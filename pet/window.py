@@ -1,0 +1,399 @@
+# -*- coding: utf-8 -*-
+"""
+桌宠主窗口 —— 透明无边框置顶窗口 + 动画链状态机 + 移动驱动 + 交互。
+
+状态机（对应原插件 dsh-pet lib/client.js 的链式模型，行为 1:1 移植）：
+  - 每个动画一次性播放，播完按概率选下一个：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动；
+  - 转向（东张西望）播完翻转朝向；facing=right 时水平镜像；
+  - 点击回应 / 拖拽动画播完先回待机缓冲，待机播完再进随机链；
+  - 移动：动画只提供"走路姿态"（3 选 1），位置由 QTimer 驱动，
+    开头/结尾各 2s 不动，中间按播放进度插值；
+  - 透明区域鼠标穿透：每帧用当前帧 alpha 生成窗口 mask（等效原版命中层设计）。
+"""
+
+from __future__ import annotations
+
+import math
+import random
+
+from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtGui import QBitmap, QImage, QPainter, QPixmap
+from PySide6.QtWidgets import QApplication, QMenu, QWidget
+
+from . import autostart as autostart_mod
+from . import catalog
+from .config import Config
+from .library import MovieLibrary
+
+
+class PetWindow(QWidget):
+    """桌宠窗口本体。"""
+
+    def __init__(self, lib: MovieLibrary, config: Config) -> None:
+        super().__init__()
+        self.lib = lib
+        self.cfg = config
+
+        # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        if config.get('on_top', True):
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        # ---- 状态 ----
+        self.anim: str = catalog.IDLE
+        self.facing: str = config.get('facing', 'left')  # left | right
+        self.scale: float = float(config.get('scale', catalog.DEFAULT_SCALE))
+        self.movie = None
+        self._frame_pixmap: QPixmap | None = None
+        self._ended_fired = False
+
+        # ---- 交互状态 ----
+        self._press_global: QPoint | None = None
+        self._grab_offset: QPoint | None = None  # 按下时 鼠标全局坐标 - 窗口左上角
+        self._dragging = False
+        self._just_dragged = False               # 抑制拖拽结束后的幽灵点击
+
+        # ---- 移动驱动 ----
+        self._move_plan: dict | None = None
+        self._move_timer = QTimer(self)
+        self._move_timer.setInterval(33)         # ~30fps 位置插值
+        self._move_timer.timeout.connect(self._on_move_tick)
+
+        # ---- 尺寸与初始状态 ----
+        self._apply_scale()
+        for name, movie in lib.movies().items():
+            # 默认参数捕获 name，避免闭包晚绑定
+            movie.frameChanged.connect(lambda n, name=name: self._on_frame(name, n))
+        self._restore_position()
+        self._switch(catalog.IDLE)
+
+    # ================================================================ 尺寸
+    def _apply_scale(self) -> None:
+        """按缩放计算窗口尺寸：宽度 220×scale，高度 (124+落地偏移)×scale。"""
+        self._w = max(1, int(round(catalog.CANVAS_W * self.scale)))
+        self._h = max(1, int(round((catalog.CANVAS_H + catalog.PAD) * self.scale)))
+        self.setFixedSize(self._w, self._h)
+
+    def change_scale(self, scale: float) -> None:
+        """切换缩放；保持窗口底边不动（脚踩的地面不变）。"""
+        if abs(scale - self.scale) < 1e-6:
+            return
+        old_bottom = self.geometry().bottom()
+        self.scale = scale
+        self._apply_scale()
+        self.move(self.x(), old_bottom - self._h + 1)
+        self._rebuild_frame()
+        self.update()
+        self._save_position()
+
+    # ================================================================ 位置
+    def _restore_position(self) -> None:
+        """恢复上次位置（按屏幕比例），无记录则落右下角。"""
+        avail = self.screen().availableGeometry()
+        rx, ry = self.cfg.get('rx'), self.cfg.get('ry')
+        if rx is None or ry is None:
+            x = avail.right() - self._w - catalog.CORNER_MARGIN
+            y = avail.bottom() - self._h
+        else:
+            x = int(round(rx * avail.width())) - self._w // 2
+            y = int(round(ry * avail.height())) - self._h // 2
+            x = min(max(x, avail.left()), avail.right() - self._w)
+            y = min(max(y, avail.top()), avail.bottom() - self._h)
+        self.move(x, y)
+
+    def _save_position(self) -> None:
+        """以"窗口中心相对屏幕可用区的比例"持久化位置（分辨率变化后仍正确）。"""
+        avail = self.screen().availableGeometry()
+        if avail.width() <= 0 or avail.height() <= 0:
+            return
+        self.cfg.set('rx', (self.x() + self._w / 2) / avail.width())
+        self.cfg.set('ry', (self.y() + self._h / 2) / avail.height())
+        self.cfg.set('facing', self.facing)
+        self.cfg.set('scale', self.scale)
+        self.cfg.save()
+
+    def _go_default_corner(self) -> None:
+        avail = self.screen().availableGeometry()
+        self.move(avail.right() - self._w - catalog.CORNER_MARGIN,
+                  avail.bottom() - self._h)
+        self._save_position()
+
+    def set_on_top(self, on: bool) -> None:
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
+        self.show()
+        self.cfg.set('on_top', on)
+        self.cfg.save()
+
+    # ================================================================ 播放
+    def _switch(self, name: str) -> None:
+        """切换到指定动画（链式模型：全部一次性播放）。"""
+        self._cancel_move()
+        self.anim = name
+        movie = self.lib.movie(name)
+        self.movie = movie
+        movie.stop()
+        movie.jumpToFrame(0)
+        self._ended_fired = False
+        self._rebuild_frame()
+        movie.start()
+
+    def _on_frame(self, name: str, n: int) -> None:
+        """QMovie 帧推进回调：重建画面；最后一帧触发播完处理。"""
+        if name != self.anim or self.movie is None:
+            return
+        self._rebuild_frame()
+        self.update()
+        if n >= self.lib.frames(name) - 1 and not self._ended_fired:
+            self._ended_fired = True
+            self.movie.stop()  # 停在最后一帧，等 _on_anim_ended 切走
+            self._on_anim_ended(name)
+
+    def _rebuild_frame(self) -> None:
+        """重建当前帧：缩放 + 朝向镜像 + 生成窗口 mask。"""
+        if self.movie is None:
+            return
+        pm = self.movie.currentPixmap()
+        if pm.isNull():
+            return
+        img = pm.toImage()
+        if self.facing == 'right':
+            img = img.mirrored(True, False)
+        w_c = max(1, int(round(catalog.CANVAS_W * self.scale)))
+        h_c = max(1, int(round(catalog.CANVAS_H * self.scale)))
+        img = img.scaled(w_c, h_c,
+                         Qt.AspectRatioMode.IgnoreAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+        self._frame_pixmap = QPixmap.fromImage(img)
+        self._sync_mask()
+
+    def _sync_mask(self) -> None:
+        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。"""
+        canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
+        canvas.fill(Qt.GlobalColor.transparent)
+        p = QPainter(canvas)
+        p.translate(0, int(round(catalog.PAD * self.scale)))
+        if self._frame_pixmap is not None:
+            p.drawPixmap(0, 0, self._frame_pixmap)
+        p.end()
+        self.setMask(QBitmap.fromImage(canvas.createAlphaMask()))
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if self._frame_pixmap is not None:
+            # 落地对齐：整帧下移 PAD×scale，让人物脚底踩在窗口底线
+            painter.translate(0, int(round(catalog.PAD * self.scale)))
+            painter.drawPixmap(0, 0, self._frame_pixmap)
+        painter.end()
+
+    def icon_pixmap(self, size: int = 64) -> QPixmap:
+        """托盘图标：取当前帧（无则待机首帧）缩放。"""
+        pm = self._frame_pixmap
+        if pm is None:
+            pm = self.lib.movie(catalog.IDLE).currentPixmap()
+        return pm.scaled(size, size,
+                         Qt.AspectRatioMode.KeepAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+
+    # ================================================================ 动画链
+    def _on_anim_ended(self, name: str) -> None:
+        if name == catalog.DRAG and self._dragging:
+            # 超长拖拽：拖拽动画循环重播，继续跟手
+            self.movie.jumpToFrame(0)
+            self._ended_fired = False
+            self.movie.start()
+            return
+        if name == catalog.TURN:
+            # 东张西望播完 → 翻转朝向
+            self.facing = 'right' if self.facing == 'left' else 'left'
+        if name == catalog.DRAG or name in catalog.CLICKS:
+            # 交互打断的动画播完 → 待机缓冲（一次性），待机播完再进链
+            self._switch(catalog.IDLE)
+            return
+        self._pick_next()
+
+    def _pick_next(self) -> None:
+        """动画链：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动（空间不够回退动作）。"""
+        roll = random.random()
+        if roll < catalog.P_IDLE:
+            self._switch(catalog.IDLE)
+        elif roll < catalog.P_TURN:
+            self._switch(catalog.TURN)
+        elif roll < catalog.P_ACTS:
+            self._switch(self._pick(catalog.ACTS, exclude=self.anim))
+        else:
+            if not self._try_move():
+                self._switch(self._pick(catalog.ACTS, exclude=self.anim))
+
+    @staticmethod
+    def _pick(pool: list[str], exclude: str | None = None) -> str:
+        entries = [n for n in pool if n != exclude] or pool
+        return random.choice(entries)
+
+    # ================================================================ 移动
+    def _try_move(self) -> bool:
+        """计划一次朝 facing 方向的移动；屏幕空间不够返回 False。"""
+        if self._move_plan is not None:
+            return True  # 已在移动/已计划
+        avail = self.screen().availableGeometry()
+        dir_sign = 1 if self.facing == 'right' else -1
+        cx = self.x() + self._w / 2
+        distance = random.randint(catalog.MOVE_MIN_PX, catalog.MOVE_MAX_PX)
+        target_cx = cx + dir_sign * distance
+        half_w = self._w / 2
+        left_bound = avail.left() + catalog.MOVE_MARGIN + half_w
+        right_bound = avail.right() - catalog.MOVE_MARGIN - half_w
+        if target_cx < left_bound or target_cx > right_bound:
+            return False
+        move_name = self._pick(catalog.MOVES)
+        duration = self.lib.duration(move_name)
+        self._switch(move_name)
+        self._move_plan = {
+            'start_x': self.x(),
+            'target_x': int(round(target_cx - half_w)),
+            'y': self.y(),
+            'duration': duration,
+        }
+        self._move_timer.start()
+        return True
+
+    def _on_move_tick(self) -> None:
+        """位置驱动：跟随动画播放进度插值（前后各 2s 不动，中间走完全程）。"""
+        plan = self._move_plan
+        if not plan or self.movie is None:
+            self._move_timer.stop()
+            return
+        t = self.movie.currentTimeSeconds()
+        lead, tail = catalog.MOVE_LEAD_SEC, catalog.MOVE_TAIL_SEC
+        dur = plan['duration']
+        if t <= lead:
+            x = plan['start_x']
+        elif t >= dur - tail:
+            x = plan['target_x']
+        else:
+            progress = (t - lead) / max(0.1, dur - lead - tail)
+            x = plan['start_x'] + (plan['target_x'] - plan['start_x']) * progress
+        self.move(int(round(x)), plan['y'])
+        if t >= dur - tail:
+            # 到位：提交终点，动画自然播完后续链
+            self._move_timer.stop()
+            self._move_plan = None
+            self._save_position()
+
+    def _cancel_move(self) -> None:
+        self._move_timer.stop()
+        self._move_plan = None
+
+    # ================================================================ 交互
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_global = event.globalPosition().toPoint()
+            self._grab_offset = self._press_global - self.pos()
+            self._dragging = False
+            self._cancel_move()  # 按下即打断移动
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._press_global is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        g = event.globalPosition().toPoint()
+        delta = g - self._press_global
+        if not self._dragging:
+            if math.hypot(delta.x(), delta.y()) < catalog.DRAG_THRESHOLD * self.scale:
+                return  # 未超阈值：仍是点击候选
+            self._dragging = True
+            self._switch(catalog.DRAG)  # 进入拖拽：播放悬空反馈动画
+        self.move(g - self._grab_offset)  # 跟手（保持抓起时的偏移）
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+        was_dragging = self._dragging
+        g = event.globalPosition().toPoint()
+        dist = 0.0
+        if self._press_global is not None:
+            d = g - self._press_global
+            dist = math.hypot(d.x(), d.y())
+        if was_dragging:
+            self._just_dragged = True  # 抑制拖拽结束后的幽灵点击
+            QTimer.singleShot(150, self._clear_just_dragged)
+            if self._grab_offset is not None:
+                self.move(g - self._grab_offset)  # 停在松手处
+            self._save_position()
+            self._switch(catalog.IDLE)  # 回待机缓冲
+        elif dist < catalog.DRAG_THRESHOLD * self.scale:
+            self._on_click()
+        self._dragging = False
+        self._press_global = None
+        self._grab_offset = None
+        event.accept()
+
+    def _clear_just_dragged(self) -> None:
+        self._just_dragged = False
+
+    def _on_click(self) -> None:
+        """真点击 → 随机一个点击回应动画。"""
+        if self._just_dragged:
+            return
+        if self.anim != catalog.IDLE:
+            return  # 链上非待机动画播放中不打断
+        self._cancel_move()
+        self._switch(self._pick(catalog.CLICKS))
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        menu = QMenu(self)
+
+        m_rest = menu.addMenu('动画 · 待机 / 转向')
+        m_rest.addAction(catalog.IDLE, lambda: self._switch(catalog.IDLE))
+        m_rest.addAction(catalog.TURN, lambda: self._switch(catalog.TURN))
+
+        m_moves = menu.addMenu('动画 · 移动')
+        for n in catalog.MOVES:
+            m_moves.addAction(n, lambda n=n: self._switch(n))
+
+        m_clicks = menu.addMenu('动画 · 点击回应')
+        for n in catalog.CLICKS:
+            m_clicks.addAction(n, lambda n=n: self._switch(n))
+
+        m_acts = menu.addMenu('动画 · 随机动作')
+        for n in catalog.ACTS:
+            m_acts.addAction(n, lambda n=n: self._switch(n))
+
+        menu.addSeparator()
+        menu.addAction('回到右下角', self._go_default_corner)
+
+        on_top = menu.addAction('窗口置顶')
+        on_top.setCheckable(True)
+        on_top.setChecked(bool(self.cfg.get('on_top', True)))
+        on_top.toggled.connect(self.set_on_top)
+
+        auto = menu.addAction('开机自启')
+        auto.setCheckable(True)
+        auto.setChecked(autostart_mod.is_enabled())
+        auto.toggled.connect(autostart_mod.set_enabled)
+
+        m_scale = menu.addMenu('大小')
+        for s in catalog.SCALE_STEPS:
+            px = int(round(catalog.CANVAS_W * s))
+            act = m_scale.addAction(f'{px}px')
+            act.setCheckable(True)
+            act.setChecked(abs(self.scale - s) < 0.02)
+            act.triggered.connect(lambda checked=False, s=s: self.change_scale(s))
+
+        menu.addSeparator()
+        menu.addAction('退出', self._request_quit)
+        menu.exec(event.globalPos())
+
+    def _request_quit(self) -> None:
+        self._save_position()
+        QApplication.instance().quit()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._save_position()
+        super().closeEvent(event)
