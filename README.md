@@ -20,6 +20,9 @@
 **跨平台的独立桌面宠物**软件（支持 **Windows** 与 **macOS**）—— 不依赖 DSH 运行时，
 用 Python + PySide6 实现，双击即跑，复用原项目 51 段高清动画（640×360，24fps）。
 
+当前版本为 **webm 直解路线**：运行时直接解码上游 640×360 透明 webm（VP9 + 8-bit alpha），
+不再打包体积庞大的 GIF 素材，画质与 web 端一致。
+
 Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「macOS」章节。
 
 ## 特性
@@ -119,7 +122,26 @@ Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「ma
 
 本项目直接运行时解码上游 640×360 透明 **webm**（VP9 + 8-bit alpha），
 使用 `imageio-ffmpeg` 自带的静态 ffmpeg 输出 RGBA 帧，保留半透明边缘。
-关键点是解码时必须使用 `-c:v libvpx-vp9` 放在输入之前，否则原生 vp9 解码器会丢弃 alpha。
+
+关键实现：
+
+- 解码命令核心参数：
+  ```python
+  imageio_ffmpeg.read_frames(
+      path,
+      pix_fmt="rgba",
+      bits_per_pixel=32,
+      input_params=["-c:v", "libvpx-vp9"],
+  )
+  ```
+  `-c:v libvpx-vp9` 必须放在输入之前，否则原生 vp9 解码器会丢弃 alpha。
+- 播放架构：
+  - 后台 reader 线程只负责把 RGBA 帧放入有界队列。
+  - 主线程 `QTimer` 按视频 fps 逐帧从队列取帧。
+  - 每次只取最早的一帧，**不跳帧、不追帧**，避免动画快进。
+  - 所有 `QImage/QPixmap` 和窗口 mask 更新都在主线程完成。
+- Windows 下 `imageio-ffmpeg` 内部使用 `STARTUPINFO` 隐藏 ffmpeg 控制台窗口，
+  避免旧 ffmpeg 子进程方案导致的“窗口反复出现/消失”。
 
 ## 快速开始
 
@@ -207,9 +229,9 @@ python -m pet
 │   └── app.py           # 入口 + 系统托盘
 ├── packaging/           # PyInstaller 打包入口
 ├── .github/workflows/   # GitHub Actions（macOS 自动打包）
-├── tests/               # 冒烟测试 / 帧率实测 / 诊断工具
+├── tests/               # 冒烟测试 / 诊断工具
 ├── run.bat              # Windows 一键启动
-└── requirements.txt     # PySide6
+└── requirements.txt     # PySide6 + imageio-ffmpeg
 ```
 
 ## 已知说明
@@ -233,9 +255,8 @@ python -m pet
 - **未签名 app 必被 Gatekeeper 拦**：免费版加 ad-hoc 签名
   （`codesign --force --deep --sign -`）后，「右键打开 / 系统设置放行」可用；彻底免
   拦截需 Apple 开发者账号公证（$99/年）。放行方法见上文「macOS」章节。
-- **打包前先关掉正在运行的桌宠进程**：Windows 打包时若旧 exe 进程存活（或杀毒软件
-  正在扫描 400MB 大文件），PyInstaller 覆盖产物会报 `PermissionError: 拒绝访问`，
-  需结束进程并等扫描结束后重试。
+- **打包前先关掉正在运行的桌宠进程**：Windows 打包时若旧 exe 进程存活，PyInstaller
+  覆盖产物会报 `PermissionError: 拒绝访问`；webm 版 exe 约 110MB，但仍需结束进程后重试。
 
 ### macOS 平台特性
 
@@ -252,10 +273,14 @@ python -m pet
 
 ### 素材与播放
 
-- **ffmpeg 转码透明 webm 时 `-c:v libvpx-vp9` 必须放在 `-i` 之前**：ffmpeg 原生 vp9
+- **ffmpeg 解码透明 webm 时 `-c:v libvpx-vp9` 必须放在 `-i` 之前**：ffmpeg 原生 vp9
   解码器会丢弃 WebM alpha 通道（上游 DESIGN.md 踩坑记录第 3 条，已实测复现）。
-- **QMovie 播放 GIF 偏慢约 20%**：QMovie 的定时器 + 解码开销使每帧比 GIF 原生时长慢，
-  需 `setSpeed(120)` 校准（见 `pet/library.py` 的 `PLAYBACK_SPEED`）。
+- **webm 播放不能“清空队列只取最新帧”**：如果每次刷新都丢弃中间帧，动画会像快进一样。
+  正确做法是按视频 fps 逐帧取最早的一帧。
+- **播放结束标记不能误停新动画**：最后一帧触发窗口层切换动画后，旧的结束标记不应再
+  停止新动画的定时器；否则会出现“播完一个动画后卡住不动”。
+- **Windows 下 ffmpeg 子进程要隐藏控制台**：使用 `imageio_ffmpeg` 自带的
+  `STARTUPINFO` 或显式 `CREATE_NO_WINDOW`，避免窗口反复出现/消失。
 
 ### 验证
 
