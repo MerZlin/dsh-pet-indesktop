@@ -216,6 +216,92 @@ shenshen  guga  dada  suansuan  dudu  mimi
 > 建议：新角色推荐直接使用 `idle/ turn/ move/ click/ drag/ random/` 子目录结构，
 > 这样不需要 manifest 也能正确分类。
 
+### 自定义形象
+
+你可以通过两种方式使用自定义形象：
+
+1. **随 exe 打包**：把形象放到项目源码的 `assets/characters/<角色ID>/videos/`，重新打包 exe。
+2. **用户本地外部扩展**：不需要重新打包，直接在 exe 同目录或用户数据目录放置形象文件夹。
+
+#### 方法一：随 exe 打包
+
+在项目源码中创建：
+
+```text
+assets/characters/<角色ID>/videos/
+├── idle/
+├── turn/
+├── move/
+├── click/
+├── drag/
+└── random/
+```
+
+把对应分类的 `.webm` 放进去，然后重新执行打包命令即可。
+
+#### 方法二：exe 同目录外部扩展（推荐给最终用户）
+
+在 exe 同目录下创建：
+
+```text
+<exe 所在目录>/
+└── characters/
+    └── <角色ID>/
+        └── videos/
+            ├── idle/
+            ├── turn/
+            ├── move/
+            ├── click/
+            ├── drag/
+            └── random/
+```
+
+也支持用户数据目录：
+
+```text
+Windows: %APPDATA%/dsh-pet-standalone/characters/<角色ID>/videos/
+macOS:   ~/Library/Application Support/dsh-pet-standalone/characters/<角色ID>/videos/
+```
+
+程序启动或切换角色时会自动检测：
+
+- 外部目录存在 → 优先使用外部形象。
+- 外部目录不存在 → 回退到 exe 内置形象，不会报错。
+
+#### 如何准备自定义形象的动画
+
+推荐直接参考上游项目 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)：
+
+1. 克隆或下载参考项目：
+   ```sh
+   git clone --depth 1 https://github.com/PC2005-cloud/dsh-pet.git
+   ```
+2. 参考项目中的透明动画位于：
+   ```text
+   dsh-pet/dsh-pet/assets/thumb/*.webm
+   ```
+   这些是 640×360 透明 webm（VP9 + 8-bit alpha）。
+3. 你可以：
+   - 直接复制这些 webm 作为基础形象；
+   - 或参考它们的动作分类，生成自己角色的同尺寸透明 webm；
+   - 或使用 ffmpeg / 图像生成工具制作新的透明动画，只要输出 640×360 透明 webm 即可。
+
+4. 将制作好的 webm 按分类放入对应子目录：
+
+```text
+videos/
+├── idle/     # 待机动画
+├── turn/     # 转向动画
+├── move/     # 移动动画
+├── click/    # 点击回应动画
+├── drag/     # 拖拽动画（可选）
+└── random/   # 随机动作动画
+```
+
+5. 如果文件名无法通过关键词自动识别，可以添加 `manifest.json` 精确指定分类。
+
+6. 启动后在桌宠右键菜单或托盘菜单的「切换角色」中选择你的新角色 ID。
+
 ## 快速开始
 
 ### 1. 安装依赖
@@ -227,8 +313,20 @@ pip install PySide6 imageio-ffmpeg
 ### 2. 准备素材
 
 请从上游 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库获取
-`dsh-pet/assets/thumb/*.webm`（51 个 640×360 透明 webm），放到本项目的
-`assets/characters/shenshen/videos/` 目录。无需转码即可直接运行。
+`dsh-pet/assets/thumb/*.webm`（51 个 640×360 透明 webm），按分类放到本项目的
+`assets/characters/shenshen/videos/` 下对应子目录：
+
+```text
+assets/characters/shenshen/videos/
+├── idle/
+├── turn/
+├── move/
+├── click/
+├── drag/
+└── random/
+```
+
+无需转码即可直接运行。
 
 ### 3. 运行
 
