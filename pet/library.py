@@ -44,6 +44,7 @@ class MovieLibrary(QObject):
             self._asset_dir = catalog.resolve_character_video_dir(self.character_id)
         self._manifest = None if manifest is None else dict(manifest)
         self.manifest = catalog.load_character_manifest(self.character_id, self._asset_dir)
+        self.folder_map: dict[str, str] = {}
         self._movies: dict[str, WebMClip] = {}
 
         self._load_all()
@@ -55,12 +56,18 @@ class MovieLibrary(QObject):
                 raise FileNotFoundError(
                     f"角色素材目录不存在: {self._asset_dir}（character_id={self.character_id}）"
                 )
-            files = sorted(self._asset_dir.glob('*.webm'))
+            files = sorted(self._asset_dir.rglob('*.webm'))
             if not files:
                 raise FileNotFoundError(
                     f"角色素材目录中没有 webm 文件: {self._asset_dir}"
                 )
-            self._manifest = {f.stem: f.name for f in files}
+            self._manifest = {}
+            self.folder_map = {}
+            for f in files:
+                rel = f.relative_to(self._asset_dir)
+                name = f.stem
+                self._manifest[name] = rel.as_posix()
+                self.folder_map[name] = rel.parts[0].lower() if len(rel.parts) > 1 else ''
 
         missing: list[str] = []
         resolved: dict[str, Path] = {}

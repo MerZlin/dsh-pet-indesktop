@@ -59,6 +59,12 @@ SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
 DEFAULT_CHARACTER = 'shenshen'
 CHARACTERS = ('shenshen', 'guga', 'dada', 'suansuan', 'dudu', 'mimi')
 MANIFEST_FILENAME = 'manifest.json'
+# videos 下的分类子目录（待机与转向放在同一目录）
+DIR_IDLE_TURN = 'idle_turn'
+DIR_MOVE = 'move'
+DIR_CLICK = 'click'
+DIR_DRAG = 'drag'
+DIR_RANDOM = 'random'
 
 
 # ---------------------------------------------------------------- 动画映射
@@ -270,41 +276,85 @@ def _keyword_match(name: str, keywords) -> bool:
     return any(k.lower() in low for k in keywords)
 
 
-def build_categories(names, manifest: dict | None = None) -> dict:
+def build_categories(names, manifest: dict | None = None, folder_map: dict | None = None) -> dict:
     """根据某个形象实际拥有的动画名，动态计算分类。
 
     分类优先级：
-    1. 如果角色目录存在 manifest.json，则严格按 manifest 指定分类；
-    2. 否则按内置已知名称 + 文件名关键词自动识别；
-    3. 未进入核心分类的动画自动归入“随机动作池”。
+    1. 如果提供 folder_map（来自 videos/ 下的子目录），优先按子目录分类；
+    2. 如果角色目录存在 manifest.json，则按 manifest 指定分类（可补充/覆盖）；
+    3. 否则按内置已知名称 + 文件名关键词自动识别；
+    4. 未进入核心分类的动画自动归入“随机动作池”。
 
-    这样即使用户把不同命名的视频一股脑丢进新角色目录，也能尽量正确分类；
-    如果希望 100% 精确，建议在角色目录放一个 manifest.json。
+    推荐的 videos 目录结构：
+        videos/
+        ├── idle_turn/   # 待机 + 转向
+        ├── move/        # 移动
+        ├── click/       # 点击回应
+        ├── drag/        # 拖拽（可选）
+        └── random/      # 随机动作
     """
     names = set(names)
     if not names:
         return {'idle': None, 'turn': None, 'moves': [], 'clicks': [], 'drag': None, 'acts': []}
 
+    idle = turn = drag = None
+    moves: list[str] = []
+    clicks: list[str] = []
+
+    if folder_map:
+        by_folder: dict[str, list[str]] = {}
+        for name in names:
+            by_folder.setdefault(folder_map.get(name, ''), []).append(name)
+
+        idle_turn_names = by_folder.get(DIR_IDLE_TURN, [])
+        if idle_turn_names:
+            idle = IDLE if IDLE in idle_turn_names else next(
+                (n for n in idle_turn_names if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
+            )
+            turn = TURN if TURN in idle_turn_names else next(
+                (n for n in idle_turn_names if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
+            )
+            if idle is None:
+                idle = idle_turn_names[0]
+            if turn is None and len(idle_turn_names) > 1:
+                turn = next((n for n in idle_turn_names if n != idle), None)
+
+        moves = list(by_folder.get(DIR_MOVE, []))
+        clicks = list(by_folder.get(DIR_CLICK, []))
+        drag_names = by_folder.get(DIR_DRAG, [])
+        if drag_names:
+            drag = drag_names[0]
+
+    # 如果子目录没有覆盖完全，再用 manifest / 关键词补全
     if manifest:
-        idle = _manifest_name(manifest.get('idle'), names)
-        turn = _manifest_name(manifest.get('turn'), names)
-        moves = _manifest_names(manifest.get('moves', []), names)
-        clicks = _manifest_names(manifest.get('clicks', []), names)
-        drag = _manifest_name(manifest.get('drag'), names)
-    else:
-        # 关键词自动识别，便于“一股脑丢进去”也能工作
+        if idle is None:
+            idle = _manifest_name(manifest.get('idle'), names)
+        if turn is None:
+            turn = _manifest_name(manifest.get('turn'), names)
+        if not moves:
+            moves = _manifest_names(manifest.get('moves', []), names)
+        if not clicks:
+            clicks = _manifest_names(manifest.get('clicks', []), names)
+        if drag is None:
+            drag = _manifest_name(manifest.get('drag'), names)
+
+    if idle is None:
         idle = IDLE if IDLE in names else next(
             (n for n in names if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
         )
+    if turn is None:
         turn = TURN if TURN in names else next(
             (n for n in names if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
         )
+    if drag is None:
         drag = DRAG if DRAG in names else next(
             (n for n in names if _keyword_match(n, ['拖拽', '拖', '悬空', 'drag', '抓'])), None
         )
+    if not moves:
         moves = [n for n in MOVES if n in names]
         if not moves:
             moves = [n for n in names if _keyword_match(n, ['走', '跑', '移动', 'move', 'walk', 'run', '踏步', '奔跑'])]
+    if not clicks:
         clicks = [n for n in CLICKS if n in names]
         if not clicks:
             clicks = [n for n in names if _keyword_match(n, ['点击', '回应', 'click', 'response'])]
