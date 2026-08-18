@@ -230,7 +230,7 @@ class PetWindow(QWidget):
         movie.start()
 
     def _on_frame(self, name: str, n: int) -> None:
-        """QMovie 帧推进回调：重建画面；最后一帧触发播完处理。"""
+        """媒体帧推进回调：重建画面；最后一帧触发播完处理。"""
         if name != self.anim or self.movie is None:
             return
         self._rebuild_frame()

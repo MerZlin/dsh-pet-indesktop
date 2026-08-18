@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import imageio_ffmpeg
-except Exception as exc:  # pragma: no cover - 依赖缺失时由 library 回退 GIF
+except Exception as exc:  # pragma: no cover - 依赖缺失时无法使用 webm 路线
     imageio_ffmpeg = None
     _IMPORT_ERROR = exc
 else:
@@ -37,7 +37,7 @@ else:
 
 
 class WebMClip(QObject):
-    """与 QMovieClip 接口兼容的 webm 播放器。"""
+    """与窗口层期望的媒体播放器接口兼容。"""
 
     available = imageio_ffmpeg is not None
 

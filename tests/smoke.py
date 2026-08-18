@@ -37,7 +37,7 @@ def _wait_until(app: QApplication, predicate, timeout: float = 5.0) -> None:
 
 def main() -> int:
     app = QApplication([])
-    lib = MovieLibrary()  # 真实 GIF：assets/animations
+    lib = MovieLibrary()  # 真实 webm：assets/videos
 
     # 1. 51 段素材全量可加载，帧数/时长有效
     names = lib.names()

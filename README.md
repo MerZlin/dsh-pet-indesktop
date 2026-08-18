@@ -183,10 +183,8 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 ### 源码运行
 
 ```sh
-pip install PySide6
-# 准备素材：同「快速开始」第 2 步，把 webm 放到 assets/videos/ 后转码
-pip install imageio-ffmpeg pillow
-python scripts/convert.py
+pip install PySide6 imageio-ffmpeg
+# 准备素材：同「快速开始」第 2 步，把 webm 放到 assets/videos/
 python -m pet
 ```
 
