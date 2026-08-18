@@ -95,7 +95,6 @@ Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「ma
 
 - **Python 3.10+ / PySide6**（Qt for Python，LGPL 许可）
 - **imageio-ffmpeg** 运行时解码 640×360 透明 webm（VP9 alpha，RGBA 帧）
-- **GIF/QMovie** 作为兼容回退（无 imageio-ffmpeg 或素材缺失时）
 
 ### 动画链状态机（1:1 移植原插件 `client.js`）
 
@@ -121,7 +120,6 @@ Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「ma
 本项目直接运行时解码上游 640×360 透明 **webm**（VP9 + 8-bit alpha），
 使用 `imageio-ffmpeg` 自带的静态 ffmpeg 输出 RGBA 帧，保留半透明边缘。
 关键点是解码时必须使用 `-c:v libvpx-vp9` 放在输入之前，否则原生 vp9 解码器会丢弃 alpha。
-`scripts/convert.py` 仍保留，用于生成 GIF 回退素材。
 
 ## 快速开始
 
@@ -137,14 +135,6 @@ pip install PySide6 imageio-ffmpeg
 `dsh-pet/assets/thumb/*.webm`（51 个 640×360 透明 webm），放到本项目的
 `assets/videos/` 目录。无需转码即可直接运行。
 
-如需保留 GIF 回退，可再执行：
-
-```sh
-pip install pillow
-python scripts/convert.py            # 默认读 assets/videos/，输出 assets/animations/
-# 或指定源目录：python scripts/convert.py --src <你的webm目录>
-```
-
 ### 3. 运行
 
 双击 `run.bat`，或命令行 `python -m pet`。
@@ -156,7 +146,6 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name dsh-pet-indesktop ^
     --collect-all imageio_ffmpeg ^
     --add-data "assets/videos;assets/videos" ^
-    --add-data "assets/animations;assets/animations" ^
     packaging/pet_entry.py
 ```
 
@@ -212,13 +201,12 @@ python -m pet
 ```
 ├── pet/                 # 核心代码
 │   ├── catalog.py       # 51 段动画目录、分类、几何/概率常量
-│   ├── library.py       # 素材库：webm 优先，GIF/QMovie 回退
+│   ├── library.py       # 素材库：webm 素材加载
 │   ├── webm_clip.py     # imageio-ffmpeg 解码 webm 的播放器
 │   ├── window.py        # 桌宠窗口：状态机 + 动画链 + 移动驱动 + 交互
 │   ├── config.py        # 配置持久化（跨平台：APPDATA / Application Support / .config）
 │   ├── autostart.py     # 开机自启（跨平台：Windows 注册表 / macOS LaunchAgents）
 │   └── app.py           # 入口 + 系统托盘
-├── scripts/convert.py   # 素材转码：webm → 640×360 透明 GIF
 ├── packaging/           # PyInstaller 打包入口
 ├── .github/workflows/   # GitHub Actions（macOS 自动打包）
 ├── tests/               # 冒烟测试 / 帧率实测 / 诊断工具
@@ -228,9 +216,8 @@ python -m pet
 
 ## 已知说明
 
-**主路线为 webm 直解**：与 web 端一致播放 640×360 透明 webm（VP9 视频，8-bit alpha），
-保留半透明边缘和原始色彩。GIF 仅作为兼容回退，回退时仍受 GIF 格式限制
-（1-bit alpha、256 色调色板）。
+**webm 直解**：与 web 端一致播放 640×360 透明 webm（VP9 视频，8-bit alpha），
+保留半透明边缘和原始色彩。不再打包体积庞大的 GIF 素材。
 
 ## 开发经验与教训
 

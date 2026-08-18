@@ -3,8 +3,7 @@
 动画目录（catalog）—— 全部动画名、文件映射、分类与几何常量的"事实来源"。
 
 素材来源：dsh-pet 插件（https://github.com/PC2005-cloud/dsh-pet）的
-assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）经 scripts/convert.py
-转码为 640×360 透明 GIF，QMovie 原生播放（零额外依赖）。
+assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）。
 
 几何常量与原插件 client.js 完全一致：
 - 画布 640×360，人物脚底 y=330
@@ -14,7 +13,7 @@ assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）经 scripts/convert.py
 from pathlib import Path
 
 # ---------------------------------------------------------------- 画布几何
-# GIF 尺寸（16:9，640×360 高清素材）
+# webm 尺寸（16:9，640×360 高清素材）
 CANVAS_W = 640
 CANVAS_H = 360
 
@@ -24,7 +23,7 @@ FEET_Y = 330 / 360 * CANVAS_H  # = 330
 # 落地偏移：帧下移多少让脚底恰好落在窗口底线
 PAD = CANVAS_H - FEET_Y        # = 30
 
-# GIF 的帧时长（毫秒）—— 24fps → 40ms，用于时长/移动插值换算
+# 视频帧时长（毫秒）—— 24fps → 40ms，用于时长/移动插值换算
 FRAME_MS = 40
 
 # 动画链概率（与 client.js 一致）：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动
@@ -51,69 +50,63 @@ CORNER_MARGIN = 24  # 距屏幕右缘的默认间距
 SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
 
 # ---------------------------------------------------------------- 动画映射
-# 中文名 → GIF 文件名（主路径）
+# 中文名 → webm 文件名（主路径，文件名与中文名一致）
 ANIM_FILES: dict[str, str] = {
-    # 待机
-    '待机呼吸休闲': 'daiji-huxi-xiuxian.gif',
-    # 转向
-    '东张西望': 'dongzhangxiwang.gif',
-    # 移动姿态（位置由代码驱动）
-    '螃蟹走路': 'pangxie-zoulu.gif',
-    '原地漂浮踏步': 'yuandi-piaofu-tabu.gif',
-    '原地左转奔跑': 'yuandi-zuozhuan-benpao.gif',
-    # 点击回应 ×3
-    '点击回应 - 开心跃动': 'dianji-huiying-kaixin-yuedong.gif',
-    '点击回应 - 害羞惊讶': 'dianji-huiying-haixiu-jingya.gif',
-    '点击回应 - 傲娇生气（侧身展示）': 'dianji-huiying-aojiao-shengqi-ceshen-zhanshi.gif',
-    # 拖拽
-    '被鼠标拖拽悬空反馈': 'beishubiao-tuozhuai-xuankong-fankui.gif',
-    # 随机动作池 ×42（与 client.js ACTS 一致）
-    '悠闲哼歌': 'youxian-hengga.gif',
-    '超大伸懒腰': 'chaoda-shenlanyao.gif',
-    '原地专心玩魔方': 'yuandi-zhuanxin-wan-mofang.gif',
-    '原地敲击桌面互动': 'yuandi-qiaoji-zhuomian-hudong.gif',
-    '原地重力下蹲压缩': 'yuandi-zhongli-xiadun-yasuo.gif',
-    '哈欠连天': 'haqian-liantian.gif',
-    '原地小憩沉眠': 'yuandi-xiaoqi-chenmian.gif',
-    '原地蹲下玩玩具汽车': 'yuandi-dunxia-wan-wanju-qiche.gif',
-    '鲸鱼吐泡泡特效': 'jingyu-tu-paopao-texiao.gif',
-    '女仆屈膝礼仪': 'nvpu-quxi-liyi.gif',
-    '被吓一跳（炸毛）': 'beixiayitiao-zhamao.gif',
-    '原地跳跃抓碎头顶物品': 'yuandi-tiaoyue-zhuasui-touding-wupin.gif',
-    '小幅度原地 360 度旋转展示': 'xiaofudu-yuandi-360du-xuanzhuan-zhanshi.gif',
-    '偷吃零食被抓住': 'touchi-lingshi-bei-zhuazhu.gif',
-    '玩游戏气急败坏': 'wan-youxi-qijibaituai.gif',
-    '用鲸鱼尾巴拍打地面': 'yong-jingyu-weiba-paidadi.gif',
-    '打瞌睡被惊醒': 'da-keshui-bei-jingxing.gif',
-    '玩水枪': 'wan-shuiqiang.gif',
-    '小提琴演奏': 'xiaotiqin-yanzou.gif',
-    '蓝鲸现世': 'lanjing-xianshi.gif',
-    '吃白饭': 'chi-baifan.gif',
-    '照镜子': 'zhao-jingzi.gif',
-    '优雅女仆舞': 'youya-nvpuwu.gif',
-    '轻快摇摆舞': 'qingkuai-yaobaiwu.gif',
-    '可爱宅舞': 'keai-zhaiwu.gif',
-    '整体换装试色': 'zhengti-huanzhuang-shise.gif',
-    '大口吃零食': 'dakou-chi-lingshi.gif',
-    '吹气球': 'chui-qiqiu.gif',
-    '动物环绕': 'dongwu-huanrao.gif',
-    '深度思考碎碎念': 'shendu-sikao-suisuinian.gif',
-    '轻快记录': 'qingkuai-jilu.gif',
-    '写代码': 'xie-daima.gif',
-    '吃Token': 'chi-token.gif',
-    '吃早餐': 'chi-zaocan.gif',
-    '吃午餐': 'chi-wucan.gif',
-    '吃晚餐': 'chi-wancan.gif',
-    '放风筝': 'fang-fengzheng.gif',
-    '摇扇纳凉': 'yaoshan-naliang.gif',
-    '吃冰淇淋融化': 'chi-bingqilin-ronghua.gif',
-    '被落叶淹没': 'beiluoye-yanmo.gif',
-    '中秋赏月吃月饼': 'zhongqiu-shangyue-chi-yuebing.gif',
-    '堆雪人': 'duixueren.gif',
+    '待机呼吸休闲': '待机呼吸休闲.webm',
+    '东张西望': '东张西望.webm',
+    '螃蟹走路': '螃蟹走路.webm',
+    '原地漂浮踏步': '原地漂浮踏步.webm',
+    '原地左转奔跑': '原地左转奔跑.webm',
+    '点击回应 - 开心跃动': '点击回应 - 开心跃动.webm',
+    '点击回应 - 害羞惊讶': '点击回应 - 害羞惊讶.webm',
+    '点击回应 - 傲娇生气（侧身展示）': '点击回应 - 傲娇生气（侧身展示）.webm',
+    '被鼠标拖拽悬空反馈': '被鼠标拖拽悬空反馈.webm',
+    '悠闲哼歌': '悠闲哼歌.webm',
+    '超大伸懒腰': '超大伸懒腰.webm',
+    '原地专心玩魔方': '原地专心玩魔方.webm',
+    '原地敲击桌面互动': '原地敲击桌面互动.webm',
+    '原地重力下蹲压缩': '原地重力下蹲压缩.webm',
+    '哈欠连天': '哈欠连天.webm',
+    '原地小憩沉眠': '原地小憩沉眠.webm',
+    '原地蹲下玩玩具汽车': '原地蹲下玩玩具汽车.webm',
+    '鲸鱼吐泡泡特效': '鲸鱼吐泡泡特效.webm',
+    '女仆屈膝礼仪': '女仆屈膝礼仪.webm',
+    '被吓一跳（炸毛）': '被吓一跳（炸毛）.webm',
+    '原地跳跃抓碎头顶物品': '原地跳跃抓碎头顶物品.webm',
+    '小幅度原地 360 度旋转展示': '小幅度原地 360 度旋转展示.webm',
+    '偷吃零食被抓住': '偷吃零食被抓住.webm',
+    '玩游戏气急败坏': '玩游戏气急败坏.webm',
+    '用鲸鱼尾巴拍打地面': '用鲸鱼尾巴拍打地面.webm',
+    '打瞌睡被惊醒': '打瞌睡被惊醒.webm',
+    '玩水枪': '玩水枪.webm',
+    '小提琴演奏': '小提琴演奏.webm',
+    '蓝鲸现世': '蓝鲸现世.webm',
+    '吃白饭': '吃白饭.webm',
+    '照镜子': '照镜子.webm',
+    '优雅女仆舞': '优雅女仆舞.webm',
+    '轻快摇摆舞': '轻快摇摆舞.webm',
+    '可爱宅舞': '可爱宅舞.webm',
+    '整体换装试色': '整体换装试色.webm',
+    '大口吃零食': '大口吃零食.webm',
+    '吹气球': '吹气球.webm',
+    '动物环绕': '动物环绕.webm',
+    '深度思考碎碎念': '深度思考碎碎念.webm',
+    '轻快记录': '轻快记录.webm',
+    '写代码': '写代码.webm',
+    '吃Token': '吃Token.webm',
+    '吃早餐': '吃早餐.webm',
+    '吃午餐': '吃午餐.webm',
+    '吃晚餐': '吃晚餐.webm',
+    '放风筝': '放风筝.webm',
+    '摇扇纳凉': '摇扇纳凉.webm',
+    '吃冰淇淋融化': '吃冰淇淋融化.webm',
+    '被落叶淹没': '被落叶淹没.webm',
+    '中秋赏月吃月饼': '中秋赏月吃月饼.webm',
+    '堆雪人': '堆雪人.webm',
 }
 
-# 中文名 → 上游 webm 文件名（兼容回退，仅当 GIF 缺失时使用）
-WEBM_FILES: dict[str, str] = {name: f'{name}.webm' for name in ANIM_FILES}
+# 兼容旧字段名：webm 文件名映射
+WEBM_FILES: dict[str, str] = ANIM_FILES
 
 # 动画分组（语义与 client.js 一致）
 IDLE = '待机呼吸休闲'
@@ -128,17 +121,12 @@ assert len(ACTS) == 42, f"动作池应为 42，实际 {len(ACTS)}"
 
 
 def assets_dir() -> Path:
-    """兼容旧调用：默认 GIF 素材目录（项目根/assets/animations）。"""
-    return gif_dir()
-
-
-def gif_dir() -> Path:
-    """GIF 素材目录（项目根/assets/animations，透明 GIF）。"""
-    return Path(__file__).resolve().parent.parent / 'assets' / 'animations'
+    """主素材目录（项目根/assets/videos，透明 webm）。"""
+    return webm_dir()
 
 
 def webm_dir() -> Path:
-    """webm 素材目录（项目根/assets/videos，透明 webm，主路线）。"""
+    """webm 素材目录（项目根/assets/videos，透明 webm）。"""
     return Path(__file__).resolve().parent.parent / 'assets' / 'videos'
 
 
@@ -148,18 +136,7 @@ def legacy_assets_dir() -> Path:
 
 
 def resolve_asset_path(name: str, filename: str, base_dir: Path | None = None) -> Path:
-    """解析素材路径；webm 缺失时回退到同名 GIF。"""
+    """解析 webm 素材路径；不存在时返回预期路径以便上层报错。"""
     base_dir = Path(base_dir) if base_dir is not None else webm_dir()
-    if base_dir == webm_dir():
-        # webm 主路径：中文名.webm
-        webm = base_dir / WEBM_FILES.get(name, filename)
-        if webm.exists():
-            return webm
-        # GIF 回退
-        gif = gif_dir() / filename
-        if gif.exists():
-            return gif
-        return webm
-    # 显式传入其他目录时按原逻辑
-    path = base_dir / filename
+    path = base_dir / WEBM_FILES.get(name, filename)
     return path

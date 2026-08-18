@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Smoke test for the GIF-backed media layer + window behavior（真实 GIF 素材，无需外部工具）。
+Smoke test for the webm-backed media layer + window behavior（真实 webm 素材）。
 
 Run: python tests/smoke.py
 """

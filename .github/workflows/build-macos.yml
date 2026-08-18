@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install PySide6 imageio-ffmpeg pillow pyinstaller
+          pip install PySide6 imageio-ffmpeg pyinstaller
 
       - name: Fetch source webm from upstream dsh-pet
         run: |
@@ -40,8 +40,6 @@ jobs:
           fi
           echo "webm 数量: $(ls assets/videos/ | wc -l)"
 
-      - name: Convert webm to GIF (fallback)
-        run: python scripts/convert.py
 
       - name: Build .app with PyInstaller
         run: |
@@ -50,7 +48,6 @@ jobs:
             --collect-all imageio_ffmpeg \
             --name "dsh-pet-indesktop" \
             --add-data "assets/videos:assets/videos" \
-            --add-data "assets/animations:assets/animations" \
             packaging/pet_entry.py
 
       - name: Verify pet module collected
