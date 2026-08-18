@@ -82,6 +82,10 @@ class PetWindow(QWidget):
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        if sys.platform == 'darwin' and config.get('on_top', True):
+            # macOS 上 Tool 窗口的置顶由 WA_MacAlwaysShowToolWindow 控制，
+            # WindowStaysOnTopHint 对 Tool 窗口不可靠（Qt 官方已知问题 QTBUG-38580）
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
 
         # ---- 状态 ----
         self.anim: str = catalog.IDLE
@@ -184,21 +188,25 @@ class PetWindow(QWidget):
         self._save_position()
 
     def set_on_top(self, on: bool) -> None:
+        if sys.platform == 'darwin':
+            # 先设属性再改 flag：setWindowFlag 触发窗口重建时一并应用
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, on)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
         self.cfg.set('on_top', on)
         self.cfg.save()
         self.show()
         if sys.platform == 'darwin':
-            _mac_set_window_level(int(self.winId()), 3 if on else 0)
+            # 延迟到 Qt 窗口重建完成后再强制原生层级，避免被 Qt 覆盖
+            QTimer.singleShot(0, lambda: _mac_set_window_level(int(self.winId()), 3 if on else 0))
         if on:
             self.raise_()
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
-        """窗口显示时校正层级（macOS 上 Qt 置顶 flag 对 Tool 窗口不可靠）。"""
+        """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
         if sys.platform == 'darwin':
             on = bool(self.cfg.get('on_top', True))
-            _mac_set_window_level(int(self.winId()), 3 if on else 0)
+            QTimer.singleShot(0, lambda: _mac_set_window_level(int(self.winId()), 3 if on else 0))
 
     def set_no_move(self, on: bool) -> None:
         """切换「不移动」：禁用自动移动；勾选瞬间若正在移动则立即停下回待机。"""
