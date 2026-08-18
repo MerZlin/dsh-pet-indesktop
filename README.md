@@ -7,7 +7,7 @@
 
 | 你的系统 | 安装包 | 说明 |
 | --- | --- | --- |
-| Windows | `dsh-pet-standalone.exe` | 双击即跑，首次启动解压需几秒 |
+| Windows | `dsh-pet-standalone-webm.exe` | 双击即跑，首次启动解压需几秒 |
 | macOS（Apple Silicon / M 系列） | `dsh-pet-indesktop-macos-arm64.zip` | 解压得 `dsh-pet-indesktop.app`，首次打开需放行（见下方「macOS」章节） |
 | macOS（Intel） | — | 暂无安装包，请按「macOS」章节源码运行 |
 
@@ -143,7 +143,7 @@ pip install PySide6 imageio-ffmpeg
 
 ```bat
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
-    --name dsh-pet-indesktop ^
+    --name dsh-pet-standalone-webm ^
     --collect-all imageio_ffmpeg ^
     --add-data "assets/videos;assets/videos" ^
     packaging/pet_entry.py
