@@ -1,5 +1,18 @@
 # dsh-pet-indesktop
 
+## 下载
+
+无需从源码构建，直接到 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases)
+页面下载对应系统的安装包：
+
+| 你的系统 | 安装包 | 说明 |
+| --- | --- | --- |
+| Windows | `dsh-pet-standalone.exe` | 双击即跑，首次启动解压需几秒 |
+| macOS（Apple Silicon / M 系列） | `dsh-pet-indesktop-macos-arm64.zip` | 解压得 `dsh-pet-indesktop.app`，首次打开需放行（见下方「macOS」章节） |
+| macOS（Intel） | — | 暂无安装包，请按「macOS」章节源码运行 |
+
+> 文件名以 Release 页面实际发布为准。
+
 > **声明与致谢**：本项目改自、源于 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)。
 > 桌宠的动画素材、动画链行为模型、交互设计均来自原项目，特此声明并感谢原作者的贡献。
 
