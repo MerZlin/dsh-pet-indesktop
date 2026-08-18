@@ -11,15 +11,7 @@ permissions:
 
 jobs:
   build-macos:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14    # Apple Silicon（M 系列，arm64）
-            arch: arm64
-          - os: macos-13    # Intel（x86_64）
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest   # Apple Silicon（arm64）；Intel 用户请用源码运行
 
     steps:
       - name: Checkout
@@ -61,12 +53,12 @@ jobs:
       - name: Package as zip
         run: |
           cd dist
-          zip -r -y "dsh-pet-indesktop-macos-${{ matrix.arch }}.zip" dsh-pet-indesktop.app
+          zip -r -y "dsh-pet-indesktop-macos-arm64.zip" dsh-pet-indesktop.app
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-pet-indesktop-macos-${{ matrix.arch }}
+          name: dsh-pet-indesktop-macos-arm64
           path: dist/*.zip
           retention-days: 30
 

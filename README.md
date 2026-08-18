@@ -149,9 +149,11 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 
 1. 打开仓库的 **Actions** 页 → 左侧选「Build macOS App」→ 右侧 **Run workflow** → 确认
 2. 等待构建完成（约 10 分钟），在构建详情页底部下载 artifact：
-   - `dsh-pet-indesktop-macos-arm64.zip` —— Apple Silicon（M 系列芯片）
-   - `dsh-pet-indesktop-macos-x86_64.zip` —— Intel 芯片
+   `dsh-pet-indesktop-macos-arm64.zip`（Apple Silicon / M 系列芯片）
 3. 解压得到 `dsh-pet-indesktop.app`，拖入「应用程序」文件夹即可
+
+> **Intel Mac 用户**：当前仅提供 Apple Silicon（arm64）安装包，Intel 芯片的 Mac
+> 请用下方「源码运行」方式使用。
 
 > **未签名提示**：目前为免费未签名版本，首次打开会被 macOS Gatekeeper 拦截。
 > 右键点击 app →「打开」→ 再点一次「打开」即可；或终端执行
