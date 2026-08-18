@@ -141,6 +141,38 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 > 打包入口必须用 `packaging/pet_entry.py`（绝对导入）；直接用 `pet/__main__.py`
 > 会因相对导入在冻结模式下失效。onefile 模式启动时会先解压素材（约 5~15 秒）。
 
+## macOS
+
+### 安装包（.app，GitHub Actions 自动构建）
+
+无需本地 Mac，项目通过 GitHub Actions 自动打包 macOS 版本：
+
+1. 打开仓库的 **Actions** 页 → 左侧选「Build macOS App」→ 右侧 **Run workflow** → 确认
+2. 等待构建完成（约 10 分钟），在构建详情页底部下载 artifact：
+   - `dsh-pet-indesktop-macos-arm64.zip` —— Apple Silicon（M 系列芯片）
+   - `dsh-pet-indesktop-macos-x86_64.zip` —— Intel 芯片
+3. 解压得到 `dsh-pet-indesktop.app`，拖入「应用程序」文件夹即可
+
+> **未签名提示**：目前为免费未签名版本，首次打开会被 macOS Gatekeeper 拦截。
+> 右键点击 app →「打开」→ 再点一次「打开」即可；或终端执行
+> `xattr -dr com.apple.quarantine "/Applications/dsh-pet-indesktop.app"` 后正常打开。
+
+### 源码运行
+
+```sh
+pip install PySide6
+# 准备素材：同「快速开始」第 2 步，把 webm 放到 assets/videos/ 后转码
+pip install imageio-ffmpeg pillow
+python scripts/convert.py
+python -m pet
+```
+
+### macOS 已知差异
+
+- **开机自启**：macOS 通过 LaunchAgents（`~/Library/LaunchAgents/`）实现，与 Windows 注册表等价
+- **透明穿透**：Qt 的窗口 mask 鼠标穿透在 macOS 上行为与 Windows 有差异，透明区域点击穿透**可能不完全生效**，需真机验证反馈
+- **配置目录**：macOS 下配置保存在 `~/Library/Application Support/dsh-pet-standalone/`
+
 ## 目录结构
 
 ```
@@ -148,13 +180,14 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 │   ├── catalog.py       # 51 段动画目录、分类、几何/概率常量
 │   ├── library.py       # QMovie 素材库（速度补偿）
 │   ├── window.py        # 桌宠窗口：状态机 + 动画链 + 移动驱动 + 交互
-│   ├── config.py        # 配置持久化（%APPDATA%/dsh-pet-indesktop/config.json）
-│   ├── autostart.py     # 开机自启（HKCU Run 注册表）
+│   ├── config.py        # 配置持久化（跨平台：APPDATA / Application Support / .config）
+│   ├── autostart.py     # 开机自启（跨平台：Windows 注册表 / macOS LaunchAgents）
 │   └── app.py           # 入口 + 系统托盘
 ├── scripts/convert.py   # 素材转码：webm → 640×360 透明 GIF
 ├── packaging/           # PyInstaller 打包入口
+├── .github/workflows/   # GitHub Actions（macOS 自动打包）
 ├── tests/               # 冒烟测试 / 帧率实测 / 诊断工具
-├── run.bat              # 一键启动
+├── run.bat              # Windows 一键启动
 └── requirements.txt     # PySide6
 ```
 

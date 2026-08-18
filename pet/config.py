@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-配置持久化 —— %APPDATA%/dsh-pet-standalone/config.json
+配置持久化（跨平台）：
+- Windows：%APPDATA%/dsh-pet-standalone/config.json
+- macOS：~/Library/Application Support/dsh-pet-standalone/config.json
+- Linux：~/.config/dsh-pet-standalone/config.json
 
 记录：位置（相对屏幕可用区的中心比例，分辨率变化后仍正确）、
 朝向、缩放、置顶开关。
@@ -10,16 +13,24 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from . import catalog
 
 
+def _default_base() -> Path:
+    """按平台返回配置根目录（Windows=APPDATA，macOS=Application Support，Linux=~/.config）。"""
+    if sys.platform == 'win32':
+        return Path(os.environ.get('APPDATA') or Path.home())
+    if sys.platform == 'darwin':
+        return Path.home() / 'Library' / 'Application Support'
+    return Path.home() / '.config'
+
+
 class Config:
     def __init__(self, base: Path | str | None = None) -> None:
-        base = Path(base) if isinstance(base, str) else (
-            base or Path(os.environ.get('APPDATA') or Path.home())
-        )
+        base = Path(base) if isinstance(base, str) else (base or _default_base())
         self.dir = base / 'dsh-pet-standalone'
         self.path = self.dir / 'config.json'
         self.data: dict = {

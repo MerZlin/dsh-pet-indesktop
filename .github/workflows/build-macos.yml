@@ -1,0 +1,78 @@
+name: Build macOS App
+
+on:
+  workflow_dispatch:        # 手动触发（Actions 页面 → Run workflow）
+  push:
+    tags:
+      - 'v*'                # 打 tag 时自动触发并发布 Release
+
+permissions:
+  contents: write           # 用于创建 Release 上传产物
+
+jobs:
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14    # Apple Silicon（M 系列，arm64）
+            arch: arm64
+          - os: macos-13    # Intel（x86_64）
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 imageio-ffmpeg pillow pyinstaller
+
+      - name: Fetch source webm from upstream dsh-pet
+        run: |
+          git clone --depth 1 https://github.com/PC2005-cloud/dsh-pet.git /tmp/dsh-pet
+          mkdir -p assets/videos
+          if [ -d /tmp/dsh-pet/dsh-pet/assets/thumb ]; then
+            cp /tmp/dsh-pet/dsh-pet/assets/thumb/*.webm assets/videos/
+          elif [ -d /tmp/dsh-pet/assets/thumb ]; then
+            cp /tmp/dsh-pet/assets/thumb/*.webm assets/videos/
+          else
+            echo "::error::未找到上游 webm 目录"; exit 1
+          fi
+          echo "webm 数量: $(ls assets/videos/ | wc -l)"
+
+      - name: Convert webm to GIF
+        run: python scripts/convert.py
+
+      - name: Build .app with PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --windowed \
+            --name "dsh-pet-indesktop" \
+            --add-data "assets/animations:assets/animations" \
+            packaging/pet_entry.py
+
+      - name: Package as zip
+        run: |
+          cd dist
+          zip -r -y "dsh-pet-indesktop-macos-${{ matrix.arch }}.zip" dsh-pet-indesktop.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-pet-indesktop-macos-${{ matrix.arch }}
+          path: dist/*.zip
+          retention-days: 30
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
