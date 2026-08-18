@@ -88,6 +88,10 @@ class PetWindow(QWidget):
         self.drag = self.cats['drag']
         self.acts = self.cats['acts']
 
+        # 预载拖拽动画首帧，避免第一次进入拖拽状态时同步解码卡顿
+        if self.drag:
+            self.lib.movie(self.drag).jumpToFrame(0)
+
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
         if config.get('on_top', True):

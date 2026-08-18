@@ -134,9 +134,8 @@ class WebMClip(QObject):
         self._running = False
         self._timer.stop()
         self._stop_evt.set()
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-            self._thread = None
+        # 不 join：reader 是 daemon 线程，避免切换动画时阻塞 UI 造成卡顿
+        self._thread = None
 
     def jumpToFrame(self, frame_index: int) -> bool:
         # 本项目只需要回到首帧；完整 seek 通过重启 reader + 丢弃帧实现。
@@ -188,6 +187,7 @@ class WebMClip(QObject):
     def _reader(self) -> None:
         gen = None
         try:
+            q = self._queue
             gen = imageio_ffmpeg.read_frames(
                 str(self.path),
                 pix_fmt='rgba',
@@ -207,14 +207,14 @@ class WebMClip(QObject):
                 if self._stop_evt.is_set():
                     break
                 try:
-                    self._queue.put(frame, timeout=0.2)
+                    q.put(frame, timeout=0.2)
                 except queue.Full:
                     # 队列满说明 UI 消费不过来；丢弃这一帧，保持实时性
                     pass
             # 正常播完时放入结束标记
             if not self._stop_evt.is_set():
                 try:
-                    self._queue.put(None, timeout=0.2)
+                    q.put(None, timeout=0.2)
                 except queue.Full:
                     pass
         except Exception as exc:
