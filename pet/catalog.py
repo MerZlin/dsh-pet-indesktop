@@ -10,6 +10,9 @@ assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）。
 - 落地偏移 PAD = 360 - 330 = 30px（绘制时把帧下移 PAD，让脚踩在窗口底线）
 """
 
+import os
+import sys
+
 from pathlib import Path
 
 # ---------------------------------------------------------------- 画布几何
@@ -141,9 +144,61 @@ def character_video_dir(character_id: str) -> Path:
     return characters_dir() / character_id / 'videos'
 
 
+def external_character_dirs() -> list[Path]:
+    """外部可扩展形象根目录（不存在时返回空列表，不报错）。
+
+    顺序：
+    1. exe 同目录 / 当前工作目录下的 characters/
+    2. 用户数据目录下的 dsh-pet-standalone/characters/
+    """
+    dirs: list[Path] = []
+    if getattr(sys, 'frozen', False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path.cwd()
+    dirs.append(base / 'characters')
+
+    if sys.platform == 'win32':
+        data_root = Path(os.environ.get('APPDATA', Path.home())) / 'dsh-pet-standalone'
+    elif sys.platform == 'darwin':
+        data_root = Path.home() / 'Library' / 'Application Support' / 'dsh-pet-standalone'
+    else:
+        data_root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'dsh-pet-standalone'
+    dirs.append(data_root / 'characters')
+    return dirs
+
+
 def resolve_character_video_dir(character_id: str) -> Path:
-    """返回形象视频目录（全部随 exe 打包，内置 assets/characters）。"""
+    """按 外部 > 内置 返回形象视频目录；外部不存在时回退内置，不报错。"""
+    for root in external_character_dirs():
+        candidate = root / character_id / 'videos'
+        if candidate.is_dir():
+            return candidate
     return character_video_dir(character_id)
+
+
+def list_available_characters() -> list[str]:
+    """返回可切换角色列表：内置角色 + 外部目录中额外检测到的角色。
+
+    外部目录不存在时静默跳过，不会报错。
+    """
+    ids: list[str] = list(CHARACTERS)
+    seen = set(ids)
+    for root in external_character_dirs():
+        if not root.is_dir():
+            continue
+        try:
+            entries = sorted(root.iterdir())
+        except OSError:
+            continue
+        for child in entries:
+            video_dir = child / 'videos'
+            if child.is_dir() and video_dir.is_dir() and any(video_dir.glob('*.webm')):
+                cid = child.name
+                if cid not in seen:
+                    seen.add(cid)
+                    ids.append(cid)
+    return ids
 
 
 def webm_dir() -> Path:

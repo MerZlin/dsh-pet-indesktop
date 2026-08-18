@@ -75,6 +75,7 @@ class PetWindow(QWidget):
         super().__init__()
         self.lib = lib
         self.cfg = config
+        self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
 
         # 根据当前形象实际拥有的动画动态计算分类，支持不同角色动作不一致
         self.cats = catalog.build_categories(lib.names())
@@ -493,6 +494,14 @@ class PetWindow(QWidget):
         for n in self.acts:
             m_acts.addAction(n, lambda n=n: self._switch(n))
 
+        m_char = menu.addMenu('切换角色')
+        current = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+        for cid in catalog.list_available_characters():
+            act = m_char.addAction(cid)
+            act.setCheckable(True)
+            act.setChecked(cid == current)
+            act.triggered.connect(lambda checked=False, cid=cid: self._request_switch_character(cid))
+
         menu.addSeparator()
         menu.addAction('回到右下角', self._go_default_corner)
 
@@ -522,6 +531,14 @@ class PetWindow(QWidget):
         menu.addSeparator()
         menu.addAction('退出', self._request_quit)
         menu.exec(event.globalPos())
+
+    def _request_switch_character(self, character_id: str) -> None:
+        """请求切换角色；优先交给 app 做热切换，否则只保存配置。"""
+        if self.on_switch_character is not None:
+            self.on_switch_character(character_id)
+        else:
+            self.cfg.set('character', character_id)
+            self.cfg.save()
 
     def _request_quit(self) -> None:
         self._save_position()
