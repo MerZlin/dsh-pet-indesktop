@@ -160,10 +160,9 @@ shenshen  guga  dada  suansuan  dudu  mimi
 - 默认形象为 `shenshen`，当前动画放在 `assets/characters/shenshen/videos/`。
 - 不同角色可以有**不同的动作集**：代码会扫描该角色目录下实际存在的 webm，
   动态计算“待机 / 转向 / 移动 / 点击回应 / 拖拽 / 随机动作”，不在核心分类里的动画会自动归入随机动作池。
-- 外部扩展目录（优先级高于内置）：
-  - exe 同目录或当前工作目录下的 `characters/<id>/videos/`
-  - 用户数据目录下的 `dsh-pet-standalone/characters/<id>/videos/`
-- 以后新增形象时，不需要改代码，只需要放入对应角色的 webm 文件夹，并在配置中指定 `character`。
+  - 所有角色素材会随 exe 一起打包，不需要外部放置。
+  - 以后新增形象时，把对应角色的 webm 放入 `assets/characters/<id>/videos/`，
+    重新打包 exe，并在配置中指定 `character` 即可。
 
 ## 快速开始
 

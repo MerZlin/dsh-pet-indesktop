@@ -15,6 +15,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import autostart as autostart_mod
+from . import catalog
 from .config import Config
 from .library import MovieLibrary
 from .window import PetWindow
