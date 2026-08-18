@@ -45,15 +45,36 @@ jobs:
 
       - name: Build .app with PyInstaller
         run: |
-          pyinstaller --noconfirm --clean --windowed \
+          python -m PyInstaller --noconfirm --clean --windowed \
+            --paths . \
             --name "dsh-pet-indesktop" \
             --add-data "assets/animations:assets/animations" \
             packaging/pet_entry.py
 
-      - name: Package as zip
+      - name: Verify pet module collected
+        run: |
+          WARN="build/dsh-pet-indesktop/warn-dsh-pet-indesktop.txt"
+          if [ -f "$WARN" ] && grep -q "missing module named pet" "$WARN"; then
+            echo "::error::pet 模块未被 PyInstaller 收集"; cat "$WARN"; exit 1
+          fi
+          echo "pet 模块已收集"
+
+      - name: Package as zip (ditto preserves permissions & symlinks)
         run: |
           cd dist
-          zip -r -y "dsh-pet-indesktop-macos-arm64.zip" dsh-pet-indesktop.app
+          ditto -c -k --keepParent dsh-pet-indesktop.app dsh-pet-indesktop-macos-arm64.zip
+
+      - name: Verify zip preserves executable permission
+        run: |
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          cd /tmp/verify
+          unzip -q "$GITHUB_WORKSPACE/dist/dsh-pet-indesktop-macos-arm64.zip"
+          BIN="dsh-pet-indesktop.app/Contents/MacOS/dsh-pet-indesktop"
+          ls -l "$BIN"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::解压后二进制丢失可执行权限"; exit 1
+          fi
+          echo "可执行权限保留"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
