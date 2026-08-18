@@ -13,6 +13,8 @@ assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）。
 import os
 import sys
 
+import json
+
 from pathlib import Path
 
 # ---------------------------------------------------------------- 画布几何
@@ -56,6 +58,7 @@ SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
 # 当前内置形象与未来扩展形象 ID（目录名建议使用稳定 ASCII）
 DEFAULT_CHARACTER = 'shenshen'
 CHARACTERS = ('shenshen', 'guga', 'dada', 'suansuan', 'dudu', 'mimi')
+MANIFEST_FILENAME = 'manifest.json'
 
 
 # ---------------------------------------------------------------- 动画映射
@@ -211,19 +214,105 @@ def legacy_assets_dir() -> Path:
     return webm_dir()
 
 
-def build_categories(names) -> dict:
+def load_character_manifest(character_id: str, asset_dir: Path | str | None = None) -> dict | None:
+    """读取角色目录下的 manifest.json（可选）。
+
+    查找位置（按优先级）：
+    1. <角色目录>/videos/manifest.json
+    2. <角色目录>/manifest.json
+
+    不存在或解析失败时返回 None，不影响运行。
+    """
+    if asset_dir is not None:
+        video_dir = Path(asset_dir)
+    else:
+        video_dir = resolve_character_video_dir(character_id)
+    candidates = [
+        video_dir / MANIFEST_FILENAME,
+        video_dir.parent / MANIFEST_FILENAME,
+    ]
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                return None
+    return None
+
+
+def _manifest_name(value, names: set[str]) -> str | None:
+    """把 manifest 中的文件名/动画名解析为实际存在的动画名。"""
+    if not isinstance(value, str):
+        return None
+    stem = Path(value).stem
+    if stem in names:
+        return stem
+    if value in names:
+        return value
+    return None
+
+
+def _manifest_names(values, names: set[str]) -> list[str]:
+    if not isinstance(values, list):
+        values = [values]
+    result: list[str] = []
+    for v in values:
+        name = _manifest_name(v, names)
+        if name is not None and name not in result:
+            result.append(name)
+    return result
+
+
+def _keyword_match(name: str, keywords) -> bool:
+    low = name.lower()
+    return any(k.lower() in low for k in keywords)
+
+
+def build_categories(names, manifest: dict | None = None) -> dict:
     """根据某个形象实际拥有的动画名，动态计算分类。
 
-    这样不同形象可以有不同动作集：
-    - 核心动画按已知名称优先识别；
-    - 不在核心分类里的动画自动归入“随机动作池”。
+    分类优先级：
+    1. 如果角色目录存在 manifest.json，则严格按 manifest 指定分类；
+    2. 否则按内置已知名称 + 文件名关键词自动识别；
+    3. 未进入核心分类的动画自动归入“随机动作池”。
+
+    这样即使用户把不同命名的视频一股脑丢进新角色目录，也能尽量正确分类；
+    如果希望 100% 精确，建议在角色目录放一个 manifest.json。
     """
     names = set(names)
-    idle = IDLE if IDLE in names else (next(iter(names), None) if names else None)
-    turn = TURN if TURN in names else None
-    moves = [n for n in MOVES if n in names]
-    clicks = [n for n in CLICKS if n in names]
-    drag = DRAG if DRAG in names else None
+    if not names:
+        return {'idle': None, 'turn': None, 'moves': [], 'clicks': [], 'drag': None, 'acts': []}
+
+    if manifest:
+        idle = _manifest_name(manifest.get('idle'), names)
+        turn = _manifest_name(manifest.get('turn'), names)
+        moves = _manifest_names(manifest.get('moves', []), names)
+        clicks = _manifest_names(manifest.get('clicks', []), names)
+        drag = _manifest_name(manifest.get('drag'), names)
+    else:
+        # 关键词自动识别，便于“一股脑丢进去”也能工作
+        idle = IDLE if IDLE in names else next(
+            (n for n in names if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
+        )
+        turn = TURN if TURN in names else next(
+            (n for n in names if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
+        )
+        drag = DRAG if DRAG in names else next(
+            (n for n in names if _keyword_match(n, ['拖拽', '拖', '悬空', 'drag', '抓'])), None
+        )
+        moves = [n for n in MOVES if n in names]
+        if not moves:
+            moves = [n for n in names if _keyword_match(n, ['走', '跑', '移动', 'move', 'walk', 'run', '踏步', '奔跑'])]
+        clicks = [n for n in CLICKS if n in names]
+        if not clicks:
+            clicks = [n for n in names if _keyword_match(n, ['点击', '回应', 'click', 'response'])]
+
+    # 如果没有明确 idle，安全回退到第一个动画，避免启动崩溃
+    if idle is None:
+        idle = next(iter(names), None)
+
     core = {idle, turn, drag, *moves, *clicks}
     core.discard(None)
     acts = [n for n in names if n not in core]

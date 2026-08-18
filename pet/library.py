@@ -43,6 +43,7 @@ class MovieLibrary(QObject):
         else:
             self._asset_dir = catalog.resolve_character_video_dir(self.character_id)
         self._manifest = None if manifest is None else dict(manifest)
+        self.manifest = catalog.load_character_manifest(self.character_id, self._asset_dir)
         self._movies: dict[str, WebMClip] = {}
 
         self._load_all()
