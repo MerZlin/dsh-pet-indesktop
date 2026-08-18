@@ -40,7 +40,14 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
         import ctypes
         import ctypes.util
 
-        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
+        lib_path = ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib'
+        objc = ctypes.cdll.LoadLibrary(lib_path)
+
+        # 关键：sel_registerName 返回 SEL（64 位指针）。ctypes 默认按 c_int(32 位)
+        # 截断返回值，损坏的 SEL 会让 ObjC runtime 段错误（SIGSEGV），必须显式声明
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+
         msg = objc.objc_msgSend
         msg.restype = ctypes.c_void_p
 
