@@ -45,6 +45,7 @@ class PetWindow(QWidget):
         self.anim: str = catalog.IDLE
         self.facing: str = config.get('facing', 'left')  # left | right
         self.scale: float = float(config.get('scale', catalog.DEFAULT_SCALE))
+        self.no_move: bool = bool(config.get('no_move', False))  # 不移动：禁用自动移动
         self.movie = None
         self._frame_pixmap: QPixmap | None = None
         self._ended_fired = False
@@ -125,6 +126,14 @@ class PetWindow(QWidget):
         self.show()
         self.cfg.set('on_top', on)
         self.cfg.save()
+
+    def set_no_move(self, on: bool) -> None:
+        """切换「不移动」：禁用自动移动；勾选瞬间若正在移动则立即停下回待机。"""
+        self.no_move = bool(on)
+        self.cfg.set('no_move', self.no_move)
+        self.cfg.save()
+        if self.no_move and self._move_plan is not None:
+            self._switch(catalog.IDLE)  # 打断进行中的移动
 
     # ================================================================ 播放
     def _switch(self, name: str) -> None:
@@ -215,7 +224,10 @@ class PetWindow(QWidget):
         self._pick_next()
 
     def _pick_next(self) -> None:
-        """动画链：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动（空间不够回退动作）。"""
+        """动画链：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动（空间不够回退动作）。
+
+        「不移动」模式下跳过移动分支，其概率并入动作 → 30% 待机 / 10% 转向 / 60% 动作。
+        """
         roll = random.random()
         if roll < catalog.P_IDLE:
             self._switch(catalog.IDLE)
@@ -224,7 +236,7 @@ class PetWindow(QWidget):
         elif roll < catalog.P_ACTS:
             self._switch(self._pick(catalog.ACTS, exclude=self.anim))
         else:
-            if not self._try_move():
+            if self.no_move or not self._try_move():
                 self._switch(self._pick(catalog.ACTS, exclude=self.anim))
 
     @staticmethod
@@ -233,8 +245,11 @@ class PetWindow(QWidget):
         return random.choice(entries)
 
     # ================================================================ 移动
-    def _try_move(self) -> bool:
-        """计划一次朝 facing 方向的移动；屏幕空间不够返回 False。"""
+    def _try_move(self, name: str | None = None) -> bool:
+        """计划一次朝 facing 方向的移动；屏幕空间不够返回 False。
+
+        name 给定时使用指定动画（手动触发），否则随机选一个移动姿态。
+        """
         if self._move_plan is not None:
             return True  # 已在移动/已计划
         avail = self.screen().availableGeometry()
@@ -247,7 +262,7 @@ class PetWindow(QWidget):
         right_bound = avail.right() - catalog.MOVE_MARGIN - half_w
         if target_cx < left_bound or target_cx > right_bound:
             return False
-        move_name = self._pick(catalog.MOVES)
+        move_name = name or self._pick(catalog.MOVES)
         duration = self.lib.duration(move_name)
         self._switch(move_name)
         self._move_plan = {
@@ -258,6 +273,13 @@ class PetWindow(QWidget):
         }
         self._move_timer.start()
         return True
+
+    def _trigger_move(self, name: str) -> None:
+        """手动触发移动（右键菜单）：先打断当前移动，再朝 facing 方向走动；
+        屏幕空间不足则原地播放走路姿态（不位移）。"""
+        self._cancel_move()
+        if not self._try_move(name):
+            self._switch(name)  # 贴边放不下：原地播放走路姿态，不位移
 
     def _on_move_tick(self) -> None:
         """位置驱动：跟随动画播放进度插值（前后各 2s 不动，中间走完全程）。"""
@@ -355,7 +377,7 @@ class PetWindow(QWidget):
 
         m_moves = menu.addMenu('动画 · 移动')
         for n in catalog.MOVES:
-            m_moves.addAction(n, lambda n=n: self._switch(n))
+            m_moves.addAction(n, lambda n=n: self._trigger_move(n))
 
         m_clicks = menu.addMenu('动画 · 点击回应')
         for n in catalog.CLICKS:
@@ -372,6 +394,11 @@ class PetWindow(QWidget):
         on_top.setCheckable(True)
         on_top.setChecked(bool(self.cfg.get('on_top', True)))
         on_top.toggled.connect(self.set_on_top)
+
+        no_move = menu.addAction('不移动')
+        no_move.setCheckable(True)
+        no_move.setChecked(self.no_move)
+        no_move.toggled.connect(self.set_no_move)
 
         auto = menu.addAction('开机自启')
         auto.setCheckable(True)

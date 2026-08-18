@@ -101,6 +101,20 @@ def main() -> int:
         assert win.x() in (x0, win._move_plan["target_x"])  # 前后 2s 内位置不动或已到位
         win._cancel_move()
 
+    # 9. 「不移动」：状态机不再进入移动动画；手动移动仍可走动；开关持久化
+    win.set_no_move(True)
+    assert win.no_move is True and cfg.get("no_move") is True
+    for _ in range(200):
+        win._cancel_move()
+        win._pick_next()
+        assert win.anim not in catalog.MOVES, win.anim
+    win._cancel_move()
+    win._trigger_move(catalog.MOVES[0])
+    assert win.anim in catalog.MOVES, win.anim
+    win._cancel_move()
+    win.set_no_move(False)
+    assert win.no_move is False and cfg.get("no_move") is False
+
     win.close()
     print("\n=== ALL SMOKE TESTS PASSED ===")
     return 0
