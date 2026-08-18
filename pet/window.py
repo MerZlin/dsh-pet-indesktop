@@ -13,8 +13,10 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import random
+import sys
 
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QBitmap, QImage, QPainter, QPixmap
@@ -24,6 +26,39 @@ from . import autostart as autostart_mod
 from . import catalog
 from .config import Config
 from .library import MovieLibrary
+
+
+def _mac_set_window_level(view_id: int, level: int) -> bool:
+    """macOS 原生：把 NSWindow 层级设为指定值（3=置顶浮动，0=普通）。
+
+    Qt 的 WindowStaysOnTopHint 在 macOS 上对无边框 Tool 窗口/运行时切换不可靠，
+    这里用 objc runtime 直接调 [NSWindow setLevel:] 强制生效（ctypes 零依赖）。
+    """
+    if sys.platform != 'darwin':
+        return False
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
+        msg = objc.objc_msgSend
+        msg.restype = ctypes.c_void_p
+
+        sel_window = objc.sel_registerName(b'window')
+        sel_set_level = objc.sel_registerName(b'setLevel:')
+
+        # [view window] —— 无参，返回 NSWindow*
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        window = msg(ctypes.c_void_p(view_id), sel_window)
+        if not window:
+            return False
+
+        # [window setLevel:level] —— 一个 NSInteger 参数
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+        msg(ctypes.c_void_p(window), sel_set_level, level)
+        return True
+    except Exception:
+        return False
 
 
 class PetWindow(QWidget):
@@ -90,42 +125,73 @@ class PetWindow(QWidget):
         self._save_position()
 
     # ================================================================ 位置
+    def _screen_available(self):
+        """窗口所在屏幕；macOS 上 self.screen() 可能失效，兜底主屏。"""
+        from PySide6.QtGui import QGuiApplication
+        scr = self.screen()
+        if scr is None:
+            scr = QGuiApplication.primaryScreen()
+        return scr
+
     def _restore_position(self) -> None:
         """恢复上次位置（按屏幕比例），无记录则落右下角。"""
-        avail = self.screen().availableGeometry()
+        scr = self._screen_available()
+        avail = scr.availableGeometry()
         rx, ry = self.cfg.get('rx'), self.cfg.get('ry')
         if rx is None or ry is None:
             x = avail.right() - self._w - catalog.CORNER_MARGIN
             y = avail.bottom() - self._h
         else:
-            x = int(round(rx * avail.width())) - self._w // 2
-            y = int(round(ry * avail.height())) - self._h // 2
+            x = int(round(avail.left() + rx * avail.width())) - self._w // 2
+            y = int(round(avail.top() + ry * avail.height())) - self._h // 2
             x = min(max(x, avail.left()), avail.right() - self._w)
             y = min(max(y, avail.top()), avail.bottom() - self._h)
+        logging.info('恢复位置 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)',
+                     scr.name(), avail.left(), avail.top(), avail.right(),
+                     avail.bottom(), scr.devicePixelRatio(), x, y)
         self.move(x, y)
 
     def _save_position(self) -> None:
         """以"窗口中心相对屏幕可用区的比例"持久化位置（分辨率变化后仍正确）。"""
-        avail = self.screen().availableGeometry()
+        scr = self._screen_available()
+        avail = scr.availableGeometry()
         if avail.width() <= 0 or avail.height() <= 0:
             return
-        self.cfg.set('rx', (self.x() + self._w / 2) / avail.width())
-        self.cfg.set('ry', (self.y() + self._h / 2) / avail.height())
+        cx = self.x() + self._w / 2
+        cy = self.y() + self._h / 2
+        self.cfg.set('rx', (cx - avail.left()) / avail.width())
+        self.cfg.set('ry', (cy - avail.top()) / avail.height())
         self.cfg.set('facing', self.facing)
         self.cfg.set('scale', self.scale)
         self.cfg.save()
 
     def _go_default_corner(self) -> None:
-        avail = self.screen().availableGeometry()
-        self.move(avail.right() - self._w - catalog.CORNER_MARGIN,
-                  avail.bottom() - self._h)
+        scr = self._screen_available()
+        avail = scr.availableGeometry()
+        x = avail.right() - self._w - catalog.CORNER_MARGIN
+        y = avail.bottom() - self._h
+        logging.info('回到右下角 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)',
+                     scr.name(), avail.left(), avail.top(), avail.right(),
+                     avail.bottom(), scr.devicePixelRatio(), x, y)
+        self.move(x, y)
         self._save_position()
 
     def set_on_top(self, on: bool) -> None:
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
-        self.show()
         self.cfg.set('on_top', on)
         self.cfg.save()
+        self.show()
+        if sys.platform == 'darwin':
+            _mac_set_window_level(int(self.winId()), 3 if on else 0)
+        if on:
+            self.raise_()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """窗口显示时校正层级（macOS 上 Qt 置顶 flag 对 Tool 窗口不可靠）。"""
+        super().showEvent(event)
+        if sys.platform == 'darwin':
+            on = bool(self.cfg.get('on_top', True))
+            _mac_set_window_level(int(self.winId()), 3 if on else 0)
 
     def set_no_move(self, on: bool) -> None:
         """切换「不移动」：禁用自动移动；勾选瞬间若正在移动则立即停下回待机。"""
