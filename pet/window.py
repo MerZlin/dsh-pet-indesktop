@@ -476,11 +476,10 @@ class PetWindow(QWidget):
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         menu = QMenu(self)
 
-        m_rest = menu.addMenu('动画 · 待机 / 转向')
         if self.idle:
-            m_rest.addAction(self.idle, lambda: self._switch(self.idle))
+            menu.addAction('动画 · 待机', lambda: self._switch(self.idle))
         if self.turn:
-            m_rest.addAction(self.turn, lambda: self._switch(self.turn))
+            menu.addAction('动画 · 转向', lambda: self._switch(self.turn))
 
         m_moves = menu.addMenu('动画 · 移动')
         for n in self.moves:

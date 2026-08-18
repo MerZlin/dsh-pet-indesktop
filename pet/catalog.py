@@ -59,8 +59,10 @@ SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
 DEFAULT_CHARACTER = 'shenshen'
 CHARACTERS = ('shenshen', 'guga', 'dada', 'suansuan', 'dudu', 'mimi')
 MANIFEST_FILENAME = 'manifest.json'
-# videos 下的分类子目录（待机与转向放在同一目录）
-DIR_IDLE_TURN = 'idle_turn'
+# videos 下的分类子目录
+DIR_IDLE = 'idle'
+DIR_TURN = 'turn'
+DIR_IDLE_TURN = 'idle_turn'  # 兼容旧结构：待机+转向合并目录
 DIR_MOVE = 'move'
 DIR_CLICK = 'click'
 DIR_DRAG = 'drag'
@@ -306,18 +308,27 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         for name in names:
             by_folder.setdefault(folder_map.get(name, ''), []).append(name)
 
-        idle_turn_names = by_folder.get(DIR_IDLE_TURN, [])
-        if idle_turn_names:
-            idle = IDLE if IDLE in idle_turn_names else next(
-                (n for n in idle_turn_names if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
-            )
-            turn = TURN if TURN in idle_turn_names else next(
-                (n for n in idle_turn_names if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
+        idle_names = by_folder.get(DIR_IDLE, [])
+        turn_names = by_folder.get(DIR_TURN, [])
+        legacy_idle_turn = by_folder.get(DIR_IDLE_TURN, [])
+
+        if idle_names:
+            idle = idle_names[0]
+        elif legacy_idle_turn:
+            idle = IDLE if IDLE in legacy_idle_turn else next(
+                (n for n in legacy_idle_turn if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
             )
             if idle is None:
-                idle = idle_turn_names[0]
-            if turn is None and len(idle_turn_names) > 1:
-                turn = next((n for n in idle_turn_names if n != idle), None)
+                idle = legacy_idle_turn[0]
+
+        if turn_names:
+            turn = turn_names[0]
+        elif legacy_idle_turn:
+            turn = TURN if TURN in legacy_idle_turn else next(
+                (n for n in legacy_idle_turn if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
+            )
+            if turn is None and idle is not None and len(legacy_idle_turn) > 1:
+                turn = next((n for n in legacy_idle_turn if n != idle), None)
 
         moves = list(by_folder.get(DIR_MOVE, []))
         clicks = list(by_folder.get(DIR_CLICK, []))
