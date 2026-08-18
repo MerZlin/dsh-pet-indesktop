@@ -94,7 +94,8 @@ Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「ma
 ### 技术栈
 
 - **Python 3.10+ / PySide6**（Qt for Python，LGPL 许可）
-- **QMovie** 播放 GIF，运行时零外部依赖（无需 ffmpeg）
+- **imageio-ffmpeg** 运行时解码 640×360 透明 webm（VP9 alpha，RGBA 帧）
+- **GIF/QMovie** 作为兼容回退（无 imageio-ffmpeg 或素材缺失时）
 
 ### 动画链状态机（1:1 移植原插件 `client.js`）
 
@@ -115,30 +116,31 @@ Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「ma
 每帧按人物 alpha 通道生成 `QBitmap` mask，透明区域鼠标直接穿透到下层窗口，
 实现"只有宠物本体可点击"（等效原版 HIT_BOX 命中层）。
 
-### 素材转码（webm → GIF）
+### 素材播放（webm 主路线）
 
-原项目的高清资源是 640×360 透明 **webm**（VP9 + 8-bit alpha）。为了让桌宠
-运行时零依赖，本项目把 webm 一次性预转码为同分辨率的透明 **GIF**，用 QMovie 播放。
-`scripts/convert.py` 的关键点是 `-c:v libvpx-vp9` 必须放在 `-i` 之前 ——
-ffmpeg 原生 vp9 解码器会丢弃 alpha（原项目 DESIGN.md 踩坑记录第 3 条，已实测复现）。
+本项目直接运行时解码上游 640×360 透明 **webm**（VP9 + 8-bit alpha），
+使用 `imageio-ffmpeg` 自带的静态 ffmpeg 输出 RGBA 帧，保留半透明边缘。
+关键点是解码时必须使用 `-c:v libvpx-vp9` 放在输入之前，否则原生 vp9 解码器会丢弃 alpha。
+`scripts/convert.py` 仍保留，用于生成 GIF 回退素材。
 
 ## 快速开始
 
 ### 1. 安装依赖
 
 ```sh
-pip install PySide6
+pip install PySide6 imageio-ffmpeg
 ```
 
 ### 2. 准备素材
 
-素材体积较大（GIF 392MB，未随仓库分发）。请从上游
-[dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库获取
+请从上游 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库获取
 `dsh-pet/assets/thumb/*.webm`（51 个 640×360 透明 webm），放到本项目的
-`assets/videos/` 目录，然后转码：
+`assets/videos/` 目录。无需转码即可直接运行。
+
+如需保留 GIF 回退，可再执行：
 
 ```sh
-pip install imageio-ffmpeg pillow
+pip install pillow
 python scripts/convert.py            # 默认读 assets/videos/，输出 assets/animations/
 # 或指定源目录：python scripts/convert.py --src <你的webm目录>
 ```
@@ -152,6 +154,8 @@ python scripts/convert.py            # 默认读 assets/videos/，输出 assets/
 ```bat
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name dsh-pet-indesktop ^
+    --collect-all imageio_ffmpeg ^
+    --add-data "assets/videos;assets/videos" ^
     --add-data "assets/animations;assets/animations" ^
     packaging/pet_entry.py
 ```
@@ -208,7 +212,8 @@ python -m pet
 ```
 ├── pet/                 # 核心代码
 │   ├── catalog.py       # 51 段动画目录、分类、几何/概率常量
-│   ├── library.py       # QMovie 素材库（速度补偿）
+│   ├── library.py       # 素材库：webm 优先，GIF/QMovie 回退
+│   ├── webm_clip.py     # imageio-ffmpeg 解码 webm 的播放器
 │   ├── window.py        # 桌宠窗口：状态机 + 动画链 + 移动驱动 + 交互
 │   ├── config.py        # 配置持久化（跨平台：APPDATA / Application Support / .config）
 │   ├── autostart.py     # 开机自启（跨平台：Windows 注册表 / macOS LaunchAgents）
@@ -223,11 +228,9 @@ python -m pet
 
 ## 已知说明
 
-**清晰度略糊于 web 端**：web 端直接播放 640×360 透明 webm（VP9 视频，8-bit alpha），
-而本项目的 GIF 受格式本身限制 —— ① 只支持 **1-bit alpha**（每像素要么全透明要么
-全不透明，无半透明过渡，发丝边缘略硬）；② 最多 **256 色调色板**（有损颜色量化）。
-分辨率与帧率与 web 端一致（640×360 / 24fps），但颜色与边缘过渡略逊，属 GIF 格式的
-固有限制。若追求与 web 端完全一致的画质，可改用运行时 ffmpeg 解码 webm 的方案。
+**主路线为 webm 直解**：与 web 端一致播放 640×360 透明 webm（VP9 视频，8-bit alpha），
+保留半透明边缘和原始色彩。GIF 仅作为兼容回退，回退时仍受 GIF 格式限制
+（1-bit alpha、256 色调色板）。
 
 ## 开发经验与教训
 

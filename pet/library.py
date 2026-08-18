@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-QMovie-backed clip library（GIF 主路线，零额外依赖）。
+Media library —— webm 主路线，GIF/QMovie 作为兼容回退。
 
 对外保持与窗口层一致的形状：
 - movie(name) -> clip object
 - movies() -> name -> clip mapping
 - frames(name) / duration(name)（秒）
 
-QMovieClip 包装 QMovie，补齐 start/stop/jumpToFrame/currentPixmap/
-currentFrameNumber/currentTimeSeconds/frameChanged/finished/errorOccurred；
-时间统一为秒（QMovie 无 duration()，按 帧数 × FRAME_MS 换算）。
+WebMClip 基于 imageio-ffmpeg 解码 640×360 透明 webm（RGBA）；
+QMovieClip 保留原 GIF 回退能力。
 """
 
 from __future__ import annotations
@@ -21,14 +20,14 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QMovie
 
 from . import catalog
+from .webm_clip import WebMClip
 
-# QMovie 播放速度补偿（%）：实测 QMovie 每帧比 GIF 原生延迟慢约 15ms，
-# 120% 恰好校准回原生 80ms/帧；如更换素材帧率可调整该常量。
+# QMovie 播放速度补偿（%）：仅 GIF 回退路线使用。
 PLAYBACK_SPEED = 120
 
 
 class QMovieClip(QObject):
-    """QMovie 包装：播放接口与窗口层兼容。"""
+    """QMovie 包装：播放接口与窗口层兼容（GIF 回退）。"""
 
     frameChanged = Signal(int)
     finished = Signal()
@@ -39,25 +38,20 @@ class QMovieClip(QObject):
         self.path = path
         self._movie = QMovie(str(path))
         self._movie.setCacheMode(QMovie.CacheMode.CacheNone)
-        # QMovie 定时器+解码开销实测约 +15ms/帧（80ms 帧实际 ~95ms），
-        # setSpeed(120) 校准回 GIF 原生 80ms/帧（实测 79.6ms）
         self._movie.setSpeed(PLAYBACK_SPEED)
         self._movie.frameChanged.connect(self._on_frame_changed)
         self._movie.finished.connect(self.finished)
         self._movie.error.connect(lambda err: self.errorOccurred.emit(str(err)))
         self._frame_count = 0
-        # 首帧预解码：确定帧数 + 防切换空白
         self._movie.jumpToFrame(0)
         self._frame_count = max(0, self._movie.frameCount())
 
-    # ------------------------------------------------------------ metadata
     def frameCount(self) -> int:
         if self._frame_count <= 0:
             self._frame_count = max(0, self._movie.frameCount())
         return max(1, self._frame_count)
 
     def duration(self) -> float:
-        """总时长（秒）= 帧数 × FRAME_MS。"""
         return self.frameCount() * catalog.FRAME_MS / 1000.0
 
     def currentFrameNumber(self) -> int:
@@ -73,7 +67,6 @@ class QMovieClip(QObject):
     def currentPixmap(self):
         return self._movie.currentPixmap()
 
-    # ------------------------------------------------------------ lifecycle
     def start(self) -> None:
         self._movie.start()
 
@@ -88,7 +81,6 @@ class QMovieClip(QObject):
             frame_index = total - 1
         return self._movie.jumpToFrame(frame_index)
 
-    # ------------------------------------------------------------ internals
     def _on_frame_changed(self, n: int) -> None:
         fc = self._movie.frameCount()
         if fc > 0:
@@ -97,7 +89,7 @@ class QMovieClip(QObject):
 
 
 class MovieLibrary(QObject):
-    """GIF 素材库：预加载全部 QMovie（CacheNone + 首帧预解码）。"""
+    """素材库：优先加载 webm，缺失或解码初始化失败时回退 GIF。"""
 
     def __init__(
         self,
@@ -107,9 +99,9 @@ class MovieLibrary(QObject):
         manifest: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._asset_dir = Path(asset_dir) if asset_dir is not None else catalog.assets_dir()
+        self._asset_dir = Path(asset_dir) if asset_dir is not None else catalog.webm_dir()
         self._manifest = dict(manifest or catalog.ANIM_FILES)
-        self._movies: dict[str, QMovieClip] = {}
+        self._movies: dict[str, object] = {}
 
         self._load_all()
 
@@ -121,15 +113,23 @@ class MovieLibrary(QObject):
             if not path.exists():
                 missing.append(f"{name}: {path}")
                 continue
+            # webm 解码依赖不可用且存在 GIF 时，自动回退 GIF
+            if path.suffix.lower() == '.webm' and not WebMClip.available:
+                gif = catalog.gif_dir() / fname
+                if gif.exists():
+                    path = gif
             resolved[name] = path
 
         if missing:
             raise FileNotFoundError("缺少素材文件: " + ", ".join(missing))
 
         for name, path in resolved.items():
-            self._movies[name] = QMovieClip(path, parent=self)
+            if path.suffix.lower() == '.webm':
+                self._movies[name] = WebMClip(path, parent=self)
+            else:
+                self._movies[name] = QMovieClip(path, parent=self)
 
-    def movie(self, name: str) -> QMovieClip:
+    def movie(self, name: str):
         return self._movies[name]
 
     def frames(self, name: str) -> int:
@@ -141,6 +141,6 @@ class MovieLibrary(QObject):
     def names(self) -> list[str]:
         return list(self._movies.keys())
 
-    def movies(self) -> dict[str, QMovieClip]:
+    def movies(self) -> dict[str, object]:
         """Name -> clip mapping for window wiring."""
         return dict(self._movies)

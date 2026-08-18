@@ -128,23 +128,38 @@ assert len(ACTS) == 42, f"动作池应为 42，实际 {len(ACTS)}"
 
 
 def assets_dir() -> Path:
-    """主素材目录（项目根/assets/animations，透明 GIF）。"""
+    """兼容旧调用：默认 GIF 素材目录（项目根/assets/animations）。"""
+    return gif_dir()
+
+
+def gif_dir() -> Path:
+    """GIF 素材目录（项目根/assets/animations，透明 GIF）。"""
     return Path(__file__).resolve().parent.parent / 'assets' / 'animations'
 
 
-def legacy_assets_dir() -> Path:
-    """兼容回退目录（项目根/assets/videos，透明 webm）。"""
+def webm_dir() -> Path:
+    """webm 素材目录（项目根/assets/videos，透明 webm，主路线）。"""
     return Path(__file__).resolve().parent.parent / 'assets' / 'videos'
 
 
+def legacy_assets_dir() -> Path:
+    """兼容旧名称：webm 素材目录。"""
+    return webm_dir()
+
+
 def resolve_asset_path(name: str, filename: str, base_dir: Path | None = None) -> Path:
-    """解析素材路径；GIF 缺失时回退到同名 webm。"""
-    base_dir = assets_dir() if base_dir is None else Path(base_dir)
-    path = base_dir / filename
-    if path.exists():
-        return path
-    if base_dir == assets_dir() and path.suffix.lower() == '.gif':
-        webm = legacy_assets_dir() / WEBM_FILES.get(name, path.with_suffix('.webm').name)
+    """解析素材路径；webm 缺失时回退到同名 GIF。"""
+    base_dir = Path(base_dir) if base_dir is not None else webm_dir()
+    if base_dir == webm_dir():
+        # webm 主路径：中文名.webm
+        webm = base_dir / WEBM_FILES.get(name, filename)
         if webm.exists():
             return webm
+        # GIF 回退
+        gif = gif_dir() / filename
+        if gif.exists():
+            return gif
+        return webm
+    # 显式传入其他目录时按原逻辑
+    path = base_dir / filename
     return path

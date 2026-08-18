@@ -40,14 +40,16 @@ jobs:
           fi
           echo "webm 数量: $(ls assets/videos/ | wc -l)"
 
-      - name: Convert webm to GIF
+      - name: Convert webm to GIF (fallback)
         run: python scripts/convert.py
 
       - name: Build .app with PyInstaller
         run: |
           python -m PyInstaller --noconfirm --clean --windowed \
             --paths . \
+            --collect-all imageio_ffmpeg \
             --name "dsh-pet-indesktop" \
+            --add-data "assets/videos:assets/videos" \
             --add-data "assets/animations:assets/animations" \
             packaging/pet_entry.py
 
