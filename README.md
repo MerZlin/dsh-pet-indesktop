@@ -4,8 +4,10 @@
 > 桌宠的动画素材、动画链行为模型、交互设计均来自原项目，特此声明并感谢原作者的贡献。
 
 把 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 插件里的桌宠，改造成一个
-**独立的 Windows 桌面宠物**软件 —— 不依赖 DSH 运行时，用 Python + PySide6 实现，
-双击即跑，复用原项目 51 段高清动画（640×360，24fps）。
+**跨平台的独立桌面宠物**软件（支持 **Windows** 与 **macOS**）—— 不依赖 DSH 运行时，
+用 Python + PySide6 实现，双击即跑，复用原项目 51 段高清动画（640×360，24fps）。
+
+Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「macOS」章节。
 
 ## 特性
 
@@ -17,7 +19,7 @@
 - **透明穿透**：窗口逐帧按人物 alpha 生成 mask，透明区域鼠标直接穿透到下层窗口
 - **右键菜单**：手动播放任意动画、回到右下角、窗口置顶、不移动、开机自启、4 档大小、退出
 - **系统托盘**：显示/隐藏、开机自启、退出；位置/朝向/大小/置顶自动持久化
-- **开机自启**：写 HKCU 注册表 Run 键（无需管理员权限），可随时开关
+- **开机自启**：Windows 写 HKCU 注册表 Run 键 / macOS 写 LaunchAgents（均无需管理员权限），可随时开关
 
 ## 使用手册
 
@@ -68,9 +70,11 @@
 
 ### 开机自启
 
-勾选「开机自启」后，桌宠写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-（**无需管理员权限**），Windows 登录后自动启动；取消勾选即移除。源码运行时指向
-`pythonw -m pet`，打包成 exe 后指向 exe 自身路径。
+勾选「开机自启」后，桌宠随系统登录自动启动；取消勾选即移除。
+
+- **Windows**：写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（无需管理员权限）；
+  源码运行时指向 `pythonw -m pet`，打包成 exe 后指向 exe 自身路径
+- **macOS**：写入 LaunchAgents（`~/Library/LaunchAgents/`），登录后自动启动
 
 ## 实现方式
 
@@ -157,13 +161,17 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 > 请用下方「源码运行」方式使用。
 
 > **未签名提示**：目前为免费版（ad-hoc 签名，未经 Apple 公证），首次打开会被 macOS
-> Gatekeeper 拦截。放行方法（任选其一）：
+> Gatekeeper 拦截。放行方法（任选其一，`<你的app路径>` 改成实际位置）：
 > 1. 右键 app →「打开」→ 再点「打开」；若无「打开」选项，走第 2 条
 > 2. 系统设置 → 隐私与安全性 → 下滑找到「已阻止 'dsh-pet-indesktop'」→ 点「仍然打开」
-> 3. 终端执行后双击（路径改成实际位置）：
+> 3. 终端清除隔离标记后双击（最常用）：
 >    ```sh
->    xattr -cr "/Applications/dsh-pet-indesktop.app"
->    codesign --force --deep --sign - "/Applications/dsh-pet-indesktop.app"
+>    sudo xattr -d com.apple.quarantine "<你的app路径>/dsh-pet-indesktop.app"
+>    ```
+> 4. 若第 3 条仍被拦，再补 ad-hoc 签名后双击：
+>    ```sh
+>    xattr -cr "<你的app路径>/dsh-pet-indesktop.app"
+>    codesign --force --deep --sign - "<你的app路径>/dsh-pet-indesktop.app"
 >    ```
 
 ### 源码运行
