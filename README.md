@@ -216,6 +216,52 @@ python -m pet
 分辨率与帧率与 web 端一致（640×360 / 24fps），但颜色与边缘过渡略逊，属 GIF 格式的
 固有限制。若追求与 web 端完全一致的画质，可改用运行时 ffmpeg 解码 webm 的方案。
 
+## 开发经验与教训
+
+> 记录本项目开发与打包过程中踩过的坑，供后续维护者参考。
+
+### 打包与分发
+
+- **CI 打包成功 ≠ 能运行**：macOS 的 GitHub Actions 构建曾"绿色成功"，但产物缺 `pet`
+  模块（运行时才报 `ModuleNotFoundError`）。原因：`pyinstaller` 命令不会把当前目录加进
+  模块搜索路径，从 `packaging/pet_entry.py` 入口分析时找不到项目根的 `pet` 包。必须用
+  `python -m PyInstaller --paths .`。教训：打包后在 CI 里加验证步骤（检查 warn 文件 /
+  解压检查权限），别只看绿灯。
+- **zip 会丢 macOS 可执行权限**：`zip -r` 打包 .app 后解压，二进制丢失 +x 权限，双击
+  无反应、终端 `permission denied`。改用 macOS 原生 `ditto -c -k --keepParent` 打包。
+- **未签名 app 必被 Gatekeeper 拦**：免费版加 ad-hoc 签名
+  （`codesign --force --deep --sign -`）后，「右键打开 / 系统设置放行」可用；彻底免
+  拦截需 Apple 开发者账号公证（$99/年）。放行方法见上文「macOS」章节。
+- **打包前先关掉正在运行的桌宠进程**：Windows 打包时若旧 exe 进程存活（或杀毒软件
+  正在扫描 400MB 大文件），PyInstaller 覆盖产物会报 `PermissionError: 拒绝访问`，
+  需结束进程并等扫描结束后重试。
+
+### macOS 平台特性
+
+- **Tool 窗口置顶用 `WA_MacAlwaysShowToolWindow`**：macOS 上 Qt 的
+  `WindowStaysOnTopHint` 对 `Tool` 窗口不可靠（Qt 官方已知问题 QTBUG-38580），正确
+  做法是设置 `Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow`；原生 `NSWindow.setLevel`
+  需等窗口重建完成后（`QTimer.singleShot(0)`）再调，否则被 Qt 覆盖。
+- **ctypes 调 ObjC 必须显式声明 restype**：`sel_registerName` 返回 64 位 SEL 指针，
+  不设 `restype = c_void_p` 会被 ctypes 默认按 32 位截断，损坏的 SEL 使 ObjC runtime
+  段错误（SIGSEGV，try/except 拦不住）。任何返回指针的 C 函数都要显式声明返回类型。
+- **屏幕坐标比例要减 `availableGeometry` 的 left/top**：macOS 上
+  `availableGeometry().top()` 等于菜单栏高度（≠0），按「窗口坐标 ÷ 可用区宽高」存比例
+  会偏一个菜单栏高度；正确做法是 `(坐标 - avail.left()/top()) / avail.width()/height()`。
+
+### 素材与播放
+
+- **ffmpeg 转码透明 webm 时 `-c:v libvpx-vp9` 必须放在 `-i` 之前**：ffmpeg 原生 vp9
+  解码器会丢弃 WebM alpha 通道（上游 DESIGN.md 踩坑记录第 3 条，已实测复现）。
+- **QMovie 播放 GIF 偏慢约 20%**：QMovie 的定时器 + 解码开销使每帧比 GIF 原生时长慢，
+  需 `setSpeed(120)` 校准（见 `pet/library.py` 的 `PLAYBACK_SPEED`）。
+
+### 验证
+
+- **真机验证不可替代**：macOS 专属代码路径（ctypes/ObjC、窗口置顶）在 Windows 上编译
+  与冒烟测试都覆盖不到，必须真机验证；诊断日志（恢复位置/回到右下角时记录
+  availableGeometry 与 DPR）就是为此加的。
+
 ## 许可与致谢
 
 - 本项目的 Python 代码为独立实现，采用 **MIT** 许可。
