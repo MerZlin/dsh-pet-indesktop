@@ -228,27 +228,27 @@ class WebMClip(QObject):
                     pass
 
     def _poll(self) -> None:
-        """主线程定时取帧。丢弃积压帧，只处理最新一帧，避免动画越播越快/越播越慢。"""
-        latest = None
-        saw_end = False
-        while True:
-            try:
-                item = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            if item is None:
-                saw_end = True
-            else:
-                latest = item
+        """主线程按视频帧率逐帧取帧，不跳帧、不积压追帧。
 
-        if latest is not None:
-            self._process_frame(latest)
+        注意：不能一次清空队列只处理最新帧，否则会把中间帧丢弃，
+        导致动画视觉上“快进”。这里每次只取最早的一帧。
+        """
+        try:
+            item = self._queue.get_nowait()
+        except queue.Empty:
+            return
 
-        if saw_end and not self._ended_fired:
-            self._ended_fired = True
-            self._running = False
-            self._timer.stop()
-            self.finished.emit()
+        if item is None:
+            # 正常播完；若在处理最后一帧时已经由窗口层启动了下一个动画，
+            # self._queue 已被替换，不会走到这里。
+            if not self._ended_fired:
+                self._ended_fired = True
+                self._running = False
+                self._timer.stop()
+                self.finished.emit()
+            return
+
+        self._process_frame(item)
 
     def _process_frame(self, data: bytes) -> None:
         expect = self._w * self._h * self._bpp
