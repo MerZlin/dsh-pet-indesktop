@@ -289,46 +289,51 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
 
     推荐的 videos 目录结构：
         videos/
-        ├── idle_turn/   # 待机 + 转向
-        ├── move/        # 移动
-        ├── click/       # 点击回应
-        ├── drag/        # 拖拽（可选）
-        └── random/      # 随机动作
+        ├── idle/     # 待机（可多个）
+        ├── turn/     # 转向（可多个）
+        ├── move/     # 移动
+        ├── click/    # 点击回应
+        ├── drag/     # 拖拽（可选）
+        └── random/   # 随机动作
     """
     names = set(names)
     if not names:
-        return {'idle': None, 'turn': None, 'moves': [], 'clicks': [], 'drag': None, 'acts': []}
+        return {
+            'idle': None, 'turn': None,
+            'idles': [], 'turns': [],
+            'moves': [], 'clicks': [], 'drag': None, 'acts': [],
+        }
 
-    idle = turn = drag = None
+    idles: list[str] = []
+    turns: list[str] = []
     moves: list[str] = []
     clicks: list[str] = []
+    drag = None
 
     if folder_map:
         by_folder: dict[str, list[str]] = {}
         for name in names:
             by_folder.setdefault(folder_map.get(name, ''), []).append(name)
 
-        idle_names = by_folder.get(DIR_IDLE, [])
-        turn_names = by_folder.get(DIR_TURN, [])
+        idles = list(by_folder.get(DIR_IDLE, []))
+        turns = list(by_folder.get(DIR_TURN, []))
         legacy_idle_turn = by_folder.get(DIR_IDLE_TURN, [])
 
-        if idle_names:
-            idle = idle_names[0]
-        elif legacy_idle_turn:
-            idle = IDLE if IDLE in legacy_idle_turn else next(
-                (n for n in legacy_idle_turn if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
-            )
-            if idle is None:
-                idle = legacy_idle_turn[0]
+        if not idles and legacy_idle_turn:
+            idle_candidates = [
+                n for n in legacy_idle_turn
+                if n == IDLE or _keyword_match(n, ['待机', 'idle', '呼吸'])
+            ]
+            idles = idle_candidates or (legacy_idle_turn[:1] if legacy_idle_turn else [])
 
-        if turn_names:
-            turn = turn_names[0]
-        elif legacy_idle_turn:
-            turn = TURN if TURN in legacy_idle_turn else next(
-                (n for n in legacy_idle_turn if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
-            )
-            if turn is None and idle is not None and len(legacy_idle_turn) > 1:
-                turn = next((n for n in legacy_idle_turn if n != idle), None)
+        if not turns and legacy_idle_turn:
+            turn_candidates = [
+                n for n in legacy_idle_turn
+                if n == TURN or _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])
+            ]
+            turns = turn_candidates
+            if not turns and idles and len(legacy_idle_turn) > 1:
+                turns = [n for n in legacy_idle_turn if n != idles[0]][:1]
 
         moves = list(by_folder.get(DIR_MOVE, []))
         clicks = list(by_folder.get(DIR_CLICK, []))
@@ -336,12 +341,16 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         if drag_names:
             drag = drag_names[0]
 
-    # 如果子目录没有覆盖完全，再用 manifest / 关键词补全
+    # manifest 补充/覆盖
     if manifest:
-        if idle is None:
-            idle = _manifest_name(manifest.get('idle'), names)
-        if turn is None:
-            turn = _manifest_name(manifest.get('turn'), names)
+        if not idles:
+            m = _manifest_name(manifest.get('idle'), names)
+            if m:
+                idles = [m]
+        if not turns:
+            m = _manifest_name(manifest.get('turn'), names)
+            if m:
+                turns = [m]
         if not moves:
             moves = _manifest_names(manifest.get('moves', []), names)
         if not clicks:
@@ -349,14 +358,19 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         if drag is None:
             drag = _manifest_name(manifest.get('drag'), names)
 
-    if idle is None:
-        idle = IDLE if IDLE in names else next(
+    # 关键词兜底
+    if not idles:
+        m = IDLE if IDLE in names else next(
             (n for n in names if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
         )
-    if turn is None:
-        turn = TURN if TURN in names else next(
+        if m:
+            idles = [m]
+    if not turns:
+        m = TURN if TURN in names else next(
             (n for n in names if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
         )
+        if m:
+            turns = [m]
     if drag is None:
         drag = DRAG if DRAG in names else next(
             (n for n in names if _keyword_match(n, ['拖拽', '拖', '悬空', 'drag', '抓'])), None
@@ -371,15 +385,20 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
             clicks = [n for n in names if _keyword_match(n, ['点击', '回应', 'click', 'response'])]
 
     # 如果没有明确 idle，安全回退到第一个动画，避免启动崩溃
-    if idle is None:
-        idle = next(iter(names), None)
+    if not idles:
+        first = next(iter(names), None)
+        if first:
+            idles = [first]
 
-    core = {idle, turn, drag, *moves, *clicks}
-    core.discard(None)
+    core = set(idles) | set(turns) | set(moves) | set(clicks)
+    if drag:
+        core.add(drag)
     acts = [n for n in names if n not in core]
     return {
-        'idle': idle,
-        'turn': turn,
+        'idle': idles[0] if idles else None,
+        'turn': turns[0] if turns else None,
+        'idles': idles,
+        'turns': turns,
         'moves': moves,
         'clicks': clicks,
         'drag': drag,

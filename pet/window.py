@@ -81,6 +81,8 @@ class PetWindow(QWidget):
         self.cats = catalog.build_categories(lib.names(), getattr(lib, 'manifest', None), getattr(lib, 'folder_map', None))
         self.idle = self.cats['idle']
         self.turn = self.cats['turn']
+        self.idles = self.cats['idles']
+        self.turns = self.cats['turns']
         self.moves = self.cats['moves']
         self.clicks = self.cats['clicks']
         self.drag = self.cats['drag']
@@ -224,8 +226,8 @@ class PetWindow(QWidget):
         self.cfg.set('no_move', self.no_move)
         self.cfg.save()
         if self.no_move and self._move_plan is not None:
-            if self.idle:
-                self._switch(self.idle)  # 打断进行中的移动
+            if self.idles:
+                self._switch(self._pick(self.idles))  # 打断进行中的移动
 
     # ================================================================ 播放
     def _switch(self, name: str) -> None:
@@ -292,7 +294,7 @@ class PetWindow(QWidget):
     def icon_pixmap(self, size: int = 64) -> QPixmap:
         """托盘图标：取当前帧（无则待机首帧）缩放。"""
         pm = self._frame_pixmap
-        if pm is None:
+        if pm is None and self.idle:
             pm = self.lib.movie(self.idle).currentPixmap()
         return pm.scaled(size, size,
                          Qt.AspectRatioMode.KeepAspectRatio,
@@ -306,13 +308,13 @@ class PetWindow(QWidget):
             self._ended_fired = False
             self.movie.start()
             return
-        if name == self.turn:
-            # 东张西望播完 → 翻转朝向
+        if name in self.turns:
+            # 转向动画播完 → 翻转朝向
             self.facing = 'right' if self.facing == 'left' else 'left'
         if name == self.drag or name in self.clicks:
             # 交互打断的动画播完 → 待机缓冲（一次性），待机播完再进链
-            if self.idle:
-                self._switch(self.idle)
+            if self.idles:
+                self._switch(self._pick(self.idles))
             return
         self._pick_next()
 
@@ -323,13 +325,13 @@ class PetWindow(QWidget):
         """
         roll = random.random()
         if roll < catalog.P_IDLE:
-            if self.idle:
-                self._switch(self.idle)
+            if self.idles:
+                self._switch(self._pick(self.idles, exclude=self.anim))
             else:
                 self._switch(self._pick(self.acts, exclude=self.anim))
         elif roll < catalog.P_TURN:
-            if self.turn:
-                self._switch(self.turn)
+            if self.turns:
+                self._switch(self._pick(self.turns, exclude=self.anim))
             else:
                 self._switch(self._pick(self.acts, exclude=self.anim))
         elif roll < catalog.P_ACTS:
@@ -450,8 +452,8 @@ class PetWindow(QWidget):
             if self._grab_offset is not None:
                 self.move(g - self._grab_offset)  # 停在松手处
             self._save_position()
-            if self.idle:
-                self._switch(self.idle)  # 回待机缓冲
+            if self.idles:
+                self._switch(self._pick(self.idles))  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
             self._on_click()
         self._dragging = False
@@ -468,7 +470,7 @@ class PetWindow(QWidget):
             return
         if not self.clicks:
             return
-        if self.idle and self.anim != self.idle:
+        if self.idles and self.anim not in self.idles:
             return  # 链上非待机动画播放中不打断
         self._cancel_move()
         self._switch(self._pick(self.clicks))
@@ -476,10 +478,14 @@ class PetWindow(QWidget):
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         menu = QMenu(self)
 
-        if self.idle:
-            menu.addAction('动画 · 待机', lambda: self._switch(self.idle))
-        if self.turn:
-            menu.addAction('动画 · 转向', lambda: self._switch(self.turn))
+        if self.idles:
+            m_idle = menu.addMenu('动画 · 待机')
+            for n in self.idles:
+                m_idle.addAction(n, lambda n=n: self._switch(n))
+        if self.turns:
+            m_turn = menu.addMenu('动画 · 转向')
+            for n in self.turns:
+                m_turn.addAction(n, lambda n=n: self._switch(n))
 
         m_moves = menu.addMenu('动画 · 移动')
         for n in self.moves:
