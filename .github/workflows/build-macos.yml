@@ -59,6 +59,10 @@ jobs:
           fi
           echo "pet 模块已收集"
 
+      - name: Ad-hoc codesign (no Apple Developer cert needed)
+        run: |
+          codesign --force --deep --sign - "dist/dsh-pet-indesktop.app"
+
       - name: Package as zip (ditto preserves permissions & symlinks)
         run: |
           cd dist

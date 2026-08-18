@@ -156,9 +156,15 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 > **Intel Mac 用户**：当前仅提供 Apple Silicon（arm64）安装包，Intel 芯片的 Mac
 > 请用下方「源码运行」方式使用。
 
-> **未签名提示**：目前为免费未签名版本，首次打开会被 macOS Gatekeeper 拦截。
-> 右键点击 app →「打开」→ 再点一次「打开」即可；或终端执行
-> `xattr -dr com.apple.quarantine "/Applications/dsh-pet-indesktop.app"` 后正常打开。
+> **未签名提示**：目前为免费版（ad-hoc 签名，未经 Apple 公证），首次打开会被 macOS
+> Gatekeeper 拦截。放行方法（任选其一）：
+> 1. 右键 app →「打开」→ 再点「打开」；若无「打开」选项，走第 2 条
+> 2. 系统设置 → 隐私与安全性 → 下滑找到「已阻止 'dsh-pet-indesktop'」→ 点「仍然打开」
+> 3. 终端执行后双击（路径改成实际位置）：
+>    ```sh
+>    xattr -cr "/Applications/dsh-pet-indesktop.app"
+>    codesign --force --deep --sign - "/Applications/dsh-pet-indesktop.app"
+>    ```
 
 ### 源码运行
 
