@@ -30,15 +30,15 @@ jobs:
       - name: Fetch source webm from upstream dsh-pet
         run: |
           git clone --depth 1 https://github.com/PC2005-cloud/dsh-pet.git /tmp/dsh-pet
-          mkdir -p assets/videos
+          mkdir -p assets/characters/shenshen/videos
           if [ -d /tmp/dsh-pet/dsh-pet/assets/thumb ]; then
-            cp /tmp/dsh-pet/dsh-pet/assets/thumb/*.webm assets/videos/
+            cp /tmp/dsh-pet/dsh-pet/assets/thumb/*.webm assets/characters/shenshen/videos/
           elif [ -d /tmp/dsh-pet/assets/thumb ]; then
-            cp /tmp/dsh-pet/assets/thumb/*.webm assets/videos/
+            cp /tmp/dsh-pet/assets/thumb/*.webm assets/characters/shenshen/videos/
           else
             echo "::error::未找到上游 webm 目录"; exit 1
           fi
-          echo "webm 数量: $(ls assets/videos/ | wc -l)"
+          echo "webm 数量: $(ls assets/characters/shenshen/videos/ | wc -l)"
 
 
       - name: Build .app with PyInstaller
@@ -47,7 +47,7 @@ jobs:
             --paths . \
             --collect-all imageio_ffmpeg \
             --name "dsh-pet-indesktop" \
-            --add-data "assets/videos:assets/videos" \
+            --add-data "assets/characters:assets/characters" \
             packaging/pet_entry.py
 
       - name: Verify pet module collected

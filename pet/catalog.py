@@ -10,6 +10,9 @@ assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）。
 - 落地偏移 PAD = 360 - 330 = 30px（绘制时把帧下移 PAD，让脚踩在窗口底线）
 """
 
+import os
+import sys
+
 from pathlib import Path
 
 # ---------------------------------------------------------------- 画布几何
@@ -48,6 +51,12 @@ CORNER_MARGIN = 24  # 距屏幕右缘的默认间距
 
 # 可选的显示缩放档位（相对 640 宽：320px / 462px / 544px / 640px）
 SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
+
+# ---------------------------------------------------------------- 多形象
+# 当前内置形象与未来扩展形象 ID（目录名建议使用稳定 ASCII）
+DEFAULT_CHARACTER = 'shenshen'
+CHARACTERS = ('shenshen', 'guga', 'dada', 'suansuan', 'dudu', 'mimi')
+
 
 # ---------------------------------------------------------------- 动画映射
 # 中文名 → webm 文件名（主路径，文件名与中文名一致）
@@ -121,18 +130,87 @@ assert len(ACTS) == 42, f"动作池应为 42，实际 {len(ACTS)}"
 
 
 def assets_dir() -> Path:
-    """主素材目录（项目根/assets/videos，透明 webm）。"""
+    """兼容旧调用：默认形象 shenshen 的 webm 素材目录。"""
     return webm_dir()
+
+
+def characters_dir() -> Path:
+    """内置多形象根目录（项目根/assets/characters）。"""
+    return Path(__file__).resolve().parent.parent / 'assets' / 'characters'
+
+
+def character_video_dir(character_id: str) -> Path:
+    """内置某个形象的 webm 目录：assets/characters/<id>/videos。"""
+    return characters_dir() / character_id / 'videos'
+
+
+def external_character_dirs() -> list[Path]:
+    """外部可扩展形象目录（优先级高于内置 assets/characters）。
+
+    顺序：
+    1. exe 同目录 / 当前工作目录下的 characters/
+    2. 用户数据目录下的 dsh-pet-standalone/characters/
+    """
+    dirs: list[Path] = []
+    if getattr(sys, 'frozen', False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path.cwd()
+    dirs.append(base / 'characters')
+
+    if sys.platform == 'win32':
+        data_root = Path(os.environ.get('APPDATA', Path.home())) / 'dsh-pet-standalone'
+    elif sys.platform == 'darwin':
+        data_root = Path.home() / 'Library' / 'Application Support' / 'dsh-pet-standalone'
+    else:
+        data_root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'dsh-pet-standalone'
+    dirs.append(data_root / 'characters')
+    return dirs
+
+
+def resolve_character_video_dir(character_id: str) -> Path:
+    """按 外部 > 内置 的优先级返回形象视频目录。"""
+    for root in external_character_dirs():
+        candidate = root / character_id / 'videos'
+        if candidate.is_dir():
+            return candidate
+    return character_video_dir(character_id)
 
 
 def webm_dir() -> Path:
-    """webm 素材目录（项目根/assets/videos，透明 webm）。"""
-    return Path(__file__).resolve().parent.parent / 'assets' / 'videos'
+    """默认形象 shenshen 的 webm 素材目录（兼容旧调用）。"""
+    return character_video_dir(DEFAULT_CHARACTER)
 
 
 def legacy_assets_dir() -> Path:
-    """兼容旧名称：webm 素材目录。"""
+    """兼容旧名称：默认形象 webm 素材目录。"""
     return webm_dir()
+
+
+def build_categories(names) -> dict:
+    """根据某个形象实际拥有的动画名，动态计算分类。
+
+    这样不同形象可以有不同动作集：
+    - 核心动画按已知名称优先识别；
+    - 不在核心分类里的动画自动归入“随机动作池”。
+    """
+    names = set(names)
+    idle = IDLE if IDLE in names else (next(iter(names), None) if names else None)
+    turn = TURN if TURN in names else None
+    moves = [n for n in MOVES if n in names]
+    clicks = [n for n in CLICKS if n in names]
+    drag = DRAG if DRAG in names else None
+    core = {idle, turn, drag, *moves, *clicks}
+    core.discard(None)
+    acts = [n for n in names if n not in core]
+    return {
+        'idle': idle,
+        'turn': turn,
+        'moves': moves,
+        'clicks': clicks,
+        'drag': drag,
+        'acts': acts,
+    }
 
 
 def resolve_asset_path(name: str, filename: str, base_dir: Path | None = None) -> Path:

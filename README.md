@@ -140,8 +140,30 @@ Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「ma
   - 主线程 `QTimer` 按视频 fps 逐帧从队列取帧。
   - 每次只取最早的一帧，**不跳帧、不追帧**，避免动画快进。
   - 所有 `QImage/QPixmap` 和窗口 mask 更新都在主线程完成。
-- Windows 下 `imageio-ffmpeg` 内部使用 `STARTUPINFO` 隐藏 ffmpeg 控制台窗口，
-  避免旧 ffmpeg 子进程方案导致的“窗口反复出现/消失”。
+  - Windows 下 `imageio-ffmpeg` 内部使用 `STARTUPINFO` 隐藏 ffmpeg 控制台窗口，
+    避免旧 ffmpeg 子进程方案导致的“窗口反复出现/消失”。
+
+### 多形象支持
+
+项目支持多角色形象，每个角色一个独立目录：
+
+```text
+assets/characters/<character_id>/videos/*.webm
+```
+
+当前内置角色：
+
+```text
+shenshen  guga  dada  suansuan  dudu  mimi
+```
+
+- 默认形象为 `shenshen`，当前动画放在 `assets/characters/shenshen/videos/`。
+- 不同角色可以有**不同的动作集**：代码会扫描该角色目录下实际存在的 webm，
+  动态计算“待机 / 转向 / 移动 / 点击回应 / 拖拽 / 随机动作”，不在核心分类里的动画会自动归入随机动作池。
+- 外部扩展目录（优先级高于内置）：
+  - exe 同目录或当前工作目录下的 `characters/<id>/videos/`
+  - 用户数据目录下的 `dsh-pet-standalone/characters/<id>/videos/`
+- 以后新增形象时，不需要改代码，只需要放入对应角色的 webm 文件夹，并在配置中指定 `character`。
 
 ## 快速开始
 
@@ -155,7 +177,7 @@ pip install PySide6 imageio-ffmpeg
 
 请从上游 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库获取
 `dsh-pet/assets/thumb/*.webm`（51 个 640×360 透明 webm），放到本项目的
-`assets/videos/` 目录。无需转码即可直接运行。
+`assets/characters/shenshen/videos/` 目录。无需转码即可直接运行。
 
 ### 3. 运行
 
@@ -167,7 +189,7 @@ pip install PySide6 imageio-ffmpeg
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name dsh-pet-standalone-webm ^
     --collect-all imageio_ffmpeg ^
-    --add-data "assets/videos;assets/videos" ^
+    --add-data "assets/characters;assets/characters" ^
     packaging/pet_entry.py
 ```
 
@@ -206,7 +228,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 
 ```sh
 pip install PySide6 imageio-ffmpeg
-# 准备素材：同「快速开始」第 2 步，把 webm 放到 assets/videos/
+# 准备素材：同「快速开始」第 2 步，把 webm 放到 assets/characters/shenshen/videos/
 python -m pet
 ```
 
@@ -220,13 +242,15 @@ python -m pet
 
 ```
 ├── pet/                 # 核心代码
-│   ├── catalog.py       # 51 段动画目录、分类、几何/概率常量
-│   ├── library.py       # 素材库：webm 素材加载
+│   ├── catalog.py       # 动画目录、多形象常量、分类、几何/概率常量
+│   ├── library.py       # 素材库：按角色加载 webm
 │   ├── webm_clip.py     # imageio-ffmpeg 解码 webm 的播放器
 │   ├── window.py        # 桌宠窗口：状态机 + 动画链 + 移动驱动 + 交互
 │   ├── config.py        # 配置持久化（跨平台：APPDATA / Application Support / .config）
 │   ├── autostart.py     # 开机自启（跨平台：Windows 注册表 / macOS LaunchAgents）
 │   └── app.py           # 入口 + 系统托盘
+├── assets/characters/   # 多形象动画（每个角色一个子目录）
+│   └── <character_id>/videos/*.webm
 ├── packaging/           # PyInstaller 打包入口
 ├── .github/workflows/   # GitHub Actions（macOS 自动打包）
 ├── tests/               # 冒烟测试 / 诊断工具

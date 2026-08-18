@@ -76,6 +76,15 @@ class PetWindow(QWidget):
         self.lib = lib
         self.cfg = config
 
+        # 根据当前形象实际拥有的动画动态计算分类，支持不同角色动作不一致
+        self.cats = catalog.build_categories(lib.names())
+        self.idle = self.cats['idle']
+        self.turn = self.cats['turn']
+        self.moves = self.cats['moves']
+        self.clicks = self.cats['clicks']
+        self.drag = self.cats['drag']
+        self.acts = self.cats['acts']
+
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
         if config.get('on_top', True):
@@ -88,7 +97,7 @@ class PetWindow(QWidget):
             self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
 
         # ---- 状态 ----
-        self.anim: str = catalog.IDLE
+        self.anim: str = self.idle
         self.facing: str = config.get('facing', 'left')  # left | right
         self.scale: float = float(config.get('scale', catalog.DEFAULT_SCALE))
         self.no_move: bool = bool(config.get('no_move', False))  # 不移动：禁用自动移动
@@ -114,7 +123,7 @@ class PetWindow(QWidget):
             # 默认参数捕获 name，避免闭包晚绑定
             movie.frameChanged.connect(lambda n, name=name: self._on_frame(name, n))
         self._restore_position()
-        self._switch(catalog.IDLE)
+        self._switch(self.idle)
 
     # ================================================================ 尺寸
     def _apply_scale(self) -> None:
@@ -214,7 +223,8 @@ class PetWindow(QWidget):
         self.cfg.set('no_move', self.no_move)
         self.cfg.save()
         if self.no_move and self._move_plan is not None:
-            self._switch(catalog.IDLE)  # 打断进行中的移动
+            if self.idle:
+                self._switch(self.idle)  # 打断进行中的移动
 
     # ================================================================ 播放
     def _switch(self, name: str) -> None:
@@ -282,25 +292,26 @@ class PetWindow(QWidget):
         """托盘图标：取当前帧（无则待机首帧）缩放。"""
         pm = self._frame_pixmap
         if pm is None:
-            pm = self.lib.movie(catalog.IDLE).currentPixmap()
+            pm = self.lib.movie(self.idle).currentPixmap()
         return pm.scaled(size, size,
                          Qt.AspectRatioMode.KeepAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
 
     # ================================================================ 动画链
     def _on_anim_ended(self, name: str) -> None:
-        if name == catalog.DRAG and self._dragging:
+        if name == self.drag and self._dragging:
             # 超长拖拽：拖拽动画循环重播，继续跟手
             self.movie.jumpToFrame(0)
             self._ended_fired = False
             self.movie.start()
             return
-        if name == catalog.TURN:
+        if name == self.turn:
             # 东张西望播完 → 翻转朝向
             self.facing = 'right' if self.facing == 'left' else 'left'
-        if name == catalog.DRAG or name in catalog.CLICKS:
+        if name == self.drag or name in self.clicks:
             # 交互打断的动画播完 → 待机缓冲（一次性），待机播完再进链
-            self._switch(catalog.IDLE)
+            if self.idle:
+                self._switch(self.idle)
             return
         self._pick_next()
 
@@ -311,14 +322,20 @@ class PetWindow(QWidget):
         """
         roll = random.random()
         if roll < catalog.P_IDLE:
-            self._switch(catalog.IDLE)
+            if self.idle:
+                self._switch(self.idle)
+            else:
+                self._switch(self._pick(self.acts, exclude=self.anim))
         elif roll < catalog.P_TURN:
-            self._switch(catalog.TURN)
+            if self.turn:
+                self._switch(self.turn)
+            else:
+                self._switch(self._pick(self.acts, exclude=self.anim))
         elif roll < catalog.P_ACTS:
-            self._switch(self._pick(catalog.ACTS, exclude=self.anim))
+            self._switch(self._pick(self.acts, exclude=self.anim))
         else:
             if self.no_move or not self._try_move():
-                self._switch(self._pick(catalog.ACTS, exclude=self.anim))
+                self._switch(self._pick(self.acts, exclude=self.anim))
 
     @staticmethod
     def _pick(pool: list[str], exclude: str | None = None) -> str:
@@ -343,7 +360,9 @@ class PetWindow(QWidget):
         right_bound = avail.right() - catalog.MOVE_MARGIN - half_w
         if target_cx < left_bound or target_cx > right_bound:
             return False
-        move_name = name or self._pick(catalog.MOVES)
+        if not self.moves:
+            return False
+        move_name = name or self._pick(self.moves)
         duration = self.lib.duration(move_name)
         self._switch(move_name)
         self._move_plan = {
@@ -409,7 +428,8 @@ class PetWindow(QWidget):
             if math.hypot(delta.x(), delta.y()) < catalog.DRAG_THRESHOLD * self.scale:
                 return  # 未超阈值：仍是点击候选
             self._dragging = True
-            self._switch(catalog.DRAG)  # 进入拖拽：播放悬空反馈动画
+            if self.drag:
+                self._switch(self.drag)  # 进入拖拽：播放悬空反馈动画
         self.move(g - self._grab_offset)  # 跟手（保持抓起时的偏移）
         event.accept()
 
@@ -429,7 +449,8 @@ class PetWindow(QWidget):
             if self._grab_offset is not None:
                 self.move(g - self._grab_offset)  # 停在松手处
             self._save_position()
-            self._switch(catalog.IDLE)  # 回待机缓冲
+            if self.idle:
+                self._switch(self.idle)  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
             self._on_click()
         self._dragging = False
@@ -444,28 +465,32 @@ class PetWindow(QWidget):
         """真点击 → 随机一个点击回应动画。"""
         if self._just_dragged:
             return
-        if self.anim != catalog.IDLE:
+        if not self.clicks:
+            return
+        if self.idle and self.anim != self.idle:
             return  # 链上非待机动画播放中不打断
         self._cancel_move()
-        self._switch(self._pick(catalog.CLICKS))
+        self._switch(self._pick(self.clicks))
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         menu = QMenu(self)
 
         m_rest = menu.addMenu('动画 · 待机 / 转向')
-        m_rest.addAction(catalog.IDLE, lambda: self._switch(catalog.IDLE))
-        m_rest.addAction(catalog.TURN, lambda: self._switch(catalog.TURN))
+        if self.idle:
+            m_rest.addAction(self.idle, lambda: self._switch(self.idle))
+        if self.turn:
+            m_rest.addAction(self.turn, lambda: self._switch(self.turn))
 
         m_moves = menu.addMenu('动画 · 移动')
-        for n in catalog.MOVES:
+        for n in self.moves:
             m_moves.addAction(n, lambda n=n: self._trigger_move(n))
 
         m_clicks = menu.addMenu('动画 · 点击回应')
-        for n in catalog.CLICKS:
+        for n in self.clicks:
             m_clicks.addAction(n, lambda n=n: self._switch(n))
 
         m_acts = menu.addMenu('动画 · 随机动作')
-        for n in catalog.ACTS:
+        for n in self.acts:
             m_acts.addAction(n, lambda n=n: self._switch(n))
 
         menu.addSeparator()

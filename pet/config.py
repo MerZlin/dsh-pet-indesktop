@@ -41,6 +41,7 @@ class Config:
             'scale': catalog.DEFAULT_SCALE,
             'on_top': True,
             'no_move': False,  # 不移动：勾选后状态机不再自动移动，仅手动点移动动画才走动
+            'character': catalog.DEFAULT_CHARACTER,  # 当前形象 ID
         }
         self._load()
 

@@ -44,7 +44,9 @@ def main(argv: list[str] | None = None) -> int:
     logging.info('dsh-pet-standalone 启动')
 
     try:
-        lib = MovieLibrary()
+        character_id = str(config.get('character', catalog.DEFAULT_CHARACTER))
+        logging.info('当前形象: %s', character_id)
+        lib = MovieLibrary(character_id=character_id)
     except FileNotFoundError as exc:
         logging.exception('素材缺失')
         _show_startup_error('dsh-pet-standalone', str(exc))

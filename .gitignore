@@ -7,10 +7,11 @@ __pycache__/
 tmp_appdata/
 tests/_tmp_*/
 
-# 素材（体积大，不入库；从上游 dsh-pet 获取 webm 后用 scripts/convert.py 转码）
+# 素材（体积大，不入库；从上游 dsh-pet 获取 webm 后放入 assets/characters/<id>/videos/）
 assets/thumb/
 assets/videos/
 assets/animations/
+assets/characters/
 
 # PyInstaller 构建产物
 build/

@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Media library —— webm 主路线（无 GIF 回退）。
+Media library —— 多形象 webm 主路线（无 GIF 回退）。
+
+支持按角色 ID 加载不同形象：
+- 默认从内置 assets/characters/<character_id>/videos/ 加载
+- 也支持外部扩展目录（exe 同目录/用户数据目录下的 characters/<id>/videos）
 
 对外保持与窗口层一致的形状：
 - movie(name) -> clip object
@@ -22,27 +26,45 @@ from .webm_clip import WebMClip
 
 
 class MovieLibrary(QObject):
-    """素材库：加载全部 webm 动画。"""
+    """素材库：加载指定形象的 webm 动画。"""
 
     def __init__(
         self,
         parent: QObject | None = None,
         *,
+        character_id: str | None = None,
         asset_dir: Path | str | None = None,
         manifest: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._asset_dir = Path(asset_dir) if asset_dir is not None else catalog.webm_dir()
-        self._manifest = dict(manifest or catalog.ANIM_FILES)
+        self.character_id = character_id or catalog.DEFAULT_CHARACTER
+        if asset_dir is not None:
+            self._asset_dir = Path(asset_dir)
+        else:
+            self._asset_dir = catalog.resolve_character_video_dir(self.character_id)
+        self._manifest = None if manifest is None else dict(manifest)
         self._movies: dict[str, WebMClip] = {}
 
         self._load_all()
 
     def _load_all(self) -> None:
+        if self._manifest is None:
+            # 自动扫描该形象目录下的所有 webm，支持不同角色有不同动作集
+            if not self._asset_dir.is_dir():
+                raise FileNotFoundError(
+                    f"角色素材目录不存在: {self._asset_dir}（character_id={self.character_id}）"
+                )
+            files = sorted(self._asset_dir.glob('*.webm'))
+            if not files:
+                raise FileNotFoundError(
+                    f"角色素材目录中没有 webm 文件: {self._asset_dir}"
+                )
+            self._manifest = {f.stem: f.name for f in files}
+
         missing: list[str] = []
         resolved: dict[str, Path] = {}
         for name, fname in self._manifest.items():
-            path = catalog.resolve_asset_path(name, fname, base_dir=self._asset_dir)
+            path = self._asset_dir / fname
             if not path.exists():
                 missing.append(f"{name}: {path}")
                 continue
