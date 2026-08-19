@@ -69,6 +69,7 @@ assets/characters/<角色ID>/videos/
 
 ```text
 <exe 所在目录>/
+├── dsh-pet-standalone-webm.exe
 └── characters/
     └── <角色ID>/
         └── videos/
