@@ -25,6 +25,13 @@
 
 Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「macOS」章节。
 
+## 相关优化项目
+
+[ianlike-ui/dsh-pet-standalone](https://github.com/ianlike-ui/dsh-pet-standalone)
+
+这是其他开发者基于本项目做的优化实现，可能在播放性能、打包体积、多角色支持或使用体验等方面进行了改进。  
+如果你希望体验社区优化版，可以前往该仓库查看说明和最新成果。
+
 ## 特性
 
 - **webm 高清播放**：直接运行时解码 640×360 透明 webm（VP9 + 8-bit alpha），保留半透明边缘
