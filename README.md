@@ -475,6 +475,13 @@ python -m pet
 <details>
 <summary>点击展开查看旧版 GIF 版本说明</summary>
 
+### 已移除/变更记录
+
+- 内置角色 `guga`、`dada`、`suansuan`、`dudu`、`mimi` 已移除（动画未能正常绘制）。当前内置角色仅保留 `shenshen`。
+- 自定义角色仍可通过 exe 同目录或用户数据目录下的 `characters/<id>/videos/` 添加，并在「切换角色」菜单中热切换。
+
+---
+
 # dsh-pet-indesktop
 
 ## 下载
