@@ -343,6 +343,7 @@ assets/characters/shenshen/videos/
 ```bat
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name dsh-pet-standalone-webm ^
+    --runtime-tmpdir "." ^
     --collect-all imageio_ffmpeg ^
     --add-data "assets/characters;assets/characters" ^
     packaging/pet_entry.py
