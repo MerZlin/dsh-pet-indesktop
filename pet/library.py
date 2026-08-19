@@ -16,6 +16,7 @@ WebMClip 基于 imageio-ffmpeg 解码 640×360 透明 webm（RGBA）。
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Mapping
 
@@ -83,6 +84,12 @@ class MovieLibrary(QObject):
 
         for name, path in resolved.items():
             self._movies[name] = WebMClip(path, parent=self)
+
+        # 并行预热元数据，避免 51 个视频顺序 count_frames_and_secs 造成切角色卡顿
+        if self._movies:
+            workers = min(8, len(self._movies))
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                list(ex.map(lambda clip: clip.warm_meta(), self._movies.values()))
 
     def movie(self, name: str) -> WebMClip:
         return self._movies[name]

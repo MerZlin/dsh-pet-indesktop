@@ -27,6 +27,9 @@ from . import catalog
 
 logger = logging.getLogger(__name__)
 
+# 进程内元数据缓存：避免反复切换角色时重复调用 count_frames_and_secs
+_META_CACHE: dict[str, tuple[int, float]] = {}
+
 try:
     import imageio_ffmpeg
 except Exception as exc:  # pragma: no cover - 依赖缺失时无法使用 webm 路线
@@ -52,11 +55,10 @@ class WebMClip(QObject):
         self._h = catalog.CANVAS_H
         self._bpp = 4  # RGBA
 
-        # 元数据（惰性填充，优先在构造时用 count_frames_and_secs 预取）
+        # 元数据（惰性填充；由 MovieLibrary 并行 warm 或首次使用时读取）
         self._frame_count = 0
         self._duration = 0.0
         self._fps = 24.0
-        self._ensure_meta()
 
         # 播放状态
         self._queue: queue.Queue = queue.Queue(maxsize=8)
@@ -76,17 +78,29 @@ class WebMClip(QObject):
     def _ensure_meta(self) -> None:
         if self._duration > 0 or imageio_ffmpeg is None:
             return
+        key = str(self.path)
+        cached = _META_CACHE.get(key)
+        if cached is not None:
+            self._frame_count, self._duration = cached
+            if self._frame_count > 0 and self._duration > 0:
+                self._fps = self._frame_count / self._duration
+            return
         try:
-            frames, secs = imageio_ffmpeg.count_frames_and_secs(str(self.path))
+            frames, secs = imageio_ffmpeg.count_frames_and_secs(key)
             if frames and frames > 0:
                 self._frame_count = int(frames)
             if secs and secs > 0:
                 self._duration = float(secs)
             if self._frame_count > 0 and self._duration > 0:
                 self._fps = self._frame_count / self._duration
+            _META_CACHE[key] = (self._frame_count, self._duration)
         except Exception as exc:
             logger.warning('webm 元数据读取失败 %s: %s', self.path, exc)
             # 保留默认值，后续 reader 会尝试从 read_frames 的 meta 补充
+
+    def warm_meta(self) -> None:
+        """预取元数据（可被线程池并行调用）。"""
+        self._ensure_meta()
 
     def _timer_interval(self) -> int:
         if self._fps > 0:
@@ -94,6 +108,8 @@ class WebMClip(QObject):
         return catalog.FRAME_MS
 
     def frameCount(self) -> int:
+        if self._frame_count <= 0:
+            self._ensure_meta()
         return max(1, self._frame_count)
 
     def duration(self) -> float:
