@@ -78,7 +78,7 @@ class PetWindow(QWidget):
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
 
         # 根据当前形象实际拥有的动画动态计算分类，支持不同角色动作不一致
-        self.cats = catalog.build_categories(lib.names(), getattr(lib, 'manifest', None), getattr(lib, 'folder_map', None))
+        self.cats = catalog.build_categories(lib.names(), getattr(lib, 'manifest', None), getattr(lib, 'folder_map', None), getattr(lib, 'folder_files', None))
         self.idle = self.cats['idle']
         self.turn = self.cats['turn']
         self.idles = self.cats['idles']

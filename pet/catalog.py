@@ -278,7 +278,7 @@ def _keyword_match(name: str, keywords) -> bool:
     return any(k.lower() in low for k in keywords)
 
 
-def build_categories(names, manifest: dict | None = None, folder_map: dict | None = None) -> dict:
+def build_categories(names, manifest: dict | None = None, folder_map: dict | None = None, folder_files: dict | None = None) -> dict:
     """根据某个形象实际拥有的动画名，动态计算分类。
 
     分类优先级：
@@ -310,11 +310,16 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
     clicks: list[str] = []
     drag = None
 
-    if folder_map:
+    if folder_files is not None:
+        by_folder: dict[str, list[str]] = {k: list(v) for k, v in folder_files.items()}
+    elif folder_map:
         by_folder: dict[str, list[str]] = {}
         for name in names:
             by_folder.setdefault(folder_map.get(name, ''), []).append(name)
+    else:
+        by_folder = {}
 
+    if folder_files is not None or folder_map:
         idles = list(by_folder.get(DIR_IDLE, []))
         turns = list(by_folder.get(DIR_TURN, []))
         legacy_idle_turn = by_folder.get(DIR_IDLE_TURN, [])
@@ -393,7 +398,24 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
     core = set(idles) | set(turns) | set(moves) | set(clicks)
     if drag:
         core.add(drag)
-    acts = [n for n in names if n not in core]
+
+    if folder_files is not None:
+        # 子目录模式下，random/ 和未知目录的内容都进入随机动作池；
+        # 允许同一文件同时出现在多个分类中（例如测试时复制同一视频到多个文件夹）
+        acts = []
+        known = {DIR_IDLE, DIR_TURN, DIR_MOVE, DIR_CLICK, DIR_DRAG}
+        for folder, ns in by_folder.items():
+            if folder == DIR_RANDOM or folder not in known:
+                acts.extend(ns)
+        seen_acts = set()
+        unique_acts = []
+        for n in acts:
+            if n not in seen_acts:
+                seen_acts.add(n)
+                unique_acts.append(n)
+        acts = unique_acts
+    else:
+        acts = [n for n in names if n not in core]
     return {
         'idle': idles[0] if idles else None,
         'turn': turns[0] if turns else None,

@@ -47,6 +47,7 @@ class MovieLibrary(QObject):
         self._manifest = None if manifest is None else dict(manifest)
         self.manifest = catalog.load_character_manifest(self.character_id, self._asset_dir)
         self.folder_map: dict[str, str] = {}
+        self.folder_files: dict[str, list[str]] = {}
         self._movies: dict[str, WebMClip] = {}
 
         self._load_all()
@@ -65,11 +66,14 @@ class MovieLibrary(QObject):
                 )
             self._manifest = {}
             self.folder_map = {}
+            self.folder_files = {}
             for f in files:
                 rel = f.relative_to(self._asset_dir)
                 name = f.stem
                 self._manifest[name] = rel.as_posix()
-                self.folder_map[name] = rel.parts[0].lower() if len(rel.parts) > 1 else ''
+                folder = rel.parts[0].lower() if len(rel.parts) > 1 else ''
+                self.folder_map[name] = folder
+                self.folder_files.setdefault(folder, []).append(name)
 
         missing: list[str] = []
         resolved: dict[str, Path] = {}
