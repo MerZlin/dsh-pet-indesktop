@@ -166,7 +166,7 @@ assets/characters/<character_id>/videos/
 当前内置角色：
 
 ```text
-shenshen  guga  dada  suansuan  dudu  mimi
+shenshen（内置） + 用户通过外部目录添加的角色
 ```
 
 - 默认形象为 `shenshen`，当前动画放在 `assets/characters/shenshen/videos/`。

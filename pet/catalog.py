@@ -57,7 +57,7 @@ SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
 # ---------------------------------------------------------------- 多形象
 # 当前内置形象与未来扩展形象 ID（目录名建议使用稳定 ASCII）
 DEFAULT_CHARACTER = 'shenshen'
-CHARACTERS = ('shenshen', 'guga', 'dada', 'suansuan', 'dudu', 'mimi')
+CHARACTERS = ('shenshen',)
 MANIFEST_FILENAME = 'manifest.json'
 # videos 下的分类子目录
 DIR_IDLE = 'idle'
@@ -204,7 +204,7 @@ def list_available_characters() -> list[str]:
             continue
         for child in entries:
             video_dir = child / 'videos'
-            if child.is_dir() and video_dir.is_dir() and any(video_dir.glob('*.webm')):
+            if child.is_dir() and video_dir.is_dir() and any(video_dir.rglob('*.webm')):
                 cid = child.name
                 if cid not in seen:
                     seen.add(cid)
