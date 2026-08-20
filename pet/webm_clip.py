@@ -138,20 +138,21 @@ class WebMClip(QObject):
             self.errorOccurred.emit(str(_IMPORT_ERROR or 'imageio_ffmpeg 不可用'))
             return
 
-        self._stop_evt.clear()
+        self._stop_evt = threading.Event()
         self._queue = queue.Queue(maxsize=8)
         self._frame_index = 0
         self._ended_fired = False
         self._running = True
 
-        self._thread = threading.Thread(target=self._reader, daemon=True)
+        self._thread = threading.Thread(target=self._reader, args=(self._stop_evt,), daemon=True)
         self._thread.start()
         self._timer.start()
 
     def stop(self) -> None:
         self._running = False
         self._timer.stop()
-        self._stop_evt.set()
+        if self._stop_evt is not None:
+            self._stop_evt.set()
         # 不 join：reader 是 daemon 线程，避免切换动画时阻塞 UI 造成卡顿
         self._thread = None
 
@@ -209,7 +210,7 @@ class WebMClip(QObject):
                     pass
 
     # ------------------------------------------------------------ reader
-    def _reader(self) -> None:
+    def _reader(self, stop_evt: threading.Event) -> None:
         gen = None
         try:
             q = self._queue
@@ -229,7 +230,7 @@ class WebMClip(QObject):
                 self._frame_count = int(round(self._fps * self._duration))
 
             for frame in gen:
-                if self._stop_evt.is_set():
+                if stop_evt.is_set():
                     break
                 try:
                     q.put(frame, timeout=0.2)
@@ -237,7 +238,7 @@ class WebMClip(QObject):
                     # 队列满说明 UI 消费不过来；丢弃这一帧，保持实时性
                     pass
             # 正常播完时放入结束标记
-            if not self._stop_evt.is_set():
+            if not stop_evt.is_set():
                 try:
                     q.put(None, timeout=0.2)
                 except queue.Full:
