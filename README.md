@@ -189,7 +189,8 @@ videos/
 勾选「开机自启」后，桌宠随系统登录自动启动；取消勾选即移除。
 
 - **Windows**：写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（无需管理员权限）；
-  源码运行时指向 `pythonw -m pet`，打包成 exe 后指向 exe 自身路径
+  源码运行时指向 `pythonw -m pet`；打包成 exe 后会先用 `start /D` 切到 exe 所在目录再启动 exe，
+  避免开机时默认工作目录不可写导致 onefile 解压失败（旧版自启命令会在下次启动时自动升级）
 - **macOS**：写入 LaunchAgents（`~/Library/LaunchAgents/`），登录后自动启动
 
 ## 实现方式
@@ -351,7 +352,6 @@ assets/characters/shenshen/videos/
 ```bat
 python -m PyInstaller --noconfirm --clean --onefile --windowed ^
     --name dsh-pet-standalone-webm ^
-    --runtime-tmpdir "." ^
     --collect-all imageio_ffmpeg ^
     --add-data "assets/characters;assets/characters" ^
     packaging/pet_entry.py
@@ -359,6 +359,10 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 
 > 打包入口必须用 `packaging/pet_entry.py`（绝对导入）；直接用 `pet/__main__.py`
 > 会因相对导入在冻结模式下失效。onefile 模式启动时会先解压素材（约 5~15 秒）。
+>
+> `--runtime-tmpdir "."` 是按“进程当前工作目录”解析的，不是 exe 所在目录。
+> 程序内部的开机自启会先切到 exe 所在目录，因此解压目录会生成在 exe 同目录；
+> 若 exe 位于系统保护目录（如 `Program Files`）且无写权限，请把 exe 放到用户可写目录。
 
 ## macOS
 
@@ -585,7 +589,8 @@ Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「ma
 勾选「开机自启」后，桌宠随系统登录自动启动；取消勾选即移除。
 
 - **Windows**：写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（无需管理员权限）；
-  源码运行时指向 `pythonw -m pet`，打包成 exe 后指向 exe 自身路径
+  源码运行时指向 `pythonw -m pet`；打包成 exe 后会先用 `start /D` 切到 exe 所在目录再启动 exe，
+  避免开机时默认工作目录不可写导致 onefile 解压失败（旧版自启命令会在下次启动时自动升级）
 - **macOS**：写入 LaunchAgents（`~/Library/LaunchAgents/`），登录后自动启动
 
 ## 实现方式
@@ -657,6 +662,10 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
 
 > 打包入口必须用 `packaging/pet_entry.py`（绝对导入）；直接用 `pet/__main__.py`
 > 会因相对导入在冻结模式下失效。onefile 模式启动时会先解压素材（约 5~15 秒）。
+>
+> `--runtime-tmpdir "."` 是按“进程当前工作目录”解析的，不是 exe 所在目录。
+> 程序内部的开机自启会先切到 exe 所在目录，因此解压目录会生成在 exe 同目录；
+> 若 exe 位于系统保护目录（如 `Program Files`）且无写权限，请把 exe 放到用户可写目录。
 
 ## macOS
 

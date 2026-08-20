@@ -11,7 +11,9 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
@@ -36,6 +38,30 @@ def _setup_logging(config: Config) -> None:
 
 def _show_startup_error(title: str, message: str) -> None:
     QMessageBox.critical(None, title, message)
+
+
+def _cleanup_stale_runtime_dirs() -> None:
+    """清理 PyInstaller onefile 遗留的 _MEI* 临时目录。
+
+    正常退出时 bootloader 会自行删除解压目录；但 Windows 关机/强杀进程时可能
+    来不及清理，残留在 exe 同目录（runtime_tmpdir="."）。这里在下次启动时
+    把当前进程以外的旧目录删掉。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return
+    current = Path(meipass).resolve()
+    parent = current.parent
+    for child in parent.glob("_MEI[0-9]*"):
+        if not child.is_dir() or child.resolve() == current:
+            continue
+        try:
+            shutil.rmtree(child)
+            logging.info("已清理遗留缓存目录: %s", child)
+        except OSError:
+            logging.warning("清理遗留缓存目录失败（可能被占用）: %s", child)
 
 
 class PetApp:
@@ -174,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     config = Config()
     _setup_logging(config)
     logging.info('dsh-pet-standalone 启动')
+    _cleanup_stale_runtime_dirs()
 
     controller = PetApp(app, config)
     try:

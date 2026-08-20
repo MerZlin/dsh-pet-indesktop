@@ -8,10 +8,13 @@ PyInstaller 打包入口。
 构建命令（项目根目录）：
     python -m PyInstaller --noconfirm --clean --onefile --windowed ^
         --name dsh-pet-standalone-webm ^
-        --runtime-tmpdir "." ^
         --collect-all imageio_ffmpeg ^
         --add-data "assets/characters;assets/characters" ^
         packaging/pet_entry.py
+
+注意：`--runtime-tmpdir "."` 是按“进程当前工作目录”解析的，不是 exe 所在目录。
+因此开机自启（pet/autostart.py）会先用 `start /D` 切到 exe 目录再启动；直接双击
+exe 时资源管理器默认工作目录就是 exe 所在目录，行为一致。
 """
 
 import sys
