@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
@@ -43,9 +44,8 @@ def _show_startup_error(title: str, message: str) -> None:
 def _cleanup_stale_runtime_dirs() -> None:
     """清理 PyInstaller onefile 遗留的 _MEI* 临时目录。
 
-    正常退出时 bootloader 会自行删除解压目录；但 Windows 关机/强杀进程时可能
-    来不及清理，残留在 exe 同目录（runtime_tmpdir="."）。这里在下次启动时
-    把当前进程以外的旧目录删掉。
+    注意：多开桌宠时，每个实例都有自己的 _MEI 目录，不能删除其他正在运行的实例目录。
+    这里只清理“很久没有被修改”的目录，避免误删其他桌宠的运行缓存。
     """
     if not getattr(sys, "frozen", False):
         return
@@ -54,8 +54,16 @@ def _cleanup_stale_runtime_dirs() -> None:
         return
     current = Path(meipass).resolve()
     parent = current.parent
+    stale_age = 24 * 3600  # 只清理超过 24 小时未变化的目录
+    now = time.time()
     for child in parent.glob("_MEI[0-9]*"):
         if not child.is_dir() or child.resolve() == current:
+            continue
+        try:
+            mtime = child.stat().st_mtime
+        except OSError:
+            continue
+        if now - mtime < stale_age:
             continue
         try:
             shutil.rmtree(child)
