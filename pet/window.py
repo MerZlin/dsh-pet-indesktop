@@ -18,7 +18,7 @@ import math
 import random
 import sys
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QElapsedTimer, QPoint, Qt, QTimer
 from PySide6.QtGui import QBitmap, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -123,6 +123,15 @@ class PetWindow(QWidget):
         self._move_timer = QTimer(self)
         self._move_timer.setInterval(33)         # ~30fps 位置插值
         self._move_timer.timeout.connect(self._on_move_tick)
+
+        # ---- 点击 Q 弹效果 ----
+        self._squash_timer = QTimer(self)
+        self._squash_timer.setInterval(16)
+        self._squash_timer.timeout.connect(self._on_squash_tick)
+        self._squash_clock = QElapsedTimer()
+        self._squash_active = False
+        self._squash_duration_ms = 220
+        self._squash_progress = 1.0
 
         # ---- 尺寸与初始状态 ----
         self._apply_scale()
@@ -290,10 +299,36 @@ class PetWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         if self._frame_pixmap is not None:
-            # 落地对齐：整帧下移 PAD×scale，让人物脚底踩在窗口底线
-            painter.translate(0, int(round(catalog.PAD * self.scale)))
-            painter.drawPixmap(0, 0, self._frame_pixmap)
+            if self._squash_active:
+                # Q 弹：垂直变矮 + 水平微微变宽，脚底保持不动
+                sy = 1.0 - 0.15 * math.sin(math.pi * self._squash_progress)
+                sx = 1.0 + 0.10 * math.sin(math.pi * self._squash_progress)
+                w = max(1, int(round(self._frame_pixmap.width() * sx)))
+                h = max(1, int(round(self._frame_pixmap.height() * sy)))
+                x = (self._w - w) // 2
+                y = self._h - h
+                painter.drawPixmap(x, y, w, h, self._frame_pixmap)
+            else:
+                # 落地对齐：整帧下移 PAD×scale，让人物脚底踩在窗口底线
+                painter.translate(0, int(round(catalog.PAD * self.scale)))
+                painter.drawPixmap(0, 0, self._frame_pixmap)
         painter.end()
+
+    def _start_squash(self) -> None:
+        """点击时启动 Q 弹效果：画面先变矮再恢复。"""
+        self._squash_active = True
+        self._squash_progress = 0.0
+        self._squash_clock.start()
+        self._squash_timer.start()
+        self.update()
+
+    def _on_squash_tick(self) -> None:
+        elapsed = self._squash_clock.elapsed()
+        self._squash_progress = min(1.0, elapsed / self._squash_duration_ms)
+        if self._squash_progress >= 1.0:
+            self._squash_active = False
+            self._squash_timer.stop()
+        self.update()
 
     def icon_pixmap(self, size: int = 64) -> QPixmap:
         """托盘图标：取当前帧（无则待机首帧）缩放。"""
@@ -477,6 +512,7 @@ class PetWindow(QWidget):
         if self.idles and self.anim not in self.idles:
             return  # 链上非待机动画播放中不打断
         self._cancel_move()
+        self._start_squash()
         self._switch(self._pick(self.clicks))
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
