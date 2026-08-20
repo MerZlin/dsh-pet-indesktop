@@ -6,7 +6,7 @@ PyInstaller 打包入口。
 在 PyInstaller 冻结模式下会解析失败，导致依赖收集为空）。
 
 构建命令（项目根目录）：
-    python -m PyInstaller --noconfirm --clean --onefile --windowed ^
+    python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx ^
         --name dsh-pet-standalone-webm ^
         --collect-all imageio_ffmpeg ^
         --add-data "assets/characters;assets/characters" ^

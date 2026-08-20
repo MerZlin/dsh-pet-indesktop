@@ -351,7 +351,7 @@ assets/characters/shenshen/videos/
 ## 打包为 exe（可选）
 
 ```bat
-python -m PyInstaller --noconfirm --clean --onefile --windowed ^
+python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx ^
     --name dsh-pet-standalone-webm ^
     --collect-all imageio_ffmpeg ^
     --add-data "assets/characters;assets/characters" ^
