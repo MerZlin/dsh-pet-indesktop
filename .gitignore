@@ -7,11 +7,14 @@ __pycache__/
 tmp_appdata/
 tests/_tmp_*/
 
-# 素材（体积大，不入库；从上游 dsh-pet 获取 webm 后放入 assets/characters/<id>/videos/）
+# 素材：只提交 assets/characters（角色动画），其他 assets 内容不入库
+assets/*
+!assets/characters/
+!assets/characters/**
 assets/thumb/
 assets/videos/
 assets/animations/
-assets/characters/
+assets/prompt/
 
 # PyInstaller 构建产物
 build/
