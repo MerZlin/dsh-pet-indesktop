@@ -236,6 +236,11 @@ class WebMClip(QObject):
         except Exception as exc:
             logger.exception('webm 解码失败: %s', self.path)
             self.errorOccurred.emit(str(exc))
+            # 异常中断也要放入结束标记，避免动画链卡在最后一帧
+            try:
+                q.put(None, timeout=0.2)
+            except Exception:
+                pass
         finally:
             if gen is not None:
                 try:
