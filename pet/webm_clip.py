@@ -70,6 +70,8 @@ class WebMClip(QObject):
 
         self._current_image: QImage | None = None
         self._current_pixmap: QPixmap | None = None
+        self._first_image: QImage | None = None
+        self._first_pixmap: QPixmap | None = None
         self._frame_index = 0
         self._ended_fired = False
         self._running = False
@@ -158,7 +160,12 @@ class WebMClip(QObject):
         if frame_index <= 0:
             self.stop()
             self._frame_index = 0
-            if self._current_image is None:
+            if self._first_image is not None:
+                self._current_image = self._first_image
+                self._current_pixmap = self._first_pixmap
+            else:
+                self._current_image = None
+                self._current_pixmap = None
                 self._decode_first_frame_sync()
             return True
         return False
@@ -190,6 +197,8 @@ class WebMClip(QObject):
                 if not img.isNull():
                     self._current_image = img.copy()
                     self._current_pixmap = QPixmap.fromImage(self._current_image)
+                    self._first_image = self._current_image
+                    self._first_pixmap = self._current_pixmap
         except Exception as exc:
             logger.warning('webm 首帧预解码失败 %s: %s', self.path, exc)
         finally:
