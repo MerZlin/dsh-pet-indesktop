@@ -504,13 +504,12 @@ class PetWindow(QWidget):
         self._just_dragged = False
 
     def _on_click(self) -> None:
-        """真点击 → 随机一个点击回应动画。"""
+        """真点击 → 随机一个点击回应动画，并重置当前动画（可连续点击打断）。"""
         if self._just_dragged:
             return
         if not self.clicks:
             return
-        if self.idles and self.anim not in self.idles:
-            return  # 链上非待机动画播放中不打断
+        # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹
         self._cancel_move()
         self._start_squash()
         self._switch(self._pick(self.clicks))
