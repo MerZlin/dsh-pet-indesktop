@@ -42,6 +42,9 @@ class Config:
             'on_top': True,
             'no_move': False,  # 不移动：勾选后状态机不再自动移动，仅手动点移动动画才走动
             'character': catalog.DEFAULT_CHARACTER,  # 当前形象 ID
+            'playback_speed': 1.0,       # 动画播放速率
+            'mouse_through': False,        # 鼠标穿透
+            'drag_physics': False,         # 拖动物理效果
         }
         self._load()
 

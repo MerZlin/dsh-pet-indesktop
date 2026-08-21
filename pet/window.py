@@ -17,6 +17,7 @@ import logging
 import math
 import random
 import sys
+import time
 
 from PySide6.QtCore import QElapsedTimer, QPoint, Qt, QTimer
 from PySide6.QtGui import QBitmap, QImage, QPainter, QPixmap
@@ -92,12 +93,18 @@ class PetWindow(QWidget):
         if self.drag:
             self.lib.movie(self.drag).jumpToFrame(0)
 
+        self.playback_speed: float = float(config.get('playback_speed', 1.0))
+        self.mouse_through: bool = bool(config.get('mouse_through', False))
+        self.drag_physics: bool = bool(config.get('drag_physics', False))
+
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
         if config.get('on_top', True):
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        if self.mouse_through:
+            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
         if sys.platform == 'darwin' and config.get('on_top', True):
             # macOS 上 Tool 窗口的置顶由 WA_MacAlwaysShowToolWindow 控制，
             # WindowStaysOnTopHint 对 Tool 窗口不可靠（Qt 官方已知问题 QTBUG-38580）
@@ -132,6 +139,17 @@ class PetWindow(QWidget):
         self._squash_active = False
         self._squash_duration_ms = 220
         self._squash_progress = 1.0
+
+        # ---- 拖动物理 ----
+        self._physics_timer = QTimer(self)
+        self._physics_timer.setInterval(16)
+        self._physics_timer.timeout.connect(self._on_physics_tick)
+        self._physics_mode: str | None = None  # None / 'drag' / 'throw'
+        self._phys_pos = [0.0, 0.0]
+        self._phys_vel = [0.0, 0.0]
+        self._drag_target: QPoint | None = None
+        self._last_global: QPoint | None = None
+        self._last_move_time = 0.0
 
         # ---- 尺寸与初始状态 ----
         self._apply_scale()
@@ -251,6 +269,8 @@ class PetWindow(QWidget):
         self.movie = movie
         movie.stop()
         movie.jumpToFrame(0)
+        if hasattr(movie, 'set_playback_speed'):
+            movie.set_playback_speed(self.playback_speed)
         self._ended_fired = False
         self._rebuild_frame()
         movie.start()
@@ -457,6 +477,11 @@ class PetWindow(QWidget):
             self._grab_offset = self._press_global - self.pos()
             self._dragging = False
             self._cancel_move()  # 按下即打断移动
+            self._last_global = self._press_global
+            self._last_move_time = time.monotonic()
+            self._phys_vel = [0.0, 0.0]
+            self._phys_pos = [float(self.x()), float(self.y())]
+            self._stop_physics()
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -472,7 +497,35 @@ class PetWindow(QWidget):
             self._dragging = True
             if self.drag:
                 self._switch(self.drag)  # 进入拖拽：播放悬空反馈动画
-        self.move(g - self._grab_offset)  # 跟手（保持抓起时的偏移）
+            if self.drag_physics:
+                self._phys_pos = [float(self.x()), float(self.y())]
+                self._drag_target = g - self._grab_offset
+                self._physics_mode = 'drag'
+                self._physics_timer.start()
+            else:
+                self.move(g - self._grab_offset)
+            self._last_global = g
+            self._last_move_time = time.monotonic()
+            event.accept()
+            return
+
+        # 已经处于拖拽中
+        if self.drag_physics:
+            now = time.monotonic()
+            dt = now - self._last_move_time
+            if dt > 0 and self._last_global is not None:
+                inst_vx = (g.x() - self._last_global.x()) / dt
+                inst_vy = (g.y() - self._last_global.y()) / dt
+                self._phys_vel[0] = self._phys_vel[0] * 0.6 + inst_vx * 0.4
+                self._phys_vel[1] = self._phys_vel[1] * 0.6 + inst_vy * 0.4
+            self._last_global = g
+            self._last_move_time = now
+            self._drag_target = g - self._grab_offset
+            if self._physics_mode != 'drag':
+                self._physics_mode = 'drag'
+                self._physics_timer.start()
+        else:
+            self.move(g - self._grab_offset)  # 跟手（保持抓起时的偏移）
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
@@ -488,9 +541,14 @@ class PetWindow(QWidget):
         if was_dragging:
             self._just_dragged = True  # 抑制拖拽结束后的幽灵点击
             QTimer.singleShot(150, self._clear_just_dragged)
-            if self._grab_offset is not None:
-                self.move(g - self._grab_offset)  # 停在松手处
-            self._save_position()
+            if self.drag_physics:
+                # 松手后进入抛掷物理：保留当前速度，重力 + 反弹 + 衰减
+                self._physics_mode = 'throw'
+                self._physics_timer.start()
+            else:
+                if self._grab_offset is not None:
+                    self.move(g - self._grab_offset)  # 停在松手处
+                self._save_position()
             if self.idles:
                 self._switch(self._pick(self.idles))  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
@@ -538,6 +596,19 @@ class PetWindow(QWidget):
         for n in self.acts:
             m_acts.addAction(n, lambda n=n: self._switch(n))
 
+        m_speed = menu.addMenu('播放速率')
+        for i in range(10, 21):
+            v = i / 10.0
+            act = m_speed.addAction(f'{v:.1f}x')
+            act.setCheckable(True)
+            act.setChecked(abs(self.playback_speed - v) < 0.01)
+            act.triggered.connect(lambda checked=False, v=v: self.set_playback_speed(v))
+
+        drag_physics_act = menu.addAction('拖动物理')
+        drag_physics_act.setCheckable(True)
+        drag_physics_act.setChecked(self.drag_physics)
+        drag_physics_act.toggled.connect(self.set_drag_physics)
+
         m_char = menu.addMenu('切换角色')
         current = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
         for cid in catalog.list_available_characters():
@@ -583,6 +654,94 @@ class PetWindow(QWidget):
         else:
             self.cfg.set('character', character_id)
             self.cfg.save()
+
+    def set_playback_speed(self, speed: float) -> None:
+        """设置动画播放速率并持久化。"""
+        self.playback_speed = max(0.1, float(speed))
+        self.cfg.set('playback_speed', self.playback_speed)
+        self.cfg.save()
+        if self.movie is not None and hasattr(self.movie, 'set_playback_speed'):
+            self.movie.set_playback_speed(self.playback_speed)
+
+    def set_mouse_through(self, on: bool) -> None:
+        """鼠标穿透：开启后桌宠不接收鼠标事件，点击会穿透到下层。"""
+        self.mouse_through = bool(on)
+        self.cfg.set('mouse_through', self.mouse_through)
+        self.cfg.save()
+        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, self.mouse_through)
+        self.show()
+
+    def set_drag_physics(self, on: bool) -> None:
+        """拖动物理开关。"""
+        self.drag_physics = bool(on)
+        self.cfg.set('drag_physics', self.drag_physics)
+        self.cfg.save()
+        if not self.drag_physics:
+            self._stop_physics()
+
+    def _stop_physics(self) -> None:
+        self._physics_timer.stop()
+        self._physics_mode = None
+
+    def _on_physics_tick(self) -> None:
+        if self._physics_mode == 'drag':
+            self._tick_drag_physics()
+        elif self._physics_mode == 'throw':
+            self._tick_throw_physics()
+
+    def _tick_drag_physics(self) -> None:
+        if self._drag_target is None:
+            return
+        dt = 0.016
+        tx, ty = self._drag_target.x(), self._drag_target.y()
+        px, py = self._phys_pos
+        # 弹簧跟随 + 阻尼，产生惯性/离心感
+        ax = (tx - px) * 80.0 - self._phys_vel[0] * 10.0
+        ay = (ty - py) * 80.0 - self._phys_vel[1] * 10.0
+        self._phys_vel[0] += ax * dt
+        self._phys_vel[1] += ay * dt
+        self._phys_pos[0] += self._phys_vel[0] * dt
+        self._phys_pos[1] += self._phys_vel[1] * dt
+        self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
+
+    def _tick_throw_physics(self) -> None:
+        dt = 0.016
+        self._phys_vel[1] += 1400.0 * dt  # 重力
+        self._phys_pos[0] += self._phys_vel[0] * dt
+        self._phys_pos[1] += self._phys_vel[1] * dt
+        scr = self._screen_available()
+        avail = scr.availableGeometry()
+        left = avail.left()
+        top = avail.top()
+        right = avail.right() - self._w
+        bottom = avail.bottom() - self._h
+        bounced = False
+        if self._phys_pos[0] < left:
+            self._phys_pos[0] = left
+            self._phys_vel[0] = abs(self._phys_vel[0]) * 0.55
+            bounced = True
+        elif self._phys_pos[0] > right:
+            self._phys_pos[0] = right
+            self._phys_vel[0] = -abs(self._phys_vel[0]) * 0.55
+            bounced = True
+        if self._phys_pos[1] < top:
+            self._phys_pos[1] = top
+            self._phys_vel[1] = abs(self._phys_vel[1]) * 0.55
+            bounced = True
+        elif self._phys_pos[1] > bottom:
+            self._phys_pos[1] = bottom
+            self._phys_vel[1] = -abs(self._phys_vel[1]) * 0.55
+            bounced = True
+        self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
+        speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
+        if bounced:
+            # 每次反弹衰减，速度太低就停
+            if speed < 40:
+                self._stop_physics()
+                self._save_position()
+        elif speed < 10 and self._phys_pos[1] >= bottom - 1:
+            self._stop_physics()
+            self._save_position()
 
     def _request_quit(self) -> None:
         self._save_position()

@@ -179,6 +179,11 @@ class PetApp:
             act.setChecked(cid == current)
             act.triggered.connect(lambda checked=False, cid=cid: self.switch_character(cid))
 
+        mouse_through = menu.addAction('鼠标穿透')
+        mouse_through.setCheckable(True)
+        mouse_through.setChecked(bool(self.config.get('mouse_through', False)))
+        mouse_through.toggled.connect(win.set_mouse_through)
+
         menu.addSeparator()
 
         auto = menu.addAction('开机自启')

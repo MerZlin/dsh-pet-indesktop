@@ -59,6 +59,7 @@ class WebMClip(QObject):
         self._frame_count = 0
         self._duration = 0.0
         self._fps = 24.0
+        self.playback_speed = 1.0
 
         # 播放状态
         self._queue: queue.Queue = queue.Queue(maxsize=8)
@@ -106,8 +107,8 @@ class WebMClip(QObject):
 
     def _timer_interval(self) -> int:
         if self._fps > 0:
-            return max(1, int(round(1000 / self._fps)))
-        return catalog.FRAME_MS
+            return max(1, int(round(1000 / (self._fps * self.playback_speed))))
+        return max(1, int(round(catalog.FRAME_MS / self.playback_speed)))
 
     def frameCount(self) -> int:
         if self._frame_count <= 0:
@@ -117,7 +118,7 @@ class WebMClip(QObject):
     def duration(self) -> float:
         if self._duration <= 0:
             self._ensure_meta()
-        return self._duration
+        return self._duration / self.playback_speed if self._duration > 0 else 0.0
 
     def currentFrameNumber(self) -> int:
         return self._frame_index
@@ -125,12 +126,17 @@ class WebMClip(QObject):
     def currentTimeSeconds(self) -> float:
         if self._fps <= 0:
             return 0.0
-        return self._frame_index / self._fps
+        return self._frame_index / (self._fps * self.playback_speed)
 
     def currentPixmap(self):
         return self._current_pixmap
 
     # ------------------------------------------------------------ lifecycle
+    def set_playback_speed(self, speed: float) -> None:
+        self.playback_speed = max(0.1, float(speed))
+        if self._timer.isActive():
+            self._timer.setInterval(self._timer_interval())
+
     def start(self) -> None:
         if self._running:
             return

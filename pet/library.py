@@ -51,6 +51,7 @@ class GifClip(QObject):
         self._movie.finished.connect(self.finished)
         self._movie.error.connect(lambda err: self.errorOccurred.emit(str(err)))
         self._frame_count = 0
+        self.playback_speed = 1.0
         self._movie.jumpToFrame(0)
         self._frame_count = max(0, self._movie.frameCount())
 
@@ -60,7 +61,7 @@ class GifClip(QObject):
         return max(1, self._frame_count)
 
     def duration(self) -> float:
-        return self.frameCount() * catalog.FRAME_MS / 1000.0
+        return self.frameCount() * catalog.FRAME_MS / 1000.0 / self.playback_speed
 
     def currentFrameNumber(self) -> int:
         return self._movie.currentFrameNumber()
@@ -74,6 +75,10 @@ class GifClip(QObject):
 
     def currentPixmap(self):
         return self._movie.currentPixmap()
+
+    def set_playback_speed(self, speed: float) -> None:
+        self.playback_speed = max(0.1, float(speed))
+        self._movie.setSpeed(int(round(PLAYBACK_SPEED * self.playback_speed)))
 
     def start(self) -> None:
         self._movie.start()
