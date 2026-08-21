@@ -719,9 +719,12 @@ class PetWindow(QWidget):
         self._phys_pos[1] += self._phys_vel[1] * dt
         scr = self._screen_available()
         avail = scr.availableGeometry()
-        left = avail.left()
+        # 忽略左右留白：角色实际可视区域约为窗口中间 1/3，
+        # 允许窗口略微超出屏幕边界，让角色形象真正碰到边缘才反弹。
+        margin = self._w / 3.0
+        left = avail.left() - margin
         top = avail.top()
-        right = avail.right() - self._w
+        right = avail.right() - self._w + margin
         bottom = avail.bottom() - self._h
         bounced = False
         if self._phys_pos[0] < left:
@@ -736,18 +739,23 @@ class PetWindow(QWidget):
             self._phys_pos[1] = top
             self._phys_vel[1] = abs(self._phys_vel[1]) * 0.78
             bounced = True
-        elif self._phys_pos[1] > bottom:
+        elif self._phys_pos[1] >= bottom:
             self._phys_pos[1] = bottom
-            self._phys_vel[1] = -abs(self._phys_vel[1]) * 0.78
+            # 地面摩擦力：水平速度逐渐衰减，避免一直在地面滑/弹
+            friction = 2.5 * dt
+            self._phys_vel[0] *= max(0.0, 1.0 - friction)
+            if abs(self._phys_vel[1]) < 40:
+                self._phys_vel[1] = 0.0
+            else:
+                self._phys_vel[1] = -abs(self._phys_vel[1]) * 0.78
             bounced = True
         self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
         speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
-        if bounced:
-            # 每次反弹衰减，速度太低就停
-            if speed < 40:
-                self._stop_physics()
-                self._save_position()
-        elif speed < 10 and self._phys_pos[1] >= bottom - 1:
+        # 在地面上且水平速度也很低时，彻底停下
+        if self._phys_pos[1] >= bottom - 1 and abs(self._phys_vel[1]) < 1 and abs(self._phys_vel[0]) < 15:
+            self._stop_physics()
+            self._save_position()
+        elif bounced and speed < 40 and abs(self._phys_vel[1]) < 1:
             self._stop_physics()
             self._save_position()
 
