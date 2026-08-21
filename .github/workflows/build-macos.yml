@@ -76,7 +76,8 @@ jobs:
             rm -rf /tmp/verify && mkdir -p /tmp/verify
             cd /tmp/verify
             unzip -q "$GITHUB_WORKSPACE/dist/$ZIP"
-            BIN="$APP/Contents/MacOS/$APP"
+            BIN_NAME="${APP%.app}"
+            BIN="$APP/Contents/MacOS/$BIN_NAME"
             ls -l "$BIN"
             if [ ! -x "$BIN" ]; then
               echo "::error::$ZIP 解压后二进制丢失可执行权限"; exit 1
