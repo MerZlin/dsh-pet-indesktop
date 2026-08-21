@@ -360,10 +360,23 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx ^
 
 > 打包入口必须用 `packaging/pet_entry.py`（绝对导入）；直接用 `pet/__main__.py`
 > 会因相对导入在冻结模式下失效。onefile 模式启动时会先解压素材（约 5~15 秒）。
->
-> `--runtime-tmpdir "."` 是按“进程当前工作目录”解析的，不是 exe 所在目录。
-> 程序内部的开机自启会先切到 exe 所在目录，因此解压目录会生成在 exe 同目录；
-> 若 exe 位于系统保护目录（如 `Program Files`）且无写权限，请把 exe 放到用户可写目录。
+
+#### GIF 版打包（可选）
+
+如果需要打包旧 GIF 素材版本，使用：
+
+```bat
+python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx ^
+    --name dsh-pet-standalone-gif ^
+    --collect-all imageio_ffmpeg ^
+    --add-data "assets/characters_gif;assets/characters_gif" ^
+    packaging/pet_entry.py
+```
+
+程序会按素材目录自动识别：
+
+- 目录里有 `*.webm` → 使用 webm 播放
+- 目录里只有 `*.gif` → 使用 GIF/QMovie 播放
 
 ## macOS
 

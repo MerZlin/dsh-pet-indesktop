@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Media library —— 多形象 webm 主路线（无 GIF 回退）。
+Media library —— 多形象，自动识别 webm / gif。
 
 支持按角色 ID 加载不同形象：
 - 默认从内置 assets/characters/<character_id>/videos/ 加载
 - 也支持外部扩展目录（exe 同目录/用户数据目录下的 characters/<id>/videos）
+- 如果目录里是 *.webm 则用 WebMClip；如果是 *.gif 则用 GifClip
 
 对外保持与窗口层一致的形状：
 - movie(name) -> clip object
@@ -12,6 +13,7 @@ Media library —— 多形象 webm 主路线（无 GIF 回退）。
 - frames(name) / duration(name)（秒）
 
 WebMClip 基于 imageio-ffmpeg 解码 640×360 透明 webm（RGBA）。
+GifClip 基于 QMovie 播放透明 GIF（兼容旧 GIF 路线）。
 """
 
 from __future__ import annotations
@@ -21,14 +23,85 @@ import threading
 from pathlib import Path
 from typing import Mapping
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QMovie
 
 from . import catalog
 from .webm_clip import WebMClip
 
 
+# QMovie 播放速度补偿（%）：GIF 路线使用，校准 QMovie 偏慢问题
+PLAYBACK_SPEED = 120
+
+
+class GifClip(QObject):
+    """QMovie 包装：与 WebMClip 接口兼容的 GIF 播放器。"""
+
+    frameChanged = Signal(int)
+    finished = Signal()
+    errorOccurred = Signal(str)
+
+    def __init__(self, path: Path, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.path = path
+        self._movie = QMovie(str(path))
+        self._movie.setCacheMode(QMovie.CacheMode.CacheNone)
+        self._movie.setSpeed(PLAYBACK_SPEED)
+        self._movie.frameChanged.connect(self._on_frame_changed)
+        self._movie.finished.connect(self.finished)
+        self._movie.error.connect(lambda err: self.errorOccurred.emit(str(err)))
+        self._frame_count = 0
+        self._movie.jumpToFrame(0)
+        self._frame_count = max(0, self._movie.frameCount())
+
+    def frameCount(self) -> int:
+        if self._frame_count <= 0:
+            self._frame_count = max(0, self._movie.frameCount())
+        return max(1, self._frame_count)
+
+    def duration(self) -> float:
+        return self.frameCount() * catalog.FRAME_MS / 1000.0
+
+    def currentFrameNumber(self) -> int:
+        return self._movie.currentFrameNumber()
+
+    def currentTimeSeconds(self) -> float:
+        n = self._movie.currentFrameNumber()
+        frames = self.frameCount()
+        if frames <= 0:
+            return 0.0
+        return n * (self.duration() / frames)
+
+    def currentPixmap(self):
+        return self._movie.currentPixmap()
+
+    def start(self) -> None:
+        self._movie.start()
+
+    def stop(self) -> None:
+        self._movie.stop()
+
+    def jumpToFrame(self, frame_index: int) -> bool:
+        if frame_index < 0:
+            frame_index = 0
+        total = self._movie.frameCount()
+        if total > 0 and frame_index >= total:
+            frame_index = total - 1
+        return self._movie.jumpToFrame(frame_index)
+
+    def warm_meta(self) -> None:
+        # GIF 由 QMovie 直接管理元数据，无需额外预热
+        return
+
+    def _on_frame_changed(self, n: int) -> None:
+        fc = self._movie.frameCount()
+        if fc > 0:
+            self._frame_count = fc
+        self.frameChanged.emit(n)
+
+
 class MovieLibrary(QObject):
-    """素材库：加载指定形象的 webm 动画。"""
+    """素材库：加载指定形象的 webm 或 gif 动画。"""
 
     def __init__(
         self,
@@ -48,21 +121,29 @@ class MovieLibrary(QObject):
         self.manifest = catalog.load_character_manifest(self.character_id, self._asset_dir)
         self.folder_map: dict[str, str] = {}
         self.folder_files: dict[str, list[str]] = {}
-        self._movies: dict[str, WebMClip] = {}
+        self._movies: dict[str, object] = {}
+        self.media_type: str = 'webm'
 
         self._load_all()
 
     def _load_all(self) -> None:
         if self._manifest is None:
-            # 自动扫描该形象目录下的所有 webm，支持不同角色有不同动作集
+            # 自动扫描该形象目录下的 webm 或 gif，支持不同角色有不同动作集
             if not self._asset_dir.is_dir():
                 raise FileNotFoundError(
                     f"角色素材目录不存在: {self._asset_dir}（character_id={self.character_id}）"
                 )
-            files = sorted(self._asset_dir.rglob('*.webm'))
-            if not files:
+            webm_files = sorted(self._asset_dir.rglob('*.webm'))
+            gif_files = sorted(self._asset_dir.rglob('*.gif'))
+            if webm_files:
+                self.media_type = 'webm'
+                files = webm_files
+            elif gif_files:
+                self.media_type = 'gif'
+                files = gif_files
+            else:
                 raise FileNotFoundError(
-                    f"角色素材目录中没有 webm 文件: {self._asset_dir}"
+                    f"角色素材目录中没有 webm/gif 文件: {self._asset_dir}"
                 )
             self._manifest = {}
             self.folder_map = {}
@@ -88,7 +169,10 @@ class MovieLibrary(QObject):
             raise FileNotFoundError("缺少素材文件: " + ", ".join(missing))
 
         for name, path in resolved.items():
-            self._movies[name] = WebMClip(path, parent=self)
+            if self.media_type == 'gif':
+                self._movies[name] = GifClip(path, parent=self)
+            else:
+                self._movies[name] = WebMClip(path, parent=self)
 
         # 后台并行预热元数据，不阻塞启动/切角色
         if self._movies:
@@ -103,7 +187,7 @@ class MovieLibrary(QObject):
             # 预热失败不致命，后续按需读取时会再尝试
             pass
 
-    def movie(self, name: str) -> WebMClip:
+    def movie(self, name: str):
         return self._movies[name]
 
     def frames(self, name: str) -> int:
@@ -115,6 +199,6 @@ class MovieLibrary(QObject):
     def names(self) -> list[str]:
         return list(self._movies.keys())
 
-    def movies(self) -> dict[str, WebMClip]:
+    def movies(self) -> dict[str, object]:
         """Name -> clip mapping for window wiring."""
         return dict(self._movies)

@@ -155,6 +155,16 @@ def character_video_dir(character_id: str) -> Path:
     return characters_dir() / character_id / 'videos'
 
 
+def characters_gif_dir() -> Path:
+    """内置 GIF 多形象根目录（项目根/assets/characters_gif）。"""
+    return Path(__file__).resolve().parent.parent / 'assets' / 'characters_gif'
+
+
+def character_gif_video_dir(character_id: str) -> Path:
+    """内置某个形象的 GIF 目录：assets/characters_gif/<id>/videos。"""
+    return characters_gif_dir() / character_id / 'videos'
+
+
 def external_character_dirs() -> list[Path]:
     """外部可扩展形象根目录（不存在时返回空列表，不报错）。
 
@@ -180,12 +190,18 @@ def external_character_dirs() -> list[Path]:
 
 
 def resolve_character_video_dir(character_id: str) -> Path:
-    """按 外部 > 内置 返回形象视频目录；外部不存在时回退内置，不报错。"""
+    """按 外部 > 内置(webm) > 内置(gif) 返回形象视频目录；都不存在时回退 webm 路径，不报错。"""
     for root in external_character_dirs():
         candidate = root / character_id / 'videos'
         if candidate.is_dir():
             return candidate
-    return character_video_dir(character_id)
+    webm_dir_path = character_video_dir(character_id)
+    if webm_dir_path.is_dir() and any(webm_dir_path.rglob('*.webm')):
+        return webm_dir_path
+    gif_dir_path = character_gif_video_dir(character_id)
+    if gif_dir_path.is_dir() and any(gif_dir_path.rglob('*.gif')):
+        return gif_dir_path
+    return webm_dir_path
 
 
 def list_available_characters() -> list[str]:
@@ -204,7 +220,9 @@ def list_available_characters() -> list[str]:
             continue
         for child in entries:
             video_dir = child / 'videos'
-            if child.is_dir() and video_dir.is_dir() and any(video_dir.rglob('*.webm')):
+            if child.is_dir() and video_dir.is_dir() and (
+                any(video_dir.rglob('*.webm')) or any(video_dir.rglob('*.gif'))
+            ):
                 cid = child.name
                 if cid not in seen:
                     seen.add(cid)
