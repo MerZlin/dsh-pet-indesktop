@@ -135,16 +135,17 @@ class MovieLibrary(QObject):
                 )
             webm_files = sorted(self._asset_dir.rglob('*.webm'))
             gif_files = sorted(self._asset_dir.rglob('*.gif'))
-            if webm_files:
-                self.media_type = 'webm'
-                files = webm_files
-            elif gif_files:
-                self.media_type = 'gif'
-                files = gif_files
-            else:
+            files = webm_files + gif_files
+            if not files:
                 raise FileNotFoundError(
                     f"角色素材目录中没有 webm/gif 文件: {self._asset_dir}"
                 )
+            if webm_files and gif_files:
+                self.media_type = 'mixed'
+            elif webm_files:
+                self.media_type = 'webm'
+            else:
+                self.media_type = 'gif'
             self._manifest = {}
             self.folder_map = {}
             self.folder_files = {}
@@ -169,7 +170,7 @@ class MovieLibrary(QObject):
             raise FileNotFoundError("缺少素材文件: " + ", ".join(missing))
 
         for name, path in resolved.items():
-            if self.media_type == 'gif':
+            if path.suffix.lower() == '.gif':
                 self._movies[name] = GifClip(path, parent=self)
             else:
                 self._movies[name] = WebMClip(path, parent=self)
