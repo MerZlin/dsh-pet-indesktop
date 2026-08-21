@@ -471,8 +471,14 @@ class PetWindow(QWidget):
         self._move_plan = None
 
     # ================================================================ 交互
+    def _is_in_interactive_area(self, local_pos) -> bool:
+        """由于动画左右有留白，只把窗口中间 1/3 宽度作为可交互区域。"""
+        return self._w / 3.0 <= local_pos.x() <= self._w * 2.0 / 3.0
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
+            if not self._is_in_interactive_area(event.position().toPoint()):
+                return  # 左右留白区域不参与点击/拖拽
             self._press_global = event.globalPosition().toPoint()
             self._grab_offset = self._press_global - self.pos()
             self._dragging = False
@@ -573,6 +579,8 @@ class PetWindow(QWidget):
         self._switch(self._pick(self.clicks))
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
+        if not self._is_in_interactive_area(event.pos()):
+            return
         menu = QMenu(self)
 
         if self.idles:
@@ -718,19 +726,19 @@ class PetWindow(QWidget):
         bounced = False
         if self._phys_pos[0] < left:
             self._phys_pos[0] = left
-            self._phys_vel[0] = abs(self._phys_vel[0]) * 0.55
+            self._phys_vel[0] = abs(self._phys_vel[0]) * 0.78
             bounced = True
         elif self._phys_pos[0] > right:
             self._phys_pos[0] = right
-            self._phys_vel[0] = -abs(self._phys_vel[0]) * 0.55
+            self._phys_vel[0] = -abs(self._phys_vel[0]) * 0.78
             bounced = True
         if self._phys_pos[1] < top:
             self._phys_pos[1] = top
-            self._phys_vel[1] = abs(self._phys_vel[1]) * 0.55
+            self._phys_vel[1] = abs(self._phys_vel[1]) * 0.78
             bounced = True
         elif self._phys_pos[1] > bottom:
             self._phys_pos[1] = bottom
-            self._phys_vel[1] = -abs(self._phys_vel[1]) * 0.55
+            self._phys_vel[1] = -abs(self._phys_vel[1]) * 0.78
             bounced = True
         self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
         speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
