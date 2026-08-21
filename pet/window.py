@@ -296,12 +296,17 @@ class PetWindow(QWidget):
         img = pm.toImage()
         if self.facing == 'right':
             img = img.mirrored(True, False)
-        w_c = max(1, int(round(catalog.CANVAS_W * self.scale)))
-        h_c = max(1, int(round(catalog.CANVAS_H * self.scale)))
+        # 按屏幕 DPR 渲染到物理像素，避免高分屏下被 Qt 二次放大导致模糊
+        scr = self._screen_available()
+        dpr = scr.devicePixelRatio() if scr is not None else 1.0
+        w_c = max(1, int(round(catalog.CANVAS_W * self.scale * dpr)))
+        h_c = max(1, int(round(catalog.CANVAS_H * self.scale * dpr)))
         img = img.scaled(w_c, h_c,
                          Qt.AspectRatioMode.IgnoreAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
-        self._frame_pixmap = QPixmap.fromImage(img)
+        pm = QPixmap.fromImage(img)
+        pm.setDevicePixelRatio(dpr)
+        self._frame_pixmap = pm
         self._sync_mask()
 
     def _sync_mask(self) -> None:
