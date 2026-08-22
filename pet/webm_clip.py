@@ -134,8 +134,9 @@ class WebMClip(QObject):
     # ------------------------------------------------------------ lifecycle
     def set_playback_speed(self, speed: float) -> None:
         self.playback_speed = max(0.1, float(speed))
-        if self._timer.isActive():
-            self._timer.setInterval(self._timer_interval())
+        # _switch() 在 movie.start() 之前设置速率，不能只在 QTimer 已启动时更新。
+        # 否则每个新 WebM 动画都会继续使用默认的 1x interval。
+        self._timer.setInterval(self._timer_interval())
 
     def start(self) -> None:
         if self._running:
@@ -144,6 +145,10 @@ class WebMClip(QObject):
             self.errorOccurred.emit(str(_IMPORT_ERROR or 'imageio_ffmpeg 不可用'))
             return
 
+        # 在 GUI 线程读取真实 fps 后再启动 QTimer，保证新动画的实际帧率
+        # 与播放速率计算一致；reader 线程只负责解码和入队。
+        self._ensure_meta()
+        self._timer.setInterval(self._timer_interval())
         self._stop_evt = threading.Event()
         self._queue = queue.Queue(maxsize=8)
         self._frame_index = 0
@@ -243,20 +248,25 @@ class WebMClip(QObject):
                 except queue.Full:
                     # 队列满说明 UI 消费不过来；丢弃这一帧，保持实时性
                     pass
-            # 正常播完时放入结束标记
-            if not stop_evt.is_set():
+            # 正常播完时放入结束标记。主线程可能正忙（队列满、帧被丢弃），
+            # 必须循环重试直到放入或收到停止信号；否则“最后一帧被丢弃且
+            # 结束标记也丢失”会让上层永远等不到播完，动画链卡死在最后一帧。
+            while not stop_evt.is_set():
                 try:
-                    q.put(None, timeout=0.2)
+                    q.put(None, timeout=0.5)
+                    break
                 except queue.Full:
-                    pass
+                    continue
         except Exception as exc:
             logger.exception('webm 解码失败: %s', self.path)
             self.errorOccurred.emit(str(exc))
             # 异常中断也要放入结束标记，避免动画链卡在最后一帧
-            try:
-                q.put(None, timeout=0.2)
-            except Exception:
-                pass
+            while not stop_evt.is_set():
+                try:
+                    q.put(None, timeout=0.5)
+                    break
+                except queue.Full:
+                    continue
         finally:
             if gen is not None:
                 try:

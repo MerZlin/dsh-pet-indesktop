@@ -1,849 +1,510 @@
 # dsh-pet-indesktop
 
-## 下载
+一个基于 **Python + PySide6** 的独立桌面宠物。项目脱离 DSH 运行时，提供透明无边框、置顶、可拖动、角色切换、动画播放、系统托盘和可选 AI 对话能力。
 
-无需从源码构建，直接到 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases)
-页面下载对应系统的安装包：
+> 当前发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。本文档以 **2026-08-22** 工作区的代码、素材、测试结果和构建产物为准。
 
-| 你的系统                        | 安装包                              | 说明                                                                  |
-| ------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
-| Windows（WebM 版）             | `dsh-pet-standalone-webm.exe`       | 包体小、画质高；首次启动解压较慢，播放加速效果不明显                  |
-| Windows（GIF 版）               | `dsh-pet-standalone-gif.exe`        | 启动快、播放加速效果好；缺点是包体较大                                |
-| macOS（Apple Silicon / M 系列） | `dsh-pet-indesktop-macos-arm64.zip` | 解压得 `dsh-pet-indesktop.app`，首次打开需放行（见下方「macOS」章节） |
-| macOS（Intel）                  | —                                   | 暂无安装包，请按「macOS」章节源码运行                                 |
+## 项目来源与素材声明
 
-> 文件名以 Release 页面实际发布为准。
+本项目改自、源于 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)。桌宠的基础交互思路、动画链行为模型和部分资源组织方式来自原项目，感谢原作者的开源贡献。
 
-> **声明与致谢**：本项目改自、源于 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)。
-> 桌宠的动画素材、动画链行为模型、交互设计均来自原项目，特此声明并感谢原作者的贡献。
+当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源，并为每一组 WebM 生成对应 GIF；当前 `assets/characters` 与 `assets/characters_gif` 的相对动画路径保持一致，各包含 91 个动画文件。后续新增或替换动画时，请先更新 WebM，再重新生成 GIF，不要手工维护两套不一致的素材。
 
-把 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 插件里的桌宠，改造成一个
-**跨平台的独立桌面宠物**软件（支持 **Windows** 与 **macOS**）—— 不依赖 DSH 运行时，
-用 Python + PySide6 实现，双击即跑，复用原项目 51 段高清动画（640×360，24fps）。
+## 当前状态
 
-当前提供两个 Windows 版本：
+- Windows 发布形态为 **WebM 两个版本**：Chat 版（含 AI 对话）与无 Chat 版，均提供安装包与绿色版。
+- 安装包免管理员、按当前用户安装，向导中可自由选择安装盘符与目录；卸载后无残留运行缓存。
+- 绿色版解压即用、删除即卸载，可放在任意盘符或 U 盘。
+- AI 对话窗口为独立的手机式聊天窗口，不改变桌宠主窗口的透明背景、mask、鼠标穿透和动画状态机。
+- WebM 播放速率设置已修复，切换动画后仍会按当前速率播放。
+- 支持相邻非待机动画之间的可选等待间隔，默认值为 `0`，保持连续播放行为。
+- 支持可开关的随机自言自语气泡，并优先定位在角色当前可见形象的正上方。
 
-- **WebM 版**：直接解码 640×360 透明 webm，画质高、包体小，但启动较慢、播放加速效果不明显。
-- **GIF 版**：使用 GIF/QMovie 播放，启动快、播放加速效果好，缺点是包体较大。
+## 下载与版本选择
 
-两个版本都支持多角色、外部扩展、切换角色、播放速率、鼠标穿透、拖动物理等功能。
+正式发布时请以 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases) 页面实际上传的文件为准。当前推荐下载的 Windows 产物如下：
 
-Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「macOS」章节。
+| 版本 | 安装包（setup.exe） | 绿色版（zip） | 适合场景 |
+|---|---|---|---|
+| Chat WebM | `dsh-pet-standalone-webm-chat-setup.exe`（约 100 MB） | `dsh-pet-standalone-webm-chat-portable.zip`（约 122 MB） | WebM 高清播放 + AI 对话，功能完整 |
+| 无 Chat WebM | `dsh-pet-standalone-webm-setup.exe`（约 100 MB） | `dsh-pet-standalone-webm-portable.zip`（约 122 MB） | 只想要桌宠本体，不接入 AI |
 
-## 版本对比
+选择建议：
 
-| 版本     | 启动速度 | 播放加速效果 | 包体大小 | 适用场景                         |
-| -------- | -------- | ------------ | -------- | -------------------------------- |
-| WebM 版  | 较慢     | 不明显       | 约 110MB | 追求小体积、高清画质             |
-| GIF 版   | 快       | 明显         | 约 450MB | 追求启动快、播放加速效果明显     |
+- **想体验完整功能（含 AI 对话）**：装 Chat 版。
+- **只需要桌宠陪伴**：装无 Chat 版，包体更小、启动更轻。
+- **不想安装、追求便携**：用绿色版 zip，解压到任意目录双击即用。
 
-> ⚠️ **注意**：GIF 版当前**不建议切换到 webm 素材角色**，切换后可能出现卡死。
-> GIF 版请使用 GIF 素材；需要播放 webm 角色请使用 WebM 版。
+> 两个版本使用同一套高清 WebM 素材（91 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
+>
+> 旧版 GIF 超大单文件（约 800 MB，运行时会在 C 盘临时目录解压并可能残留缓存）不再默认发布；确有需要可参考本文档「打包发布」一节自行构建 GIF 变体。
+>
+> macOS（Apple Silicon）用户：产物为 `dsh-pet-standalone-*-macos-arm64.zip`（onedir .app），由 GitHub Actions 构建，见下方「macOS 使用」。
 
-## 近期优化
+## 安装教程
 
-- 支持 GIF / WebM 混合素材，GIF 版也能切换并播放 webm 角色
-- 多开桌宠时不再互相清理缓存导致卡住
-- 拖拽切换动画不再卡顿
-- 点击 Q 弹反馈，连续点击可打断动画
-- 播放速率调节（1.0x ~ 2.0x）
-- 鼠标穿透开关
-- 拖动物理效果（惯性、离心、抛出、重力、反弹衰减、地面摩擦）
-- 转向动画开始不再出现突兀镜像
+### 方式一：安装包（setup.exe）安装
 
-## 相关优化项目
+1. **下载**：选择 `dsh-pet-standalone-webm-chat-setup.exe`（或无 Chat 版）放到任意位置。
+2. **双击运行**：如果出现 Windows SmartScreen 提示，点「更多信息 → 仍要运行」（软件尚未购买代码签名证书）。
+3. **选择语言**：向导默认简体中文，也可切换 English，点「下一步」。
+4. **选择安装目录**：
+   - 默认目录为 `%LOCALAPPDATA%\Programs\dsh-pet-standalone-webm-chat`（当前用户目录，**不需要管理员权限**）；
+   - 想装到其他盘符（如 `D:\`、`E:\`），点「浏览」自己选一个目录即可。
+5. **附加任务**：可勾选「创建桌面快捷方式」（默认不勾选）。
+6. **完成**：勾选「运行 dsh-pet-standalone-webm-chat」会立即启动桌宠。
+7. **首次启动**：桌宠出现在屏幕右下角；系统托盘出现常驻图标（右键托盘可打开菜单）。
 
-[ianlike-ui/dsh-pet-standalone](https://github.com/ianlike-ui/dsh-pet-standalone)
+**常见问题**
 
-这是其他开发者基于本项目做的优化实现，可能在播放性能、打包体积、多角色支持或使用体验等方面进行了改进。  
-如果你希望体验社区优化版，可以前往该仓库查看说明和最新成果。
+- **找不到桌宠了？** 看系统托盘（可能收在「显示隐藏的图标」里），双击托盘图标可显示/隐藏桌宠。
+- **想开机自启？** 右键托盘 → 勾选「开机自启」即可（写入当前用户注册表 Run 键，无需管理员）。
+- **配置存在哪里？** 设置与聊天会话保存在 `%APPDATA%\dsh-pet-standalone\`，重装/升级不会丢失。
 
-## 特性
+### 方式二：绿色版（zip）免安装
 
-- **webm 高清播放**：直接运行时解码 640×360 透明 webm（VP9 + 8-bit alpha），保留半透明边缘
-- **动画链**：每个动画播完按概率选下一个 —— 30% 待机 / 10% 转向 / 40% 随机动作 / 20% 移动，永不停止
-- **多形象支持**：支持用户通过外部目录添加自定义角色
-- **角色热切换**：右键桌宠或托盘菜单可随时切换形象，无需重启
-- **屏幕漫游**：朝面向方向行走，先检查屏幕空间、不走出屏幕（移动动画前后各 2s 准备/收尾，位置由代码驱动）
-- **左右朝向**：转向动画播完翻转朝向，所有动画支持水平镜像
-- **点击回应**：点击宠物随机播放当前角色配置的回应动画（链上非待机动画播放中不打断）
-- **点击 Q 弹**：点击时立即产生“变矮再复原”的挤压回弹反馈；连续点击可打断当前动画并重复触发 Q 弹
-- **拖拽**：按住拖动超过 5px 判定为拖拽，宠物播放"悬空反馈"动画跟手，松手停在原地
-- **透明穿透**：窗口逐帧按人物 alpha 生成 mask，透明区域鼠标直接穿透到下层窗口
-- **右键菜单**：手动播放待机/转向/移动/点击回应/随机动作、切换角色、回到右下角、窗口置顶、不移动、开机自启、4 档大小、退出
-- **系统托盘**：显示/隐藏、切换角色、开机自启、退出；位置/朝向/大小/置顶自动持久化
-- **开机自启**：Windows 写 HKCU 注册表 Run 键 / macOS 写 LaunchAgents（均无需管理员权限），可随时开关
-- **播放速率调节**：右键菜单可调 1.0x ~ 2.0x 动画播放速度
-- **鼠标穿透**：托盘菜单可开启鼠标穿透，开启后鼠标点击会穿透桌宠到下层窗口
-- **拖动物理**：可开关的拖拽物理效果，松手会抛出、带重力与反弹衰减；拖拽过程中有惯性/离心感
+1. 下载 `dsh-pet-standalone-webm-chat-portable.zip`。
+2. 解压到任意可写目录（例如 `E:\dsh-pet\`），**保持文件夹内结构完整**。
+3. 双击文件夹里的 `dsh-pet-standalone-webm-chat.exe` 即可运行。
+4. 删除整个文件夹即完成卸载，不残留任何运行缓存。
 
-## 自定义角色教程
+> 绿色版与安装版是同一套 onedir 产物，运行行为完全一致；区别只是安装版多了快捷方式与卸载器。
 
-你可以通过两种方式使用自定义形象：
+### 卸载
 
-1. **随 exe 打包**：把形象放到项目源码的 `assets/characters/<角色ID>/videos/`，重新打包 exe。
-2. **用户本地外部扩展**：不需要重新打包，直接在 exe 同目录或用户数据目录放置形象文件夹。
+- **安装版**：`设置 → 应用 → 已安装的应用`（或「控制面板 → 程序和功能」）→ 找到 `dsh-pet-standalone (WebM Chat)` → 卸载。
+- 卸载程序会删除安装目录与快捷方式；`%APPDATA%\dsh-pet-standalone\` 中的配置与会话默认保留，如需彻底清除可手动删除该目录。
 
-### 方法一：随 exe 打包
+### 升级
 
-在项目源码中创建：
+- **安装版**：直接运行新版 setup.exe 覆盖安装即可，配置与聊天会话不受影响。
+- **绿色版**：用新版 zip 解压覆盖旧文件夹即可。
 
-```text
-assets/characters/<角色ID>/videos/
-├── idle/
-├── turn/
-├── move/
-├── click/
-├── drag/
-└── random/
+## 快速开始（安装之后）
+
+1. 桌宠默认出现在屏幕右下角，播放待机动画。
+2. 右键桌宠打开菜单；**左键点击**触发互动动画，**按住拖动**可移动桌宠。
+3. 首次使用建议打开「设置」：右键桌宠 → 桌宠设置（或托盘菜单 → 桌宠设置）。
+4. Chat 版额外提供「AI 对话」和「AI 设置」入口；无 Chat 版不会显示。
+
+### 方式三：macOS（Apple Silicon）
+
+1. **获取**：GitHub Actions 页面手动运行 `Build macOS App`（或打 `v*` tag 自动发布），从 Release / Artifacts 下载 `dsh-pet-standalone-webm-chat-macos-arm64.zip`（或无 Chat 版）。
+2. **解压**：得到 `dsh-pet-standalone-webm-chat.app`，可拖入「应用程序」文件夹。
+3. **首次打开**：应用未签名（ad-hoc codesign），Gatekeeper 会拦截——**右键 .app → 打开**，或终端执行：
+   ```bash
+   xattr -dr com.apple.quarantine dsh-pet-standalone-webm-chat.app
+   ```
+4. **数据目录**：`~/Library/Application Support/dsh-pet-standalone-<变体>/`（各变体相互独立，与 Windows 行为一致）。
+5. **开机自启**：托盘/右键菜单勾选「开机自启」（按变体生成独立 LaunchAgent）。
+6. **启动 DeepSeek Harness**：需安装 Node.js（`brew install node`）；启动器会自动探测 Homebrew/nvm 等路径并回退 `npx @deepseek-ai/dsh`。
+
+> Intel Mac：当前 CI 只构建 arm64；Intel 用户请从源码运行（见下），或在 Intel 机器上自行构建。
+
+### 从源码运行（开发者）
+
+建议使用 Python 3.10 或更高版本，并在项目根目录执行：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pet
 ```
 
-把对应分类的 `.webm` 放进去，然后重新执行打包命令即可。
-
-### 方法二：exe 同目录外部扩展（推荐给最终用户）
-
-在 exe 同目录下创建：
+Windows 也可以直接双击 `run.bat`。它实际执行的是：
 
 ```text
-<exe 所在目录>/
-├── dsh-pet-standalone-webm.exe
-└── characters/
-    └── <角色ID>/
+pythonw -m pet
+```
+
+源码入口默认包含 Chat 能力；如果只想验证桌宠核心功能，可使用无 Chat 的打包入口或在本地配置中关闭聊天。
+
+## 功能概览
+
+### 桌宠窗口
+
+- PySide6 透明、无边框、置顶窗口。
+- 保留桌宠窗口的透明背景、mask、鼠标穿透和动画状态机。
+- 支持点击互动、拖动、拖动惯性、方向转向和系统托盘。
+- 支持角色切换；角色目录按素材自动发现，不要求把角色写死在代码中。
+- 右键菜单可打开设置、AI 对话、AI 设置、角色选择和退出入口。
+- 右键菜单与托盘菜单提供「启动 DeepSeek Harness」：一键后台拉起 `dsh web`（端口 3080）并自动打开浏览器；已在运行时直接打开页面。启动命令自动适配不同安装方式（PATH 上的 `dsh` → node + npm 全局包 → 官方 `npx @deepseek-ai/dsh`），macOS 同样可用（.app 环境会额外探测 Homebrew/nvm 等常见目录，需装有 Node.js）。
+
+### 动画播放
+
+- WebM 版：直接播放透明 WebM，默认素材为 640×360、24fps。
+- 播放速率可在设置中调整，当前范围为 `1.0x` 到 `2.0x`。
+- 动画按 `idle`、`turn`、`move`、`click`、`drag`、`random` 等目录组织。
+- 支持相邻非待机动画之间的等待间隔；等待期间只播放待机和转向动画。
+- 支持随机自言自语气泡；没有自定义文本时使用内置文本。
+
+### AI 对话（Chat 版）
+
+- 支持 OpenAI Chat Completions 兼容接口。
+- 支持自定义 API 地址、模型、超时、温度和最大输出 token。
+- 支持 SSE 流式输出、多轮上下文裁剪、会话 JSON 持久化、停止生成、失败重试。
+- 会话按角色隔离；切换角色时不会把旧角色消息带入新角色。
+- 聊天窗口靠近桌宠显示，并支持用户选择是否跟随桌宠移动。
+- API Key 优先使用系统钥匙串；钥匙串不可用时可按设置选择配置文件回退。
+- 纯文本安全显示，不包含完整 Markdown 渲染器。
+
+## 使用教程
+
+### 基本操作
+
+| 操作 | 效果 |
+|---|---|
+| 左键点击桌宠 | 触发点击互动动画 |
+| 按住并拖动 | 移动桌宠；松开后根据拖动方向和速度处理转向、移动或惯性 |
+| 右键桌宠 | 打开上下文菜单 |
+| 双击托盘图标 | 显示 / 隐藏桌宠 |
+| 右键托盘图标 | 打开设置、AI 对话、开机自启、启动 DeepSeek Harness、退出等菜单 |
+| 右键桌宠 | 打开上下文菜单（含「启动 DeepSeek Harness」） |
+| 拖拽桌宠时 | 若开启了聊天窗跟随，聊天窗口会一起移动；默认不跟随 |
+
+### 开机自启
+
+1. 右键系统托盘图标。
+2. 勾选菜单中的「开机自启」。
+3. 取消勾选即关闭自启；状态直接读写当前用户的注册表 Run 键，无需管理员权限。
+
+### 调整播放速率
+
+1. 右键桌宠（或托盘菜单）→「桌宠设置」。
+2. 调整「播放速率」。
+3. 点击保存或应用。
+4. 播放当前动画或切换到下一段动画，观察节奏是否变化。
+
+速率对当前片段和后续片段均生效；设置范围 `1.0x` 到 `2.0x`。
+
+### 设置动作等待间隔
+
+「动作等待间隔」用于降低连续动作过于密集时的节奏：
+
+1. 在设置中找到「动作等待间隔」。
+2. 输入间隔秒数，默认是 `0`。
+3. 设为 `0`：保持当前连续播放行为。
+4. 设为大于 `0`：相邻的非待机、非转向动画之间等待指定时间；等待期间仍允许待机和转向动画播放。
+
+这个设置只影响动画调度，不会阻塞窗口拖动、点击、设置窗口或聊天窗口。
+
+### 开启自言自语气泡
+
+1. 在「桌宠设置」中勾选「开启自言自语气泡」。
+2. 设置「随机间隔最短」和「随机间隔最长」。
+3. 在「自言自语内容」中每行填写一条文本。
+4. 留空会恢复内置内容，例如：
+
+```text
+好女孩……
+好模型……
+欧鲸鲸……
+```
+
+气泡默认显示在角色当前可见形象边界的正上方并水平居中；屏幕上方空间不足时，会自动选择不遮挡角色的候选位置。自言自语窗口不会改变桌宠的透明 mask，也不会阻止桌宠移动。
+
+### 切换角色
+
+1. 打开右键菜单中的角色选择入口。
+2. 选择角色后，桌宠会加载对应角色目录中的动画。
+3. Chat 版会同步更新聊天窗口的角色名称、头像回退、主题色、有效 system prompt 和会话列表。
+4. 角色之间的消息历史相互隔离。
+
+## AI 对话使用教程（Chat 版）
+
+### 第一步：配置 API
+
+1. 右键桌宠（或托盘菜单）→「AI 设置」。
+2. 新建或选择一个 Provider。
+3. 填写兼容接口的 API 地址、模型、超时和生成参数。
+4. 填写 API Key，并按提示选择钥匙串或配置文件回退。
+5. 使用「连接测试」确认配置可用。
+
+首期协议是 OpenAI Chat Completions 兼容协议。Gemini 等其他服务只有在提供兼容网关或兼容端点时才可使用。
+
+### 第二步：开始对话
+
+1. 右键桌宠（或托盘菜单）→「AI 对话」。
+2. 聊天窗第一次打开时会定位在桌宠旁边，并根据桌宠当前可见形象边界和屏幕边界自动避让。
+3. 输入区支持多行输入：`Enter` 发送，`Shift+Enter` 换行；生成中按钮变为「停止」。
+4. 可在 AI 设置中开启或关闭「跟随桌宠移动」。
+
+聊天窗为独立的手机式外观，包含：
+
+- 自绘标题栏：角色头像、窗口拖动、最小化、关闭和双击最大化/还原。
+- 上下文栏：Provider 状态、当前会话、新建/删除/清空会话。
+- 消息时间线：用户和桌宠气泡、流式回复、错误和停止状态。
+
+### 配置 system prompt 和角色 prompt
+
+system prompt 的优先级为：
+
+```text
+角色用户自定义 prompt > 角色 manifest 中的 prompt > 全局默认 prompt
+```
+
+角色可在以下文件中声明聊天配置：
+
+```text
+assets/characters/<character_id>/manifest.json
+```
+
+可选字段示例：
+
+```json
+{
+  "chat": {
+    "system_prompt": "你是一个温柔的桌面宠物……",
+    "theme_color": "#79C7FF",
+    "chat_actions": {
+      "thinking": "thinking.webm",
+      "success": "success.webm",
+      "error": "error.webm"
+    }
+  }
+}
+```
+
+非法或缺失的 `theme_color` 会回退为默认蓝色；缺少头像资源时，聊天窗使用角色 ID 首字母生成圆形头像。
+
+### 会话管理
+
+- 会话按角色目录保存。
+- 会话标题优先取第一条用户消息，无法生成时使用时间标题。
+- 可在顶部下拉框切换已有会话。
+- 可新建、删除当前会话或清空消息。
+- 生成过程中会限制切换和删除，避免旧请求污染新会话。
+- 停止生成时，未完成的半截 assistant 内容不会作为完整消息保存。
+
+配置与会话目录：
+
+| 系统 | 数据目录 |
+|---|---|
+| Windows | `%APPDATA%/dsh-pet-standalone/` |
+| macOS | `~/Library/Application Support/dsh-pet-standalone/` |
+| Linux | `~/.config/dsh-pet-standalone/` |
+
+目录中主要包含：
+
+```text
+config.json
+sessions/<character_id>/<session_id>.json
+pet.log
+```
+
+配置格式当前为 v3，并兼容历史平铺字段，例如 `chat_api_url`、`chat_api_key`、`chat_model`、`chat_system_prompt` 和 `chat_enabled`。日志不会输出 API Key。
+
+## 动画素材与自定义角色
+
+### 当前目录结构
+
+```text
+assets/
+├── characters/
+│   └── shenshen/
+│       ├── manifest.json
+│       └── videos/
+│           ├── idle/
+│           ├── turn/
+│           ├── move/
+│           ├── click/
+│           ├── drag/
+│           └── random/
+└── characters_gif/
+    └── shenshen/
         └── videos/
-            ├── idle/
-            ├── turn/
-            ├── move/
-            ├── click/
-            ├── drag/
-            └── random/
+            └── 与 characters/<id>/videos 相同的相对路径
 ```
 
-也支持用户数据目录：
+- `assets/characters` 是 WebM 动画源目录。
+- `assets/characters_gif` 是由 WebM 生成的 GIF 目录，仅在需要构建 GIF 变体时使用。
+- 两套目录中的角色 ID、子目录和文件相对路径应保持一致。
+- 没有稳定静态头像时，不强制从 WebM/GIF 截取首帧，以避免启动变慢和打包兼容性问题。
+
+### 重新生成 GIF（仅构建 GIF 变体时需要）
+
+更新 WebM 素材后，在项目根目录执行：
+
+```powershell
+python scripts/convert_to_gif.py --force --clean
+```
+
+其中：
+
+- `--force`：覆盖已有 GIF。
+- `--clean`：删除目标目录中已经不存在对应 WebM 的旧 GIF，防止两套素材残留不一致。
+
+转换前请确认 `imageio-ffmpeg` 已安装。生成后可以用下面的命令检查数量：
+
+```powershell
+(Get-ChildItem assets/characters -Recurse -Filter *.webm).Count
+(Get-ChildItem assets/characters_gif -Recurse -Filter *.gif).Count
+```
+
+两者应当相同；还应检查相对路径是否一一对应。
+
+### 新增角色
+
+1. 在 `assets/characters/<character_id>/videos/` 下按动画类别建立目录。
+2. 放入透明 WebM 文件，命名保持稳定、避免重复。
+3. 如有角色身份信息，在 `<character_id>/manifest.json` 中填写名称、prompt、主题色和动作映射。
+4. 如需 GIF 变体，运行 GIF 转换脚本同步生成 GIF。
+5. 使用源码运行或重新打包验证角色切换、播放、气泡定位和 Chat 身份区。
+
+## 开发结构
 
 ```text
-Windows: %APPDATA%/dsh-pet-standalone/characters/<角色ID>/videos/
-macOS:   ~/Library/Application Support/dsh-pet-standalone/characters/<角色ID>/videos/
+pet/
+├── app.py                 # 应用入口、托盘、角色切换和聊天集成
+├── config.py              # 配置读取、迁移和持久化
+├── window.py              # 桌宠主窗口、透明/mask/鼠标穿透和动画状态机
+├── catalog.py             # 角色和动画素材发现
+├── library.py             # 动画库访问
+├── webm_clip.py           # WebM 播放和速率控制
+├── gif_clip.py            # GIF/QMovie 播放
+├── speech_bubble.py       # 自言自语与状态气泡定位
+└── chat/                  # 独立 AI 对话子系统
+    ├── models.py
+    ├── providers.py
+    ├── prompt.py
+    ├── service.py
+    ├── session_store.py
+    ├── widgets.py
+    ├── settings_dialog.py
+    ├── pet_link.py
+    └── styles.qss
+
+packaging/
+├── pet_entry.py           # Chat 构建入口
+├── pet_entry_no_chat.py   # 无 Chat 构建入口
+└── dsh-pet.iss            # Inno Setup 通用安装包脚本（/D 参数编译各变体）
+
+scripts/
+├── build_onedir.ps1       # onedir 构建 + zip 绿色版打包
+├── make_icon.py           # 从待机动画提取封面帧生成应用图标（assets/icon.ico）
+├── convert_to_gif.py      # WebM → GIF 全量同步脚本
+└── cleanup_mei_cache.py   # 检查/清理旧 onefile 版本遗留的 _MEI 缓存（默认预览）
+
+tests/                     # 单元测试、Qt offscreen 测试和构建相关验证
 ```
 
-程序启动或切换角色时会自动检测：
+## 测试与验证
 
-- 外部目录存在 → 优先使用外部形象。
-- 外部目录不存在 → 回退到 exe 内置形象，不会报错。
+在项目根目录执行：
 
-### 如何准备自定义形象的动画（参考项目绘制方法）
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+python -m pytest -q
+python -m compileall pet packaging scripts
+```
 
-推荐直接参考上游项目 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)：
+最近一轮记录：
 
-1. 克隆或下载参考项目：
-   ```sh
-   git clone --depth 1 https://github.com/PC2005-cloud/dsh-pet.git
-   ```
-2. 参考项目中的透明动画位于：
-   ```text
-   dsh-pet/dsh-pet/assets/thumb/*.webm
-   ```
-   这些是 640×360 透明 webm（VP9 + 8-bit alpha）。
-3. 你可以：
-   - 直接复制这些 webm 作为基础形象；
-   - 或参考它们的动作分类，生成自己角色的同尺寸透明 webm；
-   - 或使用 ffmpeg / 图像生成工具制作新的透明动画，只要输出 640×360 透明 webm 即可。
+- `pytest`：33 passed。
+- `compileall`：通过。
+- WebM Chat、WebM 无 Chat 两个 onedir 构建均完成启动冒烟验证：进程存活超过 8 秒，系统临时目录与程序目录**均无新增 `_MEI` 缓存**。
 
-4. 将制作好的 webm 按分类放入对应子目录：
+如果要验证真实窗口，不要设置 `QT_QPA_PLATFORM=offscreen`，直接运行 `python -m pet` 或打包后的程序，重点检查：
+
+1. 桌宠透明背景、鼠标穿透、拖动和动画播放没有回归。
+2. 自言自语气泡位于角色形象正上方，靠近屏幕边缘时不会遮住角色。
+3. 动作等待间隔只限制相邻非待机动画，不阻塞待机、转向和窗口操作。
+4. WebM 播放速率切换后，当前片段和下一片段节奏都发生变化。
+5. Chat 窗口不透明、位于桌宠可见形象旁边，跟随开关符合设置。
+6. 切换会话和角色时，旧消息、旧流式气泡不会串入当前会话。
+
+## 打包发布
+
+发布流水线：**onedir 构建 → zip 绿色版 → Inno Setup 安装包**。onedir 运行期零解压，不产生 `_MEI` 缓存；安装包免管理员、可选安装目录。
+
+### 1) onedir 构建 + 绿色版 zip
+
+需要 PyInstaller：
+
+```powershell
+python -m pip install pyinstaller
+```
+
+```powershell
+# WebM Chat 版
+powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-chat
+# WebM 无 Chat 版
+powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm
+```
+
+产物位于 `dist-onedir\<name>\`（绿色版目录）与 `<name>-portable.zip`。
+
+> GIF 变体（`gif-chat` / `gif`）需要先运行 `scripts/convert_to_gif.py --force --clean` 生成 GIF 素材，构建时加 `-Gif` 参数；默认发布不含 GIF 版。
+
+### 2) Inno Setup 安装包
+
+本机已安装便携版 ISCC：`E:\tools\InnoSetup6\ISCC.exe`（免管理员）。通用脚本 `packaging\dsh-pet.iss` 用 `/D` 定义编译不同变体：
+
+```powershell
+# WebM Chat 版（脚本默认值）
+E:\tools\InnoSetup6\ISCC.exe packaging\dsh-pet.iss
+
+# WebM 无 Chat 版
+E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-webm /DMyAppExeName=dsh-pet-standalone-webm.exe /DMyAppDir=..\dist-onedir\dsh-pet-standalone-webm "/DMyAppId={{ED2590E4-A968-4E8D-B7C4-75DFE012D0E9}}" "/DMyAppDisplay=dsh-pet-standalone (WebM)" packaging\dsh-pet.iss
+```
+
+完整命令（含 GIF 变体）与安装包特性见 [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)。
+
+打包注意事项：
+
+- 构建前关闭正在运行的同类程序，避免文件被占用。
+- Chat 版使用 `packaging/pet_entry.py`，无 Chat 版使用 `packaging/pet_entry_no_chat.py`；无 Chat 入口会排除 `pet.chat` 和 `keyring`，不携带 AI 对话依赖。
+- 安装包为按用户安装（`PrivilegesRequired=lowest`），默认目录 `%LOCALAPPDATA%\Programs\...`，向导中可自行选择任意盘符。
+- 打包完成后，至少安装/运行一次，检查托盘、角色切换、设置、自言自语和聊天入口。
+
+构建记录和 SHA256 位于：
 
 ```text
-videos/
-├── idle/     # 待机动画
-├── turn/     # 转向动画
-├── move/     # 移动动画
-├── click/    # 点击回应动画
-├── drag/     # 拖拽动画（可选）
-└── random/   # 随机动作动画
+docs/BUILD_ARTIFACTS-2026-08-22.md
 ```
 
-5. 如果文件名无法通过关键词自动识别，可以添加 `manifest.json` 精确指定分类。
+## 旧版 onefile 缓存清理（仅旧版本需要）
 
-6. 启动后在桌宠右键菜单或托盘菜单的「切换角色」中选择你的新角色 ID。
+旧版单文件 EXE（onefile）运行时会在系统临时目录创建 `_MEI数字` 目录，崩溃或强制结束时可能残留；**当前 onedir 发布版不会再产生该缓存**。程序启动时仍会自动尝试清理超过 24 小时的遗留目录，并跳过当前进程正在使用的运行目录；权限不足或目录被占用时只记录日志，不强制修改 ACL。
 
-## 使用手册
+也可以使用项目提供的专用脚本检查：脚本默认只预览，不会删除任何目录。确认所有桌宠进程都已退出后，才使用 `--delete`：
 
-### 启动与退出
-
-- **启动**：双击 `run.bat`（或 `python -m pet` / 打包后的 exe），桌宠出现在屏幕右下角
-- **退出**：右键桌宠 →「退出」，或点系统托盘图标 →「退出」
-
-### 鼠标交互
-
-- **点击**：单击宠物本体，随机播放当前角色配置的回应动画之一，并触发 Q 弹挤压回弹效果。
-  连续点击可以打断当前动画，反复触发 Q 弹，手感更跟手。
-- **拖拽**：按住拖动超过 5px 判定为拖拽，宠物播放「悬空反馈」动画跟手，松手停在原地
-- **穿透**：只有宠物本体（不透明区域）可点，其余透明区域鼠标直接穿透到下层窗口
-
-### 新功能使用说明
-
-- **播放速率**：右键桌宠 →「播放速率」→ 选择 `1.0x ~ 2.0x`，动画会立即按新速度播放。
-- **鼠标穿透**：右键系统托盘图标 → 勾选「鼠标穿透」，开启后鼠标点击会穿透桌宠到下层窗口；取消勾选即可恢复。
-- **拖动物理**：右键桌宠 → 勾选「拖动物理」，开启后：
-  - 拖动时会有惯性/离心感；
-  - 松手后桌宠会被抛出；
-  - 碰到屏幕边缘会反弹并逐渐衰减；
-  - 落地后受摩擦力影响会慢慢停下。
-
-### 右键菜单（右键点击宠物本体）
-
-| 菜单项          | 功能                                                                                      |
-| --------------- | ----------------------------------------------------------------------------------------- |
-| 动画 · 待机     | 手动播放待机动画；如果待机目录有多个视频，会显示二级菜单                                  |
-| 动画 · 转向     | 手动播放转向动画；如果转向目录有多个视频，会显示二级菜单                                  |
-| 动画 · 移动     | 手动播放移动动画（走路姿态 + 朝面向方向真实走动；「不移动」模式下这是唯一触发移动的方式） |
-| 动画 · 点击回应 | 手动播放点击回应动画                                                                      |
-| 动画 · 随机动作 | 手动播放随机动作动画                                                                      |
-| 切换角色        | 热切换当前形象（内置 + 外部扩展角色都会列出）                                             |
-| 回到右下角      | 把宠物复位到屏幕右下角                                                                    |
-| 窗口置顶        | 勾选 = 始终显示在其他窗口之上，取消 = 可被其他窗口遮挡                                    |
-| 不移动          | 勾选 = 只播放原地动画（待机/转向/随机动作），不再自动走动；取消 = 恢复正常模式            |
-| 开机自启        | 勾选 = 随 Windows 登录自动启动（见下方说明）                                              |
-| 大小            | 4 档缩放：320px / 462px / 544px / 640px（默认 462px）                                     |
-| 播放速率        | 调节动画播放速度：1.0x / 1.1x / ... / 2.0x                                               |
-| 拖动物理        | 开启后拖动桌宠有惯性/离心感，松手会抛出并带重力反弹衰减                                   |
-| 退出            | 关闭桌宠                                                                                  |
-
-### 系统托盘图标
-
-| 操作                     | 功能                     |
-| ------------------------ | ------------------------ |
-| 双击托盘图标             | 显示 / 隐藏宠物          |
-| 右键托盘图标 → 显示/隐藏 | 同上                     |
-| 右键托盘图标 → 切换角色  | 热切换当前形象           |
-| 右键托盘图标 → 鼠标穿透  | 开启后鼠标点击穿透到下层窗口 |
-| 右键托盘图标 → 开机自启  | 与右键菜单的开机自启同步 |
-| 右键托盘图标 → 退出      | 关闭桌宠                 |
-
-### 自动行为（无需任何操作）
-
-桌宠会自己"生活"，挂机即可观赏：
-
-- **动画链**：每个动画播完按概率抽下一个 —— 30% 待机 / 10% 转向 / 40% 随机动作 / 20% 移动，永不停止
-- **屏幕漫游**：朝面向方向行走，先检查屏幕空间、不走出屏幕
-- **朝向翻转**：播完「东张西望」后左右翻转朝向，所有动画随之镜像
-- **状态记忆**：位置、朝向、大小、置顶、不移动、开机自启、当前角色均自动保存（`%APPDATA%/dsh-pet-standalone/config.json`），下次启动自动恢复
-
-### 开机自启
-
-勾选「开机自启」后，桌宠随系统登录自动启动；取消勾选即移除。
-
-- **Windows**：写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（无需管理员权限）；
-  源码运行时指向 `pythonw -m pet`；打包成 exe 后会先用 `start /D` 切到 exe 所在目录再启动 exe，
-  避免开机时默认工作目录不可写导致 onefile 解压失败（旧版自启命令会在下次启动时自动升级）
-- **macOS**：写入 LaunchAgents（`~/Library/LaunchAgents/`），登录后自动启动
-
-## 实现方式
-
-### 技术栈
-
-- **Python 3.10+ / PySide6**（Qt for Python，LGPL 许可）
-- **imageio-ffmpeg** 运行时解码 640×360 透明 webm（VP9 alpha，RGBA 帧）
-
-### 动画链状态机（1:1 移植原插件 `client.js`）
-
-原插件是一个"链式"状态机：每个动画一次性播放，播完按概率抽下一个
-（30% 待机 / 10% 转向 / 40% 动作 / 20% 移动）。本项目的 `pet/window.py`
-将这套行为完整移植为 Python：
-
-- `_pick_next()` 按概率抽下一个动画
-- 转向动画播完翻转朝向（`facing=right` 时水平镜像，等效原版 `scaleX(-1)`）
-- 移动动画只提供"走路姿态"，位置由 `QTimer` 驱动：开头/结尾各 2s 原地不动，
-  中间按播放进度插值位移
-- 点击回应/拖拽动画播完先回"待机缓冲"，待机播完再回到随机链
-- 点击只在待机时响应，5px 阈值区分点击与拖拽（等效原版命中层设计）
-
-### 透明窗口与鼠标穿透
-
-窗口用 Qt 的 `Tool` 无边框置顶窗口 + `WA_TranslucentBackground` 实现透明背景。
-每帧按人物 alpha 通道生成 `QBitmap` mask，透明区域鼠标直接穿透到下层窗口，
-实现"只有宠物本体可点击"（等效原版 HIT_BOX 命中层）。
-
-### 素材播放（webm 主路线）
-
-本项目直接运行时解码上游 640×360 透明 **webm**（VP9 + 8-bit alpha），
-使用 `imageio-ffmpeg` 自带的静态 ffmpeg 输出 RGBA 帧，保留半透明边缘。
-
-关键实现：
-
-- 解码命令核心参数：
-  ```python
-  imageio_ffmpeg.read_frames(
-      path,
-      pix_fmt="rgba",
-      bits_per_pixel=32,
-      input_params=["-c:v", "libvpx-vp9"],
-  )
-  ```
-  `-c:v libvpx-vp9` 必须放在输入之前，否则原生 vp9 解码器会丢弃 alpha。
-- 播放架构：
-  - 后台 reader 线程只负责把 RGBA 帧放入有界队列。
-  - 主线程 `QTimer` 按视频 fps 逐帧从队列取帧。
-  - 每次只取最早的一帧，**不跳帧、不追帧**，避免动画快进。
-  - 所有 `QImage/QPixmap` 和窗口 mask 更新都在主线程完成。
-  - Windows 下 `imageio-ffmpeg` 内部使用 `STARTUPINFO` 隐藏 ffmpeg 控制台窗口，
-    避免旧 ffmpeg 子进程方案导致的“窗口反复出现/消失”。
-
-### 多形象支持
-
-项目支持多角色形象，每个角色一个独立目录：
-
-```text
-assets/characters/<character_id>/videos/
-├── idle/     # 待机
-├── turn/     # 转向
-├── move/     # 移动
-├── click/    # 点击回应
-├── drag/     # 拖拽（可选）
-└── random/   # 随机动作
+```powershell
+python scripts/cleanup_mei_cache.py
+python scripts/cleanup_mei_cache.py --min-age-hours 0
+python scripts/cleanup_mei_cache.py --delete
 ```
 
-当前内置角色：
+如果某些目录因权限异常仍无法删除，请先退出所有桌宠，再用管理员 PowerShell 运行脚本；脚本不会自动接管目录所有权，避免误操作其他临时文件。
 
-```text
-shenshen（内置） + 用户通过外部目录添加的角色
-```
+## 配置与安全说明
 
-- 默认形象为 `shenshen`，当前动画放在 `assets/characters/shenshen/videos/`。
-- 不同角色可以有**不同的动作集**：程序会递归扫描 `videos/` 下的子目录，
-  按目录自动区分“待机 / 转向 / 移动 / 点击回应 / 拖拽 / 随机动作”。
-- 内置角色会随 exe 一起打包。
-- 同时支持用户本地外部扩展：
-  - exe 同目录或当前工作目录下的 `characters/<id>/videos/`
-  - 用户数据目录下的 `dsh-pet-standalone/characters/<id>/videos/`
-  - 运行时自动检测，存在则优先使用，不存在则回退内置，不会报错。
-- 右键桌宠或托盘菜单中的「切换角色」可热切换形象。
-- 右键菜单中「动画 · 待机」和「动画 · 转向」已拆分为两个独立按钮。
+- API Key 不会写入日志，也不应放入截图、Issue 或公开配置。
+- 默认优先使用系统钥匙串；钥匙串不可用时，设置界面会提示配置文件回退风险。
+- 会话文件保存在本地，不实现云端同步。
+- OpenAI 兼容接口的错误响应、网络异常和空响应会转换为界面错误状态，并保留用户消息供重试。
+- 当前消息按纯文本显示；不要把不可信的模型输出当作 HTML 或脚本执行。
 
-#### 动作分类规则
+## 已知限制
 
-程序按以下优先级区分“待机 / 转向 / 移动 / 点击回应 / 拖拽 / 随机动作”：
+- 当前发布只提供 WebM 变体（Chat / 无 Chat）；GIF 变体包体约 800 MB，不再默认发布，需要时按「打包发布」一节自行构建。
+- 安装包未做代码签名，首次运行时 SmartScreen 可能出现提示，需手动放行；macOS 同样未签名，需 Gatekeeper 放行（右键打开）。
+- 当前 macOS 发布只提供 Apple Silicon（arm64）的 onedir .app；Intel Mac 请源码运行或自行构建。
+- 当前 AI 对话只实现 OpenAI Chat Completions 兼容协议，不实现 Gemini 原生协议。
+- 当前不提供完整 Markdown 渲染、云端同步和编辑历史消息后重发。
+- 自言自语文本是本地配置内容，不由模型自动生成情绪或动作。
+- 本轮重点验证 Windows 发布包；macOS/Linux 保留配置目录和源码运行兼容路径，具体桌面环境仍建议在目标平台单独验证。
+- 角色资源若缺少静态头像，聊天窗使用角色 ID 首字母回退；不会强制从 WebM/GIF 生成头像。
 
-1. **优先按 `videos/` 下的子目录分类**：
-   - `idle/` → 待机
-   - `turn/` → 转向
-   - `move/` → 移动
-   - `click/` → 点击回应
-   - `drag/` → 拖拽（可选）
-   - `random/` → 随机动作
-   - 放在这些子目录之外的 webm 会进入随机动作池。
-   - 兼容旧结构：如果存在 `idle_turn/`，程序仍会尝试按文件名关键词拆分待机和转向。
+## 项目文档
 
-2. **可选 `manifest.json` 补充/覆盖**：
-   - 查找位置：
-     - `<角色目录>/videos/manifest.json`
-     - `<角色目录>/manifest.json`
-   - 示例：
-     ```json
-     {
-       "idle": "我的待机.webm",
-       "turn": "转身动画.webm",
-       "moves": ["走路1.webm", "走路2.webm"],
-       "clicks": ["点击回应.webm"],
-       "drag": "拖拽动画.webm"
-     }
-     ```
-   - 当子目录无法满足精确分类时，可以用 manifest 指定。
+- [`SPEC.md`](SPEC.md)：项目设计边界和验收标准。
+- [`LOG.md`](LOG.md)：施工记录和决策说明。
+- [`LOG-INDEX.md`](LOG-INDEX.md)：施工记录索引。
+- [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)：onedir 构建、绿色版 zip 与 Inno Setup 安装包流水线。
+- [`docs/BUILD_ARTIFACTS-2026-08-22.md`](docs/BUILD_ARTIFACTS-2026-08-22.md)：EXE 构建、大小、哈希和启动验证记录。
 
-3. **关键词兜底**：
-   - 待机：包含 `待机`、`idle`、`呼吸`
-   - 转向：包含 `转向`、`转身`、`东张西望`、`回头`、`turn`
-   - 移动：包含 `走`、`跑`、`移动`、`move`、`walk`、`run`、`踏步`、`奔跑`
-   - 点击回应：包含 `点击`、`回应`、`click`、`response`
-   - 拖拽：包含 `拖拽`、`拖`、`悬空`、`drag`、`抓`
+## 许可证与致谢
 
-4. 如果某个角色没有可用的“待机”，程序会安全回退到该角色第一个动画，避免启动崩溃。
-
-> 建议：新角色推荐直接使用 `idle/ turn/ move/ click/ drag/ random/` 子目录结构，
-> 这样不需要 manifest 也能正确分类。
-
-## 快速开始
-
-### 1. 安装依赖
-
-```sh
-pip install PySide6 imageio-ffmpeg
-```
-
-### 2. 准备素材
-
-请从上游 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库获取
-`dsh-pet/assets/thumb/*.webm`（51 个 640×360 透明 webm），按分类放到本项目的
-`assets/characters/shenshen/videos/` 下对应子目录：
-
-```text
-assets/characters/shenshen/videos/
-├── idle/
-├── turn/
-├── move/
-├── click/
-├── drag/
-└── random/
-```
-
-无需转码即可直接运行。
-
-### 3. 运行
-
-双击 `run.bat`，或命令行 `python -m pet`。
-
-## 打包为 exe（可选）
-
-```bat
-python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx ^
-    --name dsh-pet-standalone-webm ^
-    --collect-all imageio_ffmpeg ^
-    --add-data "assets/characters;assets/characters" ^
-    packaging/pet_entry.py
-```
-
-> 打包入口必须用 `packaging/pet_entry.py`（绝对导入）；直接用 `pet/__main__.py`
-> 会因相对导入在冻结模式下失效。onefile 模式启动时会先解压素材（约 5~15 秒）。
-
-#### GIF 版打包（可选）
-
-如果需要打包旧 GIF 素材版本，使用：
-
-```bat
-python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx ^
-    --name dsh-pet-standalone-gif ^
-    --collect-all imageio_ffmpeg ^
-    --add-data "assets/characters_gif;assets/characters_gif" ^
-    packaging/pet_entry.py
-```
-
-程序会按素材目录自动识别：
-
-- 目录里有 `*.webm` → 使用 webm 播放
-- 目录里只有 `*.gif` → 使用 GIF/QMovie 播放
-
-## macOS
-
-### 安装包（.app，GitHub Actions 自动构建）
-
-无需本地 Mac，项目通过 GitHub Actions 自动打包 macOS 版本：
-
-1. 打开仓库的 **Actions** 页 → 左侧选「Build macOS App」→ 右侧 **Run workflow** → 确认
-2. 等待构建完成（约 10 分钟），在构建详情页底部下载 artifact：
-   `dsh-pet-indesktop-macos-arm64.zip`（Apple Silicon / M 系列芯片）
-3. 解压得到 `dsh-pet-indesktop.app`，拖入「应用程序」文件夹即可
-
-> **Intel Mac 用户**：当前仅提供 Apple Silicon（arm64）安装包，Intel 芯片的 Mac
-> 请用下方「源码运行」方式使用。
-
-> **未签名提示**：目前为免费版（ad-hoc 签名，未经 Apple 公证），首次打开会被 macOS
-> Gatekeeper 拦截。放行方法（任选其一，`<你的app路径>` 改成实际位置）：
->
-> 1. 右键 app →「打开」→ 再点「打开」；若无「打开」选项，走第 2 条
-> 2. 系统设置 → 隐私与安全性 → 下滑找到「已阻止 'dsh-pet-indesktop'」→ 点「仍然打开」
-> 3. 终端清除隔离标记后双击（最常用）：
->    ```sh
->    sudo xattr -d com.apple.quarantine "<你的app路径>/dsh-pet-indesktop.app"
->    ```
-> 4. 若第 3 条仍被拦，再补 ad-hoc 签名后双击：
->    ```sh
->    xattr -cr "<你的app路径>/dsh-pet-indesktop.app"
->    codesign --force --deep --sign - "<你的app路径>/dsh-pet-indesktop.app"
->    ```
-
-### 源码运行
-
-```sh
-pip install PySide6 imageio-ffmpeg
-# 准备素材：同「快速开始」第 2 步，把 webm 放到 assets/characters/shenshen/videos/
-python -m pet
-```
-
-### macOS 已知差异
-
-- **开机自启**：macOS 通过 LaunchAgents（`~/Library/LaunchAgents/`）实现，与 Windows 注册表等价
-- **透明穿透**：Qt 的窗口 mask 鼠标穿透在 macOS 上行为与 Windows 有差异，透明区域点击穿透**可能不完全生效**，需真机验证反馈
-- **配置目录**：macOS 下配置保存在 `~/Library/Application Support/dsh-pet-standalone/`
-
-## 目录结构
-
-```
-├── pet/                 # 核心代码
-│   ├── catalog.py       # 动画目录、多形象常量、分类、几何/概率常量
-│   ├── library.py       # 素材库：按角色加载 webm
-│   ├── webm_clip.py     # imageio-ffmpeg 解码 webm 的播放器
-│   ├── window.py        # 桌宠窗口：状态机 + 动画链 + 移动驱动 + 交互
-│   ├── config.py        # 配置持久化（跨平台：APPDATA / Application Support / .config）
-│   ├── autostart.py     # 开机自启（跨平台：Windows 注册表 / macOS LaunchAgents）
-│   └── app.py           # 入口 + 系统托盘
-├── assets/characters/   # 多形象动画（每个角色一个子目录）
-│   └── <character_id>/videos/*.webm
-├── packaging/           # PyInstaller 打包入口
-├── .github/workflows/   # GitHub Actions（macOS 自动打包）
-├── tests/               # 冒烟测试 / 诊断工具
-├── run.bat              # Windows 一键启动
-└── requirements.txt     # PySide6 + imageio-ffmpeg
-```
-
-## 已知说明
-
-**webm 直解**：与 web 端一致播放 640×360 透明 webm（VP9 视频，8-bit alpha），
-保留半透明边缘和原始色彩。不再打包体积庞大的 GIF 素材。
-
-## 开发经验与教训
-
-> 记录本项目开发与打包过程中踩过的坑，供后续维护者参考。
-
-### 打包与分发
-
-- **CI 打包成功 ≠ 能运行**：macOS 的 GitHub Actions 构建曾"绿色成功"，但产物缺 `pet`
-  模块（运行时才报 `ModuleNotFoundError`）。原因：`pyinstaller` 命令不会把当前目录加进
-  模块搜索路径，从 `packaging/pet_entry.py` 入口分析时找不到项目根的 `pet` 包。必须用
-  `python -m PyInstaller --paths .`。教训：打包后在 CI 里加验证步骤（检查 warn 文件 /
-  解压检查权限），别只看绿灯。
-- **zip 会丢 macOS 可执行权限**：`zip -r` 打包 .app 后解压，二进制丢失 +x 权限，双击
-  无反应、终端 `permission denied`。改用 macOS 原生 `ditto -c -k --keepParent` 打包。
-- **未签名 app 必被 Gatekeeper 拦**：免费版加 ad-hoc 签名
-  （`codesign --force --deep --sign -`）后，「右键打开 / 系统设置放行」可用；彻底免
-  拦截需 Apple 开发者账号公证（$99/年）。放行方法见上文「macOS」章节。
-- **打包前先关掉正在运行的桌宠进程**：Windows 打包时若旧 exe 进程存活，PyInstaller
-  覆盖产物会报 `PermissionError: 拒绝访问`；webm 版 exe 约 110MB，但仍需结束进程后重试。
-
-### macOS 平台特性
-
-- **Tool 窗口置顶用 `WA_MacAlwaysShowToolWindow`**：macOS 上 Qt 的
-  `WindowStaysOnTopHint` 对 `Tool` 窗口不可靠（Qt 官方已知问题 QTBUG-38580），正确
-  做法是设置 `Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow`；原生 `NSWindow.setLevel`
-  需等窗口重建完成后（`QTimer.singleShot(0)`）再调，否则被 Qt 覆盖。
-- **ctypes 调 ObjC 必须显式声明 restype**：`sel_registerName` 返回 64 位 SEL 指针，
-  不设 `restype = c_void_p` 会被 ctypes 默认按 32 位截断，损坏的 SEL 使 ObjC runtime
-  段错误（SIGSEGV，try/except 拦不住）。任何返回指针的 C 函数都要显式声明返回类型。
-- **屏幕坐标比例要减 `availableGeometry` 的 left/top**：macOS 上
-  `availableGeometry().top()` 等于菜单栏高度（≠0），按「窗口坐标 ÷ 可用区宽高」存比例
-  会偏一个菜单栏高度；正确做法是 `(坐标 - avail.left()/top()) / avail.width()/height()`。
-
-### 素材与播放
-
-- **ffmpeg 解码透明 webm 时 `-c:v libvpx-vp9` 必须放在 `-i` 之前**：ffmpeg 原生 vp9
-  解码器会丢弃 WebM alpha 通道（上游 DESIGN.md 踩坑记录第 3 条，已实测复现）。
-- **webm 播放不能“清空队列只取最新帧”**：如果每次刷新都丢弃中间帧，动画会像快进一样。
-  正确做法是按视频 fps 逐帧取最早的一帧。
-- **播放结束标记不能误停新动画**：最后一帧触发窗口层切换动画后，旧的结束标记不应再
-  停止新动画的定时器；否则会出现“播完一个动画后卡住不动”。
-- **Windows 下 ffmpeg 子进程要隐藏控制台**：使用 `imageio_ffmpeg` 自带的
-  `STARTUPINFO` 或显式 `CREATE_NO_WINDOW`，避免窗口反复出现/消失。
-
-### 验证
-
-- **真机验证不可替代**：macOS 专属代码路径（ctypes/ObjC、窗口置顶）在 Windows 上编译
-  与冒烟测试都覆盖不到，必须真机验证；诊断日志（恢复位置/回到右下角时记录
-  availableGeometry 与 DPR）就是为此加的。
-
-## 附录：旧版 GIF/QMovie 路线（已归档）
-
-> 当前版本已改为 **webm 直解路线**。以下为旧版 GIF/QMovie 路线的完整说明，仅作历史存档，不再使用。
-
-<details>
-<summary>点击展开查看旧版 GIF 版本说明</summary>
-
-### 已移除/变更记录
-
-- 内置角色 `guga`、`dada`、`suansuan`、`dudu`、`mimi` 已移除（动画未能正常绘制）。当前内置角色仅保留 `shenshen`。
-- 自定义角色仍可通过 exe 同目录或用户数据目录下的 `characters/<id>/videos/` 添加，并在「切换角色」菜单中热切换。
-
----
-
-# dsh-pet-indesktop
-
-## 下载
-
-无需从源码构建，直接到 [Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases)
-页面下载对应系统的安装包：
-
-| 你的系统                        | 安装包                              | 说明                                                                  |
-| ------------------------------- | ----------------------------------- | --------------------------------------------------------------------- |
-| Windows                         | `dsh-pet-standalone.exe`            | 双击即跑，首次启动解压需几秒                                          |
-| macOS（Apple Silicon / M 系列） | `dsh-pet-indesktop-macos-arm64.zip` | 解压得 `dsh-pet-indesktop.app`，首次打开需放行（见下方「macOS」章节） |
-| macOS（Intel）                  | —                                   | 暂无安装包，请按「macOS」章节源码运行                                 |
-
-> 文件名以 Release 页面实际发布为准。
-
-> **声明与致谢**：本项目改自、源于 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)。
-> 桌宠的动画素材、动画链行为模型、交互设计均来自原项目，特此声明并感谢原作者的贡献。
-
-把 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 插件里的桌宠，改造成一个
-**跨平台的独立桌面宠物**软件（支持 **Windows** 与 **macOS**）—— 不依赖 DSH 运行时，
-用 Python + PySide6 实现，双击即跑，复用原项目 51 段高清动画（640×360，24fps）。
-
-Windows 用户见下方「快速开始 / 打包为 exe」，macOS 用户见「macOS」章节。
-
-## 特性
-
-- **webm 高清播放**：直接运行时解码 640×360 透明 webm（VP9 + 8-bit alpha），保留半透明边缘
-- **动画链**：每个动画播完按概率选下一个 —— 30% 待机 / 10% 转向 / 40% 随机动作 / 20% 移动，永不停止
-- **多形象支持**：内置多个角色，并支持用户通过外部目录添加自定义角色
-- **角色热切换**：右键桌宠或托盘菜单可随时切换形象，无需重启
-- **屏幕漫游**：朝面向方向行走，先检查屏幕空间、不走出屏幕（移动动画前后各 2s 准备/收尾，位置由代码驱动）
-- **左右朝向**：转向动画播完翻转朝向，所有动画支持水平镜像
-- **点击回应**：点击宠物随机播放当前角色配置的回应动画（链上非待机动画播放中不打断）
-- **拖拽**：按住拖动超过 5px 判定为拖拽，宠物播放"悬空反馈"动画跟手，松手停在原地
-- **透明穿透**：窗口逐帧按人物 alpha 生成 mask，透明区域鼠标直接穿透到下层窗口
-- **右键菜单**：手动播放待机/转向/移动/点击回应/随机动作、切换角色、回到右下角、窗口置顶、不移动、开机自启、4 档大小、退出
-- **系统托盘**：显示/隐藏、切换角色、开机自启、退出；位置/朝向/大小/置顶自动持久化
-- **开机自启**：Windows 写 HKCU 注册表 Run 键 / macOS 写 LaunchAgents（均无需管理员权限），可随时开关
-
-## 使用手册
-
-### 启动与退出
-
-- **启动**：双击 `run.bat`（或 `python -m pet` / 打包后的 exe），桌宠出现在屏幕右下角
-- **退出**：右键桌宠 →「退出」，或点系统托盘图标 →「退出」
-
-### 鼠标交互
-
-- **点击**：单击宠物本体，随机播放当前角色配置的回应动画之一。
-  链上非待机动画播放中点击不会打断
-- **拖拽**：按住拖动超过 5px 判定为拖拽，宠物播放「悬空反馈」动画跟手，松手停在原地
-- **穿透**：只有宠物本体（不透明区域）可点，其余透明区域鼠标直接穿透到下层窗口
-
-### 右键菜单（右键点击宠物本体）
-
-| 菜单项          | 功能                                                                                      |
-| --------------- | ----------------------------------------------------------------------------------------- |
-| 动画 · 待机     | 手动播放待机动画；如果待机目录有多个视频，会显示二级菜单                                  |
-| 动画 · 转向     | 手动播放转向动画；如果转向目录有多个视频，会显示二级菜单                                  |
-| 动画 · 移动     | 手动播放移动动画（走路姿态 + 朝面向方向真实走动；「不移动」模式下这是唯一触发移动的方式） |
-| 动画 · 点击回应 | 手动播放点击回应动画                                                                      |
-| 动画 · 随机动作 | 手动播放随机动作动画                                                                      |
-| 切换角色        | 热切换当前形象（内置 + 外部扩展角色都会列出）                                             |
-| 回到右下角      | 把宠物复位到屏幕右下角                                                                    |
-| 窗口置顶        | 勾选 = 始终显示在其他窗口之上，取消 = 可被其他窗口遮挡                                    |
-| 不移动          | 勾选 = 只播放原地动画（待机/转向/随机动作），不再自动走动；取消 = 恢复正常模式            |
-| 开机自启        | 勾选 = 随 Windows 登录自动启动（见下方说明）                                              |
-| 大小            | 4 档缩放：320px / 462px / 544px / 640px（默认 462px）                                     |
-| 退出            | 关闭桌宠                                                                                  |
-
-### 系统托盘图标
-
-| 操作                     | 功能                     |
-| ------------------------ | ------------------------ |
-| 双击托盘图标             | 显示 / 隐藏宠物          |
-| 右键托盘图标 → 显示/隐藏 | 同上                     |
-| 右键托盘图标 → 切换角色  | 热切换当前形象           |
-| 右键托盘图标 → 开机自启  | 与右键菜单的开机自启同步 |
-| 右键托盘图标 → 退出      | 关闭桌宠                 |
-
-### 自动行为（无需任何操作）
-
-桌宠会自己"生活"，挂机即可观赏：
-
-- **动画链**：每个动画播完按概率抽下一个 —— 30% 待机 / 10% 转向 / 40% 随机动作 / 20% 移动，永不停止
-- **屏幕漫游**：朝面向方向行走，先检查屏幕空间、不走出屏幕
-- **朝向翻转**：播完「东张西望」后左右翻转朝向，所有动画随之镜像
-  - **状态记忆**：位置、朝向、大小、置顶、不移动、开机自启、当前角色均自动保存（`%APPDATA%/dsh-pet-standalone/config.json`），下次启动自动恢复
-
-### 开机自启
-
-勾选「开机自启」后，桌宠随系统登录自动启动；取消勾选即移除。
-
-- **Windows**：写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（无需管理员权限）；
-  源码运行时指向 `pythonw -m pet`；打包成 exe 后会先用 `start /D` 切到 exe 所在目录再启动 exe，
-  避免开机时默认工作目录不可写导致 onefile 解压失败（旧版自启命令会在下次启动时自动升级）
-- **macOS**：写入 LaunchAgents（`~/Library/LaunchAgents/`），登录后自动启动
-
-## 实现方式
-
-### 技术栈
-
-- **Python 3.10+ / PySide6**（Qt for Python，LGPL 许可）
-- **QMovie** 播放 GIF，运行时零外部依赖（无需 ffmpeg）
-
-### 动画链状态机（1:1 移植原插件 `client.js`）
-
-原插件是一个"链式"状态机：每个动画一次性播放，播完按概率抽下一个
-（30% 待机 / 10% 转向 / 40% 动作 / 20% 移动）。本项目的 `pet/window.py`
-将这套行为完整移植为 Python：
-
-- `_pick_next()` 按概率抽下一个动画
-- 转向动画播完翻转朝向（`facing=right` 时水平镜像，等效原版 `scaleX(-1)`）
-- 移动动画只提供"走路姿态"，位置由 `QTimer` 驱动：开头/结尾各 2s 原地不动，
-  中间按播放进度插值位移
-- 点击回应/拖拽动画播完先回"待机缓冲"，待机播完再回到随机链
-- 点击只在待机时响应，5px 阈值区分点击与拖拽（等效原版命中层设计）
-
-### 透明窗口与鼠标穿透
-
-窗口用 Qt 的 `Tool` 无边框置顶窗口 + `WA_TranslucentBackground` 实现透明背景。
-每帧按人物 alpha 通道生成 `QBitmap` mask，透明区域鼠标直接穿透到下层窗口，
-实现"只有宠物本体可点击"（等效原版 HIT_BOX 命中层）。
-
-### 素材转码（webm → GIF）
-
-原项目的高清资源是 640×360 透明 **webm**（VP9 + 8-bit alpha）。为了让桌宠
-运行时零依赖，本项目把 webm 一次性预转码为同分辨率的透明 **GIF**，用 QMovie 播放。
-`scripts/convert.py` 的关键点是 `-c:v libvpx-vp9` 必须放在 `-i` 之前 ——
-ffmpeg 原生 vp9 解码器会丢弃 alpha（原项目 DESIGN.md 踩坑记录第 3 条，已实测复现）。
-
-## 快速开始
-
-### 1. 安装依赖
-
-```sh
-pip install PySide6
-```
-
-### 2. 准备素材
-
-素材体积较大（GIF 392MB，未随仓库分发）。请从上游
-[dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库获取
-`dsh-pet/assets/thumb/*.webm`（51 个 640×360 透明 webm），放到本项目的
-`assets/videos/` 目录，然后转码：
-
-```sh
-pip install imageio-ffmpeg pillow
-python scripts/convert.py            # 默认读 assets/videos/，输出 assets/animations/
-# 或指定源目录：python scripts/convert.py --src <你的webm目录>
-```
-
-### 3. 运行
-
-双击 `run.bat`，或命令行 `python -m pet`。
-
-## 打包为 exe（可选）
-
-```bat
-python -m PyInstaller --noconfirm --clean --onefile --windowed ^
-    --name dsh-pet-indesktop ^
-    --add-data "assets/animations;assets/animations" ^
-    packaging/pet_entry.py
-```
-
-> 打包入口必须用 `packaging/pet_entry.py`（绝对导入）；直接用 `pet/__main__.py`
-> 会因相对导入在冻结模式下失效。onefile 模式启动时会先解压素材（约 5~15 秒）。
->
-> `--runtime-tmpdir "."` 是按“进程当前工作目录”解析的，不是 exe 所在目录。
-> 程序内部的开机自启会先切到 exe 所在目录，因此解压目录会生成在 exe 同目录；
-> 若 exe 位于系统保护目录（如 `Program Files`）且无写权限，请把 exe 放到用户可写目录。
-
-## macOS
-
-### 安装包（.app，GitHub Actions 自动构建）
-
-无需本地 Mac，项目通过 GitHub Actions 自动打包 macOS 版本：
-
-1. 打开仓库的 **Actions** 页 → 左侧选「Build macOS App」→ 右侧 **Run workflow** → 确认
-2. 等待构建完成（约 10 分钟），在构建详情页底部下载 artifact：
-   `dsh-pet-indesktop-macos-arm64.zip`（Apple Silicon / M 系列芯片）
-3. 解压得到 `dsh-pet-indesktop.app`，拖入「应用程序」文件夹即可
-
-> **Intel Mac 用户**：当前仅提供 Apple Silicon（arm64）安装包，Intel 芯片的 Mac
-> 请用下方「源码运行」方式使用。
-
-> **未签名提示**：目前为免费版（ad-hoc 签名，未经 Apple 公证），首次打开会被 macOS
-> Gatekeeper 拦截。放行方法（任选其一，`<你的app路径>` 改成实际位置）：
->
-> 1. 右键 app →「打开」→ 再点「打开」；若无「打开」选项，走第 2 条
-> 2. 系统设置 → 隐私与安全性 → 下滑找到「已阻止 'dsh-pet-indesktop'」→ 点「仍然打开」
-> 3. 终端清除隔离标记后双击（最常用）：
->    ```sh
->    sudo xattr -d com.apple.quarantine "<你的app路径>/dsh-pet-indesktop.app"
->    ```
-> 4. 若第 3 条仍被拦，再补 ad-hoc 签名后双击：
->    ```sh
->    xattr -cr "<你的app路径>/dsh-pet-indesktop.app"
->    codesign --force --deep --sign - "<你的app路径>/dsh-pet-indesktop.app"
->    ```
-
-### 源码运行
-
-```sh
-pip install PySide6
-# 准备素材：同「快速开始」第 2 步，把 webm 放到 assets/videos/ 后转码
-pip install imageio-ffmpeg pillow
-python scripts/convert.py
-python -m pet
-```
-
-### macOS 已知差异
-
-- **开机自启**：macOS 通过 LaunchAgents（`~/Library/LaunchAgents/`）实现，与 Windows 注册表等价
-- **透明穿透**：Qt 的窗口 mask 鼠标穿透在 macOS 上行为与 Windows 有差异，透明区域点击穿透**可能不完全生效**，需真机验证反馈
-- **配置目录**：macOS 下配置保存在 `~/Library/Application Support/dsh-pet-standalone/`
-
-## 目录结构
-
-```
-├── pet/                 # 核心代码
-│   ├── catalog.py       # 51 段动画目录、分类、几何/概率常量
-│   ├── library.py       # QMovie 素材库（速度补偿）
-│   ├── window.py        # 桌宠窗口：状态机 + 动画链 + 移动驱动 + 交互
-│   ├── config.py        # 配置持久化（跨平台：APPDATA / Application Support / .config）
-│   ├── autostart.py     # 开机自启（跨平台：Windows 注册表 / macOS LaunchAgents）
-│   └── app.py           # 入口 + 系统托盘
-├── scripts/convert.py   # 素材转码：webm → 640×360 透明 GIF
-├── packaging/           # PyInstaller 打包入口
-├── .github/workflows/   # GitHub Actions（macOS 自动打包）
-├── tests/               # 冒烟测试 / 帧率实测 / 诊断工具
-├── run.bat              # Windows 一键启动
-└── requirements.txt     # PySide6
-```
-
-## 已知说明
-
-**清晰度略糊于 web 端**：web 端直接播放 640×360 透明 webm（VP9 视频，8-bit alpha），
-而本项目的 GIF 受格式本身限制 —— ① 只支持 **1-bit alpha**（每像素要么全透明要么
-全不透明，无半透明过渡，发丝边缘略硬）；② 最多 **256 色调色板**（有损颜色量化）。
-分辨率与帧率与 web 端一致（640×360 / 24fps），但颜色与边缘过渡略逊，属 GIF 格式的
-固有限制。若追求与 web 端完全一致的画质，可改用运行时 ffmpeg 解码 webm 的方案。
-
-## 开发经验与教训
-
-> 记录本项目开发与打包过程中踩过的坑，供后续维护者参考。
-
-### 打包与分发
-
-- **CI 打包成功 ≠ 能运行**：macOS 的 GitHub Actions 构建曾"绿色成功"，但产物缺 `pet`
-  模块（运行时才报 `ModuleNotFoundError`）。原因：`pyinstaller` 命令不会把当前目录加进
-  模块搜索路径，从 `packaging/pet_entry.py` 入口分析时找不到项目根的 `pet` 包。必须用
-  `python -m PyInstaller --paths .`。教训：打包后在 CI 里加验证步骤（检查 warn 文件 /
-  解压检查权限），别只看绿灯。
-- **zip 会丢 macOS 可执行权限**：`zip -r` 打包 .app 后解压，二进制丢失 +x 权限，双击
-  无反应、终端 `permission denied`。改用 macOS 原生 `ditto -c -k --keepParent` 打包。
-- **未签名 app 必被 Gatekeeper 拦**：免费版加 ad-hoc 签名
-  （`codesign --force --deep --sign -`）后，「右键打开 / 系统设置放行」可用；彻底免
-  拦截需 Apple 开发者账号公证（$99/年）。放行方法见上文「macOS」章节。
-- **打包前先关掉正在运行的桌宠进程**：Windows 打包时若旧 exe 进程存活（或杀毒软件
-  正在扫描 400MB 大文件），PyInstaller 覆盖产物会报 `PermissionError: 拒绝访问`，
-  需结束进程并等扫描结束后重试。
-
-### macOS 平台特性
-
-- **Tool 窗口置顶用 `WA_MacAlwaysShowToolWindow`**：macOS 上 Qt 的
-  `WindowStaysOnTopHint` 对 `Tool` 窗口不可靠（Qt 官方已知问题 QTBUG-38580），正确
-  做法是设置 `Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow`；原生 `NSWindow.setLevel`
-  需等窗口重建完成后（`QTimer.singleShot(0)`）再调，否则被 Qt 覆盖。
-- **ctypes 调 ObjC 必须显式声明 restype**：`sel_registerName` 返回 64 位 SEL 指针，
-  不设 `restype = c_void_p` 会被 ctypes 默认按 32 位截断，损坏的 SEL 使 ObjC runtime
-  段错误（SIGSEGV，try/except 拦不住）。任何返回指针的 C 函数都要显式声明返回类型。
-- **屏幕坐标比例要减 `availableGeometry` 的 left/top**：macOS 上
-  `availableGeometry().top()` 等于菜单栏高度（≠0），按「窗口坐标 ÷ 可用区宽高」存比例
-  会偏一个菜单栏高度；正确做法是 `(坐标 - avail.left()/top()) / avail.width()/height()`。
-
-### 素材与播放
-
-- **ffmpeg 转码透明 webm 时 `-c:v libvpx-vp9` 必须放在 `-i` 之前**：ffmpeg 原生 vp9
-  解码器会丢弃 WebM alpha 通道（上游 DESIGN.md 踩坑记录第 3 条，已实测复现）。
-- **QMovie 播放 GIF 偏慢约 20%**：QMovie 的定时器 + 解码开销使每帧比 GIF 原生时长慢，
-  需 `setSpeed(120)` 校准（见 `pet/library.py` 的 `PLAYBACK_SPEED`）。
-
-### 验证
-
-- **真机验证不可替代**：macOS 专属代码路径（ctypes/ObjC、窗口置顶）在 Windows 上编译
-  与冒烟测试都覆盖不到，必须真机验证；诊断日志（恢复位置/回到右下角时记录
-  availableGeometry 与 DPR）就是为此加的。
-
-</details>
-
-## 许可与致谢
-
-- 本项目的 Python 代码为独立实现，采用 **MIT** 许可。
-- 动画素材版权与许可归属原项目 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（MIT）。
-- 再次感谢 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 原作者。
+请以仓库中的许可证文件和上游项目说明为准。再次感谢 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 提供的参考实现与动画素材基础。

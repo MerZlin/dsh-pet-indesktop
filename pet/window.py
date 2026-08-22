@@ -19,14 +19,21 @@ import random
 import sys
 import time
 
-from PySide6.QtCore import QElapsedTimer, QPoint, Qt, QTimer
+from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QBitmap, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
 
 from . import autostart as autostart_mod
 from . import catalog
-from .config import Config
+from .config import (
+    DEFAULT_SELF_TALK_MAX_INTERVAL,
+    DEFAULT_SELF_TALK_MIN_INTERVAL,
+    DEFAULT_SELF_TALK_TEXTS,
+    Config,
+)
+from .harness_launcher import launch_harness_gui
 from .library import MovieLibrary
+from .speech_bubble import PetSpeechBubble
 
 
 def _mac_set_window_level(view_id: int, level: int) -> bool:
@@ -69,6 +76,24 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
         return False
 
 
+def _squash_geometry(
+    window_width: int,
+    window_height: int,
+    frame_width: int,
+    frame_height: int,
+    progress: float,
+) -> tuple[int, int, int, int]:
+    """返回 Q 弹帧的逻辑坐标，避免把 DPR 物理像素当成 QWidget 坐标。"""
+    progress = max(0.0, min(1.0, float(progress)))
+    pulse = math.sin(math.pi * progress)
+    sy = 1.0 - 0.15 * pulse
+    sx = 1.0 + 0.10 * pulse
+    width = max(1, int(round(frame_width * sx)))
+    height = max(1, int(round(frame_height * sy)))
+    x = int(round((window_width - width) / 2))
+    y = window_height - height
+    return x, y, width, height
+
 class PetWindow(QWidget):
     """桌宠窗口本体。"""
 
@@ -77,6 +102,10 @@ class PetWindow(QWidget):
         self.lib = lib
         self.cfg = config
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
+        self.on_open_chat = None
+        self.on_open_chat_settings = None
+        self.on_open_settings = None
+        self._position_listeners = []
 
         # 根据当前形象实际拥有的动画动态计算分类，支持不同角色动作不一致
         self.cats = catalog.build_categories(lib.names(), getattr(lib, 'manifest', None), getattr(lib, 'folder_map', None), getattr(lib, 'folder_files', None))
@@ -96,6 +125,19 @@ class PetWindow(QWidget):
         self.playback_speed: float = float(config.get('playback_speed', 1.0))
         self.mouse_through: bool = bool(config.get('mouse_through', False))
         self.drag_physics: bool = bool(config.get('drag_physics', False))
+        self.animation_gap_seconds: float = max(0.0, min(3600.0, float(config.get('animation_gap_seconds', 0.0))))
+        self._animation_gap_active = False
+        self._animation_gap_timer = QTimer(self)
+        self._animation_gap_timer.setSingleShot(True)
+        self._animation_gap_timer.timeout.connect(self._on_animation_gap_timeout)
+        self._speech_bubble = PetSpeechBubble()
+        self._self_talk_enabled = bool(config.get('self_talk_enabled', False))
+        self._self_talk_texts = self._read_self_talk_texts(config.get('self_talk_texts'))
+        self._self_talk_min_interval = max(5.0, float(config.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
+        self._self_talk_max_interval = max(self._self_talk_min_interval, float(config.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
+        self._self_talk_timer = QTimer(self)
+        self._self_talk_timer.setSingleShot(True)
+        self._self_talk_timer.timeout.connect(self._on_self_talk_timeout)
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
@@ -156,8 +198,12 @@ class PetWindow(QWidget):
         for name, movie in lib.movies().items():
             # 默认参数捕获 name，避免闭包晚绑定
             movie.frameChanged.connect(lambda n, name=name: self._on_frame(name, n))
+            # 兜底：主线程被阻塞导致队列溢出、最后一帧被丢弃时，
+            # frameChanged 永远到不了末尾帧；用 finished 信号保证动画链一定继续。
+            movie.finished.connect(lambda name=name: self._on_clip_finished(name))
         self._restore_position()
         self._switch(self.idle)
+        self._schedule_self_talk()
 
     # ================================================================ 尺寸
     def _apply_scale(self) -> None:
@@ -186,6 +232,32 @@ class PetWindow(QWidget):
         if scr is None:
             scr = QGuiApplication.primaryScreen()
         return scr
+
+    def add_position_listener(self, listener) -> None:
+        if callable(listener) and listener not in self._position_listeners:
+            self._position_listeners.append(listener)
+
+    def remove_position_listener(self, listener) -> None:
+        try:
+            self._position_listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def visible_content_rect(self) -> QRect:
+        """Return the current visible character bounds in global coordinates.
+
+        The pet window includes a transparent canvas and landing padding. The
+        alpha mask is the source of truth for the actual visible character, so
+        other windows can be placed beside the character instead of beside the
+        transparent canvas.
+        """
+        frame_rect = self.frameGeometry()
+        mask = self.mask()
+        if not mask.isEmpty():
+            local_rect = mask.boundingRect()
+            if not local_rect.isEmpty():
+                return QRect(frame_rect.topLeft() + local_rect.topLeft(), local_rect.size())
+        return frame_rect
 
     def _restore_position(self) -> None:
         """恢复上次位置（按屏幕比例），无记录则落右下角。"""
@@ -325,13 +397,14 @@ class PetWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         if self._frame_pixmap is not None:
             if self._squash_active:
-                # Q 弹：垂直变矮 + 水平微微变宽，脚底保持不动
-                sy = 1.0 - 0.15 * math.sin(math.pi * self._squash_progress)
-                sx = 1.0 + 0.10 * math.sin(math.pi * self._squash_progress)
-                w = max(1, int(round(self._frame_pixmap.width() * sx)))
-                h = max(1, int(round(self._frame_pixmap.height() * sy)))
-                x = (self._w - w) // 2
-                y = self._h - h
+                # Q 弹：使用逻辑帧尺寸；QPixmap.width() 可能是 DPR 物理像素尺寸。
+                x, y, w, h = _squash_geometry(
+                    self._w,
+                    self._h,
+                    int(round(catalog.CANVAS_W * self.scale)),
+                    int(round(catalog.CANVAS_H * self.scale)),
+                    self._squash_progress,
+                )
                 painter.drawPixmap(x, y, w, h, self._frame_pixmap)
             else:
                 # 落地对齐：整帧下移 PAD×scale，让人物脚底踩在窗口底线
@@ -364,23 +437,57 @@ class PetWindow(QWidget):
                          Qt.AspectRatioMode.KeepAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
 
+    def _on_clip_finished(self, name: str) -> None:
+        """WebMClip 播完兜底：正常路径在末尾帧处由 _on_frame 提前 stop，
+        这里只处理“末尾帧被丢弃、结束标记被消费”的异常路径，推进动画链。"""
+        if name != self.anim or self.movie is None:
+            return
+        if not self._ended_fired:
+            self._ended_fired = True
+            self._on_anim_ended(name)
+
     # ================================================================ 动画链
     def _on_anim_ended(self, name: str) -> None:
         if name == self.drag and self._dragging:
-            # 超长拖拽：拖拽动画循环重播，继续跟手
             self.movie.jumpToFrame(0)
             self._ended_fired = False
             self.movie.start()
             return
         if name in self.turns:
-            # 转向动画播完 → 翻转朝向
             self.facing = 'right' if self.facing == 'left' else 'left'
         if name == self.drag or name in self.clicks:
-            # 交互打断的动画播完 → 待机缓冲（一次性），待机播完再进链
+            self._cancel_animation_gap()
             if self.idles:
                 self._switch(self._pick(self.idles))
             return
+        if self._animation_gap_active:
+            if name in self.idles or name in self.turns:
+                self._play_animation_gap_step()
+            return
+        if self.animation_gap_seconds > 0 and (name in self.acts or name in self.moves):
+            self._start_animation_gap()
+            return
         self._pick_next()
+
+    def _cancel_animation_gap(self) -> None:
+        self._animation_gap_timer.stop()
+        self._animation_gap_active = False
+
+    def _start_animation_gap(self) -> None:
+        if self.animation_gap_seconds <= 0 or not (self.idles or self.turns):
+            self._pick_next()
+            return
+        self._animation_gap_active = True
+        self._animation_gap_timer.start(max(1, int(round(self.animation_gap_seconds * 1000))))
+        self._play_animation_gap_step()
+
+    def _play_animation_gap_step(self) -> None:
+        pool = self.idles + self.turns
+        if pool:
+            self._switch(self._pick(pool, exclude=self.anim))
+
+    def _on_animation_gap_timeout(self) -> None:
+        self._animation_gap_active = False
 
     def _pick_next(self) -> None:
         """动画链：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动（空间不够回退动作）。
@@ -445,6 +552,7 @@ class PetWindow(QWidget):
         """手动触发移动（右键菜单）：先打断当前移动，再朝 facing 方向走动；
         屏幕空间不足则原地播放走路姿态（不位移）。"""
         self._cancel_move()
+        self._cancel_animation_gap()
         if not self._try_move(name):
             self._switch(name)  # 贴边放不下：原地播放走路姿态，不位移
 
@@ -587,6 +695,14 @@ class PetWindow(QWidget):
         if not self._is_in_interactive_area(event.pos()):
             return
         menu = QMenu(self)
+        if self.on_open_chat is not None:
+            menu.addAction('AI 对话', self.on_open_chat)
+        if self.on_open_chat_settings is not None:
+            menu.addAction('AI 设置', self.on_open_chat_settings)
+        if self.on_open_settings is not None:
+            menu.addAction('桌宠设置', self.on_open_settings)
+        if self.on_open_chat is not None or self.on_open_chat_settings is not None or self.on_open_settings is not None:
+            menu.addSeparator()
 
         if self.idles:
             m_idle = menu.addMenu('动画 · 待机')
@@ -657,9 +773,67 @@ class PetWindow(QWidget):
             act.triggered.connect(lambda checked=False, s=s: self.change_scale(s))
 
         menu.addSeparator()
+        menu.addAction('启动 DeepSeek Harness', lambda: launch_harness_gui(self))
+        menu.addSeparator()
         menu.addAction('退出', self._request_quit)
         menu.exec(event.globalPos())
 
+    @staticmethod
+    def _read_self_talk_texts(value) -> list[str]:
+        if not isinstance(value, list):
+            return list(DEFAULT_SELF_TALK_TEXTS)
+        texts = []
+        for item in value:
+            text = str(item).strip()[:120]
+            if text and text not in texts:
+                texts.append(text)
+        return texts or list(DEFAULT_SELF_TALK_TEXTS)
+
+    def _schedule_self_talk(self) -> None:
+        self._self_talk_timer.stop()
+        if not self._self_talk_enabled or not self._self_talk_texts:
+            return
+        delay = random.uniform(self._self_talk_min_interval, self._self_talk_max_interval)
+        self._self_talk_timer.start(max(1000, int(round(delay * 1000))))
+
+    def _on_self_talk_timeout(self) -> None:
+        if self._self_talk_enabled and self._self_talk_texts and self.isVisible():
+            self._speech_bubble.show_text(random.choice(self._self_talk_texts), self.visible_content_rect())
+        self._schedule_self_talk()
+
+    def refresh_pet_settings(self) -> None:
+        self.animation_gap_seconds = max(0.0, min(3600.0, float(self.cfg.get('animation_gap_seconds', 0.0))))
+        if self.animation_gap_seconds <= 0:
+            self._cancel_animation_gap()
+        self._self_talk_enabled = bool(self.cfg.get('self_talk_enabled', False))
+        self._self_talk_texts = self._read_self_talk_texts(self.cfg.get('self_talk_texts'))
+        self._self_talk_min_interval = max(5.0, float(self.cfg.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
+        self._self_talk_max_interval = max(self._self_talk_min_interval, float(self.cfg.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
+        self._schedule_self_talk()
+
+    def set_animation_gap(self, seconds: float) -> None:
+        self.animation_gap_seconds = max(0.0, min(3600.0, float(seconds)))
+        self.cfg.set('animation_gap_seconds', self.animation_gap_seconds)
+        self.cfg.save()
+        if self.animation_gap_seconds <= 0:
+            self._cancel_animation_gap()
+
+    def set_self_talk_settings(self, enabled: bool, minimum: float, maximum: float, texts) -> None:
+        self._self_talk_enabled = bool(enabled)
+        self._self_talk_min_interval = max(5.0, float(minimum))
+        self._self_talk_max_interval = max(self._self_talk_min_interval, float(maximum))
+        self._self_talk_texts = self._read_self_talk_texts(texts)
+        self.cfg.set('self_talk_enabled', self._self_talk_enabled)
+        self.cfg.set('self_talk_min_interval', self._self_talk_min_interval)
+        self.cfg.set('self_talk_max_interval', self._self_talk_max_interval)
+        self.cfg.set('self_talk_texts', list(self._self_talk_texts))
+        self.cfg.save()
+        self._schedule_self_talk()
+
+    def set_chat_status(self, state: str, text: str = '') -> None:
+        if not text:
+            return
+        self._speech_bubble.show_text(text, self.visible_content_rect(), duration_ms=2200)
     def _request_switch_character(self, character_id: str) -> None:
         """请求切换角色；优先交给 app 做热切换，否则只保存配置。"""
         if self.on_switch_character is not None:
@@ -768,6 +942,18 @@ class PetWindow(QWidget):
         self._save_position()
         QApplication.instance().quit()
 
+    def moveEvent(self, event) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self._speech_bubble.reposition(self.visible_content_rect())
+        for listener in tuple(self._position_listeners):
+            try:
+                listener(self)
+            except Exception:
+                logging.exception("\u684c\u5ba0\u4f4d\u7f6e\u76d1\u542c\u5668\u6267\u884c\u5931\u8d25")
+
     def closeEvent(self, event) -> None:  # noqa: N802
         self._save_position()
+        self._self_talk_timer.stop()
+        self._cancel_animation_gap()
+        self._speech_bubble.hide()
         super().closeEvent(event)

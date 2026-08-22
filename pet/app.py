@@ -11,20 +11,20 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import sys
-import time
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import autostart as autostart_mod
 from . import catalog
-from .config import Config
+from .config import APP_DIR_NAME, Config
+from .harness_launcher import launch_harness_gui
 from .library import MovieLibrary
 from .window import PetWindow
+from .runtime_cleanup import cleanup_stale_runtime_dirs
 
 
 def _setup_logging(config: Config) -> None:
@@ -42,44 +42,36 @@ def _show_startup_error(title: str, message: str) -> None:
 
 
 def _cleanup_stale_runtime_dirs() -> None:
-    """清理 PyInstaller onefile 遗留的 _MEI* 临时目录。
+    """清理 PyInstaller onefile 遗留的 ``_MEI*`` 临时目录。
 
-    注意：多开桌宠时，每个实例都有自己的 _MEI 目录，不能删除其他正在运行的实例目录。
-    这里只清理“很久没有被修改”的目录，避免误删其他桌宠的运行缓存。
+    只扫描系统临时目录中超过 24 小时的目录，并始终跳过当前进程的
+    ``sys._MEIPASS``。删除失败只记录日志，不接管 ACL，也不影响启动。
     """
     if not getattr(sys, "frozen", False):
         return
     meipass = getattr(sys, "_MEIPASS", None)
     if not meipass:
         return
-    current = Path(meipass).resolve()
-    parent = current.parent
-    stale_age = 24 * 3600  # 只清理超过 24 小时未变化的目录
-    now = time.time()
-    for child in parent.glob("_MEI[0-9]*"):
-        if not child.is_dir() or child.resolve() == current:
-            continue
-        try:
-            mtime = child.stat().st_mtime
-        except OSError:
-            continue
-        if now - mtime < stale_age:
-            continue
-        try:
-            shutil.rmtree(child)
-            logging.info("已清理遗留缓存目录: %s", child)
-        except OSError:
-            logging.warning("清理遗留缓存目录失败（可能被占用）: %s", child)
 
+    current = Path(meipass).resolve(strict=False)
+    result = cleanup_stale_runtime_dirs(current_dir=current)
+    for directory in result.removed:
+        logging.info("已清理遗留 PyInstaller 缓存目录: %s", directory)
+    for directory, error in result.failed.items():
+        logging.warning("清理 PyInstaller 缓存目录失败: %s (%s)", directory, error)
 
 class PetApp:
     """管理桌宠窗口、托盘与角色热切换。"""
 
-    def __init__(self, app: QApplication, config: Config) -> None:
+    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True) -> None:
         self.app = app
         self.config = config
+        self.enable_chat = bool(enable_chat)
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
+        self.chat_window = None
+        self.chat_settings_dialog = None
+        self.pet_settings_dialog = None
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -96,6 +88,9 @@ class PetApp:
         lib = self._create_library(character_id)
         win = PetWindow(lib, self.config)
         win.on_switch_character = self.switch_character
+        win.on_open_chat = self.open_chat if self.enable_chat else None
+        win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
+        win.on_open_settings = self.open_pet_settings
         win.show()
 
         tray = self._build_tray(win)
@@ -140,6 +135,9 @@ class PetApp:
         # 用新库创建新窗口/托盘，旧对象延迟销毁
         win = PetWindow(lib, self.config)
         win.on_switch_character = self.switch_character
+        win.on_open_chat = self.open_chat if self.enable_chat else None
+        win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
+        win.on_open_settings = self.open_pet_settings
         win.show()
 
         tray = self._build_tray(win)
@@ -155,10 +153,71 @@ class PetApp:
         QTimer.singleShot(0, old_win.deleteLater)
         if old_tray is not None:
             QTimer.singleShot(0, old_tray.deleteLater)
+        if self.enable_chat and self.chat_window is not None:
+            self.chat_window.set_pet_window(self.win)
+            self.chat_window.switch_character(character_id)
 
         self.app.aboutToQuit.connect(win._save_position)
 
+    def open_chat(self) -> None:
+        if not self.enable_chat or self.win is None:
+            return
+        from .chat.widgets import ChatWindow
+        if self.chat_window is None:
+            self.chat_window = ChatWindow(self.config, str(self.config.get('character', catalog.DEFAULT_CHARACTER)), pet_window=self.win)
+        else:
+            self.chat_window.set_pet_window(self.win)
+        self.chat_window.show()
+        self.chat_window.position_near_pet(self.win)
+        self.chat_window.raise_()
+        self.chat_window.activateWindow()
+
+    def open_chat_settings(self) -> None:
+        """Open settings without blocking the desktop pet window.
+
+        QDialog.exec() makes the dialog application-modal, which prevents the
+        user from dragging or interacting with the pet while editing settings.
+        Keep one modeless dialog alive instead, and refresh the chat window
+        after the dialog reports an accepted save.
+        """
+        if not self.enable_chat:
+            return
+        from .chat.settings_dialog import ChatSettingsDialog
+        if self.chat_settings_dialog is None:
+            dialog = ChatSettingsDialog(self.config, self.chat_window)
+            dialog.setModal(False)
+            dialog.setWindowModality(Qt.WindowModality.NonModal)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dialog.finished.connect(self._chat_settings_finished)
+            self.chat_settings_dialog = dialog
+        dialog = self.chat_settings_dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _chat_settings_finished(self, result: int) -> None:
+        dialog = self.chat_settings_dialog
+        self.chat_settings_dialog = None
+        if result and self.chat_window is not None:
+            self.chat_window.refresh_settings()
+
     # ------------------------------------------------------------ 托盘
+    def open_pet_settings(self) -> None:
+        from .settings_dialog import PetSettingsDialog
+        if self.pet_settings_dialog is None:
+            dialog = PetSettingsDialog(self.config, self.win)
+            dialog.finished.connect(self._pet_settings_finished)
+            self.pet_settings_dialog = dialog
+        dialog = self.pet_settings_dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _pet_settings_finished(self, result: int) -> None:
+        self.pet_settings_dialog = None
+        if result and self.win is not None:
+            self.win.refresh_pet_settings()
+
     def _build_tray(self, win: PetWindow) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(QIcon(win.icon_pixmap()))
 
@@ -170,6 +229,10 @@ class PetApp:
 
         menu = QMenu()
         menu.addAction('显示 / 隐藏', toggle_visible)
+        if self.enable_chat:
+            menu.addAction('AI 对话', self.open_chat)
+            menu.addAction('AI 设置', self.open_chat_settings)
+        menu.addAction('桌宠设置', self.open_pet_settings)
 
         m_char = menu.addMenu('切换角色')
         current = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
@@ -192,6 +255,7 @@ class PetApp:
         auto.toggled.connect(autostart_mod.set_enabled)
 
         menu.addSeparator()
+        menu.addAction('启动 DeepSeek Harness', lambda: launch_harness_gui(win))
         menu.addAction('退出', self.app.quit)
 
         tray.setContextMenu(menu)
@@ -205,9 +269,9 @@ class PetApp:
         return tray
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     app = QApplication(argv if argv is not None else sys.argv)
-    app.setApplicationName('dsh-pet-standalone')
+    app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
 
     config = Config()
@@ -215,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.info('dsh-pet-standalone 启动')
     _cleanup_stale_runtime_dirs()
 
-    controller = PetApp(app, config)
+    controller = PetApp(app, config, enable_chat=enable_chat)
     try:
         controller.start()
     except Exception as exc:

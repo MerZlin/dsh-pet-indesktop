@@ -20,8 +20,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-APP_ID = "com.merzlin.dsh-pet-standalone"
-VALUE_NAME = "dsh-pet-standalone"
+from .config import APP_DIR_NAME
+
+# macOS LaunchAgent 按变体隔离（plist 文件名/Label），避免多版本互覆盖
+_APP_BASE_ID = "com.merzlin.dsh-pet-standalone"
+PLIST_LABEL = (
+    _APP_BASE_ID
+    if APP_DIR_NAME == "dsh-pet-standalone"
+    else f"{_APP_BASE_ID}.{APP_DIR_NAME}"
+)
+# Windows 自启注册表值名按变体隔离（如 dsh-pet-standalone-webm-chat），
+# 使 Chat / 无 Chat 两个版本可同时开机自启且互不覆盖。
+VALUE_NAME = APP_DIR_NAME
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 _IS_WIN = sys.platform == "win32"
@@ -36,7 +46,7 @@ def _project_root() -> Path:
 
 
 def _plist_path() -> Path:
-    return Path.home() / "Library" / "LaunchAgents" / f"{APP_ID}.plist"
+    return Path.home() / "Library" / "LaunchAgents" / f"{PLIST_LABEL}.plist"
 
 
 def _pythonw_path() -> str:
@@ -110,7 +120,7 @@ def enable() -> None:
 
         _plist_path().parent.mkdir(parents=True, exist_ok=True)
         plist: dict = {
-            "Label": APP_ID,
+            "Label": PLIST_LABEL,
             "ProgramArguments": _mac_program_args(),
             "RunAtLoad": True,
         }

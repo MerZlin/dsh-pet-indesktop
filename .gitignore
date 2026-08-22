@@ -25,3 +25,12 @@ dist/
 LOG.md
 LOG-INDEX.md
 SPEC.md
+# onedir build artifacts
+dist-onedir/
+build-onedir/
+
+# 构建注入的变体标识（由 scripts/build_onedir.ps1 生成）
+packaging/build_variant.py
+
+# 本地实验目录（含嵌套 git 仓库，不入库）
+.research/
