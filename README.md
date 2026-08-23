@@ -207,9 +207,42 @@ pythonw -m pet
 ### 切换角色
 
 1. 打开右键菜单中的角色选择入口。
-2. 选择角色后，桌宠会加载对应角色目录中的动画。
+2. 选择角色后，桌宠会加载对应角色目录中的动画（菜单每次打开都会重新扫描，无需重启）。
 3. Chat 版会同步更新聊天窗口的角色名称、头像回退、主题色、有效 system prompt 和会话列表。
 4. 角色之间的消息历史相互隔离。
+
+#### 热加载新角色：文件怎么放
+
+除内置角色外，桌宠会自动扫描**外部角色目录**发现新角色。目录名即角色 ID，按下面的树状结构放置即可（目录里含 webm 或 gif 即被识别）：
+
+```text
+characters/                          ← 外部角色根目录（见下方两个扫描位置）
+└── <新角色ID>/                      ← 目录名 = 菜单里显示的角色 ID，如 mycat
+    ├── manifest.json                ← 可选：角色名 / prompt / 主题色 / 动作映射
+    └── videos/
+        ├── idle/                    ← 待机（可多个）
+        │   └── 待机呼吸.webm
+        ├── turn/                    ← 转向
+        │   └── 东张西望.webm
+        ├── move/                    ← 移动
+        │   └── 原地踏步.webm
+        ├── click/                   ← 点击回应
+        │   └── 点击开心.webm
+        ├── drag/                    ← 拖拽（可选）
+        │   └── 悬空反馈.webm
+        └── random/                  ← 随机动作池
+            └── 吃零食.webm
+```
+
+**两个扫描位置**（exe 同目录优先，其次用户数据目录；用户数据目录跨安装/升级保留）：
+
+| 平台 | exe 同目录 | 用户数据目录 |
+|---|---|---|
+| Windows | `<安装目录>\characters\` | `%APPDATA%\dsh-pet-standalone\characters\` |
+| macOS | `.app/Contents/MacOS/characters/` | `~/Library/Application Support/dsh-pet-standalone/characters/` |
+| Linux | 源码运行目录 `characters/` | `~/.config/dsh-pet-standalone/characters/` |
+
+把新角色的 `videos` 放进去后，**右键桌宠重新打开菜单即可看到新角色**，选中即热加载——不需要重新打包或重启程序。透明 WebM 素材的制作方法见[素材生成教学](#素材生成教学从零制作动画素材)。
 
 ## AI 对话使用教程（Chat 版）
 
@@ -380,6 +413,8 @@ python encode_thumbs.py
 3. 命名保持稳定、避免重复；可参考 `assets/characters/shenshen/videos/` 现有 91 段动画的组织方式。
 4. 如需 GIF 变体，运行 `python scripts/convert_to_gif.py --force --clean` 同步生成。
 
+> 不想重新打包？把做好的透明 WebM 按「切换角色」的外部角色目录结构直接放入 `characters/<角色ID>/videos/`，右键菜单即可热加载新角色。
+>
 > 快速验证：`python -m pytest -q` 会检查 WebM/GIF 相对路径一一对应；源码运行 `python -m pet` 或重新打包后检查对应分类是否正常播放。
 
 ### 重新生成 GIF（仅构建 GIF 变体时需要）
