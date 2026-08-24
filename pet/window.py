@@ -41,8 +41,17 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
 
     Qt 的 WindowStaysOnTopHint 在 macOS 上对无边框 Tool 窗口/运行时切换不可靠，
     这里用 objc runtime 直接调 [NSWindow setLevel:] 强制生效（ctypes 零依赖）。
+
+    只在真实 cocoa 平台执行：offscreen/minimal 等测试平台下 winId() 不是
+    NSView 指针，objc_msgSend 会直接 SIGSEGV（无法被 try/except 捕获）。
     """
     if sys.platform != 'darwin':
+        return False
+    try:
+        from PySide6.QtGui import QGuiApplication
+        if QGuiApplication.platformName() != 'cocoa':
+            return False
+    except Exception:
         return False
     try:
         import ctypes

@@ -27,7 +27,8 @@ from pathlib import Path
 
 DEFAULT_PORT = 3080
 HARNESS_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
-_READY_TIMEOUT_SECONDS = 45.0
+# npx 首次拉取 @deepseek-ai/dsh 可能较慢，预留 90 秒就绪窗口
+_READY_TIMEOUT_SECONDS = 90.0
 
 # macOS/Linux 上 Finder/launchd 启动的应用 PATH 很精简，
 # 这里补充常见包管理器 bin 目录（存在才加入，避免无效探测）。
@@ -95,14 +96,16 @@ def _npm_global_roots() -> list[Path]:
         roots.append(Path(os.environ.get("APPDATA", "")) / "npm" / "node_modules")
     else:
         roots.extend(Path(directory).expanduser() for directory in _POSIX_NODE_MODULES)
-    try:
-        result = subprocess.run(
-            ["npm", "root", "-g"], capture_output=True, text=True, timeout=15
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            roots.append(Path(result.stdout.strip()))
-    except Exception:
-        pass
+    # 只在 PATH（增强后）确实存在 npm 时才探测，避免菜单里点击卡住 15 秒
+    if shutil.which("npm", path=_augmented_path()) is not None:
+        try:
+            result = subprocess.run(
+                ["npm", "root", "-g"], capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                roots.append(Path(result.stdout.strip()))
+        except Exception:
+            pass
     return roots
 
 
@@ -136,12 +139,19 @@ def _find_launch_command() -> list[str] | None:
 
 
 def _spawn(command: list[str]) -> None:
-    """后台拉起进程：Windows 隐藏窗口并脱离；POSIX 新会话脱离终端。"""
+    """后台拉起进程：Windows 隐藏窗口并脱离；POSIX 新会话脱离终端。
+
+    macOS 上 Finder 启动的 .app 环境 PATH 极简：dsh/npx 是带 shebang
+    （/usr/bin/env node）的 shell 脚本，执行时用的是**子进程环境**的 PATH，
+    而非 _which 用的增强 PATH——不注入增强 PATH 会静默失败
+    （env: node: No such file or directory，45 秒后无反应）。
+    """
     kwargs: dict = {
         "cwd": str(Path.home()),  # dsh 以调用目录为默认工作区，用家目录保持中性
         "close_fds": True,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
+        "env": {**os.environ, "PATH": _augmented_path()},
     }
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
@@ -183,19 +193,28 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
 
 
 def launch_harness_gui(parent=None) -> None:
-    """GUI 菜单入口：静默启动/打开浏览器，仅在失败时弹窗提示。"""
+    """GUI 菜单入口：静默启动/打开浏览器，仅在失败时弹窗提示。
+
+    弹窗延迟到菜单关闭后再显示：macOS 原生菜单跟踪会话中弹模态框
+    会被 AppKit 抑制（与设置对话框首次点击无反应同源）。
+    """
     status, info = launch_harness()
     if status in ("already", "started"):
         return
+
+    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QMessageBox
 
-    if status == "not-found":
-        QMessageBox.warning(
-            parent,
-            "启动 DeepSeek Harness",
-            "未找到 dsh 命令。请先安装 Node.js 后执行：\n"
-            "npm install -g @deepseek-ai/dsh\n"
-            "或直接使用：npx @deepseek-ai/dsh web",
-        )
-    elif status == "error":
-        QMessageBox.critical(parent, "启动 DeepSeek Harness", f"启动失败：{info}")
+    def _show() -> None:
+        if status == "not-found":
+            QMessageBox.warning(
+                parent,
+                "启动 DeepSeek Harness",
+                "未找到 dsh 命令。请先安装 Node.js 后执行：\n"
+                "npm install -g @deepseek-ai/dsh\n"
+                "或直接使用：npx @deepseek-ai/dsh web",
+            )
+        elif status == "error":
+            QMessageBox.critical(parent, "启动 DeepSeek Harness", f"启动失败：{info}")
+
+    QTimer.singleShot(0, _show)
