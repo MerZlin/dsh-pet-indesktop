@@ -269,10 +269,42 @@ class PetApp:
         return tray
 
 
+def _mac_set_accessory_activation() -> None:
+    """macOS：把应用设为 accessory 激活策略。
+
+    桌宠的气泡等窗口是定时器驱动的，普通应用策略下任何窗口出现都会
+    激活应用、抢走用户正在输入应用的焦点。Accessory 策略下应用：
+    - 不出现在 Dock、无菜单栏，窗口出现不激活应用、不抢焦点；
+    - 点击应用窗口仍可正常激活（聊天窗输入不受影响）。
+    """
+    if sys.platform != 'darwin':
+        return
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib')
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.objc_getClass.restype = ctypes.c_void_p
+        msg = objc.objc_msgSend
+        msg.restype = ctypes.c_void_p
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        shared = msg(
+            objc.objc_getClass(b'NSApplication'),
+            objc.sel_registerName(b'sharedApplication'),
+        )
+        # NSApplicationActivationPolicyAccessory = 1
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+        msg(shared, objc.sel_registerName(b'setActivationPolicy:'), 1)
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
+    _mac_set_accessory_activation()
 
     config = Config()
     _setup_logging(config)
