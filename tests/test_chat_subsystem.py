@@ -284,6 +284,43 @@ def test_ai_settings_is_modeless_so_pet_can_still_move(tmp_path: Path):
     assert owner.chat_settings_dialog is None
 
 
+def test_present_dialog_defers_until_popup_menu_closes(tmp_path: Path, monkeypatch):
+    """菜单跟踪会话期间触发的设置弹窗应延迟到菜单关闭后再显示。
+
+    回归 macOS 右键菜单首次点击「AI 设置/桌宠设置」无反应的问题：
+    原生 NSMenu 跟踪会话中新建窗口的 show/activate 会被 AppKit 抑制。
+    """
+    import time
+
+    import pet.app as app_mod
+    from PySide6.QtWidgets import QApplication, QDialog
+    from pet.app import PetApp
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    owner = PetApp(app, Config(tmp_path))
+    state = {"popup": True}
+
+    class FakeQApp:
+        @staticmethod
+        def activePopupWidget():
+            return object() if state["popup"] else None
+
+    monkeypatch.setattr(app_mod, "QApplication", FakeQApp)
+    dialog = QDialog()
+    owner._present_dialog(dialog)
+    app.processEvents()
+    assert not dialog.isVisible(), "菜单仍打开时不应立即显示窗口"
+    state["popup"] = False
+    deadline = time.time() + 3
+    while not dialog.isVisible() and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    assert dialog.isVisible(), "菜单关闭后窗口应自动显示"
+    dialog.close()
+    app.processEvents()
+
+
 def test_chat_window_session_switch_and_character_refresh(tmp_path: Path):
     from PySide6.QtWidgets import QApplication
     from pet.config import Config

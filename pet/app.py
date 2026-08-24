@@ -167,10 +167,26 @@ class PetApp:
             self.chat_window = ChatWindow(self.config, str(self.config.get('character', catalog.DEFAULT_CHARACTER)), pet_window=self.win)
         else:
             self.chat_window.set_pet_window(self.win)
-        self.chat_window.show()
-        self.chat_window.position_near_pet(self.win)
-        self.chat_window.raise_()
-        self.chat_window.activateWindow()
+        self._present_dialog(self.chat_window, lambda: self.chat_window.position_near_pet(self.win))
+
+    def _present_dialog(self, dialog, before_present=None, attempt: int = 0) -> None:
+        """延迟呈现非模态窗口，直到任何弹出菜单关闭。
+
+        macOS 的右键/托盘菜单是原生 NSMenu 跟踪会话（menu.exec 阻塞期间），
+        菜单项动作触发时会话尚未结束，此时新建窗口的 show/raise/activate
+        会被 AppKit 抑制——表现为首次点击「AI 设置 / 桌宠设置」无反应，
+        需要再点一次（此时窗口实例已存在，直接 show 成功）。
+        延迟到菜单关闭后再呈现即可稳定弹出；Qt 自绘菜单（Windows）同样
+        覆盖：弹窗仍显示时重试等待。
+        """
+        if QApplication.activePopupWidget() is not None and attempt < 8:
+            QTimer.singleShot(60, lambda: self._present_dialog(dialog, before_present, attempt + 1))
+            return
+        if before_present is not None:
+            before_present()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def open_chat_settings(self) -> None:
         """Open settings without blocking the desktop pet window.
@@ -190,10 +206,7 @@ class PetApp:
             dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             dialog.finished.connect(self._chat_settings_finished)
             self.chat_settings_dialog = dialog
-        dialog = self.chat_settings_dialog
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        self._present_dialog(self.chat_settings_dialog)
 
     def _chat_settings_finished(self, result: int) -> None:
         dialog = self.chat_settings_dialog
@@ -208,10 +221,7 @@ class PetApp:
             dialog = PetSettingsDialog(self.config, self.win)
             dialog.finished.connect(self._pet_settings_finished)
             self.pet_settings_dialog = dialog
-        dialog = self.pet_settings_dialog
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        self._present_dialog(self.pet_settings_dialog)
 
     def _pet_settings_finished(self, result: int) -> None:
         self.pet_settings_dialog = None
