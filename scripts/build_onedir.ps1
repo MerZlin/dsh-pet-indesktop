@@ -67,6 +67,7 @@ if (-not $SkipBuild) {
         --workpath build-onedir `
         --icon assets\icon.ico `
         --collect-all imageio_ffmpeg `
+        --collect-all certifi `
         --add-data $datas `
         @excludes `
         $entry

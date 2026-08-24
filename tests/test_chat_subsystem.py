@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import ssl
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -11,6 +14,8 @@ from pet.chat.prompt import PromptBuilder, load_character_prompt
 from pet.chat.providers import (
     ProviderError,
     SSEParser,
+    _is_cert_verify_error,
+    _make_ssl_context,
     normalize_chat_endpoint,
 )
 from pet.chat.session_store import SessionStore
@@ -553,3 +558,146 @@ def test_config_shared_dir_when_no_variant_marker(tmp_path):
 
     cfg = config_mod.Config(tmp_path)
     assert cfg.dir == tmp_path / "dsh-pet-standalone"
+
+
+def test_provider_config_verify_ssl_roundtrip():
+    p = ProviderConfig("t", verify_ssl=False)
+    assert p.to_dict()["verify_ssl"] is False
+    p2 = ProviderConfig.from_dict("t", p.to_dict())
+    assert p2.verify_ssl is False
+    # 旧配置没有该字段时默认开启校验
+    p3 = ProviderConfig.from_dict("t", {"name": "old"})
+    assert p3.verify_ssl is True
+
+
+def test_ssl_context_selection():
+    assert _make_ssl_context(False).verify_mode == ssl.CERT_NONE
+    assert _make_ssl_context(True).verify_mode == ssl.CERT_REQUIRED
+
+
+def test_cert_error_detection():
+    assert _is_cert_verify_error(
+        ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
+    ) is True
+    assert _is_cert_verify_error(TimeoutError("timed out")) is False
+
+
+def test_connection_test_happy_path(tmp_path):
+    import http.server
+
+    from pet.chat.providers import OpenAICompatibleProvider, test_connection
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            if '"stream": true' in body.decode("utf-8", "replace"):
+                out = b'data: {"choices":[{"delta":{"content":"pong"}}]}\n\ndata: [DONE]\n\n'
+            else:
+                out = json.dumps({"choices": [{"message": {"content": "pong"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        cfg = ProviderConfig("t", base_url=f"http://127.0.0.1:{port}", model="x")
+        ok, msg = test_connection(cfg)
+        assert ok is True
+        assert "200" in msg
+        # 同一配置走 stream 也应成功
+        provider = OpenAICompatibleProvider()
+        chunks = list(provider.stream([{"role": "user", "content": "hi"}], cfg, threading.Event()))
+        assert "".join(chunks) == "pong"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_stream_surfaces_certificate_hint(monkeypatch):
+    from pet.chat.providers import OpenAICompatibleProvider
+
+    def fake_urlopen(*args, **kwargs):
+        raise urllib.error.URLError(
+            ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    provider = OpenAICompatibleProvider()
+    with pytest.raises(ProviderError) as excinfo:
+        list(provider.stream([{"role": "user", "content": "hi"}], ProviderConfig("t"), threading.Event()))
+    assert "网络连接失败" in str(excinfo.value)
+    assert "跳过 SSL 证书验证" in str(excinfo.value)
+
+
+def test_connection_test_reports_certificate_hint(monkeypatch):
+    from pet.chat.providers import test_connection
+
+    def fake_urlopen(*args, **kwargs):
+        raise urllib.error.URLError(
+            ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    ok, msg = test_connection(ProviderConfig("t"))
+    assert ok is False
+    assert "跳过 SSL 证书验证" in msg
+
+
+def test_connection_test_reentrant_clicks_do_not_duplicate_requests(tmp_path, monkeypatch):
+    """多次点击测试连接：进行中重复调用被忽略，完成后可再次发起；不产生线程崩溃。"""
+    import time
+
+    import pet.chat.settings_dialog as sd
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.settings_dialog import ChatSettingsDialog
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    dialog = ChatSettingsDialog(Config(tmp_path))
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def fake_test(cfg, timeout=10.0):
+        calls.append(1)
+        started.set()
+        release.wait(10)
+        return True, "连接成功（HTTP 200）"
+
+    monkeypatch.setattr(sd, "test_connection", fake_test)
+    try:
+        dialog._run_test()
+        assert started.wait(2), "第一次测试未启动"
+        dialog._run_test()
+        dialog._run_test()
+        release.set()
+        deadline = time.time() + 5
+        while dialog._test_thread is not None and dialog._test_thread.is_alive() and time.time() < deadline:
+            time.sleep(0.05)
+        assert len(calls) == 1, f"进行中重复点击不应发起新请求，实际 {len(calls)} 次"
+        app.processEvents()
+        assert dialog.test.isEnabled()
+        assert dialog.test.text() == "测试连接"
+        # 完成后再次点击应能发起新一轮测试
+        dialog._run_test()
+        assert started.wait(2)
+        dialog._run_test()
+        release.set()
+        deadline = time.time() + 5
+        while dialog._test_thread is not None and dialog._test_thread.is_alive() and time.time() < deadline:
+            time.sleep(0.05)
+        assert len(calls) == 2
+        app.processEvents()
+    finally:
+        release.set()
+        dialog.close()
+        app.processEvents()

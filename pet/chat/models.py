@@ -9,10 +9,10 @@ def utc_now(): return datetime.now(timezone.utc).isoformat()
 @dataclass
 class ProviderConfig:
     provider_id: str
-    name: str='OpenAI Compatible'; base_url: str='https://api.openai.com'; chat_path: str='/v1/chat/completions'; model: str='gpt-4o-mini'; api_key_ref: str=''; api_key: str=''; timeout: float=60.0; temperature: float=0.7; max_tokens: int=2048
+    name: str='OpenAI Compatible'; base_url: str='https://api.openai.com'; chat_path: str='/v1/chat/completions'; model: str='gpt-4o-mini'; api_key_ref: str=''; api_key: str=''; timeout: float=60.0; temperature: float=0.7; max_tokens: int=2048; verify_ssl: bool=True
     @classmethod
     def from_dict(cls,pid,raw):
-        return cls(str(pid),str(raw.get('name',pid)),str(raw.get('base_url','https://api.openai.com')),str(raw.get('chat_path','/v1/chat/completions')),str(raw.get('model','gpt-4o-mini')),str(raw.get('api_key_ref',f'provider/{pid}')),str(raw.get('api_key','')),max(1.,float(raw.get('timeout',60))),max(0.,min(2.,float(raw.get('temperature',.7)))),max(1,int(raw.get('max_tokens',2048))))
+        return cls(str(pid),str(raw.get('name',pid)),str(raw.get('base_url','https://api.openai.com')),str(raw.get('chat_path','/v1/chat/completions')),str(raw.get('model','gpt-4o-mini')),str(raw.get('api_key_ref',f'provider/{pid}')),str(raw.get('api_key','')),max(1.,float(raw.get('timeout',60))),max(0.,min(2.,float(raw.get('temperature',.7)))),max(1,int(raw.get('max_tokens',2048))),bool(raw.get('verify_ssl',True)))
     def to_dict(self,include_secret=True):
         d=asdict(self); d.pop('provider_id',None)
         if not include_secret: d.pop('api_key',None)
