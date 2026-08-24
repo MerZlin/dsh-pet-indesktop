@@ -17,6 +17,20 @@ from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
 _MAC = sys.platform == "darwin"
 
 
+def _mac_native_available() -> bool:
+    """仅真实 macOS Cocoa 平台才走原生 orderFront 路径。
+
+    offscreen（CI 测试）等非 cocoa 平台下 winId() 不是真实 NSView，
+    直接对其调 objc 会段错误（SIGSEGV 无法被 try/except 捕获）。
+    """
+    if not _MAC:
+        return False
+    try:
+        return QGuiApplication.platformName() == "cocoa"
+    except Exception:
+        return False
+
+
 def _mac_objc_msg(selector: bytes):
     """返回能对任意 NSObject 发 objc 消息的函数（selector 预注册）。"""
     import ctypes
@@ -95,22 +109,25 @@ class PetSpeechBubble(QFrame):
     def _mac_show(self) -> None:
         """macOS：orderFront: 显示气泡，不激活应用、不抢焦点。
 
-        用 winId() 强制创建原生窗口后直接对 NSWindow 发 orderFront:，
-        等价于“只前置不激活”；失败时回退到 Qt show()。
+        仅 cocoa 平台生效（offscreen 下直接回退 Qt show()，避免对假
+        原生句柄调 objc 导致段错误）；失败时同样回退到 Qt show()。
         """
-        try:
-            order_front = _mac_objc_msg(b"orderFront:")
-            window = _mac_objc_msg(b"window")(int(self.winId()))
-            if window:
-                order_front(window)
-                self._mac_visible = True
-                return
-        except Exception:
-            pass
+        if _mac_native_available():
+            try:
+                order_front = _mac_objc_msg(b"orderFront:")
+                window = _mac_objc_msg(b"window")(int(self.winId()))
+                if window:
+                    order_front(window)
+                    self._mac_visible = True
+                    return
+            except Exception:
+                pass
         self.show()
         self._mac_visible = self.isVisible()
 
     def _mac_order_out(self) -> None:
+        if not _mac_native_available():
+            return
         try:
             order_out = _mac_objc_msg(b"orderOut:")
             window = _mac_objc_msg(b"window")(int(self.winId()))
