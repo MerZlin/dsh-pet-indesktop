@@ -85,6 +85,61 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
         return False
 
 
+def _win_set_topmost(hwnd: int, on: bool) -> bool:
+    """Windows 原生：SetWindowPos(HWND_TOPMOST / HWND_NOTOPMOST) 强制置顶/取消。
+
+    Qt 的 WindowStaysOnTopHint 在资源管理器重启、分辨率/DPI 变更、休眠唤醒、
+    显卡驱动更新等系统事件后可能丢失（Qt 已知问题 QTBUG-30359），这里在
+    每次窗口显示时用 Win32 直接重设，作为 Qt hint 之外的兜底。
+    """
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+        SWP_NOACTIVATE = 0x0010
+        user32 = ctypes.windll.user32
+        # 64 位下 HWND 是指针，不声明 argtypes 会被截断成 32 位导致无效句柄
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND, wintypes.HWND,
+            ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.c_uint,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        return bool(user32.SetWindowPos(
+            wintypes.HWND(hwnd),
+            wintypes.HWND(HWND_TOPMOST if on else HWND_NOTOPMOST),
+            0, 0, 0, 0,
+            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE,
+        ))
+    except Exception:
+        return False
+
+
+def _win_is_topmost(hwnd: int) -> bool:
+    """Windows：查询窗口是否带 WS_EX_TOPMOST 扩展样式。"""
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        GWL_EXSTYLE = -20
+        WS_EX_TOPMOST = 0x00000008
+        user32 = ctypes.windll.user32
+        user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        style = user32.GetWindowLongPtrW(wintypes.HWND(hwnd), GWL_EXSTYLE)
+        return bool(style & WS_EX_TOPMOST)
+    except Exception:
+        return False
+
+
 def _squash_geometry(
     window_width: int,
     window_height: int,
@@ -147,6 +202,14 @@ class PetWindow(QWidget):
         self._self_talk_timer = QTimer(self)
         self._self_talk_timer.setSingleShot(True)
         self._self_talk_timer.timeout.connect(self._on_self_talk_timeout)
+
+        # Windows 置顶保活：系统事件（explorer 重启/DPI 变更/休眠唤醒）可能
+        # 让 Qt 的 WindowStaysOnTopHint 丢失，30s 巡检一次，丢失则原生重设。
+        self._topmost_watchdog = QTimer(self)
+        self._topmost_watchdog.setInterval(30000)
+        self._topmost_watchdog.timeout.connect(self._enforce_topmost)
+        if sys.platform == 'win32' and config.get('on_top', True):
+            self._topmost_watchdog.start()
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
@@ -322,15 +385,39 @@ class PetWindow(QWidget):
         if sys.platform == 'darwin':
             # 延迟到 Qt 窗口重建完成后再强制原生层级，避免被 Qt 覆盖
             QTimer.singleShot(0, lambda: _mac_set_window_level(int(self.winId()), 3 if on else 0))
+        elif sys.platform == 'win32':
+            QTimer.singleShot(0, lambda: _win_set_topmost(int(self.winId()), on))
+            if on:
+                self._topmost_watchdog.start()
+            else:
+                self._topmost_watchdog.stop()
         if on:
             self.raise_()
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
+        on = bool(self.cfg.get('on_top', True))
         if sys.platform == 'darwin':
-            on = bool(self.cfg.get('on_top', True))
             QTimer.singleShot(0, lambda: _mac_set_window_level(int(self.winId()), 3 if on else 0))
+        elif sys.platform == 'win32':
+            QTimer.singleShot(0, lambda: _win_set_topmost(int(self.winId()), on))
+
+    def _enforce_topmost(self) -> None:
+        """Windows 置顶保活巡检：检测到 WS_EX_TOPMOST 丢失则原生重设。
+
+        覆盖资源管理器重启、分辨率/DPI 变更、休眠唤醒等系统事件导致的
+        置顶丢失（Qt WindowStaysOnTopHint 在这些场景下不可靠，QTBUG-30359）。
+        """
+        if sys.platform != 'win32' or not bool(self.cfg.get('on_top', True)):
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        if not _win_is_topmost(hwnd):
+            if _win_set_topmost(hwnd, True):
+                logging.info('检测到置顶丢失，已重新置顶（watchdog）')
 
     def set_no_move(self, on: bool) -> None:
         """切换「不移动」：禁用自动移动；勾选瞬间若正在移动则立即停下回待机。"""
@@ -679,6 +766,8 @@ class PetWindow(QWidget):
                 self._save_position()
             if self.idles:
                 self._switch(self._pick(self.idles))  # 回待机缓冲
+            if sys.platform == 'win32':
+                self.raise_()  # 拖拽结束把自己带回置顶组最前（不抢键盘焦点）
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
             self._on_click()
         self._dragging = False
@@ -699,6 +788,8 @@ class PetWindow(QWidget):
         self._cancel_move()
         self._start_squash()
         self._switch(self._pick(self.clicks))
+        if sys.platform == 'win32':
+            self.raise_()  # 交互时把桌宠带回置顶组最前（不抢键盘焦点）
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         if not self._is_in_interactive_area(event.pos()):
@@ -866,6 +957,14 @@ class PetWindow(QWidget):
         self.cfg.save()
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, self.mouse_through)
         self.show()
+        if self.mouse_through and sys.platform == 'win32':
+            # 非侵入提示：穿透期间桌宠无法被点击唤回置顶组最前
+            self._speech_bubble.show_text(
+                '鼠标穿透已开启：点击会穿透到桌面；'
+                '需要点击桌宠或唤回置顶时，请关闭穿透。',
+                self.visible_content_rect(),
+                duration_ms=4200,
+            )
 
     def set_drag_physics(self, on: bool) -> None:
         """拖动物理开关。"""

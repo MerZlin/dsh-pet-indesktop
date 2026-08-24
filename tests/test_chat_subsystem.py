@@ -689,6 +689,49 @@ def test_connection_test_reports_certificate_hint(monkeypatch):
     assert "跳过 SSL 证书验证" in msg
 
 
+def test_win_topmost_helpers_safe_with_invalid_hwnd():
+    """无效句柄下 Win32 置顶辅助函数应安全返回 False（不崩溃）。"""
+    from pet.window import _win_is_topmost, _win_set_topmost
+
+    assert _win_is_topmost(0) is False
+    assert _win_set_topmost(0, True) is False
+
+
+def test_enforce_topmost_resets_lost_topmost(monkeypatch, tmp_path):
+    """置顶丢失时 watchdog 应调用原生 SetWindowPos 重设。"""
+    import types
+
+    from pet import window as window_mod
+    from pet.config import Config
+
+    monkeypatch.setattr("sys.platform", "win32")
+    calls = []
+    monkeypatch.setattr(window_mod, "_win_is_topmost", lambda hwnd: False)
+    monkeypatch.setattr(window_mod, "_win_set_topmost", lambda hwnd, on: calls.append((hwnd, on)) or True)
+    cfg = Config(tmp_path)
+    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345)
+    window_mod.PetWindow._enforce_topmost(fake)
+    assert calls == [(12345, True)]
+
+
+def test_enforce_topmost_skips_when_on_top_disabled(monkeypatch, tmp_path):
+    """关闭置顶时 watchdog 不应重设。"""
+    import types
+
+    from pet import window as window_mod
+    from pet.config import Config
+
+    monkeypatch.setattr("sys.platform", "win32")
+    calls = []
+    monkeypatch.setattr(window_mod, "_win_is_topmost", lambda hwnd: False)
+    monkeypatch.setattr(window_mod, "_win_set_topmost", lambda hwnd, on: calls.append((hwnd, on)) or True)
+    cfg = Config(tmp_path)
+    cfg.set("on_top", False)
+    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345)
+    window_mod.PetWindow._enforce_topmost(fake)
+    assert calls == []
+
+
 def test_connection_test_reentrant_clicks_do_not_duplicate_requests(tmp_path, monkeypatch):
     """多次点击测试连接：进行中重复调用被忽略，完成后可再次发起；不产生线程崩溃。"""
     import time
