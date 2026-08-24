@@ -724,15 +724,19 @@ def test_connection_test_reentrant_clicks_do_not_duplicate_requests(tmp_path, mo
         app.processEvents()
         assert dialog.test.isEnabled()
         assert dialog.test.text() == "测试连接"
-        # 完成后再次点击应能发起新一轮测试
+        # 第二轮：全新阻塞事件，验证"完成后可再次发起 + 进行中重复点击仍被忽略"。
+        # 注意必须换新 release：上一轮的 release 已 set，旧事件会让新线程瞬间完成，
+        # 使 is_alive() 为 False 而误启动第三个线程（macOS 上时序更快，必然触发）。
+        release = threading.Event()
         dialog._run_test()
-        assert started.wait(2)
+        assert started.wait(2), "第二轮测试未启动"
+        dialog._run_test()
         dialog._run_test()
         release.set()
         deadline = time.time() + 5
         while dialog._test_thread is not None and dialog._test_thread.is_alive() and time.time() < deadline:
             time.sleep(0.05)
-        assert len(calls) == 2
+        assert len(calls) == 2, f"第二轮进行中重复点击不应发起新请求，实际 {len(calls)} 次"
         app.processEvents()
     finally:
         release.set()
