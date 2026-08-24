@@ -92,17 +92,31 @@ def main() -> int:
     img = Image.frombytes("RGBA", (640, 360), frame)
     # 按 alpha 裁剪到角色实际可见区域，去掉画布留白
     bbox = img.getbbox()
+    # 首帧含低 alpha 噪点（边缘 alpha≈1，直接 getbbox 会得到全画布），
+    # 用阈值提取鲸鱼真实包围盒再裁剪
+    mask = img.getchannel("A").point(lambda a: 255 if a > 8 else 0)
+    bbox = mask.getbbox()
     if bbox is None:
         print("帧全透明，无法生成图标")
         return 1
     img = img.crop(bbox)
 
-    # 正方形画布（居中 + 四周留 4% 边距，小尺寸下角色更饱满）
-    w, h = img.size
-    side = max(w, h)
-    side = int(side * 1.04)
+    # 鲸鱼放大到 ~97.7% 满幅（透明背景、保持宽高比）：
+    # 源帧中鲸鱼只占画布 33%x74%，直接用小图会让图标显得空；这里按最大边
+    # 撑到画布的 97.7%，与正规应用图标（如 WorkBuddy 97.7% 不透明占比）同级。
+    char_w, char_h = img.size
+    side = 256  # 基准画布（后续按档位缩放）
+    scale = min(0.977 * side / char_w, 0.977 * side / char_h)
+    char = img.resize(
+        (max(1, int(round(char_w * scale))), max(1, int(round(char_h * scale)))),
+        Image.Resampling.LANCZOS,
+    )
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    canvas.paste(img, ((side - w) // 2, (side - h) // 2), img)
+    canvas.paste(
+        char,
+        ((side - char.width) // 2, (side - char.height) // 2),
+        char,
+    )
     img = canvas
 
     # 生成多尺寸 ICO（手工构造以控制帧顺序：Pillow 会强制升序，首帧必为 16x16，
