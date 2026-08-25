@@ -796,7 +796,15 @@ python scripts/cleanup_mei_cache.py --delete
 
 ## 许可证与致谢
 
-本项目采用 **MIT License**（见仓库根目录 `LICENSE`）。再次感谢 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 提供的参考实现与动画素材基础，以及 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) 的余额气泡思路参考。
+本项目采用 **MIT License**（见仓库根目录 `LICENSE`）。
+
+**特别感谢：**
+
+- [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)：参考实现与动画素材基础。
+- [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)：DeepSeek 余额气泡思路参考。
+- **贡献者 [klxxya](https://github.com/klxxya)**：贡献了拖拽物理、全屏自动隐藏、看看屏幕、聊天窗主题背景、裁切取景、文字动画免镜像、置顶看门狗等一批增强功能（PR #5）。
+- **Issue 反馈者**：[Viteyun](https://github.com/Viteyun)（图标过小反馈）、[Lorin1470](https://github.com/Lorin1470)（macOS 使用反馈与建议）、[YukidokeAzarea](https://github.com/YukidokeAzarea)（AI 对话报错反馈）、[zangxx66](https://github.com/zangxx66)（macOS 右键菜单反馈）——感谢你们帮助发现并定位问题。
+- **Bilibili 上所有为本项目提供反馈和建议的观众**：你们的评论、建议与使用反馈是项目持续改进的重要动力。
 
 </details>
 
