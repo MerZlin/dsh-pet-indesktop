@@ -173,8 +173,10 @@ class WebMClip(QObject):
             self.stop()
             self._frame_index = 0
             if self._first_image is not None:
+                # 首帧已缓存（后台 warm_first_frame 或上次同步解码）：
+                # 主线程直接转 QPixmap，零阻塞、无旧帧残留窗口。
                 self._current_image = self._first_image
-                self._current_pixmap = self._first_pixmap
+                self._current_pixmap = QPixmap.fromImage(self._first_image)
             else:
                 self._current_image = None
                 self._current_pixmap = None
@@ -182,10 +184,13 @@ class WebMClip(QObject):
             return True
         return False
 
-    def _decode_first_frame_sync(self) -> None:
-        """同步解码首帧，保证 jumpToFrame(0)/currentPixmap 在 start() 前有画面。"""
+    def _decode_first_qimage(self):
+        """解码首帧为 QImage（线程安全：不触碰 QPixmap/QTimer）。
+
+        返回 None 表示失败或依赖缺失；调用方负责填入 _first_image 等缓存。
+        """
         if imageio_ffmpeg is None:
-            return
+            return None
         gen = None
         try:
             gen = imageio_ffmpeg.read_frames(
@@ -207,18 +212,38 @@ class WebMClip(QObject):
                 img = QImage(frame, self._w, self._h, self._w * self._bpp,
                              QImage.Format.Format_RGBA8888)
                 if not img.isNull():
-                    self._current_image = img.copy()
-                    self._current_pixmap = QPixmap.fromImage(self._current_image)
-                    self._first_image = self._current_image
-                    self._first_pixmap = self._current_pixmap
+                    return img.copy()
+            return None
         except Exception as exc:
-            logger.warning('webm 首帧预解码失败 %s: %s', self.path, exc)
+            logger.warning('webm 首帧解码失败 %s: %s', self.path, exc)
+            return None
         finally:
             if gen is not None:
                 try:
                     gen.close()
                 except Exception:
                     pass
+
+    def _decode_first_frame_sync(self) -> None:
+        """同步解码首帧（主线程），保证 jumpToFrame(0)/currentPixmap 在 start() 前有画面。"""
+        img = self._decode_first_qimage()
+        if img is not None:
+            self._current_image = img
+            self._current_pixmap = QPixmap.fromImage(img)
+            self._first_image = img
+            self._first_pixmap = self._current_pixmap
+
+    def warm_first_frame(self) -> None:
+        """后台线程预解码首帧缓存（仅 QImage，线程安全）。
+
+        首次播放某动画时 jumpToFrame(0) 需要首帧：有缓存则主线程零阻塞，
+        避免点击瞬间同步 ffmpeg 解码造成卡顿，以及 Q 弹期间残留旧动画帧。
+        """
+        if self._first_image is not None or imageio_ffmpeg is None:
+            return
+        img = self._decode_first_qimage()
+        if img is not None:
+            self._first_image = img
 
     # ------------------------------------------------------------ reader
     def _reader(self, stop_evt: threading.Event) -> None:

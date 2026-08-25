@@ -147,12 +147,17 @@ def _squash_geometry(
     frame_height: int,
     progress: float,
 ) -> tuple[int, int, int, int]:
-    """返回 Q 弹帧的逻辑坐标，避免把 DPR 物理像素当成 QWidget 坐标。"""
+    """返回 Q 弹帧的逻辑坐标，避免把 DPR 物理像素当成 QWidget 坐标。
+
+    只压扁高度（sy 0.85，底部贴地）：窗口尺寸与窗口 mask 都按原始帧
+    生成，宽度放大（sx>1）会让角色伸出 mask/窗口边界被裁剪成透明
+    边缘——贴近边缘的耳朵等部位会看起来"被挡住"。压扁效果由高度
+    压缩 + 底部对齐提供，无需宽度膨胀。
+    """
     progress = max(0.0, min(1.0, float(progress)))
     pulse = math.sin(math.pi * progress)
     sy = 1.0 - 0.15 * pulse
-    sx = 1.0 + 0.10 * pulse
-    width = max(1, int(round(frame_width * sx)))
+    width = max(1, int(round(frame_width)))
     height = max(1, int(round(frame_height * sy)))
     x = int(round((window_width - width) / 2))
     y = window_height - height
@@ -477,14 +482,34 @@ class PetWindow(QWidget):
         self._frame_pixmap = pm
         self._sync_mask()
 
+    def _squash_rect(self):
+        """当前 Q 弹几何（逻辑坐标）；paintEvent 与 _sync_mask 共用，保证一致。"""
+        return _squash_geometry(
+            self._w,
+            self._h,
+            int(round(catalog.CANVAS_W * self.scale)),
+            int(round(catalog.CANVAS_H * self.scale)),
+            self._squash_progress,
+        )
+
     def _sync_mask(self) -> None:
-        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。"""
+        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。
+
+        Q 弹期间 mask 必须与压扁画面使用同一几何——压扁画面底部贴窗底、
+        角色整体下移，若 mask 仍按原始帧位置绘制，下移后的耳朵/头顶装饰
+        会落在原始轮廓之外被 mask 裁剪（表现为"耳朵被挡"）。
+        """
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
         p = QPainter(canvas)
-        p.translate(0, int(round(catalog.PAD * self.scale)))
-        if self._frame_pixmap is not None:
-            p.drawPixmap(0, 0, self._frame_pixmap)
+        if self._squash_active:
+            x, y, w, h = self._squash_rect()
+            if self._frame_pixmap is not None:
+                p.drawPixmap(x, y, w, h, self._frame_pixmap)
+        else:
+            p.translate(0, int(round(catalog.PAD * self.scale)))
+            if self._frame_pixmap is not None:
+                p.drawPixmap(0, 0, self._frame_pixmap)
         p.end()
         self.setMask(QBitmap.fromImage(canvas.createAlphaMask()))
 
@@ -494,13 +519,7 @@ class PetWindow(QWidget):
         if self._frame_pixmap is not None:
             if self._squash_active:
                 # Q 弹：使用逻辑帧尺寸；QPixmap.width() 可能是 DPR 物理像素尺寸。
-                x, y, w, h = _squash_geometry(
-                    self._w,
-                    self._h,
-                    int(round(catalog.CANVAS_W * self.scale)),
-                    int(round(catalog.CANVAS_H * self.scale)),
-                    self._squash_progress,
-                )
+                x, y, w, h = self._squash_rect()
                 painter.drawPixmap(x, y, w, h, self._frame_pixmap)
             else:
                 # 落地对齐：整帧下移 PAD×scale，让人物脚底踩在窗口底线
@@ -786,8 +805,10 @@ class PetWindow(QWidget):
             return
         # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹
         self._cancel_move()
-        self._start_squash()
+        # 先切动画再启动 Q 弹：squash 压扁的是新动画首帧，
+        # 避免 Q 弹期间显示上一动画的帧残留（旧顺序会先画旧帧）。
         self._switch(self._pick(self.clicks))
+        self._start_squash()
         if sys.platform == 'win32':
             self.raise_()  # 交互时把桌宠带回置顶组最前（不抢键盘焦点）
 

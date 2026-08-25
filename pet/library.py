@@ -189,6 +189,12 @@ class MovieLibrary(QObject):
             workers = min(8, len(self._movies))
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 list(ex.map(lambda clip: clip.warm_meta(), list(self._movies.values())))
+                # 预解码各动画首帧（QImage 线程安全），首次播放时零阻塞切换，
+                # 避免点击 Q 弹瞬间同步 ffmpeg 解码造成卡顿与旧动画帧残留。
+                list(ex.map(
+                    lambda clip: getattr(clip, 'warm_first_frame', lambda: None)(),
+                    list(self._movies.values()),
+                ))
         except Exception:
             # 预热失败不致命，后续按需读取时会再尝试
             pass

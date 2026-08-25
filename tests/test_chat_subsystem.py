@@ -345,7 +345,8 @@ def test_chat_window_session_switch_and_character_refresh(tmp_path: Path):
 
 def test_squash_geometry_uses_logical_frame_size_at_high_dpi():
     # DPR=2 的 QPixmap 物理尺寸不能直接拿来当 QWidget 逻辑绘制尺寸。
-    # Q 弹中间帧应与 DPR 无关，并保持脚底在窗口底线。
+    # Q 弹中间帧应与 DPR 无关，并保持脚底在窗口底线；
+    # 宽度不放大（sx=1.0），避免角色伸出窗口/mask 边界被裁剪成透明边缘。
     logical = _squash_geometry(
         window_width=640,
         window_height=390,
@@ -360,9 +361,11 @@ def test_squash_geometry_uses_logical_frame_size_at_high_dpi():
         frame_height=720,
         progress=0.5,
     )
-    assert logical == (-32, 84, 704, 306)
+    assert logical == (0, 84, 640, 306)
     assert physical_mistake != logical
     assert logical[1] + logical[3] == 390
+    # 中间帧宽度不应超过窗口宽度（无宽度膨胀）
+    assert logical[2] == 640
 
 
 def test_follow_pet_option_registers_and_unregisters_position_listener(tmp_path: Path):
@@ -552,6 +555,29 @@ def test_webm_playback_speed_updates_timer_before_and_after_start():
     clip.stop()
     clip.set_playback_speed(0.5)
     assert clip._timer.interval() >= 80
+
+
+def test_warm_first_frame_caches_qimage_for_zero_block_jump():
+    """后台预热只缓存 QImage；jumpToFrame(0) 走缓存时主线程零阻塞转 QPixmap。
+
+    回归：点击 Q 弹残留上一动画帧——首次播放某动画时 jumpToFrame(0)
+    同步 ffmpeg 解码导致 _current_pixmap 短暂为 None，窗口层 rebuild
+    拿不到新帧而继续画旧帧。
+    """
+    from PySide6.QtWidgets import QApplication
+    from pet.webm_clip import WebMClip
+
+    if not WebMClip.available:
+        pytest.skip("imageio-ffmpeg 不可用")
+    app = QApplication.instance() or QApplication([])
+    clip = WebMClip(Path("assets/characters/shenshen/videos/idle/待机呼吸休闲.webm"))
+    assert clip._first_image is None
+    clip.warm_first_frame()
+    assert clip._first_image is not None, "后台预热应缓存首帧 QImage"
+    assert clip._first_pixmap is None, "后台预热不应触碰 QPixmap（非主线程）"
+    clip.jumpToFrame(0)
+    assert clip._current_pixmap is not None, "jumpToFrame(0) 应基于缓存立即生成 QPixmap"
+    assert not clip._current_pixmap.isNull()
 
 def test_webm_and_gif_animation_sets_are_in_sync():
     webm_root = Path("assets/characters")
