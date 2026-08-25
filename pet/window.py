@@ -21,6 +21,8 @@ import random
 import sys
 import threading
 import time
+import webbrowser
+from pathlib import Path
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QImage, QPainter, QPixmap
@@ -39,6 +41,7 @@ from .library import MovieLibrary
 from . import physics as physics_mod
 from . import vision as vision_mod
 from .speech_bubble import PetSpeechBubble
+from .updater import QUARK_PAN_URL, REPO_URL
 
 
 def _mac_set_window_level(view_id: int, level: int) -> bool:
@@ -210,7 +213,7 @@ def _make_placeholder_pixmap(character_id: str, scale: float) -> QPixmap:
 class PetWindow(QWidget):
     """桌宠窗口本体。"""
 
-    look_done = Signal(str, bool)  # 看看屏幕完成（文本, 是否失败）
+    look_done = Signal(str, str, bool)  # 看看屏幕完成（回复, 记录用的用户文本, 是否失败）
 
     def __init__(self, lib: MovieLibrary, config: Config) -> None:
         super().__init__()
@@ -220,6 +223,9 @@ class PetWindow(QWidget):
         self.on_open_chat = None
         self.on_open_chat_settings = None
         self.on_open_settings = None
+        self.on_check_update = None  # 由 app 注入：检查更新（含直接下载）
+        self.on_show_balance = None  # 由 app 注入：DeepSeek 余额气泡
+        self.on_look_synced = None   # 由 app 注入：看看屏幕结果同步到 AI 对话
         self._position_listeners = []
 
         # 根据当前形象实际拥有的动画动态计算分类，支持不同角色动作不一致
@@ -240,6 +246,14 @@ class PetWindow(QWidget):
         self.playback_speed: float = float(config.get('playback_speed', 1.0))
         self.mouse_through: bool = bool(config.get('mouse_through', False))
         self.drag_physics: bool = bool(config.get('drag_physics', False))
+        self.click_sound_enabled: bool = bool(config.get('click_sound_enabled', True))
+        self.click_show_balance: bool = bool(config.get('click_show_balance', False))
+        self.click_show_self_talk: bool = bool(config.get('click_show_self_talk', False))
+        # 点击行为序列播放器（余额 → 间隔 → 自言自语；多次点击重置，只按最后一次完整显示）
+        self._click_effect_timer = QTimer(self)
+        self._click_effect_timer.setSingleShot(True)
+        self._click_effect_timer.timeout.connect(self._on_click_effect_timeout)
+        self._click_effect_phase = 0
         self.animation_gap_seconds: float = max(0.0, min(3600.0, float(config.get('animation_gap_seconds', 0.0))))
         self._animation_gap_active = False
         self._animation_gap_timer = QTimer(self)
@@ -910,24 +924,97 @@ class PetWindow(QWidget):
             provider = settings.active_config
             provider.api_key = self.cfg.resolve_api_key(provider)
             shot = vision_mod.capture_screen(self.cfg.dir / 'screenshots')
+            app_info = vision_mod.foreground_app_info()
             reply = vision_mod.ask_about_screen(
-                shot, vision_mod.foreground_app_info(),
+                shot, app_info,
                 settings.default_system_prompt, provider,
             )
-            self.look_done.emit(reply, False)
+            user_text = f'[看看屏幕] 前台窗口：{app_info}' if app_info else '[看看屏幕]'
+            self.look_done.emit(reply, user_text, False)
         except Exception as exc:  # noqa: BLE001 - 任何失败都走气泡提示
             logging.getLogger('dsh-pet-standalone').exception('看看屏幕失败')
-            self.look_done.emit(str(exc), True)
+            self.look_done.emit(str(exc), '', True)
 
-    def _on_look_done(self, text: str, is_error: bool) -> None:
+    def _on_look_done(self, text: str, user_text: str, is_error: bool) -> None:
         self._look_busy = False
         if is_error:
             self._speech_bubble.show_text(f'看不清啊…{text[:60]}', self.visible_content_rect(), 5000)
         else:
             self._speech_bubble.show_text(text, self.visible_content_rect(), max(4000, min(12000, len(text) * 150)))
+            # 同步到 AI 对话当前会话（由 app 注入回调；聊天窗未打开时跳过）
+            if self.on_look_synced is not None:
+                self.on_look_synced(user_text, text)
+
+    def _schedule_click_effects(self) -> None:
+        """点击行为序列：余额 →（间隔 1s）→ 自言自语。
+
+        多次点击会重置：取消上一次未完成的序列，只按最后一次点击的
+        配置从头完整显示（防抖，避免点击洪峰叠出一堆气泡）。
+        """
+        self._click_effect_timer.stop()
+        self._click_effect_phase = 0
+        self._run_click_effects()
+
+    def _run_click_effects(self) -> None:
+        # 阶段 0：余额气泡（含查询，展示约 6s），随后隔 1s 进入下一项
+        if self._click_effect_phase == 0 and self.click_show_balance and self.on_show_balance is not None:
+            self.on_show_balance(self)
+            self._click_effect_phase = 1
+            self._click_effect_timer.start(7000)
+            return
+        # 阶段 1：随机一条用户自定义自言自语
+        if self._click_effect_phase <= 1 and self.click_show_self_talk and self._self_talk_enabled and self._self_talk_texts:
+            text = random.choice(self._self_talk_texts)
+            self._speech_bubble.show_text(text, self.visible_content_rect())
+            self._click_effect_phase = 2
+        # 序列结束（无更多阶段）
+
+    def _on_click_effect_timeout(self) -> None:
+        self._run_click_effects()
 
     def _clear_just_dragged(self) -> None:
         self._just_dragged = False
+
+    def _play_click_sound(self) -> None:
+        """点击 Q 弹音效：内置 assets/sounds/click.wav，可用用户数据目录 sounds/ 覆盖。
+
+        Windows 用 winsound（系统内置，零依赖）；其他平台用 afplay。
+        """
+        if not self.click_sound_enabled:
+            return
+        path = self._find_click_sound()
+        if path is None:
+            return
+        try:
+            if os.name == 'nt':
+                import winsound
+                winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+            else:
+                import subprocess
+                subprocess.Popen(
+                    ['afplay', str(path)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+        except Exception:
+            pass
+
+    def _find_click_sound(self):
+        """音效查找顺序：用户数据目录 sounds/click.wav（可自定义替换）→ 内置 assets/sounds。
+
+        onedir 打包后数据在 sys._MEIPASS（_internal）下，不能用 exe 所在目录。
+        """
+        candidates = [
+            self.cfg.dir / 'sounds' / 'click.wav',
+        ]
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidates.append(Path(meipass) / 'assets' / 'sounds' / 'click.wav')
+        else:
+            candidates.append(Path(__file__).resolve().parent.parent / 'assets' / 'sounds' / 'click.wav')
+        for path in candidates:
+            if path.is_file():
+                return path
+        return None
 
     def _on_click(self) -> None:
         """真点击 → 随机一个点击回应动画，并重置当前动画（可连续点击打断）。"""
@@ -937,6 +1024,8 @@ class PetWindow(QWidget):
             return
         # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹
         self._cancel_move()
+        self._play_click_sound()
+        self._schedule_click_effects()
         # 先切动画再启动 Q 弹：squash 压扁的是新动画首帧，
         # 避免 Q 弹期间显示上一动画的帧残留（旧顺序会先画旧帧）。
         self._switch(self._pick(self.clicks))
@@ -951,35 +1040,33 @@ class PetWindow(QWidget):
         if self.on_open_chat is not None:
             menu.addAction('AI 对话', self.on_open_chat)
         if self.on_open_chat_settings is not None:
-            menu.addAction('AI 设置', self.on_open_chat_settings)
             menu.addAction('看看屏幕', self._on_look_screen)
+            menu.addAction('AI 设置', self.on_open_chat_settings)
         if self.on_open_settings is not None:
             menu.addAction('桌宠设置', self.on_open_settings)
         if self.on_open_chat is not None or self.on_open_chat_settings is not None or self.on_open_settings is not None:
             menu.addSeparator()
 
+        # ---- 动画（二级菜单：动画 → 分类 → 具体动画，减少右键菜单臃肿） ----
+        m_anim = menu.addMenu('动画')
         if self.idles:
-            m_idle = menu.addMenu('动画 · 待机')
+            m_idle = m_anim.addMenu('待机')
             for n in self.idles:
                 m_idle.addAction(n, lambda n=n: self._switch(n))
         if self.turns:
-            m_turn = menu.addMenu('动画 · 转向')
+            m_turn = m_anim.addMenu('转向')
             for n in self.turns:
                 m_turn.addAction(n, lambda n=n: self._switch(n))
-
-        m_moves = menu.addMenu('动画 · 移动')
+        m_moves = m_anim.addMenu('移动')
         for n in self.moves:
             m_moves.addAction(n, lambda n=n: self._trigger_move(n))
-
-        m_clicks = menu.addMenu('动画 · 点击回应')
+        m_clicks = m_anim.addMenu('点击回应')
         for n in self.clicks:
             m_clicks.addAction(n, lambda n=n: self._switch(n))
-
-        m_acts = menu.addMenu('动画 · 随机动作')
+        m_acts = m_anim.addMenu('随机动作')
         for n in self.acts:
             m_acts.addAction(n, lambda n=n: self._switch(n))
-
-        m_speed = menu.addMenu('播放速率')
+        m_speed = m_anim.addMenu('播放速率')
         for i in range(10, 21):
             v = i / 10.0
             act = m_speed.addAction(f'{v:.1f}x')
@@ -987,15 +1074,11 @@ class PetWindow(QWidget):
             act.setChecked(abs(self.playback_speed - v) < 0.01)
             act.triggered.connect(lambda checked=False, v=v: self.set_playback_speed(v))
 
+        # 常用开关放主菜单（不进「动画」二级菜单）
         drag_physics_act = menu.addAction('拖动物理')
         drag_physics_act.setCheckable(True)
         drag_physics_act.setChecked(self.drag_physics)
         drag_physics_act.toggled.connect(self.set_drag_physics)
-
-        auto_hide_act = menu.addAction('全屏时自动隐藏')
-        auto_hide_act.setCheckable(True)
-        auto_hide_act.setChecked(self.auto_hide_fullscreen)
-        auto_hide_act.toggled.connect(self.set_auto_hide_fullscreen)
 
         m_char = menu.addMenu('切换角色')
         current = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
@@ -1007,6 +1090,7 @@ class PetWindow(QWidget):
 
         menu.addSeparator()
         menu.addAction('回到右下角', self._go_default_corner)
+        menu.addAction('隐藏桌宠', self.hide)
 
         on_top = menu.addAction('窗口置顶')
         on_top.setCheckable(True)
@@ -1018,11 +1102,6 @@ class PetWindow(QWidget):
         no_move.setChecked(self.no_move)
         no_move.toggled.connect(self.set_no_move)
 
-        auto = menu.addAction('开机自启')
-        auto.setCheckable(True)
-        auto.setChecked(autostart_mod.is_enabled())
-        auto.toggled.connect(autostart_mod.set_enabled)
-
         m_scale = menu.addMenu('大小')
         for s in catalog.SCALE_STEPS:
             px = int(round(catalog.CANVAS_W * s))
@@ -1032,6 +1111,15 @@ class PetWindow(QWidget):
             act.triggered.connect(lambda checked=False, s=s: self.change_scale(s))
 
         menu.addSeparator()
+        if self.on_show_balance is not None:
+            menu.addAction('DeepSeek 余额', lambda: self.on_show_balance(self))
+        # 更新/帮助：检查更新 + 下载渠道收进二级菜单
+        m_update = menu.addMenu('更新 / 帮助')
+        if self.on_check_update is not None:
+            m_update.addAction('检查更新', lambda: self.on_check_update(self))
+        m_update.addAction('GitHub 项目页', lambda: webbrowser.open(REPO_URL))
+        if sys.platform == 'win32':
+            m_update.addAction('夸克网盘下载', lambda: webbrowser.open(QUARK_PAN_URL))
         menu.addAction('启动 DeepSeek Harness', lambda: launch_harness_gui(self))
         menu.addSeparator()
         menu.addAction('退出', self._request_quit)
@@ -1060,6 +1148,10 @@ class PetWindow(QWidget):
             self._speech_bubble.show_text(random.choice(self._self_talk_texts), self.visible_content_rect())
         self._schedule_self_talk()
 
+    def show_bubble(self, text: str, duration_ms: int = 3200) -> None:
+        """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。"""
+        self._speech_bubble.show_text(text, self.visible_content_rect(), duration_ms)
+
     def refresh_pet_settings(self) -> None:
         self.animation_gap_seconds = max(0.0, min(3600.0, float(self.cfg.get('animation_gap_seconds', 0.0))))
         if self.animation_gap_seconds <= 0:
@@ -1068,6 +1160,9 @@ class PetWindow(QWidget):
         self._self_talk_texts = self._read_self_talk_texts(self.cfg.get('self_talk_texts'))
         self._self_talk_min_interval = max(5.0, float(self.cfg.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
         self._self_talk_max_interval = max(self._self_talk_min_interval, float(self.cfg.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
+        self.click_sound_enabled = bool(self.cfg.get('click_sound_enabled', True))
+        self.click_show_balance = bool(self.cfg.get('click_show_balance', False))
+        self.click_show_self_talk = bool(self.cfg.get('click_show_self_talk', False))
         self._schedule_self_talk()
 
     def set_animation_gap(self, seconds: float) -> None:
@@ -1187,7 +1282,15 @@ class PetWindow(QWidget):
     }
 
     def _foreground_covers_fullscreen(self) -> bool:
-        """前台窗口是否覆盖整个屏幕几何（含任务栏）。仅 Windows。"""
+        """前台窗口是否覆盖整个屏幕几何（含任务栏）= 真全屏。仅 Windows。
+
+        只判定真全屏（全屏视频/游戏/浏览器 F11，窗口覆盖含任务栏的
+        全屏几何）；普通最大化窗口（任务栏未被覆盖）不触发隐藏。
+
+        注意：GetWindowRect 返回物理像素，而 Qt geometry 是逻辑坐标——
+        高 DPI（125%/150%）下直接比较会把最大化窗口误判为"覆盖全屏"
+        （物理边界 > 逻辑边界）。必须统一换算到逻辑像素。
+        """
         if os.name != 'nt':
             return False
         try:
@@ -1212,14 +1315,23 @@ class PetWindow(QWidget):
             rect = RECT()
             if not u32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 return False
+            # 窗口中心点（物理像素）→ 先定位屏幕，再用该屏 DPR 换算逻辑坐标
             cx = (rect.left + rect.right) // 2
             cy = (rect.top + rect.bottom) // 2
             scr = QApplication.screenAt(QPoint(cx, cy)) or self.screen()
             if scr is None:
                 return False
+            dpr = scr.devicePixelRatio()
+            if dpr and dpr != 1.0:
+                scr = QApplication.screenAt(QPoint(int(cx / dpr), int(cy / dpr))) or scr
+                dpr = scr.devicePixelRatio()
+            # 物理像素 → 逻辑像素
+            l, t = rect.left / dpr, rect.top / dpr
+            r, b = rect.right / dpr, rect.bottom / dpr
             g = scr.geometry()
-            return (rect.left <= g.left() and rect.top <= g.top()
-                    and rect.right >= g.right() and rect.bottom >= g.bottom())
+            # 覆盖全屏几何（含任务栏）= 真全屏
+            return (l <= g.left() and t <= g.top()
+                    and r >= g.right() and b >= g.bottom())
         except Exception:
             return False
 

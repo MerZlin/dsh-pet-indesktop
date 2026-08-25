@@ -56,6 +56,9 @@ jobs:
               --paths . \
               --collect-all imageio_ffmpeg \
               --collect-all certifi \
+              --add-data "assets/sounds:assets/sounds" \
+              --add-data "assets/chat:assets/chat" \
+              --add-data "pet/chat/styles.qss:pet/chat" \
               --name "dsh-pet-standalone-$VARIANT" \
               --icon assets/icon.icns \
               --add-data "$DATAS:$DATAS" \

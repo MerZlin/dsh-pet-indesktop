@@ -19,8 +19,9 @@ from pathlib import Path
 
 from PIL import Image, ImageGrab
 
-from .chat.models import ProviderConfig
-from .chat.providers import _make_ssl_context, normalize_chat_endpoint
+# 注意：不在此处顶层 import pet.chat —— 无 Chat 变体打包时排除 pet.chat，
+# 顶层导入会导致 pet_entry_no_chat.py 启动即 ModuleNotFoundError。
+# 需要的地方在 ask_about_screen 内延迟导入。
 
 log = logging.getLogger('dsh-pet-standalone')
 
@@ -34,7 +35,7 @@ class VisionError(RuntimeError):
     pass
 
 
-def resolve_vision_model(p: ProviderConfig) -> str:
+def resolve_vision_model(p) -> str:
     """推导视觉模型：取消「同聊天模型」且手填了就用filled值；
     否则按聊天模型推导——本身多模态的直接用，ds 文本模型映射到预览版视觉模型。"""
     if not p.vision_same_as_chat and p.vision_model.strip():
@@ -115,9 +116,11 @@ def _safe_detail(raw: str) -> str:
     return ' '.join(raw.split())[:300] or 'Provider 请求失败'
 
 
-def ask_about_screen(image_path, app_info: str, system_prompt: str, p: ProviderConfig) -> str:
+def ask_about_screen(image_path, app_info: str, system_prompt: str, p) -> str:
     """把截图 + 前台窗口信息发给视觉模型，返回人设口吻的回应（非流式，一次拿整段）。
     视觉可用独立端点/密钥（vision_base_url/vision_api_key），未配置则复用聊天 provider。"""
+    # 延迟导入：无 Chat 变体（pet.chat 被排除）下本函数不会被调用
+    from .chat.providers import _make_ssl_context, normalize_chat_endpoint
     # 视觉独立端点仅在「不同聊天模型」时生效；同聊天模型时强制跟随聊天配置，
     # 否则残留的 GLM 地址会配上 ds 的模型名发出（modelCode 不存在）
     base_url = p.base_url if p.vision_same_as_chat else (p.vision_base_url or p.base_url)

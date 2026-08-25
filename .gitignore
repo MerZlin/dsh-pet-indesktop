@@ -16,6 +16,13 @@ assets/videos/
 assets/animations/
 assets/prompt/
 
+# 点击音效（内置合成 click.wav，随包分发；用户可自定义覆盖）
+!assets/sounds/
+!assets/sounds/**
+
+# Windows 安装包图标（本地生成，入库保证克隆后可构建）
+!assets/icon.ico
+
 # PyInstaller 构建产物
 build/
 dist/
