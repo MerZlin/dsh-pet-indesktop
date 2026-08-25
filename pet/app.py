@@ -41,6 +41,25 @@ def _show_startup_error(title: str, message: str) -> None:
     QMessageBox.critical(None, title, message)
 
 
+def _check_ffmpeg_available() -> bool:
+    """检测视频解码组件（imageio_ffmpeg 自带的 ffmpeg）是否可用。
+
+    杀毒软件可能隔离/删除 ffmpeg.exe：直接启动会因首帧解码失败触发
+    'NoneType' object has no attribute 'isNull' 崩溃，这里提前给出
+    明确提示并降级为占位显示（见 window._make_placeholder_pixmap）。
+    """
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        ok = bool(exe) and Path(exe).is_file()
+        if not ok:
+            logging.error('ffmpeg 不可用: %s', exe)
+        return ok
+    except Exception as exc:
+        logging.error('ffmpeg 检测失败: %s', exc)
+        return False
+
+
 def _cleanup_stale_runtime_dirs() -> None:
     """清理 PyInstaller onefile 遗留的 ``_MEI*`` 临时目录。
 
@@ -320,6 +339,17 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     _setup_logging(config)
     logging.info('dsh-pet-standalone 启动')
     _cleanup_stale_runtime_dirs()
+
+    # GIF 变体用 QMovie 播放不依赖 ffmpeg；WebM 变体需要视频解码组件。
+    # 组件不可用（如被杀毒软件隔离）时提前提示，程序降级为占位显示而非崩溃。
+    if 'gif' not in APP_DIR_NAME and not _check_ffmpeg_available():
+        QMessageBox.warning(
+            None,
+            '视频解码组件不可用',
+            '未找到可用的 ffmpeg 视频解码组件（可能被杀毒软件隔离或删除）。\n'
+            '桌宠将以占位样式运行，动画无法正常播放。\n'
+            '请在杀毒软件中恢复/信任 ffmpeg 后重启本程序。',
+        )
 
     controller = PetApp(app, config, enable_chat=enable_chat)
     try:

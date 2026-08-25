@@ -186,7 +186,9 @@ class MovieLibrary(QObject):
 
     def _warm_all_meta_background(self) -> None:
         try:
-            workers = min(8, len(self._movies))
+            # 并发控制在 3：每个 webm 首帧预热都会拉起一个 ffmpeg 子进程，
+            # 并发过高会形成进程洪峰，提高杀毒软件拦截/误报概率。
+            workers = min(3, len(self._movies))
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 list(ex.map(lambda clip: clip.warm_meta(), list(self._movies.values())))
                 # 预解码各动画首帧（QImage 线程安全），首次播放时零阻塞切换，

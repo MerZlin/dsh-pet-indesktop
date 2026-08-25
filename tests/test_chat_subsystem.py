@@ -368,6 +368,48 @@ def test_squash_geometry_uses_logical_frame_size_at_high_dpi():
     assert logical[2] == 640
 
 
+def test_placeholder_pixmap_generated():
+    """解码失败降级用的占位帧应非空且尺寸正确（None 防御的兜底画面）。"""
+    from PySide6.QtWidgets import QApplication
+    from pet.window import _make_placeholder_pixmap
+
+    app = QApplication.instance() or QApplication([])
+    pm = _make_placeholder_pixmap("shenshen", 1.0)
+    assert pm.isNull() is False
+    assert pm.width() == 640
+    assert pm.height() == 360
+    small = _make_placeholder_pixmap("", 0.5)
+    assert small.isNull() is False
+    assert small.width() == 320
+
+
+def test_check_ffmpeg_detects_missing_binary(monkeypatch):
+    """ffmpeg 二进制缺失（被杀软隔离）时启动自检应返回 False。"""
+    import imageio_ffmpeg
+
+    from pet import app as app_mod
+
+    monkeypatch.setattr(
+        imageio_ffmpeg,
+        "get_ffmpeg_exe",
+        lambda: str(Path("E:/definitely/not/exist/ffmpeg.exe")),
+    )
+    assert app_mod._check_ffmpeg_available() is False
+
+
+def test_check_ffmpeg_accepts_existing_binary(monkeypatch):
+    import imageio_ffmpeg
+
+    from pet import app as app_mod
+
+    monkeypatch.setattr(
+        imageio_ffmpeg,
+        "get_ffmpeg_exe",
+        lambda: str(Path(__file__).resolve()),
+    )
+    assert app_mod._check_ffmpeg_available() is True
+
+
 def test_follow_pet_option_registers_and_unregisters_position_listener(tmp_path: Path):
     from PySide6.QtCore import QRect
     from PySide6.QtWidgets import QApplication

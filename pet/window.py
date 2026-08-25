@@ -20,7 +20,7 @@ import sys
 import time
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QBitmap, QImage, QPainter, QPixmap
+from PySide6.QtGui import QBitmap, QColor, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
 
 from . import autostart as autostart_mod
@@ -162,6 +162,32 @@ def _squash_geometry(
     x = int(round((window_width - width) / 2))
     y = window_height - height
     return x, y, width, height
+
+
+def _make_placeholder_pixmap(character_id: str, scale: float) -> QPixmap:
+    """解码失败时的占位画面：半透明圆 + 角色首字，窗口不至于完全不可见。
+
+    触发场景：ffmpeg 视频解码组件不可用（如被杀毒软件隔离/删除）时
+    WebMClip 首帧解码失败、currentPixmap() 返回 None；用占位帧代替
+    空画面，既避免 NoneType 崩溃，也让用户看到桌宠仍在运行。
+    """
+    w = max(1, int(round(catalog.CANVAS_W * scale)))
+    h = max(1, int(round(catalog.CANVAS_H * scale)))
+    img = QImage(w, h, QImage.Format.Format_ARGB32)
+    img.fill(Qt.GlobalColor.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(90, 140, 220, 190))
+    p.drawEllipse(0, 0, w, h)
+    ch = (str(character_id or '宠').strip()[:1]) or '宠'
+    font = p.font()
+    font.setPixelSize(max(8, int(h * 0.5)))
+    p.setFont(font)
+    p.setPen(QColor(255, 255, 255, 255))
+    p.drawText(QRect(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, ch)
+    p.end()
+    return QPixmap.fromImage(img)
 
 class PetWindow(QWidget):
     """桌宠窗口本体。"""
@@ -464,8 +490,10 @@ class PetWindow(QWidget):
         if self.movie is None:
             return
         pm = self.movie.currentPixmap()
-        if pm.isNull():
-            return
+        if pm is None or pm.isNull():
+            # 解码失败（如 ffmpeg 被杀毒软件隔离/删除，_current_pixmap 为 None）：
+            # 用占位帧降级，避免 'NoneType' object has no attribute 'isNull' 崩溃。
+            pm = self._placeholder_pixmap()
         img = pm.toImage()
         if self.facing == 'right':
             img = img.mirrored(True, False)
@@ -543,11 +571,27 @@ class PetWindow(QWidget):
             self._squash_timer.stop()
         self.update()
 
+    def _placeholder_pixmap(self) -> QPixmap:
+        """解码失败降级用的占位帧（半透明圆 + 角色首字），按 scale 缓存。"""
+        cache = self.__dict__.get('_placeholder_cache')
+        if cache is None or cache[0] != self.scale:
+            cache = (
+                self.scale,
+                _make_placeholder_pixmap(
+                    str(self.cfg.get('character', catalog.DEFAULT_CHARACTER)),
+                    self.scale,
+                ),
+            )
+            self._placeholder_cache = cache
+        return cache[1]
+
     def icon_pixmap(self, size: int = 64) -> QPixmap:
-        """托盘图标：取当前帧（无则待机首帧）缩放。"""
+        """托盘图标：取当前帧（无则待机首帧）缩放；均不可用则占位帧。"""
         pm = self._frame_pixmap
-        if pm is None and self.idle:
+        if (pm is None or pm.isNull()) and self.idle:
             pm = self.lib.movie(self.idle).currentPixmap()
+        if pm is None or pm.isNull():
+            pm = self._placeholder_pixmap()
         return pm.scaled(size, size,
                          Qt.AspectRatioMode.KeepAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
