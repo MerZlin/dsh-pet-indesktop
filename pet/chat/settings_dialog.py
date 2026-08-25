@@ -32,6 +32,10 @@ class ChatSettingsDialog(QDialog):
         self.model = QLineEdit(p.model)
         self.key = QLineEdit()
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key.setPlaceholderText('留空表示不修改已保存的 Key')
+        self.key_hint = QLabel(self._key_status(p))
+        self.key_hint.setObjectName('key-hint')
+        self.key_hint.setWordWrap(True)
         self.prompt = QPlainTextEdit(self.settings.default_system_prompt)
         self.prompt.setMinimumHeight(120)
         self.timeout = QSpinBox()
@@ -89,7 +93,7 @@ class ChatSettingsDialog(QDialog):
         self.skip_ssl.setChecked(not p.verify_ssl)
         for label, w in [('Provider 名称', self.name), ('API 地址', self.url),
                          ('模型', self.model), ('', self.vsame), ('视觉模型', self.vmodel), ('视觉 API 地址', self.vurl), ('视觉 API Key', self.vkey),
-                         ('API Key', self.key), ('System Prompt', self.prompt),
+                         ('API Key', self.key), ('', self.key_hint), ('System Prompt', self.prompt),
                          ('聊天背景', bgmode_row), ('', bg_row),
                          ('超时（秒）', self.timeout), ('Temperature', self.temp),
                          ('Max Tokens', self.tokens)]:
@@ -139,6 +143,14 @@ class ChatSettingsDialog(QDialog):
                 crops[value] = [round(float(v), 4) for v in box]
             self.config.set('chat_bg_crops', crops)
             self.config.save()
+
+    @staticmethod
+    def _key_status(p) -> str:
+        """当前是否已保存 API Key（提示用户留空不修改，无需每次重输）。"""
+        saved = p.api_key or SecretStore().get(p.api_key_ref)
+        if saved:
+            return '已保存 API Key（留空保持不变，修改 System Prompt 无需重输）'
+        return '尚未设置 API Key（填入后保存即生效）'
 
     def _provisional_config(self) -> ProviderConfig:
         """用表单当前值构造一份临时配置（不保存），供测试连接使用。"""

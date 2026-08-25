@@ -161,6 +161,21 @@ QToolButton#clear-session-button:hover {
     color: @ACCENT@;
     background: #f3e9dc;
 }
+/* 重命名按钮：文字按钮，与左下角会话列表紧邻 */
+QToolButton#rename-session-button {
+    min-height: 26px;
+    padding: 0 10px;
+    border: 1px solid #e3d5c0;
+    border-radius: 13px;
+    color: #7a6a55;
+    background: #fdf9f1;
+    font-size: 12px;
+}
+QToolButton#rename-session-button:hover {
+    color: @ACCENT@;
+    border-color: @ACCENT@;
+    background: #f3e9dc;
+}
 QScrollArea#message-scroll {
     background: #fbf3e9;
     border: none;

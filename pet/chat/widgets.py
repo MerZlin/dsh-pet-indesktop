@@ -13,7 +13,9 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -50,10 +52,12 @@ def _initial(character_id: str) -> str:
 
 
 def _short_title(session) -> str:
+    if session.title and session.title.strip():
+        return session.title.strip()[:40]
     for message in session.messages:
         if message.role == "user" and message.content.strip():
             text = " ".join(message.content.split())
-            return text[:24] + ("…" if len(text) > 24 else "")
+            return text[:40] + ("…" if len(text) > 40 else "")
     try:
         return "新会话 · " + datetime.fromisoformat(session.created_at).strftime("%H:%M")
     except (TypeError, ValueError):
@@ -210,21 +214,24 @@ class ChatComposer(QFrame):
         self.input.installEventFilter(self)
         root.addWidget(self.input)
 
-        footer = QHBoxLayout()
-        footer.setContentsMargins(0, 0, 0, 0)
+        # 提示文本：输入框正下方居中（小字），腾出左下角给会话管理列表
         self.hint = QLabel("内容会保存到当前角色的本地会话")
         self.hint.setObjectName("composer-hint")
-        footer.addWidget(self.hint)
-        footer.addStretch(1)
+        self.hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(self.hint)
+
+        # 底部行：[会话下拉(弹性)] [✎重命名] …… [发送] [拖拽角]
+        self.footer_layout = QHBoxLayout()
+        self.footer_layout.setContentsMargins(0, 0, 0, 0)
         self.send = QPushButton("发送")
         self.send.setObjectName("send-button")
         self.send.setMinimumWidth(92)
         self.send.clicked.connect(self.send_requested)
-        footer.addWidget(self.send)
+        self.footer_layout.addWidget(self.send)
         self.grip = QSizeGrip(self)
         self.grip.setObjectName("composer-size-grip")
-        footer.addWidget(self.grip, 0, Qt.AlignmentFlag.AlignBottom)
-        root.addLayout(footer)
+        self.footer_layout.addWidget(self.grip, 0, Qt.AlignmentFlag.AlignBottom)
+        root.addLayout(self.footer_layout)
         self.input.textChanged.connect(self._update_enabled)
         self._update_enabled()
 
@@ -517,6 +524,9 @@ class ChatWindow(QDialog):
         self._apply_session_palette(session_view)
         self.session_combo.setMinimumWidth(0)
         self.session_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # 让会话名称尽量显示完整（至少 20 字），下拉宽度随内容自适应
+        self.session_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.session_combo.setMinimumContentsLength(20)
         context_bottom.addWidget(self.session_combo, 1)
         self.new_session_button = QToolButton()
         self.new_session_button.setObjectName("new-session-button")
@@ -528,6 +538,16 @@ class ChatWindow(QDialog):
         self.delete_session_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
         self.delete_session_button.setToolTip("删除当前会话")
         self.delete_session_button.setAccessibleName("删除当前会话")
+        self.rename_session_button = QToolButton()
+        self.rename_session_button.setObjectName("rename-session-button")
+        self.rename_session_button.setText("重命名")
+        self.rename_session_button.setToolTip("重命名当前会话（自定义标题）")
+        self.rename_session_button.setAccessibleName("重命名当前会话")
+        self.clear_all_button = QToolButton()
+        self.clear_all_button.setObjectName("clear-all-sessions-button")
+        self.clear_all_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogDiscardButton))
+        self.clear_all_button.setToolTip("清空该角色的全部会话")
+        self.clear_all_button.setAccessibleName("清空全部会话")
         self.clear_button = QToolButton()
         self.clear_button.setObjectName("clear-session-button")
         self.clear_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton))
@@ -536,6 +556,7 @@ class ChatWindow(QDialog):
         context_bottom.addWidget(self.new_session_button)
         context_bottom.addWidget(self.delete_session_button)
         context_bottom.addWidget(self.clear_button)
+        context_bottom.addWidget(self.clear_all_button)
         context_bottom.addWidget(self.follow_button)
         context_layout.addLayout(context_bottom)
         root.addWidget(context)
@@ -572,6 +593,11 @@ class ChatWindow(QDialog):
         self.composer = ChatComposer(self)
         self.input = self.composer.input
         self.send = self.composer.send
+        # 会话管理列表（下拉 + 重命名）放整个 UI 左下角；
+        # 其余会话操作按钮（新建/删除/清空等）留在上方工具栏。
+        self.composer.footer_layout.insertWidget(0, self.session_combo)
+        self.composer.footer_layout.insertWidget(1, self.rename_session_button)
+        self.composer.footer_layout.insertStretch(1)
         root.addWidget(self.composer)
 
         self.title = self.title_label
@@ -582,6 +608,8 @@ class ChatWindow(QDialog):
         self.close_button.clicked.connect(self.close)
         self.new_session_button.clicked.connect(self.new_session)
         self.delete_session_button.clicked.connect(self.delete_current_session)
+        self.rename_session_button.clicked.connect(self.rename_current_session)
+        self.clear_all_button.clicked.connect(self.clear_all_sessions)
         self.clear_button.clicked.connect(self.clear_session)
         self.follow_button.toggled.connect(self.set_follow_pet)
         self.session_combo.currentIndexChanged.connect(self._on_session_changed)
@@ -839,9 +867,58 @@ class ChatWindow(QDialog):
         if self.service.busy:
             self._active_request_id = None
             self.service.stop()
+        sessions = self.store.list(self.character_id)
+        if len(sessions) <= 1:
+            self.clear_session()  # 只剩一个时退化为清空，避免列表为空
+            return
+        title = _short_title(self.session)
+        answer = QMessageBox.question(
+            self, '删除会话',
+            f'确定删除会话「{title}」吗？\n该操作不可恢复。',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self.store.delete(self.session)
         sessions = self.store.list(self.character_id)
         self.session = sessions[0] if sessions else self._new_session()
+        self._load()
+        self._refresh_sessions()
+
+    def rename_current_session(self) -> None:
+        """自定义会话标题（备注会话内容；清空输入恢复自动标题）。"""
+        current = self.session.title or _short_title(self.session)
+        text, ok = QInputDialog.getText(
+            self, '重命名会话',
+            '会话标题（留空则恢复为自动标题）：',
+            text=current,
+        )
+        if not ok:
+            return
+        self.session.title = text.strip()
+        self.store.save(self.session)
+        self._refresh_sessions()
+
+    def clear_all_sessions(self) -> None:
+        """删除该角色的全部会话（防误删带确认）。"""
+        sessions = self.store.list(self.character_id)
+        if not sessions:
+            return
+        answer = QMessageBox.question(
+            self, '清空全部会话',
+            f'确定删除该角色的全部 {len(sessions)} 个会话吗？\n该操作不可恢复。',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        for session in sessions:
+            self.store.delete(session)
+        if self.service.busy:
+            self._active_request_id = None
+            self.service.stop()
+        self.session = self._new_session()
         self._load()
         self._refresh_sessions()
 
@@ -854,6 +931,19 @@ class ChatWindow(QDialog):
         self._set_empty_state(True)
         self._refresh_sessions()
         self._reset()
+
+    def append_look_sync(self, user_text: str, reply: str) -> None:
+        """把「看看屏幕」的记录写入当前会话（UI 气泡 + 持久化）。"""
+        if not user_text or not reply:
+            return
+        self.session.messages.append(ChatMessage("user", user_text))
+        self.session.messages.append(ChatMessage("assistant", reply))
+        self._add("user", user_text)
+        self._add("assistant", reply)
+        self._set_empty_state(False)
+        self._bottom()
+        self.store.save(self.session)
+        self._refresh_sessions()
 
     def refresh_settings(self) -> None:
         self.settings = self.config.chat_settings()

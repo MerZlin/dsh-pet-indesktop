@@ -111,35 +111,57 @@ def _mac_program_args() -> list[str]:
     return [sys.executable, "-m", "pet"]
 
 
-def enable() -> None:
+def enable() -> bool:
+    """开启自启；返回是否写入成功（Windows 回读注册表验证，macOS 验证 plist 存在）。"""
     if _IS_WIN:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, _win_command())
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, _win_command())
+            # 回读验证，防止写入被安全软件/策略静默拦截
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+                value, _ = winreg.QueryValueEx(key, VALUE_NAME)
+            return bool(value)
+        except OSError:
+            return False
     elif _IS_MAC:
         import plistlib
 
-        _plist_path().parent.mkdir(parents=True, exist_ok=True)
-        plist: dict = {
-            "Label": PLIST_LABEL,
-            "ProgramArguments": _mac_program_args(),
-            "RunAtLoad": True,
-        }
-        if not getattr(sys, "frozen", False):
-            plist["WorkingDirectory"] = str(_project_root())
-        with _plist_path().open("wb") as f:
-            plistlib.dump(plist, f)
+        try:
+            _plist_path().parent.mkdir(parents=True, exist_ok=True)
+            plist: dict = {
+                "Label": PLIST_LABEL,
+                "ProgramArguments": _mac_program_args(),
+                "RunAtLoad": True,
+            }
+            if not getattr(sys, "frozen", False):
+                plist["WorkingDirectory"] = str(_project_root())
+            with _plist_path().open("wb") as f:
+                plistlib.dump(plist, f)
+            return _plist_path().exists()
+        except OSError:
+            return False
+    return False
 
 
-def disable() -> None:
+def disable() -> bool:
+    """关闭自启；返回是否已清除。"""
     if _IS_WIN:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
                 winreg.DeleteValue(key, VALUE_NAME)
+            return True
         except FileNotFoundError:
-            pass
+            return True  # 本来就没有，视为成功
+        except OSError:
+            return False
     elif _IS_MAC:
-        _plist_path().unlink(missing_ok=True)
+        try:
+            _plist_path().unlink(missing_ok=True)
+            return True
+        except OSError:
+            return False
+    return True
 
 
-def set_enabled(on: bool) -> None:
-    enable() if on else disable()
+def set_enabled(on: bool) -> bool:
+    return enable() if on else disable()

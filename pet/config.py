@@ -136,6 +136,12 @@ class Config:
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "mouse_through": False,
             "drag_physics": False,
+            "auto_hide_fullscreen": True,  # 全屏应用自动隐藏（Windows）
+            "click_sound_enabled": True,   # 点击 Q 弹音效
+            "click_show_balance": False,   # 点击显示 DeepSeek 余额
+            "click_show_self_talk": False, # 点击随机显示自定义自言自语
+            "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
+            "autostart_wanted": False,     # 用户曾开启过开机自启（用于启动自检：被安全软件清理时提醒）
             "chat_background": "",  # 聊天背景图：空=纯色；builtin:whale=内置鲸鱼壁纸；否则为图片路径
             "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "chat": _default_chat_data(),
@@ -193,7 +199,10 @@ class Config:
             "rx", "ry", "facing", "scale", "on_top", "no_move", "character",
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
-            "mouse_through", "drag_physics", "chat_background", "chat_bg_crops",
+            "mouse_through", "drag_physics", "auto_hide_fullscreen",
+            "click_sound_enabled", "click_show_balance", "click_show_self_talk",
+            "balance_refresh_minutes", "autostart_wanted",
+            "chat_background", "chat_bg_crops",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]

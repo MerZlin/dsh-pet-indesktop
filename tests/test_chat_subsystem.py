@@ -383,6 +383,33 @@ def test_placeholder_pixmap_generated():
     assert small.width() == 320
 
 
+def test_look_sync_appends_to_current_session(tmp_path: Path):
+    """「看看屏幕」结果应写入 AI 对话当前会话（UI + 持久化）。"""
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    before = len(window.session.messages)
+    window.append_look_sync("[看看屏幕] 前台窗口：chrome.exe | 哔哩哔哩", "主人又在看视频啦~")
+    assert len(window.session.messages) == before + 2
+    assert window.session.messages[-2].role == "user"
+    assert window.session.messages[-2].content.startswith("[看看屏幕]")
+    assert window.session.messages[-1].role == "assistant"
+    assert window.session.messages[-1].content == "主人又在看视频啦~"
+    # 持久化：重新加载会话能看到
+    reloaded = window.store.load(window.session.session_id, "shenshen")
+    assert reloaded is not None
+    assert reloaded.messages[-1].content == "主人又在看视频啦~"
+    # 空参数应被忽略
+    before = len(window.session.messages)
+    window.append_look_sync("", "")
+    assert len(window.session.messages) == before
+    window.close()
+    app.processEvents()
+
+
 def test_check_ffmpeg_detects_missing_binary(monkeypatch):
     """ffmpeg 二进制缺失（被杀软隔离）时启动自检应返回 False。"""
     import imageio_ffmpeg

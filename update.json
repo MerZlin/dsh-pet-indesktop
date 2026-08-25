@@ -1,0 +1,15 @@
+{
+  "version": "3.1.0",
+  "html_url": "https://github.com/MerZlin/dsh-pet-indesktop/releases",
+  "notes": "v3.1.0",
+  "assets": {
+    "dsh-pet-standalone-webm-chat-setup.exe": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-webm-chat-setup.exe",
+    "dsh-pet-standalone-webm-chat-portable.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-webm-chat-portable.zip",
+    "dsh-pet-standalone-webm-setup.exe": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-webm-setup.exe",
+    "dsh-pet-standalone-webm-portable.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-webm-portable.zip",
+    "dsh-pet-standalone-webm-chat-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-webm-chat-macos-arm64.zip",
+    "dsh-pet-standalone-webm-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-webm-macos-arm64.zip",
+    "dsh-pet-standalone-gif-chat-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-gif-chat-macos-arm64.zip",
+    "dsh-pet-standalone-gif-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v3.0.0/dsh-pet-standalone-gif-macos-arm64.zip"
+  }
+}
