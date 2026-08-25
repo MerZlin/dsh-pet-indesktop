@@ -24,7 +24,9 @@ def test_harness_port_probe():
 def test_find_launch_command_resolves_web():
     command = _find_launch_command()
     if command is not None:
-        assert command[-1] == "web"
+        assert "web" in command
+        # 端口必须显式传给 dsh（默认 38080，避开 winnat 保留段 3080）
+        assert command[command.index("web"):] == ["web", "--host", "127.0.0.1", "--port", "38080"]
 
 
 def test_find_launch_command_fallback_without_dsh(monkeypatch):
@@ -36,7 +38,7 @@ def test_find_launch_command_fallback_without_dsh(monkeypatch):
         return  # 本机没有 node，跳过该场景
     monkeypatch.setenv("PATH", str(Path(node).parent))
     command = hl._find_launch_command()
-    assert command is not None and command[-1] == "web"
+    assert command is not None and "web" in command
     assert os.path.basename(command[0]).lower() in ("node", "node.exe", "npx", "npx.cmd")
 
 

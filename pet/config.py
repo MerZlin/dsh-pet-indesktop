@@ -136,6 +136,8 @@ class Config:
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "mouse_through": False,
             "drag_physics": False,
+            "chat_background": "",  # 聊天背景图：空=纯色；builtin:whale=内置鲸鱼壁纸；否则为图片路径
+            "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "chat": _default_chat_data(),
         }
         self._load()
@@ -191,7 +193,7 @@ class Config:
             "rx", "ry", "facing", "scale", "on_top", "no_move", "character",
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
-            "mouse_through", "drag_physics",
+            "mouse_through", "drag_physics", "chat_background", "chat_bg_crops",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]

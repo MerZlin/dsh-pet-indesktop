@@ -178,7 +178,7 @@ def test_session_popup_uses_readable_dark_text_on_light_surface(tmp_path: Path):
     popup = window.session_combo.view()
     assert popup.objectName() == "session-list"
     assert "QAbstractItemView#session-list" in window.styleSheet()
-    assert "selection-color: #1f2937" in window.styleSheet()
+    assert "selection-color: #3a4552" in window.styleSheet()
     window.close()
 
 
@@ -482,7 +482,7 @@ def test_no_chat_packaging_uses_isolated_entrypoint():
         assert "pet_entry_no_chat.py" not in chat_spec
 
 
-def test_chat_window_uses_opaque_shell_and_message_surface(tmp_path: Path):
+def test_chat_window_uses_translucent_shell_for_rounded_corners(tmp_path: Path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from pet.chat.widgets import ChatWindow
@@ -490,9 +490,9 @@ def test_chat_window_uses_opaque_shell_and_message_surface(tmp_path: Path):
 
     app = QApplication.instance() or QApplication([])
     window = ChatWindow(Config(tmp_path), "shenshen")
-    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
     assert "QDialog#chat-window" in window.styleSheet()
-    assert "background: #f7f4ee" in window.styleSheet()
+    assert "background: #fbf3e9" in window.styleSheet()
     assert window.phone_shell.autoFillBackground() is True
     window.close()
     app.processEvents()
@@ -624,6 +624,10 @@ def test_warm_first_frame_caches_qimage_for_zero_block_jump():
 def test_webm_and_gif_animation_sets_are_in_sync():
     webm_root = Path("assets/characters")
     gif_root = Path("assets/characters_gif")
+    # gif 镜像资产可选（不入库）；缺目录时跳过，不阻塞 CI
+    if not gif_root.is_dir():
+        import pytest
+        pytest.skip("gif 镜像目录 assets/characters_gif 不存在（可选资产）")
     webm_rel = {
         path.relative_to(webm_root).with_suffix(".gif")
         for path in webm_root.rglob("*.webm")
@@ -664,6 +668,40 @@ def test_config_shared_dir_when_no_variant_marker(tmp_path):
     cfg = config_mod.Config(tmp_path)
     assert cfg.dir == tmp_path / "dsh-pet-standalone"
 
+
+def test_chat_window_builtin_background_resolves(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    cfg.set("chat_background", "builtin:whale")
+    window = ChatWindow(cfg, "shenshen")
+    assert window._bg_pixmap is not None and not window._bg_pixmap.isNull()
+    assert "rgba(255, 250, 242" in window.styleSheet()  # 半透明面板叠加层生效
+    window.close()
+
+
+def test_chat_window_no_background_by_default(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    assert window._bg_pixmap is None
+    window.close()
+
+
+def test_chat_background_config_roundtrip(tmp_path: Path):
+    """chat_background 必须能穿过 config 的加载白名单存取往返。"""
+    from pet.config import Config
+
+    cfg = Config(tmp_path)
+    cfg.set("chat_background", "builtin:whale")
+    cfg.save()
+    assert Config(tmp_path).get("chat_background") == "builtin:whale"
 
 def test_provider_config_verify_ssl_roundtrip():
     p = ProviderConfig("t", verify_ssl=False)
@@ -777,7 +815,8 @@ def test_enforce_topmost_resets_lost_topmost(monkeypatch, tmp_path):
     monkeypatch.setattr(window_mod, "_win_is_topmost", lambda hwnd: False)
     monkeypatch.setattr(window_mod, "_win_set_topmost", lambda hwnd, on: calls.append((hwnd, on)) or True)
     cfg = Config(tmp_path)
-    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345)
+    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345,
+                                 isVisible=lambda: True, _auto_hidden=False)
     window_mod.PetWindow._enforce_topmost(fake)
     assert calls == [(12345, True)]
 
@@ -795,7 +834,8 @@ def test_enforce_topmost_skips_when_on_top_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(window_mod, "_win_set_topmost", lambda hwnd, on: calls.append((hwnd, on)) or True)
     cfg = Config(tmp_path)
     cfg.set("on_top", False)
-    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345)
+    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345,
+                                 isVisible=lambda: True, _auto_hidden=False)
     window_mod.PetWindow._enforce_topmost(fake)
     assert calls == []
 

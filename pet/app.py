@@ -29,11 +29,14 @@ from .runtime_cleanup import cleanup_stale_runtime_dirs
 
 def _setup_logging(config: Config) -> None:
     config.dir.mkdir(parents=True, exist_ok=True)
+    from logging.handlers import RotatingFileHandler
     logging.basicConfig(
-        filename=str(config.dir / 'pet.log'),
+        handlers=[RotatingFileHandler(
+            str(config.dir / 'pet.log'),
+            maxBytes=1_000_000, backupCount=2, encoding='utf-8',
+        )],  # 滚动日志：1MB×2，不再无限增长
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(message)s',
-        encoding='utf-8',
     )
 
 

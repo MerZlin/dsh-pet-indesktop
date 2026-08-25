@@ -2,11 +2,12 @@ from __future__ import annotations
 import threading
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout,
+    QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 from .models import ChatSettings, ProviderConfig, SecretStore
 from .providers import test_connection
+from .themes import theme_names
 
 
 class ChatSettingsDialog(QDialog):
@@ -43,12 +44,55 @@ class ChatSettingsDialog(QDialog):
         self.tokens = QSpinBox()
         self.tokens.setRange(1, 32768)
         self.tokens.setValue(p.max_tokens)
+        # 视觉模型（看看屏幕）：默认同聊天模型推导；取消勾选可手填（如免费 glm-4.6v-flash）
+        self.vmodel = QLineEdit(p.vision_model)
+        self.vmodel.setPlaceholderText('留空自动推导；免费视觉可用智谱 glm-4.6v-flash')
+        self.vsame = QCheckBox('视觉模型同聊天模型（ds 文本模型自动换 vision-exp；GLM/Kimi 等多模态直接复用）')
+        self.vsame.setChecked(p.vision_same_as_chat)
+        self.vurl = QLineEdit(p.vision_base_url)
+        self.vurl.setPlaceholderText('视觉 API 地址（留空复用聊天地址；GLM 填 https://open.bigmodel.cn/api/paas/v4）')
+        self.vkey = QLineEdit()
+        self.vkey.setEchoMode(QLineEdit.EchoMode.Password)
+        self.vkey.setPlaceholderText('视觉 API Key（留空复用聊天 Key）')
+        _vextra = [self.vmodel, self.vurl, self.vkey]
+        def _vtoggle(c):
+            for w in _vextra:
+                w.setEnabled(not c)
+        _vtoggle(p.vision_same_as_chat)
+        self.vsame.toggled.connect(_vtoggle)
+        # 聊天背景：纯色 / 内置主题 / 自定义图片 + 裁切取景
+        self._bg_keys = [k for k, _ in theme_names()]
+        self.bg_mode = QComboBox()
+        self.bg_mode.addItems(['纯色（奶油）'] + [n for _, n in theme_names()] + ['自定义图片…'])
+        cur = str(config.get('chat_background', '') or '')
+        self.bg = QLineEdit(cur if cur and not cur.startswith('builtin:') else '')
+        self.bg.setPlaceholderText('自定义图片路径，或点浏览选图')
+        self.bg_btn = QPushButton('浏览…')
+        self.bg_btn.clicked.connect(self._pick_bg)
+        bg_row = QWidget()
+        bg_lay = QHBoxLayout(bg_row)
+        bg_lay.setContentsMargins(0, 0, 0, 0)
+        bg_lay.addWidget(self.bg)
+        bg_lay.addWidget(self.bg_btn)
+        self.crop_btn = QPushButton('裁切取景…')
+        self.crop_btn.clicked.connect(self._crop_bg)
+        bgmode_row = QWidget()
+        bgm_lay = QHBoxLayout(bgmode_row)
+        bgm_lay.setContentsMargins(0, 0, 0, 0)
+        bgm_lay.addWidget(self.bg_mode)
+        bgm_lay.addWidget(self.crop_btn)
+        theme_idx = self._bg_keys.index(cur[8:]) + 1 if cur.startswith('builtin:') and cur[8:] in self._bg_keys else None
+        self.bg_mode.setCurrentIndex(0 if not cur else (theme_idx if theme_idx is not None else len(self._bg_keys) + 1))
+        bg_row.setVisible(bool(cur) and theme_idx is None)
+        self.bg_mode.currentIndexChanged.connect(lambda i: bg_row.setVisible(i == len(self._bg_keys) + 1))
         self.skip_ssl = QCheckBox('跳过 SSL 证书验证（本地网关 / 自签名证书）')
         self.skip_ssl.setChecked(not p.verify_ssl)
         for label, w in [('Provider 名称', self.name), ('API 地址', self.url),
-                         ('模型', self.model), ('API Key', self.key),
-                         ('System Prompt', self.prompt), ('超时（秒）', self.timeout),
-                         ('Temperature', self.temp), ('Max Tokens', self.tokens)]:
+                         ('模型', self.model), ('', self.vsame), ('视觉模型', self.vmodel), ('视觉 API 地址', self.vurl), ('视觉 API Key', self.vkey),
+                         ('API Key', self.key), ('System Prompt', self.prompt),
+                         ('聊天背景', bgmode_row), ('', bg_row),
+                         ('超时（秒）', self.timeout), ('Temperature', self.temp),
+                         ('Max Tokens', self.tokens)]:
             form.addRow(label, w)
         form.addRow(self.skip_ssl)
         self.result = QLabel('')
@@ -65,6 +109,36 @@ class ChatSettingsDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(self.result)
         layout.addLayout(buttons)
+
+    def _pick_bg(self):
+        path, _ = QFileDialog.getOpenFileName(self, '选择聊天背景图', '', '图片文件 (*.png *.jpg *.jpeg *.webp *.bmp)')
+        if path:
+            self.bg.setText(path)
+
+    def _crop_bg(self):
+        from .crop_dialog import CropDialog
+        from .themes import get_theme
+        from .widgets import resolve_bg_pixmap
+        i = self.bg_mode.currentIndex()
+        value = '' if i == 0 else ('builtin:' + self._bg_keys[i - 1] if i <= len(self._bg_keys) else self.bg.text().strip())
+        pix = resolve_bg_pixmap(value)
+        if pix is None:
+            self.crop_btn.setText('无可裁背景')
+            return
+        crops = dict(self.config.get('chat_bg_crops', {}) or {})
+        initial = crops.get(value)
+        if initial is None and value.startswith('builtin:'):
+            t = get_theme(value[8:])
+            initial = tuple(t['focus']) if t else None
+        dlg = CropDialog(pix, initial, self)
+        if dlg.exec():
+            reset, box = dlg.result_box()
+            if reset:
+                crops.pop(value, None)
+            else:
+                crops[value] = [round(float(v), 4) for v in box]
+            self.config.set('chat_bg_crops', crops)
+            self.config.save()
 
     def _provisional_config(self) -> ProviderConfig:
         """用表单当前值构造一份临时配置（不保存），供测试连接使用。"""
@@ -117,12 +191,23 @@ class ChatSettingsDialog(QDialog):
         p.timeout = float(self.timeout.value())
         p.temperature = float(self.temp.value())
         p.max_tokens = int(self.tokens.value())
+        p.vision_model = self.vmodel.text().strip()
+        p.vision_same_as_chat = self.vsame.isChecked()
+        p.vision_base_url = self.vurl.text().strip()
+        vkey = self.vkey.text()
+        if vkey:
+            p.vision_api_key_ref = f'provider/{p.provider_id}/vision'
+            if not SecretStore().set(p.vision_api_key_ref, vkey):
+                p.vision_api_key = vkey
         p.verify_ssl = not self.skip_ssl.isChecked()
         key = self.key.text()
         if key:
             p.api_key_ref = p.api_key_ref or f'provider/{p.provider_id}'
             if not SecretStore().set(p.api_key_ref, key):
                 p.api_key = key
+        i = self.bg_mode.currentIndex()
+        bg_val = '' if i == 0 else ('builtin:' + self._bg_keys[i - 1] if i <= len(self._bg_keys) else self.bg.text().strip())
+        self.config.set('chat_background', bg_val)
         self.settings.default_system_prompt = self.prompt.toPlainText().strip()
         self.config.set_chat_settings(self.settings)
         self.config.save()
