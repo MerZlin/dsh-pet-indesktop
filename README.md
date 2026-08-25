@@ -141,7 +141,7 @@ pythonw -m pet
 - 支持点击互动、拖动、拖动惯性、方向转向和系统托盘。
 - 支持角色切换；角色目录按素材自动发现，不要求把角色写死在代码中。
 - 右键菜单可打开设置、AI 对话、AI 设置、角色选择和退出入口。
-- 右键菜单与托盘菜单提供「启动 DeepSeek Harness」：一键后台拉起 `dsh web`（端口 3080）并自动打开浏览器；已在运行时直接打开页面。启动命令自动适配不同安装方式（PATH 上的 `dsh` → node + npm 全局包 → 官方 `npx @deepseek-ai/dsh`），macOS 同样可用（.app 环境会额外探测 Homebrew/nvm 等常见目录，需装有 Node.js）。
+- 右键菜单与托盘菜单提供「启动 DeepSeek Harness」：一键后台拉起 `dsh web`（默认端口 38080，可用环境变量 `DSH_PORT` 覆盖；注：3080 在部分 Windows 上会落入 winnat/Hyper-V 保留段导致无法监听）并自动打开浏览器；已在运行时直接打开页面。启动命令自动适配不同安装方式（PATH 上的 `dsh` → node + npm 全局包 → 官方 `npx @deepseek-ai/dsh`），macOS 同样可用（.app 环境会额外探测 Homebrew/nvm 等常见目录，需装有 Node.js）。
 
 ### 动画播放
 

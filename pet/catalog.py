@@ -413,6 +413,11 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         if first:
             idles = [first]
 
+    # 位移只给真正的走路素材：文件名含「原地」的移动素材只播姿态、不位移
+    # （用户反馈：原地动画带着窗口跑是 bug 观感）。原地素材降级进动作池。
+    inplace_moves = [m for m in moves if '原地' in m]
+    moves = [m for m in moves if '原地' not in m]
+
     core = set(idles) | set(turns) | set(moves) | set(clicks)
     if drag:
         core.add(drag)
@@ -434,6 +439,7 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         acts = unique_acts
     else:
         acts = [n for n in names if n not in core]
+    acts.extend(n for n in inplace_moves if n not in acts)  # 原地素材降级为随机动作
     return {
         'idle': idles[0] if idles else None,
         'turn': turns[0] if turns else None,

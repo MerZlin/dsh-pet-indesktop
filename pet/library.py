@@ -128,8 +128,20 @@ class MovieLibrary(QObject):
         self.folder_files: dict[str, list[str]] = {}
         self._movies: dict[str, object] = {}
         self.media_type: str = 'webm'
+        self.no_mirror: set[str] = self._load_no_mirror()
 
         self._load_all()
+
+    def _load_no_mirror(self) -> set[str]:
+        '''加载 text_clips.json：内含文字的动画在朝向翻转时不镜像（防文字反显）。'''
+        import json
+        path = self._asset_dir / 'text_clips.json'
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return set()
+        names = data.get('no_mirror', [])
+        return {str(n) for n in names} if isinstance(names, list) else set()
 
     def _load_all(self) -> None:
         if self._manifest is None:

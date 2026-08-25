@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""一键启动 DeepSeek Harness（dsh web，默认端口 3080）。
+"""一键启动 DeepSeek Harness（dsh web，默认端口 38080）。
 
 启动命令解析按可靠性级联（适配不同安装方式/不同 PATH 的电脑）：
 
@@ -25,8 +25,9 @@ import time
 import webbrowser
 from pathlib import Path
 
-DEFAULT_PORT = 3080
-HARNESS_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
+# 3080 会落入 Windows winnat/Hyper-V 动态保留段（EACCES），默认改用 38080；
+# 与环境变量 DSH_PORT 保持一致（dsh-launcher 三件套也读它）。
+DEFAULT_PORT = int(os.environ.get("DSH_PORT") or 38080)
 # npx 首次拉取 @deepseek-ai/dsh 可能较慢，预留 90 秒就绪窗口
 _READY_TIMEOUT_SECONDS = 90.0
 
@@ -109,12 +110,13 @@ def _npm_global_roots() -> list[Path]:
     return roots
 
 
-def _find_launch_command() -> list[str] | None:
+def _find_launch_command(port: int = DEFAULT_PORT) -> list[str] | None:
     """级联解析 dsh 启动命令；找不到返回 None。"""
+    tail = ["web", "--host", "127.0.0.1", "--port", str(port)]
     # 1) PATH 上的 dsh（各包管理器全局安装）
     dsh = _which("dsh")
     if dsh:
-        return _wrap_cmd([dsh, "web"])
+        return _wrap_cmd([dsh, *tail])
 
     # 2) node + npm 全局包内的 bin.js
     node = _which("node")
@@ -122,19 +124,19 @@ def _find_launch_command() -> list[str] | None:
         bin_js = root / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
         if bin_js.is_file():
             if node:
-                return [node, str(bin_js), "web"]
+                return [node, str(bin_js), *tail]
             # POSIX：bin.js 有 shebang 可直跑；Windows 上必须经 node
             if os.name != "nt":
-                return [str(bin_js), "web"]
+                return [str(bin_js), *tail]
 
     # 3) 官方推荐：npx --yes @deepseek-ai/dsh web（首次会自动拉取）
     npx = _which("npx")
     if npx:
-        return _wrap_cmd([npx, "--yes", "@deepseek-ai/dsh", "web"])
+        return _wrap_cmd([npx, "--yes", "@deepseek-ai/dsh", *tail])
     if node:
         npx_side = Path(node).with_name("npx")  # npx 随 Node 一起分发
         if npx_side.is_file():
-            return _wrap_cmd([str(npx_side), "--yes", "@deepseek-ai/dsh", "web"])
+            return _wrap_cmd([str(npx_side), "--yes", "@deepseek-ai/dsh", *tail])
     return None
 
 
@@ -169,12 +171,13 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
     - not-found 未找到 dsh 命令
     - error     启动异常（info 为异常信息）
     """
+    url = f"http://127.0.0.1:{int(port)}"
     if is_running(port):
-        webbrowser.open(HARNESS_URL)
-        return "already", HARNESS_URL
-    command = _find_launch_command()
+        webbrowser.open(url)
+        return "already", url
+    command = _find_launch_command(port)
     if command is None:
-        return "not-found", HARNESS_URL
+        return "not-found", url
     try:
         _spawn(command)
     except OSError as exc:
@@ -184,12 +187,12 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
         deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
             if is_running(port):
-                webbrowser.open(HARNESS_URL)
+                webbrowser.open(url)
                 return
             time.sleep(0.5)
 
     threading.Thread(target=_wait_and_open, daemon=True).start()
-    return "started", HARNESS_URL
+    return "started", url
 
 
 def launch_harness_gui(parent=None) -> None:

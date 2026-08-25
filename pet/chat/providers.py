@@ -4,6 +4,8 @@ from collections.abc import Iterator
 from typing import Any
 from .models import ProviderConfig
 
+import re as _re
+
 try:
     import certifi
 except Exception:  # 未安装/未打进包时回退系统默认 CA 库
@@ -54,7 +56,8 @@ def test_connection(config, timeout: float = 10.0):
 def normalize_chat_endpoint(base_url,chat_path='/v1/chat/completions'):
     base=str(base_url or '').strip().rstrip('/'); path=str(chat_path or '/v1/chat/completions').strip(); path=path if path.startswith('/') else '/'+path
     if base.endswith('/chat/completions'): return base
-    if path=='/v1/chat/completions' and base.endswith('/v1'): return base+'/chat/completions'
+    # base 已带版本段（/v1、/v4 等 OpenAI 兼容路径，如智谱 /api/paas/v4）→ 只补 /chat/completions
+    if path=='/v1/chat/completions' and _re.search(r'/v\d+$',base): return base+'/chat/completions'
     return base+path
 
 class ProviderError(RuntimeError):
@@ -87,7 +90,7 @@ class SSEParser:
         return out
 
 class OpenAICompatibleProvider:
-    def stream(self,messages:list[dict[str,str]],config:ProviderConfig,cancel_event:threading.Event)->Iterator[str]:
+    def stream(self,messages:list[dict],config:ProviderConfig,cancel_event:threading.Event)->Iterator[str]:
         endpoint=normalize_chat_endpoint(config.base_url,config.chat_path)
         payload:dict[str,Any]={'model':config.model,'messages':messages,'stream':True,'temperature':config.temperature,'max_tokens':config.max_tokens}
         headers={'Content-Type':'application/json','Accept':'text/event-stream'}

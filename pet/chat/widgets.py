@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPalette
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal, QTimer
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -28,12 +29,14 @@ from PySide6.QtWidgets import (
 from .models import ChatMessage
 from .pet_link import PetChatLink
 from .prompt import PromptBuilder, load_character_manifest
+from . import themes as chat_themes
 from .service import ChatService
 from .session_store import SessionStore
 
 
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-_DEFAULT_ACCENT = "#3994ff"
+_DEFAULT_ACCENT = "#7b8fd9"
+
 
 
 def _safe_color(value: object) -> str:
@@ -244,6 +247,33 @@ class ChatComposer(QFrame):
         self.send.style().polish(self.send)
 
 
+def resolve_bg_pixmap(config_value: str):
+    """模块级背景解析（裁切编辑器共用）：builtin:<key> → 内置主题壁纸；否则按路径。
+    空或文件不存在返回 None。"""
+    value = (config_value or '').strip()
+    if not value:
+        return None
+    if value.startswith('builtin:'):
+        theme = chat_themes.get_theme(value[8:])
+        if theme is None:
+            return None
+        name = theme['file']
+        candidates = []
+        meipass = getattr(sys, '_MEIPASS', None)  # PyInstaller 冻结环境的资源根（权威）
+        if meipass:
+            candidates.append(Path(meipass) / 'assets' / 'chat' / name)
+        candidates.append(Path(__file__).resolve().parents[2] / 'assets' / 'chat' / name)
+        base = next((c for c in candidates if c.is_file()), None)
+        if base is None:
+            return None
+    else:
+        base = Path(value)
+        if not base.is_file():
+            return None
+    pix = QPixmap(str(base))
+    return pix if not pix.isNull() else None
+
+
 class ChatWindow(QDialog):
     def __init__(self, config, character_id: str, parent=None, pet_window=None):
         super().__init__(parent)
@@ -257,8 +287,10 @@ class ChatWindow(QDialog):
         self.setMaximumSize(560, 980)
         self.resize(430, 780)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAutoFillBackground(True)
+        # 半透明窗口：外层 QDialog 透明，phone-shell 的圆角才是真轮廓；
+        # 也是自定义背景图（paintEvent 圆角裁剪绘制）的前提
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
 
         self.settings = config.chat_settings()
         self.prompt_builder = PromptBuilder(Path(__file__).resolve().parents[2] / "assets" / "characters")
@@ -272,6 +304,12 @@ class ChatWindow(QDialog):
         self._active_request_id: str | None = None
         self._last_user_text = ""
         self.accent_color = _DEFAULT_ACCENT
+        self._base_accent = _DEFAULT_ACCENT  # 角色 manifest accent 应用前的基准
+        self._bg_pixmap = None      # 聊天背景图（paintEvent 绘制）
+        self._bg_theme = None       # 当前背景主题（themes.THEMES 条目）
+        self._bg_value = ''         # 当前背景的 config 标识（自定义取景框的键）
+        self._bg_scaled = None      # 按窗口尺寸缓存的缩放结果
+        self._bg_scaled_size = None
         self.character_name = self.character_id
         self._character_manifest: dict = {}
         self.follow_pet = bool(config.get("chat_follow_pet", False))
@@ -441,23 +479,23 @@ class ChatWindow(QDialog):
         context = QFrame(self.phone_shell)
         context.setObjectName("chat-context-bar")
         context_layout = QVBoxLayout(context)
-        context_layout.setContentsMargins(16, 10, 16, 10)
+        context_layout.setContentsMargins(16, 6, 16, 8)
         context_layout.setSpacing(7)
 
-        context_top = QHBoxLayout()
-        context_top.setContentsMargins(0, 0, 0, 0)
-        context_top.setSpacing(7)
+        # 单行工具栏：[状态点][状态][provider] [会话下拉(弹性)] [新建/删除/清空][跟随桌宠]
+        context_bottom = QHBoxLayout()
+        context_bottom.setContentsMargins(0, 0, 0, 0)
+        context_bottom.setSpacing(6)
         self.status_dot = QLabel("●")
         self.status_dot.setObjectName("status-dot")
-        context_top.addWidget(self.status_dot)
+        context_bottom.addWidget(self.status_dot)
         self.status = QLabel("就绪")
         self.status.setObjectName("status-label")
-        context_top.addWidget(self.status)
+        context_bottom.addWidget(self.status)
         self.provider_label = QLabel(self.settings.active_config.name)
         self.provider_label.setObjectName("provider-label")
         self.provider = self.provider_label
-        context_top.addWidget(self.provider_label)
-        context_top.addStretch(1)
+        context_bottom.addWidget(self.provider_label)
         self.follow_button = QToolButton()
         self.follow_button.setObjectName("follow-pet-button")
         self.follow_button.setText("\u8ddf\u968f\u684c\u5ba0")
@@ -465,14 +503,9 @@ class ChatWindow(QDialog):
         self.follow_button.setChecked(self.follow_pet)
         self.follow_button.setToolTip("\u804a\u5929\u7a97\u53e3\u8ddf\u968f\u684c\u5ba0\u79fb\u52a8")
         self.follow_button.setAccessibleName("\u804a\u5929\u7a97\u8ddf\u968f\u684c\u5ba0")
-        context_top.addWidget(self.follow_button)
-        context_layout.addLayout(context_top)
-
-        context_bottom = QHBoxLayout()
-        context_bottom.setContentsMargins(0, 0, 0, 0)
-        context_bottom.setSpacing(6)
         self.session_caption = QLabel("会话")
         self.session_caption.setObjectName("context-caption")
+        self.session_caption.hide()  # 下拉框自明，隐藏"会话"文字让这排更干净
         context_bottom.addWidget(self.session_caption)
         self.session_combo = QComboBox()
         self.session_combo.setObjectName("session-combo")
@@ -503,6 +536,7 @@ class ChatWindow(QDialog):
         context_bottom.addWidget(self.new_session_button)
         context_bottom.addWidget(self.delete_session_button)
         context_bottom.addWidget(self.clear_button)
+        context_bottom.addWidget(self.follow_button)
         context_layout.addLayout(context_bottom)
         root.addWidget(context)
 
@@ -511,17 +545,20 @@ class ChatWindow(QDialog):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.message_view = QWidget()
+        self.message_view.setObjectName("message-view")
         self.message_stack = QStackedLayout(self.message_view)
         self.empty_page = QWidget()
+        self.empty_page.setObjectName("message-timeline")
         empty_layout = QVBoxLayout(self.empty_page)
         empty_layout.setContentsMargins(28, 80, 28, 80)
         empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_state = QLabel("先从一句问候开始吧\n我会在这里陪你聊天、记录和思考")
+        self.empty_state = QLabel("")  # 空状态留白：壁纸/纯色本身就是背景
         self.empty_state.setObjectName("empty-state")
         self.empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_state.setWordWrap(True)
         empty_layout.addWidget(self.empty_state)
         self.timeline_host = QWidget()
+        self.timeline_host.setObjectName("message-timeline")
         self.message_host_layout = QVBoxLayout(self.timeline_host)
         self.message_host_layout.setContentsMargins(22, 24, 22, 24)
         self.message_host_layout.setSpacing(16)
@@ -558,14 +595,73 @@ class ChatWindow(QDialog):
     def _style(self) -> None:
         try:
             stylesheet = (Path(__file__).with_name("styles.qss")).read_text(encoding="utf-8")
+            self._bg_pixmap = self._resolve_bg_pixmap()
+            if self._bg_pixmap is not None:
+                self._bg_scaled = None
+                if self._bg_theme is not None:
+                    self.accent_color = self._bg_theme['accent']  # 主题 accent 优先于角色 manifest
+                    stylesheet += chat_themes.build_overlay_qss(self._bg_theme)
+            else:
+                self.accent_color = self._base_accent  # 无背景时回到底色
             self.setStyleSheet(stylesheet.replace("@ACCENT@", self.accent_color))
         except OSError:
             pass
+        # 强调色可能随主题/背景切换而变，这里统一刷新头像与会话调色板，
+        # 不放进 paintEvent（无背景时 paintEvent 直接返回会导致样式不刷新）
         self._apply_avatar_style(self.avatar_label, self.accent_color)
         self._apply_session_palette(self.session_combo)
         self._apply_session_palette(self.session_combo.view())
         for bubble in self._bubbles:
-            self._apply_avatar_style(bubble.avatar, self.accent_color if bubble.role == "assistant" else "#2b75d6")
+            self._apply_avatar_style(bubble.avatar, self.accent_color)
+
+    def _resolve_bg_pixmap(self):
+        '''解析聊天背景图；记录当前标识与主题。'''
+        value = str(self.config.get('chat_background', '') or '').strip()
+        self._bg_value = value
+        self._bg_theme = chat_themes.get_theme(value[8:]) if value.startswith('builtin:') else None
+        return resolve_bg_pixmap(value)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        if self._bg_pixmap is None:
+            return super().paintEvent(event)
+        # 圆角裁剪绘制背景图 + 暖白纱罩（壁纸垫底，面板半透浮于其上）
+        target = self.phone_shell.geometry()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(target), 26.0, 26.0)
+        p.setClipPath(path)
+        if self._bg_scaled is None or self._bg_scaled_size != target.size():
+            self._bg_scaled = self._bg_pixmap.scaled(
+                target.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation)
+            self._bg_scaled_size = target.size()
+        sw, sh = self._bg_scaled.width(), self._bg_scaled.height()
+        # 主体感知裁剪：cover 满铺后平移，让取景框完整可见；框比窗口大则居中于主体。
+        # 用户在裁切编辑器里自定义的取景框优先于主题默认 focus。
+        crops = self.config.get('chat_bg_crops', {})
+        custom = crops.get(self._bg_value) if isinstance(crops, dict) else None
+        fx = None
+        if isinstance(custom, (list, tuple)) and len(custom) == 4:
+            try:
+                fx, fy, fw, fh = (float(v) for v in custom)
+            except (TypeError, ValueError):
+                fx = None  # 手改坏的配置：回退主题默认取景
+        if fx is None:
+            fx, fy, fw, fh = (self._bg_theme or {}).get('focus', (0.25, 0.0, 0.5, 1.0))
+        x = target.x() + target.width() / 2.0 - (fx + fw / 2.0) * sw
+        y = target.y() + target.height() / 2.0 - (fy + fh / 2.0) * sh
+        if fw * sw <= target.width():
+            x = min(max(x, target.x() + target.width() - (fx + fw) * sw), target.x() - fx * sw)
+        if fh * sh <= target.height():
+            y = min(max(y, target.y() + target.height() - (fy + fh) * sh), target.y() - fy * sh)
+        x = min(max(x, target.x() + target.width() - sw), float(target.x()))
+        y = min(max(y, target.y() + target.height() - sh), float(target.y()))
+        p.drawPixmap(int(round(x)), int(round(y)), self._bg_scaled)
+        r, g, b, a = chat_themes.scrim_rgba(self._bg_theme or {})
+        p.fillPath(path, QColor(r, g, b, a))
+        p.end()
 
     @staticmethod
     def _apply_session_palette(widget: QWidget) -> None:
@@ -604,6 +700,7 @@ class ChatWindow(QDialog):
         chat = chat if isinstance(chat, dict) else {}
         self.character_name = str(self._character_manifest.get("name") or chat.get("name") or self.character_id)
         self.accent_color = _safe_color(chat.get("theme_color"))
+        self._base_accent = self.accent_color  # 记住角色底色，无背景时 _style 据此回退
         self.title_label.setText(f"{self.character_name} · AI 对话")
         self.avatar_label.setText(_initial(self.character_id))
         self._apply_avatar_style(self.avatar_label, self.accent_color)
@@ -647,7 +744,11 @@ class ChatWindow(QDialog):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         bubble = MessageBubble(role, text, self.character_id)
-        self._apply_avatar_style(bubble.avatar, self.accent_color if role == "assistant" else "#2b75d6")
+        if role == "user":
+            bubble.meta.hide()  # 头像已是"你"，不再重复显示
+        else:
+            bubble.meta.setText(self.character_name or "桌宠")
+        self._apply_avatar_style(bubble.avatar, self.accent_color)
         if role == "user":
             row.addStretch(1)
             row.addWidget(bubble)

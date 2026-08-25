@@ -1,4 +1,5 @@
 PySide6>=6.5
 imageio-ffmpeg>=0.6
 keyring>=25
+Pillow>=10
 certifi>=2024.0.0

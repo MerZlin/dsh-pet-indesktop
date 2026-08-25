@@ -34,3 +34,7 @@ packaging/build_variant.py
 
 # 本地实验目录（含嵌套 git 仓库，不入库）
 .research/
+
+# 聊天背景主题壁纸（聊天背景功能随包分发）
+!assets/chat/
+!assets/chat/**
