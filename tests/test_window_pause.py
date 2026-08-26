@@ -135,3 +135,31 @@ def test_hide_pauses_and_show_resumes_activity(app, tmp_path):
 
     win.close()
     app.processEvents()
+
+
+def test_auto_hide_keeps_fullscreen_watcher_alive(app, tmp_path, monkeypatch):
+    """全屏自动隐藏时 watcher 必须保持运行——它是退出全屏后 show() 回来的唯一路径。"""
+    lib = FakeLibrary()
+    win = PetWindow(lib, Config(base=tmp_path))
+    win.auto_hide_fullscreen = True
+    win.show()
+    app.processEvents()
+    win._fullscreen_timer.start()  # 非 Windows 平台初始不启动，测试里强制模拟
+
+    # 模拟全屏检测命中：_check_fullscreen 先置 _auto_hidden 再 hide()
+    win._auto_hidden = True
+    win.hide()
+    app.processEvents()
+    assert win._hidden_paused is True
+    assert win._fullscreen_timer.isActive()  # 关键：watcher 不能被暂停
+
+    # 模拟退出全屏：else 分支应把桌宠 show 回来并恢复活动
+    monkeypatch.setattr(win, '_foreground_covers_fullscreen', lambda: False)
+    win._check_fullscreen()
+    app.processEvents()
+    assert win._auto_hidden is False
+    assert win._hidden_paused is False
+    assert win.movie is not None and win.movie._running is True
+
+    win.close()
+    app.processEvents()

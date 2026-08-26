@@ -528,7 +528,11 @@ class PetWindow(QWidget):
             self.movie.stop()
         self._move_timer.stop()
         self._physics_timer.stop()
-        self._fullscreen_timer.stop()
+        # 全屏 watcher 不能在“全屏自动隐藏”期间停：它是退出全屏后
+        # 重新 show() 的唯一检测路径，停了桌宠就再也回不来。
+        # 只有手动隐藏（托盘/右键，_auto_hidden 为 False）才停它。
+        if not self._auto_hidden:
+            self._fullscreen_timer.stop()
         self._topmost_watchdog.stop()
         self._self_talk_timer.stop()
         self._animation_gap_timer.stop()
