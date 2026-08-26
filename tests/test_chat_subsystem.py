@@ -785,6 +785,44 @@ def test_build_window_flags_stream_capture_mode():
     assert not (build_window_flags({"on_top": False}) & Qt.WindowType.WindowStaysOnTopHint)
 
 
+def test_enforce_topmost_darwin_skips_raise(monkeypatch):
+    """macOS 看门狗不得 raise_（置顶由原生 setLevel 保证，raise_ 会抢焦点）。"""
+    from types import SimpleNamespace
+
+    from pet.window import PetWindow
+
+    win = PetWindow.__new__(PetWindow)
+    win.cfg = SimpleNamespace(get=lambda key, default=None: default if key != "on_top" else True)
+    win._auto_hidden = False
+    win.isVisible = lambda: True
+    win.winId = lambda: 12345
+    raised = []
+    win.raise_ = lambda: raised.append(1)
+    monkeypatch.setattr("sys.platform", "darwin")
+    win._enforce_topmost()
+    assert raised == []
+
+
+def test_enforce_topmost_win32_uses_native_reset(monkeypatch):
+    """Windows 看门狗仍走原生 SetWindowPos 重设（不回归）。"""
+    from types import SimpleNamespace
+
+    from pet.window import PetWindow
+
+    win = PetWindow.__new__(PetWindow)
+    win.cfg = SimpleNamespace(get=lambda key, default=None: default if key != "on_top" else True)
+    win._auto_hidden = False
+    win.isVisible = lambda: True
+    win.winId = lambda: 12345
+    calls = []
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr("pet.window._win_is_topmost", lambda hwnd: calls.append(("check", hwnd)) or False)
+    monkeypatch.setattr("pet.window._win_set_topmost", lambda hwnd, on: calls.append(("set", hwnd, on)) or True)
+    win._enforce_topmost()
+    assert ("check", 12345) in calls
+    assert ("set", 12345, True) in calls
+
+
 def test_connection_test_happy_path(tmp_path):
     import http.server
 

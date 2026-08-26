@@ -317,6 +317,10 @@ class PetWindow(QWidget):
             # macOS 上 Tool 窗口的置顶由 WA_MacAlwaysShowToolWindow 控制，
             # WindowStaysOnTopHint 对 Tool 窗口不可靠（Qt 官方已知问题 QTBUG-38580）
             self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        if sys.platform == 'darwin':
+            # 兜底：即使 accessory 策略设置失败，show/重建窗口也不激活应用
+            # （气泡已有此属性；主窗口补上，避免启动/热切换抢焦点）
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
 
         # ---- 状态 ----
         self.anim: str = self.idle
@@ -511,6 +515,8 @@ class PetWindow(QWidget):
 
         Windows：检测 WS_EX_TOPMOST 丢失才原生重设（避免无效 SetWindowPos，
         且 _win_set_topmost 正确声明了 argtypes，不会截断 64 位 HWND）。
+        macOS：置顶已由原生 setLevel(3) 保证（showEvent 时应用），无需
+        raise_()——raise_ 会反复把窗口带到最前并可能激活，抢走用户焦点。
         其他平台：raise_() 兜底。
         覆盖资源管理器重启、DPI 变更、休眠唤醒、z-order 竞争等场景。
         """
@@ -524,6 +530,9 @@ class PetWindow(QWidget):
             if not _win_is_topmost(hwnd):
                 if _win_set_topmost(hwnd, True):
                     logging.info('检测到置顶丢失，已重新置顶（watchdog）')
+        elif sys.platform == 'darwin':
+            # macOS 置顶靠 NSWindow level，看门狗无需动作（避免 raise_ 抢焦点）
+            return
         else:
             self.raise_()
 

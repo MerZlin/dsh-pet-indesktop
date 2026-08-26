@@ -640,21 +640,25 @@ class PetApp:
         return tray
 
 
-def _mac_set_accessory_activation() -> None:
+def _mac_set_accessory_activation(attempt: int = 0) -> bool:
     """macOS：把应用设为 accessory 激活策略。
 
     桌宠的气泡等窗口是定时器驱动的，普通应用策略下任何窗口出现都会
     激活应用、抢走用户正在输入应用的焦点。Accessory 策略下应用：
     - 不出现在 Dock、无菜单栏，窗口出现不激活应用、不抢焦点；
     - 点击应用窗口仍可正常激活（聊天窗输入不受影响）。
+
+    设置后读回 activationPolicy 验证（0=Regular / 1=Accessory / 2=Prohibited），
+    失败时返回 False 并由调用方延迟重试（Qt 平台插件完全就绪后再试一次）。
     """
     if sys.platform != 'darwin':
-        return
+        return True
     try:
         import ctypes
         import ctypes.util
 
-        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib')
+        lib_path = ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib'
+        objc = ctypes.cdll.LoadLibrary(lib_path)
         objc.sel_registerName.restype = ctypes.c_void_p
         objc.objc_getClass.restype = ctypes.c_void_p
         msg = objc.objc_msgSend
@@ -664,18 +668,38 @@ def _mac_set_accessory_activation() -> None:
             objc.objc_getClass(b'NSApplication'),
             objc.sel_registerName(b'sharedApplication'),
         )
+        if not shared:
+            logging.warning('macOS: 无法获取 NSApplication（attempt=%d）', attempt)
+            return False
         # NSApplicationActivationPolicyAccessory = 1
         msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
         msg(shared, objc.sel_registerName(b'setActivationPolicy:'), 1)
-    except Exception:
-        pass
+        # 读回验证（activationPolicy 返回 NSInteger）
+        msg.restype = ctypes.c_long
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        policy = msg(shared, objc.sel_registerName(b'activationPolicy'))
+        if policy != 1:
+            logging.warning('macOS: activationPolicy 读回=%d（期望 1=Accessory，attempt=%d）',
+                            policy, attempt)
+            return False
+        logging.info('macOS: accessory 激活策略已生效（attempt=%d）', attempt)
+        return True
+    except Exception as exc:
+        logging.warning('macOS: 设置 accessory 激活策略失败: %s（attempt=%d）', exc, attempt)
+        return False
+
+
+def _ensure_mac_accessory() -> None:
+    """macOS：设置 accessory 策略；首次失败时延迟到事件循环就绪后重试。"""
+    if not _mac_set_accessory_activation(attempt=0):
+        QTimer.singleShot(1000, lambda: _mac_set_accessory_activation(attempt=1))
 
 
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     app = QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
-    _mac_set_accessory_activation()
+    _ensure_mac_accessory()
 
     config = Config()
     _setup_logging(config)
