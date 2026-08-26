@@ -163,3 +163,29 @@ def test_auto_hide_keeps_fullscreen_watcher_alive(app, tmp_path, monkeypatch):
 
     win.close()
     app.processEvents()
+
+
+def test_disable_auto_hide_restores_pet(app, tmp_path):
+    """自动隐藏状态下关闭开关：桌宠应立即恢复显示（玩游戏也想看到桌宠的场景）。"""
+    lib = FakeLibrary()
+    win = PetWindow(lib, Config(base=tmp_path))
+    win.auto_hide_fullscreen = True
+    win.show()
+    app.processEvents()
+
+    # 模拟已被全屏自动隐藏
+    win._auto_hidden = True
+    win.hide()
+    app.processEvents()
+    assert not win.isVisible()
+
+    # 用户通过菜单关闭「全屏时自动隐藏」
+    win.set_auto_hide_fullscreen(False)
+    app.processEvents()
+    assert win._auto_hidden is False
+    assert win._hidden_paused is False
+    assert win.isVisible()
+    assert win.cfg.get('auto_hide_fullscreen') is False
+
+    win.close()
+    app.processEvents()

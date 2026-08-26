@@ -1200,6 +1200,13 @@ class PetWindow(QWidget):
         on_top.setChecked(bool(self.cfg.get('on_top', True)))
         on_top.toggled.connect(self.set_on_top)
 
+        # 全屏检测仅 Windows 生效，其他平台不显示这个死开关
+        if sys.platform == 'win32':
+            auto_hide = menu.addAction('全屏时自动隐藏')
+            auto_hide.setCheckable(True)
+            auto_hide.setChecked(self.auto_hide_fullscreen)
+            auto_hide.toggled.connect(self.set_auto_hide_fullscreen)
+
         no_move = menu.addAction('不移动')
         no_move.setCheckable(True)
         no_move.setChecked(self.no_move)
