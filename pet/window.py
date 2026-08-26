@@ -39,7 +39,6 @@ from .config import (
 from .harness_launcher import launch_harness_gui
 from .library import MovieLibrary
 from . import physics as physics_mod
-from . import vision as vision_mod
 from .speech_bubble import PetSpeechBubble
 from .updater import QUARK_PAN_URL, REPO_URL
 
@@ -329,6 +328,8 @@ class PetWindow(QWidget):
         self.no_move: bool = bool(config.get('no_move', False))  # 不移动：禁用自动移动
         self.movie = None
         self._frame_pixmap: QPixmap | None = None
+        # 窗口隐藏时暂停动画解码/定时器；显示时由 showEvent 恢复
+        self._hidden_paused = False
         self._ended_fired = False
 
         # ---- 交互状态 ----
@@ -373,12 +374,10 @@ class PetWindow(QWidget):
 
         # ---- 尺寸与初始状态 ----
         self._apply_scale()
-        for name, movie in lib.movies().items():
-            # 默认参数捕获 name，避免闭包晚绑定
-            movie.frameChanged.connect(lambda n, name=name: self._on_frame(name, n))
-            # 兜底：主线程被阻塞导致队列溢出、最后一帧被丢弃时，
-            # frameChanged 永远到不了末尾帧；用 finished 信号保证动画链一定继续。
-            movie.finished.connect(lambda name=name: self._on_clip_finished(name))
+        # 懒加载：不再预先连接全部 91 个 clip 的信号；
+        # 实际播放某个动画时由 _switch -> _connect_movie 按需连接。
+        self._connected_movies: set[str] = set()
+
         self._restore_position()
         self._switch(self.idle)
         self._schedule_self_talk()
@@ -504,11 +503,53 @@ class PetWindow(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
+        if self._hidden_paused:
+            self._hidden_paused = False
+            self._resume_activity()
         on = bool(self.cfg.get('on_top', True))
         if sys.platform == 'darwin':
             QTimer.singleShot(0, lambda: _mac_set_window_level(int(self.winId()), 3 if on else 0))
         elif sys.platform == 'win32':
             QTimer.singleShot(0, lambda: _win_set_topmost(int(self.winId()), on))
+
+    def hideEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """窗口隐藏时暂停解码与全部活动定时器，避免多开/挂机白烧 CPU。
+
+        注意：这与全屏自动隐藏共用同一路径；显示时 showEvent 会自动
+        恢复当前动画并重启所需定时器。
+        """
+        self._hidden_paused = True
+        self._pause_activity()
+        super().hideEvent(event)
+
+    def _pause_activity(self) -> None:
+        """暂停动画解码与所有活动定时器（窗口不可见时没有任何可见效果）。"""
+        if self.movie is not None:
+            self.movie.stop()
+        self._move_timer.stop()
+        self._physics_timer.stop()
+        self._fullscreen_timer.stop()
+        self._topmost_watchdog.stop()
+        self._self_talk_timer.stop()
+        self._animation_gap_timer.stop()
+        self._click_effect_timer.stop()
+        self._squash_timer.stop()
+        self._squash_active = False
+        self._cancel_move()
+        self._cancel_animation_gap()
+        self._speech_bubble.hide()
+
+    def _resume_activity(self) -> None:
+        """显示时恢复动画与所需定时器（状态与隐藏前一致）。"""
+        if self.movie is not None:
+            # 从当前动画第一帧重新开始：隐藏期间用户看不到，观感无差异；
+            # 若隐藏前正在移动，_cancel_move 已清掉移动计划，不会出现“瞬移”。
+            self._switch(self.anim)
+        if bool(self.cfg.get('on_top', True)):
+            self._topmost_watchdog.start()
+        if self.auto_hide_fullscreen and os.name == 'nt':
+            self._fullscreen_timer.start()
+        self._schedule_self_talk()
 
     def _enforce_topmost(self) -> None:
         """置顶看门狗巡检：仅在置顶开启且可见（未被全屏隐藏）时动作。
@@ -546,11 +587,24 @@ class PetWindow(QWidget):
                 self._switch(self._pick(self.idles))  # 打断进行中的移动
 
     # ================================================================ 播放
+    def _connect_movie(self, name: str, movie) -> None:
+        """按需连接 clip 信号（懒加载）：同一动画只连接一次。
+
+        兜底说明：主线程被阻塞导致队列溢出、最后一帧被丢弃时，
+        frameChanged 永远到不了末尾帧；finished 信号保证动画链一定继续。
+        """
+        if name in self._connected_movies:
+            return
+        movie.frameChanged.connect(lambda n, name=name: self._on_frame(name, n))
+        movie.finished.connect(lambda name=name: self._on_clip_finished(name))
+        self._connected_movies.add(name)
+
     def _switch(self, name: str) -> None:
         """切换到指定动画（链式模型：全部一次性播放）。"""
         self._cancel_move()
         self.anim = name
         movie = self.lib.movie(name)
+        self._connect_movie(name, movie)
         self.movie = movie
         movie.stop()
         movie.jumpToFrame(0)
@@ -954,6 +1008,8 @@ class PetWindow(QWidget):
         threading.Thread(target=self._look_worker, daemon=True).start()
 
     def _look_worker(self) -> None:
+        # 延迟导入：无 Chat / 不使用「看看屏幕」的实例启动时不加载 PIL
+        from . import vision as vision_mod
         try:
             settings = self.cfg.chat_settings()
             provider = settings.active_config
@@ -1193,6 +1249,8 @@ class PetWindow(QWidget):
 
     def show_bubble(self, text: str, duration_ms: int = 3200) -> None:
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。"""
+        if not self.isVisible():
+            return
         self._speech_bubble.show_text(text, self.visible_content_rect(), duration_ms)
 
     def refresh_pet_settings(self) -> None:
@@ -1230,7 +1288,11 @@ class PetWindow(QWidget):
     def set_chat_status(self, state: str, text: str = '') -> None:
         if not text:
             return
+        if not self.isVisible():
+            return
         self._speech_bubble.show_text(text, self.visible_content_rect(), duration_ms=2200)
+
+
     def _request_switch_character(self, character_id: str) -> None:
         """请求切换角色；优先交给 app 做热切换，否则只保存配置。"""
         if self.on_switch_character is not None:

@@ -114,10 +114,17 @@ def _clean_self_talk_texts(value):
 
 
 class Config:
-    def __init__(self, base=None):
+    def __init__(self, base=None, instance_id: str | None = None):
         base = Path(base) if isinstance(base, str) else (base or _default_base())
         self.dir = base / APP_DIR_NAME
-        self.path = self.dir / "config.json"
+        # 多开隔离：--instance <id> 或 DSH_PET_INSTANCE 时使用独立配置文件，
+        # 位置/大小/朝向等不再互相覆盖；不传时完全保持原行为。
+        self.instance_id = (instance_id or os.environ.get("DSH_PET_INSTANCE", "") or "").strip()
+        self.path = (
+            self.dir / f"config-{self.instance_id}.json"
+            if self.instance_id
+            else self.dir / "config.json"
+        )
         self._migrate_legacy_config(base)
         self.data = {
             "version": 3,
@@ -154,6 +161,8 @@ class Config:
         """旧版各变体共用 %APPDATA%/dsh-pet-standalone；升级后首次运行时
         把该目录的 config.json 与 sessions/ 一次性复制到变体独立目录，
         避免用户设置与聊天会话“消失”。仅在新目录尚不存在时执行。"""
+        if self.instance_id:
+            return  # 多开实例不参与旧版迁移，避免把单开配置复制给每个实例
         if APP_DIR_NAME == "dsh-pet-standalone" or self.path.exists():
             return
         legacy = base / "dsh-pet-standalone"

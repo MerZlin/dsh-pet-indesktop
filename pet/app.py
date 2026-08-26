@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -208,7 +210,7 @@ def _setup_logging(config: Config) -> None:
     from logging.handlers import RotatingFileHandler
     logging.basicConfig(
         handlers=[RotatingFileHandler(
-            str(config.dir / 'pet.log'),
+            str(config.dir / f'pet-{os.getpid()}.log'),  # 多开实例日志按 PID 隔离，避免互相覆盖
             maxBytes=1_000_000, backupCount=2, encoding='utf-8',
         )],  # 滚动日志：1MB×2，不再无限增长
         level=logging.INFO,
@@ -274,6 +276,7 @@ class PetApp:
         self._balance_bridge = None
         self._balance_timer = None
         self._balance_cache = None  # (monotonic_ts, 文本)：30s 内复用，避免重复点击慢查询
+        self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -341,6 +344,11 @@ class PetApp:
         if self._balance_cache is not None and now - self._balance_cache[0] < 30.0:
             win.show_bubble(self._balance_cache[1], duration_ms=6000)
             return
+        file_text = self._read_balance_file_cache()
+        if file_text is not None:
+            self._balance_cache = (now, file_text)
+            win.show_bubble(file_text, duration_ms=6000)
+            return
         self._balance_busy = True
         # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
@@ -362,11 +370,36 @@ class PetApp:
             info = balance_mod.fetch_balance(base_url, api_key, verify_ssl=verify_ssl)
             text = balance_mod.format_balance(info)
             self._balance_cache = (time.monotonic(), text)
+            self._write_balance_file_cache(text)
             bridge.done.emit(True, text)
         except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
             bridge.done.emit(False, f'余额查询失败：{exc}')
         finally:
             self._balance_busy = False
+
+    def _read_balance_file_cache(self) -> str | None:
+        """读取跨实例共享的余额缓存（30s 内有效）。"""
+        try:
+            data = json.loads(self._balance_cache_path.read_text(encoding='utf-8'))
+            if isinstance(data, dict) and time.time() - float(data.get('ts', 0) or 0) < 30.0:
+                text = str(data.get('text', '') or '')
+                return text or None
+        except (OSError, ValueError, TypeError):
+            pass
+        return None
+
+    def _write_balance_file_cache(self, text: str) -> None:
+        """写入跨实例共享的余额缓存（原子替换）。"""
+        try:
+            self._balance_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._balance_cache_path.with_suffix('.json.tmp')
+            tmp.write_text(
+                json.dumps({'ts': time.time(), 'text': text}, ensure_ascii=False),
+                encoding='utf-8',
+            )
+            tmp.replace(self._balance_cache_path)
+        except OSError:
+            pass
 
     def _apply_balance_timer(self) -> None:
         """按设置启停余额自动刷新（分钟，0=关闭）。"""
@@ -380,6 +413,10 @@ class PetApp:
 
     def _create_library(self, character_id: str) -> MovieLibrary:
         lib = MovieLibrary(character_id=character_id)
+        # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.5s 错峰），
+        # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
+        lib.schedule_high_priority_warm()
+        lib.schedule_low_priority_warm()
         logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
         return lib
 
@@ -696,12 +733,18 @@ def _ensure_mac_accessory() -> None:
 
 
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
-    app = QApplication(argv if argv is not None else sys.argv)
+    argv = list(argv if argv is not None else sys.argv)
+    instance_id = None
+    if "--instance" in argv:
+        index = argv.index("--instance")
+        if index + 1 < len(argv):
+            instance_id = str(argv[index + 1])
+    app = QApplication(argv)
     app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
     _ensure_mac_accessory()
 
-    config = Config()
+    config = Config(instance_id=instance_id)
     _setup_logging(config)
     logging.info('dsh-pet-standalone 启动')
     _cleanup_stale_runtime_dirs()
