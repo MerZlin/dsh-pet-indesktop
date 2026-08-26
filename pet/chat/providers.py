@@ -27,7 +27,7 @@ def _is_cert_verify_error(reason) -> bool:
     text = str(reason).lower()
     return 'ssl' in text or 'certificate' in text or 'tls' in text
 
-_CERT_HINT = '；如为自签名/代理证书，可在 AI 设置中勾选"跳过 SSL 证书验证"后重试'
+_CERT_HINT = '；如为代理/梯子拦截或自签名证书，可在 AI 设置中勾选"跳过 SSL 证书验证"后重试'
 
 def test_connection(config, timeout: float = 10.0):
     """发送一个最小的非流式请求验证端点连通性（含 TLS 校验）。

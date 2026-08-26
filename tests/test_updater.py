@@ -45,6 +45,19 @@ def test_pick_asset_macos_arm64(monkeypatch):
     assert updater.pick_asset(release)["name"].endswith("macos-arm64.zip")
 
 
+def test_pick_asset_linux_x86_64(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "linux")
+    monkeypatch.setattr(updater, "APP_DIR_NAME", "dsh-pet-standalone-webm-chat")
+    release = {"assets": {
+        "dsh-pet-standalone-webm-chat-linux-x86_64.zip": "l",
+        "dsh-pet-standalone-webm-chat-macos-arm64.zip": "m",
+    }}
+    assert updater.pick_asset(release)["name"] == "dsh-pet-standalone-webm-chat-linux-x86_64.zip"
+    # 无 zip 时回退 tar.gz
+    release2 = {"assets": {"dsh-pet-standalone-webm-chat-linux-x86_64.tar.gz": "t"}}
+    assert updater.pick_asset(release2)["name"].endswith(".tar.gz")
+
+
 def test_pick_asset_source_run_falls_back_to_chat(monkeypatch):
     """源码运行（无变体标识）时按 webm-chat 变体选择资产。"""
     monkeypatch.setattr(updater.sys, "platform", "win32")

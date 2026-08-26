@@ -80,6 +80,8 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 > 旧版 GIF 超大单文件（约 800 MB，运行时会在 C 盘临时目录解压并可能残留缓存）不再默认发布；确有需要可参考本文档「打包发布」一节自行构建 GIF 变体。
 >
 > macOS（Apple Silicon）用户：产物为 `dsh-pet-standalone-*-macos-arm64.zip`（onedir .app），由 GitHub Actions 构建，见下方「macOS 使用」。
+>
+> Linux（x86_64）用户：产物为 `dsh-pet-standalone-*-linux-x86_64.zip`（onedir 目录，解压即用），由 GitHub Actions 构建，见下方「Linux 使用」。
 
 
 </details>
@@ -153,6 +155,31 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 6. **启动 DeepSeek Harness**：需安装 Node.js（`brew install node`）；启动器会自动探测 Homebrew/nvm 等路径并回退 `npx @deepseek-ai/dsh`。
 
 > Intel Mac：当前 CI 只构建 arm64；Intel 用户请从源码运行（见下），或在 Intel 机器上自行构建。
+
+### 方式四：Linux（x86_64）
+
+1. **获取**：GitHub Actions 页面手动运行 `Build Linux App`（或打 `v*` tag 自动发布），从 Release / Artifacts 下载 `dsh-pet-standalone-webm-chat-linux-x86_64.zip`（或无 Chat 版）。
+2. **解压**：得到 `dsh-pet-standalone-webm-chat/` 目录，运行其中的同名二进制：
+   ```bash
+   unzip dsh-pet-standalone-webm-chat-linux-x86_64.zip
+   cd dsh-pet-standalone-webm-chat
+   chmod +x dsh-pet-standalone-webm-chat   # 一般无需，zip 已保留可执行权限
+   ./dsh-pet-standalone-webm-chat
+   ```
+3. **首次运行缺库**（PySide6 需要少量系统库，常见发行版需安装）：
+   ```bash
+   # Debian / Ubuntu / Mint 等（其他发行版请找对应包名）
+   sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libegl1 libgl1 \
+                    libfontconfig1 libdbus-1-3 fonts-noto-cjk
+   ```
+   - `fonts-noto-cjk` 用于中文显示（缺失时气泡/聊天中文会显示为方块）。
+   - 默认按 X11 运行；Wayland 会话下若透明/置顶异常，可试 `QT_QPA_PLATFORM=xcb ./dsh-pet-standalone-webm-chat`。
+4. **数据目录**：`~/.config/dsh-pet-standalone-<变体>/`（各变体相互独立，与 Windows/macOS 行为一致）。
+5. **开机自启**：托盘/右键菜单勾选「开机自启」（写入 `~/.config/autostart/` 的 .desktop 文件）。
+6. **点击音效**：自动使用系统 `paplay`（PulseAudio）或 `aplay`（ALSA）；两者都没有时静默跳过。
+7. **启动 DeepSeek Harness**：需安装 Node.js；启动器会自动探测 PATH 并回退 `npx @deepseek-ai/dsh`。
+
+> 建议在 X11 桌面（GNOME/KDE/Xfce 等）上使用；托盘图标依赖桌面环境的系统托盘支持（GNOME 需安装 AppIndicator 扩展）。
 
 ### 从源码运行（开发者）
 
@@ -358,7 +385,7 @@ AI 对话接口返回的常见 HTTP 状态码含义与处理方式（「测试�
 | 429 | 请求过于频繁（限流） | 稍等片刻后重试；也可降低对话频率或减少会话历史长度 |
 | 5xx | 服务端故障 | 服务商临时问题，稍后重试 |
 | 网络连接失败 / 超时 | 无法连接 API 地址 | 检查网络与代理；确认地址可达、超时值足够 |
-| SSL CERTIFICATE_VERIFY_FAILED | 证书校验失败 | 本地网关 / 自签名证书 / 代理拦截时，可在 AI 设置中勾选「跳过 SSL 证书验证」 |
+| SSL CERTIFICATE_VERIFY_FAILED | 证书校验失败 | 开着代理/梯子（证书被拦截）或本地网关 / 自签名证书时，可在 AI 设置中勾选「跳过 SSL 证书验证」 |
 
 > 502/503/504 等 5xx 错误通常不是软件问题；若「测试连接」成功但发送失败，请把服务商返回的原始错误信息发到 Issue 便于排查。
 
@@ -691,6 +718,32 @@ E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-webm /DMyAppExe
 docs/BUILD_ARTIFACTS-2026-08-22.md
 ```
 
+### 3) Linux 构建（GitHub Actions）
+
+PyInstaller **不支持交叉编译**，Linux 包必须在 Linux 上构建。推荐直接使用仓库内的工作流 [`.github/workflows/build-linux.yml`](.github/workflows/build-linux.yml)：
+
+1. Actions 页面手动运行 **Build Linux App**（`workflow_dispatch`），或打 `v*` tag 自动触发并发布到 Release。
+2. 产物：`dsh-pet-standalone-<变体>-linux-x86_64.zip`（onedir 目录，保留可执行权限），四个变体与 Windows/macOS 一致。
+
+本地构建（在 Linux 机器上）：
+
+```bash
+python -m pip install pyinstaller
+# WebM Chat 版（VARIANT 取值 webm-chat / webm / gif-chat / gif）
+echo "VARIANT = 'webm-chat'" > packaging/build_variant.py
+python -m PyInstaller --noconfirm --clean --onedir --paths . \
+  --collect-all imageio_ffmpeg --collect-all certifi \
+  --add-data "assets/sounds:assets/sounds" \
+  --add-data "assets/chat:assets/chat" \
+  --add-data "pet/chat/styles.qss:pet/chat" \
+  --add-data "assets/characters:assets/characters" \
+  --name dsh-pet-standalone-webm-chat packaging/pet_entry.py
+cd dist && zip -r dsh-pet-standalone-webm-chat-linux-x86_64.zip dsh-pet-standalone-webm-chat/
+```
+
+> GIF 变体需先运行 `python scripts/convert_to_gif.py --force --clean` 并把 `--add-data` 换成 `assets/characters_gif`。
+> Linux 上 PyInstaller 忽略 `--icon`（仅 Windows/macOS 生效），窗口/托盘图标由程序运行时设置。
+
 
 </details>
 
@@ -764,12 +817,13 @@ python scripts/cleanup_mei_cache.py --delete
 - 当前发布只提供 WebM 变体（Chat / 无 Chat）；GIF 变体包体约 800 MB，不再默认发布，需要时按「打包发布」一节自行构建。
 - 安装包未做代码签名，首次运行时 SmartScreen 可能出现提示，需手动放行；macOS 同样未签名，需 Gatekeeper 放行（右键打开）。
 - 当前 macOS 发布只提供 Apple Silicon（arm64）的 onedir .app；Intel Mac 请源码运行或自行构建。
+- Linux 发布只提供 x86_64 的 onedir 目录包，需自行安装少量系统库（见「Linux 使用」一节）；建议在 X11 桌面使用，Wayland 会话下透明/置顶表现取决于桌面合成器。
 - 当前 AI 对话只实现 OpenAI Chat Completions 兼容协议，不实现 Gemini 原生协议。
 - 当前不提供完整 Markdown 渲染、云端同步和编辑历史消息后重发。
 - 自言自语文本是本地配置内容，不由模型自动生成情绪或动作。
 - 本轮重点验证 Windows 发布包；macOS/Linux 保留配置目录和源码运行兼容路径，具体桌面环境仍建议在目标平台单独验证。
 - 角色资源若缺少静态头像，聊天窗使用角色 ID 首字母回退；不会强制从 WebM/GIF 生成头像。
-- AI 对话默认校验 HTTPS 证书（发布包内置 CA 证书库）。使用本地网关（LM Studio / Ollama 代理 / 自签名证书）或 Clash 类代理拦截时，若报「SSL: CERTIFICATE_VERIFY_FAILED」，可在 AI 设置中勾选「跳过 SSL 证书验证」；仅建议在可信的内网/本地环境中关闭校验。
+- AI 对话默认校验 HTTPS 证书（发布包内置 CA 证书库）。开着代理/梯子（Clash 等）被证书拦截、或使用本地网关（LM Studio / Ollama 代理 / 自签名证书）时，若报「SSL: CERTIFICATE_VERIFY_FAILED」，可在 AI 设置中勾选「跳过 SSL 证书验证」后重试；该选项同时作用于对话、看看屏幕、余额查询与测试连接。仅建议在可信的内网/本地环境中关闭校验。
 - 全屏应用会暂时盖住桌宠：浏览器 F11 全屏、网页/视频全屏、游戏（全屏优化/独占渲染）在 Windows 上是系统级置顶行为，任何置顶窗口都会被其覆盖；退出全屏后桌宠自动恢复。
 - Windows 上资源管理器重启、分辨率/DPI 变更、休眠唤醒等系统事件偶发导致置顶丢失：程序每 30 秒自检一次，检测到丢失会自动重新置顶（无需手动操作）。
 - 鼠标穿透开启期间桌宠无法被点击，也无法通过点击唤回置顶最前；需要交互时请先关闭「鼠标穿透」（托盘菜单切换，开启时桌宠会气泡提示）。

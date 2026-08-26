@@ -110,6 +110,7 @@ def pick_asset(release: dict) -> dict | None:
 
     - Windows：<variant>-setup.exe（优先）或 <variant>-portable.zip；
     - macOS：<variant>-macos-arm64.zip；
+    - Linux：<variant>-linux-x86_64.zip（回退 .tar.gz）；
     源码运行（无变体标识，APP_DIR_NAME 为共享目录名）时按 webm-chat 变体选择。
     """
     base = APP_DIR_NAME
@@ -117,6 +118,8 @@ def pick_asset(release: dict) -> dict | None:
         base = 'dsh-pet-standalone-webm-chat'
     if sys.platform == 'win32':
         candidates = [f'{base}-setup.exe', f'{base}-portable.zip']
+    elif sys.platform.startswith('linux'):
+        candidates = [f'{base}-linux-x86_64.zip', f'{base}-linux-x86_64.tar.gz']
     else:
         candidates = [f'{base}-macos-arm64.zip']
     assets = release.get('assets') or {}

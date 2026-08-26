@@ -978,7 +978,8 @@ class PetWindow(QWidget):
     def _play_click_sound(self) -> None:
         """点击 Q 弹音效：内置 assets/sounds/click.wav，可用用户数据目录 sounds/ 覆盖。
 
-        Windows 用 winsound（系统内置，零依赖）；其他平台用 afplay。
+        Windows 用 winsound（系统内置，零依赖）；macOS 用 afplay；
+        Linux 按 paplay（PulseAudio）→ aplay（ALSA）回退，都没有则静默跳过。
         """
         if not self.click_sound_enabled:
             return
@@ -990,9 +991,16 @@ class PetWindow(QWidget):
                 import winsound
                 winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
             else:
+                import shutil
                 import subprocess
+                player = shutil.which('afplay') or shutil.which('paplay') or shutil.which('aplay')
+                if player is None:
+                    return
+                command = [player, str(path)]
+                if Path(player).name == 'aplay':
+                    command.insert(1, '-q')
                 subprocess.Popen(
-                    ['afplay', str(path)],
+                    command,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
         except Exception:

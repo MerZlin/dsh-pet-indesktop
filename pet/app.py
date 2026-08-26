@@ -190,13 +190,15 @@ class _UpdateBridge(QObject):
 
 
 def _reveal_in_file_manager(path: Path) -> None:
-    """在文件管理器中定位文件（Windows explorer /select，macOS open -R）。"""
+    """在文件管理器中定位文件（Windows explorer /select，macOS open -R，Linux xdg-open 父目录）。"""
     try:
         import subprocess
         if sys.platform == 'win32':
             subprocess.Popen(['explorer', '/select,', str(path)])
-        else:
+        elif sys.platform == 'darwin':
             subprocess.Popen(['open', '-R', str(path)])
+        else:
+            subprocess.Popen(['xdg-open', str(path.parent)])
     except Exception:
         pass
 

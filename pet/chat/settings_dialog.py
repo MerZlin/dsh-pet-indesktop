@@ -89,7 +89,7 @@ class ChatSettingsDialog(QDialog):
         self.bg_mode.setCurrentIndex(0 if not cur else (theme_idx if theme_idx is not None else len(self._bg_keys) + 1))
         bg_row.setVisible(bool(cur) and theme_idx is None)
         self.bg_mode.currentIndexChanged.connect(lambda i: bg_row.setVisible(i == len(self._bg_keys) + 1))
-        self.skip_ssl = QCheckBox('跳过 SSL 证书验证（本地网关 / 自签名证书）')
+        self.skip_ssl = QCheckBox('跳过 SSL 证书验证（开着代理/梯子、本地网关或自签名证书时勾选）')
         self.skip_ssl.setChecked(not p.verify_ssl)
         for label, w in [('Provider 名称', self.name), ('API 地址', self.url),
                          ('模型', self.model), ('', self.vsame), ('视觉模型', self.vmodel), ('视觉 API 地址', self.vurl), ('视觉 API Key', self.vkey),

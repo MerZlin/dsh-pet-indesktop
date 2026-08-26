@@ -1,0 +1,113 @@
+name: Build Linux App
+
+on:
+  workflow_dispatch:        # 手动触发（Actions 页面 → Run workflow）
+  push:
+    tags:
+      - 'v*'                # 打 tag 时自动触发并发布 Release
+
+permissions:
+  contents: write           # 用于创建 Release 上传产物
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest  # x86_64；PyInstaller 不支持交叉编译，必须在 Linux 上构建
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 imageio-ffmpeg pillow pyinstaller pytest keyring certifi
+
+      - name: Generate GIF assets from webm
+        run: python scripts/convert_to_gif.py
+
+      - name: Run test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      # 四个变体与 Windows/macOS 发布一致：
+      #   webm-chat / webm（无 Chat）  / gif-chat / gif（无 Chat）
+      # onedir 形态：运行期零解压、不产生临时缓存；build_variant.py 注入
+      # 变体标识，配置目录/自启项按变体隔离（与 Windows/macOS 行为一致）。
+      # Linux 上 PyInstaller 忽略 --icon（只对 Windows/macOS 生效），故省略。
+      - name: Build onedir variants
+        run: |
+          for SPEC in \
+            "webm-chat|packaging/pet_entry.py|assets/characters|" \
+            "webm|packaging/pet_entry_no_chat.py|assets/characters|--exclude-module pet.chat --exclude-module keyring" \
+            "gif-chat|packaging/pet_entry.py|assets/characters_gif|" \
+            "gif|packaging/pet_entry_no_chat.py|assets/characters_gif|--exclude-module pet.chat --exclude-module keyring"; do
+            IFS='|' read -r VARIANT ENTRY DATAS EXCLUDES <<< "$SPEC"
+            echo "==> building $VARIANT"
+            echo "VARIANT = '$VARIANT'" > packaging/build_variant.py
+            python -m PyInstaller --noconfirm --clean --onedir \
+              --paths . \
+              --collect-all imageio_ffmpeg \
+              --collect-all certifi \
+              --add-data "assets/sounds:assets/sounds" \
+              --add-data "assets/chat:assets/chat" \
+              --add-data "pet/chat/styles.qss:pet/chat" \
+              --name "dsh-pet-standalone-$VARIANT" \
+              --add-data "$DATAS:$DATAS" \
+              $EXCLUDES \
+              "$ENTRY"
+            if [ $? -ne 0 ]; then echo "::error::$VARIANT 构建失败"; exit 1; fi
+          done
+
+      - name: Verify pet module collected
+        run: |
+          for VARIANT in webm-chat webm gif-chat gif; do
+            APP="dsh-pet-standalone-$VARIANT"
+            WARN="build/$APP/warn-$APP.txt"
+            if [ -f "$WARN" ] && grep -q "missing module named pet" "$WARN"; then
+              echo "::error::$APP pet 模块未被 PyInstaller 收集"; cat "$WARN"; exit 1
+            fi
+            echo "$APP pet 模块已收集"
+          done
+
+      - name: Package as zip
+        run: |
+          cd dist
+          for VARIANT in webm-chat webm gif-chat gif; do
+            zip -r "dsh-pet-standalone-$VARIANT-linux-x86_64.zip" "dsh-pet-standalone-$VARIANT"
+          done
+
+      - name: Verify zip preserves executable permission
+        run: |
+          for ZIP in dist/dsh-pet-standalone-*-linux-x86_64.zip; do
+            rm -rf /tmp/verify && mkdir -p /tmp/verify
+            cd /tmp/verify
+            unzip -q "$GITHUB_WORKSPACE/$ZIP"
+            DIR="${ZIP##*/}"; DIR="${DIR%-linux-x86_64.zip}"
+            BIN="$DIR/$DIR"
+            ls -l "$BIN"
+            if [ ! -x "$BIN" ]; then
+              echo "::error::$ZIP 解压后二进制丢失可执行权限"; exit 1
+            fi
+            echo "$ZIP 可执行权限保留"
+            cd "$GITHUB_WORKSPACE"
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-pet-standalone-linux-x86_64
+          path: dist/*.zip
+          retention-days: 30
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true

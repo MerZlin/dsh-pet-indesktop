@@ -4,19 +4,20 @@
 
 - Windows：HKCU Run 注册表键（无需管理员权限）；
 - macOS：LaunchAgents plist（~/Library/LaunchAgents/）；
-- 其他平台：no-op（返回 False / 不操作）。
+- Linux：XDG autostart .desktop（~/.config/autostart/）。
 
 设计原则：**系统自启配置是唯一真相**。菜单勾选状态直接查它们，不与 config.json
 冗余存储，避免两处状态不同步。
 
 命令按运行形态自适应：
 - PyInstaller 打包（sys.frozen）：Windows 自启动先用 `start /D` 切到 exe 所在目录再启动 exe；
-  macOS/Linux 指向 .app 内二进制自身；
+  macOS/Linux 指向 .app 内二进制自身 / onedir 内二进制自身；
 - 源码运行：Windows 用 `pythonw -m pet`，macOS/Linux 用 `python -m pet`（带工作目录）。
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -36,6 +37,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 _IS_WIN = sys.platform == "win32"
 _IS_MAC = sys.platform == "darwin"
+_IS_LINUX = sys.platform.startswith("linux")
 
 if _IS_WIN:
     import winreg
@@ -47,6 +49,35 @@ def _project_root() -> Path:
 
 def _plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{PLIST_LABEL}.plist"
+
+
+def _desktop_path() -> Path:
+    """Linux XDG autostart 目录（兼容无 XDG_CONFIG_HOME 的环境）。"""
+    base = Path.home() / ".config"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    if xdg:
+        base = Path(xdg)
+    return base / "autostart" / f"{PLIST_LABEL}.desktop"
+
+
+def _linux_desktop_content() -> str:
+    """Linux 自启 .desktop 内容；源码运行经 sh 切工作目录，打包运行直接指向二进制。"""
+    if getattr(sys, "frozen", False):
+        command = str(Path(sys.executable).resolve())
+    else:
+        command = (
+            f"/bin/sh -c 'cd {_project_root()} && exec "
+            f"{sys.executable} -m pet'"
+        )
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name=dsh-pet ({APP_DIR_NAME})\n"
+        f"Exec={command}\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+        "Comment=Desktop pet companion\n"
+    )
 
 
 def _pythonw_path() -> str:
@@ -90,6 +121,10 @@ def is_enabled() -> bool:
             return False
     if _IS_MAC:
         return _plist_path().exists()
+    if _IS_LINUX:
+        path = _desktop_path()
+        # 兼容手动删除或 DE 禁用：文件存在即视为已开启（与 macOS 同策略）
+        return path.exists()
     return False
 
 
@@ -112,7 +147,7 @@ def _mac_program_args() -> list[str]:
 
 
 def enable() -> bool:
-    """开启自启；返回是否写入成功（Windows 回读注册表验证，macOS 验证 plist 存在）。"""
+    """开启自启；返回是否写入成功（Windows 回读注册表验证，macOS 验证 plist 存在，Linux 验证 .desktop 存在）。"""
     if _IS_WIN:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
@@ -140,6 +175,14 @@ def enable() -> bool:
             return _plist_path().exists()
         except OSError:
             return False
+    elif _IS_LINUX:
+        try:
+            path = _desktop_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_linux_desktop_content(), encoding="utf-8")
+            return path.exists()
+        except OSError:
+            return False
     return False
 
 
@@ -157,6 +200,12 @@ def disable() -> bool:
     elif _IS_MAC:
         try:
             _plist_path().unlink(missing_ok=True)
+            return True
+        except OSError:
+            return False
+    elif _IS_LINUX:
+        try:
+            _desktop_path().unlink(missing_ok=True)
             return True
         except OSError:
             return False
