@@ -32,10 +32,10 @@ def _default_chat_data():
         "history_char_limit": 24000,
         "providers": {
             "openai-main": {
-                "name": "OpenAI Compatible",
-                "base_url": "https://api.openai.com",
+                "name": "DeepSeek",
+                "base_url": "https://api.deepseek.com",
                 "chat_path": "/v1/chat/completions",
-                "model": "gpt-4o-mini",
+                "model": "deepseek-v4-flash",
                 "api_key_ref": "provider/openai-main",
                 "api_key": "",
                 "timeout": 60.0,
