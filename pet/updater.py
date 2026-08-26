@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .config import APP_DIR_NAME
 
-APP_VERSION = '3.1.0'
+APP_VERSION = '3.1.1'
 REPO = 'MerZlin/dsh-pet-indesktop'
 RELEASE_API = f'https://api.github.com/repos/{REPO}/releases/latest'
 REPO_URL = f'https://github.com/{REPO}'

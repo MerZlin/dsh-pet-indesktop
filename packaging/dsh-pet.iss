@@ -29,7 +29,7 @@
 #ifndef MyAppDisplay
 #define MyAppDisplay "dsh-pet-standalone (WebM Chat)"
 #endif
-#define MyAppVersion "3.1"
+#define MyAppVersion "3.1.1"
 
 [Setup]
 AppId={#MyAppId}
