@@ -152,6 +152,7 @@ class Config:
             "stream_capture_mode": False,  # 直播捕获兼容模式（Windows：Tool 窗口直播姬/OBS 枚举不到）
             "chat_background": "",  # 聊天背景图：空=纯色；builtin:whale=内置鲸鱼壁纸；否则为图片路径
             "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
+            "character_aliases": {},  # 角色显示名别名 {角色id: 自定义名}，空名=恢复默认
             "chat": _default_chat_data(),
         }
         self._load()
@@ -212,7 +213,7 @@ class Config:
             "mouse_through", "drag_physics", "auto_hide_fullscreen",
             "click_sound_enabled", "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
-            "chat_background", "chat_bg_crops",
+            "chat_background", "chat_bg_crops", "character_aliases",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -236,6 +237,26 @@ class Config:
 
     def get(self, key, default=None):
         return self.data.get(key, default)
+
+    def character_alias(self, character_id: str) -> str:
+        """用户自定义的角色显示名；未设置返回空串。"""
+        aliases = self.data.get("character_aliases")
+        if isinstance(aliases, dict):
+            return str(aliases.get(character_id, "") or "").strip()
+        return ""
+
+    def set_character_alias(self, character_id: str, name: str) -> None:
+        """设置角色显示名别名（最长 24 字符）；空名表示恢复默认。"""
+        aliases = self.data.setdefault("character_aliases", {})
+        if not isinstance(aliases, dict):
+            aliases = {}
+            self.data["character_aliases"] = aliases
+        name = (name or "").strip()[:24]
+        if name:
+            aliases[character_id] = name
+        else:
+            aliases.pop(character_id, None)
+        self.save()
 
     def set(self, key, value):
         self.data[key] = value

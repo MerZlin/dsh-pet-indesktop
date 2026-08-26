@@ -726,7 +726,8 @@ class ChatWindow(QDialog):
         self._character_manifest = load_character_manifest(root, self.character_id)
         chat = self._character_manifest.get("chat", {})
         chat = chat if isinstance(chat, dict) else {}
-        self.character_name = str(self._character_manifest.get("name") or chat.get("name") or self.character_id)
+        alias = self.config.character_alias(self.character_id)
+        self.character_name = alias or str(self._character_manifest.get("name") or chat.get("name") or self.character_id)
         self.accent_color = _safe_color(chat.get("theme_color"))
         self._base_accent = self.accent_color  # 记住角色底色，无背景时 _style 据此回退
         self.title_label.setText(f"{self.character_name} · AI 对话")

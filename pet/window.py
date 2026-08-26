@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import logging
 import math
 import os
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QImage, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
+from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
 from . import autostart as autostart_mod
 from . import catalog
@@ -451,10 +452,85 @@ class PetWindow(QWidget):
             y = int(round(avail.top() + ry * avail.height())) - self._h // 2
             x = min(max(x, avail.left()), avail.right() - self._w)
             y = min(max(y, avail.top()), avail.bottom() - self._h)
+        # 多开避让：与其他存活实例重叠时逐级向左错开（含双击重复启动
+        # 同一实例的场景——它和有名字的 --instance 一样会撞位置）
+        others = self._live_instance_rects()
+        if others:
+            step = self._w + 48
+            for _ in range(12):
+                if not any(self._rects_overlap(x, y, self._w, self._h, o) for o in others):
+                    break
+                nx = max(avail.left(), x - step)
+                if nx == x:
+                    break  # 已经顶到屏幕左缘，无法再让
+                x = nx
         logging.info('恢复位置 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)',
                      scr.name(), avail.left(), avail.top(), avail.right(),
                      avail.bottom(), scr.devicePixelRatio(), x, y)
         self.move(x, y)
+        self._write_runtime_marker()
+
+    @staticmethod
+    def _rects_overlap(x: int, y: int, w: int, h: int, other) -> bool:
+        ox, oy, ow, oh = other
+        return x < ox + ow and ox < x + w and y < oy + oh and oy < y + h
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。"""
+        if pid <= 0:
+            return False
+        if os.name == 'nt':
+            # PROCESS_QUERY_LIMITED_INFORMATION
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def _live_instance_rects(self) -> list[tuple[int, int, int, int]]:
+        """其他存活实例的窗口矩形（配置目录下 runtime-<pid>.json 标记）。
+
+        死进程/损坏文件的标记顺手清理，避免越积越多。
+        """
+        rects: list[tuple[int, int, int, int]] = []
+        try:
+            files = list(self.cfg.dir.glob('runtime-*.json'))
+        except OSError:
+            return rects
+        for f in files:
+            try:
+                data = json.loads(f.read_text(encoding='utf-8'))
+                pid = int(data.get('pid', 0))
+                if pid == os.getpid():
+                    continue
+                if not self._pid_alive(pid):
+                    raise OSError('stale marker')
+                x, y, w, h = (int(data.get(k, 0)) for k in ('x', 'y', 'w', 'h'))
+                if w > 0 and h > 0:
+                    rects.append((x, y, w, h))
+            except (OSError, ValueError, TypeError):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+        return rects
+
+    def _write_runtime_marker(self) -> None:
+        """登记本实例的当前位置，供后启动的实例避让。"""
+        try:
+            marker = self.cfg.dir / f'runtime-{os.getpid()}.json'
+            marker.write_text(json.dumps({
+                'pid': os.getpid(),
+                'x': self.x(), 'y': self.y(), 'w': self._w, 'h': self._h,
+            }), encoding='utf-8')
+        except OSError:
+            pass
 
     def _save_position(self) -> None:
         """以"窗口中心相对屏幕可用区的比例"持久化位置（分辨率变化后仍正确）。"""
@@ -469,6 +545,7 @@ class PetWindow(QWidget):
         self.cfg.set('facing', self.facing)
         self.cfg.set('scale', self.scale)
         self.cfg.save()
+        self._write_runtime_marker()
 
     def _go_default_corner(self) -> None:
         scr = self._screen_available()
@@ -1186,10 +1263,13 @@ class PetWindow(QWidget):
         m_char = menu.addMenu('切换角色')
         current = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
         for cid in catalog.list_available_characters():
-            act = m_char.addAction(cid)
+            label = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
+            act = m_char.addAction(label)
             act.setCheckable(True)
             act.setChecked(cid == current)
             act.triggered.connect(lambda checked=False, cid=cid: self._request_switch_character(cid))
+        m_char.addSeparator()
+        m_char.addAction('重命名当前角色…', self._rename_character)
 
         menu.addSeparator()
         menu.addAction('回到右下角', self._go_default_corner)
@@ -1303,6 +1383,19 @@ class PetWindow(QWidget):
             return
         self._speech_bubble.show_text(text, self.visible_content_rect(), duration_ms=2200)
 
+
+    def _rename_character(self) -> None:
+        """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""
+        cid = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+        current = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
+        name, ok = QInputDialog.getText(
+            self, '重命名角色', f'给 {cid} 起个名字（留空恢复默认）：', text=current,
+        )
+        if not ok:
+            return
+        self.cfg.set_character_alias(cid, name)
+        shown = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
+        self.show_bubble(f'角色名：{shown}')
 
     def _request_switch_character(self, character_id: str) -> None:
         """请求切换角色；优先交给 app 做热切换，否则只保存配置。"""
