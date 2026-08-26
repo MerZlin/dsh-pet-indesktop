@@ -17,6 +17,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # PySide6 在 Linux 上 import 需要系统 EGL/GL 等库（裸 runner 没有）；
+      # 这组库与 README「Linux 使用」给用户的运行时依赖一致。
+      - name: Install system libraries (PySide6)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0 libfontconfig1 libdbus-1-3
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
