@@ -751,7 +751,7 @@ docs/BUILD_ARTIFACTS-2026-08-22.md
 PyInstaller **不支持交叉编译**，Linux 包必须在 Linux 上构建。推荐直接使用仓库内的工作流 [`.github/workflows/build-linux.yml`](.github/workflows/build-linux.yml)：
 
 1. Actions 页面手动运行 **Build Linux App**（`workflow_dispatch`），或打 `v*` tag 自动触发并发布到 Release。
-2. 产物：`dsh-pet-standalone-<变体>-linux-x86_64.zip`（onedir 目录，保留可执行权限），四个变体与 Windows/macOS 一致。
+2. 产物：`dsh-pet-standalone-<变体>-linux-x86_64.zip`（onedir 目录，保留可执行权限）。Linux 发布两个 WebM 变体（`webm-chat` / `webm`）；GIF 变体包体约 800 MB，不发布。
 
 本地构建（在 Linux 机器上）：
 
@@ -845,7 +845,7 @@ python scripts/cleanup_mei_cache.py --delete
 - 当前发布只提供 WebM 变体（Chat / 无 Chat）；GIF 变体包体约 800 MB，不再默认发布，需要时按「打包发布」一节自行构建。
 - 安装包未做代码签名，首次运行时 SmartScreen 可能出现提示，需手动放行；macOS 同样未签名，需 Gatekeeper 放行（右键打开）。
 - 当前 macOS 发布只提供 Apple Silicon（arm64）的 onedir .app；Intel Mac 请源码运行或自行构建。
-- Linux 发布只提供 x86_64 的 onedir 目录包，需自行安装少量系统库（见「Linux 使用」一节）；建议在 X11 桌面使用，Wayland 会话下透明/置顶表现取决于桌面合成器。
+- Linux 发布只提供 x86_64 的 onedir 目录包（WebM 两个变体），需自行安装少量系统库（见「Linux 使用」一节）；建议在 X11 桌面使用，Wayland 会话下透明/置顶表现取决于桌面合成器。
 - 当前 AI 对话只实现 OpenAI Chat Completions 兼容协议，不实现 Gemini 原生协议。
 - 当前不提供完整 Markdown 渲染、云端同步和编辑历史消息后重发。
 - 自言自语文本是本地配置内容，不由模型自动生成情绪或动作。
