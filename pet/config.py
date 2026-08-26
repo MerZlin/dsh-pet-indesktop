@@ -142,6 +142,7 @@ class Config:
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
             "autostart_wanted": False,     # 用户曾开启过开机自启（用于启动自检：被安全软件清理时提醒）
+            "stream_capture_mode": False,  # 直播捕获兼容模式（Windows：Tool 窗口直播姬/OBS 枚举不到）
             "chat_background": "",  # 聊天背景图：空=纯色；builtin:whale=内置鲸鱼壁纸；否则为图片路径
             "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "chat": _default_chat_data(),
@@ -201,7 +202,7 @@ class Config:
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "mouse_through", "drag_physics", "auto_hide_fullscreen",
             "click_sound_enabled", "click_show_balance", "click_show_self_talk",
-            "balance_refresh_minutes", "autostart_wanted",
+            "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
             "chat_background", "chat_bg_crops",
         ):
             if key in raw and raw[key] is not None:

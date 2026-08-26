@@ -538,6 +538,10 @@ class PetApp:
                 self.win.set_auto_hide_fullscreen(
                     bool(self.config.get('auto_hide_fullscreen', True))
                 )
+                # 直播捕获兼容模式：Tool ↔ 普通窗口（直播姬/OBS 捕获识别）
+                self.win.set_stream_capture_mode(
+                    bool(self.config.get('stream_capture_mode', False))
+                )
 
     # ------------------------------------------------------------ 检查更新
     def check_update(self, parent=None) -> None:

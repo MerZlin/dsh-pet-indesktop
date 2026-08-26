@@ -107,6 +107,18 @@ class PetSettingsDialog(QDialog):
             self.auto_hide_check = QCheckBox("前台程序全屏时自动隐藏桌宠（如全屏视频/游戏）")
             self.auto_hide_check.setChecked(bool(config.get("auto_hide_fullscreen", True)))
             form.addRow("全屏时自动隐藏", self.auto_hide_check)
+        self.capture_check: QCheckBox | None = None
+        if sys.platform == "win32":
+            # Tool 窗口（WS_EX_TOOLWINDOW）会被直播姬/OBS 的窗口捕获过滤掉，
+            # 开启后改为普通顶层窗口 + 标题，捕获列表即可看到桌宠（任务栏会出现图标）
+            self.capture_check = QCheckBox("直播捕获兼容模式（直播姬/OBS 窗口捕获可识别桌宠）")
+            self.capture_check.setChecked(bool(config.get("stream_capture_mode", False)))
+            self.capture_check.setToolTip(
+                "直播姬/OBS 等软件的窗口捕获会过滤不占任务栏的工具窗口，"
+                "导致列表里找不到桌宠。开启后桌宠变为普通窗口并显示标题，"
+                "即可被捕获（代价：任务栏会显示桌宠图标）。"
+            )
+            form.addRow("直播捕获兼容", self.capture_check)
         root.addLayout(form)
 
         root.addWidget(QLabel("自言自语内容（每行一条，留空则恢复内置内容）："))
@@ -157,6 +169,8 @@ class PetSettingsDialog(QDialog):
             )
         if self.auto_hide_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_check.isChecked())
+        if self.capture_check is not None:
+            self.config.set("stream_capture_mode", self.capture_check.isChecked())
         self.config.save()
         self.settings_saved.emit()
         self.accept()

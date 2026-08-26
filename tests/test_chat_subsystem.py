@@ -752,6 +752,39 @@ def test_cert_error_detection():
     assert _is_cert_verify_error(TimeoutError("timed out")) is False
 
 
+def test_stream_capture_mode_config_persisted(tmp_path: Path):
+    """stream_capture_mode 必须能穿过 config 的加载白名单存取往返。"""
+    from pet.config import Config
+
+    cfg = Config(tmp_path)
+    assert cfg.get("stream_capture_mode", False) is False
+    cfg.set("stream_capture_mode", True)
+    cfg.save()
+    assert Config(tmp_path).get("stream_capture_mode", False) is True
+
+
+def test_build_window_flags_stream_capture_mode():
+    """默认 Tool（捕获软件过滤），开启兼容模式后为普通顶层窗口。"""
+    from PySide6.QtCore import Qt
+
+    from pet.window import build_window_flags
+
+    base = {"on_top": True}
+    normal = build_window_flags(base)
+    # Tool=11 含 Window=1 位，须用完整值比较判定 Tool 形态
+    assert normal & Qt.WindowType.Tool == Qt.WindowType.Tool
+
+    compat = build_window_flags(base, stream_capture_mode=True)
+    assert not (compat & Qt.WindowType.Tool == Qt.WindowType.Tool)  # 关键差异：去掉 Tool 形态
+    assert compat & Qt.WindowType.Window
+    # 置顶/穿透标志在两种模式下都保留
+    for flags in (normal, compat):
+        assert flags & Qt.WindowType.FramelessWindowHint
+        assert flags & Qt.WindowType.WindowStaysOnTopHint
+    assert build_window_flags(base, mouse_through=True) & Qt.WindowType.WindowTransparentForInput
+    assert not (build_window_flags({"on_top": False}) & Qt.WindowType.WindowStaysOnTopHint)
+
+
 def test_connection_test_happy_path(tmp_path):
     import http.server
 

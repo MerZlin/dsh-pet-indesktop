@@ -184,6 +184,31 @@ def wander_target_y(start_y: float, top: float, bottom: float, height: float,
     return int(max(y_lo, min(y_hi, start_y + dy)))
 
 
+# 直播捕获兼容模式下窗口标题（普通顶层窗口需要可见标题，供直播姬/OBS 选择）
+STREAM_CAPTURE_TITLE = 'dsh-pet 桌宠'
+
+
+def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
+    """构造桌宠窗口 flags。
+
+    默认形态：FramelessWindowHint | Tool（Windows 上映射 WS_EX_TOOLWINDOW，
+    不进任务栏/Alt+Tab，但直播姬、OBS 等窗口捕获软件会过滤掉 Tool 窗口
+    ——Bongo Cat 能被捕获而桌宠不能，差异就在这里）。
+
+    开启直播捕获兼容模式后改用普通顶层窗口（Window）并设置标题，
+    使窗口出现在捕获软件的可选窗口列表里；代价是任务栏会显示图标。
+    """
+    if stream_capture_mode:
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
+    else:
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+    if config.get('on_top', True):
+        flags |= Qt.WindowType.WindowStaysOnTopHint
+    if mouse_through:
+        flags |= Qt.WindowType.WindowTransparentForInput
+    return flags
+
+
 
 def _make_placeholder_pixmap(character_id: str, scale: float) -> QPixmap:
     """解码失败时的占位画面：半透明圆 + 角色首字，窗口不至于完全不可见。
@@ -280,14 +305,15 @@ class PetWindow(QWidget):
             self._topmost_watchdog.start()
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
-        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-        if config.get('on_top', True):
-            flags |= Qt.WindowType.WindowStaysOnTopHint
+        # 直播捕获兼容模式（stream_capture_mode）：Tool → 普通顶层窗口 + 标题，
+        # 使直播姬/OBS 的窗口捕获能枚举到桌宠（Tool 窗口会被捕获软件过滤）。
+        self._stream_capture_mode = bool(config.get('stream_capture_mode', False))
+        flags = build_window_flags(config, self.mouse_through, self._stream_capture_mode)
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        if self.mouse_through:
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
-        if sys.platform == 'darwin' and config.get('on_top', True):
+        if self._stream_capture_mode:
+            self.setWindowTitle(STREAM_CAPTURE_TITLE)
+        if sys.platform == 'darwin' and config.get('on_top', True) and not self._stream_capture_mode:
             # macOS 上 Tool 窗口的置顶由 WA_MacAlwaysShowToolWindow 控制，
             # WindowStaysOnTopHint 对 Tool 窗口不可靠（Qt 官方已知问题 QTBUG-38580）
             self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
@@ -1366,6 +1392,25 @@ class PetWindow(QWidget):
             if self._auto_hidden:
                 self._auto_hidden = False
                 self.show()
+
+    def set_stream_capture_mode(self, on: bool) -> None:
+        """直播捕获兼容模式：Tool → 普通顶层窗口 + 标题。
+
+        直播姬/OBS 的窗口捕获会过滤 Tool 窗口（WS_EX_TOOLWINDOW），
+        开启后改为普通窗口并设置可见标题，捕获列表即可看到桌宠；
+        代价是任务栏出现图标。setWindowFlags 会重建原生窗口，随后
+        showEvent 会自动重新应用置顶（Windows 原生 SetWindowPos）。
+        """
+        on = bool(on)
+        if on == self._stream_capture_mode:
+            return
+        self._stream_capture_mode = on
+        self.cfg.set('stream_capture_mode', on)
+        self.cfg.save()
+        self.setWindowFlags(build_window_flags(self.cfg, self.mouse_through, on))
+        self.setWindowTitle(STREAM_CAPTURE_TITLE if on else '')
+        if not self._auto_hidden:
+            self.show()
 
     def _request_quit(self) -> None:
         self._save_position()
