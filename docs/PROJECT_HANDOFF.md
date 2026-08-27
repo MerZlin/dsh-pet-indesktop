@@ -377,6 +377,30 @@ tail（实测开销可忽略，目录发现已降频 30s）；Linux 自启路径
 - 生产桌宠开 dsh 联动 → 监视器启动 → 真跑 dsh headless 任务 → 桥文件产出
   idle→working→idle → 桌宠侧零错误。验证后配置恢复默认关闭。
 
+### 第十二轮：Claude opus 三方审查 + 用户视角走查（2026-08-28 凌晨，用户睡觉期间）
+引入第三方审查力量：经 aicodemirror 的 claudecode 端点直连 Claude opus 4.8
+（Anthropic Messages 协议，key 与 opencode 共用）。
+
+**Claude opus 发现与分诊**：
+- 修复：pause() 不重置 worker 标志（卡死兜底缺失）；后台线程向已销毁 QObject emit
+  的崩溃风险（shiboken6.isValid 守卫）；JPEG 编码在主线程（挪 worker）；
+  provider 共享可变对象竞态（浅拷贝）；prefer_free_provider 空转（落实真实语义）；
+  dry-run 日志落窗口标题（改只记进程名）；DSH 安装 UI 线程阻塞（改后台线程+气泡反馈）；
+  卸载失败无用户反馈（气泡）；apply_config 重复块（合并残留去重）。
+- 误报：set_drag_physics 其实有 cfg.save()（它读到的是截断区段）。
+- 接受不修：跨进程频控竞态（既有声明的设计取舍，影响有界）。
+
+**双设置界面排版实测**（真机截图）：经典页开关横排被裁 → 竖排；现代页预设下拉
+超宽被裁 → 短标签+详情挪说明。两套界面均截图复核通过。
+
+**用户视角走查**：开启 Cursor/OpenCode 联动但本机未装对应软件时现在会气泡提示
+（原来勾了永远没反应）；现代设置页标题去重。
+
+**Agent 联动合并版复验**：Cursor 与 OpenCode 注入事件气泡实锤（截图），DSH 生产链路
+前一轮已实证，Claude hooks 格式与用户既有 hooks 一致 + 脚本实跑通过。
+
+测试 345 passed / 5 skipped。
+
 ### 仍未做（明确交接）
 - ~~DSH / OpenCode 插件包（事件生产者侧）~~ → 第四轮已解决（见上：DSH 内置桥接插件
   一键安装、OpenCode 原生 SQLite 直读）；
