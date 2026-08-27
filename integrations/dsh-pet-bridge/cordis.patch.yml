@@ -1,0 +1,4 @@
+# dsh-pet 桥接 bundle：挂载 Node 半侧（agent 状态事件 → 本地 jsonl）
+- insert:
+    - id: dsh-pet-bridge
+      name: '@dsh-pet/bridge'
