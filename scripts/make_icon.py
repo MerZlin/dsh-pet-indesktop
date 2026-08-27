@@ -18,7 +18,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-IDLE_WEBM = ROOT / "assets" / "characters" / "shenshen" / "videos" / "idle" / "待机呼吸休闲.webm"
+sys.path.insert(0, str(ROOT))
+from pet import catalog  # noqa: E402  （仅取常量，无 Qt 依赖）
+
+# 从 catalog 读取默认角色与画布尺寸，避免角色名/分辨率变化时构建失败；
+# 待机动画按约定取 idle 目录下第一个 webm。
+_IDLE_DIR = ROOT / "assets" / "characters" / catalog.DEFAULT_CHARACTER / "videos" / "idle"
+try:
+    IDLE_WEBM = next(_IDLE_DIR.glob("*.webm"))
+except StopIteration:
+    IDLE_WEBM = _IDLE_DIR / "待机呼吸休闲.webm"  # 报错信息用（main 里会检查存在性）
 OUT_ICO = ROOT / "assets" / "icon.ico"
 OUT_PREVIEW = ROOT / "assets" / "icon-preview.png"
 OUT_ICONSET = ROOT / "assets" / "icon.iconset"
@@ -42,8 +51,8 @@ _ICONSET_ENTRIES = (
     ("icon_512x512@2x.png", 1024),
 )
 
-def extract_frame(path: Path) -> bytes:
-    """读取 RGBA 首帧原始字节。"""
+def extract_frame(path: Path) -> tuple[bytes, int, int]:
+    """读取 RGBA 首帧原始字节，返回 (frame, width, height)。"""
     import imageio_ffmpeg
 
     gen = None
@@ -54,8 +63,10 @@ def extract_frame(path: Path) -> bytes:
             bits_per_pixel=32,
             input_params=["-c:v", "libvpx-vp9"],
         )
-        next(gen)  # meta
-        return next(gen)  # first frame
+        meta = next(gen)  # meta
+        size = meta.get("size") or meta.get("source_size") or (catalog.CANVAS_W, catalog.CANVAS_H)
+        width, height = int(size[0]), int(size[1])
+        return next(gen), width, height  # first frame
     finally:
         if gen is not None:
             try:
@@ -103,16 +114,16 @@ def main() -> int:
 
     print(f"提取首帧: {IDLE_WEBM.name}")
     try:
-        frame = extract_frame(IDLE_WEBM)
+        frame, frame_w, frame_h = extract_frame(IDLE_WEBM)
     except ImportError as exc:  # pragma: no cover
         print(f"缺少 imageio-ffmpeg: {exc}")
         return 1
-    if len(frame) != 640 * 360 * 4:
-        print(f"帧尺寸异常: {len(frame)} bytes")
+    if len(frame) != frame_w * frame_h * 4:
+        print(f"帧尺寸异常: {len(frame)} bytes（期望 {frame_w}x{frame_h}）")
         return 1
 
     try:
-        img = prepare_icon_image(Image.frombytes("RGBA", (640, 360), frame))
+        img = prepare_icon_image(Image.frombytes("RGBA", (frame_w, frame_h), frame))
     except ValueError as exc:
         print(str(exc))
         return 1

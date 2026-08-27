@@ -694,7 +694,11 @@ class PetWindow(QWidget):
             image = decode_representative_frame(path) if path is not None else QImage()
             with lock:
                 if not image.isNull():
-                    self._animation_icon_image_cache[name] = QImage(image)
+                    cache = self._animation_icon_image_cache
+                    # 简单上限：动画名数量有限，超限全清后按需重新解码
+                    if len(cache) >= 128:
+                        cache.clear()
+                    cache[name] = QImage(image)
             return image
         finally:
             with lock:
@@ -736,6 +740,10 @@ class PetWindow(QWidget):
         if self._animation_gap_active:
             if name in self.idles or name in self.turns:
                 self._play_animation_gap_step()
+            else:
+                # 异常状态（gap 期间播了非待机/转向动画）：兜底推进动画链，
+                # 避免 return 后动画链停摆
+                self._pick_next()
             return
         if self.animation_gap_seconds > 0 and (name in self.acts or name in self.moves):
             self._start_animation_gap()
@@ -797,7 +805,10 @@ class PetWindow(QWidget):
         """
         if self._move_plan is not None:
             return True  # 已在移动/已计划
-        avail = self.screen().availableGeometry()
+        scr = self._screen_available()
+        if scr is None:
+            return False
+        avail = scr.availableGeometry()
         dir_sign = 1 if self.facing == 'right' else -1
         cx = self.x() + self._w / 2
         distance = random.randint(catalog.MOVE_MIN_PX, catalog.MOVE_MAX_PX)

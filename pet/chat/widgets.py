@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QGuiApplication, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QImageReader, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -154,6 +154,7 @@ class SessionListRow(QFrame):
     def _show_menu(self) -> None:
         menu = QMenu(self)
         menu.setObjectName("session-action-menu")
+        # 浅色小菜单（深色聊天主题下仍为浅色，属已知小瑕疵；无 QSS 覆盖）
         menu.setStyleSheet(
             "QMenu{background:#fff;border:1px solid #e1e5eb;border-radius:10px;padding:5px;}"
             "QMenu::item{min-height:25px;padding:3px 24px 3px 9px;border-radius:7px;}"
@@ -288,7 +289,6 @@ class ChatTitleBar(QFrame):
 
 class MessageBubble(QFrame):
     retry_requested = Signal()
-    edit_requested = Signal(str)
 
     def __init__(self, role: str, content: str = "", character_id: str = "", parent=None):
         super().__init__(parent)
@@ -448,10 +448,15 @@ class AttachmentChip(QFrame):
         self.preview.setObjectName("attachment-preview")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setFixedSize(34, 34)
-        pixmap = QPixmap(str(self.path))
-        if not pixmap.isNull():
+        # 用 QImageReader 限定解码尺寸（34px 预览），避免 10MB 级大图
+        # 整图解码进内存只为显示 34×34 缩略图
+        reader = QImageReader(str(self.path))
+        reader.setAutoTransform(True)
+        reader.setScaledSize(self.preview.size())
+        image = reader.read()
+        if not image.isNull():
             self.preview.setPixmap(
-                pixmap.scaled(
+                QPixmap.fromImage(image).scaled(
                     self.preview.size(),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
@@ -960,13 +965,13 @@ class ChatWindow(QDialog):
         self.delete_session_button.setIcon(vector_widget_icon(self.delete_session_button, "remove", 15))
         self.delete_session_button.setToolTip("删除当前会话")
         self.delete_session_button.setAccessibleName("删除当前会话")
-        self.delete_session_button.hide()
+        footer_actions.addWidget(self.delete_session_button)
         self.clear_button = QToolButton(self)
         self.clear_button.setObjectName("clear-session-button")
         self.clear_button.setIcon(vector_widget_icon(self.clear_button, "clear", 15))
         self.clear_button.setToolTip("清空当前会话")
         self.clear_button.setAccessibleName("清空当前会话")
-        self.clear_button.hide()
+        footer_actions.addWidget(self.clear_button)
         footer_layout.addLayout(footer_actions)
         context_layout.addWidget(sidebar_footer)
         root.addWidget(context)
@@ -1363,7 +1368,6 @@ class ChatWindow(QDialog):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         bubble = MessageBubble(role, text, self.character_id)
-        bubble.edit_requested.connect(self._edit_message)
         if role == "user":
             row.addStretch(1)
             row.addWidget(bubble)
@@ -1418,10 +1422,6 @@ class ChatWindow(QDialog):
             else:
                 bubble.setMinimumWidth(0)
                 bubble.setMaximumWidth(max(220, int(available * 0.66)))
-
-    def _edit_message(self, text: str) -> None:
-        self.input.setPlainText(str(text))
-        self.input.setFocus()
 
     def _remove_bubble(self, bubble: MessageBubble | None) -> None:
         if bubble is None:
@@ -1780,7 +1780,14 @@ class ChatWindow(QDialog):
         if text.startswith(self._text):
             self._pending_output = text[len(self._text):]
         else:
-            self._pending_output = text
+            # final 与已输出不一致（服务端截断/重写）：回到公共前缀处重打，
+            # 避免整段重复显示
+            common = 0
+            limit = min(len(self._text), len(text))
+            while common < limit and self._text[common] == text[common]:
+                common += 1
+            self._text = self._text[:common]
+            self._pending_output = text[common:]
         if self._pending_output:
             if not self._typewriter_timer.isActive():
                 self._typewriter_timer.start()

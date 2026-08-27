@@ -625,9 +625,10 @@ def test_context_menu_runtime_only_dispatches_modern_layout():
     assert "build_modern_menu" not in legacy_source
     assert "build_modern_menu" in modern_source
     assert "build_legacy_menu" not in modern_source
-    assert "build_legacy_menu" not in dispatcher_source
+    # 分发器按 context_menu_template 配置选择两套模板（不再硬编码 modern）
+    assert "build_legacy_menu" in dispatcher_source
     assert "build_modern_menu" in dispatcher_source
-    assert "build_modern_menu" in dispatcher_source
+    assert "context_menu_template" in dispatcher_source
 
 
 def test_pet_avatar_menu_icon_fills_native_slot_and_stays_centered(monkeypatch):
@@ -788,7 +789,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     app.processEvents()
 
 
-def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
+def test_context_menu_dispatches_style_by_template(monkeypatch):
     from PySide6.QtWidgets import QApplication, QMenu, QStyle, QWidget
 
     from pet.context_menu import populate_context_menu
@@ -798,7 +799,12 @@ def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
             self.template = template
 
         def get(self, key, default=None):
-            return {"context_menu_template": self.template, "character": "shenshen"}.get(key, default)
+            return {
+                "context_menu_template": self.template,
+                "character": "shenshen",
+                # 固定浅色主题，避免断言随系统深色模式翻转
+                "context_menu_appearance": {"theme": "light"},
+            }.get(key, default)
 
     class Pet:
         on_open_chat = on_open_chat_settings = None
@@ -819,9 +825,9 @@ def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
     modern_menu = QMenu()
     populate_context_menu(legacy_menu, Pet("legacy"))
     populate_context_menu(modern_menu, Pet("modern"))
-    menus = [legacy_menu, modern_menu]
-    assert legacy_menu.objectName() == "modernContextMenu"
-    assert legacy_menu.styleSheet() == modern_menu.styleSheet()
+    # legacy 模板走 legacy 样式（无 modern 外观），modern 模板走 modern 样式
+    assert legacy_menu.objectName() != "modernContextMenu"
+    assert legacy_menu.styleSheet() == ""
     assert modern_menu.objectName() == "modernContextMenu"
     # The modern menu follows the compact macOS project-menu reference: a
     # white hairline surface, small system text, outline icons and subtle rules
@@ -845,7 +851,7 @@ def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
     assert Path("pet/context_menus/menu_styles/common.py").is_file()
     assert Path("pet/context_menus/menu_styles/legacy.py").is_file()
     assert Path("pet/context_menus/menu_styles/modern.py").is_file()
-    for menu in menus:
+    for menu in (legacy_menu, modern_menu):
         assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuPopupDelay, None, menu) == 60
         assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuSloppyCloseTimeout, None, menu) == 120
         assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuSloppySelectOtherActions, None, menu) == 1
@@ -1389,7 +1395,7 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     app.processEvents()
 
 
-def test_legacy_config_value_migrates_to_modern_layout(monkeypatch):
+def test_legacy_config_value_dispatches_legacy_layout(monkeypatch):
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -1423,17 +1429,21 @@ def test_legacy_config_value_migrates_to_modern_layout(monkeypatch):
     menu = QMenu()
     window_mod._populate_context_menu(menu, Pet())
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    # legacy 布局：无图标、无现代专属入口（看看屏幕/更新与帮助/生小肥鱼层级不同）
     assert labels.index("生小肥鱼") == labels.index("开机自启") + 1
     assert labels.index("打开网页版 DeepSeek") == labels.index("启动 DeepSeek Harness") + 1
-    assert "QMenu" in menu.styleSheet()
+    assert menu.styleSheet() == ""
     icon_actions = [action.text() for action in menu.actions() if not action.icon().isNull()]
-    assert "看看屏幕" in icon_actions
-    assert "更新与帮助" in icon_actions
+    assert icon_actions == []
+    assert "看看屏幕" not in labels
+    assert "更新与帮助" not in labels
+    assert "切换角色" in labels
+    assert "窗口置顶" in labels
     menu.close()
     app.processEvents()
 
 
-def test_legacy_config_value_uses_modern_settings_callback(monkeypatch):
+def test_legacy_config_value_uses_legacy_settings_callback(monkeypatch):
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -1466,8 +1476,9 @@ def test_legacy_config_value_uses_modern_settings_callback(monkeypatch):
     pet = Pet()
     menu = QMenu()
     populate_context_menu(menu, pet)
+    # legacy 模板的「桌宠设置」走旧版设置回调（不再是现代设置）
     next(action for action in menu.actions() if action.text() == "桌宠设置").trigger()
-    assert pet.opened == ["modern"]
+    assert pet.opened == ["legacy"]
     menu.close()
     app.processEvents()
 

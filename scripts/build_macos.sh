@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-/opt/miniconda3/envs/mobility_client/bin/python3}"
+# 默认用 PATH 上的 python3（源码环境）；可用 PYTHON_BIN 覆盖。
+# 注：GitHub Actions 的 macOS 构建在 build-macos.yml 内联完成（输出 dist/），
+# 本脚本面向本机构建（输出 build/macos/），两处逻辑可能漂移，改动需同步。
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || echo python3)}"
 BUILD_DEPS="$ROOT/build/.build-deps"
 DIST_DIR="$ROOT/build/macos"
 WORK_DIR="$ROOT/build/.pyinstaller/macos"

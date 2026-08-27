@@ -213,13 +213,20 @@ class PetApp:
             index = 0
         if index <= 0:
             return
-        available = self.win.screen().availableGeometry()
+        scr = self.win._screen_available()
+        if scr is None:
+            return
+        available = scr.availableGeometry()
         horizontal = -1 if self.win.geometry().center().x() > available.center().x() else 1
         vertical = -1 if self.win.geometry().center().y() > available.center().y() else 1
         x = self.win.x() + horizontal * 48 * index
         y = self.win.y() + vertical * 32 * index
-        x = min(max(x, available.left()), available.right() - self.win.width() + 1)
-        y = min(max(y, available.top()), available.bottom() - self.win.height() + 1)
+        # 小屏（可用区比窗口还窄/矮）时上界 < 下界，min/max 会互相打架把
+        # 窗口推出屏幕外；先判边界再钳制。
+        max_x = available.right() - self.win.width() + 1
+        max_y = available.bottom() - self.win.height() + 1
+        x = available.left() if max_x < available.left() else min(max(x, available.left()), max_x)
+        y = available.top() if max_y < available.top() else min(max(y, available.top()), max_y)
         self.win.move(x, y)
 
     def _create_library(self, character_id: str) -> MovieLibrary:
@@ -390,8 +397,11 @@ class PetApp:
         会被 AppKit 抑制——表现为首次点击「AI 设置 / 桌宠设置」无反应，
         需要再点一次（此时窗口实例已存在，直接 show 成功）。
         延迟到菜单关闭后再呈现即可稳定弹出；Qt 自绘菜单（Windows）同样
-        覆盖：弹窗仍显示时重试等待。
+        覆盖：弹窗仍显示时重试等待。重试 60 次（约 3.6 秒）后放弃，
+        防止弹窗长期不消失时无限空转。
         """
+        if attempt > 60:
+            return
         if QApplication.activePopupWidget() is not None:
             QTimer.singleShot(60, lambda: self._present_dialog(dialog, before_present, attempt + 1))
             return

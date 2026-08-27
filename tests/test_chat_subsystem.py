@@ -834,9 +834,14 @@ def test_modern_sidebar_footer_only_keeps_status_and_follow(tmp_path: Path):
         button for button in footer.findChildren(QToolButton)
         if not button.isHidden()
     ]
-    assert visible_tools == [window.follow_button]
+    # 跟随桌宠 + 删除当前会话 + 清空当前会话（此前两个按钮是孤儿控件）
+    assert visible_tools == [
+        window.follow_button, window.delete_session_button, window.clear_button,
+    ]
     assert window.follow_button.icon().isNull() is False
     assert window.follow_button.minimumHeight() >= 28
+    assert window.delete_session_button.icon().isNull() is False
+    assert window.clear_button.icon().isNull() is False
     window.close()
     app.processEvents()
 

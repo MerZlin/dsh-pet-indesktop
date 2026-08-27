@@ -190,6 +190,10 @@ def _merge_chat_data(raw):
             if isinstance(provider, dict):
                 base = dict(_default_chat_data()["providers"].get("openai-main", {}))
                 base.update(provider)
+                # 非 openai-main provider 未显式写 api_key_ref 时按自身归位，
+                # 避免沿用 openai-main 的钥匙串条目（密钥串用/查错 key）
+                if not str(base.get("api_key_ref") or "").strip():
+                    base["api_key_ref"] = f"provider/{provider_id}"
                 providers[str(provider_id)] = base
     else:
         providers = dict(result["providers"])
@@ -325,7 +329,10 @@ class Config:
             return
         if not isinstance(raw, dict):
             return
-        old_version = int(raw.get("version", 1) or 1)
+        try:
+            old_version = int(raw.get("version", 1) or 1)
+        except (TypeError, ValueError):
+            old_version = 1  # 脏数据（手改/损坏）不得导致启动崩溃
         if old_version < 2:
             raw.pop("scale", None)
         chat = raw.get("chat") if isinstance(raw.get("chat"), dict) else {}

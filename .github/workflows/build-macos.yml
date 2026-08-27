@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install PySide6 imageio-ffmpeg pillow pyinstaller pytest keyring certifi
+          pip install -r requirements.txt pyinstaller pytest
 
       - name: Generate GIF assets from webm
         run: python scripts/convert_to_gif.py
@@ -63,7 +63,6 @@ jobs:
               --collect-all certifi \
               --add-data "assets/sounds:assets/sounds" \
               --add-data "assets/chat:assets/chat" \
-              --add-data "pet/chat/styles.qss:pet/chat" \
               --name "dsh-pet-standalone-$VARIANT" \
               --icon assets/icon.icns \
               --add-data "$DATAS:$DATAS" \

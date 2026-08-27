@@ -7,7 +7,7 @@ from importlib import resources
 
 from PySide6.QtWidgets import QMenu
 
-from .context_menus import build_modern_menu
+from .context_menus import build_legacy_menu, build_modern_menu
 from .context_menus.icons import pet_avatar_menu_icon, vector_menu_icon
 from .context_menus.menu_styles import (
     apply_modern_menu_style,
@@ -69,8 +69,19 @@ def load_menu_template(template_id: str) -> dict:
 
 
 def populate_context_menu(menu: QMenu, pet) -> None:
-    template = load_menu_template("modern")
-    apply_modern_menu_style(menu, pet.cfg.get("context_menu_appearance", {}))
+    # 按配置分发新旧菜单模板（legacy 仅供偏好旧交互的用户；「切换菜单模板」
+    # 项通过 set_context_menu_template + reopen_context_menu 立即生效）
+    cfg = getattr(pet, "cfg", None)
+    template_id = str(cfg.get("context_menu_template", "modern") if cfg is not None else "modern")
+    if template_id not in TEMPLATE_IDS:
+        template_id = "modern"
+    template = load_menu_template(template_id)
+    if template_id == "legacy":
+        build_legacy_menu(menu, pet, template)
+        install_responsive_menu_style(menu)
+        install_stay_open_interaction(menu)
+        return
+    apply_modern_menu_style(menu, cfg.get("context_menu_appearance", {}) if cfg is not None else {})
     build_modern_menu(menu, pet, template)
     install_modern_check_indicators(menu)
     install_responsive_menu_style(menu)
