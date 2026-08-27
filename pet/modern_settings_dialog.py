@@ -1253,8 +1253,9 @@ class ModernSettingsDialog(QDialog):
         self.menu_font_select.addItem("系统默认", "system")
         self._menu_fonts_populated = False
         # 系统字体枚举在 macOS 上可达数百 ms，延迟到事件循环空闲时填充，
-        # 避免每次打开设置窗口都同步阻塞
-        QTimer.singleShot(0, self._populate_menu_fonts)
+        # 避免每次打开设置窗口都同步阻塞；带 context 的 singleShot 在
+        # 对话框销毁后自动跳过回调
+        QTimer.singleShot(0, self, self._populate_menu_fonts)
         self.menu_font_size_select = ModernSelect(self, width=112)
         for size in range(10, 19):
             self.menu_font_size_select.addItem(f"{size} px", size)

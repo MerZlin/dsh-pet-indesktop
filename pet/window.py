@@ -430,7 +430,7 @@ class PetWindow(QWidget):
         # resolved inside every callback so a stale NSView is never reused.
         apply_current_native_window()
         for delay in (0, 40, 160):
-            QTimer.singleShot(delay, apply_current_native_window)
+            QTimer.singleShot(delay, self, apply_current_native_window)
 
     def set_on_top(self, on: bool) -> None:
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
@@ -452,7 +452,7 @@ class PetWindow(QWidget):
         # Opening a native menu and then clicking another application can make
         # Cocoa reorder its owner Tool window. Reapply the level after the
         # activation transition without activating or stealing keyboard focus.
-        QTimer.singleShot(0, self._restore_on_top_after_context_menu)
+        QTimer.singleShot(0, self, self._restore_on_top_after_context_menu)
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
@@ -915,7 +915,7 @@ class PetWindow(QWidget):
             dist = math.hypot(d.x(), d.y())
         if was_dragging:
             self._just_dragged = True  # 抑制拖拽结束后的幽灵点击
-            QTimer.singleShot(150, self._clear_just_dragged)
+            QTimer.singleShot(150, self, self._clear_just_dragged)
             if self.drag_physics:
                 rvx, rvy = physics_mod.estimate_release_velocity(self._trail, time.monotonic())
                 if math.hypot(rvx, rvy) < physics_mod.DEAD_ZONE_SPEED:
@@ -1043,7 +1043,7 @@ class PetWindow(QWidget):
         self._active_context_menu = menu
         _populate_context_menu(menu, self)
         menu.aboutToHide.connect(
-            lambda: QTimer.singleShot(0, self._restore_on_top_after_context_menu)
+            lambda self=self: QTimer.singleShot(0, self, self._restore_on_top_after_context_menu)
         )
         menu.exec(global_pos)
         callbacks = take_deferred_menu_callbacks(menu)
@@ -1063,7 +1063,7 @@ class PetWindow(QWidget):
         )
         self._context_menu_anchor = QPoint(global_pos)
         menu.close()
-        QTimer.singleShot(10, lambda: self._show_context_menu(global_pos))
+        QTimer.singleShot(10, self, lambda: self._show_context_menu(global_pos))
 
     @staticmethod
     def _read_self_talk_texts(value) -> list[str]:

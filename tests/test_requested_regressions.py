@@ -182,19 +182,21 @@ def test_menu_font_select_lists_system_fonts(tmp_path, monkeypatch):
     config = Config(tmp_path)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     select = dialog.menu_font_select
-    # 字体枚举延迟到事件循环空闲时填充（避免阻塞窗口打开），等待其完成
-    for _ in range(50):
-        app.processEvents()
-        if select.count() > 1:
-            break
+    # 字体枚举延迟到事件循环空闲时填充（避免阻塞窗口打开）。
+    # 测试直接同步触发填充，不等待 QTimer：QTest.qWait 的嵌套事件循环
+    # 会触发 GC 析构残留测试对象，在 macOS/Windows CI 上均可致进程
+    # abort（setParent_helper / QPA 平台层），同步调用则完全绕开。
+    dialog._populate_menu_fonts()
     available = {select.itemData(i) for i in range(select.count())}
     system_families = set(QFontDatabase.families())
     assert "system" in available
     custom = available - {"system"}
     # 所有可选字体必须来自系统字体表
     assert custom <= system_families
-    # 必须真正列出系统字体（而非只剩硬编码几项）
-    assert len(custom) >= 4
+    # 必须真正列出系统字体（而非只剩硬编码几项）；无系统字体的平台
+    # （如 Windows offscreen CI）跳过数量断言
+    if system_families:
+        assert len(custom) >= 4
     dialog.close()
     app.processEvents()
 
@@ -374,18 +376,19 @@ def test_chat_window_edge_hover_shows_resize_cursor(tmp_path):
 def test_ojingjing_entry_hover_survives_widget_children(monkeypatch):
     """彩蛋项 hover 不应依赖 enter 事件：菜单弹出时鼠标已在项上（无 enter）
     应合成高亮；鼠标移入子 widget 触发的 leave 不应丢高亮。"""
-    from PySide6.QtCore import QEvent, QPointF, Qt
-    from PySide6.QtGui import QCursor, QMouseEvent
+    from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
     from PySide6.QtWidgets import QApplication, QMenu
 
+    import pet.context_menus.fun_entry as fun_entry
     from pet.context_menus.fun_entry import OjingjingMenuEntry
 
     app = QApplication.instance() or QApplication([])
+    # offscreen QPA 的 QCursor.setPos 不生效（光标位置由平台管理），
+    # 固定模拟光标悬在菜单项内部，验证不依赖 enter 事件的合成高亮。
+    monkeypatch.setattr(fun_entry.QCursor, "pos", staticmethod(lambda: QPoint(20, 20)))
     menu = QMenu()
     entry = OjingjingMenuEntry(menu, {"title": "厉害了我的鲸", "hint": "请点击"})
-    previous_pos = QCursor.pos()
-    QCursor.setPos(20, 20)
-    menu.move(0, 0)
     menu.show()
     app.processEvents()
     try:
@@ -403,7 +406,6 @@ def test_ojingjing_entry_hover_survives_widget_children(monkeypatch):
         ))
         assert entry._hovered, "鼠标移动应恢复高亮"
     finally:
-        QCursor.setPos(previous_pos)
         entry.close()
         menu.close()
         app.processEvents()
