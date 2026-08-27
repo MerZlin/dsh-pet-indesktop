@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
