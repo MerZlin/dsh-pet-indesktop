@@ -140,6 +140,21 @@ def _find_launch_command(port: int = DEFAULT_PORT) -> list[str] | None:
     return None
 
 
+# 模块加载时捕获真实 Popen 类型（测试会整体替换 subprocess.Popen，
+# 登记判断须用真实类型；fake 返回的对象不入登记表）。
+_POPEN_TYPE = subprocess.Popen
+
+# 已启动的子进程句柄登记：poll() 回收已退出进程（POSIX 防僵尸，
+# Windows 防句柄泄漏），不持有引用则子进程退出后无人 waitpid。
+_LAUNCHED_CHILDREN: list[subprocess.Popen] = []
+
+
+def _reap_children() -> None:
+    for proc in list(_LAUNCHED_CHILDREN):
+        if proc.poll() is not None:
+            _LAUNCHED_CHILDREN.remove(proc)
+
+
 def _spawn(command: list[str]) -> None:
     """后台拉起进程：Windows 隐藏窗口并脱离；POSIX 新会话脱离终端。
 
@@ -159,7 +174,10 @@ def _spawn(command: list[str]) -> None:
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
     else:
         kwargs["start_new_session"] = True
-    subprocess.Popen(command, **kwargs)
+    _reap_children()
+    proc = subprocess.Popen(command, **kwargs)
+    if isinstance(proc, _POPEN_TYPE):
+        _LAUNCHED_CHILDREN.append(proc)
 
 
 def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
@@ -196,19 +214,24 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
 
 
 def launch_harness_gui(parent=None) -> None:
-    """GUI 菜单入口：静默启动/打开浏览器，仅在失败时弹窗提示。
+    """GUI 菜单入口：探测/启动放到后台线程，失败时在 GUI 线程弹窗提示。
 
-    弹窗延迟到菜单关闭后再显示：macOS 原生菜单跟踪会话中弹模态框
-    会被 AppKit 抑制（与设置对话框首次点击无反应同源）。
+    命令解析可能同步执行 `npm root -g`（最长 15 秒），放在 GUI 线程会
+    卡住界面；弹窗延迟到菜单关闭后再显示（macOS 原生菜单跟踪会话中
+    弹模态框会被 AppKit 抑制，与设置对话框首次点击无反应同源）。
     """
-    status, info = launch_harness()
-    if status in ("already", "started"):
-        return
-
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QObject, QTimer
     from PySide6.QtWidgets import QMessageBox
 
+    result: dict = {}
+    # 创建于 GUI 线程，作为 singleShot 的 context：保证回调回到 GUI 线程
+    bridge = QObject()
+
     def _show() -> None:
+        status = result.get("status")
+        info = result.get("info", "")
+        if status in ("already", "started"):
+            return
         if status == "not-found":
             QMessageBox.warning(
                 parent,
@@ -220,4 +243,12 @@ def launch_harness_gui(parent=None) -> None:
         elif status == "error":
             QMessageBox.critical(parent, "启动 DeepSeek Harness", f"启动失败：{info}")
 
-    QTimer.singleShot(0, _show)
+    def worker() -> None:
+        try:
+            status, info = launch_harness()
+        except Exception as exc:  # 线程内任何异常都要反馈，不能静默
+            status, info = "error", str(exc)
+        result["status"], result["info"] = status, info
+        QTimer.singleShot(0, bridge, _show)
+
+    threading.Thread(target=worker, daemon=True, name="pet-harness-launch").start()

@@ -503,6 +503,7 @@ class ChatComposer(QFrame):
         self.setObjectName("chat-composer")
         self.setAcceptDrops(True)
         self._busy = False
+        self._ime_composing = False  # 输入法组合中（防止回车误发送）
         self.attachment_paths: list[Path] = []
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 7, 9, 7)
@@ -612,8 +613,13 @@ class ChatComposer(QFrame):
         payloads = []
         for path in self.attachment_paths:
             mime = mimetypes.guess_type(path.name)[0] or ""
-            if not mime.startswith("image/") or path.stat().st_size > 10 * 1024 * 1024:
+            if not mime.startswith("image/"):
                 continue
+            try:
+                if path.stat().st_size > 10 * 1024 * 1024:
+                    continue
+            except OSError:
+                continue  # 附件已删除
             try:
                 encoded = base64.b64encode(path.read_bytes()).decode("ascii")
             except OSError:
@@ -633,8 +639,15 @@ class ChatComposer(QFrame):
         event.acceptProposedAction()
 
     def eventFilter(self, obj, event):
-        if obj is getattr(self, "input", None) and event.type() == QEvent.Type.KeyPress:
+        # 输入法组合状态跟踪：组合中回车用于上屏候选，不应触发发送
+        if event.type() == QEvent.Type.InputMethod:
+            self._ime_composing = bool(event.preeditString())
+            if event.commitString():
+                self._ime_composing = False
+        elif obj is getattr(self, "input", None) and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                if getattr(self, "_ime_composing", False):
+                    return False  # 交给输入法上屏候选
                 self.send_requested.emit()
                 return True
         return super().eventFilter(obj, event)
@@ -1062,6 +1075,8 @@ class ChatWindow(QDialog):
         self.message_stack.addWidget(self.empty_page)
         self.message_stack.addWidget(self.timeline_host)
         self.scroll.setWidget(self.message_view)
+        # 用户上翻阅读历史时暂停自动滚底；回到底部或开始新回复时恢复跟随
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
         self.scroll.setAutoFillBackground(True)
         self.scroll.viewport().installEventFilter(self)
         self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1832,6 +1847,10 @@ class ChatWindow(QDialog):
     def _is_near_bottom(self, threshold: int = 24) -> bool:
         bar = self.scroll.verticalScrollBar()
         return bar.value() >= bar.maximum() - threshold
+
+    def _on_scroll_value_changed(self, _value: int) -> None:
+        """用户滚动位置决定是否继续跟随输出；上翻阅读时暂停自动滚底。"""
+        self._stream_follow_output = self._is_near_bottom()
 
     def _bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()

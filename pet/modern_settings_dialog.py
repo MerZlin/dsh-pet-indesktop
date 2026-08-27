@@ -52,7 +52,7 @@ from .config import (
 )
 from .context_menus.icons import vector_widget_icon
 from .context_menus.quick_launch import fitted_application_icon
-from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
+from .fun_image_popup import oijingjing_image_path, resolve_fun_asset, store_fun_asset
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
 
@@ -851,7 +851,8 @@ class _AiSettingsPage(QWidget):
             provider.chat_path,
             self.model.text().strip(),
             provider.api_key_ref,
-            self.key.text() or provider.api_key,
+            # 表单未填时回退钥匙串：凭据默认存系统钥匙串，直接读 api_key 为空
+            self.key.text() or provider.api_key or self._secret_store_type().get(provider.api_key_ref),
             float(self.timeout.value()),
             float(self.temperature.value()),
             int(self.tokens.value()),
@@ -1622,12 +1623,14 @@ class ModernSettingsDialog(QDialog):
             "enabled": self.egg_enabled_check.isChecked(),
             "title": self.egg_title_edit.text(),
             "hint": self.egg_hint_edit.text(),
-            "avatar": self.egg_avatar_picker.text(),
-            "image_dir": self.egg_image_dir_picker.text(),
+            # 内置 assets 内的路径归一化回相对值，保持 portable（目录移动/自更新后仍可用）
+            "avatar": store_fun_asset(self.egg_avatar_picker.text(), oijingjing_image_path()),
+            "image_dir": store_fun_asset(self.egg_image_dir_picker.text(), oijingjing_image_path().parent),
         })
         self.config.set("quick_launch_apps", self.quick_launch_editor.apps())
         if self.ai_page is not None:
             self.ai_page.save()
+        self.config.set("autostart_wanted", self.autostart_check.isChecked())
         self.config.save()
         if self.autostart_check.isChecked() != self._autostart_initial:
             autostart_mod.set_enabled(self.autostart_check.isChecked())

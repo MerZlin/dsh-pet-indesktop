@@ -174,7 +174,20 @@ class OjingjingMenuEntry(QWidget):
 
     def _activate(self) -> None:
         config = dict(self._config)
-        QTimer.singleShot(0, lambda: open_ojingjing_window(config))
+        menu = self._menu
+        # QWidgetAction 的自绘 widget 点击不会关闭原生菜单；macOS 上
+        # NSMenu 跟踪循环未结束时 show/raise 会被 AppKit 抑制（首点无效）。
+        # 复用菜单关闭后回调机制：菜单仍可见时把开窗动作排到 exec() 返回后。
+        if menu.isVisible():
+            root = menu
+            while isinstance(root.parent(), QMenu):
+                root = root.parent()
+            root._deferred_callbacks = list(
+                getattr(root, "_deferred_callbacks", ())
+            ) + [lambda config=config: open_ojingjing_window(config)]
+            menu.close()
+            return
+        QTimer.singleShot(0, lambda config=config: open_ojingjing_window(config))
 
 
 def add_ojingjing_entry(menu: QMenu, config: dict | None = None) -> QWidgetAction:

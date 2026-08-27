@@ -8,6 +8,21 @@ import sys
 from pathlib import Path
 
 
+# 模块加载时捕获真实 Popen 类型（测试会整体替换 subprocess.Popen，
+# 登记判断须用真实类型；fake 返回的对象不入登记表）。
+_POPEN_TYPE = subprocess.Popen
+
+# 已孵化的子进程句柄登记：每次孵化前 poll() 回收已退出的进程，
+# 避免 POSIX 上子进程退出后无人 waitpid 累积僵尸（Windows 上防句柄泄漏）。
+_SPAWNED_CHILDREN: list[subprocess.Popen] = []
+
+
+def _reap_children() -> None:
+    for proc in list(_SPAWNED_CHILDREN):
+        if proc.poll() is not None:
+            _SPAWNED_CHILDREN.remove(proc)
+
+
 def new_pet_command() -> list[str]:
     """返回与当前运行形态一致的桌宠启动命令。"""
     if getattr(sys, "frozen", False):
@@ -39,4 +54,8 @@ def launch_new_pet(offset_index: int = 1):
         )
     else:
         kwargs["start_new_session"] = True
-    return subprocess.Popen(command, **kwargs)
+    _reap_children()
+    proc = subprocess.Popen(command, **kwargs)
+    if isinstance(proc, _POPEN_TYPE):
+        _SPAWNED_CHILDREN.append(proc)
+    return proc

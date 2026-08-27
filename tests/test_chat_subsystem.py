@@ -1135,6 +1135,96 @@ def test_session_switch_during_typewriter_drain_does_not_cross_write(tmp_path: P
     app.processEvents()
 
 
+def test_image_payloads_skips_deleted_attachments(tmp_path: Path):
+    """附件文件已删除时发送图片不得抛 FileNotFoundError。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatComposer
+
+    app = QApplication.instance() or QApplication([])
+    composer = ChatComposer()
+    image = tmp_path / "a.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    composer.add_attachments([str(image)])
+    assert len(composer.attachment_paths) == 1
+    image.unlink()
+    assert composer.image_payloads() == []
+    composer.deleteLater()
+    app.processEvents()
+
+
+def test_enter_while_ime_composing_does_not_send():
+    """输入法组合中回车用于上屏候选，不得触发发送（现代+经典两套）。"""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QInputMethodEvent, QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.legacy_widgets import ChatComposer as LegacyComposer
+    from pet.chat.widgets import ChatComposer as ModernComposer
+
+    app = QApplication.instance() or QApplication([])
+    for composer_type in (ModernComposer, LegacyComposer):
+        composer = composer_type()
+        sent = []
+        composer.send_requested.connect(lambda: sent.append(1))
+        enter = QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+        )
+
+        # 未组合：回车直接发送
+        assert composer.eventFilter(composer.input, enter) is True
+        assert sent == [1]
+
+        # 组合中：回车不发送，交给输入法
+        im = QInputMethodEvent("拼音候选", [])
+        composer.eventFilter(composer.input, im)
+        assert composer._ime_composing is True
+        assert composer.eventFilter(composer.input, enter) is False
+        assert sent == [1]
+
+        # 提交后：恢复发送
+        commit = QInputMethodEvent()
+        commit.setCommitString("候选")
+        composer.eventFilter(composer.input, commit)
+        assert composer._ime_composing is False
+        assert composer.eventFilter(composer.input, enter) is True
+        assert sent == [1, 1]
+        composer.deleteLater()
+    app.processEvents()
+
+
+def test_modern_chat_pauses_follow_when_user_scrolls_up(tmp_path: Path):
+    """上翻阅读历史时暂停自动滚底；回到顶部/底部时按位置更新跟随状态。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(700, 500)
+    for index in range(40):
+        window._add("assistant", f"第 {index} 条消息。" * 40)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+    bar = window.scroll.verticalScrollBar()
+    if bar.maximum() <= 0:
+        window.close()
+        app.processEvents()
+        pytest.skip("offscreen 下内容高度不足以产生滚动条")
+    # 用户滚动到底部 → 跟随
+    bar.setValue(bar.maximum())
+    app.processEvents()
+    assert window._stream_follow_output is True
+    # 用户上翻 → 暂停跟随
+    bar.setValue(0)
+    app.processEvents()
+    assert window._stream_follow_output is False
+    window.close()
+    app.processEvents()
+
+
 def test_quit_closes_active_context_menu_before_leaving_event_loop(monkeypatch):
     import time
     from PySide6.QtWidgets import QApplication

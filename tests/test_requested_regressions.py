@@ -412,7 +412,12 @@ def test_ojingjing_entry_hover_survives_widget_children(monkeypatch):
 
 
 def test_macos_hide_pet_enables_dock_icon(tmp_path, monkeypatch):
-    """macOS 隐藏桌宠时应同步打开 Dock 图标，避免桌宠无法找回。"""
+    """macOS 隐藏桌宠时应临时打开 Dock 图标（运行期策略，不写回配置）。
+
+    回归背景：旧实现把 show_dock_icon 直接改成 True（内存态污染，且会经
+    其他路径的 cfg.save() 落盘覆盖用户偏好）；现在改为 _dock_icon_forced
+    运行期标志，恢复显示时按偏好还原。
+    """
     import sys
 
     from unittest import mock
@@ -432,19 +437,26 @@ def test_macos_hide_pet_enables_dock_icon(tmp_path, monkeypatch):
         cfg = config
 
     fake = FakePet()
-    # hide() 的同步逻辑：Dock 图标关闭时打开并写回配置
     PetWindow._ensure_dock_icon_on_hide(fake)
-    assert config.get("show_dock_icon") is True, "隐藏时若 Dock 图标关闭应自动打开"
+    assert config.get("show_dock_icon") is False, "隐藏不得覆盖用户偏好配置"
+    assert getattr(fake, "_dock_icon_forced", False) is True
     pet.app._mac_set_dock_icon_visible.assert_called_once_with(True)
 
-    # hide() 组合：先同步再真正隐藏（QWidget.hide 被 mock 拦截）
+    # 恢复显示：按偏好还原 Dock 策略（pref=False → Accessory）
+    pet.app._mac_set_dock_icon_visible.reset_mock()
+    PetWindow._restore_dock_icon_preference(fake)
+    assert getattr(fake, "_dock_icon_forced", True) is False
+    pet.app._mac_set_dock_icon_visible.assert_called_once_with(False)
+
+    # hide() 组合：先临时打开再真正隐藏（QWidget.hide 被 mock 拦截）
     with mock.patch.object(QWidget, "hide") as mock_hide:
         win = PetWindow.__new__(PetWindow)
         win.cfg = Config(tmp_path)
         win.cfg.set("show_dock_icon", False)
         PetWindow.hide(win)
         mock_hide.assert_called_once()
-        assert win.cfg.get("show_dock_icon") is True
+        assert win.cfg.get("show_dock_icon") is False
+        assert getattr(win, "_dock_icon_forced", False) is True
 
 
 def test_hide_pet_notifies_and_dock_click_restores(tmp_path, monkeypatch):
@@ -581,3 +593,165 @@ def test_build_workflows_bundle_menu_templates_and_chat_styles():
     import pet.context_menu as context_menu_mod
     assert context_menu_mod.load_menu_template("modern")["id"] == "modern"
     assert context_menu_mod.load_menu_template("legacy")["id"] == "legacy"
+
+
+def test_store_fun_asset_keeps_bundled_paths_relative(tmp_path):
+    """内置 assets 内的路径必须持久化为相对值（portable），外部文件保留绝对路径。
+
+    回归背景：设置对话框把默认相对路径固化成安装目录绝对路径，目录移动/
+    自更新后彩蛋弹窗失效。
+    """
+    from pet.fun_image_popup import bundled_assets_root, store_fun_asset
+
+    default = bundled_assets_root() / "big_blue_fat_fish" / "ojingjing.jpg"
+    # 绝对路径指向内置 assets → 归一化为相对值
+    stored = store_fun_asset(str(default), default)
+    assert stored == "assets/big_blue_fat_fish/ojingjing.jpg"
+    # 相对值原样保留
+    assert store_fun_asset("assets/big_blue_fat_fish", default) == "assets/big_blue_fat_fish"
+    # 空值回退默认
+    assert store_fun_asset("", default) == str(default)
+    # 外部文件 → 绝对路径保留
+    external = tmp_path / "custom" / "egg.jpg"
+    external.parent.mkdir(parents=True)
+    external.write_bytes(b"x")
+    assert store_fun_asset(str(external), default) == str(external)
+
+
+def test_popup_image_paths_survives_missing_directory(tmp_path):
+    """彩蛋图片目录不存在时必须返回空列表而不是抛 FileNotFoundError。"""
+    from pet.fun_image_popup import popup_image_paths
+
+    assert popup_image_paths(tmp_path / "does-not-exist") == []
+
+
+def test_config_normalizes_polluted_absolute_easter_egg_paths(tmp_path):
+    """旧配置里已固化的内置资产绝对路径在加载时归一化回相对值。"""
+    from pet.fun_image_popup import bundled_assets_root
+    from pet.config import Config
+
+    bundled = bundled_assets_root()
+    (tmp_path / "config.json").write_text(
+        '{"version": 4, "menu_easter_egg": {"enabled": true, "avatar": "'
+        + str(bundled / "big_blue_fat_fish" / "ojingjing.jpg").replace("\\", "/")
+        + '", "image_dir": "'
+        + str(bundled / "big_blue_fat_fish").replace("\\", "/")
+        + '"}}',
+        encoding="utf-8",
+    )
+    cfg = Config(tmp_path)
+    egg = cfg.get("menu_easter_egg")
+    assert egg["avatar"] == "assets/big_blue_fat_fish/ojingjing.jpg"
+    assert egg["image_dir"] == "assets/big_blue_fat_fish"
+
+
+def test_easter_egg_activate_defers_until_menu_closes():
+    """彩蛋点击在菜单可见时排入 deferred callbacks，菜单关闭后才开窗。
+
+    回归背景：macOS 原生 NSMenu 跟踪循环中直接开窗被 AppKit 抑制（首点无效）。
+    """
+    import time
+
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    import pet.context_menus.fun_entry as fun_entry_mod
+    from pet.context_menus.fun_entry import OjingjingMenuEntry
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    entry = OjingjingMenuEntry(menu, {"title": "厉害了我的鲸"})
+    opened = []
+    monkeypatch = __import__("pytest").MonkeyPatch()
+    monkeypatch.setattr(fun_entry_mod, "open_ojingjing_window", lambda config: opened.append(config))
+    try:
+        # 菜单不可见：走 singleShot 延迟
+        entry._activate()
+        deadline = time.time() + 1
+        while not opened and time.time() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+        assert opened, "不可见菜单点击应立即排队开窗"
+        opened.clear()
+
+        # 菜单可见：排入 deferred callbacks 并关闭菜单
+        menu.show()
+        app.processEvents()
+        entry._activate()
+        callbacks = list(getattr(menu, "_deferred_callbacks", ()))
+        assert callbacks, "可见菜单点击必须排入 deferred callbacks"
+        assert not menu.isVisible(), "点击后菜单应被关闭"
+        callbacks[0]()
+        assert opened, "回调应打开彩蛋窗口"
+    finally:
+        monkeypatch.undo()
+        menu.close()
+        app.processEvents()
+
+
+def test_modern_settings_save_writes_autostart_wanted(tmp_path, monkeypatch):
+    """新版设置保存必须记录 autostart_wanted（启动自检提醒依赖它）。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    assert config.get("autostart_wanted") is False
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
+    dialog.autostart_check.setChecked(True)
+    dialog._save()
+    assert config.get("autostart_wanted") is True
+    dialog.close()
+    app.processEvents()
+
+
+def test_modern_provisional_config_falls_back_to_keyring(tmp_path, monkeypatch):
+    """测试连接未填 Key 时必须回退系统钥匙串，否则默认场景误报 401。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+
+    class FakeStore:
+        def get(self, _ref):
+            return "keyring-secret"
+
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    monkeypatch.setattr(dialog.ai_page, "_secret_store_type", FakeStore)
+    provisional = dialog.ai_page.provisional_config()
+    assert provisional.api_key == "keyring-secret"
+    dialog.close()
+    app.processEvents()
+
+
+def test_spawned_children_are_reaped_after_exit():
+    """孵化的子进程退出后必须从登记表回收（防 POSIX 僵尸 / 句柄泄漏）。"""
+    import sys
+
+    import pet.instance_launcher as launcher
+
+    before = list(launcher._SPAWNED_CHILDREN)
+    try:
+        proc = launcher.launch_new_pet(offset_index=99)
+        assert proc in launcher._SPAWNED_CHILDREN
+        # 触发回收：活着的子进程必须保留
+        launcher._reap_children()
+        assert proc in launcher._SPAWNED_CHILDREN
+        # 退出后必须被回收
+        proc.terminate()
+        import time
+        deadline = time.time() + 10
+        while proc.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        launcher._reap_children()
+        assert proc not in launcher._SPAWNED_CHILDREN
+    finally:
+        for proc in list(launcher._SPAWNED_CHILDREN):
+            if proc not in before and proc.poll() is None:
+                proc.terminate()
+        launcher._SPAWNED_CHILDREN[:] = before
