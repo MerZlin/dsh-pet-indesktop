@@ -109,6 +109,9 @@ def test_breath_bubble_size_tracks_the_visible_pet_without_dominating_it():
     app.processEvents()
     assert bubble.size() == QSize(168, 137)
     assert bubble.width() <= small_pet.width()
+    # offscreen QPA shifts windows on show(); assert the placement logic
+    # directly so the visual gap contract (7px design) is platform-stable.
+    bubble._place(small_pet)
     visible_bubble_bottom = bubble.y() + bubble._surface_path.boundingRect().bottom()
     visual_gap = small_pet.top() - visible_bubble_bottom
     assert 5 <= visual_gap <= 9
@@ -622,9 +625,10 @@ def test_context_menu_runtime_only_dispatches_modern_layout():
     assert "build_modern_menu" not in legacy_source
     assert "build_modern_menu" in modern_source
     assert "build_legacy_menu" not in modern_source
-    assert "build_legacy_menu" not in dispatcher_source
+    # 分发器按 context_menu_template 配置选择两套模板（不再硬编码 modern）
+    assert "build_legacy_menu" in dispatcher_source
     assert "build_modern_menu" in dispatcher_source
-    assert "build_modern_menu" in dispatcher_source
+    assert "context_menu_template" in dispatcher_source
 
 
 def test_pet_avatar_menu_icon_fills_native_slot_and_stays_centered(monkeypatch):
@@ -654,9 +658,11 @@ def test_pet_avatar_menu_icon_fills_native_slot_and_stays_centered(monkeypatch):
     native_size = menu.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize, None, menu)
     icon = pet_avatar_menu_icon(menu, FakePet())
     pixmap = icon.pixmap(native_size, native_size)
-    assert pixmap.width() == native_size
-    assert pixmap.height() == native_size
-    assert icon.availableSizes()[0].width() == native_size
+    # Retina menu (dpr=2) yields physical 32px backing for the same 16 logical slot.
+    dpr = pixmap.devicePixelRatio() or 1.0
+    assert pixmap.width() / dpr == native_size
+    assert pixmap.height() / dpr == native_size
+    assert icon.availableSizes()[0].width() / dpr == native_size
     # Inspect actual non-transparent pixels, not merely the QImage canvas.
     points = [
         (x, y)
@@ -666,8 +672,8 @@ def test_pet_avatar_menu_icon_fills_native_slot_and_stays_centered(monkeypatch):
     ]
     left, right = min(x for x, _ in points), max(x for x, _ in points)
     top, bottom = min(y for _, y in points), max(y for _, y in points)
-    assert bottom - top + 1 >= native_size * 0.8
-    assert abs(((left + right) / 2.0) - ((native_size - 1) / 2.0)) <= 1.0
+    assert (bottom - top + 1) / dpr >= native_size * 0.8
+    assert abs(((left + right) / 2.0) / dpr - ((native_size - 1) / 2.0)) <= 1.0
     menu.close()
     app.processEvents()
 
@@ -785,7 +791,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     app.processEvents()
 
 
-def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
+def test_context_menu_dispatches_style_by_template(monkeypatch):
     from PySide6.QtWidgets import QApplication, QMenu, QStyle, QWidget
 
     from pet.context_menu import populate_context_menu
@@ -795,7 +801,12 @@ def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
             self.template = template
 
         def get(self, key, default=None):
-            return {"context_menu_template": self.template, "character": "shenshen"}.get(key, default)
+            return {
+                "context_menu_template": self.template,
+                "character": "shenshen",
+                # 固定浅色主题，避免断言随系统深色模式翻转
+                "context_menu_appearance": {"theme": "light"},
+            }.get(key, default)
 
     class Pet:
         on_open_chat = on_open_chat_settings = None
@@ -816,9 +827,9 @@ def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
     modern_menu = QMenu()
     populate_context_menu(legacy_menu, Pet("legacy"))
     populate_context_menu(modern_menu, Pet("modern"))
-    menus = [legacy_menu, modern_menu]
-    assert legacy_menu.objectName() == "modernContextMenu"
-    assert legacy_menu.styleSheet() == modern_menu.styleSheet()
+    # legacy 模板走 legacy 样式（无 modern 外观），modern 模板走 modern 样式
+    assert legacy_menu.objectName() != "modernContextMenu"
+    assert legacy_menu.styleSheet() == ""
     assert modern_menu.objectName() == "modernContextMenu"
     # The modern menu follows the compact macOS project-menu reference: a
     # white hairline surface, small system text, outline icons and subtle rules
@@ -842,7 +853,7 @@ def test_context_menu_always_uses_modern_style_with_shared_tokens(monkeypatch):
     assert Path("pet/context_menus/menu_styles/common.py").is_file()
     assert Path("pet/context_menus/menu_styles/legacy.py").is_file()
     assert Path("pet/context_menus/menu_styles/modern.py").is_file()
-    for menu in menus:
+    for menu in (legacy_menu, modern_menu):
         assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuPopupDelay, None, menu) == 60
         assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuSloppyCloseTimeout, None, menu) == 120
         assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuSloppySelectOtherActions, None, menu) == 1
@@ -1002,6 +1013,75 @@ def test_ojingjing_uses_popup_directory_random_images_and_drag_helpers(monkeypat
     assert first.pos() == QPoint(55, 75)
     first.end_drag()
     manager.close_all()
+    app.processEvents()
+
+
+def test_ojingjing_invalid_empty_or_unreadable_directory_falls_back(tmp_path):
+    import pet.fun_image_popup as popup_mod
+
+    fallback = popup_mod.oijingjing_image_path().parent
+    missing = tmp_path / "missing"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    unreadable = tmp_path / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "broken.jpg").write_bytes(b"not-an-image")
+
+    for configured in (missing, empty, unreadable):
+        paths = popup_mod.popup_image_paths(configured)
+        assert paths
+        assert all(path.parent == fallback for path in paths)
+
+    assert popup_mod.resolve_fun_asset(missing, fallback) == fallback
+
+
+def test_ojingjing_menu_entry_defers_window_until_menu_exec_returns(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    import pet.context_menus.fun_entry as fun_entry
+    from pet.context_menus.shared import take_deferred_menu_callbacks
+
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    monkeypatch.setattr(fun_entry, "open_ojingjing_window", lambda config: calls.append(config))
+    menu = QMenu()
+    entry = fun_entry.OjingjingMenuEntry(menu, {"title": "彩蛋"})
+    menu.show()
+    app.processEvents()
+
+    entry._activate()
+    assert calls == []
+    callbacks = take_deferred_menu_callbacks(menu)
+    assert len(callbacks) == 1
+    callbacks[0]()
+    assert calls == [{"title": "彩蛋"}]
+    entry.close()
+    menu.close()
+    app.processEvents()
+
+
+def test_ojingjing_menu_entry_reports_unexpected_open_error(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    import pet.context_menus.fun_entry as fun_entry
+
+    app = QApplication.instance() or QApplication([])
+    warnings = []
+
+    def fail(_config):
+        raise RuntimeError("图片解码失败")
+
+    monkeypatch.setattr(fun_entry, "open_ojingjing_window", fail)
+    monkeypatch.setattr(
+        fun_entry.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    menu = QMenu()
+    entry = fun_entry.OjingjingMenuEntry(menu)
+    entry._activate()
+    assert warnings == [("彩蛋图片不可用", "图片解码失败")]
+    entry.close()
     app.processEvents()
 
 
@@ -1387,7 +1467,7 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     app.processEvents()
 
 
-def test_legacy_config_value_migrates_to_modern_layout(monkeypatch):
+def test_legacy_config_value_dispatches_legacy_layout(monkeypatch):
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -1421,17 +1501,21 @@ def test_legacy_config_value_migrates_to_modern_layout(monkeypatch):
     menu = QMenu()
     window_mod._populate_context_menu(menu, Pet())
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    # legacy 布局：无图标、无现代专属入口（看看屏幕/更新与帮助/生小肥鱼层级不同）
     assert labels.index("生小肥鱼") == labels.index("开机自启") + 1
     assert labels.index("打开网页版 DeepSeek") == labels.index("启动 DeepSeek Harness") + 1
-    assert "QMenu" in menu.styleSheet()
+    assert menu.styleSheet() == ""
     icon_actions = [action.text() for action in menu.actions() if not action.icon().isNull()]
-    assert "看看屏幕" in icon_actions
-    assert "更新与帮助" in icon_actions
+    assert icon_actions == []
+    assert "看看屏幕" not in labels
+    assert "更新与帮助" not in labels
+    assert "切换角色" in labels
+    assert "窗口置顶" in labels
     menu.close()
     app.processEvents()
 
 
-def test_legacy_config_value_uses_modern_settings_callback(monkeypatch):
+def test_legacy_config_value_uses_legacy_settings_callback(monkeypatch):
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -1464,8 +1548,9 @@ def test_legacy_config_value_uses_modern_settings_callback(monkeypatch):
     pet = Pet()
     menu = QMenu()
     populate_context_menu(menu, pet)
+    # legacy 模板的「桌宠设置」走旧版设置回调（不再是现代设置）
     next(action for action in menu.actions() if action.text() == "桌宠设置").trigger()
-    assert pet.opened == ["modern"]
+    assert pet.opened == ["legacy"]
     menu.close()
     app.processEvents()
 
@@ -1860,7 +1945,7 @@ def test_template_reopen_reuses_original_visible_menu_position(monkeypatch):
             self.shown_at = QPoint(point)
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda _delay, callback: callback())
+    monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda *args: args[-1]())
     menu = QMenu()
     menu.move(410, 260)
     fake = FakePet()
@@ -1897,18 +1982,10 @@ def test_menu_easter_egg_and_modern_theme_fields_are_configurable(tmp_path):
     assert config.get("context_menu_appearance")["dark_background"] == "#111213"
 
 
-def test_legacy_popup_defaults_migrate_without_overwriting_custom_paths(tmp_path):
+def test_easter_egg_config_preserves_custom_paths(tmp_path):
     from pet.config import Config
 
     config = Config(tmp_path)
-    config.set("menu_easter_egg", {
-        "avatar": "assets/pop_up_window/ojingjing.jpg",
-        "image_dir": "assets\\pop_up_window",
-    })
-    migrated = config.get("menu_easter_egg")
-    assert migrated["avatar"] == "assets/big_blue_fat_fish/ojingjing.jpg"
-    assert migrated["image_dir"] == "assets/big_blue_fat_fish"
-
     config.set("menu_easter_egg", {
         "avatar": "/custom/avatar.png",
         "image_dir": "/custom/images",
@@ -2030,6 +2107,7 @@ def test_dock_icon_visibility_defaults_on_and_is_saved_by_modern_settings(tmp_pa
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.sys, "platform", "darwin")
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     config = Config(tmp_path)
     assert config.get("show_dock_icon") is True

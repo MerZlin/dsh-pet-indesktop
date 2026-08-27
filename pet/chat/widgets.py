@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QGuiApplication, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QImageReader, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -154,6 +154,7 @@ class SessionListRow(QFrame):
     def _show_menu(self) -> None:
         menu = QMenu(self)
         menu.setObjectName("session-action-menu")
+        # 浅色小菜单（深色聊天主题下仍为浅色，属已知小瑕疵；无 QSS 覆盖）
         menu.setStyleSheet(
             "QMenu{background:#fff;border:1px solid #e1e5eb;border-radius:10px;padding:5px;}"
             "QMenu::item{min-height:25px;padding:3px 24px 3px 9px;border-radius:7px;}"
@@ -288,7 +289,6 @@ class ChatTitleBar(QFrame):
 
 class MessageBubble(QFrame):
     retry_requested = Signal()
-    edit_requested = Signal(str)
 
     def __init__(self, role: str, content: str = "", character_id: str = "", parent=None):
         super().__init__(parent)
@@ -448,10 +448,15 @@ class AttachmentChip(QFrame):
         self.preview.setObjectName("attachment-preview")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setFixedSize(34, 34)
-        pixmap = QPixmap(str(self.path))
-        if not pixmap.isNull():
+        # 用 QImageReader 限定解码尺寸（34px 预览），避免 10MB 级大图
+        # 整图解码进内存只为显示 34×34 缩略图
+        reader = QImageReader(str(self.path))
+        reader.setAutoTransform(True)
+        reader.setScaledSize(self.preview.size())
+        image = reader.read()
+        if not image.isNull():
             self.preview.setPixmap(
-                pixmap.scaled(
+                QPixmap.fromImage(image).scaled(
                     self.preview.size(),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
@@ -503,6 +508,7 @@ class ChatComposer(QFrame):
         self.setObjectName("chat-composer")
         self.setAcceptDrops(True)
         self._busy = False
+        self._ime_composing = False  # 输入法组合中（防止回车误发送）
         self.attachment_paths: list[Path] = []
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 7, 9, 7)
@@ -612,8 +618,13 @@ class ChatComposer(QFrame):
         payloads = []
         for path in self.attachment_paths:
             mime = mimetypes.guess_type(path.name)[0] or ""
-            if not mime.startswith("image/") or path.stat().st_size > 10 * 1024 * 1024:
+            if not mime.startswith("image/"):
                 continue
+            try:
+                if path.stat().st_size > 10 * 1024 * 1024:
+                    continue
+            except OSError:
+                continue  # 附件已删除
             try:
                 encoded = base64.b64encode(path.read_bytes()).decode("ascii")
             except OSError:
@@ -633,8 +644,15 @@ class ChatComposer(QFrame):
         event.acceptProposedAction()
 
     def eventFilter(self, obj, event):
-        if obj is getattr(self, "input", None) and event.type() == QEvent.Type.KeyPress:
+        # 输入法组合状态跟踪：组合中回车用于上屏候选，不应触发发送
+        if event.type() == QEvent.Type.InputMethod:
+            self._ime_composing = bool(event.preeditString())
+            if event.commitString():
+                self._ime_composing = False
+        elif obj is getattr(self, "input", None) and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                if getattr(self, "_ime_composing", False):
+                    return False  # 交给输入法上屏候选
                 self.send_requested.emit()
                 return True
         return super().eventFilter(obj, event)
@@ -947,13 +965,13 @@ class ChatWindow(QDialog):
         self.delete_session_button.setIcon(vector_widget_icon(self.delete_session_button, "remove", 15))
         self.delete_session_button.setToolTip("删除当前会话")
         self.delete_session_button.setAccessibleName("删除当前会话")
-        self.delete_session_button.hide()
+        footer_actions.addWidget(self.delete_session_button)
         self.clear_button = QToolButton(self)
         self.clear_button.setObjectName("clear-session-button")
         self.clear_button.setIcon(vector_widget_icon(self.clear_button, "clear", 15))
         self.clear_button.setToolTip("清空当前会话")
         self.clear_button.setAccessibleName("清空当前会话")
-        self.clear_button.hide()
+        footer_actions.addWidget(self.clear_button)
         footer_layout.addLayout(footer_actions)
         context_layout.addWidget(sidebar_footer)
         root.addWidget(context)
@@ -1062,6 +1080,8 @@ class ChatWindow(QDialog):
         self.message_stack.addWidget(self.empty_page)
         self.message_stack.addWidget(self.timeline_host)
         self.scroll.setWidget(self.message_view)
+        # 用户上翻阅读历史时暂停自动滚底；回到底部或开始新回复时恢复跟随
+        self.scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
         self.scroll.setAutoFillBackground(True)
         self.scroll.viewport().installEventFilter(self)
         self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1343,13 +1363,12 @@ class ChatWindow(QDialog):
     def _set_empty_state(self, empty: bool) -> None:
         self.message_stack.setCurrentWidget(self.empty_page if empty else self.timeline_host)
         self.empty_state.setVisible(empty)
-        QTimer.singleShot(0, self._update_conversation_height)
+        QTimer.singleShot(0, self, self._update_conversation_height)
 
     def _add(self, role: str, text: str) -> MessageBubble:
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         bubble = MessageBubble(role, text, self.character_id)
-        bubble.edit_requested.connect(self._edit_message)
         if role == "user":
             row.addStretch(1)
             row.addWidget(bubble)
@@ -1360,7 +1379,7 @@ class ChatWindow(QDialog):
         self._bubbles.append(bubble)
         self._set_empty_state(False)
         self._update_bubble_widths()
-        QTimer.singleShot(0, self._update_conversation_height)
+        QTimer.singleShot(0, self, self._update_conversation_height)
         return bubble
 
     def _update_conversation_height(self) -> None:
@@ -1404,10 +1423,6 @@ class ChatWindow(QDialog):
             else:
                 bubble.setMinimumWidth(0)
                 bubble.setMaximumWidth(max(220, int(available * 0.66)))
-
-    def _edit_message(self, text: str) -> None:
-        self.input.setPlainText(str(text))
-        self.input.setFocus()
 
     def _remove_bubble(self, bubble: MessageBubble | None) -> None:
         if bubble is None:
@@ -1766,7 +1781,14 @@ class ChatWindow(QDialog):
         if text.startswith(self._text):
             self._pending_output = text[len(self._text):]
         else:
-            self._pending_output = text
+            # final 与已输出不一致（服务端截断/重写）：回到公共前缀处重打，
+            # 避免整段重复显示
+            common = 0
+            limit = min(len(self._text), len(text))
+            while common < limit and self._text[common] == text[common]:
+                common += 1
+            self._text = self._text[:common]
+            self._pending_output = text[common:]
         if self._pending_output:
             if not self._typewriter_timer.isActive():
                 self._typewriter_timer.start()
@@ -1814,6 +1836,12 @@ class ChatWindow(QDialog):
         self._reset()
 
     def _reset(self) -> None:
+        # 停止打字机并丢弃未排空的输出：模型完成后若仍有 ~1 秒的逐字
+        # 排空窗口，此时切换/新建/删除会话或换角色会把这轮回复继续
+        # append 并保存进"新"会话（原会话丢回复、新会话多幻影消息）。
+        self._typewriter_timer.stop()
+        self._pending_output = ""
+        self._pending_finish_text = None
         self._active_request_id = None
         self.status.setText("就绪")
         self.status_dot.setProperty("state", "ready")
@@ -1828,10 +1856,14 @@ class ChatWindow(QDialog):
         bar = self.scroll.verticalScrollBar()
         return bar.value() >= bar.maximum() - threshold
 
+    def _on_scroll_value_changed(self, _value: int) -> None:
+        """用户滚动位置决定是否继续跟随输出；上翻阅读时暂停自动滚底。"""
+        self._stream_follow_output = self._is_near_bottom()
+
     def _bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
-        QTimer.singleShot(0, self._apply_bottom)
+        QTimer.singleShot(0, self, self._apply_bottom)
 
     def _apply_bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
@@ -1847,7 +1879,7 @@ class ChatWindow(QDialog):
             self.message_horizontal_margin, 24, self.message_horizontal_margin, 24
         )
         self._update_bubble_widths()
-        QTimer.singleShot(0, self._update_conversation_height)
+        QTimer.singleShot(0, self, self._update_conversation_height)
 
     _EDGE_GRIP = 8
 
@@ -1929,7 +1961,7 @@ class ChatWindow(QDialog):
     def eventFilter(self, obj, event):
         scroll = getattr(self, "scroll", None)
         if scroll is not None and obj is scroll.viewport() and event.type() == QEvent.Type.Resize:
-            QTimer.singleShot(0, self._update_bubble_widths)
+            QTimer.singleShot(0, self, self._update_bubble_widths)
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:

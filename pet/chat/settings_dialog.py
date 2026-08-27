@@ -162,7 +162,8 @@ class ChatSettingsDialog(QDialog):
             p.chat_path,
             self.model.text().strip(),
             p.api_key_ref,
-            self.key.text() or p.api_key,
+            # 表单未填时回退钥匙串：凭据默认存系统钥匙串，直接读 api_key 为空
+            self.key.text() or p.api_key or SecretStore().get(p.api_key_ref),
             float(self.timeout.value()),
             float(self.temp.value()),
             int(self.tokens.value()),

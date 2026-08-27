@@ -49,8 +49,6 @@ DEFAULT_MENU_EASTER_EGG = {
     "avatar": "assets/big_blue_fat_fish/ojingjing.jpg",
     "image_dir": "assets/big_blue_fat_fish",
 }
-_LEGACY_MENU_EASTER_EGG_AVATAR = "assets/pop_up_window/ojingjing.jpg"
-_LEGACY_MENU_EASTER_EGG_IMAGE_DIR = "assets/pop_up_window"
 DEFAULT_QUICK_LAUNCH_APPS = [
     {"name": "默认浏览器", "path": "", "kind": "default_browser"},
 ]
@@ -97,15 +95,36 @@ def _clean_menu_appearance(value):
     return result
 
 
+def _normalize_fun_asset_path(candidate: str, default: str) -> str:
+    """绝对路径若指向应用内置 assets 目录，归一化为相对路径。
+
+    旧版设置对话框会把默认相对路径固化成安装目录绝对路径；portable
+    目录一移动/自更新即失效。此处在加载时统一还原为 assets/... 相对值。
+    """
+    candidate = str(candidate or "").strip()
+    if not candidate:
+        return default
+    path = Path(candidate).expanduser()
+    if not path.is_absolute():
+        return candidate
+    assets_root = Path(__file__).resolve().parents[1] / "assets"
+    try:
+        rel = path.resolve().relative_to(assets_root.resolve())
+        # 统一正斜杠：配置值与 legacy 迁移比较、跨平台一致
+        return str(Path("assets") / rel).replace("\\", "/")
+    except ValueError:
+        return candidate
+
+
 def _clean_menu_easter_egg(value):
     value = value if isinstance(value, dict) else {}
     defaults = DEFAULT_MENU_EASTER_EGG
-    avatar = str(value.get("avatar") or defaults["avatar"]).strip()[:500]
-    image_dir = str(value.get("image_dir") or defaults["image_dir"]).strip()[:500]
-    if avatar.replace("\\", "/") == _LEGACY_MENU_EASTER_EGG_AVATAR:
-        avatar = defaults["avatar"]
-    if image_dir.replace("\\", "/") == _LEGACY_MENU_EASTER_EGG_IMAGE_DIR:
-        image_dir = defaults["image_dir"]
+    avatar = _normalize_fun_asset_path(
+        str(value.get("avatar") or defaults["avatar"]).strip()[:500], defaults["avatar"]
+    )
+    image_dir = _normalize_fun_asset_path(
+        str(value.get("image_dir") or defaults["image_dir"]).strip()[:500], defaults["image_dir"]
+    )
     return {
         "enabled": bool(value.get("enabled", defaults["enabled"])),
         "title": str(value.get("title") or defaults["title"]).strip()[:40],
@@ -208,6 +227,10 @@ def _merge_chat_data(raw):
             if isinstance(provider, dict):
                 base = dict(_default_chat_data()["providers"].get("openai-main", {}))
                 base.update(provider)
+                # 非 openai-main provider 未显式写 api_key_ref 时按自身归位，
+                # 避免沿用 openai-main 的钥匙串条目（密钥串用/查错 key）
+                if not str(base.get("api_key_ref") or "").strip():
+                    base["api_key_ref"] = f"provider/{provider_id}"
                 providers[str(provider_id)] = base
     else:
         providers = dict(result["providers"])
@@ -355,7 +378,10 @@ class Config:
             return
         if not isinstance(raw, dict):
             return
-        old_version = int(raw.get("version", 1) or 1)
+        try:
+            old_version = int(raw.get("version", 1) or 1)
+        except (TypeError, ValueError):
+            old_version = 1  # 脏数据（手改/损坏）不得导致启动崩溃
         if old_version < 2:
             raw.pop("scale", None)
         chat = raw.get("chat") if isinstance(raw.get("chat"), dict) else {}

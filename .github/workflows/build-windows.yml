@@ -1,4 +1,4 @@
-name: Build Windows App
+﻿name: Build Windows App
 
 on:
   workflow_dispatch:        # 手动触发（Actions 页面 → Run workflow）
@@ -29,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install PySide6 imageio-ffmpeg pillow pyinstaller pytest keyring certifi
+          pip install -r requirements.txt pyinstaller pytest
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -60,9 +60,13 @@ jobs:
 
       # 参数用数组 splatting 传递：行首 /D... 会被 pwsh 当作除法运算符，
       # 含括号的显示名（如 "(WebM)"）会触发子表达式解析而报 ParserError。
+      # 版本号从 pet/__init__.py 的 __version__ 单一来源读取，避免与
+      # updater 更新检测基准漂移。
       - name: Compile installers (Inno Setup)
         shell: pwsh
         run: |
+          $version = (Select-String -Path 'pet\__init__.py' -Pattern "__version__ = '([^']+)'").Matches[0].Groups[1].Value
+          Write-Host "==> AppVersion from __version__: $version"
           & ISCC.exe packaging\dsh-pet.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC webm-chat failed" }
           $webm = @(
@@ -71,6 +75,7 @@ jobs:
             '/DMyAppDir=..\dist-onedir\dsh-pet-standalone-webm',
             '/DMyAppId={{3424d6cc-af3c-4383-8797-ab520b923aa6}',
             '/DMyAppDisplay=dsh-pet-standalone (WebM)',
+            "/DMyAppVersion=$version",
             'packaging\dsh-pet.iss'
           )
           & ISCC.exe @webm

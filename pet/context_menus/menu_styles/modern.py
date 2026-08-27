@@ -103,7 +103,9 @@ def apply_modern_menu_style(menu: QMenu, appearance: dict | None = None) -> None
         border.show()
         border.raise_()
 
-    menu.aboutToShow.connect(lambda: QTimer.singleShot(0, sync_border))
+    menu.aboutToShow.connect(
+        lambda menu=menu: QTimer.singleShot(0, menu, sync_border)
+    )
     menu._modern_hairline_border = border
 
 
@@ -131,38 +133,6 @@ class ModernHairlineBorder(QWidget):
             radius,
             radius,
         )
-
-
-class ModernEnabledIndicator(QWidget):
-    """Right-aligned status mark independent from the action's function icon."""
-
-    def __init__(self, parent: QMenu) -> None:
-        super().__init__(parent)
-        self.setObjectName("modernEnabledIndicator")
-        self.setProperty("statusAlignment", "right")
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setFixedSize(16, 16)
-        self.hide()
-
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#1677e8"))
-        painter.drawEllipse(QRectF(1.5, 1.5, 13.0, 13.0))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(
-            QPen(
-                QColor("#ffffff"),
-                1.55,
-                Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap,
-                Qt.PenJoinStyle.RoundJoin,
-            )
-        )
-        painter.drawLine(QPointF(4.6, 8.1), QPointF(7.0, 10.4))
-        painter.drawLine(QPointF(7.0, 10.4), QPointF(11.7, 5.5))
 
 
 class ModernCheckLayer(QWidget):
@@ -195,44 +165,6 @@ class ModernCheckLayer(QWidget):
             painter.drawLine(QPointF(center.x() - 1.2, center.y() + 2.4), QPointF(center.x() + 3.8, center.y() - 2.8))
 
 
-def _install_indicators_for_menu(menu: QMenu) -> None:
-    overlays: list[tuple[object, ModernEnabledIndicator]] = []
-    for action in menu.actions():
-        submenu = action.menu()
-        if submenu is not None:
-            _install_indicators_for_menu(submenu)
-        if not action.isCheckable():
-            continue
-        indicator = ModernEnabledIndicator(menu)
-        overlays.append((action, indicator))
-
-        def sync(checked: bool, indicator=indicator) -> None:
-            indicator.setVisible(bool(checked) and menu.isVisible())
-
-        action.toggled.connect(sync)
-        sync(action.isChecked())
-
-    def relayout() -> None:
-        if not menu.isVisible():
-            for _action, indicator in overlays:
-                indicator.hide()
-            return
-        for action, indicator in overlays:
-            rect = menu.actionGeometry(action)
-            indicator.move(max(0, menu.width() - 28), rect.center().y() - 8)
-            indicator.setVisible(action.isChecked())
-            indicator.raise_()
-
-    def hide_all() -> None:
-        for _action, indicator in overlays:
-            indicator.hide()
-
-    menu.aboutToShow.connect(lambda: QTimer.singleShot(0, relayout))
-    menu.aboutToHide.connect(hide_all)
-    menu._modern_check_indicators = overlays  # retain wrappers and aid diagnostics
-    menu._modern_relayout_indicators = relayout
-
-
 def install_modern_check_indicators(menu: QMenu) -> None:
     """Reserve and repaint a stable right-side checked-state slot."""
     menu.setProperty("paintChecksOnRight", True)
@@ -244,7 +176,9 @@ def install_modern_check_indicators(menu: QMenu) -> None:
         layer.raise_()
         layer.update()
 
-    menu.aboutToShow.connect(lambda: QTimer.singleShot(0, sync_layer))
+    menu.aboutToShow.connect(
+        lambda menu=menu: QTimer.singleShot(0, menu, sync_layer)
+    )
     menu.aboutToHide.connect(layer.hide)
     menu._modern_check_layer = layer
     for action in menu.actions():

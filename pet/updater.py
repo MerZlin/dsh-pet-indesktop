@@ -18,8 +18,10 @@ import urllib.request
 from pathlib import Path
 
 from .config import APP_DIR_NAME
+from . import __version__
 
-APP_VERSION = '3.1.1'
+# 与 pet/__init__.py 保持单一来源：发布时只改一处
+APP_VERSION = __version__
 REPO = 'MerZlin/dsh-pet-indesktop'
 RELEASE_API = f'https://api.github.com/repos/{REPO}/releases/latest'
 REPO_URL = f'https://github.com/{REPO}'

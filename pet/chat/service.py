@@ -1,7 +1,7 @@
 from __future__ import annotations
 import threading, uuid
 from typing import Any
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, Signal
 from .models import ProviderConfig
 from .providers import OpenAICompatibleProvider
 class _Worker(QThread):
@@ -29,7 +29,15 @@ class ChatService(QObject):
     def busy(self): return self._worker is not None and self._worker.isRunning()
     def send(self,messages:list[dict[str,Any]],config:ProviderConfig,request_id=None):
         self.stop(); rid=request_id or uuid.uuid4().hex; cancel=threading.Event(); worker=_Worker(self.provider,messages,config,cancel); self._request_id=rid; self._cancel=cancel; self._worker=worker
-        worker.delta_received.connect(lambda text,rid=rid:self._delta(rid,text)); worker.completed.connect(lambda text,rid=rid:self._finished(rid,text)); worker.failed.connect(lambda text,rid=rid:self._error(rid,text)); worker.stopped_by_user.connect(lambda rid=rid:self._stopped(rid)); worker.finished.connect(lambda rid=rid:self._cleanup(rid)); self.started.emit(rid); worker.start(); return rid
+        # 全部显式 QueuedConnection：worker 线程 emit 的信号若直连 lambda
+        # 会在 worker 线程执行 _delta/_cleanup 等，与 GUI 线程的 busy()/
+        # _request_id 读写构成数据竞态。队列投递保证回调只在 GUI 线程跑。
+        worker.delta_received.connect(lambda text,rid=rid:self._delta(rid,text), Qt.QueuedConnection)
+        worker.completed.connect(lambda text,rid=rid:self._finished(rid,text), Qt.QueuedConnection)
+        worker.failed.connect(lambda text,rid=rid:self._error(rid,text), Qt.QueuedConnection)
+        worker.stopped_by_user.connect(lambda rid=rid:self._stopped(rid), Qt.QueuedConnection)
+        worker.finished.connect(lambda rid=rid:self._cleanup(rid), Qt.QueuedConnection)
+        self.started.emit(rid); worker.start(); return rid
     def stop(self):
         if self._cancel is not None: self._cancel.set()
     def _current(self,rid): return rid==self._request_id

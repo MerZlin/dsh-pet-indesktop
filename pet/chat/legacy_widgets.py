@@ -196,6 +196,7 @@ class ChatComposer(QFrame):
         super().__init__(parent)
         self.setObjectName("chat-composer")
         self._busy = False
+        self._ime_composing = False  # 输入法组合中（防止回车误发送）
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 12)
         root.setSpacing(7)
@@ -227,8 +228,15 @@ class ChatComposer(QFrame):
         self._update_enabled()
 
     def eventFilter(self, obj, event):
-        if obj is self.input and event.type() == QEvent.Type.KeyPress:
+        # 输入法组合状态跟踪：组合中回车用于上屏候选，不应触发发送
+        if event.type() == QEvent.Type.InputMethod:
+            self._ime_composing = bool(event.preeditString())
+            if event.commitString():
+                self._ime_composing = False
+        elif obj is self.input and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                if getattr(self, "_ime_composing", False):
+                    return False  # 交给输入法上屏候选
                 self.send_requested.emit()
                 return True
         return super().eventFilter(obj, event)

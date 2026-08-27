@@ -29,7 +29,11 @@
 #ifndef MyAppDisplay
 #define MyAppDisplay "dsh-pet-standalone (WebM Chat)"
 #endif
+#ifndef MyAppVersion
+; 默认版本与 pet/__init__.py 的 __version__ 一致；CI 构建时通过
+; /DMyAppVersion=<版本> 从单一来源注入（见 build-windows.yml）。
 #define MyAppVersion "3.1.1"
+#endif
 
 [Setup]
 AppId={#MyAppId}

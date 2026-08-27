@@ -27,9 +27,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+import shiboken6
+
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
+
+import shiboken6
 
 from . import autostart as autostart_mod
 from . import catalog
@@ -539,7 +543,7 @@ class PetWindow(QWidget):
         # resolved inside every callback so a stale NSView is never reused.
         apply_current_native_window()
         for delay in (0, 40, 160):
-            QTimer.singleShot(delay, apply_current_native_window)
+            QTimer.singleShot(delay, self, apply_current_native_window)
 
     def set_on_top(self, on: bool) -> None:
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
@@ -561,7 +565,7 @@ class PetWindow(QWidget):
         # Opening a native menu and then clicking another application can make
         # Cocoa reorder its owner Tool window. Reapply the level after the
         # activation transition without activating or stealing keyboard focus.
-        QTimer.singleShot(0, self._restore_on_top_after_context_menu)
+        QTimer.singleShot(0, self, self._restore_on_top_after_context_menu)
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
@@ -571,6 +575,7 @@ class PetWindow(QWidget):
         if self._hidden_paused:
             self._hidden_paused = False
             self._resume_activity()
+        self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
         """隐藏桌宠。
@@ -738,12 +743,31 @@ class PetWindow(QWidget):
         self.show()
 
     def _ensure_dock_icon_on_hide(self) -> None:
+        """macOS：隐藏桌宠时临时开启 Dock 图标，供点击恢复。
+
+        只改运行期策略、绝不写回配置：show_dock_icon 是用户偏好，
+        一次隐藏不能把它覆盖掉，也不能经其他路径的 cfg.save() 落盘。
+        恢复显示时由 _restore_dock_icon_preference 按偏好还原。
+        """
         if sys.platform != 'darwin' or bool(self.cfg.get('show_dock_icon', True)):
             return
-        self.cfg.set('show_dock_icon', True)
+        if getattr(self, "_dock_icon_forced", False):
+            return
+        self._dock_icon_forced = True
         try:
             from .app import _mac_set_dock_icon_visible
             _mac_set_dock_icon_visible(True)
+        except Exception:
+            self._dock_icon_forced = False
+
+    def _restore_dock_icon_preference(self) -> None:
+        """macOS：桌宠恢复显示后按用户偏好还原 Dock 图标策略。"""
+        if sys.platform != 'darwin' or not getattr(self, "_dock_icon_forced", False):
+            return
+        self._dock_icon_forced = False
+        try:
+            from .app import _mac_set_dock_icon_visible
+            _mac_set_dock_icon_visible(bool(self.cfg.get('show_dock_icon', True)))
         except Exception:
             pass
 
@@ -925,7 +949,11 @@ class PetWindow(QWidget):
             image = decode_representative_frame(path) if path is not None else QImage()
             with lock:
                 if not image.isNull():
-                    self._animation_icon_image_cache[name] = QImage(image)
+                    cache = self._animation_icon_image_cache
+                    # 简单上限：动画名数量有限，超限全清后按需重新解码
+                    if len(cache) >= 128:
+                        cache.clear()
+                    cache[name] = QImage(image)
             return image
         finally:
             with lock:
@@ -967,6 +995,10 @@ class PetWindow(QWidget):
         if self._animation_gap_active:
             if name in self.idles or name in self.turns:
                 self._play_animation_gap_step()
+            else:
+                # 异常状态（gap 期间播了非待机/转向动画）：兜底推进动画链，
+                # 避免 return 后动画链停摆
+                self._pick_next()
             return
         if self.animation_gap_seconds > 0 and (name in self.acts or name in self.moves):
             self._start_animation_gap()
@@ -1034,7 +1066,10 @@ class PetWindow(QWidget):
         """
         if self._move_plan is not None:
             return True  # 已在移动/已计划
-        avail = self.screen().availableGeometry()
+        scr = self._screen_available()
+        if scr is None:
+            return False
+        avail = scr.availableGeometry()
         dir_sign = 1 if self.facing == 'right' else -1
         cx = self.x() + self._w / 2
         distance = random.randint(catalog.MOVE_MIN_PX, catalog.MOVE_MAX_PX)
@@ -1174,7 +1209,7 @@ class PetWindow(QWidget):
             dist = math.hypot(d.x(), d.y())
         if was_dragging:
             self._just_dragged = True  # 抑制拖拽结束后的幽灵点击
-            QTimer.singleShot(150, self._clear_just_dragged)
+            QTimer.singleShot(150, self, self._clear_just_dragged)
             if self.drag_physics:
                 rvx, rvy = physics_mod.estimate_release_velocity(self._trail, time.monotonic())
                 if math.hypot(rvx, rvy) < physics_mod.DEAD_ZONE_SPEED:
@@ -1278,10 +1313,14 @@ class PetWindow(QWidget):
             reply = vision_mod.ask_about_screen(
                 shot, app_info, settings.default_system_prompt, provider
             )
+            if shiboken6.isValid(self) is False:
+                return  # 窗口已销毁（退出/切角色），不再触碰信号
             user_text = f"[看看屏幕] 前台窗口：{app_info}" if app_info else "[看看屏幕]"
             self.look_done.emit(reply, user_text, False)
         except Exception as exc:
             logging.exception("看看屏幕失败")
+            if shiboken6.isValid(self) is False:
+                return
             self.look_done.emit(str(exc), "", True)
 
     def _on_look_done(self, text: str, user_text: str, is_error: bool) -> None:
@@ -1304,16 +1343,43 @@ class PetWindow(QWidget):
         self._active_context_menu = menu
         _populate_context_menu(menu, self)
         menu.aboutToHide.connect(
-            lambda: QTimer.singleShot(0, self._restore_on_top_after_context_menu)
+            lambda self=self: QTimer.singleShot(0, self, self._restore_on_top_after_context_menu)
         )
         menu.exec(global_pos)
         callbacks = take_deferred_menu_callbacks(menu)
         if getattr(self, "_active_context_menu", None) is menu:
             self._active_context_menu = None
-        # QMenu.exec() has now returned, so the native NSMenu tracking loop is
-        # gone. Heavy dialogs and QApplication.quit() are safe at this point.
-        for callback in callbacks:
-            callback()
+        if callbacks:
+            def dispatch_callbacks() -> None:
+                for callback in callbacks:
+                    callback()
+
+            def schedule_after_menu_destroyed(*_args) -> None:
+                # Windows may keep the translucent popup's native backing
+                # surface alive briefly after exec() returns. Wait for the
+                # QMenu QObject to be destroyed, then yield once more before
+                # showing or activating another top-level window.
+                try:
+                    if not shiboken6.isValid(self):
+                        return
+                    QTimer.singleShot(0, self, dispatch_callbacks)
+                except RuntimeError:
+                    # The owning pet can be destroyed between isValid() and
+                    # registering the context-bound timer during shutdown or
+                    # character replacement. Its menu command is no longer
+                    # meaningful, so discard it without touching Qt again.
+                    return
+
+            menu.destroyed.connect(schedule_after_menu_destroyed)
+        # 菜单使用完毕即释放整棵菜单树：QMenu 以长命窗口为 parent，
+        # 不删除会随每次右键累积（子菜单/动作/线程池/图标 pixmap）。
+        # 先清掉尚未启动的解码任务，避免 QThreadPool 析构时在 GUI 线程
+        # 等待运行中的 worker。
+        for submenu in menu.findChildren(QMenu):
+            pool = getattr(submenu, "_animation_icon_pool", None)
+            if pool is not None:
+                pool.clear()
+        menu.deleteLater()
 
     def reopen_context_menu(self, menu: QMenu) -> None:
         """Close the old template and immediately show the newly selected one."""
@@ -1324,7 +1390,7 @@ class PetWindow(QWidget):
         )
         self._context_menu_anchor = QPoint(global_pos)
         menu.close()
-        QTimer.singleShot(10, lambda: self._show_context_menu(global_pos))
+        QTimer.singleShot(10, self, lambda: self._show_context_menu(global_pos))
 
     @staticmethod
     def _read_self_talk_texts(value) -> list[str]:

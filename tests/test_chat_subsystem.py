@@ -834,9 +834,14 @@ def test_modern_sidebar_footer_only_keeps_status_and_follow(tmp_path: Path):
         button for button in footer.findChildren(QToolButton)
         if not button.isHidden()
     ]
-    assert visible_tools == [window.follow_button]
+    # 跟随桌宠 + 删除当前会话 + 清空当前会话（此前两个按钮是孤儿控件）
+    assert visible_tools == [
+        window.follow_button, window.delete_session_button, window.clear_button,
+    ]
     assert window.follow_button.icon().isNull() is False
     assert window.follow_button.minimumHeight() >= 28
+    assert window.delete_session_button.icon().isNull() is False
+    assert window.clear_button.icon().isNull() is False
     window.close()
     app.processEvents()
 
@@ -1095,6 +1100,136 @@ def test_streaming_reply_uses_typewriter_and_finishes_after_buffer_drains(tmp_pa
     app.processEvents()
 
 
+def test_session_switch_during_typewriter_drain_does_not_cross_write(tmp_path: Path):
+    """模型已完成、打字机仍在排空时切换会话：不得把上一轮回复写进新会话。
+
+    回归背景：_reset 此前不停止 _typewriter_timer、不清 _pending_output /
+    _pending_finish_text，切会话后迟到的 tick 会把旧回复 append+save 到
+    新会话（原会话丢回复、新会话多幻影消息）。
+    """
+    import time
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.chat.models import ChatMessage
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    # 模拟：service 已不忙（模型返回完毕），打字机仍在逐字排空
+    window._active_request_id = "request"
+    window._pending_output = "残留输出"
+    window._pending_finish_text = "完整的旧回复"
+    window._typewriter_timer.start()
+    window.session.messages.append(ChatMessage("user", "旧提问"))
+    old_session = window.session
+
+    window.new_session()
+
+    assert not window._typewriter_timer.isActive()
+    assert window._pending_output == ""
+    assert window._pending_finish_text is None
+    assert window.session is not old_session
+    assert all(m.role != "assistant" for m in window.session.messages)
+    # 事件循环再转一会儿，确认没有迟到的 tick 把旧回复写进新会话
+    deadline = time.time() + 0.5
+    while time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert all(m.role != "assistant" for m in window.session.messages)
+    window.close()
+    app.processEvents()
+
+
+def test_image_payloads_skips_deleted_attachments(tmp_path: Path):
+    """附件文件已删除时发送图片不得抛 FileNotFoundError。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatComposer
+
+    app = QApplication.instance() or QApplication([])
+    composer = ChatComposer()
+    image = tmp_path / "a.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    composer.add_attachments([str(image)])
+    assert len(composer.attachment_paths) == 1
+    image.unlink()
+    assert composer.image_payloads() == []
+    composer.deleteLater()
+    app.processEvents()
+
+
+def test_enter_while_ime_composing_does_not_send():
+    """输入法组合中回车用于上屏候选，不得触发发送（现代+经典两套）。"""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QInputMethodEvent, QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.legacy_widgets import ChatComposer as LegacyComposer
+    from pet.chat.widgets import ChatComposer as ModernComposer
+
+    app = QApplication.instance() or QApplication([])
+    for composer_type in (ModernComposer, LegacyComposer):
+        composer = composer_type()
+        sent = []
+        composer.send_requested.connect(lambda: sent.append(1))
+        enter = QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+        )
+
+        # 未组合：回车直接发送
+        assert composer.eventFilter(composer.input, enter) is True
+        assert sent == [1]
+
+        # 组合中：回车不发送，交给输入法
+        im = QInputMethodEvent("拼音候选", [])
+        composer.eventFilter(composer.input, im)
+        assert composer._ime_composing is True
+        assert composer.eventFilter(composer.input, enter) is False
+        assert sent == [1]
+
+        # 提交后：恢复发送
+        commit = QInputMethodEvent()
+        commit.setCommitString("候选")
+        composer.eventFilter(composer.input, commit)
+        assert composer._ime_composing is False
+        assert composer.eventFilter(composer.input, enter) is True
+        assert sent == [1, 1]
+        composer.deleteLater()
+    app.processEvents()
+
+
+def test_modern_chat_pauses_follow_when_user_scrolls_up(tmp_path: Path):
+    """上翻阅读历史时暂停自动滚底；回到顶部/底部时按位置更新跟随状态。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(700, 500)
+    for index in range(40):
+        window._add("assistant", f"第 {index} 条消息。" * 40)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+    bar = window.scroll.verticalScrollBar()
+    if bar.maximum() <= 0:
+        window.close()
+        app.processEvents()
+        pytest.skip("offscreen 下内容高度不足以产生滚动条")
+    # 用户滚动到底部 → 跟随
+    bar.setValue(bar.maximum())
+    app.processEvents()
+    assert window._stream_follow_output is True
+    # 用户上翻 → 暂停跟随
+    bar.setValue(0)
+    app.processEvents()
+    assert window._stream_follow_output is False
+    window.close()
+    app.processEvents()
+
+
 def test_quit_closes_active_context_menu_before_leaving_event_loop(monkeypatch):
     import time
     from PySide6.QtWidgets import QApplication
@@ -1167,14 +1302,24 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
         def connect(self, callback):
             self.callback = callback
 
+        def emit(self):
+            self.callback()
+
     class FakeMenu:
         def __init__(self, _parent):
             self.aboutToHide = FakeSignal()
+            self.destroyed = FakeSignal()
 
         def exec(self, _pos):
             state["inside_exec"] = True
             self._deferred_callbacks = [lambda: calls.append(state["inside_exec"])]
             state["inside_exec"] = False
+
+        def findChildren(self, _type):
+            return []
+
+        def deleteLater(self):
+            self.destroyed.emit()
 
     class FakePet:
         def _restore_on_top_after_context_menu(self):
@@ -1182,10 +1327,130 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
 
     monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
     monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
+    monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda *args: args[-1]())
     pet = FakePet()
     PetWindow._show_context_menu(pet, QPoint(12, 18))
     assert calls == [False]
     assert pet._active_context_menu is None
+
+
+def test_context_menu_window_callback_waits_until_old_menu_is_destroyed(monkeypatch):
+    from PySide6.QtCore import QPoint
+
+    import pet.window as window_mod
+    from pet.window import PetWindow
+
+    calls = []
+    timers = []
+    created = []
+
+    class FakeSignal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+        def emit(self):
+            for callback in list(self.callbacks):
+                callback()
+
+    class FakeMenu:
+        def __init__(self, _parent):
+            self.aboutToHide = FakeSignal()
+            self.destroyed = FakeSignal()
+            self.delete_requested = False
+            created.append(self)
+
+        def exec(self, _pos):
+            self._deferred_callbacks = [lambda: calls.append("settings")]
+
+        def findChildren(self, _type):
+            return []
+
+        def deleteLater(self):
+            self.delete_requested = True
+
+    class FakePet:
+        def _restore_on_top_after_context_menu(self):
+            pass
+
+    monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
+    monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
+    monkeypatch.setattr(
+        window_mod.QTimer,
+        "singleShot",
+        lambda *args: timers.append(args[-1]),
+    )
+
+    pet = FakePet()
+    PetWindow._show_context_menu(pet, QPoint(12, 18))
+    menu = created[0]
+    assert menu.delete_requested is True
+    assert calls == []
+    assert timers == []
+
+    menu.destroyed.emit()
+    assert calls == []
+    assert len(timers) == 1
+    timers.pop()()
+    assert calls == ["settings"]
+
+
+def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QPoint
+
+    import pet.window as window_mod
+    from pet.window import PetWindow
+
+    timers = []
+    created = []
+
+    class FakeSignal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+        def emit(self):
+            for callback in list(self.callbacks):
+                callback()
+
+    class FakeMenu:
+        def __init__(self, _parent):
+            self.aboutToHide = FakeSignal()
+            self.destroyed = FakeSignal()
+            created.append(self)
+
+        def exec(self, _pos):
+            self._deferred_callbacks = [lambda: None]
+
+        def findChildren(self, _type):
+            return []
+
+        def deleteLater(self):
+            pass
+
+    class FakePet:
+        def _restore_on_top_after_context_menu(self):
+            pass
+
+    monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
+    monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
+    monkeypatch.setattr(
+        window_mod, "shiboken6", SimpleNamespace(isValid=lambda _obj: False), raising=False
+    )
+    monkeypatch.setattr(
+        window_mod.QTimer, "singleShot", lambda *args: timers.append(args)
+    )
+
+    pet = FakePet()
+    PetWindow._show_context_menu(pet, QPoint(12, 18))
+    created[0].destroyed.emit()
+    assert timers == []
 
 
 def test_close_required_actions_are_queued_while_menu_is_visible():
