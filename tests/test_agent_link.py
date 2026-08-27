@@ -542,3 +542,41 @@ class TestMultiInstanceGlobalState:
         ok = mgr.set_enabled("claude", False)
         assert ok is True
         assert calls == []  # 另一个实例还在用 → 不卸载
+
+
+class TestModernSettingsProactivePage:
+    def test_proactive_page_save_roundtrip(self, tmp_path, monkeypatch):
+        """现代设置面板「主动识屏」页：控件→保存→配置 回路（生产实际使用的设置页）。"""
+        import sys
+        if sys.platform != "win32":
+            import pytest
+            pytest.skip("主动识屏页仅 Windows")
+        from PySide6.QtWidgets import QApplication
+        from pet.modern_settings_dialog import ModernSettingsDialog
+        import pet.modern_settings_dialog as settings_mod
+
+        app = QApplication.instance() or QApplication([])
+        monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+        monkeypatch.setattr(settings_mod.autostart_mod, "set_enabled", lambda v: None)
+
+        cfg = Config(base=tmp_path)
+        dlg = ModernSettingsDialog(cfg, include_ai=True)
+        assert hasattr(dlg, "pro_enabled_check"), "主动识屏控件未构建"
+
+        # 设置一组值并保存
+        dlg.pro_enabled_check.setChecked(True)
+        dlg.pro_whitelist_edit.setPlainText("code.exe\ntitle:*会议*")
+        dlg.pro_cap_spin.setValue(42)
+        dlg._save()
+
+        pro = cfg.data["proactive_screen"]
+        assert pro["enabled"] is True
+        assert pro["whitelist"] == ["code.exe", "title:*会议*"]
+        assert pro["daily_cap"] == 42
+        # 未暴露字段保留
+        assert "change_threshold" in pro
+
+        # 再开一次：读回的值应与保存一致
+        dlg2 = ModernSettingsDialog(cfg, include_ai=True)
+        assert dlg2.pro_enabled_check.isChecked() is True
+        assert dlg2.pro_cap_spin.value() == 42
