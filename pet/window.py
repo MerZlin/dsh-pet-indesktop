@@ -24,6 +24,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QImage, QPainter, QPixmap
@@ -40,6 +41,7 @@ from .config import (
 from .harness_launcher import launch_harness_gui
 from .library import MovieLibrary
 from . import physics as physics_mod
+from .proactive import effective_proactive_config
 from .speech_bubble import PetSpeechBubble
 from .updater import QUARK_PAN_URL, REPO_URL
 
@@ -295,6 +297,9 @@ class PetWindow(QWidget):
         self._self_talk_timer = QTimer(self)
         self._self_talk_timer.setSingleShot(True)
         self._self_talk_timer.timeout.connect(self._on_self_talk_timeout)
+        # 重要气泡（主动识屏先兆/答复、Agent 联动提醒等）占用期间，自言自语让路，
+        # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
+        self._bubble_busy_until = 0.0
 
         # 置顶保活看门狗：系统事件（explorer 重启/DPI 变更/休眠唤醒）或
         # z-order 竞争可能让置顶丢失，5s 巡检一次，丢失则原生重设。
@@ -303,6 +308,14 @@ class PetWindow(QWidget):
         self._topmost_watchdog.timeout.connect(self._enforce_topmost)
         if config.get('on_top', True):
             self._topmost_watchdog.start()
+
+        # 主动识屏后台观察器（Phase 2：必须作为 PetWindow 的子成员）
+        from .proactive import ProactiveScreenWatcher
+        self.proactive_watcher = ProactiveScreenWatcher(self, config)
+
+        # 多 Agent 状态感知管理器（Phase 5）
+        from .agent_link import AgentLinkManager
+        self.agent_link_manager = AgentLinkManager(self, config)
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         # 直播捕获兼容模式（stream_capture_mode）：Tool → 普通顶层窗口 + 标题，
@@ -616,6 +629,10 @@ class PetWindow(QWidget):
         self._click_effect_timer.stop()
         self._squash_timer.stop()
         self._squash_active = False
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.pause()
+        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+            self.agent_link_manager.pause()
         self._cancel_move()
         self._cancel_animation_gap()
         self._speech_bubble.hide()
@@ -631,6 +648,10 @@ class PetWindow(QWidget):
         if self.auto_hide_fullscreen and os.name == 'nt':
             self._fullscreen_timer.start()
         self._schedule_self_talk()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.resume()
+        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+            self.agent_link_manager.resume()
 
     def _enforce_topmost(self) -> None:
         """置顶看门狗巡检：仅在置顶开启且可见（未被全屏隐藏）时动作。
@@ -874,6 +895,12 @@ class PetWindow(QWidget):
 
         「不移动」模式下跳过移动分支，其概率并入动作 → 30% 待机 / 10% 转向 / 60% 动作。
         """
+        if not self.acts:
+            # 角色包没有随机动作素材（仅核心动画）：需要 acts 的分支与回退
+            # 统一改走待机；待机也没有则保持当前动画，绝不 random.choice([]) 崩溃。
+            if self.idles:
+                self._switch(self._pick(self.idles, exclude=self.anim))
+            return
         roll = random.random()
         if roll < catalog.P_IDLE:
             if self.idles:
@@ -1213,9 +1240,8 @@ class PetWindow(QWidget):
         if sys.platform == 'win32':
             self.raise_()  # 交互时把桌宠带回置顶组最前（不抢键盘焦点）
 
-    def contextMenuEvent(self, event) -> None:  # noqa: N802
-        if not self._is_in_interactive_area(event.pos()):
-            return
+    def _build_context_menu(self) -> QMenu:
+        """构建右键上下文菜单对象（便于测试与逻辑复用）。"""
         menu = QMenu(self)
         if self.on_open_chat is not None:
             menu.addAction('AI 对话', self.on_open_chat)
@@ -1300,6 +1326,57 @@ class PetWindow(QWidget):
             act.setChecked(abs(self.scale - s) < 0.02)
             act.triggered.connect(lambda checked=False, s=s: self.change_scale(s))
 
+        # 主动识屏二级菜单（仅 Windows 且有聊天/视觉能力，手册 §7.2）
+        # 无 Chat 变体排除了 pet.chat，视觉链路不可用，不显示入口
+        if sys.platform == 'win32' and self.on_open_chat is not None:
+            m_proactive = menu.addMenu('主动识屏')
+            pro_cfg = effective_proactive_config(self.cfg.get('proactive_screen', {}))
+
+            act_pro_enabled = m_proactive.addAction('开启主动识屏')
+            act_pro_enabled.setCheckable(True)
+            act_pro_enabled.setChecked(bool(pro_cfg.get('enabled', False)))
+            act_pro_enabled.toggled.connect(self._toggle_proactive_enabled)
+
+            act_pro_through = m_proactive.addAction('鼠标穿透时仍允许主动识屏')
+            act_pro_through.setCheckable(True)
+            act_pro_through.setChecked(bool(pro_cfg.get('allow_when_mouse_through', True)))
+            act_pro_through.toggled.connect(lambda on: self._set_proactive_option('allow_when_mouse_through', on))
+
+            act_pro_precue = m_proactive.addAction('触发前先兆提示')
+            act_pro_precue.setCheckable(True)
+            act_pro_precue.setChecked(bool(pro_cfg.get('pre_cue', True)))
+            act_pro_precue.toggled.connect(lambda on: self._set_proactive_option('pre_cue', on))
+
+            act_pro_idle = m_proactive.addAction('仅当我闲置时触发')
+            act_pro_idle.setCheckable(True)
+            act_pro_idle.setChecked(bool(pro_cfg.get('require_idle', False)))
+            act_pro_idle.toggled.connect(lambda on: self._set_proactive_option('require_idle', on))
+
+            act_pro_dry = m_proactive.addAction('dry-run 验证模式')
+            act_pro_dry.setCheckable(True)
+            act_pro_dry.setChecked(bool(pro_cfg.get('dry_run', False)))
+            act_pro_dry.toggled.connect(lambda on: self._set_proactive_option('dry_run', on))
+
+            m_proactive.addSeparator()
+            if self.on_open_settings is not None:
+                m_proactive.addAction('打开设置…', self.on_open_settings)
+
+        # Agent 联动二级菜单（手册 §8，本期提供配置与开关框架）
+        # Agent 联动二级菜单（手册 §8，支持 5 个主流 Agent）
+        m_agent = menu.addMenu('Agent 联动')
+        agent_cfg = dict(self.cfg.get('agent_link', {}))
+        for agent_key, agent_label in (
+            ('dsh', 'DeepSeek Harness (DSH)'),
+            ('claude', 'Claude Code'),
+            ('cursor', 'Cursor'),
+            ('codex', 'Codex'),
+            ('opencode', 'OpenCode'),
+        ):
+            act_ag = m_agent.addAction(agent_label)
+            act_ag.setCheckable(True)
+            act_ag.setChecked(bool(agent_cfg.get(agent_key, False)))
+            act_ag.toggled.connect(lambda on, k=agent_key, a=act_ag: self._toggle_agent_link(k, on, a))
+
         menu.addSeparator()
         if self.on_show_balance is not None:
             menu.addAction('DeepSeek 余额', lambda: self.on_show_balance(self))
@@ -1313,6 +1390,12 @@ class PetWindow(QWidget):
         menu.addAction('启动 DeepSeek Harness', lambda: launch_harness_gui(self))
         menu.addSeparator()
         menu.addAction('退出', self._request_quit)
+        return menu
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        if not self._is_in_interactive_area(event.pos()):
+            return
+        menu = self._build_context_menu()
         menu.exec(event.globalPos())
 
     @staticmethod
@@ -1334,14 +1417,23 @@ class PetWindow(QWidget):
         self._self_talk_timer.start(max(1000, int(round(delay * 1000))))
 
     def _on_self_talk_timeout(self) -> None:
+        if time.time() < self._bubble_busy_until:
+            # 重要气泡占用中：本次自言自语跳过，重新排队下一次
+            self._schedule_self_talk()
+            return
         if self._self_talk_enabled and self._self_talk_texts and self.isVisible():
             self._speech_bubble.show_text(random.choice(self._self_talk_texts), self.visible_content_rect())
         self._schedule_self_talk()
 
+    def hold_bubble(self, seconds: float) -> None:
+        """声明重要气泡占用时长（自言自语在此期间让路）。"""
+        self._bubble_busy_until = max(self._bubble_busy_until, time.time() + max(0.0, seconds))
+
     def show_bubble(self, text: str, duration_ms: int = 3200) -> None:
-        """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。"""
+        """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。"""
         if not self.isVisible():
             return
+        self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(text, self.visible_content_rect(), duration_ms)
 
     def refresh_pet_settings(self) -> None:
@@ -1356,6 +1448,8 @@ class PetWindow(QWidget):
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))
         self.click_show_self_talk = bool(self.cfg.get('click_show_self_talk', False))
         self._schedule_self_talk()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.apply_config()
 
     def set_animation_gap(self, seconds: float) -> None:
         self.animation_gap_seconds = max(0.0, min(3600.0, float(seconds)))
@@ -1383,6 +1477,54 @@ class PetWindow(QWidget):
             return
         self._speech_bubble.show_text(text, self.visible_content_rect(), duration_ms=2200)
 
+
+    def _toggle_proactive_enabled(self, on: bool) -> None:
+        """右键菜单切换主动识屏总开关。"""
+        pro_data = dict(self.cfg.get('proactive_screen', {}))
+        pro_data['enabled'] = bool(on)
+        self.cfg.set('proactive_screen', pro_data)
+        self.cfg.save()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.apply_config()
+        if on:
+            eff = effective_proactive_config(self.cfg.get('proactive_screen', {}))
+            if eff['whitelist']:
+                self.show_bubble("主动识屏已开启～我会偶尔看看你正在用的软件", duration_ms=4000)
+            else:
+                self.show_bubble(
+                    "主动识屏已开启～但白名单还是空的，在 右键→主动识屏→打开设置 里添加要观察的应用后我才会开始工作",
+                    duration_ms=6000,
+                )
+
+    def _set_proactive_option(self, key: str, value: Any) -> None:
+        """右键菜单修改主动识屏子项选项。"""
+        pro_data = dict(self.cfg.get('proactive_screen', {}))
+        pro_data[key] = value
+        self.cfg.set('proactive_screen', pro_data)
+        self.cfg.save()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.apply_config()
+
+    def _toggle_agent_link(self, agent_key: str, on: bool, action=None) -> None:
+        """右键菜单切换 Agent 状态联动子项。
+
+        set_enabled 返回 False（用户拒绝授权 / hooks 安装失败）时，
+        必须把菜单勾选态回滚，否则 UI 显示已开启而实际未生效。"""
+        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+            ok = self.agent_link_manager.set_enabled(agent_key, on)
+            if not ok:
+                if action is not None:
+                    action.blockSignals(True)
+                    action.setChecked(not on)
+                    action.blockSignals(False)
+                return
+        else:
+            ag_data = dict(self.cfg.get('agent_link', {}))
+            ag_data[agent_key] = bool(on)
+            self.cfg.set('agent_link', ag_data)
+            self.cfg.save()
+        if on:
+            self.show_bubble(f"已开启 {agent_key.upper()} 状态联动监听～", duration_ms=4000)
 
     def _rename_character(self) -> None:
         """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""

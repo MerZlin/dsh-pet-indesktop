@@ -72,6 +72,7 @@ if (-not $SkipBuild) {
         --add-data "assets/sounds;assets/sounds" `
         --add-data "assets/chat;assets/chat" `
         --add-data "pet/chat/styles.qss;pet/chat" `
+        --add-data "integrations;integrations" `
         @excludes `
         $entry
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: $LASTEXITCODE" }
