@@ -17,6 +17,7 @@ WebM-backed clip library（webm 主路线）。
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
 import json
@@ -64,7 +65,8 @@ def _save_meta_file_cache_entry(key: str, frames: int, duration: float) -> None:
                 "frames": frames,
                 "duration": duration,
             }
-            tmp = _META_FILE_CACHE_PATH.with_suffix(".json.tmp")
+            # tmp 名带 PID：共享临时目录下防符号链接预占攻击与多实例互抢
+            tmp = _META_FILE_CACHE_PATH.with_suffix(f".{os.getpid()}.tmp")
             tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
             tmp.replace(_META_FILE_CACHE_PATH)
     except OSError:

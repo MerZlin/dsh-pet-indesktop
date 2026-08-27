@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from . import catalog
 
@@ -21,6 +22,49 @@ DEFAULT_SELF_TALK_TEXTS = [
     "\u4eca\u5929\u4e5f\u8981\u8ba4\u771f\u5de5\u4f5c\u5440\u3002",
     "\u518d\u966a\u4f60\u4e00\u4f1a\u513f\u3002",
 ]
+
+
+def _default_proactive_screen_data() -> dict:
+    return {
+        "enabled": False,
+        "dry_run": False,
+        "preset": "balanced",
+        "allow_when_mouse_through": True,
+        "whitelist": [],
+        "dwell_seconds": 45,
+        "require_idle": False,
+        "min_idle_seconds": 30,
+        "cooldown_minutes": 5,
+        "daily_cap": 15,
+        "min_request_interval_seconds": 60,
+        "change_threshold": 8,
+        "prefer_free_provider": True,
+        "pre_cue": True,
+    }
+
+
+def _default_agent_link_data() -> dict:
+    return {
+        "dsh": False,
+        "claude": False,
+        "cursor": False,
+        "codex": False,
+        "opencode": False,
+    }
+
+
+def _merge_proactive_screen_data(raw: Any) -> dict:
+    result = _default_proactive_screen_data()
+    if isinstance(raw, dict):
+        result.update(raw)
+    return result
+
+
+def _merge_agent_link_data(raw: Any) -> dict:
+    result = _default_agent_link_data()
+    if isinstance(raw, dict):
+        result.update(raw)
+    return result
 
 
 def _default_chat_data():
@@ -153,6 +197,8 @@ class Config:
             "chat_background": "",  # 聊天背景图：空=纯色；builtin:whale=内置鲸鱼壁纸；否则为图片路径
             "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "character_aliases": {},  # 角色显示名别名 {角色id: 自定义名}，空名=恢复默认
+            "proactive_screen": _default_proactive_screen_data(),
+            "agent_link": _default_agent_link_data(),
             "chat": _default_chat_data(),
         }
         self._load()
@@ -217,6 +263,10 @@ class Config:
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
+        if "proactive_screen" in raw:
+            self.data["proactive_screen"] = _merge_proactive_screen_data(raw["proactive_screen"])
+        if "agent_link" in raw:
+            self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
         self.data["version"] = 3
 
     def _normalize_pet_settings(self):

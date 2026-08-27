@@ -79,5 +79,5 @@ def test_vision_overrides_ignored_when_same_as_chat():
     """同聊天模型时，视觉独立端点/密钥一律不得生效（防残留 GLM 地址配 ds 模型名）。"""
     import inspect
     from pet import vision
-    src = inspect.getsource(vision.ask_about_screen)
+    src = inspect.getsource(vision._post_vision_request)
     assert 'if p.vision_same_as_chat' in src
