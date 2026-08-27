@@ -1212,3 +1212,22 @@ class TestUXFixesRound3:
 
         watcher._worker_capture((0, 0, 100, 100), {"hwnd": 1, "process": "a.exe", "title": "t"}, {}, 0)
         assert watcher._worker_busy is False
+
+    def test_preset_falls_to_custom_when_values_diverge(self, tmp_path):
+        """非 custom 预设下改了数值再保存 → preset 自动落为 custom（gemini 审查发现）。"""
+        from PySide6.QtWidgets import QApplication
+        from pet.settings_dialog import PetSettingsDialog
+
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        dlg = PetSettingsDialog(cfg)
+        if not hasattr(dlg, "pro_preset_combo"):
+            import pytest
+            pytest.skip("非 Windows 无主动识屏设置组")
+        # 选 balanced，然后把每日上限改成非预设值
+        dlg.pro_preset_combo.setCurrentIndex(dlg.pro_preset_combo.findData("balanced"))
+        dlg._on_proactive_preset_changed(0)
+        dlg.pro_cap_spin.setValue(99)
+        dlg._save()
+        assert cfg.data["proactive_screen"]["preset"] == "custom"
+        assert cfg.data["proactive_screen"]["daily_cap"] == 99
