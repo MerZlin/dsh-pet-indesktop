@@ -587,15 +587,8 @@ class ProactiveScreenWatcher:
         # 而 showEvent 只在曾经隐藏过（_hidden_paused）时才调 _resume_activity，
         # 会导致首次启动后定时器永远不起。可见性由 _on_tick 的 G1 逐 tick 判定，
         # 隐藏由 _pause_activity → pause() 负责停止。
-        should_run = (
-            sys.platform == "win32"
-            and eff["enabled"]
-            and bool(eff["whitelist"])
-        )
         # 无 Chat 变体（排除 pet.chat）的菜单/设置入口已隐藏，用户无法开启；
-        # 即使手改 config 开启，真实请求会在 provider 解析阶段失败并计入熔断，
-        # 不会崩溃。注意：这里不能按 on_open_chat 门控——app 是在 PetWindow 构造
-        # 之后才注入回调的，构造期门控会导致定时器永远不起（首轮终审踩过的坑）。
+        # 即使手改 config 开启，真实请求会在 provider 解析阶段失败并计入熔断，不会崩溃。
         should_run = (
             sys.platform == "win32"
             and eff["enabled"]
@@ -614,6 +607,9 @@ class ProactiveScreenWatcher:
         self._current_hwnd = 0
         self._entered_ts = 0.0
         self._generation += 1  # 代次翻转：此后到达的 frame_ready 一律丢弃
+        # 恢复时应有干净的调度状态：卡在中途的 worker 标志不清掉会让 watcher 永久沉默
+        self._worker_busy = False
+        self._request_in_flight = False
 
     def resume(self) -> None:
         """窗口恢复显示时按最新配置重新评估启停。"""
@@ -696,6 +692,14 @@ class ProactiveScreenWatcher:
             name="proactive-screen-worker",
         ).start()
 
+    def _bridge_alive(self) -> bool:
+        """桥接 QObject 是否仍存活（窗口销毁后 daemon 线程的 emit 会崩）。"""
+        try:
+            import shiboken6
+            return shiboken6.isValid(self._bridge)
+        except Exception:
+            return True  # 无法判定时按存活处理，异常由调用点兜底
+
     def _worker_capture(self, rect: Any, info: dict, eff: dict, gen: int) -> None:
         """后台 worker 线程：执行窗口截图与 dHash 计算。"""
         emitted = False
@@ -721,8 +725,14 @@ class ProactiveScreenWatcher:
                 )
                 payload = dict(info)
                 payload["_gen"] = gen
-                self._bridge.frame_ready.emit(img, app_str, info["hwnd"], cur_hash, payload)
-                emitted = True
+                # JPEG 编码放在 worker 线程，避免主线程卡顿
+                import io
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, "JPEG", quality=70)
+                jpeg_bytes = buf.getvalue()
+                if self._bridge_alive():
+                    self._bridge.frame_ready.emit(jpeg_bytes, app_str, info["hwnd"], cur_hash, payload)
+                    emitted = True
         except Exception:
             pass
         finally:
@@ -774,7 +784,7 @@ class ProactiveScreenWatcher:
 
                 logging.info(
                     "主动识屏 [dry-run 模式]: 条件满足已触发! 前台: %s, 窗口: %s, dHash: %s",
-                    app_str,
+                    str(info.get("process", "")) or app_str.split(" | ")[0],  # 只记进程名，标题不落日志
                     hwnd,
                     hex(cur_hash),
                 )
@@ -790,13 +800,16 @@ class ProactiveScreenWatcher:
             if eff.get("pre_cue", True) and hasattr(self.win, "show_bubble"):
                 self.win.show_bubble("让我看看……", duration_ms=2500)
 
-            # 纯内存编码 JPEG bytes（严禁写临时文件）
-            import io
-            from PIL import Image
+            # 纯内存 JPEG bytes（严禁写临时文件）；worker 线程已完成编码，
+            # 直接调用（测试）传入 PIL Image 时在此兼容编码
+            if isinstance(img, (bytes, bytearray)):
+                jpeg_bytes = bytes(img)
+            else:
+                import io
 
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, "JPEG", quality=70)
-            jpeg_bytes = buf.getvalue()
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, "JPEG", quality=70)
+                jpeg_bytes = buf.getvalue()
 
             # 解析 Provider（手册 §6：免费优先策略）
             provider, system_prompt = self._resolve_vision_provider(eff)
@@ -821,15 +834,19 @@ class ProactiveScreenWatcher:
             self._worker_busy = False
 
     def _resolve_vision_provider(self, eff: dict) -> tuple[Any, str]:
-        """解析视觉请求使用的 provider 与 system_prompt（手册 §6）。
+        """解析视觉请求的 provider 与 system_prompt（手册 §6）。
 
-        说明：provider 对象已在内部封装了 vision_same_as_chat、vision_base_url
-        与 vision_api_key；在 _post_vision_request 中会根据 vision_same_as_chat
-        自动决定是否使用独立视觉端点，此处无需切换外部对象。
+        provider 做浅拷贝再注入 key，避免与聊天共享的可变对象产生竞态。
+        prefer_free_provider=False 时强制跟随聊天模型（vision_same_as_chat=True），
+        让该开关有真实语义：True=配置了独立视觉端点（如免费 GLM）就用它，False=始终用聊天 provider。
         """
+        import copy
+
         chat_settings = self.cfg.chat_settings()
-        provider = chat_settings.active_config
+        provider = copy.copy(chat_settings.active_config)
         provider.api_key = self.cfg.resolve_api_key(provider)
+        if not eff.get("prefer_free_provider", True):
+            provider.vision_same_as_chat = True
         system_prompt = chat_settings.default_system_prompt
         return provider, system_prompt
 
@@ -851,7 +868,7 @@ class ProactiveScreenWatcher:
             reply = vision._post_vision_request(
                 jpeg_bytes, app_str, system_prompt, provider, memory_context=memory_ctx
             )
-            if reply and reply.strip():
+            if reply and reply.strip() and self._bridge_alive():
                 # 按时长按内容长度缩放：太短读不完。6s 起步，每字 +150ms，封顶 20s
                 duration = max(6000, min(20000, 4000 + len(reply) * 150))
                 self._bridge.bubble_requested.emit(reply, duration)

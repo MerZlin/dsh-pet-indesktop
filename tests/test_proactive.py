@@ -903,6 +903,13 @@ class TestPhase4UIAndMenuIntegration:
         monkeypatch.setattr(DshMonitor, "uninstall_bridge", classmethod(lambda cls: None))
 
         win._toggle_agent_link("dsh", True)
+        # 安装走后台线程：等 install_finished 信号回来再断言
+        import time
+        for _ in range(60):
+            app.processEvents()
+            if cfg.data["agent_link"]["dsh"]:
+                break
+            time.sleep(0.05)
         assert cfg.data["agent_link"]["dsh"] is True
         assert any(("DSH" in text) or ("联动" in text) or ("实装" in text) for text, _ in bubbles)
 

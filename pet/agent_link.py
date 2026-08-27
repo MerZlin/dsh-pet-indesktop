@@ -293,6 +293,8 @@ class DshMonitor(BaseAgentMonitor):
     def __init__(self, agent_key: str, config_dir: Path, parent=None) -> None:
         super().__init__(agent_key, config_dir, parent)
         # 桥目录与变体无关：config_dir = <base>/dsh-pet-standalone[-variant] → parent = <base>
+        # 不变量：插件写 <base>/dsh-pet-bridge/（win32 即 %APPDATA%），
+        # 若未来数据目录支持自定义根，两侧必须同步改（当前 Config 结构保证 parent==base）。
         self.events_dir = self.config_dir.parent / "dsh-pet-bridge"
         self.events_file = self.events_dir / "dsh.jsonl"
         self._tailer = ByteOffsetTailer(self.events_file)
@@ -555,7 +557,9 @@ class CursorMonitor(BaseAgentMonitor):
             return
 
         now = time.time()
-        # 目录发现降频：避免每 1.5s 在主线程递归 glob 整个 projects 目录
+        # 目录发现降频：避免每 1.5s 在主线程递归 glob 整个 projects 目录。
+        # 已知边界：新出现的 transcript 文件最长 30s 才被纳入 tail，
+        # 其 backfill 防护会跳到文件末尾——发现间隙内写入的事件会错过（可接受）。
         if now - self._last_scan >= self._scan_interval:
             self._last_scan = now
             try:
@@ -652,9 +656,11 @@ class OpenCodeMonitor(BaseAgentMonitor):
 
 class AgentLinkManager(QObject):
     """多 Agent 联动总调度管理器。
-    
+
     挂载于 PetWindow，持有 4 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
     """
+
+    install_finished = Signal(str, bool, str)  # (agent_key, ok, message)
 
     def __init__(self, window: Any, config: Any, *, min_interval: float = 2.0,
                  clock: Callable[[], float] = time.time) -> None:
@@ -677,6 +683,7 @@ class AgentLinkManager(QObject):
 
         for mon in self.monitors.values():
             mon.state_changed.connect(self._on_agent_state)
+        self.install_finished.connect(self._on_install_finished)
 
         self.apply_config()
 
@@ -692,6 +699,26 @@ class AgentLinkManager(QObject):
                 monitor.start()
             elif not should_run and monitor._running:
                 monitor.stop()
+
+    def _install_dsh_worker(self) -> None:
+        """后台线程：安装 DSH 桥接插件，完成后信号回主线程。"""
+        ok, msg = DshMonitor.install_bridge()
+        self.install_finished.emit("dsh", ok, msg)
+
+    def _on_install_finished(self, agent_key: str, ok: bool, msg: str) -> None:
+        """安装完成：成功则正式开启联动，失败则提示。"""
+        if ok:
+            ag_cfg = dict(self.cfg.get("agent_link", {}))
+            ag_cfg[agent_key] = True
+            self.cfg.set("agent_link", ag_cfg)
+            self.cfg.save()
+            self.apply_config()
+            if hasattr(self.win, "show_bubble"):
+                self.win.show_bubble("DSH 桥接插件已装好，联动开启～", duration_ms=4000)
+        else:
+            log.warning("DSH 桥接插件安装失败: %s", msg)
+            if hasattr(self.win, "show_bubble"):
+                self.win.show_bubble(f"DSH 桥接插件安装失败：{msg}", duration_ms=6000)
 
     def _other_instances_enabled(self, agent_key: str) -> bool:
         """其他多开实例（含默认实例）是否也开着该 Agent 联动。
@@ -749,14 +776,15 @@ class AgentLinkManager(QObject):
                 )
                 if res != QMessageBox.StandardButton.Yes:
                     return False
-                ok, msg = DshMonitor.install_bridge()
-                if not ok:
-                    QMessageBox.warning(
-                        self.win if hasattr(self.win, "winId") else None,
-                        "开启 DSH 联动",
-                        f"桥接插件安装失败，联动未开启。\n{msg}",
-                    )
-                    return False
+                # 安装走后台线程（pnpm 解析可能数十秒，绝不在 UI 线程阻塞）；
+                # 菜单先回弹，安装完成后自动开启并气泡告知
+                if hasattr(self.win, "show_bubble"):
+                    self.win.show_bubble("正在安装 DSH 桥接插件…", duration_ms=4000)
+                import threading
+                threading.Thread(
+                    target=self._install_dsh_worker, daemon=True, name="dsh-bridge-install",
+                ).start()
+                return False
         else:
             # 关闭联动时移除我们注入的内容（只删自己的，用户自有配置不碰）；
             # 其他多开实例仍在使用则保留（hooks/插件是全局状态）
@@ -765,11 +793,15 @@ class AgentLinkManager(QObject):
                     log.info("其他实例仍在使用 Claude 联动，保留 hooks")
                 elif not ClaudeCodeMonitor.uninstall_hooks():
                     log.warning("Claude hooks 卸载未完全成功（配置已关闭，hooks 可能残留）")
+                    if hasattr(self.win, "show_bubble"):
+                        self.win.show_bubble("Claude hooks 卸载未完全成功，可手动检查 ~/.claude/settings.json", duration_ms=6000)
             elif agent_key == "dsh":
                 if self._other_instances_enabled("dsh"):
                     log.info("其他实例仍在使用 DSH 联动，保留桥接插件")
                 elif not DshMonitor.uninstall_bridge():
                     log.warning("DSH 桥接插件卸载未完全成功（配置已关闭，插件可能残留）")
+                    if hasattr(self.win, "show_bubble"):
+                        self.win.show_bubble("DSH 桥接插件卸载未完全成功", duration_ms=6000)
 
         ag_cfg = dict(self.cfg.get("agent_link", {}))
         ag_cfg[agent_key] = bool(enabled)
