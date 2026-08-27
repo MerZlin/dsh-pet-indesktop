@@ -47,12 +47,21 @@ class ChatMessage:
 
 @dataclass
 class ChatSession:
-    session_id: str; character_id: str; provider_id: str; system_prompt: str; messages: list[ChatMessage]=field(default_factory=list); created_at: str=field(default_factory=utc_now); updated_at: str=field(default_factory=utc_now); title: str=''
+    session_id: str; character_id: str; provider_id: str; system_prompt: str; messages: list[ChatMessage]=field(default_factory=list); created_at: str=field(default_factory=utc_now); updated_at: str=field(default_factory=utc_now); custom_title: str=''; pinned: bool=False
     @classmethod
     def create(cls,character_id,provider_id,system_prompt): return cls(uuid.uuid4().hex,character_id,provider_id,system_prompt)
-    def to_dict(self): return {'session_id':self.session_id,'character_id':self.character_id,'provider_id':self.provider_id,'system_prompt':self.system_prompt,'created_at':self.created_at,'updated_at':self.updated_at,'title':self.title,'messages':[m.to_dict() for m in self.messages]}
+    def to_dict(self): return {'session_id':self.session_id,'character_id':self.character_id,'provider_id':self.provider_id,'system_prompt':self.system_prompt,'created_at':self.created_at,'updated_at':self.updated_at,'title':self.custom_title,'pinned':self.pinned,'messages':[m.to_dict() for m in self.messages]}
     @classmethod
-    def from_dict(cls,raw): return cls(str(raw['session_id']),str(raw['character_id']),str(raw.get('provider_id','')),str(raw.get('system_prompt','')),[ChatMessage.from_dict(x) for x in raw.get('messages',[]) if isinstance(x,dict)],str(raw.get('created_at',utc_now())),str(raw.get('updated_at',utc_now())),str(raw.get('title','')))
+    def from_dict(cls,raw): return cls(str(raw['session_id']),str(raw['character_id']),str(raw.get('provider_id','')),str(raw.get('system_prompt','')),[ChatMessage.from_dict(x) for x in raw.get('messages',[]) if isinstance(x,dict)],str(raw.get('created_at',utc_now())),str(raw.get('updated_at',utc_now())),str(raw.get('title',raw.get('custom_title',''))),bool(raw.get('pinned',False)))
+
+    @property
+    def title(self):
+        """Upstream-compatible alias while modern UI keeps custom_title."""
+        return self.custom_title
+
+    @title.setter
+    def title(self, value):
+        self.custom_title = str(value or '')
 
 class SecretStore:
     def __init__(self,service_name='dsh-pet-standalone'):

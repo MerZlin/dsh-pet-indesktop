@@ -26,7 +26,9 @@ def test_find_launch_command_resolves_web():
     if command is not None:
         assert "web" in command
         # 端口必须显式传给 dsh（默认 38080，避开 winnat 保留段 3080）
-        assert command[command.index("web"):] == ["web", "--host", "127.0.0.1", "--port", "38080"]
+        assert command[command.index("web"):] == [
+            "web", "--host", "127.0.0.1", "--port", "38080", "--no-open",
+        ]
 
 
 def test_find_launch_command_fallback_without_dsh(monkeypatch):
@@ -39,7 +41,11 @@ def test_find_launch_command_fallback_without_dsh(monkeypatch):
     monkeypatch.setenv("PATH", str(Path(node).parent))
     command = hl._find_launch_command()
     assert command is not None and "web" in command
-    assert os.path.basename(command[0]).lower() in ("node", "node.exe", "npx", "npx.cmd")
+    allowed = ("node", "node.exe", "npx", "npx.cmd")
+    if os.name == "nt":
+        # Windows 上 npm 全局 dsh 是 .cmd shim，启动器用 cmd.exe 包装执行
+        allowed = allowed + ("cmd.exe",)
+    assert os.path.basename(command[0]).lower() in allowed
 
 
 def test_spawn_injects_augmented_path(monkeypatch):

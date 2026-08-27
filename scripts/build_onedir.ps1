@@ -46,6 +46,12 @@ $noChat = $variants[$Variant].NoChat
 $datas = if ($isGif) { 'assets/characters_gif;assets/characters_gif' } else { 'assets/characters;assets/characters' }
 # No-chat builds exclude the chat subsystem and keyring (kept out of the bundle)
 $excludes = if ($noChat) { @('--exclude-module', 'pet.chat', '--exclude-module', 'keyring') } else { @() }
+$chatData = if ($noChat) { @() } else {
+    @(
+        '--add-data', 'pet\chat\legacy_styles.qss;pet\chat',
+        '--add-data', 'pet\chat\modern_styles.qss;pet\chat'
+    )
+}
 
 # GIF variants: generate GIF assets from webm first (auto when missing, -Gif forces regen)
 if ($isGif -and -not $Gif -and -not (Test-Path 'assets\characters_gif')) {
@@ -58,6 +64,10 @@ if ($Gif -and -not $SkipBuild) {
 }
 
 if (-not $SkipBuild) {
+    Write-Host "[0/3] Generating app icon..." -ForegroundColor Cyan
+    python scripts\make_icon.py
+    if ($LASTEXITCODE -ne 0) { throw "make_icon failed: $LASTEXITCODE" }
+
     Write-Host "[1/3] PyInstaller --onedir building $name ..." -ForegroundColor Cyan
     # 注入变体标识：配置目录/会话/开机自启按变体隔离（pet/config.py 读取）
     Set-Content -Path 'packaging\build_variant.py' -Value "VARIANT = '$Variant'" -Encoding UTF8
@@ -69,9 +79,12 @@ if (-not $SkipBuild) {
         --collect-all imageio_ffmpeg `
         --collect-all certifi `
         --add-data $datas `
-        --add-data "assets/sounds;assets/sounds" `
-        --add-data "assets/chat;assets/chat" `
-        --add-data "pet/chat/styles.qss;pet/chat" `
+        --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
+        --add-data "pet\menu_templates;pet\menu_templates" `
+        @chatData `
+        --add-data "assets\sounds;assets\sounds" `
+        --add-data "assets\chat;assets\chat" `
+        --add-data "pet\chat\styles.qss;pet\chat" `
         @excludes `
         $entry
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed: $LASTEXITCODE" }

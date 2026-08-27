@@ -1,0 +1,1634 @@
+# -*- coding: utf-8 -*-
+"""Modern-inspired sidebar settings panel used by the modern context menu."""
+from __future__ import annotations
+
+import os
+import sys
+import threading
+from pathlib import Path
+
+import shiboken6
+
+from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractItemView,
+    QApplication,
+    QDialog,
+    QColorDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFileIconProvider,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+    QWidgetAction,
+)
+
+from . import autostart as autostart_mod
+from . import catalog
+from .config import (
+    DEFAULT_CONTEXT_MENU_APPEARANCE,
+    DEFAULT_MENU_EASTER_EGG,
+    DEFAULT_QUICK_LAUNCH_APPS,
+    DEFAULT_SELF_TALK_BUBBLE_STYLE,
+    DEFAULT_SELF_TALK_DURATION_SECONDS,
+    DEFAULT_SELF_TALK_MAX_INTERVAL,
+    DEFAULT_SELF_TALK_MIN_INTERVAL,
+    DEFAULT_SELF_TALK_TEXTS,
+)
+from .context_menus.icons import vector_widget_icon
+from .context_menus.quick_launch import fitted_application_icon
+from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
+from .speech_bubble import BUBBLE_STYLE_PRESETS
+
+
+def _system_font_families() -> tuple[str, ...]:
+    """缓存系统字体族列表。
+
+    macOS 上 QFontDatabase.families() 走 CoreText 枚举，首次调用可达数百 ms，
+    设置窗口每次打开都重建实例，同步枚举会明显拖慢打开速度。
+    """
+    if _system_font_families._cache is None:
+        _system_font_families._cache = tuple(QFontDatabase.families())
+    return _system_font_families._cache
+
+
+_system_font_families._cache = None
+
+
+BROWSER_CONTROL_SPEC = {
+    "field_height": 32,
+    "border": "#cfd4da",
+    "border_hover": "#aeb6c0",
+    "focus": "#0a84ff",
+    "radius": 7,
+    "scrollbar_width": 8,
+}
+
+BROWSER_CONTROL_STYLESHEET = """
+QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
+    background: #ffffff;
+    color: #202124;
+    border: 1px solid #cfd4da;
+    border-radius: 7px;
+    padding: 4px 8px;
+    selection-background-color: #0a84ff;
+    selection-color: #ffffff;
+}
+QLineEdit, QSpinBox, QDoubleSpinBox { min-height: 20px; }
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QPlainTextEdit:hover {
+    border-color: #aeb6c0;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
+    border: 2px solid #0a84ff;
+    padding: 3px 7px;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    width: 18px;
+    border: none;
+    border-left: 1px solid #e3e5e8;
+    border-bottom: 1px solid #eceef0;
+    border-top-right-radius: 6px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    width: 18px;
+    border: none;
+    border-left: 1px solid #e3e5e8;
+    border-bottom-right-radius: 6px;
+}
+QScrollBar:vertical {
+    width: 8px;
+    margin: 0;
+    background: transparent;
+}
+QScrollBar::handle:vertical {
+    min-height: 24px;
+    margin: 1px;
+    background: #c4c8cc;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover { background: #9fa5ab; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar:horizontal {
+    height: 8px;
+    margin: 0;
+    background: transparent;
+}
+QScrollBar::handle:horizontal {
+    min-width: 24px;
+    margin: 1px;
+    background: #c4c8cc;
+    border-radius: 4px;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+"""
+
+
+class ToggleSwitch(QAbstractButton):
+    """Small native-looking toggle used by settings cards."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(38, 22)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#0a84ff") if self.isChecked() else QColor("#dedede"))
+        painter.drawRoundedRect(QRectF(0, 1, 38, 20), 10, 10)
+        knob_x = 19.0 if self.isChecked() else 2.0
+        painter.setBrush(QColor("#ffffff"))
+        painter.setPen(QPen(QColor("#c9c9c9"), 0.5))
+        painter.drawEllipse(QRectF(knob_x, 2, 18, 18))
+
+
+IMAGE_NAME_FILTER = "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *.tiff)"
+AUDIO_NAME_FILTER = "音频文件 (*.wav *.mp3 *.ogg *.flac *.m4a)"
+
+
+class ResourcePathPicker(QWidget):
+    """Absolute-path field with a native file or directory chooser."""
+
+    def __init__(self, value: str, *, directory: bool = False, name_filter: str = IMAGE_NAME_FILTER, parent=None):
+        super().__init__(parent)
+        self.directory = bool(directory)
+        self.name_filter = name_filter
+        self.edit = QLineEdit(self)
+        self.edit.setMinimumWidth(250)
+        self.edit.setText(str(value))
+        self.button = QPushButton("选择…", self)
+        self.button.setFixedWidth(66)
+        self.button.clicked.connect(self.choose)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.edit, 1)
+        layout.addWidget(self.button)
+
+    def text(self) -> str:
+        return self.edit.text().strip()
+
+    def setText(self, value: str) -> None:  # noqa: N802
+        self.edit.setText(str(value))
+
+    def choose(self) -> None:
+        current = self.text()
+        start = current if current else str(Path.home())
+        if self.directory:
+            selected = QFileDialog.getExistingDirectory(self, "选择图片目录", start)
+        else:
+            selected, _ = QFileDialog.getOpenFileName(self, "选择图片", start, self.name_filter)
+        if selected:
+            self.setText(str(Path(selected).expanduser().resolve()))
+
+
+class ColorSwatchButton(QAbstractButton):
+    """Compact painted color well that does not depend on native button CSS."""
+
+    def __init__(self, value: str, parent=None):
+        super().__init__(parent)
+        self._color = QColor(value)
+        self.setFixedSize(36, 32)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("选择颜色")
+
+    def color(self) -> QColor:
+        return QColor(self._color)
+
+    def setColor(self, value) -> None:  # noqa: N802
+        color = QColor(value)
+        self._color = color if color.isValid() else QColor("#ffffff")
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor("#aeb3b8"), 1.0))
+        painter.setBrush(self._color)
+        painter.drawRoundedRect(QRectF(3.5, 3.5, self.width() - 7.0, self.height() - 7.0), 6, 6)
+
+
+class ColorPicker(QWidget):
+    """Editable #RRGGBB field paired with the native color panel."""
+
+    def __init__(self, value: str, parent=None):
+        super().__init__(parent)
+        self.edit = QLineEdit(str(value), self)
+        self.edit.setFixedWidth(96)
+        self.button = ColorSwatchButton(value, self)
+        self.button.clicked.connect(self.choose)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.edit)
+        layout.addWidget(self.button)
+        self.edit.textChanged.connect(self._sync_swatch)
+        self._sync_swatch(self.edit.text())
+
+    def text(self) -> str:
+        return self.edit.text().strip()
+
+    def choose(self) -> None:
+        initial = QColor(self.text())
+        color = QColorDialog.getColor(initial if initial.isValid() else QColor("#ffffff"), self, "选择颜色")
+        if color.isValid():
+            self.edit.setText(color.name(QColor.NameFormat.HexRgb))
+
+    def _sync_swatch(self, value: str) -> None:
+        color = QColor(value)
+        if color.isValid():
+            self.button.setColor(color)
+
+
+def _draw_chevron(widget, center_y: float, *, down: bool) -> None:
+    painter = QPainter(widget)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    color = QColor("#62676d") if widget.isEnabled() else QColor("#aeb2b7")
+    painter.setPen(QPen(color, 1.35, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+    center_x = widget.width() - 10.0
+    offset = 1.8 if down else -1.8
+    painter.drawLine(QPointF(center_x - 2.6, center_y - offset), QPointF(center_x, center_y + offset))
+    painter.drawLine(QPointF(center_x, center_y + offset), QPointF(center_x + 2.6, center_y - offset))
+
+
+MODERN_SELECT_POPUP_STYLESHEET = """
+QMenu#ModernSelectPopup {
+    background: #ffffff;
+    color: #202020;
+    border: 1px solid #d8d8d8;
+    border-radius: 10px;
+    padding: 6px;
+    font-size: 13px;
+}
+QMenu#ModernSelectPopup::item {
+    min-height: 22px;
+    padding: 4px 28px 4px 12px;
+    border-radius: 7px;
+}
+QMenu#ModernSelectPopup::item:selected { background: #eeeeee; }
+QMenu#ModernSelectPopup::indicator { width: 0; height: 0; }
+"""
+
+
+class ModernSelect(QAbstractButton):
+    """Custom-painted selector with a Modern-style popover, not a QComboBox."""
+
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, parent=None, *, width: int = 132):
+        super().__init__(parent)
+        self._items: list[tuple[str, object]] = []
+        self._index = -1
+        self._hovered = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedHeight(BROWSER_CONTROL_SPEC["field_height"])
+        self.setFixedWidth(width)
+        self.clicked.connect(self.showPopup)
+
+    def addItem(self, text: str, data=None) -> None:  # noqa: N802
+        self._items.append((str(text), data))
+        if self._index < 0:
+            self.setCurrentIndex(0)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def clear(self) -> None:
+        self._items.clear()
+        self._index = -1
+        self.setText("")
+        self.update()
+
+    def itemData(self, index: int):  # noqa: N802
+        return self._items[index][1] if 0 <= index < len(self._items) else None
+
+    def itemText(self, index: int) -> str:  # noqa: N802
+        return self._items[index][0] if 0 <= index < len(self._items) else ""
+
+    def setItemData(self, index: int, value, role=None) -> None:  # noqa: N802
+        # Foreground roles are unnecessary because the custom popup owns its
+        # palette; other calls update the stored data payload.
+        if role is None and 0 <= index < len(self._items):
+            text, _old = self._items[index]
+            self._items[index] = (text, value)
+
+    def findData(self, data) -> int:  # noqa: N802
+        for index, (_, item_data) in enumerate(self._items):
+            if item_data == data:
+                return index
+        return -1
+
+    def setCurrentData(self, data) -> None:  # noqa: N802
+        index = self.findData(data)
+        if index >= 0:
+            self.setCurrentIndex(index)
+
+    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+        if not 0 <= index < len(self._items) or index == self._index:
+            return
+        self._index = index
+        self.setText(self._items[index][0])
+        self.currentIndexChanged.emit(index)
+        self.update()
+
+    def currentIndex(self) -> int:  # noqa: N802
+        return self._index
+
+    def currentData(self):  # noqa: N802
+        return self._items[self._index][1] if 0 <= self._index < len(self._items) else None
+
+    def currentText(self) -> str:  # noqa: N802
+        return self._items[self._index][0] if 0 <= self._index < len(self._items) else ""
+
+    @staticmethod
+    def popupStyleSheet() -> str:  # noqa: N802
+        return MODERN_SELECT_POPUP_STYLESHEET
+
+    def showPopup(self) -> None:  # noqa: N802
+        popup = QMenu(self)
+        popup.setObjectName("ModernSelectPopup")
+        popup.setStyleSheet(MODERN_SELECT_POPUP_STYLESHEET)
+        popup.setMinimumWidth(self.width())
+        for index, (text, _) in enumerate(self._items):
+            action = QWidgetAction(popup)
+            option = ModernSelectOption(text, index == self._index, popup)
+            option.clicked.connect(lambda checked=False, index=index: self.setCurrentIndex(index))
+            option.clicked.connect(popup.close)
+            action.setDefaultWidget(option)
+            popup.addAction(action)
+        self._popup = popup
+        popup.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        border = "#0a84ff" if self.hasFocus() else ("#aeb6c0" if self._hovered else "#cfd4da")
+        painter.setBrush(QColor("#ffffff"))
+        painter.setPen(QPen(QColor(border), 1.5 if self.hasFocus() else 1.0))
+        painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), 8, 8)
+        painter.setPen(QColor("#202124"))
+        painter.drawText(QRectF(10, 0, self.width() - 34, self.height()), Qt.AlignmentFlag.AlignVCenter, self.currentText())
+        painter.end()
+        _draw_chevron(self, self.height() / 2.0, down=True)
+
+
+class ModernSelectOption(QAbstractButton):
+    def __init__(self, text: str, selected: bool, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._selected = selected
+        self._hovered = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(30)
+        self.setMinimumWidth(116)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self._hovered:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#eeeeee"))
+            painter.drawRoundedRect(QRectF(2, 1, self.width() - 4, self.height() - 2), 7, 7)
+        painter.setPen(QColor("#202020"))
+        painter.drawText(QRectF(10, 0, self.width() - 36, self.height()), Qt.AlignmentFlag.AlignVCenter, self._text)
+        if self._selected:
+            pen = QPen(QColor("#454545"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            x = self.width() - 17.0
+            painter.drawLine(QPointF(x - 4, 15), QPointF(x - 1, 18))
+            painter.drawLine(QPointF(x - 1, 18), QPointF(x + 5, 10))
+
+
+class BrowserSpinBox(QSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(92)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        _draw_chevron(self, self.height() * 0.29, down=False)
+        _draw_chevron(self, self.height() * 0.71, down=True)
+
+
+class BrowserDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedWidth(92)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        _draw_chevron(self, self.height() * 0.29, down=False)
+        _draw_chevron(self, self.height() * 0.71, down=True)
+
+
+class SettingRow(QFrame):
+    """A label and hint on the left, with one control aligned to the right."""
+
+    def __init__(self, key: str, title: str, hint: str, control: QWidget, parent=None, *, stacked: bool = False):
+        super().__init__(parent)
+        self.setObjectName(f"settingRow_{key}")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setProperty("stackedControl", stacked)
+        label = QLabel(title, self)
+        label.setObjectName("settingLabel")
+        hint_label = QLabel(hint, self)
+        hint_label.setObjectName("settingHint")
+        hint_label.setWordWrap(True)
+        if stacked:
+            row = QVBoxLayout(self)
+            row.setContentsMargins(14, 9, 14, 9)
+            row.setSpacing(0)
+            row.addWidget(label)
+            row.addWidget(hint_label)
+            row.addSpacing(7)
+            row.addWidget(control)
+        else:
+            row = QHBoxLayout(self)
+            row.setContentsMargins(14, 9, 14, 9)
+            row.setSpacing(18)
+            copy = QVBoxLayout()
+            copy.setContentsMargins(0, 0, 0, 0)
+            copy.setSpacing(2)
+            copy.addWidget(label)
+            copy.addWidget(hint_label)
+            copy.addStretch(1)
+            row.addLayout(copy, 1)
+            row.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.label = label
+        self.hint_label = hint_label
+        self.control = control
+
+
+class SettingsCard(QFrame):
+    def __init__(self, rows: list[SettingRow], parent=None):
+        super().__init__(parent)
+        self.setObjectName("settingsCard")
+        self.rows = list(rows)
+        self.separators: list[QFrame] = []
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        for index, row in enumerate(rows):
+            if index:
+                separator = QFrame(self)
+                separator.setObjectName("cardSeparator")
+                separator.setFixedHeight(1)
+                self.separators.append(separator)
+                layout.addWidget(separator)
+            layout.addWidget(row)
+        self.refresh_separators()
+
+    def refresh_separators(self) -> None:
+        """Keep dividers attached to visible rows during progressive disclosure."""
+        visible_before = False
+        for index, row in enumerate(self.rows):
+            if index:
+                self.separators[index - 1].setVisible(not row.isHidden() and visible_before)
+            visible_before = visible_before or not row.isHidden()
+
+
+class SettingsSection(QWidget):
+    def __init__(self, title: str, rows: list[SettingRow], parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(7)
+        label = QLabel(title, self)
+        label.setObjectName("sectionTitle")
+        layout.addWidget(label)
+        layout.addWidget(SettingsCard(rows, self))
+
+
+def _line_edit(text: str = "", *, password: bool = False, width: int = 240) -> QLineEdit:
+    edit = QLineEdit(text)
+    edit.setMinimumWidth(width)
+    if password:
+        edit.setEchoMode(QLineEdit.EchoMode.Password)
+    return edit
+
+
+class QuickLaunchEditor(QWidget):
+    """Small application picker persisted into the modern menu."""
+
+    def __init__(self, apps: list[dict], parent=None):
+        super().__init__(parent)
+        self.list = QListWidget(self)
+        self.list.setObjectName("quickLaunchList")
+        self.list.setMinimumHeight(116)
+        self.list.setIconSize(QSize(22, 22))
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.list.setDragEnabled(True)
+        self.list.setAcceptDrops(True)
+        self.list.setDropIndicatorShown(True)
+        self.add_button = QPushButton("添加应用", self)
+        self.add_button.setIcon(vector_widget_icon(self, "add", 15))
+        self.remove_button = QPushButton("移除勾选", self)
+        self.remove_button.setIcon(vector_widget_icon(self, "remove", 15))
+        self.default_button = QPushButton("添加默认浏览器", self)
+        self.default_button.setIcon(vector_widget_icon(self, "web", 15))
+        self.add_button.clicked.connect(self._choose_application)
+        self.remove_button.clicked.connect(self._remove_checked)
+        self.default_button.clicked.connect(self._add_default_browser)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(7)
+        buttons.addWidget(self.add_button)
+        buttons.addWidget(self.default_button)
+        buttons.addStretch(1)
+        buttons.addWidget(self.remove_button)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.list)
+        layout.addLayout(buttons)
+        for item in apps:
+            self.add_app(item)
+
+    def add_app(self, app: dict) -> None:
+        app = dict(app)
+        if app.get("kind") == "default_browser":
+            icon = vector_widget_icon(self, "web", 22)
+            app = {"name": str(app.get("name") or "默认浏览器"), "path": "", "kind": "default_browser"}
+        else:
+            path = str(app.get("path") or "")
+            if not path:
+                return
+            provider_icon = QFileIconProvider().icon(QFileInfo(path))
+            if provider_icon.isNull():
+                icon = vector_widget_icon(self, "application", 17)
+            else:
+                icon = fitted_application_icon(provider_icon, 22, self)
+            app = {"name": str(app.get("name") or Path(path).stem), "path": path, "kind": "application"}
+        item = QListWidgetItem(icon, app["name"])
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsDragEnabled)
+        item.setCheckState(Qt.CheckState.Unchecked)
+        item.setData(Qt.ItemDataRole.UserRole, app)
+        item.setToolTip(app["path"] or "使用系统默认浏览器")
+        self.list.addItem(item)
+
+    def apps(self) -> list[dict]:
+        return [dict(self.list.item(index).data(Qt.ItemDataRole.UserRole)) for index in range(self.list.count())]
+
+    def _choose_application(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择需要快捷启动的应用",
+            "/Applications" if os.path.isdir("/Applications") else "",
+            "应用程序 (*.app);;所有文件 (*)",
+        )
+        if path:
+            self.add_app({"name": Path(path).stem, "path": path, "kind": "application"})
+
+    def _remove_checked(self) -> None:
+        for index in range(self.list.count() - 1, -1, -1):
+            if self.list.item(index).checkState() == Qt.CheckState.Checked:
+                self.list.takeItem(index)
+
+    def _add_default_browser(self) -> None:
+        if not any(item.get("kind") == "default_browser" for item in self.apps()):
+            self.add_app(DEFAULT_QUICK_LAUNCH_APPS[0])
+
+
+class _AiSettingsPage(QWidget):
+    test_done = Signal(bool, str)
+
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        # No-chat bundles exclude pet.chat and never construct this optional page.
+        from .chat.models import ProviderConfig, SecretStore
+        from .chat.providers import test_connection
+
+        self.config = config
+        self._provider_config_type = ProviderConfig
+        self._secret_store_type = SecretStore
+        self._test_connection = test_connection
+        self.settings = config.chat_settings()
+        provider = self.settings.active_config
+        self._test_thread = None
+        self.test_done.connect(self._on_test_done)
+
+        self.name = _line_edit(provider.name)
+        self.url = _line_edit(provider.base_url)
+        self.model = _line_edit(provider.model)
+        self.key = _line_edit(password=True)
+        self.prompt = QPlainTextEdit(self.settings.default_system_prompt)
+        self.prompt.setMinimumSize(240, 80)
+        self.timeout = BrowserSpinBox()
+        self.timeout.setRange(1, 600)
+        self.timeout.setSuffix(" 秒")
+        self.timeout.setValue(int(provider.timeout))
+        self.temperature = BrowserDoubleSpinBox()
+        self.temperature.setRange(0.0, 2.0)
+        self.temperature.setSingleStep(0.1)
+        self.temperature.setValue(provider.temperature)
+        self.tokens = BrowserSpinBox()
+        self.tokens.setRange(1, 32768)
+        self.tokens.setValue(provider.max_tokens)
+        self.skip_ssl = ToggleSwitch()
+        self.skip_ssl.setChecked(not provider.verify_ssl)
+        self.chat_ui_style = ModernSelect(self, width=190)
+        self.chat_ui_style.addItem("肥鱼版 DeepSeek", "modern")
+        self.chat_ui_style.addItem("肥鱼牌小手机", "classic")
+        self.chat_ui_style.setCurrentData(str(config.get("chat_ui_style", "modern")))
+        self.vision_same = ToggleSwitch()
+        self.vision_same.setChecked(bool(provider.vision_same_as_chat))
+        self.vision_model = _line_edit(provider.vision_model)
+        self.vision_url = _line_edit(provider.vision_base_url)
+        self.vision_key = _line_edit(password=True)
+
+        from .chat.themes import theme_names
+        self._background_themes = list(theme_names())
+        self._background_values = {
+            "classic": str(config.get("chat_background", "") or ""),
+            "modern": str(config.get("modern_chat_background", "") or ""),
+        }
+        self._background_display = {
+            "classic": {
+                "opacity": int(config.get("chat_background_opacity", 100) or 100),
+                "fill": str(config.get("chat_background_fill", "cover") or "cover"),
+            },
+            "modern": {
+                "opacity": int(config.get("modern_chat_background_opacity", 100) or 100),
+                "fill": str(config.get("modern_chat_background_fill", "cover") or "cover"),
+            },
+        }
+        self._background_style = str(self.chat_ui_style.currentData() or "modern")
+        self.background_select = ModernSelect(self, width=180)
+        self.background_picker = ResourcePathPicker(
+            "",
+            parent=self,
+        )
+        self.background_opacity = BrowserSpinBox(self)
+        self.background_opacity.setRange(10, 100)
+        self.background_opacity.setSuffix(" %")
+        self.message_card_opacity = BrowserSpinBox(self)
+        self.message_card_opacity.setRange(10, 100)
+        self.message_card_opacity.setSuffix(" %")
+        self.message_card_opacity.setValue(
+            int(config.get("modern_chat_card_opacity", 84) or 84)
+        )
+        self.background_fill = ModernSelect(self, width=160)
+        self.background_fill.addItem("填充裁剪", "cover")
+        self.background_fill.addItem("完整适应", "contain")
+        self.background_fill.addItem("拉伸铺满", "stretch")
+        self._populate_background_options(self._background_style)
+        self.chat_ui_style.currentIndexChanged.connect(self._on_chat_ui_style_changed)
+        self.test_button = QPushButton("测试连接")
+        self.test_button.clicked.connect(self._run_test)
+        self.test_result = QLabel("验证当前 Provider、API 地址和凭据是否可用。")
+        self.test_result.setWordWrap(True)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(18)
+        root.addWidget(SettingsSection("模型与连接", [
+            SettingRow("provider_name", "Provider 名称", "用于区分当前使用的模型服务。", self.name),
+            SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
+            SettingRow("model", "模型", "发送请求时使用的模型标识。", self.model),
+            SettingRow("api_key", "API Key", "凭据优先保存到系统钥匙串。", self.key),
+            SettingRow("system_prompt", "System Prompt", "定义桌宠对话时的身份、语气和行为。", self.prompt, stacked=True),
+            SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
+        ], self))
+        vision_rows = [
+            SettingRow("vision_same", "视觉模型复用聊天模型", "开启后自动选择兼容的视觉模型，用于“看看屏幕”。", self.vision_same),
+            SettingRow("vision_model", "视觉模型", "关闭复用后使用的多模态模型标识；留空则自动推导。", self.vision_model),
+            SettingRow("vision_url", "视觉 API 地址", "留空复用聊天服务地址。", self.vision_url),
+            SettingRow("vision_key", "视觉 API Key", "留空复用聊天服务凭据。", self.vision_key),
+        ]
+        root.addWidget(SettingsSection("视觉能力", vision_rows, self))
+        self._vision_override_rows = vision_rows[1:]
+        self.vision_same.toggled.connect(self._update_vision_visibility)
+        self._update_vision_visibility(self.vision_same.isChecked())
+        self._test_row = self.findChild(SettingRow, "settingRow_connection_test")
+        if self._test_row is not None:
+            self.test_result = self._test_row.hint_label
+        root.addWidget(SettingsSection("生成参数", [
+            SettingRow("timeout", "请求超时", "等待模型服务响应的最长时间。", self.timeout),
+            SettingRow("temperature", "Temperature", "数值越高，回答越随机。", self.temperature),
+            SettingRow("max_tokens", "最大输出 Token", "限制模型单次回复的最大长度。", self.tokens),
+            SettingRow("skip_ssl", "跳过 SSL 证书验证", "仅用于本地网关或自签名证书。", self.skip_ssl),
+        ], self))
+        root.addStretch(1)
+
+    def appearance_rows(self) -> list[SettingRow]:
+        """Controls visually owned by the Appearance page, persisted with AI settings."""
+        rows = [
+            SettingRow(
+                "chat_ui_style", "对话窗口",
+                "肥鱼版 DeepSeek 提供宽屏现代体验；肥鱼牌小手机保留紧凑经典体验。",
+                self.chat_ui_style,
+            ),
+            SettingRow(
+                "chat_background", "对话背景",
+                "肥鱼版 DeepSeek 支持纯色或自定义图片；肥鱼牌小手机另提供内置主题。",
+                self.background_select,
+            ),
+            SettingRow("chat_background_file", "自定义背景图片", "支持常见图片格式，使用绝对路径。", self.background_picker),
+            SettingRow("chat_background_opacity", "图片不透明度", "调节背景图可见强度；消息卡片会独立保证正文可读。", self.background_opacity),
+            SettingRow("chat_background_fill", "填充方式", "选择裁剪铺满、完整显示或拉伸铺满窗口。", self.background_fill),
+            SettingRow(
+                "modern_chat_card_opacity", "消息卡片不透明度",
+                "调节肥鱼版 DeepSeek 消息卡片透出背景的程度。",
+                self.message_card_opacity,
+            ),
+        ]
+        self._background_file_row = rows[-4]
+        self._background_detail_rows = rows[-3:-1]
+        self._message_card_opacity_row = rows[-1]
+        self.background_select.currentIndexChanged.connect(self._update_background_visibility)
+        self._update_background_visibility()
+        return rows
+
+    def _current_background_value(self) -> str:
+        value = self.background_select.currentData()
+        return self.background_picker.text() if value == "custom" else str(value or "")
+
+    def _capture_background_value(self) -> None:
+        self._background_values[self._background_style] = self._current_background_value()
+        self._background_display[self._background_style] = {
+            "opacity": self.background_opacity.value(),
+            "fill": str(self.background_fill.currentData() or "cover"),
+        }
+
+    def _populate_background_options(self, style: str) -> None:
+        self.background_select.clear()
+        self.background_select.addItem("纯色背景", "")
+        if style == "classic":
+            for key, label in self._background_themes:
+                self.background_select.addItem(label, f"builtin:{key}")
+        self.background_select.addItem("自定义图片", "custom")
+        value = str(self._background_values.get(style, "") or "")
+        if style == "classic" and value.startswith("builtin:") and self.background_select.findData(value) >= 0:
+            self.background_select.setCurrentData(value)
+            self.background_picker.setText("")
+        elif value:
+            self.background_select.setCurrentData("custom")
+            self.background_picker.setText(value)
+        else:
+            self.background_select.setCurrentData("")
+            self.background_picker.setText("")
+        display = self._background_display.get(style, {})
+        self.background_opacity.setValue(int(display.get("opacity", 100)))
+        self.background_fill.setCurrentData(str(display.get("fill", "cover")))
+        self._update_background_visibility()
+
+    def _on_chat_ui_style_changed(self, _index: int = -1) -> None:
+        self._capture_background_value()
+        self._background_style = str(self.chat_ui_style.currentData() or "modern")
+        self._populate_background_options(self._background_style)
+
+    def _update_vision_visibility(self, reuse_chat_model: bool) -> None:
+        for row in self._vision_override_rows:
+            row.setVisible(not reuse_chat_model)
+        card = self._vision_override_rows[0].parentWidget() if self._vision_override_rows else None
+        if isinstance(card, SettingsCard):
+            card.refresh_separators()
+
+    def _update_background_visibility(self, _index: int = -1) -> None:
+        row = getattr(self, "_background_file_row", None)
+        if row is not None:
+            row.setVisible(self.background_select.currentData() == "custom")
+            has_image = bool(self.background_select.currentData())
+            for detail_row in getattr(self, "_background_detail_rows", []):
+                detail_row.setVisible(has_image)
+            card = row.parentWidget()
+            if isinstance(card, SettingsCard):
+                card.refresh_separators()
+        card_opacity_row = getattr(self, "_message_card_opacity_row", None)
+        if card_opacity_row is not None:
+            card_opacity_row.setVisible(self._background_style == "modern")
+
+    def provisional_config(self):
+        provider = self.settings.active_config
+        return self._provider_config_type(
+            provider.provider_id,
+            self.name.text().strip() or provider.name,
+            self.url.text().strip(),
+            provider.chat_path,
+            self.model.text().strip(),
+            provider.api_key_ref,
+            self.key.text() or provider.api_key,
+            float(self.timeout.value()),
+            float(self.temperature.value()),
+            int(self.tokens.value()),
+            verify_ssl=not self.skip_ssl.isChecked(),
+        )
+
+    def _run_test(self) -> None:
+        if self._test_thread is not None and self._test_thread.is_alive():
+            return
+        self.test_button.setEnabled(False)
+        self.test_button.setText("测试中…")
+        self.test_result.setText("正在连接模型服务…")
+        self._test_thread = threading.Thread(
+            target=self._run_test_worker,
+            args=(self.provisional_config(),),
+            daemon=True,
+            name="pet-modern-settings-connection-test",
+        )
+        self._test_thread.start()
+
+    def _run_test_worker(self, provider) -> None:
+        self.test_done.emit(*self._test_connection(provider, timeout=10.0))
+
+    def _on_test_done(self, ok: bool, message: str) -> None:
+        self.test_button.setEnabled(True)
+        self.test_button.setText("测试连接")
+        self.test_result.setText(message)
+        self.test_result.setStyleSheet("color: #16843b;" if ok else "color: #c9362b;")
+        self._test_thread = None
+
+    def save(self) -> None:
+        provider = self.settings.active_config
+        provider.name = self.name.text().strip() or provider.name
+        provider.base_url = self.url.text().strip()
+        provider.model = self.model.text().strip()
+        provider.timeout = float(self.timeout.value())
+        provider.temperature = float(self.temperature.value())
+        provider.max_tokens = int(self.tokens.value())
+        provider.verify_ssl = not self.skip_ssl.isChecked()
+        provider.vision_same_as_chat = self.vision_same.isChecked()
+        provider.vision_model = self.vision_model.text().strip()
+        provider.vision_base_url = self.vision_url.text().strip()
+        vision_key = self.vision_key.text()
+        if vision_key:
+            provider.vision_api_key_ref = provider.vision_api_key_ref or f"provider/{provider.provider_id}/vision"
+            if not self._secret_store_type().set(provider.vision_api_key_ref, vision_key):
+                provider.vision_api_key = vision_key
+        key = self.key.text()
+        if key:
+            provider.api_key_ref = provider.api_key_ref or f"provider/{provider.provider_id}"
+            if not self._secret_store_type().set(provider.api_key_ref, key):
+                provider.api_key = key
+        self.settings.default_system_prompt = self.prompt.toPlainText().strip()
+        self.config.set("chat_ui_style", self.chat_ui_style.currentData())
+        self._capture_background_value()
+        self.config.set("chat_background", self._background_values["classic"])
+        self.config.set("modern_chat_background", self._background_values["modern"])
+        self.config.set("chat_background_opacity", self._background_display["classic"]["opacity"])
+        self.config.set("chat_background_fill", self._background_display["classic"]["fill"])
+        self.config.set("modern_chat_background_opacity", self._background_display["modern"]["opacity"])
+        self.config.set("modern_chat_background_fill", self._background_display["modern"]["fill"])
+        self.config.set("modern_chat_card_opacity", self.message_card_opacity.value())
+        self.config.set_chat_settings(self.settings)
+
+
+class ModernSettingsDialog(QDialog):
+    """Settings window matching Modern's sidebar and rounded-card hierarchy."""
+
+    settings_saved = Signal()
+
+    def __init__(self, config, parent=None, *, include_ai: bool = True):
+        super().__init__(parent)
+        self.config = config
+        self.include_ai = bool(include_ai)
+        self.ai_page = None
+        self.setProperty("modernStyle", True)
+        self.setProperty("menuStyle", "modern")
+        self.setWindowTitle("桌宠设置")
+        self.resize(800, 560)
+        self.setMinimumSize(720, 500)
+        self._positioned_away = False
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+        font.setPixelSize(13)
+        self.setFont(font)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        sidebar_pane = QFrame(self)
+        sidebar_pane.setObjectName("sidebarPane")
+        sidebar_pane.setFixedWidth(188)
+        sidebar_layout = QVBoxLayout(sidebar_pane)
+        sidebar_layout.setContentsMargins(12, 16, 12, 12)
+        sidebar_layout.setSpacing(9)
+        self.save_exit_button = QPushButton("保存并退出", sidebar_pane)
+        self.save_exit_button.setObjectName("saveAndExit")
+        self.save_exit_button.setIcon(vector_widget_icon(self.save_exit_button, "back", 16))
+        self.save_exit_button.clicked.connect(self._save)
+        self.save_exit_button.setAutoDefault(False)
+        self.save_exit_button.setDefault(False)
+        sidebar_layout.addWidget(self.save_exit_button)
+        self.search_edit = QLineEdit(sidebar_pane)
+        self.search_edit.setObjectName("settingsSearch")
+        self.search_edit.setPlaceholderText("搜索设置…")
+        self.search_edit.addAction(
+            vector_widget_icon(self, "search", 16),
+            QLineEdit.ActionPosition.LeadingPosition,
+        )
+        self.search_edit.installEventFilter(self)
+        sidebar_layout.addWidget(self.search_edit)
+        self.search_status = QLabel("", sidebar_pane)
+        self.search_status.setObjectName("searchStatus")
+        self.search_status.setWordWrap(True)
+        self.search_status.hide()
+        sidebar_layout.addWidget(self.search_status)
+        self.sidebar = QListWidget(sidebar_pane)
+        self.sidebar.setObjectName("settingsSidebar")
+        self.sidebar.setSpacing(2)
+        sidebar_layout.addWidget(self.sidebar, 1)
+
+        self.pages = QStackedWidget(self)
+        body.addWidget(sidebar_pane)
+        body.addWidget(self.pages, 1)
+        root.addLayout(body, 1)
+
+        self._build_pet_controls()
+        if include_ai:
+            self.ai_page = _AiSettingsPage(config, self)
+
+        general_content = QWidget()
+        general_layout = QVBoxLayout(general_content)
+        general_layout.setContentsMargins(0, 0, 0, 0)
+        general_layout.setSpacing(18)
+        launch_rows = [
+            SettingRow("autostart", "开机自启", "登录系统后自动启动桌宠。", self.autostart_check),
+        ]
+        if sys.platform == "darwin":
+            launch_rows.append(SettingRow(
+                "dock_icon", "显示 Dock 图标", "在 macOS Dock 中显示桌宠应用；关闭后仍可通过桌宠和托盘操作。",
+                self.dock_icon_check,
+            ))
+        general_layout.addWidget(SettingsSection("应用启动", launch_rows, general_content))
+        window_rows = [
+            SettingRow("on_top", "窗口置顶", "始终将桌宠保持在其他窗口上方。", self.on_top_check),
+        ]
+        if sys.platform == "win32":
+            window_rows.extend([
+                SettingRow("auto_hide_fullscreen", "全屏时自动隐藏", "全屏游戏或视频期间自动隐藏桌宠。", self.auto_hide_fullscreen_check),
+                SettingRow("stream_capture", "直播捕获兼容", "让 OBS 等工具能够枚举并捕获桌宠窗口。", self.stream_capture_check),
+            ])
+        general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
+        if self.balance_refresh_spin is not None:
+            general_layout.addWidget(SettingsSection("后台服务", [
+                SettingRow("balance_refresh", "余额自动刷新", "设置后台刷新间隔；0 分钟表示关闭。", self.balance_refresh_spin),
+            ], general_content))
+        general_layout.addStretch(1)
+        self._add_page("常规", "settings", self._page_shell("常规", general_content))
+
+        behavior_content = QWidget()
+        behavior_layout = QVBoxLayout(behavior_content)
+        behavior_layout.setContentsMargins(0, 0, 0, 0)
+        behavior_layout.setSpacing(16)
+        behavior_layout.addWidget(SettingsSection("动画", [
+            SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
+            SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
+            SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
+        ], behavior_content))
+        behavior_layout.addWidget(SettingsSection("拖拽", [
+            SettingRow("drag_physics", "拖动物理", "启用拖拽惯性、重力和边缘反弹。", self.drag_physics_check),
+        ], behavior_content))
+        click_rows = [
+            SettingRow("click_sound", "点击音效", "点击桌宠时播放轻量反馈音效。", self.click_sound_check),
+            SettingRow("click_sound_path", "音效文件", "使用绝对路径；留空时使用内置默认音效。", self.click_sound_picker, stacked=True),
+            SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容。", self.click_self_talk_check),
+        ]
+        if self.click_balance_check is not None:
+            click_rows.insert(2, SettingRow(
+                "click_balance", "点击显示余额", "点击桌宠时查询并用气泡展示模型服务余额。",
+                self.click_balance_check,
+            ))
+        behavior_layout.addWidget(SettingsSection("点击反馈", click_rows, behavior_content))
+        behavior_layout.addWidget(SettingsSection("自言自语", [
+            SettingRow("self_talk", "气泡自言自语", "让桌宠偶尔显示一条随机思考气泡。", self.self_talk_check),
+            SettingRow("self_talk_duration", "显示时间", "每条文字或图片气泡保持显示的时间。", self.self_talk_duration_spin),
+            SettingRow("self_talk_min", "最短间隔", "上一条气泡消失后，到下一条出现前的最短空闲时间。", self.min_spin),
+            SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
+            SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
+            SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
+        ], behavior_content))
+        behavior_layout.addStretch(1)
+        self._add_page("桌宠行为", "play", self._page_shell("桌宠行为", behavior_content))
+
+        appearance_content = QWidget()
+        appearance_layout = QVBoxLayout(appearance_content)
+        appearance_layout.setContentsMargins(0, 0, 0, 0)
+        appearance_layout.setSpacing(16)
+        appearance_layout.addWidget(SettingsSection("桌宠显示", [
+            SettingRow("scale", "桌宠大小", "调整桌宠在桌面上的显示尺寸。", self.scale_combo),
+            SettingRow(
+                "self_talk_bubble_style", "气泡方案",
+                "选择气泡视觉与相对桌宠的位置；贴近屏幕边缘时自动换位。",
+                self.bubble_style_select,
+            ),
+        ], appearance_content))
+        appearance_layout.addWidget(SettingsSection("菜单外观", [
+            SettingRow("menu_theme", "颜色主题", "可跟随系统，或固定使用浅色/深色菜单。", self.menu_theme_select),
+            SettingRow("menu_density", "菜单密度", "调整新版右键菜单的菜单项高度和分组留白。", self.menu_density_select),
+            SettingRow("menu_radius", "圆角大小", "调整新版右键菜单和子菜单的外轮廓圆角。", self.menu_radius_select),
+            SettingRow("menu_font", "UI 字体", "设置新版菜单使用的界面字体。", self.menu_font_select),
+            SettingRow("menu_font_size", "UI 字号", "同步调整主菜单与多级菜单的字号。", self.menu_font_size_select),
+            SettingRow("menu_translucent", "半透明菜单", "使用接近 Modern 的半透明浮层表面。", self.menu_translucent_check),
+            SettingRow("menu_opacity", "表面不透明度", "调整菜单背景透出桌面内容的程度。", self.menu_opacity_spin),
+        ], appearance_content))
+        if self.ai_page is not None:
+            appearance_layout.addWidget(SettingsSection("AI 对话外观", self.ai_page.appearance_rows(), appearance_content))
+        appearance_layout.addWidget(SettingsSection("浅色主题", [
+            SettingRow("light_background", "背景色", "浅色菜单的浮层背景。", self.light_background_picker),
+            SettingRow("light_foreground", "文字色", "浅色菜单的主要文字与图标颜色。", self.light_foreground_picker),
+            SettingRow("light_hover", "悬停色", "鼠标悬停菜单项时的背景。", self.light_hover_picker),
+        ], appearance_content))
+        appearance_layout.addWidget(SettingsSection("深色主题", [
+            SettingRow("dark_background", "背景色", "深色菜单的浮层背景。", self.dark_background_picker),
+            SettingRow("dark_foreground", "文字色", "深色菜单的主要文字与图标颜色。", self.dark_foreground_picker),
+            SettingRow("dark_hover", "悬停色", "鼠标悬停菜单项时的背景。", self.dark_hover_picker),
+        ], appearance_content))
+        appearance_layout.addWidget(SettingsSection("彩蛋入口", [
+            SettingRow("egg_enabled", "显示彩蛋", "控制新版菜单首行彩蛋入口是否显示。", self.egg_enabled_check),
+            SettingRow("egg_title", "入口标题", "显示在圆形头像右侧的文字。", self.egg_title_edit),
+            SettingRow("egg_hint", "右侧提示", "显示在鼠标指针图标后的短提示。", self.egg_hint_edit),
+            SettingRow("egg_avatar", "头像图片", "使用绝对路径；支持常见图片格式。", self.egg_avatar_picker),
+            SettingRow("egg_image_dir", "弹窗图片目录", "使用绝对路径；每次点击会随机选择一张图片。", self.egg_image_dir_picker),
+        ], appearance_content))
+        appearance_layout.addStretch(1)
+        self._add_page("外观", "appearance", self._page_shell("外观", appearance_content))
+
+        launcher_content = QWidget()
+        launcher_layout = QVBoxLayout(launcher_content)
+        launcher_layout.setContentsMargins(0, 0, 0, 0)
+        launcher_layout.setSpacing(18)
+        self.quick_launch_editor = QuickLaunchEditor(
+            self.config.get("quick_launch_apps", DEFAULT_QUICK_LAUNCH_APPS),
+            launcher_content,
+        )
+        launcher_layout.addWidget(SettingsSection("已配置应用", [
+            SettingRow(
+                "quick_launch_apps",
+                "应用快捷启动",
+                "这些应用将按图标和名称显示在新版右键菜单的“快捷启动”子菜单中。",
+                self.quick_launch_editor,
+                stacked=True,
+            ),
+        ], launcher_content))
+        launcher_layout.addStretch(1)
+        self._add_page("快捷启动", "application", self._page_shell("快捷启动", launcher_content))
+
+        if self.ai_page is not None:
+            self._add_page("AI 设置", "chat", self._page_shell("AI 设置", self.ai_page))
+
+        self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.sidebar.setCurrentRow(0)
+        self._search_rows = self.findChildren(SettingRow)
+        self._search_matches: list[SettingRow] = []
+        self._search_index = -1
+        self.search_edit.textChanged.connect(self._search_settings)
+
+        self.self_talk_check.toggled.connect(self._update_self_talk_controls)
+        self.menu_translucent_check.toggled.connect(self._update_translucency_controls)
+        self._update_self_talk_controls(self.self_talk_check.isChecked())
+        self._update_translucency_controls(self.menu_translucent_check.isChecked())
+        # 初始同步须在全部 SettingRow 构建完成后执行，否则 findChild 找不到行
+        self._update_click_sound_controls(self.click_sound_check.isChecked())
+
+        self.setStyleSheet(self._stylesheet())
+
+    def _build_pet_controls(self) -> None:
+        self.scale_combo = ModernSelect(self, width=132)
+        current_scale = float(self.config.get("scale", catalog.DEFAULT_SCALE))
+        scales = list(catalog.SCALE_STEPS)
+        if not any(abs(current_scale - value) < 0.001 for value in scales):
+            scales.append(current_scale)
+            scales.sort()
+        for scale in scales:
+            self.scale_combo.addItem(f"{int(round(catalog.CANVAS_W * scale))} px", scale)
+        self.scale_combo.setCurrentIndex(self.scale_combo.findData(current_scale))
+
+        self.on_top_check = ToggleSwitch(self)
+        self.on_top_check.setChecked(bool(self.config.get("on_top", True)))
+        self.no_move_check = ToggleSwitch(self)
+        self.no_move_check.setChecked(bool(self.config.get("no_move", False)))
+        self.drag_physics_check = ToggleSwitch(self)
+        self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
+        self.autostart_check = ToggleSwitch(self)
+        self._autostart_initial = autostart_mod.is_enabled()
+        self.autostart_check.setChecked(self._autostart_initial)
+        self.dock_icon_check = ToggleSwitch(self)
+        self.dock_icon_check.setChecked(bool(self.config.get("show_dock_icon", True)))
+        self.click_sound_check = ToggleSwitch(self)
+        self.click_sound_check.setChecked(bool(self.config.get("click_sound_enabled", True)))
+        self.click_sound_picker = ResourcePathPicker(
+            str(self.config.get("click_sound_path", "") or ""),
+            name_filter=AUDIO_NAME_FILTER,
+            parent=self,
+        )
+        self.click_sound_check.toggled.connect(self._update_click_sound_controls)
+        self.click_balance_check = None
+        if self.include_ai:
+            self.click_balance_check = ToggleSwitch(self)
+            self.click_balance_check.setChecked(bool(self.config.get("click_show_balance", False)))
+        self.click_self_talk_check = ToggleSwitch(self)
+        self.click_self_talk_check.setChecked(bool(self.config.get("click_show_self_talk", False)))
+        self.balance_refresh_spin = None
+        if self.include_ai:
+            self.balance_refresh_spin = BrowserSpinBox(self)
+            self.balance_refresh_spin.setRange(0, 1440)
+            self.balance_refresh_spin.setSuffix(" 分钟")
+            self.balance_refresh_spin.setValue(int(self.config.get("balance_refresh_minutes", 0) or 0))
+        self.auto_hide_fullscreen_check = None
+        self.stream_capture_check = None
+        if sys.platform == "win32":
+            self.auto_hide_fullscreen_check = ToggleSwitch(self)
+            self.auto_hide_fullscreen_check.setChecked(bool(self.config.get("auto_hide_fullscreen", True)))
+            self.stream_capture_check = ToggleSwitch(self)
+            self.stream_capture_check.setChecked(bool(self.config.get("stream_capture_mode", False)))
+
+        self.speed_select = ModernSelect(self, width=112)
+        current_speed = float(self.config.get("playback_speed", 1.0))
+        speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
+        if not any(abs(current_speed - value) < 0.001 for value in speeds):
+            speeds.append(current_speed)
+            speeds.sort()
+        for speed in speeds:
+            self.speed_select.addItem(f"{speed:g}x", speed)
+        self.speed_select.setCurrentData(current_speed)
+        self.gap_spin = BrowserDoubleSpinBox(self)
+        self.gap_spin.setRange(0.0, 3600.0)
+        self.gap_spin.setSingleStep(0.5)
+        self.gap_spin.setDecimals(1)
+        self.gap_spin.setSuffix(" 秒")
+        self.gap_spin.setValue(float(self.config.get("animation_gap_seconds", 0.0)))
+
+        self.self_talk_check = ToggleSwitch(self)
+        self.self_talk_check.setChecked(bool(self.config.get("self_talk_enabled", False)))
+        self.self_talk_duration_spin = BrowserDoubleSpinBox(self)
+        self.self_talk_duration_spin.setRange(1.0, 300.0)
+        self.self_talk_duration_spin.setSingleStep(0.5)
+        self.self_talk_duration_spin.setDecimals(1)
+        self.self_talk_duration_spin.setSuffix(" 秒")
+        self.self_talk_duration_spin.setValue(float(self.config.get(
+            "self_talk_duration_seconds", DEFAULT_SELF_TALK_DURATION_SECONDS
+        )))
+        self.bubble_style_select = ModernSelect(self, width=172)
+        for value, preset in BUBBLE_STYLE_PRESETS.items():
+            self.bubble_style_select.addItem(str(preset["label"]), value)
+        self.bubble_style_select.setCurrentData(
+            str(self.config.get("self_talk_bubble_style", DEFAULT_SELF_TALK_BUBBLE_STYLE))
+        )
+        self.min_spin = BrowserDoubleSpinBox(self)
+        self.max_spin = BrowserDoubleSpinBox(self)
+        for spin, value in (
+            (self.min_spin, self.config.get("self_talk_min_interval", DEFAULT_SELF_TALK_MIN_INTERVAL)),
+            (self.max_spin, self.config.get("self_talk_max_interval", DEFAULT_SELF_TALK_MAX_INTERVAL)),
+        ):
+            spin.setRange(5.0, 3600.0)
+            spin.setDecimals(0)
+            spin.setSuffix(" 秒")
+            spin.setValue(float(value))
+        self.texts_edit = QPlainTextEdit(self)
+        self.texts_edit.setMinimumSize(240, 82)
+        self.texts_edit.setMaximumHeight(170)
+        texts = self.config.get("self_talk_texts", DEFAULT_SELF_TALK_TEXTS)
+        self.texts_edit.setPlainText("\n".join(str(item) for item in texts))
+        self.self_talk_image_dir_picker = ResourcePathPicker(
+            str(self.config.get("self_talk_image_dir", "") or ""),
+            directory=True,
+            parent=self,
+        )
+
+        appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
+        self.menu_theme_select = ModernSelect(self, width=132)
+        for label, value in (("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")):
+            self.menu_theme_select.addItem(label, value)
+        self.menu_theme_select.setCurrentData(appearance.get("theme", "system"))
+        self.menu_density_select = ModernSelect(self, width=132)
+        for label, value in (("紧凑", "compact"), ("标准", "standard"), ("宽松", "spacious")):
+            self.menu_density_select.addItem(label, value)
+        self.menu_density_select.setCurrentData(appearance.get("density", "standard"))
+        self.menu_radius_select = ModernSelect(self, width=112)
+        for radius in (8, 12, 16, 18):
+            self.menu_radius_select.addItem(f"{radius} px", radius)
+        self.menu_radius_select.setCurrentData(int(appearance.get("corner_radius", 12)))
+        self.menu_font_select = ModernSelect(self, width=172)
+        self.menu_font_select.addItem("系统默认", "system")
+        self._menu_fonts_populated = False
+        # 系统字体枚举在 macOS 上可达数百 ms，延迟到事件循环空闲时填充，
+        # 避免每次打开设置窗口都同步阻塞
+        QTimer.singleShot(0, self._populate_menu_fonts)
+        self.menu_font_size_select = ModernSelect(self, width=112)
+        for size in range(10, 19):
+            self.menu_font_size_select.addItem(f"{size} px", size)
+        self.menu_font_size_select.setCurrentData(int(appearance.get("ui_font_size", 13)))
+        self.menu_translucent_check = ToggleSwitch(self)
+        self.menu_translucent_check.setChecked(bool(appearance.get("translucent", True)))
+        self.menu_opacity_spin = BrowserDoubleSpinBox(self)
+        self.menu_opacity_spin.setRange(0.72, 1.0)
+        self.menu_opacity_spin.setSingleStep(0.02)
+        self.menu_opacity_spin.setDecimals(2)
+        self.menu_opacity_spin.setValue(float(appearance.get("opacity", 0.94)))
+
+        def color_picker(key: str) -> ColorPicker:
+            return ColorPicker(str(appearance.get(key) or DEFAULT_CONTEXT_MENU_APPEARANCE[key]), self)
+
+        self.light_background_picker = color_picker("light_background")
+        self.light_foreground_picker = color_picker("light_foreground")
+        self.light_hover_picker = color_picker("light_hover")
+        self.dark_background_picker = color_picker("dark_background")
+        self.dark_foreground_picker = color_picker("dark_foreground")
+        self.dark_hover_picker = color_picker("dark_hover")
+
+        egg = self.config.get("menu_easter_egg", DEFAULT_MENU_EASTER_EGG)
+        self.egg_enabled_check = ToggleSwitch(self)
+        self.egg_enabled_check.setChecked(bool(egg.get("enabled", True)))
+        self.egg_title_edit = _line_edit(str(egg.get("title") or "厉害了我的鲸"), width=240)
+        self.egg_hint_edit = _line_edit(str(egg.get("hint") or "请点击"), width=160)
+        avatar = resolve_fun_asset(egg.get("avatar"), oijingjing_image_path())
+        image_dir = resolve_fun_asset(egg.get("image_dir"), oijingjing_image_path().parent)
+        self.egg_avatar_picker = ResourcePathPicker(str(avatar.resolve()), parent=self)
+        self.egg_image_dir_picker = ResourcePathPicker(str(image_dir.resolve()), directory=True, parent=self)
+
+    def _update_self_talk_controls(self, enabled: bool) -> None:
+        keys = (
+            "self_talk_duration", "self_talk_min", "self_talk_max",
+            "self_talk_texts", "self_talk_images", "click_self_talk",
+        )
+        controls = (
+            self.self_talk_duration_spin, self.min_spin, self.max_spin,
+            self.texts_edit, self.self_talk_image_dir_picker,
+            self.click_self_talk_check,
+        )
+        for key, control in zip(keys, controls):
+            control.setEnabled(bool(enabled))
+            row = self.findChild(SettingRow, f"settingRow_{key}")
+            if row is not None:
+                row.setEnabled(bool(enabled))
+
+    def _populate_menu_fonts(self) -> None:
+        # 对话框可能在定时器触发前被关闭销毁（WA_DeleteOnClose）
+        if shiboken6.isValid(self) is False or self._menu_fonts_populated:
+            return
+        self._menu_fonts_populated = True
+        appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
+        for family in _system_font_families():
+            self.menu_font_select.addItem(family, family)
+        current_font = str(appearance.get("ui_font") or "system")
+        if self.menu_font_select.findData(current_font) < 0:
+            self.menu_font_select.addItem(current_font, current_font)
+        self.menu_font_select.setCurrentData(current_font)
+
+    def _update_click_sound_controls(self, enabled: bool) -> None:
+        row = self.findChild(SettingRow, "settingRow_click_sound_path")
+        if row is not None:
+            row.setVisible(bool(enabled))
+            card = row.parentWidget()
+            if isinstance(card, SettingsCard):
+                card.refresh_separators()
+
+    def _update_translucency_controls(self, enabled: bool) -> None:
+        self.menu_opacity_spin.setEnabled(bool(enabled))
+        row = self.findChild(SettingRow, "settingRow_menu_opacity")
+        if row is not None:
+            row.setEnabled(bool(enabled))
+
+    def move_away_from_pet(self) -> None:
+        """把窗口定位到不与桌宠相交的位置。
+
+        在 show() 之前调用（_present_dialog 的 before_present），窗口首帧
+        即落在最终位置，避免 Windows 上"先显示默认位置再跳走"的两段式。
+        """
+        if self._positioned_away:
+            return
+        self._positioned_away = True
+        parent = self.parentWidget()
+        if parent is not None and parent.isVisible():
+            self._move_away_from(parent.geometry())
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        super().showEvent(event)
+        # 兜底：未经 _present_dialog 直接 show 的路径仍要避让桌宠
+        self.move_away_from_pet()
+
+    def _move_away_from(self, pet_geo: QRect) -> None:
+        """首次显示时把窗口移到不与桌宠相交的位置（右侧优先，再左侧/下方/上方）。"""
+        size = self.size()
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen is not None else QRect()
+        for rect in (
+            QRect(pet_geo.right() + 12, pet_geo.top(), size.width(), size.height()),
+            QRect(pet_geo.left() - 12 - size.width(), pet_geo.top(), size.width(), size.height()),
+            QRect(pet_geo.left(), pet_geo.bottom() + 12, size.width(), size.height()),
+            QRect(pet_geo.left(), pet_geo.top() - 12 - size.height(), size.width(), size.height()),
+        ):
+            if avail.contains(rect):
+                self.move(rect.topLeft())
+                return
+
+    def _page_shell(self, title: str, content: QWidget) -> QWidget:
+        page = QWidget(self.pages)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 22, 26, 18)
+        layout.setSpacing(12)
+        heading = QLabel(title, page)
+        heading.setObjectName("pageTitle")
+        layout.addWidget(heading)
+        scroll = QScrollArea(page)
+        scroll.setObjectName("settingsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        content.setMaximumWidth(960)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _add_page(self, label: str, icon_name: str, page: QWidget) -> None:
+        item = QListWidgetItem(vector_widget_icon(self, icon_name, 16), label)
+        item.setSizeHint(QSize(0, 34))
+        self.sidebar.addItem(item)
+        self.pages.addWidget(page)
+
+    def _clear_search_matches(self) -> None:
+        for row in self._search_rows:
+            if row.property("searchMatch"):
+                row.setProperty("searchMatch", False)
+                row.style().unpolish(row)
+                row.style().polish(row)
+
+    def _search_settings(self, query: str, *, advance: bool = False) -> None:
+        query = query.strip().lower()
+        self._clear_search_matches()
+        if not query:
+            self._search_matches = []
+            self._search_index = -1
+            self.search_status.hide()
+            return
+        matches = [
+            row for row in self._search_rows
+            if query in f"{row.label.text()} {row.hint_label.text()} {row.objectName()}".lower()
+        ]
+        if not matches:
+            self._search_matches = []
+            self._search_index = -1
+            self.search_status.setText("未找到匹配的设置")
+            self.search_status.show()
+            return
+        if matches != self._search_matches:
+            self._search_matches = matches
+            self._search_index = 0
+        elif advance:
+            self._search_index = (self._search_index + 1) % len(matches)
+        row = matches[self._search_index]
+        row.setProperty("searchMatch", True)
+        row.style().unpolish(row)
+        row.style().polish(row)
+        page_index = 0
+        for index in range(self.pages.count()):
+            if self.pages.widget(index).isAncestorOf(row):
+                page_index = index
+                break
+        self.sidebar.setCurrentRow(page_index)
+        page = self.pages.widget(page_index)
+        scroll = page.findChild(QScrollArea, "settingsScroll")
+        if scroll is not None:
+            scroll.ensureWidgetVisible(row, 0, 24)
+        self.search_status.setText(
+            f"{self._search_index + 1}/{len(matches)} · {row.label.text()}"
+        )
+        self.search_status.show()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if (
+            watched is self.search_edit
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        ):
+            self._search_settings(self.search_edit.text(), advance=True)
+            return True
+        return super().eventFilter(watched, event)
+
+    @staticmethod
+    def _stylesheet() -> str:
+        return """
+            QDialog {
+                background: #fcfcfd;
+                color: #202020;
+                font-family: "SF Pro Text", ".AppleSystemUIFont", "PingFang SC", "Segoe UI", sans-serif;
+                font-size: 13px;
+            }
+            QFrame#sidebarPane {
+                background: #f7f7f8;
+                border: none;
+                border-right: 1px solid #e3e5e8;
+            }
+            QStackedWidget { background: #fcfcfd; }
+            QLineEdit#settingsSearch {
+                min-height: 30px;
+                padding: 0 8px;
+                background: #f0f1f3;
+                border: 1px solid transparent;
+                border-radius: 15px;
+                color: #202020;
+            }
+            QLineEdit#settingsSearch:focus {
+                border: 2px solid #0a84ff;
+                padding: 0 7px;
+            }
+            QPushButton#saveAndExit {
+                min-height: 28px;
+                padding: 2px 8px;
+                text-align: left;
+                background: transparent;
+                border: none;
+                border-radius: 8px;
+                font-weight: 500;
+            }
+            QPushButton#saveAndExit:hover { background: #e9eaec; }
+            QLabel#searchStatus {
+                padding: 0 5px;
+                color: #777b80;
+                font-size: 11px;
+            }
+            QListWidget#settingsSidebar {
+                background: transparent;
+                border: none;
+                outline: none;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QListWidget#settingsSidebar::item {
+                min-height: 26px;
+                padding: 4px 10px;
+                border-radius: 9px;
+                color: #4e4e4e;
+            }
+            QListWidget#settingsSidebar::item:hover {
+                background: #eceef1;
+                color: #202020;
+            }
+            QListWidget#settingsSidebar::item:selected {
+                background: #e3e5e8;
+                color: #171717;
+            }
+            QLabel#pageTitle {
+                font-size: 26px;
+                font-weight: 600;
+                color: #171717;
+            }
+            QLabel#sectionTitle {
+                font-size: 14px;
+                font-weight: 600;
+                color: #2b2b2b;
+            }
+            QFrame#settingsCard {
+                background: #ffffff;
+                border: 1px solid #e2e4e8;
+                border-radius: 11px;
+            }
+            QFrame#cardSeparator {
+                background: #eceef1;
+                border: none;
+                margin-left: 14px;
+                margin-right: 14px;
+            }
+            QLabel#settingLabel {
+                font-size: 14px;
+                font-weight: 600;
+                color: #252525;
+            }
+            QLabel#settingHint {
+                font-size: 12px;
+                font-weight: 400;
+                color: #777777;
+            }
+            QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #a6a8ac; }
+            SettingRow[searchMatch="true"] {
+                background: #eaf3ff;
+                border-radius: 8px;
+            }
+            QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget {
+                background: transparent;
+            }
+            QListWidget#quickLaunchList {
+                background: #fbfbfb;
+                border: 1px solid #d9d9d9;
+                border-radius: 8px;
+                outline: none;
+                padding: 3px;
+            }
+            QListWidget#quickLaunchList::item {
+                min-height: 30px;
+                padding: 3px 7px;
+                border-radius: 6px;
+            }
+            QListWidget#quickLaunchList::item:selected { background: #e8e8e8; color: #202020; }
+            QPushButton {
+                min-height: 26px;
+                padding: 1px 12px;
+                background: #ffffff;
+                border: 1px solid #d0d0d0;
+                border-radius: 7px;
+                font-weight: 500;
+            }
+            QPushButton:hover { background: #f0f0f0; }
+        """ + BROWSER_CONTROL_STYLESHEET
+
+    def _save(self) -> None:
+        minimum = min(self.min_spin.value(), self.max_spin.value())
+        maximum = max(self.min_spin.value(), self.max_spin.value())
+        texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]
+        self.config.set("scale", float(self.scale_combo.currentData()))
+        self.config.set("on_top", self.on_top_check.isChecked())
+        self.config.set("show_dock_icon", self.dock_icon_check.isChecked())
+        self.config.set("no_move", self.no_move_check.isChecked())
+        self.config.set("drag_physics", self.drag_physics_check.isChecked())
+        self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
+        self.config.set("click_sound_path", self.click_sound_picker.text())
+        if self.click_balance_check is not None:
+            self.config.set("click_show_balance", self.click_balance_check.isChecked())
+        self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
+        if self.balance_refresh_spin is not None:
+            self.config.set("balance_refresh_minutes", int(self.balance_refresh_spin.value()))
+        if self.auto_hide_fullscreen_check is not None:
+            self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
+        if self.stream_capture_check is not None:
+            self.config.set("stream_capture_mode", self.stream_capture_check.isChecked())
+        self.config.set("playback_speed", float(self.speed_select.currentData()))
+        self.config.set("animation_gap_seconds", self.gap_spin.value())
+        self.config.set("self_talk_enabled", self.self_talk_check.isChecked())
+        self.config.set("self_talk_bubble_style", self.bubble_style_select.currentData())
+        self.config.set("self_talk_min_interval", minimum)
+        self.config.set("self_talk_max_interval", maximum)
+        self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
+        self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
+        self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
+        self.config.set("context_menu_appearance", {
+            "theme": self.menu_theme_select.currentData(),
+            "density": self.menu_density_select.currentData(),
+            "corner_radius": self.menu_radius_select.currentData(),
+            "ui_font": self.menu_font_select.currentData(),
+            "ui_font_size": self.menu_font_size_select.currentData(),
+            "translucent": self.menu_translucent_check.isChecked(),
+            "opacity": self.menu_opacity_spin.value(),
+            "light_background": self.light_background_picker.text(),
+            "light_foreground": self.light_foreground_picker.text(),
+            "light_hover": self.light_hover_picker.text(),
+            "dark_background": self.dark_background_picker.text(),
+            "dark_foreground": self.dark_foreground_picker.text(),
+            "dark_hover": self.dark_hover_picker.text(),
+        })
+        self.config.set("menu_easter_egg", {
+            "enabled": self.egg_enabled_check.isChecked(),
+            "title": self.egg_title_edit.text(),
+            "hint": self.egg_hint_edit.text(),
+            "avatar": self.egg_avatar_picker.text(),
+            "image_dir": self.egg_image_dir_picker.text(),
+        })
+        self.config.set("quick_launch_apps", self.quick_launch_editor.apps())
+        if self.ai_page is not None:
+            self.ai_page.save()
+        self.config.save()
+        if self.autostart_check.isChecked() != self._autostart_initial:
+            autostart_mod.set_enabled(self.autostart_check.isChecked())
+        self.settings_saved.emit()
+        self.accept()

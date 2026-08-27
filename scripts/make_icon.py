@@ -42,15 +42,10 @@ _ICONSET_ENTRIES = (
     ("icon_512x512@2x.png", 1024),
 )
 
-try:
-    import imageio_ffmpeg
-except Exception as exc:  # pragma: no cover
-    print(f"缺少 imageio-ffmpeg: {exc}")
-    sys.exit(1)
-
-
 def extract_frame(path: Path) -> bytes:
     """读取 RGBA 首帧原始字节。"""
+    import imageio_ffmpeg
+
     gen = None
     try:
         gen = imageio_ffmpeg.read_frames(
@@ -69,6 +64,29 @@ def extract_frame(path: Path) -> bytes:
                 pass
 
 
+def prepare_icon_image(source_img, side: int = 256):
+    """裁掉透明留白并让角色尽量填满正方形图标画布。"""
+    from PIL import Image
+
+    img = source_img.convert("RGBA")
+    # VP9 透明边缘可能散落 alpha=1 的噪点，直接 getbbox 会误判为整张画布。
+    mask = img.getchannel("A").point(lambda a: 255 if a > 8 else 0)
+    bbox = mask.getbbox()
+    if bbox is None:
+        raise ValueError("帧全透明，无法生成图标")
+    img = img.crop(bbox)
+
+    char_w, char_h = img.size
+    scale = min(0.977 * side / char_w, 0.977 * side / char_h)
+    char = img.resize(
+        (max(1, int(round(char_w * scale))), max(1, int(round(char_h * scale)))),
+        Image.Resampling.LANCZOS,
+    )
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.alpha_composite(char, ((side - char.width) // 2, (side - char.height) // 2))
+    return canvas
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="生成应用图标")
     parser.add_argument("--icns", action="store_true", help="额外生成 macOS .icns（需 iconutil）")
@@ -84,40 +102,20 @@ def main() -> int:
         return 1
 
     print(f"提取首帧: {IDLE_WEBM.name}")
-    frame = extract_frame(IDLE_WEBM)
+    try:
+        frame = extract_frame(IDLE_WEBM)
+    except ImportError as exc:  # pragma: no cover
+        print(f"缺少 imageio-ffmpeg: {exc}")
+        return 1
     if len(frame) != 640 * 360 * 4:
         print(f"帧尺寸异常: {len(frame)} bytes")
         return 1
 
-    img = Image.frombytes("RGBA", (640, 360), frame)
-    # 按 alpha 裁剪到角色实际可见区域，去掉画布留白
-    bbox = img.getbbox()
-    # 首帧含低 alpha 噪点（边缘 alpha≈1，直接 getbbox 会得到全画布），
-    # 用阈值提取鲸鱼真实包围盒再裁剪
-    mask = img.getchannel("A").point(lambda a: 255 if a > 8 else 0)
-    bbox = mask.getbbox()
-    if bbox is None:
-        print("帧全透明，无法生成图标")
+    try:
+        img = prepare_icon_image(Image.frombytes("RGBA", (640, 360), frame))
+    except ValueError as exc:
+        print(str(exc))
         return 1
-    img = img.crop(bbox)
-
-    # 鲸鱼放大到 ~97.7% 满幅（透明背景、保持宽高比）：
-    # 源帧中鲸鱼只占画布 33%x74%，直接用小图会让图标显得空；这里按最大边
-    # 撑到画布的 97.7%，与正规应用图标（如 WorkBuddy 97.7% 不透明占比）同级。
-    char_w, char_h = img.size
-    side = 256  # 基准画布（后续按档位缩放）
-    scale = min(0.977 * side / char_w, 0.977 * side / char_h)
-    char = img.resize(
-        (max(1, int(round(char_w * scale))), max(1, int(round(char_h * scale)))),
-        Image.Resampling.LANCZOS,
-    )
-    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    canvas.paste(
-        char,
-        ((side - char.width) // 2, (side - char.height) // 2),
-        char,
-    )
-    img = canvas
 
     # 生成多尺寸 ICO（手工构造以控制帧顺序：Pillow 会强制升序，首帧必为 16x16，
     # 导致看图软件/资源管理器预览显示成小图标；这里让 256 排第一）
@@ -191,8 +189,14 @@ def build_icns(source_img) -> int:
         text=True,
     )
     if result.returncode != 0:
-        print(f"iconutil 失败: {result.stderr}")
-        return 1
+        # macOS 26 的 iconutil 可能拒绝尺寸/命名均合法的 Pillow PNG iconset。
+        # Pillow 自身支持写 ICNS，作为等价回退保证本机构建不中断。
+        print(f"iconutil 失败，改用 Pillow ICNS 回退: {result.stderr.strip()}")
+        try:
+            source_img.save(OUT_ICNS, format="ICNS")
+        except Exception as exc:
+            print(f"Pillow ICNS 回退失败: {exc}")
+            return 1
     print(f"已生成: {OUT_ICNS}")
     return 0
 

@@ -1,0 +1,96 @@
+name: Build Windows App
+
+on:
+  workflow_dispatch:        # 手动触发（Actions 页面 → Run workflow）
+  push:
+    tags:
+      - 'v*'                # 打 tag 时自动触发并发布 Release
+
+permissions:
+  contents: write           # 用于创建 Release 上传产物
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    # PYTHONIOENCODING：Windows 英文 runner 控制台为 cp1252，make_icon.py 等
+    # 脚本的中文 print 会 UnicodeEncodeError，统一按 UTF-8 输出。
+    env:
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 imageio-ffmpeg pillow pyinstaller pytest keyring certifi
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      # choco 的 innosetup 包不带 ChineseSimplified.isl（官方安装包才附带），
+      # 缺少该文件 .iss 编译会失败，从 issrc 仓库取回。
+      - name: Fetch ChineseSimplified language file
+        shell: pwsh
+        run: |
+          $langDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\Languages'
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl' -OutFile (Join-Path $langDir 'ChineseSimplified.isl')
+
+      # 与 Linux/macOS 一致：构建前先跑测试套件，避免发布损坏产物
+      - name: Run test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      # 与上游发布一致：只构建 webm 两个变体（GIF 包体约 800 MB，不发布）
+      - name: Build onedir variants
+        shell: pwsh
+        run: |
+          foreach ($VARIANT in 'webm-chat', 'webm') {
+            Write-Host "==> building $VARIANT"
+            & "$env:GITHUB_WORKSPACE\scripts\build_onedir.ps1" -Variant $VARIANT
+            if ($LASTEXITCODE -ne 0) { throw "$VARIANT build failed" }
+          }
+
+      # 参数用数组 splatting 传递：行首 /D... 会被 pwsh 当作除法运算符，
+      # 含括号的显示名（如 "(WebM)"）会触发子表达式解析而报 ParserError。
+      - name: Compile installers (Inno Setup)
+        shell: pwsh
+        run: |
+          & ISCC.exe packaging\dsh-pet.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC webm-chat failed" }
+          $webm = @(
+            '/DMyAppShortName=dsh-pet-standalone-webm',
+            '/DMyAppExeName=dsh-pet-standalone-webm.exe',
+            '/DMyAppDir=..\dist-onedir\dsh-pet-standalone-webm',
+            '/DMyAppId={{3424d6cc-af3c-4383-8797-ab520b923aa6}',
+            '/DMyAppDisplay=dsh-pet-standalone (WebM)',
+            'packaging\dsh-pet.iss'
+          )
+          & ISCC.exe @webm
+          if ($LASTEXITCODE -ne 0) { throw "ISCC webm failed" }
+          Get-ChildItem dist-onedir\*-setup.exe | ForEach-Object { Write-Host $_.Name $_.Length }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-pet-standalone-windows-x86_64
+          path: |
+            dist-onedir/*-portable.zip
+            dist-onedir/*-setup.exe
+          retention-days: 30
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-onedir/*-portable.zip
+            dist-onedir/*-setup.exe
+          generate_release_notes: true

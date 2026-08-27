@@ -8,6 +8,12 @@ anchor: 画面主体所在侧（left/center/right），竖窗裁剪时保住主�
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
+
 THEMES: dict[str, dict] = {
     'whale': {
         'name': '蓝色幻想 · 鲸鱼娘',
@@ -143,6 +149,29 @@ def theme_names() -> list[tuple[str, str]]:
     return [(key, t['name']) for key, t in THEMES.items()]
 
 
+def resolve_background_pixmap(config_value: str) -> QPixmap | None:
+    """Resolve a built-in classic theme or an absolute custom image path."""
+    value = str(config_value or '').strip()
+    if not value:
+        return None
+    if value.startswith('builtin:'):
+        theme = get_theme(value[8:])
+        if theme is None:
+            return None
+        candidates = []
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            candidates.append(Path(meipass) / 'assets' / 'chat' / theme['file'])
+        candidates.append(Path(__file__).resolve().parents[2] / 'assets' / 'chat' / theme['file'])
+        path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    else:
+        path = Path(value).expanduser()
+    if path is None or not path.is_file():
+        return None
+    pixmap = QPixmap(str(path))
+    return pixmap if not pixmap.isNull() else None
+
+
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     h = h.lstrip('#')
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
@@ -159,6 +188,48 @@ def build_overlay_qss(theme: dict) -> str:
     return (tpl.replace('{accent}', theme['accent'])
                .replace('{title0}', _mix_white(base, 0.18))
                .replace('{title1}', _mix_white(base, 0.48)))
+
+
+def build_modern_custom_overlay_qss(accent: str, card_opacity: int = 84) -> str:
+    """Make the modern workspace surfaces translucent over a custom image."""
+    alpha = round(255 * max(10, min(100, int(card_opacity))) / 100)
+    return f"""
+QFrame#phone-shell, QFrame#chat-main {{ background: transparent; }}
+QFrame#deepseek-sidebar {{ background: rgba(248, 250, 253, 218); }}
+QFrame#chat-main-header {{ background: rgba(255, 255, 255, 218); }}
+QScrollArea#message-scroll,
+QScrollArea#message-scroll QWidget#qt_scrollarea_viewport,
+QWidget#message-view,
+QWidget#message-timeline {{ background: transparent; }}
+QFrame#floating-composer {{ background: transparent; }}
+QFrame#message-bubble {{ background: transparent; }}
+QFrame#message-surface {{
+    padding: 12px 16px;
+    border: 1px solid rgba(255, 255, 255, 150);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, {alpha});
+}}
+QFrame#message-surface[role="user"] {{ background: rgba(235, 242, 252, {alpha}); }}
+QFrame#message-surface[state="error"] {{
+    border-color: rgba(225, 97, 86, 185);
+    background: rgba(255, 239, 237, {alpha});
+}}
+QFrame#chat-composer {{ background: rgba(255, 255, 255, 232); border-color: {accent}; }}
+"""
+
+
+def scale_background_pixmap(
+    pixmap: QPixmap, width: int, height: int, fill_mode: str = "cover",
+) -> QPixmap:
+    """Scale a wallpaper using browser-like cover/contain/stretch semantics."""
+    aspect_mode = {
+        "contain": Qt.AspectRatioMode.KeepAspectRatio,
+        "stretch": Qt.AspectRatioMode.IgnoreAspectRatio,
+    }.get(fill_mode, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
+    return pixmap.scaled(
+        max(1, int(width)), max(1, int(height)), aspect_mode,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
 
 def scrim_rgba(theme: dict) -> tuple[int, int, int, int]:
