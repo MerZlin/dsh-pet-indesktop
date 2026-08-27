@@ -152,17 +152,15 @@ class PetSettingsDialog(QDialog):
         g_layout = QVBoxLayout(group)
         g_layout.setSpacing(8)
 
-        # 总开关 + dry-run 开关
-        h_switches = QHBoxLayout()
+        # 总开关 + dry-run 开关（竖排：窄窗口下横排会被裁）
         self.pro_enabled_check = QCheckBox("开启主动识屏")
         self.pro_enabled_check.setChecked(bool(pro_cfg.get("enabled", False)))
-        h_switches.addWidget(self.pro_enabled_check)
+        g_layout.addWidget(self.pro_enabled_check)
 
         self.pro_dryrun_check = QCheckBox("dry-run 验证模式（只打日志不调模型）")
         self.pro_dryrun_check.setChecked(bool(pro_cfg.get("dry_run", False)))
         self.pro_dryrun_check.setToolTip("开启后满足条件时只输出日志、不调用模型、不消耗每日额度。")
-        h_switches.addWidget(self.pro_dryrun_check)
-        g_layout.addLayout(h_switches)
+        g_layout.addWidget(self.pro_dryrun_check)
 
         # 预设选择
         form_pro = QFormLayout()
@@ -238,19 +236,18 @@ class PetSettingsDialog(QDialog):
         form_pro.addRow("闲置守护", h_idle)
 
         # 选项复选框
-        h_opts = QHBoxLayout()
+        # 竖排三个选项（窄窗口下横排会被裁）
         self.pro_through_check = QCheckBox("鼠标穿透时允许识屏")
         self.pro_through_check.setChecked(bool(pro_cfg.get("allow_when_mouse_through", True)))
-        h_opts.addWidget(self.pro_through_check)
+        form_pro.addRow("", self.pro_through_check)
 
         self.pro_precue_check = QCheckBox("触发前先兆提示（“让我看看……”）")
         self.pro_precue_check.setChecked(bool(pro_cfg.get("pre_cue", True)))
-        h_opts.addWidget(self.pro_precue_check)
+        form_pro.addRow("", self.pro_precue_check)
 
         self.pro_free_check = QCheckBox("优先使用免费视觉模型（GLM-4.6V-Flash）")
         self.pro_free_check.setChecked(bool(pro_cfg.get("prefer_free_provider", True)))
-        h_opts.addWidget(self.pro_free_check)
-        form_pro.addRow("辅助开关", h_opts)
+        form_pro.addRow("", self.pro_free_check)
 
         g_layout.addLayout(form_pro)
 

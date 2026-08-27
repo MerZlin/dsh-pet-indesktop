@@ -1325,11 +1325,11 @@ class ModernSettingsDialog(QDialog):
         self.pro_dryrun_check = ToggleSwitch(self)
         self.pro_dryrun_check.setChecked(bool(pro["dry_run"]))
 
-        self.pro_preset_select = ModernSelect(self, width=220)
+        self.pro_preset_select = ModernSelect(self, width=160)
         for key, label in (
-            ("balanced", "平衡（停留45s / 冷却5min / 每日15次）"),
-            ("quiet", "安静（停留90s / 冷却10min / 每日8次）"),
-            ("active", "活跃（停留20s / 冷却3min / 每日25次）"),
+            ("balanced", "平衡（推荐）"),
+            ("quiet", "安静"),
+            ("active", "活跃"),
             ("custom", "自定义参数"),
         ):
             self.pro_preset_select.addItem(label, key)
@@ -1476,7 +1476,8 @@ class ModernSettingsDialog(QDialog):
                        self.pro_enabled_check),
             SettingRow("proactive_dry_run", "dry-run 验证模式",
                        "开启后满足条件只写日志、不调用模型、不消耗额度。", self.pro_dryrun_check),
-            SettingRow("proactive_preset", "陪伴节奏预设", "预设只影响停留/冷却/每日上限三项。",
+            SettingRow("proactive_preset", "陪伴节奏预设",
+                       "平衡 45s/5min/15次；安静 90s/10min/8次；活跃 20s/3min/25次（停留/冷却/每日上限）。",
                        self.pro_preset_select),
         ], content))
         layout.addWidget(SettingsSection("频率参数（自定义预设时生效）", [
