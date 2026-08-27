@@ -169,9 +169,18 @@ class PetApp:
         if win is None or self._balance_busy or not win.isVisible():
             return
         now = time.monotonic()
-        # 余额缓存按 provider（base_url）绑定：多实例配不同账号时不会互相串余额
+        # 余额缓存绑定 provider 身份（id + base_url + key 摘要）：同地址不同账号也不串号；
+        # 摘要不可逆推原 key，不落敏感信息。
+        import hashlib
         settings = self.config.chat_settings()
-        provider_key = str(getattr(settings.active_config, 'base_url', '') or '')
+        provider = settings.active_config
+        provider.api_key = self.config.resolve_api_key(provider)
+        key_digest = hashlib.sha256(str(provider.api_key or '').encode()).hexdigest()[:12]
+        provider_key = '|'.join([
+            str(getattr(provider, 'id', '') or ''),
+            str(provider.base_url or ''),
+            key_digest,
+        ])
         if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
                 and self._balance_cache[2] == provider_key:
             win.show_bubble(self._balance_cache[1], duration_ms=6000)
@@ -186,8 +195,6 @@ class PetApp:
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
         # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
         QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
-        provider = settings.active_config
-        provider.api_key = self.config.resolve_api_key(provider)
         bridge = _BalanceBridge(win)
         self._balance_bridge = bridge
         threading.Thread(
@@ -235,25 +242,6 @@ class PetApp:
             tmp.replace(self._balance_cache_path)
         except OSError:
             pass
-
-        win.show_bubble("正在查询余额…", duration_ms=6000)
-        provider = self.config.chat_settings().active_config
-        provider.api_key = self.config.resolve_api_key(provider)
-        bridge = _BalanceBridge(win)
-        self._balance_bridge = bridge
-
-        def worker() -> None:
-            try:
-                result = balance_mod.fetch_balance(provider.base_url, provider.api_key, verify_ssl=provider.verify_ssl)
-                message = balance_mod.format_balance(result)
-                self._balance_cache = (time.monotonic(), message)
-                bridge.done.emit(True, message)
-            except Exception as exc:
-                bridge.done.emit(False, f"余额查询失败：{exc}")
-            finally:
-                self._balance_busy = False
-
-        threading.Thread(target=worker, daemon=True, name="pet-balance").start()
 
     def check_update(self, parent=None) -> None:
         target = parent or self.win

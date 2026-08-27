@@ -302,12 +302,13 @@ def add_proactive_menu(menu: QMenu, pet) -> None:
     _toggle('dry-run 验证模式', pro_cfg.get('dry_run', False),
             lambda on: pet._set_proactive_option('dry_run', on))
     sub.addSeparator()
-    if getattr(pet, 'on_open_settings', None) is not None:
-        add_action(sub, '打开设置…', None, pet.on_open_settings, close_on_trigger=True)
+    open_settings = getattr(pet, 'on_open_modern_settings', None) or getattr(pet, 'on_open_legacy_settings', None)
+    if open_settings is not None:
+        add_action(sub, '打开设置…', None, open_settings, close_on_trigger=True)
 
 
 def add_agent_link_menu(menu: QMenu, pet) -> None:
-    """Agent 联动二级菜单（5 个 Agent 独立开关，失败/拒绝自动回滚勾选）。"""
+    """Agent 联动二级菜单（4 个 Agent 独立开关，失败/拒绝自动回滚勾选）。"""
     sub = add_submenu(menu, "Agent 联动", None)
     agent_cfg = dict(pet.cfg.get('agent_link', {}))
     for agent_key, agent_label in (

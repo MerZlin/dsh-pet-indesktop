@@ -33,8 +33,6 @@ from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
-import shiboken6
-
 from . import autostart as autostart_mod
 from . import catalog
 from .config import (
@@ -699,7 +697,7 @@ class PetWindow(QWidget):
             if not self._auto_hidden and self.isVisible():
                 self._auto_hidden = True
                 self._speech_bubble.hide()
-                self.hide()
+                self.hide(notify=False)  # 自动隐藏是内部语义，不弹"桌宠已隐藏"托盘通知
         else:
             if self._auto_hidden:
                 self._auto_hidden = False

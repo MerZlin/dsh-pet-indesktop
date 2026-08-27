@@ -653,7 +653,7 @@ class OpenCodeMonitor(BaseAgentMonitor):
 class AgentLinkManager(QObject):
     """多 Agent 联动总调度管理器。
     
-    挂载于 PetWindow，持有 5 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
+    挂载于 PetWindow，持有 4 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
     """
 
     def __init__(self, window: Any, config: Any, *, min_interval: float = 2.0,
