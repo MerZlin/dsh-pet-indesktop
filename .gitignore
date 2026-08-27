@@ -53,3 +53,4 @@ packaging/build_variant.py
 
 # 全局忽略 macOS 元数据（置于所有白名单之后，防止被 !** 反向放行）
 **/.DS_Store
+.serena/
