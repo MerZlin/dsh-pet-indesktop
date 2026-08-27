@@ -705,6 +705,22 @@ class AgentLinkManager(QObject):
         ok, msg = DshMonitor.install_bridge()
         self.install_finished.emit("dsh", ok, msg)
 
+    def _warn_if_agent_absent(self, agent_key: str) -> None:
+        """开启了联动但本机没装对应 Agent 时给用户提示（不然勾了永远没反应）。"""
+        hints = {
+            "cursor": ("Cursor", Path.home() / ".cursor" / "projects"),
+            "opencode": ("OpenCode", Path.home() / ".local" / "share" / "opencode" / "opencode.db"),
+        }
+        item = hints.get(agent_key)
+        if not item:
+            return
+        name, marker = item
+        if not marker.exists() and hasattr(self.win, "show_bubble"):
+            self.win.show_bubble(
+                f"已开启 {name} 联动监听，但没检测到本机安装 {name}——装了它我才能感知到哦",
+                duration_ms=6000,
+            )
+
     def _on_install_finished(self, agent_key: str, ok: bool, msg: str) -> None:
         """安装完成：成功则正式开启联动，失败则提示。"""
         if ok:
@@ -808,6 +824,8 @@ class AgentLinkManager(QObject):
         self.cfg.set("agent_link", ag_cfg)
         self.cfg.save()
         self.apply_config()
+        if enabled:
+            self._warn_if_agent_absent(agent_key)
         return True
 
     def pause(self) -> None:

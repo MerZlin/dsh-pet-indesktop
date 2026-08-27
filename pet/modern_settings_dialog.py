@@ -1470,7 +1470,7 @@ class ModernSettingsDialog(QDialog):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(18)
-        layout.addWidget(SettingsSection("主动识屏", [
+        layout.addWidget(SettingsSection("总开关与节奏", [
             SettingRow("proactive_enabled", "开启主动识屏",
                        "她会偶尔看一眼你在用的软件并说句话。截图只在内存处理、不落盘、不写入会话。",
                        self.pro_enabled_check),
