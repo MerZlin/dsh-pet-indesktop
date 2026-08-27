@@ -447,6 +447,13 @@ class PetSettingsDialog(QDialog):
                 if line.strip()
             ]
             preset = self.pro_preset_combo.currentData()
+            # 非 custom 预设下改了数值 → 自动落为 custom，否则运行时被预设覆盖（gemini 审查发现）
+            if preset in PRESET_DEFAULTS:
+                pv = PRESET_DEFAULTS[preset]
+                if (self.pro_dwell_spin.value() != pv["dwell_seconds"]
+                        or abs(self._cooldown_minutes_value() - pv["cooldown_minutes"]) > 1e-6
+                        or self.pro_cap_spin.value() != pv["daily_cap"]):
+                    preset = "custom"
             # 从现有配置复制，保留对话框未暴露的字段（min_request_interval_seconds、
             # change_threshold 等），避免保存时把它们冲掉。
             pro_data = dict(self.config.get("proactive_screen", {}) or {})

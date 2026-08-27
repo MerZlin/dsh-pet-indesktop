@@ -1867,11 +1867,20 @@ class ModernSettingsDialog(QDialog):
         if self.ai_page is not None:
             self.ai_page.save()
         if sys.platform == "win32" and self.include_ai and hasattr(self, "pro_enabled_check"):
+            from .proactive import PRESET_DEFAULTS
             pro_data = dict(self.config.get("proactive_screen", {}) or {})
+            preset = self.pro_preset_select.currentData()
+            # 非 custom 预设下改了数值 → 自动落为 custom，否则运行时会被预设覆盖（gemini 审查发现）
+            if preset in PRESET_DEFAULTS:
+                pv = PRESET_DEFAULTS[preset]
+                if (self.pro_dwell_spin.value() != pv["dwell_seconds"]
+                        or abs(self._pro_cooldown_minutes() - pv["cooldown_minutes"]) > 1e-6
+                        or self.pro_cap_spin.value() != pv["daily_cap"]):
+                    preset = "custom"
             pro_data.update({
                 "enabled": self.pro_enabled_check.isChecked(),
                 "dry_run": self.pro_dryrun_check.isChecked(),
-                "preset": self.pro_preset_select.currentData(),
+                "preset": preset,
                 "dwell_seconds": self.pro_dwell_spin.value(),
                 "cooldown_minutes": self._pro_cooldown_minutes(),
                 "min_request_interval_seconds": self.pro_min_interval_spin.value(),
