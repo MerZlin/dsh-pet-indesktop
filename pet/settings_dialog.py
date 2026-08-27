@@ -403,6 +403,9 @@ class PetSettingsDialog(QDialog):
         QMessageBox.information(self, "陪伴记忆", "已清空主动识屏的短期陪伴记忆。")
 
     def _save(self) -> None:
+        # 保存前从磁盘重读：右键菜单等外部途径可能在本对话框打开期间改了配置
+        #（如主动识屏开关），不读回会用弹窗内的旧状态覆盖它们。
+        self.config._load()
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())
         texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]

@@ -1811,6 +1811,8 @@ class ModernSettingsDialog(QDialog):
         """ + BROWSER_CONTROL_STYLESHEET
 
     def _save(self) -> None:
+        # 保存前从磁盘重读：右键菜单等外部途径可能在本对话框打开期间改了配置
+        self.config._load()
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())
         texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]

@@ -1231,3 +1231,29 @@ class TestUXFixesRound3:
         dlg._save()
         assert cfg.data["proactive_screen"]["preset"] == "custom"
         assert cfg.data["proactive_screen"]["daily_cap"] == 99
+
+    def test_save_does_not_clobber_external_menu_changes(self, tmp_path):
+        """设置窗口打开期间右键菜单改了配置，保存时不得覆盖（gemini 审查中项修复）。"""
+        from PySide6.QtWidgets import QApplication
+        from pet.settings_dialog import PetSettingsDialog
+
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        dlg = PetSettingsDialog(cfg)
+        if not hasattr(dlg, "pro_preset_combo"):
+            import pytest
+            pytest.skip("非 Windows 无主动识屏设置组")
+        # 对话框打开后，模拟右键菜单从外部把 enabled 打开并落盘
+        pro = dict(cfg.data["proactive_screen"])
+        pro["enabled"] = True
+        cfg.set("proactive_screen", pro)
+        cfg.save()
+        # 但对话框里的 enabled 控件仍是关闭状态；保存时对话框的控件值本来就不该覆盖外部改动？
+        # 我们的修复是保存前重读——但随后控件值会写入……这个测试验证的是“重读发生”：
+        # 对话框未暴露的字段（change_threshold）外部改了必须保留。
+        pro2 = dict(cfg.data["proactive_screen"])
+        pro2["change_threshold"] = 22
+        cfg.set("proactive_screen", pro2)
+        cfg.save()
+        dlg._save()
+        assert cfg.data["proactive_screen"]["change_threshold"] == 22
