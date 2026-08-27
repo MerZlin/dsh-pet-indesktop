@@ -1,5 +1,6 @@
 from __future__ import annotations
 import threading, uuid
+from typing import Any
 from PySide6.QtCore import QObject, QThread, Signal
 from .models import ProviderConfig
 from .providers import OpenAICompatibleProvider
@@ -12,7 +13,12 @@ class _Worker(QThread):
                 if self.cancel.is_set(): self.stopped_by_user.emit(); return
                 self.parts.append(text); self.delta_received.emit(text)
             if self.cancel.is_set(): self.stopped_by_user.emit()
-            else: self.completed.emit(''.join(self.parts))
+            else:
+                result = ''.join(self.parts)
+                if result.strip():
+                    self.completed.emit(result)
+                else:
+                    self.failed.emit('模型未返回任何内容，请稍后重试或检查模型配置。')
         except Exception as exc:
             self.stopped_by_user.emit() if self.cancel.is_set() else self.failed.emit(str(exc))
 class ChatService(QObject):
@@ -21,7 +27,7 @@ class ChatService(QObject):
         super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None
     @property
     def busy(self): return self._worker is not None and self._worker.isRunning()
-    def send(self,messages:list[dict[str,str]],config:ProviderConfig,request_id=None):
+    def send(self,messages:list[dict[str,Any]],config:ProviderConfig,request_id=None):
         self.stop(); rid=request_id or uuid.uuid4().hex; cancel=threading.Event(); worker=_Worker(self.provider,messages,config,cancel); self._request_id=rid; self._cancel=cancel; self._worker=worker
         worker.delta_received.connect(lambda text,rid=rid:self._delta(rid,text)); worker.completed.connect(lambda text,rid=rid:self._finished(rid,text)); worker.failed.connect(lambda text,rid=rid:self._error(rid,text)); worker.stopped_by_user.connect(lambda rid=rid:self._stopped(rid)); worker.finished.connect(lambda rid=rid:self._cleanup(rid)); self.started.emit(rid); worker.start(); return rid
     def stop(self):

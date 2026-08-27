@@ -1,0 +1,15 @@
+{
+  "id": "legacy",
+  "name": "旧版菜单",
+  "switch_to": "modern",
+  "switch_label": "切换到新版菜单",
+  "groups": [
+    {"id": "assistant", "items": ["chat", "chat_settings", "pet_settings"]},
+    {"id": "spawn", "items": ["spawn_pet"]},
+    {"id": "animation", "items": ["animation_categories", "playback_speed", "drag_physics", "character"]},
+    {"id": "window", "items": ["return_corner", "on_top", "no_move", "autostart", "size"]},
+    {"id": "tools", "items": ["harness"]},
+    {"id": "template", "items": ["switch_template"]},
+    {"id": "exit", "items": ["quit"]}
+  ]
+}

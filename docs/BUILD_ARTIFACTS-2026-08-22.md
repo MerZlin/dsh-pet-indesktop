@@ -2,7 +2,7 @@
 
 ## 本轮范围
 
-本轮在 `codex/ai-chat` 工作区完成聊天窗口透明背景修复、参考动画素材更新、动作等待间隔、自言自语气泡和设置窗口非模态化，并重新构建 Chat 与无 Chat 版本。构建没有覆盖原有稳定版非 Chat 根目录 EXE。
+本轮在 `modern/ai-chat` 工作区完成聊天窗口透明背景修复、参考动画素材更新、动作等待间隔、自言自语气泡和设置窗口非模态化，并重新构建 Chat 与无 Chat 版本。构建没有覆盖原有稳定版非 Chat 根目录 EXE。
 
 ## 产物
 
@@ -45,6 +45,19 @@
 5. 分别启动 `dist/dsh-pet-standalone-gif-v2.exe` 与 `dist/dsh-pet-standalone-webm-v2.exe`，确认无 AI 版本不显示 AI 对话入口且桌宠动画可正常播放。
 
 本轮未执行 `git add`、`git commit`、`git push`，未修改或清理 `.research/` 和 `注意事项.txt`。
+
+## 2026-08-26：macOS 四变体重构版
+
+通过 `scripts/build_macos.sh` 在 `build/macos/` 重新生成并临时签名以下独立 bundle：
+
+- `dsh-pet-standalone-webm-chat.app`
+- `dsh-pet-standalone-webm.app`
+- `dsh-pet-standalone-gif-chat.app`
+- `dsh-pet-standalone-gif.app`
+
+构建前重新同步 91 个 WebM 动画到 GIF 素材目录；四个 PyInstaller bundle 均完成 `COLLECT`、`BUNDLE` 和 ad-hoc codesign。`iconutil` 未接受生成的 iconset，脚本按预期改用 Pillow ICNS 回退，未中断应用构建。
+
+本轮完整回归为 `137 passed`。WebM Chat bundle 已通过 bundle 内二进制启动并保持运行，供界面验收。
 ## 第二轮：气泡居中、GIF 全量同步与 WebM 速率修复
 
 本轮以 `assets/characters/**/*.webm` 作为动画唯一源，使用 `scripts/convert_to_gif.py --force --clean` 全量生成 GIF，并修复 WebM 新动画切换前设置播放速率不生效的问题。当前 WebM/GIF 相对路径集合均为 91 个，差异为 0。
