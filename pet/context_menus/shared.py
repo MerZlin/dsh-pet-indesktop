@@ -86,6 +86,19 @@ def take_deferred_menu_callbacks(menu: QMenu) -> list:
     return callbacks
 
 
+def defer_menu_callback(menu: QMenu, callback) -> bool:
+    """Run a command after native menu tracking ends when the menu is open."""
+    if not menu.isVisible():
+        callback()
+        return False
+    root = _root_menu(menu)
+    root._deferred_callbacks = list(
+        getattr(root, "_deferred_callbacks", ())
+    ) + [callback]
+    root.close()
+    return True
+
+
 def connect_action(action, callback) -> None:
     def invoke(_checked=False, action=action, callback=callback) -> None:
         parent = action.parent()
@@ -94,11 +107,7 @@ def connect_action(action, callback) -> None:
             and isinstance(parent, QMenu)
             and parent.isVisible()
         ):
-            root = _root_menu(parent)
-            root._deferred_callbacks = list(
-                getattr(root, "_deferred_callbacks", ())
-            ) + [callback]
-            root.close()
+            defer_menu_callback(parent, callback)
             return
         callback()
 

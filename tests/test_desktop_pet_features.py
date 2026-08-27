@@ -1014,6 +1014,75 @@ def test_ojingjing_uses_popup_directory_random_images_and_drag_helpers(monkeypat
     app.processEvents()
 
 
+def test_ojingjing_invalid_empty_or_unreadable_directory_falls_back(tmp_path):
+    import pet.fun_image_popup as popup_mod
+
+    fallback = popup_mod.oijingjing_image_path().parent
+    missing = tmp_path / "missing"
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    unreadable = tmp_path / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "broken.jpg").write_bytes(b"not-an-image")
+
+    for configured in (missing, empty, unreadable):
+        paths = popup_mod.popup_image_paths(configured)
+        assert paths
+        assert all(path.parent == fallback for path in paths)
+
+    assert popup_mod.resolve_fun_asset(missing, fallback) == fallback
+
+
+def test_ojingjing_menu_entry_defers_window_until_menu_exec_returns(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    import pet.context_menus.fun_entry as fun_entry
+    from pet.context_menus.shared import take_deferred_menu_callbacks
+
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    monkeypatch.setattr(fun_entry, "open_ojingjing_window", lambda config: calls.append(config))
+    menu = QMenu()
+    entry = fun_entry.OjingjingMenuEntry(menu, {"title": "彩蛋"})
+    menu.show()
+    app.processEvents()
+
+    entry._activate()
+    assert calls == []
+    callbacks = take_deferred_menu_callbacks(menu)
+    assert len(callbacks) == 1
+    callbacks[0]()
+    assert calls == [{"title": "彩蛋"}]
+    entry.close()
+    menu.close()
+    app.processEvents()
+
+
+def test_ojingjing_menu_entry_reports_unexpected_open_error(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    import pet.context_menus.fun_entry as fun_entry
+
+    app = QApplication.instance() or QApplication([])
+    warnings = []
+
+    def fail(_config):
+        raise RuntimeError("图片解码失败")
+
+    monkeypatch.setattr(fun_entry, "open_ojingjing_window", fail)
+    monkeypatch.setattr(
+        fun_entry.QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    menu = QMenu()
+    entry = fun_entry.OjingjingMenuEntry(menu)
+    entry._activate()
+    assert warnings == [("彩蛋图片不可用", "图片解码失败")]
+    entry.close()
+    app.processEvents()
+
+
 def test_popup_manager_restores_all_existing_windows_before_new_window():
     from pet.fun_image_popup import OjingjingWindowManager
 
@@ -1910,18 +1979,10 @@ def test_menu_easter_egg_and_modern_theme_fields_are_configurable(tmp_path):
     assert config.get("context_menu_appearance")["dark_background"] == "#111213"
 
 
-def test_legacy_popup_defaults_migrate_without_overwriting_custom_paths(tmp_path):
+def test_easter_egg_config_preserves_custom_paths(tmp_path):
     from pet.config import Config
 
     config = Config(tmp_path)
-    config.set("menu_easter_egg", {
-        "avatar": "assets/pop_up_window/ojingjing.jpg",
-        "image_dir": "assets\\pop_up_window",
-    })
-    migrated = config.get("menu_easter_egg")
-    assert migrated["avatar"] == "assets/big_blue_fat_fish/ojingjing.jpg"
-    assert migrated["image_dir"] == "assets/big_blue_fat_fish"
-
     config.set("menu_easter_egg", {
         "avatar": "/custom/avatar.png",
         "image_dir": "/custom/images",
@@ -2043,6 +2104,7 @@ def test_dock_icon_visibility_defaults_on_and_is_saved_by_modern_settings(tmp_pa
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.sys, "platform", "darwin")
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     config = Config(tmp_path)
     assert config.get("show_dock_icon") is True

@@ -23,6 +23,8 @@ import threading
 import time
 from pathlib import Path
 
+import shiboken6
+
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QCursor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
@@ -1086,10 +1088,28 @@ class PetWindow(QWidget):
         callbacks = take_deferred_menu_callbacks(menu)
         if getattr(self, "_active_context_menu", None) is menu:
             self._active_context_menu = None
-        # QMenu.exec() has now returned, so the native NSMenu tracking loop is
-        # gone. Heavy dialogs and QApplication.quit() are safe at this point.
-        for callback in callbacks:
-            callback()
+        if callbacks:
+            def dispatch_callbacks() -> None:
+                for callback in callbacks:
+                    callback()
+
+            def schedule_after_menu_destroyed(*_args) -> None:
+                # Windows may keep the translucent popup's native backing
+                # surface alive briefly after exec() returns. Wait for the
+                # QMenu QObject to be destroyed, then yield once more before
+                # showing or activating another top-level window.
+                try:
+                    if not shiboken6.isValid(self):
+                        return
+                    QTimer.singleShot(0, self, dispatch_callbacks)
+                except RuntimeError:
+                    # The owning pet can be destroyed between isValid() and
+                    # registering the context-bound timer during shutdown or
+                    # character replacement. Its menu command is no longer
+                    # meaningful, so discard it without touching Qt again.
+                    return
+
+            menu.destroyed.connect(schedule_after_menu_destroyed)
         # 菜单使用完毕即释放整棵菜单树：QMenu 以长命窗口为 parent，
         # 不删除会随每次右键累积（子菜单/动作/线程池/图标 pixmap）。
         # 先清掉尚未启动的解码任务，避免 QThreadPool 析构时在 GUI 线程

@@ -201,6 +201,81 @@ def test_menu_font_select_lists_system_fonts(tmp_path, monkeypatch):
     app.processEvents()
 
 
+def test_settings_first_paint_does_not_enumerate_system_fonts(tmp_path, monkeypatch):
+    """系统字体枚举可能在 Windows 阻塞数秒，只能在用户展开字体选择器时执行。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    monkeypatch.setattr(
+        settings_mod,
+        "_system_font_families",
+        lambda: calls.append("enumerated") or ("Regression Test Font",),
+    )
+
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=False)
+    dialog.show()
+    app.processEvents()
+    assert calls == [], "首次显示设置窗口时不应枚举全部系统字体"
+
+    dialog.menu_font_select.showPopup()
+    assert calls == ["enumerated"]
+    dialog.menu_font_select._popup.close()
+    dialog.close()
+    app.processEvents()
+
+
+def test_settings_save_preserves_custom_font_before_selector_is_opened(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    appearance = dict(config.get("context_menu_appearance"))
+    appearance["ui_font"] = "Regression Custom Font"
+    config.set("context_menu_appearance", appearance)
+
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
+    assert dialog._menu_fonts_populated is False
+    assert dialog.menu_font_select.currentData() == "Regression Custom Font"
+    dialog._save()
+    assert config.get("context_menu_appearance")["ui_font"] == "Regression Custom Font"
+    app.processEvents()
+
+
+def test_modern_select_reuses_one_popup_without_accumulating_children(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=False)
+    select = dialog.menu_theme_select
+
+    popup_ids = []
+    for _ in range(3):
+        select.showPopup()
+        app.processEvents()
+        popup_ids.append(id(select._popup))
+        select._popup.close()
+        app.processEvents()
+        assert len(select.findChildren(QMenu)) == 1
+
+    assert len(set(popup_ids)) == 1
+
+    dialog.close()
+    app.processEvents()
+
+
 def test_dock_icon_row_platform_gated(tmp_path, monkeypatch):
     """「显示 Dock 图标」是 macOS 专属选项，其他平台不应显示。"""
     import sys
@@ -411,6 +486,31 @@ def test_ojingjing_entry_hover_survives_widget_children(monkeypatch):
         app.processEvents()
 
 
+def test_windows_ojingjing_children_do_not_intercept_hover():
+    """Windows 按子窗口做命中测试；首项内容必须把鼠标事件透传给背景控件。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QMenu, QWidget
+
+    from pet.context_menus.fun_entry import OjingjingMenuEntry
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    entry = OjingjingMenuEntry(menu)
+    children = [
+        entry.findChild(QWidget, "ojingjingAvatar"),
+        entry.findChild(QWidget, "ojingjingTitle"),
+        entry.findChild(QWidget, "ojingjingClickAccessory"),
+    ]
+    assert all(child is not None for child in children)
+    assert all(
+        child.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        for child in children
+    ), "头像、标题和提示不应截获 Windows hover 事件"
+    entry.close()
+    menu.close()
+    app.processEvents()
+
+
 def test_macos_hide_pet_enables_dock_icon(tmp_path, monkeypatch):
     """macOS 隐藏桌宠时应临时打开 Dock 图标（运行期策略，不写回配置）。
 
@@ -457,6 +557,36 @@ def test_macos_hide_pet_enables_dock_icon(tmp_path, monkeypatch):
         mock_hide.assert_called_once()
         assert win.cfg.get("show_dock_icon") is False
         assert getattr(win, "_dock_icon_forced", False) is True
+
+
+def test_windows_settings_has_no_orphan_macos_dock_toggle(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.sys, "platform", "win32")
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    config.set("show_dock_icon", False)
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
+
+    assert dialog.dock_icon_check is None
+    assert not any(
+        isinstance(child, settings_mod.ToggleSwitch)
+        for child in dialog.children()
+    ), "所有开关都必须被设置行接管，不能游离在窗口左上角"
+    assert dialog.findChild(
+        settings_mod.SettingRow, "settingRow_auto_hide_fullscreen"
+    ) is not None
+    assert dialog.findChild(
+        settings_mod.SettingRow, "settingRow_stream_capture"
+    ) is not None
+
+    dialog._save()
+    assert config.get("show_dock_icon") is False
+    app.processEvents()
 
 
 def test_hide_pet_notifies_and_dock_click_restores(tmp_path, monkeypatch):
@@ -619,10 +749,12 @@ def test_store_fun_asset_keeps_bundled_paths_relative(tmp_path):
 
 
 def test_popup_image_paths_survives_missing_directory(tmp_path):
-    """彩蛋图片目录不存在时必须返回空列表而不是抛 FileNotFoundError。"""
+    """彩蛋图片目录不存在时回退默认彩蛋池（而非抛异常或空列表）。"""
     from pet.fun_image_popup import popup_image_paths
 
-    assert popup_image_paths(tmp_path / "does-not-exist") == []
+    paths = popup_image_paths(tmp_path / "does-not-exist")
+    assert paths, "缺失目录应回退默认彩蛋图片池"
+    assert all(path.is_file() for path in paths)
 
 
 def test_config_normalizes_polluted_absolute_easter_egg_paths(tmp_path):
