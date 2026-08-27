@@ -1095,6 +1095,46 @@ def test_streaming_reply_uses_typewriter_and_finishes_after_buffer_drains(tmp_pa
     app.processEvents()
 
 
+def test_session_switch_during_typewriter_drain_does_not_cross_write(tmp_path: Path):
+    """模型已完成、打字机仍在排空时切换会话：不得把上一轮回复写进新会话。
+
+    回归背景：_reset 此前不停止 _typewriter_timer、不清 _pending_output /
+    _pending_finish_text，切会话后迟到的 tick 会把旧回复 append+save 到
+    新会话（原会话丢回复、新会话多幻影消息）。
+    """
+    import time
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.chat.models import ChatMessage
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    # 模拟：service 已不忙（模型返回完毕），打字机仍在逐字排空
+    window._active_request_id = "request"
+    window._pending_output = "残留输出"
+    window._pending_finish_text = "完整的旧回复"
+    window._typewriter_timer.start()
+    window.session.messages.append(ChatMessage("user", "旧提问"))
+    old_session = window.session
+
+    window.new_session()
+
+    assert not window._typewriter_timer.isActive()
+    assert window._pending_output == ""
+    assert window._pending_finish_text is None
+    assert window.session is not old_session
+    assert all(m.role != "assistant" for m in window.session.messages)
+    # 事件循环再转一会儿，确认没有迟到的 tick 把旧回复写进新会话
+    deadline = time.time() + 0.5
+    while time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert all(m.role != "assistant" for m in window.session.messages)
+    window.close()
+    app.processEvents()
+
+
 def test_quit_closes_active_context_menu_before_leaving_event_loop(monkeypatch):
     import time
     from PySide6.QtWidgets import QApplication
@@ -1175,6 +1215,12 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
             state["inside_exec"] = True
             self._deferred_callbacks = [lambda: calls.append(state["inside_exec"])]
             state["inside_exec"] = False
+
+        def findChildren(self, _type):
+            return []
+
+        def deleteLater(self):
+            pass
 
     class FakePet:
         def _restore_on_top_after_context_menu(self):

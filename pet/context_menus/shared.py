@@ -6,7 +6,7 @@ import sys
 
 import shiboken6
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import QMenu
 
@@ -33,6 +33,43 @@ class _AnimationIconWorker(QRunnable):
 
     def run(self) -> None:
         self.signals.ready.emit(self.loader(self.animation_name))
+
+
+class _AnimationIconApplier(QObject):
+    """GUI 线程槽：接收 worker 解码完成信号并更新 QAction。
+
+    挂在 submenu 下随菜单生命周期存在；worker 线程只负责解码，
+    ready 信号经 Qt 自动队列投递到本对象（GUI 线程），避免跨线程
+    操作 QMenu/QAction（Qt 未定义行为，可致偶发崩溃/图标错乱）。
+    """
+
+    def __init__(self, submenu, action, worker, pump, parent=None):
+        super().__init__(parent)
+        self._submenu = submenu
+        self._action = action
+        self._worker = worker
+        self._pump = pump
+
+    @Slot(object)
+    def on_ready(self, image) -> None:
+        submenu = self._submenu
+        if shiboken6.isValid(submenu) is False:
+            return
+        if self._worker in submenu._animation_icon_workers:
+            submenu._animation_icon_workers.remove(self._worker)
+        # setIcon() invalidates QMenu's action geometry. Doing
+        # that dozens of times on a visible, scrollable menu
+        # corrupts its scroll layout and blocks hover events.
+        if (
+            not submenu.isVisible()
+            and image is not None
+            and not image.isNull()
+        ):
+            self._action.setIcon(fitted_pet_pixmap_icon(submenu, QPixmap.fromImage(image)))
+            submenu.update()
+        pump = self._pump
+        if callable(pump):
+            pump()
 
 
 def _root_menu(menu: QMenu) -> QMenu:
@@ -168,28 +205,12 @@ def build_animation_categories(
 
                 def launch(action, animation_name) -> None:
                     worker = _AnimationIconWorker(loader, animation_name)
-
-                    def apply_image(
-                        image, action=action, worker=worker, submenu=submenu,
-                    ) -> None:
-                        # 菜单可能已在 worker 解码期间关闭销毁，跳过图标更新
-                        if shiboken6.isValid(submenu) is False:
-                            return
-                        if worker in submenu._animation_icon_workers:
-                            submenu._animation_icon_workers.remove(worker)
-                        # setIcon() invalidates QMenu's action geometry. Doing
-                        # that dozens of times on a visible, scrollable menu
-                        # corrupts its scroll layout and blocks hover events.
-                        if (
-                            not submenu.isVisible()
-                            and image is not None
-                            and not image.isNull()
-                        ):
-                            action.setIcon(fitted_pet_pixmap_icon(submenu, QPixmap.fromImage(image)))
-                            submenu.update()
-                        pump()
-
-                    worker.signals.ready.connect(apply_image)
+                    # 解码完成信号经队列投递到 GUI 线程的 applier 槽：
+                    # 菜单销毁时连接随 applier（submenu 子对象）自动断开。
+                    applier = _AnimationIconApplier(
+                        submenu, action, worker, pump, parent=submenu
+                    )
+                    worker.signals.ready.connect(applier.on_ready)
                     submenu._animation_icon_workers.append(worker)
                     submenu._animation_icon_pool.start(worker)
 

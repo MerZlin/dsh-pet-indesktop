@@ -513,3 +513,71 @@ def test_hide_pet_internal_replacement_skips_notify(tmp_path, monkeypatch):
             win, Qt.ApplicationState.ApplicationActive
         )
         mock_show.assert_not_called()
+
+
+def test_animation_icon_applier_updates_action_and_cleans_worker():
+    """图标解码完成回调须经 GUI 线程槽更新 QAction，并清理 worker 记录。
+
+    回归背景：ready 信号此前直连普通闭包，setIcon/update 在 QThreadPool
+    工作线程执行（Qt 未定义行为）；现经 _AnimationIconApplier（挂在
+    submenu 下、随菜单生命周期）队列投递回 GUI 线程。
+    """
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.shared import _AnimationIconApplier
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    submenu = QMenu(menu)
+    submenu._animation_icon_workers = []
+    action = submenu.addAction("测试动画")
+    pump_calls = []
+    worker = object()
+
+    # 无图（解码失败/空帧）：不 setIcon，但必须移除 worker 并继续泵任务
+    applier = _AnimationIconApplier(
+        submenu, action, worker, lambda: pump_calls.append(1), parent=submenu
+    )
+    applier.on_ready(None)
+    assert submenu._animation_icon_workers == []
+    assert pump_calls == [1]
+
+    # 有效图：菜单不可见（offscreen）时更新图标
+    image = QImage(16, 16, QImage.Format.Format_ARGB32)
+    image.fill(0xFF3366FF)
+    submenu._animation_icon_workers.append(worker)
+    applier2 = _AnimationIconApplier(
+        submenu, action, worker, lambda: pump_calls.append(2), parent=submenu
+    )
+    applier2.on_ready(image)
+    assert submenu._animation_icon_workers == []
+    assert pump_calls == [1, 2]
+    assert not action.icon().isNull()
+
+    # 菜单已销毁：槽必须静默返回，不访问已删 C++ 对象
+    menu.deleteLater()
+    app.processEvents()
+
+
+def test_build_workflows_bundle_menu_templates_and_chat_styles():
+    """三平台打包脚本必须包含菜单模板与聊天样式资源（防漏打包回归）。
+
+    回归背景：Linux workflow 曾漏掉 pet/menu_templates（右键菜单在冻结版
+    打不开）与 legacy/modern_styles.qss（聊天窗无样式）。
+    """
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    linux = (repo / ".github" / "workflows" / "build-linux.yml").read_text(encoding="utf-8")
+    macos = (repo / ".github" / "workflows" / "build-macos.yml").read_text(encoding="utf-8")
+    windows = (repo / "scripts" / "build_onedir.ps1").read_text(encoding="utf-8")
+
+    for name, text in (("build-linux.yml", linux), ("build-macos.yml", macos), ("build_onedir.ps1", windows)):
+        assert "menu_templates" in text, f"{name} 必须打包 pet/menu_templates"
+        assert "legacy_styles.qss" in text, f"{name} 必须打包 legacy_styles.qss"
+        assert "modern_styles.qss" in text, f"{name} 必须打包 modern_styles.qss"
+    # 兜底：模板 JSON 缺失时 load_menu_template 必须回退内置模板而非抛异常
+    import pet.context_menu as context_menu_mod
+    assert context_menu_mod.load_menu_template("modern")["id"] == "modern"
+    assert context_menu_mod.load_menu_template("legacy")["id"] == "legacy"

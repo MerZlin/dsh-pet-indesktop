@@ -1813,6 +1813,12 @@ class ChatWindow(QDialog):
         self._reset()
 
     def _reset(self) -> None:
+        # 停止打字机并丢弃未排空的输出：模型完成后若仍有 ~1 秒的逐字
+        # 排空窗口，此时切换/新建/删除会话或换角色会把这轮回复继续
+        # append 并保存进"新"会话（原会话丢回复、新会话多幻影消息）。
+        self._typewriter_timer.stop()
+        self._pending_output = ""
+        self._pending_finish_text = None
         self._active_request_id = None
         self.status.setText("就绪")
         self.status_dot.setProperty("state", "ready")

@@ -1053,6 +1053,15 @@ class PetWindow(QWidget):
         # gone. Heavy dialogs and QApplication.quit() are safe at this point.
         for callback in callbacks:
             callback()
+        # 菜单使用完毕即释放整棵菜单树：QMenu 以长命窗口为 parent，
+        # 不删除会随每次右键累积（子菜单/动作/线程池/图标 pixmap）。
+        # 先清掉尚未启动的解码任务，避免 QThreadPool 析构时在 GUI 线程
+        # 等待运行中的 worker。
+        for submenu in menu.findChildren(QMenu):
+            pool = getattr(submenu, "_animation_icon_pool", None)
+            if pool is not None:
+                pool.clear()
+        menu.deleteLater()
 
     def reopen_context_menu(self, menu: QMenu) -> None:
         """Close the old template and immediately show the newly selected one."""

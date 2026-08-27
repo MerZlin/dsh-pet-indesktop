@@ -52,6 +52,12 @@ jobs:
             IFS='|' read -r VARIANT ENTRY DATAS EXCLUDES <<< "$SPEC"
             echo "==> building $VARIANT"
             echo "VARIANT = '$VARIANT'" > packaging/build_variant.py
+            CHAT_DATA=()
+            if [[ "$VARIANT" == *-chat ]]; then
+              # 新版/经典聊天窗口读取的样式文件（与 macOS/Windows 构建一致）
+              CHAT_DATA+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")
+              CHAT_DATA+=(--add-data "pet/chat/modern_styles.qss:pet/chat")
+            fi
             python -m PyInstaller --noconfirm --clean --onedir \
               --paths . \
               --collect-all imageio_ffmpeg \
@@ -59,7 +65,8 @@ jobs:
               --add-data "assets/sounds:assets/sounds" \
               --add-data "assets/chat:assets/chat" \
               --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish" \
-              --add-data "pet/chat/styles.qss:pet/chat" \
+              --add-data "pet/menu_templates:pet/menu_templates" \
+              "${CHAT_DATA[@]}" \
               --name "dsh-pet-standalone-$VARIANT" \
               --add-data "$DATAS:$DATAS" \
               $EXCLUDES \
