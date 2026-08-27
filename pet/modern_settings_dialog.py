@@ -293,12 +293,14 @@ class ModernSelect(QAbstractButton):
     """Custom-painted selector with a Modern-style popover, not a QComboBox."""
 
     currentIndexChanged = Signal(int)
+    aboutToShowPopup = Signal()
 
     def __init__(self, parent=None, *, width: int = 132):
         super().__init__(parent)
         self._items: list[tuple[str, object]] = []
         self._index = -1
         self._hovered = False
+        self._popup: QMenu | None = None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFixedHeight(BROWSER_CONTROL_SPEC["field_height"])
@@ -365,9 +367,18 @@ class ModernSelect(QAbstractButton):
         return MODERN_SELECT_POPUP_STYLESHEET
 
     def showPopup(self) -> None:  # noqa: N802
-        popup = QMenu(self)
-        popup.setObjectName("ModernSelectPopup")
-        popup.setStyleSheet(MODERN_SELECT_POPUP_STYLESHEET)
+        self.aboutToShowPopup.emit()
+        popup = self._popup
+        if popup is None:
+            popup = QMenu(self)
+            popup.setObjectName("ModernSelectPopup")
+            popup.setStyleSheet(MODERN_SELECT_POPUP_STYLESHEET)
+            self._popup = popup
+        else:
+            # Reuse one native popup instead of retaining a new child QMenu on
+            # every open. Deleting on close is unsafe here because Qt performs
+            # that deletion asynchronously while Python still owns the wrapper.
+            popup.clear()
         popup.setMinimumWidth(self.width())
         for index, (text, _) in enumerate(self._items):
             action = QWidgetAction(popup)
@@ -376,7 +387,6 @@ class ModernSelect(QAbstractButton):
             option.clicked.connect(popup.close)
             action.setDefaultWidget(option)
             popup.addAction(action)
-        self._popup = popup
         popup.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
 
     def enterEvent(self, event) -> None:  # noqa: N802
@@ -1153,8 +1163,10 @@ class ModernSettingsDialog(QDialog):
         self.autostart_check = ToggleSwitch(self)
         self._autostart_initial = autostart_mod.is_enabled()
         self.autostart_check.setChecked(self._autostart_initial)
-        self.dock_icon_check = ToggleSwitch(self)
-        self.dock_icon_check.setChecked(bool(self.config.get("show_dock_icon", True)))
+        self.dock_icon_check = None
+        if sys.platform == "darwin":
+            self.dock_icon_check = ToggleSwitch(self)
+            self.dock_icon_check.setChecked(bool(self.config.get("show_dock_icon", True)))
         self.click_sound_check = ToggleSwitch(self)
         self.click_sound_check.setChecked(bool(self.config.get("click_sound_enabled", True)))
         self.click_sound_picker = ResourcePathPicker(
@@ -1252,10 +1264,15 @@ class ModernSettingsDialog(QDialog):
         self.menu_font_select = ModernSelect(self, width=172)
         self.menu_font_select.addItem("系统默认", "system")
         self._menu_fonts_populated = False
-        # 系统字体枚举在 macOS 上可达数百 ms，延迟到事件循环空闲时填充，
-        # 避免每次打开设置窗口都同步阻塞；带 context 的 singleShot 在
-        # 对话框销毁后自动跳过回调
-        QTimer.singleShot(0, self, self._populate_menu_fonts)
+        current_font = str(appearance.get("ui_font") or "system")
+        if current_font != "system":
+            # 保留当前配置值无需枚举字体库，确保用户未展开选择器直接保存时
+            # 不会把自定义字体静默重置为 system。
+            self.menu_font_select.addItem(current_font, current_font)
+        self.menu_font_select.setCurrentData(current_font)
+        # Windows 字体较多时首次枚举可阻塞数秒。零延迟定时器仍会在
+        # 设置窗口首帧绘制前运行，因此改为仅在用户真正展开字体选择器时加载。
+        self.menu_font_select.aboutToShowPopup.connect(self._populate_menu_fonts)
         self.menu_font_size_select = ModernSelect(self, width=112)
         for size in range(10, 19):
             self.menu_font_size_select.addItem(f"{size} px", size)
@@ -1305,13 +1322,13 @@ class ModernSettingsDialog(QDialog):
                 row.setEnabled(bool(enabled))
 
     def _populate_menu_fonts(self) -> None:
-        # 对话框可能在定时器触发前被关闭销毁（WA_DeleteOnClose）
         if shiboken6.isValid(self) is False or self._menu_fonts_populated:
             return
         self._menu_fonts_populated = True
         appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
         for family in _system_font_families():
-            self.menu_font_select.addItem(family, family)
+            if self.menu_font_select.findData(family) < 0:
+                self.menu_font_select.addItem(family, family)
         current_font = str(appearance.get("ui_font") or "system")
         if self.menu_font_select.findData(current_font) < 0:
             self.menu_font_select.addItem(current_font, current_font)
@@ -1580,7 +1597,8 @@ class ModernSettingsDialog(QDialog):
         texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]
         self.config.set("scale", float(self.scale_combo.currentData()))
         self.config.set("on_top", self.on_top_check.isChecked())
-        self.config.set("show_dock_icon", self.dock_icon_check.isChecked())
+        if self.dock_icon_check is not None:
+            self.config.set("show_dock_icon", self.dock_icon_check.isChecked())
         self.config.set("no_move", self.no_move_check.isChecked())
         self.config.set("drag_physics", self.drag_physics_check.isChecked())
         self.config.set("click_sound_enabled", self.click_sound_check.isChecked())

@@ -48,8 +48,6 @@ DEFAULT_MENU_EASTER_EGG = {
     "avatar": "assets/big_blue_fat_fish/ojingjing.jpg",
     "image_dir": "assets/big_blue_fat_fish",
 }
-_LEGACY_MENU_EASTER_EGG_AVATAR = "assets/pop_up_window/ojingjing.jpg"
-_LEGACY_MENU_EASTER_EGG_IMAGE_DIR = "assets/pop_up_window"
 DEFAULT_QUICK_LAUNCH_APPS = [
     {"name": "默认浏览器", "path": "", "kind": "default_browser"},
 ]
@@ -101,10 +99,6 @@ def _clean_menu_easter_egg(value):
     defaults = DEFAULT_MENU_EASTER_EGG
     avatar = str(value.get("avatar") or defaults["avatar"]).strip()[:500]
     image_dir = str(value.get("image_dir") or defaults["image_dir"]).strip()[:500]
-    if avatar.replace("\\", "/") == _LEGACY_MENU_EASTER_EGG_AVATAR:
-        avatar = defaults["avatar"]
-    if image_dir.replace("\\", "/") == _LEGACY_MENU_EASTER_EGG_IMAGE_DIR:
-        image_dir = defaults["image_dir"]
     return {
         "enabled": bool(value.get("enabled", defaults["enabled"])),
         "title": str(value.get("title") or defaults["title"]).strip()[:40],

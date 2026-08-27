@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QCloseEvent, QMouseEvent, QPixmap
+from PySide6.QtGui import QCloseEvent, QImageReader, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
@@ -23,19 +23,38 @@ def oijingjing_image_path() -> Path:
 
 
 def resolve_fun_asset(path: str | Path | None, fallback: Path) -> Path:
+    fallback = Path(fallback).expanduser()
     if path is None or not str(path).strip():
         return fallback
     candidate = Path(str(path or "")).expanduser()
     if candidate.is_absolute():
-        return candidate
+        return candidate if candidate.exists() else fallback
     bundled = Path(__file__).resolve().parents[1] / candidate
     return bundled if bundled.exists() else fallback
 
 
-def popup_image_paths(directory: str | Path | None = None) -> list[Path]:
-    directory = resolve_fun_asset(directory, oijingjing_image_path().parent)
+def _readable_image_paths(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
     supported = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
-    return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in supported)
+    try:
+        return sorted(
+            path for path in directory.iterdir()
+            if path.is_file()
+            and path.suffix.lower() in supported
+            and QImageReader(str(path)).canRead()
+        )
+    except OSError:
+        return []
+
+
+def popup_image_paths(directory: str | Path | None = None) -> list[Path]:
+    fallback = oijingjing_image_path().parent
+    requested = resolve_fun_asset(directory, fallback)
+    paths = _readable_image_paths(requested)
+    if paths or requested == fallback:
+        return paths
+    return _readable_image_paths(fallback)
 
 
 class OjingjingWindow(QWidget):
@@ -83,6 +102,8 @@ class OjingjingWindow(QWidget):
         image.setObjectName("ojingjingFullImage")
         image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         source = QPixmap(str(image_path))
+        if source.isNull():
+            raise ValueError(f"无法读取彩蛋图片: {image_path}")
         image.setPixmap(
             source.scaled(
                 side,
@@ -166,7 +187,7 @@ class OjingjingWindowManager:
         config = dict(config or {})
         paths = popup_image_paths(config.get("image_dir"))
         if not paths:
-            raise FileNotFoundError(f"弹窗图片目录为空: {oijingjing_image_path().parent}")
+            raise FileNotFoundError(f"没有可读取的彩蛋图片: {oijingjing_image_path().parent}")
         if show:
             self.restore_all()
         window = OjingjingWindow(

@@ -1167,14 +1167,21 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
         def connect(self, callback):
             self.callback = callback
 
+        def emit(self):
+            self.callback()
+
     class FakeMenu:
         def __init__(self, _parent):
             self.aboutToHide = FakeSignal()
+            self.destroyed = FakeSignal()
 
         def exec(self, _pos):
             state["inside_exec"] = True
             self._deferred_callbacks = [lambda: calls.append(state["inside_exec"])]
             state["inside_exec"] = False
+
+        def deleteLater(self):
+            self.destroyed.emit()
 
     class FakePet:
         def _restore_on_top_after_context_menu(self):
@@ -1182,10 +1189,124 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
 
     monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
     monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
+    monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda *args: args[-1]())
     pet = FakePet()
     PetWindow._show_context_menu(pet, QPoint(12, 18))
     assert calls == [False]
     assert pet._active_context_menu is None
+
+
+def test_context_menu_window_callback_waits_until_old_menu_is_destroyed(monkeypatch):
+    from PySide6.QtCore import QPoint
+
+    import pet.window as window_mod
+    from pet.window import PetWindow
+
+    calls = []
+    timers = []
+    created = []
+
+    class FakeSignal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+        def emit(self):
+            for callback in list(self.callbacks):
+                callback()
+
+    class FakeMenu:
+        def __init__(self, _parent):
+            self.aboutToHide = FakeSignal()
+            self.destroyed = FakeSignal()
+            self.delete_requested = False
+            created.append(self)
+
+        def exec(self, _pos):
+            self._deferred_callbacks = [lambda: calls.append("settings")]
+
+        def deleteLater(self):
+            self.delete_requested = True
+
+    class FakePet:
+        def _restore_on_top_after_context_menu(self):
+            pass
+
+    monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
+    monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
+    monkeypatch.setattr(
+        window_mod.QTimer,
+        "singleShot",
+        lambda *args: timers.append(args[-1]),
+    )
+
+    pet = FakePet()
+    PetWindow._show_context_menu(pet, QPoint(12, 18))
+    menu = created[0]
+    assert menu.delete_requested is True
+    assert calls == []
+    assert timers == []
+
+    menu.destroyed.emit()
+    assert calls == []
+    assert len(timers) == 1
+    timers.pop()()
+    assert calls == ["settings"]
+
+
+def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QPoint
+
+    import pet.window as window_mod
+    from pet.window import PetWindow
+
+    timers = []
+    created = []
+
+    class FakeSignal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+        def emit(self):
+            for callback in list(self.callbacks):
+                callback()
+
+    class FakeMenu:
+        def __init__(self, _parent):
+            self.aboutToHide = FakeSignal()
+            self.destroyed = FakeSignal()
+            created.append(self)
+
+        def exec(self, _pos):
+            self._deferred_callbacks = [lambda: None]
+
+        def deleteLater(self):
+            pass
+
+    class FakePet:
+        def _restore_on_top_after_context_menu(self):
+            pass
+
+    monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
+    monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
+    monkeypatch.setattr(
+        window_mod, "shiboken6", SimpleNamespace(isValid=lambda _obj: False), raising=False
+    )
+    monkeypatch.setattr(
+        window_mod.QTimer, "singleShot", lambda *args: timers.append(args)
+    )
+
+    pet = FakePet()
+    PetWindow._show_context_menu(pet, QPoint(12, 18))
+    created[0].destroyed.emit()
+    assert timers == []
 
 
 def test_close_required_actions_are_queued_while_menu_is_visible():
