@@ -30,7 +30,6 @@
 | D4 | 主动识屏输出 | 仅气泡展示，**默认不写入 AI 会话**；与自言自语同一心智模型 |
 | D5 | 感知性设计 | 开启时一次性告知气泡；触发前有先兆（小动作或“让我看看…”短气泡）；无新按钮 |
 | D6 | 鼠标穿透 | 穿透时**默认仍允许识屏**；右键二级菜单提供独立开关 `[x] 鼠标穿透时仍允许主动识屏` |
-| D7 | 多 Agent 联动 | 默认全关；`[ ] DSH [ ] Claude Code [ ] Cursor [ ] Codex` 逐项独立开关 |
 | D8 | 截屏范围 | 仅截**前台白名单窗口区域**；不截全屏；主动识屏截图**不落盘**（纯内存） |
 | D9 | 平台边界 | 主动识屏 v1 **仅 Windows**（GetForegroundWindow/GetLastInputInfo/DWM 均为 Win32）；非 Windows 不显示入口 |
 | D10 | 低功耗铁律 | 功能关闭 = 零定时器/零截图/零网络/零新增进程；开启后仅 8s 一次微秒级 Win32 判定；隐藏时随现有 `_pause_activity` 暂停 |
@@ -247,7 +246,6 @@ capture_window_rect(rect) -> PIL.Image | None   # 后台线程内调用
            [x] 触发前先兆提示
            [ ] 仅当我闲置时触发（默认不勾；秒数在设置页调）
            打开设置…
-Agent 联动 ▸ [ ] DSH   [ ] Claude Code   [ ] Cursor   [ ] Codex
 ```
 - 仅 Windows 显示「主动识屏」组；菜单状态与配置实时同步；
 - Agent 联动每项默认不勾；勾选即启动对应监视器，取消即停（并可选卸载注入的 hooks）。
@@ -269,7 +267,6 @@ Agent 联动 ▸ [ ] DSH   [ ] Claude Code   [ ] Cursor   [ ] Codex
 | DSH | **内置桥接插件**（`integrations/dsh-pet-bridge`）：订阅 `agent/created` + `agent/status`，写入固定桥目录 `<数据基目录>/dsh-pet-bridge/dsh.jsonl`；勾选时弹确认框一键安装（`dsh plugin install`），关闭自动卸载。已实测：插件需声明 `dsh.bundle` + `cordis.patch.yml` 才会成为 profile layer |
 | Claude Code | 官方 hooks（PreToolUse/PostToolUse/PostToolUseFailure/Stop/SessionStart/UserPromptSubmit） | 勾选开启时弹确认框，经用户同意后把 hook 命令写入 `.claude/settings.json`，命令追加一行到事件文件 |
 | Cursor | `~/.cursor/projects/**/agent-transcripts/*.jsonl`（**真实格式**：`{role, message:{content:[...]}}`——user→thinking、assistant+tool_use→working、assistant 纯文本→idle） | byte-offset tail，1.5s，仅最近 1 天目录，文件数上限 50 |
-| Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`（**真实格式**：`{type:"event_msg", payload:{type:...}}`——task_started→working、user_message/agent_reasoning→thinking、task_complete→idle，结构性记录忽略） | 同 Clawd：byte-offset tail + 启动 backfill 防护，1.5s，有界 |
 | OpenCode | **原生 SQLite 直读**（`~/.local/share/opencode/opencode.db` 的 event 表，rowid 偏移轮询，只读模式不阻塞写入）——**无需插件** | 1.5s 轮询，backfill 防护 |
 
 硬性约束：
@@ -338,7 +335,6 @@ Agent 联动 ▸ [ ] DSH   [ ] Claude Code   [ ] Cursor   [ ] Codex
 6. **§4.3 多实例语义明确**：状态文件跨实例共享，`daily_cap` 为全局每日上限。
 7. **§6 GLM 前置条件补充**：`prefer_free_provider` 生效需 `vision_same_as_chat=False`，
    否则 vision_base_url 被忽略（vision.py:126）。
-8. **§8.2 路径可移植性**：Cursor/Codex 路径改用 `Path.home()` 表述，不写死 `~/`。
 9. **闲置判定改为默认关闭（2026-08-27 用户定）**：新增独立开关 `require_idle`（默认 false，
    工作中也允许触发），`min_idle_seconds` 仅在其开启时生效；idle 从预设表中移出（预设只管
    dwell/cooldown/cap 三项）；右键「主动识屏」二级菜单新增 `[ ] 仅当我闲置时触发`，

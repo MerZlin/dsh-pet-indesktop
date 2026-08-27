@@ -20,7 +20,6 @@
 | 9 | DeepSeek 视觉请求格式 | ✅ base64 data URL、`detail: low` 可省 token、图片只允许在 user 消息 | 同上 |
 | 10 | Claude Code hooks 事件 | ✅ `SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / PostToolUseFailure / Stop / SubagentStop` 等可执行本地命令 | [Claude Code Hooks 文档](https://code.claude.com/docs/en/hooks) |
 | 11 | DSH 事件 | ✅ DSH 插件可通过 `ctx.on(...)` 监听事件（`tools/pre-execute`、`session/event` 等）；Clawd 用 DSH 插件事件驱动桌宠状态，字段见其 eventMap | [DSH 插件开发教程](https://dev.to/henry_lin_3ac6363747f45b4/deepseek-harness-dsh-cha-jian-kai-fa-jiao-cheng-4h6j)、[Clawd deepseek-harness.js](https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/agents/deepseek-harness.js) |
-| 12 | Codex / Cursor 日志 tail | ✅ Clawd 已验证：JSONL byte-offset tail（非 mtime），有 replay/backfill 防护 | [Clawd codex-log-monitor.js](https://raw.githubusercontent.com/rullerzhou-afk/clawd-on-desk/main/agents/codex-log-monitor.js) |
 | 13 | mtime 轮询不可行 | ✅ 已确认是历史方案失败根因（批量刷盘、无法区分状态）；永久弃用 | 同上 |
 
 ---
@@ -28,7 +27,6 @@
 ## 二、相对此前方案的 4 处修正（重要）
 
 1. **鼠标穿透不再阻断主动识屏**：`mouse_through=True` 时默认仍允许识屏（读屏只读画面、不交互，没有冲突）；但提供「鼠标穿透时仍主动识屏」选项，放右键二级菜单 + 设置页，默认开启，用户可关。
-2. **多 Agent 感知默认全部关闭、逐 Agent 可选**：不默认扫描、不默认写 hooks；右键二级菜单「Agent 联动」内对 `DSH / Claude Code / Cursor / Codex` 分别勾选。
 3. **截图必须在后台线程执行**：`ImageGrab` 全屏抓取单次约 50~200ms，绝不能在主线程做（会造成动画卡顿）；改为 worker 线程抓取→裁剪→dHash→信号回主线程，主线程只做毫秒级 Win32 判定。
 4. **前台窗口矩形用 DWM 边界**：`GetWindowRect` 对最大化窗口含隐形边框，会多截 8px 边缘；改用 `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)`，失败时回退 `GetWindowRect`。
 
@@ -101,14 +99,12 @@ QTimer 8s（仅 enabled && 可见时运行；禁用/隐藏时零定时器）
 
 ## 四、多 Agent 感知（默认全关、逐 Agent 独立开关）
 
-右键二级菜单「Agent 联动」：`[ ] DSH  [ ] Claude Code  [ ] Cursor  [ ] Codex`，默认全不勾选；每项开启才启动对应监视器，关闭即停（卸载 hooks 可选）。
 
 | Agent | 事件源（已验证） | 实现 |
 |---|---|---|
 | DSH | DSH 插件事件（`session/event` 等；Clawd eventMap：SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop…） | 提供轻量 DSH 插件包，把事件写入 `agent-events/dsh.jsonl`；桌宠 tail |
 | Claude Code | 官方 hooks（PreToolUse/PostToolUse/Stop/SubagentStop/…）执行本地脚本追加事件 | 开启时经用户确认把 hook 写入 `.claude/settings.json`；桌宠 tail `agent-events/claude.jsonl` |
 | Cursor | `~/.cursor/projects/**/agent-transcripts/*.jsonl` | byte-offset tail（1.5s，仅最近目录，有界） |
-| Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | 同 Clawd：byte-offset tail + backfill 防护 |
 
 统一输出：`(agent, session_id, state)` → 桌宠切动作（thinking→写代码/working→敲击桌面/attention→气泡提醒）。
 

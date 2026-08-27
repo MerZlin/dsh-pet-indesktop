@@ -12,7 +12,6 @@
 - 语法编译：`python -m compileall -q pet tests` → 通过
 - 工作区改动**均未提交**，包含：
   - 主动识屏（Phase 1~5 首项）
-  - 多 Agent 联动监视器（DSH / Claude Code / Cursor / Codex / OpenCode）
   - 设置 UI 与右键菜单
 
 ---
@@ -36,8 +35,6 @@
 
 | 文件 | 说明 |
 |---|---|
-| `pet/agent_link.py`（新增） | 多 Agent 监视器核心：`ByteOffsetTailer`、`BaseAgentMonitor`、`DshMonitor`、`ClaudeCodeMonitor`、`CursorMonitor`、`CodexMonitor`、`OpenCodeMonitor`、`AgentLinkManager` |
-| `pet/config.py` | 新增 `agent_link` 默认块（dsh/claude/cursor/codex/opencode 全 False） |
 | `pet/window.py` | 实例化 `AgentLinkManager`；右键菜单 5 项开关；隐藏/恢复时 `pause()/resume()` |
 | `pet/settings_dialog.py` | 主动识屏设置组（含「清除陪伴记忆」按钮） |
 | `pet/vision.py` | 视觉链路 bytes 级重构 + 前台窗口信息 + 短期记忆注入 |
@@ -54,7 +51,6 @@
 | **DSH** | 统一 JSONL Byte-Offset Tail，事件来自 DSH 插件写入 `agent-events/dsh.jsonl` | ⚠️ 监视器+协议完成，**DSH 插件包未实现**（`# TODO DSH plugin verification`） |
 | **Claude Code** | 官方 hooks（PreToolUse/PostToolUse/Stop/SessionStart/UserPromptSubmit）写入 `~/.claude/settings.json`，事件追加到 `agent-events/claude.jsonl` | ⚠️ 已实现，但**hooks 配置格式可能有误，需实测确认** |
 | **Cursor** | 多文件 Byte-Offset Tail：`%USERPROFILE%\.cursor\projects\**\agent-transcripts\*.jsonl`，上限 50 文件，最近 1 天 | ✅ 已实现，需真机验证 |
-| **Codex** | 会话 Byte-Offset Tail：`%USERPROFILE%\.codex\sessions\**\*.jsonl`，上限 30 文件 | ✅ 已实现，需真机验证 |
 | **OpenCode** | 统一 JSONL Tail，事件来自 opencode 插件写入 `agent-events/opencode.jsonl` | ⚠️ 监视器+协议完成，**opencode 插件包未实现**（`# TODO opencode plugin package`） |
 
 统一状态词汇：`idle / thinking / working / attention / sleeping / error`
@@ -67,7 +63,6 @@
 1. **Claude Code hooks 配置格式**：`install_hooks()` 目前把 hook 写成**字符串**，但官方规范要求**数组对象**。实测如果 hooks 不触发，大概率是这个原因。
 2. **打包版 hooks 命令**：`install_hooks()` 用的是 `sys.executable`，在 PyInstaller 打包版里会指向桌宠 exe，可能导致 `-c` 命令无效。**源码运行没问题，打包版需注意。**
 3. **授权拒绝后菜单不回弹**：开启 Claude Code 时弹确认框，如果用户点“否”，菜单 checkbox 仍会保持在勾选态。实测时注意。
-4. **状态变更无去抖**：Cursor/Codex 密集写日志时，桌宠可能被连续切动作（看起来抽搐）。实测观察是否需要加节流。
 5. **半行截断**：`ByteOffsetTailer` 没有“半行缓冲”，如果某行恰好跨过读取块边界，可能丢事件。典型场景暂未触发，但可作为后续加固。
 6. **DSH / OpenCode 插件包未实现**：要看到“DSH 在跑 → 桌宠切动作”，**现在做不到**，因为没有插件把事件写进对应 jsonl。只能先通过手动向 `agent-events/dsh.jsonl` / `agent-events/opencode.jsonl` 追加事件行来验证监视器链路。
 
@@ -83,7 +78,6 @@ python -m pet
 
 ### 1) 先验证右键菜单不崩
 - 右键桌宠 → 应看到「主动识屏」和「Agent 联动」两个二级菜单；
-- 「Agent 联动」应显示 5 项：DSH / Claude Code / Cursor / Codex / OpenCode，默认全不勾。
 
 ### 2) 验证 Claude Code 联动
 1. 右键 → Agent 联动 → 勾选 **Claude Code**；
@@ -101,9 +95,6 @@ python -m pet
    `%USERPROFILE%\.cursor\projects\test\agent-transcripts\test.jsonl`
    追加一行 `{"type":"PreToolUse"}`，应在 1.5s 内看到桌宠切“敲击桌面”。
 
-### 4) 验证 Codex 联动
-1. 勾选 **Codex**；
-2. 启动 codex 会话（`codex` 或 `codex --full-auto`）让它做事；
 3. 观察桌宠动作；
 4. 记录：是否过度触发（每条工具行都切动作）？是否需要节流。
 
@@ -133,7 +124,6 @@ python -m pet
 | 右键菜单 | 无崩溃，5 项齐全 |
 | Claude Code | hooks 写入真实有效；Agent 跑动时桌宠切动作/气泡 |
 | Cursor | 真实 transcript 触发动作；无过度抽搐 |
-| Codex | 真实 rollout 触发动作；无过度抽搐 |
 | DSH / OpenCode | 手动注入事件行能驱动动作；插件包仍未实现，不影响本链路验证 |
 | 隐藏暂停 | 隐藏后无 IO/动作；显示后恢复 |
 | 授权拒绝 | checkbox 应回弹到未勾选 |
@@ -148,7 +138,6 @@ python -m pet
 - 右键菜单：通过 / 异常
 - Claude Code：通过 / 异常（附 settings.json 关键片段）
 - Cursor：通过 / 异常
-- Codex：通过 / 异常
 - DSH / OpenCode 手动注入：通过 / 异常
 - 隐藏暂停：通过 / 异常
 - 授权拒绝回弹：通过 / 异常

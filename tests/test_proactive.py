@@ -812,26 +812,31 @@ class TestPhase4UIAndMenuIntegration:
         assert cfg.data["agent_link"]["claude"] is True
 
     def test_context_menu_proactive_build_no_name_error(self, tmp_path):
-        """测试 3：右键菜单构建不抛 NameError，且包含主动识屏与 Agent 联动。"""
-        from PySide6.QtWidgets import QApplication
+        """右键菜单（上游模板系统）构建不抛错，且包含主动识屏与 Agent 联动。"""
+        from PySide6.QtWidgets import QApplication, QMenu
         from pet.window import PetWindow
         from pet.library import MovieLibrary
+        from pet.context_menu import populate_context_menu
 
         app = QApplication.instance() or QApplication([])
 
         cfg = Config(base=tmp_path)
         lib = MovieLibrary(character_id="shenshen")
         win = PetWindow(lib, cfg)
-        win.on_open_chat = lambda: None  # 模拟有聊天能力（无 Chat 变体不显示主动识屏入口）
+        win.on_open_chat = lambda: None  # 有聊天能力才显示主动识屏入口
+        win.on_open_settings = lambda: None
 
-        menu = win._build_context_menu()
-        titles = [action.text() for action in menu.actions()]
-        # Windows 环境下必须包含 主动识屏 和 Agent 联动
+        menu = QMenu()
+        populate_context_menu(menu, win)
+        texts = []
+        for a in menu.actions():
+            texts.append(a.text())
+            if a.menu():
+                texts.extend(x.text() for x in a.menu().actions())
         import sys
         if sys.platform == "win32":
-            assert any("主动识屏" in t for t in titles)
-        assert any("Agent 联动" in t for t in titles)
-
+            assert any("主动识屏" in t for t in texts)
+        assert any("Agent 联动" in t for t in texts)
 
     def test_enable_with_empty_whitelist_bubble_hint(self, tmp_path, monkeypatch):
         """测试 4a：白名单为空时开启主动识屏，应提示「白名单还是空的」气泡。"""
@@ -1089,7 +1094,8 @@ class TestUXFixesRound3:
         app.processEvents()
 
         shown = []
-        win._speech_bubble.show_text = lambda text, rect, duration_ms=3000: shown.append(text)
+        # 上游新结构：自言自语经 _show_random_self_talk 显示（返回是否真实显示）
+        win._show_random_self_talk = lambda: shown.append(1) or True
 
         # 无占用时自言自语正常显示
         win._on_self_talk_timeout()

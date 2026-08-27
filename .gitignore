@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.DS_Store
 
 # 运行时产物
 tmp_appdata/
@@ -19,6 +20,10 @@ assets/prompt/
 # 点击音效（内置合成 click.wav，随包分发；用户可自定义覆盖）
 !assets/sounds/
 !assets/sounds/**
+
+# 彩蛋弹窗图片池（fun_image_popup 随机取图，随包分发）
+!assets/big_blue_fat_fish/
+!assets/big_blue_fat_fish/**
 
 # Windows 安装包图标（本地生成，入库保证克隆后可构建）
 !assets/icon.ico
@@ -45,3 +50,6 @@ packaging/build_variant.py
 # 聊天背景主题壁纸（聊天背景功能随包分发）
 !assets/chat/
 !assets/chat/**
+
+# 全局忽略 macOS 元数据（置于所有白名单之后，防止被 !** 反向放行）
+**/.DS_Store

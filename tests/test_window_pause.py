@@ -118,7 +118,6 @@ def test_hide_pauses_and_show_resumes_activity(app, tmp_path):
     assert idle._running is False
     assert not win._move_timer.isActive()
     assert not win._physics_timer.isActive()
-    assert not win._topmost_watchdog.isActive()
     assert not win._self_talk_timer.isActive()
     assert not win._fullscreen_timer.isActive()
     # 隐藏时不产生任何可见气泡
@@ -131,7 +130,6 @@ def test_hide_pauses_and_show_resumes_activity(app, tmp_path):
     assert win._hidden_paused is False
     assert win.movie is not None
     assert win.movie._running is True
-    assert win._topmost_watchdog.isActive()
 
     win.close()
     app.processEvents()

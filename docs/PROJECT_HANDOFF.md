@@ -88,7 +88,6 @@
   "prefer_free_provider": true,
   "pre_cue": true
 }
-"agent_link": { "dsh": false, "claude": false, "cursor": false, "codex": false }
 ```
 
 ### 2.3 多 Agent 联动（当前为框架）
@@ -136,7 +135,6 @@
 - [ ] 各 Agent 监视器真实落地：
   - Claude Code：官方 hooks + 事件文件 byte-offset tail
   - Cursor：`~/.cursor/projects/**/agent-transcripts/*.jsonl` tail（Path.home() 拼接）
-  - Codex：`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` tail（带 backfill 防护）
   - DSH：DSH 插件事件（需先读 DSH `docs/event-producer-consumer.md` 核实现版本事件名）
 - [ ] 可选项：本地 VLM provider（Ollama / LM Studio）
 - [ ] 可选项：TTS 语音播报
@@ -261,7 +259,6 @@ gemini 的 `test_window_menu_proactive_and_agent_toggles` 只 mock 了确认框�
 - DSH 链路：手动注入 `dsh.jsonl` → error 气泡弹出（截图实证）✔
 - Claude 链路（沙盘 USERPROFILE）：install → 数组格式正确 → ps1 用 Claude Code
   同款方式真实执行 → jsonl 写入 → tailer 正确解析（含 BOM）✔
-- Cursor / Codex：伪造 transcript/rollout 文件 → attention/error 气泡均弹出（截图实证）✔
 - 功耗：3 个监视器全开 16.8% CPU vs 动画基线 ~15%（1.5s 有界 tail 开销 ≈ 1-2%）✔
 - 日志零 error/warning ✔
 - 全量测试 **194 passed / 4 skipped** ✔
@@ -286,9 +283,6 @@ gemini 的 `test_window_menu_proactive_and_agent_toggles` 只 mock 了确认框�
    否则 pnpm 装了也不会成为 profile layer（不加载）。开启联动时弹确认框一键安装到
    所有 dsh profile（web/headless），关闭自动卸载。实机验证：真实 `dsh --profile headless`
    任务 → 桥文件产出 idle→working→idle ✔
-3. **Cursor/Codex 映射按真实格式重写**（依据 GitHub 真实样本/社区解析器调研）：
-   Cursor 是 `{role, message.content[]}` 角色式（无事件名）；Codex 是 `event_msg.payload.type`。
-   未装 Cursor/Codex 客户端实测（Cursor 需登录账号才产生 transcript；Codex 需 OpenAI 系 key），
    格式映射有单测 + 真实样本依据，tail 链路本身已实测。
 4. **冷却间隔双单位**：设置页 秒/分钟 下拉切换（30 秒 ~ 120 分钟，内部统一存分钟），
    自定义档另暴露「最小请求间隔（秒）」。
@@ -313,7 +307,6 @@ gemini 的 `test_window_menu_proactive_and_agent_toggles` 只 mock 了确认框�
 4. 无 Chat 变体主动识屏必炸 → 设置页/菜单/ watcher 均按 `enable_chat`/`on_open_chat` 门控。
 
 **中等（修复 12 项）**：记忆不落窗口标题；Claude settings.json 原子写；tailer 超长行
-进入"跳到下一换行"丢弃模式；Cursor/Codex 目录发现降频 30s + tailer 淘汰；
 apply_config 用 `_running` 修暂停态误判；vision.py Win32 全签名声明（HWND/HANDLE 不截断）；
 无前缀白名单规则改为仅进程名；dHash 基线哨兵 0→None；设置页延迟采样改对话框自有
 QTimer（销毁即取消）；DSH 多 profile 安装失败自动回滚；构建脚本补 integrations add-data。
@@ -345,7 +338,6 @@ tail（实测开销可忽略，目录发现已降频 30s）；Linux 自启路径
 ### 仍未做（明确交接）
 - ~~DSH / OpenCode 插件包（事件生产者侧）~~ → 第四轮已解决（见上：DSH 内置桥接插件
   一键安装、OpenCode 原生 SQLite 直读）；
-- Cursor/Codex 未装客户端实测（格式映射有真实样本依据 + 单测，tail 链路已实测）。
 
 ### 打包（frozen）验证（2026-08-27 收尾）
 - 按 WORKSPACE.md 命令完整 PyInstaller 打包（webm-chat 变体），产物在

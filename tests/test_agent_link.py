@@ -8,7 +8,6 @@
 - AgentLinkManager 生命周期与 pause / resume；
 - 状态变更触发桌宠行为与气泡反馈；
 - Claude Code 确认框逻辑（拒绝则不写入 hooks）；
-- 真实文件 tail 端到端测试（模拟 Cursor / Codex 目录）。
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ from pet.agent_link import (
     ByteOffsetTailer,
     ClaudeCodeMonitor,
     CursorMonitor,
-    CodexMonitor,
     normalize_event_state,
 )
 from pet.config import Config
@@ -114,7 +112,6 @@ class TestAgentLinkManager:
             "dsh": False,
             "claude": False,
             "cursor": False,
-            "codex": False,
             "opencode": False,
         }
 
@@ -161,7 +158,6 @@ class TestAgentLinkManager:
 
 
 # ============================================================================
-# 4. 真实文件 Tail 端到端集成测试 (模拟 Cursor / Codex 目录)
 # ============================================================================
 class TestRealFileTailEndToEnd:
     def test_cursor_multi_file_tail(self, tmp_path):
@@ -439,7 +435,6 @@ class TestAgentMenuRebound:
 
 
 # ============================================================================
-# 6. 真实格式适配：Cursor role 格式 / Codex event_msg / OpenCode SQLite
 # ============================================================================
 class TestRealFormatMappers:
     def test_cursor_role_based(self):
@@ -449,14 +444,6 @@ class TestRealFormatMappers:
         assert cursor_line_state({"role": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}}) == "idle"
         assert cursor_line_state({"random": True}) == ""
 
-    def test_codex_event_msg_payload(self):
-        from pet.agent_link import codex_line_state
-        assert codex_line_state({"type": "event_msg", "payload": {"type": "task_started"}}) == "working"
-        assert codex_line_state({"type": "event_msg", "payload": {"type": "user_message"}}) == "thinking"
-        assert codex_line_state({"type": "event_msg", "payload": {"type": "task_complete"}}) == "idle"
-        assert codex_line_state({"type": "event_msg", "payload": {"type": "token_count"}}) == ""
-        assert codex_line_state({"type": "response_item", "payload": {}}) == ""
-        assert codex_line_state({"type": "session_meta"}) == ""
 
     def test_opencode_event_types(self):
         from pet.agent_link import opencode_event_state

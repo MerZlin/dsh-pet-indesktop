@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多 Agent 状态感知与动作联动监视器模块（DSH / Claude Code / Cursor / Codex / OpenCode）。
+"""多 Agent 状态感知与动作联动监视器模块（DSH / Claude Code / Cursor / OpenCode）。
 
 设计原则（手册 §8）：
 1. 绝不使用 mtime 盲轮询；
@@ -57,7 +57,7 @@ def normalize_event_state(event_name: str, explicit_state: str = "") -> str:
     """根据事件名或显式 state 字段规范化为标准状态词汇。
 
     返回空串表示「不认识的事件，忽略」——绝不把未知事件默认当成 working
-    （Cursor/Codex 的 transcript 行类型繁杂，默认 working 会导致过度触发）。
+    （Cursor 等的 transcript 行类型繁杂，默认 working 会导致过度触发）。
     """
     if explicit_state and explicit_state in VALID_STATES:
         return explicit_state
@@ -89,30 +89,6 @@ def cursor_line_state(data: dict) -> str:
         return "idle"
     # 兼容 type/event 事件名字段（统一协议通道或 Claude 风格事件名）
     return normalize_event_state(str(data.get("type") or data.get("event") or ""))
-
-
-def codex_line_state(data: dict) -> str:
-    """Codex rollout jsonl 真实格式（{type:"event_msg", payload:{type:...}}）→ 状态。
-
-    只认 event_msg 的生命周期载荷；session_meta / response_item / turn_context
-    等结构性记录一律忽略。显式 state/event 字段（统一协议通道）优先。
-    """
-    explicit = str(data.get("state", "") or "")
-    if explicit:
-        return normalize_event_state("", explicit)
-    if str(data.get("type", "")) != "event_msg":
-        return ""
-    payload = data.get("payload")
-    pt = str(payload.get("type", "")) if isinstance(payload, dict) else ""
-    return {
-        "task_started": "working",
-        "user_message": "thinking",
-        "agent_reasoning": "thinking",
-        "agent_message": "working",
-        "task_complete": "idle",
-        "error": "error",
-        "turn_aborted": "idle",
-    }.get(pt, "")
 
 
 def opencode_event_state(event_type: str, data_raw: str) -> str:
@@ -614,50 +590,6 @@ class CursorMonitor(BaseAgentMonitor):
                     pass
 
 
-class CodexMonitor(BaseAgentMonitor):
-    """Codex 监视器。
-    扫描 Path.home() / .codex / sessions / YYYY / MM / DD / rollout-*.jsonl。
-    """
-    def __init__(self, config_dir: Path, parent=None, base_dir: Path | None = None) -> None:
-        super().__init__("codex", config_dir, parent)
-        self.codex_base = base_dir or (Path.home() / ".codex" / "sessions")
-        self._tailers: dict[str, ByteOffsetTailer] = {}
-        self._scan_interval = 30.0  # 目录发现降频：30s 一次（tail 仍 1.5s）
-        self._last_scan = 0.0
-
-    def _poll(self) -> None:
-        super()._poll()
-
-        if not self.codex_base.is_dir():
-            return
-
-        now = time.time()
-        if now - self._last_scan >= self._scan_interval:
-            self._last_scan = now
-            try:
-                files = sorted(self.codex_base.glob("**/*.jsonl"), key=lambda x: x.stat().st_mtime, reverse=True)[:30]
-                candidates = {str(f) for f in files}
-                # 淘汰不再活跃的 tailer，防止长时间运行无限增长
-                for stale in [k for k in self._tailers if k not in candidates]:
-                    del self._tailers[stale]
-                for fkey in candidates:
-                    if fkey not in self._tailers:
-                        self._tailers[fkey] = ByteOffsetTailer(fkey)
-            except Exception:
-                pass
-
-        for tailer in self._tailers.values():
-            for line in tailer.read_new_lines():
-                try:
-                    data = json.loads(line)
-                    norm = codex_line_state(data)
-                    if not norm:
-                        continue  # 未知/结构性 rollout 记录：忽略
-                    self.state_changed.emit("codex", norm)
-                except Exception:
-                    pass
-
-
 class OpenCodeMonitor(BaseAgentMonitor):
     """OpenCode 监视器。
 
@@ -731,7 +663,7 @@ class AgentLinkManager(QObject):
         self.cfg = config
         self.config_dir = config.dir
         # 状态节流：同一 Agent 相同状态去抖；同 Agent 两次动作切换最小间隔
-        # （Cursor/Codex transcript 密集写入时防止动画"抽搐"）
+        # （Cursor 等 transcript 密集写入时防止动画"抽搐"）
         self._min_interval = float(min_interval)
         self._clock = clock
         self._last_applied: dict[str, tuple[str, float]] = {}
@@ -740,7 +672,6 @@ class AgentLinkManager(QObject):
             "dsh": DshMonitor("dsh", self.config_dir, self),
             "claude": ClaudeCodeMonitor("claude", self.config_dir, self),
             "cursor": CursorMonitor(self.config_dir, self),
-            "codex": CodexMonitor(self.config_dir, self),
             "opencode": OpenCodeMonitor(self.config_dir, self),
         }
 

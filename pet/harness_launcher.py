@@ -112,7 +112,7 @@ def _npm_global_roots() -> list[Path]:
 
 def _find_launch_command(port: int = DEFAULT_PORT) -> list[str] | None:
     """级联解析 dsh 启动命令；找不到返回 None。"""
-    tail = ["web", "--host", "127.0.0.1", "--port", str(port)]
+    tail = ["web", "--host", "127.0.0.1", "--port", str(port), "--no-open"]
     # 1) PATH 上的 dsh（各包管理器全局安装）
     dsh = _which("dsh")
     if dsh:

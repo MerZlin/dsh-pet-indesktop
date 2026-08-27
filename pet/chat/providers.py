@@ -90,7 +90,7 @@ class SSEParser:
         return out
 
 class OpenAICompatibleProvider:
-    def stream(self,messages:list[dict],config:ProviderConfig,cancel_event:threading.Event)->Iterator[str]:
+    def stream(self,messages:list[dict[str,Any]],config:ProviderConfig,cancel_event:threading.Event)->Iterator[str]:
         endpoint=normalize_chat_endpoint(config.base_url,config.chat_path)
         payload:dict[str,Any]={'model':config.model,'messages':messages,'stream':True,'temperature':config.temperature,'max_tokens':config.max_tokens}
         headers={'Content-Type':'application/json','Accept':'text/event-stream'}

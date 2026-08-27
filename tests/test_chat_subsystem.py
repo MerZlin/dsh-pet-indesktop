@@ -97,7 +97,7 @@ def test_provider_error_is_safe():
     assert "401" in str(error)
     assert "api_key" not in str(error).lower()
 
-def test_config_v3_migrates_legacy_chat_fields(tmp_path: Path):
+def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path):
     from pet.config import Config
     root = tmp_path / "appdata"
     cfg_dir = root / "dsh-pet-standalone"
@@ -117,7 +117,7 @@ def test_config_v3_migrates_legacy_chat_fields(tmp_path: Path):
     assert settings.active_config.model == "deepseek-chat"
     assert settings.active_config.api_key == "secret-value"
     cfg.save()
-    assert json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))["version"] == 3
+    assert json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))["version"] == 4
 
 
 def test_chat_window_offscreen_smoke(tmp_path: Path, monkeypatch):
@@ -129,7 +129,7 @@ def test_chat_window_offscreen_smoke(tmp_path: Path, monkeypatch):
     window = ChatWindow(Config(tmp_path), "shenshen")
     window._add("user", "hello")
     window._add("assistant", "hi")
-    assert window.title.text().startswith("shenshen")
+    assert window.title.text().startswith("新会话")
     window.close()
     app.processEvents()
 
@@ -140,12 +140,12 @@ def test_chat_window_has_playful_shell_and_session_controls(tmp_path: Path):
 
     app = QApplication.instance() or QApplication([])
     window = ChatWindow(Config(tmp_path), "shenshen")
-    assert 380 <= window.minimumWidth() <= 560
-    assert window.minimumHeight() >= 620
+    assert window.minimumWidth() >= 520
+    assert window.minimumHeight() >= 480
     assert window.phone_shell.objectName() == "phone-shell"
-    assert window.title_bar.objectName() == "chat-title-bar"
+    assert window.title_bar.objectName() == "chat-main-header"
     assert window.session_combo.count() >= 1
-    assert window.new_session_button.objectName() == "new-session-button"
+    assert window.new_session_button.objectName() == "new-conversation-button"
     assert window.delete_session_button.objectName() == "delete-session-button"
     assert window.clear_button.objectName() == "clear-session-button"
     assert window.composer.objectName() == "chat-composer"
@@ -168,17 +168,17 @@ def test_message_bubble_exposes_avatar_body_and_state():
     assert bubble.body.text() == "updated"
 
 
-def test_session_popup_uses_readable_dark_text_on_light_surface(tmp_path: Path):
-    from PySide6.QtWidgets import QApplication
+def test_session_sidebar_uses_readable_deepseek_style_list(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication, QListWidget
     from pet.config import Config
     from pet.chat.widgets import ChatWindow
 
     app = QApplication.instance() or QApplication([])
     window = ChatWindow(Config(tmp_path), "shenshen")
-    popup = window.session_combo.view()
-    assert popup.objectName() == "session-list"
-    assert "QAbstractItemView#session-list" in window.styleSheet()
-    assert "selection-color: #3a4552" in window.styleSheet()
+    assert isinstance(window.session_list, QListWidget)
+    assert window.session_list.objectName() == "session-list"
+    assert window.session_list.count() >= 1
+    assert "QListWidget#session-list" in window.styleSheet()
     window.close()
 
 
@@ -200,7 +200,14 @@ def test_chat_window_uses_visible_pet_bounds_for_side_placement(tmp_path: Path):
     work_area = app.primaryScreen().availableGeometry()
     assert window.x() >= work_area.left()
     assert window.y() >= work_area.top()
-    assert window.x() == visible_rect.right() + 10 + 1
+    right_x = visible_rect.right() + 10 + 1
+    left_x = visible_rect.left() - 10 - window.width()
+    if right_x + window.width() <= work_area.right() + 1:
+        assert window.x() == right_x
+    elif left_x >= work_area.left():
+        assert window.x() == left_x
+    else:
+        assert window.x() == work_area.left()
     assert window.phone_shell.objectName() == "phone-shell"
     window.close()
     pet.close()
@@ -224,7 +231,11 @@ def test_chat_window_moves_to_left_of_pet_at_right_screen_edge(tmp_path: Path):
     app.processEvents()
     window.position_near_pet(pet, gap=10)
 
-    assert window.x() + window.width() <= visible_rect.left()
+    left_x = visible_rect.left() - 10 - window.width()
+    if left_x >= work_area.left():
+        assert window.x() + window.width() <= visible_rect.left()
+    else:
+        assert window.x() == work_area.left()
     assert window.y() >= work_area.top()
     window.close()
     pet.close()
@@ -321,6 +332,35 @@ def test_present_dialog_defers_until_popup_menu_closes(tmp_path: Path, monkeypat
     app.processEvents()
 
 
+def test_heavy_chat_creation_is_deferred_until_context_menu_closes(tmp_path: Path, monkeypatch):
+    import time
+
+    import pet.app as app_mod
+    from PySide6.QtWidgets import QApplication
+    from pet.app import PetApp
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    owner = PetApp(app, Config(tmp_path))
+    state = {"popup": True}
+    calls = []
+
+    class FakeQApp:
+        @staticmethod
+        def activePopupWidget():
+            return object() if state["popup"] else None
+
+    monkeypatch.setattr(app_mod, "QApplication", FakeQApp)
+    assert owner._defer_while_popup_active("modern-chat", lambda: calls.append("create")) is True
+    assert calls == []
+    state["popup"] = False
+    deadline = time.time() + 1
+    while not calls and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert calls == ["create"]
+
+
 def test_chat_window_session_switch_and_character_refresh(tmp_path: Path):
     from PySide6.QtWidgets import QApplication
     from pet.config import Config
@@ -345,8 +385,7 @@ def test_chat_window_session_switch_and_character_refresh(tmp_path: Path):
 
 def test_squash_geometry_uses_logical_frame_size_at_high_dpi():
     # DPR=2 的 QPixmap 物理尺寸不能直接拿来当 QWidget 逻辑绘制尺寸。
-    # Q 弹中间帧应与 DPR 无关，并保持脚底在窗口底线；
-    # 宽度不放大（sx=1.0），避免角色伸出窗口/mask 边界被裁剪成透明边缘。
+    # Q 弹中间帧应与 DPR 无关，并保持脚底在窗口底线。
     logical = _squash_geometry(
         window_width=640,
         window_height=390,
@@ -361,80 +400,9 @@ def test_squash_geometry_uses_logical_frame_size_at_high_dpi():
         frame_height=720,
         progress=0.5,
     )
-    assert logical == (0, 84, 640, 306)
+    assert logical == (-32, 84, 704, 306)
     assert physical_mistake != logical
     assert logical[1] + logical[3] == 390
-    # 中间帧宽度不应超过窗口宽度（无宽度膨胀）
-    assert logical[2] == 640
-
-
-def test_placeholder_pixmap_generated():
-    """解码失败降级用的占位帧应非空且尺寸正确（None 防御的兜底画面）。"""
-    from PySide6.QtWidgets import QApplication
-    from pet.window import _make_placeholder_pixmap
-
-    app = QApplication.instance() or QApplication([])
-    pm = _make_placeholder_pixmap("shenshen", 1.0)
-    assert pm.isNull() is False
-    assert pm.width() == 640
-    assert pm.height() == 360
-    small = _make_placeholder_pixmap("", 0.5)
-    assert small.isNull() is False
-    assert small.width() == 320
-
-
-def test_look_sync_appends_to_current_session(tmp_path: Path):
-    """「看看屏幕」结果应写入 AI 对话当前会话（UI + 持久化）。"""
-    from PySide6.QtWidgets import QApplication
-    from pet.chat.widgets import ChatWindow
-    from pet.config import Config
-
-    app = QApplication.instance() or QApplication([])
-    window = ChatWindow(Config(tmp_path), "shenshen")
-    before = len(window.session.messages)
-    window.append_look_sync("[看看屏幕] 前台窗口：chrome.exe | 哔哩哔哩", "主人又在看视频啦~")
-    assert len(window.session.messages) == before + 2
-    assert window.session.messages[-2].role == "user"
-    assert window.session.messages[-2].content.startswith("[看看屏幕]")
-    assert window.session.messages[-1].role == "assistant"
-    assert window.session.messages[-1].content == "主人又在看视频啦~"
-    # 持久化：重新加载会话能看到
-    reloaded = window.store.load(window.session.session_id, "shenshen")
-    assert reloaded is not None
-    assert reloaded.messages[-1].content == "主人又在看视频啦~"
-    # 空参数应被忽略
-    before = len(window.session.messages)
-    window.append_look_sync("", "")
-    assert len(window.session.messages) == before
-    window.close()
-    app.processEvents()
-
-
-def test_check_ffmpeg_detects_missing_binary(monkeypatch):
-    """ffmpeg 二进制缺失（被杀软隔离）时启动自检应返回 False。"""
-    import imageio_ffmpeg
-
-    from pet import app as app_mod
-
-    monkeypatch.setattr(
-        imageio_ffmpeg,
-        "get_ffmpeg_exe",
-        lambda: str(Path("E:/definitely/not/exist/ffmpeg.exe")),
-    )
-    assert app_mod._check_ffmpeg_available() is False
-
-
-def test_check_ffmpeg_accepts_existing_binary(monkeypatch):
-    import imageio_ffmpeg
-
-    from pet import app as app_mod
-
-    monkeypatch.setattr(
-        imageio_ffmpeg,
-        "get_ffmpeg_exe",
-        lambda: str(Path(__file__).resolve()),
-    )
-    assert app_mod._check_ffmpeg_available() is True
 
 
 def test_follow_pet_option_registers_and_unregisters_position_listener(tmp_path: Path):
@@ -509,7 +477,7 @@ def test_no_chat_packaging_uses_isolated_entrypoint():
         assert "pet_entry_no_chat.py" not in chat_spec
 
 
-def test_chat_window_uses_translucent_shell_for_rounded_corners(tmp_path: Path):
+def test_chat_window_uses_opaque_shell_and_message_surface(tmp_path: Path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from pet.chat.widgets import ChatWindow
@@ -517,12 +485,848 @@ def test_chat_window_uses_translucent_shell_for_rounded_corners(tmp_path: Path):
 
     app = QApplication.instance() or QApplication([])
     window = ChatWindow(Config(tmp_path), "shenshen")
-    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
     assert "QDialog#chat-window" in window.styleSheet()
-    assert "background: #fbf3e9" in window.styleSheet()
+    assert "background: #f7f8fb" in window.styleSheet()
     assert window.phone_shell.autoFillBackground() is True
     window.close()
     app.processEvents()
+
+
+def test_chat_window_uses_modern_two_pane_ai_chat_layout(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication, QWidget
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    assert window.minimumWidth() >= 520
+    assert window.findChild(QWidget, "deepseek-sidebar") is not None
+    assert window.findChild(QWidget, "chat-main") is not None
+    assert window.findChild(QWidget, "chat-main-header") is not None
+    assert window.findChild(QWidget, "new-conversation-button") is not None
+    assert window.findChild(QWidget, "floating-composer") is not None
+    assert "QFrame#deepseek-sidebar" in window.styleSheet()
+    assert "QFrame#chat-main" in window.styleSheet()
+    window.close()
+    app.processEvents()
+
+
+def test_legacy_and_modern_chat_windows_use_independent_modules_and_styles(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.legacy_widgets import ChatWindow as LegacyChatWindow
+    from pet.chat.widgets import ChatWindow as ModernChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    legacy = LegacyChatWindow(Config(tmp_path), "shenshen")
+    modern = ModernChatWindow(Config(tmp_path), "shenshen")
+    assert legacy.minimumWidth() == 380
+    assert legacy.maximumWidth() == 560
+    assert modern.minimumWidth() >= 520
+    assert "#1d2634" in legacy.styleSheet()
+    assert "QFrame#deepseek-sidebar" in modern.styleSheet()
+    assert legacy.styleSheet() != modern.styleSheet()
+    legacy.close()
+    modern.close()
+    app.processEvents()
+
+
+def test_chat_ui_style_defaults_modern_and_dispatches_classic_on_request(tmp_path: Path):
+    from pet.app import PetApp
+    from pet.config import Config
+
+    config = Config(tmp_path)
+    assert config.get("chat_ui_style") == "modern"
+    manager = PetApp(object(), config, enable_chat=True)
+    manager.win = object()
+    calls = []
+    manager.open_modern_chat = lambda: calls.append("modern")
+    manager.open_legacy_chat = lambda: calls.append("classic")
+    manager.open_chat()
+    config.set("chat_ui_style", "classic")
+    manager.open_chat()
+    assert calls == ["modern", "classic"]
+
+
+def test_single_modern_menu_routes_to_selected_chat_dispatcher():
+    from PySide6.QtWidgets import QApplication, QMenu
+    from pet.context_menu import populate_context_menu
+
+    class Config(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    class Pet:
+        cfg = Config(context_menu_template="legacy", character="shenshen", on_top=False)
+        on_open_chat_settings = on_open_legacy_settings = on_open_modern_settings = None
+        idles = turns = moves = clicks = acts = []
+        playback_speed = scale = 1.0
+        drag_physics = no_move = False
+
+        def __init__(self):
+            self.calls = []
+            self.on_open_chat = lambda: self.calls.append("selected")
+            self.on_open_modern_chat = lambda: self.calls.append("unexpected")
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_kwargs: None
+
+    app = QApplication.instance() or QApplication([])
+    pet = Pet()
+    menu = QMenu()
+    populate_context_menu(menu, pet)
+    next(action for action in menu.actions() if action.text() == "AI 对话").trigger()
+    assert pet.calls == ["selected"]
+    app.processEvents()
+
+
+def test_modern_message_rows_hide_identity_and_offer_inline_tools():
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import MessageBubble
+
+    app = QApplication.instance() or QApplication([])
+    user = MessageBubble("user", "hello", "shenshen")
+    assistant = MessageBubble("assistant", "hi", "shenshen")
+    assert user.avatar.isHidden() and user.meta.isHidden()
+    assert assistant.avatar.isHidden() and assistant.meta.isHidden()
+    assert user.findChild(object, "message-copy-button") is not None
+    assert user.findChild(object, "message-edit-button") is None
+    assert assistant.findChild(object, "message-retry-button") is None
+    assert assistant.findChild(object, "message-like-button") is None
+    assert assistant.findChild(object, "message-dislike-button") is None
+    app.processEvents()
+
+
+def test_modern_sidebar_groups_sessions_and_exposes_row_action_menu(tmp_path: Path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    headers = [
+        window.session_list.item(index).text()
+        for index in range(window.session_list.count())
+        if window.session_list.item(index).data(Qt.ItemDataRole.UserRole) is None
+    ]
+    assert "今天" in headers
+    session_items = [
+        window.session_list.item(index)
+        for index in range(window.session_list.count())
+        if window.session_list.item(index).data(Qt.ItemDataRole.UserRole)
+    ]
+    row = window.session_list.itemWidget(session_items[0])
+    assert row is not None
+    assert row.findChild(object, "session-more-button") is not None
+    window.close()
+    app.processEvents()
+
+
+def test_new_conversation_keeps_empty_canvas_on_the_styled_white_surface(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.new_session()
+    app.processEvents()
+    assert window.message_stack.currentWidget() is window.empty_page
+    assert window.empty_page.autoFillBackground() is False
+    assert window.scroll.viewport().autoFillBackground() is False
+    window.close()
+    app.processEvents()
+
+
+def test_modern_sidebar_multi_select_can_batch_pin_and_delete_sessions(tmp_path: Path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QDialog
+    from pet.chat import widgets as chat_widgets
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = chat_widgets.ChatWindow(Config(tmp_path), "shenshen")
+    first_id = window.session.session_id
+    window.new_session()
+    second_id = window.session.session_id
+
+    def selector_for(session_id):
+        for index in range(window.session_list.count()):
+            item = window.session_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == session_id:
+                return window.session_list.itemWidget(item).findChild(
+                    object, "session-select-button"
+                )
+        raise AssertionError(f"missing session row: {session_id}")
+
+    window.multi_select_button.click()
+    selector_for(first_id).click()
+    selector_for(second_id).click()
+    assert window.multi_select_button.objectName() == "session-multi-select-button"
+    assert window.batch_action_bar.isHidden() is False
+    assert window.session_caption.text() == "已选择 2 个对话"
+    session_items = [
+        window.session_list.item(index)
+        for index in range(window.session_list.count())
+        if window.session_list.item(index).data(Qt.ItemDataRole.UserRole)
+    ]
+    assert all(
+        window.session_list.itemWidget(item)
+        .findChild(object, "session-select-button")
+        .isHidden() is False
+        for item in session_items
+    )
+
+    window.batch_pin_button.click()
+    assert window.store.load(first_id, "shenshen").pinned is True
+    assert window.store.load(second_id, "shenshen").pinned is True
+    assert window.batch_action_bar.isHidden() is True
+
+    monkeypatch.setattr(
+        chat_widgets.DeleteConversationDialog,
+        "exec",
+        lambda _dialog: QDialog.DialogCode.Accepted,
+    )
+    window.multi_select_button.click()
+    selector_for(first_id).click()
+    selector_for(second_id).click()
+    window.batch_delete_button.click()
+    assert window.store.load(first_id, "shenshen") is None
+    assert window.store.load(second_id, "shenshen") is None
+    assert len(window.store.list("shenshen")) == 1
+    window.close()
+    app.processEvents()
+
+
+def test_modern_delete_uses_custom_confirmation_and_respects_cancel(tmp_path: Path, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QDialog
+    from pet.chat import widgets as chat_widgets
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = chat_widgets.ChatWindow(Config(tmp_path), "shenshen")
+    doomed_id = window.session.session_id
+    window.new_session()
+
+    seen = []
+
+    def cancel(dialog):
+        seen.append(dialog)
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(chat_widgets.DeleteConversationDialog, "exec", cancel)
+    window._session_action(doomed_id, "delete")
+    assert window.store.load(doomed_id, "shenshen") is not None
+    assert seen[0].objectName() == "delete-conversation-dialog"
+    assert seen[0].findChild(object, "confirm-delete-button") is not None
+
+    monkeypatch.setattr(
+        chat_widgets.DeleteConversationDialog,
+        "exec",
+        lambda _dialog: QDialog.DialogCode.Accepted,
+    )
+    window._session_action(doomed_id, "delete")
+    assert window.store.load(doomed_id, "shenshen") is None
+    window.close()
+    app.processEvents()
+
+
+def test_modern_header_avatar_uses_pet_image_without_colored_round_backplate(tmp_path: Path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    avatar = QPixmap(34, 34)
+    avatar.fill(Qt.GlobalColor.red)
+
+    class Pet:
+        def icon_pixmap(self, size):
+            assert size == 34
+            return avatar
+
+    window = ChatWindow(Config(tmp_path), "shenshen", pet_window=Pet())
+    assert window.avatar_label.text() == ""
+    assert window.avatar_label.pixmap() is not None
+    assert window.avatar_label.pixmap().isNull() is False
+    avatar_style = window.avatar_label.styleSheet()
+    assert "background-color" not in avatar_style
+    assert "border-radius" not in avatar_style
+    window.close()
+    app.processEvents()
+
+
+def test_batch_delete_style_outranks_generic_batch_button_color(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    assert (
+        "QFrame#session-batch-action-bar QPushButton#batch-delete-button"
+        in window.styleSheet()
+    )
+    window.close()
+    app.processEvents()
+
+
+def test_delete_confirmation_uses_visible_rounded_card_surface():
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import DeleteConversationDialog
+
+    app = QApplication.instance() or QApplication([])
+    dialog = DeleteConversationDialog(3)
+    card = dialog.findChild(object, "delete-dialog-card")
+    assert card is not None
+    assert "QFrame#delete-dialog-card" in dialog.styleSheet()
+    assert "QDialog#delete-conversation-dialog{background:transparent" in dialog.styleSheet()
+    assert card.graphicsEffect() is not None
+    dialog.close()
+    app.processEvents()
+
+
+def test_chat_session_custom_title_and_pin_round_trip():
+    from pet.chat.models import ChatSession
+
+    session = ChatSession.create("shenshen", "provider", "prompt")
+    session.custom_title = "置顶会话"
+    session.pinned = True
+    restored = ChatSession.from_dict(session.to_dict())
+    assert restored.custom_title == "置顶会话"
+    assert restored.pinned is True
+
+
+def test_modern_composer_is_single_rounded_card_with_inline_send(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    assert window.composer.findChild(object, "composer-toolbar") is not None
+    parent = window.send.parentWidget()
+    assert parent is not None
+    assert window.composer.isAncestorOf(window.send)
+    style = window.styleSheet()
+    assert "QFrame#chat-composer" in style
+    assert "border-radius: 18px" in style
+    assert "QToolButton#send-button" in style
+    window.close()
+    app.processEvents()
+
+
+def test_modern_sidebar_footer_only_keeps_status_and_follow(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication, QToolButton
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    footer = window.findChild(object, "sidebar-footer")
+    assert footer is not None
+    assert window.provider_label.isVisibleTo(footer) is False
+    visible_tools = [
+        button for button in footer.findChildren(QToolButton)
+        if not button.isHidden()
+    ]
+    assert visible_tools == [window.follow_button]
+    assert window.follow_button.icon().isNull() is False
+    assert window.follow_button.minimumHeight() >= 28
+    window.close()
+    app.processEvents()
+
+
+def test_modern_new_conversation_button_is_compact_and_elevated(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    button = window.new_session_button
+    assert button.maximumHeight() <= 36
+    assert button.graphicsEffect() is not None
+    assert button.icon().isNull() is False
+    window.close()
+    app.processEvents()
+
+
+def test_modern_message_surface_and_toolbar_are_separate_and_copy_only():
+    from PySide6.QtWidgets import QToolButton
+    from pet.chat.widgets import MessageBubble
+
+    user = MessageBubble("user", "hello", character_id="shenshen")
+    assistant = MessageBubble("assistant", "hi", character_id="shenshen")
+    assert user.findChild(object, "message-surface") is not None
+    assert assistant.findChild(object, "message-surface") is not None
+    assert [button.objectName() for button in user.tools.findChildren(QToolButton)] == [
+        "message-copy-button"
+    ]
+    assert [button.objectName() for button in assistant.tools.findChildren(QToolButton)] == [
+        "message-copy-button"
+    ]
+
+
+def test_modern_composer_supports_file_picker_state_and_drop_payload(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatComposer
+
+    app = QApplication.instance() or QApplication([])
+    document = tmp_path / "notes.txt"
+    document.write_text("附件正文", encoding="utf-8")
+    image = tmp_path / "preview.png"
+    image.write_bytes(b"small-image-payload")
+    composer = ChatComposer()
+    composer.add_attachments([document, image])
+    assert composer.acceptDrops() is True
+    assert composer.mode_button is None
+    assert composer.input.maximumHeight() <= 72
+    assert composer.attachment_paths == [document.resolve(), image.resolve()]
+    assert composer.attachment_strip.isHidden() is False
+    prompt = composer.attachment_prompt()
+    assert "notes.txt" in prompt
+    assert "附件正文" in prompt
+    image_payloads = composer.image_payloads()
+    assert image_payloads[0]["type"] == "image_url"
+    assert image_payloads[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    composer.clear_attachments()
+    assert composer.attachment_paths == []
+    app.processEvents()
+
+
+def test_modern_sidebar_becomes_overlay_drawer_on_compact_width(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(760, 600)
+    window.show()
+    app.processEvents()
+    assert window.property("compactLayout") is True
+    assert window.sidebar.isHidden()
+    assert window.sidebar_toggle_button.isVisible()
+    window.toggle_sidebar()
+    app.processEvents()
+    assert window.sidebar.isVisible()
+    assert window.sidebar.property("overlayDrawer") is True
+    assert window.sidebar_scrim.isVisible()
+    window.toggle_sidebar()
+    assert window.sidebar.isHidden()
+    window.close()
+    app.processEvents()
+
+
+def test_compact_sidebar_scrim_starts_at_actual_drawer_edge(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(620, 600)
+    window.show()
+    app.processEvents()
+    window.toggle_sidebar()
+    app.processEvents()
+    assert window.sidebar_scrim.x() == window.sidebar.geometry().right() + 1
+    assert window.sidebar_scrim.width() == window.phone_shell.width() - window.sidebar.width()
+    window.close()
+    app.processEvents()
+
+
+def test_error_message_has_rounded_surface_and_single_error_row():
+    from PySide6.QtWidgets import QApplication, QHBoxLayout
+    from pet.chat.widgets import MessageBubble
+
+    app = QApplication.instance() or QApplication([])
+    bubble = MessageBubble("assistant", "请求失败：HTTP 400", "shenshen")
+    bubble.set_state("error")
+    assert bubble.surface.property("state") == "error"
+    assert bubble.error_actions.isVisibleTo(bubble)
+    assert isinstance(bubble.error_actions.layout(), QHBoxLayout)
+    assert bubble.status_label.parentWidget() is bubble.error_actions
+    assert bubble.retry_button.parentWidget() is bubble.error_actions
+    assert bubble.tools.isHidden()
+    margins = bubble.surface.layout().contentsMargins()
+    assert margins.left() >= 10
+    assert margins.right() >= 10
+    assert margins.top() >= 8
+    assert margins.bottom() >= 8
+    bubble.deleteLater()
+    app.processEvents()
+
+
+def test_attachment_chip_has_thumbnail_and_hover_remove(tmp_path: Path):
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import AttachmentChip, ChatComposer
+
+    app = QApplication.instance() or QApplication([])
+    image_path = tmp_path / "preview.png"
+    image = QImage(24, 24, QImage.Format.Format_ARGB32)
+    image.fill(0xFF55AAEE)
+    assert image.save(str(image_path))
+    composer = ChatComposer()
+    composer.add_attachments([image_path])
+    chip = composer.attachment_strip.findChild(AttachmentChip)
+    assert chip is not None
+    assert chip.preview.pixmap().isNull() is False
+    assert chip.remove_button.isHidden()
+    chip.enterEvent(None)
+    assert chip.remove_button.isHidden() is False
+    chip.remove_button.click()
+    assert composer.attachment_paths == []
+    app.processEvents()
+
+
+def test_file_drop_is_intercepted_by_input_instead_of_inserting_file_url(tmp_path: Path):
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDropEvent
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatComposer
+
+    app = QApplication.instance() or QApplication([])
+    path = tmp_path / "test.log"
+    path.write_text("hello", encoding="utf-8")
+    composer = ChatComposer()
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(path))])
+    event = QDropEvent(
+        QPointF(5, 5), Qt.DropAction.CopyAction, mime,
+        Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+    )
+    composer.input.dropEvent(event)
+    assert composer.attachment_paths == [path.resolve()]
+    assert "file://" not in composer.input.toPlainText()
+    app.processEvents()
+
+
+def test_assistant_message_expands_to_available_timeline_width(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(1180, 700)
+    bubble = window._add("assistant", "很长的回复" * 30)
+    window.show()
+    app.processEvents()
+    available = window.scroll.viewport().width() - 2 * window.message_horizontal_margin
+    assert bubble.width() >= available - 8
+    window.close()
+    app.processEvents()
+
+
+def test_status_and_model_are_in_header_not_sidebar(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    assert window.status.parentWidget().objectName() == "header-status"
+    assert window.status_dot.parentWidget().objectName() == "header-status"
+    assert window.provider_label.parentWidget().objectName() == "header-status"
+    assert window.provider_label.text() == window.settings.active_config.model
+    assert window.status.isVisibleTo(window.title_bar)
+    window.close()
+    app.processEvents()
+
+
+def test_empty_provider_response_becomes_visible_error(tmp_path: Path):
+    import time
+
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.models import ProviderConfig
+    from pet.chat.service import ChatService
+
+    class EmptyProvider:
+        def stream(self, messages, config, cancel):
+            if False:
+                yield ""
+
+    app = QApplication.instance() or QApplication([])
+    service = ChatService(provider=EmptyProvider())
+    errors = []
+    finished = []
+    service.error.connect(lambda _rid, text: errors.append(text))
+    service.finished.connect(lambda _rid, text: finished.append(text))
+    service.send([], ProviderConfig(
+        provider_id="test", name="test", base_url="http://invalid", model="test"
+    ))
+    deadline = time.time() + 2
+    while service.busy and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    app.processEvents()
+    assert finished == []
+    assert errors and "未返回" in errors[0]
+
+
+def test_streaming_reply_uses_typewriter_and_finishes_after_buffer_drains(tmp_path: Path):
+    import time
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window._bubble = window._add("assistant", "")
+    window._active_request_id = "request"
+    text = "这是一段用于确认逐字输出效果的流式回复。"
+    window._delta("request", text)
+    assert window._bubble.body.text() != text
+    window._finished("request", text)
+    deadline = time.time() + 5
+    while window._bubble.body.text() != text and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert window._bubble.body.text() == text
+    assert window.session.messages[-1].content == text
+    window.close()
+    app.processEvents()
+
+
+def test_quit_closes_active_context_menu_before_leaving_event_loop(monkeypatch):
+    import time
+    from PySide6.QtWidgets import QApplication
+    import pet.window as window_mod
+    from pet.window import PetWindow
+
+    events = []
+
+    class FakeMenu:
+        def close(self):
+            events.append("close")
+
+    class FakeApp:
+        def quit(self):
+            events.append("quit")
+
+    class FakeQApplication:
+        @staticmethod
+        def instance():
+            return FakeApp()
+
+    class FakePet:
+        _active_context_menu = FakeMenu()
+
+        def _save_position(self):
+            events.append("save")
+
+    monkeypatch.setattr(window_mod, "QApplication", FakeQApplication)
+    PetWindow._request_quit(FakePet())
+    assert events[:2] == ["save", "close"]
+    app = QApplication.instance() or QApplication([])
+    deadline = time.time() + 0.2
+    while events[-1:] != ["quit"] and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    assert events == ["save", "close", "quit"]
+
+
+def test_short_conversation_starts_at_timeline_top_while_composer_stays_bottom(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(1180, 720)
+    bubble = window._add("assistant", "一段高度有限的回复。" * 8)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+    bubble_top = bubble.mapTo(window.scroll.viewport(), bubble.rect().topLeft()).y()
+    composer_bottom = window.composer_card.mapTo(
+        window.chat_main, window.composer_card.rect().bottomLeft()
+    ).y()
+    assert 0 <= bubble_top <= 60
+    assert window.chat_main.height() - composer_bottom <= 32
+    window.close()
+    app.processEvents()
+
+
+def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
+    from PySide6.QtCore import QPoint
+    import pet.window as window_mod
+    from pet.window import PetWindow
+
+    state = {"inside_exec": False}
+    calls = []
+
+    class FakeSignal:
+        def connect(self, callback):
+            self.callback = callback
+
+    class FakeMenu:
+        def __init__(self, _parent):
+            self.aboutToHide = FakeSignal()
+
+        def exec(self, _pos):
+            state["inside_exec"] = True
+            self._deferred_callbacks = [lambda: calls.append(state["inside_exec"])]
+            state["inside_exec"] = False
+
+    class FakePet:
+        def _restore_on_top_after_context_menu(self):
+            pass
+
+    monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
+    monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
+    pet = FakePet()
+    PetWindow._show_context_menu(pet, QPoint(12, 18))
+    assert calls == [False]
+    assert pet._active_context_menu is None
+
+
+def test_close_required_actions_are_queued_while_menu_is_visible():
+    from PySide6.QtWidgets import QApplication, QMenu
+    from pet.context_menus.shared import add_action, take_deferred_menu_callbacks
+
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    menu = QMenu()
+    action = add_action(menu, "AI 对话", None, lambda: calls.append("open"), close_on_trigger=True)
+    menu.show()
+    app.processEvents()
+    action.trigger()
+    assert calls == []
+    callbacks = take_deferred_menu_callbacks(menu)
+    assert len(callbacks) == 1
+    callbacks[0]()
+    assert calls == ["open"]
+    menu.close()
+    app.processEvents()
+
+
+def test_conversation_mode_pins_composer_to_bottom_and_top_aligns_short_messages(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(1180, 720)
+    window._add("user", "你好")
+    window._add("assistant", "一条比较短的回复。")
+    window.show()
+    app.processEvents()
+    app.processEvents()
+    composer_bottom = window.composer_card.mapTo(
+        window.chat_main, window.composer_card.rect().bottomLeft()
+    ).y()
+    first_bubble = window._bubbles[0]
+    bubble_top = first_bubble.mapTo(window.scroll.viewport(), first_bubble.rect().topLeft()).y()
+    assert window.chat_main.height() - composer_bottom <= 32
+    assert 0 <= bubble_top <= 60
+    assert window.scroll.verticalScrollBar().maximum() == 0
+    window.close()
+    app.processEvents()
+
+
+def test_empty_conversation_centers_prompt_and_composer_as_one_group(tmp_path: Path):
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(1180, 720)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+    group_top = window.scroll.mapTo(window.chat_main, window.scroll.rect().topLeft()).y()
+    group_bottom = window.composer_card.mapTo(
+        window.chat_main, window.composer_card.rect().bottomLeft()
+    ).y()
+    group_center = (group_top + group_bottom) / 2
+    assert abs(group_center - window.chat_main.height() / 2) <= 40
+    assert window.scroll.verticalScrollBar().maximum() == 0
+    window.close()
+    app.processEvents()
+
+
+def test_long_conversation_scrolls_only_after_timeline_overflows(tmp_path: Path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(1180, 720)
+    for index in range(8):
+        window._add("assistant", f"第 {index + 1} 段：" + "这是一段足够长的回复。" * 18)
+    window.show()
+    app.processEvents()
+    app.processEvents()
+    assert window.scroll.verticalScrollBar().maximum() > 0
+    assert (
+        window.scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    assert window.scroll.horizontalScrollBar().isVisible() is False
+    composer_bottom = window.composer_card.mapTo(
+        window.chat_main, window.composer_card.rect().bottomLeft()
+    ).y()
+    assert window.chat_main.height() - composer_bottom <= 32
+    window.close()
+    app.processEvents()
+
+
+def test_present_dialog_restores_a_minimized_chat_window(tmp_path: Path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QDialog
+    from pet.app import PetApp
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    owner = PetApp(app, Config(tmp_path))
+    dialog = QDialog()
+    dialog.showMinimized()
+    app.processEvents()
+    assert dialog.windowState() & Qt.WindowState.WindowMinimized
+    owner._present_dialog(dialog)
+    app.processEvents()
+    assert not dialog.windowState() & Qt.WindowState.WindowMinimized
+    assert dialog.isVisible()
+    dialog.close()
+    app.processEvents()
+
+
+def test_quit_runs_immediately_when_native_menu_has_already_returned(monkeypatch):
+    import pet.window as window_mod
+    from pet.window import PetWindow
+
+    events = []
+
+    class FakeApp:
+        def quit(self):
+            events.append("quit")
+
+    class FakeQApplication:
+        @staticmethod
+        def instance():
+            return FakeApp()
+
+    class FakePet:
+        _active_context_menu = None
+
+        def _save_position(self):
+            events.append("save")
+
+    monkeypatch.setattr(window_mod, "QApplication", FakeQApplication)
+    PetWindow._request_quit(FakePet())
+    assert events == ["save", "quit"]
 
 
 def test_pet_animation_and_self_talk_defaults_are_persisted(tmp_path: Path):
@@ -625,36 +1429,13 @@ def test_webm_playback_speed_updates_timer_before_and_after_start():
     clip.set_playback_speed(0.5)
     assert clip._timer.interval() >= 80
 
-
-def test_warm_first_frame_caches_qimage_for_zero_block_jump():
-    """后台预热只缓存 QImage；jumpToFrame(0) 走缓存时主线程零阻塞转 QPixmap。
-
-    回归：点击 Q 弹残留上一动画帧——首次播放某动画时 jumpToFrame(0)
-    同步 ffmpeg 解码导致 _current_pixmap 短暂为 None，窗口层 rebuild
-    拿不到新帧而继续画旧帧。
-    """
-    from PySide6.QtWidgets import QApplication
-    from pet.webm_clip import WebMClip
-
-    if not WebMClip.available:
-        pytest.skip("imageio-ffmpeg 不可用")
-    app = QApplication.instance() or QApplication([])
-    clip = WebMClip(Path("assets/characters/shenshen/videos/idle/待机呼吸休闲.webm"))
-    assert clip._first_image is None
-    clip.warm_first_frame()
-    assert clip._first_image is not None, "后台预热应缓存首帧 QImage"
-    assert clip._first_pixmap is None, "后台预热不应触碰 QPixmap（非主线程）"
-    clip.jumpToFrame(0)
-    assert clip._current_pixmap is not None, "jumpToFrame(0) 应基于缓存立即生成 QPixmap"
-    assert not clip._current_pixmap.isNull()
-
+@pytest.mark.skipif(
+    not Path("assets/characters_gif").is_dir(),
+    reason="GIF 派生素材未生成（本地/CI 可选生成，不作为必需检查）",
+)
 def test_webm_and_gif_animation_sets_are_in_sync():
     webm_root = Path("assets/characters")
     gif_root = Path("assets/characters_gif")
-    # gif 镜像资产可选（不入库）；缺目录时跳过，不阻塞 CI
-    if not gif_root.is_dir():
-        import pytest
-        pytest.skip("gif 镜像目录 assets/characters_gif 不存在（可选资产）")
     webm_rel = {
         path.relative_to(webm_root).with_suffix(".gif")
         for path in webm_root.rglob("*.webm")
@@ -696,40 +1477,6 @@ def test_config_shared_dir_when_no_variant_marker(tmp_path):
     assert cfg.dir == tmp_path / "dsh-pet-standalone"
 
 
-def test_chat_window_builtin_background_resolves(tmp_path: Path):
-    from PySide6.QtWidgets import QApplication
-    from pet.chat.widgets import ChatWindow
-    from pet.config import Config
-
-    app = QApplication.instance() or QApplication([])
-    cfg = Config(tmp_path)
-    cfg.set("chat_background", "builtin:whale")
-    window = ChatWindow(cfg, "shenshen")
-    assert window._bg_pixmap is not None and not window._bg_pixmap.isNull()
-    assert "rgba(255, 250, 242" in window.styleSheet()  # 半透明面板叠加层生效
-    window.close()
-
-
-def test_chat_window_no_background_by_default(tmp_path: Path):
-    from PySide6.QtWidgets import QApplication
-    from pet.chat.widgets import ChatWindow
-    from pet.config import Config
-
-    app = QApplication.instance() or QApplication([])
-    window = ChatWindow(Config(tmp_path), "shenshen")
-    assert window._bg_pixmap is None
-    window.close()
-
-
-def test_chat_background_config_roundtrip(tmp_path: Path):
-    """chat_background 必须能穿过 config 的加载白名单存取往返。"""
-    from pet.config import Config
-
-    cfg = Config(tmp_path)
-    cfg.set("chat_background", "builtin:whale")
-    cfg.save()
-    assert Config(tmp_path).get("chat_background") == "builtin:whale"
-
 def test_provider_config_verify_ssl_roundtrip():
     p = ProviderConfig("t", verify_ssl=False)
     assert p.to_dict()["verify_ssl"] is False
@@ -750,77 +1497,6 @@ def test_cert_error_detection():
         ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
     ) is True
     assert _is_cert_verify_error(TimeoutError("timed out")) is False
-
-
-def test_stream_capture_mode_config_persisted(tmp_path: Path):
-    """stream_capture_mode 必须能穿过 config 的加载白名单存取往返。"""
-    from pet.config import Config
-
-    cfg = Config(tmp_path)
-    assert cfg.get("stream_capture_mode", False) is False
-    cfg.set("stream_capture_mode", True)
-    cfg.save()
-    assert Config(tmp_path).get("stream_capture_mode", False) is True
-
-
-def test_build_window_flags_stream_capture_mode():
-    """默认 Tool（捕获软件过滤），开启兼容模式后为普通顶层窗口。"""
-    from PySide6.QtCore import Qt
-
-    from pet.window import build_window_flags
-
-    base = {"on_top": True}
-    normal = build_window_flags(base)
-    # Tool=11 含 Window=1 位，须用完整值比较判定 Tool 形态
-    assert normal & Qt.WindowType.Tool == Qt.WindowType.Tool
-
-    compat = build_window_flags(base, stream_capture_mode=True)
-    assert not (compat & Qt.WindowType.Tool == Qt.WindowType.Tool)  # 关键差异：去掉 Tool 形态
-    assert compat & Qt.WindowType.Window
-    # 置顶/穿透标志在两种模式下都保留
-    for flags in (normal, compat):
-        assert flags & Qt.WindowType.FramelessWindowHint
-        assert flags & Qt.WindowType.WindowStaysOnTopHint
-    assert build_window_flags(base, mouse_through=True) & Qt.WindowType.WindowTransparentForInput
-    assert not (build_window_flags({"on_top": False}) & Qt.WindowType.WindowStaysOnTopHint)
-
-
-def test_enforce_topmost_darwin_skips_raise(monkeypatch):
-    """macOS 看门狗不得 raise_（置顶由原生 setLevel 保证，raise_ 会抢焦点）。"""
-    from types import SimpleNamespace
-
-    from pet.window import PetWindow
-
-    win = PetWindow.__new__(PetWindow)
-    win.cfg = SimpleNamespace(get=lambda key, default=None: default if key != "on_top" else True)
-    win._auto_hidden = False
-    win.isVisible = lambda: True
-    win.winId = lambda: 12345
-    raised = []
-    win.raise_ = lambda: raised.append(1)
-    monkeypatch.setattr("sys.platform", "darwin")
-    win._enforce_topmost()
-    assert raised == []
-
-
-def test_enforce_topmost_win32_uses_native_reset(monkeypatch):
-    """Windows 看门狗仍走原生 SetWindowPos 重设（不回归）。"""
-    from types import SimpleNamespace
-
-    from pet.window import PetWindow
-
-    win = PetWindow.__new__(PetWindow)
-    win.cfg = SimpleNamespace(get=lambda key, default=None: default if key != "on_top" else True)
-    win._auto_hidden = False
-    win.isVisible = lambda: True
-    win.winId = lambda: 12345
-    calls = []
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr("pet.window._win_is_topmost", lambda hwnd: calls.append(("check", hwnd)) or False)
-    monkeypatch.setattr("pet.window._win_set_topmost", lambda hwnd, on: calls.append(("set", hwnd, on)) or True)
-    win._enforce_topmost()
-    assert ("check", 12345) in calls
-    assert ("set", 12345, True) in calls
 
 
 def test_connection_test_happy_path(tmp_path):
@@ -891,51 +1567,6 @@ def test_connection_test_reports_certificate_hint(monkeypatch):
     ok, msg = test_connection(ProviderConfig("t"))
     assert ok is False
     assert "跳过 SSL 证书验证" in msg
-
-
-def test_win_topmost_helpers_safe_with_invalid_hwnd():
-    """无效句柄下 Win32 置顶辅助函数应安全返回 False（不崩溃）。"""
-    from pet.window import _win_is_topmost, _win_set_topmost
-
-    assert _win_is_topmost(0) is False
-    assert _win_set_topmost(0, True) is False
-
-
-def test_enforce_topmost_resets_lost_topmost(monkeypatch, tmp_path):
-    """置顶丢失时 watchdog 应调用原生 SetWindowPos 重设。"""
-    import types
-
-    from pet import window as window_mod
-    from pet.config import Config
-
-    monkeypatch.setattr("sys.platform", "win32")
-    calls = []
-    monkeypatch.setattr(window_mod, "_win_is_topmost", lambda hwnd: False)
-    monkeypatch.setattr(window_mod, "_win_set_topmost", lambda hwnd, on: calls.append((hwnd, on)) or True)
-    cfg = Config(tmp_path)
-    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345,
-                                 isVisible=lambda: True, _auto_hidden=False)
-    window_mod.PetWindow._enforce_topmost(fake)
-    assert calls == [(12345, True)]
-
-
-def test_enforce_topmost_skips_when_on_top_disabled(monkeypatch, tmp_path):
-    """关闭置顶时 watchdog 不应重设。"""
-    import types
-
-    from pet import window as window_mod
-    from pet.config import Config
-
-    monkeypatch.setattr("sys.platform", "win32")
-    calls = []
-    monkeypatch.setattr(window_mod, "_win_is_topmost", lambda hwnd: False)
-    monkeypatch.setattr(window_mod, "_win_set_topmost", lambda hwnd, on: calls.append((hwnd, on)) or True)
-    cfg = Config(tmp_path)
-    cfg.set("on_top", False)
-    fake = types.SimpleNamespace(cfg=cfg, winId=lambda: 12345,
-                                 isVisible=lambda: True, _auto_hidden=False)
-    window_mod.PetWindow._enforce_topmost(fake)
-    assert calls == []
 
 
 def test_connection_test_reentrant_clicks_do_not_duplicate_requests(tmp_path, monkeypatch):
