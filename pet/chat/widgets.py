@@ -1342,7 +1342,7 @@ class ChatWindow(QDialog):
     def _set_empty_state(self, empty: bool) -> None:
         self.message_stack.setCurrentWidget(self.empty_page if empty else self.timeline_host)
         self.empty_state.setVisible(empty)
-        QTimer.singleShot(0, self._update_conversation_height)
+        QTimer.singleShot(0, self, self._update_conversation_height)
 
     def _add(self, role: str, text: str) -> MessageBubble:
         row = QHBoxLayout()
@@ -1359,7 +1359,7 @@ class ChatWindow(QDialog):
         self._bubbles.append(bubble)
         self._set_empty_state(False)
         self._update_bubble_widths()
-        QTimer.singleShot(0, self._update_conversation_height)
+        QTimer.singleShot(0, self, self._update_conversation_height)
         return bubble
 
     def _update_conversation_height(self) -> None:
@@ -1830,7 +1830,7 @@ class ChatWindow(QDialog):
     def _bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
-        QTimer.singleShot(0, self._apply_bottom)
+        QTimer.singleShot(0, self, self._apply_bottom)
 
     def _apply_bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
@@ -1846,7 +1846,7 @@ class ChatWindow(QDialog):
             self.message_horizontal_margin, 24, self.message_horizontal_margin, 24
         )
         self._update_bubble_widths()
-        QTimer.singleShot(0, self._update_conversation_height)
+        QTimer.singleShot(0, self, self._update_conversation_height)
 
     _EDGE_GRIP = 8
 
@@ -1928,7 +1928,7 @@ class ChatWindow(QDialog):
     def eventFilter(self, obj, event):
         scroll = getattr(self, "scroll", None)
         if scroll is not None and obj is scroll.viewport() and event.type() == QEvent.Type.Resize:
-            QTimer.singleShot(0, self._update_bubble_widths)
+            QTimer.singleShot(0, self, self._update_bubble_widths)
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:

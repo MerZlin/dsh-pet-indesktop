@@ -103,7 +103,9 @@ def apply_modern_menu_style(menu: QMenu, appearance: dict | None = None) -> None
         border.show()
         border.raise_()
 
-    menu.aboutToShow.connect(lambda: QTimer.singleShot(0, sync_border))
+    menu.aboutToShow.connect(
+        lambda menu=menu: QTimer.singleShot(0, menu, sync_border)
+    )
     menu._modern_hairline_border = border
 
 
@@ -227,7 +229,9 @@ def _install_indicators_for_menu(menu: QMenu) -> None:
         for _action, indicator in overlays:
             indicator.hide()
 
-    menu.aboutToShow.connect(lambda: QTimer.singleShot(0, relayout))
+    menu.aboutToShow.connect(
+        lambda menu=menu: QTimer.singleShot(0, menu, relayout)
+    )
     menu.aboutToHide.connect(hide_all)
     menu._modern_check_indicators = overlays  # retain wrappers and aid diagnostics
     menu._modern_relayout_indicators = relayout
@@ -244,7 +248,9 @@ def install_modern_check_indicators(menu: QMenu) -> None:
         layer.raise_()
         layer.update()
 
-    menu.aboutToShow.connect(lambda: QTimer.singleShot(0, sync_layer))
+    menu.aboutToShow.connect(
+        lambda menu=menu: QTimer.singleShot(0, menu, sync_layer)
+    )
     menu.aboutToHide.connect(layer.hide)
     menu._modern_check_layer = layer
     for action in menu.actions():

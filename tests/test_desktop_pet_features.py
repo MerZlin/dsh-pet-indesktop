@@ -109,6 +109,9 @@ def test_breath_bubble_size_tracks_the_visible_pet_without_dominating_it():
     app.processEvents()
     assert bubble.size() == QSize(168, 137)
     assert bubble.width() <= small_pet.width()
+    # offscreen QPA shifts windows on show(); assert the placement logic
+    # directly so the visual gap contract (7px design) is platform-stable.
+    bubble._place(small_pet)
     visible_bubble_bottom = bubble.y() + bubble._surface_path.boundingRect().bottom()
     visual_gap = small_pet.top() - visible_bubble_bottom
     assert 5 <= visual_gap <= 9
@@ -654,9 +657,11 @@ def test_pet_avatar_menu_icon_fills_native_slot_and_stays_centered(monkeypatch):
     native_size = menu.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize, None, menu)
     icon = pet_avatar_menu_icon(menu, FakePet())
     pixmap = icon.pixmap(native_size, native_size)
-    assert pixmap.width() == native_size
-    assert pixmap.height() == native_size
-    assert icon.availableSizes()[0].width() == native_size
+    # Retina menu (dpr=2) yields physical 32px backing for the same 16 logical slot.
+    dpr = pixmap.devicePixelRatio() or 1.0
+    assert pixmap.width() / dpr == native_size
+    assert pixmap.height() / dpr == native_size
+    assert icon.availableSizes()[0].width() / dpr == native_size
     # Inspect actual non-transparent pixels, not merely the QImage canvas.
     points = [
         (x, y)
@@ -666,8 +671,8 @@ def test_pet_avatar_menu_icon_fills_native_slot_and_stays_centered(monkeypatch):
     ]
     left, right = min(x for x, _ in points), max(x for x, _ in points)
     top, bottom = min(y for _, y in points), max(y for _, y in points)
-    assert bottom - top + 1 >= native_size * 0.8
-    assert abs(((left + right) / 2.0) - ((native_size - 1) / 2.0)) <= 1.0
+    assert (bottom - top + 1) / dpr >= native_size * 0.8
+    assert abs(((left + right) / 2.0) / dpr - ((native_size - 1) / 2.0)) <= 1.0
     menu.close()
     app.processEvents()
 
@@ -1857,7 +1862,7 @@ def test_template_reopen_reuses_original_visible_menu_position(monkeypatch):
             self.shown_at = QPoint(point)
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda _delay, callback: callback())
+    monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda *args: args[-1]())
     menu = QMenu()
     menu.move(410, 260)
     fake = FakePet()

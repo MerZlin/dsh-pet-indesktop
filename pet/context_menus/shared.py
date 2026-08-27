@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+import shiboken6
+
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import QMenu
@@ -132,6 +134,9 @@ def build_animation_categories(
                 submenu=submenu, icon_actions=tuple(icon_actions), pet=pet,
             ) -> None:
                 """Only alter QAction geometry before show or after hide."""
+                # aboutToHide 会排队 singleShot 刷新，菜单可能已销毁
+                if shiboken6.isValid(submenu) is False:
+                    return
                 if submenu.isVisible():
                     return
                 cached_loader = getattr(pet, "animation_icon_cached_image", None)
@@ -167,6 +172,9 @@ def build_animation_categories(
                     def apply_image(
                         image, action=action, worker=worker, submenu=submenu,
                     ) -> None:
+                        # 菜单可能已在 worker 解码期间关闭销毁，跳过图标更新
+                        if shiboken6.isValid(submenu) is False:
+                            return
                         if worker in submenu._animation_icon_workers:
                             submenu._animation_icon_workers.remove(worker)
                         # setIcon() invalidates QMenu's action geometry. Doing
@@ -190,7 +198,7 @@ def build_animation_categories(
             submenu.aboutToShow.connect(refresh_cached_icons)
             submenu.aboutToShow.connect(start_loading)
             submenu.aboutToHide.connect(
-                lambda refresh=refresh_cached_icons: QTimer.singleShot(0, refresh)
+                lambda refresh=refresh_cached_icons, submenu=submenu: QTimer.singleShot(0, submenu, refresh)
             )
             pool = QThreadPool(submenu)
             pool.setMaxThreadCount(2)
