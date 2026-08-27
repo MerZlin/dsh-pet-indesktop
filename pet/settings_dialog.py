@@ -403,8 +403,9 @@ class PetSettingsDialog(QDialog):
         QMessageBox.information(self, "陪伴记忆", "已清空主动识屏的短期陪伴记忆。")
 
     def _save(self) -> None:
-        # 保存前从磁盘重读：右键菜单等外部途径可能在本对话框打开期间改了配置
-        #（如主动识屏开关），不读回会用弹窗内的旧状态覆盖它们。
+        # 保存前从磁盘重读：吸收外部（如右键菜单）对本对话框未暴露字段的改动。
+        # 已知限制：对话框已暴露的字段仍是 last-writer-wins（对话框获胜）——
+        # 完全的双向合并需要字段级脏标记，代价远大于这个边缘场景的收益。
         self.config._load()
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())

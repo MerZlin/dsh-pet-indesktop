@@ -1811,7 +1811,8 @@ class ModernSettingsDialog(QDialog):
         """ + BROWSER_CONTROL_STYLESHEET
 
     def _save(self) -> None:
-        # 保存前从磁盘重读：右键菜单等外部途径可能在本对话框打开期间改了配置
+        # 保存前从磁盘重读：吸收外部对本对话框未暴露字段的改动。
+        # 已知限制：已暴露字段仍是 last-writer-wins（对话框获胜）。
         self.config._load()
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())
