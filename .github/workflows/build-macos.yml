@@ -52,6 +52,11 @@ jobs:
             IFS='|' read -r VARIANT ENTRY DATAS EXCLUDES <<< "$SPEC"
             echo "==> building $VARIANT"
             echo "VARIANT = '$VARIANT'" > packaging/build_variant.py
+            CHAT_DATA=()
+            if [[ "$VARIANT" == *-chat ]]; then
+              CHAT_DATA+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")
+              CHAT_DATA+=(--add-data "pet/chat/modern_styles.qss:pet/chat")
+            fi
             python -m PyInstaller --noconfirm --clean --onedir --windowed \
               --paths . \
               --collect-all imageio_ffmpeg \
@@ -62,6 +67,9 @@ jobs:
               --name "dsh-pet-standalone-$VARIANT" \
               --icon assets/icon.icns \
               --add-data "$DATAS:$DATAS" \
+              --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish" \
+              --add-data "pet/menu_templates:pet/menu_templates" \
+              "${CHAT_DATA[@]}" \
               $EXCLUDES \
               "$ENTRY"
             if [ $? -ne 0 ]; then echo "::error::$VARIANT 构建失败"; exit 1; fi

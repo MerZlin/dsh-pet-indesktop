@@ -25,7 +25,7 @@ from .config import (
 
 
 class PetSettingsDialog(QDialog):
-    """桌宠动画节奏与自言自语设置；非模态，打开时桌宠仍可拖动。"""
+    """旧版菜单专用设置；保持原始表单结构和功能边界。"""
 
     settings_saved = Signal()
 
