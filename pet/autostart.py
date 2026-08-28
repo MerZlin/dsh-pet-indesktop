@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -65,10 +66,10 @@ def _linux_desktop_content() -> str:
     if getattr(sys, "frozen", False):
         command = str(Path(sys.executable).resolve())
     else:
-        command = (
-            f"/bin/sh -c 'cd {_project_root()} && exec "
-            f"{sys.executable} -m pet'"
-        )
+        root_quoted = shlex.quote(str(_project_root()))
+        exe_quoted = shlex.quote(str(sys.executable))
+        inner_cmd = f"cd {root_quoted} && exec {exe_quoted} -m pet"
+        command = f"/bin/sh -c {shlex.quote(inner_cmd)}"
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"

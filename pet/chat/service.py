@@ -7,10 +7,23 @@ from .models import ProviderConfig
 from .providers import OpenAICompatibleProvider
 class _Worker(QThread):
     delta_received=Signal(str); completed=Signal(str); failed=Signal(str); stopped_by_user=Signal()
-    def __init__(self,provider,messages,config,cancel): super().__init__(); self.provider=provider; self.messages=messages; self.config=config; self.cancel=cancel; self.parts=[]
+    def __init__(self,provider,messages,config,cancel):
+        super().__init__()
+        self.provider=provider; self.messages=messages; self.config=config; self.cancel=cancel; self.parts=[]
+        self._responses = []
+    def cancel_response(self):
+        self.cancel.set()
+        for resp in list(self._responses):
+            try: resp.close()
+            except Exception: pass
     def run(self):
         try:
-            for text in self.provider.stream(self.messages,self.config,self.cancel):
+            stream_kwargs = {}
+            import inspect
+            sig = inspect.signature(self.provider.stream)
+            if 'response_holder' in sig.parameters:
+                stream_kwargs['response_holder'] = self._responses
+            for text in self.provider.stream(self.messages,self.config,self.cancel,**stream_kwargs):
                 if self.cancel.is_set(): self.stopped_by_user.emit(); return
                 self.parts.append(text); self.delta_received.emit(text)
             if self.cancel.is_set(): self.stopped_by_user.emit()
@@ -22,10 +35,6 @@ class _Worker(QThread):
                     self.failed.emit('模型未返回任何内容，请稍后重试或检查模型配置。')
         except Exception as exc:
             self.stopped_by_user.emit() if self.cancel.is_set() else self.failed.emit(str(exc))
-        finally:
-            if hasattr(self.provider, "cancel") and callable(self.provider.cancel):
-                try: self.provider.cancel()
-                except Exception: pass
 class ChatService(QObject):
     started=Signal(str); delta=Signal(str,str); finished=Signal(str,str); error=Signal(str,str); stopped=Signal(str)
     def __init__(self,provider=None,parent=None):
@@ -41,11 +50,11 @@ class ChatService(QObject):
         # 等其 run() 结束后由 finished 信号自行 discard 回收引用。
         self.stop()
         for worker in list(self._workers):
-            if hasattr(worker, "cancel") and worker.cancel is not None:
-                worker.cancel.set()
-            if hasattr(worker, "provider") and hasattr(worker.provider, "cancel") and callable(worker.provider.cancel):
-                try: worker.provider.cancel()
+            if hasattr(worker, "cancel_response") and callable(worker.cancel_response):
+                try: worker.cancel_response()
                 except Exception: pass
+            elif hasattr(worker, "cancel") and worker.cancel is not None:
+                worker.cancel.set()
             if worker.isRunning():
                 worker.wait(1500)
         # 返回 True 表示全部退出，False 表示仍有 worker 在运行（供调用方参考）
@@ -66,10 +75,14 @@ class ChatService(QObject):
         worker.finished.connect(lambda w=worker: self._workers.discard(w), Qt.QueuedConnection)
         self.started.emit(rid); worker.start(); return rid
     def stop(self):
-        if self._cancel is not None: self._cancel.set()
-        if hasattr(self.provider, "cancel") and callable(self.provider.cancel):
-            try: self.provider.cancel()
-            except Exception: pass
+        if self._worker is not None:
+            if hasattr(self._worker, "cancel_response") and callable(self._worker.cancel_response):
+                try: self._worker.cancel_response()
+                except Exception: pass
+            elif hasattr(self._worker, "cancel") and self._worker.cancel is not None:
+                self._worker.cancel.set()
+        elif self._cancel is not None:
+            self._cancel.set()
     def _current(self,rid): return rid==self._request_id
     def _delta(self,rid,text):
         if self._current(rid): self.delta.emit(rid,text)

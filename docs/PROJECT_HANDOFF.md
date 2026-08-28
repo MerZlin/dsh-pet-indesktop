@@ -515,3 +515,19 @@ opus R3 明确通过。sol R3/dsh R3 确认中。
 - README「看看屏幕」截图留存描述修正（实际不落盘）；WORKSPACE.md 同步。
 - 现代设置页自启应用失败现在有提示。
 - 测试 407 passed / 5 skipped。
+
+### 第十九轮（2026-08-28 晚）：三轮评审闭环 + 子代理气泡刷屏修复
+
+- OpenCode 子代理（task 子会话）事件不再触发联动状态/气泡——event 表按批
+  查 session.parent_id，只认主会话（老库无 session 表时保守不过滤）。
+- 视觉独立端点不再回退使用聊天 Key（keyring 也查，缺失明确报错）。
+- Chat 附件：数量/总大小/总字符上限 + 超限明确提示；PDF 等不支持格式不再假支持。
+- 主动识屏按真实 HTTP 请求计每日预算，429 最多重试 1 次；文案改「每日请求上限」。
+- Chat 响应改为按请求持有（_Worker 自带 response 槽），修复旧请求 finally
+  误关新请求 response 的竞态；停止时中断阻塞 read。
+- Claude hooks 归属改结构化标记 x-dsh-pet（旧格式按脚本文件名兜底清理）。
+- Linux 自启命令 shlex.quote 转义。
+- 卸载清理：--uninstall-cleanup（自启/hooks/DSH 插件）+ .iss [UninstallRun]。
+- pytest.ini 固定 testpaths=tests（裸 pytest 不再误收打包目录的第三方测试）。
+- README：配置路径分变体写清、第三方措辞修正、更新功能描述对齐真实 UI。
+- 测试 430 passed / 5 skipped。

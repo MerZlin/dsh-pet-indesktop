@@ -282,11 +282,14 @@ class TestClaudeHooksFormat:
         assert list(events_file.parent.glob("claude_event_hook.*"))
 
     def test_install_is_idempotent_and_preserves_user_hooks(self, tmp_path, monkeypatch):
-        """重复安装不产生重复条目；用户自己的 hooks 原样保留。"""
+        """重复安装不产生重复条目；用户自己的 hooks 原样保留（包括命令碰巧含 claude_event_hook 的情况）。"""
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir(parents=True, exist_ok=True)
         settings.write_text(json.dumps({
-            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "my-own-hook"}]}]},
+            "hooks": {"PreToolUse": [
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "my-own-hook"}]},
+                {"matcher": "Special", "hooks": [{"type": "command", "command": "custom_claude_event_hook_run"}]},
+            ]},
             "other_key": 1,
         }), encoding="utf-8")
         monkeypatch.setattr(ClaudeCodeMonitor, "get_settings_path", lambda: settings)
@@ -298,10 +301,12 @@ class TestClaudeHooksFormat:
 
         data = json.loads(settings.read_text(encoding="utf-8"))
         entries = data["hooks"]["PreToolUse"]
-        ours = [g for g in entries if "claude_event_hook" in json.dumps(g)]
-        theirs = [g for g in entries if "my-own-hook" in json.dumps(g)]
+        ours = [g for g in entries if g.get("x-dsh-pet") is True]
+        theirs1 = [g for g in entries if "my-own-hook" in json.dumps(g)]
+        theirs2 = [g for g in entries if "custom_claude_event_hook_run" in json.dumps(g)]
         assert len(ours) == 1  # 幂等
-        assert len(theirs) == 1  # 用户的保留
+        assert len(theirs1) == 1  # 用户的保留
+        assert len(theirs2) == 1  # 名字撞车的用户条目也保留
         assert data["other_key"] == 1
 
     def test_uninstall_removes_only_ours(self, tmp_path, monkeypatch):
@@ -311,6 +316,7 @@ class TestClaudeHooksFormat:
         settings.write_text(json.dumps({
             "hooks": {"Stop": [
                 {"matcher": "", "hooks": [{"type": "command", "command": "user-cmd"}]},
+                {"matcher": "", "hooks": [{"type": "command", "command": "user_claude_event_hook_cmd"}]},
             ]},
         }), encoding="utf-8")
 
@@ -321,8 +327,9 @@ class TestClaudeHooksFormat:
 
         data = json.loads(settings.read_text(encoding="utf-8"))
         stop_entries = data["hooks"]["Stop"]
-        assert all("claude_event_hook" not in json.dumps(g) for g in stop_entries)
+        assert all(g.get("x-dsh-pet") is not True for g in stop_entries)
         assert any("user-cmd" in json.dumps(g) for g in stop_entries)
+        assert any("user_claude_event_hook_cmd" in json.dumps(g) for g in stop_entries)
         # 我们独占的事件键整个移除
         assert "PreToolUse" not in data["hooks"]
 
@@ -1166,3 +1173,86 @@ class TestActivitySignal:
         assert "dsh" in mgr._done_pending
         mgr.pause()
         assert mgr._done_pending == {}
+
+# ============================================================================
+# 15. OpenCode 子代理会话过滤（防「干完活啦」刷屏）
+# ============================================================================
+class TestOpenCodeSubagentFilter:
+    def _make_db(self, tmp_path):
+        import sqlite3
+        db_path = tmp_path / "opencode.db"
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.execute("CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT)")
+        db.execute("INSERT INTO session VALUES ('root1', NULL)")
+        db.execute("INSERT INTO session VALUES ('child1', 'root1')")
+        db.commit()
+        db.close()
+        return db_path
+
+    def test_subagent_events_filtered(self, tmp_path):
+        """子代理（parent_id 非空）会话的 step-start/step-finish/工具事件全部忽略。"""
+        import sqlite3
+        from PySide6.QtWidgets import QApplication
+        from pet.agent_link import OpenCodeMonitor
+
+        app = QApplication.instance() or QApplication([])
+        db_path = self._make_db(tmp_path)
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        received, tools = [], []
+        mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.activity.connect(lambda k, t: tools.append(t))
+        mon.start()
+        mon._poll()  # backfill
+
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('c', 1, 'message.part.updated.1', "
+                   "'{\"sessionID\":\"child1\",\"part\":{\"type\":\"step-start\"}}')")
+        db.execute("INSERT INTO event VALUES ('c', 2, 'message.part.updated.1', "
+                   "'{\"sessionID\":\"child1\",\"part\":{\"type\":\"tool\",\"tool\":\"bash\"}}')")
+        db.execute("INSERT INTO event VALUES ('c', 3, 'message.part.updated.1', "
+                   "'{\"sessionID\":\"child1\",\"part\":{\"type\":\"step-finish\"}}')")
+        db.commit()
+        db.close()
+        mon._poll()
+        assert received == [] and tools == []  # 子代理全程静默
+
+        # 主会话正常报
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('r', 4, 'message.part.updated.1', "
+                   "'{\"sessionID\":\"root1\",\"part\":{\"type\":\"step-start\"}}')")
+        db.commit()
+        db.close()
+        mon._poll()
+        assert received == ["working"]
+        mon.stop()
+
+    def test_missing_session_table_conservative(self, tmp_path):
+        """老库没有 session 表：不过滤（保守不丢事件）。"""
+        import sqlite3
+        from PySide6.QtWidgets import QApplication
+        from pet.agent_link import OpenCodeMonitor
+
+        app = QApplication.instance() or QApplication([])
+        db_path = tmp_path / "opencode.db"
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.commit()
+        db.close()
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        received = []
+        mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.start()
+        mon._poll()
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('s1', 1, 'message.part.updated.1', "
+                   "'{\"sessionID\":\"x\",\"part\":{\"type\":\"step-start\"}}')")
+        db.commit()
+        db.close()
+        mon._poll()
+        assert received == ["working"]
+        mon.stop()

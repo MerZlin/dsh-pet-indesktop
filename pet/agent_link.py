@@ -511,6 +511,7 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
 
     HOOK_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionStart", "UserPromptSubmit")
     HOOK_MARKER = "claude_event_hook"  # 识别本桌宠注入条目的标记
+    HOOK_FLAG = "x-dsh-pet"            # 结构化字段标识
 
     def start(self) -> None:
         """启动时刷新 hook 脚本（脚本整体归本桌宠所有，升级版本自动覆盖旧版）。"""
@@ -593,9 +594,26 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
         return cmd_tmpl.replace("{script}", str(script)).replace("{event}", event)
 
     @classmethod
+    def _is_our_hook_entry(cls, entry: Any) -> bool:
+        # 新格式认结构化字段；旧格式（早期版本注入、无标记字段）兜底认
+        # command 里的脚本文件名——老用户升级后旧条目才能被正确清理/替换。
+        if not isinstance(entry, dict):
+            return False
+        if entry.get(cls.HOOK_FLAG) is True:
+            return True
+        for h in entry.get("hooks") or []:
+            # 旧格式（早期版本注入、无标记字段）兜底：command 含本桌宠落地脚本
+            # 文件名（带扩展名，避免撞名误删用户自有条目）才认作 ours——
+            # 老用户升级后旧条目才能被正确清理/替换。
+            cmd = str(h.get("command", "")) if isinstance(h, dict) else ""
+            if "claude_event_hook.ps1" in cmd or "claude_event_hook.py" in cmd:
+                return True
+        return False
+
+    @classmethod
     def install_hooks(cls, events_file: Path) -> bool:
         """注入 Claude Code 官方 hooks（数组对象格式），事件追加到 jsonl。
-        只移除/新增带本桌宠标记的条目，用户已有 hooks 不受影响。"""
+        只移除/新增带本桌宠结构化标记的条目，用户已有 hooks 不受影响。"""
         settings_path = cls.get_settings_path()
         try:
             script, cmd_tmpl = cls._ensure_hook_script(events_file)
@@ -622,7 +640,7 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
                 if isinstance(existing, list):
                     hooks[hook_name] = [
                         g for g in existing
-                        if not (isinstance(g, dict) and cls.HOOK_MARKER in json.dumps(g))
+                        if not cls._is_our_hook_entry(g)
                     ]
                 else:
                     hooks[hook_name] = []
@@ -630,6 +648,7 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
                 hooks[hook_name].append({
                     "matcher": "",
                     "hooks": [{"type": "command", "command": cmd}],
+                    cls.HOOK_FLAG: True,
                 })
             cls._write_settings_atomic(settings_path, data)
             return True
@@ -655,7 +674,7 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
                 if isinstance(entries, list):
                     kept = [
                         g for g in entries
-                        if not (isinstance(g, dict) and cls.HOOK_MARKER in json.dumps(g))
+                        if not cls._is_our_hook_entry(g)
                     ]
                     if kept:
                         hooks[hook_name] = kept
@@ -773,18 +792,52 @@ class OpenCodeMonitor(BaseAgentMonitor):
                     "SELECT rowid, type, data FROM event WHERE rowid > ? ORDER BY rowid LIMIT 200",
                     (self._last_rowid,),
                 ).fetchall()
+                # 子代理（task）会话过滤：opencode 给每个子代理开独立 session
+                # （session.parent_id 非空），其 step-start/step-finish 会随主会话
+                # 事件一起进 event 表，不过滤的话每派发/完成一个子代理就触发一次
+                # busy→idle，把「任务完成」气泡刷爆。批量查一次本批事件的会话归属。
+                session_ids: set[str] = set()
+                parsed: list[tuple[int, str, dict]] = []
+                for rowid, ev_type, data_raw in rows:
+                    try:
+                        data = json.loads(str(data_raw))
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    sid = str(data.get("sessionID") or "")
+                    if sid:
+                        session_ids.add(sid)
+                    parsed.append((int(rowid), str(ev_type), data))
+                root_sessions: dict[str, bool] = {}
+                if session_ids:
+                    try:
+                        marks = ",".join("?" * len(session_ids))
+                        for sid, parent_id in db.execute(
+                            f"SELECT id, parent_id FROM session WHERE id IN ({marks})",
+                            tuple(session_ids),
+                        ):
+                            root_sessions[str(sid)] = parent_id is None
+                    except Exception:
+                        # 老库没有 session 表等异常：全部当主会话（保守不丢事件）
+                        root_sessions = {}
             finally:
                 db.close()
         except Exception as exc:
             log.debug("OpenCode sqlite 读取异常: %s", exc)
             return
 
-        for rowid, ev_type, data_raw in rows:
-            self._last_rowid = max(self._last_rowid, int(rowid))
-            state = opencode_event_state(str(ev_type), str(data_raw))
+        for rowid, ev_type, data in parsed:
+            self._last_rowid = max(self._last_rowid, rowid)
+            sid = str(data.get("sessionID") or "")
+            # 查到归属且是子代理会话 → 整条跳过（状态和工具气泡都不报）
+            if sid and root_sessions and root_sessions.get(sid) is False:
+                continue
+            data_raw = json.dumps(data)
+            state = opencode_event_state(ev_type, data_raw)
             if state:
                 self.state_changed.emit("opencode", state)
-            tool = opencode_event_tool(str(ev_type), str(data_raw))
+            tool = opencode_event_tool(ev_type, data_raw)
             if tool:
                 self.activity.emit("opencode", tool)
 

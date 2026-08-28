@@ -1519,7 +1519,7 @@ class ModernSettingsDialog(QDialog):
                        self._pro_cooldown_row()),
             SettingRow("proactive_min_interval", "最小请求间隔（秒）", "免费模型的硬保护，不建议调太小。",
                        self.pro_min_interval_spin),
-            SettingRow("proactive_daily_cap", "每日触发上限", "DeepSeek 视觉单次约 ¥0.003；上限 9999 约等于不限。",
+            SettingRow("proactive_daily_cap", "每日请求上限", "DeepSeek 视觉单次约 ¥0.003；上限 9999 约等于不限。",
                        self.pro_cap_spin),
         ], content))
         layout.addWidget(SettingsSection("触发条件", [

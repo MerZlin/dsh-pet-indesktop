@@ -220,7 +220,7 @@ class PetSettingsDialog(QDialog):
         self.pro_cap_spin.setSuffix(" 次/天")
         self.pro_cap_spin.setValue(int(pro_cfg.get("daily_cap", 15)))
         self.pro_cap_spin.setToolTip("每天最多主动关怀几次（DeepSeek 视觉单次约 ¥0.003，15 次/天 ≈ ¥0.05；上限 9999 约等于不限）")
-        custom_form.addRow("每日触发上限", self.pro_cap_spin)
+        custom_form.addRow("每日请求上限", self.pro_cap_spin)
 
         form_pro.addRow("", self.custom_params_widget)
         self.custom_params_widget.setVisible(cur_preset == "custom")

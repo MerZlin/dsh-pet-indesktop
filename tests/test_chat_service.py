@@ -157,6 +157,77 @@ def test_shutdown_uninterruptible_worker_returns_false_and_retains_reference():
     assert worker not in service._workers
 
 
+def test_worker_cancel_closes_only_its_own_response_and_does_not_close_others():
+    """加竞态测试：A 被取消、B 已建立 response、A 退出时 B 的 response 不被关闭。"""
+    class MockResponse:
+        def __init__(self, name):
+            self.name = name
+            self.closed = False
+
+        def read(self, size=4096):
+            time.sleep(0.01)
+            return b""
+
+        def close(self):
+            self.closed = True
+
+    class ConcurrentFakeProvider:
+        def __init__(self):
+            self.responses = []
+
+        def stream(self, messages, config, cancel, response_holder=None):
+            resp = MockResponse(name=messages[0]["content"])
+            self.responses.append(resp)
+            if response_holder is not None:
+                response_holder.append(resp)
+            while not cancel.is_set():
+                time.sleep(0.01)
+            yield "done"
+
+    app = _get_qapp()
+    provider = ConcurrentFakeProvider()
+    service = ChatService(provider=provider)
+    cfg = ProviderConfig(provider_id="test", name="test", base_url="http://invalid", model="test")
+
+    # 发起请求 A
+    rid_a = service.send([{"role": "user", "content": "req_A"}], cfg)
+    w_a = service._worker
+    # 等待 worker A 启动并持有 response A
+    deadline = time.time() + 2.0
+    while len(provider.responses) < 1 and time.time() < deadline:
+        time.sleep(0.005)
+    assert len(provider.responses) == 1
+    resp_a = provider.responses[0]
+    assert resp_a.name == "req_A"
+    assert not resp_a.closed
+
+    # 发起请求 B（会调用 service.stop() 取消 A，并创建 worker B）
+    rid_b = service.send([{"role": "user", "content": "req_B"}], cfg)
+    w_b = service._worker
+    assert w_b is not w_a
+
+    # 等待 worker B 启动并持有 response B
+    deadline = time.time() + 2.0
+    while len(provider.responses) < 2 and time.time() < deadline:
+        time.sleep(0.005)
+    assert len(provider.responses) == 2
+    resp_b = provider.responses[1]
+    assert resp_b.name == "req_B"
+
+    # 等待 worker A 完全退出
+    w_a.wait(2000)
+    app.processEvents()
+
+    # 验证：A 已被关闭，但 B 的 response 绝对没有被 A 误关
+    assert resp_a.closed is True
+    assert resp_b.closed is False
+
+    # 清理 worker B
+    service.shutdown()
+    app.processEvents()
+    assert resp_b.closed is True
+
+
 def test_provider_cancel_closes_blocking_response():
     """b) fake provider 的 response 阻塞 read → cancel 后 close 被调用、read 返回"""
     from pet.chat.providers import OpenAICompatibleProvider
@@ -180,7 +251,7 @@ def test_provider_cancel_closes_blocking_response():
 
     provider = OpenAICompatibleProvider()
     fake_resp = BlockingFakeResponse()
-    provider._current_response = fake_resp
+    responses = []
 
     cancel_event = threading.Event()
     finished = threading.Event()
@@ -188,13 +259,12 @@ def test_provider_cancel_closes_blocking_response():
     def _stream():
         # 模拟 provider 循环
         try:
+            responses.append(fake_resp)
             while not cancel_event.is_set():
                 chunk = fake_resp.read(4096)
                 if not chunk:
                     break
         finally:
-            if provider._current_response is fake_resp:
-                provider._current_response = None
             fake_resp.close()
             finished.set()
 
@@ -204,7 +274,7 @@ def test_provider_cancel_closes_blocking_response():
     assert fake_resp.read_called.wait(timeout=2.0)
     # 触发取消
     cancel_event.set()
-    provider.cancel()
+    fake_resp.close()
 
     assert finished.wait(timeout=2.0), "cancel 路径未能在超时前中断阻塞的 read"
     t.join(timeout=2.0)

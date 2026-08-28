@@ -170,13 +170,13 @@ class TestProactiveLimiter:
             today=lambda: cur_day[0],
         )
 
-        # 第一次成功
-        limiter.record_success()
+        # 第一次真实请求（消耗一次预算）
+        limiter.consume_budget()
         cur_time[0] += 70.0
-        # 第二次成功
+        # 第二次真实请求
         ok, _ = limiter.allow()
         assert ok is True
-        limiter.record_success()
+        limiter.consume_budget()
 
         # 达到每日上限（cap=2）
         cur_time[0] += 70.0
@@ -703,13 +703,15 @@ class TestPhase3VisionLinkAndDryRun:
             def show_bubble(self, text, duration_ms=3000):
                 bubbles.append(text)
 
-        # mock vision._post_vision_request
+        # mock vision._post_vision_request（模拟真实请求消耗一次预算）
         from pet import vision
-        monkeypatch.setattr(
-            vision,
-            "_post_vision_request",
-            lambda jpeg_bytes, app_str, prompt, p, memory_context="": "看到你在写 Python 呢！"
-        )
+
+        def _fake_post(jpeg_bytes, app_str, prompt, p, memory_context="", consume_budget=None):
+            if consume_budget is not None:
+                consume_budget()
+            return "看到你在写 Python 呢！"
+
+        monkeypatch.setattr(vision, "_post_vision_request", _fake_post)
 
         cfg = Config(base=tmp_path)
         cfg.set("proactive_screen", {
@@ -1020,11 +1022,12 @@ class TestPhase5ShortTermMemory:
 
         recorded_contexts = []
         from pet import vision
-        monkeypatch.setattr(
-            vision,
-            "_post_vision_request",
-            lambda jpeg_bytes, app_str, prompt, p, memory_context="": recorded_contexts.append(memory_context) or "好呀"
-        )
+
+        def _fake_post(jpeg_bytes, app_str, prompt, p, memory_context="", consume_budget=None):
+            recorded_contexts.append(memory_context)
+            return "好呀"
+
+        monkeypatch.setattr(vision, "_post_vision_request", _fake_post)
 
         cfg = Config(base=tmp_path)
         cfg.set("proactive_screen", {
@@ -1268,3 +1271,72 @@ class TestUXFixesRound3:
         cfg.save()
         dlg._save()
         assert cfg.data["proactive_screen"]["change_threshold"] == 22
+
+
+# ============================================================================
+# 10. 主动识屏按真实请求计费（每次 HTTP 请求消耗预算）回归测试
+# ============================================================================
+class TestProactiveBudgetPerRequest:
+    def test_consume_budget_charges_per_real_request(self, tmp_path):
+        """每次真实请求前消耗一次预算（一次触发里的多次重试各自占用额度）。"""
+        state_file = tmp_path / "state.json"
+        cur_time = [10000.0]
+        limiter = ProactiveLimiter(
+            state_file,
+            {"daily_cap": 3, "min_request_interval_seconds": 5, "cooldown_minutes": 1},
+            clock=lambda: cur_time[0],
+            today=lambda: "2026-08-27",
+        )
+        assert limiter.consume_budget() is True
+        assert limiter.consume_budget() is True
+        assert limiter.consume_budget() is True
+        # 预算耗尽：第四次返回 False，且不再累加
+        assert limiter.consume_budget() is False
+        state = limiter._load_state()
+        assert state["count"] == 3
+
+    def test_vision_consumes_budget_each_attempt_and_429_retries_once(self, monkeypatch):
+        """497 回归：429 最多重试 1 次；每一次真实 HTTP 请求前都消耗预算。"""
+        import urllib.error
+        from pet import vision
+        from pet.chat.models import ProviderConfig
+
+        attempts = []
+        consumed = []
+
+        def fake_urlopen(req, timeout=None, context=None):
+            attempts.append(1)
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many", {}, None)
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        # 去重试 sleep，避免测试被 2 秒拖慢
+        monkeypatch.setattr(vision.time, "sleep", lambda s: None)
+
+        p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-123"})
+        with pytest.raises(vision.VisionError):
+            vision._post_vision_request(
+                b"fake-jpeg", "code.exe | t", "sys", p,
+                consume_budget=lambda: (consumed.append(1) or True),
+            )
+        # 429 只重试 1 次：总共发起 2 次请求
+        assert len(attempts) == 2
+        # 每次真实请求前都消耗一次预算
+        assert len(consumed) == 2
+
+    def test_vision_budget_exhausted_stops_before_request(self, monkeypatch):
+        """预算耗尽时必须停止，绝不再发起任何 HTTP 请求。"""
+        from pet import vision
+        from pet.chat.models import ProviderConfig
+
+        calls = []
+
+        def fake_urlopen(req, timeout=None, context=None):
+            calls.append(1)
+            raise AssertionError("预算耗尽后不应发起请求")
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-123"})
+        with pytest.raises(vision.VisionError) as exc_info:
+            vision._post_vision_request(b"fake-jpeg", "code.exe | t", "sys", p, consume_budget=lambda: False)
+        assert "上限" in str(exc_info.value)
+        assert calls == []

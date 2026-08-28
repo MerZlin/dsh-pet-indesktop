@@ -46,6 +46,86 @@ from ..context_menus.icons import vector_widget_icon
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_ACCENT = "#3994ff"
 
+# 附件上限（与发送逻辑共用，超限时明确提示而非静默跳过）
+MAX_ATTACHMENTS = 10
+MAX_IMAGE_BYTES = 10 * 1024 * 1024          # 单张图片 10MB 上限
+MAX_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024     # 图片总大小 20MB 上限
+MAX_TEXT_TOTAL_CHARS = 200_000               # 文本总长 20 万字符上限
+_TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".py", ".log", ".yaml", ".yml", ".xml"}
+
+
+def _attachment_is_image(path: Path) -> bool:
+    mime = mimetypes.guess_type(path.name)[0] or ""
+    return mime.startswith("image/")
+
+
+def _attachment_is_text(path: Path) -> bool:
+    return path.suffix.lower() in _TEXT_EXTENSIONS
+
+
+def _attachment_file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _attachment_text_chars(path: Path) -> int:
+    """文本附件的字符数；只读前 MAX_TEXT_TOTAL_CHARS+1 字符，超大文件不整读。"""
+    if not _attachment_is_text(path):
+        return 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return len(fh.read(MAX_TEXT_TOTAL_CHARS + 1))
+    except OSError:
+        return 0
+
+
+def validate_attachment_additions(current, candidates) -> tuple[list[Path], list[str]]:
+    """校验新增附件，返回（应接受的新增路径, 超限警告文案）。
+
+    规则：
+    - 附件总量 ≤ MAX_ATTACHMENTS；
+    - 图片单张 ≤ MAX_IMAGE_BYTES，图片总大小 ≤ MAX_IMAGE_TOTAL_BYTES；
+    - 文本总长度 ≤ MAX_TEXT_TOTAL_CHARS；
+    - 重复路径 / 非文件直接忽略（不视为超限）。
+    """
+    accepted: list[Path] = []
+    warnings: list[str] = []
+    seen = set(current)
+    total_count = len(current)
+    image_bytes = sum(_attachment_file_size(p) for p in current if _attachment_is_image(p))
+    text_chars = sum(_attachment_text_chars(p) for p in current if _attachment_is_text(p))
+
+    for value in candidates:
+        path = Path(value).expanduser().resolve()
+        if path in seen:
+            continue
+        if not path.is_file():
+            continue
+        if total_count >= MAX_ATTACHMENTS:
+            warnings.append(f"附件最多 {MAX_ATTACHMENTS} 个，{path.name} 未添加")
+            continue
+        if _attachment_is_image(path):
+            size = _attachment_file_size(path)
+            if size > MAX_IMAGE_BYTES:
+                warnings.append(f"图片 {path.name} 超过 10MB，未添加")
+                continue
+            if image_bytes + size > MAX_IMAGE_TOTAL_BYTES:
+                warnings.append(f"图片总大小超过 20MB，{path.name} 未添加")
+                continue
+            image_bytes += size
+        elif _attachment_is_text(path):
+            chars = _attachment_text_chars(path)
+            if text_chars + chars > MAX_TEXT_TOTAL_CHARS:
+                warnings.append(f"文本总长超过 20 万字符，{path.name} 未添加")
+                continue
+            text_chars += chars
+        accepted.append(path)
+        seen.add(path)
+        total_count += 1
+    return accepted, warnings
+
 
 def resolve_bg_pixmap(config_value: str):
     """Backward-compatible shared background resolver."""
@@ -507,6 +587,7 @@ class AttachmentChip(QFrame):
 
 class ChatComposer(QFrame):
     send_requested = Signal()
+    notice = Signal(str)  # 附件超限等需要明确提示用户的事件
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -566,21 +647,27 @@ class ChatComposer(QFrame):
             self,
             "选择附件",
             "",
-            "支持的文件 (*.txt *.md *.json *.csv *.py *.log *.jpg *.jpeg *.png *.webp *.gif *.pdf);;所有文件 (*)",
+            # 文件选择器只声明真正支持的格式：PDF 等仅能作为文件名占位、没有
+            # 实际内容发送的类型不再收录（避免“宣称支持却只发文件名”的误导）。
+            "支持的文件 (*.txt *.md *.json *.csv *.py *.log *.jpg *.jpeg *.png *.webp *.gif);;所有文件 (*)",
         )
         self.add_attachments(paths)
 
     def add_attachments(self, paths) -> None:
-        changed = False
-        for value in paths:
-            path = Path(value).expanduser().resolve()
-            if not path.is_file() or path in self.attachment_paths:
-                continue
-            self.attachment_paths.append(path)
-            changed = True
-        if changed:
+        new_paths, warnings = validate_attachment_additions(self.attachment_paths, paths)
+        if new_paths:
+            self.attachment_paths.extend(new_paths)
             self._refresh_attachments()
             self._update_enabled()
+        if warnings:
+            self._flash_notice("；".join(warnings))
+
+    def _flash_notice(self, message: str) -> None:
+        """超限提示：发出信号并在输入区底部提示栏短暂显示。"""
+        self.notice.emit(message)
+        if getattr(self, "hint", None) is not None:
+            self.hint.setText(message)
+            QTimer.singleShot(5000, lambda: self.hint.setText("内容会保存到当前角色的本地会话"))
 
     def _refresh_attachments(self) -> None:
         while self.attachment_layout.count():
@@ -607,14 +694,17 @@ class ChatComposer(QFrame):
 
     def attachment_prompt(self) -> str:
         blocks = []
-        text_extensions = {".txt", ".md", ".json", ".csv", ".py", ".log", ".yaml", ".yml", ".xml"}
+        text_budget = MAX_TEXT_TOTAL_CHARS
         for path in self.attachment_paths:
             header = f"附件：{path.name}（{mimetypes.guess_type(path.name)[0] or 'application/octet-stream'}）"
-            if path.suffix.lower() in text_extensions:
+            if _attachment_is_text(path):
                 try:
-                    content = path.read_text(encoding="utf-8", errors="replace")[:120000]
+                    content = path.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     content = "[读取失败]"
+                if len(content) > text_budget:
+                    content = content[:text_budget]
+                text_budget = max(0, text_budget - len(content))
                 blocks.append(f"{header}\n```\n{content}\n```")
             else:
                 blocks.append(header)
@@ -627,10 +717,13 @@ class ChatComposer(QFrame):
             if not mime.startswith("image/"):
                 continue
             try:
-                if path.stat().st_size > 10 * 1024 * 1024:
-                    continue
+                size = path.stat().st_size
             except OSError:
                 continue  # 附件已删除
+            if size > MAX_IMAGE_BYTES:
+                # 不再静默跳过：明确提示用户该图超限
+                self._flash_notice(f"图片 {path.name} 超过 10MB，未包含在消息中")
+                continue
             try:
                 encoded = base64.b64encode(path.read_bytes()).decode("ascii")
             except OSError:
