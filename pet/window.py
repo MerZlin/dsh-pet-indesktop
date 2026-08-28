@@ -1078,6 +1078,9 @@ class PetWindow(QWidget):
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
         self._context_menu_anchor = QPoint(global_pos)
+        # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），右键时先隐藏，
+        # 避免气泡盖住菜单
+        self._speech_bubble.hide()
         menu = QMenu(self)
         self._active_context_menu = menu
         _populate_context_menu(menu, self)

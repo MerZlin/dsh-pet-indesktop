@@ -887,3 +887,73 @@ def test_spawned_children_are_reaped_after_exit():
             if proc not in before and proc.poll() is None:
                 proc.terminate()
         launcher._SPAWNED_CHILDREN[:] = before
+
+
+def test_modern_settings_close_autosaves(tmp_path, monkeypatch):
+    """直接关闭（X）新版设置也必须落盘，不能只靠「保存并退出」。
+
+    回归背景：用户改完字体颜色/气泡方案后直接关窗，修改全部丢失。
+    """
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
+    dialog.bubble_style_select.setCurrentData("breath_bubble")
+    dialog.light_background_picker.edit.setText("#123456")
+    dialog.close()  # 不点「保存并退出」
+    app.processEvents()
+    assert config.get("self_talk_bubble_style") == "breath_bubble"
+    assert config.get("context_menu_appearance", {}).get("light_background") == "#123456"
+    # 重载磁盘验证
+    reloaded = Config(tmp_path)
+    assert reloaded.get("self_talk_bubble_style") == "breath_bubble"
+
+
+def test_settings_stylesheet_has_dark_overrides(monkeypatch):
+    """深色系统下新版设置必须追加深色覆盖段（白底白字不可读问题）。"""
+    from pet.modern_settings_dialog import _settings_stylesheet
+
+    monkeypatch.setattr("pet.modern_settings_dialog._system_dark", lambda: True)
+    qss = _settings_stylesheet()
+    assert "background: #202024" in qss
+    assert "color: #e4e4e9" in qss
+    monkeypatch.setattr("pet.modern_settings_dialog._system_dark", lambda: False)
+    qss_light = _settings_stylesheet()
+    assert "background: #202024" not in qss_light
+    # 浅色也必须显式给按钮补文字色（防深色 palette 白字）
+    assert "QPushButton { color: #202020; }" in qss_light
+
+
+def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypatch):
+    """新版设置直接关闭（Rejected）也必须把改动应用到桌宠。
+
+    回归背景：只有 Accepted（保存并退出）才刷新；X 关闭时 closeEvent 已
+    自动保存，但桌宠 scale/拖动物理等不生效。
+    """
+    from PySide6.QtWidgets import QApplication
+
+    import pet.app as app_mod
+    from pet.app import PetApp
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    owner = PetApp.__new__(PetApp)
+    owner.modern_settings_dialog = object()
+    refreshed = []
+
+    class FakeWin:
+        def refresh_pet_settings(self):
+            refreshed.append(1)
+
+    owner.win = FakeWin()
+    owner.config = Config(tmp_path)
+    owner._apply_balance_timer = lambda: None
+    owner._refresh_chat_windows = lambda: None
+    monkeypatch.setattr(app_mod, "_mac_set_dock_icon_visible", lambda *a, **k: None)
+    PetApp._modern_settings_finished(owner, 0)  # QDialog.Rejected（X 关闭）
+    assert refreshed == [1], "Rejected 关闭也必须刷新桌宠"

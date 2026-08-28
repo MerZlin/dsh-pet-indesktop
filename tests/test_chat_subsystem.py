@@ -1230,6 +1230,69 @@ def test_modern_chat_pauses_follow_when_user_scrolls_up(tmp_path: Path):
     app.processEvents()
 
 
+def test_session_switch_lands_at_bottom(tmp_path: Path):
+    """切换会话再切回长会话，必须落在最新消息底部。
+
+    回归背景：切会话时 _bottom 的 singleShot(0) 早于布局重算（maximum 仍为
+    0），切回长会话后停在顶部；加 80ms 兜底拍修复。
+    """
+    import time
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.chat.models import ChatMessage
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    window.resize(700, 500)
+    long_a = window._new_session()
+    for index in range(30):
+        long_a.messages.append(ChatMessage("assistant", f"长会话 A 第 {index} 条。" * 20))
+    window.store.save(long_a)
+    short_b = window._new_session()
+    for _ in range(2):
+        short_b.messages.append(ChatMessage("assistant", "短会话 B 消息。" * 20))
+    window.store.save(short_b)
+
+    window.show()
+    app.processEvents()
+    window.select_session(long_a.session_id)
+    app.processEvents()
+    window.select_session(short_b.session_id)
+    app.processEvents()
+    window.select_session(long_a.session_id)
+    deadline = time.time() + 1
+    bar = window.scroll.verticalScrollBar()
+    while not (bar.value() >= bar.maximum() - 24) and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert bar.value() >= bar.maximum() - 24, (
+        f"切回长会话应落在底部（max={bar.maximum()} value={bar.value()}）"
+    )
+    window.close()
+    app.processEvents()
+
+
+def test_append_look_sync_persists_to_session(tmp_path: Path):
+    """「看看屏幕」结果必须同步进当前会话并持久化（PR#11 重写后丢失）。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    before = len(window.session.messages)
+    window.append_look_sync("[看看屏幕] 前台窗口：测试", "这是屏幕分析结果")
+    after = len(window.session.messages)
+    assert after == before + 2
+    reloaded = window.store.load(window.session.session_id, "shenshen")
+    assert reloaded is not None and len(reloaded.messages) == after
+    window.close()
+    app.processEvents()
+
+
 def test_quit_closes_active_context_menu_before_leaving_event_loop(monkeypatch):
     import time
     from PySide6.QtWidgets import QApplication
@@ -1325,6 +1388,12 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
         def _restore_on_top_after_context_menu(self):
             pass
 
+    class _BubbleStub:
+        def hide(self):
+            pass
+
+    FakePet._speech_bubble = _BubbleStub()
+
     monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
     monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
     monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda *args: args[-1]())
@@ -1374,6 +1443,12 @@ def test_context_menu_window_callback_waits_until_old_menu_is_destroyed(monkeypa
     class FakePet:
         def _restore_on_top_after_context_menu(self):
             pass
+
+    class _BubbleStub:
+        def hide(self):
+            pass
+
+    FakePet._speech_bubble = _BubbleStub()
 
     monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
     monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
@@ -1437,6 +1512,12 @@ def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monke
     class FakePet:
         def _restore_on_top_after_context_menu(self):
             pass
+
+    class _BubbleStub:
+        def hide(self):
+            pass
+
+    FakePet._speech_bubble = _BubbleStub()
 
     monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
     monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)

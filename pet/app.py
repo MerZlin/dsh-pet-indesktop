@@ -465,8 +465,9 @@ class PetApp:
 
     def _modern_settings_finished(self, result: int) -> None:
         self.modern_settings_dialog = None
-        if not result:
-            return
+        # 新版设置在关闭时一律落盘（closeEvent 自动保存，「保存并退出」同样走
+        # _write_config），因此无论 Accepted/Rejected 都把改动应用到桌宠。
+        # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
         if self.win is not None:
             self.win.refresh_pet_settings()
         self._apply_balance_timer()
@@ -494,6 +495,9 @@ class PetApp:
                 win.show()
 
         menu = QMenu()
+        # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），托盘菜单弹出前
+        # 先隐藏气泡，避免气泡盖住菜单
+        menu.aboutToShow.connect(lambda: win._speech_bubble.hide())
         menu.addAction('显示 / 隐藏', toggle_visible)
         if self.enable_chat:
             menu.addAction('AI 对话', self.open_chat)

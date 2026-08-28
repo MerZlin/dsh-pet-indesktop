@@ -2,6 +2,7 @@
 """Modern-inspired sidebar settings panel used by the modern context menu."""
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -151,8 +152,9 @@ class ToggleSwitch(QAbstractButton):
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        track = "#0a84ff" if self.isChecked() else ("#3a3a42" if _system_dark() else "#dedede")
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#0a84ff") if self.isChecked() else QColor("#dedede"))
+        painter.setBrush(QColor(track))
         painter.drawRoundedRect(QRectF(0, 1, 38, 20), 10, 10)
         knob_x = 19.0 if self.isChecked() else 2.0
         painter.setBrush(QColor("#ffffff"))
@@ -262,7 +264,7 @@ class ColorPicker(QWidget):
 def _draw_chevron(widget, center_y: float, *, down: bool) -> None:
     painter = QPainter(widget)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    color = QColor("#62676d") if widget.isEnabled() else QColor("#aeb2b7")
+    color = QColor("#a8adb4" if _system_dark() else "#62676d") if widget.isEnabled() else QColor("#aeb2b7")
     painter.setPen(QPen(color, 1.35, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
     center_x = widget.width() - 10.0
     offset = 1.8 if down else -1.8
@@ -364,6 +366,8 @@ class ModernSelect(QAbstractButton):
 
     @staticmethod
     def popupStyleSheet() -> str:  # noqa: N802
+        if _system_dark():
+            return MODERN_SELECT_POPUP_STYLESHEET + _DARK_POPUP_OVERRIDE
         return MODERN_SELECT_POPUP_STYLESHEET
 
     def showPopup(self) -> None:  # noqa: N802
@@ -372,7 +376,7 @@ class ModernSelect(QAbstractButton):
         if popup is None:
             popup = QMenu(self)
             popup.setObjectName("ModernSelectPopup")
-            popup.setStyleSheet(MODERN_SELECT_POPUP_STYLESHEET)
+            popup.setStyleSheet(self.popupStyleSheet())
             self._popup = popup
         else:
             # Reuse one native popup instead of retaining a new child QMenu on
@@ -403,11 +407,14 @@ class ModernSelect(QAbstractButton):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        border = "#0a84ff" if self.hasFocus() else ("#aeb6c0" if self._hovered else "#cfd4da")
-        painter.setBrush(QColor("#ffffff"))
+        dark = _system_dark()
+        bg, border_idle, fg = ("#2e2e35", "#4a4a54", "#e4e4e9") if dark else ("#ffffff", "#cfd4da", "#202124")
+        hover_border = "#56565f" if dark else "#aeb6c0"
+        border = "#0a84ff" if self.hasFocus() else (hover_border if self._hovered else border_idle)
+        painter.setBrush(QColor(bg))
         painter.setPen(QPen(QColor(border), 1.5 if self.hasFocus() else 1.0))
         painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), 8, 8)
-        painter.setPen(QColor("#202124"))
+        painter.setPen(QColor(fg))
         painter.drawText(QRectF(10, 0, self.width() - 34, self.height()), Qt.AlignmentFlag.AlignVCenter, self.currentText())
         painter.end()
         _draw_chevron(self, self.height() / 2.0, down=True)
@@ -437,14 +444,18 @@ class ModernSelectOption(QAbstractButton):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        dark = _system_dark()
+        hover_bg, fg, check = (
+            ("#3a3a46", "#e4e4e9", "#a0a6b0") if dark else ("#eeeeee", "#202020", "#454545")
+        )
         if self._hovered:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#eeeeee"))
+            painter.setBrush(QColor(hover_bg))
             painter.drawRoundedRect(QRectF(2, 1, self.width() - 4, self.height() - 2), 7, 7)
-        painter.setPen(QColor("#202020"))
+        painter.setPen(QColor(fg))
         painter.drawText(QRectF(10, 0, self.width() - 36, self.height()), Qt.AlignmentFlag.AlignVCenter, self._text)
         if self._selected:
-            pen = QPen(QColor("#454545"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            pen = QPen(QColor(check), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             x = self.width() - 17.0
             painter.drawLine(QPointF(x - 4, 15), QPointF(x - 1, 18))
@@ -1468,131 +1479,21 @@ class ModernSettingsDialog(QDialog):
 
     @staticmethod
     def _stylesheet() -> str:
-        return """
-            QDialog {
-                background: #fcfcfd;
-                color: #202020;
-                font-family: "SF Pro Text", ".AppleSystemUIFont", "PingFang SC", "Segoe UI", sans-serif;
-                font-size: 13px;
-            }
-            QFrame#sidebarPane {
-                background: #f7f7f8;
-                border: none;
-                border-right: 1px solid #e3e5e8;
-            }
-            QStackedWidget { background: #fcfcfd; }
-            QLineEdit#settingsSearch {
-                min-height: 30px;
-                padding: 0 8px;
-                background: #f0f1f3;
-                border: 1px solid transparent;
-                border-radius: 15px;
-                color: #202020;
-            }
-            QLineEdit#settingsSearch:focus {
-                border: 2px solid #0a84ff;
-                padding: 0 7px;
-            }
-            QPushButton#saveAndExit {
-                min-height: 28px;
-                padding: 2px 8px;
-                text-align: left;
-                background: transparent;
-                border: none;
-                border-radius: 8px;
-                font-weight: 500;
-            }
-            QPushButton#saveAndExit:hover { background: #e9eaec; }
-            QLabel#searchStatus {
-                padding: 0 5px;
-                color: #777b80;
-                font-size: 11px;
-            }
-            QListWidget#settingsSidebar {
-                background: transparent;
-                border: none;
-                outline: none;
-                font-size: 13px;
-                font-weight: 500;
-            }
-            QListWidget#settingsSidebar::item {
-                min-height: 26px;
-                padding: 4px 10px;
-                border-radius: 9px;
-                color: #4e4e4e;
-            }
-            QListWidget#settingsSidebar::item:hover {
-                background: #eceef1;
-                color: #202020;
-            }
-            QListWidget#settingsSidebar::item:selected {
-                background: #e3e5e8;
-                color: #171717;
-            }
-            QLabel#pageTitle {
-                font-size: 26px;
-                font-weight: 600;
-                color: #171717;
-            }
-            QLabel#sectionTitle {
-                font-size: 14px;
-                font-weight: 600;
-                color: #2b2b2b;
-            }
-            QFrame#settingsCard {
-                background: #ffffff;
-                border: 1px solid #e2e4e8;
-                border-radius: 11px;
-            }
-            QFrame#cardSeparator {
-                background: #eceef1;
-                border: none;
-                margin-left: 14px;
-                margin-right: 14px;
-            }
-            QLabel#settingLabel {
-                font-size: 14px;
-                font-weight: 600;
-                color: #252525;
-            }
-            QLabel#settingHint {
-                font-size: 12px;
-                font-weight: 400;
-                color: #777777;
-            }
-            QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #a6a8ac; }
-            SettingRow[searchMatch="true"] {
-                background: #eaf3ff;
-                border-radius: 8px;
-            }
-            QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget {
-                background: transparent;
-            }
-            QListWidget#quickLaunchList {
-                background: #fbfbfb;
-                border: 1px solid #d9d9d9;
-                border-radius: 8px;
-                outline: none;
-                padding: 3px;
-            }
-            QListWidget#quickLaunchList::item {
-                min-height: 30px;
-                padding: 3px 7px;
-                border-radius: 6px;
-            }
-            QListWidget#quickLaunchList::item:selected { background: #e8e8e8; color: #202020; }
-            QPushButton {
-                min-height: 26px;
-                padding: 1px 12px;
-                background: #ffffff;
-                border: 1px solid #d0d0d0;
-                border-radius: 7px;
-                font-weight: 500;
-            }
-            QPushButton:hover { background: #f0f0f0; }
-        """ + BROWSER_CONTROL_STYLESHEET
+        return _settings_stylesheet()
+
+
 
     def _save(self) -> None:
+        """「保存并退出」：写入配置并关闭对话框。"""
+        self._saved_via_button = True
+        self._write_config()
+        if self.autostart_check.isChecked() != self._autostart_initial:
+            autostart_mod.set_enabled(self.autostart_check.isChecked())
+        self.settings_saved.emit()
+        self.accept()
+
+    def _write_config(self) -> None:
+        """把当前控件值写入 config 并落盘（按钮与直接关闭共用）。"""
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())
         texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]
@@ -1650,7 +1551,203 @@ class ModernSettingsDialog(QDialog):
             self.ai_page.save()
         self.config.set("autostart_wanted", self.autostart_check.isChecked())
         self.config.save()
-        if self.autostart_check.isChecked() != self._autostart_initial:
-            autostart_mod.set_enabled(self.autostart_check.isChecked())
-        self.settings_saved.emit()
-        self.accept()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        """直接关闭（X / Esc）时同样落盘，避免修改丢失。
+
+        设置项都是即时型偏好，与右键菜单/托盘修改的写入时机保持一致；
+        已走「保存并退出」则跳过（防重复写入）。
+        """
+        if not getattr(self, "_saved_via_button", False):
+            try:
+                self._write_config()
+            except Exception:
+                logging.exception("关闭设置时保存配置失败")
+        super().closeEvent(event)
+def _system_dark() -> bool:
+    """按系统调色板判断深色模式（QSS 的 color 不自动级联到子控件，
+    深色系统下未显式设 color 的控件会落到 palette 白字，白底上看不清）。"""
+    from PySide6.QtGui import QGuiApplication
+    return QGuiApplication.palette().window().color().lightness() < 128
+
+
+# 深色系统的覆盖段：追加在浅色 QSS 之后（后写规则优先）
+_DARK_OVERRIDE = """
+QDialog { background: #202024; color: #e4e4e9; }
+QFrame#sidebarPane { background: #26262b; border-right: 1px solid #34343a; }
+QStackedWidget { background: #202024; }
+QLineEdit#settingsSearch { background: #2e2e35; color: #e4e4e9; }
+QPushButton#saveAndExit { color: #e4e4e9; }
+QPushButton#saveAndExit:hover { background: #33333c; }
+QListWidget#settingsSidebar::item { color: #b8b8c0; }
+QListWidget#settingsSidebar::item:hover { background: #2e2e36; color: #f0f0f5; }
+QListWidget#settingsSidebar::item:selected { background: #3a3a46; color: #ffffff; }
+QLabel#pageTitle { color: #f0f0f5; }
+QLabel#sectionTitle { color: #d8d8e0; }
+QFrame#settingsCard { background: #2a2a30; border: 1px solid #3a3a42; }
+QFrame#cardSeparator { background: #33333a; }
+QLabel#settingLabel { color: #e0e0e6; }
+QLabel#settingHint { color: #9a9aa3; }
+QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #66666e; }
+SettingRow[searchMatch="true"] { background: #2c3a4e; }
+QListWidget#quickLaunchList { background: #26262c; border: 1px solid #3c3c44; }
+QListWidget#quickLaunchList::item:selected { background: #3a3a46; color: #ffffff; }
+QPushButton { background: #3a3a42; border: 1px solid #4a4a54; color: #e4e4e9; }
+QPushButton:hover { background: #44444e; }
+QToolButton { color: #e4e4e9; }
+QCheckBox, QRadioButton, QComboBox, QListWidget, QTreeWidget, QTableView { color: #e4e4e9; }
+"""
+
+_DARK_BROWSER_OVERRIDE = """
+QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
+    background: #2e2e35; color: #e4e4e9; border: 1px solid #45454f;
+}
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QPlainTextEdit:hover { border-color: #56565f; }
+QSpinBox::up-button, QDoubleSpinBox::up-button { border-left: 1px solid #45454f; border-bottom: 1px solid #45454f; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #55555e; }
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #6a6a74; }
+"""
+
+_DARK_POPUP_OVERRIDE = """
+QMenu#ModernSelectPopup { background: #2a2a30; color: #e4e4e9; border: 1px solid #45454f; }
+QMenu#ModernSelectPopup::item { color: #e4e4e9; }
+QMenu#ModernSelectPopup::item:selected { background: #3a3a46; }
+"""
+
+
+def _settings_stylesheet() -> str:
+    """浅色基础 QSS + 显式控件文字色补丁；深色系统时追加深色覆盖段。"""
+    light_patch = """
+        QPushButton { color: #202020; }
+        QToolButton { color: #202020; }
+        QCheckBox, QRadioButton, QComboBox, QListWidget, QTreeWidget, QTableView { color: #202020; }
+    """
+    base = _LIGHT_SETTINGS_STYLESHEET + light_patch
+    if not _system_dark():
+        return base + BROWSER_CONTROL_STYLESHEET
+    return base + _DARK_OVERRIDE + BROWSER_CONTROL_STYLESHEET + _DARK_BROWSER_OVERRIDE
+
+
+_LIGHT_SETTINGS_STYLESHEET = """
+QDialog {
+    background: #fcfcfd;
+    color: #202020;
+    font-family: "SF Pro Text", ".AppleSystemUIFont", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+QFrame#sidebarPane {
+    background: #f7f7f8;
+    border: none;
+    border-right: 1px solid #e3e5e8;
+}
+QStackedWidget { background: #fcfcfd; }
+QLineEdit#settingsSearch {
+    min-height: 30px;
+    padding: 0 8px;
+    background: #f0f1f3;
+    border: 1px solid transparent;
+    border-radius: 15px;
+    color: #202020;
+}
+QLineEdit#settingsSearch:focus {
+    border: 2px solid #0a84ff;
+    padding: 0 7px;
+}
+QPushButton#saveAndExit {
+    min-height: 28px;
+    padding: 2px 8px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    font-weight: 500;
+}
+QPushButton#saveAndExit:hover { background: #e9eaec; }
+QLabel#searchStatus {
+    padding: 0 5px;
+    color: #777b80;
+    font-size: 11px;
+}
+QListWidget#settingsSidebar {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 13px;
+    font-weight: 500;
+}
+QListWidget#settingsSidebar::item {
+    min-height: 26px;
+    padding: 4px 10px;
+    border-radius: 9px;
+    color: #4e4e4e;
+}
+QListWidget#settingsSidebar::item:hover {
+    background: #eceef1;
+    color: #202020;
+}
+QListWidget#settingsSidebar::item:selected {
+    background: #e3e5e8;
+    color: #171717;
+}
+QLabel#pageTitle {
+    font-size: 26px;
+    font-weight: 600;
+    color: #171717;
+}
+QLabel#sectionTitle {
+    font-size: 14px;
+    font-weight: 600;
+    color: #2b2b2b;
+}
+QFrame#settingsCard {
+    background: #ffffff;
+    border: 1px solid #e2e4e8;
+    border-radius: 11px;
+}
+QFrame#cardSeparator {
+    background: #eceef1;
+    border: none;
+    margin-left: 14px;
+    margin-right: 14px;
+}
+QLabel#settingLabel {
+    font-size: 14px;
+    font-weight: 600;
+    color: #252525;
+}
+QLabel#settingHint {
+    font-size: 12px;
+    font-weight: 400;
+    color: #777777;
+}
+QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #a6a8ac; }
+SettingRow[searchMatch="true"] {
+    background: #eaf3ff;
+    border-radius: 8px;
+}
+QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget {
+    background: transparent;
+}
+QListWidget#quickLaunchList {
+    background: #fbfbfb;
+    border: 1px solid #d9d9d9;
+    border-radius: 8px;
+    outline: none;
+    padding: 3px;
+}
+QListWidget#quickLaunchList::item {
+    min-height: 30px;
+    padding: 3px 7px;
+    border-radius: 6px;
+}
+QListWidget#quickLaunchList::item:selected { background: #e8e8e8; color: #202020; }
+QPushButton {
+    min-height: 26px;
+    padding: 1px 12px;
+    background: #ffffff;
+    border: 1px solid #d0d0d0;
+    border-radius: 7px;
+    font-weight: 500;
+}
+QPushButton:hover { background: #f0f0f0; }
+"""

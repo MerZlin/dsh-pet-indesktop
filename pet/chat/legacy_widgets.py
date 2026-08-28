@@ -756,6 +756,16 @@ class ChatWindow(QDialog):
         bubble.deleteLater()
         self._set_empty_state(not self._bubbles)
 
+    def append_look_sync(self, user_text: str, reply: str) -> None:
+        """把「看看屏幕」的结果同步进当前会话。"""
+        self.session.messages.append(ChatMessage("user", str(user_text)))
+        self.session.messages.append(ChatMessage("assistant", str(reply)))
+        self._add("user", str(user_text))
+        self._add("assistant", str(reply))
+        self.store.save(self.session)
+        self._refresh_sessions()
+        self._bottom()
+
     def _refresh_sessions(self) -> None:
         sessions = self.store.list(self.character_id)
         if not sessions:
@@ -960,6 +970,10 @@ class ChatWindow(QDialog):
     def _bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
         bar.setValue(bar.maximum())
+        # 切会话后布局更新可能晚于当前事件循环拍；加一拍兜底，
+        # 保证切回长会话时落在底部（与新版窗口一致）。
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(80, self, lambda bar=bar: bar.setValue(bar.maximum()))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
