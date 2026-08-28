@@ -197,6 +197,10 @@ class ChatSettingsDialog(QDialog):
         self._test_thread = None
 
     def save(self):
+        # 保存前基于磁盘最新配置重取快照，避免覆盖另一设置窗口在本窗口
+        # 打开期间写入的结构性改动（详见现代设置页 ai_page.save 同源注释）。
+        self.config._load()
+        self.settings = self.config.chat_settings()
         p = self.settings.active_config
         p.name = self.name.text().strip() or p.name
         p.base_url = self.url.text().strip()

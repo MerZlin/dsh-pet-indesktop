@@ -268,6 +268,16 @@ def load_character_manifest(character_id: str, asset_dir: Path | str | None = No
     return None
 
 
+def character_display_name(character_id: str) -> str:
+    """角色显示名：manifest.json 的 name 字段优先，缺省回退目录 id。"""
+    manifest = load_character_manifest(character_id)
+    if isinstance(manifest, dict):
+        name = str(manifest.get('name', '') or '').strip()
+        if name:
+            return name
+    return character_id
+
+
 def _manifest_name(value, names: set[str]) -> str | None:
     """把 manifest 中的文件名/动画名解析为实际存在的动画名。"""
     if not isinstance(value, str):

@@ -256,13 +256,71 @@ def build_character_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
     group.setExclusive(True)
     current = str(pet.cfg.get("character", catalog.DEFAULT_CHARACTER))
     for character_id in catalog.list_available_characters():
-        action = submenu.addAction(character_id)
+        alias_fn = getattr(pet.cfg, 'character_alias', None)
+        alias = alias_fn(character_id) if callable(alias_fn) else ''
+        label = alias or catalog.character_display_name(character_id)
+        action = submenu.addAction(label)
         action.setCheckable(True)
         action.setChecked(character_id == current)
         group.addAction(action)
         action.setProperty("closeOnTrigger", True)
         connect_action(action, lambda character_id=character_id: pet._request_switch_character(character_id))
+    # 角色显示名别名（空名恢复默认）
+    rename = getattr(pet, "_rename_character", None)
+    if callable(rename):
+        submenu.addSeparator()
+        add_action(submenu, "重命名当前角色…", None, rename, close_on_trigger=True)
     return submenu
+
+
+def add_proactive_menu(menu: QMenu, pet) -> None:
+    """主动识屏二级菜单（仅 Windows 且有聊天/视觉能力时显示）。"""
+    import sys as _sys
+    if _sys.platform != 'win32':
+        return
+    if getattr(pet, 'on_open_chat', None) is None:
+        return
+    from ..proactive import effective_proactive_config
+
+    sub = add_submenu(menu, "主动识屏", None)
+    pro_cfg = effective_proactive_config(pet.cfg.get('proactive_screen', {}))
+
+    def _toggle(text, checked, handler):
+        act = sub.addAction(text)
+        act.setCheckable(True)
+        act.setChecked(bool(checked))
+        act.toggled.connect(handler)
+        return act
+
+    _toggle('开启主动识屏', pro_cfg.get('enabled', False), pet._toggle_proactive_enabled)
+    _toggle('鼠标穿透时仍允许主动识屏', pro_cfg.get('allow_when_mouse_through', True),
+            lambda on: pet._set_proactive_option('allow_when_mouse_through', on))
+    _toggle('触发前先兆提示', pro_cfg.get('pre_cue', True),
+            lambda on: pet._set_proactive_option('pre_cue', on))
+    _toggle('仅当我闲置时触发', pro_cfg.get('require_idle', False),
+            lambda on: pet._set_proactive_option('require_idle', on))
+    _toggle('dry-run 验证模式', pro_cfg.get('dry_run', False),
+            lambda on: pet._set_proactive_option('dry_run', on))
+    sub.addSeparator()
+    open_settings = getattr(pet, 'on_open_modern_settings', None) or getattr(pet, 'on_open_legacy_settings', None)
+    if open_settings is not None:
+        add_action(sub, '打开设置…', None, open_settings, close_on_trigger=True)
+
+
+def add_agent_link_menu(menu: QMenu, pet) -> None:
+    """Agent 联动二级菜单（4 个 Agent 独立开关，失败/拒绝自动回滚勾选）。"""
+    sub = add_submenu(menu, "Agent 联动", None)
+    agent_cfg = dict(pet.cfg.get('agent_link', {}))
+    for agent_key, agent_label in (
+        ('dsh', 'DeepSeek Harness (DSH)'),
+        ('claude', 'Claude Code'),
+        ('cursor', 'Cursor'),
+        ('opencode', 'OpenCode'),
+    ):
+        act = sub.addAction(agent_label)
+        act.setCheckable(True)
+        act.setChecked(bool(agent_cfg.get(agent_key, False)))
+        act.toggled.connect(lambda on, k=agent_key, a=act: pet._toggle_agent_link(k, on, a))
 
 
 def build_size_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
@@ -315,6 +373,15 @@ def add_no_move(menu: QMenu, pet, *, icons: bool = True):
     action.setCheckable(True)
     action.setChecked(pet.no_move)
     action.toggled.connect(lambda enabled, pet=pet: pet.set_no_move(enabled))
+    return action
+
+
+def add_mouse_through(menu: QMenu, pet, *, icons: bool = True):
+    """鼠标穿透开关（上游重写时丢失的菜单入口，接回 set_mouse_through）。"""
+    action = add_action(menu, "鼠标穿透", "pin" if icons else None)
+    action.setCheckable(True)
+    action.setChecked(bool(getattr(pet, "mouse_through", False)))
+    action.toggled.connect(lambda enabled, pet=pet: pet.set_mouse_through(enabled))
     return action
 
 

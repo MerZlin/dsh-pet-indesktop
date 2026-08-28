@@ -271,7 +271,7 @@ class ChatWindow(QDialog):
 
         self.settings = config.chat_settings()
         self.prompt_builder = PromptBuilder(Path(__file__).resolve().parents[2] / "assets" / "characters")
-        self.store = SessionStore(config.dir)
+        self.store = SessionStore(config.dir, getattr(config, "instance_id", ""))
         self.session = self._get_session()
         self.service = ChatService(parent=self)
         self.pet_link = PetChatLink(pet_window)
@@ -837,6 +837,19 @@ class ChatWindow(QDialog):
         self._refresh_sessions()
         self._reset()
 
+    def append_look_sync(self, user_text: str, reply: str) -> None:
+        """「看看屏幕」的问答同步进当前会话，之后可在聊天历史里回看。
+        正在生成回答时不插入，避免与在飞请求的流式输出交错。"""
+        if self.service.busy:
+            return
+        self.session.messages.append(ChatMessage("user", user_text))
+        self.session.messages.append(ChatMessage("assistant", reply))
+        self.store.save(self.session)
+        if self.isVisible():
+            self._load()
+            self._refresh_sessions()
+            self._bottom()
+
     def refresh_settings(self) -> None:
         self.settings = self.config.chat_settings()
         self.provider_label.setText(self.settings.active_config.name)
@@ -893,7 +906,7 @@ class ChatWindow(QDialog):
         self._bottom()
 
     def _started(self, request_id: str) -> None:
-        if self._active_request_id and request_id != self._active_request_id:
+        if request_id != self._active_request_id:
             return
         self.status.setText("思考中…")
         self.status_dot.setProperty("state", "busy")
@@ -903,7 +916,7 @@ class ChatWindow(QDialog):
         self.pet_link.thinking()
 
     def _delta(self, request_id: str, text: str) -> None:
-        if self._active_request_id and request_id != self._active_request_id:
+        if request_id != self._active_request_id:
             return
         # 每次 delta 只更新文本；若用户停留在底部则跟随滚动
         follow_output = self._is_near_bottom()
@@ -917,7 +930,7 @@ class ChatWindow(QDialog):
             self._bottom()
 
     def _finished(self, request_id: str, text: str) -> None:
-        if self._active_request_id and request_id != self._active_request_id:
+        if request_id != self._active_request_id:
             return
         follow_output = self._is_near_bottom()
         if self._bubble:
@@ -932,7 +945,7 @@ class ChatWindow(QDialog):
             self._bottom()
 
     def _error(self, request_id: str, text: str) -> None:
-        if self._active_request_id and request_id != self._active_request_id:
+        if request_id != self._active_request_id:
             return
         if self._bubble:
             self._bubble.set_content("请求失败：" + str(text))
@@ -942,7 +955,7 @@ class ChatWindow(QDialog):
         self._bottom()
 
     def _stopped(self, request_id: str) -> None:
-        if self._active_request_id and request_id != self._active_request_id:
+        if request_id != self._active_request_id:
             return
         if self._bubble:
             if self._text:

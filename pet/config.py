@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any
 
 from . import catalog
 
@@ -150,6 +151,48 @@ def _clean_quick_launch_apps(value):
     return cleaned
 
 
+def _default_proactive_screen_data() -> dict:
+    return {
+        "enabled": False,
+        "dry_run": False,
+        "preset": "balanced",
+        "allow_when_mouse_through": True,
+        "whitelist": [],
+        "dwell_seconds": 45,
+        "require_idle": False,
+        "min_idle_seconds": 30,
+        "cooldown_minutes": 5,
+        "daily_cap": 15,
+        "min_request_interval_seconds": 60,
+        "change_threshold": 8,
+        "prefer_free_provider": True,
+        "pre_cue": True,
+    }
+
+
+def _default_agent_link_data() -> dict:
+    return {
+        "dsh": False,
+        "claude": False,
+        "cursor": False,
+        "opencode": False,
+    }
+
+
+def _merge_proactive_screen_data(raw: Any) -> dict:
+    result = _default_proactive_screen_data()
+    if isinstance(raw, dict):
+        result.update(raw)
+    return result
+
+
+def _merge_agent_link_data(raw: Any) -> dict:
+    result = _default_agent_link_data()
+    if isinstance(raw, dict):
+        result.update(raw)
+    return result
+
+
 def _default_chat_data():
     return {
         "enabled": True,
@@ -185,8 +228,13 @@ def _merge_chat_data(raw):
                 base = dict(_default_chat_data()["providers"].get("openai-main", {}))
                 base.update(provider)
                 # 非 openai-main provider 未显式写 api_key_ref 时按自身归位，
-                # 避免沿用 openai-main 的钥匙串条目（密钥串用/查错 key）
-                if not str(base.get("api_key_ref") or "").strip():
+                # 避免沿用 openai-main 的钥匙串条目（密钥串用/查错 key）。
+                # 必须看用户原始输入：base 已被 openai-main 默认值预填，判 base 永远非空。
+                if not str(provider.get("api_key_ref") or "").strip():
+                    base["api_key_ref"] = f"provider/{provider_id}"
+                # 历史 bug 迁移：旧版本曾把 openai-main 的钥匙串引用继承给自定义 provider，
+                # UI 从不暴露该字段，非主 provider 挂着主引用一定是继承错的。
+                if provider_id != "openai-main" and base.get("api_key_ref") == "provider/openai-main":
                     base["api_key_ref"] = f"provider/{provider_id}"
                 providers[str(provider_id)] = base
     else:
@@ -245,10 +293,17 @@ def _clean_self_talk_texts(value):
 
 
 class Config:
-    def __init__(self, base=None):
+    def __init__(self, base=None, instance_id: str | None = None):
         base = Path(base) if isinstance(base, str) else (base or _default_base())
         self.dir = base / APP_DIR_NAME
-        self.path = self.dir / "config.json"
+        # 多开隔离：--instance <id> 或 DSH_PET_INSTANCE 时使用独立配置文件，
+        # 位置/大小/朝向等不再互相覆盖；不传时完全保持原行为。
+        self.instance_id = (instance_id or os.environ.get("DSH_PET_INSTANCE", "") or "").strip()
+        self.path = (
+            self.dir / f"config-{self.instance_id}.json"
+            if self.instance_id
+            else self.dir / "config.json"
+        )
         self._migrate_legacy_config(base)
         self.data = {
             "version": 4,
@@ -292,6 +347,9 @@ class Config:
             "modern_chat_background_fill": "cover",
             "modern_chat_card_opacity": 84,
             "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
+            "character_aliases": {},  # 角色显示名别名 {角色id: 自定义名}，空名=恢复默认
+            "proactive_screen": _default_proactive_screen_data(),
+            "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
             "chat": _default_chat_data(),
         }
@@ -302,6 +360,8 @@ class Config:
         """旧版各变体共用 %APPDATA%/dsh-pet-standalone；升级后首次运行时
         把该目录的 config.json 与 sessions/ 一次性复制到变体独立目录，
         避免用户设置与聊天会话“消失”。仅在新目录尚不存在时执行。"""
+        if self.instance_id:
+            return  # 多开实例不参与旧版迁移，避免把单开配置复制给每个实例
         if APP_DIR_NAME == "dsh-pet-standalone" or self.path.exists():
             return
         legacy = base / "dsh-pet-standalone"
@@ -365,9 +425,14 @@ class Config:
             "modern_chat_card_opacity",
             "chat_bg_crops",
             "chat_ui_style",
+            "character_aliases",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
+        if "proactive_screen" in raw:
+            self.data["proactive_screen"] = _merge_proactive_screen_data(raw["proactive_screen"])
+        if "agent_link" in raw:
+            self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
         self.data["version"] = 4
 
     def _normalize_pet_settings(self):
@@ -431,6 +496,26 @@ class Config:
 
     def get(self, key, default=None):
         return self.data.get(key, default)
+
+    def character_alias(self, character_id: str) -> str:
+        """用户自定义的角色显示名；未设置返回空串。"""
+        aliases = self.data.get("character_aliases")
+        if isinstance(aliases, dict):
+            return str(aliases.get(character_id, "") or "").strip()
+        return ""
+
+    def set_character_alias(self, character_id: str, name: str) -> None:
+        """设置角色显示名别名（最长 24 字符）；空名表示恢复默认。"""
+        aliases = self.data.setdefault("character_aliases", {})
+        if not isinstance(aliases, dict):
+            aliases = {}
+            self.data["character_aliases"] = aliases
+        name = (name or "").strip()[:24]
+        if name:
+            aliases[character_id] = name
+        else:
+            aliases.pop(character_id, None)
+        self.save()
 
     def set(self, key, value):
         self.data[key] = value

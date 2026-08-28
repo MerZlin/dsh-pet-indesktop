@@ -17,8 +17,12 @@ WebM-backed clip library（webm 主路线）。
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
+import json
+import tempfile
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
@@ -29,6 +33,44 @@ logger = logging.getLogger(__name__)
 
 # 进程内元数据缓存：避免反复切换角色时重复调用 count_frames_and_secs
 _META_CACHE: dict[str, tuple[int, float]] = {}
+
+# 跨进程共享的元数据缓存文件：多开实例共享同一份，避免每个实例都拉起
+# ffmpeg 探测 91 段动画。缓存以（文件 mtime + size）为失效依据。
+_META_FILE_CACHE_PATH = Path(tempfile.gettempdir()) / "dsh-pet-media-meta-cache.json"
+_META_FILE_CACHE: dict | None = None
+_META_CACHE_LOCK = threading.Lock()
+
+
+def _load_meta_file_cache() -> dict:
+    try:
+        raw = json.loads(_META_FILE_CACHE_PATH.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _get_meta_file_cache() -> dict:
+    global _META_FILE_CACHE
+    if _META_FILE_CACHE is None:
+        _META_FILE_CACHE = _load_meta_file_cache()
+    return _META_FILE_CACHE
+
+
+def _save_meta_file_cache_entry(key: str, frames: int, duration: float) -> None:
+    global _META_FILE_CACHE
+    try:
+        with _META_CACHE_LOCK:
+            cache = _get_meta_file_cache()
+            cache[key] = {
+                "frames": frames,
+                "duration": duration,
+            }
+            # tmp 名带 PID：共享临时目录下防符号链接预占攻击与多实例互抢
+            tmp = _META_FILE_CACHE_PATH.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(_META_FILE_CACHE_PATH)
+    except OSError:
+        pass
 
 try:
     import imageio_ffmpeg
@@ -82,11 +124,24 @@ class WebMClip(QObject):
         if self._duration > 0 or imageio_ffmpeg is None:
             return
         key = str(self.path)
-        cached = _META_CACHE.get(key)
+        try:
+            st = Path(key).stat()
+            cache_key = f"{key}|{st.st_mtime_ns}|{st.st_size}"
+        except OSError:
+            cache_key = key
+        cached = _META_CACHE.get(cache_key)
         if cached is not None:
             self._frame_count, self._duration = cached
             if self._frame_count > 0 and self._duration > 0:
                 self._fps = self._frame_count / self._duration
+            return
+        entry = _get_meta_file_cache().get(cache_key)
+        if isinstance(entry, dict) and entry.get('frames') and entry.get('duration'):
+            self._frame_count = int(entry['frames'])
+            self._duration = float(entry['duration'])
+            if self._frame_count > 0 and self._duration > 0:
+                self._fps = self._frame_count / self._duration
+            _META_CACHE[cache_key] = (self._frame_count, self._duration)
             return
         try:
             frames, secs = imageio_ffmpeg.count_frames_and_secs(key)
@@ -96,7 +151,8 @@ class WebMClip(QObject):
                 self._duration = float(secs)
             if self._frame_count > 0 and self._duration > 0:
                 self._fps = self._frame_count / self._duration
-            _META_CACHE[key] = (self._frame_count, self._duration)
+            _META_CACHE[cache_key] = (self._frame_count, self._duration)
+            _save_meta_file_cache_entry(cache_key, self._frame_count, self._duration)
         except Exception as exc:
             logger.warning('webm 元数据读取失败 %s: %s', self.path, exc)
             # 保留默认值，后续 reader 会尝试从 read_frames 的 meta 补充

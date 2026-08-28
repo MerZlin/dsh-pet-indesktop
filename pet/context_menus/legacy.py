@@ -10,10 +10,13 @@ from PySide6.QtWidgets import QMenu
 
 from .shared import (
     add_action,
+    add_agent_link_menu,
+    add_proactive_menu,
     add_autostart,
     add_drag_physics,
     add_deepseek_web,
     add_harness,
+    add_mouse_through,
     add_no_move,
     add_on_top,
     add_quit,
@@ -49,6 +52,7 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     add_return_corner(menu, pet, icons=False)
     add_on_top(menu, pet, icons=False)
     add_no_move(menu, pet, icons=False)
+    add_mouse_through(menu, pet, icons=False)
     add_autostart(menu, icons=False)
     add_spawn_pet(menu, pet)
     build_size_menu(menu, pet, icons=False)
@@ -56,6 +60,8 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     menu.addSeparator()
     add_harness(menu, pet, icons=False)
     add_deepseek_web(menu, icons=False)
+    add_proactive_menu(menu, pet)
+    add_agent_link_menu(menu, pet)
 
     menu.addSeparator()
     add_template_switch(menu, pet, str(template["switch_label"]), str(template["switch_to"]), icons=False)

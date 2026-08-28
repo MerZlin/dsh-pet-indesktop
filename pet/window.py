@@ -13,7 +13,10 @@
 
 from __future__ import annotations
 
+import ctypes
+import json
 import logging
+import os
 import math
 import random
 import shutil
@@ -22,14 +25,13 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import shiboken6
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QBitmap, QCursor, QImage, QPainter, QPixmap, QRegion
-from PySide6.QtWidgets import QApplication, QMenu, QToolTip, QWidget
-
-import shiboken6
+from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPixmap, QRegion
+from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
 from . import autostart as autostart_mod
 from . import catalog
@@ -49,6 +51,8 @@ from .context_menu import populate_context_menu as _populate_context_menu
 from .context_menus.shared import take_deferred_menu_callbacks
 from . import vision as vision_mod
 from . import physics as physics_mod
+from .proactive import effective_proactive_config
+from .updater import QUARK_PAN_URL, REPO_URL
 
 
 def _resolve_self_talk_image_dir(raw: str) -> str:
@@ -125,6 +129,29 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
         return True
     except Exception:
         return False
+
+
+# 直播捕获兼容模式下窗口标题（普通顶层窗口需要可见标题，供直播姬/OBS 选择）
+STREAM_CAPTURE_TITLE = 'dsh-pet 桌宠'
+
+
+def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
+    """构造桌宠窗口 flags。
+
+    默认形态：FramelessWindowHint | Tool（Windows 上映射 WS_EX_TOOLWINDOW，
+    不进任务栏/Alt+Tab，但直播姬、OBS 等窗口捕获软件会过滤掉 Tool 窗口）。
+    开启直播捕获兼容模式后改用普通顶层窗口（Window）并设置标题，
+    使窗口出现在捕获软件的可选窗口列表里；代价是任务栏会显示图标。
+    """
+    if stream_capture_mode:
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
+    else:
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+    if config.get('on_top', True):
+        flags |= Qt.WindowType.WindowStaysOnTopHint
+    if mouse_through:
+        flags |= Qt.WindowType.WindowTransparentForInput
+    return flags
 
 
 def _squash_geometry(
@@ -238,15 +265,36 @@ class PetWindow(QWidget):
         self._self_talk_timer = QTimer(self)
         self._self_talk_timer.setSingleShot(True)
         self._self_talk_timer.timeout.connect(self._on_self_talk_timeout)
+        # 重要气泡（主动识屏先兆/答复、Agent 联动提醒等）占用期间，自言自语让路，
+        # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
+        self._bubble_busy_until = 0.0
+
+        # 主动识屏后台观察器（必须作为 PetWindow 的子成员，随窗口销毁/重建）
+        from .proactive import ProactiveScreenWatcher
+        self.proactive_watcher = ProactiveScreenWatcher(self, config)
+
+        # 多 Agent 状态感知管理器
+        from .agent_link import AgentLinkManager
+        self.agent_link_manager = AgentLinkManager(self, config)
+
+        # ---- 全屏应用自动隐藏（Windows）----
+        # 前台窗口覆盖整个屏幕几何（含任务栏区域）时自动隐藏桌宠，
+        # 全屏退出后自动恢复。最大化窗口不覆盖任务栏，不会误触发。
+        self.auto_hide_fullscreen: bool = bool(config.get('auto_hide_fullscreen', True))
+        self._auto_hidden = False  # 只恢复"由本 watcher 隐藏"的状态，尊重手动隐藏
+        self._fullscreen_timer = QTimer(self)
+        self._fullscreen_timer.setInterval(1000)
+        self._fullscreen_timer.timeout.connect(self._check_fullscreen)
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
-        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-        if config.get('on_top', True):
-            flags |= Qt.WindowType.WindowStaysOnTopHint
+        # 直播捕获兼容模式（stream_capture_mode）：Tool → 普通顶层窗口 + 标题，
+        # 使直播姬/OBS 的窗口捕获能枚举到桌宠（Tool 窗口会被捕获软件过滤）。
+        self._stream_capture_mode = bool(config.get('stream_capture_mode', False))
+        flags = build_window_flags(config, self.mouse_through, self._stream_capture_mode)
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        if self.mouse_through:
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
+        if self._stream_capture_mode:
+            self.setWindowTitle(STREAM_CAPTURE_TITLE)
         # Cocoa hides Tool windows when an accessory application deactivates.
         # Visibility and z-order are separate: always keep the pet visible,
         # then use WindowStaysOnTopHint/NSWindow level for the on-top setting.
@@ -262,6 +310,8 @@ class PetWindow(QWidget):
         self.no_move: bool = bool(config.get('no_move', False))  # 不移动：禁用自动移动
         self.movie = None
         self._frame_pixmap: QPixmap | None = None
+        # 窗口隐藏时暂停动画解码/定时器；显示时由 showEvent 恢复
+        self._hidden_paused = False
         self._ended_fired = False
 
         # ---- 交互状态 ----
@@ -299,15 +349,15 @@ class PetWindow(QWidget):
 
         # ---- 尺寸与初始状态 ----
         self._apply_scale()
-        for name, movie in lib.movies().items():
-            # 默认参数捕获 name，避免闭包晚绑定
-            movie.frameChanged.connect(lambda n, name=name: self._on_frame(name, n))
-            # 兜底：主线程被阻塞导致队列溢出、最后一帧被丢弃时，
-            # frameChanged 永远到不了末尾帧；用 finished 信号保证动画链一定继续。
-            movie.finished.connect(lambda name=name: self._on_clip_finished(name))
+        # 懒加载：不再预先连接全部 91 个 clip 的信号；
+        # 实际播放某个动画时由 _switch -> _connect_movie 按需连接。
+        self._connected_movies: set[str] = set()
+
         self._restore_position()
         self._switch(self.idle)
         self._schedule_self_talk()
+        if self.auto_hide_fullscreen and os.name == 'nt':
+            self._fullscreen_timer.start()
 
     # ================================================================ 尺寸
     def _apply_scale(self) -> None:
@@ -384,10 +434,88 @@ class PetWindow(QWidget):
             y = int(round(avail.top() + ry * avail.height())) - self._h // 2
             x = min(max(x, avail.left()), avail.right() - self._w)
             y = min(max(y, avail.top()), avail.bottom() - self._h)
+        # 多开避让：与其他存活实例重叠时逐级向左错开（含双击重复启动
+        # 同一实例的场景——它和有名字的 --instance 一样会撞位置）
+        _rects_fn = getattr(self, '_live_instance_rects', None)
+        others = _rects_fn() if callable(_rects_fn) else []
+        if others:
+            step = self._w + 48
+            for _ in range(12):
+                if not any(self._rects_overlap(x, y, self._w, self._h, o) for o in others):
+                    break
+                nx = max(avail.left(), x - step)
+                if nx == x:
+                    break  # 已经顶到屏幕左缘，无法再让
+                x = nx
         logging.info('恢复位置 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)',
                      scr.name(), avail.left(), avail.top(), avail.right(),
                      avail.bottom(), scr.devicePixelRatio(), x, y)
         self.move(x, y)
+        _marker_fn = getattr(self, '_write_runtime_marker', None)
+        if callable(_marker_fn):
+            _marker_fn()
+
+    @staticmethod
+    def _rects_overlap(x: int, y: int, w: int, h: int, other) -> bool:
+        ox, oy, ow, oh = other
+        return x < ox + ow and ox < x + w and y < oy + oh and oy < y + h
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。"""
+        if pid <= 0:
+            return False
+        if os.name == 'nt':
+            # PROCESS_QUERY_LIMITED_INFORMATION
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def _live_instance_rects(self) -> list[tuple[int, int, int, int]]:
+        """其他存活实例的窗口矩形（配置目录下 runtime-<pid>.json 标记）。
+
+        死进程/损坏文件的标记顺手清理，避免越积越多。
+        """
+        rects: list[tuple[int, int, int, int]] = []
+        try:
+            files = list(self.cfg.dir.glob('runtime-*.json'))
+        except OSError:
+            return rects
+        for f in files:
+            try:
+                data = json.loads(f.read_text(encoding='utf-8'))
+                pid = int(data.get('pid', 0))
+                if pid == os.getpid():
+                    continue
+                if not self._pid_alive(pid):
+                    raise OSError('stale marker')
+                x, y, w, h = (int(data.get(k, 0)) for k in ('x', 'y', 'w', 'h'))
+                if w > 0 and h > 0:
+                    rects.append((x, y, w, h))
+            except (OSError, ValueError, TypeError):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+        return rects
+
+    def _write_runtime_marker(self) -> None:
+        """登记本实例的当前位置，供后启动的实例避让。"""
+        try:
+            marker = self.cfg.dir / f'runtime-{os.getpid()}.json'
+            marker.write_text(json.dumps({
+                'pid': os.getpid(),
+                'x': self.x(), 'y': self.y(), 'w': self._w, 'h': self._h,
+            }), encoding='utf-8')
+        except OSError:
+            pass
 
     def _save_position(self) -> None:
         """以"窗口中心相对屏幕可用区的比例"持久化位置（分辨率变化后仍正确）。"""
@@ -403,6 +531,9 @@ class PetWindow(QWidget):
         self.cfg.set('facing', self.facing)
         self.cfg.set('scale', self.scale)
         self.cfg.save()
+        _marker_fn = getattr(self, '_write_runtime_marker', None)
+        if callable(_marker_fn):
+            _marker_fn()
 
     def _go_default_corner(self) -> None:
         # Position can still be written by the animation interpolation timer or
@@ -462,6 +593,10 @@ class PetWindow(QWidget):
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
         self._schedule_macos_window_level(bool(self.cfg.get('on_top', True)))
+        # 隐藏期暂停的活动在此恢复（与 hide() 中的 _pause_activity 配对）
+        if self._hidden_paused:
+            self._hidden_paused = False
+            self._resume_activity()
         self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
@@ -469,14 +604,165 @@ class PetWindow(QWidget):
 
         macOS 同步打开 Dock 图标；notify=False 供角色切换等内部替换使用
         （不弹托盘提示、不 arm Dock 点击恢复监听）。
+        隐藏即暂停动画解码与全部活动定时器（低功耗：不可见就零消耗）。
         """
         self._ensure_dock_icon_on_hide()
+        self._hidden_paused = True
+        self._pause_activity()
         super().hide()
         if not notify:
             return
         if callable(getattr(self, "on_hidden", None)):
             self.on_hidden()
         self._arm_dock_reactivate_restore()
+
+    def _pause_activity(self) -> None:
+        """暂停动画解码与所有活动定时器（窗口不可见时没有任何可见效果）。"""
+        if not hasattr(self, 'movie'):
+            return  # 未完整初始化（测试桩/构造早期）无可暂停
+        if self.movie is not None:
+            self.movie.stop()
+        self._move_timer.stop()
+        self._physics_timer.stop()
+        # 全屏 watcher 不能在"全屏自动隐藏"期间停：它是退出全屏后
+        # 重新 show() 的唯一检测路径，停了桌宠就再也回不来。
+        # 只有手动隐藏（托盘/右键，_auto_hidden 为 False）才停它。
+        if not self._auto_hidden:
+            self._fullscreen_timer.stop()
+        self._self_talk_timer.stop()
+        self._animation_gap_timer.stop()
+        self._squash_timer.stop()
+        self._squash_active = False
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.pause()
+        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+            self.agent_link_manager.pause()
+        if hasattr(self, 'lib') and self.lib is not None and hasattr(self.lib, 'pause_warm'):
+            self.lib.pause_warm()
+        self._cancel_move()
+        self._cancel_animation_gap()
+        self._speech_bubble.hide()
+
+    def _resume_activity(self) -> None:
+        """显示时恢复动画与所需定时器（状态与隐藏前一致）。"""
+        if not hasattr(self, 'movie'):
+            return  # 未完整初始化（测试桩/构造早期）无可恢复
+        if self.movie is not None:
+            # 从当前动画第一帧重新开始：隐藏期间用户看不到，观感无差异；
+            # 若隐藏前正在移动，_cancel_move 已清掉移动计划，不会出现"瞬移"。
+            self._switch(self.anim)
+        if self.auto_hide_fullscreen and os.name == 'nt':
+            self._fullscreen_timer.start()
+        self._schedule_self_talk()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.resume()
+        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+            self.agent_link_manager.resume()
+        if hasattr(self, 'lib') and self.lib is not None and hasattr(self.lib, 'resume_warm'):
+            self.lib.resume_warm()
+
+    _FS_SKIP_CLASSES = {
+        'Progman', 'WorkerW', 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd',
+        'Windows.UI.Core.CoreWindow',  # 开始菜单/通知中心全屏层
+    }
+
+    def _foreground_covers_fullscreen(self) -> bool:
+        """前台窗口是否覆盖整个屏幕几何（含任务栏）= 真全屏。仅 Windows。
+
+        只判定真全屏（全屏视频/游戏/浏览器 F11，窗口覆盖含任务栏的
+        全屏几何）；普通最大化窗口（任务栏未被覆盖）不触发隐藏。
+
+        注意：GetWindowRect 返回物理像素，而 Qt geometry 是逻辑坐标——
+        高 DPI（125%/150%）下直接比较会把最大化窗口误判为"覆盖全屏"
+        （物理边界 > 逻辑边界）。必须统一换算到逻辑像素。
+        """
+        if os.name != 'nt':
+            return False
+        try:
+            u32 = ctypes.windll.user32
+            hwnd = u32.GetForegroundWindow()
+            if not hwnd:
+                return False
+            # 排除本进程（桌宠自身/聊天窗/设置窗）
+            pid = ctypes.c_ulong(0)
+            u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == os.getpid():
+                return False
+            # 排除桌面/任务栏等 shell 窗口
+            buf = ctypes.create_unicode_buffer(256)
+            u32.GetClassNameW(hwnd, buf, 256)
+            if buf.value in self._FS_SKIP_CLASSES:
+                return False
+
+            class RECT(ctypes.Structure):
+                _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                            ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+            rect = RECT()
+            if not u32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return False
+            # 窗口中心点（物理像素）→ 先定位屏幕，再用该屏 DPR 换算逻辑坐标
+            cx = (rect.left + rect.right) // 2
+            cy = (rect.top + rect.bottom) // 2
+            scr = QApplication.screenAt(QPoint(cx, cy)) or self.screen()
+            if scr is None:
+                return False
+            dpr = scr.devicePixelRatio()
+            if dpr and dpr != 1.0:
+                scr = QApplication.screenAt(QPoint(int(cx / dpr), int(cy / dpr))) or scr
+                dpr = scr.devicePixelRatio()
+            # 物理像素 → 逻辑像素
+            l, t = rect.left / dpr, rect.top / dpr
+            r, b = rect.right / dpr, rect.bottom / dpr
+            g = scr.geometry()
+            # 覆盖全屏几何（含任务栏）= 真全屏
+            return (l <= g.left() and t <= g.top()
+                    and r >= g.right() and b >= g.bottom())
+        except Exception:
+            return False
+
+    def _check_fullscreen(self) -> None:
+        if self._foreground_covers_fullscreen():
+            if not self._auto_hidden and self.isVisible():
+                self._auto_hidden = True
+                self._speech_bubble.hide()
+                self.hide(notify=False)  # 自动隐藏是内部语义，不弹"桌宠已隐藏"托盘通知
+        else:
+            if self._auto_hidden:
+                self._auto_hidden = False
+                self.show()
+
+    def set_auto_hide_fullscreen(self, on: bool) -> None:
+        """全屏自动隐藏开关（供设置/菜单调用）。"""
+        self.auto_hide_fullscreen = bool(on)
+        self.cfg.set('auto_hide_fullscreen', self.auto_hide_fullscreen)
+        self.cfg.save()
+        if self.auto_hide_fullscreen and os.name == 'nt':
+            self._fullscreen_timer.start()
+        else:
+            self._fullscreen_timer.stop()
+            if self._auto_hidden:
+                self._auto_hidden = False
+                self.show()
+
+    def set_stream_capture_mode(self, on: bool) -> None:
+        """直播捕获兼容模式：Tool → 普通顶层窗口 + 标题。
+
+        直播姬/OBS 的窗口捕获会过滤 Tool 窗口（WS_EX_TOOLWINDOW），
+        开启后改为普通窗口并设置可见标题，捕获列表即可看到桌宠；
+        代价是任务栏出现图标。setWindowFlags 会重建原生窗口，随后
+        showEvent 会自动重新应用置顶。
+        """
+        on = bool(on)
+        if on == self._stream_capture_mode:
+            return
+        self._stream_capture_mode = on
+        self.cfg.set('stream_capture_mode', on)
+        self.cfg.save()
+        was_visible = self.isVisible()  # setWindowFlags 重建原生窗口会先隐藏
+        self.setWindowFlags(build_window_flags(self.cfg, self.mouse_through, on))
+        self.setWindowTitle(STREAM_CAPTURE_TITLE if on else '')
+        if was_visible:
+            self.show()  # 只在原本可见时恢复：手动/自动隐藏的桌宠不被意外唤出
 
     def _arm_dock_reactivate_restore(self) -> None:
         """macOS：隐藏后点击 Dock 图标激活应用时自动恢复桌宠（一次性监听）。
@@ -541,11 +827,24 @@ class PetWindow(QWidget):
                 self._switch(self._pick(self.idles))  # 打断进行中的移动
 
     # ================================================================ 播放
+    def _connect_movie(self, name: str, movie) -> None:
+        """按需连接 clip 信号（懒加载）：同一动画只连接一次。
+
+        兜底说明：主线程被阻塞导致队列溢出、最后一帧被丢弃时，
+        frameChanged 永远到不了末尾帧；finished 信号保证动画链一定继续。
+        """
+        if name in self._connected_movies:
+            return
+        movie.frameChanged.connect(lambda n, name=name: self._on_frame(name, n))
+        movie.finished.connect(lambda name=name: self._on_clip_finished(name))
+        self._connected_movies.add(name)
+
     def _switch(self, name: str) -> None:
         """切换到指定动画（链式模型：全部一次性播放）。"""
         self._cancel_move()
         self.anim = name
         movie = self.lib.movie(name)
+        self._connect_movie(name, movie)
         self.movie = movie
         movie.stop()
         movie.jumpToFrame(0)
@@ -571,10 +870,12 @@ class PetWindow(QWidget):
         if self.movie is None:
             return
         pm = self.movie.currentPixmap()
-        if pm.isNull():
+        if pm is None or pm.isNull():
+            # ffmpeg 缺失/素材损坏时首帧解码可能失败返回 None，跳过本帧而不是崩溃
             return
         img = pm.toImage()
-        if self.facing == 'right':
+        # 含文字/方向性画面的动画登记在 lib.no_mirror，朝右时也不镜像（否则文字反显）
+        if self.facing == 'right' and self.anim not in getattr(self.lib, 'no_mirror', frozenset()):
             img = img.mirrored(True, False)
         # 按屏幕 DPR 渲染到物理像素，避免高分屏下被 Qt 二次放大导致模糊
         scr = self._screen_available()
@@ -590,13 +891,26 @@ class PetWindow(QWidget):
         self._sync_mask()
 
     def _sync_mask(self) -> None:
-        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。"""
+        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。
+        Q 弹（squash）期间画面几何被压缩，mask 必须跟随同一几何，
+        否则变形后的角色边缘会被旧轮廓裁掉、命中区域也与画面错位。"""
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
         p = QPainter(canvas)
-        p.translate(0, int(round(catalog.PAD * self.scale)))
         if self._frame_pixmap is not None:
-            p.drawPixmap(0, 0, self._frame_pixmap)
+            if self._squash_active:
+                x, y, w, h = _squash_geometry(
+                    self._w,
+                    self._h,
+                    int(round(catalog.CANVAS_W * self.scale)),
+                    int(round(catalog.CANVAS_H * self.scale)),
+                    self._squash_progress,
+                )
+                # 与 paintEvent 完全相同的绘制调用，保证 mask 与画面逐像素一致
+                p.drawPixmap(x, y, w, h, self._frame_pixmap)
+            else:
+                p.translate(0, int(round(catalog.PAD * self.scale)))
+                p.drawPixmap(0, 0, self._frame_pixmap)
         p.end()
         self.setMask(QBitmap.fromImage(canvas.createAlphaMask()))
 
@@ -634,6 +948,7 @@ class PetWindow(QWidget):
         if self._squash_progress >= 1.0:
             self._squash_active = False
             self._squash_timer.stop()
+        self._sync_mask()  # mask 跟随 squash 几何，避免变形边缘被旧轮廓裁切
         self.update()
 
     def icon_pixmap(self, size: int = 64) -> QPixmap:
@@ -690,8 +1005,7 @@ class PetWindow(QWidget):
             pending.wait()
             with lock:
                 return QImage(self._animation_icon_image_cache.get(name, QImage()))
-        clip = self.lib.movie(name)
-        path = getattr(clip, "path", None)
+        path = self.lib.clip_path(name)  # 不在 worker 线程构造 WebMClip（Qt 线程亲和）
         try:
             image = decode_representative_frame(path) if path is not None else QImage()
             with lock:
@@ -777,6 +1091,12 @@ class PetWindow(QWidget):
 
         「不移动」模式下跳过移动分支，其概率并入动作 → 30% 待机 / 10% 转向 / 60% 动作。
         """
+        if not self.acts:
+            # 角色包没有随机动作素材（仅核心动画）：需要 acts 的分支与回退
+            # 统一改走待机；待机也没有则保持当前动画，绝不 random.choice([]) 崩溃。
+            if self.idles:
+                self._switch(self._pick(self.idles, exclude=self.anim))
+            return
         roll = random.random()
         if roll < catalog.P_IDLE:
             if self.idles:
@@ -1043,11 +1363,13 @@ class PetWindow(QWidget):
         threading.Thread(target=self._look_worker, daemon=True, name="pet-look-screen").start()
 
     def _look_worker(self) -> None:
+        # 延迟导入：无 Chat / 不使用「看看屏幕」的实例启动时不加载 PIL
+        from . import vision as vision_mod
         try:
             settings = self.cfg.chat_settings()
             provider = settings.active_config
             provider.api_key = self.cfg.resolve_api_key(provider)
-            shot = vision_mod.capture_screen(self.cfg.dir / "screenshots")
+            shot = vision_mod.capture_screen_bytes()
             app_info = vision_mod.foreground_app_info()
             reply = vision_mod.ask_about_screen(
                 shot, app_info, settings.default_system_prompt, provider
@@ -1177,12 +1499,24 @@ class PetWindow(QWidget):
         return True
 
     def _on_self_talk_timeout(self) -> None:
+        if time.time() < self._bubble_busy_until:
+            # 重要气泡占用中：本次自言自语跳过，重新排队下一次
+            self._schedule_self_talk()
+            return
         displayed = False
         if self._self_talk_enabled and self.isVisible():
             displayed = self._show_random_self_talk()
         self._schedule_self_talk(after_display=displayed)
 
+    def hold_bubble(self, seconds: float) -> None:
+        """声明重要气泡占用时长（自言自语在此期间让路）。"""
+        self._bubble_busy_until = max(self._bubble_busy_until, time.time() + max(0.0, seconds))
+
     def show_bubble(self, text: str, duration_ms: int = 3200) -> None:
+        """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。"""
+        if not self.isVisible():
+            return
+        self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
             str(text), self.visible_content_rect(), duration_ms, pet_scale=self.scale
         )
@@ -1200,6 +1534,16 @@ class PetWindow(QWidget):
         desired_no_move = bool(self.cfg.get('no_move', False))
         if desired_no_move != self.no_move:
             self.set_no_move(desired_no_move)
+        # 窗口类开关也要立即生效（否则用户保存后得重启或再去菜单切一次）
+        desired_mouse_through = bool(self.cfg.get('mouse_through', False))
+        if desired_mouse_through != self.mouse_through:
+            self.set_mouse_through(desired_mouse_through)
+        desired_auto_hide = bool(self.cfg.get('auto_hide_fullscreen', True))
+        if desired_auto_hide != self.auto_hide_fullscreen:
+            self.set_auto_hide_fullscreen(desired_auto_hide)
+        desired_stream_capture = bool(self.cfg.get('stream_capture_mode', False))
+        if desired_stream_capture != self._stream_capture_mode:
+            self.set_stream_capture_mode(desired_stream_capture)
         desired_drag_physics = bool(self.cfg.get('drag_physics', False))
         if desired_drag_physics != self.drag_physics:
             self.set_drag_physics(desired_drag_physics)
@@ -1226,6 +1570,8 @@ class PetWindow(QWidget):
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))
         self.click_show_self_talk = bool(self.cfg.get('click_show_self_talk', False))
         self._schedule_self_talk()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.apply_config()
 
     def set_context_menu_template(self, template_id: str) -> None:
         """Persist the selected right-click menu template for the next open."""
@@ -1271,10 +1617,75 @@ class PetWindow(QWidget):
     def set_chat_status(self, state: str, text: str = '') -> None:
         if not text:
             return
+        if not self.isVisible():
+            return
         self._speech_bubble.show_text(
             text, self.visible_content_rect(), duration_ms=2200,
             pet_scale=self.scale,
         )
+
+
+    def _toggle_proactive_enabled(self, on: bool) -> None:
+        """右键菜单切换主动识屏总开关。"""
+        pro_data = dict(self.cfg.get('proactive_screen', {}))
+        pro_data['enabled'] = bool(on)
+        self.cfg.set('proactive_screen', pro_data)
+        self.cfg.save()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.apply_config()
+        if on:
+            eff = effective_proactive_config(self.cfg.get('proactive_screen', {}))
+            if eff['whitelist']:
+                self.show_bubble("主动识屏已开启～我会偶尔看看你正在用的软件", duration_ms=4000)
+            else:
+                self.show_bubble(
+                    "主动识屏已开启～但白名单还是空的，在 右键→主动识屏→打开设置 里添加要观察的应用后我才会开始工作",
+                    duration_ms=6000,
+                )
+
+    def _set_proactive_option(self, key: str, value: Any) -> None:
+        """右键菜单修改主动识屏子项选项。"""
+        pro_data = dict(self.cfg.get('proactive_screen', {}))
+        pro_data[key] = value
+        self.cfg.set('proactive_screen', pro_data)
+        self.cfg.save()
+        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+            self.proactive_watcher.apply_config()
+
+    def _toggle_agent_link(self, agent_key: str, on: bool, action=None) -> None:
+        """右键菜单切换 Agent 状态联动子项。
+
+        set_enabled 返回 False（用户拒绝授权 / hooks 安装失败）时，
+        必须把菜单勾选态回滚，否则 UI 显示已开启而实际未生效。"""
+        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+            ok = self.agent_link_manager.set_enabled(agent_key, on)
+            if not ok:
+                if action is not None:
+                    action.blockSignals(True)
+                    action.setChecked(not on)
+                    action.blockSignals(False)
+                return
+        else:
+            ag_data = dict(self.cfg.get('agent_link', {}))
+            ag_data[agent_key] = bool(on)
+            self.cfg.set('agent_link', ag_data)
+            self.cfg.save()
+        if on:
+            self.show_bubble(f"已开启 {agent_key.upper()} 状态联动监听～", duration_ms=4000)
+
+    def _rename_character(self) -> None:
+        """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""
+        cid = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+        current = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
+        name, ok = QInputDialog.getText(
+            self, '重命名角色', f'给 {cid} 起个名字（留空恢复默认）：', text=current,
+        )
+        if not ok:
+            return
+        self.cfg.set_character_alias(cid, name)
+        shown = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
+        self.show_bubble(f'角色名：{shown}')
+
     def _request_switch_character(self, character_id: str) -> None:
         """请求切换角色；优先交给 app 做热切换，否则只保存配置。"""
         if self.on_switch_character is not None:
@@ -1296,8 +1707,10 @@ class PetWindow(QWidget):
         self.mouse_through = bool(on)
         self.cfg.set('mouse_through', self.mouse_through)
         self.cfg.save()
+        was_visible = self.isVisible()  # setWindowFlag 重建原生窗口会先隐藏，
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, self.mouse_through)
-        self.show()
+        if was_visible:
+            self.show()  # 只在原本可见时恢复：手动隐藏的桌宠不被设置保存意外唤出
 
     def set_drag_physics(self, on: bool) -> None:
         """拖动物理开关。"""

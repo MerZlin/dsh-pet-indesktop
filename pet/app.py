@@ -10,13 +10,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
@@ -45,7 +48,8 @@ class _BalanceBridge(_BackgroundResult):
         self.done.connect(self._show)
 
     def _show(self, _ok: bool, message) -> None:
-        if self.win is not None:
+        # 异步回调可能晚于窗口销毁（切角色/退出），先探活再触碰 Qt 对象
+        if self.win is not None and shiboken6.isValid(self.win):
             self.win.show_bubble(str(message), duration_ms=6000)
 
 
@@ -56,17 +60,19 @@ class _UpdateBridge(_BackgroundResult):
         self.done.connect(self._show)
 
     def _show(self, ok: bool, payload) -> None:
+        # 异步回调可能晚于窗口销毁，先探活再触碰 Qt 对象
+        alive = self.parent is not None and shiboken6.isValid(self.parent)
         if not ok:
-            if self.parent is not None:
+            if alive:
                 self.parent.show_bubble(f"检查更新失败：{payload}", duration_ms=7000)
             return
         release = payload
         tag = str(release.get("version", ""))
         if not updater.is_newer(tag):
-            if self.parent is not None:
+            if alive:
                 self.parent.show_bubble(f"已经是最新版本（{updater.APP_VERSION}）啦")
             return
-        if self.parent is not None:
+        if alive:
             self.parent.show_bubble(
                 f"发现新版本 v{tag}（当前 {updater.APP_VERSION}）。"
                 "可从“更新与帮助”打开项目页下载。",
@@ -77,7 +83,10 @@ class _UpdateBridge(_BackgroundResult):
 def _setup_logging(config: Config) -> None:
     config.dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        filename=str(config.dir / 'pet.log'),
+        handlers=[RotatingFileHandler(
+            str(config.dir / f'pet-{os.getpid()}.log'),  # 多开实例日志按 PID 隔离，避免互相覆盖
+            maxBytes=1_000_000, backupCount=2, encoding='utf-8',
+        )],  # 滚动日志：1MB×2，不再无限增长
         level=logging.INFO,
         format='%(asctime)s %(levelname)s %(message)s',
         encoding='utf-8',
@@ -129,6 +138,7 @@ class PetApp:
         self._balance_timer = QTimer()
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
+        self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -163,28 +173,79 @@ class PetApp:
         if win is None or self._balance_busy or not win.isVisible():
             return
         now = time.monotonic()
-        if self._balance_cache and now - self._balance_cache[0] < 30:
+        # 余额缓存绑定 provider 身份（id + base_url + key 摘要）：同地址不同账号也不串号；
+        # 摘要不可逆推原 key，不落敏感信息。
+        import hashlib
+        settings = self.config.chat_settings()
+        provider = settings.active_config
+        provider.api_key = self.config.resolve_api_key(provider)
+        key_digest = hashlib.sha256(str(provider.api_key or '').encode()).hexdigest()[:12]
+        provider_key = '|'.join([
+            str(getattr(provider, 'id', '') or ''),
+            str(provider.base_url or ''),
+            key_digest,
+        ])
+        if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
+                and self._balance_cache[2] == provider_key:
             win.show_bubble(self._balance_cache[1], duration_ms=6000)
             return
+        file_text = self._read_balance_file_cache(provider_key)
+        if file_text is not None:
+            self._balance_cache = (now, file_text, provider_key)
+            win.show_bubble(file_text, duration_ms=6000)
+            return
         self._balance_busy = True
-        win.show_bubble("正在查询余额…", duration_ms=6000)
-        provider = self.config.chat_settings().active_config
-        provider.api_key = self.config.resolve_api_key(provider)
+        # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
+        # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
+        # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
+        QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
         bridge = _BalanceBridge(win)
         self._balance_bridge = bridge
+        threading.Thread(
+            target=self._balance_worker,
+            args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
+            daemon=True, name='pet-balance',
+        ).start()
 
-        def worker() -> None:
-            try:
-                result = balance_mod.fetch_balance(provider.base_url, provider.api_key, verify_ssl=provider.verify_ssl)
-                message = balance_mod.format_balance(result)
-                self._balance_cache = (time.monotonic(), message)
-                bridge.done.emit(True, message)
-            except Exception as exc:
-                bridge.done.emit(False, f"余额查询失败：{exc}")
-            finally:
-                self._balance_busy = False
+    def _balance_worker(self, bridge, base_url: str, api_key: str, verify_ssl: bool, provider_key: str = '') -> None:
+        try:
+            info = balance_mod.fetch_balance(base_url, api_key, verify_ssl=verify_ssl)
+            text = balance_mod.format_balance(info)
+            self._balance_cache = (time.monotonic(), text, provider_key)
+            self._write_balance_file_cache(text, provider_key)
+            bridge.done.emit(True, text)
+        except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
+            bridge.done.emit(False, f'余额查询失败：{exc}')
+        finally:
+            self._balance_busy = False
 
-        threading.Thread(target=worker, daemon=True, name="pet-balance").start()
+    def _read_balance_file_cache(self, provider_key: str = '') -> str | None:
+        """读取跨实例共享的余额缓存（30s 内有效，且必须是同一 provider 的缓存）。"""
+        try:
+            data = json.loads(self._balance_cache_path.read_text(encoding='utf-8'))
+            if not isinstance(data, dict):
+                return None
+            if str(data.get('provider', '') or '') != provider_key:
+                return None
+            if time.time() - float(data.get('ts', 0) or 0) < 30.0:
+                text = str(data.get('text', '') or '')
+                return text or None
+        except (OSError, ValueError, TypeError):
+            pass
+        return None
+
+    def _write_balance_file_cache(self, text: str, provider_key: str = '') -> None:
+        """写入跨实例共享的余额缓存（原子替换，绑定 provider）。"""
+        try:
+            self._balance_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._balance_cache_path.with_suffix(f'.{os.getpid()}.tmp')
+            tmp.write_text(
+                json.dumps({'ts': time.time(), 'text': text, 'provider': provider_key}, ensure_ascii=False),
+                encoding='utf-8',
+            )
+            tmp.replace(self._balance_cache_path)
+        except OSError:
+            pass
 
     def check_update(self, parent=None) -> None:
         target = parent or self.win
@@ -231,6 +292,10 @@ class PetApp:
 
     def _create_library(self, character_id: str) -> MovieLibrary:
         lib = MovieLibrary(character_id=character_id)
+        # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.5s 错峰），
+        # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
+        lib.schedule_high_priority_warm()
+        lib.schedule_low_priority_warm()
         logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
         return lib
 
@@ -574,11 +639,17 @@ def _mac_set_dock_icon_visible(visible: bool) -> None:
 
 
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
-    app = QApplication(argv if argv is not None else sys.argv)
+    argv = list(argv if argv is not None else sys.argv)
+    instance_id = None
+    if "--instance" in argv:
+        index = argv.index("--instance")
+        if index + 1 < len(argv):
+            instance_id = str(argv[index + 1])
+    app = QApplication(argv)
     app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
 
-    config = Config()
+    config = Config(instance_id=instance_id)
     _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
     _setup_logging(config)
     logging.info('dsh-pet-standalone 启动')
