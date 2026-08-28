@@ -412,7 +412,19 @@ class ProactiveLimiter:
             fh = open(self.state_path.with_suffix(self.state_path.suffix + ".lock"), "a+b")
             if sys.platform == "win32":
                 import msvcrt
-                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                fh.seek(0)  # append 模式初始位置在 EOF，锁/解锁必须落在同一字节
+                # 非阻塞+短重试：allow/try_acquire 会在 GUI 线程（_on_frame_ready）调用，
+                # 不能用 LK_LOCK 的 ~10s 阻塞重试；锁持有时间是微秒级，100ms 内必拿到，
+                # 拿不到则降级无锁（竞态退化为计数偏差，不影响正确性主线）。
+                for _ in range(5):
+                    try:
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.02)
+                else:
+                    fh.close()
+                    fh = None
             else:
                 import fcntl
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)

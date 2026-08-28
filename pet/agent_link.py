@@ -170,6 +170,7 @@ class ByteOffsetTailer:
         if size < self.offset or (self._file_id is not None and file_id != self._file_id):
             self.offset = 0
             self._partial = b""
+            self._discard_until_newline = False  # 旧文件的超长行丢弃状态不得泄漏进新文件
         self._file_id = file_id
 
         if size == self.offset:

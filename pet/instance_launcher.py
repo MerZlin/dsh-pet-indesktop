@@ -46,11 +46,12 @@ def launch_new_pet(offset_index: int = 1):
         parent_index = 0
     child_index = parent_index + max(1, int(offset_index))
     env["DSH_PET_SPAWN_OFFSET_INDEX"] = str(child_index)
-    # 多开配置隔离：孵化出的桌宠使用独立配置文件/会话目录，
-    # 不与母桌宠互覆位置、大小等状态。索引沿孵化链递增，
-    # 同一链路上重新孵化会复用同名实例配置（位置记忆保留，不堆积文件）。
-    if not (env.get("DSH_PET_INSTANCE") or "").strip():
-        env["DSH_PET_INSTANCE"] = f"pet{child_index}"
+    # 多开配置隔离：孵化出的桌宠使用独立配置文件/会话目录。
+    # 实例 ID 必须对“独立母桌宠”也可区分——两个各自启动的母桌宠
+    # 会同时孵出索引相同的孩子，仅用链路索引会撞车；带上母进程 PID
+    # 保证共存期间唯一（PID 复用时复用旧配置=记住位置，属可接受行为）。
+    # 注意必须覆盖从母进程继承来的 DSH_PET_INSTANCE，否则孩子与母桌宠同号。
+    env["DSH_PET_INSTANCE"] = f"spawn{os.getpid()}x{child_index}"
     kwargs["env"] = env
     if getattr(sys, "frozen", False):
         kwargs["cwd"] = str(Path(sys.executable).resolve().parent)

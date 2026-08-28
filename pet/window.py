@@ -758,10 +758,11 @@ class PetWindow(QWidget):
         self._stream_capture_mode = on
         self.cfg.set('stream_capture_mode', on)
         self.cfg.save()
+        was_visible = self.isVisible()  # setWindowFlags 重建原生窗口会先隐藏
         self.setWindowFlags(build_window_flags(self.cfg, self.mouse_through, on))
         self.setWindowTitle(STREAM_CAPTURE_TITLE if on else '')
-        if not self._auto_hidden:
-            self.show()
+        if was_visible:
+            self.show()  # 只在原本可见时恢复：手动/自动隐藏的桌宠不被意外唤出
 
     def _arm_dock_reactivate_restore(self) -> None:
         """macOS：隐藏后点击 Dock 图标激活应用时自动恢复桌宠（一次性监听）。
@@ -905,7 +906,8 @@ class PetWindow(QWidget):
                     int(round(catalog.CANVAS_H * self.scale)),
                     self._squash_progress,
                 )
-                p.drawPixmap(QRect(x, y, w, h), self._frame_pixmap, self._frame_pixmap.rect())
+                # 与 paintEvent 完全相同的绘制调用，保证 mask 与画面逐像素一致
+                p.drawPixmap(x, y, w, h, self._frame_pixmap)
             else:
                 p.translate(0, int(round(catalog.PAD * self.scale)))
                 p.drawPixmap(0, 0, self._frame_pixmap)
@@ -1702,8 +1704,10 @@ class PetWindow(QWidget):
         self.mouse_through = bool(on)
         self.cfg.set('mouse_through', self.mouse_through)
         self.cfg.save()
+        was_visible = self.isVisible()  # setWindowFlag 重建原生窗口会先隐藏，
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, self.mouse_through)
-        self.show()
+        if was_visible:
+            self.show()  # 只在原本可见时恢复：手动隐藏的桌宠不被设置保存意外唤出
 
     def set_drag_physics(self, on: bool) -> None:
         """拖动物理开关。"""
