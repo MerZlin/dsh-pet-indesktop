@@ -459,3 +459,16 @@ opus R3 明确通过。sol R3/dsh R3 确认中。
 - 测试 358 passed / 5 skipped（含新回归测试 test_restore_defers_until_saved_screen_comes_online）。
 
 - 网络恢复后补推完成（2026-08-28 13:29，含 v4.0.0 合并、issue #8 修复、上游 84ca2fd CI 适配）。
+
+### 第十六轮（2026-08-28 午后）：三方诊断（K3 + sol + opus）issue #8 修复加固
+
+- opus：副屏恢复 2 中危（screenAdded 边沿竞态二次恢复无兜底、close 未撤防）→ 40c83f4。
+- sol：1 高危 4 中危 → d61ee16：
+  高危=等待副屏期间 _save_position 会覆盖副屏坐标（修复核心路径失效）；
+  中危=点击即误撤防（改真拖动才撤）、边沿信号重挂无效+旧定时器抢撤
+  （改 5s 轮询+screenAdded 双通道、可重启 QTimer）、主动识屏 pause 清
+  _request_in_flight 致并发双请求（不清，靠代次+finally）、pet_opacity
+  脏值启动崩溃（_float_or_default 兜底）。
+- 测试 360 passed / 5 skipped。
+- 用户配置虚惊事件：诊断脚本误用源码版数据目录（dsh-pet-standalone），
+  用户真实配置（webm-chat 目录）完好。注意排查时区分两个 APPDATA 目录。
