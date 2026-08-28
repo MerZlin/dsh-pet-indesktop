@@ -42,6 +42,7 @@ from .config import (
     DEFAULT_SELF_TALK_MIN_INTERVAL,
     DEFAULT_SELF_TALK_TEXTS,
     Config,
+    _float_or_default,
 )
 from .library import MovieLibrary
 from .animation_thumbnail import decode_representative_frame, representative_frame_index
@@ -237,7 +238,7 @@ class PetWindow(QWidget):
         self.drag_physics: bool = bool(config.get('drag_physics', False))
         self.lock_position: bool = bool(config.get('lock_position', False))
         self.shift_drag: bool = bool(config.get('shift_drag', False))
-        self.pet_opacity: int = max(10, min(100, int(config.get('pet_opacity', 100) or 100)))
+        self.pet_opacity: int = int(_float_or_default(config.get('pet_opacity', 100), 100, 10, 100))
         self._applied_opacity: float | None = None  # 已应用到窗口的不透明度
         self.click_sound_enabled: bool = bool(config.get('click_sound_enabled', True))
         self.click_sound_path: str = str(config.get('click_sound_path', '') or '')
@@ -358,10 +359,16 @@ class PetWindow(QWidget):
         self._connected_movies: set[str] = set()
 
         # 副屏位置恢复：开机自启时副屏可能还没就绪（显示器唤醒慢于自启），
-        # 记录的目标屏此刻枚举不到 → 先落主屏，并挂 screenAdded 监听等它上线。
-        # 用户手动拖动后立即撤防（尊重手动选择），2 分钟后自动撤防。
+        # 记录的目标屏此刻枚举不到 → 先落主屏，然后等它上线再自动恢复。
+        # 等待方式 = 5s 轮询（兜底，覆盖"信号已发但屏尚未进枚举"的竞态）
+        #         + screenAdded 即时触发（常规路径秒回）。
+        # 用户真正开始拖动/点「回到右下角」立即撤防（尊重手动选择），2 分钟超时撤防。
         self._awaiting_saved_screen: str | None = None
         self._screen_restore_armed = False
+        self._screen_retry_deadline = 0.0
+        self._screen_retry_timer = QTimer(self)
+        self._screen_retry_timer.setInterval(5000)
+        self._screen_retry_timer.timeout.connect(self._screen_retry_tick)
 
         self._restore_position()
         self._switch(self.idle)
@@ -373,44 +380,53 @@ class PetWindow(QWidget):
             self._arm_screen_restore_retry()
 
     def _arm_screen_restore_retry(self) -> None:
-        """目标副屏暂未就绪：监听 screenAdded，目标屏上线后重新恢复位置。"""
-        if self._screen_restore_armed:
-            return
+        """目标副屏暂未就绪：启动 5s 轮询 + screenAdded 监听，等它上线。"""
         from PySide6.QtGui import QGuiApplication
         app = QGuiApplication.instance()
         if app is None:
             return
-        app.screenAdded.connect(self._on_screen_added_restore)
-        self._screen_restore_armed = True
-        logging.debug('已监听 screenAdded，等待 %s 上线', self._awaiting_saved_screen)
-        QTimer.singleShot(120_000, self, self._disarm_screen_restore_retry)
+        self._screen_retry_deadline = time.monotonic() + 120.0
+        if not self._screen_restore_armed:
+            app.screenAdded.connect(self._screen_retry_tick)
+            self._screen_restore_armed = True
+            logging.debug('已监听屏幕变化，等待 %s 上线', self._awaiting_saved_screen)
+        self._screen_retry_timer.start()  # start() 即重启，超时窗口随之刷新
 
     def _disarm_screen_restore_retry(self) -> None:
+        self._awaiting_saved_screen = None
+        if hasattr(self, '_screen_retry_timer'):
+            self._screen_retry_timer.stop()
         if not self._screen_restore_armed:
             return
         self._screen_restore_armed = False
-        self._awaiting_saved_screen = None
         from PySide6.QtGui import QGuiApplication
         app = QGuiApplication.instance()
         if app is not None:
             try:
-                app.screenAdded.disconnect(self._on_screen_added_restore)
+                app.screenAdded.disconnect(self._screen_retry_tick)
             except (RuntimeError, TypeError):
                 pass
 
-    def _on_screen_added_restore(self, screen) -> None:
-        """新屏幕上线：若是保存位置时所在的那块屏，把桌宠移回去。"""
+    def _screen_retry_tick(self, *_args) -> None:
+        """轮询/screenAdded 共用入口：目标屏一旦进入枚举立即恢复位置。"""
         target = self._awaiting_saved_screen
-        if not target or screen.name() != target:
+        if not target:
+            self._disarm_screen_restore_retry()
             return
-        self._disarm_screen_restore_retry()
-        self._restore_position()
-        if self._awaiting_saved_screen:
-            # screenAdded 触发时新屏不一定已进 screens() 列表（驱动就绪节奏），
-            # 二次查找落空就重新挂监听继续等，绝不静默失败
-            self._arm_screen_restore_retry()
-        else:
+        if time.monotonic() > self._screen_retry_deadline:
+            logging.info('等待屏幕 %s 超时（120s），放弃自动恢复', target)
+            self._disarm_screen_restore_retry()
+            return
+        # _screen_available 找不到目标屏时回退当前屏（名字不匹配），找到才算上线
+        scr = self._screen_available(target)
+        if scr is not None and scr.name() == target:
+            self._disarm_screen_restore_retry()
+            self._restore_position()
             logging.info('目标屏幕 %s 上线，已恢复到保存位置', target)
+
+    def _on_screen_added_restore(self, screen) -> None:
+        """兼容入口：新屏幕上线 → 立即触发一次检查。"""
+        self._screen_retry_tick()
 
     # ================================================================ 尺寸
     def _apply_scale(self) -> None:
@@ -580,16 +596,19 @@ class PetWindow(QWidget):
             pass
 
     def _save_position(self) -> None:
-        """以"窗口中心相对屏幕可用区的比例"持久化位置（分辨率变化后仍正确）。"""
+        """以"窗口中心相对屏幕可用区的比例"持久化位置（分辨率变化后仍正确）。
+        等待目标副屏上线期间（_awaiting_saved_screen 非空）不写位置/屏名：
+        当前只是临时落脚主屏，写回会把保存的副屏坐标永久覆盖。"""
         scr = self._screen_available()
         avail = scr.availableGeometry()
         if avail.width() <= 0 or avail.height() <= 0:
             return
-        cx = self.x() + self._w / 2
-        cy = self.y() + self._h / 2
-        self.cfg.set('rx', (cx - avail.left()) / avail.width())
-        self.cfg.set('ry', (cy - avail.top()) / avail.height())
-        self.cfg.set('screen_name', scr.name())
+        if not getattr(self, '_awaiting_saved_screen', None):
+            cx = self.x() + self._w / 2
+            cy = self.y() + self._h / 2
+            self.cfg.set('rx', (cx - avail.left()) / avail.width())
+            self.cfg.set('ry', (cy - avail.top()) / avail.height())
+            self.cfg.set('screen_name', scr.name())
         self.cfg.set('facing', self.facing)
         self.cfg.set('scale', self.scale)
         self.cfg.save()
@@ -1276,10 +1295,6 @@ class PetWindow(QWidget):
                 return
             self._press_global = event.globalPosition().toPoint()
             self._grab_offset = self._press_global - self.pos()
-            # 用户开始手动拖动 = 接管位置决策，撤销"等副屏上线自动恢复"
-            _disarm = getattr(self, '_disarm_screen_restore_retry', None)
-            if callable(_disarm):
-                _disarm()
             self._dragging = False
             self._cancel_move()  # 按下即打断移动
             self._last_global = self._press_global
@@ -1309,6 +1324,11 @@ class PetWindow(QWidget):
                 self._grab_offset = None
                 return
             self._dragging = True
+            # 用户真正开始拖动 = 接管位置决策，撤销"等副屏上线自动恢复"
+            # （必须在这里而不是按下时：普通点击/未过阈值/未按 SHIFT 不算接管）
+            _disarm = getattr(self, '_disarm_screen_restore_retry', None)
+            if callable(_disarm):
+                _disarm()
             if self.drag:
                 self._switch(self.drag)  # 进入拖拽：播放悬空反馈动画
             if self.drag_physics:
@@ -1635,7 +1655,7 @@ class PetWindow(QWidget):
         desired_shift = bool(self.cfg.get('shift_drag', False))
         if desired_shift != self.shift_drag:
             self.set_shift_drag(desired_shift)
-        desired_opacity = max(10, min(100, int(self.cfg.get('pet_opacity', 100) or 100)))
+        desired_opacity = int(_float_or_default(self.cfg.get('pet_opacity', 100), 100, 10, 100))
         if desired_opacity != self.pet_opacity:
             self.set_pet_opacity(desired_opacity)
         else:

@@ -674,9 +674,11 @@ class ProactiveScreenWatcher:
         self._current_hwnd = 0
         self._entered_ts = 0.0
         self._generation += 1  # 代次翻转：此后到达的 frame_ready 一律丢弃
-        # 恢复时应有干净的调度状态：卡在中途的 worker 标志不清掉会让 watcher 永久沉默
+        # 截图 worker 标志清掉是安全的（迟到帧被代次丢弃）；
+        # 但 _request_in_flight 不能清：网络请求线程仍在跑，清了会让恢复后
+        # 重复发起第二条请求。它的 finally 一定会把标志复位（有超时兜底），
+        # 其迟到答复被代次检查丢弃，不会冒泡/计费/写记忆。
         self._worker_busy = False
-        self._request_in_flight = False
 
     def resume(self) -> None:
         """窗口恢复显示时按最新配置重新评估启停。"""

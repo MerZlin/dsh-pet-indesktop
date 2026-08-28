@@ -109,6 +109,8 @@ def test_restore_defers_until_saved_screen_comes_online():
         _w = 220
         _h = 260
         _awaiting_saved_screen = None
+        _screen_restore_armed = False
+        _screen_retry_deadline = float("inf")
 
         def _screen_available(self, screen_name=None):
             if screen_name:
@@ -124,6 +126,7 @@ def test_restore_defers_until_saved_screen_comes_online():
             self._awaiting_saved_screen = None
 
         _restore_position = PetWindow._restore_position
+        _screen_retry_tick = PetWindow._screen_retry_tick
 
     pet = FakePet()
     PetWindow._restore_position(pet)
@@ -149,12 +152,49 @@ def test_disarmed_restore_does_not_move_on_late_screen():
     class FakePet:
         cfg = _Config(rx=0.5, ry=0.5, screen_name="secondary")
         _awaiting_saved_screen = None
+        _screen_restore_armed = False
+        _screen_retry_deadline = float("inf")
 
         def move(self, x, y):
             self.position = (x, y)
+
+        _screen_retry_tick = PetWindow._screen_retry_tick
+        _disarm_screen_restore_retry = PetWindow._disarm_screen_restore_retry
 
     pet = FakePet()
     pet.position = (100, 100)
     # 撤防后目标屏上线：不应触发任何移动
     PetWindow._on_screen_added_restore(pet, secondary)
     assert pet.position == (100, 100)
+
+
+def test_save_position_skipped_while_awaiting_saved_screen():
+    """等待副屏上线期间：_save_position 不得把临时落脚屏的坐标/屏名写回配置。"""
+    primary = _Screen("primary", QRect(0, 0, 1920, 1080))
+
+    class FakePet:
+        cfg = _Config(rx=0.5, ry=0.5, screen_name="secondary")
+        facing = "left"
+        scale = 1.0
+        _w = 220
+        _h = 260
+        _awaiting_saved_screen = "secondary"  # 正在等副屏上线
+
+        def _screen_available(self):
+            return primary
+
+        def x(self):
+            return 100
+
+        def y(self):
+            return 200
+
+    pet = FakePet()
+    PetWindow._save_position(pet)
+    # 副屏坐标与屏名必须原样保留
+    assert pet.cfg["screen_name"] == "secondary"
+    assert pet.cfg["rx"] == 0.5 and pet.cfg["ry"] == 0.5
+
+    pet._awaiting_saved_screen = None  # 恢复完成后正常保存
+    PetWindow._save_position(pet)
+    assert pet.cfg["screen_name"] == "primary"
