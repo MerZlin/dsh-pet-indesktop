@@ -477,7 +477,7 @@ def test_no_chat_packaging_uses_isolated_entrypoint():
         assert "pet_entry_no_chat.py" not in chat_spec
 
 
-def test_chat_window_uses_opaque_shell_and_message_surface(tmp_path: Path):
+def test_chat_window_uses_transparent_window_around_opaque_rounded_shell(tmp_path: Path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from pet.chat.widgets import ChatWindow
@@ -485,11 +485,94 @@ def test_chat_window_uses_opaque_shell_and_message_surface(tmp_path: Path):
 
     app = QApplication.instance() or QApplication([])
     window = ChatWindow(Config(tmp_path), "shenshen")
-    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    # 无边框圆角窗：窗口自身透明，只有圆角的 phone-shell 可见（窗外无方形背景）
+    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
     assert "QDialog#chat-window" in window.styleSheet()
-    assert "background: #f7f8fb" in window.styleSheet()
+    assert "background: transparent" in window.styleSheet()
+    assert window.autoFillBackground() is False
     assert window.phone_shell.autoFillBackground() is True
     window.close()
+    app.processEvents()
+
+
+def test_modern_chat_window_icons_are_dark_on_light_surfaces(tmp_path: Path):
+    """深色系统下（palette 前景为白）聊天窗图标仍须在浅色表面上可见。
+
+    回归：关闭/最小化/新建/删除等按钮图标曾取 app palette 前景色（深色系统
+    下为白色），白底白图不可见。窗口级 menuStyle=modern 应让图标统一为深灰。
+    """
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    # 模拟深色系统：palette 前景为白（回归条件——图标曾取 palette 前景色）
+    dark_palette = app.palette()
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+        dark_palette.setColor(group, QPalette.ColorRole.WindowText, QColor("#ffffff"))
+        dark_palette.setColor(group, QPalette.ColorRole.Text, QColor("#ffffff"))
+        dark_palette.setColor(group, QPalette.ColorRole.ButtonText, QColor("#ffffff"))
+        dark_palette.setColor(group, QPalette.ColorRole.Window, QColor("#1e1e1e"))
+        dark_palette.setColor(group, QPalette.ColorRole.Base, QColor("#1e1e1e"))
+    app.setPalette(dark_palette)
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    assert window.property("menuStyle") == "modern"
+    for name, size, probe in (
+        ("minimize_button", 16, (8, 11)),    # 最小化横线
+        ("close_button", 16, (8, 8)),        # ✕ 交叉点附近
+        ("new_session_button", 16, (8, 8)),  # 圆形加号
+        ("delete_session_button", 15, (8, 8)),
+    ):
+        button = getattr(window, name)
+        image = button.icon().pixmap(size, size).toImage()
+        x, y = probe
+        color = image.pixelColor(x, y)
+        assert color.lightness() < 150, f"{name} 图标应为深色，实际 {color.name()}"
+    # 强调色/深色底上的图标应为浅色
+    window.set_follow_pet(True)  # 勾选后按钮底为强调色 → 图标应变浅
+    assert window.follow_button.property("modernDark") is True
+    for name, size in (("send", 17), ("follow_button", 14)):
+        button = getattr(window, name)
+        image = button.icon().pixmap(size, size).toImage()
+        dark = light = 0
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = image.pixelColor(x, y)
+                if color.alpha() == 0:
+                    continue
+                if color.lightness() < 100:
+                    dark += 1
+                elif color.lightness() > 170:
+                    light += 1
+        assert dark == 0, f"{name} 图标不应有深色像素"
+        assert light > 0, f"{name} 图标应含浅色像素"
+    window.close()
+    app.processEvents()
+
+
+def test_icon_theme_inherits_from_ancestor_widget():
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication, QWidget
+    from pet.context_menus.icons import _icon_theme, vector_widget_icon
+
+    app = QApplication.instance() or QApplication([])
+    root = QWidget()
+    root.setProperty("menuStyle", "modern")
+    child = QWidget(root)
+    assert _icon_theme(child) == ("modern", False)
+    assert _icon_theme(QWidget()) == ("", False)
+    accent = QWidget(child)
+    accent.setProperty("modernDark", True)
+    assert _icon_theme(accent) == ("modern", True)
+    # 渲染出的图标颜色跟随继承的主题，深色 palette 不参与
+    palette = root.palette()
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
+    root.setPalette(palette)
+    icon = vector_widget_icon(child, "minimize", 16)
+    color = icon.pixmap(16, 16).toImage().pixelColor(8, 11)
+    assert color.lightness() < 150
     app.processEvents()
 
 

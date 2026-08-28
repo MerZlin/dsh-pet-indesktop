@@ -94,9 +94,11 @@ def _session_group(session, now: datetime | None = None) -> str:
     return "更早"
 
 
-def _chat_tool_button(parent, object_name: str, icon_name: str, tooltip: str) -> QToolButton:
+def _chat_tool_button(parent, object_name: str, icon_name: str, tooltip: str, dark: bool = False) -> QToolButton:
     button = QToolButton(parent)
     button.setObjectName(object_name)
+    if dark:
+        button.setProperty("modernDark", True)  # 深色/强调色底 → 浅色图标
     button.setIcon(vector_widget_icon(button, icon_name, 16))
     button.setToolTip(tooltip)
     button.setAccessibleName(tooltip)
@@ -483,7 +485,7 @@ class AttachmentChip(QFrame):
         labels.addWidget(self.meta_label)
         layout.addLayout(labels)
 
-        self.remove_button = _chat_tool_button(self, "attachment-remove-button", "exit", "移除附件")
+        self.remove_button = _chat_tool_button(self, "attachment-remove-button", "exit", "移除附件", dark=True)
         self.remove_button.setFixedSize(20, 20)
         self.remove_button.clicked.connect(lambda: self.remove_requested.emit(str(self.path)))
         self.remove_button.hide()
@@ -546,6 +548,7 @@ class ChatComposer(QFrame):
         footer.addStretch(1)
         self.send = QToolButton(self)
         self.send.setObjectName("send-button")
+        self.send.setProperty("modernDark", True)  # 强调色底 → 浅色图标
         self.send.setIcon(vector_widget_icon(self.send, "send", 17))
         self.send.setFixedSize(34, 34)
         self.send.setToolTip("发送")
@@ -685,6 +688,9 @@ class ChatWindow(QDialog):
         self.character_id = str(character_id)
         self.setObjectName("chat-window")
         self.setWindowTitle("AI 对话")
+        # 窗口级图标主题：QSS 表面为浅色，深色系统 palette 前景是白色，
+        # 会让关闭/最小化/新建/删除等图标白底白图不可见（见 icons._icon_theme）
+        self.setProperty("menuStyle", "modern")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         # Desktop AI-chat workspace: conversation navigation on the left and
         # the focused message canvas on the right.
@@ -698,8 +704,13 @@ class ChatWindow(QDialog):
         self._resize_global_start: QPoint | None = None
         self._resize_start_geometry: QRect | None = None
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAutoFillBackground(True)
+        # 无边框圆角窗：窗口自身透明（QSS #chat-window 背景同步置 transparent），
+        # 只显示圆角的 phone-shell，去掉窗外一圈方形背景（浅色系统白框/深色系统黑框）
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        # 边缘缩放光标改用 hover 事件持续刷新：子控件无鼠标跟踪时窗口的
+        # mouseMoveEvent 会停更，导致从窗口外进入后光标卡在缩放双箭头
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
         self.settings = config.chat_settings()
         self.prompt_builder = PromptBuilder(Path(__file__).resolve().parents[2] / "assets" / "characters")
@@ -764,6 +775,9 @@ class ChatWindow(QDialog):
         self.follow_button.blockSignals(True)
         self.follow_button.setChecked(self.follow_pet)
         self.follow_button.blockSignals(False)
+        # 勾选后按钮底变为强调色，图标需换成浅色；未勾选为浅色底深色图标
+        self.follow_button.setProperty("modernDark", self.follow_pet)
+        self.follow_button.setIcon(vector_widget_icon(self.follow_button, "pin", 14))
         if persist:
             self.config.set("chat_follow_pet", self.follow_pet)
             self.config.save()
@@ -893,7 +907,7 @@ class ChatWindow(QDialog):
         brand.addStretch(1)
         context_layout.addLayout(brand)
 
-        self.new_session_button = QPushButton("开启新对话")
+        self.new_session_button = QPushButton("开启新对话", self.phone_shell)
         self.new_session_button.setObjectName("new-conversation-button")
         self.new_session_button.setIcon(vector_widget_icon(self.new_session_button, "add", 16))
         self.new_session_button.setToolTip("新建会话")
@@ -949,7 +963,7 @@ class ChatWindow(QDialog):
         footer_layout.setSpacing(7)
         footer_actions = QHBoxLayout()
         footer_actions.setSpacing(6)
-        self.follow_button = QToolButton()
+        self.follow_button = QToolButton(sidebar_footer)
         self.follow_button.setObjectName("follow-pet-button")
         self.follow_button.setText("跟随桌宠")
         self.follow_button.setCheckable(True)
@@ -1026,12 +1040,12 @@ class ChatWindow(QDialog):
         self.sidebar_toggle_button.setToolTip("显示或隐藏会话侧栏")
         self.sidebar_toggle_button.setAccessibleName("显示或隐藏会话侧栏")
         title_layout.addWidget(self.sidebar_toggle_button)
-        self.minimize_button = QToolButton()
+        self.minimize_button = QToolButton(self.title_bar)
         self.minimize_button.setObjectName("window-minimize-button")
         self.minimize_button.setIcon(vector_widget_icon(self.minimize_button, "minimize", 16))
         self.minimize_button.setToolTip("最小化")
         self.minimize_button.setAccessibleName("最小化聊天窗口")
-        self.close_button = QToolButton()
+        self.close_button = QToolButton(self.title_bar)
         self.close_button.setObjectName("window-close-button")
         self.close_button.setIcon(vector_widget_icon(self.close_button, "exit", 16))
         self.close_button.setToolTip("关闭")
@@ -1443,16 +1457,6 @@ class ChatWindow(QDialog):
             self._bubbles.remove(bubble)
         bubble.deleteLater()
         self._set_empty_state(not self._bubbles)
-
-    def append_look_sync(self, user_text: str, reply: str) -> None:
-        """把「看看屏幕」的结果同步进当前会话（PR#11 重写后丢失的旧版行为）。"""
-        self.session.messages.append(ChatMessage("user", str(user_text)))
-        self.session.messages.append(ChatMessage("assistant", str(reply)))
-        self._add("user", str(user_text))
-        self._add("assistant", str(reply))
-        self.store.save(self.session)
-        self._refresh_sessions()
-        self._bottom()
 
     def _refresh_sessions(self) -> None:
         sessions = self.store.list(self.character_id)
@@ -1935,6 +1939,16 @@ class ChatWindow(QDialog):
             return Qt.CursorShape.SizeVerCursor
         return Qt.CursorShape.ArrowCursor
 
+    def event(self, event) -> bool:  # noqa: N802
+        # Hover 事件（WA_Hover）会持续投递到本窗口，即使光标位于未启用鼠标
+        # 跟踪的子控件上方；用它刷新边缘缩放光标，避免进入窗口后光标卡死
+        # 在缩放双箭头。位置始终是窗口本地坐标。
+        if event.type() == QEvent.Type.HoverMove:
+            self.setCursor(self._edge_cursor(self._edge_at(event.position())))
+        elif event.type() == QEvent.Type.HoverLeave:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        return super().event(event)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             edges = self._edge_at(event.position())
@@ -1973,7 +1987,6 @@ class ChatWindow(QDialog):
             self.setGeometry(QRect(x, y, w, h))
             event.accept()
             return
-        self.setCursor(self._edge_cursor(self._edge_at(event.position())))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:

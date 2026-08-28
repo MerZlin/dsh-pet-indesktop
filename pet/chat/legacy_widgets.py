@@ -266,8 +266,10 @@ class ChatWindow(QDialog):
         self.setMaximumSize(560, 980)
         self.resize(430, 780)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setAutoFillBackground(True)
+        # 无边框圆角窗：窗口自身透明（QSS #chat-window 背景同步置 transparent），
+        # 只显示圆角的 phone-shell，去掉窗外一圈方形背景（深色系统下是黑框）
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
 
         self.settings = config.chat_settings()
         self.prompt_builder = PromptBuilder(Path(__file__).resolve().parents[2] / "assets" / "characters")
@@ -755,16 +757,6 @@ class ChatWindow(QDialog):
             self._bubbles.remove(bubble)
         bubble.deleteLater()
         self._set_empty_state(not self._bubbles)
-
-    def append_look_sync(self, user_text: str, reply: str) -> None:
-        """把「看看屏幕」的结果同步进当前会话。"""
-        self.session.messages.append(ChatMessage("user", str(user_text)))
-        self.session.messages.append(ChatMessage("assistant", str(reply)))
-        self._add("user", str(user_text))
-        self._add("assistant", str(reply))
-        self.store.save(self.session)
-        self._refresh_sessions()
-        self._bottom()
 
     def _refresh_sessions(self) -> None:
         sessions = self.store.list(self.character_id)

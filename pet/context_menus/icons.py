@@ -9,8 +9,35 @@ from PySide6.QtGui import QBitmap, QBrush, QColor, QIcon, QPainter, QPainterPath
 from PySide6.QtWidgets import QMenu, QStyle
 
 
+def _icon_theme(widget) -> tuple[str, bool]:
+    """Resolve (menuStyle, modernDark) from the widget or its nearest ancestor.
+
+    Settings and chat windows pin ``menuStyle=modern`` on the container so every
+    icon rendered inside inherits the outline colour (#595959 on light surfaces,
+    #d6d6d6 on dark ones) instead of the app palette. The app palette follows
+    the OS theme: on a dark system its foreground is white, which painted white
+    glyphs on the QSS-light chat surfaces (invisible close/minimize/add icons).
+    Individual widgets may still flip ``modernDark`` (e.g. the accent send
+    button) without restating the style.
+    """
+    style = ""
+    dark = False
+    current = widget
+    while current is not None:
+        value = str(current.property("menuStyle") or "")
+        if value:
+            style = value
+        if current.property("modernDark"):
+            dark = True
+        if style and dark:
+            break
+        current = current.parent()
+    return style, dark
+
+
 def small_icon_size(menu: QMenu) -> int:
-    if str(menu.property("menuStyle") or "") == "modern":
+    style, _dark = _icon_theme(menu)
+    if style == "modern":
         return 18
     return max(12, int(menu.style().pixelMetric(QStyle.PixelMetric.PM_SmallIconSize, None, menu)))
 
@@ -24,9 +51,10 @@ def _new_icon_canvas(widget, requested_size: int | None = None):
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.scale(size / 16.0, size / 16.0)
+    style, dark = _icon_theme(widget)
     color = (
-        QColor("#d6d6d6" if widget.property("modernDark") else "#595959")
-        if str(widget.property("menuStyle") or "") == "modern"
+        QColor("#d6d6d6" if dark else "#595959")
+        if style == "modern"
         else widget.palette().color(widget.foregroundRole())
     )
     painter.setPen(QPen(color, 1.35, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
