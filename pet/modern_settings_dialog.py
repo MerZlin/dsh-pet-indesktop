@@ -1531,7 +1531,7 @@ class ModernSettingsDialog(QDialog):
                        self.pro_through_check),
             SettingRow("proactive_pre_cue", "触发前先兆提示", "触发前先冒一句「让我看看……」。",
                        self.pro_precue_check),
-            SettingRow("proactive_free", "优先免费视觉模型", "视觉配置指向智谱 GLM 时优先用免费模型。",
+            SettingRow("proactive_free", "识屏优先用独立视觉配置", "开：服务商配了独立视觉端点（如免费的智谱 GLM-4.6V-Flash）时识屏走它；关：始终跟随聊天模型。",
                        self.pro_free_check),
         ], content))
         layout.addWidget(SettingsSection("白名单", [

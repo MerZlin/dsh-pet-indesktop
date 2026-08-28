@@ -249,7 +249,8 @@ class PetSettingsDialog(QDialog):
         self.pro_precue_check.setChecked(bool(pro_cfg.get("pre_cue", True)))
         form_pro.addRow("", self.pro_precue_check)
 
-        self.pro_free_check = QCheckBox("优先使用免费视觉模型（GLM-4.6V-Flash）")
+        self.pro_free_check = QCheckBox("识屏优先用独立视觉配置")
+        self.pro_free_check.setToolTip("开：服务商配了独立视觉端点（如免费的智谱 GLM-4.6V-Flash）时识屏走它；关：始终跟随聊天模型")
         self.pro_free_check.setChecked(bool(pro_cfg.get("prefer_free_provider", True)))
         form_pro.addRow("", self.pro_free_check)
 
