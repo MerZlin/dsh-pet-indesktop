@@ -189,28 +189,39 @@ def test_disable_auto_hide_restores_pet(app, tmp_path):
     app.processEvents()
 
 
-def test_fullscreen_geometry_hit_ignores_maximized_window(app, tmp_path):
-    """自动隐藏任务栏场景：最大化窗口即使铺满整屏也不判为真全屏（不误隐藏桌宠）。
+def test_fullscreen_geometry_hit_conditional_on_autohide_taskbar(app, tmp_path):
+    """全屏判定：IsZoomed 排除仅在任务栏自动隐藏时启用。
 
-    回归：开启 Windows「自动隐藏任务栏」后最大化窗口会铺满整屏（任务栏被
-    盖住），旧实现只看几何、把这类窗口误判成真全屏而隐藏桌宠。修复后叠加
-    IsZoomed（最大化）判定排除，同时保留真全屏（游戏/视频/F11）的隐藏能力。
+    回归一：开启 Windows「自动隐藏任务栏」后最大化窗口铺满整屏，旧实现只看
+    几何、把它误判成真全屏而隐藏桌宠 → 自动隐藏模式下必须排除最大化窗口。
+    回归二：最大化式无边框全屏游戏（任务栏常驻 + 最大化 + 覆盖整屏）在任务栏
+    常驻模式下应继续命中，保留真全屏自动隐藏能力——不能无条件排除最大化窗口。
     """
     lib = FakeLibrary()
     win = PetWindow(lib, Config(base=tmp_path))
     geom = QRect(0, 0, 1920, 1080)  # 含任务栏区域的整屏几何
 
-    # 真全屏：窗口铺满整屏且非最大化（游戏/视频/F11）→ 命中，应隐藏桌宠
-    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom, is_zoomed=False) is True
+    # 真全屏（F11/原生全屏）：非最大化 + 覆盖整屏，任务栏是否自动隐藏都命中
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom,
+                                        is_zoomed=False, autohide_taskbar=False) is True
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom,
+                                        is_zoomed=False, autohide_taskbar=True) is True
 
-    # 自动隐藏任务栏 + 最大化窗口：几何上同样铺满整屏，但处于最大化 → 不命中（本次修复）
-    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom, is_zoomed=True) is False
+    # 最大化式无边框全屏游戏：任务栏常驻 + 最大化 + 覆盖整屏 → 仍按真全屏命中
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom,
+                                        is_zoomed=True, autohide_taskbar=False) is True
 
-    # 任务栏常驻可见 + 普通最大化窗口：只铺到工作区，未覆盖整屏 → 不命中
-    assert win._fullscreen_geometry_hit(0, 0, 1920, 1040, geom, is_zoomed=True) is False
+    # 自动隐藏任务栏 + 最大化窗口：几何铺满整屏但处于最大化 → 不命中（修复目标）
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom,
+                                        is_zoomed=True, autohide_taskbar=True) is False
+
+    # 任务栏常驻 + 普通最大化窗口：只铺到工作区，未覆盖整屏 → 几何判定排除
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1040, geom,
+                                        is_zoomed=True, autohide_taskbar=False) is False
 
     # 普通窗口：既不覆盖整屏也非全屏 → 不命中
-    assert win._fullscreen_geometry_hit(100, 100, 1500, 900, geom, is_zoomed=False) is False
+    assert win._fullscreen_geometry_hit(100, 100, 1500, 900, geom,
+                                        is_zoomed=False, autohide_taskbar=False) is False
 
     win.close()
     app.processEvents()

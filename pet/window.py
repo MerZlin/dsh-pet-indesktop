@@ -190,6 +190,43 @@ def wander_target_y(
     return int(max(y_lo, min(y_hi, start_y + rnd.randint(-max_dy, max_dy))))
 
 
+# ---- Win32：任务栏状态查询（全屏自动隐藏判定用）----
+_ABM_GETSTATE = 4     # SHAppBarMessage：查询任务栏自动隐藏/置顶状态
+_ABS_AUTOHIDE = 0x1   # 返回状态含该位 = 任务栏处于自动隐藏模式
+
+
+class _WinRect(ctypes.Structure):
+    _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
+
+class _AppBarData(ctypes.Structure):
+    _fields_ = [('cbSize', ctypes.c_uint),
+                ('hWnd', ctypes.c_void_p),
+                ('uCallbackMessage', ctypes.c_uint),
+                ('uEdge', ctypes.c_uint),
+                ('rc', _WinRect),
+                ('lParam', ctypes.c_longlong)]
+
+
+def _taskbar_autohide_enabled() -> bool:
+    """Windows 任务栏是否处于「自动隐藏」模式。仅 Windows；异常按 False 处理。
+
+    注意：只能反映主任务栏；多屏副任务栏的自动隐藏状态不在查询范围。
+    """
+    if os.name != 'nt':
+        return False
+    try:
+        shell32 = ctypes.windll.shell32
+        shell32.SHAppBarMessage.restype = ctypes.c_uint
+        data = _AppBarData()
+        data.cbSize = ctypes.sizeof(_AppBarData)
+        state = shell32.SHAppBarMessage(_ABM_GETSTATE, ctypes.byref(data))
+        return bool(state & _ABS_AUTOHIDE)
+    except Exception:
+        return False
+
+
 class PetWindow(QWidget):
     """桌宠窗口本体。"""
 
@@ -673,15 +710,16 @@ class PetWindow(QWidget):
 
     @staticmethod
     def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float,
-                                 geom, is_zoomed: bool) -> bool:
-        """覆盖整屏几何且非最大化 = 真全屏。
+                                 geom, is_zoomed: bool, autohide_taskbar: bool) -> bool:
+        """覆盖整屏几何 = 真全屏；任务栏自动隐藏时额外排除最大化窗口。
 
-        开启 Windows「自动隐藏任务栏」后，最大化窗口也会铺满整屏（任务栏
-        被盖住），与真全屏在几何上无法区分。真全屏窗口（游戏/视频/F11）
-        不会是最大化状态（IsZoomed 为假），最大化窗口则一定是 IsZoomed 为
-        真——据此把"自动隐藏任务栏下的最大化窗口"排除，避免误隐藏桌宠。
+        任务栏常驻可见时，最大化窗口只铺到工作区、盖不住任务栏区域，
+        几何判定本身就能排除它（无需看 IsZoomed），最大化式无边框全屏
+        游戏（最大化 + 覆盖整屏）仍按真全屏命中。任务栏自动隐藏时，最大
+        化窗口会铺满整屏（盖住任务栏），与真全屏几何无法区分——此时才用
+        IsZoomed 排除最大化窗口，避免误隐藏桌宠。
         """
-        if is_zoomed:
+        if autohide_taskbar and is_zoomed:
             return False
         return (l <= geom.left() and t <= geom.top()
                 and r >= geom.right() and b >= geom.bottom())
@@ -690,8 +728,9 @@ class PetWindow(QWidget):
         """前台窗口是否覆盖整个屏幕几何（含任务栏）= 真全屏。仅 Windows。
 
         只判定真全屏（全屏视频/游戏/浏览器 F11，窗口覆盖含任务栏的
-        全屏几何）；最大化窗口不触发隐藏——即使开启了 Windows「自动
-        隐藏任务栏」、最大化窗口铺满整屏，也按 IsZoomed 状态排除。
+        全屏几何）。任务栏常驻可见时最大化窗口只铺到工作区，几何判定
+        本身就能排除；仅当任务栏处于「自动隐藏」模式（最大化窗口会铺满
+        整屏、盖住任务栏）时才按 IsZoomed 排除最大化窗口。
 
         注意：GetWindowRect 返回物理像素，而 Qt geometry 是逻辑坐标——
         高 DPI（125%/150%）下直接比较会把最大化窗口误判为"覆盖全屏"
@@ -715,10 +754,7 @@ class PetWindow(QWidget):
             if buf.value in self._FS_SKIP_CLASSES:
                 return False
 
-            class RECT(ctypes.Structure):
-                _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
-                            ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
-            rect = RECT()
+            rect = _WinRect()
             if not u32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 return False
             # 窗口中心点（物理像素）→ 先定位屏幕，再用该屏 DPR 换算逻辑坐标
@@ -735,7 +771,8 @@ class PetWindow(QWidget):
             l, t = rect.left / dpr, rect.top / dpr
             r, b = rect.right / dpr, rect.bottom / dpr
             return self._fullscreen_geometry_hit(
-                l, t, r, b, scr.geometry(), bool(u32.IsZoomed(hwnd)))
+                l, t, r, b, scr.geometry(), bool(u32.IsZoomed(hwnd)),
+                _taskbar_autohide_enabled())
         except Exception:
             return False
 
