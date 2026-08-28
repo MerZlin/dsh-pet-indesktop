@@ -122,7 +122,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 >
 > 旧版 GIF 超大单文件（约 800 MB，运行时会在 C 盘临时目录解压并可能残留缓存）不再默认发布；确有需要可参考本文档「打包发布」一节自行构建 GIF 变体。
 >
-> macOS（Apple Silicon）用户：产物为 `dsh-pet-standalone-<变体>-macos-arm64.zip`（onedir .app），由 GitHub Actions 构建，见下方「macOS 使用」。发布 WebM 与 GIF 共四个变体（gif 变体包体约 800 MB）。
+> macOS（Apple Silicon）用户：产物为 `dsh-pet-standalone-<webm-chat|webm>-macos-arm64.zip`（onedir .app），由 GitHub Actions 构建，见下方「macOS 使用」。GIF 变体自 v4.0.0 起不再发布，需要请自行构建。
 >
 > Linux（x86_64）用户：产物为 `dsh-pet-standalone-*-linux-x86_64.zip`（onedir 目录，解压即用），由 GitHub Actions 构建，见下方「Linux 使用」。
 
@@ -957,7 +957,7 @@ python scripts/cleanup_mei_cache.py --delete
 
 ## 已知限制
 
-- 当前发布只提供 WebM 变体（Chat / 无 Chat）；GIF 变体包体约 800 MB，不再默认发布，需要时按「打包发布」一节自行构建。
+- 当前发布只提供 WebM 变体（Chat / 无 Chat）；GIF 变体（Windows/macOS/Linux）自 v4.0.0 起不再发布——包体约 800 MB，构建、上传与下载成本过高。确有需要的用户请按「打包发布」一节自行构建（先运行 `python scripts/convert_to_gif.py --force --clean` 生成素材）。
 - 安装包未做代码签名，首次运行时 SmartScreen 可能出现提示，需手动放行；macOS 同样未签名，需 Gatekeeper 放行（右键打开）。
 - 当前 macOS 发布只提供 Apple Silicon（arm64）的 onedir .app；Intel Mac 请源码运行或自行构建。
 - Linux 发布只提供 x86_64 的 onedir 目录包（WebM 两个变体），需自行安装少量系统库（见「Linux 使用」一节）；建议在 X11 桌面使用，Wayland 会话下透明/置顶表现取决于桌面合成器。
