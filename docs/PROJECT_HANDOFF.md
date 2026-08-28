@@ -472,3 +472,35 @@ opus R3 明确通过。sol R3/dsh R3 确认中。
 - 测试 360 passed / 5 skipped。
 - 用户配置虚惊事件：诊断脚本误用源码版数据目录（dsh-pet-standalone），
   用户真实配置（webm-chat 目录）完好。注意排查时区分两个 APPDATA 目录。
+
+### 第十七轮（2026-08-28 晚）：Agent 联动二期 + 独立评审修复批次
+
+- 联动二期：三种气泡（开始/过程/完成，菜单可开关）、动作池轮换+平滑衔接、
+  四通道过程汇报（DSH 桥接插件从 assistant/message 提取工具名——注意 dsh
+  无独立 tool/call 事件，headless 模式连 session/event 都没有，只有 web 通道全）；
+  多 Agent 按 agent 聚合作息；长文本气泡 6 行宽版。
+- 独立评审修复：keyring 失败不明文落盘（写盘副本剔除）、保存失败反馈、
+  aboutToQuit 单绑、外部角色目录变体感知、X/ESC 应用自启、ChatService
+  worker 集合、WebMClip generation+retired 回收、hook 脚本 ConvertTo-Json。
+- 测试 403 passed / 5 skipped。
+
+#### 评审确认存在但本轮未修（留给作者决策，稳定版前建议处理）
+
+- **自定义 Provider 地址无校验**：可填 http://内网/loopback/云元数据地址，
+  聊天+截图+API Key 都会发过去。建议公网强制 HTTPS、内网地址强提醒。
+- **「跳过 SSL 证书校验」是普通勾选框**：公网场景应禁止或强警告；
+  README 不应把它当网络错误的快速建议。
+- **更新包无哈希/签名校验**：updater 从 GitHub/jsDelivr 下载直接写盘。
+  建议 release 附 manifest + SHA-256 校验。
+- **交互区硬编码窗口中央 1/3**：与 README「点击桌宠」预期不符；
+  建议改 alpha mask 真实命中区域。
+- **主动识屏无敏感应用黑名单**：建议密码管理器/银行/终端类强制排除，
+  且首次启用时明确告知截图发往哪个服务商。
+- **npx --yes 自动下载执行**（harness_launcher 回退路径）：建议固定版本+
+  首次明确提示。
+- **现代设置自绘控件可访问性不足**（ToggleSwitch/ModernSelect/颜色按钮
+  无 AccessibleName）。
+- **聊天记录无保留策略**（无自动清理/隐私会话/一键删除全部数据）。
+- **升级覆盖残留旧文件**（安装器 ignoreversion，建议版本化目录或 manifest）。
+- **配置写盘竞态**（本次新发现）：运行中实例保存配置时用内存快照整体覆盖
+  磁盘——多开或外部改配置会被回滚。建议 save 前检测磁盘 mtime 变化并合并。
