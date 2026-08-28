@@ -414,3 +414,25 @@ tail（实测开销可忽略，目录发现已降频 30s）；Linux 自启路径
 - 用户本人也实际打开了打包版右键菜单：二级菜单结构、勾选状态渲染正常；
 - 验证残留（config-verify.json / agent-events / 截图 / 验证进程）已全部清理，
   用户日常打包版（PID 12368）全程未受影响。
+
+### 第十三轮（2026-08-28）：交付前五方会诊 + 终审批次
+
+**用户反馈修复**：经典设置页补「鼠标穿透」；肥鱼版 DeepSeek 对话背景支持内置主题
+（widgets.py 移除 builtin 剥离、补纱罩，设置页两种风格均可选主题）。
+
+**五方会诊 R1**：gemini 通过；dsh 3 中危；5.6-sol 8 高 11 中。逐项人工核实后全部落实
+（commit 1d17410，21 文件）：手动看看屏幕改内存 JPEG（截图不落盘铁律全链路闭合）；
+生小肥鱼/会话目录多开隔离；聊天迟到回调严格 request_id 守卫；识屏请求代次隔离；
+频控跨进程文件锁 + try_acquire 原子判定；provider 钥匙串引用继承修复+历史迁移；
+WebM 首帧解码 None 防崩；缩略图 worker 不碰 clip 构造（clip_path）；_MEI 清理占用探活；
+直播捕获模式运行时接回；设置保存即生效（穿透/全屏/捕获）；no_mirror 复接；
+squash mask 几何一致；现代菜单接回切旧版入口；看看屏幕同步聊天历史（append_look_sync）；
+双设置窗口保存前重取磁盘快照；tailer 文件身份识别；隐藏暂停低优先级预热。
+
+**R2 复核**：gemini 通过；opus 4 中危（was_visible 门控、实例 ID 撞号、tailer 丢弃标志、
+LK_LOCK 阻塞）全部落实（13d1289）；dsh 抓出 POSIX st_ctime_ns 身份判定回归。
+
+**R3 确认**：POSIX 改 (st_dev, st_ino)（816f83b）；预热首帧完成标记补齐 resume 缺口。
+opus R3 明确通过。sol R3/dsh R3 确认中。
+
+测试：345 passed / 5 skipped（全绿）。

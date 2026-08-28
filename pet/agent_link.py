@@ -133,7 +133,7 @@ class ByteOffsetTailer:
         self._initial_backfill_done = False
         self._partial: bytes = b""  # 跨读取边界的未完成行缓冲（防止半行被丢弃）
         self._discard_until_newline = False  # 超长行丢弃模式：跳到下一个换行再恢复
-        self._file_id: tuple[int, int] | None = None  # (st_ino, st_ctime_ns)：识别同路径新文件（轮转）
+        self._file_id: tuple[int, ...] | None = None  # 文件身份（Win: ino+ctime_ns / POSIX: dev+ino），识别同路径轮转新文件
 
     def reset(self) -> None:
         self.offset = 0
