@@ -7,7 +7,7 @@ mask，多开时属于纯白烧。此测试锁定 hideEvent 暂停、showEvent �
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QRect, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
@@ -184,6 +184,33 @@ def test_disable_auto_hide_restores_pet(app, tmp_path):
     assert win._hidden_paused is False
     assert win.isVisible()
     assert win.cfg.get('auto_hide_fullscreen') is False
+
+    win.close()
+    app.processEvents()
+
+
+def test_fullscreen_geometry_hit_ignores_maximized_window(app, tmp_path):
+    """自动隐藏任务栏场景：最大化窗口即使铺满整屏也不判为真全屏（不误隐藏桌宠）。
+
+    回归：开启 Windows「自动隐藏任务栏」后最大化窗口会铺满整屏（任务栏被
+    盖住），旧实现只看几何、把这类窗口误判成真全屏而隐藏桌宠。修复后叠加
+    IsZoomed（最大化）判定排除，同时保留真全屏（游戏/视频/F11）的隐藏能力。
+    """
+    lib = FakeLibrary()
+    win = PetWindow(lib, Config(base=tmp_path))
+    geom = QRect(0, 0, 1920, 1080)  # 含任务栏区域的整屏几何
+
+    # 真全屏：窗口铺满整屏且非最大化（游戏/视频/F11）→ 命中，应隐藏桌宠
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom, is_zoomed=False) is True
+
+    # 自动隐藏任务栏 + 最大化窗口：几何上同样铺满整屏，但处于最大化 → 不命中（本次修复）
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom, is_zoomed=True) is False
+
+    # 任务栏常驻可见 + 普通最大化窗口：只铺到工作区，未覆盖整屏 → 不命中
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1040, geom, is_zoomed=True) is False
+
+    # 普通窗口：既不覆盖整屏也非全屏 → 不命中
+    assert win._fullscreen_geometry_hit(100, 100, 1500, 900, geom, is_zoomed=False) is False
 
     win.close()
     app.processEvents()

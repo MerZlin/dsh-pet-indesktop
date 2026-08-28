@@ -671,11 +671,27 @@ class PetWindow(QWidget):
         'Windows.UI.Core.CoreWindow',  # 开始菜单/通知中心全屏层
     }
 
+    @staticmethod
+    def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float,
+                                 geom, is_zoomed: bool) -> bool:
+        """覆盖整屏几何且非最大化 = 真全屏。
+
+        开启 Windows「自动隐藏任务栏」后，最大化窗口也会铺满整屏（任务栏
+        被盖住），与真全屏在几何上无法区分。真全屏窗口（游戏/视频/F11）
+        不会是最大化状态（IsZoomed 为假），最大化窗口则一定是 IsZoomed 为
+        真——据此把"自动隐藏任务栏下的最大化窗口"排除，避免误隐藏桌宠。
+        """
+        if is_zoomed:
+            return False
+        return (l <= geom.left() and t <= geom.top()
+                and r >= geom.right() and b >= geom.bottom())
+
     def _foreground_covers_fullscreen(self) -> bool:
         """前台窗口是否覆盖整个屏幕几何（含任务栏）= 真全屏。仅 Windows。
 
         只判定真全屏（全屏视频/游戏/浏览器 F11，窗口覆盖含任务栏的
-        全屏几何）；普通最大化窗口（任务栏未被覆盖）不触发隐藏。
+        全屏几何）；最大化窗口不触发隐藏——即使开启了 Windows「自动
+        隐藏任务栏」、最大化窗口铺满整屏，也按 IsZoomed 状态排除。
 
         注意：GetWindowRect 返回物理像素，而 Qt geometry 是逻辑坐标——
         高 DPI（125%/150%）下直接比较会把最大化窗口误判为"覆盖全屏"
@@ -718,10 +734,8 @@ class PetWindow(QWidget):
             # 物理像素 → 逻辑像素
             l, t = rect.left / dpr, rect.top / dpr
             r, b = rect.right / dpr, rect.bottom / dpr
-            g = scr.geometry()
-            # 覆盖全屏几何（含任务栏）= 真全屏
-            return (l <= g.left() and t <= g.top()
-                    and r >= g.right() and b >= g.bottom())
+            return self._fullscreen_geometry_hit(
+                l, t, r, b, scr.geometry(), bool(u32.IsZoomed(hwnd)))
         except Exception:
             return False
 
