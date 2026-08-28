@@ -176,6 +176,11 @@ def _default_agent_link_data() -> dict:
         "claude": False,
         "cursor": False,
         "opencode": False,
+        # 联动气泡：开始干活提醒（可选，默认关）、任务完成通知（默认开）
+        "notify_state": False,
+        "notify_done": True,
+        # 过程汇报（可选，默认关）：Agent 干活中报「正在读文件/跑命令/改代码…」
+        "notify_activity": False,
     }
 
 

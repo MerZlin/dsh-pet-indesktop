@@ -135,7 +135,9 @@ def test_breath_bubble_reflows_on_pet_scale_change_and_summarizes_markdown():
     bubble = PetSpeechBubble(style_id="breath_bubble")
     bubble.show_text(
         "## 小狐狸的星空故事\n森林边有一棵老树，树洞里住着一只小狐狸。"
-        "每天傍晚它都会抬头看星星，并把看到的故事记在叶片上。",
+        "每天傍晚它都会抬头看星星，并把看到的故事记在叶片上。"
+        "它把叶片一片片夹进树洞深处的旧书里，等月亮升起来的时候，"
+        "就坐在树根上给路过的旅人讲这些星星的故事，讲着讲着自己也睡着了。" * 2,
         pet,
         5000,
         pet_scale=0.5,
@@ -143,8 +145,8 @@ def test_breath_bubble_reflows_on_pet_scale_change_and_summarizes_markdown():
     app.processEvents()
     small_width = bubble.width()
     assert "##" not in bubble.label.text()
-    assert bubble.label.text().count("\n") <= 2
-    assert bubble.label.text().endswith("…")
+    assert bubble.label.text().count("\n") <= 5  # 长文本放宽到 6 行
+    assert bubble.label.text().endswith("…")  # 超出 6 行仍省略收尾
 
     bubble.reflow(pet, pet_scale=1.0)
     app.processEvents()

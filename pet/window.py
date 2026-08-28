@@ -274,6 +274,12 @@ class PetWindow(QWidget):
         # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
         self._bubble_busy_until = 0.0
 
+        # Agent 联动动作衔接：正在播一次性动作时联动动作不打断，存为待播（最新覆盖旧的），
+        # 等当前动作播完由 _on_anim_ended 自然接上；联动动作播完仍有 Agent 在忙则接下一个。
+        self._pending_link_anim: str | None = None
+        self._link_anim_current: str | None = None
+        self._link_next_provider = None  # AgentLinkManager 注入：()->str|None
+
         # 主动识屏后台观察器（必须作为 PetWindow 的子成员，随窗口销毁/重建）
         from .proactive import ProactiveScreenWatcher
         self.proactive_watcher = ProactiveScreenWatcher(self, config)
@@ -940,6 +946,34 @@ class PetWindow(QWidget):
         self._rebuild_frame()
         movie.start()
 
+    # ---- Agent 联动动作平滑衔接 ----
+    def _is_one_shot_playing(self) -> bool:
+        """当前是否正在播一次性动作（动作池/点击回应/移动）。待机/转向可立即切换。"""
+        return self.anim in self.acts or self.anim in self.clicks or self.anim in self.moves
+
+    def request_link_anim(self, name: str) -> None:
+        """Agent 联动动作请求：一次性动作播放中不打断，存为待播（最新覆盖旧的）。"""
+        self._pending_link_anim = name
+        if not self._is_one_shot_playing():
+            self._play_pending_link_anim()
+
+    def _play_pending_link_anim(self) -> None:
+        name = self._pending_link_anim
+        self._pending_link_anim = None
+        if not name:
+            return
+        self._link_anim_current = name
+        self._switch(name)
+
+    def request_link_idle(self) -> None:
+        """Agent 回到空闲：取消待播联动；一次性动作让它播完自然回待机，否则立即回待机。"""
+        self._pending_link_anim = None
+        self._link_anim_current = None
+        if self._is_one_shot_playing():
+            return
+        if self.idles:
+            self._switch(self._pick(self.idles))
+
     def _on_frame(self, name: str, n: int) -> None:
         """媒体帧推进回调：重建画面；最后一帧触发播完处理。"""
         if name != self.anim or self.movie is None:
@@ -1132,6 +1166,19 @@ class PetWindow(QWidget):
             self._ended_fired = False
             self.movie.start()
             return
+        # Agent 联动：待播动作优先接上（平滑衔接，不打断刚播完的动作）
+        if self._pending_link_anim:
+            self._play_pending_link_anim()
+            return
+        # 联动动作播完仍有 Agent 在忙 → 接下一个联动动作；否则走正常动画链
+        if self._link_anim_current is not None and name == self._link_anim_current:
+            self._link_anim_current = None
+            provider = self._link_next_provider
+            nxt = provider() if callable(provider) else None
+            if nxt:
+                self._link_anim_current = nxt
+                self._switch(nxt)
+                return
         if name in self.turns:
             self.facing = 'right' if self.facing == 'left' else 'left'
         if name == self.drag or name in self.clicks:
@@ -1785,6 +1832,13 @@ class PetWindow(QWidget):
             self.cfg.save()
         if on:
             self.show_bubble(f"已开启 {agent_key.upper()} 状态联动监听～", duration_ms=4000)
+
+    def _set_agent_link_option(self, key: str, on: bool) -> None:
+        """联动气泡提醒子项开关（开始干活 / 任务完成），立即写入配置。"""
+        ag_data = dict(self.cfg.get('agent_link', {}))
+        ag_data[key] = bool(on)
+        self.cfg.set('agent_link', ag_data)
+        self.cfg.save()
 
     def _rename_character(self) -> None:
         """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""

@@ -8,6 +8,12 @@ import path from "node:path";
 const MAX_BYTES = 1024 * 1024; // 事件文件超过 1MB 时轮转（保留 .1 备份，防无限增长）
 const PLUGIN_ID = "dsh-pet-bridge";
 
+// 进程内状态去重：dsh 在 agent 创建/状态切换瞬间会抖动出重复 idle
+// （实测 idle→working 仅隔 4ms）。重复状态不落盘——否则桌宠端的换帧节流
+// （同 Agent 2 秒最小间隔）会把紧跟在幻影 idle 之后的真实 working 整批吞掉，
+// 表现为"联动开了但桌宠永远没反应"。
+let lastState = null;
+
 // 桥目录必须与桌宠端一致：win32=%APPDATA%，darwin=~/Library/Application Support，其他=~/.config
 function bridgeDir() {
   if (process.platform === "win32") {
@@ -20,6 +26,17 @@ function bridgeDir() {
 }
 
 function writeEvent(state) {
+  if (state === lastState) return;
+  lastState = state;
+  writeRecord({ state });
+}
+
+// 过程汇报：工具调用事件（state 不变，只带 tool 字段，桌宠端据此弹「正在跑命令…」）
+function writeTool(tool) {
+  writeRecord({ event: "tool/call", tool });
+}
+
+function writeRecord(extra) {
   try {
     const dir = bridgeDir();
     fs.mkdirSync(dir, { recursive: true });
@@ -34,7 +51,7 @@ function writeEvent(state) {
     } catch {}
     fs.appendFileSync(
       file,
-      JSON.stringify({ ts: Date.now() / 1000, agent: "dsh", event: "AgentStatus", state }) + "\n",
+      JSON.stringify({ ts: Date.now() / 1000, agent: "dsh", event: "AgentStatus", ...extra }) + "\n",
       "utf8",
     );
   } catch {
@@ -47,7 +64,9 @@ export function apply(ctx) {
   // agent 销毁时随其 context 自动解绑，不累积 disposer。
   ctx.on("agent/created", ({ agent }) => {
     if (!agent) return;
-    writeEvent("idle");
+    // 注意：创建时不要写 idle——桌宠端本来就默认 idle 态。
+    // 实测 dsh 创建 agent 后 4ms 内必发 running，此时若先写一条幻影 idle，
+    // 会占住桌宠端 2 秒换帧节流位，把紧跟的真实 working 整个吞掉。
     agent.ctx.effect(() => {
       const stop = agent.ctx.on("agent/status", ({ status }) => {
         writeEvent(status === "running" ? "working" : "idle");
@@ -56,5 +75,24 @@ export function apply(ctx) {
         if (typeof stop === "function") stop();
       };
     }, `${PLUGIN_ID}.agent()`);
+  });
+
+  // 过程汇报：session/event 在插件/根/agent 三层上下文都可达（实测验证）。
+  // 注意 dsh 的工具调用不走独立 tool/call 事件——工具名在 assistant/message
+  // 事件的 content 块里（type === "tool-call" 的块带 name 字段），
+  // web UI 的工具卡片也是这么来的。assistant/message 每步只发一次，无流式重复。
+  ctx.on("session/event", (_session, event) => {
+    try {
+      if (!event || event.type !== "assistant/message") return;
+      // data 形状：{ turn, step, message: { content: [...] } }（兼容 data 直接是消息）
+      const data = event.data || {};
+      const content = (data.message && data.message.content) || data.content;
+      if (!Array.isArray(content)) return;
+      for (const block of content) {
+        if (block && block.type === "tool-call" && block.name) {
+          writeTool(String(block.name));
+        }
+      }
+    } catch {}
   });
 }

@@ -308,7 +308,7 @@ def add_proactive_menu(menu: QMenu, pet) -> None:
 
 
 def add_agent_link_menu(menu: QMenu, pet) -> None:
-    """Agent 联动二级菜单（4 个 Agent 独立开关，失败/拒绝自动回滚勾选）。"""
+    """Agent 联动二级菜单（4 个 Agent 独立开关 + 气泡提醒选项，失败/拒绝自动回滚勾选）。"""
     sub = add_submenu(menu, "Agent 联动", None)
     agent_cfg = dict(pet.cfg.get('agent_link', {}))
     for agent_key, agent_label in (
@@ -321,6 +321,16 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act.setCheckable(True)
         act.setChecked(bool(agent_cfg.get(agent_key, False)))
         act.toggled.connect(lambda on, k=agent_key, a=act: pet._toggle_agent_link(k, on, a))
+    sub.addSeparator()
+    for opt_key, opt_label in (
+        ('notify_state', '开始干活气泡提醒'),
+        ('notify_done', '任务完成气泡提醒'),
+        ('notify_activity', '过程汇报气泡（正在读文件/跑命令…）'),
+    ):
+        act = sub.addAction(opt_label)
+        act.setCheckable(True)
+        act.setChecked(bool(agent_cfg.get(opt_key, opt_key == 'notify_done')))
+        act.toggled.connect(lambda on, k=opt_key: pet._set_agent_link_option(k, on))
 
 
 def build_size_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:

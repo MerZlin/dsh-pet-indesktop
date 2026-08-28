@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -91,6 +92,22 @@ def cursor_line_state(data: dict) -> str:
     return normalize_event_state(str(data.get("type") or data.get("event") or ""))
 
 
+def cursor_line_tool(data: dict) -> str:
+    """从 Cursor transcript 行提取 tool_use 的工具名（content 块里的 name）。取不到返回 ""。"""
+    if not isinstance(data, dict):
+        return ""
+    if str(data.get("role", "") or "").lower() != "assistant":
+        return ""
+    content = data.get("message", {})
+    if isinstance(content, dict):
+        content = content.get("content")
+    if isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "tool_use":
+                return str(c.get("name", "") or "").strip()
+    return ""
+
+
 def opencode_event_state(event_type: str, data_raw: str) -> str:
     """OpenCode 本地 SQLite event 表（type, data JSON）→ 状态。
 
@@ -113,6 +130,23 @@ def opencode_event_state(event_type: str, data_raw: str) -> str:
     if event_type.startswith("session.created"):
         return "idle"
     return ""
+
+
+def opencode_event_tool(event_type: str, data_raw: str) -> str:
+    """从 OpenCode 事件提取工具名（message.part.updated 且 part.type=="tool" 时
+    part.tool 即工具名，如 read/bash/edit）。取不到返回 ""。"""
+    if not event_type.startswith("message.part.updated"):
+        return ""
+    try:
+        data = json.loads(data_raw) if isinstance(data_raw, str) else {}
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    part = data.get("part") or {}
+    if str(part.get("type", "")) != "tool":
+        return ""
+    return str(part.get("tool", "") or "").strip()
 
 
 class ByteOffsetTailer:
@@ -230,6 +264,7 @@ class BaseAgentMonitor(QObject):
     """Agent 监视器抽象基类。"""
 
     state_changed = Signal(str, str)  # (agent_key, state)
+    activity = Signal(str, str)       # (agent_key, 工具名) —— 过程汇报用，仅事件带工具名时发
 
     def __init__(self, agent_key: str, config_dir: Path, parent=None) -> None:
         super().__init__(parent)
@@ -281,6 +316,9 @@ class BaseAgentMonitor(QObject):
                     continue
                 ev = str(data.get("event", ""))
                 st = str(data.get("state", ""))
+                tool = str(data.get("tool", "") or "").strip()
+                if tool:
+                    self.activity.emit(self.agent_key, tool)
                 normalized = normalize_event_state(ev, st)
                 if not normalized:
                     continue  # 不认识的事件类型：忽略，不误报为 working
@@ -343,6 +381,48 @@ class DshMonitor(BaseAgentMonitor):
         )
         return profiles or ["web"]
 
+    @staticmethod
+    def _summarize_install_error(output: str) -> str:
+        """从安装输出中提取第一行有用的错误摘要。"""
+        if not output or not output.strip():
+            return "未知错误"
+
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        # 过滤掉以 'at ' 开头的堆栈行和 node_modules 路径行
+        candidate_lines = [
+            line for line in lines
+            if not line.startswith("at ") and "node_modules" not in line
+        ]
+        if not candidate_lines:
+            return "未知错误"
+
+        # 优先匹配含 'ERR_' / 'error' / 'Error' 的行
+        chosen_line = ""
+        for line in candidate_lines:
+            if "ERR_" in line or "error" in line or "Error" in line:
+                chosen_line = line
+                break
+        if not chosen_line:
+            chosen_line = candidate_lines[0]
+
+        # 清理绝对路径（Windows 如 C:\path\file.ext 或 POSIX 如 /path/to/file.ext 或 file:///C:/...）
+        # 只保留最后一段文件名
+        def _replace_path(match: re.Match) -> str:
+            raw_path = match.group(0)
+            clean_path = raw_path.replace("\\", "/").rstrip("/")
+            segment = clean_path.split("/")[-1]
+            return segment or raw_path
+
+        # 匹配 file:/// 路径、Windows 盘符路径、POSIX 绝对路径
+        path_pattern = re.compile(r'(?:file:///[A-Za-z]:[^\s\'"]+|[A-Za-z]:\\[^\s\'"]+|/(?:[^\s\'"]+/)+[^\s\'"]*)')
+        cleaned_line = path_pattern.sub(_replace_path, chosen_line)
+
+        # 最长截到 60 字符
+        if len(cleaned_line) > 60:
+            cleaned_line = cleaned_line[:60]
+
+        return cleaned_line or "未知错误"
+
     @classmethod
     def install_bridge(cls) -> tuple[bool, str]:
         """一键安装桥接插件到所有已存在的 dsh profile（web/headless 等）。
@@ -369,11 +449,14 @@ class DshMonitor(BaseAgentMonitor):
                     cmd = ["cmd", "/c"] + [f'"{a}"' if " " in a else a for a in cmd]
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, shell=False)
                 if proc.returncode != 0:
-                    failed.append(f"{profile}: {(proc.stderr or proc.stdout)[-120:]}")
+                    raw_out = (proc.stderr or proc.stdout or "").strip()
+                    summary = cls._summarize_install_error(raw_out)
+                    failed.append(f"{profile}：{summary}")
                 else:
                     succeeded.append(profile)
             except Exception as exc:
-                failed.append(f"{profile}: {exc}")
+                summary = cls._summarize_install_error(str(exc))
+                failed.append(f"{profile}：{summary}")
         if failed:
             # 事务式回滚：部分失败时把已成功的也卸掉，避免"UI 显示未开启但插件在写文件"
             for profile in succeeded:
@@ -429,6 +512,14 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
     HOOK_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionStart", "UserPromptSubmit")
     HOOK_MARKER = "claude_event_hook"  # 识别本桌宠注入条目的标记
 
+    def start(self) -> None:
+        """启动时刷新 hook 脚本（脚本整体归本桌宠所有，升级版本自动覆盖旧版）。"""
+        try:
+            self._ensure_hook_script(self.events_file)
+        except Exception as exc:
+            log.debug("刷新 Claude hook 脚本失败: %s", exc)
+        super().start()
+
     @staticmethod
     def get_settings_path() -> Path:
         return Path.home() / ".claude" / "settings.json"
@@ -447,13 +538,26 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
         if sys.platform == "win32":
             script = events_file.parent / "claude_event_hook.ps1"
             # PowerShell 脚本：不依赖任何 Python 环境，打包版同样可用。
-            # 注意：以下为普通字符串（非 f-string），{0}/{1} 是 PowerShell -f 的占位符。
+            # 注意：以下为普通字符串（非 f-string），{0}/{1}/{2} 是 PowerShell -f 的占位符。
+            # stdin 读取 Claude Code 传入的 JSON（含 tool_name）；未重定向时跳过绝不阻塞。
             events_file.parent.mkdir(parents=True, exist_ok=True)
             script.write_text(
                 "param([string]$EventName = 'unknown')\n"
+                "$tool = ''\n"
+                "if ([Console]::IsInputRedirected) {\n"
+                "  try {\n"
+                "    $raw = [Console]::In.ReadToEnd()\n"
+                "    if ($raw) { $j = $raw | ConvertFrom-Json -ErrorAction Stop; if ($j.tool_name) { $tool = [string]$j.tool_name } }\n"
+                "  } catch {}\n"
+                "}\n"
                 "$file = Join-Path $PSScriptRoot 'claude.jsonl'\n"
                 "$ts = [DateTimeOffset]::Now.ToUnixTimeMilliseconds() / 1000.0\n"
-                '$line = \'{{"ts":{0},"agent":"claude","event":"{1}"}}\' -f $ts, $EventName\n'
+                "if ($tool) {\n"
+                "  $toolEsc = $tool -replace '\\\\', '\\\\' -replace '\"', '\\\"'\n"
+                "  $line = '{{\"ts\":{0},\"agent\":\"claude\",\"event\":\"{1}\",\"tool\":\"{2}\"}}' -f $ts, $EventName, $toolEsc\n"
+                "} else {\n"
+                "  $line = '{{\"ts\":{0},\"agent\":\"claude\",\"event\":\"{1}\"}}' -f $ts, $EventName\n"
+                "}\n"
                 "Add-Content -Path $file -Value $line -Encoding UTF8\n",
                 encoding="utf-8",
             )
@@ -467,9 +571,20 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
                 "import json, sys, time\n"
                 "from pathlib import Path\n"
                 "event = sys.argv[1] if len(sys.argv) > 1 else 'unknown'\n"
+                "tool = ''\n"
+                "try:\n"
+                "    if not sys.stdin.isatty():\n"
+                "        raw = sys.stdin.read()\n"
+                "        if raw.strip():\n"
+                "            tool = str(json.loads(raw).get('tool_name') or '')\n"
+                "except Exception:\n"
+                "    pass\n"
                 "out = Path(__file__).with_name('claude.jsonl')\n"
+                "rec = {'ts': time.time(), 'agent': 'claude', 'event': event}\n"
+                "if tool:\n"
+                "    rec['tool'] = tool\n"
                 "with out.open('a', encoding='utf-8') as f:\n"
-                "    f.write(json.dumps({'ts': time.time(), 'agent': 'claude', 'event': event}) + '\\n')\n",
+                "    f.write(json.dumps(rec, ensure_ascii=False) + '\\n')\n",
                 encoding="utf-8",
             )
             # 源码运行时 sys.executable 是 Python；打包（frozen）时退化为 python3
@@ -606,6 +721,11 @@ class CursorMonitor(BaseAgentMonitor):
             for line in tailer.read_new_lines():
                 try:
                     data = json.loads(line)
+                    if not isinstance(data, dict):
+                        continue
+                    tool = cursor_line_tool(data)
+                    if tool:
+                        self.activity.emit("cursor", tool)
                     norm = cursor_line_state(data)
                     if not norm:
                         continue  # 未知 transcript 行类型：忽略
@@ -668,6 +788,9 @@ class OpenCodeMonitor(BaseAgentMonitor):
             state = opencode_event_state(str(ev_type), str(data_raw))
             if state:
                 self.state_changed.emit("opencode", state)
+            tool = opencode_event_tool(str(ev_type), str(data_raw))
+            if tool:
+                self.activity.emit("opencode", tool)
 
 
 # ----------------------------------------------------------------------
@@ -682,6 +805,23 @@ class AgentLinkManager(QObject):
 
     install_finished = Signal(str, bool, str)  # (agent_key, ok, message)
 
+    # 联动气泡展示名
+    AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode"}
+    # 过程汇报：工具名 → 用户可读文案（白名单制，未知工具静默不弹，不泄露原始命令/路径）
+    TOOL_LABELS = {
+        "read": "正在读文件", "write": "正在写文件", "edit": "正在改代码",
+        "notebookedit": "正在改代码", "bash": "正在跑命令", "shell": "正在跑命令",
+        "grep": "正在搜索", "glob": "正在搜索", "search": "正在搜索",
+        "webfetch": "正在查网页", "websearch": "正在查网页",
+        "task": "正在派活给子代理", "todowrite": "正在列计划",
+    }
+    _ACTIVITY_MIN_INTERVAL = 10.0    # 同 Agent 过程气泡最小间隔
+    _ACTIVITY_GLOBAL_MIN = 8.0       # 全局最小间隔（多 Agent 并发防刷屏）
+    _ACTIVITY_SAME_LABEL = 60.0      # 同一工具文案 60s 内不重复
+    _BUSY_STATES = ("working", "thinking")
+    _DONE_CONFIRM_MS = 800   # busy→idle 稳定确认窗口（过滤 working→idle→working 抖动）
+    _DONE_COOLDOWN_S = 5.0   # 同 Agent 完成气泡最小间隔（最后一道保险）
+
     def __init__(self, window: Any, config: Any, *, min_interval: float = 2.0,
                  clock: Callable[[], float] = time.time) -> None:
         super().__init__(window if hasattr(window, "winId") else None)
@@ -693,6 +833,16 @@ class AgentLinkManager(QObject):
         self._min_interval = float(min_interval)
         self._clock = clock
         self._last_applied: dict[str, tuple[str, float]] = {}
+        # 原始状态流（不受去抖/节流影响）：用于 busy→idle 完成检测。
+        # 不能用 _last_applied 做完成判定——节流会丢掉紧跟其后的 idle，导致完成通知丢失。
+        self._last_raw: dict[str, str] = {}
+        self._done_pending: dict[str, QTimer] = {}   # agent → 稳定确认定时器
+        self._done_cooldown: dict[str, float] = {}   # agent → 上次完成气泡时刻
+        self._saw_alert: set[str] = set()            # busy 周期内出现过 attention/error 的 Agent
+        self._link_seq = 0                           # 联动动作轮换计数
+        # 过程汇报气泡：agent → (上次文案, 时刻)；全局最后一条时刻
+        self._last_activity: dict[str, tuple[str, float]] = {}
+        self._activity_global_last = 0.0
 
         self.monitors: dict[str, BaseAgentMonitor] = {
             "dsh": DshMonitor("dsh", self.config_dir, self),
@@ -703,7 +853,11 @@ class AgentLinkManager(QObject):
 
         for mon in self.monitors.values():
             mon.state_changed.connect(self._on_agent_state)
+            mon.activity.connect(self._on_agent_activity)
         self.install_finished.connect(self._on_install_finished)
+        # 联动动作链：一次性动作播完后若仍有 Agent 在忙，由 window 回调取下一个动作
+        if hasattr(self.win, "_pending_link_anim"):
+            self.win._link_next_provider = self._next_busy_anim
 
         self.apply_config()
 
@@ -849,9 +1003,11 @@ class AgentLinkManager(QObject):
         return True
 
     def pause(self) -> None:
-        """桌宠隐藏时暂停所有监视器。"""
+        """桌宠隐藏时暂停所有监视器，并丢弃待播联动动作（避免隐藏前的旧请求在恢复后过时播出）。"""
         for mon in self.monitors.values():
             mon.pause()
+        if hasattr(self.win, "_pending_link_anim"):
+            self.win._pending_link_anim = None
 
     def resume(self) -> None:
         """桌宠恢复显示时恢复活动的监视器。"""
@@ -863,8 +1019,26 @@ class AgentLinkManager(QObject):
         if not hasattr(self.win, "isVisible") or not self.win.isVisible():
             return
 
-        # 去抖：同一 Agent 连续相同状态只生效第一次
         now = self._clock()
+        # --- 原始状态流（绕开去抖/节流）：busy→idle 完成检测 ---
+        # 不能用 _last_applied 判定完成——节流会丢掉紧跟的 idle，导致完成通知丢失。
+        prev_raw = self._last_raw.get(agent_key)
+        self._last_raw[agent_key] = state
+        if state in self._BUSY_STATES:
+            self._cancel_done_check(agent_key)
+            self._saw_alert.discard(agent_key)
+        elif state in ("attention", "error") and prev_raw in self._BUSY_STATES:
+            self._saw_alert.add(agent_key)
+            # Claude 的回合结束信号是 Stop→attention 而非 idle：busy 后的
+            # attention/error 同样进入完成确认（800ms 内回忙则取消——例如
+            # SubagentStop 后主 Agent 继续干活、工具报错后重试）。
+            self._schedule_done_check(agent_key)
+        elif state in ("idle", "sleeping") and prev_raw in self._BUSY_STATES:
+            # working/thinking → idle：疑似任务完成，800ms 稳定确认
+            # （过滤 working→idle→working 抖动；确认期间回忙则取消）
+            self._schedule_done_check(agent_key)
+
+        # 去抖：同一 Agent 连续相同状态只生效第一次
         last = self._last_applied.get(agent_key)
         if last is not None and last[0] == state:
             return
@@ -876,31 +1050,151 @@ class AgentLinkManager(QObject):
         log.debug("Agent 状态变更 [%s]: %s", agent_key, state)
 
         # 状态 -> 桌宠行为映射（手册 §8.2）
-        if state == "thinking":
-            # 切换到写代码或深度思考动作
-            target_anim = None
-            for anim_name in ("写代码", "深度思考碎碎念"):
-                if anim_name in getattr(self.win, "cats", {}).get("acts", []):
-                    target_anim = anim_name
-                    break
-            if target_anim and hasattr(self.win, "_switch"):
-                self.win._switch(target_anim)
-        elif state == "working":
-            # 敲击桌面互动
-            target_anim = None
-            for anim_name in ("原地敲击桌面互动", "轻快记录"):
-                if anim_name in getattr(self.win, "cats", {}).get("acts", []):
-                    target_anim = anim_name
-                    break
-            if target_anim and hasattr(self.win, "_switch"):
-                self.win._switch(target_anim)
+        if state in ("thinking", "working"):
+            # busy 动作池轮换（写代码/吃Token 为主，每第 3 次插播短摸鱼），
+            # 经 request_link_anim 平滑衔接：正在播的一次性动作不被打断
+            anim = self._next_link_anim_rotation()
+            if anim and hasattr(self.win, "request_link_anim"):
+                self.win.request_link_anim(anim)
+            self._maybe_notify_start(agent_key, prev_raw)
         elif state == "attention":
-            if hasattr(self.win, "show_bubble"):
-                self.win.show_bubble("主人，Agent 这边需要你看一眼～", duration_ms=4500)
+            # busy 后的 attention（如 Claude Stop=回合结束）由完成确认流程接管，
+            # 避免「需要看一眼」和「完成通知」双气泡；独立出现的才立即提醒
+            if prev_raw not in self._BUSY_STATES:
+                self._show_link_bubble("主人，Agent 这边需要你看一眼～", important=True)
         elif state == "error":
-            if hasattr(self.win, "show_bubble"):
-                self.win.show_bubble("Agent 执行好像遇到报错了…", duration_ms=4500)
+            if prev_raw not in self._BUSY_STATES:
+                self._show_link_bubble("Agent 执行好像遇到报错了…", important=True)
         elif state in ("sleeping", "idle"):
-            # 回到待机
-            if hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles:
+            # 回到待机：一次性动作播完自然回，待机/移动中立即回
+            if hasattr(self.win, "request_link_idle"):
+                self.win.request_link_idle()
+            elif hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles:
                 self.win._switch(self.win._pick(self.win.idles))
+
+    # ------------------------------------------------------------------
+    # 联动动作池（写代码/吃Token 交替为主，每第 3 次插播短摸鱼）
+    # ------------------------------------------------------------------
+    _LINK_MAIN = ("写代码", "吃Token")
+    _LINK_BREAK = ("轻快记录", "原地漂浮踏步")
+
+    def _next_link_anim_rotation(self) -> str | None:
+        """下一个联动动作：主动作严格交替；每第 3 次插播摸鱼（独立节奏）。"""
+        acts = getattr(self.win, "cats", {}).get("acts", [])
+        main = [a for a in self._LINK_MAIN if a in acts]
+        brk = [a for a in self._LINK_BREAK if a in acts]
+        if not main and not brk:
+            return None
+        self._link_seq += 1
+        if brk and self._link_seq % 3 == 0:
+            return brk[(self._link_seq // 3 - 1) % len(brk)]
+        if main:
+            return main[(self._link_seq - 1) % len(main)]
+        return brk[(self._link_seq - 1) % len(brk)]
+
+    def _next_busy_anim(self) -> str | None:
+        """window 动画结束回调用：仍有 Agent 在忙 → 下一个联动动作；否则 None。
+        全员空闲时重置轮换计数——下一个任务从「写代码」重新开始。"""
+        if any(s in self._BUSY_STATES for s in self._last_raw.values()):
+            return self._next_link_anim_rotation()
+        self._link_seq = 0
+        return None
+
+    # ------------------------------------------------------------------
+    # 联动气泡（开始干活可选 / 任务完成通知）
+    # ------------------------------------------------------------------
+    def _maybe_notify_start(self, agent_key: str, prev_raw: str | None) -> None:
+        """开始干活气泡：仅「非 busy → busy」时提示（thinking↔working 互跳不弹）。
+        低优先级：气泡位被占时直接丢弃。"""
+        agent_cfg = self.cfg.get("agent_link", {})
+        if not agent_cfg.get("notify_state", False):
+            return
+        if prev_raw in self._BUSY_STATES:
+            return
+        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        self._show_link_bubble(f"{name} 开始干活啦～", important=False, duration_ms=3000)
+
+    def _on_agent_activity(self, agent_key: str, tool: str) -> None:
+        """过程汇报气泡（可选，默认关）：「DSH 正在读文件…」这类。
+        白名单工具映射 + 三重限流（同 Agent 10s / 同文案 60s / 全局 8s）。"""
+        agent_cfg = self.cfg.get("agent_link", {})
+        if not agent_cfg.get("notify_activity", False):
+            return
+        label = self.TOOL_LABELS.get(str(tool).strip().lower(), "")
+        if not label:
+            return
+        now = self._clock()
+        last = self._last_activity.get(agent_key)
+        if last is not None:
+            if last[0] == label and now - last[1] < self._ACTIVITY_SAME_LABEL:
+                return
+            if now - last[1] < self._ACTIVITY_MIN_INTERVAL:
+                return
+        if now - self._activity_global_last < self._ACTIVITY_GLOBAL_MIN:
+            return
+        self._last_activity[agent_key] = (label, now)
+        self._activity_global_last = now
+        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        # 低优先级：气泡位被占直接丢弃，不与重要气泡竞争
+        self._show_link_bubble(f"{name} {label}…", important=False, duration_ms=2600)
+
+    def _schedule_done_check(self, agent_key: str) -> None:
+        self._cancel_done_check(agent_key)
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(self._DONE_CONFIRM_MS)
+        timer.timeout.connect(lambda k=agent_key: self._fire_done(k))
+        self._done_pending[agent_key] = timer
+        timer.start()
+
+    def _cancel_done_check(self, agent_key: str) -> None:
+        timer = self._done_pending.pop(agent_key, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+
+    def _fire_done(self, agent_key: str) -> None:
+        """800ms 稳定确认到期：期间回忙则不算完成；配置/冷却在弹出前再查。"""
+        self._done_pending.pop(agent_key, None)
+        if self._last_raw.get(agent_key) in self._BUSY_STATES:
+            return
+        agent_cfg = self.cfg.get("agent_link", {})
+        if not agent_cfg.get("notify_done", True):
+            return
+        now = self._clock()
+        if now - self._done_cooldown.get(agent_key, 0.0) < self._DONE_COOLDOWN_S:
+            return
+        self._done_cooldown[agent_key] = now
+        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        if agent_key in self._saw_alert:
+            # busy 期间出现过 attention/error：不暗示"成功完成"
+            text = f"{name} 那边停了，结果怎么样要主人自己看一眼哦"
+        else:
+            text = f"{name} 干完活啦，去看看成果吧～"
+        self._saw_alert.discard(agent_key)
+        # 恢复待机动画：Claude 回合结束没有 idle 事件，不靠这步会一直停在干活动作。
+        # 仅当没有其他 Agent 仍在忙时恢复（避免 A 完成顶掉 B 的工作动画）。
+        if not any(k != agent_key and s in self._BUSY_STATES
+                   for k, s in self._last_raw.items()):
+            if hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles \
+                    and hasattr(self.win, "_switch"):
+                self.win._switch(self.win._pick(self.win.idles))
+            self._last_applied[agent_key] = ("idle", now)
+        self._show_link_bubble(text, important=True)
+
+    def _show_link_bubble(self, text: str, *, important: bool, duration_ms: int = 4500,
+                          _retried: int = 0) -> None:
+        """联动气泡：不顶掉正在占用气泡位的重要气泡（主动识屏/attention 等）。
+        普通气泡直接让路丢弃；重要气泡每 2.5s 重试至多 4 次（约 10s 窗口），
+        仍被占才放弃——主动识屏长答复可能占位 15-20s，单次重试不够用。"""
+        if not hasattr(self.win, "show_bubble"):
+            return
+        busy_until = getattr(self.win, "_bubble_busy_until", 0.0)
+        if time.time() < busy_until:
+            if not important or _retried >= 4:
+                return
+            QTimer.singleShot(2500, self,
+                              lambda t=text, n=_retried: self._show_link_bubble(
+                                  t, important=True, _retried=n + 1))
+            return
+        self.win.show_bubble(text, duration_ms=duration_ms)
