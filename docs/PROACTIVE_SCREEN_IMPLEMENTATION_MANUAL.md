@@ -264,7 +264,7 @@ capture_window_rect(rect) -> PIL.Image | None   # 后台线程内调用
 ### 8.2 各 Agent 事件源（已调研验证）
 | Agent | 事件源 | 实现 |
 |---|---|---|
-| DSH | **内置桥接插件**（`integrations/dsh-pet-bridge`）：订阅 `agent/created` + `agent/status`，写入固定桥目录 `<数据基目录>/dsh-pet-bridge/dsh.jsonl`；勾选时弹确认框一键安装（`dsh plugin install`），关闭自动卸载。已实测：插件需声明 `dsh.bundle` + `cordis.patch.yml` 才会成为 profile layer |
+| DSH | **内置桥接插件**（`integrations/dsh-pet-bridge`）：订阅 `agent/created` + `agent/status`，写入固定桥目录 `<数据基目录>/dsh-pet-bridge/dsh.jsonl`；勾选时弹确认框一键安装（**node 直调 pnpm add + 自维护 profile 的 `dsh.profile.bundles` 层**——不走 `dsh plugin`，规避其在 Windows 上拆碎含空格路径的缺陷），关闭自动卸载（幂等）。已实测：插件需声明 `dsh.bundle` + `cordis.patch.yml` 才会成为 profile layer |
 | Claude Code | 官方 hooks（PreToolUse/PostToolUse/PostToolUseFailure/Stop/SessionStart/UserPromptSubmit） | 勾选开启时弹确认框，经用户同意后把 hook 命令写入 `.claude/settings.json`，命令追加一行到事件文件 |
 | Cursor | `~/.cursor/projects/**/agent-transcripts/*.jsonl`（**真实格式**：`{role, message:{content:[...]}}`——user→thinking、assistant+tool_use→working、assistant 纯文本→idle） | byte-offset tail，1.5s，仅最近 1 天目录，文件数上限 50 |
 | OpenCode | **原生 SQLite 直读**（`~/.local/share/opencode/opencode.db` 的 event 表，rowid 偏移轮询，只读模式不阻塞写入）——**无需插件** | 1.5s 轮询，backfill 防护 |
