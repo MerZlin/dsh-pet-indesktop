@@ -448,3 +448,12 @@ opus R3 明确通过。sol R3/dsh R3 确认中。
 - 合并后全量测试 350 passed / 5 skipped（上游新增回归测试并入）。
 - **注意：上游 main 目前仍带这个重复定义**（a67f49a 合并时带进去的），
   需要一个小修复 PR 推给作者。
+
+### 第十五轮（2026-08-28 中午）：v4.0.0 同步 + issue #8 副屏位置修复
+
+- 上游发版 v4.0.0（README 重写）+ 若干 CI 修复；合并时 append_look_sync 旧副本
+  与上游收编版冲突 → 采用上游删副本方案（内容等价，busy 守卫上游已收编）。
+- issue #8（WET1AND）：副屏上的桌宠开机自启回落主屏。根因：自启时副屏尚未
+  枚举（显示器唤醒慢），按名查找失败回退主屏后定型。修复：目标屏不在线时挂
+  screenAdded 监听，上线即自动恢复；手动拖动/回右下角立即撤防；2 分钟超时撤防。
+- 测试 358 passed / 5 skipped（含新回归测试 test_restore_defers_until_saved_screen_comes_online）。
