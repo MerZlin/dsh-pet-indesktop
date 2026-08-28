@@ -8,11 +8,21 @@ import path from "node:path";
 const MAX_BYTES = 1024 * 1024; // 事件文件超过 1MB 时轮转（保留 .1 备份，防无限增长）
 const PLUGIN_ID = "dsh-pet-bridge";
 
-// 进程内状态去重：dsh 在 agent 创建/状态切换瞬间会抖动出重复 idle
-// （实测 idle→working 仅隔 4ms）。重复状态不落盘——否则桌宠端的换帧节流
-// （同 Agent 2 秒最小间隔）会把紧跟在幻影 idle 之后的真实 working 整批吞掉，
-// 表现为"联动开了但桌宠永远没反应"。
+// 进程内状态去重 + 多 Agent 聚合：
+// 1) dsh 在 agent 创建/状态切换瞬间会抖动出重复 idle（实测 idle→working 仅隔
+//    4ms），重复聚合状态不落盘——否则桌宠端 2 秒换帧节流会吞掉真实 working。
+// 2) 必须按 agent 分别跟踪再聚合（任一在忙 = 忙）：dsh 可并发多个 agent
+//   （子代理/多会话），全局单值去重会让先完成的 agent 把还在干活的顶成 idle。
+const agentStates = new Map(); // agent 对象 → "working" | "idle"
 let lastState = null;
+
+function aggregateWrite() {
+  const anyBusy = [...agentStates.values()].some((s) => s === "working");
+  const next = anyBusy ? "working" : "idle";
+  if (next === lastState) return;
+  lastState = next;
+  writeRecord({ state: next });
+}
 
 // 桥目录必须与桌宠端一致：win32=%APPDATA%，darwin=~/Library/Application Support，其他=~/.config
 function bridgeDir() {
@@ -23,12 +33,6 @@ function bridgeDir() {
     return path.join(os.homedir(), "Library", "Application Support", "dsh-pet-bridge");
   }
   return path.join(os.homedir(), ".config", "dsh-pet-bridge");
-}
-
-function writeEvent(state) {
-  if (state === lastState) return;
-  lastState = state;
-  writeRecord({ state });
 }
 
 // 过程汇报：工具调用事件（state 不变，只带 tool 字段，桌宠端据此弹「正在跑命令…」）
@@ -68,11 +72,16 @@ export function apply(ctx) {
     // 实测 dsh 创建 agent 后 4ms 内必发 running，此时若先写一条幻影 idle，
     // 会占住桌宠端 2 秒换帧节流位，把紧跟的真实 working 整个吞掉。
     agent.ctx.effect(() => {
+      agentStates.set(agent, "idle");
       const stop = agent.ctx.on("agent/status", ({ status }) => {
-        writeEvent(status === "running" ? "working" : "idle");
+        agentStates.set(agent, status === "running" ? "working" : "idle");
+        aggregateWrite();
       });
       return () => {
         if (typeof stop === "function") stop();
+        // agent 销毁：移出聚合并重算（全部退出时落一条 idle，桌宠回待机）
+        agentStates.delete(agent);
+        aggregateWrite();
       };
     }, `${PLUGIN_ID}.agent()`);
   });

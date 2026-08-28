@@ -649,7 +649,7 @@ class TestAgentLinkBubbles:
         bubbles = []
 
         class DummyWin:
-            cats = {"acts": ["写代码", "原地敲击桌面互动"]}
+            cats = {"acts": ["写代码", "原地敲击桌面互动", "吃Token", "轻快记录", "原地漂浮踏步"]}
             idles = ["待机呼吸"]
             _bubble_busy_until = 0.0
 
@@ -658,6 +658,11 @@ class TestAgentLinkBubbles:
 
             def _switch(self, name):
                 switched.append(name)
+
+            def request_link_idle(self):
+                # 与真实 window 行为对齐：清待播并回待机
+                if self.idles:
+                    switched.append(self.idles[0])
 
             def show_bubble(self, text, duration_ms=3000):
                 bubbles.append(text)
@@ -1094,3 +1099,70 @@ class TestActivitySignal:
             fh.write('{"ts":1,"agent":"dsh","event":"AgentStatus","state":"working"}\n')
         mon._poll()
         assert got == []
+
+    class _HiddenWin:
+        cats = {"acts": ["写代码"]}
+        idles = ["待机呼吸"]
+        _bubble_busy_until = 0.0
+        switched = None
+        bubbles = None
+
+        def __init__(self):
+            self.switched = []
+            self.bubbles = []
+
+        def isVisible(self):
+            return False
+
+        def _switch(self, name):
+            self.switched.append(name)
+
+        def show_bubble(self, text, duration_ms=3000):
+            self.bubbles.append(text)
+
+        def _pick(self, lst):
+            return lst[0]
+
+    def test_fire_done_hidden_window_is_noop(self, tmp_path):
+        """opus 评审 H1：隐藏窗口上 _fire_done 不得切动画/弹气泡。"""
+        app = QApplication.instance() or QApplication([])
+        win = TestActivitySignal._HiddenWin()
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(win, cfg)
+        mgr._last_raw["dsh"] = "idle"
+        mgr._fire_done("dsh")
+        assert win.switched == []
+        assert win.bubbles == []
+
+    def test_pause_cancels_done_pending(self, tmp_path):
+        """opus 评审 H1：pause 必须取消所有完成确认计时器。"""
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        bubbles = []
+
+        class Win:
+            cats = {"acts": ["写代码"]}
+            idles = ["待机呼吸"]
+            _bubble_busy_until = 0.0
+
+            def isVisible(self):
+                return True
+
+            def _switch(self, name):
+                pass
+
+            def request_link_idle(self):
+                pass
+
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+            def _pick(self, lst):
+                return lst[0]
+
+        mgr = AgentLinkManager(Win(), cfg)
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_agent_state("dsh", "idle")
+        assert "dsh" in mgr._done_pending
+        mgr.pause()
+        assert mgr._done_pending == {}

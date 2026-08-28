@@ -1003,11 +1003,14 @@ class AgentLinkManager(QObject):
         return True
 
     def pause(self) -> None:
-        """桌宠隐藏时暂停所有监视器，并丢弃待播联动动作（避免隐藏前的旧请求在恢复后过时播出）。"""
+        """桌宠隐藏时暂停所有监视器，丢弃待播联动动作，并取消所有完成确认计时器
+        （否则隐藏期间计时器到期会在隐藏窗口上切动画/弹气泡）。"""
         for mon in self.monitors.values():
             mon.pause()
         if hasattr(self.win, "_pending_link_anim"):
             self.win._pending_link_anim = None
+        for key in list(self._done_pending):
+            self._cancel_done_check(key)
 
     def resume(self) -> None:
         """桌宠恢复显示时恢复活动的监视器。"""
@@ -1156,6 +1159,8 @@ class AgentLinkManager(QObject):
     def _fire_done(self, agent_key: str) -> None:
         """800ms 稳定确认到期：期间回忙则不算完成；配置/冷却在弹出前再查。"""
         self._done_pending.pop(agent_key, None)
+        if not hasattr(self.win, "isVisible") or not self.win.isVisible():
+            return  # 隐藏中不弹不切（pause 已取消计时器，这里是兜底）
         if self._last_raw.get(agent_key) in self._BUSY_STATES:
             return
         agent_cfg = self.cfg.get("agent_link", {})
@@ -1174,9 +1179,13 @@ class AgentLinkManager(QObject):
         self._saw_alert.discard(agent_key)
         # 恢复待机动画：Claude 回合结束没有 idle 事件，不靠这步会一直停在干活动作。
         # 仅当没有其他 Agent 仍在忙时恢复（避免 A 完成顶掉 B 的工作动画）。
+        # 必须走 request_link_idle（它会清 _link_anim_current 并尊重一次性动作），
+        # 不能裸 _switch——否则残留的 link 状态会把以后的普通同名动作劫持进联动链。
         if not any(k != agent_key and s in self._BUSY_STATES
                    for k, s in self._last_raw.items()):
-            if hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles \
+            if hasattr(self.win, "request_link_idle"):
+                self.win.request_link_idle()
+            elif hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles \
                     and hasattr(self.win, "_switch"):
                 self.win._switch(self.win._pick(self.win.idles))
             self._last_applied[agent_key] = ("idle", now)
