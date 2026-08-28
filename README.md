@@ -122,7 +122,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 >
 > 旧版 GIF 超大单文件（约 800 MB，运行时会在 C 盘临时目录解压并可能残留缓存）不再默认发布；确有需要可参考本文档「打包发布」一节自行构建 GIF 变体。
 >
-> macOS（Apple Silicon）用户：产物为 `dsh-pet-standalone-<webm-chat|webm>-macos-arm64.zip`（onedir .app），由 GitHub Actions 构建，见下方「macOS 使用」。v4.0.0 暂只发布 WebM 两个变体，macOS GIF 变体待稳定后另行补发。
+> macOS（Apple Silicon）用户：产物为 `dsh-pet-standalone-<变体>-macos-arm64.zip`（onedir .app），由 GitHub Actions 构建，见下方「macOS 使用」。发布 WebM 与 GIF 共四个变体（gif 变体包体约 800 MB）。
 >
 > Linux（x86_64）用户：产物为 `dsh-pet-standalone-*-linux-x86_64.zip`（onedir 目录，解压即用），由 GitHub Actions 构建，见下方「Linux 使用」。
 

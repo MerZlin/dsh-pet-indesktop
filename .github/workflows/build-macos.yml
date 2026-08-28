@@ -27,9 +27,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller pytest
 
-      # GIF 变体（gif-chat / gif）暂缓发布：待 webm 版稳定后再恢复。
-      # 恢复时需加回：convert_to_gif.py 生成素材步骤，以及下方四个循环
-      # 中的 gif-chat/gif 条目（DATAS=assets/characters_gif）。
+      # GIF 变体（gif-chat / gif）：webm 版稳定后恢复发布。
+      - name: Generate GIF assets from webm
+        run: python scripts/convert_to_gif.py
+
       - name: Generate app icon (.icns)
         run: python scripts/make_icon.py --icns
 
@@ -38,15 +39,17 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
 
-      # 两个 webm 变体与 Windows 发布一致：
-      #   webm-chat / webm（无 Chat）
+      # 四个变体与 Windows 发布一致：
+      #   webm-chat / webm（无 Chat）  / gif-chat / gif（无 Chat）
       # onedir 形态：运行期零解压、不产生临时缓存；build_variant.py 注入
       # 变体标识，配置目录/自启项按变体隔离（与 Windows 行为一致）。
       - name: Build onedir .app variants
         run: |
           for SPEC in \
             "webm-chat|packaging/pet_entry.py|assets/characters|" \
-            "webm|packaging/pet_entry_no_chat.py|assets/characters|--exclude-module pet.chat --exclude-module keyring"; do
+            "webm|packaging/pet_entry_no_chat.py|assets/characters|--exclude-module pet.chat --exclude-module keyring" \
+            "gif-chat|packaging/pet_entry.py|assets/characters_gif|" \
+            "gif|packaging/pet_entry_no_chat.py|assets/characters_gif|--exclude-module pet.chat --exclude-module keyring"; do
             IFS='|' read -r VARIANT ENTRY DATAS EXCLUDES <<< "$SPEC"
             echo "==> building $VARIANT"
             echo "VARIANT = '$VARIANT'" > packaging/build_variant.py
@@ -74,7 +77,7 @@ jobs:
 
       - name: Verify pet module collected
         run: |
-          for VARIANT in webm-chat webm; do
+          for VARIANT in webm-chat webm gif-chat gif; do
             APP="dsh-pet-standalone-$VARIANT"
             WARN="build/$APP/warn-$APP.txt"
             if [ -f "$WARN" ] && grep -q "missing module named pet" "$WARN"; then
@@ -85,14 +88,14 @@ jobs:
 
       - name: Ad-hoc codesign
         run: |
-          for VARIANT in webm-chat webm; do
+          for VARIANT in webm-chat webm gif-chat gif; do
             codesign --force --deep --sign - "dist/dsh-pet-standalone-$VARIANT.app"
           done
 
       - name: Package as zip
         run: |
           cd dist
-          for VARIANT in webm-chat webm; do
+          for VARIANT in webm-chat webm gif-chat gif; do
             ditto -c -k --keepParent "dsh-pet-standalone-$VARIANT.app" \
               "dsh-pet-standalone-$VARIANT-macos-arm64.zip"
           done
