@@ -876,7 +876,9 @@ def test_modern_menu_icons_are_crisp_outline_glyphs(monkeypatch):
 
     app = QApplication.instance() or QApplication([])
     menu = QMenu()
-    apply_modern_menu_style(menu)
+    # 固定浅色主题：深色系统下菜单图标为浅灰（深色菜单设计），
+    # 该断言验证的是浅色菜单的深色轮廓图标
+    apply_modern_menu_style(menu, {"theme": "light"})
     names = ("chat", "play", "character", "speed", "spawn", "settings", "web", "exit")
     cache_keys = []
     for name in names:
