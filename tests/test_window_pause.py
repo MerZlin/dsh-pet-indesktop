@@ -217,5 +217,12 @@ def test_fullscreen_geometry_hit_requires_borderless(app, tmp_path):
     # 带标题栏的普通窗口 → 不命中
     assert win._fullscreen_geometry_hit(100, 100, 1500, 900, geom, has_caption=True) is False
 
+    # Unity/UE 系游戏（如绝区零）全屏时保留 WS_CAPTION 但必带 WS_EX_TOPMOST：
+    # 置顶 + 覆盖整屏 → 命中（PR #18 的纯标题栏判据对这类游戏漏检）
+    assert win._fullscreen_geometry_hit(0, 0, 1920, 1080, geom, has_caption=True, topmost=True) is True
+
+    # 置顶但未覆盖整屏（小窗置顶播放器）→ 几何仍是必要条件
+    assert win._fullscreen_geometry_hit(100, 100, 1500, 900, geom, has_caption=True, topmost=True) is False
+
     win.close()
     app.processEvents()

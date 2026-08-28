@@ -193,7 +193,9 @@ def wander_target_y(
 
 # ---- Win32：全屏判定用常量/结构 ----
 GWL_STYLE = -16             # GetWindowLongW：取窗口样式
+GWL_EXSTYLE = -20           # GetWindowLongW：取扩展样式
 _WS_CAPTION = 0x00C00000    # WS_BORDER | WS_DLGFRAME（带标题栏）
+_WS_EX_TOPMOST = 0x00000008  # 置顶：真全屏游戏/视频几乎必带，普通最大化窗口不带
 
 
 class _WinRect(ctypes.Structure):
@@ -770,15 +772,17 @@ class PetWindow(QWidget):
 
     @staticmethod
     def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float,
-                                 geom, has_caption: bool) -> bool:
-        """覆盖整屏几何且无标题栏 = 真全屏。
+                                 geom, has_caption: bool, topmost: bool = False) -> bool:
+        """覆盖整屏几何，且（无标题栏 或 置顶）= 真全屏。
 
-        带标题栏（WS_CAPTION）的窗口只是普通/最大化窗口，不是全屏；真全屏
-        （游戏/视频/浏览器 F11）会去掉标题栏。这样 Windows「自动隐藏任务栏」
-        下最大化窗口即使铺满整屏也不误判为全屏；而已经最大化后按 F11 的窗口
-        （IsZoomed 仍为真、但标题栏被应用清掉）仍能正确命中为真全屏。
+        判据组合的原因：
+        - 带标题栏的普通/最大化窗口（含 Windows 自动隐藏任务栏场景）不置顶 → 排除；
+        - 真全屏游戏/视频：多数去掉标题栏（无标题栏直接命中）；但 Unity/UE 系游戏
+          （如绝区零）全屏时仍保留 WS_CAPTION 样式位——它们几乎必带 WS_EX_TOPMOST，
+          用置顶位兜住；
+        - 已最大化后按 F11 的窗口（IsZoomed 仍为真、标题栏被清掉）也正常命中。
         """
-        if has_caption:
+        if has_caption and not topmost:
             return False
         return (l <= geom.left() and t <= geom.top()
                 and r >= geom.right() and b >= geom.bottom())
@@ -786,10 +790,9 @@ class PetWindow(QWidget):
     def _foreground_covers_fullscreen(self) -> bool:
         """前台窗口是否覆盖整个屏幕几何（含任务栏）= 真全屏。仅 Windows。
 
-        只判定真全屏（全屏视频/游戏/浏览器 F11，窗口覆盖含任务栏的全屏几何
-        且无标题栏）。普通最大化窗口带标题栏，几何/样式判定都会排除它；即使
-        开启 Windows「自动隐藏任务栏」、最大化窗口铺满整屏，也因带标题栏而
-        不触发隐藏。
+        只判定真全屏（全屏视频/游戏/浏览器 F11，窗口覆盖含任务栏的全屏几何，
+        且无标题栏或置顶）。普通最大化窗口带标题栏且不置顶，几何/样式判定都会
+        排除它；Unity/UE 系游戏全屏保留标题栏样式位但必带置顶，正常命中。
 
         注意：GetWindowRect 返回物理像素，而 Qt geometry 是逻辑坐标——
         高 DPI（125%/150%）下直接比较会把最大化窗口误判为"覆盖全屏"
@@ -815,6 +818,8 @@ class PetWindow(QWidget):
 
             style = u32.GetWindowLongW(hwnd, GWL_STYLE)
             has_caption = bool(style & _WS_CAPTION)
+            exstyle = u32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            topmost = bool(exstyle & _WS_EX_TOPMOST)
             rect = _WinRect()
             if not u32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 return False
@@ -832,7 +837,7 @@ class PetWindow(QWidget):
             l, t = rect.left / dpr, rect.top / dpr
             r, b = rect.right / dpr, rect.bottom / dpr
             return self._fullscreen_geometry_hit(
-                l, t, r, b, scr.geometry(), has_caption)
+                l, t, r, b, scr.geometry(), has_caption, topmost)
         except Exception:
             return False
 
