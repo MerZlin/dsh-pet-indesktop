@@ -139,6 +139,7 @@ class MovieLibrary(QObject):
         # 隐藏即暂停：桌宠不可见时预热没有任何可见收益，停掉定时器并
         # 让在飞的预热线程尽快退出（低功耗铁律）。
         self._warm_paused = False
+        self._low_first_frames_done = False  # 低优先级池首帧预热是否完整跑完
         self.media_type: str = 'webm'
         self.no_mirror: set[str] = self._load_no_mirror()
 
@@ -254,11 +255,12 @@ class MovieLibrary(QObject):
         self._low_warm_timer.stop()
 
     def resume_warm(self) -> None:
-        """窗口恢复显示时补齐预热：低优先级池未建完则重新排期。"""
+        """窗口恢复显示时补齐预热：低优先级池未建完或首帧未预热完则重新排期。"""
         self._warm_paused = False
         try:
             _, low = self._priority_names()
-            if any(name not in self._movies for name in low):
+            incomplete = any(name not in self._movies for name in low) or not self._low_first_frames_done
+            if incomplete and not self._low_warm_timer.isActive():
                 self._low_warm_timer.start()
         except Exception:
             pass
@@ -291,11 +293,16 @@ class MovieLibrary(QObject):
             if not low:
                 return
             clips = [self.movie(name) for name in low]  # 主线程创建 QObject
-            threading.Thread(
-                target=self._warm_objects,
-                args=(clips, 1),
-                daemon=True,
-            ).start()
+
+            def run() -> None:
+                try:
+                    self._warm_objects(clips, 1)
+                finally:
+                    # 记录首帧预热是否完整跑完：中途 pause 会跳过首帧阶段，
+                    # resume_warm 据此决定是否重新排期（避免"clip 已建但首帧永缺"）。
+                    self._low_first_frames_done = not self._warm_paused
+
+            threading.Thread(target=run, daemon=True).start()
         except Exception:
             # 预热失败不致命，后续按需读取时会再尝试
             pass

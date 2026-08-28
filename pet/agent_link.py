@@ -153,7 +153,13 @@ class ByteOffsetTailer:
         try:
             st = self.file_path.stat()
             size = st.st_size
-            file_id = (st.st_ino, st.st_ctime_ns)
+            # 文件身份识别（应对 bridge rename 轮转出同路径新文件）：
+            # Windows 用 (ino, ctime_ns)——ctime 是创建时间，追加不变、轮转变化；
+            # POSIX 的 ctime 是 inode 变更时间（每次追加都变），只能用 (dev, ino)。
+            if os.name == "nt":
+                file_id = (st.st_ino, st.st_ctime_ns)
+            else:
+                file_id = (st.st_dev, st.st_ino)
         except (OSError, AttributeError):
             return []
 
