@@ -457,3 +457,5 @@ opus R3 明确通过。sol R3/dsh R3 确认中。
   枚举（显示器唤醒慢），按名查找失败回退主屏后定型。修复：目标屏不在线时挂
   screenAdded 监听，上线即自动恢复；手动拖动/回右下角立即撤防；2 分钟超时撤防。
 - 测试 358 passed / 5 skipped（含新回归测试 test_restore_defers_until_saved_screen_comes_online）。
+
+- 网络恢复后补推完成（2026-08-28 13:29，含 v4.0.0 合并、issue #8 修复、上游 84ca2fd CI 适配）。
