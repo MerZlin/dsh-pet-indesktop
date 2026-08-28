@@ -96,3 +96,46 @@ def test_named_screen_lookup_and_config_persistence(tmp_path, monkeypatch):
     config.set("screen_name", "secondary")
     config.save()
     assert Config(tmp_path).get("screen_name") == "secondary"
+
+
+def test_restore_defers_until_saved_screen_comes_online():
+    """issue #8：开机自启时副屏未就绪，先落主屏；副屏上线后自动恢复。"""
+    primary = _Screen("primary", QRect(0, 0, 1920, 1080))
+    secondary = _Screen("secondary", QRect(1920, 0, 1920, 1080))
+    screens = [primary]  # 模拟开机自启瞬间：副屏还没被枚举到
+
+    class FakePet:
+        cfg = _Config(rx=0.5, ry=0.5, screen_name="secondary")
+        _w = 220
+        _h = 260
+        _awaiting_saved_screen = None
+
+        def _screen_available(self, screen_name=None):
+            if screen_name:
+                for s in screens:
+                    if s.name() == screen_name:
+                        return s
+            return primary
+
+        def move(self, x, y):
+            self.position = (x, y)
+
+        def _disarm_screen_restore_retry(self):
+            self._awaiting_saved_screen = None
+
+        _restore_position = PetWindow._restore_position
+
+    pet = FakePet()
+    PetWindow._restore_position(pet)
+    # 目标屏不在线：先落主屏，并记下目标屏等待
+    assert pet._awaiting_saved_screen == "secondary"
+
+    # 无关屏幕上线：不触发
+    PetWindow._on_screen_added_restore(pet, _Screen("other", QRect(0, 0, 800, 600)))
+    assert pet._awaiting_saved_screen == "secondary"
+
+    # 副屏上线：自动恢复到副屏坐标，且撤防
+    screens.append(secondary)
+    PetWindow._on_screen_added_restore(pet, secondary)
+    assert pet._awaiting_saved_screen is None
+    assert pet.position == (2770, 410)

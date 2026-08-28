@@ -357,11 +357,54 @@ class PetWindow(QWidget):
         # 实际播放某个动画时由 _switch -> _connect_movie 按需连接。
         self._connected_movies: set[str] = set()
 
+        # 副屏位置恢复：开机自启时副屏可能还没就绪（显示器唤醒慢于自启），
+        # 记录的目标屏此刻枚举不到 → 先落主屏，并挂 screenAdded 监听等它上线。
+        # 用户手动拖动后立即撤防（尊重手动选择），2 分钟后自动撤防。
+        self._awaiting_saved_screen: str | None = None
+        self._screen_restore_armed = False
+
         self._restore_position()
         self._switch(self.idle)
         self._schedule_self_talk()
         if self.auto_hide_fullscreen and os.name == 'nt':
             self._fullscreen_timer.start()
+
+        if self._awaiting_saved_screen:
+            self._arm_screen_restore_retry()
+
+    def _arm_screen_restore_retry(self) -> None:
+        """目标副屏暂未就绪：监听 screenAdded，目标屏上线后重新恢复位置。"""
+        if self._screen_restore_armed:
+            return
+        from PySide6.QtGui import QGuiApplication
+        app = QGuiApplication.instance()
+        if app is None:
+            return
+        app.screenAdded.connect(self._on_screen_added_restore)
+        self._screen_restore_armed = True
+        QTimer.singleShot(120_000, self, self._disarm_screen_restore_retry)
+
+    def _disarm_screen_restore_retry(self) -> None:
+        if not self._screen_restore_armed:
+            return
+        self._screen_restore_armed = False
+        self._awaiting_saved_screen = None
+        from PySide6.QtGui import QGuiApplication
+        app = QGuiApplication.instance()
+        if app is not None:
+            try:
+                app.screenAdded.disconnect(self._on_screen_added_restore)
+            except (RuntimeError, TypeError):
+                pass
+
+    def _on_screen_added_restore(self, screen) -> None:
+        """新屏幕上线：若是保存位置时所在的那块屏，把桌宠移回去。"""
+        target = self._awaiting_saved_screen
+        if not target or screen.name() != target:
+            return
+        self._disarm_screen_restore_retry()
+        self._restore_position()
+        logging.info('目标屏幕 %s 上线，已恢复到保存位置', target)
 
     # ================================================================ 尺寸
     def _apply_scale(self) -> None:
@@ -426,8 +469,17 @@ class PetWindow(QWidget):
         return frame_rect
 
     def _restore_position(self) -> None:
-        """恢复上次位置（按屏幕比例），无记录则落右下角。"""
-        scr = self._screen_available(self.cfg.get('screen_name'))
+        """恢复上次位置（按屏幕比例），无记录则落右下角。
+        保存位置时所在的屏幕此刻不在线（如开机自启时副屏未就绪）→
+        落当前屏并记下目标屏，由 screenAdded 监听在它上线后重新恢复。"""
+        saved_screen = self.cfg.get('screen_name')
+        scr = self._screen_available(saved_screen)
+        if saved_screen and scr.name() != saved_screen:
+            self._awaiting_saved_screen = saved_screen
+            logging.info('目标屏幕 %s 暂不在线，先落在 %s，等它上线后自动恢复',
+                         saved_screen, scr.name())
+        else:
+            self._awaiting_saved_screen = None
         avail = scr.availableGeometry()
         rx, ry = self.cfg.get('rx'), self.cfg.get('ry')
         if rx is None or ry is None:
@@ -540,6 +592,10 @@ class PetWindow(QWidget):
             _marker_fn()
 
     def _go_default_corner(self) -> None:
+        # 用户明确要求回右下角 = 手动位置决策，撤销"等副屏上线自动恢复"
+        _disarm = getattr(self, '_disarm_screen_restore_retry', None)
+        if callable(_disarm):
+            _disarm()
         # Position can still be written by the animation interpolation timer or
         # drag-physics timer after a direct move. Stop both first, otherwise the
         # pet briefly reaches the corner and is immediately snapped back.
@@ -1214,6 +1270,10 @@ class PetWindow(QWidget):
                 return
             self._press_global = event.globalPosition().toPoint()
             self._grab_offset = self._press_global - self.pos()
+            # 用户开始手动拖动 = 接管位置决策，撤销"等副屏上线自动恢复"
+            _disarm = getattr(self, '_disarm_screen_restore_retry', None)
+            if callable(_disarm):
+                _disarm()
             self._dragging = False
             self._cancel_move()  # 按下即打断移动
             self._last_global = self._press_global
