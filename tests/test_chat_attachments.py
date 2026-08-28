@@ -94,6 +94,19 @@ class TestAttachmentLimits:
         assert accepted == []
         assert any("文本总长超过 20 万字符" in w for w in warnings)
 
+    @pytest.mark.parametrize("filename,ext_str", [
+        ("doc.pdf", ".pdf"),
+        ("sample.docx", ".docx"),
+        ("archive.zip", ".zip"),
+    ])
+    def test_unsupported_formats_rejected_with_notice(self, tmp_path, filename, ext_str):
+        unsupported = tmp_path / filename
+        unsupported.write_bytes(b"dummy binary content")
+        accepted, warnings = validate_attachment_additions([], [str(unsupported)])
+        assert accepted == []
+        assert len(warnings) == 1
+        assert warnings[0] == f"暂不支持 {ext_str} 的文件格式（支持：文本和图片）"
+
 
 # --------------------------------------------------------------------------
 # ChatComposer 集成：超限必须明确提示（notice 信号），不静默跳过

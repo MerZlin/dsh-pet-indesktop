@@ -86,6 +86,7 @@ def validate_attachment_additions(current, candidates) -> tuple[list[Path], list
 
     规则：
     - 附件总量 ≤ MAX_ATTACHMENTS；
+    - 必须为图片或文本（_attachment_is_image / _attachment_is_text 之一），否则拒绝并提示暂不支持；
     - 图片单张 ≤ MAX_IMAGE_BYTES，图片总大小 ≤ MAX_IMAGE_TOTAL_BYTES；
     - 文本总长度 ≤ MAX_TEXT_TOTAL_CHARS；
     - 重复路径 / 非文件直接忽略（不视为超限）。
@@ -102,6 +103,10 @@ def validate_attachment_additions(current, candidates) -> tuple[list[Path], list
         if path in seen:
             continue
         if not path.is_file():
+            continue
+        if not (_attachment_is_image(path) or _attachment_is_text(path)):
+            ext = path.suffix.lower() or path.name
+            warnings.append(f"暂不支持 {ext} 的文件格式（支持：文本和图片）")
             continue
         if total_count >= MAX_ATTACHMENTS:
             warnings.append(f"附件最多 {MAX_ATTACHMENTS} 个，{path.name} 未添加")

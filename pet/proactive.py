@@ -748,6 +748,12 @@ class ProactiveScreenWatcher:
             self._last_dhash = None
             return
 
+        # G2.5 联动去重：该窗口所属 Agent 联动开启且正忙时，联动气泡已在汇报，
+        # 识屏不再插话（否则 Agent 每动一下她就评一句，等于刷屏）
+        mgr = getattr(self.win, "agent_link_manager", None)
+        if mgr is not None and mgr.busy_agent_owns_process(proc):
+            return
+
         now = time.time()
         # G3 停留时长统计
         if hwnd != self._current_hwnd:

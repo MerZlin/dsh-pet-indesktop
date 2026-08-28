@@ -1256,3 +1256,26 @@ class TestOpenCodeSubagentFilter:
         mon._poll()
         assert received == ["working"]
         mon.stop()
+
+    def test_busy_agent_owns_process(self, tmp_path):
+        """联动去重：联动开启+忙碌+进程匹配 → True；其余组合 → False。"""
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        cfg.data["agent_link"]["opencode"] = True
+
+        class W:
+            cats = {"acts": []}
+            idles = []
+            _bubble_busy_until = 0.0
+            def isVisible(self): return True
+            def show_bubble(self, *a, **k): pass
+
+        mgr = AgentLinkManager(W(), cfg)
+        mgr._last_raw["opencode"] = "working"
+        assert mgr.busy_agent_owns_process("OpenCode.exe") is True
+        assert mgr.busy_agent_owns_process("msedge.exe") is False
+        mgr._last_raw["opencode"] = "idle"
+        assert mgr.busy_agent_owns_process("OpenCode.exe") is False
+        mgr._last_raw["opencode"] = "working"
+        cfg.data["agent_link"]["opencode"] = False  # 联动关闭时不抑制识屏
+        assert mgr.busy_agent_owns_process("OpenCode.exe") is False

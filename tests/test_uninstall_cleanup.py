@@ -62,7 +62,10 @@ def test_uninstall_cleanup_skips_bridge_when_other_instance_uses_dsh(tmp_path, m
         "pet.agent_link.ClaudeCodeMonitor.uninstall_hooks", classmethod(lambda cls: True)
     )
     # 其他实例仍在使用 DSH 联动：桥接插件必须保留
-    monkeypatch.setattr(uninstall_cleanup, "other_instances_use_agent", lambda config, key: True)
+    def fake_other_instances(cfg, key):
+        return key == "dsh"
+
+    monkeypatch.setattr(uninstall_cleanup, "other_instances_use_agent", fake_other_instances)
 
     results = uninstall_cleanup.run_uninstall_cleanup(config)
     assert results["autostart"] is True
@@ -70,22 +73,60 @@ def test_uninstall_cleanup_skips_bridge_when_other_instance_uses_dsh(tmp_path, m
     assert results["dsh_bridge"] == "skipped"
 
 
+def test_uninstall_cleanup_skips_claude_when_other_instance_uses_claude(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    monkeypatch.setattr("pet.autostart.disable", lambda: True)
+    monkeypatch.setattr(
+        "pet.agent_link.DshMonitor.uninstall_bridge", classmethod(lambda cls: True)
+    )
+    # 其他实例仍在使用 Claude 联动：hooks 必须保留
+    def fake_other_instances(cfg, key):
+        return key == "claude"
+
+    monkeypatch.setattr(uninstall_cleanup, "other_instances_use_agent", fake_other_instances)
+
+    results = uninstall_cleanup.run_uninstall_cleanup(config)
+    assert results["autostart"] is True
+    assert results["claude_hooks"] == "skipped"
+    assert results["dsh_bridge"] is True
+
+
+def test_uninstall_cleanup_deletes_claude_when_no_other_instance(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    monkeypatch.setattr("pet.autostart.disable", lambda: True)
+    monkeypatch.setattr(
+        "pet.agent_link.ClaudeCodeMonitor.uninstall_hooks", classmethod(lambda cls: True)
+    )
+    monkeypatch.setattr(
+        "pet.agent_link.DshMonitor.uninstall_bridge", classmethod(lambda cls: True)
+    )
+    monkeypatch.setattr(uninstall_cleanup, "other_instances_use_agent", lambda config, key: False)
+
+    results = uninstall_cleanup.run_uninstall_cleanup(config)
+    assert results["autostart"] is True
+    assert results["claude_hooks"] is True
+    assert results["dsh_bridge"] is True
+
+
 def test_other_instances_use_agent_detects_peers(tmp_path):
     this_cfg = _config(tmp_path)
-    this_cfg.data["agent_link"] = {"dsh": True}
+    this_cfg.data["agent_link"] = {"dsh": True, "claude": True}
     this_cfg.save()
     # 当前实例自身开启不视为“其他实例”
     assert uninstall_cleanup.other_instances_use_agent(this_cfg, "dsh") is False
+    assert uninstall_cleanup.other_instances_use_agent(this_cfg, "claude") is False
 
     # 同变体其他实例开启 dsh → 识别为其他实例在用
     peer = this_cfg.dir / "config-abc.json"
-    peer.write_text(json.dumps({"agent_link": {"dsh": True}}), encoding="utf-8")
+    peer.write_text(json.dumps({"agent_link": {"dsh": True, "claude": False}}), encoding="utf-8")
     assert uninstall_cleanup.other_instances_use_agent(this_cfg, "dsh") is True
+    assert uninstall_cleanup.other_instances_use_agent(this_cfg, "claude") is False
 
-    # 同变体其他实例未开启 dsh，但楼上那条开启了 → 仍为 True
+    # 同变体其他实例开启 claude
     peer2 = this_cfg.dir / "config-def.json"
-    peer2.write_text(json.dumps({"agent_link": {"dsh": False}}), encoding="utf-8")
+    peer2.write_text(json.dumps({"agent_link": {"dsh": False, "claude": True}}), encoding="utf-8")
     assert uninstall_cleanup.other_instances_use_agent(this_cfg, "dsh") is True
+    assert uninstall_cleanup.other_instances_use_agent(this_cfg, "claude") is True
 
 
 def test_other_instances_use_agent_cross_variant(tmp_path):
@@ -103,6 +144,15 @@ def test_main_dispatches_uninstall_cleanup(monkeypatch):
     import pet.__main__ as m
     monkeypatch.setattr(sys, "argv", ["pet", "--uninstall-cleanup"])
     monkeypatch.setattr(
-        "pet.uninstall_cleanup.run_uninstall_cleanup", lambda: {"autostart": True}
+        "pet.uninstall_cleanup.run_uninstall_cleanup", lambda: {"autostart": True, "claude_hooks": True, "dsh_bridge": True}
     )
     assert m._main() == 0
+
+
+def test_main_returns_nonzero_on_uninstall_failure(monkeypatch):
+    import pet.__main__ as m
+    monkeypatch.setattr(sys, "argv", ["pet", "--uninstall-cleanup"])
+    monkeypatch.setattr(
+        "pet.uninstall_cleanup.run_uninstall_cleanup", lambda: {"autostart": False, "claude_hooks": "skipped", "dsh_bridge": True}
+    )
+    assert m._main() != 0

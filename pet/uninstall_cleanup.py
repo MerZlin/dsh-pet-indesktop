@@ -39,7 +39,7 @@ def run_uninstall_cleanup(config=None) -> dict:
 
     步骤：
     1. 删除当前变体开机自启项（autostart.disable）；
-    2. 移除 Claude hooks（ClaudeCodeMonitor.uninstall_hooks）；
+    2. 若无其他实例使用 Claude 联动，移除 Claude hooks（ClaudeCodeMonitor.uninstall_hooks）；
     3. 若无其他实例使用 DSH 联动，卸载 DSH 桥接插件（DshMonitor.uninstall_bridge）。
     """
     from . import autostart
@@ -52,7 +52,10 @@ def run_uninstall_cleanup(config=None) -> dict:
 
     from .agent_link import ClaudeCodeMonitor, DshMonitor
 
-    results["claude_hooks"] = bool(ClaudeCodeMonitor.uninstall_hooks())
+    if other_instances_use_agent(config, "claude"):
+        results["claude_hooks"] = "skipped"
+    else:
+        results["claude_hooks"] = bool(ClaudeCodeMonitor.uninstall_hooks())
 
     if other_instances_use_agent(config, "dsh"):
         results["dsh_bridge"] = "skipped"

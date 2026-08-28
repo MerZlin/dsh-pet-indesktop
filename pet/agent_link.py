@@ -1152,6 +1152,26 @@ class AgentLinkManager(QObject):
         self._link_seq = 0
         return None
 
+    # 进程名 → Agent：该 Agent 联动开启且正忙时，主动识屏跳过它的窗口
+    # （联动气泡已在汇报进度，识屏再评一句就是重复打扰）。
+    # 只映射有独立桌面进程的 Agent；dsh/claude 跑在终端/浏览器里，误伤面太大不映射。
+    AGENT_PROCESS_HINTS = {
+        "opencode": ("opencode.exe",),
+        "cursor": ("cursor.exe",),
+    }
+
+    def busy_agent_owns_process(self, process_name: str) -> bool:
+        """前台进程是否属于「联动开启且正在忙」的 Agent。"""
+        p = str(process_name or "").lower()
+        if not p:
+            return False
+        agent_cfg = self.cfg.get("agent_link", {})
+        for agent_key, procs in self.AGENT_PROCESS_HINTS.items():
+            if p in procs and agent_cfg.get(agent_key) \
+                    and self._last_raw.get(agent_key) in self._BUSY_STATES:
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # 联动气泡（开始干活可选 / 任务完成通知）
     # ------------------------------------------------------------------

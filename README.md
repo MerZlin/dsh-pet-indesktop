@@ -739,7 +739,7 @@ pet/
 │   ├── themes.py          # 聊天窗背景主题
 │   ├── modern_styles.qss / legacy_styles.qss / styles.qss
 │   └── ...
-└── updater.py             # 检查更新与一键下载
+└── updater.py             # 检查更新与发布资产解析
 
 integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
 packaging/

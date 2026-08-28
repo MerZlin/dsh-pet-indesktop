@@ -531,3 +531,13 @@ opus R3 明确通过。sol R3/dsh R3 确认中。
 - pytest.ini 固定 testpaths=tests（裸 pytest 不再误收打包目录的第三方测试）。
 - README：配置路径分变体写清、第三方措辞修正、更新功能描述对齐真实 UI。
 - 测试 430 passed / 5 skipped。
+
+### 第二十轮（2026-08-28 晚）：四轮评审收尾 + 联动识屏去重
+
+- 联动识屏去重：Agent 联动开启且正忙时，主动识屏跳过该 Agent 的窗口
+  （联动气泡已在汇报，识屏不再插话）。只映射有独立桌面进程的 Agent
+  （opencode.exe/cursor.exe），dsh/claude 跑在终端/浏览器不映射。
+- 卸载清理：Claude hooks 与 DSH 同策略（其他实例在用则保留）；关键步骤
+  失败返回非零。
+- 附件格式边界：非图片非文本格式在添加时明确拒绝（选择器/拖放同校验）。
+- 测试 437 passed / 5 skipped。
