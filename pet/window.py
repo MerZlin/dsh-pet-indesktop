@@ -1212,9 +1212,6 @@ class PetWindow(QWidget):
             if self.lock_position:
                 # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
                 return
-            if self.shift_drag and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-                # SHIFT+左键才能拖动：未按 SHIFT 时只保留点击
-                return
             self._press_global = event.globalPosition().toPoint()
             self._grab_offset = self._press_global - self.pos()
             self._dragging = False
@@ -1237,6 +1234,14 @@ class PetWindow(QWidget):
         if not self._dragging:
             if math.hypot(delta.x(), delta.y()) < catalog.DRAG_THRESHOLD * self.scale:
                 return  # 未超阈值：仍是点击候选
+            if self.shift_drag and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                # SHIFT+左键才能拖动：拖拽开始（越过阈值）时必须按住 SHIFT。
+                # 判定放在阈值处而非按下时：Windows 上 press 事件的修饰键
+                # 不一定可靠，且用户可能先按下再补按 SHIFT。未按 SHIFT 时
+                # 取消按压状态，松手仍按点击处理。
+                self._press_global = None
+                self._grab_offset = None
+                return
             self._dragging = True
             if self.drag:
                 self._switch(self.drag)  # 进入拖拽：播放悬空反馈动画

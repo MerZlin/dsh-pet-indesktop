@@ -97,10 +97,10 @@ def _press(pos: QPointF, global_pos: QPointF, modifiers=Qt.KeyboardModifier.NoMo
     )
 
 
-def _move(pos: QPointF, global_pos: QPointF, buttons=Qt.MouseButton.LeftButton) -> QMouseEvent:
+def _move(pos: QPointF, global_pos: QPointF, buttons=Qt.MouseButton.LeftButton, modifiers=Qt.KeyboardModifier.NoModifier) -> QMouseEvent:
     return QMouseEvent(
         QEvent.Type.MouseMove, pos, global_pos,
-        Qt.MouseButton.NoButton, buttons, Qt.KeyboardModifier.NoModifier,
+        Qt.MouseButton.NoButton, buttons, modifiers,
     )
 
 
@@ -152,8 +152,20 @@ def test_shift_drag_requires_shift(app, tmp_path):
     win.mousePressEvent(_press(
         QPointF(10, 10), QPointF(100, 100), Qt.KeyboardModifier.ShiftModifier
     ))
-    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
+    win.mouseMoveEvent(_move(
+        QPointF(60, 60), QPointF(400, 300), modifiers=Qt.KeyboardModifier.ShiftModifier
+    ))
     assert win.pos() != start, "按住 SHIFT 应可拖动"
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
+    # 先按下（未按 SHIFT），越过阈值前补按 SHIFT → 仍可拖动
+    start = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(11, 11), QPointF(102, 102)))  # 未超阈值
+    win.mouseMoveEvent(_move(
+        QPointF(60, 60), QPointF(400, 300),
+        modifiers=Qt.KeyboardModifier.ShiftModifier,
+    ))
+    assert win.pos() != start, "越过阈值时按住 SHIFT 应开始拖动"
     win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
     win.close()
     app.processEvents()
