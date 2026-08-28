@@ -51,6 +51,7 @@ from .config import (
     DEFAULT_SELF_TALK_MAX_INTERVAL,
     DEFAULT_SELF_TALK_MIN_INTERVAL,
     DEFAULT_SELF_TALK_TEXTS,
+    _float_or_default,
 )
 from .context_menus.icons import vector_widget_icon
 from .context_menus.quick_launch import fitted_application_icon
@@ -1193,7 +1194,7 @@ class ModernSettingsDialog(QDialog):
         self.pet_opacity_spin = BrowserSpinBox(self)
         self.pet_opacity_spin.setRange(10, 100)
         self.pet_opacity_spin.setSuffix(" %")
-        self.pet_opacity_spin.setValue(int(self.config.get("pet_opacity", 100) or 100))
+        self.pet_opacity_spin.setValue(int(_float_or_default(self.config.get("pet_opacity", 100), 100, 10, 100)))
         self.autostart_check = ToggleSwitch(self)
         self._autostart_initial = autostart_mod.is_enabled()
         self.autostart_check.setChecked(self._autostart_initial)

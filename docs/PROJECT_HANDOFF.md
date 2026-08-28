@@ -436,3 +436,39 @@ LK_LOCK 阻塞）全部落实（13d1289）；dsh 抓出 POSIX st_ctime_ns 身份
 opus R3 明确通过。sol R3/dsh R3 确认中。
 
 测试：345 passed / 5 skipped（全绿）。
+
+### 第十四轮（2026-08-28 上午）：PR #7 被上游合并 + 合并后适配
+
+- 作者将本分支 PR #7 合入上游 main（a67f49a），随后作者自己提交 8a8dd86
+  （设置关闭自动保存/Rejected 也刷新/深色主题适配/切会话滚底/看看屏幕同步/气泡层级）
+  与 21f8228（菜单图标测试固定浅色主题）。
+- 适配要点：作者 8a8dd86 与我们都实现了 ChatWindow.append_look_sync —— git 合并
+  无文本冲突但同文件同方法重复定义（后定义覆盖先定义，属隐性语义事故）。
+  已消除：保留上游位置，合入我们的 service.busy 防交错守卫（212c2ab）。
+- 合并后全量测试 350 passed / 5 skipped（上游新增回归测试并入）。
+- **注意：上游 main 目前仍带这个重复定义**（a67f49a 合并时带进去的），
+  需要一个小修复 PR 推给作者。
+
+### 第十五轮（2026-08-28 中午）：v4.0.0 同步 + issue #8 副屏位置修复
+
+- 上游发版 v4.0.0（README 重写）+ 若干 CI 修复；合并时 append_look_sync 旧副本
+  与上游收编版冲突 → 采用上游删副本方案（内容等价，busy 守卫上游已收编）。
+- issue #8（WET1AND）：副屏上的桌宠开机自启回落主屏。根因：自启时副屏尚未
+  枚举（显示器唤醒慢），按名查找失败回退主屏后定型。修复：目标屏不在线时挂
+  screenAdded 监听，上线即自动恢复；手动拖动/回右下角立即撤防；2 分钟超时撤防。
+- 测试 358 passed / 5 skipped（含新回归测试 test_restore_defers_until_saved_screen_comes_online）。
+
+- 网络恢复后补推完成（2026-08-28 13:29，含 v4.0.0 合并、issue #8 修复、上游 84ca2fd CI 适配）。
+
+### 第十六轮（2026-08-28 午后）：三方诊断（K3 + sol + opus）issue #8 修复加固
+
+- opus：副屏恢复 2 中危（screenAdded 边沿竞态二次恢复无兜底、close 未撤防）→ 40c83f4。
+- sol：1 高危 4 中危 → d61ee16：
+  高危=等待副屏期间 _save_position 会覆盖副屏坐标（修复核心路径失效）；
+  中危=点击即误撤防（改真拖动才撤）、边沿信号重挂无效+旧定时器抢撤
+  （改 5s 轮询+screenAdded 双通道、可重启 QTimer）、主动识屏 pause 清
+  _request_in_flight 致并发双请求（不清，靠代次+finally）、pet_opacity
+  脏值启动崩溃（_float_or_default 兜底）。
+- 测试 360 passed / 5 skipped。
+- 用户配置虚惊事件：诊断脚本误用源码版数据目录（dsh-pet-standalone），
+  用户真实配置（webm-chat 目录）完好。注意排查时区分两个 APPDATA 目录。
