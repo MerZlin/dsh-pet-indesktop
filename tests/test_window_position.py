@@ -139,3 +139,22 @@ def test_restore_defers_until_saved_screen_comes_online():
     PetWindow._on_screen_added_restore(pet, secondary)
     assert pet._awaiting_saved_screen is None
     assert pet.position == (2770, 410)
+
+
+def test_disarmed_restore_does_not_move_on_late_screen():
+    """用户手动接管（拖动/回右下角/超时）撤防后，目标屏上线也不再自动移动。"""
+    primary = _Screen("primary", QRect(0, 0, 1920, 1080))
+    secondary = _Screen("secondary", QRect(1920, 0, 1920, 1080))
+
+    class FakePet:
+        cfg = _Config(rx=0.5, ry=0.5, screen_name="secondary")
+        _awaiting_saved_screen = None
+
+        def move(self, x, y):
+            self.position = (x, y)
+
+    pet = FakePet()
+    pet.position = (100, 100)
+    # 撤防后目标屏上线：不应触发任何移动
+    PetWindow._on_screen_added_restore(pet, secondary)
+    assert pet.position == (100, 100)

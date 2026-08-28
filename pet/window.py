@@ -382,6 +382,7 @@ class PetWindow(QWidget):
             return
         app.screenAdded.connect(self._on_screen_added_restore)
         self._screen_restore_armed = True
+        logging.debug('已监听 screenAdded，等待 %s 上线', self._awaiting_saved_screen)
         QTimer.singleShot(120_000, self, self._disarm_screen_restore_retry)
 
     def _disarm_screen_restore_retry(self) -> None:
@@ -404,7 +405,12 @@ class PetWindow(QWidget):
             return
         self._disarm_screen_restore_retry()
         self._restore_position()
-        logging.info('目标屏幕 %s 上线，已恢复到保存位置', target)
+        if self._awaiting_saved_screen:
+            # screenAdded 触发时新屏不一定已进 screens() 列表（驱动就绪节奏），
+            # 二次查找落空就重新挂监听继续等，绝不静默失败
+            self._arm_screen_restore_retry()
+        else:
+            logging.info('目标屏幕 %s 上线，已恢复到保存位置', target)
 
     # ================================================================ 尺寸
     def _apply_scale(self) -> None:
@@ -1918,6 +1924,7 @@ class PetWindow(QWidget):
                 logging.exception("\u684c\u5ba0\u4f4d\u7f6e\u76d1\u542c\u5668\u6267\u884c\u5931\u8d25")
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
         self._save_position()
         self._self_talk_timer.stop()
         self._cancel_animation_gap()
