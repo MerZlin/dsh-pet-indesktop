@@ -748,7 +748,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     menu = QMenu()
     window_mod._populate_context_menu(menu, pet)
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-    assert labels == [
+    expected_labels = [
         "厉害了我的鲸",
         "AI 对话",
         "看看屏幕",
@@ -769,12 +769,16 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
         "打开网页版 DeepSeek",
         "快捷启动",
         "更新与帮助",
-        "主动识屏",
+    ]
+    if sys.platform == "win32":
+        expected_labels.append("主动识屏")  # 仅 Windows + 有聊天能力时显示
+    expected_labels.extend([
         "Agent 联动",
         "桌宠设置",
         "切换回旧版菜单",
         "退出",
-    ]
+    ])
+    assert labels == expected_labels
     animation_action = next(action for action in menu.actions() if action.text() == "播放动画")
     assert animation_action.menu() is not None
     assert [action.text() for action in animation_action.menu().actions()] == [
@@ -1137,15 +1141,12 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 188
     assert isinstance(dialog.sidebar, QListWidget)
     assert isinstance(dialog.pages, QStackedWidget)
-    assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == [
-        "常规",
-        "桌宠行为",
-        "外观",
-        "快捷启动",
-        "主动识屏",
-        "AI 设置",
-    ]
-    assert dialog.pages.count() == 6
+    expected_pages = ["常规", "桌宠行为", "外观", "快捷启动"]
+    if sys.platform == "win32":
+        expected_pages.append("主动识屏")  # 主动识屏设置页仅 Windows + 有聊天能力时挂载
+    expected_pages.append("AI 设置")
+    assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == expected_pages
+    assert dialog.pages.count() == len(expected_pages)
     assert dialog.search_edit.placeholderText() == "搜索设置…"
     assert all(not dialog.sidebar.item(i).icon().isNull() for i in range(dialog.sidebar.count()))
     assert all(dialog.sidebar.item(i).sizeHint().height() >= 34 for i in range(dialog.sidebar.count()))
@@ -1201,7 +1202,9 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 1
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 2
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == 5
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == (
+        5 if sys.platform == "win32" else 4  # AI 设置页索引：Windows 上「主动识屏」占 index 4
+    )
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
@@ -1468,7 +1471,8 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     dialog.search_edit.setFocus()
     dialog.search_edit.setText("API 地址")
     app.processEvents()
-    assert dialog.sidebar.currentRow() == 5
+    # AI 设置页索引：Windows 上「主动识屏」页占位 index 4，其余平台为 4
+    assert dialog.sidebar.currentRow() == (5 if sys.platform == "win32" else 4)
     api_row = dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")
     assert api_row.property("searchMatch") is True
     QTest.keyClick(dialog.search_edit, Qt.Key.Key_Return)

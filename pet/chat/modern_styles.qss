@@ -1,5 +1,6 @@
 QDialog#chat-window {
-    background: #f7f8fb; color: #20242b; font-size: 13px;
+    /* 窗口自身透明：无边框圆角窗只显示圆角 phone-shell，不留窗外方形背景 */
+    background: transparent; color: #20242b; font-size: 13px;
     font-family: "SF Pro Text", ".AppleSystemUIFont", "PingFang SC", "Segoe UI", sans-serif;
 }
 QFrame#phone-shell { background: #ffffff; border: 1px solid #e1e4e9; border-radius: 14px; }

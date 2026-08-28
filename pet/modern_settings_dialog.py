@@ -1056,6 +1056,8 @@ class ModernSettingsDialog(QDialog):
         ], behavior_content))
         behavior_layout.addWidget(SettingsSection("拖拽", [
             SettingRow("drag_physics", "拖动物理", "启用拖拽惯性、重力和边缘反弹。", self.drag_physics_check),
+            SettingRow("lock_position", "锁定位置", "桌宠固定不动，无法拖动（点击互动仍有效）。", self.lock_position_check),
+            SettingRow("shift_drag", "SHIFT+左键拖动", "开启后必须按住 SHIFT 再左键才能拖动桌宠。", self.shift_drag_check),
         ], behavior_content))
         click_rows = [
             SettingRow("click_sound", "点击音效", "点击桌宠时播放轻量反馈音效。", self.click_sound_check),
@@ -1085,6 +1087,7 @@ class ModernSettingsDialog(QDialog):
         appearance_layout.setSpacing(16)
         appearance_layout.addWidget(SettingsSection("桌宠显示", [
             SettingRow("scale", "桌宠大小", "调整桌宠在桌面上的显示尺寸。", self.scale_combo),
+            SettingRow("pet_opacity", "不透明度", "调整桌宠窗口的整体透明度；100% 为完全不透明。", self.pet_opacity_spin),
             SettingRow(
                 "self_talk_bubble_style", "气泡方案",
                 "选择气泡视觉与相对桌宠的位置；贴近屏幕边缘时自动换位。",
@@ -1183,6 +1186,14 @@ class ModernSettingsDialog(QDialog):
         self.mouse_through_check.setChecked(bool(self.config.get("mouse_through", False)))
         self.drag_physics_check = ToggleSwitch(self)
         self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
+        self.lock_position_check = ToggleSwitch(self)
+        self.lock_position_check.setChecked(bool(self.config.get("lock_position", False)))
+        self.shift_drag_check = ToggleSwitch(self)
+        self.shift_drag_check.setChecked(bool(self.config.get("shift_drag", False)))
+        self.pet_opacity_spin = BrowserSpinBox(self)
+        self.pet_opacity_spin.setRange(10, 100)
+        self.pet_opacity_spin.setSuffix(" %")
+        self.pet_opacity_spin.setValue(int(self.config.get("pet_opacity", 100) or 100))
         self.autostart_check = ToggleSwitch(self)
         self._autostart_initial = autostart_mod.is_enabled()
         self.autostart_check.setChecked(self._autostart_initial)
@@ -1735,6 +1746,9 @@ class ModernSettingsDialog(QDialog):
         self.config.set("no_move", self.no_move_check.isChecked())
         self.config.set("mouse_through", self.mouse_through_check.isChecked())
         self.config.set("drag_physics", self.drag_physics_check.isChecked())
+        self.config.set("lock_position", self.lock_position_check.isChecked())
+        self.config.set("shift_drag", self.shift_drag_check.isChecked())
+        self.config.set("pet_opacity", int(self.pet_opacity_spin.value()))
         self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
         self.config.set("click_sound_path", self.click_sound_picker.text())
         if self.click_balance_check is not None:

@@ -27,6 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller pytest
 
+      # GIF 变体（gif-chat / gif）：webm 版稳定后恢复发布。
       - name: Generate GIF assets from webm
         run: python scripts/convert_to_gif.py
 

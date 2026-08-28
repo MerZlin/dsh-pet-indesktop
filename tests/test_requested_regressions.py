@@ -426,7 +426,7 @@ def test_chat_window_edge_resize_clamps_position_with_size(tmp_path):
 
 def test_chat_window_edge_hover_shows_resize_cursor(tmp_path):
     from PySide6.QtCore import QEvent, QPointF, Qt
-    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtGui import QHoverEvent
     from PySide6.QtWidgets import QApplication
 
     from pet.chat.widgets import ChatWindow
@@ -435,15 +435,23 @@ def test_chat_window_edge_hover_shows_resize_cursor(tmp_path):
     app = QApplication.instance() or QApplication([])
     win = ChatWindow(Config(tmp_path), "shenshen")
     win.resize(960, 700)
-    win.mouseMoveEvent(QMouseEvent(
-        QEvent.Type.MouseMove, QPointF(win.width() - 2, 350),
-        QPointF(win.width() - 2, 350),
-        Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
-        Qt.KeyboardModifier.NoModifier,
-    ))
+
+    def hover(x: float, y: float) -> None:
+        win.event(QHoverEvent(QEvent.Type.HoverMove, QPointF(x, y), QPointF(x, y)))
+
+    # 悬停在窗口右边缘时应显示水平缩放光标
+    hover(win.width() - 2, 350)
     assert win.cursor().shape() == Qt.CursorShape.SizeHorCursor, (
         "悬停在窗口右边缘时应显示水平缩放光标"
     )
+    # 移入窗口内部应立即恢复箭头（回归：从窗口外进入后光标卡在缩放双箭头）
+    hover(win.width() // 2, 350)
+    assert win.cursor().shape() == Qt.CursorShape.ArrowCursor, (
+        "离开边缘进入窗口内部应恢复箭头光标"
+    )
+    # 离开窗口恢复箭头
+    win.event(QHoverEvent(QEvent.Type.HoverLeave, QPointF(1, 1), QPointF(1, 1)))
+    assert win.cursor().shape() == Qt.CursorShape.ArrowCursor
     win.close()
     app.processEvents()
 
