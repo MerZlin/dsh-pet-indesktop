@@ -228,8 +228,13 @@ def _merge_chat_data(raw):
                 base = dict(_default_chat_data()["providers"].get("openai-main", {}))
                 base.update(provider)
                 # 非 openai-main provider 未显式写 api_key_ref 时按自身归位，
-                # 避免沿用 openai-main 的钥匙串条目（密钥串用/查错 key）
-                if not str(base.get("api_key_ref") or "").strip():
+                # 避免沿用 openai-main 的钥匙串条目（密钥串用/查错 key）。
+                # 必须看用户原始输入：base 已被 openai-main 默认值预填，判 base 永远非空。
+                if not str(provider.get("api_key_ref") or "").strip():
+                    base["api_key_ref"] = f"provider/{provider_id}"
+                # 历史 bug 迁移：旧版本曾把 openai-main 的钥匙串引用继承给自定义 provider，
+                # UI 从不暴露该字段，非主 provider 挂着主引用一定是继承错的。
+                if provider_id != "openai-main" and base.get("api_key_ref") == "provider/openai-main":
                     base["api_key_ref"] = f"provider/{provider_id}"
                 providers[str(provider_id)] = base
     else:

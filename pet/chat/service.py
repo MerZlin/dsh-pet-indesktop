@@ -2,6 +2,7 @@ from __future__ import annotations
 import threading, uuid
 from typing import Any
 from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtWidgets import QApplication
 from .models import ProviderConfig
 from .providers import OpenAICompatibleProvider
 class _Worker(QThread):
@@ -25,6 +26,15 @@ class ChatService(QObject):
     started=Signal(str); delta=Signal(str,str); finished=Signal(str,str); error=Signal(str,str); stopped=Signal(str)
     def __init__(self,provider=None,parent=None):
         super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None
+        # 退出时先取消并短等在飞 worker，避免 QThread 运行中被销毁导致崩溃
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.shutdown)
+
+    def shutdown(self):
+        self.stop()
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.wait(1500)
     @property
     def busy(self): return self._worker is not None and self._worker.isRunning()
     def send(self,messages:list[dict[str,Any]],config:ProviderConfig,request_id=None):

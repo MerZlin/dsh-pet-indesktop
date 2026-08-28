@@ -25,6 +25,7 @@ from .shared import (
     add_return_corner,
     add_spawn_pet,
     add_submenu,
+    add_template_switch,
     add_update_help,
     build_animation_categories,
     build_character_menu,
@@ -90,6 +91,12 @@ def build_modern_menu(menu: QMenu, pet, template: dict) -> None:
     modern_settings = getattr(pet, "on_open_modern_settings", None)
     if modern_settings is not None:
         add_action(menu, "桌宠设置", "settings", modern_settings, close_on_trigger=True)
+
+    # 5.5 模板切换：现代版菜单也要能切回旧版（模板声明了 switch_to，运行时必须落实）
+    switch_to = str(template.get("switch_to", "") or "")
+    if switch_to:
+        start_group()
+        add_template_switch(menu, pet, str(template.get("switch_label") or "切换回旧版菜单"), switch_to)
 
     # 6. 退出。
     start_group()

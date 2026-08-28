@@ -81,6 +81,31 @@ def _remove_readonly(func, path: str, _exc_info) -> None:
     func(path)
 
 
+def _dir_in_use(directory: Path) -> bool:
+    """探活：目录被存活实例占用时不可删除。
+
+    Windows 上运行中的 onefile 实例锁定其 _MEI 目录内的 DLL/pyd，
+    对目录做原地改名会失败（WinError 32/5）——改名探测比按文件名猜 PID 可靠。
+    探测成功会立刻改回原名；仅在 Windows 启用（POSIX 上 rename 总能成功，
+    无法作为占用信号，回退为纯年龄判定）。
+    """
+    if os.name != "nt":
+        return False
+    probe = directory.with_name(directory.name + ".probe")
+    try:
+        os.rename(directory, probe)
+        os.rename(probe, directory)
+    except OSError:
+        # 改名失败：可能是占用（跳过），也可能是权限问题（rmtree 同样会失败）
+        try:
+            if probe.exists() and not directory.exists():
+                os.rename(probe, directory)  # 尽力恢复原名
+        except OSError:
+            pass
+        return True
+    return False
+
+
 def cleanup_stale_runtime_dirs(
     temp_dir: Path | str | None = None,
     *,
@@ -89,7 +114,7 @@ def cleanup_stale_runtime_dirs(
     now: float | None = None,
     dry_run: bool = False,
 ) -> CleanupResult:
-    """清理过期 `_MEI`目录；默认调用方应先确保没有活动实例。"""
+    """清理过期 `_MEI`目录；删除前会先做占用探活，跳过仍被存活实例使用的目录。"""
     candidates = find_stale_runtime_dirs(
         temp_dir,
         current_dir=current_dir,
@@ -101,6 +126,8 @@ def cleanup_stale_runtime_dirs(
         return result
 
     for directory in candidates:
+        if _dir_in_use(directory):
+            continue  # 另一个仍在运行的实例：跳过，等它退出后下次再清
         try:
             shutil.rmtree(directory, onerror=_remove_readonly)
         except OSError as exc:

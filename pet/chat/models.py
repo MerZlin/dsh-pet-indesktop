@@ -6,13 +6,32 @@ from typing import Any
 
 def utc_now(): return datetime.now(timezone.utc).isoformat()
 
+def _safe_float(v, default, lo=None, hi=None):
+    """容错数值解析：配置被手改/损坏时回退默认值而不是抛异常。"""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return default
+    if lo is not None: x = max(lo, x)
+    if hi is not None: x = min(hi, x)
+    return x
+
+def _safe_int(v, default, lo=None, hi=None):
+    try:
+        x = int(float(v))
+    except (TypeError, ValueError):
+        return default
+    if lo is not None: x = max(lo, x)
+    if hi is not None: x = min(hi, x)
+    return x
+
 @dataclass
 class ProviderConfig:
     provider_id: str
     name: str='DeepSeek'; base_url: str='https://api.deepseek.com'; chat_path: str='/v1/chat/completions'; model: str='deepseek-v4-flash'; api_key_ref: str=''; api_key: str=''; timeout: float=60.0; temperature: float=0.7; max_tokens: int=2048; vision_model: str=''; vision_same_as_chat: bool=True; vision_base_url: str=''; vision_api_key_ref: str=''; vision_api_key: str=''; verify_ssl: bool=True
     @classmethod
     def from_dict(cls,pid,raw):
-        c = cls(str(pid), str(raw.get('name', pid)), str(raw.get('base_url', 'https://api.deepseek.com')), str(raw.get('chat_path', '/v1/chat/completions')), str(raw.get('model', 'deepseek-v4-flash')), str(raw.get('api_key_ref', f'provider/{pid}')), str(raw.get('api_key', '')), max(1., float(raw.get('timeout', 60))), max(0., min(2., float(raw.get('temperature', .7)))), max(1, int(raw.get('max_tokens', 2048))), verify_ssl=bool(raw.get('verify_ssl', True)))
+        c = cls(str(pid), str(raw.get('name', pid)), str(raw.get('base_url', 'https://api.deepseek.com')), str(raw.get('chat_path', '/v1/chat/completions')), str(raw.get('model', 'deepseek-v4-flash')), str(raw.get('api_key_ref', f'provider/{pid}')), str(raw.get('api_key', '')), _safe_float(raw.get('timeout', 60), 60.0, lo=1.), _safe_float(raw.get('temperature', .7), 0.7, lo=0., hi=2.), _safe_int(raw.get('max_tokens', 2048), 2048, lo=1), verify_ssl=bool(raw.get('verify_ssl', True)))
         c.vision_model=str(raw.get('vision_model','')); c.vision_same_as_chat=bool(raw.get('vision_same_as_chat',True))
         c.vision_base_url=str(raw.get('vision_base_url','')); c.vision_api_key_ref=str(raw.get('vision_api_key_ref','')); c.vision_api_key=str(raw.get('vision_api_key',''))
         return c
@@ -32,7 +51,7 @@ class ChatSettings:
         raw=raw if isinstance(raw,dict) else {}; d=cls.defaults(); pr=raw.get('providers') if isinstance(raw.get('providers'),dict) else {}
         providers={str(k):ProviderConfig.from_dict(k,v) for k,v in pr.items() if isinstance(v,dict)} or d.providers
         active=str(raw.get('active_provider',next(iter(providers)))); active=active if active in providers else next(iter(providers))
-        return cls(bool(raw.get('enabled',True)),active,str(raw.get('default_system_prompt',d.default_system_prompt)),max(1,int(raw.get('history_message_limit',40))),max(100,int(raw.get('history_char_limit',24000))),providers)
+        return cls(bool(raw.get('enabled',True)),active,str(raw.get('default_system_prompt',d.default_system_prompt)),_safe_int(raw.get('history_message_limit',40),40,lo=1),_safe_int(raw.get('history_char_limit',24000),24000,lo=100),providers)
     def to_dict(self,include_secrets=True):
         return {'enabled':self.enabled,'active_provider':self.active_provider,'default_system_prompt':self.default_system_prompt,'history_message_limit':self.history_message_limit,'history_char_limit':self.history_char_limit,'providers':{k:v.to_dict(include_secrets) for k,v in self.providers.items()}}
     @property

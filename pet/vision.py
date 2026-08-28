@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""看看屏幕：截屏 → 本地存档 → 发给视觉模型 → 返回人设口吻的回应。
+"""看看屏幕：截屏 → 内存 JPEG → 发给视觉模型 → 返回人设口吻的回应。
 
-隐私约定：截图只存本地（只留最近 KEEP_SHOTS 张），
+隐私约定：截图只在内存中处理，全程不落盘，
 除用户自己配置的聊天 API 外不发送到任何地方。
 """
 
@@ -28,7 +28,6 @@ log = logging.getLogger('dsh-pet-standalone')
 
 MAX_EDGE = 768        # 缩到最长边 768px：够看懂屏幕，token 又不贵
 JPEG_QUALITY = 70
-KEEP_SHOTS = 20
 DEFAULT_VISION_MODEL = 'deepseek-v4-flash-vision-exp'
 
 
@@ -230,24 +229,17 @@ def foreground_app_info() -> str:
     return ' | '.join(parts)
 
 
-def capture_screen(directory: Path) -> Path:
-    """截全屏（含多显示器）→ 缩到最长边 MAX_EDGE → 存 JPEG，只留最近 KEEP_SHOTS 张。"""
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
+def capture_screen_bytes() -> bytes:
+    """截全屏（含多显示器）→ 缩到最长边 MAX_EDGE → 内存 JPEG bytes，全程不落盘。"""
+    import io
     img = ImageGrab.grab(all_screens=True)
     w, h = img.size
     scale = MAX_EDGE / max(w, h, 1)
     if scale < 1.0:
         img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
-    path = directory / time.strftime('screen-%Y%m%d-%H%M%S.jpg')
-    img.convert('RGB').save(path, 'JPEG', quality=JPEG_QUALITY)
-    shots = sorted(directory.glob('screen-*.jpg'), key=lambda x: x.stat().st_mtime, reverse=True)
-    for old in shots[KEEP_SHOTS:]:
-        try:
-            old.unlink()
-        except OSError:
-            pass
-    return path
+    buf = io.BytesIO()
+    img.convert('RGB').save(buf, 'JPEG', quality=JPEG_QUALITY)
+    return buf.getvalue()
 
 
 def _safe_detail(raw: str) -> str:
@@ -364,8 +356,10 @@ def _post_vision_request(
     return text
 
 
-def ask_about_screen(image_path, app_info: str, system_prompt: str, p) -> str:
-    """把截图文件 + 前台窗口信息发给视觉模型，返回人设口吻的回应（非流式，一次拿整段）。
-    现为 _post_vision_request 的薄封装，保持既有文件调用路径 100% 兼容。"""
-    jpeg_bytes = Path(image_path).read_bytes()
-    return _post_vision_request(jpeg_bytes, app_info, system_prompt, p)
+def ask_about_screen(image, app_info: str, system_prompt: str, p) -> str:
+    """把截图（JPEG bytes）+ 前台窗口信息发给视觉模型，返回人设口吻的回应（非流式，一次拿整段）。
+    现为 _post_vision_request 的薄封装；历史兼容：传入 Path/str 时会读取文件 bytes。"""
+    jpeg_bytes = (
+        image if isinstance(image, (bytes, bytearray)) else Path(image).read_bytes()
+    )
+    return _post_vision_request(bytes(jpeg_bytes), app_info, system_prompt, p)

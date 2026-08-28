@@ -1150,7 +1150,11 @@ class TestUXFixesRound3:
         watcher = ProactiveScreenWatcher(DummyWindow(), cfg)
 
         called = []
-        monkeypatch.setattr(watcher.limiter, "record_attempt", lambda: called.append(1))
+        monkeypatch.setattr(
+            watcher.limiter,
+            "try_acquire",
+            lambda: (called.append(1) or (True, "ok")),
+        )
 
         img = Image.new("RGB", (50, 50))
         # pause 翻转代次后，携带旧代次的帧到达 → 丢弃

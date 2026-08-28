@@ -37,18 +37,20 @@ def test_manual_empty_falls_back_to_derivation():
     assert resolve_vision_model(p) == 'deepseek-v4-flash-vision-exp'
 
 
-def test_capture_screen_saves_and_prunes(tmp_path):
+def test_capture_screen_bytes_in_memory(tmp_path):
     import os
     if os.environ.get('QT_QPA_PLATFORM') == 'offscreen':
         import pytest
         pytest.skip('无显示环境下不截屏')
-    from pet.vision import KEEP_SHOTS, capture_screen
-    shot = capture_screen(tmp_path)
-    assert shot.exists() and shot.suffix == '.jpg'
+    from pet.vision import capture_screen_bytes
+    data = capture_screen_bytes()
+    assert isinstance(data, bytes) and data[:2] == b'\xff\xd8'  # JPEG SOI
     from PIL import Image
-    with Image.open(shot) as img:
+    import io
+    with Image.open(io.BytesIO(data)) as img:
         assert max(img.size) <= 768
-    assert len(list(tmp_path.glob('screen-*.jpg'))) <= KEEP_SHOTS
+    # 铁律：截图不落盘——调用后目标目录不得出现任何截图文件
+    assert not list(tmp_path.glob('screen-*.jpg'))
 
 
 def test_endpoint_glm_v4_base():

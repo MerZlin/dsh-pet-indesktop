@@ -44,7 +44,13 @@ def launch_new_pet(offset_index: int = 1):
         parent_index = max(0, int(env.get("DSH_PET_SPAWN_OFFSET_INDEX", "0")))
     except ValueError:
         parent_index = 0
-    env["DSH_PET_SPAWN_OFFSET_INDEX"] = str(parent_index + max(1, int(offset_index)))
+    child_index = parent_index + max(1, int(offset_index))
+    env["DSH_PET_SPAWN_OFFSET_INDEX"] = str(child_index)
+    # 多开配置隔离：孵化出的桌宠使用独立配置文件/会话目录，
+    # 不与母桌宠互覆位置、大小等状态。索引沿孵化链递增，
+    # 同一链路上重新孵化会复用同名实例配置（位置记忆保留，不堆积文件）。
+    if not (env.get("DSH_PET_INSTANCE") or "").strip():
+        env["DSH_PET_INSTANCE"] = f"pet{child_index}"
     kwargs["env"] = env
     if getattr(sys, "frozen", False):
         kwargs["cwd"] = str(Path(sys.executable).resolve().parent)

@@ -19,6 +19,7 @@ import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
@@ -47,7 +48,8 @@ class _BalanceBridge(_BackgroundResult):
         self.done.connect(self._show)
 
     def _show(self, _ok: bool, message) -> None:
-        if self.win is not None:
+        # 异步回调可能晚于窗口销毁（切角色/退出），先探活再触碰 Qt 对象
+        if self.win is not None and shiboken6.isValid(self.win):
             self.win.show_bubble(str(message), duration_ms=6000)
 
 
@@ -58,17 +60,19 @@ class _UpdateBridge(_BackgroundResult):
         self.done.connect(self._show)
 
     def _show(self, ok: bool, payload) -> None:
+        # 异步回调可能晚于窗口销毁，先探活再触碰 Qt 对象
+        alive = self.parent is not None and shiboken6.isValid(self.parent)
         if not ok:
-            if self.parent is not None:
+            if alive:
                 self.parent.show_bubble(f"检查更新失败：{payload}", duration_ms=7000)
             return
         release = payload
         tag = str(release.get("version", ""))
         if not updater.is_newer(tag):
-            if self.parent is not None:
+            if alive:
                 self.parent.show_bubble(f"已经是最新版本（{updater.APP_VERSION}）啦")
             return
-        if self.parent is not None:
+        if alive:
             self.parent.show_bubble(
                 f"发现新版本 v{tag}（当前 {updater.APP_VERSION}）。"
                 "可从“更新与帮助”打开项目页下载。",

@@ -3,7 +3,11 @@ import json, os, time
 from pathlib import Path
 from .models import ChatSession, utc_now
 class SessionStore:
-    def __init__(self,config_dir): self.root=Path(config_dir)/'sessions'
+    def __init__(self,config_dir,instance_id=''):
+        # 多开隔离：带实例 ID 时使用独立会话目录，避免多实例互覆同一会话；
+        # 不传实例 ID 时保持原目录，历史会话无缝沿用。
+        suffix=f'-{instance_id}' if str(instance_id or '').strip() else ''
+        self.root=Path(config_dir)/f'sessions{suffix}'
     def _path(self,character_id,session_id): return self.root/character_id/f'{session_id}.json'
     def create(self,character_id,provider_id,system_prompt): return ChatSession.create(character_id,provider_id,system_prompt)
     def save(self,session):

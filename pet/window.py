@@ -131,6 +131,29 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
         return False
 
 
+# 直播捕获兼容模式下窗口标题（普通顶层窗口需要可见标题，供直播姬/OBS 选择）
+STREAM_CAPTURE_TITLE = 'dsh-pet 桌宠'
+
+
+def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
+    """构造桌宠窗口 flags。
+
+    默认形态：FramelessWindowHint | Tool（Windows 上映射 WS_EX_TOOLWINDOW，
+    不进任务栏/Alt+Tab，但直播姬、OBS 等窗口捕获软件会过滤掉 Tool 窗口）。
+    开启直播捕获兼容模式后改用普通顶层窗口（Window）并设置标题，
+    使窗口出现在捕获软件的可选窗口列表里；代价是任务栏会显示图标。
+    """
+    if stream_capture_mode:
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window
+    else:
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+    if config.get('on_top', True):
+        flags |= Qt.WindowType.WindowStaysOnTopHint
+    if mouse_through:
+        flags |= Qt.WindowType.WindowTransparentForInput
+    return flags
+
+
 def _squash_geometry(
     window_width: int,
     window_height: int,
@@ -264,13 +287,14 @@ class PetWindow(QWidget):
         self._fullscreen_timer.timeout.connect(self._check_fullscreen)
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
-        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-        if config.get('on_top', True):
-            flags |= Qt.WindowType.WindowStaysOnTopHint
+        # 直播捕获兼容模式（stream_capture_mode）：Tool → 普通顶层窗口 + 标题，
+        # 使直播姬/OBS 的窗口捕获能枚举到桌宠（Tool 窗口会被捕获软件过滤）。
+        self._stream_capture_mode = bool(config.get('stream_capture_mode', False))
+        flags = build_window_flags(config, self.mouse_through, self._stream_capture_mode)
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        if self.mouse_through:
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
+        if self._stream_capture_mode:
+            self.setWindowTitle(STREAM_CAPTURE_TITLE)
         # Cocoa hides Tool windows when an accessory application deactivates.
         # Visibility and z-order are separate: always keep the pet visible,
         # then use WindowStaysOnTopHint/NSWindow level for the on-top setting.
@@ -613,6 +637,8 @@ class PetWindow(QWidget):
             self.proactive_watcher.pause()
         if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
             self.agent_link_manager.pause()
+        if hasattr(self, 'lib') and self.lib is not None and hasattr(self.lib, 'pause_warm'):
+            self.lib.pause_warm()
         self._cancel_move()
         self._cancel_animation_gap()
         self._speech_bubble.hide()
@@ -632,6 +658,8 @@ class PetWindow(QWidget):
             self.proactive_watcher.resume()
         if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
             self.agent_link_manager.resume()
+        if hasattr(self, 'lib') and self.lib is not None and hasattr(self.lib, 'resume_warm'):
+            self.lib.resume_warm()
 
     _FS_SKIP_CLASSES = {
         'Progman', 'WorkerW', 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd',
@@ -715,6 +743,25 @@ class PetWindow(QWidget):
             if self._auto_hidden:
                 self._auto_hidden = False
                 self.show()
+
+    def set_stream_capture_mode(self, on: bool) -> None:
+        """直播捕获兼容模式：Tool → 普通顶层窗口 + 标题。
+
+        直播姬/OBS 的窗口捕获会过滤 Tool 窗口（WS_EX_TOOLWINDOW），
+        开启后改为普通窗口并设置可见标题，捕获列表即可看到桌宠；
+        代价是任务栏出现图标。setWindowFlags 会重建原生窗口，随后
+        showEvent 会自动重新应用置顶。
+        """
+        on = bool(on)
+        if on == self._stream_capture_mode:
+            return
+        self._stream_capture_mode = on
+        self.cfg.set('stream_capture_mode', on)
+        self.cfg.save()
+        self.setWindowFlags(build_window_flags(self.cfg, self.mouse_through, on))
+        self.setWindowTitle(STREAM_CAPTURE_TITLE if on else '')
+        if not self._auto_hidden:
+            self.show()
 
     def _arm_dock_reactivate_restore(self) -> None:
         """macOS：隐藏后点击 Dock 图标激活应用时自动恢复桌宠（一次性监听）。
@@ -822,10 +869,12 @@ class PetWindow(QWidget):
         if self.movie is None:
             return
         pm = self.movie.currentPixmap()
-        if pm.isNull():
+        if pm is None or pm.isNull():
+            # ffmpeg 缺失/素材损坏时首帧解码可能失败返回 None，跳过本帧而不是崩溃
             return
         img = pm.toImage()
-        if self.facing == 'right':
+        # 含文字/方向性画面的动画登记在 lib.no_mirror，朝右时也不镜像（否则文字反显）
+        if self.facing == 'right' and self.anim not in getattr(self.lib, 'no_mirror', frozenset()):
             img = img.mirrored(True, False)
         # 按屏幕 DPR 渲染到物理像素，避免高分屏下被 Qt 二次放大导致模糊
         scr = self._screen_available()
@@ -841,13 +890,25 @@ class PetWindow(QWidget):
         self._sync_mask()
 
     def _sync_mask(self) -> None:
-        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。"""
+        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。
+        Q 弹（squash）期间画面几何被压缩，mask 必须跟随同一几何，
+        否则变形后的角色边缘会被旧轮廓裁掉、命中区域也与画面错位。"""
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
         p = QPainter(canvas)
-        p.translate(0, int(round(catalog.PAD * self.scale)))
         if self._frame_pixmap is not None:
-            p.drawPixmap(0, 0, self._frame_pixmap)
+            if self._squash_active:
+                x, y, w, h = _squash_geometry(
+                    self._w,
+                    self._h,
+                    int(round(catalog.CANVAS_W * self.scale)),
+                    int(round(catalog.CANVAS_H * self.scale)),
+                    self._squash_progress,
+                )
+                p.drawPixmap(QRect(x, y, w, h), self._frame_pixmap, self._frame_pixmap.rect())
+            else:
+                p.translate(0, int(round(catalog.PAD * self.scale)))
+                p.drawPixmap(0, 0, self._frame_pixmap)
         p.end()
         self.setMask(QBitmap.fromImage(canvas.createAlphaMask()))
 
@@ -885,6 +946,7 @@ class PetWindow(QWidget):
         if self._squash_progress >= 1.0:
             self._squash_active = False
             self._squash_timer.stop()
+        self._sync_mask()  # mask 跟随 squash 几何，避免变形边缘被旧轮廓裁切
         self.update()
 
     def icon_pixmap(self, size: int = 64) -> QPixmap:
@@ -941,8 +1003,7 @@ class PetWindow(QWidget):
             pending.wait()
             with lock:
                 return QImage(self._animation_icon_image_cache.get(name, QImage()))
-        clip = self.lib.movie(name)
-        path = getattr(clip, "path", None)
+        path = self.lib.clip_path(name)  # 不在 worker 线程构造 WebMClip（Qt 线程亲和）
         try:
             image = decode_representative_frame(path) if path is not None else QImage()
             with lock:
@@ -1306,7 +1367,7 @@ class PetWindow(QWidget):
             settings = self.cfg.chat_settings()
             provider = settings.active_config
             provider.api_key = self.cfg.resolve_api_key(provider)
-            shot = vision_mod.capture_screen(self.cfg.dir / "screenshots")
+            shot = vision_mod.capture_screen_bytes()
             app_info = vision_mod.foreground_app_info()
             reply = vision_mod.ask_about_screen(
                 shot, app_info, settings.default_system_prompt, provider
@@ -1468,6 +1529,16 @@ class PetWindow(QWidget):
         desired_no_move = bool(self.cfg.get('no_move', False))
         if desired_no_move != self.no_move:
             self.set_no_move(desired_no_move)
+        # 窗口类开关也要立即生效（否则用户保存后得重启或再去菜单切一次）
+        desired_mouse_through = bool(self.cfg.get('mouse_through', False))
+        if desired_mouse_through != self.mouse_through:
+            self.set_mouse_through(desired_mouse_through)
+        desired_auto_hide = bool(self.cfg.get('auto_hide_fullscreen', True))
+        if desired_auto_hide != self.auto_hide_fullscreen:
+            self.set_auto_hide_fullscreen(desired_auto_hide)
+        desired_stream_capture = bool(self.cfg.get('stream_capture_mode', False))
+        if desired_stream_capture != self._stream_capture_mode:
+            self.set_stream_capture_mode(desired_stream_capture)
         desired_drag_physics = bool(self.cfg.get('drag_physics', False))
         if desired_drag_physics != self.drag_physics:
             self.set_drag_physics(desired_drag_physics)

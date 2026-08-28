@@ -133,12 +133,14 @@ class ByteOffsetTailer:
         self._initial_backfill_done = False
         self._partial: bytes = b""  # 跨读取边界的未完成行缓冲（防止半行被丢弃）
         self._discard_until_newline = False  # 超长行丢弃模式：跳到下一个换行再恢复
+        self._file_id: tuple[int, int] | None = None  # (st_ino, st_ctime_ns)：识别同路径新文件（轮转）
 
     def reset(self) -> None:
         self.offset = 0
         self._initial_backfill_done = False
         self._partial = b""
         self._discard_until_newline = False
+        self._file_id = None
 
     def read_new_lines(self) -> list[str]:
         """读取文件自上次 offset 以来的全部完整新增行。
@@ -149,21 +151,26 @@ class ByteOffsetTailer:
             return []
 
         try:
-            size = self.file_path.stat().st_size
-        except OSError:
+            st = self.file_path.stat()
+            size = st.st_size
+            file_id = (st.st_ino, st.st_ctime_ns)
+        except (OSError, AttributeError):
             return []
 
         # 启动时的首次初始化：若未指定 offset 则跳至当前末尾（backfill 防护）
         if not self._initial_backfill_done:
             self._initial_backfill_done = True
             self.offset = size
+            self._file_id = file_id
             self._partial = b""
             return []
 
-        # 文件被截断或轮转
-        if size < self.offset:
+        # 文件被截断，或被轮换成同路径的新文件（bridge rename 后新文件可能
+        # 在下次轮询前就长到不小于旧 offset，只看 size 会永久跳过新文件前部）
+        if size < self.offset or (self._file_id is not None and file_id != self._file_id):
             self.offset = 0
             self._partial = b""
+        self._file_id = file_id
 
         if size == self.offset:
             return []

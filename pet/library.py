@@ -136,6 +136,9 @@ class MovieLibrary(QObject):
         self._low_warm_timer.setSingleShot(True)
         self._low_warm_timer.setInterval(2000)
         self._low_warm_timer.timeout.connect(self._warm_low_priority_background)
+        # 隐藏即暂停：桌宠不可见时预热没有任何可见收益，停掉定时器并
+        # 让在飞的预热线程尽快退出（低功耗铁律）。
+        self._warm_paused = False
         self.media_type: str = 'webm'
         self.no_mirror: set[str] = self._load_no_mirror()
 
@@ -236,12 +239,29 @@ class MovieLibrary(QObject):
             return
         with ThreadPoolExecutor(max_workers=workers) as ex:
             list(ex.map(lambda clip: clip.warm_meta(), clips))
+            if self._warm_paused:
+                return  # 窗口已隐藏：首帧预热（每段拉起 ffmpeg）留到恢复后按需进行
             # 预解码各动画首帧（QImage 线程安全），首次播放时零阻塞切换，
             # 避免点击 Q 弹瞬间同步 ffmpeg 解码造成卡顿与旧动画帧残留。
             list(ex.map(
                 lambda clip: getattr(clip, 'warm_first_frame', lambda: None)(),
                 clips,
             ))
+
+    def pause_warm(self) -> None:
+        """窗口隐藏时暂停预热：停掉延迟定时器，在飞线程尽快收尾。"""
+        self._warm_paused = True
+        self._low_warm_timer.stop()
+
+    def resume_warm(self) -> None:
+        """窗口恢复显示时补齐预热：低优先级池未建完则重新排期。"""
+        self._warm_paused = False
+        try:
+            _, low = self._priority_names()
+            if any(name not in self._movies for name in low):
+                self._low_warm_timer.start()
+        except Exception:
+            pass
 
     def _warm_clips(self, names: list[str], workers: int) -> None:
         """预热指定动画（调用方需保证 clip 已在主线程创建）。"""
@@ -306,6 +326,14 @@ class MovieLibrary(QObject):
             else:
                 self._movies[name] = WebMClip(path, parent=self)
         return self._movies[name]
+
+    def clip_path(self, name: str) -> Path | None:
+        """只取素材路径、不创建 clip——供工作线程解码缩略图用。
+
+        movie() 会构造带 QTimer 的 WebMClip（GUI 线程亲和对象），
+        在 QThreadPool worker 里调用会违反 Qt 线程规则；缩略图只需要文件路径。
+        """
+        return self._paths.get(name)
 
     def frames(self, name: str) -> int:
         return self.movie(name).frameCount()

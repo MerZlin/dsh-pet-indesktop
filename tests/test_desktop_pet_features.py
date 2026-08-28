@@ -772,6 +772,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
         "主动识屏",
         "Agent 联动",
         "桌宠设置",
+        "切换回旧版菜单",
         "退出",
     ]
     animation_action = next(action for action in menu.actions() if action.text() == "播放动画")
@@ -787,7 +788,10 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     assert next(action for action in menu.actions() if action.text() == "大小").menu() is not None
     next(action for action in menu.actions() if action.text() == "打开网页版 DeepSeek").trigger()
     assert opened_urls == [modern_menu_mod.DEEPSEEK_WEB_URL]
-    assert all("旧版菜单" not in action.text() for action in menu.actions())
+    # 现代菜单必须能切回旧版（模板声明了 switch_to，运行时不能断线）
+    switch_action = next(action for action in menu.actions() if "旧版菜单" in action.text())
+    switch_action.trigger()
+    assert pet.cfg.get("context_menu_template") == "legacy"
     menu.close()
     app.processEvents()
 
@@ -1284,9 +1288,14 @@ def test_chat_appearance_options_follow_selected_window_and_persist_independentl
     window_row = dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")
     assert "宽屏现代体验" in window_row.hint_label.text()
     assert "紧凑经典体验" in window_row.hint_label.text()
-    assert [dialog.ai_page.background_select.itemText(index) for index in range(dialog.ai_page.background_select.count())] == [
-        "纯色背景", "自定义图片",
+    # 内置主题两种风格都可选（肥鱼版 DeepSeek 与肥鱼牌小手机一致）
+    modern_options = [
+        dialog.ai_page.background_select.itemText(index)
+        for index in range(dialog.ai_page.background_select.count())
     ]
+    assert modern_options[0] == "纯色背景"
+    assert modern_options[-1] == "自定义图片"
+    assert len(modern_options) > 2
     opacity_row = dialog.findChild(settings_mod.SettingRow, "settingRow_chat_background_opacity")
     fill_row = dialog.findChild(settings_mod.SettingRow, "settingRow_chat_background_fill")
     assert opacity_row.isHidden()
@@ -1733,6 +1742,9 @@ def test_representative_animation_image_is_cached_on_pet(monkeypatch):
         def movie(self, _name):
             return Clip()
 
+        def clip_path(self, _name):
+            return Clip.path
+
     class Pet:
         lib = Library()
 
@@ -1909,6 +1921,10 @@ def test_animation_icon_pixmap_reads_named_clip_without_switching_active_animati
         def movie(self, name):
             assert name == "动画-A"
             return clip
+
+        def clip_path(self, name):
+            assert name == "动画-A"
+            return "/tmp/动画-A.webm"
 
     class FakePet:
         lib = Library()

@@ -775,7 +775,7 @@ class _AiSettingsPage(QWidget):
             ),
             SettingRow(
                 "chat_background", "对话背景",
-                "肥鱼版 DeepSeek 支持纯色或自定义图片；肥鱼牌小手机另提供内置主题。",
+                "肥鱼版 DeepSeek 与肥鱼牌小手机均支持纯色、内置主题或自定义图片。",
                 self.background_select,
             ),
             SettingRow("chat_background_file", "自定义背景图片", "支持常见图片格式，使用绝对路径。", self.background_picker),
@@ -808,12 +808,12 @@ class _AiSettingsPage(QWidget):
     def _populate_background_options(self, style: str) -> None:
         self.background_select.clear()
         self.background_select.addItem("纯色背景", "")
-        if style == "classic":
-            for key, label in self._background_themes:
-                self.background_select.addItem(label, f"builtin:{key}")
+        # 内置主题两种对话窗口风格都可用（肥鱼版 DeepSeek 与肥鱼牌小手机一致）
+        for key, label in self._background_themes:
+            self.background_select.addItem(label, f"builtin:{key}")
         self.background_select.addItem("自定义图片", "custom")
         value = str(self._background_values.get(style, "") or "")
-        if style == "classic" and value.startswith("builtin:") and self.background_select.findData(value) >= 0:
+        if value.startswith("builtin:") and self.background_select.findData(value) >= 0:
             self.background_select.setCurrentData(value)
             self.background_picker.setText("")
         elif value:
@@ -895,6 +895,10 @@ class _AiSettingsPage(QWidget):
         self._test_thread = None
 
     def save(self) -> None:
+        # 保存前基于磁盘最新配置重取快照：另一个设置窗口（AI 设置/桌宠设置 AI 页）
+        # 可能在本窗口打开期间改过 Provider 结构；UI 字段随后覆盖到新鲜快照上，
+        # 未暴露/结构性的改动（新增 provider、切换 active_provider）不被旧快照吞掉。
+        self.settings = self.config.chat_settings()
         provider = self.settings.active_config
         provider.name = self.name.text().strip() or provider.name
         provider.base_url = self.url.text().strip()

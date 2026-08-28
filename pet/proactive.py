@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import time
+import contextlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -399,6 +400,42 @@ class ProactiveLimiter:
             "paused_until_date": "",
         }
 
+    @contextlib.contextmanager
+    def _locked(self):
+        """跨进程互斥（多开共用一份频控状态）：Windows 用 msvcrt，POSIX 用 flock。
+
+        锁文件随 state_path 派生；拿不到锁时静默降级为无锁（读改写竞态退化为
+        极少数情况下的计数偏差，不影响单实例正确性）。
+        """
+        fh = None
+        try:
+            fh = open(self.state_path.with_suffix(self.state_path.suffix + ".lock"), "a+b")
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            if fh is not None:
+                fh.close()
+                fh = None
+        try:
+            yield
+        finally:
+            if fh is not None:
+                try:
+                    if sys.platform == "win32":
+                        import msvcrt
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                fh.close()
+
     def _load_state(self) -> dict[str, Any]:
         """读取状态，跨天自动重置，损坏自动回退。"""
         current_today = self._today_fn()
@@ -434,7 +471,7 @@ class ProactiveLimiter:
             pass
 
     def allow(self) -> tuple[bool, str]:
-        """判定当前是否允许发起主动识屏请求。
+        """判定当前是否允许发起主动识屏请求（跨进程加锁，判定期间状态不被并发改写）。
 
         规则判定顺序（手册 §4.3）：
         1. 跨天重置（由 _load_state 处理）；
@@ -446,6 +483,10 @@ class ProactiveLimiter:
 
         返回: (allowed: bool, reason: str)
         """
+        with self._locked():
+            return self._allow_unlocked()
+
+    def _allow_unlocked(self) -> tuple[bool, str]:
         state = self._load_state()
         now = self._clock()
         current_today = self._today_fn()
@@ -469,21 +510,34 @@ class ProactiveLimiter:
 
         return True, "ok"
 
+    def try_acquire(self) -> tuple[bool, str]:
+        """原子版 allow + record_attempt：判定与盖章在同一把锁内完成，
+        多开实例不会同时通过判定后再互相覆盖 last_request（lost update）。"""
+        with self._locked():
+            ok, reason = self._allow_unlocked()
+            if ok:
+                state = self._load_state()
+                state["last_request"] = self._clock()
+                self._save_state(state)
+            return ok, reason
+
     def record_attempt(self) -> None:
         """记录一次请求尝试（更新 last_request 时戳）。"""
-        state = self._load_state()
-        state["last_request"] = self._clock()
-        self._save_state(state)
+        with self._locked():
+            state = self._load_state()
+            state["last_request"] = self._clock()
+            self._save_state(state)
 
     def record_success(self) -> None:
         """记录一次成功的主动关怀（更新 count, last_trigger, last_request，清空失败计数）。"""
-        state = self._load_state()
-        now = self._clock()
-        state["count"] = int(state.get("count", 0)) + 1
-        state["last_trigger"] = now
-        state["last_request"] = now
-        state["consecutive_failures"] = 0
-        self._save_state(state)
+        with self._locked():
+            state = self._load_state()
+            now = self._clock()
+            state["count"] = int(state.get("count", 0)) + 1
+            state["last_trigger"] = now
+            state["last_request"] = now
+            state["consecutive_failures"] = 0
+            self._save_state(state)
 
     def record_failure(self) -> bool:
         """记录一次请求失败。
@@ -491,19 +545,20 @@ class ProactiveLimiter:
         若连续失败次数达到 3 次，触发当日熔断（paused_until_date=today）。
         返回: 是否触发了当日熔断。
         """
-        state = self._load_state()
-        now = self._clock()
-        state["last_request"] = now
-        fails = int(state.get("consecutive_failures", 0)) + 1
-        state["consecutive_failures"] = fails
+        with self._locked():
+            state = self._load_state()
+            now = self._clock()
+            state["last_request"] = now
+            fails = int(state.get("consecutive_failures", 0)) + 1
+            state["consecutive_failures"] = fails
 
-        tripped = False
-        if fails >= 3:
-            state["paused_until_date"] = self._today_fn()
-            tripped = True
+            tripped = False
+            if fails >= 3:
+                state["paused_until_date"] = self._today_fn()
+                tripped = True
 
-        self._save_state(state)
-        return tripped
+            self._save_state(state)
+            return tripped
 
 
 class ProactiveScreenWatcher:
@@ -771,8 +826,8 @@ class ProactiveScreenWatcher:
                     )
                     return
 
-            # G6 严格频控门禁二次确认
-            ok, reason = self.limiter.allow()
+            # G6 严格频控门禁二次确认（原子判定+盖章，多开不互相踩冷却）
+            ok, reason = self.limiter.try_acquire()
             if not ok:
                 return
 
@@ -788,11 +843,10 @@ class ProactiveScreenWatcher:
                     hwnd,
                     hex(cur_hash),
                 )
-                self.limiter.record_attempt()
+                # last_request 已在 try_acquire 原子盖章，无需再 record_attempt
                 return
 
-            # 真实模式：触发先兆提示 + 派发后台视觉请求
-            self.limiter.record_attempt()
+            # 真实模式：触发先兆提示 + 派发后台视觉请求（同上，盖章已完成）
             # 先兆 → 模型答复整个窗口期内占用气泡位，自言自语让路（防连环顶掉）
             hold = getattr(self.win, "hold_bubble", None)
             if callable(hold):
@@ -826,7 +880,7 @@ class ProactiveScreenWatcher:
             self._request_in_flight = True  # 请求完成前不再派新 pipeline
             threading.Thread(
                 target=self._worker_request_vision,
-                args=(jpeg_bytes, app_str, system_prompt, provider, memory_ctx, proc_name, win_title, current_act),
+                args=(jpeg_bytes, app_str, system_prompt, provider, memory_ctx, proc_name, win_title, current_act, self._generation),
                 daemon=True,
                 name="proactive-vision-requester",
             ).start()
@@ -860,6 +914,7 @@ class ProactiveScreenWatcher:
         proc_name: str = "",
         win_title: str = "",
         current_act: str = "",
+        gen: int = -1,
     ) -> None:
         """后台线程：发起大模型视觉请求，处理重试/熔断，并通过桥接信号在桌宠冒泡。"""
         from . import vision
@@ -868,6 +923,10 @@ class ProactiveScreenWatcher:
             reply = vision._post_vision_request(
                 jpeg_bytes, app_str, system_prompt, provider, memory_context=memory_ctx
             )
+            # 代次隔离：请求在飞期间用户关闭功能/隐藏窗口（pause 翻转代次）时，
+            # 迟到答复一律丢弃——不冒泡、不耗额度计数、不写陪伴记忆。
+            if gen >= 0 and gen != self._generation:
+                return
             if reply and reply.strip() and self._bridge_alive():
                 # 按时长按内容长度缩放：太短读不完。6s 起步，每字 +150ms，封顶 20s
                 duration = max(6000, min(20000, 4000 + len(reply) * 150))
@@ -883,7 +942,9 @@ class ProactiveScreenWatcher:
             import logging
 
             logging.warning("主动识屏请求失败: %s", exc)
-            self.limiter.record_failure()
+            # 代次已翻转（用户关闭/隐藏）的失败不计入熔断，避免误伤当日额度
+            if gen < 0 or gen == self._generation:
+                self.limiter.record_failure()
         finally:
             self._request_in_flight = False
 

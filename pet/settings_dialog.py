@@ -112,6 +112,10 @@ class PetSettingsDialog(QDialog):
             self.auto_hide_check = QCheckBox("前台程序全屏时自动隐藏桌宠（如全屏视频/游戏）")
             self.auto_hide_check.setChecked(bool(config.get("auto_hide_fullscreen", True)))
             form.addRow("全屏时自动隐藏", self.auto_hide_check)
+        self.mouse_through_check = QCheckBox("鼠标穿透（桌宠不响应鼠标，点击落到下层窗口）")
+        self.mouse_through_check.setChecked(bool(config.get("mouse_through", False)))
+        self.mouse_through_check.setToolTip("开启后可从托盘图标或右键菜单关闭；与「看看屏幕/主动识屏」的穿透兼容。")
+        form.addRow("鼠标穿透", self.mouse_through_check)
         self.capture_check: QCheckBox | None = None
         if sys.platform == "win32":
             self.capture_check = QCheckBox("直播捕获兼容模式（直播姬/OBS 窗口捕获可识别桌宠）")
@@ -437,6 +441,7 @@ class PetSettingsDialog(QDialog):
             )
         if self.auto_hide_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_check.isChecked())
+        self.config.set("mouse_through", self.mouse_through_check.isChecked())
         if self.capture_check is not None:
             self.config.set("stream_capture_mode", self.capture_check.isChecked())
 
