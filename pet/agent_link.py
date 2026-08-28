@@ -1154,20 +1154,27 @@ class AgentLinkManager(QObject):
 
     # 进程名 → Agent：该 Agent 联动开启且正忙时，主动识屏跳过它的窗口
     # （联动气泡已在汇报进度，识屏再评一句就是重复打扰）。
-    # 只映射有独立桌面进程的 Agent；dsh/claude 跑在终端/浏览器里，误伤面太大不映射。
+    # opencode/cursor 有独立桌面进程按进程名识别；dsh 跑在浏览器/应用窗口里，
+    # 按窗口标题识别；claude 在终端里标题不可控，不映射。
     AGENT_PROCESS_HINTS = {
         "opencode": ("opencode.exe",),
         "cursor": ("cursor.exe",),
     }
+    AGENT_TITLE_HINTS = {
+        "dsh": ("deepseek harness",),
+    }
 
-    def busy_agent_owns_process(self, process_name: str) -> bool:
-        """前台进程是否属于「联动开启且正在忙」的 Agent。"""
-        p = str(process_name or "").lower()
-        if not p:
-            return False
+    def busy_agent_owns_process(self, process_name: str, title: str = "") -> bool:
+        """前台窗口是否属于「联动开启且正在忙」的 Agent（进程名或窗口标题命中）。"""
         agent_cfg = self.cfg.get("agent_link", {})
+        p = str(process_name or "").lower()
+        t = str(title or "").lower()
         for agent_key, procs in self.AGENT_PROCESS_HINTS.items():
-            if p in procs and agent_cfg.get(agent_key) \
+            if p and p in procs and agent_cfg.get(agent_key) \
+                    and self._last_raw.get(agent_key) in self._BUSY_STATES:
+                return True
+        for agent_key, needles in self.AGENT_TITLE_HINTS.items():
+            if t and any(n in t for n in needles) and agent_cfg.get(agent_key) \
                     and self._last_raw.get(agent_key) in self._BUSY_STATES:
                 return True
         return False

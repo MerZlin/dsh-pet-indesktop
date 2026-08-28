@@ -1279,3 +1279,10 @@ class TestOpenCodeSubagentFilter:
         mgr._last_raw["opencode"] = "working"
         cfg.data["agent_link"]["opencode"] = False  # 联动关闭时不抑制识屏
         assert mgr.busy_agent_owns_process("OpenCode.exe") is False
+        # dsh 无独立进程：靠窗口标题识别
+        cfg.data["agent_link"]["dsh"] = True
+        mgr._last_raw["dsh"] = "working"
+        assert mgr.busy_agent_owns_process("msedge.exe", "审查结果 — DeepSeek Harness") is True
+        assert mgr.busy_agent_owns_process("msedge.exe", "哔哩哔哩") is False
+        mgr._last_raw["dsh"] = "idle"
+        assert mgr.busy_agent_owns_process("msedge.exe", "审查结果 — DeepSeek Harness") is False
