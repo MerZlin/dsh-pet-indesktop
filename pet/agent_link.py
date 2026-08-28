@@ -326,6 +326,23 @@ class DshMonitor(BaseAgentMonitor):
                 return c
         return None
 
+    @staticmethod
+    def _list_profiles() -> list[str]:
+        """枚举已存在的 dsh profile。
+
+        只认含 cordis.yml 的目录（真实 profile 的标志）；~/.dsh/profiles 下
+        可能混入 node_modules 等包管理器/误操作残留的杂项目录，把它们当实例
+        安装会失败并触发整体回滚，必须过滤。目录不存在或无有效 profile 时
+        回退 ["web"]（安装命令会自动创建该 profile）。"""
+        profiles_dir = Path.home() / ".dsh" / "profiles"
+        if not profiles_dir.is_dir():
+            return ["web"]
+        profiles = sorted(
+            p.name for p in profiles_dir.iterdir()
+            if p.is_dir() and (p / "cordis.yml").is_file()
+        )
+        return profiles or ["web"]
+
     @classmethod
     def install_bridge(cls) -> tuple[bool, str]:
         """一键安装桥接插件到所有已存在的 dsh profile（web/headless 等）。
@@ -340,13 +357,7 @@ class DshMonitor(BaseAgentMonitor):
         if not dsh:
             return False, "找不到 dsh 命令（未安装 DeepSeek Harness 或不在 PATH）"
 
-        profiles_dir = Path.home() / ".dsh" / "profiles"
-        profiles = (
-            sorted(p.name for p in profiles_dir.iterdir() if p.is_dir())
-            if profiles_dir.is_dir() else ["web"]
-        )
-        if not profiles:
-            profiles = ["web"]
+        profiles = cls._list_profiles()
 
         failed = []
         succeeded = []
@@ -385,13 +396,8 @@ class DshMonitor(BaseAgentMonitor):
         dsh = shutil.which("dsh")
         if not dsh:
             return True  # 没装 dsh 视为无残留
-        profiles_dir = Path.home() / ".dsh" / "profiles"
-        profiles = (
-            sorted(p.name for p in profiles_dir.iterdir() if p.is_dir())
-            if profiles_dir.is_dir() else ["web"]
-        )
         ok = True
-        for profile in profiles or ["web"]:
+        for profile in cls._list_profiles():
             try:
                 cmd = [dsh, "plugin", "--profile", profile, "uninstall", cls.PLUGIN_NAME]
                 if dsh.lower().endswith((".cmd", ".bat")):

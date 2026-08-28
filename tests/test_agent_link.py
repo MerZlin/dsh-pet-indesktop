@@ -24,6 +24,7 @@ from pet.agent_link import (
     ByteOffsetTailer,
     ClaudeCodeMonitor,
     CursorMonitor,
+    DshMonitor,
     normalize_event_state,
 )
 from pet.config import Config
@@ -580,3 +581,31 @@ class TestModernSettingsProactivePage:
         dlg2 = ModernSettingsDialog(cfg, include_ai=True)
         assert dlg2.pro_enabled_check.isChecked() is True
         assert dlg2.pro_cap_spin.value() == 42
+
+
+# ============================================================================
+# 12. DSH profile 枚举（桥接插件安装/卸载目标）
+# ============================================================================
+class TestDshProfileEnumeration:
+    """_list_profiles 只认含 cordis.yml 的目录，过滤 node_modules 等杂项残留。"""
+
+    def test_filters_non_profile_dirs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        profiles = tmp_path / ".dsh" / "profiles"
+        for name in ("web", "headless"):
+            d = profiles / name
+            d.mkdir(parents=True)
+            (d / "cordis.yml").write_text("{}", encoding="utf-8")
+        # 包管理器/误操作残留的杂项目录，不应被当作 profile
+        (profiles / "node_modules").mkdir()
+        (profiles / "empty-dir").mkdir()
+        assert DshMonitor._list_profiles() == ["headless", "web"]
+
+    def test_fallback_when_profiles_dir_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        assert DshMonitor._list_profiles() == ["web"]
+
+    def test_fallback_when_no_valid_profiles(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        (tmp_path / ".dsh" / "profiles" / "node_modules").mkdir(parents=True)
+        assert DshMonitor._list_profiles() == ["web"]
