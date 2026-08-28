@@ -1202,7 +1202,9 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 1
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 2
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == 5
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == (
+        5 if sys.platform == "win32" else 4  # AI 设置页索引：Windows 上「主动识屏」占 index 4
+    )
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
