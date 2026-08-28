@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -30,6 +32,103 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 log = logging.getLogger("dsh-pet-standalone")
+
+# ----------------------------------------------------------------------
+# DSH 桥接安装辅助（绕开 dsh CLI 的空格路径缺陷）
+# ----------------------------------------------------------------------
+# 背景：`dsh plugin` 在 Windows 上会把含空格的插件路径经 cmd.exe 二次解析拆碎
+# （dsh runPlugin 的 spawnSync shell:true 引号处理缺陷，已实测：node 直调
+# bin.js 同样复现），且 `pnpm install <dir>` 在 pnpm 11 中没有 add 语义、
+# 旧实现还会把 profiles 目录下的 node_modules 当 profile 并触发整批回滚。
+# 因此桥接插件的安装/卸载改为：
+#   node <pnpm CLI> add|remove <pkg>   —— 数组传参，不经任何 cmd 中转；
+# 并自行维护 profile 的 dsh.profile.bundles 层（等价于 dsh plugin add 的
+# reconcile 产物）。安装产物与 dsh 版本无关，EAC 桌面端 / 原生 CLI 均可加载。
+
+DSH_PLUGIN_NAME = "@dsh-pet/bridge"
+DSH_PROFILE_HOME = Path(os.environ.get("DSH_HOME", str(Path.home() / ".dsh")))
+
+
+def _real_profiles() -> list[Path]:
+    """真实存在的 dsh profile：profiles 目录下含 package.json 的子目录。
+
+    排除 node_modules 等非 profile 目录（旧版曾把它们当成 profile 去安装）。
+    """
+    profiles_dir = DSH_PROFILE_HOME / "profiles"
+    if not profiles_dir.is_dir():
+        return []
+    return sorted(
+        p for p in profiles_dir.iterdir()
+        if p.is_dir() and (p / "package.json").is_file()
+    )
+
+
+def _pnpm_cli() -> str | None:
+    """定位 pnpm 的 JS CLI 入口（由 node 直调，绕开 .cmd/.ps1 包装的空格引号坑）。
+
+    优先级：环境变量 DSH_PNPM_BIN > PATH 上 pnpm 同目录 > npm 全局目录推断。
+    """
+    env = os.environ.get("DSH_PNPM_BIN")
+    if env and Path(env).is_file():
+        return env
+    pnpm = shutil.which("pnpm")
+    if pnpm:
+        for base in (Path(pnpm).parent, Path(pnpm).resolve().parent):
+            cand = base / "node_modules" / "pnpm" / "bin" / "pnpm.mjs"
+            if cand.is_file():
+                return str(cand)
+    npm = shutil.which("npm")
+    if npm:
+        cand = Path(npm).parent / "node_modules" / "pnpm" / "bin" / "pnpm.mjs"
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def _run_pnpm(profile_dir: Path, *args: str) -> tuple[int, str]:
+    """node 直调 pnpm CLI（数组传参，无 cmd 中转），返回 (返回码, 合并输出)。"""
+    node = shutil.which("node")
+    cli = _pnpm_cli()
+    if not node or not cli:
+        return 127, "找不到 node 或 pnpm"
+    try:
+        proc = subprocess.run(
+            [node, cli, *args], capture_output=True, text=True,
+            timeout=300, shell=False, cwd=str(profile_dir),
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except Exception as exc:
+        return -1, str(exc)
+
+
+def _read_manifest(profile_dir: Path) -> dict | None:
+    try:
+        return json.loads((profile_dir / "package.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _manifest_has_plugin(pkg: dict) -> bool:
+    return DSH_PLUGIN_NAME in ((pkg.get("dependencies") or {}) or {})
+
+
+def _manifest_set_bundle(pkg: dict, profile_dir: Path, present: bool) -> bool:
+    """保持 dsh.profile.bundles 与插件安装状态一致，返回是否发生写入。"""
+    bundles = (
+        pkg.setdefault("dsh", {}).setdefault("profile", {})
+        .setdefault("bundles", [])
+    )
+    has = DSH_PLUGIN_NAME in bundles
+    if present and not has:
+        bundles.append(DSH_PLUGIN_NAME)
+    elif not present and has:
+        bundles.remove(DSH_PLUGIN_NAME)
+    else:
+        return False
+    (profile_dir / "package.json").write_text(
+        json.dumps(pkg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return True
 
 # 标准统一状态词汇
 VALID_STATES = {"idle", "thinking", "working", "attention", "sleeping", "error"}
@@ -326,89 +425,88 @@ class DshMonitor(BaseAgentMonitor):
                 return c
         return None
 
-    @staticmethod
-    def _list_profiles() -> list[str]:
-        """枚举已存在的 dsh profile。
-
-        只认含 cordis.yml 的目录（真实 profile 的标志）；~/.dsh/profiles 下
-        可能混入 node_modules 等包管理器/误操作残留的杂项目录，把它们当实例
-        安装会失败并触发整体回滚，必须过滤。目录不存在或无有效 profile 时
-        回退 ["web"]（安装命令会自动创建该 profile）。"""
-        profiles_dir = Path.home() / ".dsh" / "profiles"
-        if not profiles_dir.is_dir():
-            return ["web"]
-        profiles = sorted(
-            p.name for p in profiles_dir.iterdir()
-            if p.is_dir() and (p / "cordis.yml").is_file()
-        )
-        return profiles or ["web"]
-
     @classmethod
     def install_bridge(cls) -> tuple[bool, str]:
-        """一键安装桥接插件到所有已存在的 dsh profile（web/headless 等）。
-        返回 (成功与否, 说明)。"""
-        import shutil
-        import subprocess
+        """一键安装桥接插件到所有真实存在的 dsh profile。
 
+        直接调 pnpm（node 直调，见模块头部注释）并维护 profile 的 bundles 层，
+        不经过 dsh CLI（规避其在 Windows 上拆碎含空格路径的缺陷）；
+        已安装的 profile 幂等跳过（只补 bundles 层）；失败不回滚已成功项。
+        返回 (成功与否, 说明)。
+        """
         plugin = cls.bundled_plugin_dir()
         if plugin is None:
             return False, "找不到内置桥接插件（integrations/dsh-pet-bridge）"
-        dsh = shutil.which("dsh")
-        if not dsh:
-            return False, "找不到 dsh 命令（未安装 DeepSeek Harness 或不在 PATH）"
+        if shutil.which("node") is None or _pnpm_cli() is None:
+            return False, "找不到 node 或 pnpm（需要 Node.js 与 npm 全局 pnpm）"
 
-        profiles = cls._list_profiles()
+        profiles = _real_profiles()
+        if not profiles:
+            return False, "没有可用的 dsh profile（~/.dsh/profiles 下无 package.json）"
 
         failed = []
         succeeded = []
         for profile in profiles:
-            try:
-                cmd = [dsh, "plugin", "--profile", profile, "install", str(plugin)]
-                if dsh.lower().endswith((".cmd", ".bat")):
-                    # cmd /c 需自行给带空格的参数加引号（subprocess 不会代劳）
-                    cmd = ["cmd", "/c"] + [f'"{a}"' if " " in a else a for a in cmd]
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, shell=False)
-                if proc.returncode != 0:
-                    failed.append(f"{profile}: {(proc.stderr or proc.stdout)[-120:]}")
-                else:
-                    succeeded.append(profile)
-            except Exception as exc:
-                failed.append(f"{profile}: {exc}")
-        if failed:
-            # 事务式回滚：部分失败时把已成功的也卸掉，避免"UI 显示未开启但插件在写文件"
-            for profile in succeeded:
+            pkg = _read_manifest(profile)
+            if pkg is None:
+                failed.append(f"{profile.name}: package.json 读取失败")
+                continue
+            if _manifest_has_plugin(pkg):
+                # 已安装：幂等补 bundles（可能此前通过别的途径装过）
                 try:
-                    cmd = [dsh, "plugin", "--profile", profile, "uninstall", cls.PLUGIN_NAME]
-                    if dsh.lower().endswith((".cmd", ".bat")):
-                        cmd = ["cmd", "/c"] + [f'"{a}"' if " " in a else a for a in cmd]  # 带空格参数需自行加引号
-                    subprocess.run(cmd, capture_output=True, text=True, timeout=120, shell=False)
-                except Exception:
-                    pass
-            return False, "部分实例安装失败（已自动回滚）——" + "；".join(failed)
-        return True, f"桥接插件已安装到 {len(profiles)} 个 dsh 实例（{', '.join(profiles)}）"
+                    _manifest_set_bundle(pkg, profile, True)
+                except Exception as exc:
+                    failed.append(f"{profile.name}: bundles 写入失败 {exc}")
+                    continue
+                succeeded.append(profile.name)
+                continue
+            rc, out = _run_pnpm(profile, "add", str(plugin))
+            if rc != 0:
+                failed.append(f"{profile.name}: pnpm add 失败 {(out or '')[-150:]}")
+                continue
+            pkg = _read_manifest(profile)
+            if pkg is None:
+                failed.append(f"{profile.name}: 安装后 package.json 读取失败")
+                continue
+            try:
+                _manifest_set_bundle(pkg, profile, True)
+            except Exception as exc:
+                failed.append(f"{profile.name}: bundles 写入失败 {exc}")
+                continue
+            succeeded.append(profile.name)
+        if failed:
+            # 不做整批回滚：已装成功的保持不动（旧版回滚会把刚装好的反而卸掉）
+            return False, "部分实例安装失败（已装成功的保持不动）——" + "；".join(failed)
+        return True, f"桥接插件已安装到 {len(succeeded)} 个 dsh 实例（{', '.join(succeeded)}）"
 
     @classmethod
     def uninstall_bridge(cls) -> bool:
-        """关闭联动时卸载桥接插件。返回是否全部成功（失败记日志）。"""
-        import shutil
-        import subprocess
+        """关闭联动时卸载桥接插件。返回是否全部成功（失败记日志）。
 
-        dsh = shutil.which("dsh")
-        if not dsh:
-            return True  # 没装 dsh 视为无残留
+        幂等：未安装的 profile 直接视为成功；不再依赖 dsh CLI（同 install_bridge）。
+        """
+        if shutil.which("node") is None or _pnpm_cli() is None:
+            return True  # 没有运行环境视为无残留
         ok = True
-        for profile in cls._list_profiles():
+        for profile in _real_profiles():
+            pkg = _read_manifest(profile)
+            if pkg is None or not _manifest_has_plugin(pkg):
+                continue  # 未安装视为成功（幂等）
+            rc, out = _run_pnpm(profile, "remove", DSH_PLUGIN_NAME)
+            if rc != 0:
+                ok = False
+                log.warning("卸载 DSH 桥接插件失败(%s): %s", profile.name, (out or "")[-150:])
+                continue
+            pkg = _read_manifest(profile)
+            if pkg is None:
+                ok = False
+                log.warning("卸载 DSH 桥接插件失败(%s): 卸载后 package.json 读取失败", profile.name)
+                continue
             try:
-                cmd = [dsh, "plugin", "--profile", profile, "uninstall", cls.PLUGIN_NAME]
-                if dsh.lower().endswith((".cmd", ".bat")):
-                    cmd = ["cmd", "/c"] + [f'"{a}"' if " " in a else a for a in cmd]  # 带空格参数需自行加引号
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, shell=False)
-                if proc.returncode != 0:
-                    ok = False
-                    log.warning("卸载 DSH 桥接插件失败(%s): %s", profile, (proc.stderr or proc.stdout)[-120:])
+                _manifest_set_bundle(pkg, profile, False)
             except Exception as exc:
                 ok = False
-                log.warning("卸载 DSH 桥接插件失败(%s): %s", profile, exc)
+                log.warning("卸载 DSH 桥接插件失败(%s): bundles 清理失败 %s", profile.name, exc)
         return ok
 
 
