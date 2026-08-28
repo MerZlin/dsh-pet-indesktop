@@ -927,11 +927,13 @@ class _AiSettingsPage(QWidget):
             provider.vision_api_key_ref = provider.vision_api_key_ref or f"provider/{provider.provider_id}/vision"
             if not self._secret_store_type().set(provider.vision_api_key_ref, vision_key):
                 provider.vision_api_key = vision_key
+                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
         key = self.key.text()
         if key:
             provider.api_key_ref = provider.api_key_ref or f"provider/{provider.provider_id}"
             if not self._secret_store_type().set(provider.api_key_ref, key):
                 provider.api_key = key
+                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
         self.settings.default_system_prompt = self.prompt.toPlainText().strip()
         self.config.set("chat_ui_style", self.chat_ui_style.currentData())
         self._capture_background_value()
@@ -1721,20 +1723,28 @@ class ModernSettingsDialog(QDialog):
 
 
 
+    def _apply_autostart(self) -> None:
+        """应用「开机自启」开关：仅在实际改动时写入系统登录项。
+
+        保存按钮与直接关闭（X / Esc）共用，保证三条路径行为一致。
+        """
+        if self.autostart_check.isChecked() != self._autostart_initial:
+            autostart_mod.set_enabled(self.autostart_check.isChecked())
+
     def _save(self) -> None:
         """「保存并退出」：写入配置并关闭对话框。"""
         self._saved_via_button = True
         self._write_config()
-        if self.autostart_check.isChecked() != self._autostart_initial:
-            autostart_mod.set_enabled(self.autostart_check.isChecked())
+        self._apply_autostart()
         self.settings_saved.emit()
         self.accept()
 
-    def _write_config(self) -> None:
+    def _write_config(self) -> bool:
         """把当前控件值写入 config 并落盘（按钮与直接关闭共用）。
 
         保存前从磁盘重读：吸收外部对本对话框未暴露字段的改动。
         已知限制：已暴露字段仍是 last-writer-wins（对话框获胜）。
+        返回是否成功落盘；失败时提示用户。
         """
         self.config._load()
         minimum = min(self.min_spin.value(), self.max_spin.value())
@@ -1824,7 +1834,15 @@ class ModernSettingsDialog(QDialog):
             })
             self.config.set("proactive_screen", pro_data)
         self.config.set("autostart_wanted", self.autostart_check.isChecked())
-        self.config.save()
+        ok = self.config.save()
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "保存失败",
+                "配置未能写入磁盘，改动可能在重启后丢失。\n\n配置路径："
+                + str(self.config.path),
+            )
+        return ok
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         """直接关闭（X / Esc）时同样落盘，避免修改丢失。
@@ -1835,6 +1853,7 @@ class ModernSettingsDialog(QDialog):
         if not getattr(self, "_saved_via_button", False):
             try:
                 self._write_config()
+                self._apply_autostart()
             except Exception:
                 logging.exception("关闭设置时保存配置失败")
         super().closeEvent(event)

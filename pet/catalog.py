@@ -165,12 +165,27 @@ def character_gif_video_dir(character_id: str) -> Path:
     return characters_gif_dir() / character_id / 'videos'
 
 
+def _data_character_dirs(app_dir_name: str) -> list[Path]:
+    """按平台返回某数据目录下 characters/ 的外部形象根目录。"""
+    if sys.platform == 'win32':
+        data_root = Path(os.environ.get('APPDATA', Path.home())) / app_dir_name
+    elif sys.platform == 'darwin':
+        data_root = Path.home() / 'Library' / 'Application Support' / app_dir_name
+    else:
+        data_root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / app_dir_name
+    return [data_root / 'characters']
+
+
 def external_character_dirs() -> list[Path]:
     """外部可扩展形象根目录（不存在时返回空列表，不报错）。
 
     顺序：
     1. exe 同目录 / 当前工作目录下的 characters/
-    2. 用户数据目录下的 dsh-pet-standalone/characters/
+    2. 打包变体数据目录下的 characters/（变体感知，如 dsh-pet-standalone-webm-chat）
+    3. 旧目录 dsh-pet-standalone/characters/（兼容老用户已在旧目录放置的角色）
+
+    数据目录名复用 config.APP_DIR_NAME（延迟导入，避免与 config 顶层
+    ``from . import catalog`` 构成循环依赖）。
     """
     dirs: list[Path] = []
     if getattr(sys, 'frozen', False):
@@ -179,13 +194,12 @@ def external_character_dirs() -> list[Path]:
         base = Path.cwd()
     dirs.append(base / 'characters')
 
-    if sys.platform == 'win32':
-        data_root = Path(os.environ.get('APPDATA', Path.home())) / 'dsh-pet-standalone'
-    elif sys.platform == 'darwin':
-        data_root = Path.home() / 'Library' / 'Application Support' / 'dsh-pet-standalone'
-    else:
-        data_root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'dsh-pet-standalone'
-    dirs.append(data_root / 'characters')
+    from . import config as _config  # 延迟导入防环：config 顶层 import catalog
+    app_dir_name = getattr(_config, 'APP_DIR_NAME', 'dsh-pet-standalone')
+    dirs.extend(_data_character_dirs(app_dir_name))
+    # 非变体旧目录兜底：老用户已放入的角色不能因为变体拆分而丢
+    if app_dir_name != 'dsh-pet-standalone':
+        dirs.extend(_data_character_dirs('dsh-pet-standalone'))
     return dirs
 
 

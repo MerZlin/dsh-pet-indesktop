@@ -551,14 +551,10 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
                 "  } catch {}\n"
                 "}\n"
                 "$file = Join-Path $PSScriptRoot 'claude.jsonl'\n"
-                "$ts = [DateTimeOffset]::Now.ToUnixTimeMilliseconds() / 1000.0\n"
-                "if ($tool) {\n"
-                "  $toolEsc = $tool -replace '\\\\', '\\\\' -replace '\"', '\\\"'\n"
-                "  $line = '{{\"ts\":{0},\"agent\":\"claude\",\"event\":\"{1}\",\"tool\":\"{2}\"}}' -f $ts, $EventName, $toolEsc\n"
-                "} else {\n"
-                "  $line = '{{\"ts\":{0},\"agent\":\"claude\",\"event\":\"{1}\"}}' -f $ts, $EventName\n"
-                "}\n"
-                "Add-Content -Path $file -Value $line -Encoding UTF8\n",
+                "$rec = [ordered]@{ ts = [DateTimeOffset]::Now.ToUnixTimeMilliseconds() / 1000.0; agent = 'claude'; event = $EventName }\n"
+                "if ($tool) { $rec['tool'] = $tool }\n"
+                "# ConvertTo-Json 负责全部转义，不手工拼 JSON（tool_name 含引号/控制字符也安全）\n"
+                "Add-Content -Path $file -Value ($rec | ConvertTo-Json -Compress) -Encoding UTF8\n",
                 encoding="utf-8",
             )
             cmd_tmpl = (

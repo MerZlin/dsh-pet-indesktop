@@ -2,7 +2,9 @@
 """配置读取与持久化；兼容旧版平铺 chat_* 字段的迁移。"""
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import os
 import shutil
 import sys
@@ -549,12 +551,40 @@ class Config:
         from .chat.models import SecretStore
         return SecretStore().get(provider.api_key_ref) or provider.api_key
 
-    def save(self):
+    def _redacted_data(self) -> dict:
+        """深拷贝待写盘数据，并剔除 chat.providers 下的明文 API Key。
+
+        keyring 不可用时（SecretStore.set 返回 False）设置对话框会把 key 放进
+        provider.api_key / vision_api_key 供本次运行使用；写盘时必须剔除，
+        避免明文落盘——key 只保留在内存（self.data），重启需重输。
+        """
+        write_data = copy.deepcopy(self.data)
+        chat = write_data.get("chat")
+        if isinstance(chat, dict):
+            providers = chat.get("providers")
+            if isinstance(providers, dict):
+                for provider in providers.values():
+                    if isinstance(provider, dict):
+                        provider.pop("api_key", None)
+                        provider.pop("vision_api_key", None)
+        return write_data
+
+    def save(self) -> bool:
+        """把配置写入磁盘；成功返回 True，失败返回 False（并记录 warning）。
+
+        写盘使用 _redacted_data() 的副本，self.data 本身不动，保证运行期
+        key 在内存可见而不会明文落盘。
+        """
         try:
             self._normalize_pet_settings()
             self.dir.mkdir(parents=True, exist_ok=True)
             temp = self.path.with_suffix(".json.tmp")
-            temp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp.write_text(
+                json.dumps(self._redacted_data(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             os.replace(temp, self.path)
-        except OSError:
-            pass
+        except OSError as exc:
+            logging.warning("保存配置失败: %s (%s)", self.path, exc)
+            return False
+        return True

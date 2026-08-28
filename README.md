@@ -76,7 +76,7 @@ v4.0.0 是一次大版本升级：在 v3.1.1 的桌宠基础上，合并了社�
 
 DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，本项目的实现为桌宠内置的轻量版（菜单「DeepSeek 余额」+ 可选自动刷新，通过 DeepSeek 官方 `/user/balance` 接口查询，详见 [DeepSeek API 查询余额文档](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)）。
 
-当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源，并为每一组 WebM 生成对应 GIF；当前 `assets/characters` 与 `assets/characters_gif` 的相对动画路径保持一致，各包含 91 个动画文件。后续新增或替换动画时，请先更新 WebM，再重新生成 GIF，不要手工维护两套不一致的素材。
+当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 91 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
 
 
 </details>
@@ -294,11 +294,11 @@ pythonw -m pet
 
 - 白名单应用切换时以桌宠口吻冒泡关怀（截图 + 前台窗口上下文 → 视觉模型）。
 - 停留时长门限、闲置判定、冷却间隔、每日上限、免费模型优先、dry-run 验证模式。
-- 截图压缩后仅本地留存最近 20 张，仅发送到你自行配置的 API。
+- 截图仅在内存中压缩处理并直接发送给视觉模型，不写入本地文件、不保留副本。
 
 ### Agent 联动（默认关闭）
 
-- 内置 DSH 桥接插件（`integrations/dsh-pet-bridge`）与 Claude hooks 安装器：Agent 干活时桌宠切换动作 / 冒泡反馈。
+- 内置 DSH 桥接插件（`integrations/dsh-pet-bridge`）与 Claude hooks 安装器：感知 AI Agent 状态并切换动作，支持开始干活、过程汇报、任务完成三种气泡反馈，右键 Agent 联动子菜单可独立开关。
 
 ### 看看屏幕（Chat 版）
 
@@ -590,25 +590,20 @@ pet.log
 
 ```text
 assets/
-├── characters/
-│   └── shenshen/
-│       ├── manifest.json
-│       └── videos/
-│           ├── idle/
-│           ├── turn/
-│           ├── move/
-│           ├── click/
-│           ├── drag/
-│           └── random/
-└── characters_gif/
+└── characters/
     └── shenshen/
+        ├── manifest.json
         └── videos/
-            └── 与 characters/<id>/videos 相同的相对路径
+            ├── idle/
+            ├── turn/
+            ├── move/
+            ├── click/
+            ├── drag/
+            └── random/
 ```
 
-- `assets/characters` 是 WebM 动画源目录。
-- `assets/characters_gif` 是由 WebM 生成的 GIF 目录，仅在需要构建 GIF 变体时使用。
-- 两套目录中的角色 ID、子目录和文件相对路径应保持一致。
+- `assets/characters` 是 WebM 动画源目录，包含 91 个 WebM 动画。
+- GIF 目录（`assets/characters_gif`）仅在构建 GIF 变体时生成。
 - 没有稳定静态头像时，不强制从 WebM/GIF 截取首帧，以避免启动变慢和打包兼容性问题。
 
 ### 素材生成教学（从零制作动画素材）
@@ -776,7 +771,7 @@ python -m compileall pet packaging scripts
 
 最近一轮记录（v4.0.0）：
 
-- `pytest`：362 passed，4 skipped。
+- `pytest`：完整测试套件见 CI / 本地运行 `pytest -q`。
 - `compileall`：通过。
 - WebM Chat、WebM 无 Chat 两个 onedir 构建均完成启动冒烟验证：进程存活超过 8 秒，系统临时目录与程序目录**均无新增 `_MEI` 缓存**。
 
@@ -983,9 +978,6 @@ python scripts/cleanup_mei_cache.py --delete
 
 ## 项目文档
 
-- [`SPEC.md`](SPEC.md)：项目设计边界和验收标准。
-- [`LOG.md`](LOG.md)：施工记录和决策说明。
-- [`LOG-INDEX.md`](LOG-INDEX.md)：施工记录索引。
 - [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)：onedir 构建、绿色版 zip 与 Inno Setup 安装包流水线。
 - [`docs/BUILD_ARTIFACTS-2026-08-22.md`](docs/BUILD_ARTIFACTS-2026-08-22.md)：EXE 构建、大小、哈希和启动验证记录。
 

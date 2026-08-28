@@ -25,7 +25,7 @@ class _Worker(QThread):
 class ChatService(QObject):
     started=Signal(str); delta=Signal(str,str); finished=Signal(str,str); error=Signal(str,str); stopped=Signal(str)
     def __init__(self,provider=None,parent=None):
-        super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None
+        super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None; self._workers=set()
         # 退出时先取消并短等在飞 worker，避免 QThread 运行中被销毁导致崩溃
         app = QApplication.instance()
         if app is not None:
@@ -33,12 +33,21 @@ class ChatService(QObject):
 
     def shutdown(self):
         self.stop()
+        for worker in list(self._workers):
+            if hasattr(worker, "cancel") and worker.cancel is not None:
+                worker.cancel.set()
+            if worker.isRunning():
+                worker.wait(1500)
+        self._workers.clear()
         if self._worker is not None and self._worker.isRunning():
             self._worker.wait(1500)
+        self._worker = None
+        self._cancel = None
     @property
     def busy(self): return self._worker is not None and self._worker.isRunning()
     def send(self,messages:list[dict[str,Any]],config:ProviderConfig,request_id=None):
         self.stop(); rid=request_id or uuid.uuid4().hex; cancel=threading.Event(); worker=_Worker(self.provider,messages,config,cancel); self._request_id=rid; self._cancel=cancel; self._worker=worker
+        self._workers.add(worker)
         # 全部显式 QueuedConnection：worker 线程 emit 的信号若直连 lambda
         # 会在 worker 线程执行 _delta/_cleanup 等，与 GUI 线程的 busy()/
         # _request_id 读写构成数据竞态。队列投递保证回调只在 GUI 线程跑。
@@ -47,6 +56,7 @@ class ChatService(QObject):
         worker.failed.connect(lambda text,rid=rid:self._error(rid,text), Qt.QueuedConnection)
         worker.stopped_by_user.connect(lambda rid=rid:self._stopped(rid), Qt.QueuedConnection)
         worker.finished.connect(lambda rid=rid:self._cleanup(rid), Qt.QueuedConnection)
+        worker.finished.connect(lambda w=worker: self._workers.discard(w), Qt.QueuedConnection)
         self.started.emit(rid); worker.start(); return rid
     def stop(self):
         if self._cancel is not None: self._cancel.set()
