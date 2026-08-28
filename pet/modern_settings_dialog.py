@@ -1729,7 +1729,15 @@ class ModernSettingsDialog(QDialog):
         保存按钮与直接关闭（X / Esc）共用，保证三条路径行为一致。
         """
         if self.autostart_check.isChecked() != self._autostart_initial:
-            autostart_mod.set_enabled(self.autostart_check.isChecked())
+            # set_enabled 返回 bool（enable()/disable()）；仅在明确失败时提示。
+            ok = autostart_mod.set_enabled(self.autostart_check.isChecked())
+            if ok is False:
+                QMessageBox.warning(
+                    self,
+                    "开机自启设置失败",
+                    "写入开机自启失败：可能被安全软件拦截。\n"
+                    "可稍后在托盘菜单重试，或检查安全软件/系统优化工具的拦截记录。",
+                )
 
     def _save(self) -> None:
         """「保存并退出」：写入配置并关闭对话框。"""

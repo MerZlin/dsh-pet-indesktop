@@ -504,3 +504,14 @@ opus R3 明确通过。sol R3/dsh R3 确认中。
 - **升级覆盖残留旧文件**（安装器 ignoreversion，建议版本化目录或 manifest）。
 - **配置写盘竞态**（本次新发现）：运行中实例保存配置时用内存快照整体覆盖
   磁盘——多开或外部改配置会被回滚。建议 save 前检测磁盘 mtime 变化并合并。
+
+### 第十八轮（2026-08-28 晚）：复审三项闭环
+
+- 修复 keyring 不可用时重开设置丢内存 Key：Config._load() 合入磁盘数据后保留
+  内存中的 api_key/vision_api_key（secret 只进不出）。
+- ChatService.shutdown() 不再 clear 活动 worker 集合（超时未退出的由 finished
+  信号自行回收），返回 bool；provider 保存当前 response，stop/cancel 时主动
+  close 让阻塞 read 尽快返回。
+- README「看看屏幕」截图留存描述修正（实际不落盘）；WORKSPACE.md 同步。
+- 现代设置页自启应用失败现在有提示。
+- 测试 407 passed / 5 skipped。

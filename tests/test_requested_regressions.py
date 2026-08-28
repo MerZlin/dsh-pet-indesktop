@@ -1029,7 +1029,9 @@ def test_modern_settings_close_applies_autostart(tmp_path, monkeypatch):
     applied = []
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     monkeypatch.setattr(
-        settings_mod.autostart_mod, "set_enabled", lambda enabled: applied.append(enabled)
+        settings_mod.autostart_mod,
+        "set_enabled",
+        lambda enabled: applied.append(enabled) or True,
     )
     config = Config(tmp_path)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
@@ -1038,5 +1040,31 @@ def test_modern_settings_close_applies_autostart(tmp_path, monkeypatch):
     app.processEvents()
     assert applied == [True]
     assert config.get("autostart_wanted") is True
+    dialog.close()
+    app.processEvents()
+
+
+def test_modern_autostart_write_failure_warns(tmp_path, monkeypatch):
+    """开机自启写入失败时必须弹窗提示（此前无任何反馈，用户不知自启没生效）。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    monkeypatch.setattr(settings_mod.autostart_mod, "set_enabled", lambda enabled: False)
+    warnings = []
+    monkeypatch.setattr(
+        settings_mod.QMessageBox, "warning", lambda *a, **k: warnings.append(a)
+    )
+    config = Config(tmp_path)
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
+    # 与初始状态不同（初始 = is_enabled() = False）→ 触发写入
+    dialog.autostart_check.setChecked(True)
+    dialog._apply_autostart()
+    assert len(warnings) == 1
+    assert "开机自启设置失败" in str(warnings[0][1])
+    assert "失败" in str(warnings[0][2])
     dialog.close()
     app.processEvents()

@@ -22,6 +22,10 @@ class _Worker(QThread):
                     self.failed.emit('模型未返回任何内容，请稍后重试或检查模型配置。')
         except Exception as exc:
             self.stopped_by_user.emit() if self.cancel.is_set() else self.failed.emit(str(exc))
+        finally:
+            if hasattr(self.provider, "cancel") and callable(self.provider.cancel):
+                try: self.provider.cancel()
+                except Exception: pass
 class ChatService(QObject):
     started=Signal(str); delta=Signal(str,str); finished=Signal(str,str); error=Signal(str,str); stopped=Signal(str)
     def __init__(self,provider=None,parent=None):
@@ -31,18 +35,21 @@ class ChatService(QObject):
         if app is not None:
             app.aboutToQuit.connect(self.shutdown)
 
-    def shutdown(self):
+    def shutdown(self) -> bool:
+        # QThread 并非 daemon 线程，若在运行中被 Python GC 丢弃会触发 'QThread: Destroyed while running' 崩溃。
+        # 因此取消并有界等待后，超时未退出的 worker 仍保留在 self._workers 集合中（不强行 clear/置空），
+        # 等其 run() 结束后由 finished 信号自行 discard 回收引用。
         self.stop()
         for worker in list(self._workers):
             if hasattr(worker, "cancel") and worker.cancel is not None:
                 worker.cancel.set()
+            if hasattr(worker, "provider") and hasattr(worker.provider, "cancel") and callable(worker.provider.cancel):
+                try: worker.provider.cancel()
+                except Exception: pass
             if worker.isRunning():
                 worker.wait(1500)
-        self._workers.clear()
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(1500)
-        self._worker = None
-        self._cancel = None
+        # 返回 True 表示全部退出，False 表示仍有 worker 在运行（供调用方参考）
+        return not any(worker.isRunning() for worker in self._workers)
     @property
     def busy(self): return self._worker is not None and self._worker.isRunning()
     def send(self,messages:list[dict[str,Any]],config:ProviderConfig,request_id=None):
@@ -60,6 +67,9 @@ class ChatService(QObject):
         self.started.emit(rid); worker.start(); return rid
     def stop(self):
         if self._cancel is not None: self._cancel.set()
+        if hasattr(self.provider, "cancel") and callable(self.provider.cancel):
+            try: self.provider.cancel()
+            except Exception: pass
     def _current(self,rid): return rid==self._request_id
     def _delta(self,rid,text):
         if self._current(rid): self.delta.emit(rid,text)
