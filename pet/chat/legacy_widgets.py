@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QPlainTextEdit,
     QPushButton,
@@ -30,6 +31,7 @@ from .pet_link import PetChatLink
 from .prompt import PromptBuilder, load_character_manifest
 from .service import ChatService
 from .session_store import SessionStore
+from ..context_menus.icons import vector_widget_icon
 from . import themes as chat_themes
 
 
@@ -48,6 +50,8 @@ def _initial(character_id: str) -> str:
 
 
 def _short_title(session) -> str:
+    if str(getattr(session, "custom_title", "")).strip():
+        return str(session.custom_title).strip()
     for message in session.messages:
         if message.role == "user" and message.content.strip():
             text = " ".join(message.content.split())
@@ -260,6 +264,9 @@ class ChatWindow(QDialog):
         self.character_id = str(character_id)
         self.setObjectName("chat-window")
         self.setWindowTitle("AI 对话")
+        # 窗口级图标主题：浅色表面用深灰轮廓图标（rename 按钮等），
+        # 避免深色系统 palette 白前景造成白底白图
+        self.setProperty("menuStyle", "modern")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         # 手机式聊天窗尺寸范围：最小 380×620，最大 560×980
         self.setMinimumSize(380, 620)
@@ -512,12 +519,18 @@ class ChatWindow(QDialog):
         self.delete_session_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
         self.delete_session_button.setToolTip("删除当前会话")
         self.delete_session_button.setAccessibleName("删除当前会话")
+        self.rename_session_button = QToolButton()
+        self.rename_session_button.setObjectName("rename-session-button")
+        self.rename_session_button.setIcon(vector_widget_icon(self.rename_session_button, "rename", 15))
+        self.rename_session_button.setToolTip("重命名当前会话")
+        self.rename_session_button.setAccessibleName("重命名当前会话")
         self.clear_button = QToolButton()
         self.clear_button.setObjectName("clear-session-button")
         self.clear_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogResetButton))
         self.clear_button.setToolTip("清空当前会话")
         self.clear_button.setAccessibleName("清空当前会话")
         context_bottom.addWidget(self.new_session_button)
+        context_bottom.addWidget(self.rename_session_button)
         context_bottom.addWidget(self.delete_session_button)
         context_bottom.addWidget(self.clear_button)
         context_layout.addLayout(context_bottom)
@@ -561,6 +574,7 @@ class ChatWindow(QDialog):
         self.minimize_button.clicked.connect(self.showMinimized)
         self.close_button.clicked.connect(self.close)
         self.new_session_button.clicked.connect(self.new_session)
+        self.rename_session_button.clicked.connect(self.rename_current_session)
         self.delete_session_button.clicked.connect(self.delete_current_session)
         self.clear_button.clicked.connect(self.clear_session)
         self.follow_button.toggled.connect(self.set_follow_pet)
@@ -793,6 +807,17 @@ class ChatWindow(QDialog):
         self._set_empty_state(True)
         self._refresh_sessions()
         self._reset()
+
+    def rename_current_session(self) -> None:
+        """重命名当前会话（与新版窗口一致的交互：输入框预填当前标题）。"""
+        title, accepted = QInputDialog.getText(
+            self, "重命名会话", "会话名称", text=_short_title(self.session),
+        )
+        if not accepted:
+            return
+        self.session.custom_title = str(title).strip()[:60]
+        self.store.save(self.session)
+        self._refresh_sessions()
 
     def select_session(self, session_id: str) -> None:
         if not session_id or session_id == self.session.session_id:

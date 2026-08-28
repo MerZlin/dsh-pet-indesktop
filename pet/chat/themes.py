@@ -133,9 +133,9 @@ QLabel#provider-label, QLabel#context-caption, QLabel#composer-hint { color: #8a
 QLabel#empty-state { color: #9aa5c4; }
 QLabel#status-label { color: #7fe0b8; }
 QComboBox#session-combo { color: #e8ecf8; border-bottom: 1px solid rgba(90, 110, 160, 110); }
-QToolButton#follow-pet-button, QToolButton#new-session-button,
+QToolButton#follow-pet-button, QToolButton#new-session-button, QToolButton#rename-session-button,
 QToolButton#delete-session-button, QToolButton#clear-session-button { color: #9aa5c4; }
-QToolButton#follow-pet-button:hover, QToolButton#new-session-button:hover,
+QToolButton#follow-pet-button:hover, QToolButton#new-session-button:hover, QToolButton#rename-session-button:hover,
 QToolButton#delete-session-button:hover, QToolButton#clear-session-button:hover { color: {accent}; background: rgba(255, 255, 255, 30); }
 """
 

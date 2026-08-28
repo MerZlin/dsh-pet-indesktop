@@ -140,6 +140,7 @@ QComboBox#session-combo QAbstractItemView::item:selected {
     color: #1f2937;
 }
 QToolButton#new-session-button,
+QToolButton#rename-session-button,
 QToolButton#delete-session-button,
 QToolButton#clear-session-button {
     min-height: 30px;
@@ -150,6 +151,7 @@ QToolButton#clear-session-button {
     background: #ffffff;
 }
 QToolButton#new-session-button:hover,
+QToolButton#rename-session-button:hover,
 QToolButton#delete-session-button:hover,
 QToolButton#clear-session-button:hover {
     border-color: @ACCENT@;

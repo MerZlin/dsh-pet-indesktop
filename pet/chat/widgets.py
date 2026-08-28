@@ -156,11 +156,14 @@ class SessionListRow(QFrame):
     def _show_menu(self) -> None:
         menu = QMenu(self)
         menu.setObjectName("session-action-menu")
-        # 浅色小菜单（深色聊天主题下仍为浅色，属已知小瑕疵；无 QSS 覆盖）
+        # 浅色小菜单（深色聊天主题下仍为浅色，属已知小瑕疵；无 QSS 覆盖）。
+        # color 必须显式给出：深色系统 palette 文字为白色，白底上看不见。
         menu.setStyleSheet(
-            "QMenu{background:#fff;border:1px solid #e1e5eb;border-radius:10px;padding:5px;}"
-            "QMenu::item{min-height:25px;padding:3px 24px 3px 9px;border-radius:7px;}"
-            "QMenu::item:selected{background:#f0f3f8;}"
+            "QMenu{background:#fff;color:#252a32;border:1px solid #e1e5eb;border-radius:10px;padding:5px;}"
+            "QMenu::item{min-height:25px;padding:3px 24px 3px 9px;border-radius:7px;color:#252a32;}"
+            "QMenu::item:selected{background:#f0f3f8;color:#252a32;}"
+            "QMenu::item:disabled{color:#9aa1ab;}"
+            "QMenu::separator{height:1px;background:#eef0f4;margin:4px 8px;}"
         )
         for key, text, icon in (
             ("rename", "重命名", "rename"),

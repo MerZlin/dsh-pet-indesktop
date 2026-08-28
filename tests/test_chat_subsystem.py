@@ -595,6 +595,27 @@ def test_chat_window_uses_modern_two_pane_ai_chat_layout(tmp_path: Path):
     app.processEvents()
 
 
+def test_legacy_chat_window_renames_current_session(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication, QInputDialog
+
+    from pet.chat.legacy_widgets import ChatWindow
+    from pet.config import Config
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *args, **kwargs: ("新名字", True)))
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    assert window.rename_session_button is not None
+    window.rename_current_session()
+    assert window.session.custom_title == "新名字"
+    assert window.session_combo.currentText() == "新名字"
+    # 取消不修改
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *args, **kwargs: ("不应生效", False)))
+    window.rename_current_session()
+    assert window.session.custom_title == "新名字"
+    window.close()
+    app.processEvents()
+
+
 def test_legacy_and_modern_chat_windows_use_independent_modules_and_styles(tmp_path: Path):
     from PySide6.QtWidgets import QApplication
     from pet.chat.legacy_widgets import ChatWindow as LegacyChatWindow

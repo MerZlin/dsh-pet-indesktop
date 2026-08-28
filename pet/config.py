@@ -327,6 +327,9 @@ class Config:
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
             "mouse_through": False,
             "drag_physics": False,
+            "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
+            "shift_drag": False,     # 按住 SHIFT+左键才能拖动
+            "pet_opacity": 100,      # 桌宠窗口不透明度 10-100
             "context_menu_template": "modern",
             "context_menu_appearance": dict(DEFAULT_CONTEXT_MENU_APPEARANCE),
             "menu_easter_egg": dict(DEFAULT_MENU_EASTER_EGG),
@@ -414,6 +417,7 @@ class Config:
             "self_talk_duration_seconds", "self_talk_image_dir",
             "self_talk_bubble_style",
             "mouse_through", "drag_physics", "context_menu_template",
+            "lock_position", "shift_drag", "pet_opacity",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg", "auto_hide_fullscreen",
             "click_sound_enabled", "click_sound_path",

@@ -235,6 +235,10 @@ class PetWindow(QWidget):
         self.playback_speed: float = float(config.get('playback_speed', 1.0))
         self.mouse_through: bool = bool(config.get('mouse_through', False))
         self.drag_physics: bool = bool(config.get('drag_physics', False))
+        self.lock_position: bool = bool(config.get('lock_position', False))
+        self.shift_drag: bool = bool(config.get('shift_drag', False))
+        self.pet_opacity: int = max(10, min(100, int(config.get('pet_opacity', 100) or 100)))
+        self._applied_opacity: float | None = None  # 已应用到窗口的不透明度
         self.click_sound_enabled: bool = bool(config.get('click_sound_enabled', True))
         self.click_sound_path: str = str(config.get('click_sound_path', '') or '')
         self.click_show_balance: bool = bool(config.get('click_show_balance', False))
@@ -593,6 +597,7 @@ class PetWindow(QWidget):
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
         self._schedule_macos_window_level(bool(self.cfg.get('on_top', True)))
+        self._apply_opacity()
         # 隐藏期暂停的活动在此恢复（与 hide() 中的 _pause_activity 配对）
         if self._hidden_paused:
             self._hidden_paused = False
@@ -1204,6 +1209,12 @@ class PetWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if not self._is_in_interactive_area(event.position().toPoint()):
                 return  # 左右留白区域不参与点击/拖拽
+            if self.lock_position:
+                # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
+                return
+            if self.shift_drag and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                # SHIFT+左键才能拖动：未按 SHIFT 时只保留点击
+                return
             self._press_global = event.globalPosition().toPoint()
             self._grab_offset = self._press_global - self.pos()
             self._dragging = False
@@ -1547,6 +1558,17 @@ class PetWindow(QWidget):
         desired_drag_physics = bool(self.cfg.get('drag_physics', False))
         if desired_drag_physics != self.drag_physics:
             self.set_drag_physics(desired_drag_physics)
+        desired_lock = bool(self.cfg.get('lock_position', False))
+        if desired_lock != self.lock_position:
+            self.set_lock_position(desired_lock)
+        desired_shift = bool(self.cfg.get('shift_drag', False))
+        if desired_shift != self.shift_drag:
+            self.set_shift_drag(desired_shift)
+        desired_opacity = max(10, min(100, int(self.cfg.get('pet_opacity', 100) or 100)))
+        if desired_opacity != self.pet_opacity:
+            self.set_pet_opacity(desired_opacity)
+        else:
+            self._apply_opacity()  # 首次/未变时也确保窗口已应用
         self.animation_gap_seconds = max(0.0, min(3600.0, float(self.cfg.get('animation_gap_seconds', 0.0))))
         if self.animation_gap_seconds <= 0:
             self._cancel_animation_gap()
@@ -1719,6 +1741,37 @@ class PetWindow(QWidget):
         self.cfg.save()
         if not self.drag_physics:
             self._stop_physics()
+
+    def set_lock_position(self, on: bool) -> None:
+        """锁定位置：开启后桌宠不可拖动（点击互动仍有效）。"""
+        self.lock_position = bool(on)
+        self.cfg.set('lock_position', self.lock_position)
+        self.cfg.save()
+        if self.lock_position and self._dragging:
+            self._dragging = False
+            self._press_global = None
+            self._grab_offset = None
+            self._stop_physics()
+
+    def set_shift_drag(self, on: bool) -> None:
+        """按住 SHIFT+左键才能拖动。"""
+        self.shift_drag = bool(on)
+        self.cfg.set('shift_drag', self.shift_drag)
+        self.cfg.save()
+
+    def set_pet_opacity(self, value: int) -> None:
+        """桌宠窗口不透明度（10-100）。"""
+        self.pet_opacity = max(10, min(100, int(value)))
+        self.cfg.set('pet_opacity', self.pet_opacity)
+        self.cfg.save()
+        self._apply_opacity()
+
+    def _apply_opacity(self) -> None:
+        """把 pet_opacity 应用到窗口（值未变时跳过，避免重复系统调用）。"""
+        opacity = self.pet_opacity / 100.0
+        if self._applied_opacity is None or abs(self._applied_opacity - opacity) >= 0.005:
+            self.setWindowOpacity(opacity)
+            self._applied_opacity = opacity
 
     def _stop_physics(self) -> None:
         self._physics_timer.stop()

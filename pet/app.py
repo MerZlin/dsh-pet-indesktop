@@ -589,6 +589,14 @@ class PetApp:
         auto.setChecked(autostart_mod.is_enabled())
         auto.toggled.connect(lambda enabled: self._set_autostart(enabled, win))
 
+        def sync_tray_checks() -> None:
+            # 设置对话框/右键菜单里改过的开关，弹出托盘菜单前同步复选状态
+            #（托盘菜单在 _build_tray 时一次性构建，不复用则不刷新会过期）
+            mouse_through.setChecked(bool(self.config.get('mouse_through', False)))
+            auto.setChecked(autostart_mod.is_enabled())
+
+        menu.aboutToShow.connect(sync_tray_checks)
+
         menu.addSeparator()
         if self.enable_chat:
             menu.addAction('DeepSeek 余额', lambda: self.show_balance(win))
