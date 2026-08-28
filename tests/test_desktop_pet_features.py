@@ -760,6 +760,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
         "回到右下角",
         "隐藏桌宠",
         "不移动",
+        "鼠标穿透",
         "窗口置顶",
         "开机自启",
         "生小肥鱼",

@@ -1037,6 +1037,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
             SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
             SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
+            SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
         ], behavior_content))
         behavior_layout.addWidget(SettingsSection("拖拽", [
             SettingRow("drag_physics", "拖动物理", "启用拖拽惯性、重力和边缘反弹。", self.drag_physics_check),
@@ -1163,6 +1164,8 @@ class ModernSettingsDialog(QDialog):
         self.on_top_check.setChecked(bool(self.config.get("on_top", True)))
         self.no_move_check = ToggleSwitch(self)
         self.no_move_check.setChecked(bool(self.config.get("no_move", False)))
+        self.mouse_through_check = ToggleSwitch(self)
+        self.mouse_through_check.setChecked(bool(self.config.get("mouse_through", False)))
         self.drag_physics_check = ToggleSwitch(self)
         self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
         self.autostart_check = ToggleSwitch(self)
@@ -1823,6 +1826,7 @@ class ModernSettingsDialog(QDialog):
         if self.dock_icon_check is not None:
             self.config.set("show_dock_icon", self.dock_icon_check.isChecked())
         self.config.set("no_move", self.no_move_check.isChecked())
+        self.config.set("mouse_through", self.mouse_through_check.isChecked())
         self.config.set("drag_physics", self.drag_physics_check.isChecked())
         self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
         self.config.set("click_sound_path", self.click_sound_picker.text())

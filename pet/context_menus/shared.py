@@ -376,6 +376,15 @@ def add_no_move(menu: QMenu, pet, *, icons: bool = True):
     return action
 
 
+def add_mouse_through(menu: QMenu, pet, *, icons: bool = True):
+    """鼠标穿透开关（上游重写时丢失的菜单入口，接回 set_mouse_through）。"""
+    action = add_action(menu, "鼠标穿透", "pin" if icons else None)
+    action.setCheckable(True)
+    action.setChecked(bool(getattr(pet, "mouse_through", False)))
+    action.toggled.connect(lambda enabled, pet=pet: pet.set_mouse_through(enabled))
+    return action
+
+
 def add_on_top(menu: QMenu, pet, *, icons: bool = True):
     action = add_action(menu, "窗口置顶", "pin" if icons else None)
     action.setCheckable(True)

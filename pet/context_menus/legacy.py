@@ -16,6 +16,7 @@ from .shared import (
     add_drag_physics,
     add_deepseek_web,
     add_harness,
+    add_mouse_through,
     add_no_move,
     add_on_top,
     add_quit,
@@ -51,6 +52,7 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     add_return_corner(menu, pet, icons=False)
     add_on_top(menu, pet, icons=False)
     add_no_move(menu, pet, icons=False)
+    add_mouse_through(menu, pet, icons=False)
     add_autostart(menu, icons=False)
     add_spawn_pet(menu, pet)
     build_size_menu(menu, pet, icons=False)

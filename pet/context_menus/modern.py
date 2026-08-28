@@ -18,6 +18,7 @@ from .shared import (
     add_balance,
     add_deepseek_web,
     add_harness,
+    add_mouse_through,
     add_no_move,
     add_on_top,
     add_quit,
@@ -66,6 +67,7 @@ def build_modern_menu(menu: QMenu, pet, template: dict) -> None:
     add_return_corner(menu, pet)
     add_hide_pet(menu, pet)
     add_no_move(menu, pet)
+    add_mouse_through(menu, pet)
     add_on_top(menu, pet)
     add_autostart(menu, pet)
     add_spawn_pet(menu, pet)
