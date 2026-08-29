@@ -64,11 +64,8 @@ def _real_profiles() -> list[Path]:
     )
 
 
-def _pnpm_cli() -> str | None:
-    """定位 pnpm 的 JS CLI 入口（由 node 直调，绕开 .cmd/.ps1 包装的空格引号坑）。
-
-    优先级：环境变量 DSH_PNPM_BIN > PATH 上 pnpm 同目录 > npm 全局目录推断。
-    """
+def _find_pnpm_cli() -> str | None:
+    """定位 pnpm 的 JS CLI 入口，不触发安装。"""
     env = os.environ.get("DSH_PNPM_BIN")
     if env and Path(env).is_file():
         return env
@@ -86,12 +83,50 @@ def _pnpm_cli() -> str | None:
     return None
 
 
+def _npm_cli() -> str | None:
+    """定位 npm 的 JS CLI 入口（由 node 直调，绕开 .cmd 的空格引号坑）。"""
+    npm = shutil.which("npm")
+    if not npm:
+        return None
+    resolved = Path(npm).resolve()
+    if resolved.name == "npm-cli.js" and resolved.is_file():
+        return str(resolved)
+    for base in (Path(npm).parent, resolved.parent):
+        cand = base / "node_modules" / "npm" / "bin" / "npm-cli.js"
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def _pnpm_cli() -> str | None:
+    """定位 pnpm 的 JS CLI；缺失时尝试通过 npm 全局安装一次。"""
+    cli = _find_pnpm_cli()
+    if cli:
+        return cli
+    node = shutil.which("node")
+    npm_cli = _npm_cli()
+    if not node or not npm_cli:
+        return None
+    try:
+        proc = subprocess.run(
+            [node, npm_cli, "install", "-g", "pnpm"],
+            capture_output=True, text=True, timeout=300, shell=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return _find_pnpm_cli()
+
+
 def _run_pnpm(profile_dir: Path, *args: str) -> tuple[int, str]:
     """node 直调 pnpm CLI（数组传参，无 cmd 中转），返回 (返回码, 合并输出)。"""
     node = shutil.which("node")
     cli = _pnpm_cli()
-    if not node or not cli:
-        return 127, "找不到 node 或 pnpm"
+    if not node:
+        return 127, "找不到 node，请先安装 Node.js"
+    if not cli:
+        return 127, "需要 pnpm，自动安装失败，请手动运行: npm install -g pnpm"
     try:
         proc = subprocess.run(
             [node, cli, *args], capture_output=True, text=True,
@@ -535,8 +570,10 @@ class DshMonitor(BaseAgentMonitor):
         plugin = cls.bundled_plugin_dir()
         if plugin is None:
             return False, "找不到内置桥接插件（integrations/dsh-pet-bridge）"
-        if shutil.which("node") is None or _pnpm_cli() is None:
-            return False, "找不到 node 或 pnpm（需要 Node.js 与 npm 全局 pnpm）"
+        if shutil.which("node") is None:
+            return False, "找不到 node，请先安装 Node.js（需包含 npm）"
+        if _pnpm_cli() is None:
+            return False, "需要 pnpm，自动安装失败，请手动运行: npm install -g pnpm"
 
         profiles = _real_profiles()
         if not profiles:

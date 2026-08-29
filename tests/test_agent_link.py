@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+import pet.agent_link as agent_link
 from pet.agent_link import (
     AgentLinkManager,
     BaseAgentMonitor,
@@ -851,6 +852,54 @@ class TestAgentLinkBubbles:
 
 
 class TestInstallErrorSummary:
+    def test_install_bridge_auto_installs_pnpm(self, tmp_path, monkeypatch):
+        plugin = tmp_path / "dsh-pet-bridge"
+        plugin.mkdir()
+        profile = tmp_path / "profiles" / "default"
+        profile.mkdir(parents=True)
+        manifest = profile / "package.json"
+        manifest.write_text("{}", encoding="utf-8")
+
+        pnpm_cli = str(tmp_path / "pnpm.mjs")
+        located = iter([None, pnpm_cli, pnpm_cli])
+        monkeypatch.setattr(agent_link, "_find_pnpm_cli", lambda: next(located))
+        monkeypatch.setattr(agent_link, "_npm_cli", lambda: "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js")
+        monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
+        monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
+        monkeypatch.setattr(
+            agent_link.shutil, "which",
+            lambda name: "C:/Program Files/nodejs/node.exe" if name == "node" else None,
+        )
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            if cmd[1] == pnpm_cli:
+                manifest.write_text(
+                    json.dumps({"dependencies": {agent_link.DSH_PLUGIN_NAME: "file:bridge"}}),
+                    encoding="utf-8",
+                )
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(agent_link.subprocess, "run", fake_run)
+
+        ok, message = DshMonitor.install_bridge()
+
+        assert ok is True
+        assert "1 个 dsh 实例" in message
+        assert calls[0][0] == [
+            "C:/Program Files/nodejs/node.exe",
+            "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js",
+            "install", "-g", "pnpm",
+        ]
+        assert calls[1][0] == [
+            "C:/Program Files/nodejs/node.exe", pnpm_cli, "add", str(plugin),
+        ]
+        assert json.loads(manifest.read_text(encoding="utf-8"))["dsh"]["profile"]["bundles"] == [
+            agent_link.DSH_PLUGIN_NAME
+        ]
+
     def test_extract_err_pnpm_line(self):
         output = """
         [1/4] Resolving packages...
