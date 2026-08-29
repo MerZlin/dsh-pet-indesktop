@@ -1358,8 +1358,14 @@ class AgentLinkManager(QObject):
             return
         name = self.AGENT_NAMES.get(agent_key, agent_key)
         if state == "thinking":
-            # DSH 联动搭配鲸鱼娘形象时用角色梗自称
-            think_text = "大肥鱼正在深度思考……" if agent_key == "dsh" else f"{name} 正在深度思考……"
+            # 自定义文案优先（支持 {name} 占位符），留空用默认
+            custom = agent_cfg.get("thinking_text", "").strip()
+            if custom:
+                think_text = custom.replace("{name}", name)
+            elif agent_key == "dsh":
+                think_text = "大肥鱼正在深度思考……"
+            else:
+                think_text = f"{name} 正在深度思考……"
             self._show_link_bubble(think_text, important=False, duration_ms=3000)
         else:
             self._show_link_bubble(f"{name} 开始干活啦～", important=False, duration_ms=3000)
