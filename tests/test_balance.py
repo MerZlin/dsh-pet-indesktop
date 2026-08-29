@@ -127,6 +127,23 @@ def test_deepseek_pricing_hint_and_next_switch():
     assert "下一高峰" in hint_weekend
 
 
+def test_resolve_tier_labels_and_custom_hint():
+    # 默认
+    assert balance.resolve_tier_labels("default") == ("高峰", "空闲")
+    # 梁文
+    assert balance.resolve_tier_labels("liangwen") == ("梁文峰", "梁文谷")
+    # 自定义，留空回退默认
+    assert balance.resolve_tier_labels("custom", "自定义峰", "自定义谷") == ("自定义峰", "自定义谷")
+    assert balance.resolve_tier_labels("custom", "", "") == ("高峰", "空闲")
+
+    # 自定义文案会反映到提示里
+    hint = balance.deepseek_pricing_hint(
+        _bj(10), peak_label="梁文峰", idle_label="梁文谷"
+    )
+    assert "当前梁文峰" in hint
+    assert "下一梁文谷" in hint
+
+
 def test_friday_evening_next_peak_skips_weekend():
     # 2026-08-28 是周五，20:00 后下一高峰应为周一 09:00，而不是周六 09:00
     hint = balance.deepseek_pricing_hint(_bj(20, day=28, month=8, year=2026))

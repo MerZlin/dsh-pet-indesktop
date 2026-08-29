@@ -176,14 +176,42 @@ def _next_pricing_switch(now: datetime | None = None) -> tuple[str, datetime]:
     return 'peak', datetime.combine(next_day, time(9, 0), tzinfo=tz)
 
 
-def deepseek_pricing_hint(now: datetime | None = None) -> str:
+def resolve_tier_labels(
+    mode: str = "default",
+    custom_peak: str = "",
+    custom_idle: str = "",
+) -> tuple[str, str]:
+    """根据设置返回 (高峰文本, 空闲文本)。
+
+    - default：高峰 / 空闲
+    - liangwen：梁文峰 / 梁文谷
+    - custom：使用用户自定义文本，留空回退默认
+    """
+    mode = str(mode or "default").strip().lower()
+    if mode == "liangwen":
+        return "梁文峰", "梁文谷"
+    if mode == "custom":
+        peak = str(custom_peak or "").strip() or "高峰"
+        idle = str(custom_idle or "").strip() or "空闲"
+        return peak, idle
+    return "高峰", "空闲"
+
+
+def deepseek_pricing_hint(
+    now: datetime | None = None,
+    peak_label: str | None = None,
+    idle_label: str | None = None,
+) -> str:
     """生成余额气泡下方的 DeepSeek 峰谷提示文案。
 
-    如「当前高峰 · 下一空闲 12:00」「当前空闲 · 下一高峰 09:00」。
+    如「DeepSeek 当前高峰 · 下一空闲 12:00」「DeepSeek 当前空闲 · 下一高峰 09:00」。
+    peak_label/idle_label 可由设置项自定义（如梁文峰/梁文谷）。
     """
     bj = _beijing_now(now)
     tier = deepseek_pricing_tier(bj)
     next_tier, next_time = _next_pricing_switch(bj)
-    label = '高峰' if tier == 'peak' else '空闲'
-    next_label = '空闲' if next_tier == 'idle' else '高峰'
+    peak_text = str(peak_label or "高峰")
+    idle_text = str(idle_label or "空闲")
+    label = peak_text if tier == 'peak' else idle_text
+    next_label = idle_text if next_tier == 'idle' else peak_text
     return f'DeepSeek 当前{label} · 下一{next_label} {next_time:%H:%M}'
