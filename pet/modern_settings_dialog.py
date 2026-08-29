@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 from . import autostart as autostart_mod
 from . import catalog
+from .agent_link import AgentLinkManager
 from .config import (
     DEFAULT_CONTEXT_MENU_APPEARANCE,
     DEFAULT_MENU_EASTER_EGG,
@@ -1081,11 +1082,17 @@ class ModernSettingsDialog(QDialog):
             SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
             SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
         ], behavior_content))
-        behavior_layout.addWidget(SettingsSection("Agent 联动", [
-            SettingRow("agent_thinking_text", "思考气泡文案",
-                       "Agent 深度思考时的气泡文案。支持 {name} 占位符自动替换为 Agent 名；留空使用默认文案。",
-                       self.thinking_text_edit, stacked=True),
-        ], behavior_content))
+        # Agent 联动：每个 Agent 一行自定义思考文案
+        agent_thinking_rows = []
+        for agent_key, edit in self.thinking_text_edits.items():
+            agent_name = AgentLinkManager.AGENT_NAMES.get(agent_key, agent_key)
+            default = AgentLinkManager._THINKING_DEFAULTS.get(agent_key, f"{agent_name} 正在深度烧烤……")
+            agent_thinking_rows.append(
+                SettingRow(f"agent_thinking_{agent_key}", f"{agent_name} 思考文案",
+                           f"默认：{default}；支持 {{name}} 占位符；留空用默认。",
+                           edit, stacked=True)
+            )
+        behavior_layout.addWidget(SettingsSection("Agent 联动 · 思考气泡文案", agent_thinking_rows, behavior_content))
         behavior_layout.addStretch(1)
         self._add_page("桌宠行为", "play", self._page_shell("桌宠行为", behavior_content))
 
@@ -1290,12 +1297,22 @@ class ModernSettingsDialog(QDialog):
             parent=self,
         )
 
-        # Agent 联动：自定义 thinking 气泡文案
+        # Agent 联动：每个 Agent 的自定义 thinking 气泡文案
         agent_link_cfg = self.config.get("agent_link", {})
-        self.thinking_text_edit = QLineEdit(self)
-        self.thinking_text_edit.setPlaceholderText("大肥鱼正在深度思考……")
-        self.thinking_text_edit.setText(str(agent_link_cfg.get("thinking_text", "") or ""))
-        self.thinking_text_edit.setClearButtonEnabled(True)
+        thinking_texts = agent_link_cfg.get("thinking_texts") or {}
+        # 兼容旧的全局 thinking_text 字段
+        legacy_text = str(agent_link_cfg.get("thinking_text", "") or "")
+        self.thinking_text_edits: dict[str, QLineEdit] = {}
+        for agent_key, agent_name in AgentLinkManager.AGENT_NAMES.items():
+            edit = QLineEdit(self)
+            default = AgentLinkManager._THINKING_DEFAULTS.get(agent_key, f"{agent_name} 正在深度烧烤……")
+            edit.setPlaceholderText(default)
+            text = str(thinking_texts.get(agent_key, "") or "")
+            if not text and legacy_text:
+                text = legacy_text
+            edit.setText(text)
+            edit.setClearButtonEnabled(True)
+            self.thinking_text_edits[agent_key] = edit
 
         appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
         self.menu_theme_select = ModernSelect(self, width=132)
@@ -1802,7 +1819,12 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
         # Agent 联动：自定义 thinking 文案（合并写回，不覆盖 agent_link 其他开关）
         agent_cfg = dict(self.config.get("agent_link", {}))
-        agent_cfg["thinking_text"] = self.thinking_text_edit.text().strip()
+        agent_cfg["thinking_texts"] = {
+            key: edit.text().strip()
+            for key, edit in self.thinking_text_edits.items()
+            if edit.text().strip()
+        }
+        agent_cfg.pop("thinking_text", None)  # 旧的全局字段已迁移到 thinking_texts
         self.config.set("agent_link", agent_cfg)
         self.config.set("context_menu_appearance", {
             "theme": self.menu_theme_select.currentData(),

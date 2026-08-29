@@ -1348,6 +1348,24 @@ class AgentLinkManager(QObject):
     # ------------------------------------------------------------------
     # 联动气泡（开始干活可选 / 任务完成通知）
     # ------------------------------------------------------------------
+    # 各 Agent 的默认 thinking 文案；DSH 用角色梗，其他用烧烤梗
+    _THINKING_DEFAULTS = {"dsh": "大肥鱼正在深度思考……"}
+
+    def _thinking_text(self, agent_key: str) -> str:
+        """thinking 气泡文案：按 Agent 自定义 > 旧全局自定义 > 按 Agent 默认。"""
+        agent_cfg = self.cfg.get("agent_link", {})
+        custom = (agent_cfg.get("thinking_texts") or {}).get(agent_key, "").strip()
+        # 兼容旧的全局 thinking_text 字段（设置页保存时已自动迁移）
+        if not custom:
+            custom = str(agent_cfg.get("thinking_text", "") or "").strip()
+        if custom:
+            name = self.AGENT_NAMES.get(agent_key, agent_key)
+            return custom.replace("{name}", name)
+        if agent_key in self._THINKING_DEFAULTS:
+            return self._THINKING_DEFAULTS[agent_key]
+        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        return f"{name} 正在深度烧烤……"
+
     def _maybe_notify_start(self, agent_key: str, prev_raw: str | None, state: str = "working") -> None:
         """开始干活气泡：仅「非 busy → busy」时提示（thinking↔working 互跳不弹）。
         低优先级：气泡位被占时直接丢弃。thinking 状态用更有趣的文案。"""
@@ -1358,15 +1376,7 @@ class AgentLinkManager(QObject):
             return
         name = self.AGENT_NAMES.get(agent_key, agent_key)
         if state == "thinking":
-            # 自定义文案优先（支持 {name} 占位符），留空用默认
-            custom = agent_cfg.get("thinking_text", "").strip()
-            if custom:
-                think_text = custom.replace("{name}", name)
-            elif agent_key == "dsh":
-                think_text = "大肥鱼正在深度思考……"
-            else:
-                think_text = f"{name} 正在深度思考……"
-            self._show_link_bubble(think_text, important=False, duration_ms=3000)
+            self._show_link_bubble(self._thinking_text(agent_key), important=False, duration_ms=3000)
         else:
             self._show_link_bubble(f"{name} 开始干活啦～", important=False, duration_ms=3000)
 
