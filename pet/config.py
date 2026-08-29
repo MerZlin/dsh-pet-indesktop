@@ -26,6 +26,13 @@ DEFAULT_SELF_TALK_TEXTS = [
     "\u518d\u966a\u4f60\u4e00\u4f1a\u513f\u3002",
 ]
 DEFAULT_SELF_TALK_BUBBLE_STYLE = "classic_top"
+DEFAULT_COLLISION_SETTINGS = {
+    "collision_enabled": True,
+    "collision_restitution": 0.82,
+    "collision_friction": 0.08,
+    "collision_mass_scale": 1.0,
+    "collision_impulse_cap": 9000.0,
+}
 SELF_TALK_BUBBLE_STYLES = {
     "classic_top", "paper_left", "glass_right", "soft_blue_top", "breath_bubble",
 }
@@ -439,6 +446,8 @@ class Config:
             "proactive_screen": _default_proactive_screen_data(),
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
+            "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
+            **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
         self._load()
@@ -548,7 +557,10 @@ class Config:
             "modern_chat_card_opacity",
             "chat_bg_crops",
             "chat_ui_style",
-            "character_aliases",
+            "chat_follow_pet",
+             "character_aliases",
+             "collision_enabled", "collision_restitution", "collision_friction",
+             "collision_mass_scale", "collision_impulse_cap",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -649,6 +661,11 @@ class Config:
         self.data["throw_strength"] = strength
         self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
+        self.data["collision_enabled"] = _bool_or_default(self.data.get("collision_enabled"), True)
+        self.data["collision_restitution"] = _float_or_default(self.data.get("collision_restitution"), .82, 0.0, 1.0)
+        self.data["collision_friction"] = _float_or_default(self.data.get("collision_friction"), .08, 0.0, .30)
+        self.data["collision_mass_scale"] = _float_or_default(self.data.get("collision_mass_scale"), 1.0, .5, 2.0)
+        self.data["collision_impulse_cap"] = _float_or_default(self.data.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -721,11 +738,12 @@ class Config:
 
         写盘使用 _redacted_data() 的副本，self.data 本身不动，保证运行期
         key 在内存可见而不会明文落盘。
+        临时文件名加入 PID 后缀，避免错误并发写入撞名。
         """
         try:
             self._normalize_pet_settings()
             self.dir.mkdir(parents=True, exist_ok=True)
-            temp = self.path.with_suffix(".json.tmp")
+            temp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
             temp.write_text(
                 json.dumps(self._redacted_data(), ensure_ascii=False, indent=2),
                 encoding="utf-8",

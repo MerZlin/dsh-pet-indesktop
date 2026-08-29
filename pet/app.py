@@ -27,14 +27,16 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import autostart as autostart_mod
 from . import balance as balance_mod
 from . import catalog
+from . import slot_manager as slot_manager_mod
 from . import updater
-from .config import APP_DIR_NAME, Config
+from .config import APP_DIR_NAME, Config, _default_base
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
 from .library import MovieLibrary
 from .window import PetWindow
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
+from .collision_ipc import CollisionIpcSession
 
 
 class _BackgroundResult(QObject):
@@ -164,10 +166,12 @@ def _cleanup_stale_runtime_dirs() -> None:
 class PetApp:
     """管理桌宠窗口、托盘与角色热切换。"""
 
-    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True) -> None:
+    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True, slot_handle=None, slot_id: int | None = None) -> None:
         self.app = app
         self.config = config
         self.enable_chat = bool(enable_chat)
+        self.slot_handle = slot_handle
+        self.slot_id = slot_id
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
         self.chat_window = None
@@ -185,6 +189,7 @@ class PetApp:
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
+        self.collision_ipc = CollisionIpcSession(config, self)
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -194,6 +199,7 @@ class PetApp:
         if not self._on_about_to_quit_connected:
             self.app.aboutToQuit.connect(self._on_about_to_quit)
             self._on_about_to_quit_connected = True
+        self.collision_ipc.start()
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self._create_ui(character_id)
@@ -209,6 +215,7 @@ class PetApp:
         """
         if self.win is not None:
             self.win._save_position()
+        self.collision_ipc.stop()
 
     def _set_autostart(self, enabled: bool, win=None) -> bool:
         ok = autostart_mod.set_enabled(bool(enabled))
@@ -411,7 +418,7 @@ class PetApp:
 
     def _create_ui(self, character_id: str) -> None:
         lib = self._create_library(character_id)
-        win = PetWindow(lib, self.config)
+        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
         win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
@@ -464,7 +471,12 @@ class PetApp:
         logging.info('切换角色: %s -> %s', current, character_id)
 
         # 用新库创建新窗口/托盘，旧对象延迟销毁
-        win = PetWindow(lib, self.config)
+        old_win = self.win
+        old_win.detach_collision_session()
+        self.collision_ipc.stop()
+        self.collision_ipc = CollisionIpcSession(self.config, self)
+        self.collision_ipc.start()
+        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
         win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
@@ -481,7 +493,6 @@ class PetApp:
 
         tray = self._build_tray(win)
 
-        old_win = self.win
         old_tray = self.tray
         self.win = win
         self.tray = tray
@@ -768,30 +779,71 @@ def _mac_set_dock_icon_visible(visible: bool) -> None:
 
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     argv = list(argv if argv is not None else sys.argv)
-    instance_id = None
+    explicit_instance_id = None
+    preferred_slot = None
+
     if "--instance" in argv:
         index = argv.index("--instance")
         if index + 1 < len(argv):
-            instance_id = str(argv[index + 1])
+            explicit_instance_id = str(argv[index + 1])
+
+    if "--slot" in argv:
+        index = argv.index("--slot")
+        if index + 1 < len(argv):
+            try:
+                preferred_slot = int(argv[index + 1])
+            except ValueError:
+                logging.error("无效的 --slot 参数: %s", argv[index + 1])
+                return 1
+
     app = QApplication(argv)
     app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
 
+    # 确定配置根目录
+    config_dir = _default_base() / APP_DIR_NAME
+
+    # 执行槽位竞争或使用显式 instance_id
+    slot_handle = None
+    slot_id = None
+
+    if explicit_instance_id is not None:
+        instance_id = explicit_instance_id
+    else:
+        # 在 Config 前取得槽位排他锁
+        try:
+            slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config_dir, preferred_slot=preferred_slot)
+        except Exception as exc:
+            logging.exception("获取桌宠槽位锁失败")
+            _show_startup_error("dsh-pet-standalone", str(exc))
+            return 1
+
+        instance_id = slot_manager_mod.slot_to_instance_id(slot_id)
+        os.environ["DSH_PET_INSTANCE"] = instance_id
+
+        # 首次取得副槽位且持锁时，按需播种
+        if slot_id > 0:
+            slot_manager_mod.seed_slot_config_if_needed(config_dir, slot_id)
+
+    # 迁移旧 spawn 实例（主槽或无并发运行旧实例时触发）
+    if slot_id == 0:
+        slot_manager_mod.migrate_legacy_spawns(config_dir)
+
     config = Config(instance_id=instance_id)
     _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
     _setup_logging(config)
-    logging.info('dsh-pet-standalone 启动')
+    logging.info("dsh-pet-standalone 启动 (slot: %s, instance: %s)", slot_id, instance_id)
     _cleanup_stale_runtime_dirs()
 
-    controller = PetApp(app, config, enable_chat=enable_chat)
+    controller = PetApp(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id)
     try:
         controller.start()
     except Exception as exc:
-        logging.exception('启动失败')
-        _show_startup_error('dsh-pet-standalone', str(exc))
+        logging.exception("启动失败")
+        _show_startup_error("dsh-pet-standalone", str(exc))
         return 1
 
-    logging.info('进入事件循环')
+    logging.info("进入事件循环")
     return app.exec()
 
 

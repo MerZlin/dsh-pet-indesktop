@@ -1110,8 +1110,9 @@ class ModernSettingsDialog(QDialog):
         general_layout = QVBoxLayout(general_content)
         general_layout.setContentsMargins(0, 0, 0, 0)
         general_layout.setSpacing(18)
+        autostart_desc = "登录系统后自动启动桌宠。" if not self.config.instance_id else "登录系统后自动启动桌宠。（仅主桌宠可设置）"
         launch_rows = [
-            SettingRow("autostart", "开机自启", "登录系统后自动启动桌宠。", self.autostart_check),
+            SettingRow("autostart", "开机自启", autostart_desc, self.autostart_check),
         ]
         if sys.platform == "darwin":
             launch_rows.append(SettingRow(
@@ -1157,6 +1158,13 @@ class ModernSettingsDialog(QDialog):
             SettingRow("slingshot_enabled", "弹弓弹射", "拖拽桌宠时点击右键进入蓄力瞄准，松开左键弹射飞出（Esc或右键取消）。", self.slingshot_check),
             SettingRow("lock_position", "锁定位置", "桌宠固定不动，无法拖动（点击互动仍有效）。", self.lock_position_check),
             SettingRow("shift_drag", "SHIFT+左键拖动", "开启后必须按住 SHIFT 再左键才能拖动桌宠。", self.shift_drag_check),
+        ], behavior_content))
+        behavior_layout.addWidget(SettingsSection("多开碰撞", [
+            SettingRow("collision_enabled", "碰撞开关", "多开桌宠之间发生碰撞物理互动。开启鼠标穿透的桌宠仍会参与碰撞，锁定位置的桌宠作为固定障碍。", self.collision_enabled_check),
+            SettingRow("collision_restitution", "弹性系数", "碰撞反弹的能量保留程度（0~1.00，默认 0.82）。", self.collision_restitution_spin),
+            SettingRow("collision_friction", "摩擦系数", "擦边碰撞时的切向摩擦阻力（0~0.30，默认 0.08）。", self.collision_friction_spin),
+            SettingRow("collision_mass_scale", "质量倍率", "桌宠的基础质量加权倍率（0.5~2.0，默认 1.0）。", self.collision_mass_scale_spin),
+            SettingRow("collision_impulse_cap", "冲量上限", "单次碰撞能施加的最大冲量上限（1000~12000，默认 9000）。", self.collision_impulse_cap_spin),
         ], behavior_content))
         click_rows = [
             SettingRow("click_sound", "点击音效", "点击桌宠时播放轻量反馈音效。", self.click_sound_check),
@@ -1327,6 +1335,30 @@ class ModernSettingsDialog(QDialog):
         self.slingshot_check = ToggleSwitch(self)
         self.slingshot_check.setChecked(bool(self.config.get("slingshot_enabled", True)))
 
+        # 多开碰撞设置
+        self.collision_enabled_check = ToggleSwitch(self)
+        self.collision_enabled_check.setChecked(bool(self.config.get("collision_enabled", True)))
+        self.collision_restitution_spin = BrowserDoubleSpinBox(self)
+        self.collision_restitution_spin.setRange(0.0, 1.0)
+        self.collision_restitution_spin.setSingleStep(0.05)
+        self.collision_restitution_spin.setDecimals(2)
+        self.collision_restitution_spin.setValue(float(_float_or_default(self.config.get("collision_restitution", 0.82), 0.82, 0.0, 1.0)))
+        self.collision_friction_spin = BrowserDoubleSpinBox(self)
+        self.collision_friction_spin.setRange(0.0, 0.30)
+        self.collision_friction_spin.setSingleStep(0.01)
+        self.collision_friction_spin.setDecimals(2)
+        self.collision_friction_spin.setValue(float(_float_or_default(self.config.get("collision_friction", 0.08), 0.08, 0.0, 0.30)))
+        self.collision_mass_scale_spin = BrowserDoubleSpinBox(self)
+        self.collision_mass_scale_spin.setRange(0.5, 2.0)
+        self.collision_mass_scale_spin.setSingleStep(0.1)
+        self.collision_mass_scale_spin.setDecimals(2)
+        self.collision_mass_scale_spin.setValue(float(_float_or_default(self.config.get("collision_mass_scale", 1.0), 1.0, 0.5, 2.0)))
+        self.collision_impulse_cap_spin = BrowserDoubleSpinBox(self)
+        self.collision_impulse_cap_spin.setRange(1000.0, 12000.0)
+        self.collision_impulse_cap_spin.setSingleStep(500.0)
+        self.collision_impulse_cap_spin.setDecimals(0)
+        self.collision_impulse_cap_spin.setValue(float(_float_or_default(self.config.get("collision_impulse_cap", 9000.0), 9000.0, 1000.0, 12000.0)))
+
         self.lock_position_check = ToggleSwitch(self)
         self.lock_position_check.setChecked(bool(self.config.get("lock_position", False)))
         self.shift_drag_check = ToggleSwitch(self)
@@ -1338,6 +1370,9 @@ class ModernSettingsDialog(QDialog):
         self.autostart_check = ToggleSwitch(self)
         self._autostart_initial = autostart_mod.is_enabled()
         self.autostart_check.setChecked(self._autostart_initial)
+        if self.config.instance_id:
+            self.autostart_check.setEnabled(False)
+            self.autostart_check.setToolTip("仅主桌宠可设置")
         self.dock_icon_check = None
         if sys.platform == "darwin":
             self.dock_icon_check = ToggleSwitch(self)
@@ -2084,6 +2119,11 @@ class ModernSettingsDialog(QDialog):
         self.config.set("drag_physics", self.drag_physics_check.isChecked())
         self.config.set("throw_strength", str(self.throw_strength_select.currentData() or "standard"))
         self.config.set("slingshot_enabled", self.slingshot_check.isChecked())
+        self.config.set("collision_enabled", self.collision_enabled_check.isChecked())
+        self.config.set("collision_restitution", self.collision_restitution_spin.value())
+        self.config.set("collision_friction", self.collision_friction_spin.value())
+        self.config.set("collision_mass_scale", self.collision_mass_scale_spin.value())
+        self.config.set("collision_impulse_cap", self.collision_impulse_cap_spin.value())
         self.config.set("lock_position", self.lock_position_check.isChecked())
         self.config.set("shift_drag", self.shift_drag_check.isChecked())
         self.config.set("pet_opacity", int(self.pet_opacity_spin.value()))

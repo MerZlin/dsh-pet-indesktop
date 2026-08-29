@@ -73,11 +73,11 @@ def _desktop_path() -> Path:
 def _linux_desktop_content() -> str:
     """Linux 自启 .desktop 内容；源码运行经 sh 切工作目录，打包运行直接指向二进制。"""
     if getattr(sys, "frozen", False):
-        command = str(Path(sys.executable).resolve())
+        command = f"{shlex.quote(str(Path(sys.executable).resolve()))} --slot 0"
     else:
         root_quoted = shlex.quote(str(_project_root()))
         exe_quoted = shlex.quote(str(sys.executable))
-        inner_cmd = f"cd {root_quoted} && exec {exe_quoted} -m pet"
+        inner_cmd = f"cd {root_quoted} && exec {exe_quoted} -m pet --slot 0"
         command = f"/bin/sh -c {shlex.quote(inner_cmd)}"
     return (
         "[Desktop Entry]\n"
@@ -176,17 +176,17 @@ def _win_command() -> str:
         # onefile 的 runtime_tmpdir="." 是相对“当前工作目录”解析的；
         # 开机自启（HKCU Run）默认工作目录可能是 System32 等不可写目录。
         # 用 start 先切到 exe 所在目录再启动 exe，既保证解压目录在 exe 同目录，
-        # 又不会让 cmd 窗口一直等待桌宠退出。
+        # 又不会让 cmd 窗口一直等待桌宠退出。开机自启固定指定 --slot 0。
         exe = Path(sys.executable).resolve()
-        return f'cmd /c start "" /D "{exe.parent}" "{exe}"'
-    return f'cmd /c start "" /D "{_project_root()}" "{_pythonw_path()}" -m pet'
+        return f'cmd /c start "" /D "{exe.parent}" "{exe}" --slot 0'
+    return f'cmd /c start "" /D "{_project_root()}" "{_pythonw_path()}" -m pet --slot 0'
 
 
 def _mac_program_args() -> list[str]:
     if getattr(sys, "frozen", False):
         # .app 内二进制路径，直接作为 LaunchAgent 程序运行
-        return [str(sys.executable)]
-    return [sys.executable, "-m", "pet"]
+        return [str(sys.executable), "--slot", "0"]
+    return [sys.executable, "-m", "pet", "--slot", "0"]
 
 
 def enable() -> bool:

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多开实例位置避让（runtime 标记）+ 角色名别名的回归测试。"""
+"""多开实例位置避让（runtime 标记）、spawn offset 与角色名别名测试。"""
 from __future__ import annotations
 
 import json
@@ -31,7 +31,7 @@ def test_second_instance_avoids_live_overlap(app, tmp_path):
         {'pid': os.getppid(), 'x': rect_a[0], 'y': rect_a[1], 'w': rect_a[2], 'h': rect_a[3]},
     ), encoding='utf-8')
 
-    cfg_b = Config(base=tmp_path, instance_id='pet2')
+    cfg_b = Config(base=tmp_path, instance_id='slot-1')
     win_b = PetWindow(FakeLibrary(), cfg_b)
     try:
         # 触发了避让：向左错开（测试环境屏幕较小，一步就顶到左缘也算避让成功）
