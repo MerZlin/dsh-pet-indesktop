@@ -12,6 +12,11 @@ permissions:
 jobs:
   build-linux:
     runs-on: ubuntu-latest  # x86_64；PyInstaller 不支持交叉编译，必须在 Linux 上构建
+    # 编码隔离（issue #26）：强制 UTF-8 模式，避免任何环节按 legacy 编码
+    # 二次解码中文源码/资源（PYTHONIOENCODING 只解决控制台输出）。
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
 
     steps:
       - name: Checkout
@@ -77,6 +82,17 @@ jobs:
               $EXCLUDES \
               "$ENTRY"
             if [ $? -ne 0 ]; then echo "::error::$VARIANT 构建失败"; exit 1; fi
+          done
+
+      # 中文编码自检（issue #26）：字节码字面量/文本资源/中文文件名被
+      # 编码污染即失败，绝不发布乱码包（与 Windows build_onedir.ps1 一致）。
+      - name: Chinese-encoding self-check on bundles
+        run: |
+          for VARIANT in webm-chat webm; do
+            APP="dist/dsh-pet-standalone-$VARIANT"
+            echo "==> checking $APP"
+            python scripts/check_bundle_encoding.py --dir "$APP"
+            if [ $? -ne 0 ]; then echo "::error::$APP 中文编码自检失败（issue #26）"; exit 1; fi
           done
 
       - name: Verify pet module collected
