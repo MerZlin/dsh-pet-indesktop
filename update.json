@@ -1,15 +1,15 @@
 {
-  "version": "4.0.2",
+  "version": "4.0.3",
   "html_url": "https://github.com/MerZlin/dsh-pet-indesktop/releases",
-  "notes": "v4.0.2 修复版：点击音效/动画毛边/帧率精度/菜单避让/集成资源打包等一批修复与优化",
+  "notes": "v4.0.3 紧急修复版：Windows 透明像素点击穿透、DSH 桥接插件自动安装 pnpm、Windows 官方包中文乱码修复",
   "assets": {
-    "dsh-pet-standalone-webm-chat-setup.exe": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-chat-setup.exe",
-    "dsh-pet-standalone-webm-chat-portable.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-chat-portable.zip",
-    "dsh-pet-standalone-webm-setup.exe": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-setup.exe",
-    "dsh-pet-standalone-webm-portable.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-portable.zip",
-    "dsh-pet-standalone-webm-chat-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-chat-macos-arm64.zip",
-    "dsh-pet-standalone-webm-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-macos-arm64.zip",
-    "dsh-pet-standalone-webm-chat-linux-x86_64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-chat-linux-x86_64.zip",
-    "dsh-pet-standalone-webm-linux-x86_64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.2/dsh-pet-standalone-webm-linux-x86_64.zip"
+    "dsh-pet-standalone-webm-chat-setup.exe": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-chat-setup.exe",
+    "dsh-pet-standalone-webm-chat-portable.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-chat-portable.zip",
+    "dsh-pet-standalone-webm-setup.exe": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-setup.exe",
+    "dsh-pet-standalone-webm-portable.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-portable.zip",
+    "dsh-pet-standalone-webm-chat-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-chat-macos-arm64.zip",
+    "dsh-pet-standalone-webm-macos-arm64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-macos-arm64.zip",
+    "dsh-pet-standalone-webm-chat-linux-x86_64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-chat-linux-x86_64.zip",
+    "dsh-pet-standalone-webm-linux-x86_64.zip": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.0.3/dsh-pet-standalone-webm-linux-x86_64.zip"
   }
 }
