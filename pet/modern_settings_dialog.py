@@ -1081,6 +1081,11 @@ class ModernSettingsDialog(QDialog):
             SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
             SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
         ], behavior_content))
+        behavior_layout.addWidget(SettingsSection("Agent 联动", [
+            SettingRow("agent_thinking_text", "思考气泡文案",
+                       "Agent 深度思考时的气泡文案。支持 {name} 占位符自动替换为 Agent 名；留空使用默认文案。",
+                       self.thinking_text_edit, stacked=True),
+        ], behavior_content))
         behavior_layout.addStretch(1)
         self._add_page("桌宠行为", "play", self._page_shell("桌宠行为", behavior_content))
 
@@ -1284,6 +1289,13 @@ class ModernSettingsDialog(QDialog):
             directory=True,
             parent=self,
         )
+
+        # Agent 联动：自定义 thinking 气泡文案
+        agent_link_cfg = self.config.get("agent_link", {})
+        self.thinking_text_edit = QLineEdit(self)
+        self.thinking_text_edit.setPlaceholderText("大肥鱼正在深度思考……")
+        self.thinking_text_edit.setText(str(agent_link_cfg.get("thinking_text", "") or ""))
+        self.thinking_text_edit.setClearButtonEnabled(True)
 
         appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
         self.menu_theme_select = ModernSelect(self, width=132)
@@ -1788,6 +1800,10 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
+        # Agent 联动：自定义 thinking 文案（合并写回，不覆盖 agent_link 其他开关）
+        agent_cfg = dict(self.config.get("agent_link", {}))
+        agent_cfg["thinking_text"] = self.thinking_text_edit.text().strip()
+        self.config.set("agent_link", agent_cfg)
         self.config.set("context_menu_appearance", {
             "theme": self.menu_theme_select.currentData(),
             "density": self.menu_density_select.currentData(),
