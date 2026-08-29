@@ -105,3 +105,55 @@ def test_visible_content_rect_uses_character_region():
 
     rect = window_mod.PetWindow.visible_content_rect(obj)
     assert rect == QRect(104, 103, 20, 20)
+
+
+class _FakeBubble:
+    def __init__(self) -> None:
+        self.hidden = False
+        self.shown_text = []
+
+    def hide(self) -> None:
+        self.hidden = True
+
+    def show_text(self, text, *args, **kwargs) -> None:
+        self.shown_text.append(text)
+
+    def show_image(self, *args, **kwargs) -> None:
+        self.shown_text.append("<image>")
+
+
+class _FakeBubblePet:
+    def __init__(self) -> None:
+        self._bubble_suppressed = False
+        self._speech_bubble = _FakeBubble()
+        self.scale = 1.0
+        self._self_talk_texts = ["你好"]
+        self._self_talk_images = []
+
+    def isVisible(self) -> bool:  # noqa: N802 - Qt 命名
+        return True
+
+    def hold_bubble(self, seconds: float) -> None:
+        pass
+
+    def visible_content_rect(self) -> QRect:
+        return QRect(0, 0, 100, 100)
+
+
+def test_bubble_suppression_skips_bubbles_while_settings_open():
+    _qapp()
+    pet = _FakeBubblePet()
+
+    window_mod.PetWindow.set_bubble_suppressed(pet, True)
+    assert pet._bubble_suppressed is True
+    assert pet._speech_bubble.hidden is True
+
+    window_mod.PetWindow.show_bubble(pet, "不应显示")
+    assert pet._speech_bubble.shown_text == []
+
+    assert window_mod.PetWindow._show_random_self_talk(pet) is False
+    assert pet._speech_bubble.shown_text == []
+
+    window_mod.PetWindow.set_bubble_suppressed(pet, False)
+    window_mod.PetWindow.show_bubble(pet, "恢复显示")
+    assert pet._speech_bubble.shown_text == ["恢复显示"]

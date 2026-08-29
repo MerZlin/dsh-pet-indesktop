@@ -135,6 +135,100 @@ def add_submenu(menu: QMenu, text: str, icon_name: str | None = None) -> QMenu:
     return submenu
 
 
+def _populate_animation_category(
+    submenu: QMenu, pet, entries, callback, leaf_role_icons: bool,
+) -> None:
+    """首次展开动画分类子菜单时才填充动作，避免根菜单构建时遍历 91 个动画。"""
+    if getattr(submenu, "_animation_populated", False):
+        return
+    submenu._animation_populated = True
+
+    icon_actions = []
+    lazy_actions = []
+    for name in entries:
+        action = submenu.addAction(QIcon(), name) if leaf_role_icons else submenu.addAction(name)
+        connect_action(action, lambda name=name, callback=callback: callback(name))
+        if leaf_role_icons:
+            icon_actions.append((action, name))
+            cached_loader = getattr(pet, "animation_icon_cached_image", None)
+            cached = cached_loader(name) if callable(cached_loader) else None
+            if cached is not None and not cached.isNull():
+                action.setIcon(fitted_pet_pixmap_icon(submenu, QPixmap.fromImage(cached)))
+            else:
+                # A neutral loading glyph avoids a blank/jumping text
+                # column while the representative frame is decoded.
+                action.setIcon(vector_menu_icon(submenu, "loading"))
+                lazy_actions.append((action, name))
+
+    if not lazy_actions:
+        return
+
+    # Decoding dozens of WebM frames while the root menu is being constructed
+    # made the very first right-click block for seconds. Load only the category
+    # the user actually opens in a two-thread pool and keep completed icons on
+    # their QAction for later opens.
+    def refresh_cached_icons(
+        submenu=submenu, icon_actions=tuple(icon_actions), pet=pet,
+    ) -> None:
+        """Only alter QAction geometry before show or after hide."""
+        # aboutToHide 会排队 singleShot 刷新，菜单可能已销毁
+        if shiboken6.isValid(submenu) is False:
+            return
+        if submenu.isVisible():
+            return
+        cached_loader = getattr(pet, "animation_icon_cached_image", None)
+        if not callable(cached_loader):
+            return
+        for action, animation_name in icon_actions:
+            image = cached_loader(animation_name)
+            if image is not None and not image.isNull():
+                action.setIcon(fitted_pet_pixmap_icon(submenu, QPixmap.fromImage(image)))
+
+    def start_loading(submenu=submenu, lazy_actions=tuple(lazy_actions), pet=pet) -> None:
+        loader = getattr(pet, "animation_icon_image", None)
+        if not callable(loader):
+            return
+        if not hasattr(submenu, "_animation_icon_pending"):
+            submenu._animation_icon_pending = list(lazy_actions)
+            submenu._animation_icon_requested = set()
+
+        def pump() -> None:
+            while (
+                len(submenu._animation_icon_workers) < 2
+                and submenu._animation_icon_pending
+            ):
+                action, animation_name = submenu._animation_icon_pending.pop(0)
+                if animation_name in submenu._animation_icon_requested:
+                    continue
+                submenu._animation_icon_requested.add(animation_name)
+                launch(action, animation_name)
+
+        def launch(action, animation_name) -> None:
+            worker = _AnimationIconWorker(loader, animation_name)
+            # 解码完成信号经队列投递到 GUI 线程的 applier 槽：
+            # 菜单销毁时连接随 applier（submenu 子对象）自动断开。
+            applier = _AnimationIconApplier(
+                submenu, action, worker, pump, parent=submenu
+            )
+            worker.signals.ready.connect(applier.on_ready)
+            submenu._animation_icon_workers.append(worker)
+            submenu._animation_icon_pool.start(worker)
+
+        pump()
+
+    submenu.aboutToShow.connect(refresh_cached_icons)
+    submenu.aboutToShow.connect(start_loading)
+    submenu.aboutToHide.connect(
+        lambda refresh=refresh_cached_icons, submenu=submenu: QTimer.singleShot(0, submenu, refresh)
+    )
+    pool = QThreadPool(submenu)
+    pool.setMaxThreadCount(2)
+    submenu._animation_icon_pool = pool
+    submenu._animation_icon_workers = []
+    # 首次填充时立刻启动解码；后续 aboutToShow 继续由连接驱动
+    start_loading()
+
+
 def build_animation_categories(
     menu: QMenu, pet, *, icons: bool, legacy_labels: bool = False,
     leaf_role_icons: bool = False,
@@ -155,85 +249,11 @@ def build_animation_categories(
         inherit_menu_style(menu, submenu)
         if icons:
             submenu.setIcon(vector_menu_icon(menu, "play"))
-        icon_actions = []
-        lazy_actions = []
-        for name in entries:
-            action = submenu.addAction(QIcon(), name) if leaf_role_icons else submenu.addAction(name)
-            connect_action(action, lambda name=name, callback=callback: callback(name))
-            if leaf_role_icons:
-                icon_actions.append((action, name))
-                cached_loader = getattr(pet, "animation_icon_cached_image", None)
-                cached = cached_loader(name) if callable(cached_loader) else None
-                if cached is not None and not cached.isNull():
-                    action.setIcon(fitted_pet_pixmap_icon(submenu, QPixmap.fromImage(cached)))
-                else:
-                    # A neutral loading glyph avoids a blank/jumping text
-                    # column while the representative frame is decoded.
-                    action.setIcon(vector_menu_icon(submenu, "loading"))
-                    lazy_actions.append((action, name))
-        if lazy_actions:
-            # Decoding dozens of WebM frames while the root menu is being
-            # constructed made the very first right-click block for seconds.
-            # Load only the category the user actually opens in a two-thread
-            # pool and keep completed icons on their QAction for later opens.
-            def refresh_cached_icons(
-                submenu=submenu, icon_actions=tuple(icon_actions), pet=pet,
-            ) -> None:
-                """Only alter QAction geometry before show or after hide."""
-                # aboutToHide 会排队 singleShot 刷新，菜单可能已销毁
-                if shiboken6.isValid(submenu) is False:
-                    return
-                if submenu.isVisible():
-                    return
-                cached_loader = getattr(pet, "animation_icon_cached_image", None)
-                if not callable(cached_loader):
-                    return
-                for action, animation_name in icon_actions:
-                    image = cached_loader(animation_name)
-                    if image is not None and not image.isNull():
-                        action.setIcon(fitted_pet_pixmap_icon(submenu, QPixmap.fromImage(image)))
-
-            def start_loading(submenu=submenu, lazy_actions=tuple(lazy_actions), pet=pet) -> None:
-                loader = getattr(pet, "animation_icon_image", None)
-                if not callable(loader):
-                    return
-                if not hasattr(submenu, "_animation_icon_pending"):
-                    submenu._animation_icon_pending = list(lazy_actions)
-                    submenu._animation_icon_requested = set()
-
-                def pump() -> None:
-                    while (
-                        len(submenu._animation_icon_workers) < 2
-                        and submenu._animation_icon_pending
-                    ):
-                        action, animation_name = submenu._animation_icon_pending.pop(0)
-                        if animation_name in submenu._animation_icon_requested:
-                            continue
-                        submenu._animation_icon_requested.add(animation_name)
-                        launch(action, animation_name)
-
-                def launch(action, animation_name) -> None:
-                    worker = _AnimationIconWorker(loader, animation_name)
-                    # 解码完成信号经队列投递到 GUI 线程的 applier 槽：
-                    # 菜单销毁时连接随 applier（submenu 子对象）自动断开。
-                    applier = _AnimationIconApplier(
-                        submenu, action, worker, pump, parent=submenu
-                    )
-                    worker.signals.ready.connect(applier.on_ready)
-                    submenu._animation_icon_workers.append(worker)
-                    submenu._animation_icon_pool.start(worker)
-
-                pump()
-
-            submenu.aboutToShow.connect(refresh_cached_icons)
-            submenu.aboutToShow.connect(start_loading)
-            submenu.aboutToHide.connect(
-                lambda refresh=refresh_cached_icons, submenu=submenu: QTimer.singleShot(0, submenu, refresh)
-            )
-            pool = QThreadPool(submenu)
-            pool.setMaxThreadCount(2)
-            submenu._animation_icon_pool = pool
-            submenu._animation_icon_workers = []
+        # 首次展开该分类子菜单时才填充动作：根菜单构建不再遍历 91 个动画
+        submenu.aboutToShow.connect(
+            lambda s=submenu, e=entries, c=callback, l=leaf_role_icons, p=pet:
+                _populate_animation_category(s, p, e, c, l)
+        )
 
 
 def build_speed_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:

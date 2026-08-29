@@ -1654,9 +1654,10 @@ def test_modern_animation_leaf_icons_are_loaded_only_when_category_opens(monkeyp
     assert pet.icon_requests == 0
     animations = next(submenu for submenu in menu._owned_submenus if submenu.title() == "播放动画")
     idle = next(submenu for submenu in animations._owned_submenus if submenu.title() == "待机")
+    assert idle.actions() == [], "根菜单构建不应同步填充动画分类动作"
+    idle.aboutToShow.emit()
     placeholder_key = idle.actions()[0].icon().cacheKey()
     assert not idle.actions()[0].icon().isNull()
-    idle.aboutToShow.emit()
     deadline = time.monotonic() + 1.0
     while (
         (pet.icon_requests < 1 or idle.actions()[0].icon().cacheKey() == placeholder_key)
@@ -1723,8 +1724,10 @@ def test_reopened_animation_menu_reuses_cached_images_immediately():
     apply_modern_menu_style(root)
     build_animation_categories(root, Pet(), icons=False, leaf_role_icons=True)
     idle = root._owned_submenus[0]
-    assert not idle.actions()[0].icon().isNull()
+    assert idle.actions() == [], "根菜单构建不应同步填充动画分类动作"
     idle.aboutToShow.emit()
+    assert idle.actions(), "首次展开分类子菜单时应填充动作"
+    assert not idle.actions()[0].icon().isNull()
     app.processEvents()
 
 
@@ -1813,6 +1816,8 @@ def test_visible_animation_submenu_does_not_relayout_when_thumbnail_finishes():
     pet = Pet()
     build_animation_categories(root, pet, icons=False, leaf_role_icons=True)
     submenu = root._owned_submenus[0]
+    assert submenu.actions() == [], "根菜单构建不应同步填充动画分类动作"
+    submenu.aboutToShow.emit()
     placeholder_key = submenu.actions()[0].icon().cacheKey()
     submenu.popup(QPoint(20, 20))
     deadline = time.monotonic() + 1.0

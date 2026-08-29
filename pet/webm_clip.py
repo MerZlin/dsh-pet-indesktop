@@ -24,7 +24,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from . import catalog
@@ -108,6 +108,7 @@ class WebMClip(QObject):
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(self._timer_interval())
         self._timer.timeout.connect(self._poll)
 

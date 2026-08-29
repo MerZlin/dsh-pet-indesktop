@@ -174,6 +174,73 @@ def _squash_geometry(
     return x, y, width, height
 
 
+def _clamp_menu_rect(rect: QRect, avail: QRect) -> QRect:
+    """把菜单矩形夹到可用屏幕区域内（保持尺寸不变）。"""
+    if avail.isEmpty():
+        return QRect(rect)
+    x = min(max(rect.x(), avail.left()), max(avail.left(), avail.right() - rect.width() + 1))
+    y = min(max(rect.y(), avail.top()), max(avail.top(), avail.bottom() - rect.height() + 1))
+    return QRect(x, y, rect.width(), rect.height())
+
+
+def pick_context_menu_position(
+    pet_rect: QRect,
+    menu_size,
+    submenu_width: int,
+    avail: QRect,
+    margin: int = 10,
+) -> tuple[QPoint, Qt.LayoutDirection]:
+    """选择右键菜单根节点弹出位置，尽量让根菜单和子菜单都不遮挡角色。
+
+    优先级：
+    1. 角色右侧（子菜单默认向右展开，远离角色）；
+    2. 角色左侧（同时把菜单树设为 RTL，子菜单向左展开，远离角色）；
+    3. 屏幕里离角色最远的角落（远角 + 面向屏幕内侧的子菜单方向）。
+    """
+    menu_w = max(1, menu_size.width())
+    menu_h = max(1, menu_size.height())
+    submenu_width = max(0, int(submenu_width))
+
+    # 1) 右侧：根菜单整体在角色右侧，且子菜单向右有空间
+    root = _clamp_menu_rect(
+        QRect(pet_rect.right() + margin, pet_rect.top(), menu_w, menu_h), avail
+    )
+    if (
+        root.left() >= pet_rect.right() + margin
+        and root.right() + submenu_width <= avail.right()
+        and avail.contains(root)
+    ):
+        return root.topLeft(), Qt.LayoutDirection.LeftToRight
+
+    # 2) 左侧：根菜单整体在角色左侧，子菜单改为向左展开
+    root = _clamp_menu_rect(
+        QRect(pet_rect.left() - margin - menu_w, pet_rect.top(), menu_w, menu_h), avail
+    )
+    if (
+        root.right() <= pet_rect.left() - margin
+        and root.left() - submenu_width >= avail.left()
+        and avail.contains(root)
+    ):
+        return root.topLeft(), Qt.LayoutDirection.RightToLeft
+
+    # 3) 远角兜底：选与角色重叠面积最小的可用屏幕角，子菜单朝屏幕内侧展开
+    corners = (
+        (QPoint(avail.left() + margin, avail.top() + margin), Qt.LayoutDirection.LeftToRight),
+        (QPoint(max(avail.left() + margin, avail.right() - menu_w + 1 - margin), avail.top() + margin), Qt.LayoutDirection.RightToLeft),
+        (QPoint(avail.left() + margin, max(avail.top() + margin, avail.bottom() - menu_h + 1 - margin)), Qt.LayoutDirection.LeftToRight),
+        (QPoint(max(avail.left() + margin, avail.right() - menu_w + 1 - margin), max(avail.top() + margin, avail.bottom() - menu_h + 1 - margin)), Qt.LayoutDirection.RightToLeft),
+    )
+    best = None
+    best_area: int | None = None
+    for point, direction in corners:
+        root = QRect(point.x(), point.y(), menu_w, menu_h)
+        area = root.intersected(pet_rect).width() * root.intersected(pet_rect).height()
+        if best_area is None or area < best_area:
+            best = (point, direction)
+            best_area = area
+    return best
+
+
 def wander_target_y(
     start_y: float,
     top: float,
@@ -333,6 +400,8 @@ class PetWindow(QWidget):
         # 重要气泡（主动识屏先兆/答复、Agent 联动提醒等）占用期间，自言自语让路，
         # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
         self._bubble_busy_until = 0.0
+        # 设置窗口打开期间暂停气泡，避免置顶气泡盖住设置界面
+        self._bubble_suppressed = False
 
         # Agent 联动动作衔接：正在播一次性动作时联动动作不打断，存为待播（最新覆盖旧的），
         # 等当前动作播完由 _on_anim_ended 自然接上；联动动作播完仍有 Agent 在忙则接下一个。
@@ -1750,7 +1819,22 @@ class PetWindow(QWidget):
         menu.aboutToHide.connect(
             lambda self=self: QTimer.singleShot(0, self, self._restore_on_top_after_context_menu)
         )
-        menu.exec(global_pos)
+        # 根菜单和子菜单都尽量不遮挡角色：优先放在角色右侧（子菜单向右展开），
+        # 屏幕右侧不够时放左侧并让菜单树 RTL（子菜单向左展开），再不行放远角。
+        pet_rect = self.visible_content_rect()
+        scr = self._screen_available()
+        avail = scr.availableGeometry() if scr is not None else QRect()
+        submenu_width = max(
+            (child.sizeHint().width() for child in menu.findChildren(QMenu)),
+            default=0,
+        )
+        popup_pos, direction = pick_context_menu_position(
+            pet_rect, menu.sizeHint(), submenu_width, avail
+        )
+        menu.setLayoutDirection(direction)
+        for child in menu.findChildren(QMenu):
+            child.setLayoutDirection(direction)
+        menu.exec(popup_pos)
         callbacks = take_deferred_menu_callbacks(menu)
         if getattr(self, "_active_context_menu", None) is menu:
             self._active_context_menu = None
@@ -1820,6 +1904,8 @@ class PetWindow(QWidget):
         self._self_talk_timer.start(max(1000, int(round(delay * 1000))))
 
     def _show_random_self_talk(self) -> bool:
+        if getattr(self, "_bubble_suppressed", False):
+            return False
         choices = [
             ("text", text) for text in self._self_talk_texts
         ] + [
@@ -1853,9 +1939,15 @@ class PetWindow(QWidget):
         """声明重要气泡占用时长（自言自语在此期间让路）。"""
         self._bubble_busy_until = max(self._bubble_busy_until, time.time() + max(0.0, seconds))
 
+    def set_bubble_suppressed(self, suppressed: bool) -> None:
+        """设置窗口打开期间暂停气泡显示；True 时立即隐藏当前气泡。"""
+        self._bubble_suppressed = bool(suppressed)
+        if self._bubble_suppressed:
+            self._speech_bubble.hide()
+
     def show_bubble(self, text: str, duration_ms: int = 3200) -> None:
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。"""
-        if not self.isVisible():
+        if not self.isVisible() or self._bubble_suppressed:
             return
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(

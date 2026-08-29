@@ -509,11 +509,13 @@ class PetApp:
             dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             dialog.finished.connect(self._chat_settings_finished)
             self.chat_settings_dialog = dialog
+        self._update_bubble_suppression_for_settings()
         self._present_dialog(self.chat_settings_dialog)
 
     def _chat_settings_finished(self, result: int) -> None:
         dialog = self.chat_settings_dialog
         self.chat_settings_dialog = None
+        self._update_bubble_suppression_for_settings()
         if result:
             self._refresh_chat_windows()
 
@@ -522,6 +524,16 @@ class PetApp:
         for chat_window in (self.legacy_chat_window, self.modern_chat_window):
             if chat_window is not None:
                 chat_window.refresh_settings()
+
+    def _update_bubble_suppression_for_settings(self) -> None:
+        """任一设置窗口打开时暂停桌宠气泡，避免气泡盖住设置界面。"""
+        if self.win is None:
+            return
+        any_open = (
+            self.modern_settings_dialog is not None
+            or self.chat_settings_dialog is not None
+        )
+        self.win.set_bubble_suppressed(any_open)
 
     # ------------------------------------------------------------ 托盘
     def open_modern_settings(self) -> None:
@@ -534,6 +546,7 @@ class PetApp:
             )
             dialog.finished.connect(self._modern_settings_finished)
             self.modern_settings_dialog = dialog
+        self._update_bubble_suppression_for_settings()
         # 在 show 之前定位，避免 Windows 上窗口先显示默认位置再跳走（闪现小窗）
         self._present_dialog(
             self.modern_settings_dialog,
@@ -542,6 +555,7 @@ class PetApp:
 
     def _modern_settings_finished(self, result: int) -> None:
         self.modern_settings_dialog = None
+        self._update_bubble_suppression_for_settings()
         # 新版设置在关闭时一律落盘（closeEvent 自动保存，「保存并退出」同样走
         # _write_config），因此无论 Accepted/Rejected 都把改动应用到桌宠。
         # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。

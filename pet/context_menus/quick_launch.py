@@ -19,12 +19,24 @@ def configured_quick_apps(config) -> list[dict]:
     return [dict(item) for item in value if isinstance(item, dict)]
 
 
+# 首次 QFileIconProvider 取应用图标可能较慢；按 (kind, path) 缓存结果
+_QUICK_ICON_CACHE: dict[tuple[str, str], QIcon] = {}
+
+
 def quick_app_icon(menu: QMenu, item: dict) -> QIcon:
-    if item.get("kind") == "default_browser":
-        return vector_menu_icon(menu, "web")
+    kind = str(item.get("kind") or "")
     path = str(item.get("path") or "")
-    icon = QFileIconProvider().icon(QFileInfo(path)) if path else QIcon()
-    return fitted_application_icon(icon, 18, menu) if not icon.isNull() else vector_menu_icon(menu, "application")
+    cache_key = (kind, path)
+    cached = _QUICK_ICON_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if kind == "default_browser":
+        icon = vector_menu_icon(menu, "web")
+    else:
+        icon = QFileIconProvider().icon(QFileInfo(path)) if path else QIcon()
+        icon = fitted_application_icon(icon, 18, menu) if not icon.isNull() else vector_menu_icon(menu, "application")
+    _QUICK_ICON_CACHE[cache_key] = icon
+    return icon
 
 
 def fitted_application_icon(icon: QIcon, size: int, widget) -> QIcon:

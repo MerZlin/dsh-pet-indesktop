@@ -6,8 +6,10 @@ import threading
 import time
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
+from pet import catalog
 from pet.webm_clip import WebMClip
 
 
@@ -69,6 +71,23 @@ def test_stale_generation_reader_writes_dropped(monkeypatch):
 
     assert q.empty(), "Stale reader should not put items into queue"
     assert clip._fps == 999.0, "Stale reader should not overwrite metadata"
+
+    clip.cleanup()
+    app.processEvents()
+
+
+def test_timer_is_precise_and_frame_interval_is_42ms():
+    app = QApplication.instance() or QApplication([])
+
+    assert catalog.FRAME_MS == 42
+
+    sample_webm = Path("assets/characters/shenshen/videos/idle/待机呼吸休闲.webm")
+    clip = WebMClip(sample_webm) if sample_webm.exists() else WebMClip(__file__)
+
+    assert clip._timer.timerType() == Qt.TimerType.PreciseTimer
+    clip._fps = 24.0
+    clip.playback_speed = 1.0
+    assert clip._timer_interval() == 42
 
     clip.cleanup()
     app.processEvents()
