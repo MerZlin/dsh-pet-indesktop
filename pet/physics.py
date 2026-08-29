@@ -21,10 +21,58 @@ MIN_SPAN_SEC = 0.02       # 窗口太短视为不可估算
 SEG_MIN_DT = 0.008        # 分段速度的最小 dt：高回报率鼠标事件间隔可低至 1ms，
                           # 过小的 dt 会把抖动放大成虚假峰值，短段向前合并
 DEAD_ZONE_SPEED = 500.0   # 低于此速度 = 原地放下（px/s）
-MAX_THROW_SPEED = 3600.0  # 甩出速度上限（px/s）：软膝渐近值，疯甩实测可达 ~3000
+MAX_THROW_SPEED = 6000.0  # 甩出速度上限默认值（px/s）：软膝渐近值
 PEAK_WEIGHT = 0.5         # 初速大小 = 端点均值*(1-w) + 窗口峰值*w
 ACCEL_REF = 8000.0        # 参考加速度（px/s²）：末段加速达到它即吃满增益
 ACCEL_GAIN_MAX = 0.6      # 加速度增益上限：仍在加速的甩动最多放大 60%
+
+# ---- 甩出力度档位 ----
+THROW_STRENGTH_CAPS = {
+    "gentle": 3600.0,
+    "standard": 4800.0,
+    "strong": 7200.0,
+    "crazy": 9000.0,
+}
+
+
+def normalize_throw_strength(value: str) -> str:
+    s = str(value or "").strip().lower()
+    if s in THROW_STRENGTH_CAPS:
+        return s
+    return "standard"
+
+
+def throw_speed_cap(strength: str) -> float:
+    normalized = normalize_throw_strength(strength)
+    return THROW_STRENGTH_CAPS[normalized]
+
+
+# ---- 弹弓参数（不可配置常量） ----
+SLINGSHOT_MIN_DISTANCE = 24.0
+SLINGSHOT_MAX_DISTANCE = 160.0
+SLINGSHOT_BASE_SPEED = 900.0
+SLINGSHOT_MAX_DEFORMATION = 1.3
+
+
+def slingshot_deformation(pull_x: float, pull_y: float, progress: float,
+                          maximum: float = SLINGSHOT_MAX_DEFORMATION) -> tuple[float, float]:
+    """Return smooth x/y scale factors for an anisotropic slingshot stretch.
+
+    The stretch and compression axes are projected onto the widget axes, so
+    changing the pull angle never selects between discontinuous branches.
+    """
+    progress = max(0.0, min(1.0, float(progress)))
+    maximum = max(1.0, float(maximum))
+    distance = math.hypot(float(pull_x), float(pull_y))
+    if distance <= 1e-6 or progress <= 0.0:
+        return 1.0, 1.0
+    ux, uy = float(pull_x) / distance, float(pull_y) / distance
+    stretch = 1.0 + (maximum - 1.0) * progress
+    squeeze = 1.0 - (1.0 - 1.0 / maximum) * progress
+    return (
+        math.hypot(stretch * ux, squeeze * uy),
+        math.hypot(stretch * uy, squeeze * ux),
+    )
 
 # ---- 抛掷 ----
 GRAVITY = 1400.0          # px/s²
@@ -38,9 +86,33 @@ def soft_clamp_speed(speed: float, cap: float = MAX_THROW_SPEED) -> float:
     """软上限：cap*(1-e^(-s/cap))。硬钳会把所有快甩压成同一个速度
     （"甩多快都一样"），软膝曲线保证任意力度下速度仍单调可区分，
     同时渐近不超过 cap。"""
-    if speed <= 0.0:
+    if speed <= 0.0 or cap <= 0.0:
         return 0.0
     return cap * (1.0 - math.exp(-speed / cap))
+
+
+def slingshot_speed(distance: float, minimum: float, maximum: float, cap: float) -> float:
+    """Map pull distance to an ease-out launch speed bounded by ``cap``."""
+    if distance < minimum or maximum <= minimum or cap <= 0.0:
+        return 0.0
+    u = max(0.0, min(1.0, (float(distance) - minimum) / (maximum - minimum)))
+    eased = 1.0 - (1.0 - u) ** 2
+    raw = SLINGSHOT_BASE_SPEED + (3.0 * cap - SLINGSHOT_BASE_SPEED) * eased
+    return soft_clamp_speed(raw, cap=cap)
+
+
+def slingshot_trajectory(vx: float, vy: float, duration: float = 0.8,
+                         points: int = 12, gravity: float = GRAVITY
+                         ) -> list[tuple[float, float]]:
+    """Sample a first-flight parabolic path relative to its launch point."""
+    if duration <= 0.0 or points <= 0:
+        return []
+    if points == 1:
+        return [(0.0, 0.0)]
+    step = float(duration) / (points - 1)
+    return [(float(vx) * (i * step),
+             float(vy) * (i * step) + 0.5 * float(gravity) * (i * step) ** 2)
+            for i in range(points)]
 
 
 def spring_velocity(v: float, x: float, target: float, dt: float,
@@ -54,7 +126,7 @@ def _window(trail: list, now: float, span: float) -> list:
     return [s for s in trail if s[0] >= cutoff]
 
 
-def estimate_release_velocity(trail: list, now: float) -> tuple[float, float]:
+def estimate_release_velocity(trail: list, now: float, cap: float = MAX_THROW_SPEED) -> tuple[float, float]:
     """由拖拽轨迹估算松手初速 (vx, vy)。
 
     方向：窗口首末端点位移方向（抗抖）。
@@ -98,7 +170,7 @@ def estimate_release_velocity(trail: list, now: float) -> tuple[float, float]:
 
     speed = (1.0 - PEAK_WEIGHT) * base_speed + PEAK_WEIGHT * peak_speed
     gain = 1.0 + min(max(accel, 0.0) / ACCEL_REF, 1.0) * ACCEL_GAIN_MAX
-    speed = soft_clamp_speed(speed * gain)
+    speed = soft_clamp_speed(speed * gain, cap=cap)
 
     if base_speed < 1e-6:
         # 窗口内几乎纯抖动：沿峰值分段方向？没有可靠方向 → 垂直下落

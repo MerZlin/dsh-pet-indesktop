@@ -232,6 +232,18 @@ def vector_menu_icon(menu: QMenu, name: str, size: int | None = None) -> QIcon:
     elif name in {"tools", "functions"}:
         painter.drawRoundedRect(QRectF(1.5, 2.0, 13.0, 12.0), 2.0, 2.0)
         painter.drawLine(QPointF(5.0, 5.0), QPointF(11.0, 11.0)); painter.drawEllipse(QPointF(4.5, 4.5), 1.5, 1.5); painter.drawEllipse(QPointF(11.5, 11.5), 1.5, 1.5)
+    elif name in {"sound", "speaker", "music"}:
+        # 扬声器图标
+        path.moveTo(3.0, 6.0)
+        path.lineTo(6.0, 6.0)
+        path.lineTo(9.5, 3.0)
+        path.lineTo(9.5, 13.0)
+        path.lineTo(6.0, 10.0)
+        path.lineTo(3.0, 10.0)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawArc(QRectF(10.0, 5.5, 4.0, 5.0), -60 * 16, 120 * 16)
+        painter.drawArc(QRectF(9.0, 3.5, 7.0, 9.0), -60 * 16, 120 * 16)
     elif name == "exit":
         painter.drawLine(QPointF(3.0, 3.0), QPointF(13.0, 13.0)); painter.drawLine(QPointF(13.0, 3.0), QPointF(3.0, 13.0))
     else:

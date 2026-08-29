@@ -28,8 +28,8 @@ from typing import Any
 
 import shiboken6
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPixmap, QRegion
+from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPen, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
 from . import autostart as autostart_mod
@@ -51,7 +51,7 @@ from .context_menu import populate_context_menu as _populate_context_menu
 from .context_menus.shared import take_deferred_menu_callbacks
 from . import vision as vision_mod
 from . import physics as physics_mod
-from .click_sound import play_click_sound
+from .click_sound import choose_sound, play_sound, resolve_click_sound_candidates
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
 
@@ -134,6 +134,12 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
 
 # 直播捕获兼容模式下窗口标题（普通顶层窗口需要可见标题，供直播姬/OBS 选择）
 STREAM_CAPTURE_TITLE = 'dsh-pet 桌宠'
+
+IDLE = "IDLE"
+PRESS_CANDIDATE = "PRESS_CANDIDATE"
+DRAGGING = "DRAGGING"
+SLINGSHOT_AIMING = "SLINGSHOT_AIMING"
+THROWN = "THROWN"
 
 
 def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
@@ -335,6 +341,7 @@ class PetWindow(QWidget):
 
     look_done = Signal(str, str, bool)
     fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
+    cursor_visibility_changed = Signal(str)
 
     def __init__(self, lib: MovieLibrary, config: Config) -> None:
         super().__init__()
@@ -374,7 +381,13 @@ class PetWindow(QWidget):
             self.lib.movie(self.drag).jumpToFrame(0)
 
         self.playback_speed: float = float(config.get('playback_speed', 1.0))
-        self.mouse_through: bool = bool(config.get('mouse_through', False))
+        self._user_mouse_through = bool(config.get('mouse_through', False))
+        self._auto_cursor_hidden = False
+        self._cursor_visibility = 'UNKNOWN'
+        self._cursor_hidden_since: float | None = None
+        self._cursor_restore_pending = False
+        self._cursor_hidden_passthrough = bool(config.get('cursor_hidden_passthrough', True))
+        self.mouse_through: bool = self._user_mouse_through
         self.drag_physics: bool = bool(config.get('drag_physics', False))
         self.lock_position: bool = bool(config.get('lock_position', False))
         self.shift_drag: bool = bool(config.get('shift_drag', False))
@@ -441,6 +454,7 @@ class PetWindow(QWidget):
         self._fs_thread: threading.Thread | None = None
         self._fs_last = False
         self.fullscreen_changed.connect(self._on_fullscreen_changed)
+        self.cursor_visibility_changed.connect(self._on_cursor_visibility_changed)
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         # 直播捕获兼容模式（stream_capture_mode）：Tool → 普通顶层窗口 + 标题，
@@ -449,6 +463,7 @@ class PetWindow(QWidget):
         flags = build_window_flags(config, self.mouse_through, self._stream_capture_mode)
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         if self._stream_capture_mode:
             self.setWindowTitle(STREAM_CAPTURE_TITLE)
         # Cocoa hides Tool windows when an accessory application deactivates.
@@ -481,6 +496,13 @@ class PetWindow(QWidget):
         self._grab_offset: QPoint | None = None  # 按下时 鼠标全局坐标 - 窗口左上角
         self._dragging = False
         self._just_dragged = False               # 抑制拖拽结束后的幽灵点击
+        self._interaction_state = "IDLE"
+        self._context_menu_suppressed = False
+        self._slingshot_anchor_pos: QPoint | None = None
+        self._slingshot_anchor_mouse: QPoint | None = None
+        self._slingshot_mouse: QPoint | None = None
+        self._slingshot_pull = QPoint(0, 0)
+        self.slingshot_enabled = bool(config.get("slingshot_enabled", True))
 
         # ---- 移动驱动 ----
         self._move_plan: dict | None = None
@@ -496,6 +518,7 @@ class PetWindow(QWidget):
         self._squash_active = False
         self._squash_duration_ms = 220
         self._squash_progress = 1.0
+        self._slingshot_rebound_progress = 0.0
 
         # ---- 拖动物理 ----
         self._physics_timer = QTimer(self)
@@ -508,6 +531,8 @@ class PetWindow(QWidget):
         self._last_global: QPoint | None = None
         self._last_move_time = 0.0
         self._trail: list[tuple[float, float, float]] = []
+        self._throw_speed_cap = physics_mod.throw_speed_cap(config.get("throw_strength"))
+        self._last_physics_tick_time: float | None = None
 
         # ---- 尺寸与初始状态 ----
         self._apply_scale()
@@ -530,7 +555,7 @@ class PetWindow(QWidget):
         self._restore_position()
         self._switch(self.idle)
         self._schedule_self_talk()
-        if self.auto_hide_fullscreen and os.name == 'nt':
+        if self._watch_required():
             self._start_fs_watch()
 
         if self._awaiting_saved_screen:
@@ -852,6 +877,8 @@ class PetWindow(QWidget):
         （不弹托盘提示、不 arm Dock 点击恢复监听）。
         隐藏即暂停动画解码与全部活动定时器（低功耗：不可见就零消耗）。
         """
+        if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
+            self._cancel_slingshot_to_anchor()
         self._ensure_dock_icon_on_hide()
         self._hidden_paused = True
         self._pause_activity()
@@ -897,7 +924,7 @@ class PetWindow(QWidget):
             # 从当前动画第一帧重新开始：隐藏期间用户看不到，观感无差异；
             # 若隐藏前正在移动，_cancel_move 已清掉移动计划，不会出现"瞬移"。
             self._switch(self.anim)
-        if self.auto_hide_fullscreen and os.name == 'nt':
+        if self._watch_required():
             self._start_fs_watch()
         self._schedule_self_talk()
         if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
@@ -1039,9 +1066,25 @@ class PetWindow(QWidget):
         self._fs_stop.set()
 
     def _fs_watch_loop(self) -> None:
-        """后台轮询前台窗口；状态变化时发信号回主线程，全程留诊断日志。"""
+        """后台轮询光标与前台窗口，分别使用 20Hz 与 1Hz 节拍。"""
         polls = 0
-        while not self._fs_stop.wait(1.0):
+        next_fullscreen = time.monotonic() + 1.0
+        while not self._fs_stop.wait(0.05):
+            if self._cursor_hidden_passthrough_enabled():
+                try:
+                    visibility = vision_mod.get_cursor_visibility()
+                    self.cursor_visibility_changed.emit(visibility)
+                except (RuntimeError, AttributeError):
+                    return
+                except Exception:
+                    try:
+                        self.cursor_visibility_changed.emit('UNKNOWN')
+                    except RuntimeError:
+                        return
+            now = time.monotonic()
+            if not self.auto_hide_fullscreen or now < next_fullscreen:
+                continue
+            next_fullscreen = now + 1.0
             try:
                 hit, detail = self._fg_fullscreen_probe()
             except Exception:
@@ -1053,8 +1096,40 @@ class PetWindow(QWidget):
                 logging.info("全屏检测变化 hit=%s (%s)", hit, detail)
                 self.fullscreen_changed.emit(hit)
             elif polls % 15 == 0:
-                # 心跳：实机排障用，确认线程活着且能看到前台窗口真实状态
                 logging.info("全屏检测心跳 hit=%s %s", hit, detail)
+
+    def _cursor_hidden_passthrough_enabled(self) -> bool:
+        return self._cursor_hidden_passthrough
+
+    def _watch_required(self) -> bool:
+        return os.name == 'nt' and (self.auto_hide_fullscreen or self._cursor_hidden_passthrough_enabled())
+
+    def _cursor_transition_blocked(self) -> bool:
+        return (self._press_global is not None or self._dragging or
+                self._interaction_state in ('DRAGGING', 'SLINGSHOT_AIMING', 'PRESS_CANDIDATE'))
+
+    def _on_cursor_visibility_changed(self, visibility: str) -> None:
+        if not self._cursor_hidden_passthrough_enabled():
+            return
+        now = time.monotonic()
+        self._cursor_visibility = visibility
+        if visibility == 'HIDDEN':
+            if self._cursor_hidden_since is None:
+                self._cursor_hidden_since = now
+            if now - self._cursor_hidden_since >= 0.2 and not self._cursor_transition_blocked():
+                self._auto_cursor_hidden = True
+                self._apply_effective_mouse_through()
+        elif visibility == 'SHOWING':
+            self._cursor_hidden_since = None
+            if self._cursor_transition_blocked():
+                self._cursor_restore_pending = True
+            else:
+                self._cursor_restore_pending = False
+                self._auto_cursor_hidden = False
+                self._apply_effective_mouse_through()
+        elif visibility == 'SUPPRESSED':
+            self._cursor_hidden_since = None
+            logging.debug('系统光标被触摸/笔输入抑制，保持当前自动穿透状态')
 
     def _on_fullscreen_changed(self, hit: bool) -> None:
         """主线程：全屏出现 → 隐藏桌宠；全屏退出 → 恢复。"""
@@ -1073,13 +1148,29 @@ class PetWindow(QWidget):
         self.auto_hide_fullscreen = bool(on)
         self.cfg.set('auto_hide_fullscreen', self.auto_hide_fullscreen)
         self.cfg.save()
-        if self.auto_hide_fullscreen and os.name == 'nt':
+        if self._watch_required():
             self._start_fs_watch()
         else:
             self._stop_fs_watch()
-            if self._auto_hidden:
-                self._auto_hidden = False
-                self.show()
+        if not self.auto_hide_fullscreen and self._auto_hidden:
+            self._auto_hidden = False
+            self.show()
+
+    def set_cursor_hidden_passthrough(self, on: bool) -> None:
+        """切换光标自动穿透，不改变用户手动穿透意图。"""
+        on = bool(on)
+        self._cursor_hidden_passthrough = on
+        self.cfg.set('cursor_hidden_passthrough', on)
+        self.cfg.save()
+        self._cursor_hidden_since = None
+        self._cursor_restore_pending = False
+        if not on:
+            self._auto_cursor_hidden = False
+            self._apply_effective_mouse_through()
+        if self._watch_required():
+            self._start_fs_watch()
+        elif not self._auto_hidden:
+            self._stop_fs_watch()
 
     def set_stream_capture_mode(self, on: bool) -> None:
         """直播捕获兼容模式：Tool → 普通顶层窗口 + 标题。
@@ -1326,15 +1417,73 @@ class PetWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         if self._frame_pixmap is not None:
-            if self._squash_active:
-                # Q 弹：使用逻辑帧尺寸；QPixmap.width() 可能是 DPR 物理像素尺寸。
-                x, y, w, h = _squash_geometry(
-                    self._w,
-                    self._h,
-                    int(round(catalog.CANVAS_W * self.scale)),
-                    int(round(catalog.CANVAS_H * self.scale)),
-                    self._squash_progress,
+            if getattr(self, "_interaction_state", "IDLE") == "SLINGSHOT_AIMING":
+                base_rect = QRect(0, int(round(catalog.PAD * self.scale)),
+                                  int(round(catalog.CANVAS_W * self.scale)),
+                                  int(round(catalog.CANVAS_H * self.scale)))
+                x, y, w, h = self._slingshot_geometry(
+                    base_rect,
+                    self._slingshot_pull,
+                    self._slingshot_progress(),
+                    QRect(0, 0, self._w, self._h),
                 )
+                painter.drawPixmap(x, y, w, h, self._frame_pixmap)
+                visible = self.character_local_region()
+                character_rect = QRect(
+                    round(x + (visible.x() - base_rect.x()) * w / base_rect.width()),
+                    round(y + (visible.y() - base_rect.y()) * h / base_rect.height()),
+                    max(1, round(visible.width() * w / base_rect.width())),
+                    max(1, round(visible.height() * h / base_rect.height())),
+                )
+                if self._slingshot_mouse is not None:
+                    mouse_local = self._slingshot_mouse - self.pos()
+                    band_start, band_end = self._slingshot_band_points(
+                        character_rect, mouse_local, self._slingshot_pull,
+                    )
+                    painter.setPen(QPen(QColor(104, 174, 196, 105), max(1, round(self.scale))))
+                    painter.drawLine(band_start, band_end)
+                distance = math.hypot(self._slingshot_pull.x(), self._slingshot_pull.y())
+                minimum = physics_mod.SLINGSHOT_MIN_DISTANCE * self.scale
+                if distance >= minimum:
+                    speed = physics_mod.slingshot_speed(
+                        distance, minimum,
+                        physics_mod.SLINGSHOT_MAX_DISTANCE * self.scale,
+                        self._throw_speed_cap,
+                    )
+                    length = distance or 1.0
+                    vx = self._slingshot_pull.x() / length * speed
+                    vy = self._slingshot_pull.y() / length * speed
+                    anchor = self._slingshot_trajectory_anchor(
+                        character_rect, self._slingshot_pull,
+                    )
+                    trajectory = physics_mod.slingshot_trajectory(vx, vy)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    trajectory = self._slingshot_trajectory_preview(
+                        trajectory, anchor, QRect(0, 0, self._w, self._h), self.scale,
+                    )
+                    for index, (tx, ty) in enumerate(trajectory):
+                        fade = 1.0 - index / max(1, len(trajectory) - 1)
+                        radius = (2.8 - 1.35 * (1.0 - fade)) * self.scale
+                        painter.setBrush(QColor(104, 174, 196, int(150 * fade)))
+                        painter.drawEllipse(QPointF(tx, ty), radius, radius)
+            elif self._squash_active:
+                # Q 弹：使用逻辑帧尺寸；QPixmap.width() 可能是 DPR 物理像素尺寸。
+                if self._slingshot_rebound_progress > 0.0:
+                    amount = self._slingshot_rebound_progress * (1.0 - self._squash_progress) ** 2
+                    x, y, w, h = self._slingshot_geometry(
+                        QRect(0, int(round(catalog.PAD * self.scale)),
+                              int(round(catalog.CANVAS_W * self.scale)),
+                              int(round(catalog.CANVAS_H * self.scale))),
+                        QPoint(1, 0), amount, QRect(0, 0, self._w, self._h),
+                    )
+                else:
+                    x, y, w, h = _squash_geometry(
+                        self._w,
+                        self._h,
+                        int(round(catalog.CANVAS_W * self.scale)),
+                        int(round(catalog.CANVAS_H * self.scale)),
+                        self._squash_progress,
+                    )
                 painter.drawPixmap(x, y, w, h, self._frame_pixmap)
             else:
                 # 落地对齐：整帧下移 PAD×scale，让人物脚底踩在窗口底线
@@ -1345,6 +1494,7 @@ class PetWindow(QWidget):
     def _start_squash(self) -> None:
         """点击时启动 Q 弹效果：画面先变矮再恢复。"""
         self._squash_active = True
+        self._slingshot_rebound_progress = 0.0
         self._squash_progress = 0.0
         self._squash_clock.start()
         self._squash_timer.start()
@@ -1355,6 +1505,7 @@ class PetWindow(QWidget):
         self._squash_progress = min(1.0, elapsed / self._squash_duration_ms)
         if self._squash_progress >= 1.0:
             self._squash_active = False
+            self._slingshot_rebound_progress = 0.0
             self._squash_timer.stop()
         self._sync_mask()  # mask 跟随 squash 几何，避免变形边缘被旧轮廓裁切
         self.update()
@@ -1617,11 +1768,189 @@ class PetWindow(QWidget):
         self._move_plan = None
 
     # ================================================================ 交互
+    def _slingshot_progress(self) -> float:
+        distance = min(math.hypot(self._slingshot_pull.x(), self._slingshot_pull.y()),
+                       physics_mod.SLINGSHOT_MAX_DISTANCE * self.scale)
+        return max(0.0, min(1.0, distance / max(1.0, physics_mod.SLINGSHOT_MAX_DISTANCE * self.scale)))
+
+    @staticmethod
+    def _slingshot_geometry(base_rect: QRect, pull: QPoint, progress: float,
+                            bounds: QRect | None = None) -> tuple[int, int, int, int]:
+        progress = max(0.0, min(1.0, float(progress)))
+        distance = math.hypot(pull.x(), pull.y())
+        if distance <= 1e-6:
+            width, height = base_rect.width(), base_rect.height()
+            x, y = base_rect.x(), base_rect.y()
+            if bounds is not None:
+                x = max(bounds.x(), min(x, bounds.right() - width + 1))
+                y = max(bounds.y(), min(y, bounds.bottom() - height + 1))
+            return x, y, width, height
+        width_scale, height_scale = physics_mod.slingshot_deformation(
+            pull.x(), pull.y(), progress,
+        )
+        if bounds is not None:
+            width_scale = min(width_scale, bounds.width() / max(1, base_rect.width()))
+            height_scale = min(height_scale, bounds.height() / max(1, base_rect.height()))
+        width = max(1, int(round(base_rect.width() * width_scale)))
+        height = max(1, int(round(base_rect.height() * height_scale)))
+        # Keep the draw rect centered so the fixed hit canvas never moves.
+        x = base_rect.center().x() - width // 2
+        y = base_rect.center().y() - height // 2
+        if bounds is not None:
+            x = max(bounds.x(), min(x, bounds.right() - width + 1))
+            y = max(bounds.y(), min(y, bounds.bottom() - height + 1))
+        return x, y, width, height
+
+    @staticmethod
+    def _slingshot_trajectory_preview(
+        trajectory: list[tuple[float, float]], center: QPointF, bounds: QRect,
+        scale: float,
+    ) -> list[tuple[float, float]]:
+        """Translate physical samples from the character edge without distorting the arc."""
+        if not trajectory:
+            return []
+        return [(center.x() + x, center.y() + y)
+                for x, y in trajectory]
+
+    @staticmethod
+    def _slingshot_trajectory_anchor(character_rect: QRect, launch: QPoint) -> QPointF:
+        """Return the edge where a ray from the character center exits its visible rect."""
+        if character_rect.isEmpty():
+            return QPointF(character_rect.center())
+        length = math.hypot(launch.x(), launch.y())
+        if length <= 1e-6:
+            return QPointF(character_rect.center())
+        ux, uy = launch.x() / length, launch.y() / length
+        half_width = character_rect.width() / 2.0
+        half_height = character_rect.height() / 2.0
+        distances = [half_width / abs(ux)] if abs(ux) > 1e-6 else []
+        if abs(uy) > 1e-6:
+            distances.append(half_height / abs(uy))
+        distance = min(distances)
+        center = character_rect.center()
+        return QPointF(center.x() + ux * distance, center.y() + uy * distance)
+
+    @staticmethod
+    def _slingshot_band_points(character_rect: QRect, mouse_local: QPoint,
+                               pull: QPoint) -> tuple[QPointF, QPointF]:
+        """Return the visible edge and current mouse endpoint of the pull band."""
+        direction = QPoint(mouse_local - character_rect.center())
+        if direction.isNull():
+            direction = QPoint(-pull)
+        start = PetWindow._slingshot_trajectory_anchor(character_rect, direction)
+        return start, QPointF(mouse_local)
+
+    def _enter_slingshot(self, global_pos: QPoint) -> None:
+        self._interaction_state = "SLINGSHOT_AIMING"
+        self._slingshot_anchor_pos = QPoint(self.pos())
+        self._slingshot_anchor_mouse = QPoint(global_pos)
+        self._slingshot_mouse = QPoint(global_pos)
+        self._slingshot_pull = QPoint(0, 0)
+        self._context_menu_suppressed = True
+        self._just_dragged = False
+        self._stop_physics()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.update()
+
+    def _update_slingshot_aim(self, global_pos: QPoint) -> None:
+        if self._slingshot_anchor_mouse is None:
+            return
+        pull = self._slingshot_anchor_mouse - global_pos
+        max_distance = physics_mod.SLINGSHOT_MAX_DISTANCE * self.scale
+        length = math.hypot(pull.x(), pull.y())
+        if length > max_distance and length > 0:
+            ratio = max_distance / length
+            pull = QPoint(round(pull.x() * ratio), round(pull.y() * ratio))
+        self._slingshot_mouse = QPoint(global_pos)
+        self._slingshot_pull = pull
+        self.update()
+
+    def _clear_slingshot_input(self) -> None:
+        self._slingshot_anchor_pos = None
+        self._slingshot_anchor_mouse = None
+        self._slingshot_mouse = None
+        self._slingshot_pull = QPoint(0, 0)
+        self._press_global = None
+        self._grab_offset = None
+        self._dragging = False
+
+    def _start_slingshot_rebound(self, progress: float) -> None:
+        self._slingshot_rebound_progress = max(0.0, min(1.0, float(progress)))
+        if self._slingshot_rebound_progress <= 0.0:
+            return
+        self._squash_active = True
+        self._squash_progress = 0.0
+        self._squash_clock.start()
+        self._squash_timer.start()
+
+    def _suppress_click_after_slingshot(self) -> None:
+        self._just_dragged = True
+        QTimer.singleShot(150, self, self._clear_just_dragged)
+
+    def _cancel_slingshot_to_drag(self) -> None:
+        progress = self._slingshot_progress()
+        self._interaction_state = "DRAGGING"
+        self._slingshot_anchor_mouse = None
+        self._slingshot_pull = QPoint(0, 0)
+        self._context_menu_suppressed = True
+        if self.drag_physics and self._drag_target is None:
+            self._drag_target = QPoint(self.pos())
+        self._start_slingshot_rebound(progress)
+        self.update()
+
+    def _cancel_slingshot_to_anchor(self) -> None:
+        progress = self._slingshot_progress()
+        if self._slingshot_anchor_pos is not None:
+            self.move(self._slingshot_anchor_pos)
+        self._clear_slingshot_input()
+        self._interaction_state = "IDLE"
+        self._context_menu_suppressed = True
+        self._stop_physics()
+        self._start_slingshot_rebound(progress)
+        self._suppress_click_after_slingshot()
+        self.update()
+
+    def _launch_slingshot(self, global_pos: QPoint) -> None:
+        progress = self._slingshot_progress()
+        distance = min(math.hypot(self._slingshot_pull.x(), self._slingshot_pull.y()),
+                       physics_mod.SLINGSHOT_MAX_DISTANCE * self.scale)
+        anchor = QPoint(self._slingshot_anchor_pos or self.pos())
+        pull = QPoint(self._slingshot_pull)
+        if distance < physics_mod.SLINGSHOT_MIN_DISTANCE * self.scale:
+            self._cancel_slingshot_to_anchor()
+            return
+        speed = physics_mod.slingshot_speed(
+            distance, physics_mod.SLINGSHOT_MIN_DISTANCE * self.scale,
+            physics_mod.SLINGSHOT_MAX_DISTANCE * self.scale, self._throw_speed_cap,
+        )
+        length = math.hypot(pull.x(), pull.y()) or 1.0
+        self._phys_pos[:] = [float(anchor.x()), float(anchor.y())]
+        self._phys_vel[:] = [pull.x() / length * speed, pull.y() / length * speed]
+        self.move(anchor)
+        self._clear_slingshot_input()
+        self._interaction_state = "THROWN"
+        self._suppress_click_after_slingshot()
+        self._last_physics_tick_time = None
+        self._physics_mode = "throw"
+        self._physics_timer.start()
+        self._context_menu_suppressed = True
+        self._start_slingshot_rebound(progress)
+        self.update()
+
     def _is_in_interactive_area(self, local_pos) -> bool:
         """由于动画左右有留白，只把窗口中间 1/3 宽度作为可交互区域。"""
         return self._w / 3.0 <= local_pos.x() <= self._w * 2.0 / 3.0
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        buttons = event.buttons() | event.button()
+        if event.button() == Qt.MouseButton.RightButton and buttons & Qt.MouseButton.LeftButton:
+            if (self._interaction_state == "DRAGGING" and self.slingshot_enabled
+                    and not self.lock_position and not self.mouse_through):
+                self._enter_slingshot(event.globalPosition().toPoint())
+                event.accept()
+                return
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._context_menu_suppressed = False
         if event.button() == Qt.MouseButton.LeftButton:
             if not self._is_in_interactive_area(event.position().toPoint()):
                 return  # 左右留白区域不参与点击/拖拽
@@ -1629,6 +1958,7 @@ class PetWindow(QWidget):
                 # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
                 return
             self._press_global = event.globalPosition().toPoint()
+            self._interaction_state = "PRESS_CANDIDATE"
             self._grab_offset = self._press_global - self.pos()
             self._dragging = False
             self._cancel_move()  # 按下即打断移动
@@ -1638,12 +1968,18 @@ class PetWindow(QWidget):
             self._phys_vel = [0.0, 0.0]
             self._phys_pos = [float(self.x()), float(self.y())]
             self._stop_physics()
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
             event.accept()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
-        if self._press_global is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+        buttons = event.buttons() | getattr(event, "button", lambda: Qt.MouseButton.NoButton)()
+        if self._interaction_state == "SLINGSHOT_AIMING":
+            self._update_slingshot_aim(event.globalPosition().toPoint())
+            event.accept()
+            return
+        if self._press_global is None or not (buttons & Qt.MouseButton.LeftButton):
             return
         g = event.globalPosition().toPoint()
         delta = g - self._press_global
@@ -1659,6 +1995,7 @@ class PetWindow(QWidget):
                 self._grab_offset = None
                 return
             self._dragging = True
+            self._interaction_state = "DRAGGING"
             # 用户真正开始拖动 = 接管位置决策，撤销"等副屏上线自动恢复"
             # （必须在这里而不是按下时：普通点击/未过阈值/未按 SHIFT 不算接管）
             _disarm = getattr(self, '_disarm_screen_restore_retry', None)
@@ -1670,6 +2007,7 @@ class PetWindow(QWidget):
                 self._phys_pos = [float(self.x()), float(self.y())]
                 self._drag_target = g - self._grab_offset
                 self._physics_mode = 'drag'
+                self._last_physics_tick_time = None
                 self._physics_timer.start()
             else:
                 self.move(g - self._grab_offset)
@@ -1690,12 +2028,21 @@ class PetWindow(QWidget):
             self._drag_target = g - self._grab_offset
             if self._physics_mode != 'drag':
                 self._physics_mode = 'drag'
+                self._last_physics_tick_time = None
                 self._physics_timer.start()
         else:
             self.move(g - self._grab_offset)  # 跟手（保持抓起时的偏移）
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.RightButton and self._interaction_state == "SLINGSHOT_AIMING":
+            self._cancel_slingshot_to_drag()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._interaction_state == "SLINGSHOT_AIMING":
+            self._launch_slingshot(event.globalPosition().toPoint())
+            event.accept()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             super().mouseReleaseEvent(event)
             return
@@ -1709,7 +2056,9 @@ class PetWindow(QWidget):
             self._just_dragged = True  # 抑制拖拽结束后的幽灵点击
             QTimer.singleShot(150, self, self._clear_just_dragged)
             if self.drag_physics:
-                rvx, rvy = physics_mod.estimate_release_velocity(self._trail, time.monotonic())
+                rvx, rvy = physics_mod.estimate_release_velocity(
+                    self._trail, time.monotonic(), cap=self._throw_speed_cap
+                )
                 if math.hypot(rvx, rvy) < physics_mod.DEAD_ZONE_SPEED:
                     if self._grab_offset is not None:
                         self.move(g - self._grab_offset)
@@ -1718,6 +2067,7 @@ class PetWindow(QWidget):
                 else:
                     self._phys_vel[:] = [rvx, rvy]
                     self._physics_mode = 'throw'
+                    self._last_physics_tick_time = None
                     self._physics_timer.start()
             else:
                 if self._grab_offset is not None:
@@ -1728,8 +2078,13 @@ class PetWindow(QWidget):
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
             self._on_click()
         self._dragging = False
+        self._interaction_state = "IDLE"
         self._press_global = None
         self._grab_offset = None
+        if self._cursor_restore_pending or self._cursor_visibility == 'SHOWING':
+            self._cursor_restore_pending = False
+            self._auto_cursor_hidden = False
+        self._apply_effective_mouse_through()
         event.accept()
 
     def _clear_just_dragged(self) -> None:
@@ -1757,17 +2112,13 @@ class PetWindow(QWidget):
     def _play_click_sound(self) -> None:
         if not self.click_sound_enabled:
             return
-        candidates = []
-        custom = str(self.click_sound_path or "").strip()
-        if custom:
-            candidates.append(Path(custom).expanduser())
-        candidates.append(self.cfg.dir / "sounds" / "click.wav")
-        root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-        candidates.append(root / "assets" / "sounds" / "click.wav")
-        path = next((item for item in candidates if item.is_file()), None)
+        pack = self.cfg.get("click_sound_pack")
+        candidates = resolve_click_sound_candidates(pack, data_dir=self.cfg.dir)
+        path = choose_sound(candidates)
         if path is None:
             return
-        play_click_sound(path)
+        volume = float(self.cfg.get("click_sound_volume", 0.70))
+        play_sound(path, volume=volume)
 
     # ================================================================ 看看屏幕
     def _on_look_screen(self) -> None:
@@ -1816,9 +2167,33 @@ class PetWindow(QWidget):
             self.on_look_synced(user_text, text)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
+        if self._context_menu_suppressed:
+            self._context_menu_suppressed = False
+            event.accept()
+            return
+        if self._interaction_state in ("DRAGGING", "SLINGSHOT_AIMING") and self._press_global is not None:
+            event.accept()
+            return
         if not self._is_in_interactive_area(event.pos()):
             return
         self._show_context_menu(event.globalPos())
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape and self._interaction_state == "SLINGSHOT_AIMING":
+            self._cancel_slingshot_to_anchor()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        if self._interaction_state == "SLINGSHOT_AIMING":
+            self._cancel_slingshot_to_anchor()
+        super().focusOutEvent(event)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        if self._interaction_state == "SLINGSHOT_AIMING":
+            self._cancel_slingshot_to_anchor()
+        super().hideEvent(event)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
         self._context_menu_anchor = QPoint(global_pos)
@@ -1981,8 +2356,11 @@ class PetWindow(QWidget):
             self.set_no_move(desired_no_move)
         # 窗口类开关也要立即生效（否则用户保存后得重启或再去菜单切一次）
         desired_mouse_through = bool(self.cfg.get('mouse_through', False))
-        if desired_mouse_through != self.mouse_through:
+        if desired_mouse_through != self._user_mouse_through:
             self.set_mouse_through(desired_mouse_through)
+        desired_cursor_passthrough = bool(self.cfg.get('cursor_hidden_passthrough', True))
+        if desired_cursor_passthrough != self._cursor_hidden_passthrough:
+            self.set_cursor_hidden_passthrough(desired_cursor_passthrough)
         desired_auto_hide = bool(self.cfg.get('auto_hide_fullscreen', True))
         if desired_auto_hide != self.auto_hide_fullscreen:
             self.set_auto_hide_fullscreen(desired_auto_hide)
@@ -1998,6 +2376,9 @@ class PetWindow(QWidget):
         desired_shift = bool(self.cfg.get('shift_drag', False))
         if desired_shift != self.shift_drag:
             self.set_shift_drag(desired_shift)
+        desired_slingshot = bool(self.cfg.get('slingshot_enabled', True))
+        if desired_slingshot != self.slingshot_enabled:
+            self.slingshot_enabled = desired_slingshot
         desired_opacity = int(_float_or_default(self.cfg.get('pet_opacity', 100), 100, 10, 100))
         if desired_opacity != self.pet_opacity:
             self.set_pet_opacity(desired_opacity)
@@ -2023,6 +2404,7 @@ class PetWindow(QWidget):
         self._self_talk_max_interval = max(self._self_talk_min_interval, float(self.cfg.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
         self.click_sound_enabled = bool(self.cfg.get('click_sound_enabled', True))
         self.click_sound_path = str(self.cfg.get('click_sound_path', '') or '')
+        self._throw_speed_cap = physics_mod.throw_speed_cap(self.cfg.get('throw_strength'))
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))
         self.click_show_self_talk = bool(self.cfg.get('click_show_self_talk', False))
         self._schedule_self_talk()
@@ -2167,13 +2549,29 @@ class PetWindow(QWidget):
 
     def set_mouse_through(self, on: bool) -> None:
         """鼠标穿透：开启后桌宠不接收鼠标事件，点击会穿透到下层。"""
-        self.mouse_through = bool(on)
-        self.cfg.set('mouse_through', self.mouse_through)
+        self._user_mouse_through = bool(on)
+        self.cfg.set('mouse_through', self._user_mouse_through)
         self.cfg.save()
+        self._apply_effective_mouse_through()
+
+    def _apply_effective_mouse_through(self, enabled: bool | None = None) -> None:
+        effective = (bool(self._user_mouse_through or self._auto_cursor_hidden)
+                     if enabled is None else bool(enabled))
+        if effective == self.mouse_through:
+            return
+        self.mouse_through = effective
         was_visible = self.isVisible()  # setWindowFlag 重建原生窗口会先隐藏，
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, self.mouse_through)
+        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, effective)
         if was_visible:
             self.show()  # 只在原本可见时恢复：手动隐藏的桌宠不被设置保存意外唤出
+
+    def set_throw_strength(self, strength: str) -> None:
+        """设置甩出力度档位（gentle / standard / strong / crazy）。"""
+        self.throw_strength = physics_mod.normalize_throw_strength(strength)
+        self._throw_speed_cap = physics_mod.throw_speed_cap(self.throw_strength)
+        self.cfg.set('throw_strength', self.throw_strength)
+        self.cfg.set('throw_max_speed', self._throw_speed_cap)
+        self.cfg.save()
 
     def set_drag_physics(self, on: bool) -> None:
         """拖动物理开关。"""
@@ -2182,6 +2580,14 @@ class PetWindow(QWidget):
         self.cfg.save()
         if not self.drag_physics:
             self._stop_physics()
+
+    def set_slingshot_enabled(self, on: bool) -> None:
+        """Enable or disable the independent slingshot interaction."""
+        self.slingshot_enabled = bool(on)
+        self.cfg.set('slingshot_enabled', self.slingshot_enabled)
+        self.cfg.save()
+        if not self.slingshot_enabled and self._interaction_state == SLINGSHOT_AIMING:
+            self._cancel_slingshot_to_anchor()
 
     def set_lock_position(self, on: bool) -> None:
         """锁定位置：开启后桌宠不可拖动（点击互动仍有效）。"""
@@ -2217,17 +2623,25 @@ class PetWindow(QWidget):
     def _stop_physics(self) -> None:
         self._physics_timer.stop()
         self._physics_mode = None
+        if getattr(self, '_interaction_state', IDLE) == THROWN:
+            self._interaction_state = IDLE
 
     def _on_physics_tick(self) -> None:
-        if self._physics_mode == 'drag':
-            self._tick_drag_physics()
-        elif self._physics_mode == 'throw':
-            self._tick_throw_physics()
+        now = time.monotonic()
+        if self._last_physics_tick_time is None:
+            dt = 0.016
+        else:
+            dt = max(0.0, min(0.05, now - self._last_physics_tick_time))
+        self._last_physics_tick_time = now
 
-    def _tick_drag_physics(self) -> None:
+        if self._physics_mode == 'drag':
+            self._tick_drag_physics(min(dt, 0.033))
+        elif self._physics_mode == 'throw':
+            self._tick_throw_physics(dt)
+
+    def _tick_drag_physics(self, dt: float = 0.016) -> None:
         if self._drag_target is None:
             return
-        dt = 0.016
         tx, ty = self._drag_target.x(), self._drag_target.y()
         px, py = self._phys_pos
         self._phys_vel[0] = physics_mod.spring_velocity(self._phys_vel[0], px, tx, dt)
@@ -2236,8 +2650,7 @@ class PetWindow(QWidget):
         self._phys_pos[1] += self._phys_vel[1] * dt
         self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
 
-    def _tick_throw_physics(self) -> None:
-        dt = 0.016
+    def _tick_throw_physics(self, dt: float = 0.016) -> None:
         scr = self._screen_available()
         avail = scr.availableGeometry()
         # 忽略左右留白：角色实际可视区域约为窗口中间 1/3，
@@ -2247,18 +2660,31 @@ class PetWindow(QWidget):
         top = avail.top()
         right = avail.right() - self._w + margin
         bottom = avail.bottom() - self._h
-        px, py, vx, vy, bounced = physics_mod.throw_step(
-            self._phys_pos[0], self._phys_pos[1],
-            self._phys_vel[0], self._phys_vel[1], dt,
-            left, top, right, bottom,
-        )
+
+        max_sub_dt = 0.008
+        remaining = dt
+        bounced_any = False
+        px, py = self._phys_pos[0], self._phys_pos[1]
+        vx, vy = self._phys_vel[0], self._phys_vel[1]
+
+        while remaining > 1e-6:
+            step_dt = min(max_sub_dt, remaining)
+            px, py, vx, vy, bounced = physics_mod.throw_step(
+                px, py, vx, vy, step_dt, left, top, right, bottom,
+            )
+            bounced_any = bounced_any or bounced
+            remaining -= step_dt
+            speed = math.hypot(vx, vy)
+            if physics_mod.is_at_rest(py, vx, vy, bottom, bounced_any, speed):
+                break
+
         self._phys_pos[:] = [px, py]
         self._phys_vel[:] = [vx, vy]
         self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
         speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
         # 在地面上且水平速度也很低时，彻底停下
         if physics_mod.is_at_rest(
-            self._phys_pos[1], self._phys_vel[0], self._phys_vel[1], bottom, bounced, speed
+            self._phys_pos[1], self._phys_vel[0], self._phys_vel[1], bottom, bounced_any, speed
         ):
             self._stop_physics()
             self._save_position()
@@ -2294,7 +2720,10 @@ class PetWindow(QWidget):
                 logging.exception("\u684c\u5ba0\u4f4d\u7f6e\u76d1\u542c\u5668\u6267\u884c\u5931\u8d25")
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
+            self._cancel_slingshot_to_anchor()
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
+        self._stop_fs_watch()
         if self._input_controller is not None:
             self._input_controller.stop()
             self._input_controller = None

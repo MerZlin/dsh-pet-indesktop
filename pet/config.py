@@ -183,7 +183,65 @@ def _default_agent_link_data() -> dict:
         "notify_done": True,
         # 过程汇报（可选，默认关）：Agent 干活中报「正在读文件/跑命令/改代码…」
         "notify_activity": False,
+        # 音效配置
+        "sound_enabled": False,
+        "sound_start_path": "builtin:agent-start",
+        "sound_done_path": "builtin:agent-done",
+        "sound_error_path": "builtin:agent-error",
+        "sound_volume": 0.65,
+        "sound_cooldown_seconds": 2.0,
+        "sound_start_enabled": True,
+        "sound_done_enabled": True,
+        "sound_error_enabled": True,
     }
+
+
+def _default_click_sound_pack() -> dict:
+    return {"kind": "builtin", "id": "default", "path": ""}
+
+
+def _clean_click_sound_pack(value: Any) -> dict:
+    defaults = _default_click_sound_pack()
+    if not isinstance(value, dict):
+        return dict(defaults)
+    kind = str(value.get("kind") or "builtin").strip().lower()
+    if kind not in {"builtin", "file", "folder"}:
+        return dict(defaults)
+    pack_id = str(value.get("id") or ("default" if kind == "builtin" else "custom")).strip()
+    if kind == "builtin" and pack_id not in {"default", "duck"}:
+        pack_id = "default"
+    path = str(value.get("path") or "").strip()[:500]
+    return {
+        "kind": kind,
+        "id": pack_id,
+        "path": path,
+    }
+
+
+def _clean_agent_link_data(raw: Any) -> dict:
+    defaults = _default_agent_link_data()
+    if not isinstance(raw, dict):
+        return dict(defaults)
+    result = dict(defaults)
+    # 保留传入的额外合法键（例如 thinking_text, thinking_texts 等）
+    result.update(raw)
+    for key in (
+        "dsh", "claude", "cursor", "opencode", "notify_state", "notify_done", "notify_activity",
+        "sound_enabled", "sound_start_enabled", "sound_done_enabled", "sound_error_enabled",
+    ):
+        if key in raw:
+            result[key] = bool(raw[key])
+    for key in ("sound_start_path", "sound_done_path", "sound_error_path"):
+        if key in raw:
+            val = str(raw[key] or "").strip()[:500]
+            result[key] = val or defaults[key]
+    if "sound_volume" in raw:
+        result["sound_volume"] = _float_or_default(raw.get("sound_volume"), defaults["sound_volume"], 0.0, 1.0)
+    if "sound_cooldown_seconds" in raw:
+        result["sound_cooldown_seconds"] = _float_or_default(
+            raw.get("sound_cooldown_seconds"), defaults["sound_cooldown_seconds"], 0.0, 30.0
+        )
+    return result
 
 
 def _merge_proactive_screen_data(raw: Any) -> dict:
@@ -194,10 +252,7 @@ def _merge_proactive_screen_data(raw: Any) -> dict:
 
 
 def _merge_agent_link_data(raw: Any) -> dict:
-    result = _default_agent_link_data()
-    if isinstance(raw, dict):
-        result.update(raw)
-    return result
+    return _clean_agent_link_data(raw)
 
 
 def _default_chat_data():
@@ -288,6 +343,18 @@ def _float_or_default(value, default, minimum, maximum):
     return max(minimum, min(maximum, number))
 
 
+def _bool_or_default(value, default):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'true', '1', 'yes', 'on'}:
+            return True
+        if normalized in {'false', '0', 'no', 'off'}:
+            return False
+    return bool(default)
+
+
 def _clean_self_talk_texts(value):
     if not isinstance(value, list):
         return list(DEFAULT_SELF_TALK_TEXTS)
@@ -333,6 +400,7 @@ class Config:
             "self_talk_image_dir": "assets/big_blue_fat_fish",
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
             "mouse_through": False,
+            "cursor_hidden_passthrough": True,
             "drag_physics": False,
             "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
             "shift_drag": False,     # 按住 SHIFT+左键才能拖动
@@ -344,6 +412,11 @@ class Config:
             "auto_hide_fullscreen": True,  # 全屏应用自动隐藏（Windows）
             "click_sound_enabled": True,   # 点击 Q 弹音效
             "click_sound_path": "",        # 自定义点击音效文件绝对路径（空=内置默认）
+            "click_sound_pack": _default_click_sound_pack(),
+            "click_sound_volume": 0.70,
+            "slingshot_enabled": True,     # 弹弓弹射
+            "throw_strength": "standard",  # gentle / standard / strong / crazy
+            "throw_max_speed": 4800.0,     # 由 throw_strength 导出
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
@@ -452,11 +525,13 @@ class Config:
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
             "self_talk_bubble_style",
-            "mouse_through", "drag_physics", "context_menu_template",
+             "mouse_through", "cursor_hidden_passthrough", "drag_physics", "context_menu_template",
             "lock_position", "shift_drag", "pet_opacity",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg", "auto_hide_fullscreen",
             "click_sound_enabled", "click_sound_path",
+            "click_sound_pack", "click_sound_volume",
+            "slingshot_enabled", "throw_strength", "throw_max_speed",
             "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
             "chat_background", "modern_chat_background",
@@ -473,9 +548,29 @@ class Config:
             self.data["proactive_screen"] = _merge_proactive_screen_data(raw["proactive_screen"])
         if "agent_link" in raw:
             self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
+        self._migrate_click_sound_config(raw)
         self.data["version"] = 4
 
+    def _migrate_click_sound_config(self, raw: dict) -> None:
+        """旧版 click_sound_path 迁移为 click_sound_pack。"""
+        # 如果 raw 里面没有明确合法的 click_sound_pack，但有旧 click_sound_path
+        has_explicit_pack = isinstance(raw.get("click_sound_pack"), dict) and bool(
+            raw.get("click_sound_pack", {}).get("kind")
+        )
+        if not has_explicit_pack:
+            old_path = str(raw.get("click_sound_path") or "").strip()
+            if old_path:
+                self.data["click_sound_pack"] = {
+                    "kind": "file",
+                    "id": "custom",
+                    "path": old_path,
+                }
+            else:
+                self.data["click_sound_pack"] = _default_click_sound_pack()
+
     def _normalize_pet_settings(self):
+        from . import physics as physics_mod
+
         self.data["playback_speed"] = _float_or_default(self.data.get("playback_speed"), 1.0, 0.1, 8.0)
         self.data["animation_gap_seconds"] = _float_or_default(
             self.data.get("animation_gap_seconds"), DEFAULT_ANIMATION_GAP_SECONDS, 0.0, 3600.0
@@ -498,6 +593,9 @@ class Config:
             self.data.get("self_talk_image_dir") or ""
         ).strip()[:500]
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
+        self.data["cursor_hidden_passthrough"] = _bool_or_default(
+            self.data.get("cursor_hidden_passthrough"), True
+        )
         self.data["show_dock_icon"] = bool(self.data.get("show_dock_icon", True))
         self.data["self_talk_texts"] = _clean_self_talk_texts(self.data.get("self_talk_texts"))
         bubble_style = str(self.data.get("self_talk_bubble_style") or "")
@@ -534,6 +632,16 @@ class Config:
             card_opacity = 84
         self.data["modern_chat_card_opacity"] = max(10, min(100, card_opacity))
 
+        # 点击音效 & 弹弓 & 物理力度归一化
+        self.data["click_sound_enabled"] = bool(self.data.get("click_sound_enabled", True))
+        self.data["click_sound_pack"] = _clean_click_sound_pack(self.data.get("click_sound_pack"))
+        self.data["click_sound_volume"] = _float_or_default(self.data.get("click_sound_volume"), 0.70, 0.0, 1.0)
+        self.data["slingshot_enabled"] = bool(self.data.get("slingshot_enabled", True))
+        strength = physics_mod.normalize_throw_strength(str(self.data.get("throw_strength") or "standard"))
+        self.data["throw_strength"] = strength
+        self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
+        self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
+
     def get(self, key, default=None):
         return self.data.get(key, default)
 
@@ -566,6 +674,8 @@ class Config:
             "self_talk_bubble_style",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg",
+            "click_sound_enabled", "click_sound_pack", "click_sound_volume",
+            "slingshot_enabled", "throw_strength", "agent_link",
         }:
             self._normalize_pet_settings()
 
