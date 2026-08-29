@@ -28,7 +28,7 @@ from typing import Any
 
 import shiboken6
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRect, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPen, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
@@ -51,6 +51,7 @@ from .context_menu import populate_context_menu as _populate_context_menu
 from .context_menus.shared import take_deferred_menu_callbacks
 from . import vision as vision_mod
 from . import physics as physics_mod
+from . import collision
 from .click_sound import choose_sound, play_sound, resolve_click_sound_candidates
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
@@ -346,10 +347,13 @@ class PetWindow(QWidget):
     fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
     cursor_visibility_changed = Signal(str)
 
-    def __init__(self, lib: MovieLibrary, config: Config) -> None:
+    def __init__(self, lib: MovieLibrary, config: Config, collision_session=None) -> None:
         super().__init__()
         self.lib = lib
         self.cfg = config
+        self._collision_session = None
+        self._collision_seq = 0
+        self._collision_last_state = None
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
         self.on_open_modern_chat = None
@@ -541,7 +545,12 @@ class PetWindow(QWidget):
         self._last_move_time = 0.0
         self._trail: list[tuple[float, float, float]] = []
         self._throw_speed_cap = physics_mod.throw_speed_cap(config.get("throw_strength"))
+        self.throw_strength = physics_mod.normalize_throw_strength(config.get("throw_strength"))
         self._last_physics_tick_time: float | None = None
+
+        self._collision_timer = QTimer(self)
+        self._collision_timer.setInterval(500)
+        self._collision_timer.timeout.connect(lambda: self._submit_collision_state(force=True))
 
         # ---- 尺寸与初始状态 ----
         self._apply_scale()
@@ -570,6 +579,8 @@ class PetWindow(QWidget):
 
         if self._awaiting_saved_screen:
             self._arm_screen_restore_retry()
+
+        self.attach_collision_session(collision_session)
 
     def _arm_screen_restore_retry(self) -> None:
         """目标副屏暂未就绪：启动 5s 轮询 + screenAdded 监听，等它上线。"""
@@ -872,12 +883,15 @@ class PetWindow(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
+        self._submit_collision_state(force=True)
         self._schedule_macos_window_level(bool(self.cfg.get('on_top', True)))
         self._apply_opacity()
         # 隐藏期暂停的活动在此恢复（与 hide() 中的 _pause_activity 配对）
         if self._hidden_paused:
             self._hidden_paused = False
+            self._phys_vel[:] = [0.0, 0.0]
             self._resume_activity()
+            self._submit_collision_state(force=True)
         self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
@@ -893,6 +907,7 @@ class PetWindow(QWidget):
         self._hidden_paused = True
         self._pause_activity()
         super().hide()
+        self._submit_collision_state(force=True)
         if not notify:
             return
         if callable(getattr(self, "on_hidden", None)):
@@ -943,6 +958,139 @@ class PetWindow(QWidget):
             self.agent_link_manager.resume()
         if hasattr(self, 'lib') and self.lib is not None and hasattr(self.lib, 'resume_warm'):
             self.lib.resume_warm()
+
+    def attach_collision_session(self, session) -> None:
+        """绑定 PetApp 持有的 IPC facade，GUI 不接触 socket。"""
+        self._collision_app_session = session
+        self.detach_collision_session()
+        if session is None or not bool(self.cfg.get('collision_enabled', True)):
+            return
+        self._collision_session = session
+        session.impulse_ready.connect(self._on_collision_impulse, Qt.ConnectionType.QueuedConnection)
+        self._collision_timer.start()
+        self._submit_collision_state(force=True)
+
+    def detach_collision_session(self) -> None:
+        session = self._collision_session
+        if session is None:
+            return
+        try:
+            session.impulse_ready.disconnect(self._on_collision_impulse)
+        except (RuntimeError, TypeError):
+            pass
+        self._collision_timer.stop()
+        self._collision_session = None
+
+    def _collision_flags(self) -> int:
+        flags = collision.FLAG_VISIBLE if self.isVisible() else 0
+        if not self.isVisible() or self._hidden_paused:
+            flags |= collision.FLAG_PAUSED
+        if self._interaction_state == THROWN or self._physics_mode == 'throw':
+            flags |= collision.FLAG_THROWN
+        if self._interaction_state == DRAGGING:
+            flags |= collision.FLAG_DRAGGING
+        if self._interaction_state == SLINGSHOT_AIMING:
+            flags |= collision.FLAG_SLINGSHOT_AIMING
+        if self.lock_position:
+            flags |= collision.FLAG_LOCK_POSITION
+        if self.no_move:
+            flags |= collision.FLAG_NO_MOVE
+        if self.mouse_through:
+            flags |= collision.FLAG_MOUSE_THROUGH
+        if self._auto_cursor_hidden:
+            flags |= collision.FLAG_AUTO_CURSOR_HIDDEN
+        if bool(self.cfg.get('collision_enabled', True)):
+            flags |= collision.FLAG_COLLISION_ENABLED
+        return flags
+
+    def _collision_velocity(self) -> tuple[float, float]:
+        if self._interaction_state == DRAGGING and len(self._trail) >= 2:
+            t0, x0, y0 = self._trail[-2]
+            t1, x1, y1 = self._trail[-1]
+            dt = max(0.001, t1 - t0)
+            return (x1 - x0) / dt, (y1 - y0) / dt
+        return float(self._phys_vel[0]), float(self._phys_vel[1])
+
+    def _collision_state(self) -> dict[str, Any]:
+        rect = self.visible_content_rect()
+        vx, vy = self._collision_velocity()
+        return {
+            'seq': self._collision_seq,
+            'ts': time.monotonic(),
+            'x': float(rect.center().x()), 'y': float(rect.center().y()),
+            'w': float(self._w), 'h': float(self._h),
+            'radius_x': max(1.0, rect.width() / 2.0),
+            'radius_y': max(1.0, rect.height() / 2.0),
+            'vx': 0.0 if not self.isVisible() else vx,
+            'vy': 0.0 if not self.isVisible() else vy,
+            'flags': self._collision_flags(),
+            'character': str(self.cfg.get('character', '')),
+            'scale': float(self.scale),
+        }
+
+    def _submit_collision_state(self, force: bool = False) -> None:
+        session = getattr(self, '_collision_session', None)
+        if session is None:
+            return
+        state = self._collision_state()
+        comparable = dict(state)
+        comparable.pop('seq', None)
+        if not force and comparable == self._collision_last_state:
+            return
+        self._collision_seq += 1
+        state['seq'] = self._collision_seq
+        self._collision_last_state = comparable
+        session.submit_state(state)
+        moving = (self._interaction_state in (DRAGGING, THROWN)
+                   or math.hypot(*self._phys_vel) > 20.0)
+        self._collision_timer.setInterval(50 if moving else 500)
+
+    @Slot(object)
+    def _on_collision_impulse(self, message: dict[str, Any]) -> None:
+        if self._collision_session is None or not self.isVisible() or self._hidden_paused:
+            return
+        if self._interaction_state == DRAGGING or self._physics_mode == 'drag':
+            return
+        runtime_id = str(getattr(self._collision_session, 'runtime_id', ''))
+        if message.get('a') == runtime_id:
+            dvx, dvy = float(message.get('dvx_a', 0)), float(message.get('dvy_a', 0))
+            dx, dy = float(message.get('dx_a', 0)), float(message.get('dy_a', 0))
+        elif message.get('b') == runtime_id:
+            dvx, dvy = float(message.get('dvx_b', 0)), float(message.get('dvy_b', 0))
+            dx, dy = float(message.get('dx_b', 0)), float(message.get('dy_b', 0))
+        else:
+            return
+        rect = self.visible_content_rect()
+        radius_x = max(1.0, rect.width() / 2.0)
+        radius_y = max(1.0, rect.height() / 2.0)
+        contact_x = float(message.get('contact_x', rect.center().x()))
+        contact_y = float(message.get('contact_y', rect.center().y()))
+        nx, ny = float(message.get('nx', 0.0)), float(message.get('ny', 0.0))
+        if message.get('a') == runtime_id:
+            expected_x = contact_x - nx * radius_x
+            expected_y = contact_y - ny * radius_y
+        else:
+            expected_x = contact_x + nx * radius_x
+            expected_y = contact_y + ny * radius_y
+        if math.hypot(rect.center().x() - expected_x, rect.center().y() - expected_y) > min(radius_x, radius_y) * 0.1:
+            dx = dy = 0.0
+        self._phys_vel[0] += dvx
+        self._phys_vel[1] += dvy
+        speed = math.hypot(*self._phys_vel)
+        clamped = physics_mod.soft_clamp_speed(speed, self._throw_speed_cap)
+        if speed > 1e-6:
+            self._phys_vel[:] = [self._phys_vel[0] * clamped / speed, self._phys_vel[1] * clamped / speed]
+        self.move(self.x() + int(round(dx)), self.y() + int(round(dy)))
+        self._just_dragged = True
+        QTimer.singleShot(120, self, self._clear_just_dragged)
+        if speed >= physics_mod.DEAD_ZONE_SPEED:
+            self._interaction_state = THROWN
+            self._physics_mode = 'throw'
+            self._phys_pos[:] = [float(self.x()), float(self.y())]
+            self._last_physics_tick_time = None
+            self._physics_timer.start()
+        self._start_squash()
+        self._submit_collision_state(force=True)
 
     _FS_SKIP_CLASSES = {
         'Progman', 'WorkerW', 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd',
@@ -1263,6 +1411,7 @@ class PetWindow(QWidget):
         if self.no_move and self._move_plan is not None:
             if self.idles:
                 self._switch(self._pick(self.idles))  # 打断进行中的移动
+        self._submit_collision_state(force=True)
 
     # ================================================================ 播放
     def _connect_movie(self, name: str, movie) -> None:
@@ -1291,6 +1440,7 @@ class PetWindow(QWidget):
         self._ended_fired = False
         self._rebuild_frame()
         movie.start()
+        self._submit_collision_state(force=True)
 
     # ---- Agent 联动动作平滑衔接 ----
     def _is_one_shot_playing(self) -> bool:
@@ -2015,6 +2165,7 @@ class PetWindow(QWidget):
                 return
             self._dragging = True
             self._interaction_state = "DRAGGING"
+            self._submit_collision_state(force=True)
             # 用户真正开始拖动 = 接管位置决策，撤销"等副屏上线自动恢复"
             # （必须在这里而不是按下时：普通点击/未过阈值/未按 SHIFT 不算接管）
             _disarm = getattr(self, '_disarm_screen_restore_retry', None)
@@ -2104,6 +2255,7 @@ class PetWindow(QWidget):
             self._cursor_restore_pending = False
             self._auto_cursor_hidden = False
         self._apply_effective_mouse_through()
+        self._submit_collision_state(force=True)
         event.accept()
 
     def _clear_just_dragged(self) -> None:
@@ -2402,6 +2554,11 @@ class PetWindow(QWidget):
         )
 
     def refresh_pet_settings(self) -> None:
+        collision_enabled = bool(self.cfg.get('collision_enabled', True))
+        if collision_enabled and self._collision_session is None:
+            self.attach_collision_session(getattr(self, '_collision_app_session', None))
+        elif not collision_enabled and self._collision_session is not None:
+            self.detach_collision_session()
         desired_scale = float(self.cfg.get('scale', self.scale))
         self.change_scale(desired_scale)
         desired_speed = float(self.cfg.get('playback_speed', self.playback_speed))
@@ -2614,6 +2771,7 @@ class PetWindow(QWidget):
         self.cfg.set('mouse_through', self._user_mouse_through)
         self.cfg.save()
         self._apply_effective_mouse_through()
+        self._submit_collision_state(force=True)
 
     def _apply_effective_mouse_through(self, enabled: bool | None = None) -> None:
         effective = (bool(self._user_mouse_through or self._auto_cursor_hidden)
@@ -2660,6 +2818,7 @@ class PetWindow(QWidget):
             self._press_global = None
             self._grab_offset = None
             self._stop_physics()
+        self._submit_collision_state(force=True)
 
     def set_shift_drag(self, on: bool) -> None:
         """按住 SHIFT+左键才能拖动。"""
@@ -2686,6 +2845,7 @@ class PetWindow(QWidget):
         self._physics_mode = None
         if getattr(self, '_interaction_state', IDLE) == THROWN:
             self._interaction_state = IDLE
+        self._submit_collision_state(force=True)
 
     def _on_physics_tick(self) -> None:
         now = time.monotonic()
@@ -2774,6 +2934,7 @@ class PetWindow(QWidget):
 
     def moveEvent(self, event) -> None:  # noqa: N802
         super().moveEvent(event)
+        self._submit_collision_state(force=True)
         self._speech_bubble.reposition(self.visible_content_rect())
         for listener in tuple(self._position_listeners):
             try:
@@ -2786,6 +2947,7 @@ class PetWindow(QWidget):
             self._cancel_slingshot_to_anchor()
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
         self._stop_fs_watch()
+        self.detach_collision_session()
         if self._input_controller is not None:
             self._input_controller.stop()
             self._input_controller = None
