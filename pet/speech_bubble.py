@@ -447,12 +447,19 @@ class PetSpeechBubble(QFrame):
                 self._reset_paging()
             self.label.setPixmap(QPixmap())
             self.label.setText(display_text)
-            bounds = metrics.boundingRect(
-                QRect(0, 0, 248, 600), Qt.TextFlag.TextWordWrap, display_text
-            )
+            # 固定尺寸必须按所有页的最大测量值计算：后续页可能出现更宽的行，
+            # 若只按第一页设置，翻页后 wordWrap=False 会把后续页文本裁掉。
+            max_width = 0
+            max_height = 0
+            for page in pages:
+                page_bounds = metrics.boundingRect(
+                    QRect(0, 0, 248, 600), Qt.TextFlag.TextWordWrap, page
+                )
+                max_width = max(max_width, page_bounds.width())
+                max_height = max(max_height, page_bounds.height())
             self.label.setFixedSize(
-                max(96, min(248, bounds.width() + 3)),
-                max(20, bounds.height() + 2),
+                max(96, min(248, max_width + 3)),
+                max(20, max_height + 2),
             )
         self.adjustSize()
         self._place(anchor_rect)
