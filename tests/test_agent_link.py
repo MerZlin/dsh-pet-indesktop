@@ -940,6 +940,17 @@ class TestAgentLinkChainingAndActivity:
         expected = ["写代码", "吃Token", "轻快记录", "吃Token", "写代码", "原地漂浮踏步"]
         assert res == expected
 
+    def test_anim_rotation_falls_back_to_keywords_and_available_acts(self, tmp_path):
+        """精确动作名不存在时，按主/摸鱼关键词选择；完全不匹配时回退到任意动作。"""
+        mgr, win, bubbles, clock = self._make_mgr(
+            tmp_path, acts=["敲击键盘", "伸懒腰", "发呆"]
+        )
+        res = [mgr._next_link_anim_rotation() for _ in range(6)]
+        assert res == ["敲击键盘", "敲击键盘", "伸懒腰", "敲击键盘", "敲击键盘", "伸懒腰"]
+
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, acts=["跳舞"])
+        assert mgr._next_link_anim_rotation() == "跳舞"
+
 
     def test_empty_acts_returns_none(self, tmp_path):
         """2. 无可用动作时 _next_link_anim_rotation 返回 None（DummyWin cats.acts 为空列表）不抛异常。"""
@@ -952,7 +963,7 @@ class TestAgentLinkChainingAndActivity:
     def test_activity_reporting(self, tmp_path):
         """3. 过程汇报：cfg agent_link.notify_activity=True 时 mgr._on_agent_activity('dsh','bash') → 气泡含「正在跑命令」；
         10 秒内第二次任何工具不弹；同工具 60 秒内不重复（clock 前进 15s 再发 bash 仍不弹；换成 read 则弹「正在读文件」）；
-        全局限流 8s（另一 agent 在 8s 内也不弹）。notify_activity 默认 False 时不弹。未知工具（如 'frobnicate'）不弹。"""
+        全局限流 8s（另一 agent 在 8s 内也不弹）。notify_activity 默认 False 时不弹。未知工具（如 'frobnicate'）弹安全兜底文案。"""
         # notify_activity 默认 False 时不弹
         mgr_off, win_off, bubbles_off, clock_off = self._make_mgr(tmp_path)
         mgr_off._on_agent_activity("dsh", "bash")
@@ -961,33 +972,43 @@ class TestAgentLinkChainingAndActivity:
         # notify_activity = True
         mgr, win, bubbles, clock = self._make_mgr(tmp_path, agent_link_cfg={"notify_activity": True})
 
-        # 未知工具不弹
+        # 未知工具弹安全兜底文案，不泄露原始参数
         mgr._on_agent_activity("dsh", "frobnicate")
-        assert bubbles == []
+        assert len(bubbles) == 1
+        assert "正在调用工具" in bubbles[-1]
+        assert "frobnicate" not in bubbles[-1]
 
         # dsh bash → 弹「正在跑命令」
+        clock[0] += 10.0
         mgr._on_agent_activity("dsh", "bash")
-        assert len(bubbles) == 1
+        assert len(bubbles) == 2
         assert "正在跑命令" in bubbles[-1]
 
         # 10 秒内第二次任何工具不弹
         clock[0] += 5.0
         mgr._on_agent_activity("dsh", "read")
-        assert len(bubbles) == 1
+        assert len(bubbles) == 2
 
         # 全局限流 8s（另一 agent 在 8s 内也不弹，从 1000.0 起算此时 1005.0 < 1008.0）
         mgr._on_agent_activity("claude", "read")
-        assert len(bubbles) == 1
+        assert len(bubbles) == 2
 
         # 同工具 60 秒内不重复：前进 15s（总共 +20s > 10s，但 < 60s），再发 bash 仍不弹
         clock[0] += 15.0
         mgr._on_agent_activity("dsh", "bash")
-        assert len(bubbles) == 1
+        assert len(bubbles) == 2
 
         # 换成 read 则弹「正在读文件」
         mgr._on_agent_activity("dsh", "read")
-        assert len(bubbles) == 2
+        assert len(bubbles) == 3
         assert "正在读文件" in bubbles[-1]
+
+        clock[0] += 10.0
+        mgr._on_agent_activity("dsh", "pwsh")
+        assert "正在跑命令" in bubbles[-1]
+        clock[0] += 10.0
+        mgr._on_agent_activity("dsh", "memory_search")
+        assert "正在翻记忆" in bubbles[-1]
 
     def test_window_smooth_chaining(self, tmp_path):
         """4. window 侧平滑衔接（用真实 PetWindow + MovieLibrary，offscreen，参考 TestAgentMenuRebound 的构造）：
