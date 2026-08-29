@@ -1016,6 +1016,7 @@ class AgentLinkManager(QObject):
         "memory_search": "正在翻记忆",
         "webfetch": "正在查网页", "websearch": "正在查网页",
         "fetch": "正在查网页", "browser": "正在查网页", "web_fetch": "正在查网页",
+        "web_search": "正在查网页", "read_page": "正在读网页",
         "task": "正在派活给子代理", "todowrite": "正在列计划",
     }
     _UNKNOWN_TOOL_LABEL = "正在调用工具"
@@ -1263,7 +1264,7 @@ class AgentLinkManager(QObject):
             anim = self._next_link_anim_rotation()
             if anim and hasattr(self.win, "request_link_anim"):
                 self.win.request_link_anim(anim)
-            self._maybe_notify_start(agent_key, prev_raw)
+            self._maybe_notify_start(agent_key, prev_raw, state)
         elif state == "attention":
             # busy 后的 attention（如 Claude Stop=回合结束）由完成确认流程接管，
             # 避免「需要看一眼」和「完成通知」双气泡；独立出现的才立即提醒
@@ -1347,16 +1348,21 @@ class AgentLinkManager(QObject):
     # ------------------------------------------------------------------
     # 联动气泡（开始干活可选 / 任务完成通知）
     # ------------------------------------------------------------------
-    def _maybe_notify_start(self, agent_key: str, prev_raw: str | None) -> None:
+    def _maybe_notify_start(self, agent_key: str, prev_raw: str | None, state: str = "working") -> None:
         """开始干活气泡：仅「非 busy → busy」时提示（thinking↔working 互跳不弹）。
-        低优先级：气泡位被占时直接丢弃。"""
+        低优先级：气泡位被占时直接丢弃。thinking 状态用更有趣的文案。"""
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_state", False):
             return
         if prev_raw in self._BUSY_STATES:
             return
         name = self.AGENT_NAMES.get(agent_key, agent_key)
-        self._show_link_bubble(f"{name} 开始干活啦～", important=False, duration_ms=3000)
+        if state == "thinking":
+            # DSH 联动搭配鲸鱼娘形象时用角色梗自称
+            think_text = "大肥鱼正在深度思考……" if agent_key == "dsh" else f"{name} 正在深度思考……"
+            self._show_link_bubble(think_text, important=False, duration_ms=3000)
+        else:
+            self._show_link_bubble(f"{name} 开始干活啦～", important=False, duration_ms=3000)
 
     def _on_agent_activity(self, agent_key: str, tool: str) -> None:
         """过程汇报气泡（可选，默认关）：「DSH 正在读文件…」这类。
