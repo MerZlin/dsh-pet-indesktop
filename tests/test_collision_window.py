@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, Signal
 from PySide6.QtGui import QMouseEvent, QPixmap
@@ -96,9 +97,17 @@ class FakeCollisionSession(QObject):
         super().__init__(parent)
         self.runtime_id = runtime_id
         self.submitted_states: list[dict] = []
+        self.policy_updates: list[dict] = []
+        self.leave_calls = 0
 
     def submit_state(self, state: dict) -> None:
         self.submitted_states.append(dict(state))
+
+    def update_policy(self, policy: dict) -> None:
+        self.policy_updates.append(dict(policy))
+
+    def submit_leave(self) -> None:
+        self.leave_calls += 1
 
 
 @pytest.fixture
@@ -106,9 +115,10 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def _make_pet_window(tmp_path, runtime_id="test-slot-pid1-abc12345", collision_enabled=True):
+def _make_pet_window(tmp_path, runtime_id="test-slot-pid1-abc12345", collision_enabled=True, lock_position=False):
     cfg = Config(str(tmp_path / f"cfg_{runtime_id}.json"))
     cfg.set("collision_enabled", collision_enabled)
+    cfg.set("lock_position", lock_position)
     lib = FakeLibrary()
     session = FakeCollisionSession(runtime_id)
     win = PetWindow(lib, cfg, collision_session=session)
@@ -350,5 +360,121 @@ def test_collision_disabled_does_not_report_receive_and_detaches(tmp_path, app):
     win.cfg.set("collision_enabled", False)
     win.refresh_pet_settings()
     assert win._collision_session is None
+
+    win.close()
+
+
+def test_lock_position_window_ignores_impulse(tmp_path, app):
+    """锁定位置窗口收到 impulse：位置不变、不进 THROWN、无速度（与协调者侧无限质量互为双保险）。"""
+    win, session = _make_pet_window(tmp_path, "pet_lock", lock_position=True)
+    assert win.lock_position is True
+    start_pos = (win.x(), win.y())
+    rect = win.visible_content_rect()
+
+    msg = {
+        "a": "pet_lock",
+        "b": "pet_other",
+        "dvx_a": 1200.0,
+        "dvy_a": 0.0,
+        "dx_a": 20.0,
+        "dy_a": 0.0,
+        "contact_x": float(rect.center().x() + rect.width() / 2.0),
+        "contact_y": float(rect.center().y()),
+        "nx": -1.0,
+        "ny": 0.0,
+    }
+    session.impulse_ready.emit(msg)
+    app.processEvents()
+
+    assert (win.x(), win.y()) == start_pos
+    assert win._phys_vel == [0.0, 0.0]
+    assert win._interaction_state != 'THROWN'
+    assert win._physics_mode is None
+
+    win.close()
+
+
+def test_detach_collision_session_sends_leave(tmp_path, app):
+    """detach_collision_session 时向会话发 leave：协调者即时移除成员（不等 stale 超时）。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    assert win._collision_session is session
+    assert session.leave_calls == 0
+
+    win.detach_collision_session()
+    assert win._collision_session is None
+    assert session.leave_calls == 1
+
+    # 再次 detach（已无会话）不发 leave
+    win.detach_collision_session()
+    assert session.leave_calls == 1
+
+    win.close()
+
+
+def test_submit_collision_state_dedup_excludes_ts(tmp_path, app):
+    """comparable 不含 ts：状态未变化时非 force 提交被去重（去重不再恒失效）。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win._collision_timer.stop()  # 排除定时器 force 兜底对计数的干扰
+    session.submitted_states.clear()
+    win._collision_last_submit_at = 0.0  # 清掉 showEvent force 提交留下的限流窗口
+
+    # 与上次 force 提交（showEvent）状态一致 → 全部被去重
+    win._submit_collision_state()
+    win._submit_collision_state()
+    assert len(session.submitted_states) == 0
+
+    # 位置变化 → 非 force 放行一次
+    win.move(win.x() + 1, win.y())
+    app.processEvents()
+    assert len(session.submitted_states) == 1
+
+    # 把限流时钟拨到"刚提交过"：再次变化也被 50ms 窗口跳过
+    win._collision_last_submit_at = time.monotonic()
+    win.move(win.x() + 2, win.y())
+    app.processEvents()
+    assert len(session.submitted_states) == 1
+
+    # 拨回"很久以前"：限流窗口已过，再次变化放行
+    win._collision_last_submit_at = time.monotonic() - 0.2
+    win.move(win.x() + 3, win.y())
+    app.processEvents()
+    assert len(session.submitted_states) == 2
+
+    win.close()
+
+
+def test_move_event_submits_throttled_not_forced(tmp_path, app):
+    """moveEvent 非 force 节流提交：60Hz 连续移动不超标（上限 20Hz）。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win._collision_timer.stop()  # 排除定时器 force 兜底对计数的干扰
+    session.submitted_states.clear()
+    win._collision_last_submit_at = 0.0  # 保证首个 move 放行
+    start = win.pos()
+
+    # 模拟 60Hz 抛掷：极短时间内连续 20 次移动，全部落在 50ms 限流窗口内
+    for i in range(1, 21):
+        win.move(start.x() + i, start.y())
+    app.processEvents()
+
+    # moveEvent 路径只放行首个提交，其余被节流（运动期由 _collision_timer 兜底）
+    assert len(session.submitted_states) == 1
+
+    win.close()
+
+
+def test_move_event_submits_throttled_not_forced(tmp_path, app):
+    """moveEvent 非 force 节流提交：60Hz 连续移动不超标（上限 20Hz）。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    session.submitted_states.clear()
+    win._collision_last_submit_at = 0.0  # 保证首个 move 放行
+    start = win.pos()
+
+    # 模拟 60Hz 抛掷：极短时间内连续 20 次移动，全部落在 50ms 限流窗口内
+    for i in range(1, 21):
+        win.move(start.x() + i, start.y())
+    app.processEvents()
+
+    # moveEvent 路径只放行首个提交，其余被节流（运动期由 _collision_timer 兜底）
+    assert len(session.submitted_states) == 1
 
     win.close()

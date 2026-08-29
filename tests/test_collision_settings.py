@@ -138,3 +138,47 @@ def test_refresh_pet_settings_live_applies_collision_switch(qapp, tmp_path: Path
         assert win._collision_session is session
     finally:
         win.close()
+
+
+def test_modern_settings_dialog_collision_policy_note(qapp, tmp_path: Path):
+    """「多开碰撞」区有一行协调者配置优先的说明文案。"""
+    dialog = ModernSettingsDialog(Config(tmp_path / "appdata"), include_ai=False)
+    try:
+        assert hasattr(dialog, "collision_policy_note")
+        assert "碰撞参数由当前协调者桌宠的设置决定" in dialog.collision_policy_note.text()
+    finally:
+        dialog.deleteLater()
+
+
+def test_refresh_pet_settings_syncs_collision_policy(qapp, tmp_path: Path):
+    """运行中改碰撞参数：refresh_pet_settings 后 session policy 更新（协调者配置优先）。"""
+    cfg = Config(str(tmp_path / "cfg_policy.json"))
+    cfg.set("collision_enabled", True)
+    lib = FakeLibrary()
+    session = FakeCollisionSession("pet_policy")
+    win = PetWindow(lib, cfg, collision_session=session)
+    try:
+        win.resize(100, 100)
+        win.show()
+        # 初始 attach 已同步一次默认策略
+        assert len(session.policy_updates) >= 1
+        assert session.policy_updates[-1]["collision_restitution"] == pytest.approx(0.82)
+
+        # 运行中修改参数 → 重新同步
+        cfg.set("collision_restitution", 0.5)
+        cfg.set("collision_friction", 0.15)
+        cfg.set("collision_mass_scale", 1.5)
+        cfg.set("collision_impulse_cap", 6000.0)
+        win.refresh_pet_settings()
+        policy = session.policy_updates[-1]
+        assert policy["collision_restitution"] == pytest.approx(0.5)
+        assert policy["collision_friction"] == pytest.approx(0.15)
+        assert policy["collision_mass_scale"] == pytest.approx(1.5)
+        assert policy["collision_impulse_cap"] == pytest.approx(6000.0)
+
+        # 参数未变时不重复推送
+        before = len(session.policy_updates)
+        win.refresh_pet_settings()
+        assert len(session.policy_updates) == before
+    finally:
+        win.close()

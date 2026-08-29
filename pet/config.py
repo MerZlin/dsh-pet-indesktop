@@ -474,11 +474,17 @@ class Config:
             pass
 
     def _load(self):
+        if not self.path.is_file():
+            return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            from . import slot_manager as slot_manager_mod
+            slot_manager_mod.backup_corrupt_config(self.path)
             return
         if not isinstance(raw, dict):
+            from . import slot_manager as slot_manager_mod
+            slot_manager_mod.backup_corrupt_config(self.path)
             return
         try:
             old_version = int(raw.get("version", 1) or 1)

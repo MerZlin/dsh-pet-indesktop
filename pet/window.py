@@ -354,6 +354,8 @@ class PetWindow(QWidget):
         self._collision_session = None
         self._collision_seq = 0
         self._collision_last_state = None
+        self._collision_last_submit_at = 0.0  # 非 force 提交 20Hz 限流时间戳
+        self._applied_collision_policy: dict | None = None  # 已同步到会话的碰撞策略
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
         self.on_open_modern_chat = None
@@ -969,17 +971,47 @@ class PetWindow(QWidget):
         session.impulse_ready.connect(self._on_collision_impulse, Qt.ConnectionType.QueuedConnection)
         self._collision_timer.start()
         self._submit_collision_state(force=True)
+        self._sync_collision_policy()
 
     def detach_collision_session(self) -> None:
         session = self._collision_session
         if session is None:
             return
+        # 断开前先发 leave：协调者即时移除成员，不必等 stale 超时
+        submit_leave = getattr(session, 'submit_leave', None)
+        if callable(submit_leave):
+            submit_leave()
         try:
             session.impulse_ready.disconnect(self._on_collision_impulse)
         except (RuntimeError, TypeError):
             pass
         self._collision_timer.stop()
         self._collision_session = None
+        self._sync_collision_policy()
+
+    def _sync_collision_policy(self) -> None:
+        """把当前配置的碰撞参数同步到会话 policy，运行中改动即时生效。
+
+        协调者配置优先：本进程是协调者时碰撞求解直接用本配置；
+        非协调者时本地 policy 仅在本进程未来接管协调者时才生效。
+        """
+        session = getattr(self, '_collision_session', None)
+        policy = {
+            'collision_enabled': bool(self.cfg.get('collision_enabled', True)),
+            'collision_restitution': float(self.cfg.get('collision_restitution', .82)),
+            'collision_friction': float(self.cfg.get('collision_friction', .08)),
+            'collision_mass_scale': float(self.cfg.get('collision_mass_scale', 1.0)),
+            'collision_impulse_cap': float(self.cfg.get('collision_impulse_cap', 9000.0)),
+        }
+        if session is None:
+            self._applied_collision_policy = None
+            return
+        if policy == self._applied_collision_policy:
+            return
+        self._applied_collision_policy = policy
+        update_policy = getattr(session, 'update_policy', None)
+        if callable(update_policy):
+            update_policy(policy)
 
     def _collision_flags(self) -> int:
         flags = collision.FLAG_VISIBLE if self.isVisible() else 0
@@ -1035,11 +1067,19 @@ class PetWindow(QWidget):
         state = self._collision_state()
         comparable = dict(state)
         comparable.pop('seq', None)
+        # 时间戳不参与"状态是否变化"比较：ts 每次不同会让去重恒失效（死代码）
+        comparable.pop('ts', None)
         if not force and comparable == self._collision_last_state:
+            return
+        now = time.monotonic()
+        if not force and now - self._collision_last_submit_at < 0.05:
+            # 非 force 提交 20Hz 限流：moveEvent 等 60Hz 高频路径不超标，
+            # 运动期间由 _collision_timer（50ms/500ms）兜底强制上报
             return
         self._collision_seq += 1
         state['seq'] = self._collision_seq
         self._collision_last_state = comparable
+        self._collision_last_submit_at = now
         session.submit_state(state)
         moving = (self._interaction_state in (DRAGGING, THROWN)
                    or math.hypot(*self._phys_vel) > 20.0)
@@ -1047,6 +1087,9 @@ class PetWindow(QWidget):
 
     @Slot(object)
     def _on_collision_impulse(self, message: dict[str, Any]) -> None:
+        # 锁定位置桌宠被撞不动：与协调者侧无限质量判定互为双保险
+        if self.cfg.get('lock_position'):
+            return
         if self._collision_session is None or not self.isVisible() or self._hidden_paused:
             return
         if self._interaction_state == DRAGGING or self._physics_mode == 'drag':
@@ -2559,6 +2602,7 @@ class PetWindow(QWidget):
             self.attach_collision_session(getattr(self, '_collision_app_session', None))
         elif not collision_enabled and self._collision_session is not None:
             self.detach_collision_session()
+        self._sync_collision_policy()
         desired_scale = float(self.cfg.get('scale', self.scale))
         self.change_scale(desired_scale)
         desired_speed = float(self.cfg.get('playback_speed', self.playback_speed))
@@ -2934,7 +2978,9 @@ class PetWindow(QWidget):
 
     def moveEvent(self, event) -> None:  # noqa: N802
         super().moveEvent(event)
-        self._submit_collision_state(force=True)
+        # 非 force 节流提交：位置变化由去重 + 20Hz 限流兜底，运动期由
+        # _collision_timer（50ms）强制上报，避免 60Hz 抛掷移动上报超标
+        self._submit_collision_state()
         self._speech_bubble.reposition(self.visible_content_rect())
         for listener in tuple(self._position_listeners):
             try:

@@ -109,11 +109,14 @@ print(f"WORKER3:{{slot}}", flush=True)
     p2.wait()
     time.sleep(0.1)
 
-    # 确认锁文件残留但之后仍可成功复用 slot-0
+    # 确认锁文件残留但之后仍可成功复用 slot-0，且大小固定为 16 字节，PID 在头部
     lock0 = sm.get_slot_lock_path(config_dir, 0)
     assert lock0.exists()
+    assert lock0.stat().st_size == 16
+    assert lock0.read_bytes().strip() != b""
     slot, handle = sm.acquire_pet_slot(config_dir)
     assert slot == 0
+    assert lock0.stat().st_size == 16
     handle.close()
 
 
@@ -325,6 +328,150 @@ def test_migrate_legacy_spawns_atomic_and_rollback(tmp_path):
 
     # 迁移标记文件写入
     assert (config_dir / "migration-spawns.done").exists()
+
+
+def test_lock_file_fixed_size_and_pid_at_head(tmp_path):
+    """测试重复获取锁（不同进程/会话）后锁文件大小保持 16 字节不增长，PID 记录固定在头部。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    slot_id, h1 = sm.acquire_pet_slot(config_dir, preferred_slot=1)
+    lock_file = sm.get_slot_lock_path(config_dir, 1)
+    assert lock_file.exists()
+    assert lock_file.stat().st_size == sm.PID_RECORD_LEN
+    sm._unlock_file(h1)
+
+    content1 = lock_file.read_bytes()
+    assert content1.startswith(f"{os.getpid()}".encode("ascii"))
+
+    # 再次获取同一个槽位锁，大小不变
+    slot_id2, h2 = sm.acquire_pet_slot(config_dir, preferred_slot=1)
+    assert lock_file.stat().st_size == sm.PID_RECORD_LEN
+    sm._unlock_file(h2)
+
+    content2 = lock_file.read_bytes()
+    assert content2.startswith(f"{os.getpid()}".encode("ascii"))
+    assert lock_file.stat().st_size == sm.PID_RECORD_LEN
+
+
+def test_corrupt_config_backup_and_wiring_in_config_load(tmp_path):
+    """测试 Config._load 对损坏的 slot 配置及主配置调用 backup_corrupt_config 备份而不静默覆盖。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. 槽位配置文件损坏
+    slot1_cfg = config_dir / "config-slot-1.json"
+    slot1_cfg.write_text("{bad-json-slot1", encoding="utf-8")
+
+    cfg1 = Config(base=tmp_path, instance_id="slot-1")
+    # 检查是否生成了备份文件
+    backups1 = list(config_dir.glob("config-slot-1.json.corrupt-*"))
+    assert len(backups1) == 1
+    assert backups1[0].read_text(encoding="utf-8") == "{bad-json-slot1"
+    # cfg1 正常回退到默认配置
+    assert cfg1.get("character") is not None
+
+    # 2. 主配置文件损坏
+    master_cfg = config_dir / "config.json"
+    master_cfg.write_text("{bad-json-master", encoding="utf-8")
+
+    cfg_master = Config(base=tmp_path)
+    backups_master = list(config_dir.glob("config.json.corrupt-*"))
+    assert len(backups_master) == 1
+    assert backups_master[0].read_text(encoding="utf-8") == "{bad-json-master"
+    assert cfg_master.get("character") is not None
+
+
+def test_migrate_legacy_spawns_rollback_on_sessions_move_failure(tmp_path, monkeypatch):
+    """测试旧 spawn 迁移时，若 config 移动成功但 sessions 移动失败，完整回滚三方状态。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    old_cfg = config_dir / "config-spawn999x1.json"
+    old_cfg.write_text(json.dumps({"character": "spawn_fail"}), encoding="utf-8")
+    old_sessions = config_dir / "sessions-spawn999x1"
+    old_sessions.mkdir(parents=True, exist_ok=True)
+    (old_sessions / "session.json").write_text("{}", encoding="utf-8")
+
+    # 模拟在 move staged_sessions -> target_sessions 时抛异常
+    orig_move = shutil.move
+
+    def mock_move(src, dst, **kwargs):
+        if "sessions-slot-1" in str(dst):
+            raise OSError("Injected sessions move failure")
+        return orig_move(src, dst, **kwargs)
+
+    monkeypatch.setattr(shutil, "move", mock_move)
+
+    result = sm.migrate_legacy_spawns(config_dir)
+    assert result is False
+
+    # 验证完整回滚：原文件存在，目标文件不存在
+    assert old_cfg.exists()
+    assert old_sessions.exists()
+    assert (old_sessions / "session.json").exists()
+    assert not (config_dir / "config-slot-1.json").exists()
+    assert not (config_dir / "sessions-slot-1").exists()
+    assert not (config_dir / ".migration_staging").exists()
+
+
+def test_migrate_legacy_spawns_recovers_staged_remnants(tmp_path):
+    """测试启动迁移时若存在非空 .migration_staging 残留，能够恢复完成或清理。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    staging_dir = config_dir / ".migration_staging"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    (staging_dir / "config-slot-1.json").write_text(json.dumps({"character": "staged_pet"}), encoding="utf-8")
+
+    assert sm.migrate_legacy_spawns(config_dir) is True
+    # 验证已从 staging 恢复到目标位置
+    assert (config_dir / "config-slot-1.json").exists()
+    assert json.loads((config_dir / "config-slot-1.json").read_text(encoding="utf-8"))["character"] == "staged_pet"
+    assert not staging_dir.exists()
+
+
+def test_migrate_legacy_spawns_skips_occupied_target_slot(tmp_path):
+    """测试迁移目标槽位若被占用（持有锁），跳过该槽位并尝试下一槽位，保留旧配置。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    # 锁住 slot-1
+    slot1, h1 = sm.acquire_pet_slot(config_dir, preferred_slot=1)
+
+    old_cfg = config_dir / "config-spawn100x1.json"
+    old_cfg.write_text(json.dumps({"character": "spawn1"}), encoding="utf-8")
+
+    assert sm.migrate_legacy_spawns(config_dir) is True
+
+    # slot-1 被占用，应该迁移到 slot-2
+    assert not (config_dir / "config-slot-1.json").exists()
+    assert (config_dir / "config-slot-2.json").exists()
+    assert json.loads((config_dir / "config-slot-2.json").read_text(encoding="utf-8"))["character"] == "spawn1"
+
+    sm._unlock_file(h1)
+
+
+def test_app_main_rejects_instance_arg():
+    """测试 app.main 传入 --instance 参数时打印警告并返回 1 退出。"""
+    from pet import app as app_mod
+
+    ret = app_mod.main(["dsh-pet", "--instance", "pet2"])
+    assert ret == 1
+
+
+def test_app_main_validates_slot_arg():
+    """测试 app.main 校验 --slot 参数范围（0~127）及非法值。"""
+    from pet import app as app_mod
+
+    # 负数
+    assert app_mod.main(["dsh-pet", "--slot", "-1"]) == 1
+    # 超大值
+    assert app_mod.main(["dsh-pet", "--slot", "128"]) == 1
+    # 非法字符串
+    assert app_mod.main(["dsh-pet", "--slot", "abc"]) == 1
+    # 缺少值
+    assert app_mod.main(["dsh-pet", "--slot"]) == 1
 
 
 def test_autostart_slot0_fail_does_not_degrade(tmp_path):

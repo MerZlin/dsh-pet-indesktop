@@ -1166,6 +1166,11 @@ class ModernSettingsDialog(QDialog):
             SettingRow("collision_mass_scale", "质量倍率", "桌宠的基础质量加权倍率（0.5~2.0，默认 1.0）。", self.collision_mass_scale_spin),
             SettingRow("collision_impulse_cap", "冲量上限", "单次碰撞能施加的最大冲量上限（1000~12000，默认 9000）。", self.collision_impulse_cap_spin),
         ], behavior_content))
+        self.collision_policy_note = QLabel("碰撞参数由当前协调者桌宠的设置决定")
+        self.collision_policy_note.setObjectName("settingHint")
+        self.collision_policy_note.setWordWrap(True)
+        self.collision_policy_note.setContentsMargins(14, 0, 14, 0)
+        behavior_layout.addWidget(self.collision_policy_note)
         click_rows = [
             SettingRow("click_sound", "点击音效", "点击桌宠时播放轻量反馈音效。", self.click_sound_check),
             SettingRow("click_sound_pack", "音效音源", "选择预设音效包、自定义音频文件或文件夹随机播放。", self.click_sound_picker, stacked=True),

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import secrets
 import sys
@@ -20,6 +21,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from . import collision
 from .config import APP_DIR_NAME
+from . import slot_manager
 
 
 def collision_server_name(base=None) -> str:
@@ -45,7 +47,7 @@ class _CollisionWorker(QObject):
     error = Signal(str)
     _local_election_names: set[str] = set()
 
-    def __init__(self, name: str, runtime_id: str, instance_id: str, policy: dict[str, Any]):
+    def __init__(self, name: str, runtime_id: str, instance_id: str, policy: dict[str, Any], lock_path=None):
         super().__init__()
         self.name, self.runtime_id, self.instance_id = name, runtime_id, instance_id
         self.policy = dict(policy)
@@ -65,6 +67,13 @@ class _CollisionWorker(QObject):
         self._election_timer = None
         self._welcome_timer = None
         self._welcome_retries = 0
+        self._hello_sent = False
+        self._welcomed_peers: set[Any] = set()
+        self._last_control_message = 0.0
+        self._client_watchdog = None
+        self._coordinator_lock = None
+        self._lock_path = lock_path
+        self._last_snapshot_at = 0.0
         self._stopping = False
 
     @Slot()
@@ -86,12 +95,20 @@ class _CollisionWorker(QObject):
         if self._stopping or self.server is not None or self.socket is not None:
             return
         server = QLocalServer(self)
+        if self._lock_path is not None:
+            self._coordinator_lock = slot_manager.acquire_file_lock(self._lock_path)
+            if self._coordinator_lock is None:
+                server.deleteLater()
+                self._connect_client()
+                return
         if server.listen(self.name):
             # 同一 Qt 进程中的 QLocalServer 在 Windows 上可能允许并行
             # listen；进程内登记用于测试/嵌入式 harness 的同名候选收敛。
             if self.name in self._local_election_names:
                 server.close()
                 server.deleteLater()
+                slot_manager.release_file_lock(self._coordinator_lock)
+                self._coordinator_lock = None
                 self._connect_client()
                 return
             self._local_election_names.add(self.name)
@@ -102,6 +119,8 @@ class _CollisionWorker(QObject):
             return
         # 只有连接验证失败并短暂重试后才清理残留服务。
         server.deleteLater()
+        slot_manager.release_file_lock(self._coordinator_lock)
+        self._coordinator_lock = None
         self._connect_client()
 
     def _start_probe(self) -> None:
@@ -145,11 +164,20 @@ class _CollisionWorker(QObject):
     def _client_connected(self, socket) -> None:
         if socket is self.socket:
             self._had_client_connection = True
+            self._hello_sent = False
+            self._last_control_message = self._now()
             self._welcome_timer = QTimer(self)
             self._welcome_timer.setSingleShot(True)
             self._welcome_timer.timeout.connect(self._welcome_timed_out)
             self._welcome_timer.start(1000)
             self._send_hello()
+            self._client_watchdog = QTimer(self)
+            self._client_watchdog.timeout.connect(self._check_client_silence)
+            self._client_watchdog.start(500)
+
+    def _check_client_silence(self) -> None:
+        if self.socket is not None and self._had_client_connection and self._now() - self._last_control_message > 1.5:
+            self._welcome_timed_out()
 
     def _welcome_timed_out(self) -> None:
         """A connected but silent listener is a stale service endpoint."""
@@ -230,7 +258,9 @@ class _CollisionWorker(QObject):
                 if not runtime_id:
                     return
                 self.peers[socket] = runtime_id
-                self._send(socket, self._welcome())
+                if socket not in self._welcomed_peers:
+                    self._welcomed_peers.add(socket)
+                    self._send(socket, self._welcome())
             elif kind == "state":
                 runtime_id = self.peers.get(socket, self.runtime_id)
                 seq = int(message.get("seq", -1))
@@ -254,11 +284,13 @@ class _CollisionWorker(QObject):
                     self._welcome_timer.stop()
                     self._welcome_timer.deleteLater()
                     self._welcome_timer = None
-                self.epoch = epoch
-                self.role_changed.emit(False, epoch)
-                self.policy_changed.emit(message.get("policy") or {})
-                self.snapshot_ready.emit(message)
-                self._send_hello()
+                changed = epoch != self.epoch
+                self._last_control_message = self._now()
+                if changed:
+                    self.epoch = epoch
+                    self.role_changed.emit(False, epoch)
+                    self.policy_changed.emit(message.get("policy") or {})
+                    self.snapshot_ready.emit(message)
         elif kind == "snapshot":
             if message.get("epoch", self.epoch) == self.epoch:
                 self.snapshot_ready.emit(message)
@@ -275,6 +307,13 @@ class _CollisionWorker(QObject):
         self.server.deleteLater()
         self.server = None
         self._local_election_names.discard(self.name)
+        slot_manager.release_file_lock(self._coordinator_lock)
+        self._coordinator_lock = None
+        for socket in list(self.peers):
+            socket.disconnectFromServer()
+            socket.deleteLater()
+        self.peers.clear()
+        self.members.clear()
         for timer in self._timers:
             timer.stop()
             timer.deleteLater()
@@ -283,7 +322,8 @@ class _CollisionWorker(QObject):
         self._connect_client()
 
     def _send_hello(self) -> None:
-        if self.socket:
+        if self.socket and not self._hello_sent:
+            self._hello_sent = True
             self._send(self.socket, {"type": "hello", "runtime_id": self.runtime_id,
                                      "instance_id": self.instance_id, "pid": os.getpid(), "epoch": self.epoch})
 
@@ -297,6 +337,28 @@ class _CollisionWorker(QObject):
                                                  instance_id=self.instance_id, last_seen=self._now())
         elif self.socket:
             self._send(self.socket, dict(state, type="state"))
+
+    @Slot(object)
+    def set_policy(self, policy: dict[str, Any]) -> None:
+        """更新运行期碰撞策略（客户端/协调者共同路径）。
+
+        协调者配置优先：本进程为协调者时，碰撞求解直接使用本 policy；
+        非协调者时本地 policy 只在本进程未来接管协调者时才生效。
+        """
+        if self._stopping:
+            return
+        self.policy = dict(policy)
+
+    @Slot()
+    def submit_leave(self) -> None:
+        """客户端主动离开：立即向协调者发送 leave 帧，成员即时移除（不等 stale 超时）。
+
+        与 stop() 不同：只发 leave 不断开 socket，供 detach_collision_session 等
+        不销毁会话的退出路径使用。
+        """
+        if self._stopping or self.socket is None:
+            return
+        self._send(self.socket, {"type": "leave", "seq": int(self.latest_state.get("seq", 0)) + 1})
 
     def _start_coordinator_timers(self) -> None:
         heartbeat = QTimer(self)
@@ -314,7 +376,7 @@ class _CollisionWorker(QObject):
             now = self._now()
             for runtime_id, state in list(self.members.items()):
                 age = now - float(state.get("last_seen", now))
-                if age > 1.0:
+                if age > 3.0:
                     self._remove_member(runtime_id)
 
     def _coordinator_tick(self) -> None:
@@ -322,8 +384,13 @@ class _CollisionWorker(QObject):
             return
         now = self._now()
         active = []
-        for state in self.members.values():
-            if now - float(state.get("last_seen", now)) > 0.25:
+        # 迭代期间会 _remove_member（隐藏/暂停成员即时移除），必须用快照
+        for state in list(self.members.values()):
+            if now - float(state.get("last_seen", now)) > 1.2:
+                continue
+            flags = int(state.get("flags", 0))
+            if (flags & collision.FLAG_PAUSED) or not (flags & collision.FLAG_VISIBLE):
+                self._remove_member(str(state.get("runtime_id", "")))
                 continue
             if state.get("flags", 0) & collision.FLAG_VISIBLE:
                 defaults = {"vx": 0.0, "vy": 0.0, "mass": 1.0, "is_infinite_mass": False,
@@ -332,6 +399,7 @@ class _CollisionWorker(QObject):
                 keys = ("runtime_id", "x", "y", "radius_x", "radius_y", "vx", "vy", "mass",
                         "is_infinite_mass", "flags", "instance_id", "character", "scale", "w", "h")
                 values = {key: state.get(key, defaults.get(key, 0.0)) for key in keys}
+                values["is_infinite_mass"] = bool(int(values["flags"]) & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION))
                 values["mass"] = collision.calculate_mass(
                     values["radius_x"], values["radius_y"],
                     scale=float(values.get("scale", 0.72) or 0.72),
@@ -345,9 +413,14 @@ class _CollisionWorker(QObject):
             active, self.tick, self.overlap_history,
             restitution=self.policy["collision_restitution"], friction=self.policy["collision_friction"],
             impulse_cap=self.policy["collision_impulse_cap"])
-        for peer in self.peers:
-            self._send(peer, {"type": "snapshot", "epoch": self.epoch, "tick": self.tick,
-                              "members": [self._public_member(v) for v in self.members.values()]})
+        moving = any(math.hypot(float(v.get("vx", 0)), float(v.get("vy", 0))) > 20 or
+                     int(v.get("flags", 0)) & (collision.FLAG_THROWN | collision.FLAG_DRAGGING)
+                     for v in self.members.values())
+        if now - self._last_snapshot_at >= (0.05 if moving else 0.5):
+            self._last_snapshot_at = now
+            for peer in self.peers:
+                self._send(peer, {"type": "snapshot", "epoch": self.epoch, "tick": self.tick,
+                                  "members": [self._public_member(v) for v in self.members.values()]})
         for result in results:
             if result.j == 0 and result.sep == 0:
                 continue
@@ -361,6 +434,7 @@ class _CollisionWorker(QObject):
             self.members.pop(runtime_id, None)
 
     def _peer_lost(self, socket) -> None:
+        self._welcomed_peers.discard(socket)
         self._remove_member(self.peers.pop(socket, ""))
         try:
             socket.deleteLater()
@@ -376,6 +450,11 @@ class _CollisionWorker(QObject):
             self.socket.deleteLater()
         self.socket = None
         self._had_client_connection = False
+        self._hello_sent = False
+        if self._client_watchdog:
+            self._client_watchdog.stop()
+            self._client_watchdog.deleteLater()
+            self._client_watchdog = None
         if not self._stopping:
             # 不凭 error 信号删除命名服务，避免把存活协调者误判为残留。
             self._schedule_election()
@@ -396,6 +475,10 @@ class _CollisionWorker(QObject):
             self._probe.abort()
             self._probe.deleteLater()
             self._probe = None
+        if self._client_watchdog:
+            self._client_watchdog.stop()
+            self._client_watchdog.deleteLater()
+            self._client_watchdog = None
         if self.socket:
             socket = self.socket
             self.socket = None
@@ -415,6 +498,8 @@ class _CollisionWorker(QObject):
             self.server.deleteLater()
             self.server = None
             self._local_election_names.discard(self.name)
+        slot_manager.release_file_lock(self._coordinator_lock)
+        self._coordinator_lock = None
         for timer in self._timers:
             timer.stop()
             timer.deleteLater()
@@ -427,6 +512,8 @@ class _CollisionWorker(QObject):
 class CollisionIpcSession(QObject):
     """GUI 线程持有的 IPC facade；不暴露任何 socket 或成员表。"""
     state_submitted = Signal(object)
+    policy_submitted = Signal(object)
+    leave_submitted = Signal()
     impulse_ready = Signal(object)
     snapshot_ready = Signal(object)
     policy_changed = Signal(object)
@@ -443,7 +530,8 @@ class CollisionIpcSession(QObject):
                   "collision_mass_scale": float(config.get("collision_mass_scale", 1.0)),
                   "collision_impulse_cap": float(config.get("collision_impulse_cap", 9000.0))}
         self._worker = _CollisionWorker(server_name or collision_server_name(), self.runtime_id,
-                                        getattr(config, "instance_id", ""), policy)
+                                        getattr(config, "instance_id", ""), policy,
+                                        lock_path=config.dir / "collision-coordinator.lock")
         self._worker.moveToThread(self._thread)
         self._thread.finished.connect(self._worker.deleteLater)
         self._thread.started.connect(self._worker.start)
@@ -452,12 +540,22 @@ class CollisionIpcSession(QObject):
         self._worker.policy_changed.connect(self.policy_changed, Qt.ConnectionType.QueuedConnection)
         self._worker.role_changed.connect(self.role_changed, Qt.ConnectionType.QueuedConnection)
         self.state_submitted.connect(self._worker.submit_state, Qt.ConnectionType.QueuedConnection)
+        self.policy_submitted.connect(self._worker.set_policy, Qt.ConnectionType.QueuedConnection)
+        self.leave_submitted.connect(self._worker.submit_leave, Qt.ConnectionType.QueuedConnection)
 
     def start(self) -> None:
         self._thread.start()
 
     def submit_state(self, state: dict[str, Any]) -> None:
         self.state_submitted.emit(dict(state))
+
+    def update_policy(self, policy: dict[str, Any]) -> None:
+        """运行中更新碰撞策略：经 queued 调用到 worker 线程，线程安全。"""
+        self.policy_submitted.emit(dict(policy))
+
+    def submit_leave(self) -> None:
+        """主动向协调者发 leave：成员即时移除，不等 stale 超时。"""
+        self.leave_submitted.emit()
 
     def stop(self) -> None:
         if self._thread.isRunning():

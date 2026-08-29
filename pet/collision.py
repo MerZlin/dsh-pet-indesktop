@@ -379,6 +379,18 @@ def solve_multi_body_collision(
                     impulse_cap=impulse_cap,
                 )
 
+                # A persistent overlap must not keep carrying normal approach
+                # velocity into the next tick after the forced separation.
+                if consecutive >= 3:
+                    inv_a = 0.0 if m1.is_infinite_mass or m1.mass <= 0 else 1.0 / m1.mass
+                    inv_b = 0.0 if m2.is_infinite_mass or m2.mass <= 0 else 1.0 / m2.mass
+                    inv_sum = inv_a + inv_b
+                    vn = (m2.vx - m1.vx) * nx + (m2.vy - m1.vy) * ny
+                    if inv_sum > 0.0 and vn < 0.0:
+                        jn = -vn / inv_sum
+                        dvx_a, dvy_a = -jn * nx * inv_a, -jn * ny * inv_a
+                        dvx_b, dvy_b = jn * nx * inv_b, jn * ny * inv_b
+
                 pairs_data.append({
                     "pair": pair_key,
                     "m1": m1,
@@ -539,11 +551,22 @@ class FrameStreamDecoder:
 
             # 超限检查
             if length > self.max_frame_len or length < 0:
-                # 丢弃该超限帧头及后续字节直到可重同步（此处丢弃全部缓冲以防崩溃）
-                dropped = bytes(self._buffer)
-                self._buffer.clear()
+                dropped = bytes(self._buffer[:HEADER_SIZE])
+                del self._buffer[:HEADER_SIZE]
                 results.append(DecodeError(reason=f"Frame length {length} exceeds limit {self.max_frame_len}", raw_data=dropped))
-                break
+                # The payload length is untrusted, so discard only this header
+                # and search the remaining stream for the next plausible header.
+                sync_at = None
+                for offset in range(len(self._buffer) - HEADER_SIZE + 1):
+                    candidate = int.from_bytes(self._buffer[offset:offset + HEADER_SIZE], "big")
+                    if 0 < candidate <= self.max_frame_len:
+                        sync_at = offset
+                        break
+                if sync_at is None:
+                    self._buffer[:] = self._buffer[-(HEADER_SIZE - 1):]
+                    break
+                del self._buffer[:sync_at]
+                continue
 
             # 空帧处理 (length == 0)
             if length == 0:

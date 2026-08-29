@@ -328,6 +328,49 @@ class TestPositionSeparationAndMultiBody:
         assert overlap_of("A", "B") < 0.5
         assert overlap_of("B", "C") < 0.5
 
+    def test_force_full_clears_normal_approach_velocity(self):
+        """连续重叠第 3 tick（force_full）：完整分离并把法向接近速度置零，不再反弹抖动。
+
+        plan4 §4.2：连续 3 个 tick 仍重叠时强制完整分离一次并把法向接近速度置零。
+        只清相向分量、不动切向：分离后下一 tick 不再产生反弹冲量。
+        """
+        m1 = collision.MemberState(runtime_id="A", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
+                                   vx=80.0, vy=30.0, mass=1.0)
+        m2 = collision.MemberState(runtime_id="B", x=60.0, y=0.0, radius_x=50.0, radius_y=50.0,
+                                   vx=-80.0, vy=-10.0, mass=1.0)
+        history = {"A|B": 2}  # 前两 tick 已连续重叠，本次为第 3 tick
+        impulses, combined, new_history = collision.solve_multi_body_collision(
+            [m1, m2], tick=3, overlap_history=history, restitution=0.82,
+        )
+
+        assert new_history["A|B"] == 3
+        assert len(impulses) == 1
+        res = impulses[0]
+        # force_full：40px 重叠一次完整修正（无 min/max 截断）
+        assert res.sep == pytest.approx(40.0, abs=1e-6)
+        # 法向接近速度置零：施加冲量后相对法向速度 == 0
+        # （若走正常恢复系数 0.82 会反弹为 vn_after ≈ +131.2）
+        vn_after = ((m2.vx + res.dvx_b) - (m1.vx + res.dvx_a)) * res.nx + \
+                   ((m2.vy + res.dvy_b) - (m1.vy + res.dvy_a)) * res.ny
+        assert vn_after == pytest.approx(0.0, abs=1e-6)
+        # 只清相向分量：切向速度分量不被改动（dvy 增量为 0）
+        assert res.dvy_a == pytest.approx(0.0, abs=1e-9)
+        assert res.dvy_b == pytest.approx(0.0, abs=1e-9)
+        # 分离后中心距 == 半径和，下一 tick 不再碰撞/产生冲量（不反弹抖动）
+        pos_a = m1.x + combined["A"][2]
+        pos_b = m2.x + combined["B"][2]
+        assert pos_b - pos_a == pytest.approx(100.0, abs=1e-6)
+        settled_a = collision.MemberState(runtime_id="A", x=pos_a, y=0.0,
+                                          radius_x=50.0, radius_y=50.0,
+                                          vx=0.0, vy=30.0, mass=1.0)
+        settled_b = collision.MemberState(runtime_id="B", x=pos_b, y=0.0,
+                                          radius_x=50.0, radius_y=50.0,
+                                          vx=0.0, vy=-10.0, mass=1.0)
+        impulses4, _, _ = collision.solve_multi_body_collision(
+            [settled_a, settled_b], tick=4, overlap_history=new_history,
+        )
+        assert impulses4 == []
+
 
 class TestPhysicsSoftClampSpeedIntegration:
     """验证冲量加到速度后与 physics.soft_clamp_speed 的总速度钳制集成。"""

@@ -208,7 +208,7 @@ class PetApp:
         QTimer.singleShot(3500, self._check_autostart_wanted)
 
     def _on_about_to_quit(self) -> None:
-        """退出前保存当前有效窗口的位置。
+        """退出前保存当前有效窗口的位置并释放资源。
 
         aboutToQuit 只绑定一次自本控制器；切换角色会重建桌宠窗口，信号
         触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
@@ -216,6 +216,12 @@ class PetApp:
         if self.win is not None:
             self.win._save_position()
         self.collision_ipc.stop()
+        if self.slot_handle is not None:
+            try:
+                slot_manager_mod._unlock_file(self.slot_handle)
+            except Exception:
+                pass
+            self.slot_handle = None
 
     def _set_autostart(self, enabled: bool, win=None) -> bool:
         ok = autostart_mod.set_enabled(bool(enabled))
@@ -779,22 +785,26 @@ def _mac_set_dock_icon_visible(visible: bool) -> None:
 
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     argv = list(argv if argv is not None else sys.argv)
-    explicit_instance_id = None
     preferred_slot = None
 
     if "--instance" in argv:
-        index = argv.index("--instance")
-        if index + 1 < len(argv):
-            explicit_instance_id = str(argv[index + 1])
+        logging.error("参数 --instance 已弃用并移除，多开实例请改用 --slot <0-127>")
+        return 1
 
     if "--slot" in argv:
         index = argv.index("--slot")
         if index + 1 < len(argv):
             try:
                 preferred_slot = int(argv[index + 1])
+                if preferred_slot < 0 or preferred_slot > 127:
+                    logging.error("无效的 --slot 参数 (必须在 0~127 范围内): %s", argv[index + 1])
+                    return 1
             except ValueError:
                 logging.error("无效的 --slot 参数: %s", argv[index + 1])
                 return 1
+        else:
+            logging.error("缺少 --slot 参数值")
+            return 1
 
     app = QApplication(argv)
     app.setApplicationName(APP_DIR_NAME)
@@ -803,14 +813,11 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     # 确定配置根目录
     config_dir = _default_base() / APP_DIR_NAME
 
-    # 执行槽位竞争或使用显式 instance_id
+    # 执行槽位竞争取得排他锁
     slot_handle = None
     slot_id = None
 
-    if explicit_instance_id is not None:
-        instance_id = explicit_instance_id
-    else:
-        # 在 Config 前取得槽位排他锁
+    try:
         try:
             slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config_dir, preferred_slot=preferred_slot)
         except Exception as exc:
@@ -825,26 +832,33 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         if slot_id > 0:
             slot_manager_mod.seed_slot_config_if_needed(config_dir, slot_id)
 
-    # 迁移旧 spawn 实例（主槽或无并发运行旧实例时触发）
-    if slot_id == 0:
-        slot_manager_mod.migrate_legacy_spawns(config_dir)
+        # 迁移旧 spawn 实例（主槽或无并发运行旧实例时触发）
+        if slot_id == 0:
+            slot_manager_mod.migrate_legacy_spawns(config_dir)
 
-    config = Config(instance_id=instance_id)
-    _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
-    _setup_logging(config)
-    logging.info("dsh-pet-standalone 启动 (slot: %s, instance: %s)", slot_id, instance_id)
-    _cleanup_stale_runtime_dirs()
+        config = Config(instance_id=instance_id)
+        _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
+        _setup_logging(config)
+        logging.info("dsh-pet-standalone 启动 (slot: %s, instance: %s)", slot_id, instance_id)
+        _cleanup_stale_runtime_dirs()
 
-    controller = PetApp(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id)
-    try:
-        controller.start()
-    except Exception as exc:
-        logging.exception("启动失败")
-        _show_startup_error("dsh-pet-standalone", str(exc))
-        return 1
+        controller = PetApp(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id)
+        try:
+            controller.start()
+        except Exception as exc:
+            logging.exception("启动失败")
+            _show_startup_error("dsh-pet-standalone", str(exc))
+            return 1
 
-    logging.info("进入事件循环")
-    return app.exec()
+        logging.info("进入事件循环")
+        return app.exec()
+    finally:
+        if slot_handle is not None:
+            try:
+                slot_manager_mod._unlock_file(slot_handle)
+            except Exception:
+                pass
+            slot_handle = None
 
 
 if __name__ == '__main__':

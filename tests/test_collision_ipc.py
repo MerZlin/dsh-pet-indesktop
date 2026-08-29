@@ -151,3 +151,55 @@ session.stop()
     survivor_info = json.loads(survivor.stdout.readline())
     assert any(role[0] for role in survivor_info["roles"])
     assert survivor.wait(timeout=5) == 0
+
+
+def test_submit_leave_removes_member_immediately(tmp_path):
+    """客户端 submit_leave 后，协调者成员表即时移除（不等 stale 超时）。"""
+    QApplication.instance() or QApplication([])
+    name = "dsh-test-collision-leave-" + uuid.uuid4().hex
+    coordinator = CollisionIpcSession(Config(tmp_path, instance_id="slot-c"), server_name=name)
+    client = CollisionIpcSession(Config(tmp_path, instance_id="slot-p"), server_name=name)
+    coordinator.start()
+    client.start()
+    try:
+        _pump(1.2)
+        if coordinator._worker.server is not None:
+            coord_worker, client_session = coordinator._worker, client
+        else:
+            coord_worker, client_session = client._worker, coordinator
+        assert coord_worker.server is not None
+
+        # 客户端上报 state 成为成员
+        client_session.submit_state(_state(1, x=10.0))
+        _pump(0.4)
+        assert client_session.runtime_id in coord_worker.members
+
+        # 发送 leave：成员即时移除（3s stale 移除阈值远未到）
+        client_session.submit_leave()
+        _pump(0.4)
+        assert client_session.runtime_id not in coord_worker.members
+    finally:
+        coordinator.stop()
+        client.stop()
+
+
+def test_update_policy_live_applies_to_worker(tmp_path):
+    """运行中 update_policy：经 queued 接线更新到 worker 线程的 policy。"""
+    QApplication.instance() or QApplication([])
+    name = "dsh-test-collision-policy-" + uuid.uuid4().hex
+    session = CollisionIpcSession(Config(tmp_path, instance_id="slot-p"), server_name=name)
+    session.start()
+    try:
+        _pump(0.5)
+        session.update_policy({"collision_enabled": True, "collision_restitution": 0.5,
+                               "collision_friction": 0.15, "collision_mass_scale": 1.5,
+                               "collision_impulse_cap": 6000.0})
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and session._worker.policy.get("collision_restitution") != 0.5:
+            _pump(0.05)
+        assert session._worker.policy["collision_restitution"] == pytest.approx(0.5)
+        assert session._worker.policy["collision_friction"] == pytest.approx(0.15)
+        assert session._worker.policy["collision_mass_scale"] == pytest.approx(1.5)
+        assert session._worker.policy["collision_impulse_cap"] == pytest.approx(6000.0)
+    finally:
+        session.stop()

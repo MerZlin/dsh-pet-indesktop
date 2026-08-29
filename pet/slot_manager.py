@@ -91,12 +91,19 @@ def _try_acquire_slot_lock(config_dir: Path, slot_id: int) -> BinaryIO | None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        # a+b 打开或创建文件，不使用 open(..., "x")，绝不删除 lock 文件
-        f = open(lock_path, "a+b")
+        if not lock_path.exists():
+            # 文件不存在：以 w+b 创建，先写入初始定长空字节占位
+            f = open(lock_path, "w+b")
+            f.write(b" " * PID_RECORD_LEN)
+            f.flush()
+            f.seek(0)
+        else:
+            # 文件已存在：以 r+b 打开，不截断、不使用 a+b 追加
+            f = open(lock_path, "r+b")
     except OSError:
         return None
 
-    # 尝试加锁
+    # 尝试加锁 1 字节排他锁
     if not _try_lock_file(f):
         try:
             f.close()
@@ -104,7 +111,7 @@ def _try_acquire_slot_lock(config_dir: Path, slot_id: int) -> BinaryIO | None:
             pass
         return None
 
-    # 加锁成功后，写入定长 PID 记录并 flush
+    # 加锁成功后，写入定长 PID 记录到文件头并 flush
     try:
         f.seek(0)
         f.write(_format_pid_record(os.getpid()))
@@ -115,6 +122,39 @@ def _try_acquire_slot_lock(config_dir: Path, slot_id: int) -> BinaryIO | None:
         return None
 
     return f
+
+
+def acquire_file_lock(lock_path: Path | str) -> BinaryIO | None:
+    """Try to acquire the shared one-byte kernel lock at an arbitrary path."""
+    path = Path(lock_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if not path.exists():
+            handle = open(path, "w+b")
+            handle.write(b" " * PID_RECORD_LEN)
+            handle.flush()
+            handle.seek(0)
+        else:
+            handle = open(path, "r+b")
+    except OSError:
+        return None
+    if not _try_lock_file(handle):
+        handle.close()
+        return None
+    try:
+        handle.seek(0)
+        handle.write(_format_pid_record(os.getpid()))
+        handle.flush()
+        handle.seek(0)
+    except OSError:
+        _unlock_file(handle)
+        return None
+    return handle
+
+
+def release_file_lock(handle: BinaryIO | None) -> None:
+    if handle is not None:
+        _unlock_file(handle)
 
 
 def acquire_pet_slot(
@@ -288,6 +328,30 @@ def backup_corrupt_config(config_file: Path) -> Path | None:
         return None
 
 
+def _recover_migration_staging(config_path: Path, staging_dir: Path) -> None:
+    """恢复或清理残留的 .migration_staging 目录。
+
+    若上次迁移中途被杀，staging 内可能残留尚未移入目标或尚未回滚的文件。
+    若 staging 内有文件，将它们按元数据/对应旧名字或就近还原。
+    为保证幂等与安全：
+    staging 中的 target 格式文件（如 config-slot-N.json），若目标路径不存在则移入目标路径；若目标已存在则忽略。
+    清理完成后移除 staging 目录。
+    """
+    if not staging_dir.is_dir():
+        return
+    for item in staging_dir.iterdir():
+        target = config_path / item.name
+        if not target.exists():
+            try:
+                shutil.move(str(item), str(target))
+            except Exception as exc:
+                logging.warning("恢复 staging 文件失败: %s -> %s (%s)", item, target, exc)
+    try:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+
 def migrate_legacy_spawns(config_dir: Path | str) -> bool:
     """将旧版 config-spawn*.json 和 sessions-spawn*/ 原子迁移到 slot-1, slot-2, ...。
 
@@ -295,12 +359,19 @@ def migrate_legacy_spawns(config_dir: Path | str) -> bool:
     1. 仅在确认没有运行中的旧 spawn 实例时进行；
     2. 按旧 config 的 mtime 升序稳定排序，依次映射到 slot-1, slot-2, ...；
     3. config 与对应 sessions 作为原子迁移单元，使用 staging 临时目录回滚；
-    4. 完成后写入 migration-spawns.done 标记文件；
-    5. 未迁移或无法配对的文件一律保留不删。
+    4. 目标槽位需尝试获取该槽位锁，被占用则跳过该槽位（保留原文件，记 warning）；
+    5. config 已移到目标后 sessions 移动失败必须把目标 config 移回原路径（完整回滚）；
+    6. 启动时检测到 .migration_staging 非空，先恢复或回滚上次中断的迁移；
+    7. 完成后写入 migration-spawns.done 标记文件；
+    8. 未迁移或无法配对的文件一律保留不删。
     """
     config_path = Path(config_dir)
     if not config_path.is_dir():
         return True
+
+    staging_dir = config_path / ".migration_staging"
+    if staging_dir.is_dir():
+        _recover_migration_staging(config_path, staging_dir)
 
     marker_file = config_path / "migration-spawns.done"
     if marker_file.exists():
@@ -346,19 +417,10 @@ def migrate_legacy_spawns(config_dir: Path | str) -> bool:
 
     # 找到目标 slot-1, slot-2 等空闲槽位
     slot_idx = 1
-    staging_dir = config_path / ".migration_staging"
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     success_all = True
     for old_cfg in old_configs:
-        # 寻找下一个目标 slot 文件不存在的 slot ID
-        while True:
-            target_cfg = get_config_path_for_slot(config_path, slot_idx)
-            target_sessions = get_sessions_dir_for_slot(config_path, slot_idx)
-            if not target_cfg.exists() and not target_sessions.exists():
-                break
-            slot_idx += 1
-
         spawn_name = old_cfg.stem.removeprefix("config-")
         old_sessions = config_path / f"sessions-{spawn_name}"
 
@@ -369,30 +431,64 @@ def migrate_legacy_spawns(config_dir: Path | str) -> bool:
             logging.warning("旧 spawn 配置损坏，跳过迁移: %s (%s)", old_cfg, exc)
             continue
 
-        # 执行单元原子移动
+        # 寻找下一个目标 slot 文件不存在且能取得锁的 slot ID
+        target_lock_handle = None
+        target_cfg = None
+        target_sessions = None
+        while True:
+            t_cfg = get_config_path_for_slot(config_path, slot_idx)
+            t_sessions = get_sessions_dir_for_slot(config_path, slot_idx)
+            if not t_cfg.exists() and not t_sessions.exists():
+                # 尝试取得目标槽位锁
+                lock_h = _try_acquire_slot_lock(config_path, slot_idx)
+                if lock_h is not None:
+                    target_lock_handle = lock_h
+                    target_cfg = t_cfg
+                    target_sessions = t_sessions
+                    break
+                else:
+                    logging.warning("槽位 slot-%s 已被占用，跳过该槽位", slot_idx)
+            slot_idx += 1
+
+        # 执行单元原子移动（先 staging 再 target）
         staged_cfg = staging_dir / target_cfg.name
         staged_sessions = staging_dir / target_sessions.name if old_sessions.is_dir() else None
 
+        step = 0  # 0: 未动, 1: old->staging, 2: staged_cfg->target_cfg, 3: staged_sessions->target_sessions
         try:
             shutil.move(str(old_cfg), str(staged_cfg))
             if staged_sessions and old_sessions.is_dir():
                 shutil.move(str(old_sessions), str(staged_sessions))
+            step = 1
 
             shutil.move(str(staged_cfg), str(target_cfg))
+            step = 2
+
             if staged_sessions and staged_sessions.exists():
                 shutil.move(str(staged_sessions), str(target_sessions))
+                step = 3
+
             slot_idx += 1
         except Exception as exc:
             logging.error("迁移单元失败: %s -> slot-%s (%s)", old_cfg, slot_idx, exc)
-            # 回滚
+            # 完整回滚到迁移前状态
             try:
-                if staged_cfg.exists():
+                # 无论在哪一步出错，若 target 或 staging 存在目标文件，统一撤回至 old 路径
+                if target_cfg.exists():
+                    shutil.move(str(target_cfg), str(old_cfg))
+                elif staged_cfg.exists():
                     shutil.move(str(staged_cfg), str(old_cfg))
-                if staged_sessions and staged_sessions.exists():
+
+                if target_sessions.exists():
+                    shutil.move(str(target_sessions), str(old_sessions))
+                elif staged_sessions and staged_sessions.exists():
                     shutil.move(str(staged_sessions), str(old_sessions))
-            except Exception:
-                pass
+            except Exception as rollback_exc:
+                logging.error("回滚迁移单元失败: %s (%s)", old_cfg, rollback_exc)
             success_all = False
+        finally:
+            if target_lock_handle is not None:
+                _unlock_file(target_lock_handle)
 
     try:
         shutil.rmtree(staging_dir, ignore_errors=True)
