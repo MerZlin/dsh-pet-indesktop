@@ -305,7 +305,7 @@ class WindowsPerPixelHitTestFilter(QAbstractNativeEventFilter):
             return False, 0
         win = self._window
         try:
-            if int(msg.hwnd) != int(win.winId()):
+            if int(msg.hWnd) != int(win.winId()):
                 return False, 0
             x = ctypes.c_short(msg.lParam & 0xFFFF).value
             y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
@@ -442,6 +442,10 @@ class PetWindow(QWidget):
         # Visibility and z-order are separate: always keep the pet visible,
         # then use WindowStaysOnTopHint/NSWindow level for the on-top setting.
         _keep_macos_tool_window_visible(self)
+        # 逐像素命中测试过滤器（仅 Windows）：必须在安装前先初始化为 None，
+        # 安装后绝不能再赋值 None——installNativeEventFilter 不接管 Python 对象
+        # 所有权，丢失引用会让过滤器被 GC 回收，命中测试静默失效。
+        self._hit_filter: WindowsPerPixelHitTestFilter | None = None
         app = QApplication.instance()
         if app is not None:
             app.applicationStateChanged.connect(self._on_application_state_changed)
@@ -459,7 +463,6 @@ class PetWindow(QWidget):
         # 角色可见轮廓（窗口局部坐标）与逐像素命中缓存；贴边功能复用 _mask_bounds
         self._mask_bounds: QRect | None = None
         self._hit_alpha_image: QImage | None = None
-        self._hit_filter: WindowsPerPixelHitTestFilter | None = None
         # 窗口隐藏时暂停动画解码/定时器；显示时由 showEvent 恢复
         self._hidden_paused = False
         self._ended_fired = False

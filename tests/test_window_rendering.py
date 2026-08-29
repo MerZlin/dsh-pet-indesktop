@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtCore import QPoint, QRect, Qt
@@ -88,6 +89,57 @@ def test_is_transparent_at_uses_frame_alpha():
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(10, 10)) is False
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(50, 10)) is True
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(10, 2)) is True
+
+
+def test_hit_filter_reference_survives_init():
+    """回归：_hit_filter 不能在安装后被重置为 None（否则 GC 回收、命中测试静默失效）。"""
+    _qapp()
+    import sys
+    if sys.platform != "win32":
+        import pytest
+        pytest.skip("逐像素命中测试仅 Windows")
+
+    import tempfile
+    from pet.config import Config
+    from pet.library import MovieLibrary
+    lib = MovieLibrary(character_id='shenshen')
+    win = window_mod.PetWindow(lib, Config(base=Path(tempfile.mkdtemp())))
+    assert win._hit_filter is not None, "_hit_filter 被后置的 = None 覆盖，过滤器会被 GC 回收"
+    win.close()
+
+
+def test_hit_filter_hwnd_attribute():
+    """回归：wintypes.MSG 的窗口句柄字段是 hWnd（大写 W），写错会被 except 静默吞掉。"""
+    _qapp()
+    import sys
+    if sys.platform != "win32":
+        import pytest
+        pytest.skip("逐像素命中测试仅 Windows")
+
+    import ctypes, tempfile
+    from ctypes import wintypes
+    from pet.config import Config
+    from pet.library import MovieLibrary
+    lib = MovieLibrary(character_id='shenshen')
+    win = window_mod.PetWindow(lib, Config(base=Path(tempfile.mkdtemp())))
+    filt = win._hit_filter
+    assert filt is not None
+
+    msg = wintypes.MSG()
+    msg.hWnd = int(win.winId())
+    msg.message = 0x0084  # WM_NCHITTEST
+    win.move(-3000, -3000)  # 屏幕外避免干扰
+    win.show()
+    import time; time.sleep(1)
+    QApplication.processEvents()
+
+    # 人物中心 → HTCLIENT(1)；窗口边缘空白 → HTTRANSPARENT(-1)
+    # lParam: 低位 = x, 高位 = y（带符号 16 位）
+    gx, gy = -3000 + 230, -3000 + 162
+    msg.lParam = ((gy & 0xFFFF) << 16) | (gx & 0xFFFF)
+    result = filt.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg))
+    assert result[0] is True and result[1] == 1, f"人物中心应返回 HTCLIENT，实际 {result}"
+    win.close()
 
 
 def test_visible_content_rect_uses_character_region():
