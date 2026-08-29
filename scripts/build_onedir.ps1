@@ -46,6 +46,8 @@ $noChat = $variants[$Variant].NoChat
 $datas = if ($isGif) { 'assets/characters_gif;assets/characters_gif' } else { 'assets/characters;assets/characters' }
 # No-chat builds exclude the chat subsystem and keyring (kept out of the bundle)
 $excludes = if ($noChat) { @('--exclude-module', 'pet.chat', '--exclude-module', 'keyring') } else { @() }
+# Chat 版必须显式收集 keyring（API Key 系统安全存储）；no-chat 不收集
+$keyringCollect = if ($noChat) { @() } else { @('--collect-all', 'keyring') }
 $chatData = if ($noChat) { @() } else {
     @(
         '--add-data', 'pet\chat\legacy_styles.qss;pet\chat',
@@ -79,6 +81,7 @@ if (-not $SkipBuild) {
         --collect-all imageio_ffmpeg `
         --collect-all certifi `
         --collect-all PySide6.QtMultimedia `
+        @keyringCollect `
         --add-data $datas `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
         --add-data "pet\menu_templates;pet\menu_templates" `
