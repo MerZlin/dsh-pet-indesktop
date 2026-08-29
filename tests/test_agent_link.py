@@ -744,12 +744,37 @@ class TestAgentLinkBubbles:
         mgr_on, win_on, bubbles_on, clock_on = self._make_mgr(tmp_path, agent_link_cfg={"notify_state": True})
         mgr_on._on_agent_state("dsh", "thinking")
         assert len(bubbles_on) == 1
-        assert "开始干活啦" in bubbles_on[0]
+        assert "正在深度思考" in bubbles_on[0]
 
         clock_on[0] += 3.0
         mgr_on._on_agent_state("dsh", "working")
-        # 连续 busy 状态，第二次不应重复弹「开始干活啦」
+        # 连续 busy 状态，thinking→working 互跳不重复弹
         assert len(bubbles_on) == 1
+
+        # idle 后再 working → 弹「开始干活啦」
+        clock_on[0] += 3.0
+        mgr_on._on_agent_state("dsh", "idle")
+        clock_on[0] += 3.0
+        mgr_on._on_agent_state("dsh", "working")
+        assert len(bubbles_on) == 2
+        assert "开始干活啦" in bubbles_on[1]
+
+    def test_thinking_text_custom_override(self, tmp_path):
+        """自定义 thinking 文案：agent_link.thinking_text 非空时优先使用，支持 {name} 占位符。"""
+        mgr, win, bubbles, clock = self._make_mgr(
+            tmp_path, agent_link_cfg={"notify_state": True, "thinking_text": "{name} 大脑飞速运转中……"}
+        )
+        mgr._on_agent_state("dsh", "thinking")
+        assert len(bubbles) == 1
+        assert "DSH 大脑飞速运转中……" == bubbles[0]
+        assert "深度思考" not in bubbles[0]
+
+        # 空字符串 → 回退默认
+        mgr2, win2, bubbles2, _ = self._make_mgr(
+            tmp_path / "b", agent_link_cfg={"notify_state": True, "thinking_text": ""}
+        )
+        mgr2._on_agent_state("dsh", "thinking")
+        assert "大肥鱼正在深度思考" in bubbles2[0]
 
     def test_jitter_cancel_done_check(self, tmp_path):
         """4. working→idle→working 抖动：idle 后 pending 存在，
