@@ -2313,14 +2313,25 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
 
 def test_external_character_dirs_uses_variant_then_legacy_fallback(tmp_path, monkeypatch):
     """外部角色目录应优先变体目录，并保留旧 dsh-pet-standalone 目录兜底。"""
+    import sys
+
     import pet.catalog as catalog_mod
     from pet import config as config_mod
 
     monkeypatch.setattr(config_mod, "APP_DIR_NAME", "dsh-pet-standalone-webm-chat")
-    monkeypatch.setenv("APPDATA", str(tmp_path))
+    # 数据目录按平台走 APPDATA / Library/Application Support / XDG_CONFIG_HOME
+    if sys.platform == "win32":
+        root = tmp_path
+        monkeypatch.setenv("APPDATA", str(tmp_path))
+    elif sys.platform == "darwin":
+        root = tmp_path / "Library" / "Application Support"
+        monkeypatch.setenv("HOME", str(tmp_path))
+    else:
+        root = tmp_path
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     dirs = catalog_mod.external_character_dirs()
-    variant = tmp_path / "dsh-pet-standalone-webm-chat" / "characters"
-    legacy = tmp_path / "dsh-pet-standalone" / "characters"
+    variant = root / "dsh-pet-standalone-webm-chat" / "characters"
+    legacy = root / "dsh-pet-standalone" / "characters"
     assert variant in dirs
     assert legacy in dirs
     assert dirs.index(variant) < dirs.index(legacy)  # 新目录优先
@@ -2328,11 +2339,21 @@ def test_external_character_dirs_uses_variant_then_legacy_fallback(tmp_path, mon
 
 def test_external_character_dirs_dedupes_base_dir(tmp_path, monkeypatch):
     """非变体（APP_DIR_NAME == 默认）时旧目录不被重复追加。"""
+    import sys
+
     import pet.catalog as catalog_mod
     from pet import config as config_mod
 
     monkeypatch.setattr(config_mod, "APP_DIR_NAME", "dsh-pet-standalone")
-    monkeypatch.setenv("APPDATA", str(tmp_path))
+    if sys.platform == "win32":
+        root = tmp_path
+        monkeypatch.setenv("APPDATA", str(tmp_path))
+    elif sys.platform == "darwin":
+        root = tmp_path / "Library" / "Application Support"
+        monkeypatch.setenv("HOME", str(tmp_path))
+    else:
+        root = tmp_path
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     dirs = catalog_mod.external_character_dirs()
-    base = tmp_path / "dsh-pet-standalone" / "characters"
+    base = root / "dsh-pet-standalone" / "characters"
     assert dirs.count(base) == 1
