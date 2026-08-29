@@ -277,8 +277,38 @@ class PetApp:
         threading.Thread(target=worker, daemon=True, name="pet-update-check").start()
 
     def sync_look_to_chat(self, user_text: str, reply: str) -> None:
+        """把「看看屏幕/主动识屏」的问答同步进 AI 对话记录（issue #24）。
+
+        聊天窗口已创建 → 走窗口内同步（含界面即时刷新）；
+        聊天窗口从未打开 → 直接写入当前角色最新会话（无则新建），之后再打开
+        聊天窗口即可在历史里回看全文——气泡里被省略/分页的内容不再无处可查。
+        """
+        if not self.enable_chat or not str(reply or "").strip():
+            return
         if self.chat_window is not None and hasattr(self.chat_window, "append_look_sync"):
             self.chat_window.append_look_sync(user_text, reply)
+            return
+        try:
+            from .chat.models import ChatMessage
+            from .chat.session_store import SessionStore
+
+            store = SessionStore(self.config.dir, getattr(self.config, "instance_id", ""))
+            character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
+            sessions = store.list(character_id)
+            if sessions:
+                session = sessions[0]
+            else:
+                settings = self.config.chat_settings()
+                session = store.create(
+                    character_id,
+                    settings.active_provider,
+                    settings.default_system_prompt,
+                )
+            session.messages.append(ChatMessage("user", str(user_text)))
+            session.messages.append(ChatMessage("assistant", str(reply)))
+            store.save(session)
+        except Exception:
+            logging.exception("同步识屏问答到会话记录失败")
 
     def _apply_spawn_offset(self) -> None:
         """让新孵化的桌宠与母桌宠错开，避免两个窗口完全重叠。"""

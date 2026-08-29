@@ -12,6 +12,7 @@ from pet.speech_bubble import (
     bubble_max_lines,
     elide_bubble_text,
     normalize_bubble_text,
+    paginate_bubble_text,
 )
 
 
@@ -68,6 +69,51 @@ def test_elide_bubble_text_max_lines_6():
     lines_35 = elided_35.split("\n")
     assert len(lines_35) == 6
     assert "…" in lines_35[-1] or "..." in lines_35[-1]
+
+
+def test_paginate_bubble_text_single_page():
+    _get_app()
+    font = QFont("Arial", 12)
+    metrics = QFontMetrics(font)
+    char = "测"
+    line_w = metrics.horizontalAdvance(char * 5)
+
+    # 一页装得下的文本 → 单页、无截断、无省略号
+    pages = paginate_bubble_text(metrics, char * 15, line_w, max_lines=3)
+    assert len(pages) == 1
+    assert pages[0] == "\n".join([char * 5] * 3)
+    assert "…" not in pages[0]
+
+    # 空文本 → 空列表
+    assert paginate_bubble_text(metrics, "", line_w) == []
+
+
+def test_paginate_bubble_text_multiple_pages_keeps_full_content():
+    _get_app()
+    font = QFont("Arial", 12)
+    metrics = QFontMetrics(font)
+    char = "测"
+    line_w = metrics.horizontalAdvance(char * 5)
+
+    # 35 字符 = 7 行，3 行一页 → 3 页；每页不超过 max_lines 行
+    text_35 = char * 35
+    pages = paginate_bubble_text(metrics, text_35, line_w, max_lines=3)
+    assert len(pages) == 3
+    for page in pages:
+        assert len(page.split("\n")) <= 3
+    # 全文无损：拼接所有页去掉换行后 == 原始文本（对比 elide 的截断行为）
+    assert "\n".join(pages).replace("\n", "") == text_35
+    assert "…" not in "\n".join(pages)
+
+    # 6 行恰好一页（bubble_max_lines 对长文本的 6 行上限）
+    text_30 = char * 30
+    pages_6 = paginate_bubble_text(metrics, text_30, line_w, max_lines=6)
+    assert len(pages_6) == 1
+
+    # 37 字符 = 8 行，6 行一页 → 2 页，全文仍在
+    pages_long = paginate_bubble_text(metrics, char * 37, line_w, max_lines=6)
+    assert len(pages_long) == 2
+    assert "\n".join(pages_long).replace("\n", "") == char * 37
 
 
 def test_breath_size_for_content_short_text_matches_legacy():

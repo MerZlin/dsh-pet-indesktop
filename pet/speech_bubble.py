@@ -137,6 +137,41 @@ def elide_bubble_text(
     return "\n".join(lines[:max_lines])
 
 
+def paginate_bubble_text(
+    metrics: QFontMetrics,
+    text: str,
+    width: int,
+    max_lines: int = 3,
+) -> list[str]:
+    """Wrap text into pages of at most ``max_lines`` lines each — no elision.
+
+    Unlike :func:`elide_bubble_text`, no content is ever cut: long text is
+    split into several pages so the whole message can be shown by flipping
+    pages.  Returns a list of page strings (each already contains ``\n``
+    line breaks); a single-element list means one page suffices.
+    """
+    value = normalize_bubble_text(text)
+    if not value:
+        return []
+    lines: list[str] = []
+    current = ""
+    for index, char in enumerate(value):
+        candidate = current + char
+        if current and metrics.horizontalAdvance(candidate) > width:
+            lines.append(current)
+            current = char
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    if len(lines) <= max_lines:
+        return ["\n".join(lines)]
+    return [
+        "\n".join(lines[start : start + max_lines])
+        for start in range(0, len(lines), max_lines)
+    ]
+
+
 def bubble_rect_for_anchor(
     anchor_rect: QRect,
     bubble_size: QSize,
@@ -217,6 +252,22 @@ class PetSpeechBubble(QFrame):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(13, 10, 13, 17)
         self._layout.addWidget(self.label)
+        self._page_indicator = QLabel(self)
+        self._page_indicator.setObjectName("pet-page-indicator")
+        self._page_indicator.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._page_indicator.hide()
+        self._layout.addWidget(self._page_indicator, 0, Qt.AlignmentFlag.AlignRight)
+        # 长文本分页状态：页列表 + 当前页 + 自动翻页定时器。
+        # 气泡对鼠标全透明（WA_TransparentForMouseEvents），无法靠点击翻页，
+        # 因此采用「每页停留一小段后自动翻下一页」的方式保证全文可读完。
+        self._pages: list[str] = []
+        self._page_index = 0
+        self._page_interval_ms = 0
+        self._page_timer = QTimer(self)
+        self._page_timer.setSingleShot(True)
+        self._page_timer.timeout.connect(self._on_page_timeout)
         self._style_id = ""
         self._preset = BUBBLE_STYLE_PRESETS["classic_top"]
         self._anchor_rect = QRect()
@@ -279,6 +330,10 @@ class PetSpeechBubble(QFrame):
         self.label.setStyleSheet(
             "QLabel#pet-speech-label { background: transparent; border: none; padding: 0; "
             f"color: {self._preset['foreground']}; font-size: 13px; }}"
+        )
+        self._page_indicator.setStyleSheet(
+            "QLabel#pet-page-indicator { background: transparent; border: none; padding: 0; "
+            f"color: {self._preset['foreground']}; font-size: 10px; }}"
         )
         self.update()
 
@@ -366,14 +421,30 @@ class PetSpeechBubble(QFrame):
         self._raw_text = text
         self._source_pixmap = QPixmap()
         self._pet_scale = pet_scale
+        self._reset_paging()
         self.label.show()
         metrics = QFontMetrics(self.label.font())
         if self._preset.get("shape") == "breath_bubble":
             self._configure_breath_content(anchor_rect, pet_scale)
         else:
-            display_text = elide_bubble_text(
+            # 长文本分页：每页不超过 bubble_max_lines 行，自动翻页直到全文展示完，
+            # 底部显示「1/3」页码指示。总时长按页数扩展，保证每页可读完。
+            pages = paginate_bubble_text(
                 metrics, text, 248, bubble_max_lines(text)
             )
+            display_text = pages[0] if pages else ""
+            if len(pages) > 1:
+                per_page = max(2200, min(5000, duration_ms // len(pages)))
+                total_ms = max(duration_ms, per_page * len(pages))
+                self._pages = pages
+                self._page_index = 0
+                self._page_interval_ms = per_page
+                self._page_indicator.setText(f"1/{len(pages)}")
+                self._page_indicator.show()
+                self._page_timer.start(per_page)
+                duration_ms = total_ms
+            else:
+                self._reset_paging()
             self.label.setPixmap(QPixmap())
             self.label.setText(display_text)
             bounds = metrics.boundingRect(
@@ -390,6 +461,28 @@ class PetSpeechBubble(QFrame):
             self.raise_()
         self._hide_timer.start(max(500, int(duration_ms)))
 
+    def _reset_paging(self) -> None:
+        """停止自动翻页并隐藏页码指示（单页内容/图片/换内容时调用）。"""
+        self._page_timer.stop()
+        self._pages = []
+        self._page_index = 0
+        self._page_interval_ms = 0
+        self._page_indicator.setText("")
+        self._page_indicator.hide()
+
+    def _on_page_timeout(self) -> None:
+        """自动翻到下一页；最后一页展示完后由 _hide_timer 收尾隐藏。"""
+        if not self._pages or self._page_index >= len(self._pages) - 1:
+            self._page_timer.stop()
+            return
+        self._page_index += 1
+        if self._content_kind == "text":
+            self.label.setText(self._pages[self._page_index])
+            self._page_indicator.setText(
+                f"{self._page_index + 1}/{len(self._pages)}"
+            )
+            self._page_timer.start(self._page_interval_ms)
+
     def show_image(
         self,
         image_path: str | Path,
@@ -405,6 +498,7 @@ class PetSpeechBubble(QFrame):
         self._raw_text = ""
         self._source_pixmap = pixmap
         self._pet_scale = pet_scale
+        self._reset_paging()
         if self._preset.get("shape") == "breath_bubble":
             self._configure_breath_content(anchor_rect, pet_scale)
         else:

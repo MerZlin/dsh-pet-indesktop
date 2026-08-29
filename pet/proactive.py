@@ -183,6 +183,15 @@ def build_memory_context(last_entry: dict | None, current_activity: str) -> str 
     return f"上次看到你在{last_act}，这次看到你在{current_activity}。"
 
 
+def build_sync_marker(proc_name: str, current_act: str) -> str:
+    """构造同步进 AI 对话会话的用户侧标记（不含窗口标题，隐私约定与陪伴记忆一致）。"""
+    marker = f"[主动识屏] 前台进程：{str(proc_name or '').strip() or '未知'}"
+    act = str(current_act or "").strip()
+    if act:
+        marker += f"（{act}）"
+    return marker
+
+
 class ProactiveMemory:
     """主动识屏短期陪伴记忆管理器。
 
@@ -615,6 +624,9 @@ class ProactiveScreenWatcher:
             # 64 位 dHash 会触发 libshiboken Overflow 且投递行为未定义。
             frame_ready = Signal(object, str, object, object, dict)
             bubble_requested = Signal(str, int)
+            # 主动识屏回复全文同步进 AI 对话会话（worker 线程不能直接碰
+            # Qt/会话存储，经桥接信号回到主线程再转发给 app 层）
+            reply_synced = Signal(str, str)
 
             def __init__(self, watcher: Any, parent: Any = None) -> None:
                 super().__init__(parent)
@@ -629,12 +641,16 @@ class ProactiveScreenWatcher:
                 if hasattr(self._watcher.win, "show_bubble"):
                     self._watcher.win.show_bubble(text, duration_ms=duration_ms)
 
+            def _forward_reply_sync(self, user_text: str, reply: str) -> None:
+                self._watcher._on_reply_synced(user_text, reply)
+
         self.win = window
         self.cfg = config
         parent_obj = self.win if hasattr(self.win, "winId") else None
         self._bridge = _WatcherBridge(self, parent=parent_obj)
         self._bridge.frame_ready.connect(self._bridge._forward_frame)
         self._bridge.bubble_requested.connect(self._bridge._forward_bubble)
+        self._bridge.reply_synced.connect(self._bridge._forward_reply_sync)
 
         self._timer = QTimer(parent_obj)
         self._timer.setInterval(8000)
@@ -927,6 +943,21 @@ class ProactiveScreenWatcher:
         finally:
             self._worker_busy = False
 
+    def _on_reply_synced(self, user_text: str, reply: str) -> None:
+        """主线程槽：把主动识屏回复全文转发给 app 层同步进 AI 对话会话。
+
+        无 Chat 变体（on_look_synced 为 None）或 app 层已销毁时静默跳过。
+        """
+        callback = getattr(self.win, "on_look_synced", None)
+        if not callable(callback):
+            return
+        try:
+            callback(user_text, reply)
+        except Exception:
+            import logging
+
+            logging.exception("主动识屏回复同步进会话失败")
+
     def _resolve_vision_provider(self, eff: dict) -> tuple[Any, str]:
         """解析视觉请求的 provider 与 system_prompt（手册 §6）。
 
@@ -976,6 +1007,17 @@ class ProactiveScreenWatcher:
                 # 陪伴记忆只存 进程名+活动分类，不落窗口标题（可能含文档/网页敏感信息）
                 if proc_name or current_act:
                     self.memory.record(proc_name, "", current_act)
+                # 回复全文落日志 + 同步进 AI 对话会话（issue #24：被气泡省略/分页的
+                # 内容从此可在聊天历史/pet.log 里回看）。标记同样不含窗口标题，
+                # 与陪伴记忆的隐私约定一致。
+                import logging
+                logging.info(
+                    "主动识屏回复全文: 前台进程=%s 活动=%s | %s",
+                    proc_name, current_act, reply,
+                )
+                self._bridge.reply_synced.emit(
+                    build_sync_marker(proc_name, current_act), reply
+                )
             else:
                 # 空回复视为失败（计入熔断，不冒泡、不写记忆）
                 self.limiter.record_failure()
