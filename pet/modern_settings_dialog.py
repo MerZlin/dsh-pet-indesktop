@@ -1057,6 +1057,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
             SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
             SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
+            SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
         ], behavior_content))
         behavior_layout.addWidget(SettingsSection("拖拽", [
             SettingRow("drag_physics", "拖动物理", "启用拖拽惯性、重力和边缘反弹。", self.drag_physics_check),
@@ -1230,6 +1231,8 @@ class ModernSettingsDialog(QDialog):
             self.click_balance_check.setChecked(bool(self.config.get("click_show_balance", False)))
         self.click_self_talk_check = ToggleSwitch(self)
         self.click_self_talk_check.setChecked(bool(self.config.get("click_show_self_talk", False)))
+        self.music_sing_check = ToggleSwitch(self)
+        self.music_sing_check.setChecked(bool(self.config.get("music_sing_enabled", False)))
         self.balance_refresh_spin = None
         if self.include_ai:
             self.balance_refresh_spin = BrowserSpinBox(self)
@@ -1802,6 +1805,7 @@ class ModernSettingsDialog(QDialog):
         if self.click_balance_check is not None:
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
+        self.config.set("music_sing_enabled", self.music_sing_check.isChecked())
         if self.balance_refresh_spin is not None:
             self.config.set("balance_refresh_minutes", int(self.balance_refresh_spin.value()))
         if self.auto_hide_fullscreen_check is not None:

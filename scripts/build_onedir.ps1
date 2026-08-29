@@ -125,7 +125,7 @@ if (-not $SkipCheck) {
     Write-Host "[1.5/3] Chinese-encoding self-check on bundle..." -ForegroundColor Cyan
     python scripts\check_bundle_encoding.py --dir $appDir
     if ($LASTEXITCODE -ne 0) {
-        throw "Bundle encoding check failed — refusing to package garbled output (issue #26)"
+        throw "Bundle encoding check failed - refusing to package garbled output (issue #26)"
     }
 }
 

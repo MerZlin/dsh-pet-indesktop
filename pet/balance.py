@@ -5,6 +5,11 @@
 （见 README「参考项目」致谢），本实现为桌宠内置的轻量版本：
 菜单「DeepSeek 余额」→ 后台查询 → 桌宠气泡显示；可在桌宠设置中
 开启自动刷新（分钟级）。
+
+v4.1 扩展（同步上游 dsh-pet 余额动画）：
+- 余额按 ¥20 满额折算为“已用百分比”，分 6 档触发不同余额动画；
+- DeepSeek 峰谷计价提示（北京时间：工作日 9-12/14-18 高峰，其余空闲；
+  周六/周日全天空闲，下一高峰为下周一 9 点）。
 """
 
 from __future__ import annotations
@@ -12,8 +17,26 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 BALANCE_PATH = '/user/balance'
+
+# DeepSeek 满额基准（¥）：余额 ≥ 该值视为 100%（未消耗），余额按比例折算为已用百分比
+DEEPSEEK_FULL_BALANCE_CNY = 20.0
+
+# 余额事件动画档位顺序（与上游 assets/config.jsonc 一致）：
+# index = p === 100 ? 5 : Math.floor(p / 20)
+BALANCE_EVENT_NAMES = (
+    '余额-钱袋满溢',  # 0 ≤ p < 20（几乎未消耗）
+    '余额-金袋叮当',  # 20 ≤ p < 40
+    '余额-钱袋如常',  # 40 ≤ p < 60
+    '余额-数金皱眉',  # 60 ≤ p < 80
+    '余额-袋空如洗',  # 80 ≤ p < 100（告急）
+    '余额-分文不剩',  # p === 100（全部用完，格外档）
+)
+
+_BEIJING_TZ = ZoneInfo('Asia/Shanghai')
 
 
 def _ssl_context(verify: bool):
@@ -70,3 +93,90 @@ def format_balance(info: dict) -> str:
     if granted and topped:
         return f'余额 ¥{total}（充值 ¥{topped} / 赠送 ¥{granted}）'
     return f'余额 ¥{total}'
+
+
+def balance_percent(total: str | float | None) -> float | None:
+    """把 DeepSeek 余额折算为“已用百分比”（0 = 未消耗，100 = 耗尽）。
+
+    余额 20 元 → 0%，10 元 → 50%，0 元 → 100%；负数按 0 处理（透支视为已用完）。
+    金额非法返回 None，上层不应触发档位动画。
+    """
+    raw = str(total or '').strip()
+    if raw == '':
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN
+        return None
+    remaining = max(0.0, value) / DEEPSEEK_FULL_BALANCE_CNY * 100.0
+    return max(0.0, min(100.0, 100.0 - remaining))
+
+
+def balance_event_index(p: float) -> int:
+    """余额事件档位索引：p === 100 → 5，否则 Math.floor(p / 20) 夹到 0..4。"""
+    if p >= 100.0:
+        return 5
+    idx = int(p // 20)
+    return idx if idx < 5 else 4
+
+
+def _beijing_now(now: datetime | None = None) -> datetime:
+    """把入参统一转到北京时间；None 取当前北京时间。"""
+    if now is None:
+        return datetime.now(_BEIJING_TZ)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=_BEIJING_TZ)
+    return now.astimezone(_BEIJING_TZ)
+
+
+def deepseek_pricing_tier(now: datetime | None = None) -> str:
+    """DeepSeek 峰谷计价档位（北京时间）。
+
+    高峰：工作日 9:00–12:00、14:00–18:00；其余为空闲（低谷）。
+    周六/周日全天按低谷价计费。
+    """
+    bj = _beijing_now(now)
+    if bj.weekday() >= 5:
+        return 'idle'
+    hour = bj.hour
+    return 'peak' if (9 <= hour < 12) or (14 <= hour < 18) else 'idle'
+
+
+def _next_pricing_switch(now: datetime | None = None) -> tuple[str, datetime]:
+    """返回 (下一档位, 下一档位开始时间)，按北京时间计算。"""
+    bj = _beijing_now(now)
+    tz = bj.tzinfo or _BEIJING_TZ
+    day = bj.date()
+    weekday = bj.weekday()
+
+    if weekday >= 5:
+        # 周末全天低谷：下一高峰为下周一 9:00
+        days_until_monday = 7 - weekday
+        return 'peak', datetime.combine(day + timedelta(days=days_until_monday), time(9, 0), tzinfo=tz)
+
+    hour = bj.hour
+    if hour < 9:
+        return 'peak', datetime.combine(day, time(9, 0), tzinfo=tz)
+    if hour < 12:
+        return 'idle', datetime.combine(day, time(12, 0), tzinfo=tz)
+    if hour < 14:
+        return 'peak', datetime.combine(day, time(14, 0), tzinfo=tz)
+    if hour < 18:
+        return 'idle', datetime.combine(day, time(18, 0), tzinfo=tz)
+    # 18:00 后：下一高峰为次日 9:00
+    return 'peak', datetime.combine(day + timedelta(days=1), time(9, 0), tzinfo=tz)
+
+
+def deepseek_pricing_hint(now: datetime | None = None) -> str:
+    """生成余额气泡下方的 DeepSeek 峰谷提示文案。
+
+    如「当前高峰 · 下一空闲 12:00」「当前空闲 · 下一高峰 09:00」。
+    """
+    bj = _beijing_now(now)
+    tier = deepseek_pricing_tier(bj)
+    next_tier, next_time = _next_pricing_switch(bj)
+    label = '高峰' if tier == 'peak' else '空闲'
+    next_label = '空闲' if next_tier == 'idle' else '高峰'
+    return f'DeepSeek 当前{label} · 下一{next_label} {next_time:%H:%M}'

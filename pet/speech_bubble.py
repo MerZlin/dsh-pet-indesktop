@@ -252,6 +252,13 @@ class PetSpeechBubble(QFrame):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(13, 10, 13, 17)
         self._layout.addWidget(self.label)
+        self._subtitle_label = QLabel(self)
+        self._subtitle_label.setObjectName("pet-speech-subtitle")
+        self._subtitle_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._subtitle_label.hide()
+        self._layout.addWidget(self._subtitle_label)
         self._page_indicator = QLabel(self)
         self._page_indicator.setObjectName("pet-page-indicator")
         self._page_indicator.setAlignment(
@@ -330,6 +337,10 @@ class PetSpeechBubble(QFrame):
         self.label.setStyleSheet(
             "QLabel#pet-speech-label { background: transparent; border: none; padding: 0; "
             f"color: {self._preset['foreground']}; font-size: 13px; }}"
+        )
+        self._subtitle_label.setStyleSheet(
+            "QLabel#pet-speech-subtitle { background: transparent; border: none; padding: 0; "
+            f"color: {self._preset['foreground']}; font-size: 10px; }}"
         )
         self._page_indicator.setStyleSheet(
             "QLabel#pet-page-indicator { background: transparent; border: none; padding: 0; "
@@ -413,6 +424,7 @@ class PetSpeechBubble(QFrame):
         duration_ms: int = 3200,
         *,
         pet_scale: float | None = None,
+        subtitle: str = "",
     ) -> None:
         text = str(text).strip()
         if not text:
@@ -422,6 +434,13 @@ class PetSpeechBubble(QFrame):
         self._source_pixmap = QPixmap()
         self._pet_scale = pet_scale
         self._reset_paging()
+        subtitle = str(subtitle or "").strip()
+        if subtitle:
+            self._subtitle_label.setText(subtitle)
+            self._subtitle_label.show()
+        else:
+            self._subtitle_label.setText("")
+            self._subtitle_label.hide()
         self.label.show()
         metrics = QFontMetrics(self.label.font())
         if self._preset.get("shape") == "breath_bubble":
@@ -506,6 +525,8 @@ class PetSpeechBubble(QFrame):
         self._source_pixmap = pixmap
         self._pet_scale = pet_scale
         self._reset_paging()
+        self._subtitle_label.setText("")
+        self._subtitle_label.hide()
         if self._preset.get("shape") == "breath_bubble":
             self._configure_breath_content(anchor_rect, pet_scale)
         else:

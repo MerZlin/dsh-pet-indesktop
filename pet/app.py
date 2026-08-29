@@ -47,10 +47,31 @@ class _BalanceBridge(_BackgroundResult):
         self.win = win
         self.done.connect(self._show)
 
-    def _show(self, _ok: bool, message) -> None:
+    def _show(self, ok: bool, payload) -> None:
         # 异步回调可能晚于窗口销毁（切角色/退出），先探活再触碰 Qt 对象
-        if self.win is not None and shiboken6.isValid(self.win):
-            self.win.show_bubble(str(message), duration_ms=6000)
+        if self.win is None or not shiboken6.isValid(self.win):
+            return
+        if not ok:
+            self.win.show_bubble(str(payload), duration_ms=6000)
+            return
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "余额信息为空")
+            info = payload.get("info") or {}
+        else:
+            text = str(payload)
+            info = {}
+        # DeepSeek 峰谷提示显示在余额气泡下方
+        self.win.show_bubble(
+            text, duration_ms=6000,
+            subtitle=balance_mod.deepseek_pricing_hint(),
+        )
+        # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
+        p = balance_mod.balance_percent(info.get("total"))
+        if p is not None:
+            idx = balance_mod.balance_event_index(p)
+            name = balance_mod.BALANCE_EVENT_NAMES[idx]
+            if name and hasattr(self.win, "request_link_anim"):
+                self.win.request_link_anim(name)
 
 
 class _UpdateBridge(_BackgroundResult):
@@ -227,9 +248,10 @@ class PetApp:
         try:
             info = balance_mod.fetch_balance(base_url, api_key, verify_ssl=verify_ssl)
             text = balance_mod.format_balance(info)
+            payload = {"text": text, "info": info}
             self._balance_cache = (time.monotonic(), text, provider_key)
             self._write_balance_file_cache(text, provider_key)
-            bridge.done.emit(True, text)
+            bridge.done.emit(True, payload)
         except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
             bridge.done.emit(False, f'余额查询失败：{exc}')
         finally:
