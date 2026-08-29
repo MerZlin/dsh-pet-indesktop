@@ -54,24 +54,34 @@ class _BalanceBridge(_BackgroundResult):
         if not ok:
             self.win.show_bubble(str(payload), duration_ms=6000)
             return
-        if isinstance(payload, dict):
-            text = str(payload.get("text") or "余额信息为空")
-            info = payload.get("info") or {}
-        else:
-            text = str(payload)
-            info = {}
-        # DeepSeek 峰谷提示显示在余额气泡下方
-        self.win.show_bubble(
-            text, duration_ms=6000,
-            subtitle=balance_mod.deepseek_pricing_hint(),
-        )
-        # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
-        p = balance_mod.balance_percent(info.get("total"))
-        if p is not None:
-            idx = balance_mod.balance_event_index(p)
-            name = balance_mod.BALANCE_EVENT_NAMES[idx]
-            if name and hasattr(self.win, "request_link_anim"):
-                self.win.request_link_anim(name)
+        _show_balance_payload(self.win, payload)
+
+
+def _show_balance_payload(win, payload) -> None:
+    """展示余额气泡（含峰谷副标题）并按余额档位触发余额动画。
+
+    网络查询、内存缓存、文件缓存三条路径统一走这里，避免缓存命中时
+    没有副标题/不播动画导致的行为不一致。
+    """
+    if win is None or not shiboken6.isValid(win):
+        return
+    if isinstance(payload, dict):
+        text = str(payload.get("text") or "余额信息为空")
+        info = payload.get("info") or {}
+    else:
+        text = str(payload)
+        info = {}
+    win.show_bubble(
+        text, duration_ms=6000,
+        subtitle=balance_mod.deepseek_pricing_hint(),
+    )
+    # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
+    p = balance_mod.balance_percent(info.get("total"))
+    if p is not None:
+        idx = balance_mod.balance_event_index(p)
+        name = balance_mod.BALANCE_EVENT_NAMES[idx]
+        if name and hasattr(win, "request_link_anim"):
+            win.request_link_anim(name)
 
 
 class _UpdateBridge(_BackgroundResult):
@@ -224,12 +234,12 @@ class PetApp:
         ])
         if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
                 and self._balance_cache[2] == provider_key:
-            win.show_bubble(self._balance_cache[1], duration_ms=6000)
+            _show_balance_payload(win, self._balance_cache[1])
             return
-        file_text = self._read_balance_file_cache(provider_key)
-        if file_text is not None:
-            self._balance_cache = (now, file_text, provider_key)
-            win.show_bubble(file_text, duration_ms=6000)
+        file_payload = self._read_balance_file_cache(provider_key)
+        if file_payload is not None:
+            self._balance_cache = (now, file_payload, provider_key)
+            _show_balance_payload(win, file_payload)
             return
         self._balance_busy = True
         # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
@@ -249,36 +259,54 @@ class PetApp:
             info = balance_mod.fetch_balance(base_url, api_key, verify_ssl=verify_ssl)
             text = balance_mod.format_balance(info)
             payload = {"text": text, "info": info}
-            self._balance_cache = (time.monotonic(), text, provider_key)
-            self._write_balance_file_cache(text, provider_key)
+            self._balance_cache = (time.monotonic(), payload, provider_key)
+            self._write_balance_file_cache(payload, provider_key)
             bridge.done.emit(True, payload)
         except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
             bridge.done.emit(False, f'余额查询失败：{exc}')
         finally:
             self._balance_busy = False
 
-    def _read_balance_file_cache(self, provider_key: str = '') -> str | None:
-        """读取跨实例共享的余额缓存（30s 内有效，且必须是同一 provider 的缓存）。"""
+    def _read_balance_file_cache(self, provider_key: str = '') -> dict | None:
+        """读取跨实例共享的余额缓存（30s 内有效，且必须是同一 provider 的缓存）。
+
+        返回 {"text": ..., "info": {...}}；兼容旧版只存 text 字符串的缓存。
+        """
         try:
             data = json.loads(self._balance_cache_path.read_text(encoding='utf-8'))
             if not isinstance(data, dict):
                 return None
             if str(data.get('provider', '') or '') != provider_key:
                 return None
-            if time.time() - float(data.get('ts', 0) or 0) < 30.0:
-                text = str(data.get('text', '') or '')
-                return text or None
+            if time.time() - float(data.get('ts', 0) or 0) >= 30.0:
+                return None
+            text = str(data.get('text', '') or '')
+            if not text:
+                return None
+            info = data.get('info')
+            return {
+                'text': text,
+                'info': info if isinstance(info, dict) else {},
+            }
         except (OSError, ValueError, TypeError):
             pass
         return None
 
-    def _write_balance_file_cache(self, text: str, provider_key: str = '') -> None:
-        """写入跨实例共享的余额缓存（原子替换，绑定 provider）。"""
+    def _write_balance_file_cache(self, payload: dict, provider_key: str = '') -> None:
+        """写入跨实例共享的余额缓存（原子替换，绑定 provider）。
+
+        同时保存 text 和 info，使缓存命中时也能显示峰谷副标题并播放余额动画。
+        """
         try:
             self._balance_cache_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._balance_cache_path.with_suffix(f'.{os.getpid()}.tmp')
             tmp.write_text(
-                json.dumps({'ts': time.time(), 'text': text, 'provider': provider_key}, ensure_ascii=False),
+                json.dumps({
+                    'ts': time.time(),
+                    'text': str(payload.get('text') or ''),
+                    'info': payload.get('info') or {},
+                    'provider': provider_key,
+                }, ensure_ascii=False),
                 encoding='utf-8',
             )
             tmp.replace(self._balance_cache_path)

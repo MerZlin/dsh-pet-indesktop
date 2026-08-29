@@ -1895,15 +1895,28 @@ class PetWindow(QWidget):
         # 不删除会随每次右键累积（子菜单/动作/线程池/图标 pixmap）。
         # 先清掉尚未启动的解码任务，避免 QThreadPool 析构时在 GUI 线程
         # 等待运行中的 worker。
+        pools = []
         for submenu in menu.findChildren(QMenu):
             pool = getattr(submenu, "_animation_icon_pool", None)
             if pool is not None:
                 pool.clear()
-                # 等待正在解码的图标 worker 结束再释放菜单树：立即 deleteLater
-                # 可能让 QThreadPool/QAction 在 worker 仍在运行时析构，多次右键后
-                # 偶发崩溃。解码通常很快，短等待换取稳定性。
-                pool.waitForDone(3000)
-        menu.deleteLater()
+                pools.append(pool)
+
+        def delete_when_idle() -> None:
+            """非阻塞等待图标解码 worker 结束后再释放菜单树。
+
+            直接 pool.waitForDone(3000) 会阻塞 GUI 线程最多 3 秒，可能造成
+            右键菜单关闭时卡顿/假死；这里每 50ms 轮询一次，不阻塞事件循环。
+            """
+            if any(not pool.waitForDone(0) for pool in pools):
+                QTimer.singleShot(50, delete_when_idle)
+                return
+            menu.deleteLater()
+
+        if pools:
+            delete_when_idle()
+        else:
+            menu.deleteLater()
 
     def reopen_context_menu(self, menu: QMenu) -> None:
         """Close the old template and immediately show the newly selected one."""

@@ -165,8 +165,15 @@ def _next_pricing_switch(now: datetime | None = None) -> tuple[str, datetime]:
         return 'peak', datetime.combine(day, time(14, 0), tzinfo=tz)
     if hour < 18:
         return 'idle', datetime.combine(day, time(18, 0), tzinfo=tz)
-    # 18:00 后：下一高峰为次日 9:00
-    return 'peak', datetime.combine(day + timedelta(days=1), time(9, 0), tzinfo=tz)
+    # 18:00 后：下一高峰通常为次日 9:00，但若次日是周六/周日，
+    # 周末全天空闲，下一高峰应跳到下周一 9:00。
+    next_day = day + timedelta(days=1)
+    if next_day.weekday() >= 5:
+        days_until_monday = 7 - next_day.weekday()
+        return 'peak', datetime.combine(
+            next_day + timedelta(days=days_until_monday), time(9, 0), tzinfo=tz
+        )
+    return 'peak', datetime.combine(next_day, time(9, 0), tzinfo=tz)
 
 
 def deepseek_pricing_hint(now: datetime | None = None) -> str:
