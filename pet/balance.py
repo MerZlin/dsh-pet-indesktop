@@ -18,6 +18,7 @@ import json
 import urllib.error
 import urllib.request
 from datetime import datetime, time, timedelta, timezone
+from html import escape
 from zoneinfo import ZoneInfo
 
 BALANCE_PATH = '/user/balance'
@@ -214,4 +215,29 @@ def deepseek_pricing_hint(
     idle_text = str(idle_label or "空闲")
     label = peak_text if tier == 'peak' else idle_text
     next_label = idle_text if next_tier == 'idle' else peak_text
+    return f'DeepSeek 当前{label} · 下一{next_label} {next_time:%H:%M}'
+
+
+def deepseek_pricing_hint_html(
+    now: datetime | None = None,
+    peak_label: str | None = None,
+    idle_label: str | None = None,
+    peak_color: str = "#e5484d",
+    idle_color: str = "#30a46c",
+) -> str:
+    """生成带颜色的 DeepSeek 峰谷提示 HTML（QLabel 可直接渲染）。
+
+    默认高峰红、低谷绿；用户自定义文案会做 HTML 转义，防止破坏富文本。
+    """
+    bj = _beijing_now(now)
+    tier = deepseek_pricing_tier(bj)
+    next_tier, next_time = _next_pricing_switch(bj)
+    peak_text = escape(str(peak_label or "高峰"))
+    idle_text = escape(str(idle_label or "空闲"))
+
+    def span(text: str, color: str) -> str:
+        return f'<span style="color:{color}">{text}</span>'
+
+    label = span(peak_text, peak_color) if tier == 'peak' else span(idle_text, idle_color)
+    next_label = span(idle_text, idle_color) if next_tier == 'idle' else span(peak_text, peak_color)
     return f'DeepSeek 当前{label} · 下一{next_label} {next_time:%H:%M}'

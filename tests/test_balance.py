@@ -144,6 +144,21 @@ def test_resolve_tier_labels_and_custom_hint():
     assert "下一梁文谷" in hint
 
 
+def test_deepseek_pricing_hint_html_colors():
+    # 默认高峰红、低谷绿，且包含对应文本
+    html = balance.deepseek_pricing_hint_html(
+        _bj(10), peak_label="高峰", idle_label="空闲"
+    )
+    assert "#e5484d" in html
+    assert "高峰" in html
+    assert "空闲" in html
+    # 自定义标签会转义，避免破坏 HTML
+    html_custom = balance.deepseek_pricing_hint_html(
+        _bj(10), peak_label="<峰>", idle_label="谷"
+    )
+    assert "&lt;峰&gt;" in html_custom
+
+
 def test_friday_evening_next_peak_skips_weekend():
     # 2026-08-28 是周五，20:00 后下一高峰应为周一 09:00，而不是周六 09:00
     hint = balance.deepseek_pricing_hint(_bj(20, day=28, month=8, year=2026))

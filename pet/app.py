@@ -76,11 +76,18 @@ def _show_balance_payload(win, payload) -> None:
     custom_peak = str(cfg.get("balance_tier_label_peak", "") or "") if cfg is not None else ""
     custom_idle = str(cfg.get("balance_tier_label_idle", "") or "") if cfg is not None else ""
     peak_label, idle_label = balance_mod.resolve_tier_labels(mode, custom_peak, custom_idle)
+    color_enabled = bool(cfg.get("balance_tier_color_enabled", True)) if cfg is not None else True
+    if color_enabled:
+        subtitle = balance_mod.deepseek_pricing_hint_html(
+            peak_label=peak_label, idle_label=idle_label,
+        )
+    else:
+        subtitle = balance_mod.deepseek_pricing_hint(
+            peak_label=peak_label, idle_label=idle_label,
+        )
     win.show_bubble(
         text, duration_ms=6000,
-        subtitle=balance_mod.deepseek_pricing_hint(
-            peak_label=peak_label, idle_label=idle_label,
-        ),
+        subtitle=subtitle,
     )
     # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
     p = balance_mod.balance_percent(info.get("total"))

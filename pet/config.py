@@ -350,6 +350,7 @@ class Config:
             "balance_tier_labels_mode": "default",  # 峰谷提示文案：default / liangwen / custom
             "balance_tier_label_peak": "",  # 自定义“高峰”文本（custom 模式）
             "balance_tier_label_idle": "",  # 自定义“空闲”文本（custom 模式）
+            "balance_tier_color_enabled": True,  # 峰谷提示颜色：高峰红/低谷绿
             "music_sing_enabled": False,   # 检测到后台播放音乐时自动播放唱歌动画
             "autostart_wanted": False,     # 用户曾开启过开机自启（用于启动自检：被安全软件清理时提醒）
             "stream_capture_mode": False,  # 直播捕获兼容模式（Windows：Tool 窗口直播姬/OBS 枚举不到）
