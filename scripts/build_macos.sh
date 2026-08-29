@@ -53,6 +53,7 @@ for spec in "${variants[@]}"; do
         --add-data "assets/chat:assets/chat"
         --add-data "assets/sounds:assets/sounds"
         --add-data "pet/menu_templates:pet/menu_templates"
+        --add-data "integrations:integrations"
     )
     if [[ "$name" == *-chat ]]; then
         args+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")
