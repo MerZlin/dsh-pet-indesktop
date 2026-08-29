@@ -75,8 +75,3 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppShortN
 [UninstallDelete]
 ; Defensive: remove any residual runtime dirs (onedir normally leaves none)
 Type: filesandordirs; Name: "{app}\_MEI*"
-
-[UninstallRun]
-; 卸载前调用 exe --uninstall-cleanup：删除自启项、移除 Claude hooks、
-; 若无其他实例使用则卸载 DSH 桥接插件（卸载残余清理）。
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall-cleanup"; Flags: runhidden waituntilterminated skipifnotexists
