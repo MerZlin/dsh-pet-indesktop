@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtCore import QPoint, QRect, Qt
@@ -88,6 +89,73 @@ def test_is_transparent_at_uses_frame_alpha():
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(10, 10)) is False
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(50, 10)) is True
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(10, 2)) is True
+
+
+def test_input_controller_survives_init():
+    """回归：控制器必须由窗口持有，保证轮询持续运行。"""
+    _qapp()
+    import sys
+    if sys.platform != "win32":
+        import pytest
+        pytest.skip("逐像素命中测试仅 Windows")
+
+    import tempfile
+    from pet.config import Config
+    from pet.library import MovieLibrary
+    lib = MovieLibrary(character_id='shenshen')
+    win = window_mod.PetWindow(lib, Config(base=Path(tempfile.mkdtemp())))
+    assert win._input_controller is not None
+    win.close()
+
+
+def test_input_controller_returns_pixel_hit_result():
+    _qapp()
+
+    class FakeWindow:
+        def winId(self):
+            return 123
+
+        def mapFromGlobal(self, point):
+            return point
+
+        def _is_transparent_at(self, point):
+            return point.x() >= 50
+
+    fake = FakeWindow()
+    fake.mouse_through = False
+    fake._press_global = None
+    fake.isVisible = lambda: True
+    fake.width = lambda: 100
+    fake.height = lambda: 80
+    controller = object.__new__(window_mod.WindowsPerPixelInputController)
+    controller._window = fake
+    assert controller.should_click_through(QPoint(20, 20)) is False
+    assert controller.should_click_through(QPoint(70, 20)) is True
+    fake._press_global = QPoint(70, 20)
+    assert controller.should_click_through(QPoint(70, 20)) is False
+
+
+def test_windows_click_through_preserves_other_extended_styles():
+    class FakeUser32:
+        def __init__(self):
+            self.style = 0x00080080  # WS_EX_LAYERED | WS_EX_TOOLWINDOW
+            self.writes = []
+
+        def GetWindowLongW(self, hwnd, index):
+            assert (hwnd, index) == (123, window_mod.GWL_EXSTYLE)
+            return self.style
+
+        def SetWindowLongW(self, hwnd, index, style):
+            self.style = style
+            self.writes.append((hwnd, index, style))
+
+    user32 = FakeUser32()
+    assert window_mod._set_windows_click_through(123, True, user32) is True
+    assert user32.style == 0x000800A0
+    assert window_mod._set_windows_click_through(123, True, user32) is False
+    assert len(user32.writes) == 1
+    assert window_mod._set_windows_click_through(123, False, user32) is True
+    assert user32.style == 0x00080080
 
 
 def test_visible_content_rect_uses_character_region():
