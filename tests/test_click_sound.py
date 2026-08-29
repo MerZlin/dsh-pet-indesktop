@@ -33,7 +33,10 @@ def _make_file(tmp_path: Path, name: str) -> Path:
 
 
 def test_wav_on_windows_uses_winsound(monkeypatch, tmp_path):
-    monkeypatch.setattr(click_sound.os, "name", "nt")
+    # 替换 click_sound 模块的 os 引用而非全局 os.name：
+    # 全局 os.name 被改成 "nt" 会让 pathlib.Path 在非 Windows 上创建
+    # WindowsPath 而崩溃（Linux/macOS CI 实测 INTERNALERROR）。
+    monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
     calls = []
 
     fake = SimpleNamespace(
@@ -50,7 +53,7 @@ def test_wav_on_windows_uses_winsound(monkeypatch, tmp_path):
 
 
 def test_mp3_on_windows_uses_qt_player_not_winsound(monkeypatch, tmp_path):
-    monkeypatch.setattr(click_sound.os, "name", "nt")
+    monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
     player = FakeQtPlayer()
     monkeypatch.setattr(click_sound, "_ensure_qt_player", lambda: player)
 
@@ -72,7 +75,7 @@ def test_mp3_on_windows_uses_qt_player_not_winsound(monkeypatch, tmp_path):
 
 
 def test_nonwav_qt_unavailable_on_windows_skips_silently(monkeypatch, tmp_path):
-    monkeypatch.setattr(click_sound.os, "name", "nt")
+    monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(click_sound, "_ensure_qt_player", lambda: None)
 
     winsound_calls = []

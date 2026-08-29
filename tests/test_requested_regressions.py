@@ -837,6 +837,9 @@ def test_modern_settings_save_writes_autostart_wanted(tmp_path, monkeypatch):
 
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    # 不碰真实系统自启：CI runner 上写入失败会触发 QMessageBox.warning，
+    # offscreen 下无人交互（实测 access violation / 挂起）。
+    monkeypatch.setattr(settings_mod.autostart_mod, "set_enabled", lambda enabled: True)
     config = Config(tmp_path)
     assert config.get("autostart_wanted") is False
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
