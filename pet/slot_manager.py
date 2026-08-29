@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import time
+import re
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -85,21 +86,30 @@ def _format_pid_record(pid: int) -> bytes:
     return raw
 
 
+def _open_lock_file(path: Path) -> BinaryIO:
+    """Open or atomically create a lock file without truncating it."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
+    handle = os.fdopen(fd, "r+b")
+    try:
+        size = os.fstat(fd).st_size
+        if size < PID_RECORD_LEN:
+            handle.seek(0, os.SEEK_END)
+            handle.write(b" " * (PID_RECORD_LEN - size))
+            handle.flush()
+        handle.seek(0)
+        return handle
+    except Exception:
+        handle.close()
+        raise
+
+
 def _try_acquire_slot_lock(config_dir: Path, slot_id: int) -> BinaryIO | None:
     """尝试获取指定 slot_id 的文件锁并写入定长 PID。成功返回 open 句柄，失败返回 None。"""
     lock_path = get_slot_lock_path(config_dir, slot_id)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        if not lock_path.exists():
-            # 文件不存在：以 w+b 创建，先写入初始定长空字节占位
-            f = open(lock_path, "w+b")
-            f.write(b" " * PID_RECORD_LEN)
-            f.flush()
-            f.seek(0)
-        else:
-            # 文件已存在：以 r+b 打开，不截断、不使用 a+b 追加
-            f = open(lock_path, "r+b")
+        f = _open_lock_file(lock_path)
     except OSError:
         return None
 
@@ -129,13 +139,7 @@ def acquire_file_lock(lock_path: Path | str) -> BinaryIO | None:
     path = Path(lock_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        if not path.exists():
-            handle = open(path, "w+b")
-            handle.write(b" " * PID_RECORD_LEN)
-            handle.flush()
-            handle.seek(0)
-        else:
-            handle = open(path, "r+b")
+        handle = _open_lock_file(path)
     except OSError:
         return None
     if not _try_lock_file(handle):
@@ -328,7 +332,7 @@ def backup_corrupt_config(config_file: Path) -> Path | None:
         return None
 
 
-def _recover_migration_staging(config_path: Path, staging_dir: Path) -> None:
+def _recover_migration_staging(config_path: Path, staging_dir: Path) -> bool:
     """恢复或清理残留的 .migration_staging 目录。
 
     若上次迁移中途被杀，staging 内可能残留尚未移入目标或尚未回滚的文件。
@@ -338,18 +342,36 @@ def _recover_migration_staging(config_path: Path, staging_dir: Path) -> None:
     清理完成后移除 staging 目录。
     """
     if not staging_dir.is_dir():
-        return
-    for item in staging_dir.iterdir():
+        return True
+    remaining = False
+    for item in list(staging_dir.iterdir()):
         target = config_path / item.name
-        if not target.exists():
-            try:
+        match = re.match(r"(?:config|sessions)-slot-(\d+)", item.name)
+        lock_handle = None
+        if match:
+            lock_handle = _try_acquire_slot_lock(config_path, int(match.group(1)))
+            if lock_handle is None:
+                logging.warning("恢复 staging 时目标槽位被占用，保留残留: %s", item)
+                remaining = True
+                continue
+        try:
+            if target.exists():
+                logging.warning("恢复 staging 时目标已存在，保留残留: %s", item)
+                remaining = True
+            else:
                 shutil.move(str(item), str(target))
-            except Exception as exc:
-                logging.warning("恢复 staging 文件失败: %s -> %s (%s)", item, target, exc)
-    try:
-        shutil.rmtree(staging_dir, ignore_errors=True)
-    except Exception:
-        pass
+        except Exception as exc:
+            logging.warning("恢复 staging 文件失败: %s -> %s (%s)", item, target, exc)
+            remaining = True
+        finally:
+            if lock_handle is not None:
+                _unlock_file(lock_handle)
+    if not remaining:
+        try:
+            staging_dir.rmdir()
+        except OSError:
+            remaining = True
+    return not remaining
 
 
 def migrate_legacy_spawns(config_dir: Path | str) -> bool:
@@ -371,7 +393,8 @@ def migrate_legacy_spawns(config_dir: Path | str) -> bool:
 
     staging_dir = config_path / ".migration_staging"
     if staging_dir.is_dir():
-        _recover_migration_staging(config_path, staging_dir)
+        if not _recover_migration_staging(config_path, staging_dir):
+            return False
 
     marker_file = config_path / "migration-spawns.done"
     if marker_file.exists():

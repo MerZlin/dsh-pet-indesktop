@@ -293,12 +293,15 @@ class _CollisionWorker(QObject):
                     self.snapshot_ready.emit(message)
         elif kind == "snapshot":
             if message.get("epoch", self.epoch) == self.epoch:
+                self._last_control_message = self._now()
                 self.snapshot_ready.emit(message)
         elif kind == "impulse":
             pair = str(message.get("pair") or "")
             tick = int(message.get("tick", -1))
-            if message.get("epoch") == self.epoch and self.watermarks.should_apply(self.epoch, pair, tick):
-                self.impulse_ready.emit(message)
+            if message.get("epoch") == self.epoch:
+                self._last_control_message = self._now()
+                if self.watermarks.should_apply(self.epoch, pair, tick):
+                    self.impulse_ready.emit(message)
 
     def _resign_to(self, _winner: str) -> None:
         if self.server is None:

@@ -120,6 +120,41 @@ print(f"WORKER3:{{slot}}", flush=True)
     handle.close()
 
 
+def test_concurrent_first_lock_creation_is_not_truncated(tmp_path):
+    """两个真实进程首次创建同一锁文件时，恰一方持锁且记录保持完整。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+    release = tmp_path / "lock-start"
+    worker_code = f"""
+from pathlib import Path
+import time
+from pet.slot_manager import acquire_pet_slot
+print('READY', flush=True)
+while not Path({str(release)!r}).exists():
+    time.sleep(0.001)
+try:
+    slot, handle = acquire_pet_slot({str(config_dir)!r}, preferred_slot=0)
+except Exception as exc:
+    print(type(exc).__name__, flush=True)
+else:
+    print(f"LOCKED:{{slot}}", flush=True)
+    time.sleep(1)
+"""
+    p1 = _run_slot_worker_code(config_dir, worker_code)
+    p2 = _run_slot_worker_code(config_dir, worker_code)
+    assert p1.stdout.readline().strip() == "READY"
+    assert p2.stdout.readline().strip() == "READY"
+    release.write_text("go", encoding="ascii")
+    results = sorted([p1.stdout.readline().strip(), p2.stdout.readline().strip()])
+    assert results.count("LOCKED:0") == 1
+    assert results.count("SlotLockError") == 1
+    assert p1.wait(timeout=5) == 0
+    assert p2.wait(timeout=5) == 0
+    lock_file = sm.get_slot_lock_path(config_dir, 0)
+    assert lock_file.stat().st_size == sm.PID_RECORD_LEN
+    assert lock_file.read_bytes().strip() != b""
+
+
 def test_slot_reclaimed_after_process_killed_and_keeps_memory(tmp_path):
     """场景 2：子进程持有 slot-1 后被终止；新子进程重新加锁 slot-1，读取原个体配置和 sessions，且未删 lock 文件。"""
     config_dir = tmp_path / APP_DIR_NAME
@@ -429,6 +464,37 @@ def test_migrate_legacy_spawns_recovers_staged_remnants(tmp_path):
     assert (config_dir / "config-slot-1.json").exists()
     assert json.loads((config_dir / "config-slot-1.json").read_text(encoding="utf-8"))["character"] == "staged_pet"
     assert not staging_dir.exists()
+
+
+def test_migration_staging_remnant_is_kept_when_target_slot_is_occupied(tmp_path):
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir = config_dir / ".migration_staging"
+    staging_dir.mkdir()
+    staged = staging_dir / "config-slot-1.json"
+    staged.write_text(json.dumps({"character": "staged"}), encoding="utf-8")
+    _, handle = sm.acquire_pet_slot(config_dir, preferred_slot=1)
+    try:
+        assert sm.migrate_legacy_spawns(config_dir) is False
+        assert staged.exists()
+        assert staged.read_text(encoding="utf-8") == json.dumps({"character": "staged"})
+    finally:
+        sm._unlock_file(handle)
+
+
+def test_migration_staging_remnant_is_kept_when_target_already_exists(tmp_path):
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+    target = config_dir / "config-slot-1.json"
+    target.write_text(json.dumps({"character": "current"}), encoding="utf-8")
+    staging_dir = config_dir / ".migration_staging"
+    staging_dir.mkdir()
+    staged = staging_dir / "config-slot-1.json"
+    staged.write_text(json.dumps({"character": "staged"}), encoding="utf-8")
+
+    assert sm.migrate_legacy_spawns(config_dir) is False
+    assert staged.exists()
+    assert json.loads(target.read_text(encoding="utf-8"))["character"] == "current"
 
 
 def test_migrate_legacy_spawns_skips_occupied_target_slot(tmp_path):

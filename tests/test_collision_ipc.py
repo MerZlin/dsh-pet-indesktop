@@ -75,6 +75,22 @@ def test_client_watermark_and_epoch_switch():
     assert len(received) == 1
 
 
+def test_client_watchdog_stays_alive_while_snapshots_arrive(monkeypatch):
+    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "client", "", {})
+    worker.epoch = "epoch-a"
+    worker.socket = object()
+    worker._had_client_connection = True
+    calls = []
+    monkeypatch.setattr(worker, "_welcome_timed_out", lambda: calls.append(True))
+
+    for _ in range(4):
+        worker._last_control_message = worker._now() - 2.0
+        worker._handle_message(worker.socket, {"type": "snapshot", "epoch": "epoch-a"})
+        worker._check_client_silence()
+
+    assert calls == []
+
+
 @pytest.mark.parametrize("instance_id", ["", "slot-1"])
 def test_runtime_id_has_session_randomness(instance_id):
     first = make_runtime_id(instance_id, 123)
