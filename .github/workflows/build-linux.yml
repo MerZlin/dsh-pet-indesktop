@@ -67,6 +67,7 @@ jobs:
               --add-data "assets/chat:assets/chat" \
               --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish" \
               --add-data "pet/menu_templates:pet/menu_templates" \
+              --add-data "integrations:integrations" \
               "${CHAT_DATA[@]}" \
               --name "dsh-pet-standalone-$VARIANT" \
               --add-data "$DATAS:$DATAS" \
@@ -84,6 +85,10 @@ jobs:
               echo "::error::$APP pet 模块未被 PyInstaller 收集"; cat "$WARN"; exit 1
             fi
             echo "$APP pet 模块已收集"
+            if ! find dist -path "*integrations/dsh-pet-bridge/package.json" | grep -q .; then
+              echo "::error::$APP 未打包 integrations/dsh-pet-bridge，DSH 桥接一键安装必然失败"; exit 1
+            fi
+            echo "$APP 桥接插件资源已打包"
           done
 
       - name: Package as zip
