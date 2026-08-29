@@ -2,7 +2,7 @@
 
 一个基于 **Python + PySide6** 的独立桌面宠物。项目脱离 DSH 运行时，提供透明无边框、置顶、可拖动、角色切换、动画播放、系统托盘和可选 AI 对话能力。
 
-> **当前版本：v4.0.1**（2026-08 发布，v4.0.0 的修复版）。发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。
+> **当前版本：v4.0.2**（2026-08 发布，v4.0.1 的修复版）。发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。
 
 ## 目录
 
@@ -86,6 +86,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 
 ## 当前状态
 
+- **v4.0.2**：v4.0.1 的修复版——自定义点击音效支持 MP3/OGG/FLAC（不再仅限 WAV）、动画边缘毛边与帧率精度修复、右键菜单懒加载与智能避让、设置期间暂停气泡、macOS/Linux 补打包 integrations 资源（DSH 桥接一键安装）、Chat 版显式收集 keyring（API Key 系统安全存储）等（详见下方「最近修复」）。
 - **v4.0.1**：v4.0.0 的修复版——修复 Windows「自动隐藏任务栏」下桌宠随任务栏误隐藏（PR #18）与副屏位置开机自启不恢复（PR #16，issue #8），并含主动识屏并发、DSH 桥接安装加固等修复（详见下方「最近修复」）。
 - **v4.0.0**：Windows 发布 WebM 两个版本（Chat 版与无 Chat 版），均提供安装包与绿色版；macOS（Apple Silicon）与 Linux（x86_64）由 GitHub Actions 构建发布。
 - 安装包免管理员、按当前用户安装，向导中可自由选择安装盘符与目录；卸载后无残留运行缓存。
@@ -911,6 +912,18 @@ python scripts/cleanup_mei_cache.py --delete
 <summary><b>最近修复（2026-08）</b></summary>
 
 ## 最近修复（2026-08）
+
+### v4.0.2（修复版）
+
+- **自定义点击音效支持 MP3/OGG/FLAC/M4A**：音效播放器重构——WAV 继续走轻量 winsound（Windows），非 WAV 统一走 QtMultimedia（QMediaPlayer，自带 FFmpeg 后端），不可用时 macOS/Linux 回退系统播放器（afplay/paplay/aplay）；修复自定义 MP3 在 Windows 上被 winsound 用系统提示音"播放"的问题（winsound 只支持 WAV，传入 MP3 会响系统默认音）。Linux/macOS 构建同步补打包 PySide6.QtMultimedia。
+- **动画边缘毛边/暗边修复**：帧渲染改为**预乘 alpha 缩放**（直通 alpha 缩放会让透明像素的 RGB 渗入半透明边缘，产生暗边/彩边）；Windows 上点击命中测试由 setMask 的 1-bit 裁剪改为**逐像素命中测试**（WM_NCHITTEST + HTTRANSPARENT，透明区域鼠标穿透、可见区域可点击），不再破坏 `WA_TranslucentBackground` 的逐像素半透明边缘。
+- **Harness 启动兼容旧版 dsh**：启动前探测 `web --help` 是否支持 `--no-open`（按命令缓存）——旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；不支持时不传，由 dsh 自己打开浏览器，桌宠不重复打开。
+- **动画帧率精度**：视频帧时长按 24fps 精确值（40ms → 42ms = 1000/24）修正，动画播放定时器改用精确定时器（PreciseTimer），消除粗略定时器漂移导致的节奏/移动插值偏差。
+- **右键菜单启动提速与避让**：动画分类子菜单**首次展开才填充**动作（根菜单构建不再遍历 91 个动画，首次右键不再卡顿数秒）；菜单弹出位置智能选择——优先角色右侧（子菜单向右展开）、屏幕不够时放左侧并让子菜单向左展开（RTL）、再不行放屏幕远角，根菜单与子菜单都不再遮挡角色；快捷启动应用图标按 (类型, 路径) 缓存（QFileIconProvider 首次取图标慢）。
+- **设置窗口打开期间暂停气泡**：新版设置/聊天设置任一打开时，桌宠气泡暂停显示（关闭后恢复），不再盖住设置界面。
+- **macOS/Linux 打包补 integrations 资源（PR #22）**：onedir 构建显式打包 `integrations/`（含 DSH 桥接插件），修复 macOS/Linux 上「启动 DeepSeek Harness → 一键安装桥接插件」因资源缺失而失败的问题；构建后增加断言检查，漏打包直接报错。
+- **Chat 版显式收集 keyring（API Key 系统安全存储）**：Windows/Linux/macOS 构建均显式 `--collect-all keyring`，确保 Chat 版 API Key 走系统凭据存储可用。
+- **安装包卸载流程调整**：安装包卸载时不再自动运行 `--uninstall-cleanup` 清理脚本（卸载更快更直接）；源码运行 `python -m pet --uninstall-cleanup` 仍可用。
 
 ### v4.0.1（修复版）
 
