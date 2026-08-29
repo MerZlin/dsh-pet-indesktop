@@ -21,17 +21,19 @@ make_icon failed: 1
 
 **预防**：本地跑 `build_onedir.ps1` 前先 `$env:PYTHONIOENCODING='utf-8'`；脚本层面可在 `make_icon.py` 开头 `sys.stdout.reconfigure(encoding='utf-8', errors='replace')` 自愈。
 
-### 1.2 本地与 CI 的 Python 发行版差异（Dev-Cpp 特有 urllib 缺陷）
+### 1.2 Python 3.11 官方 urllib 缺陷（HTTPError(fp=None) 读取响应体）
 
-**现象**：本地（Dev-Cpp 内置 Python 3.11.1）全量测试报 `KeyError: 'file'`，且 pytest 崩溃（INTERNALERROR）；CI 官方 Python 3.11 上同测试通过。
+**现象**：本地（Python 3.11.1，安装路径恰好是 Dev-Cpp 的文件夹）全量测试报 `KeyError: 'file'`，且 pytest 崩溃（INTERNALERROR）。
 
-**根因**：Dev-Cpp 发行版的 `urllib/response.py` 是旧版实现——`addbase` 继承 `tempfile._TemporaryFileWrapper`；构造 `HTTPError(url, code, msg, hdrs, fp=None)` 时因 `fp is None` 不调用 `addinfourl.__init__`，实例缺 `file` 键；随后 `exc.read(2048)`（vision.py 429 处理）触发 `_TemporaryFileWrapper.__getattr__` → `KeyError: 'file'`。官方 CPython 的 addbase 继承 object，`read()` 对 `fp=None` 直接返回 `b""`。
+**根因**：这是 **CPython 3.11 官方实现**的行为（不是特殊发行版）——3.11 的 `urllib/response.py` 中 `addbase` 继承 `tempfile._TemporaryFileWrapper`（3.12 起重构为继承 object）。构造 `HTTPError(url, code, msg, hdrs, fp=None)` 时因 `fp is None` 不调用 `addinfourl.__init__`，实例缺 `file` 键；随后 `exc.read(2048)`（vision.py 429 处理）触发 `_TemporaryFileWrapper.__getattr__` → `KeyError: 'file'`。
 
-**修复**：`pet/vision.py` 对 `exc.read()` 加 try/except 防御（读不到响应体按空处理，不影响状态码判断）。
+**注意**：CI 的官方 Python 3.11.9 同样存在该行为——这段 429 重试代码（PR #19）是 v4.0.2 才引入的，首次在 CI 跑测试即暴露（被 os.name 污染的 INTERNALERROR 掩盖，见 2.2）。
+
+**修复**：`pet/vision.py` 对 `exc.read()` 加 try/except 防御（读不到响应体按空处理，不影响状态码判断）——三平台都必要。
 
 **教训**：
-- 「本地过了」不等于「CI 过了」，反之亦然——Python 发行版、pytest 版本、Qt 版本都可能不同；
-- 网络/文件对象路径（`urllib`、`subprocess`、`tempfile`）最容易暴露发行版差异，写代码时对响应体读取做防御；
+- 「本地过了」不等于「CI 过了」，反之亦然——Python 小版本（3.11.x 间行为也可能不同）、pytest 版本、Qt 版本都可能不同；
+- 网络/文件对象路径（`urllib`、`subprocess`、`tempfile`）最容易暴露版本差异，写代码时对响应体读取做防御；
 - 遇到 pytest INTERNALERROR（非测试失败而是 pytest 自身崩），先怀疑**失败异常的 repr 阶段**再崩（异常对象/链里有损坏对象）。
 
 ---

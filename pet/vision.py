@@ -338,10 +338,11 @@ def _post_vision_request(
                 data = json.loads(resp.read().decode('utf-8', 'replace'))
             break
         except urllib.error.HTTPError as exc:
-            # 部分 Python 发行版（如 Dev-Cpp 内置 3.11.1）的 urllib addbase
-            # 继承 tempfile._TemporaryFileWrapper，且 HTTPError(fp=None) 时
-            # addinfourl.__init__ 未执行，exc.read() 会 KeyError('file')。
-            # 防御：读不到响应体就当空处理，不影响状态码判断。
+            # CPython 3.11 官方 urllib/response.py 的 addbase 继承
+            # tempfile._TemporaryFileWrapper（3.12 起重构为继承 object）；
+            # HTTPError(fp=None) 时 addinfourl.__init__ 未执行、实例缺 file 键，
+            # exc.read() 会触发 KeyError('file')。防御：读不到响应体就当空处理，
+            # 不影响状态码判断。
             try:
                 detail = exc.read(2048).decode('utf-8', 'replace')
             except Exception:
