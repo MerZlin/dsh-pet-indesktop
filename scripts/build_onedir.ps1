@@ -78,6 +78,7 @@ if (-not $SkipBuild) {
         --icon assets\icon.ico `
         --collect-all imageio_ffmpeg `
         --collect-all certifi `
+        --collect-all PySide6.QtMultimedia `
         --add-data $datas `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
         --add-data "pet\menu_templates;pet\menu_templates" `

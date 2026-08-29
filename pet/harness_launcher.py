@@ -90,6 +90,35 @@ def _wrap_cmd(command: list[str]) -> list[str]:
     return command
 
 
+# 按基础命令缓存 `web --help` 是否包含 --no-open，避免每次点击菜单都探测
+_NO_OPEN_CACHE: dict[tuple[str, ...], bool] = {}
+
+
+def _supports_no_open(base_command: list[str]) -> bool:
+    """探测 `web --help` 是否支持 --no-open。
+
+    旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；探测失败/
+    超时默认 False，宁可少传参数也不能让启动命令报 unknown option。
+    """
+    key = tuple(str(part) for part in base_command)
+    if key in _NO_OPEN_CACHE:
+        return _NO_OPEN_CACHE[key]
+    try:
+        result = subprocess.run(
+            [*base_command, "web", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=str(Path.home()),
+            env={**os.environ, "PATH": _augmented_path()},
+        )
+        supported = "--no-open" in (result.stdout or "") or "--no-open" in (result.stderr or "")
+    except Exception:
+        supported = False
+    _NO_OPEN_CACHE[key] = supported
+    return supported
+
+
 def _npm_global_roots() -> list[Path]:
     """候选的 npm 全局 node_modules 根目录。"""
     roots: list[Path] = []
@@ -111,12 +140,23 @@ def _npm_global_roots() -> list[Path]:
 
 
 def _find_launch_command(port: int = DEFAULT_PORT) -> list[str] | None:
-    """级联解析 dsh 启动命令；找不到返回 None。"""
-    tail = ["web", "--host", "127.0.0.1", "--port", str(port), "--no-open"]
+    """级联解析 dsh 启动命令；找不到返回 None。
+
+    尾部参数先固定 web/host/port；只有探测到 `web --help` 支持
+    `--no-open` 时才追加该选项，否则不传（由 dsh 自己开浏览器）。
+    """
+    port = int(port)
+    tail = ["web", "--host", "127.0.0.1", "--port", str(port)]
+
+    def _finish(base_command: list[str]) -> list[str]:
+        if _supports_no_open(base_command):
+            tail.append("--no-open")
+        return _wrap_cmd([*base_command, *tail])
+
     # 1) PATH 上的 dsh（各包管理器全局安装）
     dsh = _which("dsh")
     if dsh:
-        return _wrap_cmd([dsh, *tail])
+        return _finish([dsh])
 
     # 2) node + npm 全局包内的 bin.js
     node = _which("node")
@@ -124,19 +164,19 @@ def _find_launch_command(port: int = DEFAULT_PORT) -> list[str] | None:
         bin_js = root / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
         if bin_js.is_file():
             if node:
-                return [node, str(bin_js), *tail]
+                return _finish([node, str(bin_js)])
             # POSIX：bin.js 有 shebang 可直跑；Windows 上必须经 node
             if os.name != "nt":
-                return [str(bin_js), *tail]
+                return _finish([str(bin_js)])
 
     # 3) 官方推荐：npx --yes @deepseek-ai/dsh web（首次会自动拉取）
     npx = _which("npx")
     if npx:
-        return _wrap_cmd([npx, "--yes", "@deepseek-ai/dsh", *tail])
+        return _finish([npx, "--yes", "@deepseek-ai/dsh"])
     if node:
         npx_side = Path(node).with_name("npx")  # npx 随 Node 一起分发
         if npx_side.is_file():
-            return _wrap_cmd([str(npx_side), "--yes", "@deepseek-ai/dsh", *tail])
+            return _finish([str(npx_side), "--yes", "@deepseek-ai/dsh"])
     return None
 
 
@@ -185,7 +225,8 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
 
     返回 (status, url)：
     - already   已在运行，已打开浏览器
-    - started   已后台启动，就绪后自动打开浏览器
+    - started   已后台启动；命令带 --no-open 时由桌宠等待就绪后打开浏览器，
+                否则由 dsh 自己开浏览器（桌宠不重复打开）
     - not-found 未找到 dsh 命令
     - error     启动异常（info 为异常信息）
     """
@@ -200,6 +241,10 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
         _spawn(command)
     except OSError as exc:
         return "error", str(exc)
+
+    if "--no-open" not in command:
+        # 未传 --no-open：dsh 会自己打开浏览器，桌宠不再重复打开
+        return "started", url
 
     def _wait_and_open() -> None:
         deadline = time.monotonic() + _READY_TIMEOUT_SECONDS

@@ -59,6 +59,7 @@ jobs:
               --paths . \
               --collect-all imageio_ffmpeg \
               --collect-all certifi \
+              --collect-all PySide6.QtMultimedia \
               --add-data "assets/sounds:assets/sounds" \
               --add-data "assets/chat:assets/chat" \
               --name "dsh-pet-standalone-$VARIANT" \

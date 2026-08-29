@@ -20,8 +20,6 @@ import logging
 import os
 import math
 import random
-import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -30,7 +28,7 @@ from typing import Any
 
 import shiboken6
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QAbstractNativeEventFilter, QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
@@ -53,6 +51,7 @@ from .context_menu import populate_context_menu as _populate_context_menu
 from .context_menus.shared import take_deferred_menu_callbacks
 from . import vision as vision_mod
 from . import physics as physics_mod
+from .click_sound import play_click_sound
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
 
@@ -210,6 +209,47 @@ class _WinMonitorInfo(ctypes.Structure):
                 ('rcWork', _WinRect), ('dwFlags', ctypes.c_ulong)]
 
 
+class WindowsPerPixelHitTestFilter(QAbstractNativeEventFilter):
+    """Windows 逐像素命中测试：透明区域返回 HTTRANSPARENT 让鼠标穿透。
+
+    替代 QWidget.setMask 的 1-bit 窗口裁剪——setMask 会破坏
+    WA_TranslucentBackground 的逐像素半透明边缘；这里只影响输入命中，
+    视觉仍由 translucent background 负责平滑合成。
+    """
+
+    WM_NCHITTEST = 0x0084
+    HTTRANSPARENT = -1
+    HTCLIENT = 1
+
+    def __init__(self, window: "PetWindow") -> None:
+        super().__init__()
+        self._window = window
+
+    def nativeEventFilter(self, event_type, message):
+        if os.name != "nt":
+            return False, 0
+        if event_type not in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
+            return False, 0
+        try:
+            msg = wintypes.MSG.from_address(int(message))
+        except Exception:
+            return False, 0
+        if msg.message != self.WM_NCHITTEST:
+            return False, 0
+        win = self._window
+        try:
+            if int(msg.hwnd) != int(win.winId()):
+                return False, 0
+            x = ctypes.c_short(msg.lParam & 0xFFFF).value
+            y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+            local = win.mapFromGlobal(QPoint(x, y))
+            if win._is_transparent_at(local):
+                return True, self.HTTRANSPARENT
+            return True, self.HTCLIENT
+        except Exception:
+            return False, 0
+
+
 class PetWindow(QWidget):
     """桌宠窗口本体。"""
 
@@ -336,6 +376,9 @@ class PetWindow(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.applicationStateChanged.connect(self._on_application_state_changed)
+            if os.name == "nt":
+                self._hit_filter = WindowsPerPixelHitTestFilter(self)
+                app.installNativeEventFilter(self._hit_filter)
 
         # ---- 状态 ----
         self.anim: str = self.idle
@@ -344,6 +387,10 @@ class PetWindow(QWidget):
         self.no_move: bool = bool(config.get('no_move', False))  # 不移动：禁用自动移动
         self.movie = None
         self._frame_pixmap: QPixmap | None = None
+        # 角色可见轮廓（窗口局部坐标）与逐像素命中缓存；贴边功能复用 _mask_bounds
+        self._mask_bounds: QRect | None = None
+        self._hit_alpha_image: QImage | None = None
+        self._hit_filter: WindowsPerPixelHitTestFilter | None = None
         # 窗口隐藏时暂停动画解码/定时器；显示时由 showEvent 恢复
         self._hidden_paused = False
         self._ended_fired = False
@@ -512,6 +559,9 @@ class PetWindow(QWidget):
         transparent canvas.
         """
         frame_rect = self.frameGeometry()
+        local_rect = self.character_local_region()
+        if not local_rect.isEmpty():
+            return QRect(frame_rect.topLeft() + local_rect.topLeft(), local_rect.size())
         mask = self.mask()
         if not mask.isEmpty():
             local_rect = mask.boundingRect()
@@ -1111,42 +1161,85 @@ class PetWindow(QWidget):
         # 含文字/方向性画面的动画登记在 lib.no_mirror，朝右时也不镜像（否则文字反显）
         if self.facing == 'right' and self.anim not in getattr(self.lib, 'no_mirror', frozenset()):
             img = img.mirrored(True, False)
-        # 按屏幕 DPR 渲染到物理像素，避免高分屏下被 Qt 二次放大导致模糊
+        # 按屏幕 DPR 渲染到物理像素，避免高分屏下被 Qt 二次放大导致模糊。
+        # 先转预乘 alpha 再缩放：直通 alpha 缩放会让透明像素的 RGB 渗入
+        # 半透明边缘，产生暗边/彩边（毛边来源之一）。
         scr = self._screen_available()
         dpr = scr.devicePixelRatio() if scr is not None else 1.0
         w_c = max(1, int(round(catalog.CANVAS_W * self.scale * dpr)))
         h_c = max(1, int(round(catalog.CANVAS_H * self.scale * dpr)))
+        img = img.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
         img = img.scaled(w_c, h_c,
                          Qt.AspectRatioMode.IgnoreAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
+        img = img.convertToFormat(QImage.Format.Format_ARGB32)
         pm = QPixmap.fromImage(img)
         pm.setDevicePixelRatio(dpr)
         self._frame_pixmap = pm
+        self._hit_alpha_image = None  # 帧已变化，逐像素命中缓存失效
         self._sync_mask()
 
+    def _frame_draw_rect(self) -> QRect:
+        """当前帧在窗口内的绘制矩形（逻辑坐标）；paintEvent 与命中测试共用。"""
+        if self._squash_active:
+            x, y, w, h = _squash_geometry(
+                self._w,
+                self._h,
+                int(round(catalog.CANVAS_W * self.scale)),
+                int(round(catalog.CANVAS_H * self.scale)),
+                self._squash_progress,
+            )
+            return QRect(x, y, w, h)
+        return QRect(0, int(round(catalog.PAD * self.scale)),
+                     int(round(catalog.CANVAS_W * self.scale)),
+                     int(round(catalog.CANVAS_H * self.scale)))
+
     def _sync_mask(self) -> None:
-        """按当前帧 alpha 设置窗口 mask：透明区域鼠标穿透到下层窗口。
-        Q 弹（squash）期间画面几何被压缩，mask 必须跟随同一几何，
-        否则变形后的角色边缘会被旧轮廓裁掉、命中区域也与画面错位。"""
+        """更新角色可见轮廓与窗口 mask。
+
+        - 非 Windows：继续用 QWidget.setMask 实现透明区域鼠标穿透。
+        - Windows：不再 setMask（1-bit 裁剪会破坏半透明边缘），只更新
+          _mask_bounds；鼠标穿透由 WindowsPerPixelHitTestFilter 负责。
+        """
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
         p = QPainter(canvas)
         if self._frame_pixmap is not None:
-            if self._squash_active:
-                x, y, w, h = _squash_geometry(
-                    self._w,
-                    self._h,
-                    int(round(catalog.CANVAS_W * self.scale)),
-                    int(round(catalog.CANVAS_H * self.scale)),
-                    self._squash_progress,
-                )
-                # 与 paintEvent 完全相同的绘制调用，保证 mask 与画面逐像素一致
-                p.drawPixmap(x, y, w, h, self._frame_pixmap)
-            else:
-                p.translate(0, int(round(catalog.PAD * self.scale)))
-                p.drawPixmap(0, 0, self._frame_pixmap)
+            rect = self._frame_draw_rect()
+            # 与 paintEvent 完全相同的绘制调用，保证 mask 与画面逐像素一致
+            p.drawPixmap(rect, self._frame_pixmap)
         p.end()
-        self.setMask(QBitmap.fromImage(canvas.createAlphaMask()))
+        mask = QBitmap.fromImage(canvas.createAlphaMask())
+        self._mask_bounds = QRegion(mask).boundingRect()
+        if os.name != "nt":
+            self.setMask(mask)
+        elif not self.mask().isEmpty():
+            self.clearMask()
+
+    def character_local_region(self) -> QRect:
+        """当前角色可见区域（窗口局部坐标）；供贴边/气泡定位等增量功能复用。"""
+        if self._mask_bounds is not None and not self._mask_bounds.isEmpty():
+            return QRect(self._mask_bounds)
+        return QRect(0, 0, self._w, self._h)
+
+    def _is_transparent_at(self, local: QPoint) -> bool:
+        """判断窗口局部坐标处是否透明（供 Windows 命中测试使用）。"""
+        if self._frame_pixmap is None or self._frame_pixmap.isNull():
+            return False
+        rect = self._frame_draw_rect()
+        if not rect.contains(local):
+            return True
+        if self._hit_alpha_image is None:
+            self._hit_alpha_image = self._frame_pixmap.toImage()
+        img = self._hit_alpha_image
+        if img.isNull():
+            return False
+        dpr = self._frame_pixmap.devicePixelRatio() or 1.0
+        px = int(round((local.x() - rect.x()) * dpr))
+        py = int(round((local.y() - rect.y()) * dpr))
+        if px < 0 or py < 0 or px >= img.width() or py >= img.height():
+            return True
+        return img.pixelColor(px, py).alpha() < 16
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         painter = QPainter(self)
@@ -1593,22 +1686,7 @@ class PetWindow(QWidget):
         path = next((item for item in candidates if item.is_file()), None)
         if path is None:
             return
-        if sys.platform == "win32":
-            try:
-                import winsound
-                winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
-            except Exception:
-                pass
-            return
-        player = shutil.which("afplay") or shutil.which("paplay") or shutil.which("aplay")
-        if player:
-            command = [player, str(path)]
-            if Path(player).name == "aplay":
-                command.insert(1, "-q")
-            try:
-                subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except OSError:
-                pass
+        play_click_sound(path)
 
     # ================================================================ 看看屏幕
     def _on_look_screen(self) -> None:
@@ -2113,6 +2191,11 @@ class PetWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
+        if self._hit_filter is not None:
+            app = QApplication.instance()
+            if app is not None:
+                app.removeNativeEventFilter(self._hit_filter)
+            self._hit_filter = None
         self._save_position()
         self._self_talk_timer.stop()
         self._cancel_animation_gap()

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -461,6 +462,66 @@ class DshMonitor(BaseAgentMonitor):
             if (c / "package.json").is_file():
                 return c
         return None
+
+    @staticmethod
+    def _list_profiles() -> list[str]:
+        """枚举已存在的 dsh profile。
+
+        只认含 cordis.yml 的目录（真实 profile 的标志）；~/.dsh/profiles 下
+        可能混入 node_modules 等包管理器/误操作残留的杂项目录，把它们当实例
+        安装会失败并触发整体回滚，必须过滤。目录不存在或无有效 profile 时
+        回退 ["web"]（安装命令会自动创建该 profile）。
+        """
+        profiles_dir = Path.home() / ".dsh" / "profiles"
+        if not profiles_dir.is_dir():
+            return ["web"]
+        profiles = sorted(
+            p.name for p in profiles_dir.iterdir()
+            if p.is_dir() and (p / "cordis.yml").is_file()
+        )
+        return profiles or ["web"]
+
+    @staticmethod
+    def _summarize_install_error(output: str) -> str:
+        """从安装输出中提取第一行有用的错误摘要。"""
+        if not output or not output.strip():
+            return "未知错误"
+
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        # 过滤掉以 'at ' 开头的堆栈行和 node_modules 路径行
+        candidate_lines = [
+            line for line in lines
+            if not line.startswith("at ") and "node_modules" not in line
+        ]
+        if not candidate_lines:
+            return "未知错误"
+
+        # 优先匹配含 'ERR_' / 'error' / 'Error' 的行
+        chosen_line = ""
+        for line in candidate_lines:
+            if "ERR_" in line or "error" in line or "Error" in line:
+                chosen_line = line
+                break
+        if not chosen_line:
+            chosen_line = candidate_lines[0]
+
+        # 清理绝对路径（Windows 如 C:\path\file.ext 或 POSIX 如 /path/to/file.ext 或 file:///C:/...）
+        # 只保留最后一段文件名
+        def _replace_path(match: re.Match) -> str:
+            raw_path = match.group(0)
+            clean_path = raw_path.replace("\\", "/").rstrip("/")
+            segment = clean_path.split("/")[-1]
+            return segment or raw_path
+
+        # 匹配 file:/// 路径、Windows 盘符路径、POSIX 绝对路径
+        path_pattern = re.compile(r'(?:file:///[A-Za-z]:[^\s\'"]+|[A-Za-z]:\\[^\s\'"]+|/(?:[^\s\'"]+/)+[^\s\'"]*)')
+        cleaned_line = path_pattern.sub(_replace_path, chosen_line)
+
+        # 最长截到 60 字符
+        if len(cleaned_line) > 60:
+            cleaned_line = cleaned_line[:60]
+
+        return cleaned_line or "未知错误"
 
     @classmethod
     def install_bridge(cls) -> tuple[bool, str]:
