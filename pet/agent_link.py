@@ -969,14 +969,18 @@ class AgentLinkManager(QObject):
 
     # 联动气泡展示名
     AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode"}
-    # 过程汇报：工具名 → 用户可读文案（白名单制，未知工具静默不弹，不泄露原始命令/路径）
+    # 过程汇报：工具名 → 用户可读文案（不展示原始命令/路径）
     TOOL_LABELS = {
         "read": "正在读文件", "write": "正在写文件", "edit": "正在改代码",
         "notebookedit": "正在改代码", "bash": "正在跑命令", "shell": "正在跑命令",
+        "pwsh": "正在跑命令", "powershell": "正在跑命令",
         "grep": "正在搜索", "glob": "正在搜索", "search": "正在搜索",
+        "memory_search": "正在翻记忆",
         "webfetch": "正在查网页", "websearch": "正在查网页",
+        "fetch": "正在查网页", "browser": "正在查网页", "web_fetch": "正在查网页",
         "task": "正在派活给子代理", "todowrite": "正在列计划",
     }
+    _UNKNOWN_TOOL_LABEL = "正在调用工具"
     _ACTIVITY_MIN_INTERVAL = 10.0    # 同 Agent 过程气泡最小间隔
     _ACTIVITY_GLOBAL_MIN = 8.0       # 全局最小间隔（多 Agent 并发防刷屏）
     _ACTIVITY_SAME_LABEL = 60.0      # 同一工具文案 60s 内不重复
@@ -1242,12 +1246,22 @@ class AgentLinkManager(QObject):
     # ------------------------------------------------------------------
     _LINK_MAIN = ("写代码", "吃Token")
     _LINK_BREAK = ("轻快记录", "原地漂浮踏步")
+    _LINK_MAIN_KEYWORDS = ("代码", "工作", "写", "打字", "敲")
+    _LINK_BREAK_KEYWORDS = ("记录", "踏步", "伸懒腰")
 
     def _next_link_anim_rotation(self) -> str | None:
         """下一个联动动作：主动作严格交替；每第 3 次插播摸鱼（独立节奏）。"""
-        acts = getattr(self.win, "cats", {}).get("acts", [])
+        acts = list(getattr(self.win, "cats", {}).get("acts", []) or [])
         main = [a for a in self._LINK_MAIN if a in acts]
         brk = [a for a in self._LINK_BREAK if a in acts]
+        # 不同角色包的动作名不统一：精确名缺失时按语义关键词回退。
+        if not main:
+            main = [a for a in acts if any(k in a for k in self._LINK_MAIN_KEYWORDS)]
+        if not brk:
+            brk = [a for a in acts if any(k in a for k in self._LINK_BREAK_KEYWORDS)]
+        # 角色包至少有一个动作时，确保 Agent 忙碌期间始终有可见反馈。
+        if not main and not brk:
+            main = acts
         if not main and not brk:
             return None
         self._link_seq += 1
@@ -1312,9 +1326,7 @@ class AgentLinkManager(QObject):
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_activity", False):
             return
-        label = self.TOOL_LABELS.get(str(tool).strip().lower(), "")
-        if not label:
-            return
+        label = self.TOOL_LABELS.get(str(tool).strip().lower(), self._UNKNOWN_TOOL_LABEL)
         now = self._clock()
         last = self._last_activity.get(agent_key)
         if last is not None:
