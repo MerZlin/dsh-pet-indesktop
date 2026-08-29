@@ -3,7 +3,7 @@ import threading
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 from .models import ChatSettings, ProviderConfig, SecretStore
 from .providers import test_connection
@@ -216,16 +216,19 @@ class ChatSettingsDialog(QDialog):
             p.vision_api_key_ref = f'provider/{p.provider_id}/vision'
             if not SecretStore().set(p.vision_api_key_ref, vkey):
                 p.vision_api_key = vkey
+                QMessageBox.warning(self, '安全存储不可用', '无法使用系统安全存储，Key 仅本次运行保留，重启需重输。')
         p.verify_ssl = not self.skip_ssl.isChecked()
         key = self.key.text()
         if key:
             p.api_key_ref = p.api_key_ref or f'provider/{p.provider_id}'
             if not SecretStore().set(p.api_key_ref, key):
                 p.api_key = key
+                QMessageBox.warning(self, '安全存储不可用', '无法使用系统安全存储，Key 仅本次运行保留，重启需重输。')
         i = self.bg_mode.currentIndex()
         bg_val = '' if i == 0 else ('builtin:' + self._bg_keys[i - 1] if i <= len(self._bg_keys) else self.bg.text().strip())
         self.config.set('chat_background', bg_val)
         self.settings.default_system_prompt = self.prompt.toPlainText().strip()
         self.config.set_chat_settings(self.settings)
-        self.config.save()
+        if not self.config.save():
+            QMessageBox.warning(self, '保存失败', '配置未能写入磁盘，改动可能在重启后丢失。\n\n配置路径：' + str(self.config.path))
         self.accept()

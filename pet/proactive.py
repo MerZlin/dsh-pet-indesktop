@@ -540,12 +540,32 @@ class ProactiveLimiter:
             state["last_request"] = self._clock()
             self._save_state(state)
 
-    def record_success(self) -> None:
-        """记录一次成功的主动关怀（更新 count, last_trigger, last_request，清空失败计数）。"""
+    def consume_budget(self) -> bool:
+        """每次真实 HTTP 请求前调用：消耗一次当日请求预算。
+
+        预算（count）按真实请求次数计费——一次触发里的多次重试各自占用额度，
+        不再只记一次。返回 False 表示当日预算已耗尽，调用方应停止重试。
+        """
         with self._locked():
             state = self._load_state()
             now = self._clock()
+            daily_cap = int(self.cfg.get("daily_cap", 15))
+            if int(state.get("count", 0)) >= daily_cap:
+                return False
             state["count"] = int(state.get("count", 0)) + 1
+            state["last_request"] = now
+            self._save_state(state)
+            return True
+
+    def record_success(self) -> None:
+        """记录一次成功的主动关怀（更新 last_trigger, last_request，清空失败计数）。
+
+        注意：预算（count）已由 consume_budget 在每次真实 HTTP 请求前消耗，
+        此处不再累加，避免一次请求被重复计费。
+        """
+        with self._locked():
+            state = self._load_state()
+            now = self._clock()
             state["last_trigger"] = now
             state["last_request"] = now
             state["consecutive_failures"] = 0
@@ -726,6 +746,12 @@ class ProactiveScreenWatcher:
             self._current_hwnd = 0
             self._entered_ts = 0.0
             self._last_dhash = None
+            return
+
+        # G2.5 联动去重：该窗口所属 Agent 联动开启且正忙时，联动气泡已在汇报，
+        # 识屏不再插话（否则 Agent 每动一下她就评一句，等于刷屏）
+        mgr = getattr(self.win, "agent_link_manager", None)
+        if mgr is not None and mgr.busy_agent_owns_process(proc, title):
             return
 
         now = time.time()
@@ -935,7 +961,8 @@ class ProactiveScreenWatcher:
 
         try:
             reply = vision._post_vision_request(
-                jpeg_bytes, app_str, system_prompt, provider, memory_context=memory_ctx
+                jpeg_bytes, app_str, system_prompt, provider, memory_context=memory_ctx,
+                consume_budget=self.limiter.consume_budget,
             )
             # 代次隔离：请求在飞期间用户关闭功能/隐藏窗口（pause 翻转代次）时，
             # 迟到答复一律丢弃——不冒泡、不耗额度计数、不写陪伴记忆。

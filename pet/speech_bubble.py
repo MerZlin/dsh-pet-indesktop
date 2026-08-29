@@ -103,6 +103,11 @@ def normalize_bubble_text(text: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def bubble_max_lines(text: str) -> int:
+    """Return the max allowed lines for bubble text: 3 for short text, 6 for long."""
+    return 3 if len(normalize_bubble_text(text)) <= 40 else 6
+
+
 def elide_bubble_text(
     metrics: QFontMetrics,
     text: str,
@@ -321,7 +326,10 @@ class PetSpeechBubble(QFrame):
             self.label.show()
             self.label.setPixmap(QPixmap())
             self.label.setText(elide_bubble_text(
-                QFontMetrics(self.label.font()), self._raw_text, label_width, 3
+                QFontMetrics(self.label.font()),
+                self._raw_text,
+                label_width,
+                bubble_max_lines(self._raw_text),
             ))
 
     def _breath_size_for_content(self, base_size: QSize) -> QSize:
@@ -339,8 +347,8 @@ class PetSpeechBubble(QFrame):
         elif self._content_kind == "text":
             length = len(normalize_bubble_text(self._raw_text))
             if length > 24:
-                width += min(48, ceil((length - 24) / 8) * 12)
-        width = max(base_size.width(), min(264, width))
+                width += min(104, ceil((length - 24) / 8) * 14)
+        width = max(base_size.width(), min(320, width))
         return QSize(width, int(width * 195 / 240 + 0.5))
 
     def show_text(
@@ -363,7 +371,9 @@ class PetSpeechBubble(QFrame):
         if self._preset.get("shape") == "breath_bubble":
             self._configure_breath_content(anchor_rect, pet_scale)
         else:
-            display_text = elide_bubble_text(metrics, text, 248, 3)
+            display_text = elide_bubble_text(
+                metrics, text, 248, bubble_max_lines(text)
+            )
             self.label.setPixmap(QPixmap())
             self.label.setText(display_text)
             bounds = metrics.boundingRect(

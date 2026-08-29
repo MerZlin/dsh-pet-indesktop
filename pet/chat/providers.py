@@ -90,7 +90,7 @@ class SSEParser:
         return out
 
 class OpenAICompatibleProvider:
-    def stream(self,messages:list[dict[str,Any]],config:ProviderConfig,cancel_event:threading.Event)->Iterator[str]:
+    def stream(self,messages:list[dict[str,Any]],config:ProviderConfig,cancel_event:threading.Event,response_holder:list|None=None)->Iterator[str]:
         endpoint=normalize_chat_endpoint(config.base_url,config.chat_path)
         payload:dict[str,Any]={'model':config.model,'messages':messages,'stream':True,'temperature':config.temperature,'max_tokens':config.max_tokens}
         headers={'Content-Type':'application/json','Accept':'text/event-stream'}
@@ -103,6 +103,8 @@ class OpenAICompatibleProvider:
             reason=exc.reason; hint=_CERT_HINT if _is_cert_verify_error(reason) else ''
             raise ProviderError(f'网络连接失败：{reason}{hint}') from exc
         except OSError as exc: raise ProviderError(f'网络请求失败：{exc}') from exc
+        if response_holder is not None:
+            response_holder.append(response)
         parser=SSEParser()
         try:
             while not cancel_event.is_set():

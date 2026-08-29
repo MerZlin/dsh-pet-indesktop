@@ -965,3 +965,106 @@ def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypat
     monkeypatch.setattr(app_mod, "_mac_set_dock_icon_visible", lambda *a, **k: None)
     PetApp._modern_settings_finished(owner, 0)  # QDialog.Rejected（X 关闭）
     assert refreshed == [1], "Rejected 关闭也必须刷新桌宠"
+
+
+def test_ai_page_warns_when_keyring_unavailable(tmp_path, monkeypatch):
+    """keyring 不可用时保存必须提示，且 key 仅保留内存（不落盘明文）。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+
+    class FakeStore:
+        def get(self, _ref):
+            return ""
+
+        def set(self, _ref, _value):
+            return False
+
+    warnings = []
+    monkeypatch.setattr(settings_mod.QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    monkeypatch.setattr(dialog.ai_page, "_secret_store_type", FakeStore)
+    dialog.ai_page.key.setText("sk-new")
+    dialog.ai_page.save()
+    assert len(warnings) == 1
+    assert "系统安全存储" in str(warnings[0][2])
+    assert dialog.ai_page.settings.active_config.api_key == "sk-new"
+    dialog.close()
+    app.processEvents()
+
+
+def test_modern_settings_save_warns_on_failure(tmp_path, monkeypatch):
+    """保存失败（此处置目标为目录迫使 os.replace 失败）时提示用户+配置路径。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    warnings = []
+    monkeypatch.setattr(settings_mod.QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+    config = Config(tmp_path)
+    config.path.mkdir(parents=True, exist_ok=True)  # 目标为目录，os.replace 必失败
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
+    dialog._save()
+    assert any("保存失败" in str(x[1]) for x in warnings)
+    assert any(str(config.path) in str(x[2]) for x in warnings)
+    dialog.close()
+    app.processEvents()
+
+
+def test_modern_settings_close_applies_autostart(tmp_path, monkeypatch):
+    """直接关闭（X）新版设置也必须应用开机自启开关（与「保存并退出」一致）。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    applied = []
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    monkeypatch.setattr(
+        settings_mod.autostart_mod,
+        "set_enabled",
+        lambda enabled: applied.append(enabled) or True,
+    )
+    config = Config(tmp_path)
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
+    dialog.autostart_check.setChecked(True)
+    dialog.close()  # X 关闭，不点「保存并退出」
+    app.processEvents()
+    assert applied == [True]
+    assert config.get("autostart_wanted") is True
+    dialog.close()
+    app.processEvents()
+
+
+def test_modern_autostart_write_failure_warns(tmp_path, monkeypatch):
+    """开机自启写入失败时必须弹窗提示（此前无任何反馈，用户不知自启没生效）。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    monkeypatch.setattr(settings_mod.autostart_mod, "set_enabled", lambda enabled: False)
+    warnings = []
+    monkeypatch.setattr(
+        settings_mod.QMessageBox, "warning", lambda *a, **k: warnings.append(a)
+    )
+    config = Config(tmp_path)
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
+    # 与初始状态不同（初始 = is_enabled() = False）→ 触发写入
+    dialog.autostart_check.setChecked(True)
+    dialog._apply_autostart()
+    assert len(warnings) == 1
+    assert "开机自启设置失败" in str(warnings[0][1])
+    assert "失败" in str(warnings[0][2])
+    dialog.close()
+    app.processEvents()

@@ -135,6 +135,7 @@ class PetApp:
         self._balance_busy = False
         self._balance_cache = None
         self._balance_bridge = None
+        self._on_about_to_quit_connected = False
         self._balance_timer = QTimer()
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
@@ -142,12 +143,27 @@ class PetApp:
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
+        # aboutToQuit 只在控制器层绑定一次：角色热切换会重建窗口，逐个
+        # connect win._save_position 会在旧窗口延迟销毁后残留失效引用。
+        # 统一走 _on_about_to_quit，在信号触发时读取当前有效窗口。
+        if not self._on_about_to_quit_connected:
+            self.app.aboutToQuit.connect(self._on_about_to_quit)
+            self._on_about_to_quit_connected = True
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self._create_ui(character_id)
         self._apply_spawn_offset()
         self._apply_balance_timer()
         QTimer.singleShot(3500, self._check_autostart_wanted)
+
+    def _on_about_to_quit(self) -> None:
+        """退出前保存当前有效窗口的位置。
+
+        aboutToQuit 只绑定一次自本控制器；切换角色会重建桌宠窗口，信号
+        触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
+        """
+        if self.win is not None:
+            self.win._save_position()
 
     def _set_autostart(self, enabled: bool, win=None) -> bool:
         ok = autostart_mod.set_enabled(bool(enabled))
@@ -331,8 +347,6 @@ class PetApp:
             if old_tray is not None:
                 QTimer.singleShot(0, old_tray.deleteLater)
 
-        self.app.aboutToQuit.connect(win._save_position)
-
     # ------------------------------------------------------------ 角色切换
     def switch_character(self, character_id: str) -> None:
         if self.win is None:
@@ -389,8 +403,6 @@ class PetApp:
                 if chat_window is not None:
                     chat_window.set_pet_window(self.win)
                     chat_window.switch_character(character_id)
-
-        self.app.aboutToQuit.connect(win._save_position)
 
     def open_chat(self) -> None:
         """Open the configured chat UI; menus only need this stable dispatcher."""

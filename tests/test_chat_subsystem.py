@@ -2072,3 +2072,31 @@ def test_connection_test_reentrant_clicks_do_not_duplicate_requests(tmp_path, mo
         release.set()
         dialog.close()
         app.processEvents()
+
+
+def test_chat_settings_dialog_warns_when_keyring_unavailable(tmp_path, monkeypatch):
+    """AI 设置对话框在 keyring 不可用时须提示，且 key 仅保留内存（不落盘明文）。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.chat.settings_dialog as sd
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    warnings = []
+
+    class FakeStore:
+        def get(self, _ref):
+            return ""
+
+        def set(self, _ref, _value):
+            return False
+
+    monkeypatch.setattr(sd, "SecretStore", FakeStore)
+    monkeypatch.setattr(sd.QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+    dialog = sd.ChatSettingsDialog(Config(tmp_path))
+    dialog.key.setText("sk-new")
+    dialog.save()
+    assert len(warnings) == 1
+    assert "系统安全存储" in str(warnings[0][2])
+    assert dialog.settings.active_config.api_key == "sk-new"
+    app.processEvents()

@@ -2,7 +2,9 @@
 """配置读取与持久化；兼容旧版平铺 chat_* 字段的迁移。"""
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import os
 import shutil
 import sys
@@ -176,6 +178,11 @@ def _default_agent_link_data() -> dict:
         "claude": False,
         "cursor": False,
         "opencode": False,
+        # 联动气泡：开始干活提醒（可选，默认关）、任务完成通知（默认开）
+        "notify_state": False,
+        "notify_done": True,
+        # 过程汇报（可选，默认关）：Agent 干活中报「正在读文件/跑命令/改代码…」
+        "notify_activity": False,
     }
 
 
@@ -409,7 +416,36 @@ class Config:
             legacy["providers"] = {"openai-main": legacy_provider}
         merged = dict(legacy)
         merged.update(chat)
-        self.data["chat"] = _merge_chat_data(merged)
+        # secret 只进不出：磁盘重载不得冲掉内存中的 key。
+        # _redacted_data() 写盘时会剔除 chat.providers 下的明文 api_key /
+        # vision_api_key（keyring 不可用时 key 只存内存 self.data），因此磁盘文件
+        # 里没有这两项。这里若某 provider 在磁盘数据里缺 api_key/vision_api_key
+        # 但合入前的内存里有，则保留内存值，避免设置对话框重开（自 config._load()
+        # 从磁盘重载）把用户未重启就丢掉的 key 覆盖成空。新旧两套设置对话框都走
+        # 这条 _load() 路径，一处修复全覆盖。
+        previous_chat = self.data.get("chat")
+        previous_providers = (
+            previous_chat.get("providers") if isinstance(previous_chat, dict) else None
+        )
+        merged_chat = _merge_chat_data(merged)
+        self.data["chat"] = merged_chat
+        if isinstance(previous_providers, dict):
+            raw_providers = merged.get("providers")
+            raw_providers = raw_providers if isinstance(raw_providers, dict) else {}
+            merged_providers = merged_chat.get("providers")
+            if isinstance(merged_providers, dict):
+                for provider_id, merged_provider in merged_providers.items():
+                    if not isinstance(merged_provider, dict):
+                        continue
+                    previous_provider = previous_providers.get(provider_id)
+                    if not isinstance(previous_provider, dict):
+                        continue
+                    raw_provider = raw_providers.get(provider_id)
+                    raw_provider = raw_provider if isinstance(raw_provider, dict) else {}
+                    if "api_key" not in raw_provider and previous_provider.get("api_key"):
+                        merged_provider["api_key"] = previous_provider["api_key"]
+                    if "vision_api_key" not in raw_provider and previous_provider.get("vision_api_key"):
+                        merged_provider["vision_api_key"] = previous_provider["vision_api_key"]
         for key in (
             "rx", "ry", "screen_name", "facing", "scale", "on_top", "show_dock_icon", "no_move", "character",
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
@@ -544,12 +580,40 @@ class Config:
         from .chat.models import SecretStore
         return SecretStore().get(provider.api_key_ref) or provider.api_key
 
-    def save(self):
+    def _redacted_data(self) -> dict:
+        """深拷贝待写盘数据，并剔除 chat.providers 下的明文 API Key。
+
+        keyring 不可用时（SecretStore.set 返回 False）设置对话框会把 key 放进
+        provider.api_key / vision_api_key 供本次运行使用；写盘时必须剔除，
+        避免明文落盘——key 只保留在内存（self.data），重启需重输。
+        """
+        write_data = copy.deepcopy(self.data)
+        chat = write_data.get("chat")
+        if isinstance(chat, dict):
+            providers = chat.get("providers")
+            if isinstance(providers, dict):
+                for provider in providers.values():
+                    if isinstance(provider, dict):
+                        provider.pop("api_key", None)
+                        provider.pop("vision_api_key", None)
+        return write_data
+
+    def save(self) -> bool:
+        """把配置写入磁盘；成功返回 True，失败返回 False（并记录 warning）。
+
+        写盘使用 _redacted_data() 的副本，self.data 本身不动，保证运行期
+        key 在内存可见而不会明文落盘。
+        """
         try:
             self._normalize_pet_settings()
             self.dir.mkdir(parents=True, exist_ok=True)
             temp = self.path.with_suffix(".json.tmp")
-            temp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp.write_text(
+                json.dumps(self._redacted_data(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             os.replace(temp, self.path)
-        except OSError:
-            pass
+        except OSError as exc:
+            logging.warning("保存配置失败: %s (%s)", self.path, exc)
+            return False
+        return True

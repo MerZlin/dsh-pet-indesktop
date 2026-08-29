@@ -7,10 +7,23 @@ from .models import ProviderConfig
 from .providers import OpenAICompatibleProvider
 class _Worker(QThread):
     delta_received=Signal(str); completed=Signal(str); failed=Signal(str); stopped_by_user=Signal()
-    def __init__(self,provider,messages,config,cancel): super().__init__(); self.provider=provider; self.messages=messages; self.config=config; self.cancel=cancel; self.parts=[]
+    def __init__(self,provider,messages,config,cancel):
+        super().__init__()
+        self.provider=provider; self.messages=messages; self.config=config; self.cancel=cancel; self.parts=[]
+        self._responses = []
+    def cancel_response(self):
+        self.cancel.set()
+        for resp in list(self._responses):
+            try: resp.close()
+            except Exception: pass
     def run(self):
         try:
-            for text in self.provider.stream(self.messages,self.config,self.cancel):
+            stream_kwargs = {}
+            import inspect
+            sig = inspect.signature(self.provider.stream)
+            if 'response_holder' in sig.parameters:
+                stream_kwargs['response_holder'] = self._responses
+            for text in self.provider.stream(self.messages,self.config,self.cancel,**stream_kwargs):
                 if self.cancel.is_set(): self.stopped_by_user.emit(); return
                 self.parts.append(text); self.delta_received.emit(text)
             if self.cancel.is_set(): self.stopped_by_user.emit()
@@ -25,20 +38,32 @@ class _Worker(QThread):
 class ChatService(QObject):
     started=Signal(str); delta=Signal(str,str); finished=Signal(str,str); error=Signal(str,str); stopped=Signal(str)
     def __init__(self,provider=None,parent=None):
-        super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None
+        super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None; self._workers=set()
         # 退出时先取消并短等在飞 worker，避免 QThread 运行中被销毁导致崩溃
         app = QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self.shutdown)
 
-    def shutdown(self):
+    def shutdown(self) -> bool:
+        # QThread 并非 daemon 线程，若在运行中被 Python GC 丢弃会触发 'QThread: Destroyed while running' 崩溃。
+        # 因此取消并有界等待后，超时未退出的 worker 仍保留在 self._workers 集合中（不强行 clear/置空），
+        # 等其 run() 结束后由 finished 信号自行 discard 回收引用。
         self.stop()
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(1500)
+        for worker in list(self._workers):
+            if hasattr(worker, "cancel_response") and callable(worker.cancel_response):
+                try: worker.cancel_response()
+                except Exception: pass
+            elif hasattr(worker, "cancel") and worker.cancel is not None:
+                worker.cancel.set()
+            if worker.isRunning():
+                worker.wait(1500)
+        # 返回 True 表示全部退出，False 表示仍有 worker 在运行（供调用方参考）
+        return not any(worker.isRunning() for worker in self._workers)
     @property
     def busy(self): return self._worker is not None and self._worker.isRunning()
     def send(self,messages:list[dict[str,Any]],config:ProviderConfig,request_id=None):
         self.stop(); rid=request_id or uuid.uuid4().hex; cancel=threading.Event(); worker=_Worker(self.provider,messages,config,cancel); self._request_id=rid; self._cancel=cancel; self._worker=worker
+        self._workers.add(worker)
         # 全部显式 QueuedConnection：worker 线程 emit 的信号若直连 lambda
         # 会在 worker 线程执行 _delta/_cleanup 等，与 GUI 线程的 busy()/
         # _request_id 读写构成数据竞态。队列投递保证回调只在 GUI 线程跑。
@@ -47,9 +72,17 @@ class ChatService(QObject):
         worker.failed.connect(lambda text,rid=rid:self._error(rid,text), Qt.QueuedConnection)
         worker.stopped_by_user.connect(lambda rid=rid:self._stopped(rid), Qt.QueuedConnection)
         worker.finished.connect(lambda rid=rid:self._cleanup(rid), Qt.QueuedConnection)
+        worker.finished.connect(lambda w=worker: self._workers.discard(w), Qt.QueuedConnection)
         self.started.emit(rid); worker.start(); return rid
     def stop(self):
-        if self._cancel is not None: self._cancel.set()
+        if self._worker is not None:
+            if hasattr(self._worker, "cancel_response") and callable(self._worker.cancel_response):
+                try: self._worker.cancel_response()
+                except Exception: pass
+            elif hasattr(self._worker, "cancel") and self._worker.cancel is not None:
+                self._worker.cancel.set()
+        elif self._cancel is not None:
+            self._cancel.set()
     def _current(self,rid): return rid==self._request_id
     def _delta(self,rid,text):
         if self._current(rid): self.delta.emit(rid,text)

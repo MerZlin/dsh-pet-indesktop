@@ -220,7 +220,7 @@ class PetSettingsDialog(QDialog):
         self.pro_cap_spin.setSuffix(" 次/天")
         self.pro_cap_spin.setValue(int(pro_cfg.get("daily_cap", 15)))
         self.pro_cap_spin.setToolTip("每天最多主动关怀几次（DeepSeek 视觉单次约 ¥0.003，15 次/天 ≈ ¥0.05；上限 9999 约等于不限）")
-        custom_form.addRow("每日触发上限", self.pro_cap_spin)
+        custom_form.addRow("每日请求上限", self.pro_cap_spin)
 
         form_pro.addRow("", self.custom_params_widget)
         self.custom_params_widget.setVisible(cur_preset == "custom")
@@ -249,7 +249,8 @@ class PetSettingsDialog(QDialog):
         self.pro_precue_check.setChecked(bool(pro_cfg.get("pre_cue", True)))
         form_pro.addRow("", self.pro_precue_check)
 
-        self.pro_free_check = QCheckBox("优先使用免费视觉模型（GLM-4.6V-Flash）")
+        self.pro_free_check = QCheckBox("识屏优先用独立视觉配置")
+        self.pro_free_check.setToolTip("开：服务商配了独立视觉端点（如免费的智谱 GLM-4.6V-Flash）时识屏走它；关：始终跟随聊天模型")
         self.pro_free_check.setChecked(bool(pro_cfg.get("prefer_free_provider", True)))
         form_pro.addRow("", self.pro_free_check)
 

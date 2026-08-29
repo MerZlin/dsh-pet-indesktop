@@ -118,6 +118,47 @@ class WebMClip(QObject):
         self._frame_index = 0
         self._ended_fired = False
         self._running = False
+        self._generation = 0
+        self._retired: set[threading.Thread] = set()
+
+        self.destroyed.connect(self._on_destroyed)
+
+    def _on_destroyed(self) -> None:
+        self.cleanup()
+
+    def __del__(self) -> None:
+        try:
+            self.cleanup()
+        except RuntimeError:
+            pass  # 解释器退出期 Qt C++ 对象可能已先销毁，此时无需清理
+
+    def cleanup(self) -> None:
+        """销毁或清理时对所有 retired 线程做最后一次有界等待（每个 ≤500ms）。"""
+        try:
+            self.stop()
+        except RuntimeError:
+            pass  # QTimer 等 Qt 子对象已随 C++ 侧销毁
+        retired = list(self._retired)
+        self._retired.clear()
+        for t in retired:
+            if t.is_alive():
+                try:
+                    t.join(timeout=0.5)
+                except Exception:
+                    pass
+
+    def _sweep_retired(self) -> None:
+        """探活回收已退出的线程（只清理已死的，活的不动）。"""
+        alive = set()
+        for t in self._retired:
+            if t.is_alive():
+                alive.add(t)
+            else:
+                try:
+                    t.join(timeout=0)
+                except Exception:
+                    pass
+        self._retired = alive
 
     # ------------------------------------------------------------ metadata
     def _ensure_meta(self) -> None:
@@ -210,8 +251,10 @@ class WebMClip(QObject):
         self._frame_index = 0
         self._ended_fired = False
         self._running = True
+        self._generation += 1
+        gen_id = self._generation
 
-        self._thread = threading.Thread(target=self._reader, args=(self._stop_evt,), daemon=True)
+        self._thread = threading.Thread(target=self._reader, args=(self._stop_evt, gen_id), daemon=True)
         self._thread.start()
         self._timer.start()
 
@@ -220,8 +263,10 @@ class WebMClip(QObject):
         self._timer.stop()
         if self._stop_evt is not None:
             self._stop_evt.set()
-        # 不 join：reader 是 daemon 线程，避免切换动画时阻塞 UI 造成卡顿
-        self._thread = None
+        if self._thread is not None:
+            self._retired.add(self._thread)
+            self._thread = None
+            QTimer.singleShot(5000, self._sweep_retired)
 
     def jumpToFrame(self, frame_index: int) -> bool:
         # 本项目只需要回到首帧；完整 seek 通过重启 reader + 丢弃帧实现。
@@ -302,7 +347,7 @@ class WebMClip(QObject):
             self._first_image = img
 
     # ------------------------------------------------------------ reader
-    def _reader(self, stop_evt: threading.Event) -> None:
+    def _reader(self, stop_evt: threading.Event, generation: int) -> None:
         gen = None
         try:
             q = self._queue
@@ -313,6 +358,8 @@ class WebMClip(QObject):
                 input_params=['-c:v', 'libvpx-vp9'],
             )
             meta = next(gen)
+            if self._generation != generation:
+                return
             # 用实际流信息修正元数据
             if meta.get('fps'):
                 self._fps = float(meta['fps'])
@@ -322,7 +369,7 @@ class WebMClip(QObject):
                 self._frame_count = int(round(self._fps * self._duration))
 
             for frame in gen:
-                if stop_evt.is_set():
+                if stop_evt.is_set() or self._generation != generation:
                     break
                 try:
                     q.put(frame, timeout=0.2)
@@ -332,17 +379,19 @@ class WebMClip(QObject):
             # 正常播完时放入结束标记。主线程可能正忙（队列满、帧被丢弃），
             # 必须循环重试直到放入或收到停止信号；否则“最后一帧被丢弃且
             # 结束标记也丢失”会让上层永远等不到播完，动画链卡死在最后一帧。
-            while not stop_evt.is_set():
+            while not stop_evt.is_set() and self._generation == generation:
                 try:
                     q.put(None, timeout=0.5)
                     break
                 except queue.Full:
                     continue
         except Exception as exc:
+            if self._generation != generation or stop_evt.is_set():
+                return
             logger.exception('webm 解码失败: %s', self.path)
             self.errorOccurred.emit(str(exc))
             # 异常中断也要放入结束标记，避免动画链卡在最后一帧
-            while not stop_evt.is_set():
+            while not stop_evt.is_set() and self._generation == generation:
                 try:
                     q.put(None, timeout=0.5)
                     break

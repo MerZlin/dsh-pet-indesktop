@@ -927,11 +927,13 @@ class _AiSettingsPage(QWidget):
             provider.vision_api_key_ref = provider.vision_api_key_ref or f"provider/{provider.provider_id}/vision"
             if not self._secret_store_type().set(provider.vision_api_key_ref, vision_key):
                 provider.vision_api_key = vision_key
+                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
         key = self.key.text()
         if key:
             provider.api_key_ref = provider.api_key_ref or f"provider/{provider.provider_id}"
             if not self._secret_store_type().set(provider.api_key_ref, key):
                 provider.api_key = key
+                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
         self.settings.default_system_prompt = self.prompt.toPlainText().strip()
         self.config.set("chat_ui_style", self.chat_ui_style.currentData())
         self._capture_background_value()
@@ -1517,7 +1519,7 @@ class ModernSettingsDialog(QDialog):
                        self._pro_cooldown_row()),
             SettingRow("proactive_min_interval", "最小请求间隔（秒）", "免费模型的硬保护，不建议调太小。",
                        self.pro_min_interval_spin),
-            SettingRow("proactive_daily_cap", "每日触发上限", "DeepSeek 视觉单次约 ¥0.003；上限 9999 约等于不限。",
+            SettingRow("proactive_daily_cap", "每日请求上限", "DeepSeek 视觉单次约 ¥0.003；上限 9999 约等于不限。",
                        self.pro_cap_spin),
         ], content))
         layout.addWidget(SettingsSection("触发条件", [
@@ -1529,7 +1531,7 @@ class ModernSettingsDialog(QDialog):
                        self.pro_through_check),
             SettingRow("proactive_pre_cue", "触发前先兆提示", "触发前先冒一句「让我看看……」。",
                        self.pro_precue_check),
-            SettingRow("proactive_free", "优先免费视觉模型", "视觉配置指向智谱 GLM 时优先用免费模型。",
+            SettingRow("proactive_free", "识屏优先用独立视觉配置", "开：服务商配了独立视觉端点（如免费的智谱 GLM-4.6V-Flash）时识屏走它；关：始终跟随聊天模型。",
                        self.pro_free_check),
         ], content))
         layout.addWidget(SettingsSection("白名单", [
@@ -1721,20 +1723,36 @@ class ModernSettingsDialog(QDialog):
 
 
 
+    def _apply_autostart(self) -> None:
+        """应用「开机自启」开关：仅在实际改动时写入系统登录项。
+
+        保存按钮与直接关闭（X / Esc）共用，保证三条路径行为一致。
+        """
+        if self.autostart_check.isChecked() != self._autostart_initial:
+            # set_enabled 返回 bool（enable()/disable()）；仅在明确失败时提示。
+            ok = autostart_mod.set_enabled(self.autostart_check.isChecked())
+            if ok is False:
+                QMessageBox.warning(
+                    self,
+                    "开机自启设置失败",
+                    "写入开机自启失败：可能被安全软件拦截。\n"
+                    "可稍后在托盘菜单重试，或检查安全软件/系统优化工具的拦截记录。",
+                )
+
     def _save(self) -> None:
         """「保存并退出」：写入配置并关闭对话框。"""
         self._saved_via_button = True
         self._write_config()
-        if self.autostart_check.isChecked() != self._autostart_initial:
-            autostart_mod.set_enabled(self.autostart_check.isChecked())
+        self._apply_autostart()
         self.settings_saved.emit()
         self.accept()
 
-    def _write_config(self) -> None:
+    def _write_config(self) -> bool:
         """把当前控件值写入 config 并落盘（按钮与直接关闭共用）。
 
         保存前从磁盘重读：吸收外部对本对话框未暴露字段的改动。
         已知限制：已暴露字段仍是 last-writer-wins（对话框获胜）。
+        返回是否成功落盘；失败时提示用户。
         """
         self.config._load()
         minimum = min(self.min_spin.value(), self.max_spin.value())
@@ -1824,7 +1842,15 @@ class ModernSettingsDialog(QDialog):
             })
             self.config.set("proactive_screen", pro_data)
         self.config.set("autostart_wanted", self.autostart_check.isChecked())
-        self.config.save()
+        ok = self.config.save()
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "保存失败",
+                "配置未能写入磁盘，改动可能在重启后丢失。\n\n配置路径："
+                + str(self.config.path),
+            )
+        return ok
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         """直接关闭（X / Esc）时同样落盘，避免修改丢失。
@@ -1835,6 +1861,7 @@ class ModernSettingsDialog(QDialog):
         if not getattr(self, "_saved_via_button", False):
             try:
                 self._write_config()
+                self._apply_autostart()
             except Exception:
                 logging.exception("关闭设置时保存配置失败")
         super().closeEvent(event)

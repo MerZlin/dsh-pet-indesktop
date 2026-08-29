@@ -135,7 +135,9 @@ def test_breath_bubble_reflows_on_pet_scale_change_and_summarizes_markdown():
     bubble = PetSpeechBubble(style_id="breath_bubble")
     bubble.show_text(
         "## 小狐狸的星空故事\n森林边有一棵老树，树洞里住着一只小狐狸。"
-        "每天傍晚它都会抬头看星星，并把看到的故事记在叶片上。",
+        "每天傍晚它都会抬头看星星，并把看到的故事记在叶片上。"
+        "它把叶片一片片夹进树洞深处的旧书里，等月亮升起来的时候，"
+        "就坐在树根上给路过的旅人讲这些星星的故事，讲着讲着自己也睡着了。" * 2,
         pet,
         5000,
         pet_scale=0.5,
@@ -143,8 +145,8 @@ def test_breath_bubble_reflows_on_pet_scale_change_and_summarizes_markdown():
     app.processEvents()
     small_width = bubble.width()
     assert "##" not in bubble.label.text()
-    assert bubble.label.text().count("\n") <= 2
-    assert bubble.label.text().endswith("…")
+    assert bubble.label.text().count("\n") <= 5  # 长文本放宽到 6 行
+    assert bubble.label.text().endswith("…")  # 超出 6 行仍省略收尾
 
     bubble.reflow(pet, pet_scale=1.0)
     app.processEvents()
@@ -2253,3 +2255,79 @@ def test_macos_dock_icon_policy_tracks_the_saved_visibility_setting():
     assert "setActivationPolicy:" in helper
     main = source.split("def main", 1)[1]
     assert '_mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))' in main
+
+
+def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatch):
+    """aboutToQuit 只绑定一次，且触发时保存「当前」有效窗口位置（非已销毁的旧窗口）。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.app as app_mod
+    from pet.app import PetApp
+    from pet.config import Config
+
+    QApplication.instance() or QApplication([])
+
+    class FakeApp:
+        def __init__(self):
+            self.connections = []
+
+        @property
+        def aboutToQuit(self):
+            # 模拟信号对象：self.app.aboutToQuit.connect(slot) 追加到 connections
+            return self
+
+        def connect(self, slot):
+            self.connections.append(slot)
+
+    class FakeWin:
+        def __init__(self):
+            self.saved = 0
+
+        def _save_position(self):
+            self.saved += 1
+
+    monkeypatch.setattr(app_mod.QTimer, "singleShot", lambda *a, **k: None)
+    owner = PetApp(FakeApp(), Config(tmp_path))
+    owner._create_ui = lambda cid: None
+    owner._apply_spawn_offset = lambda: None
+    owner._apply_balance_timer = lambda: None
+
+    old = FakeWin()
+    owner.win = old
+    owner.start()
+    owner.start()  # 重复 start 不得叠加 connect
+    assert len(owner.app.connections) == 1
+    assert owner.app.connections[0] == owner._on_about_to_quit
+
+    current = FakeWin()
+    owner.win = current
+    owner.app.connections[0]()  # 触发 aboutToQuit
+    assert current.saved == 1
+    assert old.saved == 0  # 旧窗口不再被保存
+
+
+def test_external_character_dirs_uses_variant_then_legacy_fallback(tmp_path, monkeypatch):
+    """外部角色目录应优先变体目录，并保留旧 dsh-pet-standalone 目录兜底。"""
+    import pet.catalog as catalog_mod
+    from pet import config as config_mod
+
+    monkeypatch.setattr(config_mod, "APP_DIR_NAME", "dsh-pet-standalone-webm-chat")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    dirs = catalog_mod.external_character_dirs()
+    variant = tmp_path / "dsh-pet-standalone-webm-chat" / "characters"
+    legacy = tmp_path / "dsh-pet-standalone" / "characters"
+    assert variant in dirs
+    assert legacy in dirs
+    assert dirs.index(variant) < dirs.index(legacy)  # 新目录优先
+
+
+def test_external_character_dirs_dedupes_base_dir(tmp_path, monkeypatch):
+    """非变体（APP_DIR_NAME == 默认）时旧目录不被重复追加。"""
+    import pet.catalog as catalog_mod
+    from pet import config as config_mod
+
+    monkeypatch.setattr(config_mod, "APP_DIR_NAME", "dsh-pet-standalone")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    dirs = catalog_mod.external_character_dirs()
+    base = tmp_path / "dsh-pet-standalone" / "characters"
+    assert dirs.count(base) == 1

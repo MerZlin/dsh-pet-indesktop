@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import json
 import logging
 import os
@@ -193,7 +194,9 @@ def wander_target_y(
 
 # ---- Win32：全屏判定用常量/结构 ----
 GWL_STYLE = -16             # GetWindowLongW：取窗口样式
+GWL_EXSTYLE = -20           # GetWindowLongW：取扩展样式
 _WS_CAPTION = 0x00C00000    # WS_BORDER | WS_DLGFRAME（带标题栏）
+_WS_EX_TOPMOST = 0x00000008  # 置顶：真全屏游戏/视频几乎必带，普通最大化窗口不带
 
 
 class _WinRect(ctypes.Structure):
@@ -201,10 +204,17 @@ class _WinRect(ctypes.Structure):
                 ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
 
 
+class _WinMonitorInfo(ctypes.Structure):
+    """GetMonitorInfoW 的 MONITORINFO（只读 rcMonitor：显示器完整几何，物理像素）。"""
+    _fields_ = [('cbSize', ctypes.c_ulong), ('rcMonitor', _WinRect),
+                ('rcWork', _WinRect), ('dwFlags', ctypes.c_ulong)]
+
+
 class PetWindow(QWidget):
     """桌宠窗口本体。"""
 
     look_done = Signal(str, str, bool)
+    fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
 
     def __init__(self, lib: MovieLibrary, config: Config) -> None:
         super().__init__()
@@ -284,6 +294,12 @@ class PetWindow(QWidget):
         # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
         self._bubble_busy_until = 0.0
 
+        # Agent 联动动作衔接：正在播一次性动作时联动动作不打断，存为待播（最新覆盖旧的），
+        # 等当前动作播完由 _on_anim_ended 自然接上；联动动作播完仍有 Agent 在忙则接下一个。
+        self._pending_link_anim: str | None = None
+        self._link_anim_current: str | None = None
+        self._link_next_provider = None  # AgentLinkManager 注入：()->str|None
+
         # 主动识屏后台观察器（必须作为 PetWindow 的子成员，随窗口销毁/重建）
         from .proactive import ProactiveScreenWatcher
         self.proactive_watcher = ProactiveScreenWatcher(self, config)
@@ -295,11 +311,14 @@ class PetWindow(QWidget):
         # ---- 全屏应用自动隐藏（Windows）----
         # 前台窗口覆盖整个屏幕几何（含任务栏区域）时自动隐藏桌宠，
         # 全屏退出后自动恢复。最大化窗口不覆盖任务栏，不会误触发。
+        # 后台线程轮询 + 信号回主线程：QTimer 轮询在实测中多起「启动数秒后
+        # 静默停发 timeout」的疑难，线程通道不受其影响；检测为纯 win32 调用。
         self.auto_hide_fullscreen: bool = bool(config.get('auto_hide_fullscreen', True))
         self._auto_hidden = False  # 只恢复"由本 watcher 隐藏"的状态，尊重手动隐藏
-        self._fullscreen_timer = QTimer(self)
-        self._fullscreen_timer.setInterval(1000)
-        self._fullscreen_timer.timeout.connect(self._check_fullscreen)
+        self._fs_stop = threading.Event()
+        self._fs_thread: threading.Thread | None = None
+        self._fs_last = False
+        self.fullscreen_changed.connect(self._on_fullscreen_changed)
 
         # ---- 窗口属性：无边框 + 透明 + 不进任务栏；置顶可配置 ----
         # 直播捕获兼容模式（stream_capture_mode）：Tool → 普通顶层窗口 + 标题，
@@ -384,7 +403,7 @@ class PetWindow(QWidget):
         self._switch(self.idle)
         self._schedule_self_talk()
         if self.auto_hide_fullscreen and os.name == 'nt':
-            self._fullscreen_timer.start()
+            self._start_fs_watch()
 
         if self._awaiting_saved_screen:
             self._arm_screen_restore_retry()
@@ -724,7 +743,7 @@ class PetWindow(QWidget):
         # 重新 show() 的唯一检测路径，停了桌宠就再也回不来。
         # 只有手动隐藏（托盘/右键，_auto_hidden 为 False）才停它。
         if not self._auto_hidden:
-            self._fullscreen_timer.stop()
+            self._stop_fs_watch()
         self._self_talk_timer.stop()
         self._animation_gap_timer.stop()
         self._squash_timer.stop()
@@ -748,7 +767,7 @@ class PetWindow(QWidget):
             # 若隐藏前正在移动，_cancel_move 已清掉移动计划，不会出现"瞬移"。
             self._switch(self.anim)
         if self.auto_hide_fullscreen and os.name == 'nt':
-            self._fullscreen_timer.start()
+            self._start_fs_watch()
         self._schedule_self_talk()
         if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
             self.proactive_watcher.resume()
@@ -764,82 +783,159 @@ class PetWindow(QWidget):
 
     @staticmethod
     def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float,
-                                 geom, has_caption: bool) -> bool:
-        """覆盖整屏几何且无标题栏 = 真全屏。
+                                 geom, has_caption: bool, topmost: bool = False) -> bool:
+        """覆盖整屏几何，且（无标题栏 或 置顶）= 真全屏。
 
-        带标题栏（WS_CAPTION）的窗口只是普通/最大化窗口，不是全屏；真全屏
-        （游戏/视频/浏览器 F11）会去掉标题栏。这样 Windows「自动隐藏任务栏」
-        下最大化窗口即使铺满整屏也不误判为全屏；而已经最大化后按 F11 的窗口
-        （IsZoomed 仍为真、但标题栏被应用清掉）仍能正确命中为真全屏。
+        判据组合的原因：
+        - 带标题栏的普通/最大化窗口（含 Windows 自动隐藏任务栏场景）不置顶 → 排除；
+        - 真全屏游戏/视频：多数去掉标题栏（无标题栏直接命中）；Unity/UE 系游戏
+          （如绝区零）全屏时保留 WS_CAPTION 样式位但几乎必带 WS_EX_TOPMOST，用
+          置顶位兜住；
+        - 已最大化后按 F11 的窗口（IsZoomed 仍为真、标题栏被清掉）也正常命中。
+
+        geom 兼容 QRect（方法访问）与 win32 RECT（属性访问）。
         """
-        if has_caption:
+        if has_caption and not topmost:
             return False
-        return (l <= geom.left() and t <= geom.top()
-                and r >= geom.right() and b >= geom.bottom())
+        gl = geom.left() if callable(getattr(geom, "left", None)) else geom.left
+        gt = geom.top() if callable(getattr(geom, "top", None)) else geom.top
+        gr = geom.right() if callable(getattr(geom, "right", None)) else geom.right
+        gb = geom.bottom() if callable(getattr(geom, "bottom", None)) else geom.bottom
+        return l <= gl and t <= gt and r >= gr and b >= gb
 
-    def _foreground_covers_fullscreen(self) -> bool:
-        """前台窗口是否覆盖整个屏幕几何（含任务栏）= 真全屏。仅 Windows。
-
-        只判定真全屏（全屏视频/游戏/浏览器 F11，窗口覆盖含任务栏的全屏几何
-        且无标题栏）。普通最大化窗口带标题栏，几何/样式判定都会排除它；即使
-        开启 Windows「自动隐藏任务栏」、最大化窗口铺满整屏，也因带标题栏而
-        不触发隐藏。
-
-        注意：GetWindowRect 返回物理像素，而 Qt geometry 是逻辑坐标——
-        高 DPI（125%/150%）下直接比较会把最大化窗口误判为"覆盖全屏"
-        （物理边界 > 逻辑边界）。必须统一换算到逻辑像素。
-        """
-        if os.name != 'nt':
-            return False
+    # ------------------------------------------------------------------
+    # 全屏 watcher：后台线程轮询（纯 win32，线程安全）+ 信号回主线程
+    # ------------------------------------------------------------------
+    def _fg_fullscreen_win32(self) -> bool:
+        """前台窗口是否真全屏。仅返回布尔值，诊断细节见 _fg_fullscreen_probe。"""
         try:
-            u32 = ctypes.windll.user32
-            hwnd = u32.GetForegroundWindow()
-            if not hwnd:
-                return False
-            # 排除本进程（桌宠自身/聊天窗/设置窗）
-            pid = ctypes.c_ulong(0)
-            u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if pid.value == os.getpid():
-                return False
-            # 排除桌面/任务栏等 shell 窗口
-            buf = ctypes.create_unicode_buffer(256)
-            u32.GetClassNameW(hwnd, buf, 256)
-            if buf.value in self._FS_SKIP_CLASSES:
-                return False
-
-            style = u32.GetWindowLongW(hwnd, GWL_STYLE)
-            has_caption = bool(style & _WS_CAPTION)
-            rect = _WinRect()
-            if not u32.GetWindowRect(hwnd, ctypes.byref(rect)):
-                return False
-            # 窗口中心点（物理像素）→ 先定位屏幕，再用该屏 DPR 换算逻辑坐标
-            cx = (rect.left + rect.right) // 2
-            cy = (rect.top + rect.bottom) // 2
-            scr = QApplication.screenAt(QPoint(cx, cy)) or self.screen()
-            if scr is None:
-                return False
-            dpr = scr.devicePixelRatio()
-            if dpr and dpr != 1.0:
-                scr = QApplication.screenAt(QPoint(int(cx / dpr), int(cy / dpr))) or scr
-                dpr = scr.devicePixelRatio()
-            # 物理像素 → 逻辑像素
-            l, t = rect.left / dpr, rect.top / dpr
-            r, b = rect.right / dpr, rect.bottom / dpr
-            return self._fullscreen_geometry_hit(
-                l, t, r, b, scr.geometry(), has_caption)
+            return self._fg_fullscreen_probe()[0]
         except Exception:
             return False
 
-    def _check_fullscreen(self) -> None:
-        if self._foreground_covers_fullscreen():
+    @staticmethod
+    def _fs_user_busy_state() -> tuple[bool, int]:
+        """SHQueryUserNotificationState：Windows 自报的全屏/演示忙状态。
+
+        与几何判定互补——几何判定在 DPI 虚拟化、跨屏、DWM 边界差异下可能漏判，
+        而这个 API 是 Windows 自己（Focus Assist/通知静默）判定"用户正在
+        全屏"的依据，游戏和全屏视频都会触发。返回 (是否全屏忙, 原始状态值)。
+        """
+        if os.name != 'nt':
+            return False, -1
+        try:
+            state = ctypes.c_int(0)
+            hr = ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state))
+            if hr != 0:  # S_OK
+                return False, -1
+            # 2=QUNS_BUSY(全屏应用运行中) 3=QUNS_RUNNING_D3D_FULL_SCREEN 4=QUNS_PRESENTATION_MODE
+            return state.value in (2, 3, 4), state.value
+        except Exception:
+            return False, -1
+
+    def _fg_fullscreen_probe(self) -> tuple[bool, str]:
+        """前台窗口全屏探测，返回 (是否全屏, 诊断描述)。
+
+        可在任意线程调用——不触碰 Qt 对象。判定链：
+        1. foreground_window_info()（vision.py）：排除不可见/最小化/cloaked
+           窗口，取 DWM 框架边界（物理像素，与本进程 DPI awareness 一致）；
+        2. 排除本进程与 shell 窗口；
+        3. 几何判定：窗口覆盖所在显示器完整几何（含任务栏），且无标题栏或置顶；
+        4. 兜底判定：Windows SHQueryUserNotificationState 报告全屏忙状态。
+        """
+        if os.name != 'nt':
+            return False, "非 Windows"
+        u32 = ctypes.windll.user32
+        # 句柄是 64 位指针：显式声明签名，避免 ctypes 默认 int32 截断
+        u32.MonitorFromWindow.restype = wintypes.HANDLE
+        u32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        u32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        u32.GetClassNameW.argtypes = [wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int]
+        info = vision_mod.foreground_window_info()
+        if not info:
+            return False, "无可判定前台窗口(不可见/最小化/cloaked)"
+        hwnd = info['hwnd']
+        # 排除本进程与其他变体/多开的桌宠进程（置顶小窗，几何不会误判，
+        # 但 SHQueryUserNotificationState 兜底需要进程名兜底排除）
+        proc = info.get('process', '')
+        if info.get('pid') == os.getpid() or proc.lower().startswith('dsh-pet-'):
+            return False, f"前台是桌宠自身 {proc}"
+        # 排除桌面/任务栏等 shell 窗口
+        buf = ctypes.create_unicode_buffer(256)
+        u32.GetClassNameW(hwnd, buf, 256)
+        cls = buf.value
+        if cls in self._FS_SKIP_CLASSES:
+            return False, f"shell 窗口 {cls}"
+
+        style = u32.GetWindowLongW(hwnd, GWL_STYLE)
+        has_caption = bool(style & _WS_CAPTION)
+        exstyle = u32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        topmost = bool(exstyle & _WS_EX_TOPMOST)
+        x, y, w, h = info['rect']
+        # 窗口所在显示器的完整几何（与 GetWindowRect/DWM 边界同为
+        # 本进程 DPI awareness 下的坐标，天然一致）
+        mon = u32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+        mi = _WinMonitorInfo()
+        mi.cbSize = ctypes.sizeof(_WinMonitorInfo)
+        if not u32.GetMonitorInfoW(mon, ctypes.byref(mi)):
+            return False, f"GetMonitorInfoW 失败 cls={cls}"
+        if self._fullscreen_geometry_hit(
+                x, y, x + w, y + h, mi.rcMonitor, has_caption, topmost):
+            return True, f"几何覆盖 cls={cls} proc={info.get('process', '')}"
+        busy, bstate = self._fs_user_busy_state()
+        if busy:
+            return True, (f"SHQueryUserNotificationState={bstate} "
+                          f"cls={cls} proc={info.get('process', '')}")
+        detail = (f"未命中 cls={cls} proc={info.get('process', '')} "
+                  f"caption={has_caption} topmost={topmost} "
+                  f"rect=({x},{y},{x + w},{y + h}) "
+                  f"monitor=({mi.rcMonitor.left},{mi.rcMonitor.top},"
+                  f"{mi.rcMonitor.right},{mi.rcMonitor.bottom}) busy={bstate}")
+        return False, detail
+
+    def _start_fs_watch(self) -> None:
+        """启动全屏监视线程（幂等）。"""
+        if self._fs_thread is not None and self._fs_thread.is_alive():
+            return
+        self._fs_stop.clear()
+        self._fs_thread = threading.Thread(
+            target=self._fs_watch_loop, daemon=True, name="pet-fs-watch")
+        self._fs_thread.start()
+        logging.info("全屏监视线程已启动")
+
+    def _stop_fs_watch(self) -> None:
+        """停止全屏监视线程（不 join，线程 1s 内自行退出，绝不卡 UI）。"""
+        self._fs_stop.set()
+
+    def _fs_watch_loop(self) -> None:
+        """后台轮询前台窗口；状态变化时发信号回主线程，全程留诊断日志。"""
+        polls = 0
+        while not self._fs_stop.wait(1.0):
+            try:
+                hit, detail = self._fg_fullscreen_probe()
+            except Exception:
+                logging.exception("全屏检测异常")
+                continue
+            polls += 1
+            if hit != self._fs_last:
+                self._fs_last = hit
+                logging.info("全屏检测变化 hit=%s (%s)", hit, detail)
+                self.fullscreen_changed.emit(hit)
+            elif polls % 15 == 0:
+                # 心跳：实机排障用，确认线程活着且能看到前台窗口真实状态
+                logging.info("全屏检测心跳 hit=%s %s", hit, detail)
+
+    def _on_fullscreen_changed(self, hit: bool) -> None:
+        """主线程：全屏出现 → 隐藏桌宠；全屏退出 → 恢复。"""
+        logging.info("全屏状态变化 hit=%s auto_hidden=%s visible=%s", hit, self._auto_hidden, self.isVisible())
+        if hit:
             if not self._auto_hidden and self.isVisible():
                 self._auto_hidden = True
                 self._speech_bubble.hide()
                 self.hide(notify=False)  # 自动隐藏是内部语义，不弹"桌宠已隐藏"托盘通知
-        else:
-            if self._auto_hidden:
-                self._auto_hidden = False
-                self.show()
+        elif self._auto_hidden:
+            self._auto_hidden = False
+            self.show()
 
     def set_auto_hide_fullscreen(self, on: bool) -> None:
         """全屏自动隐藏开关（供设置/菜单调用）。"""
@@ -847,9 +943,9 @@ class PetWindow(QWidget):
         self.cfg.set('auto_hide_fullscreen', self.auto_hide_fullscreen)
         self.cfg.save()
         if self.auto_hide_fullscreen and os.name == 'nt':
-            self._fullscreen_timer.start()
+            self._start_fs_watch()
         else:
-            self._fullscreen_timer.stop()
+            self._stop_fs_watch()
             if self._auto_hidden:
                 self._auto_hidden = False
                 self.show()
@@ -963,6 +1059,34 @@ class PetWindow(QWidget):
         self._ended_fired = False
         self._rebuild_frame()
         movie.start()
+
+    # ---- Agent 联动动作平滑衔接 ----
+    def _is_one_shot_playing(self) -> bool:
+        """当前是否正在播一次性动作（动作池/点击回应/移动）。待机/转向可立即切换。"""
+        return self.anim in self.acts or self.anim in self.clicks or self.anim in self.moves
+
+    def request_link_anim(self, name: str) -> None:
+        """Agent 联动动作请求：一次性动作播放中不打断，存为待播（最新覆盖旧的）。"""
+        self._pending_link_anim = name
+        if not self._is_one_shot_playing():
+            self._play_pending_link_anim()
+
+    def _play_pending_link_anim(self) -> None:
+        name = self._pending_link_anim
+        self._pending_link_anim = None
+        if not name:
+            return
+        self._link_anim_current = name
+        self._switch(name)
+
+    def request_link_idle(self) -> None:
+        """Agent 回到空闲：取消待播联动；一次性动作让它播完自然回待机，否则立即回待机。"""
+        self._pending_link_anim = None
+        self._link_anim_current = None
+        if self._is_one_shot_playing():
+            return
+        if self.idles:
+            self._switch(self._pick(self.idles))
 
     def _on_frame(self, name: str, n: int) -> None:
         """媒体帧推进回调：重建画面；最后一帧触发播完处理。"""
@@ -1156,6 +1280,19 @@ class PetWindow(QWidget):
             self._ended_fired = False
             self.movie.start()
             return
+        # Agent 联动：待播动作优先接上（平滑衔接，不打断刚播完的动作）
+        if self._pending_link_anim:
+            self._play_pending_link_anim()
+            return
+        # 联动动作播完仍有 Agent 在忙 → 接下一个联动动作；否则走正常动画链
+        if self._link_anim_current is not None and name == self._link_anim_current:
+            self._link_anim_current = None
+            provider = self._link_next_provider
+            nxt = provider() if callable(provider) else None
+            if nxt:
+                self._link_anim_current = nxt
+                self._switch(nxt)
+                return
         if name in self.turns:
             self.facing = 'right' if self.facing == 'left' else 'left'
         if name == self.drag or name in self.clicks:
@@ -1809,6 +1946,13 @@ class PetWindow(QWidget):
             self.cfg.save()
         if on:
             self.show_bubble(f"已开启 {agent_key.upper()} 状态联动监听～", duration_ms=4000)
+
+    def _set_agent_link_option(self, key: str, on: bool) -> None:
+        """联动气泡提醒子项开关（开始干活 / 任务完成），立即写入配置。"""
+        ag_data = dict(self.cfg.get('agent_link', {}))
+        ag_data[key] = bool(on)
+        self.cfg.set('agent_link', ag_data)
+        self.cfg.save()
 
     def _rename_character(self) -> None:
         """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""

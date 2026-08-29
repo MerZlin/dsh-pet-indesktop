@@ -76,7 +76,7 @@ v4.0.0 是一次大版本升级：在 v3.1.1 的桌宠基础上，合并了社�
 
 DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，本项目的实现为桌宠内置的轻量版（菜单「DeepSeek 余额」+ 可选自动刷新，通过 DeepSeek 官方 `/user/balance` 接口查询，详见 [DeepSeek API 查询余额文档](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)）。
 
-当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源，并为每一组 WebM 生成对应 GIF；当前 `assets/characters` 与 `assets/characters_gif` 的相对动画路径保持一致，各包含 91 个动画文件。后续新增或替换动画时，请先更新 WebM，再重新生成 GIF，不要手工维护两套不一致的素材。
+当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 91 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
 
 
 </details>
@@ -152,7 +152,10 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 - **找不到桌宠了？** 看系统托盘（可能收在「显示隐藏的图标」里），双击托盘图标可显示/隐藏桌宠。
 - **想开机自启？** 右键托盘 → 勾选「开机自启」即可（写入当前用户注册表 Run 键，无需管理员）；也可以在「桌宠设置」中开启。
   - **自启不生效怎么办**：① 安全软件/系统优化工具（360、电脑管家、Defender 等）可能拦截或清理未签名程序的自启项——请到其"开机加速/启动项管理"中恢复；② 程序每次启动会自检：若发现"之前开启过但已被清理"，桌宠会气泡提醒；③ macOS 新版系统需在「系统设置 → 通用 → 登录项」中允许桌宠（勾选时也有气泡提示）。
-- **配置存在哪里？** 设置与聊天会话保存在 `%APPDATA%\dsh-pet-standalone\`，重装/升级不会丢失。
+- **配置存在哪里？** 设置与聊天会话保存在各版本独立的数据目录（重装/升级不会丢失）：
+  - **Chat 版**：`%APPDATA%\dsh-pet-standalone-webm-chat\`
+  - **无 Chat 版**：`%APPDATA%\dsh-pet-standalone-webm\`
+  - **源码运行**：`%APPDATA%\dsh-pet-standalone\`
 
 ### 方式二：绿色版（zip）免安装
 
@@ -166,7 +169,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 ### 卸载
 
 - **安装版**：`设置 → 应用 → 已安装的应用`（或「控制面板 → 程序和功能」）→ 找到 `dsh-pet-standalone (WebM Chat)` → 卸载。
-- 卸载程序会删除安装目录与快捷方式；`%APPDATA%\dsh-pet-standalone\` 中的配置与会话默认保留，如需彻底清除可手动删除该目录。
+- 卸载程序会删除安装目录与快捷方式；各版本的数据目录（见上方「配置存在哪里」）中的配置与会话默认保留，如需彻底清除可手动删除对应目录。
 
 ### 升级
 
@@ -295,17 +298,17 @@ pythonw -m pet
 
 - 白名单应用切换时以桌宠口吻冒泡关怀（截图 + 前台窗口上下文 → 视觉模型）。
 - 停留时长门限、闲置判定、冷却间隔、每日上限、免费模型优先、dry-run 验证模式。
-- 截图压缩后仅本地留存最近 20 张，仅发送到你自行配置的 API。
+- 截图仅在内存中压缩处理并直接发送给视觉模型，不写入本地文件、不保留副本。
 
 ### Agent 联动（默认关闭）
 
-- 内置 DSH 桥接插件（`integrations/dsh-pet-bridge`）与 Claude hooks 安装器：Agent 干活时桌宠切换动作 / 冒泡反馈。
+- 内置 DSH 桥接插件（`integrations/dsh-pet-bridge`）与 Claude hooks 安装器：感知 AI Agent 状态并切换动作，支持开始干活、过程汇报、任务完成三种气泡反馈，右键 Agent 联动子菜单可独立开关。
 
 ### 看看屏幕（Chat 版）
 
 - 右键菜单 →「看看屏幕」：截取当前屏幕（含多显示器）→ 附带前台窗口「程序名 | 标题」上下文 → 发给视觉模型，用人设口吻回应一句（关心/吐槽/好奇），结果以气泡显示。
 - **回复会自动同步到 AI 对话当前会话**（一条 `[看看屏幕] 前台窗口：…` 记录 + 一条回复），可继续追问；聊天窗未打开时仅气泡显示、不写入。
-- 截图自动压缩（最长边 768px、JPEG 70）后只保存在本地 `screenshots/`（自动保留最近 20 张），仅发送到你自行配置的 API，不会上传到任何第三方。
+- 截图自动压缩（最长边 768px、JPEG 70）后仅在内存中处理并直接发送到你配置的模型服务商，不写入本地截图文件、不保留副本；不发送到本项目自建服务器，请你遵循所配置模型服务商的隐私政策。
 - 视觉模型在 AI 设置中配置：可手填模型名/独立端点/独立密钥，或勾选「同聊天模型」复用聊天配置；DeepSeek 聊天模型会自动映射到预览版视觉模型。
 - **注意：每次「看看屏幕」都会按一次视觉模型请求计费，消耗对应模型的 token**（截图按像素折算 + 回复输出）；有 4 秒冷却防连点，免费档高峰可能遇到限流（稍后重试即可）。
 
@@ -561,13 +564,13 @@ assets/characters/<character_id>/manifest.json
 - 停止生成时，未完成的半截 assistant 内容不会作为完整消息保存。
 - 旧版手机式聊天窗同样支持重命名（铅笔按钮）与新建/删除/清空。
 
-配置与会话目录：
+配置与会话目录（目录名按变体分：Chat 版 `dsh-pet-standalone-webm-chat`、无 Chat 版 `dsh-pet-standalone-webm`、源码运行为 `dsh-pet-standalone`）：
 
 | 系统 | 数据目录 |
 |---|---|
-| Windows | `%APPDATA%/dsh-pet-standalone/` |
-| macOS | `~/Library/Application Support/dsh-pet-standalone/` |
-| Linux | `~/.config/dsh-pet-standalone/` |
+| Windows | `%APPDATA%/dsh-pet-standalone-<变体>/` |
+| macOS | `~/Library/Application Support/dsh-pet-standalone-<变体>/` |
+| Linux | `~/.config/dsh-pet-standalone-<变体>/` |
 
 目录中主要包含：
 
@@ -591,25 +594,20 @@ pet.log
 
 ```text
 assets/
-├── characters/
-│   └── shenshen/
-│       ├── manifest.json
-│       └── videos/
-│           ├── idle/
-│           ├── turn/
-│           ├── move/
-│           ├── click/
-│           ├── drag/
-│           └── random/
-└── characters_gif/
+└── characters/
     └── shenshen/
+        ├── manifest.json
         └── videos/
-            └── 与 characters/<id>/videos 相同的相对路径
+            ├── idle/
+            ├── turn/
+            ├── move/
+            ├── click/
+            ├── drag/
+            └── random/
 ```
 
-- `assets/characters` 是 WebM 动画源目录。
-- `assets/characters_gif` 是由 WebM 生成的 GIF 目录，仅在需要构建 GIF 变体时使用。
-- 两套目录中的角色 ID、子目录和文件相对路径应保持一致。
+- `assets/characters` 是 WebM 动画源目录，包含 91 个 WebM 动画。
+- GIF 目录（`assets/characters_gif`）仅在构建 GIF 变体时生成。
 - 没有稳定静态头像时，不强制从 WebM/GIF 截取首帧，以避免启动变慢和打包兼容性问题。
 
 ### 素材生成教学（从零制作动画素材）
@@ -742,7 +740,7 @@ pet/
 │   ├── themes.py          # 聊天窗背景主题
 │   ├── modern_styles.qss / legacy_styles.qss / styles.qss
 │   └── ...
-└── updater.py             # 检查更新与一键下载
+└── updater.py             # 检查更新与发布资产解析
 
 integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
 packaging/
@@ -777,7 +775,7 @@ python -m compileall pet packaging scripts
 
 最近一轮记录（v4.0.1）：
 
-- `pytest`：362 passed，4 skipped。
+- `pytest`：完整测试套件见 CI / 本地运行 `pytest -q`。
 - `compileall`：通过。
 - WebM Chat、WebM 无 Chat 两个 onedir 构建均完成启动冒烟验证：进程存活超过 8 秒，系统临时目录与程序目录**均无新增 `_MEI` 缓存**。
 
@@ -936,7 +934,7 @@ python scripts/cleanup_mei_cache.py --delete
 
 ### 2026-08 上旬（v3.1.1 及更早）
 
-- **检查更新与一键下载（新功能）**：右键菜单与托盘菜单新增「检查更新」——后台查询 GitHub 最新版本（GitHub API 不可达时自动回退 jsDelivr CDN 镜像），点击后桌宠气泡即时反馈；有新版本时可直接下载当前平台/变体安装包（流式下载、进度框显示保存路径/大小/实时速度、可取消，完成后可一键打开所在文件夹），或打开 Release 下载页。另提供「GitHub 项目页」与「夸克网盘下载」（Windows 备用下载渠道）入口。
+- **检查更新（新功能）**：右键菜单与托盘菜单新增「检查更新」——后台查询 GitHub 最新版本（GitHub API 不可达时自动回退 jsDelivr CDN 镜像），点击后桌宠气泡即时反馈；发现新版本时会提示你到「更新 / 帮助」菜单打开 Release 下载页自行下载。另提供「GitHub 项目页」与「夸克网盘下载」（Windows 备用下载渠道）入口。
 - **AI 对话会话管理增强**：新增「重命名」按钮（自定义会话标题，可备注会话内容，下拉列表优先显示）；删除当前会话与「清空全部会话」均带确认框（防误删，适合会话列表太多时整体清理）；会话列表移到聊天窗左下角（重命名按钮紧随其后），自动标题截断从 24 字放宽到 40 字，下拉尽量显示完整；API Key 输入框提示"已保存，留空保持不变"——修改 System Prompt 等设置无需重输 Key。
 - **「看看屏幕」同步到 AI 对话**：视觉模型的回复会自动写入当前 AI 会话（一条 `[看看屏幕] 前台窗口：…` 记录 + 一条回复），可继续追问"你刚才看到什么了"；聊天窗未打开时仅气泡显示、不写入。
 - **点击行为设置（桌宠设置）**：可勾选「点击显示 DeepSeek 余额」「点击随机显示一条自定义自言自语」，两个都勾选时自动排队（先余额约 6 秒、隔 1 秒再自言自语）；多次点击会重置序列，只按最后一次点击从头完整显示（防抖，不叠加气泡）。
@@ -986,9 +984,6 @@ python scripts/cleanup_mei_cache.py --delete
 
 ## 项目文档
 
-- [`SPEC.md`](SPEC.md)：项目设计边界和验收标准。
-- [`LOG.md`](LOG.md)：施工记录和决策说明。
-- [`LOG-INDEX.md`](LOG-INDEX.md)：施工记录索引。
 - [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)：onedir 构建、绿色版 zip 与 Inno Setup 安装包流水线。
 - [`docs/BUILD_ARTIFACTS-2026-08-22.md`](docs/BUILD_ARTIFACTS-2026-08-22.md)：EXE 构建、大小、哈希和启动验证记录。
 
