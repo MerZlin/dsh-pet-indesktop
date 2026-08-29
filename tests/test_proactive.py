@@ -23,6 +23,7 @@ from pet.proactive import (
     DEFAULT_PROACTIVE_CONFIG,
     PRESET_DEFAULTS,
     ProactiveLimiter,
+    build_sync_marker,
     dwell_satisfied,
     effective_proactive_config,
     hamming_distance,
@@ -306,6 +307,24 @@ class TestEffectiveConfig:
 # ============================================================================
 # 5. 辅助判定函数测试
 # ============================================================================
+class TestSyncMarker:
+    def test_marker_contains_process_and_activity(self):
+        marker = build_sync_marker("code.exe", "写代码")
+        assert marker.startswith("[主动识屏]")
+        assert "code.exe" in marker
+        assert "写代码" in marker
+
+    def test_marker_falls_back_for_unknown_process(self):
+        marker = build_sync_marker("", "")
+        assert "[主动识屏]" in marker
+        assert "未知" in marker
+
+    def test_marker_never_contains_window_title(self):
+        # 隐私约定：同步标记与陪伴记忆一致，绝不落窗口标题
+        marker = build_sync_marker("chrome.exe", "上网")
+        assert "机密文档" not in marker
+
+
 class TestHelperPredicates:
     def test_dwell_satisfied(self):
         assert dwell_satisfied(entered_ts=100.0, now=145.0, dwell_seconds=45.0) is True

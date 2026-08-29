@@ -502,12 +502,13 @@ class DshMonitor(BaseAgentMonitor):
     def _list_profiles() -> list[str]:
         """枚举已存在的 dsh profile。
 
-        只认含 cordis.yml 的目录（真实 profile 的标志）；~/.dsh/profiles 下
+        只认含 cordis.yml 的目录（真实 profile 的标志）；profiles 目录下
         可能混入 node_modules 等包管理器/误操作残留的杂项目录，把它们当实例
         安装会失败并触发整体回滚，必须过滤。目录不存在或无有效 profile 时
         回退 ["web"]（安装命令会自动创建该 profile）。
+        统一使用 DSH_PROFILE_HOME（尊重 DSH_HOME），与 _real_profiles 一致。
         """
-        profiles_dir = Path.home() / ".dsh" / "profiles"
+        profiles_dir = DSH_PROFILE_HOME / "profiles"
         if not profiles_dir.is_dir():
             return ["web"]
         profiles = sorted(

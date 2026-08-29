@@ -625,8 +625,9 @@ class TestDshProfileEnumeration:
     """_list_profiles 只认含 cordis.yml 的目录，过滤 node_modules 等杂项残留。"""
 
     def test_filters_non_profile_dirs(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-        profiles = tmp_path / ".dsh" / "profiles"
+        dsh_home = tmp_path / "dsh-home"
+        monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", dsh_home)
+        profiles = dsh_home / "profiles"
         for name in ("web", "headless"):
             d = profiles / name
             d.mkdir(parents=True)
@@ -637,13 +638,28 @@ class TestDshProfileEnumeration:
         assert DshMonitor._list_profiles() == ["headless", "web"]
 
     def test_fallback_when_profiles_dir_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path / "dsh-home")
         assert DshMonitor._list_profiles() == ["web"]
 
     def test_fallback_when_no_valid_profiles(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-        (tmp_path / ".dsh" / "profiles" / "node_modules").mkdir(parents=True)
+        dsh_home = tmp_path / "dsh-home"
+        monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", dsh_home)
+        (dsh_home / "profiles" / "node_modules").mkdir(parents=True)
         assert DshMonitor._list_profiles() == ["web"]
+
+    def test_real_profiles_filters_node_modules_and_empty_dirs(self, tmp_path, monkeypatch):
+        # issue #23：~/.dsh/profiles 下可能有 pnpm 产生的 node_modules 等杂项目录，
+        # 安装/卸载桥接插件时只能枚举真实 profile（含 package.json 的目录）。
+        dsh_home = tmp_path / "dsh-home"
+        profiles = dsh_home / "profiles"
+        for name in ("web", "headless"):
+            profile = profiles / name
+            profile.mkdir(parents=True)
+            (profile / "package.json").write_text("{}", encoding="utf-8")
+        (profiles / "node_modules").mkdir()
+        (profiles / "empty-dir").mkdir()
+        monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", dsh_home)
+        assert [p.name for p in agent_link._real_profiles()] == ["headless", "web"]
 
 
 # ============================================================================
