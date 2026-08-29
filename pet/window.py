@@ -28,7 +28,7 @@ from typing import Any
 
 import shiboken6
 
-from PySide6.QtCore import QAbstractNativeEventFilter, QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
@@ -263,6 +263,7 @@ GWL_STYLE = -16             # GetWindowLongW：取窗口样式
 GWL_EXSTYLE = -20           # GetWindowLongW：取扩展样式
 _WS_CAPTION = 0x00C00000    # WS_BORDER | WS_DLGFRAME（带标题栏）
 _WS_EX_TOPMOST = 0x00000008  # 置顶：真全屏游戏/视频几乎必带，普通最大化窗口不带
+_WS_EX_TRANSPARENT = 0x00000020
 
 
 class _WinRect(ctypes.Structure):
@@ -276,45 +277,57 @@ class _WinMonitorInfo(ctypes.Structure):
                 ('rcWork', _WinRect), ('dwFlags', ctypes.c_ulong)]
 
 
-class WindowsPerPixelHitTestFilter(QAbstractNativeEventFilter):
-    """Windows 逐像素命中测试：透明区域返回 HTTRANSPARENT 让鼠标穿透。
+def _set_windows_click_through(hwnd: int, enabled: bool, user32=None) -> bool:
+    """切换 layered HWND 的输入穿透扩展样式。"""
+    user32 = user32 or ctypes.windll.user32
+    style = int(user32.GetWindowLongW(hwnd, GWL_EXSTYLE))
+    updated = style | _WS_EX_TRANSPARENT if enabled else style & ~_WS_EX_TRANSPARENT
+    if updated == style:
+        return False
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, updated)
+    return True
 
-    替代 QWidget.setMask 的 1-bit 窗口裁剪——setMask 会破坏
-    WA_TranslucentBackground 的逐像素半透明边缘；这里只影响输入命中，
-    视觉仍由 translucent background 负责平滑合成。
+
+class WindowsPerPixelInputController:
+    """根据光标所在像素动态切换 layered window 的输入穿透。
+
+    HTTRANSPARENT 只能继续命中当前线程的窗口，无法穿透到其他应用。
+    WS_EX_TRANSPARENT 会让 Windows 在命中时跳过 layered 桌宠窗口；独立
+    定时器在窗口不再收到鼠标消息时仍能检测光标并恢复角色区域交互。
     """
 
-    WM_NCHITTEST = 0x0084
-    HTTRANSPARENT = -1
-    HTCLIENT = 1
-
     def __init__(self, window: "PetWindow") -> None:
-        super().__init__()
         self._window = window
+        self._timer = QTimer(window)
+        self._timer.setInterval(10)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start()
 
-    def nativeEventFilter(self, event_type, message):
-        if os.name != "nt":
-            return False, 0
-        if event_type not in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
-            return False, 0
-        try:
-            msg = wintypes.MSG.from_address(int(message))
-        except Exception:
-            return False, 0
-        if msg.message != self.WM_NCHITTEST:
-            return False, 0
+    def should_click_through(self, global_pos: QPoint) -> bool:
         win = self._window
+        if win.mouse_through:
+            return True
+        if getattr(win, '_press_global', None) is not None or not win.isVisible():
+            return False
+        local = win.mapFromGlobal(global_pos)
+        if not QRect(0, 0, win.width(), win.height()).contains(local):
+            return False
+        return win._is_transparent_at(local)
+
+    def refresh(self) -> None:
         try:
-            if int(msg.hWnd) != int(win.winId()):
-                return False, 0
-            x = ctypes.c_short(msg.lParam & 0xFFFF).value
-            y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-            local = win.mapFromGlobal(QPoint(x, y))
-            if win._is_transparent_at(local):
-                return True, self.HTTRANSPARENT
-            return True, self.HTCLIENT
-        except Exception:
-            return False, 0
+            enabled = self.should_click_through(QCursor.pos())
+            _set_windows_click_through(int(self._window.winId()), enabled)
+        except (AttributeError, OSError, RuntimeError):
+            logging.debug("更新 Windows 逐像素鼠标穿透失败", exc_info=True)
+
+    def stop(self) -> None:
+        self._timer.stop()
+        if not self._window.mouse_through:
+            try:
+                _set_windows_click_through(int(self._window.winId()), False)
+            except (AttributeError, OSError, RuntimeError):
+                pass
 
 
 class PetWindow(QWidget):
@@ -442,16 +455,9 @@ class PetWindow(QWidget):
         # Visibility and z-order are separate: always keep the pet visible,
         # then use WindowStaysOnTopHint/NSWindow level for the on-top setting.
         _keep_macos_tool_window_visible(self)
-        # 逐像素命中测试过滤器（仅 Windows）：必须在安装前先初始化为 None，
-        # 安装后绝不能再赋值 None——installNativeEventFilter 不接管 Python 对象
-        # 所有权，丢失引用会让过滤器被 GC 回收，命中测试静默失效。
-        self._hit_filter: WindowsPerPixelHitTestFilter | None = None
         app = QApplication.instance()
         if app is not None:
             app.applicationStateChanged.connect(self._on_application_state_changed)
-            if os.name == "nt":
-                self._hit_filter = WindowsPerPixelHitTestFilter(self)
-                app.installNativeEventFilter(self._hit_filter)
 
         # ---- 状态 ----
         self.anim: str = self.idle
@@ -463,6 +469,9 @@ class PetWindow(QWidget):
         # 角色可见轮廓（窗口局部坐标）与逐像素命中缓存；贴边功能复用 _mask_bounds
         self._mask_bounds: QRect | None = None
         self._hit_alpha_image: QImage | None = None
+        self._input_controller: WindowsPerPixelInputController | None = None
+        if os.name == "nt":
+            self._input_controller = WindowsPerPixelInputController(self)
         # 窗口隐藏时暂停动画解码/定时器；显示时由 showEvent 恢复
         self._hidden_paused = False
         self._ended_fired = False
@@ -1271,7 +1280,7 @@ class PetWindow(QWidget):
 
         - 非 Windows：继续用 QWidget.setMask 实现透明区域鼠标穿透。
         - Windows：不再 setMask（1-bit 裁剪会破坏半透明边缘），只更新
-          _mask_bounds；鼠标穿透由 WindowsPerPixelHitTestFilter 负责。
+          _mask_bounds；鼠标穿透由 WindowsPerPixelInputController 负责。
         """
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
@@ -2286,11 +2295,9 @@ class PetWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
-        if self._hit_filter is not None:
-            app = QApplication.instance()
-            if app is not None:
-                app.removeNativeEventFilter(self._hit_filter)
-            self._hit_filter = None
+        if self._input_controller is not None:
+            self._input_controller.stop()
+            self._input_controller = None
         self._save_position()
         self._self_talk_timer.stop()
         self._cancel_animation_gap()

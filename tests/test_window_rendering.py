@@ -91,8 +91,8 @@ def test_is_transparent_at_uses_frame_alpha():
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(10, 2)) is True
 
 
-def test_hit_filter_reference_survives_init():
-    """回归：_hit_filter 不能在安装后被重置为 None（否则 GC 回收、命中测试静默失效）。"""
+def test_input_controller_survives_init():
+    """回归：控制器必须由窗口持有，保证轮询持续运行。"""
     _qapp()
     import sys
     if sys.platform != "win32":
@@ -104,42 +104,58 @@ def test_hit_filter_reference_survives_init():
     from pet.library import MovieLibrary
     lib = MovieLibrary(character_id='shenshen')
     win = window_mod.PetWindow(lib, Config(base=Path(tempfile.mkdtemp())))
-    assert win._hit_filter is not None, "_hit_filter 被后置的 = None 覆盖，过滤器会被 GC 回收"
+    assert win._input_controller is not None
     win.close()
 
 
-def test_hit_filter_hwnd_attribute():
-    """回归：wintypes.MSG 的窗口句柄字段是 hWnd（大写 W），写错会被 except 静默吞掉。"""
+def test_input_controller_returns_pixel_hit_result():
     _qapp()
-    import sys
-    if sys.platform != "win32":
-        import pytest
-        pytest.skip("逐像素命中测试仅 Windows")
 
-    import ctypes, tempfile
-    from ctypes import wintypes
-    from pet.config import Config
-    from pet.library import MovieLibrary
-    lib = MovieLibrary(character_id='shenshen')
-    win = window_mod.PetWindow(lib, Config(base=Path(tempfile.mkdtemp())))
-    filt = win._hit_filter
-    assert filt is not None
+    class FakeWindow:
+        def winId(self):
+            return 123
 
-    msg = wintypes.MSG()
-    msg.hWnd = int(win.winId())
-    msg.message = 0x0084  # WM_NCHITTEST
-    win.move(-3000, -3000)  # 屏幕外避免干扰
-    win.show()
-    import time; time.sleep(1)
-    QApplication.processEvents()
+        def mapFromGlobal(self, point):
+            return point
 
-    # 人物中心 → HTCLIENT(1)；窗口边缘空白 → HTTRANSPARENT(-1)
-    # lParam: 低位 = x, 高位 = y（带符号 16 位）
-    gx, gy = -3000 + 230, -3000 + 162
-    msg.lParam = ((gy & 0xFFFF) << 16) | (gx & 0xFFFF)
-    result = filt.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg))
-    assert result[0] is True and result[1] == 1, f"人物中心应返回 HTCLIENT，实际 {result}"
-    win.close()
+        def _is_transparent_at(self, point):
+            return point.x() >= 50
+
+    fake = FakeWindow()
+    fake.mouse_through = False
+    fake._press_global = None
+    fake.isVisible = lambda: True
+    fake.width = lambda: 100
+    fake.height = lambda: 80
+    controller = object.__new__(window_mod.WindowsPerPixelInputController)
+    controller._window = fake
+    assert controller.should_click_through(QPoint(20, 20)) is False
+    assert controller.should_click_through(QPoint(70, 20)) is True
+    fake._press_global = QPoint(70, 20)
+    assert controller.should_click_through(QPoint(70, 20)) is False
+
+
+def test_windows_click_through_preserves_other_extended_styles():
+    class FakeUser32:
+        def __init__(self):
+            self.style = 0x00080080  # WS_EX_LAYERED | WS_EX_TOOLWINDOW
+            self.writes = []
+
+        def GetWindowLongW(self, hwnd, index):
+            assert (hwnd, index) == (123, window_mod.GWL_EXSTYLE)
+            return self.style
+
+        def SetWindowLongW(self, hwnd, index, style):
+            self.style = style
+            self.writes.append((hwnd, index, style))
+
+    user32 = FakeUser32()
+    assert window_mod._set_windows_click_through(123, True, user32) is True
+    assert user32.style == 0x000800A0
+    assert window_mod._set_windows_click_through(123, True, user32) is False
+    assert len(user32.writes) == 1
+    assert window_mod._set_windows_click_through(123, False, user32) is True
+    assert user32.style == 0x00080080
 
 
 def test_visible_content_rect_uses_character_region():
