@@ -177,6 +177,23 @@ def _next_pricing_switch(now: datetime | None = None) -> tuple[str, datetime]:
     return 'peak', datetime.combine(next_day, time(9, 0), tzinfo=tz)
 
 
+_WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def _format_switch_time(now: datetime, next_time: datetime) -> str:
+    """把下一档位切换时间格式化为易读文案。
+
+    当天切换只显示 HH:MM；跨天切换显示“明天 HH:MM”或“下周一 HH:MM”，
+    避免周末/周五晚上把“09:00”误解为次日早晨。
+    """
+    if next_time.date() == now.date():
+        return f"{next_time:%H:%M}"
+    days = (next_time.date() - now.date()).days
+    if days == 1:
+        return f"明天 {next_time:%H:%M}"
+    return f"下{_WEEKDAY_CN[next_time.weekday()]} {next_time:%H:%M}"
+
+
 def resolve_tier_labels(
     mode: str = "default",
     custom_peak: str = "",
@@ -215,7 +232,8 @@ def deepseek_pricing_hint(
     idle_text = str(idle_label or "空闲")
     label = peak_text if tier == 'peak' else idle_text
     next_label = idle_text if next_tier == 'idle' else peak_text
-    return f'DeepSeek 当前{label} · 下一{next_label} {next_time:%H:%M}'
+    time_text = _format_switch_time(bj, next_time)
+    return f'DeepSeek 当前{label} · 下一{next_label} {time_text}'
 
 
 def deepseek_pricing_hint_html(
@@ -240,4 +258,5 @@ def deepseek_pricing_hint_html(
 
     label = span(peak_text, peak_color) if tier == 'peak' else span(idle_text, idle_color)
     next_label = span(idle_text, idle_color) if next_tier == 'idle' else span(peak_text, peak_color)
-    return f'DeepSeek 当前{label} · 下一{next_label} {next_time:%H:%M}'
+    time_text = _format_switch_time(bj, next_time)
+    return f'DeepSeek 当前{label} · 下一{next_label} {time_text}'

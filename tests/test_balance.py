@@ -124,7 +124,7 @@ def test_deepseek_pricing_hint_and_next_switch():
     # 周末全天空闲，下一高峰为周一 09:00
     hint_weekend = balance.deepseek_pricing_hint(_bj(15, day=29, month=8, year=2026))
     assert "当前空闲" in hint_weekend
-    assert "下一高峰" in hint_weekend
+    assert "下一高峰 下周一 09:00" in hint_weekend
 
 
 def test_resolve_tier_labels_and_custom_hint():
@@ -163,7 +163,7 @@ def test_friday_evening_next_peak_skips_weekend():
     # 2026-08-28 是周五，20:00 后下一高峰应为周一 09:00，而不是周六 09:00
     hint = balance.deepseek_pricing_hint(_bj(20, day=28, month=8, year=2026))
     assert "当前空闲" in hint
-    assert "下一高峰 09:00" in hint
+    assert "下一高峰 下周一 09:00" in hint
     next_tier, next_time = balance._next_pricing_switch(
         _bj(20, day=28, month=8, year=2026)
     )
