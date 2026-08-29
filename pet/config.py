@@ -420,6 +420,11 @@ class Config:
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
+            "balance_tier_labels_mode": "default",  # 峰谷提示文案：default / liangwen / custom
+            "balance_tier_label_peak": "",  # 自定义“高峰”文本（custom 模式）
+            "balance_tier_label_idle": "",  # 自定义“空闲”文本（custom 模式）
+            "balance_tier_color_enabled": True,  # 峰谷提示颜色：高峰红/低谷绿
+            "music_sing_enabled": False,   # 检测到后台播放音乐时自动播放唱歌动画
             "autostart_wanted": False,     # 用户曾开启过开机自启（用于启动自检：被安全软件清理时提醒）
             "stream_capture_mode": False,  # 直播捕获兼容模式（Windows：Tool 窗口直播姬/OBS 枚举不到）
             "chat_background": "",  # 肥鱼牌小手机背景：空=纯色；builtin:* = 内置主题；否则为图片路径
@@ -534,6 +539,9 @@ class Config:
             "slingshot_enabled", "throw_strength", "throw_max_speed",
             "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
+            "music_sing_enabled",
+            "balance_tier_labels_mode", "balance_tier_label_peak",
+            "balance_tier_label_idle", "balance_tier_color_enabled",
             "chat_background", "modern_chat_background",
             "chat_background_opacity", "chat_background_fill",
             "modern_chat_background_opacity", "modern_chat_background_fill",

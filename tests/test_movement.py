@@ -40,7 +40,7 @@ def test_inplace_move_clips_do_not_displace():
     from pet.catalog import build_categories
 
     folder_files = {
-        'move': ['原地左转奔跑', '螃蟹走路', '原地漂浮踏步'],
+        'move': ['原地小憩沉眠', '螃蟹走路'],
         'idle': ['待机呼吸休闲'],
         'click': [],
         'turn': ['东张西望'],
@@ -49,7 +49,45 @@ def test_inplace_move_clips_do_not_displace():
     names = [n for ns in folder_files.values() for n in ns]
     cats = build_categories(names, folder_files=folder_files)
     assert cats['moves'] == ['螃蟹走路']
-    assert '原地左转奔跑' in cats['acts'] and '原地漂浮踏步' in cats['acts']
+    assert '原地小憩沉眠' in cats['acts']
+
+
+def test_renamed_move_pair_stays_in_moves():
+    """原「原地漂浮踏步/原地左转奔跑」去掉“原地”后进入移动池，不再出现在随机动作里。"""
+    from pet.catalog import build_categories
+
+    folder_files = {
+        'move': ['螃蟹走路', '漂浮踏步', '左转奔跑'],
+        'idle': ['待机呼吸休闲'],
+        'click': [],
+        'turn': ['东张西望'],
+        'random': ['写代码'],
+    }
+    names = [n for ns in folder_files.values() for n in ns]
+    cats = build_categories(names, folder_files=folder_files)
+    assert {'螃蟹走路', '漂浮踏步', '左转奔跑'} == set(cats['moves'])
+    assert '漂浮踏步' not in cats['acts']
+    assert '左转奔跑' not in cats['acts']
+
+
+def test_balance_animations_also_enter_random_acts():
+    """余额动画既要能按档位触发，也要允许在随机动作池/菜单里播放。"""
+    from pet.catalog import build_categories
+
+    folder_files = {
+        'idle': ['待机呼吸休闲'],
+        'turn': ['东张西望'],
+        'move': ['螃蟹走路'],
+        'click': [],
+        'random': ['写代码', '悠闲哼歌'],
+        'events/balance': ['余额-钱袋满溢', '余额-分文不剩'],
+    }
+    names = [n for ns in folder_files.values() for n in ns]
+    cats = build_categories(names, folder_files=folder_files)
+    assert '余额-钱袋满溢' in cats['acts']
+    assert '余额-分文不剩' in cats['acts']
+    assert '写代码' in cats['acts']
+    assert '悠闲哼歌' in cats['acts']
 
 
 def test_text_clips_no_mirror_loaded():

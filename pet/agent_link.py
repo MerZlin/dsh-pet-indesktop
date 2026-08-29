@@ -1298,7 +1298,7 @@ class AgentLinkManager(QObject):
     # 联动动作池（写代码/吃Token 交替为主，每第 3 次插播短摸鱼）
     # ------------------------------------------------------------------
     _LINK_MAIN = ("写代码", "吃Token")
-    _LINK_BREAK = ("轻快记录", "原地漂浮踏步")
+    _LINK_BREAK = ("轻快记录", "漂浮踏步")
     _LINK_MAIN_KEYWORDS = ("代码", "工作", "写", "打字", "敲")
     _LINK_BREAK_KEYWORDS = ("记录", "踏步", "伸懒腰")
 

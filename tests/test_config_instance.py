@@ -49,6 +49,24 @@ def test_save_redacts_api_keys_from_disk(tmp_path):
     assert config.chat_settings().active_config.vision_api_key == "vk-plaintext"
 
 
+def test_balance_tier_and_music_settings_persist_through_reload(tmp_path):
+    """新增设置项必须能从磁盘重载，否则重启后峰谷文案/颜色/音乐开关会丢。"""
+    config = Config(base=tmp_path)
+    config.set("balance_tier_labels_mode", "liangwen")
+    config.set("balance_tier_label_peak", "梁文峰")
+    config.set("balance_tier_label_idle", "梁文谷")
+    config.set("balance_tier_color_enabled", False)
+    config.set("music_sing_enabled", True)
+    config.save()
+
+    reloaded = Config(base=tmp_path)
+    assert reloaded.get("balance_tier_labels_mode") == "liangwen"
+    assert reloaded.get("balance_tier_label_peak") == "梁文峰"
+    assert reloaded.get("balance_tier_label_idle") == "梁文谷"
+    assert reloaded.get("balance_tier_color_enabled") is False
+    assert reloaded.get("music_sing_enabled") is True
+
+
 def test_save_returns_false_on_write_failure(tmp_path):
     """写盘失败（此处置目标为目录迫使 os.replace 失败）时 save 返回 False。"""
     config = Config(base=tmp_path)

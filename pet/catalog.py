@@ -68,15 +68,14 @@ DIR_CLICK = 'click'
 DIR_DRAG = 'drag'
 DIR_RANDOM = 'random'
 
-
 # ---------------------------------------------------------------- 动画映射
 # 中文名 → webm 文件名（主路径，文件名与中文名一致）
 ANIM_FILES: dict[str, str] = {
     '待机呼吸休闲': '待机呼吸休闲.webm',
     '东张西望': '东张西望.webm',
     '螃蟹走路': '螃蟹走路.webm',
-    '原地漂浮踏步': '原地漂浮踏步.webm',
-    '原地左转奔跑': '原地左转奔跑.webm',
+    '漂浮踏步': '漂浮踏步.webm',
+    '左转奔跑': '左转奔跑.webm',
     '点击回应 - 开心跃动': '点击回应 - 开心跃动.webm',
     '点击回应 - 害羞惊讶': '点击回应 - 害羞惊讶.webm',
     '点击回应 - 傲娇生气（侧身展示）': '点击回应 - 傲娇生气（侧身展示）.webm',
@@ -131,7 +130,7 @@ WEBM_FILES: dict[str, str] = ANIM_FILES
 # 动画分组（语义与 client.js 一致）
 IDLE = '待机呼吸休闲'
 TURN = '东张西望'
-MOVES = ['螃蟹走路', '原地漂浮踏步', '原地左转奔跑']
+MOVES = ['螃蟹走路', '漂浮踏步', '左转奔跑']
 CLICKS = ['点击回应 - 开心跃动', '点击回应 - 害羞惊讶', '点击回应 - 傲娇生气（侧身展示）']
 DRAG = '被鼠标拖拽悬空反馈'
 ACTS = [n for n in ANIM_FILES if n not in (IDLE, TURN, DRAG, *MOVES, *CLICKS)]
@@ -452,6 +451,8 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         acts = []
         known = {DIR_IDLE, DIR_TURN, DIR_MOVE, DIR_CLICK, DIR_DRAG}
         for folder, ns in by_folder.items():
+            # random/ 和未知目录（含 events/balance）都进入随机动作池：
+            # 余额动画既要能按档位触发，也要允许在随机动画/手动菜单里播放。
             if folder == DIR_RANDOM or folder not in known:
                 acts.extend(ns)
         seen_acts = set()

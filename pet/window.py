@@ -55,6 +55,9 @@ from .click_sound import choose_sound, play_sound, resolve_click_sound_candidate
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
 
+# 后台播放音乐时自动播放的唱歌/哼歌动画
+SING_ANIM = '悠闲哼歌'
+
 
 def _resolve_self_talk_image_dir(raw: str) -> str:
     """Resolve the self-talk image directory; empty keeps text-only behavior."""
@@ -423,6 +426,12 @@ class PetWindow(QWidget):
         self._self_talk_timer = QTimer(self)
         self._self_talk_timer.setSingleShot(True)
         self._self_talk_timer.timeout.connect(self._on_self_talk_timeout)
+        # 后台音乐检测：默认关闭，开启后检测到系统正在输出音频就播放唱歌动画
+        self._music_sing_enabled = bool(config.get('music_sing_enabled', False))
+        self._music_sing_active = False
+        self._music_sing_timer = QTimer(self)
+        self._music_sing_timer.setInterval(4000)
+        self._music_sing_timer.timeout.connect(self._check_music_sing)
         # 重要气泡（主动识屏先兆/答复、Agent 联动提醒等）占用期间，自言自语让路，
         # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
         self._bubble_busy_until = 0.0
@@ -554,6 +563,7 @@ class PetWindow(QWidget):
 
         self._restore_position()
         self._switch(self.idle)
+        self._music_sing_timer.start()
         self._schedule_self_talk()
         if self._watch_required():
             self._start_fs_watch()
@@ -1600,6 +1610,14 @@ class PetWindow(QWidget):
 
     # ================================================================ 动画链
     def _on_anim_ended(self, name: str) -> None:
+        if name == SING_ANIM:
+            # 音乐自动唱歌开启且当前仍处于“唱歌中”时，直接无缝续播；
+            # 不再每次播完都查一次音频 COM，降低长时间运行的崩溃风险。
+            # 音乐停止由 _check_music_sing 定时检测后清掉 _music_sing_active。
+            if self._music_sing_enabled and self._music_sing_active:
+                self._switch(SING_ANIM)
+                return
+            self._music_sing_active = False
         if name == self.drag and self._dragging:
             self.movie.jumpToFrame(0)
             self._ended_fired = False
@@ -1758,10 +1776,11 @@ class PetWindow(QWidget):
             y = plan['start_y'] + (plan['target_y'] - plan['start_y']) * progress
         self.move(int(round(x)), int(round(y)))
         if t >= dur - tail:
-            # 到位：提交终点，动画自然播完后续链
+            # 到位：提交终点，动画自然播完后续链。
+            # 不把自动移动的终点写入记忆位置，否则重启后桌宠会停在
+            # 上次随机游走的位置，而不是用户手动放置的位置。
             self._move_timer.stop()
             self._move_plan = None
-            self._save_position()
 
     def _cancel_move(self) -> None:
         self._move_timer.stop()
@@ -2251,11 +2270,28 @@ class PetWindow(QWidget):
         # 不删除会随每次右键累积（子菜单/动作/线程池/图标 pixmap）。
         # 先清掉尚未启动的解码任务，避免 QThreadPool 析构时在 GUI 线程
         # 等待运行中的 worker。
+        pools = []
         for submenu in menu.findChildren(QMenu):
             pool = getattr(submenu, "_animation_icon_pool", None)
             if pool is not None:
                 pool.clear()
-        menu.deleteLater()
+                pools.append(pool)
+
+        def delete_when_idle() -> None:
+            """非阻塞等待图标解码 worker 结束后再释放菜单树。
+
+            直接 pool.waitForDone(3000) 会阻塞 GUI 线程最多 3 秒，可能造成
+            右键菜单关闭时卡顿/假死；这里每 50ms 轮询一次，不阻塞事件循环。
+            """
+            if any(not pool.waitForDone(0) for pool in pools):
+                QTimer.singleShot(50, delete_when_idle)
+                return
+            menu.deleteLater()
+
+        if pools:
+            delete_when_idle()
+        else:
+            menu.deleteLater()
 
     def reopen_context_menu(self, menu: QMenu) -> None:
         """Close the old template and immediately show the newly selected one."""
@@ -2332,13 +2368,37 @@ class PetWindow(QWidget):
         if self._bubble_suppressed:
             self._speech_bubble.hide()
 
-    def show_bubble(self, text: str, duration_ms: int = 3200) -> None:
+    def _check_music_sing(self) -> None:
+        """检测后台音乐并自动播放唱歌动画（可配置开关）。
+
+        音乐播放期间唱歌动画会持续循环；音乐停止或开关关闭后恢复普通动画链。
+        不打断正在播放的一次性动作/点击/拖拽。
+        """
+        if not self.isVisible():
+            return
+        if not self._music_sing_enabled:
+            self._music_sing_active = False
+            return
+        from . import music_detect
+        playing = music_detect.is_music_playing()
+        if self._music_sing_active:
+            if not playing:
+                self._music_sing_active = False
+            return
+        if self._dragging or self._is_one_shot_playing():
+            return
+        if playing:
+            self._music_sing_active = True
+            self._switch(SING_ANIM)
+
+    def show_bubble(self, text: str, duration_ms: int = 3200, subtitle: str | None = None) -> None:
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。"""
         if not self.isVisible() or self._bubble_suppressed:
             return
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
-            str(text), self.visible_content_rect(), duration_ms, pet_scale=self.scale
+            str(text), self.visible_content_rect(), duration_ms,
+            pet_scale=self.scale, subtitle=str(subtitle or ""),
         )
 
     def refresh_pet_settings(self) -> None:
@@ -2387,6 +2447,7 @@ class PetWindow(QWidget):
         self.animation_gap_seconds = max(0.0, min(3600.0, float(self.cfg.get('animation_gap_seconds', 0.0))))
         if self.animation_gap_seconds <= 0:
             self._cancel_animation_gap()
+        self._music_sing_enabled = bool(self.cfg.get('music_sing_enabled', False))
         self._self_talk_enabled = bool(self.cfg.get('self_talk_enabled', False))
         self._speech_bubble.set_style(
             str(self.cfg.get('self_talk_bubble_style', DEFAULT_SELF_TALK_BUBBLE_STYLE))
@@ -2687,10 +2748,11 @@ class PetWindow(QWidget):
             self._phys_pos[1], self._phys_vel[0], self._phys_vel[1], bottom, bounced_any, speed
         ):
             self._stop_physics()
-            self._save_position()
 
     def _request_quit(self) -> None:
-        self._save_position()
+        # 不在这里保存当前位置：退出时若正处于自动移动/物理抛掷后的位置，
+        # 会把随机终点写进记忆，导致重启后位置变化。手动放置的位置已在
+        # 拖动松手/回右下角/缩放时保存过。
         # The context menu is shown with QMenu.exec(), which owns a nested
         # event loop. Quitting the application from inside QAction.triggered
         # can leave that native menu loop alive (notably on macOS), making the
@@ -2727,7 +2789,7 @@ class PetWindow(QWidget):
         if self._input_controller is not None:
             self._input_controller.stop()
             self._input_controller = None
-        self._save_position()
+        # 不在这里覆盖记忆位置：避免自动移动/抛掷后的随机终点被存下来。
         self._self_talk_timer.stop()
         self._cancel_animation_gap()
         self._speech_bubble.hide()

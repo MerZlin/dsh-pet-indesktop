@@ -3,3 +3,5 @@ imageio-ffmpeg>=0.6
 Pillow>=10
 keyring>=25
 certifi>=2024.0.0
+pycaw>=0.0.13; platform_system == "Windows"
+tzdata>=2024.1

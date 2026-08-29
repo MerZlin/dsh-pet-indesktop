@@ -215,7 +215,7 @@ class TestRealFileTailEndToEnd:
 
         class DummyPetWindow:
             def __init__(self):
-                self.cats = {"acts": ["写代码", "原地敲击桌面互动", "吃Token", "轻快记录", "原地漂浮踏步"]}
+                self.cats = {"acts": ["写代码", "原地敲击桌面互动", "吃Token", "轻快记录", "漂浮踏步"]}
                 self.idles = ["待机呼吸"]
 
             def isVisible(self):
@@ -389,7 +389,7 @@ class TestAgentStateDebounce:
         switched = []
 
         class DummyWin:
-            cats = {"acts": ["写代码", "原地敲击桌面互动", "吃Token", "轻快记录", "原地漂浮踏步"]}
+            cats = {"acts": ["写代码", "原地敲击桌面互动", "吃Token", "轻快记录", "漂浮踏步"]}
             idles = ["待机呼吸"]
 
             def isVisible(self):
@@ -682,7 +682,7 @@ class TestAgentLinkBubbles:
         bubbles = []
 
         class DummyWin:
-            cats = {"acts": ["写代码", "原地敲击桌面互动", "吃Token", "轻快记录", "原地漂浮踏步"]}
+            cats = {"acts": ["写代码", "原地敲击桌面互动", "吃Token", "轻快记录", "漂浮踏步"]}
             idles = ["待机呼吸"]
             _bubble_busy_until = 0.0
 
@@ -1067,7 +1067,7 @@ class TestAgentLinkChainingAndActivity:
         bubbles = []
 
         class DummyWin:
-            cats = {"acts": ["写代码", "吃Token", "轻快记录", "原地漂浮踏步"] if acts is None else acts}
+            cats = {"acts": ["写代码", "吃Token", "轻快记录", "漂浮踏步"] if acts is None else acts}
             idles = ["待机呼吸"]
             _bubble_busy_until = 0.0
 
@@ -1102,13 +1102,13 @@ class TestAgentLinkChainingAndActivity:
         return mgr, win, bubbles, clock
 
     def test_anim_rotation_sequence(self, tmp_path):
-        """1. 动作池轮换顺序：DummyWin 的 cats.acts 含 ['写代码','吃Token','轻快记录','原地漂浮踏步']，
-        连续 6 次 busy（每次 clock 前进 3s 避免节流）→ 依次为 写代码/吃Token/轻快记录/写代码/吃Token/原地漂浮踏步（每第3次插播摸鱼）。"""
+        """1. 动作池轮换顺序：DummyWin 的 cats.acts 含 ['写代码','吃Token','轻快记录','漂浮踏步']，
+        连续 6 次 busy（每次 clock 前进 3s 避免节流）→ 依次为 写代码/吃Token/轻快记录/写代码/吃Token/漂浮踏步（每第3次插播摸鱼）。"""
         mgr, win, bubbles, clock = self._make_mgr(
-            tmp_path, acts=["写代码", "吃Token", "轻快记录", "原地漂浮踏步"]
+            tmp_path, acts=["写代码", "吃Token", "轻快记录", "漂浮踏步"]
         )
         res = [mgr._next_link_anim_rotation() for _ in range(6)]
-        expected = ["写代码", "吃Token", "轻快记录", "吃Token", "写代码", "原地漂浮踏步"]
+        expected = ["写代码", "吃Token", "轻快记录", "吃Token", "写代码", "漂浮踏步"]
         assert res == expected
 
     def test_anim_rotation_falls_back_to_keywords_and_available_acts(self, tmp_path):
