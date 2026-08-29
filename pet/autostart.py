@@ -31,10 +31,19 @@ PLIST_LABEL = (
     if APP_DIR_NAME == "dsh-pet-standalone"
     else f"{_APP_BASE_ID}.{APP_DIR_NAME}"
 )
-# Windows 自启注册表值名按变体隔离（如 dsh-pet-standalone-webm-chat），
-# 使 Chat / 无 Chat 两个版本可同时开机自启且互不覆盖。
+# Windows 自启注册表值名按变体隔离（如 dsh-pet-standalone-webm-chat）。
+# 旧版本/旧目录可能残留多个值名，若只清理当前值名会导致“关闭后仍自启”
+# 或“开机出现两个桌宠/两个终端”，因此统一维护一份已知值名清单。
 VALUE_NAME = APP_DIR_NAME
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+# 历史/各变体可能写入过的值名；enable 时只保留当前变体，disable 时全部清除。
+KNOWN_VALUE_NAMES = (
+    "dsh-pet-standalone",
+    "dsh-pet-standalone-webm",
+    "dsh-pet-standalone-webm-chat",
+    "dsh-pet-standalone-gif",
+    "dsh-pet-standalone-gif-chat",
+)
 
 _IS_WIN = sys.platform == "win32"
 _IS_MAC = sys.platform == "darwin"
@@ -94,8 +103,40 @@ def _win_command_is_current(command: str) -> bool:
     return "cmd /c start" in command.lower()
 
 
+def _iter_known_win_values() -> list[tuple[str, str]]:
+    """读取注册表里所有已知 dsh-pet 自启值名，返回 [(name, command), ...]。"""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            found = []
+            for name in KNOWN_VALUE_NAMES:
+                try:
+                    command, _ = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    continue
+                found.append((name, str(command or "")))
+            return found
+    except OSError:
+        return []
+
+
+def _delete_known_win_values(exclude: set[str] | None = None) -> None:
+    """删除已知 dsh-pet 自启值；exclude 里的值名保留。"""
+    exclude = exclude or set()
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            for name in KNOWN_VALUE_NAMES:
+                if name in exclude:
+                    continue
+                try:
+                    winreg.DeleteValue(key, name)
+                except FileNotFoundError:
+                    pass
+    except OSError:
+        pass
+
+
 def is_enabled() -> bool:
-    """当前是否已注册开机自启。"""
+    """当前是否已注册开机自启（任一已知 dsh-pet 值存在即视为已启用）。"""
     if _IS_WIN:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
@@ -119,7 +160,8 @@ def is_enabled() -> bool:
                         pass
                 return True
         except FileNotFoundError:
-            return False
+            # 当前值名不存在，但历史残留值仍可能开机启动
+            return bool(_iter_known_win_values())
     if _IS_MAC:
         return _plist_path().exists()
     if _IS_LINUX:
@@ -151,6 +193,8 @@ def enable() -> bool:
     """开启自启；返回是否写入成功（Windows 回读注册表验证，macOS 验证 plist 存在，Linux 验证 .desktop 存在）。"""
     if _IS_WIN:
         try:
+            # 先清掉历史/其他变体残留，避免开机同时启动多只桌宠/多个终端
+            _delete_known_win_values(exclude={VALUE_NAME})
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
                 winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, _win_command())
             # 回读验证，防止写入被安全软件/策略静默拦截
@@ -191,11 +235,8 @@ def disable() -> bool:
     """关闭自启；返回是否已清除。"""
     if _IS_WIN:
         try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-                winreg.DeleteValue(key, VALUE_NAME)
+            _delete_known_win_values()
             return True
-        except FileNotFoundError:
-            return True  # 本来就没有，视为成功
         except OSError:
             return False
     elif _IS_MAC:
