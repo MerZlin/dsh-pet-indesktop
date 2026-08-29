@@ -48,9 +48,10 @@ def test_elide_bubble_text_max_lines_6():
 
     # Pick a character and calculate width per line
     char = "测"
-    char_w = metrics.horizontalAdvance(char)
-    # Line width fitting exactly 5 chars
-    line_w = char_w * 5
+    # 用 5 字符串的实际度量而非 5×单字符：部分平台（macOS）对 CJK 字形
+    # 的 advance 累加有亚像素舍入，5×单字符可能略小于真实宽度，导致
+    # 每行装不下 5 个字符、30 字符被意外省略。
+    line_w = metrics.horizontalAdvance(char * 5)
 
     # 1. Text that fits in 6 lines (e.g. 5 * 6 = 30 chars) should not be truncated / no ellipsis
     text_30 = char * 30
