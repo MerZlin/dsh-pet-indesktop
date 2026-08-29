@@ -1,4 +1,4 @@
-﻿name: Build Windows App
+name: Build Windows App
 
 on:
   workflow_dispatch:        # 手动触发（Actions 页面 → Run workflow）
@@ -12,9 +12,11 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    # PYTHONIOENCODING：Windows 英文 runner 控制台为 cp1252，make_icon.py 等
-    # 脚本的中文 print 会 UnicodeEncodeError，统一按 UTF-8 输出。
+    # 编码隔离（issue #26）：PYTHONIOENCODING 只解决控制台输出，
+    # PYTHONUTF8=1 让 locale.getpreferredencoding() 恒为 utf-8，杜绝
+    # PyInstaller/辅助脚本按 GBK/cp1252 二次解码中文源码或资源。
     env:
+      PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
 
     steps:
