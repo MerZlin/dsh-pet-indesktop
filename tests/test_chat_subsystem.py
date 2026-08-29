@@ -252,6 +252,10 @@ def test_pet_window_visible_content_rect_uses_alpha_mask():
         def frameGeometry(self):
             return QRect(100, 200, 220, 160)
 
+        def character_local_region(self):
+            # 无角色轮廓缓存（_mask_bounds 为空）→ 回退 mask 分支
+            return QRect()
+
         def mask(self):
             return QRegion(QRect(36, 24, 72, 112))
 
@@ -1485,12 +1489,35 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
         def findChildren(self, _type):
             return []
 
+        def sizeHint(self):
+            from PySide6.QtCore import QSize
+
+            return QSize(120, 180)
+
+        def setLayoutDirection(self, _direction):
+            pass
+
         def deleteLater(self):
             self.destroyed.emit()
 
     class FakePet:
         def _restore_on_top_after_context_menu(self):
             pass
+
+        def visible_content_rect(self):
+            from PySide6.QtCore import QRect
+
+            return QRect(300, 300, 200, 150)
+
+        def _screen_available(self, _screen_name=None):
+            from PySide6.QtCore import QRect
+
+            class _Screen:
+                @staticmethod
+                def availableGeometry():
+                    return QRect(0, 0, 1920, 1080)
+
+            return _Screen()
 
     class _BubbleStub:
         def hide(self):
@@ -1541,12 +1568,35 @@ def test_context_menu_window_callback_waits_until_old_menu_is_destroyed(monkeypa
         def findChildren(self, _type):
             return []
 
+        def sizeHint(self):
+            from PySide6.QtCore import QSize
+
+            return QSize(120, 180)
+
+        def setLayoutDirection(self, _direction):
+            pass
+
         def deleteLater(self):
             self.delete_requested = True
 
     class FakePet:
         def _restore_on_top_after_context_menu(self):
             pass
+
+        def visible_content_rect(self):
+            from PySide6.QtCore import QRect
+
+            return QRect(300, 300, 200, 150)
+
+        def _screen_available(self, _screen_name=None):
+            from PySide6.QtCore import QRect
+
+            class _Screen:
+                @staticmethod
+                def availableGeometry():
+                    return QRect(0, 0, 1920, 1080)
+
+            return _Screen()
 
     class _BubbleStub:
         def hide(self):
@@ -1610,12 +1660,35 @@ def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monke
         def findChildren(self, _type):
             return []
 
+        def sizeHint(self):
+            from PySide6.QtCore import QSize
+
+            return QSize(120, 180)
+
+        def setLayoutDirection(self, _direction):
+            pass
+
         def deleteLater(self):
             pass
 
     class FakePet:
         def _restore_on_top_after_context_menu(self):
             pass
+
+        def visible_content_rect(self):
+            from PySide6.QtCore import QRect
+
+            return QRect(300, 300, 200, 150)
+
+        def _screen_available(self, _screen_name=None):
+            from PySide6.QtCore import QRect
+
+            class _Screen:
+                @staticmethod
+                def availableGeometry():
+                    return QRect(0, 0, 1920, 1080)
+
+            return _Screen()
 
     class _BubbleStub:
         def hide(self):

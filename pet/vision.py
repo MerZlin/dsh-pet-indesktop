@@ -338,7 +338,14 @@ def _post_vision_request(
                 data = json.loads(resp.read().decode('utf-8', 'replace'))
             break
         except urllib.error.HTTPError as exc:
-            detail = exc.read(2048).decode('utf-8', 'replace')
+            # 部分 Python 发行版（如 Dev-Cpp 内置 3.11.1）的 urllib addbase
+            # 继承 tempfile._TemporaryFileWrapper，且 HTTPError(fp=None) 时
+            # addinfourl.__init__ 未执行，exc.read() 会 KeyError('file')。
+            # 防御：读不到响应体就当空处理，不影响状态码判断。
+            try:
+                detail = exc.read(2048).decode('utf-8', 'replace')
+            except Exception:
+                detail = ""
             if exc.code == 429 and attempt < 1:  # 429 最多重试 1 次
                 last_error = exc
                 time.sleep(2.0)  # 免费视觉模型高峰过载：稍等重试

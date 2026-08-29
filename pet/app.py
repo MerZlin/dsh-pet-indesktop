@@ -527,11 +527,11 @@ class PetApp:
 
     def _update_bubble_suppression_for_settings(self) -> None:
         """任一设置窗口打开时暂停桌宠气泡，避免气泡盖住设置界面。"""
-        if self.win is None:
+        if getattr(self, "win", None) is None:
             return
         any_open = (
-            self.modern_settings_dialog is not None
-            or self.chat_settings_dialog is not None
+            getattr(self, "modern_settings_dialog", None) is not None
+            or getattr(self, "chat_settings_dialog", None) is not None
         )
         self.win.set_bubble_suppressed(any_open)
 

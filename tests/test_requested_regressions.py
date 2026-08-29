@@ -958,6 +958,9 @@ def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypat
         def refresh_pet_settings(self):
             refreshed.append(1)
 
+        def set_bubble_suppressed(self, _suppressed):
+            pass
+
     owner.win = FakeWin()
     owner.config = Config(tmp_path)
     owner._apply_balance_timer = lambda: None
