@@ -59,7 +59,8 @@ def _make_catalog_code(literals, garble: bool = False):
     lines = "\n".join(
         f"    L{i} = '前缀' + {lit!r} + '后缀'" for i, lit in enumerate(literals)
     )
-    source = f"def catalog():\n{lines}\n    return [L0, L1, L2, L3, L4, L5]\n"
+    return_items = ", ".join(f"L{i}" for i in range(len(literals)))
+    source = f"def catalog():\n{lines}\n    return [{return_items}]\n"
     if garble:
         source = source.replace(literals[0], "\u9d5a\ufffd" + literals[0][2:])
     return compile(source, "<synthetic>", "exec")
@@ -131,5 +132,14 @@ class TestBundleChecks:
     def test_missing_chinese_asset_fails(self, checker, tmp_path):
         root = self._build_bundle(tmp_path)
         (root / "assets" / "characters" / "shenshen" / "videos" / "random" / "吃Token.webm").unlink()
+        errors = checker.check_bundle(root)
+        assert any("吃Token" in error for error in errors)
+
+    def test_directory_named_with_needle_does_not_count_as_asset(self, checker, tmp_path):
+        root = self._build_bundle(tmp_path)
+        asset = root / "assets" / "characters" / "shenshen" / "videos" / "random" / "吃Token.webm"
+        asset.unlink()
+        # 只有同名目录、没有实际文件时，仍必须判定为缺失（防止目录名误报存在）
+        asset.parent.joinpath("吃Token").mkdir()
         errors = checker.check_bundle(root)
         assert any("吃Token" in error for error in errors)

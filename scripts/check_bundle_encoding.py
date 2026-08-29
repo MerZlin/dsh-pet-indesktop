@@ -235,10 +235,14 @@ def verify_text_resources(root: Path, suffixes: tuple[str, ...]) -> list[str]:
 
 
 def verify_chinese_filenames(root: Path, needles: tuple[str, ...]) -> list[str]:
-    """校验包内存在包含指定中文串的文件名，返回缺失列表。"""
+    """校验包内存在包含指定中文串的文件名，返回缺失列表。
+
+    只统计文件：目录名即使包含中文串（如 assets/characters 下的分类目录），
+    也不能代替实际素材文件，否则自检会漏报缺失文件。
+    """
     missing: list[str] = []
     for needle in needles:
-        if not any(needle in path.name for path in root.rglob("*")):
+        if not any(path.is_file() and needle in path.name for path in root.rglob("*")):
             missing.append(needle)
     return missing
 
