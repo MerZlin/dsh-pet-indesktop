@@ -124,7 +124,52 @@ def test_deepseek_pricing_hint_and_next_switch():
     # 周末全天空闲，下一高峰为周一 09:00
     hint_weekend = balance.deepseek_pricing_hint(_bj(15, day=29, month=8, year=2026))
     assert "当前空闲" in hint_weekend
-    assert "下一高峰" in hint_weekend
+    assert "下一高峰 下周一 09:00" in hint_weekend
+
+
+def test_resolve_tier_labels_and_custom_hint():
+    # 默认
+    assert balance.resolve_tier_labels("default") == ("高峰", "空闲")
+    # 梁文
+    assert balance.resolve_tier_labels("liangwen") == ("梁文峰", "梁文谷")
+    # 自定义，留空回退默认
+    assert balance.resolve_tier_labels("custom", "自定义峰", "自定义谷") == ("自定义峰", "自定义谷")
+    assert balance.resolve_tier_labels("custom", "", "") == ("高峰", "空闲")
+
+    # 自定义文案会反映到提示里
+    hint = balance.deepseek_pricing_hint(
+        _bj(10), peak_label="梁文峰", idle_label="梁文谷"
+    )
+    assert "当前梁文峰" in hint
+    assert "下一梁文谷" in hint
+
+
+def test_deepseek_pricing_hint_html_colors():
+    # 默认高峰红、低谷绿，且包含对应文本
+    html = balance.deepseek_pricing_hint_html(
+        _bj(10), peak_label="高峰", idle_label="空闲"
+    )
+    assert "#e5484d" in html
+    assert "高峰" in html
+    assert "空闲" in html
+    # 自定义标签会转义，避免破坏 HTML
+    html_custom = balance.deepseek_pricing_hint_html(
+        _bj(10), peak_label="<峰>", idle_label="谷"
+    )
+    assert "&lt;峰&gt;" in html_custom
+
+
+def test_friday_evening_next_peak_skips_weekend():
+    # 2026-08-28 是周五，20:00 后下一高峰应为周一 09:00，而不是周六 09:00
+    hint = balance.deepseek_pricing_hint(_bj(20, day=28, month=8, year=2026))
+    assert "当前空闲" in hint
+    assert "下一高峰 下周一 09:00" in hint
+    next_tier, next_time = balance._next_pricing_switch(
+        _bj(20, day=28, month=8, year=2026)
+    )
+    assert next_tier == "peak"
+    assert next_time.weekday() == 0  # Monday
+    assert next_time.hour == 9
 
 
 def test_chat_session_title_roundtrip():

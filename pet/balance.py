@@ -18,6 +18,7 @@ import json
 import urllib.error
 import urllib.request
 from datetime import datetime, time, timedelta, timezone
+from html import escape
 from zoneinfo import ZoneInfo
 
 BALANCE_PATH = '/user/balance'
@@ -165,18 +166,97 @@ def _next_pricing_switch(now: datetime | None = None) -> tuple[str, datetime]:
         return 'peak', datetime.combine(day, time(14, 0), tzinfo=tz)
     if hour < 18:
         return 'idle', datetime.combine(day, time(18, 0), tzinfo=tz)
-    # 18:00 后：下一高峰为次日 9:00
-    return 'peak', datetime.combine(day + timedelta(days=1), time(9, 0), tzinfo=tz)
+    # 18:00 后：下一高峰通常为次日 9:00，但若次日是周六/周日，
+    # 周末全天空闲，下一高峰应跳到下周一 9:00。
+    next_day = day + timedelta(days=1)
+    if next_day.weekday() >= 5:
+        days_until_monday = 7 - next_day.weekday()
+        return 'peak', datetime.combine(
+            next_day + timedelta(days=days_until_monday), time(9, 0), tzinfo=tz
+        )
+    return 'peak', datetime.combine(next_day, time(9, 0), tzinfo=tz)
 
 
-def deepseek_pricing_hint(now: datetime | None = None) -> str:
+_WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def _format_switch_time(now: datetime, next_time: datetime) -> str:
+    """把下一档位切换时间格式化为易读文案。
+
+    当天切换只显示 HH:MM；跨天切换显示“明天 HH:MM”或“下周一 HH:MM”，
+    避免周末/周五晚上把“09:00”误解为次日早晨。
+    """
+    if next_time.date() == now.date():
+        return f"{next_time:%H:%M}"
+    days = (next_time.date() - now.date()).days
+    if days == 1:
+        return f"明天 {next_time:%H:%M}"
+    return f"下{_WEEKDAY_CN[next_time.weekday()]} {next_time:%H:%M}"
+
+
+def resolve_tier_labels(
+    mode: str = "default",
+    custom_peak: str = "",
+    custom_idle: str = "",
+) -> tuple[str, str]:
+    """根据设置返回 (高峰文本, 空闲文本)。
+
+    - default：高峰 / 空闲
+    - liangwen：梁文峰 / 梁文谷
+    - custom：使用用户自定义文本，留空回退默认
+    """
+    mode = str(mode or "default").strip().lower()
+    if mode == "liangwen":
+        return "梁文峰", "梁文谷"
+    if mode == "custom":
+        peak = str(custom_peak or "").strip() or "高峰"
+        idle = str(custom_idle or "").strip() or "空闲"
+        return peak, idle
+    return "高峰", "空闲"
+
+
+def deepseek_pricing_hint(
+    now: datetime | None = None,
+    peak_label: str | None = None,
+    idle_label: str | None = None,
+) -> str:
     """生成余额气泡下方的 DeepSeek 峰谷提示文案。
 
-    如「当前高峰 · 下一空闲 12:00」「当前空闲 · 下一高峰 09:00」。
+    如「DeepSeek 当前高峰 · 下一空闲 12:00」「DeepSeek 当前空闲 · 下一高峰 09:00」。
+    peak_label/idle_label 可由设置项自定义（如梁文峰/梁文谷）。
     """
     bj = _beijing_now(now)
     tier = deepseek_pricing_tier(bj)
     next_tier, next_time = _next_pricing_switch(bj)
-    label = '高峰' if tier == 'peak' else '空闲'
-    next_label = '空闲' if next_tier == 'idle' else '高峰'
-    return f'DeepSeek 当前{label} · 下一{next_label} {next_time:%H:%M}'
+    peak_text = str(peak_label or "高峰")
+    idle_text = str(idle_label or "空闲")
+    label = peak_text if tier == 'peak' else idle_text
+    next_label = idle_text if next_tier == 'idle' else peak_text
+    time_text = _format_switch_time(bj, next_time)
+    return f'DeepSeek 当前{label} · 下一{next_label} {time_text}'
+
+
+def deepseek_pricing_hint_html(
+    now: datetime | None = None,
+    peak_label: str | None = None,
+    idle_label: str | None = None,
+    peak_color: str = "#e5484d",
+    idle_color: str = "#30a46c",
+) -> str:
+    """生成带颜色的 DeepSeek 峰谷提示 HTML（QLabel 可直接渲染）。
+
+    默认高峰红、低谷绿；用户自定义文案会做 HTML 转义，防止破坏富文本。
+    """
+    bj = _beijing_now(now)
+    tier = deepseek_pricing_tier(bj)
+    next_tier, next_time = _next_pricing_switch(bj)
+    peak_text = escape(str(peak_label or "高峰"))
+    idle_text = escape(str(idle_label or "空闲"))
+
+    def span(text: str, color: str) -> str:
+        return f'<span style="color:{color}">{text}</span>'
+
+    label = span(peak_text, peak_color) if tier == 'peak' else span(idle_text, idle_color)
+    next_label = span(idle_text, idle_color) if next_tier == 'idle' else span(peak_text, peak_color)
+    time_text = _format_switch_time(bj, next_time)
+    return f'DeepSeek 当前{label} · 下一{next_label} {time_text}'

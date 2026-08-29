@@ -1044,6 +1044,10 @@ class ModernSettingsDialog(QDialog):
         if self.balance_refresh_spin is not None:
             general_layout.addWidget(SettingsSection("后台服务", [
                 SettingRow("balance_refresh", "余额自动刷新", "设置后台刷新间隔；0 分钟表示关闭。", self.balance_refresh_spin),
+                SettingRow("balance_tier_mode", "峰谷提示文案", "选择 DeepSeek 高峰/空闲提示的显示风格。", self.balance_tier_mode_select),
+                SettingRow("balance_tier_peak", "高峰自定义文本", "仅“自定义”模式生效；留空回退默认“高峰”。", self.balance_tier_peak_edit, stacked=True),
+                SettingRow("balance_tier_idle", "空闲自定义文本", "仅“自定义”模式生效；留空回退默认“空闲”。", self.balance_tier_idle_edit, stacked=True),
+                SettingRow("balance_tier_color", "峰谷提示颜色", "开启后高峰显示红色、低谷显示绿色；关闭则使用普通气泡文字颜色。", self.balance_tier_color_check),
             ], general_content))
         general_layout.addStretch(1)
         self._add_page("常规", "settings", self._page_shell("常规", general_content))
@@ -1234,11 +1238,30 @@ class ModernSettingsDialog(QDialog):
         self.music_sing_check = ToggleSwitch(self)
         self.music_sing_check.setChecked(bool(self.config.get("music_sing_enabled", False)))
         self.balance_refresh_spin = None
+        self.balance_tier_mode_select = None
+        self.balance_tier_peak_edit = None
+        self.balance_tier_idle_edit = None
+        self.balance_tier_color_check = None
         if self.include_ai:
             self.balance_refresh_spin = BrowserSpinBox(self)
             self.balance_refresh_spin.setRange(0, 1440)
             self.balance_refresh_spin.setSuffix(" 分钟")
             self.balance_refresh_spin.setValue(int(self.config.get("balance_refresh_minutes", 0) or 0))
+            self.balance_tier_mode_select = ModernSelect(self, width=180)
+            self.balance_tier_mode_select.addItem("空闲 / 高峰（默认）", "default")
+            self.balance_tier_mode_select.addItem("梁文谷 / 梁文峰", "liangwen")
+            self.balance_tier_mode_select.addItem("自定义", "custom")
+            self.balance_tier_mode_select.setCurrentData(
+                str(self.config.get("balance_tier_labels_mode", "default") or "default")
+            )
+            self.balance_tier_peak_edit = QLineEdit(self)
+            self.balance_tier_peak_edit.setPlaceholderText("高峰文本，例如：梁文峰")
+            self.balance_tier_peak_edit.setText(str(self.config.get("balance_tier_label_peak", "") or ""))
+            self.balance_tier_idle_edit = QLineEdit(self)
+            self.balance_tier_idle_edit.setPlaceholderText("空闲文本，例如：梁文谷")
+            self.balance_tier_idle_edit.setText(str(self.config.get("balance_tier_label_idle", "") or ""))
+            self.balance_tier_color_check = ToggleSwitch(self)
+            self.balance_tier_color_check.setChecked(bool(self.config.get("balance_tier_color_enabled", True)))
         self.auto_hide_fullscreen_check = None
         self.stream_capture_check = None
         if sys.platform == "win32":
@@ -1808,6 +1831,13 @@ class ModernSettingsDialog(QDialog):
         self.config.set("music_sing_enabled", self.music_sing_check.isChecked())
         if self.balance_refresh_spin is not None:
             self.config.set("balance_refresh_minutes", int(self.balance_refresh_spin.value()))
+            self.config.set(
+                "balance_tier_labels_mode",
+                str(self.balance_tier_mode_select.currentData() or "default"),
+            )
+            self.config.set("balance_tier_label_peak", self.balance_tier_peak_edit.text().strip())
+            self.config.set("balance_tier_label_idle", self.balance_tier_idle_edit.text().strip())
+            self.config.set("balance_tier_color_enabled", self.balance_tier_color_check.isChecked())
         if self.auto_hide_fullscreen_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
         if self.stream_capture_check is not None:

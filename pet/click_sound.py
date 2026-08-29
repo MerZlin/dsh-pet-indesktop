@@ -20,6 +20,7 @@ log = logging.getLogger("pet.click_sound")
 _qt_player = None
 _qt_audio = None
 _qt_import_failed = False
+_system_proc = None  # 系统播放器回退通道的子进程句柄，用于新点击时停止上一段
 
 
 def _qt_available() -> bool:
@@ -60,6 +61,34 @@ def _ensure_qt_player():
         return None
 
 
+def stop_click_sound() -> None:
+    """停止当前正在播放的点击音效。
+
+    用户选择长音效后快速多次点击时，新点击应先停掉上一段，避免声音叠放
+    或排队播放。覆盖 QtMultimedia、Windows winsound、系统播放器三条通道。
+    """
+    global _system_proc
+    if _qt_player is not None:
+        try:
+            _qt_player.stop()
+        except Exception:
+            pass
+    if os.name == 'nt':
+        try:
+            import winsound
+
+            winsound.PlaySound(None, winsound.SND_PURGE)
+        except Exception:
+            pass
+    if _system_proc is not None:
+        try:
+            if _system_proc.poll() is None:
+                _system_proc.terminate()
+        except Exception:
+            pass
+        _system_proc = None
+
+
 def _play_with_qt(path: Path) -> bool:
     player = _ensure_qt_player()
     if player is None:
@@ -97,7 +126,10 @@ def _play_with_system_player(path: Path) -> bool:
     if Path(player).name == "aplay":
         command.insert(1, "-q")
     try:
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        global _system_proc
+        _system_proc = subprocess.Popen(
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         return True
     except OSError:
         log.exception("系统播放器失败: %s", player)
@@ -112,6 +144,9 @@ def play_click_sound(path: Path | str) -> bool:
         return False
     if not path.is_file():
         return False
+
+    # 新点击先停掉上一段音效，避免长音效叠加/排队
+    stop_click_sound()
 
     if os.name == "nt" and path.suffix.lower() == ".wav":
         return _play_wav_windows(path)
