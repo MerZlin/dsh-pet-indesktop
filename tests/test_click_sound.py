@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import random
+import wave
 from pathlib import Path
 from types import SimpleNamespace
+from PySide6.QtCore import QTimer
 
 from pet import click_sound
 from pet import window as window_mod
@@ -242,4 +244,51 @@ def test_window_play_click_sound_uses_pack(monkeypatch, tmp_path):
     monkeypatch.setattr(window_mod, "play_sound", capture)
     window_mod.PetWindow._play_click_sound(FakePet())
     assert sent == [(custom, 0.8)]
+
+
+def test_resolve_click_sound_pair_duck_and_non_duck(monkeypatch, tmp_path):
+    press = _make_file(tmp_path, "Ya1.mp3")
+    release = _make_file(tmp_path, "Ya2.mp3")
+    monkeypatch.setattr(click_sound, "resolve_click_sound_candidates", lambda pack, data_dir=None: [press, release])
+    monkeypatch.setattr(click_sound, "_cache_path", lambda path: path.with_suffix(".wav"))
+    assert click_sound.resolve_click_sound_pair({"kind": "builtin", "id": "duck"}) == (press, release)
+    press.with_suffix(".wav").write_bytes(b"")
+    release.with_suffix(".wav").write_bytes(b"")
+    assert click_sound.resolve_click_sound_pair({"kind": "builtin", "id": "duck"}) == (
+        press.with_suffix(".wav"), release.with_suffix(".wav"))
+    assert click_sound.resolve_click_sound_pair({"kind": "file", "id": "custom"}) is None
+
+
+def test_press_sound_stops_release_and_restarts_press(monkeypatch, tmp_path):
+    pair = (_make_file(tmp_path, "press.wav"), _make_file(tmp_path, "release.wav"))
+    release_effect = SimpleNamespace(
+        stopped=False, stop=lambda: setattr(release_effect, "stopped", True),
+        setLoopCount=lambda count: None, setVolume=lambda volume: None,
+    )
+    played = []
+    monkeypatch.setattr(click_sound, "_effect_for", lambda path: release_effect)
+    monkeypatch.setattr(click_sound, "play_sound", lambda path, volume=1.0: played.append((path, volume)) or True)
+    assert click_sound.play_press_sound(pair, 0.6) is True
+    assert release_effect.stopped is True
+    assert played == [(pair[0], 0.6)]
+
+
+def test_release_sound_schedules_press_tail(monkeypatch, tmp_path):
+    press = tmp_path / "press.wav"
+    release = tmp_path / "release.wav"
+    for path in (press, release):
+        with wave.open(str(path), "wb") as out:
+            out.setnchannels(1)
+            out.setsampwidth(2)
+            out.setframerate(1000)
+            out.writeframes(b"\0\0" * 1000)
+    calls = []
+    monkeypatch.setattr(click_sound, "play_sound", lambda path, volume=1.0: calls.append((path, volume)) or True)
+    monkeypatch.setattr(click_sound.time, "monotonic", lambda: 0.2)
+    scheduled = []
+    monkeypatch.setattr(QTimer, "singleShot", lambda delay, callback: scheduled.append((delay, callback)))
+    click_sound.play_release_sound((press, release), 0.5, press_started_at=0.0)
+    assert scheduled and scheduled[0][0] == 700
+    scheduled[0][1]()
+    assert calls == [(release, 0.5)]
 

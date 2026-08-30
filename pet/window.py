@@ -53,7 +53,10 @@ from . import vision as vision_mod
 from . import physics as physics_mod
 from . import collision
 from . import collision_debug
-from .click_sound import choose_sound, play_sound, resolve_click_sound_candidates
+from .click_sound import (
+    choose_sound, play_sound, resolve_click_sound_candidates, resolve_click_sound_pair,
+    play_press_sound, play_release_sound,
+)
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
 
@@ -542,6 +545,9 @@ class PetWindow(QWidget):
         self._squash_duration_ms = 220
         self._squash_progress = 1.0
         self._last_collision_squash_at = float('-inf')
+        self._last_collision_sound_at = float('-inf')
+        self._press_sound_pair = None
+        self._press_sound_started_at: float | None = None
         self._slingshot_rebound_progress = 0.0
 
         # ---- 拖动物理 ----
@@ -1213,6 +1219,7 @@ class PetWindow(QWidget):
         if has_velocity_impulse:
             self._just_dragged = True
             QTimer.singleShot(120, self, self._clear_just_dragged)
+            self._play_collision_sound()
         if has_velocity_impulse and speed >= physics_mod.DEAD_ZONE_SPEED:
             self._interaction_state = THROWN
             self._enter_physics_mode('throw')
@@ -2288,6 +2295,12 @@ class PetWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if not self._is_in_interactive_area(event.position().toPoint()):
                 return  # 左右留白区域不参与点击/拖拽
+            if self.click_sound_enabled:
+                pair = resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
+                if pair is not None:
+                    self._press_sound_pair = pair
+                    self._press_sound_started_at = time.monotonic()
+                    play_press_sound(pair, float(self.cfg.get("click_sound_volume", 0.70)))
             if self.lock_position:
                 # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
                 return
@@ -2411,6 +2424,12 @@ class PetWindow(QWidget):
             if self.idles:
                 self._switch(self._pick(self.idles))  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
+            if self._press_sound_pair is not None and self.click_sound_enabled:
+                play_release_sound(
+                    self._press_sound_pair,
+                    float(self.cfg.get("click_sound_volume", 0.70)),
+                    self._press_sound_started_at,
+                )
             self._on_click()
         self._dragging = False
         self._interaction_state = "IDLE"
@@ -2440,7 +2459,8 @@ class PetWindow(QWidget):
         self._cancel_move()
         self._start_squash()
         self._switch(self._pick(self.clicks))
-        self._schedule_click_sound()
+        if resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir) is None:
+            self._schedule_click_sound()
         if self.click_show_balance and callable(self.on_show_balance):
             self.on_show_balance(self)
         elif self.click_show_self_talk and self._self_talk_enabled:
@@ -2467,6 +2487,20 @@ class PetWindow(QWidget):
             return
         volume = float(self.cfg.get("click_sound_volume", 0.70))
         play_sound(path, volume=volume)
+
+    def _play_collision_sound(self) -> None:
+        if not self.click_sound_enabled:
+            return
+        now = time.monotonic()
+        if now - self._last_collision_sound_at < 0.25:
+            return
+        self._last_collision_sound_at = now
+        volume = float(self.cfg.get("click_sound_volume", 0.70))
+        pair = resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
+        if pair is not None:
+            play_press_sound(pair, volume)
+        else:
+            self._play_click_sound()
 
     # ================================================================ 看看屏幕
     def _on_look_screen(self) -> None:
@@ -3180,6 +3214,7 @@ class PetWindow(QWidget):
                                      self._phys_vel[1] * clamped / speed]
             self._predicted_bounces[pair] = now
             self._pending_predicted_bounce = (float(bounce_vx), float(bounce_vy))
+            self._play_collision_sound()
             self._submit_collision_state(force=True)
             if not self._squash_active and now - self._last_collision_squash_at >= 0.25:
                 self._last_collision_squash_at = now

@@ -32,6 +32,8 @@ _qt_player_index = 0
 _qt_import_failed = False
 _qt_classes: tuple[Any, ...] | None = None
 _PLAYER_POOL_SIZE = 4
+_wav_duration_cache: dict[str, float] = {}
+_click_pair_state: dict[tuple[str, str], dict[str, Any]] = {}
 
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 
@@ -107,6 +109,20 @@ def _cache_path(source: Path) -> Path:
     stat = source.stat()
     key = hashlib.sha256(f"{source.resolve()}:{stat.st_mtime_ns}:{stat.st_size}".encode()).hexdigest()[:20]
     return _sound_cache_dir() / f"{source.stem}-{key}.wav"
+
+
+def _wav_duration(path: Path) -> float:
+    """Read and cache duration from a decoded WAV header."""
+    key = str(path.resolve())
+    if key in _wav_duration_cache:
+        return _wav_duration_cache[key]
+    try:
+        with wave.open(str(path), "rb") as source:
+            duration = source.getnframes() / max(1, source.getframerate())
+    except (OSError, EOFError, wave.Error):
+        duration = 0.0
+    _wav_duration_cache[key] = duration
+    return duration
 
 
 def _effect_for(path: Path):
@@ -456,6 +472,81 @@ def resolve_click_sound_candidates(pack: dict | None, data_dir: Path | None = No
         return []
 
     return []
+
+
+def resolve_click_sound_pair(pack: dict | None, data_dir: Path | None = None) -> tuple[Path, Path] | None:
+    """Resolve the duck press/release pair, preferring decoded WAV caches."""
+    pack = pack if isinstance(pack, dict) else {}
+    if str(pack.get("kind") or "builtin").strip().lower() != "builtin":
+        return None
+    if str(pack.get("id") or "default").strip() != "duck":
+        return None
+    candidates = {path.stem.lower(): path for path in resolve_click_sound_candidates(pack, data_dir)}
+    press, release = candidates.get("ya1"), candidates.get("ya2")
+    if press is None or release is None:
+        return None
+    def cached(path: Path) -> Path:
+        if path.suffix.lower() == ".wav":
+            return path
+        cache = _cache_path(path)
+        if cache.is_file():
+            return cache
+        _decode_to_wav(path, cache, 0.0)
+        return cache if cache.is_file() else path
+    return cached(press), cached(release)
+
+
+def play_press_sound(pair: tuple[Path, Path], volume: float = 1.0) -> bool:
+    """Restart press and cancel any release currently playing."""
+    press, release = pair
+    release_effect = _effect_for(release)
+    if release_effect is not None:
+        try:
+            release_effect.stop()
+            release_effect.setLoopCount(1)
+            release_effect.setVolume(volume)
+        except Exception:
+            pass
+    state = _click_pair_state.setdefault((str(press), str(release)), {})
+    state["generation"] = int(state.get("generation", 0)) + 1
+    state["press_started_at"] = time.monotonic()
+    state["press_played"] = True
+    state["release_scheduled"] = False
+    state["release_played"] = False
+    return play_sound(press, volume=volume)
+
+
+def play_release_sound(
+    pair: tuple[Path, Path], volume: float = 1.0, press_started_at: float | None = None,
+) -> bool:
+    """Play release immediately or at the last 100ms of the press sound."""
+    press, release = pair
+    started = press_started_at
+    if started is None:
+        started = _click_pair_state.get((str(press), str(release)), {}).get("press_started_at")
+    delay_ms = 0
+    if started is not None:
+        remaining = _wav_duration(press) - (time.monotonic() - float(started))
+        delay_ms = max(0, int(round((remaining - 0.100) * 1000)))
+    state = _click_pair_state.setdefault((str(press), str(release)), {})
+    if state.get("release_scheduled") or state.get("release_played"):
+        return False
+    state["release_scheduled"] = bool(delay_ms)
+    generation = int(state.get("generation", 0))
+    def play() -> None:
+        if int(state.get("generation", 0)) == generation:
+            state["release_scheduled"] = False
+            state["release_played"] = True
+            play_sound(release, volume=volume)
+    if delay_ms:
+        try:
+            from PySide6.QtCore import QTimer
+        except Exception:
+            return play_sound(release, volume=volume)
+        QTimer.singleShot(delay_ms, play)
+        return True
+    play()
+    return True
 
 
 def choose_sound(candidates: Sequence[Path], rng: random.Random | None = None) -> Path | None:

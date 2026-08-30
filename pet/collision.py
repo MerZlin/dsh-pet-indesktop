@@ -3,7 +3,7 @@
 
 包含：
 1. 圆链/椭圆碰撞检测（Broad-phase AABB + Narrow-phase）
-2. 质量计算（面积加权 clamp 0.5~3.0，无基准按 scale^2 fallback）
+2. 质量计算（面积加权 clamp 0.5~2.5，无基准按 scale^2 fallback）
 3. 冲量求解（恢复系数默认 0.82、切向摩擦 mu=0.08、库仑上限、每质量 9000px/s 限制）
 4. 位置分离（逆质量分摊、每次最多 60% 重叠、min 1px / max 12px、0.5px slop、连续 3 tick 强制完整分离）
 5. 稳定重合方向（两 ID 稳定哈希，禁用随机）
@@ -109,9 +109,7 @@ def calculate_mass(
     """计算桌宠质量。
     
     规则 (plan4 §4.1，实机手感修正)：
-    质量按体型加权但收窄到 0.7~1.6——0.5~3.0 的 6 倍极差会让重射手
-    保留大部分动量"碾过去"（用户实机反馈不像台球）；收窄后射手撞完
-    基本停下、目标飞出去，仍保留"大一点的更稳"的手感差异。
+    质量按体型加权并限制在 0.5~2.5，优先保证街机碰撞手感。
     collision_mass_scale 是用户设置的全局倍率，照常参与。
     """
     if base_radius_x is not None and base_radius_y is not None and base_radius_x > 1e-4 and base_radius_y > 1e-4:
@@ -119,7 +117,7 @@ def calculate_mass(
     else:
         scale_ratio = scale / DEFAULT_BASE_SCALE if DEFAULT_BASE_SCALE > 0 else 1.0
         raw = collision_mass_scale * (scale_ratio ** 2)
-    return max(0.7, min(1.6, float(raw)))
+    return max(0.5, min(2.5, float(raw)))
 
 
 def stable_hash_direction(id_a: str, id_b: str) -> tuple[float, float]:

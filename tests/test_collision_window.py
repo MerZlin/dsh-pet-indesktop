@@ -540,6 +540,26 @@ def test_move_event_submits_throttled_not_forced(tmp_path, app):
     win.close()
 
 
+def test_collision_sound_cooldown_and_disabled(tmp_path, app, monkeypatch):
+    win, _ = _make_pet_window(tmp_path, "pet_sound")
+    sounds = []
+    monkeypatch.setattr(win, "_play_click_sound", lambda: sounds.append(1))
+    monkeypatch.setattr("pet.window.resolve_click_sound_pair", lambda pack, data_dir=None: None)
+    times = iter((1.0, 1.1, 1.4))
+    monkeypatch.setattr("pet.window.time.monotonic", lambda: next(times))
+    win._play_collision_sound()
+    assert sounds == [1]
+    win._play_collision_sound()
+    assert sounds == [1]
+    win._play_collision_sound()
+    assert sounds == [1, 1]
+    win.click_sound_enabled = False
+    win._last_collision_sound_at = float("-inf")
+    win._play_collision_sound()
+    assert sounds == [1, 1]
+    win.close()
+
+
 def _prediction_peer(win, runtime_id="pet_b", vx=0.0, flags=None):
     rect = win.collision_content_rect()
     own_circles = collision.circles_from_rect(rect.x(), rect.y(), rect.width(), rect.height())

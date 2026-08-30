@@ -178,33 +178,33 @@ class TestCollisionMassCalculation:
     """质量计算规则与 fallback 测试。"""
 
     def test_calculate_mass_with_base_and_clamping(self):
-        """有基准半轴时的面积比加权与 clamp 0.7~1.6（实机手感收窄）。"""
+        """有基准半轴时的面积比加权与 clamp 0.5~2.5。"""
         # 基准: 100 * 80 = 8000
         # 当前: 100 * 80 = 8000 -> mass = 1.0
         m1 = collision.calculate_mass(100.0, 80.0, base_radius_x=100.0, base_radius_y=80.0)
         assert m1 == pytest.approx(1.0, abs=1e-5)
 
-        # 极小面积：20 * 20 / 8000 = 0.05 -> clamp 0.7
+        # 极小面积：20 * 20 / 8000 = 0.05 -> clamp 0.5
         m_small = collision.calculate_mass(20.0, 20.0, base_radius_x=100.0, base_radius_y=80.0)
-        assert m_small == 0.7
+        assert m_small == 0.5
 
-        # 极大面积：400 * 300 / 8000 = 15.0 -> clamp 1.6
+        # 极大面积：400 * 300 / 8000 = 15.0 -> clamp 2.5
         m_large = collision.calculate_mass(400.0, 300.0, base_radius_x=100.0, base_radius_y=80.0)
-        assert m_large == 1.6
+        assert m_large == 2.5
 
     def test_calculate_mass_scale_squared_fallback(self):
-        """无基准半轴时按 scale^2 估算（clamp 0.7~1.6）。"""
+        """无基准半轴时按 scale^2 估算（clamp 0.5~2.5）。"""
         # scale = 0.72 (基准) -> 1.0
         m_base = collision.calculate_mass(50.0, 50.0, scale=0.72)
         assert m_base == pytest.approx(1.0, abs=1e-5)
 
-        # scale = 1.44 (2倍) -> 2^2 = 4.0 -> clamp 1.6
+        # scale = 1.44 (2倍) -> 2^2 = 4.0 -> clamp 2.5
         m_big = collision.calculate_mass(50.0, 50.0, scale=1.44)
-        assert m_big == 1.6
+        assert m_big == 2.5
 
-        # scale = 0.36 (0.5倍) -> 0.5^2 = 0.25 -> clamp 0.7
+        # scale = 0.36 (0.5倍) -> 0.5^2 = 0.25 -> clamp 0.5
         m_tiny = collision.calculate_mass(50.0, 50.0, scale=0.36)
-        assert m_tiny == 0.7
+        assert m_tiny == 0.5
 
 
 class TestCollisionImpulseAndMomentum:
