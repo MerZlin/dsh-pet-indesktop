@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -35,6 +36,15 @@ PLIST_LABEL = (
 # 每个变体只管理自己的值，避免“关无 Chat 版把 Chat 版也关了”。
 VALUE_NAME = APP_DIR_NAME
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+# 历史/各变体可能写入过的值名；仅用于启动时清理“指向已不存在路径”的失效项，
+# 不影响其他仍有效的变体自启。
+KNOWN_VALUE_NAMES = (
+    "dsh-pet-standalone",
+    "dsh-pet-standalone-webm",
+    "dsh-pet-standalone-webm-chat",
+    "dsh-pet-standalone-gif",
+    "dsh-pet-standalone-gif-chat",
+)
 
 _IS_WIN = sys.platform == "win32"
 _IS_MAC = sys.platform == "darwin"
@@ -92,6 +102,65 @@ def _pythonw_path() -> str:
 def _win_command_is_current(command: str) -> bool:
     """判断 Windows 自启命令是否已是“先切工作目录再启动”的新格式。"""
     return "cmd /c start" in command.lower()
+
+
+def _iter_known_win_values() -> list[tuple[str, str]]:
+    """读取注册表里所有已知 dsh-pet 自启值，返回 [(name, command), ...]。"""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            found = []
+            for name in KNOWN_VALUE_NAMES:
+                try:
+                    command, _ = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    continue
+                found.append((name, str(command or "")))
+            return found
+    except OSError:
+        return []
+
+
+def _win_command_target_exists(command: str) -> bool:
+    """判断 Windows 自启命令引用的路径是否仍然存在。
+
+    命令格式形如：
+      cmd /c start "" /D "C:\\path\\to\\dir" "C:\\path\\to\\app.exe"
+    只要任一被引用的非空路径已不存在，就视为失效自启项。
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    quoted = re.findall(r'"([^"]*)"', command)
+    paths = [item for item in quoted if item.strip()]
+    if not paths:
+        return True
+    return all(Path(item).exists() for item in paths)
+
+
+def cleanup_stale_entries() -> int:
+    """清理指向已不存在路径的失效开机自启项（Windows）。
+
+    用户“更新后直接删除旧目录但忘了关自启”时，HKCU Run 里会残留指向
+    已删除路径的命令，导致每次开机弹终端报“找不到文件夹”。这里只删除
+    路径已失效的已知 dsh-pet 项，不影响其他仍有效的变体自启。
+    """
+    if not _IS_WIN:
+        return 0
+    removed = 0
+    try:
+        for name, command in _iter_known_win_values():
+            if _win_command_target_exists(command):
+                continue
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE
+            ) as key:
+                try:
+                    winreg.DeleteValue(key, name)
+                    removed += 1
+                except FileNotFoundError:
+                    pass
+    except OSError:
+        pass
+    return removed
 
 
 def is_enabled() -> bool:
