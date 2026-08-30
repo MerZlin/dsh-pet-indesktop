@@ -44,63 +44,25 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
 
-      # Linux 只发布两个 WebM 变体（GIF 变体包体约 800 MB，不发布）：
-      #   webm-chat / webm（无 Chat）
+      # 构建入口与本地完全一致：scripts/build_linux.sh（PyInstaller 打包 +
+      # 中文编码自检都在脚本内完成），CI 不内联任何构建命令，
+      # 避免本地/CI 两套逻辑漂移。只构建两个 webm 变体（与 Windows/macOS
+      # 发布一致，GIF 包体约 800 MB 不发布）。
       # onedir 形态：运行期零解压、不产生临时缓存；build_variant.py 注入
       # 变体标识，配置目录/自启项按变体隔离（与 Windows/macOS 行为一致）。
       # Linux 上 PyInstaller 忽略 --icon（只对 Windows/macOS 生效），故省略。
       - name: Build onedir variants
         run: |
-          for SPEC in \
-            "webm-chat|packaging/pet_entry.py|assets/characters|" \
-            "webm|packaging/pet_entry_no_chat.py|assets/characters|--exclude-module pet.chat --exclude-module keyring"; do
-            IFS='|' read -r VARIANT ENTRY DATAS EXCLUDES <<< "$SPEC"
-            echo "==> building $VARIANT"
-            echo "VARIANT = '$VARIANT'" > packaging/build_variant.py
-            CHAT_DATA=()
-            KEYRING_COLLECT=()
-            if [[ "$VARIANT" == *-chat ]]; then
-              # 新版/经典聊天窗口读取的样式文件（与 macOS/Windows 构建一致）
-              CHAT_DATA+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")
-              CHAT_DATA+=(--add-data "pet/chat/modern_styles.qss:pet/chat")
-              KEYRING_COLLECT+=(--collect-all keyring)
-            fi
-            python -m PyInstaller --noconfirm --clean --onedir \
-              --paths . \
-              --collect-all imageio_ffmpeg \
-              --collect-all certifi \
-              --collect-all PySide6.QtMultimedia \
-              "${KEYRING_COLLECT[@]}" \
-              --add-data "assets/sounds:assets/sounds" \
-              --add-data "assets/chat:assets/chat" \
-              --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish" \
-              --add-data "pet/menu_templates:pet/menu_templates" \
-              --add-data "integrations:integrations" \
-              "${CHAT_DATA[@]}" \
-              --name "dsh-pet-standalone-$VARIANT" \
-              --add-data "$DATAS:$DATAS" \
-              $EXCLUDES \
-              "$ENTRY"
-            if [ $? -ne 0 ]; then echo "::error::$VARIANT 构建失败"; exit 1; fi
-          done
-
-      # 中文编码自检（issue #26）：字节码字面量/文本资源/中文文件名被
-      # 编码污染即失败，绝不发布乱码包（与 Windows build_onedir.ps1 一致）。
-      - name: Chinese-encoding self-check on bundles
-        run: |
-          for VARIANT in webm-chat webm; do
-            APP="dist/dsh-pet-standalone-$VARIANT"
-            echo "==> checking $APP"
-            python scripts/check_bundle_encoding.py --dir "$APP"
-            if [ $? -ne 0 ]; then echo "::error::$APP 中文编码自检失败（issue #26）"; exit 1; fi
-          done
+          bash scripts/build_linux.sh \
+            --dist dist \
+            --variants webm-chat,webm
 
       - name: Verify pet module collected
         run: |
           for VARIANT in webm-chat webm; do
             APP="dsh-pet-standalone-$VARIANT"
-            WARN="build/$APP/warn-$APP.txt"
-            if [ -f "$WARN" ] && grep -q "missing module named pet" "$WARN"; then
+            WARN="$(find build -name "warn-$APP.txt" | head -1)"
+            if [ -n "$WARN" ] && grep -q "missing module named pet" "$WARN"; then
               echo "::error::$APP pet 模块未被 PyInstaller 收集"; cat "$WARN"; exit 1
             fi
             echo "$APP pet 模块已收集"

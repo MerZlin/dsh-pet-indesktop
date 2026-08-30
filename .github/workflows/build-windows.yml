@@ -44,7 +44,7 @@ jobs:
           $langDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\Languages'
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl' -OutFile (Join-Path $langDir 'ChineseSimplified.isl')
 
-      # 与 Linux/macOS 一致：构建前先跑测试套件，避免发布损坏产物
+      # 与 Linux/macOS 一致：构建前先跑测试套件，避免发布损坏产物。
       - name: Run test suite
         env:
           QT_QPA_PLATFORM: offscreen
