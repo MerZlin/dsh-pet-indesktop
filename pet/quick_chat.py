@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -88,7 +89,15 @@ class QuickChatBubble(QFrame):
         self.output.setWordWrap(True)
         self.output.setMinimumHeight(60)
         self.output.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self.output)
+        self.output_scroll = QScrollArea()
+        self.output_scroll.setObjectName("quick-chat-output-scroll")
+        self.output_scroll.setWidgetResizable(True)
+        self.output_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.output_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.output_scroll.setMinimumHeight(60)
+        self.output_scroll.setMaximumHeight(220)
+        self.output_scroll.setWidget(self.output)
+        layout.addWidget(self.output_scroll)
 
         self.page_widget = QWidget()
         self.page_row = QHBoxLayout(self.page_widget)
@@ -124,6 +133,7 @@ class QuickChatBubble(QFrame):
         self.setStyleSheet(f"""
             QLabel#quick-chat-title, QLabel#quick-chat-hint, QLabel#quick-chat-output,
             QLabel#quick-chat-page {{ background: transparent; color: {fg}; border: none; }}
+            QScrollArea#quick-chat-output-scroll {{ background: transparent; border: none; }}
             QPushButton {{
                 background: {border}; color: {fg}; border: none; border-radius: 8px;
                 padding: 3px 8px;
