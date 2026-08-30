@@ -365,6 +365,8 @@ class PetWindow(QWidget):
         self._collision_peer_snapshots: dict[str, dict[str, Any]] = {}
         self._predicted_bounces: dict[str, float] = {}
         self._pending_predicted_bounce: tuple[float, float] | None = None
+        self._pending_predicted_contact: tuple[float, float, list[list[float]]] | None = None
+        self._collision_impulse_watermarks = collision.WatermarkDeduplicator()
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
         self.on_open_modern_chat = None
@@ -1015,6 +1017,7 @@ class PetWindow(QWidget):
         self._collision_peer_snapshots.clear()
         self._predicted_bounces.clear()
         self._pending_predicted_bounce = None
+        self._pending_predicted_contact = None
         self._sync_collision_policy()
 
     def _sync_collision_policy(self) -> None:
@@ -1096,6 +1099,8 @@ class PetWindow(QWidget):
         }
         if self._pending_predicted_bounce is not None:
             state['bounce_vx'], state['bounce_vy'] = self._pending_predicted_bounce
+            if self._pending_predicted_contact is not None:
+                state['bounce_x'], state['bounce_y'], state['bounce_circles'] = self._pending_predicted_contact
         return state
 
     def _submit_collision_state(self, force: bool = False) -> None:
@@ -1121,6 +1126,7 @@ class PetWindow(QWidget):
         session.submit_state(state)
         if self._pending_predicted_bounce is not None:
             self._pending_predicted_bounce = None
+            self._pending_predicted_contact = None
         if collision_debug.ENABLED:
             collision_debug.log(
                 getattr(session, 'runtime_id', ''), 'state_submit',
@@ -1138,6 +1144,7 @@ class PetWindow(QWidget):
             return
         if epoch != self._collision_epoch:
             self._pending_predicted_bounce = None
+            self._pending_predicted_contact = None
         self._collision_epoch = epoch
         runtime_id = str(getattr(getattr(self, '_collision_session', None), 'runtime_id', ''))
         now = time.monotonic()
@@ -1170,6 +1177,13 @@ class PetWindow(QWidget):
         if self._collision_session is None or not self.isVisible() or self._hidden_paused:
             discard('session_missing_or_hidden')
             return
+        epoch = str(message.get('epoch') or '')
+        pair_for_watermark = str(message.get('pair') or '')
+        tick = message.get('tick')
+        if epoch and pair_for_watermark and tick is not None:
+            if not self._collision_impulse_watermarks.should_apply(epoch, pair_for_watermark, int(tick)):
+                discard('watermark')
+                return
         if self._interaction_state == DRAGGING or self._physics_mode == 'drag':
             discard('dragging')
             return
@@ -3248,6 +3262,10 @@ class PetWindow(QWidget):
                                      self._phys_vel[1] * clamped / speed]
             self._predicted_bounces[pair] = now
             self._pending_predicted_bounce = (float(bounce_vx), float(bounce_vy))
+            self._pending_predicted_contact = (
+                float(own.x), float(own.y),
+                [[float(c[0]), float(c[1]), float(c[2])] for c in current_circles],
+            )
             self._play_collision_sound()
             self._submit_collision_state(force=True)
             if not self._squash_active and now - self._last_collision_squash_at >= 0.25:

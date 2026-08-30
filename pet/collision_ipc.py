@@ -63,6 +63,7 @@ class _CollisionWorker(QObject):
         self.previous_members: dict[str, dict[str, Any]] = {}
         self._swept_pair_versions: dict[str, tuple[int, int]] = {}
         self._predicted_pair_ticks: dict[str, int] = {}
+        self._position_only_pairs: dict[str, tuple[tuple[float, ...], int]] = {}
         self.latest_state: dict[str, Any] = {}
         self.epoch = ""
         self.tick = 0
@@ -473,6 +474,9 @@ class _CollisionWorker(QObject):
             pred_is_inf = bool(pred_flags & collision.FLAG_DRAGGING)
             pred_rx = float(snap.get("radius_x", 0.0))
             pred_ry = float(snap.get("radius_y", 0.0))
+            pred_x = float(snap.get("bounce_x", snap.get("x", 0.0)))
+            pred_y = float(snap.get("bounce_y", snap.get("y", 0.0)))
+            pred_circles = snap.get("bounce_circles") or snap.get("circles")
             pred_scale = float(snap.get("scale", 0.72) or 0.72)
             pred_mass = collision.calculate_mass(
                 pred_rx, pred_ry,
@@ -480,12 +484,12 @@ class _CollisionWorker(QObject):
                 collision_mass_scale=self.policy.get("collision_mass_scale", 1.0),
             )
             event_member = collision.MemberState(
-                pred_rid, float(snap.get("x", 0.0)), float(snap.get("y", 0.0)),
+                pred_rid, pred_x, pred_y,
                 pred_rx, pred_ry,
                 float(bounce_vx), float(bounce_vy), pred_mass,
                 pred_is_inf, pred_flags, str(snap.get("instance_id", "")),
                 str(snap.get("character", "")), pred_scale, float(snap.get("w", 0.0)), float(snap.get("h", 0.0)),
-                snap.get("circles"),
+                pred_circles,
             )
             for other in sorted_active:
                 if other.runtime_id == pred_rid:
@@ -495,9 +499,12 @@ class _CollisionWorker(QObject):
                     continue
                 hit = collision.check_collision_members(event_member, other)
                 if not hit[0]:
-                    if event_member.circles is not None and other.circles is not None:
+                    previous = self.previous_members.get(pred_rid)
+                    if (previous and previous.get("circles") is not None
+                            and event_member.circles is not None and other.circles is not None):
                         hit = collision.swept_circle_chain_collision(
-                            event_member.circles, event_member.circles, other.circles, other.circles)
+                            previous["circles"], event_member.circles,
+                            other.circles, other.circles)
                 if not hit[0]:
                     continue
                 _, nx, ny, overlap, cx, cy = hit
@@ -537,6 +544,9 @@ class _CollisionWorker(QObject):
                 raw["flags"] = int(raw.get("flags", 0)) & ~collision.FLAG_PREDICTED_BOUNCE
                 raw.pop("bounce_vx", None)
                 raw.pop("bounce_vy", None)
+                raw.pop("bounce_x", None)
+                raw.pop("bounce_y", None)
+                raw.pop("bounce_circles", None)
         for i, member_a in enumerate(sorted_active):
             for member_b in sorted_active[i + 1:]:
                 prev_a, prev_b = active_previous.get(member_a.runtime_id), active_previous.get(member_b.runtime_id)
@@ -577,6 +587,13 @@ class _CollisionWorker(QObject):
         for result in results:
             if result.j == 0 and result.sep == 0:
                 continue
+            if result.j == 0 and result.sep > 0:
+                signature = (round(result.dx_a, 3), round(result.dy_a, 3),
+                             round(result.dx_b, 3), round(result.dy_b, 3))
+                previous = self._position_only_pairs.get(result.pair)
+                if previous is not None and self.tick - previous[1] < 15:
+                    continue
+                self._position_only_pairs[result.pair] = (signature, self.tick)
             payload = {"type": "impulse", "epoch": self.epoch, **asdict(result)}
             for peer in self.peers:
                 self._send(peer, payload)
@@ -593,6 +610,10 @@ class _CollisionWorker(QObject):
             }
             self._predicted_pair_ticks = {
                 pair: tick for pair, tick in self._predicted_pair_ticks.items()
+                if runtime_id not in pair.split("|")
+            }
+            self._position_only_pairs = {
+                pair: value for pair, value in self._position_only_pairs.items()
                 if runtime_id not in pair.split("|")
             }
 

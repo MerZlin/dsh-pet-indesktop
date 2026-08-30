@@ -310,6 +310,26 @@ def test_client_watermark_and_epoch_switch():
     assert len(received) == 1
 
 
+def test_coordinator_suppresses_repeated_position_only_contact():
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    a = {"runtime_id": "a", "seq": 1, "x": 0.0, "y": 0.0,
+         "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+         "vx": 0.0, "vy": 0.0, "flags": flags}
+    b = {"runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
+         "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
+         "vx": 0.0, "vy": 0.0, "flags": flags}
+    worker = _coordinator_with_members(a, b)
+    received = []
+    worker.impulse_ready.connect(received.append)
+
+    worker._coordinator_tick()
+    first_count = len(received)
+    assert first_count == 1
+    for _ in range(3):
+        worker._coordinator_tick()
+    assert len(received) == first_count
+
+
 def test_client_watchdog_stays_alive_while_snapshots_arrive(monkeypatch):
     worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "client", "", {})
     worker.epoch = "epoch-a"

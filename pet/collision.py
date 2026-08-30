@@ -202,6 +202,18 @@ def swept_circle_chain_collision(
     - overlap: 固定为一个小的正值（扫掠接触是边界相触，无嵌入深度）
     - contact_x, contact_y: A 圆心在接触时刻的世界坐标
     """
+    result = swept_circle_chain_collision_at_t(a_prev, a_curr, b_prev, b_curr)
+    if not result[0]:
+        return False, 0.0, 0.0, 0.0, 0.0, 0.0
+    _, _, nx, ny, overlap, contact_x, contact_y = result
+    return True, nx, ny, overlap, contact_x, contact_y
+
+
+def swept_circle_chain_collision_at_t(
+    a_prev: Sequence[Sequence[float]], a_curr: Sequence[Sequence[float]],
+    b_prev: Sequence[Sequence[float]], b_curr: Sequence[Sequence[float]],
+) -> tuple[bool, float, float, float, float, float, float]:
+    """扫掠碰撞检测，同时返回首次接触的归一化时间 t。"""
     best = None  # (t, nx, ny, contact_x, contact_y)
     for raw_a_prev, raw_a_curr in zip(a_prev or (), a_curr or ()):
         if len(raw_a_prev) < 3 or len(raw_a_curr) < 3:
@@ -250,9 +262,9 @@ def swept_circle_chain_collision(
             if best is None or t < best[0]:
                 best = (t, nx, ny, contact_x, contact_y)
     if best is None:
-        return False, 0.0, 0.0, 0.0, 0.0, 0.0
-    _, nx, ny, contact_x, contact_y = best
-    return True, nx, ny, 1.0, contact_x, contact_y
+        return False, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    t, nx, ny, contact_x, contact_y = best
+    return True, t, nx, ny, 1.0, contact_x, contact_y
 
 
 def check_collision_members(a: MemberState, b: MemberState) -> tuple[bool, float, float, float, float, float]:

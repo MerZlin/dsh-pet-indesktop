@@ -498,7 +498,7 @@ def test_submit_collision_state_dedup_excludes_ts(tmp_path, app):
     win._submit_collision_state()
     assert len(session.submitted_states) == 0
 
-    # 位置变化 → 非 force 放行一次
+    # 位置变化 -> 非 force 放行一次
     win.move(win.x() + 1, win.y())
     app.processEvents()
     assert len(session.submitted_states) == 1
@@ -514,7 +514,43 @@ def test_submit_collision_state_dedup_excludes_ts(tmp_path, app):
     win.move(win.x() + 3, win.y())
     app.processEvents()
     assert len(session.submitted_states) == 2
+    win.close()
 
+
+def test_window_deduplicates_same_epoch_pair_tick(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    msg = {"epoch": "epoch-a", "tick": 7, "a": "pet_a", "b": "pet_b",
+           "pair": "pet_a|pet_b", "dvx_a": 1200.0, "dvy_a": 0.0,
+           "dx_a": 0.0, "dy_a": 0.0}
+    session.impulse_ready.emit(msg)
+    app.processEvents()
+    first_velocity = list(win._phys_vel)
+    session.impulse_ready.emit(msg)
+    app.processEvents()
+    assert win._phys_vel == first_velocity
+    win.close()
+
+
+def test_predicted_bounce_reports_contact_geometry(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win._physics_mode = "throw"
+    rect = win.collision_content_rect()
+    win._phys_pos[:] = [float(win.x()), float(win.y())]
+    win._phys_vel[:] = [0.0, 0.0]
+    peer_x = float(rect.center().x() + 45.0)
+    peer_y = float(rect.center().y())
+    win._collision_peer_snapshots = {
+        "pet_b": {"_received_at": time.monotonic(), "x": peer_x, "y": peer_y,
+                   "radius_x": 30.0, "radius_y": 30.0,
+                   "circles": [[peer_x, peer_y, 30.0]], "vx": 0.0, "vy": 0.0,
+                   "flags": collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED}
+    }
+    win._phys_vel[:] = [800.0, 0.0]
+    win._predict_collision_bounce(float(win.x()) - 20.0, float(win.y()))
+    state = session.submitted_states[-1]
+    assert "bounce_x" in state
+    assert "bounce_y" in state
+    assert state["bounce_circles"]
     win.close()
 
 
