@@ -179,6 +179,60 @@ def check_collision_circles(
     return True, nx, ny, overlap, contact_x, contact_y
 
 
+def swept_circle_chain_collision(
+    a_prev: Sequence[Sequence[float]], a_curr: Sequence[Sequence[float]],
+    b_prev: Sequence[Sequence[float]], b_curr: Sequence[Sequence[float]],
+) -> tuple[bool, float, float, float, float, float]:
+    """Detect a collision swept between two circle-chain snapshots.
+
+    B is made stationary by subtracting its displacement from A.  The
+    returned contact point is the closest point on the relative A trajectory,
+    translated back to the world position at the beginning of the frame.
+    """
+    best = None
+    for raw_a_prev, raw_a_curr in zip(a_prev or (), a_curr or ()):
+        if len(raw_a_prev) < 3 or len(raw_a_curr) < 3:
+            continue
+        ax0, ay0, r1 = map(float, raw_a_prev[:3])
+        ax1, ay1, r1_curr = map(float, raw_a_curr[:3])
+        r1 = max(1e-4, r1_curr)
+        for raw_b_prev, raw_b_curr in zip(b_prev or (), b_curr or ()):
+            if len(raw_b_prev) < 3 or len(raw_b_curr) < 3:
+                continue
+            bx0, by0, r2 = map(float, raw_b_prev[:3])
+            bx1, by1, r2_curr = map(float, raw_b_curr[:3])
+            r2 = max(1e-4, r2_curr)
+            start_x, start_y = ax0 - bx0, ay0 - by0
+            delta_x = (ax1 - ax0) - (bx1 - bx0)
+            delta_y = (ay1 - ay0) - (by1 - by0)
+            length_sq = delta_x * delta_x + delta_y * delta_y
+            if length_sq > 1e-12:
+                t = max(0.0, min(1.0, -(start_x * delta_x + start_y * delta_y) / length_sq))
+            else:
+                t = 0.0
+            closest_x = start_x + delta_x * t
+            closest_y = start_y + delta_y * t
+            distance = math.hypot(closest_x, closest_y)
+            radius_sum = r1 + r2
+            if distance > radius_sum:
+                continue
+            if distance < 1e-6:
+                delta_length = math.hypot(delta_x, delta_y)
+                nx, ny = ((delta_x / delta_length, delta_y / delta_length)
+                          if delta_length > 1e-6 else (1.0, 0.0))
+            else:
+                nx, ny = -closest_x / distance, -closest_y / distance
+            contact_x = ax0 + (ax1 - ax0) * t
+            contact_y = ay0 + (ay1 - ay0) * t
+            candidate = (distance, nx, ny, radius_sum - distance, contact_x, contact_y)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+    if best is None:
+        return False, 0.0, 0.0, 0.0, 0.0, 0.0
+    _, nx, ny, overlap, contact_x, contact_y = best
+    return True, nx, ny, overlap, contact_x, contact_y
+
+
 def check_collision_members(a: MemberState, b: MemberState) -> tuple[bool, float, float, float, float, float]:
     """Use the advertised circle chain, falling back to the legacy ellipse."""
     if a.circles is not None and b.circles is not None:
@@ -386,6 +440,7 @@ def solve_multi_body_collision(
     friction: float = DEFAULT_FRICTION,
     impulse_cap: float = DEFAULT_IMPULSE_CAP,
     max_separation_iterations: int = 4,
+    swept_collisions: Optional[Dict[str, tuple[bool, float, float, float, float, float]]] = None,
 ) -> tuple[List[ImpulseResult], Dict[str, tuple[float, float]], Dict[str, int]]:
     """三体及以上/同快照的多体碰撞求解。
     
@@ -421,9 +476,14 @@ def solve_multi_body_collision(
                 continue
 
             collided, nx, ny, overlap, cx, cy = check_collision_members(m1, m2)
+            was_swept = False
 
             pair_key = f"{m1.runtime_id}|{m2.runtime_id}"
-            if collided and overlap > 0.0:
+            if not collided and swept_collisions:
+                collided, nx, ny, overlap, cx, cy = swept_collisions.get(
+                    pair_key, (False, 0.0, 0.0, 0.0, 0.0, 0.0))
+                was_swept = collided
+            if collided and overlap >= 0.0:
                 consecutive = history.get(pair_key, 0) + 1
                 new_overlap_history[pair_key] = consecutive
 
@@ -462,6 +522,7 @@ def solve_multi_body_collision(
                     "dvx_b": dvx_b,
                     "dvy_b": dvy_b,
                     "consecutive": consecutive,
+                    "swept": was_swept,
                 })
 
     # 2. 迭代分离位置 (最深重叠优先，最多 max_separation_iterations 轮)
@@ -471,10 +532,33 @@ def solve_multi_body_collision(
     total_pos_deltas: Dict[str, list[float]] = {m.runtime_id: [0.0, 0.0] for m in sorted_members}
     pair_sep_results: Dict[str, tuple[float, float, float, float, float]] = {}
 
+    # Swept contacts are no longer overlapping at the current snapshot, so
+    # apply their separation directly from the swept closest approach.
+    for p in pairs_data:
+        if not p["swept"]:
+            continue
+        m_a, m_b = p["m1"], p["m2"]
+        inv_m_a = 0.0 if m_a.is_infinite_mass or m_a.mass <= 0 else 1.0 / m_a.mass
+        inv_m_b = 0.0 if m_b.is_infinite_mass or m_b.mass <= 0 else 1.0 / m_b.mass
+        separation = calculate_position_separation(
+            p["overlap"], p["nx"], p["ny"], inv_m_a, inv_m_b)
+        sep_dist, dxa, dya, dxb, dyb = separation
+        pos_map[m_a.runtime_id][0] += dxa
+        pos_map[m_a.runtime_id][1] += dya
+        pos_map[m_b.runtime_id][0] += dxb
+        pos_map[m_b.runtime_id][1] += dyb
+        total_pos_deltas[m_a.runtime_id][0] += dxa
+        total_pos_deltas[m_a.runtime_id][1] += dya
+        total_pos_deltas[m_b.runtime_id][0] += dxb
+        total_pos_deltas[m_b.runtime_id][1] += dyb
+        pair_sep_results[p["pair"]] = separation
+
     for _ in range(max_separation_iterations):
         # 重新对各 pair 计算当前重叠深度
         current_overlaps = []
         for p in pairs_data:
+            if p["swept"]:
+                continue
             id_a = p["m1"].runtime_id
             id_b = p["m2"].runtime_id
             p_x1, p_y1 = pos_map[id_a]

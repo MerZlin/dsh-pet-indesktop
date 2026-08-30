@@ -58,6 +58,8 @@ class _CollisionWorker(QObject):
         self._coordinator_announced = False
         self.peers: dict[QLocalSocket, str] = {}
         self.members: dict[str, dict[str, Any]] = {}
+        self.previous_members: dict[str, dict[str, Any]] = {}
+        self._swept_pair_versions: dict[str, tuple[int, int]] = {}
         self.latest_state: dict[str, Any] = {}
         self.epoch = ""
         self.tick = 0
@@ -271,6 +273,8 @@ class _CollisionWorker(QObject):
                 if not (int(state.get("flags", 0)) & collision.FLAG_COLLISION_ENABLED):
                     self._remove_member(runtime_id)
                     return
+                if runtime_id in self.members:
+                    self.previous_members[runtime_id] = dict(self.members[runtime_id])
                 self.members[runtime_id] = state
             elif kind == "leave":
                 self._remove_member(self.peers.get(socket, ""))
@@ -317,6 +321,8 @@ class _CollisionWorker(QObject):
             socket.deleteLater()
         self.peers.clear()
         self.members.clear()
+        self.previous_members.clear()
+        self._swept_pair_versions.clear()
         for timer in self._timers:
             timer.stop()
             timer.deleteLater()
@@ -336,6 +342,8 @@ class _CollisionWorker(QObject):
             return
         self.latest_state = dict(state)
         if self.server is not None:
+            if self.runtime_id in self.members:
+                self.previous_members[self.runtime_id] = dict(self.members[self.runtime_id])
             self.members[self.runtime_id] = dict(state, runtime_id=self.runtime_id,
                                                  instance_id=self.instance_id, last_seen=self._now())
         elif self.socket:
@@ -387,6 +395,7 @@ class _CollisionWorker(QObject):
             return
         now = self._now()
         active = []
+        active_previous: dict[str, collision.MemberState] = {}
         # 迭代期间会 _remove_member（隐藏/暂停成员即时移除），必须用快照
         for state in list(self.members.values()):
             if now - float(state.get("last_seen", now)) > 1.2:
@@ -409,13 +418,31 @@ class _CollisionWorker(QObject):
                     collision_mass_scale=self.policy.get("collision_mass_scale", 1.0),
                 )
                 active.append(collision.MemberState(**values))
+                previous = self.previous_members.get(str(values["runtime_id"]))
+                if previous and previous.get("circles") is not None and values.get("circles") is not None:
+                    previous_values = {key: previous.get(key, defaults.get(key, 0.0)) for key in keys}
+                    previous_values["runtime_id"] = values["runtime_id"]
+                    active_previous[str(values["runtime_id"])] = collision.MemberState(**previous_values)
         if len(active) < 2 or not self.policy.get("collision_enabled", True):
             return
         self.tick += 1
+        swept = {}
+        sorted_active = sorted(active, key=lambda item: item.runtime_id)
+        state_by_id = {str(state.get("runtime_id")): state for state in self.members.values()}
+        for i, member_a in enumerate(sorted_active):
+            for member_b in sorted_active[i + 1:]:
+                prev_a, prev_b = active_previous.get(member_a.runtime_id), active_previous.get(member_b.runtime_id)
+                pair = f"{member_a.runtime_id}|{member_b.runtime_id}"
+                version = (int(state_by_id[member_a.runtime_id].get("seq", -1)),
+                           int(state_by_id[member_b.runtime_id].get("seq", -1)))
+                if prev_a and prev_b and self._swept_pair_versions.get(pair) != version:
+                    swept[pair] = collision.swept_circle_chain_collision(
+                        prev_a.circles, member_a.circles, prev_b.circles, member_b.circles)
+                    self._swept_pair_versions[pair] = version
         results, _, self.overlap_history = collision.solve_multi_body_collision(
             active, self.tick, self.overlap_history,
             restitution=self.policy["collision_restitution"], friction=self.policy["collision_friction"],
-            impulse_cap=self.policy["collision_impulse_cap"])
+            impulse_cap=self.policy["collision_impulse_cap"], swept_collisions=swept)
         moving = any(math.hypot(float(v.get("vx", 0)), float(v.get("vy", 0))) > 20 or
                      int(v.get("flags", 0)) & (collision.FLAG_THROWN | collision.FLAG_DRAGGING)
                      for v in self.members.values())
@@ -435,6 +462,11 @@ class _CollisionWorker(QObject):
     def _remove_member(self, runtime_id: str) -> None:
         if runtime_id:
             self.members.pop(runtime_id, None)
+            self.previous_members.pop(runtime_id, None)
+            self._swept_pair_versions = {
+                pair: version for pair, version in self._swept_pair_versions.items()
+                if runtime_id not in pair.split("|")
+            }
 
     def _peer_lost(self, socket) -> None:
         self._welcomed_peers.discard(socket)

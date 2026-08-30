@@ -139,6 +139,38 @@ class TestCollisionCircleChain:
         b = collision.MemberState("b", 55, 55, 20, 50)
         assert collision.check_collision_members(a, b)[0] is False
 
+    def test_swept_circle_chain_detects_fast_crossing(self):
+        result = collision.swept_circle_chain_collision(
+            [[0.0, 0.0, 30.0]], [[450.0, 0.0, 30.0]],
+            [[225.0, 0.0, 30.0]], [[225.0, 0.0, 30.0]],
+        )
+        assert result[0] is True
+        assert result[4] == pytest.approx(225.0)
+        assert result[5] == pytest.approx(0.0)
+
+    def test_swept_circle_chain_low_speed_non_crossing_does_not_trigger(self):
+        result = collision.swept_circle_chain_collision(
+            [[0.0, 0.0, 10.0]], [[5.0, 0.0, 10.0]],
+            [[100.0, 0.0, 10.0]], [[100.0, 0.0, 10.0]],
+        )
+        assert result[0] is False
+
+    def test_swept_circle_chain_tangent_path_triggers(self):
+        result = collision.swept_circle_chain_collision(
+            [[0.0, 0.0, 10.0]], [[50.0, 0.0, 10.0]],
+            [[30.0, 20.0, 10.0]], [[30.0, 20.0, 10.0]],
+        )
+        assert result[0] is True
+        assert result[3] == pytest.approx(0.0)
+        assert result[4] == pytest.approx(30.0)
+
+    def test_swept_circle_chain_receding_path_does_not_trigger(self):
+        result = collision.swept_circle_chain_collision(
+            [[0.0, 0.0, 10.0]], [[-100.0, 0.0, 10.0]],
+            [[30.0, 0.0, 10.0]], [[30.0, 0.0, 10.0]],
+        )
+        assert result[0] is False
+
 
 class TestCollisionMassCalculation:
     """质量计算规则与 fallback 测试。"""

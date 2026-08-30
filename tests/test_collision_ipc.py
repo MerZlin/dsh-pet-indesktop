@@ -62,6 +62,38 @@ def test_fake_socket_join_duplicate_seq_and_disconnect():
     assert "remote" not in worker.members
 
 
+def test_coordinator_sweeps_fast_circle_chain_and_emits_impulse():
+    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
+        "collision_enabled": True, "collision_restitution": .82,
+        "collision_friction": .08, "collision_mass_scale": 1.0,
+        "collision_impulse_cap": 9000.0,
+    })
+    worker.server = object()
+    worker.epoch = "epoch-a"
+    worker._now = staticmethod(lambda: 1.0)
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    state_a = {"seq": 1, "x": 450.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0,
+               "vx": 4800.0, "vy": 0.0, "flags": flags,
+               "circles": [[450.0, 0.0, 30.0]]}
+    state_b = {"seq": 1, "x": 225.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0,
+               "vx": 0.0, "vy": 0.0, "flags": flags,
+               "circles": [[225.0, 0.0, 30.0]]}
+    worker.members = {
+        "a": dict(state_a, runtime_id="a", last_seen=1.0),
+        "b": dict(state_b, runtime_id="b", last_seen=1.0),
+    }
+    worker.previous_members = {
+        "a": dict(state_a, seq=0, x=0.0, circles=[[0.0, 0.0, 30.0]]),
+        "b": dict(state_b, seq=0),
+    }
+    received = []
+    worker.impulse_ready.connect(received.append)
+    worker._coordinator_tick()
+    assert received
+    assert received[0]["j"] > 0.0
+    assert received[0]["contact_x"] == pytest.approx(225.0)
+
+
 def test_client_watermark_and_epoch_switch():
     worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "client", "", {})
     worker.epoch = "epoch-a"
