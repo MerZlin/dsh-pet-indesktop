@@ -148,6 +148,7 @@ PRESS_CANDIDATE = "PRESS_CANDIDATE"
 DRAGGING = "DRAGGING"
 SLINGSHOT_AIMING = "SLINGSHOT_AIMING"
 THROWN = "THROWN"
+COLLISION_HIT_MIN_DV = 300.0
 
 
 def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
@@ -411,6 +412,8 @@ class PetWindow(QWidget):
         self.pet_opacity: int = int(_float_or_default(config.get('pet_opacity', 100), 100, 10, 100))
         self._applied_opacity: float | None = None  # 已应用到窗口的不透明度
         self.click_sound_enabled: bool = bool(config.get('click_sound_enabled', True))
+        self.collision_sound_enabled: bool = bool(config.get('collision_sound_enabled', True))
+        self.collision_sound_volume: float = float(config.get('collision_sound_volume', 0.70))
         self.click_sound_path: str = str(config.get('click_sound_path', '') or '')
         self.click_show_balance: bool = bool(config.get('click_show_balance', False))
         self.click_show_self_talk: bool = bool(config.get('click_show_self_talk', False))
@@ -1154,7 +1157,7 @@ class PetWindow(QWidget):
         }
         self._predicted_bounces = {
             pair: predicted_at for pair, predicted_at in self._predicted_bounces.items()
-            if now - predicted_at <= 0.2
+            if now - predicted_at <= 0.5
         }
 
     @Slot(object)
@@ -1183,12 +1186,15 @@ class PetWindow(QWidget):
                                                           str(message.get('b') or '')))))
         now = time.monotonic()
         predicted_at = self._predicted_bounces.pop(pair, None)
-        if predicted_at is not None and now - predicted_at <= 0.2:
+        if predicted_at is not None and now - predicted_at <= 0.5:
             discard('predicted_bounce_confirmed')
             return
         rect = self.collision_content_rect()
         radius_x = max(1.0, rect.width() / 2.0)
         radius_y = max(1.0, rect.height() / 2.0)
+        hit_dv = math.hypot(dvx, dvy)
+        is_real_hit = hit_dv >= COLLISION_HIT_MIN_DV
+        has_velocity_impulse = abs(dvx) > 1e-9 or abs(dvy) > 1e-9
         # 偏差豁免的本意是"协调者眼中的我已经过期就别瞬移我"——直接比较
         # 协调者 tick 时认定的我方中心（ax/ay 或 bx/by）与当前实际中心，
         # 不从 contact/normal 反推（三种检测路径的 contact 语义不同，反推
@@ -1199,34 +1205,47 @@ class PetWindow(QWidget):
         else:
             expected_x = float(message.get('bx', rect.center().x()))
             expected_y = float(message.get('by', rect.center().y()))
-        if math.hypot(rect.center().x() - expected_x, rect.center().y() - expected_y) > min(radius_x, radius_y) * 0.1:
+        threshold = min(radius_x, radius_y) * 0.1 + math.hypot(*self._phys_vel) * 0.2
+        contact_deviation = math.hypot(rect.center().x() - expected_x, rect.center().y() - expected_y) > threshold
+        if contact_deviation:
             dx = dy = 0.0
+            dvx = dvy = 0.0
             if collision_debug.ENABLED:
                 collision_debug.log(runtime_id, 'impulse_position_discard',
                                     reason='contact_deviation', pair=message.get('pair', ''))
-        has_velocity_impulse = abs(dvx) > 1e-9 or abs(dvy) > 1e-9
-        self._phys_vel[0] += dvx
-        self._phys_vel[1] += dvy
+        if is_real_hit or self._interaction_state == THROWN:
+            self._phys_vel[0] += dvx
+            self._phys_vel[1] += dvy
         speed = math.hypot(*self._phys_vel)
         clamped = physics_mod.soft_clamp_speed(speed, self._throw_speed_cap)
         if speed > 1e-6:
             self._phys_vel[:] = [self._phys_vel[0] * clamped / speed, self._phys_vel[1] * clamped / speed]
-        self.move(self.x() + int(round(dx)), self.y() + int(round(dy)))
+        if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+            self._cancel_move()
+            self._cancel_animation_gap()
+            clamped_x, clamped_y = self._collision_clamp_pos(self.x() + dx, self.y() + dy)
+            left, top = self._collision_clamp_pos(float('-inf'), float('-inf'))
+            right, bottom = self._collision_clamp_pos(float('inf'), float('inf'))
+            self.move(
+                min(max(int(round(clamped_x)), math.ceil(left)), math.floor(right)),
+                min(max(int(round(clamped_y)), math.ceil(top)), math.floor(bottom)),
+            )
+            self._phys_pos[:] = [float(self.x()), float(self.y())]
         if has_velocity_impulse:
             self._just_dragged = True
             QTimer.singleShot(120, self, self._clear_just_dragged)
             # 只有"有分量的撞击"才响：dv 太小（静置非弹性接触的微小抵消）
             # 不播，否则贴贴时每秒 4 声机枪响
-            if math.hypot(dvx, dvy) >= 300.0:
+            if is_real_hit:
                 self._play_collision_sound()
-        if has_velocity_impulse and speed >= physics_mod.DEAD_ZONE_SPEED:
+        if is_real_hit and not contact_deviation:
             self._interaction_state = THROWN
             self._enter_physics_mode('throw')
             self._phys_pos[:] = [float(self.x()), float(self.y())]
             self._last_physics_tick_time = None
             self._physics_timer.start()
         now = time.monotonic()
-        if (has_velocity_impulse and not self._squash_active
+        if (is_real_hit and not self._squash_active
                 and now - self._last_collision_squash_at >= 0.25):
             self._last_collision_squash_at = now
             self._start_squash()
@@ -2102,6 +2121,16 @@ class PetWindow(QWidget):
         self._move_timer.stop()
         self._move_plan = None
 
+    def _collision_clamp_pos(self, x: float, y: float) -> tuple[float, float]:
+        """把碰撞分离位置限制在抛掷物理使用的屏幕边界内。"""
+        avail = self._screen_available().availableGeometry()
+        margin = self._w / 3.0
+        left = avail.left() - margin
+        top = avail.top()
+        right = avail.right() - self._w + margin
+        bottom = avail.bottom() - self._h
+        return min(max(x, left), right), min(max(y, top), bottom)
+
     # ================================================================ 交互
     def _slingshot_progress(self) -> float:
         distance = min(math.hypot(self._slingshot_pull.x(), self._slingshot_pull.y()),
@@ -2488,18 +2517,21 @@ class PetWindow(QWidget):
         play_sound(path, volume=volume)
 
     def _play_collision_sound(self) -> None:
-        if not self.click_sound_enabled:
+        if not self.collision_sound_enabled:
             return
         now = time.monotonic()
         if now - self._last_collision_sound_at < 0.25:
             return
         self._last_collision_sound_at = now
-        volume = float(self.cfg.get("click_sound_volume", 0.70))
+        volume = self.collision_sound_volume
         pair = resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
         if pair is not None:
             play_press_sound(pair, volume)
         else:
-            self._play_click_sound()
+            candidates = resolve_click_sound_candidates(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
+            path = choose_sound(candidates)
+            if path is not None:
+                play_sound(path, volume=volume)
 
     # ================================================================ 看看屏幕
     def _on_look_screen(self) -> None:
@@ -2832,6 +2864,8 @@ class PetWindow(QWidget):
         self._self_talk_min_interval = max(5.0, float(self.cfg.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
         self._self_talk_max_interval = max(self._self_talk_min_interval, float(self.cfg.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
         self.click_sound_enabled = bool(self.cfg.get('click_sound_enabled', True))
+        self.collision_sound_enabled = bool(self.cfg.get('collision_sound_enabled', True))
+        self.collision_sound_volume = float(self.cfg.get('collision_sound_volume', 0.70))
         self.click_sound_path = str(self.cfg.get('click_sound_path', '') or '')
         self._throw_speed_cap = physics_mod.throw_speed_cap(self.cfg.get('throw_strength'))
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))

@@ -391,12 +391,16 @@ class TestPositionSeparationAndMultiBody:
         assert sep3 == 12.0
         assert dxa3 == -6.0 and dxb3 == 6.0
 
-        # 连续 3 tick 强制完整分离 (force_full=True)
+        # 连续 3 tick 强制分离单次最多 4 倍 max_sep
         sep_full, dxa_f, _, dxb_f, _ = collision.calculate_position_separation(
             40.0, 1.0, 0.0, inv_ma, inv_mb, force_full=True,
         )
         assert sep_full == 40.0
         assert dxa_f == -20.0 and dxb_f == 20.0
+        sep_capped, _, _, _, _ = collision.calculate_position_separation(
+            100.0, 1.0, 0.0, inv_ma, inv_mb, force_full=True,
+        )
+        assert sep_capped <= 48.0
 
     def test_multi_body_three_bodies_collision(self):
         """测试三体同时重叠：向量合并与迭代分离后跨 tick 收敛（plan4 §6.4：
@@ -469,7 +473,7 @@ class TestPositionSeparationAndMultiBody:
             [m1, m2], tick=3, overlap_history=history, restitution=0.82,
         )
 
-        assert new_history["A|B"] == 3
+        assert new_history["A|B"] == 0
         assert len(impulses) == 1
         res = impulses[0]
         # force_full：40px 重叠一次完整修正（无 min/max 截断）

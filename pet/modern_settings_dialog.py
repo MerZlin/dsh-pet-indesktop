@@ -1166,6 +1166,8 @@ class ModernSettingsDialog(QDialog):
             SettingRow("collision_friction", "摩擦系数", "擦边碰撞时的切向摩擦阻力（0~0.30，默认 0.08）。", self.collision_friction_spin),
             SettingRow("collision_mass_scale", "质量倍率", "桌宠的基础质量加权倍率（0.5~2.0，默认 1.0）。", self.collision_mass_scale_spin),
             SettingRow("collision_impulse_cap", "冲量上限", "单次碰撞能施加的最大冲量上限（1000~12000，默认 9000）。", self.collision_impulse_cap_spin),
+            SettingRow("collision_sound_enabled", "碰撞音效", "碰撞时播放音效反馈。", self.collision_sound_check),
+            SettingRow("collision_sound_volume", "碰撞音量", "调整碰撞音效播放音量。", self.collision_sound_volume_spin),
         ], behavior_content))
         self.collision_policy_note = QLabel("碰撞参数由当前协调者桌宠的设置决定")
         self.collision_policy_note.setObjectName("settingHint")
@@ -1364,6 +1366,13 @@ class ModernSettingsDialog(QDialog):
         self.collision_impulse_cap_spin.setSingleStep(500.0)
         self.collision_impulse_cap_spin.setDecimals(0)
         self.collision_impulse_cap_spin.setValue(float(_float_or_default(self.config.get("collision_impulse_cap", 9000.0), 9000.0, 1000.0, 12000.0)))
+        self.collision_sound_check = ToggleSwitch(self)
+        self.collision_sound_check.setChecked(bool(self.config.get("collision_sound_enabled", True)))
+        self.collision_sound_volume_spin = BrowserSpinBox(self)
+        self.collision_sound_volume_spin.setRange(0, 100)
+        self.collision_sound_volume_spin.setSuffix(" %")
+        collision_sound_vol = float(self.config.get("collision_sound_volume", 0.70))
+        self.collision_sound_volume_spin.setValue(int(round(collision_sound_vol * 100)))
 
         self.lock_position_check = ToggleSwitch(self)
         self.lock_position_check.setChecked(bool(self.config.get("lock_position", False)))
@@ -2130,6 +2139,8 @@ class ModernSettingsDialog(QDialog):
         self.config.set("collision_friction", self.collision_friction_spin.value())
         self.config.set("collision_mass_scale", self.collision_mass_scale_spin.value())
         self.config.set("collision_impulse_cap", self.collision_impulse_cap_spin.value())
+        self.config.set("collision_sound_enabled", self.collision_sound_check.isChecked())
+        self.config.set("collision_sound_volume", float(self.collision_sound_volume_spin.value()) / 100.0)
         self.config.set("lock_position", self.lock_position_check.isChecked())
         self.config.set("shift_drag", self.shift_drag_check.isChecked())
         self.config.set("pet_opacity", int(self.pet_opacity_spin.value()))

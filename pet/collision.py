@@ -430,7 +430,7 @@ def calculate_position_separation(
     - 增加 0.5px slop 容差 (有效重叠 = max(0, overlap - slop))
     - 每次最多修正 60% 重叠 (overlap_ratio=0.6)
     - 最小 1px，最大 12px (min_sep=1.0, max_sep=12.0)
-    - 连续 3 tick 强制完整分离时 (force_full=True): 修正 100% 重叠且无 min/max 截断限制
+    - 连续 3 tick 强制完整分离时 (force_full=True): 修正 100% 重叠且单次最多 4 倍 max_sep；应用后重置该 pair 历史
     
     返回: (sep_dist, dx_a, dy_a, dx_b, dy_b)
     """
@@ -443,7 +443,7 @@ def calculate_position_separation(
         return 0.0, 0.0, 0.0, 0.0, 0.0
 
     if force_full:
-        sep_dist = overlap
+        sep_dist = min(overlap, max_sep * 4)
     else:
         target_sep = eff_overlap * overlap_ratio
         sep_dist = max(min_sep, min(max_sep, target_sep))
@@ -562,6 +562,7 @@ def solve_multi_body_collision(
     member_map = {m.runtime_id: m for m in sorted_members}
     total_pos_deltas: Dict[str, list[float]] = {m.runtime_id: [0.0, 0.0] for m in sorted_members}
     pair_sep_results: Dict[str, tuple[float, float, float, float, float]] = {}
+    force_full_pairs: set[str] = set()
 
     # Swept contacts are no longer overlapping at the current snapshot, so
     # apply their separation directly from the swept closest approach.
@@ -625,6 +626,8 @@ def solve_multi_body_collision(
                 cur_ov, cur_nx, cur_ny, inv_m_a, inv_m_b,
                 force_full=force_full,
             )
+            if force_full:
+                force_full_pairs.add(pair_k)
 
             pos_map[id_a][0] += dxa
             pos_map[id_a][1] += dya
@@ -689,6 +692,8 @@ def solve_multi_body_collision(
         dy = total_pos_deltas[m_id][1]
         combined_impulses_by_id[m_id] = (dvx, dvy, dx, dy)
 
+    for pair_k in force_full_pairs:
+        new_overlap_history[pair_k] = 0
     return impulse_list, combined_impulses_by_id, new_overlap_history
 
 

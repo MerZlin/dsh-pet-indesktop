@@ -137,8 +137,8 @@ def test_impulse_via_queued_signal_applied_immediately_without_physics_tick(tmp_
     msg = {
         "a": "pet_a",
         "b": "pet_b",
-        "dvx_a": 250.0,
-        "dvy_a": -150.0,
+        "dvx_a": 100.0,
+        "dvy_a": 0.0,
         "dx_a": 5.0,
         "dy_a": 0.0,
         "contact_x": float(win.visible_content_rect().center().x() + win.visible_content_rect().width() / 2.0),
@@ -149,10 +149,9 @@ def test_impulse_via_queued_signal_applied_immediately_without_physics_tick(tmp_
     session.impulse_ready.emit(msg)
     app.processEvents()
 
-    # 冲量已即时加到速度，且产生位置移动（速度经 soft_clamp 略有衰减）
-    assert win._phys_vel[0] > 0.0
-    assert win._phys_vel[1] < 0.0
-    assert win._squash_active is True
+    # 未达到真实撞击门槛时，速度与 squash 均不应被静置微冲量污染。
+    assert win._phys_vel == [0.0, 0.0]
+    assert win._squash_active is False
     win.close()
 
 
@@ -160,7 +159,7 @@ def test_collision_squash_is_not_restarted_within_250ms(tmp_path, app):
     """碰撞 squash 活跃期间，250ms 内的第二次 impulse 不重置动画进度。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     msg = {
-        "a": "pet_a", "b": "pet_b", "dvx_a": 250.0, "dvy_a": 0.0,
+        "a": "pet_a", "b": "pet_b", "dvx_a": 400.0, "dvy_a": 0.0,
         "dx_a": 0.0, "dy_a": 0.0,
     }
     session.impulse_ready.emit(msg)
@@ -318,8 +317,8 @@ def test_impulse_discarded_during_paused_or_hidden_and_zero_vel_re_registered(tm
     win.close()
 
 
-def test_contact_deviation_over_10_percent_applies_velocity_without_displacement(tmp_path, app):
-    """4. 接触点偏差 >半径10% 时只应用速度冲量、无位置位移（高速擦碰不反向位移）。"""
+def test_contact_deviation_discards_impulse_without_displacement(tmp_path, app):
+    """4. 接触点偏差过大时位置与速度冲量都丢弃，但保留碰撞反馈判定。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     start_pos = (win.x(), win.y())
     rect = win.visible_content_rect()
@@ -342,8 +341,8 @@ def test_contact_deviation_over_10_percent_applies_velocity_without_displacement
     session.impulse_ready.emit(msg)
     app.processEvents()
 
-    # 速度冲量生效
-    assert win._phys_vel[0] > 0.0
+    # 偏差过大时，位置与速度冲量都被丢弃
+    assert win._phys_vel == [0.0, 0.0]
     # 位置位移被丢弃，保持原位
     assert (win.x(), win.y()) == start_pos
 
@@ -538,23 +537,87 @@ def test_move_event_submits_throttled_not_forced(tmp_path, app):
     win.close()
 
 
+def test_contact_deviation_threshold_expands_with_velocity(tmp_path, app):
+    """高速运动时，按速度放宽的协调者滞后阈值允许位置与速度冲量。"""
+    win, session = _make_pet_window(tmp_path, "pet_fast")
+    rect = win.visible_content_rect()
+    win._phys_vel[:] = [1000.0, 0.0]
+    start_pos = (win.x(), win.y())
+    session.impulse_ready.emit({
+        "a": "pet_fast", "b": "pet_b", "dvx_a": 400.0, "dvy_a": 0.0,
+        "dx_a": 10.0, "dy_a": 0.0,
+        "ax": float(rect.center().x() + 30.0), "ay": float(rect.center().y()),
+    })
+    app.processEvents()
+    assert win._phys_vel[0] > 1000.0
+    assert win.x() != start_pos[0]
+    win.close()
+
+
+def test_collision_impulse_syncs_physics_position(tmp_path, app):
+    """应用分离位移后，物理坐标与窗口坐标一致，避免下个 tick 回拉。"""
+    win, session = _make_pet_window(tmp_path, "pet_sync")
+    win._interaction_state = "THROWN"
+    win._physics_mode = "throw"
+    session.impulse_ready.emit({
+        "a": "pet_sync", "b": "pet_b", "dvx_a": 0.0, "dvy_a": 0.0,
+        "dx_a": 5.0, "dy_a": 3.0,
+    })
+    app.processEvents()
+    assert win._phys_pos == [float(win.x()), float(win.y())]
+    win.close()
+
+
+def test_collision_impulse_hit_threshold_and_position_clamp(tmp_path, app, monkeypatch):
+    """真实撞击才进入物理，并将分离位置限制在屏幕边界内。"""
+    win, session = _make_pet_window(tmp_path, "pet_threshold")
+    win.move(0, 0)
+    sounds = []
+    monkeypatch.setattr(win, "_start_squash", lambda: sounds.append("squash"))
+    monkeypatch.setattr(win, "_play_collision_sound", lambda: sounds.append("sound"))
+    win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 20, "duration": 1.0}
+    win._move_timer.start()
+
+    session.impulse_ready.emit({"a": "pet_threshold", "b": "pet_b", "dvx_a": 100.0,
+                                "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0})
+    app.processEvents()
+    assert win._phys_vel == [0.0, 0.0]
+    assert sounds == []
+    assert win._move_plan is not None
+
+    session.impulse_ready.emit({"a": "pet_threshold", "b": "pet_b", "dvx_a": 400.0,
+                                "dvy_a": 0.0, "dx_a": 100000.0, "dy_a": 100000.0})
+    app.processEvents()
+    left, top = win._collision_clamp_pos(0, 0)
+    right, bottom = win._collision_clamp_pos(10**9, 10**9)
+    assert left <= win.x() <= right
+    assert top <= win.y() <= bottom
+    assert sounds == ["sound", "squash"]
+    assert win._move_plan is None
+    win.close()
+
+
 def test_collision_sound_cooldown_and_disabled(tmp_path, app, monkeypatch):
     win, _ = _make_pet_window(tmp_path, "pet_sound")
     sounds = []
-    monkeypatch.setattr(win, "_play_click_sound", lambda: sounds.append(1))
+    monkeypatch.setattr("pet.window.play_press_sound", lambda pair, volume: sounds.append((pair, volume)))
+    monkeypatch.setattr("pet.window.play_sound", lambda path, volume: sounds.append((path, volume)))
+    win.collision_sound_volume = 0.42
     monkeypatch.setattr("pet.window.resolve_click_sound_pair", lambda pack, data_dir=None: None)
     times = iter((1.0, 1.1, 1.4))
     monkeypatch.setattr("pet.window.time.monotonic", lambda: next(times))
     win._play_collision_sound()
-    assert sounds == [1]
+    assert len(sounds) == 1
+    assert sounds[0][1] == pytest.approx(0.42)
     win._play_collision_sound()
-    assert sounds == [1]
+    assert len(sounds) == 1
     win._play_collision_sound()
-    assert sounds == [1, 1]
-    win.click_sound_enabled = False
+    assert len(sounds) == 2
+    assert sounds[1][1] == pytest.approx(0.42)
+    win.collision_sound_enabled = False
     win._last_collision_sound_at = float("-inf")
     win._play_collision_sound()
-    assert sounds == [1, 1]
+    assert len(sounds) == 2
     win.close()
 
 
@@ -655,11 +718,21 @@ def test_throw_prediction_requires_approach_speed_and_enabled_throw_mode(tmp_pat
     win.close()
 
 
+def test_prediction_prune_uses_half_second_window(tmp_path, app):
+    win, _ = _make_pet_window(tmp_path, "pet_prune")
+    now = 10.0
+    win._predicted_bounces = {"recent": now - 0.4, "old": now - 0.6}
+    win._prune_collision_prediction_state(now)
+    assert "recent" in win._predicted_bounces
+    assert "old" not in win._predicted_bounces
+    win.close()
+
+
 def test_authoritative_impulse_applies_after_prediction_window(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_a")
-    win._predicted_bounces["pet_a|pet_b"] = time.monotonic() - 0.21
+    win._predicted_bounces["pet_a|pet_b"] = time.monotonic() - 0.51
     session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b",
-                                "dvx_a": 200.0, "dvy_a": 0.0})
+                                "dvx_a": 400.0, "dvy_a": 0.0})
     app.processEvents()
     assert win._phys_vel[0] > 0.0
     win.close()

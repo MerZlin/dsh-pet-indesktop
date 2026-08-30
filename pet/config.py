@@ -32,6 +32,8 @@ DEFAULT_COLLISION_SETTINGS = {
     "collision_friction": 0.08,
     "collision_mass_scale": 1.0,
     "collision_impulse_cap": 9000.0,
+    "collision_sound_enabled": True,
+    "collision_sound_volume": 0.70,
 }
 SELF_TALK_BUBBLE_STYLES = {
     "classic_top", "paper_left", "glass_right", "soft_blue_top", "breath_bubble",
@@ -567,6 +569,7 @@ class Config:
              "character_aliases",
              "collision_enabled", "collision_restitution", "collision_friction",
              "collision_mass_scale", "collision_impulse_cap",
+             "collision_sound_enabled", "collision_sound_volume",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -672,6 +675,10 @@ class Config:
         self.data["collision_friction"] = _float_or_default(self.data.get("collision_friction"), .08, 0.0, .30)
         self.data["collision_mass_scale"] = _float_or_default(self.data.get("collision_mass_scale"), 1.0, .5, 2.0)
         self.data["collision_impulse_cap"] = _float_or_default(self.data.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
+        self.data["collision_sound_enabled"] = bool(self.data.get("collision_sound_enabled", True))
+        self.data["collision_sound_volume"] = _float_or_default(
+            self.data.get("collision_sound_volume"), 0.70, 0.0, 1.0
+        )
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -706,6 +713,7 @@ class Config:
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg",
             "click_sound_enabled", "click_sound_pack", "click_sound_volume",
+            "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
         }:
             self._normalize_pet_settings()
