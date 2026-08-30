@@ -2117,16 +2117,28 @@ class PetWindow(QWidget):
             self.on_restore_fun_windows()
         if not self.clicks:
             return
-        # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹
+        # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹。
+        # 先让 Q 弹/动画立刻开始，音效放到下一轮事件循环，避免任何音频
+        # 初始化/文件扫描阻塞点击瞬间的画面更新。
         self._cancel_move()
-        self._play_click_sound()
         self._start_squash()
         self._switch(self._pick(self.clicks))
+        self._schedule_click_sound()
         if self.click_show_balance and callable(self.on_show_balance):
             self.on_show_balance(self)
         elif self.click_show_self_talk and self._self_talk_enabled:
             if self._show_random_self_talk():
                 self._schedule_self_talk(after_display=True)
+
+    def _schedule_click_sound(self) -> None:
+        if not self.click_sound_enabled:
+            return
+
+        def play() -> None:
+            if shiboken6.isValid(self):
+                self._play_click_sound()
+
+        QTimer.singleShot(0, play)
 
     def _play_click_sound(self) -> None:
         if not self.click_sound_enabled:
