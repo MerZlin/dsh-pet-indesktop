@@ -43,9 +43,10 @@ class _BackgroundResult(QObject):
 
 
 class _BalanceBridge(_BackgroundResult):
-    def __init__(self, win):
+    def __init__(self, win, owner=None):
         super().__init__()
         self.win = win
+        self.owner = owner
         self.done.connect(self._show)
 
     def _show(self, ok: bool, payload) -> None:
@@ -56,6 +57,8 @@ class _BalanceBridge(_BackgroundResult):
             self.win.show_bubble(str(payload), duration_ms=6000)
             return
         _show_balance_payload(self.win, payload)
+        if self.owner is not None and hasattr(self.owner, "_update_island_balance"):
+            self.owner._update_island_balance(payload)
 
 
 def _show_balance_payload(win, payload) -> None:
@@ -176,6 +179,7 @@ class PetApp:
         self.modern_chat_window = None
         self.chat_settings_dialog = None
         self.modern_settings_dialog = None
+        self.island = None
         self._spawned_pet_count = 0
         self._pending_dialog_opens: set[str] = set()
         self._balance_busy = False
@@ -198,9 +202,42 @@ class PetApp:
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self._create_ui(character_id)
+        self._sync_dynamic_island()
         self._apply_spawn_offset()
         self._apply_balance_timer()
         QTimer.singleShot(3500, self._check_autostart_wanted)
+
+    def _sync_dynamic_island(self) -> None:
+        """按配置创建/隐藏灵动岛；桌宠隐藏后灵动岛仍可常驻。"""
+        island_cfg = self.config.get("dynamic_island", {})
+        enabled = bool(island_cfg.get("enabled", False)) if isinstance(island_cfg, dict) else False
+        if not enabled:
+            if getattr(self, "island", None) is not None:
+                self.island.hide()
+            return
+        if getattr(self, "island", None) is None:
+            from .dynamic_island import DynamicIsland
+
+            self.island = DynamicIsland(self.config)
+            self.island.clicked.connect(self._toggle_pet_from_island)
+        self.island.refresh_from_config()
+        pet_visible = True
+        if self.win is not None:
+            is_visible = getattr(self.win, "isVisible", None)
+            pet_visible = bool(is_visible()) if callable(is_visible) else True
+        self.island.set_pet_visible(pet_visible)
+        self.island.show()
+
+    def _toggle_pet_from_island(self) -> None:
+        win = self.win
+        if win is None:
+            return
+        if win.isVisible():
+            win.hide(notify=False)
+        else:
+            win.show()
+        if getattr(self, "island", None) is not None:
+            self.island.set_pet_visible(win.isVisible())
 
     def _on_about_to_quit(self) -> None:
         """退出前保存当前有效窗口的位置。
@@ -230,6 +267,25 @@ class PetApp:
         if minutes:
             self._balance_timer.start(minutes * 60000)
 
+    def _update_island_balance(self, payload) -> None:
+        """把余额文本/峰谷提示同步给灵动岛（若有）。"""
+        if getattr(self, "island", None) is None:
+            return
+        text = "余额 --"
+        info = {}
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "余额 --")
+            info = payload.get("info") or {}
+        peak_label, idle_label = balance_mod.resolve_tier_labels(
+            str(self.config.get("balance_tier_labels_mode", "default") or "default"),
+            str(self.config.get("balance_tier_label_peak", "") or ""),
+            str(self.config.get("balance_tier_label_idle", "") or ""),
+        )
+        hint = balance_mod.deepseek_pricing_hint(
+            peak_label=peak_label, idle_label=idle_label,
+        )
+        self.island.set_balance_info(hint, text)
+
     def show_balance(self, parent=None) -> None:
         win = parent or self.win
         if win is None or self._balance_busy or not win.isVisible():
@@ -249,11 +305,13 @@ class PetApp:
         ])
         if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
                 and self._balance_cache[2] == provider_key:
+            self._update_island_balance(self._balance_cache[1])
             _show_balance_payload(win, self._balance_cache[1])
             return
         file_payload = self._read_balance_file_cache(provider_key)
         if file_payload is not None:
             self._balance_cache = (now, file_payload, provider_key)
+            self._update_island_balance(file_payload)
             _show_balance_payload(win, file_payload)
             return
         self._balance_busy = True
@@ -261,7 +319,7 @@ class PetApp:
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
         # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
         QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
-        bridge = _BalanceBridge(win)
+        bridge = _BalanceBridge(win, owner=self)
         self._balance_bridge = bridge
         threading.Thread(
             target=self._balance_worker,
@@ -512,6 +570,8 @@ class PetApp:
                 if chat_window is not None:
                     chat_window.set_pet_window(self.win)
                     chat_window.switch_character(character_id)
+        if getattr(self, "island", None) is not None:
+            self.island.refresh_from_config()
 
     def open_chat(self) -> None:
         """Open the configured chat UI; menus only need this stable dispatcher."""
@@ -670,12 +730,15 @@ class PetApp:
         # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
         if self.win is not None:
             self.win.refresh_pet_settings()
+        self._sync_dynamic_island()
         self._apply_balance_timer()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
 
     def _notify_pet_hidden(self) -> None:
         """用户主动隐藏桌宠后弹托盘提示，指明恢复入口。"""
+        if getattr(self, "island", None) is not None:
+            self.island.set_pet_visible(False)
         if self.tray is None:
             return
         self.tray.showMessage(
@@ -693,12 +756,30 @@ class PetApp:
                 win.hide()
             else:
                 win.show()
+            if getattr(self, "island", None) is not None:
+                self.island.set_pet_visible(win.isVisible())
 
         menu = QMenu()
         # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），托盘菜单弹出前
         # 先隐藏气泡，避免气泡盖住菜单
         menu.aboutToShow.connect(lambda: win._speech_bubble.hide())
         menu.addAction('显示 / 隐藏', toggle_visible)
+
+        island_action = menu.addAction('灵动岛')
+        island_action.setCheckable(True)
+        island_action.setChecked(bool(
+            self.config.get("dynamic_island", {}).get("enabled", True)
+        ))
+
+        def toggle_island(enabled: bool) -> None:
+            island_cfg = dict(self.config.get("dynamic_island", {}) or {})
+            island_cfg["enabled"] = bool(enabled)
+            self.config.set("dynamic_island", island_cfg)
+            self.config.save()
+            self._sync_dynamic_island()
+
+        island_action.toggled.connect(toggle_island)
+
         if self.enable_chat:
             menu.addAction('AI 对话', self.open_chat)
             menu.addAction('AI 设置', self.open_chat_settings)
@@ -729,6 +810,9 @@ class PetApp:
             #（托盘菜单在 _build_tray 时一次性构建，不复用则不刷新会过期）
             mouse_through.setChecked(bool(self.config.get('mouse_through', False)))
             auto.setChecked(autostart_mod.is_enabled())
+            island_action.setChecked(bool(
+                self.config.get("dynamic_island", {}).get("enabled", True)
+            ))
 
         menu.aboutToShow.connect(sync_tray_checks)
 
