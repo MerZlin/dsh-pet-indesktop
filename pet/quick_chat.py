@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .speech_bubble import BUBBLE_STYLE_PRESETS
 
 from .chat.models import ChatMessage
 from .chat.prompt import PromptBuilder
@@ -45,6 +47,10 @@ class QuickChatBubble(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setMinimumWidth(320)
         self.setMaximumWidth(460)
+
+        style_id = str(config.get("self_talk_bubble_style", "classic_top") or "classic_top")
+        self._preset = BUBBLE_STYLE_PRESETS.get(style_id, BUBBLE_STYLE_PRESETS["classic_top"])
+        self._tail_up = False
 
         self.character_id = str(config.get("character", "shenshen"))
         self.settings = config.chat_settings()
@@ -114,6 +120,23 @@ class QuickChatBubble(QFrame):
         input_row.addWidget(self.send_btn)
         layout.addLayout(input_row)
 
+        bg = self._preset["background"]
+        fg = self._preset["foreground"]
+        border = self._preset["border"]
+        self.setStyleSheet(f"""
+            QLabel#quick-chat-title, QLabel#quick-chat-hint, QLabel#quick-chat-output,
+            QLabel#quick-chat-page {{ background: transparent; color: {fg}; border: none; }}
+            QPushButton {{
+                background: {border}; color: {fg}; border: none; border-radius: 8px;
+                padding: 3px 8px;
+            }}
+            QPushButton:hover {{ background: {fg}; color: {bg}; }}
+            QLineEdit {{
+                background: {bg}; color: {fg}; border: 1px solid {border};
+                border-radius: 8px; padding: 5px 8px;
+            }}
+        """)
+
     def _connect(self) -> None:
         self.close_btn.clicked.connect(self.close)
         self.send_btn.clicked.connect(self._send)
@@ -126,6 +149,43 @@ class QuickChatBubble(QFrame):
         self.service.finished.connect(self._finished)
         self.service.error.connect(self._error)
         self.service.stopped.connect(self._stopped)
+
+    # ------------------------------------------------------------ 绘制
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(6, 8, -6, -8)
+        radius = float(self._preset.get("radius", 14))
+        body = QPainterPath()
+        body.addRoundedRect(rect, radius, radius)
+        tail = QPainterPath()
+        tip_x = rect.center().x()
+        if self._tail_up:
+            tip = QPointF(tip_x, rect.top() - 6)
+            tail.moveTo(QPointF(tip_x - 8, rect.top() + 2))
+            tail.lineTo(tip)
+            tail.lineTo(QPointF(tip_x + 8, rect.top() + 2))
+        else:
+            tip = QPointF(tip_x, rect.bottom() + 6)
+            tail.moveTo(QPointF(tip_x - 8, rect.bottom() - 2))
+            tail.lineTo(tip)
+            tail.lineTo(QPointF(tip_x + 8, rect.bottom() - 2))
+        tail.closeSubpath()
+        surface = body.united(tail).simplified()
+
+        # 柔和阴影
+        shadow = QPainterPath(surface)
+        shadow.translate(0, 2)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self._preset.get("shadow", "#6b542b")))
+        painter.drawPath(shadow)
+
+        # 气泡主体
+        painter.setBrush(QColor(self._preset["background"]))
+        painter.setPen(QPen(QColor(self._preset["border"]), 1))
+        painter.drawPath(surface)
+        painter.end()
 
     # ------------------------------------------------------------ 会话
     def _get_session(self):
@@ -153,10 +213,13 @@ class QuickChatBubble(QFrame):
         h = self.height()
         x = anchor.center().x() - w // 2
         y = anchor.top() - h - 8
+        self._tail_up = False
         if y < available.top():
             y = anchor.bottom() + 8
+            self._tail_up = True
         x = max(available.left() + 4, min(x, available.right() - w - 4))
         self.move(x, y)
+        self.update()
 
     def show_for_pet(self, pet_window=None) -> None:
         if pet_window is not None:
