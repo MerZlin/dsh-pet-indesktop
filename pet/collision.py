@@ -183,54 +183,70 @@ def swept_circle_chain_collision(
     a_prev: Sequence[Sequence[float]], a_curr: Sequence[Sequence[float]],
     b_prev: Sequence[Sequence[float]], b_curr: Sequence[Sequence[float]],
 ) -> tuple[bool, float, float, float, float, float]:
-    """Detect a collision swept between two circle-chain snapshots.
+    """两圆链快照间的扫掠碰撞检测（首次接触时刻 TOI）。
 
-    B is made stationary by subtracting its displacement from A.  The
-    returned contact point is the closest point on the relative A trajectory,
-    translated back to the world position at the beginning of the frame.
+    把 B 的位移从 A 中减去使 B 相对静止，然后对每个圆对解二次方程
+    |start + t*delta| = r1+r2 在 t∈[0,1] 的最早根——不能用"线段最近接近点"：
+    匀速穿过时最近点的法线必垂直于运动方向，vn≈0 会被最小接近速度阈值
+    过滤掉（表现为高速直接穿透）。TOI 时刻的法线沿两圆心连线，与相对
+    速度反向分量必然为负，冲量判定必成立。
+
+    返回: (collided, nx, ny, overlap, contact_x, contact_y)
+    - nx, ny: 接触瞬间从 A 圆心指向 B 圆心的单位法线（世界坐标）
+    - overlap: 固定为一个小的正值（扫掠接触是边界相触，无嵌入深度）
+    - contact_x, contact_y: A 圆心在接触时刻的世界坐标
     """
-    best = None
+    best = None  # (t, nx, ny, contact_x, contact_y)
     for raw_a_prev, raw_a_curr in zip(a_prev or (), a_curr or ()):
         if len(raw_a_prev) < 3 or len(raw_a_curr) < 3:
             continue
-        ax0, ay0, r1 = map(float, raw_a_prev[:3])
-        ax1, ay1, r1_curr = map(float, raw_a_curr[:3])
-        r1 = max(1e-4, r1_curr)
+        ax0, ay0 = float(raw_a_prev[0]), float(raw_a_prev[1])
+        ax1, ay1 = float(raw_a_curr[0]), float(raw_a_curr[1])
+        r1 = max(1e-4, float(raw_a_curr[2]))
         for raw_b_prev, raw_b_curr in zip(b_prev or (), b_curr or ()):
             if len(raw_b_prev) < 3 or len(raw_b_curr) < 3:
                 continue
-            bx0, by0, r2 = map(float, raw_b_prev[:3])
-            bx1, by1, r2_curr = map(float, raw_b_curr[:3])
-            r2 = max(1e-4, r2_curr)
+            bx0, by0 = float(raw_b_prev[0]), float(raw_b_prev[1])
+            bx1, by1 = float(raw_b_curr[0]), float(raw_b_curr[1])
+            r2 = max(1e-4, float(raw_b_curr[2]))
+            # 相对运动：B 静止化
             start_x, start_y = ax0 - bx0, ay0 - by0
             delta_x = (ax1 - ax0) - (bx1 - bx0)
             delta_y = (ay1 - ay0) - (by1 - by0)
-            length_sq = delta_x * delta_x + delta_y * delta_y
-            if length_sq > 1e-12:
-                t = max(0.0, min(1.0, -(start_x * delta_x + start_y * delta_y) / length_sq))
-            else:
-                t = 0.0
-            closest_x = start_x + delta_x * t
-            closest_y = start_y + delta_y * t
-            distance = math.hypot(closest_x, closest_y)
             radius_sum = r1 + r2
-            if distance > radius_sum:
+            a_coef = delta_x * delta_x + delta_y * delta_y
+            if a_coef <= 1e-12:
+                continue  # 相对静止：交由当前帧检测处理
+            b_coef = 2.0 * (start_x * delta_x + start_y * delta_y)
+            c_coef = start_x * start_x + start_y * start_y - radius_sum * radius_sum
+            if c_coef <= 0.0:
+                continue  # 帧首已重叠：交由当前帧检测处理
+            disc = b_coef * b_coef - 4.0 * a_coef * c_coef
+            if disc < 0.0:
+                continue  # 轨迹未触及
+            t = (-b_coef - math.sqrt(disc)) / (2.0 * a_coef)
+            if t < 0.0 or t > 1.0:
                 continue
-            if distance < 1e-6:
-                delta_length = math.hypot(delta_x, delta_y)
-                nx, ny = ((delta_x / delta_length, delta_y / delta_length)
-                          if delta_length > 1e-6 else (1.0, 0.0))
+            # 接触瞬间 A 相对 B 的圆心位置（B 参考系）
+            rel_x = start_x + delta_x * t
+            rel_y = start_y + delta_y * t
+            dist = math.hypot(rel_x, rel_y)
+            if dist > 1e-6:
+                # rel = A − B，法线取从 A 指向 B = −rel/dist
+                nx, ny = -rel_x / dist, -rel_y / dist
             else:
-                nx, ny = -closest_x / distance, -closest_y / distance
+                # 正中靶心法线退化：沿相对运动方向取法线
+                delta_len = math.sqrt(a_coef)
+                nx, ny = delta_x / delta_len, delta_y / delta_len
+            # A 圆心在接触时刻的世界坐标
             contact_x = ax0 + (ax1 - ax0) * t
             contact_y = ay0 + (ay1 - ay0) * t
-            candidate = (distance, nx, ny, radius_sum - distance, contact_x, contact_y)
-            if best is None or candidate[0] < best[0]:
-                best = candidate
+            if best is None or t < best[0]:
+                best = (t, nx, ny, contact_x, contact_y)
     if best is None:
         return False, 0.0, 0.0, 0.0, 0.0, 0.0
-    _, nx, ny, overlap, contact_x, contact_y = best
-    return True, nx, ny, overlap, contact_x, contact_y
+    _, nx, ny, contact_x, contact_y = best
+    return True, nx, ny, 1.0, contact_x, contact_y
 
 
 def check_collision_members(a: MemberState, b: MemberState) -> tuple[bool, float, float, float, float, float]:

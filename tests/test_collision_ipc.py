@@ -91,7 +91,8 @@ def test_coordinator_sweeps_fast_circle_chain_and_emits_impulse():
     worker._coordinator_tick()
     assert received
     assert received[0]["j"] > 0.0
-    assert received[0]["contact_x"] == pytest.approx(225.0)
+    # TOI 语义：首次接触时 A 圆心在 225 − 60 = 165
+    assert received[0]["contact_x"] == pytest.approx(165.0)
 
 
 def test_client_watermark_and_epoch_switch():

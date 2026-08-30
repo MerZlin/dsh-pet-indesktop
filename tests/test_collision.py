@@ -145,7 +145,8 @@ class TestCollisionCircleChain:
             [[225.0, 0.0, 30.0]], [[225.0, 0.0, 30.0]],
         )
         assert result[0] is True
-        assert result[4] == pytest.approx(225.0)
+        # TOI 语义：首次接触时 A 圆心在 225 − (30+30) = 165
+        assert result[4] == pytest.approx(165.0)
         assert result[5] == pytest.approx(0.0)
 
     def test_swept_circle_chain_low_speed_non_crossing_does_not_trigger(self):
@@ -161,7 +162,8 @@ class TestCollisionCircleChain:
             [[30.0, 20.0, 10.0]], [[30.0, 20.0, 10.0]],
         )
         assert result[0] is True
-        assert result[3] == pytest.approx(0.0)
+        # 相切也判定接触；扫掠接触的 overlap 固定为小正值 1.0
+        assert result[3] == pytest.approx(1.0)
         assert result[4] == pytest.approx(30.0)
 
     def test_swept_circle_chain_receding_path_does_not_trigger(self):
