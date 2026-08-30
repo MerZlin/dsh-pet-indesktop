@@ -109,6 +109,37 @@ class TestCollisionEllipseDetection:
         assert dir_a1 == dir_b1 and dir_a2 == dir_b2
 
 
+class TestCollisionCircleChain:
+    def test_circle_chain_horizontal_vertical_and_square(self):
+        assert collision.circles_from_rect(10, 20, 100, 40) == [
+            [30.0, 40.0, 20.0], [60.0, 40.0, 20.0], [90.0, 40.0, 20.0]]
+        assert collision.circles_from_rect(10, 20, 40, 100) == [
+            [30.0, 40.0, 20.0], [30.0, 70.0, 20.0], [30.0, 100.0, 20.0]]
+        assert collision.circles_from_rect(10, 20, 50, 50) == [
+            [35.0, 45.0, 25.0], [35.0, 45.0, 25.0], [35.0, 45.0, 25.0]]
+
+    def test_circle_pair_tangent_one_pixel_overlap_and_separation(self):
+        a = [[0.0, 0.0, 10.0]]
+        b = [[20.0, 0.0, 10.0]]
+        assert collision.check_collision_circles(a, b)[0] is False
+        b[0][0] = 19.0
+        result = collision.check_collision_circles(a, b)
+        assert result[0] is True and result[3] == pytest.approx(1.0)
+        b[0][0] = 21.0
+        assert collision.check_collision_circles(a, b)[0] is False
+
+    def test_diagonal_chain_collision_can_trigger_when_ellipse_does_not(self):
+        circles_a = collision.circles_from_rect(-50, -20, 100, 40)
+        circles_b = collision.circles_from_rect(35, 5, 40, 100)
+        assert collision.check_collision_ellipse(0, 0, 50, 20, 55, 55, 20, 50)[0] is False
+        assert collision.check_collision_circles(circles_a, circles_b)[0] is True
+
+    def test_member_without_circles_uses_ellipse_fallback(self):
+        a = collision.MemberState("a", 0, 0, 50, 20)
+        b = collision.MemberState("b", 55, 55, 20, 50)
+        assert collision.check_collision_members(a, b)[0] is False
+
+
 class TestCollisionMassCalculation:
     """质量计算规则与 fallback 测试。"""
 

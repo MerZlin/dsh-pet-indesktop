@@ -239,6 +239,47 @@ def test_idle_pet_enters_thrown_and_physics_timer_starts_on_dead_zone_speed(tmp_
     win2.close()
 
 
+def test_collision_throw_cancels_move_plan_and_timer(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
+    win._move_timer.start()
+    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "dvx_a": 1200.0, "dvy_a": 0.0,
+                                "dx_a": 0.0, "dy_a": 0.0})
+    app.processEvents()
+    assert win._interaction_state == "THROWN"
+    assert win._move_plan is None
+    assert not win._move_timer.isActive()
+    win.close()
+
+
+def test_slingshot_launch_cancels_move_plan(tmp_path, app):
+    win, _ = _make_pet_window(tmp_path, "pet_a")
+    win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
+    win._move_timer.start()
+    win._slingshot_anchor_pos = QPoint(win.pos())
+    win._slingshot_pull = QPoint(100, 0)
+    win._launch_slingshot(QPoint(win.x() + 100, win.y()))
+    assert win._interaction_state == "THROWN"
+    assert win._move_plan is None
+    assert not win._move_timer.isActive()
+    win.close()
+
+
+def test_physics_mode_guards_movement_and_stop_restores_it(tmp_path, app):
+    win, _ = _make_pet_window(tmp_path, "pet_a")
+    win._physics_mode = "throw"
+    assert win._try_move() is False
+    win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
+    win._move_timer.start()
+    win._on_move_tick()
+    assert win._move_plan is None
+    assert not win._move_timer.isActive()
+    win._stop_physics()
+    win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
+    assert win._try_move() is True
+    win.close()
+
+
 def test_impulse_discarded_during_paused_or_hidden_and_zero_vel_re_registered(tmp_path, app):
     """3. PAUSED/隐藏期间 impulse 被丢弃，恢复后零速度重新注册。"""
     win, session = _make_pet_window(tmp_path, "pet_a")

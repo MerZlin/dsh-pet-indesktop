@@ -398,9 +398,9 @@ class _CollisionWorker(QObject):
             if state.get("flags", 0) & collision.FLAG_VISIBLE:
                 defaults = {"vx": 0.0, "vy": 0.0, "mass": 1.0, "is_infinite_mass": False,
                             "flags": 0, "instance_id": "", "character": "", "scale": 0.72,
-                            "w": 0.0, "h": 0.0}
+                             "w": 0.0, "h": 0.0, "circles": None}
                 keys = ("runtime_id", "x", "y", "radius_x", "radius_y", "vx", "vy", "mass",
-                        "is_infinite_mass", "flags", "instance_id", "character", "scale", "w", "h")
+                         "is_infinite_mass", "flags", "instance_id", "character", "scale", "w", "h", "circles")
                 values = {key: state.get(key, defaults.get(key, 0.0)) for key in keys}
                 values["is_infinite_mass"] = bool(int(values["flags"]) & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION))
                 values["mass"] = collision.calculate_mass(

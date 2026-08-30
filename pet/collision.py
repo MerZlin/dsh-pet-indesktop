@@ -2,7 +2,7 @@
 """多开桌宠碰撞物理核心与协议编解码（纯 Python 实现，无 Qt 依赖）。
 
 包含：
-1. 椭圆碰撞检测（Broad-phase AABB + Narrow-phase 归一化椭圆）
+1. 圆链/椭圆碰撞检测（Broad-phase AABB + Narrow-phase）
 2. 质量计算（面积加权 clamp 0.5~3.0，无基准按 scale^2 fallback）
 3. 冲量求解（恢复系数默认 0.82、切向摩擦 mu=0.08、库仑上限、每质量 9000px/s 限制）
 4. 位置分离（逆质量分摊、每次最多 60% 重叠、min 1px / max 12px、0.5px slop、连续 3 tick 强制完整分离）
@@ -62,6 +62,7 @@ class MemberState:
     scale: float = DEFAULT_BASE_SCALE
     w: float = 0.0
     h: float = 0.0
+    circles: Optional[Sequence[Sequence[float]]] = None
 
 
 @dataclass
@@ -130,6 +131,64 @@ def stable_hash_direction(id_a: str, id_b: str) -> tuple[float, float]:
     if id_a == ordered[0]:
         return ux, uy
     return -ux, -uy
+
+
+def circles_from_rect(left: float, top: float, width: float, height: float) -> list[list[float]]:
+    """Generate the three equal circles inscribed in a visible content rect."""
+    left, top = float(left), float(top)
+    width, height = max(0.0, float(width)), max(0.0, float(height))
+    radius = min(width, height) / 2.0
+    cx, cy = left + width / 2.0, top + height / 2.0
+    if width >= height:
+        return [[left + radius, cy, radius], [cx, cy, radius],
+                [left + width - radius, cy, radius]]
+    return [[cx, top + radius, radius], [cx, cy, radius],
+            [cx, top + height - radius, radius]]
+
+
+def check_collision_circles(
+    circles1: Sequence[Sequence[float]], circles2: Sequence[Sequence[float]],
+    id1: str = "", id2: str = "",
+) -> tuple[bool, float, float, float, float, float]:
+    """Check all circle pairs and return the deepest overlap."""
+    best = None
+    for raw1 in circles1 or ():
+        for raw2 in circles2 or ():
+            if len(raw1) < 3 or len(raw2) < 3:
+                continue
+            x1, y1, r1 = map(float, raw1[:3])
+            x2, y2, r2 = map(float, raw2[:3])
+            r1, r2 = max(1e-4, r1), max(1e-4, r2)
+            dx, dy = x2 - x1, y2 - y1
+            distance = math.hypot(dx, dy)
+            if distance >= r1 + r2:
+                continue
+            if distance < 1e-6:
+                nx, ny = stable_hash_direction(id1, id2)
+            else:
+                nx, ny = dx / distance, dy / distance
+            overlap = r1 + r2 - distance
+            contact_x = (x1 + nx * r1 + x2 - nx * r2) / 2.0
+            contact_y = (y1 + ny * r1 + y2 - ny * r2) / 2.0
+            candidate = (overlap, nx, ny, contact_x, contact_y)
+            if best is None or overlap > best[0]:
+                best = candidate
+    if best is None:
+        return False, 0.0, 0.0, 0.0, 0.0, 0.0
+    overlap, nx, ny, contact_x, contact_y = best
+    return True, nx, ny, overlap, contact_x, contact_y
+
+
+def check_collision_members(a: MemberState, b: MemberState) -> tuple[bool, float, float, float, float, float]:
+    """Use the advertised circle chain, falling back to the legacy ellipse."""
+    if a.circles is not None and b.circles is not None:
+        # Keep the existing AABB broad phase before the exact circle pairs.
+        if abs(b.x - a.x) >= a.radius_x + b.radius_x or abs(b.y - a.y) >= a.radius_y + b.radius_y:
+            return False, 0.0, 0.0, 0.0, 0.0, 0.0
+        return check_collision_circles(a.circles, b.circles, a.runtime_id, b.runtime_id)
+    return check_collision_ellipse(a.x, a.y, a.radius_x, a.radius_y,
+                                   b.x, b.y, b.radius_x, b.radius_y,
+                                   id1=a.runtime_id, id2=b.runtime_id)
 
 
 def check_collision_ellipse(
@@ -361,11 +420,7 @@ def solve_multi_body_collision(
             if (m1.flags & FLAG_PAUSED) or (m2.flags & FLAG_PAUSED):
                 continue
 
-            collided, nx, ny, overlap, cx, cy = check_collision_ellipse(
-                m1.x, m1.y, m1.radius_x, m1.radius_y,
-                m2.x, m2.y, m2.radius_x, m2.radius_y,
-                id1=m1.runtime_id, id2=m2.runtime_id,
-            )
+            collided, nx, ny, overlap, cx, cy = check_collision_members(m1, m2)
 
             pair_key = f"{m1.runtime_id}|{m2.runtime_id}"
             if collided and overlap > 0.0:
@@ -424,11 +479,17 @@ def solve_multi_body_collision(
             id_b = p["m2"].runtime_id
             p_x1, p_y1 = pos_map[id_a]
             p_x2, p_y2 = pos_map[id_b]
-            c, cur_nx, cur_ny, cur_ov, _, _ = check_collision_ellipse(
-                p_x1, p_y1, p["m1"].radius_x, p["m1"].radius_y,
-                p_x2, p_y2, p["m2"].radius_x, p["m2"].radius_y,
-                id1=id_a, id2=id_b,
-            )
+            m_a, m_b = p["m1"], p["m2"]
+            def moved_member(member, x, y):
+                circles = member.circles
+                if circles is not None:
+                    ox, oy = x - member.x, y - member.y
+                    circles = [[float(cx) + ox, float(cy) + oy, float(r)]
+                               for cx, cy, r in circles]
+                return MemberState(**{**member.__dict__, "x": x, "y": y, "circles": circles})
+            a_at_pos = moved_member(m_a, p_x1, p_y1)
+            b_at_pos = moved_member(m_b, p_x2, p_y2)
+            c, cur_nx, cur_ny, cur_ov, _, _ = check_collision_members(a_at_pos, b_at_pos)
             if c and cur_ov > 0.5:
                 current_overlaps.append((cur_ov, p["pair"], id_a, id_b, cur_nx, cur_ny, p["consecutive"]))
 

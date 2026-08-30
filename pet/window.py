@@ -1047,6 +1047,7 @@ class PetWindow(QWidget):
     def _collision_state(self) -> dict[str, Any]:
         rect = self.visible_content_rect()
         vx, vy = self._collision_velocity()
+        circles = collision.circles_from_rect(rect.x(), rect.y(), rect.width(), rect.height())
         return {
             'seq': self._collision_seq,
             'ts': time.monotonic(),
@@ -1054,6 +1055,7 @@ class PetWindow(QWidget):
             'w': float(self._w), 'h': float(self._h),
             'radius_x': max(1.0, rect.width() / 2.0),
             'radius_y': max(1.0, rect.height() / 2.0),
+            'circles': circles,
             'vx': 0.0 if not self.isVisible() else vx,
             'vy': 0.0 if not self.isVisible() else vy,
             'flags': self._collision_flags(),
@@ -1131,7 +1133,7 @@ class PetWindow(QWidget):
             QTimer.singleShot(120, self, self._clear_just_dragged)
         if has_velocity_impulse and speed >= physics_mod.DEAD_ZONE_SPEED:
             self._interaction_state = THROWN
-            self._physics_mode = 'throw'
+            self._enter_physics_mode('throw')
             self._phys_pos[:] = [float(self.x()), float(self.y())]
             self._last_physics_tick_time = None
             self._physics_timer.start()
@@ -1915,6 +1917,9 @@ class PetWindow(QWidget):
 
         name 给定时使用指定动画（手动触发），否则随机选一个移动姿态。
         """
+        if (self._physics_mode is not None
+                or self._interaction_state in (THROWN, DRAGGING)):
+            return False
         if self._move_plan is not None:
             return True  # 已在移动/已计划
         scr = self._screen_available()
@@ -1957,6 +1962,10 @@ class PetWindow(QWidget):
 
     def _on_move_tick(self) -> None:
         """位置驱动：跟随动画播放进度插值（前后各 2s 不动，中间走完全程）。"""
+        if self._physics_mode is not None:
+            self._move_timer.stop()
+            self._move_plan = None
+            return
         plan = self._move_plan
         if not plan or self.movie is None:
             self._move_timer.stop()
@@ -2150,7 +2159,7 @@ class PetWindow(QWidget):
         self._interaction_state = "THROWN"
         self._suppress_click_after_slingshot()
         self._last_physics_tick_time = None
-        self._physics_mode = "throw"
+        self._enter_physics_mode("throw")
         self._physics_timer.start()
         self._context_menu_suppressed = True
         self._start_slingshot_rebound(progress)
@@ -2226,7 +2235,7 @@ class PetWindow(QWidget):
             if self.drag_physics:
                 self._phys_pos = [float(self.x()), float(self.y())]
                 self._drag_target = g - self._grab_offset
-                self._physics_mode = 'drag'
+                self._enter_physics_mode('drag')
                 self._last_physics_tick_time = None
                 self._physics_timer.start()
             else:
@@ -2247,7 +2256,7 @@ class PetWindow(QWidget):
             self._last_move_time = now
             self._drag_target = g - self._grab_offset
             if self._physics_mode != 'drag':
-                self._physics_mode = 'drag'
+                self._enter_physics_mode('drag')
                 self._last_physics_tick_time = None
                 self._physics_timer.start()
         else:
@@ -2286,7 +2295,7 @@ class PetWindow(QWidget):
                     self._save_position()
                 else:
                     self._phys_vel[:] = [rvx, rvy]
-                    self._physics_mode = 'throw'
+                    self._enter_physics_mode('throw')
                     self._last_physics_tick_time = None
                     self._physics_timer.start()
             else:
@@ -2897,6 +2906,13 @@ class PetWindow(QWidget):
         if getattr(self, '_interaction_state', IDLE) == THROWN:
             self._interaction_state = IDLE
         self._submit_collision_state(force=True)
+
+    def _enter_physics_mode(self, mode: str) -> None:
+        """进入物理模式（'drag'/'throw'）：统一取消自主移动计划与动画间隔，
+        避免移动插值与物理位移双写位置（画面在两个位置间闪现）。"""
+        self._cancel_move()
+        self._cancel_animation_gap()
+        self._physics_mode = mode
 
     def _on_physics_tick(self) -> None:
         now = time.monotonic()
