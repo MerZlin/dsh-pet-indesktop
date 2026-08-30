@@ -237,6 +237,30 @@ class TestCollisionImpulseAndMomentum:
         assert j == 0.0
         assert dvx_a == 0.0 and dvx_b == 0.0
 
+    def test_minimum_approach_speed_suppresses_low_speed_impulse(self):
+        """低于 80px/s 的接近速度不产生速度冲量。"""
+        slow_a = collision.MemberState(
+            runtime_id="slow-a", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
+            vx=0.0, vy=0.0,
+        )
+        slow_b = collision.MemberState(
+            runtime_id="slow-b", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
+            vx=-50.0, vy=0.0,
+        )
+        result = collision.solve_collision_impulse(slow_a, slow_b, 1.0, 0.0)
+        assert result == (0.0, 0.0, 0.0, 0.0, 0.0)
+
+        fast_b = collision.MemberState(
+            runtime_id="fast-b", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
+            vx=-500.0, vy=0.0,
+        )
+        j, dvx_a, dvy_a, dvx_b, dvy_b = collision.solve_collision_impulse(
+            slow_a, fast_b, 1.0, 0.0,
+        )
+        assert j > 0.0
+        assert dvx_a < 0.0 and dvx_b > 0.0
+        assert dvy_a == 0.0 and dvy_b == 0.0
+
 
 class TestPositionSeparationAndMultiBody:
     """位置分离算法、多体/三体碰撞与迭代分离测试。"""
@@ -370,6 +394,32 @@ class TestPositionSeparationAndMultiBody:
             [settled_a, settled_b], tick=4, overlap_history=new_history,
         )
         assert impulses4 == []
+
+    def test_persistent_low_speed_contact_only_separates(self):
+        """低速重叠连续 10 tick 只分离，不产生反弹速度冲量。"""
+        a_x, b_x = 0.0, 80.0
+        history = {}
+        impulse_count = 0
+        for tick in range(10):
+            a = collision.MemberState(
+                runtime_id="A", x=a_x, y=0.0, radius_x=50.0, radius_y=50.0,
+                vx=0.0, vy=0.0,
+            )
+            b = collision.MemberState(
+                runtime_id="B", x=b_x, y=0.0, radius_x=50.0, radius_y=50.0,
+                vx=-1.0, vy=0.0,
+            )
+            impulses, combined, history = collision.solve_multi_body_collision(
+                [a, b], tick=tick, overlap_history=history,
+            )
+            impulse_count += sum(1 for item in impulses if item.j > 0.0)
+            a_x += combined["A"][2]
+            b_x += combined["B"][2]
+
+        assert impulse_count == 0
+        assert collision.check_collision_ellipse(
+            a_x, 0.0, 50.0, 50.0, b_x, 0.0, 50.0, 50.0, "A", "B",
+        )[3] < 0.5
 
 
 class TestPhysicsSoftClampSpeedIntegration:

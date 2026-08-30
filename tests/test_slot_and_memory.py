@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 """槽位机制与个体记忆的全面测试。
 
-覆盖 plan5 §7 的 10 组规范测试场景：
+覆盖 plan5 §7 的规范测试场景：
 1. 真实子进程竞争同一临时配置根目录，依次获得 slot-0/1/2；指定槽竞争失败不降级，锁文件残留可复用。
 2. 子进程持有 slot-1 后 exit 或被终止，新子进程重新加锁 slot-1，读取个体配置与 sessions，不删 lock 文件。
-3. 真实子进程并发首次播种，最终 JSON 完整，PID 后缀 .tmp 不撞名。
-4. 主配置变更后，已有 slot 保持个体值，新 slot 继承完整分类字段，位置不继承，自启仅主槽有效。
-5. keyring 引用继承、自定义 provider 归位、明文 key 不落盘。
-6. 损坏配置唯一备份名，连续恢复不覆盖旧备份。
-7. 旧 config.json 无槽位元数据仍作为 slot-0；旧 spawn 原子迁移到 slot-1/2，中断回滚与标记。
-8. slot-0 被占用时自启失败不拿 slot-1。
-9. 手动启动与菜单 spawn 顺序与 offset index 独立测试。
-10. 位置避让与 spawn offset 独立生效测试。
+3. 真实子进程并发首次创建 slot 配置，最终 JSON 完整，PID 后缀 .tmp 不撞名。
+4. 主配置变更后，新 slot 采用出厂默认配置，不继承主配置修改；已有 slot 保持个体修改记忆；位置独立，自启仅主槽有效。
+5. 损坏配置唯一备份名，连续恢复不覆盖旧备份。
+6. 旧 config.json 无槽位元数据仍作为 slot-0；旧 spawn 原子迁移到 slot-1/2，中断回滚与标记。
+7. slot-0 被占用时自启失败不拿 slot-1。
+8. 手动启动与菜单 spawn 顺序与 offset index 独立测试。
+9. 位置避让与 spawn offset 独立生效测试。
 """
 from __future__ import annotations
 
@@ -165,14 +164,13 @@ def test_slot_reclaimed_after_process_killed_and_keeps_memory(tmp_path):
 
     # 启动子进程拿 slot-1 并写个体记忆
     worker_code = f"""
-from pet.slot_manager import acquire_pet_slot, seed_slot_config_if_needed
+from pet.slot_manager import acquire_pet_slot
 from pet.config import Config
 from pet.chat.session_store import SessionStore
 from pet.chat.models import ChatMessage
 import time
 
 slot, handle = acquire_pet_slot({repr(str(config_dir))})
-seed_slot_config_if_needed({repr(str(config_dir))}, slot)
 cfg = Config(base={repr(str(tmp_path))}, instance_id=f"slot-{{slot}}")
 cfg.set("rx", 0.77)
 cfg.save()
@@ -212,8 +210,8 @@ time.sleep(10)
     handle1.close()
 
 
-def test_concurrent_seeding_and_save_pid_tmp(tmp_path):
-    """场景 3：并发播种与 save() PID 后缀 tmp 文件不撞名。"""
+def test_concurrent_creation_and_save_pid_tmp(tmp_path):
+    """场景 3：并发首次创建配置与 save() PID 后缀 tmp 文件不撞名。"""
     config_dir = tmp_path / APP_DIR_NAME
     config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -222,23 +220,23 @@ def test_concurrent_seeding_and_save_pid_tmp(tmp_path):
     master_cfg.set("character", "dundun")
     master_cfg.save()
 
-    # 启动 2 个真实子进程分别播种 slot-1 与 slot-2 并保存
+    # 启动 2 个真实子进程分别创建 slot-1 与 slot-2 并保存
     c1 = f"""
-from pet.slot_manager import acquire_pet_slot, seed_slot_config_if_needed
+from pet.slot_manager import acquire_pet_slot
 from pet.config import Config
 slot, handle = acquire_pet_slot({repr(str(config_dir))}, preferred_slot=1)
-seed_slot_config_if_needed({repr(str(config_dir))}, 1)
 cfg = Config(base={repr(str(tmp_path))}, instance_id="slot-1")
+cfg.set("scale", 1.25)
 for _ in range(5):
     cfg.save()
 print("DONE1", flush=True)
 """
     c2 = f"""
-from pet.slot_manager import acquire_pet_slot, seed_slot_config_if_needed
+from pet.slot_manager import acquire_pet_slot
 from pet.config import Config
 slot, handle = acquire_pet_slot({repr(str(config_dir))}, preferred_slot=2)
-seed_slot_config_if_needed({repr(str(config_dir))}, 2)
 cfg = Config(base={repr(str(tmp_path))}, instance_id="slot-2")
+cfg.set("scale", 1.50)
 for _ in range(5):
     cfg.save()
 print("DONE2", flush=True)
@@ -253,61 +251,58 @@ print("DONE2", flush=True)
 
     cfg1 = Config(base=tmp_path, instance_id="slot-1")
     cfg2 = Config(base=tmp_path, instance_id="slot-2")
-    assert cfg1.get("character") == "dundun"
-    assert cfg2.get("character") == "dundun"
+    assert cfg1.get("scale") == 1.25
+    assert cfg2.get("scale") == 1.50
 
 
-def test_field_inheritance_isolation_and_chat_fields(tmp_path):
-    """场景 4 & 5：主配置变更后，已有 slot 保持个体值，新 slot 继承完整分类字段，位置不继承，API Key 不落盘。"""
+def test_field_default_factory_and_individual_memory(tmp_path):
+    """场景 4：新 slot 使用出厂默认值（不继承主配置修改），之后只保留个体记忆。"""
     config_dir = tmp_path / APP_DIR_NAME
     config_dir.mkdir(parents=True, exist_ok=True)
 
     master = Config(base=tmp_path)
     master.set("character", "shenshen")
     master.set("playback_speed", 1.5)
+    master.set("click_sound_volume", 0.33)
     master.set("on_top", False)
     master.set("show_dock_icon", False)
     master.set("chat_follow_pet", True)
     master.set("rx", 0.1)
     master.set("ry", 0.2)
     master.set("autostart_wanted", True)
-
-    chat_data = master.chat_settings()
-    custom_prov = chat_data.active_config
-    custom_prov.api_key_ref = "provider/custom-ref"
-    custom_prov.api_key = "sk-secret-plain"
-    master.set_chat_settings(chat_data)
     master.save()
 
-    # 首次播种 slot-1
-    sm.seed_slot_config_if_needed(config_dir, 1)
+    # 新建 slot-1：未保存前直接读取，应完全使用出厂默认值，不继承主配置修改
     slot1 = Config(base=tmp_path, instance_id="slot-1")
-    assert slot1.get("character") == "shenshen"
-    assert slot1.get("playback_speed") == 1.5
-    assert slot1.get("on_top") is False
-    assert slot1.get("show_dock_icon") is False
-    assert slot1.get("chat_follow_pet") is True
-    # 位置与 autostart_wanted 不继承
+    default_config = Config(base=tmp_path / "dummy_clean")
+    assert slot1.get("character") == default_config.get("character")
+    assert slot1.get("playback_speed") == default_config.get("playback_speed")
+    assert slot1.get("click_sound_volume") == default_config.get("click_sound_volume")
+    assert slot1.get("click_sound_volume") == 0.70
+    assert slot1.get("on_top") == default_config.get("on_top")
+    assert slot1.get("show_dock_icon") == default_config.get("show_dock_icon")
     assert slot1.get("rx") is None
     assert slot1.get("ry") is None
     assert slot1.get("autostart_wanted") is False
 
-    # 检查 chat_settings 及 keyring 引用继承与脱敏
-    s1_chat = slot1.chat_settings()
-    assert s1_chat.active_config.api_key_ref == "provider/custom-ref"
-    disk_json = json.loads((config_dir / "config-slot-1.json").read_text(encoding="utf-8"))
-    assert "api_key" not in disk_json["chat"]["providers"]["openai-main"]
+    # slot-1 修改自身属性并保存（个体记忆）
+    slot1.set("character", "dundun")
+    slot1.set("click_sound_volume", 0.55)
+    slot1.save()
 
     # 修改主配置后，已有 slot-1 不受影响
-    master.set("character", "dundun")
+    master.set("character", "master_new")
+    master.set("click_sound_volume", 0.99)
     master.save()
-    slot1_reload = Config(base=tmp_path, instance_id="slot-1")
-    assert slot1_reload.get("character") == "shenshen"
 
-    # 新建 slot-2 继承修改后的主配置
-    sm.seed_slot_config_if_needed(config_dir, 2)
+    slot1_reload = Config(base=tmp_path, instance_id="slot-1")
+    assert slot1_reload.get("character") == "dundun"
+    assert slot1_reload.get("click_sound_volume") == 0.55
+
+    # 新建 slot-2 依然使用出厂默认值，不继承主配置的修改
     slot2 = Config(base=tmp_path, instance_id="slot-2")
-    assert slot2.get("character") == "dundun"
+    assert slot2.get("character") == default_config.get("character")
+    assert slot2.get("click_sound_volume") == 0.70
 
 
 def test_corrupt_config_backup_unique_timestamp(tmp_path):

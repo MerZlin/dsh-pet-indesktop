@@ -25,6 +25,7 @@ DEFAULT_RESTITUTION: float = 0.82       # 默认恢复系数
 DEFAULT_FRICTION: float = 0.08          # 默认切向摩擦系数
 DEFAULT_MASS_SCALE: float = 1.0         # 默认质量倍率
 DEFAULT_IMPULSE_CAP: float = 9000.0     # 每单位质量等效冲量上限 (px/s)
+IMPULSE_MIN_APPROACH_SPEED: float = 80.0  # 低于此接近速度只做位置分离 (px/s)
 DEFAULT_BASE_SCALE: float = 0.72        # 基准缩放
 
 FRAME_MAX_LENGTH: int = 4096            # 单帧最大字节数（含/不含前缀，此处限制载荷<=4096）
@@ -226,8 +227,8 @@ def solve_collision_impulse(
     # 法向相对速度 v_rel_n = dot(v_rel, n)
     vn = vrx * nx + vry * ny
 
-    # 只有相向运动 (vn < 0) 才施加速度冲量，避免已分离时反复弹
-    if vn >= 0.0:
+    # 微小接近速度只通过位置分离消除，避免静置接触反复弹跳。
+    if vn >= -IMPULSE_MIN_APPROACH_SPEED:
         return 0.0, 0.0, 0.0, 0.0, 0.0
 
     e = max(0.0, min(1.0, float(restitution)))
@@ -386,7 +387,7 @@ def solve_multi_body_collision(
                     inv_b = 0.0 if m2.is_infinite_mass or m2.mass <= 0 else 1.0 / m2.mass
                     inv_sum = inv_a + inv_b
                     vn = (m2.vx - m1.vx) * nx + (m2.vy - m1.vy) * ny
-                    if inv_sum > 0.0 and vn < 0.0:
+                    if inv_sum > 0.0 and vn < -IMPULSE_MIN_APPROACH_SPEED:
                         jn = -vn / inv_sum
                         dvx_a, dvy_a = -jn * nx * inv_a, -jn * ny * inv_a
                         dvx_b, dvy_b = jn * nx * inv_b, jn * ny * inv_b

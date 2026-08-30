@@ -156,6 +156,41 @@ def test_impulse_via_queued_signal_applied_immediately_without_physics_tick(tmp_
     win.close()
 
 
+def test_collision_squash_is_not_restarted_within_250ms(tmp_path, app):
+    """碰撞 squash 活跃期间，250ms 内的第二次 impulse 不重置动画进度。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    msg = {
+        "a": "pet_a", "b": "pet_b", "dvx_a": 250.0, "dvy_a": 0.0,
+        "dx_a": 0.0, "dy_a": 0.0,
+    }
+    session.impulse_ready.emit(msg)
+    app.processEvents()
+    assert win._squash_active is True
+
+    win._squash_progress = 0.4
+    session.impulse_ready.emit(msg)
+    app.processEvents()
+    assert win._squash_progress == pytest.approx(0.4)
+
+    win.close()
+
+
+def test_position_only_collision_does_not_throw_or_squash(tmp_path, app):
+    """低速接触的 position-only 消息不触发 THROWN 或 squash。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    msg = {
+        "a": "pet_a", "b": "pet_b", "dvx_a": 0.0, "dvy_a": 0.0,
+        "dx_a": -2.0, "dy_a": 0.0,
+    }
+    session.impulse_ready.emit(msg)
+    app.processEvents()
+
+    assert win._interaction_state != "THROWN"
+    assert win._physics_mode is None
+    assert win._squash_active is False
+    win.close()
+
+
 def test_idle_pet_enters_thrown_and_physics_timer_starts_on_dead_zone_speed(tmp_path, app):
     """2. 空闲桌宠收到 ≥DEAD_ZONE_SPEED 冲量后进入 THROWN 且 _physics_timer 启动。"""
     win, session = _make_pet_window(tmp_path, "pet_a")

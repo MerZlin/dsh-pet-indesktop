@@ -828,10 +828,6 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         instance_id = slot_manager_mod.slot_to_instance_id(slot_id)
         os.environ["DSH_PET_INSTANCE"] = instance_id
 
-        # 首次取得副槽位且持锁时，按需播种
-        if slot_id > 0:
-            slot_manager_mod.seed_slot_config_if_needed(config_dir, slot_id)
-
         # 迁移旧 spawn 实例（主槽或无并发运行旧实例时触发）
         if slot_id == 0:
             slot_manager_mod.migrate_legacy_spawns(config_dir)

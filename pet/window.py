@@ -533,6 +533,7 @@ class PetWindow(QWidget):
         self._squash_active = False
         self._squash_duration_ms = 220
         self._squash_progress = 1.0
+        self._last_collision_squash_at = float('-inf')
         self._slingshot_rebound_progress = 0.0
 
         # ---- 拖动物理 ----
@@ -1117,6 +1118,7 @@ class PetWindow(QWidget):
             expected_y = contact_y + ny * radius_y
         if math.hypot(rect.center().x() - expected_x, rect.center().y() - expected_y) > min(radius_x, radius_y) * 0.1:
             dx = dy = 0.0
+        has_velocity_impulse = abs(dvx) > 1e-9 or abs(dvy) > 1e-9
         self._phys_vel[0] += dvx
         self._phys_vel[1] += dvy
         speed = math.hypot(*self._phys_vel)
@@ -1124,15 +1126,20 @@ class PetWindow(QWidget):
         if speed > 1e-6:
             self._phys_vel[:] = [self._phys_vel[0] * clamped / speed, self._phys_vel[1] * clamped / speed]
         self.move(self.x() + int(round(dx)), self.y() + int(round(dy)))
-        self._just_dragged = True
-        QTimer.singleShot(120, self, self._clear_just_dragged)
-        if speed >= physics_mod.DEAD_ZONE_SPEED:
+        if has_velocity_impulse:
+            self._just_dragged = True
+            QTimer.singleShot(120, self, self._clear_just_dragged)
+        if has_velocity_impulse and speed >= physics_mod.DEAD_ZONE_SPEED:
             self._interaction_state = THROWN
             self._physics_mode = 'throw'
             self._phys_pos[:] = [float(self.x()), float(self.y())]
             self._last_physics_tick_time = None
             self._physics_timer.start()
-        self._start_squash()
+        now = time.monotonic()
+        if (has_velocity_impulse and not self._squash_active
+                and now - self._last_collision_squash_at >= 0.25):
+            self._last_collision_squash_at = now
+            self._start_squash()
         self._submit_collision_state(force=True)
 
     _FS_SKIP_CLASSES = {
