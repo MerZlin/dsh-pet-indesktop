@@ -425,14 +425,14 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
-        win.show()
-
-        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池在部分 Windows
-        # 环境需要 50~240ms，若留到第一次点击时再做会造成 Q 弹开头卡顿。
-        QTimer.singleShot(0, lambda: warm_click_sound_effects(
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
+        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
+        # 首次点击 Q 弹卡顿。
+        warm_click_sound_effects(
             self.config.get("click_sound_pack"),
             data_dir=self.config.dir,
-        ))
+        )
+        win.show()
 
         tray = self._build_tray(win)
 
@@ -485,14 +485,14 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
-        win.show()
-
-        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池在部分 Windows
-        # 环境需要 50~240ms，若留到第一次点击时再做会造成 Q 弹开头卡顿。
-        QTimer.singleShot(0, lambda: warm_click_sound_effects(
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
+        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
+        # 首次点击 Q 弹卡顿。
+        warm_click_sound_effects(
             self.config.get("click_sound_pack"),
             data_dir=self.config.dir,
-        ))
+        )
+        win.show()
 
         tray = self._build_tray(win)
 

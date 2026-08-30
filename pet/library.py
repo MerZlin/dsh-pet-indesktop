@@ -226,9 +226,11 @@ class MovieLibrary(QObject):
             self.folder_map,
             self.folder_files,
         )
+        # 点击回应优先级最高：首次点击最怕同步 ffmpeg 解码（实测可达 600ms+），
+        # 先预热点击动画，避免用户刚启动就点击时卡顿。
         high = list(dict.fromkeys(
-            [*(cats['idles'] or []), *(cats['turns'] or []),
-             *(cats['moves'] or []), *(cats['clicks'] or [])]
+            [*(cats['clicks'] or []), *(cats['idles'] or []),
+             *(cats['turns'] or []), *(cats['moves'] or [])]
             + ([cats['drag']] if cats.get('drag') else [])
         ))
         low = [n for n in cats.get('acts', []) if n not in high]
@@ -273,7 +275,9 @@ class MovieLibrary(QObject):
 
     def _warm_all_meta_background(self) -> None:
         try:
-            time.sleep(random.uniform(0, 0.5))  # 多开错峰，避免 ffmpeg 进程洪峰
+            # 高优先级（尤其点击回应）尽快开始；保留极短随机错峰降低多开
+            # 同时拉起 ffmpeg 的峰值，但不再让首次点击等 0.5s 预热。
+            time.sleep(random.uniform(0, 0.05))
             # 并发控制在 3：每个 webm 首帧预热都会拉起一个 ffmpeg 子进程，
             # 并发过高会形成进程洪峰，提高杀毒软件拦截/误报概率。
             high, _ = self._priority_names()
