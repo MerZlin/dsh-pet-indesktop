@@ -292,3 +292,46 @@ def test_release_sound_schedules_press_tail(monkeypatch, tmp_path):
     scheduled[0][1]()
     assert calls == [(release, 0.5)]
 
+
+def test_click_sound_immediate_toggle_in_dialog_affects_pet_window(tmp_path, monkeypatch):
+    """回归测试：设置对话框中即时关闭点击音效，桌宠窗口点击立即不播放。"""
+    from pet.config import Config
+    from pet.window import PetWindow
+    from pet.modern_settings_dialog import ModernSettingsDialog
+    from PySide6.QtWidgets import QApplication
+    from types import SimpleNamespace
+
+    app = QApplication.instance() or QApplication([])
+    config = Config(tmp_path)
+    config.set("click_sound_enabled", True)
+
+    win = PetWindow.__new__(PetWindow)
+    win.cfg = config
+
+    # 初始状态下属性读取 cfg 为 True
+    assert win.click_sound_enabled is True
+
+    # 模拟设置对话框即时关闭
+    monkeypatch.setattr("pet.modern_settings_dialog.autostart_mod.is_enabled", lambda: False)
+    dialog = ModernSettingsDialog(config, include_ai=False)
+    assert dialog.click_sound_check.isChecked() is True
+
+    played = []
+    monkeypatch.setattr("pet.window.play_sound", lambda *a, **k: played.append(a))
+    monkeypatch.setattr("pet.window.play_press_sound", lambda *a, **k: played.append(a))
+
+    # 关闭点击音效
+    dialog.click_sound_check.setChecked(False)
+
+    # 验证即时写回 config 且 PetWindow 读到 False
+    assert config.get("click_sound_enabled") is False
+    assert win.click_sound_enabled is False
+
+    # 触发播放点击音效
+    win._play_click_sound()
+    assert played == []
+
+    dialog.close()
+    app.processEvents()
+
+

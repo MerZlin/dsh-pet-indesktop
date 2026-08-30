@@ -149,6 +149,9 @@ DRAGGING = "DRAGGING"
 SLINGSHOT_AIMING = "SLINGSHOT_AIMING"
 THROWN = "THROWN"
 COLLISION_HIT_MIN_DV = 300.0
+# 抛掷中的桌宠也只吸收超过此值的冲量修正：静置接触的 e=0 抵消微冲量
+# （十几 px/s）会把贴地桌宠永远顶在静止线以上，形成自供能原地抖动
+COLLISION_CONTACT_DV_FLOOR = 50.0
 
 
 def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
@@ -413,9 +416,6 @@ class PetWindow(QWidget):
         self.shift_drag: bool = bool(config.get('shift_drag', False))
         self.pet_opacity: int = int(_float_or_default(config.get('pet_opacity', 100), 100, 10, 100))
         self._applied_opacity: float | None = None  # 已应用到窗口的不透明度
-        self.click_sound_enabled: bool = bool(config.get('click_sound_enabled', True))
-        self.collision_sound_enabled: bool = bool(config.get('collision_sound_enabled', True))
-        self.collision_sound_volume: float = float(config.get('collision_sound_volume', 0.70))
         self.click_sound_path: str = str(config.get('click_sound_path', '') or '')
         self.click_show_balance: bool = bool(config.get('click_show_balance', False))
         self.click_show_self_talk: bool = bool(config.get('click_show_self_talk', False))
@@ -603,6 +603,30 @@ class PetWindow(QWidget):
             self._arm_screen_restore_retry()
 
         self.attach_collision_session(collision_session)
+
+    @property
+    def click_sound_enabled(self) -> bool:
+        return bool(self.cfg.get('click_sound_enabled', True))
+
+    @click_sound_enabled.setter
+    def click_sound_enabled(self, value: bool) -> None:
+        self.cfg.set('click_sound_enabled', bool(value))
+
+    @property
+    def collision_sound_enabled(self) -> bool:
+        return bool(self.cfg.get('collision_sound_enabled', True))
+
+    @collision_sound_enabled.setter
+    def collision_sound_enabled(self, value: bool) -> None:
+        self.cfg.set('collision_sound_enabled', bool(value))
+
+    @property
+    def collision_sound_volume(self) -> float:
+        return float(self.cfg.get('collision_sound_volume', 0.70))
+
+    @collision_sound_volume.setter
+    def collision_sound_volume(self, value: float) -> None:
+        self.cfg.set('collision_sound_volume', float(value))
 
     def _arm_screen_restore_retry(self) -> None:
         """目标副屏暂未就绪：启动 5s 轮询 + screenAdded 监听，等它上线。"""
@@ -1227,7 +1251,8 @@ class PetWindow(QWidget):
             if collision_debug.ENABLED:
                 collision_debug.log(runtime_id, 'impulse_position_discard',
                                     reason='contact_deviation', pair=message.get('pair', ''))
-        if is_real_hit or self._interaction_state == THROWN:
+        if is_real_hit or (self._interaction_state == THROWN
+                        and hit_dv >= COLLISION_CONTACT_DV_FLOOR):
             self._phys_vel[0] += dvx
             self._phys_vel[1] += dvy
         speed = math.hypot(*self._phys_vel)
@@ -1402,19 +1427,39 @@ class PetWindow(QWidget):
     def _fs_watch_loop(self) -> None:
         """后台轮询光标与前台窗口，分别使用 20Hz 与 1Hz 节拍。"""
         polls = 0
+        consecutive_errors = 0
         next_fullscreen = time.monotonic() + 1.0
         while not self._fs_stop.wait(0.05):
+            if shiboken6.isValid(self) is False:
+                return
             if self._cursor_hidden_passthrough_enabled():
                 try:
                     visibility = vision_mod.get_cursor_visibility()
+                    if shiboken6.isValid(self) is False:
+                        return
                     self.cursor_visibility_changed.emit(visibility)
-                except (RuntimeError, AttributeError):
-                    return
+                    consecutive_errors = 0
+                except (RuntimeError, AttributeError) as exc:
+                    if shiboken6.isValid(self) is False:
+                        return
+                    consecutive_errors += 1
+                    backoff = 1.0 if consecutive_errors == 1 else (2.0 if consecutive_errors == 2 else 5.0)
+                    logging.debug("光标状态检测瞬时异常 (%s), 退避 %ss 后重试", exc, backoff)
+                    if self._fs_stop.wait(backoff):
+                        return
                 except Exception:
                     try:
+                        if shiboken6.isValid(self) is False:
+                            return
                         self.cursor_visibility_changed.emit('UNKNOWN')
-                    except RuntimeError:
-                        return
+                    except (RuntimeError, AttributeError) as exc:
+                        if shiboken6.isValid(self) is False:
+                            return
+                        consecutive_errors += 1
+                        backoff = 1.0 if consecutive_errors == 1 else (2.0 if consecutive_errors == 2 else 5.0)
+                        logging.debug("光标状态降级发射瞬时异常 (%s), 退避 %ss 后重试", exc, backoff)
+                        if self._fs_stop.wait(backoff):
+                            return
             now = time.monotonic()
             if not self.auto_hide_fullscreen or now < next_fullscreen:
                 continue
@@ -1428,6 +1473,8 @@ class PetWindow(QWidget):
             if hit != self._fs_last:
                 self._fs_last = hit
                 logging.info("全屏检测变化 hit=%s (%s)", hit, detail)
+                if shiboken6.isValid(self) is False:
+                    return
                 self.fullscreen_changed.emit(hit)
             elif polls % 15 == 0:
                 logging.info("全屏检测心跳 hit=%s %s", hit, detail)
@@ -2560,19 +2607,29 @@ class PetWindow(QWidget):
         self._last_look_ts = now
         self._look_busy = True
         self.show_bubble("让我看看…", 6000)
-        threading.Thread(target=self._look_worker, daemon=True, name="pet-look-screen").start()
 
-    def _look_worker(self) -> None:
+        # 在主线程解析好快照，避免后台 worker 线程改写共享配置对象
+        import copy
+        settings = self.cfg.chat_settings()
+        provider = copy.copy(settings.active_config)
+        provider.api_key = self.cfg.resolve_api_key(provider)
+        system_prompt = settings.default_system_prompt
+
+        threading.Thread(
+            target=self._look_worker,
+            args=(provider, system_prompt),
+            daemon=True,
+            name="pet-look-screen",
+        ).start()
+
+    def _look_worker(self, provider: Any, system_prompt: str) -> None:
         # 延迟导入：无 Chat / 不使用「看看屏幕」的实例启动时不加载 PIL
         from . import vision as vision_mod
         try:
-            settings = self.cfg.chat_settings()
-            provider = settings.active_config
-            provider.api_key = self.cfg.resolve_api_key(provider)
             shot = vision_mod.capture_screen_bytes()
             app_info = vision_mod.foreground_app_info()
             reply = vision_mod.ask_about_screen(
-                shot, app_info, settings.default_system_prompt, provider
+                shot, app_info, system_prompt, provider
             )
             if shiboken6.isValid(self) is False:
                 return  # 窗口已销毁（退出/切角色），不再触碰信号
@@ -2877,9 +2934,6 @@ class PetWindow(QWidget):
         self._self_talk_images = list_self_talk_images(_resolve_self_talk_image_dir(self._self_talk_image_dir))
         self._self_talk_min_interval = max(5.0, float(self.cfg.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
         self._self_talk_max_interval = max(self._self_talk_min_interval, float(self.cfg.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
-        self.click_sound_enabled = bool(self.cfg.get('click_sound_enabled', True))
-        self.collision_sound_enabled = bool(self.cfg.get('collision_sound_enabled', True))
-        self.collision_sound_volume = float(self.cfg.get('collision_sound_volume', 0.70))
         self.click_sound_path = str(self.cfg.get('click_sound_path', '') or '')
         self._throw_speed_cap = physics_mod.throw_speed_cap(self.cfg.get('throw_strength'))
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))

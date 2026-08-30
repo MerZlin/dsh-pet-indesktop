@@ -152,3 +152,41 @@ def test_independent_vision_prefers_own_key_over_chat_key(monkeypatch):
     auth = called_with["headers"].get("Authorization")
     assert auth == "Bearer sk-vision-secret"
     assert "sk-chat-secret" not in str(auth)
+
+
+def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeypatch):
+    """回归测试：看看屏幕 worker 接收快照，不改写主线程 ProviderConfig 共享对象。"""
+    from pet.chat.models import ProviderConfig, ChatSettings
+    from pet.window import PetWindow
+    from pet.config import Config
+    from types import SimpleNamespace
+
+    shared_provider = ProviderConfig.from_dict("test-p", {
+        "model": "deepseek-v4-flash",
+        "api_key": "unresolved_or_empty",
+    })
+    shared_settings = ChatSettings(providers={"test-p": shared_provider}, active_provider="test-p")
+
+    win = PetWindow.__new__(PetWindow)
+    win.cfg = SimpleNamespace(
+        chat_settings=lambda: shared_settings,
+        resolve_api_key=lambda p: "sk-resolved-secret",
+    )
+    win._last_look_ts = 0.0
+    win._look_busy = False
+    bubbles = []
+    win.show_bubble = lambda msg, *a, **k: bubbles.append(msg)
+    threads = []
+    monkeypatch.setattr("threading.Thread", lambda **kwargs: SimpleNamespace(start=lambda: threads.append(kwargs)))
+
+    win._on_look_screen()
+
+    assert len(threads) == 1
+    passed_args = threads[0]["args"]
+    passed_provider, passed_system_prompt = passed_args
+    # 传递给 worker 的 provider 是快照，含有已解析的 key
+    assert passed_provider.api_key == "sk-resolved-secret"
+    assert passed_provider is not shared_provider
+    # 共享对象未被污染改写
+    assert shared_provider.api_key == "unresolved_or_empty"
+

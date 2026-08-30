@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 from pet import catalog, collision
 from pet import physics as physics_mod
 from pet.config import Config
-from pet.window import PetWindow
+from pet.window import PetWindow, THROWN
 
 NAMES = [
     catalog.IDLE,
@@ -848,4 +848,33 @@ def test_soft_clamp_preserves_sub_cap_velocity_and_clamps_super_cap_velocity(tmp
     assert win._phys_vel[1] == pytest.approx(expected_vy)
     assert math.hypot(*win._phys_vel) == pytest.approx(expected_clamped)
 
+    win.close()
+def test_thrown_pet_ignores_sub_floor_contact_impulse(tmp_path, app):
+    """回归：THROWN 状态的桌宠不吸收低于 COLLISION_CONTACT_DV_FLOOR 的
+    静置接触微冲量——否则贴地桌宠被每 tick 的 e=0 抵消冲量（十几 px/s）
+    永远顶在静止线以上，原地自供能抖动。"""
+    win, _ = _make_pet_window(tmp_path, "pet_floor")
+    win._interaction_state = THROWN
+    win._physics_mode = 'throw'
+    win._phys_vel[:] = [20.0, 0.0]
+
+    impulse = {
+        "a": "pet_floor", "b": "other", "pair": "other|pet_floor",
+        "dvx_a": 12.0, "dvy_a": -1.0, "dvx_b": 0.0, "dvy_b": 0.0,
+        "dx_a": 0.0, "dy_a": 0.0, "dx_b": 0.0, "dy_b": 0.0,
+        "ax": float(win.collision_content_rect().center().x()),
+        "ay": float(win.collision_content_rect().center().y()),
+        "bx": 0.0, "by": 0.0,
+    }
+    win._on_collision_impulse(impulse)
+    # 12px/s 微冲量被丢弃，速度保持不变（不再被喂能量）
+    assert win._phys_vel == pytest.approx([20.0, 0.0])
+
+    # 超过地板的冲量仍正常吸收
+    impulse["dvx_a"] = 60.0
+    impulse["tick"] = 1
+    impulse["ax"] = float(win.collision_content_rect().center().x())
+    impulse["ay"] = float(win.collision_content_rect().center().y())
+    win._on_collision_impulse(impulse)
+    assert win._phys_vel[0] == pytest.approx(80.0)
     win.close()

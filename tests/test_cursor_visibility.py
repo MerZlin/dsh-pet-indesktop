@@ -125,3 +125,41 @@ def test_cursor_transition_is_deferred_until_release(monkeypatch):
     win._auto_cursor_hidden = False
     win._apply_effective_mouse_through()
     assert win._applied == [False]
+
+
+def test_fs_watch_loop_survives_transient_runtime_error(monkeypatch):
+    """回归测试：全屏/光标监视线程遇到瞬时异常不应退出，应继续循环。"""
+    import threading
+    from pet import vision
+
+    win = PetWindow.__new__(PetWindow)
+    win._fs_stop = threading.Event()
+    win.cfg = {'cursor_hidden_passthrough': True, 'auto_hide_fullscreen': False}
+    win._cursor_hidden_passthrough = True
+    win.auto_hide_fullscreen = False
+    emitted = []
+    win.cursor_visibility_changed = SimpleNamespace(emit=lambda val: emitted.append(val))
+
+    calls = 0
+
+    def flaky_get_cursor_visibility():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient win32 error")
+        # 第二次成功
+        return "HIDDEN"
+
+    def fake_emit(val):
+        emitted.append(val)
+        win._fs_stop.set()
+
+    win.cursor_visibility_changed = SimpleNamespace(emit=fake_emit)
+    monkeypatch.setattr("pet.vision.get_cursor_visibility", flaky_get_cursor_visibility)
+    monkeypatch.setattr("shiboken6.isValid", lambda obj: True)
+
+    # 运行 watcher loop
+    win._fs_watch_loop()
+    assert calls >= 2
+    assert emitted == ["HIDDEN"]
+
