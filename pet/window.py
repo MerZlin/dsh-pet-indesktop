@@ -352,6 +352,7 @@ class PetWindow(QWidget):
         self.cfg = config
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
+        self.on_open_quick_chat = None
         self.on_open_modern_chat = None
         self.on_open_chat_settings = None
         self.on_show_balance = None
@@ -2095,7 +2096,8 @@ class PetWindow(QWidget):
             if self.idles:
                 self._switch(self._pick(self.idles))  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
-            self._on_click()
+            if not self._try_open_quick_chat_from_bubble(g):
+                self._on_click()
         self._dragging = False
         self._interaction_state = "IDLE"
         self._press_global = None
@@ -2108,6 +2110,19 @@ class PetWindow(QWidget):
 
     def _clear_just_dragged(self) -> None:
         self._just_dragged = False
+
+    def _try_open_quick_chat_from_bubble(self, global_pos) -> bool:
+        """点击桌宠头顶的气泡时打开快速对话（而不是触发 Q 弹）。"""
+        callback = getattr(self, "on_open_quick_chat", None)
+        if not callable(callback):
+            return False
+        bubble = getattr(self, "_speech_bubble", None)
+        if bubble is None or not bubble.isVisible():
+            return False
+        if not bubble.geometry().contains(global_pos):
+            return False
+        callback()
+        return True
 
     def _on_click(self) -> None:
         """真点击 → 随机一个点击回应动画，并重置当前动画（可连续点击打断）。"""

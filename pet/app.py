@@ -474,6 +474,7 @@ class PetApp:
         win = PetWindow(lib, self.config)
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
+        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
         win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
         win.on_show_balance = self.show_balance if self.enable_chat else None
         win.on_check_update = self.check_update
@@ -534,6 +535,7 @@ class PetApp:
         win = PetWindow(lib, self.config)
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
+        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
         win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
         win.on_show_balance = self.show_balance if self.enable_chat else None
         win.on_check_update = self.check_update
