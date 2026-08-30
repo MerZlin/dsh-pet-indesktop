@@ -360,6 +360,7 @@ class PetWindow(QWidget):
         self._collision_epoch = ''
         self._collision_peer_snapshots: dict[str, dict[str, Any]] = {}
         self._predicted_bounces: dict[str, float] = {}
+        self._pending_predicted_bounce: tuple[float, float] | None = None
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
         self.on_open_modern_chat = None
@@ -1004,6 +1005,7 @@ class PetWindow(QWidget):
         self._collision_epoch = ''
         self._collision_peer_snapshots.clear()
         self._predicted_bounces.clear()
+        self._pending_predicted_bounce = None
         self._sync_collision_policy()
 
     def _sync_collision_policy(self) -> None:
@@ -1050,21 +1052,26 @@ class PetWindow(QWidget):
             flags |= collision.FLAG_AUTO_CURSOR_HIDDEN
         if bool(self.cfg.get('collision_enabled', True)):
             flags |= collision.FLAG_COLLISION_ENABLED
+        if self._pending_predicted_bounce is not None:
+            flags |= collision.FLAG_PREDICTED_BOUNCE
         return flags
 
     def _collision_velocity(self) -> tuple[float, float]:
         if self._interaction_state == DRAGGING and len(self._trail) >= 2:
-            t0, x0, y0 = self._trail[-2]
-            t1, x1, y1 = self._trail[-1]
-            dt = max(0.001, t1 - t0)
-            return (x1 - x0) / dt, (y1 - y0) / dt
+            latest_t = self._trail[-1][0]
+            samples = [sample for sample in self._trail if latest_t - sample[0] <= 0.1]
+            if len(samples) >= 2:
+                t0, x0, y0 = samples[0]
+                t1, x1, y1 = samples[-1]
+                dt = max(0.001, t1 - t0)
+                return (x1 - x0) / dt, (y1 - y0) / dt
         return float(self._phys_vel[0]), float(self._phys_vel[1])
 
     def _collision_state(self) -> dict[str, Any]:
         rect = self.collision_content_rect()
         vx, vy = self._collision_velocity()
         circles = collision.circles_from_rect(rect.x(), rect.y(), rect.width(), rect.height())
-        return {
+        state = {
             'seq': self._collision_seq,
             'ts': time.monotonic(),
             'x': float(rect.center().x()), 'y': float(rect.center().y()),
@@ -1078,6 +1085,9 @@ class PetWindow(QWidget):
             'character': str(self.cfg.get('character', '')),
             'scale': float(self.scale),
         }
+        if self._pending_predicted_bounce is not None:
+            state['bounce_vx'], state['bounce_vy'] = self._pending_predicted_bounce
+        return state
 
     def _submit_collision_state(self, force: bool = False) -> None:
         session = getattr(self, '_collision_session', None)
@@ -1100,6 +1110,8 @@ class PetWindow(QWidget):
         self._collision_last_state = comparable
         self._collision_last_submit_at = now
         session.submit_state(state)
+        if self._pending_predicted_bounce is not None:
+            self._pending_predicted_bounce = None
         if collision_debug.ENABLED:
             collision_debug.log(
                 getattr(session, 'runtime_id', ''), 'state_submit',
@@ -1115,6 +1127,8 @@ class PetWindow(QWidget):
         epoch = str(message.get('epoch') or '')
         if not epoch or (self._collision_epoch and epoch != self._collision_epoch):
             return
+        if epoch != self._collision_epoch:
+            self._pending_predicted_bounce = None
         self._collision_epoch = epoch
         runtime_id = str(getattr(getattr(self, '_collision_session', None), 'runtime_id', ''))
         now = time.monotonic()
@@ -3072,7 +3086,9 @@ class PetWindow(QWidget):
         ):
             self._stop_physics()
 
-    def _predict_collision_bounce(self, start_x: float, start_y: float) -> None:
+    def _predict_collision_bounce(self, start_x: float, start_y: float,
+                                  incoming_vx: float | None = None,
+                                  incoming_vy: float | None = None) -> None:
         if (self._physics_mode != 'throw'
                 or not bool(self.cfg.get('collision_enabled', True))
                 or self._collision_session is None):
@@ -3099,6 +3115,8 @@ class PetWindow(QWidget):
                 scale=float(self.scale),
                 collision_mass_scale=float(self.cfg.get('collision_mass_scale', 1.0))),
             flags=self._collision_flags(), circles=current_circles)
+        bounce_vx = own.vx if incoming_vx is None else incoming_vx
+        bounce_vy = own.vy if incoming_vy is None else incoming_vy
 
         for peer_id, raw_peer in self._collision_peer_snapshots.items():
             flags = int(raw_peer.get('flags', 0))
@@ -3149,6 +3167,8 @@ class PetWindow(QWidget):
                 self._phys_vel[:] = [self._phys_vel[0] * clamped / speed,
                                      self._phys_vel[1] * clamped / speed]
             self._predicted_bounces[pair] = now
+            self._pending_predicted_bounce = (float(bounce_vx), float(bounce_vy))
+            self._submit_collision_state(force=True)
             if not self._squash_active and now - self._last_collision_squash_at >= 0.25:
                 self._last_collision_squash_at = now
                 self._start_squash()

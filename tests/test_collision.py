@@ -288,8 +288,8 @@ class TestCollisionImpulseAndMomentum:
         )
         # 固定体速度不受任何影响
         assert dvx_fix == 0.0 and dvy_fix == 0.0
-        # 动态体完全吸收反弹
-        assert dvx_dyn == pytest.approx(-400.0 * (1.0 + 0.82), abs=1e-3)
+        # 任一方无限质量时 e=0，动态体只消除接近速度，不被放大反弹
+        assert dvx_dyn == pytest.approx(-400.0, abs=1e-3)
 
         # Case B: 两个都无限质量 -> 无速度冲量
         m_fixed2 = collision.MemberState(
@@ -301,6 +301,36 @@ class TestCollisionImpulseAndMomentum:
         )
         assert j == 0.0
         assert dvx_a == 0.0 and dvx_b == 0.0
+
+    def test_infinite_mass_pushes_target_at_drag_speed_without_amplification(self):
+        dragging = collision.MemberState(
+            runtime_id="drag", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
+            vx=500.0, vy=0.0, is_infinite_mass=True,
+        )
+        target = collision.MemberState(
+            runtime_id="target", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
+            vx=0.0, vy=0.0, mass=1.0,
+        )
+        _, dvx_drag, _, dvx_target, _ = collision.solve_collision_impulse(
+            dragging, target, 1.0, 0.0, restitution=0.82,
+        )
+        assert dvx_drag == 0.0
+        assert dvx_target == pytest.approx(500.0)
+
+    def test_finite_mass_collision_keeps_configured_restitution(self):
+        moving = collision.MemberState(
+            runtime_id="moving", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
+            vx=500.0, vy=0.0, mass=1.0,
+        )
+        target = collision.MemberState(
+            runtime_id="target", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
+            vx=0.0, vy=0.0, mass=1.0,
+        )
+        _, dvx_moving, _, dvx_target, _ = collision.solve_collision_impulse(
+            moving, target, 1.0, 0.0, restitution=0.82,
+        )
+        assert dvx_moving == pytest.approx(-455.0)
+        assert dvx_target == pytest.approx(455.0)
 
     def test_low_speed_contact_uses_inelastic_impulse(self):
         """低于 80px/s 的接近用 e=0 非弹性冲量：只挡不弹，低速接触有实体感。"""

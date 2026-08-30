@@ -42,6 +42,7 @@ FLAG_MOUSE_THROUGH: int = 1 << 6        # 64: 鼠标穿透
 FLAG_AUTO_CURSOR_HIDDEN: int = 1 << 7   # 128: 自动光标穿透/隐藏
 FLAG_PAUSED: int = 1 << 8               # 256: 暂停活动
 FLAG_COLLISION_ENABLED: int = 1 << 9    # 512: 开启碰撞
+FLAG_PREDICTED_BOUNCE: int = 1 << 10    # 1024: 客户端已预测的反弹事件
 
 
 @dataclass
@@ -370,6 +371,8 @@ def solve_collision_impulse(
         return 0.0, 0.0, 0.0, 0.0, 0.0
 
     e = max(0.0, min(1.0, float(restitution)))
+    if state_a.is_infinite_mass or state_b.is_infinite_mass:
+        e = 0.0
     if vn >= -IMPULSE_MIN_APPROACH_SPEED:
         e = 0.0
     sum_inv_m = inv_m_a + inv_m_b
@@ -468,6 +471,7 @@ def solve_multi_body_collision(
     impulse_cap: float = DEFAULT_IMPULSE_CAP,
     max_separation_iterations: int = 4,
     swept_collisions: Optional[Dict[str, tuple[bool, float, float, float, float, float]]] = None,
+    ignored_pairs: Optional[Set[str]] = None,
 ) -> tuple[List[ImpulseResult], Dict[str, tuple[float, float]], Dict[str, int]]:
     """三体及以上/同快照的多体碰撞求解。
     
@@ -506,6 +510,8 @@ def solve_multi_body_collision(
             was_swept = False
 
             pair_key = f"{m1.runtime_id}|{m2.runtime_id}"
+            if ignored_pairs and pair_key in ignored_pairs:
+                continue
             if not collided and swept_collisions:
                 collided, nx, ny, overlap, cx, cy = swept_collisions.get(
                     pair_key, (False, 0.0, 0.0, 0.0, 0.0, 0.0))

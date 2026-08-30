@@ -585,10 +585,15 @@ def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path,
 
     before = win._phys_vel[0]
     win._predict_collision_bounce(win._phys_pos[0], win._phys_pos[1])
-    assert win._phys_vel[0] < 0.0
+    assert win._phys_vel[0] == pytest.approx(0.0)
     assert math.hypot(*win._phys_vel) <= win._throw_speed_cap + 1e-6
     assert win._squash_active is True
     assert "pet_a|pet_b" in win._predicted_bounces
+    submitted = session.submitted_states[-1]
+    assert submitted["flags"] & collision.FLAG_PREDICTED_BOUNCE
+    assert submitted["bounce_vx"] == pytest.approx(before)
+    assert submitted["bounce_vy"] == pytest.approx(0.0)
+    assert submitted["vx"] == pytest.approx(win._phys_vel[0])
 
     predicted_velocity = tuple(win._phys_vel)
     predicted_position = (win.x(), win.y())
@@ -597,6 +602,18 @@ def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path,
     app.processEvents()
     assert tuple(win._phys_vel) == predicted_velocity
     assert (win.x(), win.y()) == predicted_position
+    win.close()
+
+
+def test_drag_collision_velocity_averages_recent_trail_and_suppresses_spike(tmp_path, app):
+    win, _ = _make_pet_window(tmp_path, "pet_a")
+    win._interaction_state = "DRAGGING"
+    win._trail = [(0.00, 0.0, 0.0), (0.04, 4.0, 0.0),
+                  (0.08, 8.0, 0.0), (0.10, 28.0, 0.0)]
+    vx, vy = win._collision_velocity()
+    assert vx == pytest.approx(280.0)
+    assert vx < 1000.0
+    assert vy == 0.0
     win.close()
 
 

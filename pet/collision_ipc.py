@@ -61,6 +61,7 @@ class _CollisionWorker(QObject):
         self.members: dict[str, dict[str, Any]] = {}
         self.previous_members: dict[str, dict[str, Any]] = {}
         self._swept_pair_versions: dict[str, tuple[int, int]] = {}
+        self._predicted_pair_ticks: dict[str, int] = {}
         self.latest_state: dict[str, Any] = {}
         self.epoch = ""
         self.tick = 0
@@ -296,6 +297,9 @@ class _CollisionWorker(QObject):
                 self._last_control_message = self._now()
                 if changed:
                     self.epoch = epoch
+                    self.latest_state["flags"] = int(self.latest_state.get("flags", 0)) & ~collision.FLAG_PREDICTED_BOUNCE
+                    self.latest_state.pop("bounce_vx", None)
+                    self.latest_state.pop("bounce_vy", None)
                     self.role_changed.emit(False, epoch)
                     self.policy_changed.emit(message.get("policy") or {})
                     self.snapshot_ready.emit(message)
@@ -335,6 +339,7 @@ class _CollisionWorker(QObject):
         self.members.clear()
         self.previous_members.clear()
         self._swept_pair_versions.clear()
+        self._predicted_pair_ticks.clear()
         for timer in self._timers:
             timer.stop()
             timer.deleteLater()
@@ -445,10 +450,79 @@ class _CollisionWorker(QObject):
         swept = {}
         sorted_active = sorted(active, key=lambda item: item.runtime_id)
         state_by_id = {str(state.get("runtime_id")): state for state in self.members.values()}
+        predicted_results = []
+        predicted_pairs = set()
+        for predicted in sorted_active:
+            raw = state_by_id.get(predicted.runtime_id, {})
+            if not int(raw.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE:
+                continue
+            bounce_vx = raw.get("bounce_vx")
+            bounce_vy = raw.get("bounce_vy")
+            for other in sorted_active:
+                if other.runtime_id == predicted.runtime_id:
+                    continue
+                pair = "|".join(sorted((predicted.runtime_id, other.runtime_id)))
+                if pair in predicted_pairs:
+                    continue
+                if bounce_vx is None or bounce_vy is None:
+                    break
+                event_member = collision.MemberState(
+                    predicted.runtime_id, predicted.x, predicted.y,
+                    predicted.radius_x, predicted.radius_y,
+                    float(bounce_vx), float(bounce_vy), predicted.mass,
+                    predicted.is_infinite_mass, predicted.flags, predicted.instance_id,
+                    predicted.character, predicted.scale, predicted.w, predicted.h,
+                    predicted.circles,
+                )
+                hit = collision.check_collision_members(event_member, other)
+                if not hit[0]:
+                    previous = active_previous.get(predicted.runtime_id)
+                    if previous and previous.circles is not None and other.circles is not None:
+                        hit = collision.swept_circle_chain_collision(
+                            previous.circles, predicted.circles, other.circles, other.circles)
+                if not hit[0]:
+                    continue
+                _, nx, ny, overlap, cx, cy = hit
+                j, _, _, dvx_other, dvy_other = collision.solve_collision_impulse(
+                    event_member, other, nx, ny,
+                    restitution=self.policy["collision_restitution"],
+                    friction=self.policy["collision_friction"],
+                    impulse_cap=self.policy["collision_impulse_cap"],
+                )
+                sep, _, _, dx_other, dy_other = collision.calculate_position_separation(
+                    overlap, nx, ny,
+                    0.0 if predicted.is_infinite_mass else 1.0 / predicted.mass,
+                    0.0 if other.is_infinite_mass else 1.0 / other.mass,
+                )
+                a, b = sorted((predicted.runtime_id, other.runtime_id))
+                other_is_a = other.runtime_id == a
+                predicted_results.append(collision.ImpulseResult(
+                    tick=self.tick, pair=pair, a=a, b=b, nx=nx, ny=ny, j=j, sep=sep,
+                    contact_x=cx, contact_y=cy,
+                    dvx_a=dvx_other if other_is_a else 0.0,
+                    dvy_a=dvy_other if other_is_a else 0.0,
+                    dvx_b=0.0 if other_is_a else dvx_other,
+                    dvy_b=0.0 if other_is_a else dvy_other,
+                    dx_a=dx_other if other_is_a else 0.0,
+                    dy_a=dy_other if other_is_a else 0.0,
+                    dx_b=0.0 if other_is_a else dx_other,
+                    dy_b=0.0 if other_is_a else dy_other,
+                    ax=predicted.x if a == predicted.runtime_id else other.x,
+                    ay=predicted.y if a == predicted.runtime_id else other.y,
+                    bx=other.x if b == other.runtime_id else predicted.x,
+                    by=other.y if b == other.runtime_id else predicted.y,
+                ))
+                predicted_pairs.add(pair)
+                break
+            raw["flags"] = int(raw.get("flags", 0)) & ~collision.FLAG_PREDICTED_BOUNCE
+            raw.pop("bounce_vx", None)
+            raw.pop("bounce_vy", None)
         for i, member_a in enumerate(sorted_active):
             for member_b in sorted_active[i + 1:]:
                 prev_a, prev_b = active_previous.get(member_a.runtime_id), active_previous.get(member_b.runtime_id)
                 pair = f"{member_a.runtime_id}|{member_b.runtime_id}"
+                if pair in predicted_pairs or self._predicted_pair_ticks.get(pair, -2) >= self.tick - 1:
+                    continue
                 version = (int(state_by_id[member_a.runtime_id].get("seq", -1)),
                            int(state_by_id[member_b.runtime_id].get("seq", -1)))
                 if prev_a and prev_b and self._swept_pair_versions.get(pair) != version:
@@ -458,7 +532,18 @@ class _CollisionWorker(QObject):
         results, _, self.overlap_history = collision.solve_multi_body_collision(
             active, self.tick, self.overlap_history,
             restitution=self.policy["collision_restitution"], friction=self.policy["collision_friction"],
-            impulse_cap=self.policy["collision_impulse_cap"], swept_collisions=swept)
+            impulse_cap=self.policy["collision_impulse_cap"], swept_collisions=swept,
+            ignored_pairs=predicted_pairs | {
+                pair for pair, tick in self._predicted_pair_ticks.items()
+                if tick >= self.tick - 1
+            })
+        results = predicted_results + results
+        self._predicted_pair_ticks = {
+            pair: tick for pair, tick in self._predicted_pair_ticks.items()
+            if self.tick - tick <= 1
+        }
+        for pair in predicted_pairs:
+            self._predicted_pair_ticks[pair] = self.tick
         moving = any(math.hypot(float(v.get("vx", 0)), float(v.get("vy", 0))) > 20 or
                      int(v.get("flags", 0)) & (collision.FLAG_THROWN | collision.FLAG_DRAGGING)
                      for v in self.members.values())
@@ -483,6 +568,10 @@ class _CollisionWorker(QObject):
             self.previous_members.pop(runtime_id, None)
             self._swept_pair_versions = {
                 pair: version for pair, version in self._swept_pair_versions.items()
+                if runtime_id not in pair.split("|")
+            }
+            self._predicted_pair_ticks = {
+                pair: tick for pair, tick in self._predicted_pair_ticks.items()
                 if runtime_id not in pair.split("|")
             }
 

@@ -95,6 +95,102 @@ def test_coordinator_sweeps_fast_circle_chain_and_emits_impulse():
     assert received[0]["contact_x"] == pytest.approx(165.0)
 
 
+def _coordinator_with_members(*states):
+    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
+        "collision_enabled": True, "collision_restitution": .82,
+        "collision_friction": .08, "collision_mass_scale": 1.0,
+        "collision_impulse_cap": 9000.0,
+    })
+    worker.server = object()
+    worker.epoch = "epoch-a"
+    worker._now = staticmethod(lambda: 1.0)
+    worker.members = {
+        state["runtime_id"]: dict(state, last_seen=1.0) for state in states
+    }
+    return worker
+
+
+@pytest.mark.parametrize(
+    ("shooter_scale", "target_scale", "minimum_target_dv"),
+    [(0.3, 2.0, 500.0), (2.0, 0.3, 1500.0)],
+)
+def test_predicted_bounce_event_sends_impulse_only_to_target(
+        shooter_scale, target_scale, minimum_target_dv):
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    shooter = {
+        "runtime_id": "a", "seq": 2, "x": 0.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0, "vy": 0.0, "bounce_vx": 2000.0, "bounce_vy": 0.0,
+        "scale": shooter_scale, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+    }
+    target = {
+        "runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0, "vy": 0.0, "scale": target_scale, "flags": flags,
+    }
+    worker = _coordinator_with_members(shooter, target)
+    received = []
+    worker.impulse_ready.connect(received.append)
+
+    worker._coordinator_tick()
+
+    assert len(received) == 1
+    assert received[0]["dvx_a"] == 0.0
+    assert received[0]["dvy_a"] == 0.0
+    assert received[0]["dvx_b"] > minimum_target_dv
+    assert worker.members["a"]["vx"] == -800.0
+    assert not worker.members["a"]["flags"] & collision.FLAG_PREDICTED_BOUNCE
+    assert "bounce_vx" not in worker.members["a"]
+
+    worker._coordinator_tick()
+    assert len(received) == 1
+
+
+def test_predicted_bounce_and_sweep_emit_pair_only_once_in_same_tick():
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    shooter = {
+        "runtime_id": "a", "seq": 2, "x": 60.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[60.0, 0.0, 30.0]],
+        "vx": -500.0, "vy": 0.0, "bounce_vx": 2000.0, "bounce_vy": 0.0,
+        "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+    }
+    target = {
+        "runtime_id": "b", "seq": 1, "x": 120.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[120.0, 0.0, 30.0]],
+        "vx": 0.0, "vy": 0.0, "flags": flags,
+    }
+    worker = _coordinator_with_members(shooter, target)
+    worker.previous_members = {
+        "a": dict(shooter, seq=1, x=0.0, circles=[[0.0, 0.0, 30.0]]),
+        "b": dict(target),
+    }
+    received = []
+    worker.impulse_ready.connect(received.append)
+    worker._coordinator_tick()
+    assert [message["pair"] for message in received] == ["a|b"]
+
+
+def test_state_without_predicted_bounce_fields_uses_normal_collision_path():
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    moving = {
+        "runtime_id": "a", "seq": 1, "x": 0.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+        "vx": 500.0, "vy": 0.0, "flags": flags,
+    }
+    target = {
+        "runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0, "vy": 0.0, "flags": flags,
+    }
+    worker = _coordinator_with_members(moving, target)
+    received = []
+    worker.impulse_ready.connect(received.append)
+    worker._coordinator_tick()
+    assert len(received) == 1
+    assert received[0]["dvx_a"] < 0.0
+    assert received[0]["dvx_b"] > 0.0
+
+
 def test_client_watermark_and_epoch_switch():
     worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "client", "", {})
     worker.epoch = "epoch-a"
