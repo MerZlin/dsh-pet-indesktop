@@ -74,6 +74,31 @@ def test_windows_autostart_variants_do_not_affect_each_other(monkeypatch):
     assert autostart_mod.is_enabled() is True
 
 
+def test_cleanup_stale_entries_removes_only_missing_paths(monkeypatch, tmp_path):
+    fake = _force_win(monkeypatch)
+    existing_dir = tmp_path / "existing"
+    existing_dir.mkdir()
+    existing_exe = existing_dir / "dsh-pet.exe"
+    existing_exe.write_bytes(b"MZ")
+    missing_dir = tmp_path / "deleted"
+    missing_exe = missing_dir / "dsh-pet.exe"
+
+    fake.values = {
+        "dsh-pet-standalone-webm": (
+            f'cmd /c start "" /D "{existing_dir}" "{existing_exe}"'
+        ),
+        "dsh-pet-standalone-webm-chat": (
+            f'cmd /c start "" /D "{missing_dir}" "{missing_exe}"'
+        ),
+    }
+
+    removed = autostart_mod.cleanup_stale_entries()
+
+    assert removed == 1
+    assert "dsh-pet-standalone-webm" in fake.values
+    assert "dsh-pet-standalone-webm-chat" not in fake.values
+
+
 def _force_linux(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(autostart_mod, "_IS_WIN", False)
     monkeypatch.setattr(autostart_mod, "_IS_MAC", False)

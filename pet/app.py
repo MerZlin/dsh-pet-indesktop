@@ -797,6 +797,9 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     _setup_logging(config)
     logging.info('dsh-pet-standalone 启动')
     _cleanup_stale_runtime_dirs()
+    stale_removed = autostart_mod.cleanup_stale_entries()
+    if stale_removed:
+        logging.info("已清理 %d 个指向不存在路径的开机自启项", stale_removed)
 
     controller = PetApp(app, config, enable_chat=enable_chat)
     try:
