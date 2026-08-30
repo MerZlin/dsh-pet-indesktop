@@ -181,6 +181,16 @@ def _decode_to_wav(source: Path, cache: Path, volume: float) -> bool:
         return False
     try:
         decoder = classes[0]()
+        # 统一输出 16-bit PCM：源是浮点（如 mp3float）时直接写 WAV 会被
+        # 当 PCM32 播放成噪音，QSoundEffect 也只认整型 PCM
+        try:
+            requested = classes[1]()
+            requested.setSampleRate(48000)
+            requested.setChannelCount(2)
+            requested.setSampleFormat(classes[1].SampleFormat.Int16)
+            decoder.setAudioFormat(requested)
+        except Exception:
+            log.warning("设置解码输出格式失败，按源格式解码: %s", source)
         state = {"chunks": [], "format": None}
         def on_buffer_ready():
             while decoder.bufferAvailable():
@@ -195,7 +205,9 @@ def _decode_to_wav(source: Path, cache: Path, volume: float) -> bool:
                 return
             try:
                 sample_format = fmt.sampleFormat()
-                sample_width = {1: 1, 2: 2, 3: 4, 4: 4}.get(int(sample_format), 2)
+                # PySide6 返回 SampleFormat 枚举（不能直接 int()），mock/旧版返回 int
+                sample_width = {1: 1, 2: 2, 3: 4, 4: 4}.get(
+                    int(getattr(sample_format, "value", sample_format)), 2)
                 cache.parent.mkdir(parents=True, exist_ok=True)
                 with wave.open(str(cache), "wb") as out:
                     out.setnchannels(fmt.channelCount())
