@@ -28,6 +28,7 @@ from . import autostart as autostart_mod
 from . import balance as balance_mod
 from . import catalog
 from . import updater
+from .click_sound import warm_click_sound_effects
 from .config import APP_DIR_NAME, Config
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
@@ -426,6 +427,13 @@ class PetApp:
         win.on_hidden = self._notify_pet_hidden
         win.show()
 
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池在部分 Windows
+        # 环境需要 50~240ms，若留到第一次点击时再做会造成 Q 弹开头卡顿。
+        QTimer.singleShot(0, lambda: warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        ))
+
         tray = self._build_tray(win)
 
         # 清理旧对象（热切换时使用）
@@ -478,6 +486,13 @@ class PetApp:
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
         win.show()
+
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池在部分 Windows
+        # 环境需要 50~240ms，若留到第一次点击时再做会造成 Q 弹开头卡顿。
+        QTimer.singleShot(0, lambda: warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        ))
 
         tray = self._build_tray(win)
 

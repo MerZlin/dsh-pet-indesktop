@@ -139,11 +139,11 @@ def _play_with_effect(path: Path, volume: float) -> bool:
         return False
 
 
-def _player_pool_play(path: Path, volume: float) -> bool:
-    global _qt_player_index
+def _warm_player_pool() -> None:
+    """预创建 QMediaPlayer 池，避免首次点击时初始化 QtMultimedia 造成卡顿。"""
     classes = _qt_multimedia_classes()
     if classes is None:
-        return False
+        return
     try:
         if not _qt_player_pool:
             if _qt_player is not None and _qt_audio is not None:
@@ -154,6 +154,19 @@ def _player_pool_play(path: Path, volume: float) -> bool:
                 player, audio = classes[3](), classes[2]()
                 player.setAudioOutput(audio)
                 _qt_player_pool.append((player, audio))
+    except Exception:
+        log.exception("预创建 QMediaPlayer 池失败")
+
+
+def _player_pool_play(path: Path, volume: float) -> bool:
+    global _qt_player_index
+    classes = _qt_multimedia_classes()
+    if classes is None:
+        return False
+    try:
+        _warm_player_pool()
+        if not _qt_player_pool:
+            return False
         player, audio = _qt_player_pool[_qt_player_index % len(_qt_player_pool)]
         _qt_player_index += 1
         audio.setVolume(volume)
@@ -250,6 +263,36 @@ def _play_with_qt(path: Path, volume: float = 1.0) -> bool:
         _player_pool_play(path, volume)
         return True
     return _player_pool_play(path, volume)
+
+
+def warm_click_sound_effects(
+    pack: dict | None,
+    data_dir: Path | None = None,
+    limit: int = 8,
+) -> None:
+    """预创建点击音效对象，避免首次点击时初始化 QtMultimedia 造成卡顿。
+
+    启动或切换音效包后调用：WAV/已缓存音频预创建 QSoundEffect，
+    非 WAV 至少预创建 QMediaPlayer 池；音频解码仍按需异步进行。
+    limit 用于限制自定义文件夹随机音效的预热数量，避免一次创建过多对象。
+    """
+    if not _qt_available():
+        return
+    try:
+        _warm_player_pool()
+        candidates = resolve_click_sound_candidates(pack, data_dir)[:limit]
+        for path in candidates:
+            try:
+                if path.suffix.lower() == ".wav":
+                    _effect_for(path)
+                else:
+                    cache = _cache_path(path)
+                    if cache.is_file():
+                        _effect_for(cache)
+            except Exception:
+                log.exception("预热点击音效失败: %s", path)
+    except Exception:
+        log.exception("点击音效预热失败")
 
 
 def _play_with_system_player(path: Path) -> bool:

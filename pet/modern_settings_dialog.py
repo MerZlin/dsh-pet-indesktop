@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 from . import autostart as autostart_mod
 from . import catalog
 from .agent_link import AgentLinkManager
+from .click_sound import warm_click_sound_effects
 from .config import (
     DEFAULT_CONTEXT_MENU_APPEARANCE,
     DEFAULT_MENU_EASTER_EGG,
@@ -2090,6 +2091,10 @@ class ModernSettingsDialog(QDialog):
         self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
         self.config.set("click_sound_pack", self.click_sound_picker.value())
         self.config.set("click_sound_volume", float(self.click_sound_volume_spin.value()) / 100.0)
+        warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
         if self.click_balance_check is not None:
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())

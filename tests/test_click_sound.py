@@ -154,6 +154,33 @@ def test_mp3_second_click_uses_decoded_cache(monkeypatch, tmp_path):
     assert FakeQtEffect.instances[-1].play_count == 1
 
 
+def test_warm_player_pool_precreates_qt_players(monkeypatch):
+    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound, "_qt_player", None)
+    monkeypatch.setattr(click_sound, "_qt_audio", None)
+
+    click_sound._warm_player_pool()
+
+    assert len(click_sound._qt_player_pool) == 4
+
+
+def test_warm_click_sound_effects_precreates_wav_effect_and_pool(monkeypatch, tmp_path):
+    monkeypatch.setattr(click_sound, "_qt_available", lambda: True)
+    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound, "_qt_effects", {})
+    monkeypatch.setattr(click_sound, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound, "_qt_player", None)
+    monkeypatch.setattr(click_sound, "_qt_audio", None)
+
+    wav = _make_file(tmp_path, "click.wav")
+    pack = {"kind": "file", "id": "custom", "path": str(wav)}
+    click_sound.warm_click_sound_effects(pack, data_dir=tmp_path)
+
+    assert str(wav.resolve()) in click_sound._qt_effects
+    assert len(click_sound._qt_player_pool) == 4
+
+
 def test_resolve_click_sound_candidates_and_choose(tmp_path):
     # 1. file mode
     f = _make_file(tmp_path, "test.mp3")
