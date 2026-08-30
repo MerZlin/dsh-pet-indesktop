@@ -21,6 +21,13 @@ CI workflow 不再内联 PyInstaller 命令，而是直接调用上述脚本：
 
 **经验**：本地构建与 CI 必须共用同一份脚本，否则会出现“本地漏收集 QtMultimedia / keyring，CI 却正常”或反之的漂移。
 
+**典型案例（PR #39 修复）**：
+- `scripts/build_macos.sh` 曾漏掉 `--collect-all PySide6.QtMultimedia`（点击音效 MP3 等多媒体资源）和 chat 变体的 `--collect-all keyring`（API Key 系统安全存储）；
+- macOS 本地脚本还多打包了无人引用的 `pet/chat/styles.qss`；
+- Linux 此前没有本地构建脚本，只能照抄 CI 内联命令，同样存在漂移风险。
+
+**教训**：改任何构建参数（collect/add-data/exclude）时，只改脚本，不要同时维护 workflow 内联命令。
+
 ### 1.2 构建前编码隔离
 
 本地跑构建前设置：
@@ -84,6 +91,14 @@ monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
 ```
 
 改全局会导致 pathlib 等后续代码在非 Windows 上崩出 `WindowsPath`，并可能引发 pytest INTERNALERROR。
+
+**最近排查**：`tests/test_proactive.py` 曾用 `monkeypatch.setattr("pet.proactive.sys.platform", "darwin")`——这改的是**全局 `sys.platform`**。已改为替换模块内的 `sys` 引用：
+
+```python
+monkeypatch.setattr("pet.proactive.sys", SimpleNamespace(platform="darwin"))
+```
+
+**检查方式**：grep 测试代码确认没有 `setattr(..., "sys.platform", ...)` / `setattr(..., "os.name", ...)`。
 
 ---
 
@@ -149,7 +164,32 @@ git push origin v4.0.5
 
 ---
 
-## 五、发布前检查清单
+## 五、当前实现类似问题排查记录
+
+对现有代码做了一次同类问题扫描：
+
+### 5.1 QMessageBox 模态弹窗
+
+- 生产代码仍有 20+ 处 `QMessageBox.warning/information/question/critical`，对真实用户合理；
+- 测试侧已由 `tests/conftest.py` 全局 mock，无人值守环境不会再挂起；
+- 新增“保存/弹窗”类测试时，注意自行覆盖或依赖全局 mock。
+
+### 5.2 QWidget.move() 与 Wayland
+
+- 桌宠窗口、聊天窗、气泡、灵动岛都依赖 `QWidget.move()`；
+- `pet/app.py` 已在 Wayland 会话默认切到 `xcb`（XWayland），因此默认环境下这些 move 都可用；
+- 已知边界：如果用户显式设置 `QT_QPA_PLATFORM=wayland`，原生 Wayland 下 move 仍会被合成器限制；这是协议级限制，非本仓库 bug。
+
+### 5.3 平台条件导入 / 全局平台变量
+
+- `pet/autostart.py` 的 `winreg` 条件导入已通过 `raising=False` 处理；
+- 测试中 `click_sound.os` 使用 `SimpleNamespace` 替换模块属性，符合规范；
+- 已修复 `tests/test_proactive.py` 中一处误改全局 `sys.platform` 的问题（改为替换模块内 `sys` 引用）；
+- 后续新增 Windows 专用测试时，继续遵守“替换模块属性，不改全局”。
+
+---
+
+## 六、发布前检查清单
 
 - [ ] 构建前设置 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`
 - [ ] 本地全量测试通过（offscreen）
