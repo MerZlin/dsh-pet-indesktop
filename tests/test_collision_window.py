@@ -754,3 +754,62 @@ def test_move_event_submits_throttled_not_forced(tmp_path, app):
     assert len(session.submitted_states) == 1
 
     win.close()
+
+
+def test_stop_physics_clears_velocity_and_submits_zero_velocity(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_stop_phys")
+    win._phys_vel[:] = [350.0, -120.0]
+    win._enter_physics_mode("throw")
+    session.submitted_states.clear()
+
+    win._stop_physics()
+
+    assert win._phys_vel == [0.0, 0.0]
+    assert len(session.submitted_states) >= 1
+    last_state = session.submitted_states[-1]
+    assert last_state.get("vx") == 0.0
+    assert last_state.get("vy") == 0.0
+    win.close()
+
+
+def test_soft_clamp_preserves_sub_cap_velocity_and_clamps_super_cap_velocity(tmp_path, app):
+    win, _ = _make_pet_window(tmp_path, "pet_clamp")
+    cap = win._throw_speed_cap
+    assert cap > 0
+
+    # 1. speed < cap: 连续两次 dv=0 冲量事件后，速度严格不变
+    initial_vx, initial_vy = 200.0, 100.0
+    initial_speed = math.hypot(initial_vx, initial_vy)
+    assert initial_speed < cap
+    win._phys_vel[:] = [initial_vx, initial_vy]
+
+    zero_impulse = {
+        "a": "pet_clamp", "b": "other", "pair": "other|pet_clamp",
+        "dvx_a": 0.0, "dvy_a": 0.0, "dvx_b": 0.0, "dvy_b": 0.0,
+        "dx_a": 0.0, "dy_a": 0.0, "dx_b": 0.0, "dy_b": 0.0,
+        "ax": float(win.rect().center().x()), "ay": float(win.rect().center().y()),
+        "bx": 0.0, "by": 0.0,
+    }
+
+    win._on_collision_impulse(zero_impulse)
+    assert win._phys_vel == pytest.approx([initial_vx, initial_vy])
+
+    win._on_collision_impulse(zero_impulse)
+    assert win._phys_vel == pytest.approx([initial_vx, initial_vy])
+
+    # 2. speed > cap: 被压到 soft_clamp_speed(speed, cap)
+    super_vx, super_vy = cap * 1.5, cap * 0.5
+    super_speed = math.hypot(super_vx, super_vy)
+    assert super_speed > cap
+    win._phys_vel[:] = [super_vx, super_vy]
+
+    expected_clamped = physics_mod.soft_clamp_speed(super_speed, cap)
+    expected_vx = super_vx * expected_clamped / super_speed
+    expected_vy = super_vy * expected_clamped / super_speed
+
+    win._on_collision_impulse(zero_impulse)
+    assert win._phys_vel[0] == pytest.approx(expected_vx)
+    assert win._phys_vel[1] == pytest.approx(expected_vy)
+    assert math.hypot(*win._phys_vel) == pytest.approx(expected_clamped)
+
+    win.close()

@@ -1217,8 +1217,8 @@ class PetWindow(QWidget):
             self._phys_vel[0] += dvx
             self._phys_vel[1] += dvy
         speed = math.hypot(*self._phys_vel)
-        clamped = physics_mod.soft_clamp_speed(speed, self._throw_speed_cap)
-        if speed > 1e-6:
+        if speed > self._throw_speed_cap:
+            clamped = physics_mod.soft_clamp_speed(speed, self._throw_speed_cap)
             self._phys_vel[:] = [self._phys_vel[0] * clamped / speed, self._phys_vel[1] * clamped / speed]
         if abs(dx) > 1e-9 or abs(dy) > 1e-9:
             self._cancel_move()
@@ -3090,6 +3090,7 @@ class PetWindow(QWidget):
         self._physics_mode = None
         if getattr(self, '_interaction_state', IDLE) == THROWN:
             self._interaction_state = IDLE
+        self._phys_vel[:] = [0.0, 0.0]
         self._submit_collision_state(force=True)
 
     def _enter_physics_mode(self, mode: str) -> None:
@@ -3241,8 +3242,8 @@ class PetWindow(QWidget):
             self._phys_vel[0] += dvx
             self._phys_vel[1] += dvy
             speed = math.hypot(*self._phys_vel)
-            clamped = physics_mod.soft_clamp_speed(speed, self._throw_speed_cap)
-            if speed > 1e-6:
+            if speed > self._throw_speed_cap:
+                clamped = physics_mod.soft_clamp_speed(speed, self._throw_speed_cap)
                 self._phys_vel[:] = [self._phys_vel[0] * clamped / speed,
                                      self._phys_vel[1] * clamped / speed]
             self._predicted_bounces[pair] = now

@@ -107,6 +107,11 @@ def _coordinator_with_members(*states):
     worker.members = {
         state["runtime_id"]: dict(state, last_seen=1.0) for state in states
     }
+    for state in states:
+        if (int(state.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE
+                and state.get("bounce_vx") is not None
+                and state.get("bounce_vy") is not None):
+            worker._pending_predicted[state["runtime_id"]] = {**state, "_captured_at": 1.0}
     return worker
 
 
@@ -189,6 +194,107 @@ def test_state_without_predicted_bounce_fields_uses_normal_collision_path():
     assert len(received) == 1
     assert received[0]["dvx_a"] < 0.0
     assert received[0]["dvx_b"] > 0.0
+
+
+def test_predicted_bounce_overwritten_by_unflagged_state_still_emits_predicted_impulse():
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
+        "collision_enabled": True, "collision_restitution": .82,
+        "collision_friction": .08, "collision_mass_scale": 1.0,
+        "collision_impulse_cap": 9000.0,
+    })
+    worker.server = object()
+    worker.epoch = "epoch-a"
+    worker._now = staticmethod(lambda: 1.0)
+
+    socket_a = FakeSocket()
+    socket_b = FakeSocket()
+    worker.peers[socket_a] = "a"
+    worker.peers[socket_b] = "b"
+
+    # target state
+    worker._handle_message(socket_b, {
+        "type": "state", "seq": 1, "x": 50.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0, "vy": 0.0, "scale": 1.0, "flags": flags,
+    })
+
+    # shooter state with predicted bounce
+    worker._handle_message(socket_a, {
+        "type": "state", "seq": 2, "x": 0.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0, "vy": 0.0, "bounce_vx": 1500.0, "bounce_vy": 0.0,
+        "scale": 1.0, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+    })
+    assert "a" in worker._pending_predicted
+
+    # overwrite shooter state in members table with unflagged state
+    worker._handle_message(socket_a, {
+        "type": "state", "seq": 3, "x": 0.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0, "vy": 0.0,
+        "scale": 1.0, "flags": flags,
+    })
+    assert not (worker.members["a"]["flags"] & collision.FLAG_PREDICTED_BOUNCE)
+    assert "bounce_vx" not in worker.members["a"]
+    assert "a" in worker._pending_predicted
+
+    received = []
+    worker.impulse_ready.connect(received.append)
+    worker._coordinator_tick()
+
+    assert len(received) == 1
+    assert received[0]["dvx_a"] == 0.0
+    assert received[0]["dvy_a"] == 0.0
+    assert received[0]["dvx_b"] > 500.0
+    assert "a" not in worker._pending_predicted
+
+
+def test_predicted_bounce_ttl_expiration_cleans_pending_and_no_impulse():
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    target = {
+        "runtime_id": "b", "seq": 1, "x": 100.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[100.0, 0.0, 30.0]],
+        "vx": 0.0, "vy": 0.0, "scale": 1.0, "flags": flags,
+    }
+    worker = _coordinator_with_members(target)
+    worker._now = staticmethod(lambda: 2.0)
+    worker.members["a"] = {
+        "runtime_id": "a", "seq": 2, "x": 0.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0, "vy": 0.0, "scale": 1.0, "flags": flags, "last_seen": 2.0,
+    }
+    # _captured_at is 1.6, diff = 0.4s > 0.3s TTL
+    # x=0.0 vs x=100.0 with r=30 does not collide normally, but if pending were processed with bounce_vx=1500 (or overlap), it won't hit here anyway unless overlap, but at x=0 & x=50 overlap was 10px so regular collision hit.
+    worker._pending_predicted["a"] = {
+        "runtime_id": "a", "seq": 2, "x": 50.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
+        "vx": -800.0, "vy": 0.0, "bounce_vx": 1500.0, "bounce_vy": 0.0,
+        "scale": 1.0, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+        "_captured_at": 1.6,
+    }
+
+    received = []
+    worker.impulse_ready.connect(received.append)
+    worker._coordinator_tick()
+
+    assert "a" not in worker._pending_predicted
+    assert len(received) == 0
+
+
+def test_remove_member_cleans_pending_predicted():
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    shooter = {
+        "runtime_id": "a", "seq": 2, "x": 0.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0, "vy": 0.0, "bounce_vx": 2000.0, "bounce_vy": 0.0,
+        "scale": 1.0, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+    }
+    worker = _coordinator_with_members(shooter)
+    assert "a" in worker._pending_predicted
+    worker._remove_member("a")
+    assert "a" not in worker._pending_predicted
+    assert "a" not in worker.members
 
 
 def test_client_watermark_and_epoch_switch():
