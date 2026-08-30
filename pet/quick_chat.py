@@ -40,11 +40,9 @@ class QuickChatBubble(QFrame):
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setMinimumWidth(320)
         self.setMaximumWidth(460)
 
@@ -227,6 +225,7 @@ class QuickChatBubble(QFrame):
         self.position_near_pet()
         self.show()
         self.raise_()
+        self.activateWindow()
         self.input.setFocus()
 
     # ------------------------------------------------------------ 发送
