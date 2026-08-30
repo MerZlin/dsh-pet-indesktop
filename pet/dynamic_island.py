@@ -112,7 +112,8 @@ class DynamicIsland(QWidget):
     def _update_size(self) -> None:
         icon, name, info, status = self._visible_parts()
         fm = self.fontMetrics()
-        width = 28  # 左右内边距
+        # 左右边距各 16px，让状态灯到右边界的距离与图标到左边界的距离一致。
+        width = 32
         if icon:
             width += 28 + 8
         if name:
@@ -120,8 +121,7 @@ class DynamicIsland(QWidget):
         if info:
             width += fm.horizontalAdvance(self._info_text()) + 8
         if status:
-            width += 12 + 10
-        width += 12
+            width += 10
         self.setFixedSize(max(120, width), _CAPSULE_HEIGHT)
 
     def _apply_position(self) -> None:
