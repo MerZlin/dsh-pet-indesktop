@@ -180,6 +180,7 @@ class PetApp:
         self.chat_settings_dialog = None
         self.modern_settings_dialog = None
         self.island = None
+        self.quick_chat = None
         self._spawned_pet_count = 0
         self._pending_dialog_opens: set[str] = set()
         self._balance_busy = False
@@ -580,6 +581,21 @@ class PetApp:
         else:
             self.open_modern_chat()
 
+    def open_quick_chat(self) -> None:
+        """打开快速对话气泡；与完整聊天窗共用会话历史。"""
+        if not self.enable_chat or self.win is None:
+            return
+        from .quick_chat import QuickChatBubble
+
+        if self.quick_chat is None:
+            self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
+            self.quick_chat.open_chat_callback = self.open_chat
+        else:
+            self.quick_chat.pet_window = self.win
+            self.quick_chat.settings = self.config.chat_settings()
+            self.quick_chat.session = self.quick_chat._get_session()
+        self.quick_chat.show_for_pet(self.win)
+
     def open_legacy_chat(self) -> None:
         if not self.enable_chat or self.win is None:
             return
@@ -782,6 +798,7 @@ class PetApp:
 
         if self.enable_chat:
             menu.addAction('AI 对话', self.open_chat)
+            menu.addAction('快速对话（气泡）', self.open_quick_chat)
             menu.addAction('AI 设置', self.open_chat_settings)
         menu.addAction('桌宠设置', self.open_modern_settings)
 
