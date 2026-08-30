@@ -314,6 +314,13 @@ def _set_windows_click_through(hwnd: int, enabled: bool, user32=None) -> bool:
     return True
 
 
+def _set_speech_bubble_interactive(pet) -> None:
+    """按当前是否可打开快速对话，切换气泡鼠标穿透/可点击。"""
+    setter = getattr(pet._speech_bubble, "set_interactive", None)
+    if callable(setter):
+        setter(callable(getattr(pet, "on_open_quick_chat", None)))
+
+
 class WindowsPerPixelInputController:
     """根据光标所在像素动态切换 layered window 的输入穿透。
 
@@ -380,6 +387,7 @@ class PetWindow(QWidget):
         self._collision_impulse_watermarks = collision.WatermarkDeduplicator()
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
+        self.on_open_quick_chat = None
         self.on_open_modern_chat = None
         self.on_open_chat_settings = None
         self.on_show_balance = None
@@ -435,6 +443,7 @@ class PetWindow(QWidget):
         self._speech_bubble = PetSpeechBubble(
             style_id=str(config.get('self_talk_bubble_style', DEFAULT_SELF_TALK_BUBBLE_STYLE))
         )
+        self._speech_bubble.clicked.connect(self._on_speech_bubble_clicked)
         self._look_busy = False
         self._last_look_ts = 0.0
         self.look_done.connect(self._on_look_done)
@@ -2527,7 +2536,8 @@ class PetWindow(QWidget):
                     float(self.cfg.get("click_sound_volume", 0.70)),
                     self._press_sound_started_at,
                 )
-            self._on_click()
+            if not self._try_open_quick_chat_from_bubble(g):
+                self._on_click()
         self._dragging = False
         self._interaction_state = "IDLE"
         self._press_global = None
@@ -2542,6 +2552,23 @@ class PetWindow(QWidget):
     def _clear_just_dragged(self) -> None:
         self._just_dragged = False
 
+    def _on_speech_bubble_clicked(self) -> None:
+        if callable(getattr(self, "on_open_quick_chat", None)):
+            self.on_open_quick_chat()
+
+    def _try_open_quick_chat_from_bubble(self, global_pos) -> bool:
+        """点击桌宠头顶的气泡时打开快速对话（而不是触发 Q 弹）。"""
+        callback = getattr(self, "on_open_quick_chat", None)
+        if not callable(callback):
+            return False
+        bubble = getattr(self, "_speech_bubble", None)
+        if bubble is None or not bubble.isVisible():
+            return False
+        if not bubble.geometry().contains(global_pos):
+            return False
+        callback()
+        return True
+
     def _on_click(self) -> None:
         """真点击 → 随机一个点击回应动画，并重置当前动画（可连续点击打断）。"""
         if self._just_dragged:
@@ -2553,15 +2580,16 @@ class PetWindow(QWidget):
         # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹。
         # 先让 Q 弹/动画立刻开始，音效放到下一轮事件循环，避免任何音频
         # 初始化/文件扫描阻塞点击瞬间的画面更新。
+        click_name = self._pick(self.clicks)
         self._cancel_move()
         self._start_squash()
-        self._switch(self._pick(self.clicks))
+        self._switch(click_name)
         if resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir) is None:
             self._schedule_click_sound()
         if self.click_show_balance and callable(self.on_show_balance):
             self.on_show_balance(self)
         elif self.click_show_self_talk and self._self_talk_enabled:
-            if self._show_random_self_talk():
+            if self._show_click_self_talk(click_name):
                 self._schedule_self_talk(after_display=True)
 
     def _schedule_click_sound(self) -> None:
@@ -2799,6 +2827,17 @@ class PetWindow(QWidget):
             delay += self._self_talk_duration_seconds
         self._self_talk_timer.start(max(1000, int(round(delay * 1000))))
 
+    def _show_self_talk_text(self, text: str) -> bool:
+        if getattr(self, "_bubble_suppressed", False):
+            return False
+        duration_ms = int(round(self._self_talk_duration_seconds * 1000))
+        anchor = self.visible_content_rect()
+        _set_speech_bubble_interactive(self)
+        self._speech_bubble.show_text(
+            text, anchor, duration_ms, pet_scale=self.scale
+        )
+        return True
+
     def _show_random_self_talk(self) -> bool:
         if getattr(self, "_bubble_suppressed", False):
             return False
@@ -2816,14 +2855,20 @@ class PetWindow(QWidget):
         kind, value = random.choice(choices)
         duration_ms = int(round(self._self_talk_duration_seconds * 1000))
         anchor = self.visible_content_rect()
+        _set_speech_bubble_interactive(self)
         if kind == "image":
             return self._speech_bubble.show_image(
                 value, anchor, duration_ms, pet_scale=self.scale
             )
-        self._speech_bubble.show_text(
-            value, anchor, duration_ms, pet_scale=self.scale
-        )
-        return True
+        return self._show_self_talk_text(value)
+
+    def _show_click_self_talk(self, click_name: str) -> bool:
+        """优先播放当前点击动画绑定的台词；未绑定则回退全局随机自言自语。"""
+        character_id = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+        texts = self.cfg.click_talk_texts_for(character_id, click_name)
+        if texts:
+            return self._show_self_talk_text(random.choice(texts))
+        return self._show_random_self_talk()
 
     def _on_self_talk_timeout(self) -> None:
         if time.time() < self._bubble_busy_until:
@@ -2872,6 +2917,7 @@ class PetWindow(QWidget):
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。"""
         if not self.isVisible() or self._bubble_suppressed:
             return
+        _set_speech_bubble_interactive(self)
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
             str(text), self.visible_content_rect(), duration_ms,
@@ -3000,6 +3046,7 @@ class PetWindow(QWidget):
             return
         if not self.isVisible():
             return
+        _set_speech_bubble_interactive(self)
         self._speech_bubble.show_text(
             text, self.visible_content_rect(), duration_ms=2200,
             pet_scale=self.scale,

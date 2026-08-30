@@ -1143,7 +1143,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 188
     assert isinstance(dialog.sidebar, QListWidget)
     assert isinstance(dialog.pages, QStackedWidget)
-    expected_pages = ["常规", "桌宠行为", "外观", "快捷启动"]
+    expected_pages = ["常规", "灵动岛", "桌宠行为", "外观", "快捷启动"]
     if sys.platform == "win32":
         expected_pages.append("主动识屏")  # 主动识屏设置页仅 Windows + 有聊天能力时挂载
     expected_pages.append("AI 设置")
@@ -1200,18 +1200,18 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         return next(index for index in range(dialog.pages.count()) if dialog.pages.widget(index).isAncestorOf(row))
 
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_autostart")) == 0
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 1
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 1
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 3
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 3
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == (
-        5 if sys.platform == "win32" else 4  # AI 设置页索引：Windows 上「主动识屏」占 index 4
+        6 if sys.platform == "win32" else 5  # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
     )
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
     dialog.show()
-    dialog.pages.widget(1).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
+    dialog.pages.widget(2).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
     app.processEvents()
     label = texts_row.findChild(settings_mod.QLabel, "settingLabel")
     hint = texts_row.findChild(settings_mod.QLabel, "settingHint")
@@ -1473,8 +1473,8 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     dialog.search_edit.setFocus()
     dialog.search_edit.setText("API 地址")
     app.processEvents()
-    # AI 设置页索引：Windows 上「主动识屏」页占位 index 4，其余平台为 4
-    assert dialog.sidebar.currentRow() == (5 if sys.platform == "win32" else 4)
+    # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
+    assert dialog.sidebar.currentRow() == (6 if sys.platform == "win32" else 5)
     api_row = dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")
     assert api_row.property("searchMatch") is True
     QTest.keyClick(dialog.search_edit, Qt.Key.Key_Return)

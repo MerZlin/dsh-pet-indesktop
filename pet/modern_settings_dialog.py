@@ -1142,6 +1142,24 @@ class ModernSettingsDialog(QDialog):
         general_layout.addStretch(1)
         self._add_page("常规", "settings", self._page_shell("常规", general_content))
 
+        island_content = QWidget()
+        island_layout = QVBoxLayout(island_content)
+        island_layout.setContentsMargins(0, 0, 0, 0)
+        island_layout.setSpacing(18)
+        island_layout.addWidget(SettingsSection("灵动岛", [
+            SettingRow("dynamic_island_enabled", "启用灵动岛", "显示独立胶囊小窗；桌宠隐藏后仍可常驻。", self.island_enabled_check),
+            SettingRow("dynamic_island_icon", "显示图标", "在胶囊左侧显示角色图标。", self.island_icon_check),
+            SettingRow("dynamic_island_name", "显示名称", "显示当前角色名称。", self.island_name_check),
+            SettingRow("dynamic_island_info", "显示信息槽", "显示时间/余额/自定义短文本等信息。", self.island_info_check),
+            SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
+            SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
+            SettingRow("dynamic_island_style", "背景风格", "黑色 / 白色 / 苹果式玻璃质感。", self.island_style_select),
+            SettingRow("dynamic_island_icon", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
+            SettingRow("dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True),
+        ], island_content))
+        island_layout.addStretch(1)
+        self._add_page("灵动岛", "island", self._page_shell("灵动岛", island_content))
+
         behavior_content = QWidget()
         behavior_layout = QVBoxLayout(behavior_content)
         behavior_layout.setContentsMargins(0, 0, 0, 0)
@@ -1194,6 +1212,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
             SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
             SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
+            SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
         ], behavior_content))
         # Agent 联动：每个 Agent 一行自定义思考文案
         agent_thinking_rows = []
@@ -1508,6 +1527,9 @@ class ModernSettingsDialog(QDialog):
             directory=True,
             parent=self,
         )
+        self.click_talk_bindings_btn = QPushButton("编辑…", self)
+        self.click_talk_bindings_btn.setObjectName("clickTalkBindingsButton")
+        self.click_talk_bindings_btn.clicked.connect(self._open_click_talk_bindings)
 
         # Agent 联动：每个 Agent 的自定义 thinking 气泡文案
         agent_link_cfg = self.config.get("agent_link", {})
@@ -1635,6 +1657,42 @@ class ModernSettingsDialog(QDialog):
         self.egg_avatar_picker = ResourcePathPicker(str(avatar.resolve()), parent=self)
         self.egg_image_dir_picker = ResourcePathPicker(str(image_dir.resolve()), directory=True, parent=self)
 
+        # 灵动岛
+        island_cfg = self.config.get("dynamic_island", {})
+        if not isinstance(island_cfg, dict):
+            island_cfg = {}
+        self.island_enabled_check = ToggleSwitch(self)
+        self.island_enabled_check.setChecked(bool(island_cfg.get("enabled", False)))
+        self.island_icon_check = ToggleSwitch(self)
+        self.island_icon_check.setChecked(bool(island_cfg.get("show_icon", True)))
+        self.island_name_check = ToggleSwitch(self)
+        self.island_name_check.setChecked(bool(island_cfg.get("show_name", True)))
+        self.island_info_check = ToggleSwitch(self)
+        self.island_info_check.setChecked(bool(island_cfg.get("show_info", True)))
+        self.island_status_check = ToggleSwitch(self)
+        self.island_status_check.setChecked(bool(island_cfg.get("show_status", True)))
+        self.island_info_mode_select = ModernSelect(self, width=160)
+        for label, value in (
+            ("当前时间", "time"),
+            ("余额峰谷", "balance_tier"),
+            ("余额数值", "balance"),
+            ("自定义短文本", "custom"),
+        ):
+            self.island_info_mode_select.addItem(label, value)
+        self.island_info_mode_select.setCurrentData(str(island_cfg.get("info_mode") or "time"))
+        self.island_style_select = ModernSelect(self, width=160)
+        for label, value in (
+            ("黑色", "dark"),
+            ("白色", "light"),
+            ("玻璃质感", "glass"),
+        ):
+            self.island_style_select.addItem(label, value)
+        self.island_style_select.setCurrentData(str(island_cfg.get("style") or "dark"))
+        self.island_icon_select = ModernSelect(self, width=160)
+        for emoji in ("🐳", "🐟", "🐙", "🦭", "🐧", "🐱", "🐶", "🌟", "⚡", "❤️"):
+            self.island_icon_select.addItem(emoji, emoji)
+        self.island_icon_select.setCurrentData(str(island_cfg.get("icon") or "🐳"))
+        self.island_custom_text_edit = _line_edit(str(island_cfg.get("custom_text") or ""), width=220)
 
     # ------------------------------------------------------------ 主动识屏
         if sys.platform == "win32" and self.include_ai:
@@ -1854,11 +1912,12 @@ class ModernSettingsDialog(QDialog):
         keys = (
             "self_talk_duration", "self_talk_min", "self_talk_max",
             "self_talk_texts", "self_talk_images", "click_self_talk",
+            "click_talk_bindings",
         )
         controls = (
             self.self_talk_duration_spin, self.min_spin, self.max_spin,
             self.texts_edit, self.self_talk_image_dir_picker,
-            self.click_self_talk_check,
+            self.click_self_talk_check, self.click_talk_bindings_btn,
         )
         for key, control in zip(keys, controls):
             control.setEnabled(bool(enabled))
@@ -1878,6 +1937,16 @@ class ModernSettingsDialog(QDialog):
         if self.menu_font_select.findData(current_font) < 0:
             self.menu_font_select.addItem(current_font, current_font)
         self.menu_font_select.setCurrentData(current_font)
+
+    def _open_click_talk_bindings(self) -> None:
+        from .click_talk_dialog import ClickTalkBindingsDialog
+
+        click_names = None
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "clicks") and parent.clicks:
+            click_names = list(parent.clicks)
+        dialog = ClickTalkBindingsDialog(self.config, click_names=click_names, parent=self)
+        dialog.exec()
 
     def _preview_click_sound(self) -> None:
         """试听当前选择的点击音效配置（不保存配置）。"""
@@ -2151,6 +2220,22 @@ class ModernSettingsDialog(QDialog):
             self.config.get("click_sound_pack"),
             data_dir=self.config.dir,
         )
+        existing_island = self.config.get("dynamic_island", {})
+        if not isinstance(existing_island, dict):
+            existing_island = {}
+        self.config.set("dynamic_island", {
+            "enabled": self.island_enabled_check.isChecked(),
+            "show_icon": self.island_icon_check.isChecked(),
+            "show_name": self.island_name_check.isChecked(),
+            "show_info": self.island_info_check.isChecked(),
+            "info_mode": str(self.island_info_mode_select.currentData() or "time"),
+            "custom_text": self.island_custom_text_edit.text().strip(),
+            "show_status": self.island_status_check.isChecked(),
+            "style": str(self.island_style_select.currentData() or "dark"),
+            "icon": str(self.island_icon_select.currentData() or "🐳"),
+            "x": existing_island.get("x"),
+            "y": existing_island.get("y"),
+        })
         if self.click_balance_check is not None:
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())

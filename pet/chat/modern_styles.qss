@@ -64,13 +64,16 @@ QFrame#chat-main { background: #ffffff; border: none; border-top-right-radius: 1
 QFrame#chat-main-header { min-height: 55px; background: #ffffff; border: none; border-bottom: 1px solid #f0f1f4; border-top-right-radius: 13px; }
 QLabel#title-label { color: #252a32; font-size: 14px; font-weight: 600; }
 QLabel#subtitle-label { color: #7189c7; font-size: 10px; }
-QToolButton#sidebar-toggle-button, QToolButton#window-minimize-button, QToolButton#window-close-button {
+QToolButton#sidebar-toggle-button, QToolButton#window-minimize-button, QToolButton#window-close-button,
+QToolButton#window-pin-button {
     width: 29px; height: 29px; border: none; border-radius: 8px; background: transparent;
     color: #252a32; /* 深色系统下无 QSS color 会落到 palette 白字，白底上看不清 */
 }
 QToolButton#sidebar-toggle-button:hover { background: #f0f2f5; }
 QToolButton#window-minimize-button:hover { background: #f0f2f5; }
 QToolButton#window-close-button:hover { background: #fbe8e8; }
+QToolButton#window-pin-button:hover { background: #f0f2f5; }
+QToolButton#window-pin-button:checked { color: #ffffff; background: @ACCENT@; }
 QScrollArea#message-scroll, QScrollArea#message-scroll QWidget#qt_scrollarea_viewport,
 QWidget#message-view, QWidget#message-timeline { background: #ffffff; border: none; }
 QLabel#empty-state { color: #969da8; font-size: 14px; }

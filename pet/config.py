@@ -375,6 +375,73 @@ def _clean_self_talk_texts(value):
     return texts or list(DEFAULT_SELF_TALK_TEXTS)
 
 
+def _default_dynamic_island_data() -> dict:
+    """灵动岛默认配置：默认开启常驻，位置留空由首次显示时自动定位。"""
+    return {
+        "enabled": True,
+        "show_icon": True,
+        "show_name": True,
+        "show_info": True,
+        "info_mode": "time",       # time / balance_tier / balance / custom
+        "custom_text": "",
+        "show_status": True,
+        "style": "dark",           # dark / light / glass
+        "icon": "🐳",
+        "x": None,
+        "y": None,
+    }
+
+
+def _clean_dynamic_island_data(value) -> dict:
+    defaults = _default_dynamic_island_data()
+    if not isinstance(value, dict):
+        return defaults
+    result = dict(defaults)
+    result.update({k: v for k, v in value.items() if k in defaults})
+    result["enabled"] = bool(result["enabled"])
+    result["show_icon"] = bool(result["show_icon"])
+    result["show_name"] = bool(result["show_name"])
+    result["show_info"] = bool(result["show_info"])
+    result["show_status"] = bool(result["show_status"])
+    mode = str(result.get("info_mode") or "time").strip()
+    result["info_mode"] = mode if mode in {"time", "balance_tier", "balance", "custom"} else "time"
+    result["custom_text"] = str(result.get("custom_text") or "")[:80]
+    style = str(result.get("style") or "dark").strip()
+    result["style"] = style if style in {"dark", "light", "glass"} else "dark"
+    result["icon"] = str(result.get("icon") or "🐳").strip()[:8] or "🐳"
+    # 至少保留一个组件：全部关闭时强制显示信息槽，避免空胶囊。
+    if not (result["show_icon"] or result["show_name"] or result["show_info"] or result["show_status"]):
+        result["show_info"] = True
+    return result
+
+
+def _clean_character_profiles(value) -> dict:
+    """角色档案：当前先承载 click_talk_bindings，后续可扩展头像/人设字段。"""
+    if not isinstance(value, dict):
+        return {}
+    cleaned = {}
+    for character_id, profile in value.items():
+        if not isinstance(profile, dict):
+            continue
+        bindings_raw = profile.get("click_talk_bindings")
+        bindings = {}
+        if isinstance(bindings_raw, dict):
+            for action_id, texts in bindings_raw.items():
+                if not isinstance(texts, list):
+                    continue
+                items = []
+                for item in texts:
+                    text = str(item).strip()
+                    if text and text not in items:
+                        items.append(text[:120])
+                if items:
+                    bindings[str(action_id)] = items
+        entry = dict(profile)
+        entry["click_talk_bindings"] = bindings
+        cleaned[str(character_id)] = entry
+    return cleaned
+
+
 class Config:
     def __init__(self, base=None, instance_id: str | None = None):
         base = Path(base) if isinstance(base, str) else (base or _default_base())
@@ -445,6 +512,9 @@ class Config:
             "modern_chat_card_opacity": 84,
             "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "character_aliases": {},  # 角色显示名别名 {角色id: 自定义名}，空名=恢复默认
+            "character_profiles": {},  # 角色档案：{角色id: {click_talk_bindings: {动画id: [台词]}}}
+            "chat_always_on_top": False,  # 聊天窗置顶
+            "dynamic_island": _default_dynamic_island_data(),
             "proactive_screen": _default_proactive_screen_data(),
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
@@ -566,10 +636,13 @@ class Config:
             "chat_bg_crops",
             "chat_ui_style",
             "chat_follow_pet",
-             "character_aliases",
-             "collision_enabled", "collision_restitution", "collision_friction",
-             "collision_mass_scale", "collision_impulse_cap",
-             "collision_sound_enabled", "collision_sound_volume",
+            "character_aliases",
+            "character_profiles",
+            "chat_always_on_top",
+            "dynamic_island",
+            "collision_enabled", "collision_restitution", "collision_friction",
+            "collision_mass_scale", "collision_impulse_cap",
+            "collision_sound_enabled", "collision_sound_volume",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -645,6 +718,13 @@ class Config:
         )
         if self.data.get("chat_ui_style") not in {"modern", "classic"}:
             self.data["chat_ui_style"] = "modern"
+        self.data["character_profiles"] = _clean_character_profiles(
+            self.data.get("character_profiles")
+        )
+        self.data["chat_always_on_top"] = bool(self.data.get("chat_always_on_top", False))
+        self.data["dynamic_island"] = _clean_dynamic_island_data(
+            self.data.get("dynamic_island")
+        )
         for prefix in ("chat_background", "modern_chat_background"):
             opacity_key = f"{prefix}_opacity"
             fill_key = f"{prefix}_fill"
@@ -703,6 +783,41 @@ class Config:
             aliases.pop(character_id, None)
         self.save()
 
+    def character_profile(self, character_id: str) -> dict:
+        """返回角色档案；不存在时返回空档案。"""
+        profiles = self.data.get("character_profiles")
+        if isinstance(profiles, dict):
+            profile = profiles.get(str(character_id))
+            if isinstance(profile, dict):
+                return profile
+        return {}
+
+    def click_talk_bindings(self, character_id: str) -> dict:
+        """返回某角色的点击动画台词绑定：{动画id: [台词, ...]}。"""
+        profile = self.character_profile(character_id)
+        bindings = profile.get("click_talk_bindings")
+        return bindings if isinstance(bindings, dict) else {}
+
+    def click_talk_texts_for(self, character_id: str, action_id: str) -> list[str]:
+        """返回某点击动画绑定的台词；未绑定返回空列表。"""
+        bindings = self.click_talk_bindings(character_id)
+        texts = bindings.get(str(action_id))
+        return texts if isinstance(texts, list) else []
+
+    def set_click_talk_bindings(self, character_id: str, bindings: dict) -> None:
+        """保存某角色的点击动画台词绑定并立即落盘。"""
+        profiles = self.data.setdefault("character_profiles", {})
+        if not isinstance(profiles, dict):
+            profiles = {}
+            self.data["character_profiles"] = profiles
+        profile = profiles.setdefault(str(character_id), {})
+        if not isinstance(profile, dict):
+            profile = {}
+            profiles[str(character_id)] = profile
+        profile["click_talk_bindings"] = bindings
+        self.data["character_profiles"] = _clean_character_profiles(profiles)
+        self.save()
+
     def set(self, key, value):
         self.data[key] = value
         if key in {
@@ -715,6 +830,7 @@ class Config:
             "click_sound_enabled", "click_sound_pack", "click_sound_volume",
             "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
+            "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()
 
