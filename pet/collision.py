@@ -107,18 +107,18 @@ def calculate_mass(
 ) -> float:
     """计算桌宠质量。
     
-    规则 (plan4 §4.1)：
-    若提供有效基准 radius_x/y：
-        mass = clamp((radius_x * radius_y) / (base_radius_x * base_radius_y) * collision_mass_scale, 0.5, 3.0)
-    若无基准：
-        mass = clamp(collision_mass_scale * (scale / 0.72)^2, 0.5, 3.0)
+    规则 (plan4 §4.1，实机手感修正)：
+    质量按体型加权但收窄到 0.7~1.6——0.5~3.0 的 6 倍极差会让重射手
+    保留大部分动量"碾过去"（用户实机反馈不像台球）；收窄后射手撞完
+    基本停下、目标飞出去，仍保留"大一点的更稳"的手感差异。
+    collision_mass_scale 是用户设置的全局倍率，照常参与。
     """
     if base_radius_x is not None and base_radius_y is not None and base_radius_x > 1e-4 and base_radius_y > 1e-4:
         raw = (radius_x * radius_y) / (base_radius_x * base_radius_y) * collision_mass_scale
     else:
         scale_ratio = scale / DEFAULT_BASE_SCALE if DEFAULT_BASE_SCALE > 0 else 1.0
         raw = collision_mass_scale * (scale_ratio ** 2)
-    return max(0.5, min(3.0, float(raw)))
+    return max(0.7, min(1.6, float(raw)))
 
 
 def stable_hash_direction(id_a: str, id_b: str) -> tuple[float, float]:
