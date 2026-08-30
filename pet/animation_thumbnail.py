@@ -2,6 +2,7 @@
 """Thread-safe representative-frame decoding for animation menu thumbnails."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from PySide6.QtGui import QImage, QImageReader
@@ -15,6 +16,10 @@ except Exception:  # pragma: no cover - optional dependency in GIF-only installs
 
 
 REPRESENTATIVE_FRACTION = 0.62
+_CACHE_LIMIT = 128
+_cache_lock = threading.Lock()
+_image_cache: dict[tuple[str, int, int], QImage] = {}
+_inflight: dict[tuple[str, int, int], threading.Event] = {}
 
 
 def representative_frame_index(frame_count: int, fraction: float = REPRESENTATIVE_FRACTION) -> int:
@@ -76,10 +81,48 @@ def _decode_webm(path: Path) -> QImage:
     return QImage()
 
 
-def decode_representative_frame(path: str | Path) -> QImage:
-    path = Path(path)
+def _decode_representative_frame(path: Path) -> QImage:
     if not path.is_file():
         return QImage()
     if path.suffix.lower() == ".gif":
         return _decode_gif(path)
     return _decode_webm(path)
+
+
+def decode_representative_frame(path: str | Path) -> QImage:
+    """Decode once per file version and share the result across pet windows."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return QImage()
+    key = (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+
+    with _cache_lock:
+        cached = _image_cache.get(key)
+        if cached is not None:
+            return QImage(cached)
+        event = _inflight.get(key)
+        owner = event is None
+        if owner:
+            event = threading.Event()
+            _inflight[key] = event
+
+    if not owner:
+        event.wait()
+        with _cache_lock:
+            return QImage(_image_cache.get(key, QImage()))
+
+    try:
+        image = _decode_representative_frame(path)
+        if not image.isNull():
+            with _cache_lock:
+                if len(_image_cache) >= _CACHE_LIMIT:
+                    _image_cache.pop(next(iter(_image_cache)))
+                _image_cache[key] = QImage(image)
+        return image
+    finally:
+        with _cache_lock:
+            event = _inflight.pop(key, None)
+            if event is not None:
+                event.set()

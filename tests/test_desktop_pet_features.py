@@ -1767,6 +1767,32 @@ def test_representative_animation_image_is_cached_on_pet(monkeypatch):
     assert calls == ["/tmp/cached-animation.webm"]
 
 
+def test_representative_animation_decode_is_shared_across_pets(monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from PySide6.QtGui import QImage
+
+    import pet.animation_thumbnail as thumbnail
+
+    path = tmp_path / "shared.webm"
+    path.write_bytes(b"fixture")
+    thumbnail._image_cache.clear()
+    thumbnail._inflight.clear()
+    calls = []
+
+    def decode(_path):
+        calls.append(1)
+        return QImage(8, 8, QImage.Format.Format_ARGB32)
+
+    monkeypatch.setattr(thumbnail, "_decode_representative_frame", decode)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        images = list(pool.map(thumbnail.decode_representative_frame, [path] * 4))
+
+    assert len(calls) == 1
+    assert all(not image.isNull() for image in images)
+    assert thumbnail.decode_representative_frame(tmp_path / "missing.webm").isNull()
+
+
 def test_long_submenus_enable_qt_scrolling():
     from PySide6.QtWidgets import QApplication, QMenu, QStyle
 
