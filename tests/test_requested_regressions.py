@@ -710,20 +710,23 @@ def test_animation_icon_applier_updates_action_and_cleans_worker():
     app.processEvents()
 
 
-def test_build_workflows_bundle_menu_templates_and_chat_styles():
+def test_build_scripts_bundle_menu_templates_and_chat_styles():
     """三平台打包脚本必须包含菜单模板与聊天样式资源（防漏打包回归）。
 
     回归背景：Linux workflow 曾漏掉 pet/menu_templates（右键菜单在冻结版
     打不开）与 legacy/modern_styles.qss（聊天窗无样式）。
+
+    构建定义统一在本地脚本（scripts/build_*.sh / build_onedir.ps1），
+    CI workflow 只调用脚本不再内联打包命令，故资源断言指向脚本而非 workflow。
     """
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[1]
-    linux = (repo / ".github" / "workflows" / "build-linux.yml").read_text(encoding="utf-8")
-    macos = (repo / ".github" / "workflows" / "build-macos.yml").read_text(encoding="utf-8")
+    linux = (repo / "scripts" / "build_linux.sh").read_text(encoding="utf-8")
+    macos = (repo / "scripts" / "build_macos.sh").read_text(encoding="utf-8")
     windows = (repo / "scripts" / "build_onedir.ps1").read_text(encoding="utf-8")
 
-    for name, text in (("build-linux.yml", linux), ("build-macos.yml", macos), ("build_onedir.ps1", windows)):
+    for name, text in (("build_linux.sh", linux), ("build_macos.sh", macos), ("build_onedir.ps1", windows)):
         assert "menu_templates" in text, f"{name} 必须打包 pet/menu_templates"
         assert "legacy_styles.qss" in text, f"{name} 必须打包 legacy_styles.qss"
         assert "modern_styles.qss" in text, f"{name} 必须打包 modern_styles.qss"
