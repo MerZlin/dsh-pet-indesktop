@@ -176,6 +176,7 @@ class PetApp:
         self.modern_chat_window = None
         self.chat_settings_dialog = None
         self.modern_settings_dialog = None
+        self.island = None
         self._spawned_pet_count = 0
         self._pending_dialog_opens: set[str] = set()
         self._balance_busy = False
@@ -198,9 +199,35 @@ class PetApp:
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self._create_ui(character_id)
+        self._sync_dynamic_island()
         self._apply_spawn_offset()
         self._apply_balance_timer()
         QTimer.singleShot(3500, self._check_autostart_wanted)
+
+    def _sync_dynamic_island(self) -> None:
+        """按配置创建/隐藏灵动岛；桌宠隐藏后灵动岛仍可常驻。"""
+        island_cfg = self.config.get("dynamic_island", {})
+        enabled = bool(island_cfg.get("enabled", False)) if isinstance(island_cfg, dict) else False
+        if not enabled:
+            if getattr(self, "island", None) is not None:
+                self.island.hide()
+            return
+        if getattr(self, "island", None) is None:
+            from .dynamic_island import DynamicIsland
+
+            self.island = DynamicIsland(self.config)
+            self.island.clicked.connect(self._toggle_pet_from_island)
+        self.island.refresh_from_config()
+        self.island.show()
+
+    def _toggle_pet_from_island(self) -> None:
+        win = self.win
+        if win is None:
+            return
+        if win.isVisible():
+            win.hide(notify=False)
+        else:
+            win.show()
 
     def _on_about_to_quit(self) -> None:
         """退出前保存当前有效窗口的位置。
@@ -230,6 +257,25 @@ class PetApp:
         if minutes:
             self._balance_timer.start(minutes * 60000)
 
+    def _update_island_balance(self, payload) -> None:
+        """把余额文本/峰谷提示同步给灵动岛（若有）。"""
+        if getattr(self, "island", None) is None:
+            return
+        text = "余额 --"
+        info = {}
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "余额 --")
+            info = payload.get("info") or {}
+        peak_label, idle_label = balance_mod.resolve_tier_labels(
+            str(self.config.get("balance_tier_labels_mode", "default") or "default"),
+            str(self.config.get("balance_tier_label_peak", "") or ""),
+            str(self.config.get("balance_tier_label_idle", "") or ""),
+        )
+        hint = balance_mod.deepseek_pricing_hint(
+            peak_label=peak_label, idle_label=idle_label,
+        )
+        self.island.set_balance_info(hint, text)
+
     def show_balance(self, parent=None) -> None:
         win = parent or self.win
         if win is None or self._balance_busy or not win.isVisible():
@@ -249,11 +295,13 @@ class PetApp:
         ])
         if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
                 and self._balance_cache[2] == provider_key:
+            self._update_island_balance(self._balance_cache[1])
             _show_balance_payload(win, self._balance_cache[1])
             return
         file_payload = self._read_balance_file_cache(provider_key)
         if file_payload is not None:
             self._balance_cache = (now, file_payload, provider_key)
+            self._update_island_balance(file_payload)
             _show_balance_payload(win, file_payload)
             return
         self._balance_busy = True
@@ -276,6 +324,7 @@ class PetApp:
             payload = {"text": text, "info": info}
             self._balance_cache = (time.monotonic(), payload, provider_key)
             self._write_balance_file_cache(payload, provider_key)
+            self._update_island_balance(payload)
             bridge.done.emit(True, payload)
         except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
             bridge.done.emit(False, f'余额查询失败：{exc}')
@@ -512,6 +561,8 @@ class PetApp:
                 if chat_window is not None:
                     chat_window.set_pet_window(self.win)
                     chat_window.switch_character(character_id)
+        if getattr(self, "island", None) is not None:
+            self.island.refresh_from_config()
 
     def open_chat(self) -> None:
         """Open the configured chat UI; menus only need this stable dispatcher."""
@@ -670,6 +721,7 @@ class PetApp:
         # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
         if self.win is not None:
             self.win.refresh_pet_settings()
+        self._sync_dynamic_island()
         self._apply_balance_timer()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))

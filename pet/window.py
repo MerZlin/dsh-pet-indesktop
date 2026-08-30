@@ -2120,14 +2120,15 @@ class PetWindow(QWidget):
         # 点击可以打断当前动画（包括正在播放的点击回应），实现连续 Q 弹。
         # 先让 Q 弹/动画立刻开始，音效放到下一轮事件循环，避免任何音频
         # 初始化/文件扫描阻塞点击瞬间的画面更新。
+        click_name = self._pick(self.clicks)
         self._cancel_move()
         self._start_squash()
-        self._switch(self._pick(self.clicks))
+        self._switch(click_name)
         self._schedule_click_sound()
         if self.click_show_balance and callable(self.on_show_balance):
             self.on_show_balance(self)
         elif self.click_show_self_talk and self._self_talk_enabled:
-            if self._show_random_self_talk():
+            if self._show_click_self_talk(click_name):
                 self._schedule_self_talk(after_display=True)
 
     def _schedule_click_sound(self) -> None:
@@ -2338,6 +2339,16 @@ class PetWindow(QWidget):
             delay += self._self_talk_duration_seconds
         self._self_talk_timer.start(max(1000, int(round(delay * 1000))))
 
+    def _show_self_talk_text(self, text: str) -> bool:
+        if getattr(self, "_bubble_suppressed", False):
+            return False
+        duration_ms = int(round(self._self_talk_duration_seconds * 1000))
+        anchor = self.visible_content_rect()
+        self._speech_bubble.show_text(
+            text, anchor, duration_ms, pet_scale=self.scale
+        )
+        return True
+
     def _show_random_self_talk(self) -> bool:
         if getattr(self, "_bubble_suppressed", False):
             return False
@@ -2355,10 +2366,15 @@ class PetWindow(QWidget):
             return self._speech_bubble.show_image(
                 value, anchor, duration_ms, pet_scale=self.scale
             )
-        self._speech_bubble.show_text(
-            value, anchor, duration_ms, pet_scale=self.scale
-        )
-        return True
+        return self._show_self_talk_text(value)
+
+    def _show_click_self_talk(self, click_name: str) -> bool:
+        """优先播放当前点击动画绑定的台词；未绑定则回退全局随机自言自语。"""
+        character_id = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+        texts = self.cfg.click_talk_texts_for(character_id, click_name)
+        if texts:
+            return self._show_self_talk_text(random.choice(texts))
+        return self._show_random_self_talk()
 
     def _on_self_talk_timeout(self) -> None:
         if time.time() < self._bubble_busy_until:
