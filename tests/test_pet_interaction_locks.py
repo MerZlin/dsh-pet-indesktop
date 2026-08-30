@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, QPointF, Qt, Signal
-from PySide6.QtGui import QMouseEvent, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, Signal
+from PySide6.QtGui import QFocusEvent, QKeyEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 
 from pet import catalog
@@ -20,6 +20,51 @@ NAMES = [
     catalog.DRAG,
     "写代码",
 ]
+
+
+def test_slingshot_geometry_stays_inside_window_for_all_pull_directions():
+    base = QRect(0, 8, 100, 100)
+    bounds = QRect(0, 0, 100, 108)
+    for pull in (QPoint(-160, 0), QPoint(160, 0), QPoint(0, -160), QPoint(0, 160),
+                 QPoint(-113, -113), QPoint(113, 113)):
+        x, y, width, height = PetWindow._slingshot_geometry(base, pull, 1.0, bounds)
+        assert bounds.contains(QRect(x, y, width, height))
+
+
+def test_slingshot_trajectory_anchor_starts_at_character_edge():
+    character = QRect(10, 8, 100, 100)
+    anchor = PetWindow._slingshot_trajectory_anchor(character, QPoint(1, 1))
+    # QRect's right/bottom are inclusive, so the ray exits at (109, 107).
+    assert anchor == QPointF(109.0, 107.0)
+
+
+def test_slingshot_trajectory_preview_preserves_arc_scale_and_allows_clipping():
+    bounds = QRect(0, 0, 120, 108)
+    anchor = QPointF(110, 108)
+    trajectory = [(0.0, 0.0), (90.0, -30.0), (180.0, 90.0)]
+    preview = PetWindow._slingshot_trajectory_preview(trajectory, anchor, bounds, 1.0)
+    assert len(preview) == len(trajectory)
+    assert preview[0] == (110.0, 108.0)
+    assert preview[1] == (200.0, 78.0)
+    assert preview[-1] == (290.0, 198.0)
+
+
+def test_slingshot_geometry_uses_smooth_directional_deformation():
+    base = QRect(0, 8, 100, 100)
+    horizontal = PetWindow._slingshot_geometry(base, QPoint(160, 0), 1.0)
+    vertical = PetWindow._slingshot_geometry(base, QPoint(0, -160), 1.0)
+    assert horizontal[2] == round(base.width() * 1.3)
+    assert horizontal[3] == round(base.height() / 1.3)
+    assert vertical[2] == round(base.width() / 1.3)
+    assert vertical[3] == round(base.height() * 1.3)
+
+
+def test_slingshot_band_points_use_visible_edge_and_mouse_endpoint():
+    start, end = PetWindow._slingshot_band_points(
+        QRect(10, 8, 100, 100), QPoint(4, 57), QPoint(20, 0),
+    )
+    assert start == QPointF(9.0, 57.0)
+    assert end == QPointF(4.0, 57.0)
 
 
 class FakeClip(QObject):
@@ -112,6 +157,23 @@ def _release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     )
 
 
+def _right_press(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
+    return QMouseEvent(
+        QEvent.Type.MouseButtonPress, pos, global_pos,
+        Qt.MouseButton.RightButton,
+        Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+
+def _right_release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
+    return QMouseEvent(
+        QEvent.Type.MouseButtonRelease, pos, global_pos,
+        Qt.MouseButton.RightButton, Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+
 def _make_win(app, tmp_path, **overrides):
     cfg = Config(base=tmp_path)
     for key, value in overrides.items():
@@ -167,6 +229,77 @@ def test_shift_drag_requires_shift(app, tmp_path):
     ))
     assert win.pos() != start, "越过阈值时按住 SHIFT 应开始拖动"
     win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_sequence_launches_with_reverse_pull(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    start = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "DRAGGING"
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "SLINGSHOT_AIMING"
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(60, 100),
+                             buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
+    assert win._slingshot_pull.x() > 0
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(60, 100)))
+    assert win._interaction_state == "THROWN"
+    assert win._physics_mode == "throw"
+    assert win._phys_vel[0] > 0, "向左拉时 pull 应指向右侧"
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_right_release_and_escape_cancel_to_anchor(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    start = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    anchor = win.pos()
+    win.mouseReleaseEvent(_right_release(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "DRAGGING"
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    win.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                Qt.KeyboardModifier.NoModifier))
+    assert win._interaction_state == "IDLE"
+    assert win.pos() == anchor
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_minimum_and_lock_position_do_not_launch(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    starts = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    anchor = win.pos()
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(130, 100)))
+    assert win._interaction_state == "IDLE"
+    assert win.pos() == anchor
+    win.set_lock_position(True)
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "IDLE"
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_focus_out_cancels_to_anchor(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    anchor = win.pos()
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(40, 100),
+                             buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
+    win.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+    assert win._interaction_state == "IDLE"
+    assert win.pos() == anchor
     win.close()
     app.processEvents()
 

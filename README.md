@@ -1029,7 +1029,7 @@ python scripts/cleanup_mei_cache.py --delete
 
 ## 许可证与致谢
 
-本项目采用 **MIT License**（见仓库根目录 `LICENSE`）。
+本项目采用 **MIT License**（见仓库根目录 `LICENSE`），第三方素材与组件授权声明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 **特别感谢：**
 

@@ -119,6 +119,15 @@ class TestAgentLinkManager:
             "notify_state": False,
             "notify_done": True,
             "notify_activity": False,
+            "sound_enabled": False,
+            "sound_start_path": "builtin:agent-start",
+            "sound_done_path": "builtin:agent-done",
+            "sound_error_path": "builtin:agent-error",
+            "sound_volume": 0.65,
+            "sound_cooldown_seconds": 2.0,
+            "sound_start_enabled": True,
+            "sound_done_enabled": True,
+            "sound_error_enabled": True,
         }
 
         mgr = AgentLinkManager(None, cfg)
@@ -890,6 +899,78 @@ class TestAgentLinkBubbles:
         switched_before = len(win2.switched)
         mgr2._fire_done("claude")
         assert len(win2.switched) == switched_before  # 没有切回待机
+
+
+class TestAgentLinkSounds:
+    def _make(self, tmp_path, monkeypatch, **sound_cfg):
+        class Win:
+            _bubble_busy_until = 0.0
+            cats = {"acts": ["写代码"]}
+            idles = ["待机"]
+
+            def isVisible(self):
+                return True
+
+            def request_link_anim(self, _name):
+                pass
+
+            def request_link_idle(self):
+                pass
+
+            def show_bubble(self, *_args, **_kwargs):
+                pass
+
+        cfg = Config(base=tmp_path)
+        cfg.data["agent_link"].update({"sound_enabled": True, **sound_cfg})
+        sound = tmp_path / "sound.wav"
+        sound.write_bytes(b"RIFF")
+        monkeypatch.setattr(agent_link, "resolve_builtin_sound", lambda _path: sound)
+        calls = []
+        monkeypatch.setattr(agent_link, "play_sound", lambda path, volume=1.0: calls.append((path, volume)) or True)
+        clock = [100.0]
+        mgr = AgentLinkManager(Win(), cfg, min_interval=0.0, clock=lambda: clock[0])
+        return mgr, clock, calls
+
+    def test_start_done_error_events_play_at_confirmed_points(self, tmp_path, monkeypatch):
+        mgr, clock, calls = self._make(tmp_path, monkeypatch, sound_cooldown_seconds=0.0)
+        mgr._on_agent_state("dsh", "working")
+        assert len(calls) == 1
+        clock[0] += 1
+        mgr._on_agent_state("dsh", "idle")
+        mgr._fire_done("dsh")
+        assert len(calls) == 2
+        clock[0] += 1
+        mgr._on_agent_state("dsh", "working")
+        clock[0] += 1
+        mgr._on_agent_state("dsh", "error")
+        assert len(calls) == 4, "新忙碌周期应有 start + error 两个事件音效"
+        mgr._on_agent_state("dsh", "idle")
+        mgr._fire_done("dsh")
+        assert len(calls) == 4, "error 周期不能追加 done 音效"
+
+        clock[0] += 1
+        mgr._on_agent_state("cursor", "working")
+        clock[0] += 1
+        mgr._on_agent_state("cursor", "error")
+        clock[0] += 1
+        mgr._on_agent_state("cursor", "working")
+        mgr._on_agent_state("cursor", "idle")
+        mgr._fire_done("cursor")
+        assert len(calls) == 7, "error 后重试仍属于同一错误周期，不能补 done"
+
+    def test_cooldown_is_global_and_disabled_is_silent(self, tmp_path, monkeypatch):
+        mgr, clock, calls = self._make(tmp_path, monkeypatch, sound_cooldown_seconds=2.0)
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_agent_state("claude", "working")
+        assert len(calls) == 1
+        clock[0] += 2.01
+        mgr._on_agent_state("claude", "error")
+        assert len(calls) == 2
+
+        mgr.cfg.data["agent_link"]["sound_enabled"] = False
+        clock[0] += 3
+        mgr._on_agent_state("cursor", "working")
+        assert len(calls) == 2
 
 
 class TestInstallErrorSummary:

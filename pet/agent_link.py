@@ -32,6 +32,8 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
+from .click_sound import play_sound, resolve_builtin_sound
+
 log = logging.getLogger("dsh-pet-standalone")
 
 # ----------------------------------------------------------------------
@@ -1044,6 +1046,9 @@ class AgentLinkManager(QObject):
         self._done_pending: dict[str, QTimer] = {}   # agent → 稳定确认定时器
         self._done_cooldown: dict[str, float] = {}   # agent → 上次完成气泡时刻
         self._saw_alert: set[str] = set()            # busy 周期内出现过 attention/error 的 Agent
+        self._saw_error: set[str] = set()            # busy 周期内真正出现过 error 的 Agent
+        self._sound_last_at: dict[str, float] = {}
+        self._sound_last_event: dict[str, tuple[str, float]] = {}
         self._link_seq = 0                           # 联动动作轮换计数
         # 过程汇报气泡：agent → (上次文案, 时刻)；全局最后一条时刻
         self._last_activity: dict[str, tuple[str, float]] = {}
@@ -1216,6 +1221,7 @@ class AgentLinkManager(QObject):
             self.win._pending_link_anim = None
         for key in list(self._done_pending):
             self._cancel_done_check(key)
+        self._sound_last_event.clear()
 
     def resume(self) -> None:
         """桌宠恢复显示时恢复活动的监视器。"""
@@ -1232,11 +1238,19 @@ class AgentLinkManager(QObject):
         # 不能用 _last_applied 判定完成——节流会丢掉紧跟的 idle，导致完成通知丢失。
         prev_raw = self._last_raw.get(agent_key)
         self._last_raw[agent_key] = state
+        if state in self._BUSY_STATES and prev_raw not in self._BUSY_STATES:
+            self._emit_sound("start", agent_key)
+        elif state == "error" and prev_raw != "error":
+            self._emit_sound("error", agent_key)
         if state in self._BUSY_STATES:
             self._cancel_done_check(agent_key)
             self._saw_alert.discard(agent_key)
+            if prev_raw != "error":
+                self._saw_error.discard(agent_key)
         elif state in ("attention", "error") and prev_raw in self._BUSY_STATES:
             self._saw_alert.add(agent_key)
+            if state == "error":
+                self._saw_error.add(agent_key)
             # Claude 的回合结束信号是 Stop→attention 而非 idle：busy 后的
             # attention/error 同样进入完成确认（800ms 内回忙则取消——例如
             # SubagentStop 后主 Agent 继续干活、工具报错后重试）。
@@ -1424,6 +1438,8 @@ class AgentLinkManager(QObject):
             return  # 隐藏中不弹不切（pause 已取消计时器，这里是兜底）
         if self._last_raw.get(agent_key) in self._BUSY_STATES:
             return
+        if agent_key not in self._saw_error:
+            self._emit_sound("done", agent_key)
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_done", True):
             return
@@ -1438,6 +1454,7 @@ class AgentLinkManager(QObject):
         else:
             text = f"{name} 干完活啦，去看看成果吧～"
         self._saw_alert.discard(agent_key)
+        self._saw_error.discard(agent_key)
         # 恢复待机动画：Claude 回合结束没有 idle 事件，不靠这步会一直停在干活动作。
         # 仅当没有其他 Agent 仍在忙时恢复（避免 A 完成顶掉 B 的工作动画）。
         # 必须走 request_link_idle（它会清 _link_anim_current 并尊重一次性动作），
@@ -1451,6 +1468,31 @@ class AgentLinkManager(QObject):
                 self.win._switch(self.win._pick(self.win.idles))
             self._last_applied[agent_key] = ("idle", now)
         self._show_link_bubble(text, important=True)
+
+    def _emit_sound(self, event_name: str, agent_key: str) -> None:
+        """播放 Agent 生命周期音效；所有 Agent 共用一组全局冷却。"""
+        agent_cfg = self.cfg.get("agent_link", {})
+        if not agent_cfg.get("sound_enabled", False):
+            return
+        if not agent_cfg.get(f"sound_{event_name}_enabled", True):
+            return
+        path_value = str(agent_cfg.get(f"sound_{event_name}_path", "") or "").strip()
+        if not path_value:
+            return
+        path = resolve_builtin_sound(path_value) if path_value.startswith("builtin:") else Path(path_value).expanduser()
+        if path is None or not path.is_file():
+            return
+        now = self._clock()
+        cooldown = max(0.0, float(agent_cfg.get("sound_cooldown_seconds", 2.0)))
+        if now - self._sound_last_at.get("global", float("-inf")) < cooldown:
+            return
+        last_event = self._sound_last_event.get(agent_key)
+        if last_event is not None and last_event[0] == event_name and now == last_event[1]:
+            return
+        self._sound_last_at["global"] = now
+        self._sound_last_event[agent_key] = (event_name, now)
+        log.info("播放联动音效 event=%s agent=%s path=%s", event_name, agent_key, path)
+        play_sound(path, volume=float(agent_cfg.get("sound_volume", 0.65)))
 
     def _show_link_bubble(self, text: str, *, important: bool, duration_ms: int = 4500,
                           _retried: int = 0) -> None:
