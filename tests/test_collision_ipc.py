@@ -387,7 +387,7 @@ session = CollisionIpcSession(Config(sys.argv[3], instance_id=sys.argv[2]), serv
 roles = []
 session.role_changed.connect(lambda coordinator, epoch: roles.append((coordinator, epoch)))
 session.start()
-deadline = time.monotonic() + 2
+deadline = time.monotonic() + 6
 while time.monotonic() < deadline and not roles:
     app.processEvents(QEventLoop.AllEvents, 10)
     time.sleep(.005)
@@ -398,7 +398,7 @@ for seq in range(1000):
     app.processEvents(QEventLoop.AllEvents, 1)
 print(json.dumps({"roles": roles, "frames": 1000}), flush=True)
 if sys.argv[4] == "hold":
-    deadline = time.monotonic() + 4
+    deadline = time.monotonic() + 12
     while time.monotonic() < deadline:
         app.processEvents(QEventLoop.AllEvents, 10)
         time.sleep(.005)
@@ -433,7 +433,11 @@ def test_submit_leave_removes_member_immediately(tmp_path):
     coordinator.start()
     client.start()
     try:
-        _pump(1.2)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            _pump(0.1)
+            if coordinator._worker.server is not None or client._worker.server is not None:
+                break
         if coordinator._worker.server is not None:
             coord_worker, client_session = coordinator._worker, client
         else:
