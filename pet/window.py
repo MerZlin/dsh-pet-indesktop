@@ -357,6 +357,9 @@ class PetWindow(QWidget):
         self._collision_last_state = None
         self._collision_last_submit_at = 0.0  # 非 force 提交 20Hz 限流时间戳
         self._applied_collision_policy: dict | None = None  # 已同步到会话的碰撞策略
+        self._collision_epoch = ''
+        self._collision_peer_snapshots: dict[str, dict[str, Any]] = {}
+        self._predicted_bounces: dict[str, float] = {}
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
         self.on_open_modern_chat = None
@@ -975,6 +978,7 @@ class PetWindow(QWidget):
             return
         self._collision_session = session
         session.impulse_ready.connect(self._on_collision_impulse, Qt.ConnectionType.QueuedConnection)
+        session.snapshot_ready.connect(self._on_collision_snapshot, Qt.ConnectionType.QueuedConnection)
         self._collision_timer.start()
         self._submit_collision_state(force=True)
         self._sync_collision_policy()
@@ -991,8 +995,15 @@ class PetWindow(QWidget):
             session.impulse_ready.disconnect(self._on_collision_impulse)
         except (RuntimeError, TypeError):
             pass
+        try:
+            session.snapshot_ready.disconnect(self._on_collision_snapshot)
+        except (RuntimeError, TypeError):
+            pass
         self._collision_timer.stop()
         self._collision_session = None
+        self._collision_epoch = ''
+        self._collision_peer_snapshots.clear()
+        self._predicted_bounces.clear()
         self._sync_collision_policy()
 
     def _sync_collision_policy(self) -> None:
@@ -1100,6 +1111,33 @@ class PetWindow(QWidget):
         self._collision_timer.setInterval(50 if moving else 500)
 
     @Slot(object)
+    def _on_collision_snapshot(self, message: dict[str, Any]) -> None:
+        epoch = str(message.get('epoch') or '')
+        if not epoch or (self._collision_epoch and epoch != self._collision_epoch):
+            return
+        self._collision_epoch = epoch
+        runtime_id = str(getattr(getattr(self, '_collision_session', None), 'runtime_id', ''))
+        now = time.monotonic()
+        peers = {}
+        for raw_member in message.get('members') or ():
+            member = dict(raw_member)
+            peer_id = str(member.get('runtime_id') or '')
+            if peer_id and peer_id != runtime_id:
+                member['_received_at'] = now
+                peers[peer_id] = member
+        self._collision_peer_snapshots = peers
+
+    def _prune_collision_prediction_state(self, now: float) -> None:
+        self._collision_peer_snapshots = {
+            runtime_id: member for runtime_id, member in self._collision_peer_snapshots.items()
+            if now - float(member.get('_received_at', 0.0)) <= 1.5
+        }
+        self._predicted_bounces = {
+            pair: predicted_at for pair, predicted_at in self._predicted_bounces.items()
+            if now - predicted_at <= 0.2
+        }
+
+    @Slot(object)
     def _on_collision_impulse(self, message: dict[str, Any]) -> None:
         runtime_id = str(getattr(getattr(self, '_collision_session', None), 'runtime_id', ''))
         def discard(reason: str) -> None:
@@ -1124,6 +1162,13 @@ class PetWindow(QWidget):
             dx, dy = float(message.get('dx_b', 0)), float(message.get('dy_b', 0))
         else:
             discard('runtime_id_mismatch')
+            return
+        pair = str(message.get('pair') or '|'.join(sorted((str(message.get('a') or ''),
+                                                          str(message.get('b') or '')))))
+        now = time.monotonic()
+        predicted_at = self._predicted_bounces.pop(pair, None)
+        if predicted_at is not None and now - predicted_at <= 0.2:
+            discard('predicted_bounce_confirmed')
             return
         rect = self.collision_content_rect()
         radius_x = max(1.0, rect.width() / 2.0)
@@ -3001,6 +3046,7 @@ class PetWindow(QWidget):
         bounced_any = False
         px, py = self._phys_pos[0], self._phys_pos[1]
         vx, vy = self._phys_vel[0], self._phys_vel[1]
+        start_px, start_py = px, py
 
         while remaining > 1e-6:
             step_dt = min(max_sub_dt, remaining)
@@ -3015,6 +3061,9 @@ class PetWindow(QWidget):
 
         self._phys_pos[:] = [px, py]
         self._phys_vel[:] = [vx, vy]
+        predict_bounce = getattr(self, '_predict_collision_bounce', None)
+        if callable(predict_bounce):
+            predict_bounce(start_px, start_py)
         self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
         speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
         # 在地面上且水平速度也很低时，彻底停下
@@ -3022,6 +3071,88 @@ class PetWindow(QWidget):
             self._phys_pos[1], self._phys_vel[0], self._phys_vel[1], bottom, bounced_any, speed
         ):
             self._stop_physics()
+
+    def _predict_collision_bounce(self, start_x: float, start_y: float) -> None:
+        if (self._physics_mode != 'throw'
+                or not bool(self.cfg.get('collision_enabled', True))
+                or self._collision_session is None):
+            return
+        now = time.monotonic()
+        self._prune_collision_prediction_state(now)
+        runtime_id = str(getattr(self._collision_session, 'runtime_id', ''))
+        if not runtime_id:
+            return
+
+        rect = self.collision_content_rect()
+        dx, dy = self._phys_pos[0] - self.x(), self._phys_pos[1] - self.y()
+        current_circles = collision.circles_from_rect(
+            rect.x() + dx, rect.y() + dy, rect.width(), rect.height())
+        previous_circles = [[x - (self._phys_pos[0] - start_x),
+                             y - (self._phys_pos[1] - start_y), radius]
+                            for x, y, radius in current_circles]
+        own = collision.MemberState(
+            runtime_id, rect.center().x() + dx, rect.center().y() + dy,
+            max(1.0, rect.width() / 2.0), max(1.0, rect.height() / 2.0),
+            self._phys_vel[0], self._phys_vel[1],
+            mass=collision.calculate_mass(
+                max(1.0, rect.width() / 2.0), max(1.0, rect.height() / 2.0),
+                scale=float(self.scale),
+                collision_mass_scale=float(self.cfg.get('collision_mass_scale', 1.0))),
+            flags=self._collision_flags(), circles=current_circles)
+
+        for peer_id, raw_peer in self._collision_peer_snapshots.items():
+            flags = int(raw_peer.get('flags', 0))
+            if (not flags & collision.FLAG_VISIBLE or flags & collision.FLAG_PAUSED
+                    or not flags & collision.FLAG_COLLISION_ENABLED):
+                continue
+            age = max(0.0, now - float(raw_peer['_received_at']))
+            extrapolation = min(0.05, age)
+            peer_vx, peer_vy = float(raw_peer.get('vx', 0.0)), float(raw_peer.get('vy', 0.0))
+            peer_dx, peer_dy = peer_vx * extrapolation, peer_vy * extrapolation
+            peer_circles = [[float(c[0]) + peer_dx, float(c[1]) + peer_dy, float(c[2])]
+                            for c in raw_peer.get('circles') or () if len(c) >= 3]
+            if not peer_circles:
+                continue
+            pair = '|'.join(sorted((runtime_id, peer_id)))
+            if pair in self._predicted_bounces:
+                continue
+            hit = collision.check_collision_circles(current_circles, peer_circles, runtime_id, peer_id)
+            if not hit[0]:
+                hit = collision.swept_circle_chain_collision(
+                    previous_circles, current_circles, peer_circles, peer_circles)
+            collided, nx, ny, _, _, _ = hit
+            vn = (peer_vx - own.vx) * nx + (peer_vy - own.vy) * ny
+            if not collided or vn >= -collision.IMPULSE_MIN_APPROACH_SPEED:
+                continue
+            radius_x = max(1.0, float(raw_peer.get('radius_x', 1.0)))
+            radius_y = max(1.0, float(raw_peer.get('radius_y', 1.0)))
+            peer = collision.MemberState(
+                peer_id, float(raw_peer.get('x', 0.0)) + peer_dx,
+                float(raw_peer.get('y', 0.0)) + peer_dy, radius_x, radius_y,
+                peer_vx, peer_vy,
+                mass=collision.calculate_mass(
+                    radius_x, radius_y,
+                    scale=float(raw_peer.get('scale', collision.DEFAULT_BASE_SCALE) or collision.DEFAULT_BASE_SCALE),
+                    collision_mass_scale=float(self.cfg.get('collision_mass_scale', 1.0))),
+                is_infinite_mass=bool(flags & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION)),
+                flags=flags, circles=peer_circles)
+            _, dvx, dvy, _, _ = collision.solve_collision_impulse(
+                own, peer, nx, ny,
+                restitution=float(self.cfg.get('collision_restitution', .82)),
+                friction=float(self.cfg.get('collision_friction', .08)),
+                impulse_cap=float(self.cfg.get('collision_impulse_cap', 9000.0)))
+            self._phys_vel[0] += dvx
+            self._phys_vel[1] += dvy
+            speed = math.hypot(*self._phys_vel)
+            clamped = physics_mod.soft_clamp_speed(speed, self._throw_speed_cap)
+            if speed > 1e-6:
+                self._phys_vel[:] = [self._phys_vel[0] * clamped / speed,
+                                     self._phys_vel[1] * clamped / speed]
+            self._predicted_bounces[pair] = now
+            if not self._squash_active and now - self._last_collision_squash_at >= 0.25:
+                self._last_collision_squash_at = now
+                self._start_squash()
+            break
 
     def _request_quit(self) -> None:
         # 不在这里保存当前位置：退出时若正处于自动移动/物理抛掷后的位置，

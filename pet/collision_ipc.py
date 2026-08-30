@@ -464,9 +464,11 @@ class _CollisionWorker(QObject):
                      for v in self.members.values())
         if now - self._last_snapshot_at >= (0.05 if moving else 0.5):
             self._last_snapshot_at = now
+            payload = {"type": "snapshot", "epoch": self.epoch, "tick": self.tick,
+                       "members": [self._public_member(v) for v in self.members.values()]}
             for peer in self.peers:
-                self._send(peer, {"type": "snapshot", "epoch": self.epoch, "tick": self.tick,
-                                  "members": [self._public_member(v) for v in self.members.values()]})
+                self._send(peer, payload)
+            self.snapshot_ready.emit(payload)
         for result in results:
             if result.j == 0 and result.sep == 0:
                 continue

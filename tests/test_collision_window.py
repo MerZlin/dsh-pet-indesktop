@@ -540,6 +540,96 @@ def test_move_event_submits_throttled_not_forced(tmp_path, app):
     win.close()
 
 
+def _prediction_peer(win, runtime_id="pet_b", vx=0.0, flags=None):
+    rect = win.collision_content_rect()
+    own_circles = collision.circles_from_rect(rect.x(), rect.y(), rect.width(), rect.height())
+    cx, cy = rect.center().x(), rect.center().y()
+    peer_circles = [[x + 30.0, y, r] for x, y, r in own_circles]
+    return {
+        "runtime_id": runtime_id,
+        "x": cx + 30.0, "y": cy, "radius_x": rect.width() / 2.0,
+        "radius_y": rect.height() / 2.0, "vx": vx, "vy": 0.0,
+        "flags": flags if flags is not None else collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED,
+        "circles": peer_circles, "scale": win.scale,
+    }
+
+
+def test_collision_snapshot_stores_epoch_and_clears_stale_members(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    session.snapshot_ready.emit({"epoch": "epoch-1", "members": [_prediction_peer(win)]})
+    app.processEvents()
+    assert "pet_b" in win._collision_peer_snapshots
+    assert win._collision_peer_snapshots["pet_b"]["_received_at"] > 0
+
+    win._collision_peer_snapshots["pet_b"]["_received_at"] = time.monotonic() - 1.6
+    win._prune_collision_prediction_state(time.monotonic())
+    assert win._collision_peer_snapshots == {}
+
+    session.snapshot_ready.emit({"epoch": "epoch-2", "members": [_prediction_peer(win)]})
+    app.processEvents()
+    assert win._collision_peer_snapshots == {}
+    win.close()
+
+
+def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win._physics_mode = "throw"
+    win._interaction_state = "THROWN"
+    win._phys_pos[:] = [float(win.x()), float(win.y())]
+    win._phys_vel[:] = [9000.0, 0.0]
+    win.cfg.set("collision_impulse_cap", 20000.0)
+    peer = _prediction_peer(win, flags=collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED |
+                            collision.FLAG_LOCK_POSITION)
+    peer["_received_at"] = time.monotonic()
+    win._collision_peer_snapshots["pet_b"] = peer
+
+    before = win._phys_vel[0]
+    win._predict_collision_bounce(win._phys_pos[0], win._phys_pos[1])
+    assert win._phys_vel[0] < 0.0
+    assert math.hypot(*win._phys_vel) <= win._throw_speed_cap + 1e-6
+    assert win._squash_active is True
+    assert "pet_a|pet_b" in win._predicted_bounces
+
+    predicted_velocity = tuple(win._phys_vel)
+    predicted_position = (win.x(), win.y())
+    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b",
+                                "dvx_a": 4000.0, "dvy_a": 0.0, "dx_a": 9.0, "dy_a": 0.0})
+    app.processEvents()
+    assert tuple(win._phys_vel) == predicted_velocity
+    assert (win.x(), win.y()) == predicted_position
+    win.close()
+
+
+def test_throw_prediction_requires_approach_speed_and_enabled_throw_mode(tmp_path, app):
+    win, _ = _make_pet_window(tmp_path, "pet_a")
+    win._physics_mode = "throw"
+    win._interaction_state = "THROWN"
+    win._phys_pos[:] = [float(win.x()), float(win.y())]
+    win._phys_vel[:] = [10.0, 0.0]
+    peer = _prediction_peer(win, vx=0.0)
+    peer["_received_at"] = time.monotonic()
+    win._collision_peer_snapshots["pet_b"] = peer
+    win._predict_collision_bounce(win._phys_pos[0], win._phys_pos[1])
+    assert win._predicted_bounces == {}
+
+    win._physics_mode = None
+    win._phys_vel[:] = [9000.0, 0.0]
+    win.cfg.set("collision_enabled", False)
+    win._predict_collision_bounce(win._phys_pos[0], win._phys_pos[1])
+    assert win._predicted_bounces == {}
+    win.close()
+
+
+def test_authoritative_impulse_applies_after_prediction_window(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win._predicted_bounces["pet_a|pet_b"] = time.monotonic() - 0.21
+    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b",
+                                "dvx_a": 200.0, "dvy_a": 0.0})
+    app.processEvents()
+    assert win._phys_vel[0] > 0.0
+    win.close()
+
+
 def test_move_event_submits_throttled_not_forced(tmp_path, app):
     """moveEvent 非 force 节流提交：60Hz 连续移动不超标（上限 20Hz）。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
