@@ -2385,3 +2385,19 @@ def test_external_character_dirs_dedupes_base_dir(tmp_path, monkeypatch):
     dirs = catalog_mod.external_character_dirs()
     base = root / "dsh-pet-standalone" / "characters"
     assert dirs.count(base) == 1
+def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path):
+    """回归：用户显式配置的外部图片目录被删后，不再回退内置彩蛋池
+    （用户删目录的意图就是不要再看图）。"""
+    from pet.window import _resolve_self_talk_image_dir
+
+    gone = tmp_path / "deleted_dir"
+    assert _resolve_self_talk_image_dir(str(gone)) == ""
+
+    existing = tmp_path / "pics"
+    existing.mkdir()
+    assert _resolve_self_talk_image_dir(str(existing)) == str(existing)
+
+    # 相对路径（内置 assets）仍走既有回退解析
+    assert _resolve_self_talk_image_dir("") == ""
+
+

@@ -878,3 +878,16 @@ def test_thrown_pet_ignores_sub_floor_contact_impulse(tmp_path, app):
     win._on_collision_impulse(impulse)
     assert win._phys_vel[0] == pytest.approx(80.0)
     win.close()
+def test_self_talk_prunes_images_deleted_while_running(tmp_path, app):
+    """回归：运行期间图片被删，下一次自言自语不再选中它。"""
+    win, _ = _make_pet_window(tmp_path, "pet_prune")
+    img = tmp_path / "a.png"
+    from PySide6.QtGui import QPixmap
+    QPixmap(4, 4).save(str(img))
+    win._self_talk_texts = []
+    win._self_talk_images = [img]
+    win._self_talk_enabled = True
+    img.unlink()  # 运行期间被删
+    assert win._show_random_self_talk() is False  # 无文本无图 → 不弹
+    assert win._self_talk_images == []            # 惰性剔除生效
+    win.close()

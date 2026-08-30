@@ -65,9 +65,17 @@ SING_ANIM = '悠闲哼歌'
 
 
 def _resolve_self_talk_image_dir(raw: str) -> str:
-    """Resolve the self-talk image directory; empty keeps text-only behavior."""
+    """Resolve the self-talk image directory; empty keeps text-only behavior.
+
+    用户显式配置的外部目录被删除后不再回退到内置彩蛋池（用户删目录的
+    意图就是"不要再看图"），直接走纯文本；相对路径（内置 assets）保留
+    回退以兼容便携包目录迁移。
+    """
     raw = str(raw or '').strip()
     if not raw:
+        return ''
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute() and not candidate.is_dir():
         return ''
     return str(resolve_fun_asset(raw, oijingjing_image_path().parent))
 
@@ -2794,6 +2802,10 @@ class PetWindow(QWidget):
     def _show_random_self_talk(self) -> bool:
         if getattr(self, "_bubble_suppressed", False):
             return False
+        # 惰性剔除运行期间被删除的图片（列表是启动/设置时的快照）
+        live_images = [p for p in self._self_talk_images if p.is_file()]
+        if len(live_images) != len(self._self_talk_images):
+            self._self_talk_images = live_images
         choices = [
             ("text", text) for text in self._self_talk_texts
         ] + [
