@@ -498,6 +498,9 @@ class PetWindow(QWidget):
         self._frame_pixmap: QPixmap | None = None
         # 角色可见轮廓（窗口局部坐标）与逐像素命中缓存；贴边功能复用 _mask_bounds
         self._mask_bounds: QRect | None = None
+        # 碰撞体稳定边界：当前动画各帧 _mask_bounds 的并集（只增不减，
+        # 切换动画/缩放时重置），避免圆链随动画帧缩放跳动导致漏判
+        self._collision_local_bounds: QRect | None = None
         self._hit_alpha_image: QImage | None = None
         self._input_controller: WindowsPerPixelInputController | None = None
         if os.name == "nt":
@@ -648,6 +651,7 @@ class PetWindow(QWidget):
         old_bottom = self.geometry().bottom()
         self.scale = scale
         self._apply_scale()
+        self._collision_local_bounds = None
         self.move(self.x(), old_bottom - self._h + 1)
         self._rebuild_frame()
         if self._speech_bubble.isVisible():
@@ -1045,7 +1049,7 @@ class PetWindow(QWidget):
         return float(self._phys_vel[0]), float(self._phys_vel[1])
 
     def _collision_state(self) -> dict[str, Any]:
-        rect = self.visible_content_rect()
+        rect = self.collision_content_rect()
         vx, vy = self._collision_velocity()
         circles = collision.circles_from_rect(rect.x(), rect.y(), rect.width(), rect.height())
         return {
@@ -1106,7 +1110,7 @@ class PetWindow(QWidget):
             dx, dy = float(message.get('dx_b', 0)), float(message.get('dy_b', 0))
         else:
             return
-        rect = self.visible_content_rect()
+        rect = self.collision_content_rect()
         radius_x = max(1.0, rect.width() / 2.0)
         radius_y = max(1.0, rect.height() / 2.0)
         contact_x = float(message.get('contact_x', rect.center().x()))
@@ -1482,6 +1486,7 @@ class PetWindow(QWidget):
         """切换到指定动画（链式模型：全部一次性播放）。"""
         self._cancel_move()
         self.anim = name
+        self._collision_local_bounds = None
         movie = self.lib.movie(name)
         self._connect_movie(name, movie)
         self.movie = movie
@@ -1595,10 +1600,25 @@ class PetWindow(QWidget):
         p.end()
         mask = QBitmap.fromImage(canvas.createAlphaMask())
         self._mask_bounds = QRegion(mask).boundingRect()
+        if not self._mask_bounds.isEmpty():
+            stable = getattr(self, '_collision_local_bounds', None)
+            if stable is None:
+                self._collision_local_bounds = QRect(self._mask_bounds)
+            else:
+                self._collision_local_bounds = stable.united(self._mask_bounds)
         if os.name != "nt":
             self.setMask(mask)
         elif not self.mask().isEmpty():
             self.clearMask()
+
+    def collision_content_rect(self) -> QRect:
+        """碰撞用的稳定可见区域（全局坐标）：取当前动画各帧包围盒的并集，
+        避免圆链随帧跳动；尚无并集时回退当前帧区域。"""
+        frame_rect = self.frameGeometry()
+        local = self._collision_local_bounds
+        if local is not None and not local.isEmpty():
+            return QRect(frame_rect.topLeft() + local.topLeft(), local.size())
+        return self.visible_content_rect()
 
     def character_local_region(self) -> QRect:
         """当前角色可见区域（窗口局部坐标）；供贴边/气泡定位等增量功能复用。"""
