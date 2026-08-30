@@ -842,7 +842,24 @@ def _mac_set_dock_icon_visible(visible: bool) -> None:
         pass
 
 
+def _default_xcb_platform_on_wayland() -> None:
+    """Linux Wayland 会话下把 Qt 平台插件默认设为 xcb（XWayland）。
+
+    Wayland 协议不允许客户端自行移动顶层窗口，桌宠拖动依赖的
+    QWidget.move() 会被合成器静默忽略（表现为无法拖动）；透明无边框
+    窗口在原生 wayland 插件下还存在重绘残留（拖影）。须在创建
+    QApplication 之前调用。用户显式设置 QT_QPA_PLATFORM 时尊重其选择。
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    if "QT_QPA_PLATFORM" in os.environ:
+        return
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland":
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
+    _default_xcb_platform_on_wayland()
     argv = list(argv if argv is not None else sys.argv)
     instance_id = None
     if "--instance" in argv:

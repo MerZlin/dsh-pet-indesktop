@@ -753,7 +753,10 @@ packaging/
 └── dsh-pet.iss            # Inno Setup 通用安装包脚本（/D 参数编译各变体）
 
 scripts/
-├── build_onedir.ps1       # onedir 构建 + zip 绿色版打包
+├── build_onedir.ps1       # Windows onedir 构建 + zip 绿色版打包（本地与 CI 共用入口）
+├── build_macos.sh         # macOS .app 构建（本地与 CI 共用入口）
+├── build_linux.sh         # Linux onedir 构建（本地与 CI 共用入口）
+├── check_bundle_encoding.py # 产物中文编码自检（issue #26，构建脚本内自动调用）
 ├── make_icon.py           # 从待机动画提取封面帧生成应用图标（assets/icon.ico）
 ├── convert_to_gif.py      # WebM → GIF 全量同步脚本
 └── cleanup_mei_cache.py   # 检查/清理旧 onefile 版本遗留的 _MEI 缓存（默认预览）
@@ -820,6 +823,15 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm
 产物位于 `dist-onedir\<name>\`（绿色版目录）与 `<name>-portable.zip`。
 
 > GIF 变体（`gif-chat` / `gif`）需要先运行 `scripts/convert_to_gif.py --force --clean` 生成 GIF 素材，构建时加 `-Gif` 参数；默认发布不含 GIF 版。
+
+macOS / Linux 本地构建与 CI 共用同一份脚本（PyInstaller 打包、中文编码自检都在脚本内完成）：
+
+```bash
+# macOS（.app，输出 build/macos/）
+bash scripts/build_macos.sh --variants webm-chat,webm
+# Linux（onedir，输出 dist/）
+bash scripts/build_linux.sh --variants webm-chat,webm
+```
 
 ### 2) Inno Setup 安装包
 

@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
-# 构建 dsh-pet-standalone macOS .app（本地与 CI 共用的唯一构建入口）。
+# 构建 dsh-pet-standalone Linux onedir（本地与 CI 共用的唯一构建入口）。
 #
-# CI（.github/workflows/build-macos.yml）与本脚本必须保持一致——构建逻辑
+# CI（.github/workflows/build-linux.yml）与本脚本必须保持一致——构建逻辑
 # 只有这一份，CI 通过调用本脚本复用，不在 workflow 内联 PyInstaller 命令，
-# 避免两处漂移（曾因本地脚本漏 --collect-all PySide6.QtMultimedia 而可能
-# 打出缺 QtMultimedia 的坏包）。
+# 避免两处漂移（曾因本地/CI 两套命令不一致而难以追踪）。
 #
 # 用法：
-#   ./scripts/build_macos.sh                          # 本地默认输出 build/macos
-#   ./scripts/build_macos.sh --dist dist              # CI：输出到 dist/
-#   ./scripts/build_macos.sh --variants webm-chat,webm # 只构建指定变体（CI 只发两个）
+#   ./scripts/build_linux.sh                            # 本地默认输出 dist
+#   ./scripts/build_linux.sh --dist dist                # 指定输出目录
+#   ./scripts/build_linux.sh --variants webm-chat,webm  # 只构建指定变体（CI 只发两个）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # 默认用 PATH 上的 python3（源码环境）；可用 PYTHON_BIN 覆盖。
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || echo python3)}"
-# 本机构建隔离依赖目录（scripts/ 下无安装脚本时用系统 python）；CI 走 pip
-# install 的系统环境，该目录不存在时直接用系统环境，不设 PYTHONPATH。
-BUILD_DEPS="$ROOT/build/.build-deps"
-DIST_DIR="$ROOT/build/macos"
-WORK_DIR="$ROOT/build/.pyinstaller/macos"
+DIST_DIR="$ROOT/dist"
+WORK_DIR="$ROOT/build/.pyinstaller/linux"
 VARIANTS="webm-chat,webm,gif-chat,gif"
 
 while [[ $# -gt 0 ]]; do
@@ -31,15 +27,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$ROOT"
-if [[ -d "$BUILD_DEPS/PyInstaller" ]]; then
-    export PYTHONPATH="$BUILD_DEPS${PYTHONPATH:+:$PYTHONPATH}"
-    export PYINSTALLER_CONFIG_DIR="$ROOT/build/.pyinstaller/config"
-fi
-
-"$PYTHON_BIN" scripts/make_icon.py --icns
 
 # 仅当要构建 gif 变体时才生成 GIF 素材（convert_to_gif 默认幂等：只转换
-# 缺失/过期的，CI 只构建 webm 变体时不会触发）。
+# 缺失/过期的，CI 只构建 webm 变体时不会触发；与 build_macos.sh 一致）。
 if [[ ",$VARIANTS," == *",gif-chat,"* || ",$VARIANTS," == *",gif,"* ]]; then
     "$PYTHON_BIN" scripts/convert_to_gif.py --clean
 fi
@@ -62,19 +52,17 @@ for variant in "${variant_list[@]}"; do
         --noconfirm
         --clean
         --onedir
-        --windowed
         --paths .
         --distpath "$DIST_DIR"
         --workpath "$WORK_DIR"
         --name "$name"
-        --icon assets/icon.icns
         --collect-all imageio_ffmpeg
         --collect-all certifi
         --collect-all PySide6.QtMultimedia
         --add-data "$assets:$assets"
-        --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish"
-        --add-data "assets/chat:assets/chat"
         --add-data "assets/sounds:assets/sounds"
+        --add-data "assets/chat:assets/chat"
+        --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish"
         --add-data "pet/menu_templates:pet/menu_templates"
         --add-data "integrations:integrations"
     )
@@ -90,11 +78,10 @@ for variant in "${variant_list[@]}"; do
         done
     fi
 
-    echo "==> 构建 $name.app"
+    echo "==> 构建 $name"
     "$PYTHON_BIN" -m PyInstaller "${args[@]}" "$entry"
     # 中文编码自检（issue #26）：字节码/资源/文件名被编码污染即中止。
-    "$PYTHON_BIN" scripts/check_bundle_encoding.py --dir "$DIST_DIR/$name.app"
-    codesign --force --deep --sign - "$DIST_DIR/$name.app"
+    "$PYTHON_BIN" scripts/check_bundle_encoding.py --dir "$DIST_DIR/$name"
 done
 
-echo "macOS 构建完成：$DIST_DIR"
+echo "Linux 构建完成：$DIST_DIR"
