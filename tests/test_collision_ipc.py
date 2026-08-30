@@ -378,11 +378,12 @@ def test_subprocess_sessions_send_frames_and_reelect_after_parent_exits(tmp_path
     name = "dsh-test-collision-subprocess-" + uuid.uuid4().hex
     script = r'''
 import json, sys, time
-from PySide6.QtCore import QCoreApplication, QEventLoop
+from PySide6.QtCore import QEventLoop
+from PySide6.QtWidgets import QApplication
 from pet.collision_ipc import CollisionIpcSession
 from pet.config import Config
 
-app = QCoreApplication([])
+app = QApplication([])
 session = CollisionIpcSession(Config(sys.argv[3], instance_id=sys.argv[2]), server_name=sys.argv[1])
 roles = []
 session.role_changed.connect(lambda coordinator, epoch: roles.append((coordinator, epoch)))
