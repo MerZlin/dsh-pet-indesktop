@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -955,8 +956,8 @@ class TestPhase4UIAndMenuIntegration:
             def isVisible(self):
                 return True
 
-        # 仅作用于本次调用：把 proactive.sys.platform 视作 darwin（非 Windows）
-        monkeypatch.setattr("pet.proactive.sys.platform", "darwin")
+        # 仅作用于本次调用：替换 proactive 模块内的 sys 引用（不改全局 sys.platform）
+        monkeypatch.setattr("pet.proactive.sys", SimpleNamespace(platform="darwin"))
 
         cfg = Config(base=tmp_path)
         cfg.set("proactive_screen", {"enabled": True, "whitelist": ["code.exe"]})
