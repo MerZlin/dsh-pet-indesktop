@@ -476,6 +476,17 @@ def play_sound(path: Path | str, volume: float = 1.0) -> bool:
         return False
     if not target.is_file():
         return False
+    # 取证日志：任何宠物侧发声都必须留痕（排查"莫名音效"用）
+    try:
+        import traceback
+        caller = ""
+        for frame in reversed(traceback.extract_stack()[-6:-1]):
+            if "click_sound.py" not in frame.filename:
+                caller = f"{Path(frame.filename).name}:{frame.lineno}"
+                break
+        log.info("播放音效 path=%s vol=%.2f caller=%s", target, volume, caller)
+    except Exception:
+        pass
 
     # WAV and decoded short effects use QSoundEffect; compressed sources use
     # the decoder/cache path and a small player pool while warming up.
