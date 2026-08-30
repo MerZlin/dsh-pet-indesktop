@@ -367,9 +367,9 @@ def _clean_self_talk_texts(value):
 
 
 def _default_dynamic_island_data() -> dict:
-    """灵动岛默认配置：默认关闭，位置留空由首次显示时自动定位。"""
+    """灵动岛默认配置：默认开启常驻，位置留空由首次显示时自动定位。"""
     return {
-        "enabled": False,
+        "enabled": True,
         "show_icon": True,
         "show_name": True,
         "show_info": True,

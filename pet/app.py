@@ -221,7 +221,11 @@ class PetApp:
             self.island = DynamicIsland(self.config)
             self.island.clicked.connect(self._toggle_pet_from_island)
         self.island.refresh_from_config()
-        self.island.set_pet_visible(self.win.isVisible() if self.win is not None else True)
+        pet_visible = True
+        if self.win is not None:
+            is_visible = getattr(self.win, "isVisible", None)
+            pet_visible = bool(is_visible()) if callable(is_visible) else True
+        self.island.set_pet_visible(pet_visible)
         self.island.show()
 
     def _toggle_pet_from_island(self) -> None:
@@ -760,6 +764,22 @@ class PetApp:
         # 先隐藏气泡，避免气泡盖住菜单
         menu.aboutToShow.connect(lambda: win._speech_bubble.hide())
         menu.addAction('显示 / 隐藏', toggle_visible)
+
+        island_action = menu.addAction('灵动岛')
+        island_action.setCheckable(True)
+        island_action.setChecked(bool(
+            self.config.get("dynamic_island", {}).get("enabled", True)
+        ))
+
+        def toggle_island(enabled: bool) -> None:
+            island_cfg = dict(self.config.get("dynamic_island", {}) or {})
+            island_cfg["enabled"] = bool(enabled)
+            self.config.set("dynamic_island", island_cfg)
+            self.config.save()
+            self._sync_dynamic_island()
+
+        island_action.toggled.connect(toggle_island)
+
         if self.enable_chat:
             menu.addAction('AI 对话', self.open_chat)
             menu.addAction('AI 设置', self.open_chat_settings)
@@ -790,6 +810,9 @@ class PetApp:
             #（托盘菜单在 _build_tray 时一次性构建，不复用则不刷新会过期）
             mouse_through.setChecked(bool(self.config.get('mouse_through', False)))
             auto.setChecked(autostart_mod.is_enabled())
+            island_action.setChecked(bool(
+                self.config.get("dynamic_island", {}).get("enabled", True)
+            ))
 
         menu.aboutToShow.connect(sync_tray_checks)
 
