@@ -474,3 +474,33 @@ def test_update_policy_live_applies_to_worker(tmp_path):
         assert session._worker.policy["collision_impulse_cap"] == pytest.approx(6000.0)
     finally:
         session.stop()
+def test_coordinator_own_predicted_bounce_via_submit_state_reaches_target():
+    """回归：协调者自身（主桌宠）经进程内 submit_state 上报预测反弹时，
+    也必须进入 _pending_predicted 捕获队列——否则主桌宠撞别的桌宠时
+    目标永远收不到权威冲量（只有 socket 路径有捕获）。"""
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    target = {
+        "runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0, "vy": 0.0, "scale": 1.0, "flags": flags,
+    }
+    worker = _coordinator_with_members(target)  # worker.runtime_id == "coordinator"
+    shooter_state = {
+        "seq": 2, "x": 0.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]], "vx": -800.0, "vy": 0.0,
+        "bounce_vx": 2000.0, "bounce_vy": 0.0, "scale": 1.0,
+        "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+    }
+    received = []
+    worker.impulse_ready.connect(received.append)
+
+    worker.submit_state(shooter_state)  # 协调者进程内直送路径
+    assert "coordinator" in worker._pending_predicted
+
+    worker._coordinator_tick()
+
+    assert len(received) == 1
+    # pair 排序后 a="b"（目标），冲量只给目标
+    assert received[0]["dvx_a"] > 500.0
+    assert received[0]["dvx_b"] == 0.0
+    assert "coordinator" not in worker._pending_predicted

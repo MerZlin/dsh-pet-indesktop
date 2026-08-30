@@ -366,6 +366,14 @@ class _CollisionWorker(QObject):
             return
         self.latest_state = dict(state)
         if self.server is not None:
+            # 协调者自身的预测反弹也要进捕获队列：本进程状态走进程内直送，
+            # 不经过 _handle_message 的 socket 路径，漏掉会导致"主桌宠撞
+            # 别人时目标收不到权威冲量"（只有协调者自己的 pet 会踩中）。
+            if (int(state.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE
+                    and state.get("bounce_vx") is not None
+                    and state.get("bounce_vy") is not None):
+                self._pending_predicted[self.runtime_id] = {
+                    **state, "runtime_id": self.runtime_id, "_captured_at": self._now()}
             if self.runtime_id in self.members:
                 self.previous_members[self.runtime_id] = dict(self.members[self.runtime_id])
             self.members[self.runtime_id] = dict(state, runtime_id=self.runtime_id,
