@@ -253,7 +253,7 @@ def test_collision_throw_cancels_move_plan_and_timer(tmp_path, app):
 
 
 def test_slingshot_launch_cancels_move_plan(tmp_path, app):
-    win, _ = _make_pet_window(tmp_path, "pet_a")
+    win, session = _make_pet_window(tmp_path, "pet_a")
     win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
     win._move_timer.start()
     win._slingshot_anchor_pos = QPoint(win.pos())
@@ -262,6 +262,8 @@ def test_slingshot_launch_cancels_move_plan(tmp_path, app):
     assert win._interaction_state == "THROWN"
     assert win._move_plan is None
     assert not win._move_timer.isActive()
+    assert session.submitted_states[-1]["flags"] & collision.FLAG_THROWN
+    assert session.submitted_states[-1]["vx"] != 0.0 or session.submitted_states[-1]["vy"] != 0.0
     win.close()
 
 

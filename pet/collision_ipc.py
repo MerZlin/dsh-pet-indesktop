@@ -20,6 +20,7 @@ from PySide6.QtCore import QMetaObject, QObject, QThread, QTimer, Qt, Signal, Sl
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from . import collision
+from . import collision_debug
 from .config import APP_DIR_NAME
 from . import slot_manager
 
@@ -260,6 +261,9 @@ class _CollisionWorker(QObject):
                 if not runtime_id:
                     return
                 self.peers[socket] = runtime_id
+                if collision_debug.ENABLED:
+                    collision_debug.log(self.runtime_id, 'hello_peer', runtime_id=runtime_id,
+                                        mapped_runtime_id=self.peers[socket])
                 if socket not in self._welcomed_peers:
                     self._welcomed_peers.add(socket)
                     self._send(socket, self._welcome())
@@ -306,6 +310,14 @@ class _CollisionWorker(QObject):
                 self._last_control_message = self._now()
                 if self.watermarks.should_apply(self.epoch, pair, tick):
                     self.impulse_ready.emit(message)
+                    if collision_debug.ENABLED:
+                        collision_debug.log(self.runtime_id, 'impulse_queued', pair=pair, tick=tick)
+                elif collision_debug.ENABLED:
+                    collision_debug.log(self.runtime_id, 'impulse_discard', pair=pair, tick=tick,
+                                        reason='watermark')
+            elif collision_debug.ENABLED:
+                collision_debug.log(self.runtime_id, 'impulse_discard', pair=pair, tick=tick,
+                                    reason='epoch_mismatch')
 
     def _resign_to(self, _winner: str) -> None:
         if self.server is None:
@@ -346,6 +358,10 @@ class _CollisionWorker(QObject):
                 self.previous_members[self.runtime_id] = dict(self.members[self.runtime_id])
             self.members[self.runtime_id] = dict(state, runtime_id=self.runtime_id,
                                                  instance_id=self.instance_id, last_seen=self._now())
+            if collision_debug.ENABLED:
+                collision_debug.log(self.runtime_id, 'state_arrive', runtime_id=self.runtime_id,
+                                    x=state.get('x'), y=state.get('y'), vx=state.get('vx'),
+                                    vy=state.get('vy'), seq=state.get('seq'))
         elif self.socket:
             self._send(self.socket, dict(state, type="state"))
 

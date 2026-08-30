@@ -52,6 +52,7 @@ from .context_menus.shared import take_deferred_menu_callbacks
 from . import vision as vision_mod
 from . import physics as physics_mod
 from . import collision
+from . import collision_debug
 from .click_sound import choose_sound, play_sound, resolve_click_sound_candidates
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
@@ -1088,20 +1089,33 @@ class PetWindow(QWidget):
         self._collision_last_state = comparable
         self._collision_last_submit_at = now
         session.submit_state(state)
+        if collision_debug.ENABLED:
+            collision_debug.log(
+                getattr(session, 'runtime_id', ''), 'state_submit',
+                x=state['x'], y=state['y'], vx=state['vx'], vy=state['vy'],
+                seq=state['seq'], force=force,
+            )
         moving = (self._interaction_state in (DRAGGING, THROWN)
                    or math.hypot(*self._phys_vel) > 20.0)
         self._collision_timer.setInterval(50 if moving else 500)
 
     @Slot(object)
     def _on_collision_impulse(self, message: dict[str, Any]) -> None:
+        runtime_id = str(getattr(getattr(self, '_collision_session', None), 'runtime_id', ''))
+        def discard(reason: str) -> None:
+            if collision_debug.ENABLED:
+                collision_debug.log(runtime_id, 'impulse_discard', reason=reason,
+                                    pair=message.get('pair', ''))
         # 锁定位置桌宠被撞不动：与协调者侧无限质量判定互为双保险
         if self.cfg.get('lock_position'):
+            discard('lock_position')
             return
         if self._collision_session is None or not self.isVisible() or self._hidden_paused:
+            discard('session_missing_or_hidden')
             return
         if self._interaction_state == DRAGGING or self._physics_mode == 'drag':
+            discard('dragging')
             return
-        runtime_id = str(getattr(self._collision_session, 'runtime_id', ''))
         if message.get('a') == runtime_id:
             dvx, dvy = float(message.get('dvx_a', 0)), float(message.get('dvy_a', 0))
             dx, dy = float(message.get('dx_a', 0)), float(message.get('dy_a', 0))
@@ -1109,6 +1123,7 @@ class PetWindow(QWidget):
             dvx, dvy = float(message.get('dvx_b', 0)), float(message.get('dvy_b', 0))
             dx, dy = float(message.get('dx_b', 0)), float(message.get('dy_b', 0))
         else:
+            discard('runtime_id_mismatch')
             return
         rect = self.collision_content_rect()
         radius_x = max(1.0, rect.width() / 2.0)
@@ -1124,6 +1139,9 @@ class PetWindow(QWidget):
             expected_y = contact_y + ny * radius_y
         if math.hypot(rect.center().x() - expected_x, rect.center().y() - expected_y) > min(radius_x, radius_y) * 0.1:
             dx = dy = 0.0
+            if collision_debug.ENABLED:
+                collision_debug.log(runtime_id, 'impulse_position_discard',
+                                    reason='contact_deviation', pair=message.get('pair', ''))
         has_velocity_impulse = abs(dvx) > 1e-9 or abs(dvy) > 1e-9
         self._phys_vel[0] += dvx
         self._phys_vel[1] += dvy
@@ -1147,6 +1165,9 @@ class PetWindow(QWidget):
             self._last_collision_squash_at = now
             self._start_squash()
         self._submit_collision_state(force=True)
+        if collision_debug.ENABLED:
+            collision_debug.log(runtime_id, 'impulse_apply', pair=message.get('pair', ''),
+                                dv=(dvx, dvy), displacement=(dx, dy), speed=speed)
 
     _FS_SKIP_CLASSES = {
         'Progman', 'WorkerW', 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd',
@@ -2144,6 +2165,7 @@ class PetWindow(QWidget):
         if self.drag_physics and self._drag_target is None:
             self._drag_target = QPoint(self.pos())
         self._start_slingshot_rebound(progress)
+        self._submit_collision_state(force=True)
         self.update()
 
     def _cancel_slingshot_to_anchor(self) -> None:
@@ -2183,6 +2205,10 @@ class PetWindow(QWidget):
         self._physics_timer.start()
         self._context_menu_suppressed = True
         self._start_slingshot_rebound(progress)
+        # The launch changes both flags and velocity after move(anchor). Publish
+        # it immediately; otherwise the first 50ms can remain behind the 500ms
+        # idle heartbeat and a fast throw crosses a peer before registration.
+        self._submit_collision_state(force=True)
         self.update()
 
     def _is_in_interactive_area(self, local_pos) -> bool:
