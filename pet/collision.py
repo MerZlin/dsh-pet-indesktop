@@ -363,11 +363,15 @@ def solve_collision_impulse(
     # 法向相对速度 v_rel_n = dot(v_rel, n)
     vn = vrx * nx + vry * ny
 
-    # 微小接近速度只通过位置分离消除，避免静置接触反复弹跳。
-    if vn >= -IMPULSE_MIN_APPROACH_SPEED:
+    # 低速接触改非弹性冲量（e=0，只挡不弹）：vn>=0 已分离不施加；
+    # 0>vn>-阈值 时用 e=0 消除法向接近速度（静置接触不抖动，但贴贴
+    # 有"被挡住"的实体感，不再像空气）；vn<=-阈值 才用正常恢复系数。
+    if vn >= 0.0:
         return 0.0, 0.0, 0.0, 0.0, 0.0
 
     e = max(0.0, min(1.0, float(restitution)))
+    if vn >= -IMPULSE_MIN_APPROACH_SPEED:
+        e = 0.0
     sum_inv_m = inv_m_a + inv_m_b
 
     # 法向冲量大小 jn

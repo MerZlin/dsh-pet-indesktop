@@ -302,8 +302,8 @@ class TestCollisionImpulseAndMomentum:
         assert j == 0.0
         assert dvx_a == 0.0 and dvx_b == 0.0
 
-    def test_minimum_approach_speed_suppresses_low_speed_impulse(self):
-        """低于 80px/s 的接近速度不产生速度冲量。"""
+    def test_low_speed_contact_uses_inelastic_impulse(self):
+        """低于 80px/s 的接近用 e=0 非弹性冲量：只挡不弹，低速接触有实体感。"""
         slow_a = collision.MemberState(
             runtime_id="slow-a", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
             vx=0.0, vy=0.0,
@@ -312,8 +312,15 @@ class TestCollisionImpulseAndMomentum:
             runtime_id="slow-b", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
             vx=-50.0, vy=0.0,
         )
-        result = collision.solve_collision_impulse(slow_a, slow_b, 1.0, 0.0)
-        assert result == (0.0, 0.0, 0.0, 0.0, 0.0)
+        j, dvx_a, dvy_a, dvx_b, dvy_b = collision.solve_collision_impulse(
+            slow_a, slow_b, 1.0, 0.0,
+        )
+        # e=0：法向接近速度恰好抵消（等质量各半），无反弹放大
+        assert j > 0.0
+        assert dvx_a == pytest.approx(-25.0)
+        assert dvx_b == pytest.approx(25.0)
+        vn_after = ((-50.0 + dvx_b) - (0.0 + dvx_a)) * 1.0
+        assert vn_after == pytest.approx(0.0)  # 完全非弹性，接近速度归零
 
         fast_b = collision.MemberState(
             runtime_id="fast-b", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
@@ -461,10 +468,10 @@ class TestPositionSeparationAndMultiBody:
         assert impulses4 == []
 
     def test_persistent_low_speed_contact_only_separates(self):
-        """低速重叠连续 10 tick 只分离，不产生反弹速度冲量。"""
+        """低速重叠连续 10 tick：分离最终完成，非弹性冲量无反弹放大、不抖动。"""
         a_x, b_x = 0.0, 80.0
         history = {}
-        impulse_count = 0
+        max_dv = 0.0
         for tick in range(10):
             a = collision.MemberState(
                 runtime_id="A", x=a_x, y=0.0, radius_x=50.0, radius_y=50.0,
@@ -477,11 +484,13 @@ class TestPositionSeparationAndMultiBody:
             impulses, combined, history = collision.solve_multi_body_collision(
                 [a, b], tick=tick, overlap_history=history,
             )
-            impulse_count += sum(1 for item in impulses if item.j > 0.0)
+            # 非弹性接触：速度增量只抵消接近速度（-1px/s），绝不放大成反弹
+            for item in impulses:
+                max_dv = max(max_dv, abs(item.dvx_a), abs(item.dvx_b))
             a_x += combined["A"][2]
             b_x += combined["B"][2]
 
-        assert impulse_count == 0
+        assert max_dv <= 1.0 + 1e-6  # 只挡不弹
         assert collision.check_collision_ellipse(
             a_x, 0.0, 50.0, 50.0, b_x, 0.0, 50.0, 50.0, "A", "B",
         )[3] < 0.5
