@@ -325,8 +325,8 @@ def test_contact_deviation_over_10_percent_applies_velocity_without_displacement
     rect = win.visible_content_rect()
     radius_x = max(1.0, rect.width() / 2.0)
 
-    # 构造一个严重偏离的期望接触点（远超 10% 半径）
-    far_contact_x = rect.center().x() + radius_x * 5.0
+    # 偏差豁免按"协调者认定的我方中心"判定：构造一个严重偏离的 ax（远超 10% 半径）
+    far_ax = rect.center().x() + radius_x * 5.0
     msg = {
         "a": "pet_a",
         "b": "pet_b",
@@ -334,8 +334,8 @@ def test_contact_deviation_over_10_percent_applies_velocity_without_displacement
         "dvy_a": 0.0,
         "dx_a": 10.0,  # 本应产生 10px 位移
         "dy_a": 0.0,
-        "contact_x": far_contact_x,
-        "contact_y": float(rect.center().y()),
+        "ax": far_ax,
+        "ay": float(rect.center().y()),
         "nx": -1.0,
         "ny": 0.0,
     }

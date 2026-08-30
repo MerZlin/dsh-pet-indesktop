@@ -1128,15 +1128,16 @@ class PetWindow(QWidget):
         rect = self.collision_content_rect()
         radius_x = max(1.0, rect.width() / 2.0)
         radius_y = max(1.0, rect.height() / 2.0)
-        contact_x = float(message.get('contact_x', rect.center().x()))
-        contact_y = float(message.get('contact_y', rect.center().y()))
-        nx, ny = float(message.get('nx', 0.0)), float(message.get('ny', 0.0))
+        # 偏差豁免的本意是"协调者眼中的我已经过期就别瞬移我"——直接比较
+        # 协调者 tick 时认定的我方中心（ax/ay 或 bx/by）与当前实际中心，
+        # 不从 contact/normal 反推（三种检测路径的 contact 语义不同，反推
+        # 会系统性误判，导致所有位置分离被丢弃）
         if message.get('a') == runtime_id:
-            expected_x = contact_x - nx * radius_x
-            expected_y = contact_y - ny * radius_y
+            expected_x = float(message.get('ax', rect.center().x()))
+            expected_y = float(message.get('ay', rect.center().y()))
         else:
-            expected_x = contact_x + nx * radius_x
-            expected_y = contact_y + ny * radius_y
+            expected_x = float(message.get('bx', rect.center().x()))
+            expected_y = float(message.get('by', rect.center().y()))
         if math.hypot(rect.center().x() - expected_x, rect.center().y() - expected_y) > min(radius_x, radius_y) * 0.1:
             dx = dy = 0.0
             if collision_debug.ENABLED:

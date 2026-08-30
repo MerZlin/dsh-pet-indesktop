@@ -79,6 +79,13 @@ class ImpulseResult:
     contact_x: float
     contact_y: float
     flags: int = 0
+    # 协调者 tick 时刻认定的双方中心坐标（客户端用它判断"协调者眼中的我"
+    # 是否过期，代替从 contact/normal 反推——后者依赖接触点语义，三种检测
+    # 路径语义不一致会导致偏差豁免系统性误判）
+    ax: float = 0.0
+    ay: float = 0.0
+    bx: float = 0.0
+    by: float = 0.0
     # 针对 a 和 b 分配的冲量增量 (px/s) 及位移分离增量 (px)
     dvx_a: float = 0.0
     dvy_a: float = 0.0
@@ -648,6 +655,10 @@ def solve_multi_body_collision(
             sep=sep_dist,
             contact_x=p["cx"],
             contact_y=p["cy"],
+            ax=p["m1"].x,
+            ay=p["m1"].y,
+            bx=p["m2"].x,
+            by=p["m2"].y,
             dvx_a=p["dvx_a"],
             dvy_a=p["dvy_a"],
             dvx_b=p["dvx_b"],
