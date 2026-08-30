@@ -15,7 +15,7 @@ import sys
 from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen,
     QPixmap, QTransform,
@@ -222,8 +222,11 @@ def bubble_rect_for_anchor(
 class PetSpeechBubble(QFrame):
     """不依赖桌宠透明窗口的独立气泡，支持跨屏幕边界自动选位。"""
 
+    clicked = Signal()
+
     def __init__(self, parent=None, style_id: str = "classic_top"):
         super().__init__(parent)
+        self._interactive = False
         self.setObjectName("pet-speech-bubble")
         flags = (
             Qt.WindowType.Tool
@@ -416,6 +419,18 @@ class PetSpeechBubble(QFrame):
                 width += min(104, ceil((length - 24) / 8) * 14)
         width = max(base_size.width(), min(320, width))
         return QSize(width, int(width * 195 / 240 + 0.5))
+
+    def set_interactive(self, on: bool) -> None:
+        """开启后气泡可被鼠标点击（用于触发快速对话），默认全透明穿透。"""
+        self._interactive = bool(on)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not self._interactive)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._interactive and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def show_text(
         self,
