@@ -43,9 +43,10 @@ class _BackgroundResult(QObject):
 
 
 class _BalanceBridge(_BackgroundResult):
-    def __init__(self, win):
+    def __init__(self, win, owner=None):
         super().__init__()
         self.win = win
+        self.owner = owner
         self.done.connect(self._show)
 
     def _show(self, ok: bool, payload) -> None:
@@ -56,6 +57,8 @@ class _BalanceBridge(_BackgroundResult):
             self.win.show_bubble(str(payload), duration_ms=6000)
             return
         _show_balance_payload(self.win, payload)
+        if self.owner is not None and hasattr(self.owner, "_update_island_balance"):
+            self.owner._update_island_balance(payload)
 
 
 def _show_balance_payload(win, payload) -> None:
@@ -218,6 +221,7 @@ class PetApp:
             self.island = DynamicIsland(self.config)
             self.island.clicked.connect(self._toggle_pet_from_island)
         self.island.refresh_from_config()
+        self.island.set_pet_visible(self.win.isVisible() if self.win is not None else True)
         self.island.show()
 
     def _toggle_pet_from_island(self) -> None:
@@ -228,6 +232,8 @@ class PetApp:
             win.hide(notify=False)
         else:
             win.show()
+        if getattr(self, "island", None) is not None:
+            self.island.set_pet_visible(win.isVisible())
 
     def _on_about_to_quit(self) -> None:
         """退出前保存当前有效窗口的位置。
@@ -309,7 +315,7 @@ class PetApp:
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
         # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
         QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
-        bridge = _BalanceBridge(win)
+        bridge = _BalanceBridge(win, owner=self)
         self._balance_bridge = bridge
         threading.Thread(
             target=self._balance_worker,
@@ -324,7 +330,6 @@ class PetApp:
             payload = {"text": text, "info": info}
             self._balance_cache = (time.monotonic(), payload, provider_key)
             self._write_balance_file_cache(payload, provider_key)
-            self._update_island_balance(payload)
             bridge.done.emit(True, payload)
         except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
             bridge.done.emit(False, f'余额查询失败：{exc}')
@@ -728,6 +733,8 @@ class PetApp:
 
     def _notify_pet_hidden(self) -> None:
         """用户主动隐藏桌宠后弹托盘提示，指明恢复入口。"""
+        if getattr(self, "island", None) is not None:
+            self.island.set_pet_visible(False)
         if self.tray is None:
             return
         self.tray.showMessage(
@@ -745,6 +752,8 @@ class PetApp:
                 win.hide()
             else:
                 win.show()
+            if getattr(self, "island", None) is not None:
+                self.island.set_pet_visible(win.isVisible())
 
         menu = QMenu()
         # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），托盘菜单弹出前

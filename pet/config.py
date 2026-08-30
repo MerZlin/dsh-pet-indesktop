@@ -377,6 +377,7 @@ def _default_dynamic_island_data() -> dict:
         "custom_text": "",
         "show_status": True,
         "style": "dark",           # dark / light / glass
+        "icon": "🐳",
         "x": None,
         "y": None,
     }
@@ -398,6 +399,7 @@ def _clean_dynamic_island_data(value) -> dict:
     result["custom_text"] = str(result.get("custom_text") or "")[:80]
     style = str(result.get("style") or "dark").strip()
     result["style"] = style if style in {"dark", "light", "glass"} else "dark"
+    result["icon"] = str(result.get("icon") or "🐳").strip()[:8] or "🐳"
     # 至少保留一个组件：全部关闭时强制显示信息槽，避免空胶囊。
     if not (result["show_icon"] or result["show_name"] or result["show_info"] or result["show_status"]):
         result["show_info"] = True

@@ -50,6 +50,7 @@ class DynamicIsland(QWidget):
         self._press_global: QPoint | None = None
         self._balance_tier_text = "余额峰谷 --"
         self._balance_text = "余额 --"
+        self._pet_visible = True
 
         self._info_timer = QTimer(self)
         self._info_timer.setInterval(30_000)
@@ -63,6 +64,10 @@ class DynamicIsland(QWidget):
         self._balance_tier_text = str(tier_text or "余额峰谷 --")
         self._balance_text = str(balance_text or "余额 --")
         self._refresh()
+
+    def set_pet_visible(self, visible: bool) -> None:
+        self._pet_visible = bool(visible)
+        self.update()
 
     def refresh_from_config(self) -> None:
         self._cfg = _cfg_dict(self.config)
@@ -101,6 +106,9 @@ class DynamicIsland(QWidget):
         character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
         return self.config.character_alias(character_id) or character_id
 
+    def _icon_text(self) -> str:
+        return str(self._cfg.get("icon") or "🐳").strip()[:8] or "🐳"
+
     def _update_size(self) -> None:
         icon, name, info, status = self._visible_parts()
         fm = self.fontMetrics()
@@ -112,7 +120,7 @@ class DynamicIsland(QWidget):
         if info:
             width += fm.horizontalAdvance(self._info_text()) + 8
         if status:
-            width += 8 + 6
+            width += 12 + 10
         width += 12
         self.setFixedSize(max(120, width), _CAPSULE_HEIGHT)
 
@@ -194,7 +202,7 @@ class DynamicIsland(QWidget):
             painter.drawEllipse(QRectF(x, (self.height() - 26) / 2, 26, 26))
             painter.setPen(QColor(255, 255, 255))
             fm = self.fontMetrics()
-            icon_text = "🐟"
+            icon_text = self._icon_text()
             painter.drawText(
                 QRectF(x, (self.height() - fm.height()) / 2 - 1, 26, fm.height()),
                 Qt.AlignmentFlag.AlignCenter,
@@ -224,9 +232,12 @@ class DynamicIsland(QWidget):
             x += self.fontMetrics().horizontalAdvance(info_text) + 8
 
         if status:
+            dot_size = 10
+            dot_color = QColor(80, 220, 120) if self._pet_visible else QColor(130, 140, 155)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(80, 220, 120))
-            painter.drawEllipse(QRectF(x, (self.height() - 6) / 2, 6, 6))
+            painter.setBrush(dot_color)
+            painter.drawEllipse(QRectF(x, (self.height() - dot_size) / 2, dot_size, dot_size))
+            x += dot_size + 12
 
         painter.end()
 
