@@ -441,20 +441,26 @@ def test_submit_leave_removes_member_immediately(tmp_path):
             _pump(0.1)
             if coordinator._worker.server is not None or client._worker.server is not None:
                 break
+        # 服务端已出现，再给客户端连接/握手留出时间
+        _pump(0.5)
         if coordinator._worker.server is not None:
             coord_worker, client_session = coordinator._worker, client
         else:
             coord_worker, client_session = client._worker, coordinator
         assert coord_worker.server is not None
 
-        # 客户端上报 state 成为成员
+        # 客户端上报 state 成为成员（CI 上 QLocal 投递可能较慢，轮询等待）
         client_session.submit_state(_state(1, x=10.0))
-        _pump(0.4)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and client_session.runtime_id not in coord_worker.members:
+            _pump(0.05)
         assert client_session.runtime_id in coord_worker.members
 
         # 发送 leave：成员即时移除（3s stale 移除阈值远未到）
         client_session.submit_leave()
-        _pump(0.4)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and client_session.runtime_id in coord_worker.members:
+            _pump(0.05)
         assert client_session.runtime_id not in coord_worker.members
     finally:
         coordinator.stop()
