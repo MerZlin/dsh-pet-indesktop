@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QPainter
+from PySide6.QtGui import QColor, QGuiApplication, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from . import catalog
@@ -53,7 +53,7 @@ class DynamicIsland(QWidget):
 
         self._info_timer = QTimer(self)
         self._info_timer.setInterval(30_000)
-        self._info_timer.timeout.connect(self.update)
+        self._info_timer.timeout.connect(self._refresh)
         self._info_timer.start()
 
         self._apply_position()
@@ -62,11 +62,16 @@ class DynamicIsland(QWidget):
     def set_balance_info(self, tier_text: str, balance_text: str) -> None:
         self._balance_tier_text = str(tier_text or "余额峰谷 --")
         self._balance_text = str(balance_text or "余额 --")
-        self.update()
+        self._refresh()
 
     def refresh_from_config(self) -> None:
         self._cfg = _cfg_dict(self.config)
-        self._apply_position()
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """内容变化后立即重算尺寸、夹回屏幕并重绘。"""
+        self._update_size()
+        self._clamp_to_screen()
         self.update()
 
     # ------------------------------------------------------------ 内部
@@ -126,6 +131,16 @@ class DynamicIsland(QWidget):
             pos.setY(max(available.top(), min(pos.y(), available.bottom() - self.height() + 1)))
         self.move(pos)
 
+    def _clamp_to_screen(self) -> None:
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        x = max(available.left(), min(self.x(), available.right() - self.width() + 1))
+        y = max(available.top(), min(self.y(), available.bottom() - self.height() + 1))
+        if (x, y) != (self.x(), self.y()):
+            self.move(x, y)
+
     def _save_position(self) -> None:
         island = dict(self._cfg)
         island["x"] = self.x()
@@ -135,6 +150,19 @@ class DynamicIsland(QWidget):
         self.config.save()
 
     # ------------------------------------------------------------ 绘制
+    def _style_palette(self):
+        """返回 (背景, 主文字色, 次文字色)。背景可为 QColor 或 QLinearGradient。"""
+        style = str(self._cfg.get("style") or "dark")
+        if style == "light":
+            return QColor(255, 255, 255, 242), QColor(31, 35, 40), QColor(107, 114, 128)
+        if style == "glass":
+            gradient = QLinearGradient(0, 0, 0, self.height())
+            gradient.setColorAt(0.0, QColor(255, 255, 255, 196))
+            gradient.setColorAt(0.5, QColor(230, 242, 255, 150))
+            gradient.setColorAt(1.0, QColor(255, 255, 255, 210))
+            return gradient, QColor(35, 45, 60), QColor(90, 105, 125)
+        return QColor(28, 30, 38, 235), QColor(235, 238, 245), QColor(160, 170, 190)
+
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -147,9 +175,16 @@ class DynamicIsland(QWidget):
         painter.setBrush(QColor(0, 0, 0, 46))
         painter.drawRoundedRect(shadow, radius, radius)
 
-        # 胶囊主体
-        painter.setBrush(QColor(28, 30, 38, 235))
+        # 胶囊主体（白色 / 黑色 / 玻璃质感）
+        background, primary_color, secondary_color = self._style_palette()
+        painter.setBrush(background)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, radius, radius)
+        if str(self._cfg.get("style") or "dark") == "glass":
+            # 玻璃高光描边，强化“液化玻璃”边缘
+            painter.setPen(QPen(QColor(255, 255, 255, 130), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5)
 
         icon, name, info, status = self._visible_parts()
         x = 16.0
@@ -168,7 +203,7 @@ class DynamicIsland(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             x += 26 + 8
 
-        painter.setPen(QColor(235, 238, 245))
+        painter.setPen(primary_color)
         if name:
             text = self._character_name()
             painter.drawText(
@@ -180,7 +215,7 @@ class DynamicIsland(QWidget):
 
         if info:
             info_text = self._info_text()
-            painter.setPen(QColor(160, 170, 190))
+            painter.setPen(secondary_color)
             painter.drawText(
                 QRectF(x, 0, self.fontMetrics().horizontalAdvance(info_text), self.height()),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,

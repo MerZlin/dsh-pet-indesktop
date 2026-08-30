@@ -1152,6 +1152,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("dynamic_island_info", "显示信息槽", "显示时间/余额/自定义短文本等信息。", self.island_info_check),
             SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
             SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
+            SettingRow("dynamic_island_style", "背景风格", "黑色 / 白色 / 苹果式玻璃质感。", self.island_style_select),
             SettingRow("dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True),
         ], island_content))
         island_layout.addStretch(1)
@@ -1629,6 +1630,14 @@ class ModernSettingsDialog(QDialog):
         ):
             self.island_info_mode_select.addItem(label, value)
         self.island_info_mode_select.setCurrentData(str(island_cfg.get("info_mode") or "time"))
+        self.island_style_select = ModernSelect(self, width=160)
+        for label, value in (
+            ("黑色", "dark"),
+            ("白色", "light"),
+            ("玻璃质感", "glass"),
+        ):
+            self.island_style_select.addItem(label, value)
+        self.island_style_select.setCurrentData(str(island_cfg.get("style") or "dark"))
         self.island_custom_text_edit = _line_edit(str(island_cfg.get("custom_text") or ""), width=220)
 
     # ------------------------------------------------------------ 主动识屏
@@ -2161,6 +2170,7 @@ class ModernSettingsDialog(QDialog):
             "info_mode": str(self.island_info_mode_select.currentData() or "time"),
             "custom_text": self.island_custom_text_edit.text().strip(),
             "show_status": self.island_status_check.isChecked(),
+            "style": str(self.island_style_select.currentData() or "dark"),
             "x": existing_island.get("x"),
             "y": existing_island.get("y"),
         })

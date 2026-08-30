@@ -376,6 +376,7 @@ def _default_dynamic_island_data() -> dict:
         "info_mode": "time",       # time / balance_tier / balance / custom
         "custom_text": "",
         "show_status": True,
+        "style": "dark",           # dark / light / glass
         "x": None,
         "y": None,
     }
@@ -395,6 +396,8 @@ def _clean_dynamic_island_data(value) -> dict:
     mode = str(result.get("info_mode") or "time").strip()
     result["info_mode"] = mode if mode in {"time", "balance_tier", "balance", "custom"} else "time"
     result["custom_text"] = str(result.get("custom_text") or "")[:80]
+    style = str(result.get("style") or "dark").strip()
+    result["style"] = style if style in {"dark", "light", "glass"} else "dark"
     # 至少保留一个组件：全部关闭时强制显示信息槽，避免空胶囊。
     if not (result["show_icon"] or result["show_name"] or result["show_info"] or result["show_status"]):
         result["show_info"] = True

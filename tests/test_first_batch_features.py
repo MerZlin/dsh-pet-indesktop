@@ -78,6 +78,7 @@ def test_dynamic_island_widget_import_and_signal(tmp_path: Path):
         "info_mode": "time",
         "custom_text": "",
         "show_status": True,
+        "style": "glass",
         "x": 100,
         "y": 100,
     })
@@ -88,6 +89,37 @@ def test_dynamic_island_widget_import_and_signal(tmp_path: Path):
     app.processEvents()
     island.clicked.emit()
     assert clicks == [1]
+    assert island.width() > 0
+    island.hide()
+    island.deleteLater()
+    app.processEvents()
+
+
+def test_dynamic_island_resizes_when_info_changes(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    from pet.dynamic_island import DynamicIsland
+
+    cfg = _config(tmp_path)
+    cfg.set("dynamic_island", {
+        "enabled": True,
+        "show_icon": True,
+        "show_name": True,
+        "show_info": True,
+        "info_mode": "balance",
+        "custom_text": "",
+        "show_status": True,
+        "style": "dark",
+        "x": 100,
+        "y": 100,
+    })
+    island = DynamicIsland(cfg)
+    width_before = island.width()
+    island.set_balance_info(
+        "当前高峰 · 下周一 09:00 切换",
+        "余额 ¥123.45（充值 ¥200.00 / 赠送 ¥0.00）",
+    )
+    app.processEvents()
+    assert island.width() > width_before
     island.hide()
     island.deleteLater()
     app.processEvents()
