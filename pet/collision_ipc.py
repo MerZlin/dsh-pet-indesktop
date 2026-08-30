@@ -107,27 +107,49 @@ class _CollisionWorker(QObject):
                 server.deleteLater()
                 self._connect_client()
                 return
-        if server.listen(self.name):
-            # 同一 Qt 进程中的 QLocalServer 在 Windows 上可能允许并行
-            # listen；进程内登记用于测试/嵌入式 harness 的同名候选收敛。
-            if self.name in self._local_election_names:
-                server.close()
-                server.deleteLater()
-                slot_manager.release_file_lock(self._coordinator_lock)
-                self._coordinator_lock = None
-                self._connect_client()
-                return
-            self._local_election_names.add(self.name)
-            self.server = server
-            self.epoch = secrets.token_hex(12)
-            server.newConnection.connect(self._accept_connection)
-            self._start_probe()
+        if not server.listen(self.name):
+            # POSIX 下被杀死/崩溃的旧协调者会残留 socket 文件，listen 报
+            # AddressInUseError（Windows 命名管道随进程死亡回收，无此问题）。
+            # 持有排他文件锁 ⇒ 旧协调者必死（flock 随进程死亡释放），先同步
+            # 探测同名服务确实无人应答，再清残留文件重试 listen（issue #42）。
+            if (sys.platform != "win32" and self._coordinator_lock is not None
+                    and not self._probe_live_server()):
+                QLocalServer.removeServer(self.name)
+                if server.listen(self.name):
+                    self._become_listener(server)
+                    return
+            server.deleteLater()
+            slot_manager.release_file_lock(self._coordinator_lock)
+            self._coordinator_lock = None
+            self._connect_client()
             return
-        # 只有连接验证失败并短暂重试后才清理残留服务。
-        server.deleteLater()
-        slot_manager.release_file_lock(self._coordinator_lock)
-        self._coordinator_lock = None
-        self._connect_client()
+        self._become_listener(server)
+
+    def _become_listener(self, server) -> None:
+        """listen 成功后的收敛：进程内同名候选去重，登记并启动决胜探测。"""
+        # 同一 Qt 进程中的 QLocalServer 在 Windows 上可能允许并行
+        # listen；进程内登记用于测试/嵌入式 harness 的同名候选收敛。
+        if self.name in self._local_election_names:
+            server.close()
+            server.deleteLater()
+            slot_manager.release_file_lock(self._coordinator_lock)
+            self._coordinator_lock = None
+            self._connect_client()
+            return
+        self._local_election_names.add(self.name)
+        self.server = server
+        self.epoch = secrets.token_hex(12)
+        server.newConnection.connect(self._accept_connection)
+        self._start_probe()
+
+    def _probe_live_server(self) -> bool:
+        """同步探测同名服务是否有活监听者（仅 POSIX 残留恢复路径使用）。"""
+        probe = QLocalSocket()
+        try:
+            probe.connectToServer(self.name)
+            return probe.waitForConnected(300)
+        finally:
+            probe.abort()
 
     def _start_probe(self) -> None:
         """Windows 命名管道允许并行 listen 时，用 QLocal 连接稳定决胜。"""
@@ -206,6 +228,10 @@ class _CollisionWorker(QObject):
             socket.readyRead.connect(lambda s=socket: self._read_socket(s))
             socket.disconnected.connect(lambda s=socket: self._peer_lost(s))
             socket.errorOccurred.connect(lambda _e, s=socket: self._peer_lost(s))
+            # POSIX 时序窗口：数据可能在 readyRead 槽连接之前就已到达，
+            # 不兜底读取的话这批数据不会再触发信号（表现为成员表为空）。
+            if socket.bytesAvailable():
+                self._read_socket(socket)
 
     def _register_self(self) -> None:
         self.members[self.runtime_id] = dict(self.latest_state, runtime_id=self.runtime_id,

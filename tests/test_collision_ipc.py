@@ -374,7 +374,6 @@ def test_two_sessions_elect_one_coordinator_and_stop(tmp_path):
     assert not second._thread.isRunning()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="QLocalServer 子进程选举在 POSIX CI 上不稳定，Windows 覆盖即可")
 def test_subprocess_sessions_send_frames_and_reelect_after_parent_exits(tmp_path):
     name = "dsh-test-collision-subprocess-" + uuid.uuid4().hex
     script = r'''
@@ -426,7 +425,6 @@ session.stop()
     assert survivor.wait(timeout=5) == 0
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="QLocalServer 双会话成员同步在 POSIX CI 上不稳定，Windows 覆盖即可")
 def test_submit_leave_removes_member_immediately(tmp_path):
     """客户端 submit_leave 后，协调者成员表即时移除（不等 stale 超时）。"""
     QApplication.instance() or QApplication([])
