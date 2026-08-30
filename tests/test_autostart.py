@@ -44,7 +44,8 @@ def _force_win(monkeypatch):
     monkeypatch.setattr(autostart_mod, "_IS_MAC", False)
     monkeypatch.setattr(autostart_mod, "_IS_LINUX", False)
     fake = FakeWinreg()
-    monkeypatch.setattr(autostart_mod, "winreg", fake)
+    # Linux/macOS 模块不会自动 import winreg，用 raising=False 补挂测试替身。
+    monkeypatch.setattr(autostart_mod, "winreg", fake, raising=False)
     return fake
 
 
