@@ -297,6 +297,13 @@ def _set_windows_click_through(hwnd: int, enabled: bool, user32=None) -> bool:
     return True
 
 
+def _set_speech_bubble_interactive(pet) -> None:
+    """按当前是否可打开快速对话，切换气泡鼠标穿透/可点击。"""
+    setter = getattr(pet._speech_bubble, "set_interactive", None)
+    if callable(setter):
+        setter(callable(getattr(pet, "on_open_quick_chat", None)))
+
+
 class WindowsPerPixelInputController:
     """根据光标所在像素动态切换 layered window 的输入穿透。
 
@@ -409,6 +416,7 @@ class PetWindow(QWidget):
         self._speech_bubble = PetSpeechBubble(
             style_id=str(config.get('self_talk_bubble_style', DEFAULT_SELF_TALK_BUBBLE_STYLE))
         )
+        self._speech_bubble.clicked.connect(self._on_speech_bubble_clicked)
         self._look_busy = False
         self._last_look_ts = 0.0
         self.look_done.connect(self._on_look_done)
@@ -2111,6 +2119,10 @@ class PetWindow(QWidget):
     def _clear_just_dragged(self) -> None:
         self._just_dragged = False
 
+    def _on_speech_bubble_clicked(self) -> None:
+        if callable(getattr(self, "on_open_quick_chat", None)):
+            self.on_open_quick_chat()
+
     def _try_open_quick_chat_from_bubble(self, global_pos) -> bool:
         """点击桌宠头顶的气泡时打开快速对话（而不是触发 Q 弹）。"""
         callback = getattr(self, "on_open_quick_chat", None)
@@ -2359,6 +2371,7 @@ class PetWindow(QWidget):
             return False
         duration_ms = int(round(self._self_talk_duration_seconds * 1000))
         anchor = self.visible_content_rect()
+        _set_speech_bubble_interactive(self)
         self._speech_bubble.show_text(
             text, anchor, duration_ms, pet_scale=self.scale
         )
@@ -2377,6 +2390,7 @@ class PetWindow(QWidget):
         kind, value = random.choice(choices)
         duration_ms = int(round(self._self_talk_duration_seconds * 1000))
         anchor = self.visible_content_rect()
+        _set_speech_bubble_interactive(self)
         if kind == "image":
             return self._speech_bubble.show_image(
                 value, anchor, duration_ms, pet_scale=self.scale
@@ -2438,6 +2452,7 @@ class PetWindow(QWidget):
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。"""
         if not self.isVisible() or self._bubble_suppressed:
             return
+        _set_speech_bubble_interactive(self)
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
             str(text), self.visible_content_rect(), duration_ms,
@@ -2561,6 +2576,7 @@ class PetWindow(QWidget):
             return
         if not self.isVisible():
             return
+        _set_speech_bubble_interactive(self)
         self._speech_bubble.show_text(
             text, self.visible_content_rect(), duration_ms=2200,
             pet_scale=self.scale,
