@@ -1784,7 +1784,7 @@ def test_long_submenus_enable_qt_scrolling():
 def test_visible_animation_submenu_does_not_relayout_when_thumbnail_finishes():
     import time
 
-    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -1819,7 +1819,9 @@ def test_visible_animation_submenu_does_not_relayout_when_thumbnail_finishes():
     assert submenu.actions() == [], "根菜单构建不应同步填充动画分类动作"
     submenu.aboutToShow.emit()
     placeholder_key = submenu.actions()[0].icon().cacheKey()
-    submenu.popup(QPoint(20, 20))
+    # popup() 在无交互桌面的测试环境中可能不会进入可见状态，
+    # 改用 show() 稳定模拟“菜单已展开”，从而覆盖可见时不重排图标的保护逻辑。
+    submenu.show()
     deadline = time.monotonic() + 1.0
     while not pet.cached and time.monotonic() < deadline:
         app.processEvents()
