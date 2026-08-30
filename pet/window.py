@@ -1164,8 +1164,14 @@ class PetWindow(QWidget):
             if collision_debug.ENABLED:
                 collision_debug.log(runtime_id, 'impulse_discard', reason=reason,
                                     pair=message.get('pair', ''))
-        # 锁定位置桌宠被撞不动：与协调者侧无限质量判定互为双保险
+        # 锁定位置桌宠不被撞动（协调者侧无限质量是主判定，这里是双保险），
+        # 但保留被撞反馈：squash + 碰撞音效，让用户知道"撞到固定障碍了"
         if self.cfg.get('lock_position'):
+            dv_mag = max(abs(float(message.get('dvx_a', 0))), abs(float(message.get('dvy_a', 0))),
+                         abs(float(message.get('dvx_b', 0))), abs(float(message.get('dvy_b', 0))))
+            if dv_mag > 1e-9:
+                self._start_squash()
+                self._play_collision_sound()
             discard('lock_position')
             return
         if self._collision_session is None or not self.isVisible() or self._hidden_paused:
