@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import wave
 from collections.abc import Sequence
 from pathlib import Path
@@ -139,11 +140,11 @@ def _play_with_effect(path: Path, volume: float) -> bool:
         return False
 
 
-def _player_pool_play(path: Path, volume: float) -> bool:
-    global _qt_player_index
+def _warm_player_pool() -> None:
+    """预创建 QMediaPlayer 池，避免首次点击时初始化 QtMultimedia 造成卡顿。"""
     classes = _qt_multimedia_classes()
     if classes is None:
-        return False
+        return
     try:
         if not _qt_player_pool:
             if _qt_player is not None and _qt_audio is not None:
@@ -154,6 +155,19 @@ def _player_pool_play(path: Path, volume: float) -> bool:
                 player, audio = classes[3](), classes[2]()
                 player.setAudioOutput(audio)
                 _qt_player_pool.append((player, audio))
+    except Exception:
+        log.exception("预创建 QMediaPlayer 池失败")
+
+
+def _player_pool_play(path: Path, volume: float) -> bool:
+    global _qt_player_index
+    classes = _qt_multimedia_classes()
+    if classes is None:
+        return False
+    try:
+        _warm_player_pool()
+        if not _qt_player_pool:
+            return False
         player, audio = _qt_player_pool[_qt_player_index % len(_qt_player_pool)]
         _qt_player_index += 1
         audio.setVolume(volume)
@@ -262,6 +276,88 @@ def _play_with_qt(path: Path, volume: float = 1.0) -> bool:
         _player_pool_play(path, volume)
         return True
     return _player_pool_play(path, volume)
+
+
+def _effect_is_ready(effect: Any) -> bool:
+    """判断 QSoundEffect 是否已完成异步加载；无 status 的测试替身视为就绪。"""
+    status = getattr(effect, "status", None)
+    if not callable(status):
+        return True
+    try:
+        from PySide6.QtMultimedia import QSoundEffect
+
+        return status() == QSoundEffect.Status.Ready
+    except Exception:
+        return True
+
+
+def warm_click_sound_effects(
+    pack: dict | None,
+    data_dir: Path | None = None,
+    limit: int = 8,
+) -> None:
+    """预创建点击音效对象，避免首次点击时初始化 QtMultimedia 造成卡顿。
+
+    启动或切换音效包后调用：WAV/已缓存音频预创建 QSoundEffect 并等待加载完成；
+    未缓存的压缩音频启动异步解码并等待缓存生成；同时预创建 QMediaPlayer 池。
+    limit 用于限制自定义文件夹随机音效的预热数量，避免一次创建过多对象。
+    """
+    if not _qt_available():
+        return
+    try:
+        from PySide6.QtCore import QCoreApplication
+
+        _warm_player_pool()
+        effects: list[Any] = []
+        decoding: list[tuple[Path, Path, str]] = []
+        candidates = resolve_click_sound_candidates(pack, data_dir)[:limit]
+        for path in candidates:
+            try:
+                if path.suffix.lower() == ".wav":
+                    effect = _effect_for(path)
+                    if effect is not None:
+                        effects.append(effect)
+                else:
+                    cache = _cache_path(path)
+                    if cache.is_file():
+                        effect = _effect_for(cache)
+                        if effect is not None:
+                            effects.append(effect)
+                    else:
+                        key = str(path.resolve())
+                        if key not in _qt_decoders:
+                            _decode_to_wav(path, cache, 0.0)
+                        decoding.append((path, cache, key))
+            except Exception:
+                log.exception("预热点击音效失败: %s", path)
+
+        # 等待压缩音频解码出 WAV 缓存（异步，QCoreApplication 泵事件完成回调）
+        deadline = time.monotonic() + 2.0
+        while decoding and time.monotonic() < deadline:
+            remaining: list[tuple[Path, Path, str]] = []
+            for path, cache, key in decoding:
+                if cache.is_file():
+                    effect = _effect_for(cache)
+                    if effect is not None:
+                        effects.append(effect)
+                elif key in _qt_decoders:
+                    remaining.append((path, cache, key))
+                # key 不在 _qt_decoders 且没有缓存 = 解码失败/超时，跳过
+            decoding = remaining
+            if decoding:
+                QCoreApplication.processEvents()
+                time.sleep(0.005)
+
+        # 等待 QSoundEffect 完成异步加载；未等待就播放会在事件循环里触发
+        # 一次性加载/初始化，造成首次点击 Q 弹卡顿（实测可达数百 ms）。
+        deadline = time.monotonic() + 2.0
+        while effects and time.monotonic() < deadline:
+            effects = [e for e in effects if not _effect_is_ready(e)]
+            if effects:
+                QCoreApplication.processEvents()
+                time.sleep(0.005)
+    except Exception:
+        log.exception("点击音效预热失败")
 
 
 def _play_with_system_player(path: Path) -> bool:

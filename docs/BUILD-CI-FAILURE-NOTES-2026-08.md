@@ -94,6 +94,20 @@ monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
 
 **预防**：`requirements.txt`（或 CI 安装命令）锁定 pytest 主版本（如 `pytest==8.3.*` 或直接钉死）；排查 CI 特有崩溃时先确认版本差。
 
+### 2.6 Linux/macOS：Windows 专用测试替身挂到不存在的 `winreg` 属性
+
+**现象**：v4.0.5 发布时 Linux/macOS 测试在 `test_windows_autostart_variants_do_not_affect_each_other` 失败：
+
+```
+AttributeError: module 'pet.autostart' has no attribute 'winreg'
+```
+
+**根因**：`pet/autostart.py` 只在 `_IS_WIN` 为真时 `import winreg`，Linux/macOS 模块根本没有 `winreg` 属性；测试里 `monkeypatch.setattr(autostart_mod, "winreg", fake)` 在非 Windows 平台直接 AttributeError。
+
+**修复**：Windows 专用测试挂替身时使用 `monkeypatch.setattr(autostart_mod, "winreg", fake, raising=False)`，属性不存在时自动补挂。
+
+**预防**：平台条件导入的模块属性，在跨平台测试里用 `raising=False`；Windows 上能过的测试不代表 Linux/macOS 也能过。
+
 ---
 
 ## 三、发布流程经验

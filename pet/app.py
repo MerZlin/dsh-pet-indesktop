@@ -29,6 +29,7 @@ from . import balance as balance_mod
 from . import catalog
 from . import slot_manager as slot_manager_mod
 from . import updater
+from .click_sound import warm_click_sound_effects
 from .config import APP_DIR_NAME, Config, _default_base
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
@@ -437,6 +438,13 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
+        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
+        # 首次点击 Q 弹卡顿。
+        warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
         win.show()
 
         tray = self._build_tray(win)
@@ -495,6 +503,13 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
+        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
+        # 首次点击 Q 弹卡顿。
+        warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
         win.show()
 
         tray = self._build_tray(win)
