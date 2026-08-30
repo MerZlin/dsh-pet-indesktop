@@ -1164,16 +1164,6 @@ class PetWindow(QWidget):
             if collision_debug.ENABLED:
                 collision_debug.log(runtime_id, 'impulse_discard', reason=reason,
                                     pair=message.get('pair', ''))
-        # 锁定位置桌宠不被撞动（协调者侧无限质量是主判定，这里是双保险），
-        # 但保留被撞反馈：squash + 碰撞音效，让用户知道"撞到固定障碍了"
-        if self.cfg.get('lock_position'):
-            dv_mag = max(abs(float(message.get('dvx_a', 0))), abs(float(message.get('dvy_a', 0))),
-                         abs(float(message.get('dvx_b', 0))), abs(float(message.get('dvy_b', 0))))
-            if dv_mag > 1e-9:
-                self._start_squash()
-                self._play_collision_sound()
-            discard('lock_position')
-            return
         if self._collision_session is None or not self.isVisible() or self._hidden_paused:
             discard('session_missing_or_hidden')
             return
@@ -1225,7 +1215,10 @@ class PetWindow(QWidget):
         if has_velocity_impulse:
             self._just_dragged = True
             QTimer.singleShot(120, self, self._clear_just_dragged)
-            self._play_collision_sound()
+            # 只有"有分量的撞击"才响：dv 太小（静置非弹性接触的微小抵消）
+            # 不播，否则贴贴时每秒 4 声机枪响
+            if math.hypot(dvx, dvy) >= 300.0:
+                self._play_collision_sound()
         if has_velocity_impulse and speed >= physics_mod.DEAD_ZONE_SPEED:
             self._interaction_state = THROWN
             self._enter_physics_mode('throw')

@@ -432,7 +432,8 @@ class _CollisionWorker(QObject):
                 keys = ("runtime_id", "x", "y", "radius_x", "radius_y", "vx", "vy", "mass",
                          "is_infinite_mass", "flags", "instance_id", "character", "scale", "w", "h", "circles")
                 values = {key: state.get(key, defaults.get(key, 0.0)) for key in keys}
-                values["is_infinite_mass"] = bool(int(values["flags"]) & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION))
+                # 无限质量只认"被拖拽中"（用户手里握着）；lock_position 只是防拖拽，仍可被撞飞（碰碰车/台球需要）
+                values["is_infinite_mass"] = bool(int(values["flags"]) & collision.FLAG_DRAGGING)
                 values["mass"] = collision.calculate_mass(
                     values["radius_x"], values["radius_y"],
                     scale=float(values.get("scale", 0.72) or 0.72),

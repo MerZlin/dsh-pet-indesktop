@@ -442,11 +442,10 @@ def test_collision_disabled_does_not_report_receive_and_detaches(tmp_path, app):
     win.close()
 
 
-def test_lock_position_window_ignores_impulse(tmp_path, app):
-    """锁定位置窗口收到 impulse：位置不变、不进 THROWN、无速度（与协调者侧无限质量互为双保险）。"""
+def test_lock_position_window_is_knockable(tmp_path, app):
+    """锁定位置只防鼠标拖拽，不防碰撞：收到 impulse 正常应用速度并进入 THROWN。"""
     win, session = _make_pet_window(tmp_path, "pet_lock", lock_position=True)
     assert win.lock_position is True
-    start_pos = (win.x(), win.y())
     rect = win.visible_content_rect()
 
     msg = {
@@ -454,7 +453,7 @@ def test_lock_position_window_ignores_impulse(tmp_path, app):
         "b": "pet_other",
         "dvx_a": 1200.0,
         "dvy_a": 0.0,
-        "dx_a": 20.0,
+        "dx_a": 0.0,
         "dy_a": 0.0,
         "contact_x": float(rect.center().x() + rect.width() / 2.0),
         "contact_y": float(rect.center().y()),
@@ -464,10 +463,9 @@ def test_lock_position_window_ignores_impulse(tmp_path, app):
     session.impulse_ready.emit(msg)
     app.processEvents()
 
-    assert (win.x(), win.y()) == start_pos
-    assert win._phys_vel == [0.0, 0.0]
-    assert win._interaction_state != 'THROWN'
-    assert win._physics_mode is None
+    assert win._phys_vel[0] > 0.0
+    assert win._interaction_state == 'THROWN'
+    assert win._physics_mode == 'throw'
 
     win.close()
 
