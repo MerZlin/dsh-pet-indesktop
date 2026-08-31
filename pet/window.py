@@ -372,10 +372,13 @@ class WindowsPerPixelInputController:
     定时器在窗口不再收到鼠标消息时仍能检测光标并恢复角色区域交互。
     """
 
+    NORMAL_POLL_INTERVAL_MS = 10
+    DRAG_POLL_INTERVAL_MS = 100
+
     def __init__(self, window: "PetWindow") -> None:
         self._window = window
         self._timer = QTimer(window)
-        self._timer.setInterval(10)
+        self._timer.setInterval(self.NORMAL_POLL_INTERVAL_MS)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
 
@@ -396,6 +399,22 @@ class WindowsPerPixelInputController:
             _set_windows_click_through(int(self._window.winId()), enabled)
         except (AttributeError, OSError, RuntimeError):
             logging.debug("更新 Windows 逐像素鼠标穿透失败", exc_info=True)
+
+    def set_drag_active(self, active: bool) -> None:
+        """拖拽按下/松手时切换轮询频率。
+
+        拖拽（_press_global 非 None）期间 should_click_through 恒返回 False，
+        每 10ms 轮询纯属空转：降频到 100ms 减少 Win32/QCursor 调用。
+        松手后立即恢复原频率并强制刷新一次穿透状态；非拖拽状态重复调用是 no-op。
+        """
+        if active:
+            if self._timer.interval() != self.DRAG_POLL_INTERVAL_MS:
+                self._timer.setInterval(self.DRAG_POLL_INTERVAL_MS)
+            return
+        if self._timer.interval() == self.NORMAL_POLL_INTERVAL_MS:
+            return
+        self._timer.setInterval(self.NORMAL_POLL_INTERVAL_MS)
+        self.refresh()
 
     def stop(self) -> None:
         self._timer.stop()
@@ -654,7 +673,8 @@ class PetWindow(QWidget):
 
         self._restore_position()
         self._switch(self.idle)
-        self._music_sing_timer.start()
+        if self._music_sing_enabled:
+            self._music_sing_timer.start()
         self._schedule_self_talk()
         if self._watch_required():
             self._start_fs_watch()
@@ -1035,6 +1055,7 @@ class PetWindow(QWidget):
         if not self._auto_hidden:
             self._stop_fs_watch()
         self._self_talk_timer.stop()
+        self._music_sing_timer.stop()
         self._animation_gap_timer.stop()
         self._squash_timer.stop()
         self._squash_active = False
@@ -1059,6 +1080,8 @@ class PetWindow(QWidget):
         if self._watch_required():
             self._start_fs_watch()
         self._schedule_self_talk()
+        if self._music_sing_enabled:
+            self._music_sing_timer.start()
         if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
             self.proactive_watcher.resume()
         if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
@@ -2358,6 +2381,7 @@ class PetWindow(QWidget):
         self._press_global = None
         self._grab_offset = None
         self._dragging = False
+        self._sync_drag_polling(False)
 
     def _start_slingshot_rebound(self, progress: float) -> None:
         self._slingshot_rebound_progress = max(0.0, min(1.0, float(progress)))
@@ -2431,6 +2455,12 @@ class PetWindow(QWidget):
         """由于动画左右有留白，只把窗口中间 1/3 宽度作为可交互区域。"""
         return self._w / 3.0 <= local_pos.x() <= self._w * 2.0 / 3.0
 
+    def _sync_drag_polling(self, active: bool) -> None:
+        """Windows 逐像素穿透轮询随拖拽按下/松手降频/恢复（非 Windows 无控制器，no-op）。"""
+        ctrl = self._input_controller
+        if ctrl is not None:
+            ctrl.set_drag_active(active)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         buttons = event.buttons() | event.button()
         if event.button() == Qt.MouseButton.RightButton and buttons & Qt.MouseButton.LeftButton:
@@ -2454,6 +2484,7 @@ class PetWindow(QWidget):
                 # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
                 return
             self._press_global = event.globalPosition().toPoint()
+            self._sync_drag_polling(True)
             self._interaction_state = "PRESS_CANDIDATE"
             self._grab_offset = self._press_global - self.pos()
             self._dragging = False
@@ -2489,6 +2520,7 @@ class PetWindow(QWidget):
                 # 取消按压状态，松手仍按点击处理。
                 self._press_global = None
                 self._grab_offset = None
+                self._sync_drag_polling(False)
                 return
             self._dragging = True
             self._interaction_state = "DRAGGING"
@@ -2585,6 +2617,7 @@ class PetWindow(QWidget):
         self._interaction_state = "IDLE"
         self._press_global = None
         self._grab_offset = None
+        self._sync_drag_polling(False)
         if self._cursor_restore_pending or self._cursor_visibility == 'SHOWING':
             self._cursor_restore_pending = False
             self._auto_cursor_hidden = False
@@ -3038,6 +3071,13 @@ class PetWindow(QWidget):
         if self.animation_gap_seconds <= 0:
             self._cancel_animation_gap()
         self._music_sing_enabled = bool(self.cfg.get('music_sing_enabled', False))
+        if self._music_sing_enabled:
+            # 隐藏期间保持停止，恢复显示时由 _resume_activity 按开关状态启动
+            if self.isVisible():
+                self._music_sing_timer.start()
+        else:
+            self._music_sing_active = False
+            self._music_sing_timer.stop()
         self._self_talk_enabled = bool(self.cfg.get('self_talk_enabled', False))
         self._speech_bubble.set_style(
             str(self.cfg.get('self_talk_bubble_style', DEFAULT_SELF_TALK_BUBBLE_STYLE))
@@ -3250,6 +3290,7 @@ class PetWindow(QWidget):
             self._dragging = False
             self._press_global = None
             self._grab_offset = None
+            self._sync_drag_polling(False)
             self._stop_physics()
         self._submit_collision_state(force=True)
 
