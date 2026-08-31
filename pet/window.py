@@ -281,6 +281,63 @@ def _mono_mask_bounds(image: QImage) -> tuple[int, int, int, int] | None:
     return x0, y0, x1, y1
 
 
+def _window_current_dpr(window) -> float:
+    """窗口当前屏幕 DPR（与 _rebuild_frame 的渲染参数同源）。"""
+    scr = window._screen_available()
+    return scr.devicePixelRatio() if scr is not None else 1.0
+
+
+def _window_cached_frame_bounds(window) -> QRect | None:
+    """查询当前 (动画, 镜像, 缩放, DPR, 帧号) 的预计算可见 bounds。
+
+    模块级函数（非方法）：_sync_mask 以类方法形式被测试假窗口调用时，
+    不要求假对象定义本函数。返回 None 表示无缓存（回落到逐帧扫描）；
+    返回 QRect 表示命中（空帧为 QRect()，与画布扫描一致）。squash 期间
+    由调用方（_sync_mask）拦截，不会走到这里。
+    """
+    movie = getattr(window, 'movie', None)
+    if movie is None:
+        return None
+    getter = getattr(movie, 'bounds_rect', None)
+    if not callable(getter):
+        return None
+    if getattr(window, '_frame_pixmap', None) is None:
+        # 无画面时保持空 bounds（与空画布扫描一致），不查缓存
+        return None
+    no_mirror = getattr(getattr(window, 'lib', None), 'no_mirror', frozenset())
+    mirrored = (
+        getattr(window, 'facing', 'left') == 'right'
+        and getattr(window, 'anim', '') not in no_mirror
+    )
+    try:
+        frame_n = movie.currentFrameNumber()
+    except AttributeError:
+        frame_n = None
+    try:
+        return getter(mirrored, float(window.scale), _window_current_dpr(window), frame_n)
+    except Exception:
+        return None
+
+
+def _window_cached_bounds_union(window) -> QRect | None:
+    """当前动画的预计算 union 可见 bounds（窗口局部）；未预计算返回 None。"""
+    movie = getattr(window, 'movie', None)
+    if movie is None:
+        return None
+    getter = getattr(movie, 'bounds_union', None)
+    if not callable(getter):
+        return None
+    no_mirror = getattr(getattr(window, 'lib', None), 'no_mirror', frozenset())
+    mirrored = (
+        getattr(window, 'facing', 'left') == 'right'
+        and getattr(window, 'anim', '') not in no_mirror
+    )
+    try:
+        return getter(mirrored, float(window.scale), _window_current_dpr(window))
+    except Exception:
+        return None
+
+
 def _clamp_menu_rect(rect: QRect, avail: QRect) -> QRect:
     """把菜单矩形夹到可用屏幕区域内（保持尺寸不变）。"""
     if avail.isEmpty():
@@ -681,6 +738,16 @@ class PetWindow(QWidget):
         # 已重建帧的输入签名（movie 身份、帧号、朝向、动画、缩放、DPR）：
         # 相同签名重复 rebuild 时整条 toImage/镜像/缩放/转换链直接跳过
         self._frame_key: tuple | None = None
+        # ---- 动画 bounds 预计算（B14）----
+        # 后台线程按 (mirrored, scale, dpr) 为每个动画预计算 union/每帧可见
+        # bounds；运行时 _sync_mask 命中即免去每帧 O(像素) 扫描，未命中回落
+        # 扫描（行为不变）。_bounds_warm_started 由 app 显式调用
+        # start_bounds_warm() 置位（测试构造的窗口不自动预热）；worker 在
+        # 隐藏/关闭时退出，showEvent / (scale,dpr) 变化时按需重启。
+        self._bounds_warm_started = False
+        self._bounds_warm_running = False
+        self._bounds_warm_done = False
+        self._bounds_warm_key: tuple | None = None
         self._input_controller: WindowsPerPixelInputController | None = None
         if os.name == "nt":
             self._input_controller = WindowsPerPixelInputController(self)
@@ -1125,6 +1192,9 @@ class PetWindow(QWidget):
             self._phys_vel[:] = [0.0, 0.0]
             self._resume_activity()
             self._submit_collision_state(force=True)
+        # 隐藏中断的 bounds 预计算在恢复显示后续跑（未完成时）
+        if getattr(self, '_bounds_warm_started', False) and not self._bounds_warm_done:
+            self._maybe_start_bounds_warm()
         self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
@@ -2105,6 +2175,14 @@ class PetWindow(QWidget):
         # 避免 _is_transparent_at 再次 toImage
         self._hit_alpha_image = img
         self._frame_key = key
+        # B14：bounds 预计算键随 (scale, dpr) 变化重建——缩放设置或跨屏
+        # （DPR 变化）后旧键缓存失效，按需重启后台预计算（幂等，运行中跳过）。
+        if getattr(self, '_bounds_warm_started', False):
+            warm_key = (self.scale, dpr)
+            if warm_key != getattr(self, '_bounds_warm_key', None):
+                self._bounds_warm_key = warm_key
+                self._bounds_warm_done = False
+                self._maybe_start_bounds_warm()
         self._sync_mask()
 
     def _frame_draw_rect(self) -> QRect:
@@ -2133,7 +2211,28 @@ class PetWindow(QWidget):
           alpha>=128 阈值、DPR/采样映射与旧 canvas→QBitmap→QRegion 路径天然
           一致（不做源图 bbox + 采样公式反推）；鼠标穿透由
           WindowsPerPixelInputController 负责。
+        - B14：Windows 上优先查该动画的预计算 bounds（后台预热生成，与画布
+          扫描逐位一致）——命中即免去每帧 O(像素) 画布+扫描；未命中（动画
+          未预计算/帧号越界/缓存键不匹配）或 squash 变形（绘制矩形与缓存
+          几何不符）时回落到上述扫描，行为不变。
         """
+        if os.name == "nt" and not getattr(self, '_squash_active', False):
+            cached = _window_cached_frame_bounds(self)
+            if cached is not None:
+                self._mask_bounds = cached
+                if not self.mask().isEmpty():
+                    self.clearMask()
+                stable = getattr(self, '_collision_local_bounds', None)
+                if stable is None:
+                    # 预计算 union 完整可用时直接作为稳定碰撞体（= 全部帧
+                    # 并集，即累积路径的收敛值）；否则从当前帧开始累积。
+                    u = _window_cached_bounds_union(self)
+                    self._collision_local_bounds = (
+                        QRect(u) if u is not None else QRect(self._mask_bounds)
+                    )
+                else:
+                    self._collision_local_bounds = stable.united(self._mask_bounds)
+                return
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
         p = QPainter(canvas)
@@ -2161,6 +2260,110 @@ class PetWindow(QWidget):
                 self._collision_local_bounds = QRect(self._mask_bounds)
             else:
                 self._collision_local_bounds = stable.united(self._mask_bounds)
+
+    # ---- B14：后台 bounds 预计算驱动 ----
+    def start_bounds_warm(self) -> None:
+        """应用层调用：窗口就绪后启动后台 bounds 预计算（幂等）。
+
+        只由真实应用（PetApp._create_ui / switch_character）触发；测试直接
+        构造的窗口不会自动预热。隐藏/关闭时 worker 退出，showEvent、
+        (scale, dpr) 变化或低优先级批处理补建 clip 后按需重启。
+        """
+        self._bounds_warm_started = True
+        # 低优先级批处理在 GUI 线程补建 clip 后（信号跨线程排队到 GUI 线程），
+        # 触发一轮 bounds 预计算；无该信号的库（测试桩）则跳过。
+        if hasattr(self.lib, 'low_warm_batch_finished'):
+            try:
+                self.lib.low_warm_batch_finished.connect(
+                    self._on_bounds_warm_batch_finished
+                )
+            except (RuntimeError, TypeError):
+                pass
+        self._maybe_start_bounds_warm()
+
+    def _on_bounds_warm_batch_finished(self) -> None:
+        """GUI 线程槽：低优先级批处理补建 clip 后补一轮 bounds 预计算。"""
+        if getattr(self, '_closing', False):
+            return
+        self._bounds_warm_done = False
+        self._maybe_start_bounds_warm()
+
+    def _maybe_start_bounds_warm(self) -> None:
+        if not getattr(self, '_bounds_warm_started', False):
+            return
+        if self._bounds_warm_running or self._bounds_warm_done or self._closing:
+            return
+        if not getattr(self, 'lib', None):
+            return
+        self._bounds_warm_running = True
+        try:
+            threading.Thread(
+                target=self._bounds_warm_worker, daemon=True, name='bounds-warm'
+            ).start()
+        except Exception:
+            self._bounds_warm_running = False
+
+    def _bounds_warm_order(self) -> list[str]:
+        """预热顺序：高频交互动画（点击/待机/转向/移动/拖拽）优先，动作池殿后。"""
+        names: list[str] = []
+        for key in ('clicks', 'idles', 'turns', 'moves'):
+            names += list(self.cats.get(key) or [])
+        drag = self.cats.get('drag')
+        if drag:
+            names.append(drag)
+        names += list(self.cats.get('acts') or [])
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for n in names:
+            if n not in seen:
+                seen.add(n)
+                ordered.append(n)
+        return ordered
+
+    def _bounds_warm_worker(self) -> None:
+        """后台线程：为每个动画预计算 bounds（两档镜像模式；文字动画只算
+        非镜像——运行时对 no_mirror 永不镜像）。
+
+        铁律：只读「已在 GUI 线程创建」的 clip（self.lib.movies()），绝不
+        在本线程创建 QObject——WebMClip 带 QTimer/QObject 线程亲和，后台
+        创建会导致信号跨线程错乱。隐藏/关闭立即退出；低优先级批处理延迟
+        补建的 clip 由本线程短暂重扫 + _on_bounds_warm_batch_finished 覆盖。
+        """
+        try:
+            for _retry in range(8):
+                if self._closing or self._hidden_paused:
+                    return  # 隐藏/关闭：剩余动画留待 showEvent 重启
+                names = self._bounds_warm_order()
+                for name in names:
+                    if self._closing or self._hidden_paused:
+                        return
+                    movie = self.lib.movies().get(name)
+                    if movie is None:
+                        continue  # clip 尚未在 GUI 线程创建：跳过
+                    warm = getattr(movie, 'warm_bounds', None)
+                    if not callable(warm):
+                        continue
+                    no_mirror = getattr(self.lib, 'no_mirror', frozenset())
+                    has_text = name in no_mirror
+                    modes = (False,) if has_text else (False, True)
+                    try:
+                        dpr = _window_current_dpr(self)
+                        for mirrored in modes:
+                            warm(mirrored, self.scale, dpr, has_text)
+                    except Exception:
+                        logging.debug('动画 bounds 预计算失败: %s', name, exc_info=True)
+                # 全部动画的 clip 均已存在并走完一轮 → 完成；仍有延迟补建
+                # 的 clip 时短暂等待后重扫（低优先级批处理 2s 后才补建）。
+                if len(self.lib.movies()) >= len(names):
+                    self._bounds_warm_done = True
+                    return
+                time.sleep(0.2)
+            # 重扫上限后仍有未建 clip：保持未完成，等 low_warm_batch_finished
+            # / showEvent 再次触发——未预计算的动画运行时回落扫描，行为不变。
+        except Exception:
+            logging.debug('动画 bounds 预计算异常', exc_info=True)
+        finally:
+            self._bounds_warm_running = False
 
     def collision_content_rect(self) -> QRect:
         """碰撞用的稳定可见区域（全局坐标）：取当前动画各帧包围盒的并集，

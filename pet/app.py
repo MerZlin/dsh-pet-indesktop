@@ -485,6 +485,9 @@ class PetApp:
     def _create_ui(self, character_id: str) -> None:
         lib = self._create_library(character_id)
         win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
+        # 窗口就绪后启动动画 bounds 后台预计算（B14）：每动画 union/每帧
+        # 可见 bounds，运行时命中即免去每帧 O(像素) 扫描。
+        win.start_bounds_warm()
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
         win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
@@ -564,6 +567,8 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
+        # 切换角色同样启动新窗口的 bounds 后台预计算（B14）
+        win.start_bounds_warm()
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
         # 首次点击 Q 弹卡顿。
