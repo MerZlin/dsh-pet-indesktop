@@ -232,7 +232,7 @@ def test_bubble_suppression_skips_bubbles_while_settings_open():
 # _rebuild_frame 缓存缩放后 ARGB32 图 / 同帧跳过；Windows 的 _mask_bounds 从
 # 「实际绘制用画布」算起：drawPixmap(rect, frame_pixmap) → createAlphaMask →
 # 直接扫描 1bpp 掩码得包围盒（窗口裁剪/阈值/DPR/采样语义与旧路径天然一致）。
-# 铁律：mask bounds 与旧 QRegion 路径逐像素一致（旧算法为基准）。
+# 铁律：mask bounds 与旧 QRegion 路径逐帧一致（旧算法为 bounds 基准）。
 
 
 def _make_frame_image(width: int, height: int, opaque_rects) -> QImage:
@@ -247,7 +247,7 @@ def _make_frame_image(width: int, height: int, opaque_rects) -> QImage:
 
 
 def _reference_mask_bounds(pm, w: int, h: int, rect: QRect) -> QRect:
-    """旧实现（canvas→createAlphaMask→QBitmap→QRegion）作为逐像素基准。"""
+    """旧实现（canvas→createAlphaMask→QBitmap→QRegion）作为 bounds 基准。"""
     canvas = QImage(w, h, QImage.Format.Format_ARGB32)
     canvas.fill(Qt.GlobalColor.transparent)
     p = QPainter(canvas)
@@ -268,7 +268,7 @@ def _install_nt_mask_stubs(fake):
 
 def test_windows_mask_bounds_from_frame_alpha_matches_reference(monkeypatch):
     """Windows：_mask_bounds 从实际绘制画布（drawPixmap → createAlphaMask）
-    扫描得到，结果与旧 QRegion 路径逐像素一致；不 setMask，旧 mask 仍清理。"""
+    扫描得到，结果与旧 QRegion 路径 bounds 逐帧一致；不 setMask，旧 mask 仍清理。"""
     _qapp()
     fake = _FakePet(scale=0.5)
     img = _make_frame_image(320, 180, [(60, 30, 260, 150)])

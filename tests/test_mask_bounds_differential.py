@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""B5 差分测试：Windows _mask_bounds 新旧算法在真实 webm 素材上逐帧一致。
+"""B5 差分测试：Windows _mask_bounds 新旧算法在真实 webm 素材上 bounds 逐帧一致。
 
-旧算法（HEAD 基准，逐像素真相）：
+旧算法（HEAD 基准，本测试的 bounds 基准）：
     canvas = QImage(w, h, ARGB32)  →  drawPixmap(rect, frame_pixmap)
     mask   = QBitmap.fromImage(canvas.createAlphaMask())
     bounds = QRegion(mask).boundingRect()
@@ -15,8 +15,18 @@
 squash 峰值时绘制矩形确实超出窗口左右边界，覆盖旧 canvas 的裁剪语义）。
 
 本测试驱动的是真实产品代码链：_rebuild_frame（toImage→镜像→预乘→Smooth
-缩放→ARGB32→QPixmap+DPR）→ _sync_mask（Windows 分支），再与旧算法逐帧比较。
+缩放→ARGB32→QPixmap+DPR）→ _sync_mask（Windows 分支），再与旧算法逐帧
+比较 bounds。
+
+注意：本测试断言的是「bounds 逐帧一致」（旧/新算法的包围盒逐帧相等），
+不是整幅图像的逐像素一致。
 """
+
+# ---------------------------------------------------------------- 已知局限
+# 本测试通过 monkeypatch 把 window_mod.os.name 桩成 "nt" 来驱动 _sync_mask 的
+# Windows 分支；offscreen CI 环境没有真实 Windows 窗口系统，无法真实验证
+# Windows 平台行为。该桩只保证 Windows 分支代码被真实执行并与旧算法逐帧比较
+# bounds；平台级验证仍需在真实 Windows（手工或平台 CI）上完成。
 from __future__ import annotations
 
 import os
@@ -70,17 +80,23 @@ def _decode_frames(path: Path) -> list[QImage]:
     return frames
 
 
-def _sample_indices(n: int, limit: int = 6) -> list[int]:
-    """首/尾 + 均匀分布的中间帧索引（覆盖同一动画的不同轮廓帧）。"""
-    if n <= limit:
+SAMPLES_MIN = 20  # 长动画等距采样的帧数下限（短动画则全帧覆盖）
+
+
+def _sample_indices(n: int, min_samples: int = SAMPLES_MIN) -> list[int]:
+    """采样策略：短动画（帧数 <= min_samples）全帧；长动画首/尾 + 等距至少
+    min_samples 帧（覆盖同一动画的不同轮廓帧）。"""
+    if n <= min_samples:
         return list(range(n))
-    idxs = {0, n - 1} | {round(n * k / (limit - 1)) for k in range(1, limit - 1)}
+    idxs = {0, n - 1} | {
+        round((n - 1) * k / (min_samples - 1)) for k in range(1, min_samples - 1)
+    }
     return sorted(i for i in idxs if 0 <= i < n)
 
 
 # ---------------------------------------------------------------- 旧算法基准
 def _reference_bounds(pm: QPixmap, w: int, h: int, rect: QRect) -> QRect:
-    """旧实现（canvas→createAlphaMask→QBitmap→QRegion）作为逐像素基准。"""
+    """旧实现（canvas→createAlphaMask→QBitmap→QRegion）作为 bounds 基准。"""
     canvas = QImage(w, h, QImage.Format.Format_ARGB32)
     canvas.fill(Qt.GlobalColor.transparent)
     p = QPainter(canvas)
@@ -199,6 +215,8 @@ def test_windows_mask_bounds_differential_on_real_webm(monkeypatch):
     checked_cases = 0
     nonempty_cases = 0
     overflow_hit = False
+    min_covered = 10**9
+    max_covered = 0
 
     for path in files:
         try:
@@ -210,7 +228,16 @@ def test_windows_mask_bounds_differential_on_real_webm(monkeypatch):
             failures.append(f"{path.name}: 无帧")
             continue
         checked_animations += 1
-        for fi in _sample_indices(len(frames)):
+        frame_idxs = _sample_indices(len(frames))
+        # 防静默少测：每个被测动画的实际覆盖帧数必须达到下限
+        # （短动画全帧、长动画等距至少 SAMPLES_MIN 帧），采样策略退化即失败。
+        covered_min = min(len(frames), SAMPLES_MIN)
+        assert len(frame_idxs) >= covered_min, (
+            f"{path.name}: 实际覆盖 {len(frame_idxs)} 帧，低于下限 {covered_min}"
+        )
+        min_covered = min(min_covered, len(frame_idxs))
+        max_covered = max(max_covered, len(frame_idxs))
+        for fi in frame_idxs:
             frame = frames[fi]
             facing = "right" if fi % 2 else "left"  # 一半帧走镜像路径
             for scale in (0.5, 1.0):
@@ -248,7 +275,8 @@ def test_windows_mask_bounds_differential_on_real_webm(monkeypatch):
             checked_frames += 1
 
     print(
-        f"\n[差分] 动画 {checked_animations} 个 / 帧样本 {checked_frames} / "
+        f"\n[差分] 动画 {checked_animations} 个 / 帧样本 {checked_frames} "
+        f"（每动画覆盖 {min_covered}~{max_covered} 帧，下限 {SAMPLES_MIN}）/ "
         f"比较 {checked_cases} 例（非空 {nonempty_cases}）/ squash 越界 {overflow_hit}"
     )
     assert overflow_hit, "测试必须真正覆盖 squash 越界几何（当前配置下无越界）"
