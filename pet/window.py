@@ -215,6 +215,66 @@ def _squash_geometry(
     return x, y, width, height
 
 
+def _mono_mask_bounds(image: QImage) -> tuple[int, int, int, int] | None:
+    """createAlphaMask 的 1bpp 掩码中置位像素的包围盒；全空返回 None。
+
+    返回 (x0, y0, x1, y1)，含边界。掩码为 Format_MonoLSB：字节内低位
+    对应左侧像素；阈值即 createAlphaMask 默认（alpha>=128），与旧
+    QBitmap→QRegion 路径的 boundingRect 逐位一致（行尾补齐位不算像素）。
+    """
+    mono = image.createAlphaMask()
+    width = mono.width()
+    height = mono.height()
+    stride = mono.bytesPerLine()
+    bits = mono.constBits()
+    last_byte = (width - 1) // 8
+    last_bits = width - last_byte * 8  # 末字节有效位数（1..8）
+    zero = b"\x00" * stride
+    x0 = y0 = None
+    x1 = y1 = -1
+    for y in range(height):
+        row = bits[y * stride:(y + 1) * stride]
+        if row == zero:
+            continue
+        # 行内首位：只统计 x < width 的置位位（行尾补齐位不算像素）
+        rx0 = None
+        for b in range(last_byte + 1):
+            byte = row[b]
+            if not byte:
+                continue
+            nbits = last_bits if b == last_byte else 8
+            for i in range(nbits):
+                if byte & (1 << i):
+                    rx0 = b * 8 + i
+                    break
+            if rx0 is not None:
+                break
+        # 行内末位
+        rx1 = None
+        for b in range(last_byte, -1, -1):
+            byte = row[b]
+            if not byte:
+                continue
+            nbits = last_bits if b == last_byte else 8
+            for i in range(nbits - 1, -1, -1):
+                if byte & (1 << i):
+                    rx1 = b * 8 + i
+                    break
+            if rx1 is not None:
+                break
+        if rx0 is None:  # 该行只有补齐位（createAlphaMask 补齐位恒 0，防御）
+            continue
+        if y0 is None:
+            y0, x0 = y, rx0
+        else:
+            x0 = min(x0, rx0)
+        y1 = y
+        x1 = max(x1, rx1)
+    if y0 is None:
+        return None
+    return x0, y0, x1, y1
+
+
 def _clamp_menu_rect(rect: QRect, avail: QRect) -> QRect:
     """把菜单矩形夹到可用屏幕区域内（保持尺寸不变）。"""
     if avail.isEmpty():
@@ -599,6 +659,9 @@ class PetWindow(QWidget):
         # 切换动画/缩放时重置），避免圆链随动画帧缩放跳动导致漏判
         self._collision_local_bounds: QRect | None = None
         self._hit_alpha_image: QImage | None = None
+        # 已重建帧的输入签名（movie 身份、帧号、朝向、动画、缩放、DPR）：
+        # 相同签名重复 rebuild 时整条 toImage/镜像/缩放/转换链直接跳过
+        self._frame_key: tuple | None = None
         self._input_controller: WindowsPerPixelInputController | None = None
         if os.name == "nt":
             self._input_controller = WindowsPerPixelInputController(self)
@@ -1831,8 +1894,22 @@ class PetWindow(QWidget):
             self._on_anim_ended(name)
 
     def _rebuild_frame(self) -> None:
-        """重建当前帧：缩放 + 朝向镜像 + 生成窗口 mask。"""
+        """重建当前帧：缩放 + 朝向镜像 + 生成窗口 mask。
+
+        帧内容由（movie 身份、帧号、朝向、动画、缩放、DPR）唯一确定：
+        相同输入重复调用（如同一帧重复 frameChanged、拖拽反复 jumpToFrame(0)）
+        时整条 toImage→镜像→预乘→Smooth 缩放→ARGB32 链直接跳过。
+        """
         if self.movie is None:
+            return
+        scr = self._screen_available()
+        dpr = scr.devicePixelRatio() if scr is not None else 1.0
+        try:
+            frame_n = self.movie.currentFrameNumber()
+        except AttributeError:
+            frame_n = None
+        key = (id(self.movie), frame_n, self.facing, self.anim, self.scale, dpr)
+        if key == getattr(self, '_frame_key', None):
             return
         pm = self.movie.currentPixmap()
         if pm is None or pm.isNull():
@@ -1845,8 +1922,6 @@ class PetWindow(QWidget):
         # 按屏幕 DPR 渲染到物理像素，避免高分屏下被 Qt 二次放大导致模糊。
         # 先转预乘 alpha 再缩放：直通 alpha 缩放会让透明像素的 RGB 渗入
         # 半透明边缘，产生暗边/彩边（毛边来源之一）。
-        scr = self._screen_available()
-        dpr = scr.devicePixelRatio() if scr is not None else 1.0
         w_c = max(1, int(round(catalog.CANVAS_W * self.scale * dpr)))
         h_c = max(1, int(round(catalog.CANVAS_H * self.scale * dpr)))
         img = img.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
@@ -1857,7 +1932,10 @@ class PetWindow(QWidget):
         pm = QPixmap.fromImage(img)
         pm.setDevicePixelRatio(dpr)
         self._frame_pixmap = pm
-        self._hit_alpha_image = None  # 帧已变化，逐像素命中缓存失效
+        # 直接缓存缩放后的 ARGB32 图：命中测试复用这份数据，
+        # 避免 _is_transparent_at 再次 toImage
+        self._hit_alpha_image = img
+        self._frame_key = key
         self._sync_mask()
 
     def _frame_draw_rect(self) -> QRect:
@@ -1878,9 +1956,14 @@ class PetWindow(QWidget):
     def _sync_mask(self) -> None:
         """更新角色可见轮廓与窗口 mask。
 
-        - 非 Windows：继续用 QWidget.setMask 实现透明区域鼠标穿透。
-        - Windows：不再 setMask（1-bit 裁剪会破坏半透明边缘），只更新
-          _mask_bounds；鼠标穿透由 WindowsPerPixelInputController 负责。
+        - 非 Windows：继续用 QWidget.setMask 实现透明区域鼠标穿透，
+          _mask_bounds 取自真实 mask 的 boundingRect（行为不变）。
+        - Windows：不再 setMask（1-bit 裁剪会破坏半透明边缘），但 _mask_bounds
+          仍从「实际绘制用画布」算起——先按 _frame_draw_rect 把帧画进窗口尺寸
+          画布、createAlphaMask、再直接扫描 1bpp 掩码得包围盒。窗口边界裁剪、
+          alpha>=128 阈值、DPR/采样映射与旧 canvas→QBitmap→QRegion 路径天然
+          一致（不做源图 bbox + 采样公式反推）；鼠标穿透由
+          WindowsPerPixelInputController 负责。
         """
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
@@ -1890,18 +1973,25 @@ class PetWindow(QWidget):
             # 与 paintEvent 完全相同的绘制调用，保证 mask 与画面逐像素一致
             p.drawPixmap(rect, self._frame_pixmap)
         p.end()
-        mask = QBitmap.fromImage(canvas.createAlphaMask())
-        self._mask_bounds = QRegion(mask).boundingRect()
+        if os.name != "nt":
+            mask = QBitmap.fromImage(canvas.createAlphaMask())
+            self._mask_bounds = QRegion(mask).boundingRect()
+            self.setMask(mask)
+        else:
+            bb = _mono_mask_bounds(canvas)
+            if bb is None:
+                self._mask_bounds = QRect()
+            else:
+                x0, y0, x1, y1 = bb
+                self._mask_bounds = QRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+            if not self.mask().isEmpty():
+                self.clearMask()
         if not self._mask_bounds.isEmpty():
             stable = getattr(self, '_collision_local_bounds', None)
             if stable is None:
                 self._collision_local_bounds = QRect(self._mask_bounds)
             else:
                 self._collision_local_bounds = stable.united(self._mask_bounds)
-        if os.name != "nt":
-            self.setMask(mask)
-        elif not self.mask().isEmpty():
-            self.clearMask()
 
     def collision_content_rect(self) -> QRect:
         """碰撞用的稳定可见区域（全局坐标）：取当前动画各帧包围盒的并集，
@@ -1926,6 +2016,8 @@ class PetWindow(QWidget):
         if not rect.contains(local):
             return True
         if self._hit_alpha_image is None:
+            # _rebuild_frame 已把缩放后的 ARGB32 图缓存为 _hit_alpha_image，
+            # 此处只是兜底（如测试直接挂 _frame_pixmap 的场景）
             self._hit_alpha_image = self._frame_pixmap.toImage()
         img = self._hit_alpha_image
         if img.isNull():
