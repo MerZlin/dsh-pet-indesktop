@@ -171,6 +171,10 @@ COLLISION_HIT_MIN_DV = 300.0
 # 抛掷中的桌宠也只吸收超过此值的冲量修正：静置接触的 e=0 抵消微冲量
 # （十几 px/s）会把贴地桌宠永远顶在静止线以上，形成自供能原地抖动
 COLLISION_CONTACT_DV_FLOOR = 50.0
+# 普通拖拽合帧消费节奏：~120Hz（8ms）。高回报率鼠标（125-1000Hz）会在
+# 一个显示帧内触发多次 mouseMoveEvent，中间位置屏幕来不及显示；合帧 timer
+# 每 tick 只消费最新目标做 self.move，丢弃中间过期位置。
+DRAG_MOVE_COALESCE_MS = 8
 
 
 def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
@@ -462,6 +466,7 @@ class PetWindow(QWidget):
         self.on_spawn_pet = None
         self.on_hidden = None  # 由 app 注入：用户主动隐藏时弹托盘提示
         self._position_listeners = []
+        self._position_sync_pending = False  # moveEvent 同帧合并：气泡/监听器 0ms 去抖待处理
         self._animation_icon_image_cache: dict[str, QImage] = {}
         self._animation_icon_inflight: dict[str, threading.Event] = {}
         self._animation_icon_cache_lock = threading.Lock()
@@ -648,6 +653,14 @@ class PetWindow(QWidget):
         self._throw_speed_cap = physics_mod.throw_speed_cap(config.get("throw_strength"))
         self.throw_strength = physics_mod.normalize_throw_strength(config.get("throw_strength"))
         self._last_physics_tick_time: float | None = None
+
+        # ---- 普通拖拽合帧 ----
+        # 普通拖拽（非物理）的 mouseMoveEvent 只记录最新目标，由 ~120Hz
+        # timer 消费最新位置做 self.move；同一显示帧内的中间位置全部丢弃。
+        self._drag_move_timer = QTimer(self)
+        self._drag_move_timer.setInterval(DRAG_MOVE_COALESCE_MS)
+        self._drag_move_timer.timeout.connect(self._consume_drag_move)
+        self._drag_move_pending: QPoint | None = None  # 尚未消费的最新拖拽目标
 
         self._collision_timer = QTimer(self)
         self._collision_timer.setInterval(500)
@@ -1049,6 +1062,8 @@ class PetWindow(QWidget):
             self.movie.stop()
         self._move_timer.stop()
         self._physics_timer.stop()
+        self._drag_move_timer.stop()
+        self._drag_move_pending = None
         # 全屏 watcher 不能在"全屏自动隐藏"期间停：它是退出全屏后
         # 重新 show() 的唯一检测路径，停了桌宠就再也回不来。
         # 只有手动隐藏（托盘/右键，_auto_hidden 为 False）才停它。
@@ -2349,6 +2364,7 @@ class PetWindow(QWidget):
         return start, QPointF(mouse_local)
 
     def _enter_slingshot(self, global_pos: QPoint) -> None:
+        self._flush_drag_move()  # 进入瞄准前应用最后一次跟手位置（锚点=当前窗口位置）
         self._interaction_state = "SLINGSHOT_AIMING"
         self._slingshot_anchor_pos = QPoint(self.pos())
         self._slingshot_anchor_mouse = QPoint(global_pos)
@@ -2381,6 +2397,7 @@ class PetWindow(QWidget):
         self._press_global = None
         self._grab_offset = None
         self._dragging = False
+        self._clear_drag_move()  # 合帧目标已在 _enter_slingshot 冲掉，这里兜底
         self._sync_drag_polling(False)
 
     def _start_slingshot_rebound(self, progress: float) -> None:
@@ -2461,6 +2478,39 @@ class PetWindow(QWidget):
         if ctrl is not None:
             ctrl.set_drag_active(active)
 
+    def _schedule_drag_move(self, target: QPoint) -> None:
+        """普通拖拽合帧：只记录最新目标位置，由 ~120Hz timer 消费。
+
+        同一显示帧内多次 mouseMoveEvent 会不断覆盖 pending，timer tick
+        时永远只消费最新目标（丢弃中间过期位置）。"""
+        self._drag_move_pending = QPoint(target)
+        if not self._drag_move_timer.isActive():
+            self._drag_move_timer.start()
+
+    def _consume_drag_move(self) -> None:
+        """~120Hz timer 槽：消费最新目标做 self.move；无新目标则停表。"""
+        if self._drag_move_pending is None:
+            self._drag_move_timer.stop()
+            return
+        target = self._drag_move_pending
+        self._drag_move_pending = None
+        self.move(target)
+
+    def _flush_drag_move(self) -> None:
+        """拖拽结束/打断前：停止合帧 timer，并立即应用最后一次目标位置。
+
+        松手/进入弹弓等路径调用：保证最后记录的跟手位置不丢失。"""
+        self._drag_move_timer.stop()
+        if self._drag_move_pending is not None:
+            target = self._drag_move_pending
+            self._drag_move_pending = None
+            self.move(target)
+
+    def _clear_drag_move(self) -> None:
+        """丢弃未消费的合帧目标并停止 timer（不移动窗口，防御性清理）。"""
+        self._drag_move_timer.stop()
+        self._drag_move_pending = None
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         buttons = event.buttons() | event.button()
         if event.button() == Qt.MouseButton.RightButton and buttons & Qt.MouseButton.LeftButton:
@@ -2489,6 +2539,7 @@ class PetWindow(QWidget):
             self._grab_offset = self._press_global - self.pos()
             self._dragging = False
             self._cancel_move()  # 按下即打断移动
+            self._clear_drag_move()  # 丢弃上一次拖拽遗留的未消费合帧目标（防御）
             self._last_global = self._press_global
             self._last_move_time = time.monotonic()
             self._trail = [(self._last_move_time, self._press_global.x(), self._press_global.y())]
@@ -2539,7 +2590,10 @@ class PetWindow(QWidget):
                 self._last_physics_tick_time = None
                 self._physics_timer.start()
             else:
+                # 拖拽开始的第一帧仍立即跟手（既有交互语义），此后由
+                # ~120Hz 合帧 timer 消费最新目标
                 self.move(g - self._grab_offset)
+                self._position_sync_now()  # 拖拽开始的第一帧立即同步（气泡/监听器）
             self._last_global = g
             self._last_move_time = time.monotonic()
             self._trail.append((self._last_move_time, g.x(), g.y()))
@@ -2560,7 +2614,9 @@ class PetWindow(QWidget):
                 self._last_physics_tick_time = None
                 self._physics_timer.start()
         else:
-            self.move(g - self._grab_offset)  # 跟手（保持抓起时的偏移）
+            # 跟手（保持抓起时的偏移）：只记录最新目标，由 ~120Hz timer 消费，
+            # 同一显示帧内的中间位置丢弃，避免一次帧内多次 move + moveEvent 开销
+            self._schedule_drag_move(g - self._grab_offset)
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
@@ -2582,6 +2638,7 @@ class PetWindow(QWidget):
             d = g - self._press_global
             dist = math.hypot(d.x(), d.y())
         if was_dragging:
+            self._flush_drag_move()  # 拖拽结束：强制处理最后一次目标位置并停止合帧 timer
             self._just_dragged = True  # 抑制拖拽结束后的幽灵点击
             QTimer.singleShot(150, self, self._clear_just_dragged)
             if self.drag_physics:
@@ -2602,6 +2659,7 @@ class PetWindow(QWidget):
                 if self._grab_offset is not None:
                     self.move(g - self._grab_offset)  # 停在松手处
                 self._save_position()
+            self._position_sync_now()  # 松手后的最终位置立即同步（气泡/监听器），不等去抖
             if self.idles:
                 self._switch(self._pick(self.idles))  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
@@ -2789,6 +2847,10 @@ class PetWindow(QWidget):
     def hideEvent(self, event) -> None:  # noqa: N802
         if self._interaction_state == "SLINGSHOT_AIMING":
             self._cancel_slingshot_to_anchor()
+        # 生命周期兜底：平台原生 hide（不经自定义 hide()/_pause_activity）同样
+        # 停掉拖拽合帧 timer 并丢弃 pending 与位置同步去抖，隐藏期间不再 move 窗口。
+        self._clear_drag_move()
+        self._position_sync_pending = False
         super().hideEvent(event)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
@@ -3287,6 +3349,9 @@ class PetWindow(QWidget):
         self.cfg.set('lock_position', self.lock_position)
         self.cfg.save()
         if self.lock_position and self._dragging:
+            # 锁定位语义等同松手：立即应用最后一次跟手位置并停止合帧 timer，
+            # 否则下一次 tick 仍会把窗口 move 到旧目标，违反锁定语义。
+            self._flush_drag_move()
             self._dragging = False
             self._press_global = None
             self._grab_offset = None
@@ -3516,6 +3581,28 @@ class PetWindow(QWidget):
         # 非 force 节流提交：位置变化由去重 + 20Hz 限流兜底，运动期由
         # _collision_timer（50ms）强制上报，避免 60Hz 抛掷移动上报超标
         self._submit_collision_state()
+        # 气泡重定位与 position listeners 同帧合并：同一 GUI 帧内多次
+        # moveEvent 只处理最后一次（0ms 去抖）；拖拽开始/松手关键帧由
+        # 调用方 _position_sync_now() 立即同步，去抖回调随后被丢弃。
+        self._schedule_position_sync()
+
+    def _schedule_position_sync(self) -> None:
+        """moveEvent 同帧合并：同一帧内多次 moveEvent 只安排一次 0ms 去抖，
+        回调触发时以最新窗口位置做气泡重定位与 position listeners 通知。"""
+        if self._position_sync_pending:
+            return
+        self._position_sync_pending = True
+        QTimer.singleShot(0, self, self._sync_position_debounced)
+
+    def _sync_position_debounced(self) -> None:
+        if not self._position_sync_pending:
+            return  # 拖拽开始/松手已立即同步，丢弃过期的去抖回调
+        self._position_sync_pending = False
+        self._position_sync_now()
+
+    def _position_sync_now(self) -> None:
+        """立即同步气泡重定位与 position listeners（拖拽开始/松手关键帧）。"""
+        self._position_sync_pending = False
         self._speech_bubble.reposition(self.visible_content_rect())
         for listener in tuple(self._position_listeners):
             try:
@@ -3535,5 +3622,7 @@ class PetWindow(QWidget):
         # 不在这里覆盖记忆位置：避免自动移动/抛掷后的随机终点被存下来。
         self._self_talk_timer.stop()
         self._cancel_animation_gap()
+        self._clear_drag_move()  # 生命周期兜底：停拖拽合帧 timer、丢 pending
+        self._position_sync_pending = False  # 丢弃 moveEvent 同帧合并的在途去抖
         self._speech_bubble.hide()
         super().closeEvent(event)
