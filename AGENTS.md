@@ -41,8 +41,8 @@ classDiagram
 The IPC facade belongs to the GUI thread; `_CollisionWorker` and every
 `QLocalServer`, `QLocalSocket`, and IPC timer belong to its dedicated `QThread`.
 The shared kernel file lock is the coordinator authority. On POSIX, a lock
-holder may remove the stale Unix socket before listening because a live
-coordinator would still hold that lock.
+holder that fails to `listen()` because of a stale Unix socket first probes
+for a live listener, and only removes the stale endpoint when nobody answers.
 
 ```mermaid
 sequenceDiagram
@@ -56,7 +56,13 @@ sequenceDiagram
     IPC-->>W: queued signal
     W->>L: try acquire
     alt lock acquired
-        W->>Q: remove stale POSIX endpoint, listen
+        W->>Q: listen
+        alt listen fails (stale POSIX endpoint)
+            W->>Q: probe live server
+            alt no live listener
+                W->>Q: remove stale endpoint, listen
+            end
+        end
         W-->>IPC: role_changed(true, epoch)
     else lock busy
         W->>Q: connect as client, hello
