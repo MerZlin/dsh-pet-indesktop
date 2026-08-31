@@ -613,6 +613,17 @@ class PetWindow(QWidget):
         self._just_dragged = False               # 抑制拖拽结束后的幽灵点击
         self._interaction_state = "IDLE"
         self._context_menu_suppressed = False
+        # 低优先级预热让路闸门：交互（左键按住/点击动画播放中/右键菜单打开）
+        # 期间持有，让 MovieLibrary 的低优先级预热让路；交互结束释放。
+        # 状态翻转时才通知库（_set_interaction_hold），避免拖拽高频事件抖动。
+        # begin_interaction 返回的 token 存于 _interaction_hold_token，释放时
+        # 原样传回：pause_warm 换代后旧 token 的释放是 no-op，配对不被破坏。
+        self._interaction_hold_active = False
+        self._interaction_hold_token = None
+        self._context_menu_open = False
+        self._lock_press_active = False   # 锁定位置下左键按住（不拖拽但仍是交互）
+        self._click_hold = False          # 点击动画播放中持有让路闸门
+        self._closing = False             # closeEvent 后丢弃迟到的动画事件
         self._slingshot_anchor_pos: QPoint | None = None
         self._slingshot_anchor_mouse: QPoint | None = None
         self._slingshot_mouse: QPoint | None = None
@@ -1080,6 +1091,11 @@ class PetWindow(QWidget):
             self.agent_link_manager.pause()
         if hasattr(self, 'lib') and self.lib is not None and hasattr(self.lib, 'pause_warm'):
             self.lib.pause_warm()
+        # 交互让路闸门随隐藏对称释放（库侧 pause_warm 已换代清零时 end 是
+        # no-op；无 pause_warm 的库则真正 end 配对，避免库侧计数泄漏）；
+        # 按住状态一并复位（含闸门释放），恢复显示后由 _switch →
+        # _update_interaction_hold 重新同步。
+        self._reset_press_hold_state()
         self._cancel_move()
         self._cancel_animation_gap()
         self._speech_bubble.hide()
@@ -1751,6 +1767,10 @@ class PetWindow(QWidget):
         """切换到指定动画（链式模型：全部一次性播放）。"""
         self._cancel_move()
         self.anim = name
+        # 点击回应动画播放中持有让路闸门；切到非点击动画即视为点击结束。
+        # （单一事实来源：_click_hold 随当前 anim 同步，覆盖所有切换路径，
+        # 避免"点击动画被拖拽/移动打断后 _click_hold 残留"导致闸门泄漏。）
+        self._click_hold = name in self.clicks
         self._collision_local_bounds = None
         movie = self.lib.movie(name)
         self._connect_movie(name, movie)
@@ -1763,6 +1783,9 @@ class PetWindow(QWidget):
         self._rebuild_frame()
         movie.start()
         self._submit_collision_state(force=True)
+        # 动画切换是让路闸门的唯一事实来源之一：点击动画开始播放时持有、
+        # 播完（_on_anim_ended 切走）时释放，覆盖所有早期返回路径。
+        self._update_interaction_hold()
 
     # ---- Agent 联动动作平滑衔接 ----
     def _is_one_shot_playing(self) -> bool:
@@ -1794,6 +1817,10 @@ class PetWindow(QWidget):
 
     def _on_frame(self, name: str, n: int) -> None:
         """媒体帧推进回调：重建画面；最后一帧触发播完处理。"""
+        if self._hidden_paused or getattr(self, '_closing', False):
+            # 隐藏/关闭/切角色后丢弃迟到的动画事件：旧窗口不得再推进动画链、
+            # 不得对旧库重新建立交互让路 hold（生命周期守卫）。
+            return
         if name != self.anim or self.movie is None:
             return
         self._rebuild_frame()
@@ -2089,6 +2116,8 @@ class PetWindow(QWidget):
     def _on_clip_finished(self, name: str) -> None:
         """WebMClip 播完兜底：正常路径在末尾帧处由 _on_frame 提前 stop，
         这里只处理“末尾帧被丢弃、结束标记被消费”的异常路径，推进动画链。"""
+        if self._hidden_paused or getattr(self, '_closing', False):
+            return
         if name != self.anim or self.movie is None:
             return
         if not self._ended_fired:
@@ -2129,6 +2158,12 @@ class PetWindow(QWidget):
             self._cancel_animation_gap()
             if self.idles:
                 self._switch(self._pick(self.idles))
+            else:
+                # 防御：角色包没有 idle 时点击动画停在最后一帧（movie 已 stop）；
+                # _switch 不会执行，显式释放让路闸门，避免 anim 仍是 click 名
+                # 导致低优先级预热永久让路。
+                self._click_hold = False
+                self._update_interaction_hold()
             return
         if self._animation_gap_active:
             if name in self.idles or name in self.turns:
@@ -2399,6 +2434,7 @@ class PetWindow(QWidget):
         self._dragging = False
         self._clear_drag_move()  # 合帧目标已在 _enter_slingshot 冲掉，这里兜底
         self._sync_drag_polling(False)
+        self._update_interaction_hold()  # 弹弓发射/取消回锚点：左键已释放 → 让路释放
 
     def _start_slingshot_rebound(self, progress: float) -> None:
         self._slingshot_rebound_progress = max(0.0, min(1.0, float(progress)))
@@ -2472,6 +2508,54 @@ class PetWindow(QWidget):
         """由于动画左右有留白，只把窗口中间 1/3 宽度作为可交互区域。"""
         return self._w / 3.0 <= local_pos.x() <= self._w * 2.0 / 3.0
 
+    def _set_interaction_hold(self, active: bool) -> None:
+        """同步低优先级预热让路闸门：只在状态翻转时通知库，避免每事件抖动。"""
+        if active == self._interaction_hold_active:
+            return
+        self._interaction_hold_active = active
+        lib = getattr(self, 'lib', None)
+        if lib is None:
+            self._interaction_hold_token = None
+            return
+        if active:
+            begin = getattr(lib, 'begin_interaction', None)
+            if callable(begin):
+                self._interaction_hold_token = begin()
+            else:
+                self._interaction_hold_token = None
+        else:
+            end = getattr(lib, 'end_interaction', None)
+            token = self._interaction_hold_token
+            self._interaction_hold_token = None
+            if callable(end):
+                end(token)
+
+    def _update_interaction_hold(self) -> None:
+        """按当前交互状态重算让路闸门：左键按住（按下/拖拽/弹弓瞄准/锁定位置
+        按住）、点击动画播放中、或右键菜单打开中 → 持有；否则释放。"""
+        active = (
+            self._press_global is not None
+            or self._lock_press_active
+            or self._context_menu_open
+            or self._click_hold
+        )
+        self._set_interaction_hold(active)
+
+    def _reset_press_hold_state(self) -> None:
+        """复位全部交互按住/点击/菜单状态并对称释放让路闸门。
+
+        隐藏/关闭路径调用（自定义 hide()→_pause_activity、原生 hideEvent、
+        closeEvent）：隐藏后不再认为自己在拖拽/按住，迟到的动画事件也不会
+        因 _press_global 残留而对旧库重新建立 hold；恢复显示后由
+        _switch → _update_interaction_hold 按新状态重新同步。"""
+        self._press_global = None
+        self._grab_offset = None
+        self._dragging = False
+        self._lock_press_active = False
+        self._click_hold = False
+        self._context_menu_open = False
+        self._set_interaction_hold(False)
+
     def _sync_drag_polling(self, active: bool) -> None:
         """Windows 逐像素穿透轮询随拖拽按下/松手降频/恢复（非 Windows 无控制器，no-op）。"""
         ctrl = self._input_controller
@@ -2531,7 +2615,12 @@ class PetWindow(QWidget):
                     self._press_sound_started_at = time.monotonic()
                     play_press_sound(pair, float(self.cfg.get("click_sound_volume", 0.70)))
             if self.lock_position:
-                # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
+                # 锁定位置：不记录按下（拖拽不会开始），但按住期间仍持有
+                # 低优先级预热让路闸门，避免锁定点击瞬间预热抢 CPU/IO；
+                # 松手走点击路径时由 _update_interaction_hold 释放。
+                self._lock_press_active = True
+                self._update_interaction_hold()
+                event.accept()
                 return
             self._press_global = event.globalPosition().toPoint()
             self._sync_drag_polling(True)
@@ -2547,6 +2636,7 @@ class PetWindow(QWidget):
             self._phys_pos = [float(self.x()), float(self.y())]
             self._stop_physics()
             self.setFocus(Qt.FocusReason.OtherFocusReason)
+            self._update_interaction_hold()  # 左键按住 → 低优先级预热让路
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -2572,6 +2662,7 @@ class PetWindow(QWidget):
                 self._press_global = None
                 self._grab_offset = None
                 self._sync_drag_polling(False)
+                self._update_interaction_hold()  # 未按 SHIFT 取消按压 → 释放让路
                 return
             self._dragging = True
             self._interaction_state = "DRAGGING"
@@ -2674,6 +2765,7 @@ class PetWindow(QWidget):
         self._dragging = False
         self._interaction_state = "IDLE"
         self._press_global = None
+        self._lock_press_active = False
         self._grab_offset = None
         self._sync_drag_polling(False)
         if self._cursor_restore_pending or self._cursor_visibility == 'SHOWING':
@@ -2681,6 +2773,8 @@ class PetWindow(QWidget):
             self._auto_cursor_hidden = False
         self._apply_effective_mouse_through()
         self._submit_collision_state(force=True)
+        # 松手后重算让路闸门：左键已释放，若点击动画仍在播放则继续保持持有
+        self._update_interaction_hold()
         event.accept()
 
     def _clear_just_dragged(self) -> None:
@@ -2851,6 +2945,21 @@ class PetWindow(QWidget):
         # 停掉拖拽合帧 timer 并丢弃 pending 与位置同步去抖，隐藏期间不再 move 窗口。
         self._clear_drag_move()
         self._position_sync_pending = False
+        # 原生隐藏同样暂停预热并对称释放交互让路闸门，避免库侧计数泄漏
+        # （自定义 hide() 路径此处是幂等重复，不影响行为）。
+        lib = getattr(self, 'lib', None)
+        if lib is not None and hasattr(lib, 'pause_warm'):
+            lib.pause_warm()
+        # 必须与自定义 hide() 一致置位 _hidden_paused：showEvent 据此走
+        # _resume_activity() → resume_warm()。缺了它，原生隐藏→显示循环后
+        # 预热被永久停用（_warm_paused 永远无法复位）。重复置位是幂等 no-op。
+        self._hidden_paused = True
+        # 原生隐藏直进路径（不经自定义 hide()/_pause_activity）同样复位全部
+        # 按住状态：只清点击/菜单标志而残留 _press_global/_dragging 时，
+        # 重新显示后 _resume_activity → _switch → _update_interaction_hold
+        # 会把旧按住误判成活跃交互、对库侧重新 begin_interaction()，松手事件
+        # 却不再到来 → 库侧 hold 泄漏（与 _pause_activity 语义对齐）。
+        self._reset_press_hold_state()
         super().hideEvent(event)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
@@ -2897,7 +3006,19 @@ class PetWindow(QWidget):
                 lambda menu=menu, target=target: animate_context_menu_to(menu, target),
             )
         )
-        menu.exec(transition_start)
+        # 右键菜单打开期间持有低优先级预热让路闸门，避免菜单/缩略图解码
+        # 与低优先级预热抢 ffmpeg/CPU；关闭后立即释放。
+        # getattr 守卫：测试桩/最小替代对象可以不实现让路钩子。
+        self._context_menu_open = True
+        update_hold = getattr(self, '_update_interaction_hold', None)
+        if callable(update_hold):
+            update_hold()
+        try:
+            menu.exec(transition_start)
+        finally:
+            self._context_menu_open = False
+            if callable(update_hold):
+                update_hold()
         callbacks = take_deferred_menu_callbacks(menu)
         if getattr(self, "_active_context_menu", None) is menu:
             self._active_context_menu = None
@@ -3358,6 +3479,7 @@ class PetWindow(QWidget):
             self._sync_drag_polling(False)
             self._stop_physics()
         self._submit_collision_state(force=True)
+        self._update_interaction_hold()  # 拖拽被锁定位置打断 → 释放让路
 
     def set_shift_drag(self, on: bool) -> None:
         """按住 SHIFT+左键才能拖动。"""
@@ -3611,6 +3733,7 @@ class PetWindow(QWidget):
                 logging.exception("\u684c\u5ba0\u4f4d\u7f6e\u76d1\u542c\u5668\u6267\u884c\u5931\u8d25")
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._closing = True  # 关闭后丢弃迟到的动画事件（生命周期守卫）
         if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
             self._cancel_slingshot_to_anchor()
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
@@ -3625,4 +3748,12 @@ class PetWindow(QWidget):
         self._clear_drag_move()  # 生命周期兜底：停拖拽合帧 timer、丢 pending
         self._position_sync_pending = False  # 丢弃 moveEvent 同帧合并的在途去抖
         self._speech_bubble.hide()
+        # 关闭即销毁：暂停预热并对称释放交互让路闸门，避免库侧计数泄漏。
+        lib = getattr(self, 'lib', None)
+        if lib is not None and hasattr(lib, 'pause_warm'):
+            lib.pause_warm()
+        self._lock_press_active = False
+        self._click_hold = False
+        self._context_menu_open = False
+        self._set_interaction_hold(False)
         super().closeEvent(event)

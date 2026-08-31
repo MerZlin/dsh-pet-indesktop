@@ -40,6 +40,10 @@ _META_FILE_CACHE_PATH = Path(tempfile.gettempdir()) / "dsh-pet-media-meta-cache.
 _META_FILE_CACHE: dict | None = None
 _META_CACHE_LOCK = threading.Lock()
 
+# 前台同步解码等待后台预热完成的有限时长（毫秒）：超过此时长前台放弃等待、
+# 直接自行解码，保证 GUI 线程不被后台首帧预热长时间卡住（N4）。
+_FIRST_FRAME_SYNC_WAIT_MS = 120
+
 
 def _load_meta_file_cache() -> dict:
     try:
@@ -116,6 +120,11 @@ class WebMClip(QObject):
         self._current_pixmap: QPixmap | None = None
         self._first_image: QImage | None = None
         self._first_pixmap: QPixmap | None = None
+        # 首帧解码原子认领（N4）：warm_first_frame（后台）与 _decode_first_frame_sync
+        # （前台）同一时间只有一个执行者。_first_frame_done 在 _first_image 写入后
+        # set，供前台有界等待复用后台解码结果（零重复解码）。
+        self._first_frame_lock = threading.Lock()
+        self._first_frame_done = threading.Event()
         self._frame_index = 0
         self._ended_fired = False
         self._running = False
@@ -326,26 +335,61 @@ class WebMClip(QObject):
                 except Exception:
                     pass
 
-    def _decode_first_frame_sync(self) -> None:
-        """同步解码首帧（主线程），保证 jumpToFrame(0)/currentPixmap 在 start() 前有画面。"""
+    def _decode_first_qimage_and_cache(self) -> None:
+        """解码首帧并写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
+
+        幂等：缓存已存在时直接返回，避免重复拉起 ffmpeg。
+        """
+        if self._first_image is not None:
+            return
         img = self._decode_first_qimage()
         if img is not None:
-            self._current_image = img
-            self._current_pixmap = QPixmap.fromImage(img)
             self._first_image = img
-            self._first_pixmap = self._current_pixmap
+            self._first_frame_done.set()
+
+    def _apply_first_frame(self) -> None:
+        """把已缓存的 _first_image 应用到当前播放帧（仅主线程调用）。"""
+        if self._first_image is None:
+            return
+        self._current_image = self._first_image
+        self._current_pixmap = QPixmap.fromImage(self._first_image)
+        self._first_pixmap = self._current_pixmap
+
+    def _decode_first_frame_sync(self) -> None:
+        """同步解码首帧（主线程），保证 jumpToFrame(0)/currentPixmap 在 start() 前有画面。
+
+        与后台 warm_first_frame 原子互斥：同一时间只有一个首帧解码执行者。
+        认领失败说明后台预热正在解码：最多等待 _FIRST_FRAME_SYNC_WAIT_MS
+        （后台完成则直接用其缓存，零重复解码）；超时则放弃等待直接自行解码，
+        前台播放绝不被后台预热长时间卡住（代价是极端情况下短暂双解码）。
+        """
+        if self._first_frame_lock.acquire(blocking=False):
+            try:
+                self._decode_first_qimage_and_cache()
+            finally:
+                self._first_frame_lock.release()
+        else:
+            if not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0):
+                self._decode_first_qimage_and_cache()
+        self._apply_first_frame()
 
     def warm_first_frame(self) -> None:
         """后台线程预解码首帧缓存（仅 QImage，线程安全）。
 
         首次播放某动画时 jumpToFrame(0) 需要首帧：有缓存则主线程零阻塞，
         避免点击瞬间同步 ffmpeg 解码造成卡顿，以及 Q 弹期间残留旧动画帧。
+
+        原子认领（N4）：同一时间只有一个首帧解码执行者。认领失败（前台
+        同步解码或并发预热正在进行）直接放弃——预热是尽力而为，不排队等待。
         """
         if self._first_image is not None or imageio_ffmpeg is None:
             return
-        img = self._decode_first_qimage()
-        if img is not None:
-            self._first_image = img
+        if not self._first_frame_lock.acquire(blocking=False):
+            return
+        try:
+            self._decode_first_qimage_and_cache()
+        finally:
+            self._first_frame_lock.release()
 
     # ------------------------------------------------------------ reader
     def _reader(self, stop_evt: threading.Event, generation: int) -> None:
