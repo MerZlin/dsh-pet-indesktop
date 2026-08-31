@@ -1479,6 +1479,7 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
 
@@ -1558,6 +1559,7 @@ def test_context_menu_window_callback_waits_until_old_menu_is_destroyed(monkeypa
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
             self.delete_requested = False
@@ -1651,6 +1653,7 @@ def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monke
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
             created.append(self)
