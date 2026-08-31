@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多 Agent 状态感知与动作联动监视器模块（DSH / Claude Code / Cursor / OpenCode）。
+"""多 Agent 状态感知与动作联动监视器模块（DSH / Claude Code / Cursor / OpenCode / 自定义）。
 
 设计原则（手册 §8）：
 1. 绝不使用 mtime 盲轮询；
@@ -995,6 +995,30 @@ class OpenCodeMonitor(BaseAgentMonitor):
                 self.activity.emit("opencode", tool)
 
 
+class CustomAgentMonitor(BaseAgentMonitor):
+    """自定义联动 Agent 监视器（agent_link.custom_agents 配置驱动）。
+
+    只读监听用户指定路径的统一协议 JSONL 事件文件（docs/AGENT_LINK_PROTOCOL.md §4）：
+    不创建目录、不写任何外部位置、无需授权弹窗；文件不存在时静默空转等待，
+    出现后自动开始增量读取（backfill 防护跳过历史内容）。"""
+
+    def __init__(self, agent_key: str, config_dir: Path, events_path: str, parent=None) -> None:
+        super().__init__(agent_key, config_dir, parent)
+        self.events_file = Path(events_path).expanduser()
+        self.events_dir = self.events_file.parent
+        self._tailer = ByteOffsetTailer(self.events_file)
+
+    def start(self) -> None:
+        # 覆写基类 start：基类会 mkdir 事件目录，这里只读监听外部文件，
+        # 不替用户在任意路径创建目录
+        self._running = True
+        self._paused = False
+        self._tailer.reset()
+        if not self._timer.isActive():
+            self._timer.start()
+        log.info("Agent 监视器 [%s] 已启动 (%s)", self.agent_key, self.events_file)
+
+
 # ----------------------------------------------------------------------
 # Agent 联动总调度管理器
 # ----------------------------------------------------------------------
@@ -1060,6 +1084,19 @@ class AgentLinkManager(QObject):
             "cursor": CursorMonitor(self.config_dir, self),
             "opencode": OpenCodeMonitor(self.config_dir, self),
         }
+        # 自定义联动 Agent：配置驱动的只读监视器（key/path 已在 config 清洗时
+        # 保证合法唯一）；显示名合并进实例级 agent_names，类级 AGENT_NAMES
+        # 保持仅内置（modern_settings_dialog 等按内置枚举处不受影响）。
+        # 注意：运行中新增/修改 custom_agents 需重启桌宠生效。
+        self.agent_names: dict[str, str] = dict(self.AGENT_NAMES)
+        for item in (self.cfg.get("agent_link", {}).get("custom_agents") or []):
+            key = str(item.get("key") or "")
+            if not key or key in self.monitors:
+                continue
+            self.monitors[key] = CustomAgentMonitor(
+                key, self.config_dir, str(item.get("path") or ""), self,
+            )
+            self.agent_names[key] = str(item.get("name") or key)
 
         for mon in self.monitors.values():
             mon.state_changed.connect(self._on_agent_state)
@@ -1091,6 +1128,17 @@ class AgentLinkManager(QObject):
 
     def _warn_if_agent_absent(self, agent_key: str) -> None:
         """开启了联动但本机没装对应 Agent 时给用户提示（不然勾了永远没反应）。"""
+        # 自定义 Agent：事件文件尚未出现时提示路径，避免"勾了没反应"的困惑
+        mon = self.monitors.get(agent_key)
+        if isinstance(mon, CustomAgentMonitor):
+            if mon.events_file.exists() or not hasattr(self.win, "show_bubble"):
+                return
+            self.win.show_bubble(
+                f"已开启 {self.agent_names.get(agent_key, agent_key)} 联动监听，"
+                f"但事件文件还没出现——{mon.events_file} 有事件我才能感知到哦",
+                duration_ms=6000,
+            )
+            return
         hints = {
             "cursor": ("Cursor", Path.home() / ".cursor" / "projects"),
             "opencode": ("OpenCode", Path.home() / ".local" / "share" / "opencode" / "opencode.db"),
@@ -1373,11 +1421,11 @@ class AgentLinkManager(QObject):
         if not custom:
             custom = str(agent_cfg.get("thinking_text", "") or "").strip()
         if custom:
-            name = self.AGENT_NAMES.get(agent_key, agent_key)
+            name = self.agent_names.get(agent_key, agent_key)
             return custom.replace("{name}", name)
         if agent_key in self._THINKING_DEFAULTS:
             return self._THINKING_DEFAULTS[agent_key]
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        name = self.agent_names.get(agent_key, agent_key)
         return f"{name} 正在深度烧烤……"
 
     def _maybe_notify_start(self, agent_key: str, prev_raw: str | None, state: str = "working") -> None:
@@ -1388,7 +1436,7 @@ class AgentLinkManager(QObject):
             return
         if prev_raw in self._BUSY_STATES:
             return
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        name = self.agent_names.get(agent_key, agent_key)
         if state == "thinking":
             self._show_link_bubble(self._thinking_text(agent_key), important=False, duration_ms=3000)
         else:
@@ -1412,7 +1460,7 @@ class AgentLinkManager(QObject):
             return
         self._last_activity[agent_key] = (label, now)
         self._activity_global_last = now
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        name = self.agent_names.get(agent_key, agent_key)
         # 低优先级：气泡位被占直接丢弃，不与重要气泡竞争
         self._show_link_bubble(f"{name} {label}…", important=False, duration_ms=2600)
 
@@ -1447,7 +1495,7 @@ class AgentLinkManager(QObject):
         if now - self._done_cooldown.get(agent_key, 0.0) < self._DONE_COOLDOWN_S:
             return
         self._done_cooldown[agent_key] = now
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        name = self.agent_names.get(agent_key, agent_key)
         if agent_key in self._saw_alert:
             # busy 期间出现过 attention/error：不暗示"成功完成"
             text = f"{name} 那边停了，结果怎么样要主人自己看一眼哦"
