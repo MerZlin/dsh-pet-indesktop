@@ -157,7 +157,9 @@ class AnimBounds:
     def frame_rect(self, n: int) -> QRect | None:
         """第 n 帧的窗口局部可见 bounds。
 
-        空帧返回空 QRect（与画布扫描一致）；越界返回 None（调用方回落扫描）。
+        n 为「显示帧索引」（0 基，== 预计算表索引 == WebMClip.currentFrameNumber
+        的语义，B14 复审 P0 统一契约）：n=0 即首帧。空帧返回空 QRect（与画布
+        扫描一致）；越界返回 None（调用方回落扫描）。
         """
         if n < 0 or n >= self.frame_count:
             return None
