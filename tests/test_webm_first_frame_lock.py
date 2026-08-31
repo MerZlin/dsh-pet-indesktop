@@ -11,6 +11,13 @@ warm_first_frame()（后台预热）与 _decode_first_frame_sync()（前台首�
    放弃等待、直接自行解码（允许短暂双解码的逃生口，但不死锁）。
 
 全部用事件/锁同步，不用 sleep 猜时序。
+
+B7 复审（R2）遗留修复：
+4. 首帧进程登记与取消的竞态窗口闭掉：登记回调在锁内复查代次/cleanup，
+   迟到登记（取消后）的进程必须自终止且不得进 _first_frame_procs；
+5. 同步逃生解码纳入代次取消语义：在飞逃生解码被取消后结果作废；
+6. 逃生口缓存提交单胜者化：拿不到锁绝不无锁 check-then-store，只把
+   图像直接应用到当前画面，缓存提交只可能由持锁方完成。
 """
 from __future__ import annotations
 
@@ -259,8 +266,9 @@ def test_sync_escape_commits_atomically_under_lock(app):
     app.processEvents()
 
 
-def test_sync_escape_commit_wins_when_background_fails(app):
-    """P1-3：后台解码失败、前台逃生口解码成功时，最终缓存必须是前台的成果。"""
+def test_sync_escape_commit_deferred_when_lock_unavailable(app):
+    """P1-3/R2：逃生口拿不到锁时放弃写缓存（单胜者=持锁方），只把图像直接
+    应用；后台（持锁方）失败时缓存保持空，前台画面仍可显示。"""
     wait_ms = webm_clip_mod._FIRST_FRAME_SYNC_WAIT_MS
     clip = _FailThenSuccessClip("dummy.webm")
     t = threading.Thread(target=clip.warm_first_frame, daemon=True)
@@ -268,15 +276,219 @@ def test_sync_escape_commit_wins_when_background_fails(app):
     assert clip.first_entered.wait(5.0), "后台第一次解码必须已卡住（持有锁）"
 
     started = time.monotonic()
-    clip._decode_first_frame_sync()  # 前台：超时 → 自行解码成功 → 锁内提交
+    clip._decode_first_frame_sync()  # 前台：超时 → 自行解码成功 → 锁不可用 → 只应用不写缓存
     elapsed = time.monotonic() - started
     assert elapsed < (wait_ms / 1000.0) + 0.5, "前台等待后台预热的时间必须有界"
     assert clip.decode_count == 2, "后台卡住时前台必须自行解码（逃生口）"
-    assert clip._first_image is not None, "前台成功解码必须提交缓存"
-    assert clip._current_pixmap is not None, "前台必须应用首帧"
+    assert clip._first_image is None, "锁不可用时逃生口不得写缓存（单胜者=持锁方）"
+    assert clip._current_pixmap is not None, "前台逃生解码结果必须直接应用到当前画面"
 
-    clip.first_release.set()  # 后台收尾：返回 None，不得覆盖前台成功结果
+    clip.first_release.set()  # 后台收尾：返回 None（失败）→ 缓存保持空
     t.join(5.0)
-    assert clip._first_image is not None, "后台失败不得覆盖前台成功结果"
+    assert clip._first_image is None, "后台失败时缓存必须保持空（无人提交）"
     clip.cleanup()
+    app.processEvents()
+
+
+def test_escape_commits_never_write_cache_without_lock(app):
+    """P1-3/R2：多个逃生提交者在锁不可用时都不写缓存（无 check-then-store
+    竞态，缓存胜者不再取决于调度顺序）；提交只由持锁方（后台）完成。"""
+    clip = _WarmBlockingClip("dummy.webm")
+    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
+    t.start()
+    assert clip.decode_entered.wait(5.0), "后台预热必须已持锁卡住"
+
+    done = threading.Event()
+
+    def _sync():
+        clip._decode_first_frame_sync()
+        done.set()
+
+    s1 = threading.Thread(target=_sync, daemon=True)
+    s2 = threading.Thread(target=_sync, daemon=True)
+    s1.start()
+    s2.start()
+    deadline = time.monotonic() + 5.0
+    while clip.decode_count < 3 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert clip.decode_count == 3, "后台 1 次 + 两个逃生口各 1 次解码"
+    assert clip._first_image is None, "锁不可用期间不得有任何无锁写缓存"
+    s1.join(5.0)
+    s2.join(5.0)
+    assert clip._current_pixmap is not None, "逃生口必须把解码结果应用到当前画面"
+
+    clip.decode_release.set()  # 后台（持锁方）完成 → 提交缓存
+    t.join(5.0)
+    assert clip._first_image is not None, "持锁方完成后缓存必须被提交"
+    assert clip._first_frame_done.is_set(), "提交必须与完成事件一致"
+    clip.cleanup()
+    app.processEvents()
+
+
+# ============================================================================
+# B7 复审（R2）遗留 3：首帧进程登记/取消竞态 + 同步逃生代次取消
+# ============================================================================
+class _FakePopenCapture:
+    """替换 _PopenCapture：单例实例，捕获 on_process 登记回调，测试可精确
+    控制「Popen 已创建但登记尚未完成」的竞态窗口。"""
+
+    _instance = None
+    current = None
+
+    def __new__(cls, on_process=None):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance.entered = threading.Event()
+            cls._instance.proceed = threading.Event()
+        return cls._instance
+
+    def __init__(self, on_process=None):
+        self.on_process = on_process
+        _FakePopenCapture.current = self
+        self.entered.clear()
+        self.proceed.clear()
+
+    def __enter__(self):
+        self.entered.set()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _fake_read_frames(proc, frame_bytes, meta, clip, observed=None):
+    """模拟 imageio_ffmpeg.read_frames：经 capture 回调拉起「解码进程」登记，
+    等待 proceed 放行（测试控制登记时机）；observed 记录登记发生时进程
+    是否已在 _first_frame_procs 中。"""
+
+    def _read_frames(*args, **kwargs):
+        cap = _FakePopenCapture.current
+        cap.proceed.wait(5.0)
+        cap.on_process(proc, ["ffmpeg", "-i", "dummy.webm"])
+        if observed is not None:
+            observed.append(proc in clip._first_frame_procs)
+        yield meta
+        yield frame_bytes
+
+    return _read_frames
+
+
+def _install_fake_decode(monkeypatch, clip, proc, observed=None):
+    """安装假 capture/read_frames，返回 capture 实例；frame 数据用真实尺寸。"""
+    frame_bytes = bytes(clip._w * clip._h * clip._bpp)
+    meta = {"fps": 24.0, "duration": 1.0}
+    cap = _FakePopenCapture()
+    fake = _fake_read_frames(proc, frame_bytes, meta, clip, observed)
+    monkeypatch.setattr(webm_clip_mod, "_PopenCapture", _FakePopenCapture)
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "read_frames", fake)
+    return cap
+
+
+def test_first_frame_proc_registered_then_unregistered(app, monkeypatch):
+    """P1-2/R2：首帧解码进程经 capture 登记进 _first_frame_procs（供取消
+    主动 terminate）；解码结束（finally）即从集合移除。"""
+    clip = WebMClip("dummy.webm")
+    gen = clip._first_frame_gen
+    proc = _FakeDecodeProc()
+    observed = []
+    cap = _install_fake_decode(monkeypatch, clip, proc, observed)
+    result = {}
+
+    def _decode():
+        result["img"] = clip._decode_first_qimage(gen=gen)
+
+    t = threading.Thread(target=_decode, daemon=True)
+    t.start()
+    assert cap.entered.wait(5.0), "capture 必须已进入"
+    cap.proceed.set()  # 放行登记回调
+    t.join(5.0)
+
+    assert result["img"] is not None, "正常解码应成功"
+    assert observed == [True], "解码期间进程必须已登记进 _first_frame_procs"
+    assert proc not in clip._first_frame_procs, "解码结束后进程必须从集合移除"
+    assert proc.terminated is False and proc.killed is False, "正常解码进程不得被终止"
+    clip.cleanup()
+    app.processEvents()
+
+
+def test_first_frame_cancel_before_register_terminates_stale_proc(app, monkeypatch):
+    """P1-2/R2：取消发生在「Popen 已创建、登记尚未完成」窗口内时，迟到的
+    登记必须在锁内复查代次并自终止进程——已取消的进程绝不漏进集合。"""
+    clip = WebMClip("dummy.webm")
+    gen = clip._first_frame_gen
+    proc = _FakeDecodeProc()
+    cap = _install_fake_decode(monkeypatch, clip, proc)
+    result = {}
+
+    def _decode():
+        result["img"] = clip._decode_first_qimage(gen=gen)
+
+    t = threading.Thread(target=_decode, daemon=True)
+    t.start()
+    assert cap.entered.wait(5.0), "capture 必须已进入"
+    # 竞态窗口：Popen 已创建、_register 尚未执行 → 此刻取消（换代 + 清集合）
+    clip.cancel_first_frame_warm()
+    cap.proceed.set()  # 放行 → 迟到登记执行
+    t.join(5.0)
+
+    assert proc.terminated or proc.killed, "迟到的登记必须自终止已取消进程"
+    assert proc.poll() is not None, "自终止必须确认进程退出"
+    assert proc not in clip._first_frame_procs, "已取消进程不得登记进集合"
+    assert result["img"] is None, "取消后解码结果作废"
+    clip.cleanup()
+    app.processEvents()
+
+
+class _SyncEscapeCancelClip(WebMClip):
+    """第一次解码阻塞（后台 warm 卡住持锁）；第二次解码阻塞（逃生口在飞），
+    放行后返回有效 QImage——用于验证取消期间完成的逃生结果作废。"""
+
+    def __init__(self, path, parent=None):
+        super().__init__(path, parent)
+        self.bg_entered = threading.Event()
+        self.bg_release = threading.Event()
+        self.escape_entered = threading.Event()
+        self.escape_release = threading.Event()
+        self.decode_count = 0
+        self._counter_lock = threading.Lock()
+
+    def _decode_first_qimage(self, gen=None):
+        with self._counter_lock:
+            self.decode_count += 1
+            n = self.decode_count
+        if n == 1:
+            self.bg_entered.set()
+            self.bg_release.wait(5.0)
+            return QImage(2, 2, QImage.Format.Format_RGBA8888)
+        self.escape_entered.set()
+        self.escape_release.wait(5.0)
+        return QImage(3, 3, QImage.Format.Format_RGBA8888)
+
+
+def test_sync_escape_result_voided_by_cancel(app):
+    """P1-2/R2：同步逃生解码在飞期间发生取消（换代）→ 逃生结果作废，
+    不得写入缓存（与后台 warm 同等的代次取消语义）。"""
+    clip = _SyncEscapeCancelClip("dummy.webm")
+    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
+    t.start()
+    assert clip.bg_entered.wait(5.0), "后台预热必须已持锁卡住"
+
+    sync_done = threading.Event()
+
+    def _sync():
+        clip._decode_first_frame_sync()
+        sync_done.set()
+
+    st = threading.Thread(target=_sync, daemon=True)
+    st.start()
+    assert clip.escape_entered.wait(5.0), "前台逃生解码必须已进入在飞"
+
+    clip.cancel_first_frame_warm()  # 取消：换代
+    clip.escape_release.set()  # 逃生解码完成 → 代次检查作废
+    st.join(5.0)
+    clip.bg_release.set()
+    t.join(5.0)
+
+    assert clip._first_image is None, "取消期间完成的逃生结果不得污染缓存"
+    assert clip._first_frame_done.is_set() is False
     app.processEvents()

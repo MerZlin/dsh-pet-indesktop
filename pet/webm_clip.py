@@ -415,6 +415,11 @@ class WebMClip(QObject):
         返回时进程要么已确认退出，要么（极端病态，kill 后仍存活）记录警告
         并保留句柄供后续 sweep 重试——绝不静默假设 terminate 后进程已退出。
         已退出或 None 进程为无操作。
+
+        已知局限：只保证单个 Popen 句柄（父进程）的退出，不覆盖其派生的
+        进程树。当前 ffmpeg 为单进程解码器、不派生子进程；若未来引入会
+        派生工作子进程的解码器，需在此升级为进程树终止（Windows job
+        object / 进程组 kill），本实现不负责该场景。
         """
         if proc is None:
             return
@@ -627,21 +632,35 @@ class WebMClip(QObject):
         P1-2 生命周期：解码拉起的 ffmpeg 进程经 _PopenCapture 登记到
         _first_frame_procs（_reader_lock 保护），cancel_first_frame_warm/
         cleanup 可主动 terminate；gen 是本次解码认领的首帧代次，解码期间
-        代次被换代则结果作废返回 None。
+        代次被换代则结果作废返回 None。未显式传入 gen 时以解码开始时的
+        代次为准（所有真实调用路径均显式传入，此为防御默认）。
         """
         if imageio_ffmpeg is None:
             return None
+        if gen is None:
+            gen = self._first_frame_gen
         proc = None
         g = None
         try:
             def _register(p: subprocess.Popen, argv) -> None:
-                """解码进程 Popen 一拉起即登记（可被取消/cleanup 主动 terminate）。"""
+                """解码进程 Popen 一拉起即登记（可被取消/cleanup 主动 terminate）。
+
+                登记在 _reader_lock 内复查代次与 cleanup 状态（B7 复审 R2）：
+                取消（cancel_first_frame_warm 换代/清集合）与登记之间存在
+                竞态窗口——「Popen 已创建、登记尚未完成」时取消会读到空集合；
+                迟到的登记必须自检 stale，已取消的进程绝不漏进集合，而是
+                立即自终止，保证取消后不再有不受控的 ffmpeg 存活。
+                """
                 nonlocal proc
                 if not (isinstance(argv, list) and "-i" in argv):
                     return  # ffmpeg exe 探测等非解码进程：忽略
                 proc = p
                 with self._reader_lock:
-                    self._first_frame_procs.add(p)
+                    stale = self._cleaned or gen != self._first_frame_gen
+                    if not stale:
+                        self._first_frame_procs.add(p)
+                if stale:
+                    self._terminate_proc(p)
 
             with _PopenCapture(on_process=_register):
                 g = imageio_ffmpeg.read_frames(
@@ -713,6 +732,19 @@ class WebMClip(QObject):
         self._current_pixmap = QPixmap.fromImage(self._first_image)
         self._first_pixmap = self._current_pixmap
 
+    def _apply_first_frame_image(self, img) -> None:
+        """把解码得到的首帧图像直接应用到当前播放帧（仅主线程调用）。
+
+        不写入 _first_image 缓存：用于逃生口拿不到锁、无法经锁提交缓存的
+        场景（P1-3 / B7 复审 R2——绝不做无锁 check-then-store，缓存提交
+        只可能由持锁方完成）。
+        """
+        if img is None:
+            return
+        self._current_image = img
+        self._current_pixmap = QPixmap.fromImage(img)
+        self._first_pixmap = self._current_pixmap
+
     def _decode_first_frame_sync(self) -> None:
         """同步解码首帧（主线程），保证 jumpToFrame(0)/currentPixmap 在 start() 前有画面。
 
@@ -721,44 +753,52 @@ class WebMClip(QObject):
         （后台完成则直接用其缓存，零重复解码）；超时则放弃等待直接自行解码，
         前台播放绝不被后台预热长时间卡住（代价是极端情况下短暂双解码）。
 
-        逃生口（超时自行解码）允许与后台双解码，但缓存提交不无锁裸写
-        （P1-3）：优先非阻塞拿锁做幂等提交；后台真卡死持锁不释放时才退化
-        为原子赋值（单条 STORE_ATTR 原子写，绝不撕裂），逃生路径绝不阻塞
-        等待锁。
+        逃生口（超时自行解码）允许与后台双解码，但缓存提交单胜者化
+        （P1-3 / B7 复审 R2）：始终经锁提交，拿不到锁就放弃写缓存、只把
+        图像直接应用到当前画面——绝不无锁 check-then-store（两个逃生提交者
+        并发时缓存胜者取决于调度顺序，且后台完成后的幂等检查会让先写入者
+        永久决定缓存）。
+
+        P1-2 / B7 复审 R2：同步路径在进入时捕获首帧代次并贯穿解码与提交，
+        在飞解码被取消（换代）后结果作废，不污染缓存——与后台 warm 同等
+        的代次取消语义。
         """
+        gen = self._first_frame_gen
         if self._first_frame_lock.acquire(blocking=False):
             try:
-                self._decode_first_qimage_and_cache()
+                self._decode_first_qimage_and_cache(gen=gen)
             finally:
                 self._first_frame_lock.release()
         else:
             if not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0):
-                img = self._decode_first_qimage()
-                self._commit_first_frame_escape(img)
+                img = self._decode_first_qimage(gen=gen)
+                self._commit_first_frame_escape(img, gen=gen)
         self._apply_first_frame()
 
-    def _commit_first_frame_escape(self, img) -> None:
-        """逃生口（未持锁）的首帧缓存提交（P1-3）。
+    def _commit_first_frame_escape(self, img, gen: int | None = None) -> None:
+        """逃生口（未持锁）的首帧缓存提交（P1-3 / B7 复审 R2）。
 
-        优先非阻塞拿锁做幂等提交（锁可用时与后台写严格互斥）；拿不到锁
-        （后台仍卡住持锁）时退化为原子赋值——单条 STORE_ATTR 对 _first_image
-        是原子写，绝不产生撕裂状态；后台后来的提交经 _store_first_frame 的
-        幂等检查不会覆盖。
+        只允许两种结果：
+        1. 拿到锁：经 _store_first_frame 幂等提交（与后台写真正互斥）；
+        2. 拿不到锁（后台仍持锁卡住）：放弃写缓存，把本帧直接应用到当前
+           画面（主线程已拿到可显示首帧）——缓存提交只可能由持锁方完成，
+           明确单胜者，绝不在锁外触碰 _first_image。
 
         绝不在逃生路径上阻塞等待锁：后台真卡死时持锁不释放，等待会把
         「前台绝不被后台预热长时间卡住」的承诺重新变成 GUI 冻结。
+        gen：本次解码认领的首帧代次；解码期间被取消（换代）则结果作废。
         """
         if img is None:
             return
+        if gen is not None and gen != self._first_frame_gen:
+            return  # 解码期间被取消/换代：结果作废，不提交（P1-2）
         if self._first_frame_lock.acquire(blocking=False):
             try:
                 self._store_first_frame(img)
             finally:
                 self._first_frame_lock.release()
         else:
-            if self._first_image is None:
-                self._first_image = img
-                self._first_frame_done.set()
+            self._apply_first_frame_image(img)
 
     def warm_first_frame(self) -> None:
         """后台线程预解码首帧缓存（仅 QImage，线程安全）。
@@ -789,9 +829,13 @@ class WebMClip(QObject):
 
         由 cleanup()（clip 销毁）与 MovieLibrary.pause_warm()（隐藏/切角色）
         调用。之后新的 warm_first_frame 仍可重新预热（代次自增，非终态）。
+
+        换代与集合读取/清空在 _reader_lock 内原子完成（B7 复审 R2）：登记
+        回调也在该锁内复查代次——「Popen 已创建、登记尚未完成」窗口内取消
+        时，迟到的登记会看到换代并自终止，已取消进程绝不漏进集合。
         """
-        self._first_frame_gen += 1
         with self._reader_lock:
+            self._first_frame_gen += 1
             procs = list(self._first_frame_procs)
             self._first_frame_procs.clear()
         for p in procs:

@@ -661,7 +661,11 @@ class PetWindow(QWidget):
         # 动画启动被拒（start() 返回 False）时的回退与重试状态（B7 审查 P1-1）：
         # _pending_switch 记录被拒动画名，_switch_retry_timer 稍后重试；
         # 重试有次数上限，避免病态 reader 永不退出时无限重试。
+        # _pending_switch_link 标记待重试是否来自 Agent 联动请求：重试绑定
+        # 目标动画身份与请求来源——无关动画的成功切换不吞掉待重试；Agent
+        # 回到 idle 只取消联动来源的重试（B7 复审 R2）。
         self._pending_switch: str | None = None
+        self._pending_switch_link = False
         self._switch_retry_count = 0
         self._switch_retry_timer = QTimer(self)
         self._switch_retry_timer.setSingleShot(True)
@@ -1150,9 +1154,7 @@ class PetWindow(QWidget):
         if self.movie is not None:
             self.movie.stop()
         # 隐藏期间不重试被拒动画：停掉待重试并清空状态（恢复显示时重新切换）
-        self._switch_retry_timer.stop()
-        self._pending_switch = None
-        self._switch_retry_count = 0
+        self._cancel_pending_switch_retry()
         self._move_timer.stop()
         self._physics_timer.stop()
         self._drag_move_timer.stop()
@@ -1845,13 +1847,20 @@ class PetWindow(QWidget):
         movie.finished.connect(lambda name=name: self._on_clip_finished(name))
         self._connected_movies.add(name)
 
-    def _switch(self, name: str) -> None:
+    def _switch(self, name: str, _link_request: bool = False) -> bool:
         """切换到指定动画（链式模型：全部一次性播放）。
 
         若目标动画启动被拒绝（movie.start() 返回 False，如退役 reader 卡死），
         执行明确降级（_switch_fallback）：回退到上一个可播放动画/待机并安排
         稍后重试——绝不留下「anim 已切换但 movie 未在播」的停滞态
         （B7 审查 P1-1）。
+
+        返回 bool：True=目标动画已实际启动；False=被拒绝并已降级。调用方
+        （尤其移动路径 _try_move）必须据返回值决定是否继续，绝不能把
+        「anim 已切换」当成「播放已成功」（B7 复审 R2）。
+
+        _link_request：本次请求是否来自 Agent 联动（决定失败重试的取消语义，
+        B7 复审 R2：Agent 回到 idle 时只取消联动来源的待重试）。
         """
         self._cancel_move()
         prev_anim = self.anim
@@ -1878,19 +1887,25 @@ class PetWindow(QWidget):
             # 启动被拒：明确降级，绝不静默留在"anim 已切但 movie 未播"状态
             self._switch_fallback(
                 prev_anim, prev_movie, prev_click_hold, prev_bounds, name,
+                is_link=_link_request,
             )
-            return
-        # 启动成功：清除任何待重试状态
-        self._pending_switch = None
-        self._switch_retry_count = 0
-        self._switch_retry_timer.stop()
+            return False
+        # 启动成功：仅当待重试的正是本动画时才清除待重试状态——重试绑定
+        # 目标动画身份，无关动画的成功切换不得吞掉其他动画的待重试
+        # （B7 复审 R2）。
+        if self._pending_switch == name:
+            self._pending_switch = None
+            self._pending_switch_link = False
+            self._switch_retry_count = 0
+            self._switch_retry_timer.stop()
         self._submit_collision_state(force=True)
         # 动画切换是让路闸门的唯一事实来源之一：点击动画开始播放时持有、
         # 播完（_on_anim_ended 切走）时释放，覆盖所有早期返回路径。
         self._update_interaction_hold()
+        return True
 
     def _switch_fallback(self, prev_anim: str, prev_movie, prev_click_hold: bool,
-                         prev_bounds, requested: str) -> None:
+                         prev_bounds, requested: str, is_link: bool = False) -> None:
         """动画启动被拒绝时的明确降级：恢复可播放状态 + 安排稍后重试。
 
         优先恢复上一动画（其 clip 仍在播则原样继续，已停则从首帧重播）；
@@ -1916,7 +1931,7 @@ class PetWindow(QWidget):
             self._update_interaction_hold()
         else:
             self._fallback_playable_idle(requested)
-        self._schedule_switch_retry(requested)
+        self._schedule_switch_retry(requested, is_link=is_link)
 
     def _fallback_playable_idle(self, requested: str) -> None:
         """回退到可播放 idle（不同 clip 实例，通常不受同一退役池影响）。
@@ -1950,27 +1965,47 @@ class PetWindow(QWidget):
         self._submit_collision_state(force=True)
         self._update_interaction_hold()
 
-    def _schedule_switch_retry(self, requested: str) -> None:
-        """安排稍后重试被拒绝的动画（有次数上限，病态 reader 永不退出时放弃）。"""
+    def _schedule_switch_retry(self, requested: str, is_link: bool = False) -> None:
+        """安排稍后重试被拒绝的动画（有次数上限，病态 reader 永不退出时放弃）。
+
+        is_link 标记请求来源（Agent 联动）：联动重试随 Agent 回到 idle /
+        新联动请求取消（B7 复审 R2）。
+        """
         self._pending_switch = requested
+        self._pending_switch_link = is_link
         if self._switch_retry_count >= _SWITCH_RETRY_MAX:
             logging.warning('动画启动重试已达上限，放弃稍后重试: %s', requested)
             self._pending_switch = None
+            self._pending_switch_link = False
             self._switch_retry_count = 0
             return
         self._switch_retry_count += 1
         self._switch_retry_timer.start()
 
+    def _cancel_pending_switch_retry(self) -> None:
+        """取消待重试动画（B7 复审 R2）：停表并清空待重试状态。
+
+        用于：窗口隐藏（pause_activity）、Agent 回到 idle（联动来源）、
+        新联动请求覆盖旧联动重试。
+        """
+        self._switch_retry_timer.stop()
+        self._pending_switch = None
+        self._pending_switch_link = False
+        self._switch_retry_count = 0
+
     def _on_switch_retry_timeout(self) -> None:
         """重试被拒绝的动画；窗口已隐藏/关闭则不重试。"""
         requested = self._pending_switch
+        is_link = self._pending_switch_link
         self._pending_switch = None
+        self._pending_switch_link = False
+        self._switch_retry_timer.stop()  # 本次重试已执行，单次计时器任务结束
         if requested is None:
             return
         if self._hidden_paused or getattr(self, '_closing', False):
             self._switch_retry_count = 0
             return
-        self._switch(requested)
+        self._switch(requested, _link_request=is_link)
 
     # ---- Agent 联动动作平滑衔接 ----
     def _is_one_shot_playing(self) -> bool:
@@ -1978,7 +2013,13 @@ class PetWindow(QWidget):
         return self.anim in self.acts or self.anim in self.clicks or self.anim in self.moves
 
     def request_link_anim(self, name: str) -> None:
-        """Agent 联动动作请求：一次性动作播放中不打断，存为待播（最新覆盖旧的）。"""
+        """Agent 联动动作请求：一次性动作播放中不打断，存为待播（最新覆盖旧的）。
+
+        B7 复审 R2：新的联动请求覆盖旧的联动失败重试（同一请求流，最新
+        覆盖旧的），避免旧重试在 1.5s 后顶掉新联动动作。
+        """
+        if self._pending_switch_link:
+            self._cancel_pending_switch_retry()
         self._pending_link_anim = name
         if not self._is_one_shot_playing():
             self._play_pending_link_anim()
@@ -1989,12 +2030,18 @@ class PetWindow(QWidget):
         if not name:
             return
         self._link_anim_current = name
-        self._switch(name)
+        self._switch(name, _link_request=True)
 
     def request_link_idle(self) -> None:
-        """Agent 回到空闲：取消待播联动；一次性动作让它播完自然回待机，否则立即回待机。"""
+        """Agent 回到空闲：取消待播联动；一次性动作让它播完自然回待机，否则立即回待机。
+
+        B7 复审 R2：联动动画失败安排的稍后重试一并取消（Agent 已 idle 的
+        过期动作不得在 1.5s 后突然重播）；非联动来源的待重试不受影响。
+        """
         self._pending_link_anim = None
         self._link_anim_current = None
+        if self._pending_switch_link:
+            self._cancel_pending_switch_retry()
         if self._is_one_shot_playing():
             return
         if self.idles:
@@ -2357,8 +2404,14 @@ class PetWindow(QWidget):
                 self._fallback_playable_idle(name)
                 self._schedule_switch_retry(name)
                 return
-            self._pending_switch = None
-            self._switch_retry_count = 0
+            # 拖拽动画直接重启成功：仅当待重试的正是本动画时清除待重试
+            # （与 _switch 同一身份绑定语义，B7 复审 R2——无关动画的
+            # 成功启动不得吞掉其他动画的待重试）。
+            if self._pending_switch == name:
+                self._pending_switch = None
+                self._pending_switch_link = False
+                self._switch_retry_count = 0
+                self._switch_retry_timer.stop()
             return
         # Agent 联动：待播动作优先接上（平滑衔接，不打断刚播完的动作）
         if self._pending_link_anim:
@@ -2454,9 +2507,12 @@ class PetWindow(QWidget):
 
     # ================================================================ 移动
     def _try_move(self, name: str | None = None) -> bool:
-        """计划一次朝 facing 方向的移动；屏幕空间不够返回 False。
+        """计划一次朝 facing 方向的移动；返回 False 表示未建立移动计划。
 
         name 给定时使用指定动画（手动触发），否则随机选一个移动姿态。
+        返回 False 的两种情况：屏幕空间不够（目标动画未尝试）；或移动动画
+        start() 被拒——此时 _switch 已回退到可播放动画并安排重试，移动计划
+        绝不建立（B7 审查 P1-1 / 复审 R2）。
         """
         if (self._physics_mode is not None
                 or self._interaction_state in (THROWN, DRAGGING)):
@@ -2480,7 +2536,12 @@ class PetWindow(QWidget):
             return False
         move_name = name or self._pick(self.moves)
         duration = self.lib.duration(move_name)
-        self._switch(move_name)
+        if not self._switch(move_name):
+            # 切换被拒：_switch 已回退到上一动画/待机并安排重试（B7 审查
+            # P1-1 / 复审 R2）。绝不能按失败移动动画建立移动计划——否则
+            # 回退动画播放时仍按失败移动的 duration/坐标位移，画面、动画、
+            # 窗口位移三者不一致。
+            return False
         self._move_plan = {
             'start_x': self.x(),
             'target_x': int(round(target_cx - half_w)),
@@ -2498,7 +2559,14 @@ class PetWindow(QWidget):
         屏幕空间不足则原地播放走路姿态（不位移）。"""
         self._cancel_move()
         self._cancel_animation_gap()
-        if not self._try_move(name):
+        if self._try_move(name):
+            return
+        # _try_move 失败两种原因：
+        # 1) 空间不足/无移动姿态（目标动画尚未尝试）→ 原地播放走路姿态；
+        # 2) 切换被拒 → _switch 已回退到可播放动画并安排重试，绝不能再次
+        #    _switch（双重降级/重复重试计数）。以「待重试登记正是该动画且
+        #    计时器在跑」区分两种失败（B7 复审 R2）。
+        if not (self._pending_switch == name and self._switch_retry_timer.isActive()):
             self._switch(name)  # 贴边放不下：原地播放走路姿态，不位移
 
     def _on_move_tick(self) -> None:
