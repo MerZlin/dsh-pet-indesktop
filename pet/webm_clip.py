@@ -33,6 +33,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import QApplication
 
 from . import catalog
 
@@ -59,8 +60,84 @@ _MAX_RETIRED_READERS = 1
 _RECLAIM_JOIN_TIMEOUT = 0.5
 # 定时 sweep 对仍存活退役 reader 的 join 时长（秒）。
 _SWEEP_JOIN_TIMEOUT = 0.2
-# stop() 后安排一次 sweep 的延迟（毫秒）。
-_SWEEP_DELAY_MS = 2000
+# terminate 后等待进程退出的有界时长（秒）；超时则 kill 强杀（P2）。
+# 在 GUI 线程调用时（stop/_reap_retired）该值同时是 GUI 阻塞上限，
+# 正常进程 terminate 后毫秒级退出，此值只作为病态场景的兜底。
+_PROC_TERMINATE_TIMEOUT = 0.5
+
+# ------------------------------------------------------------ 孤儿 sweep 生命周期管理器（B7 审查 P2）
+# 退役 reader 的回收由「独立生命周期管理器」持有：模块级注册表记录所有
+# 退役池非空的 clip，模块级 lazy QTimer 周期回收。
+#
+# 为什么必须模块级持有：若 sweep timer 是 clip 的成员 QTimer，会形成
+# 引用环（clip → timer → 连接 → clip），循环 GC 可能在 reader 线程仍在
+# 收尾（finally/gen.close/进程 teardown）时回收整个 clip——clip 的属性
+# （锁/队列/进程句柄）在 reader 线程使用中被释放，Windows 上原生崩溃。
+# 模块级注册表强引用持有 clip，直到其退役池清空，杜绝该竞态；同时满足
+# 「cleanup 后不残留调度」（cleanup 后 clip 自身不再安排任何 timer，
+# 由管理器统一回收）与「cleanup 不丢追踪」（存活 reader 的记录被持有
+# 到线程退出）。
+_ORPHANED_CLIPS: "set[WebMClip]" = set()
+_ORPHAN_LOCK = threading.Lock()
+_orphan_timer: "QTimer | None" = None
+_ORPHAN_SWEEP_DELAY_MS = 500
+# 病态 reader 永不退出时的泄漏告警阈值（连续回收次数）。
+_ORPHAN_LEAK_ATTEMPTS = 6
+
+
+def _ensure_orphan_timer() -> "QTimer | None":
+    """惰性创建模块级 sweep timer（须在 GUI 线程；无 QApplication 时返回 None）。"""
+    global _orphan_timer
+    if _orphan_timer is None:
+        app = QApplication.instance()
+        if app is None:
+            return None
+        _orphan_timer = QTimer()
+        _orphan_timer.setSingleShot(True)
+        _orphan_timer.setInterval(_ORPHAN_SWEEP_DELAY_MS)
+        _orphan_timer.timeout.connect(_reap_orphaned_clips)
+    return _orphan_timer
+
+
+def _register_orphan(clip: "WebMClip") -> None:
+    """把退役池非空的 clip 挂到模块级注册表（强引用持有，防 GC 竞态）。"""
+    with _ORPHAN_LOCK:
+        _ORPHANED_CLIPS.add(clip)
+    timer = _ensure_orphan_timer()
+    if timer is not None:
+        timer.start()
+
+
+def _unregister_orphan(clip: "WebMClip") -> None:
+    with _ORPHAN_LOCK:
+        _ORPHANED_CLIPS.discard(clip)
+
+
+def _reap_orphaned_clips() -> None:
+    """模块级回收：对注册的 clip 做有界回收；退役池清空者移出注册表。
+
+    病态 reader 多次回收仍不退出时记录泄漏告警（而不是无限静默重试）。
+    """
+    with _ORPHAN_LOCK:
+        holders = list(_ORPHANED_CLIPS)
+        for clip in holders:
+            try:
+                clip._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
+            except Exception:
+                pass  # clip 已销毁等：交由 GC 兜底
+            if not clip._retired:
+                _ORPHANED_CLIPS.discard(clip)
+        if _ORPHANED_CLIPS:
+            for clip in _ORPHANED_CLIPS:
+                clip._orphan_reap_count = getattr(clip, '_orphan_reap_count', 0) + 1
+                if clip._orphan_reap_count >= _ORPHAN_LEAK_ATTEMPTS:
+                    logger.warning(
+                        'webm 退役 reader 多次回收仍存活（疑似泄漏，进程已 terminate）: %s',
+                        clip.path,
+                    )
+            timer = _ensure_orphan_timer()
+            if timer is not None:
+                timer.start()
 
 
 class _Reader:
@@ -229,6 +306,9 @@ class WebMClip(QObject):
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(self._timer_interval())
         self._timer.timeout.connect(self._poll)
+        # cleanup 后 clip 终结：不再启动新 reader；退役池回收由模块级
+        # 生命周期管理器持有（见模块头注释，P2）。
+        self._cleaned = False
 
         self._current_image: QImage | None = None
         self._current_pixmap: QPixmap | None = None
@@ -239,6 +319,13 @@ class WebMClip(QObject):
         # set，供前台有界等待复用后台解码结果（零重复解码）。
         self._first_frame_lock = threading.Lock()
         self._first_frame_done = threading.Event()
+        # 首帧解码生命周期（P1-2）：与播放 reader 同一回收体系。
+        # _first_frame_gen 是首帧解码代次：cancel_first_frame_warm/cleanup 时自增，
+        # 使在飞解码的结果作废（不写入缓存）；_first_frame_procs 登记在飞首帧
+        # 解码拉起的 ffmpeg 进程句柄（_reader_lock 保护），取消/cleanup 时主动
+        # terminate，隐藏/切角色后不再有不受控的后台 ffmpeg 存活。
+        self._first_frame_gen = 0
+        self._first_frame_procs: set = set()
         self._frame_index = 0
         self._ended_fired = False
         self._running = False
@@ -258,26 +345,38 @@ class WebMClip(QObject):
     def cleanup(self) -> None:
         """销毁/清理：terminate active reader 的 ffmpeg，退役并回收。
 
-        对仍存活的退役 reader 保留追踪（绝不静默丢弃），等待后续 sweep 或
-        下次 cleanup/start 回收；其 ffmpeg 进程句柄已被 terminate，线程会在
-        管道 EOF 后自行退出。
+        对仍存活的退役 reader 保留追踪（绝不静默丢弃）：clip 及其 _Reader
+        记录交由模块级生命周期管理器持有（_ORPHANED_CLIPS），持续回收直到
+        线程退出——绝不随 clip GC 丢弃追踪，也不与 reader 线程的收尾竞态
+        （Windows 原生崩溃的根因，见模块头注释）。cleanup 后 clip 终结
+        （_cleaned），自身不再安排任何 sweep/timer。
         """
+        self._cleaned = True
+        self.cancel_first_frame_warm()
         try:
             self.stop()
         except RuntimeError:
             pass  # QTimer 等 Qt 子对象已随 C++ 侧销毁
         self._reap_retired(join_timeout=_RECLAIM_JOIN_TIMEOUT)
+        if self._retired:
+            # 仍存活 reader：保持模块级持有，由管理器继续回收
+            _register_orphan(self)
+        else:
+            _unregister_orphan(self)
 
     def _sweep_retired(self) -> None:
-        """定时回收退役池：清理已退出的；对仍存活者二次 terminate + 有界 join，
-        仍不退出则保留追踪并稍后再试。"""
+        """兼容别名：由模块级生命周期管理器驱动（_reap_orphaned_clips）。"""
         self._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
-        if any(r.thread.is_alive() for r in self._retired):
-            QTimer.singleShot(_SWEEP_DELAY_MS, self._sweep_retired)
 
     def _reap_retired(self, join_timeout: float) -> None:
-        """回收退役池：丢弃已退出线程；对仍存活者二次 terminate 其 ffmpeg 并
-        有界 join；仍不退出则保留在池中（绝不静默丢弃追踪）。"""
+        """回收退役池：丢弃已退出线程；对仍存活者有界 join；仍不退出则保留
+        在池中（绝不静默丢弃追踪），由模块级管理器持续重试。
+
+        注意：不在此处二次 terminate / poll 退役 reader 的进程句柄——进程
+        已由 stop()（terminate + kill 兜底）或 reader 自身 finally 终止；
+        此处再触碰 proc 会与 reader 线程的 finally 收尾并发操作同一 Popen
+        （Windows 上原生竞态崩溃）。
+        """
         survivors = []
         for r in self._retired:
             if not r.thread.is_alive():
@@ -286,8 +385,6 @@ class WebMClip(QObject):
                 except Exception:
                     pass
                 continue
-            if r.proc is not None:
-                self._terminate_proc(r.proc)
             r.thread.join(timeout=join_timeout)
             if r.thread.is_alive():
                 survivors.append(r)
@@ -299,23 +396,43 @@ class WebMClip(QObject):
         return not self._retired
 
     def _enforce_retired_cap(self) -> None:
-        """退役池超过上限时强制回收最旧的 reader（其 ffmpeg 已 terminate，join
-        快速返回）；病态场景（join 超时仍存活）停止回收并保留追踪。"""
+        """退役池超过上限时强制回收最旧的 reader（join 快速返回）；病态场景
+        （join 超时仍存活）停止回收并保留追踪（进程已终止，线程退出由管道
+        EOF 驱动；不触碰 proc，理由同 _reap_retired）。"""
         while len(self._retired) > _MAX_RETIRED_READERS:
             oldest = self._retired[0]
-            if oldest.proc is not None:
-                self._terminate_proc(oldest.proc)
             oldest.thread.join(timeout=_RECLAIM_JOIN_TIMEOUT)
             if oldest.thread.is_alive():
                 return  # 仍存活：保留追踪，池短暂超限（真实 reader 不会出现）
             self._retired.pop(0)
 
     @staticmethod
-    def _terminate_proc(proc: subprocess.Popen | None) -> None:
-        """主动终止 ffmpeg 子进程（已退出则无操作）。"""
+    def _terminate_proc(proc: subprocess.Popen | None,
+                        timeout: float = _PROC_TERMINATE_TIMEOUT) -> None:
+        """主动终止 ffmpeg 子进程并确认退出（P2）。
+
+        顺序：terminate() → 有界 wait() → 超时 kill() → 再次 wait()。
+        返回时进程要么已确认退出，要么（极端病态，kill 后仍存活）记录警告
+        并保留句柄供后续 sweep 重试——绝不静默假设 terminate 后进程已退出。
+        已退出或 None 进程为无操作。
+        """
+        if proc is None:
+            return
         try:
-            if proc is not None and proc.poll() is None:
-                proc.terminate()
+            if proc.poll() is not None:
+                return
+            proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        'ffmpeg 进程 terminate+kill 后仍存活（保留句柄供 sweep 重试）: pid=%s',
+                        getattr(proc, 'pid', '?'),
+                    )
         except Exception:
             pass
 
@@ -394,12 +511,24 @@ class WebMClip(QObject):
         # 否则每个新 WebM 动画都会继续使用默认的 1x interval。
         self._timer.setInterval(self._timer_interval())
 
-    def start(self) -> None:
+    def start(self) -> bool:
+        """启动播放；返回 True 表示已启动（或已在播），False 表示本次启动被拒绝。
+
+        拒绝原因：imageio_ffmpeg 不可用、clip 已 cleanup（终结），或退役
+        reader 池未清空（存在存活 reader，B7 硬上限）。
+
+        调用方（窗口层）必须把 False 当作「动画没有在播」并执行明确降级
+        （回退上一动画/待机、安排重试），绝不能把动画状态切换与播放启动
+        当成同一件事（B7 审查 P1-1）。
+        """
         if self._running:
-            return
+            return True
+        if self._cleaned:
+            logger.warning('clip 已 cleanup，拒绝启动 reader: %s', self.path)
+            return False
         if imageio_ffmpeg is None:
             self.errorOccurred.emit(str(_IMPORT_ERROR or 'imageio_ffmpeg 不可用'))
-            return
+            return False
 
         # 上一轮 natural end 残留的 active 线程先退役（其 ffmpeg 已自行退出）
         with self._reader_lock:
@@ -417,7 +546,7 @@ class WebMClip(QObject):
                 'webm reader 退役池未清空（存在存活 reader），拒绝启动新 reader: %s',
                 self.path,
             )
-            return
+            return False
 
         # 在 GUI 线程读取真实 fps 后再启动 QTimer，保证新动画的实际帧率
         # 与播放速率计算一致；reader 线程只负责解码和入队。
@@ -444,6 +573,7 @@ class WebMClip(QObject):
             self._thread = thread
         thread.start()
         self._timer.start()
+        return True
 
     def stop(self) -> None:
         self._running = False
@@ -465,7 +595,11 @@ class WebMClip(QObject):
         if thread is not None:
             self._retired.append(_Reader(thread=thread, proc=proc))
             self._enforce_retired_cap()
-            QTimer.singleShot(_SWEEP_DELAY_MS, self._sweep_retired)
+            # 退役池回收交给模块级生命周期管理器（P2）：持有 clip 直到退役
+            # reader 全部退出，既避免 GC 与 reader 收尾竞态，也保证 cleanup
+            # 后不残留本 clip 的 timer 调度。
+            if not self._cleaned and self._retired:
+                _register_orphan(self)
 
     def jumpToFrame(self, frame_index: int) -> bool:
         # 本项目只需要回到首帧；完整 seek 通过重启 reader + 丢弃帧实现。
@@ -484,23 +618,42 @@ class WebMClip(QObject):
             return True
         return False
 
-    def _decode_first_qimage(self):
+    def _decode_first_qimage(self, gen: int | None = None):
         """解码首帧为 QImage（线程安全：不触碰 QPixmap/QTimer）。
 
-        返回 None 表示失败或依赖缺失；调用方负责填入 _first_image 等缓存。
+        返回 None 表示失败、依赖缺失，或解码期间已被取消（换代）；调用方
+        负责经 _store_first_frame（持锁提交）写入 _first_image 缓存。
+
+        P1-2 生命周期：解码拉起的 ffmpeg 进程经 _PopenCapture 登记到
+        _first_frame_procs（_reader_lock 保护），cancel_first_frame_warm/
+        cleanup 可主动 terminate；gen 是本次解码认领的首帧代次，解码期间
+        代次被换代则结果作废返回 None。
         """
         if imageio_ffmpeg is None:
             return None
-        gen = None
+        proc = None
+        g = None
         try:
-            gen = imageio_ffmpeg.read_frames(
-                str(self.path),
-                pix_fmt='rgba',
-                bits_per_pixel=self._bpp * 8,
-                input_params=['-c:v', 'libvpx-vp9'],
-            )
-            meta = next(gen)
-            frame = next(gen)
+            def _register(p: subprocess.Popen, argv) -> None:
+                """解码进程 Popen 一拉起即登记（可被取消/cleanup 主动 terminate）。"""
+                nonlocal proc
+                if not (isinstance(argv, list) and "-i" in argv):
+                    return  # ffmpeg exe 探测等非解码进程：忽略
+                proc = p
+                with self._reader_lock:
+                    self._first_frame_procs.add(p)
+
+            with _PopenCapture(on_process=_register):
+                g = imageio_ffmpeg.read_frames(
+                    str(self.path),
+                    pix_fmt='rgba',
+                    bits_per_pixel=self._bpp * 8,
+                    input_params=['-c:v', 'libvpx-vp9'],
+                )
+                meta = next(g)  # ffmpeg 进程在此拉起；capture 即时登记句柄
+                frame = next(g)
+            if gen is not None and gen != self._first_frame_gen:
+                return None  # 解码期间被取消/换代：结果作废
             if meta.get('fps'):
                 self._fps = float(meta['fps'])
             if meta.get('duration'):
@@ -518,23 +671,39 @@ class WebMClip(QObject):
             logger.warning('webm 首帧解码失败 %s: %s', self.path, exc)
             return None
         finally:
-            if gen is not None:
+            if proc is not None:
+                with self._reader_lock:
+                    self._first_frame_procs.discard(proc)
+            if g is not None:
                 try:
-                    gen.close()
+                    g.close()
                 except Exception:
                     pass
 
-    def _decode_first_qimage_and_cache(self) -> None:
+    def _store_first_frame(self, img) -> None:
+        """把解码结果写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
+
+        幂等：缓存已存在则跳过；写入后 set _first_frame_done。
+        """
+        if img is None:
+            return
+        if self._first_image is None:
+            self._first_image = img
+            self._first_frame_done.set()
+
+    def _decode_first_qimage_and_cache(self, gen: int | None = None) -> None:
         """解码首帧并写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
 
         幂等：缓存已存在时直接返回，避免重复拉起 ffmpeg。
+        gen：warm 传入的首帧代次；解码期间被换代（cancel_first_frame_warm/
+        cleanup）则丢弃结果，不污染缓存（P1-2）。
         """
         if self._first_image is not None:
             return
-        img = self._decode_first_qimage()
-        if img is not None:
-            self._first_image = img
-            self._first_frame_done.set()
+        img = self._decode_first_qimage(gen=gen)
+        if gen is not None and gen != self._first_frame_gen:
+            return  # 已被取消/换代：结果作废，不提交
+        self._store_first_frame(img)
 
     def _apply_first_frame(self) -> None:
         """把已缓存的 _first_image 应用到当前播放帧（仅主线程调用）。"""
@@ -551,6 +720,11 @@ class WebMClip(QObject):
         认领失败说明后台预热正在解码：最多等待 _FIRST_FRAME_SYNC_WAIT_MS
         （后台完成则直接用其缓存，零重复解码）；超时则放弃等待直接自行解码，
         前台播放绝不被后台预热长时间卡住（代价是极端情况下短暂双解码）。
+
+        逃生口（超时自行解码）允许与后台双解码，但缓存提交不无锁裸写
+        （P1-3）：优先非阻塞拿锁做幂等提交；后台真卡死持锁不释放时才退化
+        为原子赋值（单条 STORE_ATTR 原子写，绝不撕裂），逃生路径绝不阻塞
+        等待锁。
         """
         if self._first_frame_lock.acquire(blocking=False):
             try:
@@ -559,8 +733,32 @@ class WebMClip(QObject):
                 self._first_frame_lock.release()
         else:
             if not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0):
-                self._decode_first_qimage_and_cache()
+                img = self._decode_first_qimage()
+                self._commit_first_frame_escape(img)
         self._apply_first_frame()
+
+    def _commit_first_frame_escape(self, img) -> None:
+        """逃生口（未持锁）的首帧缓存提交（P1-3）。
+
+        优先非阻塞拿锁做幂等提交（锁可用时与后台写严格互斥）；拿不到锁
+        （后台仍卡住持锁）时退化为原子赋值——单条 STORE_ATTR 对 _first_image
+        是原子写，绝不产生撕裂状态；后台后来的提交经 _store_first_frame 的
+        幂等检查不会覆盖。
+
+        绝不在逃生路径上阻塞等待锁：后台真卡死时持锁不释放，等待会把
+        「前台绝不被后台预热长时间卡住」的承诺重新变成 GUI 冻结。
+        """
+        if img is None:
+            return
+        if self._first_frame_lock.acquire(blocking=False):
+            try:
+                self._store_first_frame(img)
+            finally:
+                self._first_frame_lock.release()
+        else:
+            if self._first_image is None:
+                self._first_image = img
+                self._first_frame_done.set()
 
     def warm_first_frame(self) -> None:
         """后台线程预解码首帧缓存（仅 QImage，线程安全）。
@@ -570,15 +768,34 @@ class WebMClip(QObject):
 
         原子认领（N4）：同一时间只有一个首帧解码执行者。认领失败（前台
         同步解码或并发预热正在进行）直接放弃——预热是尽力而为，不排队等待。
+
+        P1-2：预热解码纳入生命周期回收——解码拉起的 ffmpeg 登记到
+        _first_frame_procs，cancel_first_frame_warm/cleanup 可主动 terminate；
+        解码代次在认领时捕获，取消后结果作废不写入缓存。cleanup 后不再预热。
         """
-        if self._first_image is not None or imageio_ffmpeg is None:
+        if self._first_image is not None or imageio_ffmpeg is None or self._cleaned:
             return
         if not self._first_frame_lock.acquire(blocking=False):
             return
         try:
-            self._decode_first_qimage_and_cache()
+            gen = self._first_frame_gen
+            self._decode_first_qimage_and_cache(gen=gen)
         finally:
             self._first_frame_lock.release()
+
+    def cancel_first_frame_warm(self) -> None:
+        """取消在飞的首帧预热（P1-2）：换代使在飞解码结果作废，并主动
+        terminate 其 ffmpeg 进程。
+
+        由 cleanup()（clip 销毁）与 MovieLibrary.pause_warm()（隐藏/切角色）
+        调用。之后新的 warm_first_frame 仍可重新预热（代次自增，非终态）。
+        """
+        self._first_frame_gen += 1
+        with self._reader_lock:
+            procs = list(self._first_frame_procs)
+            self._first_frame_procs.clear()
+        for p in procs:
+            self._terminate_proc(p)
 
     # ------------------------------------------------------------ reader
     def _reader(self, stop_evt: threading.Event, generation: int,
