@@ -8,10 +8,14 @@ WebM-backed clip library（webm 主路线）。
 - imageio_ffmpeg 内部在 Windows 上使用 STARTUPINFO 隐藏控制台窗口，
   避免旧 ffmpeg 子进程方案导致的“窗口反复出现/消失”。
 
-线程模型：
+线程模型（B7 生命周期受控）：
 - 后台 reader 线程只负责把 RGBA 字节放入有界队列；
 - 主线程 QTimer 按视频 fps 从队列取帧，构造 QImage/QPixmap 并发出 frameChanged；
 - 所有 Qt GUI 操作只发生在主线程。
+- 同一 clip 最多 1 个 active reader + 有上限的退役 reader（_MAX_RETIRED_READERS）：
+  stop() 主动 terminate 底层 ffmpeg 进程（_PopenCapture 捕获句柄），退役池超上限时
+  强制回收最旧的；start() 前清空退役池，池内仍有存活 reader 时拒绝启动（防无上限累积）。
+- cleanup() 对仍存活的退役 reader 保留追踪（绝不静默丢弃），等待后续 sweep 回收。
 """
 
 from __future__ import annotations
@@ -19,7 +23,10 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import subprocess
+import sys
 import threading
+import types
 import json
 import tempfile
 from pathlib import Path
@@ -43,6 +50,105 @@ _META_CACHE_LOCK = threading.Lock()
 # 前台同步解码等待后台预热完成的有限时长（毫秒）：超过此时长前台放弃等待、
 # 直接自行解码，保证 GUI 线程不被后台首帧预热长时间卡住（N4）。
 _FIRST_FRAME_SYNC_WAIT_MS = 120
+
+# ------------------------------------------------------------ reader 生命周期（B7）
+# 同一 clip 允许的退役 reader 上限：1 个 active reader + 1 个 retiring reader。
+_MAX_RETIRED_READERS = 1
+# 强制回收最旧退役 reader 时的有界 join 时长（秒）；真实 reader 的 ffmpeg 已被
+# terminate，join 通常在毫秒级返回，此值只作为病态场景（卡死）的上限。
+_RECLAIM_JOIN_TIMEOUT = 0.5
+# 定时 sweep 对仍存活退役 reader 的 join 时长（秒）。
+_SWEEP_JOIN_TIMEOUT = 0.2
+# stop() 后安排一次 sweep 的延迟（毫秒）。
+_SWEEP_DELAY_MS = 2000
+
+
+class _Reader:
+    """一个 reader 线程 + 其持有的底层 ffmpeg 进程句柄。"""
+
+    __slots__ = ("thread", "proc")
+
+    def __init__(self, thread: threading.Thread, proc: subprocess.Popen | None) -> None:
+        self.thread = thread
+        self.proc = proc
+
+    def join(self, timeout: float | None = None) -> None:
+        self.thread.join(timeout)
+
+
+class _PopenCapture:
+    """跨线程透明的 subprocess.Popen 包装，用于捕获 reader 线程拉起的 ffmpeg 进程句柄。
+
+    - 安装一次（幂等、加锁防并发）：把 imageio_ffmpeg._io 模块内的 `subprocess`
+      引用替换为一个代理模块（其余属性原样透传、仅 Popen 换成 _wrapped），
+      只影响 imageio_ffmpeg 的 Popen 调用；进程内全局 subprocess.Popen 保持原样
+      ——不能全局替换，否则会破坏 `class X(subprocess.Popen)` 这类继承用法
+      （asyncio.windows_utils 就是这样，会导致 unittest.mock 导入失败）。
+    - 仅「进入 capture 上下文」的线程（reader 线程）会把新建进程记入自己的
+      _procs 列表并可即时回调（on_process）；其余线程完全无感。
+    - 即时回调让 stop() 在 reader 尚处于 ffmpeg 头部解析（可能卡住）时也能
+      拿到进程句柄并主动 terminate，而不是等 reader 自己退。
+    """
+
+    _install_lock = threading.Lock()
+    _installed = False
+    _real_popen = subprocess.Popen
+    _local = threading.local()
+
+    def __init__(self, on_process=None) -> None:
+        self._on_process = on_process
+        self._procs: list[subprocess.Popen] = []
+        self._prev: _PopenCapture | None = None
+
+    def __enter__(self) -> "_PopenCapture":
+        self._install()
+        self._prev = getattr(self._local, "capture", None)
+        self._local.capture = self
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self._prev is None:
+            try:
+                del self._local.capture
+            except AttributeError:
+                pass
+        else:
+            self._local.capture = self._prev
+        return False
+
+    @property
+    def process(self) -> subprocess.Popen | None:
+        """最近拉起的进程（解码进程；ffmpeg exe 探测进程在其之前）。"""
+        return self._procs[-1] if self._procs else None
+
+    @classmethod
+    def _install(cls) -> None:
+        if cls._installed:
+            return
+        with cls._install_lock:
+            if cls._installed:
+                return
+            cls._real_popen = subprocess.Popen
+            io_mod = sys.modules.get("imageio_ffmpeg._io")
+            if io_mod is not None and getattr(io_mod, "subprocess", None) is subprocess:
+                proxy = types.ModuleType("subprocess")
+                proxy.__dict__.update(subprocess.__dict__)
+                proxy.Popen = cls._wrapped  # type: ignore[assignment]
+                io_mod.subprocess = proxy
+            cls._installed = True
+
+    @classmethod
+    def _wrapped(cls, *args, **kwargs):
+        proc = cls._real_popen(*args, **kwargs)
+        state = getattr(cls._local, "capture", None)
+        if state is not None:
+            state._procs.append(proc)
+            if state._on_process is not None:
+                try:
+                    state._on_process(proc, args[0] if args else None)
+                except Exception:
+                    pass
+        return proc
 
 
 def _load_meta_file_cache() -> dict:
@@ -111,6 +217,14 @@ class WebMClip(QObject):
         self._queue: queue.Queue = queue.Queue(maxsize=8)
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
+        # 当前 active reader 持有的 ffmpeg 进程句柄（_reader_lock 保护，reader 线程
+        # 注册、GUI 线程 stop 时读取/清空并 terminate）。
+        self._reader_proc: subprocess.Popen | None = None
+        self._reader_lock = threading.Lock()
+        # reader 已拉起并登记 ffmpeg 进程（或确定无进程）的信号；每轮 start() 重建。
+        self._reader_ready = threading.Event()
+        # 退役 reader 池（有硬上限）：thread + 其 ffmpeg 进程句柄的记录列表。
+        self._retired: list[_Reader] = []
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(self._timer_interval())
@@ -129,7 +243,6 @@ class WebMClip(QObject):
         self._ended_fired = False
         self._running = False
         self._generation = 0
-        self._retired: set[threading.Thread] = set()
 
         self.destroyed.connect(self._on_destroyed)
 
@@ -143,32 +256,68 @@ class WebMClip(QObject):
             pass  # 解释器退出期 Qt C++ 对象可能已先销毁，此时无需清理
 
     def cleanup(self) -> None:
-        """销毁或清理时对所有 retired 线程做最后一次有界等待（每个 ≤500ms）。"""
+        """销毁/清理：terminate active reader 的 ffmpeg，退役并回收。
+
+        对仍存活的退役 reader 保留追踪（绝不静默丢弃），等待后续 sweep 或
+        下次 cleanup/start 回收；其 ffmpeg 进程句柄已被 terminate，线程会在
+        管道 EOF 后自行退出。
+        """
         try:
             self.stop()
         except RuntimeError:
             pass  # QTimer 等 Qt 子对象已随 C++ 侧销毁
-        retired = list(self._retired)
-        self._retired.clear()
-        for t in retired:
-            if t.is_alive():
-                try:
-                    t.join(timeout=0.5)
-                except Exception:
-                    pass
+        self._reap_retired(join_timeout=_RECLAIM_JOIN_TIMEOUT)
 
     def _sweep_retired(self) -> None:
-        """探活回收已退出的线程（只清理已死的，活的不动）。"""
-        alive = set()
-        for t in self._retired:
-            if t.is_alive():
-                alive.add(t)
-            else:
+        """定时回收退役池：清理已退出的；对仍存活者二次 terminate + 有界 join，
+        仍不退出则保留追踪并稍后再试。"""
+        self._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
+        if any(r.thread.is_alive() for r in self._retired):
+            QTimer.singleShot(_SWEEP_DELAY_MS, self._sweep_retired)
+
+    def _reap_retired(self, join_timeout: float) -> None:
+        """回收退役池：丢弃已退出线程；对仍存活者二次 terminate 其 ffmpeg 并
+        有界 join；仍不退出则保留在池中（绝不静默丢弃追踪）。"""
+        survivors = []
+        for r in self._retired:
+            if not r.thread.is_alive():
                 try:
-                    t.join(timeout=0)
+                    r.join(timeout=0)
                 except Exception:
                     pass
-        self._retired = alive
+                continue
+            if r.proc is not None:
+                self._terminate_proc(r.proc)
+            r.thread.join(timeout=join_timeout)
+            if r.thread.is_alive():
+                survivors.append(r)
+        self._retired = survivors
+
+    def _drain_retired(self) -> bool:
+        """start() 前清空退役池；返回 True 表示可安全启动新 reader。"""
+        self._reap_retired(join_timeout=_RECLAIM_JOIN_TIMEOUT)
+        return not self._retired
+
+    def _enforce_retired_cap(self) -> None:
+        """退役池超过上限时强制回收最旧的 reader（其 ffmpeg 已 terminate，join
+        快速返回）；病态场景（join 超时仍存活）停止回收并保留追踪。"""
+        while len(self._retired) > _MAX_RETIRED_READERS:
+            oldest = self._retired[0]
+            if oldest.proc is not None:
+                self._terminate_proc(oldest.proc)
+            oldest.thread.join(timeout=_RECLAIM_JOIN_TIMEOUT)
+            if oldest.thread.is_alive():
+                return  # 仍存活：保留追踪，池短暂超限（真实 reader 不会出现）
+            self._retired.pop(0)
+
+    @staticmethod
+    def _terminate_proc(proc: subprocess.Popen | None) -> None:
+        """主动终止 ffmpeg 子进程（已退出则无操作）。"""
+        try:
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ metadata
     def _ensure_meta(self) -> None:
@@ -252,11 +401,32 @@ class WebMClip(QObject):
             self.errorOccurred.emit(str(_IMPORT_ERROR or 'imageio_ffmpeg 不可用'))
             return
 
+        # 上一轮 natural end 残留的 active 线程先退役（其 ffmpeg 已自行退出）
+        with self._reader_lock:
+            stale_thread = self._thread
+            stale_proc = self._reader_proc
+            self._thread = None
+            self._reader_proc = None
+        if stale_thread is not None:
+            self._retired.append(_Reader(thread=stale_thread, proc=stale_proc))
+        # 清空退役池（丢弃已退出者；对存活者二次 terminate + 有界 join）。
+        # 池内仍有存活 reader（进程已终止仍不退出/卡死）时拒绝启动新 reader，
+        # 防止快速切换/损坏素材场景下线程与 ffmpeg 子进程无上限累积（B7）。
+        if not self._drain_retired():
+            logger.warning(
+                'webm reader 退役池未清空（存在存活 reader），拒绝启动新 reader: %s',
+                self.path,
+            )
+            return
+
         # 在 GUI 线程读取真实 fps 后再启动 QTimer，保证新动画的实际帧率
         # 与播放速率计算一致；reader 线程只负责解码和入队。
         self._ensure_meta()
         self._timer.setInterval(self._timer_interval())
-        self._stop_evt = threading.Event()
+        stop_evt = threading.Event()
+        ready_evt = threading.Event()
+        self._stop_evt = stop_evt
+        self._reader_ready = ready_evt
         self._queue = queue.Queue(maxsize=8)
         self._frame_index = 0
         self._ended_fired = False
@@ -264,19 +434,38 @@ class WebMClip(QObject):
         self._generation += 1
         gen_id = self._generation
 
-        self._thread = threading.Thread(target=self._reader, args=(self._stop_evt, gen_id), daemon=True)
-        self._thread.start()
+        thread = threading.Thread(
+            target=self._reader,
+            args=(stop_evt, gen_id, ready_evt),
+            daemon=True,
+            name=f'webm-reader-{gen_id}',
+        )
+        with self._reader_lock:
+            self._thread = thread
+        thread.start()
         self._timer.start()
 
     def stop(self) -> None:
         self._running = False
         self._timer.stop()
-        if self._stop_evt is not None:
-            self._stop_evt.set()
-        if self._thread is not None:
-            self._retired.add(self._thread)
+        stop_evt = self._stop_evt
+        if stop_evt is not None:
+            stop_evt.set()
+        # 主动 terminate 底层 ffmpeg：不能只是 set 事件等 reader 自己退（B7）。
+        # 正在阻塞读管道/解析头部的 reader 会因进程终止而立即解除阻塞退出。
+        thread = None
+        proc = None
+        with self._reader_lock:
+            thread = self._thread
+            proc = self._reader_proc
             self._thread = None
-            QTimer.singleShot(5000, self._sweep_retired)
+            self._reader_proc = None
+        if proc is not None:
+            self._terminate_proc(proc)
+        if thread is not None:
+            self._retired.append(_Reader(thread=thread, proc=proc))
+            self._enforce_retired_cap()
+            QTimer.singleShot(_SWEEP_DELAY_MS, self._sweep_retired)
 
     def jumpToFrame(self, frame_index: int) -> bool:
         # 本项目只需要回到首帧；完整 seek 通过重启 reader + 丢弃帧实现。
@@ -392,17 +581,51 @@ class WebMClip(QObject):
             self._first_frame_lock.release()
 
     # ------------------------------------------------------------ reader
-    def _reader(self, stop_evt: threading.Event, generation: int) -> None:
+    def _reader(self, stop_evt: threading.Event, generation: int,
+                ready_evt: threading.Event | None = None) -> None:
         gen = None
+        proc = None
         try:
             q = self._queue
-            gen = imageio_ffmpeg.read_frames(
-                str(self.path),
-                pix_fmt='rgba',
-                bits_per_pixel=self._bpp * 8,
-                input_params=['-c:v', 'libvpx-vp9'],
-            )
-            meta = next(gen)
+
+            def _register(p: subprocess.Popen, argv) -> None:
+                """解码进程 Popen 一拉起即回调（可能发生在头部解析阻塞期间）：
+                登记进程句柄，让 stop() 能立即 terminate；若本轮已被 stop/换代，
+                则立即自终止。
+
+                只认解码进程（argv 含 '-i <path>'）：imageio 的 ffmpeg exe 探测
+                （ffmpeg -version）也在 reader 线程上拉起，不能登记/终止，否则
+                探测会被误杀导致 get_ffmpeg_exe 失败。
+                """
+                nonlocal proc
+                if not (isinstance(argv, list) and "-i" in argv):
+                    return  # ffmpeg exe 探测等非解码进程：忽略
+                proc = p
+                stale = stop_evt.is_set() or self._generation != generation
+                if not stale:
+                    with self._reader_lock:
+                        if not stop_evt.is_set() and self._generation == generation:
+                            self._reader_proc = p
+                if stale:
+                    self._terminate_proc(p)
+
+            with _PopenCapture(on_process=_register) as capture:
+                gen = imageio_ffmpeg.read_frames(
+                    str(self.path),
+                    pix_fmt='rgba',
+                    bits_per_pixel=self._bpp * 8,
+                    input_params=['-c:v', 'libvpx-vp9'],
+                )
+                meta = next(gen)  # ffmpeg 进程在此拉起；capture 即时登记句柄
+                if proc is None:
+                    proc = capture.process
+            if proc is not None:
+                # 兜底登记：capture 即时回调已覆盖，此处仅防异常路径遗漏
+                with self._reader_lock:
+                    if not stop_evt.is_set() and self._generation == generation:
+                        self._reader_proc = proc
+            if ready_evt is not None:
+                ready_evt.set()
             if self._generation != generation:
                 return
             # 用实际流信息修正元数据
@@ -443,6 +666,13 @@ class WebMClip(QObject):
                 except queue.Full:
                     continue
         finally:
+            with self._reader_lock:
+                if proc is not None and self._reader_proc is proc:
+                    self._reader_proc = None
+            if proc is not None:
+                # 兜底 terminate：正常情况下 stop() 已终止；自然播完/解码失败时
+                # 进程已自行退出（poll()!=None），此处为无操作。
+                self._terminate_proc(proc)
             if gen is not None:
                 try:
                     gen.close()
