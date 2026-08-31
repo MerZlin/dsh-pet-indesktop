@@ -490,10 +490,13 @@ def test_submit_collision_state_dedup_excludes_ts(tmp_path, app):
     """comparable 不含 ts：状态未变化时非 force 提交被去重（去重不再恒失效）。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     win._collision_timer.stop()  # 排除定时器 force 兜底对计数的干扰
+    # show() 只安排 showEvent，是否已经派发取决于前序 Qt 事件循环状态。
+    # 显式建立去重基线，避免完整套件与独立运行得到不同前置状态。
+    win._submit_collision_state(force=True)
     session.submitted_states.clear()
-    win._collision_last_submit_at = 0.0  # 清掉 showEvent force 提交留下的限流窗口
+    win._collision_last_submit_at = 0.0  # 清掉 baseline force 提交留下的限流窗口
 
-    # 与上次 force 提交（showEvent）状态一致 → 全部被去重
+    # 与上次 force 提交状态一致 → 全部被去重
     win._submit_collision_state()
     win._submit_collision_state()
     assert len(session.submitted_states) == 0

@@ -28,7 +28,18 @@ from typing import Any
 
 import shiboken6
 
-from PySide6.QtCore import QElapsedTimer, QPoint, QPointF, QRect, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QEasingCurve,
+    QElapsedTimer,
+    QPoint,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPen, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
 
@@ -209,6 +220,26 @@ def _clamp_menu_rect(rect: QRect, avail: QRect) -> QRect:
     return QRect(x, y, rect.width(), rect.height())
 
 
+def animate_context_menu_to(
+    menu: QMenu,
+    target: QPoint,
+    *,
+    duration_ms: int = 140,
+) -> QPropertyAnimation | None:
+    """Slide a visible menu to its safe target without changing its layout."""
+    target = QPoint(target)
+    if menu.pos() == target:
+        return None
+    animation = QPropertyAnimation(menu, b"pos", menu)
+    animation.setDuration(max(1, int(duration_ms)))
+    animation.setStartValue(menu.pos())
+    animation.setEndValue(target)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+    menu._position_transition = animation
+    animation.start()
+    return animation
+
+
 def pick_context_menu_position(
     pet_rect: QRect,
     menu_size,
@@ -216,12 +247,12 @@ def pick_context_menu_position(
     avail: QRect,
     margin: int = 10,
 ) -> tuple[QPoint, Qt.LayoutDirection]:
-    """选择右键菜单根节点弹出位置，尽量让根菜单和子菜单都不遮挡角色。
+    """选择右键根菜单弹出位置，使其避开角色并保持在可用屏幕内。
 
     优先级：
     1. 角色右侧（子菜单默认向右展开，远离角色）；
-    2. 角色左侧（同时把菜单树设为 RTL，子菜单向左展开，远离角色）；
-    3. 屏幕里离角色最远的角落（远角 + 面向屏幕内侧的子菜单方向）。
+    2. 角色左侧（视觉方向不变，根菜单保持同样的短间距）；
+    3. 屏幕里让整棵 LTR 菜单树与角色重叠最少的角落。
     """
     menu_w = max(1, menu_size.width())
     menu_h = max(1, menu_size.height())
@@ -238,29 +269,41 @@ def pick_context_menu_position(
     ):
         return root.topLeft(), Qt.LayoutDirection.LeftToRight
 
-    # 2) 左侧：根菜单整体在角色左侧，子菜单改为向左展开
+    # 2) 左侧：只按根菜单宽度避让角色。Qt 可根据屏幕空间调整子菜单
+    # 的实际弹出侧；布局方向仍为 LTR，因此文字、图标和箭头不会镜像。
     root = _clamp_menu_rect(
-        QRect(pet_rect.left() - margin - menu_w, pet_rect.top(), menu_w, menu_h), avail
+        QRect(
+            pet_rect.left() - margin - menu_w,
+            pet_rect.top(),
+            menu_w,
+            menu_h,
+        ),
+        avail,
     )
     if (
         root.right() <= pet_rect.left() - margin
-        and root.left() - submenu_width >= avail.left()
         and avail.contains(root)
     ):
-        return root.topLeft(), Qt.LayoutDirection.RightToLeft
+        return root.topLeft(), Qt.LayoutDirection.LeftToRight
 
-    # 3) 远角兜底：选与角色重叠面积最小的可用屏幕角，子菜单朝屏幕内侧展开
+    # 3) 远角兜底：视觉方向始终 LTR，按整棵菜单树计算占位和重叠。
+    tree_w = menu_w + submenu_width
+    right_x = max(
+        avail.left() + margin,
+        avail.right() - tree_w + 1 - margin,
+    )
     corners = (
         (QPoint(avail.left() + margin, avail.top() + margin), Qt.LayoutDirection.LeftToRight),
-        (QPoint(max(avail.left() + margin, avail.right() - menu_w + 1 - margin), avail.top() + margin), Qt.LayoutDirection.RightToLeft),
+        (QPoint(right_x, avail.top() + margin), Qt.LayoutDirection.LeftToRight),
         (QPoint(avail.left() + margin, max(avail.top() + margin, avail.bottom() - menu_h + 1 - margin)), Qt.LayoutDirection.LeftToRight),
-        (QPoint(max(avail.left() + margin, avail.right() - menu_w + 1 - margin), max(avail.top() + margin, avail.bottom() - menu_h + 1 - margin)), Qt.LayoutDirection.RightToLeft),
+        (QPoint(right_x, max(avail.top() + margin, avail.bottom() - menu_h + 1 - margin)), Qt.LayoutDirection.LeftToRight),
     )
     best = None
     best_area: int | None = None
     for point, direction in corners:
-        root = QRect(point.x(), point.y(), menu_w, menu_h)
-        area = root.intersected(pet_rect).width() * root.intersected(pet_rect).height()
+        tree = QRect(point.x(), point.y(), tree_w, menu_h)
+        overlap = tree.intersected(pet_rect)
+        area = overlap.width() * overlap.height()
         if best_area is None or area < best_area:
             best = (point, direction)
             best_area = area
@@ -2726,8 +2769,8 @@ class PetWindow(QWidget):
         menu.aboutToHide.connect(
             lambda self=self: QTimer.singleShot(0, self, self._restore_on_top_after_context_menu)
         )
-        # 根菜单和子菜单都尽量不遮挡角色：优先放在角色右侧（子菜单向右展开），
-        # 屏幕右侧不够时放左侧并让菜单树 RTL（子菜单向左展开），再不行放远角。
+        # 根菜单避让角色且始终保持 LTR 视觉方向；右侧不够时贴近角色左侧。
+        # 子菜单弹出侧由 Qt 按屏幕空间决定，再不行使用整树重叠最少的远角。
         pet_rect = self.visible_content_rect()
         scr = self._screen_available()
         avail = scr.availableGeometry() if scr is not None else QRect()
@@ -2741,7 +2784,25 @@ class PetWindow(QWidget):
         menu.setLayoutDirection(direction)
         for child in menu.findChildren(QMenu):
             child.setLayoutDirection(direction)
-        menu.exec(popup_pos)
+        menu_size = menu.sizeHint()
+        slide_toward_pet = 18 if popup_pos.x() < pet_rect.center().x() else -18
+        transition_start = _clamp_menu_rect(
+            QRect(
+                popup_pos.x() + slide_toward_pet,
+                popup_pos.y(),
+                menu_size.width(),
+                menu_size.height(),
+            ),
+            avail,
+        ).topLeft()
+        menu.aboutToShow.connect(
+            lambda menu=menu, target=QPoint(popup_pos): QTimer.singleShot(
+                0,
+                menu,
+                lambda menu=menu, target=target: animate_context_menu_to(menu, target),
+            )
+        )
+        menu.exec(transition_start)
         callbacks = take_deferred_menu_callbacks(menu)
         if getattr(self, "_active_context_menu", None) is menu:
             self._active_context_menu = None
