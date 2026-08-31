@@ -107,6 +107,10 @@ class _CollisionWorker(QObject):
                 server.deleteLater()
                 self._connect_client()
                 return
+            # POSIX QLocalServer 使用 Unix socket 文件。协调者被 kill 后文件会
+            # 残留，但内核文件锁已释放；持锁候选者可安全清理后重新 listen。
+            if sys.platform != "win32":
+                QLocalServer.removeServer(self.name)
         if server.listen(self.name):
             # 同一 Qt 进程中的 QLocalServer 在 Windows 上可能允许并行
             # listen；进程内登记用于测试/嵌入式 harness 的同名候选收敛。
@@ -123,7 +127,7 @@ class _CollisionWorker(QObject):
             server.newConnection.connect(self._accept_connection)
             self._start_probe()
             return
-        # 只有连接验证失败并短暂重试后才清理残留服务。
+        # 未能监听时退回客户端路径；若端点无响应，watchdog 会触发重选。
         server.deleteLater()
         slot_manager.release_file_lock(self._coordinator_lock)
         self._coordinator_lock = None

@@ -44,6 +44,11 @@ def _state(seq, x=0.0):
             "vx": 0.0, "vy": 0.0, "flags": collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED}
 
 
+def _server_name(label: str) -> str:
+    """Keep POSIX Unix-socket paths below the platform length limit."""
+    return f"d42-{label}-{uuid.uuid4().hex[:8]}"
+
+
 def test_fake_socket_join_duplicate_seq_and_disconnect():
     worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
         "collision_enabled": True, "collision_restitution": .82,
@@ -356,7 +361,7 @@ def test_runtime_id_has_session_randomness(instance_id):
 
 def test_two_sessions_elect_one_coordinator_and_stop(tmp_path):
     QApplication.instance() or QApplication([])
-    name = "dsh-test-collision-" + uuid.uuid4().hex
+    name = _server_name("elect")
     first = CollisionIpcSession(Config(tmp_path, instance_id="slot-a"), server_name=name)
     second = CollisionIpcSession(Config(tmp_path, instance_id="slot-b"), server_name=name)
     roles = []
@@ -374,9 +379,8 @@ def test_two_sessions_elect_one_coordinator_and_stop(tmp_path):
     assert not second._thread.isRunning()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="QLocalServer 子进程选举在 POSIX CI 上不稳定，Windows 覆盖即可")
 def test_subprocess_sessions_send_frames_and_reelect_after_parent_exits(tmp_path):
-    name = "dsh-test-collision-subprocess-" + uuid.uuid4().hex
+    name = _server_name("sub")
     script = r'''
 import json, sys, time
 from PySide6.QtCore import QEventLoop
@@ -426,11 +430,10 @@ session.stop()
     assert survivor.wait(timeout=5) == 0
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="QLocalServer 双会话成员同步在 POSIX CI 上不稳定，Windows 覆盖即可")
 def test_submit_leave_removes_member_immediately(tmp_path):
     """客户端 submit_leave 后，协调者成员表即时移除（不等 stale 超时）。"""
     QApplication.instance() or QApplication([])
-    name = "dsh-test-collision-leave-" + uuid.uuid4().hex
+    name = _server_name("leave")
     coordinator = CollisionIpcSession(Config(tmp_path, instance_id="slot-c"), server_name=name)
     client = CollisionIpcSession(Config(tmp_path, instance_id="slot-p"), server_name=name)
     coordinator.start()
@@ -470,7 +473,7 @@ def test_submit_leave_removes_member_immediately(tmp_path):
 def test_update_policy_live_applies_to_worker(tmp_path):
     """运行中 update_policy：经 queued 接线更新到 worker 线程的 policy。"""
     QApplication.instance() or QApplication([])
-    name = "dsh-test-collision-policy-" + uuid.uuid4().hex
+    name = _server_name("policy")
     session = CollisionIpcSession(Config(tmp_path, instance_id="slot-p"), server_name=name)
     session.start()
     try:
