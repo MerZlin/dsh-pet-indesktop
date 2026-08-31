@@ -26,10 +26,12 @@ from pet.agent_link import (
     ByteOffsetTailer,
     ClaudeCodeMonitor,
     CursorMonitor,
+    CustomAgentMonitor,
     DshMonitor,
     normalize_event_state,
 )
 from pet.config import Config
+from pet.config import _clean_agent_link_data, _clean_custom_agents
 
 
 # ============================================================================
@@ -116,6 +118,7 @@ class TestAgentLinkManager:
             "claude": False,
             "cursor": False,
             "opencode": False,
+            "custom_agents": [],
             "notify_state": False,
             "notify_done": True,
             "notify_activity": False,
@@ -1478,3 +1481,216 @@ class TestOpenCodeSubagentFilter:
         assert mgr.busy_agent_owns_process("msedge.exe", "哔哩哔哩") is False
         mgr._last_raw["dsh"] = "idle"
         assert mgr.busy_agent_owns_process("msedge.exe", "审查结果 — DeepSeek Harness") is False
+
+
+# ============================================================================
+# 自定义联动 Agent（agent_link.custom_agents 配置驱动）
+# ============================================================================
+class TestCustomAgentConfigCleaning:
+    def test_valid_entry_kept_and_normalized(self):
+        cleaned = _clean_custom_agents([
+            {"key": "Gemini", "name": "  Gemini CLI  ", "path": " ~/.gemini/ev.jsonl "},
+        ])
+        assert cleaned == [{"key": "gemini", "name": "Gemini CLI", "path": "~/.gemini/ev.jsonl"}]
+
+    def test_name_defaults_to_key(self):
+        cleaned = _clean_custom_agents([{"key": "myagent", "path": "~/x.jsonl"}])
+        assert cleaned == [{"key": "myagent", "name": "myagent", "path": "~/x.jsonl"}]
+
+    def test_invalid_entries_dropped(self):
+        cleaned = _clean_custom_agents([
+            "not-a-dict",                                # 非对象
+            {"key": "Bad Key", "path": "~/x.jsonl"},     # key 含空格/大写
+            {"key": "claude", "path": "~/x.jsonl"},      # 与内置键冲突
+            {"key": "ok", "path": ""},                   # 空 path
+            {"key": "ok2"},                              # 缺 path
+        ])
+        assert cleaned == []
+
+    def test_duplicate_keys_deduped(self):
+        cleaned = _clean_custom_agents([
+            {"key": "gemini", "path": "~/a.jsonl"},
+            {"key": "gemini", "path": "~/b.jsonl"},
+        ])
+        assert len(cleaned) == 1
+        assert cleaned[0]["path"] == "~/a.jsonl"
+
+    def test_max_entries_truncated(self):
+        raw = [{"key": f"agent{i}", "path": f"~/{i}.jsonl"} for i in range(20)]
+        assert len(_clean_custom_agents(raw)) == 8
+
+    def test_non_list_returns_empty(self):
+        assert _clean_custom_agents(None) == []
+        assert _clean_custom_agents({"key": "gemini"}) == []
+
+    def test_clean_agent_link_data_cleans_and_keeps_custom_key_booleans(self):
+        cleaned = _clean_agent_link_data({
+            "custom_agents": [{"key": "gemini", "name": "Gemini CLI", "path": "~/ev.jsonl"}],
+            "gemini": True,       # 自定义键的开关布尔（set_enabled 写入路径）
+            "notify_done": False,
+        })
+        assert cleaned["custom_agents"] == [{"key": "gemini", "name": "Gemini CLI", "path": "~/ev.jsonl"}]
+        assert cleaned["gemini"] is True
+        assert cleaned["notify_done"] is False
+
+
+class TestCustomAgentMonitor:
+    def test_tail_events_and_signals(self, tmp_path):
+        """统一协议三种形态（state / event+tool / state 收尾）→ 信号正确。"""
+        app = QApplication.instance() or QApplication([])
+        events = tmp_path / "sub" / "gemini.jsonl"
+        events.parent.mkdir(parents=True)
+        events.touch()
+
+        states, tools = [], []
+        mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(events))
+        mon.state_changed.connect(lambda k, s: states.append((k, s)))
+        mon.activity.connect(lambda k, t: tools.append((k, t)))
+        mon.start()
+        mon._poll()  # backfill 初始化
+
+        with open(events, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": 1.0, "state": "working"}) + "\n")
+            f.write(json.dumps({"ts": 2.0, "event": "PreToolUse", "tool": "bash"}) + "\n")
+            f.write(json.dumps({"ts": 3.0, "state": "idle"}) + "\n")
+
+        mon._poll()
+        # PreToolUse 事件按内置映射同时产生 working 状态 + bash 工具过程
+        assert states == [("gemini", "working"), ("gemini", "working"), ("gemini", "idle")]
+        assert tools == [("gemini", "bash")]
+        mon.stop()
+
+    def test_missing_file_idle_then_appears(self, tmp_path):
+        """文件不存在时空转；出现后 backfill 防护跳过历史，只读新增行。"""
+        app = QApplication.instance() or QApplication([])
+        missing = tmp_path / "not_yet.jsonl"
+        mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(missing))
+        states = []
+        mon.state_changed.connect(lambda k, s: states.append((k, s)))
+        mon.start()
+        mon._poll()
+        mon._poll()
+        assert states == []
+
+        missing.write_text('{"state": "working"}\n', encoding="utf-8")
+        mon._poll()  # 首次发现文件：backfill，不回放历史
+        assert states == []
+
+        with open(missing, "a", encoding="utf-8") as f:
+            f.write('{"state": "idle"}\n')
+        mon._poll()
+        assert states == [("gemini", "idle")]
+        mon.stop()
+
+    def test_start_does_not_create_dirs(self, tmp_path):
+        """只读监听：绝不替用户在任意路径创建目录。"""
+        app = QApplication.instance() or QApplication([])
+        mon = CustomAgentMonitor(
+            "gemini", tmp_path / "cfg", str(tmp_path / "deep" / "nested" / "ev.jsonl"),
+        )
+        mon.start()
+        mon._poll()
+        assert not (tmp_path / "deep").exists()
+        mon.stop()
+
+    def test_tilde_path_expanded(self, tmp_path, monkeypatch):
+        # expanduser 在 Windows 读 USERPROFILE、POSIX 读 HOME，两个都设以保证跨平台
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        mon = CustomAgentMonitor("gemini", tmp_path / "cfg", "~/events.jsonl")
+        assert mon.events_file == tmp_path / "events.jsonl"
+        assert "~" not in str(mon.events_file)
+
+
+class TestCustomAgentManager:
+    def test_registered_names_merged_and_generic_toggle(self, tmp_path):
+        """custom_agents → 监视器注册 + 显示名合并 + 通用开关联动（无需授权弹窗）。"""
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        ag = dict(cfg.get("agent_link", {}))
+        ag["custom_agents"] = [
+            {"key": "gemini", "name": "Gemini CLI", "path": str(tmp_path / "gemini.jsonl")},
+        ]
+        cfg.set("agent_link", ag)
+        cfg.save()
+
+        mgr = AgentLinkManager(None, cfg)
+        assert "gemini" in mgr.monitors
+        assert isinstance(mgr.monitors["gemini"], CustomAgentMonitor)
+        assert mgr.agent_names["gemini"] == "Gemini CLI"
+        # 类级 AGENT_NAMES 保持仅内置：设置页按内置枚举的遍历不受自定义影响
+        assert "gemini" not in AgentLinkManager.AGENT_NAMES
+        assert mgr.agent_names["dsh"] == "DSH"
+
+        # 通用开关：开启持久化并启动监视器
+        assert mgr.set_enabled("gemini", True) is True
+        assert cfg.data["agent_link"]["gemini"] is True
+        assert mgr.monitors["gemini"].is_running() is True
+
+        # 隐藏暂停 / 显示恢复
+        mgr.pause()
+        assert mgr.monitors["gemini"].is_running() is False
+        mgr.resume()
+        assert mgr.monitors["gemini"].is_running() is True
+
+        # 关闭
+        assert mgr.set_enabled("gemini", False) is True
+        assert cfg.data["agent_link"]["gemini"] is False
+        assert mgr.monitors["gemini"].is_running() is False
+
+    def test_builtin_key_in_custom_agents_ignored(self, tmp_path):
+        """config 清洗会拒绝与内置键冲突的自定义条目，管理器不覆盖内置监视器。"""
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        ag = dict(cfg.get("agent_link", {}))
+        ag["custom_agents"] = [{"key": "claude", "name": "Fake", "path": str(tmp_path / "x.jsonl")}]
+        cfg.set("agent_link", ag)
+        cfg.save()
+
+        mgr = AgentLinkManager(None, cfg)
+        assert not isinstance(mgr.monitors["claude"], CustomAgentMonitor)
+        assert mgr.agent_names["claude"] == "Claude Code"
+
+
+class TestCustomAgentMenu:
+    def test_menu_lists_custom_agent_and_toggle_routes(self, tmp_path):
+        """右键菜单动态渲染自定义 Agent，勾选走通用 _toggle_agent_link。"""
+        from PySide6.QtWidgets import QMenu
+        from pet.context_menus.shared import add_agent_link_menu
+
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        ag = dict(cfg.get("agent_link", {}))
+        ag["custom_agents"] = [
+            {"key": "gemini", "name": "Gemini CLI", "path": "~/gemini.jsonl"},
+        ]
+        cfg.set("agent_link", ag)
+        cfg.save()
+
+        toggles, options = [], []
+
+        class DummyPet:
+            def __init__(self):
+                self.cfg = cfg
+
+            def _toggle_agent_link(self, key, on, action=None):
+                toggles.append((key, on))
+
+            def _set_agent_link_option(self, key, on):
+                options.append((key, on))
+
+        menu = QMenu()
+        try:
+            add_agent_link_menu(menu, DummyPet())
+            sub = menu.actions()[0].menu()
+            texts = [a.text() for a in sub.actions()]
+            # 内置 4 项仍在，自定义项按显示名插入
+            for label in ("DeepSeek Harness (DSH)", "Claude Code", "Cursor", "OpenCode"):
+                assert label in texts
+            assert "Gemini CLI" in texts
+
+            gemini_act = next(a for a in sub.actions() if a.text() == "Gemini CLI")
+            gemini_act.setChecked(True)
+            assert toggles == [("gemini", True)]
+        finally:
+            menu.deleteLater()

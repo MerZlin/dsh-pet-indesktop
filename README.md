@@ -307,6 +307,7 @@ pythonw -m pet
 ### Agent 联动（默认关闭）
 
 - 内置 DSH 桥接插件（`integrations/dsh-pet-bridge`）与 Claude hooks 安装器：感知 AI Agent 状态并切换动作，支持开始干活、过程汇报、任务完成三种气泡反馈，右键 Agent 联动子菜单可独立开关。
+- **自定义联动 Agent**：在 `config.json` 的 `agent_link.custom_agents` 里声明任意 Agent（key / 显示名 / 事件文件路径），桌宠即对其 JSONL 事件文件做只读监听，联动行为与内置 Agent 一致——不改代码即可接入任何能写本地文件的 Agent，协议详见 `docs/AGENT_LINK_PROTOCOL.md`。
 
 ### 看看屏幕（Chat 版）
 
