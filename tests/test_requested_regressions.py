@@ -73,26 +73,26 @@ def test_click_sound_path_is_linked_to_enable_toggle_and_persisted(tmp_path, mon
 
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     row = dialog.findChild(
-        settings_mod.SettingRow, "settingRow_click_sound_path"
+        settings_mod.SettingRow, "settingRow_click_sound_pack"
     )
     assert row is not None
-    # 默认开启 → 音效文件行可见
+    # 默认开启 → 音效包行可见
     assert dialog.click_sound_check.isChecked()
     assert not row.isHidden()
     dialog.click_sound_check.setChecked(False)
     assert row.isHidden()
     dialog.click_sound_check.setChecked(True)
     assert not row.isHidden()
-    dialog.click_sound_picker.setText("/tmp/my-click.wav")
+    dialog.click_sound_picker.set_pack({"kind": "file", "id": "custom", "path": "/tmp/my-click.wav"})
     dialog._save()
 
-    assert config.get("click_sound_path") == "/tmp/my-click.wav"
+    assert config.get("click_sound_pack") == {"kind": "file", "id": "custom", "path": "/tmp/my-click.wav"}
     dialog.close()
     app.processEvents()
 
 
 def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, monkeypatch):
-    """点击音效未启用时，音效文件行初始就应隐藏（此前初始同步在 UI 构建前，
+    """点击音效未启用时，音效包行初始就应隐藏（此前初始同步在 UI 构建前，
     findChild 找不到行导致初始状态错误显示）。"""
     import pet.modern_settings_dialog as settings_mod
     from PySide6.QtWidgets import QApplication
@@ -105,7 +105,7 @@ def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, mo
     config.set("click_sound_enabled", False)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     row = dialog.findChild(
-        settings_mod.SettingRow, "settingRow_click_sound_path"
+        settings_mod.SettingRow, "settingRow_click_sound_pack"
     )
     assert row is not None
     assert not dialog.click_sound_check.isChecked()
@@ -115,8 +115,8 @@ def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, mo
 
 
 def test_click_sound_path_row_sits_directly_below_toggle(tmp_path, monkeypatch):
-    """音效文件行必须紧贴点击音效行下方（此前 click_balance 插入 index 1 把
-    音效文件行挤到第三位）。"""
+    """音效包行必须紧贴点击音效行下方（此前 click_balance 插入 index 1 把
+    音效包行挤到第三位）。"""
     import pet.modern_settings_dialog as settings_mod
     from PySide6.QtWidgets import QApplication, QLabel
 
@@ -135,7 +135,7 @@ def test_click_sound_path_row_sits_directly_below_toggle(tmp_path, monkeypatch):
     assert card is not None
     names = [row.objectName() for row in card.rows]
     assert names[0] == "settingRow_click_sound"
-    assert names[1] == "settingRow_click_sound_path"
+    assert names[1] == "settingRow_click_sound_pack"
     dialog.close()
     app.processEvents()
 
@@ -710,20 +710,23 @@ def test_animation_icon_applier_updates_action_and_cleans_worker():
     app.processEvents()
 
 
-def test_build_workflows_bundle_menu_templates_and_chat_styles():
+def test_build_scripts_bundle_menu_templates_and_chat_styles():
     """三平台打包脚本必须包含菜单模板与聊天样式资源（防漏打包回归）。
 
     回归背景：Linux workflow 曾漏掉 pet/menu_templates（右键菜单在冻结版
     打不开）与 legacy/modern_styles.qss（聊天窗无样式）。
+
+    构建定义统一在本地脚本（scripts/build_*.sh / build_onedir.ps1），
+    CI workflow 只调用脚本不再内联打包命令，故资源断言指向脚本而非 workflow。
     """
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[1]
-    linux = (repo / ".github" / "workflows" / "build-linux.yml").read_text(encoding="utf-8")
-    macos = (repo / ".github" / "workflows" / "build-macos.yml").read_text(encoding="utf-8")
+    linux = (repo / "scripts" / "build_linux.sh").read_text(encoding="utf-8")
+    macos = (repo / "scripts" / "build_macos.sh").read_text(encoding="utf-8")
     windows = (repo / "scripts" / "build_onedir.ps1").read_text(encoding="utf-8")
 
-    for name, text in (("build-linux.yml", linux), ("build-macos.yml", macos), ("build_onedir.ps1", windows)):
+    for name, text in (("build_linux.sh", linux), ("build_macos.sh", macos), ("build_onedir.ps1", windows)):
         assert "menu_templates" in text, f"{name} 必须打包 pet/menu_templates"
         assert "legacy_styles.qss" in text, f"{name} 必须打包 legacy_styles.qss"
         assert "modern_styles.qss" in text, f"{name} 必须打包 modern_styles.qss"

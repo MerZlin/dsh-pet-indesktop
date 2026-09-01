@@ -1430,13 +1430,14 @@ def test_quit_closes_active_context_menu_before_leaving_event_loop(monkeypatch):
 
     monkeypatch.setattr(window_mod, "QApplication", FakeQApplication)
     PetWindow._request_quit(FakePet())
-    assert events[:2] == ["save", "close"]
+    # 退出不再保存当前位置（自动移动/抛掷后的位置不覆盖手动放置记忆）
+    assert events == ["close"]
     app = QApplication.instance() or QApplication([])
     deadline = time.time() + 0.2
     while events[-1:] != ["quit"] and time.time() < deadline:
         app.processEvents()
         time.sleep(0.005)
-    assert events == ["save", "close", "quit"]
+    assert events == ["close", "quit"]
 
 
 def test_short_conversation_starts_at_timeline_top_while_composer_stays_bottom(tmp_path: Path):
@@ -1478,6 +1479,7 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
 
@@ -1557,6 +1559,7 @@ def test_context_menu_window_callback_waits_until_old_menu_is_destroyed(monkeypa
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
             self.delete_requested = False
@@ -1650,6 +1653,7 @@ def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monke
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
             created.append(self)
@@ -1849,7 +1853,8 @@ def test_quit_runs_immediately_when_native_menu_has_already_returned(monkeypatch
 
     monkeypatch.setattr(window_mod, "QApplication", FakeQApplication)
     PetWindow._request_quit(FakePet())
-    assert events == ["save", "quit"]
+    # 退出不再保存当前位置
+    assert events == ["quit"]
 
 
 def test_pet_animation_and_self_talk_defaults_are_persisted(tmp_path: Path):

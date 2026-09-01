@@ -2,6 +2,10 @@
 """Thread-safe representative-frame decoding for animation menu thumbnails."""
 from __future__ import annotations
 
+import threading
+import hashlib
+import os
+import tempfile
 from pathlib import Path
 
 from PySide6.QtGui import QImage, QImageReader
@@ -15,6 +19,13 @@ except Exception:  # pragma: no cover - optional dependency in GIF-only installs
 
 
 REPRESENTATIVE_FRACTION = 0.62
+_CACHE_LIMIT = 128
+_DISK_CACHE_LIMIT = 256
+_DISK_CACHE_DIR = Path(tempfile.gettempdir()) / "dsh-pet-thumbs"
+_DECODE_SEMAPHORE = threading.BoundedSemaphore(2)
+_cache_lock = threading.Lock()
+_image_cache: dict[tuple[str, int, int], QImage] = {}
+_inflight: dict[tuple[str, int, int], threading.Event] = {}
 
 
 def representative_frame_index(frame_count: int, fraction: float = REPRESENTATIVE_FRACTION) -> int:
@@ -76,10 +87,104 @@ def _decode_webm(path: Path) -> QImage:
     return QImage()
 
 
-def decode_representative_frame(path: str | Path) -> QImage:
-    path = Path(path)
+def _disk_cache_path(key: tuple[str, int, int]) -> Path:
+    digest = hashlib.sha1("|".join(map(str, key)).encode("utf-8")).hexdigest()
+    return _DISK_CACHE_DIR / f"{digest}.png"
+
+
+def _read_disk_cache(key: tuple[str, int, int]) -> QImage:
+    cache_path = _disk_cache_path(key)
+    try:
+        image = QImage(str(cache_path))
+        if image.isNull():
+            return QImage()
+        return image
+    except Exception:
+        return QImage()
+
+
+def _trim_disk_cache() -> None:
+    try:
+        entries = [path for path in _DISK_CACHE_DIR.glob("*.png") if path.is_file()]
+        if len(entries) <= _DISK_CACHE_LIMIT:
+            return
+        entries.sort(key=lambda path: path.stat().st_mtime_ns)
+        for path in entries[:-_DISK_CACHE_LIMIT]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _write_disk_cache(key: tuple[str, int, int], image: QImage) -> None:
+    cache_path = _disk_cache_path(key)
+    tmp_path = cache_path.with_name(
+        f".{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        _DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        if image.save(str(tmp_path), "PNG"):
+            os.replace(tmp_path, cache_path)
+            _trim_disk_cache()
+    except Exception:
+        pass
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def _decode_representative_frame(path: Path) -> QImage:
     if not path.is_file():
         return QImage()
     if path.suffix.lower() == ".gif":
         return _decode_gif(path)
     return _decode_webm(path)
+
+
+def decode_representative_frame(path: str | Path) -> QImage:
+    """Decode once per file version and share the result across pet windows."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return QImage()
+    key = (str(path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+
+    with _cache_lock:
+        cached = _image_cache.get(key)
+        if cached is not None:
+            return QImage(cached)
+        disk_cached = _read_disk_cache(key)
+        if not disk_cached.isNull():
+            _image_cache[key] = QImage(disk_cached)
+            return disk_cached
+        event = _inflight.get(key)
+        owner = event is None
+        if owner:
+            event = threading.Event()
+            _inflight[key] = event
+
+    if not owner:
+        event.wait()
+        with _cache_lock:
+            return QImage(_image_cache.get(key, QImage()))
+
+    try:
+        with _DECODE_SEMAPHORE:
+            image = _decode_representative_frame(path)
+        if not image.isNull():
+            with _cache_lock:
+                if len(_image_cache) >= _CACHE_LIMIT:
+                    _image_cache.pop(next(iter(_image_cache)))
+                _image_cache[key] = QImage(image)
+            _write_disk_cache(key, image)
+        return image
+    finally:
+        with _cache_lock:
+            event = _inflight.pop(key, None)
+            if event is not None:
+                event.set()

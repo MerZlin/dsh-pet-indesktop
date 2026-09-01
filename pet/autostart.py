@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -32,11 +33,11 @@ PLIST_LABEL = (
     else f"{_APP_BASE_ID}.{APP_DIR_NAME}"
 )
 # Windows 自启注册表值名按变体隔离（如 dsh-pet-standalone-webm-chat）。
-# 旧版本/旧目录可能残留多个值名，若只清理当前值名会导致“关闭后仍自启”
-# 或“开机出现两个桌宠/两个终端”，因此统一维护一份已知值名清单。
+# 每个变体只管理自己的值，避免“关无 Chat 版把 Chat 版也关了”。
 VALUE_NAME = APP_DIR_NAME
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-# 历史/各变体可能写入过的值名；enable 时只保留当前变体，disable 时全部清除。
+# 历史/各变体可能写入过的值名；仅用于启动时清理“指向已不存在路径”的失效项，
+# 不影响其他仍有效的变体自启。
 KNOWN_VALUE_NAMES = (
     "dsh-pet-standalone",
     "dsh-pet-standalone-webm",
@@ -73,11 +74,11 @@ def _desktop_path() -> Path:
 def _linux_desktop_content() -> str:
     """Linux 自启 .desktop 内容；源码运行经 sh 切工作目录，打包运行直接指向二进制。"""
     if getattr(sys, "frozen", False):
-        command = str(Path(sys.executable).resolve())
+        command = f"{shlex.quote(str(Path(sys.executable).resolve()))} --slot 0"
     else:
         root_quoted = shlex.quote(str(_project_root()))
         exe_quoted = shlex.quote(str(sys.executable))
-        inner_cmd = f"cd {root_quoted} && exec {exe_quoted} -m pet"
+        inner_cmd = f"cd {root_quoted} && exec {exe_quoted} -m pet --slot 0"
         command = f"/bin/sh -c {shlex.quote(inner_cmd)}"
     return (
         "[Desktop Entry]\n"
@@ -104,7 +105,7 @@ def _win_command_is_current(command: str) -> bool:
 
 
 def _iter_known_win_values() -> list[tuple[str, str]]:
-    """读取注册表里所有已知 dsh-pet 自启值名，返回 [(name, command), ...]。"""
+    """读取注册表里所有已知 dsh-pet 自启值，返回 [(name, command), ...]。"""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
             found = []
@@ -119,24 +120,51 @@ def _iter_known_win_values() -> list[tuple[str, str]]:
         return []
 
 
-def _delete_known_win_values(exclude: set[str] | None = None) -> None:
-    """删除已知 dsh-pet 自启值；exclude 里的值名保留。"""
-    exclude = exclude or set()
+def _win_command_target_exists(command: str) -> bool:
+    """判断 Windows 自启命令引用的路径是否仍然存在。
+
+    命令格式形如：
+      cmd /c start "" /D "C:\\path\\to\\dir" "C:\\path\\to\\app.exe"
+    只要任一被引用的非空路径已不存在，就视为失效自启项。
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    quoted = re.findall(r'"([^"]*)"', command)
+    paths = [item for item in quoted if item.strip()]
+    if not paths:
+        return True
+    return all(Path(item).exists() for item in paths)
+
+
+def cleanup_stale_entries() -> int:
+    """清理指向已不存在路径的失效开机自启项（Windows）。
+
+    用户“更新后直接删除旧目录但忘了关自启”时，HKCU Run 里会残留指向
+    已删除路径的命令，导致每次开机弹终端报“找不到文件夹”。这里只删除
+    路径已失效的已知 dsh-pet 项，不影响其他仍有效的变体自启。
+    """
+    if not _IS_WIN:
+        return 0
+    removed = 0
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
-            for name in KNOWN_VALUE_NAMES:
-                if name in exclude:
-                    continue
+        for name, command in _iter_known_win_values():
+            if _win_command_target_exists(command):
+                continue
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE
+            ) as key:
                 try:
                     winreg.DeleteValue(key, name)
+                    removed += 1
                 except FileNotFoundError:
                     pass
     except OSError:
         pass
+    return removed
 
 
 def is_enabled() -> bool:
-    """当前是否已注册开机自启（任一已知 dsh-pet 值存在即视为已启用）。"""
+    """当前变体是否已注册开机自启（只查当前变体自己的注册表值）。"""
     if _IS_WIN:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
@@ -160,8 +188,8 @@ def is_enabled() -> bool:
                         pass
                 return True
         except FileNotFoundError:
-            # 当前值名不存在，但历史残留值仍可能开机启动
-            return bool(_iter_known_win_values())
+            # 只认当前变体自己的值；其他变体的自启状态互不影响。
+            return False
     if _IS_MAC:
         return _plist_path().exists()
     if _IS_LINUX:
@@ -176,25 +204,24 @@ def _win_command() -> str:
         # onefile 的 runtime_tmpdir="." 是相对“当前工作目录”解析的；
         # 开机自启（HKCU Run）默认工作目录可能是 System32 等不可写目录。
         # 用 start 先切到 exe 所在目录再启动 exe，既保证解压目录在 exe 同目录，
-        # 又不会让 cmd 窗口一直等待桌宠退出。
+        # 又不会让 cmd 窗口一直等待桌宠退出。开机自启固定指定 --slot 0。
         exe = Path(sys.executable).resolve()
-        return f'cmd /c start "" /D "{exe.parent}" "{exe}"'
-    return f'cmd /c start "" /D "{_project_root()}" "{_pythonw_path()}" -m pet'
+        return f'cmd /c start "" /D "{exe.parent}" "{exe}" --slot 0'
+    return f'cmd /c start "" /D "{_project_root()}" "{_pythonw_path()}" -m pet --slot 0'
 
 
 def _mac_program_args() -> list[str]:
     if getattr(sys, "frozen", False):
         # .app 内二进制路径，直接作为 LaunchAgent 程序运行
-        return [str(sys.executable)]
-    return [sys.executable, "-m", "pet"]
+        return [str(sys.executable), "--slot", "0"]
+    return [sys.executable, "-m", "pet", "--slot", "0"]
 
 
 def enable() -> bool:
     """开启自启；返回是否写入成功（Windows 回读注册表验证，macOS 验证 plist 存在，Linux 验证 .desktop 存在）。"""
     if _IS_WIN:
         try:
-            # 先清掉历史/其他变体残留，避免开机同时启动多只桌宠/多个终端
-            _delete_known_win_values(exclude={VALUE_NAME})
+            # 只写当前变体自己的值，不影响其他 Chat/无 Chat 变体的自启状态。
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
                 winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, _win_command())
             # 回读验证，防止写入被安全软件/策略静默拦截
@@ -235,7 +262,11 @@ def disable() -> bool:
     """关闭自启；返回是否已清除。"""
     if _IS_WIN:
         try:
-            _delete_known_win_values()
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                try:
+                    winreg.DeleteValue(key, VALUE_NAME)
+                except FileNotFoundError:
+                    pass
             return True
         except OSError:
             return False

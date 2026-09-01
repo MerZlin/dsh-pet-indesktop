@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 from . import autostart as autostart_mod
 from . import catalog
 from .agent_link import AgentLinkManager
+from .click_sound import warm_click_sound_effects
 from .config import (
     DEFAULT_CONTEXT_MENU_APPEARANCE,
     DEFAULT_MENU_EASTER_EGG,
@@ -168,6 +169,93 @@ class ToggleSwitch(QAbstractButton):
 
 IMAGE_NAME_FILTER = "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *.tiff)"
 AUDIO_NAME_FILTER = "音频文件 (*.wav *.mp3 *.ogg *.flac *.m4a)"
+
+
+class ClickSoundPackPicker(QWidget):
+    """点击音效包选择器（内置默认/小黄鸭/自定义单文件/自定义文件夹）。"""
+
+    changed = Signal()
+
+    def __init__(self, pack: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.mode_select = ModernSelect(self, width=170)
+        self.mode_select.addItem("默认包", "builtin:default")
+        self.mode_select.addItem("小黄鸭包", "builtin:duck")
+        self.mode_select.addItem("自定义单文件", "file")
+        self.mode_select.addItem("自定义文件夹（随机）", "folder")
+
+        self.file_picker = ResourcePathPicker("", name_filter=AUDIO_NAME_FILTER, parent=self)
+        self.folder_picker = ResourcePathPicker("", directory=True, parent=self)
+
+        self.stack = QStackedWidget(self)
+        empty_page = QWidget(self)
+        self.stack.addWidget(empty_page)         # 0: builtin (hidden)
+        self.stack.addWidget(self.file_picker)    # 1: file
+        self.stack.addWidget(self.folder_picker)  # 2: folder
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.mode_select)
+        layout.addWidget(self.stack)
+
+        self.mode_select.currentIndexChanged.connect(self._on_mode_changed)
+        self.file_picker.edit.textChanged.connect(lambda: self.changed.emit())
+        self.folder_picker.edit.textChanged.connect(lambda: self.changed.emit())
+
+        self.set_pack(pack or {})
+
+    def _on_mode_changed(self, index: int) -> None:
+        data = self.mode_select.currentData()
+        if data == "file":
+            self.stack.setCurrentIndex(1)
+            self.stack.show()
+        elif data == "folder":
+            self.stack.setCurrentIndex(2)
+            self.stack.show()
+        else:
+            self.stack.setCurrentIndex(0)
+            self.stack.hide()
+        self.changed.emit()
+
+    def value(self) -> dict:
+        data = str(self.mode_select.currentData() or "builtin:default")
+        if data.startswith("builtin:"):
+            bid = data.split(":", 1)[1]
+            return {"kind": "builtin", "id": bid, "path": ""}
+        if data == "file":
+            return {"kind": "file", "id": "custom", "path": self.file_picker.text()}
+        if data == "folder":
+            return {"kind": "folder", "id": "custom", "path": self.folder_picker.text()}
+        return {"kind": "builtin", "id": "default", "path": ""}
+
+    def set_pack(self, pack: dict) -> None:
+        pack = pack if isinstance(pack, dict) else {}
+        kind = str(pack.get("kind") or "builtin").strip().lower()
+        pack_id = str(pack.get("id") or "default").strip()
+        path = str(pack.get("path") or "")
+
+        if kind == "builtin":
+            if pack_id == "duck":
+                self.mode_select.setCurrentData("builtin:duck")
+            else:
+                self.mode_select.setCurrentData("builtin:default")
+            self.stack.setCurrentIndex(0)
+            self.stack.hide()
+        elif kind == "file":
+            self.file_picker.setText(path)
+            self.mode_select.setCurrentData("file")
+            self.stack.setCurrentIndex(1)
+            self.stack.show()
+        elif kind == "folder":
+            self.folder_picker.setText(path)
+            self.mode_select.setCurrentData("folder")
+            self.stack.setCurrentIndex(2)
+            self.stack.show()
+        else:
+            self.mode_select.setCurrentData("builtin:default")
+            self.stack.setCurrentIndex(0)
+            self.stack.hide()
 
 
 class ResourcePathPicker(QWidget):
@@ -1024,8 +1112,9 @@ class ModernSettingsDialog(QDialog):
         general_layout = QVBoxLayout(general_content)
         general_layout.setContentsMargins(0, 0, 0, 0)
         general_layout.setSpacing(18)
+        autostart_desc = "登录系统后自动启动桌宠。" if not self.config.instance_id else "登录系统后自动启动桌宠。（仅主桌宠可设置）"
         launch_rows = [
-            SettingRow("autostart", "开机自启", "登录系统后自动启动桌宠。", self.autostart_check),
+            SettingRow("autostart", "开机自启", autostart_desc, self.autostart_check),
         ]
         if sys.platform == "darwin":
             launch_rows.append(SettingRow(
@@ -1039,6 +1128,7 @@ class ModernSettingsDialog(QDialog):
         if sys.platform == "win32":
             window_rows.extend([
                 SettingRow("auto_hide_fullscreen", "全屏时自动隐藏", "全屏游戏或视频期间自动隐藏桌宠。", self.auto_hide_fullscreen_check),
+                SettingRow("cursor_hidden_passthrough", "光标隐藏时自动穿透", "Windows 光标隐藏后，桌宠自动穿透点击；光标出现立即恢复。适用于游戏，也可能影响自动隐藏光标的视频播放器。", self.cursor_hidden_passthrough_check),
                 SettingRow("stream_capture", "直播捕获兼容", "让 OBS 等工具能够枚举并捕获桌宠窗口。", self.stream_capture_check),
             ])
         general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
@@ -1053,6 +1143,24 @@ class ModernSettingsDialog(QDialog):
         general_layout.addStretch(1)
         self._add_page("常规", "settings", self._page_shell("常规", general_content))
 
+        island_content = QWidget()
+        island_layout = QVBoxLayout(island_content)
+        island_layout.setContentsMargins(0, 0, 0, 0)
+        island_layout.setSpacing(18)
+        island_layout.addWidget(SettingsSection("灵动岛", [
+            SettingRow("dynamic_island_enabled", "启用灵动岛", "显示独立胶囊小窗；桌宠隐藏后仍可常驻。", self.island_enabled_check),
+            SettingRow("dynamic_island_icon", "显示图标", "在胶囊左侧显示角色图标。", self.island_icon_check),
+            SettingRow("dynamic_island_name", "显示名称", "显示当前角色名称。", self.island_name_check),
+            SettingRow("dynamic_island_info", "显示信息槽", "显示时间/余额/自定义短文本等信息。", self.island_info_check),
+            SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
+            SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
+            SettingRow("dynamic_island_style", "背景风格", "黑色 / 白色 / 苹果式玻璃质感。", self.island_style_select),
+            SettingRow("dynamic_island_icon", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
+            SettingRow("dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True),
+        ], island_content))
+        island_layout.addStretch(1)
+        self._add_page("灵动岛", "island", self._page_shell("灵动岛", island_content))
+
         behavior_content = QWidget()
         behavior_layout = QVBoxLayout(behavior_content)
         behavior_layout.setContentsMargins(0, 0, 0, 0)
@@ -1064,18 +1172,36 @@ class ModernSettingsDialog(QDialog):
             SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
             SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
         ], behavior_content))
-        behavior_layout.addWidget(SettingsSection("拖拽", [
+        behavior_layout.addWidget(SettingsSection("拖拽与弹射", [
             SettingRow("drag_physics", "拖动物理", "启用拖拽惯性、重力和边缘反弹。", self.drag_physics_check),
+            SettingRow("throw_strength", "甩出力度", "控制桌宠被甩出或弹射发射时的最大速度限制。", self.throw_strength_select),
+            SettingRow("slingshot_enabled", "弹弓弹射", "拖拽桌宠时点击右键进入蓄力瞄准，松开左键弹射飞出（Esc或右键取消）。", self.slingshot_check),
             SettingRow("lock_position", "锁定位置", "桌宠固定不动，无法拖动（点击互动仍有效）。", self.lock_position_check),
             SettingRow("shift_drag", "SHIFT+左键拖动", "开启后必须按住 SHIFT 再左键才能拖动桌宠。", self.shift_drag_check),
         ], behavior_content))
+        behavior_layout.addWidget(SettingsSection("多开碰撞", [
+            SettingRow("collision_enabled", "碰撞开关", "多开桌宠之间发生碰撞物理互动。开启鼠标穿透的桌宠仍会参与碰撞，锁定位置的桌宠作为固定障碍。", self.collision_enabled_check),
+            SettingRow("collision_restitution", "弹性系数", "碰撞反弹的能量保留程度（0~1.00，默认 0.82）。", self.collision_restitution_spin),
+            SettingRow("collision_friction", "摩擦系数", "擦边碰撞时的切向摩擦阻力（0~0.30，默认 0.08）。", self.collision_friction_spin),
+            SettingRow("collision_mass_scale", "质量倍率", "桌宠的基础质量加权倍率（0.5~2.0，默认 1.0）。", self.collision_mass_scale_spin),
+            SettingRow("collision_impulse_cap", "冲量上限", "单次碰撞能施加的最大冲量上限（1000~12000，默认 9000）。", self.collision_impulse_cap_spin),
+            SettingRow("collision_sound_enabled", "碰撞音效", "碰撞时播放音效反馈。", self.collision_sound_check),
+            SettingRow("collision_sound_volume", "碰撞音量", "调整碰撞音效播放音量。", self.collision_sound_volume_spin),
+        ], behavior_content))
+        self.collision_policy_note = QLabel("碰撞参数由当前协调者桌宠的设置决定")
+        self.collision_policy_note.setObjectName("settingHint")
+        self.collision_policy_note.setWordWrap(True)
+        self.collision_policy_note.setContentsMargins(14, 0, 14, 0)
+        behavior_layout.addWidget(self.collision_policy_note)
         click_rows = [
             SettingRow("click_sound", "点击音效", "点击桌宠时播放轻量反馈音效。", self.click_sound_check),
-            SettingRow("click_sound_path", "音效文件", "使用绝对路径；留空时使用内置默认音效。", self.click_sound_picker, stacked=True),
+            SettingRow("click_sound_pack", "音效音源", "选择预设音效包、自定义音频文件或文件夹随机播放。", self.click_sound_picker, stacked=True),
+            SettingRow("click_sound_volume", "音效音量", "调整点击音效播放音量。", self.click_sound_volume_spin),
+            SettingRow("click_sound_preview", "试听音效", "测试当前选择的点击音效。", self.click_sound_preview_btn),
             SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容。", self.click_self_talk_check),
         ]
         if self.click_balance_check is not None:
-            click_rows.insert(2, SettingRow(
+            click_rows.insert(4, SettingRow(
                 "click_balance", "点击显示余额", "点击桌宠时查询并用气泡展示模型服务余额。",
                 self.click_balance_check,
             ))
@@ -1087,6 +1213,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
             SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
             SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
+            SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
         ], behavior_content))
         # Agent 联动：每个 Agent 一行自定义思考文案
         agent_thinking_rows = []
@@ -1099,6 +1226,17 @@ class ModernSettingsDialog(QDialog):
                            edit, stacked=True)
             )
         behavior_layout.addWidget(SettingsSection("Agent 联动 · 思考气泡文案", agent_thinking_rows, behavior_content))
+
+        # Agent 联动：音效设置
+        agent_sound_rows = [
+            SettingRow("agent_sound_enabled", "Agent 音效联动", "当 Agent 开始工作、任务完成或发生错误时播放提示音。", self.agent_sound_check),
+            SettingRow("agent_sound_start", "开始工作提示音", "Agent 进入工作状态时播放。", self.agent_sound_start_widget, stacked=True),
+            SettingRow("agent_sound_done", "任务完成提示音", "Agent 完成任务时播放。", self.agent_sound_done_widget, stacked=True),
+            SettingRow("agent_sound_error", "发生错误提示音", "Agent 出现错误异常时播放。", self.agent_sound_error_widget, stacked=True),
+            SettingRow("agent_sound_volume", "音效音量", "调整 Agent 提示音音量。", self.agent_sound_volume_spin),
+            SettingRow("agent_sound_cooldown", "冷却时间", "防止短时间内频繁触发音效；0 表示无时间冷却（仍单次去重）。", self.agent_sound_cooldown_spin),
+        ]
+        behavior_layout.addWidget(SettingsSection("Agent 联动 · 提示音效", agent_sound_rows, behavior_content))
         behavior_layout.addStretch(1)
         self._add_page("桌宠行为", "play", self._page_shell("桌宠行为", behavior_content))
 
@@ -1215,6 +1353,8 @@ class ModernSettingsDialog(QDialog):
         self._update_translucency_controls(self.menu_translucent_check.isChecked())
         # 初始同步须在全部 SettingRow 构建完成后执行，否则 findChild 找不到行
         self._update_click_sound_controls(self.click_sound_check.isChecked())
+        self._update_agent_sound_controls(self.agent_sound_check.isChecked())
+        self._update_agent_sound_subcontrols()
 
         self.setStyleSheet(self._stylesheet())
 
@@ -1235,8 +1375,55 @@ class ModernSettingsDialog(QDialog):
         self.no_move_check.setChecked(bool(self.config.get("no_move", False)))
         self.mouse_through_check = ToggleSwitch(self)
         self.mouse_through_check.setChecked(bool(self.config.get("mouse_through", False)))
+        self.cursor_hidden_passthrough_check = ToggleSwitch(self)
+        self.cursor_hidden_passthrough_check.setChecked(bool(self.config.get("cursor_hidden_passthrough", True)))
         self.drag_physics_check = ToggleSwitch(self)
         self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
+
+        # 甩出力度四档：gentle (轻柔) / standard (标准) / strong (强力) / crazy (疯狂)
+        self.throw_strength_select = ModernSelect(self, width=132)
+        self.throw_strength_select.addItem("轻柔", "gentle")
+        self.throw_strength_select.addItem("标准", "standard")
+        self.throw_strength_select.addItem("强力", "strong")
+        self.throw_strength_select.addItem("疯狂", "crazy")
+        current_strength = str(self.config.get("throw_strength", "standard") or "standard")
+        self.throw_strength_select.setCurrentData(current_strength if current_strength in {"gentle", "standard", "strong", "crazy"} else "standard")
+
+        # 弹弓弹射开关
+        self.slingshot_check = ToggleSwitch(self)
+        self.slingshot_check.setChecked(bool(self.config.get("slingshot_enabled", True)))
+
+        # 多开碰撞设置
+        self.collision_enabled_check = ToggleSwitch(self)
+        self.collision_enabled_check.setChecked(bool(self.config.get("collision_enabled", True)))
+        self.collision_restitution_spin = BrowserDoubleSpinBox(self)
+        self.collision_restitution_spin.setRange(0.0, 1.0)
+        self.collision_restitution_spin.setSingleStep(0.05)
+        self.collision_restitution_spin.setDecimals(2)
+        self.collision_restitution_spin.setValue(float(_float_or_default(self.config.get("collision_restitution", 0.82), 0.82, 0.0, 1.0)))
+        self.collision_friction_spin = BrowserDoubleSpinBox(self)
+        self.collision_friction_spin.setRange(0.0, 0.30)
+        self.collision_friction_spin.setSingleStep(0.01)
+        self.collision_friction_spin.setDecimals(2)
+        self.collision_friction_spin.setValue(float(_float_or_default(self.config.get("collision_friction", 0.08), 0.08, 0.0, 0.30)))
+        self.collision_mass_scale_spin = BrowserDoubleSpinBox(self)
+        self.collision_mass_scale_spin.setRange(0.5, 2.0)
+        self.collision_mass_scale_spin.setSingleStep(0.1)
+        self.collision_mass_scale_spin.setDecimals(2)
+        self.collision_mass_scale_spin.setValue(float(_float_or_default(self.config.get("collision_mass_scale", 1.0), 1.0, 0.5, 2.0)))
+        self.collision_impulse_cap_spin = BrowserDoubleSpinBox(self)
+        self.collision_impulse_cap_spin.setRange(1000.0, 12000.0)
+        self.collision_impulse_cap_spin.setSingleStep(500.0)
+        self.collision_impulse_cap_spin.setDecimals(0)
+        self.collision_impulse_cap_spin.setValue(float(_float_or_default(self.config.get("collision_impulse_cap", 9000.0), 9000.0, 1000.0, 12000.0)))
+        self.collision_sound_check = ToggleSwitch(self)
+        self.collision_sound_check.setChecked(bool(self.config.get("collision_sound_enabled", True)))
+        self.collision_sound_volume_spin = BrowserSpinBox(self)
+        self.collision_sound_volume_spin.setRange(0, 100)
+        self.collision_sound_volume_spin.setSuffix(" %")
+        collision_sound_vol = float(self.config.get("collision_sound_volume", 0.70))
+        self.collision_sound_volume_spin.setValue(int(round(collision_sound_vol * 100)))
+
         self.lock_position_check = ToggleSwitch(self)
         self.lock_position_check.setChecked(bool(self.config.get("lock_position", False)))
         self.shift_drag_check = ToggleSwitch(self)
@@ -1248,18 +1435,36 @@ class ModernSettingsDialog(QDialog):
         self.autostart_check = ToggleSwitch(self)
         self._autostart_initial = autostart_mod.is_enabled()
         self.autostart_check.setChecked(self._autostart_initial)
+        if self.config.instance_id:
+            self.autostart_check.setEnabled(False)
+            self.autostart_check.setToolTip("仅主桌宠可设置")
         self.dock_icon_check = None
         if sys.platform == "darwin":
             self.dock_icon_check = ToggleSwitch(self)
             self.dock_icon_check.setChecked(bool(self.config.get("show_dock_icon", True)))
+
+        # 点击音效控件群
         self.click_sound_check = ToggleSwitch(self)
         self.click_sound_check.setChecked(bool(self.config.get("click_sound_enabled", True)))
-        self.click_sound_picker = ResourcePathPicker(
-            str(self.config.get("click_sound_path", "") or ""),
-            name_filter=AUDIO_NAME_FILTER,
+        self.click_sound_picker = ClickSoundPackPicker(
+            self.config.get("click_sound_pack"),
             parent=self,
         )
+        self.click_sound_volume_spin = BrowserSpinBox(self)
+        self.click_sound_volume_spin.setRange(0, 100)
+        self.click_sound_volume_spin.setSuffix(" %")
+        click_vol = float(self.config.get("click_sound_volume", 0.70))
+        self.click_sound_volume_spin.setValue(int(round(click_vol * 100)))
+
+        self.click_sound_preview_btn = QPushButton("试听", self)
+        self.click_sound_preview_btn.setIcon(vector_widget_icon(self, "sound", 14))
+        self.click_sound_preview_btn.setFixedWidth(72)
+        self.click_sound_preview_btn.clicked.connect(self._preview_click_sound)
+
         self.click_sound_check.toggled.connect(self._update_click_sound_controls)
+        # 音效开关即时生效：对话框的批量写回发生在关闭时，但声音开关是即时
+        # 听觉反馈——用户关掉后期望立刻静音，而不是等关对话框。
+        self.click_sound_check.toggled.connect(self._apply_click_sound_enabled_now)
         self.click_balance_check = None
         if self.include_ai:
             self.click_balance_check = ToggleSwitch(self)
@@ -1353,6 +1558,9 @@ class ModernSettingsDialog(QDialog):
             directory=True,
             parent=self,
         )
+        self.click_talk_bindings_btn = QPushButton("编辑…", self)
+        self.click_talk_bindings_btn.setObjectName("clickTalkBindingsButton")
+        self.click_talk_bindings_btn.clicked.connect(self._open_click_talk_bindings)
 
         # Agent 联动：每个 Agent 的自定义 thinking 气泡文案
         agent_link_cfg = self.config.get("agent_link", {})
@@ -1383,6 +1591,58 @@ class ModernSettingsDialog(QDialog):
             edit.setPlaceholderText("留空使用基础模式台词；支持 {name}、{command}、{body}、{count}、{reasons}")
             edit.setClearButtonEnabled(True)
             self.dialogue_phrase_edits[key] = edit
+
+        # Agent 联动：音效控件群
+        self.agent_sound_check = ToggleSwitch(self)
+        self.agent_sound_check.setChecked(bool(agent_link_cfg.get("sound_enabled", False)))
+
+        # 辅助构建包含“开关+路径选择+试听”的组合控件
+        def _build_agent_event_row(evt_key: str, default_builtin: str) -> tuple[QWidget, ToggleSwitch, ResourcePathPicker, QPushButton]:
+            container = QWidget(self)
+            layout = QHBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+            toggle = ToggleSwitch(container)
+            toggle.setChecked(bool(agent_link_cfg.get(f"sound_{evt_key}_enabled", True)))
+            path_val = str(agent_link_cfg.get(f"sound_{evt_key}_path") or default_builtin)
+            picker = ResourcePathPicker(path_val, name_filter=AUDIO_NAME_FILTER, parent=container)
+            preview_btn = QPushButton("试听", container)
+            preview_btn.setIcon(vector_widget_icon(self, "sound", 14))
+            preview_btn.setFixedWidth(72)
+            preview_btn.clicked.connect(lambda _, k=evt_key: self._preview_agent_sound(k))
+
+            layout.addWidget(toggle)
+            layout.addWidget(picker, 1)
+            layout.addWidget(preview_btn)
+            return container, toggle, picker, preview_btn
+
+        (self.agent_sound_start_widget, self.agent_sound_start_check,
+         self.agent_sound_start_picker, self.agent_sound_start_preview) = _build_agent_event_row("start", "builtin:agent-start")
+
+        (self.agent_sound_done_widget, self.agent_sound_done_check,
+         self.agent_sound_done_picker, self.agent_sound_done_preview) = _build_agent_event_row("done", "builtin:agent-done")
+
+        (self.agent_sound_error_widget, self.agent_sound_error_check,
+         self.agent_sound_error_picker, self.agent_sound_error_preview) = _build_agent_event_row("error", "builtin:agent-error")
+
+        self.agent_sound_volume_spin = BrowserSpinBox(self)
+        self.agent_sound_volume_spin.setRange(0, 100)
+        self.agent_sound_volume_spin.setSuffix(" %")
+        agent_vol = float(agent_link_cfg.get("sound_volume", 0.65))
+        self.agent_sound_volume_spin.setValue(int(round(agent_vol * 100)))
+
+        self.agent_sound_cooldown_spin = BrowserDoubleSpinBox(self)
+        self.agent_sound_cooldown_spin.setRange(0.0, 30.0)
+        self.agent_sound_cooldown_spin.setSingleStep(0.5)
+        self.agent_sound_cooldown_spin.setDecimals(1)
+        self.agent_sound_cooldown_spin.setSuffix(" 秒")
+        self.agent_sound_cooldown_spin.setValue(float(agent_link_cfg.get("sound_cooldown_seconds", 2.0)))
+
+        self.agent_sound_check.toggled.connect(self._update_agent_sound_controls)
+        self.agent_sound_check.toggled.connect(self._apply_agent_sound_enabled_now)
+        self.agent_sound_start_check.toggled.connect(lambda: self._update_agent_sound_subcontrols())
+        self.agent_sound_done_check.toggled.connect(lambda: self._update_agent_sound_subcontrols())
+        self.agent_sound_error_check.toggled.connect(lambda: self._update_agent_sound_subcontrols())
 
         appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
         self.menu_theme_select = ModernSelect(self, width=132)
@@ -1441,6 +1701,42 @@ class ModernSettingsDialog(QDialog):
         self.egg_avatar_picker = ResourcePathPicker(str(avatar.resolve()), parent=self)
         self.egg_image_dir_picker = ResourcePathPicker(str(image_dir.resolve()), directory=True, parent=self)
 
+        # 灵动岛
+        island_cfg = self.config.get("dynamic_island", {})
+        if not isinstance(island_cfg, dict):
+            island_cfg = {}
+        self.island_enabled_check = ToggleSwitch(self)
+        self.island_enabled_check.setChecked(bool(island_cfg.get("enabled", False)))
+        self.island_icon_check = ToggleSwitch(self)
+        self.island_icon_check.setChecked(bool(island_cfg.get("show_icon", True)))
+        self.island_name_check = ToggleSwitch(self)
+        self.island_name_check.setChecked(bool(island_cfg.get("show_name", True)))
+        self.island_info_check = ToggleSwitch(self)
+        self.island_info_check.setChecked(bool(island_cfg.get("show_info", True)))
+        self.island_status_check = ToggleSwitch(self)
+        self.island_status_check.setChecked(bool(island_cfg.get("show_status", True)))
+        self.island_info_mode_select = ModernSelect(self, width=160)
+        for label, value in (
+            ("当前时间", "time"),
+            ("余额峰谷", "balance_tier"),
+            ("余额数值", "balance"),
+            ("自定义短文本", "custom"),
+        ):
+            self.island_info_mode_select.addItem(label, value)
+        self.island_info_mode_select.setCurrentData(str(island_cfg.get("info_mode") or "time"))
+        self.island_style_select = ModernSelect(self, width=160)
+        for label, value in (
+            ("黑色", "dark"),
+            ("白色", "light"),
+            ("玻璃质感", "glass"),
+        ):
+            self.island_style_select.addItem(label, value)
+        self.island_style_select.setCurrentData(str(island_cfg.get("style") or "dark"))
+        self.island_icon_select = ModernSelect(self, width=160)
+        for emoji in ("🐳", "🐟", "🐙", "🦭", "🐧", "🐱", "🐶", "🌟", "⚡", "❤️"):
+            self.island_icon_select.addItem(emoji, emoji)
+        self.island_icon_select.setCurrentData(str(island_cfg.get("icon") or "🐳"))
+        self.island_custom_text_edit = _line_edit(str(island_cfg.get("custom_text") or ""), width=220)
 
     # ------------------------------------------------------------ 主动识屏
         if sys.platform == "win32" and self.include_ai:
@@ -1660,11 +1956,12 @@ class ModernSettingsDialog(QDialog):
         keys = (
             "self_talk_duration", "self_talk_min", "self_talk_max",
             "self_talk_texts", "self_talk_images", "click_self_talk",
+            "click_talk_bindings",
         )
         controls = (
             self.self_talk_duration_spin, self.min_spin, self.max_spin,
             self.texts_edit, self.self_talk_image_dir_picker,
-            self.click_self_talk_check,
+            self.click_self_talk_check, self.click_talk_bindings_btn,
         )
         for key, control in zip(keys, controls):
             control.setEnabled(bool(enabled))
@@ -1685,19 +1982,103 @@ class ModernSettingsDialog(QDialog):
             self.menu_font_select.addItem(current_font, current_font)
         self.menu_font_select.setCurrentData(current_font)
 
+    def _open_click_talk_bindings(self) -> None:
+        from .click_talk_dialog import ClickTalkBindingsDialog
+
+        click_names = None
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "clicks") and parent.clicks:
+            click_names = list(parent.clicks)
+        dialog = ClickTalkBindingsDialog(self.config, click_names=click_names, parent=self)
+        dialog.exec()
+
+    def _preview_click_sound(self) -> None:
+        """试听当前选择的点击音效配置（不保存配置）。"""
+        from .click_sound import choose_sound, play_sound, resolve_click_sound_candidates
+
+        pack = self.click_sound_picker.value()
+        candidates = resolve_click_sound_candidates(pack, self.config.dir)
+        sound_file = choose_sound(candidates)
+        if sound_file:
+            vol = float(self.click_sound_volume_spin.value()) / 100.0
+            play_sound(sound_file, volume=vol)
+
+    def _preview_agent_sound(self, event_name: str) -> None:
+        """试听当前填写的 Agent 音效（不保存配置、不触发 Agent 业务逻辑）。"""
+        from .click_sound import play_sound, resolve_builtin_sound
+
+        picker = {
+            "start": self.agent_sound_start_picker,
+            "done": self.agent_sound_done_picker,
+            "error": self.agent_sound_error_picker,
+        }.get(event_name)
+        if picker is None:
+            return
+        path_str = picker.text().strip()
+        if not path_str:
+            path_str = f"builtin:agent-{event_name}"
+
+        target = None
+        if path_str.startswith("builtin:"):
+            target = resolve_builtin_sound(path_str)
+        else:
+            p = Path(path_str).expanduser()
+            if p.is_file():
+                target = p
+
+        if target:
+            vol = float(self.agent_sound_volume_spin.value()) / 100.0
+            play_sound(target, volume=vol)
+
     def _update_click_sound_controls(self, enabled: bool) -> None:
-        row = self.findChild(SettingRow, "settingRow_click_sound_path")
-        if row is not None:
-            row.setVisible(bool(enabled))
-            card = row.parentWidget()
-            if isinstance(card, SettingsCard):
-                card.refresh_separators()
+        for row_key in ("click_sound_pack", "click_sound_volume", "click_sound_preview"):
+            row = self.findChild(SettingRow, f"settingRow_{row_key}")
+            if row is not None:
+                row.setVisible(bool(enabled))
+                card = row.parentWidget()
+                if isinstance(card, SettingsCard):
+                    card.refresh_separators()
+
+    def _update_agent_sound_controls(self, enabled: bool) -> None:
+        """Agent 音效总开关联动控制整组子项可见性/可用性。"""
+        for row_key in ("agent_sound_start", "agent_sound_done", "agent_sound_error", "agent_sound_volume", "agent_sound_cooldown"):
+            row = self.findChild(SettingRow, f"settingRow_{row_key}")
+            if row is not None:
+                row.setVisible(bool(enabled))
+                card = row.parentWidget()
+                if isinstance(card, SettingsCard):
+                    card.refresh_separators()
+        if enabled:
+            self._update_agent_sound_subcontrols()
+
+    def _update_agent_sound_subcontrols(self) -> None:
+        """根据单事件独立开关启用/禁用路径选择器和试听按钮。"""
+        self.agent_sound_start_picker.setEnabled(self.agent_sound_start_check.isChecked())
+        self.agent_sound_start_preview.setEnabled(self.agent_sound_start_check.isChecked())
+
+        self.agent_sound_done_picker.setEnabled(self.agent_sound_done_check.isChecked())
+        self.agent_sound_done_preview.setEnabled(self.agent_sound_done_check.isChecked())
+
+        self.agent_sound_error_picker.setEnabled(self.agent_sound_error_check.isChecked())
+        self.agent_sound_error_preview.setEnabled(self.agent_sound_error_check.isChecked())
 
     def _update_translucency_controls(self, enabled: bool) -> None:
         self.menu_opacity_spin.setEnabled(bool(enabled))
         row = self.findChild(SettingRow, "settingRow_menu_opacity")
         if row is not None:
             row.setEnabled(bool(enabled))
+
+    def _apply_agent_sound_enabled_now(self, checked: bool) -> None:
+        """音效总开关即时生效，不等对话框关闭（合并写回，不动其他 agent_link 键）。"""
+        agent_cfg = dict(self.config.get("agent_link", {}))
+        agent_cfg["sound_enabled"] = bool(checked)
+        self.config.set("agent_link", agent_cfg)
+        self.config.save()
+
+    def _apply_click_sound_enabled_now(self, checked: bool) -> None:
+        """点击音效开关即时生效，不等对话框关闭。"""
+        self.config.set("click_sound_enabled", bool(checked))
+        self.config.save()
 
     def move_away_from_pet(self) -> None:
         """把窗口定位到不与桌宠相交的位置。
@@ -1864,11 +2245,41 @@ class ModernSettingsDialog(QDialog):
         self.config.set("no_move", self.no_move_check.isChecked())
         self.config.set("mouse_through", self.mouse_through_check.isChecked())
         self.config.set("drag_physics", self.drag_physics_check.isChecked())
+        self.config.set("throw_strength", str(self.throw_strength_select.currentData() or "standard"))
+        self.config.set("slingshot_enabled", self.slingshot_check.isChecked())
+        self.config.set("collision_enabled", self.collision_enabled_check.isChecked())
+        self.config.set("collision_restitution", self.collision_restitution_spin.value())
+        self.config.set("collision_friction", self.collision_friction_spin.value())
+        self.config.set("collision_mass_scale", self.collision_mass_scale_spin.value())
+        self.config.set("collision_impulse_cap", self.collision_impulse_cap_spin.value())
+        self.config.set("collision_sound_enabled", self.collision_sound_check.isChecked())
+        self.config.set("collision_sound_volume", float(self.collision_sound_volume_spin.value()) / 100.0)
         self.config.set("lock_position", self.lock_position_check.isChecked())
         self.config.set("shift_drag", self.shift_drag_check.isChecked())
         self.config.set("pet_opacity", int(self.pet_opacity_spin.value()))
         self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
-        self.config.set("click_sound_path", self.click_sound_picker.text())
+        self.config.set("click_sound_pack", self.click_sound_picker.value())
+        self.config.set("click_sound_volume", float(self.click_sound_volume_spin.value()) / 100.0)
+        warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
+        existing_island = self.config.get("dynamic_island", {})
+        if not isinstance(existing_island, dict):
+            existing_island = {}
+        self.config.set("dynamic_island", {
+            "enabled": self.island_enabled_check.isChecked(),
+            "show_icon": self.island_icon_check.isChecked(),
+            "show_name": self.island_name_check.isChecked(),
+            "show_info": self.island_info_check.isChecked(),
+            "info_mode": str(self.island_info_mode_select.currentData() or "time"),
+            "custom_text": self.island_custom_text_edit.text().strip(),
+            "show_status": self.island_status_check.isChecked(),
+            "style": str(self.island_style_select.currentData() or "dark"),
+            "icon": str(self.island_icon_select.currentData() or "🐳"),
+            "x": existing_island.get("x"),
+            "y": existing_island.get("y"),
+        })
         if self.click_balance_check is not None:
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
@@ -1884,6 +2295,8 @@ class ModernSettingsDialog(QDialog):
             self.config.set("balance_tier_color_enabled", self.balance_tier_color_check.isChecked())
         if self.auto_hide_fullscreen_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
+        if self.cursor_hidden_passthrough_check is not None:
+            self.config.set("cursor_hidden_passthrough", self.cursor_hidden_passthrough_check.isChecked())
         if self.stream_capture_check is not None:
             self.config.set("stream_capture_mode", self.stream_capture_check.isChecked())
         self.config.set("playback_speed", float(self.speed_select.currentData()))
@@ -1895,6 +2308,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
+        # Agent 联动：自定义 thinking 文案与音效（合并写回，不覆盖 agent_link 其他开关）
         self.config.set("dialogue_mode", str(self.dialogue_mode_select.currentData() or "legacy"))
         self.config.set("dialogue_phrases", {
             key: edit.text().strip() for key, edit in self.dialogue_phrase_edits.items() if edit.text().strip()
@@ -1910,6 +2324,18 @@ class ModernSettingsDialog(QDialog):
         # 循环检测设置页（合并写回，不覆盖 agent_link 其他字段）
         if self.watchdog_page is not None:
             agent_cfg = self.watchdog_page.apply_to_config(agent_cfg)
+
+        # Agent 联动音效写回
+        agent_cfg["sound_enabled"] = self.agent_sound_check.isChecked()
+        agent_cfg["sound_start_enabled"] = self.agent_sound_start_check.isChecked()
+        agent_cfg["sound_start_path"] = self.agent_sound_start_picker.text().strip() or "builtin:agent-start"
+        agent_cfg["sound_done_enabled"] = self.agent_sound_done_check.isChecked()
+        agent_cfg["sound_done_path"] = self.agent_sound_done_picker.text().strip() or "builtin:agent-done"
+        agent_cfg["sound_error_enabled"] = self.agent_sound_error_check.isChecked()
+        agent_cfg["sound_error_path"] = self.agent_sound_error_picker.text().strip() or "builtin:agent-error"
+        agent_cfg["sound_volume"] = float(self.agent_sound_volume_spin.value()) / 100.0
+        agent_cfg["sound_cooldown_seconds"] = float(self.agent_sound_cooldown_spin.value())
+
         self.config.set("agent_link", agent_cfg)
         self.config.set("context_menu_appearance", {
             "theme": self.menu_theme_select.currentData(),

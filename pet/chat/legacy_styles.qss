@@ -32,7 +32,8 @@ QLabel#subtitle-label {
     font-size: 10px;
 }
 QToolButton#window-minimize-button,
-QToolButton#window-close-button {
+QToolButton#window-close-button,
+QToolButton#window-pin-button {
     min-width: 32px;
     max-width: 32px;
     min-height: 32px;
@@ -49,6 +50,14 @@ QToolButton#window-minimize-button:hover {
 }
 QToolButton#window-close-button:hover {
     background: #ef6b73;
+    color: #ffffff;
+}
+QToolButton#window-pin-button:hover {
+    background: #334155;
+    color: #ffffff;
+}
+QToolButton#window-pin-button:checked {
+    background: #3994ff;
     color: #ffffff;
 }
 QFrame#chat-context-bar {

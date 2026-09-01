@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
-"""拖拽物理纯函数测试：初速估算（含加速度增益）、弹簧、抛掷。"""
+"""拖拽物理纯函数测试：初速估算（含加速度增益）、弹簧、抛掷、四档力度与软上限。"""
 
 import math
+import pytest
 
 from pet.physics import (
     ACCEL_GAIN_MAX,
     DEAD_ZONE_SPEED,
     MAX_THROW_SPEED,
+    THROW_STRENGTH_CAPS,
     estimate_release_velocity,
+    normalize_throw_strength,
+    slingshot_speed,
+    slingshot_trajectory,
+    soft_clamp_speed,
     spring_velocity,
+    throw_speed_cap,
     throw_step,
 )
 
@@ -97,3 +104,64 @@ def test_throw_bounces_and_settles():
         assert -1 <= px <= 1001 and -1 <= py <= 601  # 不穿墙
     assert bounced_once
     assert py == 600.0 and abs(vy) < 1 and abs(vx) < 30  # 最终落地停稳
+
+
+def test_throw_strength_mapping_and_caps():
+    assert THROW_STRENGTH_CAPS == {
+        "gentle": 3600.0,
+        "standard": 4800.0,
+        "strong": 7200.0,
+        "crazy": 9000.0,
+    }
+    assert normalize_throw_strength("GENTLE") == "gentle"
+    assert normalize_throw_strength("invalid") == "standard"
+    assert throw_speed_cap("gentle") == 3600.0
+    assert throw_speed_cap("crazy") == 9000.0
+    assert throw_speed_cap("unknown") == 4800.0
+
+
+def test_soft_clamp_speed_monotonic_and_bounded():
+    assert soft_clamp_speed(-100) == 0.0
+    assert soft_clamp_speed(0.0) == 0.0
+    assert soft_clamp_speed(100.0, cap=0.0) == 0.0
+
+    cap = 4800.0
+    s1 = soft_clamp_speed(1000.0, cap=cap)
+    s2 = soft_clamp_speed(5000.0, cap=cap)
+    s3 = soft_clamp_speed(50000.0, cap=cap)
+    assert 0 < s1 < s2 < s3 < cap
+
+
+def test_estimate_release_velocity_custom_cap():
+    tr = _trail([(100 + i * 500, 100) for i in range(10)])
+    vx_gentle, _ = estimate_release_velocity(tr, tr[-1][0], cap=3600.0)
+    vx_crazy, _ = estimate_release_velocity(tr, tr[-1][0], cap=9000.0)
+    assert vx_gentle < 3600.0
+    assert vx_crazy > vx_gentle
+    assert vx_crazy < 9000.0
+
+
+def test_slingshot_speed_threshold_ease_out_and_cap():
+    cap = 4800.0
+    assert slingshot_speed(23.9, 24.0, 160.0, cap) == 0.0
+    low = slingshot_speed(24.0, 24.0, 160.0, cap)
+    middle = slingshot_speed(92.0, 24.0, 160.0, cap)
+    high = slingshot_speed(160.0, 24.0, 160.0, cap)
+    beyond = slingshot_speed(1000.0, 24.0, 160.0, cap)
+    assert 0.0 < low < middle < high < cap
+    assert beyond == high
+
+
+def test_slingshot_trajectory_samples_gravity_arc():
+    path = slingshot_trajectory(100.0, -200.0, duration=1.0, points=11)
+    assert len(path) == 11
+    assert path[0] == (0.0, 0.0)
+    assert path[-1] == (100.0, 500.0)
+    assert path[5][0] == 50.0
+    assert path[5][1] == 75.0
+
+
+def test_slingshot_trajectory_handles_invalid_sampling():
+    assert slingshot_trajectory(100.0, 0.0, duration=0.0, points=12) == []
+    assert slingshot_trajectory(100.0, 0.0, duration=1.0, points=0) == []
+    assert slingshot_trajectory(100.0, 0.0, duration=1.0, points=1) == [(0.0, 0.0)]

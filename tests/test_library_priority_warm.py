@@ -79,6 +79,16 @@ def test_priority_names_split(tmp_path, monkeypatch):
     assert set(high).isdisjoint(low)
 
 
+def test_priority_names_click_before_idle(tmp_path, monkeypatch):
+    lib = _make_lib(tmp_path, monkeypatch)
+    high, _ = lib._priority_names()
+
+    # 点击回应必须优先于 idle/turn/move 预热：首次点击最怕同步 ffmpeg 解码卡顿。
+    assert high.index(catalog.CLICKS[0]) < high.index(catalog.IDLE)
+    assert high.index(catalog.CLICKS[0]) < high.index(catalog.TURN)
+    assert high.index(catalog.CLICKS[0]) < high.index(catalog.MOVES[0])
+
+
 def test_low_priority_warm_not_auto_started_then_scheduled(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication
 

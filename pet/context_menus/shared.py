@@ -328,7 +328,7 @@ def add_proactive_menu(menu: QMenu, pet) -> None:
 
 
 def add_agent_link_menu(menu: QMenu, pet) -> None:
-    """Agent 联动二级菜单（5 个 Agent 独立开关 + 气泡提醒选项 + 卡住检测配置）。"""
+    """Agent 联动二级菜单（4 个 Agent 独立开关 + 自定义 Agent + 气泡提醒选项，失败/拒绝自动回滚勾选）。"""
     sub = add_submenu(menu, "Agent 联动", None)
     agent_cfg = dict(pet.cfg.get('agent_link', {}))
     for agent_key, agent_label in (
@@ -336,16 +336,20 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         ('claude', 'Claude Code'),
         ('cursor', 'Cursor'),
         ('opencode', 'OpenCode'),
-        ('codex', 'Codex (ChatGPT)'),
     ):
         act = sub.addAction(agent_label)
         act.setCheckable(True)
         act.setChecked(bool(agent_cfg.get(agent_key, False)))
         act.toggled.connect(lambda on, k=agent_key, a=act: pet._toggle_agent_link(k, on, a))
-        # Codex 内部功能未实现：开关暂时屏蔽（置灰不可点击，避免用户开启后无效果）
-        if agent_key == 'codex':
-            act.setText("Codex (ChatGPT)（未实现）")
-            act.setEnabled(False)
+    # 自定义联动 Agent（config.json 的 agent_link.custom_agents，只读监听）
+    for item in (agent_cfg.get('custom_agents') or []):
+        key = str(item.get('key') or '')
+        if not key:
+            continue
+        act = sub.addAction(str(item.get('name') or key))
+        act.setCheckable(True)
+        act.setChecked(bool(agent_cfg.get(key, False)))
+        act.toggled.connect(lambda on, k=key, a=act: pet._toggle_agent_link(k, on, a))
     sub.addSeparator()
     for opt_key, opt_label in (
         ('notify_state', '开始干活气泡提醒'),

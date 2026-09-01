@@ -27,9 +27,15 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import autostart as autostart_mod
 from . import balance as balance_mod
 from . import catalog
+from . import slot_manager as slot_manager_mod
 from . import updater
+<<<<<<< HEAD
 from .config import APP_DIR_NAME, Config
 from .dsh_state import DshStateTracker
+=======
+from .click_sound import warm_click_sound_effects
+from .config import APP_DIR_NAME, Config, _default_base
+>>>>>>> origin/main
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
 from .library import MovieLibrary
@@ -37,6 +43,7 @@ from .window import PetWindow
 from .persona_phrases import PhrasePicker
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
+from .collision_ipc import CollisionIpcSession
 
 
 class _BackgroundResult(QObject):
@@ -44,9 +51,10 @@ class _BackgroundResult(QObject):
 
 
 class _BalanceBridge(_BackgroundResult):
-    def __init__(self, win):
+    def __init__(self, win, owner=None):
         super().__init__()
         self.win = win
+        self.owner = owner
         self.done.connect(self._show)
 
     def _show(self, ok: bool, payload) -> None:
@@ -57,6 +65,8 @@ class _BalanceBridge(_BackgroundResult):
             self.win.show_bubble(str(payload), duration_ms=6000)
             return
         _show_balance_payload(self.win, payload)
+        if self.owner is not None and hasattr(self.owner, "_update_island_balance"):
+            self.owner._update_island_balance(payload)
 
 
 _PERSONA_PICKER = PhrasePicker()
@@ -180,10 +190,12 @@ def _cleanup_stale_runtime_dirs() -> None:
 class PetApp:
     """管理桌宠窗口、托盘与角色热切换。"""
 
-    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True) -> None:
+    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True, slot_handle=None, slot_id: int | None = None) -> None:
         self.app = app
         self.config = config
         self.enable_chat = bool(enable_chat)
+        self.slot_handle = slot_handle
+        self.slot_id = slot_id
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
         self.chat_window = None
@@ -191,7 +203,12 @@ class PetApp:
         self.modern_chat_window = None
         self.chat_settings_dialog = None
         self.modern_settings_dialog = None
+<<<<<<< HEAD
         self.watchdog_settings_dialog = None
+=======
+        self.island = None
+        self.quick_chat = None
+>>>>>>> origin/main
         self._spawned_pet_count = 0
         self._pending_dialog_opens: set[str] = set()
         self._balance_busy = False
@@ -202,12 +219,16 @@ class PetApp:
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
+<<<<<<< HEAD
         # DSH 统一状态跟踪：轻量常驻，接收 bridge 事件收敛为 offline/idle/thinking/
         # working/waiting_approval/success/error。状态日志由 dsh_state 内部按
         # edge-trigger 写出；这里只订阅 state_changed，供后续状态动画/通知等消费。
         # 不把 self.app 当 QObject parent（测试会传假对象），靠自身引用保活。
         self._dsh_state_tracker = DshStateTracker(config.dir)
         self._dsh_state_tracker.state_changed.connect(self._on_dsh_state_changed)
+=======
+        self.collision_ipc = CollisionIpcSession(config, self)
+>>>>>>> origin/main
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -217,15 +238,18 @@ class PetApp:
         if not self._on_about_to_quit_connected:
             self.app.aboutToQuit.connect(self._on_about_to_quit)
             self._on_about_to_quit_connected = True
+        self.collision_ipc.start()
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self._create_ui(character_id)
+        self._sync_dynamic_island()
         self._apply_spawn_offset()
         self._apply_balance_timer()
         # 启动 DSH 状态跟踪（DSH 未运行也不影响桌宠启动，只切 offline）
         self._dsh_state_tracker.start()
         QTimer.singleShot(3500, self._check_autostart_wanted)
 
+<<<<<<< HEAD
     def _on_dsh_state_changed(self, from_state: str, to_state: str) -> None:
         """订阅 DSH 统一状态变化。
 
@@ -246,15 +270,55 @@ class PetApp:
                 pattern = getattr(alm, "_behavior_detector", None)
                 if pattern is not None and hasattr(pattern, "reset_all"):
                     pattern.reset_all()
+=======
+    def _sync_dynamic_island(self) -> None:
+        """按配置创建/隐藏灵动岛；桌宠隐藏后灵动岛仍可常驻。"""
+        island_cfg = self.config.get("dynamic_island", {})
+        enabled = bool(island_cfg.get("enabled", False)) if isinstance(island_cfg, dict) else False
+        if not enabled:
+            if getattr(self, "island", None) is not None:
+                self.island.hide()
+            return
+        if getattr(self, "island", None) is None:
+            from .dynamic_island import DynamicIsland
+
+            self.island = DynamicIsland(self.config)
+            self.island.clicked.connect(self._toggle_pet_from_island)
+        self.island.refresh_from_config()
+        pet_visible = True
+        if self.win is not None:
+            is_visible = getattr(self.win, "isVisible", None)
+            pet_visible = bool(is_visible()) if callable(is_visible) else True
+        self.island.set_pet_visible(pet_visible)
+        self.island.show()
+
+    def _toggle_pet_from_island(self) -> None:
+        win = self.win
+        if win is None:
+            return
+        if win.isVisible():
+            win.hide(notify=False)
+        else:
+            win.show()
+        if getattr(self, "island", None) is not None:
+            self.island.set_pet_visible(win.isVisible())
+>>>>>>> origin/main
 
     def _on_about_to_quit(self) -> None:
-        """退出前保存当前有效窗口的位置。
+        """退出前保存当前有效窗口的位置并释放资源。
 
         aboutToQuit 只绑定一次自本控制器；切换角色会重建桌宠窗口，信号
         触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
         """
         if self.win is not None:
             self.win._save_position()
+        self.collision_ipc.stop()
+        if self.slot_handle is not None:
+            try:
+                slot_manager_mod._unlock_file(self.slot_handle)
+            except Exception:
+                pass
+            self.slot_handle = None
 
     def _set_autostart(self, enabled: bool, win=None) -> bool:
         ok = autostart_mod.set_enabled(bool(enabled))
@@ -275,6 +339,25 @@ class PetApp:
         if minutes:
             self._balance_timer.start(minutes * 60000)
 
+    def _update_island_balance(self, payload) -> None:
+        """把余额文本/峰谷提示同步给灵动岛（若有）。"""
+        if getattr(self, "island", None) is None:
+            return
+        text = "余额 --"
+        info = {}
+        if isinstance(payload, dict):
+            text = str(payload.get("text") or "余额 --")
+            info = payload.get("info") or {}
+        peak_label, idle_label = balance_mod.resolve_tier_labels(
+            str(self.config.get("balance_tier_labels_mode", "default") or "default"),
+            str(self.config.get("balance_tier_label_peak", "") or ""),
+            str(self.config.get("balance_tier_label_idle", "") or ""),
+        )
+        hint = balance_mod.deepseek_pricing_hint(
+            peak_label=peak_label, idle_label=idle_label,
+        )
+        self.island.set_balance_info(hint, text)
+
     def show_balance(self, parent=None) -> None:
         win = parent or self.win
         if win is None or self._balance_busy or not win.isVisible():
@@ -294,21 +377,28 @@ class PetApp:
         ])
         if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
                 and self._balance_cache[2] == provider_key:
+            self._update_island_balance(self._balance_cache[1])
             _show_balance_payload(win, self._balance_cache[1])
             return
         file_payload = self._read_balance_file_cache(provider_key)
         if file_payload is not None:
             self._balance_cache = (now, file_payload, provider_key)
+            self._update_island_balance(file_payload)
             _show_balance_payload(win, file_payload)
             return
         self._balance_busy = True
         # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
         # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
+<<<<<<< HEAD
         QTimer.singleShot(0, lambda: win.show_bubble(
             _persona_text(win, "balance.loading", "让我看看余额…"), duration_ms=6000
         ))
         bridge = _BalanceBridge(win)
+=======
+        QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
+        bridge = _BalanceBridge(win, owner=self)
+>>>>>>> origin/main
         self._balance_bridge = bridge
         threading.Thread(
             target=self._balance_worker,
@@ -459,9 +549,10 @@ class PetApp:
 
     def _create_ui(self, character_id: str) -> None:
         lib = self._create_library(character_id)
-        win = PetWindow(lib, self.config)
+        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
+        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
         win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
         win.on_show_balance = self.show_balance if self.enable_chat else None
         win.on_check_update = self.check_update
@@ -473,6 +564,13 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
+        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
+        # 首次点击 Q 弹卡顿。
+        warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
         win.show()
 
         tray = self._build_tray(win)
@@ -513,9 +611,15 @@ class PetApp:
         logging.info('切换角色: %s -> %s', current, character_id)
 
         # 用新库创建新窗口/托盘，旧对象延迟销毁
-        win = PetWindow(lib, self.config)
+        old_win = self.win
+        old_win.detach_collision_session()
+        self.collision_ipc.stop()
+        self.collision_ipc = CollisionIpcSession(self.config, self)
+        self.collision_ipc.start()
+        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
+        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
         win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
         win.on_show_balance = self.show_balance if self.enable_chat else None
         win.on_check_update = self.check_update
@@ -527,11 +631,17 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
+        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
+        # 首次点击 Q 弹卡顿。
+        warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
         win.show()
 
         tray = self._build_tray(win)
 
-        old_win = self.win
         old_tray = self.tray
         self.win = win
         self.tray = tray
@@ -547,6 +657,8 @@ class PetApp:
                 if chat_window is not None:
                     chat_window.set_pet_window(self.win)
                     chat_window.switch_character(character_id)
+        if getattr(self, "island", None) is not None:
+            self.island.refresh_from_config()
 
     def open_chat(self) -> None:
         """Open the configured chat UI; menus only need this stable dispatcher."""
@@ -554,6 +666,21 @@ class PetApp:
             self.open_legacy_chat()
         else:
             self.open_modern_chat()
+
+    def open_quick_chat(self) -> None:
+        """打开快速对话气泡；与完整聊天窗共用会话历史。"""
+        if not self.enable_chat or self.win is None:
+            return
+        from .quick_chat import QuickChatBubble
+
+        if self.quick_chat is None:
+            self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
+            self.quick_chat.open_chat_callback = self.open_chat
+        else:
+            self.quick_chat.pet_window = self.win
+            self.quick_chat.settings = self.config.chat_settings()
+            self.quick_chat.session = self.quick_chat._get_session()
+        self.quick_chat.show_for_pet(self.win)
 
     def open_legacy_chat(self) -> None:
         if not self.enable_chat or self.win is None:
@@ -724,12 +851,15 @@ class PetApp:
         # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
         if self.win is not None:
             self.win.refresh_pet_settings()
+        self._sync_dynamic_island()
         self._apply_balance_timer()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
 
     def _notify_pet_hidden(self) -> None:
         """用户主动隐藏桌宠后弹托盘提示，指明恢复入口。"""
+        if getattr(self, "island", None) is not None:
+            self.island.set_pet_visible(False)
         if self.tray is None:
             return
         self.tray.showMessage(
@@ -747,14 +877,33 @@ class PetApp:
                 win.hide()
             else:
                 win.show()
+            if getattr(self, "island", None) is not None:
+                self.island.set_pet_visible(win.isVisible())
 
         menu = QMenu()
         # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），托盘菜单弹出前
         # 先隐藏气泡，避免气泡盖住菜单
         menu.aboutToShow.connect(lambda: win._speech_bubble.hide())
         menu.addAction('显示 / 隐藏', toggle_visible)
+
+        island_action = menu.addAction('灵动岛')
+        island_action.setCheckable(True)
+        island_action.setChecked(bool(
+            self.config.get("dynamic_island", {}).get("enabled", True)
+        ))
+
+        def toggle_island(enabled: bool) -> None:
+            island_cfg = dict(self.config.get("dynamic_island", {}) or {})
+            island_cfg["enabled"] = bool(enabled)
+            self.config.set("dynamic_island", island_cfg)
+            self.config.save()
+            self._sync_dynamic_island()
+
+        island_action.toggled.connect(toggle_island)
+
         if self.enable_chat:
             menu.addAction('AI 对话', self.open_chat)
+            menu.addAction('快速对话（气泡）', self.open_quick_chat)
             menu.addAction('AI 设置', self.open_chat_settings)
         menu.addAction('桌宠设置', self.open_modern_settings)
 
@@ -783,6 +932,9 @@ class PetApp:
             #（托盘菜单在 _build_tray 时一次性构建，不复用则不刷新会过期）
             mouse_through.setChecked(bool(self.config.get('mouse_through', False)))
             auto.setChecked(autostart_mod.is_enabled())
+            island_action.setChecked(bool(
+                self.config.get("dynamic_island", {}).get("enabled", True)
+            ))
 
         menu.aboutToShow.connect(sync_tray_checks)
 
@@ -835,40 +987,109 @@ def _mac_set_dock_icon_visible(visible: bool) -> None:
         pass
 
 
+def _default_xcb_platform_on_wayland() -> None:
+    """Linux Wayland 会话下把 Qt 平台插件默认设为 xcb（XWayland）。
+
+    Wayland 协议不允许客户端自行移动顶层窗口，桌宠拖动依赖的
+    QWidget.move() 会被合成器静默忽略（表现为无法拖动）；透明无边框
+    窗口在原生 wayland 插件下还存在重绘残留（拖影）。须在创建
+    QApplication 之前调用。用户显式设置 QT_QPA_PLATFORM 时尊重其选择。
+    """
+    if not sys.platform.startswith("linux"):
+        return
+    if "QT_QPA_PLATFORM" in os.environ:
+        return
+    if os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland":
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
+    _default_xcb_platform_on_wayland()
     argv = list(argv if argv is not None else sys.argv)
-    instance_id = None
+    preferred_slot = None
+
     if "--instance" in argv:
-        index = argv.index("--instance")
+        logging.error("参数 --instance 已弃用并移除，多开实例请改用 --slot <0-127>")
+        return 1
+
+    if "--slot" in argv:
+        index = argv.index("--slot")
         if index + 1 < len(argv):
-            instance_id = str(argv[index + 1])
+            try:
+                preferred_slot = int(argv[index + 1])
+                if preferred_slot < 0 or preferred_slot > 127:
+                    logging.error("无效的 --slot 参数 (必须在 0~127 范围内): %s", argv[index + 1])
+                    return 1
+            except ValueError:
+                logging.error("无效的 --slot 参数: %s", argv[index + 1])
+                return 1
+        else:
+            logging.error("缺少 --slot 参数值")
+            return 1
+
     app = QApplication(argv)
     app.setApplicationName(APP_DIR_NAME)
     app.setQuitOnLastWindowClosed(False)
 
-    config = Config(instance_id=instance_id)
-    _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
-    _setup_logging(config)
-    try:
-        source_path = Path(__file__).resolve()
-        source_mtime = source_path.stat().st_mtime
-    except Exception:
-        source_path, source_mtime = "unknown", 0
-    logging.info('dsh-pet-standalone 启动 runtime_version=%s app_version=%s source=%s executable=%s build_mtime=%s',
-                 'pet-runtime-2026-09-01.1', getattr(updater, 'APP_VERSION', 'unknown'), source_path,
-                 sys.executable, source_mtime)
-    _cleanup_stale_runtime_dirs()
+    # 确定配置根目录
+    config_dir = _default_base() / APP_DIR_NAME
 
-    controller = PetApp(app, config, enable_chat=enable_chat)
-    try:
-        controller.start()
-    except Exception as exc:
-        logging.exception('启动失败')
-        _show_startup_error('dsh-pet-standalone', str(exc))
-        return 1
+    # 执行槽位竞争取得排他锁
+    slot_handle = None
+    slot_id = None
 
-    logging.info('进入事件循环')
-    return app.exec()
+    try:
+        try:
+            slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config_dir, preferred_slot=preferred_slot)
+        except Exception as exc:
+            logging.exception("获取桌宠槽位锁失败")
+            _show_startup_error("dsh-pet-standalone", str(exc))
+            return 1
+
+        instance_id = slot_manager_mod.slot_to_instance_id(slot_id)
+        os.environ["DSH_PET_INSTANCE"] = instance_id
+
+        # 迁移旧 spawn 实例（主槽或无并发运行旧实例时触发）
+        if slot_id == 0:
+            slot_manager_mod.migrate_legacy_spawns(config_dir)
+
+        config = Config(instance_id=instance_id)
+        _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
+        _setup_logging(config)
+        try:
+            source_path = Path(__file__).resolve()
+            source_mtime = source_path.stat().st_mtime
+        except Exception:
+            source_path, source_mtime = "unknown", 0
+        logging.info(
+            "dsh-pet-standalone 启动 slot=%s instance=%s runtime_version=%s "
+            "app_version=%s source=%s executable=%s build_mtime=%s",
+            slot_id, instance_id, "pet-runtime-2026-09-01.1",
+            getattr(updater, "APP_VERSION", "unknown"), source_path,
+            sys.executable, source_mtime,
+        )
+        _cleanup_stale_runtime_dirs()
+        stale_removed = autostart_mod.cleanup_stale_entries()
+        if stale_removed:
+            logging.info("已清理 %d 个指向不存在路径的开机自启项", stale_removed)
+
+        controller = PetApp(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id)
+        try:
+            controller.start()
+        except Exception as exc:
+            logging.exception("启动失败")
+            _show_startup_error("dsh-pet-standalone", str(exc))
+            return 1
+
+        logging.info("进入事件循环")
+        return app.exec()
+    finally:
+        if slot_handle is not None:
+            try:
+                slot_manager_mod._unlock_file(slot_handle)
+            except Exception:
+                pass
+            slot_handle = None
 
 
 if __name__ == '__main__':

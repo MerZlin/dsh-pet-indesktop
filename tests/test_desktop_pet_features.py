@@ -1143,7 +1143,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 188
     assert isinstance(dialog.sidebar, QListWidget)
     assert isinstance(dialog.pages, QStackedWidget)
-    expected_pages = ["常规", "桌宠行为", "外观", "快捷启动"]
+    expected_pages = ["常规", "灵动岛", "桌宠行为", "外观", "快捷启动"]
     if sys.platform == "win32":
         expected_pages.append("主动识屏")  # 主动识屏设置页仅 Windows + 有聊天能力时挂载
     expected_pages.append("AI 设置")
@@ -1200,18 +1200,18 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         return next(index for index in range(dialog.pages.count()) if dialog.pages.widget(index).isAncestorOf(row))
 
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_autostart")) == 0
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 1
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 1
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 3
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 3
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == (
-        5 if sys.platform == "win32" else 4  # AI 设置页索引：Windows 上「主动识屏」占 index 4
+        6 if sys.platform == "win32" else 5  # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
     )
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
     dialog.show()
-    dialog.pages.widget(1).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
+    dialog.pages.widget(2).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
     app.processEvents()
     label = texts_row.findChild(settings_mod.QLabel, "settingLabel")
     hint = texts_row.findChild(settings_mod.QLabel, "settingHint")
@@ -1473,8 +1473,8 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     dialog.search_edit.setFocus()
     dialog.search_edit.setText("API 地址")
     app.processEvents()
-    # AI 设置页索引：Windows 上「主动识屏」页占位 index 4，其余平台为 4
-    assert dialog.sidebar.currentRow() == (5 if sys.platform == "win32" else 4)
+    # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
+    assert dialog.sidebar.currentRow() == (6 if sys.platform == "win32" else 5)
     api_row = dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")
     assert api_row.property("searchMatch") is True
     QTest.keyClick(dialog.search_edit, Qt.Key.Key_Return)
@@ -1767,6 +1767,32 @@ def test_representative_animation_image_is_cached_on_pet(monkeypatch):
     assert calls == ["/tmp/cached-animation.webm"]
 
 
+def test_representative_animation_decode_is_shared_across_pets(monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from PySide6.QtGui import QImage
+
+    import pet.animation_thumbnail as thumbnail
+
+    path = tmp_path / "shared.webm"
+    path.write_bytes(b"fixture")
+    thumbnail._image_cache.clear()
+    thumbnail._inflight.clear()
+    calls = []
+
+    def decode(_path):
+        calls.append(1)
+        return QImage(8, 8, QImage.Format.Format_ARGB32)
+
+    monkeypatch.setattr(thumbnail, "_decode_representative_frame", decode)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        images = list(pool.map(thumbnail.decode_representative_frame, [path] * 4))
+
+    assert len(calls) == 1
+    assert all(not image.isNull() for image in images)
+    assert thumbnail.decode_representative_frame(tmp_path / "missing.webm").isNull()
+
+
 def test_long_submenus_enable_qt_scrolling():
     from PySide6.QtWidgets import QApplication, QMenu, QStyle
 
@@ -1784,7 +1810,7 @@ def test_long_submenus_enable_qt_scrolling():
 def test_visible_animation_submenu_does_not_relayout_when_thumbnail_finishes():
     import time
 
-    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -1819,7 +1845,9 @@ def test_visible_animation_submenu_does_not_relayout_when_thumbnail_finishes():
     assert submenu.actions() == [], "根菜单构建不应同步填充动画分类动作"
     submenu.aboutToShow.emit()
     placeholder_key = submenu.actions()[0].icon().cacheKey()
-    submenu.popup(QPoint(20, 20))
+    # popup() 在无交互桌面的测试环境中可能不会进入可见状态，
+    # 改用 show() 稳定模拟“菜单已展开”，从而覆盖可见时不重排图标的保护逻辑。
+    submenu.show()
     deadline = time.monotonic() + 1.0
     while not pet.cached and time.monotonic() < deadline:
         app.processEvents()
@@ -2357,3 +2385,19 @@ def test_external_character_dirs_dedupes_base_dir(tmp_path, monkeypatch):
     dirs = catalog_mod.external_character_dirs()
     base = root / "dsh-pet-standalone" / "characters"
     assert dirs.count(base) == 1
+def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path):
+    """回归：用户显式配置的外部图片目录被删后，不再回退内置彩蛋池
+    （用户删目录的意图就是不要再看图）。"""
+    from pet.window import _resolve_self_talk_image_dir
+
+    gone = tmp_path / "deleted_dir"
+    assert _resolve_self_talk_image_dir(str(gone)) == ""
+
+    existing = tmp_path / "pics"
+    existing.mkdir()
+    assert _resolve_self_talk_image_dir(str(existing)) == str(existing)
+
+    # 相对路径（内置 assets）仍走既有回退解析
+    assert _resolve_self_talk_image_dir("") == ""
+
+

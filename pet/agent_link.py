@@ -34,6 +34,8 @@ from typing import Any, Callable
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWidgets import QMessageBox
 
+from .click_sound import play_sound, resolve_builtin_sound
+
 from .persona_phrases import PhrasePicker
 
 log = logging.getLogger("dsh-pet-standalone")
@@ -1266,378 +1268,28 @@ class OpenCodeMonitor(BaseAgentMonitor):
                 self.activity.emit("opencode", tool)
 
 
-# ----------------------------------------------------------------------
-# Codex（ChatGPT App 内融合）app-server 事件监听器
-# ----------------------------------------------------------------------
+class CustomAgentMonitor(BaseAgentMonitor):
+    """自定义联动 Agent 监视器（agent_link.custom_agents 配置驱动）。
 
-class CodexMonitor(QObject):
-    """ChatGPT App 内新版 Codex（app-server）事件监听器。
+    只读监听用户指定路径的统一协议 JSONL 事件文件（docs/AGENT_LINK_PROTOCOL.md §4）：
+    不创建目录、不写任何外部位置、无需授权弹窗；文件不存在时静默空转等待，
+    出现后自动开始增量读取（backfill 防护跳过历史内容）。"""
 
-    数据源：Codex app-server 的本地 WebSocket 事件流（JSON-RPC 风格
-    ServerNotification）。app-server 是 Codex 融合进 ChatGPT App 后的本机
-    服务，通过 healthz 探测端口，WebSocket 订阅 thread/item/approval 事件。
-
-    事件 → 统一状态（词汇与 BaseAgentMonitor 一致）：
-      - thread/started / turn/started → thinking
-      - item/started → working（可带 tool 名用于过程汇报）
-      - item/completed / thread/completed / turn/completed → idle
-      - item/error / error / interrupted → error / idle
-      - approval/requested / CommandApprovalRequested / PermissionsApprovalRequested
-        → 发 approval_requested 信号（常驻气泡）
-      - RequestUserInput / question/requested → 发 question_requested 信号
-      - approval/resolved / question/resolved → 发 resolved 信号
-
-    连接细节（需真机验证）：
-    - 端口：通过环境变量 CODEX_APP_SERVER_PORT / CODEX_APP_SERVER_WS_URL 配置，
-      或扫描候选端口（默认 4317, 3456）的 healthz 端点自动发现。
-    - WebSocket 路径：/events（官方 app-server 文档约定，可降级）。
-    - 鉴权：无（本机回环，与 DSH 的 /api/respond 同模式）。
-    """
-
-    state_changed = Signal(str, str)           # (agent_key, state)
-    activity = Signal(str, str)                 # (agent_key, tool_name)
-    approval_requested = Signal(str, object)    # (agent_key, payload)
-    approval_resolved = Signal(str, object)     # (agent_key, payload)
-    question_requested = Signal(str, object)    # (agent_key, payload)
-    question_resolved = Signal(str, object)     # (agent_key, payload)
-    # 硬失败（execution/failed）：DSH 已决定本轮不再继续，不经行为分析直接提醒。
-    # Codex app-server 协议暂无此事件，预留信号保证 AgentLinkManager 统一连接。
-    execution_failed = Signal(str, object)      # (agent_key, payload)
-
-    # ---- 端点发现（动态，不写死端口）----
-    # Codex app-server 没有固定事件端口：ChatGPT Desktop 每次启动都动态分配
-    # loopback 端口（甚至可能是 stdio/Named Pipe）。发现策略：
-    #   1. 查 ChatGPT.exe 全部 PID
-    #   2. 查这些 PID 的 127.0.0.1/::1 LISTEN socket（Get-NetTCPConnection）
-    #   3. 对候选端口逐个试连 WebSocket（/events、/ws、/），连上即锁定
-    #   4. ChatGPT PID 变化 / socket 断开 → 重新发现
-    # 显式 ws_url / 环境变量始终是最高优先级，可手动指定。
-    WS_PATHS = ("/events", "/ws", "/")
-    # 发现轮询间隔（PID 变化 / 新端口出现时才能感知）
-    _DISCOVER_MS = 15000
-    # 连接超时/重连间隔
-    _RECONNECT_BASE_MS = 2000
-    _RECONNECT_MAX_MS = 30000
-
-    def __init__(self, config_dir: Path, parent: QObject | None = None,
-                 *, ws_url: str | None = None) -> None:
-        super().__init__(parent)
-        self.agent_key = "codex"
-        self.config_dir = Path(config_dir)
-        self._ws_url = ws_url  # 显式指定时跳过端点发现
-        self._running = False
-        self._paused = False
-        self._ws: Any | None = None
-        self._connect_attempts = 0
-        self._reconnect_timer = QTimer(self)
-        self._reconnect_timer.timeout.connect(self._connect)
-        self._discover_timer = QTimer(self)
-        self._discover_timer.setInterval(self._DISCOVER_MS)
-        self._discover_timer.timeout.connect(self._discover)
-        # 候选端点（按优先级排序的 ws:// URL 列表）+ 当前尝试下标
-        self._candidate_urls: list[str] = []
-        self._candidate_idx = 0
-        # 已锁定端点（PID + URL 缓存）：PID 不变且连接正常则继续用
-        self._found_pid: int | None = None
-        self._found_url: str | None = None
-
-    # ---- 生命周期 ----
-    def is_running(self) -> bool:
-        return self._running and not self._paused and self._ws is not None
+    def __init__(self, agent_key: str, config_dir: Path, events_path: str, parent=None) -> None:
+        super().__init__(agent_key, config_dir, parent)
+        self.events_file = Path(events_path).expanduser()
+        self.events_dir = self.events_file.parent
+        self._tailer = ByteOffsetTailer(self.events_file)
 
     def start(self) -> None:
+        # 覆写基类 start：基类会 mkdir 事件目录，这里只读监听外部文件，
+        # 不替用户在任意路径创建目录
         self._running = True
         self._paused = False
-        self._connect_attempts = 0
-        self._schedule_connect()
-        self._discover_timer.start()
-        log.info("Agent 监视器 [codex] 已启动")
-
-    def stop(self) -> None:
-        self._running = False
-        self._paused = False
-        self._reconnect_timer.stop()
-        self._discover_timer.stop()
-        self._close_ws()
-        log.info("Agent 监视器 [codex] 已停止")
-
-    def pause(self) -> None:
-        if self._running:
-            self._paused = True
-            self._reconnect_timer.stop()
-            self._discover_timer.stop()
-            self._close_ws()
-
-    def resume(self) -> None:
-        if self._running and self._paused:
-            self._paused = False
-            self._connect_attempts = 0
-            self._schedule_connect()
-            self._discover_timer.start()
-
-    # ---- 连接管理 ----
-    def _schedule_connect(self) -> None:
-        """立即或安排在下次重连。"""
-        if self._reconnect_timer.isActive():
-            return
-        self._connect()
-
-    def _connect(self) -> None:
-        """尝试连接 WebSocket：从候选 URL 列表逐个试连，首个连上即锁定端点。"""
-        if self._paused or not self._running:
-            return
-        self._reconnect_timer.stop()
-        url = self._resolve_ws_url()
-        if not url:
-            self._schedule_reconnect()
-            return
-        try:
-            from PySide6.QtWebSockets import QWebSocket
-            ws = QWebSocket(parent=self)
-            ws.connected.connect(self._on_connected)
-            ws.textMessageReceived.connect(self._on_text)
-            ws.disconnected.connect(self._on_disconnected)
-            ws.errorOccurred.connect(self._on_error)
-            self._ws = ws
-            ws.openUrl(QUrl(url))
-            self._connect_attempts += 1
-        except Exception as exc:
-            log.debug("Codex WebSocket 连接失败 %s: %s", url, exc)
-            self._on_connect_failed()
-
-    def _close_ws(self) -> None:
-        if self._ws is not None:
-            try:
-                self._ws.connected.disconnect()
-                self._ws.textMessageReceived.disconnect()
-                self._ws.disconnected.disconnect()
-                self._ws.errorOccurred.disconnect()
-            except Exception:
-                pass
-            try:
-                self._ws.close()
-            except Exception:
-                pass
-            self._ws = None
-        self._connect_attempts = 0
-
-    def _schedule_reconnect(self) -> None:
-        """指数退避重连。"""
-        if self._paused or not self._running:
-            return
-        delay = min(
-            self._RECONNECT_BASE_MS * (2 ** min(self._connect_attempts, 5)),
-            self._RECONNECT_MAX_MS,
-        )
-        self._reconnect_timer.setInterval(delay)
-        self._reconnect_timer.start()
-
-    def _resolve_ws_url(self) -> str | None:
-        """确定要尝试的 WebSocket URL。
-
-        优先级：显式 ws_url > 环境变量 CODEX_APP_SERVER_WS_URL >
-        环境变量 CODEX_APP_SERVER_PORT > 已锁定端点 > 候选列表下一项。
-        """
-        if self._ws_url:
-            return self._ws_url
-        env_url = os.environ.get("CODEX_APP_SERVER_WS_URL")
-        if env_url:
-            return env_url
-        env_port = os.environ.get("CODEX_APP_SERVER_PORT")
-        if env_port:
-            try:
-                return f"ws://127.0.0.1:{int(env_port)}/events"
-            except (ValueError, TypeError):
-                pass
-        if self._found_url:
-            return self._found_url
-        if self._candidate_urls:
-            if self._candidate_idx >= len(self._candidate_urls):
-                self._candidate_idx = 0
-            return self._candidate_urls[self._candidate_idx]
-        return None  # 端点发现尚未找到
-
-    @staticmethod
-    def _chatgpt_pids() -> list[int]:
-        """返回正在运行的 ChatGPT.exe PID 列表（Windows）。"""
-        if os.name != "nt":
-            return []
-        try:
-            import subprocess
-            out = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq ChatGPT.exe", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=3,
-            ).stdout
-            pids: list[int] = []
-            for line in out.splitlines():
-                # CSV: "ChatGPT.exe","1234","Console","1","N/A"
-                parts = line.strip().split('","')
-                if len(parts) >= 2:
-                    try:
-                        pids.append(int(parts[1].strip('"')))
-                    except (ValueError, TypeError):
-                        continue
-            return pids
-        except Exception:
-            return []
-
-    def _listen_ports_for_pids(self, pids: list[int]) -> list[int]:
-        """查这些 PID 的 127.0.0.1/::1 LISTEN 端口（Windows 一次性 PowerShell）。
-
-        不用全端口扫描：直接问 OS 这些进程正在 listen 的 loopback 端口。
-        """
-        if os.name != "nt" or not pids:
-            return []
-        try:
-            import subprocess
-            pid_list = ",".join(str(p) for p in pids)
-            ps = (
-                "$pids = @(" + pid_list + "); "
-                "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
-                "Where-Object { $_.OwningProcess -in $pids -and "
-                "  ($_.LocalAddress -eq '127.0.0.1' -or $_.LocalAddress -eq '::1') } | "
-                "Select-Object -ExpandProperty LocalPort"
-            )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
-                capture_output=True, text=True, timeout=5,
-            ).stdout
-            ports: list[int] = []
-            for token in out.split():
-                try:
-                    p = int(token)
-                    if 0 < p < 65536:
-                        ports.append(p)
-                except (ValueError, TypeError):
-                    continue
-            return sorted(set(ports))
-        except Exception:
-            return []
-
-    def _discover(self) -> None:
-        """动态发现 ChatGPT 的 loopback 桥接端点（PID → LISTEN 端口 → 候选 URL）。
-
-        只在未锁定或候选为空时执行；发现后按 WS_PATHS 构造候选 URL，
-        由 _connect 逐个试连。ChatGPT PID 变化时强制重新发现。"""
-        if self._paused or not self._running:
-            return
-        if self._ws_url:
-            return  # 显式端点不扫描
-        pids = self._chatgpt_pids()
-        if not pids:
-            # ChatGPT 未运行：清空候选（下次发现重新来）
-            self._candidate_urls = []
-            self._found_pid = None
-            self._found_url = None
-            return
-        # PID 变化 → 强制重新发现（新实例可能换了端口）
-        if self._found_pid is not None and self._found_pid not in pids:
-            log.info("ChatGPT PID 变化，重新发现 Codex 端点")
-            self._found_pid = None
-            self._found_url = None
-            self._candidate_urls = []
-        if self._found_url:
-            return  # 已锁定且 PID 未变
-        ports = self._listen_ports_for_pids(pids)
-        if not ports:
-            return
-        urls: list[str] = []
-        for port in ports:
-            for path in self.WS_PATHS:
-                urls.append(f"ws://127.0.0.1:{port}{path}")
-        self._candidate_urls = urls
-        self._candidate_idx = 0
-        self._found_pid = pids[0]
-        log.info("Codex 端点候选: %s", ", ".join(urls[:6]) + ("…" if len(urls) > 6 else ""))
-        self._connect()
-
-    # ---- 事件处理 ----
-    def _on_connect_failed(self) -> None:
-        """当前候选连接失败：试下一个候选 URL；全部失败则指数退避重连。"""
-        if self._paused or not self._running:
-            return
-        if self._candidate_urls:
-            self._candidate_idx += 1
-            if self._candidate_idx < len(self._candidate_urls):
-                # 立即试下一个候选（同一发现周期内不等待退避）
-                QTimer.singleShot(150, self._connect)
-                return
-            self._candidate_idx = 0
-        self._schedule_reconnect()
-
-    def _on_connected(self) -> None:
-        """WebSocket 已连接：锁定当前候选为已发现端点。"""
-        self._connect_attempts = 0
-        url = self._resolve_ws_url()
-        if url and self._found_pid is not None:
-            self._found_url = url
-        self._discover_timer.stop()  # 连上后停止端点发现
-        log.info("Codex 端点已连接: %s", url or "?")
-
-    def _on_disconnected(self) -> None:
-        """WebSocket 断开：若已锁定端点则失效，重新发现并试下一个候选。"""
-        self._ws = None
-        if self._running and not self._paused:
-            log.debug("Codex WebSocket 断开，重新发现端点")
-            self._found_url = None
-            self._candidate_idx = 0
-            self._discover_timer.start()  # 恢复端点发现
-            self._schedule_reconnect()
-
-    def _on_error(self, error: Any) -> None:
-        """WebSocket 错误：当前候选失败，试下一个。"""
-        log.debug("Codex WebSocket 错误: %s", error)
-        self._on_connect_failed()
-
-    def _on_text(self, message: str) -> None:
-        """收到 WebSocket 文本消息（JSON-RPC 风格 ServerNotification）。
-
-        消息格式：{"method": "item/started", "params": {...}}
-        或：{"type": "server-request", "payload": {...}}（兼容 DSH mux 风格）
-        """
-        try:
-            data = json.loads(message)
-            if not isinstance(data, dict):
-                return
-        except (ValueError, TypeError):
-            return
-
-        # 兼容 DSH 的 mux server-request 风格（部分桥接插件复用）
-        from_ = data.get("from")
-        if from_ == "codex" or data.get("source") == "codex":
-            data = data.get("data") or data
-            if not isinstance(data, dict):
-                return
-
-        method = str(data.get("method") or data.get("type") or "").strip()
-        params = data.get("params") or data.get("payload") or {}
-        if not isinstance(params, dict):
-            params = {}
-
-        # 1) 审批/问题交互事件（发专用信号，不进状态机）
-        if method in CODEX_APPROVAL_EVENTS:
-            if method in ("approval/resolved",):
-                self.approval_resolved.emit(self.agent_key, params)
-            else:
-                self.approval_requested.emit(self.agent_key, params)
-            return
-        if method in CODEX_QUESTION_EVENTS:
-            if method in ("question/resolved",):
-                self.question_resolved.emit(self.agent_key, params)
-            else:
-                self.question_requested.emit(self.agent_key, params)
-            return
-
-        # 2) 工具名（过程汇报用）
-        tool = codex_event_tool(method, params)
-        if tool:
-            self.activity.emit(self.agent_key, tool)
-
-        # 3) 统一状态
-        state = codex_event_state(method)
-        if not state:
-            return  # 不认识的 method：忽略，绝不默认 working
-        self.state_changed.emit(self.agent_key, state)
+        self._tailer.reset()
+        if not self._timer.isActive():
+            self._timer.start()
+        log.info("Agent 监视器 [%s] 已启动 (%s)", self.agent_key, self.events_file)
 
 
 # ----------------------------------------------------------------------
@@ -1647,7 +1299,7 @@ class CodexMonitor(QObject):
 class AgentLinkManager(QObject):
     """多 Agent 联动总调度管理器。
 
-    挂载于 PetWindow，持有 5 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
+    挂载于 PetWindow，持有 4 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
     """
 
     install_finished = Signal(str, bool, str)  # (agent_key, ok, message)
@@ -1656,10 +1308,7 @@ class AgentLinkManager(QObject):
     _exploration_control_result = Signal(str, str, bool, str)  # session, operation, ok, detail
 
     # 联动气泡展示名
-    AGENT_NAMES = {
-        "dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor",
-        "opencode": "OpenCode", "codex": "Codex",
-    }
+    AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode"}
     # 过程汇报：工具名 → 用户可读文案（不展示原始命令/路径）
     TOOL_LABELS = {
         "read": "正在读文件", "write": "正在写文件", "edit": "正在改代码",
@@ -1697,6 +1346,9 @@ class AgentLinkManager(QObject):
         self._done_pending: dict[str, QTimer] = {}   # agent → 稳定确认定时器
         self._done_cooldown: dict[str, float] = {}   # agent → 上次完成气泡时刻
         self._saw_alert: set[str] = set()            # busy 周期内出现过 attention/error 的 Agent
+        self._saw_error: set[str] = set()            # busy 周期内真正出现过 error 的 Agent
+        self._sound_last_at: dict[str, float] = {}
+        self._sound_last_event: dict[str, tuple[str, float]] = {}
         self._link_seq = 0                           # 联动动作轮换计数
         # 过程汇报气泡：agent → (上次文案, 时刻)；全局最后一条时刻
         self._last_activity: dict[str, tuple[str, float]] = {}
@@ -1719,8 +1371,20 @@ class AgentLinkManager(QObject):
             "claude": ClaudeCodeMonitor("claude", self.config_dir, self),
             "cursor": CursorMonitor(self.config_dir, self),
             "opencode": OpenCodeMonitor(self.config_dir, self),
-            "codex": CodexMonitor(self.config_dir, self),
         }
+        # 自定义联动 Agent：配置驱动的只读监视器（key/path 已在 config 清洗时
+        # 保证合法唯一）；显示名合并进实例级 agent_names，类级 AGENT_NAMES
+        # 保持仅内置（modern_settings_dialog 等按内置枚举处不受影响）。
+        # 注意：运行中新增/修改 custom_agents 需重启桌宠生效。
+        self.agent_names: dict[str, str] = dict(self.AGENT_NAMES)
+        for item in (self.cfg.get("agent_link", {}).get("custom_agents") or []):
+            key = str(item.get("key") or "")
+            if not key or key in self.monitors:
+                continue
+            self.monitors[key] = CustomAgentMonitor(
+                key, self.config_dir, str(item.get("path") or ""), self,
+            )
+            self.agent_names[key] = str(item.get("name") or key)
 
         # 卡住检测（stuck_detector）：DSH 专属，消费桥接增强记录推断「人工介入更快」。
         from .stuck_detector import StuckDetector
@@ -1802,43 +1466,30 @@ class AgentLinkManager(QObject):
 
     def _warn_if_agent_absent(self, agent_key: str) -> None:
         """开启了联动但本机没装对应 Agent 时给用户提示（不然勾了永远没反应）。"""
+        # 自定义 Agent：事件文件尚未出现时提示路径，避免"勾了没反应"的困惑
+        mon = self.monitors.get(agent_key)
+        if isinstance(mon, CustomAgentMonitor):
+            if mon.events_file.exists() or not hasattr(self.win, "show_bubble"):
+                return
+            self.win.show_bubble(
+                f"已开启 {self.agent_names.get(agent_key, agent_key)} 联动监听，"
+                f"但事件文件还没出现——{mon.events_file} 有事件我才能感知到哦",
+                duration_ms=6000,
+            )
+            return
         hints = {
             "cursor": ("Cursor", Path.home() / ".cursor" / "projects"),
             "opencode": ("OpenCode", Path.home() / ".local" / "share" / "opencode" / "opencode.db"),
-            "codex": ("Codex", None),
         }
         item = hints.get(agent_key)
         if not item:
             return
         name, marker = item
-        # Codex 融合进 ChatGPT 桌面 App：无独立安装目录可探测，用运行中的进程判断
-        if agent_key == "codex":
-            if not self._codex_app_running() and hasattr(self.win, "show_bubble"):
-                self.win.show_bubble(
-                    self._dialogue("agent.missing", f"已开启 {name} 联动监听，但没检测到 ChatGPT 桌面端在运行——打开 ChatGPT App 我才能感知到哦", name=name),
-                    duration_ms=6000,
-                )
-            return
         if not marker.exists() and hasattr(self.win, "show_bubble"):
             self.win.show_bubble(
                 self._dialogue("agent.missing", f"已开启 {name} 联动监听，但没检测到本机安装 {name}——装了它我才能感知到哦", name=name),
                 duration_ms=6000,
             )
-
-    @staticmethod
-    def _codex_app_running() -> bool:
-        """探测 ChatGPT 桌面端（内含 Codex app-server）进程是否在运行。"""
-        if os.name != "nt":
-            return False
-        try:
-            import subprocess
-            out = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq ChatGPT.exe", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=3,
-            ).stdout
-            return "ChatGPT.exe" in out
-        except Exception:
-            return False
 
     def _on_install_finished(self, agent_key: str, ok: bool, msg: str) -> None:
         """安装完成：成功则正式开启联动，失败则提示。"""
@@ -1963,6 +1614,7 @@ class AgentLinkManager(QObject):
             self.win._pending_link_anim = None
         for key in list(self._done_pending):
             self._cancel_done_check(key)
+        self._sound_last_event.clear()
 
     def resume(self) -> None:
         """桌宠恢复显示时恢复活动的监视器。"""
@@ -1996,11 +1648,19 @@ class AgentLinkManager(QObject):
         # 不能用 _last_applied 判定完成——节流会丢掉紧跟的 idle，导致完成通知丢失。
         prev_raw = self._last_raw.get(agent_key)
         self._last_raw[agent_key] = state
+        if state in self._BUSY_STATES and prev_raw not in self._BUSY_STATES:
+            self._emit_sound("start", agent_key)
+        elif state == "error" and prev_raw != "error":
+            self._emit_sound("error", agent_key)
         if state in self._BUSY_STATES:
             self._cancel_done_check(agent_key)
             self._saw_alert.discard(agent_key)
+            if prev_raw != "error":
+                self._saw_error.discard(agent_key)
         elif state in ("attention", "error") and prev_raw in self._BUSY_STATES:
             self._saw_alert.add(agent_key)
+            if state == "error":
+                self._saw_error.add(agent_key)
             # Claude 的回合结束信号是 Stop→attention 而非 idle：busy 后的
             # attention/error 同样进入完成确认（800ms 内回忙则取消——例如
             # SubagentStop 后主 Agent 继续干活、工具报错后重试）。
@@ -2088,11 +1748,9 @@ class AgentLinkManager(QObject):
     # （联动气泡已在汇报进度，识屏再评一句就是重复打扰）。
     # opencode/cursor 有独立桌面进程按进程名识别；dsh 跑在浏览器/应用窗口里，
     # 按窗口标题识别；claude 在终端里标题不可控，不映射。
-    # codex 融合进 ChatGPT 桌面 App：按 ChatGPT.exe 进程名识别。
     AGENT_PROCESS_HINTS = {
         "opencode": ("opencode.exe",),
         "cursor": ("cursor.exe",),
-        "codex": ("chatgpt.exe",),
     }
     AGENT_TITLE_HINTS = {
         "dsh": ("deepseek harness",),
@@ -2130,16 +1788,27 @@ class AgentLinkManager(QObject):
         """thinking 气泡文案：按 Agent 自定义 > 旧全局自定义 > 按 Agent 默认。"""
         agent_cfg = self.cfg.get("agent_link", {})
         custom = (agent_cfg.get("thinking_texts") or {}).get(agent_key, "").strip()
-        # 兼容旧的全局 thinking_text 字段（设置页保存时已自动迁移）
+
         if not custom:
             custom = str(agent_cfg.get("thinking_text", "") or "").strip()
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+
+        name = self.agent_names.get(
+            agent_key,
+            self.AGENT_NAMES.get(agent_key, agent_key),
+        )
+
         if custom:
             return custom.replace("{name}", name)
+
         if agent_key in self._THINKING_DEFAULTS:
             fallback = self._THINKING_DEFAULTS[agent_key]
             return self._dialogue("thinking", fallback, name=name)
-        return self._dialogue("thinking", f"{name} 正在深度烧烤……", name=name)
+
+        return self._dialogue(
+            "thinking",
+            f"{name} 正在深度烧烤……",
+            name=name,
+        )
 
     def _maybe_notify_start(self, agent_key: str, prev_raw: str | None, state: str = "working") -> None:
         """开始干活气泡：仅「非 busy → busy」时提示（thinking↔working 互跳不弹）。
@@ -2149,7 +1818,7 @@ class AgentLinkManager(QObject):
             return
         if prev_raw in self._BUSY_STATES:
             return
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        name = self.agent_names.get(agent_key, agent_key)
         if state == "thinking":
             self._show_link_bubble(self._thinking_text(agent_key), important=False, duration_ms=3000)
         else:
@@ -2176,7 +1845,7 @@ class AgentLinkManager(QObject):
             return
         self._last_activity[agent_key] = (label, now)
         self._activity_global_last = now
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        name = self.agent_names.get(agent_key, agent_key)
         # 低优先级：气泡位被占直接丢弃，不与重要气泡竞争
         tool_key = str(tool).strip().lower()
         if tool_key in {"read", "read_page"}:
@@ -2648,6 +2317,8 @@ class AgentLinkManager(QObject):
             return  # 隐藏中不弹不切（pause 已取消计时器，这里是兜底）
         if self._last_raw.get(agent_key) in self._BUSY_STATES:
             return
+        if agent_key not in self._saw_error:
+            self._emit_sound("done", agent_key)
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_done", True):
             return
@@ -2655,7 +2326,7 @@ class AgentLinkManager(QObject):
         if now - self._done_cooldown.get(agent_key, 0.0) < self._DONE_COOLDOWN_S:
             return
         self._done_cooldown[agent_key] = now
-        name = self.AGENT_NAMES.get(agent_key, agent_key)
+        name = self.agent_names.get(agent_key, agent_key)
         if agent_key in self._saw_alert:
             # busy 期间出现过 attention/error：不暗示"成功完成"
             text = self._dialogue("done.attention", f"{name} 那边停了，结果怎么样要主人自己看一眼哦", name=name)
@@ -2675,6 +2346,31 @@ class AgentLinkManager(QObject):
                 self.win._switch(self.win._pick(self.win.idles))
             self._last_applied[agent_key] = ("idle", now)
         self._show_link_bubble(text, important=True)
+
+    def _emit_sound(self, event_name: str, agent_key: str) -> None:
+        """播放 Agent 生命周期音效；所有 Agent 共用一组全局冷却。"""
+        agent_cfg = self.cfg.get("agent_link", {})
+        if not agent_cfg.get("sound_enabled", False):
+            return
+        if not agent_cfg.get(f"sound_{event_name}_enabled", True):
+            return
+        path_value = str(agent_cfg.get(f"sound_{event_name}_path", "") or "").strip()
+        if not path_value:
+            return
+        path = resolve_builtin_sound(path_value) if path_value.startswith("builtin:") else Path(path_value).expanduser()
+        if path is None or not path.is_file():
+            return
+        now = self._clock()
+        cooldown = max(0.0, float(agent_cfg.get("sound_cooldown_seconds", 2.0)))
+        if now - self._sound_last_at.get("global", float("-inf")) < cooldown:
+            return
+        last_event = self._sound_last_event.get(agent_key)
+        if last_event is not None and last_event[0] == event_name and now == last_event[1]:
+            return
+        self._sound_last_at["global"] = now
+        self._sound_last_event[agent_key] = (event_name, now)
+        log.info("播放联动音效 event=%s agent=%s path=%s", event_name, agent_key, path)
+        play_sound(path, volume=float(agent_cfg.get("sound_volume", 0.65)))
 
     def _show_link_bubble(self, text: str, *, important: bool, duration_ms: int = 4500,
                           _retried: int = 0) -> None:

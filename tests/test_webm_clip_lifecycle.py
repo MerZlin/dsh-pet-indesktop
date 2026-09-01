@@ -38,9 +38,16 @@ def test_rapid_start_stop_no_leaked_running_threads():
     for t in clip._retired:
         assert not t.is_alive()
 
-    # 断言无残留运行中的 reader 线程（或整体 threading 运行线程无残留）
-    alive_threads = {t for t in threading.enumerate() if t.is_alive()}
-    new_alive = [t for t in alive_threads if t not in initial_threads]
+    # 断言无残留运行中的 reader 线程（或整体 threading 运行线程无残留）。
+    # 线程退出是异步的，给一点宽限时间再断言，避免 CI 偶发“线程尚未完全回收”。
+    deadline = time.monotonic() + 5.0
+    while True:
+        alive_threads = {t for t in threading.enumerate() if t.is_alive()}
+        new_alive = [t for t in alive_threads if t not in initial_threads]
+        if not new_alive or time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)
+        app.processEvents()
     assert len(new_alive) == 0, f"Remaining unexpected threads: {new_alive}"
 
 

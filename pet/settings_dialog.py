@@ -106,16 +106,31 @@ class PetSettingsDialog(QDialog):
         # 开机自启 / 全屏自动隐藏（从主菜单移入设置）
         self.autostart_check = QCheckBox("开机自动启动桌宠")
         self.autostart_check.setChecked(autostart_mod.is_enabled())
+        if config.instance_id:
+            self.autostart_check.setEnabled(False)
+            self.autostart_check.setToolTip("仅主桌宠可设置")
         form.addRow("开机自启", self.autostart_check)
         self.auto_hide_check: QCheckBox | None = None
         if sys.platform == "win32":
             self.auto_hide_check = QCheckBox("前台程序全屏时自动隐藏桌宠（如全屏视频/游戏）")
             self.auto_hide_check.setChecked(bool(config.get("auto_hide_fullscreen", True)))
             form.addRow("全屏时自动隐藏", self.auto_hide_check)
+        self.cursor_hidden_passthrough_check: QCheckBox | None = None
+        if sys.platform == "win32":
+            self.cursor_hidden_passthrough_check = QCheckBox("光标隐藏时自动穿透（光标出现立即恢复）")
+            self.cursor_hidden_passthrough_check.setChecked(bool(config.get("cursor_hidden_passthrough", True)))
+            self.cursor_hidden_passthrough_check.setToolTip(
+                "Windows 光标隐藏后桌宠自动穿透；适用于游戏，也可能影响自动隐藏光标的视频播放器。"
+            )
+            form.addRow("光标隐藏时自动穿透", self.cursor_hidden_passthrough_check)
         self.mouse_through_check = QCheckBox("鼠标穿透（桌宠不响应鼠标，点击落到下层窗口）")
         self.mouse_through_check.setChecked(bool(config.get("mouse_through", False)))
         self.mouse_through_check.setToolTip("开启后可从托盘图标或右键菜单关闭；与「看看屏幕/主动识屏」的穿透兼容。")
         form.addRow("鼠标穿透", self.mouse_through_check)
+        self.collision_enabled_check = QCheckBox("多开桌宠碰撞（与其他桌宠互动碰撞物理）")
+        self.collision_enabled_check.setChecked(bool(config.get("collision_enabled", True)))
+        self.collision_enabled_check.setToolTip("开启后多开桌宠之间会产生碰撞反弹；鼠标穿透仍会参与碰撞。")
+        form.addRow("多开碰撞", self.collision_enabled_check)
         self.capture_check: QCheckBox | None = None
         if sys.platform == "win32":
             self.capture_check = QCheckBox("直播捕获兼容模式（直播姬/OBS 窗口捕获可识别桌宠）")
@@ -442,7 +457,10 @@ class PetSettingsDialog(QDialog):
             )
         if self.auto_hide_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_check.isChecked())
+        if self.cursor_hidden_passthrough_check is not None:
+            self.config.set("cursor_hidden_passthrough", self.cursor_hidden_passthrough_check.isChecked())
         self.config.set("mouse_through", self.mouse_through_check.isChecked())
+        self.config.set("collision_enabled", self.collision_enabled_check.isChecked())
         if self.capture_check is not None:
             self.config.set("stream_capture_mode", self.capture_check.isChecked())
 

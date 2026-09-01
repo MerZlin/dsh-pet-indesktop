@@ -343,6 +343,27 @@ class ChatWindow(QDialog):
         if self.follow_pet and self.isVisible():
             self.position_near_pet()
 
+    def toggle_always_on_top(self) -> None:
+        on = self.pin_button.isChecked()
+        self.config.set("chat_always_on_top", on)
+        self.config.save()
+        self.set_chat_always_on_top(on)
+
+    def set_chat_always_on_top(self, on: bool) -> None:
+        """切换聊天窗置顶；保留位置、尺寸与可见/激活状态。"""
+        was_visible = self.isVisible()
+        was_active = self.isActiveWindow()
+        geometry = self.geometry()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(on))
+        self.setGeometry(geometry)
+        if was_visible:
+            self.show()
+            if was_active:
+                self.activateWindow()
+        self.pin_button.blockSignals(True)
+        self.pin_button.setChecked(bool(on))
+        self.pin_button.blockSignals(False)
+
     def position_near_pet(self, pet_window=None, gap: int = 14) -> None:
         """Place the phone chat window beside the visible pet bounds."""
         pet = pet_window or self.pet_link.pet_window
@@ -448,6 +469,14 @@ class ChatWindow(QDialog):
         title_text.addWidget(self.subtitle_label)
         title_layout.addLayout(title_text)
         title_layout.addStretch(1)
+        self.pin_button = QToolButton()
+        self.pin_button.setObjectName("window-pin-button")
+        self.pin_button.setIcon(vector_widget_icon(self.pin_button, "pin", 16))
+        self.pin_button.setToolTip("窗口置顶")
+        self.pin_button.setAccessibleName("切换聊天窗口置顶")
+        self.pin_button.setCheckable(True)
+        self.pin_button.setChecked(bool(self.config.get("chat_always_on_top", False)))
+        title_layout.addWidget(self.pin_button)
         self.minimize_button = QToolButton()
         self.minimize_button.setObjectName("window-minimize-button")
         self.minimize_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarMinButton))
@@ -573,6 +602,7 @@ class ChatWindow(QDialog):
     def _connect(self) -> None:
         self.minimize_button.clicked.connect(self.showMinimized)
         self.close_button.clicked.connect(self.close)
+        self.pin_button.clicked.connect(self.toggle_always_on_top)
         self.new_session_button.clicked.connect(self.new_session)
         self.rename_session_button.clicked.connect(self.rename_current_session)
         self.delete_session_button.clicked.connect(self.delete_current_session)
@@ -873,6 +903,11 @@ class ChatWindow(QDialog):
         self._apply_character_theme()
         self._style()
         self._refresh_sessions()
+        desired_pin = bool(self.config.get("chat_always_on_top", False))
+        if desired_pin != bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint):
+            self.set_chat_always_on_top(desired_pin)
+        else:
+            self.pin_button.setChecked(desired_pin)
 
     def switch_character(self, character_id: str) -> None:
         if not character_id or character_id == self.character_id:

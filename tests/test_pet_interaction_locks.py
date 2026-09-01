@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QEvent, QObject, QPointF, Qt, Signal
-from PySide6.QtGui import QMouseEvent, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, Signal
+from PySide6.QtGui import QFocusEvent, QKeyEvent, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 
 from pet import catalog
@@ -20,6 +20,51 @@ NAMES = [
     catalog.DRAG,
     "写代码",
 ]
+
+
+def test_slingshot_geometry_stays_inside_window_for_all_pull_directions():
+    base = QRect(0, 8, 100, 100)
+    bounds = QRect(0, 0, 100, 108)
+    for pull in (QPoint(-160, 0), QPoint(160, 0), QPoint(0, -160), QPoint(0, 160),
+                 QPoint(-113, -113), QPoint(113, 113)):
+        x, y, width, height = PetWindow._slingshot_geometry(base, pull, 1.0, bounds)
+        assert bounds.contains(QRect(x, y, width, height))
+
+
+def test_slingshot_trajectory_anchor_starts_at_character_edge():
+    character = QRect(10, 8, 100, 100)
+    anchor = PetWindow._slingshot_trajectory_anchor(character, QPoint(1, 1))
+    # QRect's right/bottom are inclusive, so the ray exits at (109, 107).
+    assert anchor == QPointF(109.0, 107.0)
+
+
+def test_slingshot_trajectory_preview_preserves_arc_scale_and_allows_clipping():
+    bounds = QRect(0, 0, 120, 108)
+    anchor = QPointF(110, 108)
+    trajectory = [(0.0, 0.0), (90.0, -30.0), (180.0, 90.0)]
+    preview = PetWindow._slingshot_trajectory_preview(trajectory, anchor, bounds, 1.0)
+    assert len(preview) == len(trajectory)
+    assert preview[0] == (110.0, 108.0)
+    assert preview[1] == (200.0, 78.0)
+    assert preview[-1] == (290.0, 198.0)
+
+
+def test_slingshot_geometry_uses_smooth_directional_deformation():
+    base = QRect(0, 8, 100, 100)
+    horizontal = PetWindow._slingshot_geometry(base, QPoint(160, 0), 1.0)
+    vertical = PetWindow._slingshot_geometry(base, QPoint(0, -160), 1.0)
+    assert horizontal[2] == round(base.width() * 1.3)
+    assert horizontal[3] == round(base.height() / 1.3)
+    assert vertical[2] == round(base.width() / 1.3)
+    assert vertical[3] == round(base.height() * 1.3)
+
+
+def test_slingshot_band_points_use_visible_edge_and_mouse_endpoint():
+    start, end = PetWindow._slingshot_band_points(
+        QRect(10, 8, 100, 100), QPoint(4, 57), QPoint(20, 0),
+    )
+    assert start == QPointF(9.0, 57.0)
+    assert end == QPointF(4.0, 57.0)
 
 
 class FakeClip(QObject):
@@ -112,6 +157,23 @@ def _release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     )
 
 
+def _right_press(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
+    return QMouseEvent(
+        QEvent.Type.MouseButtonPress, pos, global_pos,
+        Qt.MouseButton.RightButton,
+        Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+
+def _right_release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
+    return QMouseEvent(
+        QEvent.Type.MouseButtonRelease, pos, global_pos,
+        Qt.MouseButton.RightButton, Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+
 def _make_win(app, tmp_path, **overrides):
     cfg = Config(base=tmp_path)
     for key, value in overrides.items():
@@ -167,6 +229,77 @@ def test_shift_drag_requires_shift(app, tmp_path):
     ))
     assert win.pos() != start, "越过阈值时按住 SHIFT 应开始拖动"
     win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_sequence_launches_with_reverse_pull(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    start = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "DRAGGING"
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "SLINGSHOT_AIMING"
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(60, 100),
+                             buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
+    assert win._slingshot_pull.x() > 0
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(60, 100)))
+    assert win._interaction_state == "THROWN"
+    assert win._physics_mode == "throw"
+    assert win._phys_vel[0] > 0, "向左拉时 pull 应指向右侧"
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_right_release_and_escape_cancel_to_anchor(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    start = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    anchor = win.pos()
+    win.mouseReleaseEvent(_right_release(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "DRAGGING"
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    win.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                Qt.KeyboardModifier.NoModifier))
+    assert win._interaction_state == "IDLE"
+    assert win.pos() == anchor
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_minimum_and_lock_position_do_not_launch(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    starts = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    anchor = win.pos()
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(130, 100)))
+    assert win._interaction_state == "IDLE"
+    assert win.pos() == anchor
+    win.set_lock_position(True)
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    assert win._interaction_state == "IDLE"
+    win.close()
+    app.processEvents()
+
+
+def test_slingshot_focus_out_cancels_to_anchor(app, tmp_path):
+    win = _make_win(app, tmp_path)
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
+    win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
+    anchor = win.pos()
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(40, 100),
+                             buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
+    win.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
+    assert win._interaction_state == "IDLE"
+    assert win.pos() == anchor
     win.close()
     app.processEvents()
 
@@ -231,4 +364,66 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
     action.setChecked(False)
     assert config.get("mouse_through") is False
     tray.hide()
+    app.processEvents()
+
+def test_drag_does_not_play_click_sound_but_click_does(app, tmp_path, monkeypatch):
+    from pathlib import Path
+    win = _make_win(app, tmp_path)
+    press_calls = []
+    release_calls = []
+    monkeypatch.setattr("pet.window.resolve_click_sound_pair", lambda pack, data_dir=None: (Path("press.wav"), Path("release.wav")))
+    monkeypatch.setattr("pet.window.play_press_sound", lambda pair, volume: press_calls.append((pair, volume)))
+    monkeypatch.setattr("pet.window.play_release_sound", lambda pair, volume: release_calls.append((pair, volume)))
+
+    # 拖动：按下 -> 超过阈值移动 -> 松手，不应触发任何点击音效
+    start = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
+    assert win.pos() != start
+    assert press_calls == []
+    assert release_calls == []
+
+    # 点击：按下 -> 原位松手，应播放完整 press+release
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(200, 200)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(200, 200)))
+    assert len(press_calls) == 1
+    assert len(release_calls) == 1
+
+    win.close()
+    app.processEvents()
+
+def test_click_sound_pair_is_cleared_when_resolution_fails(app, tmp_path, monkeypatch):
+    from pathlib import Path
+    win = _make_win(app, tmp_path)
+    press_calls = []
+    release_calls = []
+    pair_a = (Path("press-a.wav"), Path("release-a.wav"))
+    current_pair = [pair_a]
+    monkeypatch.setattr("pet.window.resolve_click_sound_pair", lambda pack, data_dir=None: current_pair[0])
+    monkeypatch.setattr("pet.window.play_press_sound", lambda pair, volume: press_calls.append(pair))
+    monkeypatch.setattr("pet.window.play_release_sound", lambda pair, volume: release_calls.append(pair))
+
+    # 第一次点击：解析成功，播放 pair_a
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(200, 200)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(200, 200)))
+    assert press_calls == [pair_a]
+    assert release_calls == [pair_a]
+
+    # 解析失败（如切换音效包后文件缺失）：不应复用旧 pair
+    current_pair[0] = None
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(300, 300)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(300, 300)))
+    assert press_calls == [pair_a], "解析失败时不应播放旧按下音"
+    assert release_calls == [pair_a], "解析失败时不应播放旧释放音"
+
+    # 再次解析成功且换成 pair_b：应播放新 pair
+    pair_b = (Path("press-b.wav"), Path("release-b.wav"))
+    current_pair[0] = pair_b
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(400, 400)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(400, 400)))
+    assert press_calls == [pair_a, pair_b]
+    assert release_calls == [pair_a, pair_b]
+
+    win.close()
     app.processEvents()

@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -28,6 +29,15 @@ DEFAULT_SELF_TALK_TEXTS = [
 DEFAULT_SELF_TALK_BUBBLE_STYLE = "classic_top"
 DIALOGUE_MODES = {"legacy", "whale_maid"}
 DEFAULT_DIALOGUE_PHRASES = {}
+DEFAULT_COLLISION_SETTINGS = {
+    "collision_enabled": True,
+    "collision_restitution": 0.82,
+    "collision_friction": 0.08,
+    "collision_mass_scale": 1.0,
+    "collision_impulse_cap": 9000.0,
+    "collision_sound_enabled": True,
+    "collision_sound_volume": 0.70,
+}
 SELF_TALK_BUBBLE_STYLES = {
     "classic_top", "paper_left", "glass_right", "soft_blue_top", "breath_bubble",
 }
@@ -180,7 +190,9 @@ def _default_agent_link_data() -> dict:
         "claude": False,
         "cursor": False,
         "opencode": False,
-        "codex": False,
+        # 自定义联动 Agent（协议见 docs/AGENT_LINK_PROTOCOL.md §4）：只读监听
+        # 用户指定的事件文件，不写外部配置、无需授权弹窗，默认空
+        "custom_agents": [],
         # 联动气泡：开始干活提醒（可选，默认关）、任务完成通知（默认开）
         "notify_state": False,
         "notify_done": True,
@@ -229,7 +241,101 @@ def _default_agent_link_data() -> dict:
         "codex_filter_mode": "all",    # all=全部 thread / cwd=按项目目录 / latest=仅最新
         "codex_watch_cwds": [],        # cwd 模式下监听的项目目录列表
         "codex_stale_minutes": 10,     # 无新记录多久后超时恢复为 idle
+        # 音效配置
+        "sound_enabled": False,
+        "sound_start_path": "builtin:agent-start",
+        "sound_done_path": "builtin:agent-done",
+        "sound_error_path": "builtin:agent-error",
+        "sound_volume": 0.65,
+        "sound_cooldown_seconds": 2.0,
+        "sound_start_enabled": True,
+        "sound_done_enabled": True,
+        "sound_error_enabled": True,
     }
+
+
+def _default_click_sound_pack() -> dict:
+    return {"kind": "builtin", "id": "default", "path": ""}
+
+
+def _clean_click_sound_pack(value: Any) -> dict:
+    defaults = _default_click_sound_pack()
+    if not isinstance(value, dict):
+        return dict(defaults)
+    kind = str(value.get("kind") or "builtin").strip().lower()
+    if kind not in {"builtin", "file", "folder"}:
+        return dict(defaults)
+    pack_id = str(value.get("id") or ("default" if kind == "builtin" else "custom")).strip()
+    if kind == "builtin" and pack_id not in {"default", "duck"}:
+        pack_id = "default"
+    path = str(value.get("path") or "").strip()[:500]
+    return {
+        "kind": kind,
+        "id": pack_id,
+        "path": path,
+    }
+
+
+# 内置联动 Agent 键：custom_agents 的 key 不得与之重复
+_AGENT_LINK_BUILTIN_KEYS = ("dsh", "claude", "cursor", "opencode")
+# 自定义联动 Agent 条目上限（防配置文件被塞爆）
+_CUSTOM_AGENT_MAX = 8
+
+
+def _clean_custom_agents(raw: Any) -> list[dict]:
+    """清洗自定义联动 Agent 列表（agent_link.custom_agents）。
+
+    条目 {key, name, path}：key 为小写标识（不得与内置键/其他条目重复），
+    name 为显示名（缺省用 key），path 为事件文件路径（支持 ~，允许暂不存在）。
+    非法条目直接丢弃，超出上限截断。"""
+    if not isinstance(raw, list):
+        return []
+    result: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        if len(result) >= _CUSTOM_AGENT_MAX:
+            break
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", key):
+            continue
+        if key in _AGENT_LINK_BUILTIN_KEYS or key in seen:
+            continue
+        path = str(item.get("path") or "").strip()[:500]
+        if not path:
+            continue
+        name = str(item.get("name") or "").strip()[:50] or key
+        seen.add(key)
+        result.append({"key": key, "name": name, "path": path})
+    return result
+
+
+def _clean_agent_link_data(raw: Any) -> dict:
+    defaults = _default_agent_link_data()
+    if not isinstance(raw, dict):
+        return dict(defaults)
+    result = dict(defaults)
+    # 保留传入的额外合法键（例如 thinking_text, thinking_texts 等）
+    result.update(raw)
+    result["custom_agents"] = _clean_custom_agents(raw.get("custom_agents"))
+    for key in (
+        "dsh", "claude", "cursor", "opencode", "notify_state", "notify_done", "notify_activity",
+        "sound_enabled", "sound_start_enabled", "sound_done_enabled", "sound_error_enabled",
+    ):
+        if key in raw:
+            result[key] = bool(raw[key])
+    for key in ("sound_start_path", "sound_done_path", "sound_error_path"):
+        if key in raw:
+            val = str(raw[key] or "").strip()[:500]
+            result[key] = val or defaults[key]
+    if "sound_volume" in raw:
+        result["sound_volume"] = _float_or_default(raw.get("sound_volume"), defaults["sound_volume"], 0.0, 1.0)
+    if "sound_cooldown_seconds" in raw:
+        result["sound_cooldown_seconds"] = _float_or_default(
+            raw.get("sound_cooldown_seconds"), defaults["sound_cooldown_seconds"], 0.0, 30.0
+        )
+    return result
 
 
 def _merge_proactive_screen_data(raw: Any) -> dict:
@@ -240,10 +346,7 @@ def _merge_proactive_screen_data(raw: Any) -> dict:
 
 
 def _merge_agent_link_data(raw: Any) -> dict:
-    result = _default_agent_link_data()
-    if isinstance(raw, dict):
-        result.update(raw)
-    return result
+    return _clean_agent_link_data(raw)
 
 
 def _default_chat_data():
@@ -334,6 +437,18 @@ def _float_or_default(value, default, minimum, maximum):
     return max(minimum, min(maximum, number))
 
 
+def _bool_or_default(value, default):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'true', '1', 'yes', 'on'}:
+            return True
+        if normalized in {'false', '0', 'no', 'off'}:
+            return False
+    return bool(default)
+
+
 def _clean_self_talk_texts(value):
     if not isinstance(value, list):
         return list(DEFAULT_SELF_TALK_TEXTS)
@@ -343,6 +458,73 @@ def _clean_self_talk_texts(value):
         if text and text not in texts:
             texts.append(text[:120])
     return texts or list(DEFAULT_SELF_TALK_TEXTS)
+
+
+def _default_dynamic_island_data() -> dict:
+    """灵动岛默认配置：默认开启常驻，位置留空由首次显示时自动定位。"""
+    return {
+        "enabled": True,
+        "show_icon": True,
+        "show_name": True,
+        "show_info": True,
+        "info_mode": "time",       # time / balance_tier / balance / custom
+        "custom_text": "",
+        "show_status": True,
+        "style": "dark",           # dark / light / glass
+        "icon": "🐳",
+        "x": None,
+        "y": None,
+    }
+
+
+def _clean_dynamic_island_data(value) -> dict:
+    defaults = _default_dynamic_island_data()
+    if not isinstance(value, dict):
+        return defaults
+    result = dict(defaults)
+    result.update({k: v for k, v in value.items() if k in defaults})
+    result["enabled"] = bool(result["enabled"])
+    result["show_icon"] = bool(result["show_icon"])
+    result["show_name"] = bool(result["show_name"])
+    result["show_info"] = bool(result["show_info"])
+    result["show_status"] = bool(result["show_status"])
+    mode = str(result.get("info_mode") or "time").strip()
+    result["info_mode"] = mode if mode in {"time", "balance_tier", "balance", "custom"} else "time"
+    result["custom_text"] = str(result.get("custom_text") or "")[:80]
+    style = str(result.get("style") or "dark").strip()
+    result["style"] = style if style in {"dark", "light", "glass"} else "dark"
+    result["icon"] = str(result.get("icon") or "🐳").strip()[:8] or "🐳"
+    # 至少保留一个组件：全部关闭时强制显示信息槽，避免空胶囊。
+    if not (result["show_icon"] or result["show_name"] or result["show_info"] or result["show_status"]):
+        result["show_info"] = True
+    return result
+
+
+def _clean_character_profiles(value) -> dict:
+    """角色档案：当前先承载 click_talk_bindings，后续可扩展头像/人设字段。"""
+    if not isinstance(value, dict):
+        return {}
+    cleaned = {}
+    for character_id, profile in value.items():
+        if not isinstance(profile, dict):
+            continue
+        bindings_raw = profile.get("click_talk_bindings")
+        bindings = {}
+        if isinstance(bindings_raw, dict):
+            for action_id, texts in bindings_raw.items():
+                if not isinstance(texts, list):
+                    continue
+                items = []
+                for item in texts:
+                    text = str(item).strip()
+                    if text and text not in items:
+                        items.append(text[:120])
+                if items:
+                    bindings[str(action_id)] = items
+        entry = dict(profile)
+        entry["click_talk_bindings"] = bindings
+        cleaned[str(character_id)] = entry
+    return cleaned
 
 
 class Config:
@@ -382,6 +564,7 @@ class Config:
             "dialogue_mode": "legacy",
             "dialogue_phrases": dict(DEFAULT_DIALOGUE_PHRASES),
             "mouse_through": False,
+            "cursor_hidden_passthrough": True,
             "drag_physics": False,
             "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
             "shift_drag": False,     # 按住 SHIFT+左键才能拖动
@@ -393,6 +576,11 @@ class Config:
             "auto_hide_fullscreen": True,  # 全屏应用自动隐藏（Windows）
             "click_sound_enabled": True,   # 点击 Q 弹音效
             "click_sound_path": "",        # 自定义点击音效文件绝对路径（空=内置默认）
+            "click_sound_pack": _default_click_sound_pack(),
+            "click_sound_volume": 0.70,
+            "slingshot_enabled": True,     # 弹弓弹射
+            "throw_strength": "standard",  # gentle / standard / strong / crazy
+            "throw_max_speed": 4800.0,     # 由 throw_strength 导出
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
@@ -412,9 +600,14 @@ class Config:
             "modern_chat_card_opacity": 84,
             "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "character_aliases": {},  # 角色显示名别名 {角色id: 自定义名}，空名=恢复默认
+            "character_profiles": {},  # 角色档案：{角色id: {click_talk_bindings: {动画id: [台词]}}}
+            "chat_always_on_top": False,  # 聊天窗置顶
+            "dynamic_island": _default_dynamic_island_data(),
             "proactive_screen": _default_proactive_screen_data(),
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
+            "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
+            **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
         self._load()
@@ -441,11 +634,17 @@ class Config:
             pass
 
     def _load(self):
+        if not self.path.is_file():
+            return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            from . import slot_manager as slot_manager_mod
+            slot_manager_mod.backup_corrupt_config(self.path)
             return
         if not isinstance(raw, dict):
+            from . import slot_manager as slot_manager_mod
+            slot_manager_mod.backup_corrupt_config(self.path)
             return
         try:
             old_version = int(raw.get("version", 1) or 1)
@@ -506,6 +705,7 @@ class Config:
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
             "self_talk_bubble_style",
+             "mouse_through", "cursor_hidden_passthrough", "drag_physics", "context_menu_template",
             "dialogue_mode",
             "dialogue_phrases",
             "mouse_through", "drag_physics", "context_menu_template",
@@ -513,6 +713,8 @@ class Config:
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg", "auto_hide_fullscreen",
             "click_sound_enabled", "click_sound_path",
+            "click_sound_pack", "click_sound_volume",
+            "slingshot_enabled", "throw_strength", "throw_max_speed",
             "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
             "music_sing_enabled",
@@ -524,7 +726,14 @@ class Config:
             "modern_chat_card_opacity",
             "chat_bg_crops",
             "chat_ui_style",
+            "chat_follow_pet",
             "character_aliases",
+            "character_profiles",
+            "chat_always_on_top",
+            "dynamic_island",
+            "collision_enabled", "collision_restitution", "collision_friction",
+            "collision_mass_scale", "collision_impulse_cap",
+            "collision_sound_enabled", "collision_sound_volume",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -532,7 +741,25 @@ class Config:
             self.data["proactive_screen"] = _merge_proactive_screen_data(raw["proactive_screen"])
         if "agent_link" in raw:
             self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
+        self._migrate_click_sound_config(raw)
         self.data["version"] = 4
+
+    def _migrate_click_sound_config(self, raw: dict) -> None:
+        """旧版 click_sound_path 迁移为 click_sound_pack。"""
+        # 如果 raw 里面没有明确合法的 click_sound_pack，但有旧 click_sound_path
+        has_explicit_pack = isinstance(raw.get("click_sound_pack"), dict) and bool(
+            raw.get("click_sound_pack", {}).get("kind")
+        )
+        if not has_explicit_pack:
+            old_path = str(raw.get("click_sound_path") or "").strip()
+            if old_path:
+                self.data["click_sound_pack"] = {
+                    "kind": "file",
+                    "id": "custom",
+                    "path": old_path,
+                }
+            else:
+                self.data["click_sound_pack"] = _default_click_sound_pack()
 
     def _normalize_pet_settings(self):
         dialogue_mode = str(self.data.get("dialogue_mode") or "legacy").lower()
@@ -545,6 +772,8 @@ class Config:
              if str(k).strip() and (v if isinstance(v, list) else str(v).strip())}
             if isinstance(raw_phrases, dict) else {}
         )
+        from . import physics as physics_mod
+
         self.data["playback_speed"] = _float_or_default(self.data.get("playback_speed"), 1.0, 0.1, 8.0)
         self.data["animation_gap_seconds"] = _float_or_default(
             self.data.get("animation_gap_seconds"), DEFAULT_ANIMATION_GAP_SECONDS, 0.0, 3600.0
@@ -567,6 +796,9 @@ class Config:
             self.data.get("self_talk_image_dir") or ""
         ).strip()[:500]
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
+        self.data["cursor_hidden_passthrough"] = _bool_or_default(
+            self.data.get("cursor_hidden_passthrough"), True
+        )
         self.data["show_dock_icon"] = bool(self.data.get("show_dock_icon", True))
         self.data["self_talk_texts"] = _clean_self_talk_texts(self.data.get("self_talk_texts"))
         bubble_style = str(self.data.get("self_talk_bubble_style") or "")
@@ -587,6 +819,13 @@ class Config:
         )
         if self.data.get("chat_ui_style") not in {"modern", "classic"}:
             self.data["chat_ui_style"] = "modern"
+        self.data["character_profiles"] = _clean_character_profiles(
+            self.data.get("character_profiles")
+        )
+        self.data["chat_always_on_top"] = bool(self.data.get("chat_always_on_top", False))
+        self.data["dynamic_island"] = _clean_dynamic_island_data(
+            self.data.get("dynamic_island")
+        )
         for prefix in ("chat_background", "modern_chat_background"):
             opacity_key = f"{prefix}_opacity"
             fill_key = f"{prefix}_fill"
@@ -602,6 +841,25 @@ class Config:
         except (TypeError, ValueError):
             card_opacity = 84
         self.data["modern_chat_card_opacity"] = max(10, min(100, card_opacity))
+
+        # 点击音效 & 弹弓 & 物理力度归一化
+        self.data["click_sound_enabled"] = bool(self.data.get("click_sound_enabled", True))
+        self.data["click_sound_pack"] = _clean_click_sound_pack(self.data.get("click_sound_pack"))
+        self.data["click_sound_volume"] = _float_or_default(self.data.get("click_sound_volume"), 0.70, 0.0, 1.0)
+        self.data["slingshot_enabled"] = bool(self.data.get("slingshot_enabled", True))
+        strength = physics_mod.normalize_throw_strength(str(self.data.get("throw_strength") or "standard"))
+        self.data["throw_strength"] = strength
+        self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
+        self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
+        self.data["collision_enabled"] = _bool_or_default(self.data.get("collision_enabled"), True)
+        self.data["collision_restitution"] = _float_or_default(self.data.get("collision_restitution"), .82, 0.0, 1.0)
+        self.data["collision_friction"] = _float_or_default(self.data.get("collision_friction"), .08, 0.0, .30)
+        self.data["collision_mass_scale"] = _float_or_default(self.data.get("collision_mass_scale"), 1.0, .5, 2.0)
+        self.data["collision_impulse_cap"] = _float_or_default(self.data.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
+        self.data["collision_sound_enabled"] = bool(self.data.get("collision_sound_enabled", True))
+        self.data["collision_sound_volume"] = _float_or_default(
+            self.data.get("collision_sound_volume"), 0.70, 0.0, 1.0
+        )
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -626,6 +884,41 @@ class Config:
             aliases.pop(character_id, None)
         self.save()
 
+    def character_profile(self, character_id: str) -> dict:
+        """返回角色档案；不存在时返回空档案。"""
+        profiles = self.data.get("character_profiles")
+        if isinstance(profiles, dict):
+            profile = profiles.get(str(character_id))
+            if isinstance(profile, dict):
+                return profile
+        return {}
+
+    def click_talk_bindings(self, character_id: str) -> dict:
+        """返回某角色的点击动画台词绑定：{动画id: [台词, ...]}。"""
+        profile = self.character_profile(character_id)
+        bindings = profile.get("click_talk_bindings")
+        return bindings if isinstance(bindings, dict) else {}
+
+    def click_talk_texts_for(self, character_id: str, action_id: str) -> list[str]:
+        """返回某点击动画绑定的台词；未绑定返回空列表。"""
+        bindings = self.click_talk_bindings(character_id)
+        texts = bindings.get(str(action_id))
+        return texts if isinstance(texts, list) else []
+
+    def set_click_talk_bindings(self, character_id: str, bindings: dict) -> None:
+        """保存某角色的点击动画台词绑定并立即落盘。"""
+        profiles = self.data.setdefault("character_profiles", {})
+        if not isinstance(profiles, dict):
+            profiles = {}
+            self.data["character_profiles"] = profiles
+        profile = profiles.setdefault(str(character_id), {})
+        if not isinstance(profile, dict):
+            profile = {}
+            profiles[str(character_id)] = profile
+        profile["click_talk_bindings"] = bindings
+        self.data["character_profiles"] = _clean_character_profiles(profiles)
+        self.save()
+
     def set(self, key, value):
         self.data[key] = value
         if key in {
@@ -635,6 +928,10 @@ class Config:
             "self_talk_bubble_style",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg",
+            "click_sound_enabled", "click_sound_pack", "click_sound_volume",
+            "collision_sound_enabled", "collision_sound_volume",
+            "slingshot_enabled", "throw_strength", "agent_link",
+            "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()
 
@@ -672,11 +969,12 @@ class Config:
 
         写盘使用 _redacted_data() 的副本，self.data 本身不动，保证运行期
         key 在内存可见而不会明文落盘。
+        临时文件名加入 PID 后缀，避免错误并发写入撞名。
         """
         try:
             self._normalize_pet_settings()
             self.dir.mkdir(parents=True, exist_ok=True)
-            temp = self.path.with_suffix(".json.tmp")
+            temp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
             temp.write_text(
                 json.dumps(self._redacted_data(), ensure_ascii=False, indent=2),
                 encoding="utf-8",

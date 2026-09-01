@@ -60,7 +60,8 @@ def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0,
     endpoint = str(base_url or '').strip().rstrip('/') + BALANCE_PATH
     if not api_key:
         raise BalanceError('未配置 API Key')
-    headers = {'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'}
+    from .chat.providers import build_browser_headers  # 延迟导入：无 Chat 变体排除 pet.chat
+    headers = build_browser_headers({'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'})
     req = urllib.request.Request(endpoint, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout,
