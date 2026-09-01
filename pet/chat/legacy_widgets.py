@@ -832,6 +832,8 @@ class ChatWindow(QDialog):
         if self.service.busy:
             self._active_request_id = None
             self.service.stop()
+        # B8：切换会话前把旧会话（含生成中/停止的提问）入队保存，避免异步期间丢失
+        self.store.save(self.session)
         self.session = self._new_session()
         self._clear_message_rows()
         self._set_empty_state(True)
@@ -855,6 +857,8 @@ class ChatWindow(QDialog):
         if self.service.busy:
             self._active_request_id = None
             self.service.stop()
+        # B8：切换前保存当前会话最新状态（与 _stopped 的请求身份过滤互补）
+        self.store.save(self.session)
         session = self.store.load(session_id, self.character_id)
         if session is None:
             self._refresh_sessions()
@@ -915,6 +919,8 @@ class ChatWindow(QDialog):
         if self.service.busy:
             self._active_request_id = None
             self.service.stop()
+        # B8：切换角色前保存旧角色会话（角色目录隔离，队列串行写不互踩）
+        self.store.save(self.session)
         self.character_id = str(character_id)
         self._apply_character_theme()
         self.session = self._get_session()
@@ -950,7 +956,8 @@ class ChatWindow(QDialog):
         self._bubble.set_state("streaming")
         self._bubble.retry_requested.connect(self.retry_last)
         self._text = ""
-        self.store.save(self.session)
+        # B8：生成期间不落盘；整个交换在 _finished 保存一次，
+        # 停止/失败/切会话/关窗时强制 flush（提问不丢）。
         config = self.settings.active_config
         config.api_key = self.config.resolve_api_key(config)
         messages = self.prompt_builder.build_messages(self.settings, self.character_id, self.session.messages[:-1], text)
@@ -989,6 +996,7 @@ class ChatWindow(QDialog):
             self._bubble.set_content(text)
             self._bubble.set_state("normal")
         self.session.messages.append(ChatMessage("assistant", text))
+        # B8：流式结束保存一次（异步入队；同会话合并，GUI 线程不碰磁盘 I/O）
         self.store.save(self.session)
         self._refresh_sessions()
         self._reset()
@@ -1002,6 +1010,9 @@ class ChatWindow(QDialog):
         if self._bubble:
             self._bubble.set_content("请求失败：" + str(text))
             self._bubble.set_state("error")
+        # B8：失败时强制 flush——提问立即落盘（失败回复不保存）
+        self.store.save(self.session)
+        self.store.flush()
         self._reset()
         self.pet_link.error(text)
         self._bottom()
@@ -1015,6 +1026,9 @@ class ChatWindow(QDialog):
                 self._bubble.set_state("stopped")
             else:
                 self._remove_bubble(self._bubble)
+        # B8：停止时强制 flush——已输入内容立即落盘
+        self.store.save(self.session)
+        self.store.flush()
         self._reset()
 
     def _reset(self) -> None:
@@ -1045,8 +1059,10 @@ class ChatWindow(QDialog):
         self._update_bubble_widths()
 
     def closeEvent(self, event) -> None:
-        """关闭=隐藏并复用窗口：停止生成、解除桌宠位置监听，避免泄漏。"""
+        """关闭=隐藏并复用窗口：停止生成、解除桌宠位置监听、落盘排队保存，避免泄漏。"""
         self.service.stop()
+        # B8：关窗强制 flush——排队中的保存立即落盘
+        self.store.flush()
         self.set_pet_window(None)
         self.hide()
         event.ignore()
