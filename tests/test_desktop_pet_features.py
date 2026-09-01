@@ -873,6 +873,55 @@ def test_context_menu_dispatches_style_by_template(monkeypatch):
     app.processEvents()
 
 
+def test_context_menu_invalid_template_falls_back_to_modern_uniformly():
+    """非法/缺失模板 id：load_menu_template 与 populate_context_menu 统一回退 modern。
+
+    历史分歧：load_menu_template 曾把非法值回退 legacy、populate_context_menu 回退
+    modern——同一非法配置在两个入口结果不同。现在统一走 normalize_template_id，
+    非法值一律落到现行默认模板 modern。
+    """
+    from PySide6.QtWidgets import QApplication, QMenu
+    from pet.context_menu import load_menu_template, normalize_template_id, populate_context_menu
+
+    # normalize 是唯一的回退决策点
+    assert normalize_template_id("modern") == "modern"
+    assert normalize_template_id("legacy") == "legacy"
+    assert normalize_template_id("MODERN") == "modern"
+    assert normalize_template_id(None) == "modern"
+    assert normalize_template_id("") == "modern"
+    assert normalize_template_id("bogus") == "modern"
+    # 两个入口对同一非法值给出同一结果：modern 模板
+    assert load_menu_template("bogus")["id"] == "modern"
+    assert load_menu_template(None)["id"] == "modern"
+    assert load_menu_template("")["id"] == "modern"
+
+    class Config:
+        def get(self, key, default=None):
+            return "bogus" if key == "context_menu_template" else default
+
+    class Pet:
+        on_open_chat = on_open_chat_settings = None
+        on_open_legacy_settings = on_open_modern_settings = None
+        on_spawn_pet = None
+        idles = turns = moves = clicks = acts = []
+        playback_speed = scale = 1.0
+        drag_physics = no_move = False
+
+        def __init__(self):
+            self.cfg = Config()
+
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    populate_context_menu(menu, Pet())
+    # 非法配置下分发器也走 modern（现行默认模板）
+    assert menu.objectName() == "modernContextMenu"
+    menu.close()
+    app.processEvents()
+
+
 def test_modern_menu_icons_are_crisp_outline_glyphs(monkeypatch):
     from PySide6.QtGui import QColor, QImage
     from PySide6.QtWidgets import QApplication, QMenu
