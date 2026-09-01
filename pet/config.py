@@ -564,7 +564,7 @@ class Config:
             **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
-        self._load()
+        self.reload()
         self._normalize_pet_settings()
 
     def _migrate_legacy_config(self, base) -> None:
@@ -587,7 +587,7 @@ class Config:
         except OSError:
             pass
 
-    def _load(self):
+    def reload(self):
         if not self.path.is_file():
             return
         try:
@@ -627,9 +627,9 @@ class Config:
         # _redacted_data() 写盘时会剔除 chat.providers 下的明文 api_key /
         # vision_api_key（keyring 不可用时 key 只存内存 self.data），因此磁盘文件
         # 里没有这两项。这里若某 provider 在磁盘数据里缺 api_key/vision_api_key
-        # 但合入前的内存里有，则保留内存值，避免设置对话框重开（自 config._load()
+        # 但合入前的内存里有，则保留内存值，避免设置对话框重开（自 config.reload()
         # 从磁盘重载）把用户未重启就丢掉的 key 覆盖成空。新旧两套设置对话框都走
-        # 这条 _load() 路径，一处修复全覆盖。
+        # 这条 reload() 路径，一处修复全覆盖。
         previous_chat = self.data.get("chat")
         previous_providers = (
             previous_chat.get("providers") if isinstance(previous_chat, dict) else None

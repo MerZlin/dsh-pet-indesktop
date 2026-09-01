@@ -58,6 +58,10 @@ class _CollisionWorker(QObject):
         self._probe = None
         self._coordinator_announced = False
         self.peers: dict[QLocalSocket, str] = {}
+        # socket -> 流式帧解码器；只被 worker 线程访问（_read_socket 及其
+        # 清理路径都运行在 worker 线程），键为 socket 对象本身，条目在
+        # socket 断开/被销毁时同步移除，防止悬挂解码器随 socket 一起泄漏。
+        self._socket_decoders: dict[QLocalSocket, collision.FrameStreamDecoder] = {}
         self.members: dict[str, dict[str, Any]] = {}
         self._pending_predicted: dict[str, dict] = {}
         self.previous_members: dict[str, dict[str, Any]] = {}
@@ -215,6 +219,7 @@ class _CollisionWorker(QObject):
         self.socket = None
         self._had_client_connection = False
         socket.abort()
+        self._socket_decoders.pop(socket, None)
         socket.deleteLater()
         self._welcome_retries += 1
         if self._welcome_retries > 1:
@@ -259,10 +264,10 @@ class _CollisionWorker(QObject):
             logging.debug("碰撞 IPC 写入失败", exc_info=True)
 
     def _read_socket(self, socket) -> None:
-        decoder = getattr(socket, "_collision_decoder", None)
+        decoder = self._socket_decoders.get(socket)
         if decoder is None:
             decoder = collision.FrameStreamDecoder()
-            socket._collision_decoder = decoder
+            self._socket_decoders[socket] = decoder
         for message in decoder.feed(bytes(socket.readAll())):
             if isinstance(message, collision.DecodeError) or not isinstance(message, dict):
                 continue
@@ -366,6 +371,7 @@ class _CollisionWorker(QObject):
         self._coordinator_lock = None
         for socket in list(self.peers):
             socket.disconnectFromServer()
+            self._socket_decoders.pop(socket, None)
             socket.deleteLater()
         self.peers.clear()
         self.members.clear()
@@ -654,6 +660,7 @@ class _CollisionWorker(QObject):
     def _peer_lost(self, socket) -> None:
         self._welcomed_peers.discard(socket)
         self._remove_member(self.peers.pop(socket, ""))
+        self._socket_decoders.pop(socket, None)
         try:
             socket.deleteLater()
         except RuntimeError:
@@ -665,6 +672,7 @@ class _CollisionWorker(QObject):
             self._welcome_timer.deleteLater()
             self._welcome_timer = None
         if self.socket:
+            self._socket_decoders.pop(self.socket, None)
             self.socket.deleteLater()
         self.socket = None
         self._had_client_connection = False
@@ -691,6 +699,7 @@ class _CollisionWorker(QObject):
             self._welcome_timer = None
         if self._probe:
             self._probe.abort()
+            self._socket_decoders.pop(self._probe, None)
             self._probe.deleteLater()
             self._probe = None
         if self._client_watchdog:
@@ -700,6 +709,7 @@ class _CollisionWorker(QObject):
         if self.socket:
             socket = self.socket
             self.socket = None
+            self._socket_decoders.pop(socket, None)
             self._send(socket, {"type": "leave", "seq": int(self.latest_state.get("seq", 0)) + 1})
             socket.disconnectFromServer()
             try:
@@ -709,6 +719,7 @@ class _CollisionWorker(QObject):
         for socket in list(self.peers):
             self._send(socket, {"type": "snapshot", "epoch": self.epoch, "tick": self.tick, "members": []})
             socket.disconnectFromServer()
+            self._socket_decoders.pop(socket, None)
             socket.deleteLater()
         self.peers.clear()
         if self.server:
