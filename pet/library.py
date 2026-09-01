@@ -334,21 +334,14 @@ class MovieLibrary(QObject):
         self._low_warm_timer.stop()
         self._low_warm_retry_timer.stop()
         self._warm_generation += 1
-        # 取消在飞的首帧预热与动画 bounds 预计算（B7 审查 P1-2 / B14）：
-        # 其拉起的 ffmpeg 进程随 clip 侧取消（换代 + 主动 terminate）回收，
-        # 隐藏/切角色后不再有不受控的后台解码进程存活；恢复显示后新预热
-        # 仍可正常进行（非终态）。
+        # 取消在飞的首帧预热（B7 审查 P1-2）：其拉起的 ffmpeg 进程随 clip 侧
+        # 取消（换代 + 主动 terminate）回收，隐藏/切角色后不再有不受控的
+        # 后台解码进程存活；恢复显示后新预热仍可正常进行（非终态）。
         for clip in list(self._movies.values()):
             cancel = getattr(clip, 'cancel_first_frame_warm', None)
             if callable(cancel):
                 try:
                     cancel()
-                except Exception:
-                    pass
-            cancel_bounds = getattr(clip, 'cancel_bounds_warm', None)
-            if callable(cancel_bounds):
-                try:
-                    cancel_bounds()
                 except Exception:
                     pass
         # 交互让路闸门同步复位：持有计数清零并放行在飞的低优先级预热线程，

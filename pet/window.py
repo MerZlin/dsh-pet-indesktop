@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import math
-import queue
 import random
 import sys
 import threading
@@ -46,7 +45,6 @@ from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidg
 
 from . import autostart as autostart_mod
 from . import catalog
-from . import webm_clip as webm_clip_mod
 from .config import (
     DEFAULT_SELF_TALK_BUBBLE_STYLE,
     DEFAULT_SELF_TALK_DURATION_SECONDS,
@@ -81,20 +79,6 @@ SING_ANIM = '悠闲哼歌'
 # 重试有次数上限：病态 reader 永不退出时不再无限重试，避免 GUI 反复同步解码。
 _SWITCH_RETRY_DELAY_MS = 1500
 _SWITCH_RETRY_MAX = 8
-
-# B14 bounds 预计算（复审 P1）：
-# - GUI 定时轮询间隔（ms）：worker 把完成的 AnimBounds 整包放入普通队列，
-#   GUI 线程定时排空并按代次提交（worker 不触碰任何 Qt 对象）。
-_BOUNDS_WARM_POLL_MS = 100
-# - 完成判定失败（解码失败/目标 clip 未建）时的重试上限：到限仍不完整则
-#   放弃本轮，运行时回落扫描（行为不变），避免对永久失败素材无限重试。
-_BOUNDS_WARM_MAX_RETRIES = 8
-# 空任务（并发认领忙 / 目标 clip 未创建）轮询重试上限（tick 数，100ms/tick）：
-# 短暂 busy 由轮询吸收，超限停表放弃本轮（不虚假标记 done）。
-_BOUNDS_WARM_EMPTY_MAX_TICKS = 50
-# 停止时对旧 worker 的有界 join 时长（秒）：已 terminate 其解码进程，正常
-# 毫秒级退出；此值只作为病态场景（解码卡死）的 GUI 阻塞上限。
-_BOUNDS_WARM_JOIN_TIMEOUT = 0.5
 
 
 def _resolve_self_talk_image_dir(raw: str) -> str:
@@ -295,112 +279,6 @@ def _mono_mask_bounds(image: QImage) -> tuple[int, int, int, int] | None:
     if y0 is None:
         return None
     return x0, y0, x1, y1
-
-
-def _window_current_dpr(window) -> float:
-    """窗口当前屏幕 DPR（与 _rebuild_frame 的渲染参数同源）。"""
-    scr = window._screen_available()
-    return scr.devicePixelRatio() if scr is not None else 1.0
-
-
-def _run_bounds_warm_tasks(snapshot, stop_evt, results_q, procs, procs_lock,
-                           round_gen=None) -> None:
-    """后台 bounds 预计算 worker（B14 复审 P1）：只用 GUI 线程采集的纯数据
-    快照 + 独立解码，不触碰任何 Qt 对象。
-
-    - snapshot：GUI 线程 _collect_bounds_snapshot 采集的不可变普通值
-      （scale/dpr + 每任务 path/w/h/bpp/mirrored/has_text/gen/key/name）；
-    - stop_evt：隐藏/关闭/换代时置位，worker 逐帧放弃；迟到的进程登记自终止；
-    - results_q：完成的 AnimBounds 整包入队，由 GUI 线程 _on_bounds_warm_poll
-      排空并按代次提交（代次确认 + 缓存写入与取消换代同一把锁，取消后绝不
-      提交）；
-    - procs/procs_lock：本窗口在飞解码进程登记（纯 set + 锁），停止时
-      terminate（隐藏/切角色后零不受控后台 ffmpeg）；
-    - round_gen：窗口级轮次代次（B14 复审 R2）。结果携带该代次，GUI 线程
-      只提交当前轮次——停止/换代后旧轮次迟到结果绝不生效。None 时结果不带
-      轮次代次（测试直接调用路径，视为当前轮次）。
-    """
-    try:
-        scale = float(snapshot["scale"])
-        dpr = float(snapshot["dpr"])
-        for task in snapshot["tasks"]:
-            if stop_evt.is_set():
-                return
-
-            def _is_stale() -> bool:
-                return stop_evt.is_set()
-
-            def _register(proc, argv) -> None:
-                """解码进程一拉起即回调：登记进窗口进程集合（锁内复查停止
-                事件），取消后迟到的登记自终止——已取消进程绝不漏进集合。"""
-                if not (isinstance(argv, list) and "-i" in argv):
-                    return
-                stale = stop_evt.is_set()
-                with procs_lock:
-                    if not stale:
-                        procs.add(proc)
-                if stale:
-                    webm_clip_mod.WebMClip._terminate_proc(proc)
-
-            def _unregister(proc) -> None:
-                with procs_lock:
-                    procs.discard(proc)
-
-            data = webm_clip_mod.compute_anim_bounds(
-                task["path"], task["w"], task["h"], task["bpp"],
-                mirrored=task["mirrored"], scale=scale, dpr=dpr,
-                has_text=task["has_text"],
-                is_stale=_is_stale,
-                on_process=_register,
-                on_process_done=_unregister,
-            )
-            if data is not None and not stop_evt.is_set():
-                try:
-                    if round_gen is None:
-                        results_q.put_nowait(
-                            (task["name"], task["key"], data, task["gen"])
-                        )
-                    else:
-                        results_q.put_nowait(
-                            (task["name"], task["key"], data, task["gen"], round_gen)
-                        )
-                except Exception:
-                    logging.debug('bounds 结果入队失败', exc_info=True)
-    except Exception:
-        logging.debug('动画 bounds 预计算异常', exc_info=True)
-
-
-def _window_cached_frame_bounds(window) -> QRect | None:
-    """查询当前 (动画, 镜像, 缩放, DPR, 帧号) 的预计算可见 bounds。
-
-    模块级函数（非方法）：_sync_mask 以类方法形式被测试假窗口调用时，
-    不要求假对象定义本函数。返回 None 表示无缓存（回落到逐帧扫描）；
-    返回 QRect 表示命中（空帧为 QRect()，与画布扫描一致）。squash 期间
-    由调用方（_sync_mask）拦截，不会走到这里。帧号取 movie.currentFrameNumber()
-    ——统一 0 基「显示帧索引」，与预计算表索引一致（B14 复审 P0）。
-    """
-    movie = getattr(window, 'movie', None)
-    if movie is None:
-        return None
-    getter = getattr(movie, 'bounds_rect', None)
-    if not callable(getter):
-        return None
-    if getattr(window, '_frame_pixmap', None) is None:
-        # 无画面时保持空 bounds（与空画布扫描一致），不查缓存
-        return None
-    no_mirror = getattr(getattr(window, 'lib', None), 'no_mirror', frozenset())
-    mirrored = (
-        getattr(window, 'facing', 'left') == 'right'
-        and getattr(window, 'anim', '') not in no_mirror
-    )
-    try:
-        frame_n = movie.currentFrameNumber()
-    except AttributeError:
-        frame_n = None
-    try:
-        return getter(mirrored, float(window.scale), _window_current_dpr(window), frame_n)
-    except Exception:
-        return None
 
 
 def _clamp_menu_rect(rect: QRect, avail: QRect) -> QRect:
@@ -803,37 +681,6 @@ class PetWindow(QWidget):
         # 已重建帧的输入签名（movie 身份、帧号、朝向、动画、缩放、DPR）：
         # 相同签名重复 rebuild 时整条 toImage/镜像/缩放/转换链直接跳过
         self._frame_key: tuple | None = None
-        # ---- 动画 bounds 预计算（B14）----
-        # 后台线程按 (mirrored, scale, dpr) 为每个动画预计算 union/每帧可见
-        # bounds；运行时 _sync_mask 命中即免去每帧 O(像素) 扫描，未命中回落
-        # 扫描（行为不变）。_bounds_warm_started 由 app 显式调用
-        # start_bounds_warm() 置位（测试构造的窗口不自动预热）。
-        # 线程模型（B14 复审 P1）：GUI 线程采集纯数据快照（路径/尺寸/bpp/
-        # scale/dpr/代次），worker 只做独立解码并整包入普通队列；GUI 线程
-        # 定时轮询排空并按代次提交。worker 不触碰任何 Qt 对象；隐藏/关闭经
-        # 停止事件 + terminate 已登记解码进程回收（有明确停止协议）。
-        self._bounds_warm_started = False
-        self._bounds_warm_running = False
-        self._bounds_warm_done = False
-        self._bounds_warm_key: tuple | None = None
-        self._bounds_warm_retries = 0
-        # 窗口级预热轮次代次（B14 复审 R2）：每启动一轮 worker 或停止一轮时
-        # 自增，worker 结果携带轮次代次，poll 只提交当前轮次——旧轮次迟到
-        # 结果绝不生效（与 clip 级 bounds 代次互补，窗口级停止自足，不依赖
-        # MovieLibrary.pause_warm 的 cancel）。
-        self._bounds_warm_round_gen = 0
-        # 空任务（并发认领忙 / 目标 clip 未创建）轮询重试计数：独立于 worker
-        # 轮次预算，短暂 busy 不消耗 worker 重试次数；超限停表放弃本轮（不虚假
-        # 标记 done），等 showEvent/(scale,dpr) 变化/批次补建重置后重新尝试。
-        self._bounds_warm_empty_ticks = 0
-        self._bounds_warm_thread: threading.Thread | None = None
-        self._bounds_warm_stop_evt = threading.Event()
-        self._bounds_warm_procs: set = set()
-        self._bounds_warm_procs_lock = threading.Lock()
-        self._bounds_warm_results: queue.Queue = queue.Queue()
-        self._bounds_warm_timer = QTimer(self)
-        self._bounds_warm_timer.setInterval(_BOUNDS_WARM_POLL_MS)
-        self._bounds_warm_timer.timeout.connect(self._on_bounds_warm_poll)
         self._input_controller: WindowsPerPixelInputController | None = None
         if os.name == "nt":
             self._input_controller = WindowsPerPixelInputController(self)
@@ -1278,11 +1125,6 @@ class PetWindow(QWidget):
             self._phys_vel[:] = [0.0, 0.0]
             self._resume_activity()
             self._submit_collision_state(force=True)
-        # 隐藏中断的 bounds 预计算在恢复显示后续跑（未完成时）
-        if getattr(self, '_bounds_warm_started', False) and not self._bounds_warm_done:
-            self._bounds_warm_retries = 0
-            self._bounds_warm_empty_ticks = 0
-            self._maybe_start_bounds_warm()
         self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
@@ -1296,7 +1138,6 @@ class PetWindow(QWidget):
             self._cancel_slingshot_to_anchor()
         self._ensure_dock_icon_on_hide()
         self._hidden_paused = True
-        self._bounds_warm_stop()  # 停止在飞 bounds 预计算（停止事件 + terminate）
         self._pause_activity()
         super().hide()
         self._submit_collision_state(force=True)
@@ -2207,14 +2048,7 @@ class PetWindow(QWidget):
             self._switch(self._pick(self.idles))
 
     def _on_frame(self, name: str, n: int) -> None:
-        """媒体帧推进回调：重建画面；最后一帧触发播完处理。
-
-        帧号契约（B14 复审 P0/R2）：frameChanged 信号值在 WebMClip 是 1 基
-        「事件序号」、在 GifClip 是 QMovie 0 基帧号，两种语义都不能直接当
-        「显示帧索引」用。播完判定统一以 movie.currentFrameNumber()（0 基
-        显示帧索引，== 预计算表索引，两实现一致）与总帧数比较——否则三帧
-        动画会在信号值 2（第二帧）被误判结束、第三帧永远不显示。
-        """
+        """媒体帧推进回调：重建画面；最后一帧触发播完处理。"""
         if self._hidden_paused or getattr(self, '_closing', False):
             # 隐藏/关闭/切角色后丢弃迟到的动画事件：旧窗口不得再推进动画链、
             # 不得对旧库重新建立交互让路 hold（生命周期守卫）。
@@ -2223,11 +2057,7 @@ class PetWindow(QWidget):
             return
         self._rebuild_frame()
         self.update()
-        try:
-            shown = self.movie.currentFrameNumber()
-        except AttributeError:
-            shown = n  # 无帧号接口的播放器（防御）：退回信号值
-        if shown >= self.lib.frames(name) - 1 and not self._ended_fired:
+        if n >= self.lib.frames(name) - 1 and not self._ended_fired:
             self._ended_fired = True
             self.movie.stop()  # 停在最后一帧，等 _on_anim_ended 切走
             self._on_anim_ended(name)
@@ -2275,19 +2105,6 @@ class PetWindow(QWidget):
         # 避免 _is_transparent_at 再次 toImage
         self._hit_alpha_image = img
         self._frame_key = key
-        # 几何状态随 (scale, dpr) 键失效（B14 复审 P1）：跨屏 DPR 变化时旧键
-        # 的碰撞 union / 掩码与新键几何不可比，必须重置（change_scale 已重置
-        # _collision_local_bounds，此处统一覆盖 DPR 变化路径）并重启预热。
-        warm_key = (self.scale, dpr)
-        if warm_key != getattr(self, '_bounds_warm_key', None):
-            self._bounds_warm_key = warm_key
-            self._collision_local_bounds = None
-            self._mask_bounds = None
-            if getattr(self, '_bounds_warm_started', False):
-                self._bounds_warm_done = False
-                self._bounds_warm_retries = 0
-                self._bounds_warm_empty_ticks = 0
-                self._maybe_start_bounds_warm()
         self._sync_mask()
 
     def _frame_draw_rect(self) -> QRect:
@@ -2316,28 +2133,7 @@ class PetWindow(QWidget):
           alpha>=128 阈值、DPR/采样映射与旧 canvas→QBitmap→QRegion 路径天然
           一致（不做源图 bbox + 采样公式反推）；鼠标穿透由
           WindowsPerPixelInputController 负责。
-        - B14：Windows 上优先查该动画的预计算 bounds（后台预热生成，与画布
-          扫描逐位一致）——命中即免去每帧 O(像素) 画布+扫描；未命中（动画
-          未预计算/帧号越界/缓存键不匹配）或 squash 变形（绘制矩形与缓存
-          几何不符）时回落到上述扫描，行为不变。
-        - 碰撞 union 时机/几何与旧扫描路径逐帧等价（B14 复审 P1）：预计算
-          只替代「每帧 bounds 怎么算」，绝不改变「什么时候 union、union
-          哪些」——命中时同样逐帧累积（首帧=当前帧，之后 united 已显示帧，
-          空帧不改变 union），绝不提前使用全动画 union。
         """
-        if os.name == "nt" and not getattr(self, '_squash_active', False):
-            cached = _window_cached_frame_bounds(self)
-            if cached is not None:
-                self._mask_bounds = cached
-                if not self.mask().isEmpty():
-                    self.clearMask()
-                if not self._mask_bounds.isEmpty():
-                    stable = getattr(self, '_collision_local_bounds', None)
-                    if stable is None:
-                        self._collision_local_bounds = QRect(self._mask_bounds)
-                    else:
-                        self._collision_local_bounds = stable.united(self._mask_bounds)
-                return
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
         p = QPainter(canvas)
@@ -2365,278 +2161,6 @@ class PetWindow(QWidget):
                 self._collision_local_bounds = QRect(self._mask_bounds)
             else:
                 self._collision_local_bounds = stable.united(self._mask_bounds)
-
-    # ---- B14：后台 bounds 预计算驱动 ----
-    def start_bounds_warm(self) -> None:
-        """应用层调用：窗口就绪后启动后台 bounds 预计算（幂等）。
-
-        只由真实应用（PetApp._create_ui / switch_character）触发；测试直接
-        构造的窗口不会自动预热。隐藏/关闭时 worker 退出，showEvent、
-        (scale, dpr) 变化或低优先级批处理补建 clip 后按需重启。
-        """
-        self._bounds_warm_started = True
-        # 低优先级批处理在 GUI 线程补建 clip 后（信号跨线程排队到 GUI 线程），
-        # 触发一轮 bounds 预计算；无该信号的库（测试桩）则跳过。
-        if hasattr(self.lib, 'low_warm_batch_finished'):
-            try:
-                self.lib.low_warm_batch_finished.connect(
-                    self._on_bounds_warm_batch_finished
-                )
-            except (RuntimeError, TypeError):
-                pass
-        self._maybe_start_bounds_warm()
-
-    def _on_bounds_warm_batch_finished(self) -> None:
-        """GUI 线程槽：低优先级批处理补建 clip 后补一轮 bounds 预计算。"""
-        if getattr(self, '_closing', False):
-            return
-        self._bounds_warm_done = False
-        self._bounds_warm_retries = 0
-        self._bounds_warm_empty_ticks = 0
-        self._maybe_start_bounds_warm()
-
-    def _maybe_start_bounds_warm(self) -> None:
-        """GUI 线程：满足条件则采集纯数据快照并启动一个 bounds worker（幂等）。
-
-        worker 只持有快照/停止事件/结果队列/进程登记集合（均为普通对象），
-        不触碰任何 Qt 对象；结果由 _on_bounds_warm_poll 在 GUI 线程提交。
-        """
-        if not getattr(self, '_bounds_warm_started', False):
-            return
-        if self._bounds_warm_running or self._bounds_warm_done:
-            return
-        if getattr(self, '_closing', False) or getattr(self, '_hidden_paused', False):
-            return
-        if not getattr(self, 'lib', None):
-            return
-        snapshot = self._collect_bounds_snapshot()
-        if not snapshot['tasks']:
-            # 无待预热任务：全部已缓存/无 bounds API → 直接判完成；并发认领忙
-            # 或目标 clip 尚未创建 → 不得永久停滞（B14 复审 R2 P1）：进入轮询
-            # 重试（有独立上限），绝不虚假标记 done；超限停表后由 showEvent/
-            # (scale,dpr) 变化/批次补建重置重新尝试。
-            if self._bounds_warm_complete():
-                self._bounds_warm_done = True
-                self._bounds_warm_empty_ticks = 0
-                self._bounds_warm_timer.stop()
-                return
-            self._bounds_warm_empty_ticks += 1
-            if self._bounds_warm_empty_ticks < _BOUNDS_WARM_EMPTY_MAX_TICKS:
-                self._bounds_warm_timer.start()
-            else:
-                self._bounds_warm_timer.stop()
-            return
-        if self._bounds_warm_retries >= _BOUNDS_WARM_MAX_RETRIES:
-            # 重试上限仍不完整：停表放弃本轮（预计算确实未完成，不虚假标记
-            # done）；后续 showEvent/(scale,dpr) 变化/批次补建会重置重试。
-            self._bounds_warm_timer.stop()
-            return
-        self._bounds_warm_running = True
-        self._bounds_warm_retries += 1
-        self._bounds_warm_empty_ticks = 0
-        self._bounds_warm_round_gen += 1
-        round_gen = self._bounds_warm_round_gen
-        stop_evt = threading.Event()
-        self._bounds_warm_stop_evt = stop_evt
-        procs_lock = threading.Lock()
-        self._bounds_warm_procs_lock = procs_lock
-        self._bounds_warm_procs = set()
-        try:
-            th = threading.Thread(
-                target=_run_bounds_warm_tasks,
-                args=(snapshot, stop_evt, self._bounds_warm_results,
-                      self._bounds_warm_procs, procs_lock, round_gen),
-                daemon=True,
-                name='bounds-warm',
-            )
-            self._bounds_warm_thread = th
-            th.start()
-            self._bounds_warm_timer.start()
-        except Exception:
-            self._bounds_warm_running = False
-            self._bounds_warm_thread = None
-            logging.debug('bounds 预热线程启动失败', exc_info=True)
-
-    def _collect_bounds_snapshot(self) -> dict:
-        """GUI 线程：采集 bounds 预计算任务的不可变纯数据快照。
-
-        worker 只拿到普通值（路径/尺寸/bpp/镜像/scale/dpr/has_text/代次），
-        不持有任何 Qt 对象；DPR 必须在 GUI 线程读取后作为 float 传入
-        （B14 复审 P1：worker 内调用 QWidget/QGui API 属线程违规）。
-        """
-        names = self._bounds_warm_order()
-        no_mirror = getattr(self.lib, 'no_mirror', frozenset())
-        dpr = _window_current_dpr(self)
-        tasks: list[dict] = []
-        for name in names:
-            clip = self.lib.movies().get(name)
-            if clip is None:
-                continue  # clip 尚未在 GUI 线程创建：由低优先级批次补建后重扫
-            snap = getattr(clip, 'bounds_warm_snapshot', None)
-            if not callable(snap):
-                continue  # GIF 等无 bounds API：运行时回落扫描
-            has_text = name in no_mirror
-            modes = (False,) if has_text else (False, True)
-            for mirrored in modes:
-                info = snap(mirrored, float(self.scale), dpr, has_text)
-                if info is None:
-                    continue  # 已缓存 / 解码依赖缺失 / 并发认领忙
-                info = dict(info)
-                info['name'] = name
-                tasks.append(info)
-        return {'scale': float(self.scale), 'dpr': dpr, 'tasks': tasks}
-
-    def _on_bounds_warm_poll(self) -> None:
-        """GUI 线程定时槽（B14 复审 P1）：排空 worker 结果并按代次提交；
-        worker 退出后做完成判定（按目标键验证结果已提交）/ 有限重试 / 停表。
-
-        B14 复审 R2：结果携带窗口级轮次代次（round_gen），旧轮次迟到结果
-        直接丢弃（窗口级停止自足）；重试耗尽时停表但绝不虚假标记 done。
-        """
-        # 1) 排空结果队列（整包提交；代次确认 + 缓存写入与取消换代同一把锁；
-        #    旧轮次迟到结果按窗口级轮次代次丢弃）
-        while True:
-            try:
-                item = self._bounds_warm_results.get_nowait()
-            except queue.Empty:
-                break
-            if (isinstance(item, tuple) and len(item) >= 5
-                    and item[4] != getattr(self, '_bounds_warm_round_gen', None)):
-                continue  # 旧轮次（停止/换代后）迟到结果：不得生效
-            name, key, data, gen = item[0], item[1], item[2], item[3]
-            clip = None
-            lib = getattr(self, 'lib', None)
-            if lib is not None:
-                clip = lib.movies().get(name)
-            commit = getattr(clip, 'bounds_warm_commit', None)
-            if callable(commit):
-                try:
-                    commit(key, data, gen)
-                except Exception:
-                    logging.debug('bounds 结果提交失败: %s', name, exc_info=True)
-        # 2) worker 退出 → 清理在飞标志
-        th = self._bounds_warm_thread
-        if th is not None and not th.is_alive() and self._bounds_warm_running:
-            self._bounds_warm_running = False
-            self._bounds_warm_thread = None
-        # 3) 完成判定 / 重试 / 停表
-        if (not getattr(self, '_bounds_warm_started', False)
-                or getattr(self, '_closing', False)
-                or getattr(self, '_hidden_paused', False)):
-            self._bounds_warm_timer.stop()
-            return
-        if self._bounds_warm_done or self._bounds_warm_running:
-            return
-        if self._bounds_warm_complete():
-            self._bounds_warm_done = True
-            self._bounds_warm_empty_ticks = 0
-            self._bounds_warm_timer.stop()
-        elif self._bounds_warm_retries < _BOUNDS_WARM_MAX_RETRIES:
-            self._maybe_start_bounds_warm()
-        else:
-            # 重试上限仍不完整：停表放弃本轮（B14 复审 R2：绝不把未完成虚假
-            # 标记为 done——运行时回落扫描行为不变，后续 showEvent/(scale,dpr)
-            # 变化/批次补建会重置重试重新尝试）。
-            self._bounds_warm_timer.stop()
-
-    def _bounds_warm_complete(self) -> bool:
-        """GUI 线程：按目标键逐一验证预计算结果已提交。
-
-        区分「clip 已创建」≠「任务已执行」≠「结果已提交」：完成条件按
-        bounds_data(...) is not None 逐一验证每个目标 (name, mirrored) 键；
-        GIF 等无 bounds API 的 clip 不计入（运行时回落扫描，不阻塞完成）。
-        """
-        lib = getattr(self, 'lib', None)
-        if lib is None:
-            return False
-        names = self._bounds_warm_order()
-        if not names:
-            return True
-        no_mirror = getattr(lib, 'no_mirror', frozenset())
-        dpr = _window_current_dpr(self)
-        movies = lib.movies()
-        for name in names:
-            clip = movies.get(name)
-            if clip is None:
-                return False
-            getter = getattr(clip, 'bounds_data', None)
-            if not callable(getter):
-                continue  # GIF 等无 bounds API：回落扫描，不计入完成
-            has_text = name in no_mirror
-            modes = (False,) if has_text else (False, True)
-            for mirrored in modes:
-                if getter(mirrored, float(self.scale), dpr) is None:
-                    return False
-        return True
-
-    def _bounds_warm_stop(self) -> None:
-        """停止在飞 bounds 预计算（GUI 线程；hide/closeEvent 调用）。
-
-        完整停止协议（B14 复审 R2 P1）：
-        1. 置停止事件让 worker 逐帧放弃，并 terminate 已登记的解码进程
-           （取消后迟到的登记自终止）——隐藏/切角色后不再有不受控的后台 ffmpeg；
-        2. 窗口级换代（_bounds_warm_round_gen += 1）：本轮所有在飞/迟到结果
-           作废，poll 按轮次代次丢弃——窗口级停止自足，不依赖库侧
-           pause_warm 的 cancel；
-        3. 有界 join 旧 worker：已 terminate 其解码进程，正常毫秒级退出，
-           保证恢复显示前旧 worker 不再写结果队列；
-        4. 清空结果队列：旧轮次已入队但未提交的结果不进入下一轮提交；
-        5. 同步复位在飞标志（worker 只持有停止事件/纯对象，退出时不写窗口
-           状态），恢复显示后 showEvent → _maybe_start_bounds_warm 可立即重启。
-        """
-        evt = getattr(self, '_bounds_warm_stop_evt', None)
-        if evt is not None:
-            evt.set()
-        procs = []
-        lock = getattr(self, '_bounds_warm_procs_lock', None)
-        if lock is not None:
-            with lock:
-                procs = list(self._bounds_warm_procs)
-                self._bounds_warm_procs.clear()
-        for p in procs:
-            try:
-                webm_clip_mod.WebMClip._terminate_proc(p)
-            except Exception:
-                pass
-        if hasattr(self, '_bounds_warm_round_gen'):
-            self._bounds_warm_round_gen += 1  # 本轮所有在飞/迟到结果作废
-        th = getattr(self, '_bounds_warm_thread', None)
-        if th is not None:
-            try:
-                th.join(timeout=_BOUNDS_WARM_JOIN_TIMEOUT)
-            except Exception:
-                pass
-        results = getattr(self, '_bounds_warm_results', None)
-        if results is not None:
-            try:
-                while True:
-                    results.get_nowait()
-            except queue.Empty:
-                pass
-        self._bounds_warm_running = False
-        self._bounds_warm_thread = None
-        if hasattr(self, '_bounds_warm_empty_ticks'):
-            self._bounds_warm_empty_ticks = 0
-        timer = getattr(self, '_bounds_warm_timer', None)
-        if timer is not None:
-            timer.stop()
-
-    def _bounds_warm_order(self) -> list[str]:
-        """预热顺序：高频交互动画（点击/待机/转向/移动/拖拽）优先，动作池殿后。"""
-        names: list[str] = []
-        for key in ('clicks', 'idles', 'turns', 'moves'):
-            names += list(self.cats.get(key) or [])
-        drag = self.cats.get('drag')
-        if drag:
-            names.append(drag)
-        names += list(self.cats.get('acts') or [])
-        seen: set[str] = set()
-        ordered: list[str] = []
-        for n in names:
-            if n not in seen:
-                seen.add(n)
-                ordered.append(n)
-        return ordered
 
     def collision_content_rect(self) -> QRect:
         """碰撞用的稳定可见区域（全局坐标）：取当前动画各帧包围盒的并集，
@@ -4499,7 +4023,6 @@ class PetWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._closing = True  # 关闭后丢弃迟到的动画事件（生命周期守卫）
-        self._bounds_warm_stop()  # 停止在飞 bounds 预计算（停止事件 + terminate）
         if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
             self._cancel_slingshot_to_anchor()
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调

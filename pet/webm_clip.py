@@ -31,12 +31,11 @@ import json
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from . import catalog
-from . import bounds_precompute as bounds_mod
 
 logger = logging.getLogger(__name__)
 
@@ -269,89 +268,6 @@ else:
     _IMPORT_ERROR = None
 
 
-def compute_anim_bounds(path, w, h, bpp, *, mirrored, scale, dpr, has_text,
-                        is_stale, on_process=None, on_process_done=None):
-    """独立解码整个动画并逐帧计算窗口局部可见 bounds（纯数据，B14 复审 P1）。
-
-    参数全部为普通值/回调，不持有任何 Qt 对象，可在后台线程执行：
-    - path/w/h/bpp：解码所需的文件路径与像素格式（GUI 线程从 clip 快照）；
-    - mirrored/scale/dpr/has_text：与运行时渲染参数一致（scale/dpr 由 GUI
-      线程采集后原样传入，绝不在本函数内读取 QWidget/QGui）；
-    - is_stale()：逐帧调用的取消探针（换代/停止事件），返回 True 则结果作废；
-    - on_process(proc, argv)：ffmpeg 解码进程一拉起即回调（登记句柄供取消
-      主动 terminate；调用方须在回调内复查 stale，取消后迟到的登记自终止）；
-    - on_process_done(proc)：解码收尾回调（注销句柄）。
-
-    返回 AnimBounds 整包数据（union/feet 含空动画语义）；被取消/失败返回
-    None——调用方不得提交。
-    """
-    if imageio_ffmpeg is None:
-        return None
-    proc = None
-    g = None
-    flat = bounds_mod.empty_flat(0)
-    union = None
-    try:
-        def _register(p: subprocess.Popen, argv) -> None:
-            """解码进程 Popen 一拉起即回调（可能发生在头部解析阻塞期间）：
-            记录句柄供收尾注销，并转发给调用方登记（其锁内复查 stale）。"""
-            nonlocal proc
-            if not (isinstance(argv, list) and "-i" in argv):
-                return  # ffmpeg exe 探测等非解码进程：忽略
-            proc = p
-            if on_process is not None:
-                on_process(p, argv)
-
-        with _PopenCapture(on_process=_register):
-            g = imageio_ffmpeg.read_frames(
-                str(path),
-                pix_fmt='rgba',
-                bits_per_pixel=bpp * 8,
-                input_params=['-c:v', 'libvpx-vp9'],
-            )
-            next(g)  # ffmpeg 进程在此拉起；capture 即时回调登记句柄
-            expect = w * h * bpp
-            for frame_data in g:
-                if is_stale():
-                    return None  # 解码期间被取消/换代/停止：结果作废
-                if len(frame_data) != expect:
-                    continue
-                img = QImage(frame_data, w, h, w * bpp,
-                             QImage.Format.Format_RGBA8888)
-                if img.isNull():
-                    continue
-                rect = bounds_mod.frame_window_bounds(
-                    img, mirrored=mirrored, scale=scale, dpr=dpr
-                )
-                if rect.isEmpty():
-                    flat.extend((-1, -1, -1, -1))
-                else:
-                    flat.extend((rect.x(), rect.y(), rect.right(), rect.bottom()))
-                    union = rect if union is None else union.united(rect)
-        if is_stale():
-            return None
-        frame_count = len(flat) // 4
-        if frame_count == 0:
-            return None
-        u = union if union is not None else QRect()
-        feet = QPoint(u.center().x(), u.bottom()) if not u.isEmpty() else QPoint(0, 0)
-        return bounds_mod.AnimBounds(frame_count, flat, u, feet, has_text)
-    except Exception as exc:
-        logger.warning('webm bounds 预计算失败 %s: %s', path, exc)
-        return None
-    finally:
-        if proc is not None and on_process_done is not None:
-            try:
-                on_process_done(proc)
-            except Exception:
-                pass
-        if g is not None:
-            try:
-                g.close()
-            except Exception:
-                pass
-
-
 class WebMClip(QObject):
     """与窗口层期望的媒体播放器接口兼容。"""
 
@@ -410,21 +326,7 @@ class WebMClip(QObject):
         # terminate，隐藏/切角色后不再有不受控的后台 ffmpeg 存活。
         self._first_frame_gen = 0
         self._first_frame_procs: set = set()
-        # 动画 bounds 预计算（B14）：与首帧解码同款的 锁 + 代次 + 进程登记
-        # 生命周期（互不复用同一把锁/代次，两条解码任务互不干扰；取消/回收
-        # 均走 _reader_lock 保护登记集合）。结果按 (mirrored, scale, dpr) 键
-        # 整包原子提交——绝不提交半成品，运行时才可安全地把缓存当完整 union。
-        self._bounds_lock = threading.Lock()
-        self._bounds_gen = 0
-        self._bounds_procs: set = set()
-        self._bounds_cache: dict[tuple, bounds_mod.AnimBounds] = {}
-        # 帧号契约（B14 复审 P0）：_frame_index 是「事件序号」（1 基，frameChanged
-        # 信号值，供 _on_frame 播完判定/currentTimeSeconds），_display_frame_index
-        # 是「当前显示帧索引」（0 基，== 预计算表索引 == QMovie 语义）。两者分离，
-        # 播放推进时先记录本次显示帧的索引再自增事件序号；jumpToFrame(0)/首帧
-        # 缓存路径显示首帧时索引为 0。运行时查预计算表必须用显示帧索引。
         self._frame_index = 0
-        self._display_frame_index = 0
         self._ended_fired = False
         self._running = False
         self._generation = 0
@@ -451,7 +353,6 @@ class WebMClip(QObject):
         """
         self._cleaned = True
         self.cancel_first_frame_warm()
-        self.cancel_bounds_warm()
         try:
             self.stop()
         except RuntimeError:
@@ -598,8 +499,7 @@ class WebMClip(QObject):
         return self._duration / self.playback_speed if self._duration > 0 else 0.0
 
     def currentFrameNumber(self) -> int:
-        """当前显示帧索引（0 基，== 预计算表索引；与 QMovie 语义一致）。"""
-        return self._display_frame_index
+        return self._frame_index
 
     def currentTimeSeconds(self) -> float:
         if self._fps <= 0:
@@ -663,7 +563,6 @@ class WebMClip(QObject):
         self._reader_ready = ready_evt
         self._queue = queue.Queue(maxsize=8)
         self._frame_index = 0
-        self._display_frame_index = 0
         self._ended_fired = False
         self._running = True
         self._generation += 1
@@ -712,7 +611,6 @@ class WebMClip(QObject):
         if frame_index <= 0:
             self.stop()
             self._frame_index = 0
-            self._display_frame_index = 0
             if self._first_image is not None:
                 # 首帧已缓存（后台 warm_first_frame 或上次同步解码）：
                 # 主线程直接转 QPixmap，零阻塞、无旧帧残留窗口。
@@ -943,195 +841,6 @@ class WebMClip(QObject):
         for p in procs:
             self._terminate_proc(p)
 
-    # ------------------------------------------------------------ bounds 预计算（B14）
-    def warm_bounds(self, mirrored: bool, scale: float, dpr: float,
-                    has_text: bool = False) -> None:
-        """后台线程预计算整个动画的可见 bounds（锁 + 代次，与 warm_first_frame
-        同款原子认领）。
-
-        - 同一时间只有一个执行者：认领失败（并发 warm 或解码进行中）直接放弃，
-          不排队等待——预热是尽力而为；
-        - 解码拉起的 ffmpeg 进程登记进 _bounds_procs（_reader_lock 保护，
-          登记回调在锁内复查代次，B7 复审 R2 同款），cancel_bounds_warm /
-          cleanup 可主动 terminate；
-        - 结果按 (mirrored, scale, dpr) 键整包原子提交（全部帧算完才写入
-          _bounds_cache），被取消/换代则作废不提交——运行时把缓存当完整
-          union 使用才是安全的；
-        - 代次确认 + 缓存写入与 cancel_bounds_warm 的换代使用同一把锁
-          （_reader_lock，B14 复审 P1：取消与提交同一同步协议，取消后绝不
-          提交旧结果）。
-
-        mirrored：是否按朝向镜像（facing=right 且非 no_mirror）；scale/dpr
-        与窗口渲染参数一致；has_text：文字动画标记（text_clips.json）。
-        """
-        if self._cleaned or imageio_ffmpeg is None:
-            return
-        key = (bool(mirrored), float(scale), float(dpr))
-        if self._bounds_cache_contains(key):
-            return
-        if not self._bounds_lock.acquire(blocking=False):
-            return
-        try:
-            if self._bounds_cache_contains(key):
-                return
-            gen = self._bounds_gen
-            data = self._compute_bounds(gen, key, bool(has_text))
-            if data is not None:
-                with self._reader_lock:
-                    if not self._cleaned and gen == self._bounds_gen:
-                        self._bounds_cache[key] = data
-        finally:
-            self._bounds_lock.release()
-
-    def _compute_bounds(self, gen: int, key: tuple, has_text: bool):
-        """解码全部帧并逐帧计算窗口局部 bounds（线程安全：只用 QImage）。
-
-        复用模块级 compute_anim_bounds（纯数据独立解码）：本方法只负责把
-        clip 的路径/尺寸/bpp 与代次/清理状态闭包进去。解码期间被换代/
-        cleanup 则返回 None（结果作废，不污染缓存）。
-        """
-        mirrored, scale, dpr = key
-
-        def _is_stale() -> bool:
-            return self._cleaned or gen != self._bounds_gen
-
-        def _register(p: subprocess.Popen, argv) -> None:
-            """解码进程 Popen 一拉起即回调：登记句柄供取消/cleanup 主动
-            terminate；在锁内复查代次——取消后迟到的登记必须自终止，
-            已取消进程绝不漏进集合（B7 复审 R2 同款）。"""
-            with self._reader_lock:
-                stale = self._cleaned or gen != self._bounds_gen
-                if not stale:
-                    self._bounds_procs.add(p)
-            if stale:
-                self._terminate_proc(p)
-
-        def _unregister(p: subprocess.Popen) -> None:
-            with self._reader_lock:
-                self._bounds_procs.discard(p)
-
-        return compute_anim_bounds(
-            str(self.path), self._w, self._h, self._bpp,
-            mirrored=mirrored, scale=scale, dpr=dpr, has_text=has_text,
-            is_stale=_is_stale,
-            on_process=_register,
-            on_process_done=_unregister,
-        )
-
-    def bounds_warm_snapshot(self, mirrored: bool, scale: float, dpr: float,
-                             has_text: bool = False) -> dict | None:
-        """GUI 线程采集 bounds 预计算任务的纯数据快照（B14 复审 P1）。
-
-        返回的 dict 只含普通值（路径/尺寸/bpp/镜像/scale/dpr/has_text/代次），
-        不持有任何 Qt 对象引用——后台 worker 据此独立解码，绝不触碰本 clip；
-        结果由 GUI 线程经 bounds_warm_commit 提交。
-
-        返回 None 表示无需预热：已缓存 / imageio_ffmpeg 不可用 / 已 cleanup /
-        并发预热认领忙（尽力而为，不排队）。
-        """
-        if self._cleaned or imageio_ffmpeg is None:
-            return None
-        key = (bool(mirrored), float(scale), float(dpr))
-        if self._bounds_cache_contains(key):
-            return None
-        if not self._bounds_lock.acquire(blocking=False):
-            return None
-        try:
-            if self._bounds_cache_contains(key):
-                return None
-            gen = self._bounds_gen
-        finally:
-            self._bounds_lock.release()
-        return {
-            "path": str(self.path),
-            "w": self._w,
-            "h": self._h,
-            "bpp": self._bpp,
-            "key": key,
-            "mirrored": bool(mirrored),
-            "scale": float(scale),
-            "dpr": float(dpr),
-            "has_text": bool(has_text),
-            "gen": gen,
-        }
-
-    def bounds_warm_commit(self, key: tuple, data, gen: int) -> bool:
-        """GUI 线程提交 bounds 预计算结果（B14 复审 P1）。
-
-        worker 独立解码完成后由窗口 GUI 线程回调本方法：代次确认 + 缓存写入
-        与 cancel_bounds_warm 的换代使用同一把锁（_reader_lock），取消/cleanup
-        后旧代次结果绝不进入缓存。
-        """
-        with self._reader_lock:
-            if self._cleaned or gen != self._bounds_gen:
-                return False
-            self._bounds_cache[key] = data
-            return True
-
-    def _bounds_cache_get(self, key: tuple):
-        """持锁读取 _bounds_cache 单项（B14 复审 R2 P1）。
-
-        缓存读写统一同步协议：写入（warm_bounds/bounds_warm_commit 的整包
-        提交）与读取（bounds_data 及 warm_bounds/bounds_warm_snapshot 的
-        存在性预检）全部经 _reader_lock——该锁同时是取消换代（cancel_bounds_warm）
-        与代次确认的锁，读者绝不见取消后旧代次结果/半成品。
-        """
-        with self._reader_lock:
-            return self._bounds_cache.get(key)
-
-    def _bounds_cache_contains(self, key: tuple) -> bool:
-        """持锁检查 _bounds_cache 是否已提交该键（与写入同一同步协议）。"""
-        with self._reader_lock:
-            return key in self._bounds_cache
-
-    def bounds_data(self, mirrored: bool, scale: float, dpr: float):
-        """指定 (mirrored, scale, dpr) 键的完整 bounds 数据；未预计算返回 None。
-
-        读取与写入共用 _reader_lock（B14 复审 R2 P1）：读者只会看到 None 或
-        整包提交的完整 AnimBounds，取消后旧代次结果绝不进入缓存。
-        """
-        return self._bounds_cache_get((bool(mirrored), float(scale), float(dpr)))
-
-    def bounds_rect(self, mirrored: bool, scale: float, dpr: float,
-                    frame_n: int | None) -> QRect | None:
-        """运行时逐帧查询：当前帧的窗口局部可见 bounds。
-
-        命中返回 QRect（空帧为 QRect()，与画布扫描一致）；未预计算或帧号
-        越界返回 None——调用方（_sync_mask）回落到现有逐帧扫描，行为不变。
-        """
-        data = self.bounds_data(mirrored, scale, dpr)
-        if data is None or frame_n is None:
-            return None
-        return data.frame_rect(int(frame_n))
-
-    def bounds_union(self, mirrored: bool, scale: float, dpr: float) -> QRect | None:
-        """预计算的整段动画 union 可见 bounds（窗口局部坐标）；未预计算返回 None。
-
-        仅当该键整包预计算完成后存在（原子提交），因此可安全地直接作为
-        碰撞稳定体边界使用，不会出现半成品下界（漏判）。
-        """
-        data = self.bounds_data(mirrored, scale, dpr)
-        if data is None:
-            return None
-        return QRect(data.union)
-
-    def cancel_bounds_warm(self) -> None:
-        """取消在飞 bounds 预计算：换代使在飞解码结果作废，并主动 terminate
-        其 ffmpeg 进程。
-
-        由 cleanup()（clip 销毁）与 MovieLibrary.pause_warm()（隐藏/切角色）
-        调用。之后新的 warm_bounds 仍可重新预计算（代次自增，非终态）。
-        换代与集合读取/清空在 _reader_lock 内原子完成——该锁同时是
-        warm_bounds/bounds_warm_commit 的代次确认 + 缓存提交锁（B14 复审 P1：
-        取消与提交同一同步协议，取消后旧代次结果绝不进入缓存）。
-        """
-        with self._reader_lock:
-            self._bounds_gen += 1
-            procs = list(self._bounds_procs)
-            self._bounds_procs.clear()
-        for p in procs:
-            self._terminate_proc(p)
-
     # ------------------------------------------------------------ reader
     def _reader(self, stop_evt: threading.Event, generation: int,
                 ready_evt: threading.Event | None = None) -> None:
@@ -1265,9 +974,5 @@ class WebMClip(QObject):
             return
         self._current_image = img.copy()
         self._current_pixmap = QPixmap.fromImage(self._current_image)
-        # 帧号契约（B14 复审 P0）：先记录本次显示帧的索引（0 基，== 预计算表
-        # 索引），再自增事件序号（1 基，frameChanged 信号值）。第一帧显示时
-        # 查表必须命中第 0 帧 bounds，最后一帧不得越界回落。
-        self._display_frame_index = self._frame_index
         self._frame_index += 1
         self.frameChanged.emit(self._frame_index)
