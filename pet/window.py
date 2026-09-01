@@ -619,14 +619,20 @@ class PetWindow(QWidget):
         # 切换动画/缩放时重置），避免圆链随动画帧缩放跳动导致漏判
         self._collision_local_bounds: QRect | None = None
         self._hit_alpha_image: QImage | None = None
-        # 已重建帧的输入签名（movie 身份、帧号、朝向、动画、缩放、DPR）：
-        # 相同签名重复 rebuild 时整条 toImage/镜像/缩放/转换链直接跳过
+        # 已重建帧的输入签名：movie 身份 + 完整缓存 key（素材路径+mtime+大小、
+        # 帧号、朝向、镜像、scale、DPR、动画名）。相同签名重复 rebuild 时整条
+        # toImage/镜像/缩放/转换链直接跳过；素材原地替换（mtime/大小变化）使
+        # key 不同，快路径同样失效（P1，不得绕过变更检测）。
         self._frame_key: tuple | None = None
+        # 当前帧构建时所用的屏幕 DPR：窗口跨屏（moveEvent）时对比新 DPR，
+        # 变化即强制 _rebuild_frame，避免旧 DPR 成品继续显示（P1）。
+        self._last_frame_dpr: float | None = None
         # 预缩放成品帧缓存（方案 A §3.1）：同一动画同一帧在相同
-        # (素材路径+mtime, 帧号, 朝向, scale, DPR, 动画名) 下结果确定，
+        # (素材路径+mtime+大小, 帧号, 朝向, scale, DPR, 动画名) 下结果确定，
         # 循环播放直接复用最终 QPixmap，跳过整条 CPU 转换链。
-        # 字节预算默认 256MB（可用 frame_cache_max_bytes 配置覆盖），
-        # 超限逐出最久未用；scale/DPR/角色/素材变化由 key 自动失效。
+        # 字节预算默认 256MB（可用 frame_cache_max_bytes 配置覆盖），按
+        # QPixmap+QImage 双份 ARGB32 记账，超限逐出最久未用（硬上界）；
+        # scale/DPR/角色/素材变化由 key 自动失效。
         try:
             _budget = int(self.cfg.get('frame_cache_max_bytes',
                                        FRAME_CACHE_DEFAULT_MAX_BYTES))
@@ -2015,14 +2021,18 @@ class PetWindow(QWidget):
             self._on_anim_ended(name)
 
     def _frame_cache_key(self, frame_n: int | None, dpr: float) -> tuple:
-        """预缩放缓存的 key：素材路径+mtime、帧号、朝向、动画名、scale、DPR。
+        """预缩放缓存的 key：素材路径+mtime+大小、帧号、朝向、动画名、scale、DPR。
 
         任意一项变化都会命中不同条目（scale/DPR/角色切换/素材文件变化
         由此自动失效）；镜像决策（facing + no_mirror）也进 key，避免
-        文字动画朝右与朝左共用条目。
+        文字动画朝右与朝左共用条目。mtime 之外再记 st_size：复制工具
+        保留 mtime 时，内容大小变化仍能失效（P1）。该 key 同时是
+        _rebuild_frame 快路径签名的一部分：素材原地替换（mtime/大小
+        变化）时快路径同样失效，不会绕过变更检测。
         """
         path: str | None = None
         mtime = 0
+        size = 0
         path_getter = getattr(self.lib, 'clip_path', None)
         if callable(path_getter):
             try:
@@ -2035,10 +2045,13 @@ class PetWindow(QWidget):
                 except TypeError:
                     path = str(clip_path)
                 try:
-                    # 素材文件变更（mtime 变化）必须失效旧成品
-                    mtime = os.stat(clip_path).st_mtime_ns
+                    # 素材文件变更（mtime/大小变化）必须失效旧成品
+                    st = os.stat(clip_path)
+                    mtime = st.st_mtime_ns
+                    size = st.st_size
                 except OSError:
                     mtime = 0
+                    size = 0
         if path is None:
             # 无 clip_path 的库（测试桩）：退化为 clip 实例身份，保证不串帧
             path = '<clip:%d>' % id(self.movie)
@@ -2046,12 +2059,13 @@ class PetWindow(QWidget):
             self.facing == 'right'
             and self.anim not in getattr(self.lib, 'no_mirror', frozenset())
         )
-        return (path, mtime, frame_n, self.facing, mirrored, self.scale, dpr, self.anim)
+        return (path, mtime, size, frame_n, self.facing, mirrored,
+                self.scale, dpr, self.anim)
 
     def _rebuild_frame(self) -> None:
         """重建当前帧：缩放 + 朝向镜像 + 生成窗口 mask。
 
-        帧内容由（素材路径+mtime、帧号、朝向、动画、缩放、DPR）唯一确定。
+        帧内容由（素材路径+mtime+大小、帧号、朝向、动画、缩放、DPR）唯一确定。
         两级复用：
         - 同一 movie 同一帧重复 rebuild（_frame_key 相同）：整条链直接跳过；
         - 动画循环回到已构建过的帧：命中预缩放缓存（FramePixmapCache），
@@ -2062,11 +2076,15 @@ class PetWindow(QWidget):
             return
         scr = self._screen_available()
         dpr = scr.devicePixelRatio() if scr is not None else 1.0
+        self._last_frame_dpr = dpr
         try:
             frame_n = self.movie.currentFrameNumber()
         except AttributeError:
             frame_n = None
-        key = (id(self.movie), frame_n, self.facing, self.anim, self.scale, dpr)
+        # 快路径签名 = movie 身份 + 完整缓存 key：素材 mtime/大小变化会改变
+        # 缓存 key，快路径随之失效——快路径不得绕过素材变更检测（P1）。
+        cache_key = self._frame_cache_key(frame_n, dpr)
+        key = (id(self.movie), cache_key)
         if key == getattr(self, '_frame_key', None):
             return
         cache = getattr(self, '_frame_cache', None)
@@ -2075,7 +2093,6 @@ class PetWindow(QWidget):
                 getattr(self, '_frame_cache_max_bytes', FRAME_CACHE_DEFAULT_MAX_BYTES)
             )
             self._frame_cache = cache
-        cache_key = self._frame_cache_key(frame_n, dpr)
         entry = cache.get(cache_key)
         if entry is not None:
             # 命中：直接复用最终 pixmap 与命中测试 alpha 图。两者出自同一
@@ -2112,6 +2129,21 @@ class PetWindow(QWidget):
         self._hit_alpha_image = img
         self._frame_key = key
         self._sync_mask()
+
+    def _refresh_frame_for_screen_dpr(self) -> None:
+        """窗口所在屏幕 DPR 变化（跨屏/显示缩放变化）时强制按新 DPR 重建帧。
+
+        _rebuild_frame 只在被调用时读取 DPR；窗口跨屏后若帧号/朝向等未变，
+        _frame_key 快路径会跳过整条链，旧 DPR 的成品继续显示（模糊/物理
+        尺寸不符，P1）。在 moveEvent 中对比「当前屏 DPR」与「当前帧构建
+        所用 DPR」，变化即重建并重绘；DPR 未变（同屏移动）零开销。
+        """
+        scr = self._screen_available()
+        dpr = scr.devicePixelRatio() if scr is not None else 1.0
+        if (self._frame_pixmap is not None
+                and dpr != getattr(self, '_last_frame_dpr', None)):
+            self._rebuild_frame()
+            self.update()
 
     def _frame_draw_rect(self) -> QRect:
         """当前帧在窗口内的绘制矩形（逻辑坐标）；paintEvent 与命中测试共用。"""
@@ -3986,6 +4018,10 @@ class PetWindow(QWidget):
 
     def moveEvent(self, event) -> None:  # noqa: N802
         super().moveEvent(event)
+        # 跨屏（屏幕 DPR 变化）：_rebuild_frame 只在被调用时读 DPR，帧号/
+        # 朝向等未变时 _frame_key 快路径会跳过 → 这里检测 DPR 变化并强制
+        # 按新 DPR 重建帧，避免跨屏后继续显示旧 DPR 成品（P1）。
+        self._refresh_frame_for_screen_dpr()
         # 非 force 节流提交：位置变化由去重 + 20Hz 限流兜底，运动期由
         # _collision_timer（50ms）强制上报，避免 60Hz 抛掷移动上报超标
         self._submit_collision_state()

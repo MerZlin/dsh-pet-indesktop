@@ -135,6 +135,7 @@ class _CachePet:
         self._squash_active = False
         self._squash_progress = 1.0
         self._sync_mask_calls = 0
+        self.update_calls = 0
         if cache_max_bytes is not None:
             self._frame_cache_max_bytes = cache_max_bytes
 
@@ -143,6 +144,9 @@ class _CachePet:
 
     def _sync_mask(self):
         self._sync_mask_calls += 1
+
+    def update(self):
+        self.update_calls += 1
 
 
 def _make_pet(clip_images, **kwargs):
@@ -154,16 +158,19 @@ def _make_pet(clip_images, **kwargs):
 # ================================================================ 缓存本体：LRU / 预算 / 计数
 
 def test_frame_cache_lru_eviction_and_counters():
-    """字节预算 LRU：超限逐出最久未用；命中/逐出/缺失/插入计数正确。"""
+    """字节预算 LRU：超限逐出最久未用；命中/逐出/缺失/插入计数正确。
+
+    字节按双份（QPixmap+QImage）ARGB32 记账：16x16 每条 16*16*4*2 = 2048B。
+    """
     _qapp()
-    cache = FramePixmapCache(max_bytes=3 * 1024)  # 每条 16x16x4 = 1024B
+    cache = FramePixmapCache(max_bytes=3 * 2048)  # 三条 16x16 双份字节
     imgs = [QImage(16, 16, QImage.Format.Format_ARGB32) for _ in range(4)]
     for name, img in zip("abc", imgs[:3]):
         cache.put((name,), None, img)
     assert len(cache) == 3
     assert cache.stats()["evictions"] == 0
     assert cache.stats()["inserts"] == 3
-    assert cache.stats()["bytes"] == 3 * 1024
+    assert cache.stats()["bytes"] == 3 * 2048
 
     # 命中 a → LRU 序变为 b, c, a
     assert cache.get(("a",)) is not None
@@ -175,34 +182,60 @@ def test_frame_cache_lru_eviction_and_counters():
     assert cache.get(("b",)) is None  # 已被逐出
     assert cache.stats()["misses"] == 1
     assert cache.stats()["evictions"] == 1
-    assert cache.stats()["bytes"] == 3 * 1024
+    assert cache.stats()["bytes"] == 3 * 2048
     for name in "acd":
         assert cache.get((name,)) is not None
 
 
-def test_frame_cache_single_oversized_entry_stays():
-    """单帧超过预算：保留该条目不自我逐出；再放新条目时逐出旧大帧。"""
+def test_frame_cache_oversized_entry_not_cached_no_thrash():
+    """单帧超过预算：不入缓存（当前帧仍由调用方直接持有显示），预算为硬上界；
+    小条目正常积累，不再被超预算条目反复逐出（P2 缓存抖动顺修）。"""
     _qapp()
-    cache = FramePixmapCache(max_bytes=1024)
-    big = QImage(64, 64, QImage.Format.Format_ARGB32)  # 16384B > 预算
+    cache = FramePixmapCache(max_bytes=4096)
+    big = QImage(64, 64, QImage.Format.Format_ARGB32)  # 64*64*8 = 32768 > 预算
     cache.put(("big",), None, big)
-    assert len(cache) == 1
-    assert cache.get(("big",)) is not None
-    small = QImage(8, 8, QImage.Format.Format_ARGB32)  # 256B
-    cache.put(("small",), None, small)
+    assert len(cache) == 0              # 超预算条目不进入缓存
+    assert cache.total_bytes() == 0     # 预算严格不被突破
     assert cache.get(("big",)) is None
-    assert cache.get(("small",)) is not None
+    assert cache.stats()["evictions"] == 0
+
+    # 小条目（8x8 → 512B）正常积累，不因"大条目占预算"而抖动
+    for i in range(8):
+        cache.put((f"s{i}",), None, QImage(8, 8, QImage.Format.Format_ARGB32))
+    assert len(cache) == 8              # 8*512 = 4096 == 预算
+    assert cache.total_bytes() == 4096
+    assert cache.stats()["evictions"] == 0
+    for i in range(8):
+        assert cache.get((f"s{i}",)) is not None
+
+    # 第 9 个小条目 → 正常 LRU 逐出最久未用（s0），其余全部存活
+    cache.put(("s8",), None, QImage(8, 8, QImage.Format.Format_ARGB32))
+    assert cache.get(("s0",)) is None
+    assert len(cache) == 8
+    assert cache.total_bytes() <= 4096
+
+
+def test_frame_cache_oversized_put_removes_same_key_old_entry():
+    """同 key 已有正常条目时放入超预算新帧：旧条目被移除，绝不留陈旧像素。"""
+    _qapp()
+    cache = FramePixmapCache(max_bytes=4096)
+    cache.put(("k",), None, QImage(8, 8, QImage.Format.Format_ARGB32))
+    assert len(cache) == 1
+    cache.put(("k",), None, QImage(64, 64, QImage.Format.Format_ARGB32))  # 32768 > 4096
+    assert len(cache) == 0
+    assert cache.total_bytes() == 0
+    assert cache.get(("k",)) is None
 
 
 def test_frame_cache_put_replaces_and_reaccounts_bytes():
-    """同 key 重复 put：替换条目且字节重新记账（不重复累计）。"""
+    """同 key 重复 put：替换条目且字节重新记账（双份 w*h*4*2，不重复累计）。"""
     _qapp()
     cache = FramePixmapCache(max_bytes=4096)
-    cache.put(("k",), None, QImage(8, 8, QImage.Format.Format_ARGB32))    # 256B
-    assert cache.total_bytes() == 256
-    cache.put(("k",), None, QImage(16, 16, QImage.Format.Format_ARGB32))  # 1024B
+    cache.put(("k",), None, QImage(8, 8, QImage.Format.Format_ARGB32))    # 512B
+    assert cache.total_bytes() == 512
+    cache.put(("k",), None, QImage(16, 16, QImage.Format.Format_ARGB32))  # 2048B
     assert len(cache) == 1
-    assert cache.total_bytes() == 1024
+    assert cache.total_bytes() == 2048
     assert cache.stats()["inserts"] == 2
     assert cache.stats()["evictions"] == 0
 
@@ -342,6 +375,95 @@ def test_rebuild_frame_invalidates_on_material_file_change(tmp_path):
     assert new_img.size() == old_img.size()
     assert new_img.pixelColor(10, 10) == old_img.pixelColor(10, 10)
     assert new_img.pixelColor(100, 100) == old_img.pixelColor(100, 100)
+
+
+def test_rebuild_frame_invalidates_on_in_place_material_replace(tmp_path):
+    """P1：素材原地替换——同一 movie 实例、同一帧号，仅 mtime/内容变化，
+    _frame_key 快路径不得绕过变更检测，必须重新构建（不得继续显示旧成品）。"""
+    _qapp()
+    path = tmp_path / "idle.webm"
+    path.write_bytes(b"v0")
+    os.utime(path, (1000, 1000))
+
+    clip = _FramesClip([_frame_image(0)])  # 同一 clip 实例贯穿全程
+    pet = _CachePet(clip, _CacheLibrary({"idle": clip}, clip_paths={"idle": path}),
+                    anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    pm_v0 = pet._frame_pixmap
+    assert pet._frame_cache.stats()["misses"] == 1
+
+    # 同帧重复 rebuild：快路径确实生效（不重复解码/不重复 miss）
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip.pixmap_requests == 1
+    assert pet._frame_cache.stats()["misses"] == 1
+    assert pet._frame_pixmap is pm_v0
+
+    # 素材原地替换：mtime/内容变化，movie 实例/帧号/朝向/scale/DPR 全不变
+    path.write_bytes(b"v1")
+    os.utime(path, (2000, 2000))
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip.pixmap_requests == 2            # 快路径必须失效，重新走转换链
+    assert pet._frame_cache.stats()["misses"] == 2
+    assert pet._frame_pixmap is not pm_v0
+
+
+def test_rebuild_frame_invalidates_on_same_mtime_size_change(tmp_path):
+    """同一 mtime 下内容大小变化（复制工具保留 mtime 的场景）：st_size 进 key，
+    快路径同样失效，不得复用旧成品。"""
+    _qapp()
+    path = tmp_path / "idle.webm"
+    path.write_bytes(b"v0")
+    os.utime(path, (1000, 1000))
+
+    clip = _FramesClip([_frame_image(0)])
+    pet = _CachePet(clip, _CacheLibrary({"idle": clip}, clip_paths={"idle": path}),
+                    anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert pet._frame_cache.stats()["misses"] == 1
+
+    path.write_bytes(b"v0-with-much-longer-content")
+    os.utime(path, (1000, 1000))  # 保留同一 mtime，仅大小变化
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip.pixmap_requests == 2
+    assert pet._frame_cache.stats()["misses"] == 2
+
+
+# ================================================================ P1：DPR 变化触发重建
+
+def test_refresh_frame_for_screen_dpr_rebuilds_on_change():
+    """P1：屏幕 DPR 变化（窗口跨屏）→ 强制按新 DPR 重建帧并重绘。"""
+    _qapp()
+    clip, pet = _make_pet([_frame_image(0)], anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert pet._last_frame_dpr == 1.0
+    pm1 = pet._frame_pixmap
+    assert pet._frame_cache.stats()["misses"] == 1
+
+    pet._screen_dpr = 2.0  # 模拟窗口跨到 DPR 2 的屏幕
+    window_mod.PetWindow._refresh_frame_for_screen_dpr(pet)
+    assert pet._last_frame_dpr == 2.0
+    assert pet._frame_pixmap is not pm1
+    assert pet._frame_pixmap.width() == round(catalog.CANVAS_W * 0.5 * 2.0)
+    assert pet._frame_cache.stats()["misses"] == 2
+    assert pet.update_calls == 1
+
+
+def test_refresh_frame_for_screen_dpr_noop_when_unchanged():
+    """DPR 未变（同屏移动/微移）：不重建、不重绘，零开销。"""
+    _qapp()
+    clip, pet = _make_pet([_frame_image(0)], anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    pm1 = pet._frame_pixmap
+    window_mod.PetWindow._refresh_frame_for_screen_dpr(pet)
+    assert pet._frame_pixmap is pm1
+    assert pet.update_calls == 0
+    assert pet._frame_cache.stats()["misses"] == 1
+
+    # 尚无帧（movie=None）时同样安全 no-op
+    pet.movie = None
+    pet._frame_pixmap = None
+    window_mod.PetWindow._refresh_frame_for_screen_dpr(pet)
+    assert pet.update_calls == 0
 
 
 def test_character_switch_gets_fresh_cache_per_window():

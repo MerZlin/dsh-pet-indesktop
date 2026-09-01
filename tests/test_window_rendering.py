@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QBitmap, QColor, QImage, QPainter, QPixmap, QRegion
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QBitmap, QColor, QImage, QMoveEvent, QPainter, QPixmap, QRegion
+from PySide6.QtWidgets import QApplication, QWidget
 
 from pet import window as window_mod
 from pet import catalog
@@ -736,3 +736,54 @@ def test_is_transparent_at_dpr_mapping_with_cached_image():
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(159, 20)) is False
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(160, 20)) is True
     assert window_mod.PetWindow._is_transparent_at(fake, QPoint(200, 20)) is True
+
+
+# ================================================================ P1：跨屏 DPR 变化
+# moveEvent 接入 _refresh_frame_for_screen_dpr：窗口跨屏（DPR 变化）→ 强制
+# 按新 DPR 重建帧；DPR 未变的普通移动 → 零开销。
+
+def test_move_event_refreshes_frame_on_dpr_change():
+    """moveEvent 检测屏幕 DPR 变化：跨屏后重建帧并重绘；DPR 未变不重建。"""
+    _qapp()
+    calls = {"rebuild": 0, "update": 0}
+
+    class _MovePet(window_mod.PetWindow):
+        # 跳过 PetWindow 的繁重初始化：直接初始化 QWidget 层，只保留
+        # moveEvent 路径需要的成员（PetWindow 子类保证 super().moveEvent
+        # 解析到 QWidget，且 _refresh_frame_for_screen_dpr 直接继承）。
+        def __init__(self):
+            QWidget.__init__(self)
+            self._frame_pixmap = QPixmap(8, 8)
+            self._last_frame_dpr = 1.0
+            self._screen_dpr = 2.0
+
+        def _screen_available(self):
+            return SimpleNamespace(devicePixelRatio=lambda: self._screen_dpr)
+
+        def _rebuild_frame(self):
+            calls["rebuild"] += 1
+            self._last_frame_dpr = self._screen_dpr  # 与真实 _rebuild_frame 记账一致
+
+        def update(self):
+            calls["update"] += 1
+
+        def _submit_collision_state(self):
+            pass
+
+        def _schedule_position_sync(self):
+            pass
+
+    fake = _MovePet()
+    window_mod.PetWindow.moveEvent(fake, QMoveEvent(QPoint(10, 10), QPoint(0, 0)))
+    assert calls["rebuild"] == 1   # DPR 1 → 2：跨屏强制重建
+    assert calls["update"] == 1
+
+    # 同屏再移动（DPR 未变）：零开销
+    window_mod.PetWindow.moveEvent(fake, QMoveEvent(QPoint(20, 20), QPoint(10, 10)))
+    assert calls["rebuild"] == 1
+    assert calls["update"] == 1
+
+    # 移回 DPR 1 的屏幕：再次重建
+    fake._screen_dpr = 1.0
+    window_mod.PetWindow.moveEvent(fake, QMoveEvent(QPoint(0, 0), QPoint(20, 20)))
+    assert calls["rebuild"] == 2
