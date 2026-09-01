@@ -365,3 +365,30 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
     assert config.get("mouse_through") is False
     tray.hide()
     app.processEvents()
+
+def test_drag_does_not_play_click_sound_but_click_does(app, tmp_path, monkeypatch):
+    from pathlib import Path
+    win = _make_win(app, tmp_path)
+    press_calls = []
+    release_calls = []
+    monkeypatch.setattr("pet.window.resolve_click_sound_pair", lambda pack, data_dir=None: (Path("press.wav"), Path("release.wav")))
+    monkeypatch.setattr("pet.window.play_press_sound", lambda pair, volume: press_calls.append((pair, volume)))
+    monkeypatch.setattr("pet.window.play_release_sound", lambda pair, volume: release_calls.append((pair, volume)))
+
+    # 拖动：按下 -> 超过阈值移动 -> 松手，不应触发任何点击音效
+    start = win.pos()
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
+    assert win.pos() != start
+    assert press_calls == []
+    assert release_calls == []
+
+    # 点击：按下 -> 原位松手，应播放完整 press+release
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(200, 200)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(200, 200)))
+    assert len(press_calls) == 1
+    assert len(release_calls) == 1
+
+    win.close()
+    app.processEvents()
