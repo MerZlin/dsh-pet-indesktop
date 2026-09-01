@@ -59,7 +59,7 @@ from .frame_cache import FRAME_CACHE_DEFAULT_MAX_BYTES, FramePixmapCache
 from .animation_thumbnail import decode_representative_frame, representative_frame_index
 from .speech_bubble import PetSpeechBubble, list_self_talk_images
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
-from .context_menu import populate_context_menu as _populate_context_menu
+from .context_menu import normalize_template_id, populate_context_menu as _populate_context_menu
 from .context_menus.shared import take_deferred_menu_callbacks
 from . import vision as vision_mod
 from . import physics as physics_mod
@@ -3824,7 +3824,7 @@ class PetWindow(QWidget):
 
     def set_context_menu_template(self, template_id: str) -> None:
         """Persist the selected right-click menu template for the next open."""
-        template_id = template_id if template_id in {'legacy', 'modern'} else 'legacy'
+        template_id = normalize_template_id(template_id)
         self.cfg.set('context_menu_template', template_id)
         self.cfg.save()
 

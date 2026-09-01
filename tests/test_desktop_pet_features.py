@@ -921,6 +921,38 @@ def test_context_menu_invalid_template_falls_back_to_modern_uniformly():
     menu.close()
     app.processEvents()
 
+    # PetWindow.set_context_menu_template 是第三个入口（历史旁路：非法值曾回退 legacy，
+    # 与 normalize 分歧）。现在同样走 normalize_template_id，持久化值与 normalize 结果一致。
+    from pet.window import PetWindow
+
+    class RecorderConfig:
+        def __init__(self):
+            self.values = {}
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def save(self):
+            return None
+
+    class PetWindowStub:
+        def __init__(self):
+            self.cfg = RecorderConfig()
+
+    def persisted_template(raw):
+        stub = PetWindowStub()
+        PetWindow.set_context_menu_template(stub, raw)
+        return stub.cfg.values["context_menu_template"]
+
+    for raw in (None, "bad", "LEGACY", "legacy", "modern"):
+        assert persisted_template(raw) == normalize_template_id(raw)
+    # 非法值 None/bad 落到现行默认模板 modern；合法值 legacy/modern 原样保留
+    # （'LEGACY' 是 'legacy' 的大小写变体，normalize 折叠为合法值 'legacy'）
+    assert persisted_template(None) == "modern"
+    assert persisted_template("bad") == "modern"
+    assert persisted_template("legacy") == "legacy"
+    assert persisted_template("modern") == "modern"
+
 
 def test_modern_menu_icons_are_crisp_outline_glyphs(monkeypatch):
     from PySide6.QtGui import QColor, QImage
