@@ -8,6 +8,7 @@ from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication
 
 from pet.speech_bubble import (
+    FlowLayout,
     PetSpeechBubble,
     bubble_max_lines,
     elide_bubble_text,
@@ -153,3 +154,91 @@ def test_breath_size_for_content_short_text_matches_legacy():
         expected_width = 168
         expected_height = int(expected_width * 195 / 240 + 0.5)
         assert size == QSize(expected_width, expected_height)
+
+
+def test_sticky_bubble_no_auto_hide():
+    """sticky=True 的气泡（审批）不启动自动隐藏定时器，一直停留直到 dismiss。"""
+    _get_app()
+    bubble = PetSpeechBubble()  # classic_top，避开 breath 复杂路径
+    hidden_log = []
+    bubble.hidden_signal.connect(lambda: hidden_log.append(1))
+
+    bubble.show_text("有审批等你点", QRect(0, 0, 120, 120), 3200, sticky=True)
+    assert bubble._hide_timer.isActive() is False, "sticky 气泡不应启动自动隐藏定时器"
+    assert bubble.isVisible() is True
+
+    # 普通气泡：有自动隐藏定时器
+    bubble.show_text("普通气泡", QRect(0, 0, 120, 120), 3200, sticky=False)
+    assert bubble._hide_timer.isActive() is True
+
+    # dismiss 立即关闭并触发 hidden_signal
+    bubble.dismiss()
+    assert bubble.isVisible() is False
+    assert len(hidden_log) == 1
+
+
+def test_sticky_bubble_dismiss_emits_hidden_signal():
+    """审批气泡 dismiss 后 hidden_signal 应发出（供上层判断不再恢复）。"""
+    _get_app()
+    bubble = PetSpeechBubble()
+    hidden_log = []
+    bubble.hidden_signal.connect(lambda: hidden_log.append(1))
+    bubble.show_text("审批", QRect(0, 0, 120, 120), 3200, sticky=True)
+    bubble.dismiss()
+    assert len(hidden_log) == 1
+
+
+# ============================================================================
+# 交互气泡：选项按钮不撑宽气泡，文本区宽度自适应
+# ============================================================================
+
+def _fake_buttons(n: int):
+    """构造 n 个按钮（label + no-op callback）。"""
+    return [(f"选项 {i}", lambda: None) for i in range(n)]
+
+
+def test_interactive_bubble_uses_flow_layout():
+    """按钮行必须是 FlowLayout（自动换行，而不是横向一行撑宽）。"""
+    bubble = PetSpeechBubble()
+    assert isinstance(bubble._button_layout, FlowLayout)
+
+
+def test_interactive_many_buttons_does_not_stretch_width():
+    """很多选项时气泡宽度必须被文本宽度约束，不能被按钮总宽撑开。"""
+    _get_app()
+    bubble = PetSpeechBubble()
+    text = "请选择下一步操作："
+    # 单独显示文本得到基准宽度
+    bubble.show_text(text, QRect(0, 0, 120, 120), 3200, sticky=True)
+    text_width = bubble.width()
+
+    # 带 8 个按钮的交互气泡：宽度不应显著超过纯文本气泡
+    bubble.show_text(
+        text, QRect(0, 0, 120, 120), 3200, sticky=True,
+        buttons=_fake_buttons(8),
+    )
+    # 气泡宽度有上限（不应被 8 个按钮总宽横向撑开）；允许小幅放宽容纳按钮行
+    assert bubble.width() <= max(text_width, 320) + 4, (
+        f"交互气泡宽度 {bubble.width()} 不应远大于纯文本宽度 {text_width}"
+    )
+
+
+def test_interactive_label_width_follows_bubble():
+    """文本 label 宽度应跟随气泡实际宽度（自适应，不固定 248）。"""
+    _get_app()
+    bubble = PetSpeechBubble()
+    bubble.show_text(
+        "短文本", QRect(0, 0, 120, 120), 3200, sticky=True,
+        buttons=_fake_buttons(2),
+    )
+    assert bubble.label.width() > 0
+    # label 在气泡内（含边距），不会超过气泡宽度
+    assert bubble.label.width() <= bubble.width()
+
+
+def test_flow_layout_has_height_for_width():
+    """FlowLayout 必须实现 hasHeightForWidth / heightForWidth（换行高度计算的前提）。"""
+    layout = FlowLayout()
+    assert layout.hasHeightForWidth() is True
+    assert layout.heightForWidth(120) >= 0
+

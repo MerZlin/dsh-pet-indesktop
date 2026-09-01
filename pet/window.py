@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from collections import deque
 import json
 import logging
 import os
@@ -30,7 +31,10 @@ import shiboken6
 
 from PySide6.QtCore import QElapsedTimer, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBitmap, QColor, QCursor, QImage, QPainter, QPixmap, QRegion
-from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QDialogButtonBox, QFormLayout, QInputDialog,
+    QLineEdit, QMenu, QToolTip, QWidget,
+)
 
 from . import autostart as autostart_mod
 from . import catalog
@@ -353,6 +357,7 @@ class PetWindow(QWidget):
         self.on_look_screen = None
         self.on_open_legacy_settings = None
         self.on_open_modern_settings = None
+        self.on_open_watchdog_settings = None
         self.on_restore_fun_windows = None
         self.on_spawn_pet = None
         self.on_hidden = None  # 由 app 注入：用户主动隐藏时弹托盘提示
@@ -424,6 +429,17 @@ class PetWindow(QWidget):
         self._bubble_busy_until = 0.0
         # 设置窗口打开期间暂停气泡，避免置顶气泡盖住设置界面
         self._bubble_suppressed = False
+        # 审批等「一直挂到主动关闭」的气泡：激活期间自言自语/普通气泡让路，
+        # 临时气泡盖掉它后在其隐藏时自动恢复；审批结束调用 hide_bubble 收尾。
+        self._sticky_bubble_active = False
+        self._sticky_text = ""
+        self._sticky_subtitle = ""
+        self._sticky_buttons: list[tuple[str, object]] | None = None
+        # 提醒消息队列：所有需要用户注意的提醒（审批/问题/硬失败/卡住介入）
+        # 统一入队，一次只展示一个，当前展示时普通气泡全部让路不覆盖。
+        self._alert_queue: deque = deque()
+        self._alert_current: dict | None = None  # 当前展示的提醒
+        self._speech_bubble.hidden_signal.connect(self._on_speech_bubble_hidden)
 
         # Agent 联动动作衔接：正在播一次性动作时联动动作不打断，存为待播（最新覆盖旧的），
         # 等当前动作播完由 _on_anim_ended 自然接上；联动动作播完仍有 Agent 在忙则接下一个。
@@ -916,6 +932,12 @@ class PetWindow(QWidget):
             self.agent_link_manager.resume()
         if hasattr(self, 'lib') and self.lib is not None and hasattr(self.lib, 'resume_warm'):
             self.lib.resume_warm()
+        # 窗口隐藏期间审批气泡被 _pause_activity 关掉；恢复显示时若审批仍挂着则重新挂上
+        if self._sticky_bubble_active and self._sticky_text:
+            self._speech_bubble.show_text(
+                self._sticky_text, self.visible_content_rect(), 0,
+                pet_scale=self.scale, subtitle=self._sticky_subtitle, sticky=True,
+            )
 
     _FS_SKIP_CLASSES = {
         'Progman', 'WorkerW', 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd',
@@ -1954,6 +1976,9 @@ class PetWindow(QWidget):
     def _show_random_self_talk(self) -> bool:
         if getattr(self, "_bubble_suppressed", False):
             return False
+        if self._sticky_bubble_active or self._alert_current is not None:
+            # 审批等一直挂着的气泡优先：自言自语不顶掉它，重新排队下次
+            return False
         choices = [
             ("text", text) for text in self._self_talk_texts
         ] + [
@@ -2016,15 +2041,225 @@ class PetWindow(QWidget):
             self._music_sing_active = True
             self._switch(SING_ANIM)
 
-    def show_bubble(self, text: str, duration_ms: int = 3200, subtitle: str | None = None) -> None:
-        """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。"""
+    def show_alert(self, text: str, *, subtitle: str = "", duration_ms: int = 0,
+                   buttons: list[tuple[str, object]] | None = None,
+                   sticky: bool = True, alert_id: str = "", priority: int = 3,
+                   alert_type: str = "watchdog", metadata: dict | None = None) -> None:
+        """提醒消息队列：需要用户注意的提醒统一入队，一次只展示一个。
+
+        - 审批/问题（sticky=True）：一直挂到上层 resolve_alert/hide_bubble 收尾；
+        - 硬失败/卡住介入（sticky=False + duration_ms）：限时展示后自动弹下一条。
+        当前有提醒在展示时，普通 show_bubble 一律让路，绝不覆盖审批弹窗。
+
+        ``alert_id`` 用于精确定位某条提醒（如某 agent 的审批），resolve 时只关
+        自己，不误关其他排队中的提醒。同 id 提醒重复到达时**就地升级**而不是
+        再排一条：同一审批可能先后到达「无 rpcId 提示 → 带 rpcId 交互」两条
+        记录（桥接双通道/竞态），若排成两条，第二条会被当前展示压住，待第一条
+        resolved 后才弹出，其按钮已绑到已结束的审批——表现为「先无按钮、后弹出
+        的按钮绑错事件」。"""
         if not self.isVisible() or self._bubble_suppressed:
+            return
+        item = {
+            "id": alert_id or "",
+            "text": str(text),
+            "subtitle": str(subtitle or ""),
+            "buttons": list(buttons) if buttons else None,
+            "duration_ms": int(duration_ms),
+            "sticky": bool(sticky),
+            "priority": int(priority),
+            "alertType": str(alert_type or "watchdog"),
+            "preemptedAlertId": "",
+        }
+        if isinstance(metadata, dict):
+            for key in ("sessionId", "riskScore", "riskReasons", "targetCount", "targets"):
+                if key in metadata:
+                    item[key] = metadata[key]
+        logging.getLogger("dsh-pet-standalone").info(
+            "alert enqueue alertType=%s priority=%s alertId=%s preemptedAlertId=%s",
+            item["alertType"], item["priority"], item["id"], item["preemptedAlertId"],
+        )
+        if alert_id:
+            # 同 id 正在展示：就地替换（升级文案/按钮），不排队
+            cur = self._alert_current
+            if cur is not None and cur.get("id") == alert_id:
+                self._alert_current = item
+                self._sticky_bubble_active = bool(sticky)
+                self._sticky_text = item["text"]
+                self._sticky_subtitle = item["subtitle"]
+                self._sticky_buttons = item["buttons"]
+                if item["sticky"]:
+                    self._speech_bubble.show_text(
+                        item["text"], self.visible_content_rect(), 0,
+                        pet_scale=self.scale, subtitle=item["subtitle"],
+                        sticky=True, buttons=item["buttons"],
+                    )
+                return
+            # 同 id 在排队：移除旧条目，由新条目接管
+            self._alert_queue = deque(
+                q for q in self._alert_queue if q.get("id") != alert_id
+            )
+        current = self._alert_current
+        if current is not None and item["priority"] < int(current.get("priority", 3)):
+            # High-priority interactions preempt low-priority watchdog/status
+            # alerts. Sticky watchdog interactions remain recoverable.
+            old = current
+            self._alert_current = None
+            self._sticky_bubble_active = False
+            self._speech_bubble.dismiss()
+            item["preemptedAlertId"] = old.get("id", "")
+            logging.getLogger("dsh-pet-standalone").info(
+                "alert preempted alertType=%s priority=%s alertId=%s by=%s",
+                old.get("alertType", ""), old.get("priority", 3), old.get("id", ""), item.get("id", ""),
+            )
+            if old.get("sticky") and int(old.get("priority", 3)) >= 2:
+                self._alert_queue.appendleft(old)
+        self._alert_queue.append(item)
+        self._alert_queue = deque(sorted(
+            self._alert_queue, key=lambda queued: int(queued.get("priority", 3))
+        ))
+        self._pump_alerts()
+
+    def resolve_alert(self, alert_id: str) -> None:
+        """按 alert_id 关闭某条提醒：若正在展示则收起并弹下一条，若在队列中则移除。
+
+        供 AgentLinkManager 在审批/问题 resolved 时精确定位，避免多 agent 并发
+        审批时 hide_bubble 误关他人的提醒。"""
+        if not alert_id:
+            return
+        cur = self._alert_current
+        if cur is not None and cur.get("id") == alert_id:
+            # 当前展示的就是这条：收起并推进队列
+            self._sticky_bubble_active = False
+            self._sticky_text = ""
+            self._sticky_subtitle = ""
+            self._sticky_buttons = None
+            self._alert_current = None
+            self._speech_bubble.dismiss()
+            self._pump_alerts()
+            return
+        # 在队列中：移除该条（不打断当前展示）
+        self._alert_queue = deque(
+            item for item in self._alert_queue if item.get("id") != alert_id
+        )
+
+    def _pump_alerts(self) -> None:
+        """若当前无提醒展示且队列非空，弹出队首展示。"""
+        if self._alert_current is not None:
+            return
+        if not self._alert_queue:
+            return
+        if not self.isVisible() or self._bubble_suppressed:
+            return
+        item = self._alert_queue.popleft()
+        self._alert_current = item
+        if item.get("sticky"):
+            self._sticky_bubble_active = True
+            self._sticky_text = item["text"]
+            self._sticky_subtitle = item.get("subtitle", "")
+            self._sticky_buttons = item.get("buttons")
+            self._speech_bubble.show_text(
+                item["text"], self.visible_content_rect(), 0,
+                pet_scale=self.scale, subtitle=item.get("subtitle", ""),
+                sticky=True, buttons=item.get("buttons"),
+            )
+        else:
+            duration_ms = item.get("duration_ms") or 6000
+            self._speech_bubble.show_text(
+                item["text"], self.visible_content_rect(), duration_ms,
+                pet_scale=self.scale, subtitle=item.get("subtitle", ""),
+            )
+
+    def show_bubble(self, text: str, duration_ms: int = 3200, subtitle: str | None = None,
+                    *, sticky: bool = False, buttons: list[tuple[str, object]] | None = None) -> None:
+        """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。
+
+        ``sticky=True`` 显示「一直挂到主动关闭」的气泡（审批等）：不启动自动
+        隐藏，且激活期间自言自语/普通气泡让路；被其他气泡临时盖掉后会自动恢复，
+        直到调用 :meth:`hide_bubble` 收尾。
+
+        ``buttons=[(label, callback), ...]`` 进入「交互气泡」模式（审批同意/拒绝、
+        问题 A/B/C）：按钮内嵌在气泡里，点击即回调（上层据此回写 DSH），
+        且自动 sticky（点选前一直挂着）。
+
+        提醒消息队列激活期间（有审批/问题/硬失败/卡住提醒在展示），普通气泡
+        直接让路丢弃，不覆盖提醒弹窗。"""
+        if not self.isVisible() or self._bubble_suppressed:
+            return
+        if not sticky and not buttons and getattr(self, "_alert_current", None) is not None:
+            # 有提醒在展示：普通气泡让路，绝不覆盖审批弹窗
+            return
+        if sticky or buttons:
+            self._sticky_bubble_active = True
+            self._sticky_text = str(text)
+            self._sticky_subtitle = str(subtitle or "")
+            self._sticky_buttons = list(buttons) if buttons else None
+            # sticky 不 hold 气泡位（否则会永久挡自言自语）；靠 _sticky_bubble_active 挡
+            self._speech_bubble.show_text(
+                self._sticky_text, self.visible_content_rect(), 0,
+                pet_scale=self.scale, subtitle=self._sticky_subtitle, sticky=True,
+                buttons=self._sticky_buttons,
+            )
             return
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
             str(text), self.visible_content_rect(), duration_ms,
             pet_scale=self.scale, subtitle=str(subtitle or ""),
         )
+
+    def hide_bubble(self) -> None:
+        """主动关闭当前气泡并解除 sticky（审批结束 / DSH 离线时调用）。
+
+        若关闭的是队列中的提醒，则自动弹出下一条。"""
+        self._sticky_bubble_active = False
+        self._sticky_text = ""
+        self._sticky_subtitle = ""
+        self._sticky_buttons = None
+        self._alert_current = None
+        self._speech_bubble.dismiss()
+        self._pump_alerts()
+
+    def clear_alerts(self) -> None:
+        """清空提醒消息队列并关闭当前提醒（DSH 离线/重启时全部失效）。"""
+        self._alert_queue.clear()
+        self._alert_current = None
+        self._sticky_bubble_active = False
+        self._sticky_text = ""
+        self._sticky_subtitle = ""
+        self._sticky_buttons = None
+        self._speech_bubble.dismiss()
+
+    def _on_speech_bubble_hidden(self) -> None:
+        """气泡被隐藏（临时气泡超时 / dismiss / 窗口隐藏）后的恢复/推进逻辑。
+
+        sticky 恢复防抖：同一 sticky 内容在 300ms 内不重复 show_text，
+        避免「审批被盖→恢复→再盖→再恢复」的卡顿循环。"""
+        if not self.isVisible() or self._bubble_suppressed:
+            return
+        cur = self._alert_current
+        if cur is not None:
+            if cur.get("sticky"):
+                # 防抖：同一 sticky 内容在 300ms 内不重复恢复
+                now = time.monotonic()
+                if abs(now - getattr(self, "_last_sticky_restore", 0.0)) < 0.3:
+                    return
+                self._last_sticky_restore = now
+                self._speech_bubble.show_text(
+                    cur["text"], self.visible_content_rect(), 0,
+                    pet_scale=self.scale, subtitle=cur.get("subtitle", ""),
+                    sticky=True, buttons=cur.get("buttons"),
+                )
+            else:
+                # 限时提醒（硬失败/卡住）：展示结束，弹出下一条
+                self._alert_current = None
+                self._pump_alerts()
+            return
+        # 旧路径兼容：sticky 审批气泡（不经队列）被盖掉后恢复
+        if self._sticky_bubble_active and self._sticky_text:
+            self._speech_bubble.show_text(
+                self._sticky_text, self.visible_content_rect(), 0,
+                pet_scale=self.scale, subtitle=self._sticky_subtitle, sticky=True,
+                buttons=self._sticky_buttons,
+            )
 
     def refresh_pet_settings(self) -> None:
         desired_scale = float(self.cfg.get('scale', self.scale))
@@ -2191,11 +2426,111 @@ class PetWindow(QWidget):
             self.show_bubble(f"已开启 {agent_key.upper()} 状态联动监听～", duration_ms=4000)
 
     def _set_agent_link_option(self, key: str, on: bool) -> None:
-        """联动气泡提醒子项开关（开始干活 / 任务完成），立即写入配置。"""
+        """联动气泡提醒子项开关（开始干活 / 任务完成 / 卡住检测），立即写入配置。"""
         ag_data = dict(self.cfg.get('agent_link', {}))
         ag_data[key] = bool(on)
         self.cfg.set('agent_link', ag_data)
         self.cfg.save()
+        # 卡住检测/行为模式检测开关是 AgentLinkManager.apply_config 在启动/切换时
+        # 同步的，需要立即触发，否则要等下次设置变更/重启才生效。
+        if key in ('stuck_detect', 'pattern_detect', 'exploration_watchdog_enabled') and hasattr(self, 'agent_link_manager'):
+            self.agent_link_manager.apply_config()
+
+    def _set_agent_link_mode(self, mode: str) -> None:
+        """切换循环检测手动/自动模式。"""
+        mode = mode if mode in ('manual', 'auto') else 'manual'
+        ag_data = dict(self.cfg.get('agent_link', {}))
+        ag_data['exploration_watchdog_mode'] = mode
+        self.cfg.set('agent_link', ag_data)
+        self.cfg.save()
+        if hasattr(self, 'agent_link_manager'):
+            self.agent_link_manager.apply_config()
+        self.show_bubble(f'循环检测已切换为{"自动" if mode == "auto" else "手动"}模式', duration_ms=3000)
+
+    def _set_dialogue_mode(self, mode: str) -> None:
+        """Switch wording for existing desktop-pet events; legacy remains default."""
+        mode = mode if mode in ("legacy", "whale_maid", "custom") else "legacy"
+        self.cfg.set("dialogue_mode", mode)
+        self.cfg.save()
+        label = {"legacy": "原有模式", "whale_maid": "鲸鱼娘女仆模式", "custom": "自定义台词"}[mode]
+        self.show_bubble(f"台词风格已切换为{label}", duration_ms=3000)
+
+    def _edit_dialogue_phrases(self) -> None:
+        """Edit templates for the existing event messages only."""
+        fields = (
+            ("start", "开始工作"), ("thinking", "思考"),
+            ("activity.read", "读取"), ("activity.search", "搜索"),
+            ("activity.edit", "编辑"), ("activity.run", "运行/测试"),
+            ("activity.default", "其他工具"),
+            ("approval.command", "审批命令"), ("approval.tool", "审批工具"),
+            ("approval.generic", "审批提示"),
+            ("question.empty", "无选项问题"), ("question.one", "用户问题"),
+            ("question.many", "多个问题"),
+            ("watchdog.warning", "循环警告"), ("watchdog.intervention", "循环干预"),
+            ("watchdog.unknown", "Judge 不可用"), ("rate_limit.one", "限流"),
+            ("rate_limit.many", "连续限流"),
+            ("done.success", "任务完成"), ("done.attention", "任务暂停"),
+            ("failure.retry", "重试失败"), ("failure.tool", "工具失败"),
+            ("failure.generic", "执行失败"),
+        )
+        dialog = QDialog(self)
+        dialog.setWindowTitle("自定义现有台词")
+        layout = QFormLayout(dialog)
+        current = self.cfg.get("dialogue_phrases", {})
+        edits = {}
+        for key, label in fields:
+            edit = QLineEdit(str(current.get(key, "") or ""))
+            edit.setPlaceholderText("留空则使用原有台词；可用 {name}、{command}、{reasons} 等变量")
+            layout.addRow(label, edit)
+            edits[key] = edit
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        phrases = {key: edit.text().strip() for key, edit in edits.items() if edit.text().strip()}
+        self.cfg.set("dialogue_phrases", phrases)
+        self.cfg.set("dialogue_mode", "custom")
+        self.cfg.save()
+        self.show_bubble("自定义台词已保存并启用", duration_ms=3000)
+
+    def _edit_agent_link_int(self, key: str, label: str, unit: str,
+                             default: int, minimum: int, maximum: int) -> None:
+        """编辑卡住检测整数参数（阈值/窗口/冷却），立即保存并同步到检测器。"""
+        ag_data = dict(self.cfg.get('agent_link', {}))
+        try:
+            current = int(ag_data.get(key, default))
+        except (TypeError, ValueError):
+            current = default
+        value, ok = QInputDialog.getInt(
+            self, '卡住检测设置', f'{label}（{unit}）：',
+            value=current, minValue=minimum, maxValue=maximum,
+        )
+        if not ok:
+            return
+        ag_data[key] = value
+        self.cfg.set('agent_link', ag_data)
+        self.cfg.save()
+        if hasattr(self, 'agent_link_manager'):
+            self.agent_link_manager.apply_config()
+        self.show_bubble(f'{label}：{value} {unit}')
+
+    def _edit_agent_link_text(self, key: str, label: str) -> None:
+        """编辑卡住检测自定义文案（留空恢复默认），立即保存并同步。"""
+        ag_data = dict(self.cfg.get('agent_link', {}))
+        current = str(ag_data.get(key, '') or '')
+        text, ok = QInputDialog.getText(
+            self, '卡住检测设置', f'{label}（留空恢复默认）：', text=current,
+        )
+        if not ok:
+            return
+        ag_data[key] = text.strip()
+        self.cfg.set('agent_link', ag_data)
+        self.cfg.save()
+        if hasattr(self, 'agent_link_manager'):
+            self.agent_link_manager.apply_config()
+        self.show_bubble('卡住检测文案已更新' if text.strip() else '卡住检测文案已恢复默认')
 
     def _rename_character(self) -> None:
         """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""

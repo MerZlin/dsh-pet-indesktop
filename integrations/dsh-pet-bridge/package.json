@@ -1,13 +1,13 @@
 {
   "name": "@dsh-pet/bridge",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js"
   },
-  "description": "dsh-pet 桌宠桥接：把 DSH agent 状态事件写入本地 jsonl（仅本地文件，无任何网络请求）",
+  "description": "dsh-pet 桌宠桥接：把 DSH agent 状态事件写入本地 jsonl，并提供可选的 watchdog 控制（仅本地文件，无任何网络请求）",
   "license": "MIT",
   "files": [
     "index.js",

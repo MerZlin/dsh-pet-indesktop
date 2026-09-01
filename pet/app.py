@@ -29,10 +29,12 @@ from . import balance as balance_mod
 from . import catalog
 from . import updater
 from .config import APP_DIR_NAME, Config
+from .dsh_state import DshStateTracker
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
 from .library import MovieLibrary
 from .window import PetWindow
+from .persona_phrases import PhrasePicker
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 
@@ -55,6 +57,19 @@ class _BalanceBridge(_BackgroundResult):
             self.win.show_bubble(str(payload), duration_ms=6000)
             return
         _show_balance_payload(self.win, payload)
+
+
+_PERSONA_PICKER = PhrasePicker()
+
+
+def _persona_text(win, key: str, fallback: str, **values) -> str:
+    cfg = getattr(win, "cfg", None)
+    if cfg is None:
+        return fallback
+    mode = str(cfg.get("dialogue_mode", "legacy") or "legacy")
+    if mode == "custom":
+        return _PERSONA_PICKER.custom(cfg.get("dialogue_phrases", {}), key, fallback, **values)
+    return _PERSONA_PICKER.get(mode, key, fallback, **values)
 
 
 def _show_balance_payload(win, payload) -> None:
@@ -85,6 +100,7 @@ def _show_balance_payload(win, payload) -> None:
         subtitle = balance_mod.deepseek_pricing_hint(
             peak_label=peak_label, idle_label=idle_label,
         )
+    text = _persona_text(win, "balance.result", text, text=text)
     win.show_bubble(
         text, duration_ms=6000,
         subtitle=subtitle,
@@ -175,6 +191,7 @@ class PetApp:
         self.modern_chat_window = None
         self.chat_settings_dialog = None
         self.modern_settings_dialog = None
+        self.watchdog_settings_dialog = None
         self._spawned_pet_count = 0
         self._pending_dialog_opens: set[str] = set()
         self._balance_busy = False
@@ -185,6 +202,12 @@ class PetApp:
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
+        # DSH 统一状态跟踪：轻量常驻，接收 bridge 事件收敛为 offline/idle/thinking/
+        # working/waiting_approval/success/error。状态日志由 dsh_state 内部按
+        # edge-trigger 写出；这里只订阅 state_changed，供后续状态动画/通知等消费。
+        # 不把 self.app 当 QObject parent（测试会传假对象），靠自身引用保活。
+        self._dsh_state_tracker = DshStateTracker(config.dir)
+        self._dsh_state_tracker.state_changed.connect(self._on_dsh_state_changed)
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -199,7 +222,30 @@ class PetApp:
         self._create_ui(character_id)
         self._apply_spawn_offset()
         self._apply_balance_timer()
+        # 启动 DSH 状态跟踪（DSH 未运行也不影响桌宠启动，只切 offline）
+        self._dsh_state_tracker.start()
         QTimer.singleShot(3500, self._check_autostart_wanted)
+
+    def _on_dsh_state_changed(self, from_state: str, to_state: str) -> None:
+        """订阅 DSH 统一状态变化。
+
+        第一版只做订阅 + 关键兜底（状态日志已由 dsh_state 在 transition 时写出）；
+        后续的状态动画映射 / Windows Toast / 系统声音等在此挂接，不塞进 dsh_state。
+        """
+        if to_state == "offline" and self.win is not None:
+            # DSH 断开/重启：审批/问题等阻塞交互必然失效，收掉一直挂着的常驻气泡；
+            # 卡住检测的旧评分与行为模式检测的旧窗口也一并清零（重启后是全新任务，
+            # 不沿用旧状态）。
+            alm = getattr(self.win, "agent_link_manager", None)
+            if alm is not None:
+                if hasattr(alm, "dismiss_all_interactions"):
+                    alm.dismiss_all_interactions()
+                detector = getattr(alm, "_stuck_detector", None)
+                if detector is not None and hasattr(detector, "reset_all"):
+                    detector.reset_all()
+                pattern = getattr(alm, "_behavior_detector", None)
+                if pattern is not None and hasattr(pattern, "reset_all"):
+                    pattern.reset_all()
 
     def _on_about_to_quit(self) -> None:
         """退出前保存当前有效窗口的位置。
@@ -259,7 +305,9 @@ class PetApp:
         # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
         # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
-        QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
+        QTimer.singleShot(0, lambda: win.show_bubble(
+            _persona_text(win, "balance.loading", "让我看看余额…"), duration_ms=6000
+        ))
         bridge = _BalanceBridge(win)
         self._balance_bridge = bridge
         threading.Thread(
@@ -421,6 +469,7 @@ class PetApp:
         win.on_look_screen = win._on_look_screen if self.enable_chat and hasattr(win, "_on_look_screen") else None
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self.open_modern_settings
+        win.on_open_watchdog_settings = self.open_watchdog_settings
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
@@ -474,6 +523,7 @@ class PetApp:
         win.on_look_screen = win._on_look_screen if self.enable_chat and hasattr(win, "_on_look_screen") else None
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self.open_modern_settings
+        win.on_open_watchdog_settings = self.open_watchdog_settings
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
@@ -647,6 +697,25 @@ class PetApp:
             before_present=self.modern_settings_dialog.move_away_from_pet,
         )
 
+    def open_watchdog_settings(self) -> None:
+        from .exploration_watchdog_settings import WatchdogSettingsDialog
+        if self.watchdog_settings_dialog is None:
+            dialog = WatchdogSettingsDialog(self.config, self.win)
+            dialog.set_pet_instance(self.win)
+            dialog.settings_saved.connect(self._watchdog_settings_finished)
+            self.watchdog_settings_dialog = dialog
+        self._update_bubble_suppression_for_settings()
+        self._present_dialog(
+            self.watchdog_settings_dialog,
+            before_present=self.watchdog_settings_dialog.move_away_from_pet,
+        )
+
+    def _watchdog_settings_finished(self) -> None:
+        self.watchdog_settings_dialog = None
+        self._update_bubble_suppression_for_settings()
+        if self.win is not None:
+            self.win.refresh_pet_settings()
+
     def _modern_settings_finished(self, result: int) -> None:
         self.modern_settings_dialog = None
         self._update_bubble_suppression_for_settings()
@@ -780,7 +849,14 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     config = Config(instance_id=instance_id)
     _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
     _setup_logging(config)
-    logging.info('dsh-pet-standalone 启动')
+    try:
+        source_path = Path(__file__).resolve()
+        source_mtime = source_path.stat().st_mtime
+    except Exception:
+        source_path, source_mtime = "unknown", 0
+    logging.info('dsh-pet-standalone 启动 runtime_version=%s app_version=%s source=%s executable=%s build_mtime=%s',
+                 'pet-runtime-2026-09-01.1', getattr(updater, 'APP_VERSION', 'unknown'), source_path,
+                 sys.executable, source_mtime)
     _cleanup_stale_runtime_dirs()
 
     controller = PetApp(app, config, enable_chat=enable_chat)

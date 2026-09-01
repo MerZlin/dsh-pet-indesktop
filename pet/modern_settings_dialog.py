@@ -58,6 +58,7 @@ from .context_menus.icons import vector_widget_icon
 from .context_menus.quick_launch import fitted_application_icon
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset, store_fun_asset
 from .speech_bubble import BUBBLE_STYLE_PRESETS
+from .persona_phrases import phrase_keys
 
 
 def _system_font_families() -> tuple[str, ...]:
@@ -1101,6 +1102,30 @@ class ModernSettingsDialog(QDialog):
         behavior_layout.addStretch(1)
         self._add_page("桌宠行为", "play", self._page_shell("桌宠行为", behavior_content))
 
+        dialogue_content = QWidget()
+        dialogue_layout = QVBoxLayout(dialogue_content)
+        dialogue_layout.setContentsMargins(0, 0, 0, 0)
+        dialogue_layout.setSpacing(16)
+        dialogue_layout.addWidget(SettingsSection("现有事件台词", [
+            SettingRow("dialogue_mode", "台词模式", "选择原有、鲸鱼娘女仆或逐句自定义模式。", self.dialogue_mode_select),
+        ], dialogue_content))
+        labels = {
+            "start": "开始工作", "thinking": "思考", "activity.read": "读取", "activity.search": "搜索",
+            "activity.edit": "编辑", "activity.run": "运行/测试", "activity.default": "其他工具",
+            "approval.command": "审批命令", "approval.tool": "审批工具", "approval.generic": "审批提示",
+            "question.empty": "无选项问题", "question.one": "用户问题", "question.many": "多个问题",
+            "watchdog.warning": "循环警告", "watchdog.intervention": "循环干预", "watchdog.unknown": "Judge 不可用",
+            "rate_limit.one": "限流", "rate_limit.many": "连续限流", "done.success": "任务完成",
+            "done.attention": "任务暂停", "failure.retry": "重试失败", "failure.tool": "工具失败", "failure.generic": "执行失败",
+        }
+        dialogue_rows = [
+            SettingRow(f"dialogue_{key}", labels.get(key, key), "留空则使用基础模式台词。", edit, stacked=True)
+            for key, edit in self.dialogue_phrase_edits.items()
+        ]
+        dialogue_layout.addWidget(SettingsSection("逐句自定义（自定义模式）", dialogue_rows, dialogue_content))
+        dialogue_layout.addStretch(1)
+        self._add_page("台词风格", "chat", self._page_shell("台词风格", dialogue_content))
+
         appearance_content = QWidget()
         appearance_layout = QVBoxLayout(appearance_content)
         appearance_layout.setContentsMargins(0, 0, 0, 0)
@@ -1170,6 +1195,12 @@ class ModernSettingsDialog(QDialog):
 
         if self.ai_page is not None:
             self._add_page("AI 设置", "chat", self._page_shell("AI 设置", self.ai_page))
+
+        # Agent Exploration Loop Watchdog 独立设置页
+        from .exploration_watchdog_settings import WatchdogSettingsPage
+        agent_link_cfg = self.config.get("agent_link", {})
+        self.watchdog_page = WatchdogSettingsPage(self.config, agent_link_cfg, self)
+        self._add_page("循环检测", "watchdog", self._page_shell("循环检测", self.watchdog_page))
 
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
@@ -1339,6 +1370,19 @@ class ModernSettingsDialog(QDialog):
             edit.setText(text)
             edit.setClearButtonEnabled(True)
             self.thinking_text_edits[agent_key] = edit
+
+        self.dialogue_mode_select = ModernSelect(self, width=190)
+        for label, value in (("原有模式", "legacy"), ("鲸鱼娘女仆模式", "whale_maid"), ("自定义台词", "custom")):
+            self.dialogue_mode_select.addItem(label, value)
+        self.dialogue_mode_select.setCurrentData(str(self.config.get("dialogue_mode", "legacy") or "legacy"))
+        configured_phrases = self.config.get("dialogue_phrases", {})
+        self.dialogue_phrase_edits: dict[str, QLineEdit] = {}
+        for key in phrase_keys():
+            edit = QLineEdit(self)
+            edit.setText(str(configured_phrases.get(key, "") or ""))
+            edit.setPlaceholderText("留空使用基础模式台词；支持 {name}、{command}、{body}、{count}、{reasons}")
+            edit.setClearButtonEnabled(True)
+            self.dialogue_phrase_edits[key] = edit
 
         appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
         self.menu_theme_select = ModernSelect(self, width=132)
@@ -1851,6 +1895,10 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
+        self.config.set("dialogue_mode", str(self.dialogue_mode_select.currentData() or "legacy"))
+        self.config.set("dialogue_phrases", {
+            key: edit.text().strip() for key, edit in self.dialogue_phrase_edits.items() if edit.text().strip()
+        })
         # Agent 联动：自定义 thinking 文案（合并写回，不覆盖 agent_link 其他开关）
         agent_cfg = dict(self.config.get("agent_link", {}))
         agent_cfg["thinking_texts"] = {
@@ -1859,6 +1907,9 @@ class ModernSettingsDialog(QDialog):
             if edit.text().strip()
         }
         agent_cfg.pop("thinking_text", None)  # 旧的全局字段已迁移到 thinking_texts
+        # 循环检测设置页（合并写回，不覆盖 agent_link 其他字段）
+        if self.watchdog_page is not None:
+            agent_cfg = self.watchdog_page.apply_to_config(agent_cfg)
         self.config.set("agent_link", agent_cfg)
         self.config.set("context_menu_appearance", {
             "theme": self.menu_theme_select.currentData(),

@@ -26,6 +26,8 @@ DEFAULT_SELF_TALK_TEXTS = [
     "\u518d\u966a\u4f60\u4e00\u4f1a\u513f\u3002",
 ]
 DEFAULT_SELF_TALK_BUBBLE_STYLE = "classic_top"
+DIALOGUE_MODES = {"legacy", "whale_maid"}
+DEFAULT_DIALOGUE_PHRASES = {}
 SELF_TALK_BUBBLE_STYLES = {
     "classic_top", "paper_left", "glass_right", "soft_blue_top", "breath_bubble",
 }
@@ -178,11 +180,55 @@ def _default_agent_link_data() -> dict:
         "claude": False,
         "cursor": False,
         "opencode": False,
+        "codex": False,
         # 联动气泡：开始干活提醒（可选，默认关）、任务完成通知（默认开）
         "notify_state": False,
         "notify_done": True,
         # 过程汇报（可选，默认关）：Agent 干活中报「正在读文件/跑命令/改代码…」
         "notify_activity": False,
+        # 硬失败提醒（默认开）：DSH 已决定本轮不再继续（重试耗尽/工具最终失败）
+        # 时直接提醒，不经行为分析。与审批/问题（notify_approval）同级。
+        "notify_exec_failed": True,
+        # 卡住检测（建议介入，默认关）：DSH 联动开启时，根据工具成败/超时/错误
+        # 推断「Agent 钻牛角尖了」，档位 1 播焦急动画、档位 2 弹持续提醒气泡。
+        "stuck_detect": False,
+        "stuck_worried_threshold": 3,
+        "stuck_intervene_threshold": 5,
+        "stuck_window_seconds": 90,
+        "stuck_cooldown_seconds": 300,
+        "stuck_reminder_text": "",
+        "exploration_watchdog_enabled": True,
+        "exploration_watchdog_mode": "manual",
+        "exploration_watchdog_warning_threshold": 3,
+        "exploration_watchdog_control_threshold": 5,
+        "exploration_watchdog_judge_model": "",
+        "exploration_watchdog_judge_provider": "",
+        "exploration_watchdog_judge_timeout": 8,
+        "exploration_watchdog_cooldown_steps": 3,
+        "exploration_watchdog_early_grace_minutes": 5,
+        "exploration_watchdog_long_run_minutes": 10,
+        "exploration_watchdog_long_think_seconds": 120,
+        # 行为模式检测（默认关）：双窗口规则识别慢性循环 / 短时爆发 / 纯探索无产出。
+        # 细分类：W10 同类 >= 3 → warning；W10 >= 4 → control；W6 >= 3 → control。
+        # 大类：W6 EXPLORATION >= 5 且 ACTION == 0 → control；W10 EXPLORATION >= 7 且
+        # ACTION <= 1 → warning。触发后至少新增 pattern_min_steps_between 个 step
+        # 且间隔 pattern_cooldown_seconds 秒才允许再次触发（step 去重防止误杀并行调用）。
+        "pattern_detect": False,
+        "pattern_w6_control": 3,
+        "pattern_w10_warn": 3,
+        "pattern_w10_control": 4,
+        "pattern_macro_w6_explore": 5,
+        "pattern_macro_w6_action": 0,
+        "pattern_macro_w10_explore": 7,
+        "pattern_macro_w10_action": 1,
+        "pattern_min_steps_between": 3,
+        "pattern_cooldown_seconds": 60,
+        # Codex rollout 文件监听（第一阶段：只监听状态，不做审批交互）
+        "codex_poll_ms": 700,          # 轮询间隔（>=300ms）
+        "codex_scan_days": 3,          # 扫描最近几天的 rollout 文件
+        "codex_filter_mode": "all",    # all=全部 thread / cwd=按项目目录 / latest=仅最新
+        "codex_watch_cwds": [],        # cwd 模式下监听的项目目录列表
+        "codex_stale_minutes": 10,     # 无新记录多久后超时恢复为 idle
     }
 
 
@@ -332,6 +378,9 @@ class Config:
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "self_talk_image_dir": "assets/big_blue_fat_fish",
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
+            # Existing event wording: legacy is deliberately the default.
+            "dialogue_mode": "legacy",
+            "dialogue_phrases": dict(DEFAULT_DIALOGUE_PHRASES),
             "mouse_through": False,
             "drag_physics": False,
             "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
@@ -457,6 +506,8 @@ class Config:
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
             "self_talk_bubble_style",
+            "dialogue_mode",
+            "dialogue_phrases",
             "mouse_through", "drag_physics", "context_menu_template",
             "lock_position", "shift_drag", "pet_opacity",
             "context_menu_appearance", "quick_launch_apps",
@@ -484,6 +535,16 @@ class Config:
         self.data["version"] = 4
 
     def _normalize_pet_settings(self):
+        dialogue_mode = str(self.data.get("dialogue_mode") or "legacy").lower()
+        self.data["dialogue_mode"] = dialogue_mode if dialogue_mode in {"legacy", "whale_maid", "custom"} else "legacy"
+        raw_phrases = self.data.get("dialogue_phrases")
+        self.data["dialogue_phrases"] = (
+            {str(k): ([str(item).strip()[:240] for item in v if str(item).strip()][:8]
+                      if isinstance(v, list) else str(v).strip()[:240])
+             for k, v in raw_phrases.items()
+             if str(k).strip() and (v if isinstance(v, list) else str(v).strip())}
+            if isinstance(raw_phrases, dict) else {}
+        )
         self.data["playback_speed"] = _float_or_default(self.data.get("playback_speed"), 1.0, 0.1, 8.0)
         self.data["animation_gap_seconds"] = _float_or_default(
             self.data.get("animation_gap_seconds"), DEFAULT_ANIMATION_GAP_SECONDS, 0.0, 3600.0
