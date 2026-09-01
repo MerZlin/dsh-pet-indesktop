@@ -34,12 +34,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .geometry import best_position_near_pet
 from .models import ChatMessage
 from .pet_link import PetChatLink
 from .prompt import PromptBuilder, load_character_manifest
 from . import themes as chat_themes
 from .service import ChatService
 from .session_store import SessionStore
+from .utils import _short_title
 from ..context_menus.icons import vector_widget_icon
 
 
@@ -145,20 +147,6 @@ def _safe_color(value: object) -> str:
 def _initial(character_id: str) -> str:
     text = str(character_id or "宠").strip()
     return text[:1].upper() or "宠"
-
-
-def _short_title(session) -> str:
-    if str(getattr(session, "custom_title", "")).strip():
-        return str(session.custom_title).strip()
-    for message in session.messages:
-        if message.role == "user" and message.content.strip():
-            text = " ".join(message.content.split())
-            return text[:24] + ("…" if len(text) > 24 else "")
-    try:
-        created = datetime.fromisoformat(session.created_at)
-        return "新会话 · " + created.astimezone().strftime("%H:%M")
-    except (TypeError, ValueError):
-        return "新会话"
 
 
 def _session_group(session, now: datetime | None = None) -> str:
@@ -941,43 +929,7 @@ class ChatWindow(QDialog):
         if available.width() < 1000 and self.width() > available.width() - 140:
             self.resize(max(self.minimumWidth(), available.width() - 140), self.height())
         size = self.frameGeometry().size()
-        # Prefer the side with the least visual obstruction. If the pet is near
-        # a screen edge, the first fully-contained candidate on another side wins.
-        y = pet_rect.center().y() - size.height() // 2
-        candidates = [
-            QPoint(pet_rect.right() + gap + 1, y),
-            QPoint(pet_rect.left() - size.width() - gap, y),
-            QPoint(pet_rect.center().x() - size.width() // 2, pet_rect.bottom() + gap + 1),
-            QPoint(pet_rect.center().x() - size.width() // 2, pet_rect.top() - size.height() - gap),
-        ]
-        for point in candidates:
-            candidate = QRect(point, size)
-            if available.contains(candidate):
-                self.move(point)
-                return
-
-        # If the phone is taller than the available work area, a full candidate
-        # may be impossible even though one side still has enough horizontal
-        # space. Clamp every candidate, then choose the one with the smallest
-        # overlap against the visible character. This prevents the old fallback
-        # from forcing the phone back onto the pet when the pet is at the right
-        # edge of the screen.
-        def clamp_point(point: QPoint) -> QPoint:
-            x = max(available.left(), min(point.x(), available.right() - size.width() + 1))
-            y = max(available.top(), min(point.y(), available.bottom() - size.height() + 1))
-            return QPoint(x, y)
-
-        ranked = []
-        for index, point in enumerate(candidates):
-            clamped = clamp_point(point)
-            candidate = QRect(clamped, size)
-            intersection = candidate.intersected(pet_rect)
-            overlap = intersection.width() * intersection.height() if not intersection.isEmpty() else 0
-            displacement = abs(clamped.x() - point.x()) + abs(clamped.y() - point.y())
-            ranked.append((overlap, displacement, index, clamped))
-
-        _, _, _, best_point = min(ranked, key=lambda item: item[:3])
-        self.move(best_point)
+        self.move(best_position_near_pet(pet_rect, size, available, gap))
 
     def _get_session(self):
         sessions = self.store.list(self.character_id)

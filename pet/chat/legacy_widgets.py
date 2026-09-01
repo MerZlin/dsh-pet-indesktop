@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter, QPainterPath, QPalette
 from PySide6.QtWidgets import (
     QComboBox,
@@ -26,11 +25,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .geometry import best_position_near_pet
 from .models import ChatMessage
 from .pet_link import PetChatLink
 from .prompt import PromptBuilder, load_character_manifest
 from .service import ChatService
 from .session_store import SessionStore
+from .utils import _short_title
 from ..context_menus.icons import vector_widget_icon
 from . import themes as chat_themes
 
@@ -47,19 +48,6 @@ def _safe_color(value: object) -> str:
 def _initial(character_id: str) -> str:
     text = str(character_id or "宠").strip()
     return text[:1].upper() or "宠"
-
-
-def _short_title(session) -> str:
-    if str(getattr(session, "custom_title", "")).strip():
-        return str(session.custom_title).strip()
-    for message in session.messages:
-        if message.role == "user" and message.content.strip():
-            text = " ".join(message.content.split())
-            return text[:24] + ("…" if len(text) > 24 else "")
-    try:
-        return "新会话 · " + datetime.fromisoformat(session.created_at).strftime("%H:%M")
-    except (TypeError, ValueError):
-        return "新会话"
 
 
 class ChatTitleBar(QFrame):
@@ -386,43 +374,7 @@ class ChatWindow(QDialog):
 
         available = screen.availableGeometry()
         size = self.frameGeometry().size()
-        # Prefer the side with the least visual obstruction. If the pet is near
-        # a screen edge, the first fully-contained candidate on another side wins.
-        y = pet_rect.center().y() - size.height() // 2
-        candidates = [
-            QPoint(pet_rect.right() + gap + 1, y),
-            QPoint(pet_rect.left() - size.width() - gap, y),
-            QPoint(pet_rect.center().x() - size.width() // 2, pet_rect.bottom() + gap + 1),
-            QPoint(pet_rect.center().x() - size.width() // 2, pet_rect.top() - size.height() - gap),
-        ]
-        for point in candidates:
-            candidate = QRect(point, size)
-            if available.contains(candidate):
-                self.move(point)
-                return
-
-        # If the phone is taller than the available work area, a full candidate
-        # may be impossible even though one side still has enough horizontal
-        # space. Clamp every candidate, then choose the one with the smallest
-        # overlap against the visible character. This prevents the old fallback
-        # from forcing the phone back onto the pet when the pet is at the right
-        # edge of the screen.
-        def clamp_point(point: QPoint) -> QPoint:
-            x = max(available.left(), min(point.x(), available.right() - size.width() + 1))
-            y = max(available.top(), min(point.y(), available.bottom() - size.height() + 1))
-            return QPoint(x, y)
-
-        ranked = []
-        for index, point in enumerate(candidates):
-            clamped = clamp_point(point)
-            candidate = QRect(clamped, size)
-            intersection = candidate.intersected(pet_rect)
-            overlap = intersection.width() * intersection.height() if not intersection.isEmpty() else 0
-            displacement = abs(clamped.x() - point.x()) + abs(clamped.y() - point.y())
-            ranked.append((overlap, displacement, index, clamped))
-
-        _, _, _, best_point = min(ranked, key=lambda item: item[:3])
-        self.move(best_point)
+        self.move(best_position_near_pet(pet_rect, size, available, gap))
 
     def _get_session(self):
         sessions = self.store.list(self.character_id)
@@ -811,7 +763,7 @@ class ChatWindow(QDialog):
         self.session_combo.clear()
         selected = -1
         for index, session in enumerate(sessions):
-            self.session_combo.addItem(_short_title(session), session.session_id)
+            self.session_combo.addItem(_short_title(session, localize_time=False), session.session_id)
             # 设置列表项前景色：让会话标题在浅色弹层中清晰可读
             self.session_combo.setItemData(index, QColor("#1f2937"), Qt.ItemDataRole.ForegroundRole)
             if session.session_id == self.session.session_id:
@@ -841,7 +793,7 @@ class ChatWindow(QDialog):
     def rename_current_session(self) -> None:
         """重命名当前会话（与新版窗口一致的交互：输入框预填当前标题）。"""
         title, accepted = QInputDialog.getText(
-            self, "重命名会话", "会话名称", text=_short_title(self.session),
+            self, "重命名会话", "会话名称", text=_short_title(self.session, localize_time=False),
         )
         if not accepted:
             return
