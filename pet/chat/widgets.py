@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import mimetypes
 import re
 from datetime import datetime, timedelta
@@ -46,8 +45,6 @@ from ..context_menus.icons import vector_widget_icon
 
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_ACCENT = "#3994ff"
-
-_logger = logging.getLogger(__name__)
 
 # 附件上限（与发送逻辑共用，超限时明确提示而非静默跳过）
 MAX_ATTACHMENTS = 10
@@ -1732,8 +1729,6 @@ class ChatWindow(QDialog):
         if self.service.busy:
             self._active_request_id = None
             self.service.stop()
-        # B8：切换会话前把旧会话（含生成中/停止的提问）入队保存，避免异步期间丢失
-        self.store.save(self.session)
         self.session = self._new_session()
         self._clear_message_rows()
         self._set_empty_state(True)
@@ -1746,8 +1741,6 @@ class ChatWindow(QDialog):
         if self.service.busy:
             self._active_request_id = None
             self.service.stop()
-        # B8：切换前保存当前会话最新状态（与 _stopped 的请求身份过滤互补）
-        self.store.save(self.session)
         session = self.store.load(session_id, self.character_id)
         if session is None:
             self._refresh_sessions()
@@ -1832,8 +1825,6 @@ class ChatWindow(QDialog):
         if self.service.busy:
             self._active_request_id = None
             self.service.stop()
-        # B8：切换角色前保存旧角色会话（角色目录隔离，队列串行写不互踩）
-        self.store.save(self.session)
         self.character_id = str(character_id)
         self._apply_character_theme()
         self.session = self._get_session()
@@ -1889,8 +1880,7 @@ class ChatWindow(QDialog):
         self._bubble.set_state("streaming")
         self._bubble.retry_requested.connect(self.retry_last)
         self._text = ""
-        # B8：生成期间不落盘；整个交换在 _complete_finished 保存一次，
-        # 停止/失败/切会话/关窗时强制 flush（提问不丢）。
+        self.store.save(self.session)
         config = self.settings.active_config
         config.api_key = self.config.resolve_api_key(config)
         messages = self.prompt_builder.build_messages(self.settings, self.character_id, self.session.messages[:-1], text)
@@ -1976,7 +1966,6 @@ class ChatWindow(QDialog):
             self._bubble.set_content(text)
             self._bubble.set_state("normal")
         self.session.messages.append(ChatMessage("assistant", text))
-        # B8：流式结束保存一次（异步入队；同会话合并，GUI 线程不碰磁盘 I/O）
         self.store.save(self.session)
         self._refresh_sessions()
         self._reset()
@@ -1993,9 +1982,6 @@ class ChatWindow(QDialog):
         if self._bubble:
             self._bubble.set_content("请求失败：" + str(text))
             self._bubble.set_state("error")
-        # B8：失败时强制 flush——提问立即落盘（失败回复不保存）
-        self.store.save(self.session)
-        self._flush_forced('请求失败')
         self._reset()
         self.pet_link.error(text)
         self._bottom()
@@ -2012,16 +1998,7 @@ class ChatWindow(QDialog):
                 self._bubble.set_state("stopped")
             else:
                 self._remove_bubble(self._bubble)
-        # B8：停止时强制 flush——已输入内容立即落盘
-        self.store.save(self.session)
-        self._flush_forced('生成停止')
         self._reset()
-
-    def _flush_forced(self, context: str) -> None:
-        """强制 flush 落盘；失败必须被上层感知（记录日志，供排查与提示）。"""
-        if not self.store.flush():
-            _logger.error('%s强制落盘失败（用户数据可能未保存）: session=%s last_error=%s',
-                          context, self.session.session_id, self.store.last_error)
 
     def _reset(self) -> None:
         # 停止打字机并丢弃未排空的输出：模型完成后若仍有 ~1 秒的逐字
@@ -2165,23 +2142,9 @@ class ChatWindow(QDialog):
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event) -> None:
-        """关闭=隐藏并复用窗口：先入队当前会话（含未提交提问），再停止生成，flush 落盘。
-
-        停止前直接把当前会话入队：不依赖 worker 的 queued stopped 回调——该回调在
-        退出事件循环停止后不会执行，生成中的提问可能从未入队而丢失。
-        """
+        """关闭=隐藏并复用窗口：停止生成、解除桌宠位置监听，避免泄漏。"""
         self._typewriter_timer.stop()
-        try:
-            # save() 返回 False 表示提交被拒绝（写入器关闭中/会话已删除）：
-            # 关窗路径必须感知并记录，不能只依赖 writer 内部日志。
-            if self.store.save(self.session) is False:
-                _logger.error('关闭窗口时保存会话被拒绝（数据未入队，可能未保存）: session=%s',
-                              self.session.session_id)
-        except Exception:
-            _logger.exception('关闭窗口时保存会话失败')
         self.service.stop()
-        self._active_request_id = None
-        self._flush_forced('关闭窗口')
         self.set_pet_window(None)
         self.hide()
         event.ignore()

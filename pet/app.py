@@ -247,18 +247,13 @@ class PetApp:
             self.island.set_pet_visible(win.isVisible())
 
     def _on_about_to_quit(self) -> None:
-        """退出前保存当前有效窗口的位置、把聊天窗会话落盘并释放资源。
+        """退出前保存当前有效窗口的位置并释放资源。
 
         aboutToQuit 只绑定一次自本控制器；切换角色会重建桌宠窗口，信号
         触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
-        退出链路：各聊天窗当前会话直接入队（不依赖 worker 的 queued stopped
-        回调）→ 同步 flush 共享会话 writer（失败记录日志）。
         """
         if self.win is not None:
-            try:
-                self.win._save_position()
-            except Exception:
-                logging.exception('退出时保存窗口位置失败')
+            self.win._save_position()
         self.collision_ipc.stop()
         if self.slot_handle is not None:
             try:
@@ -266,44 +261,6 @@ class PetApp:
             except Exception:
                 pass
             self.slot_handle = None
-        if self.enable_chat:
-            self._persist_chat_sessions_on_quit()
-
-    def _persist_chat_sessions_on_quit(self) -> None:
-        """把每个聊天窗（modern/classic/quick）的当前会话直接入队并 flush 落盘。
-
-        不依赖 ChatService worker 的 queued stopped 回调：那些回调在退出事件
-        循环停止后不会执行，生成中的提问可能从未入队。这里直接读取各窗口内存
-        中的 session 对象保存，保证退出链路「停止→入队→flush」可靠；flush
-        失败必须被感知（记录日志，提示用户数据可能未保存）。
-        """
-        for win in (self.legacy_chat_window, self.modern_chat_window, self.quick_chat):
-            if win is None:
-                continue
-            try:
-                service = getattr(win, "service", None)
-                if service is not None and callable(getattr(service, "stop", None)):
-                    service.stop()
-            except Exception:
-                logging.exception('退出时停止聊天服务失败')
-            try:
-                session = getattr(win, "session", None)
-                store = getattr(win, "store", None)
-                if session is not None and store is not None and callable(getattr(store, "save", None)):
-                    # save() 返回 False 表示提交被拒绝（写入器关闭中/会话已删除）：
-                    # 退出路径必须感知并记录，不能只依赖 writer 内部日志。
-                    if store.save(session) is False:
-                        logging.error(
-                            '退出时保存聊天会话被拒绝（数据未入队，可能未保存）: session=%s',
-                            getattr(session, "session_id", "?"))
-            except Exception:
-                logging.exception('退出时保存聊天会话失败')
-        try:
-            from .chat.session_store import flush_shared_writer
-            if not flush_shared_writer():
-                logging.error('退出时会话强制落盘未全部成功（用户数据可能未保存）')
-        except Exception:
-            logging.exception('退出时会话强制落盘失败')
 
     def _set_autostart(self, enabled: bool, win=None) -> bool:
         ok = autostart_mod.set_enabled(bool(enabled))
@@ -487,10 +444,6 @@ class PetApp:
             session.messages.append(ChatMessage("user", str(user_text)))
             session.messages.append(ChatMessage("assistant", str(reply)))
             store.save(session)
-            # 落盘失败发生在后台 worker：显式 flush 并检查真实结果，否则
-            # 外层 try/except 捕获不到磁盘写失败（同步识屏问答丢失不可见）。
-            if not store.flush():
-                logging.error("同步识屏问答到会话记录落盘失败: %s", store.last_error)
         except Exception:
             logging.exception("同步识屏问答到会话记录失败")
 
@@ -1034,15 +987,6 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         logging.info("进入事件循环")
         return app.exec()
     finally:
-        # 会话 writer 的 worker 生命周期纳入应用退出路径（排空+停线程），
-        # atexit 只作兜底；失败必须记录（用户数据可能未保存）。
-        if enable_chat:
-            try:
-                from .chat.session_store import close_shared_writer
-                if not close_shared_writer():
-                    logging.error("退出时会话写入未全部落盘（用户数据可能未保存）")
-            except Exception:
-                logging.exception("关闭会话写入器失败")
         if slot_handle is not None:
             try:
                 slot_manager_mod._unlock_file(slot_handle)

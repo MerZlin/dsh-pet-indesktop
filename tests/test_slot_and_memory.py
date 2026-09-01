@@ -179,7 +179,6 @@ store = SessionStore({repr(str(config_dir))}, instance_id=f"slot-{{slot}}")
 s = store.create("shenshen", "openai-main", "prompt")
 s.messages.append(ChatMessage("user", "hello-slot-1"))
 store.save(s)
-store.flush()  # B8：保存异步化——落盘完成后再宣告就绪，进程被强杀时数据仍在
 
 print(f"READY:{{slot}}", flush=True)
 time.sleep(10)

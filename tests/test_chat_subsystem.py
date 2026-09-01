@@ -82,7 +82,6 @@ def test_session_store_atomic_roundtrip_and_corruption(tmp_path: Path):
     session = store.create("cat", "provider", "system")
     session.messages.append(ChatMessage("user", "hi"))
     store.save(session)
-    store.flush()  # B8：保存异步化——显式等待落盘后再直接改文件，保证后续断言确定
     loaded = store.load(session.session_id)
     assert loaded is not None
     assert loaded.messages[0].content == "hi"
