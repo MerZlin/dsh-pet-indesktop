@@ -84,6 +84,7 @@ def test_falls_back_to_minimal_overlap_corner_when_both_sides_blocked():
 def test_context_menu_transitions_smoothly_to_safe_target():
     script = r'''
 import json
+import time
 from PySide6.QtCore import QPoint
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMenu
@@ -98,9 +99,13 @@ menu.popup(start)
 QTest.qWait(20)
 shown = menu.pos()
 animate_context_menu_to(menu, target, duration_ms=400)
-QTest.qWait(80)
+# 轮询等待首次位移：固定等待在 macOS offscreen 上可能采样到尚未推进的帧
 middle = menu.pos()
-QTest.qWait(350)
+deadline = time.monotonic() + 2.0
+while middle == shown and time.monotonic() < deadline:
+    QTest.qWait(10)
+    middle = menu.pos()
+QTest.qWait(500)  # 等待动画完成 + 余量
 end = menu.pos()
 print(json.dumps({"shown": [shown.x(), shown.y()],
                   "middle": [middle.x(), middle.y()],
@@ -118,6 +123,6 @@ menu.close()
     )
     observed = json.loads(result.stdout.strip().splitlines()[-1])
     assert observed["shown"] == [40, 80]
-    assert 40 <= observed["middle"][0] <= 100
+    assert 40 < observed["middle"][0] < 100
     assert observed["middle"][1] == 80
     assert observed["end"] == [100, 80]
