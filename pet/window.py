@@ -221,66 +221,6 @@ def _squash_geometry(
     return x, y, width, height
 
 
-def _mono_mask_bounds(image: QImage) -> tuple[int, int, int, int] | None:
-    """createAlphaMask 的 1bpp 掩码中置位像素的包围盒；全空返回 None。
-
-    返回 (x0, y0, x1, y1)，含边界。掩码为 Format_MonoLSB：字节内低位
-    对应左侧像素；阈值即 createAlphaMask 默认（alpha>=128），与旧
-    QBitmap→QRegion 路径的 boundingRect 逐位一致（行尾补齐位不算像素）。
-    """
-    mono = image.createAlphaMask()
-    width = mono.width()
-    height = mono.height()
-    stride = mono.bytesPerLine()
-    bits = mono.constBits()
-    last_byte = (width - 1) // 8
-    last_bits = width - last_byte * 8  # 末字节有效位数（1..8）
-    zero = b"\x00" * stride
-    x0 = y0 = None
-    x1 = y1 = -1
-    for y in range(height):
-        row = bits[y * stride:(y + 1) * stride]
-        if row == zero:
-            continue
-        # 行内首位：只统计 x < width 的置位位（行尾补齐位不算像素）
-        rx0 = None
-        for b in range(last_byte + 1):
-            byte = row[b]
-            if not byte:
-                continue
-            nbits = last_bits if b == last_byte else 8
-            for i in range(nbits):
-                if byte & (1 << i):
-                    rx0 = b * 8 + i
-                    break
-            if rx0 is not None:
-                break
-        # 行内末位
-        rx1 = None
-        for b in range(last_byte, -1, -1):
-            byte = row[b]
-            if not byte:
-                continue
-            nbits = last_bits if b == last_byte else 8
-            for i in range(nbits - 1, -1, -1):
-                if byte & (1 << i):
-                    rx1 = b * 8 + i
-                    break
-            if rx1 is not None:
-                break
-        if rx0 is None:  # 该行只有补齐位（createAlphaMask 补齐位恒 0，防御）
-            continue
-        if y0 is None:
-            y0, x0 = y, rx0
-        else:
-            x0 = min(x0, rx0)
-        y1 = y
-        x1 = max(x1, rx1)
-    if y0 is None:
-        return None
-    return x0, y0, x1, y1
-
-
 def _clamp_menu_rect(rect: QRect, avail: QRect) -> QRect:
     """把菜单矩形夹到可用屏幕区域内（保持尺寸不变）。"""
     if avail.isEmpty():
@@ -2127,12 +2067,10 @@ class PetWindow(QWidget):
 
         - 非 Windows：继续用 QWidget.setMask 实现透明区域鼠标穿透，
           _mask_bounds 取自真实 mask 的 boundingRect（行为不变）。
-        - Windows：不再 setMask（1-bit 裁剪会破坏半透明边缘），但 _mask_bounds
-          仍从「实际绘制用画布」算起——先按 _frame_draw_rect 把帧画进窗口尺寸
-          画布、createAlphaMask、再直接扫描 1bpp 掩码得包围盒。窗口边界裁剪、
-          alpha>=128 阈值、DPR/采样映射与旧 canvas→QBitmap→QRegion 路径天然
-          一致（不做源图 bbox + 采样公式反推）；鼠标穿透由
-          WindowsPerPixelInputController 负责。
+        - Windows：不再 setMask（1-bit 裁剪会破坏半透明边缘），_mask_bounds
+          用 Qt C++ 路径（createAlphaMask→QBitmap→QRegion）计算。
+          教训：曾改成 Python 逐位扫描掩码，benchmark 实测比 Qt C++ 慢 3.5 倍
+          （1.11ms vs 0.32ms/帧），每帧都亏——不要为了"省 Qt 调用"用 Python 扫像素。
         """
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
@@ -2142,19 +2080,12 @@ class PetWindow(QWidget):
             # 与 paintEvent 完全相同的绘制调用，保证 mask 与画面逐像素一致
             p.drawPixmap(rect, self._frame_pixmap)
         p.end()
+        mask = QBitmap.fromImage(canvas.createAlphaMask())
+        self._mask_bounds = QRegion(mask).boundingRect()
         if os.name != "nt":
-            mask = QBitmap.fromImage(canvas.createAlphaMask())
-            self._mask_bounds = QRegion(mask).boundingRect()
             self.setMask(mask)
-        else:
-            bb = _mono_mask_bounds(canvas)
-            if bb is None:
-                self._mask_bounds = QRect()
-            else:
-                x0, y0, x1, y1 = bb
-                self._mask_bounds = QRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
-            if not self.mask().isEmpty():
-                self.clearMask()
+        elif not self.mask().isEmpty():
+            self.clearMask()  # Windows：清掉历史遗留 mask（本路径不 setMask）
         if not self._mask_bounds.isEmpty():
             stable = getattr(self, '_collision_local_bounds', None)
             if stable is None:

@@ -488,27 +488,30 @@ def test_windows_mask_bounds_dpr_sweep(dpr, monkeypatch):
 def test_create_alpha_mask_threshold_boundary():
     """createAlphaMask 默认阈值（B5 铁律）：alpha=127 不进 mask、128 进。
 
-    直接核对 Qt 默认行为（_mono_mask_bounds 内部即 createAlphaMask），
-    把「127/128 边界」变成机器验证而非注释假设。
+    直接用 Qt 的 QRegion 路径验证（与生产 _sync_mask 同一链路）。
     """
     _qapp()
+
+    def mask_bounds(img):
+        return QRegion(QBitmap.fromImage(img.createAlphaMask())).boundingRect()
+
     low = QImage(2, 1, QImage.Format.Format_ARGB32)
     low.fill(Qt.GlobalColor.transparent)
     low.setPixelColor(0, 0, QColor(255, 255, 255, 127))
     low.setPixelColor(1, 0, QColor(255, 255, 255, 127))
-    assert window_mod._mono_mask_bounds(low) is None  # 全 127：不进 mask
+    assert mask_bounds(low).isEmpty()  # 全 127：不进 mask
 
     high = QImage(2, 1, QImage.Format.Format_ARGB32)
     high.fill(Qt.GlobalColor.transparent)
     high.setPixelColor(0, 0, QColor(255, 255, 255, 128))
     high.setPixelColor(1, 0, QColor(255, 255, 255, 128))
-    assert window_mod._mono_mask_bounds(high) == (0, 0, 1, 0)  # 全 128：进 mask
+    assert mask_bounds(high) == QRect(0, 0, 2, 1)  # 全 128：进 mask
 
     mixed = QImage(2, 1, QImage.Format.Format_ARGB32)
     mixed.fill(Qt.GlobalColor.transparent)
     mixed.setPixelColor(0, 0, QColor(255, 255, 255, 127))
     mixed.setPixelColor(1, 0, QColor(255, 255, 255, 128))
-    assert window_mod._mono_mask_bounds(mixed) == (1, 0, 1, 0)  # 只有 128 列进
+    assert mask_bounds(mixed) == QRect(1, 0, 1, 1)  # 只有 128 列进
 
 
 class _RebuildClip:
