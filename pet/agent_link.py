@@ -14,6 +14,10 @@
    - idle -> 待机
 5. 低功耗：功能默认全关，每个 Agent 独立开关；隐藏时全线 pause()，显示时 resume()；
 6. 写入外部配置/hooks 前必须弹窗征得用户明确同意。
+
+批6-5 拆分：状态归约（AgentLinkReducer，纯状态机）与呈现（AgentLinkPresentation，
+气泡/音效/动画调度）已拆至 pet/agent_link_reducer.py 与 pet/agent_link_presentation.py；
+本文件保留监视器层与 AgentLinkManager 装配/编排（安装卸载、生命周期、配置应用）。
 """
 
 from __future__ import annotations
@@ -31,10 +35,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
 
-from .click_sound import play_sound, resolve_builtin_sound
+from .agent_link_presentation import AgentLinkPresentation
+from .agent_link_reducer import AgentLinkReducer
+# 保持模块命名空间（呈现层经 pet.agent_link 模块属性在调用时解析 play_sound /
+# resolve_builtin_sound，测试按模块名 patch；本文件自身不再直接调用）。
+from .click_sound import play_sound, resolve_builtin_sound  # noqa: F401
 
 log = logging.getLogger("dsh-pet-standalone")
 
@@ -1225,32 +1233,21 @@ def other_instances_use_agent(config, agent_key: str) -> bool:
 class AgentLinkManager(QObject):
     """多 Agent 联动总调度管理器。
 
-    挂载于 PetWindow，持有 4 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
+    批6-5 拆分后本类只保留装配与编排：
+    - 装配：4 内置 + 配置驱动的自定义监视器、AgentLinkReducer（纯状态机）、
+      AgentLinkPresentation（气泡/音效/动画调度），并完成信号接线；
+    - 监视器生命周期：pause / resume / shutdown / apply_config；
+    - set_enabled 安装/卸载编排（授权弹窗、后台安装、hooks 注入/移除）；
+    - 对既有调用面（PetWindow / PetApp / ProactiveScreenWatcher / 测试）的
+      薄转发。状态机与呈现逻辑分别位于 agent_link_reducer / agent_link_presentation。
     """
 
     install_finished = Signal(str, bool, str)  # (agent_key, ok, message)
 
     # 联动气泡展示名
     AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode"}
-    # 过程汇报：工具名 → 用户可读文案（不展示原始命令/路径）
-    TOOL_LABELS = {
-        "read": "正在读文件", "write": "正在写文件", "edit": "正在改代码",
-        "notebookedit": "正在改代码", "bash": "正在跑命令", "shell": "正在跑命令",
-        "pwsh": "正在跑命令", "powershell": "正在跑命令",
-        "grep": "正在搜索", "glob": "正在搜索", "search": "正在搜索",
-        "memory_search": "正在翻记忆",
-        "webfetch": "正在查网页", "websearch": "正在查网页",
-        "fetch": "正在查网页", "browser": "正在查网页", "web_fetch": "正在查网页",
-        "web_search": "正在查网页", "read_page": "正在读网页",
-        "task": "正在派活给子代理", "todowrite": "正在列计划",
-    }
-    _UNKNOWN_TOOL_LABEL = "正在调用工具"
-    _ACTIVITY_MIN_INTERVAL = 10.0    # 同 Agent 过程气泡最小间隔
-    _ACTIVITY_GLOBAL_MIN = 8.0       # 全局最小间隔（多 Agent 并发防刷屏）
-    _ACTIVITY_SAME_LABEL = 60.0      # 同一工具文案 60s 内不重复
-    _BUSY_STATES = ("working", "thinking")
-    _DONE_CONFIRM_MS = 800   # busy→idle 稳定确认窗口（过滤 working→idle→working 抖动）
-    _DONE_COOLDOWN_S = 5.0   # 同 Agent 完成气泡最小间隔（最后一道保险）
+    # 默认 thinking 文案单一来源在 Presentation；此处再导出供设置页按类访问
+    _THINKING_DEFAULTS = AgentLinkPresentation._THINKING_DEFAULTS
 
     def __init__(self, window: Any, config: Any, *, min_interval: float = 2.0,
                  clock: Callable[[], float] = time.time) -> None:
@@ -1258,24 +1255,6 @@ class AgentLinkManager(QObject):
         self.win = window
         self.cfg = config
         self.config_dir = config.dir
-        # 状态节流：同一 Agent 相同状态去抖；同 Agent 两次动作切换最小间隔
-        # （Cursor 等 transcript 密集写入时防止动画"抽搐"）
-        self._min_interval = float(min_interval)
-        self._clock = clock
-        self._last_applied: dict[str, tuple[str, float]] = {}
-        # 原始状态流（不受去抖/节流影响）：用于 busy→idle 完成检测。
-        # 不能用 _last_applied 做完成判定——节流会丢掉紧跟其后的 idle，导致完成通知丢失。
-        self._last_raw: dict[str, str] = {}
-        self._done_pending: dict[str, QTimer] = {}   # agent → 稳定确认定时器
-        self._done_cooldown: dict[str, float] = {}   # agent → 上次完成气泡时刻
-        self._saw_alert: set[str] = set()            # busy 周期内出现过 attention/error 的 Agent
-        self._saw_error: set[str] = set()            # busy 周期内真正出现过 error 的 Agent
-        self._sound_last_at: dict[str, float] = {}
-        self._sound_last_event: dict[str, tuple[str, float]] = {}
-        self._link_seq = 0                           # 联动动作轮换计数
-        # 过程汇报气泡：agent → (上次文案, 时刻)；全局最后一条时刻
-        self._last_activity: dict[str, tuple[str, float]] = {}
-        self._activity_global_last = 0.0
 
         self.monitors: dict[str, BaseAgentMonitor] = {
             "dsh": DshMonitor("dsh", self.config_dir, self),
@@ -1297,6 +1276,20 @@ class AgentLinkManager(QObject):
             )
             self.agent_names[key] = str(item.get("name") or key)
 
+        # 状态归约器（纯状态机）+ 呈现层（气泡/音效/动画调度）
+        self.reducer = AgentLinkReducer(
+            config, self._emit_gen_of, self._monitor_running, self._window_visible,
+            self.agent_names, min_interval=min_interval, clock=clock, parent=self,
+        )
+        self.presentation = AgentLinkPresentation(
+            window, config, self.agent_names, clock=clock, parent=self,
+        )
+        # 效果信号：Reducer → Presentation（同线程直连，保持 emit→dispatch 语义）
+        self.reducer.activity.connect(self.presentation.on_activity)
+        self.reducer.sound_event.connect(self.presentation.on_sound_event)
+        self.reducer.state_applied.connect(self.presentation.on_state_applied)
+        self.reducer.done_bubble.connect(self.presentation.on_done_bubble)
+
         for mon in self.monitors.values():
             mon.state_changed.connect(self._on_agent_state_event)
             mon.activity.connect(self._on_agent_activity_event)
@@ -1306,6 +1299,19 @@ class AgentLinkManager(QObject):
             self.win.set_link_next_provider(self._next_busy_anim)
 
         self.apply_config()
+
+    # ---- Reducer 依赖注入（状态机不直接触碰监视器/窗口） ----
+
+    def _emit_gen_of(self, agent_key: str) -> int | None:
+        mon = self.monitors.get(agent_key)
+        return None if mon is None else mon._emit_gen
+
+    def _monitor_running(self, agent_key: str) -> bool | None:
+        mon = self.monitors.get(agent_key)
+        return None if mon is None else bool(getattr(mon, "_running", True))
+
+    def _window_visible(self) -> bool:
+        return hasattr(self.win, "isVisible") and bool(self.win.isVisible())
 
     def apply_config(self) -> None:
         """根据配置启停各个 Agent 监视器。
@@ -1321,20 +1327,13 @@ class AgentLinkManager(QObject):
                 monitor.stop()
 
     def any_busy(self) -> bool:
-        """任一已启用 Agent 正处于 busy（working/thinking）状态。
+        """任一已启用 Agent 正处于 busy（working/thinking）状态。（转发 Reducer）
 
         供闲置降帧等"Agent 在干活 = 桌宠活跃"的判定使用：dsh 干活时桌宠
         视为活跃、不降帧。已停用监视器的残留状态不计入（关掉联动 = 不再
         被视为活跃，否则降帧开关会被僵尸 busy 永久顶掉）。
         """
-        for key, state in self._last_raw.items():
-            if state not in self._BUSY_STATES:
-                continue
-            mon = self.monitors.get(key)
-            if mon is not None and not getattr(mon, "_running", True):
-                continue
-            return True
-        return False
+        return self.reducer.any_busy()
 
     def _install_dsh_worker(self) -> None:
         """后台线程：安装 DSH 桥接插件，完成后信号回主线程。"""
@@ -1460,23 +1459,13 @@ class AgentLinkManager(QObject):
         （否则隐藏期间计时器到期会在隐藏窗口上切动画/弹气泡）。"""
         for mon in self.monitors.values():
             mon.pause()
-        if hasattr(self.win, "clear_pending_link_anim"):
-            self.win.clear_pending_link_anim()
-        for key in list(self._done_pending):
-            self._cancel_done_check(key)
-        self._sound_last_event.clear()
+        self.presentation.pause()
+        self.reducer.pause()
 
     def resume(self) -> None:
         """桌宠恢复显示时恢复活动的监视器。"""
         for mon in self.monitors.values():
             mon.resume()
-
-    def _gen_current(self, agent_key: str, gen: int) -> bool:
-        """校验发射代次是否仍是该监视器的当前代次（丢弃旧 worker 的迟到信号）。"""
-        mon = self.monitors.get(agent_key)
-        if mon is None:
-            return False
-        return gen == mon._emit_gen
 
     def shutdown(self) -> None:
         """窗口销毁/角色切换：先广播停止（不逐个阻塞），再按共享截止 join。
@@ -1498,6 +1487,8 @@ class AgentLinkManager(QObject):
         for mon in active:
             mon.finish_stop(deadline)
 
+    # ---- 信号槽（监视器 worker → 本管理器，Queued 语义保持） ----
+
     def _on_agent_state_event(self, event: AgentEvent) -> None:
         """state_changed 信号槽：AgentEvent 载荷 → 既有处理入口（代次校验在内）。"""
         self._on_agent_state(event.agent, event.state, event.gen)
@@ -1507,297 +1498,52 @@ class AgentLinkManager(QObject):
         self._on_agent_activity(event.agent, event.tool, event.gen)
 
     def _on_agent_state(self, agent_key: str, state: str, gen: int = 0) -> None:
-        """接收 Agent 状态变更并调度桌宠动作/气泡（带去抖与节流）。
+        """接收 Agent 状态变更（测试兼容入口；状态机逻辑在 Reducer）。"""
+        self.reducer.on_state(agent_key, state, gen)
 
-        代次校验：worker 线程发射带其启动代次，监视器重启后旧代次的迟到
-        信号（已入 Qt 队列的）在此丢弃——发送端标志挡不住 emit→dispatch
-        竞态，接收端校验是唯一的完整闸门（B9 设计评审结论）。
-        """
-        if not self._gen_current(agent_key, gen):
-            return
-        if not hasattr(self.win, "isVisible") or not self.win.isVisible():
-            return
-        # 联动状态事件 = 联动事件：刷新桌宠的闲置降帧活跃锚点（busy 与
-        # 回到 idle 都算"有过联动活动"；持续 busy 由 any_busy() 门控兜底）
-        mark = getattr(self.win, "mark_activity", None)
-        if callable(mark):
-            mark()
+    def _on_agent_activity(self, agent_key: str, tool: str, gen: int = 0) -> None:
+        """接收 Agent 工具过程汇报（测试兼容入口；代次校验在 Reducer，气泡在 Presentation）。"""
+        if not self.reducer.gen_current(agent_key, gen):
+            return  # 旧代次 worker 的迟到信号
+        self.presentation.on_tool_activity(agent_key, tool)
 
-        now = self._clock()
-        # --- 原始状态流（绕开去抖/节流）：busy→idle 完成检测 ---
-        # 不能用 _last_applied 判定完成——节流会丢掉紧跟的 idle，导致完成通知丢失。
-        prev_raw = self._last_raw.get(agent_key)
-        self._last_raw[agent_key] = state
-        if state in self._BUSY_STATES and prev_raw not in self._BUSY_STATES:
-            self._emit_sound("start", agent_key)
-        elif state == "error" and prev_raw != "error":
-            self._emit_sound("error", agent_key)
-        if state in self._BUSY_STATES:
-            self._cancel_done_check(agent_key)
-            self._saw_alert.discard(agent_key)
-            if prev_raw != "error":
-                self._saw_error.discard(agent_key)
-        elif state in ("attention", "error") and prev_raw in self._BUSY_STATES:
-            self._saw_alert.add(agent_key)
-            if state == "error":
-                self._saw_error.add(agent_key)
-            # Claude 的回合结束信号是 Stop→attention 而非 idle：busy 后的
-            # attention/error 同样进入完成确认（800ms 内回忙则取消——例如
-            # SubagentStop 后主 Agent 继续干活、工具报错后重试）。
-            self._schedule_done_check(agent_key)
-        elif state in ("idle", "sleeping") and prev_raw in self._BUSY_STATES:
-            # working/thinking → idle：疑似任务完成，800ms 稳定确认
-            # （过滤 working→idle→working 抖动；确认期间回忙则取消）
-            self._schedule_done_check(agent_key)
+    def _fire_done(self, agent_key: str) -> None:
+        """800ms 稳定确认到期（测试兼容入口；逻辑在 Reducer）。"""
+        self.reducer.fire_done(agent_key)
 
-        # 去抖：同一 Agent 连续相同状态只生效第一次
-        last = self._last_applied.get(agent_key)
-        if last is not None and last[0] == state:
-            return
-        # 节流：同一 Agent 两次动作/气泡切换最小间隔
-        if last is not None and (now - last[1]) < self._min_interval:
-            return
-        self._last_applied[agent_key] = (state, now)
-
-        log.debug("Agent 状态变更 [%s]: %s", agent_key, state)
-
-        # 状态 -> 桌宠行为映射（手册 §8.2）
-        if state in ("thinking", "working"):
-            # busy 动作池轮换（写代码/吃Token 为主，每第 3 次插播短摸鱼），
-            # 经 request_link_anim 平滑衔接：正在播的一次性动作不被打断
-            anim = self._next_link_anim_rotation()
-            if anim and hasattr(self.win, "request_link_anim"):
-                self.win.request_link_anim(anim)
-            self._maybe_notify_start(agent_key, prev_raw, state)
-        elif state == "attention":
-            # busy 后的 attention（如 Claude Stop=回合结束）由完成确认流程接管，
-            # 避免「需要看一眼」和「完成通知」双气泡；独立出现的才立即提醒
-            if prev_raw not in self._BUSY_STATES:
-                self._show_link_bubble("主人，Agent 这边需要你看一眼～", important=True)
-        elif state == "error":
-            if prev_raw not in self._BUSY_STATES:
-                self._show_link_bubble("Agent 执行好像遇到报错了…", important=True)
-        elif state in ("sleeping", "idle"):
-            # 回到待机：一次性动作播完自然回，待机/移动中立即回
-            if hasattr(self.win, "request_link_idle"):
-                self.win.request_link_idle()
-
-    # ------------------------------------------------------------------
-    # 联动动作池（写代码/吃Token 交替为主，每第 3 次插播短摸鱼）
-    # ------------------------------------------------------------------
-    _LINK_MAIN = ("写代码", "吃Token")
-    _LINK_BREAK = ("轻快记录", "漂浮踏步")
-    _LINK_MAIN_KEYWORDS = ("代码", "工作", "写", "打字", "敲")
-    _LINK_BREAK_KEYWORDS = ("记录", "踏步", "伸懒腰")
+    def _show_link_bubble(self, text: str, *, important: bool, duration_ms: int = 4500,
+                          _retried: int = 0) -> None:
+        """联动气泡（测试兼容入口；逻辑在 Presentation）。"""
+        self.presentation.show_link_bubble(
+            text, important=important, duration_ms=duration_ms, _retried=_retried)
 
     def _next_link_anim_rotation(self) -> str | None:
-        """下一个联动动作：主动作严格交替；每第 3 次插播摸鱼（独立节奏）。"""
-        acts = list(getattr(self.win, "cats", {}).get("acts", []) or [])
-        main = [a for a in self._LINK_MAIN if a in acts]
-        brk = [a for a in self._LINK_BREAK if a in acts]
-        # 不同角色包的动作名不统一：精确名缺失时按语义关键词回退。
-        if not main:
-            main = [a for a in acts if any(k in a for k in self._LINK_MAIN_KEYWORDS)]
-        if not brk:
-            brk = [a for a in acts if any(k in a for k in self._LINK_BREAK_KEYWORDS)]
-        # 角色包至少有一个动作时，确保 Agent 忙碌期间始终有可见反馈。
-        if not main and not brk:
-            main = acts
-        if not main and not brk:
-            return None
-        self._link_seq += 1
-        if brk and self._link_seq % 3 == 0:
-            return brk[(self._link_seq // 3 - 1) % len(brk)]
-        if main:
-            return main[(self._link_seq - 1) % len(main)]
-        return brk[(self._link_seq - 1) % len(brk)]
+        """下一个联动动作（测试兼容入口；轮换逻辑在 Presentation）。"""
+        return self.presentation.next_link_anim_rotation()
 
     def _next_busy_anim(self) -> str | None:
         """window 动画结束回调用：仍有 Agent 在忙 → 下一个联动动作；否则 None。
         全员空闲时重置轮换计数——下一个任务从「写代码」重新开始。"""
-        if any(s in self._BUSY_STATES for s in self._last_raw.values()):
-            return self._next_link_anim_rotation()
-        self._link_seq = 0
-        return None
-
-    # 进程名 → Agent：该 Agent 联动开启且正忙时，主动识屏跳过它的窗口
-    # （联动气泡已在汇报进度，识屏再评一句就是重复打扰）。
-    # opencode/cursor 有独立桌面进程按进程名识别；dsh 跑在浏览器/应用窗口里，
-    # 按窗口标题识别；claude 在终端里标题不可控，不映射。
-    AGENT_PROCESS_HINTS = {
-        "opencode": ("opencode.exe",),
-        "cursor": ("cursor.exe",),
-    }
-    AGENT_TITLE_HINTS = {
-        "dsh": ("deepseek harness",),
-    }
+        return self.presentation.next_busy_anim(self.reducer.has_any_busy_raw)
 
     def busy_agent_owns_process(self, process_name: str, title: str = "") -> bool:
-        """前台窗口是否属于「联动开启且正在忙」的 Agent（进程名或窗口标题命中）。"""
-        agent_cfg = self.cfg.get("agent_link", {})
-        p = str(process_name or "").lower()
-        t = str(title or "").lower()
-        for agent_key, procs in self.AGENT_PROCESS_HINTS.items():
-            if p and p in procs and agent_cfg.get(agent_key) \
-                    and self._last_raw.get(agent_key) in self._BUSY_STATES:
-                return True
-        for agent_key, needles in self.AGENT_TITLE_HINTS.items():
-            if t and any(n in t for n in needles) and agent_cfg.get(agent_key) \
-                    and self._last_raw.get(agent_key) in self._BUSY_STATES:
-                return True
-        return False
+        """前台窗口是否属于「联动开启且正在忙」的 Agent（转发 Reducer）。"""
+        return self.reducer.busy_agent_owns_process(process_name, title)
 
-    # ------------------------------------------------------------------
-    # 联动气泡（开始干活可选 / 任务完成通知）
-    # ------------------------------------------------------------------
-    # 各 Agent 的默认 thinking 文案；DSH 用角色梗，其他用烧烤梗
-    _THINKING_DEFAULTS = {"dsh": "大肥鱼正在深度思考……"}
+    # ---- 测试兼容的状态字段视图（指向 Reducer 真实对象，逐字段等价） ----
 
-    def _thinking_text(self, agent_key: str) -> str:
-        """thinking 气泡文案：按 Agent 自定义 > 旧全局自定义 > 按 Agent 默认。"""
-        agent_cfg = self.cfg.get("agent_link", {})
-        custom = (agent_cfg.get("thinking_texts") or {}).get(agent_key, "").strip()
-        # 兼容旧的全局 thinking_text 字段（设置页保存时已自动迁移）
-        if not custom:
-            custom = str(agent_cfg.get("thinking_text", "") or "").strip()
-        if custom:
-            name = self.agent_names.get(agent_key, agent_key)
-            return custom.replace("{name}", name)
-        if agent_key in self._THINKING_DEFAULTS:
-            return self._THINKING_DEFAULTS[agent_key]
-        name = self.agent_names.get(agent_key, agent_key)
-        return f"{name} 正在深度烧烤……"
+    @property
+    def _last_raw(self) -> dict[str, str]:
+        return self.reducer._last_raw
 
-    def _maybe_notify_start(self, agent_key: str, prev_raw: str | None, state: str = "working") -> None:
-        """开始干活气泡：仅「非 busy → busy」时提示（thinking↔working 互跳不弹）。
-        低优先级：气泡位被占时直接丢弃。thinking 状态用更有趣的文案。"""
-        agent_cfg = self.cfg.get("agent_link", {})
-        if not agent_cfg.get("notify_state", False):
-            return
-        if prev_raw in self._BUSY_STATES:
-            return
-        name = self.agent_names.get(agent_key, agent_key)
-        if state == "thinking":
-            self._show_link_bubble(self._thinking_text(agent_key), important=False, duration_ms=3000)
-        else:
-            self._show_link_bubble(f"{name} 开始干活啦～", important=False, duration_ms=3000)
+    @_last_raw.setter
+    def _last_raw(self, value: dict[str, str]) -> None:
+        self.reducer._last_raw = value
 
-    def _on_agent_activity(self, agent_key: str, tool: str, gen: int = 0) -> None:
-        """过程汇报气泡（可选，默认关）：「DSH 正在读文件…」这类。
-        白名单工具映射 + 三重限流（同 Agent 10s / 同文案 60s / 全局 8s）。"""
-        if not self._gen_current(agent_key, gen):
-            return  # 旧代次 worker 的迟到信号
-        # 工具活动 = 联动事件：刷新闲置降帧的活跃锚点（Agent 正在调工具干活）
-        mark = getattr(self.win, "mark_activity", None)
-        if callable(mark):
-            mark()
-        agent_cfg = self.cfg.get("agent_link", {})
-        if not agent_cfg.get("notify_activity", False):
-            return
-        label = self.TOOL_LABELS.get(str(tool).strip().lower(), self._UNKNOWN_TOOL_LABEL)
-        now = self._clock()
-        last = self._last_activity.get(agent_key)
-        if last is not None:
-            if last[0] == label and now - last[1] < self._ACTIVITY_SAME_LABEL:
-                return
-            if now - last[1] < self._ACTIVITY_MIN_INTERVAL:
-                return
-        if now - self._activity_global_last < self._ACTIVITY_GLOBAL_MIN:
-            return
-        self._last_activity[agent_key] = (label, now)
-        self._activity_global_last = now
-        name = self.agent_names.get(agent_key, agent_key)
-        # 低优先级：气泡位被占直接丢弃，不与重要气泡竞争
-        self._show_link_bubble(f"{name} {label}…", important=False, duration_ms=2600)
+    @property
+    def _last_applied(self) -> dict[str, tuple[str, float]]:
+        return self.reducer._last_applied
 
-    def _schedule_done_check(self, agent_key: str) -> None:
-        self._cancel_done_check(agent_key)
-        timer = QTimer(self)
-        timer.setSingleShot(True)
-        timer.setInterval(self._DONE_CONFIRM_MS)
-        timer.timeout.connect(lambda k=agent_key: self._fire_done(k))
-        self._done_pending[agent_key] = timer
-        timer.start()
-
-    def _cancel_done_check(self, agent_key: str) -> None:
-        timer = self._done_pending.pop(agent_key, None)
-        if timer is not None:
-            timer.stop()
-            timer.deleteLater()
-
-    def _fire_done(self, agent_key: str) -> None:
-        """800ms 稳定确认到期：期间回忙则不算完成；配置/冷却在弹出前再查。"""
-        self._done_pending.pop(agent_key, None)
-        if not hasattr(self.win, "isVisible") or not self.win.isVisible():
-            return  # 隐藏中不弹不切（pause 已取消计时器，这里是兜底）
-        if self._last_raw.get(agent_key) in self._BUSY_STATES:
-            return
-        if agent_key not in self._saw_error:
-            self._emit_sound("done", agent_key)
-        agent_cfg = self.cfg.get("agent_link", {})
-        if not agent_cfg.get("notify_done", True):
-            return
-        now = self._clock()
-        if now - self._done_cooldown.get(agent_key, 0.0) < self._DONE_COOLDOWN_S:
-            return
-        self._done_cooldown[agent_key] = now
-        name = self.agent_names.get(agent_key, agent_key)
-        if agent_key in self._saw_alert:
-            # busy 期间出现过 attention/error：不暗示"成功完成"
-            text = f"{name} 那边停了，结果怎么样要主人自己看一眼哦"
-        else:
-            text = f"{name} 干完活啦，去看看成果吧～"
-        self._saw_alert.discard(agent_key)
-        self._saw_error.discard(agent_key)
-        # 恢复待机动画：Claude 回合结束没有 idle 事件，不靠这步会一直停在干活动作。
-        # 仅当没有其他 Agent 仍在忙时恢复（避免 A 完成顶掉 B 的工作动画）。
-        # 必须走 request_link_idle（它会清 _link_anim_current 并尊重一次性动作），
-        # 不能裸 _switch——否则残留的 link 状态会把以后的普通同名动作劫持进联动链。
-        if not any(k != agent_key and s in self._BUSY_STATES
-                   for k, s in self._last_raw.items()):
-            if hasattr(self.win, "request_link_idle"):
-                self.win.request_link_idle()
-            self._last_applied[agent_key] = ("idle", now)
-        self._show_link_bubble(text, important=True)
-
-    def _emit_sound(self, event_name: str, agent_key: str) -> None:
-        """播放 Agent 生命周期音效；所有 Agent 共用一组全局冷却。"""
-        agent_cfg = self.cfg.get("agent_link", {})
-        if not agent_cfg.get("sound_enabled", False):
-            return
-        if not agent_cfg.get(f"sound_{event_name}_enabled", True):
-            return
-        path_value = str(agent_cfg.get(f"sound_{event_name}_path", "") or "").strip()
-        if not path_value:
-            return
-        path = resolve_builtin_sound(path_value) if path_value.startswith("builtin:") else Path(path_value).expanduser()
-        if path is None or not path.is_file():
-            return
-        now = self._clock()
-        cooldown = max(0.0, float(agent_cfg.get("sound_cooldown_seconds", 2.0)))
-        if now - self._sound_last_at.get("global", float("-inf")) < cooldown:
-            return
-        last_event = self._sound_last_event.get(agent_key)
-        if last_event is not None and last_event[0] == event_name and now == last_event[1]:
-            return
-        self._sound_last_at["global"] = now
-        self._sound_last_event[agent_key] = (event_name, now)
-        log.info("播放联动音效 event=%s agent=%s path=%s", event_name, agent_key, path)
-        play_sound(path, volume=float(agent_cfg.get("sound_volume", 0.65)))
-
-    def _show_link_bubble(self, text: str, *, important: bool, duration_ms: int = 4500,
-                          _retried: int = 0) -> None:
-        """联动气泡：不顶掉正在占用气泡位的重要气泡（主动识屏/attention 等）。
-        普通气泡直接让路丢弃；重要气泡每 2.5s 重试至多 4 次（约 10s 窗口），
-        仍被占才放弃——主动识屏长答复可能占位 15-20s，单次重试不够用。"""
-        if not hasattr(self.win, "show_bubble"):
-            return
-        busy_until = getattr(self.win, "_bubble_busy_until", 0.0)
-        if time.time() < busy_until:
-            if not important or _retried >= 4:
-                return
-            QTimer.singleShot(2500, self,
-                              lambda t=text, n=_retried: self._show_link_bubble(
-                                  t, important=True, _retried=n + 1))
-            return
-        self.win.show_bubble(text, duration_ms=duration_ms)
+    @property
+    def _done_pending(self) -> dict[str, Any]:
+        return self.reducer._done_pending
