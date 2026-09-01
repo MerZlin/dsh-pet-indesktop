@@ -612,7 +612,6 @@ class PetWindow(QWidget):
         self._last_collision_squash_at = float('-inf')
         self._last_collision_sound_at = float('-inf')
         self._press_sound_pair = None
-        self._press_sound_started_at: float | None = None
         self._slingshot_rebound_progress = 0.0
 
         # ---- 拖动物理 ----
@@ -2454,7 +2453,6 @@ class PetWindow(QWidget):
                 pair = resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
                 if pair is not None:
                     self._press_sound_pair = pair
-                    self._press_sound_started_at = time.monotonic()
                     # 拖动不应触发点击音效：按下阶段不发声，确认是点击后再播放完整 press+release
             if self.lock_position:
                 # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
