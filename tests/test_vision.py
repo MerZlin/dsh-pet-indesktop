@@ -150,6 +150,7 @@ def test_independent_vision_prefers_own_key_over_chat_key(monkeypatch):
     assert reply == "好呀"
     assert called_with["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     auth = called_with["headers"].get("Authorization")
+    assert called_with["headers"].get("User-agent", "").startswith("Mozilla/")
     assert auth == "Bearer sk-vision-secret"
     assert "sk-chat-secret" not in str(auth)
 

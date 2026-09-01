@@ -2449,7 +2449,7 @@ class PetWindow(QWidget):
                 if pair is not None:
                     self._press_sound_pair = pair
                     self._press_sound_started_at = time.monotonic()
-                    play_press_sound(pair, float(self.cfg.get("click_sound_volume", 0.70)))
+                    # 拖动不应触发点击音效：按下阶段不发声，确认是点击后再播放完整 press+release
             if self.lock_position:
                 # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
                 return
@@ -2574,11 +2574,9 @@ class PetWindow(QWidget):
                 self._switch(self._pick(self.idles))  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
             if self._press_sound_pair is not None and self.click_sound_enabled:
-                play_release_sound(
-                    self._press_sound_pair,
-                    float(self.cfg.get("click_sound_volume", 0.70)),
-                    self._press_sound_started_at,
-                )
+                volume = float(self.cfg.get("click_sound_volume", 0.70))
+                play_press_sound(self._press_sound_pair, volume)
+                play_release_sound(self._press_sound_pair, volume)
             if not self._try_open_quick_chat_from_bubble(g):
                 self._on_click()
         self._dragging = False
