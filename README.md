@@ -86,7 +86,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 
 ## 当前状态
 
-- **开发版（v4.0.5 之后）**：多开碰撞、灵动岛、快速对话气泡、自定义 Agent 联动通道、POSIX IPC 重选修复、右键菜单 LTR、碰撞协议加固、拖动不触发点击音效、点击音效切换修复、Cloudflare 请求头优化、CI 稳定性加固等（PR #36/#39/#40/#41/#44/#46/#47/#49/#50/#52/#53/#54）。
+- **开发版（v4.0.5 之后）**：多开碰撞、灵动岛、快速对话气泡、自定义 Agent 联动通道、POSIX 碰撞 IPC 重选修复、右键菜单 LTR、碰撞协议加固、拖动不触发点击音效、点击音效切换修复、Cloudflare 请求头优化、CI 稳定性加固等（PR #36/#39/#40/#41/#44/#46/#47/#49/#50/#52/#53/#54）。
 - **v4.0.5**：功能版——音效体系升级（点击音效包/Agent 联动音效）、甩出力度档位、弹弓弹射、光标隐藏自动穿透、点击 Q 弹卡顿修复、自启变体独立（PR #33/#34/#35）。
 - **v4.0.4**：功能版——余额分档动画、DeepSeek 峰谷提示（可自定义文案与颜色）、后台音乐自动唱歌、点击音效打断、移动动画调整、位置记忆修复、自启残留清理、thinking 专属气泡文案等（PR #29/#30/#31/#32）。
 - **v4.0.3**：紧急修复版——修复 Windows 透明像素点击穿透、DSH 桥接插件自动安装 pnpm，以及 Windows 官方包中文乱码（PR #27/#28）。
@@ -948,7 +948,7 @@ python scripts/cleanup_mei_cache.py --delete
 ### 构建 / CI 失败经验（v4.0.5 之后）
 
 - **POSIX 碰撞 IPC 测试失败（issue #42）**：Linux/macOS 上协调者被强杀后 `QLocalServer` 的 Unix socket 文件残留，幸存者 `listen()` 报 `AddressInUseError` 导致重选死循环；`submit_leave` 成员表为空属于同批时序问题。处理：先探测活监听者、确认无人应答再清理残留并重试；补 `bytesAvailable()` 兜底读取；测试服务名缩短规避 macOS socket 路径长度上限（PR #46/#49）。
-- **WebM 线程回收偶发失败**：`test_rapid_start_stop_no_leaked_running_threads` 在 Linux/macOS 偶发断言残留 reader/LogCatcher 线程。处理：线程退出是异步的，断言前给 5s 宽限等待；若仍偶发可重跑定位是否负载相关。
+- **WebM 线程回收偶发失败**：`test_rapid_start_stop_no_leaked_running_threads` 在 Linux/macOS 偶发断言残留新出现的非预期线程（含 reader 线程）。处理：线程退出是异步的，断言前给 5s 宽限等待；若仍偶发可重跑定位是否负载相关。
 - **macOS 右键菜单动画时序失败**：`test_context_menu_transitions_smoothly_to_safe_target` 原先固定 `qWait(50)` 采样动画中间位置，macOS offscreen 子进程定时器调度延迟时会采样到尚未推进的帧（`middle.x == 40`）。处理：改为轮询等待菜单位置首次变化（上限 2s）后再采样，并等待 `duration + margin` 验证最终位置；恢复严格下界断言（PR #53/#54）。
 - **经验总结**：
   - 本地 Windows 全量通过 ≠ 三平台通过；QLocalServer、子进程、UI 动画等平台敏感测试必须跑真实 Linux/macOS。
