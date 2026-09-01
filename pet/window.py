@@ -3836,6 +3836,16 @@ class PetWindow(QWidget):
         lib = getattr(self, 'lib', None)
         if lib is not None and hasattr(lib, 'pause_warm'):
             lib.pause_warm()
+        # 显式停掉当前动画 reader（Fix D）：窗口关闭不再依赖 GC + destroyed
+        # （已实证会失效的路径），关闭即 stop()——reader 收到停止信号、底层
+        # ffmpeg 被 terminate、线程退役登记。_closing 已置位，迟到的动画事件
+        # 会被丢弃，与此停播语义不冲突；stop() 幂等，对测试替身无副作用。
+        movie = getattr(self, 'movie', None)
+        if movie is not None:
+            try:
+                movie.stop()
+            except RuntimeError:
+                pass  # movie 的 C++ 侧已随库销毁（半销毁场景）：不得中断 closeEvent 后续清理
         self._lock_press_active = False
         self._click_hold = False
         self._context_menu_open = False

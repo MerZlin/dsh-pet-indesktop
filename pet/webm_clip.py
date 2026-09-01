@@ -33,6 +33,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import types
 import json
 import tempfile
@@ -71,6 +72,11 @@ _SWEEP_JOIN_TIMEOUT = 0.2
 # 在 GUI 线程调用时（stop/_reap_retired）该值同时是 GUI 阻塞上限，
 # 正常进程 terminate 后毫秒级退出，此值只作为病态场景的兜底。
 _PROC_TERMINATE_TIMEOUT = 0.5
+# 结束标记（None）放入队列的总时限（秒，Fix C）：正常路径队列很快腾出
+# 槽位、立即送达；仅病态（队列持续满且无人消费、stop_evt 缺失的历史僵尸）
+# 时有界放弃并告警，绝不让 reader 永久空转。放弃后 finally 仍保证
+# _terminate_proc 与 gen.close() 执行。
+_END_MARKER_PUT_TIMEOUT = 5.0
 
 # ------------------------------------------------------------ 孤儿 sweep 生命周期管理器（B7 审查 P2）
 # 退役 reader 的回收由「独立生命周期管理器」持有：注册表记录所有
@@ -389,10 +395,20 @@ class WebMClip(QObject):
         self._running = False
         self._generation = 0
 
-        self.destroyed.connect(self._on_destroyed)
+        # 销毁清理（Fix A1）：绝不连接「自身 bound-method」槽——PySide6 在
+        # C++ 删除对象时【从不】调用它（调查实证：lambda/外部对象方法才会被
+        # 调用），那会让 cleanup() 缺席、reader 变僵尸。改连无 receiver 的
+        # callable；lambda 捕获 self 会形成引用环（clip→连接→lambda→clip），
+        # 由 cleanup() 内显式断开（_destroyed_conn）打破，C++ 删除时 Qt 也会
+        # 清理连接兜底。
+        self._destroyed_conn = self.destroyed.connect(
+            lambda *_: WebMClip._destroyed_cleanup(self)
+        )
 
-    def _on_destroyed(self) -> None:
-        self.cleanup()
+    @staticmethod
+    def _destroyed_cleanup(clip: "WebMClip") -> None:
+        """C++ 对象销毁时经 destroyed 信号回调（无 receiver callable）。"""
+        clip.cleanup()
 
     def __del__(self) -> None:
         try:
@@ -409,6 +425,16 @@ class WebMClip(QObject):
         （Windows 原生崩溃的根因，见模块头注释）。cleanup 后 clip 终结
         （_cleaned），自身不再安排任何 sweep/timer。
         """
+        # 断开 destroyed 的 lambda 连接（Fix A1）：lambda 捕获 self 形成
+        # 引用环，显式断开让 Python GC 可回收；C++ 已删场景 disconnect 抛
+        # RuntimeError 属预期（连接随 C++ 信号消亡，Qt 侧已清理）。
+        conn = getattr(self, '_destroyed_conn', None)
+        if conn is not None:
+            try:
+                self.destroyed.disconnect(conn)
+            except RuntimeError:
+                pass
+            self._destroyed_conn = None
         self._cleaned = True
         self.cancel_first_frame_warm()
         try:
@@ -639,7 +665,10 @@ class WebMClip(QObject):
 
     def stop(self) -> None:
         self._running = False
-        self._timer.stop()
+        # 停止信号先于任何 Qt 交互送达（Fix B）：C++ 半销毁（QTimer 已随 clip
+        # 销毁）场景下，reader 也必须收到停止信号、ffmpeg 必被 terminate、
+        # 线程必被退役登记——_timer.stop() 移到最末并吞 RuntimeError，保证
+        # 前置步骤永不因 Qt 缺失中止（否则又是同款僵尸）。
         stop_evt = self._stop_evt
         if stop_evt is not None:
             stop_evt.set()
@@ -662,6 +691,10 @@ class WebMClip(QObject):
             # 后不残留本 clip 的 timer 调度。
             if not self._cleaned and self._retired:
                 _register_orphan(self)
+        try:
+            self._timer.stop()
+        except RuntimeError:
+            pass  # C++ QTimer 已随 clip 销毁（半销毁场景）：停止信号与进程终止已先行完成
 
     def jumpToFrame(self, frame_index: int) -> bool:
         # 本项目只需要回到首帧；完整 seek 通过重启 reader + 丢弃帧实现。
@@ -963,24 +996,16 @@ class WebMClip(QObject):
             # 正常播完时放入结束标记。主线程可能正忙（队列满、帧被丢弃），
             # 必须循环重试直到放入或收到停止信号；否则“最后一帧被丢弃且
             # 结束标记也丢失”会让上层永远等不到播完，动画链卡死在最后一帧。
-            while not stop_evt.is_set() and self._generation == generation:
-                try:
-                    q.put(None, timeout=0.5)
-                    break
-                except queue.Full:
-                    continue
+            # 重试有总时限（Fix C）：病态场景（队列持续满）下有界放弃，绝不
+            # 永久空转；_terminate_proc / gen.close() 由 finally 保证。
+            self._put_end_marker(q, stop_evt, generation)
         except Exception as exc:
             if self._generation != generation or stop_evt.is_set():
                 return
             logger.exception('webm 解码失败: %s', self.path)
             self.errorOccurred.emit(str(exc))
-            # 异常中断也要放入结束标记，避免动画链卡在最后一帧
-            while not stop_evt.is_set() and self._generation == generation:
-                try:
-                    q.put(None, timeout=0.5)
-                    break
-                except queue.Full:
-                    continue
+            # 异常中断也要放入结束标记，避免动画链卡在最后一帧（同样有界）。
+            self._put_end_marker(q, stop_evt, generation)
         finally:
             with self._reader_lock:
                 if proc is not None and self._reader_proc is proc:
@@ -1017,6 +1042,28 @@ class WebMClip(QObject):
             return
 
         self._process_frame(item)
+
+    def _put_end_marker(self, q, stop_evt, generation) -> None:
+        """有界重试把结束标记（None）放入队列（Fix C）。
+
+        正常路径队列很快腾出槽位、首次即送达（保住「最后一帧/结束标记必须
+        送达」契约）；仅病态（队列持续满且无人消费、stop_evt 缺失的历史
+        僵尸）在 _END_MARKER_PUT_TIMEOUT 内有界放弃并告警，绝不永久空转。
+        调用方（_reader）的 finally 仍保证 _terminate_proc 与 gen.close()。
+        """
+        deadline = time.monotonic() + _END_MARKER_PUT_TIMEOUT
+        while not stop_evt.is_set() and self._generation == generation:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    'webm 结束标记放入超时放弃（队列持续满）: %s', self.path,
+                )
+                return
+            try:
+                q.put(None, timeout=min(0.5, remaining))
+                break
+            except queue.Full:
+                continue
 
     @staticmethod
     def _stamp_source_indices(frames, q, is_stopped, timeout: float = 0.2) -> None:
