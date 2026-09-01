@@ -7,7 +7,7 @@
 3. 冲量求解（恢复系数默认 0.82、切向摩擦 mu=0.08、库仑上限、每质量 9000px/s 限制）
 4. 位置分离（逆质量分摊、每次最多 60% 重叠、min 1px / max 12px、0.5px slop、连续 3 tick 强制完整分离）
 5. 稳定重合方向（两 ID 稳定哈希，禁用随机）
-6. 协议帧解析与编码（4 字节大端长度前缀 + UTF-8 JSON，4096 字节上限超限丢弃）
+6. 协议帧解析与编码（4 字节大端长度前缀 + UTF-8 JSON，256 KiB 有界载荷）
 7. 水位去重（按 epoch 记录每个 pair 最高已应用 tick）
 8. 多体碰撞冲量合并与迭代分离
 """
@@ -28,7 +28,8 @@ DEFAULT_IMPULSE_CAP: float = 9000.0     # 每单位质量等效冲量上限 (px/
 IMPULSE_MIN_APPROACH_SPEED: float = 80.0  # 低于此接近速度只做位置分离 (px/s)
 DEFAULT_BASE_SCALE: float = 0.72        # 基准缩放
 
-FRAME_MAX_LENGTH: int = 4096            # 单帧最大字节数（含/不含前缀，此处限制载荷<=4096）
+FRAME_MAX_LENGTH: int = 256 * 1024       # coordinator 下行；覆盖最多 128 个槽位的完整快照
+STATE_FRAME_MAX_LENGTH: int = 4 * 1024   # client 上行状态；阻止单成员耗尽聚合快照预算
 HEADER_SIZE: int = 4                    # 4字节无符号大端整数长度头
 
 # ---- 状态 Flags 位定义 (plan4 §2.1) ----
@@ -718,16 +719,18 @@ class DecodeError:
     raw_data: bytes = b""
 
 
-def encode_frame(obj: Any) -> bytes:
+def encode_frame(obj: Any, max_frame_len: int = FRAME_MAX_LENGTH) -> bytes:
     """将 Python 对象编码为 4 字节大端长度前缀 + UTF-8 JSON 字节帧。"""
     payload = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     length = len(payload)
+    if length > max_frame_len:
+        raise ValueError(f"Frame length {length} exceeds limit {max_frame_len}")
     header = length.to_bytes(HEADER_SIZE, byteorder="big", signed=False)
     return header + payload
 
 
 class FrameStreamDecoder:
-    """流式帧解析器，支持粘包与半包解析，超过 4096 字节安全丢弃。"""
+    """流式帧解析器，支持粘包与半包解析，超过配置上限时安全丢弃。"""
 
     def __init__(self, max_frame_len: int = FRAME_MAX_LENGTH) -> None:
         self._buffer = bytearray()

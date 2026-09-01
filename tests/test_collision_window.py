@@ -166,10 +166,12 @@ def test_collision_squash_is_not_restarted_within_250ms(tmp_path, app):
     app.processEvents()
     assert win._squash_active is True
 
-    win._squash_progress = 0.4
+    first_started_at = win._last_collision_squash_at
     session.impulse_ready.emit(msg)
     app.processEvents()
-    assert win._squash_progress == pytest.approx(0.4)
+    # progress 是由真实 elapsed timer 派生的，不能手工设值后做精确比较；
+    # 开始时间戳不变才是“第二次冲量没有重启动画”的直接证据。
+    assert win._last_collision_squash_at == first_started_at
 
     win.close()
 
@@ -437,6 +439,7 @@ def test_collision_disabled_does_not_report_receive_and_detaches(tmp_path, app):
     win.cfg.set("collision_enabled", False)
     win.refresh_pet_settings()
     assert win._collision_session is None
+    assert session.policy_updates[-1]["collision_enabled"] is False
 
     win.close()
 
@@ -469,15 +472,27 @@ def test_lock_position_window_is_knockable(tmp_path, app):
     win.close()
 
 
-def test_detach_collision_session_sends_leave(tmp_path, app):
+def test_detach_collision_session_sends_leave_after_stopping_state_production(
+    tmp_path, app, monkeypatch
+):
     """detach_collision_session 时向会话发 leave：协调者即时移除成员（不等 stale 超时）。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     assert win._collision_session is session
     assert session.leave_calls == 0
+    state_at_leave = []
+
+    def record_leave():
+        state_at_leave.append((win._collision_session, win._collision_timer.isActive()))
+        session.leave_calls += 1
+
+    monkeypatch.setattr(session, "submit_leave", record_leave)
+    win.cfg.set("collision_enabled", False)
 
     win.detach_collision_session()
     assert win._collision_session is None
     assert session.leave_calls == 1
+    assert state_at_leave == [(None, False)]
+    assert session.policy_updates[-1]["collision_enabled"] is False
 
     # 再次 detach（已无会话）不发 leave
     win.detach_collision_session()
@@ -528,6 +543,8 @@ def test_window_deduplicates_same_epoch_pair_tick(tmp_path, app):
     session.impulse_ready.emit(msg)
     app.processEvents()
     first_velocity = list(win._phys_vel)
+    # 隔离碰撞冲量去重：物理定时器会独立施加重力并改变 Y 速度。
+    win._physics_timer.stop()
     session.impulse_ready.emit(msg)
     app.processEvents()
     assert win._phys_vel == first_velocity
@@ -557,10 +574,13 @@ def test_predicted_bounce_reports_contact_geometry(tmp_path, app):
     win.close()
 
 
-def test_move_event_submits_throttled_not_forced(tmp_path, app):
+def test_move_event_submits_throttled_not_forced(tmp_path, app, monkeypatch):
     """moveEvent 非 force 节流提交：60Hz 连续移动不超标（上限 20Hz）。"""
+    import pet.window as window_mod
+
     win, session = _make_pet_window(tmp_path, "pet_a")
     win._collision_timer.stop()  # 排除定时器 force 兜底对计数的干扰
+    monkeypatch.setattr(window_mod.time, "monotonic", lambda: 100.0)
     session.submitted_states.clear()
     win._collision_last_submit_at = 0.0  # 保证首个 move 放行
     start = win.pos()
@@ -674,10 +694,11 @@ def _prediction_peer(win, runtime_id="pet_b", vx=0.0, flags=None):
     }
 
 
-def test_collision_snapshot_stores_epoch_and_clears_stale_members(tmp_path, app):
+def test_collision_snapshot_accepts_new_epoch_after_coordinator_failover(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_a")
     session.snapshot_ready.emit({"epoch": "epoch-1", "members": [_prediction_peer(win)]})
     app.processEvents()
+    assert win._collision_epoch == "epoch-1"
     assert "pet_b" in win._collision_peer_snapshots
     assert win._collision_peer_snapshots["pet_b"]["_received_at"] > 0
 
@@ -685,9 +706,16 @@ def test_collision_snapshot_stores_epoch_and_clears_stale_members(tmp_path, app)
     win._prune_collision_prediction_state(time.monotonic())
     assert win._collision_peer_snapshots == {}
 
+    win._pending_predicted_bounce = (10.0, 20.0)
+    win._pending_predicted_contact = (30.0, 40.0, [])
+    win._predicted_bounces = {"pet_a|pet_b": time.monotonic()}
     session.snapshot_ready.emit({"epoch": "epoch-2", "members": [_prediction_peer(win)]})
     app.processEvents()
-    assert win._collision_peer_snapshots == {}
+    assert win._collision_epoch == "epoch-2"
+    assert "pet_b" in win._collision_peer_snapshots
+    assert win._predicted_bounces == {}
+    assert win._pending_predicted_bounce is None
+    assert win._pending_predicted_contact is None
     win.close()
 
 
@@ -774,24 +802,6 @@ def test_authoritative_impulse_applies_after_prediction_window(tmp_path, app):
                                 "dvx_a": 400.0, "dvy_a": 0.0})
     app.processEvents()
     assert win._phys_vel[0] > 0.0
-    win.close()
-
-
-def test_move_event_submits_throttled_not_forced(tmp_path, app):
-    """moveEvent 非 force 节流提交：60Hz 连续移动不超标（上限 20Hz）。"""
-    win, session = _make_pet_window(tmp_path, "pet_a")
-    session.submitted_states.clear()
-    win._collision_last_submit_at = 0.0  # 保证首个 move 放行
-    start = win.pos()
-
-    # 模拟 60Hz 抛掷：极短时间内连续 20 次移动，全部落在 50ms 限流窗口内
-    for i in range(1, 21):
-        win.move(start.x() + i, start.y())
-    app.processEvents()
-
-    # moveEvent 路径只放行首个提交，其余被节流（运动期由 _collision_timer 兜底）
-    assert len(session.submitted_states) == 1
-
     win.close()
 
 

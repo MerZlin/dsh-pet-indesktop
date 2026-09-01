@@ -87,20 +87,32 @@ def _format_pid_record(pid: int) -> bytes:
 
 
 def _open_lock_file(path: Path) -> BinaryIO:
-    """Open or atomically create a lock file without truncating it."""
+    """Open or create a lock file and ensure the lock byte exists.
+
+    The absolute truncate is intentionally idempotent.  Multiple first-time
+    openers may all observe size zero before any of them acquires the kernel
+    lock; appending the observed deficit would grow the file to 32+ bytes.
+    """
     fd = os.open(path, os.O_RDWR | os.O_CREAT)
     handle = os.fdopen(fd, "r+b")
     try:
         size = os.fstat(fd).st_size
         if size < PID_RECORD_LEN:
-            handle.seek(0, os.SEEK_END)
-            handle.write(b" " * (PID_RECORD_LEN - size))
-            handle.flush()
+            os.ftruncate(fd, PID_RECORD_LEN)
         handle.seek(0)
         return handle
     except Exception:
         handle.close()
         raise
+
+
+def _write_pid_record(file_obj: BinaryIO) -> None:
+    """Write this process PID and restore the fixed-size lock-file format."""
+    file_obj.seek(0)
+    file_obj.write(_format_pid_record(os.getpid()))
+    file_obj.flush()
+    os.ftruncate(file_obj.fileno(), PID_RECORD_LEN)
+    file_obj.seek(0)
 
 
 def _try_acquire_slot_lock(config_dir: Path, slot_id: int) -> BinaryIO | None:
@@ -123,10 +135,7 @@ def _try_acquire_slot_lock(config_dir: Path, slot_id: int) -> BinaryIO | None:
 
     # 加锁成功后，写入定长 PID 记录到文件头并 flush
     try:
-        f.seek(0)
-        f.write(_format_pid_record(os.getpid()))
-        f.flush()
-        f.seek(0)
+        _write_pid_record(f)
     except OSError:
         _unlock_file(f)
         return None
@@ -146,10 +155,7 @@ def acquire_file_lock(lock_path: Path | str) -> BinaryIO | None:
         handle.close()
         return None
     try:
-        handle.seek(0)
-        handle.write(_format_pid_record(os.getpid()))
-        handle.flush()
-        handle.seek(0)
+        _write_pid_record(handle)
     except OSError:
         _unlock_file(handle)
         return None

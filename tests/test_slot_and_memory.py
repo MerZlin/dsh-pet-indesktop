@@ -154,6 +154,94 @@ else:
     assert lock_file.read_bytes().strip() != b""
 
 
+def test_public_acquire_is_safe_when_two_processes_observe_stale_zero_size(tmp_path):
+    """强制两个进程都在初始化前读到 size=0，后到者不能重复追加 16 字节。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+    sync_dir = tmp_path / "stale-size-sync"
+    sync_dir.mkdir()
+    initialized = sync_dir / "first-initialized"
+
+    def worker_code(role: str) -> str:
+        return f"""
+from pathlib import Path
+import time
+from pet import slot_manager as sm
+role = {role!r}
+sync_dir = Path({str(sync_dir)!r})
+initialized = Path({str(initialized)!r})
+real_fstat = sm.os.fstat
+def synchronized_fstat(fd):
+    observed = real_fstat(fd)
+    (sync_dir / f"ready-{{role}}").write_text("ready", encoding="ascii")
+    deadline = time.monotonic() + 5
+    while len(list(sync_dir.glob("ready-*"))) < 2:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("peer did not reach fstat barrier")
+        time.sleep(0.001)
+    if role == "second":
+        while not initialized.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("first process did not initialize lock")
+            time.sleep(0.001)
+    return observed
+sm.os.fstat = synchronized_fstat
+try:
+    slot, handle = sm.acquire_pet_slot({str(config_dir)!r}, preferred_slot=0)
+except Exception as exc:
+    print(type(exc).__name__, flush=True)
+else:
+    if role == "first":
+        initialized.write_text("done", encoding="ascii")
+    print(f"LOCKED:{{slot}}", flush=True)
+    time.sleep(1)
+"""
+
+    first = _run_slot_worker_code(config_dir, worker_code("first"))
+    second = _run_slot_worker_code(config_dir, worker_code("second"))
+    assert first.stdout.readline().strip() == "LOCKED:0"
+    assert second.stdout.readline().strip() == "SlotLockError"
+    assert first.wait(timeout=5) == 0
+    assert second.wait(timeout=5) == 0
+    lock_file = sm.get_slot_lock_path(config_dir, 0)
+    assert lock_file.stat().st_size == sm.PID_RECORD_LEN
+
+
+def test_lock_initialization_is_idempotent_when_size_observation_is_stale(
+    tmp_path, monkeypatch
+):
+    """并发打开者都观察到旧 size=0 时，初始化也不能重复追加记录。"""
+    lock_file = sm.get_slot_lock_path(tmp_path / APP_DIR_NAME, 0)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+    class StaleStat:
+        st_size = 0
+
+    monkeypatch.setattr(sm.os, "fstat", lambda _fd: StaleStat())
+    first = sm._open_lock_file(lock_file)
+    first.close()
+    second = sm._open_lock_file(lock_file)
+    second.close()
+
+    assert lock_file.stat().st_size == sm.PID_RECORD_LEN
+
+
+def test_lock_acquisition_repairs_an_oversized_pid_record(tmp_path):
+    """旧竞态留下的 32 字节锁文件在下一次成功持锁后恢复为定长格式。"""
+    lock_file = sm.get_slot_lock_path(tmp_path / APP_DIR_NAME, 0)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_bytes(b" " * (sm.PID_RECORD_LEN * 2))
+
+    handle = sm.acquire_file_lock(lock_file)
+    assert handle is not None
+    try:
+        assert os.fstat(handle.fileno()).st_size == sm.PID_RECORD_LEN
+        handle.seek(0)
+        assert handle.read(sm.PID_RECORD_LEN).startswith(str(os.getpid()).encode("ascii"))
+    finally:
+        sm.release_file_lock(handle)
+
+
 def test_slot_reclaimed_after_process_killed_and_keeps_memory(tmp_path):
     """场景 2：子进程持有 slot-1 后被终止；新子进程重新加锁 slot-1，读取原个体配置和 sessions，且未删 lock 文件。"""
     config_dir = tmp_path / APP_DIR_NAME
