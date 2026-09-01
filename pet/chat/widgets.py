@@ -2172,7 +2172,11 @@ class ChatWindow(QDialog):
         """
         self._typewriter_timer.stop()
         try:
-            self.store.save(self.session)
+            # save() 返回 False 表示提交被拒绝（写入器关闭中/会话已删除）：
+            # 关窗路径必须感知并记录，不能只依赖 writer 内部日志。
+            if self.store.save(self.session) is False:
+                _logger.error('关闭窗口时保存会话被拒绝（数据未入队，可能未保存）: session=%s',
+                              self.session.session_id)
         except Exception:
             _logger.exception('关闭窗口时保存会话失败')
         self.service.stop()

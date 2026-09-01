@@ -53,6 +53,44 @@ def _fsync_dir(path):
         os.close(fd)
 
 
+class SessionDeletedError(Exception):
+    """跨进程墓碑拒绝：会话已被其他进程显式删除，迟到的保存被拒绝（防复活）。"""
+
+
+def _tombstone_path(path):
+    """跨进程删除墓碑：与锁文件同目录、不参与 *.json 会话 glob 的隐藏侧车文件。"""
+    return path.with_name(f'.{path.name}.deleted')
+
+
+def _read_tombstone(path):
+    """读跨进程删除墓碑的删除版本；无墓碑/损坏返回 0。"""
+    try:
+        with _tombstone_path(path).open('r', encoding='utf-8') as f:
+            raw = json.load(f)
+        return int(raw.get('rev', 0) or 0) if isinstance(raw, dict) else 0
+    except (OSError, ValueError, TypeError):
+        return 0
+
+
+def _write_tombstone(path, rev):
+    """写跨进程删除墓碑（tmp+fsync+replace 原子落盘），供其他进程拒绝迟到保存。"""
+    tomb = _tombstone_path(path)
+    tmp = path.with_name(f'.{path.name}.deleted.{os.getpid()}.tmp')
+    with tmp.open('w', encoding='utf-8', newline='\n') as f:
+        json.dump({'rev': int(rev), 'deleted_at': utc_now()}, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, tomb)
+
+
+def _clear_tombstone(path):
+    """删除后合法重建（保存基线不早于删除版本）时清除墓碑。"""
+    try:
+        _tombstone_path(path).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _acquire_write_lock(path, timeout=WRITE_LOCK_TIMEOUT):
     """跨进程互斥：写会话文件前持同路径 .lock 文件的内核排他锁（阻塞等待至超时）。"""
     lock_path = path.with_name(f'{path.name}.lock')
@@ -99,11 +137,31 @@ def _read_snapshot(path):
         return None
 
 
+def _missing_disk_messages(existing, incoming):
+    """磁盘快照存在、但 incoming 缺失的消息 id（rev 数字跨 writer 碰撞时的内容级 CAS 判定）。
+
+    两个独立 writer 各自维护本地 rev 序列，同一路径上两者都可能认为自己是
+    "rev N"，单靠 `base < disk_rev` 会漏掉 rev 相等但内容分叉的情况，导致
+    后写者静默覆盖先写者的消息。以 message_id 集合做内容级判定兜底。
+    """
+    if not existing:
+        return False
+    incoming_ids = {
+        str(m.get('message_id')) for m in (incoming.get('messages') or [])
+        if isinstance(m, dict)
+    }
+    for m in existing.get('messages') or []:
+        if isinstance(m, dict) and str(m.get('message_id')) not in incoming_ids:
+            return True
+    return False
+
+
 def _atomic_write(path, snapshot):
     """tmp + flush + fsync + os.replace 原子替换，并同步父目录。
 
     写前持跨进程锁并按磁盘 rev 做 CAS：旧版本快照按 message_id 合并后再写，
-    绝不静默覆盖其他进程已落盘的新数据。返回实际写入的快照（可能为合并结果）。
+    绝不静默覆盖其他进程已落盘的新数据；删除墓碑（跨进程）拒绝更旧的迟到保存，
+    防止已删除会话复活。返回实际写入的快照（可能为合并结果）。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     base = int(snapshot.get('base_rev', snapshot.get('rev', 0)) or 0)
@@ -113,13 +171,21 @@ def _atomic_write(path, snapshot):
         lock = _acquire_write_lock(path)
         existing = _read_snapshot(path)
         disk_rev = int((existing or {}).get('rev', 0) or 0)
-        if base < disk_rev:
+        tomb_rev = _read_tombstone(path)
+        if tomb_rev > base:
+            raise SessionDeletedError(
+                f'会话已被其他进程删除（墓碑 rev {tomb_rev} > 保存基线 {base}），'
+                f'拒绝迟到保存防复活: {path}')
+        if tomb_rev > disk_rev:
+            disk_rev = tomb_rev  # 删除后重建：基线不低于删除版本
+        if base < disk_rev or _missing_disk_messages(existing, snapshot):
+            stale_base = base
             snapshot = _merge_snapshots(existing, snapshot)
             base = disk_rev
             snapshot['base_rev'] = base
             snapshot['rev'] = disk_rev + 1
-            _logger.warning('跨进程/跨 writer 旧版本保存（base %d < 磁盘 %d），已合并消息: %s',
-                            base, disk_rev, path)
+            _logger.warning('跨进程/跨 writer 快照冲突（base %d < 磁盘 %d），已合并消息: %s',
+                            stale_base, disk_rev, path)
         # 内部 CAS 基线不写入持久化格式
         snapshot = dict(snapshot)
         snapshot.pop('base_rev', None)
@@ -130,6 +196,7 @@ def _atomic_write(path, snapshot):
             os.fsync(f.fileno())
         os.replace(temp, path)
         temp = None
+        _clear_tombstone(path)
         _fsync_dir(path.parent)
         return snapshot
     finally:
@@ -142,11 +209,26 @@ def _atomic_write(path, snapshot):
                 pass
 
 
-def _atomic_delete(path):
+def _atomic_delete(path, rev=None):
+    """跨进程删除：与写入共用同一把锁；写持久墓碑（含删除版本）防其他进程迟到保存复活。
+
+    与 _atomic_write 同待遇：unlink 后同步父目录，删除的目录项在掉电后持久。
+    """
+    lock = None
     try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+        lock = _acquire_write_lock(path)
+        if rev is None:
+            existing = _read_snapshot(path)
+            rev = int((existing or {}).get('rev', 0) or 0) + 1
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        _write_tombstone(path, rev)
+        _fsync_dir(path.parent)
+    finally:
+        if lock is not None:
+            slot_manager_mod.release_file_lock(lock)
 
 
 class _SessionWriter:
@@ -179,6 +261,7 @@ class _SessionWriter:
         self._stop = False
         self._closed = False
         self._closing = False
+        self._close_failed = False  # close() 首次失败/超时状态粘滞：重复 close 不得谎报 True
         # 测试/替换 seam：worker 通过实例属性调用，隔离测试可注入计数/失败包装
         self.atomic_write = _atomic_write
         self.atomic_delete = _atomic_delete
@@ -245,12 +328,17 @@ class _SessionWriter:
                 return False
             self._tombstones.add(path)
             self._last_rev[path] = self._last_rev.get(path, 0) + 1
-            self._ops[path] = ('delete', None)
+            # payload 携带删除版本：写盘时作为跨进程墓碑 rev（防其他进程迟到保存复活）
+            self._ops[path] = ('delete', self._last_rev[path])
             self._cond.notify()
             return True
 
     def _ensure_open_locked(self, path, action):
-        """提交入口：关闭中拒绝并记录；已完全关闭则重开 worker（绝不静默丢数据）。"""
+        """提交入口：关闭中拒绝并记录；已完全关闭则重开 worker（绝不静默丢数据）。
+
+        close(timeout) 超时后旧 worker 若仍存活，直接复用（唤醒继续消费），
+        绝不另起线程与旧 worker 并存争抢同一队列。
+        """
         if not self._closed:
             return True
         if self._closing:
@@ -259,9 +347,14 @@ class _SessionWriter:
         _logger.debug('会话写入已关闭，重新拉起 worker 接受%s: %s', action, path)
         self._closed = False
         self._stop = False
-        self._thread = threading.Thread(
-            target=self._run, name='session-save-worker', daemon=True)
-        self._thread.start()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            # close 超时遗留的旧 worker 仍存活：唤醒继续消费，不再新建线程
+            self._cond.notify()
+        else:
+            self._thread = threading.Thread(
+                target=self._run, name='session-save-worker', daemon=True)
+            self._thread.start()
         return True
 
     def _latest_snapshot_locked(self, path):
@@ -277,7 +370,7 @@ class _SessionWriter:
         return self._last_snapshot.get(path)
 
     def peek(self, path):
-        """返回该路径最新未落盘操作 ('save', snapshot) / ('delete', None)，无则 None。"""
+        """返回该路径最新未落盘操作 ('save', snapshot) / ('delete', rev)，无则 None。"""
         with self._cond:
             op = self._ops.get(path)
             if op is None:
@@ -317,22 +410,34 @@ class _SessionWriter:
     def close(self, timeout=10.0):
         """排空队列并停 worker 线程（应用退出路径；atexit 兜底注册）。
 
-        先原子关闭提交入口再排空：关闭窗口内到达的提交被拒绝并记录（不留无人
-        消费的队列）；关闭完成后若仍有新提交则自动重开 worker。返回是否全部成功落盘。
+        - 先原子关闭提交入口再排空：关闭窗口内到达的提交被拒绝（save()/delete()
+          通过公开 API 返回 False 明确失败，不再只记内部日志）且不留无人消费的队列；
+        - 幂等且诚实：重复调用返回第一次调用的结果；首次排空/落盘失败或超时的状态
+          粘滞，后续 close() 不得谎报 True（不丢第一次的失败信息）；
+        - close(timeout) 超时后旧 worker 仍存活时，后续提交复用该 worker
+          （绝不另起线程与旧 worker 并存争抢队列）。
         """
+        deadline = time.monotonic() + timeout
         with self._cond:
             if self._closed:
-                return True
-            self._closing = True
-            self._closed = True
-        deadline = time.monotonic() + timeout
-        ok = self.flush(timeout)
+                thread = self._thread
+                ok = not self._close_failed
+                closing_now = False
+            else:
+                thread = self._thread
+                self._closing = True
+                self._closed = True
+                closing_now = True
+        if closing_now:
+            # flush 会自行加 _cond，不能在持锁状态下调用
+            ok = self.flush(timeout)
+            with self._cond:
+                if not ok:
+                    self._close_failed = True
+                self._stop = True
+                self._closing = False
+                self._cond.notify_all()
         remaining = deadline - time.monotonic()
-        with self._cond:
-            self._stop = True
-            self._closing = False
-            self._cond.notify_all()
-        thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=max(0.0, remaining))
         return ok
@@ -352,6 +457,12 @@ class _SessionWriter:
                 for path, (kind, payload) in batch:
                     try:
                         self._apply(path, kind, payload)
+                    except SessionDeletedError:
+                        # 跨进程墓碑拒绝：不是 I/O 失败（不入 _failed、不重试），
+                        # 而是可观测的冲突——丢弃迟到保存，防复活。
+                        with self._cond:
+                            self._conflicts += 1
+                        _logger.error('会话已被其他进程删除，拒绝迟到的保存（防复活）: %s', path)
                     except Exception as exc:  # noqa: BLE001 —— worker 永不因单条失败退出
                         self._record_failure(path, kind, payload, exc)
             finally:
@@ -365,7 +476,7 @@ class _SessionWriter:
             written = self.atomic_write(path, payload)
         else:
             written = None
-            self.atomic_delete(path)
+            self.atomic_delete(path, payload)  # payload 为删除版本（跨进程墓碑 rev）
         with self._cond:
             if kind == 'save':
                 if written is not None:
@@ -442,8 +553,11 @@ class SessionStore:
     def save(self, session):
         """GUI 线程只做内存快照与入队（不落盘、不阻塞）；同一会话队列合并。
 
-        返回 session；提交被拒绝（旧版本冲突/已删除/写入关闭）时 session.rev 不更新，
-        拒绝原因通过 writer 的日志与 conflict_count 可观测。
+        返回是否成功入队：True 表示已接受（可随后 flush() 确认真实落盘）；
+        False 表示被拒绝——会话已删除（防复活）、基于旧版本且无最新快照可合并、
+        或写入器正在关闭。拒绝时 session.rev 不更新；拒绝原因通过 writer 的
+        日志与 conflict_count 可观测。调用方（关窗/退出路径）必须感知 False 并
+        记录，不能只依赖内部日志。
         """
         session.updated_at = utc_now()
         _enforce_save_caps(session)
@@ -451,7 +565,8 @@ class SessionStore:
             self._path(session.character_id, session.session_id), session.to_dict())
         if rev is not None:
             session.rev = rev
-        return session
+            return True
+        return False
 
     def flush(self, timeout=10.0):
         """强制 flush：等待所有已提交操作真实落盘；失败/超时返回 False。"""
@@ -516,7 +631,8 @@ class SessionStore:
         return result
 
     def delete(self, session):
-        self._writer.submit_delete(self._path(session.character_id, session.session_id))
+        """删除会话（异步入队）；返回是否被接受。False 表示写入器正在关闭被拒绝。"""
+        return self._writer.submit_delete(self._path(session.character_id, session.session_id))
 
     def clear(self, session):
         session.messages.clear()

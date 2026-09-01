@@ -21,6 +21,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -36,6 +39,7 @@ from pet.chat.session_store import (
     SessionStore,
     _SessionWriter,
     _atomic_delete,
+    _tombstone_path,
 )
 
 
@@ -163,9 +167,10 @@ def test_delete_cancels_pending_save_and_blocks_late_save_resurrection(tmp_path:
     assert writer.flush()
     assert not path.exists()
 
-    # 删除之后，持有旧对象的迟到保存不得复活会话（防复活墓碑）
+    # 删除之后，持有旧对象的迟到保存不得复活会话（防复活墓碑）；save() 必须
+    # 显式返回 False 让调用方感知提交被拒（不再只记内部日志）
     session.messages.append(ChatMessage("user", "again"))
-    assert store.save(session) is session  # 不抛异常，但提交被拒绝
+    assert store.save(session) is False  # 提交被拒绝，可观测
     assert writer.flush()
     assert not path.exists()
     assert store.load(session.session_id, "cat") is None
@@ -603,7 +608,7 @@ def test_delete_failure_is_tracked_and_flush_reports(tmp_path: Path):
     assert writer.flush()
     assert path.exists()
 
-    def failing_delete(target):
+    def failing_delete(target, rev=None):
         raise OSError("injected delete failure")
 
     writer.atomic_delete = failing_delete
@@ -855,3 +860,329 @@ def test_shared_writer_close_flushes_and_reopens_on_submit(tmp_path: Path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert [m["content"] for m in data["messages"]] == ["退出前", "关闭后"]
     assert close_shared_writer() is True
+
+
+# ---------------------------------------------------------------- B8 R2 复审残留：close 语义 / 迟到提交 / 真多进程 / 删除 fsync
+
+def test_close_failure_is_sticky_across_repeated_calls(tmp_path: Path):
+    """第一次 close() 失败后，重复 close() 不得谎报 True（失败状态粘滞，不丢第一次失败信息）。"""
+    writer = _SessionWriter()
+    store = _store(tmp_path, writer=writer)
+    session = _session(store)
+    session.messages.append(ChatMessage("user", "x"))
+
+    def failing(path, snapshot):
+        raise OSError("disk down")
+
+    real = writer.atomic_write
+    writer.atomic_write = failing
+    store.save(session)
+    assert writer.close() is False  # 首次失败如实返回
+    assert writer.close() is False  # 第二次不得无条件返回 True
+    assert writer.close(timeout=0.5) is False  # 第三次同样诚实
+
+    # 恢复后重开 worker 落盘：数据不丢；首次失败的痕迹仍可观测
+    # （failure_count/last_error），且重开后的新 close 如实返回真实结果
+    writer.atomic_write = real
+    session.messages.append(ChatMessage("user", "y"))
+    assert store.save(session) is True  # 关闭后提交自动重开 worker
+    assert writer.flush()
+    data = json.loads(store._path("cat", session.session_id).read_text(encoding="utf-8"))
+    assert [m["content"] for m in data["messages"]] == ["x", "y"]
+    assert writer.failure_count >= 1  # 第一次失败的信息不丢
+    assert writer.last_error is not None
+    assert writer.close() is True  # 重开后的新 close 排空成功 → 如实返回 True
+
+
+def test_close_timeout_reuses_surviving_worker_on_resubmit(tmp_path: Path):
+    """close(timeout) 超时后旧 worker 不得与重启 worker 并存：后续提交复用旧 worker。"""
+    writer = _SessionWriter()
+    store = _store(tmp_path, writer=writer)
+    session = _session(store)
+    session.messages.append(ChatMessage("user", "first"))
+    started = threading.Event()
+    release = threading.Event()
+    real = writer.atomic_write
+
+    def stalled(path, snapshot):
+        started.set()
+        assert release.wait(5)
+        return real(path, snapshot)
+
+    writer.atomic_write = stalled
+
+    store.save(session)
+    assert started.wait(2)
+    assert writer.close(timeout=0.2) is False  # flush 超时：旧 worker 仍存活
+    old_thread = writer._thread
+    assert old_thread.is_alive()
+    assert writer.close(timeout=0.1) is False  # 重复 close 不得谎报 True（失败粘滞）
+
+    # 关闭后迟到提交：必须复用旧 worker，绝不另起线程并存争抢队列
+    session.messages.append(ChatMessage("user", "second"))
+    assert store.save(session) is True
+    assert writer._thread is old_thread, "close 超时遗留的旧 worker 必须被复用，不得并存第二个 worker"
+
+    release.set()
+    assert writer.flush()
+    data = json.loads(store._path("cat", session.session_id).read_text(encoding="utf-8"))
+    assert [m["content"] for m in data["messages"]] == ["first", "second"]
+    assert writer.close() is True  # 复用后的新 close 排空成功 → 如实返回 True
+
+
+def test_save_reports_rejection_while_closing(tmp_path: Path):
+    """关闭期间提交被拒：save()/delete() 必须通过公开 API 显式返回 False（不再只记内部日志）。"""
+    writer = _SessionWriter()
+    store = _store(tmp_path, writer=writer)
+    session = _session(store)
+    session.messages.append(ChatMessage("user", "x"))
+    started = threading.Event()
+    release = threading.Event()
+    real = writer.atomic_write
+
+    def stalled(path, snapshot):
+        started.set()
+        assert release.wait(5)
+        return real(path, snapshot)
+
+    writer.atomic_write = stalled
+    store.save(session)
+    assert started.wait(2)
+
+    results = []
+
+    def do_close():
+        results.append(writer.close(timeout=2.0))
+
+    closer = threading.Thread(target=do_close)
+    closer.start()
+    deadline = time.time() + 2.0
+    while not writer._closing and time.time() < deadline:
+        time.sleep(0.01)
+    assert writer._closing, "close 已进入关闭窗口（flush 被 stalled 写阻塞）"
+
+    # 关闭窗口内提交：显式返回 False（可观测）
+    assert store.save(session) is False
+    assert store.delete(session) is False
+
+    release.set()
+    closer.join(5)
+    assert not closer.is_alive()
+    assert results == [True]  # 放行后 close 排空成功 → 如实返回 True
+    data = json.loads(store._path("cat", session.session_id).read_text(encoding="utf-8"))
+    assert data["messages"][0]["content"] == "x"  # 已入队的写最终落盘
+    assert writer.close() is True  # 幂等：重复 close 返回同一真实结果
+
+
+def test_delete_fsyncs_parent_dir(tmp_path: Path, monkeypatch):
+    """删除必须与 _atomic_write 同待遇：unlink 后同步父目录（掉电后删除项持久）。"""
+    from pet.chat import session_store as ss
+
+    calls = []
+    real = ss._fsync_dir
+
+    def spy(path):
+        calls.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(ss, "_fsync_dir", spy)
+    writer = _SessionWriter()
+    store = _store(tmp_path, writer=writer)
+    session = _session(store)
+    session.messages.append(ChatMessage("user", "hi"))
+    store.save(session)
+    assert writer.flush()
+    calls.clear()
+    store.delete(session)
+    assert writer.flush()
+    assert not store._path("cat", session.session_id).exists()
+    assert str(store._path("cat", session.session_id).parent) in calls, \
+        "删除后必须同步父目录（fsync）"
+
+
+def test_cross_writer_delete_blocks_late_save(tmp_path: Path):
+    """跨 writer（跨进程语义）：A 删除写持久墓碑后，B 的迟到保存被拒绝，不复活。
+
+    覆盖「删除和写入使用同一个跨进程锁及同一 revision/tombstone 协议」。
+    """
+    writer_a = _SessionWriter()
+    writer_b = _SessionWriter()
+    store_a = _store(tmp_path, writer=writer_a)
+    store_b = _store(tmp_path, writer=writer_b)
+    session = _session(store_a)
+    session.session_id = "cross-del"
+    session.messages.append(ChatMessage("user", "from-A"))
+    store_a.save(session)
+    assert writer_a.flush()
+    path = store_a._path("cat", "cross-del")
+    assert path.exists()
+
+    # A 删除：与写入共用同一把锁，写持久墓碑（删除版本）并同步父目录
+    store_a.delete(session)
+    assert writer_a.flush()
+    assert not path.exists()
+    assert _tombstone_path(path).exists()
+
+    # B（不知道删除）基于旧版本迟到保存：写盘时被跨进程墓碑拒绝，不复活
+    stale = _session(store_b)
+    stale.session_id = "cross-del"
+    stale.character_id = "cat"
+    stale.messages.append(ChatMessage("user", "late-from-B"))
+    assert store_b.save(stale) is True  # B 自身队列接受（未落盘前无感知）
+    assert writer_b.flush()  # 墓碑拒绝是冲突而非 I/O 失败 → flush 仍 True
+    assert not path.exists(), "跨进程迟到保存不得复活已删除会话"
+    assert writer_b.conflict_count >= 1
+    writer_a.close()
+    writer_b.close()
+
+
+# ---- 真实多进程（subprocess 起第二个 python）同路径竞争 ----
+
+def _child_env() -> dict:
+    env = dict(os.environ)
+    root = str(Path(__file__).resolve().parents[1])
+    env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+_MULTIPROCESS_CONCURRENT_SAVE = r'''
+import json, sys, time
+from pathlib import Path
+
+root, char, sid, ready, go = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+
+from pet.chat.session_store import SessionStore, _SessionWriter
+from pet.chat.models import ChatMessage
+
+writer = _SessionWriter()
+store = SessionStore(root, writer=writer)
+session = store.create(char, "provider", "system")
+session.session_id = sid
+Path(ready).write_text("ready", encoding="utf-8")
+deadline = time.time() + 30
+while not Path(go).exists():
+    if time.time() > deadline:
+        sys.exit(2)
+    time.sleep(0.02)
+for i in range(5):
+    session.messages.append(ChatMessage("user", f"child-{i}"))
+    store.save(session)
+    if not writer.flush():
+        sys.exit(3)
+writer.close()
+sys.exit(0)
+'''
+
+
+def test_real_multiprocess_concurrent_saves_same_path(tmp_path: Path):
+    """起真实子进程（第二个 python）并发写同一会话目录：跨进程锁 + CAS 合并，
+    双方消息全部保留（不再只是同进程两个 writer 模拟）。"""
+    root = tmp_path
+    ready = root / "ready"
+    go = root / "go"
+    writer = _SessionWriter()
+    store = _store(root, writer=writer)
+    session = _session(store)
+    session.session_id = "mps-race"
+    session.messages.append(ChatMessage("user", "parent-0"))
+    store.save(session)
+    assert writer.flush()
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _MULTIPROCESS_CONCURRENT_SAVE,
+         str(root), "cat", "mps-race", str(ready), str(go)],
+        env=_child_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        # 等子进程就绪后放行，双方并发写同一路径
+        deadline = time.time() + 30
+        while not ready.exists() and time.time() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), "子进程未就绪"
+        go.write_text("go", encoding="utf-8")
+        for i in range(1, 5):
+            session.messages.append(ChatMessage("user", f"parent-{i}"))
+            store.save(session)
+            assert writer.flush()
+        out, err = proc.communicate(timeout=60)
+        assert proc.returncode == 0, f"子进程失败 rc={proc.returncode}: {err}"
+        assert writer.flush()
+        data = json.loads(store._path("cat", "mps-race").read_text(encoding="utf-8"))
+        contents = {m["content"] for m in data["messages"]}
+        expected = {f"parent-{i}" for i in range(5)} | {f"child-{i}" for i in range(5)}
+        assert contents == expected, contents
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    writer.close()
+
+
+_MULTIPROCESS_DELETE_LATE_SAVE = r'''
+import json, sys, time
+from pathlib import Path
+
+root, char, sid, go, done = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+
+from pet.chat.session_store import SessionStore, _SessionWriter
+from pet.chat.models import ChatMessage
+
+writer = _SessionWriter()
+store = SessionStore(root, writer=writer)
+session = store.create(char, "provider", "system")
+session.session_id = sid
+deadline = time.time() + 30
+while not Path(go).exists():
+    if time.time() > deadline:
+        Path(done).write_text(json.dumps({"timed_out": True}), encoding="utf-8")
+        sys.exit(2)
+    time.sleep(0.02)
+session.messages.append(ChatMessage("user", "late-child-save"))
+store.save(session)
+ok = writer.flush()
+result = {
+    "ok": ok,
+    "conflicts": writer.conflict_count,
+    "resurrected": Path(root, char, f"{sid}.json").exists(),
+}
+Path(done).write_text(json.dumps(result), encoding="utf-8")
+writer.close()
+sys.exit(0)
+'''
+
+
+def test_real_multiprocess_delete_then_late_save_does_not_resurrect(tmp_path: Path):
+    """真实子进程：父进程删除写墓碑后，子进程的迟到保存被跨进程墓碑拒绝，文件不得复活。"""
+    root = tmp_path
+    go = root / "go"
+    done = root / "done"
+    writer = _SessionWriter()
+    store = _store(root, writer=writer)
+    session = _session(store)
+    session.session_id = "mps-delete"
+    session.messages.append(ChatMessage("user", "parent-saved"))
+    store.save(session)
+    assert writer.flush()
+    path = store._path("cat", "mps-delete")
+    assert path.exists()
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _MULTIPROCESS_DELETE_LATE_SAVE,
+         str(root), "cat", "mps-delete", str(go), str(done)],
+        env=_child_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        # 父进程先删除（unlink + 持久墓碑 + 父目录 fsync），再放行子进程迟到保存
+        store.delete(session)
+        assert writer.flush()
+        go.write_text("go", encoding="utf-8")
+        out, err = proc.communicate(timeout=60)
+        assert proc.returncode == 0, f"子进程失败 rc={proc.returncode}: {err}"
+        result = json.loads(done.read_text(encoding="utf-8"))
+        assert result["resurrected"] is False, "迟到保存不得复活已删除的会话"
+        assert result["conflicts"] >= 1, "跨进程墓碑必须拒绝迟到保存（冲突可观测）"
+        assert not path.exists(), "文件不得复活"
+        assert _tombstone_path(path).exists()  # 持久墓碑仍在
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    writer.close()

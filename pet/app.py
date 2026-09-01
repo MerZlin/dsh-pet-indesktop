@@ -290,7 +290,12 @@ class PetApp:
                 session = getattr(win, "session", None)
                 store = getattr(win, "store", None)
                 if session is not None and store is not None and callable(getattr(store, "save", None)):
-                    store.save(session)
+                    # save() 返回 False 表示提交被拒绝（写入器关闭中/会话已删除）：
+                    # 退出路径必须感知并记录，不能只依赖 writer 内部日志。
+                    if store.save(session) is False:
+                        logging.error(
+                            '退出时保存聊天会话被拒绝（数据未入队，可能未保存）: session=%s',
+                            getattr(session, "session_id", "?"))
             except Exception:
                 logging.exception('退出时保存聊天会话失败')
         try:
