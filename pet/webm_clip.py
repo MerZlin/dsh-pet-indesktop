@@ -9,8 +9,15 @@ WebM-backed clip library（webm 主路线）。
   避免旧 ffmpeg 子进程方案导致的“窗口反复出现/消失”。
 
 线程模型（B7 生命周期受控）：
-- 后台 reader 线程只负责把 RGBA 字节放入有界队列；
-- 主线程 QTimer 按视频 fps 从队列取帧，构造 QImage/QPixmap 并发出 frameChanged；
+- 后台 reader 线程只负责把 RGBA 字节放入有界队列；每帧附带素材源时间线
+  帧号（0-based），队列满丢弃时源帧号照常推进（被丢弃的帧仍占用时间线
+  槽位）——主线程拿到的显示帧索引在丢帧后依然锚定素材原始时间线；
+- 主线程 QTimer 按视频 fps 从队列取帧，构造 QImage/QPixmap 并发出
+  frameChanged(源时间线帧号)；
+- 帧号契约（P1 复审）：frameChanged / currentFrameNumber 携带 0-based
+  素材源时间线帧号（显示帧索引，= elapsed video time × fps）；播放计数
+  _frame_index 是 1-based 主线程已消费帧数。降帧相位与末帧判断必须用
+  显示帧索引，绝不能使用消费计数（队列满丢帧后两者不再相等）；
 - 所有 Qt GUI 操作只发生在主线程。
 - 同一 clip 最多 1 个 active reader + 有上限的退役 reader（_MAX_RETIRED_READERS）：
   stop() 主动 terminate 底层 ffmpeg 进程（_PopenCapture 捕获句柄），退役池超上限时
@@ -327,6 +334,9 @@ class WebMClip(QObject):
         self._first_frame_gen = 0
         self._first_frame_procs: set = set()
         self._frame_index = 0
+        # 显示帧索引 = 素材源时间线上的 0-based 帧号（reader 打标，丢帧后
+        # 仍一致）；与 1-based 播放计数 _frame_index 分离（P1 复审）。
+        self._current_frame_index = 0
         self._ended_fired = False
         self._running = False
         self._generation = 0
@@ -494,12 +504,14 @@ class WebMClip(QObject):
         return self._duration / self.playback_speed if self._duration > 0 else 0.0
 
     def currentFrameNumber(self) -> int:
-        return self._frame_index
+        # 显示帧索引 = 素材源时间线 0-based 帧号（P1 复审）：降帧相位与
+        # 末帧判断、预缩放缓存的帧号 key 都以此为准，与消费计数无关。
+        return self._current_frame_index
 
     def currentTimeSeconds(self) -> float:
         if self._fps <= 0:
             return 0.0
-        return self._frame_index / (self._fps * self.playback_speed)
+        return self._current_frame_index / (self._fps * self.playback_speed)
 
     def currentPixmap(self):
         return self._current_pixmap
@@ -559,6 +571,7 @@ class WebMClip(QObject):
         self._reader_ready = ready_evt
         self._queue = queue.Queue(maxsize=8)
         self._frame_index = 0
+        self._current_frame_index = 0  # 新一轮播放从头计时（P1 复审）
         self._ended_fired = False
         self._running = True
         self._generation += 1
@@ -607,6 +620,7 @@ class WebMClip(QObject):
         if frame_index <= 0:
             self.stop()
             self._frame_index = 0
+            self._current_frame_index = 0  # 回到首帧 = 源时间线 0（P1 复审）
             if self._first_image is not None:
                 # 首帧已缓存（后台 warm_first_frame 或上次同步解码）：
                 # 主线程直接转 QPixmap，零阻塞、无旧帧残留窗口。
@@ -893,14 +907,11 @@ class WebMClip(QObject):
             if self._frame_count <= 0 and self._fps > 0 and self._duration > 0:
                 self._frame_count = int(round(self._fps * self._duration))
 
-            for frame in gen:
-                if stop_evt.is_set() or self._generation != generation:
-                    break
-                try:
-                    q.put(frame, timeout=0.2)
-                except queue.Full:
-                    # 队列满说明 UI 消费不过来；丢弃这一帧，保持实时性
-                    pass
+            self._stamp_source_indices(
+                gen,
+                q,
+                lambda: stop_evt.is_set() or self._generation != generation,
+            )
             # 正常播完时放入结束标记。主线程可能正忙（队列满、帧被丢弃），
             # 必须循环重试直到放入或收到停止信号；否则“最后一帧被丢弃且
             # 结束标记也丢失”会让上层永远等不到播完，动画链卡死在最后一帧。
@@ -959,7 +970,31 @@ class WebMClip(QObject):
 
         self._process_frame(item)
 
-    def _process_frame(self, data: bytes) -> None:
+    @staticmethod
+    def _stamp_source_indices(frames, q, is_stopped, timeout: float = 0.2) -> None:
+        """reader 线程把解码帧逐帧打上素材源时间线帧号后入队。
+
+        队列项 = (RGBA 字节, 源时间线 0-based 帧号)。返回帧号即
+        elapsed video time × fps 对应的素材原始帧号；队列满（UI 消费
+        不过来）时丢弃该帧，但源帧号照常推进——被丢弃的帧仍占用时间线
+        槽位，保证主线程拿到的显示帧索引在丢帧后依然锚定素材时间线
+        （消费计数在丢帧后不再等于源帧号，绝不能用作降帧相位/末帧判断）。
+
+        抽取为独立方法便于单元测试：不依赖 ffmpeg/Qt，直接验证
+        「丢帧后帧号连续性与停止语义」（P1 复审）。
+        """
+        src_idx = 0
+        for frame in frames:
+            if is_stopped():
+                break
+            try:
+                q.put((frame, src_idx), timeout=timeout)
+            except queue.Full:
+                pass  # 丢弃该帧；源帧号照常推进（时间线槽位不因丢帧回退）
+            src_idx += 1
+
+    def _process_frame(self, item) -> None:
+        data, src_idx = item
         expect = self._w * self._h * self._bpp
         if len(data) != expect:
             logger.warning('webm 帧长度异常: got=%d expect=%d', len(data), expect)
@@ -970,5 +1005,10 @@ class WebMClip(QObject):
             return
         self._current_image = img.copy()
         self._current_pixmap = QPixmap.fromImage(self._current_image)
+        # 显示帧索引 = 素材源时间线 0-based 帧号（reader 打标，丢帧后仍
+        # 一致）；播放计数 _frame_index = 已消费帧数（1-based）。二者分离：
+        # 降帧相位与末帧判断一律使用显示帧索引，绝不使用消费计数
+        # （P1 复审——否则 reader 队列满丢帧后相位错位、末帧提前）。
+        self._current_frame_index = src_idx
         self._frame_index += 1
-        self.frameChanged.emit(self._frame_index)
+        self.frameChanged.emit(self._current_frame_index)

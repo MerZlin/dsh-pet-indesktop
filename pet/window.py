@@ -800,10 +800,25 @@ class PetWindow(QWidget):
 
     # ================================================================ 闲置降帧（性能调研 §4.3）
     def mark_activity(self) -> None:
-        """记录一次用户/联动交互（鼠标命中/点击/拖拽/菜单/联动事件）。
+        """记录一次用户/联动交互，刷新"最近活跃"时刻（单调时钟）。
 
-        闲置降帧的时间线锚点：任何交互都刷新"最近活跃"时刻（单调时钟），
-        下一帧动画立即恢复全帧率呈现。
+        闲置降帧的时间线锚点：任何交互都刷新"最近活跃"时刻，下一帧动画
+        立即恢复全帧率呈现。
+
+        活跃度判定范围（进入闲置降帧前的计时锚点）：
+        - 鼠标：到达桌宠窗口的按下/移动/松手（含点击、拖拽、弹弓瞄准；
+          平台穿透 mask 已挡住透明区域，能到达窗口的鼠标事件视为用户注意，
+          左右留白收到事件也计入——这是设计选择而非误计）；
+        - 键盘：被窗口消费的按键（ESC 取消弹弓等，keyPressEvent）；
+        - 失焦取消弹弓（focusOutEvent）；
+        - 右键菜单弹出（_show_context_menu）；
+        - Agent 联动事件与 request_link_anim；
+        - 显示恢复（showEvent）。
+
+        不计入的范围（自动产生的视觉/物理活动，不算用户活跃）：
+        - 自动动画链/自动移动/物理抛掷/碰撞反弹/弹弓物理 tick
+          ——否则桌宠持续自动活动将永不进入降帧；
+        - 未到达窗口或被窗口忽略的输入。
         """
         self._last_activity_ts = self._clock()
 
@@ -833,11 +848,14 @@ class PetWindow(QWidget):
 
     @staticmethod
     def _is_reduced_publish_frame(frame_index: int, divisor: int = IDLE_LOW_FPS_DIVISOR) -> bool:
-        """闲置降帧的隔帧发布判定（按时间线跳帧）。
+        """闲置降帧的隔帧发布判定（按源时间线跳帧）。
 
-        帧号 = elapsed video time × fps；目标呈现帧 = floor(elapsed×fps/divisor)×divisor，
-        即帧号能被 divisor 整除的帧才发布（24fps 素材 → 12fps 效果）。动画时间线
-        照常推进（movie 全速解码），动画时长不变——不能靠改播放速率让时间变慢。
+        frame_index = 素材源时间线上的 0-based 显示帧索引（= elapsed video
+        time × fps；由播放器按源时间线打标，reader 队列满丢帧后仍一致，
+        与主线程消费序号无关——P1 复审）。目标呈现帧 =
+        floor(elapsed×fps/divisor)×divisor，即帧号能被 divisor 整除的帧才
+        发布（24fps 素材 → 12fps 效果）。动画时间线照常推进（movie 全速
+        解码），动画时长不变——不能靠改播放速率让时间变慢。
         """
         return int(frame_index) % max(1, int(divisor)) == 0
 
@@ -2083,14 +2101,19 @@ class PetWindow(QWidget):
             self._switch(self._pick(self.idles))
 
     def _on_frame(self, name: str, n: int) -> None:
-        """媒体帧推进回调：重建画面；最后一帧触发播完处理。"""
+        """媒体帧推进回调：重建画面；最后一帧触发播完处理。
+
+        n = 素材源时间线上的 0-based 显示帧索引（WebMClip/GifClip 统一契约，
+        由播放器按源时间线打标，队列满丢帧后仍一致——P1 复审）。降帧相位
+        与末帧判断都以此为准，绝不使用主线程消费序号。
+        """
         if self._hidden_paused or getattr(self, '_closing', False):
             # 隐藏/关闭/切角色后丢弃迟到的动画事件：旧窗口不得再推进动画链、
             # 不得对旧库重新建立交互让路 hold（生命周期守卫）。
             return
         if name != self.anim or self.movie is None:
             return
-        is_last = n >= self.lib.frames(name) - 1
+        is_last = n >= self.lib.frames(name) - 1  # n 是 0-based 源帧号：末帧判定不提前
         if self._idle_reduction_active() and not self._is_reduced_publish_frame(n):
             # 闲置降帧：按时间线跳帧呈现（24fps 素材 → 12fps 效果），本帧
             # 不发布——命中测试继续使用最近一次已发布的 alpha 图，不逐帧重建；
@@ -2168,6 +2191,9 @@ class PetWindow(QWidget):
         # 失败路径（解码返回空图）与快路径跳过均不更新，避免把「未按新
         # DPR 重建」记成已重建（P1 复审）。
         try:
+            # currentFrameNumber = 0-based 源时间线显示帧索引（P1 复审）：
+            # 缓存 key 锚定素材真实帧号，队列满丢帧后不会把不同源帧
+            # 的成品误串（消费计数与源帧号在丢帧后不再相等）。
             frame_n = self.movie.currentFrameNumber()
         except AttributeError:
             frame_n = None
@@ -3422,6 +3448,9 @@ class PetWindow(QWidget):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape and self._interaction_state == "SLINGSHOT_AIMING":
+            # ESC 取消弹弓 = 被窗口消费的键盘交互：刷新闲置降帧活跃锚点
+            # （P2 顺修：键盘交互同样计活跃，任何交互立即回满帧率）。
+            self.mark_activity()
             self._cancel_slingshot_to_anchor()
             event.accept()
             return
@@ -3429,6 +3458,9 @@ class PetWindow(QWidget):
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
         if self._interaction_state == "SLINGSHOT_AIMING":
+            # 失焦取消弹弓 = 被窗口消费的交互状态变更：同样刷新活跃锚点
+            # （P2 顺修：与 ESC 取消同一语义，避免取消后立刻落入降帧）。
+            self.mark_activity()
             self._cancel_slingshot_to_anchor()
         super().focusOutEvent(event)
 
