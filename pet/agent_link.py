@@ -1815,14 +1815,13 @@ class AgentLinkManager(QObject):
         if agent_key == "codex":
             if not self._codex_app_running() and hasattr(self.win, "show_bubble"):
                 self.win.show_bubble(
-                    f"已开启 {name} 联动监听，但没检测到 ChatGPT 桌面端在运行——"
-                    f"打开 ChatGPT App 我才能感知到哦",
+                    self._dialogue("agent.missing", f"已开启 {name} 联动监听，但没检测到 ChatGPT 桌面端在运行——打开 ChatGPT App 我才能感知到哦", name=name),
                     duration_ms=6000,
                 )
             return
         if not marker.exists() and hasattr(self.win, "show_bubble"):
             self.win.show_bubble(
-                f"已开启 {name} 联动监听，但没检测到本机安装 {name}——装了它我才能感知到哦",
+                self._dialogue("agent.missing", f"已开启 {name} 联动监听，但没检测到本机安装 {name}——装了它我才能感知到哦", name=name),
                 duration_ms=6000,
             )
 
@@ -1850,11 +1849,13 @@ class AgentLinkManager(QObject):
             self.cfg.save()
             self.apply_config()
             if hasattr(self.win, "show_bubble"):
-                self.win.show_bubble("DSH 桥接插件已装好，联动开启～", duration_ms=4000)
+                name = self.AGENT_NAMES.get(agent_key, agent_key)
+                self.win.show_bubble(self._dialogue("bridge.install.success", "DSH 桥接插件已装好，联动开启～", name=name), duration_ms=4000)
         else:
             log.warning("DSH 桥接插件安装失败: %s", msg)
             if hasattr(self.win, "show_bubble"):
-                self.win.show_bubble(f"DSH 桥接插件安装失败：{msg}", duration_ms=6000)
+                name = self.AGENT_NAMES.get(agent_key, agent_key)
+                self.win.show_bubble(self._dialogue("bridge.install.failed", f"DSH 桥接插件安装失败：{msg}", name=name, detail=msg), duration_ms=6000)
 
     def _other_instances_enabled(self, agent_key: str) -> bool:
         """其他多开实例（含默认实例）是否也开着该 Agent 联动。
@@ -1915,7 +1916,8 @@ class AgentLinkManager(QObject):
                 # 安装走后台线程（pnpm 解析可能数十秒，绝不在 UI 线程阻塞）；
                 # 菜单先回弹，安装完成后自动开启并气泡告知
                 if hasattr(self.win, "show_bubble"):
-                    self.win.show_bubble("正在安装 DSH 桥接插件…", duration_ms=4000)
+                    name = self.AGENT_NAMES.get(agent_key, agent_key)
+                    self.win.show_bubble(self._dialogue("bridge.install.pending", "正在安装 DSH 桥接插件…", name=name), duration_ms=4000)
                 import threading
                 threading.Thread(
                     target=self._install_dsh_worker, daemon=True, name="dsh-bridge-install",
@@ -1930,14 +1932,16 @@ class AgentLinkManager(QObject):
                 elif not ClaudeCodeMonitor.uninstall_hooks():
                     log.warning("Claude hooks 卸载未完全成功（配置已关闭，hooks 可能残留）")
                     if hasattr(self.win, "show_bubble"):
-                        self.win.show_bubble("Claude hooks 卸载未完全成功，可手动检查 ~/.claude/settings.json", duration_ms=6000)
+                        name = self.AGENT_NAMES.get(agent_key, agent_key)
+                        self.win.show_bubble(self._dialogue("bridge.uninstall.failed", "Claude hooks 卸载未完全成功，可手动检查 ~/.claude/settings.json", name=name), duration_ms=6000)
             elif agent_key == "dsh":
                 if self._other_instances_enabled("dsh"):
                     log.info("其他实例仍在使用 DSH 联动，保留桥接插件")
                 elif not DshMonitor.uninstall_bridge():
                     log.warning("DSH 桥接插件卸载未完全成功（配置已关闭，插件可能残留）")
                     if hasattr(self.win, "show_bubble"):
-                        self.win.show_bubble("DSH 桥接插件卸载未完全成功", duration_ms=6000)
+                        name = self.AGENT_NAMES.get(agent_key, agent_key)
+                        self.win.show_bubble(self._dialogue("bridge.uninstall.failed", "DSH 桥接插件卸载未完全成功", name=name), duration_ms=6000)
 
         ag_cfg = dict(self.cfg.get("agent_link", {}))
         ag_cfg[agent_key] = bool(enabled)
@@ -2029,10 +2033,12 @@ class AgentLinkManager(QObject):
             # busy 后的 attention（如 Claude Stop=回合结束）由完成确认流程接管，
             # 避免「需要看一眼」和「完成通知」双气泡；独立出现的才立即提醒
             if prev_raw not in self._BUSY_STATES:
-                self._show_link_bubble("主人，Agent 这边需要你看一眼～", important=True)
+                name = self.AGENT_NAMES.get(agent_key, agent_key)
+                self._show_link_bubble(self._dialogue("agent.attention", "主人，Agent 这边需要你看一眼～", name=name), important=True)
         elif state == "error":
             if prev_raw not in self._BUSY_STATES:
-                self._show_link_bubble("Agent 执行好像遇到报错了…", important=True)
+                name = self.AGENT_NAMES.get(agent_key, agent_key)
+                self._show_link_bubble(self._dialogue("agent.error", "Agent 执行好像遇到报错了…", name=name), important=True)
         elif state in ("sleeping", "idle"):
             # 回到待机：一次性动作播完自然回，待机/移动中立即回
             if hasattr(self.win, "request_link_idle"):
@@ -2222,9 +2228,9 @@ class AgentLinkManager(QObject):
                     label=label, name=name,
                 )
             elif tool:
-                text = f"{prefix}{name} 有审批等你决定（{tool}）："
+                text = self._dialogue("approval.tool", f"{prefix}{name} 有审批等你决定（{tool}）：", label=tool, name=name)
             else:
-                text = f"{prefix}{name} 有审批等你决定："
+                text = self._dialogue("approval.generic", f"{prefix}{name} 有审批等你决定：", name=name)
             if not label and not tool:
                 text = self._dialogue("approval.generic", text, name=name)
         self._register_interaction(
@@ -2577,7 +2583,7 @@ class AgentLinkManager(QObject):
             worker.start()
         except Exception:
             log.exception("DSH 回写线程启动失败")
-            self._show_link_bubble("回写 DSH 失败，请到 DSH 界面处理", important=True)
+            self._show_link_bubble(self._dialogue("dsh.writeback.failed", "回写 DSH 失败，请到 DSH 界面处理"), important=True)
 
     def _post_respond_worker(self, agent_key: str, msg: dict) -> None:
         """后台线程：找在线 DSH 端口并 POST /api/respond，结果经信号回主线程。"""
@@ -2609,7 +2615,7 @@ class AgentLinkManager(QObject):
         log.warning("DSH 回写失败: %s", detail)
         try:
             if hasattr(self.win, "show_bubble") and self.win.isVisible():
-                self.win.show_bubble("回写 DSH 失败，请到 DSH 界面处理", duration_ms=4000)
+                self.win.show_bubble(self._dialogue("dsh.writeback.failed", "回写 DSH 失败，请到 DSH 界面处理"), duration_ms=4000)
         except Exception:
             pass
 
@@ -3007,9 +3013,9 @@ class AgentLinkManager(QObject):
 
     def _show_429_alert(self, session_key: str, count: int) -> None:
         """展示 429 提醒弹窗，高优先级，带「知道了」按钮，15 秒自动收起。"""
-        text = "DSH 请求受限（429），本轮未完成；请稍后重试。"
-        if count > 1:
-            text = f"DSH 请求受限（429），已连续限流 {count} 次，请稍后重试。"
+        fallback = "DSH 请求受限（429），本轮未完成；请稍后重试。"
+        key = "rate_limit.many" if count > 1 else "rate_limit.one"
+        text = self._dialogue(key, fallback, count=count)
         buttons = [("知道了", lambda sk=session_key: self._dismiss_429_alert(sk))]
         if hasattr(self.win, "show_alert"):
             self.win.show_alert(
