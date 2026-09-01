@@ -332,6 +332,9 @@ class WebMClip(QObject):
         # 首帧解码原子认领（N4）：warm_first_frame（后台）与 _decode_first_frame_sync
         # （前台）同一时间只有一个执行者。_first_frame_done 在 _first_image 写入后
         # set，供前台有界等待复用后台解码结果（零重复解码）。
+        # P3 复审：_first_frame_done 是「首帧解码已完成」的粘性事件——治理逐出
+        # （evict_first_frame）只清 _first_image，绝不撤销已完成的解码事实；
+        # 「是否仍被缓存持有」由 _first_image 与治理序表达，两个状态不再混用。
         self._first_frame_lock = threading.Lock()
         self._first_frame_done = threading.Event()
         # 首帧解码生命周期（P1-2）：与播放 reader 同一回收体系。
@@ -370,6 +373,7 @@ class WebMClip(QObject):
         （_cleaned），自身不再安排任何 sweep/timer。
         """
         self._cleaned = True
+        self._unpin_first_frame()  # P3 复审：销毁时释放治理保护（防 stale pin）
         self.cancel_first_frame_warm()
         try:
             self.stop()
@@ -595,11 +599,16 @@ class WebMClip(QObject):
             self._thread = thread
         thread.start()
         self._timer.start()
+        # P3 复审：启动成功即治理保护（pin）——正在播放的动画首帧绝不可被
+        # LRU 逐出（播放期间不 touch 首帧，靠 pin 而非 LRU 序保护）。
+        # 对应释放：stop() / 自然播完（_poll 收尾）/ cleanup()。
+        self._pin_first_frame()
         return True
 
     def stop(self) -> None:
         self._running = False
         self._timer.stop()
+        self._unpin_first_frame()  # P3 复审：停止播放即释放治理保护
         stop_evt = self._stop_evt
         if stop_evt is not None:
             stop_evt.set()
@@ -782,14 +791,39 @@ class WebMClip(QObject):
                 pass
 
     def evict_first_frame(self) -> None:
-        """内存治理：逐出本 clip 的首帧缓存（P3，§4.4）。
+        """内存治理：逐出本 clip 的首帧图像（P3，§4.4）。
 
-        只清首帧缓存与完成事件，绝不触碰当前播放帧 / 当前 alpha 图；
+        只清 _first_image（首帧缓存），绝不触碰当前播放帧 / 当前 alpha 图；
+        _first_frame_done 是「首帧解码已完成」的粘性事件，治理逐出不撤销
+        已完成的解码事实（P3 复审：解码完成与缓存持有两个状态分离，等待者
+        不会观察到「完成事件被逐出线程清掉」的不一致）。
         冷动画被逐出后下次用到再解码（允许代价）。幂等；在飞首帧解码
         完成仍会重新写入（重新成为最近使用）。
         """
         self._first_image = None
-        self._first_frame_done.clear()
+
+    def _pin_first_frame(self) -> None:
+        """治理保护（pin）：本 clip 首帧绝不可被治理逐出。
+
+        调用点：start()（正在播放）、_decode_first_frame_sync 等待窗口
+        （正在等待应用首帧）。对应 _unpin_first_frame。
+        """
+        governor = getattr(self, '_first_frame_cache', None)
+        if governor is not None:
+            try:
+                governor.pin(self)
+            except Exception:
+                pass
+
+    def _unpin_first_frame(self) -> None:
+        """释放一次治理保护。调用点：stop() / 自然播完 / cleanup() /
+        _decode_first_frame_sync 应用完成。"""
+        governor = getattr(self, '_first_frame_cache', None)
+        if governor is not None:
+            try:
+                governor.unpin(self)
+            except Exception:
+                pass
 
     def _apply_first_frame_image(self, img) -> None:
         """把解码得到的首帧图像直接应用到当前播放帧（仅主线程调用）。
@@ -812,6 +846,12 @@ class WebMClip(QObject):
         （后台完成则直接用其缓存，零重复解码）；超时则放弃等待直接自行解码，
         前台播放绝不被后台预热长时间卡住（代价是极端情况下短暂双解码）。
 
+        P3 复审（875a246 一审 P1-1/P1-3）：整个同步窗口（含等待与解码）先
+        pin 本 clip 首帧（治理认领），应用完成后再 unpin——「_first_frame_done
+        置位后、_apply_first_frame 前」的窗口内，并发逐出绝不命中本 clip：
+        等待者不会观察到「完成事件在、图像却被清空」的空帧。若解码已完成但
+        图像在认领前已被逐出（粘性完成事件 + 图像缺失），走逃生解码补帧。
+
         逃生口（超时自行解码）允许与后台双解码，但缓存提交单胜者化
         （P1-3 / B7 复审 R2）：始终经锁提交，拿不到锁就放弃写缓存、只把
         图像直接应用到当前画面——绝不无锁 check-then-store（两个逃生提交者
@@ -823,16 +863,23 @@ class WebMClip(QObject):
         的代次取消语义。
         """
         gen = self._first_frame_gen
-        if self._first_frame_lock.acquire(blocking=False):
-            try:
-                self._decode_first_qimage_and_cache(gen=gen)
-            finally:
-                self._first_frame_lock.release()
-        else:
-            if not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0):
-                img = self._decode_first_qimage(gen=gen)
-                self._commit_first_frame_escape(img, gen=gen)
-        self._apply_first_frame()
+        self._pin_first_frame()  # P3 复审：同步窗口内本 clip 首帧不可被逐出
+        try:
+            if self._first_frame_lock.acquire(blocking=False):
+                try:
+                    self._decode_first_qimage_and_cache(gen=gen)
+                finally:
+                    self._first_frame_lock.release()
+            else:
+                if (not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0)
+                        or self._first_image is None):
+                    # 等待超时（后台卡住），或解码已完成但图像在认领前已被
+                    # 治理逐出（粘性完成事件 + 图像缺失）：逃生解码补帧。
+                    img = self._decode_first_qimage(gen=gen)
+                    self._commit_first_frame_escape(img, gen=gen)
+            self._apply_first_frame()
+        finally:
+            self._unpin_first_frame()  # 应用完成（或异常）即释放治理认领
 
     def _commit_first_frame_escape(self, img, gen: int | None = None) -> None:
         """逃生口（未持锁）的首帧缓存提交（P1-3 / B7 复审 R2）。
@@ -1014,6 +1061,7 @@ class WebMClip(QObject):
                 self._ended_fired = True
                 self._running = False
                 self._timer.stop()
+                self._unpin_first_frame()  # P3 复审：自然播完即释放治理保护
                 self.finished.emit()
             return
 
