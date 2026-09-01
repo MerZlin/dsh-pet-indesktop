@@ -18,7 +18,7 @@ import pet.library as library_mod
 class FakeClip:
     """极简假 WebMClip：记录预热调用，不碰 ffmpeg/Qt。"""
 
-    def __init__(self, path, parent=None):
+    def __init__(self, path, parent=None, first_frame_cache=None):
         self.path = Path(path)
         self.warmed_meta = False
         self.warmed_frame = False

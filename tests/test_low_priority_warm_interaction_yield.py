@@ -41,7 +41,7 @@ from tests.test_window_pause import FakeLibrary
 class FakeClip:
     """极简假 WebMClip：记录预热调用（含次数），不碰 ffmpeg/Qt。"""
 
-    def __init__(self, path, parent=None):
+    def __init__(self, path, parent=None, first_frame_cache=None):
         self.path = Path(path)
         self.warmed_meta = False
         self.warmed_frame = False
@@ -60,8 +60,8 @@ class FakeClip:
 class BlockableClip(FakeClip):
     """warm_meta 可阻塞/可放行的假 clip，用于观测让路与放弃时机。"""
 
-    def __init__(self, path, parent=None):
-        super().__init__(path, parent)
+    def __init__(self, path, parent=None, first_frame_cache=None):
+        super().__init__(path, parent, first_frame_cache=first_frame_cache)
         self.meta_entered = threading.Event()
         self.meta_release = threading.Event()
 

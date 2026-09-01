@@ -284,12 +284,20 @@ class WebMClip(QObject):
     finished = Signal()
     errorOccurred = Signal(str)
 
-    def __init__(self, path, parent: QObject | None = None) -> None:
+    def __init__(self, path, parent: QObject | None = None,
+                 first_frame_cache=None) -> None:
         super().__init__(parent)
         self.path = path
         self._w = catalog.CANVAS_W
         self._h = catalog.CANVAS_H
         self._bpp = 4  # RGBA
+        # 首帧单帧记账字节（内存治理用，P3）：与 FirstFrameCache 的预算
+        # 公式（角色内动画数 × 单帧大小）同口径。
+        self._first_frame_bytes = self._w * self._h * self._bpp
+        # 首帧 LRU 治理缓存（每库一个，MovieLibrary 注入；None = 无治理，
+        # 直接构造的 clip 行为与 P3 之前完全一致）。见 _touch_first_frame /
+        # _notify_first_frame_stored / evict_first_frame。
+        self._first_frame_cache = first_frame_cache
 
         # 元数据（惰性填充；由 MovieLibrary 并行 warm 或首次使用时读取）
         self._frame_count = 0
@@ -626,9 +634,13 @@ class WebMClip(QObject):
                 # 主线程直接转 QPixmap，零阻塞、无旧帧残留窗口。
                 self._current_image = self._first_image
                 self._current_pixmap = QPixmap.fromImage(self._first_image)
+                self._touch_first_frame()
             else:
+                # 首帧被 LRU 治理逐出（冷动画）：记录“用到但缓存缺失”，
+                # 重新同步解码——用到再解码是允许代价（P3，§4.4）。
                 self._current_image = None
                 self._current_pixmap = None
+                self._touch_first_frame()
                 self._decode_first_frame_sync()
             return True
         return False
@@ -712,13 +724,15 @@ class WebMClip(QObject):
     def _store_first_frame(self, img) -> None:
         """把解码结果写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
 
-        幂等：缓存已存在则跳过；写入后 set _first_frame_done。
+        幂等：缓存已存在则跳过；写入后 set _first_frame_done，并通知
+        LRU 治理缓存（超预算时由它逐出最久未用的冷门动画首帧）。
         """
         if img is None:
             return
         if self._first_image is None:
             self._first_image = img
             self._first_frame_done.set()
+            self._notify_first_frame_stored()
 
     def _decode_first_qimage_and_cache(self, gen: int | None = None) -> None:
         """解码首帧并写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
@@ -741,6 +755,41 @@ class WebMClip(QObject):
         self._current_image = self._first_image
         self._current_pixmap = QPixmap.fromImage(self._first_image)
         self._first_pixmap = self._current_pixmap
+        self._touch_first_frame()
+
+    def _touch_first_frame(self) -> None:
+        """首帧被读取/应用：刷新 LRU 治理序（正在播放的动画首帧保持最近使用）。
+
+        治理回调失败不影响首帧缓存本身（防御性捕获）。
+        """
+        governor = getattr(self, '_first_frame_cache', None)
+        if governor is not None:
+            try:
+                governor.note_used(self)
+            except Exception:
+                pass
+
+    def _notify_first_frame_stored(self) -> None:
+        """首帧已写入缓存：通知 LRU 治理（超预算逐出最久未用的冷门动画）。
+
+        治理回调失败不影响首帧缓存本身（防御性捕获）。
+        """
+        governor = getattr(self, '_first_frame_cache', None)
+        if governor is not None:
+            try:
+                governor.note_stored(self)
+            except Exception:
+                pass
+
+    def evict_first_frame(self) -> None:
+        """内存治理：逐出本 clip 的首帧缓存（P3，§4.4）。
+
+        只清首帧缓存与完成事件，绝不触碰当前播放帧 / 当前 alpha 图；
+        冷动画被逐出后下次用到再解码（允许代价）。幂等；在飞首帧解码
+        完成仍会重新写入（重新成为最近使用）。
+        """
+        self._first_image = None
+        self._first_frame_done.clear()
 
     def _apply_first_frame_image(self, img) -> None:
         """把解码得到的首帧图像直接应用到当前播放帧（仅主线程调用）。

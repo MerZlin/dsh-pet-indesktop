@@ -122,6 +122,7 @@ class MovieLibrary(QObject):
         character_id: str | None = None,
         asset_dir: Path | str | None = None,
         manifest: Mapping[str, str] | None = None,
+        first_frame_cache_max_bytes: int | None = None,
     ) -> None:
         super().__init__(parent)
         self.character_id = character_id or catalog.DEFAULT_CHARACTER
@@ -131,6 +132,11 @@ class MovieLibrary(QObject):
             self._asset_dir = catalog.resolve_character_video_dir(self.character_id)
         self._manifest = None if manifest is None else dict(manifest)
         self.manifest = catalog.load_character_manifest(self.character_id, self._asset_dir)
+        # 首帧 LRU 治理（P3，§4.2 L2）：每库一个；预算 = 角色内动画数 ×
+        # 单帧大小（惰性创建于首次建 clip 时，见 _ensure_first_frame_cache）。
+        # first_frame_cache_max_bytes 仅供测试覆盖小预算。
+        self._first_frame_cache_max_bytes = first_frame_cache_max_bytes
+        self._first_frame_cache = None
         self.folder_map: dict[str, str] = {}
         self.folder_files: dict[str, list[str]] = {}
         self._movies: dict[str, object] = {}
@@ -527,14 +533,36 @@ class MovieLibrary(QObject):
 
         这样多开实例不会在启动瞬间一次性 new 出 91 个播放器对象；
         随机动作池由 _warm_low_priority_background 在启动后 2s 补全。
+        WebMClip 注入本库的首帧 LRU 治理缓存（GifClip 无首帧缓存概念）。
         """
         if name not in self._movies:
             path = self._paths[name]
+            cache = self._ensure_first_frame_cache()
             if path.suffix.lower() == '.gif':
                 self._movies[name] = GifClip(path, parent=self)
             else:
-                self._movies[name] = WebMClip(path, parent=self)
+                self._movies[name] = WebMClip(path, parent=self, first_frame_cache=cache)
         return self._movies[name]
+
+    def _ensure_first_frame_cache(self):
+        """首帧 LRU 治理缓存（惰性创建，首次建 clip 时）：预算 = 角色内
+        动画数 × 单帧大小（§4.2/§4.4）；测试可经 first_frame_cache_max_bytes
+        覆盖。惰性是为了 _load_all 填充 _paths 后才有准确动画数。
+        """
+        if self._first_frame_cache is None:
+            from .first_frame_cache import FirstFrameCache, character_first_frame_budget
+            if self._first_frame_cache_max_bytes is not None:
+                budget = max(1, int(self._first_frame_cache_max_bytes))
+            else:
+                budget = character_first_frame_budget(
+                    len(self._paths), catalog.CANVAS_W, catalog.CANVAS_H)
+            self._first_frame_cache = FirstFrameCache(max_bytes=budget)
+        return self._first_frame_cache
+
+    def first_frame_cache_stats(self) -> dict:
+        """首帧缓存当前占用（entries/bytes/max_bytes/命中逐出计数），
+        供测试断言与遥测（P3 观测要求）。"""
+        return self._ensure_first_frame_cache().stats()
 
     def clip_path(self, name: str) -> Path | None:
         """只取素材路径、不创建 clip——供工作线程解码缩略图用。
