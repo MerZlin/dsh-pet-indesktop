@@ -1083,10 +1083,10 @@ class PetWindow(QWidget):
         session = self._collision_session
         if session is None:
             return
-        # 断开前先发 leave：协调者即时移除成员，不必等 stale 超时
-        submit_leave = getattr(session, 'submit_leave', None)
-        if callable(submit_leave):
-            submit_leave()
+        # 先关闭所有状态生产路径，再把 leave 排入同一 worker 队列；否则一个
+        # 已排队的 timer tick 可能在 leave 之后重新提交状态并复活成员。
+        self._collision_timer.stop()
+        self._collision_session = None
         try:
             session.impulse_ready.disconnect(self._on_collision_impulse)
         except (RuntimeError, TypeError):
@@ -1095,8 +1095,9 @@ class PetWindow(QWidget):
             session.snapshot_ready.disconnect(self._on_collision_snapshot)
         except (RuntimeError, TypeError):
             pass
-        self._collision_timer.stop()
-        self._collision_session = None
+        submit_leave = getattr(session, 'submit_leave', None)
+        if callable(submit_leave):
+            submit_leave()
         self._collision_epoch = ''
         self._collision_peer_snapshots.clear()
         self._predicted_bounces.clear()
@@ -1111,6 +1112,10 @@ class PetWindow(QWidget):
         非协调者时本地 policy 仅在本进程未来接管协调者时才生效。
         """
         session = getattr(self, '_collision_session', None)
+        if session is None:
+            # 本地成员 detach 后，app-owned worker 仍可能是其他实例的协调者；
+            # 策略必须继续同步，尤其是 collision_enabled=False。
+            session = getattr(self, '_collision_app_session', None)
         policy = {
             'collision_enabled': bool(self.cfg.get('collision_enabled', True)),
             'collision_restitution': float(self.cfg.get('collision_restitution', .82)),
@@ -1224,9 +1229,10 @@ class PetWindow(QWidget):
     @Slot(object)
     def _on_collision_snapshot(self, message: dict[str, Any]) -> None:
         epoch = str(message.get('epoch') or '')
-        if not epoch or (self._collision_epoch and epoch != self._collision_epoch):
+        if not epoch:
             return
         if epoch != self._collision_epoch:
+            self._predicted_bounces.clear()
             self._pending_predicted_bounce = None
             self._pending_predicted_contact = None
         self._collision_epoch = epoch
@@ -2988,6 +2994,8 @@ class PetWindow(QWidget):
         if collision_enabled and self._collision_session is None:
             self.attach_collision_session(getattr(self, '_collision_app_session', None))
         elif not collision_enabled and self._collision_session is not None:
+            # 先让协调 worker 停止求解，再提交本地成员 leave。
+            self._sync_collision_policy()
             self.detach_collision_session()
         self._sync_collision_policy()
         desired_scale = float(self.cfg.get('scale', self.scale))
