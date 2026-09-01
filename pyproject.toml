@@ -51,6 +51,6 @@ select = ["F"]
 "pet/collision.py" = ["F401"]            # 未用导入 typing.Tuple
 "pet/context_menus/modern.py" = ["F401"] # 未用导入 QDesktopServices、DEEPSEEK_WEB_URL
 "pet/context_menus/shared.py" = ["F401"] # 未用导入 Qt
-"pet/modern_settings_dialog.py" = ["F401"] # 未用导入 QDialogButtonBox
+"pet/modern_settings_dialog.py" = ["F401"] # 测试兼容 re-export（QDialogButtonBox/QAbstractItemView/QFileDialog/QColorDialog/ColorSwatchButton 在控件库搬出后仅作模块级再导出，供 tests 断言与 monkeypatch）
 "pet/slot_manager.py" = ["F401", "F841"] # F401 typing.Any；F841 slot_manager.py:388 `step`
 "pet/window.py" = ["F401"]               # 未用导入 QToolTip、autostart_mod、QUARK_PAN_URL、REPO_URL
