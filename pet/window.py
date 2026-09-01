@@ -945,6 +945,10 @@ class PetWindow(QWidget):
             scr = QGuiApplication.primaryScreen()
         return scr
 
+    def screen_available(self, screen_name: str | None = None):
+        """公开转发：返回指定或窗口所在屏幕（等价 _screen_available）。"""
+        return self._screen_available(screen_name)
+
     def add_position_listener(self, listener) -> None:
         if callable(listener) and listener not in self._position_listeners:
             self._position_listeners.append(listener)
@@ -1099,6 +1103,10 @@ class PetWindow(QWidget):
         _marker_fn = getattr(self, '_write_runtime_marker', None)
         if callable(_marker_fn):
             _marker_fn()
+
+    def save_position(self) -> None:
+        """公开转发：以窗口中心相对屏幕可用区的比例持久化位置（等价 _save_position）。"""
+        self._save_position()
 
     def _go_default_corner(self) -> None:
         # 用户明确要求回右下角 = 手动位置决策，撤销"等副屏上线自动恢复"
@@ -2099,6 +2107,14 @@ class PetWindow(QWidget):
             return
         if self.idles:
             self._switch(self._pick(self.idles))
+
+    def set_link_next_provider(self, value) -> None:
+        """公开转发：注入联动动作链"下一个动作提供者"回调（等价 _link_next_provider 赋值）。"""
+        self._link_next_provider = value
+
+    def clear_pending_link_anim(self) -> None:
+        """公开转发：清除待播联动动作（等价 _pending_link_anim = None）。"""
+        self._pending_link_anim = None
 
     def _on_frame(self, name: str, n: int) -> None:
         """媒体帧推进回调：重建画面；最后一帧触发播完处理。
@@ -3406,6 +3422,10 @@ class PetWindow(QWidget):
             name="pet-look-screen",
         ).start()
 
+    def look_at_screen(self) -> None:
+        """公开转发：触发一次"看看屏幕"识别（等价 _on_look_screen）。"""
+        self._on_look_screen()
+
     def _look_worker(self, provider: Any, system_prompt: str) -> None:
         # 延迟导入：无 Chat / 不使用「看看屏幕」的实例启动时不加载 PIL
         from . import vision as vision_mod
@@ -3731,6 +3751,10 @@ class PetWindow(QWidget):
             str(text), self.visible_content_rect(), duration_ms,
             pet_scale=self.scale, subtitle=str(subtitle or ""),
         )
+
+    def hide_speech_bubble(self) -> None:
+        """公开转发：隐藏当前气泡（等价 _speech_bubble.hide()）。"""
+        self._speech_bubble.hide()
 
     def refresh_pet_settings(self) -> None:
         collision_enabled = bool(self.cfg.get('collision_enabled', True))

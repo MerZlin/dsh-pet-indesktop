@@ -200,7 +200,7 @@ class PetApp:
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
         # aboutToQuit 只在控制器层绑定一次：角色热切换会重建窗口，逐个
-        # connect win._save_position 会在旧窗口延迟销毁后残留失效引用。
+        # connect win.save_position 会在旧窗口延迟销毁后残留失效引用。
         # 统一走 _on_about_to_quit，在信号触发时读取当前有效窗口。
         if not self._on_about_to_quit_connected:
             self.app.aboutToQuit.connect(self._on_about_to_quit)
@@ -253,7 +253,7 @@ class PetApp:
         触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
         """
         if self.win is not None:
-            self.win._save_position()
+            self.win.save_position()
         # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
         if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
             self.win.agent_link_manager.shutdown()
@@ -476,7 +476,7 @@ class PetApp:
             index = 0
         if index <= 0:
             return
-        scr = self.win._screen_available()
+        scr = self.win.screen_available()
         if scr is None:
             return
         available = scr.availableGeometry()
@@ -514,7 +514,7 @@ class PetApp:
         win.on_show_balance = self.show_balance if self.enable_chat else None
         win.on_check_update = self.check_update
         win.on_look_synced = self.sync_look_to_chat if self.enable_chat else None
-        win.on_look_screen = win._on_look_screen if self.enable_chat and hasattr(win, "_on_look_screen") else None
+        win.on_look_screen = win.look_at_screen if self.enable_chat and hasattr(win, "look_at_screen") else None
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self.open_modern_settings
         win.on_spawn_pet = self.spawn_pet
@@ -816,7 +816,7 @@ class PetApp:
         menu = QMenu()
         # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），托盘菜单弹出前
         # 先隐藏气泡，避免气泡盖住菜单
-        menu.aboutToShow.connect(lambda: win._speech_bubble.hide())
+        menu.aboutToShow.connect(lambda: win.hide_speech_bubble())
         menu.addAction('显示 / 隐藏', toggle_visible)
 
         island_action = menu.addAction('灵动岛')

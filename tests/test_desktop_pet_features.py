@@ -2397,7 +2397,7 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
         def __init__(self):
             self.saved = 0
 
-        def _save_position(self):
+        def save_position(self):
             self.saved += 1
 
     monkeypatch.setattr(app_mod.QTimer, "singleShot", lambda *a, **k: None)

@@ -1245,8 +1245,8 @@ class AgentLinkManager(QObject):
             mon.activity.connect(self._on_agent_activity)
         self.install_finished.connect(self._on_install_finished)
         # 联动动作链：一次性动作播完后若仍有 Agent 在忙，由 window 回调取下一个动作
-        if hasattr(self.win, "_pending_link_anim"):
-            self.win._link_next_provider = self._next_busy_anim
+        if hasattr(self.win, "set_link_next_provider"):
+            self.win.set_link_next_provider(self._next_busy_anim)
 
         self.apply_config()
 
@@ -1423,8 +1423,8 @@ class AgentLinkManager(QObject):
         （否则隐藏期间计时器到期会在隐藏窗口上切动画/弹气泡）。"""
         for mon in self.monitors.values():
             mon.pause()
-        if hasattr(self.win, "_pending_link_anim"):
-            self.win._pending_link_anim = None
+        if hasattr(self.win, "clear_pending_link_anim"):
+            self.win.clear_pending_link_anim()
         for key in list(self._done_pending):
             self._cancel_done_check(key)
         self._sound_last_event.clear()
@@ -1536,8 +1536,6 @@ class AgentLinkManager(QObject):
             # 回到待机：一次性动作播完自然回，待机/移动中立即回
             if hasattr(self.win, "request_link_idle"):
                 self.win.request_link_idle()
-            elif hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles:
-                self.win._switch(self.win._pick(self.win.idles))
 
     # ------------------------------------------------------------------
     # 联动动作池（写代码/吃Token 交替为主，每第 3 次插播短摸鱼）
@@ -1714,9 +1712,6 @@ class AgentLinkManager(QObject):
                    for k, s in self._last_raw.items()):
             if hasattr(self.win, "request_link_idle"):
                 self.win.request_link_idle()
-            elif hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles \
-                    and hasattr(self.win, "_switch"):
-                self.win._switch(self.win._pick(self.win.idles))
             self._last_applied[agent_key] = ("idle", now)
         self._show_link_bubble(text, important=True)
 
