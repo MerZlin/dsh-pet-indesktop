@@ -254,14 +254,6 @@ class PetApp:
         """
         if self.win is not None:
             self.win._save_position()
-            # P3 复审：退出时关闭当前库（清治理器 + 取消预热 + 释放 clip
-            # 引用）；close 幂等，与 closeEvent 的调用重复触发无副作用。
-            _lib = getattr(self.win, 'lib', None)
-            if _lib is not None and hasattr(_lib, 'close'):
-                try:
-                    _lib.close()
-                except Exception:
-                    logging.exception('退出时关闭素材库失败')
         # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
         if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
             self.win.agent_link_manager.shutdown()
@@ -553,11 +545,6 @@ class PetApp:
         if old_win is not None:
             old_win.hide(notify=False)
             old_tray.hide() if old_tray is not None else None
-            # P3 复审：旧库显式关闭（清治理器 + 取消预热 + 释放 clip 引用），
-            # 旧角色缓存有确定的释放时点，不随 deleteLater 的异步时序悬置。
-            old_lib = getattr(old_win, 'lib', None)
-            if old_lib is not None and hasattr(old_lib, 'close'):
-                old_lib.close()
             QTimer.singleShot(0, old_win.deleteLater)
             if old_tray is not None:
                 QTimer.singleShot(0, old_tray.deleteLater)
@@ -614,12 +601,6 @@ class PetApp:
         old_win.hide(notify=False)
         if old_tray is not None:
             old_tray.hide()
-        # P3 复审：旧库显式关闭（清治理器 + 取消预热 + 释放 clip 引用），
-        # 旧角色缓存与后台预热有确定的释放/停止时点，连续 A->B->C 切换
-        # 不残留旧角色资源（P1-4/P1-5）。
-        old_lib = getattr(old_win, 'lib', None)
-        if old_lib is not None and hasattr(old_lib, 'close'):
-            old_lib.close()
         QTimer.singleShot(0, old_win.deleteLater)
         if old_tray is not None:
             QTimer.singleShot(0, old_tray.deleteLater)

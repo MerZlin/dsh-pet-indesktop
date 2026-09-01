@@ -208,7 +208,7 @@ def test_library_pause_warm_cancels_inflight_first_frame_warm(app, tmp_path, mon
     import pet.library as library_mod
 
     class CancelTrackingClip:
-        def __init__(self, path, parent=None, first_frame_cache=None):
+        def __init__(self, path, parent=None):
             self.path = Path(path)
             self.cancel_calls = 0
 

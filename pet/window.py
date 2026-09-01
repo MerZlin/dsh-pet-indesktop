@@ -4296,15 +4296,10 @@ class PetWindow(QWidget):
         self._clear_drag_move()  # 生命周期兜底：停拖拽合帧 timer、丢 pending
         self._position_sync_pending = False  # 丢弃 moveEvent 同帧合并的在途去抖
         self._speech_bubble.hide()
-        # 关闭即销毁：优先走库级关闭协议（清治理器 + 取消预热 + 释放 clip
-        # 引用）；旧桩库（仅 pause_warm）退化为原暂停语义（P3 复审 P1-4）。
+        # 关闭即销毁：暂停预热并对称释放交互让路闸门，避免库侧计数泄漏。
         lib = getattr(self, 'lib', None)
-        if lib is not None:
-            close = getattr(lib, 'close', None)
-            if callable(close):
-                close()
-            elif hasattr(lib, 'pause_warm'):
-                lib.pause_warm()
+        if lib is not None and hasattr(lib, 'pause_warm'):
+            lib.pause_warm()
         self._lock_press_active = False
         self._click_hold = False
         self._context_menu_open = False
