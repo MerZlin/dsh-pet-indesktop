@@ -223,8 +223,8 @@ def _make_opencode_db(path, rows):
 
 class TestOutboxPolicy:
     def test_outbox_never_drops_state_events(self, tmp_path):
-        """pause 期间 outbox 满：activity 丢最旧的，state 丢最旧的（被取代），
-        但连续重复状态去重、且不同状态序列的尾部（最新状态）一定保留。"""
+        """pause 期间 outbox 满：丢最旧的 activity；状态事件绝不丢
+        （无 activity 可丢时允许超容量——已去重，现实增长有界）。"""
         mon = _make_monitor(tmp_path)
         mon._running = True
         mon._paused = True  # 白盒模拟 pause 中（不真起线程）
