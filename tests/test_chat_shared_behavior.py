@@ -9,6 +9,7 @@
 """
 
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize
 
@@ -163,3 +164,32 @@ def test_clamp_fallback_tiny_available_stays_at_corner():
     pet = QRect(40, 20, 60, 40)
     point = best_position_near_pet(pet, QSize(400, 300), available)
     assert point == QPoint(0, 0)
+
+
+# ---------- 调用点契约（批6-6 盲审 P2，源码轻量断言） ----------
+# 钉的是调用契约而非行为：Legacy 调用点必须显式传 localize_time=False，
+# Modern 调用点必须走默认 True。这两类断言是本批例外允许的源码断言——
+# 直接断言 UI 调用点，防止未来重构时漏传/错传该旗标（纯函数行为测试
+# 无法覆盖调用点接线）。
+
+
+def _chat_src(module_name: str) -> str:
+    return (Path(__file__).resolve().parents[1] / "pet" / "chat" / f"{module_name}.py").read_text(encoding="utf-8")
+
+
+def test_legacy_call_sites_pass_localize_time_false():
+    """Legacy（legacy_widgets）所有 _short_title 调用点必须显式传 localize_time=False。"""
+    calls = [ln for ln in _chat_src("legacy_widgets").splitlines() if "_short_title(" in ln]
+    assert calls, "legacy_widgets.py 应存在 _short_title 调用点"
+    for ln in calls:
+        assert "localize_time=False" in ln, f"Legacy 调用点必须显式传 localize_time=False: {ln.strip()}"
+
+
+def test_modern_call_sites_use_default_localize_time_true():
+    """Modern（widgets）所有 _short_title 调用点不得传 localize_time，走默认 True。"""
+    calls = [ln for ln in _chat_src("widgets").splitlines() if "_short_title(" in ln]
+    assert calls, "widgets.py 应存在 _short_title 调用点"
+    for ln in calls:
+        assert "localize_time" not in ln, f"Modern 调用点不得传 localize_time（走默认 True）: {ln.strip()}"
+    # 默认值本身为 True（Modern 历史行为，见 utils.py 签名）。
+    assert "def _short_title(session, *, localize_time: bool = True)" in _chat_src("utils")

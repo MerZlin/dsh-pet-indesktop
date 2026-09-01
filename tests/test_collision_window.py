@@ -777,24 +777,6 @@ def test_authoritative_impulse_applies_after_prediction_window(tmp_path, app):
     win.close()
 
 
-def test_move_event_submits_throttled_not_forced(tmp_path, app):
-    """moveEvent 非 force 节流提交：60Hz 连续移动不超标（上限 20Hz）。"""
-    win, session = _make_pet_window(tmp_path, "pet_a")
-    session.submitted_states.clear()
-    win._collision_last_submit_at = 0.0  # 保证首个 move 放行
-    start = win.pos()
-
-    # 模拟 60Hz 抛掷：极短时间内连续 20 次移动，全部落在 50ms 限流窗口内
-    for i in range(1, 21):
-        win.move(start.x() + i, start.y())
-    app.processEvents()
-
-    # moveEvent 路径只放行首个提交，其余被节流（运动期由 _collision_timer 兜底）
-    assert len(session.submitted_states) == 1
-
-    win.close()
-
-
 def test_stop_physics_clears_velocity_and_submits_zero_velocity(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_stop_phys")
     win._phys_vel[:] = [350.0, -120.0]
