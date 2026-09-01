@@ -144,8 +144,12 @@ def test_stop_terminates_ffmpeg_process(app):
     clip.cleanup()
 
 
-def test_retired_pool_cap_blocks_new_reader_when_stuck(app):
-    """退役池满且无法回收（卡死 reader）时，拒绝启动新 reader（硬上限生效）。"""
+def test_start_never_blocks_gui_when_retired_reader_stuck(app):
+    """退役池有存活卡死 reader 时 start() 也不得阻塞 GUI（零等待回收）。
+
+    原设计：池未清空就拒绝启动新 reader（B7 一审）。实测回归：join 等待在
+    GUI 线程造成连点/快速切换卡顿。现契约：start 永远零等待推进，卡死的
+    退役 reader 由模块级管理器追踪回收，累积只记日志不阻塞。"""
     clip = _StuckReaderClip(SAMPLE_WEBM)
     clip.start()
     assert clip.reader_entered.wait(5.0), "卡死 reader 必须已进入"
@@ -153,19 +157,19 @@ def test_retired_pool_cap_blocks_new_reader_when_stuck(app):
     clip.stop()  # 退役卡死 reader（线程不退出）
     assert len(clip._retired) == 1
 
-    # 池满（1 个存活退役 reader）→ 拒绝启动新 reader，不产生累积
-    assert clip.start() is False, "退役池未清空时 start() 必须返回失败状态（可观测）"
-    assert clip._thread is None, "退役池未清空时不得启动新 reader"
-    assert clip._running is False
-    assert clip.spawn_count == 1, "卡死场景下不得再拉起新 reader"
-    assert len(clip._retired) == webm_clip_mod._MAX_RETIRED_READERS
+    import time as _t
+    t0 = _t.monotonic()
+    assert clip.start() is True, "退役池有存活 reader 也必须正常启动（不阻塞）"
+    assert _t.monotonic() - t0 < 0.2, "start() 绝不做有界 join（零等待）"
+    assert clip._running is True
+    assert clip.spawn_count == 2, "新 reader 正常拉起"
+    assert len(clip._retired) == 1, "卡死的旧 reader 保留追踪（不丢、不泄漏）"
 
-    # 放行后线程退出，池可回收
+    # 放行后线程退出，cleanup 回收
     clip.reader_release.set()
     clip._retired[0].thread.join(5.0)
-    assert not clip._retired[0].thread.is_alive()
+    clip.stop()
     clip.cleanup()
-    assert len(clip._retired) == 0
     app.processEvents()
 
 

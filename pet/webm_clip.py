@@ -390,20 +390,15 @@ class WebMClip(QObject):
                 survivors.append(r)
         self._retired = survivors
 
-    def _drain_retired(self) -> bool:
-        """start() 前清空退役池；返回 True 表示可安全启动新 reader。"""
-        self._reap_retired(join_timeout=_RECLAIM_JOIN_TIMEOUT)
-        return not self._retired
-
     def _enforce_retired_cap(self) -> None:
-        """退役池超过上限时强制回收最旧的 reader（join 快速返回）；病态场景
-        （join 超时仍存活）停止回收并保留追踪（进程已终止，线程退出由管道
-        EOF 驱动；不触碰 proc，理由同 _reap_retired）。"""
+        """退役池超过上限时回收已退出者（零等待 join；存活者保留追踪，
+        由模块级管理器持续重试）。绝不做有界 join——stop() 在 GUI 线程，
+        任何 join 等待都会变成用户可感知的卡顿（连点回归教训）。"""
         while len(self._retired) > _MAX_RETIRED_READERS:
             oldest = self._retired[0]
-            oldest.thread.join(timeout=_RECLAIM_JOIN_TIMEOUT)
+            oldest.thread.join(timeout=0)
             if oldest.thread.is_alive():
-                return  # 仍存活：保留追踪，池短暂超限（真实 reader 不会出现）
+                return  # 仍存活：保留追踪，池短暂超限（进程已终止，线程随管道 EOF 退出）
             self._retired.pop(0)
 
     @staticmethod
@@ -543,15 +538,16 @@ class WebMClip(QObject):
             self._reader_proc = None
         if stale_thread is not None:
             self._retired.append(_Reader(thread=stale_thread, proc=stale_proc))
-        # 清空退役池（丢弃已退出者；对存活者二次 terminate + 有界 join）。
-        # 池内仍有存活 reader（进程已终止仍不退出/卡死）时拒绝启动新 reader，
-        # 防止快速切换/损坏素材场景下线程与 ffmpeg 子进程无上限累积（B7）。
-        if not self._drain_retired():
+        # 退役池回收只做零等待（丢弃已退出者）；存活者已在 stop() 时 terminate，
+        # 其线程由管道 EOF 驱动退出、模块级管理器持续追踪。
+        # 绝不在这里 join 等待：join 会阻塞 GUI 线程，连点/快速切换动画时
+        # 每次都卡最多 0.5s（实测回归）。病态卡死的极端累积由日志可观测。
+        self._reap_retired(join_timeout=0)
+        if len(self._retired) > _MAX_RETIRED_READERS * 4:
             logger.warning(
-                'webm reader 退役池未清空（存在存活 reader），拒绝启动新 reader: %s',
-                self.path,
+                'webm reader 退役池异常累积（%d 个存活）：%s',
+                len(self._retired), self.path,
             )
-            return False
 
         # 在 GUI 线程读取真实 fps 后再启动 QTimer，保证新动画的实际帧率
         # 与播放速率计算一致；reader 线程只负责解码和入队。
