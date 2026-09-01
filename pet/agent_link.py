@@ -23,13 +23,15 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from .click_sound import play_sound, resolve_builtin_sound
@@ -397,7 +399,14 @@ class ByteOffsetTailer:
 
 
 class BaseAgentMonitor(QObject):
-    """Agent 监视器抽象基类。"""
+    """Agent 监视器抽象基类。
+
+    B9（性能计划）：文件/SQLite I/O 全部在后台 worker 线程执行——
+    GUI 线程的 QTimer 只负责唤醒 worker（_poll），worker 在后台完成读取、
+    解析、归一化后经 state_changed / activity 信号把结果投递回 GUI 线程
+    （AgentLinkManager 显式 QueuedConnection，跨线程安全）。
+    stop() 后 worker 退出且不再发任何信号（_emit_* 先查 _running 守卫）。
+    """
 
     state_changed = Signal(str, str)  # (agent_key, state)
     activity = Signal(str, str)       # (agent_key, 工具名) —— 过程汇报用，仅事件带工具名时发
@@ -414,6 +423,12 @@ class BaseAgentMonitor(QObject):
         self._timer.setInterval(1500)
         self._timer.timeout.connect(self._poll)
         self._tailer = ByteOffsetTailer(self.events_file)
+        # B9 后台轮询线程（I/O 移出 GUI 线程）：
+        # 控制事件按 worker 代次独立（stop 后旧 worker 只认自己的事件，不会串台）
+        self._worker_thread: threading.Thread | None = None
+        self._worker_tick = threading.Event()   # GUI→worker：有轮询任务
+        self._worker_stop = threading.Event()   # GUI→worker：停止退出
+        self._worker_done = threading.Event()   # worker→测试/停止：本轮处理完毕
 
     def is_running(self) -> bool:
         return self._running and not self._paused
@@ -423,6 +438,7 @@ class BaseAgentMonitor(QObject):
         self._paused = False
         self.events_dir.mkdir(parents=True, exist_ok=True)
         self._tailer.reset()
+        self._start_worker_thread()
         if not self._timer.isActive():
             self._timer.start()
         log.info("Agent 监视器 [%s] 已启动", self.agent_key)
@@ -431,6 +447,14 @@ class BaseAgentMonitor(QObject):
         self._running = False
         self._paused = False
         self._timer.stop()
+        # 通知后台线程退出；_emit_* 的 _running 检查保证 stop 后不再发信号
+        self._worker_stop.set()
+        self._worker_tick.set()
+        if self._worker_thread is not None:
+            self._worker_thread.join(timeout=2.0)
+            if self._worker_thread.is_alive():
+                log.warning("Agent 监视器 [%s] 后台线程未在 2s 内退出（轮询卡死？）", self.agent_key)
+        # 不置 None：下次 start() 按存活状态复用或重建
         log.info("Agent 监视器 [%s] 已停止", self.agent_key)
 
     def pause(self) -> None:
@@ -443,7 +467,64 @@ class BaseAgentMonitor(QObject):
             self._paused = False
             self._timer.start()
 
+    # ------------------------------------------------------------------
+    # B9 后台 worker：I/O + 归一化都在 worker 线程，GUI 线程只收信号
+    # ------------------------------------------------------------------
+    def _start_worker_thread(self) -> None:
+        """启动（或复用）后台轮询线程。
+
+        上一代 worker 正常服役时直接复用；已退出或正在收尾（stop 已置位）
+        时等它结束再换代。控制事件按代次重建，旧 worker 持有自己的事件，
+        不会和新代 worker 串台。"""
+        thread = self._worker_thread
+        if thread is not None and thread.is_alive() and not self._worker_stop.is_set():
+            return  # 现有 worker 正常服役中
+        if thread is not None:
+            thread.join(timeout=2.0)  # 等旧代退出（含 stop 后的收尾）
+        self._worker_stop = threading.Event()
+        self._worker_tick = threading.Event()
+        self._worker_done = threading.Event()
+        self._worker_thread = threading.Thread(
+            target=self._worker_loop,
+            args=(self._worker_stop, self._worker_tick, self._worker_done),
+            name=f"agent-monitor-{self.agent_key}",
+            daemon=True,
+        )
+        self._worker_thread.start()
+
+    def _worker_loop(self, stop_evt: threading.Event, tick_evt: threading.Event,
+                     done_evt: threading.Event) -> None:
+        """worker 线程主循环：等 tick → 执行一轮 _poll_worker → 通知完成。"""
+        try:
+            while not stop_evt.is_set():
+                if not tick_evt.wait(timeout=0.25):
+                    continue  # 定时醒来只为检查 stop，无任务则继续等
+                tick_evt.clear()
+                if stop_evt.is_set():
+                    break
+                try:
+                    self._poll_worker()
+                except Exception:
+                    log.exception("Agent 监视器 [%s] 后台轮询异常", self.agent_key)
+                done_evt.set()
+        finally:
+            self._close_worker_resources()
+
+    def _close_worker_resources(self) -> None:
+        """worker 线程退出前释放资源（子类覆写，如 OpenCode 只读连接）。"""
+        return None
+
     def _poll(self) -> None:
+        """GUI 线程入口（QTimer 槽）：只唤醒后台 worker，I/O 全部在 worker 线程。"""
+        if self._running and self._worker_thread is not None and self._worker_thread.is_alive():
+            self._worker_done.clear()
+            self._worker_tick.set()
+
+    def _poll_worker(self) -> None:
+        """后台线程：读取事件源并发出归一化信号（子类覆写扩展）。
+
+        只应在 worker 线程（或测试同步 seam）中执行；本方法包含全部
+        文件 I/O 与解析，任何信号都经 _emit_* 发出（stop 后静默）。"""
         lines = self._tailer.read_new_lines()
         for line in lines:
             try:
@@ -454,13 +535,25 @@ class BaseAgentMonitor(QObject):
                 st = str(data.get("state", ""))
                 tool = str(data.get("tool", "") or "").strip()
                 if tool:
-                    self.activity.emit(self.agent_key, tool)
+                    self._emit_activity(tool)
                 normalized = normalize_event_state(ev, st)
                 if not normalized:
                     continue  # 不认识的事件类型：忽略，不误报为 working
-                self.state_changed.emit(self.agent_key, normalized)
+                self._emit_state(normalized)
             except Exception:
                 pass
+
+    def _emit_state(self, state: str) -> None:
+        """发状态信号；stop 后（_running=False）后台线程不得再发。"""
+        if not self._running:
+            return
+        self.state_changed.emit(self.agent_key, state)
+
+    def _emit_activity(self, tool: str) -> None:
+        """发过程汇报信号；stop 后（_running=False）后台线程不得再发。"""
+        if not self._running:
+            return
+        self.activity.emit(self.agent_key, tool)
 
 
 # ----------------------------------------------------------------------
@@ -852,15 +945,19 @@ class CursorMonitor(BaseAgentMonitor):
         self._scan_interval = 30.0  # 目录发现降频：30s 一次（tail 仍 1.5s）
         self._last_scan = 0.0
 
-    def _poll(self) -> None:
+    def _poll_worker(self) -> None:
+        """后台线程：统一 jsonl + Cursor transcript 扫描与增量 tail。
+
+        目录递归 glob+stat 全部在 worker 线程执行（B9），GUI 线程只收信号；
+        目录发现仍按 30s 降频，tail 仍随 1.5s 定时器节奏。"""
         # 首先检查统一 jsonl
-        super()._poll()
+        super()._poll_worker()
 
         if not self.cursor_base.is_dir():
             return
 
         now = time.time()
-        # 目录发现降频：避免每 1.5s 在主线程递归 glob 整个 projects 目录。
+        # 目录发现降频：避免每 1.5s 递归 glob 整个 projects 目录。
         # 已知边界：新出现的 transcript 文件最长 30s 才被纳入 tail，
         # 其 backfill 防护会跳到文件末尾——发现间隙内写入的事件会错过（可接受）。
         if now - self._last_scan >= self._scan_interval:
@@ -893,11 +990,11 @@ class CursorMonitor(BaseAgentMonitor):
                         continue
                     tool = cursor_line_tool(data)
                     if tool:
-                        self.activity.emit("cursor", tool)
+                        self._emit_activity(tool)
                     norm = cursor_line_state(data)
                     if not norm:
                         continue  # 未知 transcript 行类型：忽略
-                    self.state_changed.emit("cursor", norm)
+                    self._emit_state(norm)
                 except Exception:
                     pass
 
@@ -908,6 +1005,10 @@ class OpenCodeMonitor(BaseAgentMonitor):
     直接只读 OpenCode 本地 SQLite 事件库（~/.local/share/opencode/opencode.db
     的 event 表，rowid 偏移增量轮询）——**无需安装任何插件**。
     同时保留统一 jsonl 通道（agent-events/opencode.jsonl）作为兼容路径。
+
+    B9：SQLite 连接与查询全部在后台 worker 线程；只读连接常驻复用
+    （不必每轮 connect/close）；库文件被删/损坏/轮换时优雅降级——
+    关闭连接、标记未就绪，等文件恢复后自动重连并重新 backfill。
     """
 
     def __init__(self, config_dir: Path, parent=None, db_path: Path | None = None) -> None:
@@ -917,68 +1018,107 @@ class OpenCodeMonitor(BaseAgentMonitor):
         )
         self._last_rowid: int = 0
         self._db_ready: bool = False
+        # B9 常驻只读连接（worker 线程独占，避免每轮 connect/close）
+        self._db: Any = None
+        self._db_file_id: tuple[int, ...] | None = None  # 同路径文件身份（识别轮转/重建）
 
     def start(self) -> None:
         self._db_ready = False
+        self._last_rowid = 0
         super().start()
 
-    def _poll(self) -> None:
-        # 统一 jsonl 通道（兼容未来插件/手动注入）
-        super()._poll()
+    def _close_worker_resources(self) -> None:
+        """worker 线程退出前释放常驻连接。"""
+        self._close_db()
 
-        if not self.db_path.is_file():
-            return
-        import sqlite3
-
-        try:
-            # 只读连接；WAL 模式下只读不阻塞 OpenCode 写入
-            db = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+    def _close_db(self) -> None:
+        """关闭只读连接并复位就绪态（文件被删/损坏/轮换后重连 + backfill）。"""
+        db, self._db = self._db, None
+        self._db_file_id = None
+        self._db_ready = False
+        if db is not None:
             try:
-                if not self._db_ready:
-                    # backfill 防护：启动时跳到当前末尾，不回放历史事件
-                    self._last_rowid = db.execute(
-                        "SELECT COALESCE(MAX(rowid), 0) FROM event"
-                    ).fetchone()[0]
-                    self._db_ready = True
-                    return
-                rows = db.execute(
-                    "SELECT rowid, type, data FROM event WHERE rowid > ? ORDER BY rowid LIMIT 200",
-                    (self._last_rowid,),
-                ).fetchall()
-                # 子代理（task）会话过滤：opencode 给每个子代理开独立 session
-                # （session.parent_id 非空），其 step-start/step-finish 会随主会话
-                # 事件一起进 event 表，不过滤的话每派发/完成一个子代理就触发一次
-                # busy→idle，把「任务完成」气泡刷爆。批量查一次本批事件的会话归属。
-                session_ids: set[str] = set()
-                parsed: list[tuple[int, str, dict]] = []
-                for rowid, ev_type, data_raw in rows:
-                    try:
-                        data = json.loads(str(data_raw))
-                    except (ValueError, TypeError):
-                        continue
-                    if not isinstance(data, dict):
-                        continue
-                    sid = str(data.get("sessionID") or "")
-                    if sid:
-                        session_ids.add(sid)
-                    parsed.append((int(rowid), str(ev_type), data))
-                root_sessions: dict[str, bool] = {}
-                if session_ids:
-                    try:
-                        marks = ",".join("?" * len(session_ids))
-                        for sid, parent_id in db.execute(
-                            f"SELECT id, parent_id FROM session WHERE id IN ({marks})",
-                            tuple(session_ids),
-                        ):
-                            root_sessions[str(sid)] = parent_id is None
-                    except Exception:
-                        # 老库没有 session 表等异常：全部当主会话（保守不丢事件）
-                        root_sessions = {}
-            finally:
                 db.close()
-        except Exception as exc:
-            log.debug("OpenCode sqlite 读取异常: %s", exc)
+            except Exception:
+                pass
+
+    def _poll_worker(self) -> None:
+        # 统一 jsonl 通道（兼容未来插件/手动注入）
+        super()._poll_worker()
+        self._poll_sqlite()
+
+    def _poll_sqlite(self) -> None:
+        """后台线程：常驻只读连接增量查询 OpenCode event 表。
+
+        子代理（task）会话过滤保留在读取层（见下）——opencode 给每个子代理
+        开独立 session（session.parent_id 非空），其 step-start/step-finish
+        会随主会话事件一起进 event 表，不过滤的话每派发/完成一个子代理就
+        触发一次 busy→idle，把「任务完成」气泡刷爆。"""
+        if not self.db_path.is_file():
+            self._close_db()   # 文件被删：关闭连接，等文件恢复后重连
             return
+        try:
+            st = self.db_path.stat()
+        except OSError:
+            self._close_db()
+            return
+        # 文件身份识别（同 ByteOffsetTailer）：Windows 用 (ino, ctime_ns)，
+        # POSIX 用 (dev, ino)；识别同路径轮转/重建的新文件
+        if os.name == "nt":
+            file_id = (st.st_ino, st.st_ctime_ns)
+        else:
+            file_id = (st.st_dev, st.st_ino)
+        if self._db is not None and file_id != self._db_file_id:
+            self._close_db()   # 同路径文件被替换：旧连接作废
+        try:
+            if self._db is None:
+                # 只读连接常驻复用；WAL 模式下只读不阻塞 OpenCode 写入
+                self._db = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+                self._db_file_id = file_id
+                self._db_ready = False   # 新连接必须重新 backfill
+            if not self._db_ready:
+                # backfill 防护：启动/恢复时跳到当前末尾，不回放历史事件
+                self._last_rowid = self._db.execute(
+                    "SELECT COALESCE(MAX(rowid), 0) FROM event"
+                ).fetchone()[0]
+                self._db_ready = True
+                return
+            rows = self._db.execute(
+                "SELECT rowid, type, data FROM event WHERE rowid > ? ORDER BY rowid LIMIT 200",
+                (self._last_rowid,),
+            ).fetchall()
+        except Exception as exc:
+            # 库文件损坏/被并发写坏：关连接标记未就绪，下轮自动重连
+            log.debug("OpenCode sqlite 读取异常，将关闭重连: %s", exc)
+            self._close_db()
+            return
+
+        # 批量解析本批事件，收集会话归属
+        session_ids: set[str] = set()
+        parsed: list[tuple[int, str, dict]] = []
+        for rowid, ev_type, data_raw in rows:
+            try:
+                data = json.loads(str(data_raw))
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            sid = str(data.get("sessionID") or "")
+            if sid:
+                session_ids.add(sid)
+            parsed.append((int(rowid), str(ev_type), data))
+        root_sessions: dict[str, bool] = {}
+        if session_ids:
+            try:
+                marks = ",".join("?" * len(session_ids))
+                for sid, parent_id in self._db.execute(
+                    f"SELECT id, parent_id FROM session WHERE id IN ({marks})",
+                    tuple(session_ids),
+                ):
+                    root_sessions[str(sid)] = parent_id is None
+            except Exception:
+                # 老库没有 session 表等异常：全部当主会话（保守不丢事件）
+                root_sessions = {}
 
         for rowid, ev_type, data in parsed:
             self._last_rowid = max(self._last_rowid, rowid)
@@ -989,10 +1129,10 @@ class OpenCodeMonitor(BaseAgentMonitor):
             data_raw = json.dumps(data)
             state = opencode_event_state(ev_type, data_raw)
             if state:
-                self.state_changed.emit("opencode", state)
+                self._emit_state(state)
             tool = opencode_event_tool(ev_type, data_raw)
             if tool:
-                self.activity.emit("opencode", tool)
+                self._emit_activity(tool)
 
 
 class CustomAgentMonitor(BaseAgentMonitor):
@@ -1014,6 +1154,7 @@ class CustomAgentMonitor(BaseAgentMonitor):
         self._running = True
         self._paused = False
         self._tailer.reset()
+        self._start_worker_thread()
         if not self._timer.isActive():
             self._timer.start()
         log.info("Agent 监视器 [%s] 已启动 (%s)", self.agent_key, self.events_file)
@@ -1099,8 +1240,11 @@ class AgentLinkManager(QObject):
             self.agent_names[key] = str(item.get("name") or key)
 
         for mon in self.monitors.values():
-            mon.state_changed.connect(self._on_agent_state)
-            mon.activity.connect(self._on_agent_activity)
+            # 监视器信号由后台 worker 线程发出：显式 QueuedConnection 保证
+            # 跨线程投递到 GUI 线程（AutoConnection 在跨线程时也是 queued，
+            # 这里显式声明，杜绝任何同线程直连的歧义）
+            mon.state_changed.connect(self._on_agent_state, Qt.ConnectionType.QueuedConnection)
+            mon.activity.connect(self._on_agent_activity, Qt.ConnectionType.QueuedConnection)
         self.install_finished.connect(self._on_install_finished)
         # 联动动作链：一次性动作播完后若仍有 Agent 在忙，由 window 回调取下一个动作
         if hasattr(self.win, "_pending_link_anim"):
@@ -1228,7 +1372,6 @@ class AgentLinkManager(QObject):
                 # 菜单先回弹，安装完成后自动开启并气泡告知
                 if hasattr(self.win, "show_bubble"):
                     self.win.show_bubble("正在安装 DSH 桥接插件…", duration_ms=4000)
-                import threading
                 threading.Thread(
                     target=self._install_dsh_worker, daemon=True, name="dsh-bridge-install",
                 ).start()

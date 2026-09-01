@@ -8,11 +8,13 @@
 - AgentLinkManager 生命周期与 pause / resume；
 - 状态变更触发桌宠行为与气泡反馈；
 - Claude Code 确认框逻辑（拒绝则不写入 hooks）；
+- B9：监视器 I/O 后台线程化（事件/屏障同步，不用 sleep 猜时序）。
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -28,6 +30,7 @@ from pet.agent_link import (
     CursorMonitor,
     CustomAgentMonitor,
     DshMonitor,
+    OpenCodeMonitor,
     normalize_event_state,
 )
 from pet.config import Config
@@ -194,15 +197,17 @@ class TestRealFileTailEndToEnd:
         mon = CursorMonitor(cfg_dir, base_dir=tmp_path / ".cursor" / "projects")
         mon.state_changed.connect(lambda k, s: received_states.append((k, s)))
 
-        mon.start()
-        mon._poll()  # 初始化 tailer
+        # B9 同步 seam：直接跑 worker 主体（后台轮询线程执行的同一段代码），
+        # 不启动定时器/后台线程，测试完全确定、无时序抖动
+        mon._running = True
+        mon._poll_worker()  # 初始化 tailer
 
         # 模拟 Cursor 追加写入事件行
         with open(transcript_file, "a", encoding="utf-8") as f:
             f.write(json.dumps({"type": "PreToolUse"}) + "\n")
             f.write(json.dumps({"type": "Stop"}) + "\n")
 
-        mon._poll()
+        mon._poll_worker()
 
         assert len(received_states) == 2
         assert received_states[0] == ("cursor", "working")
@@ -525,8 +530,9 @@ class TestOpenCodeSqliteTail:
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
         mon.state_changed.connect(lambda k, s: received.append(s))
-        mon.start()
-        mon._poll()  # 首次 = backfill，不产生事件
+        # B9 同步 seam：直接跑 worker 主体（含常驻只读连接 + 增量查询）
+        mon._running = True
+        mon._poll_worker()  # 首次 = backfill，不产生事件
         assert received == []
 
         db = sqlite3.connect(db_path)
@@ -536,7 +542,7 @@ class TestOpenCodeSqliteTail:
         db.commit()
         db.close()
 
-        mon._poll()
+        mon._poll_worker()
         assert received == ["thinking", "working"]  # session.updated 被忽略
         mon.stop()
 
@@ -1281,9 +1287,10 @@ class TestActivitySignal:
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()  # 先建空文件，backfill 才能落到末尾
         mon._tailer.read_new_lines()  # backfill 初始化
+        mon._running = True  # B9 同步 seam
         with mon.events_file.open("a", encoding="utf-8") as fh:
             fh.write('{"ts":1,"agent":"dsh","event":"tool/call","tool":"bash"}\n')
-        mon._poll()
+        mon._poll_worker()
         assert got == [("dsh", "bash")]
         assert states == []
 
@@ -1297,9 +1304,10 @@ class TestActivitySignal:
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()
         mon._tailer.read_new_lines()
+        mon._running = True  # B9 同步 seam
         with mon.events_file.open("a", encoding="utf-8") as fh:
             fh.write('{"ts":1,"agent":"dsh","event":"AgentStatus","state":"working"}\n')
-        mon._poll()
+        mon._poll_worker()
         assert got == []
 
     class _HiddenWin:
@@ -1399,8 +1407,9 @@ class TestOpenCodeSubagentFilter:
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
         mon.state_changed.connect(lambda k, s: received.append(s))
         mon.activity.connect(lambda k, t: tools.append(t))
-        mon.start()
-        mon._poll()  # backfill
+        # B9 同步 seam：直接跑 worker 主体（子代理过滤保留在读取层）
+        mon._running = True
+        mon._poll_worker()  # backfill
 
         db = sqlite3.connect(db_path)
         db.execute("INSERT INTO event VALUES ('c', 1, 'message.part.updated.1', "
@@ -1411,7 +1420,7 @@ class TestOpenCodeSubagentFilter:
                    "'{\"sessionID\":\"child1\",\"part\":{\"type\":\"step-finish\"}}')")
         db.commit()
         db.close()
-        mon._poll()
+        mon._poll_worker()
         assert received == [] and tools == []  # 子代理全程静默
 
         # 主会话正常报
@@ -1420,7 +1429,7 @@ class TestOpenCodeSubagentFilter:
                    "'{\"sessionID\":\"root1\",\"part\":{\"type\":\"step-start\"}}')")
         db.commit()
         db.close()
-        mon._poll()
+        mon._poll_worker()
         assert received == ["working"]
         mon.stop()
 
@@ -1441,14 +1450,15 @@ class TestOpenCodeSubagentFilter:
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
         mon.state_changed.connect(lambda k, s: received.append(s))
-        mon.start()
-        mon._poll()
+        # B9 同步 seam
+        mon._running = True
+        mon._poll_worker()
         db = sqlite3.connect(db_path)
         db.execute("INSERT INTO event VALUES ('s1', 1, 'message.part.updated.1', "
                    "'{\"sessionID\":\"x\",\"part\":{\"type\":\"step-start\"}}')")
         db.commit()
         db.close()
-        mon._poll()
+        mon._poll_worker()
         assert received == ["working"]
         mon.stop()
 
@@ -1546,15 +1556,16 @@ class TestCustomAgentMonitor:
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(events))
         mon.state_changed.connect(lambda k, s: states.append((k, s)))
         mon.activity.connect(lambda k, t: tools.append((k, t)))
-        mon.start()
-        mon._poll()  # backfill 初始化
+        # B9 同步 seam：直接跑 worker 主体
+        mon._running = True
+        mon._poll_worker()  # backfill 初始化
 
         with open(events, "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": 1.0, "state": "working"}) + "\n")
             f.write(json.dumps({"ts": 2.0, "event": "PreToolUse", "tool": "bash"}) + "\n")
             f.write(json.dumps({"ts": 3.0, "state": "idle"}) + "\n")
 
-        mon._poll()
+        mon._poll_worker()
         # PreToolUse 事件按内置映射同时产生 working 状态 + bash 工具过程
         assert states == [("gemini", "working"), ("gemini", "working"), ("gemini", "idle")]
         assert tools == [("gemini", "bash")]
@@ -1567,18 +1578,19 @@ class TestCustomAgentMonitor:
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(missing))
         states = []
         mon.state_changed.connect(lambda k, s: states.append((k, s)))
-        mon.start()
-        mon._poll()
-        mon._poll()
+        # B9 同步 seam
+        mon._running = True
+        mon._poll_worker()
+        mon._poll_worker()
         assert states == []
 
         missing.write_text('{"state": "working"}\n', encoding="utf-8")
-        mon._poll()  # 首次发现文件：backfill，不回放历史
+        mon._poll_worker()  # 首次发现文件：backfill，不回放历史
         assert states == []
 
         with open(missing, "a", encoding="utf-8") as f:
             f.write('{"state": "idle"}\n')
-        mon._poll()
+        mon._poll_worker()
         assert states == [("gemini", "idle")]
         mon.stop()
 
@@ -1588,8 +1600,9 @@ class TestCustomAgentMonitor:
         mon = CustomAgentMonitor(
             "gemini", tmp_path / "cfg", str(tmp_path / "deep" / "nested" / "ev.jsonl"),
         )
-        mon.start()
-        mon._poll()
+        # B9 同步 seam：只读监听不创建目录（不启动定时器/后台线程）
+        mon._running = True
+        mon._poll_worker()
         assert not (tmp_path / "deep").exists()
         mon.stop()
 
@@ -1694,3 +1707,348 @@ class TestCustomAgentMenu:
             assert toggles == [("gemini", True)]
         finally:
             menu.deleteLater()
+
+
+# ============================================================================
+# B9：监视器 I/O 移出 GUI 线程（后台 worker + 跨线程 QueuedConnection）
+# ============================================================================
+class TestMonitorBackgroundPolling:
+    """B9 硬约束验证（全部事件/屏障同步，不用 sleep 猜时序）：
+
+    1. 文件/SQLite I/O 在后台线程执行，GUI 线程只收归一化信号；
+    2. 跨线程信号走 QueuedConnection（事件循环不跑则信号不送达）；
+    3. stop 后后台线程退出且不再发信号（_emit_* 的 _running 守卫）；
+    4. pause/resume 语义不变，worker 全程存活供 resume 立即恢复；
+    5. OpenCode 只读连接常驻复用；库文件被删/损坏后优雅降级并自动恢复；
+    6. 子代理会话过滤保留在读取层（后台轮询路径同样不产生信号）。
+    """
+
+    @staticmethod
+    def _app():
+        return QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _write_event(mon, line: str) -> None:
+        with open(mon.events_file, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+    def test_io_runs_on_worker_thread_and_signal_is_queued(self, tmp_path, monkeypatch):
+        """I/O（read_new_lines）执行线程 ≠ MainThread；worker 完成读取后信号排队，
+        不跑事件循环则不送达（跨线程 QueuedConnection），processEvents 后送达。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+
+        io_threads = []
+        orig_read = ByteOffsetTailer.read_new_lines
+
+        def recording_read(self_, *args, **kwargs):
+            io_threads.append(threading.current_thread().name)
+            return orig_read(self_, *args, **kwargs)
+
+        monkeypatch.setattr(ByteOffsetTailer, "read_new_lines", recording_read)
+
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append((k, s)))
+        mon.start()
+        try:
+            mon._poll()                       # tick1：backfill
+            assert mon._worker_done.wait(5)   # 屏障：worker 已完成本轮
+            assert io_threads and io_threads[0] != "MainThread"
+            assert received == []
+
+            self._write_event(mon, '{"event": "PreToolUse"}')
+            mon._poll()                       # tick2：读取新行
+            assert mon._worker_done.wait(5)   # 屏障：读取完成
+            # 事件循环尚未运行 → 跨线程信号仍排队（QueuedConnection 行为）
+            assert received == []
+            app.processEvents()               # 事件循环：交付排队信号
+            assert received == [("dsh", "working")]
+        finally:
+            mon.stop()
+
+    def test_stop_suppresses_all_further_signals(self, tmp_path):
+        """stop 后后台线程退出；worker 主体即使被直接调用也不再发信号。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append((k, s)))
+        mon.start()
+        try:
+            mon._poll()                       # tick1：backfill（写文件之前）
+            assert mon._worker_done.wait(5)
+            self._write_event(mon, '{"event": "PreToolUse"}')
+            mon._poll()                       # tick2：读取新行
+            assert mon._worker_done.wait(5)
+            app.processEvents()
+            assert received == [("dsh", "working")]
+
+            mon.stop()
+            assert mon._worker_thread is not None
+            mon._worker_thread.join(5)            # 屏障：等后台线程真正退出
+            assert not mon._worker_thread.is_alive()
+
+            self._write_event(mon, '{"event": "Stop"}')
+            mon._poll_worker()                    # 直接跑 worker 主体
+            app.processEvents()
+            assert received == [("dsh", "working")]   # 不再新增
+        finally:
+            mon.stop()
+
+    def test_emit_guard_blocks_after_stop(self, tmp_path):
+        """_emit_* 的 _running 守卫：stop（_running=False）后任何发射路径都被拦截。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        got = []
+        mon.state_changed.connect(lambda k, s: got.append(s))
+        mon._running = True
+        mon._emit_state("working")
+        assert got == ["working"]
+        mon._running = False      # 模拟 stop() 之后
+        mon._emit_state("idle")
+        mon._emit_activity("bash")
+        assert got == ["working"]
+
+    def test_pause_halts_scheduling_resume_restores(self, tmp_path):
+        """pause/resume 语义不变：pause 停定时器（不再调度轮询），
+        resume 恢复；后台 worker 全程存活，resume 立即恢复。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.start()
+        try:
+            assert mon.is_running() is True
+            assert mon._timer.isActive()
+            worker = mon._worker_thread
+            assert worker is not None and worker.is_alive()
+
+            mon.pause()
+            assert mon.is_running() is False
+            assert not mon._timer.isActive()
+            assert worker.is_alive()          # worker 保留，resume 无需重启
+
+            mon.resume()
+            assert mon.is_running() is True
+            assert mon._timer.isActive()
+            assert mon._worker_thread is worker
+        finally:
+            mon.stop()
+
+    def test_stop_then_start_restarts_worker(self, tmp_path):
+        """stop 后 start 重建后台线程（新代 worker），监控恢复正常。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.start()
+        try:
+            mon._poll()                        # backfill
+            assert mon._worker_done.wait(5)
+            first_worker = mon._worker_thread
+            assert first_worker is not None
+
+            mon.stop()
+            first_worker.join(5)               # 屏障：第一代 worker 退出
+            assert not first_worker.is_alive()
+
+            mon.start()                        # 重启 → 新代 worker
+            assert mon._worker_thread is not first_worker
+            mon._poll()                        # backfill（跳过旧行）
+            assert mon._worker_done.wait(5)
+            self._write_event(mon, '{"event": "PreToolUse"}')
+            mon._poll()
+            assert mon._worker_done.wait(5)
+            app.processEvents()
+            assert received == ["working"]     # 重启后监控恢复正常
+        finally:
+            mon.stop()
+
+    def test_manager_receives_monitor_signals_via_queued_connection(self, tmp_path):
+        """AgentLinkManager 对监视器信号显式 QueuedConnection：
+        即使同线程发射也不立即送达，必须跑事件循环。"""
+        app = self._app()
+        switched = []
+
+        class DummyWin:
+            cats = {"acts": ["写代码"]}
+            idles = ["待机呼吸"]
+
+            def isVisible(self):
+                return True
+
+            def request_link_anim(self, name):
+                switched.append(name)
+
+            def request_link_idle(self):
+                pass
+
+            def _switch(self, name):
+                pass
+
+            def _pick(self, lst):
+                return lst[0]
+
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(DummyWin(), cfg, min_interval=0.0)
+        mon = mgr.monitors["dsh"]
+        # 模拟后台线程产出归一化结果：发射监视器信号
+        mon.state_changed.emit("dsh", "working")
+        assert switched == []          # 未送达（QueuedConnection 排队中）
+        app.processEvents()            # 事件循环 → 送达
+        assert switched == ["写代码"]
+
+    def test_opencode_connection_reused_across_polls(self, tmp_path, monkeypatch):
+        """OpenCode 只读连接常驻复用：多轮轮询只 connect 一次。"""
+        import sqlite3
+
+        app = self._app()
+        db_path = tmp_path / "opencode.db"
+        real_connect = sqlite3.connect
+        db = real_connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.commit()
+        db.close()
+
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        calls = []
+
+        def counting_connect(*a, **kw):
+            calls.append(a)
+            return real_connect(*a, **kw)
+
+        monkeypatch.setattr(agent_link.sqlite3, "connect", counting_connect)
+
+        mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        # B9 同步 seam
+        mon._running = True
+        mon._poll_worker()   # backfill：首次连接
+        assert len(calls) == 1
+
+        db = real_connect(db_path)   # 测试侧写入用原始 connect，不影响计数
+        db.execute("INSERT INTO event VALUES ('s1', 1, 'message.updated.1', "
+                   "'{\"info\":{\"role\":\"user\"}}')")
+        db.commit()
+        db.close()
+        mon._poll_worker()
+        mon._poll_worker()
+        assert len(calls) == 1            # 常驻复用，不再 connect/close
+        assert received == ["thinking"]
+        mon.stop()
+
+    def test_opencode_db_corruption_and_deletion_recovery(self, tmp_path):
+        """库文件损坏/被删：优雅降级（关连接、标记未就绪），
+        文件恢复后自动重连 + backfill（不重放历史），增量正常。"""
+        import sqlite3
+
+        app = self._app()
+        db_path = tmp_path / "opencode.db"
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.commit()
+        db.close()
+
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        # B9 同步 seam
+        mon._running = True
+
+        mon._poll_worker()   # backfill
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('s1', 1, 'message.updated.1', "
+                   "'{\"info\":{\"role\":\"user\"}}')")
+        db.commit()
+        db.close()
+        mon._poll_worker()
+        assert received == ["thinking"]
+
+        # 损坏：先关连接（释放句柄，Windows 上才能覆写/删除），再写垃圾字节
+        mon._close_db()
+        db_path.write_bytes(b"this is not a sqlite database at all")
+        mon._poll_worker()                       # 重连读到垃圾 → 优雅降级
+        assert mon._db is None
+        assert mon._db_ready is False
+        assert received == ["thinking"]          # 无新事件
+
+        # 删除：文件不存在时空转，不抛异常
+        db_path.unlink()
+        mon._poll_worker()
+        assert mon._db is None
+
+        # 重建新库：自动重连 + backfill（历史不回放），随后增量正常
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.execute("INSERT INTO event VALUES ('s1', 1, 'message.updated.1', "
+                   "'{\"info\":{\"role\":\"user\"}}')")
+        db.commit()
+        db.close()
+        mon._poll_worker()                       # 重连 + backfill
+        assert received == ["thinking"]          # 历史不回放
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('s1', 2, 'message.part.updated.1', "
+                   "'{\"part\":{\"type\":\"step-start\"}}')")
+        db.commit()
+        db.close()
+        mon._poll_worker()
+        assert received == ["thinking", "working"]
+        mon.stop()
+
+    def test_opencode_subagent_filter_applies_in_background_poll(self, tmp_path):
+        """子代理会话过滤保留在读取层：后台轮询路径同样过滤，不发信号。"""
+        import sqlite3
+
+        app = self._app()
+        db_path = tmp_path / "opencode.db"
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.execute("CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT)")
+        db.execute("INSERT INTO session VALUES ('root1', NULL)")
+        db.execute("INSERT INTO session VALUES ('child1', 'root1')")
+        db.commit()
+        db.close()
+
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.start()
+        try:
+            mon._poll()                        # backfill
+            assert mon._worker_done.wait(5)
+
+            db = sqlite3.connect(db_path)
+            db.execute("INSERT INTO event VALUES ('c', 1, 'message.part.updated.1', "
+                       "'{\"sessionID\":\"child1\",\"part\":{\"type\":\"step-start\"}}')")
+            db.commit()
+            db.close()
+            mon._poll()                        # 子代理事件：读取层过滤
+            assert mon._worker_done.wait(5)
+            app.processEvents()
+            assert received == []              # 后台路径同样静默
+
+            db = sqlite3.connect(db_path)
+            db.execute("INSERT INTO event VALUES ('r', 2, 'message.part.updated.1', "
+                       "'{\"sessionID\":\"root1\",\"part\":{\"type\":\"step-start\"}}')")
+            db.commit()
+            db.close()
+            mon._poll()                        # 主会话正常报
+            assert mon._worker_done.wait(5)
+            app.processEvents()
+            assert received == ["working"]
+        finally:
+            mon.stop()
