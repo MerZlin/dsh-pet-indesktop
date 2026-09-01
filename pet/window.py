@@ -55,6 +55,7 @@ from .config import (
     _float_or_default,
 )
 from .library import MovieLibrary
+from .frame_cache import FRAME_CACHE_DEFAULT_MAX_BYTES, FramePixmapCache
 from .animation_thumbnail import decode_representative_frame, representative_frame_index
 from .speech_bubble import PetSpeechBubble, list_self_talk_images
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
@@ -621,6 +622,17 @@ class PetWindow(QWidget):
         # 已重建帧的输入签名（movie 身份、帧号、朝向、动画、缩放、DPR）：
         # 相同签名重复 rebuild 时整条 toImage/镜像/缩放/转换链直接跳过
         self._frame_key: tuple | None = None
+        # 预缩放成品帧缓存（方案 A §3.1）：同一动画同一帧在相同
+        # (素材路径+mtime, 帧号, 朝向, scale, DPR, 动画名) 下结果确定，
+        # 循环播放直接复用最终 QPixmap，跳过整条 CPU 转换链。
+        # 字节预算默认 256MB（可用 frame_cache_max_bytes 配置覆盖），
+        # 超限逐出最久未用；scale/DPR/角色/素材变化由 key 自动失效。
+        try:
+            _budget = int(self.cfg.get('frame_cache_max_bytes',
+                                       FRAME_CACHE_DEFAULT_MAX_BYTES))
+        except (TypeError, ValueError):
+            _budget = FRAME_CACHE_DEFAULT_MAX_BYTES
+        self._frame_cache = FramePixmapCache(_budget)
         self._input_controller: WindowsPerPixelInputController | None = None
         if os.name == "nt":
             self._input_controller = WindowsPerPixelInputController(self)
@@ -2002,12 +2014,49 @@ class PetWindow(QWidget):
             self.movie.stop()  # 停在最后一帧，等 _on_anim_ended 切走
             self._on_anim_ended(name)
 
+    def _frame_cache_key(self, frame_n: int | None, dpr: float) -> tuple:
+        """预缩放缓存的 key：素材路径+mtime、帧号、朝向、动画名、scale、DPR。
+
+        任意一项变化都会命中不同条目（scale/DPR/角色切换/素材文件变化
+        由此自动失效）；镜像决策（facing + no_mirror）也进 key，避免
+        文字动画朝右与朝左共用条目。
+        """
+        path: str | None = None
+        mtime = 0
+        path_getter = getattr(self.lib, 'clip_path', None)
+        if callable(path_getter):
+            try:
+                clip_path = path_getter(self.anim)
+            except Exception:
+                clip_path = None
+            if clip_path is not None:
+                try:
+                    path = os.fspath(clip_path)
+                except TypeError:
+                    path = str(clip_path)
+                try:
+                    # 素材文件变更（mtime 变化）必须失效旧成品
+                    mtime = os.stat(clip_path).st_mtime_ns
+                except OSError:
+                    mtime = 0
+        if path is None:
+            # 无 clip_path 的库（测试桩）：退化为 clip 实例身份，保证不串帧
+            path = '<clip:%d>' % id(self.movie)
+        mirrored = bool(
+            self.facing == 'right'
+            and self.anim not in getattr(self.lib, 'no_mirror', frozenset())
+        )
+        return (path, mtime, frame_n, self.facing, mirrored, self.scale, dpr, self.anim)
+
     def _rebuild_frame(self) -> None:
         """重建当前帧：缩放 + 朝向镜像 + 生成窗口 mask。
 
-        帧内容由（movie 身份、帧号、朝向、动画、缩放、DPR）唯一确定：
-        相同输入重复调用（如同一帧重复 frameChanged、拖拽反复 jumpToFrame(0)）
-        时整条 toImage→镜像→预乘→Smooth 缩放→ARGB32 链直接跳过。
+        帧内容由（素材路径+mtime、帧号、朝向、动画、缩放、DPR）唯一确定。
+        两级复用：
+        - 同一 movie 同一帧重复 rebuild（_frame_key 相同）：整条链直接跳过；
+        - 动画循环回到已构建过的帧：命中预缩放缓存（FramePixmapCache），
+          复用最终 QPixmap 与命中测试 alpha 图，跳过 toImage→镜像→预乘→
+          Smooth 缩放→ARGB32→fromImage 整条 CPU 链（方案 A §3.1）。
         """
         if self.movie is None:
             return
@@ -2020,6 +2069,22 @@ class PetWindow(QWidget):
         key = (id(self.movie), frame_n, self.facing, self.anim, self.scale, dpr)
         if key == getattr(self, '_frame_key', None):
             return
+        cache = getattr(self, '_frame_cache', None)
+        if cache is None:
+            cache = FramePixmapCache(
+                getattr(self, '_frame_cache_max_bytes', FRAME_CACHE_DEFAULT_MAX_BYTES)
+            )
+            self._frame_cache = cache
+        cache_key = self._frame_cache_key(frame_n, dpr)
+        entry = cache.get(cache_key)
+        if entry is not None:
+            # 命中：直接复用最终 pixmap 与命中测试 alpha 图。两者出自同一
+            # 缓存条目，_hit_alpha_image 与 _frame_pixmap 永远逐像素一致。
+            self._frame_pixmap = entry.pixmap
+            self._hit_alpha_image = entry.image
+            self._frame_key = key
+            self._sync_mask()
+            return
         pm = self.movie.currentPixmap()
         if pm is None or pm.isNull():
             # ffmpeg 缺失/素材损坏时首帧解码可能失败返回 None，跳过本帧而不是崩溃
@@ -2030,7 +2095,7 @@ class PetWindow(QWidget):
             img = img.mirrored(True, False)
         # 按屏幕 DPR 渲染到物理像素，避免高分屏下被 Qt 二次放大导致模糊。
         # 先转预乘 alpha 再缩放：直通 alpha 缩放会让透明像素的 RGB 渗入
-        # 半透明边缘，产生暗边/彩边（毛边来源之一）。
+        # 半透明边缘，产生暗边/彩边（毛边来源之一）。顺序不可交换。
         w_c = max(1, int(round(catalog.CANVAS_W * self.scale * dpr)))
         h_c = max(1, int(round(catalog.CANVAS_H * self.scale * dpr)))
         img = img.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
@@ -2040,6 +2105,7 @@ class PetWindow(QWidget):
         img = img.convertToFormat(QImage.Format.Format_ARGB32)
         pm = QPixmap.fromImage(img)
         pm.setDevicePixelRatio(dpr)
+        cache.put(cache_key, pm, img)
         self._frame_pixmap = pm
         # 直接缓存缩放后的 ARGB32 图：命中测试复用这份数据，
         # 避免 _is_transparent_at 再次 toImage
