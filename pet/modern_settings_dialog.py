@@ -62,6 +62,59 @@ from .speech_bubble import BUBBLE_STYLE_PRESETS
 from .persona_phrases import phrase_keys
 
 
+# 语言配置页只展示用户能理解的事件名称；内部 key 仍用于保存和渲染。
+DIALOGUE_LABELS = {
+    "start": "开始工作", "thinking": "思考", "activity.read": "读取文件",
+    "activity.search": "搜索或查找", "activity.edit": "编辑代码",
+    "activity.run": "运行或测试", "activity.default": "其他工具操作",
+    "agent.attention": "需要用户处理", "agent.error": "Agent 出错",
+    "agent.missing": "未找到 Agent", "bridge.install.pending": "安装桥接中",
+    "bridge.install.success": "桥接安装成功", "bridge.install.failed": "桥接安装失败",
+    "bridge.uninstall.failed": "桥接卸载失败", "dsh.writeback.failed": "回写 DSH 失败",
+    "approval.command": "审批命令", "approval.tool": "审批工具",
+    "approval.generic": "审批提示", "question.empty": "等待选择",
+    "question.one": "单个用户问题", "question.many": "多个用户问题",
+    "watchdog.warning": "循环检测警告", "watchdog.intervention": "循环检测干预",
+    "watchdog.unknown": "循环判断不可用", "rate_limit.one": "单次限流",
+    "rate_limit.many": "连续限流", "done.success": "任务完成",
+    "done.attention": "任务暂停待确认", "failure.retry": "重试后失败",
+    "failure.tool": "工具执行失败", "failure.generic": "执行失败",
+    "control.replan.pending": "重新规划处理中", "control.replan.success": "重新规划完成",
+    "control.interrupt.pending": "终止处理中", "control.interrupt.success": "终止完成",
+    "control.failed": "控制请求失败", "stuck.reminder": "卡住提醒",
+    "pattern.warning": "行为重复警告", "pattern.control": "行为重复干预",
+    "balance.loading": "查询余额中", "balance.result": "余额结果",
+}
+
+DIALOGUE_PARAMS = {
+    "name": "Agent 名称", "command": "待审批命令", "label": "工具名称",
+    "body": "问题内容", "count": "数量", "reasons": "判断原因",
+    "detail": "错误详情", "text": "显示文本",
+}
+
+DIALOGUE_KEY_PARAMS = {
+    "start": ("name",), "thinking": ("name",), "activity.read": ("name",),
+    "activity.search": ("name",), "activity.edit": ("name",), "activity.run": ("name",),
+    "activity.default": ("name",), "agent.attention": ("name",),
+    "agent.error": ("name",), "agent.missing": ("name",),
+    "bridge.install.pending": ("name",), "bridge.install.success": ("name",),
+    "bridge.install.failed": ("name", "detail"), "bridge.uninstall.failed": ("name",),
+    "dsh.writeback.failed": (), "approval.command": ("name", "command"),
+    "approval.tool": ("name", "label"), "approval.generic": ("name",),
+    "question.empty": (), "question.one": ("name", "body"),
+    "question.many": ("name", "count"), "watchdog.warning": ("name", "reasons"),
+    "watchdog.intervention": ("name", "reasons"), "watchdog.unknown": (),
+    "rate_limit.one": (), "rate_limit.many": ("count",), "done.success": ("name",),
+    "done.attention": ("name",), "failure.retry": ("name",),
+    "failure.tool": ("name",), "failure.generic": ("name",),
+    "control.replan.pending": ("name",), "control.replan.success": ("name",),
+    "control.interrupt.pending": ("name",), "control.interrupt.success": ("name",),
+    "control.failed": ("name",), "stuck.reminder": ("name",),
+    "pattern.warning": ("name",), "pattern.control": ("name", "reasons"),
+    "balance.loading": (), "balance.result": ("text",),
+}
+
+
 def _system_font_families() -> tuple[str, ...]:
     """缓存系统字体族列表。
 
@@ -1247,17 +1300,18 @@ class ModernSettingsDialog(QDialog):
         dialogue_layout.addWidget(SettingsSection("现有事件台词", [
             SettingRow("dialogue_mode", "台词模式", "选择原有、鲸鱼娘女仆或逐句自定义模式。", self.dialogue_mode_select),
         ], dialogue_content))
-        labels = {
-            "start": "开始工作", "thinking": "思考", "activity.read": "读取", "activity.search": "搜索",
-            "activity.edit": "编辑", "activity.run": "运行/测试", "activity.default": "其他工具",
-            "approval.command": "审批命令", "approval.tool": "审批工具", "approval.generic": "审批提示",
-            "question.empty": "无选项问题", "question.one": "用户问题", "question.many": "多个问题",
-            "watchdog.warning": "循环警告", "watchdog.intervention": "循环干预", "watchdog.unknown": "Judge 不可用",
-            "rate_limit.one": "限流", "rate_limit.many": "连续限流", "done.success": "任务完成",
-            "done.attention": "任务暂停", "failure.retry": "重试失败", "failure.tool": "工具失败", "failure.generic": "执行失败",
-        }
+        labels = DIALOGUE_LABELS
         dialogue_rows = [
-            SettingRow(f"dialogue_{key}", labels.get(key, key), "留空则使用基础模式台词。", edit, stacked=True)
+            SettingRow(
+                f"dialogue_{key}",
+                labels.get(key, key),
+                "留空则使用基础模式台词。可用参数："
+                + "、".join("{" + item + "}" for item in DIALOGUE_KEY_PARAMS.get(key, ()))
+                if DIALOGUE_KEY_PARAMS.get(key)
+                else "留空则使用基础模式台词。可用参数：无",
+                edit,
+                stacked=True,
+            )
             for key, edit in self.dialogue_phrase_edits.items()
         ]
         dialogue_layout.addWidget(SettingsSection("逐句自定义（自定义模式）", dialogue_rows, dialogue_content))
@@ -1588,7 +1642,16 @@ class ModernSettingsDialog(QDialog):
         for key in phrase_keys():
             edit = QLineEdit(self)
             edit.setText(str(configured_phrases.get(key, "") or ""))
-            edit.setPlaceholderText("留空使用基础模式台词；支持 {name}、{command}、{body}、{count}、{reasons}")
+            params = DIALOGUE_KEY_PARAMS.get(key, ())
+            if params:
+                param_text = "、".join(
+                    "{" + item + "}（" + DIALOGUE_PARAMS[item] + "）"
+                    for item in params
+                )
+                placeholder = "留空使用基础模式台词；本事件支持：" + param_text
+            else:
+                placeholder = "留空使用基础模式台词；本事件无可替换参数"
+            edit.setPlaceholderText(placeholder)
             edit.setClearButtonEnabled(True)
             self.dialogue_phrase_edits[key] = edit
 
