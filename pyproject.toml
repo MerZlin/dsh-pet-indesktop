@@ -1,0 +1,56 @@
+# dsh-pet 最小 ruff 基线（批 0a 建立，纯非行为变更）。
+# 目标：不改任何存量代码，仅靠配置让 `ruff check pet/ tests/` 全绿。
+# 只选 pyflakes(F) 级规则；E/W 风格规则与 format/isort 均不启用，
+# 避免给存量代码制造新的格式噪音（存量风格另走手工格式化批次）。
+
+[tool.ruff]
+line-length = 160   # 与存量代码现状匹配（F 规则不检查行长，此值仅作基线声明）
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+# —— 存量 F 级违规豁免（基线策略：不改存量代码，仅靠配置全绿）——
+# 每类豁免均登记在批 0a 报告（含逐条违规清单）；后续结构优化批
+# （见 _plan/current/STRUCT_PLAN_FINAL.md）逐条清理后，应同步收紧本表直至可删除。
+
+# pet/chat/__init__.py：包公开 API 的刻意再导出（re-export），F401 属预期用法。
+"pet/chat/__init__.py" = ["F401"]
+
+# pet/vision.py：`Any` 未导入。文件头部有 from __future__ import annotations，
+# 注解惰性求值、运行期不触发 NameError；属存量技术债，待后续补 import 后解除。
+"pet/vision.py" = ["F821"]
+
+# tests 目录 F401/F841：测试中大量 `app = QApplication.instance() or QApplication([])`
+# 是刻意副作用（创建 Qt 单例，变量本身无需使用）；其余为遗留未用导入/变量。
+# 全部归入结构优化 A17「测试债」批次，基线期整目录豁免，清理时按文件收紧。
+"tests/*.py" = ["F401", "F841"]
+
+# tests 目录 F811（文件内重复定义）：
+#   - test_collision_window.py:780 与 :560 同名测试函数重复定义（后者覆盖前者，
+#     pytest 实际只收集到一份）——真问题，登记待删除重复定义后解除豁免。
+#   - test_pet_interaction_locks.py:329、test_proactive.py:613/882/1069：
+#     函数内重复 import 同名模块/符号，属测试代码冗余。
+"tests/test_collision_window.py" = ["F811"]
+"tests/test_pet_interaction_locks.py" = ["F811"]
+"tests/test_proactive.py" = ["F811"]
+
+# tests/test_collision_ipc.py：`f"pid123-"` 无占位符，冗余 f 前缀，无害。
+"tests/test_collision_ipc.py" = ["F541"]
+
+# —— pet/ 产品代码 F401/F841 存量债务，逐文件精确豁免 ——
+"pet/app.py" = ["F841"]                  # app.py:311 `info`、:739 `dialog` 未用局部变量
+"pet/balance.py" = ["F401"]              # 未用导入 datetime.timezone
+"pet/chat/legacy_widgets.py" = ["F401"]  # 未用导入 json、QSize
+"pet/chat/models.py" = ["F401"]          # 未用导入 typing.Any
+"pet/chat/prompt.py" = ["F401"]          # 未用导入 .models.ChatSettings
+"pet/chat/settings_dialog.py" = ["F401"] # 未用导入 .models.ChatSettings
+"pet/chat/widgets.py" = ["F401"]         # 未用导入 json、QSizeGrip、QStyle
+"pet/click_talk_dialog.py" = ["F401"]    # 未用导入 Qt
+"pet/collision.py" = ["F401"]            # 未用导入 typing.Tuple
+"pet/context_menus/modern.py" = ["F401"] # 未用导入 QDesktopServices、DEEPSEEK_WEB_URL
+"pet/context_menus/shared.py" = ["F401"] # 未用导入 Qt
+"pet/modern_settings_dialog.py" = ["F401"] # 未用导入 QDialogButtonBox
+"pet/slot_manager.py" = ["F401", "F841"] # F401 typing.Any；F841 slot_manager.py:388 `step`
+"pet/window.py" = ["F401"]               # 未用导入 QToolTip、autostart_mod、QUARK_PAN_URL、REPO_URL
