@@ -533,6 +533,8 @@ class Config:
             "slingshot_enabled": True,     # 弹弓弹射
             "throw_strength": "standard",  # gentle / standard / strong / crazy
             "throw_max_speed": 4800.0,     # 由 throw_strength 导出
+            "idle_low_fps_enabled": False,  # 闲置降帧（灰度默认关）：长时间无交互时动画隔帧呈现
+            "idle_low_fps_threshold": 30.0,  # 闲置阈值（秒）：超过该时长无交互且窗口可见才降帧
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
@@ -664,6 +666,7 @@ class Config:
             "click_sound_enabled", "click_sound_path",
             "click_sound_pack", "click_sound_volume",
             "slingshot_enabled", "throw_strength", "throw_max_speed",
+            "idle_low_fps_enabled", "idle_low_fps_threshold",
             "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
             "music_sing_enabled",
@@ -789,6 +792,11 @@ class Config:
         strength = physics_mod.normalize_throw_strength(str(self.data.get("throw_strength") or "standard"))
         self.data["throw_strength"] = strength
         self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
+        # 闲置降帧（性能调研 §4.3）：开关默认关（灰度）；阈值夹到 [1, 3600] 秒
+        self.data["idle_low_fps_enabled"] = bool(self.data.get("idle_low_fps_enabled", False))
+        self.data["idle_low_fps_threshold"] = _float_or_default(
+            self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
+        )
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         self.data["collision_enabled"] = _bool_or_default(self.data.get("collision_enabled"), True)
         self.data["collision_restitution"] = _float_or_default(self.data.get("collision_restitution"), .82, 0.0, 1.0)
@@ -870,6 +878,7 @@ class Config:
             "click_sound_enabled", "click_sound_pack", "click_sound_volume",
             "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
+            "idle_low_fps_enabled", "idle_low_fps_threshold",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()

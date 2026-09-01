@@ -1167,6 +1167,7 @@ class ModernSettingsDialog(QDialog):
         behavior_layout.addWidget(SettingsSection("动画", [
             SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
             SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
+            SettingRow("idle_low_fps", "闲置降帧", "一段时间不操作桌宠时，动画按半帧率呈现（24fps 素材 → 12fps 效果）；任何交互立即恢复全帧率。", self.idle_low_fps_check),
             SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
             SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
             SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
@@ -1493,6 +1494,9 @@ class ModernSettingsDialog(QDialog):
 
         self.self_talk_check = ToggleSwitch(self)
         self.self_talk_check.setChecked(bool(self.config.get("self_talk_enabled", False)))
+        # 闲置降帧（灰度默认关）：长时间无交互且窗口可见时动画隔帧呈现
+        self.idle_low_fps_check = ToggleSwitch(self)
+        self.idle_low_fps_check.setChecked(bool(self.config.get("idle_low_fps_enabled", False)))
         self.self_talk_duration_spin = BrowserDoubleSpinBox(self)
         self.self_talk_duration_spin.setRange(1.0, 300.0)
         self.self_talk_duration_spin.setSingleStep(0.5)
@@ -2257,6 +2261,7 @@ class ModernSettingsDialog(QDialog):
             self.config.set("stream_capture_mode", self.stream_capture_check.isChecked())
         self.config.set("playback_speed", float(self.speed_select.currentData()))
         self.config.set("animation_gap_seconds", self.gap_spin.value())
+        self.config.set("idle_low_fps_enabled", self.idle_low_fps_check.isChecked())
         self.config.set("self_talk_enabled", self.self_talk_check.isChecked())
         self.config.set("self_talk_bubble_style", self.bubble_style_select.currentData())
         self.config.set("self_talk_min_interval", minimum)

@@ -1263,6 +1263,22 @@ class AgentLinkManager(QObject):
             elif not should_run and monitor._running:
                 monitor.stop()
 
+    def any_busy(self) -> bool:
+        """任一已启用 Agent 正处于 busy（working/thinking）状态。
+
+        供闲置降帧等"Agent 在干活 = 桌宠活跃"的判定使用：dsh 干活时桌宠
+        视为活跃、不降帧。已停用监视器的残留状态不计入（关掉联动 = 不再
+        被视为活跃，否则降帧开关会被僵尸 busy 永久顶掉）。
+        """
+        for key, state in self._last_raw.items():
+            if state not in self._BUSY_STATES:
+                continue
+            mon = self.monitors.get(key)
+            if mon is not None and not getattr(mon, "_running", True):
+                continue
+            return True
+        return False
+
     def _install_dsh_worker(self) -> None:
         """后台线程：安装 DSH 桥接插件，完成后信号回主线程。"""
         ok, msg = DshMonitor.install_bridge()
@@ -1456,6 +1472,11 @@ class AgentLinkManager(QObject):
             return
         if not hasattr(self.win, "isVisible") or not self.win.isVisible():
             return
+        # 联动状态事件 = 联动事件：刷新桌宠的闲置降帧活跃锚点（busy 与
+        # 回到 idle 都算"有过联动活动"；持续 busy 由 any_busy() 门控兜底）
+        mark = getattr(self.win, "mark_activity", None)
+        if callable(mark):
+            mark()
 
         now = self._clock()
         # --- 原始状态流（绕开去抖/节流）：busy→idle 完成检测 ---
@@ -1623,6 +1644,10 @@ class AgentLinkManager(QObject):
         白名单工具映射 + 三重限流（同 Agent 10s / 同文案 60s / 全局 8s）。"""
         if not self._gen_current(agent_key, gen):
             return  # 旧代次 worker 的迟到信号
+        # 工具活动 = 联动事件：刷新闲置降帧的活跃锚点（Agent 正在调工具干活）
+        mark = getattr(self.win, "mark_activity", None)
+        if callable(mark):
+            mark()
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_activity", False):
             return

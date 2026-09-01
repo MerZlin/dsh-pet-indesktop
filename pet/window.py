@@ -183,6 +183,15 @@ COLLISION_CONTACT_DV_FLOOR = 50.0
 # 每 tick 只消费最新目标做 self.move，丢弃中间过期位置。
 DRAG_MOVE_COALESCE_MS = 8
 
+# ---- 闲置降帧（性能调研 §4.3）----
+# 用户长时间不碰桌宠（无鼠标命中/点击/拖拽/菜单/联动事件）且窗口可见时，
+# 动画按时间线隔帧呈现：24fps 素材播 12fps 效果，动画时长不变。
+# 默认闲置阈值 30 秒（配置项 idle_low_fps_threshold）；开关默认关（灰度）。
+IDLE_LOW_FPS_DEFAULT_THRESHOLD = 30.0
+# 降帧除数：每 N 帧发布 1 帧（2 = 半帧率）。按时间线跳帧（elapsed time 算
+# 目标帧），绝不允许改播放速率/QTimer interval 让动画时间变慢/变快。
+IDLE_LOW_FPS_DIVISOR = 2
+
 
 def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
     """构造桌宠窗口 flags。
@@ -443,10 +452,20 @@ class PetWindow(QWidget):
     fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
     cursor_visibility_changed = Signal(str)
 
-    def __init__(self, lib: MovieLibrary, config: Config, collision_session=None) -> None:
+    def __init__(self, lib: MovieLibrary, config: Config, collision_session=None,
+                 *, clock=None) -> None:
         super().__init__()
         self.lib = lib
         self.cfg = config
+        # 闲置降帧的单调时钟（可注入，测试用假时钟控制时间流逝，零抖动）。
+        # 注意：只用 time.monotonic 语义的时钟——绝不使用 wall clock。
+        self._clock = clock if callable(clock) else time.monotonic
+        self._last_activity_ts = self._clock()
+        self.idle_low_fps_enabled = bool(config.get('idle_low_fps_enabled', False))
+        self.idle_low_fps_threshold = max(
+            1.0, min(3600.0, float(config.get('idle_low_fps_threshold',
+                                              IDLE_LOW_FPS_DEFAULT_THRESHOLD)))
+        )
         self._collision_session = None
         self._collision_seq = 0
         self._collision_last_state = None
@@ -779,6 +798,49 @@ class PetWindow(QWidget):
     def collision_sound_volume(self, value: float) -> None:
         self.cfg.set('collision_sound_volume', float(value))
 
+    # ================================================================ 闲置降帧（性能调研 §4.3）
+    def mark_activity(self) -> None:
+        """记录一次用户/联动交互（鼠标命中/点击/拖拽/菜单/联动事件）。
+
+        闲置降帧的时间线锚点：任何交互都刷新"最近活跃"时刻（单调时钟），
+        下一帧动画立即恢复全帧率呈现。
+        """
+        self._last_activity_ts = self._clock()
+
+    def _agent_busy(self) -> bool:
+        """Agent 联动忙碌（dsh 等正在干活）视为活跃，不降帧。"""
+        mgr = getattr(self, 'agent_link_manager', None)
+        if mgr is None:
+            return False
+        any_busy = getattr(mgr, 'any_busy', None)
+        return bool(any_busy()) if callable(any_busy) else False
+
+    def _idle_reduction_active(self) -> bool:
+        """闲置降帧门控：开关开 + 窗口可见 + 超过闲置阈值 + 无活跃按压/菜单 + Agent 不忙。
+
+        隐藏/不可见时维持现有全停语义（_hidden_paused 时动画本就停着），
+        这里返回 False 表示不额外降帧；按住/菜单打开/Agent 干活都算活跃。
+        """
+        if not self.idle_low_fps_enabled:
+            return False
+        if self._hidden_paused or not self.isVisible():
+            return False
+        if self._press_global is not None or self._context_menu_open:
+            return False
+        if self._agent_busy():
+            return False
+        return self._clock() - self._last_activity_ts >= self.idle_low_fps_threshold
+
+    @staticmethod
+    def _is_reduced_publish_frame(frame_index: int, divisor: int = IDLE_LOW_FPS_DIVISOR) -> bool:
+        """闲置降帧的隔帧发布判定（按时间线跳帧）。
+
+        帧号 = elapsed video time × fps；目标呈现帧 = floor(elapsed×fps/divisor)×divisor，
+        即帧号能被 divisor 整除的帧才发布（24fps 素材 → 12fps 效果）。动画时间线
+        照常推进（movie 全速解码），动画时长不变——不能靠改播放速率让时间变慢。
+        """
+        return int(frame_index) % max(1, int(divisor)) == 0
+
     def _arm_screen_restore_retry(self) -> None:
         """目标副屏暂未就绪：启动 5s 轮询 + screenAdded 监听，等它上线。"""
         from PySide6.QtGui import QGuiApplication
@@ -1093,6 +1155,9 @@ class PetWindow(QWidget):
             self._phys_vel[:] = [0.0, 0.0]
             self._resume_activity()
             self._submit_collision_state(force=True)
+            # 恢复显示 = 用户重新看着桌宠：重置闲置计时，重新以全帧率呈现
+            # （只有再闲置 idle_low_fps_threshold 秒才进入降帧）
+            self.mark_activity()
         self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
@@ -1986,6 +2051,8 @@ class PetWindow(QWidget):
         B7 复审 R2：新的联动请求覆盖旧的联动失败重试（同一请求流，最新
         覆盖旧的），避免旧重试在 1.5s 后顶掉新联动动作。
         """
+        # 联动请求 = 联动事件：刷新闲置降帧的活跃锚点
+        self.mark_activity()
         if self._pending_switch_link:
             self._cancel_pending_switch_retry()
         self._pending_link_anim = name
@@ -2023,9 +2090,20 @@ class PetWindow(QWidget):
             return
         if name != self.anim or self.movie is None:
             return
+        is_last = n >= self.lib.frames(name) - 1
+        if self._idle_reduction_active() and not self._is_reduced_publish_frame(n):
+            # 闲置降帧：按时间线跳帧呈现（24fps 素材 → 12fps 效果），本帧
+            # 不发布——命中测试继续使用最近一次已发布的 alpha 图，不逐帧重建；
+            # 动画时间线照常推进（movie 全速解码），动画时长不变。
+            # 末帧的动画链推进绝不能因跳帧而丢（否则停在最后一帧）。
+            if is_last and not self._ended_fired:
+                self._ended_fired = True
+                self.movie.stop()
+                self._on_anim_ended(name)
+            return
         self._rebuild_frame()
         self.update()
-        if n >= self.lib.frames(name) - 1 and not self._ended_fired:
+        if is_last and not self._ended_fired:
             self._ended_fired = True
             self.movie.stop()  # 停在最后一帧，等 _on_anim_ended 切走
             self._on_anim_ended(name)
@@ -3004,6 +3082,10 @@ class PetWindow(QWidget):
         self._drag_move_pending = None
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        # 任何到达桌宠窗口的按下都是"鼠标命中"：立即回满帧率（闲置降帧锚点）。
+        # 窗口透明区域在 Windows 逐像素穿透/非 Windows mask 下不会收到事件，
+        # 因此能到达这里的一定是用户真的在点桌宠。
+        self.mark_activity()
         buttons = event.buttons() | event.button()
         if event.button() == Qt.MouseButton.RightButton and buttons & Qt.MouseButton.LeftButton:
             if (self._interaction_state == "DRAGGING" and self.slingshot_enabled
@@ -3050,6 +3132,8 @@ class PetWindow(QWidget):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        # 拖拽/弹弓瞄准中的移动 = 交互：刷新闲置降帧的活跃锚点
+        self.mark_activity()
         buttons = event.buttons() | getattr(event, "button", lambda: Qt.MouseButton.NoButton)()
         if self._interaction_state == "SLINGSHOT_AIMING":
             self._update_slingshot_aim(event.globalPosition().toPoint())
@@ -3119,6 +3203,8 @@ class PetWindow(QWidget):
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        # 松手 = 交互结束事件：同样刷新活跃锚点（点击/拖拽松手都算"碰过"）
+        self.mark_activity()
         if event.button() == Qt.MouseButton.RightButton and self._interaction_state == "SLINGSHOT_AIMING":
             self._cancel_slingshot_to_drag()
             event.accept()
@@ -3371,6 +3457,11 @@ class PetWindow(QWidget):
         super().hideEvent(event)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
+        # 右键菜单弹出 = 用户交互：刷新闲置降帧的活跃锚点。
+        # getattr 守卫：测试桩/最小替代对象可以不实现 mark_activity。
+        mark = getattr(self, 'mark_activity', None)
+        if callable(mark):
+            mark()
         self._context_menu_anchor = QPoint(global_pos)
         # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），右键时先隐藏，
         # 避免气泡盖住菜单
@@ -3653,6 +3744,13 @@ class PetWindow(QWidget):
         desired_slingshot = bool(self.cfg.get('slingshot_enabled', True))
         if desired_slingshot != self.slingshot_enabled:
             self.slingshot_enabled = desired_slingshot
+        # 闲置降帧开关/阈值即时生效（设置保存后无需重启）；降帧门控逐帧
+        # 读取这两个字段，关闭后下一帧即恢复全帧率。
+        self.idle_low_fps_enabled = bool(self.cfg.get('idle_low_fps_enabled', False))
+        self.idle_low_fps_threshold = max(
+            1.0, min(3600.0, float(self.cfg.get('idle_low_fps_threshold',
+                                                 IDLE_LOW_FPS_DEFAULT_THRESHOLD)))
+        )
         desired_opacity = int(_float_or_default(self.cfg.get('pet_opacity', 100), 100, 10, 100))
         if desired_opacity != self.pet_opacity:
             self.set_pet_opacity(desired_opacity)
