@@ -9,7 +9,8 @@
 5. 稳定重合方向（两 ID 稳定哈希，禁用随机）
 6. 多体碰撞冲量合并与迭代分离
 
-协议帧编解码与水位去重已迁至 collision_codec.py（本模块保留 re-export 兼容）。
+协议帧编解码与水位去重位于 collision_codec.py（批2 迁出，批3 移除本模块的
+re-export 过渡层）；编解码符号请直接从 .collision_codec 导入。
 """
 
 from __future__ import annotations
@@ -26,13 +27,6 @@ DEFAULT_MASS_SCALE: float = 1.0         # 默认质量倍率
 DEFAULT_IMPULSE_CAP: float = 9000.0     # 每单位质量等效冲量上限 (px/s)
 IMPULSE_MIN_APPROACH_SPEED: float = 80.0  # 低于此接近速度只做位置分离 (px/s)
 DEFAULT_BASE_SCALE: float = 0.72        # 基准缩放
-
-# ---- 协议层兼容再导出（编解码已迁至 collision_codec.py） ----
-# window.py（批 1c 已合入，仍经 collision.WatermarkDeduplicator 引用）与存量
-# 测试经本模块访问编解码符号；新代码应直接从 .collision_codec 导入。
-from .collision_codec import (  # noqa: F401
-    DecodeError, FrameStreamDecoder, WatermarkDeduplicator, encode_frame,
-)
 
 # ---- 状态 Flags 位定义 (plan4 §2.1) ----
 FLAG_VISIBLE: int = 1 << 0              # 1: 可见

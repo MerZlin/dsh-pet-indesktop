@@ -192,7 +192,7 @@ class TestRealFileTailEndToEnd:
 
         received_states = []
         mon = CursorMonitor(cfg_dir, base_dir=tmp_path / ".cursor" / "projects")
-        mon.state_changed.connect(lambda k, s: received_states.append((k, s)))
+        mon.state_changed.connect(lambda ev: received_states.append((ev.agent, ev.state)))
 
         mon.start()
         mon._poll()  # 初始化 tailer
@@ -524,7 +524,7 @@ class TestOpenCodeSqliteTail:
         cfg_dir.mkdir()
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.state_changed.connect(lambda ev: received.append(ev.state))
         mon.start()
         mon._poll()  # 首次 = backfill，不产生事件
         assert received == []
@@ -1249,8 +1249,8 @@ class TestActivitySignal:
         cfg = Config(base=tmp_path)
         mon = BaseAgentMonitor("dsh", cfg.dir)
         got, states = [], []
-        mon.activity.connect(lambda a, t: got.append((a, t)))
-        mon.state_changed.connect(lambda a, s: states.append(s))
+        mon.activity.connect(lambda ev: got.append((ev.agent, ev.tool)))
+        mon.state_changed.connect(lambda ev: states.append(ev.state))
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()  # 先建空文件，backfill 才能落到末尾
         mon._tailer.read_new_lines()  # backfill 初始化
@@ -1266,7 +1266,7 @@ class TestActivitySignal:
         cfg = Config(base=tmp_path)
         mon = BaseAgentMonitor("dsh", cfg.dir)
         got = []
-        mon.activity.connect(lambda a, t: got.append(t))
+        mon.activity.connect(lambda ev: got.append(ev.tool))
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()
         mon._tailer.read_new_lines()
@@ -1370,8 +1370,8 @@ class TestOpenCodeSubagentFilter:
         cfg_dir.mkdir()
         received, tools = [], []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda k, s: received.append(s))
-        mon.activity.connect(lambda k, t: tools.append(t))
+        mon.state_changed.connect(lambda ev: received.append(ev.state))
+        mon.activity.connect(lambda ev: tools.append(ev.tool))
         mon.start()
         mon._poll()  # backfill
 
@@ -1413,7 +1413,7 @@ class TestOpenCodeSubagentFilter:
         cfg_dir.mkdir()
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.state_changed.connect(lambda ev: received.append(ev.state))
         mon.start()
         mon._poll()
         db = sqlite3.connect(db_path)
@@ -1517,8 +1517,8 @@ class TestCustomAgentMonitor:
 
         states, tools = [], []
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(events))
-        mon.state_changed.connect(lambda k, s: states.append((k, s)))
-        mon.activity.connect(lambda k, t: tools.append((k, t)))
+        mon.state_changed.connect(lambda ev: states.append((ev.agent, ev.state)))
+        mon.activity.connect(lambda ev: tools.append((ev.agent, ev.tool)))
         mon.start()
         mon._poll()  # backfill 初始化
 
@@ -1539,7 +1539,7 @@ class TestCustomAgentMonitor:
         missing = tmp_path / "not_yet.jsonl"
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(missing))
         states = []
-        mon.state_changed.connect(lambda k, s: states.append((k, s)))
+        mon.state_changed.connect(lambda ev: states.append((ev.agent, ev.state)))
         mon.start()
         mon._poll()
         mon._poll()

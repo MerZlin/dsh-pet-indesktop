@@ -64,6 +64,7 @@ from .context_menus.shared import take_deferred_menu_callbacks
 from . import vision as vision_mod
 from . import physics as physics_mod
 from . import collision
+from . import collision_codec
 from . import collision_debug
 from .click_sound import (
     choose_sound, play_sound, resolve_click_sound_candidates, resolve_click_sound_pair,
@@ -476,7 +477,7 @@ class PetWindow(QWidget):
         self._predicted_bounces: dict[str, float] = {}
         self._pending_predicted_bounce: tuple[float, float] | None = None
         self._pending_predicted_contact: tuple[float, float, list[list[float]]] | None = None
-        self._collision_impulse_watermarks = collision.WatermarkDeduplicator()
+        self._collision_impulse_watermarks = collision_codec.WatermarkDeduplicator()
         self.on_switch_character = None  # 由 app 注入，用于运行时切换角色
         self.on_open_chat = None
         self.on_open_quick_chat = None
@@ -4201,14 +4202,20 @@ class PetWindow(QWidget):
                              y - (self._phys_pos[1] - start_y), radius]
                             for x, y, radius in current_circles]
         own = collision.MemberState(
-            runtime_id, rect.center().x() + dx, rect.center().y() + dy,
-            max(1.0, rect.width() / 2.0), max(1.0, rect.height() / 2.0),
-            self._phys_vel[0], self._phys_vel[1],
+            runtime_id=runtime_id,
+            x=rect.center().x() + dx,
+            y=rect.center().y() + dy,
+            radius_x=max(1.0, rect.width() / 2.0),
+            radius_y=max(1.0, rect.height() / 2.0),
+            vx=self._phys_vel[0],
+            vy=self._phys_vel[1],
             mass=collision.calculate_mass(
                 max(1.0, rect.width() / 2.0), max(1.0, rect.height() / 2.0),
                 scale=float(self.scale),
                 collision_mass_scale=float(self.cfg.get('collision_mass_scale', 1.0))),
-            flags=self._collision_flags(), circles=current_circles)
+            flags=self._collision_flags(),
+            circles=current_circles,
+        )
         bounce_vx = own.vx if incoming_vx is None else incoming_vx
         bounce_vy = own.vy if incoming_vy is None else incoming_vy
 
@@ -4239,15 +4246,21 @@ class PetWindow(QWidget):
             radius_x = max(1.0, float(raw_peer.get('radius_x', 1.0)))
             radius_y = max(1.0, float(raw_peer.get('radius_y', 1.0)))
             peer = collision.MemberState(
-                peer_id, float(raw_peer.get('x', 0.0)) + peer_dx,
-                float(raw_peer.get('y', 0.0)) + peer_dy, radius_x, radius_y,
-                peer_vx, peer_vy,
+                runtime_id=peer_id,
+                x=float(raw_peer.get('x', 0.0)) + peer_dx,
+                y=float(raw_peer.get('y', 0.0)) + peer_dy,
+                radius_x=radius_x,
+                radius_y=radius_y,
+                vx=peer_vx,
+                vy=peer_vy,
                 mass=collision.calculate_mass(
                     radius_x, radius_y,
                     scale=float(raw_peer.get('scale', collision.DEFAULT_BASE_SCALE) or collision.DEFAULT_BASE_SCALE),
                     collision_mass_scale=float(self.cfg.get('collision_mass_scale', 1.0))),
                 is_infinite_mass=bool(flags & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION)),
-                flags=flags, circles=peer_circles)
+                flags=flags,
+                circles=peer_circles,
+            )
             _, dvx, dvy, _, _ = collision.solve_collision_impulse(
                 own, peer, nx, ny,
                 restitution=float(self.cfg.get('collision_restitution', .82)),

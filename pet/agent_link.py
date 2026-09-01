@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -397,6 +398,29 @@ class ByteOffsetTailer:
         return [line.strip() for line in lines if line.strip()]
 
 
+@dataclass(frozen=True)
+class AgentEvent:
+    """监视器 → Manager 的联动事件载荷（经 state_changed / activity 信号传递）。
+
+    字段取自实际事件流（BaseAgentMonitor._poll 解析 + 发射代次），不臆造：
+    - agent: 监视器 key（dsh / claude / cursor / opencode / 自定义）
+    - kind: 事件种类，"state"（状态变更）或 "tool"（工具过程汇报）
+    - gen: 发射代次（worker 重启后旧代次的迟到信号由接收端校验丢弃）
+    - state: 归一化状态（kind=="state" 时，六态词汇之一）
+    - tool: 工具名（kind=="tool" 时，如 bash / read / edit）
+
+    说明：事件文件行里另有 ts / agent 字段（docs/AGENT_LINK_PROTOCOL.md §2.2），
+    但监视器→Manager 信号路径目前不携带时间戳（agent 由监视器自身 key 决定，
+    故不重复建模）；event_id / session_id 不存在于本路径，按禁止臆造字段不建模。
+    """
+
+    agent: str
+    kind: str
+    gen: int = 0
+    state: str = ""
+    tool: str = ""
+
+
 class BaseAgentMonitor(QObject):
     """Agent 监视器抽象基类。
 
@@ -411,8 +435,8 @@ class BaseAgentMonitor(QObject):
       绝不允许双 worker 同时读写共享状态。
     """
 
-    state_changed = Signal(str, str, int)  # (agent_key, state, 发射代次)
-    activity = Signal(str, str, int)       # (agent_key, 工具名, 发射代次) —— 仅事件带工具名时发
+    state_changed = Signal(object)  # AgentEvent(kind="state")
+    activity = Signal(object)       # AgentEvent(kind="tool") —— 仅事件带工具名时发
 
     _POLL_INTERVAL_S = 1.5
     _STOP_JOIN_TIMEOUT_S = 2.0  # 有界等待：绝不无界 join（GUI 冻结教训）
@@ -511,10 +535,10 @@ class BaseAgentMonitor(QObject):
     # ---------------- 发射（worker 或测试直调） ----------------
 
     def _emit_state(self, state: str, gen: int) -> None:
-        self._emit(self.state_changed, (self.agent_key, state, gen))
+        self._emit(self.state_changed, (AgentEvent(agent=self.agent_key, kind="state", state=state, gen=gen),))
 
     def _emit_tool(self, tool: str, gen: int) -> None:
-        self._emit(self.activity, (self.agent_key, tool, gen))
+        self._emit(self.activity, (AgentEvent(agent=self.agent_key, kind="tool", tool=tool, gen=gen),))
 
     def _emit(self, signal, args: tuple) -> None:
         """pause 中暂存 outbox（resume 补发），否则直接 emit。
@@ -528,7 +552,7 @@ class BaseAgentMonitor(QObject):
             with self._outbox_lock:
                 if signal is self.state_changed and self._outbox:
                     last_sig, last_args = self._outbox[-1]
-                    if last_sig is self.state_changed and last_args[1] == args[1]:
+                    if last_sig is self.state_changed and last_args[0].state == args[0].state:
                         return  # 连续重复状态，去重
                 if len(self._outbox) >= self._OUTBOX_CAP:
                     # 先丢最旧的 activity 腾位；状态事件绝不丢：
@@ -1274,8 +1298,8 @@ class AgentLinkManager(QObject):
             self.agent_names[key] = str(item.get("name") or key)
 
         for mon in self.monitors.values():
-            mon.state_changed.connect(self._on_agent_state)
-            mon.activity.connect(self._on_agent_activity)
+            mon.state_changed.connect(self._on_agent_state_event)
+            mon.activity.connect(self._on_agent_activity_event)
         self.install_finished.connect(self._on_install_finished)
         # 联动动作链：一次性动作播完后若仍有 Agent 在忙，由 window 回调取下一个动作
         if hasattr(self.win, "set_link_next_provider"):
@@ -1473,6 +1497,14 @@ class AgentLinkManager(QObject):
         deadline = time.monotonic() + BaseAgentMonitor._STOP_JOIN_TIMEOUT_S
         for mon in active:
             mon.finish_stop(deadline)
+
+    def _on_agent_state_event(self, event: AgentEvent) -> None:
+        """state_changed 信号槽：AgentEvent 载荷 → 既有处理入口（代次校验在内）。"""
+        self._on_agent_state(event.agent, event.state, event.gen)
+
+    def _on_agent_activity_event(self, event: AgentEvent) -> None:
+        """activity 信号槽：AgentEvent 载荷 → 既有处理入口（代次校验在内）。"""
+        self._on_agent_activity(event.agent, event.tool, event.gen)
 
     def _on_agent_state(self, agent_key: str, state: str, gen: int = 0) -> None:
         """接收 Agent 状态变更并调度桌宠动作/气泡（带去抖与节流）。

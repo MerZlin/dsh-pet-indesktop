@@ -14,7 +14,7 @@ import os
 import secrets
 import sys
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtCore import QMetaObject, QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -248,7 +248,7 @@ class _CollisionWorker(QObject):
         from time import monotonic
         return monotonic()
 
-    def _welcome(self) -> dict[str, Any]:
+    def _welcome(self) -> collision_codec.WelcomeMessage:
         return {"type": "welcome", "epoch": self.epoch, "coordinator_id": self.runtime_id,
                 "tick": self.tick, "policy": self.policy,
                 "members": [self._public_member(v) for v in self.members.values()]}
@@ -257,7 +257,7 @@ class _CollisionWorker(QObject):
     def _public_member(member: dict[str, Any]) -> dict[str, Any]:
         return {k: v for k, v in member.items() if k != "last_seen"}
 
-    def _send(self, socket, message: dict[str, Any]) -> None:
+    def _send(self, socket, message: collision_codec.WireMessage) -> None:
         try:
             socket.write(collision_codec.encode_frame(message))
             socket.flush()
@@ -272,9 +272,11 @@ class _CollisionWorker(QObject):
         for message in decoder.feed(bytes(socket.readAll())):
             if isinstance(message, collision_codec.DecodeError) or not isinstance(message, dict):
                 continue
-            self._handle_message(socket, message)
+            # 解码边界收敛：JSON dict -> 协议 TypedDict（cast 仅类型层，
+            # 字段缺省/多余由各分支的 .get 容错处理，见 _handle_message）
+            self._handle_message(socket, cast(collision_codec.WireMessage, message))
 
-    def _handle_message(self, socket, message: dict[str, Any]) -> None:
+    def _handle_message(self, socket, message: collision_codec.WireMessage) -> None:
         kind = message.get("type")
         if socket is self._probe and kind == "coordinator":
             self._resign_to(str(message.get("runtime_id") or ""))
@@ -525,12 +527,22 @@ class _CollisionWorker(QObject):
                 collision_mass_scale=self.policy.get("collision_mass_scale", 1.0),
             )
             event_member = collision.MemberState(
-                pred_rid, pred_x, pred_y,
-                pred_rx, pred_ry,
-                float(bounce_vx), float(bounce_vy), pred_mass,
-                pred_is_inf, pred_flags, str(snap.get("instance_id", "")),
-                str(snap.get("character", "")), pred_scale, float(snap.get("w", 0.0)), float(snap.get("h", 0.0)),
-                pred_circles,
+                runtime_id=pred_rid,
+                x=pred_x,
+                y=pred_y,
+                radius_x=pred_rx,
+                radius_y=pred_ry,
+                vx=float(bounce_vx),
+                vy=float(bounce_vy),
+                mass=pred_mass,
+                is_infinite_mass=pred_is_inf,
+                flags=pred_flags,
+                instance_id=str(snap.get("instance_id", "")),
+                character=str(snap.get("character", "")),
+                scale=pred_scale,
+                w=float(snap.get("w", 0.0)),
+                h=float(snap.get("h", 0.0)),
+                circles=pred_circles,
             )
             for other in sorted_active:
                 if other.runtime_id == pred_rid:
@@ -620,8 +632,8 @@ class _CollisionWorker(QObject):
                      for v in self.members.values())
         if now - self._last_snapshot_at >= (0.05 if moving else 0.5):
             self._last_snapshot_at = now
-            payload = {"type": "snapshot", "epoch": self.epoch, "tick": self.tick,
-                       "members": [self._public_member(v) for v in self.members.values()]}
+            payload: collision_codec.SnapshotMessage = {"type": "snapshot", "epoch": self.epoch, "tick": self.tick,
+                                                        "members": [self._public_member(v) for v in self.members.values()]}
             for peer in self.peers:
                 self._send(peer, payload)
             self.snapshot_ready.emit(payload)
@@ -635,7 +647,7 @@ class _CollisionWorker(QObject):
                 if previous is not None and self.tick - previous[1] < 15:
                     continue
                 self._position_only_pairs[result.pair] = (signature, self.tick)
-            payload = {"type": "impulse", "epoch": self.epoch, **asdict(result)}
+            payload: collision_codec.ImpulseMessage = {"type": "impulse", "epoch": self.epoch, **asdict(result)}
             for peer in self.peers:
                 self._send(peer, payload)
             self.impulse_ready.emit(payload)

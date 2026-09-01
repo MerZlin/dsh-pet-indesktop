@@ -4,16 +4,127 @@
 从 collision.py 迁出：仅含与物理求解无关的协议层——
 1. 协议帧解析与编码（4 字节大端长度前缀 + UTF-8 JSON，4096 字节上限超限丢弃）
 2. 水位去重（按 epoch 记录每个 pair 最高已应用 tick）
+3. 协议消息 TypedDict（snapshot/impulse 等线格式类型，供编解码边界收敛，
+   见 collision_ipc.py 的 _send/_handle_message；TypedDict 仅类型层，无运行期开销）
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal, TypedDict, Union
 
 FRAME_MAX_LENGTH: int = 4096            # 单帧最大字节数（含/不含前缀，此处限制载荷<=4096）
 HEADER_SIZE: int = 4                    # 4字节无符号大端整数长度头
+
+
+# ----------------------------------------------------------------------
+# 协议消息线格式（TypedDict，total=False：线上字段可缺省）
+# ----------------------------------------------------------------------
+
+class ProbeMessage(TypedDict, total=False):
+    """协调者决胜探测帧。"""
+    type: Literal["probe"]
+    runtime_id: str
+
+
+class CoordinatorMessage(TypedDict, total=False):
+    """探测应答：对方是协调者。"""
+    type: Literal["coordinator"]
+    runtime_id: str
+    epoch: str
+
+
+class HelloMessage(TypedDict, total=False):
+    """客户端入会帧。"""
+    type: Literal["hello"]
+    runtime_id: str
+    instance_id: str
+    pid: int
+    epoch: str
+
+
+class WelcomeMessage(TypedDict, total=False):
+    """协调者入会应答：携带 epoch 与当前成员表。"""
+    type: Literal["welcome"]
+    epoch: str
+    coordinator_id: str
+    tick: int
+    policy: Dict[str, Any]
+    members: List[Dict[str, Any]]
+
+
+class LeaveMessage(TypedDict, total=False):
+    """离开帧。"""
+    type: Literal["leave"]
+    seq: int
+
+
+class StateMessage(TypedDict, total=False):
+    """成员状态帧：_CollisionWorker.submit_state 的 state dict + type 标记。"""
+    type: Literal["state"]
+    runtime_id: str
+    instance_id: str
+    seq: int
+    flags: int
+    x: float
+    y: float
+    vx: float
+    vy: float
+    radius_x: float
+    radius_y: float
+    mass: float
+    is_infinite_mass: bool
+    character: str
+    scale: float
+    w: float
+    h: float
+    circles: Any
+    last_seen: float
+    ts: float
+
+
+class SnapshotMessage(TypedDict, total=False):
+    """快照帧：协调者 tick 时点全体成员表。"""
+    type: Literal["snapshot"]
+    epoch: str
+    tick: int
+    members: List[Dict[str, Any]]
+
+
+class ImpulseMessage(TypedDict, total=False):
+    """冲量帧：ImpulseResult.asdict() 平铺字段 + epoch/type 标记。"""
+    type: Literal["impulse"]
+    epoch: str
+    tick: int
+    pair: str
+    a: str
+    b: str
+    nx: float
+    ny: float
+    j: float
+    sep: float
+    contact_x: float
+    contact_y: float
+    flags: int
+    ax: float
+    ay: float
+    bx: float
+    by: float
+    dvx_a: float
+    dvy_a: float
+    dvx_b: float
+    dvy_b: float
+    dx_a: float
+    dy_a: float
+    dx_b: float
+    dy_b: float
+
+
+WireMessage = Union[
+    ProbeMessage, CoordinatorMessage, HelloMessage, WelcomeMessage,
+    LeaveMessage, StateMessage, SnapshotMessage, ImpulseMessage,
+]
 
 
 @dataclass
