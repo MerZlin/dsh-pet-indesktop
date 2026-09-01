@@ -626,7 +626,14 @@ class PetWindow(QWidget):
         self._frame_key: tuple | None = None
         # 当前帧构建时所用的屏幕 DPR：窗口跨屏（moveEvent）时对比新 DPR，
         # 变化即强制 _rebuild_frame，避免旧 DPR 成品继续显示（P1）。
+        # 只在重建成功后记账（P1 复审）：失败/快路径跳过时不提前更新，
+        # 后续信号/移动仍会按新 DPR 重试。
         self._last_frame_dpr: float | None = None
+        # Qt 信号驱动 DPR 变化（P1 复审）：QWindow.screenChanged 与所在屏
+        # DPI 变化信号挂到强制 _rebuild_frame（静止窗口也能重建）；
+        # showEvent 接线，closeEvent 摘线。
+        self._dpr_watch_window = None
+        self._dpr_watch_screen = None
         # 预缩放成品帧缓存（方案 A §3.1）：同一动画同一帧在相同
         # (素材路径+mtime+大小, 帧号, 朝向, scale, DPR, 动画名) 下结果确定，
         # 循环播放直接复用最终 QPixmap，跳过整条 CPU 转换链。
@@ -1074,6 +1081,9 @@ class PetWindow(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
+        # 原生窗口此刻已就绪：接线 DPR 变化信号（跨屏/显示缩放 → 强制重建）。
+        # 幂等；QWindow 被重建后再次 show 会重挂到新 handle。
+        self._arm_dpr_change_watch()
         self._submit_collision_state(force=True)
         self._schedule_macos_window_level(bool(self.cfg.get('on_top', True)))
         self._apply_opacity()
@@ -2076,7 +2086,9 @@ class PetWindow(QWidget):
             return
         scr = self._screen_available()
         dpr = scr.devicePixelRatio() if scr is not None else 1.0
-        self._last_frame_dpr = dpr
+        # 注意：_last_frame_dpr 只在重建成功后记账（命中缓存也算成功）；
+        # 失败路径（解码返回空图）与快路径跳过均不更新，避免把「未按新
+        # DPR 重建」记成已重建（P1 复审）。
         try:
             frame_n = self.movie.currentFrameNumber()
         except AttributeError:
@@ -2100,6 +2112,7 @@ class PetWindow(QWidget):
             self._frame_pixmap = entry.pixmap
             self._hit_alpha_image = entry.image
             self._frame_key = key
+            self._last_frame_dpr = dpr
             self._sync_mask()
             return
         pm = self.movie.currentPixmap()
@@ -2128,6 +2141,7 @@ class PetWindow(QWidget):
         # 避免 _is_transparent_at 再次 toImage
         self._hit_alpha_image = img
         self._frame_key = key
+        self._last_frame_dpr = dpr
         self._sync_mask()
 
     def _refresh_frame_for_screen_dpr(self) -> None:
@@ -2144,6 +2158,82 @@ class PetWindow(QWidget):
                 and dpr != getattr(self, '_last_frame_dpr', None)):
             self._rebuild_frame()
             self.update()
+
+    # ================================================================ P1 复审：Qt 信号驱动 DPR 变化
+    # Qt 6.11 的 QScreen 没有 devicePixelRatioChanged 信号；系统显示缩放变化
+    # （改变 devicePixelRatio()）由 logicalDotsPerInchChanged /
+    # physicalDotsPerInchChanged 上报。二者 + QWindow.screenChanged 都挂到
+    # 强制 _rebuild_frame：缓存 key 用新 DPR，帧号/朝向等未变也不会被快路径
+    # 跳过；DPR 确实未变（同 DPI 屏间跨屏等）由快路径自行跳过，零开销。
+    # moveEvent 里的 _refresh_frame_for_screen_dpr 保留作兜底。
+
+    def _arm_dpr_change_watch(self) -> None:
+        """接线 Qt 信号：窗口跨屏 / 所在屏显示缩放变化 → 强制重建帧。
+
+        幂等：QWindow 被重建（改 flags 等）时重挂到新 handle。QScreen 在
+        拔屏时销毁，Qt 自动摘除其连接，无需手动清理。
+        """
+        win = self.windowHandle()
+        if win is None:
+            return
+        old = getattr(self, '_dpr_watch_window', None)
+        if old is win:
+            return
+        if old is not None:
+            try:
+                old.screenChanged.disconnect(self._on_window_screen_changed)
+            except (RuntimeError, TypeError):
+                pass  # 旧 QWindow 已销毁
+        self._dpr_watch_window = win
+        win.screenChanged.connect(self._on_window_screen_changed)
+        scr = win.screen()
+        if scr is not None:
+            self._wire_screen_dpi_signals(scr)
+
+    def _wire_screen_dpi_signals(self, screen) -> None:
+        """把所在屏的 DPI 变化信号挂到强制重建；跨屏时换挂新屏。"""
+        old = getattr(self, '_dpr_watch_screen', None)
+        if old is screen:
+            return
+        if old is not None:
+            for sig in ('logicalDotsPerInchChanged', 'physicalDotsPerInchChanged'):
+                try:
+                    getattr(old, sig).disconnect(self._on_screen_dpi_changed)
+                except (RuntimeError, TypeError):
+                    pass  # 旧屏已销毁
+        self._dpr_watch_screen = screen
+        for sig in ('logicalDotsPerInchChanged', 'physicalDotsPerInchChanged'):
+            getattr(screen, sig).connect(self._on_screen_dpi_changed)
+
+    def _disarm_dpr_change_watch(self) -> None:
+        """关闭窗口时摘除信号接线（与 showEvent 的 arm 对称）。"""
+        old = getattr(self, '_dpr_watch_window', None)
+        if old is not None:
+            try:
+                old.screenChanged.disconnect(self._on_window_screen_changed)
+            except (RuntimeError, TypeError):
+                pass
+            self._dpr_watch_window = None
+        old = getattr(self, '_dpr_watch_screen', None)
+        if old is not None:
+            for sig in ('logicalDotsPerInchChanged', 'physicalDotsPerInchChanged'):
+                try:
+                    getattr(old, sig).disconnect(self._on_screen_dpi_changed)
+                except (RuntimeError, TypeError):
+                    pass
+            self._dpr_watch_screen = None
+
+    def _on_window_screen_changed(self, screen) -> None:
+        """QWindow.screenChanged：跨屏 → 换挂新屏 DPI 信号并按新 DPR 强制重建。"""
+        if screen is not None:
+            self._wire_screen_dpi_signals(screen)
+        self._rebuild_frame()
+        self.update()
+
+    def _on_screen_dpi_changed(self, *_args) -> None:
+        """QScreen DPI 变化（系统显示缩放变化，窗口未移动）→ 强制按新 DPR 重建。"""
+        self._rebuild_frame()
+        self.update()
 
     def _frame_draw_rect(self) -> QRect:
         """当前帧在窗口内的绘制矩形（逻辑坐标）；paintEvent 与命中测试共用。"""
@@ -4056,6 +4146,8 @@ class PetWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._closing = True  # 关闭后丢弃迟到的动画事件（生命周期守卫）
+        # 摘除 DPR 变化信号接线（与 showEvent 的 arm 对称）
+        self._disarm_dpr_change_watch()
         # 停掉 Agent 监视器 worker 线程：worker 经引用链持有本窗口，
         # 不主动停会让旧窗口在 deleteLater 之后仍被轮询线程保活（B9）
         if getattr(self, 'agent_link_manager', None) is not None:
