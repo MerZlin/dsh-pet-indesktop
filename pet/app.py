@@ -482,9 +482,12 @@ class PetApp:
         logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
         return lib
 
-    def _create_ui(self, character_id: str) -> None:
-        lib = self._create_library(character_id)
-        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
+    def _wire_window(self, win: PetWindow) -> None:
+        """绑定新窗口的回调接线（创建与角色切换共用，两处历史逐行重复）。
+
+        两段原始代码逐行一致（并集 = 该段本身，未发现任一方多设回调），
+        后续新增回调只改这一处即可保证两个入口同步。
+        """
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
         win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
@@ -498,6 +501,11 @@ class PetApp:
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
+
+    def _create_ui(self, character_id: str) -> None:
+        lib = self._create_library(character_id)
+        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
+        self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
         # 首次点击 Q 弹卡顿。
@@ -551,19 +559,7 @@ class PetApp:
         self.collision_ipc = CollisionIpcSession(self.config, self)
         self.collision_ipc.start()
         win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
-        win.on_switch_character = self.switch_character
-        win.on_open_chat = self.open_chat if self.enable_chat else None
-        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
-        win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
-        win.on_show_balance = self.show_balance if self.enable_chat else None
-        win.on_check_update = self.check_update
-        win.on_look_synced = self.sync_look_to_chat if self.enable_chat else None
-        win.on_look_screen = win._on_look_screen if self.enable_chat and hasattr(win, "_on_look_screen") else None
-        win.on_open_legacy_settings = None
-        win.on_open_modern_settings = self.open_modern_settings
-        win.on_spawn_pet = self.spawn_pet
-        win.on_restore_fun_windows = restore_ojingjing_windows
-        win.on_hidden = self._notify_pet_hidden
+        self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
         # 首次点击 Q 弹卡顿。
