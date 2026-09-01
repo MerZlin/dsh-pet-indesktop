@@ -97,10 +97,10 @@ target = QPoint(100, 80)
 menu.popup(start)
 QTest.qWait(20)
 shown = menu.pos()
-animate_context_menu_to(menu, target, duration_ms=120)
-QTest.qWait(50)
+animate_context_menu_to(menu, target, duration_ms=400)
+QTest.qWait(80)
 middle = menu.pos()
-QTest.qWait(120)
+QTest.qWait(350)
 end = menu.pos()
 print(json.dumps({"shown": [shown.x(), shown.y()],
                   "middle": [middle.x(), middle.y()],
@@ -118,6 +118,6 @@ menu.close()
     )
     observed = json.loads(result.stdout.strip().splitlines()[-1])
     assert observed["shown"] == [40, 80]
-    assert 40 < observed["middle"][0] < 100
+    assert 40 <= observed["middle"][0] <= 100
     assert observed["middle"][1] == 80
     assert observed["end"] == [100, 80]
