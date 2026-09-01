@@ -251,13 +251,9 @@ class PetApp:
 
         aboutToQuit 只绑定一次自本控制器；切换角色会重建桌宠窗口，信号
         触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
-        Agent 联动监视器的 worker 线程同样在此统一收尾（REVIEW_B9 P1）。
         """
         if self.win is not None:
             self.win._save_position()
-            mgr = getattr(self.win, "agent_link_manager", None)
-            if mgr is not None:
-                mgr.stop()
         self.collision_ipc.stop()
         if self.slot_handle is not None:
             try:
@@ -551,12 +547,6 @@ class PetApp:
         # 用新库创建新窗口/托盘，旧对象延迟销毁
         old_win = self.win
         old_win.detach_collision_session()
-        # 旧窗口的 Agent 联动监视器必须在其 deleteLater 前同步停止——
-        # 后台 worker 反向持有旧 monitor/manager/窗口引用链，不停止会继续
-        # 轮询并泄漏线程/OpenCode 连接（REVIEW_B9_FINDINGS.md P1）。
-        old_mgr = getattr(old_win, "agent_link_manager", None)
-        if old_mgr is not None:
-            old_mgr.stop()
         self.collision_ipc.stop()
         self.collision_ipc = CollisionIpcSession(self.config, self)
         self.collision_ipc.start()
