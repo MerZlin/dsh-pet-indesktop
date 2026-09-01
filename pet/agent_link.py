@@ -519,20 +519,27 @@ class BaseAgentMonitor(QObject):
     def _emit(self, signal, args: tuple) -> None:
         """pause 中暂存 outbox（resume 补发），否则直接 emit。
 
-        容量策略：过程汇报（activity）事件可丢；状态（state_changed）事件绝不丢
-        （满容量时优先丢最旧的 activity 腾位；全是状态事件时允许超限——
-        隐藏期间攒 500 条状态翻转在实践中不可能发生）。"""
+        容量策略（有界且保住关键信息）：
+        - 连续重复的相同状态去重（状态流大量是同态重复）；
+        - 满容量时优先丢最旧的 activity（过程汇报本来就是噪音）；
+          加状态事件时没有 activity 可丢才丢最旧状态（被更新的取代，
+          manager 只关心最新状态与 busy→idle 边沿）。"""
         if self._paused and self._running:
             with self._outbox_lock:
+                if signal is self.state_changed and self._outbox:
+                    last_sig, last_args = self._outbox[-1]
+                    if last_sig is self.state_changed and last_args[1] == args[1]:
+                        return  # 连续重复状态，去重
                 if len(self._outbox) >= self._OUTBOX_CAP:
-                    if signal is self.activity:
-                        for i, (sig, _) in enumerate(self._outbox):
-                            if sig is self.activity:
-                                del self._outbox[i]
-                                break
-                        else:
-                            return  # 全是状态事件且已满：丢本条 activity
-                    # 状态事件不受容量限制，继续往下追加
+                    # 先丢最旧的 activity 腾位；没有 activity 才丢最旧的同类
+                    for i, (sig, _) in enumerate(self._outbox):
+                        if sig is self.activity:
+                            del self._outbox[i]
+                            break
+                    else:
+                        if signal is self.activity:
+                            return  # 全是状态且已满：丢本条 activity
+                        self._outbox.pop(0)  # 状态事件：丢最旧状态（被取代）
                 self._outbox.append((signal, args))
             return
         signal.emit(*args)

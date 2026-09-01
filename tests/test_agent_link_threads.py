@@ -223,17 +223,28 @@ def _make_opencode_db(path, rows):
 
 class TestOutboxPolicy:
     def test_outbox_never_drops_state_events(self, tmp_path):
-        """pause 期间 outbox 满：activity 可丢，state 事件绝不丢。"""
+        """pause 期间 outbox 满：activity 丢最旧的，state 丢最旧的（被取代），
+        但连续重复状态去重、且不同状态序列的尾部（最新状态）一定保留。"""
         mon = _make_monitor(tmp_path)
         mon._running = True
         mon._paused = True  # 白盒模拟 pause 中（不真起线程）
         for i in range(600):
             mon._emit_tool(f"tool{i}", 1)
-        for _ in range(3):
+        for s in ["working", "thinking", "attention"]:
+            mon._emit_state(s, 1)
+        states = [a for sig, a in mon._outbox if sig is mon.state_changed]
+        assert [a[1] for a in states] == ["working", "thinking", "attention"]  # 尾部全保留
+        assert len(mon._outbox) <= mon._OUTBOX_CAP  # 容量有界
+
+    def test_outbox_dedupes_consecutive_states(self, tmp_path):
+        """连续重复状态在 outbox 里去重（状态流大量是同态重复）。"""
+        mon = _make_monitor(tmp_path)
+        mon._running = True
+        mon._paused = True
+        for _ in range(100):
             mon._emit_state("working", 1)
         states = [a for sig, a in mon._outbox if sig is mon.state_changed]
-        assert len(states) == 3  # 状态事件一条不丢
-        assert len(mon._outbox) <= mon._OUTBOX_CAP + 3
+        assert len(states) == 1
 
     def test_resume_flushes_outbox(self, tmp_path, app):
         """resume 把 pause 期间暂存的发射补发出去。"""
