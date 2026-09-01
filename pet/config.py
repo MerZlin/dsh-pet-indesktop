@@ -482,6 +482,25 @@ def _clean_character_profiles(value) -> dict:
     return cleaned
 
 
+def _clean_collision_data(value: dict) -> dict:
+    """归一化碰撞设置：collision_* 一组 7 键。
+
+    从 Config._normalize_pet_settings 原样上提为模块级纯函数，供 Config 与
+    config_domains 的 CollisionConfig 共用；清洗逻辑本体一行未改。
+    """
+    result = dict(value)
+    result["collision_enabled"] = _bool_or_default(value.get("collision_enabled"), True)
+    result["collision_restitution"] = _float_or_default(value.get("collision_restitution"), .82, 0.0, 1.0)
+    result["collision_friction"] = _float_or_default(value.get("collision_friction"), .08, 0.0, .30)
+    result["collision_mass_scale"] = _float_or_default(value.get("collision_mass_scale"), 1.0, .5, 2.0)
+    result["collision_impulse_cap"] = _float_or_default(value.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
+    result["collision_sound_enabled"] = bool(value.get("collision_sound_enabled", True))
+    result["collision_sound_volume"] = _float_or_default(
+        value.get("collision_sound_volume"), 0.70, 0.0, 1.0
+    )
+    return result
+
+
 class Config:
     def __init__(self, base=None, instance_id: str | None = None):
         base = Path(base) if isinstance(base, str) else (base or _default_base())
@@ -798,15 +817,7 @@ class Config:
             self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
         )
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
-        self.data["collision_enabled"] = _bool_or_default(self.data.get("collision_enabled"), True)
-        self.data["collision_restitution"] = _float_or_default(self.data.get("collision_restitution"), .82, 0.0, 1.0)
-        self.data["collision_friction"] = _float_or_default(self.data.get("collision_friction"), .08, 0.0, .30)
-        self.data["collision_mass_scale"] = _float_or_default(self.data.get("collision_mass_scale"), 1.0, .5, 2.0)
-        self.data["collision_impulse_cap"] = _float_or_default(self.data.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
-        self.data["collision_sound_enabled"] = bool(self.data.get("collision_sound_enabled", True))
-        self.data["collision_sound_volume"] = _float_or_default(
-            self.data.get("collision_sound_volume"), 0.70, 0.0, 1.0
-        )
+        self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -889,6 +900,29 @@ class Config:
 
     def set_chat_settings(self, settings):
         self.data["chat"] = settings.to_dict(include_secrets=True)
+
+    # ---- 域 facade 便捷入口（批5：只建不用，调用点未迁移）----
+    # 返回对应域的轻量视图（pet/config_domains.py）。normalize 复用本模块现有
+    # _merge_*/_clean_* 函数；facade 只读，不写盘、不碰 secret 保留/version 迁移。
+    def chat_config(self):
+        from .config_domains import ChatConfig
+        return ChatConfig.from_dict(self.data.get("chat", {}))
+
+    def agent_link_config(self):
+        from .config_domains import AgentLinkConfig
+        return AgentLinkConfig.from_dict(self.data.get("agent_link", {}))
+
+    def proactive_config(self):
+        from .config_domains import ProactiveConfig
+        return ProactiveConfig.from_dict(self.data.get("proactive_screen", {}))
+
+    def collision_config(self):
+        from .config_domains import CollisionConfig
+        return CollisionConfig.from_dict(self.data)
+
+    def menu_config(self):
+        from .config_domains import MenuConfig
+        return MenuConfig.from_dict(self.data)
 
     def resolve_api_key(self, provider):
         from .chat.models import SecretStore
