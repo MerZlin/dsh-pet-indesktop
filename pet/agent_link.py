@@ -1161,6 +1161,39 @@ class CustomAgentMonitor(BaseAgentMonitor):
         return ok
 
 
+def other_instances_use_agent(config, agent_key: str) -> bool:
+    """<base> 下其他变体 / 多开实例是否仍开启该 Agent 联动（关闭/卸载时保守保留）。
+
+    语义取两份历史实现的**并集**：既扫当前变体目录的 config.json +
+    config-*.json，也扫 <base> 下全部变体的 dsh-pet-standalone*/config*.json
+    （含当前变体）——任一实现认为在用的文件命中也视为在用。hooks/桥接插件
+    是全局状态，防卸载/关闭时误删仍被其他实例使用的内容。当前实例自身配置
+    始终排除；解析失败的文件按「不在用」跳过（与两份历史实现一致）。
+    """
+    config_dir = Path(config.dir)
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    try:
+        candidates.append(config_dir / "config.json")
+        candidates.extend(config_dir.glob("config-*.json"))
+        candidates.extend(config_dir.parent.glob("dsh-pet-standalone*/config*.json"))
+    except OSError:
+        pass
+    for f in candidates:
+        if f in seen:
+            continue
+        seen.add(f)
+        if config.path and f == config.path:
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict) and bool((data.get("agent_link") or {}).get(agent_key, False)):
+            return True
+    return False
+
+
 # ----------------------------------------------------------------------
 # Agent 联动总调度管理器
 # ----------------------------------------------------------------------
@@ -1326,24 +1359,6 @@ class AgentLinkManager(QObject):
             if hasattr(self.win, "show_bubble"):
                 self.win.show_bubble(f"DSH 桥接插件安装失败：{msg}", duration_ms=6000)
 
-    def _other_instances_enabled(self, agent_key: str) -> bool:
-        """其他多开实例（含默认实例）是否也开着该 Agent 联动。
-        hooks/桥接插件是全局状态，别的实例还在用就不能卸。"""
-        try:
-            candidates = [self.config_dir / "config.json"] + list(self.config_dir.glob("config-*.json"))
-            for f in candidates:
-                if self.cfg.path and f == self.cfg.path:
-                    continue
-                try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
-                    if isinstance(data, dict) and bool((data.get("agent_link") or {}).get(agent_key, False)):
-                        return True
-                except Exception:
-                    continue
-        except Exception:
-            pass
-        return False
-
     def set_enabled(self, agent_key: str, enabled: bool) -> bool:
         """开启或关闭指定 Agent 监视器（必要时弹出确认框）。
 
@@ -1394,17 +1409,15 @@ class AgentLinkManager(QObject):
         else:
             # 关闭联动时移除我们注入的内容（只删自己的，用户自有配置不碰）；
             # 其他多开实例仍在使用则保留（hooks/插件是全局状态）
-            if agent_key == "claude":
-                if self._other_instances_enabled("claude"):
-                    log.info("其他实例仍在使用 Claude 联动，保留 hooks")
-                elif not ClaudeCodeMonitor.uninstall_hooks():
+            if agent_key in ("claude", "dsh") and other_instances_use_agent(self.cfg, agent_key):
+                log.info("其他实例仍在使用 %s 联动，保留注入内容", agent_key)
+            elif agent_key == "claude":
+                if not ClaudeCodeMonitor.uninstall_hooks():
                     log.warning("Claude hooks 卸载未完全成功（配置已关闭，hooks 可能残留）")
                     if hasattr(self.win, "show_bubble"):
                         self.win.show_bubble("Claude hooks 卸载未完全成功，可手动检查 ~/.claude/settings.json", duration_ms=6000)
             elif agent_key == "dsh":
-                if self._other_instances_enabled("dsh"):
-                    log.info("其他实例仍在使用 DSH 联动，保留桥接插件")
-                elif not DshMonitor.uninstall_bridge():
+                if not DshMonitor.uninstall_bridge():
                     log.warning("DSH 桥接插件卸载未完全成功（配置已关闭，插件可能残留）")
                     if hasattr(self.win, "show_bubble"):
                         self.win.show_bubble("DSH 桥接插件卸载未完全成功", duration_ms=6000)

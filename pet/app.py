@@ -27,9 +27,9 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import autostart as autostart_mod
 from . import balance as balance_mod
 from . import catalog
+from . import click_sound
 from . import slot_manager as slot_manager_mod
 from . import updater
-from .click_sound import warm_click_sound_effects
 from .config import APP_DIR_NAME, Config, _default_base
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
@@ -521,14 +521,22 @@ class PetApp:
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
 
-    def _create_ui(self, character_id: str) -> None:
-        lib = self._create_library(character_id)
+    def _build_window(self, character_id: str, lib: MovieLibrary | None = None) -> PetWindow:
+        """创建新窗口/托盘并完成接线、音效预热与旧对象延迟销毁（创建与切换共用）。
+
+        从 _create_ui 与 switch_character 两处历史逐行重复的公共序列（约 25 行）
+        抽出：步骤顺序与 deleteLater / QTimer.singleShot 时序与原实现完全一致。
+        lib 可预传入（switch_character 先预创建、失败则保留当前角色），
+        缺省时按 character_id 创建（_create_ui 启动路径）。
+        """
+        if lib is None:
+            lib = self._create_library(character_id)
         win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
         self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
         # 首次点击 Q 弹卡顿。
-        warm_click_sound_effects(
+        click_sound.warm_click_sound_effects(
             self.config.get("click_sound_pack"),
             data_dir=self.config.dir,
         )
@@ -544,10 +552,15 @@ class PetApp:
 
         if old_win is not None:
             old_win.hide(notify=False)
-            old_tray.hide() if old_tray is not None else None
+            if old_tray is not None:
+                old_tray.hide()
             QTimer.singleShot(0, old_win.deleteLater)
             if old_tray is not None:
                 QTimer.singleShot(0, old_tray.deleteLater)
+        return win
+
+    def _create_ui(self, character_id: str) -> None:
+        self._build_window(character_id)
 
     # ------------------------------------------------------------ 角色切换
     def switch_character(self, character_id: str) -> None:
@@ -562,7 +575,7 @@ class PetApp:
         self.config.save()
 
         try:
-            # 预创建新库，失败则保留当前角色
+            # 预创建新库，失败则保留当前角色（在动旧窗口之前完成）
             lib = self._create_library(character_id)
         except Exception as exc:
             logging.exception('切换角色失败: %s', character_id)
@@ -571,39 +584,17 @@ class PetApp:
 
         logging.info('切换角色: %s -> %s', current, character_id)
 
-        # 用新库创建新窗口/托盘，旧对象延迟销毁
+        # 先停旧窗口的碰撞会话与 Agent 监视器 worker，再重建 IPC 会话：
+        # 否则旧窗口 deleteLater 后其 worker 线程仍经引用链保活并继续轮询
+        # （B9 一审发现）。新窗口/托盘由 _build_window 创建（含旧对象延迟销毁）。
         old_win = self.win
         old_win.detach_collision_session()
-        # 停掉旧窗口的 Agent 监视器 worker：否则旧窗口 deleteLater 后
-        # 其 worker 线程仍经引用链保活并继续轮询（B9 一审发现）
         if getattr(old_win, 'agent_link_manager', None) is not None:
             old_win.agent_link_manager.shutdown()
         self.collision_ipc.stop()
         self.collision_ipc = CollisionIpcSession(self.config, self)
         self.collision_ipc.start()
-        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
-        self._wire_window(win)
-        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
-        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
-        # 首次点击 Q 弹卡顿。
-        warm_click_sound_effects(
-            self.config.get("click_sound_pack"),
-            data_dir=self.config.dir,
-        )
-        win.show()
-
-        tray = self._build_tray(win)
-
-        old_tray = self.tray
-        self.win = win
-        self.tray = tray
-
-        old_win.hide(notify=False)
-        if old_tray is not None:
-            old_tray.hide()
-        QTimer.singleShot(0, old_win.deleteLater)
-        if old_tray is not None:
-            QTimer.singleShot(0, old_tray.deleteLater)
+        self._build_window(character_id, lib=lib)
         if self.enable_chat:
             for chat_window in (self.legacy_chat_window, self.modern_chat_window):
                 if chat_window is not None:

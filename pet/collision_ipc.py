@@ -20,6 +20,7 @@ from PySide6.QtCore import QMetaObject, QObject, QThread, QTimer, Qt, Signal, Sl
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from . import collision
+from . import collision_codec
 from . import collision_debug
 from .config import APP_DIR_NAME
 from . import slot_manager
@@ -61,7 +62,7 @@ class _CollisionWorker(QObject):
         # socket -> 流式帧解码器；只被 worker 线程访问（_read_socket 及其
         # 清理路径都运行在 worker 线程），键为 socket 对象本身，条目在
         # socket 断开/被销毁时同步移除，防止悬挂解码器随 socket 一起泄漏。
-        self._socket_decoders: dict[QLocalSocket, collision.FrameStreamDecoder] = {}
+        self._socket_decoders: dict[QLocalSocket, collision_codec.FrameStreamDecoder] = {}
         self.members: dict[str, dict[str, Any]] = {}
         self._pending_predicted: dict[str, dict] = {}
         self.previous_members: dict[str, dict[str, Any]] = {}
@@ -72,7 +73,7 @@ class _CollisionWorker(QObject):
         self.epoch = ""
         self.tick = 0
         self.overlap_history: dict[str, int] = {}
-        self.watermarks = collision.WatermarkDeduplicator()
+        self.watermarks = collision_codec.WatermarkDeduplicator()
         self._timers: list[QTimer] = []
         self._election_timer = None
         self._welcome_timer = None
@@ -258,7 +259,7 @@ class _CollisionWorker(QObject):
 
     def _send(self, socket, message: dict[str, Any]) -> None:
         try:
-            socket.write(collision.encode_frame(message))
+            socket.write(collision_codec.encode_frame(message))
             socket.flush()
         except Exception:
             logging.debug("碰撞 IPC 写入失败", exc_info=True)
@@ -266,10 +267,10 @@ class _CollisionWorker(QObject):
     def _read_socket(self, socket) -> None:
         decoder = self._socket_decoders.get(socket)
         if decoder is None:
-            decoder = collision.FrameStreamDecoder()
+            decoder = collision_codec.FrameStreamDecoder()
             self._socket_decoders[socket] = decoder
         for message in decoder.feed(bytes(socket.readAll())):
-            if isinstance(message, collision.DecodeError) or not isinstance(message, dict):
+            if isinstance(message, collision_codec.DecodeError) or not isinstance(message, dict):
                 continue
             self._handle_message(socket, message)
 
