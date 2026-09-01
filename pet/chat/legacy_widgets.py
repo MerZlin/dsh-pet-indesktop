@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,8 @@ from . import themes as chat_themes
 
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_ACCENT = "#3994ff"
+
+_logger = logging.getLogger(__name__)
 
 
 def _safe_color(value: object) -> str:
@@ -1012,7 +1015,7 @@ class ChatWindow(QDialog):
             self._bubble.set_state("error")
         # B8：失败时强制 flush——提问立即落盘（失败回复不保存）
         self.store.save(self.session)
-        self.store.flush()
+        self._flush_forced('请求失败')
         self._reset()
         self.pet_link.error(text)
         self._bottom()
@@ -1028,8 +1031,14 @@ class ChatWindow(QDialog):
                 self._remove_bubble(self._bubble)
         # B8：停止时强制 flush——已输入内容立即落盘
         self.store.save(self.session)
-        self.store.flush()
+        self._flush_forced('生成停止')
         self._reset()
+
+    def _flush_forced(self, context: str) -> None:
+        """强制 flush 落盘；失败必须被上层感知（记录日志，供排查与提示）。"""
+        if not self.store.flush():
+            _logger.error('%s强制落盘失败（用户数据可能未保存）: session=%s last_error=%s',
+                          context, self.session.session_id, self.store.last_error)
 
     def _reset(self) -> None:
         self._active_request_id = None
@@ -1059,10 +1068,18 @@ class ChatWindow(QDialog):
         self._update_bubble_widths()
 
     def closeEvent(self, event) -> None:
-        """关闭=隐藏并复用窗口：停止生成、解除桌宠位置监听、落盘排队保存，避免泄漏。"""
+        """关闭=隐藏并复用窗口：先入队当前会话（含未提交提问），再停止生成，flush 落盘。
+
+        停止前直接把当前会话入队：不依赖 worker 的 queued stopped 回调——该回调在
+        退出事件循环停止后不会执行，生成中的提问可能从未入队而丢失。
+        """
+        try:
+            self.store.save(self.session)
+        except Exception:
+            _logger.exception('关闭窗口时保存会话失败')
         self.service.stop()
-        # B8：关窗强制 flush——排队中的保存立即落盘
-        self.store.flush()
+        self._active_request_id = None
+        self._flush_forced('关闭窗口')
         self.set_pet_window(None)
         self.hide()
         event.ignore()

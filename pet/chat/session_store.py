@@ -2,6 +2,7 @@ from __future__ import annotations
 import atexit, json, logging, os, threading, time
 from pathlib import Path
 from .models import ChatSession, utc_now
+from .. import slot_manager as slot_manager_mod
 
 # ============ 历史上限（数值锚定现有代码量级，非拍脑袋） ============
 # 参考：prompt.py 的上下文裁剪 history_message_limit=40 / history_char_limit=24000；
@@ -11,12 +12,17 @@ MAX_MESSAGE_CHARS = 200_000               # 与 MAX_TEXT_TOTAL_CHARS 一致：�
 MAX_SESSION_FILE_BYTES = 16 * 1024 * 1024 # 与 20MB 图片总量同量级：单文件大小上限（保存裁剪/加载拒绝）
 MAX_SESSION_LIST = 200                    # 列表加载数量上限（防全会话解析爆炸）
 MAX_WRITE_ATTEMPTS = 2                    # 单快照写失败自动重试次数（仍失败则内存保留+日志）
+WRITE_LOCK_TIMEOUT = 2.0                  # 跨进程会话写锁最长等待（秒）
 
 _logger = logging.getLogger(__name__)
 
 
 def _serialize_snapshot(snapshot):
-    """序列化快照；超出单文件上限时从快照中裁剪最旧消息（内存对象不受影响）。"""
+    """序列化快照；超出单文件上限时从快照中裁剪最旧消息（内存对象不受影响）。
+
+    非消息字段（system_prompt/custom_title 等）单独超限时抛出 ValueError，
+    让写入失败可观测（flush 返回 False），而不是静默产出超限文件。
+    """
     data = json.dumps(snapshot, ensure_ascii=False, indent=2)
     if len(data.encode('utf-8')) <= MAX_SESSION_FILE_BYTES:
         return data
@@ -26,24 +32,114 @@ def _serialize_snapshot(snapshot):
     while messages and len(data.encode('utf-8')) > MAX_SESSION_FILE_BYTES:
         messages = messages[1:]
         data = json.dumps({**snapshot, 'messages': messages}, ensure_ascii=False, indent=2)
+    if len(data.encode('utf-8')) > MAX_SESSION_FILE_BYTES:
+        raise ValueError(
+            f'会话元数据（非消息字段）超过 {MAX_SESSION_FILE_BYTES} 字节上限，'
+            f'无法安全保存: {snapshot.get("session_id")}')
     return data
 
 
-def _atomic_write(path, snapshot):
-    """tmp + flush + fsync + os.replace 原子替换；tmp 名含 pid+线程 id，跨进程不撞名。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f'.{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+def _fsync_dir(path):
+    """fsync 父目录，保证 os.replace 的目录项在掉电/系统崩溃后持久（POSIX；Windows 跳过）。"""
     try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _acquire_write_lock(path, timeout=WRITE_LOCK_TIMEOUT):
+    """跨进程互斥：写会话文件前持同路径 .lock 文件的内核排他锁（阻塞等待至超时）。"""
+    lock_path = path.with_name(f'{path.name}.lock')
+    deadline = time.monotonic() + timeout
+    while True:
+        handle = slot_manager_mod.acquire_file_lock(lock_path)
+        if handle is not None:
+            return handle
+        if time.monotonic() >= deadline:
+            raise OSError(f'无法获取会话写锁（超时 {timeout:.1f}s）: {lock_path}')
+        time.sleep(0.05)
+
+
+def _merge_snapshots(base_snapshot, incoming):
+    """按 message_id 合并两个会话快照（聊天消息追加语义）。
+
+    base_snapshot 是较新（rev 更高）的一份；incoming 是基于旧版本的编辑。
+    返回新快照：消息按 base 顺序并附上 incoming 独有的消息；标量字段以 base 为准。
+    用于修复「双窗口/双进程基于旧版本保存 → 整会话静默覆盖」的数据丢失。
+    """
+    merged = dict(base_snapshot)
+    seen = {}
+    for message in base_snapshot.get('messages') or []:
+        if isinstance(message, dict):
+            seen[str(message.get('message_id') or id(message))] = message
+    for message in incoming.get('messages') or []:
+        if isinstance(message, dict):
+            key = str(message.get('message_id') or id(message))
+            if key not in seen:
+                seen[key] = message
+    merged['messages'] = list(seen.values())
+    return merged
+
+
+def _read_snapshot(path):
+    """读磁盘上的会话快照；不存在/损坏/超限返回 None（不抛异常）。"""
+    try:
+        if path.stat().st_size > MAX_SESSION_FILE_BYTES:
+            return None
+        with path.open('r', encoding='utf-8') as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _atomic_write(path, snapshot):
+    """tmp + flush + fsync + os.replace 原子替换，并同步父目录。
+
+    写前持跨进程锁并按磁盘 rev 做 CAS：旧版本快照按 message_id 合并后再写，
+    绝不静默覆盖其他进程已落盘的新数据。返回实际写入的快照（可能为合并结果）。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    base = int(snapshot.get('base_rev', snapshot.get('rev', 0)) or 0)
+    lock = None
+    temp = None
+    try:
+        lock = _acquire_write_lock(path)
+        existing = _read_snapshot(path)
+        disk_rev = int((existing or {}).get('rev', 0) or 0)
+        if base < disk_rev:
+            snapshot = _merge_snapshots(existing, snapshot)
+            base = disk_rev
+            snapshot['base_rev'] = base
+            snapshot['rev'] = disk_rev + 1
+            _logger.warning('跨进程/跨 writer 旧版本保存（base %d < 磁盘 %d），已合并消息: %s',
+                            base, disk_rev, path)
+        # 内部 CAS 基线不写入持久化格式
+        snapshot = dict(snapshot)
+        snapshot.pop('base_rev', None)
+        temp = path.with_name(f'.{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
         with temp.open('w', encoding='utf-8', newline='\n') as f:
             f.write(_serialize_snapshot(snapshot))
             f.flush()
             os.fsync(f.fileno())
         os.replace(temp, path)
+        temp = None
+        _fsync_dir(path.parent)
+        return snapshot
     finally:
-        try:
-            temp.unlink()
-        except OSError:
-            pass
+        if lock is not None:
+            slot_manager_mod.release_file_lock(lock)
+        if temp is not None:
+            try:
+                temp.unlink()
+            except OSError:
+                pass
 
 
 def _atomic_delete(path):
@@ -58,24 +154,31 @@ class _SessionWriter:
 
     - submit 只做内存合并入队：同一路径只保留最新操作（save 互相合并、delete 覆盖
       save、save 覆盖 delete），I/O 全部在唯一 worker 线程串行执行；
-    - 读穿透：peek() 返回最新未落盘操作，GUI 线程 load/list 无需等磁盘；
-    - 写失败：记日志 + 自动重试一次；仍失败则内存保留最新快照（可观测：
-      failure_count / last_error / failed_count），等待下次 save/flush 重试，
-      绝不静默丢数据、绝不留半成品文件；
-    - flush() 是排空屏障：等待队列与在飞写全部落盘（含失败快照重试）。
+    - 版本控制：每个会话快照携带单调递增 rev；基于旧 rev 的保存按 message_id 合并
+      （双窗口/双进程并发编辑不静默覆盖）；显式删除后的迟到保存被墓碑拒绝（防复活）；
+    - 读穿透：peek() 返回最新未落盘操作（含失败快照），GUI 线程 load/list 不丢会话；
+    - 写失败：记日志 + 自动重试一次；仍失败则内存保留（可观测：failure_count /
+      last_error / failed_count），flush() 会再重试并如实返回失败；
+    - flush() 是排空+真实落盘屏障：返回 True 当且仅当所有已提交操作全部成功持久化；
+    - close() 原子关闭提交入口后排空并停 worker；关闭后新提交自动重开 worker（不丢数据）。
     """
 
     def __init__(self):
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
-        self._ops: dict[Path, tuple[str, object]] = {}      # path -> ('save', snapshot) | ('delete', None)
+        self._ops: dict[Path, tuple[str, object]] = {}       # path -> ('save', snapshot) | ('delete', None)
         self._inflight: dict[Path, tuple[str, object]] = {}  # 正在写盘的操作（读穿透仍可见）
-        self._failed: dict[Path, object] = {}                # 写失败保留的最新快照
+        self._failed: dict[Path, tuple[str, object]] = {}    # 写失败保留的操作（save/delete 均计入）
         self._write_attempts: dict[Path, int] = {}
+        self._last_rev: dict[Path, int] = {}                 # 每路径已接受的最新 rev
+        self._last_snapshot: dict[Path, dict] = {}           # 每路径最后成功写盘的快照（合并来源）
+        self._tombstones: set[Path] = set()                  # 显式删除的路径（防迟到保存复活）
         self._failures = 0
         self._last_error: BaseException | None = None
+        self._conflicts = 0
         self._stop = False
         self._closed = False
+        self._closing = False
         # 测试/替换 seam：worker 通过实例属性调用，隔离测试可注入计数/失败包装
         self.atomic_write = _atomic_write
         self.atomic_delete = _atomic_delete
@@ -99,22 +202,79 @@ class _SessionWriter:
         with self._lock:
             return len(self._failed)
 
+    @property
+    def conflict_count(self):
+        """旧版本保存冲突 / 删除后复活被拒的次数（可观测，供排查双窗口覆盖）。"""
+        with self._lock:
+            return self._conflicts
+
     # ---- 提交（GUI 线程调用，不阻塞） ----
     def submit_save(self, path, snapshot):
         with self._cond:
-            if self._closed:
-                _logger.warning('会话写入已关闭，丢弃保存: %s', path)
-                return
+            if not self._ensure_open_locked(path, '保存'):
+                return None
+            if path in self._tombstones:
+                self._conflicts += 1
+                _logger.error('会话已删除，拒绝迟到的保存（防复活）: %s', path)
+                return None
+            base = int(snapshot.get('base_rev', snapshot.get('rev', 0)) or 0)
+            last = self._last_rev.get(path, 0)
+            if base < last:
+                latest = self._latest_snapshot_locked(path)
+                if latest is None:
+                    self._conflicts += 1
+                    _logger.error('会话保存基于旧版本且无最新快照可合并，拒绝: %s', path)
+                    return None
+                snapshot = _merge_snapshots(latest, snapshot)
+                base = last  # 合并后内容已含到 last 为止的全部消息
+                self._conflicts += 1
+                _logger.warning('会话保存基于旧版本（base %d < %d），已合并消息防覆盖: %s',
+                                base, last, path)
+            rev = max(last, int(snapshot.get('rev', 0) or 0)) + 1
+            self._last_rev[path] = rev
+            snapshot = dict(snapshot)
+            snapshot['base_rev'] = base  # 携带调用方基线，供写盘时跨进程 CAS 使用
+            snapshot['rev'] = rev
             self._ops[path] = ('save', snapshot)
             self._cond.notify()
+            return rev
 
     def submit_delete(self, path):
         with self._cond:
-            if self._closed:
-                _logger.warning('会话写入已关闭，丢弃删除: %s', path)
-                return
+            if not self._ensure_open_locked(path, '删除'):
+                return False
+            self._tombstones.add(path)
+            self._last_rev[path] = self._last_rev.get(path, 0) + 1
             self._ops[path] = ('delete', None)
             self._cond.notify()
+            return True
+
+    def _ensure_open_locked(self, path, action):
+        """提交入口：关闭中拒绝并记录；已完全关闭则重开 worker（绝不静默丢数据）。"""
+        if not self._closed:
+            return True
+        if self._closing:
+            _logger.warning('会话写入正在关闭，丢弃%s: %s', action, path)
+            return False
+        _logger.debug('会话写入已关闭，重新拉起 worker 接受%s: %s', action, path)
+        self._closed = False
+        self._stop = False
+        self._thread = threading.Thread(
+            target=self._run, name='session-save-worker', daemon=True)
+        self._thread.start()
+        return True
+
+    def _latest_snapshot_locked(self, path):
+        op = self._ops.get(path)
+        if op is not None and op[0] == 'save':
+            return op[1]
+        op = self._inflight.get(path)
+        if op is not None and op[0] == 'save':
+            return op[1]
+        failed = self._failed.get(path)
+        if failed is not None and failed[0] == 'save':
+            return failed[1]
+        return self._last_snapshot.get(path)
 
     def peek(self, path):
         """返回该路径最新未落盘操作 ('save', snapshot) / ('delete', None)，无则 None。"""
@@ -122,22 +282,29 @@ class _SessionWriter:
             op = self._ops.get(path)
             if op is None:
                 op = self._inflight.get(path)
+            if op is None:
+                op = self._failed.get(path)
             return op
 
     def pending_paths(self):
-        """返回所有未落盘路径（供无 character_id 的 load 扫描待写快照）。"""
+        """返回所有未落盘路径（含失败快照；供无 character_id 的 load 扫描）。"""
         with self._cond:
-            return list(self._ops) + list(self._inflight)
+            return list(self._ops) + list(self._inflight) + list(self._failed)
 
-    # ---- 屏障（GUI 线程调用，等待落盘） ----
+    # ---- 屏障（GUI 线程调用，等待真实落盘） ----
     def flush(self, timeout=10.0):
-        """同步等待所有已提交操作（含失败快照的一次重试）落盘。返回是否排空。"""
+        """同步等待所有已提交操作落盘；返回是否全部成功持久化。
+
+        契约：队列排空后只要仍有失败操作（save/delete 均计入 _failed）或超时，
+        就返回 False；只有全部操作真实落盘才返回 True。上层"强制 flush"路径
+        必须检查返回值并至少记录日志。
+        """
         deadline = time.monotonic() + timeout
         with self._cond:
-            retry = [p for p in self._failed
+            retry = [p for p, _kind in self._failed.items()
                      if p not in self._ops and p not in self._inflight]
             for p in retry:
-                self._ops[p] = ('save', self._failed[p])
+                self._ops[p] = self._failed[p]
             self._cond.notify()
         with self._cond:
             while self._ops or self._inflight:
@@ -145,21 +312,30 @@ class _SessionWriter:
                 if remaining <= 0:
                     return False
                 self._cond.wait(remaining)
-        return True
+            return not self._failed
 
     def close(self, timeout=10.0):
-        """排空队列后停 worker 线程（退出路径；atexit 兜底注册）。"""
+        """排空队列并停 worker 线程（应用退出路径；atexit 兜底注册）。
+
+        先原子关闭提交入口再排空：关闭窗口内到达的提交被拒绝并记录（不留无人
+        消费的队列）；关闭完成后若仍有新提交则自动重开 worker。返回是否全部成功落盘。
+        """
         with self._cond:
             if self._closed:
-                return
-            self._stop = True
-        self.flush(timeout)
-        with self._cond:
+                return True
+            self._closing = True
             self._closed = True
+        deadline = time.monotonic() + timeout
+        ok = self.flush(timeout)
+        remaining = deadline - time.monotonic()
+        with self._cond:
+            self._stop = True
+            self._closing = False
             self._cond.notify_all()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=min(5.0, max(0.1, timeout)))
+            thread.join(timeout=max(0.0, remaining))
+        return ok
 
     # ---- worker 线程 ----
     def _run(self):
@@ -186,10 +362,19 @@ class _SessionWriter:
 
     def _apply(self, path, kind, payload):
         if kind == 'save':
-            self.atomic_write(path, payload)
+            written = self.atomic_write(path, payload)
         else:
+            written = None
             self.atomic_delete(path)
         with self._cond:
+            if kind == 'save':
+                if written is not None:
+                    self._last_snapshot[path] = written
+                    written_rev = int(written.get('rev', 0) or 0)
+                    if written_rev > self._last_rev.get(path, 0):
+                        self._last_rev[path] = written_rev
+            else:
+                self._last_snapshot.pop(path, None)
             self._failed.pop(path, None)
             self._write_attempts.pop(path, None)
 
@@ -197,23 +382,31 @@ class _SessionWriter:
         with self._cond:
             self._failures += 1
             self._last_error = exc
-            if kind != 'save':
-                _logger.error('会话删除失败 path=%s: %s', path, exc, exc_info=exc)
-                return
-            self._failed[path] = payload
+            self._failed[path] = (kind, payload)
             attempts = self._write_attempts.get(path, 0)
             self._write_attempts[path] = attempts + 1
             retry = attempts < MAX_WRITE_ATTEMPTS - 1 and path not in self._ops
             if retry:
-                self._ops[path] = ('save', payload)
+                self._ops[path] = (kind, payload)
                 self._cond.notify()
-        _logger.error('会话保存失败 path=%s: %s', path, exc, exc_info=exc)
+        _logger.error('会话%s失败 path=%s: %s',
+                      '删除' if kind != 'save' else '保存', path, exc, exc_info=exc)
 
 
-# 进程内单例：同进程多窗口（modern+classic）/ 多角色共用一条串行 I/O 队列，
-# 同一会话只保留最新快照，天然规避双窗口写同一会话的竞态。
+# 进程内单例：同进程多窗口（modern+classic）/ 多角色共用一条串行 I/O 队列；
+# 同一会话按 rev 合并（不互覆）；显式删除以墓碑防复活。
 _shared_writer = _SessionWriter()
 atexit.register(_shared_writer.close)
+
+
+def flush_shared_writer(timeout=10.0) -> bool:
+    """应用退出路径：同步排空共享会话 writer。返回是否全部成功落盘。"""
+    return _shared_writer.flush(timeout)
+
+
+def close_shared_writer(timeout=10.0) -> bool:
+    """应用退出路径：排空并停掉共享会话 writer（atexit 兜底）。返回是否全部成功落盘。"""
+    return _shared_writer.close(timeout)
 
 
 def _enforce_save_caps(session):
@@ -247,15 +440,21 @@ class SessionStore:
         return ChatSession.create(character_id, provider_id, system_prompt)
 
     def save(self, session):
-        """GUI 线程只做内存快照与入队（不落盘、不阻塞）；同一会话队列合并。"""
+        """GUI 线程只做内存快照与入队（不落盘、不阻塞）；同一会话队列合并。
+
+        返回 session；提交被拒绝（旧版本冲突/已删除/写入关闭）时 session.rev 不更新，
+        拒绝原因通过 writer 的日志与 conflict_count 可观测。
+        """
         session.updated_at = utc_now()
         _enforce_save_caps(session)
-        self._writer.submit_save(
+        rev = self._writer.submit_save(
             self._path(session.character_id, session.session_id), session.to_dict())
+        if rev is not None:
+            session.rev = rev
         return session
 
     def flush(self, timeout=10.0):
-        """强制 flush：等待所有已提交操作落盘（退出/停止/失败时调用）。"""
+        """强制 flush：等待所有已提交操作真实落盘；失败/超时返回 False。"""
         return self._writer.flush(timeout)
 
     @property
