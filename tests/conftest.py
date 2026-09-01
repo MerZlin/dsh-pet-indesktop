@@ -34,3 +34,15 @@ def _no_modal_message_boxes(monkeypatch):
 
     for method in ("warning", "information", "critical", "question", "about"):
         monkeypatch.setattr(QMessageBox, method, staticmethod(lambda *a, **k: None))
+
+
+@pytest.fixture(autouse=True)
+def _close_session_writers():
+    """会话异步写盘（B8）：每个测试结束后关闭所有后台 writer，
+    避免守护线程在 tmp_path 已清理后继续写盘（WinError 145 之类的 teardown 竞态）。"""
+    yield
+    try:
+        from pet.chat import session_store
+        session_store.close_all_writers()
+    except Exception:
+        pass

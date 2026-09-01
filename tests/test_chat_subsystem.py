@@ -86,6 +86,8 @@ def test_session_store_atomic_roundtrip_and_corruption(tmp_path: Path):
     assert loaded is not None
     assert loaded.messages[0].content == "hi"
     loaded_path = tmp_path / "sessions" / "cat" / f"{session.session_id}.json"
+    # 异步写盘（B8）：直接 poke 磁盘路径前先确保已落盘
+    assert store.flush()
     loaded_path.write_text("{bad", encoding="utf-8")
     recovered = store.load(session.session_id)
     assert recovered is None

@@ -255,6 +255,12 @@ class PetApp:
         if self.win is not None:
             self.win._save_position()
         self.collision_ipc.stop()
+        # 会话异步写盘（B8）：退出时落盘并关闭所有 writer，不依赖 atexit 兜底
+        try:
+            from .chat import session_store as _session_store
+            _session_store.close_all_writers()
+        except Exception:
+            logging.exception("退出时关闭会话写盘 worker 失败")
         if self.slot_handle is not None:
             try:
                 slot_manager_mod._unlock_file(self.slot_handle)
