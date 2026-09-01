@@ -541,33 +541,6 @@ class TestOpenCodeSqliteTail:
         mon.stop()
 
 
-class TestCooldownUnits:
-    def test_seconds_and_minutes_conversion(self, tmp_path):
-        """冷却间隔秒/分钟双单位：45 秒应存为 0.75 分钟。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.settings_dialog import PetSettingsDialog
-
-        app = QApplication.instance() or QApplication([])
-        cfg = Config(base=tmp_path)
-        dlg = PetSettingsDialog(cfg)
-        if not hasattr(dlg, "pro_cooldown_unit"):
-            import pytest
-            pytest.skip("非 Windows 无主动识屏设置组")
-
-        # 切到秒，设 45 秒
-        dlg.pro_cooldown_unit.setCurrentIndex(1)
-        dlg.pro_cooldown_spin.setValue(45)
-        assert abs(dlg._cooldown_minutes_value() - 0.75) < 1e-9
-
-        # 切回分钟应自动换算显示
-        dlg.pro_cooldown_unit.setCurrentIndex(0)
-        assert abs(dlg.pro_cooldown_spin.value() - 0.75) < 1e-9
-
-        # 保存后配置为分钟值
-        dlg._save()
-        assert abs(cfg.data["proactive_screen"]["cooldown_minutes"] - 0.75) < 1e-9
-
-
 class TestMultiInstanceGlobalState:
     def test_disable_skips_uninstall_when_other_instance_enabled(self, tmp_path, monkeypatch):
         """其他实例仍开启某 Agent 联动时，本实例关闭不得卸载全局 hooks/插件。"""

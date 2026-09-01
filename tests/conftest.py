@@ -7,7 +7,7 @@
    机器上跑都不应该让喇叭出声。
 
 2) 无人值守环境（CI/自动化）下，模态 QMessageBox 弹窗会永久阻塞或直接崩溃
-   （Fatal: Aborted）。settings_dialog._save() 在写开机自启失败时会弹模态
+   （Fatal: Aborted）。设置对话框（如 modern_settings_dialog）保存开机自启失败时会弹模态
    QMessageBox.warning，所有调用 _save() 的测试在 CI 上都会因此卡死
    （定位手段：pytest -o timeout_method=thread --timeout=90 可 dump 出
    卡住的线程堆栈）。这里用 autouse fixture 全局把 QMessageBox 的静态弹窗

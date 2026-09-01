@@ -1879,32 +1879,6 @@ def test_pet_animation_and_self_talk_defaults_are_persisted(tmp_path: Path):
     assert loaded.get("self_talk_texts") == ["one", "two"]
 
 
-
-def test_pet_settings_dialog_saves_animation_gap_and_self_talk(tmp_path: Path):
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication
-    from pet.config import Config
-    from pet.settings_dialog import PetSettingsDialog
-
-    app = QApplication.instance() or QApplication([])
-    config = Config(tmp_path)
-    dialog = PetSettingsDialog(config)
-    assert dialog.isModal() is False
-    assert dialog.windowModality() == Qt.WindowModality.NonModal
-    dialog.gap_spin.setValue(4.5)
-    dialog.self_talk_check.setChecked(True)
-    dialog.min_spin.setValue(7)
-    dialog.max_spin.setValue(12)
-    dialog.texts_edit.setPlainText("自定义一\n自定义二")
-    dialog._save()
-    assert config.get("animation_gap_seconds") == 4.5
-    assert config.get("self_talk_enabled") is True
-    assert config.get("self_talk_min_interval") == 7.0
-    assert config.get("self_talk_max_interval") == 12.0
-    assert config.get("self_talk_texts") == ["自定义一", "自定义二"]
-    app.processEvents()
-
-
 def test_reference_animation_materials_are_folder_classified():
     from pet import catalog
 

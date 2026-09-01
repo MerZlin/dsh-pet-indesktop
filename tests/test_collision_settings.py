@@ -9,7 +9,6 @@ from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
 from pet.modern_settings_dialog import ModernSettingsDialog
-from pet.settings_dialog import PetSettingsDialog
 from pet.window import PetWindow
 from tests.test_collision_window import FakeLibrary, FakeCollisionSession
 
@@ -116,25 +115,6 @@ def test_modern_settings_dialog_collision_ui_and_round_trip(qapp, tmp_path: Path
     assert reloaded_cfg.get("collision_impulse_cap") == pytest.approx(6000.0)
     assert reloaded_cfg.get("collision_sound_enabled") is False
     assert reloaded_cfg.get("collision_sound_volume") == pytest.approx(0.42)
-
-
-def test_legacy_settings_dialog_collision_toggle_round_trip(qapp, tmp_path: Path):
-    """验证旧版 PetSettingsDialog 总开关存在并能正确保存。"""
-    cfg_file = tmp_path / "appdata"
-    cfg = Config(cfg_file)
-
-    dialog = PetSettingsDialog(cfg, enable_chat=False)
-    try:
-        assert hasattr(dialog, "collision_enabled_check")
-        assert dialog.collision_enabled_check.isChecked() is True
-
-        dialog.collision_enabled_check.setChecked(False)
-        dialog._save()
-    finally:
-        dialog.deleteLater()
-
-    reloaded_cfg = Config(cfg_file)
-    assert reloaded_cfg.get("collision_enabled") is False
 
 
 def test_refresh_pet_settings_live_applies_collision_switch(qapp, tmp_path: Path):
