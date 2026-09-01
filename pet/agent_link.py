@@ -432,6 +432,11 @@ class BaseAgentMonitor(QObject):
         self._gen = 0        # 启动代次（start 时自增）
         self._emit_gen = 0   # 当前发射代次（worker/直调 _poll 发射时携带）
         self._mkdir_on_start = True  # CustomAgentMonitor 只读外部文件时不建目录
+        # pause 中途落在 poll 里的发射暂存 outbox，resume 时补发（宁可晚到不可丢，
+        # 否则 offset 已推进但隐藏期信号被丢弃 = 事件丢失）。容量有界。
+        self._outbox: list[tuple] = []
+        self._outbox_lock = threading.Lock()
+        self._OUTBOX_CAP = 500
 
     def is_running(self) -> bool:
         return self._running and not self._paused
@@ -462,9 +467,15 @@ class BaseAgentMonitor(QObject):
         return True
 
     def begin_stop(self) -> None:
-        """停止第一阶段：清状态+发停止信号（不 join，供批量关闭先广播）。"""
+        """停止第一阶段：作废旧代次+清状态+发停止信号（不 join，供批量关闭先广播）。
+
+        _emit_gen 置 -1 让接收端立即拒收本代次的迟到信号（含已入队未派发的）——
+        否则 stop 后队列里的旧信号仍会被当成当前代次处理。"""
+        self._emit_gen = -1
         self._running = False
         self._paused = False
+        with self._outbox_lock:
+            self._outbox.clear()
         self._worker_stop.set()
 
     def finish_stop(self, deadline: float | None = None) -> None:
@@ -490,6 +501,32 @@ class BaseAgentMonitor(QObject):
     def resume(self) -> None:
         if self._running and self._paused:
             self._paused = False
+            # 补发 pause 期间暂存的发射（GUI 线程直接 emit，即直接派发）
+            with self._outbox_lock:
+                pending = list(self._outbox)
+                self._outbox.clear()
+            for signal, args in pending:
+                signal.emit(*args)
+
+    # ---------------- 发射（worker 或测试直调） ----------------
+
+    def _emit_state(self, state: str, gen: int) -> None:
+        self._emit(self.state_changed, (self.agent_key, state, gen))
+
+    def _emit_tool(self, tool: str, gen: int) -> None:
+        self._emit(self.activity, (self.agent_key, tool, gen))
+
+    def _emit(self, signal, args: tuple) -> None:
+        """pause 中暂存 outbox（resume 补发），否则直接 emit。"""
+        if self._paused and self._running:
+            with self._outbox_lock:
+                if len(self._outbox) < self._OUTBOX_CAP:
+                    self._outbox.append((signal, args))
+                else:
+                    # 满了：状态事件保留最后一个位置（最新状态最重要），过程汇报可丢
+                    log.debug("Agent 监视器 [%s] outbox 已满，丢弃发射", self.agent_key)
+            return
+        signal.emit(*args)
 
     # ---------------- worker 线程 ----------------
 
@@ -500,12 +537,19 @@ class BaseAgentMonitor(QObject):
         启动瞬间不抢读——_poll() 同时是测试的直调 seam（tests 直接驱动
         _poll 验证解析逻辑），worker 若立即抢读会和直调竞争同一个 tailer。
         """
+        self._worker_started()
         while not self._worker_stop.wait(self._POLL_INTERVAL_S):
             if not self._paused:
                 try:
                     self._poll(gen=gen)
                 except Exception:
                     log.debug("Agent 监视器 [%s] 轮询异常", self.agent_key, exc_info=True)
+
+    def _worker_started(self) -> None:
+        """worker 线程开场钩子：worker 独占状态的初始化放这里（worker 线程内执行）。
+
+        不要在 start() 里从 GUI 线程写这些状态——旧 worker 可能仍存活，
+        GUI 写入会与在飞 worker 交叉（B9 设计评审）。"""
 
     def _poll(self, gen: int | None = None) -> None:
         """读一轮统一协议 jsonl。gen=None（测试直调）时用当前发射代次。"""
@@ -520,11 +564,11 @@ class BaseAgentMonitor(QObject):
                 st = str(data.get("state", ""))
                 tool = str(data.get("tool", "") or "").strip()
                 if tool:
-                    self.activity.emit(self.agent_key, tool, emit_gen)
+                    self._emit_tool(tool, emit_gen)
                 normalized = normalize_event_state(ev, st)
                 if not normalized:
                     continue  # 不认识的事件类型：忽略，不误报为 working
-                self.state_changed.emit(self.agent_key, normalized, emit_gen)
+                self._emit_state(normalized, emit_gen)
             except Exception:
                 pass
 
@@ -960,11 +1004,11 @@ class CursorMonitor(BaseAgentMonitor):
                         continue
                     tool = cursor_line_tool(data)
                     if tool:
-                        self.activity.emit("cursor", tool, emit_gen)
+                        self._emit_tool(tool, emit_gen)
                     norm = cursor_line_state(data)
                     if not norm:
                         continue  # 未知 transcript 行类型：忽略
-                    self.state_changed.emit("cursor", norm, emit_gen)
+                    self._emit_state(norm, emit_gen)
                 except Exception:
                     pass
 
@@ -982,12 +1026,15 @@ class OpenCodeMonitor(BaseAgentMonitor):
         self.db_path = db_path or (
             Path.home() / ".local" / "share" / "opencode" / "opencode.db"
         )
+        # 以下状态全部归 worker 线程独占（_worker_started 里初始化/轮换重置）：
         self._last_rowid: int = 0
         self._db_ready: bool = False
+        self._db_file_id: tuple[int, ...] | None = None
 
-    def start(self) -> None:
+    def _worker_started(self) -> None:
         self._db_ready = False
-        super().start()
+        self._last_rowid = 0
+        self._db_file_id = None
 
     def _poll(self, gen: int | None = None) -> None:
         # 统一 jsonl 通道（兼容未来插件/手动注入）
@@ -997,6 +1044,17 @@ class OpenCodeMonitor(BaseAgentMonitor):
         if not self.db_path.is_file():
             return
         import sqlite3
+
+        try:
+            # 库文件被替换/重建（OpenCode 更新、删库重建）时重新 backfill：
+            # 否则沿用旧 rowid 会静默漏掉新库的事件
+            st = self.db_path.stat()
+            file_id = (st.st_dev, st.st_ino)
+            if file_id != self._db_file_id:
+                self._db_file_id = file_id
+                self._db_ready = False
+        except OSError:
+            return
 
         try:
             # 只读连接；WAL 模式下只读不阻塞 OpenCode 写入
@@ -1057,10 +1115,10 @@ class OpenCodeMonitor(BaseAgentMonitor):
             data_raw = json.dumps(data)
             state = opencode_event_state(ev_type, data_raw)
             if state:
-                self.state_changed.emit("opencode", state, emit_gen)
+                self._emit_state(state, emit_gen)
             tool = opencode_event_tool(ev_type, data_raw)
             if tool:
-                self.activity.emit("opencode", tool, emit_gen)
+                self._emit_tool(tool, emit_gen)
 
 
 class CustomAgentMonitor(BaseAgentMonitor):

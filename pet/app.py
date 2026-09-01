@@ -254,6 +254,9 @@ class PetApp:
         """
         if self.win is not None:
             self.win._save_position()
+        # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
+        if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
+            self.win.agent_link_manager.shutdown()
         self.collision_ipc.stop()
         # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
         # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。

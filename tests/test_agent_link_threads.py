@@ -71,21 +71,73 @@ class TestWorkerLifecycle:
         finally:
             mon.stop()
 
-    def test_restart_drops_stale_generation_signals(self, tmp_path):
-        """重启后旧代次的迟到信号被接收端丢弃，新代次正常接收。"""
+    def test_restart_drops_stale_generation_signals(self, tmp_path, app):
+        """重启后旧代次的迟到信号被接收端丢弃，新代次正常接收（真实信号路径）。"""
         cfg = Config(base=tmp_path)
-        mgr = AgentLinkManager(None, cfg)
+
+        class DummyWin:
+            idles = ["待机"]
+            cats = {"acts": ["写代码"]}
+            def __init__(self): self.switched = []
+            def isVisible(self): return True
+            def request_link_anim(self, name): self.switched.append(name)
+            def request_link_idle(self): pass
+            def _pick(self, lst): return lst[0]
+            def show_bubble(self, *a, **k): pass
+
+        win = DummyWin()
+        mgr = AgentLinkManager(win, cfg, min_interval=0.0)
         mon = mgr.monitors["dsh"]
-        applied = []
-        orig = mgr._on_agent_state
-        mgr._on_agent_state = lambda k, s, g=0: applied.append(s) if mgr._gen_current(k, g) else None
-        # 直接验证接收端代次闸门：旧代次丢弃、当前代次放行
-        assert mgr._gen_current("dsh", 0) is True   # 未启动过：gen=0
-        mon._gen = 5
-        mon._emit_gen = 5
-        assert mgr._gen_current("dsh", 3) is False  # 旧代次
-        assert mgr._gen_current("dsh", 5) is True   # 当前代次
-        mgr._on_agent_state = orig
+        mon._POLL_INTERVAL_S = 0.05
+        # 先建空事件文件再启动：tailer backfill 防护只在文件存在时完成，
+        # 否则启动后首轮读取会把启动间隙写入的内容当历史跳过
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        # 等 worker 完成首轮 backfill 再写事件，否则被当历史跳过
+        polls = []
+        orig_poll = mon._poll
+        mon._poll = lambda gen=None: (polls.append(1), orig_poll(gen=gen))
+        assert mon.start() is True
+        assert wait_until(lambda: len(polls) >= 1)
+        gen1 = mon._emit_gen
+        with open(mon.events_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"state": "working"}) + "\n")
+        assert wait_until(lambda: len(win.switched) >= 1)
+        # 停止：当前代次立即作废，旧代次信号被拒收
+        mon.stop()
+        n_after_stop = len(win.switched)
+        mon.state_changed.emit("dsh", "working", gen1)   # 迟到旧信号（直发=同步派发）
+        app.processEvents()
+        assert len(win.switched) == n_after_stop         # 被丢弃
+        # 重启后新代次正常
+        assert mon.start() is True
+        mon.stop()
+
+    def test_stop_invalidates_current_generation(self, tmp_path, app):
+        """stop 后（未重启）当前代次的在途信号也被接收端拒收。"""
+        cfg = Config(base=tmp_path)
+
+        class DummyWin:
+            idles = ["待机"]
+            cats = {"acts": ["写代码"]}
+            def __init__(self): self.switched = []
+            def isVisible(self): return True
+            def request_link_anim(self, name): self.switched.append(name)
+            def request_link_idle(self): pass
+            def _pick(self, lst): return lst[0]
+            def show_bubble(self, *a, **k): pass
+
+        win = DummyWin()
+        mgr = AgentLinkManager(win, cfg, min_interval=0.0)
+        mon = mgr.monitors["dsh"]
+        mon._POLL_INTERVAL_S = 0.05
+        assert mon.start() is True
+        gen = mon._emit_gen
+        mon.stop()
+        # stop 后带 stop 前代次的信号到达：必须被拒（_emit_gen 已作废为 -1）
+        mon.state_changed.emit("dsh", "working", gen)
+        app.processEvents()
+        assert win.switched == []
 
     def test_start_refused_while_old_worker_alive(self, tmp_path):
         """旧 worker 未死透时 start 拒绝重启（绝不允许双 worker）。"""
