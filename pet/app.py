@@ -255,10 +255,20 @@ class PetApp:
         if self.win is not None:
             self.win._save_position()
         self.collision_ipc.stop()
-        # 会话异步写盘（B8）：退出时落盘并关闭所有 writer，不依赖 atexit 兜底
+        # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
+        # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
         try:
             from .chat import session_store as _session_store
-            _session_store.close_all_writers()
+            for _w in (self.legacy_chat_window, self.modern_chat_window, self.quick_chat):
+                _session = getattr(_w, 'session', None)
+                _store = getattr(_w, 'store', None)
+                if _session is not None and _store is not None:
+                    try:
+                        _store.save(_session)
+                    except Exception:
+                        logging.exception("退出前保存会话失败")
+            if not _session_store.close_all_writers(permanent=True):
+                logging.warning("退出时会话写盘 worker 未干净关闭")
         except Exception:
             logging.exception("退出时关闭会话写盘 worker 失败")
         if self.slot_handle is not None:

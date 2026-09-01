@@ -91,14 +91,17 @@ class _AsyncWriter:
             return ok
 
     def close(self, timeout: float = 10.0) -> bool:
-        """幂等关闭：先 flush 再停线程。返回第一次 close 的真实结果（粘滞）。"""
+        """幂等关闭：先关提交入口再排空已接受的提交。返回第一次 close 的真实结果（粘滞）。
+
+        顺序必须是 closing → flush：先 flush 再关入口会让「flush 目标捕获之后、
+        closing 之前」被接受的提交脱离本次关闭的保证范围（复审档案 R2 的教训）。
+        """
         with self._cond:
             if self._close_result is not None:
                 return self._close_result
-        ok = self.flush(timeout=timeout)
-        with self._cond:
-            self._closing = True
+            self._closing = True  # 先关提交入口：此后 submit 一律拒绝
             self._cond.notify_all()
+        ok = self.flush(timeout=timeout)
         self._thread.join(timeout=5.0)
         if self._thread.is_alive():
             # daemon 线程会随进程退出；标记结果但绝不无限等待（B9 的教训：
@@ -144,14 +147,21 @@ class _AsyncWriter:
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
-    """与旧同步版一致的崩溃安全写：tmp + fsync + os.replace + 父目录 fsync。"""
+    """与旧同步版一致的崩溃安全写：tmp + fsync + os.replace + 父目录 fsync。
+
+    tmp 名带进程+线程标识：异常场景下若存在多个写者（如退出边缘重建的
+    writer），至少不会同时写同一个临时文件把内容写串。
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(".json.tmp")
-    with temp.open("w", encoding="utf-8", newline="\n") as f:
-        f.write(payload.decode("utf-8"))
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temp, path)
+    temp = path.with_suffix(f".json.tmp-{os.getpid()}-{threading.get_ident():x}")
+    try:
+        with temp.open("w", encoding="utf-8", newline="\n") as f:
+            f.write(payload.decode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)  # 异常路径清掉半成品 tmp
     _fsync_dir(path.parent)
 
 
@@ -170,10 +180,17 @@ def _fsync_dir(folder: Path) -> None:
 # 但同一 root 只有一个写盘线程（串行即一致）。
 _writers: dict[Path, _AsyncWriter] = {}
 _writers_lock = threading.Lock()
+# 永久关闭屏障（应用退出）：置位后 _writer_for 不再创建新 writer，
+# 杜绝「注册表已清空但旧 writer 未关完时，迟到提交又建第二个同目录 writer」
+# （双 writer 会同时写同一个 tmp 文件/互相 os.replace，破坏串行前提）。
+_shutdown = False
 
 
-def _writer_for(root: Path) -> _AsyncWriter:
+def _writer_for(root: Path) -> _AsyncWriter | None:
+    """返回 root 的共享 writer；全局或局部关闭中返回 None（调用方按拒绝处理）。"""
     with _writers_lock:
+        if _shutdown:
+            return None
         w = _writers.get(root)
         # 不复活正在关闭的 writer：让 submit 走「拒绝可观测」路径；
         # 测试/重开场景先 close_all_writers() 清注册表，下一次提交自然建新实例。
@@ -183,9 +200,16 @@ def _writer_for(root: Path) -> _AsyncWriter:
         return w
 
 
-def close_all_writers(timeout: float = 10.0) -> bool:
-    """应用退出时调用：落盘并关闭全部 writer。返回是否全部干净关闭。"""
+def close_all_writers(timeout: float = 10.0, *, permanent: bool = False) -> bool:
+    """落盘并关闭全部 writer。返回是否全部干净关闭。
+
+    permanent=True（应用退出）：永久关闭提交入口，之后不再创建新 writer。
+    permanent=False（测试隔离）：允许后续提交重建 writer。
+    """
+    global _shutdown
     with _writers_lock:
+        if permanent:
+            _shutdown = True
         writers = list(_writers.values())
         _writers.clear()
     ok = True
@@ -212,8 +236,11 @@ class SessionStore:
         """序列化（调用线程）+ 提交异步落盘。返回 False = writer 已关闭被拒绝。"""
         session.updated_at = utc_now()
         payload = json.dumps(session.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
-        return _writer_for(self.root).submit(
-            self._path(session.character_id, session.session_id), payload)
+        w = _writer_for(self.root)
+        if w is None:
+            log.warning("会话保存被拒绝（写盘已全局关闭）: %s", session.session_id)
+            return False
+        return w.submit(self._path(session.character_id, session.session_id), payload)
 
     def flush(self, timeout: float = 10.0) -> bool:
         """等待本目录所有已提交写盘完成；有失败/超时返回 False。"""
@@ -275,7 +302,11 @@ class SessionStore:
         return sorted(sessions, key=lambda x: x.updated_at, reverse=True)
 
     def delete(self, session) -> bool:
-        return _writer_for(self.root).submit(
+        w = _writer_for(self.root)
+        if w is None:
+            log.warning("会话删除被拒绝（写盘已全局关闭）: %s", session.session_id)
+            return False
+        return w.submit(
             self._path(session.character_id, session.session_id), None)
 
     def clear(self, session):

@@ -149,3 +149,39 @@ def test_corrupt_file_still_quarantined(store):
     (bad / "bad.json").write_text("{oops", encoding="utf-8")
     assert st.load("bad", "shenshen") is None
     assert list(bad.glob("*.corrupt-*.json"))
+
+
+def test_close_drains_accepted_ops_before_shutdown(store):
+    """close 屏障：先关入口再排空——已接受的提交必须全部落盘。"""
+    st, tmp = store
+    session = _make_session(st)
+    assert st.save(session) is True
+    assert ss.close_all_writers() is True
+    assert (tmp / "sessions" / "shenshen" / "s1.json").is_file()
+
+
+def test_permanent_shutdown_rejects_new_writers(store):
+    """permanent 关闭后不再创建新 writer，save 被拒绝且可观测。"""
+    st, _ = store
+    session = _make_session(st)
+    st.save(session)
+    assert ss.close_all_writers(permanent=True) is True
+    try:
+        st2 = ss.SessionStore(_)
+        assert st2.save(_make_session(st2, sid="s9")) is False
+        assert st2.root not in ss._writers  # 没有偷偷重建 writer
+    finally:
+        ss._shutdown = False  # 复位全局屏障，不影响后续测试
+
+
+def test_concurrent_submit_during_close(store):
+    """close 进行中迟到的提交被拒绝而不是进入双 writer。"""
+    st, _ = store
+    session = _make_session(st)
+    st.save(session)
+    with ss._writers_lock:
+        w = ss._writers.get(st.root)
+    assert w is not None
+    with w._cond:
+        w._closing = True  # 模拟关闭屏障已落下
+    assert st.save(session) is False

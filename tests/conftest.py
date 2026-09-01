@@ -44,5 +44,6 @@ def _close_session_writers():
     try:
         from pet.chat import session_store
         session_store.close_all_writers()
+        session_store._shutdown = False  # 复位永久关闭屏障（aboutToQuit 路径可能置位）
     except Exception:
         pass
