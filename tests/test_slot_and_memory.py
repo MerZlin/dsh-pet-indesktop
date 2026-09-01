@@ -120,24 +120,41 @@ print(f"WORKER3:{{slot}}", flush=True)
 
 
 def test_concurrent_first_lock_creation_is_not_truncated(tmp_path):
-    """两个真实进程首次创建同一锁文件时，恰一方持锁且记录保持完整。"""
+    """两个真实进程首次创建同一锁文件时，恰一方持锁且记录保持完整。
+
+    对负载不敏感：持锁方不再固定 sleep 1 秒后释放（全量负载下后到的进程
+    可能错过窗口、在锁释放后拿到锁，导致双双报 LOCKED）。改为持锁方一直
+    持有锁，直到失败方落一个「已尝试」标记（最多等 60s），保证无论调度
+    延迟多大，两进程的竞争窗口必然重叠、恰一方持锁。
+    """
     config_dir = tmp_path / APP_DIR_NAME
     config_dir.mkdir(parents=True, exist_ok=True)
     release = tmp_path / "lock-start"
+    attempted = config_dir / "loser-attempted.flag"
     worker_code = f"""
 from pathlib import Path
 import time
 from pet.slot_manager import acquire_pet_slot
+
+config_dir = Path({str(config_dir)!r})
+release = Path({str(release)!r})
+attempted = Path({str(attempted)!r})
 print('READY', flush=True)
-while not Path({str(release)!r}).exists():
+while not release.exists():
     time.sleep(0.001)
 try:
-    slot, handle = acquire_pet_slot({str(config_dir)!r}, preferred_slot=0)
+    slot, handle = acquire_pet_slot(config_dir, preferred_slot=0)
 except Exception as exc:
+    # 失败方：先落标记（持锁方据此确认竞争已发生），再报告退出
+    attempted.write_text("1", encoding="ascii")
     print(type(exc).__name__, flush=True)
 else:
     print(f"LOCKED:{{slot}}", flush=True)
-    time.sleep(1)
+    # 持锁等待对方确认尝试过（上限 60s），保证竞争窗口必然重叠
+    deadline = time.monotonic() + 60
+    while not attempted.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    handle.close()
 """
     p1 = _run_slot_worker_code(config_dir, worker_code)
     p2 = _run_slot_worker_code(config_dir, worker_code)
@@ -147,8 +164,8 @@ else:
     results = sorted([p1.stdout.readline().strip(), p2.stdout.readline().strip()])
     assert results.count("LOCKED:0") == 1
     assert results.count("SlotLockError") == 1
-    assert p1.wait(timeout=5) == 0
-    assert p2.wait(timeout=5) == 0
+    assert p1.wait(timeout=30) == 0
+    assert p2.wait(timeout=30) == 0
     lock_file = sm.get_slot_lock_path(config_dir, 0)
     assert lock_file.stat().st_size == sm.PID_RECORD_LEN
     assert lock_file.read_bytes().strip() != b""
