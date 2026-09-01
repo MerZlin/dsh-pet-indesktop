@@ -1129,6 +1129,10 @@ class PetWindow(QWidget):
         self.move(x, y)
         self._save_position()
 
+    def go_default_corner(self) -> None:
+        """公开转发：手动回到右下角（等价 _go_default_corner）。"""
+        self._go_default_corner()
+
     def _schedule_macos_window_level(self, on: bool) -> None:
         if sys.platform != 'darwin':
             return
@@ -1962,6 +1966,10 @@ class PetWindow(QWidget):
         # 播完（_on_anim_ended 切走）时释放，覆盖所有早期返回路径。
         self._update_interaction_hold()
         return True
+
+    def switch_clip(self, name: str, link_request: bool = False) -> bool:
+        """公开转发：切换到指定动画（等价 _switch）。"""
+        return self._switch(name, _link_request=link_request)
 
     def _switch_fallback(self, prev_anim: str, prev_movie, prev_click_hold: bool,
                          prev_bounds, requested: str, is_link: bool = False) -> None:
@@ -2807,6 +2815,10 @@ class PetWindow(QWidget):
         #    计时器在跑」区分两种失败（B7 复审 R2）。
         if not (self._pending_switch == name and self._switch_retry_timer.isActive()):
             self._switch(name)  # 贴边放不下：原地播放走路姿态，不位移
+
+    def trigger_move(self, name: str) -> None:
+        """公开转发：手动触发移动（等价 _trigger_move）。"""
+        self._trigger_move(name)
 
     def _on_move_tick(self) -> None:
         """位置驱动：跟随动画播放进度插值（前后各 2s 不动，中间走完全程）。"""
@@ -3917,6 +3929,10 @@ class PetWindow(QWidget):
                     duration_ms=6000,
                 )
 
+    def toggle_proactive_enabled(self, on: bool) -> None:
+        """公开转发：切换主动识屏总开关（等价 _toggle_proactive_enabled）。"""
+        self._toggle_proactive_enabled(on)
+
     def _set_proactive_option(self, key: str, value: Any) -> None:
         """右键菜单修改主动识屏子项选项。"""
         pro_data = dict(self.cfg.get('proactive_screen', {}))
@@ -3925,6 +3941,10 @@ class PetWindow(QWidget):
         self.cfg.save()
         if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
             self.proactive_watcher.apply_config()
+
+    def set_proactive_option(self, key: str, value: Any) -> None:
+        """公开转发：修改主动识屏子项选项（等价 _set_proactive_option）。"""
+        self._set_proactive_option(key, value)
 
     def _toggle_agent_link(self, agent_key: str, on: bool, action=None) -> None:
         """右键菜单切换 Agent 状态联动子项。
@@ -3947,12 +3967,20 @@ class PetWindow(QWidget):
         if on:
             self.show_bubble(f"已开启 {agent_key.upper()} 状态联动监听～", duration_ms=4000)
 
+    def toggle_agent_link(self, agent_key: str, on: bool, action=None) -> None:
+        """公开转发：切换 Agent 状态联动子项（等价 _toggle_agent_link）。"""
+        self._toggle_agent_link(agent_key, on, action)
+
     def _set_agent_link_option(self, key: str, on: bool) -> None:
         """联动气泡提醒子项开关（开始干活 / 任务完成），立即写入配置。"""
         ag_data = dict(self.cfg.get('agent_link', {}))
         ag_data[key] = bool(on)
         self.cfg.set('agent_link', ag_data)
         self.cfg.save()
+
+    def set_agent_link_option(self, key: str, on: bool) -> None:
+        """公开转发：联动气泡提醒子项开关（等价 _set_agent_link_option）。"""
+        self._set_agent_link_option(key, on)
 
     def _rename_character(self) -> None:
         """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""
@@ -3967,6 +3995,10 @@ class PetWindow(QWidget):
         shown = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
         self.show_bubble(f'角色名：{shown}')
 
+    def rename_character(self) -> None:
+        """公开转发：自定义当前角色显示名（等价 _rename_character）。"""
+        self._rename_character()
+
     def _request_switch_character(self, character_id: str) -> None:
         """请求切换角色；优先交给 app 做热切换，否则只保存配置。"""
         if self.on_switch_character is not None:
@@ -3974,6 +4006,10 @@ class PetWindow(QWidget):
         else:
             self.cfg.set('character', character_id)
             self.cfg.save()
+
+    def request_switch_character(self, character_id: str) -> None:
+        """公开转发：请求切换角色（等价 _request_switch_character）。"""
+        self._request_switch_character(character_id)
 
     def set_playback_speed(self, speed: float) -> None:
         """设置动画播放速率并持久化。"""
@@ -4259,6 +4295,10 @@ class PetWindow(QWidget):
         # unwind. Quitting synchronously avoids the first click being consumed
         # before the zero-delay callback can run.
         app.quit()
+
+    def request_quit(self) -> None:
+        """公开转发：请求退出应用（等价 _request_quit）。"""
+        self._request_quit()
 
     def moveEvent(self, event) -> None:  # noqa: N802
         super().moveEvent(event)

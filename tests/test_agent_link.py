@@ -1627,7 +1627,7 @@ class TestCustomAgentManager:
 
 class TestCustomAgentMenu:
     def test_menu_lists_custom_agent_and_toggle_routes(self, tmp_path):
-        """右键菜单动态渲染自定义 Agent，勾选走通用 _toggle_agent_link。"""
+        """右键菜单动态渲染自定义 Agent，勾选走通用 toggle_agent_link。"""
         from PySide6.QtWidgets import QMenu
         from pet.context_menus.shared import add_agent_link_menu
 
@@ -1646,10 +1646,10 @@ class TestCustomAgentMenu:
             def __init__(self):
                 self.cfg = cfg
 
-            def _toggle_agent_link(self, key, on, action=None):
+            def toggle_agent_link(self, key, on, action=None):
                 toggles.append((key, on))
 
-            def _set_agent_link_option(self, key, on):
+            def set_agent_link_option(self, key, on):
                 options.append((key, on))
 
         menu = QMenu()
