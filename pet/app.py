@@ -571,6 +571,10 @@ class PetApp:
         # 用新库创建新窗口/托盘，旧对象延迟销毁
         old_win = self.win
         old_win.detach_collision_session()
+        # 停掉旧窗口的 Agent 监视器 worker：否则旧窗口 deleteLater 后
+        # 其 worker 线程仍经引用链保活并继续轮询（B9 一审发现）
+        if getattr(old_win, 'agent_link_manager', None) is not None:
+            old_win.agent_link_manager.shutdown()
         self.collision_ipc.stop()
         self.collision_ipc = CollisionIpcSession(self.config, self)
         self.collision_ipc.start()

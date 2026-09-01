@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -397,10 +398,24 @@ class ByteOffsetTailer:
 
 
 class BaseAgentMonitor(QObject):
-    """Agent 监视器抽象基类。"""
+    """Agent 监视器抽象基类。
 
-    state_changed = Signal(str, str)  # (agent_key, state)
-    activity = Signal(str, str)       # (agent_key, 工具名) —— 过程汇报用，仅事件带工具名时发
+    线程模型（B9 重做，设计见 _plan/B9_DESIGN.md + 设计评审）：
+    - 每个监视器一条专属 daemon worker 线程，自持 1.5s 节奏循环；
+      所有 I/O（文件 tail / 目录扫描 / SQLite）都在 worker 线程，GUI 零 I/O；
+    - 发射带代次号（emit_gen）：worker 捕获自己启动时的代次，重启后旧线程的
+      迟到发射带旧代次，由 manager 接收端校验丢弃（发送端标志挡不住
+      emit→dispatch 竞态，代次校验必须在做接收端——设计评审结论）；
+    - pause 只跳过读取、绝不推进 offset/rowid（事件不丢）；
+    - stop 有界 join；join 超时（病态 I/O 卡死）则 start 拒绝重启，
+      绝不允许双 worker 同时读写共享状态。
+    """
+
+    state_changed = Signal(str, str, int)  # (agent_key, state, 发射代次)
+    activity = Signal(str, str, int)       # (agent_key, 工具名, 发射代次) —— 仅事件带工具名时发
+
+    _POLL_INTERVAL_S = 1.5
+    _STOP_JOIN_TIMEOUT_S = 2.0  # 有界等待：绝不无界 join（GUI 冻结教训）
 
     def __init__(self, agent_key: str, config_dir: Path, parent=None) -> None:
         super().__init__(parent)
@@ -410,40 +425,91 @@ class BaseAgentMonitor(QObject):
         self.events_file = self.events_dir / f"{agent_key}.jsonl"
         self._running = False
         self._paused = False
-        self._timer = QTimer(self)
-        self._timer.setInterval(1500)
-        self._timer.timeout.connect(self._poll)
         self._tailer = ByteOffsetTailer(self.events_file)
+        # worker 线程状态
+        self._worker: threading.Thread | None = None
+        self._worker_stop = threading.Event()
+        self._gen = 0        # 启动代次（start 时自增）
+        self._emit_gen = 0   # 当前发射代次（worker/直调 _poll 发射时携带）
+        self._mkdir_on_start = True  # CustomAgentMonitor 只读外部文件时不建目录
 
     def is_running(self) -> bool:
         return self._running and not self._paused
 
-    def start(self) -> None:
+    # ---------------- 生命周期（GUI 线程调用） ----------------
+
+    def start(self) -> bool:
+        """启动 worker 线程。旧 worker 未死透（上轮 join 超时）则拒绝重启。"""
+        if self._worker is not None and self._worker.is_alive():
+            log.warning("Agent 监视器 [%s] 旧 worker 未退出，拒绝重启（防双 worker）", self.agent_key)
+            return False
+        self._worker_stop.set()  # 兜底：万一旧 event 还在 set 状态…先清再建
+        self._worker_stop = threading.Event()
+        self._gen += 1
+        self._emit_gen = self._gen
         self._running = True
         self._paused = False
-        self.events_dir.mkdir(parents=True, exist_ok=True)
+        if self._mkdir_on_start:
+            self.events_dir.mkdir(parents=True, exist_ok=True)
         self._tailer.reset()
-        if not self._timer.isActive():
-            self._timer.start()
+        gen = self._gen
+        self._worker = threading.Thread(
+            target=self._work_loop, args=(gen,), daemon=True,
+            name=f"agent-monitor-{self.agent_key}",
+        )
+        self._worker.start()
         log.info("Agent 监视器 [%s] 已启动", self.agent_key)
+        return True
 
-    def stop(self) -> None:
+    def begin_stop(self) -> None:
+        """停止第一阶段：清状态+发停止信号（不 join，供批量关闭先广播）。"""
         self._running = False
         self._paused = False
-        self._timer.stop()
+        self._worker_stop.set()
+
+    def finish_stop(self, deadline: float | None = None) -> None:
+        """停止第二阶段：有界 join。deadline 为 time.monotonic() 绝对时间。"""
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            remaining = self._STOP_JOIN_TIMEOUT_S if deadline is None \
+                else max(0.0, deadline - time.monotonic())
+            worker.join(timeout=remaining)
+            if worker.is_alive():
+                log.warning("Agent 监视器 [%s] worker 退出超时（病态 I/O 卡死）", self.agent_key)
+
+    def stop(self) -> None:
+        self.begin_stop()
+        self.finish_stop()
         log.info("Agent 监视器 [%s] 已停止", self.agent_key)
 
     def pause(self) -> None:
+        """暂停读取（不推进 offset，事件不丢）。worker 线程保持存活空转。"""
         if self._running:
             self._paused = True
-            self._timer.stop()
 
     def resume(self) -> None:
         if self._running and self._paused:
             self._paused = False
-            self._timer.start()
 
-    def _poll(self) -> None:
+    # ---------------- worker 线程 ----------------
+
+    def _work_loop(self, gen: int) -> None:
+        """worker 主循环：1.5s 节奏；stop_event.wait 可被 stop 立即唤醒。
+
+        首轮先等一个周期再读（stop_event.wait 返回 True=被停止，直接退出）：
+        启动瞬间不抢读——_poll() 同时是测试的直调 seam（tests 直接驱动
+        _poll 验证解析逻辑），worker 若立即抢读会和直调竞争同一个 tailer。
+        """
+        while not self._worker_stop.wait(self._POLL_INTERVAL_S):
+            if not self._paused:
+                try:
+                    self._poll(gen=gen)
+                except Exception:
+                    log.debug("Agent 监视器 [%s] 轮询异常", self.agent_key, exc_info=True)
+
+    def _poll(self, gen: int | None = None) -> None:
+        """读一轮统一协议 jsonl。gen=None（测试直调）时用当前发射代次。"""
+        emit_gen = self._emit_gen if gen is None else gen
         lines = self._tailer.read_new_lines()
         for line in lines:
             try:
@@ -454,11 +520,11 @@ class BaseAgentMonitor(QObject):
                 st = str(data.get("state", ""))
                 tool = str(data.get("tool", "") or "").strip()
                 if tool:
-                    self.activity.emit(self.agent_key, tool)
+                    self.activity.emit(self.agent_key, tool, emit_gen)
                 normalized = normalize_event_state(ev, st)
                 if not normalized:
                     continue  # 不认识的事件类型：忽略，不误报为 working
-                self.state_changed.emit(self.agent_key, normalized)
+                self.state_changed.emit(self.agent_key, normalized, emit_gen)
             except Exception:
                 pass
 
@@ -852,9 +918,10 @@ class CursorMonitor(BaseAgentMonitor):
         self._scan_interval = 30.0  # 目录发现降频：30s 一次（tail 仍 1.5s）
         self._last_scan = 0.0
 
-    def _poll(self) -> None:
+    def _poll(self, gen: int | None = None) -> None:
         # 首先检查统一 jsonl
-        super()._poll()
+        super()._poll(gen=gen)
+        emit_gen = self._emit_gen if gen is None else gen
 
         if not self.cursor_base.is_dir():
             return
@@ -893,11 +960,11 @@ class CursorMonitor(BaseAgentMonitor):
                         continue
                     tool = cursor_line_tool(data)
                     if tool:
-                        self.activity.emit("cursor", tool)
+                        self.activity.emit("cursor", tool, emit_gen)
                     norm = cursor_line_state(data)
                     if not norm:
                         continue  # 未知 transcript 行类型：忽略
-                    self.state_changed.emit("cursor", norm)
+                    self.state_changed.emit("cursor", norm, emit_gen)
                 except Exception:
                     pass
 
@@ -922,9 +989,10 @@ class OpenCodeMonitor(BaseAgentMonitor):
         self._db_ready = False
         super().start()
 
-    def _poll(self) -> None:
+    def _poll(self, gen: int | None = None) -> None:
         # 统一 jsonl 通道（兼容未来插件/手动注入）
-        super()._poll()
+        super()._poll(gen=gen)
+        emit_gen = self._emit_gen if gen is None else gen
 
         if not self.db_path.is_file():
             return
@@ -989,10 +1057,10 @@ class OpenCodeMonitor(BaseAgentMonitor):
             data_raw = json.dumps(data)
             state = opencode_event_state(ev_type, data_raw)
             if state:
-                self.state_changed.emit("opencode", state)
+                self.state_changed.emit("opencode", state, emit_gen)
             tool = opencode_event_tool(ev_type, data_raw)
             if tool:
-                self.activity.emit("opencode", tool)
+                self.activity.emit("opencode", tool, emit_gen)
 
 
 class CustomAgentMonitor(BaseAgentMonitor):
@@ -1007,16 +1075,14 @@ class CustomAgentMonitor(BaseAgentMonitor):
         self.events_file = Path(events_path).expanduser()
         self.events_dir = self.events_file.parent
         self._tailer = ByteOffsetTailer(self.events_file)
+        # 只读监听外部文件：不替用户在任意路径创建目录
+        self._mkdir_on_start = False
 
-    def start(self) -> None:
-        # 覆写基类 start：基类会 mkdir 事件目录，这里只读监听外部文件，
-        # 不替用户在任意路径创建目录
-        self._running = True
-        self._paused = False
-        self._tailer.reset()
-        if not self._timer.isActive():
-            self._timer.start()
-        log.info("Agent 监视器 [%s] 已启动 (%s)", self.agent_key, self.events_file)
+    def start(self) -> bool:
+        ok = super().start()
+        if ok:
+            log.info("Agent 监视器 [%s] 已启动 (%s)", self.agent_key, self.events_file)
+        return ok
 
 
 # ----------------------------------------------------------------------
@@ -1276,8 +1342,42 @@ class AgentLinkManager(QObject):
         for mon in self.monitors.values():
             mon.resume()
 
-    def _on_agent_state(self, agent_key: str, state: str) -> None:
-        """接收 Agent 状态变更并调度桌宠动作/气泡（带去抖与节流）。"""
+    def _gen_current(self, agent_key: str, gen: int) -> bool:
+        """校验发射代次是否仍是该监视器的当前代次（丢弃旧 worker 的迟到信号）。"""
+        mon = self.monitors.get(agent_key)
+        if mon is None:
+            return False
+        return gen == mon._emit_gen
+
+    def shutdown(self) -> None:
+        """窗口销毁/角色切换：先广播停止（不逐个阻塞），再按共享截止 join。
+
+        防止 worker 线程经「线程→monitor→manager→旧窗口」引用链把旧窗口
+        对象保活（B9 一审：角色切换后旧窗口的 monitor 继续轮询）。
+        没有存活 worker 时零开销直接返回（不调 time.monotonic——测试里
+        它可能被 monkeypatch 成有限迭代器，多调一次就是 StopIteration）。
+        """
+        for mon in self.monitors.values():
+            mon.begin_stop()
+        active = [
+            mon for mon in self.monitors.values()
+            if mon._worker is not None and mon._worker.is_alive()
+        ]
+        if not active:
+            return
+        deadline = time.monotonic() + BaseAgentMonitor._STOP_JOIN_TIMEOUT_S
+        for mon in active:
+            mon.finish_stop(deadline)
+
+    def _on_agent_state(self, agent_key: str, state: str, gen: int = 0) -> None:
+        """接收 Agent 状态变更并调度桌宠动作/气泡（带去抖与节流）。
+
+        代次校验：worker 线程发射带其启动代次，监视器重启后旧代次的迟到
+        信号（已入 Qt 队列的）在此丢弃——发送端标志挡不住 emit→dispatch
+        竞态，接收端校验是唯一的完整闸门（B9 设计评审结论）。
+        """
+        if not self._gen_current(agent_key, gen):
+            return
         if not hasattr(self.win, "isVisible") or not self.win.isVisible():
             return
 
@@ -1442,9 +1542,11 @@ class AgentLinkManager(QObject):
         else:
             self._show_link_bubble(f"{name} 开始干活啦～", important=False, duration_ms=3000)
 
-    def _on_agent_activity(self, agent_key: str, tool: str) -> None:
+    def _on_agent_activity(self, agent_key: str, tool: str, gen: int = 0) -> None:
         """过程汇报气泡（可选，默认关）：「DSH 正在读文件…」这类。
         白名单工具映射 + 三重限流（同 Agent 10s / 同文案 60s / 全局 8s）。"""
+        if not self._gen_current(agent_key, gen):
+            return  # 旧代次 worker 的迟到信号
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_activity", False):
             return

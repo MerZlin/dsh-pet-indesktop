@@ -4023,6 +4023,10 @@ class PetWindow(QWidget):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._closing = True  # 关闭后丢弃迟到的动画事件（生命周期守卫）
+        # 停掉 Agent 监视器 worker 线程：worker 经引用链持有本窗口，
+        # 不主动停会让旧窗口在 deleteLater 之后仍被轮询线程保活（B9）
+        if getattr(self, 'agent_link_manager', None) is not None:
+            self.agent_link_manager.shutdown()
         if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
             self._cancel_slingshot_to_anchor()
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
