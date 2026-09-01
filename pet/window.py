@@ -4028,6 +4028,11 @@ class PetWindow(QWidget):
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调
         self._stop_fs_watch()
         self.detach_collision_session()
+        # Agent 联动监视器：worker 线程反向持有本窗口引用链，关闭前必须同步
+        # 停止（幂等；角色切换走 PetApp.switch_character 的显式 stop，这里是
+        # 直接 close/退出路径的统一收尾）——REVIEW_B9_FINDINGS.md P1。
+        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+            self.agent_link_manager.stop()
         if self._input_controller is not None:
             self._input_controller.stop()
             self._input_controller = None

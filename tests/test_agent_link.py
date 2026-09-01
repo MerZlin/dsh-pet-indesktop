@@ -2052,3 +2052,468 @@ class TestMonitorBackgroundPolling:
             assert received == ["working"]
         finally:
             mon.stop()
+
+
+# ============================================================================
+# B9 复审：生命周期隔离（迟到信号代次 / 双 worker / pause 竞态 / 关闭路径）
+# 对应 _plan/REVIEW_B9_FINDINGS.md 的 P1/P2 逐项回归
+# ============================================================================
+class TestMonitorLifecycleIsolation:
+    """B9 复审硬约束（全部事件/屏障同步，不用 sleep 猜时序）：
+
+    1. stop 后已排队的迟到信号按代次隔离——快速 stop/start 时旧代事件
+       不得污染新代 GUI 状态（含 stop 后不重启的场景）；
+    2. pause 与在飞 worker 竞态不丢事件：暂停期间 worker 不读取
+       （offset 不前移），已读取的在途事件由 manager 缓存、resume 重放；
+    3. stop 超时后 start 必须等旧 worker 彻底退出才换代——绝不允许
+       两个 worker 同时读写同一 tailer/SQLite；旧代 worker 不得关闭
+       新代 worker 的 SQLite 连接；
+    4. 旧窗口/角色切换/应用退出必须停掉 worker（manager.stop() 幂等、
+       PetWindow.closeEvent、PetApp.switch_character、_on_about_to_quit）；
+    5. OpenCode session 归属查询失败 fail-closed：子代理事件不得放行。
+    """
+
+    @staticmethod
+    def _app():
+        return QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _write_event(mon, line: str) -> None:
+        with open(mon.events_file, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+
+    # ---------------------------------------------------------------- 1. 迟到信号代次隔离
+    def test_stop_start_drops_old_generation_queued_signals(self, tmp_path):
+        """worker emit → 不跑事件循环 → stop → start（换代）→ processEvents：
+        旧代已排队的信号必须被代次闸门拦截，只有新代事件生效。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append((k, s)))
+        mon.start()
+        try:
+            mon._poll()                       # 旧代 backfill
+            assert mon._worker_done.wait(5)
+            self._write_event(mon, '{"event": "PreToolUse"}')
+            mon._poll()                       # 旧代 worker 读取并发出信号（排队中）
+            assert mon._worker_done.wait(5)
+            mon.stop()                        # 不跑 processEvents：信号留在队列
+            first = mon._worker_thread
+            mon.start()                       # 换代：新代 worker
+            assert mon._worker_thread is not first
+            mon._poll()                       # 新代 backfill（跳过旧行）
+            assert mon._worker_done.wait(5)
+            self._write_event(mon, '{"event": "Stop"}')
+            mon._poll()                       # 新代读取新事件
+            assert mon._worker_done.wait(5)
+            app.processEvents()               # 旧代迟到信号 + 新代信号一起投递
+            assert received == [("dsh", "attention")]   # 旧代 working 被隔离
+        finally:
+            mon.stop()
+
+    def test_stop_without_restart_drops_queued_signals(self, tmp_path):
+        """worker emit → 不跑事件循环 → stop（不重启）→ processEvents：
+        已停监视器的迟到信号同样被隔离（运行态闸门）。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append((k, s)))
+        mon.start()
+        try:
+            mon._poll()                       # backfill
+            assert mon._worker_done.wait(5)
+            self._write_event(mon, '{"event": "PreToolUse"}')
+            mon._poll()                       # worker 读取并发出信号（排队中）
+            assert mon._worker_done.wait(5)
+            mon.stop()                        # 不 processEvents
+            app.processEvents()               # 迟到信号投递
+            assert received == []             # 已停监视器的信号被隔离
+        finally:
+            mon.stop()
+
+    def test_emit_with_stale_generation_is_silent(self, tmp_path):
+        """代次闸门：旧代 worker（换代后仍在跑）的发射路径全部静默。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        got = []
+        mon.state_changed.connect(lambda k, s: got.append(s))
+        mon._running = True
+        mon._generation = 3                   # 当前代次 3
+        mon._poll_worker(gen=1)               # 旧代 poll：不得触碰共享状态/发信号
+        mon._emit_state("working", gen=1)     # 旧代发射：静默
+        mon._emit_activity("bash", gen=1)
+        assert got == []
+        mon._emit_state("working", gen=3)     # 当前代次：正常
+        assert got == ["working"]
+
+    # ---------------------------------------------------------------- 2. pause 竞态不丢事件
+    def test_pause_buffers_in_flight_events_resume_replays(self, tmp_path):
+        """pause 与在飞 worker 竞态：暂停期间到达的事件必须缓存并在
+        resume 重放——绝不允许「offset 已推进但事件被丢」。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        received, bubbles = [], []
+
+        class Win:
+            cats = {"acts": ["写代码"]}
+            idles = ["待机呼吸"]
+            _bubble_busy_until = 0.0
+            _pending_link_anim = None
+
+            def isVisible(self):
+                return True
+
+            def request_link_anim(self, name):
+                received.append(name)
+
+            def request_link_idle(self):
+                pass
+
+            def _switch(self, name):
+                pass
+
+            def _pick(self, lst):
+                return lst[0]
+
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+        mgr = AgentLinkManager(Win(), cfg, min_interval=0.0)
+        mon = mgr.monitors["dsh"]
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()               # 先建空文件，backfill 才能落到末尾
+        mon.start()
+        try:
+            mon._poll()                       # backfill
+            assert mon._worker_done.wait(5)
+            self._write_event(mon, '{"event": "PreToolUse"}')
+            mon._poll()                       # worker 读取并发出信号（排队中）
+            assert mon._worker_done.wait(5)
+            mgr.pause()                       # 暂停：事件尚未投递
+            app.processEvents()               # 投递 hop1：worker → 监视器代次闸门
+            app.processEvents()               # 投递 hop2：监视器 → manager（暂停中 → 缓存）
+            assert received == []
+            assert "dsh" in mgr._paused_pending
+            mgr.resume()                      # 恢复：重放缓存事件
+            assert received == ["写代码"]     # 事件不丢
+        finally:
+            mgr.stop()
+
+    def test_pause_freezes_worker_reads_resume_continues(self, tmp_path):
+        """暂停期间 worker 不读取（offset 不前移），暂停期间写入的事件
+        在 resume 后读到——「事件要么不读要么不丢」。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.start()
+        try:
+            mon._poll()                       # backfill
+            assert mon._worker_done.wait(5)
+            mon.pause()
+            self._write_event(mon, '{"event": "PreToolUse"}')
+            mon._worker_done.clear()
+            mon._worker_tick.set()            # 即使手动唤醒，worker 也因暂停不读取
+            assert mon._worker_done.wait(5)
+            app.processEvents()
+            assert received == []
+            mon.resume()
+            mon._poll()
+            assert mon._worker_done.wait(5)
+            app.processEvents()
+            assert received == ["working"]    # 暂停期间写入的事件恢复后读到
+        finally:
+            mon.stop()
+
+    # ---------------------------------------------------------------- 3. 双 worker 防护
+    def test_stop_timeout_never_leaves_two_workers(self, tmp_path, monkeypatch):
+        """stop 超时（旧 worker 卡在 I/O）后 start 必须等旧 worker 彻底退出
+        才换代——绝不允许新旧两个 worker 同时读写共享状态（审查 P1）。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        mon._STOP_JOIN_TIMEOUT_S = 0.05        # 测试提速：stop 快速超时
+
+        gate = threading.Event()               # 卡住 poll（模拟慢 I/O）
+        entered = threading.Event()            # 旧 worker 已进入 poll
+        in_poll = []                           # 当前并发 poll 的线程名
+        peak = [0]
+        guard = threading.Lock()
+        orig = BaseAgentMonitor._poll_worker
+
+        def blocking_poll(self_, gen=None):
+            with guard:
+                in_poll.append(threading.current_thread().name)
+                peak[0] = max(peak[0], len(in_poll))
+            entered.set()
+            try:
+                assert gate.wait(10), "测试 gate 超时"
+            finally:
+                with guard:
+                    in_poll.remove(threading.current_thread().name)
+
+        monkeypatch.setattr(BaseAgentMonitor, "_poll_worker", blocking_poll)
+        mon.start()
+        try:
+            mon._poll()
+            assert entered.wait(5)             # 旧 worker 卡在 I/O 中
+            mon.stop()                         # join 超时：旧 worker 未退出
+            old_thread = mon._worker_thread
+            assert old_thread.is_alive()
+            # 旧 worker 的 I/O 在 ~3.5s 后才放行：旧实现 start() 内部 join
+            # 固定 2s，超时后会创建第二个 worker（≈2s 返回）；新实现无限期等
+            # 旧 worker 死透（≥3.5s 才返回）。elapsed 断言区分两种实现，
+            # 对确定性的 2s join 超时留有 1.5s 裕度。
+            threading.Thread(
+                target=lambda: (time.sleep(3.5), gate.set()), daemon=True,
+            ).start()
+            t0 = time.monotonic()
+            mon.start()
+            elapsed = time.monotonic() - t0
+            assert elapsed >= 3.0, "start() 在旧 worker 死透前返回：允许双 worker 并发"
+            assert not old_thread.is_alive()
+            assert mon._worker_thread is not old_thread
+            assert peak[0] == 1                # 全程从未有两个 worker 并发 poll
+        finally:
+            gate.set()
+            mon.stop()
+
+    def test_stale_generation_cannot_close_current_db(self, tmp_path):
+        """旧代 worker 收尾不得关闭新代 worker 正在使用的 SQLite 连接
+        （连接按 worker 代次私有，审查 P1）。"""
+        import sqlite3
+
+        app = self._app()
+        db_path = tmp_path / "opencode.db"
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.commit()
+        db.close()
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
+        mon._running = True
+        mon._generation = 2                   # 模拟新代 worker 已就位
+        mon._poll_worker(gen=2)               # 新代建立只读连接
+        assert mon._db is not None
+        conn = mon._db
+        mon._close_worker_resources(gen=1)    # 旧代收尾：不得关闭新代连接
+        assert mon._db is conn
+        mon._poll_worker(gen=1)               # 旧代 poll：代次不匹配，不触碰共享状态
+        assert mon._db is conn
+        mon._close_worker_resources(gen=2)    # 新代正常收尾
+        assert mon._db is None
+
+    # ---------------------------------------------------------------- 4. 关闭/切换路径
+    def test_manager_stop_stops_all_monitor_workers(self, tmp_path):
+        """manager.stop()（窗口关闭/角色切换/退出统一收尾）：所有监视器
+        worker 线程退出，幂等可重复调用。"""
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        ag = dict(cfg.get("agent_link", {}))
+        ag.update({"dsh": True, "claude": True, "cursor": True, "opencode": True})
+        cfg.set("agent_link", ag)
+        cfg.save()
+        mgr = AgentLinkManager(None, cfg)
+        try:
+            for mon in mgr.monitors.values():
+                assert mon._running is True
+                assert mon._worker_thread is not None and mon._worker_thread.is_alive()
+            mgr.stop()
+            for mon in mgr.monitors.values():
+                assert not mon._worker_thread.is_alive()
+                assert mon._running is False
+            mgr.stop()                        # 幂等
+            for mon in mgr.monitors.values():
+                assert not mon._worker_thread.is_alive()
+        finally:
+            mgr.stop()
+
+    def test_pet_window_close_stops_agent_workers(self, tmp_path):
+        """审查 P1：PetWindow.closeEvent 必须停止 agent_link_manager（worker 退出）。"""
+        from pet.library import MovieLibrary
+        from pet.window import PetWindow
+
+        app = self._app()
+        cfg = Config(base=tmp_path)
+        ag = dict(cfg.get("agent_link", {}))
+        ag["dsh"] = True
+        cfg.set("agent_link", ag)
+        cfg.save()
+        lib = MovieLibrary(character_id="shenshen")
+        win = PetWindow(lib, cfg)
+        try:
+            mgr = win.agent_link_manager
+            mon = mgr.monitors["dsh"]
+            assert mon._running is True
+            worker = mon._worker_thread
+            assert worker is not None and worker.is_alive()
+            win.close()
+            app.processEvents()
+            assert not worker.is_alive()
+            assert mon._running is False
+        finally:
+            win.close()
+            win.deleteLater()
+            app.processEvents()
+
+    def test_switch_character_stops_old_window_manager(self, tmp_path, monkeypatch):
+        """审查 P1：switch_character 必须在旧窗口 deleteLater 前停止旧 manager
+        （否则 worker 反向持有旧窗口引用链继续轮询）。"""
+        from types import SimpleNamespace
+
+        import pet.app as app_mod
+        from pet.app import PetApp
+        from pet.config import Config
+
+        app = self._app()
+        config = Config(base=tmp_path)
+        config.set("character", "shenshen")
+        config.save()
+        owner = PetApp(app, config, enable_chat=False)
+
+        stopped = []
+
+        class FakeMgr:
+            def stop(self):
+                stopped.append(1)
+
+        class FakeWin:
+            agent_link_manager = FakeMgr()
+
+            def detach_collision_session(self):
+                pass
+
+            def hide(self, notify=False):
+                pass
+
+            def show(self):
+                pass
+
+            def deleteLater(self):
+                pass
+
+        class FakeTray:
+            def hide(self):
+                pass
+
+            def deleteLater(self):
+                pass
+
+        owner.win = FakeWin()
+        owner.tray = FakeTray()
+        owner.island = None
+        monkeypatch.setattr(owner.collision_ipc, "stop", lambda: None)
+        monkeypatch.setattr(
+            app_mod, "CollisionIpcSession",
+            lambda cfg, parent: SimpleNamespace(stop=lambda: None, start=lambda: None),
+        )
+        monkeypatch.setattr(
+            app_mod, "PetWindow", lambda lib, cfg, collision_session=None: FakeWin(),
+        )
+        monkeypatch.setattr(owner, "_create_library", lambda cid: object())
+        monkeypatch.setattr(owner, "_build_tray", lambda win: FakeTray())
+        monkeypatch.setattr(app_mod, "warm_click_sound_effects", lambda *a, **k: None)
+
+        owner.switch_character("another")
+        assert stopped == [1]                 # 旧窗口 manager 已停止
+        owner.switch_character("third")       # 再次切换：新旧窗口同样收尾
+        assert stopped == [1, 1]
+        app.processEvents()                   # 处理 deleteLater 调度（无异常即可）
+
+    def test_about_to_quit_stops_current_window_manager(self, tmp_path, monkeypatch):
+        """审查 P1：aboutToQuit 收尾必须停止当前窗口的 agent_link_manager。"""
+        from pet.app import PetApp
+        from pet.config import Config
+
+        app = self._app()
+        config = Config(base=tmp_path)
+        owner = PetApp(app, config, enable_chat=False)
+        stopped = []
+
+        class FakeMgr:
+            def stop(self):
+                stopped.append(1)
+
+        class FakeWin:
+            agent_link_manager = FakeMgr()
+
+            def _save_position(self):
+                pass
+
+        owner.win = FakeWin()
+        owner.slot_handle = None
+        monkeypatch.setattr(owner.collision_ipc, "stop", lambda: None)
+        owner._on_about_to_quit()
+        assert stopped == [1]
+
+    # ---------------------------------------------------------------- 5. OpenCode fail-closed
+    def test_opencode_session_query_failure_filters_batch(self, tmp_path):
+        """审查 P2：有 session 表但归属查询失败（锁定/轮换/schema 变更中）时
+        fail-closed——跳过整批并关闭连接，绝不把子代理事件当主会话放行
+        （防「干完活啦」刷屏）；恢复后重连 backfill 正常。"""
+        import sqlite3
+
+        class _FlakyExecute:
+            """代理真实连接：命中 fail 子串的 execute 抛异常（模拟归属查询失败）。"""
+
+            def __init__(self, conn, fail_on_substring):
+                self._conn = conn
+                self._fail_on = fail_on_substring
+
+            def execute(self, sql, params=()):
+                if self._fail_on in sql:
+                    raise sqlite3.OperationalError("simulated session query lock")
+                return self._conn.execute(sql, params)
+
+            def close(self):
+                self._conn.close()
+
+        app = self._app()
+        db_path = tmp_path / "opencode.db"
+        db = sqlite3.connect(db_path)
+        db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+        db.execute("CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT)")
+        db.execute("INSERT INTO session VALUES ('child1', 'root1')")
+        db.commit()
+        db.close()
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
+        received = []
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon._running = True
+        mon._poll_worker()                    # 连接 + backfill
+
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('c', 1, 'message.part.updated.1', "
+                   "'{\"sessionID\":\"child1\",\"part\":{\"type\":\"step-start\"}}')")
+        db.commit()
+        db.close()
+        real_conn = mon._db
+        mon._db = _FlakyExecute(real_conn, "FROM session")
+        mon._poll_worker()                    # 归属查询失败 → 跳过整批
+        assert received == []                 # 子代理事件未放行
+        assert mon._db is None                # 连接已关闭，等待重连
+
+        mon._poll_worker()                    # 重连 + backfill（跳过已读 batch）
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('r', 2, 'message.part.updated.1', "
+                   "'{\"sessionID\":\"root1\",\"part\":{\"type\":\"step-start\"}}')")
+        db.commit()
+        db.close()
+        mon._poll_worker()                    # 主会话正常上报
+        assert received == ["working"]
+        mon._close_worker_resources()         # 同步 seam 手动收尾
