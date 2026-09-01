@@ -1344,8 +1344,11 @@ class ModernSettingsDialog(QDialog):
         self.no_move_check.setChecked(bool(self.config.get("no_move", False)))
         self.mouse_through_check = ToggleSwitch(self)
         self.mouse_through_check.setChecked(bool(self.config.get("mouse_through", False)))
-        self.cursor_hidden_passthrough_check = ToggleSwitch(self)
-        self.cursor_hidden_passthrough_check.setChecked(bool(self.config.get("cursor_hidden_passthrough", True)))
+        # Windows 专属的光标隐藏穿透仅在 Windows 创建，避免非 Windows 未入布局时游离到窗口左上角。
+        self.cursor_hidden_passthrough_check = None
+        if sys.platform == "win32":
+            self.cursor_hidden_passthrough_check = ToggleSwitch(self)
+            self.cursor_hidden_passthrough_check.setChecked(bool(self.config.get("cursor_hidden_passthrough", True)))
         self.drag_physics_check = ToggleSwitch(self)
         self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
 
