@@ -86,6 +86,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 
 ## 当前状态
 
+- **开发版（v4.0.5 之后）**：多开碰撞、灵动岛、快速对话气泡、自定义 Agent 联动通道、POSIX IPC 重选修复、右键菜单 LTR、碰撞协议加固、拖动不触发点击音效、Cloudflare 请求头优化等（PR #36/#39/#40/#41/#44/#46/#47/#49/#50）。
 - **v4.0.5**：功能版——音效体系升级（点击音效包/Agent 联动音效）、甩出力度档位、弹弓弹射、光标隐藏自动穿透、点击 Q 弹卡顿修复、自启变体独立（PR #33/#34/#35）。
 - **v4.0.4**：功能版——余额分档动画、DeepSeek 峰谷提示（可自定义文案与颜色）、后台音乐自动唱歌、点击音效打断、移动动画调整、位置记忆修复、自启残留清理、thinking 专属气泡文案等（PR #29/#30/#31/#32）。
 - **v4.0.3**：紧急修复版——修复 Windows 透明像素点击穿透、DSH 桥接插件自动安装 pnpm，以及 Windows 官方包中文乱码（PR #27/#28）。
@@ -928,6 +929,20 @@ python scripts/cleanup_mei_cache.py --delete
 <summary><b>最近修复（2026-08）</b></summary>
 
 ## 最近修复（2026-08）
+
+### v4.0.5 之后（开发版）
+
+- **多开碰撞引擎「鱼塘碰碰车」（PR #41）**：多开桌宠物理对撞、槽位管理、碰撞 IPC 与缩略图缓存；支持拖拽/甩出/弹弓等物理交互。
+- **灵动岛（PR #36）**：新增独立灵动岛胶囊窗口，展示余额/状态信息，可拖拽、贴边吸附、记忆位置，支持暗色/浅色/玻璃风格与自定义图标。
+- **聊天窗置顶与点击台词绑定（PR #36）**：AI 聊天窗支持始终置顶；点击桌宠可按配置触发对应台词/动画。
+- **快速对话气泡（PR #40）**：点击桌宠头顶气泡直接打开 Quick Chat，长文本分页滚动，支持焦点输入。
+- **统一三平台构建与 CI（PR #39）**：统一 Linux/macOS/Windows 构建脚本与测试基建，修复 Wayland 下拖动/拖影，CI 测试全局 mock QMessageBox 等。
+- **自定义 Agent 联动通道（PR #44）**：`agent_link.custom_agents` 配置驱动，声明 `{key, name, path}` 即可零代码接入任意符合统一事件协议的 JSONL Agent；新增 `docs/AGENT_LINK_PROTOCOL.md` 协议文档。
+- **POSIX 碰撞 IPC 重选修复（PR #46）**：QLocalServer 在 Linux/macOS 残留 Unix socket 导致协调者重选死循环——改为先探测活监听者，确认无人应答再清理残留并重试；补 `bytesAvailable()` 兜底读取，恢复 POSIX 测试覆盖。
+- **右键菜单 LTR 与平滑入场（PR #47）**：菜单始终 LTR 布局，不再镜像子菜单；新增 140ms OutCubic 位置动画。
+- **碰撞协议与协调者生命周期加固（PR #49）**：协议预算（协调者下行 256 KiB / 客户端上行 4 KiB）、成员数/载荷限制、残留端点恢复、锁文件初始化、成员 freshness 统一、leave/failover/epoch 切换时序修正。
+- **拖动不再触发点击音效（PR #50）**：按下阶段不再播放 press 音效，确认是点击后才播放完整 press+release。
+- **Cloudflare 1010 请求头优化（PR #50）**：urllib 请求统一增加浏览器特征头（Mozilla User-Agent / Accept-Language 等），规避 opencode go 等网关的 Cloudflare 浏览器签名拦截。
 
 ### v4.0.5（功能版）
 
