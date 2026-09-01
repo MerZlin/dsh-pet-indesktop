@@ -517,14 +517,23 @@ class BaseAgentMonitor(QObject):
         self._emit(self.activity, (self.agent_key, tool, gen))
 
     def _emit(self, signal, args: tuple) -> None:
-        """pause 中暂存 outbox（resume 补发），否则直接 emit。"""
+        """pause 中暂存 outbox（resume 补发），否则直接 emit。
+
+        容量策略：过程汇报（activity）事件可丢；状态（state_changed）事件绝不丢
+        （满容量时优先丢最旧的 activity 腾位；全是状态事件时允许超限——
+        隐藏期间攒 500 条状态翻转在实践中不可能发生）。"""
         if self._paused and self._running:
             with self._outbox_lock:
-                if len(self._outbox) < self._OUTBOX_CAP:
-                    self._outbox.append((signal, args))
-                else:
-                    # 满了：状态事件保留最后一个位置（最新状态最重要），过程汇报可丢
-                    log.debug("Agent 监视器 [%s] outbox 已满，丢弃发射", self.agent_key)
+                if len(self._outbox) >= self._OUTBOX_CAP:
+                    if signal is self.activity:
+                        for i, (sig, _) in enumerate(self._outbox):
+                            if sig is self.activity:
+                                del self._outbox[i]
+                                break
+                        else:
+                            return  # 全是状态事件且已满：丢本条 activity
+                    # 状态事件不受容量限制，继续往下追加
+                self._outbox.append((signal, args))
             return
         signal.emit(*args)
 
@@ -1026,7 +1035,8 @@ class OpenCodeMonitor(BaseAgentMonitor):
         self.db_path = db_path or (
             Path.home() / ".local" / "share" / "opencode" / "opencode.db"
         )
-        # 以下状态全部归 worker 线程独占（_worker_started 里初始化/轮换重置）：
+        # 声明在 __init__（此刻尚无任何线程，安全）；运行期读写归 worker 线程
+        # 独占（_worker_started 里初始化/轮换重置），GUI 线程不得触碰：
         self._last_rowid: int = 0
         self._db_ready: bool = False
         self._db_file_id: tuple[int, ...] | None = None

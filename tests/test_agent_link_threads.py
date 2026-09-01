@@ -205,3 +205,79 @@ class TestCloseEventStopsMonitors:
         app.processEvents()
         assert not mon._running
         assert not mon._worker.is_alive()
+
+
+def _make_opencode_db(path, rows):
+    import sqlite3
+    if path.exists():
+        path.unlink()
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE event (type TEXT, data TEXT)")
+    db.execute("CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT)")
+    db.execute("INSERT INTO session (id, parent_id) VALUES ('s1', NULL)")
+    for t, d in rows:
+        db.execute("INSERT INTO event (type, data) VALUES (?, ?)", (t, json.dumps(d)))
+    db.commit()
+    db.close()
+
+
+class TestOutboxPolicy:
+    def test_outbox_never_drops_state_events(self, tmp_path):
+        """pause 期间 outbox 满：activity 可丢，state 事件绝不丢。"""
+        mon = _make_monitor(tmp_path)
+        mon._running = True
+        mon._paused = True  # 白盒模拟 pause 中（不真起线程）
+        for i in range(600):
+            mon._emit_tool(f"tool{i}", 1)
+        for _ in range(3):
+            mon._emit_state("working", 1)
+        states = [a for sig, a in mon._outbox if sig is mon.state_changed]
+        assert len(states) == 3  # 状态事件一条不丢
+        assert len(mon._outbox) <= mon._OUTBOX_CAP + 3
+
+    def test_resume_flushes_outbox(self, tmp_path, app):
+        """resume 把 pause 期间暂存的发射补发出去。"""
+        mon = _make_monitor(tmp_path)
+        received = []
+        mon.state_changed.connect(lambda k, s, g: received.append(s))
+        mon._running = True
+        mon._paused = True
+        mon._emit_state("working", 1)
+        assert received == []
+        mon.resume()
+        app.processEvents()
+        assert received == ["working"]
+
+
+class TestOpenCodeDbRotation:
+    def test_db_replacement_rebackfills(self, tmp_path):
+        """OpenCode 库被替换/重建：身份变化自动重新 backfill，不回放旧库事件、不漏新库事件。"""
+        from pet.agent_link import OpenCodeMonitor
+
+        db1 = tmp_path / "opencode.db"
+        _make_opencode_db(db1, [("session.created", {"sessionID": "s1"})])
+        cfg_dir = tmp_path / "cfg"
+        cfg_dir.mkdir()
+        mon = OpenCodeMonitor(cfg_dir, db_path=db1)
+        mon._running = True
+        received = []
+        mon.state_changed.connect(lambda k, s, g: received.append(s))
+        mon._worker_started()  # 模拟 worker 开场（worker 线程独占初始化）
+        mon._poll()  # 首轮 backfill：跳到末尾
+        assert received == []
+        # 替换整个库文件（新内容、新 rowid 序列）
+        _make_opencode_db(db1, [("session.created", {"sessionID": "s1"})])
+        mon._poll()  # 检测到身份变化 → 重新 backfill，不回放新库历史
+        assert received == []
+        # 新库的新事件正常送达（往【当前】库追加，而不是再替换一次——
+        # 替换时点已存在的内容按历史处理，这是 backfill 防护的设计语义）
+        import sqlite3
+        db = sqlite3.connect(db1)
+        db.execute(
+            "INSERT INTO event (type, data) VALUES (?, ?)",
+            ("message.updated", json.dumps({"info": {"role": "user"}, "sessionID": "s1"})),
+        )
+        db.commit()
+        db.close()
+        mon._poll()
+        assert "thinking" in received
