@@ -73,10 +73,13 @@ _SWEEP_JOIN_TIMEOUT = 0.2
 _PROC_TERMINATE_TIMEOUT = 0.5
 
 # ------------------------------------------------------------ 孤儿 sweep 生命周期管理器（B7 审查 P2）
-# 退役 reader 的回收由「独立生命周期管理器」持有：模块级注册表记录所有
-# 退役池非空的 clip，模块级 lazy QTimer 周期回收。
+# 退役 reader 的回收由「独立生命周期管理器」持有：注册表记录所有
+# 退役池非空的 clip，lazy QTimer 周期回收。状态与回收逻辑收编进
+# `_OrphanClipRegistry`（N2b），模块级 `_register_orphan` /
+# `_unregister_orphan` / `_reap_orphaned_clips` 只是委托到模块底部单例
+# `_ORPHAN_REGISTRY` 的薄壳，clip 侧调用点与时序零改动。
 #
-# 为什么必须模块级持有：若 sweep timer 是 clip 的成员 QTimer，会形成
+# 为什么必须模块级单例持有：若 sweep timer 是 clip 的成员 QTimer，会形成
 # 引用环（clip → timer → 连接 → clip），循环 GC 可能在 reader 线程仍在
 # 收尾（finally/gen.close/进程 teardown）时回收整个 clip——clip 的属性
 # （锁/队列/进程句柄）在 reader 线程使用中被释放，Windows 上原生崩溃。
@@ -84,67 +87,112 @@ _PROC_TERMINATE_TIMEOUT = 0.5
 # 「cleanup 后不残留调度」（cleanup 后 clip 自身不再安排任何 timer，
 # 由管理器统一回收）与「cleanup 不丢追踪」（存活 reader 的记录被持有
 # 到线程退出）。
-_ORPHANED_CLIPS: "set[WebMClip]" = set()
-_ORPHAN_LOCK = threading.Lock()
-_orphan_timer: "QTimer | None" = None
-_ORPHAN_SWEEP_DELAY_MS = 500
-# 病态 reader 永不退出时的泄漏告警阈值（连续回收次数）。
-_ORPHAN_LEAK_ATTEMPTS = 6
+class _OrphanClipRegistry:
+    """跨实例孤儿回收管理器：退役 reader 的注册表 + lazy sweep timer（N2b）。
+
+    线程归属：
+    - 注册表（_clips）由 _lock 保护：register/unregister/holders 任意
+      线程可调用（clip 的 cleanup/stop 在主线程，reader 线程不触碰）；
+    - sweep QTimer 只能在 GUI 线程创建（须已有 QApplication）与启动；
+      reap 由 Qt 事件循环在 GUI 线程触发，且全程持 _lock——与收编前模块级
+      `_reap_orphaned_clips` 持 `_ORPHAN_LOCK` 的语义逐条一致（只搬形态、
+      不改锁范围）：锁内覆盖对 clip 的 `_reap_retired` 有界 join（时长受
+      模块级 `_SWEEP_JOIN_TIMEOUT` 兜底，正常进程 terminate 后毫秒级退出，
+      仅病态场景达到上限）与 `_ensure_timer()`；此期间 register/unregister
+      会阻塞在 _lock 上，直至 reap 释放。
+
+    生命周期语义（与既有模块级实现逐条一致，只搬形态不改时序/加锁）：
+    - register：强引用持有 clip（防 GC 与 reader 收尾竞态），并启动 timer；
+    - reap：持锁对注册的 clip 做有界回收，退役池清空者移出注册表；仍存活者
+      累计回收次数，达到 _LEAK_ATTEMPTS 阈值记录泄漏告警（不无限静默重试）
+      并继续持有追踪；
+    - unregister：移除追踪（退役池已清空时调用）。
+    """
+
+    _SWEEP_DELAY_MS = 500  # 惰性 sweep timer 的间隔（原 _ORPHAN_SWEEP_DELAY_MS）
+    _LEAK_ATTEMPTS = 6  # 病态 reader 永不退出时的泄漏告警阈值（原 _ORPHAN_LEAK_ATTEMPTS）
+
+    def __init__(self) -> None:
+        self._clips: "set[WebMClip]" = set()
+        self._lock = threading.Lock()
+        self._timer: "QTimer | None" = None
+
+    def register(self, clip: "WebMClip") -> None:
+        """把退役池非空的 clip 挂到注册表（强引用持有，防 GC 竞态）。"""
+        with self._lock:
+            self._clips.add(clip)
+        timer = self._ensure_timer()
+        if timer is not None:
+            timer.start()
+
+    def unregister(self, clip: "WebMClip") -> None:
+        with self._lock:
+            self._clips.discard(clip)
+
+    def holders(self) -> "set[WebMClip]":
+        """当前被持有追踪的 clip 快照（加锁拷贝；诊断/测试用）。"""
+        with self._lock:
+            return set(self._clips)
+
+    def _ensure_timer(self) -> "QTimer | None":
+        """惰性创建 sweep timer（须在 GUI 线程；无 QApplication 时返回 None）。"""
+        if self._timer is None:
+            app = QApplication.instance()
+            if app is None:
+                return None
+            self._timer = QTimer()
+            self._timer.setSingleShot(True)
+            self._timer.setInterval(self._SWEEP_DELAY_MS)
+            self._timer.timeout.connect(self.reap)
+        return self._timer
+
+    def reap(self) -> None:
+        """对注册的 clip 做有界回收；退役池清空者移出注册表。
+
+        全程持 _lock（与收编前模块级 `_reap_orphaned_clips` 持
+        `_ORPHAN_LOCK` 的语义一致）：对 clip._reap_retired 的有界 join
+        （时长受 `_SWEEP_JOIN_TIMEOUT` 兜底）与 `_ensure_timer()` 都在
+        锁内执行；此期间 register/unregister 会阻塞等待 _lock。
+        病态 reader 多次回收仍不退出时记录泄漏告警（而不是无限静默重试）。
+        """
+        with self._lock:
+            holders = list(self._clips)
+            for clip in holders:
+                try:
+                    clip._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
+                except Exception:
+                    pass  # clip 已销毁等：交由 GC 兜底
+                if not clip._retired:
+                    self._clips.discard(clip)
+            if self._clips:
+                for clip in self._clips:
+                    clip._orphan_reap_count = getattr(clip, '_orphan_reap_count', 0) + 1
+                    if clip._orphan_reap_count >= self._LEAK_ATTEMPTS:
+                        logger.warning(
+                            'webm 退役 reader 多次回收仍存活（疑似泄漏，进程已 terminate）: %s',
+                            clip.path,
+                        )
+                timer = self._ensure_timer()
+                if timer is not None:
+                    timer.start()
 
 
-def _ensure_orphan_timer() -> "QTimer | None":
-    """惰性创建模块级 sweep timer（须在 GUI 线程；无 QApplication 时返回 None）。"""
-    global _orphan_timer
-    if _orphan_timer is None:
-        app = QApplication.instance()
-        if app is None:
-            return None
-        _orphan_timer = QTimer()
-        _orphan_timer.setSingleShot(True)
-        _orphan_timer.setInterval(_ORPHAN_SWEEP_DELAY_MS)
-        _orphan_timer.timeout.connect(_reap_orphaned_clips)
-    return _orphan_timer
+# 模块级单例：跨实例孤儿回收管理器（强引用持有 clip，防 GC 竞态）。
+_ORPHAN_REGISTRY = _OrphanClipRegistry()
 
 
 def _register_orphan(clip: "WebMClip") -> None:
     """把退役池非空的 clip 挂到模块级注册表（强引用持有，防 GC 竞态）。"""
-    with _ORPHAN_LOCK:
-        _ORPHANED_CLIPS.add(clip)
-    timer = _ensure_orphan_timer()
-    if timer is not None:
-        timer.start()
+    _ORPHAN_REGISTRY.register(clip)
 
 
 def _unregister_orphan(clip: "WebMClip") -> None:
-    with _ORPHAN_LOCK:
-        _ORPHANED_CLIPS.discard(clip)
+    _ORPHAN_REGISTRY.unregister(clip)
 
 
 def _reap_orphaned_clips() -> None:
-    """模块级回收：对注册的 clip 做有界回收；退役池清空者移出注册表。
-
-    病态 reader 多次回收仍不退出时记录泄漏告警（而不是无限静默重试）。
-    """
-    with _ORPHAN_LOCK:
-        holders = list(_ORPHANED_CLIPS)
-        for clip in holders:
-            try:
-                clip._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
-            except Exception:
-                pass  # clip 已销毁等：交由 GC 兜底
-            if not clip._retired:
-                _ORPHANED_CLIPS.discard(clip)
-        if _ORPHANED_CLIPS:
-            for clip in _ORPHANED_CLIPS:
-                clip._orphan_reap_count = getattr(clip, '_orphan_reap_count', 0) + 1
-                if clip._orphan_reap_count >= _ORPHAN_LEAK_ATTEMPTS:
-                    logger.warning(
-                        'webm 退役 reader 多次回收仍存活（疑似泄漏，进程已 terminate）: %s',
-                        clip.path,
-                    )
-            timer = _ensure_orphan_timer()
-            if timer is not None:
-                timer.start()
+    """模块级回收（薄壳）：委托给 _ORPHAN_REGISTRY.reap()。"""
+    _ORPHAN_REGISTRY.reap()
 
 
 class _Reader:
@@ -356,7 +404,7 @@ class WebMClip(QObject):
         """销毁/清理：terminate active reader 的 ffmpeg，退役并回收。
 
         对仍存活的退役 reader 保留追踪（绝不静默丢弃）：clip 及其 _Reader
-        记录交由模块级生命周期管理器持有（_ORPHANED_CLIPS），持续回收直到
+        记录交由模块级生命周期管理器持有（_ORPHAN_REGISTRY），持续回收直到
         线程退出——绝不随 clip GC 丢弃追踪，也不与 reader 线程的收尾竞态
         （Windows 原生崩溃的根因，见模块头注释）。cleanup 后 clip 终结
         （_cleaned），自身不再安排任何 sweep/timer。

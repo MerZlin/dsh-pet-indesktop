@@ -123,7 +123,7 @@ def test_close_sticky_and_rejects_late_save(store):
     st2 = ss.SessionStore(tmp)
     session2 = _make_session(st2, sid="s2")
     assert st2.save(session2) is True
-    w = ss._writers[st2.root]
+    w = ss._registry.get_writer(st2.root)
     assert w.close() is True
     assert w.close() is True          # 幂等
     assert st2.save(session2) is False  # 关闭后拒绝可观测
@@ -169,9 +169,9 @@ def test_permanent_shutdown_rejects_new_writers(store):
     try:
         st2 = ss.SessionStore(_)
         assert st2.save(_make_session(st2, sid="s9")) is False
-        assert st2.root not in ss._writers  # 没有偷偷重建 writer
+        assert ss._registry.get_writer(st2.root) is None  # 没有偷偷重建 writer
     finally:
-        ss._shutdown = False  # 复位全局屏障，不影响后续测试
+        ss.reset_writers_for_tests()  # 复位全局屏障，不影响后续测试
 
 
 def test_concurrent_submit_during_close(store):
@@ -179,8 +179,7 @@ def test_concurrent_submit_during_close(store):
     st, _ = store
     session = _make_session(st)
     st.save(session)
-    with ss._writers_lock:
-        w = ss._writers.get(st.root)
+    w = ss._registry.get_writer(st.root)
     assert w is not None
     with w._cond:
         w._closing = True  # 模拟关闭屏障已落下

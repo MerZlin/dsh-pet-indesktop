@@ -257,11 +257,11 @@ def test_cleanup_keeps_tracking_via_module_lifecycle_manager(app):
     clip.cleanup()
     assert clip._cleaned is True
     # 追踪保留：模块级管理器持有该 clip（不随 cleanup 丢弃）
-    assert clip in webm_clip_mod._ORPHANED_CLIPS, "cleanup 后存活 reader 的追踪必须由管理器持有"
+    assert clip in webm_clip_mod._ORPHAN_REGISTRY.holders(), "cleanup 后存活 reader 的追踪必须由管理器持有"
 
     # 手动触发一次模块回收：卡死 reader 仍在 → 继续持有（不静默丢弃）
     webm_clip_mod._reap_orphaned_clips()
-    assert clip in webm_clip_mod._ORPHANED_CLIPS
+    assert clip in webm_clip_mod._ORPHAN_REGISTRY.holders()
     assert clip._retired[0].thread.is_alive()
 
     # reader 退出后：回收清空退役池 → 管理器释放该 clip
@@ -269,7 +269,7 @@ def test_cleanup_keeps_tracking_via_module_lifecycle_manager(app):
     clip._retired[0].thread.join(5.0)
     webm_clip_mod._reap_orphaned_clips()
     assert len(clip._retired) == 0
-    assert clip not in webm_clip_mod._ORPHANED_CLIPS, "退役池清空后管理器必须释放追踪"
+    assert clip not in webm_clip_mod._ORPHAN_REGISTRY.holders(), "退役池清空后管理器必须释放追踪"
     app.processEvents()
 
 
@@ -283,5 +283,5 @@ def test_start_after_cleanup_is_rejected(app):
     clip.reader_release.set()
     clip._retired[0].thread.join(5.0)
     clip.cleanup()
-    assert clip not in webm_clip_mod._ORPHANED_CLIPS
+    assert clip not in webm_clip_mod._ORPHAN_REGISTRY.holders()
     app.processEvents()

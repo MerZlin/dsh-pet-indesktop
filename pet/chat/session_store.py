@@ -13,6 +13,9 @@
 - 崩溃安全与旧版一致（tmp + fsync + os.replace）；进程被 kill -9 时未落盘快照丢失
   （窗口 ≈毫秒级，worker 连续消费无人工延迟）——已知权衡，写在这里；
 - 不做任何跨进程协调（多实例靠 instance_id 分目录隔离，那是既有机制）。
+- 共享 writer 注册表与永久关闭屏障收编进 `_WriterRegistry`（N2a）：模块级
+  函数只是委托给模块底部单例 `_registry` 的薄壳，公开重置接口
+  `reset_writers_for_tests()` 供测试隔离（conftest 不再触碰 `_shutdown` 私有）。
 """
 from __future__ import annotations
 
@@ -176,28 +179,89 @@ def _fsync_dir(folder: Path) -> None:
         os.close(fd)
 
 
-# 同目录共享 writer：app/现代窗/经典窗/快速对话各建各的 SessionStore，
-# 但同一 root 只有一个写盘线程（串行即一致）。
-_writers: dict[Path, _AsyncWriter] = {}
-_writers_lock = threading.Lock()
-# 永久关闭屏障（应用退出）：置位后 _writer_for 不再创建新 writer，
-# 杜绝「注册表已清空但旧 writer 未关完时，迟到提交又建第二个同目录 writer」
-# （双 writer 会同时写同一个 tmp 文件/互相 os.replace，破坏串行前提）。
-_shutdown = False
+class _WriterRegistry:
+    """同目录共享 writer 的注册表 + 永久关闭屏障（N2a 模块级状态收编）。
+
+    收编原模块级 `_writers` / `_writers_lock` / `_shutdown` 三个可变全局；
+    模块级 `_writer_for` / `close_all_writers` 变薄壳委托到模块底部单例
+    `_registry`。
+
+    语义与既有设计逐条一致（一丝不变）：
+    - 同一 root 只有一个写盘线程（串行即一致）；
+    - 永久关闭屏障（应用退出）：置位后 `writer_for` 不再创建新 writer，
+      杜绝「注册表已清空但旧 writer 未关完时，迟到提交又建第二个同目录
+      writer」（双 writer 会同时写同一个 tmp 文件/互相 os.replace，破坏
+      串行前提）；
+    - `close_all` 先关提交入口再排空（closing → flush），返回第一次 close
+      的真实结果（粘滞）。
+
+    线程归属：注册表字典与屏障由 `_lock` 保护，任意线程经锁访问；
+    实际落盘仍由 `_AsyncWriter` 的串行 worker 线程执行。
+    """
+
+    def __init__(self) -> None:
+        self._writers: dict[Path, _AsyncWriter] = {}
+        self._lock = threading.Lock()
+        self._shutdown = False
+
+    def writer_for(self, root: Path) -> _AsyncWriter | None:
+        """返回 root 的共享 writer；全局或局部关闭中返回 None（调用方按拒绝处理）。"""
+        with self._lock:
+            if self._shutdown:
+                return None
+            w = self._writers.get(root)
+            # 不复活正在关闭的 writer：让 submit 走「拒绝可观测」路径；
+            # 测试/重开场景先 close_all() 清注册表，下一次提交自然建新实例。
+            if w is None:
+                w = _AsyncWriter(root)
+                self._writers[root] = w
+            return w
+
+    def get_writer(self, root: Path) -> _AsyncWriter | None:
+        """只读访问：返回 root 当前已注册的 writer；不存在返回 None（不创建）。"""
+        with self._lock:
+            return self._writers.get(root)
+
+    def close_all(self, timeout: float = 10.0, *, permanent: bool = False) -> bool:
+        """落盘并关闭全部 writer。返回是否全部干净关闭。
+
+        permanent=True（应用退出）：永久关闭提交入口，之后不再创建新 writer。
+        permanent=False（测试隔离）：允许后续提交重建 writer。
+        """
+        with self._lock:
+            if permanent:
+                self._shutdown = True
+            writers = list(self._writers.values())
+            self._writers.clear()
+        ok = True
+        for w in writers:
+            if not w.close(timeout=timeout):
+                ok = False
+        return ok
+
+    def reset_for_tests(self) -> None:
+        """公开测试重置接口：关闭全部 writer 并复位永久关闭屏障。
+
+        等价于旧 conftest 的「close_all_writers() + _shutdown = False」
+        两步，供测试隔离使用；conftest/用例不再直接触碰 `_shutdown`
+        私有状态。幂等：注册表已空/屏障已复位时是无操作。
+        """
+        with self._lock:
+            writers = list(self._writers.values())
+            self._writers.clear()
+        for w in writers:
+            w.close(timeout=10.0)
+        with self._lock:
+            self._shutdown = False
+
+
+# 模块级单例：共享 writer 注册表与永久关闭屏障的唯一所有权对象。
+_registry = _WriterRegistry()
 
 
 def _writer_for(root: Path) -> _AsyncWriter | None:
     """返回 root 的共享 writer；全局或局部关闭中返回 None（调用方按拒绝处理）。"""
-    with _writers_lock:
-        if _shutdown:
-            return None
-        w = _writers.get(root)
-        # 不复活正在关闭的 writer：让 submit 走「拒绝可观测」路径；
-        # 测试/重开场景先 close_all_writers() 清注册表，下一次提交自然建新实例。
-        if w is None:
-            w = _AsyncWriter(root)
-            _writers[root] = w
-        return w
+    return _registry.writer_for(root)
 
 
 def close_all_writers(timeout: float = 10.0, *, permanent: bool = False) -> bool:
@@ -206,17 +270,15 @@ def close_all_writers(timeout: float = 10.0, *, permanent: bool = False) -> bool
     permanent=True（应用退出）：永久关闭提交入口，之后不再创建新 writer。
     permanent=False（测试隔离）：允许后续提交重建 writer。
     """
-    global _shutdown
-    with _writers_lock:
-        if permanent:
-            _shutdown = True
-        writers = list(_writers.values())
-        _writers.clear()
-    ok = True
-    for w in writers:
-        if not w.close(timeout=timeout):
-            ok = False
-    return ok
+    return _registry.close_all(timeout=timeout, permanent=permanent)
+
+
+def reset_writers_for_tests() -> None:
+    """公开测试重置接口：关闭全部 writer 并复位永久关闭屏障。
+
+    conftest/测试隔离用；等价于 close_all_writers() 后复位 _shutdown。
+    """
+    _registry.reset_for_tests()
 
 
 class SessionStore:
@@ -244,8 +306,7 @@ class SessionStore:
 
     def flush(self, timeout: float = 10.0) -> bool:
         """等待本目录所有已提交写盘完成；有失败/超时返回 False。"""
-        with _writers_lock:
-            w = _writers.get(self.root)
+        w = _registry.get_writer(self.root)
         if w is None:
             return True  # 从未写过，无事可等
         return w.flush(timeout=timeout)
@@ -317,8 +378,7 @@ class SessionStore:
 
 def _pending_for_session(root: Path, session_id: str, character_id) -> tuple[bool, bytes | None]:
     """在共享 writer 的 pending 里按 session_id（可选限定角色目录）找未落盘操作。"""
-    with _writers_lock:
-        w = _writers.get(root)
+    w = _registry.get_writer(root)
     if w is None:
         return False, None
     with w._cond:
@@ -332,8 +392,7 @@ def _pending_for_session(root: Path, session_id: str, character_id) -> tuple[boo
 
 
 def _pending_for_dir(root: Path, folder: Path) -> dict[Path, bytes | None]:
-    with _writers_lock:
-        w = _writers.get(root)
+    w = _registry.get_writer(root)
     if w is None:
         return {}
     return w.pending_for_dir(folder)

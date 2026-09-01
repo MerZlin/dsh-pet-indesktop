@@ -90,8 +90,8 @@ def _make_file(tmp_path: Path, name: str) -> Path:
 def test_wav_restarts_qsound_effect_on_each_click(monkeypatch, tmp_path):
     monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
     effect = FakeQtEffect()
-    monkeypatch.setattr(click_sound, "_qt_effects", {})
-    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
 
     path_wav = _make_file(tmp_path, "click.wav")
     assert click_sound.play_sound(path_wav, volume=0.5) is True
@@ -103,22 +103,22 @@ def test_wav_restarts_qsound_effect_on_each_click(monkeypatch, tmp_path):
 
 def test_mp3_decode_failure_falls_back_to_player_pool(monkeypatch, tmp_path):
     monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
-    monkeypatch.setattr(click_sound, "_qt_effects", {})
-    monkeypatch.setattr(click_sound, "_qt_decoders", {})
-    monkeypatch.setattr(click_sound, "_qt_player_pool", [])
-    monkeypatch.setattr(click_sound, "_qt_player_index", 0)
-    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_decoders", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound._pool, "_qt_player_index", 0)
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
     monkeypatch.setattr(click_sound, "_sound_cache_dir", lambda: tmp_path / "cache")
 
     path = _make_file(tmp_path, "click.mp3")
     assert click_sound.play_click_sound(path) is True
-    assert len(click_sound._qt_player_pool) == 4
-    assert click_sound._qt_player_pool[0][0].played is True
+    assert len(click_sound._pool._qt_player_pool) == 4
+    assert click_sound._pool._qt_player_pool[0][0].played is True
 
 
 def test_nonwav_qt_unavailable_on_windows_skips_silently(monkeypatch, tmp_path):
     monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
-    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", lambda: None)
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", lambda: None)
 
     path = _make_file(tmp_path, "click.mp3")
     assert click_sound.play_click_sound(path) is False
@@ -126,11 +126,11 @@ def test_nonwav_qt_unavailable_on_windows_skips_silently(monkeypatch, tmp_path):
 
 def test_mp3_second_click_uses_decoded_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
-    monkeypatch.setattr(click_sound, "_qt_effects", {})
-    monkeypatch.setattr(click_sound, "_qt_decoders", {})
-    monkeypatch.setattr(click_sound, "_qt_player_pool", [])
-    monkeypatch.setattr(click_sound, "_qt_player_index", 0)
-    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_decoders", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound._pool, "_qt_player_index", 0)
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
     cache_dir = tmp_path / "cache"
     monkeypatch.setattr(click_sound, "_sound_cache_dir", lambda: cache_dir)
     path = _make_file(tmp_path, "click.mp3")
@@ -149,7 +149,7 @@ def test_mp3_second_click_uses_decoded_cache(monkeypatch, tmp_path):
             self.bufferReady.callback()
             self.finished.callback()
 
-    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", lambda: (Decoder, FakeQtAudio, FakeQtAudio, FakeQtPlayer, FakeQtEffect))
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", lambda: (Decoder, FakeQtAudio, FakeQtAudio, FakeQtPlayer, FakeQtEffect))
     assert click_sound.play_sound(path) is True
     assert list(cache_dir.glob("*.wav"))
     assert click_sound.play_sound(path) is True
@@ -157,30 +157,30 @@ def test_mp3_second_click_uses_decoded_cache(monkeypatch, tmp_path):
 
 
 def test_warm_player_pool_precreates_qt_players(monkeypatch):
-    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", _fake_classes)
-    monkeypatch.setattr(click_sound, "_qt_player_pool", [])
-    monkeypatch.setattr(click_sound, "_qt_player", None)
-    monkeypatch.setattr(click_sound, "_qt_audio", None)
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound._pool, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound._pool, "_qt_player", None)
+    monkeypatch.setattr(click_sound._pool, "_qt_audio", None)
 
     click_sound._warm_player_pool()
 
-    assert len(click_sound._qt_player_pool) == 4
+    assert len(click_sound._pool._qt_player_pool) == 4
 
 
 def test_warm_click_sound_effects_precreates_wav_effect_and_pool(monkeypatch, tmp_path):
-    monkeypatch.setattr(click_sound, "_qt_available", lambda: True)
-    monkeypatch.setattr(click_sound, "_qt_multimedia_classes", _fake_classes)
-    monkeypatch.setattr(click_sound, "_qt_effects", {})
-    monkeypatch.setattr(click_sound, "_qt_player_pool", [])
-    monkeypatch.setattr(click_sound, "_qt_player", None)
-    monkeypatch.setattr(click_sound, "_qt_audio", None)
+    monkeypatch.setattr(click_sound._pool, "qt_available", lambda: True)
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound._pool, "_qt_player", None)
+    monkeypatch.setattr(click_sound._pool, "_qt_audio", None)
 
     wav = _make_file(tmp_path, "click.wav")
     pack = {"kind": "file", "id": "custom", "path": str(wav)}
     click_sound.warm_click_sound_effects(pack, data_dir=tmp_path)
 
-    assert str(wav.resolve()) in click_sound._qt_effects
-    assert len(click_sound._qt_player_pool) == 4
+    assert str(wav.resolve()) in click_sound._pool._qt_effects
+    assert len(click_sound._pool._qt_player_pool) == 4
 
 
 def test_resolve_click_sound_candidates_and_choose(tmp_path):
@@ -266,8 +266,8 @@ def test_press_sound_stops_release_and_restarts_press(monkeypatch, tmp_path):
         setLoopCount=lambda count: None, setVolume=lambda volume: None,
     )
     played = []
-    monkeypatch.setattr(click_sound, "_effect_for", lambda path: release_effect)
-    monkeypatch.setattr(click_sound, "play_sound", lambda path, volume=1.0: played.append((path, volume)) or True)
+    monkeypatch.setattr(click_sound._pool, "effect_for", lambda path: release_effect)
+    monkeypatch.setattr(click_sound._pool, "play_sound", lambda path, volume=1.0: played.append((path, volume)) or True)
     assert click_sound.play_press_sound(pair, 0.6) is True
     assert release_effect.stopped is True
     assert played == [(pair[0], 0.6)]
@@ -283,7 +283,7 @@ def test_release_sound_schedules_press_tail(monkeypatch, tmp_path):
             out.setframerate(1000)
             out.writeframes(b"\0\0" * 1000)
     calls = []
-    monkeypatch.setattr(click_sound, "play_sound", lambda path, volume=1.0: calls.append((path, volume)) or True)
+    monkeypatch.setattr(click_sound._pool, "play_sound", lambda path, volume=1.0: calls.append((path, volume)) or True)
     monkeypatch.setattr(click_sound.time, "monotonic", lambda: 0.2)
     scheduled = []
     monkeypatch.setattr(QTimer, "singleShot", lambda delay, callback: scheduled.append((delay, callback)))
@@ -291,6 +291,61 @@ def test_release_sound_schedules_press_tail(monkeypatch, tmp_path):
     assert scheduled and scheduled[0][0] == 700
     scheduled[0][1]()
     assert calls == [(release, 0.5)]
+
+
+def test_second_pool_instance_state_is_isolated_from_singleton(tmp_path):
+    """批4：第二个 ClickSoundPool 实例与模块单例 _pool 的状态互相隔离。
+
+    类方法一律走 self.<method>()，实例的可变状态（音效/解码器/播放器池/
+    时长缓存/配对状态）必须各自独立。不造 Qt 对象，仅轻量状态断言。
+    """
+    other = click_sound.ClickSoundPool()
+    singleton = click_sound._pool
+
+    # 1) 可变状态容器不是同一对象
+    for attr in ("_qt_effects", "_qt_decoders", "_qt_player_pool",
+                 "_wav_duration_cache", "_click_pair_state"):
+        assert getattr(other, attr) is not getattr(singleton, attr), attr
+
+    # 2) 直接写互不串
+    other._wav_duration_cache["a.wav"] = 1.5
+    assert "a.wav" not in singleton._wav_duration_cache
+    other._qt_effects["k"] = object()
+    assert "k" not in singleton._qt_effects
+    index_before = singleton._qt_player_index
+    other._qt_player_index = 7
+    assert singleton._qt_player_index == index_before
+
+    # 3) 经实例方法写入只落在第二个实例：批4 前 play_with_effect 会经模块
+    #    薄壳 _effect_for 把音效写进单例 _pool._qt_effects（实例间串写）。
+    wav = tmp_path / "tick.wav"
+    with wave.open(str(wav), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(1000)
+        out.writeframes(b"\0\0" * 100)
+
+    assert other.wav_duration(wav) == 0.1
+    assert str(wav.resolve()) in other._wav_duration_cache
+    assert str(wav.resolve()) not in singleton._wav_duration_cache
+
+    class _FakeEffect:
+        def __init__(self):
+            self.source = None
+
+        def setSource(self, source):
+            self.source = source
+
+        def setVolume(self, volume):
+            pass
+
+        def play(self):
+            pass
+
+    other.qt_multimedia_classes = lambda: (None, None, None, None, _FakeEffect)
+    assert other.play_with_effect(wav, 0.5) is True
+    assert str(wav.resolve()) in other._qt_effects
+    assert str(wav.resolve()) not in singleton._qt_effects
 
 
 def test_click_sound_immediate_toggle_in_dialog_affects_pet_window(tmp_path, monkeypatch):
