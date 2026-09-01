@@ -6,10 +6,14 @@ worker 节奏通过实例属性 _POLL_INTERVAL_S 调快（类属性，实例覆�
 """
 from __future__ import annotations
 
+import gc
 import json
+import threading
 import time
+import weakref
 
 import pytest
+from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication
 
 from pet.agent_link import AgentEvent, AgentLinkManager, BaseAgentMonitor, CursorMonitor
@@ -188,6 +192,150 @@ class TestWorkerLifecycle:
         time.sleep(0.05)  # 短于首轮等待：不应有轮询发生
         assert polled == []
         mon.stop()
+
+class TestDestroyedFallback:
+    """全审 P1-2：未 shutdown 直接销毁 monitor/manager 时，worker 不得变僵尸。
+
+    机理（与已修复的 webm reader 僵尸同构）：worker 线程 target 是 bound
+    method → 线程强引用 monitor wrapper → __del__ 永不触发；C++ 对象销毁
+    时自身 bound-method 槽被 PySide6 跳过，必须靠 destroyed 无 receiver
+    callable 兜底（Fix A1 模式）。"""
+
+    def test_worker_exits_when_manager_discarded_without_shutdown(self, tmp_path, app):
+        """用完即弃场景：AgentLinkManager 未 shutdown 直接丢弃（测试建窗
+        不 close / 管理器被 GC）→ monitor C++ 随父链删除 → worker 必须退出。"""
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(None, cfg)
+        mon = mgr.monitors["dsh"]
+        mon._POLL_INTERVAL_S = 0.05
+        mon.start()
+        worker = mon._worker
+        assert worker is not None and worker.is_alive()
+        del mgr
+        gc.collect()  # 管理器 wrapper 回收 → C++ 父链删除 → destroyed 兜底
+        assert wait_until(lambda: not worker.is_alive(), timeout=5.0)
+
+    def test_worker_exits_when_parent_object_destroyed_without_shutdown(self, tmp_path, app):
+        """更直接的父链场景：monitor 挂普通 QObject 父，父被删除即销毁，
+        destroyed 兜底必须停掉 worker（不经 stop/shutdown）。"""
+        holder = QObject()
+        mon = _make_monitor(tmp_path)
+        mon.setParent(holder)
+        mon.start()
+        worker = mon._worker
+        assert worker is not None and worker.is_alive()
+        del holder
+        gc.collect()
+        assert wait_until(lambda: not worker.is_alive(), timeout=5.0)
+
+    def test_destroyed_guard_explicitly_breaks_lambda_cycle(self, tmp_path, app):
+        """B9 复审 P2（Fix A1 对照）：销毁兜底必须显式断开 destroyed 的
+        lambda 连接并清空 connection——否则 monitor→connection→lambda→monitor
+        引用环只依赖 Qt 内部清理，不等价于 WebMClip.cleanup 的完整生命周期
+        闭环。重复调用幂等。"""
+        mon = _make_monitor(tmp_path)
+        assert mon._destroyed_conn is not None
+        BaseAgentMonitor._destroyed_guard(mon)
+        assert mon._destroyed_conn is None          # 显式断环
+        BaseAgentMonitor._destroyed_guard(mon)      # 重复销毁：幂等无操作
+        assert mon._destroyed_conn is None
+        assert not mon._running
+
+    def test_stop_breaks_destroyed_lambda_cycle(self, tmp_path, app):
+        """B9 复审 P2：正常 stop 路径同样显式断开 destroyed 连接（清理路径
+        断环），此后 wrapper 无 lambda 环、可被 GC。"""
+        mon = _make_monitor(tmp_path)
+        mon.start()
+        assert mon._destroyed_conn is not None
+        mon.stop()
+        assert mon._destroyed_conn is None
+        # 重启会重建兜底连接：生命周期闭环（stop 断环 → start 重新接线）
+        assert mon.start() is True
+        assert mon._destroyed_conn is not None
+        mon.stop()
+
+    def test_destroyed_guard_does_not_block_calling_thread(self, tmp_path, app):
+        """B9 复审 P2：destroyed 在 GUI 线程触发，兜底里的有界 join 会阻塞
+        GUI 最多 2 秒——join 必须挪出调用线程（reaper），调用立即返回，
+        worker 最终仍退出。"""
+        mon = _make_monitor(tmp_path)
+        entered = threading.Event()
+        block = threading.Event()
+        orig_poll = mon._poll
+
+        def slow_poll(gen=None):
+            entered.set()
+            assert block.wait(timeout=10.0), "测试释放信号未到达"
+            return orig_poll(gen=gen)
+
+        mon._poll = slow_poll
+        mon.start()
+        assert entered.wait(timeout=5.0), "worker 未进入轮询"
+        t0 = time.monotonic()
+        BaseAgentMonitor._destroyed_guard(mon)      # 模拟 GUI 线程上的销毁兜底
+        elapsed = time.monotonic() - t0
+        assert elapsed < 0.5, f"销毁兜底阻塞了调用线程 {elapsed:.2f}s（应在 reaper 里 join）"
+        block.set()                                 # 释放卡死的 I/O
+        assert wait_until(lambda: not mon._worker.is_alive(), timeout=5.0)
+
+    def test_destroyed_guard_repeated_calls_spawn_single_reaper(self, tmp_path, app):
+        """B9 复审 P2：worker 仍卡住时重复调用 guard——只允许一个 reaper
+        （一次性退役标记保证真正幂等），且 reaper 是 daemon、有界 join、
+        做完即退（无泄漏）。"""
+        mon = _make_monitor(tmp_path)
+        entered = threading.Event()
+        block = threading.Event()
+        orig_poll = mon._poll
+
+        def slow_poll(gen=None):
+            entered.set()
+            assert block.wait(timeout=10.0), "测试释放信号未到达"
+            return orig_poll(gen=gen)
+
+        mon._poll = slow_poll
+        mon.start()
+        assert entered.wait(timeout=5.0), "worker 未进入轮询"
+        reap_name = f"agent-monitor-reap-{mon.agent_key}"
+
+        def alive_reapers():
+            return [t for t in threading.enumerate()
+                    if t.name == reap_name and t.is_alive()]
+
+        before = alive_reapers()
+        # 重复触发 guard（worker 仍卡住）：旧实现每次都会新建一个 reaper
+        BaseAgentMonitor._destroyed_guard(mon)
+        BaseAgentMonitor._destroyed_guard(mon)
+        BaseAgentMonitor._destroyed_guard(mon)
+        after = alive_reapers()
+        assert len(after) == len(before) + 1, \
+            f"重复 guard 产生 {len(after) - len(before)} 个 reaper（应只有 1 个）"
+        reaper = next(t for t in after if t not in before)
+        assert reaper.daemon          # daemon：不阻止进程退出
+        block.set()                   # 释放卡死的 I/O
+        assert wait_until(lambda: not mon._worker.is_alive(), timeout=5.0)
+        assert wait_until(lambda: not reaper.is_alive(), timeout=5.0)  # 做完即退
+
+    def test_wrapper_collectable_after_destroyed_guard(self, tmp_path, app):
+        """B9 复审 P2：显式断环后，父链销毁 + 兜底停 worker，wrapper 可被
+        GC 回收（弱引用失效）——不留因 lambda 环导致的 Python 侧泄漏。"""
+        holder = QObject()
+        mon = _make_monitor(tmp_path)
+        mon.setParent(holder)
+        mon.start()
+        worker = mon._worker
+        assert worker is not None and worker.is_alive()
+        ref = weakref.ref(mon)
+        del holder          # C++ 父链删除 → destroyed → 兜底（断环 + 停 worker）
+        gc.collect()
+        assert wait_until(lambda: not worker.is_alive(), timeout=5.0)
+        del mon
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            gc.collect()
+            if not ref():
+                break
+            time.sleep(0.05)
+        assert not ref(), "wrapper 未被回收（引用环未断）"
 
 
 class TestCloseEventStopsMonitors:

@@ -470,6 +470,48 @@ class BaseAgentMonitor(QObject):
         self._outbox_lock = threading.Lock()
         self._OUTBOX_CAP = 500
 
+        # 销毁兜底（全审 P1-2，Fix A1 同款模式）：worker 线程 target 是
+        # bound method → 线程强引用本 wrapper → __del__ 永不触发；C++ 对象
+        # 被销毁（父链删除/管理器 GC）时自身 bound-method 槽在 PySide6 下
+        # 从不被调用（调查 §2.1 实证），必须连无 receiver 的 callable。
+        # lambda 捕获 self 形成引用环，由 _break_destroyed_conn() 显式断开
+        # （stop/销毁兜底路径，对照 WebMClip.cleanup 的 Fix A1；B9 复审 P2
+        # ——不依赖 Qt 内部清理，保证 wrapper 可回收与生命周期闭环）。
+        self._destroyed_conn = self.destroyed.connect(
+            lambda *_: BaseAgentMonitor._destroyed_guard(self)
+        )
+        # 销毁兜底一次性标记（B9 R2 复审 P2）：_destroyed_guard 只在第一次
+        # 调用时真正执行（断环 + 停 worker + 派发 reaper），worker 仍存活时
+        # 的重复触发（显式兜底、异常重入、测试/退出期重复调用）一律幂等，
+        # 绝不重复创建 agent-monitor-reap-* 线程。start() 重建 worker 时
+        # 重新武装（新 worker 代次需要新的兜底）。
+        self._destroy_guard_ran = False
+        self._destroy_guard_lock = threading.Lock()
+
+    def _break_destroyed_conn(self) -> None:
+        """显式断开 destroyed 的 lambda 连接并清空 connection（Fix A1）。
+
+        lambda 捕获 self 形成 monitor→connection→lambda→monitor 引用环；
+        不显式断开则只依赖 C++ 删除时 Qt 的连接清理（B9 复审 P2：不等价于
+        WebMClip.cleanup 的完整生命周期闭环）。stop 完成与销毁兜底两条路径
+        都调用；C++ 已删场景 disconnect 抛 RuntimeError 属预期（连接随 C++
+        信号消亡，Qt 侧已清理）。幂等：connection 已清空时是无操作。
+        """
+        conn = getattr(self, "_destroyed_conn", None)
+        if conn is not None:
+            try:
+                self.destroyed.disconnect(conn)
+            except RuntimeError:
+                pass
+            self._destroyed_conn = None
+
+    def _ensure_destroyed_conn(self) -> None:
+        """start 重启后重建 destroyed 兜底连接（stop 已断开，生命周期闭环）。"""
+        if self._destroyed_conn is None:
+            self._destroyed_conn = self.destroyed.connect(
+                lambda *_: BaseAgentMonitor._destroyed_guard(self)
+            )
+
     def is_running(self) -> bool:
         return self._running and not self._paused
 
@@ -480,6 +522,9 @@ class BaseAgentMonitor(QObject):
         if self._worker is not None and self._worker.is_alive():
             log.warning("Agent 监视器 [%s] 旧 worker 未退出，拒绝重启（防双 worker）", self.agent_key)
             return False
+        self._ensure_destroyed_conn()  # 上一轮 stop 已断开：重启重建兜底连接（Fix A1 闭环）
+        with self._destroy_guard_lock:
+            self._destroy_guard_ran = False  # 新 worker 代次：重新武装销毁兜底（B9 R2 P2）
         self._worker_stop.set()  # 兜底：万一旧 event 还在 set 状态…先清再建
         self._worker_stop = threading.Event()
         self._gen += 1
@@ -511,7 +556,11 @@ class BaseAgentMonitor(QObject):
         self._worker_stop.set()
 
     def finish_stop(self, deadline: float | None = None) -> None:
-        """停止第二阶段：有界 join。deadline 为 time.monotonic() 绝对时间。"""
+        """停止第二阶段：有界 join。deadline 为 time.monotonic() 绝对时间。
+
+        完成后显式断开 destroyed 连接（Fix A1 断环，B9 复审 P2）：本监视器
+        已退役，lambda 引用环不再需要；wrapper 可被 GC，不依赖 Qt 内部清理。
+        """
         worker = self._worker
         if worker is not None and worker.is_alive():
             remaining = self._STOP_JOIN_TIMEOUT_S if deadline is None \
@@ -519,11 +568,65 @@ class BaseAgentMonitor(QObject):
             worker.join(timeout=remaining)
             if worker.is_alive():
                 log.warning("Agent 监视器 [%s] worker 退出超时（病态 I/O 卡死）", self.agent_key)
+        self._break_destroyed_conn()
 
     def stop(self) -> None:
         self.begin_stop()
         self.finish_stop()
         log.info("Agent 监视器 [%s] 已停止", self.agent_key)
+
+    @staticmethod
+    def _destroyed_guard(mon: "BaseAgentMonitor") -> None:
+        """C++ 对象销毁兜底：未经 shutdown()/stop() 直接销毁时停掉 worker，
+        防止 daemon 轮询线程变僵尸（全审 P1-2；崩溃 dump 现场 3× _work_loop
+        存活为证——窗口/管理器被 GC 而未走 closeEvent/switch_character/
+        aboutToQuit 的显式 shutdown 路径时，worker 永久轮询并保活旧窗口）。
+
+        与 begin_stop 同语义（作废代次 + 停轮询）再加有界 join；正常
+        stop 后再销毁是纯幂等无操作。
+
+        执行线程（B9 复审 P2 确认）：destroyed 信号在 QObject 所在线程
+        （GUI 线程）随 C++ 析构同步发射——**join 绝不能在这里执行**，否则
+        最多阻塞 GUI _STOP_JOIN_TIMEOUT_S 秒（worker 可能卡在 I/O 里）。
+        因此：① 先显式断开 destroyed 连接（Fix A1 断环，同时保证重复销毁
+        幂等——第二次调用时 connection 已清空）；② 有界 join 挪到一次性
+        daemon 回收线程执行，调用立即返回。worker 收到 stop 事件后自行
+        退出（轮询循环每轮检查），reaper 只是有界等待并上报超时。
+
+        幂等（B9 R2 复审 P2）：_destroy_guard_ran 一次性标记 + 锁保证
+        guard 只真正执行一次——worker 仍存活时重复触发（显式兜底、异常
+        重入、测试/退出期重复调用）不会重复创建 reaper 线程。reaper 自身
+        无泄漏：daemon 线程（不阻止进程退出）、对同一 worker 做一次有界
+        join（≤ _STOP_JOIN_TIMEOUT_S）、做完即退（不持有 monitor 引用，
+        不会反向保活 wrapper）。
+        """
+        with mon._destroy_guard_lock:
+            if mon._destroy_guard_ran:
+                return
+            mon._destroy_guard_ran = True
+        try:
+            mon._break_destroyed_conn()
+            mon._worker_stop.set()
+            mon._emit_gen = -1
+            mon._running = False
+            mon._paused = False
+            worker = mon._worker
+            if worker is not None and worker.is_alive():
+                threading.Thread(
+                    target=BaseAgentMonitor._reap_worker,
+                    args=(worker, mon._STOP_JOIN_TIMEOUT_S, mon.agent_key),
+                    daemon=True,
+                    name=f"agent-monitor-reap-{mon.agent_key}",
+                ).start()
+        except Exception:
+            log.debug("Agent 监视器 [%s] 销毁兜底异常", mon.agent_key, exc_info=True)
+
+    @staticmethod
+    def _reap_worker(worker: threading.Thread, timeout: float, agent_key: str) -> None:
+        """回收线程：有界 join 已停止信号的 worker（GUI 线程不阻塞）。"""
+        worker.join(timeout=timeout)
+        if worker.is_alive():
+            log.warning("Agent 监视器 [%s] 销毁兜底 worker 退出超时（病态 I/O 卡死）", agent_key)
 
     def pause(self) -> None:
         """暂停读取（不推进 offset，事件不丢）。worker 线程保持存活空转。"""
@@ -1242,7 +1345,7 @@ class AgentLinkManager(QObject):
       薄转发。状态机与呈现逻辑分别位于 agent_link_reducer / agent_link_presentation。
     """
 
-    install_finished = Signal(str, bool, str)  # (agent_key, ok, message)
+    install_finished = Signal(str, bool, str, int)  # (agent_key, ok, message, install_token)
 
     # 联动气泡展示名
     AGENT_NAMES = {"dsh": "DSH", "claude": "Claude Code", "cursor": "Cursor", "opencode": "OpenCode"}
@@ -1255,6 +1358,15 @@ class AgentLinkManager(QObject):
         self.win = window
         self.cfg = config
         self.config_dir = config.dir
+
+        # 安装生命周期守卫（全审 P1-4）：_shutdown = 管理器已关闭（窗口
+        # close / 角色切换 / aboutToQuit）；_install_pending = 在途 dsh
+        # 安装代次（set_enabled 发起时登记，disable/shutdown 作废）。后台
+        # 安装线程完成回调若在关闭/重新禁用之后才到达，不得再写配置、
+        # 启动监视器或对旧窗口弹气泡。二者只在本线程（GUI）读写。
+        self._shutdown = False
+        self._install_token = 0
+        self._install_pending: dict[str, int] = {}
 
         self.monitors: dict[str, BaseAgentMonitor] = {
             "dsh": DshMonitor("dsh", self.config_dir, self),
@@ -1335,10 +1447,27 @@ class AgentLinkManager(QObject):
         """
         return self.reducer.any_busy()
 
-    def _install_dsh_worker(self) -> None:
-        """后台线程：安装 DSH 桥接插件，完成后信号回主线程。"""
+    def _install_dsh_worker(self, token: int) -> None:
+        """后台线程：安装 DSH 桥接插件，完成后信号回主线程。
+
+        代次守卫（全审 P1-4 + B9 复审 P1）：安装期间 manager 被 shutdown/
+        联动被重新禁用/又发起了新安装时，token 与当前代次不符 → 迟到结果
+        直接丢弃，不 emit（避免对已销毁 C++ 对象 emit 的 RuntimeError 噪音）。
+        完成信号携带本线程捕获的 token（B9 复审 P1）：emit→dispatch 窗口里
+        即使 token 检查通过后才被 disable→re-enable，旧 queued 回调也会因
+        载荷 token 与当前登记代次不符而在 GUI 槽被丢弃——接收端代次校验
+        才是权威（发送端标志挡不住 emit→dispatch 竞态）。
+        """
         ok, msg = DshMonitor.install_bridge()
-        self.install_finished.emit("dsh", ok, msg)
+        if token != self._install_token:
+            log.info("DSH 桥接安装结果已过期，丢弃（manager 已关闭或安装已取消）")
+            return
+        try:
+            self.install_finished.emit("dsh", ok, msg, token)
+        except RuntimeError:
+            # manager C++ 已随窗口销毁：信号无处投递，静默丢弃（daemon
+            # 线程不能把未捕获异常打印成噪音）
+            log.debug("DSH 桥接安装完成但 manager 已销毁，丢弃结果")
 
     def _warn_if_agent_absent(self, agent_key: str) -> None:
         """开启了联动但本机没装对应 Agent 时给用户提示（不然勾了永远没反应）。"""
@@ -1367,8 +1496,26 @@ class AgentLinkManager(QObject):
                 duration_ms=6000,
             )
 
-    def _on_install_finished(self, agent_key: str, ok: bool, msg: str) -> None:
-        """安装完成：成功则正式开启联动，失败则提示。"""
+    def _on_install_finished(self, agent_key: str, ok: bool, msg: str, token: int) -> None:
+        """安装完成：成功则正式开启联动，失败则提示。
+
+        生命周期守卫（全审 P1-4 + B9 复审 P1）：窗口关闭/角色切换（shutdown）
+        或用户重新禁用（set_enabled(..., False) 作废在途安装）后，迟到的完成
+        回调不得再写配置 / apply_config 启动监视器 / 对旧窗口弹气泡。
+        信号是 worker 线程 → GUI 线程的 queued 投递，本方法在 GUI 线程
+        执行，_shutdown / _install_pending 无跨线程竞态。
+
+        代次校验（B9 复审 P1）：信号载荷携带安装 token，必须与当前登记
+        代次一致才消费并 pop——disable→re-enable 后，旧安装的 queued 回调
+        不得消费新安装的 pending（仅凭 agent key 无法区分两代安装）。
+        """
+        if self._shutdown:
+            log.info("安装完成回调被丢弃（manager 已关闭）: %s", agent_key)
+            return
+        if self._install_pending.get(agent_key) != token:
+            log.info("安装完成回调被丢弃（安装已取消或代次过期）: %s", agent_key)
+            return
+        self._install_pending.pop(agent_key, None)
         if ok:
             ag_cfg = dict(self.cfg.get("agent_link", {}))
             ag_cfg[agent_key] = True
@@ -1421,15 +1568,25 @@ class AgentLinkManager(QObject):
                 if res != QMessageBox.StandardButton.Yes:
                     return False
                 # 安装走后台线程（pnpm 解析可能数十秒，绝不在 UI 线程阻塞）；
-                # 菜单先回弹，安装完成后自动开启并气泡告知
+                # 菜单先回弹，安装完成后自动开启并气泡告知。
+                # 登记安装代次（全审 P1-4）：完成回调据此判断安装是否仍有效。
+                self._install_token += 1
+                token = self._install_token
+                self._install_pending["dsh"] = token
                 if hasattr(self.win, "show_bubble"):
                     self.win.show_bubble("正在安装 DSH 桥接插件…", duration_ms=4000)
                 import threading
                 threading.Thread(
-                    target=self._install_dsh_worker, daemon=True, name="dsh-bridge-install",
+                    target=self._install_dsh_worker, args=(token,), daemon=True,
+                    name="dsh-bridge-install",
                 ).start()
                 return False
         else:
+            # 关闭联动：作废在途的 dsh 安装（全审 P1-4）——完成回调将因
+            # 代次过期被丢弃，不得在用户关闭后反向把配置写回 True。
+            if agent_key == "dsh":
+                self._install_pending.pop("dsh", None)
+                self._install_token += 1
             # 关闭联动时移除我们注入的内容（只删自己的，用户自有配置不碰）；
             # 其他多开实例仍在使用则保留（hooks/插件是全局状态）
             if agent_key in ("claude", "dsh") and other_instances_use_agent(self.cfg, agent_key):
@@ -1474,7 +1631,13 @@ class AgentLinkManager(QObject):
         对象保活（B9 一审：角色切换后旧窗口的 monitor 继续轮询）。
         没有存活 worker 时零开销直接返回（不调 time.monotonic——测试里
         它可能被 monkeypatch 成有限迭代器，多调一次就是 StopIteration）。
+
+        同时进入关闭态（全审 P1-4）：作废在途 dsh 安装，迟到的安装完成
+        回调（install_finished）一律丢弃，不再写配置/启动监视器/弹气泡。
         """
+        self._shutdown = True
+        self._install_pending.clear()
+        self._install_token += 1
         for mon in self.monitors.values():
             mon.begin_stop()
         active = [

@@ -2652,6 +2652,12 @@ class PetWindow(QWidget):
         self._click_hold = False
         self._context_menu_open = False
         self._set_interaction_hold(False)
+        # 拖拽降频对称恢复（全审 P2-3）：按下时已 set_drag_active(True) 把
+        # 穿透轮询降频到 100ms，隐藏/关闭打断拖拽后必须恢复 10ms 原频率并
+        # 强制刷新一次穿透状态——否则滞留拖拽节奏直到下一次完整按-放循环
+        # （re-show 后穿透状态更新延迟 10 倍且缺一次强制刷新）。非拖拽态
+        # 重复调用是 no-op（platform_win.set_drag_active 已保证），安全。
+        self._sync_drag_polling(False)
 
     def _sync_drag_polling(self, active: bool) -> None:
         """Windows 逐像素穿透轮询随拖拽按下/松手降频/恢复（非 Windows 无控制器，no-op）。"""

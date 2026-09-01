@@ -834,6 +834,8 @@ def test_soft_clamp_preserves_sub_cap_velocity_and_clamps_super_cap_velocity(tmp
     assert math.hypot(*win._phys_vel) == pytest.approx(expected_clamped)
 
     win.close()
+
+
 def test_thrown_pet_ignores_sub_floor_contact_impulse(tmp_path, app):
     """回归：THROWN 状态的桌宠不吸收低于 COLLISION_CONTACT_DV_FLOOR 的
     静置接触微冲量——否则贴地桌宠被每 tick 的 e=0 抵消冲量（十几 px/s）
@@ -863,6 +865,8 @@ def test_thrown_pet_ignores_sub_floor_contact_impulse(tmp_path, app):
     win._on_collision_impulse(impulse)
     assert win._phys_vel[0] == pytest.approx(80.0)
     win.close()
+
+
 def test_self_talk_prunes_images_deleted_while_running(tmp_path, app):
     """回归：运行期间图片被删，下一次自言自语不再选中它。"""
     win, _ = _make_pet_window(tmp_path, "pet_prune")

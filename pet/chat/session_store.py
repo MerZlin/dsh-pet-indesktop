@@ -203,11 +203,31 @@ class _WriterRegistry:
         self._writers: dict[Path, _AsyncWriter] = {}
         self._lock = threading.Lock()
         self._shutdown = False
+        # 「关闭中」标志（全审 P3-5 硬化）：close_all/reset_for_tests 逐个
+        # 关闭旧 writer 的窗口期内拒绝新 writer_for，杜绝「清表后、旧 writer
+        # 关完前」并发 save() 看到空注册表、新建同 root writer 与旧 writer
+        # 并发写同一 tmp/互相 os.replace——破坏「同一 root 单写盘线程」前提。
+        self._closing = False
+        # 重叠 close_all 防护（B9 复审 P2）：_closing 是布尔，两个线程重叠
+        # 进入 close_all 时，后进入者在自己的 finally 里复位标志会提前放行
+        # 新 writer（第一个仍在锁外关闭旧 writer）。用关闭深度计数：最后一个
+        # 关闭者完成前屏障绝不复位。仅 _lock 保护。
+        self._closing_depth = 0
+        # 永久关闭并发防护（B9 R2 复审 P1）：_shutdown 是「应用退出」的永久
+        # 屏障，权威规则 = 永久关闭优先于并发测试重置——reset_for_tests 只在
+        # 与 permanent close 完全无交错时才允许复位 _shutdown：
+        #   - _permanent_closers：正在执行中的 permanent close 计数（锁内
+        #     进入 +1、锁外关闭完成后 -1），reset 开始时 >0 说明重叠在飞；
+        #   - _permanent_epoch：永久关闭发起代次（每次发起 +1），reset 期间
+        #     前进说明有新的 permanent close 与之交错。
+        # 二者都在 _lock 保护下读写。
+        self._permanent_closers = 0
+        self._permanent_epoch = 0
 
     def writer_for(self, root: Path) -> _AsyncWriter | None:
         """返回 root 的共享 writer；全局或局部关闭中返回 None（调用方按拒绝处理）。"""
         with self._lock:
-            if self._shutdown:
+            if self._shutdown or self._closing:
                 return None
             w = self._writers.get(root)
             # 不复活正在关闭的 writer：让 submit 走「拒绝可观测」路径；
@@ -227,16 +247,45 @@ class _WriterRegistry:
 
         permanent=True（应用退出）：永久关闭提交入口，之后不再创建新 writer。
         permanent=False（测试隔离）：允许后续提交重建 writer。
+
+        顺序（全审 P3-5）：锁内**先置「关闭中」标志再清表**，锁外逐个 close。
+        旧实现先 clear 再逐个 close——清表后、旧 writer 关完前的窗口期里
+        并发 save() 会看到空注册表并新建同 root writer，与旧 writer 并发
+        落盘（双 writer 竞态）。置标志后该窗口期的新提交被明确拒绝；
+        close 全部完成后复位标志，后续提交自然重建新 writer。
+
+        重叠防护（B9 复审 P2）：两个线程重叠进入 close_all 时，后进入者
+        不能在自己的 finally 里提前复位 _closing（第一个可能仍在锁外关闭
+        旧 writer）。用 _closing_depth 计数：每个进入者 +1、finally -1，
+        仅当深度归零（最后一个关闭者完成）才复位 _closing。第二个调用拿
+        到的注册表为空时直接返回 True（实际关闭由第一个完成，幂等）。
+
+        永久语义（B9 R2 复审 P1 权威规则）：permanent=True 置位 _shutdown
+        的同时登记永久关闭在飞计数与发起代次——供 reset_for_tests 判断
+        是否与本关闭交错，避免并发测试重置把退出屏障清掉。
         """
         with self._lock:
             if permanent:
                 self._shutdown = True
+                self._permanent_closers += 1
+                self._permanent_epoch += 1
+            self._closing_depth += 1
+            self._closing = True
             writers = list(self._writers.values())
             self._writers.clear()
         ok = True
-        for w in writers:
-            if not w.close(timeout=timeout):
-                ok = False
+        try:
+            for w in writers:
+                if not w.close(timeout=timeout):
+                    ok = False
+        finally:
+            with self._lock:
+                if permanent:
+                    self._permanent_closers -= 1
+                self._closing_depth -= 1
+                if self._closing_depth <= 0:
+                    self._closing_depth = 0
+                    self._closing = False
         return ok
 
     def reset_for_tests(self) -> None:
@@ -245,14 +294,43 @@ class _WriterRegistry:
         等价于旧 conftest 的「close_all_writers() + _shutdown = False」
         两步，供测试隔离使用；conftest/用例不再直接触碰 `_shutdown`
         私有状态。幂等：注册表已空/屏障已复位时是无操作。
+        与 close_all 一致使用关闭深度计数：与重叠的 close_all 并发时，
+        屏障由最后一个关闭者统一复位（B9 复审 P2）。
+
+        永久语义（B9 R2 复审 P1 权威规则）：**永久关闭优先于并发测试重置**。
+        `_shutdown` 是应用退出屏障（生产路径只有 permanent=True 的退出
+        close_all，从不调用本接口）；本接口只在测试串行 teardown 里复位
+        屏障。因此仅在「本 reset 与 permanent close 完全无交错」时允许
+        复位 `_shutdown`：
+        - 开始时无永久关闭在飞（_permanent_closers == 0）；
+        - 期间无新的永久关闭发起（_permanent_epoch 未前进）。
+        一旦与 permanent close 交错，保留屏障（测试用例应自行先等永久
+        关闭完成，或显式再 reset 一次做串行复位）。
         """
         with self._lock:
+            perm_closers_at_start = self._permanent_closers
+            perm_epoch_at_start = self._permanent_epoch
             writers = list(self._writers.values())
             self._writers.clear()
-        for w in writers:
-            w.close(timeout=10.0)
-        with self._lock:
-            self._shutdown = False
+            self._closing_depth += 1
+            self._closing = True  # 与 close_all 一致：关闭窗口期拒绝新 writer
+        try:
+            for w in writers:
+                w.close(timeout=10.0)
+        finally:
+            with self._lock:
+                if (perm_closers_at_start == 0
+                        and self._permanent_epoch == perm_epoch_at_start):
+                    self._shutdown = False
+                else:
+                    log.warning(
+                        "reset_for_tests 与永久关闭交错，保留退出屏障"
+                        "（_shutdown 不复位）"
+                    )
+                self._closing_depth -= 1
+                if self._closing_depth <= 0:
+                    self._closing_depth = 0
+                    self._closing = False
 
 
 # 模块级单例：共享 writer 注册表与永久关闭屏障的唯一所有权对象。

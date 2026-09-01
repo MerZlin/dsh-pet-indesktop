@@ -137,3 +137,45 @@ def test_window_press_drag_release_slows_and_restores_polling(app, tmp_path):
     finally:
         win.close()
         app.processEvents()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="逐像素穿透控制器仅 Windows 创建")
+def test_hide_during_drag_restores_polling(app, tmp_path):
+    """全审 P2-3：拖拽中隐藏打断 → _reset_press_hold_state 必须对称恢复
+    穿透轮询原频率（否则滞留 100ms 拖拽节奏直到下一次完整按-放循环，
+    re-show 后穿透状态更新延迟 10 倍且缺强制刷新）。"""
+    win = PetWindow(FakeLibrary(), Config(base=tmp_path))
+    win._is_in_interactive_area = lambda pos: True
+    ctrl = win._input_controller
+    assert ctrl is not None
+    normal = window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS
+    slow = window_mod.WindowsPerPixelInputController.DRAG_POLL_INTERVAL_MS
+    try:
+        assert ctrl._timer.interval() == normal
+
+        # 拖拽中（按下 → 拖拽 → 未松手）被隐藏
+        win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+        assert ctrl._timer.interval() == slow
+        win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
+        assert win._dragging is True
+        assert ctrl._timer.interval() == slow
+
+        win.hide()  # 全屏自动隐藏/托盘隐藏路径（自定义 hide → _pause_activity）
+        app.processEvents()
+        assert win._dragging is False
+        assert ctrl._timer.interval() == normal, "隐藏打断拖拽后穿透轮询应立即恢复原频率"
+
+        # 重新显示 → 再拖拽 → 原生 hide（setVisible(False) 直进 hideEvent）
+        win.show()
+        app.processEvents()
+        win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+        assert ctrl._timer.interval() == slow
+        win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
+        assert win._dragging is True
+        win.setVisible(False)
+        app.processEvents()
+        assert win._dragging is False
+        assert ctrl._timer.interval() == normal, "原生隐藏打断拖拽后穿透轮询应立即恢复原频率"
+    finally:
+        win.close()
+        app.processEvents()
