@@ -251,7 +251,7 @@ def test_frame_cache_clear_empties_entries_and_bytes():
 
 
 def test_frame_cache_default_budget_constant():
-    assert FRAME_CACHE_DEFAULT_MAX_BYTES == 256 * 1024 * 1024
+    assert FRAME_CACHE_DEFAULT_MAX_BYTES == 64 * 1024 * 1024
 
 
 # ================================================================ _rebuild_frame 集成
@@ -543,7 +543,7 @@ def test_hit_alpha_image_consistent_after_cache_hit():
 
 
 def test_frame_cache_default_budget_is_256mb_on_lazy_init():
-    """无显式配置时（_frame_cache_max_bytes 缺省）默认 256MB 预算。"""
+    """无显式配置时（_frame_cache_max_bytes 缺省）默认 64MB 预算。"""
     _qapp()
     clip, pet = _make_pet([_frame_image(0)], anim="idle")
     window_mod.PetWindow._rebuild_frame(pet)
@@ -551,7 +551,7 @@ def test_frame_cache_default_budget_is_256mb_on_lazy_init():
 
 
 def test_pet_window_init_creates_bounded_cache_with_default_budget():
-    """真实 PetWindow：__init__ 即建缓存，默认 256MB。"""
+    """真实 PetWindow：__init__ 即建缓存，默认 64MB。"""
     _qapp()
     import tempfile
 

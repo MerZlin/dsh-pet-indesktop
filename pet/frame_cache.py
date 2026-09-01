@@ -17,9 +17,11 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Any
 
-# 默认字节预算：256MB（按 QPixmap+QImage 双份记账）。只缓存最近播放的成品帧，
+# 默认字节预算：64MB（按 QPixmap+QImage 双份记账）。只缓存最近播放的成品帧，
 # 远小于"整段动画全展开"；单帧超过预算不入缓存，预算为硬上界。
-FRAME_CACHE_DEFAULT_MAX_BYTES = 256 * 1024 * 1024
+# 实测记录（2026-09-01）：256MB 预算下内存涨约 200MB 但待机 CPU 没降——
+# 收紧到短动画（点击/拖拽等高频交互路径）装得下的量级，长动画不缓存。
+FRAME_CACHE_DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 
 
 class FramePixmapCache:
