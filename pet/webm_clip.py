@@ -967,12 +967,12 @@ class WebMClip(QObject):
         if self._cleaned or imageio_ffmpeg is None:
             return
         key = (bool(mirrored), float(scale), float(dpr))
-        if key in self._bounds_cache:
+        if self._bounds_cache_contains(key):
             return
         if not self._bounds_lock.acquire(blocking=False):
             return
         try:
-            if key in self._bounds_cache:
+            if self._bounds_cache_contains(key):
                 return
             gen = self._bounds_gen
             data = self._compute_bounds(gen, key, bool(has_text))
@@ -1032,12 +1032,12 @@ class WebMClip(QObject):
         if self._cleaned or imageio_ffmpeg is None:
             return None
         key = (bool(mirrored), float(scale), float(dpr))
-        if key in self._bounds_cache:
+        if self._bounds_cache_contains(key):
             return None
         if not self._bounds_lock.acquire(blocking=False):
             return None
         try:
-            if key in self._bounds_cache:
+            if self._bounds_cache_contains(key):
                 return None
             gen = self._bounds_gen
         finally:
@@ -1068,9 +1068,29 @@ class WebMClip(QObject):
             self._bounds_cache[key] = data
             return True
 
+    def _bounds_cache_get(self, key: tuple):
+        """持锁读取 _bounds_cache 单项（B14 复审 R2 P1）。
+
+        缓存读写统一同步协议：写入（warm_bounds/bounds_warm_commit 的整包
+        提交）与读取（bounds_data 及 warm_bounds/bounds_warm_snapshot 的
+        存在性预检）全部经 _reader_lock——该锁同时是取消换代（cancel_bounds_warm）
+        与代次确认的锁，读者绝不见取消后旧代次结果/半成品。
+        """
+        with self._reader_lock:
+            return self._bounds_cache.get(key)
+
+    def _bounds_cache_contains(self, key: tuple) -> bool:
+        """持锁检查 _bounds_cache 是否已提交该键（与写入同一同步协议）。"""
+        with self._reader_lock:
+            return key in self._bounds_cache
+
     def bounds_data(self, mirrored: bool, scale: float, dpr: float):
-        """指定 (mirrored, scale, dpr) 键的完整 bounds 数据；未预计算返回 None。"""
-        return self._bounds_cache.get((bool(mirrored), float(scale), float(dpr)))
+        """指定 (mirrored, scale, dpr) 键的完整 bounds 数据；未预计算返回 None。
+
+        读取与写入共用 _reader_lock（B14 复审 R2 P1）：读者只会看到 None 或
+        整包提交的完整 AnimBounds，取消后旧代次结果绝不进入缓存。
+        """
+        return self._bounds_cache_get((bool(mirrored), float(scale), float(dpr)))
 
     def bounds_rect(self, mirrored: bool, scale: float, dpr: float,
                     frame_n: int | None) -> QRect | None:

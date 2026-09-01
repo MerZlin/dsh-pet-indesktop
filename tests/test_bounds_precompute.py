@@ -959,6 +959,8 @@ class _WarmWindow:
         self._bounds_warm_done = False
         self._bounds_warm_key = None
         self._bounds_warm_retries = 0
+        self._bounds_warm_round_gen = 0
+        self._bounds_warm_empty_ticks = 0
         self._bounds_warm_thread = None
         self._bounds_warm_stop_evt = threading.Event()
         self._bounds_warm_procs = set()
@@ -1150,3 +1152,555 @@ def test_bounds_memory_bounded(monkeypatch):
     # 真实动画 241 帧 ≈ 1.9KB/动画/模式；97 动画 × 2 模式 ≈ 0.4MB，可控
     assert 241 * 4 * 2 == 1928
     clip.cleanup()
+
+
+# ================================================================ B14 复审 R2：运行时播放契约（P0）
+class _PlaybackLib:
+    """真实播放链路假库：frames/movie/movies 与 PetWindow 期望一致。"""
+
+    def __init__(self, clip, name="idle") -> None:
+        self._clip = clip
+        self._name = name
+        self.no_mirror = frozenset()
+
+    def frames(self, name):
+        return self._clip.frameCount()
+
+    def movie(self, name):
+        return self._clip
+
+    def movies(self):
+        return {self._name: self._clip}
+
+
+class _PlaybackPet:
+    """挂载真实 _on_frame/_rebuild_frame/_sync_mask 的假窗口：movie 为真实
+    WebMClip。只用于「start → reader 线程 → QTimer → frameChanged →
+    _on_frame」端到端播放时序测试（B14 复审 R2 P0）。
+
+    _sync_mask 用包装：事件循环泵动期间其他遗留窗口/定时器也可能触发模块级
+    画布扫描（_mono_mask_bounds），不能算进本测试——用 _sync_scan_active
+    只标记本 pet 的扫描，回落断言只针对本 pet 的播放链。
+    """
+
+    _on_frame = window_mod.PetWindow._on_frame
+    _rebuild_frame = window_mod.PetWindow._rebuild_frame
+    _frame_draw_rect = window_mod.PetWindow._frame_draw_rect
+    _orig_sync_mask = window_mod.PetWindow._sync_mask
+    _sync_scan_active = False
+
+    def _sync_mask(self):
+        _PlaybackPet._sync_scan_active = True
+        try:
+            return _PlaybackPet._orig_sync_mask(self)
+        finally:
+            _PlaybackPet._sync_scan_active = False
+
+    def __init__(self, clip, lib, *, scale=0.72, dpr=1.0, facing="left") -> None:
+        self.movie = clip
+        self.lib = lib
+        self.scale = scale
+        self.facing = facing
+        self.anim = "idle"
+        self._w = max(1, int(round(catalog.CANVAS_W * scale)))
+        self._h = max(1, int(round((catalog.CANVAS_H + catalog.PAD) * scale)))
+        self._squash_active = False
+        self._squash_progress = 1.0
+        self._frame_pixmap = None
+        self._hit_alpha_image = None
+        self._mask_bounds = None
+        self._collision_local_bounds = None
+        self._frame_key = None
+        self._screen_dpr = dpr
+        self._hidden_paused = False
+        self._closing = False
+        self._ended_fired = False
+        # 每次 _on_frame 记录 (signal 值, 显示帧索引, _mask_bounds)
+        self.frame_events = []
+        # 播完事件：(name, 触发时显示帧索引, 总帧数)
+        self.ended_events = []
+        self.updates = 0
+
+    def _screen_available(self):
+        return SimpleNamespace(devicePixelRatio=lambda: self._screen_dpr)
+
+    def update(self) -> None:
+        self.updates += 1
+
+    def mask(self):
+        return QRegion(0, 0, 10, 10)
+
+    def clearMask(self) -> None:
+        pass
+
+    def _on_anim_ended(self, name):
+        self.ended_events.append(
+            (name, self.movie.currentFrameNumber(), self.lib.frames(name))
+        )
+
+
+def _drive_event_loop(app, predicate, timeout=5.0):
+    """驱动 Qt 事件循环直到 predicate() 为真（QTimer/信号链真实推进）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.002)
+    return False
+
+
+def test_on_frame_end_detection_uses_display_index():
+    """播完判定回归（B14 复审 R2 P0）：_on_frame 必须用 0 基显示帧索引判定末帧，
+    不能把 1 基 frameChanged 事件序号当帧号——三帧动画在信号值 2（第二帧）时
+    不得提前结束，最后一帧（显示索引 2 / 信号值 3）才触发一次播完。"""
+    _qapp()
+
+    class _Movie:
+        def __init__(self, frame_count):
+            self._fc = frame_count
+            self._display = 0
+            self.stops = 0
+
+        def currentFrameNumber(self):
+            return self._display
+
+        def frameCount(self):
+            return self._fc
+
+        def stop(self):
+            self.stops += 1
+
+    class _Lib:
+        no_mirror = frozenset()
+
+        def frames(self, name):
+            return 3
+
+    class _Pet:
+        def __init__(self, movie):
+            self.movie = movie
+            self.lib = _Lib()
+            self.anim = "idle"
+            self._hidden_paused = False
+            self._closing = False
+            self._ended_fired = False
+            self.rebuilt = 0
+            self.ended = 0
+
+        def _rebuild_frame(self):
+            self.rebuilt += 1
+
+        def update(self):
+            pass
+
+        def _on_anim_ended(self, name):
+            self.ended += 1
+
+    movie = _Movie(3)
+    pet = _Pet(movie)
+    # 逐帧推进显示索引，信号值模拟真实 WebMClip 时序（显示 0/1/2 → 信号 1/2/3）
+    for display, signal in ((0, 1), (1, 2), (2, 3)):
+        movie._display = display
+        window_mod.PetWindow._on_frame(pet, "idle", signal)
+    assert pet.rebuilt == 3, "每一帧都必须重建画面（不得在第二帧提前结束）"
+    assert pet.ended == 1, "播完判定只允许在最后一帧触发一次"
+    assert movie.stops == 1, "只在最后一帧 stop"
+
+
+def test_real_playback_timing_frame_contract(monkeypatch):
+    """真实播放时序端到端（B14 复审 R2 P0）：start → reader 线程 → QTimer →
+    frameChanged → PetWindow._on_frame 全链路。三帧动画：
+    - frameChanged 信号值为 1 基事件序号（1,2,3）；
+    - currentFrameNumber()（0 基显示帧索引）为 0,1,2（== 预计算表索引）；
+    - 每帧查预计算表命中当前帧 bounds（首帧=A、末帧=C，不越界回落）；
+    - 播完判定必须发生在最后一帧（显示索引 2），绝不能在第二帧提前结束
+      （旧实现把 1 基信号值当 0 基帧号用，三帧动画在信号值 2 时被误判结束，
+      第三帧永远不显示、不触发窗口回调）。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "os", SimpleNamespace(name="nt"))
+    clip = WebMClip("dummy.webm")
+    rects = [(60, 30, 260, 150), (300, 100, 640, 360), (10, 200, 100, 300)]
+    frames = [_frame_bytes([r]) for r in rects]
+    _install_fake_decode(monkeypatch, clip, frames)
+    clip.warm_bounds(False, 0.72, 1.0)
+    data = clip.bounds_data(False, 0.72, 1.0)
+    assert data is not None and data.frame_count == 3
+
+    def _img(fb):
+        return QImage(fb, 640, 360, 640 * 4, QImage.Format.Format_RGBA8888)
+
+    expected = [
+        bp.frame_window_bounds(_img(frames[0]), mirrored=False, scale=0.72, dpr=1.0),
+        bp.frame_window_bounds(_img(frames[1]), mirrored=False, scale=0.72, dpr=1.0),
+        bp.frame_window_bounds(_img(frames[2]), mirrored=False, scale=0.72, dpr=1.0),
+    ]
+    # 固定元数据（避免 reader 用假 meta 的 fps×duration 覆盖帧数）：
+    # 帧数=3 是播完判定的分母；提高 fps 只是加快 QTimer 节拍，帧号契约与节拍无关。
+    clip._frame_count = 3
+    clip._duration = 1.0
+    clip._fps = 240.0
+
+    scan_calls = []
+
+    def _rec_mono(img):
+        # 只记录本 pet 的回落扫描（_sync_scan_active 标记）；事件循环泵动期间
+        # 其他遗留窗口/定时器的扫描与本测试无关，不计入
+        if _PlaybackPet._sync_scan_active:
+            scan_calls.append(img)
+        return None
+
+    monkeypatch.setattr(window_mod, "_mono_mask_bounds", _rec_mono)
+
+    lib = _PlaybackLib(clip)
+    pet = _PlaybackPet(clip, lib)
+    lookups = []
+    lookup_errors = []
+    lookup_misses = []
+    orig_bounds_rect = clip.bounds_rect
+
+    def _rec_bounds(mirrored, scale, dpr, frame_n):
+        lookups.append(frame_n)
+        try:
+            r = orig_bounds_rect(mirrored, scale, dpr, frame_n)
+        except Exception as exc:  # 记录异常以便定位回落根因
+            lookup_errors.append((frame_n, repr(exc)))
+            raise
+        if r is None:
+            lookup_misses.append(
+                (frame_n, clip.bounds_data(mirrored, scale, dpr),
+                 clip.currentFrameNumber(), clip._display_frame_index)
+            )
+        return r
+
+    clip.bounds_rect = _rec_bounds
+
+    def _on_frame_record(name, n):
+        window_mod.PetWindow._on_frame(pet, name, n)
+        pet.frame_events.append((n, clip.currentFrameNumber(),
+                                 QRect(pet._mask_bounds) if pet._mask_bounds is not None else None))
+
+    clip.frameChanged.connect(
+        lambda n, name="idle": _on_frame_record(name, n)
+    )
+    assert clip.start() is True, "真实播放启动必须成功"
+
+    app = _qapp()
+    assert _drive_event_loop(app, lambda: bool(pet.ended_events)), \
+        "动画必须真实播完并触发 _on_anim_ended"
+
+    # 播完判定发生在最后一帧：显示索引 == 总帧数-1（绝不在第二帧提前结束）
+    name, shown, total = pet.ended_events[0]
+    assert total == 3
+    assert shown == 2, f"播完判定必须发生在最后一帧（显示索引 2），实际在显示索引 {shown} 提前结束"
+    assert len(pet.ended_events) == 1, "_on_anim_ended 只允许触发一次"
+    assert clip.currentFrameNumber() == 2, "停表后显示帧索引必须停留在最后一帧"
+    # 三帧全部显示过：每帧 _mask_bounds 命中当前帧预计算 bounds
+    assert [e[0] for e in pet.frame_events] == [1, 2, 3], "frameChanged 信号序列必须为 1 基事件序号"
+    assert [e[1] for e in pet.frame_events] == [0, 1, 2], "显示帧索引必须为 0 基序列"
+    assert [e[2] for e in pet.frame_events] == expected, "每帧查表必须命中当前帧 bounds"
+    assert lookups == [0, 1, 2], f"预计算查表帧号序列错误: {lookups}（不得错位/越界回落）"
+    assert not lookup_errors, f"bounds 查表异常: {lookup_errors}"
+    assert not lookup_misses, f"bounds 查表未命中: {lookup_misses}"
+    assert not scan_calls, "真实播放链全程不得走回落扫描（每帧均命中预计算表）"
+    assert pet.updates >= 3, "窗口必须为每一帧重建画面"
+    clip.cleanup()
+
+
+def test_first_frame_cache_jump_keeps_zero_based_contract(monkeypatch):
+    """首帧缓存路径（B14 复审 R2 P0）：_first_image 已缓存时 jumpToFrame(0)
+    直接应用首帧（零阻塞），显示帧索引保持 0（查表命中第 0 帧）、事件序号
+    保持 0——与播放路径共用同一 0 基显示帧契约。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "os", SimpleNamespace(name="nt"))
+    clip = WebMClip("dummy.webm")
+    frames = [_frame_bytes([(60, 30, 260, 150)]), _frame_bytes([(300, 100, 640, 360)])]
+    _install_fake_decode(monkeypatch, clip, frames)
+    clip.warm_bounds(False, 0.72, 1.0)
+    expected0 = bp.frame_window_bounds(
+        QImage(frames[0], 640, 360, 640 * 4, QImage.Format.Format_RGBA8888),
+        mirrored=False, scale=0.72, dpr=1.0,
+    )
+    clip._first_image = QImage(frames[0], 640, 360, 640 * 4,
+                               QImage.Format.Format_RGBA8888)
+    clip._first_frame_done.set()
+    scan_calls = []
+    monkeypatch.setattr(window_mod, "_mono_mask_bounds",
+                        lambda img: (scan_calls.append(img), None)[1])
+    pet = _CachedPet(clip)
+    assert clip.jumpToFrame(0) is True
+    assert clip.currentFrameNumber() == 0, "首帧缓存路径显示帧索引必须为 0"
+    assert clip._display_frame_index == 0 and clip._frame_index == 0, \
+        "首帧缓存/手动跳帧路径不得残留旧事件序号"
+    assert clip._current_pixmap is not None, "首帧缓存必须直接应用（零阻塞）"
+    window_mod.PetWindow._sync_mask(pet)
+    assert pet._mask_bounds == expected0, "首帧缓存路径必须命中首帧 bounds"
+    assert not scan_calls, "首帧路径不得走回落扫描"
+    clip.cleanup()
+
+
+# ================================================================ B14 复审 R2：缓存读写同步协议（P1）
+def test_bounds_cache_lock_protocol_rejects_stale_and_never_partial():
+    """缓存读写同步协议（B14 复审 R2 P1）：读（bounds_data）与写
+    （bounds_warm_commit）共用同一把锁；代次匹配才提交、取消/换代后旧代次
+    提交被拒且绝不进入缓存；读者只可能看到 None 或完整 AnimBounds。"""
+    _qapp()
+    clip = WebMClip("dummy.webm")
+    key = (False, 0.72, 1.0)
+    data_a = bp.AnimBounds(2, bp.empty_flat(2), QRect(1, 2, 3, 4), QPoint(2, 5), False)
+    data_b = bp.AnimBounds(2, bp.empty_flat(2), QRect(5, 6, 7, 8), QPoint(2, 5), False)
+    gen0 = clip._bounds_gen
+    assert clip.bounds_data(False, 0.72, 1.0) is None, "未预计算返回 None"
+    # 代次匹配 → 提交成功；读者立即可见完整对象
+    assert clip.bounds_warm_commit(key, data_a, gen0) is True
+    assert clip.bounds_data(False, 0.72, 1.0) is data_a
+    # 取消换代后：旧代次提交被拒，读者仍只见已提交值（旧代次结果绝不生效）
+    clip.cancel_bounds_warm()
+    assert clip.bounds_warm_commit(key, data_b, gen0) is False
+    assert clip.bounds_data(False, 0.72, 1.0) is data_a, "取消后旧代次结果不得生效"
+    # cleanup 后：任何提交被拒（读仍返回已提交的完整对象，不返回半成品）
+    clip.cleanup()
+    assert clip.bounds_warm_commit(key, data_a, clip._bounds_gen) is False
+    assert clip.bounds_data(False, 0.72, 1.0) is data_a
+
+
+def test_bounds_cache_concurrent_reads_never_partial():
+    """缓存读写并发压力（B14 复审 R2 P1）：后台读线程与前台提交/取消交错时，
+    读者只可能观察到 None 或完整 AnimBounds（整包原子提交，无半成品/无崩溃）。"""
+    _qapp()
+    clip = WebMClip("dummy.webm")
+    key = (False, 0.72, 1.0)
+    data = bp.AnimBounds(60, bp.empty_flat(60), QRect(1, 2, 3, 4), QPoint(2, 5), False)
+    stop = threading.Event()
+    bad: list = []
+
+    def _reader():
+        while not stop.is_set():
+            v = clip.bounds_data(False, 0.72, 1.0)
+            if v is not None and not isinstance(v, bp.AnimBounds):
+                bad.append(v)
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    try:
+        for _ in range(200):
+            gen0 = clip._bounds_gen
+            clip.bounds_warm_commit(key, data, gen0)
+            clip.cancel_bounds_warm()  # 换代：旧代次结果绝不写入
+            assert clip.bounds_warm_commit(key, data, gen0) is False
+            clip.bounds_warm_commit(key, data, clip._bounds_gen)
+    finally:
+        stop.set()
+        t.join(5.0)
+    assert not bad, "读者绝不见半成品/非 AnimBounds 数据"
+    clip.cleanup()
+
+
+# ================================================================ B14 复审 R2：窗口 worker 生命周期（P1）
+def test_bounds_warm_stop_joins_and_drops_queued_results():
+    """窗口级停止协议（B14 复审 R2 P1）：停止置事件 + terminate 已登记进程 +
+    有界 join 旧 worker + 清空结果队列 + 窗口级换代（旧轮次迟到结果不得生效），
+    复位后可立即重启。"""
+    _qapp()
+    proc = _FakeDecodeProc()
+
+    class _FakeThread:
+        def __init__(self):
+            self.join_calls = []
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+
+    th = _FakeThread()
+    pet = SimpleNamespace(
+        _bounds_warm_stop_evt=threading.Event(),
+        _bounds_warm_procs={proc},
+        _bounds_warm_procs_lock=threading.Lock(),
+        _bounds_warm_timer=QTimer(),
+        _bounds_warm_running=True,
+        _bounds_warm_thread=th,
+        _bounds_warm_results=queue.Queue(),
+        _bounds_warm_round_gen=3,
+    )
+    pet._bounds_warm_results.put(("idle", (False, 0.72, 1.0), object(), 1, 3))
+    window_mod.PetWindow._bounds_warm_stop(pet)
+    assert pet._bounds_warm_stop_evt.is_set(), "停止事件必须置位"
+    assert proc.terminated or proc.killed, "已登记解码进程必须 terminate"
+    assert pet._bounds_warm_procs == set(), "登记集合必须清空"
+    assert th.join_calls, "停止必须 join 旧 worker（不残留后台线程）"
+    assert pet._bounds_warm_results.empty(), "停止必须清空结果队列（迟到结果不得残留）"
+    assert pet._bounds_warm_round_gen == 4, "停止必须窗口级换代（迟到结果不得生效）"
+    assert not pet._bounds_warm_timer.isActive()
+    assert pet._bounds_warm_running is False
+    assert pet._bounds_warm_thread is None
+
+
+def test_bounds_warm_poll_drops_stale_round_results(monkeypatch):
+    """窗口级换代（B14 复审 R2 P1）：旧轮次 worker 的迟到结果（round_gen 不匹配）
+    必须被 poll 丢弃，绝不提交进 clip 缓存；当前轮次结果正常提交。"""
+    _qapp()
+    webm = WebMClip("dummy.webm")
+    data = bp.AnimBounds(1, bp.empty_flat(1), QRect(1, 2, 3, 4), QPoint(2, 5), False)
+    # no_mirror：完成判定只要求非镜像键（本测试只提交该键）
+    win = _WarmWindow(_WarmLib({"idle": webm}, no_mirror={"idle"}), {"idles": ["idle"]})
+    win._bounds_warm_started = True
+    win._bounds_warm_round_gen = 7
+    # 旧轮次（round_gen=6）迟到结果 + 当前轮次结果混入队列
+    win._bounds_warm_results.put(("idle", (False, 0.72, 1.0), data, webm._bounds_gen, 6))
+    win._bounds_warm_results.put(("idle", (False, 0.72, 1.0), data, webm._bounds_gen, 7))
+    win._on_bounds_warm_poll()
+    assert webm.bounds_data(False, 0.72, 1.0) is data, "仅当前轮次结果提交"
+    assert win._bounds_warm_done, "当前轮次结果提交后判完成"
+    webm.cleanup()
+
+
+# ================================================================ B14 复审 R2：_bounds_warm_done 状态机（P1）
+def test_window_warm_no_stall_when_snapshot_busy(monkeypatch):
+    """并发认领忙（bounds_warm_snapshot 全返回 None）时不得永久停滞（B14 复审
+    R2 P1）：忙态下不启动 worker、不虚假判完成，但必须进入轮询重试；忙态结束
+    后轮询自动补跑并完成。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "os", SimpleNamespace(name="nt"))
+    webm = WebMClip("dummy.webm")
+    frames = [_frame_bytes([(60, 30, 260, 150)]), _frame_bytes([(300, 100, 640, 360)])]
+    _install_fake_decode(monkeypatch, webm, frames)
+    lib = _WarmLib({"idle": webm})
+    win = _WarmWindow(lib, {"idles": ["idle"]})
+    win._bounds_warm_started = True
+
+    webm._bounds_lock.acquire()  # 模拟并发 clip 级 warm 占用：快照采集全部认领忙
+    try:
+        win._maybe_start_bounds_warm()
+        assert not win._bounds_warm_running, "忙态下不得启动 worker"
+        assert not win._bounds_warm_done, "忙态下不得虚假判完成"
+        assert win._bounds_warm_timer.isActive(), "忙态下必须进入轮询重试（不得永久停滞）"
+    finally:
+        webm._bounds_lock.release()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        win._on_bounds_warm_poll()
+        if win._bounds_warm_done:
+            break
+        time.sleep(0.01)
+    assert win._bounds_warm_done, "忙态结束后轮询重试必须自动补跑并完成"
+    assert webm.bounds_union(False, 0.72, 1.0) is not None
+    webm.cleanup()
+
+
+def test_bounds_warm_retry_exhaustion_does_not_false_done(monkeypatch):
+    """重试耗尽不得虚假标记 done（B14 复审 R2 P1）：目标键始终无法提交（如
+    永久解码失败）时，_bounds_warm_done 必须保持 False（预计算确实未完成），
+    定时器停表放弃本轮；后续触发（showEvent/(scale,dpr) 变化/批次补建）会
+    重置重试。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "os", SimpleNamespace(name="nt"))
+    webm = WebMClip("dummy.webm")
+    frames = [_frame_bytes([(60, 30, 260, 150)])]
+    _install_fake_decode(monkeypatch, webm, frames)
+    lib = _WarmLib({"idle": webm})
+    win = _WarmWindow(lib, {"idles": ["idle"]})
+    win._bounds_warm_started = True
+    # 提交永远失败（模拟永久解码失败/键不匹配）：目标键永不就绪
+    monkeypatch.setattr(webm, "bounds_warm_commit", lambda key, data, gen: False)
+
+    win._maybe_start_bounds_warm()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        win._on_bounds_warm_poll()
+        if not win._bounds_warm_timer.isActive() and not win._bounds_warm_running:
+            break
+        time.sleep(0.01)
+    assert not win._bounds_warm_timer.isActive(), "重试耗尽必须停表"
+    assert not win._bounds_warm_running
+    assert win._bounds_warm_done is False, "失败路径不得虚假标记 done（预计算未完成）"
+    assert webm.bounds_data(False, 0.72, 1.0) is None, "失败路径不得有缓存结果"
+    webm.cleanup()
+
+
+# ================================================================ B14 复审 R2：DPR 往返 / union 窗口接缝
+def test_rebuild_frame_resets_collision_on_dpr_round_trip(monkeypatch):
+    """DPR 完整往返 1.0→2.0→1.0（B14 复审 R2 P1）：每次 (scale, dpr) 键变化都
+    重置 _collision_local_bounds，往返后按新键几何重新累积，不得残留旧键并集。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "os", SimpleNamespace(name="nt"))
+    frame = _make_rgba_frame(640, 360, [(60, 30, 260, 150)])
+    pet = _ScanPet(_FrameClip(frame), scale=0.72, dpr=1.0, facing="left")
+    window_mod.PetWindow._rebuild_frame(pet)
+    r1 = QRect(pet._collision_local_bounds)
+    assert not r1.isEmpty()
+
+    pet._screen_dpr = 2.0
+    window_mod.PetWindow._rebuild_frame(pet)
+    r2 = QRect(pet._collision_local_bounds)
+    assert r2 != r1, "DPR 1.0→2.0 几何应变化"
+    assert pet._collision_local_bounds == pet._mask_bounds, "DPR 变化后必须从当前帧重新累积"
+
+    pet._screen_dpr = 1.0
+    window_mod.PetWindow._rebuild_frame(pet)
+    r3 = QRect(pet._collision_local_bounds)
+    assert r3 == r1, "DPR 2.0→1.0 往返后几何应回到 1.0 基准（不得残留 2.0 键并集）"
+    assert pet._collision_local_bounds == pet._mask_bounds
+
+
+def test_collision_content_rect_uses_accumulated_union():
+    """碰撞窗口接缝（B14 复审 R2）：collision_content_rect 取逐帧累积 union——
+    「视觉未接触但 union 接触」时碰撞体大于当前帧视觉区域（圆链不随帧跳动）。"""
+    _qapp()
+
+    class _UnionPet:
+        _collision_local_bounds = QRect(20, 30, 120, 150)  # 累积 union（大于当前帧）
+        _mask_bounds = QRect(60, 60, 40, 50)               # 当前帧视觉区域
+
+        def frameGeometry(self):
+            return QRect(100, 200, 300, 400)
+
+        def visible_content_rect(self):
+            return QRect(160, 260, 40, 50)
+
+    rect = window_mod.PetWindow.collision_content_rect(_UnionPet())
+    assert rect == QRect(120, 230, 120, 150), \
+        f"collision_content_rect 必须返回累积 union（当前帧视觉区域仅 {_UnionPet._mask_bounds}）"
+
+
+def test_warm_bounds_real_webm_all_categories_match_runtime_scan(monkeypatch):
+    """真实 webm 全类别覆盖（B14 复审 R2）：不再只取第一个文件——按顶层类别
+    目录（click/idle/turn/move/drag/act…）各取一个真实素材，warm_bounds 全帧
+    预计算后采样帧缓存 bounds 与运行时扫描逐帧一致（1 个 scale/DPR 组合控制
+    运行时长，类别覆盖保证样本代表性）。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "os", SimpleNamespace(name="nt"))
+    files = sorted(VIDEOS_ROOT.rglob("*.webm"))
+    if not files:
+        pytest.skip("缺少真实 webm 素材目录")
+    by_cat: dict[str, Path] = {}
+    for p in files:
+        cat = p.parent.name
+        by_cat.setdefault(cat, p)
+    picks = [by_cat[k] for k in sorted(by_cat)]
+    assert len(picks) >= 3, "素材类别覆盖过少"
+    checked = 0
+    for path in picks:
+        clip = WebMClip(path)
+        try:
+            clip.warm_bounds(False, 0.72, 1.0)
+            data = clip.bounds_data(False, 0.72, 1.0)
+            assert data is not None, f"{path.name} 未预计算"
+            frames = _decode_frames(path)
+            assert len(frames) > 0
+            for fi in _sample_indices(len(frames), min_samples=6):
+                cached = clip.bounds_rect(False, 0.72, 1.0, fi)
+                assert cached is not None, f"{path.name} frame#{fi} 未预计算"
+                expected = bp.frame_window_bounds(
+                    frames[fi], mirrored=False, scale=0.72, dpr=1.0
+                )
+                checked += 1
+                assert cached == expected, (
+                    f"{path.name} frame#{fi}: 缓存={cached} 运行时={expected}"
+                )
+        finally:
+            clip.cleanup()
+    assert checked >= 18, "真实素材类别覆盖帧数不足"

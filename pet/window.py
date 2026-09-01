@@ -89,6 +89,12 @@ _BOUNDS_WARM_POLL_MS = 100
 # - 完成判定失败（解码失败/目标 clip 未建）时的重试上限：到限仍不完整则
 #   放弃本轮，运行时回落扫描（行为不变），避免对永久失败素材无限重试。
 _BOUNDS_WARM_MAX_RETRIES = 8
+# 空任务（并发认领忙 / 目标 clip 未创建）轮询重试上限（tick 数，100ms/tick）：
+# 短暂 busy 由轮询吸收，超限停表放弃本轮（不虚假标记 done）。
+_BOUNDS_WARM_EMPTY_MAX_TICKS = 50
+# 停止时对旧 worker 的有界 join 时长（秒）：已 terminate 其解码进程，正常
+# 毫秒级退出；此值只作为病态场景（解码卡死）的 GUI 阻塞上限。
+_BOUNDS_WARM_JOIN_TIMEOUT = 0.5
 
 
 def _resolve_self_talk_image_dir(raw: str) -> str:
@@ -297,7 +303,8 @@ def _window_current_dpr(window) -> float:
     return scr.devicePixelRatio() if scr is not None else 1.0
 
 
-def _run_bounds_warm_tasks(snapshot, stop_evt, results_q, procs, procs_lock) -> None:
+def _run_bounds_warm_tasks(snapshot, stop_evt, results_q, procs, procs_lock,
+                           round_gen=None) -> None:
     """后台 bounds 预计算 worker（B14 复审 P1）：只用 GUI 线程采集的纯数据
     快照 + 独立解码，不触碰任何 Qt 对象。
 
@@ -308,7 +315,10 @@ def _run_bounds_warm_tasks(snapshot, stop_evt, results_q, procs, procs_lock) -> 
       排空并按代次提交（代次确认 + 缓存写入与取消换代同一把锁，取消后绝不
       提交）；
     - procs/procs_lock：本窗口在飞解码进程登记（纯 set + 锁），停止时
-      terminate（隐藏/切角色后零不受控后台 ffmpeg）。
+      terminate（隐藏/切角色后零不受控后台 ffmpeg）；
+    - round_gen：窗口级轮次代次（B14 复审 R2）。结果携带该代次，GUI 线程
+      只提交当前轮次——停止/换代后旧轮次迟到结果绝不生效。None 时结果不带
+      轮次代次（测试直接调用路径，视为当前轮次）。
     """
     try:
         scale = float(snapshot["scale"])
@@ -346,9 +356,14 @@ def _run_bounds_warm_tasks(snapshot, stop_evt, results_q, procs, procs_lock) -> 
             )
             if data is not None and not stop_evt.is_set():
                 try:
-                    results_q.put_nowait(
-                        (task["name"], task["key"], data, task["gen"])
-                    )
+                    if round_gen is None:
+                        results_q.put_nowait(
+                            (task["name"], task["key"], data, task["gen"])
+                        )
+                    else:
+                        results_q.put_nowait(
+                            (task["name"], task["key"], data, task["gen"], round_gen)
+                        )
                 except Exception:
                     logging.debug('bounds 结果入队失败', exc_info=True)
     except Exception:
@@ -802,6 +817,15 @@ class PetWindow(QWidget):
         self._bounds_warm_done = False
         self._bounds_warm_key: tuple | None = None
         self._bounds_warm_retries = 0
+        # 窗口级预热轮次代次（B14 复审 R2）：每启动一轮 worker 或停止一轮时
+        # 自增，worker 结果携带轮次代次，poll 只提交当前轮次——旧轮次迟到
+        # 结果绝不生效（与 clip 级 bounds 代次互补，窗口级停止自足，不依赖
+        # MovieLibrary.pause_warm 的 cancel）。
+        self._bounds_warm_round_gen = 0
+        # 空任务（并发认领忙 / 目标 clip 未创建）轮询重试计数：独立于 worker
+        # 轮次预算，短暂 busy 不消耗 worker 重试次数；超限停表放弃本轮（不虚假
+        # 标记 done），等 showEvent/(scale,dpr) 变化/批次补建重置后重新尝试。
+        self._bounds_warm_empty_ticks = 0
         self._bounds_warm_thread: threading.Thread | None = None
         self._bounds_warm_stop_evt = threading.Event()
         self._bounds_warm_procs: set = set()
@@ -1257,6 +1281,7 @@ class PetWindow(QWidget):
         # 隐藏中断的 bounds 预计算在恢复显示后续跑（未完成时）
         if getattr(self, '_bounds_warm_started', False) and not self._bounds_warm_done:
             self._bounds_warm_retries = 0
+            self._bounds_warm_empty_ticks = 0
             self._maybe_start_bounds_warm()
         self._restore_dock_icon_preference()
 
@@ -2182,7 +2207,14 @@ class PetWindow(QWidget):
             self._switch(self._pick(self.idles))
 
     def _on_frame(self, name: str, n: int) -> None:
-        """媒体帧推进回调：重建画面；最后一帧触发播完处理。"""
+        """媒体帧推进回调：重建画面；最后一帧触发播完处理。
+
+        帧号契约（B14 复审 P0/R2）：frameChanged 信号值在 WebMClip 是 1 基
+        「事件序号」、在 GifClip 是 QMovie 0 基帧号，两种语义都不能直接当
+        「显示帧索引」用。播完判定统一以 movie.currentFrameNumber()（0 基
+        显示帧索引，== 预计算表索引，两实现一致）与总帧数比较——否则三帧
+        动画会在信号值 2（第二帧）被误判结束、第三帧永远不显示。
+        """
         if self._hidden_paused or getattr(self, '_closing', False):
             # 隐藏/关闭/切角色后丢弃迟到的动画事件：旧窗口不得再推进动画链、
             # 不得对旧库重新建立交互让路 hold（生命周期守卫）。
@@ -2191,7 +2223,11 @@ class PetWindow(QWidget):
             return
         self._rebuild_frame()
         self.update()
-        if n >= self.lib.frames(name) - 1 and not self._ended_fired:
+        try:
+            shown = self.movie.currentFrameNumber()
+        except AttributeError:
+            shown = n  # 无帧号接口的播放器（防御）：退回信号值
+        if shown >= self.lib.frames(name) - 1 and not self._ended_fired:
             self._ended_fired = True
             self.movie.stop()  # 停在最后一帧，等 _on_anim_ended 切走
             self._on_anim_ended(name)
@@ -2250,6 +2286,7 @@ class PetWindow(QWidget):
             if getattr(self, '_bounds_warm_started', False):
                 self._bounds_warm_done = False
                 self._bounds_warm_retries = 0
+                self._bounds_warm_empty_ticks = 0
                 self._maybe_start_bounds_warm()
         self._sync_mask()
 
@@ -2355,6 +2392,7 @@ class PetWindow(QWidget):
             return
         self._bounds_warm_done = False
         self._bounds_warm_retries = 0
+        self._bounds_warm_empty_ticks = 0
         self._maybe_start_bounds_warm()
 
     def _maybe_start_bounds_warm(self) -> None:
@@ -2373,14 +2411,31 @@ class PetWindow(QWidget):
             return
         snapshot = self._collect_bounds_snapshot()
         if not snapshot['tasks']:
-            # 无待预热任务：全部已缓存/无 bounds API → 直接判完成；目标 clip
-            # 尚未创建时留待 low_warm_batch_finished / showEvent 补触发。
+            # 无待预热任务：全部已缓存/无 bounds API → 直接判完成；并发认领忙
+            # 或目标 clip 尚未创建 → 不得永久停滞（B14 复审 R2 P1）：进入轮询
+            # 重试（有独立上限），绝不虚假标记 done；超限停表后由 showEvent/
+            # (scale,dpr) 变化/批次补建重置重新尝试。
             if self._bounds_warm_complete():
                 self._bounds_warm_done = True
+                self._bounds_warm_empty_ticks = 0
                 self._bounds_warm_timer.stop()
+                return
+            self._bounds_warm_empty_ticks += 1
+            if self._bounds_warm_empty_ticks < _BOUNDS_WARM_EMPTY_MAX_TICKS:
+                self._bounds_warm_timer.start()
+            else:
+                self._bounds_warm_timer.stop()
+            return
+        if self._bounds_warm_retries >= _BOUNDS_WARM_MAX_RETRIES:
+            # 重试上限仍不完整：停表放弃本轮（预计算确实未完成，不虚假标记
+            # done）；后续 showEvent/(scale,dpr) 变化/批次补建会重置重试。
+            self._bounds_warm_timer.stop()
             return
         self._bounds_warm_running = True
         self._bounds_warm_retries += 1
+        self._bounds_warm_empty_ticks = 0
+        self._bounds_warm_round_gen += 1
+        round_gen = self._bounds_warm_round_gen
         stop_evt = threading.Event()
         self._bounds_warm_stop_evt = stop_evt
         procs_lock = threading.Lock()
@@ -2390,7 +2445,7 @@ class PetWindow(QWidget):
             th = threading.Thread(
                 target=_run_bounds_warm_tasks,
                 args=(snapshot, stop_evt, self._bounds_warm_results,
-                      self._bounds_warm_procs, procs_lock),
+                      self._bounds_warm_procs, procs_lock, round_gen),
                 daemon=True,
                 name='bounds-warm',
             )
@@ -2434,13 +2489,21 @@ class PetWindow(QWidget):
     def _on_bounds_warm_poll(self) -> None:
         """GUI 线程定时槽（B14 复审 P1）：排空 worker 结果并按代次提交；
         worker 退出后做完成判定（按目标键验证结果已提交）/ 有限重试 / 停表。
+
+        B14 复审 R2：结果携带窗口级轮次代次（round_gen），旧轮次迟到结果
+        直接丢弃（窗口级停止自足）；重试耗尽时停表但绝不虚假标记 done。
         """
-        # 1) 排空结果队列（整包提交；代次确认 + 缓存写入与取消换代同一把锁）
+        # 1) 排空结果队列（整包提交；代次确认 + 缓存写入与取消换代同一把锁；
+        #    旧轮次迟到结果按窗口级轮次代次丢弃）
         while True:
             try:
-                name, key, data, gen = self._bounds_warm_results.get_nowait()
+                item = self._bounds_warm_results.get_nowait()
             except queue.Empty:
                 break
+            if (isinstance(item, tuple) and len(item) >= 5
+                    and item[4] != getattr(self, '_bounds_warm_round_gen', None)):
+                continue  # 旧轮次（停止/换代后）迟到结果：不得生效
+            name, key, data, gen = item[0], item[1], item[2], item[3]
             clip = None
             lib = getattr(self, 'lib', None)
             if lib is not None:
@@ -2466,13 +2529,14 @@ class PetWindow(QWidget):
             return
         if self._bounds_warm_complete():
             self._bounds_warm_done = True
+            self._bounds_warm_empty_ticks = 0
             self._bounds_warm_timer.stop()
         elif self._bounds_warm_retries < _BOUNDS_WARM_MAX_RETRIES:
             self._maybe_start_bounds_warm()
         else:
-            # 重试上限仍不完整：放弃本轮，运行时回落扫描（行为不变），
-            # 避免对永久失败素材无限重试。
-            self._bounds_warm_done = True
+            # 重试上限仍不完整：停表放弃本轮（B14 复审 R2：绝不把未完成虚假
+            # 标记为 done——运行时回落扫描行为不变，后续 showEvent/(scale,dpr)
+            # 变化/批次补建会重置重试重新尝试）。
             self._bounds_warm_timer.stop()
 
     def _bounds_warm_complete(self) -> bool:
@@ -2508,12 +2572,17 @@ class PetWindow(QWidget):
     def _bounds_warm_stop(self) -> None:
         """停止在飞 bounds 预计算（GUI 线程；hide/closeEvent 调用）。
 
-        置停止事件让 worker 逐帧放弃，并 terminate 已登记的解码进程
-        （取消后迟到的登记自终止）——隐藏/切角色后不再有不受控的后台 ffmpeg，
-        窗口销毁前 worker 不再触碰任何窗口状态。同步复位在飞标志：worker
-        只持有停止事件/纯对象，退出时不写窗口状态，恢复显示后
-        showEvent → _maybe_start_bounds_warm 可立即重启（旧 worker 的迟到
-        结果由代次提交协议丢弃）。
+        完整停止协议（B14 复审 R2 P1）：
+        1. 置停止事件让 worker 逐帧放弃，并 terminate 已登记的解码进程
+           （取消后迟到的登记自终止）——隐藏/切角色后不再有不受控的后台 ffmpeg；
+        2. 窗口级换代（_bounds_warm_round_gen += 1）：本轮所有在飞/迟到结果
+           作废，poll 按轮次代次丢弃——窗口级停止自足，不依赖库侧
+           pause_warm 的 cancel；
+        3. 有界 join 旧 worker：已 terminate 其解码进程，正常毫秒级退出，
+           保证恢复显示前旧 worker 不再写结果队列；
+        4. 清空结果队列：旧轮次已入队但未提交的结果不进入下一轮提交；
+        5. 同步复位在飞标志（worker 只持有停止事件/纯对象，退出时不写窗口
+           状态），恢复显示后 showEvent → _maybe_start_bounds_warm 可立即重启。
         """
         evt = getattr(self, '_bounds_warm_stop_evt', None)
         if evt is not None:
@@ -2529,8 +2598,25 @@ class PetWindow(QWidget):
                 webm_clip_mod.WebMClip._terminate_proc(p)
             except Exception:
                 pass
+        if hasattr(self, '_bounds_warm_round_gen'):
+            self._bounds_warm_round_gen += 1  # 本轮所有在飞/迟到结果作废
+        th = getattr(self, '_bounds_warm_thread', None)
+        if th is not None:
+            try:
+                th.join(timeout=_BOUNDS_WARM_JOIN_TIMEOUT)
+            except Exception:
+                pass
+        results = getattr(self, '_bounds_warm_results', None)
+        if results is not None:
+            try:
+                while True:
+                    results.get_nowait()
+            except queue.Empty:
+                pass
         self._bounds_warm_running = False
         self._bounds_warm_thread = None
+        if hasattr(self, '_bounds_warm_empty_ticks'):
+            self._bounds_warm_empty_ticks = 0
         timer = getattr(self, '_bounds_warm_timer', None)
         if timer is not None:
             timer.stop()
