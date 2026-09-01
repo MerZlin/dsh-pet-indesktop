@@ -392,3 +392,38 @@ def test_drag_does_not_play_click_sound_but_click_does(app, tmp_path, monkeypatc
 
     win.close()
     app.processEvents()
+
+def test_click_sound_pair_is_cleared_when_resolution_fails(app, tmp_path, monkeypatch):
+    from pathlib import Path
+    win = _make_win(app, tmp_path)
+    press_calls = []
+    release_calls = []
+    pair_a = (Path("press-a.wav"), Path("release-a.wav"))
+    current_pair = [pair_a]
+    monkeypatch.setattr("pet.window.resolve_click_sound_pair", lambda pack, data_dir=None: current_pair[0])
+    monkeypatch.setattr("pet.window.play_press_sound", lambda pair, volume: press_calls.append(pair))
+    monkeypatch.setattr("pet.window.play_release_sound", lambda pair, volume: release_calls.append(pair))
+
+    # 第一次点击：解析成功，播放 pair_a
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(200, 200)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(200, 200)))
+    assert press_calls == [pair_a]
+    assert release_calls == [pair_a]
+
+    # 解析失败（如切换音效包后文件缺失）：不应复用旧 pair
+    current_pair[0] = None
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(300, 300)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(300, 300)))
+    assert press_calls == [pair_a], "解析失败时不应播放旧按下音"
+    assert release_calls == [pair_a], "解析失败时不应播放旧释放音"
+
+    # 再次解析成功且换成 pair_b：应播放新 pair
+    pair_b = (Path("press-b.wav"), Path("release-b.wav"))
+    current_pair[0] = pair_b
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(400, 400)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(400, 400)))
+    assert press_calls == [pair_a, pair_b]
+    assert release_calls == [pair_a, pair_b]
+
+    win.close()
+    app.processEvents()

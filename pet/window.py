@@ -2451,9 +2451,9 @@ class PetWindow(QWidget):
                 return  # 左右留白区域不参与点击/拖拽
             if self.click_sound_enabled:
                 pair = resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
-                if pair is not None:
-                    self._press_sound_pair = pair
-                    # 拖动不应触发点击音效：按下阶段不发声，确认是点击后再播放完整 press+release
+                # 每次按下都重置：解析失败/切换音效包时不能复用上一次的旧 pair
+                self._press_sound_pair = pair
+                # 拖动不应触发点击音效：按下阶段不发声，确认是点击后再播放完整 press+release
             if self.lock_position:
                 # 锁定位置：不记录按下，拖拽不会开始；松手时仍按点击处理
                 return
