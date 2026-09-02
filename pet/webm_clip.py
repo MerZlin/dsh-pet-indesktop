@@ -1237,7 +1237,7 @@ class WebMClip(QObject):
                 # 主线程直接转 QPixmap，零阻塞、无旧帧残留窗口。
                 self._current_image = self._first_image
                 self._current_pixmap = QPixmap.fromImage(self._first_image)
-                _ffr_touch(self)  # LRU 置顶（纯重排，不记账）
+                _ffr_evict(_ffr_touch(self))  # LRU 置顶 + 执行被逐出项（不丢弃）
             else:
                 self._current_image = None
                 self._current_pixmap = None
@@ -1335,18 +1335,22 @@ class WebMClip(QObject):
                 except Exception:
                     pass
 
-    def _store_first_frame(self, img) -> None:
+    def _store_first_frame(self, img) -> list:
         """把解码结果写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
 
         幂等：缓存已存在则跳过；写入后 set _first_frame_done。
+        返回待逐出列表——调用方必须在释放本 clip 锁后再 _ffr_evict
+        （R3 复审：锁内逐出会取 victim 的锁，构成跨对象持锁嵌套）。
         """
         if img is None:
-            return
+            return []
         if self._first_image is None:
             self._first_image = img
             self._first_frame_done.set()
-            # 预算 LRU 登记（超预算逐出最久未用者，锁外执行）
-            _ffr_evict(_ffr_touch(self, img.width() * img.height() * 4))
+            # 预算 LRU 登记；逐出返回给调用方、在释放本 clip 锁后执行
+            # （R3 复审：持锁期间逐出会取 victim 的锁，跨对象嵌套可死锁）
+            return _ffr_touch(self, img.width() * img.height() * 4)
+        return []
 
     def _decode_first_qimage_and_cache(self, gen: int | None = None) -> None:
         """解码首帧并写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
@@ -1356,11 +1360,11 @@ class WebMClip(QObject):
         cleanup）则丢弃结果，不污染缓存（P1-2）。
         """
         if self._first_image is not None:
-            return
+            return []
         img = self._decode_first_qimage(gen=gen)
         if gen is not None and gen != self._first_frame_gen:
-            return  # 已被取消/换代：结果作废，不提交
-        self._store_first_frame(img)
+            return []  # 已被取消/换代：结果作废，不提交
+        return self._store_first_frame(img)
 
     def _apply_first_frame(self) -> None:
         """把已缓存的 _first_image 应用到当前播放帧（仅主线程调用）。"""
@@ -1400,15 +1404,17 @@ class WebMClip(QObject):
         的代次取消语义。
         """
         gen = self._first_frame_gen
+        victims = []
         if self._first_frame_lock.acquire(blocking=False):
             try:
-                self._decode_first_qimage_and_cache(gen=gen)
+                victims = self._decode_first_qimage_and_cache(gen=gen)
             finally:
                 self._first_frame_lock.release()
         else:
             if not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0):
                 img = self._decode_first_qimage(gen=gen)
-                self._commit_first_frame_escape(img, gen=gen)
+                victims = self._commit_first_frame_escape(img, gen=gen)
+        _ffr_evict(victims)  # 逐出延迟到本 clip 锁释放后（防跨对象持锁嵌套）
         self._apply_first_frame()
 
     def _commit_first_frame_escape(self, img, gen: int | None = None) -> None:
@@ -1425,16 +1431,16 @@ class WebMClip(QObject):
         gen：本次解码认领的首帧代次；解码期间被取消（换代）则结果作废。
         """
         if img is None:
-            return
+            return []
         if gen is not None and gen != self._first_frame_gen:
-            return  # 解码期间被取消/换代：结果作废，不提交（P1-2）
+            return []  # 解码期间被取消/换代：结果作废，不提交（P1-2）
         if self._first_frame_lock.acquire(blocking=False):
             try:
-                self._store_first_frame(img)
+                return self._store_first_frame(img)
             finally:
                 self._first_frame_lock.release()
-        else:
-            self._apply_first_frame_image(img)
+        self._apply_first_frame_image(img)
+        return []
 
     def warm_first_frame(self) -> None:
         """后台线程预解码首帧缓存（仅 QImage，线程安全）。
@@ -1453,11 +1459,13 @@ class WebMClip(QObject):
             return
         if not self._first_frame_lock.acquire(blocking=False):
             return
+        victims = []
         try:
             gen = self._first_frame_gen
-            self._decode_first_qimage_and_cache(gen=gen)
+            victims = self._decode_first_qimage_and_cache(gen=gen)
         finally:
             self._first_frame_lock.release()
+        _ffr_evict(victims)  # 锁外逐出（同上）
 
     def cancel_first_frame_warm(self) -> None:
         """取消在飞的首帧预热（P1-2）：换代使在飞解码结果作废，并主动

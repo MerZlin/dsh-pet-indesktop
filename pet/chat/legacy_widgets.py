@@ -923,6 +923,8 @@ class ChatWindow(QDialog):
         self._bubble.set_state("streaming")
         self._bubble.retry_requested.connect(self.retry_last)
         self._text = ""
+        # 整会话冗余 save：与 widgets.py 同款——append_message 已原子落盘，
+        # 此处仅作「会话被并发删除后本地兜底」的复活机制（R3 复审：保留）。
         self.store.save(self.session)
         config = self.settings.active_config
         config.api_key = self.config.resolve_api_key(config)

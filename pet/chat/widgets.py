@@ -1860,6 +1860,10 @@ class ChatWindow(QDialog):
         self._bubble.set_state("streaming")
         self._bubble.retry_requested.connect(self.retry_last)
         self._text = ""
+        # 整会话冗余 save：send_message 已经过 append_message 原子落盘，
+        # 这里是「会话被并发删除后本地兜底 append」路径的复活机制
+        # （append_message 返回 None 时消息只在内存）。与并发 append 的
+        # 覆盖窗口是同调用栈内的微秒级，可接受（R3 复审结论：保留）。
         self.store.save(self.session)
         config = self.settings.active_config
         config.api_key = self.config.resolve_api_key(config)

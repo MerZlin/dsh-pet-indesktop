@@ -425,7 +425,10 @@ class SessionStore:
                 return None, False
             absorbed = str(fresh.updated_at) > str(session.updated_at)
             fresh.messages.extend(messages)
-            self.save(fresh)
+            if not self.save(fresh):
+                # writer 已永久关闭（退出窗口期）：追加只留在内存——
+                # 「拒绝可观测」语义在 append 路径同样保持（R3 复审）
+                log.warning("会话追加未落盘（写盘已关闭）: %s", session.session_id)
             return fresh, absorbed
 
     def flush(self, timeout: float = 10.0) -> bool:

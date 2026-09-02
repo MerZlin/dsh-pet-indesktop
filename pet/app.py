@@ -516,9 +516,12 @@ class PetApp:
                     settings.active_provider,
                     settings.default_system_prompt,
                 )
-            session.messages.append(ChatMessage("user", str(user_text)))
-            session.messages.append(ChatMessage("assistant", str(reply)))
-            store.save(session)
+            msgs = [ChatMessage("user", str(user_text)), ChatMessage("assistant", str(reply))]
+            synced, _absorbed = store.append_messages(session, msgs)
+            if synced is None:
+                # 会话已被并发删除等边界：本地兜底（保持旧行为）
+                session.messages.extend(msgs)
+                store.save(session)
         except Exception:
             logging.exception("同步识屏问答到会话记录失败")
 
