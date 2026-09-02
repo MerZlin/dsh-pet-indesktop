@@ -376,8 +376,8 @@ def test_settings_menu_editor_moves_action_into_submenu_without_dragging(tmp_pat
     dialog = ModernSettingsDialog(Config(tmp_path), include_ai=False)
     editor = dialog.menu_layout_editor
     editor.tree.setCurrentItem(editor.item_for_action("playback_speed"))
-    editor.target_select.setCurrentData("pet_controls")
-    editor.move_to_button.click()
+    editor.move_menu.aboutToShow.emit()
+    next(action for action in editor.move_menu.actions() if action.data() == "pet_controls").trigger()
     dialog.save_exit_button.click()
 
     nodes = Config(tmp_path).get("context_menu_layout")["nodes"]
@@ -395,14 +395,15 @@ def test_menu_editor_reorders_and_promotes_actions_with_button_controls():
     editor = MenuLayoutEditor(None)
     root_ids = [node["id"] for node in editor.value()["nodes"]]
     editor.tree.setCurrentItem(editor.item_for_action("chat"))
-    editor.down_button.click()
+    editor.move_down_action.trigger()
     reordered_ids = [node["id"] for node in editor.value()["nodes"]]
     chat_index = root_ids.index("chat")
     assert reordered_ids[chat_index : chat_index + 2] == ["look_screen", "chat"]
 
     promoted = editor.item_for_action("drag_physics")
     editor.tree.setCurrentItem(promoted)
-    editor.promote_button.click()
+    editor.move_menu.aboutToShow.emit()
+    next(action for action in editor.move_menu.actions() if action.data() == "__root__").trigger()
 
     assert promoted.parent() is None
     assert editor.value()["nodes"][-1]["id"] == "drag_physics"
@@ -421,9 +422,10 @@ def test_menu_editor_reset_restores_the_versioned_default():
     editor = MenuLayoutEditor(None)
     editor.item_for_action("chat").setCheckState(0, Qt.CheckState.Unchecked)
     editor.tree.setCurrentItem(editor.item_for_action("drag_physics"))
-    editor.promote_button.click()
+    editor.move_menu.aboutToShow.emit()
+    next(action for action in editor.move_menu.actions() if action.data() == "__root__").trigger()
 
-    editor.reset_button.click()
+    editor.reset_action.trigger()
 
     assert editor.value()["nodes"] == load_default_menu_layout()["nodes"]
     editor.close()
@@ -442,7 +444,7 @@ def test_settings_menu_editor_creates_named_submenu(tmp_path, monkeypatch):
     monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("常用操作", True))
     dialog = ModernSettingsDialog(Config(tmp_path), include_ai=False)
 
-    dialog.menu_layout_editor.new_submenu_button.click()
+    dialog.menu_layout_editor.new_submenu_action.trigger()
 
     user_submenus = [
         node for node in dialog.menu_layout_editor.value()["nodes"]
@@ -452,6 +454,99 @@ def test_settings_menu_editor_creates_named_submenu(tmp_path, monkeypatch):
         ("常用操作", [])
     ]
     dialog.reject()
+    app.processEvents()
+
+
+def test_menu_editor_confirms_before_deleting_submenu_and_preserves_children(monkeypatch):
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from pet.menu_layout import load_default_menu_layout
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    layout = load_default_menu_layout()
+    chat = next(node for node in layout["nodes"] if node["id"] == "chat")
+    layout["nodes"].remove(chat)
+    layout["nodes"].insert(1, {
+        "type": "submenu", "id": "user.work", "label": "工作",
+        "visible": True, "children": [chat],
+    })
+    editor = MenuLayoutEditor(layout)
+    submenu = editor.tree.topLevelItem(1)
+    editor.tree.setCurrentItem(submenu)
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Cancel,
+    )
+    editor.delete_submenu_action.trigger()
+    assert any(node["id"] == "user.work" for node in editor.value()["nodes"])
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    editor.delete_submenu_action.trigger()
+    nodes = editor.value()["nodes"]
+    assert all(node["id"] != "user.work" for node in nodes)
+    assert nodes[1]["id"] == "chat"
+    editor.close()
+    app.processEvents()
+
+
+def test_menu_editor_removes_submenu_after_its_last_item_moves_out():
+    from PySide6.QtWidgets import QApplication
+
+    from pet.menu_layout import load_default_menu_layout
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    layout = load_default_menu_layout()
+    chat = next(node for node in layout["nodes"] if node["id"] == "chat")
+    layout["nodes"].remove(chat)
+    layout["nodes"].insert(1, {
+        "type": "submenu", "id": "user.work", "label": "工作",
+        "visible": True, "children": [chat],
+    })
+    editor = MenuLayoutEditor(layout)
+    editor.tree.setCurrentItem(editor.item_for_action("chat"))
+    editor.move_menu.aboutToShow.emit()
+    root_action = next(
+        action for action in editor.move_menu.actions()
+        if action.text() == "根菜单"
+    )
+    root_action.trigger()
+
+    nodes = editor.value()["nodes"]
+    assert all(node["id"] != "user.work" for node in nodes)
+    assert any(node["id"] == "chat" for node in nodes)
+    editor.close()
+    app.processEvents()
+
+
+def test_menu_editor_drag_model_cleanup_removes_the_emptied_source_submenu():
+    from PySide6.QtWidgets import QApplication
+
+    from pet.menu_layout import load_default_menu_layout
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    layout = load_default_menu_layout()
+    chat = next(node for node in layout["nodes"] if node["id"] == "chat")
+    layout["nodes"].remove(chat)
+    layout["nodes"].insert(1, {
+        "type": "submenu", "id": "user.drag", "label": "拖拽来源",
+        "visible": True, "children": [chat],
+    })
+    editor = MenuLayoutEditor(layout)
+    submenu = editor.tree.topLevelItem(1)
+    moved = submenu.takeChild(0)
+    editor.tree.addTopLevelItem(moved)
+    app.processEvents()
+
+    assert all(node["id"] != "user.drag" for node in editor.value()["nodes"])
+    assert any(node["id"] == "chat" for node in editor.value()["nodes"])
+    editor.close()
     app.processEvents()
 
 
@@ -595,6 +690,34 @@ def test_settings_visual_hierarchy_uses_shared_product_tokens(tmp_path, monkeypa
     assert row.label.font().pixelSize() == 13
     assert row.label.font().weight() == 500
     assert row.hint_label.font().pixelSize() == 12
+    dialog.reject()
+    app.processEvents()
+
+
+def test_wide_settings_title_tracks_the_centered_page_content(tmp_path, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    dialog.resize(1600, 900)
+    dialog.show()
+    app.processEvents()
+
+    page = dialog.pages.currentWidget()
+    title = page.findChild(settings_mod.QLabel, "pageTitle")
+    scroll = page.findChild(QScrollArea, "settingsScroll")
+    content = scroll.widget()
+    assert title.mapTo(page, QPoint(0, 0)).x() == content.mapTo(page, QPoint(0, 0)).x()
+
+    dialog.resize(720, 700)
+    app.processEvents()
+    assert title.mapTo(page, QPoint(0, 0)).x() == content.mapTo(page, QPoint(0, 0)).x()
     dialog.reject()
     app.processEvents()
 
@@ -1003,6 +1126,46 @@ def test_menu_editor_uses_settings_cards_instead_of_native_table_chrome():
     app.processEvents()
 
 
+def test_wide_menu_editor_expands_and_groups_commands_into_dropdowns(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    menu_index = next(
+        index for index in range(dialog.sidebar.count())
+        if dialog.sidebar.item(index).text() == "菜单"
+    )
+    dialog.sidebar.setCurrentRow(menu_index)
+    dialog.resize(1600, 1000)
+    dialog.show()
+    app.processEvents()
+
+    editor = dialog.menu_layout_editor
+    assert editor.width() >= 1100
+    assert editor.tree.height() >= 320
+    assert editor.editor_label.text() == "菜单结构"
+    assert editor.preview_label.text() == "实时菜单预览"
+    grouped = (
+        (editor.order_button, "排序"),
+        (editor.move_button, "移动到"),
+        (editor.submenu_button, "子菜单"),
+        (editor.more_button, "更多"),
+    )
+    assert all(button.text() == label for button, label in grouped)
+    assert all(button.menu() is not None for button, _label in grouped)
+
+    dialog.resize(720, 700)
+    app.processEvents()
+    assert editor.split.orientation() == settings_mod.Qt.Orientation.Vertical
+    dialog.reject()
+    app.processEvents()
+
+
 def test_menu_editor_compact_action_bar_keeps_every_button_reachable():
     from PySide6.QtCore import QPoint
     from PySide6.QtWidgets import QApplication
@@ -1017,19 +1180,17 @@ def test_menu_editor_compact_action_bar_keeps_every_button_reachable():
     assert editor.width() <= 420
 
     buttons = (
-        editor.up_button,
-        editor.down_button,
-        editor.promote_button,
-        editor.move_to_button,
-        editor.new_submenu_button,
-        editor.reset_button,
+        editor.order_button,
+        editor.move_button,
+        editor.submenu_button,
+        editor.more_button,
     )
     assert all(button.isVisible() for button in buttons)
     assert all(
         button.mapTo(editor, QPoint(0, 0)).x() + button.width() <= editor.width()
         for button in buttons
     )
-    assert len({button.mapTo(editor, QPoint(0, 0)).y() for button in buttons}) > 1
+    assert len({button.mapTo(editor, QPoint(0, 0)).y() for button in buttons}) == 1
     editor.close()
     app.processEvents()
 
@@ -1078,12 +1239,10 @@ def test_compact_settings_menu_action_bar_fits_scroll_viewport(tmp_path, monkeyp
     assert scroll is not None
 
     for button in (
-        editor.up_button,
-        editor.down_button,
-        editor.promote_button,
-        editor.move_to_button,
-        editor.new_submenu_button,
-        editor.reset_button,
+        editor.order_button,
+        editor.move_button,
+        editor.submenu_button,
+        editor.more_button,
     ):
         left = button.mapTo(scroll.viewport(), QPoint(0, 0)).x()
         assert left >= 0
@@ -1174,9 +1333,8 @@ def test_menu_editor_refuses_to_nest_one_submenu_inside_another():
         if (root.child(index).data(0, Qt.ItemDataRole.UserRole) or {}).get("id") == "pet_controls"
     )
     editor.tree.setCurrentItem(source)
-    editor.target_select.setCurrentData("tools_help")
-
-    editor.move_to_button.click()
+    editor.move_menu.aboutToShow.emit()
+    next(action for action in editor.move_menu.actions() if action.data() == "tools_help").trigger()
 
     assert source.parent() is None
     editor.close()

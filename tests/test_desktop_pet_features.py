@@ -1515,6 +1515,65 @@ def test_quick_launch_editor_drag_order_and_checked_removal_drive_saved_menu_ord
     app.processEvents()
 
 
+def test_quick_launch_editor_uses_content_sized_rows_and_grouped_add_menu():
+    from PySide6.QtWidgets import QApplication, QSizePolicy
+
+    import pet.modern_settings_dialog as settings_mod
+
+    app = QApplication.instance() or QApplication([])
+    editor = settings_mod.QuickLaunchEditor([
+        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+        {"name": "Finder", "path": "/System/Library/CoreServices/Finder.app", "kind": "application"},
+    ])
+    editor.resize(760, 300)
+    editor.show()
+    app.processEvents()
+
+    assert editor.count_label.text() == "2 个快捷项"
+    assert editor.add_button.text() == "添加"
+    assert [action.text() for action in editor.add_button.menu().actions()] == [
+        "选择应用…", "添加默认浏览器",
+    ]
+    assert editor.list.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+    assert editor.list.height() <= 124
+    first_row = editor.list.itemWidget(editor.list.item(0))
+    second_row = editor.list.itemWidget(editor.list.item(1))
+    assert first_row.name_label.text() == "默认浏览器"
+    assert "系统默认" in first_row.detail_label.text()
+    assert second_row.name_label.text() == "Finder"
+    assert "Finder.app" in second_row.detail_label.text()
+    assert editor.empty_label.isHidden()
+
+    editor.close()
+    app.processEvents()
+
+
+def test_quick_launch_editor_collapses_to_a_compact_empty_state_after_last_removal():
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+
+    app = QApplication.instance() or QApplication([])
+    editor = settings_mod.QuickLaunchEditor([
+        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+    ])
+    editor.show()
+    app.processEvents()
+
+    editor.list.item(0).setCheckState(Qt.CheckState.Checked)
+    editor._remove_checked()
+    app.processEvents()
+
+    assert editor.count_label.text() == "0 个快捷项"
+    assert editor.list.isHidden()
+    assert not editor.empty_label.isHidden()
+    assert editor.empty_label.height() <= 72
+
+    editor.close()
+    app.processEvents()
+
+
 def test_macos_tool_window_stays_visible_when_application_deactivates(monkeypatch):
     from PySide6.QtCore import Qt
 

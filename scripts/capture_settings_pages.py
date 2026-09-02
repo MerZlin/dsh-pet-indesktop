@@ -143,6 +143,22 @@ def capture(args: argparse.Namespace) -> None:
             target = destination / "08-AI 与对话-高级展开.png"
             if not dialog.grab().save(str(target)):
                 raise RuntimeError(f"failed to save screenshot: {target}")
+        if args.menu_details:
+            menu_index = next(
+                index
+                for index in range(dialog.sidebar.count())
+                if dialog.sidebar.item(index).text() == "菜单"
+            )
+            dialog.sidebar.setCurrentRow(menu_index)
+            page = dialog.pages.currentWidget()
+            quick_launch_row = dialog.findChild(SettingRow, "settingRow_quick_launch_apps")
+            scroll = page.findChild(QScrollArea, "settingsScroll")
+            if scroll is not None and quick_launch_row is not None:
+                scroll.ensureWidgetVisible(quick_launch_row, 0, 36)
+            app.processEvents()
+            target = destination / "04-菜单-快捷启动.png"
+            if not dialog.grab().save(str(target)):
+                raise RuntimeError(f"failed to save screenshot: {target}")
         dialog.close()
         app.processEvents()
 
@@ -157,6 +173,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--font-scale", type=float, default=1.0)
     parser.add_argument("--extreme-copy", action="store_true")
     parser.add_argument("--expanded-toggles", action="store_true")
+    parser.add_argument("--menu-details", action="store_true")
     return parser.parse_args()
 
 

@@ -6,7 +6,7 @@ Use these sources in descending order:
 
 1. component behavior and QSS in `pet/modern_settings_dialog.py`;
 2. semantic vectors in `pet/context_menus/icons.py`;
-3. accepted renders in `docs/screenshots/settings-redesign/iteration-2-*`;
+3. accepted renders in `docs/screenshots/settings-redesign/iteration-5-layout-*`;
 4. this summary.
 
 When an accepted change intentionally alters a token, update this reference in the same change.
@@ -62,6 +62,8 @@ Let labels and hints wrap. Increase row height from `sizeHint`; do not assign fi
 
 At 720 px, preserve the sidebar and stack complex editors vertically. Toolbars may use a grid. Controls stay reachable without horizontal page scrolling. At standard/wide widths, let cards fill the page rather than forming narrow nested columns.
 
+The page title and scroll content share one maximum-width contract. Center that contract as a unit so the title follows the content edge when a wide window introduces outer whitespace.
+
 ## Surfaces and color
 
 | Surface | Light | Dark |
@@ -85,7 +87,8 @@ Cards use a 12 px radius and 1 px border. Fields use a 7 px radius and 32 px tot
 - `SettingsSection` owns section rhythm. `advanced=True` is the only supported disclosure depth.
 - `SettingsDisclosureHeader` owns the non-native disclosure look and accessible expanded/collapsed name.
 - `ModernSelect`, `BrowserSpinBox`, and `BrowserDoubleSpinBox` own shared field geometry and focus treatment.
-- `MenuLayoutEditor` uses a card-styled tree, stretched label column, content-sized position column, and headerless menu-like preview.
+- `MenuLayoutEditor` gives its editor and preview symmetric labeled panels. It stacks them at compact widths and expands both at wide widths; command groups live in `排序 / 移动到 / 子菜单 / 更多` menus.
+- `QuickLaunchEditor` uses content-sized two-line rows (name plus source), a count, compact empty state, and one grouped Add menu. Cap list growth and let the page own overflow.
 
 Reuse these classes. Decide responsive placement from font-derived size hints and available width, not platform names or one fixed breakpoint. A new control variant must define light/dark, hover, pressed, focus, disabled, and High DPI behavior before adoption.
 

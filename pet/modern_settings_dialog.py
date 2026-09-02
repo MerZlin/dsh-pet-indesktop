@@ -887,12 +887,49 @@ class SettingsSection(QWidget):
             self.toggle.update()
 
 
+class _SettingsPageShell(QWidget):
+    """Keep the fixed page header aligned with the centered scroll content."""
+
+    def __init__(self, content_max_width: int, parent=None):
+        super().__init__(parent)
+        self.content_max_width = int(content_max_width)
+        self.heading_host: QWidget | None = None
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self.heading_host is not None:
+            available = max(0, self.width() - 30 - 28)
+            self.heading_host.setFixedWidth(min(self.content_max_width, available))
+
+
 def _line_edit(text: str = "", *, password: bool = False, width: int = 240) -> QLineEdit:
     edit = QLineEdit(text)
     edit.setMinimumWidth(width)
     if password:
         edit.setEchoMode(QLineEdit.EchoMode.Password)
     return edit
+
+
+class QuickLaunchItemRow(QWidget):
+    """Two-line quick-launch row; the owning list keeps selection and drag."""
+
+    def __init__(self, name: str, detail: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("quickLaunchItemRow")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.name_label = QLabel(name, self)
+        self.name_label.setObjectName("quickLaunchName")
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.detail_label = QLabel(detail, self)
+        self.detail_label.setObjectName("quickLaunchDetail")
+        self.detail_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.detail_label.setToolTip(detail)
+        self.detail_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        copy = QVBoxLayout(self)
+        copy.setContentsMargins(62, 5, 10, 5)
+        copy.setSpacing(1)
+        copy.addWidget(self.name_label)
+        copy.addWidget(self.detail_label)
 
 
 class QuickLaunchEditor(QWidget):
@@ -909,30 +946,42 @@ class QuickLaunchEditor(QWidget):
         self.list.setDragEnabled(True)
         self.list.setAcceptDrops(True)
         self.list.setDropIndicatorShown(True)
-        self.add_button = QPushButton("添加应用", self)
+        self.list.setSpacing(2)
+        self.list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.count_label = QLabel("0 个快捷项", self)
+        self.count_label.setObjectName("quickLaunchCount")
+        self.empty_label = QLabel("还没有快捷启动项，可从“添加”开始。", self)
+        self.empty_label.setObjectName("quickLaunchEmpty")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setFixedHeight(64)
+        self.add_button = QPushButton("添加", self)
         self.add_button.setIcon(vector_widget_icon(self, "add", 15))
-        self.remove_button = QPushButton("移除勾选", self)
+        self.add_menu = QMenu(self.add_button)
+        self.choose_application_action = self.add_menu.addAction("选择应用…")
+        self.add_default_action = self.add_menu.addAction("添加默认浏览器")
+        self.choose_application_action.triggered.connect(self._choose_application)
+        self.add_default_action.triggered.connect(self._add_default_browser)
+        self.add_button.setMenu(self.add_menu)
+        self.remove_button = QPushButton("移除所选", self)
         self.remove_button.setIcon(vector_widget_icon(self, "remove", 15))
-        self.default_button = QPushButton("添加默认浏览器", self)
-        self.default_button.setIcon(vector_widget_icon(self, "web", 15))
-        self.add_button.clicked.connect(self._choose_application)
         self.remove_button.clicked.connect(self._remove_checked)
-        self.default_button.clicked.connect(self._add_default_browser)
 
-        buttons = QHBoxLayout()
-        buttons.setContentsMargins(0, 0, 0, 0)
-        buttons.setSpacing(7)
-        buttons.addWidget(self.add_button)
-        buttons.addWidget(self.default_button)
-        buttons.addStretch(1)
-        buttons.addWidget(self.remove_button)
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(7)
+        toolbar.addWidget(self.count_label)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.add_button)
+        toolbar.addWidget(self.remove_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
+        layout.addLayout(toolbar)
         layout.addWidget(self.list)
-        layout.addLayout(buttons)
+        layout.addWidget(self.empty_label)
         for item in apps:
             self.add_app(item)
+        self._sync_content_height()
 
     def add_app(self, app: dict) -> None:
         app = dict(app)
@@ -949,12 +998,16 @@ class QuickLaunchEditor(QWidget):
             else:
                 icon = fitted_application_icon(provider_icon, 22, self)
             app = {"name": str(app.get("name") or Path(path).stem), "path": path, "kind": "application"}
-        item = QListWidgetItem(icon, app["name"])
+        item = QListWidgetItem(icon, "")
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsDragEnabled)
         item.setCheckState(Qt.CheckState.Unchecked)
         item.setData(Qt.ItemDataRole.UserRole, app)
         item.setToolTip(app["path"] or "使用系统默认浏览器")
+        item.setSizeHint(QSize(0, 52))
         self.list.addItem(item)
+        detail = "系统默认浏览器" if app["kind"] == "default_browser" else app["path"]
+        self.list.setItemWidget(item, QuickLaunchItemRow(app["name"], detail, self.list))
+        self._sync_content_height()
 
     def apps(self) -> list[dict]:
         return [dict(self.list.item(index).data(Qt.ItemDataRole.UserRole)) for index in range(self.list.count())]
@@ -973,10 +1026,19 @@ class QuickLaunchEditor(QWidget):
         for index in range(self.list.count() - 1, -1, -1):
             if self.list.item(index).checkState() == Qt.CheckState.Checked:
                 self.list.takeItem(index)
+        self._sync_content_height()
 
     def _add_default_browser(self) -> None:
         if not any(item.get("kind") == "default_browser" for item in self.apps()):
             self.add_app(DEFAULT_QUICK_LAUNCH_APPS[0])
+
+    def _sync_content_height(self) -> None:
+        count = self.list.count()
+        self.count_label.setText(f"{count} 个快捷项")
+        self.empty_label.setVisible(count == 0)
+        self.list.setVisible(count > 0)
+        if count:
+            self.list.setFixedHeight(min(226, count * 56 + 10))
 
 
 class MenuLayoutEditor(QWidget):
@@ -997,6 +1059,15 @@ class MenuLayoutEditor(QWidget):
         self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.tree.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.tree.setAccessibleName("右键菜单内容与布局")
+        self.editor_label = QLabel("菜单结构", self)
+        self.editor_label.setObjectName("menuLayoutEditorLabel")
+        editor_panel = QWidget(self)
+        editor_panel.setObjectName("menuLayoutEditorPanel")
+        editor_layout = QVBoxLayout(editor_panel)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(6)
+        editor_layout.addWidget(self.editor_label)
+        editor_layout.addWidget(self.tree)
         self.preview = QTreeWidget(self)
         self.preview.setObjectName("menuLayoutPreview")
         self.preview.setHeaderHidden(True)
@@ -1014,44 +1085,71 @@ class MenuLayoutEditor(QWidget):
         preview_layout.addWidget(self.preview_label)
         preview_layout.addWidget(self.preview)
 
-        self.up_button = QPushButton("上移", self)
-        self.down_button = QPushButton("下移", self)
-        self.promote_button = QPushButton("提升到根菜单", self)
-        self.target_select = ModernSelect(self, width=150)
-        self.move_to_button = QPushButton("移动到", self)
-        self.new_submenu_button = QPushButton("新建子菜单", self)
-        self.reset_button = QPushButton("恢复默认", self)
-        self.up_button.clicked.connect(lambda: self._move_selected(-1))
-        self.down_button.clicked.connect(lambda: self._move_selected(1))
-        self.promote_button.clicked.connect(self._promote_selected)
-        self.move_to_button.clicked.connect(self._move_selected_to_target)
-        self.new_submenu_button.clicked.connect(self._create_submenu)
-        self.reset_button.clicked.connect(self.reset_default)
+        self.order_button = QPushButton("排序", self)
+        self.order_button.setIcon(vector_widget_icon(self, "edit", 14))
+        self.order_menu = QMenu(self.order_button)
+        self.move_up_action = self.order_menu.addAction("上移")
+        self.move_down_action = self.order_menu.addAction("下移")
+        self.move_up_action.triggered.connect(lambda: self._move_selected(-1))
+        self.move_down_action.triggered.connect(lambda: self._move_selected(1))
+        self.order_button.setMenu(self.order_menu)
 
-        self.button_layout = QGridLayout()
-        self.button_layout.setContentsMargins(0, 0, 0, 0)
-        self.button_layout.setHorizontalSpacing(8)
-        self.button_layout.setVerticalSpacing(8)
-        self._compact_buttons = None
+        self.move_button = QPushButton("移动到", self)
+        self.move_button.setIcon(vector_widget_icon(self, "multi_select", 14))
+        self.move_menu = QMenu(self.move_button)
+        self.move_menu.aboutToShow.connect(self._rebuild_move_menu)
+        self.move_button.setMenu(self.move_menu)
+
+        self.submenu_button = QPushButton("子菜单", self)
+        self.submenu_button.setIcon(vector_widget_icon(self, "add", 14))
+        self.submenu_menu = QMenu(self.submenu_button)
+        self.new_submenu_action = self.submenu_menu.addAction("新建子菜单…")
+        self.delete_submenu_action = self.submenu_menu.addAction("删除所选子菜单…")
+        self.new_submenu_action.triggered.connect(self._create_submenu)
+        self.delete_submenu_action.triggered.connect(self._delete_selected_submenu)
+        self.delete_submenu_action.setEnabled(False)
+        self.submenu_button.setMenu(self.submenu_menu)
+
+        self.more_button = QPushButton("更多", self)
+        self.more_button.setIcon(vector_widget_icon(self, "more", 14))
+        self.more_menu = QMenu(self.more_button)
+        self.reset_action = self.more_menu.addAction("恢复默认布局")
+        self.reset_action.triggered.connect(self.reset_default)
+        self.more_button.setMenu(self.more_menu)
+
+        toolbar = QWidget(self)
+        toolbar.setObjectName("menuEditorToolbar")
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_layout.setSpacing(7)
+        for button in (
+            self.order_button, self.move_button,
+            self.submenu_button, self.more_button,
+        ):
+            toolbar_layout.addWidget(button)
+        toolbar_layout.addStretch(1)
+
         self.split = QSplitter(Qt.Orientation.Horizontal, self)
         self.split.setObjectName("menuEditorSplit")
-        self.split.addWidget(self.tree)
+        self.split.addWidget(editor_panel)
         self.split.addWidget(preview_panel)
         self.split.setStretchFactor(0, 3)
         self.split.setStretchFactor(1, 2)
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(8)
-        box.addWidget(self.split)
-        box.addLayout(self.button_layout)
+        box.addWidget(self.split, 1)
+        box.addWidget(toolbar)
 
         self._preview_refresh_pending = False
+        self._pending_empty_submenus: list[QTreeWidgetItem] = []
         self.tree.itemChanged.connect(self._on_changed)
         tree_model = self.tree.model()
         tree_model.rowsMoved.connect(self._schedule_preview_refresh)
         tree_model.rowsInserted.connect(self._schedule_preview_refresh)
-        tree_model.rowsRemoved.connect(self._schedule_preview_refresh)
+        tree_model.rowsRemoved.connect(self._on_tree_rows_removed)
         tree_model.modelReset.connect(self._schedule_preview_refresh)
+        self.tree.currentItemChanged.connect(self._sync_command_state)
         self.set_layout(layout or load_default_menu_layout())
         self._update_layout_mode()
 
@@ -1065,54 +1163,59 @@ class MenuLayoutEditor(QWidget):
             self.split.setOrientation(
                 Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
             )
-            self._layout_action_buttons(compact)
+            window_height = self.window().height()
+            preferred = (
+                min(720, max(520, window_height - 180))
+                if compact
+                else min(620, max(360, window_height - 360))
+            )
+            self.setMinimumHeight(preferred)
 
-    def _layout_action_buttons(self, compact: bool) -> None:
-        if self._compact_buttons is compact:
-            return
-        self._compact_buttons = compact
-        while self.button_layout.count():
-            self.button_layout.takeAt(0)
-        for column in range(8):
-            self.button_layout.setColumnStretch(column, 0)
-        if compact:
-            self.button_layout.addWidget(self.up_button, 0, 0)
-            self.button_layout.addWidget(self.down_button, 0, 1)
-            self.button_layout.addWidget(self.promote_button, 0, 2)
-            self.button_layout.addWidget(self.target_select, 1, 0)
-            self.button_layout.addWidget(self.move_to_button, 1, 1)
-            self.button_layout.addWidget(self.new_submenu_button, 1, 2)
-            self.button_layout.addWidget(self.reset_button, 2, 2)
-        else:
-            self.button_layout.addWidget(self.up_button, 0, 0)
-            self.button_layout.addWidget(self.down_button, 0, 1)
-            self.button_layout.addWidget(self.promote_button, 0, 2)
-            self.button_layout.addWidget(self.target_select, 0, 3)
-            self.button_layout.addWidget(self.move_to_button, 0, 4)
-            self.button_layout.addWidget(self.new_submenu_button, 0, 5)
-            self.button_layout.setColumnStretch(6, 1)
-            self.button_layout.addWidget(self.reset_button, 0, 7)
-        self.button_layout.invalidate()
-        self.button_layout.activate()
-        ancestor: QWidget | None = self
-        while ancestor is not None:
-            layout = ancestor.layout()
-            if layout is not None:
-                layout.invalidate()
-            ancestor.updateGeometry()
-            ancestor = ancestor.parentWidget()
+    def _sync_command_state(self, current=None, _previous=None) -> None:
+        item = current or self.tree.currentItem()
+        parent = item.parent() if item is not None else None
+        sibling_parent = parent or self.tree.invisibleRootItem()
+        index = sibling_parent.indexOfChild(item) if item is not None else -1
+        self.move_up_action.setEnabled(index > 0)
+        self.move_down_action.setEnabled(
+            item is not None and index < sibling_parent.childCount() - 1
+        )
+        data = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else {}
+        self.move_button.setEnabled(bool(data and data.get("type") == "action"))
+        self.delete_submenu_action.setEnabled(
+            bool(data and data.get("type") == "submenu")
+        )
+
+    def _rebuild_move_menu(self) -> None:
+        self.move_menu.clear()
+        root_action = self.move_menu.addAction("根菜单")
+        root_action.setData("__root__")
+        root_action.triggered.connect(lambda: self._move_selected_to("__root__"))
+        root = self.tree.invisibleRootItem()
+        for index in range(root.childCount()):
+            item = root.child(index)
+            data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+            if data.get("type") != "submenu":
+                continue
+            target_id = str(data.get("id") or "")
+            action = self.move_menu.addAction(item.text(0))
+            action.setData(target_id)
+            action.triggered.connect(
+                lambda _checked=False, target_id=target_id: self._move_selected_to(target_id)
+            )
 
     def set_layout(self, layout: dict) -> None:
         layout, _diagnostics = merge_default_menu_actions(
             layout, registered_actions=MENU_ACTIONS.ids
         )
+        self._pending_empty_submenus.clear()
         self.tree.blockSignals(True)
         self.tree.clear()
         for node in layout.get("nodes", []):
             self._append_node(None, node)
         self.tree.expandAll()
         self.tree.blockSignals(False)
-        self._refresh_targets()
+        self._sync_command_state()
         self._on_changed()
 
     def _schedule_preview_refresh(self, *_args) -> None:
@@ -1122,8 +1225,19 @@ class MenuLayoutEditor(QWidget):
         self._preview_refresh_pending = True
         QTimer.singleShot(0, self._flush_preview_refresh)
 
+    def _on_tree_rows_removed(self, parent_index, *_args) -> None:
+        if parent_index.isValid():
+            parent = self.tree.itemFromIndex(parent_index)
+            data = parent.data(0, Qt.ItemDataRole.UserRole) if parent is not None else {}
+            if data and data.get("type") == "submenu":
+                self._pending_empty_submenus.append(parent)
+        self._schedule_preview_refresh()
+
     def _flush_preview_refresh(self) -> None:
         self._preview_refresh_pending = False
+        for submenu in self._pending_empty_submenus:
+            self._remove_empty_submenu(submenu)
+        self._pending_empty_submenus.clear()
         self._on_changed()
 
     def _append_node(self, parent: QTreeWidgetItem | None, node: dict) -> None:
@@ -1207,33 +1321,31 @@ class MenuLayoutEditor(QWidget):
         item = self.tree.currentItem()
         if item is None or item.parent() is None:
             return
-        item.parent().removeChild(item)
+        old_parent = item.parent()
+        old_parent.removeChild(item)
         self.tree.addTopLevelItem(item)
+        self._remove_empty_submenu(old_parent)
         self.tree.setCurrentItem(item)
         self._on_changed()
 
-    def _refresh_targets(self) -> None:
-        selected = self.target_select.currentData()
-        self.target_select.clear()
-        self.target_select.addItem("根菜单", "__root__")
+    def _remove_empty_submenu(self, item: QTreeWidgetItem | None) -> bool:
+        if item is None or item.childCount() != 0:
+            return False
+        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        if data.get("type") != "submenu" or item.parent() is not None:
+            return False
         root = self.tree.invisibleRootItem()
-        def add_submenus(parent):
-            for index in range(parent.childCount()):
-                item = parent.child(index)
-                data = item.data(0, Qt.ItemDataRole.UserRole) or {}
-                if data.get("type") == "submenu":
-                    self.target_select.addItem(item.text(0), data.get("id"))
-                add_submenus(item)
-        add_submenus(root)
-        if selected is not None:
-            self.target_select.setCurrentData(selected)
+        index = root.indexOfChild(item)
+        if index < 0:
+            return False
+        root.takeChild(index)
+        return True
 
-    def _move_selected_to_target(self) -> None:
+    def _move_selected_to(self, target_id: str) -> None:
         item = self.tree.currentItem()
         if item is None:
             return
         item_data = item.data(0, Qt.ItemDataRole.UserRole) or {}
-        target_id = self.target_select.currentData()
         if target_id == "__root__":
             self._promote_selected()
             return
@@ -1256,6 +1368,8 @@ class MenuLayoutEditor(QWidget):
         parent = item.parent() or root
         parent.removeChild(item)
         target.addChild(item)
+        if parent is not root:
+            self._remove_empty_submenu(parent)
         target.setExpanded(True)
         self.tree.setCurrentItem(item)
         self._on_changed()
@@ -1279,7 +1393,32 @@ class MenuLayoutEditor(QWidget):
             "visible": True,
             "children": [],
         })
-        self._refresh_targets()
+        self._on_changed()
+
+    def _delete_selected_submenu(self) -> None:
+        item = self.tree.currentItem()
+        data = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else {}
+        if item is None or not data or data.get("type") != "submenu":
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除子菜单",
+            f"确定删除“{item.text(0)}”吗？\n其中的菜单项会保留并移到根菜单。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        root = self.tree.invisibleRootItem()
+        index = root.indexOfChild(item)
+        children = [item.takeChild(0) for _ in range(item.childCount())]
+        root.takeChild(index)
+        for offset, child in enumerate(children):
+            root.insertChild(index + offset, child)
+        if children:
+            self.tree.setCurrentItem(children[0])
+        elif root.childCount():
+            self.tree.setCurrentItem(root.child(min(index, root.childCount() - 1)))
         self._on_changed()
 
     def _on_changed(self, *_args) -> None:
@@ -2964,20 +3103,30 @@ class ModernSettingsDialog(QDialog):
                 return
 
     def _page_shell(self, title: str, content: QWidget) -> QWidget:
-        page = QWidget(self.pages)
+        content_max_width = int(content.property("contentMaxWidth") or 960)
+        page = _SettingsPageShell(content_max_width, self.pages)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(30, 24, 28, 20)
         layout.setSpacing(12)
-        heading = QLabel(title, page)
+        heading_host = QWidget(page)
+        heading_host.setObjectName("pageHeader")
+        heading_host.setMaximumWidth(content_max_width)
+        heading_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        heading_layout = QVBoxLayout(heading_host)
+        heading_layout.setContentsMargins(0, 0, 0, 0)
+        heading_layout.setSpacing(0)
+        heading = QLabel(title, heading_host)
         heading.setObjectName("pageTitle")
-        layout.addWidget(heading)
+        heading_layout.addWidget(heading)
+        page.heading_host = heading_host
+        layout.addWidget(heading_host, 0, Qt.AlignmentFlag.AlignHCenter)
         scroll = QScrollArea(page)
         scroll.setObjectName("settingsScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        content.setMaximumWidth(960)
+        content.setMaximumWidth(content_max_width)
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
         return page
@@ -3064,6 +3213,7 @@ class ModernSettingsDialog(QDialog):
             ), True),
             ("彩蛋入口", claim_prefix("egg_")),
         ])
+        menu.setProperty("contentMaxWidth", 1240)
         island_rows = list(old_pages.get("灵动岛", QWidget()).findChildren(SettingRow))
         claimed.update(island_rows)
         desktop_components = page_content([("桌面胶囊（灵动岛）", island_rows)])
@@ -3446,6 +3596,10 @@ QFrame#settingsCard { background: #2a2a30; border: 1px solid #3a3a42; }
 QFrame#cardSeparator { background: #33333a; }
 QLabel#settingLabel { color: #e0e0e6; }
 QLabel#settingHint { color: #9a9aa3; }
+QLabel#quickLaunchName { color: #e0e0e6; }
+QLabel#quickLaunchDetail, QLabel#quickLaunchCount, QLabel#quickLaunchEmpty,
+QLabel#menuLayoutEditorLabel, QLabel#menuLayoutPreviewLabel { color: #a8a8b0; }
+QLabel#quickLaunchEmpty { background: #26262c; border-color: #3c3c44; }
 QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #66666e; }
 SettingRow[searchMatch="true"] { background: #2c3a4e; }
 QListWidget#quickLaunchList { background: #26262c; border: 1px solid #3c3c44; }
@@ -3462,6 +3616,8 @@ QTreeWidget#menuLayoutTree QHeaderView::section {
     color: #a8a8b0;
 }
 QLabel#menuLayoutPreviewLabel { color: #a8a8b0; }
+QMenu { background: #2a2a30; color: #e4e4e9; border: 1px solid #45454f; }
+QMenu::item:selected { background: #3a3a46; }
 QPushButton { background: #3a3a42; border: 1px solid #4a4a54; color: #e4e4e9; }
 QPushButton:hover { background: #44444e; }
 QPushButton#advancedSectionToggle {
@@ -3607,6 +3763,20 @@ SettingRow[searchMatch="true"] {
 QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget {
     background: transparent;
 }
+QLabel#quickLaunchCount, QLabel#menuLayoutEditorLabel, QLabel#menuLayoutPreviewLabel {
+    color: #6f7378;
+    font-size: 12px;
+    font-weight: 500;
+    padding-left: 2px;
+}
+QLabel#quickLaunchName { color: #252525; font-size: 13px; font-weight: 500; }
+QLabel#quickLaunchDetail { color: #777777; font-size: 11px; }
+QLabel#quickLaunchEmpty {
+    color: #777777;
+    background: #fbfbfb;
+    border: 1px dashed #d9d9d9;
+    border-radius: 8px;
+}
 QListWidget#quickLaunchList {
     background: #fbfbfb;
     border: 1px solid #d9d9d9;
@@ -3648,12 +3818,16 @@ QTreeWidget#menuLayoutTree QHeaderView::section {
     font-size: 12px;
     font-weight: 500;
 }
-QLabel#menuLayoutPreviewLabel {
-    color: #6f7378;
-    font-size: 12px;
-    font-weight: 500;
-    padding-left: 2px;
+QMenu {
+    background: #ffffff;
+    color: #202020;
+    border: 1px solid #d7d9dd;
+    border-radius: 8px;
+    padding: 4px;
 }
+QMenu::item { min-height: 26px; padding: 2px 24px 2px 10px; border-radius: 6px; }
+QMenu::item:selected { background: #edf2f7; }
+QMenu::item:disabled { color: #a6a8ac; }
 QPushButton {
     min-height: 26px;
     padding: 1px 12px;

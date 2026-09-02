@@ -1,6 +1,6 @@
 # Settings redesign handoff
 
-Updated: 2026-09-02 (after ToggleSwitch progressive-disclosure acceptance)
+Updated: 2026-09-02 (after responsive menu-editor and quick-launch acceptance)
 
 ## Workspace
 
@@ -47,11 +47,15 @@ Updated: 2026-09-02 (after ToggleSwitch progressive-disclosure acceptance)
 - Composite visibility reasons prevent nested controls from reappearing while an ancestor remains off; empty advanced sections hide with their rows.
 - Real Cocoa default, expanded, and compact-expanded matrices are in `docs/screenshots/settings-redesign/iteration-4-toggle-*`.
 - Screenshot-driven Agent sound overflow is fixed by `ResponsiveToggleActionRow` and a 720px geometry contract.
+- Wide page headings share the centered content-width contract; the menu domain expands to 1240px while compact mode stacks the editor and preview.
+- Menu commands are grouped into four dropdowns. Submenus have confirmed explicit deletion, and empty source submenus are pruned after move/promote/drag.
+- Quick launch uses content-sized two-line rows, grouped add actions, bounded list growth, and a compact empty state.
+- Real Cocoa layout evidence is in `docs/screenshots/settings-redesign/iteration-5-layout-*`; the focused quick-launch image confirms the single-row scrollbar regression is gone.
 
 ## Current TDD state
 
-- Last REDs: self-talk/translucency remained enabled-but-visible; island/egg/collision/proactive had no row dependencies; Agent event detail stayed visible when off and its compact horizontal layout touched the card edge.
-- Last GREEN: focused dependency and responsive-layout contracts, `125 passed` related settings/menu suite, `748 passed, 8 skipped` full suite, and three current macOS screenshot matrices.
+- Last REDs: wide title stayed left of centered content; menu editor remained fixed/narrow with seven flat commands; submenu deletion/empty cleanup were absent; quick-launch rows consumed stack-like empty height.
+- Last GREEN: focused geometry/state contracts, `132 passed` related settings/menu suite, and `755 passed, 8 skipped` full suite.
 
 ## Exact next step
 
