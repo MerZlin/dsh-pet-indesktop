@@ -47,6 +47,10 @@ class _CollisionWorker(QObject):
     policy_changed = Signal(object)
     role_changed = Signal(bool, str)
     error = Signal(str)
+    # P3 broker：coordinator 收到 decode_subscribe → 转发 GUI（带 peer runtime_id）；
+    # client 收到 decode_grant/decode_deny → 转发 GUI。
+    decode_subscribe_requested = Signal(str, object)
+    decode_reply_ready = Signal(object)
     _local_election_names: set[str] = set()
 
     def __init__(self, name: str, runtime_id: str, instance_id: str, policy: dict[str, Any], lock_path=None):
@@ -86,6 +90,9 @@ class _CollisionWorker(QObject):
         self._lock_path = lock_path
         self._last_snapshot_at = 0.0
         self._stopping = False
+        # P3 broker：GUI 侧同步查询用角色状态（角色是否已定 + 是否 coordinator）。
+        # 角色未定（选举进行中/刚断线）时 broker 决策等待 ≤600ms 或直接本地。
+        self._role_ready = False
 
     @Slot()
     def start(self) -> None:
@@ -176,6 +183,7 @@ class _CollisionWorker(QObject):
             return
         self._coordinator_announced = True
         self.role_changed.emit(True, self.epoch)
+        self._role_ready = True
         self._start_coordinator_timers()
         self._register_self()
 
@@ -321,6 +329,12 @@ class _CollisionWorker(QObject):
                 if runtime_id in self.members:
                     self.previous_members[runtime_id] = dict(self.members[runtime_id])
                 self.members[runtime_id] = state
+            elif kind == "decode_subscribe":
+                # P3 broker：把订阅请求转发 GUI（facade 决策 grant/deny）。
+                # peers 未登记（hello 尚未到达）时静默丢弃——client 超时回退本地。
+                runtime_id = self.peers.get(socket, "")
+                if runtime_id:
+                    self.decode_subscribe_requested.emit(runtime_id, dict(message))
             elif kind == "leave":
                 self._remove_member(self.peers.get(socket, ""))
         elif kind == "coordinator":
@@ -341,8 +355,12 @@ class _CollisionWorker(QObject):
                     self.latest_state.pop("bounce_vx", None)
                     self.latest_state.pop("bounce_vy", None)
                     self.role_changed.emit(False, epoch)
+                    self._role_ready = True
                     self.policy_changed.emit(message.get("policy") or {})
                     self.snapshot_ready.emit(message)
+        elif kind in ("decode_grant", "decode_deny"):
+            # P3 broker：coordinator 对订阅请求的答复 → 转发 GUI（facade 配对 req_id）
+            self.decode_reply_ready.emit(dict(message))
         elif kind == "snapshot":
             if message.get("epoch", self.epoch) == self.epoch:
                 self._last_control_message = self._now()
@@ -366,6 +384,13 @@ class _CollisionWorker(QObject):
     def _resign_to(self, _winner: str) -> None:
         if self.server is None:
             return
+        # P3 broker（P3A P1-1）：coordinator 退选必须同步发出卸任角色事件——
+        # GUI 侧 facade 据此中止自己仍在发布的共享解码 session（aborted 广播
+        # → 消费端立即回退本地）。若只等随后的 client welcome（新 epoch）才
+        # 发 role_changed(False)，旧 publisher 会一直发布到 welcome 到达
+        # （甚至更久），造成「已不是 coordinator 仍在写共享内存」的窗口。
+        self.role_changed.emit(False, self.epoch)
+        self._role_ready = True
         self.server.close()
         self.server.deleteLater()
         self.server = None
@@ -430,6 +455,28 @@ class _CollisionWorker(QObject):
         if self._stopping:
             return
         self.policy = dict(policy)
+
+    # ---- P3 broker：订阅请求（client 侧发出）与授权答复（coordinator 侧发出）----
+    @Slot(object)
+    def request_decode(self, req: dict[str, Any]) -> None:
+        """client 侧发送 decode_subscribe（复用本会话的 socket 通道）。"""
+        if self._stopping or self.socket is None:
+            return
+        self._send(self.socket, {"type": "decode_subscribe", **dict(req)})
+
+    @Slot(str, object)
+    def send_decode_reply(self, runtime_id: str, reply: dict[str, Any]) -> None:
+        """coordinator 侧按 runtime_id 定向发送 decode_grant/decode_deny。
+
+        runtime_id→socket 反查失败（peer 已离开）时静默丢弃——订阅请求方
+        超时回退本地解码，不产生悬挂答复。
+        """
+        if self._stopping or self.server is None:
+            return
+        for socket, peer_id in self.peers.items():
+            if peer_id == runtime_id:
+                self._send(socket, dict(reply))
+                return
 
     @Slot()
     def submit_leave(self) -> None:
@@ -695,6 +742,11 @@ class _CollisionWorker(QObject):
             self._client_watchdog.deleteLater()
             self._client_watchdog = None
         if not self._stopping:
+            # P3 broker（P3A P1-5）：client 断流是连接状态事件——先通知 GUI
+            # facade 作废 pending 订阅（reader 立即回退本地，不等 600ms 兜底
+            # 超时；旧 coordinator 若仍排队答复也命中空表被丢弃），再照常
+            # 重选举（当选/连上由后续 role_changed(True/False) 决定）。
+            self.role_changed.emit(False, "")
             # 不凭 error 信号删除命名服务，避免把存活协调者误判为残留。
             self._schedule_election()
 
@@ -760,12 +812,22 @@ class CollisionIpcSession(QObject):
     snapshot_ready = Signal(object)
     policy_changed = Signal(object)
     role_changed = Signal(bool, str)
+    # P3 broker：worker → GUI 转发（coordinator 收到订阅 / client 收到答复）
+    decode_subscribe_requested = Signal(str, object)
+    decode_reply_ready = Signal(object)
+    # GUI → worker 发送通道（client 发订阅 / coordinator 发答复）
+    decode_request_submitted = Signal(object)
+    decode_reply_submitted = Signal(str, object)
 
     def __init__(self, config, parent=None, server_name: str | None = None):
         # PetApp 是普通控制器而非 QObject；生命周期由其属性持有。
         super().__init__(parent if isinstance(parent, QObject) else None)
         self.runtime_id = make_runtime_id(getattr(config, "instance_id", ""))
         self._thread = QThread(self)
+        # P3 broker：GUI 侧角色镜像（queued role_changed 更新；默认未定）
+        self._coordinator_mirror = False
+        self._role_known_mirror = False
+        self.role_changed.connect(self._mirror_role)
         policy = {"collision_enabled": bool(config.get("collision_enabled", True)),
                   "collision_restitution": float(config.get("collision_restitution", .82)),
                   "collision_friction": float(config.get("collision_friction", .08)),
@@ -781,12 +843,25 @@ class CollisionIpcSession(QObject):
         self._worker.snapshot_ready.connect(self.snapshot_ready, Qt.ConnectionType.QueuedConnection)
         self._worker.policy_changed.connect(self.policy_changed, Qt.ConnectionType.QueuedConnection)
         self._worker.role_changed.connect(self.role_changed, Qt.ConnectionType.QueuedConnection)
+        self._worker.decode_subscribe_requested.connect(
+            self.decode_subscribe_requested, Qt.ConnectionType.QueuedConnection)
+        self._worker.decode_reply_ready.connect(
+            self.decode_reply_ready, Qt.ConnectionType.QueuedConnection)
         self.state_submitted.connect(self._worker.submit_state, Qt.ConnectionType.QueuedConnection)
         self.policy_submitted.connect(self._worker.set_policy, Qt.ConnectionType.QueuedConnection)
         self.leave_submitted.connect(self._worker.submit_leave, Qt.ConnectionType.QueuedConnection)
+        self.decode_request_submitted.connect(
+            self._worker.request_decode, Qt.ConnectionType.QueuedConnection)
+        self.decode_reply_submitted.connect(
+            self._worker.send_decode_reply, Qt.ConnectionType.QueuedConnection)
 
     def start(self) -> None:
         self._thread.start()
+
+    def _mirror_role(self, is_coordinator: bool, _epoch: str) -> None:
+        """GUI 侧角色镜像（role_changed 信号到达即更新）。"""
+        self._coordinator_mirror = bool(is_coordinator)
+        self._role_known_mirror = True
 
     def submit_state(self, state: dict[str, Any]) -> None:
         self.state_submitted.emit(dict(state))
@@ -798,6 +873,29 @@ class CollisionIpcSession(QObject):
     def submit_leave(self) -> None:
         """主动向协调者发 leave：成员即时移除，不等 stale 超时。"""
         self.leave_submitted.emit()
+
+    # ---- P3 broker：GUI 侧转发 -------------------------------------------------
+    def request_decode(self, req: dict[str, Any]) -> None:
+        """client 侧发起共享解码订阅（经 worker socket 发出）。"""
+        self.decode_request_submitted.emit(dict(req))
+
+    def send_decode_reply(self, runtime_id: str, reply: dict[str, Any]) -> None:
+        """coordinator 侧向指定 peer 定向发送 decode_grant/decode_deny。"""
+        self.decode_reply_submitted.emit(str(runtime_id), dict(reply))
+
+    @property
+    def is_coordinator(self) -> bool:
+        """GUI 侧角色镜像：worker 选举/欢迎后经 queued role_changed 更新。
+
+        首次 idle 决策等「角色可能尚未送达」的场景，由窗口层等
+        facade.role_known()（≤600ms 预算，设计 P0-2），不依赖本标志。
+        """
+        return self._coordinator_mirror
+
+    @property
+    def role_known(self) -> bool:
+        """是否已收到过至少一次角色事件（coordinator 或 client 均算）。"""
+        return self._role_known_mirror
 
     def stop(self) -> None:
         if self._thread.isRunning():

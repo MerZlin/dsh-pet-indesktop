@@ -121,9 +121,53 @@ class ImpulseMessage(TypedDict, total=False):
     dy_b: float
 
 
+class DecodeSubscribeMessage(TypedDict, total=False):
+    """P3 broker：client → coordinator 订阅共享解码请求。
+
+    复用碰撞 QLocal 通道（collision_ipc.py），数据面（帧）不经过本消息——
+    只协商「是否共享」与共享内存名/几何。老版本 coordinator 忽略未知类型
+    → client 超时回退本地解码（设计 §3.5）。
+    """
+    type: Literal["decode_subscribe"]
+    req_id: str
+    path: str
+    anim: str
+
+
+class DecodeUnsubscribeMessage(TypedDict, total=False):
+    """P3 broker：client → coordinator 取消订阅（本地 close 尽力发送）。"""
+    type: Literal["decode_unsubscribe"]
+    req_id: str
+
+
+class DecodeGrantMessage(TypedDict, total=False):
+    """P3 broker：coordinator → client 授权共享解码（携带 shm 信息与几何）。"""
+    type: Literal["decode_grant"]
+    req_id: str
+    shm_name: str
+    epoch: str
+    frame_w: int
+    frame_h: int
+    bpp: int
+    fps_x1000: int
+    total_frames: int
+    slot_count: int
+    seq: int
+    last_src: int
+
+
+class DecodeDenyMessage(TypedDict, total=False):
+    """P3 broker：coordinator → client 拒绝（素材未在播/剩余帧不足/预算满）。"""
+    type: Literal["decode_deny"]
+    req_id: str
+    reason: str
+
+
 WireMessage = Union[
     ProbeMessage, CoordinatorMessage, HelloMessage, WelcomeMessage,
     LeaveMessage, StateMessage, SnapshotMessage, ImpulseMessage,
+    DecodeSubscribeMessage, DecodeUnsubscribeMessage,
+    DecodeGrantMessage, DecodeDenyMessage,
 ]
 
 
