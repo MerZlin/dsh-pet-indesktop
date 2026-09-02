@@ -259,6 +259,9 @@ def opencode_event_state(event_type: str, data_raw: str) -> str:
 
     - message.updated 且 role=user → thinking
     - part type=step-start → working；reasoning → thinking；step-finish → idle
+      （reason="tool-calls" 例外：模型停笔等工具结果（含 task 子代理长跑），
+      回合未完，返回 "" 维持现状——否则派发子代理后主代理等待期会被误报为
+      结束，触发假完成音/气泡；本机 opencode.db 实测 tool-calls 占绝大多数）
     - session.created → idle
     其余忽略。data 解析失败返回 ""。"""
     try:
@@ -271,8 +274,14 @@ def opencode_event_state(event_type: str, data_raw: str) -> str:
         role = str((data.get("info") or {}).get("role", ""))
         return "thinking" if role == "user" else ""
     if event_type.startswith("message.part.updated"):
-        pt = str((data.get("part") or {}).get("type", ""))
-        return {"step-start": "working", "reasoning": "thinking", "step-finish": "idle"}.get(pt, "")
+        part = data.get("part") or {}
+        pt = str(part.get("type", ""))
+        if pt == "step-finish":
+            # 只对已知的忙碌信号特判；无 reason（旧版兼容）/ stop 照旧 idle
+            if str(part.get("reason") or "") == "tool-calls":
+                return ""
+            return "idle"
+        return {"step-start": "working", "reasoning": "thinking"}.get(pt, "")
     if event_type.startswith("session.created"):
         return "idle"
     return ""

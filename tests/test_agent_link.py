@@ -500,7 +500,11 @@ class TestRealFormatMappers:
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "user"}})) == "thinking"
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "assistant"}})) == ""
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-start"}})) == "working"
+        # step-finish 按 reason 分流：tool-calls = 停笔等工具（含 task 子代理
+        # 长跑），维持现状不触发完成确认；stop / 无 reason（旧版兼容）→ idle
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish"}})) == "idle"
+        assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish", "reason": "stop"}})) == "idle"
+        assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}})) == ""
         assert opencode_event_state("session.updated.1", "{}") == ""
         assert opencode_event_state("message.part.updated.1", "not json") == ""
 
@@ -702,6 +706,34 @@ class TestAgentLinkBubbles:
         mgr._on_agent_state("dsh", "idle")
         assert "dsh" in mgr._done_pending
 
+        mgr._fire_done("dsh")
+        assert any("干完活啦" in b for b in bubbles)
+
+    def test_opencode_step_finish_tool_calls_no_done(self, tmp_path):
+        """opencode step-finish(reason=tool-calls)（派 task 子代理后主代理停笔等待）
+        不触发完成确认：不产出 idle 状态 → 800ms 确认不排程；
+        step-finish(reason=stop) 才是真结束 → 排程并出完成气泡。"""
+        from pet.agent_link import opencode_event_state
+        import json as j
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path)
+        mgr._on_agent_state("dsh", "working")
+
+        # 子代理长跑期间：tool-calls 维持现状，确认窗口不排程
+        state = opencode_event_state("message.part.updated.1",
+                                     j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}}))
+        assert state == ""
+        if state:  # 与 agent_link._poll 的空状态跳过逻辑一致
+            mgr._on_agent_state("dsh", state)
+        clock[0] += 3.0
+        assert "dsh" not in mgr._done_pending
+        assert bubbles == []
+
+        # 子代理回注、整轮真结束：stop → idle → 排程 → 完成气泡恰一次
+        state = opencode_event_state("message.part.updated.1",
+                                     j.dumps({"part": {"type": "step-finish", "reason": "stop"}}))
+        assert state == "idle"
+        mgr._on_agent_state("dsh", state)
+        assert "dsh" in mgr._done_pending
         mgr._fire_done("dsh")
         assert any("干完活啦" in b for b in bubbles)
 
