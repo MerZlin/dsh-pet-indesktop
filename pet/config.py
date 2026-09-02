@@ -531,6 +531,7 @@ class Config:
             "self_talk_min_interval": DEFAULT_SELF_TALK_MIN_INTERVAL,
             "self_talk_max_interval": DEFAULT_SELF_TALK_MAX_INTERVAL,
             "self_talk_duration_seconds": DEFAULT_SELF_TALK_DURATION_SECONDS,
+            "self_talk_image_scale": 100,  # 气泡配图显示尺寸百分比（50~300，100 = 默认）
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "self_talk_image_dir": "assets/big_blue_fat_fish",
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
@@ -688,6 +689,7 @@ class Config:
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
+            "self_talk_image_scale",
             "self_talk_bubble_style",
              "mouse_through", "cursor_hidden_passthrough", "drag_physics", "context_menu_template",
             "lock_position", "shift_drag", "pet_opacity",
@@ -769,6 +771,9 @@ class Config:
         self.data["self_talk_image_dir"] = str(
             self.data.get("self_talk_image_dir") or ""
         ).strip()[:500]
+        self.data["self_talk_image_scale"] = int(_float_or_default(
+            self.data.get("self_talk_image_scale"), 100.0, 50.0, 300.0
+        ))
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
         self.data["cursor_hidden_passthrough"] = _bool_or_default(
             self.data.get("cursor_hidden_passthrough"), True
@@ -914,6 +919,7 @@ class Config:
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
+            "self_talk_image_scale",
             "self_talk_bubble_style",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg",

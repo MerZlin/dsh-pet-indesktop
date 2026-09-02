@@ -427,6 +427,7 @@ class PetWindow(QWidget):
         )
         self._self_talk_image_dir = str(config.get('self_talk_image_dir', '') or '')
         self._self_talk_images = list_self_talk_images(_resolve_self_talk_image_dir(self._self_talk_image_dir))
+        self._self_talk_image_scale = max(0.5, min(3.0, float(config.get('self_talk_image_scale', 100)) / 100.0))
         self._self_talk_min_interval = max(5.0, float(config.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
         self._self_talk_max_interval = max(self._self_talk_min_interval, float(config.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
         self._self_talk_timer = QTimer(self)
@@ -3622,7 +3623,8 @@ class PetWindow(QWidget):
         _set_speech_bubble_interactive(self)
         if kind == "image":
             return self._speech_bubble.show_image(
-                value, anchor, duration_ms, pet_scale=self.scale
+                value, anchor, duration_ms, pet_scale=self.scale,
+                image_scale=self._self_talk_image_scale,
             )
         return self._show_self_talk_text(value)
 
@@ -3774,6 +3776,7 @@ class PetWindow(QWidget):
         )
         self._self_talk_image_dir = str(self.cfg.get('self_talk_image_dir', '') or '')
         self._self_talk_images = list_self_talk_images(_resolve_self_talk_image_dir(self._self_talk_image_dir))
+        self._self_talk_image_scale = max(0.5, min(3.0, float(self.cfg.get('self_talk_image_scale', 100)) / 100.0))
         self._self_talk_min_interval = max(5.0, float(self.cfg.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
         self._self_talk_max_interval = max(self._self_talk_min_interval, float(self.cfg.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
         self.click_sound_path = str(self.cfg.get('click_sound_path', '') or '')

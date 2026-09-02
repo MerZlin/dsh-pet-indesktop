@@ -46,7 +46,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "music_sing_enabled", "no_move", "on_top", "pet_opacity", "playback_speed",
     "quick_launch_apps", "rx", "ry", "scale", "screen_name",
     "self_talk_bubble_style", "self_talk_duration_seconds", "self_talk_enabled",
-    "self_talk_image_dir", "self_talk_max_interval", "self_talk_min_interval",
+    "self_talk_image_dir", "self_talk_image_scale", "self_talk_max_interval", "self_talk_min_interval",
     "self_talk_texts", "shift_drag", "show_dock_icon", "slingshot_enabled",
     "stream_capture_mode", "system_notifications_enabled", "throw_max_speed", "throw_strength",
 })

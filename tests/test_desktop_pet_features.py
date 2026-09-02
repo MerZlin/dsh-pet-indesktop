@@ -373,8 +373,76 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
     app.processEvents()
     assert not bubble._source_pixmap.isNull()
     assert not bubble._breath_image_rect.isEmpty()
-    bubble.close()
+
+
+def test_self_talk_image_scale_config_and_bubble_size(tmp_path):
+    """气泡配图尺寸：配置 50~300 钳位 + 气泡按 image_scale 放大（双气泡形态都验证）。"""
+    from PIL import Image
+
+    from pet.config import Config
+
+    image_dir = tmp_path / "talk-images"
+    image_dir.mkdir()
+    Image.new("RGB", (20, 10), "blue").save(image_dir / "one.png")
+
+    config = Config(tmp_path)
+    assert config.get("self_talk_image_scale") == 100  # 默认
+    config.set("self_talk_image_scale", 250)
+    config.save()
+    loaded = Config(tmp_path)
+    assert loaded.get("self_talk_image_scale") == 250
+    # 钳位：越界/非数值
+    config.set("self_talk_image_scale", 9999)
+    config.save()
+    assert Config(tmp_path).get("self_talk_image_scale") == 300
+    config.set("self_talk_image_scale", "abc")
+    config.save()
+    assert Config(tmp_path).get("self_talk_image_scale") == 100
+
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QApplication
+    from pet.speech_bubble import PetSpeechBubble
+
+    app = QApplication.instance() or QApplication([])
+    anchor = QRect(420, 460, 220, 260)
+    normal = PetSpeechBubble()
+    big = PetSpeechBubble()
+    assert normal.show_image(image_dir / "one.png", anchor, 5000, image_scale=1.0)
+    assert big.show_image(image_dir / "one.png", anchor, 5000, image_scale=2.5)
+    assert big.label.width() > normal.label.width() * 2
+    # 呼吸气泡形态同样吃缩放
+    breath_normal = PetSpeechBubble(style_id="breath_bubble")
+    breath_big = PetSpeechBubble(style_id="breath_bubble")
+    assert breath_normal.show_image(image_dir / "one.png", anchor, 5000, pet_scale=0.72, image_scale=1.0)
+    assert breath_big.show_image(image_dir / "one.png", anchor, 5000, pet_scale=0.72, image_scale=2.5)
+    assert breath_big.width() > breath_normal.width()
+    # 超界缩放被弹窗侧钳住（双保险）
+    huge = PetSpeechBubble()
+    capped = PetSpeechBubble()
+    assert huge.show_image(image_dir / "one.png", anchor, 5000, image_scale=99.0)
+    assert capped.show_image(image_dir / "one.png", anchor, 5000, image_scale=3.0)
+    assert huge._image_scale == 3.0
+    assert huge.label.width() == capped.label.width()
     app.processEvents()
+    for w in (normal, big, breath_normal, breath_big, huge, capped):
+        w.close()
+    app.processEvents()
+
+
+def test_self_talk_scheduling_and_random_talk_dispatch(tmp_path, monkeypatch):
+    """自言自语调度间隔与随机图片/文本派发（原 test_self_talk_images... 的后半段）。"""
+    import random  # noqa: F401
+    from pathlib import Path  # noqa: F401
+
+    from PySide6.QtCore import QRect
+
+    from pet.window import PetWindow
+
+    image_dir = tmp_path / "talk-images"
+    image_dir.mkdir()
+    # _show_random_self_talk 会惰性剔除不存在的图片文件——必须有真实图片
+    from PIL import Image
+    Image.new("RGB", (20, 10), "blue").save(image_dir / "one.png")
 
     starts = []
 
@@ -390,6 +458,7 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
         _self_talk_enabled = True
         _self_talk_texts = ["hello"]
         _self_talk_images = [image_dir / "one.png"]
+        _self_talk_image_scale = 1.0
         _self_talk_min_interval = 5.0
         _self_talk_max_interval = 5.0
         _self_talk_duration_seconds = 7.5
@@ -401,8 +470,8 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
     shown = []
 
     class Bubble:
-        def show_image(self, path, anchor, duration, *, pet_scale):
-            shown.append((Path(path), anchor, duration, pet_scale))
+        def show_image(self, path, anchor, duration, *, pet_scale, image_scale=1.0):
+            shown.append((Path(path), anchor, duration, pet_scale, image_scale))
             return True
 
     runtime_pet = FakePet()
@@ -411,7 +480,7 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
     runtime_pet.visible_content_rect = lambda: QRect(10, 20, 180, 240)
     monkeypatch.setattr("pet.window.random.choice", lambda choices: choices[-1])
     assert PetWindow._show_random_self_talk(runtime_pet)
-    assert shown == [(image_dir / "one.png", QRect(10, 20, 180, 240), 7500, 0.72)]
+    assert shown == [(image_dir / "one.png", QRect(10, 20, 180, 240), 7500, 0.72, 1.0)]
 
 
 def test_speech_bubble_tail_is_one_surface_and_shadow_has_no_graphics_effect():

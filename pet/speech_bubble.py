@@ -177,6 +177,7 @@ class PetSpeechBubble(QFrame):
         self._raw_text = ""
         self._source_pixmap = QPixmap()
         self._pet_scale: float | None = None
+        self._image_scale: float = 1.0
         self.set_style(style_id)
         self._hide_timer = QTimer(self)
         self._hide_timer.setSingleShot(True)
@@ -230,6 +231,12 @@ class PetSpeechBubble(QFrame):
             if pet_scale is not None
             else breath_bubble_size_for_anchor(anchor_rect)
         )
+        # 配图内容吃用户可调的 image_scale（文字气泡尺寸不变）
+        if self._content_kind == "image" and self._image_scale != 1.0:
+            base_size = QSize(
+                int(base_size.width() * self._image_scale),
+                int(base_size.height() * self._image_scale),
+            )
         bubble_size = self._breath_size_for_content(base_size)
         self._breath_scale = bubble_size.width() / 240.0
         scale = self._breath_scale
@@ -400,6 +407,7 @@ class PetSpeechBubble(QFrame):
         duration_ms: int = 3200,
         *,
         pet_scale: float | None = None,
+        image_scale: float = 1.0,
     ) -> bool:
         pixmap = QPixmap(str(image_path))
         if pixmap.isNull():
@@ -408,16 +416,19 @@ class PetSpeechBubble(QFrame):
         self._raw_text = ""
         self._source_pixmap = pixmap
         self._pet_scale = pet_scale
+        # 用户可调的配图显示尺寸（self_talk_image_scale，百分比/100），双保险钳位
+        self._image_scale = max(0.5, min(3.0, float(image_scale)))
         self._reset_paging()
         self._subtitle_label.setText("")
         self._subtitle_label.hide()
         if self._preset.get("shape") == "breath_bubble":
             self._configure_breath_content(anchor_rect, pet_scale)
         else:
+            box = QSize(int(220 * self._image_scale), int(140 * self._image_scale))
             target = pixmap.size()
-            target.scale(QSize(220, 140), Qt.AspectRatioMode.KeepAspectRatio)
-            target.setWidth(max(96, target.width()))
-            target.setHeight(max(64, target.height()))
+            target.scale(box, Qt.AspectRatioMode.KeepAspectRatio)
+            target.setWidth(max(int(96 * self._image_scale), target.width()))
+            target.setHeight(max(int(64 * self._image_scale), target.height()))
             self.label.setFixedSize(target)
             self.label.setText("")
             self.label.show()

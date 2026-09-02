@@ -760,6 +760,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
             SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
             SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
+            SettingRow("self_talk_image_scale", "配图大小", "气泡里配图的显示尺寸（100% 为默认）。", self.self_talk_image_scale_spin),
             SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
         ], behavior_content))
         # Agent 联动：每个 Agent 一行自定义思考文案
@@ -1078,6 +1079,10 @@ class ModernSettingsDialog(QDialog):
             directory=True,
             parent=self,
         )
+        self.self_talk_image_scale_spin = BrowserSpinBox(self)
+        self.self_talk_image_scale_spin.setRange(50, 300)
+        self.self_talk_image_scale_spin.setSuffix(" %")
+        self.self_talk_image_scale_spin.setValue(int(self.config.get("self_talk_image_scale", 100)))
         self.click_talk_bindings_btn = QPushButton("编辑…", self)
         self.click_talk_bindings_btn.setObjectName("clickTalkBindingsButton")
         self.click_talk_bindings_btn.clicked.connect(self._open_click_talk_bindings)
@@ -1816,6 +1821,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
+        self.config.set("self_talk_image_scale", self.self_talk_image_scale_spin.value())
         # Agent 联动：自定义 thinking 文案与音效（合并写回，不覆盖 agent_link 其他开关）
         agent_cfg = dict(self.config.get("agent_link", {}))
         agent_cfg["thinking_texts"] = {
