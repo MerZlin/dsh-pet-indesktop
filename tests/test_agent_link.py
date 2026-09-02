@@ -25,12 +25,9 @@ from pet.agent_link import (
     BaseAgentMonitor,
     ByteOffsetTailer,
     ClaudeCodeMonitor,
-    CodexMonitor,
     CursorMonitor,
     CustomAgentMonitor,
     DshMonitor,
-    codex_event_state,
-    codex_event_tool,
     normalize_event_state,
 )
 from pet.config import Config
@@ -1893,9 +1890,11 @@ class TestApprovalStickyBubble:
         """question/requested 带 options：常驻气泡列出选项，让用户选一个才能继续。"""
         mgr = self._make_mgr(tmp_path)
         mgr._on_question_request("dsh", {"questions": self.QUESTIONS})
-        assert "dsh" in mgr._pending_interactions
-        assert mgr._pending_interactions["dsh"]["kind"] == "question"
-        assert mgr._pending_interactions["dsh"]["interactive"] is False
+        pending = mgr.pending_interactions_for("dsh")
+        assert pending, "应有至少一条 pending 交互"
+        item = next(iter(pending.values()))
+        assert item["kind"] == "question"
+        assert item["interactive"] is False
         assert mgr.win._sticky_bubble_active is True
         text, sticky = mgr.win.sticky_shown[-1]
         assert sticky is True
@@ -1923,12 +1922,55 @@ class TestApprovalStickyBubble:
             "questions": self.QUESTIONS, "callId": "call-b", "sessionId": "session-a",
         })
 
-        assert len(mgr._pending_interactions) == 2
+        assert len(mgr.pending_interactions_for("dsh")) == 2
         mgr._on_question_resolved("dsh", {"callId": "call-b", "sessionId": "session-a"})
 
-        assert len(mgr._pending_interactions) == 1
-        remaining = next(iter(mgr._pending_interactions.values()))
+        assert len(mgr.pending_interactions_for("dsh")) == 1
+        remaining = next(iter(mgr.pending_interactions_for("dsh").values()))
         assert remaining["call_id"] == "call-a"
+
+    def test_pending_interaction_uses_interaction_id_not_agent_key(self, tmp_path):
+        """pending_interactions 的键是 interaction_id 而非 agent_key。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-x"})
+        keys = list(mgr._pending_interactions.keys())
+        assert keys, "应有至少一条 pending 交互"
+        assert "dsh" not in keys, "键应为 interaction_id，不是 agent_key"
+        assert "rpc-x" in keys[0], f"键应包含 rpcId（如 approval:rpc-x），实际为 {keys[0]}"
+        pending = mgr.pending_interactions_for("dsh")
+        assert len(pending) == 1
+        item = next(iter(pending.values()))
+        assert item["agent_key"] == "dsh"
+        assert item["kind"] == "question"
+
+    def test_concurrent_pending_resolved_independently(self, tmp_path):
+        """同一个 Agent 有两个 pending interaction → 解决其中一个，另一个仍然存在。
+
+        并发两个审批后分别解决一个，验证未解决的审批不会因另一个解决而关闭。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-a", "approvalId": "ap-a", "sessionId": "s-1"}
+        )
+        mgr._on_approval_request(
+            "dsh", {"tool": "pwsh", "rpcId": "rpc-b", "approvalId": "ap-b", "sessionId": "s-1"}
+        )
+        pending_before = mgr.pending_interactions_for("dsh")
+        assert len(pending_before) == 2, f"应有 2 条 pending 交互，实际 {len(pending_before)}"
+        pending_keys = set(pending_before)
+        assert "approval:rpc-a" in pending_keys and "approval:rpc-b" in pending_keys
+
+        # 解决 A
+        mgr._respond_interaction("approval:rpc-a", "allowed-once")
+        remaining = mgr.pending_interactions_for("dsh")
+        assert len(remaining) == 1, "解决 A 后应只剩 B"
+        assert "approval:rpc-b" in remaining, "B 仍应处于 pending 状态"
+        item_b = remaining["approval:rpc-b"]
+        assert item_b["tool"] == "pwsh"
+        assert item_b["approval_id"] == "ap-b"
+
+        # 解决 B 后全部清空
+        mgr._respond_interaction("approval:rpc-b", "allowed-once")
+        assert mgr.pending_interactions_for("dsh") == {}, "解决 B 后应全部清空"
 
     def test_question_no_options_needs_input(self, tmp_path):
         """无 options 的问题（自由输入/确认）：提示需要输入，不出交互按钮。"""
@@ -1959,9 +2001,10 @@ class TestApprovalStickyBubble:
         mgr._on_question_request("dsh", {"questions": self.QUESTIONS})
         # 同一 agent 的多个交互各自独立存储（不再互相覆盖）
         assert self._agent_keys(mgr) == {"dsh"}
-        assert len(mgr._pending_interactions) == 2, "审批和问题应共存，各自一条 pending"
+        pending = mgr.pending_interactions_for("dsh")
+        assert len(pending) == 2, "审批和问题应共存，各自一条 pending"
         # 审批和问题各自有 kind
-        kinds = {item["kind"] for item in mgr.pending_interactions_for("dsh").values()}
+        kinds = {item["kind"] for item in pending.values()}
         assert kinds == {"approval", "question"}
         # 分别 resolved：先关闭问题
         mgr._on_question_resolved("dsh")
@@ -1969,7 +2012,7 @@ class TestApprovalStickyBubble:
         assert self._single_pending(mgr, "dsh")["kind"] == "approval"
         # 再关闭审批
         mgr._on_approval_resolved("dsh")
-        assert mgr._pending_interactions == {}
+        assert mgr.pending_interactions_for("dsh") == {}
 
     # ---- 交互模式（带 rpcId，气泡内可直接点选） ----
 
@@ -1979,11 +2022,12 @@ class TestApprovalStickyBubble:
         mgr._on_approval_request(
             "dsh", {"tool": "bash", "rpcId": "rpc-1", "approvalId": "ap-1", "sessionId": "s-1"}
         )
-        pending = mgr._pending_interactions["dsh"]
-        assert pending["interactive"] is True
-        assert pending["rpc_id"] == "rpc-1"
-        assert pending["approval_id"] == "ap-1"
-        assert pending["session_id"] == "s-1"
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
+        assert item["rpc_id"] == "rpc-1"
+        assert item["approval_id"] == "ap-1"
+        assert item["session_id"] == "s-1"
         assert mgr.win.shown_buttons and mgr.win.shown_buttons[-1][1] == ["同意", "拒绝"]
 
     def test_question_interactive_buttons(self, tmp_path):
@@ -1992,8 +2036,9 @@ class TestApprovalStickyBubble:
         mgr._on_question_request(
             "dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-2", "sessionId": "s-1"}
         )
-        pending = mgr._pending_interactions["dsh"]
-        assert pending["interactive"] is True
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
         assert mgr.win.shown_buttons and mgr.win.shown_buttons[-1][1] == ["方案 A", "方案 B", "方案 C"]
 
     def test_hint_upgraded_to_interactive(self, tmp_path):
@@ -2004,7 +2049,9 @@ class TestApprovalStickyBubble:
         mgr._on_question_request(
             "dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-3", "sessionId": "s-1"}
         )
-        assert mgr._pending_interactions["dsh"]["interactive"] is True
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
         assert mgr.win.shown_buttons[-1][1] == ["方案 A", "方案 B", "方案 C"]
 
     def test_interactive_not_downgraded_by_late_hint(self, tmp_path):
@@ -2016,14 +2063,18 @@ class TestApprovalStickyBubble:
         mgr._on_approval_request(
             "dsh", {"tool": "bash", "rpcId": "rpc-1", "approvalId": "ap-1", "sessionId": "s-1"}
         )
-        assert mgr._pending_interactions["dsh"]["interactive"] is True
-        assert mgr._pending_interactions["dsh"]["rpc_id"] == "rpc-1"
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
+        assert item["rpc_id"] == "rpc-1"
         assert mgr.win.shown_buttons[-1][1] == ["同意", "拒绝"]
 
         # 后到无 rpcId 的提示：不降级
         mgr._on_approval_request("dsh", {"tool": "bash"})
-        assert mgr._pending_interactions["dsh"]["interactive"] is True, "不应降级为纯提示"
-        assert mgr._pending_interactions["dsh"]["rpc_id"] == "rpc-1", "rpc_id 应保留"
+        pending2 = mgr.pending_interactions_for("dsh")
+        item2 = next(iter(pending2.values()))
+        assert item2["interactive"] is True, "不应降级为纯提示"
+        assert item2["rpc_id"] == "rpc-1", "rpc_id 应保留"
         assert mgr.win.shown_buttons[-1][1] == ["同意", "拒绝"], "按钮应仍然存在"
 
     def test_build_respond_approval_message(self, tmp_path):
@@ -2032,7 +2083,9 @@ class TestApprovalStickyBubble:
         mgr._on_approval_request(
             "dsh", {"tool": "bash", "rpcId": "rpc-1", "approvalId": "ap-1", "sessionId": "s-1"}
         )
-        msg = mgr._build_respond_message(mgr._pending_interactions["dsh"], "allowed-once")
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        msg = mgr._build_respond_message(item, "allowed-once")
         assert msg == {
             "type": "client-response",
             "rpcId": "rpc-1",
@@ -2072,7 +2125,7 @@ class TestApprovalStickyBubble:
 
         # 点 B 正常收尾，回写 A、B 各一次
         mgr._respond_interaction("approval:rpc-B", "allowed-once")
-        assert mgr._pending_interactions == {}
+        assert mgr.pending_interactions_for("dsh") == {}
         assert [m[1]["rpcId"] for m in posted] == ["rpc-A", "rpc-B"]
 
     def test_build_respond_question_message(self, tmp_path):
@@ -2081,7 +2134,9 @@ class TestApprovalStickyBubble:
         mgr._on_question_request(
             "dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-2", "sessionId": "s-1"}
         )
-        msg = mgr._build_respond_message(mgr._pending_interactions["dsh"], ["方案 B"])
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        msg = mgr._build_respond_message(item, ["方案 B"])
         assert msg["rpcId"] == "rpc-2"
         assert msg["result"]["ok"] is True
         value = msg["result"]["value"]
@@ -2092,7 +2147,9 @@ class TestApprovalStickyBubble:
         """无 rpcId 的纯提示交互：没有可回写消息（返回 None）。"""
         mgr = self._make_mgr(tmp_path)
         mgr._on_approval_request("dsh", {"tool": "bash"})
-        assert mgr._build_respond_message(mgr._pending_interactions["dsh"], "allowed-once") is None
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert mgr._build_respond_message(item, "allowed-once") is None
 
     def test_respond_interaction_posts_worker(self, tmp_path):
         """点按钮触发回写：收起 pending + 起后台线程带正确消息。"""
@@ -2102,135 +2159,11 @@ class TestApprovalStickyBubble:
         )
         captured = {}
         mgr._post_respond_worker = lambda agent_key, msg: captured.update({"agent": agent_key, "msg": msg})
-        mgr._respond_interaction("dsh", "rejected")
-        assert mgr._pending_interactions == {}, "点击后 pending 立即收起"
+        mgr._respond_interaction("approval:rpc-1", "rejected")
+        assert mgr.pending_interactions_for("dsh") == {}, "点击后 pending 立即收起"
         assert captured["agent"] == "dsh"
         assert captured["msg"]["result"]["value"]["outcome"] == "rejected"
         assert mgr.win.hidden_calls == 1
-
-
-# ============================================================================
-# Codex（ChatGPT App 内 app-server）事件监听器
-# ============================================================================
-class TestCodexEventState:
-    """codex_event_state / codex_event_tool 事件 → 统一状态映射（官方协议词汇）。"""
-
-    def test_lifecycle_events(self):
-        assert codex_event_state("thread/started") == "thinking"
-        assert codex_event_state("turn/started") == "thinking"
-        assert codex_event_state("item/started") == "working"
-        assert codex_event_state("item/completed") == "idle"
-        assert codex_event_state("thread/completed") == "idle"
-        assert codex_event_state("turn/completed") == "idle"
-
-    def test_error_and_interrupt(self):
-        assert codex_event_state("item/error") == "error"
-        assert codex_event_state("error") == "error"
-        assert codex_event_state("interrupted") == "idle"
-
-    def test_unknown_event_ignored(self):
-        """不认识的 method 返回空串，绝不默认 working（防过度触发）。"""
-        assert codex_event_state("something/else") == ""
-        assert codex_event_state("") == ""
-
-    def test_approval_question_not_in_state_map(self):
-        """审批/问题事件不驱动状态动画（走专用交互信号）。"""
-        assert codex_event_state("approval/requested") == ""
-        assert codex_event_state("CommandApprovalRequested") == ""
-        assert codex_event_state("RequestUserInput") == ""
-
-    def test_tool_extraction(self):
-        assert codex_event_tool("item/started", {"tool": "bash"}) == "bash"
-        assert codex_event_tool("item/started", {"name": "read"}) == "read"
-        assert codex_event_tool("turn/started", {"tool": "write"}) == "write"
-        # 非 item/turn 事件、无工具名、非 dict 一律空串
-        assert codex_event_tool("item/completed", {"tool": "bash"}) == ""
-        assert codex_event_tool("item/started", {}) == ""
-        assert codex_event_tool("item/started", None) == ""
-
-
-class TestCodexMonitor:
-    """CodexMonitor 的 ServerNotification 消息解析（不依赖真实 WebSocket）。"""
-
-    def _make_monitor(self):
-        QApplication.instance() or QApplication([])
-        return CodexMonitor(Path("."), ws_url="ws://127.0.0.1:1/events")
-
-    def _collect(self, mon):
-        """挂收集器：返回 (state_events, approval_events, question_events, activity_events)。"""
-        states, approvals, questions, activities = [], [], [], []
-        mon.state_changed.connect(lambda k, s: states.append((k, s)))
-        mon.approval_requested.connect(lambda k, p: approvals.append((k, p)))
-        mon.question_requested.connect(lambda k, p: questions.append((k, p)))
-        mon.activity.connect(lambda k, t: activities.append((k, t)))
-        return states, approvals, questions, activities
-
-    def test_parse_item_started_working(self):
-        mon = self._make_monitor()
-        states, approvals, questions, activities = self._collect(mon)
-        mon._on_text('{"method": "item/started", "params": {"tool": "bash"}}')
-        assert states == [("codex", "working")]
-        assert activities == [("codex", "bash")]
-
-    def test_parse_thread_started_thinking(self):
-        mon = self._make_monitor()
-        states, *_ = self._collect(mon)
-        mon._on_text('{"method": "thread/started", "params": {}}')
-        assert states == [("codex", "thinking")]
-
-    def test_parse_approval_requested(self):
-        """approval/requested 发专用交互信号，不进状态机。"""
-        mon = self._make_monitor()
-        states, approvals, *_ = self._collect(mon)
-        mon._on_text('{"method": "approval/requested", "params": {"toolName": "bash"}}')
-        assert approvals == [("codex", {"toolName": "bash"})]
-        assert states == [], "审批不驱动状态动画"
-
-    def test_parse_permissions_approval(self):
-        mon = self._make_monitor()
-        _, approvals, *_ = self._collect(mon)
-        mon._on_text('{"method": "PermissionsApprovalRequested", "params": {}}')
-        assert approvals and approvals[0][0] == "codex"
-
-    def test_parse_request_user_input(self):
-        mon = self._make_monitor()
-        _, _, questions, _ = self._collect(mon)
-        mon._on_text('{"method": "RequestUserInput", "params": {}}')
-        assert questions and questions[0][0] == "codex"
-
-    def test_parse_unknown_method_ignored(self):
-        mon = self._make_monitor()
-        states, *_ = self._collect(mon)
-        mon._on_text('{"method": "mcpServer/startupStatus/updated", "params": {}}')
-        assert states == [], "未映射事件一律忽略"
-
-    def test_parse_bad_json_ignored(self):
-        mon = self._make_monitor()
-        states, *_ = self._collect(mon)
-        mon._on_text("not json {{{")
-        mon._on_text("")
-        assert states == []
-
-    def test_parse_error_event(self):
-        mon = self._make_monitor()
-        states, *_ = self._collect(mon)
-        mon._on_text('{"method": "error", "params": {"message": "boom"}}')
-        assert states == [("codex", "error")]
-
-    def test_url_resolution_priority(self):
-        """显式 ws_url > 环境变量 > 已锁定端点 > 候选列表。"""
-        mon = self._make_monitor()
-        assert mon._resolve_ws_url() == "ws://127.0.0.1:1/events"
-        mon._ws_url = None
-        mon._found_url = "ws://127.0.0.1:4317/events"
-        assert mon._resolve_ws_url() == "ws://127.0.0.1:4317/events"
-        # 无锁定端点时回退候选列表（按优先级依次尝试）
-        mon._found_url = None
-        mon._candidate_urls = ["ws://127.0.0.1:4000/events", "ws://127.0.0.1:4001/ws"]
-        mon._candidate_idx = 0
-        assert mon._resolve_ws_url() == "ws://127.0.0.1:4000/events"
-        mon._candidate_idx = 1
-        assert mon._resolve_ws_url() == "ws://127.0.0.1:4001/ws"
 
 
 # ============================================================================

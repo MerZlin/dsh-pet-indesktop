@@ -2009,12 +2009,20 @@ class AgentLinkManager(QObject):
             self._resolve_interaction(candidates[0])
 
     def _on_question_resolved(self, agent_key: str, payload: dict | None = None) -> None:
-        """问题结束（question/resolved）：按 rpcId 精确关闭对应交互记录。
+        """问题结束（question/resolved）：按 rpcId/callId 精确关闭对应交互记录。
 
         与审批同理：带 id 的 resolved 帧只关闭自己那一条；带 id 但未匹配的
         帧是陈旧已解决帧，绝不回退关闭其他 pending 问题；兜底（无 id 的旧
         路径）仅对无 rpc_id 的纯提示问题生效，交互问题由 mux 帧精确关闭。"""
         payload = payload if isinstance(payload, dict) else {}
+        call_id = payload.get("callId")
+        if call_id:
+            call_id = str(call_id)
+            for iid, item in self._pending_interactions.items():
+                if item.get("kind") == "question" and str(item.get("call_id") or "") == call_id:
+                    self._resolve_interaction(iid)
+                    return
+            return  # 带 callId 但未匹配：陈旧已解决帧，不动其他问题
         rpc_id = payload.get("rpcId")
         if rpc_id:
             for iid, item in self._pending_interactions.items():
