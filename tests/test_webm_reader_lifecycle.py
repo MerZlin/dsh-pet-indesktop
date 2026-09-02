@@ -101,8 +101,10 @@ def test_rapid_start_stop_leaks_no_threads_or_processes(app):
     assert all(p.poll() is not None for p in clip.seen_procs), \
         "stop() 后存在未退出的 ffmpeg 进程"
 
-    # 无残留 reader 线程（含竞态路径下自终止的 reader）
-    deadline = time.monotonic() + 5.0
+    # 无残留 reader 线程（含竞态路径下自终止的 reader）。
+    # CI 高负载下线程退出可能显著变慢（登记册 flake）——时限放宽到 30s
+    # （测试的是「最终不残留」，不是退出速度）
+    deadline = time.monotonic() + 30.0
     while True:
         new_alive = [t for t in threading.enumerate()
                      if t.is_alive() and t not in baseline]

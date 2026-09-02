@@ -183,6 +183,9 @@ def test_close_total_blocking_time_bounded_by_timeout(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ss, "_atomic_write", stuck_write)
 
+    # 必须等 worker 确实进入卡住的写盘再 close——否则 CI 高负载下 close
+    # 可能在 worker 开工前返回 True（竞态，CI macOS 实测踩中）
+    assert entered.wait(timeout=5.0), "卡住的写盘未在时限内开始"
     start = time.monotonic()
     ok = w.close(timeout=0.3)
     elapsed = time.monotonic() - start
