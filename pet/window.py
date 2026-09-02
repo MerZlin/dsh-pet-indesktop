@@ -329,10 +329,17 @@ class PetWindow(QWidget):
     cursor_visibility_changed = Signal(str)
 
     def __init__(self, lib: MovieLibrary, config: Config, collision_session=None,
-                 *, clock=None) -> None:
+                 broker_facade=None, *, clock=None) -> None:
         super().__init__()
         self.lib = lib
         self.cfg = config
+        # P3 broker：PetApp 注入的 BrokerFacade（GUI 线程编排器；默认 None =
+        # broker 关，窗口全部 broker 分支 no-op，与历史行为逐位一致）。
+        self._broker_facade = broker_facade
+        # 首个 idle 是否因 broker 开（等角色就绪 ≤600ms）被延迟：__init__ 置位，
+        # attach_collision_session 尾部（角色可查询后）启动轮询。
+        self._first_idle_broker_pending = False
+        self._broker_first_idle_attempts = 0
         # 闲置降帧的单调时钟（可注入，测试用假时钟控制时间流逝，零抖动）。
         # 注意：只用 time.monotonic 语义的时钟——绝不使用 wall clock。
         self._clock = clock if callable(clock) else time.monotonic
@@ -637,7 +644,13 @@ class PetWindow(QWidget):
         self._screen_retry_timer.timeout.connect(self._screen_retry_tick)
 
         self._restore_position()
-        self._switch(self.idle)
+        if self._broker_delays_first_idle():
+            # P3 broker（开）：首个 idle 延迟到「角色就绪或 ≤600ms」——attach
+            # 尾部（collision 会话 attach 后）启动轮询再起播。broker 关（默认）
+            # 时走 else：与历史逐位相同，构造后立即有动画（大量测试依赖）。
+            self._first_idle_broker_pending = True
+        else:
+            self._switch(self.idle)
         if self._music_sing_enabled:
             self._music_sing_timer.start()
         self._schedule_self_talk()
@@ -1126,6 +1139,9 @@ class PetWindow(QWidget):
             return  # 未完整初始化（测试桩/构造早期）无可暂停
         if self.movie is not None:
             self.movie.stop()
+            # P3 broker：窗口停播（隐藏/暂停）→ shareable idle 会话中止
+            # （publish_abort/subscribe_end，消费端本地回退）；broker 关 = no-op。
+            self._broker_unregister(self.anim, self.movie, natural=False)
         # 隐藏期间不重试被拒动画：停掉待重试并清空状态（恢复显示时重新切换）
         self._cancel_pending_switch_retry()
         self._move_timer.stop()
@@ -1165,6 +1181,10 @@ class PetWindow(QWidget):
             # 从当前动画第一帧重新开始：隐藏期间用户看不到，观感无差异；
             # 若隐藏前正在移动，_cancel_move 已清掉移动计划，不会出现"瞬移"。
             self._switch(self.anim)
+        else:
+            # 首个 idle 被 broker 延迟（等角色）期间窗口被隐藏：恢复显示时
+            # 若仍未起播则重新武装轮询（broker 关时无挂起 = no-op）。
+            self._broker_arm_first_idle_if_pending()
         if self._watch_required():
             self._start_fs_watch()
         self._schedule_self_talk()
@@ -1181,10 +1201,123 @@ class PetWindow(QWidget):
         """绑定 PetApp 持有的 IPC facade，GUI 不接触 socket。"""
         self._collision_app_session = session
         self._collision_client.attach(session)
+        # P3 broker：attach 尾部 bind —— 把注入且启用的 BrokerFacade 绑到本窗口
+        # attach 的会话（先 unbind 旧会话再 bind 新会话，幂等；decode 转发/角色
+        # 镜像随会话走）。broker 关/facade 缺席 = no-op（逐位不变）。
+        facade = getattr(self, '_broker_facade', None)
+        if facade is not None and bool(getattr(facade, 'enabled', False)):
+            facade.unbind()
+            facade.bind(session)
+        # P3 broker：首个 idle 若因 broker 开被延迟（等角色就绪 ≤600ms），
+        # 在此启动轮询；broker 关/无挂起 = no-op（逐位不变）。
+        self._broker_arm_first_idle_if_pending()
+
+    # ---- P3 broker：窗口侧接线（只经 BrokerFacade 公开接口）----------------
+    def _broker_active(self) -> bool:
+        """broker 是否参与本窗口：facade 注入且启用，且 collision 开
+        （broker 骑在碰撞 QLocal 通道上，设计 §3.1）。默认关 = False。"""
+        facade = getattr(self, '_broker_facade', None)
+        if facade is None or not bool(getattr(facade, 'enabled', False)):
+            return False
+        return bool(self.cfg.get('collision_enabled', True))
+
+    def _broker_shareable(self, name) -> bool:
+        """可共享判定（设计 §3.1）：name ∈ self.idles（列表成员测试）且开关开。"""
+        return self._broker_active() and name in self.idles
+
+    def _broker_register(self, name, movie) -> None:
+        """shareable movie 即将 start() 前调用：按当时角色（is_coordinator）
+        经 facade 分流 publish_start/subscribe_start。失败不影响本地播放。"""
+        if not self._broker_shareable(name):
+            return
+        facade = self._broker_facade
+        try:
+            facade.shareable_start(name, movie)
+        except Exception:
+            logging.exception('broker shareable_start 异常，回退本地: %s', name)
+
+    def _broker_unregister(self, name, movie, natural: bool) -> None:
+        """shareable movie 停播/自然播完：通知 facade 解注册。
+        natural=True = 自然播完（run_ended_natural 广播）；False = 停播/切走
+        （publish_abort / subscribe_end）。幂等；broker 关时 no-op。"""
+        if not self._broker_shareable(name):
+            return
+        facade = self._broker_facade
+        try:
+            facade.shareable_end(name, movie, natural=natural)
+        except Exception:
+            logging.exception('broker shareable_end 异常: %s', name)
+
+    def _broker_delays_first_idle(self) -> bool:
+        """首个 idle 是否延迟决策：broker 开且首个素材可共享（idle 类）。
+        返回 True 时 __init__ 不立即 _switch(self.idle)，改由 attach 尾部
+        等「角色就绪或 ≤600ms」后起播（设计 P0-2）。"""
+        if not self._broker_active():
+            return False
+        return self.idle in self.idles
+
+    def _broker_arm_first_idle_if_pending(self) -> None:
+        if not getattr(self, '_first_idle_broker_pending', False):
+            return
+        facade = getattr(self, '_broker_facade', None)
+        if facade is None:
+            self._first_idle_broker_pending = False
+            self._switch(self.idle)  # 兜底：无 facade 也照常起播
+            return
+        self._broker_first_idle_attempts = 0
+        QTimer.singleShot(50, self, self._broker_first_idle_tick)
+
+    def _broker_first_idle_tick(self) -> None:
+        """50ms×12 轮询角色就绪（≤600ms）：就绪即按角色起播首个 idle；
+        超时也起播（facade.role_known=False → shareable_start 回退本地，
+        下一轮再按新角色决策）。"""
+        if getattr(self, '_closing', False):
+            self._first_idle_broker_pending = False
+            return
+        if self._hidden_paused:
+            # 隐藏期间不强行起播、不空转轮询：保持挂起；恢复显示时
+            # _resume_activity 重新武装（角色就绪后由同一轮询补起首个 idle）。
+            return
+        facade = self._broker_facade
+        role_known = bool(facade is not None and facade.role_known())
+        self._broker_first_idle_attempts += 1
+        if role_known or self._broker_first_idle_attempts >= 12:
+            self._first_idle_broker_pending = False
+            if self.movie is None:
+                # 等待期内用户/其它路径已起播（_switch 已置 movie）则不覆盖；
+                # 否则首个 idle 起播（role_known → 按角色发布/订阅；超时 →
+                # shareable_start 内 role 未定回退本地）。
+                self._switch(self.idle)
+            return
+        QTimer.singleShot(50, self, self._broker_first_idle_tick)
 
     def detach_collision_session(self) -> None:
-        """解绑碰撞会话：发 leave、断开信号、停定时器并清空客户端预测状态。"""
+        """解绑碰撞会话：发 leave、断开信号、停定时器并清空客户端预测状态。
+
+        P3 broker（P3A P2-2）：解绑 = broker teardown——facade.unbind() 除
+        断开信号外会作废全部 pending 订阅（等待 grant 的 reader 立即回退
+        本地，不等 600ms 兜底）；此处再摘掉当前 movie 的发布/订阅钩子，
+        避免 broker 停用期间复用旧 clip（同素材重播/回退）时误用上一轮的
+        sink/feed。正在 stream 的 feed 由 movie 的 stop/自然结束收尾
+        （reader 的 finally 必 close feed session），此处不打断播放。
+        """
         self._collision_client.detach()
+        facade = getattr(self, '_broker_facade', None)
+        if facade is not None:
+            try:
+                facade.unbind()
+            except Exception:
+                pass
+        movie = getattr(self, 'movie', None)
+        if movie is not None:
+            try:
+                movie._publish_sink = None
+            except Exception:
+                pass
+            try:
+                movie._feed_source = None
+            except Exception:
+                pass
 
     def _sync_collision_policy(self) -> None:
         """把当前配置的碰撞参数同步到会话 policy，运行中改动即时生效。"""
@@ -1542,6 +1675,12 @@ class PetWindow(QWidget):
         prev_movie = self.movie
         prev_click_hold = self._click_hold
         prev_bounds = self._collision_local_bounds
+        # P3 broker：离开上一个可共享素材（idle 类）时通知 facade 解注册——
+        # 自然播完（_ended_fired=True，末帧已处理）→ run_ended_natural；
+        # 打断/切走（仍播放中）→ publish_abort/subscribe_end（消费端本地回退）。
+        if prev_movie is not None and self._broker_shareable(prev_anim):
+            self._broker_unregister(prev_anim, prev_movie,
+                                    natural=bool(self._ended_fired))
 
         self.anim = name
         # 点击回应动画播放中持有让路闸门；切到非点击动画即视为点击结束。
@@ -1563,8 +1702,12 @@ class PetWindow(QWidget):
             movie.set_playback_speed(self.playback_speed)
         self._ended_fired = False
         self._rebuild_frame()
+        # P3 broker：shareable（idle 类）素材 start() 前注册——发布/订阅由
+        # facade 依当时角色（is_coordinator）分流；非 shareable/关 = no-op。
+        self._broker_register(name, movie)
         if movie.start() is False:
-            # 启动被拒：明确降级，绝不静默留在"anim 已切但 movie 未播"状态
+            # 启动被拒：先撤销刚注册的 broker 会话（movie 未真正起播），再降级
+            self._broker_unregister(name, movie, natural=False)
             self._switch_fallback(
                 prev_anim, prev_movie, prev_click_hold, prev_bounds, name,
                 is_link=_link_request,
@@ -1600,9 +1743,20 @@ class PetWindow(QWidget):
         """
         logging.warning('动画启动被拒绝，回退可播放动画并安排重试: %s', requested)
         restored = False
+        registered_prev = False
         if prev_movie is not None:
-            # start 幂等：仍在播则 no-op；已停（播完/被 stop）则重播上一动画
+            # P3 broker：回退上一动画并（重新）起播。若上一素材可共享且其 clip
+            # 当前未在播（自然播完/被停后重播 = 新一轮），start() 会拉起新 reader
+            # → start() 前按当前角色注册发布/订阅；仍在播则 start() 为 no-op
+            # （其会话已在 _switch 顶部按自然/中止收尾），不必重复注册。
+            if (self._broker_shareable(prev_anim)
+                    and not getattr(prev_movie, '_running', False)):
+                self._broker_register(prev_anim, prev_movie)
+                registered_prev = True
             restored = prev_movie.start() is not False
+            if not restored and registered_prev:
+                # 重播也被拒（病态退役池）：撤销刚注册的会话，交给 idle 回退
+                self._broker_unregister(prev_anim, prev_movie, natural=False)
         if restored:
             self.anim = prev_anim
             self._click_hold = prev_click_hold
@@ -1642,9 +1796,12 @@ class PetWindow(QWidget):
         if hasattr(movie, 'set_playback_speed'):
             movie.set_playback_speed(self.playback_speed)
         self._rebuild_frame()
+        # P3 broker：回退到可共享 idle 起播前注册（按当前角色分流）。
+        self._broker_register(idle_name, movie)
         if movie.start() is False:
             # 极端：idle 也被拒——保留最后渲染帧，释放 hold，等重试恢复
             logging.warning('idle 回退也被拒绝（其退役池卡死）: %s', idle_name)
+            self._broker_unregister(idle_name, movie, natural=False)
             self._click_hold = False
             self._update_interaction_hold()
             return
@@ -3991,6 +4148,13 @@ class PetWindow(QWidget):
                 movie.stop()
             except RuntimeError:
                 pass  # movie 的 C++ 侧已随库销毁（半销毁场景）：不得中断 closeEvent 后续清理
+            # P3 broker：窗口关闭 = 停播 → shareable idle 会话中止（aborted
+            # 广播，消费端本地回退）；broker 关 = no-op。
+            try:
+                self._broker_unregister(getattr(self, 'anim', None), movie,
+                                        natural=False)
+            except Exception:
+                pass  # 关闭期 facade 可能已 shutdown，尽力而为
         self._lock_press_active = False
         self._click_hold = False
         self._context_menu_open = False

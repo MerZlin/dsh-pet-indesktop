@@ -38,6 +38,7 @@ from .window import PetWindow
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .collision_ipc import CollisionIpcSession
+from .decode_broker import BrokerFacade
 
 
 class _BackgroundResult(QObject):
@@ -196,6 +197,10 @@ class PetApp:
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
         self.collision_ipc = CollisionIpcSession(config, self)
+        # P3 broker：PetApp 持有 BrokerFacade（随 collision_ipc 同生命周期）。
+        # bind 在窗口 attach_collision_session 尾部完成（facade 需绑定到窗口实际
+        # attach 的会话），此处只创建（含开关位），不提前 bind（避免双重连接）。
+        self.broker_facade = BrokerFacade(enabled=bool(config.get('decode_broker_enabled', False)))
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -257,6 +262,11 @@ class PetApp:
         # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
         if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
             self.win.agent_link_manager.shutdown()
+        # P3 broker：退出前中止本实例全部发布 session（aborted → 其它实例本地回退）
+        try:
+            self.broker_facade.shutdown()
+        except Exception:
+            logging.exception("退出时关闭 broker facade 失败")
         self.collision_ipc.stop()
         # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
         # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
@@ -531,7 +541,8 @@ class PetApp:
         """
         if lib is None:
             lib = self._create_library(character_id)
-        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
+        win = PetWindow(lib, self.config, collision_session=self.collision_ipc,
+                        broker_facade=self.broker_facade)
         self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
@@ -589,10 +600,17 @@ class PetApp:
         # （B9 一审发现）。新窗口/托盘由 _build_window 创建（含旧对象延迟销毁）。
         old_win = self.win
         old_win.detach_collision_session()
+        # P3 broker：旧窗口/旧 ipc 退场前中止其仍在发布的全部 session
+        # （publish_abort 全部 session → 消费端本地回退；旧 facade 随旧 ipc 退役）。
+        self.broker_facade.shutdown()
         if getattr(old_win, 'agent_link_manager', None) is not None:
             old_win.agent_link_manager.shutdown()
         self.collision_ipc.stop()
         self.collision_ipc = CollisionIpcSession(self.config, self)
+        # P3 broker：新 ipc 配新 facade（同 CollisionIpcSession 生命周期；
+        # bind 由新窗口 attach_collision_session 尾部完成）。
+        self.broker_facade = BrokerFacade(
+            enabled=bool(self.config.get('decode_broker_enabled', False)))
         self.collision_ipc.start()
         self._build_window(character_id, lib=lib)
         if self.enable_chat:
