@@ -1760,9 +1760,15 @@ class ChatWindow(QDialog):
         正在生成回答时不插入，避免与在飞请求的流式输出交错。"""
         if self.service.busy:
             return
-        self.session.messages.append(ChatMessage("user", user_text))
-        self.session.messages.append(ChatMessage("assistant", reply))
-        self.store.save(self.session)
+        synced, absorbed = self.store.append_messages(
+            self.session, [ChatMessage("user", user_text), ChatMessage("assistant", reply)]
+        )
+        if synced is None:
+            self.session.messages.append(ChatMessage("user", user_text))
+            self.session.messages.append(ChatMessage("assistant", reply))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         if self.isVisible():
             self._load()
             self._refresh_sessions()
@@ -1977,8 +1983,12 @@ class ChatWindow(QDialog):
         if self._bubble:
             self._bubble.set_content(text)
             self._bubble.set_state("normal")
-        self.session.messages.append(ChatMessage("assistant", text))
-        self.store.save(self.session)
+        synced, _absorbed = self.store.append_message(self.session, ChatMessage("assistant", text))
+        if synced is None:
+            self.session.messages.append(ChatMessage("assistant", text))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         self._refresh_sessions()
         self._reset()
         self.pet_link.success()

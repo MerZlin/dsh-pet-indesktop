@@ -405,6 +405,10 @@ class SessionStore:
         return w.submit(self._path(session.character_id, session.session_id), payload)
 
     def append_message(self, session, message):
+        """单消息便捷封装，语义见 append_messages。"""
+        return self.append_messages(session, [message])
+
+    def append_messages(self, session, messages):
         """原子「读 → 追加 → 提交」（审查 R3 P1：M7 修复的硬版本）。
 
         多前端（modern/legacy/QuickChat）共享同一会话目录且各持内存快照：
@@ -420,7 +424,7 @@ class SessionStore:
             if fresh is None:
                 return None, False
             absorbed = str(fresh.updated_at) > str(session.updated_at)
-            fresh.messages.append(message)
+            fresh.messages.extend(messages)
             self.save(fresh)
             return fresh, absorbed
 

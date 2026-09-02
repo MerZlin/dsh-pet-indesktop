@@ -288,8 +288,12 @@ class QuickChatBubble(QFrame):
         if request_id != self._active_request_id:
             return
         self._reply_text = str(text or "")
-        self.session.messages.append(ChatMessage("assistant", self._reply_text))
-        self.store.save(self.session)
+        synced, _absorbed = self.store.append_message(self.session, ChatMessage("assistant", self._reply_text))
+        if synced is None:
+            self.session.messages.append(ChatMessage("assistant", self._reply_text))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         self._active_request_id = None
         self.hint_label.setText("")
         self._render_reply()
