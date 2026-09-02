@@ -102,6 +102,26 @@ class DynamicIsland(QWidget):
 
         return QTime.currentTime().toString("HH:mm")
 
+    def _info_color(self, fallback: QColor) -> QColor:
+        """余额峰谷信息槽跟随设置的峰谷提示颜色开关。
+
+        开启后高峰显示红色、低谷显示绿色；关闭或非余额峰谷模式使用普通次文字色。
+        """
+        if str(self._cfg.get("info_mode") or "time") != "balance_tier":
+            return fallback
+        if not bool(self.config.get("balance_tier_color_enabled", True)):
+            return fallback
+        try:
+            from . import balance as balance_mod
+            tier = balance_mod.deepseek_pricing_tier()
+        except Exception:
+            return fallback
+        if tier == "peak":
+            return QColor("#e5484d")
+        if tier == "idle":
+            return QColor("#30a46c")
+        return fallback
+
     def _character_name(self) -> str:
         character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
         return self.config.character_alias(character_id) or character_id
@@ -223,7 +243,7 @@ class DynamicIsland(QWidget):
 
         if info:
             info_text = self._info_text()
-            painter.setPen(secondary_color)
+            painter.setPen(self._info_color(secondary_color))
             painter.drawText(
                 QRectF(x, 0, self.fontMetrics().horizontalAdvance(info_text), self.height()),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
