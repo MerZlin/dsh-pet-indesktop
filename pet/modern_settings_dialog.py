@@ -23,7 +23,10 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFileIconProvider,
     QFrame,
+    QGridLayout,
+    QHeaderView,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -34,7 +37,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QStackedWidget,
+    QSizePolicy,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -57,7 +64,9 @@ from .config import (
 )
 from .context_menus.icons import vector_widget_icon
 from .context_menus.quick_launch import fitted_application_icon
+from .context_menus.registry import MENU_ACTIONS
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset, store_fun_asset
+from .menu_layout import load_default_menu_layout, resolve_menu_layout
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
 
@@ -83,6 +92,16 @@ BROWSER_CONTROL_SPEC = {
     "radius": 7,
     "scrollbar_width": 8,
 }
+
+SETTINGS_DOMAIN_NAV = (
+    ("常规", "settings"),
+    ("桌宠", "pet"),
+    ("互动", "interaction"),
+    ("菜单", "application"),
+    ("桌面组件", "island"),
+    ("AI 与对话", "chat"),
+    ("自动化与联动", "automation"),
+)
 
 BROWSER_CONTROL_STYLESHEET = """
 QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
@@ -588,9 +607,14 @@ class SettingRow(QFrame):
         hint_label = QLabel(hint, self)
         hint_label.setObjectName("settingHint")
         hint_label.setWordWrap(True)
+        label.setBuddy(control)
+        if not control.accessibleName():
+            control.setAccessibleName(title)
+        if hint and not control.accessibleDescription():
+            control.setAccessibleDescription(hint)
         if stacked:
             row = QVBoxLayout(self)
-            row.setContentsMargins(14, 9, 14, 9)
+            row.setContentsMargins(16, 10, 16, 10)
             row.setSpacing(0)
             row.addWidget(label)
             row.addWidget(hint_label)
@@ -598,7 +622,7 @@ class SettingRow(QFrame):
             row.addWidget(control)
         else:
             row = QHBoxLayout(self)
-            row.setContentsMargins(14, 9, 14, 9)
+            row.setContentsMargins(16, 10, 16, 10)
             row.setSpacing(18)
             copy = QVBoxLayout()
             copy.setContentsMargins(0, 0, 0, 0)
@@ -641,16 +665,63 @@ class SettingsCard(QFrame):
             visible_before = visible_before or not row.isHidden()
 
 
-class SettingsSection(QWidget):
-    def __init__(self, title: str, rows: list[SettingRow], parent=None):
+class SettingsDisclosureHeader(QPushButton):
+    """QSS-owned one-level disclosure without platform-native tool chrome."""
+
+    def __init__(self, title: str, parent=None):
         super().__init__(parent)
+        self.setObjectName("advancedSectionToggle")
+        self.setText(title)
+        self.setCheckable(True)
+        self.setChecked(False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(f"展开{title}")
+        self.chevron = QLabel("›", self)
+        self.chevron.setObjectName("disclosureChevron")
+        self.chevron.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chevron.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.toggled.connect(self._sync_chevron)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return QSize(240, 42)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self.chevron.setGeometry(max(0, self.width() - 36), 0, 28, self.height())
+
+    def _sync_chevron(self, expanded: bool) -> None:
+        self.chevron.setText("⌄" if expanded else "›")
+
+
+class SettingsSection(QWidget):
+    def __init__(self, title: str, rows: list[SettingRow], parent=None, *, advanced: bool = False):
+        super().__init__(parent)
+        self.advanced = advanced
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(7)
-        label = QLabel(title, self)
-        label.setObjectName("sectionTitle")
-        layout.addWidget(label)
-        layout.addWidget(SettingsCard(rows, self))
+        if advanced:
+            self.toggle = SettingsDisclosureHeader(title, self)
+            layout.addWidget(self.toggle)
+        else:
+            self.toggle = None
+            label = QLabel(title, self)
+            label.setObjectName("sectionTitle")
+            layout.addWidget(label)
+        self.card = SettingsCard(rows, self)
+        layout.addWidget(self.card)
+        if self.toggle is not None:
+            self.card.setVisible(False)
+            self.toggle.toggled.connect(self._set_expanded)
+
+    def _set_expanded(self, expanded: bool) -> None:
+        self.card.setVisible(expanded)
+        if self.toggle is not None:
+            self.toggle.setAccessibleName(
+                f"{'收起' if expanded else '展开'}{self.toggle.text()}"
+            )
+            self.toggle.update()
 
 
 def _line_edit(text: str = "", *, password: bool = False, width: int = 240) -> QLineEdit:
@@ -745,11 +816,326 @@ class QuickLaunchEditor(QWidget):
             self.add_app(DEFAULT_QUICK_LAUNCH_APPS[0])
 
 
+class MenuLayoutEditor(QWidget):
+    """Draft tree editor with a preview derived from the same nodes."""
+
+    changed = Signal()
+
+    def __init__(self, layout: dict | None, parent=None, *, available_actions=None):
+        super().__init__(parent)
+        self.available_actions = frozenset(available_actions or MENU_ACTIONS.ids)
+        self.tree = QTreeWidget(self)
+        self.tree.setObjectName("menuLayoutTree")
+        self.tree.setHeaderLabels(["菜单项", "位置"])
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setIndentation(18)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.tree.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.tree.setAccessibleName("右键菜单内容与布局")
+        self.preview = QTreeWidget(self)
+        self.preview.setObjectName("menuLayoutPreview")
+        self.preview.setHeaderHidden(True)
+        self.preview.setUniformRowHeights(True)
+        self.preview.setIndentation(18)
+        self.preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.preview.setAccessibleName("右键菜单实时预览")
+        self.preview_label = QLabel("实时菜单预览", self)
+        self.preview_label.setObjectName("menuLayoutPreviewLabel")
+        preview_panel = QWidget(self)
+        preview_panel.setObjectName("menuLayoutPreviewPanel")
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(6)
+        preview_layout.addWidget(self.preview_label)
+        preview_layout.addWidget(self.preview)
+
+        self.up_button = QPushButton("上移", self)
+        self.down_button = QPushButton("下移", self)
+        self.promote_button = QPushButton("提升到根菜单", self)
+        self.target_select = ModernSelect(self, width=150)
+        self.move_to_button = QPushButton("移动到", self)
+        self.new_submenu_button = QPushButton("新建子菜单", self)
+        self.reset_button = QPushButton("恢复默认", self)
+        self.up_button.clicked.connect(lambda: self._move_selected(-1))
+        self.down_button.clicked.connect(lambda: self._move_selected(1))
+        self.promote_button.clicked.connect(self._promote_selected)
+        self.move_to_button.clicked.connect(self._move_selected_to_target)
+        self.new_submenu_button.clicked.connect(self._create_submenu)
+        self.reset_button.clicked.connect(self.reset_default)
+
+        self.button_layout = QGridLayout()
+        self.button_layout.setContentsMargins(0, 0, 0, 0)
+        self.button_layout.setHorizontalSpacing(8)
+        self.button_layout.setVerticalSpacing(8)
+        self._compact_buttons = None
+        self.split = QSplitter(Qt.Orientation.Horizontal, self)
+        self.split.setObjectName("menuEditorSplit")
+        self.split.addWidget(self.tree)
+        self.split.addWidget(preview_panel)
+        self.split.setStretchFactor(0, 3)
+        self.split.setStretchFactor(1, 2)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        box.addWidget(self.split)
+        box.addLayout(self.button_layout)
+
+        self.tree.itemChanged.connect(self._on_changed)
+        self.tree.model().rowsMoved.connect(self._on_changed)
+        self.set_layout(layout or load_default_menu_layout())
+        self._update_layout_mode()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._update_layout_mode()
+
+    def _update_layout_mode(self) -> None:
+        if hasattr(self, "split"):
+            compact = self.width() < 720
+            self.split.setOrientation(
+                Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+            )
+            self._layout_action_buttons(compact)
+
+    def _layout_action_buttons(self, compact: bool) -> None:
+        if self._compact_buttons is compact:
+            return
+        self._compact_buttons = compact
+        while self.button_layout.count():
+            self.button_layout.takeAt(0)
+        for column in range(8):
+            self.button_layout.setColumnStretch(column, 0)
+        if compact:
+            self.button_layout.addWidget(self.up_button, 0, 0)
+            self.button_layout.addWidget(self.down_button, 0, 1)
+            self.button_layout.addWidget(self.promote_button, 0, 2)
+            self.button_layout.addWidget(self.target_select, 1, 0)
+            self.button_layout.addWidget(self.move_to_button, 1, 1)
+            self.button_layout.addWidget(self.new_submenu_button, 1, 2)
+            self.button_layout.addWidget(self.reset_button, 2, 2)
+        else:
+            self.button_layout.addWidget(self.up_button, 0, 0)
+            self.button_layout.addWidget(self.down_button, 0, 1)
+            self.button_layout.addWidget(self.promote_button, 0, 2)
+            self.button_layout.addWidget(self.target_select, 0, 3)
+            self.button_layout.addWidget(self.move_to_button, 0, 4)
+            self.button_layout.addWidget(self.new_submenu_button, 0, 5)
+            self.button_layout.setColumnStretch(6, 1)
+            self.button_layout.addWidget(self.reset_button, 0, 7)
+        self.button_layout.invalidate()
+        self.button_layout.activate()
+        ancestor: QWidget | None = self
+        while ancestor is not None:
+            layout = ancestor.layout()
+            if layout is not None:
+                layout.invalidate()
+            ancestor.updateGeometry()
+            ancestor = ancestor.parentWidget()
+
+    def set_layout(self, layout: dict) -> None:
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        for node in layout.get("nodes", []):
+            self._append_node(None, node)
+        self.tree.expandAll()
+        self.tree.blockSignals(False)
+        self._refresh_targets()
+        self._on_changed()
+
+    def _append_node(self, parent: QTreeWidgetItem | None, node: dict) -> None:
+        node_type = str(node.get("type") or "")
+        node_id = str(node.get("id") or "")
+        label = str(node.get("label") or MENU_ACTIONS.label(node_id))
+        item = QTreeWidgetItem([label, ""])
+        item.setData(0, Qt.ItemDataRole.UserRole, {
+            "type": node_type,
+            "id": node_id,
+            "section": node.get("section"),
+        })
+        available = node_type != "action" or node_id in self.available_actions
+        item.setData(0, Qt.ItemDataRole.UserRole + 1, available)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        if node_type == "submenu":
+            # Submenus stay at the root: they can receive actions, but cannot be
+            # dragged into one another. Their root order is changed with the
+            # explicit move buttons.
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDropEnabled)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
+        else:
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDropEnabled)
+        item.setCheckState(0, Qt.CheckState.Checked if node.get("visible", True) else Qt.CheckState.Unchecked)
+        if node_type == "action" and node_id in {"modern_settings", "quit"}:
+            item.setCheckState(0, Qt.CheckState.Checked)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+        if not available:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+        if parent is None:
+            self.tree.addTopLevelItem(item)
+        else:
+            parent.addChild(item)
+        for child in node.get("children", []):
+            self._append_node(item, child)
+
+    def item_for_action(self, action_id: str) -> QTreeWidgetItem | None:
+        def find(parent):
+            for index in range(parent.childCount()):
+                item = parent.child(index)
+                data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+                if data.get("type") == "action" and data.get("id") == action_id:
+                    return item
+                found = find(item)
+                if found is not None:
+                    return found
+            return None
+        return find(self.tree.invisibleRootItem())
+
+    def value(self) -> dict:
+        def encode(item: QTreeWidgetItem) -> dict:
+            data = dict(item.data(0, Qt.ItemDataRole.UserRole) or {})
+            node = {"type": data.get("type"), "id": data.get("id"), "visible": item.checkState(0) == Qt.CheckState.Checked}
+            if data.get("section"):
+                node["section"] = data["section"]
+            if data.get("type") == "submenu":
+                node["label"] = item.text(0).strip()
+                node["children"] = [encode(item.child(i)) for i in range(item.childCount())]
+            return node
+        root = self.tree.invisibleRootItem()
+        return {"schema_version": 1, "layout_id": "user", "nodes": [encode(root.child(i)) for i in range(root.childCount())]}
+
+    def reset_default(self) -> None:
+        self.set_layout(load_default_menu_layout())
+
+    def _move_selected(self, offset: int) -> None:
+        item = self.tree.currentItem()
+        if item is None:
+            return
+        parent = item.parent() or self.tree.invisibleRootItem()
+        index = parent.indexOfChild(item)
+        target = index + offset
+        if 0 <= target < parent.childCount():
+            parent.takeChild(index)
+            parent.insertChild(target, item)
+            self.tree.setCurrentItem(item)
+            self._on_changed()
+
+    def _promote_selected(self) -> None:
+        item = self.tree.currentItem()
+        if item is None or item.parent() is None:
+            return
+        item.parent().removeChild(item)
+        self.tree.addTopLevelItem(item)
+        self.tree.setCurrentItem(item)
+        self._on_changed()
+
+    def _refresh_targets(self) -> None:
+        selected = self.target_select.currentData()
+        self.target_select.clear()
+        self.target_select.addItem("根菜单", "__root__")
+        root = self.tree.invisibleRootItem()
+        def add_submenus(parent):
+            for index in range(parent.childCount()):
+                item = parent.child(index)
+                data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+                if data.get("type") == "submenu":
+                    self.target_select.addItem(item.text(0), data.get("id"))
+                add_submenus(item)
+        add_submenus(root)
+        if selected is not None:
+            self.target_select.setCurrentData(selected)
+
+    def _move_selected_to_target(self) -> None:
+        item = self.tree.currentItem()
+        if item is None:
+            return
+        item_data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        target_id = self.target_select.currentData()
+        if target_id == "__root__":
+            self._promote_selected()
+            return
+        if item_data.get("type") == "submenu":
+            return
+        target = None
+        root = self.tree.invisibleRootItem()
+        def find(parent):
+            nonlocal target
+            for index in range(parent.childCount()):
+                candidate = parent.child(index)
+                data = candidate.data(0, Qt.ItemDataRole.UserRole) or {}
+                if data.get("type") == "submenu" and data.get("id") == target_id:
+                    target = candidate
+                    return
+                find(candidate)
+        find(root)
+        if target is None or target is item:
+            return
+        parent = item.parent() or root
+        parent.removeChild(item)
+        target.addChild(item)
+        target.setExpanded(True)
+        self.tree.setCurrentItem(item)
+        self._on_changed()
+
+    def _create_submenu(self) -> None:
+        label, accepted = QInputDialog.getText(self, "新建子菜单", "子菜单名称")
+        label = label.strip()
+        if not accepted or not label:
+            return
+        existing = {
+            str((self.tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) or {}).get("id") or "")
+            for i in range(self.tree.topLevelItemCount())
+        }
+        index = 1
+        while f"user.submenu-{index}" in existing:
+            index += 1
+        self._append_node(None, {
+            "type": "submenu",
+            "id": f"user.submenu-{index}",
+            "label": label[:40],
+            "visible": True,
+            "children": [],
+        })
+        self._refresh_targets()
+        self._on_changed()
+
+    def _on_changed(self, *_args) -> None:
+        self.tree.blockSignals(True)
+        self.preview.clear()
+        def refresh_positions(source):
+            for index in range(source.childCount()):
+                item = source.child(index)
+                if item.data(0, Qt.ItemDataRole.UserRole + 1) is False:
+                    item.setText(1, "此平台不可用")
+                else:
+                    item.setText(1, "根菜单" if item.parent() is None else item.parent().text(0))
+                refresh_positions(item)
+        refresh_positions(self.tree.invisibleRootItem())
+        resolved = resolve_menu_layout(
+            self.value(),
+            registered_actions=MENU_ACTIONS.ids,
+            available_actions=self.available_actions,
+        )
+        def add_preview(nodes, target):
+            for node in nodes:
+                label = str(node.get("label") or MENU_ACTIONS.label(str(node.get("id") or "")))
+                clone = QTreeWidgetItem([label])
+                target.addChild(clone)
+                add_preview(node.get("children", ()), clone)
+        add_preview(resolved.nodes, self.preview.invisibleRootItem())
+        self.preview.expandAll()
+        self.tree.blockSignals(False)
+        self.changed.emit()
+
+
 class _AiSettingsPage(QWidget):
     test_done = Signal(bool, str)
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
+        self.setObjectName("aiSettingsContent")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         # No-chat bundles exclude pet.chat and never construct this optional page.
         from .chat.models import ProviderConfig, SecretStore
         from .chat.providers import test_connection
@@ -858,12 +1244,12 @@ class _AiSettingsPage(QWidget):
         self._test_row = self.findChild(SettingRow, "settingRow_connection_test")
         if self._test_row is not None:
             self.test_result = self._test_row.hint_label
-        root.addWidget(SettingsSection("生成参数", [
+        root.addWidget(SettingsSection("生成参数（高级）", [
             SettingRow("timeout", "请求超时", "等待模型服务响应的最长时间。", self.timeout),
             SettingRow("temperature", "Temperature", "数值越高，回答越随机。", self.temperature),
             SettingRow("max_tokens", "最大输出 Token", "限制模型单次回复的最大长度。", self.tokens),
             SettingRow("skip_ssl", "跳过 SSL 证书验证", "仅用于本地网关或自签名证书。", self.skip_ssl),
-        ], self))
+        ], self, advanced=True))
         root.addStretch(1)
 
     def appearance_rows(self) -> list[SettingRow]:
@@ -1068,7 +1454,7 @@ class ModernSettingsDialog(QDialog):
 
         sidebar_pane = QFrame(self)
         sidebar_pane.setObjectName("sidebarPane")
-        sidebar_pane.setFixedWidth(188)
+        sidebar_pane.setFixedWidth(200)
         sidebar_layout = QVBoxLayout(sidebar_pane)
         sidebar_layout.setContentsMargins(12, 16, 12, 12)
         sidebar_layout.setSpacing(9)
@@ -1095,6 +1481,7 @@ class ModernSettingsDialog(QDialog):
         sidebar_layout.addWidget(self.search_status)
         self.sidebar = QListWidget(sidebar_pane)
         self.sidebar.setObjectName("settingsSidebar")
+        self.sidebar.setIconSize(QSize(18, 18))
         self.sidebar.setSpacing(2)
         sidebar_layout.addWidget(self.sidebar, 1)
 
@@ -1283,6 +1670,35 @@ class ModernSettingsDialog(QDialog):
         appearance_layout.addStretch(1)
         self._add_page("外观", "appearance", self._page_shell("外观", appearance_content))
 
+        menu_content = QWidget()
+        menu_page_layout = QVBoxLayout(menu_content)
+        menu_page_layout.setContentsMargins(0, 0, 0, 0)
+        menu_page_layout.setSpacing(18)
+        self.menu_template_select = ModernSelect(menu_content, width=156)
+        self.menu_template_select.addItem("新版菜单", "modern")
+        self.menu_template_select.addItem("旧版兼容菜单", "legacy")
+        self.menu_template_select.setCurrentData(
+            str(self.config.get("context_menu_template", "modern") or "modern")
+        )
+        menu_available_actions = set(MENU_ACTIONS.ids)
+        if sys.platform != "win32":
+            menu_available_actions.discard("proactive_screen")
+        if not self.include_ai:
+            menu_available_actions.difference_update({"chat", "look_screen", "balance", "proactive_screen"})
+        if not self.config.get("quick_launch_apps", DEFAULT_QUICK_LAUNCH_APPS):
+            menu_available_actions.discard("quick_launch")
+        self.menu_layout_editor = MenuLayoutEditor(
+            self.config.get("context_menu_layout"),
+            menu_content,
+            available_actions=menu_available_actions,
+        )
+        menu_page_layout.addWidget(SettingsSection("内容与布局", [
+            SettingRow("menu_template", "菜单模式", "旧版仅用于迁移期兼容；内容编排只作用于新版菜单。", self.menu_template_select),
+            SettingRow("context_menu_layout", "菜单编排", "调整显示、顺序和层级；左侧编辑，右侧同步预览。", self.menu_layout_editor, stacked=True),
+        ], menu_content))
+        menu_page_layout.addStretch(1)
+        self._add_page("菜单", "application", self._page_shell("菜单", menu_content))
+
         launcher_content = QWidget()
         launcher_layout = QVBoxLayout(launcher_content)
         launcher_layout.setContentsMargins(0, 0, 0, 0)
@@ -1306,9 +1722,12 @@ class ModernSettingsDialog(QDialog):
         if sys.platform == "win32" and self.include_ai:
             self._add_page("主动识屏", "screen", self._page_shell("主动识屏", self._proactive_page_content()))
 
-        if self.ai_page is not None:
-            self._add_page("AI 设置", "chat", self._page_shell("AI 设置", self.ai_page))
+        # AI rows are composed directly into the final capability domain by
+        # _rebuild_domain_navigation. Do not temporarily hand the controller
+        # widget to a QScrollArea: that creates a second Qt ownership path when
+        # its rows are reparented into the shared card system.
 
+        self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
         self._search_rows = self.findChildren(SettingRow)
@@ -1344,8 +1763,10 @@ class ModernSettingsDialog(QDialog):
         self.no_move_check.setChecked(bool(self.config.get("no_move", False)))
         self.mouse_through_check = ToggleSwitch(self)
         self.mouse_through_check.setChecked(bool(self.config.get("mouse_through", False)))
-        self.cursor_hidden_passthrough_check = ToggleSwitch(self)
-        self.cursor_hidden_passthrough_check.setChecked(bool(self.config.get("cursor_hidden_passthrough", True)))
+        self.cursor_hidden_passthrough_check = None
+        if sys.platform == "win32":
+            self.cursor_hidden_passthrough_check = ToggleSwitch(self)
+            self.cursor_hidden_passthrough_check.setChecked(bool(self.config.get("cursor_hidden_passthrough", True)))
         self.drag_physics_check = ToggleSwitch(self)
         self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
 
@@ -2053,6 +2474,9 @@ class ModernSettingsDialog(QDialog):
         super().showEvent(event)
         # 兜底：未经 _present_dialog 直接 show 的路径仍要避让桌宠
         self.move_away_from_pet()
+        if not getattr(self, "_initial_focus_assigned", False):
+            self._initial_focus_assigned = True
+            self.sidebar.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _move_away_from(self, pet_geo: QRect) -> None:
         """首次显示时把窗口移到不与桌宠相交的位置（右侧优先，再左侧/下方/上方）。"""
@@ -2072,7 +2496,7 @@ class ModernSettingsDialog(QDialog):
     def _page_shell(self, title: str, content: QWidget) -> QWidget:
         page = QWidget(self.pages)
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(28, 22, 26, 18)
+        layout.setContentsMargins(30, 24, 28, 20)
         layout.setSpacing(12)
         heading = QLabel(title, page)
         heading.setObjectName("pageTitle")
@@ -2093,6 +2517,148 @@ class ModernSettingsDialog(QDialog):
         item.setSizeHint(QSize(0, 34))
         self.sidebar.addItem(item)
         self.pages.addWidget(page)
+
+    def _rebuild_domain_navigation(self) -> None:
+        """Move existing rows into stable capability domains without cloning state."""
+        old_pages = {
+            self.sidebar.item(index).text(): self.pages.widget(index)
+            for index in range(self.pages.count())
+        }
+        all_rows = list(self.findChildren(SettingRow))
+        claimed: set[SettingRow] = set()
+
+        def claim(*setting_ids: str) -> list[SettingRow]:
+            rows = []
+            for setting_id in setting_ids:
+                row = self.findChild(SettingRow, f"settingRow_{setting_id}")
+                if row is not None and row not in claimed:
+                    claimed.add(row)
+                    rows.append(row)
+            return rows
+
+        def claim_prefix(prefix: str) -> list[SettingRow]:
+            rows = [row for row in all_rows if row.objectName().startswith(f"settingRow_{prefix}") and row not in claimed]
+            claimed.update(rows)
+            return rows
+
+        def page_content(sections) -> QWidget:
+            content = QWidget(self)
+            layout = QVBoxLayout(content)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(18)
+            for section in sections:
+                title, rows, *options = section
+                rows = [row for row in rows if row is not None]
+                if rows:
+                    layout.addWidget(SettingsSection(
+                        title,
+                        rows,
+                        content,
+                        advanced=bool(options and options[0]),
+                    ))
+            layout.addStretch(1)
+            return content
+
+        general = page_content([
+            ("应用启动", claim("autostart")),
+            ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
+        ])
+        collision_primary = claim("collision_enabled", "collision_sound_enabled")
+        collision_advanced = claim(
+            "collision_restitution",
+            "collision_friction",
+            "collision_mass_scale",
+            "collision_impulse_cap",
+            "collision_sound_volume",
+        )
+        pet = page_content([
+            ("显示", claim("scale", "pet_opacity")),
+            ("动画与移动", claim("playback_speed", "animation_gap", "no_move", "music_sing")),
+            ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
+            ("多开碰撞", collision_primary),
+            ("碰撞参数（高级）", collision_advanced, True),
+        ])
+        interaction = page_content([
+            ("输入", claim("mouse_through")),
+            ("点击反馈", claim_prefix("click_")),
+            ("自言自语", claim("self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min", "self_talk_max", "self_talk_texts", "self_talk_images")),
+        ])
+        # click_talk_bindings shares the click_ prefix and remains in interaction.
+        menu = page_content([
+            ("内容与布局", claim("menu_template", "context_menu_layout")),
+            ("快捷启动", claim("quick_launch_apps")),
+            ("外观", claim("menu_theme", "menu_density", "menu_radius", "menu_font", "menu_font_size", "menu_translucent", "menu_opacity")),
+            ("高级配色", claim(
+                "light_background", "light_foreground", "light_hover",
+                "dark_background", "dark_foreground", "dark_hover",
+            ), True),
+            ("彩蛋入口", claim_prefix("egg_")),
+        ])
+        island_rows = list(old_pages.get("灵动岛", QWidget()).findChildren(SettingRow))
+        claimed.update(island_rows)
+        desktop_components = page_content([("桌面胶囊（灵动岛）", island_rows)])
+
+        ai_sections = None
+        if self.ai_page is not None:
+            balance_rows = claim_prefix("balance_")
+            appearance_rows = claim("chat_ui_style", "chat_background", "chat_background_file", "chat_background_opacity", "chat_background_fill", "modern_chat_card_opacity")
+            ai_sections = page_content([
+                ("模型与连接", claim(
+                    "provider_name", "api_url", "model", "api_key",
+                    "system_prompt", "connection_test",
+                )),
+                ("视觉能力", claim(
+                    "vision_same", "vision_model", "vision_url", "vision_key",
+                )),
+                ("生成参数（高级）", claim(
+                    "timeout", "temperature", "max_tokens", "skip_ssl",
+                ), True),
+                ("对话窗口", appearance_rows),
+                ("余额与服务状态", balance_rows),
+            ])
+            ai_sections.setObjectName("settingsDomain_ai")
+            # Keep the control owner alive for save/dependency behavior, but
+            # visible rows now belong directly to the shared domain layout.
+            self.ai_page.setParent(self)
+            self.ai_page.hide()
+
+        proactive_rows = list(old_pages.get("主动识屏", QWidget()).findChildren(SettingRow))
+        claimed.update(proactive_rows)
+        automation = page_content([
+            ("Agent 文案", claim_prefix("agent_thinking_")),
+            ("Agent 提示音", claim_prefix("agent_sound_")),
+            ("主动感知", proactive_rows),
+        ])
+
+        # Preserve any newly added row until it receives an explicit domain decision.
+        leftovers = [
+            row for row in all_rows
+            if row not in claimed
+            and (self.ai_page is None or not self.ai_page.isAncestorOf(row))
+        ]
+        if leftovers:
+            layout = automation.layout()
+            layout.insertWidget(max(0, layout.count() - 1), SettingsSection("待分类（开发期）", leftovers, automation))
+
+        while self.pages.count():
+            self.pages.removeWidget(self.pages.widget(0))
+        self.sidebar.clear()
+        domain_content = {
+            "常规": general,
+            "桌宠": pet,
+            "互动": interaction,
+            "菜单": menu,
+            "桌面组件": desktop_components,
+            "AI 与对话": ai_sections,
+            "自动化与联动": automation,
+        }
+        for label, icon in SETTINGS_DOMAIN_NAV:
+            content = domain_content.get(label)
+            if content is None:
+                continue
+            self._add_page(label, icon, self._page_shell(label, content))
+        for page in old_pages.values():
+            page.deleteLater()
 
     def _clear_search_matches(self) -> None:
         for row in self._search_rows:
@@ -2177,8 +2743,9 @@ class ModernSettingsDialog(QDialog):
 
     def _save(self) -> None:
         """「保存并退出」：写入配置并关闭对话框。"""
+        if not self._write_config():
+            return
         self._saved_via_button = True
-        self._write_config()
         self._apply_autostart()
         self.settings_saved.emit()
         self.accept()
@@ -2190,6 +2757,19 @@ class ModernSettingsDialog(QDialog):
         已知限制：已暴露字段仍是 last-writer-wins（对话框获胜）。
         返回是否成功落盘；失败时提示用户。
         """
+        menu_layout_value = self.menu_layout_editor.value()
+        menu_validation = resolve_menu_layout(
+            menu_layout_value,
+            registered_actions=MENU_ACTIONS.ids,
+            available_actions=MENU_ACTIONS.ids,
+        )
+        if menu_validation.source == "fallback":
+            QMessageBox.warning(
+                self,
+                "菜单布局无效",
+                "菜单布局未保存：" + "、".join(menu_validation.diagnostics),
+            )
+            return False
         self.config._load()
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())
@@ -2300,6 +2880,12 @@ class ModernSettingsDialog(QDialog):
             "dark_foreground": self.dark_foreground_picker.text(),
             "dark_hover": self.dark_hover_picker.text(),
         })
+        self.config.set("context_menu_template", self.menu_template_select.currentData())
+        default_menu_nodes = load_default_menu_layout().get("nodes", [])
+        self.config.set(
+            "context_menu_layout",
+            None if menu_layout_value.get("nodes") == default_menu_nodes else menu_layout_value,
+        )
         self.config.set("menu_easter_egg", {
             "enabled": self.egg_enabled_check.isChecked(),
             "title": self.egg_title_edit.text(),
@@ -2357,7 +2943,9 @@ class ModernSettingsDialog(QDialog):
         """
         if not getattr(self, "_saved_via_button", False):
             try:
-                self._write_config()
+                if not self._write_config():
+                    event.ignore()
+                    return
                 self._apply_autostart()
             except Exception:
                 logging.exception("关闭设置时保存配置失败")
@@ -2390,8 +2978,28 @@ QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #66666e; }
 SettingRow[searchMatch="true"] { background: #2c3a4e; }
 QListWidget#quickLaunchList { background: #26262c; border: 1px solid #3c3c44; }
 QListWidget#quickLaunchList::item:selected { background: #3a3a46; color: #ffffff; }
+QTreeWidget#menuLayoutTree, QTreeWidget#menuLayoutPreview {
+    background: #2a2a30;
+    border-color: #3a3a42;
+}
+QTreeWidget#menuLayoutTree::item:hover { background: #303036; }
+QTreeWidget#menuLayoutTree::item:selected { background: #3a3a46; color: #ffffff; }
+QTreeWidget#menuLayoutTree QHeaderView::section {
+    background: #303036;
+    border-bottom-color: #404048;
+    color: #a8a8b0;
+}
+QLabel#menuLayoutPreviewLabel { color: #a8a8b0; }
 QPushButton { background: #3a3a42; border: 1px solid #4a4a54; color: #e4e4e9; }
 QPushButton:hover { background: #44444e; }
+QPushButton#advancedSectionToggle {
+    min-height: 40px; padding: 0 38px 0 14px; text-align: left;
+    background: #2a2a30; border: 1px solid #3a3a42; border-radius: 10px;
+    color: #e4e4e9; font-size: 13px; font-weight: 600;
+}
+QPushButton#advancedSectionToggle:hover { background: #303036; border-color: #45454d; }
+QPushButton#advancedSectionToggle:focus { border: 2px solid #0a84ff; }
+QLabel#disclosureChevron { color: #a8a8b0; font-size: 18px; background: transparent; }
 QToolButton { color: #e4e4e9; }
 QCheckBox, QRadioButton, QComboBox, QListWidget, QTreeWidget, QTableView { color: #e4e4e9; }
 """
@@ -2439,6 +3047,7 @@ QFrame#sidebarPane {
     border-right: 1px solid #e3e5e8;
 }
 QStackedWidget { background: #fcfcfd; }
+QWidget#aiSettingsContent { background: transparent; }
 QLineEdit#settingsSearch {
     min-height: 30px;
     padding: 0 8px;
@@ -2488,19 +3097,19 @@ QListWidget#settingsSidebar::item:selected {
     color: #171717;
 }
 QLabel#pageTitle {
-    font-size: 26px;
+    font-size: 22px;
     font-weight: 600;
     color: #171717;
 }
 QLabel#sectionTitle {
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     color: #2b2b2b;
 }
 QFrame#settingsCard {
     background: #ffffff;
     border: 1px solid #e2e4e8;
-    border-radius: 11px;
+    border-radius: 12px;
 }
 QFrame#cardSeparator {
     background: #eceef1;
@@ -2509,8 +3118,8 @@ QFrame#cardSeparator {
     margin-right: 14px;
 }
 QLabel#settingLabel {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 500;
     color: #252525;
 }
 QLabel#settingHint {
@@ -2539,6 +3148,40 @@ QListWidget#quickLaunchList::item {
     border-radius: 6px;
 }
 QListWidget#quickLaunchList::item:selected { background: #e8e8e8; color: #202020; }
+QTreeWidget#menuLayoutTree, QTreeWidget#menuLayoutPreview {
+    background: #ffffff;
+    border: 1px solid #e2e4e8;
+    border-radius: 10px;
+    outline: none;
+    padding: 4px;
+}
+QTreeWidget#menuLayoutTree::item, QTreeWidget#menuLayoutPreview::item {
+    min-height: 28px;
+    padding: 1px 5px;
+    border-radius: 6px;
+}
+QTreeWidget#menuLayoutTree::item:hover { background: #f4f5f6; }
+QTreeWidget#menuLayoutTree::item:selected {
+    background: #e9eef5;
+    color: #202020;
+}
+QTreeWidget#menuLayoutPreview::item:hover { background: transparent; }
+QTreeWidget#menuLayoutTree QHeaderView::section {
+    min-height: 28px;
+    padding: 0 8px;
+    background: #f7f7f8;
+    border: none;
+    border-bottom: 1px solid #e8e9ec;
+    color: #6f7378;
+    font-size: 12px;
+    font-weight: 500;
+}
+QLabel#menuLayoutPreviewLabel {
+    color: #6f7378;
+    font-size: 12px;
+    font-weight: 500;
+    padding-left: 2px;
+}
 QPushButton {
     min-height: 26px;
     padding: 1px 12px;
@@ -2548,4 +3191,22 @@ QPushButton {
     font-weight: 500;
 }
 QPushButton:hover { background: #f0f0f0; }
+QPushButton:focus {
+    border: 2px solid #0a84ff;
+    padding: 0 11px;
+}
+QPushButton#advancedSectionToggle {
+    min-height: 40px;
+    padding: 0 38px 0 14px;
+    text-align: left;
+    background: #ffffff;
+    border: 1px solid #e2e4e8;
+    border-radius: 10px;
+    color: #252525;
+    font-size: 13px;
+    font-weight: 600;
+}
+QPushButton#advancedSectionToggle:hover { background: #f7f7f8; border-color: #d7d9dd; }
+QPushButton#advancedSectionToggle:focus { border: 2px solid #0a84ff; }
+QLabel#disclosureChevron { color: #777b80; font-size: 18px; background: transparent; }
 """

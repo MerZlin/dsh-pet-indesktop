@@ -107,6 +107,16 @@ def vector_menu_icon(menu: QMenu, name: str, size: int | None = None) -> QIcon:
         painter.drawEllipse(QPointF(8.0, 8.0), 2.15, 2.15)
     elif name == "play":
         painter.drawPolygon(QPolygonF([QPointF(4.0, 2.5), QPointF(13.0, 8.0), QPointF(4.0, 13.5)]))
+    elif name == "pet":
+        painter.drawEllipse(QPointF(8.0, 9.4), 3.8, 3.2)
+        for x, y in ((3.8, 5.2), (6.5, 3.6), (9.5, 3.6), (12.2, 5.2)):
+            painter.drawEllipse(QPointF(x, y), 1.25, 1.45)
+    elif name == "interaction":
+        painter.drawEllipse(QPointF(7.0, 8.0), 3.0, 3.0)
+        painter.drawLine(QPointF(10.0, 10.2), QPointF(13.7, 13.5))
+        painter.drawLine(QPointF(2.0, 3.4), QPointF(3.5, 4.9))
+        painter.drawLine(QPointF(6.2, 1.5), QPointF(6.2, 3.5))
+        painter.drawLine(QPointF(1.5, 8.0), QPointF(3.5, 8.0))
     elif name == "speed":
         painter.drawArc(QRectF(2.0, 3.0, 12.0, 12.0), 0, 180 * 16)
         painter.drawLine(QPointF(8.0, 9.0), QPointF(11.6, 5.6))
@@ -162,6 +172,17 @@ def vector_menu_icon(menu: QMenu, name: str, size: int | None = None) -> QIcon:
         painter.drawRoundedRect(QRectF(2.0, 2.0, 12.0, 12.0), 2.0, 2.0)
         for x, y in ((5.0, 5.0), (11.0, 5.0), (5.0, 11.0), (11.0, 11.0)):
             painter.drawEllipse(QPointF(x, y), 1.15, 1.15)
+    elif name == "island":
+        painter.drawRoundedRect(QRectF(1.5, 4.2, 13.0, 7.6), 3.8, 3.8)
+        painter.setBrush(QBrush(color))
+        painter.drawEllipse(QPointF(11.2, 8.0), 1.15, 1.15)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+    elif name == "automation":
+        painter.drawLine(QPointF(4.0, 4.0), QPointF(11.8, 7.8))
+        painter.drawLine(QPointF(4.0, 12.0), QPointF(11.8, 8.2))
+        painter.drawEllipse(QPointF(3.5, 3.8), 2.0, 2.0)
+        painter.drawEllipse(QPointF(3.5, 12.2), 2.0, 2.0)
+        painter.drawEllipse(QPointF(12.5, 8.0), 2.0, 2.0)
     elif name == "appearance":
         painter.drawEllipse(QPointF(8.0, 8.0), 5.8, 5.8)
         painter.drawArc(QRectF(4.0, 4.0, 8.0, 8.0), 90 * 16, 180 * 16)

@@ -587,7 +587,8 @@ def test_modern_pet_context_menu_has_spawn_action_with_avatar_icon(monkeypatch):
 
     direct_actions = [action for action in menu.actions() if not action.isSeparator()]
     assert direct_actions
-    spawn_action = next(action for action in direct_actions if action.text() == "生小肥鱼")
+    controls = next(action.menu() for action in direct_actions if action.text() == "桌宠控制")
+    spawn_action = next(action for action in controls.actions() if action.text() == "生小肥鱼")
     assert not spawn_action.icon().isNull()
     spawn_action.trigger()
     assert pet.spawn_count == 1
@@ -685,7 +686,8 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     from PySide6.QtWidgets import QApplication, QMenu
 
     import pet.window as window_mod
-    import pet.context_menus.modern as modern_menu_mod
+    import pet.context_menus.registry as registry_mod
+    import pet.context_menus.shared as shared_menu_mod
 
     class FakeConfig:
         def __init__(self):
@@ -742,7 +744,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     monkeypatch.setattr(window_mod.catalog, "list_available_characters", lambda: ["shenshen"])
     opened_urls = []
     monkeypatch.setattr(
-        modern_menu_mod.QDesktopServices,
+        registry_mod.QDesktopServices,
         "openUrl",
         lambda url: opened_urls.append(url.toString()) or True,
     )
@@ -758,26 +760,15 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
         "切换角色",
         "播放速率",
         "大小",
-        "拖动物理",
-        "回到右下角",
-        "隐藏桌宠",
-        "不移动",
-        "鼠标穿透",
-        "窗口置顶",
-        "开机自启",
-        "生小肥鱼",
-        "DeepSeek 余额",
-        "启动 DeepSeek Harness",
-        "打开网页版 DeepSeek",
+        "桌宠控制",
         "快捷启动",
-        "更新与帮助",
+        "工具与帮助",
+        "Agent 联动",
     ]
     if sys.platform == "win32":
         expected_labels.append("主动识屏")  # 仅 Windows + 有聊天能力时显示
     expected_labels.extend([
-        "Agent 联动",
         "桌宠设置",
-        "切换回旧版菜单",
         "退出",
     ])
     assert labels == expected_labels
@@ -792,12 +783,11 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     ]
     assert next(action for action in menu.actions() if action.text() == "播放速率").menu() is not None
     assert next(action for action in menu.actions() if action.text() == "大小").menu() is not None
-    next(action for action in menu.actions() if action.text() == "打开网页版 DeepSeek").trigger()
-    assert opened_urls == [modern_menu_mod.DEEPSEEK_WEB_URL]
-    # 现代菜单必须能切回旧版（模板声明了 switch_to，运行时不能断线）
-    switch_action = next(action for action in menu.actions() if "旧版菜单" in action.text())
-    switch_action.trigger()
-    assert pet.cfg.get("context_menu_template") == "legacy"
+    tools = next(action.menu() for action in menu.actions() if action.text() == "工具与帮助")
+    next(action for action in tools.actions() if action.text() == "打开网页版 DeepSeek").trigger()
+    assert opened_urls == [shared_menu_mod.DEEPSEEK_WEB_URL]
+    # 模板模式已迁入设置；默认菜单不再用低频迁移命令占据根菜单。
+    assert all("旧版菜单" not in action.text() for action in menu.actions())
     menu.close()
     app.processEvents()
 
@@ -975,7 +965,8 @@ def test_modern_menu_starts_with_ojingjing_entry_and_uses_pet_avatar(monkeypatch
     assert entry.height() == 39
     assert entry.findChild(QWidget, "ojingjingAvatar") is not None
     assert entry.findChild(QWidget, "ojingjingClickAccessory") is not None
-    spawn = next(action for action in menu.actions() if action.text() == "生小肥鱼")
+    controls = next(action.menu() for action in menu.actions() if action.text() == "桌宠控制")
+    spawn = next(action for action in controls.actions() if action.text() == "生小肥鱼")
     pixmap = spawn.icon().pixmap(18, 18)
     center = pixmap.toImage().pixelColor(pixmap.width() // 2, pixmap.height() // 2)
     assert center.blue() > center.red() + 80
@@ -1140,13 +1131,10 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert dialog.size() == QSize(800, 560)
     assert dialog.minimumSize() == QSize(720, 500)
     assert dialog.font().pixelSize() == 13
-    assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 188
+    assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 200
     assert isinstance(dialog.sidebar, QListWidget)
     assert isinstance(dialog.pages, QStackedWidget)
-    expected_pages = ["常规", "灵动岛", "桌宠行为", "外观", "快捷启动"]
-    if sys.platform == "win32":
-        expected_pages.append("主动识屏")  # 主动识屏设置页仅 Windows + 有聊天能力时挂载
-    expected_pages.append("AI 设置")
+    expected_pages = ["常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动"]
     assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == expected_pages
     assert dialog.pages.count() == len(expected_pages)
     assert dialog.search_edit.placeholderText() == "搜索设置…"
@@ -1157,10 +1145,20 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert "background: #f7f7f8" in dialog.styleSheet()
     section_titles = [label.text() for label in dialog.findChildren(settings_mod.QLabel, "sectionTitle")]
     assert {
-        "应用启动", "窗口与系统", "动画", "点击反馈", "自言自语",
-        "桌宠显示", "菜单外观", "AI 对话外观", "已配置应用",
-        "模型与连接", "视觉能力", "生成参数",
+        "应用启动", "窗口与系统", "动画与移动", "点击反馈", "自言自语",
+        "显示", "外观", "对话窗口", "快捷启动", "内容与布局",
+        "模型与连接", "视觉能力",
     }.issubset(set(section_titles))
+    advanced_titles = [
+        button.text()
+        for button in dialog.findChildren(
+            settings_mod.SettingsDisclosureHeader,
+            "advancedSectionToggle",
+        )
+    ]
+    assert {"生成参数（高级）", "碰撞参数（高级）", "高级配色"}.issubset(
+        set(advanced_titles)
+    )
     assert {"浅色主题", "深色主题", "彩蛋入口"}.issubset(set(section_titles))
     scale_row = dialog.findChild(settings_mod.QWidget, "settingRow_scale")
     assert scale_row is not None
@@ -1171,7 +1169,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert "QSpinBox::up-button" in stylesheet
     assert "QScrollBar::handle:vertical" in stylesheet
     assert "font-size: 13px" in stylesheet
-    assert "font-size: 26px" in stylesheet
+    assert "font-size: 22px" in stylesheet
     assert "min-height: 20px" in stylesheet
     dialog.scale_combo.setCurrentIndex(dialog.scale_combo.findData(0.85))
     dialog.on_top_check.setChecked(False)
@@ -1200,13 +1198,11 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         return next(index for index in range(dialog.pages.count()) if dialog.pages.widget(index).isAncestorOf(row))
 
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_autostart")) == 0
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 1
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 3
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 3
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == (
-        6 if sys.platform == "win32" else 5  # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
-    )
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 1
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 5
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == 5
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
@@ -1473,8 +1469,7 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     dialog.search_edit.setFocus()
     dialog.search_edit.setText("API 地址")
     app.processEvents()
-    # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
-    assert dialog.sidebar.currentRow() == (6 if sys.platform == "win32" else 5)
+    assert dialog.sidebar.currentRow() == 5  # 稳定的“AI 与对话”能力域
     api_row = dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")
     assert api_row.property("searchMatch") is True
     QTest.keyClick(dialog.search_edit, Qt.Key.Key_Return)
@@ -2185,6 +2180,10 @@ def test_product_copy_has_no_external_brand_reference():
         for path in paths:
             if not path.is_file() or path.suffix.lower() not in {".py", ".qss", ".md", ".json"}:
                 continue
+            # Competitive research records source names by design; they are
+            # evidence, not user-facing product copy.
+            if path.name.endswith("-RESEARCH.md"):
+                continue
             if forbidden in path.read_text(encoding="utf-8", errors="ignore").lower():
                 hits.append(str(path))
     assert hits == []
@@ -2399,5 +2398,3 @@ def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path)
 
     # 相对路径（内置 assets）仍走既有回退解析
     assert _resolve_self_talk_image_dir("") == ""
-
-
