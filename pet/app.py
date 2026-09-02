@@ -32,6 +32,7 @@ from . import updater
 from .click_sound import warm_click_sound_effects
 from .config import APP_DIR_NAME, Config, _default_base
 from .context_menus.shared import open_deepseek_web
+from .desktop_notify import DesktopNotification, position_stack
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
 from .library import MovieLibrary
@@ -180,6 +181,7 @@ class PetApp:
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
         self._notification_click_callback = None
+        self._toast_windows: list[DesktopNotification] = []
         self.chat_window = None
         self.legacy_chat_window = None
         self.modern_chat_window = None
@@ -798,16 +800,25 @@ class PetApp:
         )
 
     def system_notify(self, title: str, message: str, *, on_click=None, duration_ms: int = 5000) -> None:
-        """Show a desktop tray notification; clicking routes to on_click."""
-        if self.tray is None:
-            return
-        self._notification_click_callback = on_click
-        self.tray.showMessage(
+        """Show a bottom-right desktop notification (self-drawn, tray-independent)."""
+        self._prune_toasts()
+        toast = DesktopNotification(
             str(title),
             str(message),
-            QSystemTrayIcon.MessageIcon.Information,
-            int(duration_ms),
+            on_click=on_click,
+            duration_ms=int(duration_ms),
         )
+        self._toast_windows.append(toast)
+        toast.destroyed.connect(lambda _obj=None: self._prune_toasts())
+        toast.show()
+        position_stack(self._toast_windows)
+
+    def _prune_toasts(self) -> None:
+        self._toast_windows = [
+            w for w in self._toast_windows
+            if not (hasattr(w, "is_closed") and w.is_closed())
+        ]
+        position_stack(self._toast_windows)
 
     def _on_tray_message_clicked(self) -> None:
         callback = self._notification_click_callback
