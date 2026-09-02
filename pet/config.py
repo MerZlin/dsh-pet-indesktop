@@ -580,6 +580,16 @@ class Config:
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
             "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
+            # P3 broker（灰度默认关，不进设置 UI）：多开同角色空闲素材共享解码开关。
+            # 前置条件 = collision_enabled（broker 骑在碰撞 QLocal 通道上）。
+            # ⚠ 平台限定（P3A R2 P0-1 / R3 收口）：本键只在 Windows x86/x64
+            # （AMD64/x86_64，TSO）上生效——共享内存 seqlock 的 seq 提交词只经
+            # ctypes 普通 8B load/store，无 acquire/release/跨进程 barrier，
+            # 弱序平台（ARM macOS/Linux 及 **Windows ARM64**）上协议不作正确性
+            # 声明。非支持平台即使本键为 True，BrokerFacade 的 enabled 判定
+            # （decode_broker.broker_platform_supported()：OS + 架构双重检查）
+            # 也强制为 False：本键只是「用户请求」，平台门禁在启用点收口。
+            "decode_broker_enabled": False,
             **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
@@ -705,6 +715,7 @@ class Config:
             "collision_enabled", "collision_restitution", "collision_friction",
             "collision_mass_scale", "collision_impulse_cap",
             "collision_sound_enabled", "collision_sound_volume",
+            "decode_broker_enabled",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -815,6 +826,16 @@ class Config:
         self.data["idle_low_fps_enabled"] = bool(self.data.get("idle_low_fps_enabled", False))
         self.data["idle_low_fps_threshold"] = _float_or_default(
             self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
+        )
+        # P3 broker（灰度默认关）：多开同角色空闲素材共享解码开关。
+        # ⚠ 平台限定（P3A R2 P0-1 / R3，与 defaults 声明一致）：本键只在
+        # Windows x86/x64（AMD64/x86_64 TSO）上生效——非支持平台（非 Windows，
+        # 或 Windows ARM64 弱序）即使归一后为 True，BrokerFacade 的 enabled
+        # 判定也会与 broker_platform_supported()（Windows 且 AMD64/x86_64）
+        # 做与而强制关闭；此处归一只保证「类型为 bool」，「是否启用」由启用点
+        # 的平台门禁收口。
+        self.data["decode_broker_enabled"] = _bool_or_default(
+            self.data.get("decode_broker_enabled"), False
         )
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         self.data.update(_clean_collision_data(self.data))
