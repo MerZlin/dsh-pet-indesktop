@@ -1352,7 +1352,7 @@ class WebMClip(QObject):
             return _ffr_touch(self, img.width() * img.height() * 4)
         return []
 
-    def _decode_first_qimage_and_cache(self, gen: int | None = None) -> None:
+    def _decode_first_qimage_and_cache(self, gen: int | None = None) -> list:
         """解码首帧并写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
 
         幂等：缓存已存在时直接返回，避免重复拉起 ffmpeg。
@@ -1417,7 +1417,7 @@ class WebMClip(QObject):
         _ffr_evict(victims)  # 逐出延迟到本 clip 锁释放后（防跨对象持锁嵌套）
         self._apply_first_frame()
 
-    def _commit_first_frame_escape(self, img, gen: int | None = None) -> None:
+    def _commit_first_frame_escape(self, img, gen: int | None = None) -> list:
         """逃生口（未持锁）的首帧缓存提交（P1-3 / B7 复审 R2）。
 
         只允许两种结果：
