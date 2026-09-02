@@ -2591,3 +2591,85 @@ def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path)
     assert _resolve_self_talk_image_dir("") == ""
 
 
+
+
+def test_cleanup_old_pet_logs(tmp_path):
+    """审查 GLM-M2 回归：启动时清理超龄 pet-*.log，不动新日志与其他文件。"""
+    import os
+    import time
+
+    from pet.app import _cleanup_old_pet_logs
+
+    old = tmp_path / "pet-111.log"
+    old.write_text("x", encoding="utf-8")
+    old_ts = time.time() - 8 * 86400
+    os.utime(old, (old_ts, old_ts))
+    old_backup = tmp_path / "pet-111.log.1"
+    old_backup.write_text("x", encoding="utf-8")
+    os.utime(old_backup, (old_ts, old_ts))
+    fresh = tmp_path / "pet-222.log"
+    fresh.write_text("y", encoding="utf-8")
+    other = tmp_path / "config.json"
+    other.write_text("z", encoding="utf-8")
+    os.utime(other, (time.time() - 30 * 86400,) * 2)  # 老但非 pet 日志
+
+    assert _cleanup_old_pet_logs(tmp_path) == 2
+    assert not old.exists() and not old_backup.exists()
+    assert fresh.exists() and other.exists()
+
+
+def test_check_update_failure_reports_and_reentry_guard(tmp_path, monkeypatch):
+    """审查 P1-01/GLM-L3 回归：更新检查线程异常收口回 GUI + 重入防护。"""
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    from pet import app as app_mod
+    from pet.app import PetApp
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    owner = PetApp(app, Config(tmp_path))
+
+    gate = threading.Event()
+
+    def boom():
+        gate.wait(5)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_mod.updater, "latest_release", boom)
+    owner.check_update(parent=None)
+    bridge = owner._update_bridge
+    results = []
+    bridge.done.connect(lambda ok, payload: results.append((bool(ok), str(payload))))
+    gate.set()
+
+    deadline = time.monotonic() + 5
+    while not results and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert results == [(False, "检查更新失败：boom")]
+
+    # 重入防护：完成前连点不重复起线程；完成后放行
+    deadline = time.monotonic() + 5
+    while owner._update_checking and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert owner._update_checking is False
+
+
+def test_modern_settings_reject_saves_config(tmp_path):
+    """审查 DS-M9 回归：Esc（reject）路径与 X 一样落盘。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    dlg = settings_mod.ModernSettingsDialog(cfg, include_ai=False)
+    dlg.self_talk_image_scale_spin.setValue(180)
+    dlg.reject()
+    app.processEvents()
+    assert Config(tmp_path).get("self_talk_image_scale") == 180

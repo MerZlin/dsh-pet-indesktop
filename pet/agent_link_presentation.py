@@ -210,7 +210,7 @@ class AgentLinkPresentation(QObject):
         # 气泡位占用检测：win._bubble_busy_until 无公开 seam（测试夹具按该
         # 私有字段断言），保持既有 getattr 行为不变；仅此一处私有访问。
         busy_until = getattr(self.win, "_bubble_busy_until", 0.0)
-        if time.time() < busy_until:
+        if time.monotonic() < busy_until:
             if not important or _retried >= 4:
                 return
             QTimer.singleShot(2500, self,

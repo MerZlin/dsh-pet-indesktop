@@ -1907,6 +1907,17 @@ class ModernSettingsDialog(QDialog):
             )
         return ok
 
+    def reject(self) -> None:  # noqa: N802 - Qt API
+        """Esc 路径：QDialog.reject() 不触发 closeEvent（实测 Qt 6.11），
+        「直接关闭同样落盘」的收口必须在这里也执行（审查 DS-M9）。"""
+        if not getattr(self, "_saved_via_button", False):
+            try:
+                self._write_config()
+                self._apply_autostart()
+            except Exception:
+                logging.exception("Esc 关闭设置时保存配置失败")
+        super().reject()
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         """直接关闭（X / Esc）时同样落盘，避免修改丢失。
 

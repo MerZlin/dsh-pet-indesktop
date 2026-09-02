@@ -22,7 +22,7 @@ from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
 from . import collision
 from . import collision_codec
 from . import collision_debug
-from .config import APP_DIR_NAME
+from .config import APP_DIR_NAME, DEFAULT_COLLISION_SETTINGS
 from . import slot_manager
 
 MAX_COLLISION_MEMBERS = 128
@@ -210,6 +210,25 @@ class _CollisionWorker(QObject):
     def _try_election(self) -> None:
         if self._stopping or self.server is not None or self.socket is not None:
             return
+        # 异常围栏（审查 M5）：选举/监听序列任何意外异常都必须清理
+        # 「持锁 + 已 listen」的中间态，否则整簇卡死到本进程退出
+        try:
+            self._try_election_inner()
+        except Exception:
+            logging.exception("碰撞选举异常，复位为客户端")
+            try:
+                if self.server is not None:
+                    self.server.close()
+                    self.server.deleteLater()
+                    self.server = None
+                self._local_election_names.discard(self.name)
+                slot_manager.release_file_lock(self._coordinator_lock)
+                self._coordinator_lock = None
+            except Exception:
+                pass
+            self._connect_client()
+
+    def _try_election_inner(self) -> None:
         server = QLocalServer(self)
         if self._lock_path is not None:
             self._coordinator_lock = slot_manager.acquire_file_lock(self._lock_path)
@@ -545,6 +564,10 @@ class _CollisionWorker(QObject):
                 # policy 与权威成员表；只有角色变更通知受 changed 门禁。
                 self.policy_changed.emit(message.get("policy") or {})
                 self.snapshot_ready.emit(message)
+                # 重连盲窗收口（审查 M4）：收到 welcome 立即补发当前状态，
+                # 不等下一心跳周期（静止时最长 ~500ms 不在权威成员表）
+                if self._participating and self.latest_state and self.socket is not None:
+                    self._send(self.socket, dict(self.latest_state, type="state"))
         elif kind in ("decode_grant", "decode_deny"):
             # P3 broker：coordinator 对订阅请求的答复 → 转发 GUI（facade 配对 req_id）
             self.decode_reply_ready.emit(dict(message))
@@ -554,7 +577,12 @@ class _CollisionWorker(QObject):
                 self.snapshot_ready.emit(message)
         elif kind == "impulse":
             pair = str(message.get("pair") or "")
-            tick = int(message.get("tick", -1))
+            try:
+                tick = int(message.get("tick", -1))
+            except (TypeError, ValueError, OverflowError):
+                # 畸形帧（恶意/损坏/版本不兼容的远端）逐条丢弃，
+                # 不中断后续帧的处理（审查 P1-02/P7）
+                return
             if message.get("epoch") == self.epoch:
                 self._last_control_message = self._now()
                 if self.watermarks.should_apply(self.epoch, pair, tick):
@@ -590,6 +618,16 @@ class _CollisionWorker(QObject):
             socket.deleteLater()
         self.peers.clear()
         self.members.clear()
+        # 让位时同步清理决胜 probe 与其流解码器（否则每次「监听→让位」
+        # 泄漏一个 QLocalSocket + decoder，审查 L5）
+        if self._probe is not None:
+            try:
+                self._probe.abort()
+            except Exception:
+                pass
+            self._socket_decoders.pop(self._probe, None)
+            self._probe.deleteLater()
+            self._probe = None
         self._membership_dirty = False
         self._clear_solver_history()
         for timer in self._timers:
@@ -661,7 +699,10 @@ class _CollisionWorker(QObject):
             bool(self.policy.get("collision_enabled", True))
             != bool(policy.get("collision_enabled", True))
         )
-        self.policy = dict(policy)
+        # 部分字典防御：update_policy 是公开边界，缺键时保留旧值/默认值，
+        # 防止 coordinator tick 读必需键 KeyError（审查 P2-03）
+        merged = {**DEFAULT_COLLISION_SETTINGS, **self.policy, **dict(policy)}
+        self.policy = merged
         if enabled_changed:
             self._membership_dirty = True
             self._clear_solver_history()

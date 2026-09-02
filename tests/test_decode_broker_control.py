@@ -771,3 +771,29 @@ def test_publish_geometry_mismatch_falls_back_local(tmp_path):
     finally:
         facade.shutdown()
     assert _budget() == before
+
+
+def test_subscribe_end_by_movie_identity_with_real_req_id(tmp_path, monkeypatch):
+    """审查 P2-01 回归：素材 key 漂移（播放中途文件变更）时 subscribe_end
+    仍按 movie 身份清理 pending；unsubscribe 带真实 req_id 而非占位 'end'。"""
+    pair = _Pair(tmp_path, "subend")
+    try:
+        pair.settle()
+        coord_facade, client_facade = _bind_facades(pair)
+        path = str(tmp_path / "subend.webm")
+        assert coord_facade.shareable_start("idle", _Movie(path), path=path) == "publish"
+        movie = _Movie(path)
+        assert client_facade.shareable_start("idle", movie, path=path) == "feed"
+        feed = movie._feed_source
+        assert client_facade._pending.get(feed.req_id) is feed
+        # 素材中途变更 → asset key 漂移（按 key 匹配将失配）
+        Path(path).write_bytes(b"changed-content")
+        sent = []
+        monkeypatch.setattr(client_facade._ipc, "request_decode", sent.append)
+        client_facade.subscribe_end(path, movie)
+        assert not client_facade._pending
+        assert movie._feed_source is None
+        assert sent == [{"type": "decode_unsubscribe", "req_id": feed.req_id}]
+    finally:
+        _shutdown_facades(coord_facade, client_facade)
+        pair.stop()

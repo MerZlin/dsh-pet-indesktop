@@ -76,7 +76,7 @@ v4.0.0 是一次大版本升级：在 v3.1.1 的桌宠基础上，合并了社�
 
 DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，本项目的实现为桌宠内置的轻量版（菜单「DeepSeek 余额」+ 可选自动刷新，通过 DeepSeek 官方 `/user/balance` 接口查询，详见 [DeepSeek API 查询余额文档](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)）。
 
-当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 91 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
+当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 97 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
 
 
 </details>
@@ -124,7 +124,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 - **只需要桌宠陪伴**：装无 Chat 版，包体更小、启动更轻。
 - **不想安装、追求便携**：用绿色版 zip，解压到任意目录双击即用。
 
-> 两个版本使用同一套高清 WebM 素材（91 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
+> 两个版本使用同一套高清 WebM 素材（97 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
 >
 > 旧版 GIF 超大单文件（约 800 MB，运行时会在 C 盘临时目录解压并可能残留缓存）不再默认发布；确有需要可参考本文档「打包发布」一节自行构建 GIF 变体。
 >
@@ -619,7 +619,7 @@ assets/
             └── random/
 ```
 
-- `assets/characters` 是 WebM 动画源目录，包含 91 个 WebM 动画。
+- `assets/characters` 是 WebM 动画源目录，包含 97 个 WebM 动画。
 - GIF 目录（`assets/characters_gif`）仅在构建 GIF 变体时生成。
 - 没有稳定静态头像时，不强制从 WebM/GIF 截取首帧，以避免启动变慢和打包兼容性问题。
 
@@ -661,7 +661,7 @@ python normalize_step03.py
 python encode_thumbs.py
 ```
 
-> 参考项目全部 91 个动作均采用**路线 B（PR 手工抠像）**：对含第三方物品/透明边缘复杂的动作，自动 HSV 抠像易残边或误抠；`chroma_step02.py` 保留为自动化兜底。中间产物 step01~04 由脚本生成、不入仓库；`video/` 源视频与 `scripts/` 是成果、入库维护。
+> 参考项目全部 97 个动作均采用**路线 B（PR 手工抠像）**：对含第三方物品/透明边缘复杂的动作，自动 HSV 抠像易残边或误抠；`chroma_step02.py` 保留为自动化兜底。中间产物 step01~04 由脚本生成、不入仓库；`video/` 源视频与 `scripts/` 是成果、入库维护。
 
 #### ③ 透明动画 → 接入本项目
 
@@ -678,7 +678,7 @@ python encode_thumbs.py
    ```
 
 2. 保持几何约定与播放器一致：画布 **640×360**、24fps、**VP9 alpha 透明**；角色脚底对齐画布 y=330（`catalog.py` 中 `FEET_Y=330`、落地偏移 `PAD=30`），这样桌宠窗口的脚底落地对齐才准确。
-3. 命名保持稳定、避免重复；可参考 `assets/characters/shenshen/videos/` 现有 91 段动画的组织方式。
+3. 命名保持稳定、避免重复；可参考 `assets/characters/shenshen/videos/` 现有 97 段动画的组织方式。
 4. 如需 GIF 变体，运行 `python scripts/convert_to_gif.py --force --clean` 同步生成。
 
 > 不想重新打包？把做好的透明 WebM 按「切换角色」的外部角色目录结构直接放入 `characters/<角色ID>/videos/`，右键菜单即可热加载新角色。
@@ -829,6 +829,7 @@ tests/                     # 单元测试、Qt offscreen 测试和构建相关�
 在项目根目录执行：
 
 ```powershell
+pip install -r requirements.txt   # 运行时 + 开发依赖（含 pytest/ruff）
 $env:QT_QPA_PLATFORM = "offscreen"
 python -m pytest -q
 python -m compileall pet packaging scripts
@@ -921,24 +922,14 @@ PyInstaller **不支持交叉编译**，Linux 包必须在 Linux 上构建。推
 1. Actions 页面手动运行 **Build Linux App**（`workflow_dispatch`），或打 `v*` tag 自动触发并发布到 Release。
 2. 产物：`dsh-pet-standalone-<变体>-linux-x86_64.zip`（onedir 目录，保留可执行权限）。Linux 发布两个 WebM 变体（`webm-chat` / `webm`）；GIF 变体包体约 800 MB，不发布。
 
-本地构建（在 Linux 机器上）：
+本地构建（在 Linux 机器上）——**以正式脚本为准**（手工 PyInstaller 命令
+长期与脚本漂移、会漏菜单模板/QSS 等资源，审查 P2-07）：
 
 ```bash
-python -m pip install pyinstaller
-# WebM Chat 版（VARIANT 取值 webm-chat / webm / gif-chat / gif）
-echo "VARIANT = 'webm-chat'" > packaging/build_variant.py
-python -m PyInstaller --noconfirm --clean --onedir --paths . \
-  --collect-all imageio_ffmpeg --collect-all certifi \
-  --add-data "assets/sounds:assets/sounds" \
-  --add-data "assets/chat:assets/chat" \
-  --add-data "pet/chat/styles.qss:pet/chat" \
-  --add-data "assets/characters:assets/characters" \
-  --name dsh-pet-standalone-webm-chat packaging/pet_entry.py
-cd dist && zip -r dsh-pet-standalone-webm-chat-linux-x86_64.zip dsh-pet-standalone-webm-chat/
+bash scripts/build_linux.sh webm-chat   # 变体：webm-chat / webm / gif-chat / gif
 ```
 
-> GIF 变体需先运行 `python scripts/convert_to_gif.py --force --clean` 并把 `--add-data` 换成 `assets/characters_gif`。
-> Linux 上 PyInstaller 忽略 `--icon`（仅 Windows/macOS 生效），窗口/托盘图标由程序运行时设置。
+> GIF 变体需先运行 `python scripts/convert_to_gif.py --force --clean`。
 
 
 </details>
@@ -1054,7 +1045,7 @@ python scripts/cleanup_mei_cache.py --delete
 - **动画边缘毛边/暗边修复**：帧渲染改为**预乘 alpha 缩放**（直通 alpha 缩放会让透明像素的 RGB 渗入半透明边缘，产生暗边/彩边）；Windows 上点击命中测试由 setMask 的 1-bit 裁剪改为**逐像素命中测试**（WM_NCHITTEST + HTTRANSPARENT，透明区域鼠标穿透、可见区域可点击），不再破坏 `WA_TranslucentBackground` 的逐像素半透明边缘。
 - **Harness 启动兼容旧版 dsh**：启动前探测 `web --help` 是否支持 `--no-open`（按命令缓存）——旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；不支持时不传，由 dsh 自己打开浏览器，桌宠不重复打开。
 - **动画帧率精度**：视频帧时长按 24fps 精确值（40ms → 42ms = 1000/24）修正，动画播放定时器改用精确定时器（PreciseTimer），消除粗略定时器漂移导致的节奏/移动插值偏差。
-- **右键菜单启动提速与避让**：动画分类子菜单**首次展开才填充**动作（根菜单构建不再遍历 91 个动画，首次右键不再卡顿数秒）；菜单弹出位置智能选择——优先角色右侧（子菜单向右展开）、屏幕不够时放左侧并让子菜单向左展开（RTL）、再不行放屏幕远角，根菜单与子菜单都不再遮挡角色；快捷启动应用图标按 (类型, 路径) 缓存（QFileIconProvider 首次取图标慢）。
+- **右键菜单启动提速与避让**：动画分类子菜单**首次展开才填充**动作（根菜单构建不再遍历 97 个动画，首次右键不再卡顿数秒）；菜单弹出位置智能选择——优先角色右侧（子菜单向右展开）、屏幕不够时放左侧并让子菜单向左展开（RTL）、再不行放屏幕远角，根菜单与子菜单都不再遮挡角色；快捷启动应用图标按 (类型, 路径) 缓存（QFileIconProvider 首次取图标慢）。
 - **设置窗口打开期间暂停气泡**：新版设置/聊天设置任一打开时，桌宠气泡暂停显示（关闭后恢复），不再盖住设置界面。
 - **macOS/Linux 打包补 integrations 资源（PR #22）**：onedir 构建显式打包 `integrations/`（含 DSH 桥接插件），修复 macOS/Linux 上「启动 DeepSeek Harness → 一键安装桥接插件」因资源缺失而失败的问题；构建后增加断言检查，漏打包直接报错。
 - **Chat 版显式收集 keyring（API Key 系统安全存储）**：Windows/Linux/macOS 构建均显式 `--collect-all keyring`，确保 Chat 版 API Key 走系统凭据存储可用。

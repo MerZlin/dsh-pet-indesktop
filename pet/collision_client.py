@@ -287,7 +287,12 @@ class CollisionClient(QObject):
         pair_for_watermark = str(message.get('pair') or '')
         tick = message.get('tick')
         if epoch and pair_for_watermark and tick is not None:
-            if not self.impulse_watermarks.should_apply(epoch, pair_for_watermark, int(tick)):
+            try:
+                tick_int = int(tick)
+            except (TypeError, ValueError, OverflowError):
+                discard('bad_tick')
+                return
+            if not self.impulse_watermarks.should_apply(epoch, pair_for_watermark, tick_int):
                 discard('watermark')
                 return
         if win._interaction_state == self._dragging or win._physics_mode == 'drag':

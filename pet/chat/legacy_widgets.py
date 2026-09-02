@@ -824,6 +824,8 @@ class ChatWindow(QDialog):
             self._active_request_id = None
             self.service.stop()
         self.store.delete(self.session)
+        # 幻影消息防护（审查 DS-M6）：停打字机丢弃未排空输出，再加载新会话
+        self._reset()
         sessions = self.store.list(self.character_id)
         self.session = sessions[0] if sessions else self._new_session()
         self._load()

@@ -85,7 +85,9 @@ class ProviderError(RuntimeError):
 class SSEParser:
     def __init__(self): self._buffer=b''; self.done=False
     def feed(self,chunk:bytes):
-        self._buffer+=chunk; out=[]
+        self._buffer+=chunk
+        if len(self._buffer)>1024*1024: raise ProviderError('SSE 缓冲超过 1MB 上限（服务端未按事件分隔）')  # 审查 GLM-M5：防异常 provider 无界堆积
+        out=[]
         while True:
             found=None
             for marker in (b'\r\n\r\n',b'\n\n'):
@@ -97,6 +99,7 @@ class SSEParser:
                 if line and not line.startswith(b':') and line.startswith(b'data:'): data.append(line[5:].lstrip().decode('utf-8','replace'))
             if not data: continue
             payload_text='\n'.join(data).strip()
+            if not payload_text: continue  # 空 data: 心跳行（部分 OpenAI 兼容服务用作 keepalive），跳过不解析——否则 json.loads('') 中止整条流（审查 DS-L20）
             if payload_text=='[DONE]': self.done=True; continue
             try: payload=json.loads(payload_text)
             except json.JSONDecodeError as exc: raise ProviderError('Provider 返回了无效 JSON') from exc

@@ -1127,3 +1127,53 @@ def test_coordinator_own_predicted_bounce_via_submit_state_reaches_target():
     assert received[0]["dvx_a"] > 500.0
     assert received[0]["dvx_b"] == 0.0
     assert "coordinator" not in worker._pending_predicted
+
+
+def test_impulse_malformed_tick_dropped_without_raising():
+    """审查 P1-02/P7 回归：畸形 tick 的 impulse 帧逐条丢弃，不抛异常、
+    不中断后续合法帧。"""
+    worker = _CollisionWorker(_server_name("bad-tick"), "client", "slot-1", {})
+    worker.epoch = "epoch-a"
+    impulses = []
+    worker.impulse_ready.connect(impulses.append)
+    for bad_tick in ("bad", None, [1], {"x": 1}):
+        worker._handle_message(FakeSocket(), {
+            "type": "impulse", "epoch": "epoch-a", "pair": "a|b", "tick": bad_tick,
+        })
+    assert impulses == []
+    worker._handle_message(FakeSocket(), {
+        "type": "impulse", "epoch": "epoch-a", "pair": "a|b", "tick": 3,
+    })
+    assert len(impulses) == 1
+
+
+def test_set_policy_partial_dict_merges_with_defaults():
+    """审查 P2-03 回归：update_policy 公开边界收到部分 dict 时缺键由
+    默认值/旧值补齐，coordinator tick 不再可能 KeyError。"""
+    worker = _CollisionWorker(_server_name("policy-merge"), "coordinator", "", {})
+    worker.set_policy({"collision_enabled": False})
+    for key in ("collision_restitution", "collision_friction",
+                "collision_mass_scale", "collision_impulse_cap"):
+        assert key in worker.policy
+    assert worker.policy["collision_enabled"] is False
+    # 再次部分更新不清掉既有键
+    worker.set_policy({"collision_restitution": 0.5})
+    assert worker.policy["collision_restitution"] == 0.5
+    assert worker.policy["collision_enabled"] is False
+
+
+def test_welcome_triggers_immediate_state_resend():
+    """审查 DS-M4 回归：收到 welcome（含同 epoch 重连）立即补发当前状态，
+    不等下一心跳周期。"""
+    worker = _CollisionWorker(_server_name("welcome-resend"), "client", "slot-1", {})
+    client_socket = FakeSocket()
+    worker.socket = client_socket
+    worker.latest_state = _state(5)
+    worker._participating = True
+    worker.epoch = "epoch-1"  # 同 epoch 重连场景
+    worker._handle_message(client_socket, {
+        "type": "welcome", "epoch": "epoch-1", "tick": 0, "policy": {}, "members": [],
+    })
+    frames = [m for frame in client_socket.sent
+              for m in collision_codec.FrameStreamDecoder().feed(frame)]
+    assert any(m.get("type") == "state" for m in frames)

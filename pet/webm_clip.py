@@ -707,14 +707,17 @@ class WebMClip(QObject):
         （_cleaned），自身不再安排任何 sweep/timer。
         """
         # 断开 destroyed 的 lambda 连接（Fix A1）：lambda 捕获 self 形成
-        # 引用环，显式断开让 Python GC 可回收；C++ 已删场景 disconnect 抛
-        # RuntimeError 属预期（连接随 C++ 信号消亡，Qt 侧已清理）。
+        # 引用环，显式断开让 Python GC 可回收；C++ 已删场景直接跳过——
+        # 否则 libpyside 在 Python except 之前先打 RuntimeWarning 噪音
+        # （审查 DS-L3）。
         conn = getattr(self, '_destroyed_conn', None)
         if conn is not None:
-            try:
-                self.destroyed.disconnect(conn)
-            except RuntimeError:
-                pass
+            import shiboken6
+            if shiboken6.isValid(self):
+                try:
+                    self.destroyed.disconnect(conn)
+                except RuntimeError:
+                    pass
             self._destroyed_conn = None
         self._cleaned = True
         self.cancel_first_frame_warm()

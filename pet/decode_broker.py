@@ -1188,10 +1188,19 @@ class BrokerFacade:
         弹出即 complete(None) 唤醒仍等待的 reader 回退本地；条目已不在表中
         的迟到 grant 由 _on_decode_reply 静默丢弃（不 attach → 无泄漏）。
         """
+        # 匹配优先级（审查 P2-01）：先按 movie 身份（素材中途变更/mtime
+        # 漂移时 asset key 会失配），再按 asset key 兜底；弹出后补 complete
+        # 唤醒 reader 回退；unsubscribe 带真实 req_id（原固定 "end" 占位
+        # 对协调者无任何可配对信息）。
+        feeds = []
+        movie_feed = getattr(movie, "_feed_source", None) if movie is not None else None
         key = asset_key(asset)
         with self._pending_lock:
-            feeds = [feed for req_id, feed in list(self._pending.items())
-                     if feed.asset == key]
+            if movie_feed is not None and self._pending.get(movie_feed.req_id) is movie_feed:
+                feeds.append(movie_feed)
+            for req_id, feed in list(self._pending.items()):
+                if feed.asset == key and feed not in feeds:
+                    feeds.append(feed)
             for feed in feeds:
                 self._pending.pop(feed.req_id, None)
         for feed in feeds:
@@ -1203,11 +1212,12 @@ class BrokerFacade:
             except Exception:
                 pass
         if self._ipc is not None:
-            try:
-                self._ipc.request_decode({"type": "decode_unsubscribe",
-                                          "req_id": "end"})
-            except Exception:
-                pass  # 尽力而为
+            for feed in feeds:
+                try:
+                    self._ipc.request_decode({"type": "decode_unsubscribe",
+                                              "req_id": feed.req_id})
+                except Exception:
+                    pass  # 尽力而为
 
     # ---- worker → GUI 转发（coordinator 收订阅 / client 收答复）------------
     def _on_subscribe_requested(self, runtime_id: str, message: dict) -> None:

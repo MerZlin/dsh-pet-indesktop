@@ -1090,7 +1090,7 @@ class TestUXFixesRound3:
         assert len(shown) == 1  # 没有新增
 
         # 占用过期后恢复
-        win._bubble_busy_until = time.time() - 1
+        win._bubble_busy_until = time.monotonic() - 1  # 字段自审查修复起为单调时钟
         win._on_self_talk_timeout()
         assert len(shown) == 2
         win.close()

@@ -45,6 +45,17 @@ def test_sse_parser_ignores_keep_alive_and_empty_choices():
     assert parser.feed(b'data: {"choices":[]}\n\n') == []
 
 
+def test_sse_parser_empty_data_keepalive_and_buffer_cap():
+    """审查修复回归：空 data: 心跳行不解析不中止（DS-L20）；缓冲超 1MB 抛错（GLM-M5）。"""
+    parser = SSEParser()
+    # 空 data 行（部分 OpenAI 兼容服务的心跳）+ 正常内容混排：只取内容
+    out = parser.feed(b'data:\n\ndata: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: \n\n')
+    assert out == ['ok']
+    # 缓冲无界增长防护：超过 1MB 未分隔数据 → ProviderError
+    with pytest.raises(ProviderError):
+        parser.feed(b'x' * (1024 * 1024 + 1))
+
+
 def test_prompt_priority_and_limits(tmp_path: Path):
     character_dir = tmp_path / "assets" / "characters" / "cat"
     character_dir.mkdir(parents=True)
@@ -2254,3 +2265,48 @@ def test_chat_settings_dialog_persists_system_notification_toggle(tmp_path):
     finally:
         dlg.close()
         _app.processEvents()
+
+
+def test_delete_current_session_during_streaming_resets_typewriter(tmp_path: Path, monkeypatch):
+    """审查 DS-M6 回归（modern）：删除当前会话时停打字机并丢弃未排空输出，
+    防幻影消息写入新加载的会话。"""
+    from PySide6.QtWidgets import QApplication, QDialog
+    from pet.chat import widgets as chat_widgets
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = chat_widgets.ChatWindow(Config(tmp_path), "shenshen")
+    old_id = window.session.session_id
+    window._pending_output = "残文"
+    window._pending_finish_text = "最终"
+    window._active_request_id = "req-1"
+
+    monkeypatch.setattr(
+        chat_widgets.DeleteConversationDialog, "exec",
+        lambda _d: QDialog.DialogCode.Accepted,
+    )
+    window._delete_sessions([old_id])
+
+    assert window.session.session_id != old_id
+    assert window._pending_output == ""
+    assert window._pending_finish_text is None
+    assert window._active_request_id is None
+    assert window.session.messages == []
+    window.close()
+    app.processEvents()
+
+
+def test_legacy_delete_current_session_calls_reset(tmp_path: Path, monkeypatch):
+    """审查 DS-M6 回归（legacy）：删除当前会话同样走 _reset 收口。"""
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.legacy_widgets import ChatWindow as LegacyChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = LegacyChatWindow(Config(tmp_path), "shenshen")
+    calls = []
+    monkeypatch.setattr(window, "_reset", lambda: calls.append(1))
+    window.delete_current_session()
+    assert calls == [1]
+    window.close()
+    app.processEvents()

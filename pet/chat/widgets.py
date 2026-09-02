@@ -1728,6 +1728,9 @@ class ChatWindow(QDialog):
         for session in sessions:
             self.store.delete(session)
         if current_deleted:
+            # 幻影消息防护（审查 DS-M6）：删除当前会话前先停打字机并丢弃
+            # 未排空的输出——否则残活的逐字排空会把上轮回复写进新加载的会话
+            self._reset()
             remaining = self.store.list(self.character_id)
             self.session = remaining[0] if remaining else self._new_session()
             self._load()

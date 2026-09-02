@@ -200,6 +200,10 @@ class QuickChatBubble(QFrame):
         sessions = self.store.list(self.character_id)
         return sessions[0] if sessions else self._new_session()
 
+    def refresh_session(self) -> None:
+        """从磁盘重取最近会话（公开 seam；角色切换后外部刷新用，替代私访 _get_session）。"""
+        self.session = self._get_session()
+
     def _new_session(self):
         session = self.store.create(
             self.character_id,

@@ -2515,7 +2515,9 @@ class PetWindow(QWidget):
                 pending = threading.Event()
                 self._animation_icon_inflight[name] = pending
         if not owner:
-            pending.wait()
+            if not pending.wait(timeout=30.0):
+                # 解码线程病态卡死的逃生口：不永久挂起等待线程（审查 GLM-L5）
+                return QImage()
             with lock:
                 return QImage(self._animation_icon_image_cache.get(name, QImage()))
         path = self.lib.clip_path(name)  # 不在 worker 线程构造 WebMClip（Qt 线程亲和）
@@ -3543,14 +3545,19 @@ class PetWindow(QWidget):
                 pool.clear()
                 pools.append(pool)
 
-        def delete_when_idle() -> None:
+        def delete_when_idle(_attempts: int = 0) -> None:
             """非阻塞等待图标解码 worker 结束后再释放菜单树。
 
             直接 pool.waitForDone(3000) 会阻塞 GUI 线程最多 3 秒，可能造成
             右键菜单关闭时卡顿/假死；这里每 50ms 轮询一次，不阻塞事件循环。
+            总上限 3s（60×50ms）：解码 worker 病态不结束时也强制释放，
+            否则菜单树会永久滞留、deferred 回调永不派发（审查 DS-L16）。
             """
+            if _attempts >= 60:
+                menu.deleteLater()
+                return
             if any(not pool.waitForDone(0) for pool in pools):
-                QTimer.singleShot(50, delete_when_idle)
+                QTimer.singleShot(50, lambda: delete_when_idle(_attempts + 1))
                 return
             menu.deleteLater()
 
@@ -3637,7 +3644,7 @@ class PetWindow(QWidget):
         return self._show_random_self_talk()
 
     def _on_self_talk_timeout(self) -> None:
-        if time.time() < self._bubble_busy_until:
+        if time.monotonic() < self._bubble_busy_until:
             # 重要气泡占用中：本次自言自语跳过，重新排队下一次
             self._schedule_self_talk()
             return
@@ -3648,7 +3655,7 @@ class PetWindow(QWidget):
 
     def hold_bubble(self, seconds: float) -> None:
         """声明重要气泡占用时长（自言自语在此期间让路）。"""
-        self._bubble_busy_until = max(self._bubble_busy_until, time.time() + max(0.0, seconds))
+        self._bubble_busy_until = max(self._bubble_busy_until, time.monotonic() + max(0.0, seconds))
 
     def set_bubble_suppressed(self, suppressed: bool) -> None:
         """设置窗口打开期间暂停气泡显示；True 时立即隐藏当前气泡。"""

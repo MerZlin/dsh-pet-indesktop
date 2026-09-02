@@ -145,6 +145,28 @@ def _setup_logging(config: Config) -> None:
         format='%(asctime)s %(levelname)s %(message)s',
         encoding='utf-8',
     )
+    _cleanup_old_pet_logs(config.dir)
+
+
+def _cleanup_old_pet_logs(log_dir, *, max_age_days: float = 7.0) -> int:
+    """启动时清理过期的 pet-<pid>.log（含滚动备份 .log.1/.2）。
+
+    每实例每次启动都产生新文件，不清理会无界累积（审查 GLM-M2）。
+    只删本变体命名空间下超龄文件；失败静默（清理不影响启动）。
+    """
+    removed = 0
+    try:
+        cutoff = time.time() - max_age_days * 86400
+        for path in Path(log_dir).glob('pet-*.log*'):
+            try:
+                if path.is_file() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return removed
 
 
 def _show_startup_error(title: str, message: str) -> None:
@@ -181,7 +203,6 @@ class PetApp:
         self.slot_id = slot_id
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
-        self._notification_click_callback = None
         self._toast_windows: list[DesktopNotification] = []
         self.chat_window = None
         self.legacy_chat_window = None
@@ -263,6 +284,14 @@ class PetApp:
         """
         if self.win is not None:
             self.win.save_position()
+        # 退出前暂停动画预热：低优预热队列（ThreadPoolExecutor 的 worker 非
+        # daemon）在解释器退出期会被排空执行——不暂停的话退出会被拖住数秒
+        # 并继续拉起 ffmpeg（审查 DS-M1）
+        try:
+            if self.win is not None and getattr(self.win, 'lib', None) is not None:
+                self.win.lib.pause_warm()
+        except Exception:
+            logging.exception("退出时暂停预热失败")
         # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
         if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
             self.win.agent_link_manager.shutdown()
@@ -434,14 +463,27 @@ class PetApp:
             pass
 
     def check_update(self, parent=None) -> None:
+        # 重入防护（审查 GLM-L3）：连点不应起多个检查线程/叠气泡
+        if getattr(self, "_update_checking", False):
+            return
+        self._update_checking = True
         target = parent or self.win
         if target is not None:
             target.show_bubble("正在检查更新…", duration_ms=6000)
         bridge = _UpdateBridge(target)
         self._update_bridge = bridge
+        # 完成后放行下一次检查（无论成败）
+        bridge.done.connect(lambda *_: setattr(self, "_update_checking", False))
 
         def worker() -> None:
-            release = updater.latest_release()
+            try:
+                release = updater.latest_release()
+            except Exception as exc:
+                # 后台线程异常必须收口回 GUI，否则更新提示永远停在
+                # 「正在检查更新」（审查 P1-01）
+                logging.debug("检查更新失败", exc_info=True)
+                bridge.done.emit(False, f"检查更新失败：{exc}")
+                return
             bridge.done.emit(bool(release), release or "无法连接更新服务，请稍后重试。")
 
         threading.Thread(target=worker, daemon=True, name="pet-update-check").start()
@@ -644,7 +686,7 @@ class PetApp:
         else:
             self.quick_chat.pet_window = self.win
             self.quick_chat.settings = self.config.chat_settings()
-            self.quick_chat.session = self.quick_chat._get_session()
+            self.quick_chat.refresh_session()
         self.quick_chat.show_for_pet(self.win)
 
     def open_legacy_chat(self) -> None:
@@ -848,15 +890,6 @@ class PetApp:
         ]
         position_stack(self._toast_windows)
 
-    def _on_tray_message_clicked(self) -> None:
-        callback = self._notification_click_callback
-        self._notification_click_callback = None
-        if callable(callback):
-            try:
-                callback()
-            except Exception:
-                logging.exception("系统通知点击回调执行失败")
-
     def _build_tray(self, win: PetWindow) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(QIcon(win.icon_pixmap()))
 
@@ -938,7 +971,6 @@ class PetApp:
 
         tray.setContextMenu(menu)
         tray.setToolTip('dsh-pet 独立桌宠')
-        tray.messageClicked.connect(self._on_tray_message_clicked)
         tray.activated.connect(
             lambda reason: toggle_visible()
             if reason == QSystemTrayIcon.ActivationReason.DoubleClick
