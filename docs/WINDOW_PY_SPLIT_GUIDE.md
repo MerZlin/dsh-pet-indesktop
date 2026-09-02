@@ -170,4 +170,4 @@ CI 里有行数预算红线（`test_window_py_line_budget`），超了测试直�
 | webm_clip.py 拆分（reader 生命周期/孤儿注册表） | 下次有人动 WebM 播放 | 结构线 S6 记录 |
 | config_domains 调用点迁移 | 下次加设置项时顺手 | pet/config_domains.py |
 | A17 测试债（源码字符串断言→行为断言） | 维护到对应测试文件时顺手 | pyproject.toml 豁免表 |
-| QQuickWindow 前端迁移 | 需要合成器级视觉（粒子/多层特效）或"GUI 忙时动画卡"成为实测瓶颈 | 桌面的《dsh-pet-QQuickWindow迁移方案》；硬前置 = §4.1/4.2 两域拆分完成 |
+| QQuickWindow 前端迁移 | 需要合成器级视觉（粒子/多层特效）或"GUI 忙时动画卡"成为实测瓶颈 | 完整设计稿已有存档（含平台矩阵/回退/分批计划），需要时再立项；硬前置 = §4.1/4.2 两域拆分完成 |
