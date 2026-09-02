@@ -482,7 +482,7 @@ class PetApp:
                 # 后台线程异常必须收口回 GUI，否则更新提示永远停在
                 # 「正在检查更新」（审查 P1-01）
                 logging.debug("检查更新失败", exc_info=True)
-                bridge.done.emit(False, f"检查更新失败：{exc}")
+                bridge.done.emit(False, str(exc))  # 前缀由 _UpdateBridge._show 统一加
                 return
             bridge.done.emit(bool(release), release or "无法连接更新服务，请稍后重试。")
 

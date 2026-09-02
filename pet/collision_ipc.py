@@ -224,12 +224,36 @@ class _CollisionWorker(QObject):
                 self._local_election_names.discard(self.name)
                 slot_manager.release_file_lock(self._coordinator_lock)
                 self._coordinator_lock = None
+                # probe 可能已在 _start_probe 建好：一并清理（修复批复审 P1-2）
+                if self._probe is not None:
+                    try:
+                        self._probe.abort()
+                    except Exception:
+                        pass
+                    self._socket_decoders.pop(self._probe, None)
+                    self._probe.deleteLater()
+                    self._probe = None
             except Exception:
                 pass
             self._connect_client()
 
     def _try_election_inner(self) -> None:
         server = QLocalServer(self)
+        # 局部 server 围栏（修复批复审 P1-2）：listen 成功到 _become_listener
+        # 把 server 挂上 self.server 之间存在窗口——其间异常必须清掉这个局部
+        # listener，否则留下「自监听端点」且外层围栏够不到它。
+        try:
+            self._try_election_listen(server)
+        except Exception:
+            if self.server is not server:
+                try:
+                    server.close()
+                except Exception:
+                    pass
+                server.deleteLater()
+            raise
+
+    def _try_election_listen(self, server) -> None:
         if self._lock_path is not None:
             self._coordinator_lock = slot_manager.acquire_file_lock(self._lock_path)
             if self._coordinator_lock is None:
@@ -695,14 +719,14 @@ class _CollisionWorker(QObject):
         """
         if self._stopping:
             return
-        enabled_changed = (
-            bool(self.policy.get("collision_enabled", True))
-            != bool(policy.get("collision_enabled", True))
-        )
         # 部分字典防御：update_policy 是公开边界，缺键时保留旧值/默认值，
         # 防止 coordinator tick 读必需键 KeyError（审查 P2-03）
+        old_enabled = bool(self.policy.get("collision_enabled", True))
         merged = {**DEFAULT_COLLISION_SETTINGS, **self.policy, **dict(policy)}
         self.policy = merged
+        # 变更判定必须基于合并后的值（部分更新缺键时沿用旧值，
+        # 不能按「缺省 True」误判为变更——修复批复审 P1）
+        enabled_changed = old_enabled != bool(merged.get("collision_enabled", True))
         if enabled_changed:
             self._membership_dirty = True
             self._clear_solver_history()

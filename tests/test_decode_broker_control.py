@@ -797,3 +797,33 @@ def test_subscribe_end_by_movie_identity_with_real_req_id(tmp_path, monkeypatch)
     finally:
         _shutdown_facades(coord_facade, client_facade)
         pair.stop()
+
+
+def test_subscribe_end_does_not_touch_sibling_feed_same_asset(tmp_path, monkeypatch):
+    """修复批复审 P1-3 回归：同素材两个 movie 同时 pending 时，结束其一
+    只清自己的 feed，兄弟订阅保持 pending 且不被 complete/unsubscribe。"""
+    pair = _Pair(tmp_path, "subend-sib")
+    try:
+        pair.settle()
+        coord_facade, client_facade = _bind_facades(pair)
+        path = str(tmp_path / "subend-sib.webm")
+        assert coord_facade.shareable_start("idle", _Movie(path), path=path) == "publish"
+        movie_a = _Movie(path)
+        movie_b = _Movie(path)
+        assert client_facade.shareable_start("idle", movie_a, path=path) == "feed"
+        assert client_facade.shareable_start("idle", movie_b, path=path) == "feed"
+        feed_a = movie_a._feed_source
+        feed_b = movie_b._feed_source
+        assert feed_a.req_id != feed_b.req_id
+        assert len(client_facade._pending) == 2
+
+        sent = []
+        monkeypatch.setattr(client_facade._ipc, "request_decode", sent.append)
+        client_facade.subscribe_end(path, movie_a)
+
+        assert client_facade._pending.get(feed_b.req_id) is feed_b
+        assert not feed_b.ready  # 兄弟未被 complete（未被迫回退）
+        assert sent == [{"type": "decode_unsubscribe", "req_id": feed_a.req_id}]
+    finally:
+        _shutdown_facades(coord_facade, client_facade)
+        pair.stop()

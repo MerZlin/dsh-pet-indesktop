@@ -1177,3 +1177,20 @@ def test_welcome_triggers_immediate_state_resend():
     frames = [m for frame in client_socket.sent
               for m in collision_codec.FrameStreamDecoder().feed(frame)]
     assert any(m.get("type") == "state" for m in frames)
+
+
+def test_set_policy_partial_update_on_disabled_keeps_history():
+    """修复批复审 P1-1 回归：旧值 collision_enabled=False 时，不含该键的
+    部分更新不得误判为「开关变更」（不误清求解历史/不误标 membership）。"""
+    worker = _CollisionWorker(_server_name("policy-partial-off"), "coordinator", "", {})
+    worker.set_policy({"collision_enabled": False})
+    assert worker.policy["collision_enabled"] is False
+    worker._membership_dirty = False
+    worker.overlap_history["a|b"] = 3
+    worker.set_policy({"collision_friction": 0.2})  # 部分更新，不带开关键
+    assert worker.policy["collision_enabled"] is False
+    assert worker.policy["collision_friction"] == 0.2
+    assert worker.overlap_history == {"a|b": 3}  # 未被误清
+    # 真变更仍然生效
+    worker.set_policy({"collision_enabled": True})
+    assert worker.overlap_history == {}
