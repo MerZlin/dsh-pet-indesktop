@@ -2,7 +2,7 @@
 
 一个基于 **Python + PySide6** 的独立桌面宠物。项目脱离 DSH 运行时，提供透明无边框、置顶、可拖动、角色切换、动画播放、系统托盘和可选 AI 对话能力。
 
-> **当前版本：v4.0.5**（2026-08 功能版，新增音效体系/弹弓弹射/光标隐藏自动穿透/点击卡顿修复等）。发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。
+> **当前版本：v4.1.0**（2026-09 累计版，自 v4.0.0 以来的功能与修复汇总：多开碰撞、灵动岛、快速对话气泡、API/Provider 列表、三平台 CI 等）。发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。
 
 ## 目录
 
@@ -86,6 +86,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 
 ## 当前状态
 
+- **v4.1.0（累计版）**：自 v4.0.0 以来的功能与修复汇总——多开碰撞、灵动岛、快速对话气泡、自定义 Agent 联动通道、API/Provider 列表、右键菜单 LTR、三平台 CI 等（PR #36/#39/#40/#41/#44/#46/#47/#49/#50/#52/#53/#54/#55/#56/#59/#60）。
 - **v4.0.5**：功能版——音效体系升级（点击音效包/Agent 联动音效）、甩出力度档位、弹弓弹射、光标隐藏自动穿透、点击 Q 弹卡顿修复、自启变体独立（PR #33/#34/#35）。
 - **v4.0.4**：功能版——余额分档动画、DeepSeek 峰谷提示（可自定义文案与颜色）、后台音乐自动唱歌、点击音效打断、移动动画调整、位置记忆修复、自启残留清理、thinking 专属气泡文案等（PR #29/#30/#31/#32）。
 - **v4.0.3**：紧急修复版——修复 Windows 透明像素点击穿透、DSH 桥接插件自动安装 pnpm，以及 Windows 官方包中文乱码（PR #27/#28）。
@@ -307,6 +308,7 @@ pythonw -m pet
 ### Agent 联动（默认关闭）
 
 - 内置 DSH 桥接插件（`integrations/dsh-pet-bridge`）与 Claude hooks 安装器：感知 AI Agent 状态并切换动作，支持开始干活、过程汇报、任务完成三种气泡反馈，右键 Agent 联动子菜单可独立开关。
+- **自定义联动 Agent**：在 `config.json` 的 `agent_link.custom_agents` 里声明任意 Agent（key / 显示名 / 事件文件路径），桌宠即对其 JSONL 事件文件做只读监听，联动行为与内置 Agent 一致——不改代码即可接入任何能写本地文件的 Agent，协议详见 `docs/AGENT_LINK_PROTOCOL.md`。
 
 ### 看看屏幕（Chat 版）
 
@@ -927,6 +929,41 @@ python scripts/cleanup_mei_cache.py --delete
 <summary><b>最近修复（2026-08）</b></summary>
 
 ## 最近修复（2026-08）
+
+### v4.1.0（累计版）
+
+- **发布 v4.1.0**：自 v4.0.0 以来的功能与修复完整汇总（详见 GitHub Release）。
+- **API / Provider 列表（PR #59）**：AI 设置新增 API 列表，可快速添加 / 删除 / 切换模型服务 Provider，并修复 Provider id 复用与 Key 草稿覆盖问题。
+- **灵动岛余额峰谷颜色同步（PR #60）**：灵动岛余额峰谷文字颜色跟随设置的峰谷提示颜色开关（高峰红 / 低谷绿）。
+- **纯桌宠菜单入口收敛（PR #60）**：无 Chat 的纯桌宠版本去掉“启动 DeepSeek Harness”入口，只保留“打开网页版 DeepSeek”。
+- **系统通知（暂未成功实现）**：对话完成 / 生成失败 / 需要授权时的桌面右下角系统通知目前仍无法可靠触发，本版本不将其视为可用功能，后续继续修复。
+
+### v4.0.5 之后（开发版）
+
+- **多开碰撞引擎「鱼塘碰碰车」（PR #41）**：多开桌宠物理对撞、槽位管理、碰撞 IPC 与缩略图缓存；支持拖拽/甩出/弹弓等物理交互。
+- **灵动岛（PR #36）**：新增独立灵动岛胶囊窗口，展示余额/状态信息，可拖拽、贴边吸附、记忆位置，支持暗色/浅色/玻璃风格与自定义图标。
+- **聊天窗置顶与点击台词绑定（PR #36）**：AI 聊天窗支持始终置顶；点击桌宠可按配置触发对应台词/动画。
+- **快速对话气泡（PR #40）**：点击桌宠头顶气泡直接打开 Quick Chat，长文本分页滚动，支持焦点输入。
+- **统一三平台构建与 CI（PR #39）**：统一 Linux/macOS/Windows 构建脚本与测试基建，修复 Wayland 下拖动/拖影，CI 测试全局 mock QMessageBox 等。
+- **自定义 Agent 联动通道（PR #44）**：`agent_link.custom_agents` 配置驱动，声明 `{key, name, path}` 即可零代码接入任意符合统一事件协议的 JSONL Agent；新增 `docs/AGENT_LINK_PROTOCOL.md` 协议文档。
+- **POSIX 碰撞 IPC 重选修复（PR #46）**：QLocalServer 在 Linux/macOS 残留 Unix socket 导致协调者重选死循环——改为先探测活监听者，确认无人应答再清理残留并重试；补 `bytesAvailable()` 兜底读取，恢复 POSIX 测试覆盖。
+- **右键菜单 LTR 与平滑入场（PR #47）**：菜单始终 LTR 布局，不再镜像子菜单；新增 140ms OutCubic 位置动画。
+- **碰撞协议与协调者生命周期加固（PR #49）**：协议预算（协调者下行 256 KiB / 客户端上行 4 KiB）、成员数/载荷限制、残留端点恢复、锁文件初始化、成员 freshness 统一、leave/failover/epoch 切换时序修正。
+- **拖动不再触发点击音效（PR #50）**：按下阶段不再播放 press 音效，确认是点击后才播放完整 press+release。
+- **Cloudflare 1010 请求头优化（PR #50）**：urllib 请求统一增加浏览器特征头（Mozilla User-Agent / Accept-Language 等），规避 opencode go 等网关的 Cloudflare 浏览器签名拦截。
+- **点击音效切换/解析失败修复（PR #52）**：每次按下都重置当前音效 pair，切换音效包或解析失败后不会复用上一次的旧音效。
+
+### 构建 / CI 失败经验（v4.0.5 之后）
+
+- **POSIX 碰撞 IPC 测试失败（issue #42）**：Linux/macOS 上协调者被强杀后 `QLocalServer` 的 Unix socket 文件残留，幸存者 `listen()` 报 `AddressInUseError` 导致重选死循环；`submit_leave` 成员表为空属于同批时序问题。处理：先探测活监听者、确认无人应答再清理残留并重试；补 `bytesAvailable()` 兜底读取；测试服务名缩短规避 macOS socket 路径长度上限（PR #46/#49）。
+- **WebM 线程回收偶发失败**：`test_rapid_start_stop_no_leaked_running_threads` 在 Linux/macOS 偶发断言残留新出现的非预期线程（含 reader 线程）。处理：线程退出是异步的，断言前给 5s 宽限等待；若仍偶发可重跑定位是否负载相关。
+- **macOS 右键菜单动画时序失败**：`test_context_menu_transitions_smoothly_to_safe_target` 原先固定 `qWait(50)` 采样动画中间位置，macOS offscreen 子进程定时器调度延迟时会采样到尚未推进的帧（`middle.x == 40`）。处理：改为轮询等待菜单位置首次变化（上限 2s）后再采样，并等待 `duration + margin` 验证最终位置；恢复严格下界断言（PR #53/#54）。
+- **经验总结**：
+  - 本地 Windows 全量通过 ≠ 三平台通过；QLocalServer、子进程、UI 动画等平台敏感测试必须跑真实 Linux/macOS。
+  - 固定短等待采样 UI 中间态是 flaky 主要来源，应轮询“状态变化”而非假设固定帧率/调度。
+  - `workflow_dispatch` 手动触发 CI 只测试+构建+上传 artifact，不创建/修改 Release，适合合并前/后验证。
+  - 遇到平台相关 flaky 先定位根因，不要简单放宽断言到“永远通过”。
+  - 更完整记录见 `docs/BUILD-CI-FAILURE-NOTES-2026-08.md`。
 
 ### v4.0.5（功能版）
 

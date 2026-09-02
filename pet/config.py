@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -191,6 +192,9 @@ def _default_agent_link_data() -> dict:
         "claude": False,
         "cursor": False,
         "opencode": False,
+        # 自定义联动 Agent（协议见 docs/AGENT_LINK_PROTOCOL.md §4）：只读监听
+        # 用户指定的事件文件，不写外部配置、无需授权弹窗，默认空
+        "custom_agents": [],
         # 联动气泡：开始干活提醒（可选，默认关）、任务完成通知（默认开）
         "notify_state": False,
         "notify_done": True,
@@ -231,6 +235,41 @@ def _clean_click_sound_pack(value: Any) -> dict:
     }
 
 
+# 内置联动 Agent 键：custom_agents 的 key 不得与之重复
+_AGENT_LINK_BUILTIN_KEYS = ("dsh", "claude", "cursor", "opencode")
+# 自定义联动 Agent 条目上限（防配置文件被塞爆）
+_CUSTOM_AGENT_MAX = 8
+
+
+def _clean_custom_agents(raw: Any) -> list[dict]:
+    """清洗自定义联动 Agent 列表（agent_link.custom_agents）。
+
+    条目 {key, name, path}：key 为小写标识（不得与内置键/其他条目重复），
+    name 为显示名（缺省用 key），path 为事件文件路径（支持 ~，允许暂不存在）。
+    非法条目直接丢弃，超出上限截断。"""
+    if not isinstance(raw, list):
+        return []
+    result: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        if len(result) >= _CUSTOM_AGENT_MAX:
+            break
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", key):
+            continue
+        if key in _AGENT_LINK_BUILTIN_KEYS or key in seen:
+            continue
+        path = str(item.get("path") or "").strip()[:500]
+        if not path:
+            continue
+        name = str(item.get("name") or "").strip()[:50] or key
+        seen.add(key)
+        result.append({"key": key, "name": name, "path": path})
+    return result
+
+
 def _clean_agent_link_data(raw: Any) -> dict:
     defaults = _default_agent_link_data()
     if not isinstance(raw, dict):
@@ -238,6 +277,7 @@ def _clean_agent_link_data(raw: Any) -> dict:
     result = dict(defaults)
     # 保留传入的额外合法键（例如 thinking_text, thinking_texts 等）
     result.update(raw)
+    result["custom_agents"] = _clean_custom_agents(raw.get("custom_agents"))
     for key in (
         "dsh", "claude", "cursor", "opencode", "notify_state", "notify_done", "notify_activity",
         "sound_enabled", "sound_start_enabled", "sound_done_enabled", "sound_error_enabled",
@@ -524,6 +564,7 @@ class Config:
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
             "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
+            "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
@@ -642,6 +683,7 @@ class Config:
             "chat_bg_crops",
             "chat_ui_style",
             "chat_follow_pet",
+            "system_notifications_enabled",
             "character_aliases",
             "character_profiles",
             "chat_always_on_top",

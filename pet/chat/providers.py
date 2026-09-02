@@ -29,13 +29,32 @@ def _is_cert_verify_error(reason) -> bool:
 
 _CERT_HINT = '；如为代理/梯子拦截或自签名证书，可在 AI 设置中勾选"跳过 SSL 证书验证"后重试'
 
+
+def build_browser_headers(extra: dict | None = None) -> dict[str, str]:
+    """构造带浏览器特征的请求头，降低 Cloudflare 等 WAF 的机器人误判。
+
+    urllib 默认 User-Agent 是 Python-urllib/3.x，容易被识别为脚本机器人
+    （如 Cloudflare error 1010）。这里提供常见浏览器头，业务头经 extra 覆盖。
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+    }
+    if extra:
+        headers.update(extra)
+    return headers
+
+
 def test_connection(config, timeout: float = 10.0):
     """发送一个最小的非流式请求验证端点连通性（含 TLS 校验）。
     返回 (ok: bool, message: str)，供设置界面"测试连接"使用，不写入任何状态。"""
     try:
         endpoint = normalize_chat_endpoint(config.base_url, config.chat_path)
         payload = {'model': config.model, 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1, 'stream': False}
-        headers = {'Content-Type': 'application/json'}
+        headers = build_browser_headers({'Content-Type': 'application/json'})
         if config.api_key: headers['Authorization'] = f'Bearer {config.api_key}'
         req = urllib.request.Request(endpoint, data=json.dumps(payload, ensure_ascii=False).encode('utf-8'), headers=headers, method='POST')
         with urllib.request.urlopen(req, timeout=timeout, context=_make_ssl_context(config.verify_ssl)) as resp:
@@ -93,7 +112,7 @@ class OpenAICompatibleProvider:
     def stream(self,messages:list[dict[str,Any]],config:ProviderConfig,cancel_event:threading.Event,response_holder:list|None=None)->Iterator[str]:
         endpoint=normalize_chat_endpoint(config.base_url,config.chat_path)
         payload:dict[str,Any]={'model':config.model,'messages':messages,'stream':True,'temperature':config.temperature,'max_tokens':config.max_tokens}
-        headers={'Content-Type':'application/json','Accept':'text/event-stream'}
+        headers=build_browser_headers({'Content-Type':'application/json','Accept':'text/event-stream'})
         if config.api_key: headers['Authorization']=f'Bearer {config.api_key}'
         req=urllib.request.Request(endpoint,data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),headers=headers,method='POST')
         try: response=urllib.request.urlopen(req,timeout=config.timeout,context=_make_ssl_context(config.verify_ssl))

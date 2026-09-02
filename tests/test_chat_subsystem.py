@@ -1479,6 +1479,7 @@ def test_close_required_menu_callback_runs_only_after_exec_returns(monkeypatch):
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
 
@@ -1558,6 +1559,7 @@ def test_context_menu_window_callback_waits_until_old_menu_is_destroyed(monkeypa
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
             self.delete_requested = False
@@ -1651,6 +1653,7 @@ def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monke
 
     class FakeMenu:
         def __init__(self, _parent):
+            self.aboutToShow = FakeSignal()
             self.aboutToHide = FakeSignal()
             self.destroyed = FakeSignal()
             created.append(self)
@@ -2175,3 +2178,103 @@ def test_chat_settings_dialog_warns_when_keyring_unavailable(tmp_path, monkeypat
     assert "系统安全存储" in str(warnings[0][2])
     assert dialog.settings.active_config.api_key == "sk-new"
     app.processEvents()
+
+
+def test_chat_window_system_notification_when_not_active(tmp_path):
+    """聊天窗口非活动时发送系统通知；点击回调可聚焦窗口。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    calls = []
+    win = ChatWindow(
+        Config(tmp_path),
+        "shenshen",
+        notifier=lambda title, message, on_click=None: calls.append((title, message, on_click)),
+    )
+    try:
+        win._show_system_notice("对话完成", "AI 已回复完成，点击查看。")
+        assert len(calls) == 1
+        assert calls[0][0] == "对话完成"
+        assert calls[0][1] == "AI 已回复完成，点击查看。"
+        # 点击默认回调应把窗口带回前台（能调用不抛异常即可）
+        calls[0][2]()
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_chat_window_authorization_error_opens_settings(tmp_path):
+    """认证失败类系统通知的点击回调应打开 AI 设置。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    settings_opened = []
+    notices = []
+    win = ChatWindow(
+        Config(tmp_path),
+        "shenshen",
+        notifier=lambda title, message, on_click=None: notices.append((title, on_click)),
+        auth_callback=lambda: settings_opened.append(1),
+    )
+    try:
+        assert win._looks_like_authorization_error("HTTP 401 Unauthorized")
+        assert win._looks_like_authorization_error("认证失败：invalid api key")
+        assert not win._looks_like_authorization_error("connection reset")
+        win._show_system_notice("需要授权", "请检查 API Key", on_click=win._focus_auth_settings)
+        assert len(notices) == 1
+        notices[0][1]()
+        assert settings_opened == [1]
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_system_notification_respects_disabled_setting(tmp_path):
+    """关闭“系统通知”设置后，即使窗口非活动也不再弹系统通知。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    cfg.set("system_notifications_enabled", False)
+    cfg.save()
+    calls = []
+    win = ChatWindow(
+        cfg,
+        "shenshen",
+        notifier=lambda title, message, on_click=None: calls.append((title, message)),
+    )
+    try:
+        win._show_system_notice("对话完成", "不应弹出")
+        assert calls == []
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_chat_settings_dialog_persists_system_notification_toggle(tmp_path):
+    """AI 设置中的“系统通知”开关应能保存并重新读取。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.settings_dialog import ChatSettingsDialog
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    dlg = ChatSettingsDialog(cfg)
+    try:
+        assert dlg.system_notify_check.isChecked() is True
+        dlg.system_notify_check.setChecked(False)
+        dlg.save()
+        assert Config(tmp_path).get("system_notifications_enabled") is False
+    finally:
+        dlg.close()
+        _app.processEvents()

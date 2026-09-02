@@ -303,7 +303,7 @@ def _post_vision_request(
     次数消耗每日预算，避免一次触发多次重试却只记一次）。返回 False 表示预算
     已耗尽，函数直接抛出 VisionError 停止后续重试。"""
     # 延迟导入：无 Chat 变体（pet.chat 被排除）下本函数不会被调用
-    from .chat.providers import _make_ssl_context, normalize_chat_endpoint
+    from .chat.providers import _make_ssl_context, normalize_chat_endpoint, build_browser_headers
     # 视觉独立端点仅在「不同聊天模型」时生效；同聊天模型时强制跟随聊天配置，
     # 否则残留的 GLM 地址会配上 ds 的模型名发出（modelCode 不存在）
     base_url = p.base_url if p.vision_same_as_chat else (p.vision_base_url or p.base_url)
@@ -338,7 +338,7 @@ def _post_vision_request(
     if model_name.lower().startswith('deepseek') and 'deepseek' in base_url.lower():
         # ds 视觉模型默认开推理（思考十几秒才说话），关掉后 1~2 秒直答
         payload['thinking'] = {'type': 'disabled'}
-    headers = {'Content-Type': 'application/json'}
+    headers = build_browser_headers({'Content-Type': 'application/json'})
     # 安全（高优先）：独立视觉端点（vision_same_as_chat=False）绝不能把聊天 Key
     # 一起发过去。只有与聊天同模型时才允许复用聊天 Key；独立端点只认视觉自己的
     # Key（含钥匙串解析），缺失时直接报错，绝不回退到聊天 Key。

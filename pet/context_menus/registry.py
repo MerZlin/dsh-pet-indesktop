@@ -137,7 +137,7 @@ class MenuActionRegistry:
                 lambda pet: bool(configured_quick_apps(pet.cfg)),
             ),
             "balance": MenuActionSpec(add_balance, _callback_available("on_show_balance")),
-            "harness": MenuActionSpec(add_harness),
+            "harness": MenuActionSpec(add_harness, _callback_available("on_open_chat")),
             "deepseek_web": MenuActionSpec(lambda menu, pet: add_deepseek_web(menu)),
             "check_update": MenuActionSpec(_build_check_update, _callback_available("on_check_update")),
             "github_project": MenuActionSpec(_build_github),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -258,10 +259,12 @@ class ChatComposer(QFrame):
 
 
 class ChatWindow(QDialog):
-    def __init__(self, config, character_id: str, parent=None, pet_window=None):
+    def __init__(self, config, character_id: str, parent=None, pet_window=None, notifier=None, auth_callback=None):
         super().__init__(parent)
         self.config = config
         self.character_id = str(character_id)
+        self._system_notifier = notifier
+        self._auth_callback = auth_callback
         self.setObjectName("chat-window")
         self.setWindowTitle("AI 对话")
         # 窗口级图标主题：浅色表面用深灰轮廓图标（rename 按钮等），
@@ -957,6 +960,44 @@ class ChatWindow(QDialog):
         self._active_request_id = self.service.send(messages, config)
         self._bottom()
 
+    def _focus_chat(self) -> None:
+        """把聊天窗口带回前台，供系统通知点击后跳回页面处理。"""
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _focus_auth_settings(self) -> None:
+        if callable(self._auth_callback):
+            self._auth_callback()
+        else:
+            self._focus_chat()
+
+    def _show_system_notice(self, title: str, message: str, *, on_click=None) -> None:
+        """仅在聊天窗口不是当前活动窗口时弹系统通知；点击默认跳回本窗口。"""
+        if (self._system_notifier is None
+                or not bool(self.config.get("system_notifications_enabled", True))
+                or self.isActiveWindow()):
+            return
+        try:
+            self._system_notifier(title, message, on_click=on_click or self._focus_chat)
+        except Exception:
+            logging.getLogger(__name__).exception("系统通知发送失败")
+
+    @staticmethod
+    def _looks_like_authorization_error(text: str) -> bool:
+        lowered = str(text or "").lower()
+        return any(
+            token in lowered
+            for token in ("401", "403", "unauthorized", "authentication", "api key",
+                          "认证失败", "未授权", "授权")
+        )
+
+    def notify_authorization_required(self, message: str = "有一条需要授权或确认的请求，点击查看。") -> None:
+        """供“需要授权/审批”类事件调用：切走窗口时弹系统通知并跳回聊天页。"""
+        self._show_system_notice("需要授权", message)
+
     def _started(self, request_id: str) -> None:
         if request_id != self._active_request_id:
             return
@@ -993,6 +1034,7 @@ class ChatWindow(QDialog):
         self._refresh_sessions()
         self._reset()
         self.pet_link.success()
+        self._show_system_notice("对话完成", "AI 已回复完成，点击查看。")
         if follow_output:
             self._bottom()
 
@@ -1004,6 +1046,14 @@ class ChatWindow(QDialog):
             self._bubble.set_state("error")
         self._reset()
         self.pet_link.error(text)
+        if self._looks_like_authorization_error(text):
+            self._show_system_notice(
+                "需要授权",
+                "模型服务返回认证失败，点击打开 AI 设置检查 API Key。",
+                on_click=self._focus_auth_settings,
+            )
+        else:
+            self._show_system_notice("生成失败", f"对话生成失败：{str(text)[:100]}")
         self._bottom()
 
     def _stopped(self, request_id: str) -> None:

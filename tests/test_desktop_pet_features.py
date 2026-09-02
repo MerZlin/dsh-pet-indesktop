@@ -792,6 +792,54 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     app.processEvents()
 
 
+def test_pure_pet_context_menu_keeps_web_but_hides_harness():
+    """纯桌宠（无 Chat/DSH 联动）右键菜单去掉 DeepSeek Harness，保留网页版。"""
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menu import populate_context_menu
+
+    class FakeConfig:
+        def get(self, key, default=None):
+            return {
+                "context_menu_template": "modern",
+                "character": "shenshen",
+                "context_menu_appearance": {"theme": "light"},
+            }.get(key, default)
+
+    class FakePet:
+        cfg = FakeConfig()
+        on_open_chat = None
+        on_open_chat_settings = None
+        on_open_legacy_settings = None
+        on_open_modern_settings = None
+        on_spawn_pet = None
+        idles = turns = moves = clicks = acts = []
+        playback_speed = scale = 1.0
+        drag_physics = no_move = False
+
+        def __getattr__(self, name):
+            return None
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    populate_context_menu(menu, FakePet())
+    def labels_in(menu):
+        labels = []
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            labels.append(action.text())
+            if action.menu() is not None:
+                labels.extend(labels_in(action.menu()))
+        return labels
+
+    labels = labels_in(menu)
+    assert "启动 DeepSeek Harness" not in labels
+    assert "打开网页版 DeepSeek" in labels
+    menu.close()
+    app.processEvents()
+
+
 def test_context_menu_dispatches_style_by_template(monkeypatch):
     from PySide6.QtWidgets import QApplication, QMenu, QStyle, QWidget
 
@@ -1515,8 +1563,10 @@ def test_legacy_config_value_dispatches_legacy_layout(monkeypatch):
     window_mod._populate_context_menu(menu, Pet())
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
     # legacy 布局：无图标、无现代专属入口（看看屏幕/更新与帮助/生小肥鱼层级不同）
+    # Pet 无 on_open_chat，属于纯桌宠版：不显示 DeepSeek Harness，保留网页版
     assert labels.index("生小肥鱼") == labels.index("开机自启") + 1
-    assert labels.index("打开网页版 DeepSeek") == labels.index("启动 DeepSeek Harness") + 1
+    assert "启动 DeepSeek Harness" not in labels
+    assert "打开网页版 DeepSeek" in labels
     assert menu.styleSheet() == ""
     icon_actions = [action.text() for action in menu.actions() if not action.icon().isNull()]
     assert icon_actions == []
