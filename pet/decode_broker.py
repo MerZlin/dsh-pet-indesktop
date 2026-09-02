@@ -1050,8 +1050,20 @@ class BrokerFacade:
         if not _SHM_AVAILABLE:
             logger.warning('broker: 平台无 shared_memory，发布降级本地: %s', asset)
             return "local"
+        # 几何守卫（DS 终审 P2-2）：session 几何 = 画布几何，素材真实几何与之
+        # 不符时发布端会静默截断/补零、消费端整帧丢弃——不符直接降级本地，
+        # 绝不把错位帧写进共享内存。movie 未暴露几何（替身/GifClip）时跳过校验。
+        mw = getattr(movie, "_w", None)
+        mh = getattr(movie, "_h", None)
+        if (isinstance(mw, int) and isinstance(mh, int) and mw > 0 and mh > 0
+                and (mw != self._canvas_w or mh != self._canvas_h)):
+            logger.warning('broker: 素材几何 %sx%s ≠ 画布 %sx%s，发布降级本地: %s',
+                           mw, mh, self._canvas_w, self._canvas_h, asset)
+            return "local"
         key = asset_key(asset)
-        existing = self._publishers.pop(key, None)
+        # 按素材路径（而非当下重算的 key）替换旧记录：播放期间素材被替换/
+        # 删除会让 key 漂移，按 key pop 会落空导致同路径双 session（终审 P1-1）。
+        existing = self._pop_publisher_for_asset(asset)
         if existing is not None:
             # 同一素材重复起播（stop 后重入等异常路径；自然结束的记录在
             # publish_natural_end 已移出）：旧 session 尚未收尾——中止广播并
@@ -1087,6 +1099,21 @@ class BrokerFacade:
         logger.info('broker: 发布 session 就绪 asset=%s shm=%s', key, session.name)
         return "publish"
 
+    def _pop_publisher_for_asset(self, asset: str) -> "_PublisherRecord | None":
+        """按素材路径弹出发布记录（终审 P1-1）。
+
+        不以当下文件 stat 重算 ``asset_key``：播放期间素材被替换/删除会使
+        key 漂移，按新 key ``pop`` 落空会把 record（共享内存、预算位、movie
+        引用）泄漏到 shutdown 才清理。发布表至多几项（一素材一 session），
+        线性匹配 record.asset（创建时登记的原始路径）足够；匹配到即按创建
+        时的 key 移出。
+        """
+        for key, record in list(self._publishers.items()):
+            if record.asset == asset:
+                del self._publishers[key]
+                return record
+        return None
+
     def publish_natural_end(self, asset: str) -> None:
         """coordinator 侧：素材自然播完（窗口末帧 stop / movie finished）。
 
@@ -1099,13 +1126,12 @@ class BrokerFacade:
         起播干净地创建新 epoch session；定时器只按 record 身份 close（幂等、
         预算恰释放一次），绝不误删同 key 的新一轮记录。
         """
-        key = asset_key(asset)
-        record = self._publishers.pop(key, None)
+        record = self._pop_publisher_for_asset(asset)
         if record is None:
             return
         if not record.mark_natural_end():
             return  # 已置终态（自然/中止）→ 幂等返回（不重复调度）
-        logger.info('broker: 发布 session 自然结束 asset=%s', key)
+        logger.info('broker: 发布 session 自然结束 asset=%s', asset)
         self._schedule_close(record, grace=SESSION_END_GRACE_S)
 
     def publish_abort(self, asset: str) -> None:
@@ -1114,12 +1140,11 @@ class BrokerFacade:
         记录弹出后幂等关闭：``_PublisherRecord.close()`` 只 release 预算一次，
         自然结束宽限期记录已被 pop（此处 no-op），不会重复释放。
         """
-        key = asset_key(asset)
-        record = self._publishers.pop(key, None)
+        record = self._pop_publisher_for_asset(asset)
         if record is None:
             return
         if record.mark_aborted():
-            logger.info('broker: 发布 session 中止 asset=%s', key)
+            logger.info('broker: 发布 session 中止 asset=%s', asset)
         record.close()
 
     # ---- 订阅侧（client 的 movie 开始/结束）--------------------------------

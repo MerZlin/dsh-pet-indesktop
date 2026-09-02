@@ -689,3 +689,4 @@ def test_reader_register_race_never_leaves_untracked_live_proc(app, monkeypatch)
     assert proc.poll() is not None, "最终进程必须确认退出"
     clip.cleanup()
     app.processEvents()
+

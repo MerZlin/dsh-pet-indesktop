@@ -346,7 +346,7 @@ def test_subscribe_timeout_after_600ms_budget_when_coordinator_silent(tmp_path):
 # ---------------------------------------------------------------------------
 # 杀 coordinator：断流回退事件 + 重选举后不回订自己 + 新 epoch 发布
 # ---------------------------------------------------------------------------
-def test_kill_coordinator_client_falls_back_then_republishes_with_new_epoch(tmp_path):
+def test_coordinator_graceful_shutdown_client_falls_back_then_republishes_with_new_epoch(tmp_path):
     pair = _Pair(tmp_path, "kill")
     old_shm_name = None
     try:
@@ -370,7 +370,10 @@ def test_kill_coordinator_client_falls_back_then_republishes_with_new_epoch(tmp_
         kind, data, src = feed_session.poll()
         assert kind == "frame" and src == 0 and data == _PAYLOAD
 
-        # 杀 coordinator（模拟进程退出）：先中止发布 session（aborted 广播），再关会话
+        # coordinator 优雅退出（shutdown 会主动中止发布 session 并广播 aborted，
+        # 再关会话）。注：本测试覆盖的是优雅 shutdown 路径；真正的 taskkill
+        # 进程击杀路径由实机实证覆盖（_plan/current/P3_DEMO_EVIDENCE.md 回退
+        # 段：停滞看门狗 → 消费端本地回退）。测试名已据实修正（终审 5.6sol P2-1）。
         coord_facade.shutdown()
         pair.coord_session.stop()
 
@@ -714,3 +717,57 @@ def test_publisher_record_close_idempotent_releases_once(tmp_path):
     finally:
         _shutdown_facades(coord_facade, client_facade)
         pair.stop()
+
+
+def test_publish_teardown_survives_asset_file_change(tmp_path):
+    """终审 P1-1：播放期间素材被替换/删除后，publish_abort/publish_natural_end
+    仍须按创建时登记的路径收尾——不得以当下文件 stat 重算 asset_key：key
+    漂移会让按 key 的 pop 落空，record（shm/预算位/movie 引用）泄漏到
+    shutdown。按 record.asset（创建时路径）匹配收尾。"""
+    facade = BrokerFacade(ipc_session=None, enabled=True)
+    asset_file = tmp_path / "idle-drift.webm"
+    asset_file.write_bytes(b"\x00" * 128)
+    asset = str(asset_file)
+    before = _budget()
+    try:
+        assert facade.publish_start(asset, _Movie(asset)) == "publish"
+        assert len(facade._publishers) == 1
+        # 播放期间素材被替换（mtime/size 变化 → key 漂移）
+        asset_file.write_bytes(b"\x01" * 256)
+        facade.publish_abort(asset)
+        assert len(facade._publishers) == 0, "key 漂移后 publish_abort 落空"
+        assert _budget() == before, "key 漂移后预算位泄漏"
+
+        # 自然结束路径 + 素材被删除（stat 失败 → key 退化为裸路径）
+        facade.publish_start(asset, _Movie(asset))
+        record = next(iter(facade._publishers.values()))
+        asset_file.unlink()
+        facade.publish_natural_end(asset)
+        assert len(facade._publishers) == 0, "素材删除后 publish_natural_end 落空"
+        record.close()  # 宽限期定时器之外的确定性收尾（幂等，预算恰一次）
+        assert _budget() == before
+    finally:
+        facade.shutdown()
+    assert _budget() == before
+
+
+def test_publish_geometry_mismatch_falls_back_local(tmp_path):
+    """DS 终审 P2-2：素材真实几何 ≠ 画布几何时发布端直接降级本地——
+    不把会被静默截断/补零的错位帧写进共享内存。"""
+    facade = BrokerFacade(ipc_session=None, enabled=True)
+    asset = str(tmp_path / "idle-geo.webm")
+    before = _budget()
+    try:
+        movie = _Movie(asset)
+        movie._w, movie._h = 320, 240  # 非画布几何
+        assert facade.publish_start(asset, movie) == "local"
+        assert len(facade._publishers) == 0
+        assert _budget() == before
+        # 画布几何（WebMClip 的 _w/_h）照常发布
+        movie2 = _Movie(asset)
+        movie2._w, movie2._h = 640, 360
+        assert facade.publish_start(asset, movie2) == "publish"
+        assert movie2._publish_sink is not None
+    finally:
+        facade.shutdown()
+    assert _budget() == before

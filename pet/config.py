@@ -823,7 +823,11 @@ class Config:
         self.data["throw_strength"] = strength
         self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
         # 闲置降帧（性能调研 §4.3）：开关默认关（灰度）；阈值夹到 [1, 3600] 秒
-        self.data["idle_low_fps_enabled"] = bool(self.data.get("idle_low_fps_enabled", False))
+        # 终审 P1-3：必须用 _bool_or_default——bool("false") is True，字符串
+        # 布尔（外部手改配置/旧版导出）会被误开；与 decode_broker_enabled 同规。
+        self.data["idle_low_fps_enabled"] = _bool_or_default(
+            self.data.get("idle_low_fps_enabled"), False
+        )
         self.data["idle_low_fps_threshold"] = _float_or_default(
             self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
         )

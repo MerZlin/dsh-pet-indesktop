@@ -66,7 +66,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication
 
@@ -206,6 +206,30 @@ class _OrphanClipRegistry:
     _SWEEP_DELAY_MS = 500  # 惰性 sweep timer 的间隔（原 _ORPHAN_SWEEP_DELAY_MS）
     _LEAK_ATTEMPTS = 6  # 病态 reader 永不退出时的泄漏告警阈值（原 _ORPHAN_LEAK_ATTEMPTS）
 
+    class _ArmInvoker(QObject):
+        """跨线程编排信号载体（终审 P1-4）：worker 线程的 register 经
+        arm_requested 信号排队到 GUI 线程执行 timer 创建/启动。实例在注册表
+        实例化（模块导入 = 主线程 = 本应用的 GUI 线程）时创建，affinity 即
+        主线程；在任意线程 emit 都安全（Qt 排队投递）。
+
+        槽必须挂在 QObject（本类自身）上：排队投递到 QObject receiver 是
+        Qt 久经验证的跨线程路径（与 PetWindow.fullscreen_changed 同款）；
+        投递到非 QObject 的 plain callable 在跨线程场景不稳定（终审修复
+        初版曾因此原生崩溃）。"""
+
+        arm_requested = Signal()
+
+        def __init__(self, registry: "_OrphanClipRegistry") -> None:
+            super().__init__()
+            self._registry = registry
+            # AutoConnection：emit 线程 ≠ invoker 所在线程（主线程）时自动
+            # 走 QueuedConnection，槽在 GUI 线程执行。
+            self.arm_requested.connect(self._on_arm_requested)
+
+        @Slot()
+        def _on_arm_requested(self) -> None:
+            self._registry._arm_sweep_timer_on_gui()
+
     def __init__(self) -> None:
         self._clips: "set[WebMClip]" = set()
         self._lock = threading.Lock()
@@ -213,11 +237,34 @@ class _OrphanClipRegistry:
         # reap 防重入（R3）：reap 的锁外窗口期（补杀 poll/terminate）不持
         # _lock，第二个并发 reap 进入时直接跳过，避免与首个 reap 交错。
         self._reaping = False
+        self._arm_invoker = self._ArmInvoker(self)
 
     def register(self, clip: "WebMClip") -> None:
-        """把退役池非空的 clip 挂到注册表（强引用持有，防 GC 竞态）。"""
+        """把退役池非空的 clip 挂到注册表（强引用持有，防 GC 竞态）。
+
+        终审 P1-4：timer 的创建/启动必须在 GUI 线程——本方法可被任意线程
+        调用（如首帧进程收尾经 _track_unconfirmed_proc 在解码线程触发），
+        若在无线程事件循环的 worker 线程里首次创建并 start QTimer，sweep
+        永不触发（Qt 定时器只在其所属线程的事件循环里工作），退役 reader /
+        未确认首帧进程将无人回收。非 GUI 线程经 _ArmInvoker 信号排队到
+        GUI 线程执行（多次编排幂等）。
+        """
         with self._lock:
             self._clips.add(clip)
+        self._arm_sweep_timer()
+
+    def _arm_sweep_timer(self) -> None:
+        """确保 sweep timer 存在并启动（只在 GUI 线程执行创建/启动）。"""
+        app = QApplication.instance()
+        if app is None:
+            return
+        if QThread.currentThread() is app.thread():
+            self._arm_sweep_timer_on_gui()
+        else:
+            self._arm_invoker.arm_requested.emit()
+
+    def _arm_sweep_timer_on_gui(self) -> None:
+        """创建（若未建）并启动 sweep timer——只在 GUI 线程执行。"""
         timer = self._ensure_timer()
         if timer is not None:
             timer.start()

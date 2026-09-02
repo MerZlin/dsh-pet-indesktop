@@ -222,6 +222,23 @@ class TestConfig:
         reloaded2 = Config(base=tmp_path)
         assert reloaded2.get("idle_low_fps_threshold") == 3600.0
 
+    def test_string_bool_values_normalized(self, tmp_path):
+        """字符串布尔（外部手改配置/旧版导出）按语义归一化（终审 P1-3）：
+        bool("false") is True——配置层曾因此把 "false" 误归一为开。"""
+        import json
+        cfg = Config(base=tmp_path)
+        cfg.path.parent.mkdir(parents=True, exist_ok=True)
+        cfg.path.write_text(
+            json.dumps({"version": 4, "idle_low_fps_enabled": "false"}),
+            encoding="utf-8",
+        )
+        assert Config(base=tmp_path).get("idle_low_fps_enabled") is False
+        cfg.path.write_text(
+            json.dumps({"version": 4, "idle_low_fps_enabled": "true"}),
+            encoding="utf-8",
+        )
+        assert Config(base=tmp_path).get("idle_low_fps_enabled") is True
+
 
 # ============================================================================
 # 2. 活跃度门控：单调时钟 + 阈值 + 可见性 + 交互复位
