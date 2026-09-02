@@ -1,173 +1,222 @@
-# window.py 增量拆分公约（加功能前必读）
+# window.py 演进指南
 
-状态：现行公约 ｜ 建立于：结构线收官（perf/stage-1，2026-09）｜ 强制力：`tests/test_architecture.py` 的 window.py 行数预算红线 + CI
+**文档性质**：本文是项目结构治理实践的经验整理与演进建议，供贡献者参考，
+不构成强制规范。CI 的强制检查来自 `.github/workflows/pr-test.yml`（完整
+测试套件 + ruff）；其中与本文直接相关的架构护栏是
+`tests/test_architecture.py` 的三项断言（依赖方向、窗口私有面、行数预算，
+覆盖范围见第 5 节）。
+
+**适用范围**：`pet/window.py`（`PetWindow`，4239 行 / 237 个类级方法
+（AST 直接定义口径）/ 159 个不同名实例字段（全文 `self.xxx =` 赋值
+去重口径，2026-09-03 实测））及其后续演进。
+
+**版本**：2026-09-03，对应分支 `perf/stage-1`。
 
 ---
 
-## 0. 一句话公约
+## 1. 背景与现状
 
-**往 window.py 加功能之前，先把你要碰的那片逻辑拆成独立控制器，再在拆干净的地基上写功能。**
+`PetWindow` 是桌宠主窗口类，历史上承担了渲染、交互、动画状态机、碰撞
+客户端、平台适配、气泡调度、设置写回等几乎全部窗口侧职责。2026-09 的
+结构治理已将其中的碰撞客户端、平台层、共享解码 broker 接线等拆分为独立
+模块，但该类仍是仓库内最大的单一类。
 
-window.py 已从 4307 行/207 方法的上帝类拆出碰撞客户端、平台层、broker 接线等模块，
-但仍有约 4200 行、220+ 方法、70+ 个共享实例字段。它不再是"能塞就塞"的地方：
-CI 里有行数预算红线（`test_window_py_line_budget`），超了测试直接红。
+结构治理同时在 CI（`.github/workflows/pr-test.yml`，完整测试套件 + ruff）
+之上建立了三条架构红线（`tests/test_architecture.py`）：
 
-## 1. 为什么是这个公约（而不是"提前全拆"或"不许拆"）
+1. 纯逻辑层（collision / physics / collision_codec）不依赖 Qt；
+2. decode_broker 不反向依赖 window / webm_clip；
+3. window.py 行数不超过预算值（超出即测试失败）。
 
-2026-09 结构线的实证结论：
+注：红线 2 约束的是模块级 import 依赖方向，不等于「控制器不访问窗口
+实例」——近邻控制器持有窗口引用并读写其状态是当前的实际做法（见 §5）。
 
-- **提前全拆（为整洁而拆）不可行**：window.py 剩余的纠缠是 70+ 个共享字段的隐式契约，
-  没有功能牵引的拆分没有真实验收标准（只能说"测试还绿"），而 Qt 生命周期类回归
-  测试覆盖不到（实机才暴露）。
-- **不拆直接加功能更不可行**：每加一个功能，上帝类更胖、以后拆的成本更高（要先把
-  新功能代码从窗口逻辑里分离出来再拆，成本超线性增长）。
-- **唯一可持续的路**：拆分跟着真实功能走。谁要加功能，谁就先把那片域切下来——
-  此时拆分有最实的验收标准（新功能要用它），拆错了立刻暴露。
+## 2. 演进策略：功能驱动拆分
 
-这就是"功能驱动拆分"：拆分的时机、范围、验收全由正在开发的功能决定。
+本项目对 window.py 采用「功能驱动拆分」策略，即：**拆分的时机与范围由
+正在开发的功能决定，不进行无功能牵引的预防性拆分。**
 
-## 2. 触发条件（满足其一就必须先拆）
+该策略的依据来自治理期间的实践观察：
 
-1. 新功能需要在 window.py 里新增超过 ~100 行；
-2. 新功能需要改动某个域的 3 个以上既有方法；
-3. CI 行数预算红了（说明有人没遵守前两条）。
+- 预防性全量拆分缺乏真实验收标准（仅能以"测试仍绿"判定），而 Qt
+  生命周期类回归难以被 offscreen 测试覆盖，风险不可控；
+- 直接在大型类上持续叠加功能，会使后续拆分的分离成本随代码量持续增长；
+- 功能开发过程中进行拆分，功能本身即为拆分的验收标准，回归定位最快。
 
-## 3. 标准拆分流程（照做即可）
+**建议的启动条件**（满足其一即建议评估拆分）：
 
-以"把域 X 拆成 `pet/window_X.py` 的 XController"为例：
+1. 新功能预计在该类中新增超过约 100 行；
+2. 新功能需要修改某一域的 3 个以上既有方法；
+3. CI 行数预算触发告警。
 
-1. **圈地**：按下文 §4 的域地图确认你要碰的方法属于哪个域。如果域地图里没有
-   你要的域，先和 maintainer 讨论补地图，不要自己发明边界。
-2. **读纠缠**：把该域每个方法读一遍，列出它读写的 `self._xxx` 字段清单；
-   标出哪些字段**只**被本域用（直接搬走），哪些被别域共享（留窗口，控制器
-   经构造注入或回调访问）。这步省不得——76 个共享字段里标错一个就是隐性 bug。
-3. **建控制器**：新文件 `pet/window_<域>.py`，类持有自己的字段；对窗口的反向
-   依赖通过构造参数注入（参考 `collision_client.py`：构造时传入交互常量，
-   避免循环 import；参考 `agent_link_reducer.py`：依赖以 Callable 注入）。
-4. **搬移不改逻辑**：逐方法机械搬移，一行逻辑不改、一个数值不动。
-   每搬一组就跑测试。
-5. **留兼容委托**：window.py 里保薄的转发/委托属性（参考现有
-   `_collision_session` / `_predicted_bounces` 等 property 块）——既有调用面
-   和测试断言不因拆分而变。
-6. **验收**（缺一不可）：
-   - `QT_QPA_PLATFORM=offscreen python -m pytest -q` 全绿；
-   - `ruff check pet/ tests/` 全绿；
-   - `tests/test_architecture.py` 绿（行数预算应随拆分**下调**，在 PR 里同步改）；
-   - 实机四场景冒烟：拖拽（含弹弓/抛掷）、多开碰撞、聊天开关窗、Agent 联动。
-7. **PR 描述**写明：拆了哪个域、搬走哪些字段、哪些字段是共享的及理由。
+不满足上述条件的小改动，直接修改 window.py 是合理的，无需为此拆分模块。
 
-## 4. 域地图（window.py 剩余部分的功能归属）
+## 3. 推荐拆分流程
 
-每个域标注：核心方法（真实方法名，按字母聚类）｜主要共享字段｜拆分难度｜对应已宣布功能。
+以下流程在 `collision_client.py` 的拆分中验证过，可作为参照（代码本身
+即为可阅读的范例）。
 
-### 4.1 屏幕可见性域 → ScreenVisibilityController
+1. **确定边界**：参照第 4 节域地图确定涉及方法的归属域；域边界不明确时，
+   建议先与熟悉该域的维护者讨论。
+2. **梳理字段依赖**：列出目标域每个方法读写的实例字段，区分「仅本域使用」
+   （可随域迁出）与「跨域共享」（留在窗口类，经构造注入或回调访问）。
+   当前不同名实例字段 159 个（赋值去重口径），此步骤的准确性
+   直接决定拆分质量，建议逐字段核对而非依赖估计。
+3. **建立控制器**：新模块持有本域字段；对窗口的反向依赖经构造参数注入，
+   避免循环 import（参考 `collision_client.py` 的常量注入与
+   `agent_link_reducer.py` 的 Callable 注入两种模式）。
+4. **搬移与变更分离**：拆分提交仅做机械搬移，不夹带逻辑或数值修改，
+   以保证回归可归因。
+5. **保留兼容面**：window.py 保留薄委托 property / 转发方法，使既有调用
+   与测试断言不因拆分而改变。
+6. **验收**：测试套件全绿（`QT_QPA_PLATFORM=offscreen python -m pytest -q`）、
+   `ruff check pet/ tests/` 全绿、架构红线测试通过（拆分后可在 PR 中同步
+   下调行数预算）；涉及线程或生命周期的拆分，建议补充实机冒烟（此项为
+   建议，非 CI 门禁）。
+7. **PR 说明**：注明拆分域、迁出字段、保留共享字段及理由。
 
-边缘探头等"贴边/全屏感知"功能的地基。
+## 4. 域地图
 
-- 方法：`_start_fs_watch` / `_stop_fs_watch` / `_fs_watch_loop` /
-  `_fg_fullscreen_win32`（薄委托→platform_win）/ `_fg_fullscreen_probe` /
-  `_fs_user_busy_state` / `_on_fullscreen_changed` / `set_auto_hide_fullscreen` /
-  `_on_application_state_changed` / `_arm_screen_restore_retry` /
-  `_disarm_screen_restore_retry` / `_screen_retry_tick` / `_on_screen_added_restore`
-- 位置存取与多实例避让：`_restore_position` / `_save_position` / `save_position` /
-  `_go_default_corner` / `go_default_corner` / `_screen_available` /
-  `screen_available` / `_live_instance_rects` / `_rects_overlap` / `_pid_alive` /
-  `_write_runtime_marker`
-- 共享字段（示例，拆前必须自行复核）：`_fs_watch_stop`、`_screen_restore_timer`、
-  `_position_listeners`、位置/屏幕名配置
-- 难度：中。watcher 是后台线程，拆时注意线程边界留在窗口侧。
-- 对应功能：**边缘探头**。
+以下为按方法聚类的参考划分，边界为近似划分而非严格分层。
 
-### 4.2 动画链域 → AnimationChainController
+### 4.1 屏幕可见性与位置
 
-自定义角色动作/动作池功能的地基。
+- 全屏监视：`_start_fs_watch` / `_stop_fs_watch` / `_fs_watch_loop` /
+  `_fg_fullscreen_win32`（薄委托至 platform_win）/ `_fg_fullscreen_probe` /
+  `_fs_user_busy_state` / `_on_fullscreen_changed` /
+  `set_auto_hide_fullscreen` / `_on_application_state_changed`
+- 屏幕恢复重试：`_arm_screen_restore_retry` / `_disarm_screen_restore_retry` /
+  `_screen_retry_tick` / `_on_screen_added_restore`
+- 位置持久化与多实例避让：`_restore_position` / `_save_position` /
+  `save_position` / `_go_default_corner` / `go_default_corner` /
+  `_screen_available` / `screen_available` / `_live_instance_rects` /
+  `_rects_overlap` / `_pid_alive` / `_write_runtime_marker`
+- 相关字段（拆分前请再次核对）：`_fs_stop`、`_fs_thread`、
+  `_screen_restore_armed`、`_position_listeners` 等
+- 注意：watcher 运行于后台线程，拆分时建议将线程边界保留在窗口侧。
+  另请注意本域是粗粒度归并：全屏 watcher（线程）、位置恢复
+  （Qt `screenAdded` 信号）、多实例避让（文件/进程探测）的实现机制
+  差异较大，不能据此推断它们可作为一个整体迁移。
+- 拆分难度评估：中。
 
-- 方法：`_switch` / `_switch_fallback` / `switch_clip` / `_fallback_playable_idle` /
-  `_schedule_switch_retry` / `_cancel_pending_switch_retry` /
-  `_on_switch_retry_timeout` / `_connect_movie` / `_on_clip_finished` /
-  `_on_anim_ended` / `_pick` / `_pick_next` / `_start_animation_gap` /
-  `_cancel_animation_gap` / `_play_animation_gap_step` / `_on_animation_gap_timeout` /
+### 4.2 动画链
+
+- 方法：`_switch` / `_switch_fallback` / `switch_clip` /
+  `_fallback_playable_idle` / `_schedule_switch_retry` /
+  `_cancel_pending_switch_retry` / `_on_switch_retry_timeout` /
+  `_connect_movie` / `_on_clip_finished` / `_on_anim_ended` / `_pick` /
+  `_pick_next` / `_start_animation_gap` / `_cancel_animation_gap` /
+  `_play_animation_gap_step` / `_on_animation_gap_timeout` /
   `set_animation_gap` / `set_playback_speed`
-- 共享字段：`self.anim` / `self.movie` / `self.idles` / 分类动作池 /
+- 相关字段：`self.anim` / `self.movie` / `self.idles` / 各分类动作池 /
   `_switch_retry_timer` 等
-- 难度：高。动画链是全局最忙的状态机，联动/碰撞/菜单都会触发 `_switch`。
-  broker 钩子（`_broker_register` / `_broker_unregister` / `_broker_*`）与
-  `_switch` 耦合——拆这片时必须连 broker 注册/解注册的对称性一起搬。
-- 对应功能：**自定义角色动作、动作池编排**。
+- 注意：该状态机是联动、碰撞、菜单等多方的汇聚点（外部模块经公开 seam
+  间接触发，不直接调 `_switch`）；broker 的注册/解注册钩子
+  与 `_switch` 耦合，拆分时需连同该对称性一并迁移。
+- 拆分难度评估：高。
 
-### 4.3 交互动物理域 → InteractionController
-
-拖拽/弹弓/抛掷的手感改造才需要拆；没有功能立项前**不要动**。
+### 4.3 交互与物理
 
 - 方法：`mousePressEvent` / `mouseMoveEvent` / `mouseReleaseEvent` /
   `_schedule_drag_move` / `_consume_drag_move` / `_flush_drag_move` /
-  `_clear_drag_move` / `_sync_drag_polling` / 弹弓族（`_enter_slingshot` …
+  `_clear_drag_move` / `_sync_drag_polling` / 弹弓相关（`_enter_slingshot` …
   `_launch_slingshot` / `_slingshot_geometry` / `_slingshot_trajectory_*`）/
   `_on_move_tick` / `_trigger_move` / `_try_move` / `_cancel_move` /
-  `_collision_clamp_pos` / `_set_interaction_hold` / `_update_interaction_hold` /
-  `_reset_press_hold_state` / `_is_in_interactive_area`
-- 难度：最高。事件→状态转换与 Qt 事件循环、物理定时器、碰撞上报三方纠缠。
+  `_collision_clamp_pos` / `_set_interaction_hold` /
+  `_update_interaction_hold` / `_reset_press_hold_state` /
+  `_is_in_interactive_area`
+- 注意：事件到状态的转换与 Qt 事件循环、物理定时器、碰撞上报三方耦合。
+- 拆分难度评估：最高。
 
-### 4.4 气泡与自语域 → BubbleCoordinator
-
-气泡类新功能（新气泡样式/多气泡）的地基。
+### 4.4 气泡与自语
 
 - 方法：`show_bubble` / `hide_speech_bubble` / `hold_bubble` /
   `set_bubble_suppressed` / `_on_speech_bubble_clicked` /
-  `_try_open_quick_chat_from_bubble` / 自语族（`_schedule_self_talk` /
-  `_show_self_talk_text` / `_show_random_self_talk` / `_show_click_self_talk` /
-  `_on_self_talk_timeout` / `_read_self_talk_texts` / `set_self_talk_settings`）/
-  `_check_music_sing`
-- 难度：中。气泡本体已在 speech_bubble.py，这里剩调度与定位。
+  `_try_open_quick_chat_from_bubble` / `_schedule_self_talk` /
+  `_show_self_talk_text` / `_show_random_self_talk` /
+  `_show_click_self_talk` / `_on_self_talk_timeout` / `_read_self_talk_texts` /
+  `set_self_talk_settings` / `_check_music_sing`
+- 注意：气泡绘制本体位于 speech_bubble.py；窗口侧除调度与定位外，
+  还保留公开气泡 API、气泡占用状态（`_bubble_busy_until`）与交互回调，
+  实际边界比「纯调度层」更宽。
+- 拆分难度评估：中。
 
-### 4.5 设置写回域
+### 4.5 设置写回
 
-`refresh_pet_settings`（~90 行）与 `_show_context_menu`（~110 行）两个回填大方法：
-不急着拆类，但**加设置项时**应把配置键→窗口行为的映射抽成 mapper 函数/表，
-别继续在两个大方法里加 if 分支。
+`refresh_pet_settings` 与 `_show_context_menu` 为两个较大的配置回填方法。
+新增设置项时，建议将「配置键 → 窗口行为」的映射抽取为独立的 mapper
+函数或映射表，避免在两个方法中继续叠加分支。
 
-### 4.6 已拆出的域（不要再往 window.py 里加回这些逻辑）
+### 4.6 已迁出的域
 
-- 碰撞客户端：collision_client.py（窗口侧全部是薄委托，见 `_collision_*` property 块）
-- 碰撞物理/协议：collision.py / collision_codec.py / collision_ipc.py
-- 平台层：platform_win.py / platform_mac.py
-- broker：decode_broker.py（窗口侧只有 `_broker_*` 薄转发）
-- 帧缓存：frame_cache.py；性能打点：perfstats.py
+下列职责已有独立模块承载，相关新逻辑建议直接加入对应模块：
 
-## 5. 范例：collision_client.py 是怎么拆的（可照抄的模式）
+| 职责 | 模块 |
+|---|---|
+| 碰撞客户端（窗口侧为薄委托） | collision_client.py |
+| 碰撞物理 / 协议 / IPC | collision.py / collision_codec.py / collision_ipc.py |
+| 平台层 | platform_win.py / platform_mac.py |
+| 共享解码 broker | decode_broker.py（窗口侧 `_broker_*` 块为接线+首播决策状态机，非纯转发） |
+| 帧缓存 / 性能打点 | frame_cache.py / perfstats.py |
 
-1. 控制器持有全部域字段（`session`/`epoch`/`peer_snapshots`/`predicted_bounces`/
-   冷却时间戳……），窗口侧一个不留；
+## 5. 参考范例：collision_client.py 的拆法
+
+`collision_client.py` 是「功能驱动拆分」的完整范例，可直接对照阅读：
+
+1. 控制器持有已抽取的域状态（session / epoch / peer_snapshots /
+   predicted_bounces 等）；窗口保留组合对象、兼容委托 property 与必要的
+   宿主状态；
 2. 窗口保留同名委托 property（get/set 转发），既有测试与调用面零改动；
-3. 控制器需要的窗口交互常量（拖拽中/抛掷中等判定值）在**构造时注入**，
-   不反向 import window；
-4. 信号直接连控制器方法（`session.impulse_ready.connect(client._on_collision_impulse)`），
-   不经窗口转发；
-5. 窗口侧新增只读 seam（如 `collision_app_session` property）供控制器兜底，
-   而不是让控制器摸 `win._xxx` 私有字段——**跨模块私有访问是红线**，
-   `tests/test_architecture.py` 会拦。
+3. 控制器需要的窗口常量在构造时注入，不做模块级 `import window`；
+4. 信号直接连接控制器方法，不经窗口转发；
+5. 需要兜底访问时，窗口侧增加只读公开 seam（如 `collision_app_session`
+   property）。
 
-## 6. 禁忌（每条都对应真实事故）
+关于私有访问的真实边界（易误读，请注意）：CI 断言
+`test_window_private_surface_frozen` **只覆盖 `app.py` / `agent_link.py` /
+`context_menus/` 三个外围调用面**——这些模块不得访问 `win._xxx`。
+而 `collision_client.py`、`platform_win.py` 等窗口的近邻控制器目前仍
+按既有约定访问窗口私有成员（属当前事实而非违规），
+`agent_link_presentation.py` 也保留了一处有注释登记的例外
+（`win._bubble_busy_until`）。新拆控制器时建议优先走公开 seam；确实
+需要近邻访问时，参照这些既有模块保持克制并在注释中说明。
 
-- **禁止跨模块访问 `win._xxx` / `pet._xxx`**：S2 批次清掉过 8 处，CI 有断言。
-  需要就加公开 seam。
-- **禁止搬移时顺手改逻辑/数值**：拆分 PR 只做搬移。"顺手优化"让回归无法归因。
-- **禁止在 GUI 线程外直接操作 QObject**：PySide6 跨线程 `QTimer.singleShot(0, app, callable)`
-  会原生崩溃；跨线程通信用"以 GUI 侧 QObject 为 receiver 的 queued 信号"。
-- **C++ 已销毁对象不调自身 bound-method 的 destroyed 槽**：cleanup 回调用无 receiver
-  的 lambda（Fix A1 模式，代码里有多处范例）。
-- **新增配置键必须过三关**：默认值 dict + reload 白名单 + `test_config_schema.py`
-  快照——漏登记测试直接红（这是刻意设计）。布尔键用 `_bool_or_default` 归一
-  （`bool("false") is True` 的坑踩过）。
-- **实机四场景冒烟不可省**：offscreen 测试测不出 Qt 生命周期/时序回归
-  （有过实机 15 分钟定格而测试全绿的先例）。
+## 6. 已知风险点（来自项目事故与审查记录）
 
-## 7. 后续路线（不写死排期，只写触发条件）
+以下为治理与审查过程中实际发生/发现过的问题，供参考（详细记录在
+`_plan/` 工作档案中，该目录不入库）：
 
-| 候选方向 | 触发条件 | 参考 |
+- **跨模块私有成员访问（外围调用面）**：治理期间曾清理 8 处
+  （app.py / agent_link.py / context_menus），现有 CI 断言防止这三处
+  回潮（覆盖范围见 §5 第 5 点）。
+- **拆分夹带行为变更**：会导致回归无法归因，拆分与行为修改应分开提交。
+- **跨线程操作 QObject**：跨线程 `QTimer.singleShot(0, app, callable)`
+  属于 PySide6 已知危险用法（治理期间的事故记录，仓内无单独 issue 可溯）；
+  跨线程通信应使用以 GUI 侧 QObject 为 receiver 的 queued 信号。
+- **已销毁对象的 destroyed 槽**：PySide6 在 C++ 侧删除对象时不会调用该
+  对象自身 bound-method 形式的 destroyed 槽；cleanup 回调应使用无
+  receiver 的 lambda（代码内搜「Fix A1」可见范例）。
+- **新增配置键的登记**：普通顶层键需同步默认值字典、reload 白名单与
+  `test_config_schema.py` 快照，缺一则测试失败（刻意设计）；特例键
+  （version / proactive_screen / agent_link / chat）走专门的合并/迁移
+  路径，不要塞进普通白名单。布尔键应使用 `_bool_or_default` 归一化。
+- **offscreen 测试盲区**：线程与时序类回归无法被 offscreen 测试发现，
+  存在测试全绿但实机异常的先例；涉及线程/生命周期的改动应实机验证。
+
+## 7. 暂不处理的部分及理由
+
+以下各项为经过评估后的**主动缓办决策**，均非缺陷或遗留 bug。每项附
+缓办理由与建议的重新评估时机。
+
+| 项 | 缓办理由 | 建议的重新评估时机 |
 |---|---|---|
-| InteractionController 拆分 | 有手感/交互类功能立项 | §4.3 |
-| webm_clip.py 拆分（reader 生命周期/孤儿注册表） | 下次有人动 WebM 播放 | 结构线 S6 记录 |
-| config_domains 调用点迁移 | 下次加设置项时顺手 | pet/config_domains.py |
-| A17 测试债（源码字符串断言→行为断言） | 维护到对应测试文件时顺手 | pyproject.toml 豁免表 |
-| QQuickWindow 前端迁移 | 需要合成器级视觉（粒子/多层特效）或"GUI 忙时动画卡"成为实测瓶颈 | 完整设计稿已有存档（含平台矩阵/回退/分批计划），需要时再立项；硬前置 = §4.1/4.2 两域拆分完成 |
+| 交互与物理域拆分（§4.3） | 该域与其他域耦合最深，拆分回归风险最高；当前无功能需求 | 有交互手感类功能立项时 |
+| webm_clip.py 进一步拆分 | 该文件承担 reader 生命周期管理，近期刚完成多轮生命周期修复，稳定性优先 | 下一次需要修改 WebM 播放逻辑时 |
+| config_domains 调用点迁移 | facade 已建立且 normalize 复用现有逻辑；迁移调用点无行为差异，属纯结构调整 | 下一次新增设置项时一并进行 |
+| 测试中的源码字符串断言改造 | 相关断言目前均能通过且有意义；批量重写为行为断言的工作量与风险不成比例 | 维护到对应测试文件时局部改进 |
+| QQuickWindow 前端迁移 | 属产品架构级变更；已完成完整设计稿（含平台矩阵与回退方案），当前 raster 路径经优化后无实测瓶颈 | 出现合成器级视觉需求，或 perfstats 数据显示渲染成为瓶颈时 |
+
+---
+
+*本文档随 `docs/HANDOVER_2026-09.md` 一同交付。对本文内容有异议或补充，
+欢迎通过 PR 修订。*
