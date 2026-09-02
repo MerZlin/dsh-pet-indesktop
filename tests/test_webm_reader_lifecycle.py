@@ -423,3 +423,269 @@ def test_start_after_cleanup_is_rejected(app):
     clip.cleanup()
     assert clip not in webm_clip_mod._ORPHAN_REGISTRY.holders()
     app.processEvents()
+
+
+# ============================================================================
+# 批 6-8b R3（R2 复审 P1 闭合）：兜底补杀链失败保留追踪 + 有界重试 + 达上限
+# 告警标注放弃（绝不静默丢句柄）+ sweep 补杀移出注册表锁
+# ============================================================================
+class _UnkillableProc:
+    """模拟病态 ffmpeg：terminate/kill 全部执行但进程永不退出（kill 无效）。"""
+
+    def __init__(self):
+        self.terminated = False
+        self.killed = False
+        self.waits = 0
+        self.pid = id(self)
+
+    def poll(self):
+        return None  # 永远存活
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        self.waits += 1
+        raise subprocess.TimeoutExpired(self, timeout)
+
+
+class _PollRaisingProc:
+    """模拟 poll 抛异常的进程句柄（Windows 句柄失效等病态）。"""
+
+    def __init__(self):
+        self.pid = id(self)
+        self.poll_calls = 0
+
+    def poll(self):
+        self.poll_calls += 1
+        raise OSError("handle invalid")
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 1
+
+
+def _dead_thread():
+    done = threading.Event()
+
+    def _target():
+        done.set()
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(5.0)
+    assert not t.is_alive(), "测试前提：退役线程已退出"
+    return t
+
+
+def test_reap_retired_keeps_tracking_when_proc_unkillable(app):
+    """R2 复审 P1 闭合：退役 reader 进程 kill 后仍存活时不得移出追踪——
+    记录保留在 _retired 中、重试计数递增，后续 sweep 可再次尝试补杀。"""
+    clip = WebMClip("dummy.webm")
+    proc = _UnkillableProc()
+    r = webm_clip_mod._Reader(thread=_dead_thread(), proc=proc)
+    clip._retired.append(r)
+
+    clip._reap_retired(join_timeout=0)
+
+    assert r in clip._retired, "kill 后仍存活：必须保留追踪（不得移出）"
+    assert r.kill_attempts == 1, "失败必须累计有界重试计数"
+    assert r.abandoned is False, "未达上限不得标注放弃"
+    assert proc.terminated is True and proc.killed is True, "补杀必须已执行"
+    assert proc.poll() is None, "进程仍存活（未被误判为已退出）"
+
+    # 第二次 sweep 仍可再次补杀（追踪不丢）
+    clip._reap_retired(join_timeout=0)
+    assert r.kill_attempts == 2
+    assert r in clip._retired
+
+    clip.cleanup()
+    # 清理测试残留：病态进程不可回收，手动清空退役池与注册表持有
+    clip._retired = []
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(clip)
+    app.processEvents()
+
+
+def test_reap_retired_keeps_tracking_when_poll_raises(app):
+    """R2 复审 P1 闭合：poll 异常时不得把进程移出追踪——记录保留、重试计数
+    递增（poll 是确认手段，异常即无法确认退出）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _PollRaisingProc()
+    r = webm_clip_mod._Reader(thread=_dead_thread(), proc=proc)
+    clip._retired.append(r)
+
+    clip._reap_retired(join_timeout=0)
+
+    assert r in clip._retired, "poll 异常：必须保留追踪"
+    assert r.kill_attempts == 1
+    assert proc.poll_calls >= 1
+    assert r.abandoned is False
+
+    clip.cleanup()
+    clip._retired = []
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(clip)
+    app.processEvents()
+
+
+def test_reap_retired_abandons_after_retry_limit(app):
+    """R2 复审 P1 闭合：补杀确认失败达到重试上限时告警并标注 abandoned——
+    记录保留在追踪中但不再重试（绝不静默丢弃句柄）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _UnkillableProc()
+    r = webm_clip_mod._Reader(thread=_dead_thread(), proc=proc)
+    clip._retired.append(r)
+    limit = webm_clip_mod._CONFIRM_KILL_MAX
+    for _ in range(limit):
+        clip._reap_retired(join_timeout=0)
+
+    assert r.abandoned is True, "达到上限必须标注 abandoned"
+    assert r.kill_attempts == limit
+    assert r in clip._retired, "标注放弃后记录仍保留在追踪中（不静默丢）"
+    assert proc.poll() is None, "病态进程仍未退出"
+
+    # 标注放弃后：后续 sweep 不再重试（计数不再递增）
+    clip._reap_retired(join_timeout=0)
+    assert r.kill_attempts == limit, "标注放弃后不得再重试"
+
+    clip.cleanup()
+    clip._retired = []
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(clip)
+    app.processEvents()
+
+
+def test_reap_releases_registry_lock_during_clip_reap(app, monkeypatch):
+    """R2 复审「sweep 锁内串行补杀的累计阻塞」闭合：补杀的 poll/terminate
+    移出注册表锁——sweep 的锁外窗口期，其他 clip 的 register 不被阻塞
+    （锁内只取快照，锁外操作 proc，写回时再进锁）。"""
+    # 先禁用 timer 创建，避免注册启动的真实 QTimer 干扰本测试
+    monkeypatch.setattr(webm_clip_mod._ORPHAN_REGISTRY, "_ensure_timer", lambda: None)
+    clip = WebMClip("dummy.webm")
+    webm_clip_mod._register_orphan(clip)
+
+    entered = threading.Event()
+    release = threading.Event()
+    orig_reap_retired = clip._reap_retired
+
+    def _blocking_reap_retired(join_timeout):
+        entered.set()
+        release.wait(5.0)
+        orig_reap_retired(join_timeout)
+
+    monkeypatch.setattr(clip, "_reap_retired", _blocking_reap_retired)
+
+    reaper = threading.Thread(
+        target=webm_clip_mod._reap_orphaned_clips, daemon=True
+    )
+    reaper.start()
+    assert entered.wait(5.0), "sweep 必须已进入 clip 的 _reap_retired（锁外窗口）"
+
+    # 锁外窗口期：注册表锁必须可获取（补杀不得阻塞其他 clip 的 register）
+    lock = webm_clip_mod._ORPHAN_REGISTRY._lock
+    acquired = lock.acquire(blocking=False)
+    if acquired:
+        lock.release()
+    assert acquired, "sweep 锁外窗口期注册表锁必须空闲（串行补杀不得阻塞 register）"
+
+    release.set()
+    reaper.join(5.0)
+    assert not reaper.is_alive(), "reap 必须完成"
+
+    other = WebMClip("dummy2.webm")
+    other.cleanup()
+    clip.cleanup()
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(clip)
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(other)
+    app.processEvents()
+
+
+class _RacyStopEvent(threading.Event):
+    """is_set 第 n 次调用时置位但本次仍返回 False，之后返回 True——精确模拟
+    stop() 恰好落在 _register 的 stale 判定与登记之间的竞态窗口。"""
+
+    def __init__(self, flip_call: int = 3):
+        super().__init__()
+        self._flip_call = flip_call
+        self._race_calls = 0
+
+    def is_set(self):
+        self._race_calls += 1
+        if self._race_calls == self._flip_call:
+            self.set()
+            return False  # 本次调用仍返回 False（stop 恰在此刻之后生效）
+        return super().is_set()
+
+
+class _StuckAfterMetaGen:
+    """模拟进程存活但输出停滞的 read_frames 生成器：meta 后第二次 next 卡住
+    直到放行（对应 reader 阻塞读存活进程的场景）。"""
+
+    def __init__(self, meta):
+        self._meta = meta
+        self._stage = 0
+        self.release = threading.Event()
+        self.closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._stage == 0:
+            self._stage = 1
+            return self._meta
+        if self._stage == 1:
+            self._stage = 2
+            self.release.wait(5.0)  # 卡住：模拟阻塞读
+            return b""
+        raise StopIteration
+
+    def close(self):
+        self.closed = True
+
+
+def test_reader_register_race_never_leaves_untracked_live_proc(app, monkeypatch):
+    """R3 收尾：stop 恰好落在 _register 的 stale 判定与登记之间时，迟到的
+    登记必须在锁内复查 stop——要么完成登记（stop 可见 handle 可解除阻塞读），
+    要么自终止进程。绝不出现「进程存活且无任何追踪」（全量偶发 flake 根因：
+    webm-reader 卡死在阻塞读 + imageio LogCatcher 残留）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _FakeProc()  # 存活：terminate 后退出
+    meta = {"fps": 24.0, "duration": 1.0}
+    gen = _StuckAfterMetaGen(meta)
+
+    stop_evt = _RacyStopEvent(flip_call=3)  # 第 3 次 is_set = _register 的 stale 判定
+    clip._stop_evt = stop_evt
+    register_entered = threading.Event()
+
+    def _fake_read_frames(*args, **kwargs):
+        cap = webm_clip_mod._PopenCapture._local.capture
+        cap._on_process(proc, ["ffmpeg", "-i", "dummy.webm"])  # 触发 _register（同步完成）
+        register_entered.set()  # 在 _register 之后放行断言（消除断言时序竞态）
+        return gen
+
+    monkeypatch.setattr(webm_clip_mod, "_ensure_ffmpeg_exe", lambda: None)
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "read_frames", _fake_read_frames)
+    clip._generation = 1
+
+    t = threading.Thread(target=clip._reader, args=(stop_evt, 1), daemon=True)
+    t.start()
+    assert register_entered.wait(5.0), "reader 必须进入 read_frames 并触发登记"
+
+    # 竞态窗口已触发：进程不得处于「存活且无追踪」状态
+    assert proc.poll() is not None or clip._reader_proc is proc, \
+        "stop 竞态下进程必须被自终止或完成登记（绝不存活且无追踪）"
+
+    # 放行卡住的 gen：reader 走 finally 终止进程并退出
+    gen.release.set()
+    t.join(5.0)
+    assert not t.is_alive(), "reader 必须退出"
+    assert proc.poll() is not None, "最终进程必须确认退出"
+    clip.cleanup()
+    app.processEvents()

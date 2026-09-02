@@ -518,3 +518,137 @@ def test_sync_escape_result_voided_by_cancel(app):
     assert clip._first_image is None, "取消期间完成的逃生结果不得污染缓存"
     assert clip._first_frame_done.is_set() is False
     app.processEvents()
+
+
+# ============================================================================
+# 批 6-8b R3（R2 复审 P1 闭合）：_sweep_unconfirmed_procs 补杀失败保留追踪
+# + 有界重试 + 达上限告警标注放弃（绝不静默丢句柄）
+# ============================================================================
+class _UnkillableDecodeProc:
+    """模拟首帧解码进程：terminate/kill 全部执行但进程永不退出（kill 无效）。"""
+
+    def __init__(self):
+        self.terminated = False
+        self.killed = False
+        self.waits = 0
+        self.pid = id(self)
+
+    def poll(self):
+        return None  # 永远存活
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        self.waits += 1
+        raise subprocess.TimeoutExpired(self, timeout)
+
+
+class _PollRaisingDecodeProc:
+    """模拟 poll 抛异常的进程句柄（Windows 句柄失效等病态）。"""
+
+    def __init__(self):
+        self.pid = id(self)
+        self.poll_calls = 0
+
+    def poll(self):
+        self.poll_calls += 1
+        raise OSError("handle invalid")
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 1
+
+
+def test_sweep_unconfirmed_keeps_tracking_when_proc_unkillable(app, monkeypatch):
+    """R2 复审 P1 闭合：拿到 _ff_proc_lock 后补杀失败（kill 后仍存活）不得
+    一次即丢条目——保留追踪并累计 attempts，后续 sweep 可再次补杀。"""
+    clip = WebMClip("dummy.webm")
+    proc = _UnkillableDecodeProc()
+    with clip._reader_lock:
+        clip._unconfirmed_procs.append([proc, 0, False])
+    webm_clip_mod._register_orphan(clip)
+    monkeypatch.setattr(webm_clip_mod, "_PROC_LOCK_ACQUIRE_TIMEOUT", 0.05)
+
+    webm_clip_mod._reap_orphaned_clips()
+
+    entries = list(clip._unconfirmed_procs)
+    assert len(entries) == 1, "补杀失败必须保留条目（不得移出追踪）"
+    assert entries[0][0] is proc
+    assert entries[0][1] == 1, "失败必须累计 attempts"
+    assert entries[0][2] is False, "未达上限不得标注放弃"
+    assert proc.terminated is True and proc.killed is True, "补杀必须已执行"
+    assert proc.poll() is None, "进程仍存活（未被误判为已退出）"
+
+    # 第二次 sweep 仍可再次补杀（追踪不丢）
+    webm_clip_mod._reap_orphaned_clips()
+    entries = list(clip._unconfirmed_procs)
+    assert entries[0][1] == 2
+
+    clip.cleanup()
+    clip._unconfirmed_procs = []
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(clip)
+    app.processEvents()
+
+
+def test_sweep_unconfirmed_keeps_tracking_when_poll_raises(app, monkeypatch):
+    """R2 复审 P1 闭合：poll 异常（无法确认退出）时条目必须保留追踪并累计
+    attempts（绝不一次即丢）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _PollRaisingDecodeProc()
+    with clip._reader_lock:
+        clip._unconfirmed_procs.append([proc, 0, False])
+    webm_clip_mod._register_orphan(clip)
+    monkeypatch.setattr(webm_clip_mod, "_PROC_LOCK_ACQUIRE_TIMEOUT", 0.05)
+
+    webm_clip_mod._reap_orphaned_clips()
+
+    entries = list(clip._unconfirmed_procs)
+    assert len(entries) == 1, "poll 异常：必须保留条目"
+    assert entries[0][1] == 1
+    assert entries[0][2] is False
+    assert proc.poll_calls >= 1
+
+    clip.cleanup()
+    clip._unconfirmed_procs = []
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(clip)
+    app.processEvents()
+
+
+def test_sweep_unconfirmed_abandons_after_retry_limit(app, monkeypatch):
+    """R2 复审 P1 闭合：未确认退出达到重试上限时告警并标注 abandoned——
+    条目保留在追踪中但不再重试（绝不静默丢弃句柄）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _UnkillableDecodeProc()
+    with clip._reader_lock:
+        clip._unconfirmed_procs.append([proc, 0, False])
+    webm_clip_mod._register_orphan(clip)
+    monkeypatch.setattr(webm_clip_mod, "_PROC_LOCK_ACQUIRE_TIMEOUT", 0.01)
+
+    limit = webm_clip_mod._UNCONFIRMED_KILL_MAX
+    for _ in range(limit):
+        webm_clip_mod._reap_orphaned_clips()
+
+    entries = list(clip._unconfirmed_procs)
+    assert len(entries) == 1, "标注放弃后条目仍保留在追踪中"
+    assert entries[0][1] >= limit
+    assert entries[0][2] is True, "达到上限必须标注 abandoned"
+    assert proc.poll() is None, "病态进程仍未退出"
+
+    # 标注放弃后：后续 sweep 不再重试（attempts 不再递增）
+    webm_clip_mod._reap_orphaned_clips()
+    entries = list(clip._unconfirmed_procs)
+    assert entries[0][1] == limit, "标注放弃后不得再重试"
+
+    clip.cleanup()
+    clip._unconfirmed_procs = []
+    webm_clip_mod._ORPHAN_REGISTRY._clips.discard(clip)
+    app.processEvents()

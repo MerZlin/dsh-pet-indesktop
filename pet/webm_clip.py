@@ -23,6 +23,28 @@ WebM-backed clip library（webm 主路线）。
   stop() 主动 terminate 底层 ffmpeg 进程（_PopenCapture 捕获句柄），退役池超上限时
   强制回收最旧的；start() 前清空退役池，池内仍有存活 reader 时拒绝启动（防无上限累积）。
 - cleanup() 对仍存活的退役 reader 保留追踪（绝不静默丢弃），等待后续 sweep 回收。
+- Popen 并发串行化（批 6-8b，Windows access violation 主凶修复）：clip 名下任一
+  Popen 的「操作」（poll/terminate/wait/kill/关管道）任意时刻只允许一个线程执行。
+  播放 reader 的 Popen 由 reader 线程独占生命周期（创建/读/close/terminate/wait/
+  kill），GUI stop() 只置 stop_evt + 经 _unblock_proc 做最小 TerminateProcess 解除
+  阻塞读（所有权仍在 reader，GUI 绝不 wait/kill/关管道）；首帧解码进程同样由解码
+  线程独占 close/terminate，GUI cancel_first_frame_warm 的完整 terminate 与之经
+  _ff_proc_lock 互斥。阻塞读（generator 内 stdout.read）不持锁——只与最小
+  terminate 并发（进程句柄 vs 管道句柄，不同原生对象），是解除阻塞读的既定安全
+  配对。详见 _proc_lock/_ff_proc_lock 的注释。
+- try-acquire 超时跳过的最终保障链（批 6-8b 收尾；R3 闭合 R2 复审 P1）：
+  _unblock_proc / cancel_first_frame_warm 的锁超时跳过依赖 owner
+  （reader/decode 线程）在 finally 杀进程——这是条件保证；闭合它的兜底是
+  ——reader 的（thread, proc）随 stop() 进入退役池，孤儿注册表 sweep 的
+  _reap_retired 在线程退出（finally 完成）后经 _confirm_retired_proc 补杀
+  仍存活者；首帧进程在取消超时跳过时登记进 _unconfirmed_procs，sweep 的
+  _sweep_unconfirmed_procs 在 owner 释放 _ff_proc_lock 后确认/补杀。
+  两条兜底链对「poll 异常 / terminate+kill 后仍存活」都不静默丢句柄：
+  确认失败保留追踪并累计有界重试，达到上限（_CONFIRM_KILL_MAX /
+  _UNCONFIRMED_KILL_MAX）告警并标注 abandoned（保留追踪不再重试）——
+  绝不漏杀、不无限静默重试、也不静默丢句柄。sweep 的补杀（poll/terminate）
+  在注册表锁外执行（锁内只取快照，写回再进锁），单个 clip 的串行补杀不阻塞
+  其他 clip 的 register/unregister。
 """
 
 from __future__ import annotations
@@ -77,6 +99,52 @@ _PROC_TERMINATE_TIMEOUT = 0.5
 # 时有界放弃并告警，绝不让 reader 永久空转。放弃后 finally 仍保证
 # _terminate_proc 与 gen.close() 执行。
 _END_MARKER_PUT_TIMEOUT = 5.0
+# GUI 侧「最小解除阻塞 terminate」（_unblock_proc）获取 _proc_lock /
+# _ff_proc_lock 的有限等待（秒，批 6-8b）：超过此时长说明 reader/解码线程
+# 正在 finally 收尾（持锁），它自己会 terminate 进程——GUI 跳过是安全的
+# （绝不漏杀），同时也绝不让 stop()/cancel_first_frame_warm() 因锁等待
+# 明显变长（用户可感知的响应延迟红线）。
+_PROC_LOCK_ACQUIRE_TIMEOUT = 0.2
+# 首帧进程「取消后未确认退出」的有界补杀重试上限（批 6-8b 收尾；R3 语义）：
+# cancel_first_frame_warm 的 try-acquire 超时跳过的进程登记进
+# _unconfirmed_procs，孤儿注册表 sweep 周期补杀；owner（解码线程）持续
+# 持锁不释放（g.close() 病态卡死）或补杀后进程仍存活（poll 异常 / kill
+# 失败）时，达到此上限记录告警并**标注 abandoned**（条目保留在追踪中、
+# 后续 sweep 不再重试）——不无限静默重试，也绝不静默丢句柄（与
+# _LEAK_ATTEMPTS 的「不无限静默重试」同一原则）。
+_UNCONFIRMED_KILL_MAX = 6
+# 退役 reader 兜底确认（_confirm_retired_proc）失败后的有界重试上限
+# （批 6-8b R3）：线程退出后 poll 异常 / terminate+kill 后仍存活时保留
+# _Reader 记录并累计重试；达到此上限记录告警并标注 abandoned（保留追踪
+# 不再重试）——绝不静默丢弃句柄（与 _UNCONFIRMED_KILL_MAX 同一原则）。
+_CONFIRM_KILL_MAX = 6
+
+# ------------------------------------------------------------ ffmpeg exe 探测串行化（批 6-8b）
+# imageio 的 get_ffmpeg_exe() 在缓存未命中时用 subprocess.check_call 跑
+# `ffmpeg -version` 探测（**无限等待**）。并发 reader 同时冷启动会各自拉起
+# 探测进程：进程拉起风暴显著拖慢探测，极端负载下探测可超过 0.5s——快速
+# start/stop 时被 stop 的 reader 会滞留在探测里迟迟不退（test_webm_clip_
+# lifecycle::test_rapid_start_stop 的既有 flake 根因，基线 2/30 失败）。
+# 用模块级锁串行化首次探测：一次命中缓存后所有后续调用零进程开销。reader
+# 在拉起解码进程前探测、且探测后复查 stop_evt——被 stop 的 reader 绝不
+# 拉起解码进程（省掉「拉起→_register 发现 stale→自终止」的浪费与延迟）。
+_FFMPEG_EXE_LOCK = threading.Lock()
+
+
+def _ensure_ffmpeg_exe() -> None:
+    """串行化首次 ffmpeg exe 探测并预热缓存（幂等，任意线程可调用）。
+
+    imageio_ffmpeg 不可用 / 探测失败时为无操作（read_frames 内部会再报错）。
+    锁内探测保证并发调用方不重复拉起探测进程；探测完成后 lru_cache 命中，
+    后续 get_ffmpeg_exe() 零子进程开销。
+    """
+    if imageio_ffmpeg is None:
+        return
+    with _FFMPEG_EXE_LOCK:
+        try:
+            imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            pass
 
 # ------------------------------------------------------------ 孤儿 sweep 生命周期管理器（B7 审查 P2）
 # 退役 reader 的回收由「独立生命周期管理器」持有：注册表记录所有
@@ -100,18 +168,21 @@ class _OrphanClipRegistry:
     - 注册表（_clips）由 _lock 保护：register/unregister/holders 任意
       线程可调用（clip 的 cleanup/stop 在主线程，reader 线程不触碰）；
     - sweep QTimer 只能在 GUI 线程创建（须已有 QApplication）与启动；
-      reap 由 Qt 事件循环在 GUI 线程触发，且全程持 _lock——与收编前模块级
-      `_reap_orphaned_clips` 持 `_ORPHAN_LOCK` 的语义逐条一致（只搬形态、
-      不改锁范围）：锁内覆盖对 clip 的 `_reap_retired` 有界 join（时长受
-      模块级 `_SWEEP_JOIN_TIMEOUT` 兜底，正常进程 terminate 后毫秒级退出，
-      仅病态场景达到上限）与 `_ensure_timer()`；此期间 register/unregister
-      会阻塞在 _lock 上，直至 reap 释放。
+      reap 由 Qt 事件循环在 GUI 线程触发。R3（R2 复审「锁内串行补杀的
+      累计阻塞」闭合）：reap 不再全程持 _lock——锁内只取快照（list 强引用
+      持有 clip，锁外窗口内不被 GC），锁外对每个 clip 做有界 join 与补杀
+      （_reap_retired 的 join 时长受模块级 _SWEEP_JOIN_TIMEOUT 兜底、
+      _sweep_unconfirmed_procs 的锁等待受 _PROC_LOCK_ACQUIRE_TIMEOUT
+      兜底，正常毫秒级），状态写回（移出注册表 / 泄漏计数 / _ensure_timer）
+      时再进锁；_reaping 标志防止锁外窗口期重复 reap 交错。此期间
+      register/unregister 只会在「取快照 / 写回」两个短临界区短暂阻塞，
+      不会被单个 clip 的串行补杀长时间阻塞。
 
     生命周期语义（与既有模块级实现逐条一致，只搬形态不改时序/加锁）：
     - register：强引用持有 clip（防 GC 与 reader 收尾竞态），并启动 timer；
-    - reap：持锁对注册的 clip 做有界回收，退役池清空者移出注册表；仍存活者
-      累计回收次数，达到 _LEAK_ATTEMPTS 阈值记录泄漏告警（不无限静默重试）
-      并继续持有追踪；
+    - reap：快照后对注册的 clip 做有界回收与首帧补杀，退役池清空且无
+      未确认首帧进程者移出注册表；仍存活者累计回收次数，达到
+      _LEAK_ATTEMPTS 阈值记录泄漏告警（不无限静默重试）并继续持有追踪；
     - unregister：移除追踪（退役池已清空时调用）。
     """
 
@@ -122,6 +193,9 @@ class _OrphanClipRegistry:
         self._clips: "set[WebMClip]" = set()
         self._lock = threading.Lock()
         self._timer: "QTimer | None" = None
+        # reap 防重入（R3）：reap 的锁外窗口期（补杀 poll/terminate）不持
+        # _lock，第二个并发 reap 进入时直接跳过，避免与首个 reap 交错。
+        self._reaping = False
 
     def register(self, clip: "WebMClip") -> None:
         """把退役池非空的 clip 挂到注册表（强引用持有，防 GC 竞态）。"""
@@ -155,32 +229,50 @@ class _OrphanClipRegistry:
     def reap(self) -> None:
         """对注册的 clip 做有界回收；退役池清空者移出注册表。
 
-        全程持 _lock（与收编前模块级 `_reap_orphaned_clips` 持
-        `_ORPHAN_LOCK` 的语义一致）：对 clip._reap_retired 的有界 join
-        （时长受 `_SWEEP_JOIN_TIMEOUT` 兜底）与 `_ensure_timer()` 都在
-        锁内执行；此期间 register/unregister 会阻塞等待 _lock。
-        病态 reader 多次回收仍不退出时记录泄漏告警（而不是无限静默重试）。
+        R3（R2 复审「sweep 锁内串行补杀的累计阻塞」闭合）：补杀的
+        poll/terminate（clip._reap_retired 的兜底确认与
+        clip._sweep_unconfirmed_procs 的补杀）**移出注册表锁**——锁内只取
+        快照（快照 list 强引用持有 clip，锁外窗口内不被 GC），锁外对每个
+        clip 做有界 join / 补杀确认（时长分别受 `_SWEEP_JOIN_TIMEOUT` /
+        `_PROC_LOCK_ACQUIRE_TIMEOUT` 兜底，正常毫秒级），状态写回（移出
+        注册表 / 泄漏计数 / `_ensure_timer()`）时再进锁。单个 clip 的串行
+        补杀不再阻塞其他 clip 的 register/unregister；`_reaping` 标志防止
+        锁外窗口期重复 reap 交错。病态 reader 多次回收仍不退出时记录泄漏
+        告警（而不是无限静默重试）。
         """
         with self._lock:
+            if self._reaping:
+                return  # 已有 reap 在锁外窗口期运行：本次跳过（下次 timer 再来）
+            self._reaping = True
             holders = list(self._clips)
+        try:
             for clip in holders:
                 try:
                     clip._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
                 except Exception:
                     pass  # clip 已销毁等：交由 GC 兜底
-                if not clip._retired:
-                    self._clips.discard(clip)
-            if self._clips:
-                for clip in self._clips:
-                    clip._orphan_reap_count = getattr(clip, '_orphan_reap_count', 0) + 1
-                    if clip._orphan_reap_count >= self._LEAK_ATTEMPTS:
-                        logger.warning(
-                            'webm 退役 reader 多次回收仍存活（疑似泄漏，进程已 terminate）: %s',
-                            clip.path,
-                        )
-                timer = self._ensure_timer()
-                if timer is not None:
-                    timer.start()
+                try:
+                    clip._sweep_unconfirmed_procs()
+                except Exception:
+                    pass
+            with self._lock:
+                for clip in holders:
+                    if not clip._retired and not clip._has_unconfirmed_procs():
+                        self._clips.discard(clip)
+                if self._clips:
+                    for clip in self._clips:
+                        clip._orphan_reap_count = getattr(clip, '_orphan_reap_count', 0) + 1
+                        if clip._orphan_reap_count >= self._LEAK_ATTEMPTS:
+                            logger.warning(
+                                'webm 退役 reader 多次回收仍存活（疑似泄漏，进程已 terminate）: %s',
+                                clip.path,
+                            )
+                    timer = self._ensure_timer()
+                    if timer is not None:
+                        timer.start()
+        finally:
+            with self._lock:
+                self._reaping = False
 
 
 # 模块级单例：跨实例孤儿回收管理器（强引用持有 clip，防 GC 竞态）。
@@ -202,13 +294,21 @@ def _reap_orphaned_clips() -> None:
 
 
 class _Reader:
-    """一个 reader 线程 + 其持有的底层 ffmpeg 进程句柄。"""
+    """一个 reader 线程 + 其持有的底层 ffmpeg 进程句柄。
 
-    __slots__ = ("thread", "proc")
+    kill_attempts / abandoned（批 6-8b R3）：线程退出后的兜底确认
+    （_confirm_retired_proc）失败时保留记录并累计重试次数；达到
+    _CONFIRM_KILL_MAX 上限标注 abandoned（保留追踪、sweep 不再重试），
+    绝不静默丢弃句柄。
+    """
+
+    __slots__ = ("thread", "proc", "kill_attempts", "abandoned")
 
     def __init__(self, thread: threading.Thread, proc: subprocess.Popen | None) -> None:
         self.thread = thread
         self.proc = proc
+        self.kill_attempts = 0
+        self.abandoned = False
 
     def join(self, timeout: float | None = None) -> None:
         self.thread.join(timeout)
@@ -304,19 +404,82 @@ def _get_meta_file_cache() -> dict:
     return _META_FILE_CACHE
 
 
+def _meta_cache_file_lock():
+    """跨进程互斥锁文件（批 6-8b 修 3）：让「读盘→合并→原子替换」成为
+    read-modify-write 临界区，保证多开实例的缓存单调累积——后写进程不会用
+    旧进程内快照覆盖先写进程刚加入的条目（5.6sol 全审 P2）。
+
+    返回持锁文件对象（调用方在 finally 中 close 即释放锁）；平台不支持
+    （非 Windows/POSIX）或锁获取超时/失败时返回 None——调用方退化为纯
+    「写前重读合并」（仍优于旧实现的进程内快照覆盖，仅余极小竞态窗口，
+    且每个条目仍以（mtime+size）key 幂等）。锁文件与缓存文件分离：
+    缓存文件用 tmp+replace 原子替换，锁文件固定不变（不随替换消失）。
+    """
+    lock_path = _META_FILE_CACHE_PATH.with_suffix(
+        _META_FILE_CACHE_PATH.suffix + ".lock"
+    )
+    try:
+        f = open(lock_path, "a+b")
+    except OSError:
+        return None
+    try:
+        # 保证至少 1 字节可锁（msvcrt.locking 从当前位置起锁；空文件位置 0
+        # 也可锁，写 1 字节更稳）
+        f.seek(0, 2)
+        if f.tell() == 0:
+            f.write(b"\x00")
+            f.flush()
+        deadline = time.monotonic() + 1.0  # 有界等待，绝不长期阻塞
+        while True:
+            try:
+                f.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return f
+            except OSError:
+                if time.monotonic() >= deadline:
+                    f.close()
+                    return None
+                time.sleep(0.005)
+    except Exception:
+        try:
+            f.close()
+        except Exception:
+            pass
+        return None
+
+
 def _save_meta_file_cache_entry(key: str, frames: int, duration: float) -> None:
     global _META_FILE_CACHE
     try:
         with _META_CACHE_LOCK:
-            cache = _get_meta_file_cache()
-            cache[key] = {
-                "frames": frames,
-                "duration": duration,
-            }
-            # tmp 名带 PID：共享临时目录下防符号链接预占攻击与多实例互抢
-            tmp = _META_FILE_CACHE_PATH.with_suffix(f".{os.getpid()}.tmp")
-            tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(_META_FILE_CACHE_PATH)
+            lock = _meta_cache_file_lock()
+            try:
+                # 写前重读磁盘合并（read-modify-write，批 6-8b 修 3）：其他
+                # 进程可能刚写入了新条目，绝不用进程内旧快照覆盖它们——
+                # 缓存单调累积，多开预热不重复探测。跨进程临界区由
+                # _meta_cache_file_lock 提供（有界等待，失败退化为重读合并）。
+                cache = _load_meta_file_cache()
+                cache[key] = {
+                    "frames": frames,
+                    "duration": duration,
+                }
+                # 进程内快照同步为合并结果（原子换引用；后续读取即命中）
+                _META_FILE_CACHE = cache
+                # tmp 名带 PID：共享临时目录下防符号链接预占攻击与多实例互抢
+                tmp = _META_FILE_CACHE_PATH.with_suffix(f".{os.getpid()}.tmp")
+                tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+                tmp.replace(_META_FILE_CACHE_PATH)
+            finally:
+                if lock is not None:
+                    try:
+                        lock.close()
+                    except OSError:
+                        pass
     except OSError:
         pass
 
@@ -359,6 +522,21 @@ class WebMClip(QObject):
         # 注册、GUI 线程 stop 时读取/清空并 terminate）。
         self._reader_proc: subprocess.Popen | None = None
         self._reader_lock = threading.Lock()
+        # Popen 操作串行化锁（批 6-8b）：播放 reader 的 ffmpeg Popen 的「操作」
+        # （poll/terminate/wait/kill/关管道）任意时刻只允许一个线程执行。Windows
+        # 上两线程并发操作同一 Popen（如 GUI stop 的 terminate/wait 与 reader
+        # finally 的 _terminate_proc/gen.close() 关管道）是原生竞态崩溃
+        # （access violation）的根因。与 _reader_lock（状态锁，瞬时持有）分离：
+        # terminate/gen.close 等最长可达 ~1s 的操作不阻塞状态链（_register
+        # 登记、start() 残留摘取等）。阻塞读（generator 内 stdout.read）不持锁
+        # ——它只与 GUI 的「最小 terminate」并发（进程句柄 vs 管道句柄，不同
+        # 原生对象），是解除阻塞读的既定安全配对（B7 注释「正在阻塞读管道的
+        # reader 会因进程终止而立即解除阻塞退出」）。
+        self._proc_lock = threading.Lock()
+        # 首帧解码进程的 Popen 操作锁（批 6-8b）：与 _proc_lock 同语义，独立
+        # 成锁避免首帧解码收尾（g.close() 最长 ~1.5s 病态）阻塞播放 reader 的
+        # stop 解除阻塞——两类 Popen 互不相交，锁也互不相交。
+        self._ff_proc_lock = threading.Lock()
         # reader 已拉起并登记 ffmpeg 进程（或确定无进程）的信号；每轮 start() 重建。
         self._reader_ready = threading.Event()
         # 退役 reader 池（有硬上限）：thread + 其 ffmpeg 进程句柄的记录列表。
@@ -387,6 +565,15 @@ class WebMClip(QObject):
         # terminate，隐藏/切角色后不再有不受控的后台 ffmpeg 存活。
         self._first_frame_gen = 0
         self._first_frame_procs: set = set()
+        # 取消时 try-acquire 超时跳过、尚未确认退出的首帧进程（批 6-8b 收尾；
+        # R3 条目格式 [proc, attempts, abandoned]）：_reader_lock 保护。
+        # cancel_first_frame_warm 的超时跳过依赖解码线程 finally 的 g.close()
+        # 杀进程——该保证是条件性的（g.close 异常被吞等病态路径会漏），登记后
+        # 由孤儿注册表 sweep（_sweep_unconfirmed_procs）在 owner 释放
+        # _ff_proc_lock 后确认/补杀；确认失败保留条目并累计有界重试，达到上限
+        # 告警并标注 abandoned（保留追踪不再重试）——闭合「取消绝不留存活
+        # ffmpeg」的最终保障，绝不静默丢句柄。
+        self._unconfirmed_procs: list = []
         self._frame_index = 0
         # 显示帧索引 = 素材源时间线上的 0-based 帧号（reader 打标，丢帧后
         # 仍一致）；与 1-based 播放计数 _frame_index 分离（P1 复审）。
@@ -442,8 +629,10 @@ class WebMClip(QObject):
         except RuntimeError:
             pass  # QTimer 等 Qt 子对象已随 C++ 侧销毁
         self._reap_retired(join_timeout=_RECLAIM_JOIN_TIMEOUT)
-        if self._retired:
-            # 仍存活 reader：保持模块级持有，由管理器继续回收
+        if self._retired or self._has_unconfirmed_procs():
+            # 仍存活 reader 或未确认退出的首帧进程：保持模块级持有，由管理器
+            # 继续回收/补杀（批 6-8b 收尾：_unconfirmed_procs 非空也必须留
+            # 在注册表，否则 sweep 不会再来补杀）。
             _register_orphan(self)
         else:
             _unregister_orphan(self)
@@ -453,17 +642,27 @@ class WebMClip(QObject):
         self._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
 
     def _reap_retired(self, join_timeout: float) -> None:
-        """回收退役池：丢弃已退出线程；对仍存活者有界 join；仍不退出则保留
-        在池中（绝不静默丢弃追踪），由模块级管理器持续重试。
+        """回收退役池：丢弃已确认退出的记录；对仍存活者有界 join；仍不退出
+        或兜底确认失败则保留在池中（绝不静默丢弃追踪），由模块级管理器
+        持续重试。
 
-        注意：不在此处二次 terminate / poll 退役 reader 的进程句柄——进程
-        已由 stop()（terminate + kill 兜底）或 reader 自身 finally 终止；
-        此处再触碰 proc 会与 reader 线程的 finally 收尾并发操作同一 Popen
-        （Windows 上原生竞态崩溃）。
+        兜底确认（批 6-8b 收尾；R3 闭合 R2 复审 P1）：只在「reader 线程
+        已退出」后触碰其 proc——线程退出意味着 finally 已完整执行
+        （_terminate_proc + gen.close() 是杀进程的主保证），此刻不存在与
+        reader 收尾的并发 Popen 操作，可安全做「reader finally 之外的兜底
+        确认」：句柄仍存活（_terminate_proc / gen.close 的异常被吞的病态
+        路径）则补杀。确认失败（poll 异常 / terminate+kill 后仍存活）时
+        **保留记录**并累计重试次数，达到 _CONFIRM_KILL_MAX 上限告警并标注
+        abandoned（保留追踪不再重试）——绝不静默丢弃句柄。这闭合了
+        try-acquire 超时跳过（_unblock_proc）依赖 owner 进 finally 杀进程的
+        条件保证——即使 owner 因异常未能杀成，sweep 也会确认并补杀。
         """
         survivors = []
         for r in self._retired:
             if not r.thread.is_alive():
+                if not self._confirm_or_keep(r):
+                    survivors.append(r)
+                    continue
                 try:
                     r.join(timeout=0)
                 except Exception:
@@ -472,28 +671,91 @@ class WebMClip(QObject):
             r.thread.join(timeout=join_timeout)
             if r.thread.is_alive():
                 survivors.append(r)
+            elif not self._confirm_or_keep(r):
+                survivors.append(r)
         self._retired = survivors
 
+    def _confirm_or_keep(self, r: "_Reader") -> bool:
+        """确认退役 reader 进程已退出；确认成功返回 True（调用方可移出追踪）。
+
+        确认失败（_confirm_retired_proc 返回 False：poll 异常 / terminate+kill
+        后仍存活）时**保留记录**并累计重试次数（有界重试）：达到
+        _CONFIRM_KILL_MAX 记录告警并标注 abandoned——记录保留在追踪中但
+        sweep 不再重试，绝不静默丢弃句柄（R3 闭合 R2 复审 P1）。
+        已标注 abandoned 的记录不再尝试确认（直接返回 False 保留追踪）。
+        """
+        if r.abandoned:
+            return False
+        if self._confirm_retired_proc(r):
+            return True
+        if r.kill_attempts >= _CONFIRM_KILL_MAX:
+            r.abandoned = True
+            logger.warning(
+                '退役 reader 进程补杀确认多次失败，标注放弃（保留追踪不再重试）: pid=%s path=%s',
+                getattr(r.proc, 'pid', '?'),
+                self.path,
+            )
+        return False
+
+    @staticmethod
+    def _confirm_retired_proc(r: "_Reader") -> bool:
+        """退役 reader 线程已退出后的兜底确认/补杀（批 6-8b 收尾；R3 闭合）。
+
+        前置条件：调用方已确认 r.thread 不再存活（finally 已完整执行，不会
+        再有并发 Popen 操作）。正常路径进程已被 reader finally 终止
+        （poll()!=None），此处为无操作；仅病态路径（_terminate_proc 或
+        gen.close() 的异常被吞、进程仍存活）触发补杀——与「绝不让超时跳过
+        的 _unblock_proc 留下未确认存活的 ffmpeg」的最终保障对应。
+
+        R3（R2 复审 P1 闭合）：返回明确的退出确认结果——
+        - True：进程已确认退出（或无需处理，proc 为 None），调用方可以安全
+          移出追踪；
+        - False：未能确认退出（poll 异常 / terminate+kill 后仍存活），调用方
+          必须保留记录继续受控追踪（累计 r.kill_attempts，达到上限由调用方
+          告警并标注 abandoned）——绝不静默丢弃句柄。
+        """
+        proc = r.proc
+        if proc is None:
+            return True
+        try:
+            if proc.poll() is not None:
+                return True
+        except Exception:
+            r.kill_attempts += 1
+            return False  # poll 异常：无法确认退出 → 保留追踪重试
+        if not WebMClip._terminate_proc(proc):
+            r.kill_attempts += 1
+            return False  # 杀后仍存活 / 终止异常：保留追踪重试
+        return True
+
     def _enforce_retired_cap(self) -> None:
-        """退役池超过上限时回收已退出者（零等待 join；存活者保留追踪，
+        """退役池超过上限时回收已确认退出者（零等待 join；存活者保留追踪，
         由模块级管理器持续重试）。绝不做有界 join——stop() 在 GUI 线程，
-        任何 join 等待都会变成用户可感知的卡顿（连点回归教训）。"""
+        任何 join 等待都会变成用户可感知的卡顿（连点回归教训）。
+
+        弹出记录前做兜底确认（_confirm_retired_proc / _confirm_or_keep）：
+        确认成功才弹出；确认失败（poll 异常 / reader finally 异常被吞后
+        进程仍存活）保留追踪（有界重试，达上限告警标注放弃）——绝不静默
+        丢失句柄。"""
         while len(self._retired) > _MAX_RETIRED_READERS:
             oldest = self._retired[0]
             oldest.thread.join(timeout=0)
             if oldest.thread.is_alive():
                 return  # 仍存活：保留追踪，池短暂超限（进程已终止，线程随管道 EOF 退出）
+            if not self._confirm_or_keep(oldest):
+                return  # 未确认/已放弃：保留追踪（宁可池短暂超限，不可丢句柄）
             self._retired.pop(0)
 
     @staticmethod
     def _terminate_proc(proc: subprocess.Popen | None,
-                        timeout: float = _PROC_TERMINATE_TIMEOUT) -> None:
-        """主动终止 ffmpeg 子进程并确认退出（P2）。
+                        timeout: float = _PROC_TERMINATE_TIMEOUT) -> bool:
+        """主动终止 ffmpeg 子进程并确认退出（P2；R3 返回确认结果）。
 
         顺序：terminate() → 有界 wait() → 超时 kill() → 再次 wait()。
-        返回时进程要么已确认退出，要么（极端病态，kill 后仍存活）记录警告
-        并保留句柄供后续 sweep 重试——绝不静默假设 terminate 后进程已退出。
-        已退出或 None 进程为无操作。
+        返回 True=已确认退出（或 None / 已退出进程，无操作）；False=未能
+        确认退出（kill 后仍存活 / poll/terminate/wait 异常）——调用方必须
+        保留句柄供后续有界重试（绝不静默假设 terminate 后进程已退出，也
+        不静默丢句柄）。
 
         已知局限：只保证单个 Popen 句柄（父进程）的退出，不覆盖其派生的
         进程树。当前 ffmpeg 为单进程解码器、不派生子进程；若未来引入会
@@ -501,24 +763,64 @@ class WebMClip(QObject):
         object / 进程组 kill），本实现不负责该场景。
         """
         if proc is None:
-            return
+            return True
         try:
             if proc.poll() is not None:
-                return
+                return True
             proc.terminate()
             try:
                 proc.wait(timeout=timeout)
+                return True
             except subprocess.TimeoutExpired:
                 proc.kill()
                 try:
                     proc.wait(timeout=timeout)
+                    return True
                 except subprocess.TimeoutExpired:
                     logger.warning(
                         'ffmpeg 进程 terminate+kill 后仍存活（保留句柄供 sweep 重试）: pid=%s',
                         getattr(proc, 'pid', '?'),
                     )
+                    return False
         except Exception:
-            pass
+            return False
+
+    def _unblock_proc(self, proc: subprocess.Popen | None) -> None:
+        """GUI 侧对播放 reader Popen 的唯一操作：最小解除阻塞 terminate（批 6-8b）。
+
+        只发 TerminateProcess（Windows 上同步杀进程），不做 wait/kill/关管道
+        ——进程退出的确认与管道清理由 reader 线程 finally 的 _terminate_proc +
+        gen.close() 完成（同一 Popen 的完整生命周期只由 owner 线程操作，杜绝
+        跨线程并发操作同一 Popen 的原生竞态）。正在阻塞读 stdout/解析头部的
+        reader 会因进程终止而立即解除阻塞退出（B7 契约不变）。
+
+        幂等：进程已退出/returncode 已知时 terminate() 直接返回（CPython
+        Windows 实现），重复调用无副作用。获取 _proc_lock 有界等待
+        （_PROC_LOCK_ACQUIRE_TIMEOUT）：超时说明 reader 线程正在 finally
+        收尾（持锁，它自己会 _terminate_proc + gen.close() 杀进程）——此处
+        跳过。**跳过不是无条件安全，但最终保障链是闭合的**：stop() 在调用
+        本方法后把（thread, proc）记录进退役池，孤儿注册表 sweep 的
+        _reap_retired 在 reader 线程退出（finally 完成）后做兜底确认
+        （_confirm_retired_proc：句柄仍存活则补杀）。因此即使 owner 的
+        _terminate_proc / gen.close() 因异常被吞而未杀成，sweep 也会补杀
+        并确认退出——try-acquire 超时绝不会留下无人追踪的存活 ffmpeg，
+        也绝不让 stop() 因锁等待明显变长。
+        """
+        if proc is None:
+            return
+        if not self._proc_lock.acquire(timeout=_PROC_LOCK_ACQUIRE_TIMEOUT):
+            # reader 正在 finally 收尾：它会自行 terminate。跳过不新增登记——
+            # 本 proc 已随 stop() 进入退役池 _Reader 记录，sweep 的
+            # _reap_retired 会在线程退出后兜底确认/补杀（见方法 docstring）。
+            return
+        try:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+        finally:
+            self._proc_lock.release()
 
     # ------------------------------------------------------------ metadata
     def _ensure_meta(self) -> None:
@@ -674,6 +976,10 @@ class WebMClip(QObject):
             stop_evt.set()
         # 主动 terminate 底层 ffmpeg：不能只是 set 事件等 reader 自己退（B7）。
         # 正在阻塞读管道/解析头部的 reader 会因进程终止而立即解除阻塞退出。
+        # 批 6-8b：这里只做「最小解除阻塞 terminate」（_unblock_proc）——所有权
+        # 在 reader 线程（唯一执行 wait/kill/关管道的线程），GUI 侧绝不再并发
+        # 操作同一 Popen（Windows 原生竞态崩溃根因）；进程退出的确认由 reader
+        # finally 完成，stop() 本身零等待返回。
         thread = None
         proc = None
         with self._reader_lock:
@@ -682,7 +988,7 @@ class WebMClip(QObject):
             self._thread = None
             self._reader_proc = None
         if proc is not None:
-            self._terminate_proc(proc)
+            self._unblock_proc(proc)
         if thread is not None:
             self._retired.append(_Reader(thread=thread, proc=proc))
             self._enforce_retired_cap()
@@ -728,6 +1034,10 @@ class WebMClip(QObject):
         """
         if imageio_ffmpeg is None:
             return None
+        # 批 6-8b：探测串行化预热——与播放 reader 同源，避免首帧解码路径
+        # 并发跑 ffmpeg -version 探测（read_frames 内部本就会探测，此处仅
+        # 提前到统一入口并串行化）。
+        _ensure_ffmpeg_exe()
         if gen is None:
             gen = self._first_frame_gen
         proc = None
@@ -786,7 +1096,11 @@ class WebMClip(QObject):
                     self._first_frame_procs.discard(proc)
             if g is not None:
                 try:
-                    g.close()
+                    # 批 6-8b：g.close()（内部 poll/关管道/等待/kill）与 GUI
+                    # cancel_first_frame_warm 的 _terminate_proc 以 _ff_proc_lock
+                    # 互斥——同一 Popen 的操作任意时刻只允许一个线程执行。
+                    with self._ff_proc_lock:
+                        g.close()
                 except Exception:
                     pass
 
@@ -930,11 +1244,102 @@ class WebMClip(QObject):
             procs = list(self._first_frame_procs)
             self._first_frame_procs.clear()
         for p in procs:
-            self._terminate_proc(p)
+            # 批 6-8b：完整 terminate（terminate→wait→kill→wait，测试锁定的取消
+            # 语义：进程必须确认退出）在 _ff_proc_lock 内执行——与解码线程
+            # finally 的 g.close()（同锁）互斥，杜绝 GUI 与解码线程并发操作
+            # 同一 Popen。有界等待：超时说明解码线程正在收尾，其 g.close() 内部
+            # 会 kill 存活进程（imageio finally：poll 判活 → 关管道 → kill），
+            # 且结果已因换代作废。超时跳过不是无条件安全（g.close 异常被吞的
+            # 病态路径会漏）——登记到 _unconfirmed_procs，由孤儿注册表 sweep
+            # 在 owner 释放锁后确认/补杀（_sweep_unconfirmed_procs）。
+            if self._ff_proc_lock.acquire(timeout=_PROC_LOCK_ACQUIRE_TIMEOUT):
+                try:
+                    self._terminate_proc(p)
+                finally:
+                    self._ff_proc_lock.release()
+            else:
+                self._track_unconfirmed_proc(p)
+
+    def _track_unconfirmed_proc(self, proc: subprocess.Popen) -> None:
+        """把 try-acquire 超时跳过、未确认退出的首帧进程登记进重试机制
+        （批 6-8b 收尾；R3 条目格式 [proc, attempts, abandoned]）：挂到
+        _unconfirmed_procs 并确保 clip 进入孤儿注册表，sweep 会在 owner
+        释放 _ff_proc_lock 后确认/补杀。确认失败保留条目并累计重试，达到
+        上限告警标注 abandoned（保留追踪不再重试）——绝不静默丢弃句柄。"""
+        with self._reader_lock:
+            self._unconfirmed_procs.append([proc, 0, False])
+        _register_orphan(self)
+
+    def _has_unconfirmed_procs(self) -> bool:
+        with self._reader_lock:
+            return bool(self._unconfirmed_procs)
+
+    def _sweep_unconfirmed_procs(self) -> None:
+        """对未确认退出的首帧进程做有界补杀确认（批 6-8b 收尾；孤儿注册表
+        sweep 调用，GUI 线程）。
+
+        owner（解码线程）持有 _ff_proc_lock 说明其 finally 的 g.close() 正在
+        执行（内部会杀存活进程）——此时有界尝试获取锁失败即留待下次 sweep
+        （绝不阻塞 GUI）；owner 已释放（g.close 完成 / 线程已退出）时获取
+        成功并确认：进程已死则为无操作，仍存活则补杀。
+
+        R3（R2 复审 P1 闭合）：确认失败（poll 异常 / terminate+kill 后仍
+        存活 / 锁竞争超时）**保留条目**并累计 attempts，绝不一次即丢；达到
+        _UNCONFIRMED_KILL_MAX 记录告警并标注 abandoned（条目保留在追踪中、
+        后续 sweep 不再重试）——不无限静默重试，也不静默丢句柄。
+        """
+        with self._reader_lock:
+            if not self._unconfirmed_procs:
+                return
+            pending = list(self._unconfirmed_procs)
+            self._unconfirmed_procs.clear()
+        still: list = []
+        for entry in pending:
+            proc, attempts, abandoned = entry
+            if abandoned:
+                still.append(entry)  # 已标注放弃：保留追踪，不再重试
+                continue
+            if not self._ff_proc_lock.acquire(timeout=_PROC_LOCK_ACQUIRE_TIMEOUT):
+                self._bump_unconfirmed(proc, attempts, still)
+                continue
+            try:
+                confirmed = WebMClip._terminate_proc(proc)
+            finally:
+                self._ff_proc_lock.release()
+            if not confirmed:
+                self._bump_unconfirmed(proc, attempts, still)
+        if still:
+            with self._reader_lock:
+                self._unconfirmed_procs.extend(still)
+
+    def _bump_unconfirmed(self, proc: subprocess.Popen, attempts: int,
+                          still: list) -> None:
+        """未确认退出的一次重试记账（R3）：递增 attempts；达到上限告警并
+        标注 abandoned（条目保留在追踪中、不再重试），否则保留待下次 sweep
+        重试——绝不静默丢弃句柄。"""
+        attempts += 1
+        if attempts >= _UNCONFIRMED_KILL_MAX:
+            logger.warning(
+                '首帧进程取消后未确认退出，标注放弃（保留追踪不再重试）: pid=%s',
+                getattr(proc, 'pid', '?'),
+            )
+            still.append([proc, attempts, True])
+        else:
+            still.append([proc, attempts, False])
 
     # ------------------------------------------------------------ reader
     def _reader(self, stop_evt: threading.Event, generation: int,
                 ready_evt: threading.Event | None = None) -> None:
+        # 批 6-8b：线程启动前已被 stop/换代的 reader 零成本退出——绝不拉起
+        # 任何 ffmpeg 进程（省掉「拉起→_register 发现 stale→自终止」的浪费
+        # 与延迟，也杜绝 stop 无法解除的探测/解码等待）。
+        if stop_evt.is_set() or self._generation != generation:
+            return
+        # ffmpeg exe 探测串行化预热（见模块级 _ensure_ffmpeg_exe）：并发
+        # reader 不再各自跑 ffmpeg -version 探测（无限等待的 check_call）。
+        _ensure_ffmpeg_exe()
+        if stop_evt.is_set() or self._generation != generation:
+            return  # 探测期间被 stop：不拉起解码进程，直接退出
         gen = None
         proc = None
         try:
@@ -953,11 +1358,17 @@ class WebMClip(QObject):
                 if not (isinstance(argv, list) and "-i" in argv):
                     return  # ffmpeg exe 探测等非解码进程：忽略
                 proc = p
-                stale = stop_evt.is_set() or self._generation != generation
-                if not stale:
-                    with self._reader_lock:
-                        if not stop_evt.is_set() and self._generation == generation:
-                            self._reader_proc = p
+                # stale 判定与登记在 _reader_lock 内原子完成（R3 收尾，与首帧
+                # 路径同构）：stop() 先 set stop_evt、再取 _reader_lock。若 stale
+                # 在锁外先算、锁内再复查，会留下「外层 False → 锁内 True → 既
+                # 不登记也不自终止」的窗口——进程存活且无任何追踪，stop 拿不到
+                # handle 无法解除其阻塞读（reader 卡死 + LogCatcher 残留的全量
+                # 偶发 flake 根因）。锁内单次判定保证：要么完成登记（stop 可见
+                # handle 并解除阻塞读），要么判定 stale 并立即自终止，绝不漏。
+                with self._reader_lock:
+                    stale = stop_evt.is_set() or self._generation != generation
+                    if not stale:
+                        self._reader_proc = p
                 if stale:
                     self._terminate_proc(p)
 
@@ -972,10 +1383,16 @@ class WebMClip(QObject):
                 if proc is None:
                     proc = capture.process
             if proc is not None:
-                # 兜底登记：capture 即时回调已覆盖，此处仅防异常路径遗漏
+                # 兜底登记：capture 即时回调已覆盖，此处仅防异常路径遗漏。
+                # stale 时不能只跳过登记——进程逃出追踪链（5.6sol 三审），
+                # 与 _register 回调同构：判定 stale 则立即自终止（幂等，
+                # 已死进程 terminate 是 no-op）。
                 with self._reader_lock:
-                    if not stop_evt.is_set() and self._generation == generation:
+                    stale = stop_evt.is_set() or self._generation != generation
+                    if not stale:
                         self._reader_proc = proc
+                if stale:
+                    self._terminate_proc(proc)
             if ready_evt is not None:
                 ready_evt.set()
             if self._generation != generation:
@@ -1010,15 +1427,35 @@ class WebMClip(QObject):
             with self._reader_lock:
                 if proc is not None and self._reader_proc is proc:
                     self._reader_proc = None
-            if proc is not None:
-                # 兜底 terminate：正常情况下 stop() 已终止；自然播完/解码失败时
-                # 进程已自行退出（poll()!=None），此处为无操作。
-                self._terminate_proc(proc)
-            if gen is not None:
-                try:
-                    gen.close()
-                except Exception:
-                    pass
+            if proc is not None or gen is not None:
+                # 批 6-8b：收尾操作（_terminate_proc 的 poll/terminate/wait/kill +
+                # gen.close() 的 poll/关管道）在 _proc_lock 内串行化——与 GUI
+                # stop() 的 _unblock_proc 互斥，同一 Popen 任意时刻只有一个线程
+                # 操作（Windows 原生竞态崩溃根因）。
+                #
+                # 代码路径保证（针对「gen.close() 1.5s 轮询被短路」的条件性）：
+                # - 路径 A（正常，proc 已捕获）：先 _terminate_proc 杀进程，再
+                #   gen.close()。实测 imageio-ffmpeg 0.6.0 的 close() 首先
+                #   `process.poll()` 判活——进程已死（returncode 已知）时整个
+                #   「存活进程清理块」（关管道 + 1.5s 轮询 + kill，_io.py
+                #   finally 的 `if process.poll() is None:` 分支）被跳过，
+                #   锁持有上界 = _terminate_proc 时间（正常毫秒级，无 1.5s）。
+                # - 路径 B（兜底，proc 句柄捕获失败 = capture 未看到进程）：
+                #   只剩 gen.close() 执行终止——imageio finally 内 poll 判活 →
+                #   关管道 → 1.5s 轮询 → kill，锁持有时间病态可达 ~1.5s。
+                #   这是捕获失败这一罕见异常路径的代价上界（可接受：进程
+                #   仍必被终止，只是时间更长）。
+                with self._proc_lock:
+                    if proc is not None:
+                        # 兜底 terminate：正常情况下 stop() 已解除阻塞/终止；
+                        # 自然播完/解码失败时进程已自行退出（poll()!=None），
+                        # 此处为无操作。
+                        self._terminate_proc(proc)
+                    if gen is not None:
+                        try:
+                            gen.close()
+                        except Exception:
+                            pass
 
     def _poll(self) -> None:
         """主线程按视频帧率逐帧取帧，不跳帧、不积压追帧。
