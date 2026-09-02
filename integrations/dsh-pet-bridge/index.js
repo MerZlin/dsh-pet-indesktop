@@ -452,7 +452,7 @@ function writeSessionMeta(agent, session) {
   writeRecord({
     type: "session/meta",
     sessionId: sid,
-    label: meta.displayLabel,
+    label: meta.label,          // 原始对话名（writeRecord 自动补充 projectName）
     agentName: meta.agentName || "DSH",
   });
 
@@ -608,6 +608,7 @@ const WATCHDOG_EVENT_TYPES = new Set([
   "agent_reasoning", "agent_reasoning_raw_content", "web_search_begin", "web_search_end",
   "exec_command_begin", "exec_command_end", "mcp_tool_call_begin", "mcp_tool_call_end",
   "context_compacted", "thread_rolled_back", "task_started", "task_complete",
+  "user_action",
 ]);
 
 // 审批请求提醒：一次性事件，桌宠端收到即弹「有审批等你点」气泡。
@@ -781,10 +782,29 @@ function muxConnect() {
         writeRecordDedup({ event: "approval/request", rpcId: msg.rpcId, sessionId: p.sessionId, approvalId: p.approvalId, toolName: p.toolName, command: latestCommandFor(p.toolName, p.arguments) });
       } else if (p.type === "approval/resolved") {
         writeRecord({ event: "approval/resolved", rpcId: msg.rpcId, sessionId: p.sessionId, approvalId: p.approvalId, outcome: p.outcome });
+        writeInteractionResolved("approval", p.sessionId, { rpcId: msg.rpcId, approvalId: p.approvalId }, p.outcome || "approved");
+        // 用户介入信号
+        writeRecord({
+          event: "user_action",
+          action: "approval_resolved",
+          outcome: String(p.outcome || ""),
+          rpcId: msg.rpcId,
+          approvalId: p.approvalId,
+          sessionId: p.sessionId,
+        });
       } else if (p.type === "question/requested") {
         writeRecordDedup({ event: "question/requested", rpcId: msg.rpcId, sessionId: p.sessionId, questions: p.questions });
       } else if (p.type === "question/resolved") {
         writeRecord({ event: "question/resolved", rpcId: msg.rpcId, sessionId: p.sessionId, outcome: p.outcome });
+        writeInteractionResolved("question", p.sessionId, { rpcId: msg.rpcId }, p.outcome || "answered");
+        // 用户介入信号
+        writeRecord({
+          event: "user_action",
+          action: "question_resolved",
+          outcome: String(p.outcome || ""),
+          rpcId: msg.rpcId,
+          sessionId: p.sessionId,
+        });
       }
     } catch {}
   };
@@ -837,6 +857,15 @@ function flushPending() {
 
 function writeRecord(extra) {
   try {
+    // 从 sessionMetaCache 补充 projectName / label（会话所属项目名与对话名）
+    const sid = extra.sessionId;
+    if (sid) {
+      const meta = sessionMetaCache.get(sid);
+      if (meta) {
+        if (meta.projectName) extra.projectName = meta.projectName;
+        if (meta.label) extra.label = meta.label;
+      }
+    }
     writeQueue.push(
       JSON.stringify({ ts: Date.now() / 1000, agent: "dsh", event: "AgentStatus", ...extra }) + "\n",
     );
@@ -856,6 +885,27 @@ function writeRecord(extra) {
 // 优先保留带 rpcId 的可交互版本。
 const INTERACTION_DEDUP_MS = 8000;
 const interactionSeen = new Map(); // key -> { ts, hasRpcId }
+const resolvedInteractionIds = new Set();
+
+function interactionIdentity(kind, sessionId, values = {}) {
+  const id = String(values.requestId || values.rpcId || values.approvalId || values.callId || "");
+  return id && `${String(sessionId || "")}|${kind}|${id}`;
+}
+
+function writeInteractionResolved(kind, sessionId, values = {}, outcome = "") {
+  const identity = interactionIdentity(kind, sessionId, values);
+  if (!identity || resolvedInteractionIds.has(identity)) return false;
+  resolvedInteractionIds.add(identity);
+  if (resolvedInteractionIds.size > 2048) resolvedInteractionIds.delete(resolvedInteractionIds.values().next().value);
+  writeRecord({
+    event: "interaction/resolved", source: "dsh", agentName: agentLabelFor(sessionId),
+    sessionId: String(sessionId || ""), kind,
+    requestId: String(values.requestId || ""), rpcId: String(values.rpcId || ""),
+    approvalId: String(values.approvalId || ""), callId: String(values.callId || ""),
+    outcome: String(outcome || ""),
+  });
+  return true;
+}
 
 function _interactionDedupKeys(extra) {
   const ev = extra.event || "";
@@ -1081,6 +1131,11 @@ export function apply(ctx) {
       //    session 路径兜底写提示（无按钮但至少弹窗出现，不会丢审批）。
       //    不能 return 整个回调——approval/asked 仍需经 STATE_EVENT_TYPES 转发，
       //    驱动桌宠 waiting_approval 状态锁存。
+      if (type === "approval/decided") {
+        const data = event.data || {};
+        writeInteractionResolved("approval", sessionId, { rpcId: data.rpcId, approvalId: data.approvalId, callId: data.callId }, data.outcome || data.decision || "approved");
+      }
+
       if (type === "approval/asked") {
         const data = event.data || {};
         const toolName = data.toolName ? String(data.toolName) : "";
@@ -1122,6 +1177,15 @@ export function apply(ctx) {
         const d = event.data || {};
         const callId = d.message && d.message.callId;
         if (callId) resolveQuestion(callId, sessionId);
+        // 用户介入信号：ask_user_question 回答后
+        if (callId && pendingQuestionCallIds.has(String(callId))) {
+          writeRecord({
+            event: "user_action",
+            action: "question_resolved",
+            callId: String(callId),
+            sessionId,
+          });
+        }
         const info = toolResultInfo(d);
         const pending = consumeToolCall(info.callId) || {};
         const tool = pending.tool || "";
@@ -1202,6 +1266,18 @@ export function apply(ctx) {
             retry: typeof d.retry === "number" ? d.retry : 0,
           });
         }
+        // PI_AI_ERROR（bad_response_status_code）：AI API 返回 404/5xx 等 HTTP 错误，
+        // 表示函数/模型不存在或 API 不可用。此类错误与限流不同，直接写入 llm_error 事件。
+        if (errorCode === "bad_response_status_code" &&
+            noteRetryConnection(sessionKeyOf(_session, event))) {
+          writeRecord({
+            event: "llm_error",
+            errorCode: "PI_AI_ERROR",
+            errorMessage: truncate(errorMessage),
+            sessionId,
+            retry: typeof d.retry === "number" ? d.retry : 0,
+          });
+        }
         // 累计本轮重试计数（供 turn/end 时判定「重试耗尽」硬失败）
         const st = _turnStats(sessionKeyOf(_session, event));
         if (st) st.retries++;
@@ -1241,6 +1317,21 @@ export function apply(ctx) {
       //    转发时携带 step（step/start、turn/start 等），供行为模式检测按 step 去重。
       if (STATE_EVENT_TYPES.has(type)) {
       writeStateEvent(type, stepOf(event), sessionId, agentName);
+      // 用户介入信号：approval/decided 或 thread_rolled_back 等用户主动干预事件
+      // → 向桌宠发送 user_action 事件，关闭对应弹窗
+      if (type === "approval/decided") {
+        const data = event.data || {};
+        writeRecord({
+          event: "user_action",
+          action: "approval_decided",
+          decision: String(data.decision || ""),
+          toolName: String(data.toolName || ""),
+          rpcId: String(data.rpcId || ""),
+          approvalId: String(data.approvalId || ""),
+          sessionId,
+          step: stepOf(event),
+        });
+      }
       } else if (WATCHDOG_EVENT_TYPES.has(type)) {
         const data = event.data || {};
         const extra = { event: type, step: stepOf(event), sessionId, agentName };

@@ -102,6 +102,7 @@ _EVENT_TO_STATE = {
     # 完成 / 出错
     "turn/end": DshState.SUCCESS,
     "llm/retry": DshState.ERROR,
+    "llm/error": DshState.ERROR,  # PI_AI_ERROR（bad_response_status_code）等 API 级错误
 }
 
 
@@ -140,6 +141,7 @@ class DshStateTracker(QObject):
         port: Optional[int] = None,
         parent: Optional[QObject] = None,
         clock=None,
+        scan_interval: float = 5.0,
     ) -> None:
         super().__init__(parent)
         self.config_dir = Path(config_dir)
@@ -151,7 +153,7 @@ class DshStateTracker(QObject):
         # 多 DSH 实例分区写入（P0-2）：生产端每个实例写 dsh-{pid}.jsonl，
         # 消费端 glob 全部 dsh*.jsonl（兼容旧版单文件 dsh.jsonl）。
         # _bridge_file 保留为旧字段名（兼容），实际读取走 DirGlobTailer。
-        self._tailer = DirGlobTailer(self._bridge_dir, pattern="dsh*.jsonl")
+        self._tailer = DirGlobTailer(self._bridge_dir, pattern="dsh*.jsonl", scan_interval=scan_interval)
 
         # 统一状态（edge-trigger）。初始 None，使首个状态（offline/idle）也真正落日志
         self.current_state: Optional[DshState] = None

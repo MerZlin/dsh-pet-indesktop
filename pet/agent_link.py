@@ -35,6 +35,10 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from .click_sound import play_sound, resolve_builtin_sound
+from .agent_event_protocol import parse_agent_event
+from .agent_event_normalizer import normalize_event
+from .agent_event_runtime import AgentEventRuntime
+from .rate_limit_tracker import RateLimitTracker
 
 from .persona_phrases import PhrasePicker
 
@@ -483,12 +487,18 @@ class BaseAgentMonitor(QObject):
     # 原始桥接记录转发（供 stuck_detector 等消费）：(agent_key, record)
     # 只挂 DSH 监视器；其他 Agent（claude/cursor/…）不产生这类增强记录。
     raw_record = Signal(str, object)
+    # Unified protocol output; legacy signals below remain the compatibility API.
+    normalized_event = Signal(object)
     # 硬失败（execution/failed）：DSH 已决定本轮不再继续，不经行为分析直接提醒
     execution_failed = Signal(str, object)   # (agent_key, payload)
     # 会话元数据更新（session/meta 事件）：(agent_key, record)
     session_meta = Signal(str, object)
     # 限流提醒（rate_limit 事件，errorCode=429）：(agent_key, record)
     rate_limit = Signal(str, object)
+    # LLM API 错误（llm_error 事件，errorCode=PI_AI_ERROR / bad_response_status_code）：(agent_key, record)
+    llm_error = Signal(str, object)
+    # 用户介入信号（user_action 事件）：用户 DSH 审批/回答 → 桌宠应关闭对应弹窗
+    user_action = Signal(str, object)
 
     def __init__(self, agent_key: str, config_dir: Path, parent=None) -> None:
         super().__init__(parent)
@@ -531,6 +541,15 @@ class BaseAgentMonitor(QObject):
             self._paused = False
             self._timer.start()
 
+    def _emit_unified_event(self, data: dict) -> None:
+        try:
+            event = parse_agent_event(data, source_hint=self.agent_key, agent_name_hint=self.agent_key)
+            normalized = normalize_event(event)
+            if normalized is not None:
+                self.normalized_event.emit(normalized)
+        except Exception:
+            log.debug("统一 AgentEvent 解析失败", exc_info=True)
+
     def _poll(self) -> None:
         lines = self._tailer.read_new_lines()
         for line in lines:
@@ -541,7 +560,14 @@ class BaseAgentMonitor(QObject):
                 ev = str(data.get("event", ""))
                 st = str(data.get("state", ""))
                 tool = str(data.get("tool", "") or "").strip()
-                # 原始记录转发（只挂 DSH 监视器；stuck_detector 消费成败/错误/文本）
+                # Unified event path is additive and intentionally guarded.
+                try:
+                    normalized = normalize_event(parse_agent_event(data, source_hint=self.agent_key, agent_name_hint=self.agent_key))
+                    if normalized is not None:
+                        self.normalized_event.emit(normalized)
+                except Exception:
+                    log.debug("统一 AgentEvent 解析失败", exc_info=True)
+                # 原始记录转发（兼容旧消费者）
                 self.raw_record.emit(self.agent_key, data)
                 # 审批请求提醒：一次性事件，收到即发信号（不进入状态机，
                 # 因为 DSH 等审批时 agent 仍在 running，状态还是 working）。
@@ -574,153 +600,18 @@ class BaseAgentMonitor(QObject):
                 # 限流事件：rate_limit（errorCode=429）→ 信号转发给 Manager 显示提醒
                 if ev == "rate_limit":
                     self.rate_limit.emit(self.agent_key, data)
+                # LLM API 错误事件：llm_error（errorCode=PI_AI_ERROR）→ 信号转发给 Manager
+                if ev == "llm_error":
+                    self.llm_error.emit(self.agent_key, data)
+                # 用户介入信号：user_action（审批决定/回答）→ 关闭对应弹窗
+                if ev == "user_action":
+                    self.user_action.emit(self.agent_key, data)
                 normalized = normalize_event_state(ev, st)
                 if not normalized:
                     continue  # 不认识的事件类型：忽略，不误报为 working
                 self.state_changed.emit(self.agent_key, normalized)
             except Exception:
                 pass
-
-
-# ----------------------------------------------------------------------
-# Codex rollout 记录解析（~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl）
-# ----------------------------------------------------------------------
-# rollout JSONL 是 Codex CLI / 桌面端每个 thread 一个文件的会话落盘日志
-# （文件名末段即 thread id），是 Codex 状态的唯一可靠实时事件源：
-#   {"timestamp": "...", "ordinal": N, "type": "session_meta|turn_context|
-#    response_item|event_msg|world_state", "payload": {...}}
-# - event_msg.payload.type:
-#     task_started / task_complete / turn_aborted   -- turn 生命周期
-#     item_completed（含 thread_id/turn_id/item）    -- 工作单元完成
-# - response_item.payload.type:
-#     function_call / custom_tool_call（call_id）     -- 工具调用开始标记
-# - turn_context.payload：turn_id + cwd（每个 turn 的工作目录）
-# 辅助：~/.codex/sqlite/codex-dev.db 的 local_thread_catalog（只读连接）
-# 提供 thread 元数据（cwd/标题/最近更新时间），用于启动恢复与项目过滤。
-# 审批/用户交互是 app-server JSON-RPC 通道（第三阶段），不从 rollout 猜测
-# approval 事件名。
-
-# rollout item.type → 过程汇报工具名（manager TOOL_LABELS 的键）
-_CODEX_ITEM_TOOLS = {
-    "CommandExecution": "bash",
-    "FileChange": "edit",
-    "WebSearch": "websearch",
-}
-# response_item 工具调用 name → 汇报工具名别名
-_CODEX_CALL_TOOL_ALIASES = {
-    "exec": "bash",
-    "exec_command": "bash",
-    "local_shell": "bash",
-    "shell": "bash",
-}
-# turn_aborted reason → 用户主动中断（不按失败处理）
-_CODEX_INTERRUPT_REASONS = {"interrupted", "cancelled", "canceled", "user_interrupt"}
-
-_CODEX_ROLLOUT_NAME_RE = re.compile(
-    r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(?P<tid>[0-9A-Za-z-]{8,64})\.jsonl$"
-)
-
-
-def codex_rollout_thread_id_from_name(name: str) -> str:
-    """从 rollout 文件名提取 thread id（文件名末段）；不匹配返回 ""。"""
-    m = _CODEX_ROLLOUT_NAME_RE.match(str(name or ""))
-    return m.group("tid") if m else ""
-
-
-def _parse_iso8601_utc(value) -> float:
-    """ISO8601（含 Z 后缀）→ epoch 秒；解析失败返回 0。"""
-    text = str(value or "").strip()
-    if not text:
-        return 0.0
-    try:
-        if text.endswith(("Z", "z")):
-            text = text[:-1] + "+00:00"
-        dt = datetime.fromisoformat(text)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
-    except (ValueError, TypeError, OverflowError):
-        return 0.0
-
-
-def parse_codex_rollout_line(line: str) -> dict | None:
-    """解析一行 rollout JSONL → 标准化事件 dict；无法解析返回 None。
-
-    标准化字段（缺失为 ""/0）：
-      kind     meta / turn_context / turn_start / turn_end / turn_abort /
-               item_start / item_end / heartbeat
-      turn_id / item_id / item_type / tool / status / cwd / reason / ts
-    未知记录类型一律归为 heartbeat（只用于线程活跃心跳，不驱动状态）。
-    """
-    try:
-        rec = json.loads(line)
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(rec, dict):
-        return None
-    rtype = str(rec.get("type") or "")
-    payload = rec.get("payload")
-    payload = payload if isinstance(payload, dict) else {}
-    ts = _parse_iso8601_utc(rec.get("timestamp"))
-    ev: dict = {"kind": "heartbeat", "turn_id": "", "item_id": "",
-                "item_type": "", "tool": "", "status": "", "cwd": "",
-                "reason": "", "ts": ts}
-
-    if rtype == "session_meta":
-        ev["kind"] = "meta"
-        ev["turn_id"] = str(payload.get("session_id") or payload.get("id") or "")
-        ev["cwd"] = str(payload.get("cwd") or "")
-        return ev
-    if rtype == "turn_context":
-        ev["kind"] = "turn_context"
-        ev["turn_id"] = str(payload.get("turn_id") or "")
-        ev["cwd"] = str(payload.get("cwd") or "")
-        return ev
-
-    if rtype == "response_item":
-        ptype = str(payload.get("type") or "")
-        if ptype in ("function_call", "custom_tool_call"):
-            ev["kind"] = "item_start"
-            ev["item_id"] = str(payload.get("call_id") or payload.get("id") or "")
-            name = str(payload.get("name") or "")
-            ev["tool"] = _CODEX_CALL_TOOL_ALIASES.get(name, name)
-            ev["item_type"] = "CommandExecution"
-            return ev
-        return ev  # message/reasoning/输出等：心跳
-
-    if rtype == "event_msg":
-        ptype = str(payload.get("type") or "")
-        if ptype == "task_started":
-            ev["kind"] = "turn_start"
-            ev["turn_id"] = str(payload.get("turn_id") or "")
-            return ev
-        if ptype == "task_complete":
-            ev["kind"] = "turn_end"
-            ev["turn_id"] = str(payload.get("turn_id") or "")
-            return ev
-        if ptype == "turn_aborted":
-            ev["kind"] = "turn_abort"
-            ev["turn_id"] = str(payload.get("turn_id") or "")
-            ev["reason"] = str(payload.get("reason") or "")
-            return ev
-        if ptype in ("item_started", "item_completed"):
-            item = payload.get("item")
-            item = item if isinstance(item, dict) else {}
-            itype = str(item.get("type") or "")
-            ev["kind"] = "item_start" if ptype == "item_started" else "item_end"
-            ev["turn_id"] = str(payload.get("turn_id") or "")
-            ev["item_id"] = str(item.get("id") or "")
-            ev["item_type"] = itype
-            ev["status"] = str(item.get("status") or "")
-            if itype in _CODEX_ITEM_TOOLS:
-                ev["tool"] = _CODEX_ITEM_TOOLS[itype]
-            elif itype in ("McpToolCall", "DynamicToolCall"):
-                ev["tool"] = str(item.get("tool") or "")
-            return ev
-        return ev  # token_count/agent_message/…：心跳
-
-    return ev  # world_state 等：心跳
-
 
 # ----------------------------------------------------------------------
 # 各 Agent 具体监视器实现
@@ -1164,6 +1055,7 @@ class CursorMonitor(BaseAgentMonitor):
                     data = json.loads(line)
                     if not isinstance(data, dict):
                         continue
+                    self._emit_unified_event(data)
                     tool = cursor_line_tool(data)
                     if tool:
                         self.activity.emit("cursor", tool)
@@ -1354,6 +1246,8 @@ class AgentLinkManager(QObject):
         self._last_activity: dict[str, tuple[str, float]] = {}
         self._activity_global_last = 0.0
         self._phrase_picker = PhrasePicker()
+        self._event_runtime = AgentEventRuntime()
+        self._rate_limit_tracker = RateLimitTracker()
         # 待处理阻塞型交互：interaction_id → {"agent_key", "kind": "approval"|"question",
         # "text": str, "tool"?: str, "questions"?: list, "rpc_id"?, "approval_id"?,
         # "session_id"?, "alert_id"}。审批 / 用户问题都是「阻塞 Agent 等待用户输入」的
@@ -1419,6 +1313,8 @@ class AgentLinkManager(QObject):
         self._exploration_control_result.connect(self._on_exploration_control_result)
 
         for mon in self.monitors.values():
+            mon.normalized_event.connect(self._event_runtime.dispatch)
+            mon.normalized_event.connect(self._on_normalized_event)
             mon.state_changed.connect(self._on_agent_state)
             mon.activity.connect(self._on_agent_activity)
             mon.approval_requested.connect(self._on_approval_request)
@@ -1428,9 +1324,14 @@ class AgentLinkManager(QObject):
             mon.execution_failed.connect(self._on_execution_failed)
         self.monitors["dsh"].session_meta.connect(self._on_session_meta)
         self.monitors["dsh"].rate_limit.connect(self._on_rate_limit)
+        self.monitors["dsh"].llm_error.connect(self._on_llm_error)
+        self.monitors["dsh"].user_action.connect(self._on_user_action)
         # 429 限流缓存：session_key → { "count": int, "_ts": float, "_first_ts": float, "_dismissed": bool }
         self._429_cache: dict[str, dict] = {}
         self._429_timers: dict[str, QTimer] = {}   # session_key → 自动收起定时器
+        # LLM API 错误缓存：session_key → { "_ts": float, "_dismissed": bool }
+        self._llm_error_cache: dict[str, dict] = {}
+        self._llm_error_timers: dict[str, QTimer] = {}
         self._respond_result.connect(self._on_respond_result)
         self.install_finished.connect(self._on_install_finished)
         # 联动动作链：一次性动作播完后若仍有 Agent 在忙，由 window 回调取下一个动作
@@ -1438,6 +1339,28 @@ class AgentLinkManager(QObject):
             self.win._link_next_provider = self._next_busy_anim
 
         self.apply_config()
+
+    def _on_normalized_event(self, event) -> None:
+        """Consume additive semantic events; external resolutions only close UI."""
+        from .agent_event_normalizer import InteractionResolvedEvent
+        if not isinstance(event, InteractionResolvedEvent):
+            return
+        candidates = []
+        for iid, item in self._pending_interactions.items():
+            if item.get("kind") != event.kind or item.get("agent_key") != event.source:
+                continue
+            if event.session_id and str(item.get("session_id") or "") != event.session_id:
+                continue
+            identities = (event.request_id, event.rpc_id, event.approval_id, event.call_id)
+            item_ids = (str(item.get("request_id") or ""), str(item.get("rpc_id") or ""), str(item.get("approval_id") or ""), str(item.get("call_id") or ""))
+            if any(value and value == candidate for value in identities for candidate in item_ids):
+                candidates.append(iid)
+        if len(candidates) == 1:
+            self._resolve_interaction(candidates[0])
+        elif len(candidates) > 1:
+            self._resolve_interaction(candidates[0])
+        else:
+            log.debug("interaction/resolved unmatched source=%s session=%s", event.source, event.session_id)
 
     def apply_config(self) -> None:
         """根据配置启停各个 Agent 监视器。
@@ -2674,6 +2597,7 @@ class AgentLinkManager(QObject):
             return
         self._session_meta_cache[session_id] = {
             "label": str(record.get("label") or ""),
+            "projectName": str(record.get("projectName") or ""),
             "agentName": str(record.get("agentName") or ""),
         }
         log.debug("session_meta cached: %s → %s", session_id[:12], self._session_meta_cache[session_id])
@@ -2782,16 +2706,152 @@ class AgentLinkManager(QObject):
         if hasattr(self.win, "resolve_alert"):
             self.win.resolve_alert(alert_id)
 
+    @staticmethod
+    def _llm_error_alert_id(session_key: str) -> str:
+        return f"llm-error:{session_key}"
+
+    def _on_llm_error(self, agent_key: str, record: dict) -> None:
+        """处理 LLM API 错误事件（errorCode=PI_AI_ERROR）：弹窗提醒。"""
+        if not hasattr(self.win, "isVisible") or not self.win.isVisible():
+            return
+        if not isinstance(record, dict):
+            return
+        session_key = str(record.get("sessionId") or agent_key)
+        now = self._clock()
+        cache = self._llm_error_cache
+        # LLM API 错误不合并，每次错误都提醒（但用冷却时间防刷屏）
+        existing = cache.get(session_key)
+        if existing and now - existing.get("_ts", 0) < self._429_COOLDOWN_S:
+            return  # 冷却期内忽略
+        cache[session_key] = {
+            "_ts": now,
+            "_dismissed": False,
+        }
+        error_message = str(record.get("errorMessage") or "AI 服务不可用")
+        error_code = str(record.get("errorCode") or "UNKNOWN")
+        fallback = f"AI 服务错误（{error_code}）：{error_message}"
+        key = "llm_error.api"
+        text = self._dialogue(key, fallback)
+        buttons = [("知道了", lambda sk=session_key: self._dismiss_llm_error_alert(sk))]
+        if hasattr(self.win, "show_alert"):
+            self.win.show_alert(
+                text,
+                duration_ms=0,
+                sticky=True,
+                buttons=buttons,
+                alert_id=self._llm_error_alert_id(session_key),
+                priority=self._429_PRIORITY,
+                alert_type="llm_error",
+                metadata={"sessionId": session_key, "errorCode": error_code},
+            )
+        elif hasattr(self.win, "show_bubble"):
+            self.win.show_bubble(text, duration_ms=self._429_DURATION_MS)
+        self._schedule_llm_error_dismiss(session_key)
+
+    def _schedule_llm_error_dismiss(self, session_key: str) -> None:
+        """排定 LLM 错误提醒的自动收起时间。"""
+        if not hasattr(self.win, "_bubble_busy_until"):
+            return
+        entry = self._llm_error_cache.get(session_key)
+        if not entry:
+            return
+        now = self._clock()
+        ts = entry.get("_ts", now)
+        delay_s = self._429_DURATION_MS / 1000.0
+        self._cancel_llm_error_timer(session_key)
+        parent = self.win if isinstance(self.win, QObject) else None
+        timer = QTimer(parent)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda sk=session_key: self._dismiss_llm_error_alert(sk))
+        self._llm_error_timers[session_key] = timer
+        timer.start(int(delay_s * 1000))
+
+    def _cancel_llm_error_timer(self, session_key: str) -> None:
+        timer = self._llm_error_timers.pop(session_key, None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+            timer.deleteLater()
+
+    def _dismiss_llm_error_alert(self, session_key: str) -> None:
+        """用户点击「知道了」或超时自动收起：清理缓存并关闭提醒。"""
+        cache = self._llm_error_cache
+        entry = cache.pop(session_key, None)
+        if entry:
+            entry["_dismissed"] = True
+        self._cancel_llm_error_timer(session_key)
+        alert_id = self._llm_error_alert_id(session_key)
+        if hasattr(self.win, "resolve_alert"):
+            self.win.resolve_alert(alert_id)
+
+    def _on_user_action(self, agent_key: str, record: dict) -> None:
+        """用户介入信号（user_action 事件）：DSH 审批决定/回答 → 关闭对应弹窗。
+
+        action 类型：
+        - approval_decided / approval_resolved：审批已决定
+        - question_resolved：用户已回答问题
+        """
+        if not hasattr(self.win, "isVisible") or not self.win.isVisible():
+            return
+        if not isinstance(record, dict):
+            return
+
+        action = str(record.get("action") or "")
+        session_key = str(record.get("sessionId") or agent_key)
+
+        # 按 action 类型关闭对应交互弹窗
+        if action == "approval_decided":
+            approval_id = str(record.get("approvalId") or "")
+            rpc_id = str(record.get("rpcId") or "")
+            self._close_interaction_by_id("approval", rpc_id, approval_id, session_key)
+        elif action == "approval_resolved":
+            approval_id = str(record.get("approvalId") or "")
+            rpc_id = str(record.get("rpcId") or "")
+            self._close_interaction_by_id("approval", rpc_id, approval_id, session_key)
+        elif action == "question_resolved":
+            call_id = str(record.get("callId") or "")
+            rpc_id = str(record.get("rpcId") or "")
+            self._close_interaction_by_id("question", rpc_id, call_id, session_key)
+
+    def _close_interaction_by_id(self, kind: str, rpc_id: str, id_: str, session_key: str) -> None:
+        """按 kind + id 精确关闭对应的交互弹窗。
+
+        优先匹配 rpc_id（可交互审批/问题的权威身份），其次匹配 approvalId/callId。
+        两者均不匹配时，降级关闭该 kind 下同 session 的无 id 条目（旧路径兜底）。
+        """
+        for iid, item in self._pending_interactions.items():
+            if item.get("kind") != kind:
+                continue
+            if rpc_id and item.get("rpc_id") == rpc_id:
+                self._resolve_interaction(iid)
+                return
+            if id_ and item.get(f"{kind[:2]}_id" if kind == "approval" else "call_id") == id_:
+                self._resolve_interaction(iid)
+                return
+        # 无 id 匹配：旧路径兜底，关闭同 kind 同 session 的无 rpc_id 条目
+        for iid, item in self._pending_interactions.items():
+            if (item.get("kind") == kind and item.get("agent_key") == session_key
+                    and not item.get("rpc_id")):
+                self._resolve_interaction(iid)
+                return
+
     def get_session_display_name(self, session_id: str) -> str:
         """解析会话的人类可读显示名。
 
-        降级链：cache.label → cache.agentName → 截短 sessionId → 完整 sessionId。
+        降级链：cache 中的 projectName+label → cache.agentName → 截短 sessionId → 完整 sessionId。
         控制请求（interrupt/replan）仍严格使用 sessionId，此处仅用于展示。
         """
         meta = self._session_meta_cache.get(session_id)
         if meta:
+            project_name = str(meta.get("projectName") or "")
             label = str(meta.get("label") or "")
+            # 优先用 projectName + label 组合（更精确）
+            if project_name and label:
+                return f"{project_name} · {label}"
             if label:
+                # 兼容旧格式：label 可能是完整 displayLabel（如 "DSH · proj · conv"）
                 return label
             agent_name = str(meta.get("agentName") or "")
             if agent_name:
