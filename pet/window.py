@@ -511,7 +511,7 @@ class PetWindow(QWidget):
         # 预缩放成品帧缓存（方案 A §3.1）：同一动画同一帧在相同
         # (素材路径+mtime+大小+内容弱指纹, 帧号, 朝向, scale, DPR, 动画名)
         # 下结果确定，循环播放直接复用最终 QPixmap，跳过整条 CPU 转换链。
-        # 字节预算默认 256MB（可用 frame_cache_max_bytes 配置覆盖），按
+        # 字节预算默认 64MB（可用 frame_cache_max_bytes 配置覆盖），按
         # QPixmap+QImage 双份 ARGB32 记账，超限逐出最久未用（硬上界）；
         # scale/DPR/角色/素材变化（含同 mtime+同 size 的原地替换，见
         # _frame_cache_key / _frame_content_fingerprint）由 key 自动失效。
