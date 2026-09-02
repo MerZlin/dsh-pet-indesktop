@@ -40,12 +40,22 @@ _PHRASES = {
     "watchdog.unknown": ["判断服务暂时不可用，这次先提醒主人留意。"],
     "rate_limit.one": ["呜，通信有点拥挤，暂时被限流了，请稍后再试。"],
     "rate_limit.many": ["呜，通信有点拥挤，已经连续限流 {count} 次了，请稍后再试。"],
+    "llm_error.api": ["AI 服务出错了，主人看看是怎么回事吧。"],
     "done.success": ["主人，{name}这一轮完成啦，去看看成果吧。"],
     "done.attention": ["{name}这一轮停下来了，结果还请主人确认一下。"],
     "failure.retry": ["{name}本轮没有完成：多次重试后仍未成功，请检查后再运行。"],
     "failure.tool": ["{name}本轮没有完成：工具执行失败，请检查后再运行。"],
     "failure.generic": ["{name}本轮没有完成，请检查后再运行。"],
 }
+
+# Stable schema keys reserved for newer event integrations.  Empty built-ins
+# remain compatible with the legacy JSON while making exports complete.
+for _key in (
+    "control.replan.pending", "control.replan.success", "control.interrupt.pending",
+    "control.interrupt.success", "control.failed", "stuck.reminder", "pattern.warning",
+    "pattern.control", "balance.query",
+):
+    _PHRASES.setdefault(_key, [])
 
 try:
     _json_phrases = json.loads(Path(__file__).with_name("persona_phrases.json").read_text(encoding="utf-8"))
@@ -94,3 +104,7 @@ class PhrasePicker:
             return fallback
 def phrase_keys() -> tuple[str, ...]:
     return tuple(sorted(_PHRASES))
+
+def default_phrases() -> dict[str, str]:
+    """Return the default phrase template for each key (first variant)."""
+    return {key: variants[0] if variants else "" for key, variants in _PHRASES.items()}

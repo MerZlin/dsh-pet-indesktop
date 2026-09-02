@@ -27,7 +27,7 @@ DEFAULT_SELF_TALK_TEXTS = [
     "\u518d\u966a\u4f60\u4e00\u4f1a\u513f\u3002",
 ]
 DEFAULT_SELF_TALK_BUBBLE_STYLE = "classic_top"
-DIALOGUE_MODES = {"legacy", "whale_maid"}
+DIALOGUE_MODES = {"legacy", "whale_maid", "custom"}
 DEFAULT_DIALOGUE_PHRASES = {}
 DEFAULT_COLLISION_SETTINGS = {
     "collision_enabled": True,
@@ -235,12 +235,6 @@ def _default_agent_link_data() -> dict:
         "pattern_macro_w10_action": 1,
         "pattern_min_steps_between": 3,
         "pattern_cooldown_seconds": 60,
-        # Codex rollout 文件监听（第一阶段：只监听状态，不做审批交互）
-        "codex_poll_ms": 700,          # 轮询间隔（>=300ms）
-        "codex_scan_days": 3,          # 扫描最近几天的 rollout 文件
-        "codex_filter_mode": "all",    # all=全部 thread / cwd=按项目目录 / latest=仅最新
-        "codex_watch_cwds": [],        # cwd 模式下监听的项目目录列表
-        "codex_stale_minutes": 10,     # 无新记录多久后超时恢复为 idle
         # 音效配置
         "sound_enabled": False,
         "sound_start_path": "builtin:agent-start",
@@ -766,10 +760,13 @@ class Config:
         self.data["dialogue_mode"] = dialogue_mode if dialogue_mode in {"legacy", "whale_maid", "custom"} else "legacy"
         raw_phrases = self.data.get("dialogue_phrases")
         self.data["dialogue_phrases"] = (
-            {str(k): ([str(item).strip()[:240] for item in v if str(item).strip()][:8]
-                      if isinstance(v, list) else str(v).strip()[:240])
+            {str(k): ([item.strip()[:240] for item in v if isinstance(item, str) and item.strip()][:8]
+                       if isinstance(v, list) else str(v).strip()[:240])
              for k, v in raw_phrases.items()
-             if str(k).strip() and (v if isinstance(v, list) else str(v).strip())}
+             if str(k).strip() and (
+                 (isinstance(v, list) and any(isinstance(item, str) and item.strip() for item in v))
+                 or (isinstance(v, str) and v.strip())
+             )}
             if isinstance(raw_phrases, dict) else {}
         )
         from . import physics as physics_mod

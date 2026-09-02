@@ -6,12 +6,13 @@ import logging
 import os
 import sys
 import threading
+import json
 from pathlib import Path
 
 import shiboken6
 
 from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
+from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen, QClipboard
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
@@ -59,7 +60,8 @@ from .context_menus.icons import vector_widget_icon
 from .context_menus.quick_launch import fitted_application_icon
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset, store_fun_asset
 from .speech_bubble import BUBBLE_STYLE_PRESETS
-from .persona_phrases import phrase_keys
+from .persona_phrases import phrase_keys, default_phrases
+from .persona_template import build_persona_template, template_json
 
 
 # 语言配置页只展示用户能理解的事件名称；内部 key 仍用于保存和渲染。
@@ -76,7 +78,8 @@ DIALOGUE_LABELS = {
     "question.one": "单个用户问题", "question.many": "多个用户问题",
     "watchdog.warning": "循环检测警告", "watchdog.intervention": "循环检测干预",
     "watchdog.unknown": "循环判断不可用", "rate_limit.one": "单次限流",
-    "rate_limit.many": "连续限流", "done.success": "任务完成",
+    "rate_limit.many": "连续限流", "llm_error.api": "AI 服务错误",
+    "done.success": "任务完成",
     "done.attention": "任务暂停待确认", "failure.retry": "重试后失败",
     "failure.tool": "工具执行失败", "failure.generic": "执行失败",
     "control.replan.pending": "重新规划处理中", "control.replan.success": "重新规划完成",
@@ -104,7 +107,8 @@ DIALOGUE_KEY_PARAMS = {
     "question.empty": (), "question.one": ("name", "body"),
     "question.many": ("name", "count"), "watchdog.warning": ("name", "reasons"),
     "watchdog.intervention": ("name", "reasons"), "watchdog.unknown": (),
-    "rate_limit.one": (), "rate_limit.many": ("count",), "done.success": ("name",),
+    "rate_limit.one": (), "rate_limit.many": ("count",), "llm_error.api": (),
+    "done.success": ("name",),
     "done.attention": ("name",), "failure.retry": ("name",),
     "failure.tool": ("name",), "failure.generic": ("name",),
     "control.replan.pending": ("name",), "control.replan.success": ("name",),
@@ -1314,7 +1318,31 @@ class ModernSettingsDialog(QDialog):
             )
             for key, edit in self.dialogue_phrase_edits.items()
         ]
-        dialogue_layout.addWidget(SettingsSection("逐句自定义（自定义模式）", dialogue_rows, dialogue_content))
+        # 逐句自定义区域：标题 + 导入/导出/复制模板按钮
+        custom_header = QWidget(dialogue_content)
+        custom_header_layout = QHBoxLayout(custom_header)
+        custom_header_layout.setContentsMargins(0, 0, 0, 0)
+        custom_header_layout.setSpacing(8)
+        custom_title = QLabel("逐句自定义（自定义模式）", custom_header)
+        custom_title.setObjectName("sectionTitle")
+        custom_header_layout.addWidget(custom_title)
+        custom_header_layout.addStretch(1)
+        self.import_template_btn = QPushButton("导入默认模板", custom_header)
+        self.import_template_btn.setIcon(vector_widget_icon(self, "import", 14))
+        self.import_template_btn.setFixedWidth(120)
+        self.import_template_btn.clicked.connect(self._import_dialogue_template)
+        custom_header_layout.addWidget(self.import_template_btn)
+        self.export_template_btn = QPushButton("导出模板", custom_header)
+        self.export_template_btn.setFixedWidth(100)
+        self.export_template_btn.clicked.connect(self._export_dialogue_template)
+        custom_header_layout.addWidget(self.export_template_btn)
+        self.copy_template_btn = QPushButton("复制模板", custom_header)
+        self.copy_template_btn.setIcon(vector_widget_icon(self, "copy", 14))
+        self.copy_template_btn.setFixedWidth(100)
+        self.copy_template_btn.clicked.connect(self._copy_dialogue_template)
+        custom_header_layout.addWidget(self.copy_template_btn)
+        dialogue_layout.addWidget(custom_header)
+        dialogue_layout.addWidget(SettingsCard(dialogue_rows, dialogue_content))
         dialogue_layout.addStretch(1)
         self._add_page("台词风格", "chat", self._page_shell("台词风格", dialogue_content))
 
@@ -2092,6 +2120,58 @@ class ModernSettingsDialog(QDialog):
         if target:
             vol = float(self.agent_sound_volume_spin.value()) / 100.0
             play_sound(target, volume=vol)
+
+    def _import_dialogue_template(self) -> None:
+        """导入默认台词模板：将所有预设台词填充到自定义编辑框。"""
+        defaults = default_phrases()
+        for key, edit in self.dialogue_phrase_edits.items():
+            if key in defaults:
+                edit.setText(defaults[key])
+        QMessageBox.information(self, "导入成功", "已导入全部默认台词模板。")
+
+    def _current_dialogue_template(self) -> dict:
+        return build_persona_template({
+            "dialogue_mode": self.dialogue_mode_select.currentData() or "legacy",
+            "dialogue_phrases": {
+                key: edit.text() for key, edit in self.dialogue_phrase_edits.items()
+            },
+        })
+
+    def _export_dialogue_template(self) -> None:
+        """Export the complete current template without changing configuration."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出角色台词模板", "persona-phrases-custom.json", "JSON 文件 (*.json)"
+        )
+        if not path:
+            return
+        try:
+            text = template_json({
+                "dialogue_mode": self.dialogue_mode_select.currentData() or "legacy",
+                "dialogue_phrases": {key: edit.text() for key, edit in self.dialogue_phrase_edits.items()},
+            })
+            Path(path).write_text(text, encoding="utf-8")
+            json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            QMessageBox.warning(self, "导出失败", f"模板未能写入：{exc}")
+            return
+        QMessageBox.information(self, "导出成功", "角色台词模板已导出。")
+
+    def _copy_dialogue_template(self) -> None:
+        """Copy a complete snapshot of the current editor values."""
+        try:
+            text = template_json({
+                "dialogue_mode": self.dialogue_mode_select.currentData() or "legacy",
+                "dialogue_phrases": {key: edit.text() for key, edit in self.dialogue_phrase_edits.items()},
+            })
+            clipboard = QApplication.clipboard()
+            if clipboard is None:
+                raise RuntimeError("系统剪贴板不可用")
+            clipboard.setText(text)
+        except Exception as exc:
+            logging.exception("copy persona template failed")
+            QMessageBox.warning(self, "复制失败", f"无法写入系统剪贴板：{exc}")
+            return
+        QMessageBox.information(self, "复制成功", "模板已复制。")
 
     def _update_click_sound_controls(self, enabled: bool) -> None:
         for row_key in ("click_sound_pack", "click_sound_volume", "click_sound_preview"):
