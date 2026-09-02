@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
     QApplication,
+    QBoxLayout,
     QDialog,
     QColorDialog,
     QDialogButtonBox,
@@ -66,7 +67,11 @@ from .context_menus.icons import vector_widget_icon
 from .context_menus.quick_launch import fitted_application_icon
 from .context_menus.registry import MENU_ACTIONS
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset, store_fun_asset
-from .menu_layout import load_default_menu_layout, resolve_menu_layout
+from .menu_layout import (
+    load_default_menu_layout,
+    merge_default_menu_actions,
+    resolve_menu_layout,
+)
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
 
@@ -604,6 +609,7 @@ class SettingRow(QFrame):
         self.setProperty("stackedControl", stacked)
         label = QLabel(title, self)
         label.setObjectName("settingLabel")
+        label.setWordWrap(True)
         hint_label = QLabel(hint, self)
         hint_label.setObjectName("settingHint")
         hint_label.setWordWrap(True)
@@ -620,6 +626,8 @@ class SettingRow(QFrame):
             row.addWidget(hint_label)
             row.addSpacing(7)
             row.addWidget(control)
+            self._responsive_layout = None
+            self.setProperty("responsiveStacked", True)
         else:
             row = QHBoxLayout(self)
             row.setContentsMargins(16, 10, 16, 10)
@@ -632,9 +640,103 @@ class SettingRow(QFrame):
             copy.addStretch(1)
             row.addLayout(copy, 1)
             row.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._responsive_layout = row
+            self.setProperty("responsiveStacked", False)
         self.label = label
         self.hint_label = hint_label
         self.control = control
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        layout = self._responsive_layout
+        if layout is None:
+            return
+        copy_minimum = min(320, max(180, self.label.sizeHint().width()))
+        control_width = max(
+            self.control.minimumWidth(), self.control.sizeHint().width()
+        )
+        preferred_inline_width = getattr(
+            self.control, "preferred_inline_width", None
+        )
+        if callable(preferred_inline_width):
+            control_width = max(control_width, preferred_inline_width())
+        required_width = 32 + copy_minimum + 18 + control_width
+        stacked = self.width() < required_width
+        if self.property("responsiveStacked") is stacked:
+            return
+        self.setProperty("responsiveStacked", stacked)
+        layout.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if stacked
+            else QBoxLayout.Direction.LeftToRight
+        )
+        layout.setSpacing(7 if stacked else 18)
+        layout.setAlignment(
+            self.control,
+            Qt.AlignmentFlag(0)
+            if stacked
+            else Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        self.updateGeometry()
+
+
+class ResponsiveActionRow(QWidget):
+    """Keep a primary control and adjacent actions usable under localization."""
+
+    def __init__(self, primary: QWidget, actions: list[QWidget], parent=None):
+        super().__init__(parent)
+        self.primary = primary
+        self.actions = list(actions)
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(6)
+        self.grid.setVerticalSpacing(6)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._stacked = None
+        self._reflow(True)
+
+    def preferred_inline_width(self) -> int:
+        widths = [self.primary.sizeHint().width(), *(
+            action.sizeHint().width() for action in self.actions
+        )]
+        return sum(widths) + self.grid.horizontalSpacing() * (len(widths) - 1)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        action_width = sum(
+            action.minimumSizeHint().width() for action in self.actions
+        ) + self.grid.horizontalSpacing() * max(0, len(self.actions) - 1)
+        width = max(self.primary.minimumSizeHint().width(), action_width)
+        action_height = max(
+            (action.minimumSizeHint().height() for action in self.actions),
+            default=0,
+        )
+        height = (
+            self.primary.minimumSizeHint().height()
+            + (self.grid.verticalSpacing() + action_height if self.actions else 0)
+        )
+        return QSize(width, height)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._reflow(self.width() < self.preferred_inline_width())
+
+    def _reflow(self, stacked: bool) -> None:
+        if self._stacked is stacked:
+            return
+        self._stacked = stacked
+        self.setProperty("responsiveStacked", stacked)
+        while self.grid.count():
+            self.grid.takeAt(0)
+        if stacked:
+            self.grid.addWidget(self.primary, 0, 0, 1, max(1, len(self.actions)))
+            for index, action in enumerate(self.actions):
+                self.grid.addWidget(action, 1, index)
+        else:
+            self.grid.addWidget(self.primary, 0, 0)
+            for index, action in enumerate(self.actions, start=1):
+                self.grid.addWidget(action, 0, index)
+        self.grid.setColumnStretch(0, 1)
+        self.updateGeometry()
 
 
 class SettingsCard(QFrame):
@@ -882,8 +984,13 @@ class MenuLayoutEditor(QWidget):
         box.addWidget(self.split)
         box.addLayout(self.button_layout)
 
+        self._preview_refresh_pending = False
         self.tree.itemChanged.connect(self._on_changed)
-        self.tree.model().rowsMoved.connect(self._on_changed)
+        tree_model = self.tree.model()
+        tree_model.rowsMoved.connect(self._schedule_preview_refresh)
+        tree_model.rowsInserted.connect(self._schedule_preview_refresh)
+        tree_model.rowsRemoved.connect(self._schedule_preview_refresh)
+        tree_model.modelReset.connect(self._schedule_preview_refresh)
         self.set_layout(layout or load_default_menu_layout())
         self._update_layout_mode()
 
@@ -935,6 +1042,9 @@ class MenuLayoutEditor(QWidget):
             ancestor = ancestor.parentWidget()
 
     def set_layout(self, layout: dict) -> None:
+        layout, _diagnostics = merge_default_menu_actions(
+            layout, registered_actions=MENU_ACTIONS.ids
+        )
         self.tree.blockSignals(True)
         self.tree.clear()
         for node in layout.get("nodes", []):
@@ -942,6 +1052,17 @@ class MenuLayoutEditor(QWidget):
         self.tree.expandAll()
         self.tree.blockSignals(False)
         self._refresh_targets()
+        self._on_changed()
+
+    def _schedule_preview_refresh(self, *_args) -> None:
+        """Coalesce the remove/insert phases of cross-parent tree moves."""
+        if self._preview_refresh_pending:
+            return
+        self._preview_refresh_pending = True
+        QTimer.singleShot(0, self._flush_preview_refresh)
+
+    def _flush_preview_refresh(self) -> None:
+        self._preview_refresh_pending = False
         self._on_changed()
 
     def _append_node(self, parent: QTreeWidgetItem | None, node: dict) -> None:
@@ -1235,13 +1356,10 @@ class _AiSettingsPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(18)
-        provider_row = QWidget()
-        provider_lay = QHBoxLayout(provider_row)
-        provider_lay.setContentsMargins(0, 0, 0, 0)
-        provider_lay.setSpacing(6)
-        provider_lay.addWidget(self.provider_combo, 1)
-        provider_lay.addWidget(self.add_provider_btn)
-        provider_lay.addWidget(self.delete_provider_btn)
+        provider_row = ResponsiveActionRow(
+            self.provider_combo,
+            [self.add_provider_btn, self.delete_provider_btn],
+        )
         root.addWidget(SettingsSection("API 列表", [
             SettingRow(
                 "provider_list", "API 列表",

@@ -351,6 +351,7 @@ def test_settings_menu_editor_commits_visibility_draft(tmp_path, monkeypatch):
     chat_item = dialog.menu_layout_editor.item_for_action("chat")
     assert chat_item is not None
     chat_item.setCheckState(0, Qt.CheckState.Unchecked)
+    assert Config(tmp_path).get("context_menu_layout") is None
     dialog.save_exit_button.click()
 
     restored = Config(tmp_path)
@@ -382,6 +383,50 @@ def test_settings_menu_editor_moves_action_into_submenu_without_dragging(tmp_pat
     nodes = Config(tmp_path).get("context_menu_layout")["nodes"]
     pet_controls = next(node for node in nodes if node["id"] == "pet_controls")
     assert [child["id"] for child in pet_controls["children"]][-1] == "playback_speed"
+    app.processEvents()
+
+
+def test_menu_editor_reorders_and_promotes_actions_with_button_controls():
+    from PySide6.QtWidgets import QApplication
+
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None)
+    root_ids = [node["id"] for node in editor.value()["nodes"]]
+    editor.tree.setCurrentItem(editor.item_for_action("chat"))
+    editor.down_button.click()
+    reordered_ids = [node["id"] for node in editor.value()["nodes"]]
+    chat_index = root_ids.index("chat")
+    assert reordered_ids[chat_index : chat_index + 2] == ["look_screen", "chat"]
+
+    promoted = editor.item_for_action("drag_physics")
+    editor.tree.setCurrentItem(promoted)
+    editor.promote_button.click()
+
+    assert promoted.parent() is None
+    assert editor.value()["nodes"][-1]["id"] == "drag_physics"
+    assert editor.preview.topLevelItem(editor.preview.topLevelItemCount() - 1).text(0) == "拖动物理"
+    editor.close()
+    app.processEvents()
+
+
+def test_menu_editor_reset_restores_the_versioned_default():
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None)
+    editor.item_for_action("chat").setCheckState(0, Qt.CheckState.Unchecked)
+    editor.tree.setCurrentItem(editor.item_for_action("drag_physics"))
+    editor.promote_button.click()
+
+    editor.reset_button.click()
+
+    assert editor.value()["nodes"] == load_default_menu_layout()["nodes"]
+    editor.close()
     app.processEvents()
 
 
@@ -567,10 +612,86 @@ def test_setting_rows_name_and_describe_their_controls_for_accessibility(tmp_pat
     row = dialog.findChild(SettingRow, "settingRow_autostart")
 
     assert row.label.buddy() is row.control
+    assert row.label.wordWrap()
     assert row.control.accessibleName() == row.label.text()
     assert row.control.accessibleDescription() == row.hint_label.text()
     assert "QPushButton:focus" in dialog.styleSheet()
 
+    dialog.reject()
+    app.processEvents()
+
+
+def test_setting_row_stacks_a_wide_control_before_copy_becomes_unreadable():
+    from PySide6.QtWidgets import QApplication, QPushButton
+
+    from pet.modern_settings_dialog import SettingRow
+
+    app = QApplication.instance() or QApplication([])
+    control = QPushButton("宽控件")
+    control.setFixedWidth(340)
+    row = SettingRow(
+        "responsive",
+        "跨平台同步与自动恢复策略的超长本地化标题示例",
+        "说明文字必须保持可读。",
+        control,
+    )
+    row.resize(500, 180)
+    row.show()
+    app.processEvents()
+
+    assert control.y() > row.label.y() + row.label.height()
+    assert row.property("responsiveStacked") is True
+
+    row.resize(900, 180)
+    app.processEvents()
+
+    assert control.x() > row.label.x()
+    assert row.property("responsiveStacked") is False
+    row.close()
+    app.processEvents()
+
+
+def test_compact_ai_provider_controls_stay_inside_their_setting_row(tmp_path, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog, SettingRow
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    dialog.resize(720, 760)
+    dialog.sidebar.setCurrentRow(5)
+    for control in (
+        dialog.ai_page.provider_combo,
+        dialog.ai_page.add_provider_btn,
+        dialog.ai_page.delete_provider_btn,
+    ):
+        font = control.font()
+        font.setPixelSize(17)
+        control.setFont(font)
+    dialog.ai_page.add_provider_btn.setText("添加新的 Provider")
+    dialog.ai_page.delete_provider_btn.setText("删除当前 Provider")
+    dialog.show()
+    dialog.resize(721, 760)
+    app.processEvents()
+    dialog.resize(720, 760)
+    app.processEvents()
+
+    row = dialog.findChild(SettingRow, "settingRow_provider_list")
+    provider_controls = dialog.ai_page.provider_combo.parentWidget()
+    left = provider_controls.mapTo(row, QPoint(0, 0)).x()
+    assert left >= 16
+    assert left + provider_controls.width() <= row.width() - 16
+    scroll = row.parentWidget()
+    while scroll is not None and not isinstance(scroll, QScrollArea):
+        scroll = scroll.parentWidget()
+    assert scroll is not None
+    row_left = row.mapTo(scroll.viewport(), QPoint(0, 0)).x()
+    assert row_left >= 0
+    assert row_left + row.width() <= scroll.viewport().width()
     dialog.reject()
     app.processEvents()
 
@@ -670,6 +791,119 @@ def test_menu_preview_uses_resolver_and_omits_empty_submenu(tmp_path, monkeypatc
     ]
     assert "桌宠控制" not in preview_labels
     dialog.reject()
+    app.processEvents()
+
+
+def test_menu_preview_refreshes_after_tree_shape_changes():
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None)
+    controls = next(
+        editor.tree.topLevelItem(index)
+        for index in range(editor.tree.topLevelItemCount())
+        if (
+            editor.tree.topLevelItem(index).data(0, Qt.ItemDataRole.UserRole) or {}
+        ).get("id")
+        == "pet_controls"
+    )
+    action = controls.child(0)
+    action_label = action.text(0)
+
+    controls.removeChild(action)
+    editor.tree.addTopLevelItem(action)
+    app.processEvents()
+
+    preview_roots = [
+        editor.preview.topLevelItem(index)
+        for index in range(editor.preview.topLevelItemCount())
+    ]
+    preview_controls = next(item for item in preview_roots if item.text(0) == "桌宠控制")
+    assert action_label in [item.text(0) for item in preview_roots]
+    assert action_label not in [
+        preview_controls.child(index).text(0)
+        for index in range(preview_controls.childCount())
+    ]
+    editor.close()
+    app.processEvents()
+
+
+def test_menu_preview_and_runtime_qmenu_share_the_same_layout_structure():
+    from copy import deepcopy
+
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.modern import build_modern_menu
+    from pet.context_menus.registry import MENU_ACTIONS
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    layout = deepcopy(load_default_menu_layout())
+    layout["layout_id"] = "user"
+    visible_root_ids = {"chat", "pet_controls", "modern_settings", "quit"}
+    for node in layout["nodes"]:
+        node["visible"] = node["id"] in visible_root_ids
+        if node["id"] == "pet_controls":
+            node["label"] = "常用桌宠操作"
+            for child in node["children"]:
+                child["visible"] = child["id"] == "drag_physics"
+
+    class FakeConfig:
+        def get(self, key, default=None):
+            values = {
+                "context_menu_layout": layout,
+                "menu_easter_egg": {"enabled": False},
+                "quick_launch_apps": [],
+            }
+            return values.get(key, default)
+
+    class FakePet:
+        cfg = FakeConfig()
+        drag_physics = False
+        on_open_chat = lambda self: None
+        on_open_modern_settings = lambda self: None
+        set_drag_physics = lambda self, _enabled: None
+        _request_quit = lambda self: None
+
+    def preview_shape(parent):
+        return [
+            (
+                parent.child(index).text(0),
+                preview_shape(parent.child(index)),
+            )
+            for index in range(parent.childCount())
+        ]
+
+    def runtime_shape(menu, nodes):
+        actions = [action for action in menu.actions() if not action.isSeparator()]
+        assert len(actions) == len(nodes)
+        return [
+            (
+                action.text(),
+                runtime_shape(action.menu(), node["children"])
+                if node.get("type") == "submenu"
+                else [],
+            )
+            for action, node in zip(actions, nodes)
+        ]
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(layout, available_actions=MENU_ACTIONS.ids)
+    runtime_menu = QMenu()
+    build_modern_menu(runtime_menu, FakePet(), {})
+    resolved = resolve_menu_layout(
+        layout,
+        registered_actions=MENU_ACTIONS.ids,
+        available_actions=MENU_ACTIONS.available_ids(FakePet()),
+    )
+
+    assert preview_shape(editor.preview.invisibleRootItem()) == runtime_shape(
+        runtime_menu, resolved.nodes
+    )
+    runtime_menu.close()
+    editor.close()
     app.processEvents()
 
 
@@ -916,6 +1150,124 @@ def test_removed_action_is_ignored_with_migration_diagnostic():
     assert result.source == "normalized"
     assert result.diagnostics == ("unknown-action:retired_action",)
     assert [node["id"] for node in result.nodes] == ["chat", "modern_settings", "quit"]
+
+
+def test_user_layout_gains_future_default_action_without_losing_custom_order(
+    monkeypatch,
+):
+    import pet.menu_layout as layout_mod
+
+    monkeypatch.setattr(
+        layout_mod,
+        "load_default_menu_layout",
+        lambda: {
+            "schema_version": 1,
+            "layout_id": "modern-default-v1",
+            "nodes": [
+                {
+                    "type": "submenu",
+                    "id": "pet_controls",
+                    "label": "桌宠控制",
+                    "visible": True,
+                    "children": [
+                        {"type": "action", "id": "drag_physics", "visible": True},
+                        {"type": "action", "id": "future_action", "visible": True},
+                        {"type": "action", "id": "no_move", "visible": True},
+                    ],
+                },
+                {"type": "action", "id": "modern_settings", "visible": True},
+                {"type": "action", "id": "quit", "visible": True},
+            ],
+        },
+    )
+    result = resolve_menu_layout(
+        {
+            "schema_version": 1,
+            "layout_id": "user",
+            "nodes": [
+                {
+                    "type": "submenu",
+                    "id": "pet_controls",
+                    "label": "我的桌宠操作",
+                    "visible": True,
+                    "children": [
+                        {"type": "action", "id": "no_move", "visible": True},
+                        {"type": "action", "id": "drag_physics", "visible": False},
+                    ],
+                },
+                {"type": "action", "id": "modern_settings", "visible": True},
+                {"type": "action", "id": "quit", "visible": True},
+            ],
+        },
+        registered_actions={
+            "drag_physics",
+            "future_action",
+            "no_move",
+            "modern_settings",
+            "quit",
+        },
+        available_actions={
+            "drag_physics",
+            "future_action",
+            "no_move",
+            "modern_settings",
+            "quit",
+        },
+    )
+
+    assert result.source == "normalized"
+    assert result.diagnostics == ("default-action-added:future_action",)
+    controls = result.nodes[0]
+    assert controls["label"] == "我的桌宠操作"
+    assert [child["id"] for child in controls["children"]] == [
+        "no_move",
+        "future_action",
+    ]
+
+
+def test_menu_editor_exposes_future_default_action_for_customization(monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.menu_layout as layout_mod
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    monkeypatch.setattr(
+        layout_mod,
+        "load_default_menu_layout",
+        lambda: {
+            "schema_version": 1,
+            "layout_id": "modern-default-v1",
+            "nodes": [
+                {"type": "action", "id": "chat", "visible": True},
+                {"type": "action", "id": "look_screen", "visible": True},
+                {"type": "action", "id": "modern_settings", "visible": True},
+                {"type": "action", "id": "quit", "visible": True},
+            ],
+        },
+    )
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(
+        {
+            "schema_version": 1,
+            "layout_id": "user",
+            "nodes": [
+                {"type": "action", "id": "chat", "visible": True},
+                {"type": "action", "id": "modern_settings", "visible": True},
+                {"type": "action", "id": "quit", "visible": True},
+            ],
+        },
+        available_actions={"chat", "look_screen", "modern_settings", "quit"},
+    )
+
+    assert editor.item_for_action("look_screen") is not None
+    assert [node["id"] for node in editor.value()["nodes"]] == [
+        "chat",
+        "look_screen",
+        "modern_settings",
+        "quit",
+    ]
+    editor.close()
+    app.processEvents()
 
 
 def test_settings_rejects_invalid_nested_menu_draft_before_writing(tmp_path, monkeypatch):

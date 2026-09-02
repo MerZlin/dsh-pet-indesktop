@@ -112,6 +112,11 @@ Use the single-context layout: root `CONTEXT.md` and system ADRs under
 Use `.agents/skills/qt-ui-review/SKILL.md` when reviewing settings, menus,
 overlays, QSS, accessibility, or cross-platform desktop presentation.
 
+### Qt UI development
+
+Use `.agents/skills/desktop-pet-ui-style/SKILL.md` when adding or materially
+restyling settings, menus, dialogs, overlays, or desktop widgets.
+
 ### Work handoff
 
 For unfinished multi-ticket work, read and refresh the feature's

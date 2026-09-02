@@ -9,6 +9,7 @@
 - `screenshots/settings-redesign/iteration-2-wide/`
 - `screenshots/settings-redesign/iteration-2-compact/`
 - `screenshots/settings-redesign/iteration-2-dark-wide/`
+- `screenshots/settings-redesign/iteration-3-accessibility/`（720×760、125% 字体、极端长文案）
 
 ## 逐页结果
 
@@ -24,6 +25,10 @@
 
 AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、箭头、展开卡片和下游内容在浅色宽屏、浅色紧凑及深色宽屏下保持同一视觉语言。
 
+## 放大字体与极端文案矩阵
+
+用 `scripts/capture_settings_pages.py --width 720 --height 760 --font-scale 1.25 --extreme-copy` 在真实 macOS Cocoa 后端逐页复拍并人工检查。首拍发现菜单模式行与 AI Provider 复合控件横向溢出；修复后七页均满足：标题/说明完整换行、右侧或下置控件位于卡片内、无水平滚动、纵向滚动可达。下拉框中超出单行容量的当前值允许截短，但控件边界与操作按钮不得被裁切。
+
 ## 本轮截图驱动修复
 
 - AI 页原先嵌套“页面中的页面”，Cocoa 下内容被压缩成窄列；可见设置组现直接进入共享页面容器。
@@ -34,4 +39,4 @@ AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、
 
 ## 未声称的覆盖
 
-Windows 与 Linux 尚未在真实主机逐页截图；当前只有共享 Qt 实现和 capability 测试覆盖，不能据此声称两端视觉已验收。放大字体与极端长本地化文案仍属于后续矩阵。
+Windows 与 Linux 尚未在真实主机逐页截图；当前只有共享 Qt 实现和 capability 测试覆盖，不能据此声称两端视觉已验收。

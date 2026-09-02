@@ -24,7 +24,9 @@ _Avoid_: Modern menu behavior, legacy menu behavior
 **Menu Layout Tree**:
 A versioned tree of stable action IDs and one-level submenus. It owns order and
 user visibility, while the Menu Action Model owns labels, callbacks, runtime
-state, and platform capability.
+state, and platform capability. Missing actions from newer versioned defaults
+are inserted beside their nearest template sibling; explicit hidden nodes and
+user ordering remain authoritative.
 _Avoid_: Serialized QAction, platform-specific menu order
 
 **Settings Capability Domain**:

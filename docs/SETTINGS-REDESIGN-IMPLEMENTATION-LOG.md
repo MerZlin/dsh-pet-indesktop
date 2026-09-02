@@ -16,31 +16,34 @@
 - 高级披露统一使用 `SettingsDisclosureHeader`；菜单编辑器使用卡片式树样式、语义列宽和无表头预览。
 - 七个能力域使用独立语义侧栏图标，并统一 22px 页面标题、13px 分组/正文层级、12px 提示文字和 12px 圆角卡片。
 - 设置草稿通过 resolver 后才写配置；非法结构保持窗口打开并显示恢复信息。未修改默认树时仍保存 `null`，避免复制默认值阻断未来升级。
+- 旧自定义树会补入后续默认模板新增的 action：以最近模板兄弟为锚点确定插入位置，不改变现有顺序、显隐、父级或用户子菜单名称；编辑器与运行时共用该迁移。
+- 菜单树跨父级变化会合并 Qt 的 remove/insert/move/reset 信号后刷新预览，避免拖拽改变层级时预览滞留旧结构。
 
 ## TDD 记录
 
-每个切片先运行单个失败测试，再做最小实现并转绿。覆盖内容包括默认树、重复 action、未知 schema、缺失资源、安全 action 恢复、平台不可用项、空子菜单、真实 QMenu 层级与分隔、配置 round trip、编辑器显隐/移动/自建子菜单、响应式 split、非法草稿拒绝、稳定能力域和高级披露。
+每个切片先运行单个失败测试，再做最小实现并转绿。覆盖内容包括默认树、重复 action、未知 schema、缺失资源、安全 action 恢复、未来默认 action 迁移、平台不可用项、空子菜单、真实 QMenu 层级与分隔、配置 round trip、编辑器显隐/移动/提升/重置/自建子菜单、预览与运行时结构等价、响应式 split、非法草稿拒绝、稳定能力域和高级披露。
 
-最终相关回归：
-
-```text
-110 passed
-```
-
-最终沙箱外全量：
+当前合并冲突面与菜单/设置相关回归：
 
 ```text
-680 passed, 10 skipped, 3 warnings
+49 passed
 ```
 
-3 条 warning 均为既有 `QHoverEvent` 构造 API 弃用提示。竞品研究文档曾被“产品文案”测试误扫；测试现只排除命名为 `*-RESEARCH.md` 的研究证据，运行时代码与普通产品文档仍受门禁约束。
+合并上游并完成本轮修复后的沙箱外全量：
+
+```text
+745 passed, 8 skipped（753 collected）
+```
+
+竞品研究文档曾被“产品文案”测试误扫；测试现只排除命名为 `*-RESEARCH.md` 的研究证据，运行时代码与普通产品文档仍受门禁约束。
 
 ## macOS Cocoa 视觉验收
 
 - 已用 Cocoa 平台插件逐页完成 1100×760 浅色、720×760 浅色、1100×760 深色三组真实窗口渲染；清单见 `docs/SETTINGS-REDESIGN-UI-ACCEPTANCE.md`。
 - 第一轮截图发现 Windows 专属光标穿透开关在 macOS 作为孤立直属控件显示；补失败测试后改为非 Windows 不创建。
 - 第二轮截图发现 wide→compact transition 保留旧最小宽度，导致按钮栏横向裁切；测试复现同一状态迁移后，compact 改为三列 Grid 并向祖先布局传播约束失效，第三轮截图确认无横向死区。
-- 本轮另外修复了 AI 页窄列、自绘披露控件 Cocoa 崩溃、菜单名称截断和原生表格风格。当前已验证浅/深主题、默认字体、七页 wide/compact、平台不可用项模型和布局 transition；字体放大和极端长本地化文案仍列入后续视觉矩阵。
+- 本轮另外修复了 AI 页窄列、自绘披露控件 Cocoa 崩溃、菜单名称截断和原生表格风格。
+- 新增可重复截图脚本 `scripts/capture_settings_pages.py`。真实 Cocoa 的 720×760、125% 字体、极端长中英文本逐页检查发现标题未换行和 Provider 复合控件撑宽页面；经 RED→GREEN 增加标题换行、`SettingRow` 自动上下布局和 `ResponsiveActionRow` 后，七页复拍通过，证据位于 `docs/screenshots/settings-redesign/iteration-3-accessibility/`。
 
 ## 踩坑与约束
 
@@ -51,4 +54,7 @@
 - `QTreeWidget` 的默认 item flags 同时允许 drag/drop。若不按节点类型收紧，action 会意外成为容器，内建子菜单也能形成不受支持的三级结构。
 - 平台不可用和用户隐藏是不同状态。编辑器必须保留前者的位置并禁用显示，实际菜单/预览才按当前 capability 过滤。
 - 默认布局不能复制进每个用户配置；否则未来新增默认 action 无法迁移。只有实际编辑后才持久化 override。
+- `QAbstractItemModel` 跨父级拖动不保证只发 `rowsMoved`，可能分成 `rowsRemoved` 与 `rowsInserted`；实时预览需排队合并这些阶段，不能在中间态同步。
+- 复合控件即使外层 `SettingRow` 已改成上下布局，也可能由内部水平 layout 的 minimum size 撑宽整个 `QScrollArea`；响应式容器必须提供可收缩的 stacked minimum size hint。
 - 项目 skill 校验在 `mobility_client` 环境缺少 PyYAML；使用已有 `voice-picker-dev` 环境运行 `quick_validate.py` 后通过。
+- `mobility_client` 已包含 `imageio-ffmpeg 0.6.0` 和 `PyInstaller 6.22.2`。WebM + Chat 变体完成 PyInstaller、中文编码检查和 ad-hoc codesign；工作区旧 `build/macos` 带 `com.apple.provenance` 时 BUNDLE 写入会报 `Operation not permitted`，改用全新 `/private/tmp` dist 目录即可通过，这不是缺少 Python 模块。

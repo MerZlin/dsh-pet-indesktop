@@ -1,12 +1,13 @@
 # Settings redesign handoff
 
-Updated: 2026-09-02
+Updated: 2026-09-02 (after upstream merge and final local acceptance)
 
 ## Workspace
 
 - Worktree: `/Users/ushio/github/dsh-pet-indesktop-settings-redesign`
 - Branch: `feature/codex-settings-redesign`
-- No commits created in this task.
+- Upstream merge commit: `8a2c8e4` (checkpoint before merge: `f5f998c`).
+- Post-merge fixes and evidence are committed on this feature branch; use `git log -3` for the exact hash.
 - Do not edit the original dirty worktree at `/Users/ushio/github/dsh-pet-indesktop`.
 
 ## Fixed decisions
@@ -30,39 +31,42 @@ Updated: 2026-09-02
 - Shared typography, spacing, card radius, initial focus, and semantic sidebar icons aligned across all seven domains.
 - Setting labels/descriptions are exposed on their controls; generic buttons now have a visible keyboard focus ring.
 - `docs/SETTINGS-CHANGE-GATES.md`, Qt UI review skill, concise AGENTS pointers, research and implementation log.
-- Project skill validated with `/opt/miniconda3/envs/voice-picker-dev/bin/python`.
-- Related regression: `110 passed`.
-- Full suite outside sandbox with null keyring: `680 passed, 10 skipped, 3 existing deprecation warnings`.
-- `git diff --check` passed before this final handoff refresh.
+- Project skills validated with `/opt/miniconda3/envs/voice-picker-dev/bin/python`.
+- `git diff --check` passed after the final handoff refresh.
 - macOS Cocoa screenshots cover every page in light wide, light compact, and dark wide matrices. See `docs/SETTINGS-REDESIGN-UI-ACCEPTANCE.md`.
+- `origin/main` at `4eb8c37` merged with Provider list, notification, custom-agent and issue-42/LTR changes retained; conflict surface passed.
+- Future-default actions migrate into old user trees at deterministic template anchors and remain editable.
+- Menu preview refreshes after cross-parent remove/insert/move/reset events; preview/runtime structural equivalence is tested.
+- Reorder, promote, reset, draft-before-save and migration editor contracts are covered.
+- Reusable UI development skill: `.agents/skills/desktop-pet-ui-style/`; validated with `voice-picker-dev`.
+- Real Cocoa accessibility matrix covers all seven pages at 720×760, 125% fonts and extreme copy under `docs/screenshots/settings-redesign/iteration-3-accessibility/`.
+- Responsive copy and Provider composite controls were fixed from screenshot-discovered failures.
+- Related regression: `49 passed`; full suite: `745 passed, 8 skipped` (`753 collected`).
+- macOS `webm-chat` package passed PyInstaller, encoding check and ad-hoc codesign in `/private/tmp/dsh-pet-macos-build.0ZBbuF`; `imageio-ffmpeg 0.6.0` is present.
 
 ## Current TDD state
 
-- Last red: menu editor retained default interactive column sizing and truncated action labels.
-- Last green: accessibility/visual contracts, 110 related tests, 680-pass full suite, and all current macOS screenshot matrices.
+- Last REDs: tree-shape preview stayed stale; future default action was absent; long titles and Provider actions overflowed under enlarged fonts.
+- Last GREEN: all new focused contracts, 49 related tests, 745-pass full suite, package build, and all current macOS screenshot matrices.
 
 ## Exact next step
 
-Add the future-default-action migration test first (ticket 01): a customized v1 layout that predates a newly registered default action must gain that action at a deterministic template position without disturbing explicit user order/visibility. Observe red before choosing the migration metadata/algorithm.
-
-After that change, rerun outside the restricted sandbox because tests bind loopback. Keep real macOS credentials isolated:
+No unfinished local implementation ticket remains. If work continues on another host, run the real Windows/Linux visual matrix first; do not infer visual acceptance from capability fakes. Keep real credentials isolated for any full rerun:
 
 ```bash
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring PYTEST_ADDOPTS='-p no:cacheprovider' QT_QPA_PLATFORM=offscreen /opt/miniconda3/envs/mobility_client/bin/python -m pytest -q
 ```
 
-Then run `git diff --check` and inspect `git status --short`.
+Before PR, rerun `git diff --check` and inspect `git status --short` for unrelated local files.
 
 ## Remaining acceptance work
 
-1. Decide and implement migration insertion for actions added after a customized v1 layout; current unknown retired actions are normalized, but future default additions are not merged into overrides.
-2. Add/confirm focused tests for editor reorder, promote, reset, cancel/draft, and preview/runtime structural equivalence; do not assert private calls.
-3. Extend visual QA to enlarged font and extreme long labels. Current macOS light wide/compact, dark wide, unavailable action and expanded disclosure evidence is complete.
-4. Validate the current resolver-backed preview on real Windows/Linux hosts; do not create a second semantic model for platform-specific visuals.
-5. Run a final diff-level Qt UI review after the remaining work, update ticket statuses and this handoff, then report clearly that Windows/Linux have model coverage only unless real hosts were used.
+1. Validate the resolver-backed preview and seven settings pages on real Windows/Linux hosts; do not create a second semantic model for platform-specific visuals.
+2. Report clearly that Windows/Linux currently have model/capability coverage only.
 
 ## Risks
 
 - The editor preview is a resolver-backed hierarchy, not an embedded native `QMenu`; visual parity must be assessed during GUI QA.
 - Internal `QTreeWidget` drag/drop is constrained by flags, but keyboard alternatives remain the authoritative accessible path.
 - Full-suite Qt process can abort after a test failure if a background `QThread` is still alive; use `-x` to diagnose first failures.
+- Reusing the provenance-marked workspace `build/macos` directory can fail during PyInstaller BUNDLE creation; a fresh dist directory under `/private/tmp` passed.
