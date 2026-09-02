@@ -2178,3 +2178,58 @@ def test_chat_settings_dialog_warns_when_keyring_unavailable(tmp_path, monkeypat
     assert "系统安全存储" in str(warnings[0][2])
     assert dialog.settings.active_config.api_key == "sk-new"
     app.processEvents()
+
+
+def test_chat_window_system_notification_when_not_active(tmp_path):
+    """聊天窗口非活动时发送系统通知；点击回调可聚焦窗口。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    calls = []
+    win = ChatWindow(
+        Config(tmp_path),
+        "shenshen",
+        notifier=lambda title, message, on_click=None: calls.append((title, message, on_click)),
+    )
+    try:
+        win._show_system_notice("对话完成", "AI 已回复完成，点击查看。")
+        assert len(calls) == 1
+        assert calls[0][0] == "对话完成"
+        assert calls[0][1] == "AI 已回复完成，点击查看。"
+        # 点击默认回调应把窗口带回前台（能调用不抛异常即可）
+        calls[0][2]()
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_chat_window_authorization_error_opens_settings(tmp_path):
+    """认证失败类系统通知的点击回调应打开 AI 设置。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    settings_opened = []
+    notices = []
+    win = ChatWindow(
+        Config(tmp_path),
+        "shenshen",
+        notifier=lambda title, message, on_click=None: notices.append((title, on_click)),
+        auth_callback=lambda: settings_opened.append(1),
+    )
+    try:
+        assert win._looks_like_authorization_error("HTTP 401 Unauthorized")
+        assert win._looks_like_authorization_error("认证失败：invalid api key")
+        assert not win._looks_like_authorization_error("connection reset")
+        win._show_system_notice("需要授权", "请检查 API Key", on_click=win._focus_auth_settings)
+        assert len(notices) == 1
+        notices[0][1]()
+        assert settings_opened == [1]
+    finally:
+        win.close()
+        _app.processEvents()

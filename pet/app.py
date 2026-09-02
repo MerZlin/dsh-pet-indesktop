@@ -178,6 +178,7 @@ class PetApp:
         self.slot_id = slot_id
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
+        self._notification_click_callback = None
         self.chat_window = None
         self.legacy_chat_window = None
         self.modern_chat_window = None
@@ -622,7 +623,13 @@ class PetApp:
             return
         from .chat.legacy_widgets import ChatWindow
         if self.legacy_chat_window is None:
-            self.legacy_chat_window = ChatWindow(self.config, str(self.config.get('character', catalog.DEFAULT_CHARACTER)), pet_window=self.win)
+            self.legacy_chat_window = ChatWindow(
+                self.config,
+                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
+                pet_window=self.win,
+                notifier=self.system_notify,
+                auth_callback=self.open_chat_settings,
+            )
         else:
             self.legacy_chat_window.set_pet_window(self.win)
         self.chat_window = self.legacy_chat_window
@@ -635,7 +642,13 @@ class PetApp:
             return
         from .chat.widgets import ChatWindow
         if self.modern_chat_window is None:
-            self.modern_chat_window = ChatWindow(self.config, str(self.config.get('character', catalog.DEFAULT_CHARACTER)), pet_window=self.win)
+            self.modern_chat_window = ChatWindow(
+                self.config,
+                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
+                pet_window=self.win,
+                notifier=self.system_notify,
+                auth_callback=self.open_chat_settings,
+            )
         else:
             self.modern_chat_window.set_pet_window(self.win)
         self.chat_window = self.modern_chat_window
@@ -783,6 +796,27 @@ class PetApp:
             4000,
         )
 
+    def system_notify(self, title: str, message: str, *, on_click=None, duration_ms: int = 5000) -> None:
+        """Show a desktop tray notification; clicking routes to on_click."""
+        if self.tray is None:
+            return
+        self._notification_click_callback = on_click
+        self.tray.showMessage(
+            str(title),
+            str(message),
+            QSystemTrayIcon.MessageIcon.Information,
+            int(duration_ms),
+        )
+
+    def _on_tray_message_clicked(self) -> None:
+        callback = self._notification_click_callback
+        self._notification_click_callback = None
+        if callable(callback):
+            try:
+                callback()
+            except Exception:
+                logging.exception("系统通知点击回调执行失败")
+
     def _build_tray(self, win: PetWindow) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(QIcon(win.icon_pixmap()))
 
@@ -861,6 +895,7 @@ class PetApp:
 
         tray.setContextMenu(menu)
         tray.setToolTip('dsh-pet 独立桌宠')
+        tray.messageClicked.connect(self._on_tray_message_clicked)
         tray.activated.connect(
             lambda reason: toggle_visible()
             if reason == QSystemTrayIcon.ActivationReason.DoubleClick
