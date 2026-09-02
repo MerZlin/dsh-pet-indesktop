@@ -2310,3 +2310,57 @@ def test_legacy_delete_current_session_calls_reset(tmp_path: Path, monkeypatch):
     assert calls == [1]
     window.close()
     app.processEvents()
+
+
+def test_resync_session_from_disk_helper(tmp_path: Path):
+    """DS-M7 修复的纯函数层：无更新原样返回、有更新返回磁盘版、异常不阻断。"""
+    from pet.chat.models import ChatMessage
+    from pet.chat.session_store import SessionStore
+    from pet.chat.utils import resync_session_from_disk
+
+    store = SessionStore(tmp_path, instance_id="t")
+    s = store.create("shenshen", "p", "prompt")
+    store.save(s)
+    store.flush()
+    assert resync_session_from_disk(store, s, "shenshen") is s
+
+    disk = store.load(s.session_id, "shenshen")
+    disk.messages.append(ChatMessage("user", "另一前端的消息"))
+    store.save(disk)
+    store.flush()
+    out = resync_session_from_disk(store, s, "shenshen")
+    assert out is not s
+    assert [m.content for m in out.messages] == ["另一前端的消息"]
+
+    # 会话不存在/异常 → 原样返回
+    ghost = store.create("shenshen", "p", "prompt")
+    assert resync_session_from_disk(store, ghost, "shenshen") is ghost
+    assert resync_session_from_disk(None, None, "shenshen") is None
+
+
+def test_send_message_resyncs_stale_session_from_disk(tmp_path: Path, monkeypatch):
+    """审查 DS-M7 回归：另一前端写过同一会话后，本窗发送先对齐磁盘，
+    两条消息都保留（陈旧快照不再整体覆盖）。"""
+    from PySide6.QtWidgets import QApplication
+    from pet.chat import widgets as chat_widgets
+    from pet.chat.models import ChatMessage
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = chat_widgets.ChatWindow(Config(tmp_path), "shenshen")
+    session_id = window.session.session_id
+
+    disk = window.store.load(session_id, "shenshen")
+    disk.messages.append(ChatMessage("user", "来自另一窗口"))
+    window.store.save(disk)
+    window.store.flush()
+
+    window.input.setPlainText("本窗发送")
+    monkeypatch.setattr(window, "_begin_generation", lambda *a, **k: None)
+    window.send_message()
+
+    texts = [m.content for m in window.session.messages]
+    assert "来自另一窗口" in texts
+    assert "本窗发送" in texts
+    window.close()
+    app.processEvents()

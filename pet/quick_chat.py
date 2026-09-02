@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
 from .chat.models import ChatMessage
+from .chat.utils import resync_session_from_disk
 from .chat.prompt import PromptBuilder
 from .chat.service import ChatService
 from .chat.session_store import SessionStore
@@ -251,6 +252,8 @@ class QuickChatBubble(QFrame):
         if not text:
             return
         self.input.clear()
+        # 陈旧快照防护（DS-M7）：发送前对齐磁盘（另一前端可能写过同一会话）
+        self.session = resync_session_from_disk(self.store, self.session, self.character_id)
         self.session.messages.append(ChatMessage("user", text))
         self.store.save(self.session)
         self.output.setText("")

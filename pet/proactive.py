@@ -443,6 +443,16 @@ class ProactiveScreenWatcher:
                 )
                 payload = dict(info)
                 payload["_gen"] = gen
+                # 编码前先降采样（审查 DS-M3）：窗口全分辨率 JPEG 是 MB 级
+                # 跨线程搬运，模型侧最长边 768 已够用（与 capture_screen_bytes
+                # 同规）。dHash 必须在降采样前算，保持既有阈值语义不变。
+                w, h = img.size
+                scale = vision.MAX_EDGE / max(w, h, 1)
+                if scale < 1.0:
+                    img = img.resize(
+                        (max(1, round(w * scale)), max(1, round(h * scale))),
+                        vision.Image.LANCZOS,
+                    )
                 # JPEG 编码放在 worker 线程，避免主线程卡顿
                 import io
                 buf = io.BytesIO()

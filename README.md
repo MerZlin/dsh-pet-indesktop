@@ -897,7 +897,7 @@ bash scripts/build_linux.sh --variants webm-chat,webm
 E:\tools\InnoSetup6\ISCC.exe packaging\dsh-pet.iss
 
 # WebM 无 Chat 版
-E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-webm /DMyAppExeName=dsh-pet-standalone-webm.exe /DMyAppDir=..\dist-onedir\dsh-pet-standalone-webm "/DMyAppId={{ED2590E4-A968-4E8D-B7C4-75DFE012D0E9}}" "/DMyAppDisplay=dsh-pet-standalone (WebM)" packaging\dsh-pet.iss
+E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-webm /DMyAppExeName=dsh-pet-standalone-webm.exe /DMyAppDir=..\dist-onedir\dsh-pet-standalone-webm "/DMyAppId={{3424d6cc-af3c-4383-8797-ab520b923aa6}}" "/DMyAppDisplay=dsh-pet-standalone (WebM)" packaging\dsh-pet.iss
 ```
 
 完整命令（含 GIF 变体）与安装包特性见 [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)。

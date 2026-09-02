@@ -3,7 +3,7 @@
 
 实测一个「预热完成」的实例占用多少内存，并量化各缓存的上界形态：
 - WebMClip._first_image（每 clip 一张首帧 QImage，warm_first_frame 缓存）
-- WebMClip._first_pixmap / _current_*（播放中额外持有的 QPixmap）
+- WebMClip._current_*（播放中额外持有的 QPixmap）
 - webm_clip._META_CACHE（进程内元数据缓存，key=(path|mtime|size)）
 - webm_clip._META_FILE_CACHE / 磁盘 JSON（跨进程共享元数据缓存）
 - MovieLibrary._movies（clip 对象表）
@@ -142,9 +142,9 @@ def audit_character(char_id: str, tmp_dir: Path) -> dict:
 
     first_images = [c._first_image for c in clips if c._first_image is not None]
     total_first_bytes = sum(_img_bytes(i) for i in first_images)
-    # 播放中的 clip 还持有 QPixmap 形态（首帧/当前帧），单独量一份
+    # 播放中的 clip 还持有 QPixmap 形态（当前帧），单独量一份
     pm_bytes = sum(
-        _pm_bytes(getattr(c, "_current_pixmap", None)) + _pm_bytes(getattr(c, "_first_pixmap", None))
+        _pm_bytes(getattr(c, "_current_pixmap", None))
         for c in clips
     )
 
@@ -153,7 +153,7 @@ def audit_character(char_id: str, tmp_dir: Path) -> dict:
     displayed = clips[0]
     try:
         displayed.jumpToFrame(0)
-        active_pm_bytes = _pm_bytes(displayed._current_pixmap) + _pm_bytes(displayed._first_pixmap)
+        active_pm_bytes = _pm_bytes(displayed._current_pixmap)
     except Exception:
         active_pm_bytes = 0
 

@@ -60,6 +60,7 @@ import queue
 import subprocess
 import sys
 import threading
+import weakref
 import time
 import types
 import json
@@ -350,6 +351,83 @@ def _register_orphan(clip: "WebMClip") -> None:
 
 def _unregister_orphan(clip: "WebMClip") -> None:
     _ORPHAN_REGISTRY.unregister(clip)
+
+
+# ---- 首帧缓存总预算（内存瘦身批，2026-09-03）----
+# 现状问题：每段动画的首帧缓存 ~0.88MB（640×360 RGBA QImage），按内容
+# 规模自然累积（97 段 ≈ 85MB/实例），无总量上限。
+# 预算 LRU：总量超预算时逐出「最久未用」的首帧——冷门动画下次冷播重新
+# 解码（走既有 120ms 有界等待/逃生口路径），热门（待机/点击/最近播放）
+# 常驻。锁序：clip._first_frame_lock → 注册表锁（单向）；逐出在注册表锁外
+# 逐个取 victim 自己的锁，杜绝跨对象持锁嵌套（对照 P2-10 教训）。
+_FIRST_FRAME_BUDGET_BYTES = 32 * 1024 * 1024  # 32MB ≈ 36 段热动画常驻
+_first_frame_reg_lock = threading.Lock()
+_first_frame_reg: list = []  # [(weakref(clip), bytes)]，尾部 = 最近使用
+_first_frame_bytes = 0
+
+
+def _clip_first_frame_bytes(clip) -> int:
+    img = clip._first_image
+    return 0 if img is None else img.width() * img.height() * 4
+
+
+def _ffr_touch(clip, added_bytes: int = 0) -> list:
+    """登记/置顶 clip 并记账；返回待逐出 clip 列表（调用方锁外处理）。"""
+    global _first_frame_bytes
+    victims = []
+    with _first_frame_reg_lock:
+        live = []
+        for ref, nbytes in _first_frame_reg:
+            other = ref()
+            if other is None:
+                _first_frame_bytes -= nbytes  # 死引用连带账目一并清
+            elif other is clip:
+                _first_frame_bytes -= nbytes  # 旧条目账目移除，下方按现状重计
+            else:
+                live.append((ref, nbytes))
+        current = added_bytes or _clip_first_frame_bytes(clip)
+        live.append((weakref.ref(clip), current))
+        _first_frame_reg[:] = live
+        _first_frame_bytes += current
+        while _first_frame_bytes > _FIRST_FRAME_BUDGET_BYTES and len(_first_frame_reg) > 1:
+            victim = _first_frame_reg[0][0]()
+            if victim is None:
+                _first_frame_bytes -= _first_frame_reg[0][1]
+                _first_frame_reg.pop(0)
+                continue
+            if victim._first_image is None:
+                # 缓存已空（cleanup 清过）：账目一并清，不算逐出
+                _first_frame_bytes -= _first_frame_reg[0][1]
+                _first_frame_reg.pop(0)
+                continue
+            victims.append(victim)
+            _first_frame_bytes -= _first_frame_reg[0][1]
+            _first_frame_reg.pop(0)
+    return victims
+
+
+def _ffr_unregister(clip) -> None:
+    """clip 终结时摘出注册表并清账（cleanup 调用）。"""
+    global _first_frame_bytes
+    with _first_frame_reg_lock:
+        live = []
+        for ref, nbytes in _first_frame_reg:
+            other = ref()
+            if other is None or other is clip:
+                _first_frame_bytes -= nbytes
+            else:
+                live.append((ref, nbytes))
+        _first_frame_reg[:] = live
+
+
+def _ffr_evict(victims) -> None:
+    """锁外逐出：逐个取 victim 自己的首帧锁清空缓存。"""
+    for victim in victims:
+        try:
+            with victim._first_frame_lock:
+                victim._first_image = None
+        except Exception:
+            pass  # clip 可能正在 cleanup，逐出失败无碍（其清理路径自会释放）
 
 
 def _reap_orphaned_clips() -> None:
@@ -646,7 +724,6 @@ class WebMClip(QObject):
         self._current_image: QImage | None = None
         self._current_pixmap: QPixmap | None = None
         self._first_image: QImage | None = None
-        self._first_pixmap: QPixmap | None = None
         # 首帧解码原子认领（N4）：warm_first_frame（后台）与 _decode_first_frame_sync
         # （前台）同一时间只有一个执行者。_first_frame_done 在 _first_image 写入后
         # set，供前台有界等待复用后台解码结果（零重复解码）。
@@ -721,6 +798,14 @@ class WebMClip(QObject):
             self._destroyed_conn = None
         self._cleaned = True
         self.cancel_first_frame_warm()
+        # 释放首帧缓存（内存瘦身批）：clip 终结后缓存无意义，同时摘出预算
+        # 注册表清账
+        try:
+            with self._first_frame_lock:
+                self._first_image = None
+        except Exception:
+            pass
+        _ffr_unregister(self)
         try:
             self.stop()
         except RuntimeError:
@@ -1138,6 +1223,7 @@ class WebMClip(QObject):
                 # 主线程直接转 QPixmap，零阻塞、无旧帧残留窗口。
                 self._current_image = self._first_image
                 self._current_pixmap = QPixmap.fromImage(self._first_image)
+                _ffr_touch(self)  # LRU 置顶（纯重排，不记账）
             else:
                 self._current_image = None
                 self._current_pixmap = None
@@ -1245,6 +1331,8 @@ class WebMClip(QObject):
         if self._first_image is None:
             self._first_image = img
             self._first_frame_done.set()
+            # 预算 LRU 登记（超预算逐出最久未用者，锁外执行）
+            _ffr_evict(_ffr_touch(self, img.width() * img.height() * 4))
 
     def _decode_first_qimage_and_cache(self, gen: int | None = None) -> None:
         """解码首帧并写入 _first_image 缓存（调用方须已持有 _first_frame_lock）。
@@ -1266,7 +1354,6 @@ class WebMClip(QObject):
             return
         self._current_image = self._first_image
         self._current_pixmap = QPixmap.fromImage(self._first_image)
-        self._first_pixmap = self._current_pixmap
 
     def _apply_first_frame_image(self, img) -> None:
         """把解码得到的首帧图像直接应用到当前播放帧（仅主线程调用）。
@@ -1279,7 +1366,6 @@ class WebMClip(QObject):
             return
         self._current_image = img
         self._current_pixmap = QPixmap.fromImage(img)
-        self._first_pixmap = self._current_pixmap
 
     def _decode_first_frame_sync(self) -> None:
         """同步解码首帧（主线程），保证 jumpToFrame(0)/currentPixmap 在 start() 前有画面。

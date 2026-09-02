@@ -42,7 +42,7 @@ from .prompt import PromptBuilder, load_character_manifest
 from . import themes as chat_themes
 from .service import ChatService
 from .session_store import SessionStore
-from .utils import _short_title
+from .utils import _short_title, resync_session_from_disk
 from ..context_menus.icons import vector_widget_icon
 
 
@@ -457,6 +457,10 @@ class MessageBubble(QFrame):
         self.body.setText(str(text))
 
     def set_state(self, state: str) -> None:
+        # 打字机每 tick 都会调本方法：状态未变时全部视觉副作用都是冗余
+        # （unpolish/polish 是重活），直接短路（审查 DS-M8 的安全刀）
+        if state == getattr(self, "state", None):
+            return
         self.state = state
         self.setProperty("state", state)
         self.surface.setProperty("state", state)
@@ -1809,6 +1813,13 @@ class ChatWindow(QDialog):
             request_text += "\n\n" + attachment_context
         self.input.clear()
         self.composer.clear_attachments()
+        # 陈旧快照防护（DS-M7）：另一前端在本窗打开期间写过同一会话时，
+        # 先对齐磁盘再追加，避免整体覆盖丢消息
+        synced = resync_session_from_disk(self.store, self.session, self.character_id)
+        if synced is not self.session:
+            self.session = synced
+            self._load()
+            self._refresh_sessions()
         self.session.messages.append(ChatMessage("user", display_text))
         self._add("user", display_text)
         self._last_user_text = request_text
