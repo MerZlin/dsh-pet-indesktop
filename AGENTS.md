@@ -78,8 +78,13 @@ sequenceDiagram
   event loops and process boundaries; mock only operating-system or network
   boundaries that cannot run deterministically.
 - A fix is complete when the focused regression is red before the product
-  change, green afterward, the related test file passes, and the full suite
-  passes.
+  change, green afterward, and verification matches the risk gate below.
+- Run the full suite for shared models/config migrations, application lifecycle,
+  threading/IPC, packaging/dependencies, platform branches, changes spanning
+  multiple test domains, or the final accumulated branch before merge.
+- Focused plus related tests are sufficient for a local presentation token or
+  isolated widget behavior when interfaces, persisted data, lifecycle, and
+  platform dispatch are unchanged. Record why the full suite was skipped.
 - Keep `CollisionIpcSession.stop()` ordering intact: stop producers, send leave,
   close local endpoints and timers, then quit/wait for the worker thread.
 - Keep QLocal test server names short. POSIX converts names to Unix socket paths,

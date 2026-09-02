@@ -1,6 +1,6 @@
 # Settings redesign handoff
 
-Updated: 2026-09-02 (after input, theme-sync and quick-chat regression fixes)
+Updated: 2026-09-02 (after dark-menu easter-egg text fix)
 
 ## Workspace
 
@@ -54,11 +54,12 @@ Updated: 2026-09-02 (after input, theme-sync and quick-chat regression fixes)
 - Quick-launch check indicators accept real pointer clicks despite custom item widgets.
 - Explicit menu appearance themes now apply to the open Settings System immediately; custom-painted controls inherit the same resolved state.
 - Quick Chat closes on top-level window deactivation and stops active work through its existing close path.
+- Dark-menu easter-egg title and hint inherit the configured foreground; related coverage is `84 passed` plus one real Cocoa render test, with full suite intentionally skipped under the documented low-risk gate.
 
 ## Current TDD state
 
-- Last REDs: quick-launch pointer clicks left items unchecked; explicit dark appearance left Settings light; Quick Chat remained visible after `WindowDeactivate`.
-- Last GREEN: real Qt pointer/theme/window-event contracts, `175 passed` related suite, and `759 passed, 8 skipped` full suite. No screenshots were requested for this behavior-only round.
+- Last RED: dark-menu easter-egg title resolved to black and its hint rendered no pixel lighter than the fixed `#777777`.
+- Last GREEN: dark-menu foreground render contract plus `84 passed` related file. Full suite was intentionally skipped because this change is an isolated presentation token; the latest branch-wide full result remains `759 passed, 8 skipped` at `8f2aa81`.
 
 ## Exact next step
 

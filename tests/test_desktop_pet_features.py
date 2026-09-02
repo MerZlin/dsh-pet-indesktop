@@ -2358,6 +2358,35 @@ def test_easter_egg_first_row_font_tracks_modern_menu_ui_size():
     app.processEvents()
 
 
+def test_easter_egg_text_remains_readable_in_the_dark_menu_theme():
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.fun_entry import OjingjingMenuEntry
+    from pet.context_menus.menu_styles.modern import apply_modern_menu_style
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    apply_modern_menu_style(menu, {"theme": "dark"})
+    entry = OjingjingMenuEntry(menu, {"title": "彩蛋入口", "hint": "请点击"})
+    entry.show()
+    app.processEvents()
+
+    title_color = entry.title_label.palette().color(QPalette.ColorRole.WindowText)
+    accessory_image = entry.click_accessory.grab().toImage()
+    accessory_lightness = max(
+        accessory_image.pixelColor(x, y).lightness()
+        for x in range(accessory_image.width())
+        for y in range(accessory_image.height())
+    )
+    assert title_color.lightness() >= 180
+    assert accessory_lightness >= 160
+
+    entry.close()
+    menu.close()
+    app.processEvents()
+
+
 def test_template_switch_requests_immediate_menu_reopen():
     from PySide6.QtWidgets import QApplication, QMenu
 

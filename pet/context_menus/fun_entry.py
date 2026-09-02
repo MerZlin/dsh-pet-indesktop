@@ -34,10 +34,13 @@ def _circle_photo(path: Path, size: int, dpr: float) -> QPixmap:
 
 
 class ClickAccessory(QWidget):
-    def __init__(self, parent: QWidget, text: str = "请点击") -> None:
+    def __init__(
+        self, parent: QWidget, text: str = "请点击", color: str = "#777777",
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("ojingjingClickAccessory")
         self._text = str(text or "请点击")[:20]
+        self._color = QColor(color)
         self.setProperty("text", self._text)
         self.setFixedSize(54, 20)
         font = parent.font()
@@ -54,10 +57,9 @@ class ClickAccessory(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        color = QColor("#777777")
         painter.setPen(
             QPen(
-                color,
+                self._color,
                 1.25,
                 Qt.PenStyle.SolidLine,
                 Qt.PenCapStyle.RoundCap,
@@ -126,9 +128,18 @@ class OjingjingMenuEntry(QWidget):
         self.title_label.setFixedWidth(105)
         self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.title_label.setFont(menu.font())
+        appearance = menu.property("modernAppearance") or {}
+        dark = bool(menu.property("modernDark"))
+        foreground = str(
+            appearance.get("dark_foreground" if dark else "light_foreground")
+            or ("#f3f3f3" if dark else "#171717")
+        )
+        self.title_label.setStyleSheet(f"color: {foreground};")
         layout.addWidget(self.title_label)
         layout.addStretch(1)
-        self.click_accessory = ClickAccessory(self, str(self._config.get("hint") or "请点击"))
+        self.click_accessory = ClickAccessory(
+            self, str(self._config.get("hint") or "请点击"), foreground,
+        )
         self.click_accessory.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.click_accessory)
         self.clicked.connect(self._activate)
