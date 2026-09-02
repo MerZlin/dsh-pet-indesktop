@@ -761,7 +761,17 @@ class _AiSettingsPage(QWidget):
         self.settings = config.chat_settings()
         provider = self.settings.active_config
         self._test_thread = None
+        self._provider_drafts: dict[str, dict] = {}
+        self._deleted_provider_ids: set[str] = set()
+        self._loading_provider = False
         self.test_done.connect(self._on_test_done)
+
+        self.provider_combo = ModernSelect(self, width=230)
+        self.add_provider_btn = QPushButton("添加", self)
+        self.delete_provider_btn = QPushButton("删除", self)
+        for pid, provider_item in self.settings.providers.items():
+            self.provider_combo.addItem(self._provider_label(provider_item), pid)
+        self.provider_combo.setCurrentData(self.settings.active_provider)
 
         self.name = _line_edit(provider.name)
         self.url = _line_edit(provider.base_url)
@@ -837,6 +847,20 @@ class _AiSettingsPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(18)
+        provider_row = QWidget()
+        provider_lay = QHBoxLayout(provider_row)
+        provider_lay.setContentsMargins(0, 0, 0, 0)
+        provider_lay.setSpacing(6)
+        provider_lay.addWidget(self.provider_combo, 1)
+        provider_lay.addWidget(self.add_provider_btn)
+        provider_lay.addWidget(self.delete_provider_btn)
+        root.addWidget(SettingsSection("API 列表", [
+            SettingRow(
+                "provider_list", "API 列表",
+                "选择要编辑/切换的模型服务；保存后当前选中项会作为 active_provider 生效。",
+                provider_row,
+            ),
+        ], self))
         root.addWidget(SettingsSection("模型与连接", [
             SettingRow("provider_name", "Provider 名称", "用于区分当前使用的模型服务。", self.name),
             SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
@@ -864,6 +888,10 @@ class _AiSettingsPage(QWidget):
             SettingRow("max_tokens", "最大输出 Token", "限制模型单次回复的最大长度。", self.tokens),
             SettingRow("skip_ssl", "跳过 SSL 证书验证", "仅用于本地网关或自签名证书。", self.skip_ssl),
         ], self))
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        self.add_provider_btn.clicked.connect(self._add_provider)
+        self.delete_provider_btn.clicked.connect(self._delete_provider)
+        self._update_provider_buttons()
         root.addStretch(1)
 
     def appearance_rows(self) -> list[SettingRow]:
@@ -954,6 +982,172 @@ class _AiSettingsPage(QWidget):
         if card_opacity_row is not None:
             card_opacity_row.setVisible(self._background_style == "modern")
 
+    # ------------------------------------------------------------ API 列表管理
+    @staticmethod
+    def _provider_label(p) -> str:
+        name = str(p.name or p.provider_id)
+        model = str(p.model or '').strip()
+        return f"{name} · {model}" if model else name
+
+    def _capture_current_draft(self) -> None:
+        pid = self.settings.active_provider
+        if not pid or pid not in self.settings.providers:
+            return
+        existing = self._provider_drafts.get(pid, {})
+        key_text = self.key.text()
+        vkey_text = self.vision_key.text()
+        self._provider_drafts[pid] = {
+            "name": self.name.text().strip(),
+            "base_url": self.url.text().strip(),
+            "model": self.model.text().strip(),
+            # 输入框为空表示“不修改/不覆盖”，保留草稿里已录入但尚未保存的 Key；
+            # 否则 _load_provider_ui() 清空输入框后会把草稿 Key 覆盖成空。
+            "key": key_text if key_text else existing.get("key", ""),
+            "timeout": float(self.timeout.value()),
+            "temperature": float(self.temperature.value()),
+            "max_tokens": int(self.tokens.value()),
+            "vision_model": self.vision_model.text().strip(),
+            "vision_same_as_chat": self.vision_same.isChecked(),
+            "vision_base_url": self.vision_url.text().strip(),
+            "vision_key": vkey_text if vkey_text else existing.get("vision_key", ""),
+            "verify_ssl": not self.skip_ssl.isChecked(),
+        }
+
+    def _load_provider_ui(self, provider_id: str) -> None:
+        p = self.settings.providers.get(provider_id)
+        if p is None:
+            return
+        draft = self._provider_drafts.get(provider_id, {})
+        self.settings.active_provider = provider_id
+        self.name.setText(draft.get("name") if draft.get("name") is not None else p.name)
+        self.url.setText(draft.get("base_url") if draft.get("base_url") is not None else p.base_url)
+        self.model.setText(draft.get("model") if draft.get("model") is not None else p.model)
+        self.key.clear()
+        self.timeout.setValue(int(draft.get("timeout", p.timeout)))
+        self.temperature.setValue(float(draft.get("temperature", p.temperature)))
+        self.tokens.setValue(int(draft.get("max_tokens", p.max_tokens)))
+        self.vision_model.setText(draft.get("vision_model", p.vision_model))
+        self.vision_same.setChecked(bool(draft.get("vision_same_as_chat", p.vision_same_as_chat)))
+        self.vision_url.setText(draft.get("vision_base_url", p.vision_base_url))
+        self.vision_key.clear()
+        self.skip_ssl.setChecked(not bool(draft.get("verify_ssl", p.verify_ssl)))
+        self._update_provider_buttons()
+
+    def _on_provider_changed(self, _index: int = -1) -> None:
+        if self._loading_provider:
+            return
+        self._capture_current_draft()
+        pid = self.provider_combo.currentData()
+        if pid and pid in self.settings.providers:
+            self._load_provider_ui(pid)
+
+    def _new_provider_id(self) -> str:
+        # 避免复用已删除的 provider_id：否则保存合并时新建项会被删除集合过滤掉。
+        used = set(self.settings.providers) | set(self._deleted_provider_ids)
+        i = len(self.settings.providers) + 1
+        while f"api-{i}" in used:
+            i += 1
+        return f"api-{i}"
+
+    def _add_provider(self) -> None:
+        self._capture_current_draft()
+        base = self.settings.active_config
+        new_id = self._new_provider_id()
+        new = self._provider_config_type(
+            new_id,
+            name=f"{base.name} 副本",
+            base_url=base.base_url,
+            chat_path=base.chat_path,
+            model=base.model,
+            api_key_ref=f"provider/{new_id}",
+            timeout=base.timeout,
+            temperature=base.temperature,
+            max_tokens=base.max_tokens,
+            vision_model=base.vision_model,
+            vision_same_as_chat=base.vision_same_as_chat,
+            vision_base_url=base.vision_base_url,
+            vision_api_key_ref=f"provider/{new_id}/vision",
+            verify_ssl=base.verify_ssl,
+        )
+        self.settings.providers[new_id] = new
+        self._provider_drafts[new_id] = {
+            "name": new.name,
+            "base_url": new.base_url,
+            "model": new.model,
+            "key": "",
+            "timeout": new.timeout,
+            "temperature": new.temperature,
+            "max_tokens": new.max_tokens,
+            "vision_model": new.vision_model,
+            "vision_same_as_chat": new.vision_same_as_chat,
+            "vision_base_url": new.vision_base_url,
+            "vision_key": "",
+            "verify_ssl": new.verify_ssl,
+        }
+        self._loading_provider = True
+        try:
+            self.provider_combo.addItem(self._provider_label(new), new_id)
+            self.provider_combo.setCurrentIndex(self.provider_combo.count() - 1)
+        finally:
+            self._loading_provider = False
+        self.settings.active_provider = new_id
+        self._load_provider_ui(new_id)
+        self._update_provider_buttons()
+
+    def _delete_provider(self) -> None:
+        if len(self.settings.providers) <= 1:
+            return
+        pid = self.provider_combo.currentData()
+        if not pid or pid not in self.settings.providers:
+            return
+        self.settings.providers.pop(pid, None)
+        self._provider_drafts.pop(pid, None)
+        self._deleted_provider_ids.add(pid)
+        index = self.provider_combo.currentIndex()
+        self._loading_provider = True
+        try:
+            self.provider_combo.clear()
+            for p in self.settings.providers.values():
+                self.provider_combo.addItem(self._provider_label(p), p.provider_id)
+            self.settings.active_provider = next(iter(self.settings.providers))
+            self.provider_combo.setCurrentData(self.settings.active_provider)
+        finally:
+            self._loading_provider = False
+        self._load_provider_ui(self.settings.active_provider)
+        self._update_provider_buttons()
+
+    def _update_provider_buttons(self) -> None:
+        self.delete_provider_btn.setEnabled(len(self.settings.providers) > 1)
+
+    def _apply_draft_to_provider(self, provider_id: str) -> None:
+        p = self.settings.providers.get(provider_id)
+        draft = self._provider_drafts.get(provider_id)
+        if p is None or not draft:
+            return
+        if draft.get("name"):
+            p.name = draft["name"]
+        p.base_url = draft.get("base_url") or p.base_url
+        p.model = draft.get("model") or p.model
+        p.timeout = float(draft.get("timeout", p.timeout))
+        p.temperature = float(draft.get("temperature", p.temperature))
+        p.max_tokens = int(draft.get("max_tokens", p.max_tokens))
+        p.vision_model = draft.get("vision_model", p.vision_model)
+        p.vision_same_as_chat = bool(draft.get("vision_same_as_chat", p.vision_same_as_chat))
+        p.vision_base_url = draft.get("vision_base_url", p.vision_base_url)
+        p.verify_ssl = bool(draft.get("verify_ssl", p.verify_ssl))
+        key = str(draft.get("key") or "")
+        if key:
+            p.api_key_ref = p.api_key_ref or f"provider/{provider_id}"
+            if not self._secret_store_type().set(p.api_key_ref, key):
+                p.api_key = key
+                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
+        vkey = str(draft.get("vision_key") or "")
+        if vkey:
+            p.vision_api_key_ref = p.vision_api_key_ref or f"provider/{provider_id}/vision"
+            if not self._secret_store_type().set(p.vision_api_key_ref, vkey):
+                p.vision_api_key = vkey
+                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
+
     def provisional_config(self):
         provider = self.settings.active_config
         return self._provider_config_type(
@@ -997,32 +1191,24 @@ class _AiSettingsPage(QWidget):
 
     def save(self) -> None:
         # 保存前基于磁盘最新配置重取快照：另一个设置窗口（AI 设置/桌宠设置 AI 页）
-        # 可能在本窗口打开期间改过 Provider 结构；UI 字段随后覆盖到新鲜快照上，
-        # 未暴露/结构性的改动（新增 provider、切换 active_provider）不被旧快照吞掉。
+        # 可能在本窗口打开期间改过 Provider 结构；先保留本窗口的 provider 草稿/
+        # 新增/删除，再与磁盘快照合并，避免覆盖其它窗口新增的结构。
+        old_settings = self.settings
+        self._capture_current_draft()
         self.settings = self.config.chat_settings()
-        provider = self.settings.active_config
-        provider.name = self.name.text().strip() or provider.name
-        provider.base_url = self.url.text().strip()
-        provider.model = self.model.text().strip()
-        provider.timeout = float(self.timeout.value())
-        provider.temperature = float(self.temperature.value())
-        provider.max_tokens = int(self.tokens.value())
-        provider.verify_ssl = not self.skip_ssl.isChecked()
-        provider.vision_same_as_chat = self.vision_same.isChecked()
-        provider.vision_model = self.vision_model.text().strip()
-        provider.vision_base_url = self.vision_url.text().strip()
-        vision_key = self.vision_key.text()
-        if vision_key:
-            provider.vision_api_key_ref = provider.vision_api_key_ref or f"provider/{provider.provider_id}/vision"
-            if not self._secret_store_type().set(provider.vision_api_key_ref, vision_key):
-                provider.vision_api_key = vision_key
-                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
-        key = self.key.text()
-        if key:
-            provider.api_key_ref = provider.api_key_ref or f"provider/{provider.provider_id}"
-            if not self._secret_store_type().set(provider.api_key_ref, key):
-                provider.api_key = key
-                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
+        for pid in list(self.settings.providers):
+            if pid in self._deleted_provider_ids:
+                self.settings.providers.pop(pid, None)
+        for pid, provider in old_settings.providers.items():
+            if pid not in self.settings.providers and pid not in self._deleted_provider_ids:
+                self.settings.providers[pid] = provider
+        active_pid = self.provider_combo.currentData()
+        if active_pid in self.settings.providers:
+            self.settings.active_provider = active_pid
+        elif self.settings.providers:
+            self.settings.active_provider = next(iter(self.settings.providers))
+        for pid in list(self.settings.providers):
+            self._apply_draft_to_provider(pid)
         self.settings.default_system_prompt = self.prompt.toPlainText().strip()
         self.config.set("chat_ui_style", self.chat_ui_style.currentData())
         self._capture_background_value()
