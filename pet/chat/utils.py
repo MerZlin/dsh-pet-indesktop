@@ -39,23 +39,3 @@ def _short_title(session, *, localize_time: bool = True) -> str:
     except (TypeError, ValueError):
         return "新会话"
 
-
-def resync_session_from_disk(store, session, character_id):
-    """多前端共享会话目录的陈旧快照防护（审查 DS-M7）。
-
-    现代/经典聊天窗与 QuickChat 共享同一会话目录且各持内存快照：
-    本窗口打开期间另一前端写入的消息，会被本窗口下次 save 整体覆盖
-    （静默丢消息）。发送消息前调用本函数对齐：磁盘版本更新则返回磁盘
-    版本，否则原样返回。失败一律原样返回（宁可保持旧行为也不阻断发送）。
-    """
-    if session is None or not getattr(session, "session_id", ""):
-        return session
-    try:
-        disk = store.load(session.session_id, character_id)
-    except Exception:
-        return session
-    if disk is None:
-        return session
-    if str(disk.updated_at) > str(session.updated_at):
-        return disk
-    return session

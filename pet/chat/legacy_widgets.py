@@ -32,7 +32,7 @@ from .pet_link import PetChatLink
 from .prompt import PromptBuilder, load_character_manifest
 from .service import ChatService
 from .session_store import SessionStore
-from .utils import _short_title, resync_session_from_disk
+from .utils import _short_title
 from ..context_menus.icons import vector_widget_icon
 from . import themes as chat_themes
 
@@ -888,9 +888,17 @@ class ChatWindow(QDialog):
         if not text:
             return
         self.input.clear()
-        # 陈旧快照防护（DS-M7）：发送前对齐磁盘（另一前端可能写过同一会话）
-        self.session = resync_session_from_disk(self.store, self.session, self.character_id)
-        self.session.messages.append(ChatMessage("user", text))
+        # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」
+        synced, absorbed = self.store.append_message(
+            self.session, ChatMessage("user", text)
+        )
+        if synced is None:
+            self.session.messages.append(ChatMessage("user", text))
+        else:
+            self.session = synced
+            if absorbed:
+                self._load()
+                self._refresh_sessions()
         self._add("user", text)
         self._last_user_text = text
         self._begin_generation(text)

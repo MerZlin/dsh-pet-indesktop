@@ -2312,30 +2312,64 @@ def test_legacy_delete_current_session_calls_reset(tmp_path: Path, monkeypatch):
     app.processEvents()
 
 
-def test_resync_session_from_disk_helper(tmp_path: Path):
-    """DS-M7 修复的纯函数层：无更新原样返回、有更新返回磁盘版、异常不阻断。"""
+def test_append_message_atomic_across_store_instances(tmp_path: Path):
+    """审查 R3 P1 回归：append_message 原子「读-追加-提交」——两个
+    SessionStore 实例（模拟 modern/legacy/QuickChat 各持一份）交错发送
+    互不覆盖；吸收外部消息时 absorbed=True；会话已删返回 (None, False)。"""
     from pet.chat.models import ChatMessage
     from pet.chat.session_store import SessionStore
-    from pet.chat.utils import resync_session_from_disk
 
-    store = SessionStore(tmp_path, instance_id="t")
-    s = store.create("shenshen", "p", "prompt")
-    store.save(s)
-    store.flush()
-    assert resync_session_from_disk(store, s, "shenshen") is s
+    store_a = SessionStore(tmp_path, instance_id="shared")
+    store_b = SessionStore(tmp_path, instance_id="shared")  # 同实例目录，另一前端
+    s = store_a.create("shenshen", "p", "prompt")
+    store_a.save(s)
+    store_a.flush()
 
-    disk = store.load(s.session_id, "shenshen")
-    disk.messages.append(ChatMessage("user", "另一前端的消息"))
-    store.save(disk)
-    store.flush()
-    out = resync_session_from_disk(store, s, "shenshen")
-    assert out is not s
-    assert [m.content for m in out.messages] == ["另一前端的消息"]
+    # A 先发送（B 的内存快照此后变陈旧）
+    out, absorbed = store_a.append_message(s, ChatMessage("user", "A 的消息"))
+    assert out is not None and absorbed is False
+    store_a.flush()
 
-    # 会话不存在/异常 → 原样返回
-    ghost = store.create("shenshen", "p", "prompt")
-    assert resync_session_from_disk(store, ghost, "shenshen") is ghost
-    assert resync_session_from_disk(None, None, "shenshen") is None
+    # B 用陈旧快照发送：必须吸收 A 的消息而不是覆盖
+    out_b, absorbed_b = store_b.append_message(s, ChatMessage("user", "B 的消息"))
+    assert out_b is not None and absorbed_b is True
+    texts = [m.content for m in out_b.messages]
+    assert "A 的消息" in texts and "B 的消息" in texts
+
+    # 会话已删 → (None, False)
+    store_a.delete(out_b)
+    store_a.flush()
+    ghost, absorbed_ghost = store_b.append_message(out_b, ChatMessage("user", "x"))
+    assert ghost is None and absorbed_ghost is False
+
+
+def test_append_message_concurrent_no_lost_messages(tmp_path: Path):
+    """并发压力：两个前端各发 20 条，最终 40 条全在。"""
+    import threading
+
+    from pet.chat.models import ChatMessage
+    from pet.chat.session_store import SessionStore
+
+    store_a = SessionStore(tmp_path, instance_id="shared")
+    store_b = SessionStore(tmp_path, instance_id="shared")
+    s = store_a.create("shenshen", "p", "prompt")
+    store_a.save(s)
+    store_a.flush()
+
+    def blast(store, tag):
+        for i in range(20):
+            store.append_message(s, ChatMessage("user", f"{tag}-{i}"))
+
+    t1 = threading.Thread(target=blast, args=(store_a, "A"))
+    t2 = threading.Thread(target=blast, args=(store_b, "B"))
+    t1.start(); t2.start(); t1.join(); t2.join()
+    store_a.flush()
+
+    final = store_a.load(s.session_id, "shenshen")
+    contents = {m.content for m in final.messages}
+    assert len(contents) == 40
+    assert all(f"A-{i}" in contents for i in range(20))
+    assert all(f"B-{i}" in contents for i in range(20))
 
 
 def test_send_message_resyncs_stale_session_from_disk(tmp_path: Path, monkeypatch):

@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
 from .chat.models import ChatMessage
-from .chat.utils import resync_session_from_disk
 from .chat.prompt import PromptBuilder
 from .chat.service import ChatService
 from .chat.session_store import SessionStore
@@ -252,10 +251,15 @@ class QuickChatBubble(QFrame):
         if not text:
             return
         self.input.clear()
-        # 陈旧快照防护（DS-M7）：发送前对齐磁盘（另一前端可能写过同一会话）
-        self.session = resync_session_from_disk(self.store, self.session, self.character_id)
-        self.session.messages.append(ChatMessage("user", text))
-        self.store.save(self.session)
+        # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」
+        synced, _absorbed = self.store.append_message(
+            self.session, ChatMessage("user", text)
+        )
+        if synced is None:
+            self.session.messages.append(ChatMessage("user", text))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         self.output.setText("")
         self._reply_text = ""
         self._page = 0

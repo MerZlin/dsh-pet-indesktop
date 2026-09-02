@@ -364,6 +364,7 @@ _FIRST_FRAME_BUDGET_BYTES = 32 * 1024 * 1024  # 32MB ≈ 36 段热动画常驻
 _first_frame_reg_lock = threading.Lock()
 _first_frame_reg: list = []  # [(weakref(clip), bytes)]，尾部 = 最近使用
 _first_frame_bytes = 0
+_ffr_evict_seq = 0
 
 
 def _clip_first_frame_bytes(clip) -> int:
@@ -372,8 +373,13 @@ def _clip_first_frame_bytes(clip) -> int:
 
 
 def _ffr_touch(clip, added_bytes: int = 0) -> list:
-    """登记/置顶 clip 并记账；返回待逐出 clip 列表（调用方锁外处理）。"""
-    global _first_frame_bytes
+    """登记/置顶 clip 并记账；返回待逐出 (clip, token) 列表（调用方锁外处理）。
+
+    token 机制（R3 复审 P1）：摘表与清空分两阶段，期间的重新登记会把
+    clip._ffr_evict_token 复位为 None，使迟到的逐出在校验时跳过——
+    热门 clip 不会被「过期的逐出决定」误清。
+    """
+    global _first_frame_bytes, _ffr_evict_seq
     victims = []
     with _first_frame_reg_lock:
         live = []
@@ -389,6 +395,7 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
         live.append((weakref.ref(clip), current))
         _first_frame_reg[:] = live
         _first_frame_bytes += current
+        clip._ffr_evict_token = None  # 新登记/置顶 = 取消悬挂中的逐出
         while _first_frame_bytes > _FIRST_FRAME_BUDGET_BYTES and len(_first_frame_reg) > 1:
             victim = _first_frame_reg[0][0]()
             if victim is None:
@@ -400,7 +407,9 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
                 _first_frame_bytes -= _first_frame_reg[0][1]
                 _first_frame_reg.pop(0)
                 continue
-            victims.append(victim)
+            _ffr_evict_seq += 1
+            victim._ffr_evict_token = _ffr_evict_seq
+            victims.append((victim, _ffr_evict_seq))
             _first_frame_bytes -= _first_frame_reg[0][1]
             _first_frame_reg.pop(0)
     return victims
@@ -418,14 +427,18 @@ def _ffr_unregister(clip) -> None:
             else:
                 live.append((ref, nbytes))
         _first_frame_reg[:] = live
+    clip._ffr_evict_token = None
 
 
 def _ffr_evict(victims) -> None:
-    """锁外逐出：逐个取 victim 自己的首帧锁清空缓存。"""
-    for victim in victims:
+    """锁外逐出：逐个取 victim 自己的首帧锁，校验 token 未过期才清空。"""
+    for victim, token in victims:
         try:
             with victim._first_frame_lock:
+                if victim._ffr_evict_token != token:
+                    continue  # 摘表后被重新登记/置顶：本次逐出决定已过期
                 victim._first_image = None
+                victim._ffr_evict_token = None
         except Exception:
             pass  # clip 可能正在 cleanup，逐出失败无碍（其清理路径自会释放）
 
@@ -724,6 +737,7 @@ class WebMClip(QObject):
         self._current_image: QImage | None = None
         self._current_pixmap: QPixmap | None = None
         self._first_image: QImage | None = None
+        self._ffr_evict_token = None  # 首帧预算 LRU 的逐出代次（见模块级注册表注释）
         # 首帧解码原子认领（N4）：warm_first_frame（后台）与 _decode_first_frame_sync
         # （前台）同一时间只有一个执行者。_first_frame_done 在 _first_image 写入后
         # set，供前台有界等待复用后台解码结果（零重复解码）。

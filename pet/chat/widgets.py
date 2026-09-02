@@ -42,7 +42,7 @@ from .prompt import PromptBuilder, load_character_manifest
 from . import themes as chat_themes
 from .service import ChatService
 from .session_store import SessionStore
-from .utils import _short_title, resync_session_from_disk
+from .utils import _short_title
 from ..context_menus.icons import vector_widget_icon
 
 
@@ -1813,14 +1813,19 @@ class ChatWindow(QDialog):
             request_text += "\n\n" + attachment_context
         self.input.clear()
         self.composer.clear_attachments()
-        # 陈旧快照防护（DS-M7）：另一前端在本窗打开期间写过同一会话时，
-        # 先对齐磁盘再追加，避免整体覆盖丢消息
-        synced = resync_session_from_disk(self.store, self.session, self.character_id)
-        if synced is not self.session:
+        # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」，
+        # 另一前端在本窗打开期间的写入不会被覆盖
+        synced, absorbed = self.store.append_message(
+            self.session, ChatMessage("user", display_text)
+        )
+        if synced is None:
+            # 会话已被并发删除等边界：本地兜底（保持旧行为）
+            self.session.messages.append(ChatMessage("user", display_text))
+        else:
             self.session = synced
-            self._load()
-            self._refresh_sessions()
-        self.session.messages.append(ChatMessage("user", display_text))
+            if absorbed:
+                self._load()
+                self._refresh_sessions()
         self._add("user", display_text)
         self._last_user_text = request_text
         self._begin_generation(request_text, image_payloads=image_payloads)

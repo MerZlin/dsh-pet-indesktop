@@ -53,7 +53,7 @@ def test_budget_evicts_oldest():
     _store(a, 100)
     _store(b, 100)
     victims = _store(c, 100)  # 300 > 250 → 逐出最久未用的 a
-    assert victims == [a]
+    assert [v for v, _t in victims] == [a]
     assert a._first_image is None
     assert b._first_image is not None and c._first_image is not None
     assert webm_clip._first_frame_bytes == 200
@@ -65,7 +65,7 @@ def test_touch_reorders_lru():
     _store(b, 100)
     webm_clip._ffr_touch(a)  # a 变最近使用
     victims = _store(c, 100)
-    assert victims == [b]  # 逐出 b 而非 a
+    assert [v for v, _t in victims] == [b]  # 逐出 b 而非 a
     assert a._first_image is not None and b._first_image is None
 
 
@@ -111,3 +111,32 @@ def test_eviction_of_emptied_clip_clears_its_accounting():
     _store(c, 100)  # 账面 300 > 250 → a 出列（不视为逐出）
     assert webm_clip._first_frame_bytes == 200
     assert len(webm_clip._first_frame_reg) == 2
+
+
+def test_stale_eviction_token_skips_reregistered_clip():
+    """R3 复审 P1 回归：摘表与清空之间被重新登记的热门 clip，
+    迟到的逐出决定必须被 token 拦截（不再误清）。"""
+    a, b, c = _FakeClip(100), _FakeClip(100), _FakeClip(100)
+    _store(a, 100)
+    _store(b, 100)
+    victims = webm_clip._ffr_touch(c, 100)  # 300 > 250 → 决定逐出 a
+    assert victims and victims[0][0] is a
+    # 逐出执行前，a 被重新使用（jumpToFrame 命中路径的 touch）——
+    # 这次 touch 自身超预算，顺便会决定逐出 b（真实流程，照常执行）
+    pending = webm_clip._ffr_touch(a)
+    webm_clip._ffr_evict(pending)
+    webm_clip._ffr_evict(victims)  # 针对 a 的迟到逐出：应被 token 拦截
+    assert a._first_image is not None
+    assert b._first_image is None  # b 被新一轮正常逐出
+    assert webm_clip._first_frame_bytes == 200
+
+
+def test_fresh_eviction_token_still_evicts():
+    """token 不误伤正常逐出：未被重新登记的 victim 照常清空。"""
+    a, b, c = _FakeClip(100), _FakeClip(100), _FakeClip(100)
+    _store(a, 100)
+    _store(b, 100)
+    victims = webm_clip._ffr_touch(c, 100)
+    webm_clip._ffr_evict(victims)
+    assert a._first_image is None
+    assert webm_clip._first_frame_bytes == 200

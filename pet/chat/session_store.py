@@ -343,6 +343,21 @@ class _WriterRegistry:
 # 模块级单例：共享 writer 注册表与永久关闭屏障的唯一所有权对象。
 _registry = _WriterRegistry()
 
+# 同进程跨实例（多前端各自建 SessionStore）的「读-改-写」原子锁：
+# 按会话根目录分锁。跨进程无需协调——多开按 slot 分目录（审查 R3 P1）。
+_store_io_locks: dict[str, threading.Lock] = {}
+_store_io_locks_guard = threading.Lock()
+
+
+def _io_lock_for(root: Path) -> threading.Lock:
+    key = str(root)
+    with _store_io_locks_guard:
+        lock = _store_io_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _store_io_locks[key] = lock
+        return lock
+
 
 def _writer_for(root: Path) -> _AsyncWriter | None:
     """返回 root 的共享 writer；全局或局部关闭中返回 None（调用方按拒绝处理）。"""
@@ -388,6 +403,26 @@ class SessionStore:
             log.warning("会话保存被拒绝（写盘已全局关闭）: %s", session.session_id)
             return False
         return w.submit(self._path(session.character_id, session.session_id), payload)
+
+    def append_message(self, session, message):
+        """原子「读 → 追加 → 提交」（审查 R3 P1：M7 修复的硬版本）。
+
+        多前端（modern/legacy/QuickChat）共享同一会话目录且各持内存快照：
+        「先 load 对齐再 append/save」在 load 与 save 之间仍有被另一前端
+        插入写入的窗口。本方法在同进程全局 io 锁内完成读-改-写提交
+        （pending 层的 read-your-writes 保证另一实例的写入立即可见），
+        并发发送互不覆盖。跨进程无需协调：多开按 slot 分目录。
+
+        返回 (更新后会话, 是否吸收了外部新消息)；会话已被删返回 (None, False)。
+        """
+        with _io_lock_for(self.root):
+            fresh = self.load(session.session_id, session.character_id)
+            if fresh is None:
+                return None, False
+            absorbed = str(fresh.updated_at) > str(session.updated_at)
+            fresh.messages.append(message)
+            self.save(fresh)
+            return fresh, absorbed
 
     def flush(self, timeout: float = 10.0) -> bool:
         """等待本目录所有已提交写盘完成；有失败/超时返回 False。"""
