@@ -60,7 +60,6 @@ DEFAULT_MENU_EASTER_EGG = {
     "hint": "请点击",
     "avatar": "assets/big_blue_fat_fish/ojingjing.jpg",
     "image_dir": "assets/big_blue_fat_fish",
-    "image_scale": 100,  # 弹窗图片边长百分比（40~200，100 = 原始默认尺寸）
 }
 DEFAULT_QUICK_LAUNCH_APPS = [
     {"name": "默认浏览器", "path": "", "kind": "default_browser"},
@@ -144,9 +143,6 @@ def _clean_menu_easter_egg(value):
         "hint": str(value.get("hint") or defaults["hint"]).strip()[:20],
         "avatar": avatar,
         "image_dir": image_dir,
-        "image_scale": int(_float_or_default(
-            value.get("image_scale"), defaults["image_scale"], 40.0, 200.0
-        )),
     }
 
 

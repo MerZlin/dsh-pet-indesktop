@@ -1123,26 +1123,6 @@ def test_ojingjing_windows_are_frameless_stackable_and_closeable():
     assert manager.windows == []
 
 
-def test_ojingjing_image_scale_changes_window_size():
-    """image_scale 百分比直接决定弹窗尺寸：200% 应明显大于 50%，默认 100。"""
-    from PySide6.QtWidgets import QApplication
-
-    from pet.fun_image_popup import OjingjingWindowManager
-
-    app = QApplication.instance() or QApplication([])
-    manager = OjingjingWindowManager()
-    small = manager.open_window(show=False, config={"image_scale": 50})
-    normal = manager.open_window(show=False)
-    big = manager.open_window(show=False, config={"image_scale": 200})
-    assert small.width() < normal.width() < big.width()
-    assert big.width() >= int(normal.width() * 1.9)
-    # 超界输入在弹窗侧同样被钳住（双保险：config 清洗 + 弹窗钳位）
-    huge = manager.open_window(show=False, config={"image_scale": 999})
-    assert huge.width() == big.width()
-    manager.close_all()
-    app.processEvents()
-
-
 def test_ojingjing_uses_popup_directory_random_images_and_drag_helpers(monkeypatch):
     from PySide6.QtCore import QPoint
     from PySide6.QtWidgets import QApplication

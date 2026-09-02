@@ -93,7 +93,6 @@ class OjingjingWindow(QWidget):
         close_all: Callable[[], None],
         on_closed: Callable[[QWidget], None],
         title: str = "厉害了我的鲸",
-        image_scale: float = 1.0,
     ) -> None:
         super().__init__(None)
         self._on_closed = on_closed
@@ -112,10 +111,7 @@ class OjingjingWindow(QWidget):
 
         screen = QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else None
-        base_side = 520 if available is None else max(280, min(560, int(available.height() * 0.64)))
-        # 用户可调显示尺寸（menu_easter_egg.image_scale，百分比 40~200）
-        scale = max(0.4, min(2.0, float(image_scale)))
-        side = int(base_side * scale)
+        side = 520 if available is None else max(280, min(560, int(available.height() * 0.64)))
 
         card = QWidget(self)
         card.setObjectName("ojingjingCard")
@@ -226,7 +222,6 @@ class OjingjingWindowManager:
         window = OjingjingWindow(
             random.choice(paths), self.close_all, self._forget,
             title=str(config.get("title") or "厉害了我的鲸"),
-            image_scale=float(config.get("image_scale") or 100) / 100.0,
         )
         offset = (len(self.windows) % 7) * 24
         window.setProperty("cascadeOffset", offset)
