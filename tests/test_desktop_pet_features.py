@@ -1304,7 +1304,14 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
 
     vision_model = dialog.findChild(settings_mod.SettingRow, "settingRow_vision_model")
     custom_background = dialog.findChild(settings_mod.SettingRow, "settingRow_chat_background_file")
-    minimum = dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_min")
+    self_talk_rows = [
+        dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
+        for key in (
+            "self_talk_duration", "self_talk_min", "self_talk_max",
+            "self_talk_texts", "self_talk_images", "click_self_talk",
+            "click_talk_bindings",
+        )
+    ]
     opacity = dialog.findChild(settings_mod.SettingRow, "settingRow_menu_opacity")
 
     assert vision_model.isHidden() is dialog.ai_page.vision_same.isChecked()
@@ -1314,9 +1321,112 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
     dialog.ai_page.background_select.setCurrentData("custom")
     assert not custom_background.isHidden()
     dialog.self_talk_check.setChecked(False)
-    assert not minimum.isEnabled()
+    assert all(row is not None and row.isHidden() for row in self_talk_rows)
+    dialog.self_talk_check.setChecked(True)
+    assert all(row is not None and not row.isHidden() for row in self_talk_rows)
     dialog.menu_translucent_check.setChecked(False)
-    assert not opacity.isEnabled()
+    assert opacity.isHidden()
+    dialog.menu_translucent_check.setChecked(True)
+    assert not opacity.isHidden()
+    dialog.close()
+    app.processEvents()
+
+
+def test_modern_settings_toggle_dependencies_hide_complete_setting_groups(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+
+    def row(key):
+        result = dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
+        assert result is not None
+        return result
+
+    island_children = [
+        row(key) for key in (
+            "dynamic_island_icon", "dynamic_island_name", "dynamic_island_info",
+            "dynamic_island_status", "dynamic_island_info_mode",
+            "dynamic_island_style", "dynamic_island_icon_value",
+            "dynamic_island_custom_text",
+        )
+    ]
+    dialog.island_enabled_check.setChecked(False)
+    assert all(child.isHidden() for child in island_children)
+    dialog.island_enabled_check.setChecked(True)
+    assert not row("dynamic_island_icon_value").isHidden()
+    assert row("dynamic_island_custom_text").isHidden()
+    dialog.island_icon_check.setChecked(False)
+    assert row("dynamic_island_icon_value").isHidden()
+    dialog.island_info_check.setChecked(False)
+    assert row("dynamic_island_info_mode").isHidden()
+    dialog.island_info_mode_select.setCurrentData("custom")
+    assert row("dynamic_island_custom_text").isHidden()
+    dialog.island_info_check.setChecked(True)
+    assert not row("dynamic_island_custom_text").isHidden()
+
+    egg_children = [row(key) for key in ("egg_title", "egg_hint", "egg_avatar", "egg_image_dir")]
+    dialog.egg_enabled_check.setChecked(False)
+    assert all(child.isHidden() for child in egg_children)
+    dialog.egg_enabled_check.setChecked(True)
+    assert all(not child.isHidden() for child in egg_children)
+
+    collision_children = [
+        row(key) for key in (
+            "collision_sound_enabled", "collision_restitution", "collision_friction",
+            "collision_mass_scale", "collision_impulse_cap", "collision_sound_volume",
+        )
+    ]
+    collision_advanced_section = row("collision_restitution").parentWidget().parentWidget()
+    dialog.collision_enabled_check.setChecked(False)
+    assert all(child.isHidden() for child in collision_children)
+    assert collision_advanced_section.isHidden()
+    dialog.collision_sound_check.setChecked(False)
+    dialog.collision_enabled_check.setChecked(True)
+    assert not row("collision_sound_enabled").isHidden()
+    assert row("collision_sound_volume").isHidden()
+    assert not collision_advanced_section.isHidden()
+
+    dialog.close()
+    app.processEvents()
+
+
+def test_windows_proactive_master_and_idle_toggles_hide_dependent_rows(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.sys, "platform", "win32")
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+
+    def row(key):
+        result = dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
+        assert result is not None
+        return result
+
+    child_keys = (
+        "proactive_dry_run", "proactive_preset", "proactive_dwell",
+        "proactive_cooldown", "proactive_min_interval", "proactive_daily_cap",
+        "proactive_require_idle", "proactive_idle_seconds", "proactive_through",
+        "proactive_pre_cue", "proactive_free", "proactive_whitelist",
+        "proactive_whitelist_add", "proactive_memory_clear",
+    )
+    dialog.pro_enabled_check.setChecked(False)
+    assert all(row(key).isHidden() for key in child_keys)
+    dialog.pro_idle_check.setChecked(False)
+    dialog.pro_enabled_check.setChecked(True)
+    assert row("proactive_idle_seconds").isHidden()
+    assert all(not row(key).isHidden() for key in child_keys if key != "proactive_idle_seconds")
+    dialog.pro_idle_check.setChecked(True)
+    assert not row("proactive_idle_seconds").isHidden()
+
     dialog.close()
     app.processEvents()
 

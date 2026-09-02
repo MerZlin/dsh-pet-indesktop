@@ -67,6 +67,24 @@ def _apply_extreme_copy(dialog: ModernSettingsDialog) -> None:
         rows[0].hint_label.setText(hint)
 
 
+def _expand_toggle_dependencies(dialog: ModernSettingsDialog) -> None:
+    """Expose every macOS-available dependent group for visual acceptance."""
+    for toggle in (
+        dialog.self_talk_check,
+        dialog.menu_translucent_check,
+        dialog.island_enabled_check,
+        dialog.island_icon_check,
+        dialog.island_info_check,
+        dialog.egg_enabled_check,
+        dialog.collision_enabled_check,
+        dialog.collision_sound_check,
+        dialog.click_sound_check,
+        dialog.agent_sound_check,
+    ):
+        toggle.setChecked(True)
+    dialog.island_info_mode_select.setCurrentData("custom")
+
+
 def capture(args: argparse.Namespace) -> None:
     app = QApplication.instance() or QApplication([])
     if args.dark:
@@ -79,6 +97,9 @@ def capture(args: argparse.Namespace) -> None:
         dialog.resize(args.width, args.height)
         dialog.show()
         app.processEvents()
+        if args.expanded_toggles:
+            _expand_toggle_dependencies(dialog)
+            app.processEvents()
         if args.extreme_copy:
             _apply_extreme_copy(dialog)
         _apply_font_scale(dialog, args.font_scale)
@@ -135,6 +156,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expanded-ai", action="store_true")
     parser.add_argument("--font-scale", type=float, default=1.0)
     parser.add_argument("--extreme-copy", action="store_true")
+    parser.add_argument("--expanded-toggles", action="store_true")
     return parser.parse_args()
 
 

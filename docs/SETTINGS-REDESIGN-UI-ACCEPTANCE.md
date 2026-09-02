@@ -10,6 +10,9 @@
 - `screenshots/settings-redesign/iteration-2-compact/`
 - `screenshots/settings-redesign/iteration-2-dark-wide/`
 - `screenshots/settings-redesign/iteration-3-accessibility/`（720×760、125% 字体、极端长文案）
+- `screenshots/settings-redesign/iteration-4-toggle-default/`（1100×760，配置默认显隐态）
+- `screenshots/settings-redesign/iteration-4-toggle-expanded/`（1100×760，macOS 可用依赖全部展开）
+- `screenshots/settings-redesign/iteration-4-toggle-compact/`（720×760、125% 字体、极端长文案、依赖全部展开）
 
 ## 逐页结果
 
@@ -22,6 +25,8 @@
 | 桌面组件 | 密集开关、下拉与文本框混排 | 通过 |
 | AI 与对话 | 内容占满共享页面宽度、长文本输入、连接卡片 | 通过 |
 | 自动化与联动 | 多文本框卡片、长说明与开关布局 | 通过 |
+
+ToggleSwitch 专项同时检查关闭后的卡片收缩、分隔线重排、空高级分组隐藏，以及重新开启后的完整恢复。灵动岛还覆盖“显示图标 / 显示信息槽 / 自定义短文本”组合依赖；Windows 主动识屏无法在本机真实截图，仅有 capability fake 的显隐测试。
 
 AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、箭头、展开卡片和下游内容在浅色宽屏、浅色紧凑及深色宽屏下保持同一视觉语言。
 
@@ -36,6 +41,7 @@ AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、
 - 菜单编辑器原生灰色表头和默认列宽导致名称省略；现使用卡片式树样式，菜单项列拉伸、位置列按内容定宽，预览不显示表格表头。
 - 截图脚本固定把初始焦点留在侧栏，避免搜索框蓝色焦点环干扰默认视觉层级。
 - 设置行标题/说明现关联到实际控件，普通按钮与自定义下拉/披露控件均有可见键盘焦点状态。
+- Agent 单事件音效首轮紧凑截图中固定横排贴到右边界；`ResponsiveToggleActionRow` 现于窄宽度改为两层布局，关闭事件时只保留可恢复开关，展开态不再裁切路径和按钮。
 
 ## 未声称的覆盖
 

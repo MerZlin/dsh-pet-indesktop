@@ -696,6 +696,58 @@ def test_compact_ai_provider_controls_stay_inside_their_setting_row(tmp_path, mo
     app.processEvents()
 
 
+def test_compact_agent_sound_controls_reflow_inside_their_setting_row(tmp_path, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog, SettingRow
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = ModernSettingsDialog(Config(tmp_path), include_ai=False)
+    dialog.agent_sound_check.setChecked(True)
+    dialog.resize(720, 760)
+    automation_index = next(
+        index for index in range(dialog.sidebar.count())
+        if dialog.sidebar.item(index).text() == "自动化与联动"
+    )
+    dialog.sidebar.setCurrentRow(automation_index)
+    for control in (
+        dialog.agent_sound_start_picker,
+        dialog.agent_sound_start_preview,
+    ):
+        font = control.font()
+        font.setPixelSize(17)
+        control.setFont(font)
+    dialog.show()
+    dialog.resize(721, 760)
+    app.processEvents()
+    dialog.resize(720, 760)
+    app.processEvents()
+
+    row = dialog.findChild(SettingRow, "settingRow_agent_sound_start")
+    for control in (
+        dialog.agent_sound_start_check,
+        dialog.agent_sound_start_picker,
+        dialog.agent_sound_start_preview,
+    ):
+        left = control.mapTo(row, QPoint(0, 0)).x()
+        assert left >= 16
+        assert left + control.width() <= row.width() - 16
+    assert dialog.agent_sound_start_widget.property("responsiveStacked") is True
+    scroll = row.parentWidget()
+    while scroll is not None and not isinstance(scroll, QScrollArea):
+        scroll = scroll.parentWidget()
+    assert scroll is not None
+    row_left = row.mapTo(scroll.viewport(), QPoint(0, 0)).x()
+    assert row_left >= 0
+    assert row_left + row.width() <= scroll.viewport().width()
+    dialog.reject()
+    app.processEvents()
+
+
 def test_settings_domains_use_semantic_sidebar_icons():
     from pet.modern_settings_dialog import SETTINGS_DOMAIN_NAV
 

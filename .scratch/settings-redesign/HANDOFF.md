@@ -1,6 +1,6 @@
 # Settings redesign handoff
 
-Updated: 2026-09-02 (after upstream merge and final local acceptance)
+Updated: 2026-09-02 (after ToggleSwitch progressive-disclosure acceptance)
 
 ## Workspace
 
@@ -43,15 +43,19 @@ Updated: 2026-09-02 (after upstream merge and final local acceptance)
 - Responsive copy and Provider composite controls were fixed from screenshot-discovered failures.
 - Related regression: `49 passed`; full suite: `745 passed, 8 skipped` (`753 collected`).
 - macOS `webm-chat` package passed PyInstaller, encoding check and ad-hoc codesign in `/private/tmp/dsh-pet-macos-build.0ZBbuF`; `imageio-ffmpeg 0.6.0` is present.
+- ToggleSwitch dependency rows now hide instead of merely disabling: self-talk, menu translucency, island, easter egg, collision, Agent event details, and Windows proactive-screen settings all have explicit parent/child contracts.
+- Composite visibility reasons prevent nested controls from reappearing while an ancestor remains off; empty advanced sections hide with their rows.
+- Real Cocoa default, expanded, and compact-expanded matrices are in `docs/screenshots/settings-redesign/iteration-4-toggle-*`.
+- Screenshot-driven Agent sound overflow is fixed by `ResponsiveToggleActionRow` and a 720px geometry contract.
 
 ## Current TDD state
 
-- Last REDs: tree-shape preview stayed stale; future default action was absent; long titles and Provider actions overflowed under enlarged fonts.
-- Last GREEN: all new focused contracts, 49 related tests, 745-pass full suite, package build, and all current macOS screenshot matrices.
+- Last REDs: self-talk/translucency remained enabled-but-visible; island/egg/collision/proactive had no row dependencies; Agent event detail stayed visible when off and its compact horizontal layout touched the card edge.
+- Last GREEN: focused dependency and responsive-layout contracts, `125 passed` related settings/menu suite, `748 passed, 8 skipped` full suite, and three current macOS screenshot matrices.
 
 ## Exact next step
 
-No unfinished local implementation ticket remains. If work continues on another host, run the real Windows/Linux visual matrix first; do not infer visual acceptance from capability fakes. Keep real credentials isolated for any full rerun:
+No unfinished local implementation ticket remains. If work continues on another host, run the real Windows/Linux visual matrix first; do not infer visual acceptance from capability fakes. Full-suite loopback HTTP tests require sandbox/network permission; keep real credentials isolated for any rerun:
 
 ```bash
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring PYTEST_ADDOPTS='-p no:cacheprovider' QT_QPA_PLATFORM=offscreen /opt/miniconda3/envs/mobility_client/bin/python -m pytest -q

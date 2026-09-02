@@ -739,6 +739,59 @@ class ResponsiveActionRow(QWidget):
         self.updateGeometry()
 
 
+class ResponsiveToggleActionRow(QWidget):
+    """Reflow a toggle, an expanding detail editor, and one trailing action."""
+
+    def __init__(self, toggle: QWidget, detail: QWidget, action: QWidget, parent=None):
+        super().__init__(parent)
+        self.toggle = toggle
+        self.detail = detail
+        self.action = action
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(6)
+        self.grid.setVerticalSpacing(6)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._stacked = None
+        self._reflow(True)
+
+    def preferred_inline_width(self) -> int:
+        return (
+            self.toggle.sizeHint().width()
+            + self.detail.sizeHint().width()
+            + self.action.sizeHint().width()
+            + self.grid.horizontalSpacing() * 2
+        )
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # Localized controls need breathing room; reflow before they touch the
+        # card edge rather than waiting for literal minimum-size overflow.
+        self._reflow(self.width() < self.preferred_inline_width() + 48)
+
+    def _reflow(self, stacked: bool) -> None:
+        if self._stacked is stacked:
+            return
+        self._stacked = stacked
+        self.setProperty("responsiveStacked", stacked)
+        while self.grid.count():
+            self.grid.takeAt(0)
+        if stacked:
+            self.grid.addWidget(self.toggle, 0, 0)
+            self.grid.addWidget(self.action, 0, 1, Qt.AlignmentFlag.AlignRight)
+            self.grid.addWidget(self.detail, 1, 0, 1, 2)
+            self.grid.setColumnStretch(0, 1)
+            self.grid.setColumnStretch(1, 0)
+        else:
+            self.grid.addWidget(self.toggle, 0, 0)
+            self.grid.addWidget(self.detail, 0, 1)
+            self.grid.addWidget(self.action, 0, 2)
+            self.grid.setColumnStretch(0, 0)
+            self.grid.setColumnStretch(1, 1)
+            self.grid.setColumnStretch(2, 0)
+        self.updateGeometry()
+
+
 class SettingsCard(QFrame):
     def __init__(self, rows: list[SettingRow], parent=None):
         super().__init__(parent)
@@ -800,6 +853,7 @@ class SettingsSection(QWidget):
     def __init__(self, title: str, rows: list[SettingRow], parent=None, *, advanced: bool = False):
         super().__init__(parent)
         self.advanced = advanced
+        self.rows = list(rows)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(7)
@@ -816,6 +870,13 @@ class SettingsSection(QWidget):
         if self.toggle is not None:
             self.card.setVisible(False)
             self.toggle.toggled.connect(self._set_expanded)
+
+    def refresh_dependency_visibility(self) -> None:
+        """Hide a section when every row is suppressed by a parent setting."""
+        self.setVisible(any(
+            all(getattr(row, "_visibility_dependencies", {}).values())
+            for row in self.rows
+        ))
 
     def _set_expanded(self, expanded: bool) -> None:
         self.card.setVisible(expanded)
@@ -1855,7 +1916,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
             SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
             SettingRow("dynamic_island_style", "背景风格", "黑色 / 白色 / 苹果式玻璃质感。", self.island_style_select),
-            SettingRow("dynamic_island_icon", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
+            SettingRow("dynamic_island_icon_value", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
             SettingRow("dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True),
         ], island_content))
         island_layout.addStretch(1)
@@ -2051,8 +2112,23 @@ class ModernSettingsDialog(QDialog):
 
         self.self_talk_check.toggled.connect(self._update_self_talk_controls)
         self.menu_translucent_check.toggled.connect(self._update_translucency_controls)
+        self.island_enabled_check.toggled.connect(self._update_island_controls)
+        self.island_icon_check.toggled.connect(self._update_island_icon_controls)
+        self.island_info_check.toggled.connect(self._update_island_info_controls)
+        self.island_info_mode_select.currentIndexChanged.connect(self._update_island_custom_text)
+        self.egg_enabled_check.toggled.connect(self._update_egg_controls)
+        self.collision_enabled_check.toggled.connect(self._update_collision_controls)
+        self.collision_sound_check.toggled.connect(self._update_collision_sound_controls)
+        if hasattr(self, "pro_enabled_check"):
+            self.pro_enabled_check.toggled.connect(self._update_proactive_controls)
+            self.pro_idle_check.toggled.connect(self._update_proactive_idle_controls)
         self._update_self_talk_controls(self.self_talk_check.isChecked())
         self._update_translucency_controls(self.menu_translucent_check.isChecked())
+        self._update_island_controls(self.island_enabled_check.isChecked())
+        self._update_egg_controls(self.egg_enabled_check.isChecked())
+        self._update_collision_controls(self.collision_enabled_check.isChecked())
+        if hasattr(self, "pro_enabled_check"):
+            self._update_proactive_controls(self.pro_enabled_check.isChecked())
         # 初始同步须在全部 SettingRow 构建完成后执行，否则 findChild 找不到行
         self._update_click_sound_controls(self.click_sound_check.isChecked())
         self._update_agent_sound_controls(self.agent_sound_check.isChecked())
@@ -2289,22 +2365,15 @@ class ModernSettingsDialog(QDialog):
 
         # 辅助构建包含“开关+路径选择+试听”的组合控件
         def _build_agent_event_row(evt_key: str, default_builtin: str) -> tuple[QWidget, ToggleSwitch, ResourcePathPicker, QPushButton]:
-            container = QWidget(self)
-            layout = QHBoxLayout(container)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setSpacing(6)
-            toggle = ToggleSwitch(container)
+            toggle = ToggleSwitch(self)
             toggle.setChecked(bool(agent_link_cfg.get(f"sound_{evt_key}_enabled", True)))
             path_val = str(agent_link_cfg.get(f"sound_{evt_key}_path") or default_builtin)
-            picker = ResourcePathPicker(path_val, name_filter=AUDIO_NAME_FILTER, parent=container)
-            preview_btn = QPushButton("试听", container)
+            picker = ResourcePathPicker(path_val, name_filter=AUDIO_NAME_FILTER, parent=self)
+            preview_btn = QPushButton("试听", self)
             preview_btn.setIcon(vector_widget_icon(self, "sound", 14))
             preview_btn.setFixedWidth(72)
             preview_btn.clicked.connect(lambda _, k=evt_key: self._preview_agent_sound(k))
-
-            layout.addWidget(toggle)
-            layout.addWidget(picker, 1)
-            layout.addWidget(preview_btn)
+            container = ResponsiveToggleActionRow(toggle, picker, preview_btn, self)
             return container, toggle, picker, preview_btn
 
         (self.agent_sound_start_widget, self.agent_sound_start_check,
@@ -2649,16 +2718,106 @@ class ModernSettingsDialog(QDialog):
             "self_talk_texts", "self_talk_images", "click_self_talk",
             "click_talk_bindings",
         )
-        controls = (
-            self.self_talk_duration_spin, self.min_spin, self.max_spin,
-            self.texts_edit, self.self_talk_image_dir_picker,
-            self.click_self_talk_check, self.click_talk_bindings_btn,
+        self._set_setting_rows_visible(keys, enabled)
+
+    def _update_island_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible((
+            "dynamic_island_icon", "dynamic_island_name", "dynamic_island_info",
+            "dynamic_island_status", "dynamic_island_info_mode",
+            "dynamic_island_style", "dynamic_island_icon_value",
+            "dynamic_island_custom_text",
+        ), enabled, dependency="island_enabled")
+        self._update_island_icon_controls(self.island_icon_check.isChecked())
+        self._update_island_info_controls(self.island_info_check.isChecked())
+
+    def _update_island_icon_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible(
+            ("dynamic_island_icon_value",),
+            enabled,
+            dependency="island_show_icon",
         )
-        for key, control in zip(keys, controls):
-            control.setEnabled(bool(enabled))
+
+    def _update_island_info_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible(
+            ("dynamic_island_info_mode", "dynamic_island_custom_text"),
+            enabled,
+            dependency="island_show_info",
+        )
+        self._update_island_custom_text()
+
+    def _update_island_custom_text(self, _index: int | None = None) -> None:
+        self._set_setting_rows_visible(
+            ("dynamic_island_custom_text",),
+            self.island_info_mode_select.currentData() == "custom",
+            dependency="island_info_mode",
+        )
+
+    def _update_egg_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible(
+            ("egg_title", "egg_hint", "egg_avatar", "egg_image_dir"),
+            enabled,
+            dependency="egg_enabled",
+        )
+
+    def _update_collision_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible((
+            "collision_sound_enabled", "collision_restitution", "collision_friction",
+            "collision_mass_scale", "collision_impulse_cap", "collision_sound_volume",
+        ), enabled, dependency="collision_enabled")
+        self._update_collision_sound_controls(self.collision_sound_check.isChecked())
+
+    def _update_collision_sound_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible(
+            ("collision_sound_volume",),
+            enabled,
+            dependency="collision_sound_enabled",
+        )
+
+    def _update_proactive_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible((
+            "proactive_dry_run", "proactive_preset", "proactive_dwell",
+            "proactive_cooldown", "proactive_min_interval", "proactive_daily_cap",
+            "proactive_require_idle", "proactive_idle_seconds", "proactive_through",
+            "proactive_pre_cue", "proactive_free", "proactive_whitelist",
+            "proactive_whitelist_add", "proactive_memory_clear",
+        ), enabled, dependency="proactive_enabled")
+        self._update_proactive_idle_controls(self.pro_idle_check.isChecked())
+
+    def _update_proactive_idle_controls(self, enabled: bool) -> None:
+        self._set_setting_rows_visible(
+            ("proactive_idle_seconds",),
+            enabled,
+            dependency="proactive_require_idle",
+        )
+
+    def _set_setting_rows_visible(
+        self,
+        keys: tuple[str, ...],
+        visible: bool,
+        *,
+        dependency: str = "parent",
+    ) -> None:
+        """Show dependent settings as a complete group and repair card dividers."""
+        cards: set[SettingsCard] = set()
+        sections: set[SettingsSection] = set()
+        for key in keys:
             row = self.findChild(SettingRow, f"settingRow_{key}")
-            if row is not None:
-                row.setEnabled(bool(enabled))
+            if row is None:
+                continue
+            dependencies = getattr(row, "_visibility_dependencies", {})
+            dependencies[dependency] = bool(visible)
+            row._visibility_dependencies = dependencies
+            row.setVisible(all(dependencies.values()))
+            card = row.parentWidget()
+            if isinstance(card, SettingsCard):
+                cards.add(card)
+                section = card.parentWidget()
+                if isinstance(section, SettingsSection):
+                    sections.add(section)
+        for section in sections:
+            section.refresh_dependency_visibility()
+        for card in cards:
+            card.refresh_separators()
 
     def _populate_menu_fonts(self) -> None:
         if shiboken6.isValid(self) is False or self._menu_fonts_populated:
@@ -2743,21 +2902,18 @@ class ModernSettingsDialog(QDialog):
             self._update_agent_sound_subcontrols()
 
     def _update_agent_sound_subcontrols(self) -> None:
-        """根据单事件独立开关启用/禁用路径选择器和试听按钮。"""
-        self.agent_sound_start_picker.setEnabled(self.agent_sound_start_check.isChecked())
-        self.agent_sound_start_preview.setEnabled(self.agent_sound_start_check.isChecked())
-
-        self.agent_sound_done_picker.setEnabled(self.agent_sound_done_check.isChecked())
-        self.agent_sound_done_preview.setEnabled(self.agent_sound_done_check.isChecked())
-
-        self.agent_sound_error_picker.setEnabled(self.agent_sound_error_check.isChecked())
-        self.agent_sound_error_preview.setEnabled(self.agent_sound_error_check.isChecked())
+        """单事件关闭时保留开关，仅隐藏其路径选择器和试听按钮。"""
+        for toggle, picker, preview in (
+            (self.agent_sound_start_check, self.agent_sound_start_picker, self.agent_sound_start_preview),
+            (self.agent_sound_done_check, self.agent_sound_done_picker, self.agent_sound_done_preview),
+            (self.agent_sound_error_check, self.agent_sound_error_picker, self.agent_sound_error_preview),
+        ):
+            visible = toggle.isChecked()
+            picker.setVisible(visible)
+            preview.setVisible(visible)
 
     def _update_translucency_controls(self, enabled: bool) -> None:
-        self.menu_opacity_spin.setEnabled(bool(enabled))
-        row = self.findChild(SettingRow, "settingRow_menu_opacity")
-        if row is not None:
-            row.setEnabled(bool(enabled))
+        self._set_setting_rows_visible(("menu_opacity",), enabled)
 
     def _apply_agent_sound_enabled_now(self, checked: bool) -> None:
         """音效总开关即时生效，不等对话框关闭（合并写回，不动其他 agent_link 键）。"""
