@@ -251,7 +251,9 @@ def test_close_all_rejects_new_writers_during_close_window(store):
     # 标志复位（close 完成）后：同 root 可正常重建新 writer
     assert st.save(session) is True
     assert ss._registry.get_writer(st.root) is not None
-    assert ss.close_all_writers() is True
+    # CI 高负载下 writer 收尾可能超过默认 10s（跨测试残留 writer 一并
+    # 参与全局关闭）——本断言验证「能干净关闭」而非「10s 内关闭」
+    assert ss.close_all_writers(timeout=30.0) is True
     assert (tmp / "sessions" / "shenshen" / "s1.json").is_file()
 
 

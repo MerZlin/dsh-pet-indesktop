@@ -52,5 +52,14 @@ jobs:
       - name: Ruff
         run: ruff check pet/ tests/
 
-      - name: Pytest
-        run: python -m pytest -q
+      - name: Pytest (main suite)
+        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py
+
+      # webm 生命周期族（reader/ffmpeg 进程 teardown 竞态）在 macOS CI 上
+      # 偶发段错误（exit 139，栈在 reader 线程 + imageio LogCatcher）。
+      # 段错误会杀掉整个 pytest 进程、拖垮主套件的结果报告，因此拆成
+      # 独立步骤：崩溃时只隔离失败这一步，主套件结果照常产出。
+      # 注意：拆步骤不改变测试内容，不掩盖失败——该红还是红。
+      - name: Pytest (webm lifecycle family, isolated)
+        run: python -m pytest -q tests/test_webm_reader_lifecycle.py tests/test_webm_clip_lifecycle.py tests/test_webm_first_frame_lock.py
+
