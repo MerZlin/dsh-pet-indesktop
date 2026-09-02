@@ -726,34 +726,79 @@ python scripts/convert_to_gif.py --force --clean
 ```text
 pet/
 ├── app.py                 # 应用入口、托盘、角色切换和聊天集成
-├── config.py              # 配置读取、迁移和持久化
-├── window.py              # 桌宠主窗口、透明/mask/鼠标穿透和动画状态机
+├── config.py              # 配置读取、迁移和持久化（reload 白名单 + schema 测试）
+├── config_domains.py      # 配置域 facade（chat/agent_link/proactive/collision/menu）
+├── window.py              # 桌宠主窗口（组合根；碰撞/平台层已拆出，见下行）
+├── collision.py           # 碰撞物理核心（纯 Python，无 Qt）
+├── collision_client.py    # 窗口侧碰撞客户端（预测/对账/上报节流/squash 冷却）
+├── collision_codec.py     # 碰撞 IPC 帧编解码 + 水位去重 + 协议 TypedDict（纯 Python）
+├── collision_ipc.py       # 碰撞协调者选举与成员协议（QLocalServer 控制面）
+├── collision_debug.py     # 碰撞调试日志
+├── decode_broker.py       # 多开共享解码 broker（共享内存 ring + seqlock，灰度默认关）
+├── frame_cache.py         # 帧预缩放缓存（字节硬预算 LRU）
+├── perfstats.py           # 性能打点（PET_PERF_STATS=1 启用，atexit 落盘）
+├── platform_win.py        # Windows 平台层（鼠标穿透/全屏判定/PerPixel 输入）
+├── platform_mac.py        # macOS 平台层（NSWindow level/激活策略）
 ├── catalog.py             # 角色和动画素材发现
 ├── library.py             # 动画库访问（懒加载 + 优先级预热）
-├── webm_clip.py           # WebM 播放和速率控制
+├── webm_clip.py           # WebM 播放（reader 线程/解码节流/broker 钩子）
 ├── gif_clip.py            # GIF/QMovie 播放
-├── speech_bubble.py       # 自言自语与状态气泡定位
-├── fun_image_popup.py     # 彩蛋图片弹窗
-├── proactive.py           # 主动识屏陪伴（白名单/门限/冷却/记忆）
-├── agent_link.py          # 多 Agent 联动状态机
+├── speech_bubble.py       # 气泡绘制与交互
+├── speech_bubble_text.py  # 气泡分页/定位纯函数
+├── click_sound.py         # 点击音效（ClickSoundPool 单例封装）
+├── desktop_notify.py      # 自绘右下角系统通知
+├── slot_manager.py        # 多开 slot 文件锁
+├── proactive.py           # 主动识屏陪伴（Watcher 编排）
+├── proactive_limiter.py   # 主动识屏频控
+├── proactive_memory.py    # 主动识屏记忆
+├── agent_link.py          # Agent 联动监视器（多 Agent 事件源：CLI/IDE/SQLite 轮询）
+├── agent_link_reducer.py  # 联动状态机（去抖/节流/完成确认，纯状态）
+├── agent_link_presentation.py # 联动表现层（气泡/音效）
 ├── vision.py              # 视觉模型调用（看看屏幕/主动识屏）
 ├── harness_launcher.py    # DeepSeek Harness 一键启动
 ├── instance_launcher.py   # 「生小肥鱼」多开孵化
 ├── modern_settings_dialog.py  # 新版侧边栏设置对话框
+├── settings_widgets.py    # 设置页共享控件库（ToggleSwitch 等 13 类）
 ├── settings_dialog.py     # 旧版设置对话框
 ├── context_menus/         # 新旧菜单模板、图标、彩蛋入口
 ├── chat/                  # 独立 AI 对话子系统（现代双栏 + 经典手机式）
-│   ├── models.py
-│   ├── providers.py
-│   ├── prompt.py
-│   ├── service.py
-│   ├── session_store.py
+│   ├── models.py          # 数据模型（ProviderConfig/ChatSession/...）
+│   ├── providers.py       # Provider 请求与连接测试
+│   ├── service.py         # 对话服务
+│   ├── session_store.py   # 会话持久化（异步 writer + 注册表）
+│   ├── geometry.py        # 聊天窗跟随定位（双 UI 共享纯函数）
+│   ├── utils.py           # 会话标题/时间格式化（双 UI 共享）
+│   ├── themes.py          # 聊天窗背景主题
 │   ├── widgets.py         # 新版聊天窗
 │   ├── legacy_widgets.py  # 经典手机式聊天窗
-│   ├── themes.py          # 聊天窗背景主题
 │   ├── modern_styles.qss / legacy_styles.qss / styles.qss
 │   └── ...
 └── updater.py             # 检查更新与发布资产解析
+
+integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
+packaging/
+├── pet_entry.py           # Chat 构建入口
+├── pet_entry_no_chat.py   # 无 Chat 构建入口
+└── dsh-pet.iss            # Inno Setup 通用安装包脚本（/D 参数编译各变体）
+
+scripts/
+├── build_onedir.ps1       # Windows onedir 构建 + zip 绿色版打包（本地与 CI 共用入口）
+├── build_macos.sh         # macOS .app 构建（本地与 CI 共用入口）
+├── build_linux.sh         # Linux onedir 构建（本地与 CI 共用入口）
+├── check_bundle_encoding.py # 产物中文编码自检（issue #26，构建脚本内自动调用）
+├── make_icon.py           # 从待机动画提取封面帧生成应用图标（assets/icon.ico）
+├── convert_to_gif.py      # WebM → GIF 全量同步脚本
+└── cleanup_mei_cache.py   # 检查/清理旧 onefile 版本遗留的 _MEI 缓存（默认预览）
+
+tests/                     # 单元测试、Qt offscreen 测试和构建相关验证
+                           # （含 test_architecture.py 架构红线：依赖方向 /
+                           #  window 私有面冻结 / window.py 行数预算）
+```
+
+**给 window.py 加功能前必读**：[docs/WINDOW_PY_SPLIT_GUIDE.md](docs/WINDOW_PY_SPLIT_GUIDE.md)
+——window.py 处于「只许瘦不许胖」的增量拆分公约下（CI 有行数预算红线），
+新功能先按公约拆对应控制器再动手。
+
 
 integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
 packaging/
