@@ -23,3 +23,10 @@ test("all queue outcomes share the response and event writer", () => {
   assert.match(source, /writeRecord\(\{ event: "watchdog\/control-result"/);
   assert.match(source, /error: "bridge-internal-error"/);
 });
+
+test("question events preserve call and session identity", () => {
+  assert.match(source, /function writeQuestionRequest\(callId, questions, sessionId\)/);
+  assert.match(source, /writeRecordDedup\(\{[\s\S]*event: "question\/requested"[\s\S]*callId[\s\S]*sessionId[\s\S]*questions/);
+  assert.match(source, /function resolveQuestion\(callId, sessionId\)/);
+  assert.match(source, /writeRecord\(\{[\s\S]*event: "question\/resolved"[\s\S]*callId[\s\S]*sessionId/);
+});

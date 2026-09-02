@@ -1945,6 +1945,7 @@ class AgentLinkManager(QObject):
             questions=questions,
             interactive=bool(payload.get("rpcId")) and self._question_has_options(questions),
             rpc_id=payload.get("rpcId"),
+            call_id=payload.get("callId"),
             session_id=session_id,
         )
 
@@ -2051,6 +2052,15 @@ class AgentLinkManager(QObject):
         弹窗延迟 0.5~1s 后自动消失，DSH 却只收到第一个审批的决策）。
         兜底仅用于无任何 id 的旧路径 approval/decided（单 pending 时关闭）。"""
         payload = payload if isinstance(payload, dict) else {}
+        call_id = payload.get("callId")
+        if call_id:
+            call_id = str(call_id)
+            for iid, item in self._pending_interactions.items():
+                if (item.get("kind") == "question"
+                        and str(item.get("call_id") or "") == call_id):
+                    self._resolve_interaction(iid)
+                    return
+            return  # 带 callId 但未匹配：陈旧已解决帧，不动其他问题
         rpc_id = payload.get("rpcId")
         approval_id = payload.get("approvalId")
         if rpc_id:

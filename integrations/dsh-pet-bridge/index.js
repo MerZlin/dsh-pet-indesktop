@@ -290,9 +290,32 @@ const TEXT_MAX = 300;
 //   - 本轮工具执行最终失败（有失败且无成功）
 // 只在 turn/end 时判定并写一条脱敏记录（错误码保留、错误正文不落盘）。
 const RETRY_EXHAUSTED_THRESHOLD = 4;
+// 限流/连接重试只在同一 session 连续达到 5 次时提醒一次。
+// 原始 llm/retry 仍然逐条转发，便于桌宠侧做详细诊断；这里只抑制高优先级
+// rate_limit 事件，避免一次短暂抖动连续轰炸桌宠。
+const RETRY_EVENT_THRESHOLD = 5;
 
 // 每个 turn 的状态：sessionKey -> {retries, hadSuccess, hadFailure, lastErrorCode, lastErrorMessage, turnActive}
 const turnStatsMap = new Map();
+
+// sessionKey -> { count, notified }
+// 只统计连续的 llm/retry 限流事件。任意其他 session 事件、连接成功或 Agent
+// 状态变化都会清零，因此不会把不同阶段的重试拼成一次长期故障。
+const retryConnectionStats = new Map();
+
+function resetRetryConnection(sessionKey) {
+  retryConnectionStats.delete(String(sessionKey || "session:unknown"));
+}
+
+function noteRetryConnection(sessionKey) {
+  const key = String(sessionKey || "session:unknown");
+  const current = retryConnectionStats.get(key) || { count: 0, notified: false };
+  current.count += 1;
+  retryConnectionStats.set(key, current);
+  if (current.count !== RETRY_EVENT_THRESHOLD || current.notified) return false;
+  current.notified = true;
+  return true;
+}
 
 // 用于硬失败判定的 session 键：优先 session.id，回退到 event.data.turn
 function sessionKeyOf(_session, event) {
@@ -660,22 +683,33 @@ function extractQuestions(arguments_) {
     .filter((q) => q && q.question);
 }
 
-function writeQuestionRequest(callId, questions) {
-  if (!callId || pendingQuestionCallIds.has(callId)) return; // 已写过，去重
-  pendingQuestionCallIds.add(callId);
+function writeQuestionRequest(callId, questions, sessionId) {
+  const id = String(callId || "");
+  if (!id || pendingQuestionCallIds.has(id)) return; // 已写过，去重
+  pendingQuestionCallIds.add(id);
   // 两个路径（tool/call + mux）都无条件写，由 writeRecordDedup 去重：
   // mux 正常时保留 rpcId 版本（可交互）；mux 不可用/连接失败时兜底写提示
   // （无按钮但至少弹窗出现，不会丢问题）。
-  writeRecordDedup({ event: "question/requested", questions });
+  writeRecordDedup({
+    event: "question/requested",
+    callId: id,
+    sessionId: String(sessionId || ""),
+    questions,
+  });
 }
 
-function resolveQuestion(callId) {
-  if (!callId || !pendingQuestionCallIds.has(callId)) return;
-  pendingQuestionCallIds.delete(callId);
+function resolveQuestion(callId, sessionId) {
+  const id = String(callId || "");
+  if (!id || !pendingQuestionCallIds.has(id)) return;
+  pendingQuestionCallIds.delete(id);
   // 收尾记录不 gate mux：重复的 question/resolved 无害（桌宠幂等），
   // 但若 mux 在问题中途才连上、丢了对应的 resolved 帧，这里必须兜底写，
   // 否则桌宠会卡死在 waiting_question。
-  writeRecord({ event: "question/resolved" });
+  writeRecord({
+    event: "question/resolved",
+    callId: id,
+    sessionId: String(sessionId || ""),
+  });
 }
 
 // ===== interactive mux relay =====
@@ -911,6 +945,9 @@ export function apply(ctx) {
     agent.ctx.effect(() => {
       agentStates.set(agent, "idle");
       const stop = agent.ctx.on("agent/status", ({ status }) => {
+        // running/idle 是连接生命周期的成功/切换信号，不能让上一轮
+        // request-error 重试计数泄漏到下一轮。
+        resetRetryConnection(String(agent.session?.id || agent.id || ""));
         agentStates.set(agent, status === "running" ? "working" : "idle");
         aggregateWrite();
       });
@@ -925,13 +962,18 @@ export function apply(ctx) {
           errorCode: errCode.slice(0, 48),
           errorMessage: truncate(errMsg),
         });
-        // 限流错误也即时写出 rate_limit，供桌宠显示统一文案
-        if (isRateLimitError(errCode, errMsg)) {
+        const retrySessionKey = String(agent.session?.id || agent.id || "");
+        // 只有同一 session 连续累计达到阈值才写高优先级提醒；每次
+        // request-error 仍保留原始记录，便于诊断真实重试过程。
+        if (isRateLimitError(errCode, errMsg) && noteRetryConnection(retrySessionKey)) {
           writeRecord({
             event: "rate_limit",
             errorCode: errCode.slice(0, 48) || "RATE_LIMIT",
             errorMessage: truncate(errMsg),
+            sessionId: retrySessionKey,
           });
+        } else if (!isRateLimitError(errCode, errMsg)) {
+          resetRetryConnection(retrySessionKey);
         }
       });
       return () => {
@@ -957,6 +999,9 @@ export function apply(ctx) {
       const type = event.type;
       const sessionId = sessionIdOf(_session, event);
       const agentName = agentLabelFor(sessionId);
+      // 只有连续的 llm/retry 才属于同一轮连接异常；切换到任意其他
+      // session/event（包括成功结果、工具调用和新的 turn）都开始新一轮统计。
+      if (type !== "llm/retry") resetRetryConnection(sessionKeyOf(_session, event));
 
       // 若此 sessionId 尚未见过，尝试补发 session/meta
       if (!sessionMetaCache.has(sessionId) && _session) {
@@ -989,7 +1034,11 @@ export function apply(ctx) {
             if (block.type === "tool-call" && block.name) {
               if (block.name === QUESTION_TOOL) {
                 // 兜底：assistant/message 的 tool-call 块也带 arguments，去重后补写
-                writeQuestionRequest(block.callId || block.id, extractQuestions(block.arguments));
+                writeQuestionRequest(
+                  block.callId || block.id,
+                  extractQuestions(block.arguments),
+                  sessionId,
+                );
                 continue;
               }
               // 与下方独立 tool/call 事件同一条路径写入（按 callId 去重，避免双写）
@@ -1046,7 +1095,7 @@ export function apply(ctx) {
       if (type === "tool/call") {
         const d = event.data || {};
         if (d.name === QUESTION_TOOL) {
-          writeQuestionRequest(d.callId, extractQuestions(d.arguments));
+          writeQuestionRequest(d.callId, extractQuestions(d.arguments), sessionId);
         }
         // 记录待跟踪调用（覆盖 assistant/message 兜底，去重写入）
         if (d.callId && d.name) {
@@ -1072,7 +1121,7 @@ export function apply(ctx) {
       } else if (type === "tool/result") {
         const d = event.data || {};
         const callId = d.message && d.message.callId;
-        if (callId) resolveQuestion(callId);
+        if (callId) resolveQuestion(callId, sessionId);
         const info = toolResultInfo(d);
         const pending = consumeToolCall(info.callId) || {};
         const tool = pending.tool || "";
@@ -1143,7 +1192,8 @@ export function apply(ctx) {
         // 429 限流即时提醒：不等到 turn/end，LLM 重试时直接写 rate_limit 事件。
         // DSH 实测 errorCode 为 "RATE_LIMIT"（消息形如 "429: ..."），旧实现仅
         // 匹配 code==="429"，导致真实限流永远不触发。改用 isRateLimitError 判定。
-        if (isRateLimitError(errorCode, errorMessage)) {
+        if (isRateLimitError(errorCode, errorMessage) &&
+            noteRetryConnection(sessionKeyOf(_session, event))) {
           writeRecord({
             event: "rate_limit",
             errorCode: errorCode.slice(0, 48) || "RATE_LIMIT",
@@ -1180,6 +1230,7 @@ export function apply(ctx) {
           }
         }
         _endTurnStats(sessionKeyOf(_session, event));
+        resetRetryConnection(sessionKeyOf(_session, event));
       }
 
       // 3) 统一状态联动：转发 DSH 原始 session/event 类型为「简单事件」，
@@ -1217,3 +1268,8 @@ export { inject };
 // Kept private-by-convention: package tests use this surface to exercise the
 // control boundary without starting a DSH host or touching the real queue.
 export const __controlTest = { controlAgent, handleControlRequest, liveAgents, knownSessions };
+export const __retryTest = {
+  threshold: RETRY_EVENT_THRESHOLD,
+  reset: resetRetryConnection,
+  note: noteRetryConnection,
+};

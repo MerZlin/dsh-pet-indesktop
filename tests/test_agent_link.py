@@ -1913,6 +1913,23 @@ class TestApprovalStickyBubble:
         assert mgr.win.hidden_calls == 1
         assert mgr.win._sticky_bubble_active is False
 
+    def test_question_resolved_matches_call_id_with_multiple_pending(self, tmp_path):
+        """并发问题必须按 callId 关闭，不能因无 rpcId 而让整个提醒队列卡住。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {
+            "questions": self.QUESTIONS, "callId": "call-a", "sessionId": "session-a",
+        })
+        mgr._on_question_request("dsh", {
+            "questions": self.QUESTIONS, "callId": "call-b", "sessionId": "session-a",
+        })
+
+        assert len(mgr._pending_interactions) == 2
+        mgr._on_question_resolved("dsh", {"callId": "call-b", "sessionId": "session-a"})
+
+        assert len(mgr._pending_interactions) == 1
+        remaining = next(iter(mgr._pending_interactions.values()))
+        assert remaining["call_id"] == "call-a"
+
     def test_question_no_options_needs_input(self, tmp_path):
         """无 options 的问题（自由输入/确认）：提示需要输入，不出交互按钮。"""
         mgr = self._make_mgr(tmp_path)
