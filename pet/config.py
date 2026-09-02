@@ -559,6 +559,7 @@ class Config:
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
             "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
+            "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
@@ -676,6 +677,7 @@ class Config:
             "chat_bg_crops",
             "chat_ui_style",
             "chat_follow_pet",
+            "system_notifications_enabled",
             "character_aliases",
             "character_profiles",
             "chat_always_on_top",

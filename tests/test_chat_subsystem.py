@@ -2233,3 +2233,48 @@ def test_chat_window_authorization_error_opens_settings(tmp_path):
     finally:
         win.close()
         _app.processEvents()
+
+
+def test_system_notification_respects_disabled_setting(tmp_path):
+    """关闭“系统通知”设置后，即使窗口非活动也不再弹系统通知。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    cfg.set("system_notifications_enabled", False)
+    cfg.save()
+    calls = []
+    win = ChatWindow(
+        cfg,
+        "shenshen",
+        notifier=lambda title, message, on_click=None: calls.append((title, message)),
+    )
+    try:
+        win._show_system_notice("对话完成", "不应弹出")
+        assert calls == []
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_chat_settings_dialog_persists_system_notification_toggle(tmp_path):
+    """AI 设置中的“系统通知”开关应能保存并重新读取。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.settings_dialog import ChatSettingsDialog
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    dlg = ChatSettingsDialog(cfg)
+    try:
+        assert dlg.system_notify_check.isChecked() is True
+        dlg.system_notify_check.setChecked(False)
+        dlg.save()
+        assert Config(tmp_path).get("system_notifications_enabled") is False
+    finally:
+        dlg.close()
+        _app.processEvents()

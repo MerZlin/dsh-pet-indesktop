@@ -1909,7 +1909,9 @@ class ChatWindow(QDialog):
 
     def _show_system_notice(self, title: str, message: str, *, on_click=None) -> None:
         """仅在聊天窗口不是当前活动窗口时弹系统通知；点击默认跳回本窗口。"""
-        if self._system_notifier is None or self.isActiveWindow():
+        if (self._system_notifier is None
+                or not bool(self.config.get("system_notifications_enabled", True))
+                or self.isActiveWindow()):
             return
         try:
             self._system_notifier(title, message, on_click=on_click or self._focus_chat)

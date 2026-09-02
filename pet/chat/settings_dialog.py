@@ -119,11 +119,15 @@ class ChatSettingsDialog(QDialog):
         self.bg_mode.currentIndexChanged.connect(lambda i: bg_row.setVisible(i == len(self._bg_keys) + 1))
         self.skip_ssl = QCheckBox('跳过 SSL 证书验证（开着代理/梯子、本地网关或自签名证书时勾选）')
         self.skip_ssl.setChecked(not p.verify_ssl)
+        self.system_notify_check = QCheckBox('对话完成 / 生成失败 / 需要授权时，在桌面右下角弹系统通知')
+        self.system_notify_check.setChecked(bool(config.get("system_notifications_enabled", True)))
 
         form.insertRow(0, 'API 列表', provider_row)
         for label, w in [('Provider 名称', self.name), ('API 地址', self.url),
                          ('模型', self.model), ('', self.vsame), ('视觉模型', self.vmodel), ('视觉 API 地址', self.vurl), ('视觉 API Key', self.vkey),
-                         ('API Key', self.key), ('', self.key_hint), ('System Prompt', self.prompt),
+                         ('API Key', self.key), ('', self.key_hint),
+                         ('系统通知', self.system_notify_check),
+                         ('System Prompt', self.prompt),
                          ('聊天背景', bgmode_row), ('', bg_row),
                          ('超时（秒）', self.timeout), ('Temperature', self.temp),
                          ('Max Tokens', self.tokens)]:
@@ -425,6 +429,7 @@ class ChatSettingsDialog(QDialog):
         i = self.bg_mode.currentIndex()
         bg_val = '' if i == 0 else ('builtin:' + self._bg_keys[i - 1] if i <= len(self._bg_keys) else self.bg.text().strip())
         self.config.set('chat_background', bg_val)
+        self.config.set('system_notifications_enabled', self.system_notify_check.isChecked())
         self.config.set_chat_settings(self.settings)
         if not self.config.save():
             QMessageBox.warning(self, '保存失败', '配置未能写入磁盘，改动可能在重启后丢失。\n\n配置路径：' + str(self.config.path))

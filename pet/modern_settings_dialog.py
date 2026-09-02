@@ -792,6 +792,8 @@ class _AiSettingsPage(QWidget):
         self.tokens.setValue(provider.max_tokens)
         self.skip_ssl = ToggleSwitch()
         self.skip_ssl.setChecked(not provider.verify_ssl)
+        self.system_notify_check = ToggleSwitch()
+        self.system_notify_check.setChecked(bool(config.get("system_notifications_enabled", True)))
         self.chat_ui_style = ModernSelect(self, width=190)
         self.chat_ui_style.addItem("肥鱼版 DeepSeek", "modern")
         self.chat_ui_style.addItem("肥鱼牌小手机", "classic")
@@ -868,6 +870,13 @@ class _AiSettingsPage(QWidget):
             SettingRow("api_key", "API Key", "凭据优先保存到系统钥匙串。", self.key),
             SettingRow("system_prompt", "System Prompt", "定义桌宠对话时的身份、语气和行为。", self.prompt, stacked=True),
             SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
+        ], self))
+        root.addWidget(SettingsSection("系统通知", [
+            SettingRow(
+                "system_notifications_enabled", "系统通知",
+                "对话完成 / 生成失败 / 需要授权时，即使切走窗口也会在桌面右下角提醒。",
+                self.system_notify_check,
+            ),
         ], self))
         vision_rows = [
             SettingRow("vision_same", "视觉模型复用聊天模型", "开启后自动选择兼容的视觉模型，用于“看看屏幕”。", self.vision_same),
@@ -1219,6 +1228,7 @@ class _AiSettingsPage(QWidget):
         self.config.set("modern_chat_background_opacity", self._background_display["modern"]["opacity"])
         self.config.set("modern_chat_background_fill", self._background_display["modern"]["fill"])
         self.config.set("modern_chat_card_opacity", self.message_card_opacity.value())
+        self.config.set("system_notifications_enabled", self.system_notify_check.isChecked())
         self.config.set_chat_settings(self.settings)
 
 
