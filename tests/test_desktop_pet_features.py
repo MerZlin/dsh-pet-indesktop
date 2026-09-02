@@ -1558,8 +1558,10 @@ def test_legacy_config_value_dispatches_legacy_layout(monkeypatch):
     window_mod._populate_context_menu(menu, Pet())
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
     # legacy 布局：无图标、无现代专属入口（看看屏幕/更新与帮助/生小肥鱼层级不同）
+    # Pet 无 on_open_chat，属于纯桌宠版：不显示 DeepSeek Harness，保留网页版
     assert labels.index("生小肥鱼") == labels.index("开机自启") + 1
-    assert labels.index("打开网页版 DeepSeek") == labels.index("启动 DeepSeek Harness") + 1
+    assert "启动 DeepSeek Harness" not in labels
+    assert "打开网页版 DeepSeek" in labels
     assert menu.styleSheet() == ""
     icon_actions = [action.text() for action in menu.actions() if not action.icon().isNull()]
     assert icon_actions == []
