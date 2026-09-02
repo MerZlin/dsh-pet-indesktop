@@ -18,6 +18,11 @@ WebM-backed clip library（webm 主路线）。
   素材源时间线帧号（显示帧索引，= elapsed video time × fps）；播放计数
   _frame_index 是 1-based 主线程已消费帧数。降帧相位与末帧判断必须用
   显示帧索引，绝不能使用消费计数（队列满丢帧后两者不再相等）；
+- 解码节流（批11，闲置降帧联动）：set_decode_throttle(ratio) 把消费端
+  QTimer interval ×ratio，同时 reader 入队由「超时丢帧」切为「有界阻塞
+  重试」——队列写满后 ffmpeg 的 stdout 管道写满、解码进程阻塞在 write()，
+  解码速率随消费端联动下降到 ≈原始 fps/ratio。非闲置（ratio=1）路径
+  与历史行为逐位一致（超时丢帧 + 全速解码）；
 - 所有 Qt GUI 操作只发生在主线程。
 - 同一 clip 最多 1 个 active reader + 有上限的退役 reader（_MAX_RETIRED_READERS）：
   stop() 主动 terminate 底层 ffmpeg 进程（_PopenCapture 捕获句柄），退役池超上限时
@@ -541,6 +546,15 @@ class WebMClip(QObject):
         self._reader_ready = threading.Event()
         # 退役 reader 池（有硬上限）：thread + 其 ffmpeg 进程句柄的记录列表。
         self._retired: list[_Reader] = []
+        # 解码节流比率（闲置降帧联动，批11）：1 = 不节流（非闲置路径零变化）；
+        # >1 时消费端 QTimer interval ×ratio、reader 按目标呈现节奏阻塞
+        # （q.put 有界重试不丢帧）——管道写满让 ffmpeg 阻塞在 write()，
+        # 解码速率随消费端联动下降 ≈ 原始帧率/ratio。比率由窗口层经
+        # set_decode_throttle 推送（可配置接口，默认跟随闲置降帧除数）。
+        # 主线程写、reader 线程读（int 赋值在 CPython 下原子，GIL 保证，
+        # 与 _generation 的跨线程读取同一模式）。必须在 _timer 初始化前
+        # 赋值（_timer_interval 会读它）。
+        self._decode_throttle_divisor = 1
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(self._timer_interval())
@@ -865,9 +879,15 @@ class WebMClip(QObject):
         self._ensure_meta()
 
     def _timer_interval(self) -> int:
-        if self._fps > 0:
-            return max(1, int(round(1000 / (self._fps * self.playback_speed))))
-        return max(1, int(round(catalog.FRAME_MS / self.playback_speed)))
+        base = (
+            max(1, int(round(1000 / (self._fps * self.playback_speed))))
+            if self._fps > 0
+            else max(1, int(round(catalog.FRAME_MS / self.playback_speed)))
+        )
+        # 解码节流（批11）：interval ×ratio —— 消费端降速为
+        # fps/ratio，配合 reader 的阻塞入队（背压）让 ffmpeg 解码速率
+        # 联动下降到同一节奏。ratio=1（默认/非闲置）时与旧行为逐位一致。
+        return max(1, base * self._decode_throttle_divisor)
 
     def frameCount(self) -> int:
         if self._frame_count <= 0:
@@ -897,6 +917,28 @@ class WebMClip(QObject):
         self.playback_speed = max(0.1, float(speed))
         # _switch() 在 movie.start() 之前设置速率，不能只在 QTimer 已启动时更新。
         # 否则每个新 WebM 动画都会继续使用默认的 1x interval。
+        self._timer.setInterval(self._timer_interval())
+
+    @property
+    def decode_throttle_divisor(self) -> int:
+        """当前解码节流比率（1 = 不节流）。窗口层读取以协调发布语义。"""
+        return self._decode_throttle_divisor
+
+    def set_decode_throttle(self, divisor: int) -> None:
+        """设置解码节流比率（闲置降帧联动，批11；主线程调用）。
+
+        预留接口：比率可配，默认由窗口层按闲置降帧除数（IDLE_LOW_FPS_
+        DIVISOR = 2）推送，不硬编码。>1 时：
+        - 消费端：QTimer interval ×divisor（呈现节奏 = 原始 fps/divisor）；
+        - 解码端：reader 入队改阻塞（背压），ffmpeg 解码速率随消费端联动
+          下降（队列写满 → ffmpeg 阻塞在 write()）。
+        ratio=1 恢复全速——非闲置路径调用此方法为幂等 no-op，行为零变化。
+        幂等：比率未变时不做任何事（窗口层每帧同步调用，成本仅一次 int 比较）。
+        """
+        divisor = max(1, int(divisor))
+        if divisor == self._decode_throttle_divisor:
+            return
+        self._decode_throttle_divisor = divisor
         self._timer.setInterval(self._timer_interval())
 
     def start(self) -> bool:
@@ -1409,6 +1451,7 @@ class WebMClip(QObject):
                 gen,
                 q,
                 lambda: stop_evt.is_set() or self._generation != generation,
+                throttled=lambda: self._decode_throttle_divisor > 1,
             )
             # 正常播完时放入结束标记。主线程可能正忙（队列满、帧被丢弃），
             # 必须循环重试直到放入或收到停止信号；否则“最后一帧被丢弃且
@@ -1503,7 +1546,8 @@ class WebMClip(QObject):
                 continue
 
     @staticmethod
-    def _stamp_source_indices(frames, q, is_stopped, timeout: float = 0.2) -> None:
+    def _stamp_source_indices(frames, q, is_stopped, timeout: float = 0.2,
+                              throttled=None) -> None:
         """reader 线程把解码帧逐帧打上素材源时间线帧号后入队。
 
         队列项 = (RGBA 字节, 源时间线 0-based 帧号)。返回帧号即
@@ -1512,6 +1556,16 @@ class WebMClip(QObject):
         槽位，保证主线程拿到的显示帧索引在丢帧后依然锚定素材时间线
         （消费计数在丢帧后不再等于源帧号，绝不能用作降帧相位/末帧判断）。
 
+        throttled（批11）：可调用对象，每次入队前求值；返回 True 表示当前
+        解码节流生效（闲置降帧激活）。节流路径 reader **绝不超时丢帧**，
+        而是按目标呈现节奏阻塞：q.put 有界重试同一帧直到成功或收到停止
+        信号——队列写满即 reader 停步、ffmpeg 的 stdout 管道写满、解码进程
+        阻塞在 write()，解码速率随消费端联动下降到目标节奏（≈原始帧率/
+        ratio）。停止检查夹在每次重试之间（有界，_reader 的 finally 仍保证
+        杀进程与 gen.close()，绝不让 reader 永久空转）。节流时源帧号只在
+        入队成功后推进——被阻塞重试的帧绝不丢失、绝不虚占时间线槽位。
+        throttled=None（默认）＝永不节流：与历史行为逐位一致（超时丢帧）。
+
         抽取为独立方法便于单元测试：不依赖 ffmpeg/Qt，直接验证
         「丢帧后帧号连续性与停止语义」（P1 复审）。
         """
@@ -1519,6 +1573,16 @@ class WebMClip(QObject):
         for frame in frames:
             if is_stopped():
                 break
+            if throttled is not None and throttled():
+                # 节流路径：阻塞入队（背压），不丢帧、不虚推进源帧号。
+                while not is_stopped():
+                    try:
+                        q.put((frame, src_idx), timeout=timeout)
+                        src_idx += 1
+                        break
+                    except queue.Full:
+                        continue  # 队列仍满：同一帧继续阻塞重试
+                continue
             try:
                 q.put((frame, src_idx), timeout=timeout)
             except queue.Full:

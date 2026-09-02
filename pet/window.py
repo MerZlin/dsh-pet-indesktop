@@ -131,13 +131,22 @@ COLLISION_CONTACT_DV_FLOOR = 50.0
 # 每 tick 只消费最新目标做 self.move，丢弃中间过期位置。
 DRAG_MOVE_COALESCE_MS = 8
 
-# ---- 闲置降帧（性能调研 §4.3）----
+# ---- 闲置降帧（性能调研 §4.3；批11 联动解码节流）----
 # 用户长时间不碰桌宠（无鼠标命中/点击/拖拽/菜单/联动事件）且窗口可见时，
-# 动画按时间线隔帧呈现：24fps 素材播 12fps 效果，动画时长不变。
+# 动画降帧呈现。批11 前：只省显示不省解码（WebMClip 全速解码 + 窗口按
+# 时间线跳帧，24fps 素材播 12fps 效果，动画时长不变）。批11 起：闲置降帧
+# 激活时 WebMClip 的消费端 QTimer interval ×divisor、reader 入队由超时丢帧
+# 改为有界阻塞（背压）——ffmpeg 解码速率联动下降到 ≈半帧率，被旧过滤器
+# 丢弃的帧在 reader 侧就未解码，clip 侧 QImage/QPixmap 零构造（浪费②）。
+# 节流路径呈现每帧消费帧（12fps，帧号仍锚定源时间线），时间线推进速率随
+# 解码减半（动画时长 ×divisor）——这是解码减半的必然代价。
 # 默认闲置阈值 30 秒（配置项 idle_low_fps_threshold）；开关默认关（灰度）。
 IDLE_LOW_FPS_DEFAULT_THRESHOLD = 30.0
 # 降帧除数：每 N 帧发布 1 帧（2 = 半帧率）。按时间线跳帧（elapsed time 算
 # 目标帧），绝不允许改播放速率/QTimer interval 让动画时间变慢/变快。
+# 批11：该除数同时是解码节流比率（WebMClip 消费/解码按 1/N 降速）——
+# 节流比率可配的预留接口：未来单独配置节流比率时替换 _sync_movie_throttle
+# 里的 divisor 来源即可，不硬编码。
 IDLE_LOW_FPS_DIVISOR = 2
 
 # ---- 帧缓存素材内容弱指纹（P2）----
@@ -686,6 +695,9 @@ class PetWindow(QWidget):
         - 未到达窗口或被窗口忽略的输入。
         """
         self._last_activity_ts = self._clock()
+        # 任何交互立刻回满帧率：同步把解码节流关掉（幂等，非 WebMClip /
+        # 本就未节流时为 no-op），不等下一帧 _on_frame 才恢复（响应更快）。
+        self._sync_movie_throttle(False)
 
     def _agent_busy(self) -> bool:
         """Agent 联动忙碌（dsh 等正在干活）视为活跃，不降帧。"""
@@ -719,10 +731,42 @@ class PetWindow(QWidget):
         time × fps；由播放器按源时间线打标，reader 队列满丢帧后仍一致，
         与主线程消费序号无关——P1 复审）。目标呈现帧 =
         floor(elapsed×fps/divisor)×divisor，即帧号能被 divisor 整除的帧才
-        发布（24fps 素材 → 12fps 效果）。动画时间线照常推进（movie 全速
-        解码），动画时长不变——不能靠改播放速率让时间变慢。
+        发布（24fps 素材 → 12fps 效果）。
+
+        批11 适用范围收窄：本判定只用于**解码未联动节流**的播放器
+        （GifClip、测试替身等不支持 set_decode_throttle 的 movie）——
+        它们仍全速解码、靠这里跳帧省显示。WebMClip 的闲置降帧走
+        _sync_movie_throttle 联动（消费端 interval ×divisor + reader 背压
+        阻塞，解码速率 ≈半帧率）：消费端已按 divisor 降速，每帧都是目标
+        呈现帧，不再经过本判定（否则会把已减半的流再砍一半成 6fps）。
         """
         return int(frame_index) % max(1, int(divisor)) == 0
+
+    def _movie_decode_throttled(self) -> bool:
+        """当前 movie 的解码节流是否生效（WebMClip 联动后 divisor > 1）。"""
+        movie = self.movie
+        if movie is None:
+            return False
+        return getattr(movie, 'decode_throttle_divisor', 1) > 1
+
+    def _sync_movie_throttle(self, reduced: bool) -> None:
+        """闲置降帧 → 解码节流联动（批11）：把节流比率推到当前 movie。
+
+        reduced=True 时推 IDLE_LOW_FPS_DIVISOR（默认 2，可配接口——
+        未来若给节流比率单独配置，改这里一处即可，不硬编码）；False 推 1
+        恢复全速。只对暴露 set_decode_throttle 的播放器（WebMClip）生效，
+        GifClip / 测试替身自动跳过；比率未变时幂等 no-op（每帧同步调用
+        的成本仅一次 int 比较）。必须在 GUI 线程调用（触碰 movie 的 QTimer）。
+        """
+        movie = self.movie
+        if movie is None:
+            return
+        setter = getattr(movie, 'set_decode_throttle', None)
+        if setter is None:
+            return
+        divisor = IDLE_LOW_FPS_DIVISOR if reduced else 1
+        if getattr(movie, 'decode_throttle_divisor', 1) != divisor:
+            setter(divisor)
 
     def _arm_screen_restore_retry(self) -> None:
         """目标副屏暂未就绪：启动 5s 轮询 + screenAdded 监听，等它上线。"""
@@ -1507,6 +1551,11 @@ class PetWindow(QWidget):
         movie = self.lib.movie(name)
         self._connect_movie(name, movie)
         self.movie = movie
+        # 批11：切换动画时按当前门控同步解码节流（在 start() 之前——start
+        # 里会用 _timer_interval 重设 QTimer interval）。clip 实例被库缓存
+        # 复用，上次播放遗留的 divisor 必须在此对齐当前门控，否则切到闲置
+        # 动画时可能以错误的节流状态开播最多一帧。
+        self._sync_movie_throttle(self._idle_reduction_active())
         movie.stop()
         movie.jumpToFrame(0)
         if hasattr(movie, 'set_playback_speed'):
@@ -1585,6 +1634,8 @@ class PetWindow(QWidget):
         self._collision_local_bounds = None
         self._ended_fired = False
         self.movie = movie
+        # 批11：idle 回退同样按当前门控对齐解码节流（见 _switch 同名调用）。
+        self._sync_movie_throttle(self._idle_reduction_active())
         movie.stop()
         movie.jumpToFrame(0)
         if hasattr(movie, 'set_playback_speed'):
@@ -1705,10 +1756,19 @@ class PetWindow(QWidget):
         if name != self.anim or self.movie is None:
             return
         is_last = n >= self.lib.frames(name) - 1  # n 是 0-based 源帧号：末帧判定不提前
-        if self._idle_reduction_active() and not self._is_reduced_publish_frame(n):
-            # 闲置降帧：按时间线跳帧呈现（24fps 素材 → 12fps 效果），本帧
-            # 不发布——命中测试继续使用最近一次已发布的 alpha 图，不逐帧重建；
-            # 动画时间线照常推进（movie 全速解码），动画时长不变。
+        reduced = self._idle_reduction_active()
+        # 批11 解码节流联动：把当前门控状态推给 movie（WebMClip 消费端
+        # interval ×divisor + reader 背压阻塞，解码速率 ≈半帧率）。推送先于
+        # 发布判定：WebMClip 在门控生效的那一帧起即按节流语义发布（见下）。
+        self._sync_movie_throttle(reduced)
+        if (reduced and not self._movie_decode_throttled()
+                and not self._is_reduced_publish_frame(n)):
+            # 闲置降帧（解码未联动节流的播放器：GifClip / 测试替身）：
+            # 按时间线跳帧呈现（24fps 素材 → 12fps 效果），本帧不发布——
+            # 命中测试继续使用最近一次已发布的 alpha 图，不逐帧重建。
+            # WebMClip 节流路径消费端已按 divisor 降速、每帧都是目标呈现
+            # 帧，不经过本判定（否则会把已减半的流再砍一半成 6fps）；
+            # 帧号锚定（显示帧索引 = 源时间线）在两路径都不变。
             # 末帧的动画链推进绝不能因跳帧而丢（否则停在最后一帧）。
             if is_last and not self._ended_fired:
                 self._ended_fired = True

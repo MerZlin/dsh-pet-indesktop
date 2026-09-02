@@ -12,6 +12,12 @@
   0-based 素材源时间线帧号（显示帧索引），与 1-based 播放计数分离，
   reader 队列满丢帧后显示帧索引仍锚定素材时间线（P1 复审）；
 - 设置页开关默认关（灰度）。
+- 批11 解码节流联动：闲置降帧激活时 WebMClip 消费端 interval ×divisor
+  （消费速率减半）+ reader 入队由超时丢帧改为有界阻塞（背压不丢帧）——
+  ffmpeg 解码速率随消费端联动下降到 ≈半帧率；节流比率可配（默认跟随
+  IDLE_LOW_FPS_DIVISOR=2）；非闲置路径（divisor=1）行为逐位不变；
+  帧号锚定语义在节流路径同样保持（显示帧索引 = 源时间线帧号）。
+  全部用假时钟/计数断言，不用 sleep 计时。
 """
 from __future__ import annotations
 
@@ -27,7 +33,7 @@ from pet.agent_link import AgentLinkManager
 from pet.config import Config
 from pet.modern_settings_dialog import ModernSettingsDialog
 from pet.webm_clip import WebMClip
-from pet.window import PetWindow
+from pet.window import IDLE_LOW_FPS_DIVISOR, PetWindow
 
 NAMES = [
     catalog.IDLE,
@@ -179,6 +185,17 @@ class _FlakyQueue:
         if self._drop_every > 0 and self._puts % self._drop_every == 0:
             raise queue.Full
         self.items.append(item)
+
+
+class _ThrottleFakeClip(FakeClip):
+    """带解码节流接口的假播放器：记录窗口层推来的节流比率（联动验证）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.decode_throttle_divisor = 1
+
+    def set_decode_throttle(self, divisor: int) -> None:
+        self.decode_throttle_divisor = max(1, int(divisor))
 
 
 # ============================================================================
@@ -669,6 +686,259 @@ class TestSettings:
             cfg.set("idle_low_fps_enabled", False)
             win.refresh_pet_settings()
             assert win.idle_low_fps_enabled is False
+        finally:
+            win.close()
+            app.processEvents()
+
+
+# ============================================================================
+# 6. 批11 解码节流：闲置降帧激活时消费/解码速率确实下降（假时钟/计数断言）
+# ============================================================================
+class TestDecodeThrottle:
+    """WebMClip 侧：set_decode_throttle 把消费端 interval ×ratio，reader
+    入队由超时丢帧改为有界阻塞（背压）——解码速率随消费端联动下降。"""
+
+    def test_consumer_interval_halves_when_throttled(self, app, tmp_path):
+        clip = WebMClip(str(tmp_path / "x.webm"))
+        clip._fps = 24.0
+        clip.playback_speed = 1.0
+        try:
+            assert clip.decode_throttle_divisor == 1
+            assert clip._timer_interval() == 42  # 24fps → 42ms
+            clip.set_decode_throttle(2)
+            assert clip.decode_throttle_divisor == 2
+            assert clip._timer_interval() == 84  # 消费速率减半（≈12fps）
+            clip.set_decode_throttle(1)
+            assert clip._timer_interval() == 42  # 恢复全速
+        finally:
+            clip.cleanup()
+            app.processEvents()
+
+    def test_throttle_ratio_is_configurable(self, app, tmp_path):
+        # 预留接口：比率可配，不硬编码（默认跟随闲置降帧除数 2）
+        clip = WebMClip(str(tmp_path / "x.webm"))
+        clip._fps = 24.0
+        try:
+            assert IDLE_LOW_FPS_DIVISOR == 2
+            clip.set_decode_throttle(3)
+            assert clip._timer_interval() == 126  # 42 × 3
+            clip.set_decode_throttle(0)  # 非法值钳制到 1（不节流）
+            assert clip.decode_throttle_divisor == 1
+            assert clip._timer_interval() == 42
+        finally:
+            clip.cleanup()
+            app.processEvents()
+
+    def test_set_decode_throttle_is_idempotent_noop(self, app, tmp_path):
+        clip = WebMClip(str(tmp_path / "x.webm"))
+        clip._fps = 24.0
+        try:
+            interval = clip._timer_interval()
+            clip.set_decode_throttle(1)  # 与现状相同：no-op
+            assert clip._timer_interval() == interval
+            clip.set_decode_throttle(2)
+            throttled = clip._timer_interval()
+            clip.set_decode_throttle(2)  # 重复推送：no-op
+            assert clip._timer_interval() == throttled
+        finally:
+            clip.cleanup()
+            app.processEvents()
+
+    def test_throttled_reader_blocks_never_drops(self):
+        # 节流路径：队列满时 reader 有界重试同一帧（背压，不丢帧、不虚推进
+        # 源帧号）——ffmpeg 解码速率随消费端联动下降的 reader 侧机制。
+        attempts = {"n": 0}
+
+        class _FullThenRoom:
+            def __init__(self):
+                self.items = []
+
+            def put(self, item, timeout=0):
+                attempts["n"] += 1
+                if attempts["n"] < 3:
+                    raise queue.Full  # 前两次队列满：必须阻塞重试同一帧
+                self.items.append(item)
+
+        q = _FullThenRoom()
+        WebMClip._stamp_source_indices(
+            iter([b"f0", b"f1"]), q, lambda: False, throttled=lambda: True,
+        )
+        # f0 试 3 次入队成功（前两次阻塞重试），f1 一次成功；源帧号连续
+        assert [item[0] for item in q.items] == [b"f0", b"f1"]
+        assert [item[1] for item in q.items] == [0, 1]
+        assert attempts["n"] == 4
+
+    def test_throttled_reader_stops_while_queue_full(self):
+        # 队列恒满 + 收到停止信号：reader 必须尽快退出（不悬挂、不丢帧语义
+        # 破坏）——停止检查夹在每次有界重试之间。
+        class _AlwaysFull:
+            def put(self, item, timeout=0):
+                raise queue.Full
+
+        checks = {"n": 0}
+
+        def is_stopped():
+            checks["n"] += 1
+            return checks["n"] >= 3  # 首次 False 进入入队，随后停止
+
+        WebMClip._stamp_source_indices(
+            iter([b"f0"]), _AlwaysFull(), is_stopped, throttled=lambda: True,
+        )
+        assert checks["n"] >= 3  # 至少尝试过入队并检测到停止（无死等）
+
+    def test_unthrottled_reader_keeps_drop_semantics(self):
+        # throttled=None（默认/非闲置路径）：超时丢帧 + 源帧号照常推进
+        # ——与历史行为逐位一致（防回归护栏）。
+        q = _FlakyQueue(drop_every=2)
+        WebMClip._stamp_source_indices(
+            iter([b"f0", b"f1", b"f2", b"f3"]),
+            q,
+            lambda: False,
+        )
+        assert [item[0] for item in q.items] == [b"f0", b"f2"]
+        assert [item[1] for item in q.items] == [0, 2]  # 丢帧后源帧号照常推进
+
+
+# ============================================================================
+# 6b. 批11 窗口联动：门控激活推节流、交互立即回全速、节流路径全发布
+# ============================================================================
+class TestWindowDecodeThrottleLinkage:
+    """PetWindow 侧：_idle_reduction_active 路径把节流比率推给 movie；节流
+    生效时每帧都是目标呈现帧（不再隔帧跳——否则 12fps 流被砍成 6fps）。"""
+
+    def test_reduced_gate_pushes_throttle_and_activity_restores(self, app, tmp_path):
+        cfg = _make_config(tmp_path, enabled=True, threshold=0.0)
+        clock = FakeClock()
+        win = PetWindow(FakeLibrary(), cfg, clock=clock)
+        win.show()
+        app.processEvents()
+        try:
+            clock.advance(60)
+            assert win._idle_reduction_active() is True
+            throttled = _ThrottleFakeClip()
+            win.movie = throttled
+            anim = win.anim
+            win._on_frame(anim, 0)
+            # 门控激活 → 推送节流比率（默认跟随闲置降帧除数 2）
+            assert throttled.decode_throttle_divisor == IDLE_LOW_FPS_DIVISOR
+            assert win._movie_decode_throttled() is True
+            # 任何交互 → 立即恢复全速（mark_activity 同步推送 divisor=1）
+            win.mark_activity()
+            assert throttled.decode_throttle_divisor == 1
+            assert win._movie_decode_throttled() is False
+        finally:
+            win.close()
+            app.processEvents()
+
+    def test_throttled_movie_publishes_every_frame_when_reduced(self, app, tmp_path):
+        # 节流路径：消费端已按 divisor 降速，每帧都是目标呈现帧——奇数帧
+        # 也必须发布（若沿用隔帧过滤器会把 12fps 流砍成 6fps）。
+        cfg = _make_config(tmp_path, enabled=True, threshold=0.0)
+        clock = FakeClock()
+        lib = FakeLibrary(frame_count=10)
+        win = PetWindow(lib, cfg, clock=clock)
+        win.show()
+        app.processEvents()
+        try:
+            clock.advance(60)
+            assert win._idle_reduction_active() is True
+            throttled = _ThrottleFakeClip()
+            win.movie = throttled
+            calls = []
+            orig = win._rebuild_frame
+            win._rebuild_frame = lambda: (calls.append(1), orig())[1]
+            anim = win.anim
+            win._on_frame(anim, 0)
+            assert len(calls) == 1  # 偶数帧发布
+            win._on_frame(anim, 1)
+            assert len(calls) == 2  # 奇数帧：节流路径照常发布
+            win._on_frame(anim, 2)
+            assert len(calls) == 3
+            win._on_frame(anim, 3)
+            assert len(calls) == 4
+        finally:
+            win.close()
+            app.processEvents()
+
+    def test_unthrottled_movie_keeps_timeline_skip_when_reduced(self, app, tmp_path):
+        # 未联动节流的播放器（GifClip/测试替身）：保持原隔帧发布语义——
+        # 批11 只改 WebMClip 节流路径，非节流路径行为逐位不变。
+        cfg = _make_config(tmp_path, enabled=True, threshold=0.0)
+        clock = FakeClock()
+        lib = FakeLibrary(frame_count=10)
+        win = PetWindow(lib, cfg, clock=clock)
+        win.show()
+        app.processEvents()
+        try:
+            clock.advance(60)
+            # FakeClip 无 set_decode_throttle：门控激活也不推送、不节流
+            assert not hasattr(win.movie, "set_decode_throttle")
+            assert win._movie_decode_throttled() is False
+            calls = []
+            orig = win._rebuild_frame
+            win._rebuild_frame = lambda: (calls.append(1), orig())[1]
+            anim = win.anim
+            win._on_frame(anim, 0)
+            assert len(calls) == 1  # 偶数帧发布
+            win._on_frame(anim, 1)
+            assert len(calls) == 1  # 奇数帧仍按时间线跳帧（原语义）
+            win._on_frame(anim, 2)
+            assert len(calls) == 2
+            win._on_frame(anim, 3)
+            assert len(calls) == 2
+        finally:
+            win.close()
+            app.processEvents()
+
+    def test_gate_active_halves_real_webm_consumer_interval(self, app, tmp_path):
+        # 端到端（假时钟，零 sleep）：门控激活 → 真实 WebMClip 收到
+        # divisor=2 → 消费 QTimer interval 减半（24fps→12fps 消费节奏）；
+        # 任何交互 → 立即恢复全速。消费速率下降由 interval 断言直接锁定。
+        cfg = _make_config(tmp_path, enabled=True, threshold=0.0)
+        clock = FakeClock()
+        lib = FakeLibrary(frame_count=10)
+        win = PetWindow(lib, cfg, clock=clock)
+        clip = WebMClip(str(tmp_path / "x.webm"))
+        clip._fps = 24.0
+        clip.playback_speed = 1.0
+        win.show()
+        app.processEvents()
+        try:
+            win.movie = clip
+            anim = win.anim
+            clock.advance(60)
+            assert win._idle_reduction_active() is True
+            win._on_frame(anim, 0)
+            assert clip.decode_throttle_divisor == IDLE_LOW_FPS_DIVISOR
+            assert clip._timer_interval() == 84  # 消费速率减半（42→84ms）
+            win.mark_activity()
+            assert win._idle_reduction_active() is False
+            assert clip._timer_interval() == 42  # 交互后恢复全速
+        finally:
+            win.close()
+            clip.cleanup()
+            app.processEvents()
+
+    def test_switch_syncs_throttle_from_gate(self, app, tmp_path):
+        # 切换动画时按当前门控对齐节流（clip 实例被库缓存复用，防止旧 divisor
+        # 残留导致以错误节流状态开播）。
+        cfg = _make_config(tmp_path, enabled=True, threshold=0.0)
+        clock = FakeClock()
+        lib = FakeLibrary(frame_count=10)
+        win = PetWindow(lib, cfg, clock=clock)
+        win.show()
+        app.processEvents()
+        try:
+            clock.advance(60)
+            assert win._idle_reduction_active() is True
+            target = _ThrottleFakeClip()
+            lib._clips[catalog.TURN] = target
+            ok = win.switch_clip(catalog.TURN)
+            assert ok is True
+            assert win.movie is target
+            assert target.decode_throttle_divisor == IDLE_LOW_FPS_DIVISOR
+            win.mark_activity()
+            assert target.decode_throttle_divisor == 1
         finally:
             win.close()
             app.processEvents()
