@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
@@ -123,3 +124,38 @@ def test_dynamic_island_resizes_when_info_changes(tmp_path: Path):
     island.hide()
     island.deleteLater()
     app.processEvents()
+
+
+def test_dynamic_island_balance_tier_color_syncs_to_setting(tmp_path: Path, monkeypatch):
+    """灵动岛余额峰谷信息槽跟随设置的颜色开关显示高峰/低谷颜色。"""
+    import pet.balance as balance_mod
+    from pet.dynamic_island import DynamicIsland
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda: "peak")
+    cfg = _config(tmp_path)
+    cfg.set("dynamic_island", {
+        "enabled": True,
+        "show_icon": True,
+        "show_name": True,
+        "show_info": True,
+        "info_mode": "balance_tier",
+        "custom_text": "",
+        "show_status": True,
+        "style": "dark",
+        "x": 100,
+        "y": 100,
+    })
+    cfg.set("balance_tier_color_enabled", True)
+    island = DynamicIsland(cfg)
+    try:
+        fallback = QColor(160, 170, 190)
+        assert island._info_color(fallback).name() == "#e5484d"
+
+        cfg.set("balance_tier_color_enabled", False)
+        island.refresh_from_config()
+        assert island._info_color(fallback) is fallback
+    finally:
+        island.hide()
+        island.deleteLater()
+        app.processEvents()
