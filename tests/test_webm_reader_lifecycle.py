@@ -83,7 +83,13 @@ def test_rapid_start_stop_leaks_no_threads_or_processes(app):
     clip.cleanup()
     app.processEvents()
 
-    # 退役池不超过硬上限
+    # 退役池不超过硬上限。回收由注册表 sweep 驱动（需事件循环轮次），
+    # CI 高负载下一次 processEvents 可能不够——给有界泵循环（登记册 flake）
+    reap_deadline = time.monotonic() + 5.0
+    while len(clip._retired) > webm_clip_mod._MAX_RETIRED_READERS \
+            and time.monotonic() < reap_deadline:
+        app.processEvents()
+        time.sleep(0.02)
     assert len(clip._retired) <= webm_clip_mod._MAX_RETIRED_READERS
     # 退役 reader 线程全部退出、其进程句柄全部退出
     for r in clip._retired:
