@@ -43,6 +43,7 @@ from PySide6.QtWidgets import QApplication, QInputDialog, QMenu, QToolTip, QWidg
 
 from . import autostart as autostart_mod
 from . import catalog
+from . import perfstats
 from .config import (
     DEFAULT_SELF_TALK_BUBBLE_STYLE,
     DEFAULT_SELF_TALK_DURATION_SECONDS,
@@ -1874,6 +1875,9 @@ class PetWindow(QWidget):
         """
         if self.movie is None:
             return
+        if perfstats.ENABLED:
+            _rf_t0 = perfstats.clock()
+            perfstats.note('rebuild.calls')
         scr = self._screen_available()
         dpr = scr.devicePixelRatio() if scr is not None else 1.0
         # 注意：_last_frame_dpr 只在重建成功后记账（命中缓存也算成功）；
@@ -1891,6 +1895,9 @@ class PetWindow(QWidget):
         cache_key = self._frame_cache_key(frame_n, dpr)
         key = (id(self.movie), cache_key)
         if key == getattr(self, '_frame_key', None):
+            if perfstats.ENABLED:
+                perfstats.note('rebuild.skip')
+                perfstats.time('rebuild.total', perfstats.clock() - _rf_t0)
             return
         cache = getattr(self, '_frame_cache', None)
         if cache is None:
@@ -1900,6 +1907,8 @@ class PetWindow(QWidget):
             self._frame_cache = cache
         entry = cache.get(cache_key)
         if entry is not None:
+            if perfstats.ENABLED:
+                perfstats.note('frame_cache.hit')
             # 命中：直接复用最终 pixmap 与命中测试 alpha 图。两者出自同一
             # 缓存条目，_hit_alpha_image 与 _frame_pixmap 永远逐像素一致。
             self._frame_pixmap = entry.pixmap
@@ -1907,11 +1916,17 @@ class PetWindow(QWidget):
             self._frame_key = key
             self._last_frame_dpr = dpr
             self._sync_mask()
+            if perfstats.ENABLED:
+                perfstats.time('rebuild.total', perfstats.clock() - _rf_t0)
             return
+        if perfstats.ENABLED:
+            perfstats.note('frame_cache.miss')
         pm = self.movie.currentPixmap()
         if pm is None or pm.isNull():
             # ffmpeg 缺失/素材损坏时首帧解码可能失败返回 None，跳过本帧而不是崩溃
             return
+        if perfstats.ENABLED:
+            _scale_t0 = perfstats.clock()
         img = pm.toImage()
         # 含文字/方向性画面的动画登记在 lib.no_mirror，朝右时也不镜像（否则文字反显）
         if self.facing == 'right' and self.anim not in getattr(self.lib, 'no_mirror', frozenset()):
@@ -1928,6 +1943,10 @@ class PetWindow(QWidget):
         img = img.convertToFormat(QImage.Format.Format_ARGB32)
         pm = QPixmap.fromImage(img)
         pm.setDevicePixelRatio(dpr)
+        if perfstats.ENABLED:
+            # 未命中路径的整条转换链：toImage→镜像→预乘→Smooth 缩放→
+            # ARGB32→fromImage（P0 观测：帧缓存 miss 时的缩放段成本）。
+            perfstats.time('rebuild.scale', perfstats.clock() - _scale_t0)
         cache.put(cache_key, pm, img)
         self._frame_pixmap = pm
         # 直接缓存缩放后的 ARGB32 图：命中测试复用这份数据，
@@ -1936,6 +1955,8 @@ class PetWindow(QWidget):
         self._frame_key = key
         self._last_frame_dpr = dpr
         self._sync_mask()
+        if perfstats.ENABLED:
+            perfstats.time('rebuild.total', perfstats.clock() - _rf_t0)
 
     def _refresh_frame_for_screen_dpr(self) -> None:
         """窗口所在屏幕 DPR 变化（跨屏/显示缩放变化）时强制按新 DPR 重建帧。
@@ -2053,6 +2074,8 @@ class PetWindow(QWidget):
           教训：曾改成 Python 逐位扫描掩码，benchmark 实测比 Qt C++ 慢 3.5 倍
           （1.11ms vs 0.32ms/帧），每帧都亏——不要为了"省 Qt 调用"用 Python 扫像素。
         """
+        if perfstats.ENABLED:
+            _mask_t0 = perfstats.clock()
         canvas = QImage(self._w, self._h, QImage.Format.Format_ARGB32)
         canvas.fill(Qt.GlobalColor.transparent)
         p = QPainter(canvas)
@@ -2073,6 +2096,9 @@ class PetWindow(QWidget):
                 self._collision_local_bounds = QRect(self._mask_bounds)
             else:
                 self._collision_local_bounds = stable.united(self._mask_bounds)
+        if perfstats.ENABLED:
+            # mask 生成（canvas 绘制 + createAlphaMask + QRegion，P0 观测）。
+            perfstats.time('rebuild.mask', perfstats.clock() - _mask_t0)
 
     def collision_content_rect(self) -> QRect:
         """碰撞用的稳定可见区域（全局坐标）：取当前动画各帧包围盒的并集，
@@ -2111,6 +2137,8 @@ class PetWindow(QWidget):
         return img.pixelColor(px, py).alpha() < 16
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        if perfstats.ENABLED:
+            _paint_t0 = perfstats.clock()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         if self._frame_pixmap is not None:
@@ -2187,6 +2215,9 @@ class PetWindow(QWidget):
                 painter.translate(0, int(round(catalog.PAD * self.scale)))
                 painter.drawPixmap(0, 0, self._frame_pixmap)
         painter.end()
+        if perfstats.ENABLED:
+            # 窗口绘制（paintEvent 全段，含 slingshot/squash 附加绘制，P0 观测）。
+            perfstats.time('paint.draw', perfstats.clock() - _paint_t0)
 
     def _start_squash(self) -> None:
         """点击时启动 Q 弹效果：画面先变矮再恢复。"""

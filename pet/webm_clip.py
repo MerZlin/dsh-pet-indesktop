@@ -71,15 +71,27 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from . import catalog
+from . import perfstats
+from .frame_cache import ByteBudgetLru
 
 logger = logging.getLogger(__name__)
 
 # 进程内元数据缓存：避免反复切换角色时重复调用 count_frames_and_secs
-_META_CACHE: dict[str, tuple[int, float]] = {}
+# （P2 审计 2026-09：key=(path|mtime|size) 随素材原地更新单调新增且永不
+# 逐出——无界；改字节预算 + LRU，复用 frame_cache 的预算模式。默认
+# 512KB ≈ 数千条（多角色 × 文件版本）量级，超出逐出最久未用：旧版本
+# 失效条目最先走，仍在用的版本常驻；逐出后经磁盘缓存命中可零 ffmpeg 重探）。
+_META_CACHE_MAX_BYTES = 512 * 1024
+_META_CACHE = ByteBudgetLru(_META_CACHE_MAX_BYTES)
 
 # 跨进程共享的元数据缓存文件：多开实例共享同一份，避免每个实例都拉起
 # ffmpeg 探测 91 段动画。缓存以（文件 mtime + size）为失效依据。
+# 条目数硬上限（P2 审计）：该文件跨进程/跨运行单调累积且从不清理——
+# 每轮素材更新新增整套 key 后永久留存，长期无界；写路径在合并后按
+# 「先写入先逐出」裁到上限（无访问时间戳，近似 LRU，仅防病态长尾），
+# 20000 条 ≈ 3MB 文件，正常使用（多角色 × 版本数）远够不到。
 _META_FILE_CACHE_PATH = Path(tempfile.gettempdir()) / "dsh-pet-media-meta-cache.json"
+_META_FILE_CACHE_MAX_ENTRIES = 20000
 _META_FILE_CACHE: dict | None = None
 _META_CACHE_LOCK = threading.Lock()
 
@@ -402,10 +414,21 @@ def _load_meta_file_cache() -> dict:
         return {}
 
 
+def _prune_meta_file_cache(cache: dict) -> None:
+    """磁盘 meta 缓存条数上限（P2 审计）：跨进程/跨运行单调累积且从不
+    清理——无界；在写路径（读盘合并后）与加载路径按「先写入先逐出」裁到
+    _META_FILE_CACHE_MAX_ENTRIES（无访问时间戳，近似 LRU 的卫生上限，
+    预算为硬上界）。正常使用远够不到；逐出条目由需要它的实例以一次
+    ffmpeg 探测自愈，无正确性影响。"""
+    while len(cache) > _META_FILE_CACHE_MAX_ENTRIES:
+        cache.pop(next(iter(cache)))
+
+
 def _get_meta_file_cache() -> dict:
     global _META_FILE_CACHE
     if _META_FILE_CACHE is None:
         _META_FILE_CACHE = _load_meta_file_cache()
+        _prune_meta_file_cache(_META_FILE_CACHE)  # 历史超限文件：内存即有界
     return _META_FILE_CACHE
 
 
@@ -473,6 +496,8 @@ def _save_meta_file_cache_entry(key: str, frames: int, duration: float) -> None:
                     "frames": frames,
                     "duration": duration,
                 }
+                # 条数上限（P2 审计）：合并后裁到硬上限，防长期跨运行无界增长
+                _prune_meta_file_cache(cache)
                 # 进程内快照同步为合并结果（原子换引用；后续读取即命中）
                 _META_FILE_CACHE = cache
                 # tmp 名带 PID：共享临时目录下防符号链接预占攻击与多实例互抢
@@ -1105,6 +1130,8 @@ class WebMClip(QObject):
                 if stale:
                     self._terminate_proc(p)
 
+            if perfstats.ENABLED:
+                _ff_t0 = perfstats.clock()
             with _PopenCapture(on_process=_register):
                 g = imageio_ffmpeg.read_frames(
                     str(self.path),
@@ -1114,6 +1141,10 @@ class WebMClip(QObject):
                 )
                 meta = next(g)  # ffmpeg 进程在此拉起；capture 即时登记句柄
                 frame = next(g)
+            if perfstats.ENABLED:
+                # 首帧解码核心段（ffmpeg 拉起 + 两帧交付）：同步路径的
+                # 点击卡顿与后台预热的耗时都在这里（P0 观测）。
+                perfstats.time('webm.first_frame', perfstats.clock() - _ff_t0)
             if gen is not None and gen != self._first_frame_gen:
                 return None  # 解码期间被取消/换代：结果作废
             if meta.get('fps'):
@@ -1509,6 +1540,9 @@ class WebMClip(QObject):
         try:
             item = self._queue.get_nowait()
         except queue.Empty:
+            if perfstats.ENABLED:
+                # 消费端空转（解码还没跟上/未开始）：P0 观测。
+                perfstats.note('webm.poll_empty')
             return
 
         if item is None:
@@ -1570,11 +1604,24 @@ class WebMClip(QObject):
         「丢帧后帧号连续性与停止语义」（P1 复审）。
         """
         src_idx = 0
-        for frame in frames:
+        it = iter(frames)
+        while True:
+            if perfstats.ENABLED:
+                _dec_t0 = perfstats.clock()
+            try:
+                frame = next(it)
+            except StopIteration:
+                break
             if is_stopped():
                 break
+            if perfstats.ENABLED:
+                # 帧间隔 = ffmpeg 解码 + 管道交付一帧的耗时（reader 侧，
+                # P0 观测：不把下方入队阻塞计入解码耗时）。
+                perfstats.time('webm.decode', perfstats.clock() - _dec_t0)
             if throttled is not None and throttled():
                 # 节流路径：阻塞入队（背压），不丢帧、不虚推进源帧号。
+                if perfstats.ENABLED:
+                    _put_t0 = perfstats.clock()
                 while not is_stopped():
                     try:
                         q.put((frame, src_idx), timeout=timeout)
@@ -1582,11 +1629,19 @@ class WebMClip(QObject):
                         break
                     except queue.Full:
                         continue  # 队列仍满：同一帧继续阻塞重试
+                if perfstats.ENABLED:
+                    perfstats.time('webm.queue_wait', perfstats.clock() - _put_t0)
                 continue
+            if perfstats.ENABLED:
+                _put_t0 = perfstats.clock()
             try:
                 q.put((frame, src_idx), timeout=timeout)
             except queue.Full:
+                if perfstats.ENABLED:
+                    perfstats.note('webm.queue_drop')
                 pass  # 丢弃该帧；源帧号照常推进（时间线槽位不因丢帧回退）
+            if perfstats.ENABLED:
+                perfstats.time('webm.queue_wait', perfstats.clock() - _put_t0)
             src_idx += 1
 
     def _process_frame(self, item) -> None:
@@ -1595,6 +1650,8 @@ class WebMClip(QObject):
         if len(data) != expect:
             logger.warning('webm 帧长度异常: got=%d expect=%d', len(data), expect)
             return
+        if perfstats.ENABLED:
+            _cons_t0 = perfstats.clock()
         img = QImage(data, self._w, self._h, self._w * self._bpp,
                      QImage.Format.Format_RGBA8888)
         if img.isNull():
@@ -1607,4 +1664,7 @@ class WebMClip(QObject):
         # （P1 复审——否则 reader 队列满丢帧后相位错位、末帧提前）。
         self._current_frame_index = src_idx
         self._frame_index += 1
+        if perfstats.ENABLED:
+            # 主线程消费转换（RGBA→QImage→QPixmap）耗时（P0 观测）。
+            perfstats.time('webm.consume', perfstats.clock() - _cons_t0)
         self.frameChanged.emit(self._current_frame_index)
