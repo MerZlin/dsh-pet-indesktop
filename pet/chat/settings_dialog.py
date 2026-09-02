@@ -161,18 +161,23 @@ class ChatSettingsDialog(QDialog):
         pid = self.settings.active_provider
         if not pid or pid not in self.settings.providers:
             return
+        existing = self._provider_drafts.get(pid, {})
+        key_text = self.key.text()
+        vkey_text = self.vkey.text()
         self._provider_drafts[pid] = {
             'name': self.name.text().strip(),
             'base_url': self.url.text().strip(),
             'model': self.model.text().strip(),
-            'key': self.key.text(),
+            # 输入框为空表示“不修改/不覆盖”，保留草稿里已录入但尚未保存的 Key；
+            # 否则 _load_provider_ui() 清空输入框后会把草稿 Key 覆盖成空。
+            'key': key_text if key_text else existing.get('key', ''),
             'timeout': float(self.timeout.value()),
             'temperature': float(self.temp.value()),
             'max_tokens': int(self.tokens.value()),
             'vision_model': self.vmodel.text().strip(),
             'vision_same_as_chat': self.vsame.isChecked(),
             'vision_base_url': self.vurl.text().strip(),
-            'vision_key': self.vkey.text(),
+            'vision_key': vkey_text if vkey_text else existing.get('vision_key', ''),
             'verify_ssl': not self.skip_ssl.isChecked(),
         }
 
@@ -206,7 +211,8 @@ class ChatSettingsDialog(QDialog):
             self._load_provider_ui(pid)
 
     def _new_provider_id(self) -> str:
-        used = set(self.settings.providers)
+        # 避免复用已删除的 provider_id：否则保存合并时新建项会被删除集合过滤掉。
+        used = set(self.settings.providers) | set(self._deleted_provider_ids)
         i = len(self.settings.providers) + 1
         while f'api-{i}' in used:
             i += 1
