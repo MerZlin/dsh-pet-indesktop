@@ -1,6 +1,6 @@
 # Settings redesign handoff
 
-Updated: 2026-09-02 (after responsive menu-editor and quick-launch acceptance)
+Updated: 2026-09-02 (after input, theme-sync and quick-chat regression fixes)
 
 ## Workspace
 
@@ -51,11 +51,14 @@ Updated: 2026-09-02 (after responsive menu-editor and quick-launch acceptance)
 - Menu commands are grouped into four dropdowns. Submenus have confirmed explicit deletion, and empty source submenus are pruned after move/promote/drag.
 - Quick launch uses content-sized two-line rows, grouped add actions, bounded list growth, and a compact empty state.
 - Real Cocoa layout evidence is in `docs/screenshots/settings-redesign/iteration-5-layout-*`; the focused quick-launch image confirms the single-row scrollbar regression is gone.
+- Quick-launch check indicators accept real pointer clicks despite custom item widgets.
+- Explicit menu appearance themes now apply to the open Settings System immediately; custom-painted controls inherit the same resolved state.
+- Quick Chat closes on top-level window deactivation and stops active work through its existing close path.
 
 ## Current TDD state
 
-- Last REDs: wide title stayed left of centered content; menu editor remained fixed/narrow with seven flat commands; submenu deletion/empty cleanup were absent; quick-launch rows consumed stack-like empty height.
-- Last GREEN: focused geometry/state contracts, `132 passed` related settings/menu suite, and `755 passed, 8 skipped` full suite.
+- Last REDs: quick-launch pointer clicks left items unchecked; explicit dark appearance left Settings light; Quick Chat remained visible after `WindowDeactivate`.
+- Last GREEN: real Qt pointer/theme/window-event contracts, `175 passed` related suite, and `759 passed, 8 skipped` full suite. No screenshots were requested for this behavior-only round.
 
 ## Exact next step
 

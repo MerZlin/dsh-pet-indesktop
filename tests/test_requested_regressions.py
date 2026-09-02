@@ -943,6 +943,53 @@ def test_settings_stylesheet_has_dark_overrides(monkeypatch):
     assert "QPushButton { color: #202020; }" in qss_light
 
 
+def test_settings_window_uses_the_explicit_dark_appearance_on_a_light_system(
+    tmp_path, monkeypatch,
+):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod, "_system_dark", lambda: False)
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    config.set("context_menu_appearance", {"theme": "dark"})
+
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
+    assert "QDialog { background: #202024" in dialog.styleSheet()
+
+    dialog.close()
+    app.processEvents()
+
+
+def test_settings_window_rethemes_immediately_with_the_appearance_selector(
+    tmp_path, monkeypatch,
+):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod, "_system_dark", lambda: False)
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=False)
+    assert "QDialog { background: #202024" not in dialog.styleSheet()
+
+    dialog.menu_theme_select.setCurrentData("dark")
+    app.processEvents()
+    assert "QDialog { background: #202024" in dialog.styleSheet()
+
+    dialog.menu_theme_select.setCurrentData("light")
+    app.processEvents()
+    assert "QDialog { background: #202024" not in dialog.styleSheet()
+
+    dialog.close()
+    app.processEvents()
+
+
 def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypatch):
     """新版设置直接关闭（Rejected）也必须把改动应用到桌宠。
 

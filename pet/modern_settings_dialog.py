@@ -168,6 +168,16 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
 
 
+def _widget_dark(widget: QWidget | None = None) -> bool:
+    current = widget
+    while current is not None:
+        explicit = current.property("settingsDark")
+        if explicit is not None:
+            return bool(explicit)
+        current = current.parentWidget()
+    return _system_dark()
+
+
 class ToggleSwitch(QAbstractButton):
     """Small native-looking toggle used by settings cards."""
 
@@ -180,7 +190,7 @@ class ToggleSwitch(QAbstractButton):
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        track = "#0a84ff" if self.isChecked() else ("#3a3a42" if _system_dark() else "#dedede")
+        track = "#0a84ff" if self.isChecked() else ("#3a3a42" if _widget_dark(self) else "#dedede")
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(track))
         painter.drawRoundedRect(QRectF(0, 1, 38, 20), 10, 10)
@@ -379,7 +389,7 @@ class ColorPicker(QWidget):
 def _draw_chevron(widget, center_y: float, *, down: bool) -> None:
     painter = QPainter(widget)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    color = QColor("#a8adb4" if _system_dark() else "#62676d") if widget.isEnabled() else QColor("#aeb2b7")
+    color = QColor("#a8adb4" if _widget_dark(widget) else "#62676d") if widget.isEnabled() else QColor("#aeb2b7")
     painter.setPen(QPen(color, 1.35, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
     center_x = widget.width() - 10.0
     offset = 1.8 if down else -1.8
@@ -479,9 +489,8 @@ class ModernSelect(QAbstractButton):
     def currentText(self) -> str:  # noqa: N802
         return self._items[self._index][0] if 0 <= self._index < len(self._items) else ""
 
-    @staticmethod
-    def popupStyleSheet() -> str:  # noqa: N802
-        if _system_dark():
+    def popupStyleSheet(self) -> str:  # noqa: N802
+        if _widget_dark(self):
             return MODERN_SELECT_POPUP_STYLESHEET + _DARK_POPUP_OVERRIDE
         return MODERN_SELECT_POPUP_STYLESHEET
 
@@ -522,7 +531,7 @@ class ModernSelect(QAbstractButton):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        dark = _system_dark()
+        dark = _widget_dark(self)
         bg, border_idle, fg = ("#2e2e35", "#4a4a54", "#e4e4e9") if dark else ("#ffffff", "#cfd4da", "#202124")
         hover_border = "#56565f" if dark else "#aeb6c0"
         border = "#0a84ff" if self.hasFocus() else (hover_border if self._hovered else border_idle)
@@ -559,7 +568,7 @@ class ModernSelectOption(QAbstractButton):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        dark = _system_dark()
+        dark = _widget_dark(self)
         hover_bg, fg, check = (
             ("#3a3a46", "#e4e4e9", "#a0a6b0") if dark else ("#eeeeee", "#202020", "#454545")
         )
@@ -948,6 +957,7 @@ class QuickLaunchEditor(QWidget):
         self.list.setDropIndicatorShown(True)
         self.list.setSpacing(2)
         self.list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.list.viewport().installEventFilter(self)
         self.count_label = QLabel("0 个快捷项", self)
         self.count_label.setObjectName("quickLaunchCount")
         self.empty_label = QLabel("还没有快捷启动项，可从“添加”开始。", self)
@@ -1039,6 +1049,24 @@ class QuickLaunchEditor(QWidget):
         self.list.setVisible(count > 0)
         if count:
             self.list.setFixedHeight(min(226, count * 56 + 10))
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if (
+            watched is self.list.viewport()
+            and event.type() == QEvent.Type.MouseButtonRelease
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            point = event.position().toPoint()
+            item = self.list.itemAt(point)
+            if item is not None:
+                row = self.list.visualItemRect(item)
+                if point.x() <= row.left() + 36:
+                    checked = item.checkState() == Qt.CheckState.Checked
+                    item.setCheckState(
+                        Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked
+                    )
+                    return True
+        return super().eventFilter(watched, event)
 
 
 class MenuLayoutEditor(QWidget):
@@ -2273,7 +2301,8 @@ class ModernSettingsDialog(QDialog):
         self._update_agent_sound_controls(self.agent_sound_check.isChecked())
         self._update_agent_sound_subcontrols()
 
-        self.setStyleSheet(self._stylesheet())
+        self.menu_theme_select.currentIndexChanged.connect(self._apply_selected_theme)
+        self._apply_selected_theme()
 
     def _build_pet_controls(self) -> None:
         self.scale_combo = ModernSelect(self, width=132)
@@ -3341,9 +3370,21 @@ class ModernSettingsDialog(QDialog):
             return True
         return super().eventFilter(watched, event)
 
-    @staticmethod
-    def _stylesheet() -> str:
-        return _settings_stylesheet()
+    def _apply_selected_theme(self, *_args) -> None:
+        theme = str(self.menu_theme_select.currentData() or "system")
+        dark = theme == "dark" or (theme == "system" and _system_dark())
+        self.setProperty("settingsDark", dark)
+        self.setStyleSheet(_settings_stylesheet(theme))
+        for control in self.findChildren(ModernSelect):
+            if control._popup is not None:
+                control._popup.setStyleSheet(control.popupStyleSheet())
+            control.update()
+        for control in self.findChildren(ToggleSwitch):
+            control.update()
+
+    def _stylesheet(self) -> str:
+        theme = self.menu_theme_select.currentData() if hasattr(self, "menu_theme_select") else "system"
+        return _settings_stylesheet(str(theme or "system"))
 
 
 
@@ -3649,7 +3690,7 @@ QMenu#ModernSelectPopup::item:selected { background: #3a3a46; }
 """
 
 
-def _settings_stylesheet() -> str:
+def _settings_stylesheet(theme: str = "system") -> str:
     """浅色基础 QSS + 显式控件文字色补丁；深色系统时追加深色覆盖段。"""
     light_patch = """
         QPushButton { color: #202020; }
@@ -3657,7 +3698,8 @@ def _settings_stylesheet() -> str:
         QCheckBox, QRadioButton, QComboBox, QListWidget, QTreeWidget, QTableView { color: #202020; }
     """
     base = _LIGHT_SETTINGS_STYLESHEET + light_patch
-    if not _system_dark():
+    dark = theme == "dark" or (theme == "system" and _system_dark())
+    if not dark:
         return base + BROWSER_CONTROL_STYLESHEET
     return base + _DARK_OVERRIDE + BROWSER_CONTROL_STYLESHEET + _DARK_BROWSER_OVERRIDE
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
@@ -325,6 +325,12 @@ class QuickChatBubble(QFrame):
             pet.on_open_chat()
         elif hasattr(self, "open_chat_callback") and callable(self.open_chat_callback):
             self.open_chat_callback()
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.WindowDeactivate and self.isVisible():
+            self.close()
+            return True
+        return super().event(event)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.service.busy:

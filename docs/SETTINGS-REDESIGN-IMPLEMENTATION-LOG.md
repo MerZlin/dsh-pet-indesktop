@@ -23,6 +23,9 @@
 - 菜单编排在宽屏扩大到 1240px，对称展示“菜单结构 / 实时菜单预览”；排序、移动、子菜单与恢复命令收进四个功能下拉组，紧凑宽度改为上下分栏。
 - 子菜单支持带二次确认的显式删除；确认后保留其子项并提升到原根位置。移动或拖拽移出最后一个子项时，空来源子菜单自动清理。
 - 快捷启动改为内容驱动的双行应用列表，显示名称、来源和数量；添加入口归入下拉菜单，列表有高度上限，最后一项移除后显示 64px 紧凑空状态。
+- 快捷启动自定义行覆盖原生 delegate 后，由列表 viewport 在复选命中区显式切换 item 状态，恢复鼠标勾选与“移除所选”的完整链路。
+- 菜单“颜色主题”现在也是设置窗口的显式主题来源：初次打开和运行中切换都会同步整页 QSS、自绘选择器、箭头与 ToggleSwitch；“跟随系统”仍由系统 palette 决定。
+- 快速对话收到顶层 `WindowDeactivate` 时关闭，并复用原关闭路径停止进行中的请求。
 
 ## ToggleSwitch 依赖审计（2026-09-02）
 
@@ -45,13 +48,13 @@
 当前合并冲突面与菜单/设置相关回归：
 
 ```text
-132 passed
+175 passed
 ```
 
 合并上游并完成本轮修复后的沙箱外全量：
 
 ```text
-755 passed, 8 skipped（763 collected）
+759 passed, 8 skipped（767 collected）
 ```
 
 竞品研究文档曾被“产品文案”测试误扫；测试现只排除命名为 `*-RESEARCH.md` 的研究证据，运行时代码与普通产品文档仍受门禁约束。
@@ -65,6 +68,7 @@
 - 新增可重复截图脚本 `scripts/capture_settings_pages.py`。真实 Cocoa 的 720×760、125% 字体、极端长中英文本逐页检查发现标题未换行和 Provider 复合控件撑宽页面；经 RED→GREEN 增加标题换行、`SettingRow` 自动上下布局和 `ResponsiveActionRow` 后，七页复拍通过，证据位于 `docs/screenshots/settings-redesign/iteration-3-accessibility/`。
 - ToggleSwitch 本轮增加默认态、全依赖展开态和 720×760/125% 字体全展开态逐页截图。紧凑首拍发现 Agent 单事件音效仍被固定横排推到卡片边缘；补几何失败测试后引入 `ResponsiveToggleActionRow`，复拍确认开关/试听与路径选择分层且无裁切。证据位于 `iteration-4-toggle-*`。
 - 布局专项使用 1600×1000 浅色、720×760 浅色和 1100×760 深色复拍。截图确认标题/内容同轴、菜单编排宽屏扩展与紧凑上下分栏、快捷启动单行无伪滚动条；证据位于 `iteration-5-layout-*`。
+- 本轮三个修复均为输入/状态事件行为，按需求仅用真实 Qt 事件测试验收，未新增截图。
 
 ## 踩坑与约束
 
@@ -79,4 +83,6 @@
 - 复合控件即使外层 `SettingRow` 已改成上下布局，也可能由内部水平 layout 的 minimum size 撑宽整个 `QScrollArea`；响应式容器必须提供可收缩的 stacked minimum size hint。
 - 项目 skill 校验在 `mobility_client` 环境缺少 PyYAML；使用已有 `voice-picker-dev` 环境运行 `quick_validate.py` 后通过。
 - `QListWidget` 即使只有一项，也会因边框、spacing 与估算高度差异出现伪滚动条；内容高度必须给视口留出边框余量，并对总高度设上限。
+- `QListWidget.setItemWidget()` 会让自定义整行控件接管原生 delegate 区域；即使视觉上仍有 indicator，也不能假设 delegate 会处理点击。
+- 顶层工具窗口内通常由输入框持有焦点；关闭“窗口失焦”应监听 `WindowDeactivate`，而不是只监听某个子控件的 `FocusOut`。
 - `mobility_client` 已包含 `imageio-ffmpeg 0.6.0` 和 `PyInstaller 6.22.2`。WebM + Chat 变体完成 PyInstaller、中文编码检查和 ad-hoc codesign；工作区旧 `build/macos` 带 `com.apple.provenance` 时 BUNDLE 写入会报 `Operation not permitted`，改用全新 `/private/tmp` dist 目录即可通过，这不是缺少 Python 模块。

@@ -1574,6 +1574,35 @@ def test_quick_launch_editor_collapses_to_a_compact_empty_state_after_last_remov
     app.processEvents()
 
 
+def test_quick_launch_checkbox_can_be_selected_with_a_pointer_click():
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+
+    app = QApplication.instance() or QApplication([])
+    editor = settings_mod.QuickLaunchEditor([
+        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+    ])
+    editor.resize(520, 140)
+    editor.show()
+    app.processEvents()
+
+    item = editor.list.item(0)
+    row = editor.list.visualItemRect(item)
+    QTest.mouseClick(
+        editor.list.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(row.left() + 14, row.center().y()),
+    )
+    app.processEvents()
+
+    assert item.checkState() == Qt.CheckState.Checked
+    editor.close()
+    app.processEvents()
+
+
 def test_macos_tool_window_stays_visible_when_application_deactivates(monkeypatch):
     from PySide6.QtCore import Qt
 
