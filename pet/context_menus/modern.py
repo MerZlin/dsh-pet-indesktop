@@ -76,7 +76,10 @@ def build_modern_menu(menu: QMenu, pet, template: dict) -> None:
     # 4. 工具：同样直接显示，避免为了两个动作增加一级导航。
     start_group()
     add_balance(menu, pet)
-    add_harness(menu, pet)
+    # 纯桌宠（无 Chat/DSH 联动）版本不再显示“启动 DeepSeek Harness”，
+    # 仅保留“打开网页版 DeepSeek”。
+    if getattr(pet, "on_open_chat", None) is not None:
+        add_harness(menu, pet)
     add_deepseek_web(menu)
     add_quick_launch_menu(menu, pet.cfg)
     add_update_help(menu, pet)

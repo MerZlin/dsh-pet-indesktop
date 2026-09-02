@@ -31,6 +31,7 @@ from . import slot_manager as slot_manager_mod
 from . import updater
 from .click_sound import warm_click_sound_effects
 from .config import APP_DIR_NAME, Config, _default_base
+from .context_menus.shared import open_deepseek_web
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
 from .library import MovieLibrary
@@ -889,8 +890,11 @@ class PetApp:
         menu.addSeparator()
         if self.enable_chat:
             menu.addAction('DeepSeek 余额', lambda: self.show_balance(win))
+            menu.addAction('启动 DeepSeek Harness', lambda: launch_harness_gui(win))
+        else:
+            # 纯桌宠版本不提供本地 DSH 启动入口，只保留网页版入口
+            menu.addAction('打开网页版 DeepSeek', open_deepseek_web)
         menu.addAction('检查更新', lambda: self.check_update(win))
-        menu.addAction('启动 DeepSeek Harness', lambda: launch_harness_gui(win))
         menu.addAction('退出', self.app.quit)
 
         tray.setContextMenu(menu)
