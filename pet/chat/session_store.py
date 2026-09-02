@@ -98,17 +98,24 @@ class _AsyncWriter:
 
         顺序必须是 closing → flush：先 flush 再关入口会让「flush 目标捕获之后、
         closing 之前」被接受的提交脱离本次关闭的保证范围（复审档案 R2 的教训）。
+
+        timeout 是本次 close 的总上界（P2）：flush 与 thread join 共用同一
+        deadline——flush 耗尽整个 timeout 后 join 不得再额外阻塞（旧实现固定
+        join(5.0)，close(10) 实际可阻塞约 15s，close_all 多 root 逐个关闭时
+        继续累加，异常 writer 会明显拖慢退出路径）。
         """
+        deadline = time.monotonic() + timeout
         with self._cond:
             if self._close_result is not None:
                 return self._close_result
             self._closing = True  # 先关提交入口：此后 submit 一律拒绝
             self._cond.notify_all()
-        ok = self.flush(timeout=timeout)
-        self._thread.join(timeout=5.0)
+        ok = self.flush(timeout=max(0.0, deadline - time.monotonic()))
+        self._thread.join(timeout=max(0.0, deadline - time.monotonic()))
         if self._thread.is_alive():
             # daemon 线程会随进程退出；标记结果但绝不无限等待（B9 的教训：
-            # 无界 join 会冻结 GUI/退出路径）
+            # 无界 join 会冻结 GUI/退出路径；join 上界已计入本次 close 的
+            # 同一 deadline）
             log.warning("会话写盘 worker 退出超时（仍有未落盘数据风险）")
             ok = False
         with self._cond:

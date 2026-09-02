@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 import pytest
 
@@ -159,6 +160,43 @@ def test_close_drains_accepted_ops_before_shutdown(store):
     assert st.save(session) is True
     assert ss.close_all_writers() is True
     assert (tmp / "sessions" / "shenshen" / "s1.json").is_file()
+
+
+def test_close_total_blocking_time_bounded_by_timeout(tmp_path, monkeypatch):
+    """P2：close(timeout) 的实际上界必须等于 timeout——flush 耗尽 deadline 后
+    join 不得再额外阻塞（旧实现固定 join(5.0)，close(0.3) 实际约 5.3s；
+    close(10) 约 15s，close_all 多 root 逐个关闭还会继续累加）。"""
+    st = ss.SessionStore(tmp_path)
+    session = _make_session(st, sid="s-block")
+    assert st.save(session) is True
+    w = ss._registry.get_writer(st.root)
+    assert w is not None
+
+    entered = threading.Event()
+    release = threading.Event()
+    orig_write = ss._atomic_write
+
+    def stuck_write(path, payload):
+        entered.set()
+        assert release.wait(timeout=10.0), "测试释放信号未到达"
+        return orig_write(path, payload)
+
+    monkeypatch.setattr(ss, "_atomic_write", stuck_write)
+
+    start = time.monotonic()
+    ok = w.close(timeout=0.3)
+    elapsed = time.monotonic() - start
+    assert ok is False, "worker 未在 deadline 内落盘，close 必须诚实返回 False"
+    assert elapsed < 1.5, f"close(0.3) 实际阻塞 {elapsed:.2f}s（join 必须计入同一 deadline）"
+
+    # 放行卡住的写盘，让 worker 正常收尾（避免泄漏/teardown 竞态）
+    release.set()
+    w._thread.join(timeout=5.0)
+    assert not w._thread.is_alive()
+    # 粘滞语义不变：已关闭的 writer 再 close 返回同一结果、不再阻塞
+    start = time.monotonic()
+    assert w.close(timeout=0.3) is False
+    assert time.monotonic() - start < 0.5
 
 
 def test_permanent_shutdown_rejects_new_writers(store):

@@ -23,7 +23,7 @@ import random
 import threading
 import time
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QMovie
@@ -275,12 +275,18 @@ class MovieLibrary(QObject):
         *,
         yield_to_interaction: bool = False,
         generation: int | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> None:
         """预热已创建的 clip 对象：元数据 + 首帧 QImage（线程安全）。
 
         yield_to_interaction=True 时（低优先级随机动作池），每段耗时的
         ffmpeg 预热前检查交互让路闸门：交互进行中阻塞等待，交互结束后继续；
         被 pause_warm（隐藏/切角色）作废则放弃本批（代次检查），不复活。
+
+        cancelled：可选的轻量中途作废检查（高优先级预热用，非阻塞）。每个
+        clip 预热前调用，返回 True（已暂停/换代）则跳过该 clip——隐藏/切角色
+        发生在预热中途时，旧库不再继续为后续 clip 拉起 ffmpeg（P2 对齐低优
+        路径的门控；低优路径走 yield_to_interaction 的阻塞闸门，不受影响）。
 
         generation：批次认领时（GUI 线程）捕获的代次，随批次传入 worker；避免
         "认领后、worker 真正开始预热前"的快速 pause/resume 让旧批次读到新代次
@@ -295,6 +301,8 @@ class MovieLibrary(QObject):
             def _warm_meta(clip: object) -> None:
                 if yield_to_interaction and not self._await_interaction_clear(generation):
                     return
+                if cancelled is not None and cancelled():
+                    return
                 clip.warm_meta()
 
             list(ex.map(_warm_meta, clips))
@@ -303,6 +311,8 @@ class MovieLibrary(QObject):
 
             def _warm_first(clip: object) -> None:
                 if yield_to_interaction and not self._await_interaction_clear(generation):
+                    return
+                if cancelled is not None and cancelled():
                     return
                 getattr(clip, 'warm_first_frame', lambda: None)()
 
@@ -395,21 +405,48 @@ class MovieLibrary(QObject):
                 self._interaction_active.clear()
                 self._interaction_cond.notify_all()
 
-    def _warm_clips(self, names: list[str], workers: int) -> None:
+    def _warm_clips(
+        self,
+        names: list[str],
+        workers: int,
+        *,
+        generation: int | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> None:
         """预热指定动画（调用方需保证 clip 已在主线程创建）。"""
         if not names:
             return
-        self._warm_objects([self.movie(name) for name in names], workers)
+        self._warm_objects(
+            [self.movie(name) for name in names], workers,
+            generation=generation, cancelled=cancelled,
+        )
 
     def _warm_all_meta_background(self) -> None:
+        """高优先级后台预热（独立 daemon 线程，由 schedule_high_priority_warm 调度）。
+
+        门控与低优先级批次对齐（P2）：代次在批次认领这一刻捕获；随机错峰
+        sleep 前检查 _warm_paused、sleep 后校验 _warm_paused 与代次；预热
+        中途每个 clip 前再查一次（cancelled）。隐藏/切角色/关闭发生在 sleep
+        或 metadata 解码期间时，旧库不再拉起 ffmpeg 继续预热（低功耗铁律 +
+        旧角色预热不复活）。
+        """
         try:
+            if self._warm_paused:
+                return  # 已暂停（隐藏/切角色）：不进入 sleep、不启动 ffmpeg
+            generation = self._warm_generation  # 认领即捕获：worker 不再自读
             # 高优先级（尤其点击回应）尽快开始；保留极短随机错峰降低多开
             # 同时拉起 ffmpeg 的峰值，但不再让首次点击等 0.5s 预热。
             time.sleep(random.uniform(0, 0.05))
+            if self._warm_paused or generation != self._warm_generation:
+                return  # sleep 期间隐藏/切角色（换代）：本批作废，不拉起 ffmpeg
             # 并发控制在 3：每个 webm 首帧预热都会拉起一个 ffmpeg 子进程，
             # 并发过高会形成进程洪峰，提高杀毒软件拦截/误报概率。
             high, _ = self._priority_names()
-            self._warm_clips(high, workers=min(3, len(high)))
+            self._warm_clips(
+                high, workers=min(3, len(high)),
+                generation=generation,
+                cancelled=lambda: self._warm_paused or generation != self._warm_generation,
+            )
         except Exception:
             # 预热失败不致命，后续按需读取时会再尝试
             pass

@@ -116,6 +116,7 @@ class _CachePet:
     _is_transparent_at = window_mod.PetWindow._is_transparent_at
     _frame_draw_rect = window_mod.PetWindow._frame_draw_rect
     _frame_cache_key = window_mod.PetWindow._frame_cache_key
+    _frame_content_fingerprint = window_mod.PetWindow._frame_content_fingerprint
 
     def __init__(self, movie, lib, facing="left", scale=0.5, anim="idle", dpr=1.0,
                  cache_max_bytes=None):
@@ -426,6 +427,41 @@ def test_rebuild_frame_invalidates_on_same_mtime_size_change(tmp_path):
     window_mod.PetWindow._rebuild_frame(pet)
     assert clip.pixmap_requests == 2
     assert pet._frame_cache.stats()["misses"] == 2
+
+
+def test_rebuild_frame_invalidates_on_same_mtime_same_size_content_change(tmp_path, monkeypatch):
+    """P2：同一 mtime + 同一 size 的内容原地替换（等长热更）——首尾块弱指纹
+    必须让 key 失效，不得整会话继续显示旧成品帧。
+
+    指纹按 _FRAME_FP_REFRESH_SECS 间隔刷新；测试把刷新间隔压到 0 强制每次
+    key 计算都重读首尾块（验证的是失效语义，不是刷新节奏）。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "_FRAME_FP_REFRESH_SECS", 0.0)
+    path = tmp_path / "idle.webm"
+    path.write_bytes(b"AAAA" + b"x" * 100 + b"BBBB")
+    os.utime(path, (1000, 1000))
+
+    clip = _FramesClip([_frame_image(0)])
+    pet = _CachePet(clip, _CacheLibrary({"idle": clip}, clip_paths={"idle": path}),
+                    anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    pm_v0 = pet._frame_pixmap
+    assert pet._frame_cache.stats()["misses"] == 1
+
+    # 等长原地替换：mtime 与 size 均不变，仅内容不同 → 指纹不同 → 必须失效
+    path.write_bytes(b"CCCC" + b"y" * 100 + b"DDDD")
+    os.utime(path, (1000, 1000))
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip.pixmap_requests == 2, "同 mtime+同 size 的内容替换必须走转换链重建"
+    assert pet._frame_cache.stats()["misses"] == 2
+    assert pet._frame_pixmap is not pm_v0
+
+    # 内容未再变化：同一指纹 → 新 movie 实例同 key 命中缓存（弱指纹不抖动）
+    clip2 = _FramesClip([_frame_image(0)])
+    pet.movie = clip2
+    pet.lib = _CacheLibrary({"idle": clip2}, clip_paths={"idle": path})
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert pet._frame_cache.stats()["hits"] == 1
 
 
 # ================================================================ P1：DPR 变化触发重建

@@ -763,7 +763,7 @@ class ChatWindow(QDialog):
         self.session_combo.clear()
         selected = -1
         for index, session in enumerate(sessions):
-            self.session_combo.addItem(_short_title(session, localize_time=False), session.session_id)
+            self.session_combo.addItem(_short_title(session), session.session_id)
             # 设置列表项前景色：让会话标题在浅色弹层中清晰可读
             self.session_combo.setItemData(index, QColor("#1f2937"), Qt.ItemDataRole.ForegroundRole)
             if session.session_id == self.session.session_id:
@@ -793,7 +793,7 @@ class ChatWindow(QDialog):
     def rename_current_session(self) -> None:
         """重命名当前会话（与新版窗口一致的交互：输入框预填当前标题）。"""
         title, accepted = QInputDialog.getText(
-            self, "重命名会话", "会话名称", text=_short_title(self.session, localize_time=False),
+            self, "重命名会话", "会话名称", text=_short_title(self.session),
         )
         if not accepted:
             return

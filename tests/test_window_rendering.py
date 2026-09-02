@@ -581,6 +581,7 @@ class _RebuildPet:
 
     _rebuild_frame = window_mod.PetWindow._rebuild_frame
     _frame_cache_key = window_mod.PetWindow._frame_cache_key
+    _frame_content_fingerprint = window_mod.PetWindow._frame_content_fingerprint
     _is_transparent_at = window_mod.PetWindow._is_transparent_at
 
     def __init__(self, movie, lib, facing="left", scale=0.5, anim="idle"):

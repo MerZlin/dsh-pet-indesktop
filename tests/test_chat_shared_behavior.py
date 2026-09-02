@@ -2,7 +2,8 @@
 
 覆盖 R6 验收「共享纯函数测试」的确定性部分：
 - _short_title：空会话/自定义标题/长标题截断/空白压缩/坏时间戳；
-  Modern（localize_time=True）与 Legacy（localize_time=False）的时区行为差异保持。
+  批10 产品修复后 Modern 与 Legacy 调用点均走默认 True（本地时间显示），
+  纯函数保留 localize_time=False 路径（历史行为/API 兼容）由本文件钉住。
 - 定位：四个屏幕边缘、超大窗口/小屏 available geometry、clamp 与 overlap 选择。
 
 定位纯函数只操作 QtCore 值类型（QRect/QPoint/QSize），无需 QApplication。
@@ -60,9 +61,10 @@ def test_short_title_fallback_new_session_modern_converts_to_local():
     assert _short_title(session) == f"新会话 · {expected_local}"
 
 
-def test_short_title_fallback_legacy_keeps_stored_wall_clock():
+def test_short_title_fallback_legacy_false_path_keeps_stored_wall_clock():
     session = _session(created_at="2026-08-27T01:05:00+00:00")
-    # Legacy 历史行为：不做本地时区转换，按 UTC 存储钟点原样显示。
+    # 纯函数 localize_time=False 路径（批10 前 Legacy 的历史行为，现无生产调用方，
+    # 作为 API 兼容路径钉住）：不做本地时区转换，按 UTC 存储钟点原样显示。
     assert _short_title(session, localize_time=False) == "新会话 · 01:05"
 
 
@@ -167,22 +169,25 @@ def test_clamp_fallback_tiny_available_stays_at_corner():
 
 
 # ---------- 调用点契约（批6-6 盲审 P2，源码轻量断言） ----------
-# 钉的是调用契约而非行为：Legacy 调用点必须显式传 localize_time=False，
-# Modern 调用点必须走默认 True。这两类断言是本批例外允许的源码断言——
-# 直接断言 UI 调用点，防止未来重构时漏传/错传该旗标（纯函数行为测试
-# 无法覆盖调用点接线）。
+# 钉的是调用契约而非行为：批10 产品修复后 Legacy 与 Modern 调用点统一走默认
+# localize_time=True（本地时间显示，产品 bug 修复）；纯函数保留 False 路径
+# 供 API 兼容。这两类断言是本批例外允许的源码断言——直接断言 UI 调用点，
+# 防止未来重构时漏传/错传该旗标（纯函数行为测试无法覆盖调用点接线）。
 
 
 def _chat_src(module_name: str) -> str:
     return (Path(__file__).resolve().parents[1] / "pet" / "chat" / f"{module_name}.py").read_text(encoding="utf-8")
 
 
-def test_legacy_call_sites_pass_localize_time_false():
-    """Legacy（legacy_widgets）所有 _short_title 调用点必须显式传 localize_time=False。"""
+def test_legacy_call_sites_use_default_localize_time_true():
+    """Legacy（legacy_widgets）所有 _short_title 调用点不得传 localize_time，
+    走默认 True（批10 产品修复：与 Modern 一致显示本地时间）。"""
     calls = [ln for ln in _chat_src("legacy_widgets").splitlines() if "_short_title(" in ln]
     assert calls, "legacy_widgets.py 应存在 _short_title 调用点"
     for ln in calls:
-        assert "localize_time=False" in ln, f"Legacy 调用点必须显式传 localize_time=False: {ln.strip()}"
+        assert "localize_time" not in ln, f"Legacy 调用点不得传 localize_time（走默认 True）: {ln.strip()}"
+    # 默认值本身为 True（本地时间显示，见 utils.py 签名）。
+    assert "def _short_title(session, *, localize_time: bool = True)" in _chat_src("utils")
 
 
 def test_modern_call_sites_use_default_localize_time_true():

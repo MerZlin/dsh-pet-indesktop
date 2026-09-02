@@ -418,6 +418,84 @@ def test_high_priority_warm_unaffected_by_interaction(tmp_path, monkeypatch):
     assert lib._movies[catalog.DRAG].warmed_meta is True
 
 
+def test_high_priority_warm_skipped_while_paused(tmp_path, monkeypatch):
+    """P2：高优先级预热在暂停（隐藏/切角色）时整批放弃——sleep 前门控。"""
+    lib = _make_lib(tmp_path, monkeypatch)
+    lib.pause_warm()
+
+    lib._warm_all_meta_background()
+    assert lib._movies[catalog.CLICKS[0]].warmed_meta is False
+    assert lib._movies[catalog.CLICKS[0]].warmed_frame is False
+    assert lib._movies[catalog.IDLE].warmed_meta is False
+    assert lib._movies[catalog.DRAG].warmed_meta is False
+
+
+def test_high_priority_warm_aborts_when_paused_during_sleep(tmp_path, monkeypatch):
+    """P2：高优先级预热的随机错峰 sleep 期间被 pause_warm（隐藏/切角色）——
+    sleep 后必须检查 _warm_paused/代次并作废本批，不得拉起 ffmpeg 继续预热。
+
+    用 fake sleep 在 sleep 窗口内同步触发 pause_warm（不猜时序），验证门控。
+    """
+    lib = _make_lib(tmp_path, monkeypatch)
+    real_sleep = library_mod.time.sleep
+    sleep_calls = {"n": 0}
+
+    def pausing_sleep(seconds):
+        sleep_calls["n"] += 1
+        lib.pause_warm()  # 模拟 sleep 期间隐藏/切角色：换代
+
+    monkeypatch.setattr(library_mod.time, "sleep", pausing_sleep)
+    lib._warm_all_meta_background()
+    assert sleep_calls["n"] == 1, "高优先级预热必须经历随机错峰 sleep"
+    assert lib._movies[catalog.CLICKS[0]].warmed_meta is False, "sleep 期间暂停，本批必须作废"
+    assert lib._movies[catalog.CLICKS[0]].warmed_frame is False
+    assert lib._movies[catalog.IDLE].warmed_meta is False
+    assert lib._movies[catalog.DRAG].warmed_meta is False
+
+    # 恢复后新代次批次可正常预热（门控不放错、不误伤）
+    monkeypatch.setattr(library_mod.time, "sleep", real_sleep)
+    lib.resume_warm()
+    lib._warm_all_meta_background()
+    assert lib._movies[catalog.CLICKS[0]].warmed_meta is True
+    assert lib._movies[catalog.CLICKS[0]].warmed_frame is True
+    assert lib._movies[catalog.IDLE].warmed_meta is True
+
+
+def test_high_priority_warm_aborts_mid_batch_when_paused(tmp_path, monkeypatch):
+    """P2：高优先级预热中途（metadata 解码期间）被 pause_warm——尚未开始的
+    clip 不得再拉起 ffmpeg（非阻塞中途作废），首帧阶段整段跳过。"""
+    lib = _make_lib(tmp_path, monkeypatch, clip_cls=BlockableClip)
+    results: dict = {}
+    t = threading.Thread(
+        target=lambda: (lib._warm_all_meta_background(), results.setdefault("done", True)),
+        name="test-high-warm",
+    )
+    t.start()
+    # 第一批（并发 3）已进入 warm_meta 阻塞：事件同步，不猜时序
+    _wait_until(lambda: lib._movies[catalog.CLICKS[0]].meta_entered.is_set())
+    lib.pause_warm()  # 隐藏/切角色：排队中的 clip 必须作废
+    for clip in list(lib._movies.values()):
+        if clip.meta_entered.is_set():
+            clip.meta_release.set()  # 放行已在跑的 metadata 探测
+    t.join(timeout=10.0)
+    assert not t.is_alive()
+    assert results.get("done") is True
+    # 首帧阶段整段跳过（暂停中，不得再拉起 ffmpeg）
+    assert all(c.frame_calls == 0 for c in lib._movies.values())
+    # 已进入 meta 的 clip 完成探测；暂停后排队未开始的 clip 被中途作废
+    entered = [c for c in lib._movies.values() if c.meta_entered.is_set()]
+    skipped = [c for c in lib._movies.values() if not c.meta_entered.is_set()]
+    assert entered, "第一批高优先级 clip 必须已进入 warm_meta"
+    assert all(c.meta_calls == 1 for c in entered)
+    assert all(c.meta_calls == 0 for c in skipped), "暂停后排队中的 clip 不得再拉起 ffmpeg"
+
+    # 恢复后新代次批次可完整跑完（门控不误伤）
+    lib.resume_warm()
+    lib._warm_all_meta_background()
+    assert lib._movies[catalog.CLICKS[0]].warmed_frame is True
+    assert lib._movies[catalog.DRAG].warmed_frame is True
+
+
 # ---------------------------------------------------------------- 窗口侧钩子
 class RecordingLibrary(FakeLibrary):
     """记录 begin/end_interaction 调用的假素材库（token 兼容签名）。

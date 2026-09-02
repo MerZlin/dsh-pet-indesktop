@@ -245,6 +245,144 @@ def test_terminate_proc_is_noop_for_exited_and_none_proc(app):
     app.processEvents()
 
 
+# ============================================================================
+# 批 6-8b 收尾：try-acquire 超时跳过的最终保障（P1 盲审两项）
+# ============================================================================
+def test_reap_retired_confirms_and_kills_proc_after_reader_exit(app):
+    """P1：reader finally 之外的兜底确认——退役线程已退出（finally 已完整
+    执行）但进程句柄仍存活（_terminate_proc/gen.close 异常被吞的病态路径）
+    时，_reap_retired 补杀并确认退出，绝不静默丢失句柄。"""
+    clip = WebMClip("dummy.webm")
+    proc = _FakeProc()  # 存活：poll() is None
+    done = threading.Event()
+
+    def _target():
+        done.set()
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(5.0)
+    assert not t.is_alive(), "测试前提：退役线程已退出"
+
+    clip._retired.append(webm_clip_mod._Reader(thread=t, proc=proc))
+    clip._reap_retired(join_timeout=0)
+
+    assert proc.poll() is not None, "兜底确认必须补杀仍存活的进程"
+    assert clip._retired == [], "已退出且已确认的退役记录应被丢弃"
+    clip.cleanup()
+    app.processEvents()
+
+
+def test_unblock_proc_timeout_skip_still_killed_by_owner_finally(app):
+    """P1：_unblock_proc 的 try-acquire 超时跳过是有界的，且锁持有者
+    （reader finally）随后仍会执行终止——「超时跳过绝不漏杀」的最终保障链
+    闭合（owner 杀进程为主保证，退役池 sweep 兜底确认）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _FakeProc()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _owner_in_finally():
+        with clip._proc_lock:  # 模拟 reader finally 持锁收尾
+            entered.set()
+            release.wait(5.0)
+            webm_clip_mod.WebMClip._terminate_proc(proc)  # owner 的主保证
+
+    t = threading.Thread(target=_owner_in_finally, daemon=True)
+    t.start()
+    assert entered.wait(5.0), "owner 必须已持锁"
+
+    t0 = time.monotonic()
+    clip._unblock_proc(proc)  # 锁被持有 → 有界超时跳过
+    elapsed = time.monotonic() - t0
+    assert proc.terminated is False, "GUI 不得在锁被持有时操作同一 Popen"
+    assert elapsed < 1.0, "超时跳过必须有界（≈_PROC_LOCK_ACQUIRE_TIMEOUT）"
+    assert elapsed >= 0.15, "确实走了超时跳过路径（等满 0.2s 锁等待）"
+
+    release.set()
+    t.join(5.0)
+    assert proc.poll() is not None, "owner finally 必须杀进程（主保证）"
+    clip.cleanup()
+    app.processEvents()
+
+
+class _FakeReaderGen:
+    """模拟 imageio read_frames 生成器：记录 close() 时进程是否存活。
+
+    close() 模仿 imageio-ffmpeg 0.6.0 的 finally：先 poll 判活（短路点），
+    进程仍存活则 kill 兜底（对应关管道 + 1.5s 轮询 + kill 的清理块）。
+    """
+
+    def __init__(self, proc, meta):
+        self._proc = proc
+        self._meta = meta
+        self._stage = 0
+        self.closed = False
+        self.saw_alive_at_close = None
+
+    def __next__(self):
+        if self._stage == 0:
+            self._stage = 1
+            return self._meta
+        self._stage = 2
+        raise StopIteration  # 模拟自然播完（无更多帧）
+
+    def close(self):
+        self.closed = True
+        self.saw_alive_at_close = self._proc.poll() is None
+        if self.saw_alive_at_close:
+            self._proc.kill()  # 模拟 imageio finally 的存活进程清理
+
+
+def test_reader_finally_short_circuits_gen_close_when_proc_captured(app, monkeypatch):
+    """P1/Fix2-路径A：句柄已捕获时先 _terminate_proc 再 gen.close()——close
+    内部 poll 判死（saw_alive_at_close=False），跳过 imageio 的存活进程清理
+    （1.5s 轮询）路径（短路成立，锁持有上界 = terminate 时间）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _FakeProc()
+    meta = {"fps": 24.0, "duration": 1.0}
+    gen = _FakeReaderGen(proc, meta)
+
+    def _fake_read_frames(*args, **kwargs):
+        cap = webm_clip_mod._PopenCapture._local.capture
+        cap._on_process(proc, ["ffmpeg", "-i", "dummy.webm"])  # 正常登记
+        return gen
+
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "read_frames", _fake_read_frames)
+    clip._generation = 1
+    clip._reader(threading.Event(), generation=1)
+
+    assert proc.poll() is not None, "reader finally 必须终止进程"
+    assert gen.closed is True, "gen.close() 必须被调用"
+    assert gen.saw_alive_at_close is False, \
+        "先杀后 close：close 时必须看到进程已死（短路，无 1.5s 轮询）"
+    clip.cleanup()
+    app.processEvents()
+
+
+def test_reader_finally_gen_close_kills_when_proc_capture_failed(app, monkeypatch):
+    """P1/Fix2-路径B：proc 句柄捕获失败（capture 未看到进程）时收尾退化为
+    只调 gen.close()——imageio close 是最后杀手（poll 判活 → kill 兜底），
+    进程仍必被终止（该路径不短路，病态锁持有可达 ~1.5s，为代价上界）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _FakeProc()
+    meta = {"fps": 24.0, "duration": 1.0}
+    gen = _FakeReaderGen(proc, meta)
+
+    def _fake_read_frames(*args, **kwargs):
+        return gen  # 不触发 capture 登记 → 句柄捕获失败（proc 保持 None）
+
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "read_frames", _fake_read_frames)
+    clip._generation = 1
+    clip._reader(threading.Event(), generation=1)
+
+    assert gen.closed is True, "句柄捕获失败也必须 close 生成器"
+    assert gen.saw_alive_at_close is True, "路径 B：close 时进程仍存活（未短路）"
+    assert proc.poll() is not None, "gen.close() 必须兜底杀进程"
+    clip.cleanup()
+    app.processEvents()
+
+
 def test_cleanup_keeps_tracking_via_module_lifecycle_manager(app):
     """P2：cleanup 后 clip 自身不再调度 sweep；存活 reader 的追踪由模块级
     生命周期管理器持有（不随 clip GC 丢弃，也与 reader 收尾不竞态）。"""

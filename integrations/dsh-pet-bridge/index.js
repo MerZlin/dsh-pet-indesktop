@@ -122,7 +122,6 @@ function toolsFromAssistantMessage(event) {
 function handleEvent(session, event) {
   if (!event || typeof event.type !== "string") return;
   if (isSubagent(session)) return; // 子代理状态不抢桌宠（刷屏且无信息量）
-  sawRichEvents = true;
 
   const id = sessionIdOf(session, event);
   let r = sessions.get(id);
@@ -209,8 +208,16 @@ function handleEvent(session, event) {
     }
 
     default:
-      break;
+      // 未知事件不产生状态：直接返回、不置 sawRichEvents。否则混合协议
+      // 序列「未知 rich event → 旧版 agent/status: running」会永久跳过
+      // legacy 回退通道，桌宠卡在 idle（P2 修复：只有能产生状态的已知
+      // rich event 才停用旧版宿主回退）。
+      return;
   }
+  // 走到这里 = 命中了能产生状态的已知 rich event：旧版宿主回退通道
+  // 的数据太粗（running/idle），会覆盖 thinking/working 等细粒度状态，
+  // 从此停用。未知事件不经过此处（上面 default 已 return）。
+  sawRichEvents = true;
 }
 
 function disposeSession(session) {

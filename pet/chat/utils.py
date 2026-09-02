@@ -18,9 +18,11 @@ def _short_title(session, *, localize_time: bool = True) -> str:
     3. 否则回退为「新会话 · HH:MM」，created_at 解析失败则仅「新会话」。
 
     `localize_time` 控制回退标题中时间戳的时区处理：
-    - True（Modern 历史行为）：timezone-aware 的 created_at 先转换到本地时区
-      再格式化（UTC 存储 → 本地钟点，见 test_requested_regressions.py 固定用例）；
-    - False（Legacy 历史行为）：按存储的钟点原样格式化，不做本地转换。
+    - True（默认，Modern 历史行为；批10 产品修复后 Legacy 调用点同样走默认
+      True）：timezone-aware 的 created_at 先转换到本地时区再格式化
+      （UTC 存储 → 本地钟点，见 test_requested_regressions.py 固定用例）；
+    - False（批10 前 Legacy 的历史行为，现无生产调用方，仅作 API 兼容保留）：
+      按存储的钟点原样格式化，不做本地转换。
     naive 时间戳两者结果一致（astimezone 对 naive 视为本地时间、钟点不变）。
     """
     if str(getattr(session, "custom_title", "")).strip():

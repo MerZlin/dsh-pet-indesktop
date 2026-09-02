@@ -140,6 +140,15 @@ IDLE_LOW_FPS_DEFAULT_THRESHOLD = 30.0
 # 目标帧），绝不允许改播放速率/QTimer interval 让动画时间变慢/变快。
 IDLE_LOW_FPS_DIVISOR = 2
 
+# ---- 帧缓存素材内容弱指纹（P2）----
+# 缓存 key 的 mtime+size 无法识别「同 mtime + 同 size 的原地替换」：复制工具
+# 保留 mtime、新文件恰与旧文件等长时，整会话会命中旧成品帧。补一个首尾块
+# 内容指纹兜底，但绝不能每帧读文件（key 在 _rebuild_frame 热路径上逐帧计算）。
+# 折中：指纹按固定间隔刷新——稳态下每帧只做一次 dict 命中 + monotonic 比较
+# （零文件 I/O）；内容被原地替换时最迟一个刷新周期内 key 变化、旧成品失效。
+_FRAME_FP_REFRESH_SECS = 2.0
+_FRAME_FP_BLOCK = 64  # 头部/尾部各取 64 字节做弱指纹（webm 头尾都含结构信息）
+
 
 def build_window_flags(config, mouse_through: bool = False, stream_capture_mode: bool = False):
     """构造桌宠窗口 flags。
@@ -500,11 +509,12 @@ class PetWindow(QWidget):
         self._dpr_watch_window = None
         self._dpr_watch_screen = None
         # 预缩放成品帧缓存（方案 A §3.1）：同一动画同一帧在相同
-        # (素材路径+mtime+大小, 帧号, 朝向, scale, DPR, 动画名) 下结果确定，
-        # 循环播放直接复用最终 QPixmap，跳过整条 CPU 转换链。
+        # (素材路径+mtime+大小+内容弱指纹, 帧号, 朝向, scale, DPR, 动画名)
+        # 下结果确定，循环播放直接复用最终 QPixmap，跳过整条 CPU 转换链。
         # 字节预算默认 256MB（可用 frame_cache_max_bytes 配置覆盖），按
         # QPixmap+QImage 双份 ARGB32 记账，超限逐出最久未用（硬上界）；
-        # scale/DPR/角色/素材变化由 key 自动失效。
+        # scale/DPR/角色/素材变化（含同 mtime+同 size 的原地替换，见
+        # _frame_cache_key / _frame_content_fingerprint）由 key 自动失效。
         try:
             _budget = int(self.cfg.get('frame_cache_max_bytes',
                                        FRAME_CACHE_DEFAULT_MAX_BYTES))
@@ -1713,18 +1723,21 @@ class PetWindow(QWidget):
             self._on_anim_ended(name)
 
     def _frame_cache_key(self, frame_n: int | None, dpr: float) -> tuple:
-        """预缩放缓存的 key：素材路径+mtime+大小、帧号、朝向、动画名、scale、DPR。
+        """预缩放缓存的 key：素材路径+mtime+大小+内容弱指纹、帧号、朝向、动画名、scale、DPR。
 
         任意一项变化都会命中不同条目（scale/DPR/角色切换/素材文件变化
         由此自动失效）；镜像决策（facing + no_mirror）也进 key，避免
         文字动画朝右与朝左共用条目。mtime 之外再记 st_size：复制工具
-        保留 mtime 时，内容大小变化仍能失效（P1）。该 key 同时是
-        _rebuild_frame 快路径签名的一部分：素材原地替换（mtime/大小
-        变化）时快路径同样失效，不会绕过变更检测。
+        保留 mtime 时，内容大小变化仍能失效（P1）。同 mtime+同 size 的
+        原地替换靠首尾块弱指纹兜底（_frame_content_fingerprint，固定
+        间隔刷新），把「整会话显示旧帧」收窄到最多一个刷新周期（P2）。
+        该 key 同时是 _rebuild_frame 快路径签名的一部分：素材原地替换
+        （mtime/大小/指纹任一变化）时快路径同样失效，不会绕过变更检测。
         """
         path: str | None = None
         mtime = 0
         size = 0
+        fp = 0
         path_getter = getattr(self.lib, 'clip_path', None)
         if callable(path_getter):
             try:
@@ -1737,13 +1750,15 @@ class PetWindow(QWidget):
                 except TypeError:
                     path = str(clip_path)
                 try:
-                    # 素材文件变更（mtime/大小变化）必须失效旧成品
+                    # 素材文件变更（mtime/大小/内容指纹变化）必须失效旧成品
                     st = os.stat(clip_path)
                     mtime = st.st_mtime_ns
                     size = st.st_size
+                    fp = self._frame_content_fingerprint(path, mtime, size)
                 except OSError:
                     mtime = 0
                     size = 0
+                    fp = 0
         if path is None:
             # 无 clip_path 的库（测试桩）：退化为 clip 实例身份，保证不串帧
             path = '<clip:%d>' % id(self.movie)
@@ -1751,8 +1766,41 @@ class PetWindow(QWidget):
             self.facing == 'right'
             and self.anim not in getattr(self.lib, 'no_mirror', frozenset())
         )
-        return (path, mtime, size, frame_n, self.facing, mirrored,
+        return (path, mtime, size, fp, frame_n, self.facing, mirrored,
                 self.scale, dpr, self.anim)
+
+    def _frame_content_fingerprint(self, path: str, mtime: int, size: int) -> int:
+        """素材内容弱指纹（首尾块）：同 mtime + 同 size 的原地替换也能失效。
+
+        只读文件头部与尾部各 _FRAME_FP_BLOCK 字节做 hash；读整文件在 GUI
+        线程热路径上不可接受。指纹按 _FRAME_FP_REFRESH_SECS 间隔刷新：
+        - 稳态（同一素材连续重建、元数据未变、上次检查未过期）：dict 命中 +
+          monotonic 比较，零文件 I/O；
+        - 元数据已变（mtime/size 任一不同）或检查过期：重读首尾块刷新记录。
+        内容被原地替换但元数据未变时，最迟一个刷新周期内 key 变化、旧缓存
+        条目失效（当前实现替换后至多 2s 内自愈；替换发生瞬间读不到文件则
+        退回指纹 0，key 变化触发重建，同样自愈）。
+        """
+        now = time.monotonic()
+        table = getattr(self, '_frame_fp', None)
+        if table is None:
+            table = self._frame_fp = {}
+        rec = table.get(path)
+        if (rec is not None and rec[0] == mtime and rec[1] == size
+                and now - rec[2] < _FRAME_FP_REFRESH_SECS):
+            return rec[3]
+        fp = 0
+        try:
+            with open(path, 'rb') as f:
+                head = f.read(_FRAME_FP_BLOCK)
+                tail_start = max(0, size - _FRAME_FP_BLOCK)
+                f.seek(tail_start)
+                tail = f.read(_FRAME_FP_BLOCK)
+            fp = hash((head, tail))
+        except OSError:
+            fp = 0  # 读不到（替换瞬间被独占/删除）：退回 0，key 变化触发重建，自愈
+        table[path] = (mtime, size, now, fp)
+        return fp
 
     def _rebuild_frame(self) -> None:
         """重建当前帧：缩放 + 朝向镜像 + 生成窗口 mask。

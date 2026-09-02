@@ -439,6 +439,32 @@ def test_first_frame_cancel_before_register_terminates_stale_proc(app, monkeypat
     app.processEvents()
 
 
+def test_cancel_timeout_skip_registers_unconfirmed_and_sweep_kills(app, monkeypatch):
+    """批 6-8b 收尾 P1：cancel_first_frame_warm 的 try-acquire 超时跳过不再是
+    「无条件安全」——跳过时进程必须登记进 _unconfirmed_procs 重试机制，孤儿
+    注册表 sweep 在 owner 释放 _ff_proc_lock 后确认/补杀（进程最终退出）。"""
+    clip = WebMClip("dummy.webm")
+    proc = _FakeDecodeProc()
+    with clip._reader_lock:
+        clip._first_frame_procs.add(proc)
+    monkeypatch.setattr(webm_clip_mod, "_PROC_LOCK_ACQUIRE_TIMEOUT", 0.05)
+
+    with clip._ff_proc_lock:  # 模拟解码线程正在 finally 的 g.close()（持锁）
+        clip.cancel_first_frame_warm()  # 超时跳过 → 登记 unconfirmed
+
+    assert proc.terminated is False, "持锁期间取消不得操作 Popen"
+    assert clip._unconfirmed_procs, "超时跳过的进程必须登记进重试机制"
+    assert proc in [e[0] for e in clip._unconfirmed_procs], "登记必须携带进程句柄"
+
+    # owner 释放锁后：sweep 补杀确认
+    webm_clip_mod._reap_orphaned_clips()
+    assert proc.terminated or proc.killed, "sweep 必须补杀未确认退出的进程"
+    assert proc.poll() is not None, "补杀必须确认进程退出"
+    assert clip._unconfirmed_procs == [], "确认后登记列表必须清空"
+    clip.cleanup()
+    app.processEvents()
+
+
 class _SyncEscapeCancelClip(WebMClip):
     """第一次解码阻塞（后台 warm 卡住持锁）；第二次解码阻塞（逃生口在飞），
     放行后返回有效 QImage——用于验证取消期间完成的逃生结果作废。"""
