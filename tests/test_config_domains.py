@@ -252,6 +252,24 @@ def test_menu_unknown_subkeys_dropped_by_clean_functions():
     assert normalized["context_menu_appearance"]["theme"] == "light"
 
 
+def test_menu_easter_egg_image_scale_cleaned_and_clamped():
+    """彩蛋弹窗尺寸百分比：默认 100，钳到 40~200，非数值回默认。"""
+    cases = [
+        ({}, 100),                          # 缺省回默认
+        ({"image_scale": 150}, 150),
+        ({"image_scale": 40}, 40),          # 下界可取
+        ({"image_scale": 200}, 200),        # 上界可取
+        ({"image_scale": 10}, 40),          # 超界钳位
+        ({"image_scale": 999}, 200),
+        ({"image_scale": "abc"}, 100),      # 非数值回默认
+        ({"image_scale": None}, 100),
+    ]
+    for raw, expected in cases:
+        normalized = MenuConfig.normalize({"menu_easter_egg": raw})
+        assert normalized["menu_easter_egg"]["image_scale"] == expected, raw
+
+
+
 # ============================================================================
 # 4. Config 便捷入口（只读视图，不改 Config 状态）
 # ============================================================================

@@ -827,6 +827,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("egg_hint", "右侧提示", "显示在鼠标指针图标后的短提示。", self.egg_hint_edit),
             SettingRow("egg_avatar", "头像图片", "使用绝对路径；支持常见图片格式。", self.egg_avatar_picker),
             SettingRow("egg_image_dir", "弹窗图片目录", "使用绝对路径；每次点击会随机选择一张图片。", self.egg_image_dir_picker),
+            SettingRow("egg_image_scale", "弹窗图片大小", "新打开图片的显示尺寸（100% 为默认）。", self.egg_image_scale_spin),
         ], appearance_content))
         appearance_layout.addStretch(1)
         self._add_page("外观", "appearance", self._page_shell("外观", appearance_content))
@@ -1207,6 +1208,10 @@ class ModernSettingsDialog(QDialog):
         image_dir = resolve_fun_asset(egg.get("image_dir"), oijingjing_image_path().parent)
         self.egg_avatar_picker = ResourcePathPicker(str(avatar.resolve()), parent=self)
         self.egg_image_dir_picker = ResourcePathPicker(str(image_dir.resolve()), directory=True, parent=self)
+        self.egg_image_scale_spin = BrowserSpinBox(self)
+        self.egg_image_scale_spin.setRange(40, 200)
+        self.egg_image_scale_spin.setSuffix(" %")
+        self.egg_image_scale_spin.setValue(int(egg.get("image_scale", 100)))
 
         # 灵动岛
         island_cfg = self.config.get("dynamic_island", {})
@@ -1859,6 +1864,7 @@ class ModernSettingsDialog(QDialog):
             # 内置 assets 内的路径归一化回相对值，保持 portable（目录移动/自更新后仍可用）
             "avatar": store_fun_asset(self.egg_avatar_picker.text(), oijingjing_image_path()),
             "image_dir": store_fun_asset(self.egg_image_dir_picker.text(), oijingjing_image_path().parent),
+            "image_scale": self.egg_image_scale_spin.value(),
         })
         self.config.set("quick_launch_apps", self.quick_launch_editor.apps())
         if self.ai_page is not None:
