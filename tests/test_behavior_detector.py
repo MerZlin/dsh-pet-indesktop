@@ -254,7 +254,7 @@ class TestCooldownGate:
     def test_after_trigger_needs_new_steps(self):
         det, clock = _make_detector(min_steps_between=3, cooldown_seconds=0)
         col = _Collector(det)
-        # 触发一次 control（W6 Search=3）
+        # 触发一次 control（W6/W10 Search=3）
         for tool, s in [("web_search", 1), ("Read", 2), ("web_search", 3),
                         ("pwd", 4), ("web_search", 5), ("Grep", 6)]:
             det.feed_record("dsh", _call(tool, s))
@@ -262,13 +262,17 @@ class TestCooldownGate:
         # 紧接着再来（新增 1 step，不足 3）→ 不重复触发
         det.feed_record("dsh", _call("web_search", 7))
         assert len(col.controls) == 1
-        # 新增 2 个 step 后仍不足 → 不触发
+        # 新增 3 step 后（step8 - step5 = 3），step gate 通过 → 允许再次触发
         det.feed_record("dsh", _call("Read", 8))
+        assert len(col.controls) == 2, "新增 >=3 step 后应允许再次触发"
         det.feed_record("dsh", _call("think", 9))
-        assert len(col.controls) == 1
-        # 新增 >=3 step 后再次高密度 Search → 允许再次触发
+        assert len(col.controls) == 2
+        # step10: 仅 2 step 过去 → 仍被 gate 挡住
         det.feed_record("dsh", _call("web_search", 10))
-        assert len(col.controls) >= 2, "新增 >=3 step 后应允许再次触发"
+        assert len(col.controls) == 2
+        # step11: 3 step 过去 → 允许第三次触发
+        det.feed_record("dsh", _call("web_search", 11))
+        assert len(col.controls) >= 3, "新增 >=3 step 后应允许第三次触发"
 
     def test_cooldown_time_gate(self):
         det, clock = _make_detector(cooldown_seconds=60)
@@ -354,17 +358,19 @@ class TestLifecycle:
             det.feed_record("dsh", _call(tool, s))
         det.feed_record("dsh", {"event": "AgentStatus", "state": "idle"})
         assert col.resolved == ["dsh"]
-        # 重置后重新累计，不沿用旧窗口
-        det.feed_record("dsh", _call("Read", 10))
-        det.feed_record("dsh", _call("Grep", 11))
-        det.feed_record("dsh", _call("cat", 12))
-        det.feed_record("dsh", _call("head", 13))
-        det.feed_record("dsh", _call("tail", 14))
-        det.feed_record("dsh", _call("glob", 15))
+        # 重置后立即创建新 collector（在重置后触发的任何 control 之前）
         col2 = _Collector(det)
-        det.feed_record("dsh", _call("Bash", 16))  # 触发评估（flush step15）
-        # W6（步11-16）= Grep/cat/head/tail/glob/Bash → READ=4 → control
+        # 重置后重新累计，不沿用旧窗口：
+        # 3 个 READ 在 W6 中触发 W6 control
+        steps = [("Read", 10), ("Grep", 11), ("cat", 12), ("head", 13),
+                 ("tail", 14), ("Bash", 16)]
+        for tool, s in steps:
+            det.feed_record("dsh", _call(tool, s))
+        # W6 中 READ=3 触发 W6 control（在 step 12 时）
         assert col2.controls, "重置后新窗口应能重新评估并触发"
+        assert col2.controls[0]["reason"] == PatternReason.FINE_REPEAT_W6.value
+        assert col2.controls[0]["class"] == BehaviorClass.READ.value
+        assert col2.controls[0]["count"] == 3
 
     def test_reset_on_turn_end(self):
         det, _ = _make_detector()

@@ -264,6 +264,10 @@ class PatternLevel(str, Enum):
     WARNING = "warning"   # ⚠️ 有重复倾向 / 长期探索无产出
     CONTROL = "control"   # 🛑 已明显偏离，值得 Judge 检查
 
+    def _severity(self) -> int:
+        """数值化 severity，用于升级比较（不能按 str 比较，'warning' > 'control'）。"""
+        return 1 if self is PatternLevel.WARNING else 2
+
 
 # 触发原因代码
 class PatternReason(str, Enum):
@@ -489,6 +493,7 @@ class BehaviorPatternDetector(QObject):
             "seq": 0,
             "last_trigger_seq": None,
             "last_trigger_at": 0.0,
+            "last_trigger_level": None,  # 上次触发的档位（warning / control）
             "last_level": None,
         })
 
@@ -564,21 +569,10 @@ class BehaviorPatternDetector(QObject):
         current_seq = state["seq"] + (1 if state["current"] is not None and state["current_classes"] else 0)
         last_trigger_seq = state["last_trigger_seq"]
 
-        # cooldown 门控：
-        # 1) 触发后至少要新增 N 个 Agent step（seq 前进 >= N）
-        if last_trigger_seq is not None:
-            if current_seq - last_trigger_seq < self._min_steps_between:
-                return
-        # 2) 时间兜底：触发后最少间隔（防极端情况下 step 异常导致高频触发）
-        if state["last_trigger_at"] and (now - state["last_trigger_at"]) < self._cooldown_seconds:
-            return
-
-        # 只统计 inspected_seq 之后的事件（旧历史不再重复触发）；含当前进行中的 step
-        decisions = [d for d in self._all_decisions(state)
-                     if last_trigger_seq is None or d.seq > last_trigger_seq]
+        # 先做规则判定，拿到 level 后再决定 gate 策略
+        decisions = self._all_decisions(state)
         if not decisions:
             return
-
         w6 = decisions[-6:]
         w10 = decisions[-10:]
         counts6 = self._counts_in(w6)
@@ -590,14 +584,39 @@ class BehaviorPatternDetector(QObject):
         if level is None:
             return
 
+        # cooldown 门控：
+        # last_trigger_seq 只用于抑制同档重复提醒，不能阻断风险等级升级；
+        # 风险从 warning 升级到 control 时，跳过 step gate 和 time gate，
+        # 且使用完整窗口（all_decisions）确保 warning 之前的有效事件被计入。
+        prev_level = state["last_trigger_level"]
+        is_upgrade = prev_level is None or level._severity() > prev_level._severity()
+
+        if not is_upgrade:
+            # 同档位：受 step gate 限制
+            if last_trigger_seq is not None:
+                if current_seq - last_trigger_seq < self._min_steps_between:
+                    return
+        # 同档位：受 time gate 限制（升级跳过）
+        if not is_upgrade and state["last_trigger_at"] and (now - state["last_trigger_at"]) < self._cooldown_seconds:
+            return
+
         # 同档位去抖：上次同档且内容一致则不重复发射（但 cooldown 已挡大部分）
-        prev = state["last_level"]
+        prev = state["last_trigger_level"]
         if prev == level and (state["last_trigger_at"] and (now - state["last_trigger_at"]) < self._cooldown_seconds):
             return
+
+        # 升级使用完整窗口（含 warning 之前的有效事件）；
+        # 同档位只统计上次触发之后的新事件。
+        if is_upgrade:
+            decisions = self._all_decisions(state)
+        else:
+            decisions = [d for d in self._all_decisions(state)
+                         if last_trigger_seq is None or d.seq > last_trigger_seq]
 
         # 标记触发（cooldown 门控）
         state["last_trigger_seq"] = current_seq
         state["last_trigger_at"] = now
+        state["last_trigger_level"] = level
         state["last_level"] = level
 
         # 构建 payload
