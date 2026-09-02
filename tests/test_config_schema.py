@@ -48,7 +48,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "self_talk_bubble_style", "self_talk_duration_seconds", "self_talk_enabled",
     "self_talk_image_dir", "self_talk_max_interval", "self_talk_min_interval",
     "self_talk_texts", "shift_drag", "show_dock_icon", "slingshot_enabled",
-    "stream_capture_mode", "throw_max_speed", "throw_strength",
+    "stream_capture_mode", "system_notifications_enabled", "throw_max_speed", "throw_strength",
 })
 
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。

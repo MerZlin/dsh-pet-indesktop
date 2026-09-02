@@ -84,10 +84,11 @@ class CollisionClient(QObject):
         session = self.session
         if session is None:
             return
-        # 断开前先发 leave：协调者即时移除成员，不必等 stale 超时
-        submit_leave = getattr(session, 'submit_leave', None)
-        if callable(submit_leave):
-            submit_leave()
+        # 先关闭所有状态生产路径，再把 leave 排入同一 worker 队列；否则一个
+        # 已排队的 timer tick 可能在 leave 之后重新提交状态并复活成员。
+        # （顺序语义来自上游 issue #42 加固，合并时保持）
+        self.timer.stop()
+        self.session = None
         try:
             session.impulse_ready.disconnect(self._on_collision_impulse)
         except (RuntimeError, TypeError):
@@ -96,8 +97,9 @@ class CollisionClient(QObject):
             session.snapshot_ready.disconnect(self._on_collision_snapshot)
         except (RuntimeError, TypeError):
             pass
-        self.timer.stop()
-        self.session = None
+        submit_leave = getattr(session, 'submit_leave', None)
+        if callable(submit_leave):
+            submit_leave()
         self.epoch = ''
         self.peer_snapshots.clear()
         self.predicted_bounces.clear()
@@ -113,6 +115,10 @@ class CollisionClient(QObject):
         """
         win = self._win
         session = self.session
+        if session is None:
+            # 本地成员 detach 后，app-owned worker 仍可能是其他实例的协调者；
+            # 策略必须继续同步，尤其是 collision_enabled=False（上游 #42）。
+            session = getattr(win, 'collision_app_session', None)
         policy = {
             'collision_enabled': bool(win.cfg.get('collision_enabled', True)),
             'collision_restitution': float(win.cfg.get('collision_restitution', .82)),
@@ -236,9 +242,12 @@ class CollisionClient(QObject):
     @Slot(object)
     def _on_collision_snapshot(self, message: dict[str, Any]) -> None:
         epoch = str(message.get('epoch') or '')
-        if not epoch or (self.epoch and epoch != self.epoch):
+        if not epoch:
             return
         if epoch != self.epoch:
+            # 新 epoch = 新协调者上任：权威成员表整个换人，旧 epoch 的预测
+            # 反弹状态全部作废（上游 #42：不再丢弃新 epoch 快照，而是清场接纳）
+            self.predicted_bounces.clear()
             self.pending_predicted_bounce = None
             self.pending_predicted_contact = None
         self.epoch = epoch

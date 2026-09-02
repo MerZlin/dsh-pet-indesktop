@@ -590,6 +590,7 @@ class Config:
             # （decode_broker.broker_platform_supported()：OS + 架构双重检查）
             # 也强制为 False：本键只是「用户请求」，平台门禁在启用点收口。
             "decode_broker_enabled": False,
+            "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
@@ -708,6 +709,7 @@ class Config:
             "chat_bg_crops",
             "chat_ui_style",
             "chat_follow_pet",
+            "system_notifications_enabled",
             "character_aliases",
             "character_profiles",
             "chat_always_on_top",
@@ -840,6 +842,10 @@ class Config:
         # 的平台门禁收口。
         self.data["decode_broker_enabled"] = _bool_or_default(
             self.data.get("decode_broker_enabled"), False
+        )
+        # 上游 #60 系统通知开关：同规防字符串布尔误开（bool("false") is True）。
+        self.data["system_notifications_enabled"] = _bool_or_default(
+            self.data.get("system_notifications_enabled"), True
         )
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         self.data.update(_clean_collision_data(self.data))

@@ -42,6 +42,8 @@ def test_fetch_balance_parses_response(monkeypatch):
         # 校验端点与认证头
         assert req.full_url.endswith("/user/balance")
         assert req.get_header("Authorization") == "Bearer sk-test"
+        assert req.get_header("User-agent", "").startswith("Mozilla/")
+        assert req.get_header("Accept-language", "") != ""
         return io.BytesIO(body)
 
     monkeypatch.setattr(balance.urllib.request, "urlopen", fake_urlopen)

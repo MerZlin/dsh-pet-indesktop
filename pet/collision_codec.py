@@ -2,7 +2,7 @@
 """多开桌宠碰撞 IPC 协议帧编解码与水位去重（纯 Python 实现，无 Qt 依赖）。
 
 从 collision.py 迁出：仅含与物理求解无关的协议层——
-1. 协议帧解析与编码（4 字节大端长度前缀 + UTF-8 JSON，4096 字节上限超限丢弃）
+1. 协议帧解析与编码（4 字节大端长度前缀 + UTF-8 JSON，256 KiB 有界载荷）
 2. 水位去重（按 epoch 记录每个 pair 最高已应用 tick）
 3. 协议消息 TypedDict（snapshot/impulse 等线格式类型，供编解码边界收敛，
    见 collision_ipc.py 的 _send/_handle_message；TypedDict 仅类型层，无运行期开销）
@@ -14,7 +14,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, TypedDict, Union
 
-FRAME_MAX_LENGTH: int = 4096            # 单帧最大字节数（含/不含前缀，此处限制载荷<=4096）
+FRAME_MAX_LENGTH: int = 256 * 1024       # coordinator 下行；覆盖最多 128 个槽位的完整快照
+STATE_FRAME_MAX_LENGTH: int = 4 * 1024   # client 上行状态；阻止单成员耗尽聚合快照预算
 HEADER_SIZE: int = 4                    # 4字节无符号大端整数长度头
 
 
@@ -178,16 +179,18 @@ class DecodeError:
     raw_data: bytes = b""
 
 
-def encode_frame(obj: Any) -> bytes:
+def encode_frame(obj: Any, max_frame_len: int = FRAME_MAX_LENGTH) -> bytes:
     """将 Python 对象编码为 4 字节大端长度前缀 + UTF-8 JSON 字节帧。"""
     payload = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     length = len(payload)
+    if length > max_frame_len:
+        raise ValueError(f"Frame length {length} exceeds limit {max_frame_len}")
     header = length.to_bytes(HEADER_SIZE, byteorder="big", signed=False)
     return header + payload
 
 
 class FrameStreamDecoder:
-    """流式帧解析器，支持粘包与半包解析，超过 4096 字节安全丢弃。"""
+    """流式帧解析器，支持粘包与半包解析，超过配置上限时安全丢弃。"""
 
     def __init__(self, max_frame_len: int = FRAME_MAX_LENGTH) -> None:
         self._buffer = bytearray()

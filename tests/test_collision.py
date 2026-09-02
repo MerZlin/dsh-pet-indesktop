@@ -9,7 +9,7 @@
 5. 两两碰撞与三体及以上多体碰撞（最深重叠优先、迭代分离）
 6. 动量守恒（误差 < 1e-6）
 7. 分离后不重叠或残余重叠量 < 0.5px
-8. 协议帧流式解析（4 字节大端长度前缀、粘包/半包、超长帧丢弃、空帧、坏 JSON、不抛未捕获异常）
+8. 协议帧流式解析（4 字节大端长度前缀、有界大快照、粘包/半包、超长帧丢弃、空帧、坏 JSON）
 9. 水位去重（重复 tick 拒绝、低于水位拒绝、epoch 切换整体重置）
 10. 合速度 9000+9000 施加冲量后，经 physics.soft_clamp_speed 钳制后严格不超过 cap
 """
@@ -566,7 +566,7 @@ class TestPhysicsSoftClampSpeedIntegration:
 
 
 class TestProtocolFrameEncodingAndDecoding:
-    """协议帧（4 字节大端长度前缀、4096 上限、粘包/半包、坏 JSON/空帧）测试。"""
+    """协议帧（4 字节大端长度前缀、有限载荷、粘包/半包、坏 JSON/空帧）测试。"""
 
     def test_encode_and_decode_normal_frame(self):
         """正常帧编解码 round-trip。"""
@@ -623,6 +623,46 @@ class TestProtocolFrameEncodingAndDecoding:
         assert len(all_res) == 2
         assert all_res[0] == msg1
         assert all_res[1] == msg2
+
+    def test_default_limit_accepts_realistic_multi_member_snapshot(self):
+        """默认协议容量必须覆盖正常的多桌宠全量快照。"""
+        members = [
+            {
+                "runtime_id": f"slot-{index}-pid{1000 + index}-abcdefgh",
+                "instance_id": f"slot-{index}",
+                "seq": index,
+                "ts": 1000.0 + index,
+                "x": float(index * 32),
+                "y": float(index * 16),
+                "w": 461.0,
+                "h": 281.0,
+                "radius_x": 115.0,
+                "radius_y": 82.0,
+                "vx": 12.5,
+                "vy": -7.5,
+                "flags": 3,
+                "character": "shenshen",
+                "scale": 0.72,
+                "circles": [[float(index * 32 + offset), 64.0, 28.0]
+                            for offset in (0, 28, 56, 84)],
+            }
+            for index in range(128)
+        ]
+        snapshot = {
+            "type": "snapshot",
+            "epoch": "0123456789abcdef01234567",
+            "tick": 42,
+            "members": members,
+        }
+
+        frame = collision_codec.encode_frame(snapshot)
+        assert len(frame) - collision_codec.HEADER_SIZE > 4096
+        assert collision_codec.FrameStreamDecoder().feed(frame) == [snapshot]
+
+    def test_encoder_rejects_payload_over_protocol_limit(self):
+        """发送端和接收端必须共享同一个最大帧边界。"""
+        with pytest.raises(ValueError, match="exceeds limit"):
+            collision_codec.encode_frame({"blob": "x" * collision_codec.FRAME_MAX_LENGTH})
 
     def test_empty_frame_corrupted_json_and_oversized_frame_no_exception(self):
         """坏 JSON、空帧、超长帧返回 DecodeError 且不抛未捕获异常。"""

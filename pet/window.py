@@ -590,7 +590,6 @@ class PetWindow(QWidget):
         self._squash_progress = 1.0
         self._last_collision_sound_at = float('-inf')
         self._press_sound_pair = None
-        self._press_sound_started_at: float | None = None
         self._slingshot_rebound_progress = 0.0
 
         # ---- 拖动物理 ----
@@ -1369,6 +1368,11 @@ class PetWindow(QWidget):
         self._collision_client.session = value
 
     @property
+    def collision_app_session(self):
+        """PetApp 持有的 IPC facade（只读 seam，供 CollisionClient 策略兜底同步）。"""
+        return self._collision_app_session
+
+    @property
     def _collision_timer(self):
         return self._collision_client.timer
 
@@ -1395,6 +1399,34 @@ class PetWindow(QWidget):
     @_predicted_bounces.setter
     def _predicted_bounces(self, value) -> None:
         self._collision_client.predicted_bounces = value
+
+    @property
+    def _collision_epoch(self) -> str:
+        return self._collision_client.epoch
+
+    @_collision_epoch.setter
+    def _collision_epoch(self, value: str) -> None:
+        self._collision_client.epoch = value
+
+    @property
+    def _pending_predicted_bounce(self):
+        return self._collision_client.pending_predicted_bounce
+
+    @_pending_predicted_bounce.setter
+    def _pending_predicted_bounce(self, value) -> None:
+        self._collision_client.pending_predicted_bounce = value
+
+    @property
+    def _pending_predicted_contact(self):
+        return self._collision_client.pending_predicted_contact
+
+    @_pending_predicted_contact.setter
+    def _pending_predicted_contact(self, value) -> None:
+        self._collision_client.pending_predicted_contact = value
+
+    @property
+    def _last_collision_squash_at(self) -> float:
+        return self._collision_client.last_collision_squash_at
 
     def _submit_collision_state(self, force: bool = False) -> None:
         client = getattr(self, '_collision_client', None)
@@ -3049,10 +3081,9 @@ class PetWindow(QWidget):
                 return  # 左右留白区域不参与点击/拖拽
             if self.click_sound_enabled:
                 pair = resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
-                if pair is not None:
-                    self._press_sound_pair = pair
-                    self._press_sound_started_at = time.monotonic()
-                    play_press_sound(pair, float(self.cfg.get("click_sound_volume", 0.70)))
+                # 每次按下都重置：解析失败/切换音效包时不能复用上一次的旧 pair
+                self._press_sound_pair = pair
+                # 拖动不应触发点击音效：按下阶段不发声，确认是点击后再播放完整 press+release
             if self.lock_position:
                 # 锁定位置：不记录按下（拖拽不会开始），但按住期间仍持有
                 # 低优先级预热让路闸门，避免锁定点击瞬间预热抢 CPU/IO；
@@ -3198,11 +3229,9 @@ class PetWindow(QWidget):
                 self._switch(self._pick(self.idles))  # 回待机缓冲
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
             if self._press_sound_pair is not None and self.click_sound_enabled:
-                play_release_sound(
-                    self._press_sound_pair,
-                    float(self.cfg.get("click_sound_volume", 0.70)),
-                    self._press_sound_started_at,
-                )
+                volume = float(self.cfg.get("click_sound_volume", 0.70))
+                play_press_sound(self._press_sound_pair, volume)
+                play_release_sound(self._press_sound_pair, volume)
             if not self._try_open_quick_chat_from_bubble(g):
                 self._on_click()
         self._dragging = False
@@ -3668,6 +3697,8 @@ class PetWindow(QWidget):
         if collision_enabled and self._collision_session is None:
             self.attach_collision_session(getattr(self, '_collision_app_session', None))
         elif not collision_enabled and self._collision_session is not None:
+            # 先让协调 worker 停止求解，再提交本地成员 leave。
+            self._sync_collision_policy()
             self.detach_collision_session()
         self._sync_collision_policy()
         desired_scale = float(self.cfg.get('scale', self.scale))
