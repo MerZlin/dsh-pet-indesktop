@@ -2387,6 +2387,34 @@ def test_easter_egg_text_remains_readable_in_the_dark_menu_theme():
     app.processEvents()
 
 
+def test_easter_egg_hover_surface_stays_dark_in_the_dark_menu_theme():
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QEnterEvent
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.fun_entry import OjingjingMenuEntry
+    from pet.context_menus.menu_styles.modern import apply_modern_menu_style
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    apply_modern_menu_style(menu, {"theme": "dark", "dark_hover": "#3a3a3a"})
+    entry = OjingjingMenuEntry(menu, {"title": "彩蛋入口", "hint": "请点击"})
+    entry.show()
+    QApplication.sendEvent(
+        entry,
+        QEnterEvent(QPointF(1, 1), QPointF(1, 1), QPointF(1, 1)),
+    )
+    app.processEvents()
+
+    image = entry.grab().toImage()
+    hover_surface = image.pixelColor(4, entry.height() // 2)
+    assert hover_surface.lightness() < 100
+
+    entry.close()
+    menu.close()
+    app.processEvents()
+
+
 def test_template_switch_requests_immediate_menu_reopen():
     from PySide6.QtWidgets import QApplication, QMenu
 

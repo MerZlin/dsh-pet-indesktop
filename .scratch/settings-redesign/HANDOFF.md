@@ -1,6 +1,6 @@
 # Settings redesign handoff
 
-Updated: 2026-09-02 (after dark-menu easter-egg text fix)
+Updated: 2026-09-03 (after dark-menu easter-egg hover fix)
 
 ## Workspace
 
@@ -55,6 +55,7 @@ Updated: 2026-09-02 (after dark-menu easter-egg text fix)
 - Explicit menu appearance themes now apply to the open Settings System immediately; custom-painted controls inherit the same resolved state.
 - Quick Chat closes on top-level window deactivation and stops active work through its existing close path.
 - Dark-menu easter-egg title and hint inherit the configured foreground; related coverage is `84 passed` plus one real Cocoa render test, with full suite intentionally skipped under the documented low-risk gate.
+- Easter-egg hover inherits the configured theme hover surface; four focused tests and one real Cocoa render test pass, with no full-suite rerun for this isolated token fix.
 
 ## Current TDD state
 

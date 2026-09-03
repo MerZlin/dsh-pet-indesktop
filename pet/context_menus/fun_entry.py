@@ -134,6 +134,12 @@ class OjingjingMenuEntry(QWidget):
             appearance.get("dark_foreground" if dark else "light_foreground")
             or ("#f3f3f3" if dark else "#171717")
         )
+        self._hover_color = QColor(
+            str(
+                appearance.get("dark_hover" if dark else "light_hover")
+                or ("#3a3a3a" if dark else "#eeeeee")
+            )
+        )
         self.title_label.setStyleSheet(f"color: {foreground};")
         layout.addWidget(self.title_label)
         layout.addStretch(1)
@@ -187,7 +193,7 @@ class OjingjingMenuEntry(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#eeeeee"))
+        painter.setBrush(self._hover_color)
         painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 9, 9)
 
     def _activate(self) -> None:
