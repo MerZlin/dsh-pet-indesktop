@@ -1458,7 +1458,7 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
         dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
         for key in (
             "self_talk_duration", "self_talk_min", "self_talk_max",
-            "self_talk_texts", "self_talk_images", "click_self_talk",
+            "self_talk_texts", "self_talk_images", "self_talk_image_scale", "click_self_talk",
             "click_talk_bindings",
         )
     ]

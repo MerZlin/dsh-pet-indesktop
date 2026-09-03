@@ -3671,7 +3671,7 @@ class ModernSettingsDialog(QDialog):
     def _update_self_talk_controls(self, enabled: bool) -> None:
         keys = (
             "self_talk_duration", "self_talk_min", "self_talk_max",
-            "self_talk_texts", "self_talk_images", "click_self_talk",
+            "self_talk_texts", "self_talk_images", "self_talk_image_scale", "click_self_talk",
             "click_talk_bindings",
         )
         self._set_setting_rows_visible(keys, enabled)
