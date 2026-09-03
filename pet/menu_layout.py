@@ -287,7 +287,15 @@ def resolve_menu_layout(
                     if alias:
                         action["alias"] = alias
                     if "icon" in node:
-                        action["icon"] = str(node.get("icon") or "none")[:40]
+                        icon = node.get("icon")
+                        if isinstance(icon, Mapping) and icon.get("kind") == "file":
+                            action["icon"] = {
+                                "kind": "file",
+                                "path": str(icon.get("path") or "")[:2048],
+                                "display": "cover" if icon.get("display") == "cover" else "contain",
+                            }
+                        else:
+                            action["icon"] = str(icon or "none")[:40]
                     resolved.append(action)
                 continue
             if node_type == "submenu":
@@ -307,7 +315,15 @@ def resolve_menu_layout(
                     if alias:
                         submenu["alias"] = alias
                     if "icon" in node:
-                        submenu["icon"] = str(node.get("icon") or "none")[:40]
+                        icon = node.get("icon")
+                        if isinstance(icon, Mapping) and icon.get("kind") == "file":
+                            submenu["icon"] = {
+                                "kind": "file",
+                                "path": str(icon.get("path") or "")[:2048],
+                                "display": "cover" if icon.get("display") == "cover" else "contain",
+                            }
+                        else:
+                            submenu["icon"] = str(icon or "none")[:40]
                     resolved.append(submenu)
         return _normalize_separators(tuple(resolved))
 

@@ -19,6 +19,15 @@
 - `screenshots/settings-redesign/iteration-6-menu-tabs-wide/`（1600×1000，三个菜单页内任务与停用态）
 - `screenshots/settings-redesign/iteration-6-menu-tabs-compact/`（720×760，页内 Tab、上下编排与停用态）
 - `screenshots/settings-redesign/iteration-6-menu-tabs-dark/`（1100×760，页内 Tab、编排与停用态深色样式）
+- `screenshots/settings-redesign/iteration-7-menu-assets-wide/`（1100×760，别名/原名、统一下拉和图片目录预览）
+- `screenshots/settings-redesign/iteration-7-menu-assets-compact/`（720×760，紧凑宽度下的别名与图片流）
+- `screenshots/settings-redesign/iteration-7-menu-assets-dark/`（1100×760，统一下拉和图片流深色样式）
+- `screenshots/settings-redesign/iteration-8-masonry-wide/`（1100×760，紧凑 Tab、可调列表头、统一弹层与三列瀑布流抽屉）
+- `screenshots/settings-redesign/iteration-8-masonry-dark/`（1100×760，上述交互的深色表面）
+- `screenshots/settings-redesign/iteration-9-menu-responsive-wide/`（1100×760，紧凑操作栏和统一弹层）
+- `screenshots/settings-redesign/iteration-9-menu-responsive-medium/`（900×760，三列两行操作栏和上下分栏）
+- `screenshots/settings-redesign/iteration-9-menu-responsive-compact/`（720×760，两列三行操作栏、精简表格列）
+- `screenshots/settings-redesign/iteration-9-menu-responsive-dark/`（1100×760，统一弹层与编排深色样式）
 
 ## 逐页结果
 
@@ -44,7 +53,7 @@ AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、
 
 - AI 页原先嵌套“页面中的页面”，Cocoa 下内容被压缩成窄列；可见设置组现直接进入共享页面容器。
 - 原生 `QToolButton` 披露控件与页面风格不一致；现改为统一的 `SettingsDisclosureHeader`，不使用会导致 Cocoa 崩溃的自绘 `QPainter` 路径。
-- 菜单编辑器原生灰色表头和默认列宽导致名称省略；现使用卡片式树样式，菜单项列拉伸、位置列按内容定宽，预览不显示表格表头。
+- 菜单编辑器原生灰色表头和默认列宽导致名称省略；现使用双卡片树样式，三个表头列均可拖动调宽并有操作提示，预览不显示表格表头。
 - 截图脚本固定把初始焦点留在侧栏，避免搜索框蓝色焦点环干扰默认视觉层级。
 - 设置行标题/说明现关联到实际控件，普通按钮与自定义下拉/披露控件均有可见键盘焦点状态。
 - Agent 单事件音效首轮紧凑截图中固定横排贴到右边界；`ResponsiveToggleActionRow` 现于窄宽度改为两层布局，关闭事件时只保留可恢复开关，展开态不再裁切路径和按钮。
@@ -53,6 +62,12 @@ AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、
 - 子菜单删除/自动清理属于交互状态，使用确认框替身和树模型 remove/insert 测试验收；静态截图不伪造弹窗状态。
 - 菜单页的三个同级任务现由页内 Tab 分离，截图确认侧栏仍为原七个能力域；宽屏、紧凑和深色下选中态清楚，隐藏页不会撑宽当前页。
 - 默认分组显示为编排树中的“— 分割线”，可被移动或删除；彩蛋关闭后的节点仍停留原位，状态切为“已停用”，预览以不可用样式保留。快捷启动空状态同样由自动化测试覆盖，布局节点不变。
+- 菜单模式、菜单编排和快捷启动命令弹层现共用同一 `SettingsPopup` 实现；别名行同时呈现原名，运行时预览仅呈现别名。本地图片图标支持 contain/cover。
+- 图片目录预览由表单内等高格子改为按需打开的右侧抽屉。默认三列按当前最短列放置下一张图片，图片高度随宽高比变化，文件名在卡片下方单行省略并保留完整 tooltip；浅色和深色 Cocoa 截图均确认抽屉层级、关闭入口和滚动区域。
+- 页内 Tab 参考目标插件设置导航改为左对齐、内容定宽的紧凑 toolbar 分段控件，避免三个入口横向拉伸成主导航。
+- 操作菜单与菜单模式不再只共享 QSS：二者现使用同一种 QAction 行和弹层接口。截图确认触发按钮没有系统小圆点/原生 indicator，弹层与按钮保持 4px 间距，宽度至少覆盖触发按钮，选择态只在右侧显示一次。
+- 菜单编排新增三种响应式布局。宽屏按钮不再平均拉伸，中等宽度改为三列两行并上下排列编辑/预览，紧凑宽度改为两列三行并隐藏“位置”列和列宽提示；窗口跨断点反复缩放由自动化测试覆盖。
+- macOS Dock 菜单属于系统原生表面，不伪造到设置截图中；动作存在性和“桌宠设置”回调由 Cocoa Qt 自动化测试验收。
 
 ## 未声称的覆盖
 

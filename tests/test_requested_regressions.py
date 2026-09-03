@@ -1124,3 +1124,32 @@ def test_modern_autostart_write_failure_warns(tmp_path, monkeypatch):
     assert "失败" in str(warnings[0][2])
     dialog.close()
     app.processEvents()
+# --- macOS Dock recovery menu regression (2026-09-03) ---
+
+
+def test_macos_dock_menu_keeps_settings_reachable_when_pet_is_mouse_through(monkeypatch):
+    from unittest import mock
+
+    from PySide6.QtWidgets import QApplication
+
+    import pet.app as app_mod
+
+    app = QApplication.instance() or QApplication([])
+    controller = app_mod.PetApp.__new__(app_mod.PetApp)
+    controller.app = app
+    controller.win = mock.Mock()
+    controller.open_modern_settings = mock.Mock()
+    controller.open_chat = mock.Mock()
+    controller.enable_chat = True
+    monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+
+    menu = controller._install_macos_dock_menu()
+
+    assert menu is controller.dock_menu
+    assert menu.property("dockMenuInstalled") is True
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels[:3] == ["显示桌宠", "桌宠设置", "AI 对话"]
+    next(action for action in menu.actions() if action.text() == "桌宠设置").trigger()
+    controller.open_modern_settings.assert_called_once_with()
+    menu.close()
+    app.processEvents()

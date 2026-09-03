@@ -172,6 +172,67 @@ def capture(args: argparse.Namespace) -> None:
             target = destination / "04-菜单-停用状态.png"
             if not dialog.grab().save(str(target)):
                 raise RuntimeError(f"failed to save screenshot: {target}")
+            tabs.setCurrentKey("layout")
+            dialog.menu_layout_editor.set_item_alias("chat", "和鲸鱼聊聊")
+            chat_item = dialog.menu_layout_editor.item_for_action("chat")
+            dialog.menu_layout_editor.tree.setCurrentItem(chat_item)
+            dialog.menu_layout_editor.set_item_file_icon(
+                "chat", Path(__file__).resolve().parents[1] / "assets" / "icon-preview.png",
+            )
+            app.processEvents()
+            target = destination / "04-菜单-别名保留原名.png"
+            if not dialog.grab().save(str(target)):
+                raise RuntimeError(f"failed to save screenshot: {target}")
+            for button, menu, filename in (
+                (dialog.menu_layout_editor.order_button, dialog.menu_layout_editor.order_menu, "04-菜单-排序下拉.png"),
+                (dialog.menu_layout_editor.move_button, dialog.menu_layout_editor.move_menu, "04-菜单-移动下拉.png"),
+                (dialog.menu_layout_editor.customize_button, dialog.menu_layout_editor.customize_menu, "04-菜单-自定义下拉.png"),
+                (dialog.quick_launch_editor.add_button, dialog.quick_launch_editor.add_menu, "04-菜单-快捷启动下拉.png"),
+            ):
+                button.showPopup()
+                app.processEvents()
+                target = destination / filename
+                if not menu.grab().save(str(target)):
+                    raise RuntimeError(f"failed to save screenshot: {target}")
+                menu.close()
+                app.processEvents()
+            dialog.menu_layout_editor.icon_display_menu.popup(
+                dialog.mapToGlobal(QPoint(dialog.width() // 2, 180))
+            )
+            app.processEvents()
+            target = destination / "04-菜单-图片显示方式.png"
+            if not dialog.menu_layout_editor.icon_display_menu.grab().save(str(target)):
+                raise RuntimeError(f"failed to save screenshot: {target}")
+            dialog.menu_layout_editor.icon_display_menu.close()
+            app.processEvents()
+            dialog.menu_template_select.showPopup()
+            app.processEvents()
+            popup = dialog.menu_template_select._popup
+            if popup is None:
+                raise RuntimeError("menu mode popup was not created")
+            target = destination / "04-菜单-菜单模式下拉.png"
+            if not popup.grab().save(str(target)):
+                raise RuntimeError(f"failed to save screenshot: {target}")
+            popup.close()
+            app.processEvents()
+        if args.image_previews:
+            interaction_index = next(
+                index
+                for index in range(dialog.sidebar.count())
+                if dialog.sidebar.item(index).text() == "互动"
+            )
+            dialog.sidebar.setCurrentRow(interaction_index)
+            dialog.self_talk_check.setChecked(True)
+            dialog.self_talk_image_dir_picker.setText(
+                str(Path(__file__).resolve().parents[1] / "assets" / "chat")
+            )
+            preview_button = dialog.self_talk_image_dir_picker.preview_button
+            if preview_button is not None:
+                preview_button.click()
+            app.processEvents()
+            target = destination / "03-互动-图片目录抽屉.png"
+            if not dialog.grab().save(str(target)):
+                raise RuntimeError(f"failed to save screenshot: {target}")
         dialog.close()
         app.processEvents()
 
@@ -187,6 +248,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--extreme-copy", action="store_true")
     parser.add_argument("--expanded-toggles", action="store_true")
     parser.add_argument("--menu-details", action="store_true")
+    parser.add_argument("--image-previews", action="store_true")
     return parser.parse_args()
 
 

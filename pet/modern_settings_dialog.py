@@ -11,7 +11,7 @@ from pathlib import Path
 import shiboken6
 
 from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontDatabase, QIcon, QPainter, QPen
+from PySide6.QtGui import QAction, QColor, QFontDatabase, QIcon, QImageReader, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QLayout,
     QMessageBox,
     QMenu,
     QPlainTextEdit,
@@ -45,7 +46,6 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 from . import autostart as autostart_mod
@@ -63,7 +63,11 @@ from .config import (
     DEFAULT_SELF_TALK_TEXTS,
     _float_or_default,
 )
-from .context_menus.icons import vector_widget_icon
+from .context_menus.icons import (
+    CUSTOM_ICON_SUFFIXES,
+    custom_icon_file_error,
+    vector_widget_icon,
+)
 from .context_menus.quick_launch import fitted_application_icon
 from .context_menus.registry import CUSTOM_ICON_CHOICES, MENU_ACTIONS
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset, store_fun_asset
@@ -292,10 +296,239 @@ class ClickSoundPackPicker(QWidget):
             self.stack.hide()
 
 
+class MasonryLayout(QLayout):
+    """A true shortest-column layout whose cards retain their image ratios."""
+
+    def __init__(self, parent=None, *, column_count: int = 3, spacing: int = 10):
+        super().__init__(parent)
+        self.column_count = max(1, int(column_count))
+        self._items = []
+        self.setSpacing(spacing)
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:  # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation.Horizontal
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def _arrange(self, rect: QRect, *, apply: bool) -> int:
+        left, top, right, bottom = self.getContentsMargins()
+        width = max(0, rect.width() - left - right)
+        gap = self.spacing()
+        column_width = max(1, (width - gap * (self.column_count - 1)) // self.column_count)
+        heights = [top] * self.column_count
+        for item in self._items:
+            column = min(range(self.column_count), key=heights.__getitem__)
+            widget = item.widget()
+            height = widget.heightForWidth(column_width) if widget and widget.hasHeightForWidth() else item.sizeHint().height()
+            x = rect.x() + left + column * (column_width + gap)
+            y = rect.y() + heights[column]
+            if apply:
+                item.setGeometry(QRect(x, y, column_width, height))
+            heights[column] += height + gap
+        return max(heights, default=top) - (gap if self._items else 0) + bottom
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._arrange(QRect(0, 0, max(0, width), 0), apply=False)
+
+    def setGeometry(self, rect: QRect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._arrange(rect, apply=True)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        width = 420
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        return QSize(300, self.heightForWidth(300))
+
+
+class MasonryImageCard(QWidget):
+    """Aspect-ratio thumbnail with an elided filename caption."""
+
+    def __init__(self, path: Path, parent=None):
+        super().__init__(parent)
+        self.path = path
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        source_size = reader.size()
+        if source_size.isValid() and max(source_size.width(), source_size.height()) > 512:
+            source_size.scale(QSize(512, 512), Qt.AspectRatioMode.KeepAspectRatio)
+            reader.setScaledSize(source_size)
+        self.pixmap = QPixmap.fromImage(reader.read())
+        self.setObjectName("masonryImageCard")
+        self.setToolTip(path.name)
+        self.setAccessibleName(path.name)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def _image_height(self, width: int) -> int:
+        if self.pixmap.isNull() or self.pixmap.width() <= 0:
+            return 96
+        natural = round(width * self.pixmap.height() / self.pixmap.width())
+        return max(72, min(230, natural))
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._image_height(width) + 28
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(120, self.heightForWidth(120))
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        image_height = self._image_height(self.width())
+        image_rect = QRectF(0, 0, self.width(), image_height)
+        clip = QPainterPath()
+        clip.addRoundedRect(image_rect, 9, 9)
+        painter.setClipPath(clip)
+        if self.pixmap.isNull():
+            painter.fillRect(image_rect, QColor("#e9ebee"))
+        else:
+            scaled = self.pixmap.scaled(
+                image_rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            source_x = max(0, (scaled.width() - self.width()) // 2)
+            source_y = max(0, (scaled.height() - image_height) // 2)
+            painter.drawPixmap(image_rect.toRect(), scaled, QRect(source_x, source_y, self.width(), image_height))
+        painter.setClipping(False)
+        painter.setPen(QColor("#d8d8e0" if _widget_dark(self) else "#404348"))
+        text = painter.fontMetrics().elidedText(self.path.name, Qt.TextElideMode.ElideRight, max(0, self.width() - 4))
+        painter.drawText(QRectF(2, image_height + 5, self.width() - 4, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
+
+class MasonryFlow(QWidget):
+    def __init__(self, parent=None, *, column_count: int = 3):
+        super().__init__(parent)
+        self.setObjectName("imageMasonryFlow")
+        self.layout = MasonryLayout(self, column_count=column_count)
+        self.cards: list[MasonryImageCard] = []
+
+    def set_paths(self, paths: list[Path]) -> None:
+        while self.layout.count():
+            item = self.layout.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self.cards = [MasonryImageCard(path, self) for path in paths]
+        for card in self.cards:
+            self.layout.addWidget(card)
+        self._sync_height()
+
+    def _sync_height(self) -> None:
+        width = max(300, self.width())
+        self.setMinimumHeight(self.layout.heightForWidth(width))
+        self.updateGeometry()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_height()
+
+
+class ImagePreviewDrawer(QFrame):
+    """Right-side on-demand image browser; decoding is deferred until opening."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("imagePreviewDrawer")
+        self.setProperty("surface", "drawer")
+        self.title_label = QLabel("图片预览", self)
+        self.title_label.setObjectName("imagePreviewTitle")
+        self.count_label = QLabel("0 张图片", self)
+        self.count_label.setObjectName("imagePreviewCount")
+        self.close_button = QPushButton(self)
+        self.close_button.setObjectName("imagePreviewClose")
+        self.close_button.setFixedSize(28, 28)
+        self.close_button.setIcon(vector_widget_icon(self, "exit", 14))
+        self.close_button.setAccessibleName("关闭图片预览")
+        self.close_button.clicked.connect(self.hide)
+        header = QHBoxLayout()
+        header.addWidget(self.title_label)
+        header.addWidget(self.count_label)
+        header.addStretch(1)
+        header.addWidget(self.close_button)
+        self.path_label = QLabel(self)
+        self.path_label.setObjectName("imagePreviewPath")
+        self.path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.scroll = QScrollArea(self)
+        self.scroll.setObjectName("imagePreviewScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.flow = MasonryFlow(column_count=3)
+        self.scroll.setWidget(self.flow)
+        self.empty_label = QLabel("这个目录中没有可预览的图片", self)
+        self.empty_label.setObjectName("imagePreviewEmpty")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(10)
+        root.addLayout(header)
+        root.addWidget(self.path_label)
+        root.addWidget(self.scroll, 1)
+        root.addWidget(self.empty_label, 1)
+        parent.installEventFilter(self)
+        self.hide()
+
+    def _sync_geometry(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        width = min(480, max(360, round(parent.width() * 0.46)))
+        self.setGeometry(parent.width() - width, 0, width, parent.height())
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self.parentWidget() and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._sync_geometry()
+        return super().eventFilter(watched, event)
+
+    def open_directory(self, value: str) -> None:
+        directory = Path(str(value or "")).expanduser()
+        paths: list[Path] = []
+        if directory.is_dir():
+            try:
+                candidates = sorted(
+                    path for path in directory.iterdir()
+                    if path.is_file() and path.suffix.lower() in CUSTOM_ICON_SUFFIXES
+                )
+                paths = [path for path in candidates if QImageReader(str(path)).canRead()]
+            except OSError:
+                paths = []
+        self.path_label.setText(str(directory))
+        self.path_label.setToolTip(str(directory))
+        self.count_label.setText(f"{len(paths)} 张图片")
+        self.flow.set_paths(paths)
+        self.scroll.setVisible(bool(paths))
+        self.empty_label.setVisible(not paths)
+        self._sync_geometry()
+        self.show()
+        self.raise_()
+        QTimer.singleShot(0, self.flow._sync_height)
+
+
 class ResourcePathPicker(QWidget):
     """Absolute-path field with a native file or directory chooser."""
 
-    def __init__(self, value: str, *, directory: bool = False, name_filter: str = IMAGE_NAME_FILTER, parent=None):
+    def __init__(
+        self, value: str, *, directory: bool = False,
+        name_filter: str = IMAGE_NAME_FILTER, image_preview: bool = False,
+        parent=None,
+    ):
         super().__init__(parent)
         self.directory = bool(directory)
         self.name_filter = name_filter
@@ -305,11 +538,23 @@ class ResourcePathPicker(QWidget):
         self.button = QPushButton("选择…", self)
         self.button.setFixedWidth(66)
         self.button.clicked.connect(self.choose)
-        layout = QHBoxLayout(self)
+        path_row = QHBoxLayout()
+        path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.setSpacing(6)
+        path_row.addWidget(self.edit, 1)
+        self.preview_button = (
+            QPushButton("预览", self) if self.directory and image_preview else None
+        )
+        if self.preview_button is not None:
+            self.preview_button.setIcon(vector_widget_icon(self, "screen", 14))
+            self.preview_button.clicked.connect(self._open_preview)
+            path_row.addWidget(self.preview_button)
+        path_row.addWidget(self.button)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(self.edit, 1)
-        layout.addWidget(self.button)
+        layout.addLayout(path_row)
+        self.image_preview = None
 
     def text(self) -> str:
         return self.edit.text().strip()
@@ -326,6 +571,13 @@ class ResourcePathPicker(QWidget):
             selected, _ = QFileDialog.getOpenFileName(self, "选择图片", start, self.name_filter)
         if selected:
             self.setText(str(Path(selected).expanduser().resolve()))
+
+    def _open_preview(self) -> None:
+        host = self.window()
+        drawer = host.findChild(ImagePreviewDrawer, "imagePreviewDrawer")
+        if drawer is None:
+            drawer = ImagePreviewDrawer(host)
+        drawer.open_directory(self.text())
 
 
 class ColorSwatchButton(QAbstractButton):
@@ -398,8 +650,9 @@ def _draw_chevron(widget, center_y: float, *, down: bool) -> None:
     painter.drawLine(QPointF(center_x, center_y + offset), QPointF(center_x + 2.6, center_y - offset))
 
 
-MODERN_SELECT_POPUP_STYLESHEET = """
-QMenu#ModernSelectPopup {
+SETTINGS_POPUP_OBJECT_NAME = "SettingsPopup"
+SETTINGS_POPUP_STYLESHEET = """
+QMenu#SettingsPopup {
     background: #ffffff;
     color: #202020;
     border: 1px solid #d8d8d8;
@@ -407,14 +660,108 @@ QMenu#ModernSelectPopup {
     padding: 6px;
     font-size: 13px;
 }
-QMenu#ModernSelectPopup::item {
+QMenu#SettingsPopup::item {
     min-height: 22px;
     padding: 4px 28px 4px 12px;
     border-radius: 7px;
 }
-QMenu#ModernSelectPopup::item:selected { background: #eeeeee; }
-QMenu#ModernSelectPopup::indicator { width: 0; height: 0; }
+QMenu#SettingsPopup::item:selected { background: #eeeeee; }
+QMenu#SettingsPopup::indicator { width: 0; height: 0; }
 """
+
+
+def settings_popup_stylesheet(widget: QWidget | None = None) -> str:
+    style = SETTINGS_POPUP_STYLESHEET
+    if _widget_dark(widget):
+        style += _DARK_POPUP_OVERRIDE.replace("ModernSelectPopup", SETTINGS_POPUP_OBJECT_NAME)
+    return style
+
+
+def configure_settings_action_popup(menu: QMenu) -> QMenu:
+    """Apply the one shared settings popover surface to any menu."""
+    menu.setObjectName(SETTINGS_POPUP_OBJECT_NAME)
+    menu.setStyleSheet(settings_popup_stylesheet(menu))
+    menu.setProperty("menuStyle", "modern")
+    menu.setProperty("settingsPopup", True)
+    return menu
+
+
+class SettingsPopupAction(QAction):
+    """Logical checked state painted by SettingsPopupMenu on the trailing edge."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self._settings_checkable = False
+        self._settings_checked = False
+
+    def setCheckable(self, checkable: bool) -> None:  # noqa: N802
+        self._settings_checkable = bool(checkable)
+        self.changed.emit()
+
+    def isCheckable(self) -> bool:  # noqa: N802
+        return self._settings_checkable
+
+    def setChecked(self, checked: bool) -> None:  # noqa: N802
+        self._settings_checked = bool(checked)
+        self.changed.emit()
+
+    def isChecked(self) -> bool:  # noqa: N802
+        return self._settings_checked
+
+
+class SettingsPopupMenu(QMenu):
+    """Shared menu surface for selectors and commands, including right checks."""
+
+    def addAction(self, *args):  # noqa: N802
+        if len(args) == 1 and isinstance(args[0], str):
+            action = SettingsPopupAction(args[0], self)
+            super().addAction(action)
+            return action
+        return super().addAction(*args)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(
+            QColor("#a0a6b0" if _widget_dark(self) else "#454545"),
+            1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+        ))
+        for action in self.actions():
+            if not action.isVisible() or not action.isCheckable() or not action.isChecked():
+                continue
+            rect = self.actionGeometry(action)
+            x = rect.right() - 17.0
+            y = rect.center().y()
+            painter.drawLine(QPointF(x - 4, y), QPointF(x - 1, y + 3))
+            painter.drawLine(QPointF(x - 1, y + 3), QPointF(x + 5, y - 5))
+
+
+class SettingsMenuButton(QPushButton):
+    """Command-menu trigger with the same anchor and chevron as ModernSelect."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self._popup_menu: QMenu | None = None
+        self.setProperty("settingsMenuButton", True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.clicked.connect(self.showPopup)
+
+    def setPopupMenu(self, menu: QMenu) -> None:  # noqa: N802
+        self._popup_menu = configure_settings_action_popup(menu)
+
+    def popupMenu(self) -> QMenu | None:  # noqa: N802
+        return self._popup_menu
+
+    def showPopup(self) -> None:  # noqa: N802
+        if self._popup_menu is None or not self.isEnabled():
+            return
+        self._popup_menu.setMinimumWidth(self.width())
+        self._popup_menu.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        _draw_chevron(self, self.height() / 2.0, down=True)
 
 
 class ModernSelect(QAbstractButton):
@@ -491,17 +838,13 @@ class ModernSelect(QAbstractButton):
         return self._items[self._index][0] if 0 <= self._index < len(self._items) else ""
 
     def popupStyleSheet(self) -> str:  # noqa: N802
-        if _widget_dark(self):
-            return MODERN_SELECT_POPUP_STYLESHEET + _DARK_POPUP_OVERRIDE
-        return MODERN_SELECT_POPUP_STYLESHEET
+        return settings_popup_stylesheet(self)
 
     def showPopup(self) -> None:  # noqa: N802
         self.aboutToShowPopup.emit()
         popup = self._popup
         if popup is None:
-            popup = QMenu(self)
-            popup.setObjectName("ModernSelectPopup")
-            popup.setStyleSheet(self.popupStyleSheet())
+            popup = configure_settings_action_popup(SettingsPopupMenu(self))
             self._popup = popup
         else:
             # Reuse one native popup instead of retaining a new child QMenu on
@@ -510,12 +853,12 @@ class ModernSelect(QAbstractButton):
             popup.clear()
         popup.setMinimumWidth(self.width())
         for index, (text, _) in enumerate(self._items):
-            action = QWidgetAction(popup)
-            option = ModernSelectOption(text, index == self._index, popup)
-            option.clicked.connect(lambda checked=False, index=index: self.setCurrentIndex(index))
-            option.clicked.connect(popup.close)
-            action.setDefaultWidget(option)
-            popup.addAction(action)
+            action = popup.addAction(text)
+            action.setCheckable(True)
+            action.setChecked(index == self._index)
+            action.triggered.connect(
+                lambda _checked=False, index=index: self.setCurrentIndex(index)
+            )
         popup.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
 
     def enterEvent(self, event) -> None:  # noqa: N802
@@ -543,48 +886,6 @@ class ModernSelect(QAbstractButton):
         painter.drawText(QRectF(10, 0, self.width() - 34, self.height()), Qt.AlignmentFlag.AlignVCenter, self.currentText())
         painter.end()
         _draw_chevron(self, self.height() / 2.0, down=True)
-
-
-class ModernSelectOption(QAbstractButton):
-    def __init__(self, text: str, selected: bool, parent=None):
-        super().__init__(parent)
-        self._text = text
-        self._selected = selected
-        self._hovered = False
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(30)
-        self.setMinimumWidth(116)
-
-    def enterEvent(self, event) -> None:  # noqa: N802
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:  # noqa: N802
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        dark = _widget_dark(self)
-        hover_bg, fg, check = (
-            ("#3a3a46", "#e4e4e9", "#a0a6b0") if dark else ("#eeeeee", "#202020", "#454545")
-        )
-        if self._hovered:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(hover_bg))
-            painter.drawRoundedRect(QRectF(2, 1, self.width() - 4, self.height() - 2), 7, 7)
-        painter.setPen(QColor(fg))
-        painter.drawText(QRectF(10, 0, self.width() - 36, self.height()), Qt.AlignmentFlag.AlignVCenter, self._text)
-        if self._selected:
-            pen = QPen(QColor(check), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            x = self.width() - 17.0
-            painter.drawLine(QPointF(x - 4, 15), QPointF(x - 1, 18))
-            painter.drawLine(QPointF(x - 1, 18), QPointF(x + 5, 10))
 
 
 class BrowserSpinBox(QSpinBox):
@@ -923,9 +1224,11 @@ class SettingsTabContainer(QWidget):
         self._buttons: list[QPushButton] = []
         self.tab_bar = QWidget(self)
         self.tab_bar.setObjectName("settingsTaskTabBar")
+        self.tab_bar.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.tab_layout = QHBoxLayout(self.tab_bar)
-        self.tab_layout.setContentsMargins(4, 4, 4, 4)
-        self.tab_layout.setSpacing(4)
+        self.tab_layout.setContentsMargins(3, 3, 3, 3)
+        self.tab_layout.setSpacing(2)
+        self.tab_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.stack = _CurrentPageStack(self)
         self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout = QVBoxLayout(self)
@@ -938,6 +1241,8 @@ class SettingsTabContainer(QWidget):
         key = str(key)
         button = QPushButton(str(label), self.tab_bar)
         button.setObjectName("settingsTaskTab")
+        button.setProperty("navigationStyle", "plugin")
+        button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         button.setCheckable(True)
         button.setAutoExclusive(True)
         button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -1060,14 +1365,14 @@ class QuickLaunchEditor(QWidget):
         self.empty_label.setObjectName("quickLaunchEmpty")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setFixedHeight(64)
-        self.add_button = QPushButton("添加", self)
+        self.add_button = SettingsMenuButton("添加", self)
         self.add_button.setIcon(vector_widget_icon(self, "add", 15))
-        self.add_menu = QMenu(self.add_button)
+        self.add_menu = configure_settings_action_popup(SettingsPopupMenu(self.add_button))
         self.choose_application_action = self.add_menu.addAction("选择应用…")
         self.add_default_action = self.add_menu.addAction("添加默认浏览器")
         self.choose_application_action.triggered.connect(self._choose_application)
         self.add_default_action.triggered.connect(self._add_default_browser)
-        self.add_button.setMenu(self.add_menu)
+        self.add_button.setPopupMenu(self.add_menu)
         self.remove_button = QPushButton("移除所选", self)
         self.remove_button.setIcon(vector_widget_icon(self, "remove", 15))
         self.remove_button.clicked.connect(self._remove_checked)
@@ -1183,9 +1488,15 @@ class MenuLayoutEditor(QWidget):
         self.tree = QTreeWidget(self)
         self.tree.setObjectName("menuLayoutTree")
         self.tree.setHeaderLabels(["菜单项", "状态", "位置"])
-        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header = self.tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionsMovable(False)
+        header.setMinimumSectionSize(72)
+        for column in range(3):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        self.tree.setColumnWidth(0, 280)
+        self.tree.setColumnWidth(1, 92)
+        self.tree.setColumnWidth(2, 92)
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(18)
         self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
@@ -1193,12 +1504,18 @@ class MenuLayoutEditor(QWidget):
         self.tree.setAccessibleName("右键菜单内容与布局")
         self.editor_label = QLabel("菜单结构", self)
         self.editor_label.setObjectName("menuLayoutEditorLabel")
-        editor_panel = QWidget(self)
+        self.editor_hint = QLabel("拖动表头分隔线调整列宽", self)
+        self.editor_hint.setObjectName("menuLayoutEditorHint")
+        editor_panel = QFrame(self)
         editor_panel.setObjectName("menuLayoutEditorPanel")
         editor_layout = QVBoxLayout(editor_panel)
-        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setContentsMargins(10, 10, 10, 10)
         editor_layout.setSpacing(6)
-        editor_layout.addWidget(self.editor_label)
+        editor_heading = QHBoxLayout()
+        editor_heading.addWidget(self.editor_label)
+        editor_heading.addStretch(1)
+        editor_heading.addWidget(self.editor_hint)
+        editor_layout.addLayout(editor_heading)
         editor_layout.addWidget(self.tree)
         self.preview = QTreeWidget(self)
         self.preview.setObjectName("menuLayoutPreview")
@@ -1209,52 +1526,69 @@ class MenuLayoutEditor(QWidget):
         self.preview.setAccessibleName("右键菜单实时预览")
         self.preview_label = QLabel("实时菜单预览", self)
         self.preview_label.setObjectName("menuLayoutPreviewLabel")
-        preview_panel = QWidget(self)
+        preview_panel = QFrame(self)
         preview_panel.setObjectName("menuLayoutPreviewPanel")
         preview_layout = QVBoxLayout(preview_panel)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setContentsMargins(10, 10, 10, 10)
         preview_layout.setSpacing(6)
         preview_layout.addWidget(self.preview_label)
         preview_layout.addWidget(self.preview)
 
-        self.order_button = QPushButton("排序", self)
+        self.order_button = SettingsMenuButton("排序", self)
         self.order_button.setIcon(vector_widget_icon(self, "edit", 14))
-        self.order_menu = QMenu(self.order_button)
+        self.order_menu = configure_settings_action_popup(SettingsPopupMenu(self.order_button))
         self.move_up_action = self.order_menu.addAction("上移")
         self.move_down_action = self.order_menu.addAction("下移")
         self.move_up_action.triggered.connect(lambda: self._move_selected(-1))
         self.move_down_action.triggered.connect(lambda: self._move_selected(1))
-        self.order_button.setMenu(self.order_menu)
+        self.order_button.setPopupMenu(self.order_menu)
 
-        self.move_button = QPushButton("移动到", self)
+        self.move_button = SettingsMenuButton("移动到", self)
         self.move_button.setIcon(vector_widget_icon(self, "multi_select", 14))
-        self.move_menu = QMenu(self.move_button)
+        self.move_menu = configure_settings_action_popup(SettingsPopupMenu(self.move_button))
         self.move_menu.aboutToShow.connect(self._rebuild_move_menu)
-        self.move_button.setMenu(self.move_menu)
+        self.move_button.setPopupMenu(self.move_menu)
 
-        self.submenu_button = QPushButton("插入", self)
+        self.submenu_button = SettingsMenuButton("插入", self)
         self.submenu_button.setIcon(vector_widget_icon(self, "add", 14))
-        self.submenu_menu = QMenu(self.submenu_button)
+        self.submenu_menu = configure_settings_action_popup(SettingsPopupMenu(self.submenu_button))
         self.new_submenu_action = self.submenu_menu.addAction("新建子菜单…")
         self.insert_separator_action = self.submenu_menu.addAction("插入分割线")
         self.new_submenu_action.triggered.connect(self._create_submenu)
         self.insert_separator_action.triggered.connect(self._insert_separator_after_selected)
-        self.submenu_button.setMenu(self.submenu_menu)
+        self.submenu_button.setPopupMenu(self.submenu_menu)
 
-        self.customize_button = QPushButton("自定义", self)
+        self.customize_button = SettingsMenuButton("自定义", self)
         self.customize_button.setIcon(vector_widget_icon(self, "edit", 14))
-        self.customize_menu = QMenu(self.customize_button)
+        self.customize_menu = configure_settings_action_popup(SettingsPopupMenu(self.customize_button))
         self.rename_action = self.customize_menu.addAction("更换别名…")
-        self.change_icon_action = self.customize_menu.addAction("更换图标…")
+        self.change_icon_action = self.customize_menu.addAction("选择内置图标…")
+        self.choose_icon_file_action = self.customize_menu.addAction("选择图片文件…（最大 5 MB）")
+        self.choose_icon_file_action.setToolTip(
+            "支持 PNG、JPG、WebP、BMP、GIF、TIFF；作为静态方形菜单图标显示"
+        )
+        self.icon_display_menu = configure_settings_action_popup(SettingsPopupMenu("图片显示方式", self.customize_menu))
+        self.icon_contain_action = self.icon_display_menu.addAction("完整显示")
+        self.icon_cover_action = self.icon_display_menu.addAction("裁切填满")
+        self.icon_contain_action.setCheckable(True)
+        self.icon_cover_action.setCheckable(True)
+        self.customize_menu.addMenu(self.icon_display_menu)
         self.restore_presentation_action = self.customize_menu.addAction("恢复默认名称与图标")
         self.rename_action.triggered.connect(self._rename_selected)
         self.change_icon_action.triggered.connect(self._change_selected_icon)
+        self.choose_icon_file_action.triggered.connect(self._choose_selected_file_icon)
+        self.icon_contain_action.triggered.connect(
+            lambda: self._set_selected_file_display("contain")
+        )
+        self.icon_cover_action.triggered.connect(
+            lambda: self._set_selected_file_display("cover")
+        )
         self.restore_presentation_action.triggered.connect(self._restore_selected_presentation)
-        self.customize_button.setMenu(self.customize_menu)
+        self.customize_button.setPopupMenu(self.customize_menu)
 
-        self.more_button = QPushButton("更多", self)
+        self.more_button = SettingsMenuButton("更多", self)
         self.more_button.setIcon(vector_widget_icon(self, "more", 14))
-        self.more_menu = QMenu(self.more_button)
+        self.more_menu = configure_settings_action_popup(SettingsPopupMenu(self.more_button))
         self.delete_submenu_action = self.more_menu.addAction("删除所选子菜单…")
         self.delete_separator_action = self.more_menu.addAction("删除所选分割线")
         self.more_menu.addSeparator()
@@ -1264,10 +1598,11 @@ class MenuLayoutEditor(QWidget):
         self.reset_action.triggered.connect(self.reset_default)
         self.delete_submenu_action.setEnabled(False)
         self.delete_separator_action.setEnabled(False)
-        self.more_button.setMenu(self.more_menu)
+        self.more_button.setPopupMenu(self.more_menu)
 
         toolbar = QWidget(self)
         toolbar.setObjectName("menuEditorToolbar")
+        self.toolbar = toolbar
         self.toolbar_layout = QGridLayout(toolbar)
         self.toolbar_layout.setContentsMargins(0, 0, 0, 0)
         self.toolbar_layout.setHorizontalSpacing(7)
@@ -1276,7 +1611,7 @@ class MenuLayoutEditor(QWidget):
             self.order_button, self.move_button,
             self.submenu_button, self.customize_button, self.more_button,
         )
-        self._toolbar_compact = None
+        self._toolbar_mode = None
 
         self.split = QSplitter(Qt.Orientation.Horizontal, self)
         self.split.setObjectName("menuEditorSplit")
@@ -1287,8 +1622,8 @@ class MenuLayoutEditor(QWidget):
         box = QVBoxLayout(self)
         box.setContentsMargins(0, 0, 0, 0)
         box.setSpacing(8)
-        box.addWidget(self.split, 1)
         box.addWidget(toolbar)
+        box.addWidget(self.split, 1)
 
         self._preview_refresh_pending = False
         self._pending_empty_submenus: list[QTreeWidgetItem] = []
@@ -1308,30 +1643,49 @@ class MenuLayoutEditor(QWidget):
 
     def _update_layout_mode(self) -> None:
         if hasattr(self, "split"):
-            compact = self.width() < 720
-            self._reflow_toolbar(compact)
+            mode = "wide" if self.width() >= 760 else ("medium" if self.width() >= 600 else "compact")
+            compact = mode == "compact"
+            if self.property("layoutMode") != mode:
+                self.setProperty("layoutMode", mode)
+                self.style().unpolish(self)
+                self.style().polish(self)
+            self._reflow_toolbar(mode)
+            self.editor_hint.setVisible(not compact)
+            self.tree.setColumnHidden(2, compact)
             self.split.setOrientation(
-                Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+                Qt.Orientation.Horizontal if mode == "wide" else Qt.Orientation.Vertical
             )
             window_height = self.window().height()
             preferred = (
-                min(720, max(520, window_height - 180))
-                if compact
+                min(760, max(540, window_height - 160))
+                if mode != "wide"
                 else min(620, max(360, window_height - 360))
             )
             self.setMinimumHeight(preferred)
 
-    def _reflow_toolbar(self, compact: bool) -> None:
-        if self._toolbar_compact is compact:
+    def _reflow_toolbar(self, mode: str) -> None:
+        if self._toolbar_mode == mode:
             return
-        self._toolbar_compact = compact
+        self._toolbar_mode = mode
         while self.toolbar_layout.count():
             self.toolbar_layout.takeAt(0)
-        columns = 3 if compact else len(self.toolbar_buttons)
+        columns = {"wide": 5, "medium": 3, "compact": 2}[mode]
         for index, button in enumerate(self.toolbar_buttons):
+            if mode == "wide":
+                button.setMaximumWidth(132)
+                button.setMinimumWidth(104)
+                button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            else:
+                button.setMaximumWidth(16777215)
+                button.setMinimumWidth(0)
+                button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.toolbar_layout.addWidget(button, index // columns, index % columns)
         for column in range(columns):
-            self.toolbar_layout.setColumnStretch(column, 1 if compact else 0)
+            self.toolbar_layout.setColumnStretch(column, 0 if mode == "wide" else 1)
+        self.toolbar_layout.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            if mode == "wide" else Qt.AlignmentFlag.AlignTop
+        )
 
     def _sync_command_state(self, current=None, _previous=None) -> None:
         item = current or self.tree.currentItem()
@@ -1346,6 +1700,15 @@ class MenuLayoutEditor(QWidget):
         node_type = data.get("type") if data else ""
         self.move_button.setEnabled(node_type == "action")
         self.customize_button.setEnabled(node_type in {"action", "submenu"})
+        icon = data.get("icon") if data else None
+        self.icon_display_menu.setEnabled(
+            node_type in {"action", "submenu"}
+            and isinstance(icon, dict)
+            and icon.get("kind") == "file"
+        )
+        display = icon.get("display") if isinstance(icon, dict) else ""
+        self.icon_contain_action.setChecked(display == "contain")
+        self.icon_cover_action.setChecked(display == "cover")
         self.delete_submenu_action.setEnabled(
             node_type == "submenu"
         )
@@ -1410,7 +1773,8 @@ class MenuLayoutEditor(QWidget):
         node_type = str(node.get("type") or "")
         node_id = str(node.get("id") or "")
         alias = str(node.get("alias") or "").strip()
-        label = str(alias or node.get("label") or MENU_ACTIONS.label(node_id))
+        original = str(node.get("label") or MENU_ACTIONS.label(node_id))
+        label = f"{alias}（{original}）" if alias else original
         if node_type == "separator":
             label = "— 分割线"
         item = QTreeWidgetItem([label, "", ""])
@@ -1482,7 +1846,8 @@ class MenuLayoutEditor(QWidget):
             if data.get("alias"):
                 node["alias"] = str(data["alias"])[:40]
             if data.get("icon") is not None:
-                node["icon"] = str(data["icon"])[:40]
+                icon = data["icon"]
+                node["icon"] = dict(icon) if isinstance(icon, dict) else str(icon)[:40]
             if node_type == "submenu":
                 node["label"] = str(data.get("label") or item.text(0)).strip()[:40]
                 node["children"] = [encode(item.child(i)) for i in range(item.childCount())]
@@ -1518,6 +1883,28 @@ class MenuLayoutEditor(QWidget):
             return
         self._set_item_icon(item, icon_name)
 
+    def set_item_file_icon(self, action_id: str, path, display: str = "contain") -> bool:
+        item = self.item_for_action(action_id)
+        if item is None:
+            return False
+        return self._set_item_file_icon(item, path, display)
+
+    def _set_item_file_icon(self, item: QTreeWidgetItem, path, display: str) -> bool:
+        candidate = Path(path).expanduser().resolve()
+        if custom_icon_file_error(candidate):
+            return False
+        data = dict(item.data(0, Qt.ItemDataRole.UserRole) or {})
+        data["icon"] = {
+            "kind": "file",
+            "path": str(candidate),
+            "display": "cover" if display == "cover" else "contain",
+        }
+        item.setData(0, Qt.ItemDataRole.UserRole, data)
+        self._sync_item_icon(item)
+        self._sync_command_state(item)
+        self._on_changed()
+        return True
+
     def insert_separator(self, *, after_action_id: str | None = None) -> None:
         target = self.item_for_action(after_action_id) if after_action_id else self.tree.currentItem()
         parent = target.parent() if target is not None else None
@@ -1546,13 +1933,16 @@ class MenuLayoutEditor(QWidget):
         """Configure a node before insertion without coupling to tree ownership."""
         node_type = str(node.get("type") or "")
         node_id = str(node.get("id") or "")
-        label = "— 分割线" if node_type == "separator" else str(
-            node.get("alias") or node.get("label") or MENU_ACTIONS.label(node_id)
+        original = str(node.get("label") or MENU_ACTIONS.label(node_id))
+        alias = str(node.get("alias") or "").strip()
+        label = (
+            "— 分割线" if node_type == "separator"
+            else f"{alias}（{original}）" if alias else original
         )
         item.setText(0, label)
         item.setData(0, Qt.ItemDataRole.UserRole, {
             "type": node_type, "id": node_id, "section": node.get("section"),
-            "label": node.get("label"), "alias": str(node.get("alias") or ""),
+            "label": node.get("label"), "alias": alias,
             "icon": node.get("icon") if "icon" in node else None,
         })
         item.setData(0, Qt.ItemDataRole.UserRole + 1, True)
@@ -1565,7 +1955,7 @@ class MenuLayoutEditor(QWidget):
         data["alias"] = alias
         item.setData(0, Qt.ItemDataRole.UserRole, data)
         default = data.get("label") or MENU_ACTIONS.label(str(data.get("id") or ""))
-        item.setText(0, alias or str(default))
+        item.setText(0, f"{alias}（{default}）" if alias else str(default))
         self._on_changed()
 
     def _set_item_icon(self, item: QTreeWidgetItem, icon_name: str) -> None:
@@ -1573,6 +1963,7 @@ class MenuLayoutEditor(QWidget):
         data["icon"] = None if icon_name == "default" else str(icon_name or "none")
         item.setData(0, Qt.ItemDataRole.UserRole, data)
         self._sync_item_icon(item)
+        self._sync_command_state(item)
         self._on_changed()
 
     def _sync_item_icon(self, item: QTreeWidgetItem) -> None:
@@ -1580,16 +1971,18 @@ class MenuLayoutEditor(QWidget):
         if data.get("type") == "separator":
             item.setIcon(0, QIcon())
             return
-        icon_name = data.get("icon")
-        if icon_name is None:
-            icon_name = MENU_ACTIONS.default_icon(str(data.get("id") or ""))
-        item.setIcon(0, QIcon() if icon_name in {"", "none"} else vector_widget_icon(self, str(icon_name), 16))
+        item.setIcon(0, MENU_ACTIONS.icon(
+            self, str(data.get("id") or ""), data.get("icon")
+        ))
 
     def _rename_selected(self) -> None:
         item = self.tree.currentItem()
         if item is None:
             return
-        text, accepted = QInputDialog.getText(self, "更换菜单别名", "显示名称", text=item.text(0))
+        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        text, accepted = QInputDialog.getText(
+            self, "更换菜单别名", "显示名称", text=str(data.get("alias") or "")
+        )
         if accepted:
             self._set_item_alias(item, text)
 
@@ -1602,6 +1995,32 @@ class MenuLayoutEditor(QWidget):
         if accepted:
             value = next(value for label, value in CUSTOM_ICON_CHOICES if label == selected)
             self._set_item_icon(item, value)
+
+    def _choose_selected_file_icon(self) -> None:
+        item = self.tree.currentItem()
+        if item is None:
+            return
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择菜单图标",
+            str(Path.home()),
+            IMAGE_NAME_FILTER,
+        )
+        if not selected:
+            return
+        error = custom_icon_file_error(selected)
+        if error:
+            QMessageBox.warning(self, "无法使用此图标", error)
+            return
+        self._set_item_file_icon(item, selected, "contain")
+
+    def _set_selected_file_display(self, display: str) -> None:
+        item = self.tree.currentItem()
+        data = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else {}
+        icon = data.get("icon") if data else None
+        if not isinstance(icon, dict) or icon.get("kind") != "file":
+            return
+        self._set_item_file_icon(item, icon.get("path") or "", display)
 
     def _restore_selected_presentation(self) -> None:
         item = self.tree.currentItem()
@@ -1761,6 +2180,7 @@ class MenuLayoutEditor(QWidget):
                 else:
                     item.setText(1, "已启用")
                     item.setText(2, "根菜单" if item.parent() is None else item.parent().text(0))
+                item.setToolTip(2, item.text(2))
                 refresh_positions(item)
         refresh_positions(self.tree.invisibleRootItem())
         resolved = resolve_menu_layout(
@@ -1777,11 +2197,9 @@ class MenuLayoutEditor(QWidget):
                 action_id = str(node.get("id") or "")
                 label = str(node.get("alias") or node.get("label") or MENU_ACTIONS.label(action_id))
                 clone = QTreeWidgetItem([label])
-                icon_name = node.get("icon")
-                if icon_name is None:
-                    icon_name = MENU_ACTIONS.default_icon(action_id)
-                if icon_name not in {"", "none"}:
-                    clone.setIcon(0, vector_widget_icon(self, str(icon_name), 16))
+                icon = MENU_ACTIONS.icon(self, action_id, node.get("icon"))
+                if not icon.isNull():
+                    clone.setIcon(0, icon)
                 if node.get("type") == "action" and action_id not in self.enabled_actions:
                     clone.setFlags(clone.flags() & ~Qt.ItemFlag.ItemIsEnabled)
                     clone.setToolTip(0, MENU_ACTIONS.disabled_reason(action_id))
@@ -2835,6 +3253,7 @@ class ModernSettingsDialog(QDialog):
         self.self_talk_image_dir_picker = ResourcePathPicker(
             str(self.config.get("self_talk_image_dir", "") or ""),
             directory=True,
+            image_preview=True,
             parent=self,
         )
         self.click_talk_bindings_btn = QPushButton("编辑…", self)
@@ -2958,7 +3377,9 @@ class ModernSettingsDialog(QDialog):
         avatar = resolve_fun_asset(egg.get("avatar"), oijingjing_image_path())
         image_dir = resolve_fun_asset(egg.get("image_dir"), oijingjing_image_path().parent)
         self.egg_avatar_picker = ResourcePathPicker(str(avatar.resolve()), parent=self)
-        self.egg_image_dir_picker = ResourcePathPicker(str(image_dir.resolve()), directory=True, parent=self)
+        self.egg_image_dir_picker = ResourcePathPicker(
+            str(image_dir.resolve()), directory=True, image_preview=True, parent=self,
+        )
 
         # 灵动岛
         island_cfg = self.config.get("dynamic_island", {})
@@ -3721,6 +4142,9 @@ class ModernSettingsDialog(QDialog):
             if control._popup is not None:
                 control._popup.setStyleSheet(control.popupStyleSheet())
             control.update()
+        for popup in self.findChildren(QMenu):
+            if popup.property("settingsPopup"):
+                configure_settings_action_popup(popup)
         for control in self.findChildren(ToggleSwitch):
             control.update()
 
@@ -3975,15 +4399,15 @@ QListWidget#settingsSidebar::item:hover { background: #2e2e36; color: #f0f0f5; }
 QListWidget#settingsSidebar::item:selected { background: #3a3a46; color: #ffffff; }
 QWidget#settingsTaskTabBar {
     background: #292930;
-    border: 1px solid #3a3a42;
-    border-radius: 10px;
+    border: none;
+    border-radius: 8px;
 }
 QPushButton#settingsTaskTab {
-    min-height: 28px;
-    padding: 1px 14px;
+    min-height: 26px;
+    padding: 0 12px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: 6px;
     color: #aaaab3;
 }
 QPushButton#settingsTaskTab:hover { background: #33333b; color: #f0f0f5; }
@@ -4002,8 +4426,22 @@ QLabel#settingLabel { color: #e0e0e6; }
 QLabel#settingHint { color: #9a9aa3; }
 QLabel#quickLaunchName { color: #e0e0e6; }
 QLabel#quickLaunchDetail, QLabel#quickLaunchCount, QLabel#quickLaunchEmpty,
-QLabel#menuLayoutEditorLabel, QLabel#menuLayoutPreviewLabel { color: #a8a8b0; }
+QLabel#menuLayoutEditorLabel, QLabel#menuLayoutPreviewLabel,
+QLabel#menuLayoutEditorHint { color: #a8a8b0; }
 QLabel#quickLaunchEmpty { background: #26262c; border-color: #3c3c44; }
+QFrame#menuLayoutEditorPanel, QFrame#menuLayoutPreviewPanel {
+    background: #26262c; border: 1px solid #3c3c44; border-radius: 10px;
+}
+QFrame#imagePreviewDrawer {
+    background: #242429; border: none; border-left: 1px solid #44444d;
+}
+QScrollArea#imagePreviewScroll, QScrollArea#imagePreviewScroll > QWidget > QWidget,
+QWidget#imageMasonryFlow { background: transparent; }
+QLabel#imagePreviewTitle { color: #f0f0f5; font-size: 16px; font-weight: 600; }
+QLabel#imagePreviewCount, QLabel#imagePreviewPath { color: #9999a2; }
+QLabel#imagePreviewEmpty { color: #9999a2; }
+QPushButton#imagePreviewClose { background: transparent; border: none; font-size: 20px; }
+QPushButton#imagePreviewClose:hover { background: #393940; }
 QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #66666e; }
 SettingRow[searchMatch="true"] { background: #2c3a4e; }
 QListWidget#quickLaunchList { background: #26262c; border: 1px solid #3c3c44; }
@@ -4127,15 +4565,15 @@ QListWidget#settingsSidebar::item:hover {
 }
 QWidget#settingsTaskTabBar {
     background: #f0f1f3;
-    border: 1px solid #e2e4e8;
-    border-radius: 10px;
+    border: none;
+    border-radius: 8px;
 }
 QPushButton#settingsTaskTab {
-    min-height: 28px;
-    padding: 1px 14px;
+    min-height: 26px;
+    padding: 0 12px;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: 6px;
     color: #60646a;
 }
 QPushButton#settingsTaskTab:hover { background: #e5e7ea; color: #202020; }
@@ -4189,7 +4627,8 @@ SettingRow[searchMatch="true"] {
 QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget {
     background: transparent;
 }
-QLabel#quickLaunchCount, QLabel#menuLayoutEditorLabel, QLabel#menuLayoutPreviewLabel {
+QLabel#quickLaunchCount, QLabel#menuLayoutEditorLabel, QLabel#menuLayoutPreviewLabel,
+QLabel#menuLayoutEditorHint {
     color: #6f7378;
     font-size: 12px;
     font-weight: 500;
@@ -4216,6 +4655,24 @@ QListWidget#quickLaunchList::item {
     border-radius: 6px;
 }
 QListWidget#quickLaunchList::item:selected { background: #e8e8e8; color: #202020; }
+QLabel#menuLayoutEditorHint { font-weight: 400; }
+QFrame#menuLayoutEditorPanel, QFrame#menuLayoutPreviewPanel {
+    background: #fbfbfc;
+    border: 1px solid #e2e4e8;
+    border-radius: 10px;
+}
+QFrame#imagePreviewDrawer {
+    background: #ffffff;
+    border: none;
+    border-left: 1px solid #d9dce1;
+}
+QScrollArea#imagePreviewScroll, QScrollArea#imagePreviewScroll > QWidget > QWidget,
+QWidget#imageMasonryFlow { background: transparent; }
+QLabel#imagePreviewTitle { color: #202124; font-size: 16px; font-weight: 600; }
+QLabel#imagePreviewCount, QLabel#imagePreviewPath { color: #777b80; font-size: 11px; }
+QLabel#imagePreviewEmpty { color: #777b80; }
+QPushButton#imagePreviewClose { background: transparent; border: none; font-size: 20px; }
+QPushButton#imagePreviewClose:hover { background: #eceef1; }
 QTreeWidget#menuLayoutTree, QTreeWidget#menuLayoutPreview {
     background: #ffffff;
     border: 1px solid #e2e4e8;
@@ -4267,6 +4724,8 @@ QPushButton:focus {
     border: 2px solid #0a84ff;
     padding: 0 11px;
 }
+QPushButton[settingsMenuButton="true"] { padding-right: 26px; }
+QPushButton[settingsMenuButton="true"]:focus { padding-right: 25px; }
 QPushButton#advancedSectionToggle {
     min-height: 40px;
     padding: 0 38px 0 14px;

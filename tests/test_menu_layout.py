@@ -1308,10 +1308,12 @@ def test_menu_editor_switches_between_stacked_and_split_layouts():
     editor.show()
     app.processEvents()
     assert editor.findChild(type(editor.split), "menuEditorSplit").orientation() == Qt.Orientation.Vertical
+    assert editor.tree.isColumnHidden(2)
 
     editor.resize(900, 420)
     app.processEvents()
     assert editor.split.orientation() == Qt.Orientation.Horizontal
+    assert not editor.tree.isColumnHidden(2)
     editor.close()
     app.processEvents()
 
@@ -1323,12 +1325,19 @@ def test_menu_editor_uses_settings_cards_instead_of_native_table_chrome():
 
     app = QApplication.instance() or QApplication([])
     editor = MenuLayoutEditor(None)
+    editor.resize(900, 520)
+    editor.show()
+    app.processEvents()
 
     assert editor.tree.objectName() == "menuLayoutTree"
     assert editor.tree.uniformRowHeights()
     assert editor.tree.indentation() == 18
-    assert editor.tree.header().sectionResizeMode(0) == QHeaderView.ResizeMode.Stretch
-    assert editor.tree.header().sectionResizeMode(1) == QHeaderView.ResizeMode.ResizeToContents
+    assert all(
+        editor.tree.header().sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive
+        for column in range(3)
+    )
+    assert not editor.tree.header().stretchLastSection()
+    assert editor.tree.columnWidth(2) == 92
     assert editor.preview.header().isHidden()
     assert editor.preview.uniformRowHeights()
     assert editor.preview.indentation() == 18
@@ -1372,7 +1381,7 @@ def test_wide_menu_editor_expands_and_groups_commands_into_dropdowns(tmp_path, m
         (editor.more_button, "更多"),
     )
     assert all(button.text() == label for button, label in grouped)
-    assert all(button.menu() is not None for button, _label in grouped)
+    assert all(button.popupMenu() is not None for button, _label in grouped)
 
     dialog.resize(720, 700)
     app.processEvents()
@@ -1406,7 +1415,7 @@ def test_menu_editor_compact_action_bar_keeps_every_button_reachable():
         button.mapTo(editor, QPoint(0, 0)).x() + button.width() <= editor.width()
         for button in buttons
     )
-    assert len({button.mapTo(editor, QPoint(0, 0)).y() for button in buttons}) == 2
+    assert len({button.mapTo(editor, QPoint(0, 0)).y() for button in buttons}) == 3
     editor.close()
     app.processEvents()
 
@@ -1726,4 +1735,264 @@ def test_settings_rejects_invalid_nested_menu_draft_before_writing(tmp_path, mon
     assert Config(tmp_path).get("context_menu_layout") is None
     assert warnings and "菜单布局" in warnings[0]
     dialog.reject()
+    app.processEvents()
+# --- Settings menu customization regressions (2026-09-03) ---
+
+
+def test_settings_action_popups_share_the_modern_select_visual_tokens():
+    from PySide6.QtWidgets import QApplication
+
+    from pet.context_menus.registry import MENU_ACTIONS
+    from pet.modern_settings_dialog import MenuLayoutEditor, QuickLaunchEditor
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None, available_actions=MENU_ACTIONS.ids)
+    launcher = QuickLaunchEditor([])
+    menus = [
+        editor.order_menu, editor.move_menu, editor.submenu_menu,
+        editor.customize_menu, editor.more_menu, launcher.add_menu,
+    ]
+    assert all(menu.objectName() == "SettingsPopup" for menu in menus)
+    assert all("border-radius: 10px" in menu.styleSheet() for menu in menus)
+    assert all("padding: 6px" in menu.styleSheet() for menu in menus)
+    assert all("min-height: 22px" in menu.styleSheet() for menu in menus)
+    editor.close()
+    launcher.close()
+    app.processEvents()
+
+
+def test_action_popups_use_the_exact_same_popup_surface_as_menu_mode():
+    from PySide6.QtWidgets import QApplication
+
+    from pet.context_menus.registry import MENU_ACTIONS
+    from pet.modern_settings_dialog import MenuLayoutEditor, ModernSelect, QuickLaunchEditor
+
+    app = QApplication.instance() or QApplication([])
+    select = ModernSelect(width=156)
+    select.addItem("新版菜单", "modern")
+    select.addItem("旧版兼容菜单", "legacy")
+    select.show()
+    select.showPopup()
+    app.processEvents()
+    editor = MenuLayoutEditor(None, available_actions=MENU_ACTIONS.ids)
+    launcher = QuickLaunchEditor([])
+
+    reference = select._popup
+    assert reference is not None
+    for popup in (editor.order_menu, editor.customize_menu, launcher.add_menu):
+        assert popup.objectName() == reference.objectName()
+        assert popup.styleSheet() == reference.styleSheet()
+        assert popup.property("settingsPopup") is True
+
+    reference.close()
+    select.close()
+    editor.close()
+    launcher.close()
+    app.processEvents()
+
+
+def test_menu_editor_header_columns_are_user_resizable():
+    from PySide6.QtWidgets import QApplication, QHeaderView
+
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None)
+    editor.resize(1000, 560)
+    editor.show()
+    app.processEvents()
+
+    header = editor.tree.header()
+    assert all(
+        header.sectionResizeMode(index) == QHeaderView.ResizeMode.Interactive
+        for index in range(3)
+    )
+    assert not header.sectionsMovable()
+    original = editor.tree.columnWidth(0)
+    header.resizeSection(0, original + 48)
+    app.processEvents()
+    assert editor.tree.columnWidth(0) == original + 48
+    assert "拖动表头" in editor.editor_hint.text()
+    editor.close()
+    app.processEvents()
+
+
+def test_settings_tabs_are_compact_left_aligned_plugin_style_navigation():
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QSizePolicy, QWidget
+
+    from pet.modern_settings_dialog import SettingsTabContainer
+
+    app = QApplication.instance() or QApplication([])
+    tabs = SettingsTabContainer()
+    for key, label in (("layout", "菜单编排"), ("launcher", "快捷启动"), ("appearance", "外观")):
+        tabs.addTab(key, label, QWidget())
+    tabs.resize(900, 420)
+    tabs.show()
+    app.processEvents()
+
+    assert tabs.tab_bar.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Maximum
+    assert tabs.tab_layout.alignment() & Qt.AlignmentFlag.AlignLeft
+    assert tabs.tab_bar.width() < tabs.width() * 0.7
+    assert all(button.property("navigationStyle") == "plugin" for button in tabs._buttons)
+    tabs.close()
+    app.processEvents()
+
+
+def test_action_menu_button_matches_selector_popup_geometry_and_anchor():
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication, QWidgetAction
+
+    from pet.modern_settings_dialog import MenuLayoutEditor, ModernSelect, SettingsMenuButton
+
+    app = QApplication.instance() or QApplication([])
+    select = ModernSelect(width=240)
+    select.addItem("新版菜单", "modern")
+    select.addItem("旧版兼容菜单", "legacy")
+    select.move(40, 40)
+    select.show()
+    select.showPopup()
+    app.processEvents()
+    selector_popup = select._popup
+    assert selector_popup is not None
+
+    editor = MenuLayoutEditor(None)
+    editor.resize(1000, 560)
+    editor.show()
+    app.processEvents()
+    button = editor.order_button
+    assert isinstance(button, SettingsMenuButton)
+    assert button.menu() is None  # no native indicator/anchoring path
+    button.showPopup()
+    app.processEvents()
+    popup = button.popupMenu()
+
+    assert popup.width() >= button.width()
+    assert popup.pos() == button.mapToGlobal(QPoint(0, button.height() + 4))
+    assert popup.property("settingsPopup") == selector_popup.property("settingsPopup")
+    assert not any(isinstance(action, QWidgetAction) for action in selector_popup.actions())
+    assert popup.actionGeometry(popup.actions()[0]).height() == selector_popup.actionGeometry(
+        selector_popup.actions()[0]
+    ).height()
+    popup.close()
+    selector_popup.close()
+    editor.close()
+    select.close()
+    app.processEvents()
+
+
+def test_menu_editor_uses_three_responsive_toolbar_and_panel_modes():
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None)
+    editor.show()
+
+    editor.resize(1000, 600)
+    app.processEvents()
+    assert editor.property("layoutMode") == "wide"
+    assert editor.split.orientation() == Qt.Orientation.Horizontal
+    assert max(button.width() for button in editor.toolbar_buttons) <= 132
+    assert editor.toolbar_layout.itemAtPosition(0, 4) is not None
+
+    editor.resize(680, 700)
+    app.processEvents()
+    assert editor.property("layoutMode") == "medium"
+    assert editor.split.orientation() == Qt.Orientation.Vertical
+    assert editor.toolbar_layout.itemAtPosition(1, 1) is not None
+    assert editor.toolbar_layout.itemAtPosition(1, 2) is None
+
+    editor.resize(430, 760)
+    app.processEvents()
+    assert editor.property("layoutMode") == "compact"
+    assert editor.tree.isColumnHidden(2)
+    assert editor.toolbar_layout.itemAtPosition(2, 0) is not None
+    assert editor.editor_hint.isHidden()
+    editor.close()
+    app.processEvents()
+
+
+def test_alias_keeps_original_name_in_editor_but_runtime_uses_alias_only():
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.registry import MENU_ACTIONS
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    class Pet:
+        on_open_chat = lambda self: None
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None, available_actions=MENU_ACTIONS.ids)
+    editor.resize(900, 520)
+    editor.show()
+    app.processEvents()
+    editor.set_item_alias("chat", "和鲸鱼聊聊")
+    item = editor.item_for_action("chat")
+    assert item.text(0) == "和鲸鱼聊聊（AI 对话）"
+    assert editor.tree.header().sectionSize(0) > editor.tree.header().sectionSize(2)
+    preview = [
+        editor.preview.topLevelItem(index).text(0)
+        for index in range(editor.preview.topLevelItemCount())
+    ]
+    assert "和鲸鱼聊聊" in preview
+    assert item.text(0) not in preview
+    menu = QMenu()
+    MENU_ACTIONS.populate(menu, Pet(), ({
+        "type": "action", "id": "chat", "alias": "和鲸鱼聊聊",
+    },), enabled_actions={"chat"})
+    assert [action.text() for action in menu.actions()] == ["和鲸鱼聊聊"]
+    editor.close()
+    menu.close()
+    app.processEvents()
+
+
+def test_custom_file_icon_is_validated_persisted_and_supports_fit_modes(tmp_path):
+    from PIL import Image
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.icons import custom_file_menu_icon
+    from pet.context_menus.registry import MENU_ACTIONS
+    from pet.menu_layout import resolve_menu_layout
+    from pet.modern_settings_dialog import MenuLayoutEditor, custom_icon_file_error
+
+    icon_path = tmp_path / "wide icon.png"
+    Image.new("RGBA", (80, 32), (20, 120, 220, 255)).save(icon_path)
+    invalid_path = tmp_path / "not-image.txt"
+    invalid_path.write_text("not an image", encoding="utf-8")
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(None, available_actions=MENU_ACTIONS.ids)
+    assert custom_icon_file_error(icon_path) == ""
+    assert custom_icon_file_error(invalid_path)
+    assert editor.set_item_file_icon("chat", icon_path, "contain") is True
+    chat = next(node for node in editor.value()["nodes"] if node.get("id") == "chat")
+    assert chat["icon"] == {
+        "kind": "file", "path": str(icon_path.resolve()), "display": "contain",
+    }
+    assert not editor.item_for_action("chat").icon(0).isNull()
+    resolved = resolve_menu_layout(
+        editor.value(),
+        registered_actions=MENU_ACTIONS.ids,
+        available_actions=MENU_ACTIONS.ids,
+    )
+    resolved_chat = next(node for node in resolved.nodes if node.get("id") == "chat")
+    assert resolved_chat["icon"] == chat["icon"]
+    menu = QMenu()
+    MENU_ACTIONS.populate(menu, type("Pet", (), {"on_open_chat": lambda self: None})(),
+                          (resolved_chat,), enabled_actions={"chat"})
+    assert not menu.actions()[0].icon().isNull()
+    contain = custom_file_menu_icon(menu, chat["icon"], 18).pixmap(18, 18).toImage()
+    assert contain.pixelColor(9, 0).alpha() == 0
+    assert editor.set_item_file_icon("chat", icon_path, "cover") is True
+    chat = next(node for node in editor.value()["nodes"] if node.get("id") == "chat")
+    assert chat["icon"]["display"] == "cover"
+    cover = custom_file_menu_icon(menu, chat["icon"], 18).pixmap(18, 18).toImage()
+    assert cover.pixelColor(9, 0).alpha() > 0
+    assert {action.text() for action in editor.icon_display_menu.actions()} == {
+        "完整显示", "裁切填满",
+    }
+    editor.close()
+    menu.close()
     app.processEvents()

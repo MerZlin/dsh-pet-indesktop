@@ -4,9 +4,72 @@ from __future__ import annotations
 
 from math import cos, pi, sin
 
+from pathlib import Path
+
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBitmap, QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRegion
+from PySide6.QtGui import QBitmap, QBrush, QColor, QIcon, QImageReader, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRegion
 from PySide6.QtWidgets import QMenu, QStyle
+
+
+CUSTOM_ICON_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
+})
+CUSTOM_ICON_MAX_BYTES = 5 * 1024 * 1024
+
+
+def custom_icon_file_error(path: str | Path) -> str:
+    """Return a user-facing validation error, or an empty string when valid."""
+    candidate = Path(path).expanduser()
+    if not candidate.is_file():
+        return "请选择存在的图片文件"
+    if candidate.suffix.lower() not in CUSTOM_ICON_SUFFIXES:
+        return "仅支持 PNG、JPG、WebP、BMP、GIF 和 TIFF 图片"
+    try:
+        if candidate.stat().st_size > CUSTOM_ICON_MAX_BYTES:
+            return "图片文件不能超过 5 MB"
+    except OSError:
+        return "无法读取图片文件"
+    reader = QImageReader(str(candidate))
+    if not reader.canRead() or not reader.size().isValid():
+        return "图片内容无效或无法解码"
+    return ""
+
+
+def custom_file_menu_icon(widget, spec: dict, size: int = 18) -> QIcon:
+    """Render a validated local image into the square menu icon slot."""
+    path = Path(str(spec.get("path") or "")).expanduser()
+    if custom_icon_file_error(path):
+        return QIcon()
+    reader = QImageReader(str(path))
+    image = reader.read()
+    if image.isNull():
+        return QIcon()
+    mode = "cover" if spec.get("display") == "cover" else "contain"
+    dpr = widget.devicePixelRatioF() or 1.0
+    pixels = max(1, round(size * dpr))
+    canvas = QPixmap(pixels, pixels)
+    canvas.setDevicePixelRatio(dpr)
+    canvas.fill(Qt.GlobalColor.transparent)
+    source = QPixmap.fromImage(image)
+    target_mode = (
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding
+        if mode == "cover"
+        else Qt.AspectRatioMode.KeepAspectRatio
+    )
+    scaled = source.scaled(
+        pixels, pixels, target_mode, Qt.TransformationMode.SmoothTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+    painter = QPainter(canvas)
+    scaled_width = scaled.width() / dpr
+    scaled_height = scaled.height() / dpr
+    painter.drawPixmap(
+        round((size - scaled_width) / 2),
+        round((size - scaled_height) / 2),
+        scaled,
+    )
+    painter.end()
+    return QIcon(canvas)
 
 
 def _icon_theme(widget) -> tuple[str, bool]:

@@ -1234,7 +1234,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         "柔蓝对话 · 正上方",
         "吐气水泡 · 左上方",
     ]
-    assert "ModernSelectPopup" in dialog.scale_combo.popupStyleSheet()
+    assert "SettingsPopup" in dialog.scale_combo.popupStyleSheet()
     assert dialog.gap_spin.maximumWidth() <= 100
     assert dialog.self_talk_duration_spin.value() == 3.2
     assert dialog.self_talk_image_dir_picker.directory is True
@@ -1531,7 +1531,7 @@ def test_quick_launch_editor_uses_content_sized_rows_and_grouped_add_menu():
 
     assert editor.count_label.text() == "2 个快捷项"
     assert editor.add_button.text() == "添加"
-    assert [action.text() for action in editor.add_button.menu().actions()] == [
+    assert [action.text() for action in editor.add_button.popupMenu().actions()] == [
         "选择应用…", "添加默认浏览器",
     ]
     assert editor.list.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
@@ -2703,3 +2703,59 @@ def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path)
 
     # 相对路径（内置 assets）仍走既有回退解析
     assert _resolve_self_talk_image_dir("") == ""
+# --- Custom image-directory gallery regression (2026-09-03) ---
+
+
+def test_image_directory_picker_opens_right_drawer_with_three_column_masonry(tmp_path):
+    from PIL import Image
+    from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout
+
+    from pet.modern_settings_dialog import ImagePreviewDrawer, ResourcePathPicker
+
+    short = tmp_path / "01-one.png"
+    long = tmp_path / ("02-" + "very-long-image-name-" * 8 + ".jpg")
+    Image.new("RGB", (40, 80), "red").save(short)
+    Image.new("RGB", (100, 40), "blue").save(long)
+    Image.new("RGB", (80, 80), "green").save(tmp_path / "03-square.png")
+    Image.new("RGB", (120, 50), "yellow").save(tmp_path / "04-fourth.png")
+    (tmp_path / "ignore.txt").write_text("ignore", encoding="utf-8")
+    app = QApplication.instance() or QApplication([])
+    host = QDialog()
+    host.resize(1000, 680)
+    layout = QVBoxLayout(host)
+    picker = ResourcePathPicker(str(tmp_path), directory=True, image_preview=True, parent=host)
+    layout.addWidget(picker)
+    host.show()
+    app.processEvents()
+
+    assert picker.preview_button.text() == "预览"
+    assert host.findChild(ImagePreviewDrawer, "imagePreviewDrawer") is None
+    picker.preview_button.click()
+    app.processEvents()
+    drawer = host.findChild(ImagePreviewDrawer, "imagePreviewDrawer")
+    assert drawer is not None and not drawer.isHidden()
+    assert drawer.geometry().right() == host.rect().right()
+    assert drawer.flow.layout.column_count == 3
+    assert drawer.count_label.text() == "4 张图片"
+    assert len(drawer.flow.cards) == 4
+    assert drawer.flow.cards[1].toolTip() == long.name
+    assert drawer.flow.cards[3].y() < drawer.flow.cards[0].geometry().bottom()
+    assert drawer.flow.cards[3].x() == drawer.flow.cards[1].x()
+    host.close()
+    app.processEvents()
+
+
+def test_settings_image_directories_use_preview_but_audio_folders_do_not(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    assert dialog.self_talk_image_dir_picker.preview_button is not None
+    assert dialog.egg_image_dir_picker.preview_button is not None
+    assert dialog.click_sound_picker.folder_picker.preview_button is None
+    dialog.reject()
+    app.processEvents()

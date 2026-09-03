@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QMenu, QWidgetAction
 
 from ..config import DEFAULT_MENU_EASTER_EGG
 from .fun_entry import add_ojingjing_entry
-from .icons import vector_menu_icon
+from .icons import custom_file_menu_icon, vector_menu_icon
 from .quick_launch import add_quick_launch_menu, configured_quick_apps
 from .shared import (
     QUARK_PAN_URL,
@@ -211,6 +211,18 @@ class MenuActionRegistry:
     def label(self, action_id: str) -> str:
         return ACTION_LABELS.get(action_id, action_id)
 
+    def icon(self, widget, action_id: str, override=None) -> QIcon:
+        """Resolve semantic or local-file presentation with a safe fallback."""
+        if isinstance(override, dict) and override.get("kind") == "file":
+            custom = custom_file_menu_icon(widget, override)
+            if not custom.isNull():
+                return custom
+            override = None
+        if override == "none":
+            return QIcon()
+        name = str(override or self.default_icon(action_id) or "")
+        return vector_menu_icon(widget, name) if name else QIcon()
+
     def populate(self, menu: QMenu, pet, nodes, *, enabled_actions=None) -> None:
         enabled = frozenset(enabled_actions) if enabled_actions is not None else self.enabled_ids(pet)
         explicit_separators = any(node.get("type") == "separator" for node in nodes)
@@ -238,6 +250,10 @@ class MenuActionRegistry:
                     submenu, pet, node.get("children", ()), enabled_actions=enabled,
                 )
                 built = submenu
+                if "icon" in node:
+                    submenu.menuAction().setIcon(
+                        self.icon(menu, str(node.get("id") or ""), node.get("icon"))
+                    )
             else:
                 action_id = str(node.get("id") or "")
                 spec = self._specs.get(action_id)
@@ -253,11 +269,7 @@ class MenuActionRegistry:
                             if callable(setter):
                                 setter(alias)
                     if action is not None and "icon" in node:
-                        icon_name = str(node.get("icon") or "none")
-                        action.setIcon(
-                            QIcon() if icon_name == "none"
-                            else vector_menu_icon(menu, icon_name)
-                        )
+                        action.setIcon(self.icon(menu, action_id, node.get("icon")))
                     if action is not None and action_id not in enabled:
                         action.setEnabled(False)
                         action.setToolTip(self.disabled_reason(action_id))
