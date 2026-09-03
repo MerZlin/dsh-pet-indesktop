@@ -39,18 +39,18 @@ Updated: 2026-09-03 (after cross-platform CI regression fixes)
 - Menu preview refreshes after cross-parent remove/insert/move/reset events; preview/runtime structural equivalence is tested.
 - Reorder, promote, reset, draft-before-save and migration editor contracts are covered.
 - Reusable UI development skill: `.agents/skills/desktop-pet-ui-style/`; validated with `voice-picker-dev`.
-- Real Cocoa accessibility matrix covers all seven pages at 720×760, 125% fonts and extreme copy under `docs/screenshots/settings-redesign/iteration-3-accessibility/`.
+- Real Cocoa accessibility QA covered all seven pages at 720×760, 125% fonts and extreme copy; the PR retains representative Menu and AI captures under `docs/screenshots/settings-redesign/iteration-3-accessibility/`.
 - Responsive copy and Provider composite controls were fixed from screenshot-discovered failures.
 - Related regression: `49 passed`; full suite: `745 passed, 8 skipped` (`753 collected`).
 - macOS `webm-chat` package passed PyInstaller, encoding check and ad-hoc codesign in `/private/tmp/dsh-pet-macos-build.0ZBbuF`; `imageio-ffmpeg 0.6.0` is present.
 - ToggleSwitch dependency rows now hide instead of merely disabling: self-talk, menu translucency, island, easter egg, collision, Agent event details, and Windows proactive-screen settings all have explicit parent/child contracts.
 - Composite visibility reasons prevent nested controls from reappearing while an ancestor remains off; empty advanced sections hide with their rows.
-- Real Cocoa default, expanded, and compact-expanded matrices are in `docs/screenshots/settings-redesign/iteration-4-toggle-*`.
+- Real Cocoa default, expanded, and compact-expanded matrices were reviewed; duplicate intermediate captures were removed from the PR after the final iteration 9 matrix was accepted.
 - Screenshot-driven Agent sound overflow is fixed by `ResponsiveToggleActionRow` and a 720px geometry contract.
 - Wide page headings share the centered content-width contract; the menu domain expands to 1240px while compact mode stacks the editor and preview.
 - Menu commands are grouped into four dropdowns. Submenus have confirmed explicit deletion, and empty source submenus are pruned after move/promote/drag.
 - Quick launch uses content-sized two-line rows, grouped add actions, bounded list growth, and a compact empty state.
-- Real Cocoa layout evidence is in `docs/screenshots/settings-redesign/iteration-5-layout-*`; the focused quick-launch image confirms the single-row scrollbar regression is gone.
+- Real Cocoa layout evidence is consolidated under `docs/screenshots/settings-redesign/iteration-9-menu-responsive-*`; the final compact page confirms the quick-launch scrollbar regression is gone.
 - Quick-launch check indicators accept real pointer clicks despite custom item widgets.
 - Explicit menu appearance themes now apply to the open Settings System immediately; custom-painted controls inherit the same resolved state.
 - Quick Chat opens on the next event turn, waits for detectable Qt popups to close,

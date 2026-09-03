@@ -4,30 +4,17 @@
 真实平台：macOS，Qt Cocoa  
 窗口矩阵：1100×760 浅色、720×760 浅色、1100×760 深色
 
-截图目录：
+为避免把中间迭代产物永久带入仓库，PR 只保留以下最终或专项证据：
 
-- `screenshots/settings-redesign/iteration-2-wide/`
-- `screenshots/settings-redesign/iteration-2-compact/`
-- `screenshots/settings-redesign/iteration-2-dark-wide/`
-- `screenshots/settings-redesign/iteration-3-accessibility/`（720×760、125% 字体、极端长文案）
-- `screenshots/settings-redesign/iteration-4-toggle-default/`（1100×760，配置默认显隐态）
-- `screenshots/settings-redesign/iteration-4-toggle-expanded/`（1100×760，macOS 可用依赖全部展开）
-- `screenshots/settings-redesign/iteration-4-toggle-compact/`（720×760、125% 字体、极端长文案、依赖全部展开）
-- `screenshots/settings-redesign/iteration-5-layout-wide/`（1600×1000，宽内容与标题对齐）
-- `screenshots/settings-redesign/iteration-5-layout-compact/`（720×760，菜单上下分栏）
-- `screenshots/settings-redesign/iteration-5-layout-dark/`（1100×760，菜单与快捷启动深色态）
-- `screenshots/settings-redesign/iteration-6-menu-tabs-wide/`（1600×1000，三个菜单页内任务与停用态）
-- `screenshots/settings-redesign/iteration-6-menu-tabs-compact/`（720×760，页内 Tab、上下编排与停用态）
-- `screenshots/settings-redesign/iteration-6-menu-tabs-dark/`（1100×760，页内 Tab、编排与停用态深色样式）
-- `screenshots/settings-redesign/iteration-7-menu-assets-wide/`（1100×760，别名/原名、统一下拉和图片目录预览）
-- `screenshots/settings-redesign/iteration-7-menu-assets-compact/`（720×760，紧凑宽度下的别名与图片流）
-- `screenshots/settings-redesign/iteration-7-menu-assets-dark/`（1100×760，统一下拉和图片流深色样式）
-- `screenshots/settings-redesign/iteration-8-masonry-wide/`（1100×760，紧凑 Tab、可调列表头、统一弹层与三列瀑布流抽屉）
-- `screenshots/settings-redesign/iteration-8-masonry-dark/`（1100×760，上述交互的深色表面）
-- `screenshots/settings-redesign/iteration-9-menu-responsive-wide/`（1100×760，紧凑操作栏和统一弹层）
-- `screenshots/settings-redesign/iteration-9-menu-responsive-medium/`（900×760，三列两行操作栏和上下分栏）
-- `screenshots/settings-redesign/iteration-9-menu-responsive-compact/`（720×760，两列三行操作栏、精简表格列）
-- `screenshots/settings-redesign/iteration-9-menu-responsive-dark/`（1100×760，统一弹层与编排深色样式）
+- `screenshots/settings-redesign/iteration-9-menu-responsive-wide/`：七个页面及菜单编排关键交互。
+- `screenshots/settings-redesign/iteration-9-menu-responsive-compact/`：720×760 七页面最终矩阵。
+- `screenshots/settings-redesign/iteration-9-menu-responsive-dark/`：1100×760 深色七页面最终矩阵。
+- `screenshots/settings-redesign/iteration-9-menu-responsive-medium/04-菜单.png`：900×760 中间断点。
+- `screenshots/settings-redesign/iteration-3-accessibility/04-菜单.png` 与 `06-AI-与对话.png`：125% 字体和极端文案代表页。
+- `screenshots/settings-redesign/iteration-8-masonry-wide/03-互动-图片目录抽屉.png` 与深色同名文件：三列瀑布流抽屉。
+- `screenshots/settings-redesign/quick-chat-*-macos.png`：快速对话窗口激活与失焦回归。
+
+其余 baseline 和 iteration 过程图已从 PR 最终树删除；必要时仍可从功能分支历史提交恢复。
 
 ## 逐页结果
 
@@ -43,7 +30,7 @@
 
 ToggleSwitch 专项同时检查关闭后的卡片收缩、分隔线重排、空高级分组隐藏，以及重新开启后的完整恢复。灵动岛还覆盖“显示图标 / 显示信息槽 / 自定义短文本”组合依赖；Windows 主动识屏无法在本机真实截图，仅有 capability fake 的显隐测试。
 
-AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、箭头、展开卡片和下游内容在浅色宽屏、浅色紧凑及深色宽屏下保持同一视觉语言。
+AI 高级披露的展开/收起、箭头和下游可达性由真实 Qt 行为测试覆盖；PR 不再保留每轮重复展开截图。
 
 ## 放大字体与极端文案矩阵
 

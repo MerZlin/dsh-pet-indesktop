@@ -114,9 +114,9 @@
 - 第一轮截图发现 Windows 专属光标穿透开关在 macOS 作为孤立直属控件显示；补失败测试后改为非 Windows 不创建。
 - 第二轮截图发现 wide→compact transition 保留旧最小宽度，导致按钮栏横向裁切；测试复现同一状态迁移后，compact 改为三列 Grid 并向祖先布局传播约束失效，第三轮截图确认无横向死区。
 - 本轮另外修复了 AI 页窄列、自绘披露控件 Cocoa 崩溃、菜单名称截断和原生表格风格。
-- 新增可重复截图脚本 `scripts/capture_settings_pages.py`。真实 Cocoa 的 720×760、125% 字体、极端长中英文本逐页检查发现标题未换行和 Provider 复合控件撑宽页面；经 RED→GREEN 增加标题换行、`SettingRow` 自动上下布局和 `ResponsiveActionRow` 后，七页复拍通过，证据位于 `docs/screenshots/settings-redesign/iteration-3-accessibility/`。
-- ToggleSwitch 本轮增加默认态、全依赖展开态和 720×760/125% 字体全展开态逐页截图。紧凑首拍发现 Agent 单事件音效仍被固定横排推到卡片边缘；补几何失败测试后引入 `ResponsiveToggleActionRow`，复拍确认开关/试听与路径选择分层且无裁切。证据位于 `iteration-4-toggle-*`。
-- 布局专项使用 1600×1000 浅色、720×760 浅色和 1100×760 深色复拍。截图确认标题/内容同轴、菜单编排宽屏扩展与紧凑上下分栏、快捷启动单行无伪滚动条；证据位于 `iteration-5-layout-*`。
+- 新增可重复截图脚本 `scripts/capture_settings_pages.py`。真实 Cocoa 的 720×760、125% 字体、极端长中英文本逐页检查发现标题未换行和 Provider 复合控件撑宽页面；经 RED→GREEN 增加标题换行、`SettingRow` 自动上下布局和 `ResponsiveActionRow` 后复拍通过。PR 仅保留菜单与 AI 两张代表性可访问性截图。
+- ToggleSwitch 默认态、全依赖展开态和 720×760/125% 字体全展开态曾完成逐页截图。紧凑首拍发现 Agent 单事件音效仍被固定横排推到卡片边缘；补几何失败测试后引入 `ResponsiveToggleActionRow`，复拍确认开关/试听与路径选择分层且无裁切。中间截图已精简，最终页面状态见 UI 验收文档。
+- 布局专项使用 1600×1000 浅色、720×760 浅色和 1100×760 深色复拍。截图确认标题/内容同轴、菜单编排宽屏扩展与紧凑上下分栏、快捷启动单行无伪滚动条；PR 保留 iteration 9 最终宽度矩阵。
 - 本轮三个修复均为输入/状态事件行为，按需求仅用真实 Qt 事件测试验收，未新增截图。
 - 彩蛋文字色属于隔离的展示 token，相关文件 `84 passed`，真实 Cocoa 聚焦渲染 `1 passed`；未触及接口、持久化、生命周期或平台分发，按项目风险门禁跳过全量。
 
