@@ -24,7 +24,7 @@
 #endif
 #ifndef MyAppId
 ; NOTE: value must include the double-brace escaping required by AppId ({{GUID})
-#define MyAppId "{{BE859155-E238-4D47-B16D-F1B2AC2AFB0E}"
+#define MyAppId "{{3424d6cc-af3c-4383-8797-ab520b923aa6}"
 #endif
 #ifndef MyAppDisplay
 #define MyAppDisplay "dsh-pet-standalone (WebM Chat)"

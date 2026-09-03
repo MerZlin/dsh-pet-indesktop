@@ -373,8 +373,76 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
     app.processEvents()
     assert not bubble._source_pixmap.isNull()
     assert not bubble._breath_image_rect.isEmpty()
-    bubble.close()
+
+
+def test_self_talk_image_scale_config_and_bubble_size(tmp_path):
+    """气泡配图尺寸：配置 50~300 钳位 + 气泡按 image_scale 放大（双气泡形态都验证）。"""
+    from PIL import Image
+
+    from pet.config import Config
+
+    image_dir = tmp_path / "talk-images"
+    image_dir.mkdir()
+    Image.new("RGB", (20, 10), "blue").save(image_dir / "one.png")
+
+    config = Config(tmp_path)
+    assert config.get("self_talk_image_scale") == 100  # 默认
+    config.set("self_talk_image_scale", 250)
+    config.save()
+    loaded = Config(tmp_path)
+    assert loaded.get("self_talk_image_scale") == 250
+    # 钳位：越界/非数值
+    config.set("self_talk_image_scale", 9999)
+    config.save()
+    assert Config(tmp_path).get("self_talk_image_scale") == 300
+    config.set("self_talk_image_scale", "abc")
+    config.save()
+    assert Config(tmp_path).get("self_talk_image_scale") == 100
+
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QApplication
+    from pet.speech_bubble import PetSpeechBubble
+
+    app = QApplication.instance() or QApplication([])
+    anchor = QRect(420, 460, 220, 260)
+    normal = PetSpeechBubble()
+    big = PetSpeechBubble()
+    assert normal.show_image(image_dir / "one.png", anchor, 5000, image_scale=1.0)
+    assert big.show_image(image_dir / "one.png", anchor, 5000, image_scale=2.5)
+    assert big.label.width() > normal.label.width() * 2
+    # 呼吸气泡形态同样吃缩放
+    breath_normal = PetSpeechBubble(style_id="breath_bubble")
+    breath_big = PetSpeechBubble(style_id="breath_bubble")
+    assert breath_normal.show_image(image_dir / "one.png", anchor, 5000, pet_scale=0.72, image_scale=1.0)
+    assert breath_big.show_image(image_dir / "one.png", anchor, 5000, pet_scale=0.72, image_scale=2.5)
+    assert breath_big.width() > breath_normal.width()
+    # 超界缩放被弹窗侧钳住（双保险）
+    huge = PetSpeechBubble()
+    capped = PetSpeechBubble()
+    assert huge.show_image(image_dir / "one.png", anchor, 5000, image_scale=99.0)
+    assert capped.show_image(image_dir / "one.png", anchor, 5000, image_scale=3.0)
+    assert huge._image_scale == 3.0
+    assert huge.label.width() == capped.label.width()
     app.processEvents()
+    for w in (normal, big, breath_normal, breath_big, huge, capped):
+        w.close()
+    app.processEvents()
+
+
+def test_self_talk_scheduling_and_random_talk_dispatch(tmp_path, monkeypatch):
+    """自言自语调度间隔与随机图片/文本派发（原 test_self_talk_images... 的后半段）。"""
+    import random  # noqa: F401
+    from pathlib import Path  # noqa: F401
+
+    from PySide6.QtCore import QRect
+
+    from pet.window import PetWindow
+
+    image_dir = tmp_path / "talk-images"
+    image_dir.mkdir()
+    # _show_random_self_talk 会惰性剔除不存在的图片文件——必须有真实图片
+    from PIL import Image
+    Image.new("RGB", (20, 10), "blue").save(image_dir / "one.png")
 
     starts = []
 
@@ -390,6 +458,7 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
         _self_talk_enabled = True
         _self_talk_texts = ["hello"]
         _self_talk_images = [image_dir / "one.png"]
+        _self_talk_image_scale = 1.0
         _self_talk_min_interval = 5.0
         _self_talk_max_interval = 5.0
         _self_talk_duration_seconds = 7.5
@@ -401,8 +470,8 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
     shown = []
 
     class Bubble:
-        def show_image(self, path, anchor, duration, *, pet_scale):
-            shown.append((Path(path), anchor, duration, pet_scale))
+        def show_image(self, path, anchor, duration, *, pet_scale, image_scale=1.0):
+            shown.append((Path(path), anchor, duration, pet_scale, image_scale))
             return True
 
     runtime_pet = FakePet()
@@ -411,7 +480,7 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
     runtime_pet.visible_content_rect = lambda: QRect(10, 20, 180, 240)
     monkeypatch.setattr("pet.window.random.choice", lambda choices: choices[-1])
     assert PetWindow._show_random_self_talk(runtime_pet)
-    assert shown == [(image_dir / "one.png", QRect(10, 20, 180, 240), 7500, 0.72)]
+    assert shown == [(image_dir / "one.png", QRect(10, 20, 180, 240), 7500, 0.72, 1.0)]
 
 
 def test_speech_bubble_tail_is_one_surface_and_shadow_has_no_graphics_effect():
@@ -909,6 +978,87 @@ def test_context_menu_dispatches_style_by_template(monkeypatch):
         assert menu.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuUniDirection, None, menu) == 0
         menu.close()
     app.processEvents()
+
+
+def test_context_menu_invalid_template_falls_back_to_modern_uniformly():
+    """非法/缺失模板 id：load_menu_template 与 populate_context_menu 统一回退 modern。
+
+    历史分歧：load_menu_template 曾把非法值回退 legacy、populate_context_menu 回退
+    modern——同一非法配置在两个入口结果不同。现在统一走 normalize_template_id，
+    非法值一律落到现行默认模板 modern。
+    """
+    from PySide6.QtWidgets import QApplication, QMenu
+    from pet.context_menu import load_menu_template, normalize_template_id, populate_context_menu
+
+    # normalize 是唯一的回退决策点
+    assert normalize_template_id("modern") == "modern"
+    assert normalize_template_id("legacy") == "legacy"
+    assert normalize_template_id("MODERN") == "modern"
+    assert normalize_template_id(None) == "modern"
+    assert normalize_template_id("") == "modern"
+    assert normalize_template_id("bogus") == "modern"
+    # 两个入口对同一非法值给出同一结果：modern 模板
+    assert load_menu_template("bogus")["id"] == "modern"
+    assert load_menu_template(None)["id"] == "modern"
+    assert load_menu_template("")["id"] == "modern"
+
+    class Config:
+        def get(self, key, default=None):
+            return "bogus" if key == "context_menu_template" else default
+
+    class Pet:
+        on_open_chat = on_open_chat_settings = None
+        on_open_legacy_settings = on_open_modern_settings = None
+        on_spawn_pet = None
+        idles = turns = moves = clicks = acts = []
+        playback_speed = scale = 1.0
+        drag_physics = no_move = False
+
+        def __init__(self):
+            self.cfg = Config()
+
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    populate_context_menu(menu, Pet())
+    # 非法配置下分发器也走 modern（现行默认模板）
+    assert menu.objectName() == "modernContextMenu"
+    menu.close()
+    app.processEvents()
+
+    # PetWindow.set_context_menu_template 是第三个入口（历史旁路：非法值曾回退 legacy，
+    # 与 normalize 分歧）。现在同样走 normalize_template_id，持久化值与 normalize 结果一致。
+    from pet.window import PetWindow
+
+    class RecorderConfig:
+        def __init__(self):
+            self.values = {}
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def save(self):
+            return None
+
+    class PetWindowStub:
+        def __init__(self):
+            self.cfg = RecorderConfig()
+
+    def persisted_template(raw):
+        stub = PetWindowStub()
+        PetWindow.set_context_menu_template(stub, raw)
+        return stub.cfg.values["context_menu_template"]
+
+    for raw in (None, "bad", "LEGACY", "legacy", "modern"):
+        assert persisted_template(raw) == normalize_template_id(raw)
+    # 非法值 None/bad 落到现行默认模板 modern；合法值 legacy/modern 原样保留
+    # （'LEGACY' 是 'legacy' 的大小写变体，normalize 折叠为合法值 'legacy'）
+    assert persisted_template(None) == "modern"
+    assert persisted_template("bad") == "modern"
+    assert persisted_template("legacy") == "legacy"
+    assert persisted_template("modern") == "modern"
 
 
 def test_modern_menu_icons_are_crisp_outline_glyphs(monkeypatch):
@@ -2356,7 +2506,7 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
         def __init__(self):
             self.saved = 0
 
-        def _save_position(self):
+        def save_position(self):
             self.saved += 1
 
     monkeypatch.setattr(app_mod.QTimer, "singleShot", lambda *a, **k: None)
@@ -2441,3 +2591,103 @@ def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path)
     assert _resolve_self_talk_image_dir("") == ""
 
 
+
+
+def test_cleanup_old_pet_logs(tmp_path):
+    """审查 GLM-M2 回归：启动时清理超龄 pet-*.log，不动新日志与其他文件。"""
+    import os
+    import time
+
+    from pet.app import _cleanup_old_pet_logs
+
+    old = tmp_path / "pet-111.log"
+    old.write_text("x", encoding="utf-8")
+    old_ts = time.time() - 8 * 86400
+    os.utime(old, (old_ts, old_ts))
+    old_backup = tmp_path / "pet-111.log.1"
+    old_backup.write_text("x", encoding="utf-8")
+    os.utime(old_backup, (old_ts, old_ts))
+    fresh = tmp_path / "pet-222.log"
+    fresh.write_text("y", encoding="utf-8")
+    other = tmp_path / "config.json"
+    other.write_text("z", encoding="utf-8")
+    os.utime(other, (time.time() - 30 * 86400,) * 2)  # 老但非 pet 日志
+
+    assert _cleanup_old_pet_logs(tmp_path) == 2
+    assert not old.exists() and not old_backup.exists()
+    assert fresh.exists() and other.exists()
+
+
+def test_check_update_failure_reports_and_reentry_guard(tmp_path, monkeypatch):
+    """审查 P1-01/GLM-L3 回归：更新检查线程异常收口回 GUI + 重入防护。
+
+    （修复批复审 P2：payload 不再带重复前缀；重入必须在请求进行中验证，
+    且完成后必须能再次发起。）
+    """
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    from pet import app as app_mod
+    from pet.app import PetApp
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    owner = PetApp(app, Config(tmp_path))
+
+    gate = threading.Event()
+
+    def boom():
+        gate.wait(5)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_mod.updater, "latest_release", boom)
+    owner.check_update(parent=None)
+    first_bridge = owner._update_bridge
+    results = []
+    first_bridge.done.connect(lambda ok, payload: results.append((bool(ok), str(payload))))
+
+    # 请求进行中再次调用 → 闸门拦截，不换 bridge、不起新线程
+    owner.check_update(parent=None)
+    assert owner._update_bridge is first_bridge
+    assert owner._update_checking is True
+
+    gate.set()
+    deadline = time.monotonic() + 5
+    while not results and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert results == [(False, "boom")]  # 前缀由 UI 层统一加，payload 不带
+
+    # 完成后闸门放行，可再次发起
+    deadline = time.monotonic() + 5
+    while owner._update_checking and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert owner._update_checking is False
+    gate.clear()
+    owner.check_update(parent=None)
+    assert owner._update_bridge is not first_bridge
+    # 收尾：放行第二个线程，避免泄漏到后续测试
+    gate.set()
+    deadline = time.monotonic() + 5
+    while owner._update_checking and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+def test_modern_settings_reject_saves_config(tmp_path):
+    """审查 DS-M9 回归：Esc（reject）路径与 X 一样落盘。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    dlg = settings_mod.ModernSettingsDialog(cfg, include_ai=False)
+    dlg.self_talk_image_scale_spin.setValue(180)
+    dlg.reject()
+    app.processEvents()
+    assert Config(tmp_path).get("self_talk_image_scale") == 180

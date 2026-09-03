@@ -27,9 +27,9 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import autostart as autostart_mod
 from . import balance as balance_mod
 from . import catalog
+from . import click_sound
 from . import slot_manager as slot_manager_mod
 from . import updater
-from .click_sound import warm_click_sound_effects
 from .config import APP_DIR_NAME, Config, _default_base
 from .context_menus.shared import open_deepseek_web
 from .desktop_notify import DesktopNotification, position_stack
@@ -40,6 +40,7 @@ from .window import PetWindow
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .collision_ipc import CollisionIpcSession
+from .decode_broker import BrokerFacade
 
 
 class _BackgroundResult(QObject):
@@ -144,6 +145,28 @@ def _setup_logging(config: Config) -> None:
         format='%(asctime)s %(levelname)s %(message)s',
         encoding='utf-8',
     )
+    _cleanup_old_pet_logs(config.dir)
+
+
+def _cleanup_old_pet_logs(log_dir, *, max_age_days: float = 7.0) -> int:
+    """启动时清理过期的 pet-<pid>.log（含滚动备份 .log.1/.2）。
+
+    每实例每次启动都产生新文件，不清理会无界累积（审查 GLM-M2）。
+    只删本变体命名空间下超龄文件；失败静默（清理不影响启动）。
+    """
+    removed = 0
+    try:
+        cutoff = time.time() - max_age_days * 86400
+        for path in Path(log_dir).glob('pet-*.log*'):
+            try:
+                if path.is_file() and path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return removed
 
 
 def _show_startup_error(title: str, message: str) -> None:
@@ -180,7 +203,6 @@ class PetApp:
         self.slot_id = slot_id
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
-        self._notification_click_callback = None
         self._toast_windows: list[DesktopNotification] = []
         self.chat_window = None
         self.legacy_chat_window = None
@@ -200,11 +222,15 @@ class PetApp:
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
         self.collision_ipc = CollisionIpcSession(config, self)
+        # P3 broker：PetApp 持有 BrokerFacade（随 collision_ipc 同生命周期）。
+        # bind 在窗口 attach_collision_session 尾部完成（facade 需绑定到窗口实际
+        # attach 的会话），此处只创建（含开关位），不提前 bind（避免双重连接）。
+        self.broker_facade = BrokerFacade(enabled=bool(config.get('decode_broker_enabled', False)))
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
         # aboutToQuit 只在控制器层绑定一次：角色热切换会重建窗口，逐个
-        # connect win._save_position 会在旧窗口延迟销毁后残留失效引用。
+        # connect win.save_position 会在旧窗口延迟销毁后残留失效引用。
         # 统一走 _on_about_to_quit，在信号触发时读取当前有效窗口。
         if not self._on_about_to_quit_connected:
             self.app.aboutToQuit.connect(self._on_about_to_quit)
@@ -257,8 +283,40 @@ class PetApp:
         触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
         """
         if self.win is not None:
-            self.win._save_position()
+            self.win.save_position()
+        # 退出前暂停动画预热：低优预热队列（ThreadPoolExecutor 的 worker 非
+        # daemon）在解释器退出期会被排空执行——不暂停的话退出会被拖住数秒
+        # 并继续拉起 ffmpeg（审查 DS-M1）
+        try:
+            if self.win is not None and getattr(self.win, 'lib', None) is not None:
+                self.win.lib.pause_warm()
+        except Exception:
+            logging.exception("退出时暂停预热失败")
+        # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
+        if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
+            self.win.agent_link_manager.shutdown()
+        # P3 broker：退出前中止本实例全部发布 session（aborted → 其它实例本地回退）
+        try:
+            self.broker_facade.shutdown()
+        except Exception:
+            logging.exception("退出时关闭 broker facade 失败")
         self.collision_ipc.stop()
+        # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
+        # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
+        try:
+            from .chat import session_store as _session_store
+            for _w in (self.legacy_chat_window, self.modern_chat_window, self.quick_chat):
+                _session = getattr(_w, 'session', None)
+                _store = getattr(_w, 'store', None)
+                if _session is not None and _store is not None:
+                    try:
+                        _store.save(_session)
+                    except Exception:
+                        logging.exception("退出前保存会话失败")
+            if not _session_store.close_all_writers(permanent=True):
+                logging.warning("退出时会话写盘 worker 未干净关闭")
+        except Exception:
+            logging.exception("退出时关闭会话写盘 worker 失败")
         if self.slot_handle is not None:
             try:
                 slot_manager_mod._unlock_file(self.slot_handle)
@@ -405,14 +463,27 @@ class PetApp:
             pass
 
     def check_update(self, parent=None) -> None:
+        # 重入防护（审查 GLM-L3）：连点不应起多个检查线程/叠气泡
+        if getattr(self, "_update_checking", False):
+            return
+        self._update_checking = True
         target = parent or self.win
         if target is not None:
             target.show_bubble("正在检查更新…", duration_ms=6000)
         bridge = _UpdateBridge(target)
         self._update_bridge = bridge
+        # 完成后放行下一次检查（无论成败）
+        bridge.done.connect(lambda *_: setattr(self, "_update_checking", False))
 
         def worker() -> None:
-            release = updater.latest_release()
+            try:
+                release = updater.latest_release()
+            except Exception as exc:
+                # 后台线程异常必须收口回 GUI，否则更新提示永远停在
+                # 「正在检查更新」（审查 P1-01）
+                logging.debug("检查更新失败", exc_info=True)
+                bridge.done.emit(False, str(exc))  # 前缀由 _UpdateBridge._show 统一加
+                return
             bridge.done.emit(bool(release), release or "无法连接更新服务，请稍后重试。")
 
         threading.Thread(target=worker, daemon=True, name="pet-update-check").start()
@@ -445,9 +516,12 @@ class PetApp:
                     settings.active_provider,
                     settings.default_system_prompt,
                 )
-            session.messages.append(ChatMessage("user", str(user_text)))
-            session.messages.append(ChatMessage("assistant", str(reply)))
-            store.save(session)
+            msgs = [ChatMessage("user", str(user_text)), ChatMessage("assistant", str(reply))]
+            synced, _absorbed = store.append_messages(session, msgs)
+            if synced is None:
+                # 会话已被并发删除等边界：本地兜底（保持旧行为）
+                session.messages.extend(msgs)
+                store.save(session)
         except Exception:
             logging.exception("同步识屏问答到会话记录失败")
 
@@ -461,7 +535,7 @@ class PetApp:
             index = 0
         if index <= 0:
             return
-        scr = self.win._screen_available()
+        scr = self.win.screen_available()
         if scr is None:
             return
         available = scr.availableGeometry()
@@ -486,9 +560,12 @@ class PetApp:
         logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
         return lib
 
-    def _create_ui(self, character_id: str) -> None:
-        lib = self._create_library(character_id)
-        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
+    def _wire_window(self, win: PetWindow) -> None:
+        """绑定新窗口的回调接线（创建与角色切换共用，两处历史逐行重复）。
+
+        两段原始代码逐行一致（并集 = 该段本身，未发现任一方多设回调），
+        后续新增回调只改这一处即可保证两个入口同步。
+        """
         win.on_switch_character = self.switch_character
         win.on_open_chat = self.open_chat if self.enable_chat else None
         win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
@@ -496,16 +573,30 @@ class PetApp:
         win.on_show_balance = self.show_balance if self.enable_chat else None
         win.on_check_update = self.check_update
         win.on_look_synced = self.sync_look_to_chat if self.enable_chat else None
-        win.on_look_screen = win._on_look_screen if self.enable_chat and hasattr(win, "_on_look_screen") else None
+        win.on_look_screen = win.look_at_screen if self.enable_chat and hasattr(win, "look_at_screen") else None
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self.open_modern_settings
         win.on_spawn_pet = self.spawn_pet
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._notify_pet_hidden
+
+    def _build_window(self, character_id: str, lib: MovieLibrary | None = None) -> PetWindow:
+        """创建新窗口/托盘并完成接线、音效预热与旧对象延迟销毁（创建与切换共用）。
+
+        从 _create_ui 与 switch_character 两处历史逐行重复的公共序列（约 25 行）
+        抽出：步骤顺序与 deleteLater / QTimer.singleShot 时序与原实现完全一致。
+        lib 可预传入（switch_character 先预创建、失败则保留当前角色），
+        缺省时按 character_id 创建（_create_ui 启动路径）。
+        """
+        if lib is None:
+            lib = self._create_library(character_id)
+        win = PetWindow(lib, self.config, collision_session=self.collision_ipc,
+                        broker_facade=self.broker_facade)
+        self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
         # 首次点击 Q 弹卡顿。
-        warm_click_sound_effects(
+        click_sound.warm_click_sound_effects(
             self.config.get("click_sound_pack"),
             data_dir=self.config.dir,
         )
@@ -521,10 +612,15 @@ class PetApp:
 
         if old_win is not None:
             old_win.hide(notify=False)
-            old_tray.hide() if old_tray is not None else None
+            if old_tray is not None:
+                old_tray.hide()
             QTimer.singleShot(0, old_win.deleteLater)
             if old_tray is not None:
                 QTimer.singleShot(0, old_tray.deleteLater)
+        return win
+
+    def _create_ui(self, character_id: str) -> None:
+        self._build_window(character_id)
 
     # ------------------------------------------------------------ 角色切换
     def switch_character(self, character_id: str) -> None:
@@ -539,7 +635,7 @@ class PetApp:
         self.config.save()
 
         try:
-            # 预创建新库，失败则保留当前角色
+            # 预创建新库，失败则保留当前角色（在动旧窗口之前完成）
             lib = self._create_library(character_id)
         except Exception as exc:
             logging.exception('切换角色失败: %s', character_id)
@@ -548,47 +644,24 @@ class PetApp:
 
         logging.info('切换角色: %s -> %s', current, character_id)
 
-        # 用新库创建新窗口/托盘，旧对象延迟销毁
+        # 先停旧窗口的碰撞会话与 Agent 监视器 worker，再重建 IPC 会话：
+        # 否则旧窗口 deleteLater 后其 worker 线程仍经引用链保活并继续轮询
+        # （B9 一审发现）。新窗口/托盘由 _build_window 创建（含旧对象延迟销毁）。
         old_win = self.win
         old_win.detach_collision_session()
+        # P3 broker：旧窗口/旧 ipc 退场前中止其仍在发布的全部 session
+        # （publish_abort 全部 session → 消费端本地回退；旧 facade 随旧 ipc 退役）。
+        self.broker_facade.shutdown()
+        if getattr(old_win, 'agent_link_manager', None) is not None:
+            old_win.agent_link_manager.shutdown()
         self.collision_ipc.stop()
         self.collision_ipc = CollisionIpcSession(self.config, self)
+        # P3 broker：新 ipc 配新 facade（同 CollisionIpcSession 生命周期；
+        # bind 由新窗口 attach_collision_session 尾部完成）。
+        self.broker_facade = BrokerFacade(
+            enabled=bool(self.config.get('decode_broker_enabled', False)))
         self.collision_ipc.start()
-        win = PetWindow(lib, self.config, collision_session=self.collision_ipc)
-        win.on_switch_character = self.switch_character
-        win.on_open_chat = self.open_chat if self.enable_chat else None
-        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
-        win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
-        win.on_show_balance = self.show_balance if self.enable_chat else None
-        win.on_check_update = self.check_update
-        win.on_look_synced = self.sync_look_to_chat if self.enable_chat else None
-        win.on_look_screen = win._on_look_screen if self.enable_chat and hasattr(win, "_on_look_screen") else None
-        win.on_open_legacy_settings = None
-        win.on_open_modern_settings = self.open_modern_settings
-        win.on_spawn_pet = self.spawn_pet
-        win.on_restore_fun_windows = restore_ojingjing_windows
-        win.on_hidden = self._notify_pet_hidden
-        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
-        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
-        # 首次点击 Q 弹卡顿。
-        warm_click_sound_effects(
-            self.config.get("click_sound_pack"),
-            data_dir=self.config.dir,
-        )
-        win.show()
-
-        tray = self._build_tray(win)
-
-        old_tray = self.tray
-        self.win = win
-        self.tray = tray
-
-        old_win.hide(notify=False)
-        if old_tray is not None:
-            old_tray.hide()
-        QTimer.singleShot(0, old_win.deleteLater)
-        if old_tray is not None:
-            QTimer.singleShot(0, old_tray.deleteLater)
+        self._build_window(character_id, lib=lib)
         if self.enable_chat:
             for chat_window in (self.legacy_chat_window, self.modern_chat_window):
                 if chat_window is not None:
@@ -616,7 +689,7 @@ class PetApp:
         else:
             self.quick_chat.pet_window = self.win
             self.quick_chat.settings = self.config.chat_settings()
-            self.quick_chat.session = self.quick_chat._get_session()
+            self.quick_chat.refresh_session()
         self.quick_chat.show_for_pet(self.win)
 
     def open_legacy_chat(self) -> None:
@@ -820,15 +893,6 @@ class PetApp:
         ]
         position_stack(self._toast_windows)
 
-    def _on_tray_message_clicked(self) -> None:
-        callback = self._notification_click_callback
-        self._notification_click_callback = None
-        if callable(callback):
-            try:
-                callback()
-            except Exception:
-                logging.exception("系统通知点击回调执行失败")
-
     def _build_tray(self, win: PetWindow) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(QIcon(win.icon_pixmap()))
 
@@ -843,7 +907,7 @@ class PetApp:
         menu = QMenu()
         # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），托盘菜单弹出前
         # 先隐藏气泡，避免气泡盖住菜单
-        menu.aboutToShow.connect(lambda: win._speech_bubble.hide())
+        menu.aboutToShow.connect(lambda: win.hide_speech_bubble())
         menu.addAction('显示 / 隐藏', toggle_visible)
 
         island_action = menu.addAction('灵动岛')
@@ -910,7 +974,6 @@ class PetApp:
 
         tray.setContextMenu(menu)
         tray.setToolTip('dsh-pet 独立桌宠')
-        tray.messageClicked.connect(self._on_tray_message_clicked)
         tray.activated.connect(
             lambda reason: toggle_visible()
             if reason == QSystemTrayIcon.ActivationReason.DoubleClick

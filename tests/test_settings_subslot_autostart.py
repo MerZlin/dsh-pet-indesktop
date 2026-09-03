@@ -7,7 +7,6 @@ from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
 from pet.modern_settings_dialog import ModernSettingsDialog
-from pet.settings_dialog import PetSettingsDialog
 
 
 @pytest.fixture
@@ -27,25 +26,6 @@ def test_modern_settings_dialog_disables_autostart_on_sub_slot(app, tmp_path):
     # 副槽（instance_id="slot-1"）
     slot1_cfg = Config(base=tmp_path, instance_id="slot-1")
     d_slot1 = ModernSettingsDialog(slot1_cfg, include_ai=False)
-    try:
-        assert d_slot1.autostart_check.isEnabled() is False
-        assert d_slot1.autostart_check.toolTip() == "仅主桌宠可设置"
-    finally:
-        d_slot1.close()
-
-
-def test_legacy_settings_dialog_disables_autostart_on_sub_slot(app, tmp_path):
-    # 主槽
-    master_cfg = Config(base=tmp_path)
-    d_master = PetSettingsDialog(master_cfg)
-    try:
-        assert d_master.autostart_check.isEnabled() is True
-    finally:
-        d_master.close()
-
-    # 副槽
-    slot1_cfg = Config(base=tmp_path, instance_id="slot-1")
-    d_slot1 = PetSettingsDialog(slot1_cfg)
     try:
         assert d_slot1.autostart_check.isEnabled() is False
         assert d_slot1.autostart_check.toolTip() == "仅主桌宠可设置"

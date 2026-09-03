@@ -34,9 +34,9 @@ def test_rapid_start_stop_no_leaked_running_threads():
     clip.cleanup()
     app.processEvents()
 
-    # 断言 clip._retired 中的线程已全部结束
-    for t in clip._retired:
-        assert not t.is_alive()
+    # 断言 clip._retired 中的 reader（线程+进程句柄记录）已全部结束
+    for r in clip._retired:
+        assert not r.thread.is_alive()
 
     # 断言无残留运行中的 reader 线程（或整体 threading 运行线程无残留）。
     # 线程退出是异步的，给一点宽限时间再断言，避免 CI 偶发“线程尚未完全回收”。

@@ -1,27 +1,28 @@
 # -*- coding: utf-8 -*-
-"""Modern-inspired sidebar settings panel used by the modern context menu."""
+"""Modern-inspired sidebar settings panel used by the modern context menu.
+
+批 6-7：自定义控件库整体搬移至 settings_widgets.py（逐行搬移）；本文件保留
+设置页构建与配置写回，import 控件库并 re-export（维持测试兼容），内联 QSS
+抽至 pet/settings_styles*.qss（与 pet/chat/*.qss 同约定，运行时读取）。
+"""
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import threading
 from pathlib import Path
 
 import shiboken6
 
-from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
-    QAbstractButton,
     QAbstractItemView,
     QApplication,
-    QDialog,
     QColorDialog,
+    QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
-    QFileIconProvider,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -29,15 +30,12 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QMenu,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 from . import autostart as autostart_mod
@@ -56,8 +54,24 @@ from .config import (
     _float_or_default,
 )
 from .context_menus.icons import vector_widget_icon
-from .context_menus.quick_launch import fitted_application_icon
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset, store_fun_asset
+from .settings_widgets import (
+    AUDIO_NAME_FILTER,
+    BROWSER_CONTROL_STYLESHEET,
+    BrowserDoubleSpinBox,
+    BrowserSpinBox,
+    ClickSoundPackPicker,
+    ColorPicker,
+    ColorSwatchButton,
+    ModernSelect,
+    QuickLaunchEditor,
+    ResourcePathPicker,
+    SettingRow,
+    SettingsCard,
+    SettingsSection,
+    ToggleSwitch,
+    _system_dark,
+)
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
 
@@ -75,674 +89,12 @@ def _system_font_families() -> tuple[str, ...]:
 _system_font_families._cache = None
 
 
-BROWSER_CONTROL_SPEC = {
-    "field_height": 32,
-    "border": "#cfd4da",
-    "border_hover": "#aeb6c0",
-    "focus": "#0a84ff",
-    "radius": 7,
-    "scrollbar_width": 8,
-}
-
-BROWSER_CONTROL_STYLESHEET = """
-QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
-    background: #ffffff;
-    color: #202124;
-    border: 1px solid #cfd4da;
-    border-radius: 7px;
-    padding: 4px 8px;
-    selection-background-color: #0a84ff;
-    selection-color: #ffffff;
-}
-QLineEdit, QSpinBox, QDoubleSpinBox { min-height: 20px; }
-QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QPlainTextEdit:hover {
-    border-color: #aeb6c0;
-}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {
-    border: 2px solid #0a84ff;
-    padding: 3px 7px;
-}
-QSpinBox::up-button, QDoubleSpinBox::up-button {
-    width: 18px;
-    border: none;
-    border-left: 1px solid #e3e5e8;
-    border-bottom: 1px solid #eceef0;
-    border-top-right-radius: 6px;
-}
-QSpinBox::down-button, QDoubleSpinBox::down-button {
-    width: 18px;
-    border: none;
-    border-left: 1px solid #e3e5e8;
-    border-bottom-right-radius: 6px;
-}
-QScrollBar:vertical {
-    width: 8px;
-    margin: 0;
-    background: transparent;
-}
-QScrollBar::handle:vertical {
-    min-height: 24px;
-    margin: 1px;
-    background: #c4c8cc;
-    border-radius: 4px;
-}
-QScrollBar::handle:vertical:hover { background: #9fa5ab; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-QScrollBar:horizontal {
-    height: 8px;
-    margin: 0;
-    background: transparent;
-}
-QScrollBar::handle:horizontal {
-    min-width: 24px;
-    margin: 1px;
-    background: #c4c8cc;
-    border-radius: 4px;
-}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-"""
-
-
-class ToggleSwitch(QAbstractButton):
-    """Small native-looking toggle used by settings cards."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setCheckable(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(38, 22)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        track = "#0a84ff" if self.isChecked() else ("#3a3a42" if _system_dark() else "#dedede")
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(track))
-        painter.drawRoundedRect(QRectF(0, 1, 38, 20), 10, 10)
-        knob_x = 19.0 if self.isChecked() else 2.0
-        painter.setBrush(QColor("#ffffff"))
-        painter.setPen(QPen(QColor("#c9c9c9"), 0.5))
-        painter.drawEllipse(QRectF(knob_x, 2, 18, 18))
-
-
-IMAGE_NAME_FILTER = "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *.tiff)"
-AUDIO_NAME_FILTER = "音频文件 (*.wav *.mp3 *.ogg *.flac *.m4a)"
-
-
-class ClickSoundPackPicker(QWidget):
-    """点击音效包选择器（内置默认/小黄鸭/自定义单文件/自定义文件夹）。"""
-
-    changed = Signal()
-
-    def __init__(self, pack: dict | None = None, parent=None):
-        super().__init__(parent)
-        self.mode_select = ModernSelect(self, width=170)
-        self.mode_select.addItem("默认包", "builtin:default")
-        self.mode_select.addItem("小黄鸭包", "builtin:duck")
-        self.mode_select.addItem("自定义单文件", "file")
-        self.mode_select.addItem("自定义文件夹（随机）", "folder")
-
-        self.file_picker = ResourcePathPicker("", name_filter=AUDIO_NAME_FILTER, parent=self)
-        self.folder_picker = ResourcePathPicker("", directory=True, parent=self)
-
-        self.stack = QStackedWidget(self)
-        empty_page = QWidget(self)
-        self.stack.addWidget(empty_page)         # 0: builtin (hidden)
-        self.stack.addWidget(self.file_picker)    # 1: file
-        self.stack.addWidget(self.folder_picker)  # 2: folder
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self.mode_select)
-        layout.addWidget(self.stack)
-
-        self.mode_select.currentIndexChanged.connect(self._on_mode_changed)
-        self.file_picker.edit.textChanged.connect(lambda: self.changed.emit())
-        self.folder_picker.edit.textChanged.connect(lambda: self.changed.emit())
-
-        self.set_pack(pack or {})
-
-    def _on_mode_changed(self, index: int) -> None:
-        data = self.mode_select.currentData()
-        if data == "file":
-            self.stack.setCurrentIndex(1)
-            self.stack.show()
-        elif data == "folder":
-            self.stack.setCurrentIndex(2)
-            self.stack.show()
-        else:
-            self.stack.setCurrentIndex(0)
-            self.stack.hide()
-        self.changed.emit()
-
-    def value(self) -> dict:
-        data = str(self.mode_select.currentData() or "builtin:default")
-        if data.startswith("builtin:"):
-            bid = data.split(":", 1)[1]
-            return {"kind": "builtin", "id": bid, "path": ""}
-        if data == "file":
-            return {"kind": "file", "id": "custom", "path": self.file_picker.text()}
-        if data == "folder":
-            return {"kind": "folder", "id": "custom", "path": self.folder_picker.text()}
-        return {"kind": "builtin", "id": "default", "path": ""}
-
-    def set_pack(self, pack: dict) -> None:
-        pack = pack if isinstance(pack, dict) else {}
-        kind = str(pack.get("kind") or "builtin").strip().lower()
-        pack_id = str(pack.get("id") or "default").strip()
-        path = str(pack.get("path") or "")
-
-        if kind == "builtin":
-            if pack_id == "duck":
-                self.mode_select.setCurrentData("builtin:duck")
-            else:
-                self.mode_select.setCurrentData("builtin:default")
-            self.stack.setCurrentIndex(0)
-            self.stack.hide()
-        elif kind == "file":
-            self.file_picker.setText(path)
-            self.mode_select.setCurrentData("file")
-            self.stack.setCurrentIndex(1)
-            self.stack.show()
-        elif kind == "folder":
-            self.folder_picker.setText(path)
-            self.mode_select.setCurrentData("folder")
-            self.stack.setCurrentIndex(2)
-            self.stack.show()
-        else:
-            self.mode_select.setCurrentData("builtin:default")
-            self.stack.setCurrentIndex(0)
-            self.stack.hide()
-
-
-class ResourcePathPicker(QWidget):
-    """Absolute-path field with a native file or directory chooser."""
-
-    def __init__(self, value: str, *, directory: bool = False, name_filter: str = IMAGE_NAME_FILTER, parent=None):
-        super().__init__(parent)
-        self.directory = bool(directory)
-        self.name_filter = name_filter
-        self.edit = QLineEdit(self)
-        self.edit.setMinimumWidth(250)
-        self.edit.setText(str(value))
-        self.button = QPushButton("选择…", self)
-        self.button.setFixedWidth(66)
-        self.button.clicked.connect(self.choose)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self.edit, 1)
-        layout.addWidget(self.button)
-
-    def text(self) -> str:
-        return self.edit.text().strip()
-
-    def setText(self, value: str) -> None:  # noqa: N802
-        self.edit.setText(str(value))
-
-    def choose(self) -> None:
-        current = self.text()
-        start = current if current else str(Path.home())
-        if self.directory:
-            selected = QFileDialog.getExistingDirectory(self, "选择图片目录", start)
-        else:
-            selected, _ = QFileDialog.getOpenFileName(self, "选择图片", start, self.name_filter)
-        if selected:
-            self.setText(str(Path(selected).expanduser().resolve()))
-
-
-class ColorSwatchButton(QAbstractButton):
-    """Compact painted color well that does not depend on native button CSS."""
-
-    def __init__(self, value: str, parent=None):
-        super().__init__(parent)
-        self._color = QColor(value)
-        self.setFixedSize(36, 32)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("选择颜色")
-
-    def color(self) -> QColor:
-        return QColor(self._color)
-
-    def setColor(self, value) -> None:  # noqa: N802
-        color = QColor(value)
-        self._color = color if color.isValid() else QColor("#ffffff")
-        self.update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(QColor("#aeb3b8"), 1.0))
-        painter.setBrush(self._color)
-        painter.drawRoundedRect(QRectF(3.5, 3.5, self.width() - 7.0, self.height() - 7.0), 6, 6)
-
-
-class ColorPicker(QWidget):
-    """Editable #RRGGBB field paired with the native color panel."""
-
-    def __init__(self, value: str, parent=None):
-        super().__init__(parent)
-        self.edit = QLineEdit(str(value), self)
-        self.edit.setFixedWidth(96)
-        self.button = ColorSwatchButton(value, self)
-        self.button.clicked.connect(self.choose)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self.edit)
-        layout.addWidget(self.button)
-        self.edit.textChanged.connect(self._sync_swatch)
-        self._sync_swatch(self.edit.text())
-
-    def text(self) -> str:
-        return self.edit.text().strip()
-
-    def choose(self) -> None:
-        initial = QColor(self.text())
-        color = QColorDialog.getColor(initial if initial.isValid() else QColor("#ffffff"), self, "选择颜色")
-        if color.isValid():
-            self.edit.setText(color.name(QColor.NameFormat.HexRgb))
-
-    def _sync_swatch(self, value: str) -> None:
-        color = QColor(value)
-        if color.isValid():
-            self.button.setColor(color)
-
-
-def _draw_chevron(widget, center_y: float, *, down: bool) -> None:
-    painter = QPainter(widget)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    color = QColor("#a8adb4" if _system_dark() else "#62676d") if widget.isEnabled() else QColor("#aeb2b7")
-    painter.setPen(QPen(color, 1.35, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-    center_x = widget.width() - 10.0
-    offset = 1.8 if down else -1.8
-    painter.drawLine(QPointF(center_x - 2.6, center_y - offset), QPointF(center_x, center_y + offset))
-    painter.drawLine(QPointF(center_x, center_y + offset), QPointF(center_x + 2.6, center_y - offset))
-
-
-MODERN_SELECT_POPUP_STYLESHEET = """
-QMenu#ModernSelectPopup {
-    background: #ffffff;
-    color: #202020;
-    border: 1px solid #d8d8d8;
-    border-radius: 10px;
-    padding: 6px;
-    font-size: 13px;
-}
-QMenu#ModernSelectPopup::item {
-    min-height: 22px;
-    padding: 4px 28px 4px 12px;
-    border-radius: 7px;
-}
-QMenu#ModernSelectPopup::item:selected { background: #eeeeee; }
-QMenu#ModernSelectPopup::indicator { width: 0; height: 0; }
-"""
-
-
-class ModernSelect(QAbstractButton):
-    """Custom-painted selector with a Modern-style popover, not a QComboBox."""
-
-    currentIndexChanged = Signal(int)
-    aboutToShowPopup = Signal()
-
-    def __init__(self, parent=None, *, width: int = 132):
-        super().__init__(parent)
-        self._items: list[tuple[str, object]] = []
-        self._index = -1
-        self._hovered = False
-        self._popup: QMenu | None = None
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setFixedHeight(BROWSER_CONTROL_SPEC["field_height"])
-        self.setFixedWidth(width)
-        self.clicked.connect(self.showPopup)
-
-    def addItem(self, text: str, data=None) -> None:  # noqa: N802
-        self._items.append((str(text), data))
-        if self._index < 0:
-            self.setCurrentIndex(0)
-
-    def count(self) -> int:
-        return len(self._items)
-
-    def clear(self) -> None:
-        self._items.clear()
-        self._index = -1
-        self.setText("")
-        self.update()
-
-    def itemData(self, index: int):  # noqa: N802
-        return self._items[index][1] if 0 <= index < len(self._items) else None
-
-    def itemText(self, index: int) -> str:  # noqa: N802
-        return self._items[index][0] if 0 <= index < len(self._items) else ""
-
-    def setItemData(self, index: int, value, role=None) -> None:  # noqa: N802
-        # Foreground roles are unnecessary because the custom popup owns its
-        # palette; other calls update the stored data payload.
-        if role is None and 0 <= index < len(self._items):
-            text, _old = self._items[index]
-            self._items[index] = (text, value)
-
-    def findData(self, data) -> int:  # noqa: N802
-        for index, (_, item_data) in enumerate(self._items):
-            if item_data == data:
-                return index
-        return -1
-
-    def setCurrentData(self, data) -> None:  # noqa: N802
-        index = self.findData(data)
-        if index >= 0:
-            self.setCurrentIndex(index)
-
-    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
-        if not 0 <= index < len(self._items) or index == self._index:
-            return
-        self._index = index
-        self.setText(self._items[index][0])
-        self.currentIndexChanged.emit(index)
-        self.update()
-
-    def currentIndex(self) -> int:  # noqa: N802
-        return self._index
-
-    def currentData(self):  # noqa: N802
-        return self._items[self._index][1] if 0 <= self._index < len(self._items) else None
-
-    def currentText(self) -> str:  # noqa: N802
-        return self._items[self._index][0] if 0 <= self._index < len(self._items) else ""
-
-    @staticmethod
-    def popupStyleSheet() -> str:  # noqa: N802
-        if _system_dark():
-            return MODERN_SELECT_POPUP_STYLESHEET + _DARK_POPUP_OVERRIDE
-        return MODERN_SELECT_POPUP_STYLESHEET
-
-    def showPopup(self) -> None:  # noqa: N802
-        self.aboutToShowPopup.emit()
-        popup = self._popup
-        if popup is None:
-            popup = QMenu(self)
-            popup.setObjectName("ModernSelectPopup")
-            popup.setStyleSheet(self.popupStyleSheet())
-            self._popup = popup
-        else:
-            # Reuse one native popup instead of retaining a new child QMenu on
-            # every open. Deleting on close is unsafe here because Qt performs
-            # that deletion asynchronously while Python still owns the wrapper.
-            popup.clear()
-        popup.setMinimumWidth(self.width())
-        for index, (text, _) in enumerate(self._items):
-            action = QWidgetAction(popup)
-            option = ModernSelectOption(text, index == self._index, popup)
-            option.clicked.connect(lambda checked=False, index=index: self.setCurrentIndex(index))
-            option.clicked.connect(popup.close)
-            action.setDefaultWidget(option)
-            popup.addAction(action)
-        popup.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
-
-    def enterEvent(self, event) -> None:  # noqa: N802
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:  # noqa: N802
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        dark = _system_dark()
-        bg, border_idle, fg = ("#2e2e35", "#4a4a54", "#e4e4e9") if dark else ("#ffffff", "#cfd4da", "#202124")
-        hover_border = "#56565f" if dark else "#aeb6c0"
-        border = "#0a84ff" if self.hasFocus() else (hover_border if self._hovered else border_idle)
-        painter.setBrush(QColor(bg))
-        painter.setPen(QPen(QColor(border), 1.5 if self.hasFocus() else 1.0))
-        painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), 8, 8)
-        painter.setPen(QColor(fg))
-        painter.drawText(QRectF(10, 0, self.width() - 34, self.height()), Qt.AlignmentFlag.AlignVCenter, self.currentText())
-        painter.end()
-        _draw_chevron(self, self.height() / 2.0, down=True)
-
-
-class ModernSelectOption(QAbstractButton):
-    def __init__(self, text: str, selected: bool, parent=None):
-        super().__init__(parent)
-        self._text = text
-        self._selected = selected
-        self._hovered = False
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(30)
-        self.setMinimumWidth(116)
-
-    def enterEvent(self, event) -> None:  # noqa: N802
-        self._hovered = True
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:  # noqa: N802
-        self._hovered = False
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        dark = _system_dark()
-        hover_bg, fg, check = (
-            ("#3a3a46", "#e4e4e9", "#a0a6b0") if dark else ("#eeeeee", "#202020", "#454545")
-        )
-        if self._hovered:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(hover_bg))
-            painter.drawRoundedRect(QRectF(2, 1, self.width() - 4, self.height() - 2), 7, 7)
-        painter.setPen(QColor(fg))
-        painter.drawText(QRectF(10, 0, self.width() - 36, self.height()), Qt.AlignmentFlag.AlignVCenter, self._text)
-        if self._selected:
-            pen = QPen(QColor(check), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            x = self.width() - 17.0
-            painter.drawLine(QPointF(x - 4, 15), QPointF(x - 1, 18))
-            painter.drawLine(QPointF(x - 1, 18), QPointF(x + 5, 10))
-
-
-class BrowserSpinBox(QSpinBox):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedWidth(92)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
-        _draw_chevron(self, self.height() * 0.29, down=False)
-        _draw_chevron(self, self.height() * 0.71, down=True)
-
-
-class BrowserDoubleSpinBox(QDoubleSpinBox):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedWidth(92)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
-        _draw_chevron(self, self.height() * 0.29, down=False)
-        _draw_chevron(self, self.height() * 0.71, down=True)
-
-
-class SettingRow(QFrame):
-    """A label and hint on the left, with one control aligned to the right."""
-
-    def __init__(self, key: str, title: str, hint: str, control: QWidget, parent=None, *, stacked: bool = False):
-        super().__init__(parent)
-        self.setObjectName(f"settingRow_{key}")
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setProperty("stackedControl", stacked)
-        label = QLabel(title, self)
-        label.setObjectName("settingLabel")
-        hint_label = QLabel(hint, self)
-        hint_label.setObjectName("settingHint")
-        hint_label.setWordWrap(True)
-        if stacked:
-            row = QVBoxLayout(self)
-            row.setContentsMargins(14, 9, 14, 9)
-            row.setSpacing(0)
-            row.addWidget(label)
-            row.addWidget(hint_label)
-            row.addSpacing(7)
-            row.addWidget(control)
-        else:
-            row = QHBoxLayout(self)
-            row.setContentsMargins(14, 9, 14, 9)
-            row.setSpacing(18)
-            copy = QVBoxLayout()
-            copy.setContentsMargins(0, 0, 0, 0)
-            copy.setSpacing(2)
-            copy.addWidget(label)
-            copy.addWidget(hint_label)
-            copy.addStretch(1)
-            row.addLayout(copy, 1)
-            row.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.label = label
-        self.hint_label = hint_label
-        self.control = control
-
-
-class SettingsCard(QFrame):
-    def __init__(self, rows: list[SettingRow], parent=None):
-        super().__init__(parent)
-        self.setObjectName("settingsCard")
-        self.rows = list(rows)
-        self.separators: list[QFrame] = []
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        for index, row in enumerate(rows):
-            if index:
-                separator = QFrame(self)
-                separator.setObjectName("cardSeparator")
-                separator.setFixedHeight(1)
-                self.separators.append(separator)
-                layout.addWidget(separator)
-            layout.addWidget(row)
-        self.refresh_separators()
-
-    def refresh_separators(self) -> None:
-        """Keep dividers attached to visible rows during progressive disclosure."""
-        visible_before = False
-        for index, row in enumerate(self.rows):
-            if index:
-                self.separators[index - 1].setVisible(not row.isHidden() and visible_before)
-            visible_before = visible_before or not row.isHidden()
-
-
-class SettingsSection(QWidget):
-    def __init__(self, title: str, rows: list[SettingRow], parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(7)
-        label = QLabel(title, self)
-        label.setObjectName("sectionTitle")
-        layout.addWidget(label)
-        layout.addWidget(SettingsCard(rows, self))
-
-
 def _line_edit(text: str = "", *, password: bool = False, width: int = 240) -> QLineEdit:
     edit = QLineEdit(text)
     edit.setMinimumWidth(width)
     if password:
         edit.setEchoMode(QLineEdit.EchoMode.Password)
     return edit
-
-
-class QuickLaunchEditor(QWidget):
-    """Small application picker persisted into the modern menu."""
-
-    def __init__(self, apps: list[dict], parent=None):
-        super().__init__(parent)
-        self.list = QListWidget(self)
-        self.list.setObjectName("quickLaunchList")
-        self.list.setMinimumHeight(116)
-        self.list.setIconSize(QSize(22, 22))
-        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.list.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.list.setDragEnabled(True)
-        self.list.setAcceptDrops(True)
-        self.list.setDropIndicatorShown(True)
-        self.add_button = QPushButton("添加应用", self)
-        self.add_button.setIcon(vector_widget_icon(self, "add", 15))
-        self.remove_button = QPushButton("移除勾选", self)
-        self.remove_button.setIcon(vector_widget_icon(self, "remove", 15))
-        self.default_button = QPushButton("添加默认浏览器", self)
-        self.default_button.setIcon(vector_widget_icon(self, "web", 15))
-        self.add_button.clicked.connect(self._choose_application)
-        self.remove_button.clicked.connect(self._remove_checked)
-        self.default_button.clicked.connect(self._add_default_browser)
-
-        buttons = QHBoxLayout()
-        buttons.setContentsMargins(0, 0, 0, 0)
-        buttons.setSpacing(7)
-        buttons.addWidget(self.add_button)
-        buttons.addWidget(self.default_button)
-        buttons.addStretch(1)
-        buttons.addWidget(self.remove_button)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self.list)
-        layout.addLayout(buttons)
-        for item in apps:
-            self.add_app(item)
-
-    def add_app(self, app: dict) -> None:
-        app = dict(app)
-        if app.get("kind") == "default_browser":
-            icon = vector_widget_icon(self, "web", 22)
-            app = {"name": str(app.get("name") or "默认浏览器"), "path": "", "kind": "default_browser"}
-        else:
-            path = str(app.get("path") or "")
-            if not path:
-                return
-            provider_icon = QFileIconProvider().icon(QFileInfo(path))
-            if provider_icon.isNull():
-                icon = vector_widget_icon(self, "application", 17)
-            else:
-                icon = fitted_application_icon(provider_icon, 22, self)
-            app = {"name": str(app.get("name") or Path(path).stem), "path": path, "kind": "application"}
-        item = QListWidgetItem(icon, app["name"])
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsDragEnabled)
-        item.setCheckState(Qt.CheckState.Unchecked)
-        item.setData(Qt.ItemDataRole.UserRole, app)
-        item.setToolTip(app["path"] or "使用系统默认浏览器")
-        self.list.addItem(item)
-
-    def apps(self) -> list[dict]:
-        return [dict(self.list.item(index).data(Qt.ItemDataRole.UserRole)) for index in range(self.list.count())]
-
-    def _choose_application(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择需要快捷启动的应用",
-            "/Applications" if os.path.isdir("/Applications") else "",
-            "应用程序 (*.app);;所有文件 (*)",
-        )
-        if path:
-            self.add_app({"name": Path(path).stem, "path": path, "kind": "application"})
-
-    def _remove_checked(self) -> None:
-        for index in range(self.list.count() - 1, -1, -1):
-            if self.list.item(index).checkState() == Qt.CheckState.Checked:
-                self.list.takeItem(index)
-
-    def _add_default_browser(self) -> None:
-        if not any(item.get("kind") == "default_browser" for item in self.apps()):
-            self.add_app(DEFAULT_QUICK_LAUNCH_APPS[0])
 
 
 class _AiSettingsPage(QWidget):
@@ -1112,7 +464,6 @@ class _AiSettingsPage(QWidget):
         self.settings.providers.pop(pid, None)
         self._provider_drafts.pop(pid, None)
         self._deleted_provider_ids.add(pid)
-        index = self.provider_combo.currentIndex()
         self._loading_provider = True
         try:
             self.provider_combo.clear()
@@ -1363,6 +714,7 @@ class ModernSettingsDialog(QDialog):
         behavior_layout.addWidget(SettingsSection("动画", [
             SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
             SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
+            SettingRow("idle_low_fps", "闲置降帧", "一段时间不操作桌宠时，动画按半帧率呈现（24fps 素材 → 12fps 效果）；任何交互立即恢复全帧率。", self.idle_low_fps_check),
             SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
             SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
             SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
@@ -1408,6 +760,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
             SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
             SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
+            SettingRow("self_talk_image_scale", "配图大小", "气泡里配图的显示尺寸（100% 为默认）。", self.self_talk_image_scale_spin),
             SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
         ], behavior_content))
         # Agent 联动：每个 Agent 一行自定义思考文案
@@ -1689,6 +1042,9 @@ class ModernSettingsDialog(QDialog):
 
         self.self_talk_check = ToggleSwitch(self)
         self.self_talk_check.setChecked(bool(self.config.get("self_talk_enabled", False)))
+        # 闲置降帧（灰度默认关）：长时间无交互且窗口可见时动画隔帧呈现
+        self.idle_low_fps_check = ToggleSwitch(self)
+        self.idle_low_fps_check.setChecked(bool(self.config.get("idle_low_fps_enabled", False)))
         self.self_talk_duration_spin = BrowserDoubleSpinBox(self)
         self.self_talk_duration_spin.setRange(1.0, 300.0)
         self.self_talk_duration_spin.setSingleStep(0.5)
@@ -1723,6 +1079,10 @@ class ModernSettingsDialog(QDialog):
             directory=True,
             parent=self,
         )
+        self.self_talk_image_scale_spin = BrowserSpinBox(self)
+        self.self_talk_image_scale_spin.setRange(50, 300)
+        self.self_talk_image_scale_spin.setSuffix(" %")
+        self.self_talk_image_scale_spin.setValue(int(self.config.get("self_talk_image_scale", 100)))
         self.click_talk_bindings_btn = QPushButton("编辑…", self)
         self.click_talk_bindings_btn.setObjectName("clickTalkBindingsButton")
         self.click_talk_bindings_btn.clicked.connect(self._open_click_talk_bindings)
@@ -2386,7 +1746,7 @@ class ModernSettingsDialog(QDialog):
         已知限制：已暴露字段仍是 last-writer-wins（对话框获胜）。
         返回是否成功落盘；失败时提示用户。
         """
-        self.config._load()
+        self.config.reload()
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())
         texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]
@@ -2453,6 +1813,7 @@ class ModernSettingsDialog(QDialog):
             self.config.set("stream_capture_mode", self.stream_capture_check.isChecked())
         self.config.set("playback_speed", float(self.speed_select.currentData()))
         self.config.set("animation_gap_seconds", self.gap_spin.value())
+        self.config.set("idle_low_fps_enabled", self.idle_low_fps_check.isChecked())
         self.config.set("self_talk_enabled", self.self_talk_check.isChecked())
         self.config.set("self_talk_bubble_style", self.bubble_style_select.currentData())
         self.config.set("self_talk_min_interval", minimum)
@@ -2460,6 +1821,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
+        self.config.set("self_talk_image_scale", self.self_talk_image_scale_spin.value())
         # Agent 联动：自定义 thinking 文案与音效（合并写回，不覆盖 agent_link 其他开关）
         agent_cfg = dict(self.config.get("agent_link", {}))
         agent_cfg["thinking_texts"] = {
@@ -2545,6 +1907,17 @@ class ModernSettingsDialog(QDialog):
             )
         return ok
 
+    def reject(self) -> None:  # noqa: N802 - Qt API
+        """Esc 路径：QDialog.reject() 不触发 closeEvent（实测 Qt 6.11），
+        「直接关闭同样落盘」的收口必须在这里也执行（审查 DS-M9）。"""
+        if not getattr(self, "_saved_via_button", False):
+            try:
+                self._write_config()
+                self._apply_autostart()
+            except Exception:
+                logging.exception("Esc 关闭设置时保存配置失败")
+        super().reject()
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         """直接关闭（X / Esc）时同样落盘，避免修改丢失。
 
@@ -2558,55 +1931,17 @@ class ModernSettingsDialog(QDialog):
             except Exception:
                 logging.exception("关闭设置时保存配置失败")
         super().closeEvent(event)
-def _system_dark() -> bool:
-    """按系统调色板判断深色模式（QSS 的 color 不自动级联到子控件，
-    深色系统下未显式设 color 的控件会落到 palette 白字，白底上看不清）。"""
-    from PySide6.QtGui import QGuiApplication
-    return QGuiApplication.palette().window().color().lightness() < 128
+
+
+def _load_qss(name: str) -> str:
+    """读取随包分发的 QSS 资源（与 pet/chat/*.qss 同约定）。"""
+    return (Path(__file__).with_name(name)).read_text(encoding="utf-8")
 
 
 # 深色系统的覆盖段：追加在浅色 QSS 之后（后写规则优先）
-_DARK_OVERRIDE = """
-QDialog { background: #202024; color: #e4e4e9; }
-QFrame#sidebarPane { background: #26262b; border-right: 1px solid #34343a; }
-QStackedWidget { background: #202024; }
-QLineEdit#settingsSearch { background: #2e2e35; color: #e4e4e9; }
-QPushButton#saveAndExit { color: #e4e4e9; }
-QPushButton#saveAndExit:hover { background: #33333c; }
-QListWidget#settingsSidebar::item { color: #b8b8c0; }
-QListWidget#settingsSidebar::item:hover { background: #2e2e36; color: #f0f0f5; }
-QListWidget#settingsSidebar::item:selected { background: #3a3a46; color: #ffffff; }
-QLabel#pageTitle { color: #f0f0f5; }
-QLabel#sectionTitle { color: #d8d8e0; }
-QFrame#settingsCard { background: #2a2a30; border: 1px solid #3a3a42; }
-QFrame#cardSeparator { background: #33333a; }
-QLabel#settingLabel { color: #e0e0e6; }
-QLabel#settingHint { color: #9a9aa3; }
-QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #66666e; }
-SettingRow[searchMatch="true"] { background: #2c3a4e; }
-QListWidget#quickLaunchList { background: #26262c; border: 1px solid #3c3c44; }
-QListWidget#quickLaunchList::item:selected { background: #3a3a46; color: #ffffff; }
-QPushButton { background: #3a3a42; border: 1px solid #4a4a54; color: #e4e4e9; }
-QPushButton:hover { background: #44444e; }
-QToolButton { color: #e4e4e9; }
-QCheckBox, QRadioButton, QComboBox, QListWidget, QTreeWidget, QTableView { color: #e4e4e9; }
-"""
-
-_DARK_BROWSER_OVERRIDE = """
-QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
-    background: #2e2e35; color: #e4e4e9; border: 1px solid #45454f;
-}
-QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QPlainTextEdit:hover { border-color: #56565f; }
-QSpinBox::up-button, QDoubleSpinBox::up-button { border-left: 1px solid #45454f; border-bottom: 1px solid #45454f; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #55555e; }
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #6a6a74; }
-"""
-
-_DARK_POPUP_OVERRIDE = """
-QMenu#ModernSelectPopup { background: #2a2a30; color: #e4e4e9; border: 1px solid #45454f; }
-QMenu#ModernSelectPopup::item { color: #e4e4e9; }
-QMenu#ModernSelectPopup::item:selected { background: #3a3a46; }
-"""
+_LIGHT_SETTINGS_STYLESHEET = _load_qss("settings_styles.qss")
+_DARK_OVERRIDE = _load_qss("settings_styles_dark.qss")
+_DARK_BROWSER_OVERRIDE = _load_qss("settings_styles_dark_browser.qss")
 
 
 def _settings_stylesheet() -> str:
@@ -2620,128 +1955,3 @@ def _settings_stylesheet() -> str:
     if not _system_dark():
         return base + BROWSER_CONTROL_STYLESHEET
     return base + _DARK_OVERRIDE + BROWSER_CONTROL_STYLESHEET + _DARK_BROWSER_OVERRIDE
-
-
-_LIGHT_SETTINGS_STYLESHEET = """
-QDialog {
-    background: #fcfcfd;
-    color: #202020;
-    font-family: "SF Pro Text", ".AppleSystemUIFont", "PingFang SC", "Segoe UI", sans-serif;
-    font-size: 13px;
-}
-QFrame#sidebarPane {
-    background: #f7f7f8;
-    border: none;
-    border-right: 1px solid #e3e5e8;
-}
-QStackedWidget { background: #fcfcfd; }
-QLineEdit#settingsSearch {
-    min-height: 30px;
-    padding: 0 8px;
-    background: #f0f1f3;
-    border: 1px solid transparent;
-    border-radius: 15px;
-    color: #202020;
-}
-QLineEdit#settingsSearch:focus {
-    border: 2px solid #0a84ff;
-    padding: 0 7px;
-}
-QPushButton#saveAndExit {
-    min-height: 28px;
-    padding: 2px 8px;
-    text-align: left;
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    font-weight: 500;
-}
-QPushButton#saveAndExit:hover { background: #e9eaec; }
-QLabel#searchStatus {
-    padding: 0 5px;
-    color: #777b80;
-    font-size: 11px;
-}
-QListWidget#settingsSidebar {
-    background: transparent;
-    border: none;
-    outline: none;
-    font-size: 13px;
-    font-weight: 500;
-}
-QListWidget#settingsSidebar::item {
-    min-height: 26px;
-    padding: 4px 10px;
-    border-radius: 9px;
-    color: #4e4e4e;
-}
-QListWidget#settingsSidebar::item:hover {
-    background: #eceef1;
-    color: #202020;
-}
-QListWidget#settingsSidebar::item:selected {
-    background: #e3e5e8;
-    color: #171717;
-}
-QLabel#pageTitle {
-    font-size: 26px;
-    font-weight: 600;
-    color: #171717;
-}
-QLabel#sectionTitle {
-    font-size: 14px;
-    font-weight: 600;
-    color: #2b2b2b;
-}
-QFrame#settingsCard {
-    background: #ffffff;
-    border: 1px solid #e2e4e8;
-    border-radius: 11px;
-}
-QFrame#cardSeparator {
-    background: #eceef1;
-    border: none;
-    margin-left: 14px;
-    margin-right: 14px;
-}
-QLabel#settingLabel {
-    font-size: 14px;
-    font-weight: 600;
-    color: #252525;
-}
-QLabel#settingHint {
-    font-size: 12px;
-    font-weight: 400;
-    color: #777777;
-}
-QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #a6a8ac; }
-SettingRow[searchMatch="true"] {
-    background: #eaf3ff;
-    border-radius: 8px;
-}
-QScrollArea#settingsScroll, QScrollArea#settingsScroll > QWidget > QWidget {
-    background: transparent;
-}
-QListWidget#quickLaunchList {
-    background: #fbfbfb;
-    border: 1px solid #d9d9d9;
-    border-radius: 8px;
-    outline: none;
-    padding: 3px;
-}
-QListWidget#quickLaunchList::item {
-    min-height: 30px;
-    padding: 3px 7px;
-    border-radius: 6px;
-}
-QListWidget#quickLaunchList::item:selected { background: #e8e8e8; color: #202020; }
-QPushButton {
-    min-height: 26px;
-    padding: 1px 12px;
-    background: #ffffff;
-    border: 1px solid #d0d0d0;
-    border-radius: 7px;
-    font-weight: 500;
-}
-QPushButton:hover { background: #f0f0f0; }
-"""

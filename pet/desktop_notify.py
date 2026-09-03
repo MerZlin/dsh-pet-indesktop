@@ -7,7 +7,7 @@ QSystemTrayIcon.showMessage 在 Windows 托盘图标被收进“隐藏的图标�
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 

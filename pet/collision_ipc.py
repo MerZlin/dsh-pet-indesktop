@@ -14,14 +14,15 @@ import os
 import secrets
 import sys
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtCore import QMetaObject, QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
 
 from . import collision
+from . import collision_codec
 from . import collision_debug
-from .config import APP_DIR_NAME
+from .config import APP_DIR_NAME, DEFAULT_COLLISION_SETTINGS
 from . import slot_manager
 
 MAX_COLLISION_MEMBERS = 128
@@ -113,7 +114,7 @@ def _normalize_state(raw: dict[str, Any]) -> dict[str, Any] | None:
     if bounce_circles is not None:
         state["bounce_circles"] = bounce_circles
     try:
-        collision.encode_frame(state, max_frame_len=collision.STATE_FRAME_MAX_LENGTH)
+        collision_codec.encode_frame(state, max_frame_len=collision_codec.STATE_FRAME_MAX_LENGTH)
     except (TypeError, ValueError):
         return None
     return state
@@ -142,6 +143,10 @@ class _CollisionWorker(QObject):
     policy_changed = Signal(object)
     role_changed = Signal(bool, str)
     error = Signal(str)
+    # P3 broker：coordinator 收到 decode_subscribe → 转发 GUI（带 peer runtime_id）；
+    # client 收到 decode_grant/decode_deny → 转发 GUI。
+    decode_subscribe_requested = Signal(str, object)
+    decode_reply_ready = Signal(object)
     _local_election_names: set[str] = set()
 
     def __init__(self, name: str, runtime_id: str, instance_id: str, policy: dict[str, Any], lock_path=None):
@@ -154,6 +159,10 @@ class _CollisionWorker(QObject):
         self._probe = None
         self._coordinator_announced = False
         self.peers: dict[QLocalSocket, str] = {}
+        # socket -> 流式帧解码器；只被 worker 线程访问（_read_socket 及其
+        # 清理路径都运行在 worker 线程），键为 socket 对象本身，条目在
+        # socket 断开/被销毁时同步移除，防止悬挂解码器随 socket 一起泄漏。
+        self._socket_decoders: dict[QLocalSocket, collision_codec.FrameStreamDecoder] = {}
         self.members: dict[str, dict[str, Any]] = {}
         self._pending_predicted: dict[str, dict] = {}
         self.previous_members: dict[str, dict[str, Any]] = {}
@@ -166,7 +175,7 @@ class _CollisionWorker(QObject):
         self.epoch = ""
         self.tick = 0
         self.overlap_history: dict[str, int] = {}
-        self.watermarks = collision.WatermarkDeduplicator()
+        self.watermarks = collision_codec.WatermarkDeduplicator()
         self._timers: list[QTimer] = []
         self._election_timer = None
         self._welcome_timer = None
@@ -178,6 +187,9 @@ class _CollisionWorker(QObject):
         self._lock_path = lock_path
         self._last_snapshot_at = 0.0
         self._stopping = False
+        # P3 broker：GUI 侧同步查询用角色状态（角色是否已定 + 是否 coordinator）。
+        # 角色未定（选举进行中/刚断线）时 broker 决策等待 ≤600ms 或直接本地。
+        self._role_ready = False
 
     @Slot()
     def start(self) -> None:
@@ -198,7 +210,50 @@ class _CollisionWorker(QObject):
     def _try_election(self) -> None:
         if self._stopping or self.server is not None or self.socket is not None:
             return
+        # 异常围栏（审查 M5）：选举/监听序列任何意外异常都必须清理
+        # 「持锁 + 已 listen」的中间态，否则整簇卡死到本进程退出
+        try:
+            self._try_election_inner()
+        except Exception:
+            logging.exception("碰撞选举异常，复位为客户端")
+            try:
+                if self.server is not None:
+                    self.server.close()
+                    self.server.deleteLater()
+                    self.server = None
+                self._local_election_names.discard(self.name)
+                slot_manager.release_file_lock(self._coordinator_lock)
+                self._coordinator_lock = None
+                # probe 可能已在 _start_probe 建好：一并清理（修复批复审 P1-2）
+                if self._probe is not None:
+                    try:
+                        self._probe.abort()
+                    except Exception:
+                        pass
+                    self._socket_decoders.pop(self._probe, None)
+                    self._probe.deleteLater()
+                    self._probe = None
+            except Exception:
+                pass
+            self._connect_client()
+
+    def _try_election_inner(self) -> None:
         server = QLocalServer(self)
+        # 局部 server 围栏（修复批复审 P1-2）：listen 成功到 _become_listener
+        # 把 server 挂上 self.server 之间存在窗口——其间异常必须清掉这个局部
+        # listener，否则留下「自监听端点」且外层围栏够不到它。
+        try:
+            self._try_election_listen(server)
+        except Exception:
+            if self.server is not server:
+                try:
+                    server.close()
+                except Exception:
+                    pass
+                server.deleteLater()
+            raise
+
+    def _try_election_listen(self, server) -> None:
         if self._lock_path is not None:
             self._coordinator_lock = slot_manager.acquire_file_lock(self._lock_path)
             if self._coordinator_lock is None:
@@ -255,8 +310,8 @@ class _CollisionWorker(QObject):
         """Windows 命名管道允许并行 listen 时，用 QLocal 连接稳定决胜。"""
         probe = QLocalSocket(self)
         self._probe = probe
-        probe._collision_decoder = collision.FrameStreamDecoder(
-            max_frame_len=collision.STATE_FRAME_MAX_LENGTH,
+        self._socket_decoders[probe] = collision_codec.FrameStreamDecoder(
+            max_frame_len=collision_codec.STATE_FRAME_MAX_LENGTH,
         )
         probe.connected.connect(lambda: self._send(probe, {
             "type": "probe", "runtime_id": self.runtime_id,
@@ -274,6 +329,7 @@ class _CollisionWorker(QObject):
             return
         self._coordinator_announced = True
         self.role_changed.emit(True, self.epoch)
+        self._role_ready = True
         self._start_coordinator_timers()
         self._register_self()
 
@@ -318,14 +374,15 @@ class _CollisionWorker(QObject):
         self.socket = None
         self._had_client_connection = False
         socket.abort()
+        self._socket_decoders.pop(socket, None)
         socket.deleteLater()
         self._schedule_election()
 
     def _accept_connection(self) -> None:
         while self.server and self.server.hasPendingConnections():
             socket = self.server.nextPendingConnection()
-            socket._collision_decoder = collision.FrameStreamDecoder(
-                max_frame_len=collision.STATE_FRAME_MAX_LENGTH,
+            self._socket_decoders[socket] = collision_codec.FrameStreamDecoder(
+                max_frame_len=collision_codec.STATE_FRAME_MAX_LENGTH,
             )
             self.peers[socket] = ""
             socket.readyRead.connect(lambda s=socket: self._read_socket(s))
@@ -354,7 +411,7 @@ class _CollisionWorker(QObject):
             last_seen=self._now(),
         )
         try:
-            collision.encode_frame(
+            collision_codec.encode_frame(
                 self._public_member(member),
                 max_frame_len=PUBLIC_MEMBER_MAX_LENGTH,
             )
@@ -383,7 +440,7 @@ class _CollisionWorker(QObject):
         from time import monotonic
         return monotonic()
 
-    def _welcome(self) -> dict[str, Any]:
+    def _welcome(self) -> collision_codec.WelcomeMessage:
         return {"type": "welcome", "epoch": self.epoch, "coordinator_id": self.runtime_id,
                 "tick": self.tick, "policy": self.policy,
                 "members": (
@@ -404,14 +461,14 @@ class _CollisionWorker(QObject):
             if now - float(value.get("last_seen", now)) <= ACTIVE_MEMBER_MAX_AGE
         ]
 
-    def _send(self, socket, message: dict[str, Any]) -> None:
+    def _send(self, socket, message: collision_codec.WireMessage) -> None:
         try:
             max_frame_len = (
-                collision.STATE_FRAME_MAX_LENGTH
+                collision_codec.STATE_FRAME_MAX_LENGTH
                 if message.get("type") == "state"
-                else collision.FRAME_MAX_LENGTH
+                else collision_codec.FRAME_MAX_LENGTH
             )
-            frame = collision.encode_frame(message, max_frame_len=max_frame_len)
+            frame = collision_codec.encode_frame(message, max_frame_len=max_frame_len)
         except Exception:
             logging.debug("碰撞 IPC 编码失败", exc_info=True)
             return
@@ -425,9 +482,9 @@ class _CollisionWorker(QObject):
         except Exception:
             logging.debug("碰撞 IPC 写入失败", exc_info=True)
 
-    def _broadcast(self, sockets, message: dict[str, Any]) -> None:
+    def _broadcast(self, sockets, message: collision_codec.WireMessage) -> None:
         try:
-            frame = collision.encode_frame(message)
+            frame = collision_codec.encode_frame(message)
         except Exception:
             logging.debug("碰撞 IPC 广播编码失败", exc_info=True)
             return
@@ -435,16 +492,18 @@ class _CollisionWorker(QObject):
             self._write_frame(socket, frame)
 
     def _read_socket(self, socket) -> None:
-        decoder = getattr(socket, "_collision_decoder", None)
+        decoder = self._socket_decoders.get(socket)
         if decoder is None:
-            decoder = collision.FrameStreamDecoder()
-            socket._collision_decoder = decoder
+            decoder = collision_codec.FrameStreamDecoder()
+            self._socket_decoders[socket] = decoder
         for message in decoder.feed(bytes(socket.readAll())):
-            if isinstance(message, collision.DecodeError) or not isinstance(message, dict):
+            if isinstance(message, collision_codec.DecodeError) or not isinstance(message, dict):
                 continue
-            self._handle_message(socket, message)
+            # 解码边界收敛：JSON dict -> 协议 TypedDict（cast 仅类型层，
+            # 字段缺省/多余由各分支的 .get 容错处理，见 _handle_message）
+            self._handle_message(socket, cast(collision_codec.WireMessage, message))
 
-    def _handle_message(self, socket, message: dict[str, Any]) -> None:
+    def _handle_message(self, socket, message: collision_codec.WireMessage) -> None:
         kind = message.get("type")
         if socket is self._probe and kind == "coordinator":
             self._resign_to(str(message.get("runtime_id") or ""))
@@ -499,6 +558,12 @@ class _CollisionWorker(QObject):
                     self.previous_members[runtime_id] = dict(self.members[runtime_id])
                 self.members[runtime_id] = member
                 self._membership_dirty = self._membership_dirty or is_new
+            elif kind == "decode_subscribe":
+                # P3 broker：把订阅请求转发 GUI（facade 决策 grant/deny）。
+                # peers 未登记（hello 尚未到达）时静默丢弃——client 超时回退本地。
+                runtime_id = self.peers.get(socket, "")
+                if runtime_id:
+                    self.decode_subscribe_requested.emit(runtime_id, dict(message))
             elif kind == "leave":
                 self._remove_member(self.peers.get(socket, ""))
         elif kind == "coordinator":
@@ -518,17 +583,30 @@ class _CollisionWorker(QObject):
                     self.latest_state.pop("bounce_vx", None)
                     self.latest_state.pop("bounce_vy", None)
                     self.role_changed.emit(False, epoch)
+                    self._role_ready = True
                 # 同一 coordinator/epoch 的断线重连也必须用 welcome 刷新
                 # policy 与权威成员表；只有角色变更通知受 changed 门禁。
                 self.policy_changed.emit(message.get("policy") or {})
                 self.snapshot_ready.emit(message)
+                # 重连盲窗收口（审查 M4）：收到 welcome 立即补发当前状态，
+                # 不等下一心跳周期（静止时最长 ~500ms 不在权威成员表）
+                if self._participating and self.latest_state and self.socket is not None:
+                    self._send(self.socket, dict(self.latest_state, type="state"))
+        elif kind in ("decode_grant", "decode_deny"):
+            # P3 broker：coordinator 对订阅请求的答复 → 转发 GUI（facade 配对 req_id）
+            self.decode_reply_ready.emit(dict(message))
         elif kind == "snapshot":
             if message.get("epoch", self.epoch) == self.epoch:
                 self._last_control_message = self._now()
                 self.snapshot_ready.emit(message)
         elif kind == "impulse":
             pair = str(message.get("pair") or "")
-            tick = int(message.get("tick", -1))
+            try:
+                tick = int(message.get("tick", -1))
+            except (TypeError, ValueError, OverflowError):
+                # 畸形帧（恶意/损坏/版本不兼容的远端）逐条丢弃，
+                # 不中断后续帧的处理（审查 P1-02/P7）
+                return
             if message.get("epoch") == self.epoch:
                 self._last_control_message = self._now()
                 if self.watermarks.should_apply(self.epoch, pair, tick):
@@ -545,6 +623,13 @@ class _CollisionWorker(QObject):
     def _resign_to(self, _winner: str) -> None:
         if self.server is None:
             return
+        # P3 broker（P3A P1-1）：coordinator 退选必须同步发出卸任角色事件——
+        # GUI 侧 facade 据此中止自己仍在发布的共享解码 session（aborted 广播
+        # → 消费端立即回退本地）。若只等随后的 client welcome（新 epoch）才
+        # 发 role_changed(False)，旧 publisher 会一直发布到 welcome 到达
+        # （甚至更久），造成「已不是 coordinator 仍在写共享内存」的窗口。
+        self.role_changed.emit(False, self.epoch)
+        self._role_ready = True
         self.server.close()
         self.server.deleteLater()
         self.server = None
@@ -553,9 +638,20 @@ class _CollisionWorker(QObject):
         self._coordinator_lock = None
         for socket in list(self.peers):
             socket.disconnectFromServer()
+            self._socket_decoders.pop(socket, None)
             socket.deleteLater()
         self.peers.clear()
         self.members.clear()
+        # 让位时同步清理决胜 probe 与其流解码器（否则每次「监听→让位」
+        # 泄漏一个 QLocalSocket + decoder，审查 L5）
+        if self._probe is not None:
+            try:
+                self._probe.abort()
+            except Exception:
+                pass
+            self._socket_decoders.pop(self._probe, None)
+            self._probe.deleteLater()
+            self._probe = None
         self._membership_dirty = False
         self._clear_solver_history()
         for timer in self._timers:
@@ -623,11 +719,14 @@ class _CollisionWorker(QObject):
         """
         if self._stopping:
             return
-        enabled_changed = (
-            bool(self.policy.get("collision_enabled", True))
-            != bool(policy.get("collision_enabled", True))
-        )
-        self.policy = dict(policy)
+        # 部分字典防御：update_policy 是公开边界，缺键时保留旧值/默认值，
+        # 防止 coordinator tick 读必需键 KeyError（审查 P2-03）
+        old_enabled = bool(self.policy.get("collision_enabled", True))
+        merged = {**DEFAULT_COLLISION_SETTINGS, **self.policy, **dict(policy)}
+        self.policy = merged
+        # 变更判定必须基于合并后的值（部分更新缺键时沿用旧值，
+        # 不能按「缺省 True」误判为变更——修复批复审 P1）
+        enabled_changed = old_enabled != bool(merged.get("collision_enabled", True))
         if enabled_changed:
             self._membership_dirty = True
             self._clear_solver_history()
@@ -640,6 +739,28 @@ class _CollisionWorker(QObject):
         self._predicted_pair_ticks.clear()
         self._position_only_pairs.clear()
         self.overlap_history.clear()
+
+    # ---- P3 broker：订阅请求（client 侧发出）与授权答复（coordinator 侧发出）----
+    @Slot(object)
+    def request_decode(self, req: dict[str, Any]) -> None:
+        """client 侧发送 decode_subscribe（复用本会话的 socket 通道）。"""
+        if self._stopping or self.socket is None:
+            return
+        self._send(self.socket, {"type": "decode_subscribe", **dict(req)})
+
+    @Slot(str, object)
+    def send_decode_reply(self, runtime_id: str, reply: dict[str, Any]) -> None:
+        """coordinator 侧按 runtime_id 定向发送 decode_grant/decode_deny。
+
+        runtime_id→socket 反查失败（peer 已离开）时静默丢弃——订阅请求方
+        超时回退本地解码，不产生悬挂答复。
+        """
+        if self._stopping or self.server is None:
+            return
+        for socket, peer_id in self.peers.items():
+            if peer_id == runtime_id:
+                self._send(socket, dict(reply))
+                return
 
     @Slot()
     def submit_leave(self) -> None:
@@ -773,12 +894,22 @@ class _CollisionWorker(QObject):
                 collision_mass_scale=self.policy.get("collision_mass_scale", 1.0),
             )
             event_member = collision.MemberState(
-                pred_rid, pred_x, pred_y,
-                pred_rx, pred_ry,
-                float(bounce_vx), float(bounce_vy), pred_mass,
-                pred_is_inf, pred_flags, str(snap.get("instance_id", "")),
-                str(snap.get("character", "")), pred_scale, float(snap.get("w", 0.0)), float(snap.get("h", 0.0)),
-                pred_circles,
+                runtime_id=pred_rid,
+                x=pred_x,
+                y=pred_y,
+                radius_x=pred_rx,
+                radius_y=pred_ry,
+                vx=float(bounce_vx),
+                vy=float(bounce_vy),
+                mass=pred_mass,
+                is_infinite_mass=pred_is_inf,
+                flags=pred_flags,
+                instance_id=str(snap.get("instance_id", "")),
+                character=str(snap.get("character", "")),
+                scale=pred_scale,
+                w=float(snap.get("w", 0.0)),
+                h=float(snap.get("h", 0.0)),
+                circles=pred_circles,
             )
             for other in sorted_active:
                 if other.runtime_id == pred_rid:
@@ -874,7 +1005,7 @@ class _CollisionWorker(QObject):
                 if previous is not None and self.tick - previous[1] < 15:
                     continue
                 self._position_only_pairs[result.pair] = (signature, self.tick)
-            payload = {"type": "impulse", "epoch": self.epoch, **asdict(result)}
+            payload: collision_codec.ImpulseMessage = {"type": "impulse", "epoch": self.epoch, **asdict(result)}
             self._broadcast(self.peers, payload)
             self.impulse_ready.emit(payload)
 
@@ -905,6 +1036,7 @@ class _CollisionWorker(QObject):
     def _peer_lost(self, socket) -> None:
         self._welcomed_peers.discard(socket)
         self._remove_member(self.peers.pop(socket, ""))
+        self._socket_decoders.pop(socket, None)
         try:
             socket.deleteLater()
         except RuntimeError:
@@ -916,6 +1048,7 @@ class _CollisionWorker(QObject):
             self._welcome_timer.deleteLater()
             self._welcome_timer = None
         if self.socket:
+            self._socket_decoders.pop(self.socket, None)
             self.socket.deleteLater()
         self.socket = None
         self._had_client_connection = False
@@ -925,6 +1058,11 @@ class _CollisionWorker(QObject):
             self._client_watchdog.deleteLater()
             self._client_watchdog = None
         if not self._stopping:
+            # P3 broker（P3A P1-5）：client 断流是连接状态事件——先通知 GUI
+            # facade 作废 pending 订阅（reader 立即回退本地，不等 600ms 兜底
+            # 超时；旧 coordinator 若仍排队答复也命中空表被丢弃），再照常
+            # 重选举（当选/连上由后续 role_changed(True/False) 决定）。
+            self.role_changed.emit(False, "")
             # 不凭 error 信号删除命名服务，避免把存活协调者误判为残留。
             self._schedule_election()
 
@@ -943,6 +1081,7 @@ class _CollisionWorker(QObject):
             self._welcome_timer = None
         if self._probe:
             self._probe.abort()
+            self._socket_decoders.pop(self._probe, None)
             self._probe.deleteLater()
             self._probe = None
         if self._client_watchdog:
@@ -952,6 +1091,7 @@ class _CollisionWorker(QObject):
         if self.socket:
             socket = self.socket
             self.socket = None
+            self._socket_decoders.pop(socket, None)
             self._send(socket, {"type": "leave", "seq": int(self.latest_state.get("seq", 0)) + 1})
             socket.disconnectFromServer()
             try:
@@ -965,6 +1105,7 @@ class _CollisionWorker(QObject):
         )
         for socket in peer_sockets:
             socket.disconnectFromServer()
+            self._socket_decoders.pop(socket, None)
             socket.deleteLater()
         self.peers.clear()
         if self.server:
@@ -994,12 +1135,22 @@ class CollisionIpcSession(QObject):
     snapshot_ready = Signal(object)
     policy_changed = Signal(object)
     role_changed = Signal(bool, str)
+    # P3 broker：worker → GUI 转发（coordinator 收到订阅 / client 收到答复）
+    decode_subscribe_requested = Signal(str, object)
+    decode_reply_ready = Signal(object)
+    # GUI → worker 发送通道（client 发订阅 / coordinator 发答复）
+    decode_request_submitted = Signal(object)
+    decode_reply_submitted = Signal(str, object)
 
     def __init__(self, config, parent=None, server_name: str | None = None):
         # PetApp 是普通控制器而非 QObject；生命周期由其属性持有。
         super().__init__(parent if isinstance(parent, QObject) else None)
         self.runtime_id = make_runtime_id(getattr(config, "instance_id", ""))
         self._thread = QThread(self)
+        # P3 broker：GUI 侧角色镜像（queued role_changed 更新；默认未定）
+        self._coordinator_mirror = False
+        self._role_known_mirror = False
+        self.role_changed.connect(self._mirror_role)
         policy = {"collision_enabled": bool(config.get("collision_enabled", True)),
                   "collision_restitution": float(config.get("collision_restitution", .82)),
                   "collision_friction": float(config.get("collision_friction", .08)),
@@ -1015,12 +1166,25 @@ class CollisionIpcSession(QObject):
         self._worker.snapshot_ready.connect(self.snapshot_ready, Qt.ConnectionType.QueuedConnection)
         self._worker.policy_changed.connect(self.policy_changed, Qt.ConnectionType.QueuedConnection)
         self._worker.role_changed.connect(self.role_changed, Qt.ConnectionType.QueuedConnection)
+        self._worker.decode_subscribe_requested.connect(
+            self.decode_subscribe_requested, Qt.ConnectionType.QueuedConnection)
+        self._worker.decode_reply_ready.connect(
+            self.decode_reply_ready, Qt.ConnectionType.QueuedConnection)
         self.state_submitted.connect(self._worker.submit_state, Qt.ConnectionType.QueuedConnection)
         self.policy_submitted.connect(self._worker.set_policy, Qt.ConnectionType.QueuedConnection)
         self.leave_submitted.connect(self._worker.submit_leave, Qt.ConnectionType.QueuedConnection)
+        self.decode_request_submitted.connect(
+            self._worker.request_decode, Qt.ConnectionType.QueuedConnection)
+        self.decode_reply_submitted.connect(
+            self._worker.send_decode_reply, Qt.ConnectionType.QueuedConnection)
 
     def start(self) -> None:
         self._thread.start()
+
+    def _mirror_role(self, is_coordinator: bool, _epoch: str) -> None:
+        """GUI 侧角色镜像（role_changed 信号到达即更新）。"""
+        self._coordinator_mirror = bool(is_coordinator)
+        self._role_known_mirror = True
 
     def submit_state(self, state: dict[str, Any]) -> None:
         self.state_submitted.emit(dict(state))
@@ -1032,6 +1196,29 @@ class CollisionIpcSession(QObject):
     def submit_leave(self) -> None:
         """主动向协调者发 leave：成员即时移除，不等 stale 超时。"""
         self.leave_submitted.emit()
+
+    # ---- P3 broker：GUI 侧转发 -------------------------------------------------
+    def request_decode(self, req: dict[str, Any]) -> None:
+        """client 侧发起共享解码订阅（经 worker socket 发出）。"""
+        self.decode_request_submitted.emit(dict(req))
+
+    def send_decode_reply(self, runtime_id: str, reply: dict[str, Any]) -> None:
+        """coordinator 侧向指定 peer 定向发送 decode_grant/decode_deny。"""
+        self.decode_reply_submitted.emit(str(runtime_id), dict(reply))
+
+    @property
+    def is_coordinator(self) -> bool:
+        """GUI 侧角色镜像：worker 选举/欢迎后经 queued role_changed 更新。
+
+        首次 idle 决策等「角色可能尚未送达」的场景，由窗口层等
+        facade.role_known()（≤600ms 预算，设计 P0-2），不依赖本标志。
+        """
+        return self._coordinator_mirror
+
+    @property
+    def role_known(self) -> bool:
+        """是否已收到过至少一次角色事件（coordinator 或 client 均算）。"""
+        return self._role_known_mirror
 
     def stop(self) -> None:
         if self._thread.isRunning():

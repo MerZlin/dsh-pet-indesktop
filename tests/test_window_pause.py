@@ -96,6 +96,21 @@ class FakeLibrary:
         return 1.0
 
 
+class WarmRecordingLibrary(FakeLibrary):
+    """记录 pause_warm/resume_warm 调用的假素材库（N1：原生隐藏→显示预热恢复）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.pause_calls = 0
+        self.resume_calls = 0
+
+    def pause_warm(self):
+        self.pause_calls += 1
+
+    def resume_warm(self):
+        self.resume_calls += 1
+
+
 @pytest.fixture
 def app():
     return QApplication.instance() or QApplication([])
@@ -184,6 +199,30 @@ def test_disable_auto_hide_restores_pet(app, tmp_path):
     assert win._hidden_paused is False
     assert win.isVisible()
     assert win.cfg.get('auto_hide_fullscreen') is False
+
+    win.close()
+    app.processEvents()
+
+
+def test_native_set_visible_cycle_recovers_warm(app, tmp_path):
+    """N1：不经自定义 hide() 的原生 setVisible(False)→setVisible(True) 周期
+    必须完整恢复预热——hideEvent 设置 _hidden_paused，showEvent 据此走
+    _resume_activity() 并 resume_warm()；否则预热被永久停用。"""
+    lib = WarmRecordingLibrary()
+    win = PetWindow(lib, Config(base=tmp_path))
+    win.show()
+    app.processEvents()
+    assert lib.pause_calls == 0 and lib.resume_calls == 0, "首次显示不触发预热暂停/恢复"
+
+    win.setVisible(False)  # 原生隐藏直进 hideEvent
+    app.processEvents()
+    assert win._hidden_paused is True, "原生隐藏必须设置 _hidden_paused（showEvent 恢复的依据）"
+    assert lib.pause_calls >= 1, "原生隐藏必须暂停预热"
+
+    win.setVisible(True)  # 原生显示直进 showEvent
+    app.processEvents()
+    assert win._hidden_paused is False
+    assert lib.resume_calls >= 1, "原生隐藏→显示周期后必须恢复预热，不得永久停用"
 
     win.close()
     app.processEvents()

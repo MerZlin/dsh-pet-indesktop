@@ -482,6 +482,25 @@ def _clean_character_profiles(value) -> dict:
     return cleaned
 
 
+def _clean_collision_data(value: dict) -> dict:
+    """归一化碰撞设置：collision_* 一组 7 键。
+
+    从 Config._normalize_pet_settings 原样上提为模块级纯函数，供 Config 与
+    config_domains 的 CollisionConfig 共用；清洗逻辑本体一行未改。
+    """
+    result = dict(value)
+    result["collision_enabled"] = _bool_or_default(value.get("collision_enabled"), True)
+    result["collision_restitution"] = _float_or_default(value.get("collision_restitution"), .82, 0.0, 1.0)
+    result["collision_friction"] = _float_or_default(value.get("collision_friction"), .08, 0.0, .30)
+    result["collision_mass_scale"] = _float_or_default(value.get("collision_mass_scale"), 1.0, .5, 2.0)
+    result["collision_impulse_cap"] = _float_or_default(value.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
+    result["collision_sound_enabled"] = bool(value.get("collision_sound_enabled", True))
+    result["collision_sound_volume"] = _float_or_default(
+        value.get("collision_sound_volume"), 0.70, 0.0, 1.0
+    )
+    return result
+
+
 class Config:
     def __init__(self, base=None, instance_id: str | None = None):
         base = Path(base) if isinstance(base, str) else (base or _default_base())
@@ -512,6 +531,7 @@ class Config:
             "self_talk_min_interval": DEFAULT_SELF_TALK_MIN_INTERVAL,
             "self_talk_max_interval": DEFAULT_SELF_TALK_MAX_INTERVAL,
             "self_talk_duration_seconds": DEFAULT_SELF_TALK_DURATION_SECONDS,
+            "self_talk_image_scale": 100,  # 气泡配图显示尺寸百分比（50~300，100 = 默认）
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "self_talk_image_dir": "assets/big_blue_fat_fish",
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
@@ -533,6 +553,8 @@ class Config:
             "slingshot_enabled": True,     # 弹弓弹射
             "throw_strength": "standard",  # gentle / standard / strong / crazy
             "throw_max_speed": 4800.0,     # 由 throw_strength 导出
+            "idle_low_fps_enabled": False,  # 闲置降帧（灰度默认关）：长时间无交互时动画隔帧呈现
+            "idle_low_fps_threshold": 30.0,  # 闲置阈值（秒）：超过该时长无交互且窗口可见才降帧
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
@@ -559,11 +581,21 @@ class Config:
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
             "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
+            # P3 broker（灰度默认关，不进设置 UI）：多开同角色空闲素材共享解码开关。
+            # 前置条件 = collision_enabled（broker 骑在碰撞 QLocal 通道上）。
+            # ⚠ 平台限定（P3A R2 P0-1 / R3 收口）：本键只在 Windows x86/x64
+            # （AMD64/x86_64，TSO）上生效——共享内存 seqlock 的 seq 提交词只经
+            # ctypes 普通 8B load/store，无 acquire/release/跨进程 barrier，
+            # 弱序平台（ARM macOS/Linux 及 **Windows ARM64**）上协议不作正确性
+            # 声明。非支持平台即使本键为 True，BrokerFacade 的 enabled 判定
+            # （decode_broker.broker_platform_supported()：OS + 架构双重检查）
+            # 也强制为 False：本键只是「用户请求」，平台门禁在启用点收口。
+            "decode_broker_enabled": False,
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             **DEFAULT_COLLISION_SETTINGS,
             "chat": _default_chat_data(),
         }
-        self._load()
+        self.reload()
         self._normalize_pet_settings()
 
     def _migrate_legacy_config(self, base) -> None:
@@ -586,7 +618,7 @@ class Config:
         except OSError:
             pass
 
-    def _load(self):
+    def reload(self):
         if not self.path.is_file():
             return
         try:
@@ -626,9 +658,9 @@ class Config:
         # _redacted_data() 写盘时会剔除 chat.providers 下的明文 api_key /
         # vision_api_key（keyring 不可用时 key 只存内存 self.data），因此磁盘文件
         # 里没有这两项。这里若某 provider 在磁盘数据里缺 api_key/vision_api_key
-        # 但合入前的内存里有，则保留内存值，避免设置对话框重开（自 config._load()
+        # 但合入前的内存里有，则保留内存值，避免设置对话框重开（自 config.reload()
         # 从磁盘重载）把用户未重启就丢掉的 key 覆盖成空。新旧两套设置对话框都走
-        # 这条 _load() 路径，一处修复全覆盖。
+        # 这条 reload() 路径，一处修复全覆盖。
         previous_chat = self.data.get("chat")
         previous_providers = (
             previous_chat.get("providers") if isinstance(previous_chat, dict) else None
@@ -657,6 +689,7 @@ class Config:
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
+            "self_talk_image_scale",
             "self_talk_bubble_style",
              "mouse_through", "cursor_hidden_passthrough", "drag_physics", "context_menu_template",
             "lock_position", "shift_drag", "pet_opacity",
@@ -665,6 +698,7 @@ class Config:
             "click_sound_enabled", "click_sound_path",
             "click_sound_pack", "click_sound_volume",
             "slingshot_enabled", "throw_strength", "throw_max_speed",
+            "idle_low_fps_enabled", "idle_low_fps_threshold",
             "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
             "music_sing_enabled",
@@ -685,6 +719,7 @@ class Config:
             "collision_enabled", "collision_restitution", "collision_friction",
             "collision_mass_scale", "collision_impulse_cap",
             "collision_sound_enabled", "collision_sound_volume",
+            "decode_broker_enabled",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -736,6 +771,9 @@ class Config:
         self.data["self_talk_image_dir"] = str(
             self.data.get("self_talk_image_dir") or ""
         ).strip()[:500]
+        self.data["self_talk_image_scale"] = int(_float_or_default(
+            self.data.get("self_talk_image_scale"), 100.0, 50.0, 300.0
+        ))
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
         self.data["cursor_hidden_passthrough"] = _bool_or_default(
             self.data.get("cursor_hidden_passthrough"), True
@@ -791,16 +829,31 @@ class Config:
         strength = physics_mod.normalize_throw_strength(str(self.data.get("throw_strength") or "standard"))
         self.data["throw_strength"] = strength
         self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
-        self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
-        self.data["collision_enabled"] = _bool_or_default(self.data.get("collision_enabled"), True)
-        self.data["collision_restitution"] = _float_or_default(self.data.get("collision_restitution"), .82, 0.0, 1.0)
-        self.data["collision_friction"] = _float_or_default(self.data.get("collision_friction"), .08, 0.0, .30)
-        self.data["collision_mass_scale"] = _float_or_default(self.data.get("collision_mass_scale"), 1.0, .5, 2.0)
-        self.data["collision_impulse_cap"] = _float_or_default(self.data.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
-        self.data["collision_sound_enabled"] = bool(self.data.get("collision_sound_enabled", True))
-        self.data["collision_sound_volume"] = _float_or_default(
-            self.data.get("collision_sound_volume"), 0.70, 0.0, 1.0
+        # 闲置降帧（性能调研 §4.3）：开关默认关（灰度）；阈值夹到 [1, 3600] 秒
+        # 终审 P1-3：必须用 _bool_or_default——bool("false") is True，字符串
+        # 布尔（外部手改配置/旧版导出）会被误开；与 decode_broker_enabled 同规。
+        self.data["idle_low_fps_enabled"] = _bool_or_default(
+            self.data.get("idle_low_fps_enabled"), False
         )
+        self.data["idle_low_fps_threshold"] = _float_or_default(
+            self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
+        )
+        # P3 broker（灰度默认关）：多开同角色空闲素材共享解码开关。
+        # ⚠ 平台限定（P3A R2 P0-1 / R3，与 defaults 声明一致）：本键只在
+        # Windows x86/x64（AMD64/x86_64 TSO）上生效——非支持平台（非 Windows，
+        # 或 Windows ARM64 弱序）即使归一后为 True，BrokerFacade 的 enabled
+        # 判定也会与 broker_platform_supported()（Windows 且 AMD64/x86_64）
+        # 做与而强制关闭；此处归一只保证「类型为 bool」，「是否启用」由启用点
+        # 的平台门禁收口。
+        self.data["decode_broker_enabled"] = _bool_or_default(
+            self.data.get("decode_broker_enabled"), False
+        )
+        # 上游 #60 系统通知开关：同规防字符串布尔误开（bool("false") is True）。
+        self.data["system_notifications_enabled"] = _bool_or_default(
+            self.data.get("system_notifications_enabled"), True
+        )
+        self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
+        self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
         return self.data.get(key, default)
@@ -866,12 +919,14 @@ class Config:
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
+            "self_talk_image_scale",
             "self_talk_bubble_style",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg",
             "click_sound_enabled", "click_sound_pack", "click_sound_volume",
             "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
+            "idle_low_fps_enabled", "idle_low_fps_threshold",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()
@@ -882,6 +937,29 @@ class Config:
 
     def set_chat_settings(self, settings):
         self.data["chat"] = settings.to_dict(include_secrets=True)
+
+    # ---- 域 facade 便捷入口（批5：只建不用，调用点未迁移）----
+    # 返回对应域的轻量视图（pet/config_domains.py）。normalize 复用本模块现有
+    # _merge_*/_clean_* 函数；facade 只读，不写盘、不碰 secret 保留/version 迁移。
+    def chat_config(self):
+        from .config_domains import ChatConfig
+        return ChatConfig.from_dict(self.data.get("chat", {}))
+
+    def agent_link_config(self):
+        from .config_domains import AgentLinkConfig
+        return AgentLinkConfig.from_dict(self.data.get("agent_link", {}))
+
+    def proactive_config(self):
+        from .config_domains import ProactiveConfig
+        return ProactiveConfig.from_dict(self.data.get("proactive_screen", {}))
+
+    def collision_config(self):
+        from .config_domains import CollisionConfig
+        return CollisionConfig.from_dict(self.data)
+
+    def menu_config(self):
+        from .config_domains import MenuConfig
+        return MenuConfig.from_dict(self.data)
 
     def resolve_api_key(self, provider):
         from .chat.models import SecretStore
