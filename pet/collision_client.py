@@ -52,6 +52,11 @@ class CollisionClient(QObject):
         self.seq = 0
         self.last_state = None
         self.last_submit_at = 0.0  # 非 force 提交 20Hz 限流时间戳
+        # 碰撞反弹预测限频：预测只是提前量优化（权威判定在协调者），30ms
+        # 粒度足够；165Hz 高节拍下每 tick 全量跑（圆链扫描×peer 数）会把
+        # GUI 线程打满（实测定案：碰撞风暴时 _predict_collision_bounce
+        # 单函数吃掉 GUI 的 13%）。
+        self._last_predict_at = 0.0
         self.applied_policy = None  # 已同步到会话的碰撞策略
         self.epoch = ''
         self.peer_snapshots: dict[str, dict[str, Any]] = {}
@@ -206,17 +211,19 @@ class CollisionClient(QObject):
         session = self.session
         if session is None:
             return
-        state = self._collision_state()
-        comparable = dict(state)
-        comparable.pop('seq', None)
-        # 时间戳不参与"状态是否变化"比较：ts 每次不同会让去重恒失效（死代码）
-        comparable.pop('ts', None)
-        if not force and comparable == self.last_state:
-            return
         now = time.monotonic()
         if not force and now - self.last_submit_at < 0.05:
-            # 非 force 提交 20Hz 限流：moveEvent 等 60Hz 高频路径不超标，
-            # 运动期间由 self.timer（50ms/500ms）兜底强制上报
+            # 非 force 提交 20Hz 限流——先限流再建状态：165Hz 高节拍下
+            # moveEvent 每 tick 调进来，先建后弃等于每秒白建 165 份完整
+            # 状态（圆链几何），实测定案会把 GUI 打满。被限流期间的状态
+            # 变化由 self.timer（50ms/500ms）兜底强制上报，不丢最终态。
+            return
+        state = self._collision_state()
+        comparable = dict(state)
+        # 时间戳不参与"状态是否变化"比较：ts 每次不同会让去重恒失效（死代码）
+        comparable.pop('seq', None)
+        comparable.pop('ts', None)
+        if not force and comparable == self.last_state:
             return
         self.seq += 1
         state['seq'] = self.seq
@@ -392,6 +399,9 @@ class CollisionClient(QObject):
                 or self.session is None):
             return
         now = time.monotonic()
+        if now - self._last_predict_at < 0.030:
+            return  # 预测限频 ~33Hz（见 __init__ 注释）
+        self._last_predict_at = now
         self._prune_collision_prediction_state(now)
         runtime_id = str(getattr(self.session, 'runtime_id', ''))
         if not runtime_id:
