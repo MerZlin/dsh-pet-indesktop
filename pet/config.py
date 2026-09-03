@@ -694,6 +694,42 @@ class Config:
             self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
         self._migrate_click_sound_config(raw)
         self.data["version"] = 4
+        self._migrate_plaintext_keys_to_keyring()
+
+    def _migrate_plaintext_keys_to_keyring(self) -> None:
+        """加载时把磁盘遗留的明文 API Key 迁移进 keyring。
+
+        v4.0.4/4.0.5 起 _redacted_data() 写盘时剔除 chat.providers 下的明文
+        api_key/vision_api_key，但 SecretStore.set 只在设置对话框保存时调用——
+        老版本（≤v4.0.0）磁盘上的明文 key 从未进过 keyring，升级后首次写盘即被剔除，
+        重启后 resolve_api_key 拿不到任何值，聊天/视觉 401 静默失效。
+        此处补迁移：keyring 已有值不覆盖（与 resolve_api_key 的 keyring 优先序一致），
+        仅丢弃明文；set 失败（keyring 不可用）保留内存明文，维持原兜底行为。
+        幂等：迁移成功后内存/磁盘均无明文，重复 _load 无副作用；不主动 save()，
+        写盘剔除交给下次正常保存。
+        """
+        chat = self.data.get("chat")
+        providers = chat.get("providers") if isinstance(chat, dict) else None
+        if not isinstance(providers, dict):
+            return
+        from .chat.models import SecretStore  # 惰性导入，且只实例化一次
+        store = SecretStore()
+        for provider_id, provider in providers.items():
+            if not isinstance(provider, dict):
+                continue
+            for key_field, ref_field, default_ref in (
+                ("api_key", "api_key_ref", f"provider/{provider_id}"),
+                ("vision_api_key", "vision_api_key_ref", f"provider/{provider_id}/vision"),
+            ):
+                plaintext = str(provider.get(key_field) or "")
+                if not plaintext.strip():
+                    continue
+                ref = str(provider.get(ref_field) or "").strip()
+                if not ref:
+                    ref = default_ref
+                    provider[ref_field] = ref
+                if store.get(ref) or store.set(ref, plaintext):
+                    provider.pop(key_field, None)
 
     def _migrate_click_sound_config(self, raw: dict) -> None:
         """旧版 click_sound_path 迁移为 click_sound_pack。"""
