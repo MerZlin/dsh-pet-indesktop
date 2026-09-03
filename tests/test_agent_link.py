@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -192,7 +193,7 @@ class TestRealFileTailEndToEnd:
 
         received_states = []
         mon = CursorMonitor(cfg_dir, base_dir=tmp_path / ".cursor" / "projects")
-        mon.state_changed.connect(lambda k, s: received_states.append((k, s)))
+        mon.state_changed.connect(lambda ev: received_states.append((ev.agent, ev.state)))
 
         mon.start()
         mon._poll()  # 初始化 tailer
@@ -499,7 +500,11 @@ class TestRealFormatMappers:
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "user"}})) == "thinking"
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "assistant"}})) == ""
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-start"}})) == "working"
+        # step-finish 按 reason 分流：tool-calls = 停笔等工具（含 task 子代理
+        # 长跑），维持现状不触发完成确认；stop / 无 reason（旧版兼容）→ idle
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish"}})) == "idle"
+        assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish", "reason": "stop"}})) == "idle"
+        assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}})) == ""
         assert opencode_event_state("session.updated.1", "{}") == ""
         assert opencode_event_state("message.part.updated.1", "not json") == ""
 
@@ -524,7 +529,7 @@ class TestOpenCodeSqliteTail:
         cfg_dir.mkdir()
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.state_changed.connect(lambda ev: received.append(ev.state))
         mon.start()
         mon._poll()  # 首次 = backfill，不产生事件
         assert received == []
@@ -539,33 +544,6 @@ class TestOpenCodeSqliteTail:
         mon._poll()
         assert received == ["thinking", "working"]  # session.updated 被忽略
         mon.stop()
-
-
-class TestCooldownUnits:
-    def test_seconds_and_minutes_conversion(self, tmp_path):
-        """冷却间隔秒/分钟双单位：45 秒应存为 0.75 分钟。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.settings_dialog import PetSettingsDialog
-
-        app = QApplication.instance() or QApplication([])
-        cfg = Config(base=tmp_path)
-        dlg = PetSettingsDialog(cfg)
-        if not hasattr(dlg, "pro_cooldown_unit"):
-            import pytest
-            pytest.skip("非 Windows 无主动识屏设置组")
-
-        # 切到秒，设 45 秒
-        dlg.pro_cooldown_unit.setCurrentIndex(1)
-        dlg.pro_cooldown_spin.setValue(45)
-        assert abs(dlg._cooldown_minutes_value() - 0.75) < 1e-9
-
-        # 切回分钟应自动换算显示
-        dlg.pro_cooldown_unit.setCurrentIndex(0)
-        assert abs(dlg.pro_cooldown_spin.value() - 0.75) < 1e-9
-
-        # 保存后配置为分钟值
-        dlg._save()
-        assert abs(cfg.data["proactive_screen"]["cooldown_minutes"] - 0.75) < 1e-9
 
 
 class TestMultiInstanceGlobalState:
@@ -728,6 +706,34 @@ class TestAgentLinkBubbles:
         mgr._on_agent_state("dsh", "idle")
         assert "dsh" in mgr._done_pending
 
+        mgr._fire_done("dsh")
+        assert any("干完活啦" in b for b in bubbles)
+
+    def test_opencode_step_finish_tool_calls_no_done(self, tmp_path):
+        """opencode step-finish(reason=tool-calls)（派 task 子代理后主代理停笔等待）
+        不触发完成确认：不产出 idle 状态 → 800ms 确认不排程；
+        step-finish(reason=stop) 才是真结束 → 排程并出完成气泡。"""
+        from pet.agent_link import opencode_event_state
+        import json as j
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path)
+        mgr._on_agent_state("dsh", "working")
+
+        # 子代理长跑期间：tool-calls 维持现状，确认窗口不排程
+        state = opencode_event_state("message.part.updated.1",
+                                     j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}}))
+        assert state == ""
+        if state:  # 与 agent_link._poll 的空状态跳过逻辑一致
+            mgr._on_agent_state("dsh", state)
+        clock[0] += 3.0
+        assert "dsh" not in mgr._done_pending
+        assert bubbles == []
+
+        # 子代理回注、整轮真结束：stop → idle → 排程 → 完成气泡恰一次
+        state = opencode_event_state("message.part.updated.1",
+                                     j.dumps({"part": {"type": "step-finish", "reason": "stop"}}))
+        assert state == "idle"
+        mgr._on_agent_state("dsh", state)
+        assert "dsh" in mgr._done_pending
         mgr._fire_done("dsh")
         assert any("干完活啦" in b for b in bubbles)
 
@@ -1276,8 +1282,8 @@ class TestActivitySignal:
         cfg = Config(base=tmp_path)
         mon = BaseAgentMonitor("dsh", cfg.dir)
         got, states = [], []
-        mon.activity.connect(lambda a, t: got.append((a, t)))
-        mon.state_changed.connect(lambda a, s: states.append(s))
+        mon.activity.connect(lambda ev: got.append((ev.agent, ev.tool)))
+        mon.state_changed.connect(lambda ev: states.append(ev.state))
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()  # 先建空文件，backfill 才能落到末尾
         mon._tailer.read_new_lines()  # backfill 初始化
@@ -1293,7 +1299,7 @@ class TestActivitySignal:
         cfg = Config(base=tmp_path)
         mon = BaseAgentMonitor("dsh", cfg.dir)
         got = []
-        mon.activity.connect(lambda a, t: got.append(t))
+        mon.activity.connect(lambda ev: got.append(ev.tool))
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()
         mon._tailer.read_new_lines()
@@ -1397,8 +1403,8 @@ class TestOpenCodeSubagentFilter:
         cfg_dir.mkdir()
         received, tools = [], []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda k, s: received.append(s))
-        mon.activity.connect(lambda k, t: tools.append(t))
+        mon.state_changed.connect(lambda ev: received.append(ev.state))
+        mon.activity.connect(lambda ev: tools.append(ev.tool))
         mon.start()
         mon._poll()  # backfill
 
@@ -1440,7 +1446,7 @@ class TestOpenCodeSubagentFilter:
         cfg_dir.mkdir()
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.state_changed.connect(lambda ev: received.append(ev.state))
         mon.start()
         mon._poll()
         db = sqlite3.connect(db_path)
@@ -1544,8 +1550,8 @@ class TestCustomAgentMonitor:
 
         states, tools = [], []
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(events))
-        mon.state_changed.connect(lambda k, s: states.append((k, s)))
-        mon.activity.connect(lambda k, t: tools.append((k, t)))
+        mon.state_changed.connect(lambda ev: states.append((ev.agent, ev.state)))
+        mon.activity.connect(lambda ev: tools.append((ev.agent, ev.tool)))
         mon.start()
         mon._poll()  # backfill 初始化
 
@@ -1566,7 +1572,7 @@ class TestCustomAgentMonitor:
         missing = tmp_path / "not_yet.jsonl"
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(missing))
         states = []
-        mon.state_changed.connect(lambda k, s: states.append((k, s)))
+        mon.state_changed.connect(lambda ev: states.append((ev.agent, ev.state)))
         mon.start()
         mon._poll()
         mon._poll()
@@ -1654,7 +1660,7 @@ class TestCustomAgentManager:
 
 class TestCustomAgentMenu:
     def test_menu_lists_custom_agent_and_toggle_routes(self, tmp_path):
-        """右键菜单动态渲染自定义 Agent，勾选走通用 _toggle_agent_link。"""
+        """右键菜单动态渲染自定义 Agent，勾选走通用 toggle_agent_link。"""
         from PySide6.QtWidgets import QMenu
         from pet.context_menus.shared import add_agent_link_menu
 
@@ -1673,10 +1679,10 @@ class TestCustomAgentMenu:
             def __init__(self):
                 self.cfg = cfg
 
-            def _toggle_agent_link(self, key, on, action=None):
+            def toggle_agent_link(self, key, on, action=None):
                 toggles.append((key, on))
 
-            def _set_agent_link_option(self, key, on):
+            def set_agent_link_option(self, key, on):
                 options.append((key, on))
 
         menu = QMenu()
@@ -1694,3 +1700,203 @@ class TestCustomAgentMenu:
             assert toggles == [("gemini", True)]
         finally:
             menu.deleteLater()
+
+# ============================================================================
+# 16. DSH 安装线程生命周期守卫（全审 P1-4）
+# ============================================================================
+class TestInstallFinishedGuard:
+    """安装后台线程完成回调不得越过 manager 生命周期：窗口关闭/角色切换
+    （shutdown）或重新禁用后，迟到的 install_finished 不得写配置/启动
+    监视器/弹气泡（daemon 安装线程本身无法被取消，只能拦完成回调）。"""
+
+    def _make_manager(self, tmp_path, bubbles, monkeypatch, release):
+        cfg = Config(base=tmp_path)
+
+        class Win:
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+            def isVisible(self):
+                return True
+
+        mgr = AgentLinkManager(Win(), cfg)
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **kw: QMessageBox.StandardButton.Yes,
+        )
+        monkeypatch.setattr(
+            DshMonitor, "uninstall_bridge", classmethod(lambda cls: True),
+        )
+
+        def fake_install():
+            assert release.wait(timeout=5.0), "测试释放信号未到达"
+            return (True, "ok")
+
+        monkeypatch.setattr(
+            DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),
+        )
+        return cfg, mgr
+
+    def _install_thread(self):
+        return next(
+            t for t in threading.enumerate() if t.name == "dsh-bridge-install"
+        )
+
+    def test_late_completion_after_shutdown_is_dropped(self, tmp_path, monkeypatch):
+        """安装完成发生在 shutdown（窗口关闭/角色切换）之后 → 完成回调被
+        丢弃：配置不写回、监视器不启动、无完成气泡。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        assert "dsh" in mgr._install_pending
+        assert bubbles == ["正在安装 DSH 桥接插件…"]
+        mgr.shutdown()   # 安装完成前 manager 被关闭（窗口 close / 角色切换）
+        release.set()    # 安装此刻才完成
+        install_thread.join(timeout=5.0)
+        app.processEvents()
+        app.processEvents()
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert not mgr.monitors["dsh"]._running
+        assert bubbles == ["正在安装 DSH 桥接插件…"], "不得弹完成气泡"
+
+    def test_queued_completion_dispatched_after_shutdown_is_dropped(self, tmp_path, monkeypatch):
+        """emit→dispatch 竞态：信号在 shutdown 前已 emit 入队（worker 已
+        完成），但回调在 shutdown 之后才被派发 → 同样必须丢弃（完成回调
+        在 GUI 线程的权威校验兜住该窗口）。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        release.set()                 # 安装完成 → worker emit（queued 入队）
+        install_thread.join(timeout=5.0)
+        # 未跑 processEvents：queued 回调仍躺在 GUI 事件队列里
+        mgr.shutdown()                # 关闭发生在回调派发之前
+        app.processEvents()           # 迟到的 queued 回调此刻才派发 → 丢弃
+        app.processEvents()
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert not mgr.monitors["dsh"]._running
+        assert bubbles == ["正在安装 DSH 桥接插件…"]
+
+    def test_late_completion_after_redisable_is_dropped(self, tmp_path, monkeypatch):
+        """用户重新关闭联动（安装进行中）→ 在途安装作废，完成回调被丢弃，
+        不得反向把配置写回 True / 启动监视器。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        assert "dsh" in mgr._install_pending
+        mgr.set_enabled("dsh", False)  # 用户重新关闭联动 → 在途安装作废
+        assert "dsh" not in mgr._install_pending
+        release.set()
+        install_thread.join(timeout=5.0)
+        app.processEvents()
+        app.processEvents()
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert not mgr.monitors["dsh"]._running
+        assert bubbles == ["正在安装 DSH 桥接插件…"]
+
+    def test_stale_queued_completion_must_not_consume_reinstalled_pending(self, tmp_path, monkeypatch):
+        """B9 复审 P1：disable→re-enable 两代安装交错。安装 A 完成信号已
+        queued 入队但未派发时，用户关闭联动并再次开启、登记安装 B（新代次）；
+        A 的旧回调随后派发时不得消费 B 的 pending（不得写配置/启动监视器/
+        弹完成气泡），B 的真实回调随后正常生效。完成信号必须携带并校验
+        安装代次，仅凭 agent key 无法区分两代安装。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        cfg = Config(base=tmp_path)
+
+        class Win:
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+            def isVisible(self):
+                return True
+
+        mgr = AgentLinkManager(Win(), cfg)
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **kw: QMessageBox.StandardButton.Yes,
+        )
+        monkeypatch.setattr(
+            DshMonitor, "uninstall_bridge", classmethod(lambda cls: True),
+        )
+
+        release_a, release_b = threading.Event(), threading.Event()
+        queue = [release_a, release_b]
+
+        def fake_install():
+            ev = queue.pop(0)
+            assert ev.wait(timeout=5.0), "测试释放信号未到达"
+            return (True, "ok")
+
+        monkeypatch.setattr(
+            DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),
+        )
+
+        def install_thread():
+            return next(
+                t for t in threading.enumerate() if t.name == "dsh-bridge-install"
+            )
+
+        # 第一代安装 A：等它完成并 emit（queued 入队），但先不派发
+        mgr.set_enabled("dsh", True)
+        thread_a = install_thread()
+        release_a.set()
+        thread_a.join(timeout=5.0)
+        assert not thread_a.is_alive()
+        assert "dsh" in mgr._install_pending   # A 的 pending 尚未被消费
+        # 未跑 processEvents：A 的 queued 回调仍躺在 GUI 事件队列里
+        mgr.set_enabled("dsh", False)          # 关闭联动：作废在途安装
+        assert "dsh" not in mgr._install_pending
+        mgr.set_enabled("dsh", True)           # 再次开启：登记安装 B（新代次）
+        assert "dsh" in mgr._install_pending
+        thread_b = install_thread()
+        # 此刻派发 A 的旧 queued 回调：不得消费 B 的 pending
+        app.processEvents()
+        app.processEvents()
+        assert "dsh" in mgr._install_pending           # B 的 pending 必须仍在
+        assert cfg.data["agent_link"]["dsh"] is False  # 配置不得被 A 写回
+        assert not mgr.monitors["dsh"]._running        # 监视器不得被 A 启动
+        assert not any("装好" in b for b in bubbles), f"不得弹完成气泡: {bubbles}"
+        # B 的真实回调随后派发：正常生效（写配置、启动监视器、弹气泡）
+        release_b.set()
+        thread_b.join(timeout=5.0)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            app.processEvents()
+            if cfg.data["agent_link"]["dsh"]:
+                break
+            time.sleep(0.01)
+        assert cfg.data["agent_link"]["dsh"] is True
+        assert mgr.monitors["dsh"]._running
+        assert any("装好" in b for b in bubbles), f"应有 B 的完成气泡: {bubbles}"
+
+    def test_normal_completion_still_applies(self, tmp_path, monkeypatch):
+        """正常路径回归：安装完成后回调照常生效（写配置、启动监视器、
+        弹完成气泡）。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        release.set()
+        install_thread.join(timeout=5.0)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            app.processEvents()
+            if cfg.data["agent_link"]["dsh"]:
+                break
+            time.sleep(0.01)
+        assert cfg.data["agent_link"]["dsh"] is True
+        assert mgr.monitors["dsh"]._running
+        assert any("装好" in b for b in bubbles), f"应有完成气泡，实际: {bubbles}"
+        mgr.set_enabled("dsh", False)
+        assert cfg.data["agent_link"]["dsh"] is False

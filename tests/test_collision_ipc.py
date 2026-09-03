@@ -15,6 +15,7 @@ from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
 from pet import collision
+from pet import collision_codec
 from pet import collision_ipc
 from pet.collision_ipc import (
     CollisionIpcSession,
@@ -115,10 +116,10 @@ def test_welcome_for_all_supported_slots_round_trips_default_protocol():
     }
 
     welcome = worker._welcome()
-    frame = collision.encode_frame(welcome)
+    frame = collision_codec.encode_frame(welcome)
 
-    assert len(frame) - collision.HEADER_SIZE > 4096
-    assert collision.FrameStreamDecoder().feed(frame) == [welcome]
+    assert len(frame) - collision_codec.HEADER_SIZE > 4096
+    assert collision_codec.FrameStreamDecoder().feed(frame) == [welcome]
 
 
 def test_large_inbound_state_cannot_poison_the_aggregate_snapshot():
@@ -128,19 +129,19 @@ def test_large_inbound_state_cannot_poison_the_aggregate_snapshot():
     message = {
         "type": "state",
         **_state(1),
-        "padding": "x" * (collision.FRAME_MAX_LENGTH - 8192),
+        "padding": "x" * (collision_codec.FRAME_MAX_LENGTH - 8192),
         "character": "界" * 1000,
         "circles": [[float(index), 1.0, 2.0] for index in range(12)],
     }
-    oversized_frame = collision.encode_frame(message)
-    assert len(oversized_frame) - collision.HEADER_SIZE > collision.STATE_FRAME_MAX_LENGTH
-    valid_frame = collision.encode_frame(
+    oversized_frame = collision_codec.encode_frame(message)
+    assert len(oversized_frame) - collision_codec.HEADER_SIZE > collision_codec.STATE_FRAME_MAX_LENGTH
+    valid_frame = collision_codec.encode_frame(
         {"type": "state", **_state(2, x=42.0)},
-        max_frame_len=collision.STATE_FRAME_MAX_LENGTH,
+        max_frame_len=collision_codec.STATE_FRAME_MAX_LENGTH,
     )
     socket = IncomingSocket(oversized_frame + valid_frame)
-    socket._collision_decoder = collision.FrameStreamDecoder(
-        max_frame_len=collision.STATE_FRAME_MAX_LENGTH,
+    worker._socket_decoders[socket] = collision_codec.FrameStreamDecoder(
+        max_frame_len=collision_codec.STATE_FRAME_MAX_LENGTH,
     )
     worker.peers[socket] = "remote"
 
@@ -156,7 +157,7 @@ def test_large_inbound_state_cannot_poison_the_aggregate_snapshot():
         "tick": worker.tick,
         "members": [worker._public_member(item) for item in worker.members.values()],
     }
-    collision.encode_frame(snapshot)
+    collision_codec.encode_frame(snapshot)
 
 
 def test_state_ingestion_caps_members_and_preserves_snapshot_budget():
@@ -183,10 +184,10 @@ def test_state_ingestion_caps_members_and_preserves_snapshot_budget():
     assert all(len(member["circles"]) <= 3 for member in worker.members.values())
     assert (collision_ipc.MAX_COLLISION_MEMBERS
             * (collision_ipc.PUBLIC_MEMBER_MAX_LENGTH + 1)
-            + collision.STATE_FRAME_MAX_LENGTH < collision.FRAME_MAX_LENGTH)
-    frame = collision.encode_frame(worker._welcome())
-    assert len(frame) - collision.HEADER_SIZE <= collision.FRAME_MAX_LENGTH
-    assert collision.FrameStreamDecoder().feed(frame) == [worker._welcome()]
+            + collision_codec.STATE_FRAME_MAX_LENGTH < collision_codec.FRAME_MAX_LENGTH)
+    frame = collision_codec.encode_frame(worker._welcome())
+    assert len(frame) - collision_codec.HEADER_SIZE <= collision_codec.FRAME_MAX_LENGTH
+    assert collision_codec.FrameStreamDecoder().feed(frame) == [worker._welcome()]
 
 
 def test_schedule_election_reuses_one_timer():
@@ -345,7 +346,7 @@ def test_coordinator_submit_leave_broadcasts_remaining_members():
     assert "coordinator" not in worker.members
     assert "peer" in worker.members
     assert len(peer_socket.sent) == 1
-    snapshot = collision.FrameStreamDecoder().feed(peer_socket.sent[0])[0]
+    snapshot = collision_codec.FrameStreamDecoder().feed(peer_socket.sent[0])[0]
     assert snapshot["type"] == "snapshot"
     assert [member["runtime_id"] for member in snapshot["members"]] == ["peer"]
 
@@ -371,7 +372,7 @@ def test_single_member_snapshot_heartbeat_does_not_require_solver(collision_enab
     assert len(peer_socket.sent) == 2
     assert worker.tick == 0
     snapshots = [
-        collision.FrameStreamDecoder().feed(frame)[0]
+        collision_codec.FrameStreamDecoder().feed(frame)[0]
         for frame in peer_socket.sent
     ]
     if collision_enabled:
@@ -401,7 +402,7 @@ def test_authoritative_membership_excludes_solver_stale_members():
     worker._coordinator_tick()
 
     assert "stale" in worker.members
-    snapshot = collision.FrameStreamDecoder().feed(peer_socket.sent[0])[0]
+    snapshot = collision_codec.FrameStreamDecoder().feed(peer_socket.sent[0])[0]
     assert [member["runtime_id"] for member in snapshot["members"]] == ["fresh"]
     assert [member["runtime_id"] for member in worker._welcome()["members"]] == ["fresh"]
 
@@ -446,7 +447,7 @@ def test_policy_toggle_forces_empty_then_full_membership_snapshot():
     worker._coordinator_tick()
 
     snapshots = [
-        collision.FrameStreamDecoder().feed(frame)[0]
+        collision_codec.FrameStreamDecoder().feed(frame)[0]
         for frame in peer_socket.sent
     ]
     assert [snapshot["members"] for snapshot in snapshots] == [[], [
@@ -535,7 +536,7 @@ def test_accept_connection_reads_bytes_that_arrived_before_signal_hooks():
     worker._accept_connection()
 
     assert worker.peers[socket] == ""
-    assert socket._collision_decoder.max_frame_len == collision.STATE_FRAME_MAX_LENGTH
+    assert worker._socket_decoders[socket].max_frame_len == collision_codec.STATE_FRAME_MAX_LENGTH
     assert reads == [socket]
 
 
@@ -654,9 +655,9 @@ def test_snapshot_broadcast_encodes_once_for_all_peers(monkeypatch):
     sockets = [FakeSocket() for _ in range(3)]
     worker.peers = {socket: f"peer-{index}" for index, socket in enumerate(sockets)}
     encoded = []
-    original_encode = collision.encode_frame
+    original_encode = collision_codec.encode_frame
     monkeypatch.setattr(
-        collision,
+        collision_codec,
         "encode_frame",
         lambda message: encoded.append(message) or original_encode(message),
     )
@@ -933,6 +934,7 @@ import json, sys, time
 from PySide6.QtCore import QEventLoop
 from PySide6.QtWidgets import QApplication
 from pet import collision
+from pet import collision_codec
 from pet.collision_ipc import CollisionIpcSession
 from pet.config import Config
 
@@ -1125,3 +1127,70 @@ def test_coordinator_own_predicted_bounce_via_submit_state_reaches_target():
     assert received[0]["dvx_a"] > 500.0
     assert received[0]["dvx_b"] == 0.0
     assert "coordinator" not in worker._pending_predicted
+
+
+def test_impulse_malformed_tick_dropped_without_raising():
+    """审查 P1-02/P7 回归：畸形 tick 的 impulse 帧逐条丢弃，不抛异常、
+    不中断后续合法帧。"""
+    worker = _CollisionWorker(_server_name("bad-tick"), "client", "slot-1", {})
+    worker.epoch = "epoch-a"
+    impulses = []
+    worker.impulse_ready.connect(impulses.append)
+    for bad_tick in ("bad", None, [1], {"x": 1}):
+        worker._handle_message(FakeSocket(), {
+            "type": "impulse", "epoch": "epoch-a", "pair": "a|b", "tick": bad_tick,
+        })
+    assert impulses == []
+    worker._handle_message(FakeSocket(), {
+        "type": "impulse", "epoch": "epoch-a", "pair": "a|b", "tick": 3,
+    })
+    assert len(impulses) == 1
+
+
+def test_set_policy_partial_dict_merges_with_defaults():
+    """审查 P2-03 回归：update_policy 公开边界收到部分 dict 时缺键由
+    默认值/旧值补齐，coordinator tick 不再可能 KeyError。"""
+    worker = _CollisionWorker(_server_name("policy-merge"), "coordinator", "", {})
+    worker.set_policy({"collision_enabled": False})
+    for key in ("collision_restitution", "collision_friction",
+                "collision_mass_scale", "collision_impulse_cap"):
+        assert key in worker.policy
+    assert worker.policy["collision_enabled"] is False
+    # 再次部分更新不清掉既有键
+    worker.set_policy({"collision_restitution": 0.5})
+    assert worker.policy["collision_restitution"] == 0.5
+    assert worker.policy["collision_enabled"] is False
+
+
+def test_welcome_triggers_immediate_state_resend():
+    """审查 DS-M4 回归：收到 welcome（含同 epoch 重连）立即补发当前状态，
+    不等下一心跳周期。"""
+    worker = _CollisionWorker(_server_name("welcome-resend"), "client", "slot-1", {})
+    client_socket = FakeSocket()
+    worker.socket = client_socket
+    worker.latest_state = _state(5)
+    worker._participating = True
+    worker.epoch = "epoch-1"  # 同 epoch 重连场景
+    worker._handle_message(client_socket, {
+        "type": "welcome", "epoch": "epoch-1", "tick": 0, "policy": {}, "members": [],
+    })
+    frames = [m for frame in client_socket.sent
+              for m in collision_codec.FrameStreamDecoder().feed(frame)]
+    assert any(m.get("type") == "state" for m in frames)
+
+
+def test_set_policy_partial_update_on_disabled_keeps_history():
+    """修复批复审 P1-1 回归：旧值 collision_enabled=False 时，不含该键的
+    部分更新不得误判为「开关变更」（不误清求解历史/不误标 membership）。"""
+    worker = _CollisionWorker(_server_name("policy-partial-off"), "coordinator", "", {})
+    worker.set_policy({"collision_enabled": False})
+    assert worker.policy["collision_enabled"] is False
+    worker._membership_dirty = False
+    worker.overlap_history["a|b"] = 3
+    worker.set_policy({"collision_friction": 0.2})  # 部分更新，不带开关键
+    assert worker.policy["collision_enabled"] is False
+    assert worker.policy["collision_friction"] == 0.2
+    assert worker.overlap_history == {"a|b": 3}  # 未被误清
+    # 真变更仍然生效
+    worker.set_policy({"collision_enabled": True})
+    assert worker.overlap_history == {}

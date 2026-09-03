@@ -35,12 +35,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .geometry import best_position_near_pet
 from .models import ChatMessage
 from .pet_link import PetChatLink
 from .prompt import PromptBuilder, load_character_manifest
 from . import themes as chat_themes
 from .service import ChatService
 from .session_store import SessionStore
+from .utils import _short_title
 from ..context_menus.icons import vector_widget_icon
 
 
@@ -146,20 +148,6 @@ def _safe_color(value: object) -> str:
 def _initial(character_id: str) -> str:
     text = str(character_id or "宠").strip()
     return text[:1].upper() or "宠"
-
-
-def _short_title(session) -> str:
-    if str(getattr(session, "custom_title", "")).strip():
-        return str(session.custom_title).strip()
-    for message in session.messages:
-        if message.role == "user" and message.content.strip():
-            text = " ".join(message.content.split())
-            return text[:24] + ("…" if len(text) > 24 else "")
-    try:
-        created = datetime.fromisoformat(session.created_at)
-        return "新会话 · " + created.astimezone().strftime("%H:%M")
-    except (TypeError, ValueError):
-        return "新会话"
 
 
 def _session_group(session, now: datetime | None = None) -> str:
@@ -469,6 +457,10 @@ class MessageBubble(QFrame):
         self.body.setText(str(text))
 
     def set_state(self, state: str) -> None:
+        # 打字机每 tick 都会调本方法：状态未变时全部视觉副作用都是冗余
+        # （unpolish/polish 是重活），直接短路（审查 DS-M8 的安全刀）
+        if state == getattr(self, "state", None):
+            return
         self.state = state
         self.setProperty("state", state)
         self.surface.setProperty("state", state)
@@ -944,43 +936,7 @@ class ChatWindow(QDialog):
         if available.width() < 1000 and self.width() > available.width() - 140:
             self.resize(max(self.minimumWidth(), available.width() - 140), self.height())
         size = self.frameGeometry().size()
-        # Prefer the side with the least visual obstruction. If the pet is near
-        # a screen edge, the first fully-contained candidate on another side wins.
-        y = pet_rect.center().y() - size.height() // 2
-        candidates = [
-            QPoint(pet_rect.right() + gap + 1, y),
-            QPoint(pet_rect.left() - size.width() - gap, y),
-            QPoint(pet_rect.center().x() - size.width() // 2, pet_rect.bottom() + gap + 1),
-            QPoint(pet_rect.center().x() - size.width() // 2, pet_rect.top() - size.height() - gap),
-        ]
-        for point in candidates:
-            candidate = QRect(point, size)
-            if available.contains(candidate):
-                self.move(point)
-                return
-
-        # If the phone is taller than the available work area, a full candidate
-        # may be impossible even though one side still has enough horizontal
-        # space. Clamp every candidate, then choose the one with the smallest
-        # overlap against the visible character. This prevents the old fallback
-        # from forcing the phone back onto the pet when the pet is at the right
-        # edge of the screen.
-        def clamp_point(point: QPoint) -> QPoint:
-            x = max(available.left(), min(point.x(), available.right() - size.width() + 1))
-            y = max(available.top(), min(point.y(), available.bottom() - size.height() + 1))
-            return QPoint(x, y)
-
-        ranked = []
-        for index, point in enumerate(candidates):
-            clamped = clamp_point(point)
-            candidate = QRect(clamped, size)
-            intersection = candidate.intersected(pet_rect)
-            overlap = intersection.width() * intersection.height() if not intersection.isEmpty() else 0
-            displacement = abs(clamped.x() - point.x()) + abs(clamped.y() - point.y())
-            ranked.append((overlap, displacement, index, clamped))
-
-        _, _, _, best_point = min(ranked, key=lambda item: item[:3])
-        self.move(best_point)
+        self.move(best_position_near_pet(pet_rect, size, available, gap))
 
     def _get_session(self):
         sessions = self.store.list(self.character_id)
@@ -1776,6 +1732,9 @@ class ChatWindow(QDialog):
         for session in sessions:
             self.store.delete(session)
         if current_deleted:
+            # 幻影消息防护（审查 DS-M6）：删除当前会话前先停打字机并丢弃
+            # 未排空的输出——否则残活的逐字排空会把上轮回复写进新加载的会话
+            self._reset()
             remaining = self.store.list(self.character_id)
             self.session = remaining[0] if remaining else self._new_session()
             self._load()
@@ -1801,9 +1760,15 @@ class ChatWindow(QDialog):
         正在生成回答时不插入，避免与在飞请求的流式输出交错。"""
         if self.service.busy:
             return
-        self.session.messages.append(ChatMessage("user", user_text))
-        self.session.messages.append(ChatMessage("assistant", reply))
-        self.store.save(self.session)
+        synced, absorbed = self.store.append_messages(
+            self.session, [ChatMessage("user", user_text), ChatMessage("assistant", reply)]
+        )
+        if synced is None:
+            self.session.messages.append(ChatMessage("user", user_text))
+            self.session.messages.append(ChatMessage("assistant", reply))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         if self.isVisible():
             self._load()
             self._refresh_sessions()
@@ -1854,7 +1819,19 @@ class ChatWindow(QDialog):
             request_text += "\n\n" + attachment_context
         self.input.clear()
         self.composer.clear_attachments()
-        self.session.messages.append(ChatMessage("user", display_text))
+        # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」，
+        # 另一前端在本窗打开期间的写入不会被覆盖
+        synced, absorbed = self.store.append_message(
+            self.session, ChatMessage("user", display_text)
+        )
+        if synced is None:
+            # 会话已被并发删除等边界：本地兜底（保持旧行为）
+            self.session.messages.append(ChatMessage("user", display_text))
+        else:
+            self.session = synced
+            if absorbed:
+                self._load()
+                self._refresh_sessions()
         self._add("user", display_text)
         self._last_user_text = request_text
         self._begin_generation(request_text, image_payloads=image_payloads)
@@ -1883,6 +1860,10 @@ class ChatWindow(QDialog):
         self._bubble.set_state("streaming")
         self._bubble.retry_requested.connect(self.retry_last)
         self._text = ""
+        # 整会话冗余 save：send_message 已经过 append_message 原子落盘，
+        # 这里是「会话被并发删除后本地兜底 append」路径的复活机制
+        # （append_message 返回 None 时消息只在内存）。与并发 append 的
+        # 覆盖窗口是同调用栈内的微秒级，可接受（R3 复审结论：保留）。
         self.store.save(self.session)
         config = self.settings.active_config
         config.api_key = self.config.resolve_api_key(config)
@@ -2006,8 +1987,12 @@ class ChatWindow(QDialog):
         if self._bubble:
             self._bubble.set_content(text)
             self._bubble.set_state("normal")
-        self.session.messages.append(ChatMessage("assistant", text))
-        self.store.save(self.session)
+        synced, _absorbed = self.store.append_message(self.session, ChatMessage("assistant", text))
+        if synced is None:
+            self.session.messages.append(ChatMessage("assistant", text))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         self._refresh_sessions()
         self._reset()
         self.pet_link.success()

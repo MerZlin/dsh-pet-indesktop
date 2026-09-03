@@ -37,6 +37,7 @@ dist/
 LOG.md
 LOG-INDEX.md
 SPEC.md
+_plan/
 # onedir build artifacts
 dist-onedir/
 build-onedir/

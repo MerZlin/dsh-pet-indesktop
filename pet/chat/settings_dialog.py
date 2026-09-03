@@ -408,7 +408,7 @@ class ChatSettingsDialog(QDialog):
         # 保存前基于磁盘最新配置重取快照：另一个设置窗口可能在本窗口打开期间
         # 写入结构性改动。先保留本窗口的 provider 草稿/新增/删除，再与磁盘快照合并。
         old_settings = self.settings
-        self.config._load()
+        self.config.reload()
         self._capture_current_draft()
         self.settings = self.config.chat_settings()
         # 合并 provider 结构：保留磁盘中其它窗口新增的项，应用本窗口删除/新增的项。

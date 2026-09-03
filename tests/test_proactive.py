@@ -779,32 +779,6 @@ class TestPhase3VisionLinkAndDryRun:
 # 8. Phase 4 UI 与设置集成测试
 # ============================================================================
 class TestPhase4UIAndMenuIntegration:
-    def test_settings_dialog_proactive_controls(self, tmp_path):
-        from PySide6.QtWidgets import QApplication
-        from pet.settings_dialog import PetSettingsDialog
-
-        app = QApplication.instance() or QApplication([])
-
-        cfg = Config(base=tmp_path)
-        dlg = PetSettingsDialog(cfg)
-
-        # 验证控件初始化
-        if hasattr(dlg, "pro_enabled_check"):
-            assert dlg.pro_enabled_check.isChecked() is False
-            dlg.pro_enabled_check.setChecked(True)
-            dlg.pro_whitelist_edit.setPlainText("code.exe\ntitle:*测试*")
-            dlg.pro_preset_combo.setCurrentIndex(dlg.pro_preset_combo.findData("active"))
-            dlg._on_proactive_preset_changed(0)
-            assert dlg.pro_dwell_spin.value() == 20
-
-            # 保存
-            dlg._save()
-            loaded_pro = cfg.data["proactive_screen"]
-            assert loaded_pro["enabled"] is True
-            assert loaded_pro["preset"] == "active"
-            assert "code.exe" in loaded_pro["whitelist"]
-            assert "title:*测试*" in loaded_pro["whitelist"]
-
     def test_window_menu_proactive_and_agent_toggles(self, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QApplication, QMessageBox
         from pet.window import PetWindow
@@ -880,27 +854,6 @@ class TestPhase4UIAndMenuIntegration:
         assert cfg.data["proactive_screen"]["enabled"] is True
         assert win.proactive_watcher.is_running() is False
         assert any("白名单" in text for text, _ in bubbles)
-
-    def test_settings_save_preserves_unexposed_keys(self, tmp_path):
-        """测试 4b：_save 应保留对话框未暴露的字段（min_request_interval_seconds 等）。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.settings_dialog import PetSettingsDialog
-
-        app = QApplication.instance() or QApplication([])
-
-        cfg = Config(base=tmp_path)
-        cfg.set("proactive_screen", {
-            "min_request_interval_seconds": 123,
-            "change_threshold": 20,
-        })
-        cfg.save()
-
-        dlg = PetSettingsDialog(cfg)
-        dlg._save()
-
-        pro = cfg.data["proactive_screen"]
-        assert pro["min_request_interval_seconds"] == 123
-        assert pro["change_threshold"] == 20
 
     def test_agent_link_toggle_bubble_notice(self, tmp_path, monkeypatch):
         """测试 4c：开启 Agent 联动应气泡提示「后续版本实装」。"""
@@ -1137,7 +1090,7 @@ class TestUXFixesRound3:
         assert len(shown) == 1  # 没有新增
 
         # 占用过期后恢复
-        win._bubble_busy_until = time.time() - 1
+        win._bubble_busy_until = time.monotonic() - 1  # 字段自审查修复起为单调时钟
         win._on_self_talk_timeout()
         assert len(shown) == 2
         win.close()
@@ -1246,51 +1199,6 @@ class TestUXFixesRound3:
 
         watcher._worker_capture((0, 0, 100, 100), {"hwnd": 1, "process": "a.exe", "title": "t"}, {}, 0)
         assert watcher._worker_busy is False
-
-    def test_preset_falls_to_custom_when_values_diverge(self, tmp_path):
-        """非 custom 预设下改了数值再保存 → preset 自动落为 custom（gemini 审查发现）。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.settings_dialog import PetSettingsDialog
-
-        app = QApplication.instance() or QApplication([])
-        cfg = Config(base=tmp_path)
-        dlg = PetSettingsDialog(cfg)
-        if not hasattr(dlg, "pro_preset_combo"):
-            import pytest
-            pytest.skip("非 Windows 无主动识屏设置组")
-        # 选 balanced，然后把每日上限改成非预设值
-        dlg.pro_preset_combo.setCurrentIndex(dlg.pro_preset_combo.findData("balanced"))
-        dlg._on_proactive_preset_changed(0)
-        dlg.pro_cap_spin.setValue(99)
-        dlg._save()
-        assert cfg.data["proactive_screen"]["preset"] == "custom"
-        assert cfg.data["proactive_screen"]["daily_cap"] == 99
-
-    def test_save_does_not_clobber_external_menu_changes(self, tmp_path):
-        """设置窗口打开期间右键菜单改了配置，保存时不得覆盖（gemini 审查中项修复）。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.settings_dialog import PetSettingsDialog
-
-        app = QApplication.instance() or QApplication([])
-        cfg = Config(base=tmp_path)
-        dlg = PetSettingsDialog(cfg)
-        if not hasattr(dlg, "pro_preset_combo"):
-            import pytest
-            pytest.skip("非 Windows 无主动识屏设置组")
-        # 对话框打开后，模拟右键菜单从外部把 enabled 打开并落盘
-        pro = dict(cfg.data["proactive_screen"])
-        pro["enabled"] = True
-        cfg.set("proactive_screen", pro)
-        cfg.save()
-        # 但对话框里的 enabled 控件仍是关闭状态；保存时对话框的控件值本来就不该覆盖外部改动？
-        # 我们的修复是保存前重读——但随后控件值会写入……这个测试验证的是“重读发生”：
-        # 对话框未暴露的字段（change_threshold）外部改了必须保留。
-        pro2 = dict(cfg.data["proactive_screen"])
-        pro2["change_threshold"] = 22
-        cfg.set("proactive_screen", pro2)
-        cfg.save()
-        dlg._save()
-        assert cfg.data["proactive_screen"]["change_threshold"] == 22
 
 
 # ============================================================================

@@ -2858,6 +2858,7 @@ class ModernSettingsDialog(QDialog):
         behavior_layout.addWidget(SettingsSection("动画", [
             SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
             SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
+            SettingRow("idle_low_fps", "闲置降帧", "一段时间不操作桌宠时，动画按半帧率呈现（24fps 素材 → 12fps 效果）；任何交互立即恢复全帧率。", self.idle_low_fps_check),
             SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
             SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
             SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
@@ -2903,6 +2904,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
             SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
             SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
+            SettingRow("self_talk_image_scale", "配图大小", "气泡里配图的显示尺寸（100% 为默认）。", self.self_talk_image_scale_spin),
             SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
         ], behavior_content))
         # Agent 联动：每个 Agent 一行自定义思考文案
@@ -3250,6 +3252,8 @@ class ModernSettingsDialog(QDialog):
 
         self.self_talk_check = ToggleSwitch(self)
         self.self_talk_check.setChecked(bool(self.config.get("self_talk_enabled", False)))
+        self.idle_low_fps_check = ToggleSwitch(self)
+        self.idle_low_fps_check.setChecked(bool(self.config.get("idle_low_fps_enabled", False)))
         self.self_talk_duration_spin = BrowserDoubleSpinBox(self)
         self.self_talk_duration_spin.setRange(1.0, 300.0)
         self.self_talk_duration_spin.setSingleStep(0.5)
@@ -3285,6 +3289,10 @@ class ModernSettingsDialog(QDialog):
             image_preview=True,
             parent=self,
         )
+        self.self_talk_image_scale_spin = BrowserSpinBox(self)
+        self.self_talk_image_scale_spin.setRange(50, 300)
+        self.self_talk_image_scale_spin.setSuffix(" %")
+        self.self_talk_image_scale_spin.setValue(int(self.config.get("self_talk_image_scale", 100)))
         self.click_talk_bindings_btn = QPushButton("编辑…", self)
         self.click_talk_bindings_btn.setObjectName("clickTalkBindingsButton")
         self.click_talk_bindings_btn.clicked.connect(self._open_click_talk_bindings)
@@ -4002,7 +4010,7 @@ class ModernSettingsDialog(QDialog):
         )
         pet = page_content([
             ("显示", claim("scale", "pet_opacity")),
-            ("动画与移动", claim("playback_speed", "animation_gap", "no_move", "music_sing")),
+            ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "no_move", "music_sing")),
             ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
             ("多开碰撞", collision_primary),
             ("碰撞参数（高级）", collision_advanced, True),
@@ -4010,7 +4018,7 @@ class ModernSettingsDialog(QDialog):
         interaction = page_content([
             ("输入", claim("mouse_through")),
             ("点击反馈", claim_prefix("click_")),
-            ("自言自语", claim("self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min", "self_talk_max", "self_talk_texts", "self_talk_images")),
+            ("自言自语", claim("self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min", "self_talk_max", "self_talk_texts", "self_talk_images", "self_talk_image_scale")),
         ])
         # click_talk_bindings shares the click_ prefix and remains in interaction.
         menu = SettingsTabContainer(self)
@@ -4228,7 +4236,7 @@ class ModernSettingsDialog(QDialog):
                 "菜单布局未保存：" + "、".join(menu_validation.diagnostics),
             )
             return False
-        self.config._load()
+        self.config.reload()
         minimum = min(self.min_spin.value(), self.max_spin.value())
         maximum = max(self.min_spin.value(), self.max_spin.value())
         texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]
@@ -4295,6 +4303,7 @@ class ModernSettingsDialog(QDialog):
             self.config.set("stream_capture_mode", self.stream_capture_check.isChecked())
         self.config.set("playback_speed", float(self.speed_select.currentData()))
         self.config.set("animation_gap_seconds", self.gap_spin.value())
+        self.config.set("idle_low_fps_enabled", self.idle_low_fps_check.isChecked())
         self.config.set("self_talk_enabled", self.self_talk_check.isChecked())
         self.config.set("self_talk_bubble_style", self.bubble_style_select.currentData())
         self.config.set("self_talk_min_interval", minimum)
@@ -4302,6 +4311,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_duration_seconds", self.self_talk_duration_spin.value())
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
+        self.config.set("self_talk_image_scale", self.self_talk_image_scale_spin.value())
         # Agent 联动：自定义 thinking 文案与音效（合并写回，不覆盖 agent_link 其他开关）
         agent_cfg = dict(self.config.get("agent_link", {}))
         agent_cfg["thinking_texts"] = {
@@ -4392,6 +4402,16 @@ class ModernSettingsDialog(QDialog):
                 + str(self.config.path),
             )
         return ok
+
+    def reject(self) -> None:  # noqa: N802 - Qt API
+        """Esc 路径与关闭按钮一致：保存设置并应用开机自启。"""
+        if not getattr(self, "_saved_via_button", False):
+            try:
+                self._write_config()
+                self._apply_autostart()
+            except Exception:
+                logging.exception("Esc 关闭设置时保存配置失败")
+        super().reject()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         """直接关闭（X / Esc）时同样落盘，避免修改丢失。

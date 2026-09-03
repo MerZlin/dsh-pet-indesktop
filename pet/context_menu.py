@@ -53,10 +53,21 @@ _FALLBACK_TEMPLATES = {
 }
 
 
+def normalize_template_id(template_id) -> str:
+    """把配置里的菜单模板标识归一化为合法值。
+
+    缺失/空值/非法值一律回退 ``modern``（现行默认模板）。
+    load_menu_template 与 populate_context_menu 两个入口共用此函数，
+    避免同一非法配置在两个入口回退结果不一致（历史分歧：前者曾回退 legacy）。
+    """
+    if template_id is None:
+        return "modern"
+    tid = str(template_id).strip().lower()
+    return tid if tid in TEMPLATE_IDS else "modern"
+
+
 def load_menu_template(template_id: str) -> dict:
-    template_id = str(template_id or "legacy").strip().lower()
-    if template_id not in TEMPLATE_IDS:
-        template_id = "legacy"
+    template_id = normalize_template_id(template_id)
     path = resources.files("pet.menu_templates").joinpath(f"{template_id}.json")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -72,9 +83,9 @@ def populate_context_menu(menu: QMenu, pet) -> None:
     # 按配置分发新旧菜单模板（legacy 仅供偏好旧交互的用户；「切换菜单模板」
     # 项通过 set_context_menu_template + reopen_context_menu 立即生效）
     cfg = getattr(pet, "cfg", None)
-    template_id = str(cfg.get("context_menu_template", "modern") if cfg is not None else "modern")
-    if template_id not in TEMPLATE_IDS:
-        template_id = "modern"
+    template_id = normalize_template_id(
+        cfg.get("context_menu_template", "modern") if cfg is not None else "modern"
+    )
     template = load_menu_template(template_id)
     if template_id == "legacy":
         build_legacy_menu(menu, pet, template)
@@ -91,6 +102,7 @@ def populate_context_menu(menu: QMenu, pet) -> None:
 __all__ = [
     "TEMPLATE_IDS",
     "load_menu_template",
+    "normalize_template_id",
     "populate_context_menu",
     "pet_avatar_menu_icon",
     "vector_menu_icon",

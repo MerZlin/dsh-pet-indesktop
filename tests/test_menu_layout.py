@@ -209,7 +209,7 @@ def test_runtime_menu_renders_alias_icon_separator_and_disabled_item():
         cfg = Config()
         on_open_chat = lambda self: None
         on_open_modern_settings = lambda self: None
-        _request_quit = lambda self: None
+        request_quit = lambda self: None
 
     app = QApplication.instance() or QApplication([])
     menu = QMenu()
@@ -1313,7 +1313,7 @@ def test_menu_preview_and_runtime_qmenu_share_the_same_layout_structure():
         on_open_chat = lambda self: None
         on_open_modern_settings = lambda self: None
         set_drag_physics = lambda self, _enabled: None
-        _request_quit = lambda self: None
+        request_quit = lambda self: None
 
     def preview_shape(parent):
         return [
