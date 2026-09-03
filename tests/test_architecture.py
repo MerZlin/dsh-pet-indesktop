@@ -20,7 +20,9 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 
 # window.py 行数预算：合并上游 v4.1.0 后实测 4229，留 ~1.7% 余量。
 # 拆分控制器时本预算应随之下调。
-WINDOW_PY_LINE_BUDGET = 4300
+# 2026-09-04 上调到 4330（流畅度批次：刷新率自适应节拍、PreciseTimer、
+# DPR 兜底轮询限频、perfstats 帧间隔看门狗；均有实测数据支撑）。
+WINDOW_PY_LINE_BUDGET = 4330
 
 
 def _read(name: str) -> str:

@@ -328,6 +328,11 @@ class PetWindow(QWidget):
     fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
     cursor_visibility_changed = Signal(str)
 
+    # 类级兜底默认值：测试里有绕过 __init__ 的轻量子类桩（_SignalPet 等），
+    # 它们继承真实 moveEvent/_on_squash_tick——这些属性必须有类级默认。
+    _last_mask_sync_at = 0.0   # squash 高节拍下 mask ~30Hz 限频用
+    _last_dpr_poll_at = 0.0    # moveEvent 的 DPR 兜底轮询 10Hz 限频用
+
     def __init__(self, lib: MovieLibrary, config: Config, collision_session=None,
                  broker_facade=None, *, clock=None) -> None:
         super().__init__()
@@ -581,9 +586,24 @@ class PetWindow(QWidget):
         self._move_timer.setInterval(33)         # ~30fps 位置插值
         self._move_timer.timeout.connect(self._on_move_tick)
 
+        # ---- 交互节拍跟随屏幕刷新率 ----
+        # 节拍与显示帧间隔非整数倍时（60Hz 物理 vs 165Hz 屏），位置在显示
+        # 帧间分布不匀，肉眼感知"不丝滑"（实测定案）。>90Hz 屏对齐节拍
+        # 到显示帧间隔；≤90Hz 维持 16ms。物理积分按真实 dt，不受影响。
+        try:
+            _refresh = float(QApplication.primaryScreen().refreshRate())
+        except Exception:
+            _refresh = 60.0
+        if not _refresh > 30.0:  # 读取失败/异常值兜底
+            _refresh = 60.0
+        _tick_ms = max(4, round(1000.0 / _refresh)) if _refresh > 90.0 else 16
+
         # ---- 点击 Q 弹效果 ----
         self._squash_timer = QTimer(self)
-        self._squash_timer.setInterval(16)
+        self._squash_timer.setInterval(_tick_ms)
+        # 精确定时：Windows 默认粗定时器按 15.6ms 系统粒度取整，16ms 会在
+        # 15.6/31.2ms 间抖动，Q 弹动画帧距肉眼可见地不匀（macOS 定时器天然精确）。
+        self._squash_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._squash_timer.timeout.connect(self._on_squash_tick)
         self._squash_clock = QElapsedTimer()
         self._squash_active = False
@@ -595,7 +615,8 @@ class PetWindow(QWidget):
 
         # ---- 拖动物理 ----
         self._physics_timer = QTimer(self)
-        self._physics_timer.setInterval(16)
+        self._physics_timer.setInterval(_tick_ms)  # 跟随屏幕刷新率（见上方注释）
+        self._physics_timer.setTimerType(Qt.TimerType.PreciseTimer)  # 同上：抛掷/落地弹跳的位置节拍必须均匀
         self._physics_timer.timeout.connect(self._on_physics_tick)
         self._physics_mode: str | None = None  # None / 'drag' / 'throw'
         self._phys_pos = [0.0, 0.0]
@@ -612,9 +633,21 @@ class PetWindow(QWidget):
         # 普通拖拽（非物理）的 mouseMoveEvent 只记录最新目标，由 ~120Hz
         # timer 消费最新位置做 self.move；同一显示帧内的中间位置全部丢弃。
         self._drag_move_timer = QTimer(self)
-        self._drag_move_timer.setInterval(DRAG_MOVE_COALESCE_MS)
+        # 高刷屏上合帧节拍同样对齐显示帧间隔（165Hz → 6ms）；低刷屏维持 8ms。
+        self._drag_move_timer.setInterval(min(DRAG_MOVE_COALESCE_MS, _tick_ms))
+        self._drag_move_timer.setTimerType(Qt.TimerType.PreciseTimer)  # 8ms 合帧节拍，粗定时器会直接倍化成 ~15.6ms
         self._drag_move_timer.timeout.connect(self._consume_drag_move)
         self._drag_move_pending: QPoint | None = None  # 尚未消费的最新拖拽目标
+
+        # ---- GUI 帧间隔看门狗（仅观测模式启用，常态零开销）----
+        # >50ms 的 GUI 线程空窗按桶计数，>100ms 落日志（带现场状态归因）。
+        if perfstats.ENABLED:
+            self._jank_last = time.monotonic()
+            self._jank_timer = QTimer(self)
+            self._jank_timer.setInterval(4)
+            self._jank_timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self._jank_timer.timeout.connect(self._jank_check)
+            self._jank_timer.start()
 
         # ---- 碰撞客户端（组合）----
         # 碰撞会话 attach/detach、状态上报、快照/冲量接收、predicted 本地预测
@@ -2455,14 +2488,24 @@ class PetWindow(QWidget):
         self.update()
 
     def _on_squash_tick(self) -> None:
+        if perfstats.ENABLED:
+            _sq_t0 = perfstats.clock()
         elapsed = self._squash_clock.elapsed()
         self._squash_progress = min(1.0, elapsed / self._squash_duration_ms)
-        if self._squash_progress >= 1.0:
+        done = self._squash_progress >= 1.0
+        if done:
             self._squash_active = False
             self._slingshot_rebound_progress = 0.0
             self._squash_timer.stop()
-        self._sync_mask()  # mask 跟随 squash 几何，避免变形边缘被旧轮廓裁切
+        # 高节拍下 mask 每 tick 重建是浪费（命中/碰撞用途 ~30Hz 足够）；
+        # 收势帧强制全量同步一次，保证静止后的轮廓精确。
+        now = time.monotonic()
+        if done or now - self._last_mask_sync_at >= 0.033:
+            self._last_mask_sync_at = now
+            self._sync_mask()
         self.update()
+        if perfstats.ENABLED:
+            perfstats.time('squash.tick_ms', perfstats.clock() - _sq_t0)
 
     def icon_pixmap(self, size: int = 64) -> QPixmap:
         """托盘/菜单图标：裁掉帧透明留白后再缩放。"""
@@ -3041,6 +3084,18 @@ class PetWindow(QWidget):
         if not self._drag_move_timer.isActive():
             self._drag_move_timer.start()
 
+    def _jank_check(self) -> None:
+        """观测模式看门狗：GUI 线程帧间隔超阈值即计数/落日志（定案测量用）。"""
+        now = time.monotonic()
+        gap = now - self._jank_last
+        self._jank_last = now
+        if gap > 0.10:
+            perfstats.note('jank.100ms+')
+            logging.warning('GUI 卡顿 %.0fms state=%s anim=%s physics=%s',
+                            gap * 1000, self._interaction_state, self.anim, self._physics_mode)
+        elif gap > 0.05:
+            perfstats.note('jank.50_100ms')
+
     def _consume_drag_move(self) -> None:
         """~120Hz timer 槽：消费最新目标做 self.move；无新目标则停表。"""
         if self._drag_move_pending is None:
@@ -3049,6 +3104,8 @@ class PetWindow(QWidget):
         target = self._drag_move_pending
         self._drag_move_pending = None
         self.move(target)
+        if perfstats.ENABLED:
+            perfstats.note('drag.move_applied')  # 实测拖拽位置更新率（P0 定案测量）
 
     def _flush_drag_move(self) -> None:
         """拖拽结束/打断前：停止合帧 timer，并立即应用最后一次目标位置。
@@ -4051,6 +4108,9 @@ class PetWindow(QWidget):
         self._physics_mode = mode
 
     def _on_physics_tick(self) -> None:
+        if perfstats.ENABLED:
+            perfstats.note('physics.tick')  # 实测物理节拍达成率（P0 定案测量）
+            _pt_t0 = perfstats.clock()
         now = time.monotonic()
         if self._last_physics_tick_time is None:
             dt = 0.016
@@ -4062,6 +4122,8 @@ class PetWindow(QWidget):
             self._tick_drag_physics(min(dt, 0.033))
         elif self._physics_mode == 'throw':
             self._tick_throw_physics(dt)
+        if perfstats.ENABLED:
+            perfstats.time('physics.tick_ms', perfstats.clock() - _pt_t0)
 
     def _tick_drag_physics(self, dt: float = 0.016) -> None:
         if self._drag_target is None:
@@ -4153,10 +4215,15 @@ class PetWindow(QWidget):
 
     def moveEvent(self, event) -> None:  # noqa: N802
         super().moveEvent(event)
-        # 跨屏（屏幕 DPR 变化）：_rebuild_frame 只在被调用时读 DPR，帧号/
-        # 朝向等未变时 _frame_key 快路径会跳过 → 这里检测 DPR 变化并强制
-        # 按新 DPR 重建帧，避免跨屏后继续显示旧 DPR 成品（P1）。
-        self._refresh_frame_for_screen_dpr()
+        # 跨屏（屏幕 DPR 变化）兜底轮询限频 10Hz：主路径是 Qt 的
+        # screenChanged / DPI 变化信号（即时强制重建，见 _arm_dpr_change_watch），
+        # 此处仅为信号失效场景的兜底；高节拍（165Hz）下每次移动都查属于浪费
+        # （实测定案归因：物理 tick 本体 1.97ms/次里的成分之一）。最坏情况 =
+        # 跨屏后按旧 DPR 多显示 100ms，信号路径正常时完全无感。
+        now = time.monotonic()
+        if now - self._last_dpr_poll_at >= 0.1:
+            self._last_dpr_poll_at = now
+            self._refresh_frame_for_screen_dpr()
         # 非 force 节流提交：位置变化由去重 + 20Hz 限流兜底，运动期由
         # _collision_timer（50ms）强制上报，避免 60Hz 抛掷移动上报超标
         self._submit_collision_state()
