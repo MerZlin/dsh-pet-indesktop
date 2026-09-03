@@ -237,7 +237,11 @@ class MovieLibrary(QObject):
         # 低优先级由 QTimer 在主线程触发 _warm_low_priority_background 创建。
         high, _ = self._priority_names()
         for name in high:
-            self.movie(name)
+            clip = self.movie(name)
+            # 高频交互链首帧常驻：低优先级随机动作池（数量超首帧预算）
+            # 的预热浪涌不得把它们逐出——否则用户点击/拖拽时被迫 GUI
+            # 同步解码首帧，产生可感知的百毫秒级切换卡顿（实测定案）。
+            clip._ffr_pinned = True
 
         # 预热线程由应用层在 UI 就绪后统一调度（schedule_high_priority_warm /
         # schedule_low_priority_warm），避免库构造时在测试/非事件循环环境里

@@ -140,3 +140,30 @@ def test_fresh_eviction_token_still_evicts():
     webm_clip._ffr_evict(victims)
     assert a._first_image is None
     assert webm_clip._first_frame_bytes == 200
+
+
+def test_pinned_clip_survives_lru_eviction():
+    """常驻（高频交互链）clip 不被逐出：LRU 跳过它逐出下一个非驻留项。"""
+    a, b, c = _FakeClip(100), _FakeClip(100), _FakeClip(100)
+    a._ffr_pinned = True
+    _store(a, 100)
+    _store(b, 100)
+    victims = _store(c, 100)  # 300 > 250 → a 常驻跳过，逐出 b
+    assert [v for v, _t in victims] == [b]
+    assert a._first_image is not None
+    assert b._first_image is None and c._first_image is not None
+    assert webm_clip._first_frame_bytes == 200
+
+
+def test_all_pinned_budget_becomes_soft_cap():
+    """剩余全是常驻时预算转软上限：不为压预算逐出常驻项。"""
+    a, b, c = _FakeClip(100), _FakeClip(100), _FakeClip(100)
+    a._ffr_pinned = True
+    b._ffr_pinned = True
+    c._ffr_pinned = True
+    _store(a, 100)
+    _store(b, 100)
+    victims = _store(c, 100)  # 300 > 250，但全是常驻 → 一个都不逐
+    assert victims == []
+    assert a._first_image is not None
+    assert b._first_image is not None and c._first_image is not None
