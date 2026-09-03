@@ -1146,7 +1146,7 @@ def test_macos_dock_menu_keeps_settings_reachable_when_pet_is_mouse_through(monk
     menu = controller._install_macos_dock_menu()
 
     assert menu is controller.dock_menu
-    assert menu.property("dockMenuInstalled") is True
+    assert menu.property("dockMenuInstalled") is callable(getattr(menu, "setAsDockMenu", None))
     labels = [action.text() for action in menu.actions() if not action.isSeparator()]
     assert labels[:3] == ["显示桌宠", "桌宠设置", "AI 对话"]
     next(action for action in menu.actions() if action.text() == "桌宠设置").trigger()

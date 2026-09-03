@@ -866,8 +866,11 @@ class PetApp:
         quit_callback = getattr(self.app, "quit", None)
         if callable(quit_callback):
             menu.addAction("退出", quit_callback)
-        menu.setAsDockMenu()
-        menu.setProperty("dockMenuInstalled", True)
+        install_dock_menu = getattr(menu, "setAsDockMenu", None)
+        dock_menu_installed = callable(install_dock_menu)
+        if dock_menu_installed:
+            install_dock_menu()
+        menu.setProperty("dockMenuInstalled", dock_menu_installed)
         self.dock_menu = menu
         return menu
 
