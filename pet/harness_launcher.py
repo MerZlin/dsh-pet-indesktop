@@ -17,7 +17,6 @@ nvm、volta、bun、pnpm 等常见安装目录后回退 npx；需要机器装有
 from __future__ import annotations
 
 import os
-import shutil
 import socket
 import subprocess
 import threading
@@ -25,26 +24,14 @@ import time
 import webbrowser
 from pathlib import Path
 
+from .node_runtime import augmented_path as _augmented_path
+from .node_runtime import which as _which
+
 # 3080 会落入 Windows winnat/Hyper-V 动态保留段（EACCES），默认改用 38080；
 # 与环境变量 DSH_PORT 保持一致（dsh-launcher 三件套也读它）。
 DEFAULT_PORT = int(os.environ.get("DSH_PORT") or 38080)
 # npx 首次拉取 @deepseek-ai/dsh 可能较慢，预留 90 秒就绪窗口
 _READY_TIMEOUT_SECONDS = 90.0
-
-# macOS/Linux 上 Finder/launchd 启动的应用 PATH 很精简，
-# 这里补充常见包管理器 bin 目录（存在才加入，避免无效探测）。
-_POSIX_BIN_DIRS = (
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    "~/.npm-global/bin",
-    "~/.local/bin",
-    "~/.volta/bin",
-    "~/.bun/bin",
-    "~/.yarn/bin",
-    "~/Library/pnpm",
-    "~/.local/share/pnpm",
-)
 
 _POSIX_NODE_MODULES = (
     "~/.local/lib/node_modules",
@@ -62,25 +49,6 @@ def is_running(port: int = DEFAULT_PORT) -> bool:
             return True
     except OSError:
         return False
-
-
-def _augmented_path() -> str:
-    """在原 PATH 前拼接常见 bin 目录（Windows 直接返回原 PATH）。"""
-    if os.name == "nt":
-        return os.environ.get("PATH", "")
-    extra: list[str] = []
-    for directory in _POSIX_BIN_DIRS:
-        path = Path(directory).expanduser()
-        if path.is_dir():
-            extra.append(str(path))
-    nvm = Path.home() / ".nvm" / "versions" / "node"
-    if nvm.is_dir():
-        extra.extend(str(p) for p in sorted(nvm.glob("*/bin")) if p.is_dir())
-    return os.pathsep.join([*extra, os.environ.get("PATH", "")])
-
-
-def _which(name: str) -> str | None:
-    return shutil.which(name, path=_augmented_path())
 
 
 def _wrap_cmd(command: list[str]) -> list[str]:
@@ -126,11 +94,15 @@ def _npm_global_roots() -> list[Path]:
         roots.append(Path(os.environ.get("APPDATA", "")) / "npm" / "node_modules")
     else:
         roots.extend(Path(directory).expanduser() for directory in _POSIX_NODE_MODULES)
-    # 只在 PATH（增强后）确实存在 npm 时才探测，避免菜单里点击卡住 15 秒
-    if shutil.which("npm", path=_augmented_path()) is not None:
+    # 只在 PATH（增强后）确实存在 npm 时才探测，避免菜单里点击卡住 15 秒。
+    # 使用绝对路径并传入增强环境，Finder 启动时 npm 的 env-node shebang
+    # 才能继续找到 Homebrew Node（Issue #67）。
+    npm = _which("npm")
+    if npm is not None:
         try:
             result = subprocess.run(
-                ["npm", "root", "-g"], capture_output=True, text=True, timeout=15
+                [npm, "root", "-g"], capture_output=True, text=True, timeout=15,
+                env={**os.environ, "PATH": _augmented_path()},
             )
             if result.returncode == 0 and result.stdout.strip():
                 roots.append(Path(result.stdout.strip()))

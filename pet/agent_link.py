@@ -26,7 +26,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -40,6 +39,8 @@ from PySide6.QtWidgets import QMessageBox
 
 from .agent_link_presentation import AgentLinkPresentation
 from .agent_link_reducer import AgentLinkReducer
+from .node_runtime import augmented_path as _augmented_path
+from .node_runtime import which as _which
 # 保持模块命名空间（呈现层经 pet.agent_link 模块属性在调用时解析 play_sound /
 # resolve_builtin_sound，测试按模块名 patch；本文件自身不再直接调用）。
 from .click_sound import play_sound, resolve_builtin_sound  # noqa: F401
@@ -81,13 +82,16 @@ def _find_pnpm_cli() -> str | None:
     env = os.environ.get("DSH_PNPM_BIN")
     if env and Path(env).is_file():
         return env
-    pnpm = shutil.which("pnpm")
+    pnpm = _which("pnpm")
     if pnpm:
-        for base in (Path(pnpm).parent, Path(pnpm).resolve().parent):
+        resolved = Path(pnpm).resolve()
+        if resolved.is_file() and resolved.suffix.lower() in {".js", ".cjs", ".mjs"}:
+            return str(resolved)
+        for base in (Path(pnpm).parent, resolved.parent):
             cand = base / "node_modules" / "pnpm" / "bin" / "pnpm.mjs"
             if cand.is_file():
                 return str(cand)
-    npm = shutil.which("npm")
+    npm = _which("npm")
     if npm:
         cand = Path(npm).parent / "node_modules" / "pnpm" / "bin" / "pnpm.mjs"
         if cand.is_file():
@@ -97,7 +101,7 @@ def _find_pnpm_cli() -> str | None:
 
 def _npm_cli() -> str | None:
     """定位 npm 的 JS CLI 入口（由 node 直调，绕开 .cmd 的空格引号坑）。"""
-    npm = shutil.which("npm")
+    npm = _which("npm")
     if not npm:
         return None
     resolved = Path(npm).resolve()
@@ -115,7 +119,7 @@ def _pnpm_cli() -> str | None:
     cli = _find_pnpm_cli()
     if cli:
         return cli
-    node = shutil.which("node")
+    node = _which("node")
     npm_cli = _npm_cli()
     if not node or not npm_cli:
         return None
@@ -123,6 +127,7 @@ def _pnpm_cli() -> str | None:
         proc = subprocess.run(
             [node, npm_cli, "install", "-g", "pnpm"],
             capture_output=True, text=True, timeout=300, shell=False,
+            env={**os.environ, "PATH": _augmented_path()},
         )
     except Exception:
         return None
@@ -133,7 +138,7 @@ def _pnpm_cli() -> str | None:
 
 def _run_pnpm(profile_dir: Path, *args: str) -> tuple[int, str]:
     """node 直调 pnpm CLI（数组传参，无 cmd 中转），返回 (返回码, 合并输出)。"""
-    node = shutil.which("node")
+    node = _which("node")
     cli = _pnpm_cli()
     if not node:
         return 127, "找不到 node，请先安装 Node.js"
@@ -143,6 +148,7 @@ def _run_pnpm(profile_dir: Path, *args: str) -> tuple[int, str]:
         proc = subprocess.run(
             [node, cli, *args], capture_output=True, text=True,
             timeout=300, shell=False, cwd=str(profile_dir),
+            env={**os.environ, "PATH": _augmented_path()},
         )
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except Exception as exc:
@@ -844,7 +850,7 @@ class DshMonitor(BaseAgentMonitor):
         plugin = cls.bundled_plugin_dir()
         if plugin is None:
             return False, "找不到内置桥接插件（integrations/dsh-pet-bridge）"
-        if shutil.which("node") is None:
+        if _which("node") is None:
             return False, "找不到 node，请先安装 Node.js（需包含 npm）"
         if _pnpm_cli() is None:
             return False, "需要 pnpm，自动安装失败，请手动运行: npm install -g pnpm"
@@ -894,7 +900,7 @@ class DshMonitor(BaseAgentMonitor):
 
         幂等：未安装的 profile 直接视为成功；不再依赖 dsh CLI（同 install_bridge）。
         """
-        if shutil.which("node") is None or _pnpm_cli() is None:
+        if _which("node") is None or _pnpm_cli() is None:
             return True  # 没有运行环境视为无残留
         ok = True
         for profile in _real_profiles():

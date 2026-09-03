@@ -153,6 +153,34 @@ def test_spawn_injects_augmented_path(monkeypatch):
     assert env["PATH"] == original
 
 
+def test_node_runtime_augments_finder_path_with_homebrew(monkeypatch):
+    """Issue #67：macOS Finder 的极简 PATH 仍能覆盖 Homebrew bin。"""
+    if os.name == "nt":
+        return
+    from pet import node_runtime
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    monkeypatch.setattr(
+        node_runtime.Path,
+        "is_dir",
+        lambda path: str(path) == "/opt/homebrew/bin",
+    )
+    captured = {}
+
+    def fake_which(name, path=None):
+        captured["name"] = name
+        captured["path"] = path
+        return "/opt/homebrew/bin/node"
+
+    monkeypatch.setattr(node_runtime.shutil, "which", fake_which)
+
+    assert node_runtime.which("node") == "/opt/homebrew/bin/node"
+    assert captured == {
+        "name": "node",
+        "path": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    }
+
+
 def test_npm_root_probe_skipped_when_npm_missing(monkeypatch):
     """PATH 上没有 npm 时不应执行 npm root -g（避免菜单点击卡 15 秒）。"""
     from pet import harness_launcher as hl
@@ -163,7 +191,7 @@ def test_npm_root_probe_skipped_when_npm_missing(monkeypatch):
         calls.append(args)
         raise FileNotFoundError("npm not found")
 
-    monkeypatch.setattr(hl.shutil, "which", lambda name, path=None: None)
+    monkeypatch.setattr(hl, "_which", lambda name: None)
     monkeypatch.setattr(hl.subprocess, "run", fake_run)
     roots = hl._npm_global_roots()
     assert calls == [], "npm 不存在时不应探测 npm root -g"
@@ -180,9 +208,7 @@ def test_npm_root_probe_runs_when_npm_present(monkeypatch):
         result = SimpleNamespace(returncode=0, stdout="/fake/global/node_modules\n")
         return result
 
-    monkeypatch.setattr(
-        hl.shutil, "which", lambda name, path=None: "/fake/npm" if name == "npm" else None
-    )
+    monkeypatch.setattr(hl, "_which", lambda name: "/fake/npm" if name == "npm" else None)
     monkeypatch.setattr(hl.subprocess, "run", fake_run)
     roots = hl._npm_global_roots()
     assert calls, "npm 存在时应执行 npm root -g"

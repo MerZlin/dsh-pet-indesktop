@@ -983,6 +983,52 @@ class TestAgentLinkSounds:
 
 
 class TestInstallErrorSummary:
+    def test_find_pnpm_cli_accepts_homebrew_javascript_symlink(self, tmp_path, monkeypatch):
+        cli = tmp_path / "lib" / "node_modules" / "pnpm" / "bin" / "pnpm.cjs"
+        cli.parent.mkdir(parents=True)
+        cli.write_text("", encoding="utf-8")
+        shim = tmp_path / "bin" / "pnpm"
+        shim.parent.mkdir()
+        shim.symlink_to(cli)
+        monkeypatch.delenv("DSH_PNPM_BIN", raising=False)
+        monkeypatch.setattr(agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None)
+
+        assert agent_link._find_pnpm_cli() == str(cli)
+
+    def test_install_bridge_finds_homebrew_node_outside_finder_path(self, tmp_path, monkeypatch):
+        """Issue #67：Finder 启动的 macOS 应用也应找到 Homebrew Node。"""
+        plugin = tmp_path / "dsh-pet-bridge"
+        plugin.mkdir()
+        profile = tmp_path / "profiles" / "default"
+        profile.mkdir(parents=True)
+        manifest = profile / "package.json"
+        manifest.write_text("{}", encoding="utf-8")
+
+        node = "/opt/homebrew/bin/node"
+        pnpm_cli = str(tmp_path / "pnpm.mjs")
+        monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        monkeypatch.setattr(agent_link, "_which", lambda name: node if name == "node" else None, raising=False)
+        monkeypatch.setattr(agent_link, "_pnpm_cli", lambda: pnpm_cli)
+        monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
+        monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
+
+        commands = []
+
+        def fake_run(cmd, **kwargs):
+            commands.append((cmd, kwargs))
+            manifest.write_text(
+                json.dumps({"dependencies": {agent_link.DSH_PLUGIN_NAME: "file:bridge"}}),
+                encoding="utf-8",
+            )
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(agent_link.subprocess, "run", fake_run)
+
+        ok, message = DshMonitor.install_bridge()
+
+        assert ok is True, message
+        assert commands[0][0] == [node, pnpm_cli, "add", str(plugin)]
+
     def test_install_bridge_auto_installs_pnpm(self, tmp_path, monkeypatch):
         plugin = tmp_path / "dsh-pet-bridge"
         plugin.mkdir()
@@ -998,7 +1044,7 @@ class TestInstallErrorSummary:
         monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
         monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
         monkeypatch.setattr(
-            agent_link.shutil, "which",
+            agent_link, "_which",
             lambda name: "C:/Program Files/nodejs/node.exe" if name == "node" else None,
         )
 
