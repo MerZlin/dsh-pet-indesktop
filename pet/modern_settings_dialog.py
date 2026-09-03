@@ -1003,42 +1003,71 @@ class ResponsiveActionRow(QWidget):
         self.grid.setHorizontalSpacing(6)
         self.grid.setVerticalSpacing(6)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._stacked = None
-        self._reflow(True)
+        self._mode = None
+        self._reflow("compact")
+
+    def _effective_width(self, widget: QWidget) -> int:
+        return max(
+            widget.minimumWidth() or widget.minimumSizeHint().width(),
+            widget.sizeHint().width(),
+        )
 
     def preferred_inline_width(self) -> int:
-        widths = [self.primary.sizeHint().width(), *(
-            action.sizeHint().width() for action in self.actions
+        widths = [self._effective_width(self.primary), *(
+            self._effective_width(action) for action in self.actions
         )]
         return sum(widths) + self.grid.horizontalSpacing() * (len(widths) - 1)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        action_width = sum(
-            action.minimumSizeHint().width() for action in self.actions
-        ) + self.grid.horizontalSpacing() * max(0, len(self.actions) - 1)
-        width = max(self.primary.minimumSizeHint().width(), action_width)
-        action_height = max(
-            (action.minimumSizeHint().height() for action in self.actions),
+        widgets = [self.primary, *self.actions]
+        width = max(
+            (widget.minimumWidth() or widget.minimumSizeHint().width() for widget in widgets),
             default=0,
         )
-        height = (
-            self.primary.minimumSizeHint().height()
-            + (self.grid.verticalSpacing() + action_height if self.actions else 0)
-        )
+        heights = [
+            widget.minimumHeight() or widget.minimumSizeHint().height()
+            for widget in widgets
+        ]
+        if self._mode == "inline":
+            height = max(heights, default=0)
+        elif self._mode == "stacked":
+            action_height = max(heights[1:], default=0)
+            height = heights[0] + (
+                self.grid.verticalSpacing() + action_height if self.actions else 0
+            )
+        else:
+            height = sum(heights) + self.grid.verticalSpacing() * max(0, len(heights) - 1)
         return QSize(width, height)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._reflow(self.width() < self.preferred_inline_width())
+        action_row_width = sum(
+            max(action.minimumWidth(), action.sizeHint().width())
+            for action in self.actions
+        ) + self.grid.horizontalSpacing() * max(0, len(self.actions) - 1)
+        if self.width() >= self.preferred_inline_width():
+            mode = "inline"
+        elif self.width() >= action_row_width:
+            mode = "stacked"
+        else:
+            mode = "compact"
+        self._reflow(mode)
 
-    def _reflow(self, stacked: bool) -> None:
-        if self._stacked is stacked:
+    def _reflow(self, mode: str) -> None:
+        if self._mode == mode:
             return
-        self._stacked = stacked
-        self.setProperty("responsiveStacked", stacked)
+        self._mode = mode
+        self.setProperty("responsiveMode", mode)
+        self.setProperty("responsiveStacked", mode != "inline")
         while self.grid.count():
             self.grid.takeAt(0)
-        if stacked:
+        for column in range(len(self.actions) + 1):
+            self.grid.setColumnStretch(column, 0)
+        if mode == "compact":
+            self.grid.addWidget(self.primary, 0, 0)
+            for row, action in enumerate(self.actions, start=1):
+                self.grid.addWidget(action, row, 0)
+        elif mode == "stacked":
             self.grid.addWidget(self.primary, 0, 0, 1, max(1, len(self.actions)))
             for index, action in enumerate(self.actions):
                 self.grid.addWidget(action, 1, index)

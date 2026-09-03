@@ -386,6 +386,7 @@ def test_unknown_schema_uses_safe_fallback_with_migration_diagnostic():
 
 
 def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
+    import sys
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -441,7 +442,7 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     populate_context_menu(menu, FakePet())
 
     root = [action.text() for action in menu.actions() if not action.isSeparator()]
-    assert root == [
+    expected_root = [
         "厉害了我的鲸",
         "AI 对话",
         "看看屏幕",
@@ -456,8 +457,11 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         "桌宠设置",
         "退出",
     ]
+    if sys.platform == "win32":
+        expected_root.insert(-2, "主动识屏")
+    assert root == expected_root
     rendered = ["|" if action.isSeparator() else action.text() for action in menu.actions()]
-    assert rendered == [
+    expected_rendered = [
         "厉害了我的鲸", "|",
         "AI 对话", "看看屏幕", "|",
         "播放动画", "切换角色", "播放速率", "大小", "|",
@@ -465,6 +469,9 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         "工具与帮助", "Agent 联动", "|",
         "桌宠设置", "退出",
     ]
+    if sys.platform == "win32":
+        expected_rendered.insert(-3, "主动识屏")
+    assert rendered == expected_rendered
     pet_controls = next(action.menu() for action in menu.actions() if action.text() == "桌宠控制")
     assert [action.text() for action in pet_controls.actions() if not action.isSeparator()] == [
         "拖动物理",
@@ -477,13 +484,16 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         "生小肥鱼",
     ]
     tools = next(action.menu() for action in menu.actions() if action.text() == "工具与帮助")
-    assert [action.text() for action in tools.actions() if not action.isSeparator()] == [
+    expected_tools = [
         "DeepSeek 余额",
         "启动 DeepSeek Harness",
         "打开网页版 DeepSeek",
         "检查更新",
         "GitHub 项目页",
     ]
+    if sys.platform == "win32":
+        expected_tools.append("夸克网盘下载")
+    assert [action.text() for action in tools.actions() if not action.isSeparator()] == expected_tools
     menu.close()
     app.processEvents()
 
@@ -1029,6 +1039,56 @@ def test_compact_ai_provider_controls_stay_inside_their_setting_row(tmp_path, mo
     assert row_left >= 0
     assert row_left + row.width() <= scroll.viewport().width()
     dialog.reject()
+    app.processEvents()
+
+
+def test_responsive_action_row_can_stack_wide_actions_vertically():
+    from PySide6.QtWidgets import QApplication, QPushButton
+
+    from pet.modern_settings_dialog import ModernSelect, ResponsiveActionRow
+
+    app = QApplication.instance() or QApplication([])
+    primary = ModernSelect(width=230)
+    first = QPushButton("第一个很长的本地化操作")
+    second = QPushButton("第二个很长的本地化操作")
+    first.setMinimumWidth(260)
+    second.setMinimumWidth(260)
+    row = ResponsiveActionRow(primary, [first, second])
+    row.setFixedWidth(454)
+    row.resize(454, 180)
+    row.show()
+    app.processEvents()
+
+    assert row.minimumSizeHint().width() <= 260
+    assert row.property("responsiveMode") == "compact"
+    assert first.y() < second.y()
+    assert first.geometry().right() <= row.rect().right()
+    assert second.geometry().right() <= row.rect().right()
+    row.close()
+    app.processEvents()
+
+
+def test_responsive_action_row_inline_mode_does_not_reserve_compact_height():
+    from PySide6.QtWidgets import QApplication, QPushButton
+
+    from pet.modern_settings_dialog import ModernSelect, ResponsiveActionRow
+
+    app = QApplication.instance() or QApplication([])
+    primary = ModernSelect(width=230)
+    first = QPushButton("新增")
+    second = QPushButton("删除")
+    row = ResponsiveActionRow(primary, [first, second])
+    row.setFixedWidth(800)
+    row.show()
+    app.processEvents()
+
+    expected_height = max(
+        widget.minimumHeight() or widget.minimumSizeHint().height()
+        for widget in (primary, first, second)
+    )
+    assert row.property("responsiveMode") == "inline"
+    assert row.minimumSizeHint().height() == expected_height
+    row.close()
     app.processEvents()
 
 

@@ -1,6 +1,6 @@
 # Settings redesign handoff
 
-Updated: 2026-09-03 (after Quick Chat Cocoa activation/render fix)
+Updated: 2026-09-03 (after cross-platform CI regression fixes)
 
 ## Workspace
 
@@ -68,19 +68,20 @@ Updated: 2026-09-03 (after Quick Chat Cocoa activation/render fix)
 
 ## Current TDD state
 
-- Last RED: the in-page stack inherited the hidden Appearance task's minimum
-  width, overflowing the compact Menu viewport; the existing settings contract
-  also still expected the pre-tab section names.
-- Last GREEN: Menu coverage `54 passed`, combined Menu/Quick Chat/settings
-  contract `61 passed`, and segmented full coverage `772 passed, 7 skipped`.
-  One-process full execution remains susceptible to the documented native
-  WebM-reader/Cocoa interaction, so the same complete set ran as `663 + 103 + 6`
-  passing tests in isolated processes. Cocoa screenshots cover all three tabs,
-  compact/dark states, and runtime-disabled styling under `iteration-6-menu-tabs-*`.
+- Last RED: a wide `ResponsiveActionRow` reserved the height of its three-row
+  compact layout (`98px` instead of `32px`), and a WebM reader cancelled while
+  metadata was being returned still requested the first frame.
+- Last GREEN: the two focused regressions plus the four original CI regressions
+  pass (`6 passed`); complete Menu Layout/WebM lifecycle coverage is
+  `69 passed`; the full suite passes in one process outside the restricted
+  loopback sandbox (`785 passed, 9 skipped`).
 
 ## Exact next step
 
-No unfinished local implementation ticket remains. If work continues on another host, run the real Windows/Linux visual matrix first; do not infer visual acceptance from capability fakes. Full-suite loopback HTTP tests require sandbox/network permission; keep real credentials isolated for any rerun:
+Rerun GitHub Actions on Windows and macOS. Do not infer real Windows visual
+acceptance from the local macOS run. Full-suite
+loopback HTTP tests require sandbox/network permission; keep real credentials
+isolated for any rerun:
 
 ```bash
 PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring PYTEST_ADDOPTS='-p no:cacheprovider' QT_QPA_PLATFORM=offscreen /opt/miniconda3/envs/mobility_client/bin/python -m pytest -q

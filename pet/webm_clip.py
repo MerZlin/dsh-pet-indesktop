@@ -351,6 +351,12 @@ class WebMClip(QObject):
     def _reader(self, stop_evt: threading.Event, generation: int) -> None:
         gen = None
         try:
+            # Coalesce starts cancelled within half a display frame. Without
+            # this gate a rapid start/stop burst launches ffmpeg readers that
+            # can spend up to 10 seconds inside imageio's uninterruptible
+            # metadata handshake before observing stop_evt.
+            if self._generation != generation or stop_evt.wait(0.02):
+                return
             q = self._queue
             gen = imageio_ffmpeg.read_frames(
                 str(self.path),
@@ -359,7 +365,7 @@ class WebMClip(QObject):
                 input_params=['-c:v', 'libvpx-vp9'],
             )
             meta = next(gen)
-            if self._generation != generation:
+            if stop_evt.is_set() or self._generation != generation:
                 return
             # 用实际流信息修正元数据
             if meta.get('fps'):
