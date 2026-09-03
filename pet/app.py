@@ -203,6 +203,8 @@ class PetApp:
         self.slot_id = slot_id
         self.win: PetWindow | None = None
         self.tray: QSystemTrayIcon | None = None
+        self.dock_menu: QMenu | None = None
+        self._notification_click_callback = None
         self._toast_windows: list[DesktopNotification] = []
         self.chat_window = None
         self.legacy_chat_window = None
@@ -239,6 +241,7 @@ class PetApp:
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self._create_ui(character_id)
+        self._install_macos_dock_menu()
         self._sync_dynamic_island()
         self._apply_spawn_offset()
         self._apply_balance_timer()
@@ -681,6 +684,16 @@ class PetApp:
         """打开快速对话气泡；与完整聊天窗共用会话历史。"""
         if not self.enable_chat or self.win is None:
             return
+        # Cocoa 原生 QMenu 跟踪期间 activePopupWidget() 可能为 None，且其
+        # 嵌套事件循环会把这个 singleShot 留到菜单关闭后再派发。若是 Qt
+        # 自绘 popup，下一层仍通过 _defer_while_popup_active 等待其关闭。
+        QTimer.singleShot(0, self._show_quick_chat)
+
+    def _show_quick_chat(self) -> None:
+        if not self.enable_chat or self.win is None:
+            return
+        if self._defer_while_popup_active("quick-chat", self._show_quick_chat):
+            return
         from .quick_chat import QuickChatBubble
 
         if self.quick_chat is None:
@@ -829,6 +842,38 @@ class PetApp:
         self.win.set_bubble_suppressed(any_open)
 
     # ------------------------------------------------------------ 托盘
+    def _install_macos_dock_menu(self) -> QMenu | None:
+        """Install the native Dock context menu as an independent recovery path."""
+        if sys.platform != "darwin":
+            self.dock_menu = None
+            return None
+        menu = QMenu()
+
+        def show_pet() -> None:
+            win = self.win
+            if win is None:
+                return
+            win.show()
+            win.raise_()
+            if getattr(self, "island", None) is not None:
+                self.island.set_pet_visible(True)
+
+        menu.addAction("显示桌宠", show_pet)
+        menu.addAction("桌宠设置", self.open_modern_settings)
+        if self.enable_chat:
+            menu.addAction("AI 对话", self.open_chat)
+        menu.addSeparator()
+        quit_callback = getattr(self.app, "quit", None)
+        if callable(quit_callback):
+            menu.addAction("退出", quit_callback)
+        install_dock_menu = getattr(menu, "setAsDockMenu", None)
+        dock_menu_installed = callable(install_dock_menu)
+        if dock_menu_installed:
+            install_dock_menu()
+        menu.setProperty("dockMenuInstalled", dock_menu_installed)
+        self.dock_menu = menu
+        return menu
+
     def open_modern_settings(self) -> None:
         from .modern_settings_dialog import ModernSettingsDialog
         if self.modern_settings_dialog is None:

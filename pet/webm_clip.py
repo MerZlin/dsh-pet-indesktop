@@ -1664,7 +1664,7 @@ class WebMClip(QObject):
                     self._terminate_proc(proc)
             if ready_evt is not None:
                 ready_evt.set()
-            if self._generation != generation:
+            if stop_evt.is_set() or self._generation != generation:
                 return
             # 用实际流信息修正元数据
             if meta.get('fps'):

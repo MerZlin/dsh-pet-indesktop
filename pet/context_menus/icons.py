@@ -4,9 +4,72 @@ from __future__ import annotations
 
 from math import cos, pi, sin
 
+from pathlib import Path
+
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBitmap, QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRegion
+from PySide6.QtGui import QBitmap, QBrush, QColor, QIcon, QImageReader, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRegion
 from PySide6.QtWidgets import QMenu, QStyle
+
+
+CUSTOM_ICON_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
+})
+CUSTOM_ICON_MAX_BYTES = 5 * 1024 * 1024
+
+
+def custom_icon_file_error(path: str | Path) -> str:
+    """Return a user-facing validation error, or an empty string when valid."""
+    candidate = Path(path).expanduser()
+    if not candidate.is_file():
+        return "请选择存在的图片文件"
+    if candidate.suffix.lower() not in CUSTOM_ICON_SUFFIXES:
+        return "仅支持 PNG、JPG、WebP、BMP、GIF 和 TIFF 图片"
+    try:
+        if candidate.stat().st_size > CUSTOM_ICON_MAX_BYTES:
+            return "图片文件不能超过 5 MB"
+    except OSError:
+        return "无法读取图片文件"
+    reader = QImageReader(str(candidate))
+    if not reader.canRead() or not reader.size().isValid():
+        return "图片内容无效或无法解码"
+    return ""
+
+
+def custom_file_menu_icon(widget, spec: dict, size: int = 18) -> QIcon:
+    """Render a validated local image into the square menu icon slot."""
+    path = Path(str(spec.get("path") or "")).expanduser()
+    if custom_icon_file_error(path):
+        return QIcon()
+    reader = QImageReader(str(path))
+    image = reader.read()
+    if image.isNull():
+        return QIcon()
+    mode = "cover" if spec.get("display") == "cover" else "contain"
+    dpr = widget.devicePixelRatioF() or 1.0
+    pixels = max(1, round(size * dpr))
+    canvas = QPixmap(pixels, pixels)
+    canvas.setDevicePixelRatio(dpr)
+    canvas.fill(Qt.GlobalColor.transparent)
+    source = QPixmap.fromImage(image)
+    target_mode = (
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding
+        if mode == "cover"
+        else Qt.AspectRatioMode.KeepAspectRatio
+    )
+    scaled = source.scaled(
+        pixels, pixels, target_mode, Qt.TransformationMode.SmoothTransformation,
+    )
+    scaled.setDevicePixelRatio(dpr)
+    painter = QPainter(canvas)
+    scaled_width = scaled.width() / dpr
+    scaled_height = scaled.height() / dpr
+    painter.drawPixmap(
+        round((size - scaled_width) / 2),
+        round((size - scaled_height) / 2),
+        scaled,
+    )
+    painter.end()
+    return QIcon(canvas)
 
 
 def _icon_theme(widget) -> tuple[str, bool]:
@@ -107,6 +170,16 @@ def vector_menu_icon(menu: QMenu, name: str, size: int | None = None) -> QIcon:
         painter.drawEllipse(QPointF(8.0, 8.0), 2.15, 2.15)
     elif name == "play":
         painter.drawPolygon(QPolygonF([QPointF(4.0, 2.5), QPointF(13.0, 8.0), QPointF(4.0, 13.5)]))
+    elif name == "pet":
+        painter.drawEllipse(QPointF(8.0, 9.4), 3.8, 3.2)
+        for x, y in ((3.8, 5.2), (6.5, 3.6), (9.5, 3.6), (12.2, 5.2)):
+            painter.drawEllipse(QPointF(x, y), 1.25, 1.45)
+    elif name == "interaction":
+        painter.drawEllipse(QPointF(7.0, 8.0), 3.0, 3.0)
+        painter.drawLine(QPointF(10.0, 10.2), QPointF(13.7, 13.5))
+        painter.drawLine(QPointF(2.0, 3.4), QPointF(3.5, 4.9))
+        painter.drawLine(QPointF(6.2, 1.5), QPointF(6.2, 3.5))
+        painter.drawLine(QPointF(1.5, 8.0), QPointF(3.5, 8.0))
     elif name == "speed":
         painter.drawArc(QRectF(2.0, 3.0, 12.0, 12.0), 0, 180 * 16)
         painter.drawLine(QPointF(8.0, 9.0), QPointF(11.6, 5.6))
@@ -162,6 +235,17 @@ def vector_menu_icon(menu: QMenu, name: str, size: int | None = None) -> QIcon:
         painter.drawRoundedRect(QRectF(2.0, 2.0, 12.0, 12.0), 2.0, 2.0)
         for x, y in ((5.0, 5.0), (11.0, 5.0), (5.0, 11.0), (11.0, 11.0)):
             painter.drawEllipse(QPointF(x, y), 1.15, 1.15)
+    elif name == "island":
+        painter.drawRoundedRect(QRectF(1.5, 4.2, 13.0, 7.6), 3.8, 3.8)
+        painter.setBrush(QBrush(color))
+        painter.drawEllipse(QPointF(11.2, 8.0), 1.15, 1.15)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+    elif name == "automation":
+        painter.drawLine(QPointF(4.0, 4.0), QPointF(11.8, 7.8))
+        painter.drawLine(QPointF(4.0, 12.0), QPointF(11.8, 8.2))
+        painter.drawEllipse(QPointF(3.5, 3.8), 2.0, 2.0)
+        painter.drawEllipse(QPointF(3.5, 12.2), 2.0, 2.0)
+        painter.drawEllipse(QPointF(12.5, 8.0), 2.0, 2.0)
     elif name == "appearance":
         painter.drawEllipse(QPointF(8.0, 8.0), 5.8, 5.8)
         painter.drawArc(QRectF(4.0, 4.0, 8.0, 8.0), 90 * 16, 180 * 16)

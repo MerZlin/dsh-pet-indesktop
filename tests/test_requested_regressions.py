@@ -943,6 +943,53 @@ def test_settings_stylesheet_has_dark_overrides(monkeypatch):
     assert "QPushButton { color: #202020; }" in qss_light
 
 
+def test_settings_window_uses_the_explicit_dark_appearance_on_a_light_system(
+    tmp_path, monkeypatch,
+):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod, "_system_dark", lambda: False)
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    config.set("context_menu_appearance", {"theme": "dark"})
+
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
+    assert "QDialog { background: #202024" in dialog.styleSheet()
+
+    dialog.close()
+    app.processEvents()
+
+
+def test_settings_window_rethemes_immediately_with_the_appearance_selector(
+    tmp_path, monkeypatch,
+):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod, "_system_dark", lambda: False)
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=False)
+    assert "QDialog { background: #202024" not in dialog.styleSheet()
+
+    dialog.menu_theme_select.setCurrentData("dark")
+    app.processEvents()
+    assert "QDialog { background: #202024" in dialog.styleSheet()
+
+    dialog.menu_theme_select.setCurrentData("light")
+    app.processEvents()
+    assert "QDialog { background: #202024" not in dialog.styleSheet()
+
+    dialog.close()
+    app.processEvents()
+
+
 def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypatch):
     """新版设置直接关闭（Rejected）也必须把改动应用到桌宠。
 
@@ -1076,4 +1123,33 @@ def test_modern_autostart_write_failure_warns(tmp_path, monkeypatch):
     assert "开机自启设置失败" in str(warnings[0][1])
     assert "失败" in str(warnings[0][2])
     dialog.close()
+    app.processEvents()
+# --- macOS Dock recovery menu regression (2026-09-03) ---
+
+
+def test_macos_dock_menu_keeps_settings_reachable_when_pet_is_mouse_through(monkeypatch):
+    from unittest import mock
+
+    from PySide6.QtWidgets import QApplication
+
+    import pet.app as app_mod
+
+    app = QApplication.instance() or QApplication([])
+    controller = app_mod.PetApp.__new__(app_mod.PetApp)
+    controller.app = app
+    controller.win = mock.Mock()
+    controller.open_modern_settings = mock.Mock()
+    controller.open_chat = mock.Mock()
+    controller.enable_chat = True
+    monkeypatch.setattr(app_mod.sys, "platform", "darwin")
+
+    menu = controller._install_macos_dock_menu()
+
+    assert menu is controller.dock_menu
+    assert menu.property("dockMenuInstalled") is callable(getattr(menu, "setAsDockMenu", None))
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels[:3] == ["显示桌宠", "桌宠设置", "AI 对话"]
+    next(action for action in menu.actions() if action.text() == "桌宠设置").trigger()
+    controller.open_modern_settings.assert_called_once_with()
+    menu.close()
     app.processEvents()

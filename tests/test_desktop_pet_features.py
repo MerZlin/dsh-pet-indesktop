@@ -656,7 +656,8 @@ def test_modern_pet_context_menu_has_spawn_action_with_avatar_icon(monkeypatch):
 
     direct_actions = [action for action in menu.actions() if not action.isSeparator()]
     assert direct_actions
-    spawn_action = next(action for action in direct_actions if action.text() == "生小肥鱼")
+    controls = next(action.menu() for action in direct_actions if action.text() == "桌宠控制")
+    spawn_action = next(action for action in controls.actions() if action.text() == "生小肥鱼")
     assert not spawn_action.icon().isNull()
     spawn_action.trigger()
     assert pet.spawn_count == 1
@@ -754,7 +755,8 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     from PySide6.QtWidgets import QApplication, QMenu
 
     import pet.window as window_mod
-    import pet.context_menus.modern as modern_menu_mod
+    import pet.context_menus.registry as registry_mod
+    import pet.context_menus.shared as shared_menu_mod
 
     class FakeConfig:
         def __init__(self):
@@ -811,7 +813,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     monkeypatch.setattr(window_mod.catalog, "list_available_characters", lambda: ["shenshen"])
     opened_urls = []
     monkeypatch.setattr(
-        modern_menu_mod.QDesktopServices,
+        registry_mod.QDesktopServices,
         "openUrl",
         lambda url: opened_urls.append(url.toString()) or True,
     )
@@ -827,26 +829,15 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
         "切换角色",
         "播放速率",
         "大小",
-        "拖动物理",
-        "回到右下角",
-        "隐藏桌宠",
-        "不移动",
-        "鼠标穿透",
-        "窗口置顶",
-        "开机自启",
-        "生小肥鱼",
-        "DeepSeek 余额",
-        "启动 DeepSeek Harness",
-        "打开网页版 DeepSeek",
+        "桌宠控制",
         "快捷启动",
-        "更新与帮助",
+        "工具与帮助",
+        "Agent 联动",
     ]
     if sys.platform == "win32":
         expected_labels.append("主动识屏")  # 仅 Windows + 有聊天能力时显示
     expected_labels.extend([
-        "Agent 联动",
         "桌宠设置",
-        "切换回旧版菜单",
         "退出",
     ])
     assert labels == expected_labels
@@ -861,12 +852,11 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     ]
     assert next(action for action in menu.actions() if action.text() == "播放速率").menu() is not None
     assert next(action for action in menu.actions() if action.text() == "大小").menu() is not None
-    next(action for action in menu.actions() if action.text() == "打开网页版 DeepSeek").trigger()
-    assert opened_urls == [modern_menu_mod.DEEPSEEK_WEB_URL]
-    # 现代菜单必须能切回旧版（模板声明了 switch_to，运行时不能断线）
-    switch_action = next(action for action in menu.actions() if "旧版菜单" in action.text())
-    switch_action.trigger()
-    assert pet.cfg.get("context_menu_template") == "legacy"
+    tools = next(action.menu() for action in menu.actions() if action.text() == "工具与帮助")
+    next(action for action in tools.actions() if action.text() == "打开网页版 DeepSeek").trigger()
+    assert opened_urls == [shared_menu_mod.DEEPSEEK_WEB_URL]
+    # 模板模式已迁入设置；默认菜单不再用低频迁移命令占据根菜单。
+    assert all("旧版菜单" not in action.text() for action in menu.actions())
     menu.close()
     app.processEvents()
 
@@ -902,7 +892,17 @@ def test_pure_pet_context_menu_keeps_web_but_hides_harness():
     app = QApplication.instance() or QApplication([])
     menu = QMenu()
     populate_context_menu(menu, FakePet())
-    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    def labels_in(menu):
+        labels = []
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            labels.append(action.text())
+            if action.menu() is not None:
+                labels.extend(labels_in(action.menu()))
+        return labels
+
+    labels = labels_in(menu)
     assert "启动 DeepSeek Harness" not in labels
     assert "打开网页版 DeepSeek" in labels
     menu.close()
@@ -1163,7 +1163,8 @@ def test_modern_menu_starts_with_ojingjing_entry_and_uses_pet_avatar(monkeypatch
     assert entry.height() == 39
     assert entry.findChild(QWidget, "ojingjingAvatar") is not None
     assert entry.findChild(QWidget, "ojingjingClickAccessory") is not None
-    spawn = next(action for action in menu.actions() if action.text() == "生小肥鱼")
+    controls = next(action.menu() for action in menu.actions() if action.text() == "桌宠控制")
+    spawn = next(action for action in controls.actions() if action.text() == "生小肥鱼")
     pixmap = spawn.icon().pixmap(18, 18)
     center = pixmap.toImage().pixelColor(pixmap.width() // 2, pixmap.height() // 2)
     assert center.blue() > center.red() + 80
@@ -1328,13 +1329,10 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert dialog.size() == QSize(800, 560)
     assert dialog.minimumSize() == QSize(720, 500)
     assert dialog.font().pixelSize() == 13
-    assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 188
+    assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 200
     assert isinstance(dialog.sidebar, QListWidget)
     assert isinstance(dialog.pages, QStackedWidget)
-    expected_pages = ["常规", "灵动岛", "桌宠行为", "外观", "快捷启动"]
-    if sys.platform == "win32":
-        expected_pages.append("主动识屏")  # 主动识屏设置页仅 Windows + 有聊天能力时挂载
-    expected_pages.append("AI 设置")
+    expected_pages = ["常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动"]
     assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == expected_pages
     assert dialog.pages.count() == len(expected_pages)
     assert dialog.search_edit.placeholderText() == "搜索设置…"
@@ -1345,10 +1343,20 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert "background: #f7f7f8" in dialog.styleSheet()
     section_titles = [label.text() for label in dialog.findChildren(settings_mod.QLabel, "sectionTitle")]
     assert {
-        "应用启动", "窗口与系统", "动画", "点击反馈", "自言自语",
-        "桌宠显示", "菜单外观", "AI 对话外观", "已配置应用",
-        "模型与连接", "视觉能力", "生成参数",
+        "应用启动", "窗口与系统", "动画与移动", "点击反馈", "自言自语",
+        "显示", "菜单外观", "对话窗口", "已配置应用", "内容与布局",
+        "模型与连接", "视觉能力",
     }.issubset(set(section_titles))
+    advanced_titles = [
+        button.text()
+        for button in dialog.findChildren(
+            settings_mod.SettingsDisclosureHeader,
+            "advancedSectionToggle",
+        )
+    ]
+    assert {"生成参数（高级）", "碰撞参数（高级）", "高级配色"}.issubset(
+        set(advanced_titles)
+    )
     assert {"浅色主题", "深色主题", "彩蛋入口"}.issubset(set(section_titles))
     scale_row = dialog.findChild(settings_mod.QWidget, "settingRow_scale")
     assert scale_row is not None
@@ -1359,7 +1367,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert "QSpinBox::up-button" in stylesheet
     assert "QScrollBar::handle:vertical" in stylesheet
     assert "font-size: 13px" in stylesheet
-    assert "font-size: 26px" in stylesheet
+    assert "font-size: 22px" in stylesheet
     assert "min-height: 20px" in stylesheet
     dialog.scale_combo.setCurrentIndex(dialog.scale_combo.findData(0.85))
     dialog.on_top_check.setChecked(False)
@@ -1376,7 +1384,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         "柔蓝对话 · 正上方",
         "吐气水泡 · 左上方",
     ]
-    assert "ModernSelectPopup" in dialog.scale_combo.popupStyleSheet()
+    assert "SettingsPopup" in dialog.scale_combo.popupStyleSheet()
     assert dialog.gap_spin.maximumWidth() <= 100
     assert dialog.self_talk_duration_spin.value() == 3.2
     assert dialog.self_talk_image_dir_picker.directory is True
@@ -1388,13 +1396,11 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         return next(index for index in range(dialog.pages.count()) if dialog.pages.widget(index).isAncestorOf(row))
 
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_autostart")) == 0
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 2
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 1
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 3
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 3
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == (
-        6 if sys.platform == "win32" else 5  # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
-    )
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 1
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 5
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == 5
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
@@ -1448,7 +1454,14 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
 
     vision_model = dialog.findChild(settings_mod.SettingRow, "settingRow_vision_model")
     custom_background = dialog.findChild(settings_mod.SettingRow, "settingRow_chat_background_file")
-    minimum = dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_min")
+    self_talk_rows = [
+        dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
+        for key in (
+            "self_talk_duration", "self_talk_min", "self_talk_max",
+            "self_talk_texts", "self_talk_images", "self_talk_image_scale", "click_self_talk",
+            "click_talk_bindings",
+        )
+    ]
     opacity = dialog.findChild(settings_mod.SettingRow, "settingRow_menu_opacity")
 
     assert vision_model.isHidden() is dialog.ai_page.vision_same.isChecked()
@@ -1458,9 +1471,112 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
     dialog.ai_page.background_select.setCurrentData("custom")
     assert not custom_background.isHidden()
     dialog.self_talk_check.setChecked(False)
-    assert not minimum.isEnabled()
+    assert all(row is not None and row.isHidden() for row in self_talk_rows)
+    dialog.self_talk_check.setChecked(True)
+    assert all(row is not None and not row.isHidden() for row in self_talk_rows)
     dialog.menu_translucent_check.setChecked(False)
-    assert not opacity.isEnabled()
+    assert opacity.isHidden()
+    dialog.menu_translucent_check.setChecked(True)
+    assert not opacity.isHidden()
+    dialog.close()
+    app.processEvents()
+
+
+def test_modern_settings_toggle_dependencies_hide_complete_setting_groups(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+
+    def row(key):
+        result = dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
+        assert result is not None
+        return result
+
+    island_children = [
+        row(key) for key in (
+            "dynamic_island_icon", "dynamic_island_name", "dynamic_island_info",
+            "dynamic_island_status", "dynamic_island_info_mode",
+            "dynamic_island_style", "dynamic_island_icon_value",
+            "dynamic_island_custom_text",
+        )
+    ]
+    dialog.island_enabled_check.setChecked(False)
+    assert all(child.isHidden() for child in island_children)
+    dialog.island_enabled_check.setChecked(True)
+    assert not row("dynamic_island_icon_value").isHidden()
+    assert row("dynamic_island_custom_text").isHidden()
+    dialog.island_icon_check.setChecked(False)
+    assert row("dynamic_island_icon_value").isHidden()
+    dialog.island_info_check.setChecked(False)
+    assert row("dynamic_island_info_mode").isHidden()
+    dialog.island_info_mode_select.setCurrentData("custom")
+    assert row("dynamic_island_custom_text").isHidden()
+    dialog.island_info_check.setChecked(True)
+    assert not row("dynamic_island_custom_text").isHidden()
+
+    egg_children = [row(key) for key in ("egg_title", "egg_hint", "egg_avatar", "egg_image_dir")]
+    dialog.egg_enabled_check.setChecked(False)
+    assert all(child.isHidden() for child in egg_children)
+    dialog.egg_enabled_check.setChecked(True)
+    assert all(not child.isHidden() for child in egg_children)
+
+    collision_children = [
+        row(key) for key in (
+            "collision_sound_enabled", "collision_restitution", "collision_friction",
+            "collision_mass_scale", "collision_impulse_cap", "collision_sound_volume",
+        )
+    ]
+    collision_advanced_section = row("collision_restitution").parentWidget().parentWidget()
+    dialog.collision_enabled_check.setChecked(False)
+    assert all(child.isHidden() for child in collision_children)
+    assert collision_advanced_section.isHidden()
+    dialog.collision_sound_check.setChecked(False)
+    dialog.collision_enabled_check.setChecked(True)
+    assert not row("collision_sound_enabled").isHidden()
+    assert row("collision_sound_volume").isHidden()
+    assert not collision_advanced_section.isHidden()
+
+    dialog.close()
+    app.processEvents()
+
+
+def test_windows_proactive_master_and_idle_toggles_hide_dependent_rows(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.sys, "platform", "win32")
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+
+    def row(key):
+        result = dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
+        assert result is not None
+        return result
+
+    child_keys = (
+        "proactive_dry_run", "proactive_preset", "proactive_dwell",
+        "proactive_cooldown", "proactive_min_interval", "proactive_daily_cap",
+        "proactive_require_idle", "proactive_idle_seconds", "proactive_through",
+        "proactive_pre_cue", "proactive_free", "proactive_whitelist",
+        "proactive_whitelist_add", "proactive_memory_clear",
+    )
+    dialog.pro_enabled_check.setChecked(False)
+    assert all(row(key).isHidden() for key in child_keys)
+    dialog.pro_idle_check.setChecked(False)
+    dialog.pro_enabled_check.setChecked(True)
+    assert row("proactive_idle_seconds").isHidden()
+    assert all(not row(key).isHidden() for key in child_keys if key != "proactive_idle_seconds")
+    dialog.pro_idle_check.setChecked(True)
+    assert not row("proactive_idle_seconds").isHidden()
+
     dialog.close()
     app.processEvents()
 
@@ -1545,6 +1661,94 @@ def test_quick_launch_editor_drag_order_and_checked_removal_drive_saved_menu_ord
     editor.list.item(1).setCheckState(Qt.CheckState.Checked)
     editor._remove_checked()
     assert [item["name"] for item in editor.apps()] == ["B"]
+    editor.close()
+    app.processEvents()
+
+
+def test_quick_launch_editor_uses_content_sized_rows_and_grouped_add_menu():
+    from PySide6.QtWidgets import QApplication, QSizePolicy
+
+    import pet.modern_settings_dialog as settings_mod
+
+    app = QApplication.instance() or QApplication([])
+    editor = settings_mod.QuickLaunchEditor([
+        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+        {"name": "Finder", "path": "/System/Library/CoreServices/Finder.app", "kind": "application"},
+    ])
+    editor.resize(760, 300)
+    editor.show()
+    app.processEvents()
+
+    assert editor.count_label.text() == "2 个快捷项"
+    assert editor.add_button.text() == "添加"
+    assert [action.text() for action in editor.add_button.popupMenu().actions()] == [
+        "选择应用…", "添加默认浏览器",
+    ]
+    assert editor.list.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+    assert editor.list.height() <= 124
+    first_row = editor.list.itemWidget(editor.list.item(0))
+    second_row = editor.list.itemWidget(editor.list.item(1))
+    assert first_row.name_label.text() == "默认浏览器"
+    assert "系统默认" in first_row.detail_label.text()
+    assert second_row.name_label.text() == "Finder"
+    assert "Finder.app" in second_row.detail_label.text()
+    assert editor.empty_label.isHidden()
+
+    editor.close()
+    app.processEvents()
+
+
+def test_quick_launch_editor_collapses_to_a_compact_empty_state_after_last_removal():
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+
+    app = QApplication.instance() or QApplication([])
+    editor = settings_mod.QuickLaunchEditor([
+        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+    ])
+    editor.show()
+    app.processEvents()
+
+    editor.list.item(0).setCheckState(Qt.CheckState.Checked)
+    editor._remove_checked()
+    app.processEvents()
+
+    assert editor.count_label.text() == "0 个快捷项"
+    assert editor.list.isHidden()
+    assert not editor.empty_label.isHidden()
+    assert editor.empty_label.height() <= 72
+
+    editor.close()
+    app.processEvents()
+
+
+def test_quick_launch_checkbox_can_be_selected_with_a_pointer_click():
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+
+    app = QApplication.instance() or QApplication([])
+    editor = settings_mod.QuickLaunchEditor([
+        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+    ])
+    editor.resize(520, 140)
+    editor.show()
+    app.processEvents()
+
+    item = editor.list.item(0)
+    row = editor.list.visualItemRect(item)
+    QTest.mouseClick(
+        editor.list.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(row.left() + 14, row.center().y()),
+    )
+    app.processEvents()
+
+    assert item.checkState() == Qt.CheckState.Checked
     editor.close()
     app.processEvents()
 
@@ -1661,8 +1865,7 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     dialog.search_edit.setFocus()
     dialog.search_edit.setText("API 地址")
     app.processEvents()
-    # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
-    assert dialog.sidebar.currentRow() == (6 if sys.platform == "win32" else 5)
+    assert dialog.sidebar.currentRow() == 5  # 稳定的“AI 与对话”能力域
     api_row = dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")
     assert api_row.property("searchMatch") is True
     QTest.keyClick(dialog.search_edit, Qt.Key.Key_Return)
@@ -2305,6 +2508,63 @@ def test_easter_egg_first_row_font_tracks_modern_menu_ui_size():
     app.processEvents()
 
 
+def test_easter_egg_text_remains_readable_in_the_dark_menu_theme():
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.fun_entry import OjingjingMenuEntry
+    from pet.context_menus.menu_styles.modern import apply_modern_menu_style
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    apply_modern_menu_style(menu, {"theme": "dark"})
+    entry = OjingjingMenuEntry(menu, {"title": "彩蛋入口", "hint": "请点击"})
+    entry.show()
+    app.processEvents()
+
+    title_color = entry.title_label.palette().color(QPalette.ColorRole.WindowText)
+    accessory_image = entry.click_accessory.grab().toImage()
+    accessory_lightness = max(
+        accessory_image.pixelColor(x, y).lightness()
+        for x in range(accessory_image.width())
+        for y in range(accessory_image.height())
+    )
+    assert title_color.lightness() >= 180
+    assert accessory_lightness >= 160
+
+    entry.close()
+    menu.close()
+    app.processEvents()
+
+
+def test_easter_egg_hover_surface_stays_dark_in_the_dark_menu_theme():
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QEnterEvent
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.fun_entry import OjingjingMenuEntry
+    from pet.context_menus.menu_styles.modern import apply_modern_menu_style
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    apply_modern_menu_style(menu, {"theme": "dark", "dark_hover": "#3a3a3a"})
+    entry = OjingjingMenuEntry(menu, {"title": "彩蛋入口", "hint": "请点击"})
+    entry.show()
+    QApplication.sendEvent(
+        entry,
+        QEnterEvent(QPointF(1, 1), QPointF(1, 1), QPointF(1, 1)),
+    )
+    app.processEvents()
+
+    image = entry.grab().toImage()
+    hover_surface = image.pixelColor(4, entry.height() // 2)
+    assert hover_surface.lightness() < 100
+
+    entry.close()
+    menu.close()
+    app.processEvents()
+
+
 def test_template_switch_requests_immediate_menu_reopen():
     from PySide6.QtWidgets import QApplication, QMenu
 
@@ -2374,6 +2634,10 @@ def test_product_copy_has_no_external_brand_reference():
         paths = [root] if root.is_file() else list(root.rglob("*"))
         for path in paths:
             if not path.is_file() or path.suffix.lower() not in {".py", ".qss", ".md", ".json"}:
+                continue
+            # Competitive research records source names by design; they are
+            # evidence, not user-facing product copy.
+            if path.name.endswith("-RESEARCH.md"):
                 continue
             if forbidden in path.read_text(encoding="utf-8", errors="ignore").lower():
                 hits.append(str(path))
@@ -2589,8 +2853,46 @@ def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path)
 
     # 相对路径（内置 assets）仍走既有回退解析
     assert _resolve_self_talk_image_dir("") == ""
+# --- Custom image-directory gallery regression (2026-09-03) ---
 
 
+def test_image_directory_picker_opens_right_drawer_with_three_column_masonry(tmp_path):
+    from PIL import Image
+    from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout
+
+    from pet.modern_settings_dialog import ImagePreviewDrawer, ResourcePathPicker
+
+    short = tmp_path / "01-one.png"
+    long = tmp_path / ("02-" + "very-long-image-name-" * 8 + ".jpg")
+    Image.new("RGB", (40, 80), "red").save(short)
+    Image.new("RGB", (100, 40), "blue").save(long)
+    Image.new("RGB", (80, 80), "green").save(tmp_path / "03-square.png")
+    Image.new("RGB", (120, 50), "yellow").save(tmp_path / "04-fourth.png")
+    (tmp_path / "ignore.txt").write_text("ignore", encoding="utf-8")
+    app = QApplication.instance() or QApplication([])
+    host = QDialog()
+    host.resize(1000, 680)
+    layout = QVBoxLayout(host)
+    picker = ResourcePathPicker(str(tmp_path), directory=True, image_preview=True, parent=host)
+    layout.addWidget(picker)
+    host.show()
+    app.processEvents()
+
+    assert picker.preview_button.text() == "预览"
+    assert host.findChild(ImagePreviewDrawer, "imagePreviewDrawer") is None
+    picker.preview_button.click()
+    app.processEvents()
+    drawer = host.findChild(ImagePreviewDrawer, "imagePreviewDrawer")
+    assert drawer is not None and not drawer.isHidden()
+    assert drawer.geometry().right() == host.rect().right()
+    assert drawer.flow.layout.column_count == 3
+    assert drawer.count_label.text() == "4 张图片"
+    assert len(drawer.flow.cards) == 4
+    assert drawer.flow.cards[1].toolTip() == long.name
+    assert drawer.flow.cards[3].y() < drawer.flow.cards[0].geometry().bottom()
+    assert drawer.flow.cards[3].x() == drawer.flow.cards[1].x()
+    host.close()
+    app.processEvents()
 
 
 def test_cleanup_old_pet_logs(tmp_path):
@@ -2691,3 +2993,19 @@ def test_modern_settings_reject_saves_config(tmp_path):
     dlg.reject()
     app.processEvents()
     assert Config(tmp_path).get("self_talk_image_scale") == 180
+
+
+def test_settings_image_directories_use_preview_but_audio_folders_do_not(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    assert dialog.self_talk_image_dir_picker.preview_button is not None
+    assert dialog.egg_image_dir_picker.preview_button is not None
+    assert dialog.click_sound_picker.folder_picker.preview_button is None
+    dialog.reject()
+    app.processEvents()

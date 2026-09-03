@@ -66,6 +66,10 @@ DEFAULT_QUICK_LAUNCH_APPS = [
 ]
 
 
+def _clean_menu_layout_override(value):
+    return copy.deepcopy(value) if isinstance(value, dict) else None
+
+
 def _clean_color(value, default):
     value = str(value or "").strip()
     if len(value) == 7 and value.startswith("#"):
@@ -542,6 +546,7 @@ class Config:
             "shift_drag": False,     # 按住 SHIFT+左键才能拖动
             "pet_opacity": 100,      # 桌宠窗口不透明度 10-100
             "context_menu_template": "modern",
+            "context_menu_layout": None,
             "context_menu_appearance": dict(DEFAULT_CONTEXT_MENU_APPEARANCE),
             "menu_easter_egg": dict(DEFAULT_MENU_EASTER_EGG),
             "quick_launch_apps": [dict(item) for item in DEFAULT_QUICK_LAUNCH_APPS],
@@ -692,6 +697,7 @@ class Config:
             "self_talk_image_scale",
             "self_talk_bubble_style",
              "mouse_through", "cursor_hidden_passthrough", "drag_physics", "context_menu_template",
+            "context_menu_layout",
             "lock_position", "shift_drag", "pet_opacity",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg", "auto_hide_fullscreen",
@@ -787,6 +793,9 @@ class Config:
         )
         if self.data.get("context_menu_template") not in {"legacy", "modern"}:
             self.data["context_menu_template"] = "modern"
+        self.data["context_menu_layout"] = _clean_menu_layout_override(
+            self.data.get("context_menu_layout")
+        )
         self.data["context_menu_appearance"] = _clean_menu_appearance(
             self.data.get("context_menu_appearance")
         )
@@ -921,7 +930,7 @@ class Config:
             "self_talk_duration_seconds", "self_talk_image_dir",
             "self_talk_image_scale",
             "self_talk_bubble_style",
-            "context_menu_appearance", "quick_launch_apps",
+            "context_menu_appearance", "context_menu_layout", "quick_launch_apps",
             "menu_easter_egg",
             "click_sound_enabled", "click_sound_pack", "click_sound_volume",
             "collision_sound_enabled", "collision_sound_volume",

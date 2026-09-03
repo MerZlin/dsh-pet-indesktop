@@ -5,7 +5,7 @@ pet/config.py 里 __init__ 的默认值 dict（约 498-566 行）与 reload() �
 元组（约 656-691 行）是两份独立维护的键列表。本测试把现状文档化并加护栏：
 
 实测两集合**不一致**（现状文档化，不修产品代码）：
-- 默认值 dict 共 74 键；reload 白名单共 70 键。
+- 默认值 dict 共 75 键；reload 白名单共 71 键。
 - 差异 = 默认值多出 4 键：{version, proactive_screen, agent_link, chat}。
   这 4 键在 reload() 里走专门路径（version 末尾强制回写 4；
   proactive_screen / agent_link / chat 分别经 _merge_*_data 合并），
@@ -25,7 +25,7 @@ import re
 from pet import config as config_mod
 from pet.config import Config
 
-# reload() 白名单键集合现状快照（70 键，与 pet/config.py reload() 的
+# reload() 白名单键集合现状快照（71 键，与 pet/config.py reload() 的
 # "for key in (...)" 元组一致；任何增删必须同步更新本快照）。
 RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "animation_gap_seconds", "auto_hide_fullscreen", "autostart_wanted",
@@ -37,7 +37,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "click_sound_enabled", "click_sound_pack", "click_sound_path", "click_sound_volume",
     "collision_enabled", "collision_friction", "collision_impulse_cap",
     "collision_mass_scale", "collision_restitution", "collision_sound_enabled",
-    "collision_sound_volume", "context_menu_appearance", "context_menu_template",
+    "collision_sound_volume", "context_menu_appearance", "context_menu_layout", "context_menu_template",
     "cursor_hidden_passthrough", "decode_broker_enabled", "drag_physics",
     "dynamic_island", "facing",
     "idle_low_fps_enabled", "idle_low_fps_threshold", "lock_position",
@@ -54,7 +54,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。
 SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat"})
 
-# 默认值 dict 键集合现状快照（74 键）= 白名单 ∪ 特例键。
+# 默认值 dict 键集合现状快照（75 键）= 白名单 ∪ 特例键。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

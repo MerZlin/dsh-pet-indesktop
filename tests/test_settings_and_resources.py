@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from pet.click_sound import resolve_builtin_sound
 from pet.config import Config
-from pet.modern_settings_dialog import ModernSettingsDialog
+from pet.modern_settings_dialog import ModernSettingsDialog, SettingRow
 
 
 @pytest.fixture(scope="session")
@@ -100,31 +100,31 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
 
 
 def test_agent_sound_controls_visibility_and_subcontrols(qapp, tmp_path: Path):
-    """验证总开关关掉时子项置灰/联动，以及各事件独立开关的启用状态控制。"""
+    """总开关隐藏子项；单事件开关隐藏路径和试听，但保留自身以便恢复。"""
     cfg_root = tmp_path / "appdata"
     cfg = Config(cfg_root)
     dialog = ModernSettingsDialog(cfg, include_ai=False)
     try:
         # 初始 sound_enabled=False
         dialog._update_agent_sound_controls(False)
-        start_row = dialog.findChild(type(dialog.findChild(ModernSettingsDialog, "settingRow_agent_sound_start")), "settingRow_agent_sound_start")
-        if start_row is not None:
-            assert start_row.isVisible() is False
+        start_row = dialog.findChild(SettingRow, "settingRow_agent_sound_start")
+        assert start_row is not None
+        assert start_row.isHidden() is True
 
         # 开启总开关
         dialog.agent_sound_check.setChecked(True)
         dialog._update_agent_sound_controls(True)
-        if start_row is not None:
-            assert start_row.isVisible() is True
+        assert start_row.isHidden() is False
 
         # 单独关闭 start 事件
         dialog.agent_sound_start_check.setChecked(False)
-        assert dialog.agent_sound_start_picker.isEnabled() is False
-        assert dialog.agent_sound_start_preview.isEnabled() is False
+        assert dialog.agent_sound_start_picker.isHidden() is True
+        assert dialog.agent_sound_start_preview.isHidden() is True
+        assert dialog.agent_sound_start_check.isHidden() is False
 
         # 打开 start 事件
         dialog.agent_sound_start_check.setChecked(True)
-        assert dialog.agent_sound_start_picker.isEnabled() is True
-        assert dialog.agent_sound_start_preview.isEnabled() is True
+        assert dialog.agent_sound_start_picker.isHidden() is False
+        assert dialog.agent_sound_start_preview.isHidden() is False
     finally:
         dialog.deleteLater()
