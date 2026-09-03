@@ -87,7 +87,8 @@ Cards use a 12 px radius and 1 px border. Fields use a 7 px radius and 32 px tot
 - `SettingsSection` owns section rhythm. `advanced=True` is the only supported disclosure depth.
 - `SettingsDisclosureHeader` owns the non-native disclosure look and accessible expanded/collapsed name.
 - `ModernSelect`, `BrowserSpinBox`, and `BrowserDoubleSpinBox` own shared field geometry and focus treatment.
-- `MenuLayoutEditor` gives its editor and preview symmetric labeled panels. It stacks them at compact widths and expands both at wide widths; command groups live in `排序 / 移动到 / 子菜单 / 更多` menus.
+- `SettingsTabContainer` is for peer tasks inside one capability domain, not for replacing the seven-domain sidebar. Tabs use a compact segmented surface, retain keyboard focus, and hidden pages must not impose their minimum width on the active page.
+- `MenuLayoutEditor` gives its editor and preview symmetric labeled panels. It stacks them at compact widths and expands both at wide widths; command groups live in `排序 / 移动到 / 插入 / 自定义 / 更多` menus. The tree owns order, visibility, submenus, separators, aliases, and icon overrides; the status column distinguishes enabled, runtime-disabled, hidden, and platform-unavailable items.
 - `QuickLaunchEditor` uses content-sized two-line rows (name plus source), a count, compact empty state, and one grouped Add menu. Cap list growth and let the page own overflow.
 
 Reuse these classes. Decide responsive placement from font-derived size hints and available width, not platform names or one fixed breakpoint. A new control variant must define light/dark, hover, pressed, focus, disabled, and High DPI behavior before adoption.

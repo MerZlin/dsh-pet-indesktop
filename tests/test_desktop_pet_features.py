@@ -1194,7 +1194,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     section_titles = [label.text() for label in dialog.findChildren(settings_mod.QLabel, "sectionTitle")]
     assert {
         "应用启动", "窗口与系统", "动画与移动", "点击反馈", "自言自语",
-        "显示", "外观", "对话窗口", "快捷启动", "内容与布局",
+        "显示", "菜单外观", "对话窗口", "已配置应用", "内容与布局",
         "模型与连接", "视觉能力",
     }.issubset(set(section_titles))
     advanced_titles = [

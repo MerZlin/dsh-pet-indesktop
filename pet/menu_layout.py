@@ -117,6 +117,62 @@ def load_default_menu_layout(layout_id: str = DEFAULT_LAYOUT_ID) -> dict:
     return data
 
 
+def materialize_implicit_separators(raw_layout: Mapping) -> dict:
+    """Turn legacy section boundaries into editable separator nodes.
+
+    Runtime rendering keeps supporting old ``section`` metadata. The editor
+    upgrades it so every layout-affecting divider is visible and editable.
+    """
+    layout = deepcopy(dict(raw_layout))
+    used_ids: set[str] = set()
+
+    def collect(nodes) -> None:
+        for node in nodes if isinstance(nodes, list) else ():
+            if not isinstance(node, dict):
+                continue
+            used_ids.add(str(node.get("id") or ""))
+            collect(node.get("children", []))
+
+    collect(layout.get("nodes", []))
+    counter = 1
+
+    def next_id() -> str:
+        nonlocal counter
+        while f"user.separator-{counter}" in used_ids:
+            counter += 1
+        result = f"user.separator-{counter}"
+        used_ids.add(result)
+        counter += 1
+        return result
+
+    def upgrade(nodes) -> list[dict]:
+        if not isinstance(nodes, list):
+            return []
+        upgraded: list[dict] = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            copied = deepcopy(node)
+            if copied.get("type") == "submenu":
+                copied["children"] = upgrade(copied.get("children", []))
+            upgraded.append(copied)
+        if any(node.get("type") == "separator" for node in upgraded):
+            return upgraded
+        result: list[dict] = []
+        previous_section = ""
+        for node in upgraded:
+            section = str(node.get("section") or "")
+            if result and section and previous_section and section != previous_section:
+                result.append({"type": "separator", "id": next_id(), "visible": True})
+            result.append(node)
+            if section:
+                previous_section = section
+        return result
+
+    layout["nodes"] = upgrade(layout.get("nodes", []))
+    return layout
+
+
 def merge_default_menu_actions(
     raw_layout: Mapping, *, registered_actions: Collection[str]
 ) -> tuple[dict, tuple[str, ...]]:
@@ -209,6 +265,15 @@ def resolve_menu_layout(
             if not isinstance(node, dict) or not node.get("visible", True):
                 continue
             node_type = node.get("type")
+            if node_type == "separator":
+                # Separators are explicit layout nodes. The renderer normalizes
+                # leading/trailing/consecutive dividers after capability filters.
+                resolved.append({
+                    "type": "separator",
+                    "id": str(node.get("id") or ""),
+                    "visible": True,
+                })
+                continue
             if node_type == "action":
                 action_id = str(node.get("id") or "")
                 if action_id not in registered:
@@ -218,10 +283,16 @@ def resolve_menu_layout(
                     action = {"type": "action", "id": action_id, "visible": True}
                     if node.get("section"):
                         action["section"] = str(node["section"])
+                    alias = str(node.get("alias") or "").strip()[:40]
+                    if alias:
+                        action["alias"] = alias
+                    if "icon" in node:
+                        action["icon"] = str(node.get("icon") or "none")[:40]
                     resolved.append(action)
                 continue
             if node_type == "submenu":
                 children = resolve_nodes(node.get("children", []))
+                children = _normalize_separators(children)
                 if children:
                     submenu = {
                         "type": "submenu",
@@ -232,8 +303,24 @@ def resolve_menu_layout(
                     }
                     if node.get("section"):
                         submenu["section"] = str(node["section"])
+                    alias = str(node.get("alias") or "").strip()[:40]
+                    if alias:
+                        submenu["alias"] = alias
+                    if "icon" in node:
+                        submenu["icon"] = str(node.get("icon") or "none")[:40]
                     resolved.append(submenu)
-        return tuple(resolved)
+        return _normalize_separators(tuple(resolved))
+
+    def _normalize_separators(nodes: tuple[dict, ...]) -> tuple[dict, ...]:
+        normalized: list[dict] = []
+        for node in nodes:
+            if node.get("type") == "separator":
+                if not normalized or normalized[-1].get("type") == "separator":
+                    continue
+            normalized.append(node)
+        while normalized and normalized[-1].get("type") == "separator":
+            normalized.pop()
+        return tuple(normalized)
 
     resolved_nodes = list(resolve_nodes(working_nodes))
 

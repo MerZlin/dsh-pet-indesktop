@@ -1,6 +1,6 @@
 # Settings redesign handoff
 
-Updated: 2026-09-03 (after dark-menu easter-egg hover fix)
+Updated: 2026-09-03 (after Quick Chat Cocoa activation/render fix)
 
 ## Workspace
 
@@ -53,14 +53,30 @@ Updated: 2026-09-03 (after dark-menu easter-egg hover fix)
 - Real Cocoa layout evidence is in `docs/screenshots/settings-redesign/iteration-5-layout-*`; the focused quick-launch image confirms the single-row scrollbar regression is gone.
 - Quick-launch check indicators accept real pointer clicks despite custom item widgets.
 - Explicit menu appearance themes now apply to the open Settings System immediately; custom-painted controls inherit the same resolved state.
-- Quick Chat closes on top-level window deactivation and stops active work through its existing close path.
+- Quick Chat opens on the next event turn, waits for detectable Qt popups to close,
+  ignores Cocoa's transitional deactivation during first activation, then closes
+  on genuine top-level window deactivation. This avoids both native menu teardown
+  and an active Settings System window leaving a blank native Quick Chat surface,
+  while preserving the existing request-stop close path. Real Cocoa evidence is
+  in `docs/screenshots/settings-redesign/quick-chat-focus-regression-macos.png`
+  and `docs/screenshots/settings-redesign/quick-chat-self-talk-activation-macos.png`.
 - Dark-menu easter-egg title and hint inherit the configured foreground; related coverage is `84 passed` plus one real Cocoa render test, with full suite intentionally skipped under the documented low-risk gate.
 - Easter-egg hover inherits the configured theme hover surface; four focused tests and one real Cocoa render test pass, with no full-suite rerun for this isolated token fix.
+- The Menu domain keeps the seven-domain sidebar intact and uses in-page `SettingsTabContainer` tasks for Menu Layout, Quick Launch, and Appearance. Search activates the owning tab before scrolling to a result.
+- Menu Layout now owns aliases, semantic icon overrides, and explicit separator nodes. Legacy section boundaries materialize as editable separators; runtime feature toggles retain their nodes and render them disabled with a reason instead of filtering or reordering the tree.
+- The editor retains native tree semantics and adds an enabled-state column plus responsive `排序 / 移动到 / 插入 / 自定义 / 更多` command groups. Focused menu coverage is `54 passed`.
 
 ## Current TDD state
 
-- Last RED: dark-menu easter-egg title resolved to black and its hint rendered no pixel lighter than the fixed `#777777`.
-- Last GREEN: dark-menu foreground render contract plus `84 passed` related file. Full suite was intentionally skipped because this change is an isolated presentation token; the latest branch-wide full result remains `759 passed, 8 skipped` at `8f2aa81`.
+- Last RED: the in-page stack inherited the hidden Appearance task's minimum
+  width, overflowing the compact Menu viewport; the existing settings contract
+  also still expected the pre-tab section names.
+- Last GREEN: Menu coverage `54 passed`, combined Menu/Quick Chat/settings
+  contract `61 passed`, and segmented full coverage `772 passed, 7 skipped`.
+  One-process full execution remains susceptible to the documented native
+  WebM-reader/Cocoa interaction, so the same complete set ran as `663 + 103 + 6`
+  passing tests in isolated processes. Cocoa screenshots cover all three tabs,
+  compact/dark states, and runtime-disabled styling under `iteration-6-menu-tabs-*`.
 
 ## Exact next step
 

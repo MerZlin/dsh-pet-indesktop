@@ -1,6 +1,6 @@
 # 设置页逐页 UI 验收
 
-日期：2026-09-02  
+日期：2026-09-03
 真实平台：macOS，Qt Cocoa  
 窗口矩阵：1100×760 浅色、720×760 浅色、1100×760 深色
 
@@ -16,6 +16,9 @@
 - `screenshots/settings-redesign/iteration-5-layout-wide/`（1600×1000，宽内容与标题对齐）
 - `screenshots/settings-redesign/iteration-5-layout-compact/`（720×760，菜单上下分栏）
 - `screenshots/settings-redesign/iteration-5-layout-dark/`（1100×760，菜单与快捷启动深色态）
+- `screenshots/settings-redesign/iteration-6-menu-tabs-wide/`（1600×1000，三个菜单页内任务与停用态）
+- `screenshots/settings-redesign/iteration-6-menu-tabs-compact/`（720×760，页内 Tab、上下编排与停用态）
+- `screenshots/settings-redesign/iteration-6-menu-tabs-dark/`（1100×760，页内 Tab、编排与停用态深色样式）
 
 ## 逐页结果
 
@@ -48,6 +51,8 @@ AI 页另存 `08-AI 与对话-高级展开.png`，确认自定义披露标题、
 - 1600px 窗口下标题与 1240px 菜单内容左沿同步；编排左右面板充分利用宽高，操作按能力分组为下拉菜单。
 - 720px 窗口下编排面板转为上下排列，四个命令组保持同排可达；快捷启动改为两行内容项和紧凑空状态，不再保留大块空白列表。
 - 子菜单删除/自动清理属于交互状态，使用确认框替身和树模型 remove/insert 测试验收；静态截图不伪造弹窗状态。
+- 菜单页的三个同级任务现由页内 Tab 分离，截图确认侧栏仍为原七个能力域；宽屏、紧凑和深色下选中态清楚，隐藏页不会撑宽当前页。
+- 默认分组显示为编排树中的“— 分割线”，可被移动或删除；彩蛋关闭后的节点仍停留原位，状态切为“已停用”，预览以不可用样式保留。快捷启动空状态同样由自动化测试覆盖，布局节点不变。
 
 ## 未声称的覆盖
 

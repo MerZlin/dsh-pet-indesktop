@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -61,6 +62,7 @@ class QuickChatBubble(QFrame):
         self._reply_text = ""
         self._page = 0
         self._pages: list[str] = []
+        self._deactivate_check_pending = False
 
         self._build()
         self._connect()
@@ -328,9 +330,19 @@ class QuickChatBubble(QFrame):
 
     def event(self, event) -> bool:
         if event.type() == QEvent.Type.WindowDeactivate and self.isVisible():
-            self.close()
-            return True
+            # Cocoa 在另一个应用内窗口仍活动时首次 show/activate Tool 窗口，
+            # 会产生一次过渡性的 WindowDeactivate；此时同步 close 会留下只
+            # 有原生灰色底板的空白窗口。下一事件轮的 activeWindow 已稳定，
+            # 可以区分这次过渡和用户真正切走焦点。
+            if not self._deactivate_check_pending:
+                self._deactivate_check_pending = True
+                QTimer.singleShot(0, self, self._close_if_still_inactive)
         return super().event(event)
+
+    def _close_if_still_inactive(self) -> None:
+        self._deactivate_check_pending = False
+        if self.isVisible() and QApplication.activeWindow() is not self:
+            self.close()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.service.busy:

@@ -7,10 +7,12 @@ from typing import Callable
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QMenu
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QMenu, QWidgetAction
 
 from ..config import DEFAULT_MENU_EASTER_EGG
 from .fun_entry import add_ojingjing_entry
+from .icons import vector_menu_icon
 from .quick_launch import add_quick_launch_menu, configured_quick_apps
 from .shared import (
     QUARK_PAN_URL,
@@ -55,12 +57,38 @@ ACTION_LABELS = {
 
 Builder = Callable[[QMenu, object], object]
 Availability = Callable[[object], bool]
+Enablement = Callable[[object], bool]
+
+
+ACTION_ICONS = {
+    "ojingjing": "pet", "chat": "chat", "look_screen": "screen",
+    "animations_hub": "play", "character": "character", "playback_speed": "speed",
+    "size": "size", "drag_physics": "physics", "no_move": "pause",
+    "mouse_through": "interaction", "on_top": "pin", "autostart": "autostart",
+    "return_corner": "corner", "hide_pet": "hide", "spawn_pet": "spawn",
+    "quick_launch": "application", "balance": "balance", "harness": "harness",
+    "deepseek_web": "web", "check_update": "update", "github_project": "web",
+    "quark_download": "download", "agent_link": "automation",
+    "proactive_screen": "screen", "modern_settings": "settings", "quit": "quit",
+}
+
+CUSTOM_ICON_CHOICES = (
+    ("默认图标", "default"), ("无图标", "none"),
+    ("对话", "chat"), ("屏幕", "screen"), ("播放", "play"),
+    ("角色", "character"), ("速度", "speed"), ("尺寸", "size"),
+    ("桌宠", "pet"), ("交互", "interaction"), ("置顶", "pin"),
+    ("隐藏", "hide"), ("应用", "application"), ("余额", "balance"),
+    ("网页", "web"), ("下载", "download"), ("更新", "update"),
+    ("自动化", "automation"), ("设置", "settings"),
+)
 
 
 @dataclass(frozen=True)
 class MenuActionSpec:
     build: Builder
     available: Availability = lambda _pet: True
+    enabled: Enablement = lambda _pet: True
+    disabled_reason: str = "当前功能未启用"
 
 
 def _callback_available(name: str) -> Availability:
@@ -114,9 +142,10 @@ class MenuActionRegistry:
                 lambda menu, pet: add_ojingjing_entry(
                     menu, pet.cfg.get("menu_easter_egg", DEFAULT_MENU_EASTER_EGG)
                 ),
-                lambda pet: bool(
+                enabled=lambda pet: bool(
                     pet.cfg.get("menu_easter_egg", DEFAULT_MENU_EASTER_EGG).get("enabled", True)
                 ),
+                disabled_reason="彩蛋入口已在设置中停用",
             ),
             "chat": MenuActionSpec(_build_chat, _callback_available("on_open_chat")),
             "look_screen": MenuActionSpec(add_look_screen, _callback_available("on_look_screen")),
@@ -134,7 +163,8 @@ class MenuActionRegistry:
             "spawn_pet": MenuActionSpec(add_spawn_pet, _callback_available("on_spawn_pet")),
             "quick_launch": MenuActionSpec(
                 lambda menu, pet: add_quick_launch_menu(menu, pet.cfg),
-                lambda pet: bool(configured_quick_apps(pet.cfg)),
+                enabled=lambda pet: bool(configured_quick_apps(pet.cfg)),
+                disabled_reason="尚未配置快捷启动应用",
             ),
             "balance": MenuActionSpec(add_balance, _callback_available("on_show_balance")),
             "harness": MenuActionSpec(add_harness, _callback_available("on_open_chat")),
@@ -164,23 +194,75 @@ class MenuActionRegistry:
             if spec.available(pet)
         )
 
+    def enabled_ids(self, pet) -> frozenset[str]:
+        return frozenset(
+            action_id
+            for action_id, spec in self._specs.items()
+            if spec.available(pet) and spec.enabled(pet)
+        )
+
+    def disabled_reason(self, action_id: str) -> str:
+        spec = self._specs.get(action_id)
+        return spec.disabled_reason if spec is not None else "当前不可用"
+
+    def default_icon(self, action_id: str) -> str:
+        return ACTION_ICONS.get(action_id, "")
+
     def label(self, action_id: str) -> str:
         return ACTION_LABELS.get(action_id, action_id)
 
-    def populate(self, menu: QMenu, pet, nodes) -> None:
+    def populate(self, menu: QMenu, pet, nodes, *, enabled_actions=None) -> None:
+        enabled = frozenset(enabled_actions) if enabled_actions is not None else self.enabled_ids(pet)
+        explicit_separators = any(node.get("type") == "separator" for node in nodes)
         previous_section = None
         rendered = 0
         for node in nodes:
+            if node.get("type") == "separator":
+                if rendered and menu.actions() and not menu.actions()[-1].isSeparator():
+                    menu.addSeparator()
+                previous_section = None
+                continue
             section = node.get("section")
-            if rendered and section and previous_section and section != previous_section:
+            if (
+                not explicit_separators
+                and rendered and section and previous_section and section != previous_section
+            ):
                 menu.addSeparator()
+            built = None
             if node.get("type") == "submenu":
-                submenu = add_submenu(menu, str(node.get("label") or ""))
-                self.populate(submenu, pet, node.get("children", ()))
+                submenu = add_submenu(
+                    menu,
+                    str(node.get("alias") or node.get("label") or ""),
+                )
+                self.populate(
+                    submenu, pet, node.get("children", ()), enabled_actions=enabled,
+                )
+                built = submenu
             else:
-                spec = self._specs.get(str(node.get("id") or ""))
+                action_id = str(node.get("id") or "")
+                spec = self._specs.get(action_id)
                 if spec is not None:
-                    spec.build(menu, pet)
+                    built = spec.build(menu, pet)
+                    action = built.menuAction() if isinstance(built, QMenu) else built
+                    alias = str(node.get("alias") or "").strip()
+                    if alias and action is not None:
+                        action.setText(alias)
+                        if isinstance(action, QWidgetAction):
+                            widget = action.defaultWidget()
+                            setter = getattr(widget, "set_title", None)
+                            if callable(setter):
+                                setter(alias)
+                    if action is not None and "icon" in node:
+                        icon_name = str(node.get("icon") or "none")
+                        action.setIcon(
+                            QIcon() if icon_name == "none"
+                            else vector_menu_icon(menu, icon_name)
+                        )
+                    if action is not None and action_id not in enabled:
+                        action.setEnabled(False)
+                        action.setToolTip(self.disabled_reason(action_id))
+                        if isinstance(action, QWidgetAction) and action.defaultWidget() is not None:
+                            action.defaultWidget().setEnabled(False)
             rendered += 1
             if section:
                 previous_section = section

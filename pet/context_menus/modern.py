@@ -18,4 +18,6 @@ def build_modern_menu(menu: QMenu, pet, template: dict) -> None:
     )
     menu.setProperty("menuLayoutSource", result.source)
     menu.setProperty("menuLayoutDiagnostics", list(result.diagnostics))
-    MENU_ACTIONS.populate(menu, pet, result.nodes)
+    MENU_ACTIONS.populate(
+        menu, pet, result.nodes, enabled_actions=MENU_ACTIONS.enabled_ids(pet)
+    )

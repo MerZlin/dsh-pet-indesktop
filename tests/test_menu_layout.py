@@ -1,4 +1,8 @@
-from pet.menu_layout import load_default_menu_layout, resolve_menu_layout
+from pet.menu_layout import (
+    load_default_menu_layout,
+    materialize_implicit_separators,
+    resolve_menu_layout,
+)
 
 
 def test_modern_default_v1_has_compact_root_and_safety_actions():
@@ -8,17 +12,22 @@ def test_modern_default_v1_has_compact_root_and_safety_actions():
     assert layout["layout_id"] == "modern-default-v1"
     assert [node["id"] for node in layout["nodes"]] == [
         "ojingjing",
+        "default.separator-profile",
         "chat",
         "look_screen",
+        "default.separator-interaction",
         "animations_hub",
         "character",
         "playback_speed",
         "size",
+        "default.separator-playback",
         "pet_controls",
         "quick_launch",
+        "default.separator-pet",
         "tools_help",
         "agent_link",
         "proactive_screen",
+        "default.separator-tools",
         "modern_settings",
         "quit",
     ]
@@ -26,6 +35,22 @@ def test_modern_default_v1_has_compact_root_and_safety_actions():
         {"type": "action", "id": "modern_settings", "visible": True, "section": "system"},
         {"type": "action", "id": "quit", "visible": True, "section": "system"},
     ]
+
+
+def test_legacy_section_boundaries_become_editable_separator_nodes():
+    upgraded = materialize_implicit_separators({
+        "schema_version": 1,
+        "layout_id": "user",
+        "nodes": [
+            {"type": "action", "id": "chat", "visible": True, "section": "one"},
+            {"type": "action", "id": "look_screen", "visible": True, "section": "two"},
+        ],
+    })
+
+    assert [node["type"] for node in upgraded["nodes"]] == [
+        "action", "separator", "action"
+    ]
+    assert upgraded["nodes"][1]["id"] == "user.separator-1"
 
 
 def test_invalid_layout_falls_back_to_minimum_safe_menu():
@@ -110,6 +135,137 @@ def test_user_layout_filters_hidden_unavailable_and_empty_submenus():
     )
 
 
+def test_layout_preserves_alias_icon_and_explicit_separator_nodes():
+    result = resolve_menu_layout(
+        {
+            "schema_version": 1,
+            "layout_id": "user",
+            "nodes": [
+                {
+                    "type": "action",
+                    "id": "chat",
+                    "visible": True,
+                    "alias": "和鲸鱼聊聊",
+                    "icon": "screen",
+                },
+                {"type": "separator", "id": "user.separator-1", "visible": True},
+                {"type": "action", "id": "modern_settings", "visible": True},
+                {"type": "action", "id": "quit", "visible": True},
+            ],
+        },
+        registered_actions={"chat", "modern_settings", "quit"},
+        available_actions={"chat", "modern_settings", "quit"},
+    )
+
+    assert result.nodes[0] == {
+        "type": "action",
+        "id": "chat",
+        "visible": True,
+        "alias": "和鲸鱼聊聊",
+        "icon": "screen",
+    }
+    assert result.nodes[1] == {
+        "type": "separator",
+        "id": "user.separator-1",
+        "visible": True,
+    }
+
+
+def test_runtime_feature_state_does_not_filter_menu_layout_actions():
+    from pet.context_menus.registry import MENU_ACTIONS
+
+    class Config:
+        def get(self, key, default=None):
+            if key == "menu_easter_egg":
+                return {"enabled": False}
+            if key == "quick_launch_apps":
+                return []
+            return default
+
+    class Pet:
+        cfg = Config()
+        on_open_chat = lambda self: None
+        on_look_screen = lambda self: None
+        on_show_balance = lambda self, parent=None: None
+        on_check_update = lambda self, parent=None: None
+        on_open_modern_settings = lambda self: None
+        on_spawn_pet = lambda self: None
+
+    pet = Pet()
+    assert {"ojingjing", "quick_launch"} <= MENU_ACTIONS.available_ids(pet)
+    assert {"ojingjing", "quick_launch"}.isdisjoint(MENU_ACTIONS.enabled_ids(pet))
+
+
+def test_runtime_menu_renders_alias_icon_separator_and_disabled_item():
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.registry import MENU_ACTIONS
+
+    class Config:
+        def get(self, key, default=None):
+            return [] if key == "quick_launch_apps" else default
+
+    class Pet:
+        cfg = Config()
+        on_open_chat = lambda self: None
+        on_open_modern_settings = lambda self: None
+        _request_quit = lambda self: None
+
+    app = QApplication.instance() or QApplication([])
+    menu = QMenu()
+    nodes = (
+        {"type": "action", "id": "chat", "alias": "和鲸鱼聊聊", "icon": "screen"},
+        {"type": "separator", "id": "user.separator-1"},
+        {"type": "action", "id": "quick_launch"},
+    )
+    MENU_ACTIONS.populate(menu, Pet(), nodes)
+
+    actions = menu.actions()
+    assert actions[0].text() == "和鲸鱼聊聊"
+    assert not actions[0].icon().isNull()
+    assert actions[1].isSeparator()
+    assert actions[2].text() == "快捷启动"
+    assert not actions[2].isEnabled()
+    assert actions[2].toolTip() == "尚未配置快捷启动应用"
+    assert actions[2].menu().actions()[0].text() == "尚未配置快捷项"
+    menu.close()
+    app.processEvents()
+
+
+def test_menu_editor_customizes_alias_icon_separator_and_shows_runtime_state():
+    from PySide6.QtWidgets import QApplication
+
+    from pet.context_menus.registry import MENU_ACTIONS
+    from pet.modern_settings_dialog import MenuLayoutEditor
+
+    app = QApplication.instance() or QApplication([])
+    editor = MenuLayoutEditor(
+        None,
+        available_actions=MENU_ACTIONS.ids,
+        enabled_actions=MENU_ACTIONS.ids - {"quick_launch"},
+    )
+
+    assert [editor.tree.headerItem().text(index) for index in range(3)] == [
+        "菜单项", "状态", "位置",
+    ]
+    quick_launch = editor.item_for_action("quick_launch")
+    assert quick_launch is not None
+    assert quick_launch.text(1) == "已停用"
+    assert quick_launch.flags() & __import__("PySide6").QtCore.Qt.ItemFlag.ItemIsEnabled
+
+    editor.set_item_alias("chat", "和鲸鱼聊聊")
+    editor.set_item_icon("chat", "screen")
+    editor.insert_separator(after_action_id="chat")
+
+    nodes = editor.value()["nodes"]
+    chat_index = next(index for index, node in enumerate(nodes) if node.get("id") == "chat")
+    assert nodes[chat_index]["alias"] == "和鲸鱼聊聊"
+    assert nodes[chat_index]["icon"] == "screen"
+    assert nodes[chat_index + 1]["type"] == "separator"
+    editor.close()
+    app.processEvents()
+
+
 def test_layout_restores_required_settings_and_exit_actions():
     result = resolve_menu_layout(
         {
@@ -129,7 +285,7 @@ def test_layout_restores_required_settings_and_exit_actions():
         "required-action-restored:modern_settings",
         "required-action-restored:quit",
     )
-    assert [node["id"] for node in result.nodes] == [
+    assert [node["id"] for node in result.nodes if node["type"] != "separator"] == [
         "chat",
         "modern_settings",
         "quit",
@@ -174,7 +330,7 @@ def test_missing_user_layout_resolves_versioned_default():
 
     assert result.source == "default"
     assert result.diagnostics == ()
-    assert [node["id"] for node in result.nodes] == [
+    assert [node["id"] for node in result.nodes if node["type"] != "separator"] == [
         "ojingjing",
         "chat",
         "look_screen",
@@ -606,6 +762,63 @@ def test_settings_sidebar_uses_stable_domains_and_owns_representative_rows(tmp_p
     assert "待分类（开发期）" not in [
         label.text() for label in dialog.findChildren(settings_mod.QLabel)
     ]
+    dialog.reject()
+    app.processEvents()
+
+
+def test_menu_domain_uses_in_page_task_tabs_without_changing_sidebar(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog, SettingRow, SettingsTabContainer
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = ModernSettingsDialog(Config(tmp_path), include_ai=True)
+
+    expected_sidebar = ["常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动"]
+    assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == expected_sidebar
+    tabs = dialog.pages.widget(3).findChild(SettingsTabContainer, "settingsTaskTabs")
+    assert tabs is not None
+    assert tabs.keys() == ("layout", "launcher", "appearance")
+    assert tabs.labels() == ("菜单编排", "快捷启动", "外观")
+
+    layout_row = dialog.findChild(SettingRow, "settingRow_context_menu_layout")
+    launcher_row = dialog.findChild(SettingRow, "settingRow_quick_launch_apps")
+    appearance_row = dialog.findChild(SettingRow, "settingRow_menu_theme")
+    assert tabs.key_for_descendant(layout_row) == "layout"
+    assert tabs.key_for_descendant(launcher_row) == "launcher"
+    assert tabs.key_for_descendant(appearance_row) == "appearance"
+
+    dialog.search_edit.setText("应用快捷启动")
+    app.processEvents()
+    assert dialog.sidebar.currentItem().text() == "菜单"
+    assert tabs.currentKey() == "launcher"
+    dialog.reject()
+    app.processEvents()
+
+
+def test_runtime_toggles_refresh_menu_status_without_rewriting_tree(tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = ModernSettingsDialog(Config(tmp_path), include_ai=True)
+    before = dialog.menu_layout_editor.value()["nodes"]
+
+    dialog.egg_enabled_check.setChecked(False)
+    dialog.quick_launch_editor.list.clear()
+    dialog.quick_launch_editor._sync_content_height()
+    app.processEvents()
+
+    assert dialog.menu_layout_editor.item_for_action("ojingjing").text(1) == "已停用"
+    assert dialog.menu_layout_editor.item_for_action("quick_launch").text(1) == "已停用"
+    assert dialog.menu_layout_editor.value()["nodes"] == before
     dialog.reject()
     app.processEvents()
 
@@ -1049,6 +1262,7 @@ def test_menu_preview_and_runtime_qmenu_share_the_same_layout_structure():
                 preview_shape(parent.child(index)),
             )
             for index in range(parent.childCount())
+            if parent.child(index).text(0) != "────────"
         ]
 
     def runtime_shape(menu, nodes):
@@ -1153,7 +1367,8 @@ def test_wide_menu_editor_expands_and_groups_commands_into_dropdowns(tmp_path, m
     grouped = (
         (editor.order_button, "排序"),
         (editor.move_button, "移动到"),
-        (editor.submenu_button, "子菜单"),
+        (editor.submenu_button, "插入"),
+        (editor.customize_button, "自定义"),
         (editor.more_button, "更多"),
     )
     assert all(button.text() == label for button, label in grouped)
@@ -1183,6 +1398,7 @@ def test_menu_editor_compact_action_bar_keeps_every_button_reachable():
         editor.order_button,
         editor.move_button,
         editor.submenu_button,
+        editor.customize_button,
         editor.more_button,
     )
     assert all(button.isVisible() for button in buttons)
@@ -1190,7 +1406,7 @@ def test_menu_editor_compact_action_bar_keeps_every_button_reachable():
         button.mapTo(editor, QPoint(0, 0)).x() + button.width() <= editor.width()
         for button in buttons
     )
-    assert len({button.mapTo(editor, QPoint(0, 0)).y() for button in buttons}) == 1
+    assert len({button.mapTo(editor, QPoint(0, 0)).y() for button in buttons}) == 2
     editor.close()
     app.processEvents()
 
@@ -1242,6 +1458,7 @@ def test_compact_settings_menu_action_bar_fits_scroll_viewport(tmp_path, monkeyp
         editor.order_button,
         editor.move_button,
         editor.submenu_button,
+        editor.customize_button,
         editor.more_button,
     ):
         left = button.mapTo(scroll.viewport(), QPoint(0, 0)).x()

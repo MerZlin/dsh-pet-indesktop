@@ -153,6 +153,11 @@ class OjingjingMenuEntry(QWidget):
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return QSize(224, 39)
 
+    def set_title(self, title: str) -> None:
+        """Apply a Menu Layout Tree alias to the custom header widget."""
+        self.title_label._full_text = str(title)
+        self.title_label.setText(self.title_label.displayText())
+
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt API
         self._hovered = True
         self.update()

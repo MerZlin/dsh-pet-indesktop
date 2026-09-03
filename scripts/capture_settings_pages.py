@@ -21,6 +21,7 @@ from pet.modern_settings_dialog import (  # noqa: E402
     ModernSettingsDialog,
     SettingRow,
     SettingsDisclosureHeader,
+    SettingsTabContainer,
 )
 
 
@@ -151,12 +152,24 @@ def capture(args: argparse.Namespace) -> None:
             )
             dialog.sidebar.setCurrentRow(menu_index)
             page = dialog.pages.currentWidget()
-            quick_launch_row = dialog.findChild(SettingRow, "settingRow_quick_launch_apps")
-            scroll = page.findChild(QScrollArea, "settingsScroll")
-            if scroll is not None and quick_launch_row is not None:
-                scroll.ensureWidgetVisible(quick_launch_row, 0, 36)
+            tabs = page.findChild(SettingsTabContainer, "settingsTaskTabs")
+            if tabs is None:
+                raise RuntimeError("menu task tabs were not found")
+            for key, label in zip(tabs.keys(), tabs.labels()):
+                tabs.setCurrentKey(key)
+                for scroll in page.findChildren(QScrollArea):
+                    scroll.verticalScrollBar().setValue(0)
+                    scroll.horizontalScrollBar().setValue(0)
+                app.processEvents()
+                target = destination / f"04-菜单-{_safe_filename(label)}.png"
+                if not dialog.grab().save(str(target)):
+                    raise RuntimeError(f"failed to save screenshot: {target}")
+            dialog.egg_enabled_check.setChecked(False)
+            dialog.quick_launch_editor.list.clear()
+            dialog.quick_launch_editor._sync_content_height()
+            tabs.setCurrentKey("layout")
             app.processEvents()
-            target = destination / "04-菜单-快捷启动.png"
+            target = destination / "04-菜单-停用状态.png"
             if not dialog.grab().save(str(target)):
                 raise RuntimeError(f"failed to save screenshot: {target}")
         dialog.close()

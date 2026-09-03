@@ -608,6 +608,16 @@ class PetApp:
         """打开快速对话气泡；与完整聊天窗共用会话历史。"""
         if not self.enable_chat or self.win is None:
             return
+        # Cocoa 原生 QMenu 跟踪期间 activePopupWidget() 可能为 None，且其
+        # 嵌套事件循环会把这个 singleShot 留到菜单关闭后再派发。若是 Qt
+        # 自绘 popup，下一层仍通过 _defer_while_popup_active 等待其关闭。
+        QTimer.singleShot(0, self._show_quick_chat)
+
+    def _show_quick_chat(self) -> None:
+        if not self.enable_chat or self.win is None:
+            return
+        if self._defer_while_popup_active("quick-chat", self._show_quick_chat):
+            return
         from .quick_chat import QuickChatBubble
 
         if self.quick_chat is None:
