@@ -2606,7 +2606,6 @@ class _AiSettingsPage(QWidget):
         self.settings.providers.pop(pid, None)
         self._provider_drafts.pop(pid, None)
         self._deleted_provider_ids.add(pid)
-        index = self.provider_combo.currentIndex()
         self._loading_provider = True
         try:
             self.provider_combo.clear()
