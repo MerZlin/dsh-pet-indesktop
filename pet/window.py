@@ -54,6 +54,7 @@ from .config import (
     _float_or_default,
 )
 from .library import MovieLibrary
+from .predictive_prewarm import PredictivePrewarm, pick_from_pool, roll_next
 from . import slot_manager as slot_manager_mod
 from .animation_thumbnail import decode_representative_frame, representative_frame_index
 from .speech_bubble import PetSpeechBubble, list_self_talk_images
@@ -394,6 +395,16 @@ class PetWindow(QWidget):
         self.clicks = self.cats['clicks']
         self.drag = self.cats['drag']
         self.acts = self.cats['acts']
+
+        # 批10-A1 预测式预热（控制器在 predictive_prewarm.py）；提前量默认 350ms，可配 200-600。
+        self.predict_prewarm_lead_ms = max(200, min(600, int(config.get('predict_prewarm_lead_ms', 350))))
+        # should_predict 只闸「预热」不闸「预测」（P1-1 语义）；no_move 时不预热移动（P2-4）。
+        self.predictive_prewarm = PredictivePrewarm(
+            roll=self._roll_next,
+            warm=lambda name: getattr(self.lib, 'warm_predicted', lambda n: None)(name),
+            should_predict=lambda name: name in self.acts
+            or (name in self.moves and not self.no_move),
+        )
 
         # 预载拖拽动画首帧，避免第一次进入拖拽状态时同步解码卡顿
         if self.drag:
@@ -1196,6 +1207,9 @@ class PetWindow(QWidget):
         self._reset_press_hold_state()
         self._cancel_move()
         self._cancel_animation_gap()
+        pp = getattr(self, 'predictive_prewarm', None)
+        if pp is not None:
+            pp.clear()
         self._speech_bubble.hide()
 
     def _resume_activity(self) -> None:
@@ -1776,6 +1790,9 @@ class PetWindow(QWidget):
         # （单一事实来源：_click_hold 随当前 anim 同步，覆盖所有切换路径，
         # 避免"点击动画被拖拽/移动打断后 _click_hold 残留"导致闸门泄漏。）
         self._click_hold = name in self.clicks
+        pp = getattr(self, 'predictive_prewarm', None)
+        if pp is not None:
+            pp.begin_anim(name)
         self._collision_local_bounds = None
         movie = self.lib.movie(name)
         self._connect_movie(name, movie)
@@ -2008,6 +2025,7 @@ class PetWindow(QWidget):
         # interval ×divisor + reader 背压阻塞，解码速率 ≈半帧率）。推送先于
         # 发布判定：WebMClip 在门控生效的那一帧起即按节流语义发布（见下）。
         self._sync_movie_throttle(reduced)
+        self._predict_prewarm(name, n)  # 批10-A1 帧驱动前置：墙钟剩余≤lead 时掷骰+预热
         if (reduced and not self._movie_decode_throttled()
                 and not self._is_reduced_publish_frame(n)):
             # 闲置降帧（解码未联动节流的播放器：GifClip / 测试替身）：
@@ -2653,35 +2671,59 @@ class PetWindow(QWidget):
     def _pick_next(self) -> None:
         """动画链：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动（空间不够回退动作）。
 
-        「不移动」模式下跳过移动分支，其概率并入动作 → 30% 待机 / 10% 转向 / 60% 动作。
+        「不移动」模式下跳过移动分支，其概率并入动作。批10-A1：先尝试消费预测
+        （context_anim 一致且代次未变，不符即弃），概率逻辑与预测共用 _roll_next。
         """
         if not self.acts:
-            # 角色包没有随机动作素材（仅核心动画）：需要 acts 的分支与回退
-            # 统一改走待机；待机也没有则保持当前动画，绝不 random.choice([]) 崩溃。
+            # 没有随机动作素材（仅核心动画）：需要 acts 的分支与回退统一走待机。
             if self.idles:
                 self._switch(self._pick(self.idles, exclude=self.anim))
             return
-        roll = random.random()
-        if roll < catalog.P_IDLE:
-            if self.idles:
-                self._switch(self._pick(self.idles, exclude=self.anim))
-            else:
+        pp = getattr(self, 'predictive_prewarm', None)
+        predicted = None
+        if pp is not None:
+            predicted = pp.consume(
+                context_anim=self.anim, exclude=self.anim,
+                gap_active=bool(self._animation_gap_active),
+                moves=self.moves,
+            )  # P2-3：move 产物豁免 exclude 撞名校验
+        if predicted is not None:
+            self._play_roll(predicted)
+            return
+        name = self._roll_next(self.anim)
+        if name is not None:
+            self._play_roll(name)
+
+    def _play_roll(self, name: str) -> None:
+        """执行掷骰结果：非移动名直接切换；移动名走 _try_move（含位移计划，失败/不移动回退动作池）。"""
+        if name in self.moves:
+            if self.no_move or not self._try_move(name):
                 self._switch(self._pick(self.acts, exclude=self.anim))
-        elif roll < catalog.P_TURN:
-            if self.turns:
-                self._switch(self._pick(self.turns, exclude=self.anim))
-            else:
-                self._switch(self._pick(self.acts, exclude=self.anim))
-        elif roll < catalog.P_ACTS:
-            self._switch(self._pick(self.acts, exclude=self.anim))
         else:
-            if self.no_move or not self._try_move():
-                self._switch(self._pick(self.acts, exclude=self.anim))
+            self._switch(name)
+
+    def _roll_next(self, exclude: str | None = None) -> str | None:
+        """掷骰纯函数（与预测共用同一份概率逻辑）：返回下一动画候选名。"""
+        return roll_next({'idles': self.idles, 'turns': self.turns,
+                          'acts': self.acts, 'moves': self.moves}, exclude)
+
+    def _predict_prewarm(self, name: str, n: int) -> None:
+        """帧驱动前置：墙钟剩余 ≤ lead 时掷骰并预热首帧（公式见 predictive_prewarm.on_frame）。"""
+        pp = getattr(self, 'predictive_prewarm', None)
+        if pp is None or not self.acts or self._animation_gap_active:
+            return
+        frames = self.lib.frames(name)
+        dur = self.lib.duration(name)
+        pp.on_frame(
+            name, n, frames, (frames / dur) if dur > 0 else 0.0,
+            getattr(self.movie, 'decode_throttle_divisor', 1) or 1,
+            self.predict_prewarm_lead_ms / 1000.0, exclude=self.anim,
+        )
 
     @staticmethod
     def _pick(pool: list[str], exclude: str | None = None) -> str:
-        entries = [n for n in pool if n != exclude] or pool
-        return random.choice(entries)
+        # 批10-A1 P2-6：采样逻辑单一事实来源在 predictive_prewarm.pick_from_pool。
+        return pick_from_pool(pool, exclude)
 
     # ================================================================ 移动
     def _try_move(self, name: str | None = None) -> bool:
@@ -3466,6 +3508,9 @@ class PetWindow(QWidget):
         # 会把旧按住误判成活跃交互、对库侧重新 begin_interaction()，松手事件
         # 却不再到来 → 库侧 hold 泄漏（与 _pause_activity 语义对齐）。
         self._reset_press_hold_state()
+        pp = getattr(self, 'predictive_prewarm', None)
+        if pp is not None:
+            pp.clear()
         super().hideEvent(event)
 
     def _show_context_menu(self, global_pos: QPoint) -> None:
@@ -3775,6 +3820,9 @@ class PetWindow(QWidget):
             1.0, min(3600.0, float(self.cfg.get('idle_low_fps_threshold',
                                                  IDLE_LOW_FPS_DEFAULT_THRESHOLD)))
         )
+        # 批10-A1 P2-2：预测预热提前量也即时生效（与其它白名单键一致）。
+        self.predict_prewarm_lead_ms = max(
+            200, min(600, int(self.cfg.get('predict_prewarm_lead_ms', 350))))
         desired_opacity = int(_float_or_default(self.cfg.get('pet_opacity', 100), 100, 10, 100))
         if desired_opacity != self.pet_opacity:
             self.set_pet_opacity(desired_opacity)

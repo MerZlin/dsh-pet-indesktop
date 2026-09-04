@@ -600,6 +600,9 @@ class Config:
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             "first_frame_cache_max_mb": 32,  # 首帧缓存全局预算（MB），低配机可调小
+            # 批10-A1 预测式接力预热：当前动画墙钟剩余 ≤ 该提前量（毫秒）时，
+            # 帧驱动提前掷骰决定下一动画并在后台预解码其首帧进 LRU（Phase 1）。
+            "predict_prewarm_lead_ms": 350,  # 提前量（ms），范围 200-600
             # 批5.2 spike（默认关）：开 = 「生小肥鱼」从 spawn 新进程改为进程内
             # 创建第二个 PetInstance。关 = 行为与现状逐位一致（回退保险）。
             "experimental_single_process_spawn": False,
@@ -733,6 +736,7 @@ class Config:
             "decode_broker_enabled",
             "media_prewarm",
             "first_frame_cache_max_mb",
+            "predict_prewarm_lead_ms",
             "experimental_single_process_spawn",
         ):
             if key in raw and raw[key] is not None:
@@ -875,6 +879,10 @@ class Config:
         self.data["first_frame_cache_max_mb"] = int(_float_or_default(
             self.data.get("first_frame_cache_max_mb"), 32, 4, 64
         ))
+        # 批10-A1 预测式预热提前量：夹到 [200, 600] 毫秒（默认 350）。
+        self.data["predict_prewarm_lead_ms"] = int(_float_or_default(
+            self.data.get("predict_prewarm_lead_ms"), 350, 200, 600
+        ))
         # 批5.2 spike 开关：同 decode_broker_enabled 规约，防字符串布尔误开。
         self.data["experimental_single_process_spawn"] = _bool_or_default(
             self.data.get("experimental_single_process_spawn"), False
@@ -953,7 +961,7 @@ class Config:
             "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
-            "media_prewarm", "first_frame_cache_max_mb",
+            "media_prewarm", "first_frame_cache_max_mb", "predict_prewarm_lead_ms",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()

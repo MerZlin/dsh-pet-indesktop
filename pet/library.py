@@ -29,6 +29,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QMovie
 
 from . import catalog
+from . import perfstats
 from .webm_clip import WebMClip
 
 
@@ -577,6 +578,48 @@ class MovieLibrary(QObject):
     def schedule_low_priority_warm(self) -> None:
         """应用层调用：UI 就绪后延迟补全随机动作池预热（2s 后 1 worker）。"""
         self._low_warm_timer.start()
+
+    def warm_predicted(self, name: str) -> None:
+        """批10-A1：后台预解码预测动画的首帧（Phase 1，尽力而为）。
+
+        GLM A-1 / A3：预测预热只复用「交互让路 / 隐藏暂停 / warm_first_frame
+        幂等」三重闸门，webm_clip.py 零改动；不预起 reader（Phase 2 挂起）。
+
+        - 交互让路（_await_interaction_clear）：拖拽/点击动画/右键菜单期间等待；
+        - 隐藏暂停（_warm_paused / 代次）：pause_warm 换代后作废，不复活；
+        - warm_first_frame 幂等：已有缓存直接返回，不重复拉起 ffmpeg。
+
+        预测预热只是消除首播卡顿的缓存；作废/未命中时最坏退化为今天的行为
+        （后台短命 ffmpeg 产物进 LRU，被逐出即自然回收）。
+
+        必须在 GUI 线程调用（self.movie(name) 按 QObject thread affinity 在
+        主线程创建 clip）；真正耗时的 ffmpeg 解码放到独立 daemon 线程。
+        """
+        if self._warm_paused:
+            return
+        clip = self.movie(name)
+        generation = self._warm_generation
+
+        def _run() -> None:
+            try:
+                if not self._await_interaction_clear(generation):
+                    return
+                if self._warm_paused or generation != self._warm_generation:
+                    return
+                warm = getattr(clip, 'warm_first_frame', None)
+                if not callable(warm):
+                    return
+                t0 = perfstats.clock() if perfstats.ENABLED else 0.0
+                warm()
+                if perfstats.ENABLED:
+                    perfstats.time('prewarm.ff_ms', perfstats.clock() - t0)
+            except Exception:
+                pass  # 预热失败不致命，后续播放按需同步解码
+
+        try:
+            threading.Thread(target=_run, daemon=True).start()
+        except Exception:
+            pass
 
     def movie(self, name: str):
         """按需创建并缓存 clip（懒加载）：启动时只创建实际用到/预热的动画。
