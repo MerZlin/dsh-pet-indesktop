@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 import shiboken6
 
 from PySide6.QtCore import (
@@ -1526,8 +1528,14 @@ class PetWindow(QWidget):
         logging.info("全屏监视线程已启动")
 
     def _stop_fs_watch(self) -> None:
-        """停止全屏监视线程（不 join，线程 1s 内自行退出，绝不卡 UI）。"""
+        """停止全屏监视线程，并等待其退出（线程不会触碰 Qt UI）。"""
         self._fs_stop.set()
+        thread = self._fs_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.2)
+            if not thread.is_alive():
+                self._fs_thread = None
+
 
     def _fs_watch_loop(self) -> None:
         """后台轮询光标与前台窗口，分别使用 20Hz 与 1Hz 节拍。"""
@@ -2141,9 +2149,12 @@ class PetWindow(QWidget):
             if name in self.idles or name in self.turns:
                 self._play_animation_gap_step()
             else:
-                # 异常状态（gap 期间播了非待机/转向动画）：兜底推进动画链，
-                # 避免 return 后动画链停摆
-                self._pick_next()
+                # gap 期间只允许待机/转向自然续播；其他结束回调不能
+                # 绕过剩余计时直接推进动作链。
+                logger.warning(
+                    "animation ended during gap with non-gap clip: name=%r anim=%r",
+                    name, self.anim,
+                )
             return
         if self.animation_gap_seconds > 0 and (name in self.acts or name in self.moves):
             self._start_animation_gap()
@@ -2168,7 +2179,13 @@ class PetWindow(QWidget):
             self._switch(self._pick(pool, exclude=self.anim))
 
     def _on_animation_gap_timeout(self) -> None:
+        logger.info(
+            "animation gap timeout: anim=%r gap_active=%s timer_active=%s",
+            self.anim, self._animation_gap_active,
+            self._animation_gap_timer.isActive(),
+        )
         self._animation_gap_active = False
+        self._pick_next()
 
     def _pick_next(self) -> None:
         """动画链：30% 待机 / 10% 转向 / 40% 动作 / 20% 移动（空间不够回退动作）。
@@ -2638,6 +2655,13 @@ class PetWindow(QWidget):
         self._just_dragged = False
 
     def _on_speech_bubble_clicked(self) -> None:
+        # 交互/告警气泡的主体点击必须是 no-op；只有普通无按钮气泡可打开对话栏。
+        # 以实际展示状态判断，不依赖气泡文案关键词。按钮自身仍由气泡控件处理。
+        bubble = getattr(self, "_speech_bubble", None)
+        if (getattr(self, "_sticky_bubble_active", False)
+                or getattr(bubble, "_interactive_active", False)
+                or getattr(self, "_alert_current", None) is not None):
+            return
         if callable(getattr(self, "on_open_quick_chat", None)):
             self.on_open_quick_chat()
 
@@ -2650,6 +2674,10 @@ class PetWindow(QWidget):
         if bubble is None or not bubble.isVisible():
             return False
         if not bubble.geometry().contains(global_pos):
+            return False
+        if (getattr(self, "_sticky_bubble_active", False)
+                or getattr(bubble, "_interactive_active", False)
+                or getattr(self, "_alert_current", None) is not None):
             return False
         callback()
         return True
@@ -2930,6 +2958,19 @@ class PetWindow(QWidget):
             delay += self._self_talk_duration_seconds
         self._self_talk_timer.start(max(1000, int(round(delay * 1000))))
 
+    def _expression_style_text(self, text: str) -> str:
+        """Apply the shared expression style only to built-in self-talk text."""
+        if text not in DEFAULT_SELF_TALK_TEXTS:
+            return text
+        mode = str(self.cfg.get("dialogue_mode", "legacy") or "legacy")
+        from .persona_phrases import PhrasePicker
+        picker = getattr(self, "_expression_picker", None)
+        if picker is None:
+            picker = self._expression_picker = PhrasePicker()
+        if mode == "custom":
+            return picker.custom(self.cfg.get("dialogue_phrases", {}), "thinking", text)
+        return picker.get(mode, "thinking", text)
+
     def _show_self_talk_text(self, text: str) -> bool:
         if getattr(self, "_bubble_suppressed", False):
             return False
@@ -2946,7 +2987,7 @@ class PetWindow(QWidget):
             return False
 
         # 审批等一直挂着的气泡优先，自言自语不覆盖
-        if self._sticky_bubble_active or self._alert_current is not None:
+        if getattr(self, "_sticky_bubble_active", False) or getattr(self, "_alert_current", None) is not None:
             return False
 
         # 惰性剔除运行期间被删除的图片
@@ -3008,11 +3049,39 @@ class PetWindow(QWidget):
         """声明重要气泡占用时长（自言自语在此期间让路）。"""
         self._bubble_busy_until = max(self._bubble_busy_until, time.time() + max(0.0, seconds))
 
+    @staticmethod
+    def _alert_survives_suppression(alert_type: str, *, sticky: bool, buttons, priority: int) -> bool:
+        """Settings only suppress ordinary presentation; stateful events survive."""
+        kind = str(alert_type or "").strip().lower()
+        if kind in {
+            "approval", "question", "interaction", "approval/resolved", "question/resolved",
+            "interaction/resolved", "control", "control-result", "bridge/control-result",
+            "watchdog/control-result", "lifecycle", "turn/end", "task_complete",
+            "execution/failed", "agent/request-error", "session/end", "balance",
+        }:
+            return True
+        return bool(sticky or buttons) and int(priority) <= 1
+
     def set_bubble_suppressed(self, suppressed: bool) -> None:
         """设置窗口打开期间暂停气泡显示；True 时立即隐藏当前气泡。"""
         self._bubble_suppressed = bool(suppressed)
         if self._bubble_suppressed:
             self._speech_bubble.hide()
+        else:
+            current = getattr(self, "_alert_current", None)
+            if current is not None and PetWindow._alert_survives_suppression(
+                    current.get("alertType", ""), sticky=bool(current.get("sticky")),
+                    buttons=current.get("buttons"), priority=int(current.get("priority", 3))):
+                if current.get("sticky"):
+                    self._speech_bubble.show_text(
+                        current["text"], self.visible_content_rect(), 0,
+                        pet_scale=self.scale, subtitle=current.get("subtitle", ""),
+                        sticky=True, buttons=current.get("buttons"),
+                    )
+            elif current is None:
+                pump = getattr(self, "_pump_alerts", None)
+                if callable(pump):
+                    pump()
 
     def _check_music_sing(self) -> None:
         """检测后台音乐并自动播放唱歌动画（可配置开关）。
@@ -3041,19 +3110,11 @@ class PetWindow(QWidget):
                    buttons: list[tuple[str, object]] | None = None,
                    sticky: bool = True, alert_id: str = "", priority: int = 3,
                    alert_type: str = "watchdog", metadata: dict | None = None) -> None:
-        """提醒消息队列：需要用户注意的提醒统一入队，一次只展示一个。
-
-        - 审批/问题（sticky=True）：一直挂到上层 resolve_alert/hide_bubble 收尾；
-        - 硬失败/卡住介入（sticky=False + duration_ms）：限时展示后自动弹下一条。
-        当前有提醒在展示时，普通 show_bubble 一律让路，绝不覆盖审批弹窗。
-
-        ``alert_id`` 用于精确定位某条提醒（如某 agent 的审批），resolve 时只关
-        自己，不误关其他排队中的提醒。同 id 提醒重复到达时**就地升级**而不是
-        再排一条：同一审批可能先后到达「无 rpcId 提示 → 带 rpcId 交互」两条
-        记录（桥接双通道/竞态），若排成两条，第二条会被当前展示压住，待第一条
-        resolved 后才弹出，其按钮已绑到已结束的审批——表现为「先无按钮、后弹出
-        的按钮绑错事件」。"""
-        if not self.isVisible() or self._bubble_suppressed:
+        """提醒消息队列：需要用户注意的提醒统一入队，一次只展示一个。"""
+        if not self.isVisible():
+            return
+        if self._bubble_suppressed and not PetWindow._alert_survives_suppression(
+                alert_type, sticky=sticky, buttons=buttons, priority=priority):
             return
         item = {
             "id": alert_id or "",
@@ -3309,9 +3370,16 @@ class PetWindow(QWidget):
             self.set_pet_opacity(desired_opacity)
         else:
             self._apply_opacity()  # 首次/未变时也确保窗口已应用
+        previous_gap = self.animation_gap_seconds
         self.animation_gap_seconds = max(0.0, min(3600.0, float(self.cfg.get('animation_gap_seconds', 0.0))))
         if self.animation_gap_seconds <= 0:
             self._cancel_animation_gap()
+        elif self._animation_gap_active and (
+                abs(previous_gap - self.animation_gap_seconds) >= 0.001
+                or not self._animation_gap_timer.isActive()):
+            self._animation_gap_timer.start(
+                max(1, int(round(self.animation_gap_seconds * 1000)))
+            )
         self._music_sing_enabled = bool(self.cfg.get('music_sing_enabled', False))
         self._self_talk_enabled = bool(self.cfg.get('self_talk_enabled', False))
         self._speech_bubble.set_style(
@@ -3348,6 +3416,10 @@ class PetWindow(QWidget):
         self.cfg.save()
         if self.animation_gap_seconds <= 0:
             self._cancel_animation_gap()
+        elif self._animation_gap_active:
+            self._animation_gap_timer.start(
+                max(1, int(round(self.animation_gap_seconds * 1000)))
+            )
 
     def set_self_talk_settings(
         self,

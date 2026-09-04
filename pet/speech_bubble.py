@@ -33,6 +33,13 @@ SELF_TALK_IMAGE_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
 }
 
+# 交互按钮行里除 ``(label, callback)`` 按钮外的结构化行标记：
+# - (SECTION_HEADER_LABEL, text) —— 分支/小节标题（独占一行、加粗）
+# - (SECTION_HINT_LABEL, text)  —— 灰色提示行（独占一行）
+# 由 agent_link 的多分支问题收集模式生成，SpeechBubble 负责渲染。
+SECTION_HEADER_LABEL = "__pet_section_header__"
+SECTION_HINT_LABEL = "__pet_section_hint__"
+
 
 class FlowLayout(QLayout):
     """流式布局：子项超出可用宽度时自动换行（按钮行专用）。
@@ -651,7 +658,14 @@ class PetSpeechBubble(QFrame):
             self._hide_timer.start(max(500, int(duration_ms)))
 
     def _setup_buttons(self, buttons: list[tuple[str, object]]) -> None:
-        """清空旧按钮并按 (label, callback) 重建按钮行（仅交互气泡用）。"""
+        """清空旧按钮并按元素重建按钮行（仅交互气泡用）。
+
+        元素除普通 ``(label, callback)`` 按钮外，还支持两类结构化行：
+        - ``("__header__", text)``：分支标题行（独占一行、加粗）——多分支问题
+          弹窗按分支分组展示的标题。
+        - ``("__hint__", text)``：灰色提示行（独占一行）——例如自由文本问题
+          「请到 DSH 界面输入文本回答」。
+        """
         while self._button_layout.count():
             item = self._button_layout.takeAt(0)
             w = item.widget()
@@ -659,6 +673,31 @@ class PetSpeechBubble(QFrame):
                 w.deleteLater()
         self._interactive_buttons = []
         for label, callback in buttons:
+            if label == SECTION_HEADER_LABEL:
+                header = QLabel(str(callback), self._button_row)
+                header.setObjectName("pet-speech-branch-header")
+                header.setWordWrap(True)
+                header.setFixedWidth(220)
+                header.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                header.setStyleSheet(
+                    "QLabel { background: transparent; border: none;"
+                    " font-weight:600; font-size:11px; color:#2b3a4a;"
+                    " padding:2px 0 0 0; }"
+                )
+                self._button_layout.addWidget(header)
+                continue
+            if label == SECTION_HINT_LABEL:
+                hint = QLabel(str(callback), self._button_row)
+                hint.setObjectName("pet-speech-branch-hint")
+                hint.setWordWrap(True)
+                hint.setFixedWidth(220)
+                hint.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                hint.setStyleSheet(
+                    "QLabel { background: transparent; border: none;"
+                    " font-size:10px; color:#7a8a9a; padding:1px 0 0 0; }"
+                )
+                self._button_layout.addWidget(hint)
+                continue
             btn = QPushButton(str(label), self._button_row)
             btn.setObjectName("pet-speech-button")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)

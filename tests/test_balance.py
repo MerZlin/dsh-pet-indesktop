@@ -184,3 +184,37 @@ def test_chat_session_title_roundtrip():
     data = session.to_dict()
     data.pop("title")
     assert ChatSession.from_dict(data).title == ""
+
+
+def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QApplication
+    from pet.app import PetApp
+    from pet.config import Config
+    app = QApplication.instance() or QApplication([])
+    owner = PetApp(app, Config(base=tmp_path))
+    owner.win = type("Win", (), {"isVisible": lambda self: True})()
+    monkeypatch.setattr(owner, "_read_balance_file_cache", lambda *_: None)
+    class Settings:
+        active_config = type("Provider", (), {"id":"x", "base_url":"https://x", "api_key":"k", "verify_ssl":True})()
+    monkeypatch.setattr(owner.config, "chat_settings", lambda: Settings())
+    monkeypatch.setattr(owner.config, "resolve_api_key", lambda p: "k")
+    class BrokenThread:
+        def __init__(self, *a, **k): pass
+        def start(self): raise RuntimeError("cannot start")
+    monkeypatch.setattr("pet.app.threading.Thread", BrokenThread)
+    owner.show_balance(owner.win)
+    assert owner._balance_busy is False
+
+
+def test_menu_balance_action_calls_bound_window_callback():
+    from PySide6.QtWidgets import QApplication, QMenu
+    from pet.context_menus.shared import add_balance
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    pet = type("Pet", (), {"on_show_balance": lambda self, parent=None: calls.append(parent)})()
+    menu = QMenu()
+    action = add_balance(menu, pet, icons=False)
+    assert action is not None
+    action.trigger()
+    app.processEvents()
+    assert calls == [pet]

@@ -175,11 +175,59 @@ def test_show_bubble_yields_when_alert_active(win):
     assert win._speech_bubble.shown[-1]["text"] == "审批一"
 
 
-def test_show_bubble_works_when_no_alert(win):
-    """无提醒时普通气泡正常显示。"""
-    win.show_bubble("普通气泡", duration_ms=3000)
+def test_bubble_body_opens_quick_chat_only_for_plain_bubble(win):
+    """普通无按钮气泡主体点击仍打开快速对话。"""
+    opened = []
+    win.on_open_quick_chat = lambda: opened.append(True)
+    win.show_bubble("普通气泡")
     assert win._speech_bubble.shown[-1]["text"] == "普通气泡"
     assert win._speech_bubble.shown[-1]["sticky"] is False
+    win._on_speech_bubble_clicked()
+    assert opened == [True]
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ["同意", "拒绝"],
+        ["终止", "重试终止"],
+        ["不要", "终止"],
+    ],
+)
+def test_interactive_bubble_body_does_not_open_quick_chat(win, labels):
+    """带决定/控制按钮的气泡主体点击不应打开快速对话。"""
+    opened = []
+    win.on_open_quick_chat = lambda: opened.append(True)
+    win.show_alert(
+        "请选择", buttons=[(label, lambda: None) for label in labels],
+        sticky=True, alert_id="interactive",
+    )
+    win._on_speech_bubble_clicked()
+    assert opened == []
+
+
+def test_interactive_button_callback_still_runs_and_closes(win):
+    actions = []
+    win.show_alert(
+        "提醒", buttons=[("关闭提醒", lambda: (actions.append(True), win.resolve_alert("close")))],
+        sticky=True, alert_id="close",
+    )
+    callback = win._speech_bubble.shown[-1]["buttons"][0][1]
+    callback()
+    assert actions == [True]
+    assert win._alert_current is None
+    assert win._sticky_bubble_active is False
+    win._on_speech_bubble_clicked()
+
+
+def test_plain_and_interactive_bubble_clicks_are_independent(win):
+    opened = []
+    win.on_open_quick_chat = lambda: opened.append(True)
+    win.show_bubble("普通气泡")
+    win._on_speech_bubble_clicked()
+    win.show_alert("审批", buttons=[("同意", lambda: None)], sticky=True, alert_id="mixed")
+    win._on_speech_bubble_clicked()
+    assert opened == [True]
 
 
 def test_sticky_alert_is_sticky(win):

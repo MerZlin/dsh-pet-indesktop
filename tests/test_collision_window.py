@@ -384,6 +384,56 @@ def test_click_suppressed_for_120ms_after_impulse(tmp_path, app):
     win.close()
 
 
+def test_animation_gap_timeout_resumes_animation_chain(tmp_path, app):
+    """动画等待间隔结束后必须继续选择下一段动画，而不是停在待机。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win.animation_gap_seconds = 10.0
+    win._animation_gap_active = True
+    calls = []
+    win._pick_next = lambda: calls.append("next")
+
+    win._on_animation_gap_timeout()
+
+    assert win._animation_gap_active is False
+    assert calls == ["next"]
+    win.close()
+
+
+def test_animation_gap_uses_configured_ten_seconds_timer(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win.animation_gap_seconds = 10.0
+    win._play_animation_gap_step = lambda: None
+    win._start_animation_gap()
+    assert win._animation_gap_active is True
+    assert win._animation_gap_timer.isSingleShot() is True
+    assert win._animation_gap_timer.interval() == 10000
+    assert win._animation_gap_timer.isActive() is True
+    win._cancel_animation_gap()
+    win.close()
+
+
+def test_action_completion_starts_real_gap_state(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win.animation_gap_seconds = 10.0
+    calls = []
+    win._start_animation_gap = lambda: calls.append("gap")
+    win._on_anim_ended(win.acts[0])
+    assert calls == ["gap"]
+    win.close()
+
+
+def test_refresh_pet_settings_restarts_active_animation_gap_timer(tmp_path, app):
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win.cfg.set("animation_gap_seconds", 10.0)
+    win._animation_gap_active = True
+    win._animation_gap_timer.start(1000)
+    win.refresh_pet_settings()
+    assert win.animation_gap_seconds == pytest.approx(10.0)
+    assert win._animation_gap_timer.isActive() is True
+    assert win._animation_gap_timer.interval() == 10000
+    win._cancel_animation_gap()
+    win.close()
+
 def test_dragging_reports_position_delta_velocity_not_phys_vel(tmp_path, app):
     """6. 拖拽中上报的 vx/vy 是位置差分而非 _phys_vel。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
@@ -404,7 +454,6 @@ def test_dragging_reports_position_delta_velocity_not_phys_vel(tmp_path, app):
     state = session.submitted_states[-1]
     assert state["vx"] == pytest.approx(200.0, abs=1.0)
     assert state["vy"] == pytest.approx(100.0, abs=1.0)
-    # _phys_vel 仍为 0.0，证明上报的是差分速度
     assert win._phys_vel == [0.0, 0.0]
 
     win.close()

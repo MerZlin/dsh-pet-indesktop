@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from pet import catalog
+from pet import webm_clip as webm_clip_module
 from pet.webm_clip import WebMClip
 
 

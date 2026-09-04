@@ -58,7 +58,13 @@ class _BalanceBridge(_BackgroundResult):
         if self.win is None or not shiboken6.isValid(self.win):
             return
         if not ok:
-            self.win.show_bubble(str(payload), duration_ms=6000)
+            text = str(payload)
+            if (getattr(self.win, "_alert_current", None) is not None
+                    or getattr(self.win, "_bubble_suppressed", False)):
+                self.win.show_alert(text, duration_ms=6000, sticky=False,
+                                    priority=2, alert_type="balance")
+            else:
+                self.win.show_bubble(text, duration_ms=6000)
             return
         _show_balance_payload(self.win, payload)
         if self.owner is not None and hasattr(self.owner, "_update_island_balance"):
@@ -107,10 +113,17 @@ def _show_balance_payload(win, payload) -> None:
             peak_label=peak_label, idle_label=idle_label,
         )
     text = _persona_text(win, "balance.result", text, text=text)
-    win.show_bubble(
-        text, duration_ms=6000,
-        subtitle=subtitle,
-    )
+    if (getattr(win, "_alert_current", None) is not None
+            or getattr(win, "_bubble_suppressed", False)):
+        win.show_alert(
+            text, subtitle=subtitle, duration_ms=6000, sticky=False,
+            priority=2, alert_type="balance",
+        )
+    else:
+        win.show_bubble(
+            text, duration_ms=6000,
+            subtitle=subtitle,
+        )
     # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
     p = balance_mod.balance_percent(info.get("total"))
     if p is not None:
@@ -376,18 +389,33 @@ class PetApp:
             return
         self._balance_busy = True
         # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
-        # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
-        # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
-        QTimer.singleShot(0, lambda: win.show_bubble(
-            _persona_text(win, "balance.loading", "让我看看余额…"), duration_ms=6000
-        ))
+        # AppKit 抑制；回调再次探活，避免窗口销毁后触碰 Qt 对象。
+        def window_is_visible() -> bool:
+            try:
+                return win is not None and shiboken6.isValid(win) and win.isVisible()
+            except (TypeError, RuntimeError, AttributeError):
+                return False
+
+        def show_loading() -> None:
+            if window_is_visible():
+                win.show_bubble(
+                    _persona_text(win, "balance.loading", "让我看看余额…"), duration_ms=6000
+                )
+        QTimer.singleShot(0, show_loading)
         bridge = _BalanceBridge(win, owner=self)
         self._balance_bridge = bridge
-        threading.Thread(
-            target=self._balance_worker,
-            args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
-            daemon=True, name='pet-balance',
-        ).start()
+        try:
+            threading.Thread(
+                target=self._balance_worker,
+                args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
+                daemon=True, name='pet-balance',
+            ).start()
+        except Exception as exc:  # 线程创建/启动失败也不能永久 busy
+            self._balance_busy = False
+            if window_is_visible():
+                QTimer.singleShot(0, lambda error_text=f"余额查询失败：{exc}": bridge.done.emit(
+                    False, error_text
+                ))
 
     def _balance_worker(self, bridge, base_url: str, api_key: str, verify_ssl: bool, provider_key: str = '') -> None:
         try:
@@ -1041,9 +1069,7 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
 
         config = Config(instance_id=instance_id)
 
-        _mac_set_dock_icon_visible(
-            bool(config.get("show_dock_icon", True))
-        )
+        _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
 
         _setup_logging(config)
 

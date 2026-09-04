@@ -15,6 +15,7 @@ v4.1 扩展（同步上游 dsh-pet 余额动画）：
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from datetime import datetime, time, timedelta, timezone
@@ -68,11 +69,18 @@ def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0,
                                     context=_ssl_context(verify_ssl)) as resp:
             data = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
-        raise BalanceError(f'HTTP {exc.code}（该端点可能不支持余额查询）') from exc
+        raise BalanceError(f'HTTP {exc.code}') from exc
+    except (socket.timeout, TimeoutError) as exc:
+        raise BalanceError('请求超时') from exc
     except urllib.error.URLError as exc:
+        reason = str(exc.reason or '')
+        if 'timed out' in reason.lower() or 'timeout' in reason.lower():
+            raise BalanceError('请求超时') from exc
         raise BalanceError(f'网络连接失败：{exc.reason}') from exc
+    except json.JSONDecodeError as exc:
+        raise BalanceError('返回数据无效') from exc
     except (OSError, ValueError) as exc:
-        raise BalanceError(str(exc)) from exc
+        raise BalanceError(f'返回数据无效：{exc}') from exc
     infos = data.get('balance_infos') if isinstance(data, dict) else None
     if not infos:
         raise BalanceError('响应中没有余额信息')

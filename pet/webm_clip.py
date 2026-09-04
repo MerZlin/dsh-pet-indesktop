@@ -134,19 +134,23 @@ class WebMClip(QObject):
             pass  # 解释器退出期 Qt C++ 对象可能已先销毁，此时无需清理
 
     def cleanup(self) -> None:
-        """销毁或清理时对所有 retired 线程做最后一次有界等待（每个 ≤500ms）。"""
+        """停止播放并等待所有 reader 线程退出。"""
         try:
             self.stop()
         except RuntimeError:
             pass  # QTimer 等 Qt 子对象已随 C++ 侧销毁
+        # stop() 会把当前 reader 放入 _retired。这里必须等待它们真正退出；
+        # imageio-ffmpeg 关闭生成器时可能需要等待 ffmpeg 的收尾线程，短暂
+        # 的 500ms 等待会把 LogCatcher 留到测试/进程退出之后。
         retired = list(self._retired)
-        self._retired.clear()
         for t in retired:
             if t.is_alive():
                 try:
-                    t.join(timeout=0.5)
+                    t.join(timeout=5.0)
                 except Exception:
                     pass
+        self._retired.difference_update(retired)
+        self._sweep_retired()
 
     def _sweep_retired(self) -> None:
         """探活回收已退出的线程（只清理已死的，活的不动）。"""
@@ -264,8 +268,9 @@ class WebMClip(QObject):
         self._timer.stop()
         if self._stop_evt is not None:
             self._stop_evt.set()
-        if self._thread is not None:
-            self._retired.add(self._thread)
+        thread = self._thread
+        if thread is not None:
+            self._retired.add(thread)
             self._thread = None
             QTimer.singleShot(5000, self._sweep_retired)
 
@@ -375,8 +380,9 @@ class WebMClip(QObject):
                 try:
                     q.put(frame, timeout=0.2)
                 except queue.Full:
-                    # 队列满说明 UI 消费不过来；丢弃这一帧，保持实时性
-                    pass
+                    # 队列满说明 UI 消费不过来；等待主线程消费，保持
+                    # 视频时间轴，不让后台解码速度决定动画播放速度。
+                    continue
             # 正常播完时放入结束标记。主线程可能正忙（队列满、帧被丢弃），
             # 必须循环重试直到放入或收到停止信号；否则“最后一帧被丢弃且
             # 结束标记也丢失”会让上层永远等不到播完，动画链卡死在最后一帧。
