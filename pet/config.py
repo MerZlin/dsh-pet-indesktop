@@ -600,6 +600,9 @@ class Config:
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             "first_frame_cache_max_mb": 32,  # 首帧缓存全局预算（MB），低配机可调小
+            # 批5.2 spike（默认关）：开 = 「生小肥鱼」从 spawn 新进程改为进程内
+            # 创建第二个 PetInstance。关 = 行为与现状逐位一致（回退保险）。
+            "experimental_single_process_spawn": False,
             "chat": _default_chat_data(),
         }
         self.reload()
@@ -730,6 +733,7 @@ class Config:
             "decode_broker_enabled",
             "media_prewarm",
             "first_frame_cache_max_mb",
+            "experimental_single_process_spawn",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -871,6 +875,10 @@ class Config:
         self.data["first_frame_cache_max_mb"] = int(_float_or_default(
             self.data.get("first_frame_cache_max_mb"), 32, 4, 64
         ))
+        # 批5.2 spike 开关：同 decode_broker_enabled 规约，防字符串布尔误开。
+        self.data["experimental_single_process_spawn"] = _bool_or_default(
+            self.data.get("experimental_single_process_spawn"), False
+        )
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):

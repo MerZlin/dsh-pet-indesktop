@@ -334,10 +334,14 @@ class PetWindow(QWidget):
     _last_dpr_poll_at = 0.0    # moveEvent 的 DPR 兜底轮询 10Hz 限频用
 
     def __init__(self, lib: MovieLibrary, config: Config, collision_session=None,
-                 broker_facade=None, *, clock=None) -> None:
+                 broker_facade=None, *, clock=None, single_process_spawn: bool = False) -> None:
         super().__init__()
         self.lib = lib
         self.cfg = config
+        # 批5.2 N-1（复审阻塞项）：进程级 flag 快照必须在 __init__ 早期就位——
+        # 尾部 _restore_position() 会写/读 runtime 标记，若等构造返回后再注入，
+        # flag 开下每个窗的初始标记都会错用旧名（两窗互踩）。
+        self._single_process_spawn = bool(single_process_spawn)
         # P3 broker：PetApp 注入的 BrokerFacade（GUI 线程编排器；默认 None =
         # broker 关，窗口全部 broker 分支 no-op，与历史行为逐位一致）。
         self._broker_facade = broker_facade
@@ -373,6 +377,7 @@ class PetWindow(QWidget):
         self.on_restore_fun_windows = None
         self.on_spawn_pet = None
         self.on_hidden = None  # 由 app 注入：用户主动隐藏时弹托盘提示
+        self.on_exit_window = None  # 由 app 注入：批5.2「退出这只」窗级退出回调
         self._position_listeners = []
         self._position_sync_pending = False  # moveEvent 同帧合并：气泡/监听器 0ms 去抖待处理
         self._animation_icon_image_cache: dict[str, QImage] = {}
@@ -640,7 +645,7 @@ class PetWindow(QWidget):
         # 碰撞会话 attach/detach、状态上报、快照/冲量接收、predicted 本地预测
         # 及碰撞相关状态字段已迁至 CollisionClient（批 6-4）；窗口保留组合与
         # 薄委托，对外行为（碰撞反应、音效、弹开）一丝不变。
-        self._collision_app_session = None  # PetApp 持有的 IPC facade（重挂用）
+        self._collision_app_session = None  # AppShell 持有的 IPC facade（重挂用）
         self._collision_client = CollisionClient(
             self,
             thrown=THROWN,
@@ -983,29 +988,48 @@ class PetWindow(QWidget):
         """
         return slot_manager_mod.pid_alive(pid)
 
+    def _runtime_marker_versioned(self) -> bool:
+        """批5.2 R4：本窗 runtime 标记是否用版本化新名。
+
+        P1-2/N-1：读取构造参数注入的进程级 flag 快照（_single_process_spawn，
+        __init__ 早期就位，先于 _restore_position 的标记读写），不读每窗
+        config——第二窗 config-slot-N 里 `experimental_single_process_spawn`
+        无意义（进程级事实）。
+        """
+        return bool(getattr(self, '_single_process_spawn', False))
+
     def _live_instance_rects(self) -> list[tuple[int, int, int, int]]:
-        """其他存活实例的窗口矩形（配置目录下 runtime-<pid>.json 标记）。
+        """其他存活实例的窗口矩形（runtime-<pid>.json / pet-runtime-v2-* 标记）。
 
         死进程/损坏文件的标记由 slot_manager.read_live_instances 顺手清理，
-        避免越积越多。
+        避免越积越多。批5.2 多窗同 pid 下排除「本窗自己的标记」而不按 pid
+        过滤（否则会把同进程其它窗一并排除）。
         """
+        own_marker = slot_manager_mod.runtime_marker_path(
+            self.cfg.dir, self.cfg.instance_id,
+            versioned=self._runtime_marker_versioned(),
+        )
         rects: list[tuple[int, int, int, int]] = []
         for _pid, x, y, w, h in slot_manager_mod.read_live_instances(
-                self.cfg.dir, exclude_pid=os.getpid(), pid_alive_fn=self._pid_alive):
+                self.cfg.dir, exclude_markers=[own_marker], pid_alive_fn=self._pid_alive):
             if w > 0 and h > 0:
                 rects.append((x, y, w, h))
         return rects
 
     def _write_runtime_marker(self) -> None:
         """登记本实例的当前位置，供后启动的实例避让。"""
-        try:
-            marker = self.cfg.dir / f'runtime-{os.getpid()}.json'
-            marker.write_text(json.dumps({
-                'pid': os.getpid(),
-                'x': self.x(), 'y': self.y(), 'w': self._w, 'h': self._h,
-            }), encoding='utf-8')
-        except OSError:
-            pass
+        slot_manager_mod.write_runtime_marker(
+            self.cfg.dir, self.cfg.instance_id,
+            self.x(), self.y(), self._w, self._h,
+            versioned=self._runtime_marker_versioned(),
+        )
+
+    def remove_runtime_marker(self) -> None:
+        """删除本窗 runtime 标记（「退出这只」显式清，防活 pid 陈旧标记虚增计数）。"""
+        slot_manager_mod.delete_runtime_marker(
+            self.cfg.dir, self.cfg.instance_id,
+            versioned=self._runtime_marker_versioned(),
+        )
 
     def _save_position(self) -> None:
         """以"窗口中心相对屏幕可用区的比例"持久化位置（分辨率变化后仍正确）。
@@ -1199,7 +1223,7 @@ class PetWindow(QWidget):
             self.lib.resume_warm()
 
     def attach_collision_session(self, session) -> None:
-        """绑定 PetApp 持有的 IPC facade，GUI 不接触 socket。"""
+        """绑定 AppShell 持有的 IPC facade，GUI 不接触 socket。"""
         self._collision_app_session = session
         self._collision_client.attach(session)
         # P3 broker：attach 尾部 bind —— 把注入且启用的 BrokerFacade 绑到本窗口
@@ -1366,7 +1390,7 @@ class PetWindow(QWidget):
 
     @property
     def collision_app_session(self):
-        """PetApp 持有的 IPC facade（只读 seam，供 CollisionClient 策略兜底同步）。"""
+        """AppShell 持有的 IPC facade（只读 seam，供 CollisionClient 策略兜底同步）。"""
         return self._collision_app_session
 
     @property
@@ -4135,8 +4159,18 @@ class PetWindow(QWidget):
         # can leave that native menu loop alive (notably on macOS), making the
         # command appear to do nothing. End menu tracking first, then quit on
         # the next GUI event-cycle.
+        exit_fn = getattr(self, "on_exit_window", None)
         menu = getattr(self, "_active_context_menu", None)
         app = QApplication.instance()
+        # 批5.2：右键「退出」→ 窗级「退出这只」（on_exit_window 由 app 注入）。
+        # flag 关时 on_exit_window 未注入 → 回退到原「退出应用」语义（逐位一致）。
+        if exit_fn is not None and callable(exit_fn):
+            if menu is not None:
+                menu.close()
+                QTimer.singleShot(0, exit_fn)
+                return
+            exit_fn()
+            return
         if app is None:
             return
         if menu is not None:

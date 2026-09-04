@@ -448,23 +448,101 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
+# --- 批5.2 R4：runtime 标记格式版本化（多窗每窗一份，旧 glob 不匹配）--------
+# 旧版（runtime-<pid>.json）用 glob('runtime-*.json') 读取；为避免新旧混跑时
+# 旧版把新版标记也计入「存活实例」而虚高计数（预算被错误压小），新版标记
+# 改用不与 'runtime-*.json' 匹配的 pet-runtime-v2-<pid>-slot-<N>.json 前缀。
+_RUNTIME_V2_PREFIX = "pet-runtime-v2-"
+
+
+def _slot_label(instance_id: str) -> str:
+    """从 instance_id 提取 slot 标签（用于 runtime 标记文件名）。"""
+    s = str(instance_id or "").strip()
+    if not s or s == "slot-0":
+        return "0"
+    if s.startswith("slot-"):
+        return s[len("slot-"):] or "0"
+    return re.sub(r"[^A-Za-z0-9_-]", "_", s) or "0"
+
+
+def runtime_marker_name(instance_id: str = "", *, versioned: bool = False) -> str:
+    """返回某窗 runtime 标记文件名。versioned=False 用旧名
+    runtime-<pid>.json（单窗/flag 关时保持旧行为）；True 用版本化新名
+    pet-runtime-v2-<pid>-slot-<N>.json（批5.2 多窗，规避旧 glob 匹配）。"""
+    pid = os.getpid()
+    if versioned:
+        return f"{_RUNTIME_V2_PREFIX}{pid}-slot-{_slot_label(instance_id)}.json"
+    return f"runtime-{pid}.json"
+
+
+def runtime_marker_path(config_dir: Path | str, instance_id: str = "",
+                        *, versioned: bool = False) -> Path:
+    """返回某窗 runtime 标记的完整路径。"""
+    return Path(config_dir) / runtime_marker_name(instance_id, versioned=versioned)
+
+
+def write_runtime_marker(config_dir: Path | str, instance_id: str,
+                         x: int, y: int, w: int, h: int,
+                         *, versioned: bool = False) -> Path:
+    """写入本窗 runtime 标记（旧格式仅主窗/pflag 关时用；versioned 多窗用）。
+
+    写版本化标记时顺手清掉同 pid 的旧格式标记，避免同进程混用重复计数。
+    """
+    path = runtime_marker_path(config_dir, instance_id, versioned=versioned)
+    try:
+        if versioned:
+            legacy = Path(config_dir) / f"runtime-{os.getpid()}.json"
+            try:
+                if legacy.exists():
+                    legacy.unlink()
+            except OSError:
+                pass
+        path.write_text(json.dumps({
+            'pid': os.getpid(),
+            'x': int(x), 'y': int(y), 'w': int(w), 'h': int(h),
+        }), encoding='utf-8')
+    except OSError:
+        pass
+    return path
+
+
+def delete_runtime_marker(config_dir: Path | str, instance_id: str = "",
+                          *, versioned: bool = True) -> None:
+    """删除本窗 runtime 标记（「退出这只」必须显式删，否则活 pid 的陈旧
+    标记永久虚增计数/避让错乱）。新旧两种命名都尝试删（跨格式迁移兜底）。"""
+    for ver in (bool(versioned), not bool(versioned)):
+        try:
+            path = runtime_marker_path(config_dir, instance_id, versioned=ver)
+            if path.exists():
+                path.unlink()
+        except OSError:
+            pass
+
+
 def read_live_instances(
     config_dir: Path | str,
     *,
     exclude_pid: int | None = None,
+    exclude_markers=None,
     pid_alive_fn=None,
 ) -> list[tuple[int, int, int, int, int]]:
-    """读取 <config_dir>/runtime-*.json 实例标记，返回存活实例 (pid, x, y, w, h) 列表。
+    """读取目录内 runtime 标记，返回存活实例 (pid, x, y, w, h) 列表。
 
-    死进程 pid、损坏 JSON、字段非法的标记顺手删除（避免越积越多）；
-    exclude_pid（通常传本进程 pid，其标记可能在计数后才写入）对应的
-    标记跳过且保留。供多开位置避让（PetWindow._live_instance_rects）使用。
-    pid_alive_fn 可注入（测试用），缺省用本模块 pid_alive。
+    同时认旧（runtime-<pid>.json）与批5.2 新（pet-runtime-v2-*）两种命名
+    （避让定位兼容新旧混跑）。死进程 pid、损坏 JSON、字段非法的标记顺手
+    删除（避免越积越多）；exclude_markers（本窗自己的标记路径/文件名）跳过
+    且保留——批5.2 多窗同 pid 下不能再用 exclude_pid 这种按 pid 过滤的
+    方式（会把同进程所有窗都排除）。pid_alive_fn 可注入（测试用）。
     """
     alive = pid_alive_fn if pid_alive_fn is not None else pid_alive
+    try:
+        exclude_names = {Path(m).name for m in (exclude_markers or ())}
+    except (TypeError, OSError):
+        exclude_names = set()
     instances: list[tuple[int, int, int, int, int]] = []
     try:
         files = list(Path(config_dir).glob('runtime-*.json'))
+        files.extend(Path(config_dir).glob(f'{_RUNTIME_V2_PREFIX}*.json'))
     except OSError:
         return instances
     for f in files:
@@ -472,6 +550,8 @@ def read_live_instances(
             data = json.loads(f.read_text(encoding='utf-8'))
             pid = int(data.get('pid', 0))
             if exclude_pid is not None and pid == exclude_pid:
+                continue
+            if f.name in exclude_names:
                 continue
             if not alive(pid):
                 raise OSError('stale marker')

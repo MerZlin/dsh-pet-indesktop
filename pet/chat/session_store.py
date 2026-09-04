@@ -215,6 +215,10 @@ class _WriterRegistry:
         # 关完前」并发 save() 看到空注册表、新建同 root writer 与旧 writer
         # 并发写同一 tmp/互相 os.replace——破坏「同一 root 单写盘线程」前提。
         self._closing = False
+        # 批5.2 P1-7：per-root 关闭屏障——close_root 只把正在关闭的 root 加入
+        # _closing_roots，该 root 的 writer_for 被拒绝，其它窗的 writer 照常
+        # 可建（旧实现用全局 _closing，关 A 窗 writer 期间 B 窗 save 也被拒）。
+        self._closing_roots: set[Path] = set()
         # 重叠 close_all 防护（B9 复审 P2）：_closing 是布尔，两个线程重叠
         # 进入 close_all 时，后进入者在自己的 finally 里复位标志会提前放行
         # 新 writer（第一个仍在锁外关闭旧 writer）。用关闭深度计数：最后一个
@@ -232,9 +236,16 @@ class _WriterRegistry:
         self._permanent_epoch = 0
 
     def writer_for(self, root: Path) -> _AsyncWriter | None:
-        """返回 root 的共享 writer；全局或局部关闭中返回 None（调用方按拒绝处理）。"""
+        """返回 root 的共享 writer；全局或该 root 关闭中返回 None（调用方按拒绝处理）。
+
+        批5.2 P1-7：全局关闭（_shutdown/_closing，来自 close_all）拒绝全部；
+        per-root 关闭（_closing_roots，来自 close_root）只拒绝该 root——
+        关 A 窗 writer 期间 B 窗的 save() 不被拒（与文档承诺"不影响其它窗"一致）。
+        """
         with self._lock:
             if self._shutdown or self._closing:
+                return None
+            if root in self._closing_roots:
                 return None
             w = self._writers.get(root)
             # 不复活正在关闭的 writer：让 submit 走「拒绝可观测」路径；
@@ -295,6 +306,33 @@ class _WriterRegistry:
                     self._closing = False
         return ok
 
+    def close_root(self, root: Path, timeout: float = 10.0) -> bool:
+        """落盘并关闭指定 root 的 writer（批5.2「退出这只」窗级收口），
+        不置永久屏障——其它窗的 writer 保持不变。
+
+        批5.2 P1-7：关闭屏障改为 per-root（_closing_roots 只含目标 root），
+        关 A 窗 writer 期间 B 窗 save() 不被拒（旧实现用全局 _closing 会跨窗
+        拒绝，与 docstring「不影响其它窗」承诺相悖）。仍与 close_all 共用
+        关闭深度计数：重叠关窗期间全局 _closing 保持为真直到全部关闭者结束。
+        只 pop 目标 root，其它窗的 writer 原样保留。
+        """
+        with self._lock:
+            self._closing_roots.add(root)
+            self._closing_depth += 1
+            w = self._writers.pop(root, None)
+        ok = True
+        try:
+            if w is not None and not w.close(timeout=timeout):
+                ok = False
+        finally:
+            with self._lock:
+                self._closing_roots.discard(root)
+                self._closing_depth -= 1
+                if self._closing_depth <= 0:
+                    self._closing_depth = 0
+                    self._closing = False
+        return ok
+
     def reset_for_tests(self) -> None:
         """公开测试重置接口：关闭全部 writer 并复位永久关闭屏障。
 
@@ -338,6 +376,7 @@ class _WriterRegistry:
                 if self._closing_depth <= 0:
                     self._closing_depth = 0
                     self._closing = False
+                self._closing_roots.clear()
 
 
 # 模块级单例：共享 writer 注册表与永久关闭屏障的唯一所有权对象。
@@ -371,6 +410,12 @@ def close_all_writers(timeout: float = 10.0, *, permanent: bool = False) -> bool
     permanent=False（测试隔离）：允许后续提交重建 writer。
     """
     return _registry.close_all(timeout=timeout, permanent=permanent)
+
+
+def close_writer_for_root(root: Path, timeout: float = 10.0) -> bool:
+    """落盘并关闭指定会话根目录的 writer（批5.2「退出这只」窗级收口），
+    不置永久屏障、不影响其它窗。返回是否干净关闭。"""
+    return _registry.close_root(Path(root), timeout=timeout)
 
 
 def reset_writers_for_tests() -> None:
