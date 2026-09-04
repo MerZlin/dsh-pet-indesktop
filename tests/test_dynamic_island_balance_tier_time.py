@@ -35,7 +35,7 @@ def _island_cfg(tmp_path, info_mode: str = "balance_tier") -> Config:
 def test_balance_tier_text_uses_time_and_custom_labels(tmp_path, monkeypatch):
     app = _qapp()
     cfg = _island_cfg(tmp_path)
-    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda _now: "peak")
+    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda: "peak")
     monkeypatch.setattr(balance_mod, "next_pricing_switch", lambda _now: ("idle", None))
     monkeypatch.setattr(balance_mod, "format_switch_time", lambda _now, _next: "12:00")
     island = DynamicIsland(cfg)
@@ -58,7 +58,7 @@ def test_balance_tier_text_uses_time_and_custom_labels(tmp_path, monkeypatch):
 def test_balance_tier_idle_uses_idle_label(tmp_path, monkeypatch):
     app = _qapp()
     cfg = _island_cfg(tmp_path)
-    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda _now: "idle")
+    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda: "idle")
     monkeypatch.setattr(balance_mod, "next_pricing_switch", lambda _now: ("peak", None))
     monkeypatch.setattr(balance_mod, "format_switch_time", lambda _now, _next: "09:00")
     island = DynamicIsland(cfg)

@@ -94,7 +94,8 @@ class DynamicIsland(QWidget):
             str(self.config.get("balance_tier_label_peak", "") or ""),
             str(self.config.get("balance_tier_label_idle", "") or ""),
         )
-        tier = balance_mod.deepseek_pricing_tier(now)
+        # 保持无参调用以兼容现有测试/调用面（函数内部使用同一北京时间）。
+        tier = balance_mod.deepseek_pricing_tier()
         label = peak_label if tier == "peak" else idle_label
         try:
             _next_tier, next_time = balance_mod.next_pricing_switch(now)
