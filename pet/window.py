@@ -68,6 +68,7 @@ from .click_sound import (
 )
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
+from .window_optional_services import WindowFeatureGateMixin
 
 from . import platform_win
 from .platform_mac import _keep_macos_tool_window_visible, _mac_set_window_level
@@ -320,7 +321,7 @@ def _set_speech_bubble_interactive(pet) -> None:
         setter(callable(getattr(pet, "on_open_quick_chat", None)))
 
 
-class PetWindow(QWidget):
+class PetWindow(QWidget, WindowFeatureGateMixin):
     """桌宠窗口本体。"""
 
     look_done = Signal(str, str, bool)
@@ -695,45 +696,6 @@ class PetWindow(QWidget):
             self._arm_screen_restore_retry()
 
         self.attach_collision_session(collision_session)
-
-    # ---- Phase 1：可选后台服务懒装配 -------------------------------------
-    def _proactive_wanted(self) -> bool:
-        raw = self.cfg.get("proactive_screen", {})
-        return bool((raw or {}).get("enabled", False))
-
-    def _agent_link_wanted(self) -> bool:
-        raw = self.cfg.get("agent_link", {})
-        if not isinstance(raw, dict):
-            return False
-        for key in ("dsh", "claude", "cursor", "opencode"):
-            if bool(raw.get(key, False)):
-                return True
-        return bool(raw.get("custom_agents"))
-
-    def _ensure_proactive_watcher(self):
-        """首次启用主动识屏时懒创建观察器；已存在则原样返回。"""
-        if self.proactive_watcher is None:
-            from .proactive import ProactiveScreenWatcher
-            self.proactive_watcher = ProactiveScreenWatcher(self, self.cfg)
-        return self.proactive_watcher
-
-    def _ensure_agent_link_manager(self):
-        """首次启用 Agent 联动时懒创建管理器；已存在则原样返回。"""
-        if self.agent_link_manager is None:
-            from .agent_link import AgentLinkManager
-            self.agent_link_manager = AgentLinkManager(self, self.cfg)
-        return self.agent_link_manager
-
-    def sync_optional_services(self) -> None:
-        """设置刷新公共入口：按配置懒装配/同步主动识屏与 Agent 联动。"""
-        if self._proactive_wanted():
-            self._ensure_proactive_watcher().apply_config()
-        elif self.proactive_watcher is not None:
-            self.proactive_watcher.apply_config()
-        if self._agent_link_wanted():
-            self._ensure_agent_link_manager().apply_config()
-        elif self.agent_link_manager is not None:
-            self.agent_link_manager.apply_config()
 
     @property
     def click_sound_enabled(self) -> bool:

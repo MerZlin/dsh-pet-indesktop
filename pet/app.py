@@ -294,7 +294,9 @@ class PetApp:
         same_broker = getattr(win, "_broker_facade", None) is broker
         if same_session and same_broker:
             return
-        win._broker_facade = broker
+        setter = getattr(win, "set_broker_facade", None)
+        if callable(setter):
+            setter(broker)
         try:
             win.attach_collision_session(self.collision_ipc)
         except Exception:

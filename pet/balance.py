@@ -178,6 +178,16 @@ def _next_pricing_switch(now: datetime | None = None) -> tuple[str, datetime]:
     return 'peak', datetime.combine(next_day, time(9, 0), tzinfo=tz)
 
 
+def next_pricing_switch(now: datetime | None = None) -> tuple[str, datetime]:
+    """公开入口：返回 (下一档位, 下一档位开始时间)，按北京时间计算。"""
+    return _next_pricing_switch(now)
+
+
+def beijing_now(now: datetime | None = None) -> datetime:
+    """公开入口：返回当前/入参的北京时间（供 UI 层自行定时刷新）。"""
+    return _beijing_now(now)
+
+
 _WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
 
@@ -193,6 +203,11 @@ def _format_switch_time(now: datetime, next_time: datetime) -> str:
     if days == 1:
         return f"明天 {next_time:%H:%M}"
     return f"下{_WEEKDAY_CN[next_time.weekday()]} {next_time:%H:%M}"
+
+
+def format_switch_time(now: datetime, next_time: datetime) -> str:
+    """公开入口：把下一档位切换时间格式化为易读文案。"""
+    return _format_switch_time(now, next_time)
 
 
 def resolve_tier_labels(
