@@ -27,7 +27,7 @@ def _make_tracker(tmp_path, monkeypatch, online=False):
     bridge_dir = base / "dsh-pet-bridge"
     bridge_dir.mkdir(parents=True)
     monkeypatch.setattr(harness_launcher, "is_running", lambda port: online)
-    tracker = DshStateTracker(config_dir, parent=None)
+    tracker = DshStateTracker(config_dir, parent=None, scan_interval=0.0)
     # 关闭 ByteOffsetTailer 的 backfill 防护，让测试能立即读到已写入内容
     tracker._tailer._initial_backfill_done = True
     return tracker, bridge_dir

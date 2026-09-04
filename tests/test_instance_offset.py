@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 from pet.config import Config
 from pet.window import PetWindow
 
-from test_window_pause import FakeLibrary
+from .test_window_pause import FakeLibrary
 
 
 @pytest.fixture
