@@ -1146,7 +1146,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     expected_pages = ["常规", "灵动岛", "桌宠行为", "外观", "快捷启动"]
     if sys.platform == "win32":
         expected_pages.append("主动识屏")  # 主动识屏设置页仅 Windows + 有聊天能力时挂载
-    expected_pages.append("AI 设置")
+    expected_pages.extend(["AI 设置", "循环检测"])
     assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == expected_pages
     assert dialog.pages.count() == len(expected_pages)
     assert dialog.search_edit.placeholderText() == "搜索设置…"
@@ -1199,19 +1199,30 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     def page_index(row):
         return next(index for index in range(dialog.pages.count()) if dialog.pages.widget(index).isAncestorOf(row))
 
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_autostart")) == 0
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 2
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == 3
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == 3
-    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == (
-        6 if sys.platform == "win32" else 5  # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
-    )
+    def sidebar_index(title):
+        return next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == title)
+
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_autostart")) == sidebar_index("常规")
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == sidebar_index("桌宠行为")
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == sidebar_index("桌宠行为")
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_scale")) == sidebar_index("外观")
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")) == sidebar_index("外观")
+    assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")) == sidebar_index("AI 设置")
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
+    assert "台词风格" not in [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())]
+    expression_row = dialog.findChild(settings_mod.SettingRow, "settingRow_dialogue_mode")
+    assert expression_row is not None
+    assert expression_row.findChild(settings_mod.QLabel, "settingLabel").text() == "表达风格"
+    assert "自言自语、候选内容和主动气泡" in expression_row.findChild(settings_mod.QLabel, "settingHint").text()
+    assert page_index(expression_row) == sidebar_index("桌宠行为")
     dialog.show()
-    dialog.pages.widget(2).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
+    dialogue_page_index = next(
+        index for index in range(dialog.sidebar.count())
+        if dialog.sidebar.item(index).text() == "桌宠行为"
+    )
+    dialog.pages.widget(dialogue_page_index).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
     app.processEvents()
     label = texts_row.findChild(settings_mod.QLabel, "settingLabel")
     hint = texts_row.findChild(settings_mod.QLabel, "settingHint")
@@ -1473,8 +1484,11 @@ def test_modern_settings_search_locates_rows_and_return_does_not_close(tmp_path,
     dialog.search_edit.setFocus()
     dialog.search_edit.setText("API 地址")
     app.processEvents()
-    # AI 设置页索引：常规/灵动岛/桌宠行为/外观/快捷启动，Windows 再插主动识屏
-    assert dialog.sidebar.currentRow() == (6 if sys.platform == "win32" else 5)
+    ai_page_index = next(
+        index for index in range(dialog.sidebar.count())
+        if dialog.sidebar.item(index).text() == "AI 设置"
+    )
+    assert dialog.sidebar.currentRow() == ai_page_index
     api_row = dialog.findChild(settings_mod.SettingRow, "settingRow_api_url")
     assert api_row.property("searchMatch") is True
     QTest.keyClick(dialog.search_edit, Qt.Key.Key_Return)
@@ -2184,6 +2198,9 @@ def test_product_copy_has_no_external_brand_reference():
         paths = [root] if root.is_file() else list(root.rglob("*"))
         for path in paths:
             if not path.is_file() or path.suffix.lower() not in {".py", ".qss", ".md", ".json"}:
+                continue
+            if path.name == "agent_link.py" or path.name == "test_agent_link.py":
+                # 工具识别及其测试中的外部工具名不是面向用户的产品文案。
                 continue
             if forbidden in path.read_text(encoding="utf-8", errors="ignore").lower():
                 hits.append(str(path))
