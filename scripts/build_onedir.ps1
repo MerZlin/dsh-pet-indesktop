@@ -68,6 +68,51 @@ if (-not (Test-Path $bridgeManifest)) { throw "Bridge manifest missing: $bridgeM
 # package.json is UTF-8 and its Chinese description would become invalid JSON.
 $bridgeManifestJson = [System.IO.File]::ReadAllText($bridgeManifest, [System.Text.Encoding]::UTF8)
 $bridgePackage = $bridgeManifestJson | ConvertFrom-Json
+
+# 桥接插件依赖完整性硬校验（issue: Cannot find package '@deepseek-ai/cosmokit'）：
+# Cordis 在 ESM import 时会立即解析它的运行时依赖（cosmokit / standard-schema），
+# dsh-invariants / dsh-llm 又依赖 schemastery。任何一个漏进 devDependencies 或
+# 从打包中漏掉，都会让 DSH 的 plugin tree 初始化失败、DSH 无法启动。
+$bridgeRequiredDeps = @(
+    '@deepseek-ai/cordis',
+    '@deepseek-ai/cosmokit',
+    '@deepseek-ai/dsh-attachment',
+    '@deepseek-ai/dsh-brand',
+    '@deepseek-ai/dsh-invariants',
+    '@deepseek-ai/dsh-llm',
+    '@deepseek-ai/dsh-timeout',
+    '@deepseek-ai/schemastery',
+    '@standard-schema/spec'
+)
+foreach ($dep in $bridgeRequiredDeps) {
+    if (-not $bridgePackage.dependencies.$dep) {
+        throw "[bridge] missing runtime dependency '$dep' in integrations\dsh-pet-bridge\package.json (must be in dependencies, not dev/peer)"
+    }
+}
+$bridgeLock = Join-Path $root 'integrations\dsh-pet-bridge\pnpm-lock.yaml'
+if (-not (Test-Path $bridgeLock)) { throw "Bridge lockfile missing: $bridgeLock" }
+$bridgeLockText = [System.IO.File]::ReadAllText($bridgeLock, [System.Text.Encoding]::UTF8)
+foreach ($snapshot in @('@deepseek-ai/cosmokit@1.8.3', '@deepseek-ai/schemastery@3.18.2', '@standard-schema/spec@1.1.0')) {
+    if (-not $bridgeLockText.Contains($snapshot)) {
+        throw "[bridge] lockfile missing snapshot for '$snapshot' - run pnpm install in integrations\dsh-pet-bridge and commit pnpm-lock.yaml"
+    }
+}
+# 若本地已安装 node_modules，则真实执行一次 ESM 导入冒烟（等价于 Cordis loader 的
+# import 路径）。构建环境没有 node_modules 时（CI 首次 checkout）只做声明校验，
+# 由 install_bridge 在运行时用 pnpm 落盘；两者都不允许静默放行缺声明的情况。
+# 冒烟脚本必须位于 bridge 目录内：ESM bare specifier 从脚本自身目录向上解析
+# node_modules，放在根 scripts\ 下会误报全部依赖缺失。
+$bridgeNodeModules = Join-Path $root 'integrations\dsh-pet-bridge\node_modules'
+if (Test-Path $bridgeNodeModules) {
+    $smoke = Join-Path $root 'integrations\dsh-pet-bridge\verify_import.mjs'
+    if (-not (Test-Path $smoke)) { throw "missing verify script: $smoke" }
+    Write-Host "[bridge] verifying plugin import + transitive deps..." -ForegroundColor Cyan
+    & node $smoke
+    if ($LASTEXITCODE -ne 0) { throw "[bridge] plugin import smoke test failed (exit $LASTEXITCODE)" }
+    Write-Host "[bridge] import smoke OK" -ForegroundColor Green
+} else {
+    Write-Host "[bridge] node_modules absent - manifest/lockfile declaration check only (pnpm add resolves at install time)" -ForegroundColor Yellow
+}
 $bridgeLlmVersion = $bridgePackage.dependencies.'@deepseek-ai/dsh-llm'
 if ($bridgeLlmVersion) {
     Write-Host "[bridge] legacy dsh-llm dependency declared: $bridgeLlmVersion"
@@ -160,6 +205,15 @@ if (-not $SkipBuild) {
 
 $appDir = Join-Path $root "dist-onedir\$name"
 if (-not (Test-Path $appDir)) { throw "Build output missing: $appDir" }
+
+# ---------- Bridge node_modules 自包含修复（issue: Cannot find package '@deepseek-ai/cosmokit'） ----------
+# PyInstaller 的 --add-data 会把 pnpm 的 junction 布局复制成损坏的空目录/源机器链接，
+# 导致 Cordis loader import bridge 时 cosmokit 等传递依赖解析失败、DSH 无法启动。
+# 这里把源码 node_modules 展开复制成自包含真实目录树，并在 dist 副本上跑 import 冒烟。
+Write-Host "[bridge] repairing bundle node_modules (expand junctions)..." -ForegroundColor Cyan
+python scripts\fix_bridge_bundle.py --app-dir $appDir
+if ($LASTEXITCODE -ne 0) { throw "Bridge bundle repair failed: $LASTEXITCODE" }
+Write-Host "[bridge] bundle node_modules self-contained OK" -ForegroundColor Green
 
 # =====================================================================
 # Qt runtime post-build (issue: shiboken6 "找不到指定的模块")
