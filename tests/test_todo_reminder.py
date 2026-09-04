@@ -432,9 +432,12 @@ def test_petapp_settings_finish_applies_todo_prefs(tmp_path, monkeypatch):
     owner._refresh_chat_windows = lambda: None
     owner._sync_dynamic_island = lambda: None
     owner.todo_service = TodoReminderService(owner)
+    # Phase 1：设置保存也会同步可选服务；此测试只关注 todo，避免碰撞服务被拉起。
+    owner.config.set("collision_enabled", False)
     owner.config.set("todo_reminder_enabled", False)
     PetApp._modern_settings_finished(owner, 0)
-    assert owner.todo_service._prefs["enabled"] is False
+    # Phase 1：待办总开关关闭且无面板打开时，服务对象应被释放。
+    assert owner.todo_service is None
 
 
 # ------------------------------------------------------------ 管理面板

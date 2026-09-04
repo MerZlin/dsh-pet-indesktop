@@ -4278,10 +4278,12 @@ class ModernSettingsDialog(QDialog):
         self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
         self.config.set("click_sound_pack", self.click_sound_picker.value())
         self.config.set("click_sound_volume", float(self.click_sound_volume_spin.value()) / 100.0)
-        warm_click_sound_effects(
-            self.config.get("click_sound_pack"),
-            data_dir=self.config.dir,
-        )
+        # Phase 1：音效关闭时不再预加载 QtMultimedia 音效池。
+        if self.click_sound_check.isChecked():
+            warm_click_sound_effects(
+                self.config.get("click_sound_pack"),
+                data_dir=self.config.dir,
+            )
         existing_island = self.config.get("dynamic_island", {})
         if not isinstance(existing_island, dict):
             existing_island = {}

@@ -657,7 +657,8 @@ class TestAgentBusy:
         try:
             clock.advance(60)
             assert win._idle_reduction_active() is True
-            mgr = win.agent_link_manager
+            # Phase 1：Agent 联动默认不装配，测试显式创建管理器。
+            mgr = win._ensure_agent_link_manager()
             mon = mgr.monitors["dsh"]
             mon._running = True
             mgr._last_raw = {"dsh": "working"}

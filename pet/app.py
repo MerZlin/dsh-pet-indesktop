@@ -39,9 +39,8 @@ from .library import MovieLibrary
 from .window import PetWindow
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
-from .collision_ipc import CollisionIpcSession
-from .decode_broker import BrokerFacade
-from .todo_reminder import TodoReminderService
+# 可选服务模块按需在 _ensure_* 中局部导入：功能关闭时不让这些模块
+# 进入启动 import 路径（Phase 1 开关式加载门控）。
 
 
 class _BackgroundResult(QObject):
@@ -224,15 +223,127 @@ class PetApp:
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
-        self.collision_ipc = CollisionIpcSession(config, self)
-        # 待办提醒：GUI 线程定时调度服务；win 引用在 tick 时动态读取，
-        # 角色热切换重建窗口后无需重绑。
-        self.todo_service = TodoReminderService(self)
+        # Phase 1 开关式加载：可选服务按配置懒创建/懒启动；关闭的功能不构造
+        # CollisionIpcSession / TodoReminderService / BrokerFacade 对象。
+        self.collision_ipc = None
+        self.todo_service = None
+        self.broker_facade = None
         self.todo_panel = None
-        # P3 broker：PetApp 持有 BrokerFacade（随 collision_ipc 同生命周期）。
-        # bind 在窗口 attach_collision_session 尾部完成（facade 需绑定到窗口实际
-        # attach 的会话），此处只创建（含开关位），不提前 bind（避免双重连接）。
-        self.broker_facade = BrokerFacade(enabled=bool(config.get('decode_broker_enabled', False)))
+        if self._collision_wanted():
+            self._ensure_collision_ipc()
+        if self._todo_wanted():
+            self._ensure_todo_service()
+        if self._collision_wanted() and self._broker_wanted():
+            self._ensure_broker_facade()
+
+    # ------------------------------------------------------------ 功能门控
+    def _collision_wanted(self) -> bool:
+        return bool(self.config.get("collision_enabled", True))
+
+    def _todo_wanted(self) -> bool:
+        return bool(self.config.get("todo_reminder_enabled", True))
+
+    def _broker_wanted(self) -> bool:
+        return bool(self.config.get("decode_broker_enabled", False))
+
+    def _ensure_collision_ipc(self):
+        """懒创建碰撞 IPC 会话（仅在碰撞功能开启时创建）。"""
+        if getattr(self, "collision_ipc", None) is None:
+            from .collision_ipc import CollisionIpcSession
+            self.collision_ipc = CollisionIpcSession(self.config, self)
+        return self.collision_ipc
+
+    def _ensure_broker_facade(self):
+        """懒创建多开共享解码 facade（仅在 decode_broker 开启时创建）。"""
+        if getattr(self, "broker_facade", None) is None:
+            from .decode_broker import BrokerFacade
+            self.broker_facade = BrokerFacade(enabled=True)
+        return self.broker_facade
+
+    def _ensure_todo_service(self):
+        """懒创建待办提醒服务（仅在使用待办/打开面板时创建）。"""
+        if getattr(self, "todo_service", None) is None:
+            from .todo_reminder import TodoReminderService
+            self.todo_service = TodoReminderService(self)
+        return self.todo_service
+
+    def _stop_collision_ipc(self) -> None:
+        """停止并释放碰撞 IPC 与 broker facade（两者同生命周期）。"""
+        broker = getattr(self, "broker_facade", None)
+        if broker is not None:
+            try:
+                broker.shutdown()
+            except Exception:
+                logging.exception("退出时关闭 broker facade 失败")
+            self.broker_facade = None
+        collision = getattr(self, "collision_ipc", None)
+        if collision is not None:
+            try:
+                collision.stop()
+            except Exception:
+                logging.exception("停止碰撞 IPC 失败")
+            self.collision_ipc = None
+
+    def _attach_window_collision(self) -> None:
+        """把当前有效窗口绑定到当前碰撞 IPC（仅当两者都存在且未绑定）。"""
+        win = self.win
+        if win is None or self.collision_ipc is None:
+            return
+        same_session = getattr(win, "_collision_session", None) is self.collision_ipc
+        broker = getattr(self, "broker_facade", None)
+        same_broker = getattr(win, "_broker_facade", None) is broker
+        if same_session and same_broker:
+            return
+        win._broker_facade = broker
+        try:
+            win.attach_collision_session(self.collision_ipc)
+        except Exception:
+            logging.exception("窗口绑定碰撞会话失败")
+
+    def _sync_collision_service(self, *, attach_window: bool = True) -> None:
+        """按配置启停碰撞 IPC / broker：启动前保证会话已创建。"""
+        if self._collision_wanted():
+            self._ensure_collision_ipc()
+            if self._broker_wanted():
+                self._ensure_broker_facade()
+            thread = getattr(self.collision_ipc, "_thread", None)
+            if thread is None or not callable(getattr(thread, "isRunning", None)) or not thread.isRunning():
+                start = getattr(self.collision_ipc, "start", None)
+                if callable(start):
+                    start()
+            if attach_window:
+                self._attach_window_collision()
+        else:
+            if attach_window and self.win is not None:
+                try:
+                    self.win.detach_collision_session()
+                except Exception:
+                    logging.exception("窗口解绑碰撞会话失败")
+            self._stop_collision_ipc()
+
+    def _sync_todo_service(self) -> None:
+        """按配置启停待办提醒服务；关闭且无面板打开时释放服务对象。"""
+        if self._todo_wanted():
+            service = self._ensure_todo_service()
+            timer = getattr(service, "_timer", None)
+            if timer is not None and callable(getattr(timer, "isActive", None)) and timer.isActive():
+                # 已在运行：设置保存只刷新偏好/条目，不重置 30s tick。
+                service.apply_config()
+            elif callable(getattr(service, "start", None)):
+                service.start()
+        elif getattr(self, "todo_service", None) is not None:
+            try:
+                self.todo_service.stop()
+            except Exception:
+                logging.exception("停止待办提醒服务失败")
+            # 面板持有 app 引用并动态读取 todo_service；面板还开着时保留对象。
+            if getattr(self, "todo_panel", None) is None:
+                self.todo_service = None
+
+    def _sync_feature_services(self) -> None:
+        """设置保存/启动等公共入口：按配置同步所有可选服务生命周期。"""
+        self._sync_collision_service(attach_window=True)
+        self._sync_todo_service()
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -242,7 +353,8 @@ class PetApp:
         if not self._on_about_to_quit_connected:
             self.app.aboutToQuit.connect(self._on_about_to_quit)
             self._on_about_to_quit_connected = True
-        self.collision_ipc.start()
+        # 碰撞会话必须先于窗口创建启动，PetWindow 构造时才能 attach 到实际会话。
+        self._sync_collision_service(attach_window=False)
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self._create_ui(character_id)
@@ -250,7 +362,7 @@ class PetApp:
         self._sync_dynamic_island()
         self._apply_spawn_offset()
         self._apply_balance_timer()
-        self.todo_service.start()
+        self._sync_todo_service()
         QTimer.singleShot(3500, self._check_autostart_wanted)
 
     def _sync_dynamic_island(self) -> None:
@@ -304,13 +416,10 @@ class PetApp:
         # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
         if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
             self.win.agent_link_manager.shutdown()
-        # P3 broker：退出前中止本实例全部发布 session（aborted → 其它实例本地回退）
-        try:
-            self.broker_facade.shutdown()
-        except Exception:
-            logging.exception("退出时关闭 broker facade 失败")
-        self.collision_ipc.stop()
-        self.todo_service.stop()
+        # P3 broker + 碰撞：同生命周期停止并释放（功能关闭时可能从未创建）
+        self._stop_collision_ipc()
+        if getattr(self, "todo_service", None) is not None:
+            self.todo_service.stop()
         # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
         # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
         try:
@@ -606,11 +715,12 @@ class PetApp:
         self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
-        # 首次点击 Q 弹卡顿。
-        click_sound.warm_click_sound_effects(
-            self.config.get("click_sound_pack"),
-            data_dir=self.config.dir,
-        )
+        # 首次点击 Q 弹卡顿。Phase 1：点击音效关闭时不预加载 QtMultimedia。
+        if bool(self.config.get("click_sound_enabled", True)):
+            click_sound.warm_click_sound_effects(
+                self.config.get("click_sound_pack"),
+                data_dir=self.config.dir,
+            )
         win.show()
 
         tray = self._build_tray(win)
@@ -655,23 +765,16 @@ class PetApp:
 
         logging.info('切换角色: %s -> %s', current, character_id)
 
-        # 先停旧窗口的碰撞会话与 Agent 监视器 worker，再重建 IPC 会话：
+        # 先停旧窗口的碰撞会话与 Agent 监视器 worker，再按当前配置重建 IPC：
         # 否则旧窗口 deleteLater 后其 worker 线程仍经引用链保活并继续轮询
         # （B9 一审发现）。新窗口/托盘由 _build_window 创建（含旧对象延迟销毁）。
+        # Phase 1：碰撞关闭时不创建 IPC；开启时由 _sync_collision_service 懒建。
         old_win = self.win
         old_win.detach_collision_session()
-        # P3 broker：旧窗口/旧 ipc 退场前中止其仍在发布的全部 session
-        # （publish_abort 全部 session → 消费端本地回退；旧 facade 随旧 ipc 退役）。
-        self.broker_facade.shutdown()
         if getattr(old_win, 'agent_link_manager', None) is not None:
             old_win.agent_link_manager.shutdown()
-        self.collision_ipc.stop()
-        self.collision_ipc = CollisionIpcSession(self.config, self)
-        # P3 broker：新 ipc 配新 facade（同 CollisionIpcSession 生命周期；
-        # bind 由新窗口 attach_collision_session 尾部完成）。
-        self.broker_facade = BrokerFacade(
-            enabled=bool(self.config.get('decode_broker_enabled', False)))
-        self.collision_ipc.start()
+        self._stop_collision_ipc()
+        self._sync_collision_service(attach_window=False)
         self._build_window(character_id, lib=lib)
         if self.enable_chat:
             for chat_window in (self.legacy_chat_window, self.modern_chat_window):
@@ -905,11 +1008,14 @@ class PetApp:
         # 新版设置在关闭时一律落盘（closeEvent 自动保存，「保存并退出」同样走
         # _write_config），因此无论 Accepted/Rejected 都把改动应用到桌宠。
         # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
+        # Phase 1：先按配置启停可选服务，再让窗口刷新碰撞/其它设置。
+        self._sync_feature_services()
         if self.win is not None:
             self.win.refresh_pet_settings()
         self._sync_dynamic_island()
         self._apply_balance_timer()
-        self.todo_service.apply_config()
+        if getattr(self, "todo_service", None) is not None:
+            self.todo_service.apply_config()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
 
@@ -917,6 +1023,8 @@ class PetApp:
         """打开待办管理面板（非模态单例；条目增删改即时落盘）。"""
         from .todo_panel import TodoPanelDialog
 
+        # Phase 1：即使总开关关闭，用户主动打开面板也需要服务对象（懒创建）。
+        self._ensure_todo_service()
         if self.todo_panel is None:
             dialog = TodoPanelDialog(self, parent=self.win)
             dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)

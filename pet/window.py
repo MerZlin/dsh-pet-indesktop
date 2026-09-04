@@ -60,7 +60,6 @@ from .speech_bubble import PetSpeechBubble, list_self_talk_images
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
 from .context_menu import normalize_template_id, populate_context_menu as _populate_context_menu
 from .context_menus.shared import take_deferred_menu_callbacks
-from . import vision as vision_mod
 from . import physics as physics_mod
 from .collision_client import CollisionClient
 from .click_sound import (
@@ -456,13 +455,10 @@ class PetWindow(QWidget):
         self._link_anim_current: str | None = None
         self._link_next_provider = None  # AgentLinkManager 注入：()->str|None
 
-        # 主动识屏后台观察器（必须作为 PetWindow 的子成员，随窗口销毁/重建）
-        from .proactive import ProactiveScreenWatcher
-        self.proactive_watcher = ProactiveScreenWatcher(self, config)
-
-        # 多 Agent 状态感知管理器
-        from .agent_link import AgentLinkManager
-        self.agent_link_manager = AgentLinkManager(self, config)
+        # Phase 1 开关式加载：主动识屏/Agent 联动默认不构造；首次启用时由
+        # _ensure_* 懒创建（模块与 Qt 对象都只在功能打开后进入运行期）。
+        self.proactive_watcher = None
+        self.agent_link_manager = None
 
         # ---- 全屏应用自动隐藏（Windows）----
         # 前台窗口覆盖整个屏幕几何（含任务栏区域）时自动隐藏桌宠，
@@ -699,6 +695,45 @@ class PetWindow(QWidget):
             self._arm_screen_restore_retry()
 
         self.attach_collision_session(collision_session)
+
+    # ---- Phase 1：可选后台服务懒装配 -------------------------------------
+    def _proactive_wanted(self) -> bool:
+        raw = self.cfg.get("proactive_screen", {})
+        return bool((raw or {}).get("enabled", False))
+
+    def _agent_link_wanted(self) -> bool:
+        raw = self.cfg.get("agent_link", {})
+        if not isinstance(raw, dict):
+            return False
+        for key in ("dsh", "claude", "cursor", "opencode"):
+            if bool(raw.get(key, False)):
+                return True
+        return bool(raw.get("custom_agents"))
+
+    def _ensure_proactive_watcher(self):
+        """首次启用主动识屏时懒创建观察器；已存在则原样返回。"""
+        if self.proactive_watcher is None:
+            from .proactive import ProactiveScreenWatcher
+            self.proactive_watcher = ProactiveScreenWatcher(self, self.cfg)
+        return self.proactive_watcher
+
+    def _ensure_agent_link_manager(self):
+        """首次启用 Agent 联动时懒创建管理器；已存在则原样返回。"""
+        if self.agent_link_manager is None:
+            from .agent_link import AgentLinkManager
+            self.agent_link_manager = AgentLinkManager(self, self.cfg)
+        return self.agent_link_manager
+
+    def sync_optional_services(self) -> None:
+        """设置刷新公共入口：按配置懒装配/同步主动识屏与 Agent 联动。"""
+        if self._proactive_wanted():
+            self._ensure_proactive_watcher().apply_config()
+        elif self.proactive_watcher is not None:
+            self.proactive_watcher.apply_config()
+        if self._agent_link_wanted():
+            self._ensure_agent_link_manager().apply_config()
+        elif self.agent_link_manager is not None:
+            self.agent_link_manager.apply_config()
 
     @property
     def click_sound_enabled(self) -> bool:
@@ -1531,6 +1566,8 @@ class PetWindow(QWidget):
 
     def _fs_watch_loop(self) -> None:
         """后台轮询光标与前台窗口，分别使用 20Hz 与 1Hz 节拍。"""
+        # Phase 1：避免纯桌宠启动即加载 PIL；该线程真正需要检测光标时才导入。
+        from . import vision as vision_mod
         polls = 0
         consecutive_errors = 0
         next_fullscreen = time.monotonic() + 1.0
@@ -3848,8 +3885,8 @@ class PetWindow(QWidget):
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))
         self.click_show_self_talk = bool(self.cfg.get('click_show_self_talk', False))
         self._schedule_self_talk()
-        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
-            self.proactive_watcher.apply_config()
+        # Phase 1：主动识屏/Agent 联动按配置懒装配或同步。
+        self.sync_optional_services()
 
     def set_context_menu_template(self, template_id: str) -> None:
         """Persist the selected right-click menu template for the next open."""
@@ -3910,7 +3947,10 @@ class PetWindow(QWidget):
         pro_data['enabled'] = bool(on)
         self.cfg.set('proactive_screen', pro_data)
         self.cfg.save()
-        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+        # Phase 1：开启时懒创建观察器；关闭时仅同步已存在实例。
+        if on:
+            self._ensure_proactive_watcher().apply_config()
+        elif self.proactive_watcher is not None:
             self.proactive_watcher.apply_config()
         if on:
             eff = effective_proactive_config(self.cfg.get('proactive_screen', {}))
@@ -3932,7 +3972,9 @@ class PetWindow(QWidget):
         pro_data[key] = value
         self.cfg.set('proactive_screen', pro_data)
         self.cfg.save()
-        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+        if self._proactive_wanted():
+            self._ensure_proactive_watcher().apply_config()
+        elif self.proactive_watcher is not None:
             self.proactive_watcher.apply_config()
 
     def set_proactive_option(self, key: str, value: Any) -> None:
@@ -3944,7 +3986,10 @@ class PetWindow(QWidget):
 
         set_enabled 返回 False（用户拒绝授权 / hooks 安装失败）时，
         必须把菜单勾选态回滚，否则 UI 显示已开启而实际未生效。"""
-        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+        if on:
+            # Phase 1：开启时先懒创建管理器，再走完整 set_enabled 编排。
+            self._ensure_agent_link_manager()
+        if self.agent_link_manager is not None:
             ok = self.agent_link_manager.set_enabled(agent_key, on)
             if not ok:
                 if action is not None:
