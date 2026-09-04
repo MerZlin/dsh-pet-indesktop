@@ -246,6 +246,13 @@ def vector_menu_icon(menu: QMenu, name: str, size: int | None = None) -> QIcon:
         painter.drawEllipse(QPointF(3.5, 3.8), 2.0, 2.0)
         painter.drawEllipse(QPointF(3.5, 12.2), 2.0, 2.0)
         painter.drawEllipse(QPointF(12.5, 8.0), 2.0, 2.0)
+    elif name == "todo":
+        # 清单板：圆角板面 + 两行勾选，与整体单色描边语言一致。
+        painter.drawRoundedRect(QRectF(2.0, 2.0, 12.0, 12.0), 2.0, 2.0)
+        painter.drawLine(QPointF(4.4, 5.6), QPointF(5.6, 6.8)); painter.drawLine(QPointF(5.6, 6.8), QPointF(7.4, 4.8))
+        painter.drawLine(QPointF(9.2, 5.8), QPointF(11.8, 5.8))
+        painter.drawLine(QPointF(4.4, 10.2), QPointF(5.6, 11.4)); painter.drawLine(QPointF(5.6, 11.4), QPointF(7.4, 9.4))
+        painter.drawLine(QPointF(9.2, 10.4), QPointF(11.8, 10.4))
     elif name == "appearance":
         painter.drawEllipse(QPointF(8.0, 8.0), 5.8, 5.8)
         painter.drawArc(QRectF(4.0, 4.0, 8.0, 8.0), 90 * 16, 180 * 16)

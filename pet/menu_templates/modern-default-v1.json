@@ -48,6 +48,7 @@
     },
     {"type": "action", "id": "agent_link", "visible": true, "section": "tools"},
     {"type": "action", "id": "proactive_screen", "visible": true, "section": "tools"},
+    {"type": "action", "id": "todo_panel", "visible": true, "section": "tools"},
     {"type": "separator", "id": "default.separator-tools", "visible": true},
     {"type": "action", "id": "modern_settings", "visible": true, "section": "system"},
     {"type": "action", "id": "quit", "visible": true, "section": "system"}
