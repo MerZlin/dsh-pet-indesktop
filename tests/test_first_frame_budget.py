@@ -38,7 +38,7 @@ class _FakeClip:
 def _clean_registry(monkeypatch):
     monkeypatch.setattr(webm_clip, "_first_frame_reg", [])
     monkeypatch.setattr(webm_clip, "_first_frame_bytes", 0)
-    monkeypatch.setattr(webm_clip, "_FIRST_FRAME_BUDGET_BYTES", 250)
+    monkeypatch.setattr(webm_clip, "_first_frame_budget_bytes", 250)
     yield
 
 
@@ -167,3 +167,27 @@ def test_all_pinned_budget_becomes_soft_cap():
     assert victims == []
     assert a._first_image is not None
     assert b._first_image is not None and c._first_image is not None
+
+
+def test_set_first_frame_budget_applies():
+    """运行期预算设置生效：调小后按新预算逐出，恢复默认后不再逐出。"""
+    webm_clip.set_first_frame_budget(150)
+    try:
+        a, b = _FakeClip(100), _FakeClip(100)
+        _store(a, 100)
+        victims = _store(b, 100)  # 200 > 150 → 逐出 a
+        assert [v for v, _t in victims] == [a]
+        assert webm_clip._first_frame_budget_bytes == 150
+    finally:
+        webm_clip.set_first_frame_budget(250)
+
+
+def test_config_first_frame_budget_normalized(tmp_path):
+    from pet.config import Config
+
+    cfg = Config(tmp_path)
+    assert cfg.get("first_frame_cache_max_mb") == 32
+    cfg.set("first_frame_cache_max_mb", 999)
+    assert cfg.get("first_frame_cache_max_mb") == 64  # 夹到上限
+    cfg.set("first_frame_cache_max_mb", "abc")
+    assert cfg.get("first_frame_cache_max_mb") == 32  # 非法值回默认

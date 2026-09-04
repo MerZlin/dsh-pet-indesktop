@@ -599,6 +599,7 @@ class Config:
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
+            "first_frame_cache_max_mb": 32,  # 首帧缓存全局预算（MB），低配机可调小
             "chat": _default_chat_data(),
         }
         self.reload()
@@ -728,6 +729,7 @@ class Config:
             "collision_sound_enabled", "collision_sound_volume",
             "decode_broker_enabled",
             "media_prewarm",
+            "first_frame_cache_max_mb",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -866,6 +868,9 @@ class Config:
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
         self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
+        self.data["first_frame_cache_max_mb"] = int(_float_or_default(
+            self.data.get("first_frame_cache_max_mb"), 32, 4, 64
+        ))
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
@@ -940,7 +945,7 @@ class Config:
             "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
-            "media_prewarm",
+            "media_prewarm", "first_frame_cache_max_mb",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()

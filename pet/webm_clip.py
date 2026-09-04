@@ -398,6 +398,8 @@ def _unregister_orphan(clip: "WebMClip") -> None:
 # 常驻。锁序：clip._first_frame_lock → 注册表锁（单向）；逐出在注册表锁外
 # 逐个取 victim 自己的锁，杜绝跨对象持锁嵌套（对照 P2-10 教训）。
 _FIRST_FRAME_BUDGET_BYTES = 32 * 1024 * 1024  # 32MB ≈ 36 段热动画常驻
+# 运行期可调的预算值（set_first_frame_budget 写入）；常量保留为默认值。
+_first_frame_budget_bytes = _FIRST_FRAME_BUDGET_BYTES
 _first_frame_reg_lock = threading.Lock()
 _first_frame_reg: list = []  # [(weakref(clip), bytes)]，尾部 = 最近使用
 _first_frame_bytes = 0
@@ -433,7 +435,7 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
         _first_frame_reg[:] = live
         _first_frame_bytes += current
         clip._ffr_evict_token = None  # 新登记/置顶 = 取消悬挂中的逐出
-        while _first_frame_bytes > _FIRST_FRAME_BUDGET_BYTES and len(_first_frame_reg) > 1:
+        while _first_frame_bytes > _first_frame_budget_bytes and len(_first_frame_reg) > 1:
             # 从 LRU 头部找首个可逐出项：死引用/已清缓存顺手清账摘出；
             # _ffr_pinned（高频交互链：click/idle/turn/move/drag，由
             # MovieLibrary 标记）跳过不逐——否则低优先级随机动作池的预热
@@ -464,6 +466,17 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
             _first_frame_bytes -= _first_frame_reg[i][1]
             _first_frame_reg.pop(i)
     return victims
+
+
+def set_first_frame_budget(max_bytes: int) -> None:
+    """设置首帧缓存全局预算（启动时由应用层按配置调用一次）。
+
+    只写预算值，不主动逐出——超出部分随后续登记自然逐出（下一次
+    register/置顶触发），避免在 GUI 线程做同步清理。
+    """
+    global _first_frame_budget_bytes
+    with _first_frame_reg_lock:
+        _first_frame_budget_bytes = max(0, int(max_bytes))
 
 
 def _ffr_unregister(clip) -> None:
