@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
@@ -110,6 +111,30 @@ def test_flush_reports_write_failure_once(store):
     assert st.flush() is False   # 诚实：没写上就是 False
     assert st.flush() is True    # 失败已上报过一次，队列已空
     blocker.rmdir()
+
+
+def test_transient_replace_lock_is_retried(store, monkeypatch):
+    """CI(windows-latest) 实录：刚落盘的目标文件被瞬时占用（Defender/索引
+    服务扫描，WinError 5 → PermissionError）时，_atomic_write 必须有界退避
+    重试骑过瞬时锁。否则 writer 把失败计入 flush，close 路径误报 False。"""
+    st, tmp = store
+    session = _make_session(st)
+    target = tmp / "sessions" / "shenshen" / "s1.json"
+    real_replace = os.replace
+    injected = {"n": 0}
+
+    def flaky_replace(src, dst):
+        if str(dst) == str(target) and injected["n"] == 0:
+            injected["n"] += 1
+            raise PermissionError(5, "Access is denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky_replace)
+    assert st.save(session) is True
+    assert st.flush() is True              # 瞬时锁被骑过：不算写失败
+    assert injected["n"] == 1              # 确实注入过一次瞬时锁
+    assert target.is_file()
+    assert ss.close_all_writers() is True
 
 
 def test_close_sticky_and_rejects_late_save(store):

@@ -1,4 +1,5 @@
 import os
+import types
 
 import pytest
 from datetime import datetime, timezone
@@ -1018,6 +1019,7 @@ def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypat
     owner.config = Config(tmp_path)
     owner._apply_balance_timer = lambda: None
     owner._refresh_chat_windows = lambda: None
+    owner.todo_service = types.SimpleNamespace(apply_config=lambda: None)
     monkeypatch.setattr(app_mod, "_mac_set_dock_icon_visible", lambda *a, **k: None)
     PetApp._modern_settings_finished(owner, 0)  # QDialog.Rejected（X 关闭）
     assert refreshed == [1], "Rejected 关闭也必须刷新桌宠"

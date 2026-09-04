@@ -836,6 +836,7 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     ]
     if sys.platform == "win32":
         expected_labels.append("主动识屏")  # 仅 Windows + 有聊天能力时显示
+    expected_labels.append("待办提醒")  # 待办管理面板入口（所有平台）
     expected_labels.extend([
         "桌宠设置",
         "退出",

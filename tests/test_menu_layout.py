@@ -27,6 +27,7 @@ def test_modern_default_v1_has_compact_root_and_safety_actions():
         "tools_help",
         "agent_link",
         "proactive_screen",
+        "todo_panel",
         "default.separator-tools",
         "modern_settings",
         "quit",
@@ -318,6 +319,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "quark_download",
         "agent_link",
         "proactive_screen",
+        "todo_panel",
         "modern_settings",
         "quit",
     }
@@ -343,6 +345,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "tools_help",
         "agent_link",
         "proactive_screen",
+        "todo_panel",
         "modern_settings",
         "quit",
     ]
@@ -459,6 +462,9 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     ]
     if sys.platform == "win32":
         expected_root.insert(-2, "主动识屏")
+        expected_root.insert(-2, "待办提醒")
+    else:
+        expected_root.insert(-2, "待办提醒")
     assert root == expected_root
     rendered = ["|" if action.isSeparator() else action.text() for action in menu.actions()]
     expected_rendered = [
@@ -471,6 +477,8 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     ]
     if sys.platform == "win32":
         expected_rendered.insert(-3, "主动识屏")
+    # tools 段顺序：… Agent 联动 [主动识屏] 待办提醒 | 桌宠设置 退出
+    expected_rendered.insert(-3, "待办提醒")
     assert rendered == expected_rendered
     pet_controls = next(action.menu() for action in menu.actions() if action.text() == "桌宠控制")
     assert [action.text() for action in pet_controls.actions() if not action.isSeparator()] == [
