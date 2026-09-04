@@ -143,3 +143,16 @@ class TestBundleChecks:
         asset.parent.joinpath("吃Token").mkdir()
         errors = checker.check_bundle(root)
         assert any("吃Token" in error for error in errors)
+
+
+# Linux 回归：Fcitx 会话必须保留 fcitx 输入法上下文，供随包的匹配 Qt 插件加载。
+def test_linux_fcitx_session_preserves_fcitx_input_context(monkeypatch):
+    from pet import app as app_mod
+
+    monkeypatch.setattr(app_mod.sys, "platform", "linux")
+    monkeypatch.setenv("XMODIFIERS", "@im=fcitx")
+    monkeypatch.setenv("QT_IM_MODULE", "fcitx")
+
+    app_mod._configure_linux_fcitx_input_method()
+
+    assert app_mod.os.environ["QT_IM_MODULE"] == "fcitx"

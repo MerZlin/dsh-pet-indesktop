@@ -1098,8 +1098,21 @@ def _default_xcb_platform_on_wayland() -> None:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 
+def _configure_linux_fcitx_input_method() -> None:
+    """为 PySide6 冻结版选择与内置 Qt ABI 兼容的 Fcitx 输入法前端。"""
+    # Linux 成品随包携带按 PySide6 Qt ABI 编译的 Fcitx 插件；未指定时默认选中 fcitx 上下文。
+    if not sys.platform.startswith("linux"):
+        return
+    if os.environ.get("XMODIFIERS", "").strip() != "@im=fcitx":
+        return
+    if not os.environ.get("QT_IM_MODULE", "").strip():
+        os.environ["QT_IM_MODULE"] = "fcitx"
+
+
 def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     _default_xcb_platform_on_wayland()
+    # 必须在 QApplication 构造前设置，Qt 才会按随包 Fcitx 插件创建输入法上下文。
+    _configure_linux_fcitx_input_method()
     argv = list(argv if argv is not None else sys.argv)
     preferred_slot = None
 
