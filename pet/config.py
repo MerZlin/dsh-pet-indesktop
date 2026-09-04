@@ -560,6 +560,7 @@ class Config:
             "throw_max_speed": 4800.0,     # 由 throw_strength 导出
             "idle_low_fps_enabled": False,  # 闲置降帧（灰度默认关）：长时间无交互时动画隔帧呈现
             "idle_low_fps_threshold": 30.0,  # 闲置阈值（秒）：超过该时长无交互且窗口可见才降帧
+            "animation_prewarm_enabled": True,  # 动画预热（默认开）：预载高频/随机动作首帧以换流畅；关闭省内存
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
@@ -707,6 +708,7 @@ class Config:
             "click_sound_pack", "click_sound_volume",
             "slingshot_enabled", "throw_strength", "throw_max_speed",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
+            "animation_prewarm_enabled",
             "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
             "music_sing_enabled",
@@ -886,6 +888,10 @@ class Config:
         self.data["idle_low_fps_threshold"] = _float_or_default(
             self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
         )
+        # 动画预热（Phase 2，默认开）：关闭后不再后台预载大量动画首帧。
+        self.data["animation_prewarm_enabled"] = _bool_or_default(
+            self.data.get("animation_prewarm_enabled"), True
+        )
         # P3 broker（灰度默认关）：多开同角色空闲素材共享解码开关。
         # ⚠ 平台限定（P3A R2 P0-1 / R3，与 defaults 声明一致）：本键只在
         # Windows x86/x64（AMD64/x86_64 TSO）上生效——非支持平台（非 Windows，
@@ -982,6 +988,7 @@ class Config:
             "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
+            "animation_prewarm_enabled",
             "todo_reminder_enabled", "todo_reminder_lead_minutes",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:

@@ -673,13 +673,28 @@ class PetApp:
         self.win.move(x, y)
 
     def _create_library(self, character_id: str) -> MovieLibrary:
-        lib = MovieLibrary(character_id=character_id)
+        # Phase 2：动画预热默认开；关闭时库内不启动任何后台首帧预热。
+        prewarm = bool(self.config.get("animation_prewarm_enabled", True))
+        lib = MovieLibrary(character_id=character_id, prewarm_enabled=prewarm)
         # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.5s 错峰），
         # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
         lib.schedule_high_priority_warm()
         lib.schedule_low_priority_warm()
         logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
         return lib
+
+    def _sync_animation_prewarm(self) -> None:
+        """设置保存后把动画预热开关同步到当前素材库（幂等）。"""
+        win = self.win
+        lib = getattr(win, "lib", None) if win is not None else None
+        setter = getattr(lib, "set_prewarm_enabled", None)
+        if not callable(setter):
+            return
+        visible = None
+        is_visible = getattr(win, "isVisible", None) if win is not None else None
+        if callable(is_visible):
+            visible = bool(is_visible())
+        setter(bool(self.config.get("animation_prewarm_enabled", True)), visible=visible)
 
     def _wire_window(self, win: PetWindow) -> None:
         """绑定新窗口的回调接线（创建与角色切换共用，两处历史逐行重复）。
@@ -1012,6 +1027,7 @@ class PetApp:
         # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
         # Phase 1：先按配置启停可选服务，再让窗口刷新碰撞/其它设置。
         self._sync_feature_services()
+        self._sync_animation_prewarm()
         if self.win is not None:
             self.win.refresh_pet_settings()
         self._sync_dynamic_island()
