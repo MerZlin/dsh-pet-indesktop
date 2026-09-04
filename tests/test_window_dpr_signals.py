@@ -120,7 +120,7 @@ class _SignalPet(window_mod.PetWindow):
     """
 
     _rebuild_frame = window_mod.PetWindow._rebuild_frame
-    _frame_cache_key = window_mod.PetWindow._frame_cache_key
+    _frame_signature = window_mod.PetWindow._frame_signature
     _frame_content_fingerprint = window_mod.PetWindow._frame_content_fingerprint
     _refresh_frame_for_screen_dpr = window_mod.PetWindow._refresh_frame_for_screen_dpr
 

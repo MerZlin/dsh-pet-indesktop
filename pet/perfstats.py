@@ -13,7 +13,7 @@
 
 产品打点指标清单（快照键 ``{name: {count, total}}``；计时键 total 单位 =
 秒，avg = total/count×1000ms 在 dump 日志中直接给出）。来源：webm_clip.py
-（webm.*）与 window.py（rebuild.* / frame_cache.* / paint.draw）：
+（webm.*）与 window.py（rebuild.* / paint.draw）：
 
 - ``webm.first_frame``：首帧解码核心段 = ffmpeg 拉起 + 两帧交付耗时；
   同步路径的点击卡顿与后台预热的耗时主体都在这。
@@ -24,12 +24,10 @@
 - ``webm.poll_empty``：消费端空转计数（取帧队列空：解码未跟上/未开始）。
 - ``webm.consume``：主线程消费转换 RGBA→QImage→QPixmap 耗时。
 - ``rebuild.calls``：_rebuild_frame 实际进入次数（movie 非空即计）。
-- ``rebuild.skip``：快路径跳过计数（同 movie 同帧同 key，整条链未执行）。
-- ``rebuild.total``：帧重建整条路径耗时（skip/命中/未命中成功路径都计）。
-- ``frame_cache.hit`` / ``frame_cache.miss``：预缩放缓存命中/未命中计数，
-  命中率 = hit/(hit+miss)，可从快照直接算出。
-- ``rebuild.scale``：未命中路径 CPU 转换链耗时（toImage→镜像→预乘→
-  Smooth 缩放→ARGB32→fromImage）。
+- ``rebuild.skip``：快路径跳过计数（同 movie 同帧同签名，整条链未执行）。
+- ``rebuild.total``：帧重建整条路径耗时（skip/重建成功路径都计）。
+- ``rebuild.scale``：重建路径 CPU 转换链耗时（toImage→镜像→预乘→
+  Smooth 缩放→fromImage）。
 - ``rebuild.mask``：_sync_mask 掩码生成耗时（canvas 绘制 + createAlphaMask
   + QRegion）。
 - ``paint.draw``：paintEvent 全段耗时（含 slingshot/squash 附加绘制）。

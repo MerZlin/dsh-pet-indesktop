@@ -598,6 +598,7 @@ class Config:
             "decode_broker_enabled": False,
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             **DEFAULT_COLLISION_SETTINGS,
+            "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             "chat": _default_chat_data(),
         }
         self.reload()
@@ -726,6 +727,7 @@ class Config:
             "collision_mass_scale", "collision_impulse_cap",
             "collision_sound_enabled", "collision_sound_volume",
             "decode_broker_enabled",
+            "media_prewarm",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -862,6 +864,8 @@ class Config:
             self.data.get("system_notifications_enabled"), True
         )
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
+        prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
+        self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
@@ -936,6 +940,7 @@ class Config:
             "collision_sound_enabled", "collision_sound_volume",
             "slingshot_enabled", "throw_strength", "agent_link",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
+            "media_prewarm",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()

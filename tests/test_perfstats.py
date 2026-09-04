@@ -6,8 +6,8 @@
 - 关闭态零开销形态：打点路径不产生任何指标记录、行为与未打点前逐位一致；
 - webm_clip 打点：_stamp_source_indices（解码帧耗时 / 队列等待 / 丢帧）、
   _process_frame（主线程消费转换耗时）、_poll（空转计数）；
-- window 打点：_rebuild_frame 命中/缺失/快路径与缩放段、_sync_mask 掩码段、
-  paintEvent 绘制段、frame_cache 命中率计数。
+- window 打点：_rebuild_frame 重建/快路径与缩放段、_sync_mask 掩码段、
+  paintEvent 绘制段。
 """
 from __future__ import annotations
 
@@ -252,11 +252,11 @@ class _CacheLibrary:
         return list(self._clips)
 
 
-class _CachePet:
-    """只挂载 _rebuild_frame 的假窗口（与 test_frame_pixmap_cache 同构）。"""
+class _RebuildPet:
+    """只挂载 _rebuild_frame 的假窗口。"""
 
     _rebuild_frame = window_mod.PetWindow._rebuild_frame
-    _frame_cache_key = window_mod.PetWindow._frame_cache_key
+    _frame_signature = window_mod.PetWindow._frame_signature
     _frame_content_fingerprint = window_mod.PetWindow._frame_content_fingerprint
 
     def __init__(self, movie, lib, scale=0.5, anim="idle", dpr=1.0):
@@ -295,33 +295,31 @@ class TestWindowInstrumentation:
         _qapp()
         clip = _FrameClip([_frame_image(i) for i in range(n_frames)])
         lib = _CacheLibrary({"idle": clip})
-        return clip, _CachePet(clip, lib)
+        return clip, _RebuildPet(clip, lib)
 
     def test_rebuild_frame_disabled_records_nothing(self):
         clip, pet = self._pet()
         window_mod.PetWindow._rebuild_frame(pet)
         window_mod.PetWindow._rebuild_frame(pet)
-        assert pet._frame_cache is not None  # 缓存路径照常工作
+        assert pet._frame_pixmap is not None  # 重建路径照常工作
         assert perfstats.snapshot() == {}
 
-    def test_rebuild_frame_records_hit_miss_skip_and_scale(self):
+    def test_rebuild_frame_records_rebuild_skip_and_scale(self):
         clip, pet = self._pet()
         perfstats.enable()
         try:
-            window_mod.PetWindow._rebuild_frame(pet)  # 帧0：miss
+            window_mod.PetWindow._rebuild_frame(pet)  # 帧0：重建
             clip._frame_number = 1
-            window_mod.PetWindow._rebuild_frame(pet)  # 帧1：miss
+            window_mod.PetWindow._rebuild_frame(pet)  # 帧1：重建
             clip._frame_number = 0
-            window_mod.PetWindow._rebuild_frame(pet)  # 帧0：缓存命中
+            window_mod.PetWindow._rebuild_frame(pet)  # 帧0：签名不同，直接重建
             window_mod.PetWindow._rebuild_frame(pet)  # 同帧：快路径跳过
         finally:
             perfstats.disable()
         snap = perfstats.snapshot()
         assert snap["rebuild.calls"]["count"] == 4
-        assert snap["frame_cache.miss"]["count"] == 2
-        assert snap["frame_cache.hit"]["count"] == 1
         assert snap["rebuild.skip"]["count"] == 1
-        assert snap["rebuild.scale"]["count"] == 2  # 每次 miss 走整条转换链
+        assert snap["rebuild.scale"]["count"] == 3  # 每次签名变化都走整条转换链
         assert snap["rebuild.total"]["count"] == 4
 
     def test_sync_mask_timing_records_mask_segment(self, monkeypatch):
@@ -368,21 +366,3 @@ class TestWindowInstrumentation:
             w.close()
         snap = perfstats.snapshot()
         assert snap["paint.draw"]["count"] == 2
-
-    def test_frame_cache_hit_rate_exposed_via_snapshot(self):
-        """命中率 = frame_cache.hit / (hit + miss)，可从 snapshot 直接算出。"""
-        clip, pet = self._pet()
-        perfstats.enable()
-        try:
-            window_mod.PetWindow._rebuild_frame(pet)
-            clip._frame_number = 1
-            window_mod.PetWindow._rebuild_frame(pet)
-            clip._frame_number = 0
-            window_mod.PetWindow._rebuild_frame(pet)
-        finally:
-            perfstats.disable()
-        snap = perfstats.snapshot()
-        hits = snap["frame_cache.hit"]["count"]
-        misses = snap["frame_cache.miss"]["count"]
-        assert (hits, misses) == (1, 2)
-        assert hits / (hits + misses) == pytest.approx(1 / 3)

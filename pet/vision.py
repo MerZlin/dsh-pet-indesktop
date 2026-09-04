@@ -18,9 +18,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from PIL import Image, ImageGrab
-
-# 注意：不在此处顶层 import pet.chat —— 无 Chat 变体打包时排除 pet.chat，
+# 注意：不在此处顶层 import PIL —— Image/ImageGrab 只在截屏路径
+# （capture_window_rect / capture_screen_bytes）用到，而本模块随 pet.window
+# 顶层导入常驻进程；PIL 顶层导入会让它在启动期常驻数 MB。用到的地方在
+# 函数内延迟导入（PIL 进入 sys.modules 后重复 import 代价可忽略）。
+#
+# 同样不在此处顶层 import pet.chat —— 无 Chat 变体打包时排除 pet.chat，
 # 顶层导入会导致 pet_entry_no_chat.py 启动即 ModuleNotFoundError。
 # 需要的地方在 ask_about_screen 内延迟导入。
 
@@ -221,6 +224,7 @@ def capture_window_rect(rect: tuple[int, int, int, int] | None) -> Any:
     仅允许在后台 worker 线程调用！
     针对多屏负坐标：抓取全屏后按虚拟屏幕原点平移裁剪。
     """
+    from PIL import ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
     if not rect or rect[2] <= 0 or rect[3] <= 0:
         return None
     try:
@@ -268,6 +272,7 @@ def foreground_app_info() -> str:
 def capture_screen_bytes() -> bytes:
     """截全屏（含多显示器）→ 缩到最长边 MAX_EDGE → 内存 JPEG bytes，全程不落盘。"""
     import io
+    from PIL import Image, ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
     img = ImageGrab.grab(all_screens=True)
     w, h = img.size
     scale = MAX_EDGE / max(w, h, 1)

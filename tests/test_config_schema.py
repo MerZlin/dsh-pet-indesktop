@@ -41,7 +41,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "cursor_hidden_passthrough", "decode_broker_enabled", "drag_physics",
     "dynamic_island", "facing",
     "idle_low_fps_enabled", "idle_low_fps_threshold", "lock_position",
-    "menu_easter_egg", "modern_chat_background", "modern_chat_background_fill",
+    "menu_easter_egg", "media_prewarm", "modern_chat_background", "modern_chat_background_fill",
     "modern_chat_background_opacity", "modern_chat_card_opacity", "mouse_through",
     "music_sing_enabled", "no_move", "on_top", "pet_opacity", "playback_speed",
     "quick_launch_apps", "rx", "ry", "scale", "screen_name",

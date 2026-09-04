@@ -555,7 +555,17 @@ class PetApp:
         self.win.move(x, y)
 
     def _create_library(self, character_id: str) -> MovieLibrary:
-        lib = MovieLibrary(character_id=character_id)
+        # 预热策略：默认 balanced（高频交互链预热首帧，随机动作池只取元数据
+        # 按需解码）；省电模式（闲置降帧开关）强制 minimal（连高频链也不预热，
+        # 常驻内存最低）。media_prewarm 配置键保留给手改 config 的高级用户
+        # （可显式设 full），但被省电模式覆盖。
+        prewarm = str(self.config.get("media_prewarm", "balanced") or "balanced")
+        if self.config.get("idle_low_fps_enabled", False):
+            prewarm = "minimal"
+        lib = MovieLibrary(
+            character_id=character_id,
+            prewarm_policy=prewarm,
+        )
         # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.5s 错峰），
         # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
         lib.schedule_high_priority_warm()
@@ -598,11 +608,12 @@ class PetApp:
         self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
-        # 首次点击 Q 弹卡顿。
-        click_sound.warm_click_sound_effects(
-            self.config.get("click_sound_pack"),
-            data_dir=self.config.dir,
-        )
+        # 首次点击 Q 弹卡顿。音效关闭时不预热，避免无谓拉起 QtMultimedia 池。
+        if self.config.get("click_sound_enabled", True) or self.config.get("collision_sound_enabled", True):
+            click_sound.warm_click_sound_effects(
+                self.config.get("click_sound_pack"),
+                data_dir=self.config.dir,
+            )
         win.show()
 
         tray = self._build_tray(win)

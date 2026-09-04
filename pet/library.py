@@ -122,9 +122,12 @@ class MovieLibrary(QObject):
         character_id: str | None = None,
         asset_dir: Path | str | None = None,
         manifest: Mapping[str, str] | None = None,
+        prewarm_policy: str = "balanced",
     ) -> None:
         super().__init__(parent)
         self.character_id = character_id or catalog.DEFAULT_CHARACTER
+        policy = str(prewarm_policy or "balanced").strip().lower()
+        self._prewarm_policy = policy if policy in {"full", "balanced", "minimal"} else "balanced"
         if asset_dir is not None:
             self._asset_dir = Path(asset_dir)
         else:
@@ -280,8 +283,16 @@ class MovieLibrary(QObject):
         yield_to_interaction: bool = False,
         generation: int | None = None,
         cancelled: Callable[[], bool] | None = None,
+        include_frames: bool = True,
     ) -> None:
-        """预热已创建的 clip 对象：元数据 + 首帧 QImage（线程安全）。
+        """预热已创建的 clip 对象：元数据 +（可选）首帧 QImage（线程安全）。
+
+        include_frames 控制是否预解码首帧：首帧只是消除首次播放卡顿的缓存，
+        每段 QImage 约占 640×360×4 ≈ 0.9MB；随机动作池有 40+ 段，全部预解码
+        会白白吃掉数十 MB 常驻内存。由 prewarm_policy 决定取舍：
+        - full     所有段落都预解码首帧（最流畅，内存最高）
+        - balanced 只预解码常用交互动画首帧，随机动作池只取元数据（默认）
+        - minimal  一律不预解码首帧，按需同步解码（最省内存，首次播放可能微卡）
 
         yield_to_interaction=True 时（低优先级随机动作池），每段耗时的
         ffmpeg 预热前检查交互让路闸门：交互进行中阻塞等待，交互结束后继续；
@@ -310,8 +321,8 @@ class MovieLibrary(QObject):
                 clip.warm_meta()
 
             list(ex.map(_warm_meta, clips))
-            if self._warm_paused:
-                return  # 窗口已隐藏：首帧预热（每段拉起 ffmpeg）留到恢复后按需进行
+            if self._warm_paused or not include_frames:
+                return  # 窗口已隐藏 / 该批不需要首帧：首帧留到恢复后或首次播放按需进行
 
             def _warm_first(clip: object) -> None:
                 if yield_to_interaction and not self._await_interaction_clear(generation):
@@ -416,6 +427,7 @@ class MovieLibrary(QObject):
         *,
         generation: int | None = None,
         cancelled: Callable[[], bool] | None = None,
+        include_frames: bool = True,
     ) -> None:
         """预热指定动画（调用方需保证 clip 已在主线程创建）。"""
         if not names:
@@ -423,6 +435,7 @@ class MovieLibrary(QObject):
         self._warm_objects(
             [self.movie(name) for name in names], workers,
             generation=generation, cancelled=cancelled,
+            include_frames=include_frames,
         )
 
     def _warm_all_meta_background(self) -> None:
@@ -450,6 +463,7 @@ class MovieLibrary(QObject):
                 high, workers=min(3, len(high)),
                 generation=generation,
                 cancelled=lambda: self._warm_paused or generation != self._warm_generation,
+                include_frames=(self._prewarm_policy != "minimal"),
             )
         except Exception:
             # 预热失败不致命，后续按需读取时会再尝试
@@ -503,6 +517,7 @@ class MovieLibrary(QObject):
                         clips, 1,
                         yield_to_interaction=True,
                         generation=generation,
+                        include_frames=(self._prewarm_policy == "full"),
                     )
                 finally:
                     # 记录首帧预热是否完整跑完：中途 pause/换代会跳过首帧阶段，

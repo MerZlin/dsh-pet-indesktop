@@ -449,9 +449,11 @@ class ProactiveScreenWatcher:
                 w, h = img.size
                 scale = vision.MAX_EDGE / max(w, h, 1)
                 if scale < 1.0:
+                    # vision 的 PIL 已下沉为函数内懒导入，这里自行局部导入
+                    from PIL import Image
                     img = img.resize(
                         (max(1, round(w * scale)), max(1, round(h * scale))),
-                        vision.Image.LANCZOS,
+                        Image.LANCZOS,
                     )
                 # JPEG 编码放在 worker 线程，避免主线程卡顿
                 import io

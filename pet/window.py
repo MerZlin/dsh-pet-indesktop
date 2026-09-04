@@ -54,7 +54,7 @@ from .config import (
     _float_or_default,
 )
 from .library import MovieLibrary
-from .frame_cache import FRAME_CACHE_DEFAULT_MAX_BYTES, FramePixmapCache
+from . import slot_manager as slot_manager_mod
 from .animation_thumbnail import decode_representative_frame, representative_frame_index
 from .speech_bubble import PetSpeechBubble, list_self_talk_images
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
@@ -150,12 +150,12 @@ IDLE_LOW_FPS_DEFAULT_THRESHOLD = 30.0
 # 里的 divisor 来源即可，不硬编码。
 IDLE_LOW_FPS_DIVISOR = 2
 
-# ---- 帧缓存素材内容弱指纹（P2）----
-# 缓存 key 的 mtime+size 无法识别「同 mtime + 同 size 的原地替换」：复制工具
-# 保留 mtime、新文件恰与旧文件等长时，整会话会命中旧成品帧。补一个首尾块
-# 内容指纹兜底，但绝不能每帧读文件（key 在 _rebuild_frame 热路径上逐帧计算）。
+# ---- 帧快路径素材内容弱指纹（P2）----
+# 快路径签名的 mtime+size 无法识别「同 mtime + 同 size 的原地替换」：复制工具
+# 保留 mtime、新文件恰与旧文件等长时，整会话会一直显示旧帧。补一个首尾块
+# 内容指纹兜底，但绝不能每帧读文件（签名在 _rebuild_frame 热路径上逐帧计算）。
 # 折中：指纹按固定间隔刷新——稳态下每帧只做一次 dict 命中 + monotonic 比较
-# （零文件 I/O）；内容被原地替换时最迟一个刷新周期内 key 变化、旧成品失效。
+# （零文件 I/O）；内容被原地替换时最迟一个刷新周期内签名变化、强制重建。
 _FRAME_FP_REFRESH_SECS = 2.0
 _FRAME_FP_BLOCK = 64  # 头部/尾部各取 64 字节做弱指纹（webm 头尾都含结构信息）
 
@@ -521,10 +521,10 @@ class PetWindow(QWidget):
         # 切换动画/缩放时重置），避免圆链随动画帧缩放跳动导致漏判
         self._collision_local_bounds: QRect | None = None
         self._hit_alpha_image: QImage | None = None
-        # 已重建帧的输入签名：movie 身份 + 完整缓存 key（素材路径+mtime+大小、
+        # 已重建帧的输入签名：movie 身份 + 完整帧签名（素材路径+mtime+大小、
         # 帧号、朝向、镜像、scale、DPR、动画名）。相同签名重复 rebuild 时整条
         # toImage/镜像/缩放/转换链直接跳过；素材原地替换（mtime/大小变化）使
-        # key 不同，快路径同样失效（P1，不得绕过变更检测）。
+        # 签名不同，快路径同样失效（P1，不得绕过变更检测）。
         self._frame_key: tuple | None = None
         # 当前帧构建时所用的屏幕 DPR：窗口跨屏（moveEvent）时对比新 DPR，
         # 变化即强制 _rebuild_frame，避免旧 DPR 成品继续显示（P1）。
@@ -536,19 +536,6 @@ class PetWindow(QWidget):
         # showEvent 接线，closeEvent 摘线。
         self._dpr_watch_window = None
         self._dpr_watch_screen = None
-        # 预缩放成品帧缓存（方案 A §3.1）：同一动画同一帧在相同
-        # (素材路径+mtime+大小+内容弱指纹, 帧号, 朝向, scale, DPR, 动画名)
-        # 下结果确定，循环播放直接复用最终 QPixmap，跳过整条 CPU 转换链。
-        # 字节预算默认 64MB（可用 frame_cache_max_bytes 配置覆盖），按
-        # QPixmap+QImage 双份 ARGB32 记账，超限逐出最久未用（硬上界）；
-        # scale/DPR/角色/素材变化（含同 mtime+同 size 的原地替换，见
-        # _frame_cache_key / _frame_content_fingerprint）由 key 自动失效。
-        try:
-            _budget = int(self.cfg.get('frame_cache_max_bytes',
-                                       FRAME_CACHE_DEFAULT_MAX_BYTES))
-        except (TypeError, ValueError):
-            _budget = FRAME_CACHE_DEFAULT_MAX_BYTES
-        self._frame_cache = FramePixmapCache(_budget)
         self._input_controller: WindowsPerPixelInputController | None = None
         if os.name == "nt":
             self._input_controller = WindowsPerPixelInputController(self)
@@ -989,48 +976,24 @@ class PetWindow(QWidget):
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
-        """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。"""
-        if pid <= 0:
-            return False
-        if os.name == 'nt':
-            # PROCESS_QUERY_LIMITED_INFORMATION
-            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if not handle:
-                return False
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。
+
+        实现已下沉到 slot_manager.pid_alive（多开避让与帧缓存预算均分共用），
+        本方法保留作薄封装，外部对 PetWindow._pid_alive 的补丁仍生效。
+        """
+        return slot_manager_mod.pid_alive(pid)
 
     def _live_instance_rects(self) -> list[tuple[int, int, int, int]]:
         """其他存活实例的窗口矩形（配置目录下 runtime-<pid>.json 标记）。
 
-        死进程/损坏文件的标记顺手清理，避免越积越多。
+        死进程/损坏文件的标记由 slot_manager.read_live_instances 顺手清理，
+        避免越积越多。
         """
         rects: list[tuple[int, int, int, int]] = []
-        try:
-            files = list(self.cfg.dir.glob('runtime-*.json'))
-        except OSError:
-            return rects
-        for f in files:
-            try:
-                data = json.loads(f.read_text(encoding='utf-8'))
-                pid = int(data.get('pid', 0))
-                if pid == os.getpid():
-                    continue
-                if not self._pid_alive(pid):
-                    raise OSError('stale marker')
-                x, y, w, h = (int(data.get(k, 0)) for k in ('x', 'y', 'w', 'h'))
-                if w > 0 and h > 0:
-                    rects.append((x, y, w, h))
-            except (OSError, ValueError, TypeError):
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
+        for _pid, x, y, w, h in slot_manager_mod.read_live_instances(
+                self.cfg.dir, exclude_pid=os.getpid(), pid_alive_fn=self._pid_alive):
+            if w > 0 and h > 0:
+                rects.append((x, y, w, h))
         return rects
 
     def _write_runtime_marker(self) -> None:
@@ -2042,17 +2005,17 @@ class PetWindow(QWidget):
             self.movie.stop()  # 停在最后一帧，等 _on_anim_ended 切走
             self._on_anim_ended(name)
 
-    def _frame_cache_key(self, frame_n: int | None, dpr: float) -> tuple:
-        """预缩放缓存的 key：素材路径+mtime+大小+内容弱指纹、帧号、朝向、动画名、scale、DPR。
+    def _frame_signature(self, frame_n: int | None, dpr: float) -> tuple:
+        """帧内容签名：素材路径+mtime+大小+内容弱指纹、帧号、朝向、动画名、scale、DPR。
 
-        任意一项变化都会命中不同条目（scale/DPR/角色切换/素材文件变化
-        由此自动失效）；镜像决策（facing + no_mirror）也进 key，避免
-        文字动画朝右与朝左共用条目。mtime 之外再记 st_size：复制工具
+        任意一项变化都会得到不同签名（scale/DPR/角色切换/素材文件变化
+        由此触发重建）；镜像决策（facing + no_mirror）也进签名，避免
+        文字动画朝右与朝左共用签名。mtime 之外再记 st_size：复制工具
         保留 mtime 时，内容大小变化仍能失效（P1）。同 mtime+同 size 的
         原地替换靠首尾块弱指纹兜底（_frame_content_fingerprint，固定
         间隔刷新），把「整会话显示旧帧」收窄到最多一个刷新周期（P2）。
-        该 key 同时是 _rebuild_frame 快路径签名的一部分：素材原地替换
-        （mtime/大小/指纹任一变化）时快路径同样失效，不会绕过变更检测。
+        该签名是 _rebuild_frame 快路径签名的一部分：素材原地替换
+        （mtime/大小/指纹任一变化）时快路径失效，不会绕过变更检测。
         """
         path: str | None = None
         mtime = 0
@@ -2097,9 +2060,9 @@ class PetWindow(QWidget):
         - 稳态（同一素材连续重建、元数据未变、上次检查未过期）：dict 命中 +
           monotonic 比较，零文件 I/O；
         - 元数据已变（mtime/size 任一不同）或检查过期：重读首尾块刷新记录。
-        内容被原地替换但元数据未变时，最迟一个刷新周期内 key 变化、旧缓存
-        条目失效（当前实现替换后至多 2s 内自愈；替换发生瞬间读不到文件则
-        退回指纹 0，key 变化触发重建，同样自愈）。
+        内容被原地替换但元数据未变时，最迟一个刷新周期内签名变化、强制重建
+        （当前实现替换后至多 2s 内自愈；替换发生瞬间读不到文件则
+        退回指纹 0，签名变化触发重建，同样自愈）。
         """
         now = time.monotonic()
         table = getattr(self, '_frame_fp', None)
@@ -2126,11 +2089,9 @@ class PetWindow(QWidget):
         """重建当前帧：缩放 + 朝向镜像 + 生成窗口 mask。
 
         帧内容由（素材路径+mtime+大小、帧号、朝向、动画、缩放、DPR）唯一确定。
-        两级复用：
-        - 同一 movie 同一帧重复 rebuild（_frame_key 相同）：整条链直接跳过；
-        - 动画循环回到已构建过的帧：命中预缩放缓存（FramePixmapCache），
-          复用最终 QPixmap 与命中测试 alpha 图，跳过 toImage→镜像→预乘→
-          Smooth 缩放→ARGB32→fromImage 整条 CPU 链（方案 A §3.1）。
+        同一 movie 同一帧重复 rebuild（_frame_key 相同）时整条链直接跳过；
+        签名不同（帧推进/朝向/scale/DPR/素材变化）时直接重建——整条转换链
+        实测 1~2.4ms/帧，远低于 24fps 的 41.6ms 帧预算，无需成品缓存。
         """
         if self.movie is None:
             return
@@ -2139,47 +2100,24 @@ class PetWindow(QWidget):
             perfstats.note('rebuild.calls')
         scr = self._screen_available()
         dpr = scr.devicePixelRatio() if scr is not None else 1.0
-        # 注意：_last_frame_dpr 只在重建成功后记账（命中缓存也算成功）；
+        # 注意：_last_frame_dpr 只在重建成功后记账；
         # 失败路径（解码返回空图）与快路径跳过均不更新，避免把「未按新
         # DPR 重建」记成已重建（P1 复审）。
         try:
             # currentFrameNumber = 0-based 源时间线显示帧索引（P1 复审）：
-            # 缓存 key 锚定素材真实帧号，队列满丢帧后不会把不同源帧
-            # 的成品误串（消费计数与源帧号在丢帧后不再相等）。
+            # 签名锚定素材真实帧号，队列满丢帧后不会把不同源帧
+            # 的画面误串（消费计数与源帧号在丢帧后不再相等）。
             frame_n = self.movie.currentFrameNumber()
         except AttributeError:
             frame_n = None
-        # 快路径签名 = movie 身份 + 完整缓存 key：素材 mtime/大小变化会改变
-        # 缓存 key，快路径随之失效——快路径不得绕过素材变更检测（P1）。
-        cache_key = self._frame_cache_key(frame_n, dpr)
-        key = (id(self.movie), cache_key)
+        # 快路径签名 = movie 身份 + 完整帧签名：素材 mtime/大小/指纹变化会
+        # 改变签名，快路径随之失效——快路径不得绕过素材变更检测（P1）。
+        key = (id(self.movie), self._frame_signature(frame_n, dpr))
         if key == getattr(self, '_frame_key', None):
             if perfstats.ENABLED:
                 perfstats.note('rebuild.skip')
                 perfstats.time('rebuild.total', perfstats.clock() - _rf_t0)
             return
-        cache = getattr(self, '_frame_cache', None)
-        if cache is None:
-            cache = FramePixmapCache(
-                getattr(self, '_frame_cache_max_bytes', FRAME_CACHE_DEFAULT_MAX_BYTES)
-            )
-            self._frame_cache = cache
-        entry = cache.get(cache_key)
-        if entry is not None:
-            if perfstats.ENABLED:
-                perfstats.note('frame_cache.hit')
-            # 命中：直接复用最终 pixmap 与命中测试 alpha 图。两者出自同一
-            # 缓存条目，_hit_alpha_image 与 _frame_pixmap 永远逐像素一致。
-            self._frame_pixmap = entry.pixmap
-            self._hit_alpha_image = entry.image
-            self._frame_key = key
-            self._last_frame_dpr = dpr
-            self._sync_mask()
-            if perfstats.ENABLED:
-                perfstats.time('rebuild.total', perfstats.clock() - _rf_t0)
-            return
-        if perfstats.ENABLED:
-            perfstats.note('frame_cache.miss')
         pm = self.movie.currentPixmap()
         if pm is None or pm.isNull():
             # ffmpeg 缺失/素材损坏时首帧解码可能失败返回 None，跳过本帧而不是崩溃
@@ -2199,17 +2137,18 @@ class PetWindow(QWidget):
         img = img.scaled(w_c, h_c,
                          Qt.AspectRatioMode.IgnoreAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
-        img = img.convertToFormat(QImage.Format.Format_ARGB32)
+        # 保留 ARGB32_Premultiplied，不再转回非预乘：QPixmap.fromImage 对预乘
+        # 图是 O(1) 浅共享（转非预乘反而深拷贝），且这份缩放后的预乘图直接
+        # 充任 _hit_alpha_image，命中测试/mask 复用同一份像素（预乘只乘
+        # RGB 不动 alpha 字节，alpha 语义不变）。
         pm = QPixmap.fromImage(img)
         pm.setDevicePixelRatio(dpr)
         if perfstats.ENABLED:
-            # 未命中路径的整条转换链：toImage→镜像→预乘→Smooth 缩放→
-            # ARGB32→fromImage（P0 观测：帧缓存 miss 时的缩放段成本）。
+            # 重建路径的整条转换链：toImage→镜像→预乘→Smooth 缩放→
+            # fromImage（浅共享）（P0 观测：重建的缩放段成本）。
             perfstats.time('rebuild.scale', perfstats.clock() - _scale_t0)
-        cache.put(cache_key, pm, img)
         self._frame_pixmap = pm
-        # 直接缓存缩放后的 ARGB32 图：命中测试复用这份数据，
-        # 避免 _is_transparent_at 再次 toImage
+        # 命中测试复用这份缩放后的预乘图，避免 _is_transparent_at 再次 toImage
         self._hit_alpha_image = img
         self._frame_key = key
         self._last_frame_dpr = dpr
@@ -2236,7 +2175,7 @@ class PetWindow(QWidget):
     # Qt 6.11 的 QScreen 没有 devicePixelRatioChanged 信号；系统显示缩放变化
     # （改变 devicePixelRatio()）由 logicalDotsPerInchChanged /
     # physicalDotsPerInchChanged 上报。二者 + QWindow.screenChanged 都挂到
-    # 强制 _rebuild_frame：缓存 key 用新 DPR，帧号/朝向等未变也不会被快路径
+    # 强制 _rebuild_frame：帧签名用新 DPR，帧号/朝向等未变也不会被快路径
     # 跳过；DPR 确实未变（同 DPI 屏间跨屏等）由快路径自行跳过，零开销。
     # moveEvent 里的 _refresh_frame_for_screen_dpr 保留作兜底。
 
@@ -2382,7 +2321,8 @@ class PetWindow(QWidget):
         if not rect.contains(local):
             return True
         if self._hit_alpha_image is None:
-            # _rebuild_frame 已把缩放后的 ARGB32 图缓存为 _hit_alpha_image，
+            # _rebuild_frame 已把缩放后的预乘 ARGB32 图缓存为 _hit_alpha_image
+            # （预乘不动 alpha 字节，命中测试语义不变），
             # 此处只是兜底（如测试直接挂 _frame_pixmap 的场景）
             self._hit_alpha_image = self._frame_pixmap.toImage()
         img = self._hit_alpha_image

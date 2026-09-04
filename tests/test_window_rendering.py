@@ -553,8 +553,9 @@ class _RebuildClip:
 
 
 class _RebuildLibrary:
-    def __init__(self, clips, no_mirror=frozenset()):
+    def __init__(self, clips, no_mirror=frozenset(), clip_paths=None):
         self._clips = dict(clips)
+        self._paths = dict(clip_paths or {})
         self.no_mirror = set(no_mirror)
         self.manifest = {}
         self.folder_map = {}
@@ -575,12 +576,15 @@ class _RebuildLibrary:
     def duration(self, name):
         return 1.0
 
+    def clip_path(self, name):
+        return self._paths.get(name)
+
 
 class _RebuildPet:
     """只挂载 _rebuild_frame / _is_transparent_at 的假窗口。"""
 
     _rebuild_frame = window_mod.PetWindow._rebuild_frame
-    _frame_cache_key = window_mod.PetWindow._frame_cache_key
+    _frame_signature = window_mod.PetWindow._frame_signature
     _frame_content_fingerprint = window_mod.PetWindow._frame_content_fingerprint
     _is_transparent_at = window_mod.PetWindow._is_transparent_at
 
@@ -693,9 +697,9 @@ def test_rebuild_frame_skips_when_same_movie_frame_unchanged():
     assert clip.pixmap_requests == 5
 
 
-def test_rebuild_frame_caches_scaled_image_for_hit_testing():
-    """_rebuild_frame 直接把缩放后的 ARGB32 图缓存为 _hit_alpha_image，
-    命中测试不再调用 QPixmap.toImage。"""
+def test_rebuild_frame_stores_scaled_image_for_hit_testing():
+    """_rebuild_frame 直接把缩放后的预乘 ARGB32 图存为 _hit_alpha_image
+    （预乘不动 alpha 字节，命中测试语义不变），命中测试不再调用 QPixmap.toImage。"""
     _qapp()
     clip = _RebuildClip(_solid_frame_pixmap(), frame_number=0)
     lib = _RebuildLibrary({"idle": clip})
@@ -705,7 +709,7 @@ def test_rebuild_frame_caches_scaled_image_for_hit_testing():
     assert pet._hit_alpha_image.width() == round(catalog.CANVAS_W * 0.5)
     assert pet._hit_alpha_image.height() == round(catalog.CANVAS_H * 0.5)
 
-    # 换成不可 toImage 的 pixmap：命中测试必须走 _hit_alpha_image 缓存
+    # 换成不可 toImage 的 pixmap：命中测试必须走 _hit_alpha_image
     class _NoToImagePixmap:
         def isNull(self):
             return False
@@ -794,3 +798,130 @@ def test_move_event_refreshes_frame_on_dpr_change():
     fake._last_dpr_poll_at = 0.0
     window_mod.PetWindow.moveEvent(fake, QMoveEvent(QPoint(0, 0), QPoint(20, 20)))
     assert calls["rebuild"] == 2
+
+
+# ================================================================ 素材变更 → 帧签名失效（P1/P2 回归）
+# 无缓存重建路径下，素材文件变化必须使 _frame_signature 变化并触发真实重建
+# （移植自已删除的 test_frame_pixmap_cache.py，剥掉 FramePixmapCache 断言）。
+
+def test_rebuild_frame_invalidates_on_material_file_change(tmp_path):
+    """素材文件 mtime 变化：同一路径同一帧号也必须真实重建，不得继续显示旧帧。"""
+    _qapp()
+    path = tmp_path / "idle.webm"
+    path.write_bytes(b"v0")
+    os.utime(path, (1000, 1000))
+
+    clip0 = _RebuildClip(_solid_frame_pixmap())
+    pet = _RebuildPet(clip0, _RebuildLibrary({"idle": clip0}, clip_paths={"idle": path}),
+                      anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    pm_v0 = pet._frame_pixmap
+    alpha_v0 = pet._hit_alpha_image
+    sig_v0 = pet._frame_signature(0, 1.0)
+
+    # 素材被替换（mtime 变化）+ 新 clip 实例（同一路径同一帧号）
+    path.write_bytes(b"v1")
+    os.utime(path, (2000, 2000))
+    clip1 = _RebuildClip(_solid_frame_pixmap())
+    pet.movie = clip1
+    pet.lib = _RebuildLibrary({"idle": clip1}, clip_paths={"idle": path})
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert pet._frame_signature(0, 1.0) != sig_v0  # mtime 不同 → 签名变化
+    assert clip1.pixmap_requests == 1              # 真实重建（走整条转换链）
+    assert pet._frame_pixmap is not pm_v0
+    assert pet._hit_alpha_image is not alpha_v0
+
+    # 同一路径 + 同一 mtime + 同一帧 + 新 movie 实例：重建结果逐像素一致
+    clip2 = _RebuildClip(_solid_frame_pixmap())
+    pet.movie = clip2
+    pet.lib = _RebuildLibrary({"idle": clip2}, clip_paths={"idle": path})
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip2.pixmap_requests == 1
+    new_img = pet._frame_pixmap.toImage()
+    old_img = pm_v0.toImage()
+    assert new_img.size() == old_img.size()
+    assert new_img.pixelColor(10, 10) == old_img.pixelColor(10, 10)
+    assert new_img.pixelColor(100, 100) == old_img.pixelColor(100, 100)
+
+
+def test_rebuild_frame_invalidates_on_in_place_material_replace(tmp_path):
+    """P1：素材原地替换——同一 movie 实例、同一帧号，仅 mtime/内容变化，
+    _frame_key 快路径不得绕过变更检测，必须重新构建（不得继续显示旧帧）。"""
+    _qapp()
+    path = tmp_path / "idle.webm"
+    path.write_bytes(b"v0")
+    os.utime(path, (1000, 1000))
+
+    clip = _RebuildClip(_solid_frame_pixmap())  # 同一 clip 实例贯穿全程
+    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}),
+                      anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    pm_v0 = pet._frame_pixmap
+
+    # 同帧重复 rebuild：快路径确实生效（不重复解码）
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip.pixmap_requests == 1
+    assert pet._frame_pixmap is pm_v0
+
+    # 素材原地替换：mtime/内容变化，movie 实例/帧号/朝向/scale/DPR 全不变
+    path.write_bytes(b"v1")
+    os.utime(path, (2000, 2000))
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip.pixmap_requests == 2            # 快路径必须失效，重新走转换链
+    assert pet._frame_pixmap is not pm_v0
+
+
+def test_rebuild_frame_invalidates_on_same_mtime_size_change(tmp_path):
+    """同一 mtime 下内容大小变化（复制工具保留 mtime 的场景）：st_size 进签名，
+    快路径同样失效，不得继续显示旧帧。"""
+    _qapp()
+    path = tmp_path / "idle.webm"
+    path.write_bytes(b"v0")
+    os.utime(path, (1000, 1000))
+
+    clip = _RebuildClip(_solid_frame_pixmap())
+    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}),
+                      anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    sig_v0 = pet._frame_signature(0, 1.0)
+
+    path.write_bytes(b"v0-with-much-longer-content")
+    os.utime(path, (1000, 1000))  # 保留同一 mtime，仅大小变化
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert pet._frame_signature(0, 1.0) != sig_v0
+    assert clip.pixmap_requests == 2
+
+
+def test_rebuild_frame_invalidates_on_same_mtime_same_size_content_change(tmp_path, monkeypatch):
+    """P2：同一 mtime + 同一 size 的内容原地替换（等长热更）——首尾块弱指纹
+    必须让签名失效，不得整会话继续显示旧帧。
+
+    指纹按 _FRAME_FP_REFRESH_SECS 间隔刷新；测试把刷新间隔压到 0 强制每次
+    签名计算都重读首尾块（验证的是失效语义，不是刷新节奏）。"""
+    _qapp()
+    monkeypatch.setattr(window_mod, "_FRAME_FP_REFRESH_SECS", 0.0)
+    path = tmp_path / "idle.webm"
+    path.write_bytes(b"AAAA" + b"x" * 100 + b"BBBB")
+    os.utime(path, (1000, 1000))
+
+    clip = _RebuildClip(_solid_frame_pixmap())
+    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}),
+                      anim="idle", scale=0.5)
+    window_mod.PetWindow._rebuild_frame(pet)
+    pm_v0 = pet._frame_pixmap
+    sig_v0 = pet._frame_signature(0, 1.0)
+
+    # 等长原地替换：mtime 与 size 均不变，仅内容不同 → 指纹不同 → 必须失效
+    path.write_bytes(b"CCCC" + b"y" * 100 + b"DDDD")
+    os.utime(path, (1000, 1000))
+    window_mod.PetWindow._rebuild_frame(pet)
+    assert clip.pixmap_requests == 2, "同 mtime+同 size 的内容替换必须走转换链重建"
+    sig_v1 = pet._frame_signature(0, 1.0)
+    assert sig_v1 != sig_v0
+    assert pet._frame_pixmap is not pm_v0
+
+    # 内容未再变化：同一指纹 → 签名稳定（弱指纹不抖动）
+    clip2 = _RebuildClip(_solid_frame_pixmap())
+    pet.movie = clip2
+    pet.lib = _RebuildLibrary({"idle": clip2}, clip_paths={"idle": path})
+    assert pet._frame_signature(0, 1.0) == sig_v1

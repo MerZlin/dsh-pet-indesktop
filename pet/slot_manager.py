@@ -427,3 +427,59 @@ def migrate_legacy_spawns(config_dir: Path | str) -> bool:
             pass
 
     return success_all
+
+
+def pid_alive(pid: int) -> bool:
+    """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。"""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        # PROCESS_QUERY_LIMITED_INFORMATION
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def read_live_instances(
+    config_dir: Path | str,
+    *,
+    exclude_pid: int | None = None,
+    pid_alive_fn=None,
+) -> list[tuple[int, int, int, int, int]]:
+    """读取 <config_dir>/runtime-*.json 实例标记，返回存活实例 (pid, x, y, w, h) 列表。
+
+    死进程 pid、损坏 JSON、字段非法的标记顺手删除（避免越积越多）；
+    exclude_pid（通常传本进程 pid，其标记可能在计数后才写入）对应的
+    标记跳过且保留。供多开位置避让（PetWindow._live_instance_rects）使用。
+    pid_alive_fn 可注入（测试用），缺省用本模块 pid_alive。
+    """
+    alive = pid_alive_fn if pid_alive_fn is not None else pid_alive
+    instances: list[tuple[int, int, int, int, int]] = []
+    try:
+        files = list(Path(config_dir).glob('runtime-*.json'))
+    except OSError:
+        return instances
+    for f in files:
+        try:
+            data = json.loads(f.read_text(encoding='utf-8'))
+            pid = int(data.get('pid', 0))
+            if exclude_pid is not None and pid == exclude_pid:
+                continue
+            if not alive(pid):
+                raise OSError('stale marker')
+            x, y, w, h = (int(data.get(k, 0)) for k in ('x', 'y', 'w', 'h'))
+            instances.append((pid, x, y, w, h))
+        except (OSError, ValueError, TypeError):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    return instances

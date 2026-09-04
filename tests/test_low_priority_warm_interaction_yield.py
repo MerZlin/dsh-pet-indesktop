@@ -81,13 +81,14 @@ class _GateObjectsLib(library_mod.MovieLibrary):
         self.objects_entered = threading.Event()
         self.objects_release = threading.Event()
 
-    def _warm_objects(self, clips, workers, *, yield_to_interaction=False, generation=None):
+    def _warm_objects(self, clips, workers, *, yield_to_interaction=False, generation=None, include_frames=True):
         self.objects_entered.set()
         self.objects_release.wait(5.0)
         return super()._warm_objects(
             clips, workers,
             yield_to_interaction=yield_to_interaction,
             generation=generation,
+            include_frames=include_frames,
         )
 
 
@@ -108,7 +109,9 @@ def _make_lib(tmp_path, monkeypatch, clip_cls=FakeClip, lib_cls=None):
         directory.mkdir(parents=True)
         for name in files:
             (directory / name).write_bytes(b"fake")
-    return lib_cls(asset_dir=videos)
+    # 本文件锁定的是让路/代次机制（含首帧阶段），用 full 档保持旧预热语义；
+    # 档位对首帧的门控由 test_library_priority_warm.py 专项覆盖。
+    return lib_cls(asset_dir=videos, prewarm_policy="full")
 
 
 def _wait_until(predicate, timeout=3.0):

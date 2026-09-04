@@ -30,7 +30,7 @@ class FakeClip:
         self.warmed_frame = True
 
 
-def _make_lib(tmp_path, monkeypatch):
+def _make_lib(tmp_path, monkeypatch, prewarm_policy="balanced"):
     monkeypatch.setattr(library_mod, "WebMClip", FakeClip)
     videos = tmp_path / "videos"
     folders = {
@@ -43,10 +43,10 @@ def _make_lib(tmp_path, monkeypatch):
     }
     for folder, files in folders.items():
         directory = videos / folder
-        directory.mkdir(parents=True)
+        directory.mkdir(parents=True, exist_ok=True)
         for name in files:
             (directory / name).write_bytes(b"fake")
-    return library_mod.MovieLibrary(asset_dir=videos)
+    return library_mod.MovieLibrary(asset_dir=videos, prewarm_policy=prewarm_policy)
 
 
 def test_lazy_creates_only_high_priority_at_start(tmp_path, monkeypatch):
@@ -99,3 +99,94 @@ def test_low_priority_warm_not_auto_started_then_scheduled(tmp_path, monkeypatch
     lib.schedule_low_priority_warm()
     assert lib._low_warm_timer.isActive() is True
     app.processEvents()
+
+
+def test_prewarm_policy_default_balanced(tmp_path, monkeypatch):
+    lib = _make_lib(tmp_path, monkeypatch)
+    assert lib._prewarm_policy == "balanced"
+
+
+def test_prewarm_invalid_policy_falls_back_to_balanced(tmp_path, monkeypatch):
+    lib = _make_lib(tmp_path, monkeypatch, prewarm_policy="magic")
+    assert lib._prewarm_policy == "balanced"
+
+
+def test_warm_objects_skips_frames_when_include_frames_false(tmp_path, monkeypatch):
+    lib = _make_lib(tmp_path, monkeypatch)
+    clip = lib.movie("写代码")
+    lib._warm_objects([clip], 1, include_frames=False)
+    assert clip.warmed_meta is True
+    assert clip.warmed_frame is False
+
+
+def test_warm_objects_decodes_frames_when_include_frames_true(tmp_path, monkeypatch):
+    lib = _make_lib(tmp_path, monkeypatch)
+    clip = lib.movie("写代码")
+    lib._warm_objects([clip], 1, include_frames=True)
+    assert clip.warmed_meta is True
+    assert clip.warmed_frame is True
+
+
+def test_low_warm_include_frames_by_policy(tmp_path, monkeypatch):
+    lib = _make_lib(tmp_path, monkeypatch, prewarm_policy="balanced")
+    captured = {}
+    lib._warm_objects = lambda clips, workers, **kw: captured.update(kw)
+
+    class SyncThread:
+        def __init__(self, target, *a, **k):
+            self.target = target
+            self.args = a
+
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(library_mod.threading, "Thread", SyncThread)
+    lib._warm_low_priority_background()
+    assert captured["include_frames"] is False
+
+    lib = _make_lib(tmp_path, monkeypatch, prewarm_policy="full")
+    captured = {}
+    lib._warm_objects = lambda clips, workers, **kw: captured.update(kw)
+    lib._warm_low_priority_background()
+    assert captured["include_frames"] is True
+
+
+def test_app_create_library_prewarm_derivation(tmp_path, monkeypatch):
+    """预热策略推导：默认 balanced；省电模式（idle_low_fps）强制 minimal；
+    手改 media_prewarm=full 的高级配置在非省电模式下生效、被省电模式覆盖。"""
+    from pet import app as app_mod
+    from pet.config import Config
+
+    captured = {}
+
+    class FakeLib:
+        def __init__(self, **kw):
+            captured.update(kw)
+
+        def schedule_high_priority_warm(self):
+            pass
+
+        def schedule_low_priority_warm(self):
+            pass
+
+        def names(self):
+            return []
+
+    monkeypatch.setattr(app_mod, "MovieLibrary", FakeLib)
+
+    app = app_mod.PetApp(object(), Config(tmp_path / "a"))
+    app._create_library("shenshen")
+    assert captured["prewarm_policy"] == "balanced"
+
+    cfg = Config(tmp_path / "b")
+    cfg.set("media_prewarm", "full")
+    app = app_mod.PetApp(object(), cfg)
+    app._create_library("shenshen")
+    assert captured["prewarm_policy"] == "full"
+
+    cfg = Config(tmp_path / "c")
+    cfg.set("media_prewarm", "full")
+    cfg.set("idle_low_fps_enabled", True)
+    app = app_mod.PetApp(object(), cfg)
+    app._create_library("shenshen")
+    assert captured["prewarm_policy"] == "minimal"

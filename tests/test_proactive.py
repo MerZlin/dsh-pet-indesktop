@@ -504,7 +504,9 @@ class TestVisionAndWatcherPhase2:
 
         # 创建一个 1000x1000 的虚拟屏幕
         fake_all_screen = Image.new("RGB", (1000, 1000), color=(50, 100, 150))
-        monkeypatch.setattr(vision.ImageGrab, "grab", lambda all_screens=True: fake_all_screen)
+        # vision 的 PIL 已下沉为函数内懒导入，直接 patch PIL.ImageGrab 本体
+        # （与原先 patch vision.ImageGrab 语义一致：同一模块对象）
+        monkeypatch.setattr("PIL.ImageGrab.grab", lambda all_screens=True: fake_all_screen)
 
         # 模拟抓取有效区域 (100, 100, 200, 200)
         img = vision.capture_window_rect((100, 100, 200, 200))
@@ -806,6 +808,9 @@ class TestPhase4UIAndMenuIntegration:
 
         win._toggle_agent_link("claude", True)
         assert cfg.data["agent_link"]["claude"] is True
+        # 窗口必须关闭：泄漏的真实窗口会在共享事件循环上继续推进动画链
+        win.close()
+        win.deleteLater()
 
     def test_context_menu_proactive_build_no_name_error(self, tmp_path):
         """右键菜单（上游模板系统）构建不抛错，且包含主动识屏与 Agent 联动。"""
@@ -833,6 +838,8 @@ class TestPhase4UIAndMenuIntegration:
         if sys.platform == "win32":
             assert any("主动识屏" in t for t in texts)
         assert any("Agent 联动" in t for t in texts)
+        win.close()
+        win.deleteLater()
 
     def test_enable_with_empty_whitelist_bubble_hint(self, tmp_path, monkeypatch):
         """测试 4a：白名单为空时开启主动识屏，应提示「白名单还是空的」气泡。"""
@@ -854,6 +861,8 @@ class TestPhase4UIAndMenuIntegration:
         assert cfg.data["proactive_screen"]["enabled"] is True
         assert win.proactive_watcher.is_running() is False
         assert any("白名单" in text for text, _ in bubbles)
+        win.close()
+        win.deleteLater()
 
     def test_agent_link_toggle_bubble_notice(self, tmp_path, monkeypatch):
         """测试 4c：开启 Agent 联动应气泡提示「后续版本实装」。"""
@@ -891,6 +900,8 @@ class TestPhase4UIAndMenuIntegration:
         # 关闭不强制要求气泡，仅需状态落盘
         win._toggle_agent_link("dsh", False)
         assert cfg.data["agent_link"]["dsh"] is False
+        win.close()
+        win.deleteLater()
     def test_apply_config_non_windows_no_timer(self, tmp_path, monkeypatch):
         """测试 4d：非 Windows 平台即使 enabled=True 且白名单非空也不起动定时器。"""
         from PySide6.QtWidgets import QApplication
