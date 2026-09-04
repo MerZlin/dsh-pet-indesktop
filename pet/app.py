@@ -732,12 +732,11 @@ class PetApp:
         self._wire_window(win)
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
-        # 首次点击 Q 弹卡顿。Phase 1：点击音效关闭时不预加载 QtMultimedia。
-        if bool(self.config.get("click_sound_enabled", True)):
-            click_sound.warm_click_sound_effects(
-                self.config.get("click_sound_pack"),
-                data_dir=self.config.dir,
-            )
+        # 首次点击 Q 弹卡顿。这里保持无条件预热，避免首次点击/试听无声。
+        click_sound.warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
         win.show()
 
         tray = self._build_tray(win)

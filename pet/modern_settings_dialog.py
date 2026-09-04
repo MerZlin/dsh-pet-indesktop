@@ -3901,6 +3901,12 @@ class ModernSettingsDialog(QDialog):
         """点击音效开关即时生效，不等对话框关闭。"""
         self.config.set("click_sound_enabled", bool(checked))
         self.config.save()
+        if bool(checked):
+            # 开启后立即预热，保证不关闭对话框直接试听/点击也有声音。
+            warm_click_sound_effects(
+                self.config.get("click_sound_pack"),
+                data_dir=self.config.dir,
+            )
 
     def move_away_from_pet(self) -> None:
         """把窗口定位到不与桌宠相交的位置。
@@ -4281,12 +4287,11 @@ class ModernSettingsDialog(QDialog):
         self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
         self.config.set("click_sound_pack", self.click_sound_picker.value())
         self.config.set("click_sound_volume", float(self.click_sound_volume_spin.value()) / 100.0)
-        # Phase 1：音效关闭时不再预加载 QtMultimedia 音效池。
-        if self.click_sound_check.isChecked():
-            warm_click_sound_effects(
-                self.config.get("click_sound_pack"),
-                data_dir=self.config.dir,
-            )
+        # 保持无条件预热，避免试听/首次点击时 QSoundEffect 尚未加载完成导致无声。
+        warm_click_sound_effects(
+            self.config.get("click_sound_pack"),
+            data_dir=self.config.dir,
+        )
         existing_island = self.config.get("dynamic_island", {})
         if not isinstance(existing_island, dict):
             existing_island = {}
