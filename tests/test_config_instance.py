@@ -74,13 +74,28 @@ def test_save_returns_false_on_write_failure(tmp_path):
     assert config.save() is False
 
 
-def test_reload_preserves_memory_api_key_when_keyring_unavailable(tmp_path):
+def test_reload_preserves_memory_api_key_when_keyring_unavailable(tmp_path, monkeypatch):
     """keyring 不可用时 key 只存内存：磁盘重载（config.reload()）不得冲掉内存 key。
 
     回归背景：设置对话框保存前会调用 config.reload() 从磁盘重读以吸收外部改动，
     而 _redacted_data() 写盘时剔除了明文 api_key/vision_api_key —— 磁盘文件里没有
     key，reload() 于是把内存中的 key 覆盖成空，用户没重启就丢了 key。
     """
+    # 模拟 keyring 不可用：set 恒失败、get 恒空；否则加载时明文迁移会把内存 key
+    # 搬进真实 keyring（见 Config._migrate_plaintext_keys_to_keyring），本测试
+    # 要固定的正是「不可用兜底」这条路径。
+    class _UnavailableStore:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, ref):
+            return ""
+
+        def set(self, ref, value):
+            return False
+
+    monkeypatch.setattr("pet.chat.models.SecretStore", _UnavailableStore)
+
     config = Config(base=tmp_path)
     settings = config.chat_settings()
     provider = settings.active_config

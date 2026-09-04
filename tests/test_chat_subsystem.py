@@ -110,8 +110,27 @@ def test_provider_error_is_safe():
     assert "401" in str(error)
     assert "api_key" not in str(error).lower()
 
-def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path):
+def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path, monkeypatch):
     from pet.config import Config
+
+    # 内存假 keyring：加载时明文迁移（_migrate_plaintext_keys_to_keyring）会把
+    # legacy chat_api_key 搬进去，不碰真实系统钥匙串。
+    class _FakeStore:
+        shared = {}
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, ref):
+            return self.shared.get(ref, "") if ref else ""
+
+        def set(self, ref, value):
+            self.shared[ref] = value
+            return True
+
+    _FakeStore.shared = {}
+    monkeypatch.setattr("pet.chat.models.SecretStore", _FakeStore)
+
     root = tmp_path / "appdata"
     cfg_dir = root / "dsh-pet-standalone"
     cfg_dir.mkdir(parents=True)
@@ -128,7 +147,10 @@ def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path):
     assert settings.default_system_prompt == "legacy prompt"
     assert settings.active_config.base_url == "https://deepseek.example/v1/"
     assert settings.active_config.model == "deepseek-chat"
-    assert settings.active_config.api_key == "secret-value"
+    # 明文 key 已迁移进 keyring：内存 api_key 置空，经 keyring 优先序仍可解析
+    assert settings.active_config.api_key == ""
+    assert _FakeStore.shared["provider/openai-main"] == "secret-value"
+    assert cfg.resolve_api_key(settings.active_config) == "secret-value"
     cfg.save()
     assert json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))["version"] == 4
 

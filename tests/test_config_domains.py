@@ -22,6 +22,27 @@ from pet.config_domains import (
     ProactiveConfig,
 )
 
+
+class _UnavailableSecretStore:
+    """让 Config 加载路径不依赖真实系统 keyring。
+
+    CHAT_DIRTY 里含明文 api_key；_migrate_plaintext_keys_to_keyring 遇到
+    keyring 不可用时会保留内存明文，使 facade.normalize(raw) 与 Config 的
+    实际加载路径保持一致（不会因 CI 机器有无 keyring 而结果不同）。
+    """
+
+    def get(self, ref):
+        return ""
+
+    def set(self, ref, value):
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _fake_unavailable_secret_store(monkeypatch):
+    monkeypatch.setattr("pet.chat.models.SecretStore", _UnavailableSecretStore)
+
+
 COLLISION_KEYS = (
     "collision_enabled", "collision_restitution", "collision_friction",
     "collision_mass_scale", "collision_impulse_cap",
