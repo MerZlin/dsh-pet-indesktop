@@ -412,6 +412,7 @@ class PetWindow(QWidget):
             self.lib.movie(self.drag).jumpToFrame(0)
 
         self.playback_speed: float = float(config.get('playback_speed', 1.0))
+        self._ffmpeg_recycle_minutes = self._recycle_minutes_from(config)
         self._user_mouse_through = bool(config.get('mouse_through', False))
         self._auto_cursor_hidden = False
         self._cursor_visibility = 'UNKNOWN'
@@ -1807,6 +1808,8 @@ class PetWindow(QWidget):
         movie.jumpToFrame(0)
         if hasattr(movie, 'set_playback_speed'):
             movie.set_playback_speed(self.playback_speed)
+        # 批11-B1：把回收阈值推到本 clip（start 前生效；幂等，clip 被库缓存复用）。
+        self._push_recycle(movie)
         self._ended_fired = False
         self._rebuild_frame()
         # P3 broker：shareable（idle 类）素材 start() 前注册——发布/订阅由
@@ -1902,6 +1905,7 @@ class PetWindow(QWidget):
         movie.jumpToFrame(0)
         if hasattr(movie, 'set_playback_speed'):
             movie.set_playback_speed(self.playback_speed)
+        self._push_recycle(movie)  # 批11-B1：同 _switch 推送回收阈值到回退 idle clip
         self._rebuild_frame()
         # P3 broker：回退到可共享 idle 起播前注册（按当前角色分流）。
         self._broker_register(idle_name, movie)
@@ -2593,6 +2597,7 @@ class PetWindow(QWidget):
                 return
             self._music_sing_active = False
         if name == self.drag and self._dragging:
+            self._push_recycle(self.movie)  # 批11-B1 P2-2：拖拽重启不经 _switch，补推送
             self.movie.jumpToFrame(0)
             self._ended_fired = False
             if self.movie.start() is False:
@@ -2720,6 +2725,15 @@ class PetWindow(QWidget):
             getattr(self.movie, 'decode_throttle_divisor', 1) or 1,
             self.predict_prewarm_lead_ms / 1000.0, exclude=self.anim,
         )
+
+    @staticmethod
+    def _recycle_minutes_from(config) -> int:
+        raw = _float_or_default(config.get('ffmpeg_recycle_minutes', 10), 10, 0, 120)
+        return 0 if raw <= 0 else int(max(2.0, raw))  # 批11-B1：0=关，否则 [2,120]min
+
+    def _push_recycle(self, movie) -> None:
+        if hasattr(movie, 'set_recycle_minutes'):  # 批11-B1：幂等推送回收阈值
+            movie.set_recycle_minutes(self._ffmpeg_recycle_minutes)
 
     @staticmethod
     def _pick(pool: list[str], exclude: str | None = None) -> str:
@@ -3821,9 +3835,11 @@ class PetWindow(QWidget):
             1.0, min(3600.0, float(self.cfg.get('idle_low_fps_threshold',
                                                  IDLE_LOW_FPS_DEFAULT_THRESHOLD)))
         )
-        # 批10-A1 P2-2：预测预热提前量也即时生效（与其它白名单键一致）。
+        # 批10-A1 P2-2 / 批11-B1 P1-2：预测提前量与回收阈值即时生效并推送当前 clip。
         self.predict_prewarm_lead_ms = max(
             200, min(600, int(self.cfg.get('predict_prewarm_lead_ms', 350))))
+        self._ffmpeg_recycle_minutes = self._recycle_minutes_from(self.cfg)
+        self._push_recycle(self.movie)
         desired_opacity = int(_float_or_default(self.cfg.get('pet_opacity', 100), 100, 10, 100))
         if desired_opacity != self.pet_opacity:
             self.set_pet_opacity(desired_opacity)

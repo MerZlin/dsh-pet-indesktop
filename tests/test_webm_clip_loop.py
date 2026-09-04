@@ -31,6 +31,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from pet import webm_clip as webm_clip_mod
+from pet import perfstats
 from pet.webm_clip import WebMClip
 
 
@@ -802,4 +803,198 @@ def test_drain_boundary_marker_preserves_frames(app, tmp_path):
         assert clip._queue.empty()
     finally:
         clip.cleanup()
+        app.processEvents()
+
+
+# ---------------------------------------------------------------------------
+# 批11-B1：ffmpeg 圈边界定期回收（阈值到期退役换新 / 未到照旧 park /
+#          0 关闭永不回收 / 只在圈边界生效 / re-arm 竞态不回收）
+# ---------------------------------------------------------------------------
+
+def _recycle_count() -> int:
+    snap = perfstats.snapshot()
+    return snap.get('ffmpeg.recycle', {}).get('count', 0)
+
+
+def test_recycle_at_boundary_retires_process_and_fresh_spawns(app, monkeypatch, tmp_path):
+    """到达回收阈值的圈边界 → 进程退役（旧 pid 死、下圈 start 新 pid）。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    clip.set_recycle_minutes(10)  # 阈值 = 600s
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    srcs: list = []
+    finished: list = []
+    clip.frameChanged.connect(srcs.append)
+    clip.finished.connect(lambda: finished.append(True))
+    perfstats.enable()
+    perfstats.reset()
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        proc, gen = spawns[0][0], spawns[0][1]
+        # 把当前进程「出生时刻」拨回 1200s 前 → 到达圈边界时必已过阈值。
+        clip._reader_born_at = time.monotonic() - 1200.0
+        for _ in range(3):
+            gen.release()
+        # 回收必须完整播完一圈（绝不打断）：三帧全交付 + 结束标记 → finished
+        assert _consume_until(clip, lambda: len(finished) == 1), f"srcs={srcs}"
+        assert srcs == [0, 1, 2], f"回收前必须完整播完一圈: {srcs}"
+        # 圈边界回收：旧 ffmpeg 进程退役
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.02)
+        assert proc.poll() is not None, "圈边界回收必须杀掉旧 ffmpeg 进程"
+        assert not clip._thread.is_alive(), "回收后 reader 线程必须退出"
+        assert _recycle_count() >= 1, "回收必须计入 perfstats ffmpeg.recycle"
+        # 圈末 stop()：_reader_parked=False → 硬停（无软停驻留）
+        clip.stop()
+        assert clip._soft_parked is False
+        # 下圈 start() 自然 fresh spawn（新 pid）
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        assert len(spawns) == 2, "回收后必须重新拉起 ffmpeg"
+        proc2, gen2 = spawns[1][0], spawns[1][1]
+        assert proc2 is not proc and proc2.pid != proc.pid
+        for _ in range(3):
+            gen2.release()
+        assert _consume_until(clip, lambda: len(finished) == 2), f"srcs={srcs}"
+        assert srcs[-3:] == [0, 1, 2], f"新进程第二圈帧号未回绕: {srcs}"
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        perfstats.disable()
+        perfstats.reset()
+        app.processEvents()
+
+
+def test_recycle_not_due_still_parks_and_rearms(app, monkeypatch, tmp_path):
+    """未达回收阈值的圈边界 → 照旧 park/re-arm（同一 reader/进程续圈）。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    clip.set_recycle_minutes(10)  # 阈值 = 600s；进程刚出生 → 未达阈值
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    srcs: list = []
+    finished: list = []
+    clip.frameChanged.connect(srcs.append)
+    clip.finished.connect(lambda: finished.append(True))
+    perfstats.enable()
+    perfstats.reset()
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        proc, gen = spawns[0][0], spawns[0][1]
+        first_thread = clip._thread
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: len(finished) == 1), f"srcs={srcs}"
+        assert clip._natural_end_pending is True
+        clip.stop()
+        assert clip._soft_parked is True, "未达回收阈值必须照旧软停"
+        assert proc.poll() is None, "软停不得杀 ffmpeg 进程"
+        assert _recycle_count() == 0, "未达阈值不得计入回收"
+        assert clip.start() is True
+        assert clip._thread is first_thread, "未达阈值不得重启 reader 线程"
+        assert clip._reader_proc is proc, "未达阈值不得重启 ffmpeg 进程"
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: len(finished) == 2)
+        assert srcs[-3:] == [0, 1, 2], f"第二圈帧号未回绕: {srcs}"
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        perfstats.disable()
+        perfstats.reset()
+        app.processEvents()
+
+
+def test_recycle_disabled_never_triggers(app, monkeypatch, tmp_path):
+    """recycle_minutes=0 → 永不回收（现状逐位一致）：即使进程已超长寿也照常软停。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    clip.set_recycle_minutes(0)  # 0 = 关闭回收（回退保险）
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    srcs: list = []
+    finished: list = []
+    clip.frameChanged.connect(srcs.append)
+    clip.finished.connect(lambda: finished.append(True))
+    perfstats.enable()
+    perfstats.reset()
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        proc, gen = spawns[0][0], spawns[0][1]
+        clip._reader_born_at = time.monotonic() - 3000.0  # 已远超任何合理阈值
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: len(finished) == 1), f"srcs={srcs}"
+        clip.stop()
+        assert clip._soft_parked is True, "0 配置必须照旧软停（永不回收）"
+        assert proc.poll() is None, "0 配置不得杀 ffmpeg 进程"
+        assert _recycle_count() == 0, "0 配置永不回收"
+        assert clip.start() is True
+        assert clip._reader_proc is proc, "0 配置不得重启 ffmpeg 进程"
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        perfstats.disable()
+        perfstats.reset()
+        app.processEvents()
+
+
+def test_recycle_only_fires_at_boundary_not_mid_loop(app, monkeypatch, tmp_path):
+    """回收只在圈边界（park 决策点）生效：播放循环中途绝不被回收打断。"""
+    clip = _make_clip(tmp_path, frame_count=100)
+    clip.set_recycle_minutes(10)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    srcs: list = []
+    clip.frameChanged.connect(srcs.append)
+    perfstats.enable()
+    perfstats.reset()
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        proc, gen = spawns[0][0], spawns[0][1]
+        clip._reader_born_at = time.monotonic() - 1200.0  # 已远超阈值
+        # 循环中途（未达圈边界）：回收必须不生效——进程继续存活出帧
+        gen.release()
+        assert _consume_until(clip, lambda: srcs == [0])
+        assert clip._natural_end_pending is False
+        assert proc.poll() is None, "循环中途不得因回收杀进程"
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: len(srcs) >= 4)
+        assert proc.poll() is None, "同一圈内播放不得被回收打断"
+        assert _recycle_count() == 0, "回收未到边界不得计入"
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        perfstats.disable()
+        perfstats.reset()
+        app.processEvents()
+
+
+def test_recycle_skipped_when_rearm_pending(app, tmp_path):
+    """pending re-arm 期间不得回收：_rearm_pending 置位时圈边界直接续圈，
+    绝不经回收分支（否则 re-arm 与回收竞态会破坏续圈语义）。"""
+    clip = _make_clip(tmp_path)
+    clip._recycle_seconds = 0.001  # 若评估回收必命中
+    # 盲审 P1-1：回收判定还要求 _reader_born_at 已记录，缺这行则
+    # _recycle_due 恒 False、本测试对回收维度空转（守卫失效）。
+    clip._reader_born_at = time.monotonic() - 10.0
+    clip._rearm_pending = True
+    clip._loop_gate.set()  # 模拟 re-arm 已置位
+    q = queue.Queue(maxsize=8)
+    perfstats.enable()
+    perfstats.reset()
+    try:
+        assert clip._loop_boundary(q, threading.Event(), clip._generation) is True
+        assert q.empty(), "re-arm 期间不得发结束标记"
+        assert clip._rearm_pending is False
+        assert not clip._loop_gate.is_set(), "残留 gate 必须被清（防下一圈直通）"
+        assert _recycle_count() == 0, "pending re-arm 期间不得回收"
+    finally:
+        clip.cleanup()
+        perfstats.disable()
+        perfstats.reset()
         app.processEvents()

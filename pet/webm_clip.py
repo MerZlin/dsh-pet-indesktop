@@ -33,6 +33,12 @@ WebM-backed clip library（webm 主路线）。
   reader 自行退出杀进程），续播同一 clip 经 start() re-arm 直接续圈
   （带唤醒握手，握手失败落回 fresh start）；中途打断/切换/关停仍走
   硬停杀进程（原路径不变）；
+- 圈边界定期回收（批11-B1）：长寿 ffmpeg 进程在圈边界驻留时按存活时长
+  定期重建（ffmpeg_recycle_minutes，默认 10min，0=关闭）。到阈值的圈末
+  不做 park/re-arm、reader 正常退出杀进程，下一次 start() 自然 fresh
+  spawn——把 ffmpeg 进程内部（分配器高水位/解复用器随 -stream_loop 回绕
+  累积）47→64MB 的爬升周期性清零。回收只在圈边界动手，绝不播放中途杀
+  进程；圈边界是完美切口（-stream_loop 每圈本就从帧 0 重启，视觉无感）。
 - 所有 Qt GUI 操作只发生在主线程。
 - 同一 clip 最多 1 个 active reader + 有上限的退役 reader（_MAX_RETIRED_READERS）：
   stop() 主动 terminate 底层 ffmpeg 进程（_PopenCapture 捕获句柄），退役池超上限时
@@ -782,6 +788,17 @@ class WebMClip(QObject):
         # 与 _generation 的跨线程读取同一模式）。必须在 _timer 初始化前
         # 赋值（_timer_interval 会读它）。
         self._decode_throttle_divisor = 1
+        # 批11-B1：ffmpeg 圈边界定期回收阈值（秒；0 = 关闭回收）。窗口层经
+        # set_recycle_minutes 推送 config 的 ffmpeg_recycle_minutes（分钟，
+        # 默认 10）。构造默认 0（关闭）：未经窗口推送的 clip（直接测试等）
+        # 保持现状逐位一致。主线程写（setter）、reader 线程读（_loop_boundary
+        # 的 _recycle_due），float 赋值在 CPython GIL 下原子，与
+        # _decode_throttle_divisor 的跨线程读同一模式。
+        self._recycle_seconds = 0.0
+        # 当前 ffmpeg 进程出生时刻（time.monotonic 秒）与已完成圈数（均 reader
+        # 线程写）；圈边界回收判定/日志用。0.0 = 尚未拉起本进程（feed 路径）。
+        self._reader_born_at = 0.0
+        self._reader_loops = 0
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(self._timer_interval())
@@ -1216,6 +1233,38 @@ class WebMClip(QObject):
             return
         self._decode_throttle_divisor = divisor
         self._timer.setInterval(self._timer_interval())
+
+    def set_recycle_minutes(self, minutes: int) -> None:
+        """设置 ffmpeg 圈边界定期回收阈值（分钟；0 = 关闭回收。批11-B1，主线程调用）。
+
+        窗口层在播放动画前推送 config 的 ``ffmpeg_recycle_minutes``（默认 10）。
+        只影响圈边界回收判定（_loop_boundary 的 _recycle_due）：到达阈值的一圈
+        结束时不做 park/re-arm、reader 正常退出杀进程，下一次 start() 自然
+        fresh spawn。不改变任何播放/驻留/续圈/退役语义。正值夹到 [2, 120] 分钟；
+        0 / 非法输入视为关闭（回退保险，现状逐位一致）。
+        """
+        try:
+            minutes = float(minutes)
+        except (TypeError, ValueError):
+            minutes = 0.0
+        if minutes <= 0:
+            self._recycle_seconds = 0.0
+        else:
+            self._recycle_seconds = max(2.0, min(120.0, minutes)) * 60.0
+
+    def _recycle_due(self) -> bool:
+        """圈边界回收判定（reader 线程）：当前 ffmpeg 进程存活已达回收阈值。
+
+        只在圈边界（_loop_boundary，结束标记已交付、无 pending re-arm）调用。
+        0（关闭，_recycle_seconds <= 0）恒为 False；进程出生时刻未记录
+        （_reader_born_at <= 0，feed 路径/异常）也判 False（防御）。
+        读 _recycle_seconds 用 GIL 原子性，与 _decode_throttle_divisor 同模式。
+        """
+        if self._recycle_seconds <= 0:
+            return False
+        if self._reader_born_at <= 0:
+            return False
+        return (time.monotonic() - self._reader_born_at) >= self._recycle_seconds
 
     def start(self) -> bool:
         """启动播放；返回 True 表示已启动（或已在播），False 表示本次启动被拒绝。
@@ -1888,6 +1937,11 @@ class WebMClip(QObject):
             if loop_frame_count > 0:
                 input_params += ['-stream_loop', '-1',
                                  '-readrate', str(max(1.0, self.playback_speed))]
+            # 批11-B1：记录当前 ffmpeg 进程出生时刻并清零圈数（圈边界回收
+            # 判定/日志用；reader 线程写，Reader 读同线程）。只在此处记录一次，
+            # feed 路径（不拉起 ffmpeg）不会走到这里，_reader_born_at 保持 0。
+            self._reader_born_at = time.monotonic()
+            self._reader_loops = 0
             with _PopenCapture(on_process=_register) as capture:
                 gen = imageio_ffmpeg.read_frames(
                     str(self.path),
@@ -2126,15 +2180,24 @@ class WebMClip(QObject):
         """圈边界（批8，reader 线程）：交付「播完」结束标记后驻留等续圈。
 
         返回 True = 续播下一圈（re-arm 已发生）；False = 退出 reader
-        （被停止/换代，或宽限期满无人续圈——切走/被打断的 clip 自行退出，
-        由 _reader_local 的 finally 杀掉 ffmpeg，绝不泄漏常驻进程）。
+        （被停止/换代，或宽限期满无人续圈，或 批11-B1 圈边界回收——切走/
+        被打断/回收的 clip 自行退出，由 _reader_local 的 finally 杀掉
+        ffmpeg，绝不泄漏常驻进程）。
 
         「结束标记至多交付一次」：reader 在 _loop_lock 内检查
         _rearm_pending 决定跳过/发出标记，re-arm（_rearm_loop_reader）在
         同一把锁内置位并排空腹中标记——两案互斥。锁内做 put 是安全的：
         上层只有消费到末帧/结束标记后才会 re-arm（此时队列必有空间，
         put 不会阻塞；队列满 = 上层尚未消费到圈末 = 不可能有 re-arm 在等锁）。
+
+        批11-B1 回收只在本点（圈边界、结束标记已交付、_rearm_pending 未置位）
+        评估：到达回收阈值的一圈结束不做 park/re-arm，直接退出（下一次
+        start() 自然 fresh spawn）。判定在 _loop_lock 内完成，与 re-arm 的
+        gate/标记互斥原子；re-arm 若恰在并发等待 ack，会因 reader 未 ack 而
+        超时回滚落回 fresh start（既有 P1-2 语义），不破坏状态。
         """
+        # 批11-B1：本圈已完成（到达圈边界），累计当前进程圈数（回收日志用）。
+        self._reader_loops += 1
         with self._loop_lock:
             if self._rearm_pending:
                 # 上层已续圈（末帧路径先于结束标记路径完成调度）：跳过本圈
@@ -2149,6 +2212,24 @@ class WebMClip(QObject):
             # 标记已发出（本圈结束已上报）：无论随后被 _poll 消费还是被
             # re-arm 排空，下一圈边界都不得因此跳过标记。
             self._boundary_marker_pending = delivered
+            # 批11-B1：圈边界回收。结束标记已交付、re-arm 未置位（无 pending
+            # re-arm）、且本圈是「本来就要 park」的圈末驻留点 → 若当前 ffmpeg
+            # 进程存活已达阈值，不做 park/re-arm，直接返回 False（reader 退出、
+            # finally 杀进程），下一次 start() 自然 fresh spawn。只在圈边界
+            # （本点）动手，绝不播放中途杀进程；判定幂等（每圈只在本点评估）。
+            if (delivered
+                    and not stop_evt.is_set()
+                    and self._generation == generation
+                    and self._recycle_due()):
+                self._reader_parked = False
+                logger.info(
+                    'webm 圈边界回收 ffmpeg（age=%.1fs loops=%d）: %s',
+                    time.monotonic() - self._reader_born_at,
+                    self._reader_loops, self.path,
+                )
+                if perfstats.ENABLED:
+                    perfstats.note('ffmpeg.recycle')
+                return False
         if stop_evt.is_set() or self._generation != generation:
             return False
         if not delivered:

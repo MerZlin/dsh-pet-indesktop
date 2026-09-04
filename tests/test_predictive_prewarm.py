@@ -54,6 +54,7 @@ class FakeClip(QObject):
         self.warm_calls = 0
         self.stop_count = 0
         self.start_count = 0
+        self.recycle_minutes_calls: list = []
         self._pm = QPixmap(2, 2)
         self._pm.fill()
 
@@ -91,6 +92,10 @@ class FakeClip(QObject):
 
     def set_decode_throttle(self, divisor):
         self.decode_throttle_divisor = max(1, int(divisor))
+
+    # 批11-B1 复审 P2-1：窗口→clip 的回收阈值推送回归用（记录调用值）。
+    def set_recycle_minutes(self, minutes):
+        self.recycle_minutes_calls.append(minutes)
 
 
 class FakeLibrary:
@@ -582,3 +587,27 @@ class TestDistributionParity:
         # 传 moves：move 产物豁免，合法命中
         assert pp2.consume(context_anim="m1", exclude="m1", gap_active=False,
                            moves=moves) == "m1"
+
+
+def test_recycle_minutes_pushed_on_switch_and_refresh(tmp_path, app):
+    """批11-B1 复审 P2-1：窗口→clip 的回收阈值推送回归（hasattr 守卫一旦
+    漏一处，回收会静默关闭而全套测试仍绿——必须有这条钉住）。
+
+    覆盖两个推送点：构造首个 _switch（启动即播 idle）+ refresh_pet_settings
+    （设置保存后运行期刷新，复审 P1-2）。
+    """
+    win = _make_window(tmp_path, ffmpeg_recycle_minutes=5,
+                       collision_enabled=False)
+    try:
+        clip = win.lib.movie(win.idle)
+        assert 5 in clip.recycle_minutes_calls, \
+            f"构造首个 _switch 必须推送回收阈值，实际: {clip.recycle_minutes_calls}"
+        n_before = len(clip.recycle_minutes_calls)
+        win.cfg.set("ffmpeg_recycle_minutes", 0)
+        win.refresh_pet_settings()
+        assert len(clip.recycle_minutes_calls) > n_before, \
+            "refresh_pet_settings 必须把新阈值推送到当前 clip"
+        assert clip.recycle_minutes_calls[-1] == 0
+    finally:
+        win.close()
+        app.processEvents()

@@ -606,6 +606,11 @@ class Config:
             # 批10-A1 预测式接力预热：当前动画墙钟剩余 ≤ 该提前量（毫秒）时，
             # 帧驱动提前掷骰决定下一动画并在后台预解码其首帧进 LRU（Phase 1）。
             "predict_prewarm_lead_ms": 350,  # 提前量（ms），范围 200-600
+            # 批11-B1：ffmpeg 圈边界定期回收阈值（分钟）。长寿循环 reader 在圈
+            # 边界驻留时按进程存活时长评估回收：达到该值 → 不 park/re-arm，正常
+            # 退出杀进程、下一次 start() 自然 fresh spawn（把 47→64MB 的 ffmpeg
+            # 内部累积周期性清零）。0 = 关闭回收（回退保险）；否则范围 [2, 120]。
+            "ffmpeg_recycle_minutes": 10,
             # 批5.2 spike（默认关）：开 = 「生小肥鱼」从 spawn 新进程改为进程内
             # 创建第二个 PetInstance。关 = 行为与现状逐位一致（回退保险）。
             "experimental_single_process_spawn": False,
@@ -740,6 +745,7 @@ class Config:
             "media_prewarm",
             "first_frame_cache_max_mb",
             "predict_prewarm_lead_ms",
+            "ffmpeg_recycle_minutes",
             "experimental_single_process_spawn",
         ):
             if key in raw and raw[key] is not None:
@@ -887,6 +893,10 @@ class Config:
         self.data["predict_prewarm_lead_ms"] = int(_float_or_default(
             self.data.get("predict_prewarm_lead_ms"), 350, 200, 600
         ))
+        # 批11-B1：ffmpeg 圈边界回收阈值（分钟）。0 = 关闭回收；否则夹到
+        # [2, 120]（默认 10）。
+        _ffr = _float_or_default(self.data.get("ffmpeg_recycle_minutes"), 10, 0, 120)
+        self.data["ffmpeg_recycle_minutes"] = 0 if _ffr <= 0 else int(max(2.0, _ffr))
         # 批5.2 spike 开关：同 decode_broker_enabled 规约，防字符串布尔误开。
         self.data["experimental_single_process_spawn"] = _bool_or_default(
             self.data.get("experimental_single_process_spawn"), False
@@ -966,6 +976,7 @@ class Config:
             "slingshot_enabled", "throw_strength", "agent_link",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
             "media_prewarm", "first_frame_cache_max_mb", "predict_prewarm_lead_ms",
+            "ffmpeg_recycle_minutes",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()
