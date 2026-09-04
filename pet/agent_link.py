@@ -41,6 +41,7 @@ from .agent_event_runtime import AgentEventRuntime
 from .rate_limit_tracker import RateLimitTracker
 
 from .persona_phrases import PhrasePicker
+from .speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
 
 log = logging.getLogger("dsh-pet-standalone")
 
@@ -311,6 +312,7 @@ class DirGlobTailer:
         self.scan_interval = scan_interval
         self.max_files = max_files
         self._last_scan = 0.0
+        self._last_directory_mtime_ns: int | None = None
         self._tailers: dict[str, ByteOffsetTailer] = {}
         self._initial_backfill_done: bool = False
 
@@ -331,14 +333,24 @@ class DirGlobTailer:
 
     def reset(self) -> None:
         self._last_scan = 0.0
+        self._last_directory_mtime_ns = None
         for t in self._tailers.values():
             t.reset()
         self._tailers.clear()
 
     def _scan(self, now: float) -> None:
-        if now - self._last_scan < self.scan_interval:
+        # Directory metadata changes on create/delete/rename.  Existing files
+        # remain cheap to tail on every poll; their ByteOffsetTailer owns the
+        # current byte offset, so appends do not need a directory rescan.
+        try:
+            directory_mtime = self.directory.stat().st_mtime_ns if self.directory.is_dir() else None
+        except OSError:
+            directory_mtime = None
+        directory_changed = directory_mtime != self._last_directory_mtime_ns
+        if not directory_changed and now - self._last_scan < self.scan_interval:
             return
         self._last_scan = now
+        self._last_directory_mtime_ns = directory_mtime
         try:
             if not self.directory.is_dir():
                 return
@@ -484,6 +496,8 @@ class BaseAgentMonitor(QObject):
     approval_resolved = Signal(str, object)   # (agent_key, payload) —— 审批已结束，气泡应消失
     question_requested = Signal(str, object)  # (agent_key, payload) —— ask_user_question 阻塞交互
     question_resolved = Signal(str, object)   # (agent_key, payload) —— 问题已解决，气泡应消失
+    cordis_requested = Signal(str, object)
+    cordis_resolved = Signal(str, object)
     # 原始桥接记录转发（供 stuck_detector 等消费）：(agent_key, record)
     # 只挂 DSH 监视器；其他 Agent（claude/cursor/…）不产生这类增强记录。
     raw_record = Signal(str, object)
@@ -557,6 +571,11 @@ class BaseAgentMonitor(QObject):
                 data = json.loads(line)
                 if not isinstance(data, dict):
                     continue
+                nested = data.get("data")
+                if isinstance(nested, dict):
+                    flattened = dict(data)
+                    flattened.update(nested)
+                    data = flattened
                 ev = str(data.get("event", ""))
                 st = str(data.get("state", ""))
                 tool = str(data.get("tool", "") or "").strip()
@@ -571,8 +590,13 @@ class BaseAgentMonitor(QObject):
                 self.raw_record.emit(self.agent_key, data)
                 # 审批请求提醒：一次性事件，收到即发信号（不进入状态机，
                 # 因为 DSH 等审批时 agent 仍在 running，状态还是 working）。
+                # 只收桥接后的 UI 事件 approval/request（权威 mux 来源）与兼容旧名
+                # approval/requested；裸 approval/asked 只是状态/审计信号（驱动
+                # dsh_state 锁存 waiting_approval），绝不驱动桌宠审批弹窗——普通
+                # 工具调用（如 pwsh 跑 Get-Location）被宿主标成 approval/asked
+                # 也不能误触发。
                 # payload 带 rpcId/sessionId/approvalId 时可交互（气泡内直接点选回写）。
-                if ev == "approval/request":
+                if ev in ("approval/request", "approval/requested"):
                     self.approval_requested.emit(self.agent_key, data)
                 # 审批已结束（approval/decided 会话事件 或 approval/resolved mux 帧）：
                 # 审批气泡应消失。
@@ -585,6 +609,10 @@ class BaseAgentMonitor(QObject):
                     self.question_requested.emit(self.agent_key, data)
                 if ev == "question/resolved":
                     self.question_resolved.emit(self.agent_key, data)
+                if ev == "cordis/request-run" and data.get("requiresApproval") is True:
+                    self.cordis_requested.emit(self.agent_key, data)
+                if ev == "cordis/request-run-resolved":
+                    self.cordis_resolved.emit(self.agent_key, data)
                 # 硬失败（execution/failed）：DSH 已决定本轮不再继续，不经行为分析直接提醒
                 if ev == "execution/failed":
                     self.execution_failed.emit(self.agent_key, data)
@@ -1161,9 +1189,9 @@ class OpenCodeMonitor(BaseAgentMonitor):
 
 
 class CustomAgentMonitor(BaseAgentMonitor):
-    """自定义联动 Agent 监视器（agent_link.custom_agents 配置驱动）。
+    """自定义联动 Agent 监视器（agent_link.custom_agents 配置驱动）。"""
 
-    只读监听用户指定路径的统一协议 JSONL 事件文件（docs/AGENT_LINK_PROTOCOL.md §4）：
+    """只读监听用户指定路径的统一协议 JSONL 事件文件（docs/AGENT_LINK_PROTOCOL.md §4）：
     不创建目录、不写任何外部位置、无需授权弹窗；文件不存在时静默空转等待，
     出现后自动开始增量读取（backfill 防护跳过历史内容）。"""
 
@@ -1246,6 +1274,10 @@ class AgentLinkManager(QObject):
         self._last_activity: dict[str, tuple[str, float]] = {}
         self._activity_global_last = 0.0
         self._phrase_picker = PhrasePicker()
+        # Latest raw upstream record, exposed to dialogue templates.  This is
+        # intentionally data-driven: newly added bridge fields become usable
+        # without another per-event adapter change.
+        self._dialogue_context: dict[str, Any] = {}
         self._event_runtime = AgentEventRuntime()
         self._rate_limit_tracker = RateLimitTracker()
         # 待处理阻塞型交互：interaction_id → {"agent_key", "kind": "approval"|"question",
@@ -1265,7 +1297,7 @@ class AgentLinkManager(QObject):
             "claude": ClaudeCodeMonitor("claude", self.config_dir, self),
             "cursor": CursorMonitor(self.config_dir, self),
             "opencode": OpenCodeMonitor(self.config_dir, self),
-        }
+            }
         # 自定义联动 Agent：配置驱动的只读监视器（key/path 已在 config 清洗时
         # 保证合法唯一）；显示名合并进实例级 agent_names，类级 AGENT_NAMES
         # 保持仅内置（modern_settings_dialog 等按内置枚举处不受影响）。
@@ -1301,6 +1333,10 @@ class AgentLinkManager(QObject):
         self._exploration_watchdog.set_judge(self._run_exploration_judge)
         self.monitors["dsh"].raw_record.connect(self._exploration_watchdog.feed_record)
         self.monitors["dsh"].raw_record.connect(self._on_exploration_lifecycle)
+        # 阻塞交互兜底清理：会话/turn 结束或 agent 停止时，任何 pending 的
+        # 审批/问题交互必然失效（DSH 漏发 resolved 的异常场景），据此清掉，
+        # 防止真实异常也留下永久弹窗。
+        self.monitors["dsh"].raw_record.connect(self._on_interaction_lifecycle)
         self._exploration_watchdog.warning.connect(self._on_exploration_warning)
         self._exploration_watchdog.judge_required.connect(self._on_exploration_judge_required)
         self._exploration_watchdog.judge_result.connect(self._on_exploration_judge_result)
@@ -1313,6 +1349,7 @@ class AgentLinkManager(QObject):
         self._exploration_control_result.connect(self._on_exploration_control_result)
 
         for mon in self.monitors.values():
+            mon.raw_record.connect(self._remember_dialogue_record)
             mon.normalized_event.connect(self._event_runtime.dispatch)
             mon.normalized_event.connect(self._on_normalized_event)
             mon.state_changed.connect(self._on_agent_state)
@@ -1321,6 +1358,8 @@ class AgentLinkManager(QObject):
             mon.approval_resolved.connect(self._on_approval_resolved)
             mon.question_requested.connect(self._on_question_request)
             mon.question_resolved.connect(self._on_question_resolved)
+            mon.cordis_requested.connect(self._on_cordis_request)
+            mon.cordis_resolved.connect(self._on_cordis_resolved)
             mon.execution_failed.connect(self._on_execution_failed)
         self.monitors["dsh"].session_meta.connect(self._on_session_meta)
         self.monitors["dsh"].rate_limit.connect(self._on_rate_limit)
@@ -1329,6 +1368,8 @@ class AgentLinkManager(QObject):
         # 429 限流缓存：session_key → { "count": int, "_ts": float, "_first_ts": float, "_dismissed": bool }
         self._429_cache: dict[str, dict] = {}
         self._429_timers: dict[str, QTimer] = {}   # session_key → 自动收起定时器
+        self._429_retry_counts: dict[tuple[str, str], int] = {}
+        self._429_anonymous_seq = 0
         # LLM API 错误缓存：session_key → { "_ts": float, "_dismissed": bool }
         self._llm_error_cache: dict[str, dict] = {}
         self._llm_error_timers: dict[str, QTimer] = {}
@@ -1341,8 +1382,17 @@ class AgentLinkManager(QObject):
         self.apply_config()
 
     def _on_normalized_event(self, event) -> None:
-        """Consume additive semantic events; external resolutions only close UI."""
-        from .agent_event_normalizer import InteractionResolvedEvent
+        """Consume semantic events for streak tracking and interaction cleanup."""
+        from .agent_event_normalizer import InteractionResolvedEvent, RetryEvent
+        if isinstance(event, RetryEvent):
+            streak = self._rate_limit_tracker.consume(event)
+            if streak:
+                self._429_retry_counts[(event.source, event.session_id)] = int(streak["consecutiveRetryCount"])
+            return
+        # The tracker resets its streak on successful/lifecycle events.
+        if getattr(event, "session_id", ""):
+            self._rate_limit_tracker.consume(event)
+            self._429_retry_counts.pop((event.source, event.session_id), None)
         if not isinstance(event, InteractionResolvedEvent):
             return
         candidates = []
@@ -1368,6 +1418,8 @@ class AgentLinkManager(QObject):
         注意用 _running（生命周期状态）而非 is_running()（会被 pause 置 False）——
         否则"隐藏期间关配置"不会真正 stop，恢复显示时又会被 resume 拉起。"""
         agent_cfg = self.cfg.get("agent_link", {})
+        if not agent_cfg.get("dsh", False):
+            self._clear_429_alerts()
         for key, monitor in self.monitors.items():
             should_run = bool(agent_cfg.get(key, False))
             if should_run and not monitor._running:
@@ -1700,12 +1752,24 @@ class AgentLinkManager(QObject):
     # 各 Agent 的默认 thinking 文案；DSH 用角色梗，其他用烧烤梗
     _THINKING_DEFAULTS = {"dsh": "大肥鱼正在深度思考……"}
 
+    def _remember_dialogue_record(self, agent_key: str, record: object) -> None:
+        """Expose the latest upstream record to phrase templates."""
+        if not isinstance(record, dict):
+            return
+        context = dict(record)
+        context.setdefault("agent_key", agent_key)
+        context.setdefault("agent", agent_key)
+        context.setdefault("agent_name", self.agent_names.get(agent_key, agent_key))
+        self._dialogue_context = context
+
     def _dialogue(self, key: str, fallback: str, **values) -> str:
-        """Render an existing event in the selected wording mode."""
+        """Render an event with explicit aliases plus latest upstream fields."""
+        merged = dict(self._dialogue_context)
+        merged.update(values)
         mode = str(self.cfg.get("dialogue_mode", "legacy") or "legacy")
         if mode == "custom":
-            return self._phrase_picker.custom(self.cfg.get("dialogue_phrases", {}), key, fallback, **values)
-        return self._phrase_picker.get(mode, key, fallback, **values)
+            return self._phrase_picker.custom(self.cfg.get("dialogue_phrases", {}), key, fallback, **merged)
+        return self._phrase_picker.get(mode, key, fallback, **merged)
 
     def _thinking_text(self, agent_key: str) -> str:
         """thinking 气泡文案：按 Agent 自定义 > 旧全局自定义 > 按 Agent 默认。"""
@@ -1787,10 +1851,14 @@ class AgentLinkManager(QObject):
     def _on_approval_request(self, agent_key: str, payload: dict) -> None:
         """审批请求提醒：一直挂到审批结束的高优先级气泡。
 
-        payload 带 rpcId/approvalId/sessionId 时进入交互模式：气泡内嵌
-        「同意 / 拒绝」按钮，点击即 POST /api/respond 回写 DSH（web UI 同款
-        client-response 机制），当场解除阻塞。无 rpcId（桥接旧路径/降级）时
-        退化为纯提示气泡，仍需到 DSH 界面点。
+        只登记**具备可关联身份**的审批（rpcId / approvalId / requestId / callId
+        任一非空）：这类记录能与其 approval/resolved 配对精确关闭。带 rpcId 时
+        进入交互模式：气泡内嵌「同意 / 拒绝」按钮，点击即 POST /api/respond
+        回写 DSH（web UI 同款 client-response 机制），当场解除阻塞；仅带
+        approvalId/requestId 时退化为纯提示气泡（仍可被对应身份 resolved 关闭）。
+
+        无任何稳定身份的记录（如普通工具调用被误标 approval/asked 后的桥接
+        残留）无法与 resolved 配对，创建 sticky 弹窗必然无法关闭——直接忽略。
 
         气泡文案优先展示被审批命令的完整内容（payload.command，来自 bridge
         的 arguments），让用户不用去 DSH 界面就能看到要批准什么。"""
@@ -1798,6 +1866,11 @@ class AgentLinkManager(QObject):
         if not agent_cfg.get("notify_approval", True):
             return
         payload = payload if isinstance(payload, dict) else {}
+        # 可关联身份门禁：无 rpcId/approvalId/requestId/callId 一律不弹窗。
+        if not (payload.get("rpcId") or payload.get("approvalId")
+                or payload.get("requestId") or payload.get("callId")):
+            log.debug("approval/request 缺可关联身份，忽略（不弹窗）: %s", str(payload)[:200])
+            return
         name = self.AGENT_NAMES.get(agent_key, agent_key)
         tool = str(payload.get("toolName") or payload.get("tool") or "").strip()
         command = str(payload.get("command") or "").strip()
@@ -1830,6 +1903,7 @@ class AgentLinkManager(QObject):
             interactive=bool(payload.get("rpcId")),
             rpc_id=payload.get("rpcId"),
             approval_id=payload.get("approvalId"),
+            request_id=payload.get("requestId"),
             session_id=session_id,
         )
 
@@ -1845,17 +1919,39 @@ class AgentLinkManager(QObject):
             text = text[:max_len].rstrip() + "…"
         return text
 
+    def _on_cordis_request(self, agent_key: str, payload: dict) -> None:
+        payload = payload if isinstance(payload, dict) else {}
+        # 可关联身份门禁：cordis 交互靠 requestId 与 request-run-resolved 配对关闭。
+        # 无 requestId 的记录无法关闭，直接忽略（requiresApproval 严格布尔检查在 _poll）。
+        if not payload.get("requestId"):
+            log.debug("cordis/request-run 缺 requestId，忽略（不弹窗）: %s", str(payload)[:200])
+            return
+        name = str(payload.get("name") or "Cordis 插件")
+        purpose = str(payload.get("purpose") or "需要你的确认")
+        self._register_interaction(agent_key, kind="cordis", text=f"{name} 请求运行：{purpose}", interactive=False, request_id=payload.get("requestId"), session_id=payload.get("agentId") or payload.get("sessionId"))
+
+    def _on_cordis_resolved(self, agent_key: str, payload: dict) -> None:
+        payload = payload if isinstance(payload, dict) else {}
+        self._close_interaction_by_id("cordis", str(payload.get("requestId") or ""), "", str(payload.get("agentId") or payload.get("sessionId") or agent_key))
+
     def _on_question_request(self, agent_key: str, payload: dict) -> None:
         """用户问题（ask_user_question）阻塞交互：与审批同待遇的常驻气泡。
 
         payload 带 rpcId 且问题带 options 时进入交互模式：气泡内嵌每个选项的
         按钮，点击即 POST /api/respond 回写 DSH（当场选中该选项）。无 rpcId
-        （桥接旧路径）或自由输入类问题（无 options，必须敲字）时退化为纯提示，
-        仍需到 DSH 界面输入/确认。"""
+        （桥接 tool/call 兜底，带 callId）或自由输入类问题（无 options，必须
+        敲字）时退化为纯提示，仍需到 DSH 界面输入/确认。
+
+        只登记**具备可关联身份**的问题（rpcId 或 callId 任一非空），靠它与
+        question/resolved 配对精确关闭；两者皆无的记录无法可靠关闭，直接忽略。"""
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_approval", True):  # 与审批同一开关
             return
         payload = payload if isinstance(payload, dict) else {}
+        # 可关联身份门禁：rpcId（mux）或 callId（tool/call 兜底）任一非空才登记。
+        if not (payload.get("rpcId") or payload.get("callId")):
+            log.debug("question/requested 缺可关联身份，忽略（不弹窗）: %s", str(payload)[:200])
+            return
         name = self.AGENT_NAMES.get(agent_key, agent_key)
         questions = payload.get("questions") or []
         if not isinstance(questions, list):
@@ -1866,19 +1962,11 @@ class AgentLinkManager(QObject):
         self._register_interaction(
             agent_key, kind="question", text=self._question_text(name, questions, prefix=prefix),
             questions=questions,
-            interactive=bool(payload.get("rpcId")) and self._question_has_options(questions),
+            interactive=bool(payload.get("rpcId")) and self._questions_all_have_options(questions),
             rpc_id=payload.get("rpcId"),
             call_id=payload.get("callId"),
             session_id=session_id,
         )
-
-    @staticmethod
-    def _question_has_options(questions: list) -> bool:
-        """问题是否带可点选选项（交互气泡的前提）。"""
-        for q in questions:
-            if isinstance(q, dict) and q.get("options"):
-                return True
-        return False
 
     def _question_text(self, name: str, questions: list, *, prefix: str = "") -> str:
         """把 questions 载荷排版成气泡文案（单行紧凑）。
@@ -1889,7 +1977,14 @@ class AgentLinkManager(QObject):
         if not questions:
             return self._dialogue("question.empty", f"{prefix}{name} 在等你回答一个问题，快去看一下～", name=name)
         if len(questions) > 1:
-            return self._dialogue("question.many", f"{prefix}{name} 有 {len(questions)} 个问题等你回答，快去看一下～", count=len(questions), name=name)
+            if self._questions_all_have_options(questions):
+                return self._dialogue("question.many", f"{prefix}{name} 有 {len(questions)} 个问题等你回答，快去看一下～", count=len(questions), name=name)
+            return self._dialogue(
+                "question.many",
+                f"{prefix}{name} 有 {len(questions)} 个问题等你回答"
+                "（含文本输入，请到 DSH 界面输入文本回答）～",
+                count=len(questions), name=name,
+            )
         q = questions[0]
         if not isinstance(q, dict):
             q = {}
@@ -1908,7 +2003,11 @@ class AgentLinkManager(QObject):
             return f"{name} 在问你：{body}（{' / '.join(labels)}）{multi}请选择一个："
         if multi:
             return f"{name} 在问你：{body}（可多选）快去选一下～"
-        return self._dialogue("question.one", f"{name} 在问你：{body}，需要你输入，快去看一下～", body=body, name=name)
+        return self._dialogue(
+            "question.one",
+            f"{name} 在问你：{body}，需要你输入，请到 DSH 界面输入文本回答～",
+            body=body, name=name,
+        )
 
     def _interaction_key(self, agent_key: str, kind: str, rpc_id) -> str:
         """生成稳定交互 id：有 rpcId 用 rpcId（同一审批/问题的稳定标识），
@@ -1952,7 +2051,10 @@ class AgentLinkManager(QObject):
                     self._show_interaction_bubble(iid)
                     return iid
         iid = self._interaction_key(agent_key, kind, rpc_id)
-        # 同 rpcId 重复到达：就地覆盖内容（不排队第二条气泡）
+        # A DSH rpcId is normally globally unique, but isolate malformed or
+        # concurrent transports that reuse it across sessions.
+        if iid in self._pending_interactions and rpc_id:
+            iid = f"{iid}:{str(extra.get('session_id') or '')}"
         alert_id = f"interaction:{iid}"
         self._pending_interactions[iid] = {
             "kind": kind, "text": text, "alert_id": alert_id,
@@ -2018,15 +2120,20 @@ class AgentLinkManager(QObject):
         call_id = payload.get("callId")
         if call_id:
             call_id = str(call_id)
+            session_id = str(payload.get("sessionId") or "")
             for iid, item in self._pending_interactions.items():
-                if item.get("kind") == "question" and str(item.get("call_id") or "") == call_id:
+                if (item.get("kind") == "question"
+                        and str(item.get("call_id") or "") == call_id
+                        and (not session_id or str(item.get("session_id") or "") == session_id)):
                     self._resolve_interaction(iid)
                     return
             return  # 带 callId 但未匹配：陈旧已解决帧，不动其他问题
         rpc_id = payload.get("rpcId")
         if rpc_id:
+            session_id = str(payload.get("sessionId") or "")
             for iid, item in self._pending_interactions.items():
-                if item.get("kind") == "question" and item.get("rpc_id") == rpc_id:
+                if (item.get("kind") == "question" and str(item.get("rpc_id") or "") == str(rpc_id)
+                        and (not session_id or str(item.get("session_id") or "") == session_id)):
                     self._resolve_interaction(iid)
                     return
             return  # 带 id 但未匹配：陈旧已解决帧，不动其他问题
@@ -2061,6 +2168,7 @@ class AgentLinkManager(QObject):
 
     def dismiss_all_interactions(self) -> None:
         """清空全部待处理阻塞交互并关闭气泡（DSH 离线/重启时交互必然失效）。"""
+        self._clear_429_alerts()
         if not self._pending_interactions and not getattr(self.win, "_sticky_bubble_active", False):
             return
         self._pending_interactions.clear()
@@ -2110,8 +2218,12 @@ class AgentLinkManager(QObject):
                 legacy.pop(key, None)
             self.win.show_alert(text, **legacy)
 
-    def _interaction_buttons(self, interaction_id: str) -> list[tuple[str, Callable]] | None:
-        """为某条可交互 pending 阻塞交互构建按钮 [(label, callback)]；不可交互返回 None。
+    def _interaction_buttons(self, interaction_id: str) -> list[tuple[str, object]] | None:
+        """为某条可交互 pending 阻塞交互构建按钮元素；不可交互返回 None。
+
+        按钮元素除 ``(label, callback)`` 外，支持结构化行：
+        - ``(SECTION_HEADER_LABEL, text)``：分支标题行 —— 多分支问题按分支分组展示。
+        - ``(SECTION_HINT_LABEL, text)``：灰色提示行 —— 如「文本回答请到 DSH 界面输入」。
 
         按钮回调捕获 interaction_id：点击只对该条交互回写，与同一 agent 的
         其他并发审批互不干扰（修复「点同意却放行后面那个请求」的覆盖 bug）。"""
@@ -2123,23 +2235,77 @@ class AgentLinkManager(QObject):
                 ("同意", lambda iid=interaction_id: self._respond_interaction(iid, "allowed-once")),
                 ("拒绝", lambda iid=interaction_id: self._respond_interaction(iid, "rejected")),
             ]
-        # question：每个选项一个按钮，点击即回答该选项（selected=[该选项 label]）
+        # question：单问题保持旧的即时选择；多问题或多选进入收集模式，
+        # 按分支分组展示（每个问题一行标题 + 自己的选项），点击更新对应
+        # 问题的 selected，最后点击提交一次性回写完整 answers。
         questions = pending.get("questions") or []
-        q = questions[0] if questions else {}
-        if not isinstance(q, dict):
-            q = {}
-        opts = q.get("options") or []
-        labels = []
-        for o in opts:
-            label = str(o.get("label") or "") if isinstance(o, dict) else str(o)
-            if label:
-                labels.append(label)
-        if not labels:
-            return None
-        return [
-            (label, lambda iid=interaction_id, lbl=label: self._respond_interaction(iid, [lbl]))
-            for label in labels
-        ]
+        if len(questions) == 1 and not bool((questions[0] or {}).get("multiSelect")):
+            q = questions[0] if isinstance(questions[0], dict) else {}
+            labels = [str(o.get("label") or "") if isinstance(o, dict) else str(o)
+                      for o in (q.get("options") or [])]
+            labels = [label for label in labels if label]
+            if not labels:
+                return None
+            return [(label, lambda iid=interaction_id, lbl=label: self._respond_interaction(iid, [lbl])) for label in labels]
+        state = pending.setdefault("selections", {})
+        buttons: list[tuple[str, object]] = []
+        for index, question in enumerate(questions):
+            if not isinstance(question, dict):
+                continue
+            header = str(question.get("header") or question.get("question") or f"问题 {index + 1}").strip()
+            if header:
+                buttons.append((SECTION_HEADER_LABEL, header))
+            for option in question.get("options") or []:
+                label = str(option.get("label") or "") if isinstance(option, dict) else str(option)
+                if not label:
+                    continue
+                selected = state.setdefault(str(question.get("id") or index), [])
+                mark = "✓ " if label in selected else ""
+                buttons.append((f"{mark}{label}", lambda iid=interaction_id, idx=index, lbl=label: self._toggle_question_option(iid, idx, lbl)))
+        if self._questions_all_have_options(questions):
+            buttons.append(("提交回答", lambda iid=interaction_id: self._submit_question_answers(iid)))
+        else:
+            # 分支中有自由文本问题（无 options）：气泡内无法收集文本，
+            # 隐藏提交按钮，提示回 DSH 界面输入文本回答。
+            buttons.append((SECTION_HINT_LABEL, "文本回答请到 DSH 界面输入"))
+        return buttons or None
+
+    @staticmethod
+    def _questions_all_have_options(questions: list) -> bool:
+        """整批问题是否全部带可点选选项（是否可完全在气泡内回答完）。"""
+        if not questions:
+            return False
+        return all(
+            isinstance(q, dict) and bool(q.get("options"))
+            for q in questions
+        )
+
+    def _toggle_question_option(self, interaction_id: str, index: int, label: str) -> None:
+        pending = self._pending_interactions.get(interaction_id)
+        if not pending:
+            return
+        questions = pending.get("questions") or []
+        q = questions[index] if index < len(questions) and isinstance(questions[index], dict) else {}
+        key = str(q.get("id") or index)
+        selected = pending.setdefault("selections", {}).setdefault(key, [])
+        if label in selected:
+            selected.remove(label)
+        elif q.get("multiSelect"):
+            selected.append(label)
+        else:
+            selected[:] = [label]
+        self._show_interaction_bubble(interaction_id)
+
+    def _submit_question_answers(self, interaction_id: str) -> None:
+        pending = self._pending_interactions.get(interaction_id)
+        if not pending:
+            return
+        answers = []
+        selections = pending.get("selections") or {}
+        for index, q in enumerate(pending.get("questions") or []):
+            q = q if isinstance(q, dict) else {}
+            answers.append({"id": q.get("id"), "selected": list(selections.get(str(q.get("id") or index), []))})
+        self._respond_interaction(interaction_id, {"answers": answers})
 
     @staticmethod
     def _build_respond_message(pending: dict, decision) -> dict | None:
@@ -2157,14 +2323,30 @@ class AgentLinkManager(QObject):
                 "outcome": str(decision),
             }
         else:
-            qid = None
             questions = pending.get("questions") or []
-            if questions and isinstance(questions[0], dict):
-                qid = questions[0].get("id")
-            selected = decision if isinstance(decision, (list, tuple)) else [decision]
+            # The DSH response contract is answers[], one entry for every
+            # question.  Accept the structured decision from richer UI paths;
+            # retain the legacy list form for a single question.
+            if isinstance(decision, dict) and isinstance(decision.get("answers"), (list, tuple)):
+                answers = []
+                for answer in decision["answers"]:
+                    if not isinstance(answer, dict):
+                        continue
+                    item = {"id": answer.get("id"), "selected": [str(s) for s in (answer.get("selected") or [])]}
+                    if answer.get("custom") is not None:
+                        item["custom"] = str(answer.get("custom"))
+                    answers.append(item)
+            else:
+                selected = decision if isinstance(decision, (list, tuple)) else [decision]
+                answers = []
+                for index, question in enumerate(questions):
+                    if not isinstance(question, dict):
+                        question = {}
+                    values = selected if index == 0 else []
+                    answers.append({"id": question.get("id"), "selected": [str(s) for s in values]})
             value = {
                 "sessionId": session_id,
-                "answer": {"answers": [{"id": qid, "selected": [str(s) for s in selected]}]},
+                "answer": {"answers": answers},
             }
         return {
             "type": "client-response",
@@ -2487,6 +2669,33 @@ class AgentLinkManager(QObject):
                 self._exploration_active_generation.pop(key, None)
                 self._dismiss_exploration(key)
 
+    # 阻塞交互兜底清理（approval / question / cordis 共用）。
+    # 审批/问题等待期间 Agent 不会走到 turn/end（DSH 仍处于 running）；
+    # 一旦出现 turn/end、task_complete、execution/failed、thread_rolled_back
+    # 或 AgentStatus idle/sleeping，说明会话已结束/回合已结束/Agent 已停止，
+    # 任何仍 pending 的阻塞交互必然失效（DSH 漏发 resolved 的异常场景），
+    # 据此精确清掉对应会话（无 sessionId 时清该 agent 全部）的交互弹窗，
+    # 防止真实异常也留下永久弹窗。带 rpcId/approvalId 的真实审批由
+    # approval/resolved 正常关闭，不受影响。
+    _INTERACTION_END_EVENTS = {
+        "turn/end", "task_complete", "execution/failed", "thread_rolled_back",
+    }
+
+    def _on_interaction_lifecycle(self, agent_key: str, record: dict) -> None:
+        """会话/turn 结束或 Agent 停止时，清掉对应会话/agent 的 pending 阻塞交互。"""
+        if not isinstance(record, dict):
+            return
+        event = str(record.get("event") or "")
+        session = str(record.get("sessionId") or record.get("session_id") or "")
+        ended = (event in self._INTERACTION_END_EVENTS or
+                 (event == "AgentStatus" and str(record.get("state") or "") in {"idle", "sleeping"}))
+        if not ended:
+            return
+        for iid in [i for i, v in self._pending_interactions.items()
+                    if v.get("agent_key") == agent_key
+                    and (not session or not v.get("session_id") or v.get("session_id") == session)]:
+            self._resolve_interaction(iid)
+
     def _exploration_provider_config(self):
         from dataclasses import replace
         from .chat.models import ChatSettings
@@ -2563,13 +2772,12 @@ class AgentLinkManager(QObject):
         self._exploration_alerts[session_key] = alert_id
         buttons = [
             ("不管", lambda s=session_key: self._continue_exploration(s)),
-            ("自动优化", lambda s=session_key, p=payload: self._replan_exploration(s, p)),
             ("终止", lambda s=session_key: self._stop_exploration(s)),
         ]
         show_interactive = self._exploration_watchdog.mode != "auto" or verdict in ("ASK_USER", "STOP")
         if show_interactive:
             if hasattr(self.win, "show_alert"):
-                self._show_alert_compat(text, subtitle=f"建议：{judge.get('next_action', '重新规划')}",
+                self._show_alert_compat(text, subtitle="请确认是否终止当前执行",
                                     buttons=buttons, sticky=True, alert_id=alert_id,
                                     priority=1, alert_type="watchdog-intervention",
                                     metadata={"sessionId": session_key, "riskScore": payload.get("risk", 0),
@@ -2630,30 +2838,51 @@ class AgentLinkManager(QObject):
             return
         if not isinstance(record, dict):
             return
-        session_key = str(record.get("sessionId") or agent_key)
+        session_id = str(record.get("sessionId") or "")
+        if not session_id:
+            self._429_anonymous_seq += 1
+            session_key = f"{agent_key}:anonymous:{self._429_anonymous_seq}"
+        else:
+            session_key = session_id
         now = self._clock()
         cache = self._429_cache
         existing = cache.get(session_key)
+        supplied_count = record.get("consecutiveRetryCount")
+        if supplied_count is None and session_id:
+            supplied_count = self._429_retry_counts.get((agent_key, session_id), 0)
+        try:
+            supplied_count = int(supplied_count) if supplied_count is not None else 0
+        except (TypeError, ValueError):
+            supplied_count = 0
         if existing and now - existing.get("_ts", 0) < self._429_COOLDOWN_S:
-            # 合并：更新计数与时间，不重复弹窗；刷新 15 秒倒计时
-            existing["count"] = existing.get("count", 1) + 1
+            # Prefer the bridge's actual streak; legacy payloads increment locally.
+            existing_count = int(existing.get("count", 1) or 1)
+            existing["count"] = max(existing_count, supplied_count) if supplied_count else existing_count + 1
             existing["_ts"] = now
             existing["_dismissed"] = False
             self._show_429_alert(session_key, existing["count"])
             return
         cache[session_key] = {
-            "count": 1,
+            "count": max(1, supplied_count),
             "_ts": now,
             "_first_ts": now,
             "_dismissed": False,
         }
-        self._show_429_alert(session_key, 1)
+        self._show_429_alert(session_key, cache[session_key]["count"])
 
     def _show_429_alert(self, session_key: str, count: int) -> None:
         """展示 429 提醒弹窗，高优先级，带「知道了」按钮，15 秒自动收起。"""
-        fallback = "DSH 请求受限（429），本轮未完成；请稍后重试。"
+        fallback = (
+            "DSH 请求受限（429），本次限流未完成；请稍后重试。"
+            if count <= 1 else
+            f"DSH 请求受限（429），已连续限流 {count} 次；请稍后重试。"
+        )
         key = "rate_limit.many" if count > 1 else "rate_limit.one"
         text = self._dialogue(key, fallback, count=count)
+        # PhrasePicker's built-in persona text is intentionally allowed to use
+        # different wording; only an unavailable/empty renderer falls back.
+        if not str(text or '').strip():
+            text = fallback
         buttons = [("知道了", lambda sk=session_key: self._dismiss_429_alert(sk))]
         if hasattr(self.win, "show_alert"):
             self.win.show_alert(
@@ -2702,6 +2931,17 @@ class AgentLinkManager(QObject):
             except Exception:
                 pass
             timer.deleteLater()
+
+    def _clear_429_alerts(self) -> None:
+        """清理全部 429 提醒、计数和定时器。"""
+        session_keys = set(self._429_cache) | set(self._429_timers)
+        self._429_cache.clear()
+        self._429_retry_counts.clear()
+        for session_key in list(self._429_timers):
+            self._cancel_429_timer(session_key)
+        for session_key in session_keys:
+            if hasattr(self.win, "resolve_alert"):
+                self.win.resolve_alert(self._429_alert_id(session_key))
 
     def _dismiss_429_alert(self, session_key: str) -> None:
         """用户点击「知道了」或超时自动收起：清理缓存并关闭提醒。"""
@@ -2824,24 +3064,23 @@ class AgentLinkManager(QObject):
             self._close_interaction_by_id("question", rpc_id, call_id, session_key)
 
     def _close_interaction_by_id(self, kind: str, rpc_id: str, id_: str, session_key: str) -> None:
-        """按 kind + id 精确关闭对应的交互弹窗。
-
-        优先匹配 rpc_id（可交互审批/问题的权威身份），其次匹配 approvalId/callId。
-        两者均不匹配时，降级关闭该 kind 下同 session 的无 id 条目（旧路径兜底）。
-        """
+        """按 kind + identity + session 精确关闭交互弹窗。"""
         for iid, item in self._pending_interactions.items():
             if item.get("kind") != kind:
                 continue
-            if rpc_id and item.get("rpc_id") == rpc_id:
+            item_session = str(item.get("session_id") or "")
+            if session_key and item_session and item_session != session_key:
+                continue
+            if rpc_id and (item.get("rpc_id") == rpc_id or item.get("request_id") == rpc_id):
                 self._resolve_interaction(iid)
                 return
-            if id_ and item.get(f"{kind[:2]}_id" if kind == "approval" else "call_id") == id_:
+            if id_ and (item.get("approval_id") == id_ or item.get("call_id") == id_):
                 self._resolve_interaction(iid)
                 return
-        # 无 id 匹配：旧路径兜底，关闭同 kind 同 session 的无 rpc_id 条目
+        if kind not in ("approval", "question"):
+            return
         for iid, item in self._pending_interactions.items():
-            if (item.get("kind") == kind and item.get("agent_key") == session_key
-                    and not item.get("rpc_id")):
+            if item.get("kind") == kind and item.get("agent_key") == session_key and not item.get("rpc_id"):
                 self._resolve_interaction(iid)
                 return
 
@@ -3051,8 +3290,15 @@ class AgentLinkManager(QObject):
         # 若该 session 有活跃的 429 提醒，不再重复弹通用失败横幅（避免双重通知）
         session_key = str(payload.get("sessionId") or agent_key)
         active_429 = self._429_cache.get(session_key)
+        error_code = str(payload.get("errorCode") or "").strip().upper()
+        error_message = str(payload.get("errorMessage") or payload.get("errorText") or "")
+        rate_limit_codes = {"429", "RATE_LIMIT", "TOO_MANY_REQUESTS", "RESOURCE_EXHAUSTED"}
+        is_rate_limit_failure = error_code in rate_limit_codes or "429" in error_message or "rate limit" in error_message.lower()
+        retry_exhausted = bool(payload.get("retryExhausted"))
+        source = str(payload.get("source") or "").strip()
+        suppress_as_429 = is_rate_limit_failure or (retry_exhausted and source != "tool" and not error_code)
         if active_429 and not active_429.get("_dismissed") and \
-                self._clock() - active_429.get("_ts", 0) < self._429_COOLDOWN_S:
+                self._clock() - active_429.get("_ts", 0) < self._429_COOLDOWN_S and suppress_as_429:
             return
         # 失败动画（若角色素材有）；没有就保持当前动作，仅弹气泡
         anim = self._pick_fail_anim()

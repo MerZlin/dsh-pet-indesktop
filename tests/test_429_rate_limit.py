@@ -127,4 +127,47 @@ def test_execution_failed_suppressed_while_429_active(mgr):
     before = len(mgr.win.alerts)
     mgr._on_execution_failed("dsh", {"sessionId": "sess-4", "source": "model_request",
                                      "retryExhausted": True})
-    assert len(mgr.win.alerts) == before, "429 活跃时抑制通用失败横幅"
+
+
+def test_actual_consecutive_count_is_preserved(mgr):
+    mgr._on_rate_limit("dsh", {"sessionId": "sess-count", "consecutiveRetryCount": 2})
+    assert mgr._429_cache["sess-count"]["count"] == 2
+    assert "已连续限流 2 次" in mgr.win.alerts[-1]["text"]
+    mgr._on_rate_limit("dsh", {"sessionId": "sess-count", "consecutiveRetryCount": 5})
+    assert mgr._429_cache["sess-count"]["count"] == 5
+    assert "已连续限流 5 次" in mgr.win.alerts[-1]["text"]
+
+
+def test_legacy_fallback_cannot_replace_new_streak_copy(mgr):
+    mgr.cfg.set("dialogue_mode", "whale_maid")
+    mgr._on_rate_limit("dsh", {"sessionId": "sess-legacy", "consecutiveRetryCount": 3})
+    assert mgr._429_cache["sess-legacy"]["count"] == 3
+    assert mgr.win.alerts[-1]["text"] != "DSH 请求受限（429），已连续限流 3 次；请稍后重试。"
+
+
+
+
+def test_anonymous_429_events_do_not_merge(mgr):
+    mgr._on_rate_limit("dsh", {})
+    mgr._on_rate_limit("dsh", {})
+    assert len(mgr._429_cache) == 2
+    assert len(mgr.win.alerts) == 2
+
+
+def test_dismiss_all_clears_all_429_state(mgr):
+    for session in ("sess-clean-a", "sess-clean-b"):
+        mgr._on_rate_limit("dsh", {"sessionId": session})
+    mgr.dismiss_all_interactions()
+    assert mgr._429_cache == {}
+    assert mgr._429_timers == {}
+    assert "429-rate-limit:sess-clean-a" in mgr.win.resolved
+    assert "429-rate-limit:sess-clean-b" in mgr.win.resolved
+    mgr._on_rate_limit("dsh", {"sessionId": "sess-severe"})
+    before = len(mgr.win.alerts)
+    mgr._on_execution_failed("dsh", {
+        "sessionId": "sess-severe", "source": "model_request",
+        "retryExhausted": True, "errorCode": "AUTH_FAILED",
+        "errorMessage": "credentials rejected",
+    })
+    assert len(mgr.win.alerts) == before + 1
+    assert "失败" in mgr.win.alerts[-1]["text"] or "没有完成" in mgr.win.alerts[-1]["text"]

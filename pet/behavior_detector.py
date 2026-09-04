@@ -97,7 +97,7 @@ _TRACKED_CLASSES = frozenset(
 # ---------------------------------------------------------------------------
 
 # 精确别名表：归一化后的工具名 → 行为类。
-# 覆盖 DSH / Claude / Codex / 常见命令 的命名习惯（小写、去空格、去扩展名）。
+# 覆盖 DSH / Claude / Cursor / OpenCode / 常见命令 的命名习惯（小写、去空格、去扩展名）。
 _CLASS_ALIASES: dict[BehaviorClass, frozenset[str]] = {
     BehaviorClass.SEARCH: frozenset(
         {
@@ -196,8 +196,8 @@ def normalize_tool(tool: str) -> str:
     for sep in ("/", "\\", "."):
         if sep in t:
             t = t.split(sep)[-1]
-    # 去常见前缀 mcp/tool_/tools_/codex_/file_/files_ 等
-    for prefix in ("mcp", "mcp_", "tool", "tools", "codex", "file", "files", "fs"):
+    # 去常见前缀 mcp/tool_/tools_/file_/files_ 等
+    for prefix in ("mcp", "mcp_", "tool", "tools", "file", "files", "fs"):
         if t.startswith(prefix) and t != prefix:
             t = t[len(prefix):]
             break
