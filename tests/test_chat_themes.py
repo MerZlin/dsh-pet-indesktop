@@ -66,6 +66,7 @@ def test_all_builtin_themes_resolve():
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     from PySide6.QtWidgets import QApplication
     from pet.chat.legacy_widgets import ChatWindow
+    from pet.chat import session_store
     from pet.config import Config
     import tempfile
 
@@ -78,6 +79,10 @@ def test_all_builtin_themes_resolve():
             assert win._bg_pixmap is not None and not win._bg_pixmap.isNull(), key
             assert win._bg_theme['accent'] == THEMES[key]['accent']
             win.close()
+            # conftest 的 writer 收口在 fixture teardown，晚于本 with 块的
+            # rmtree——必须在目录清理前排空并关闭后台写盘线程，否则 writer
+            # 的 mkdir+写盘与 rmtree 竞态（CI windows-latest 实录 WinError 145）。
+            assert session_store.close_all_writers() is True
 
 
 def test_classic_background_supports_builtin_theme_while_modern_background_is_independent(tmp_path):
