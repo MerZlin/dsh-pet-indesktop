@@ -1143,7 +1143,7 @@ class CollisionIpcSession(QObject):
     decode_reply_submitted = Signal(str, object)
 
     def __init__(self, config, parent=None, server_name: str | None = None):
-        # PetApp 是普通控制器而非 QObject；生命周期由其属性持有。
+        # AppShell 是普通控制器而非 QObject；生命周期由其属性持有。
         super().__init__(parent if isinstance(parent, QObject) else None)
         self.runtime_id = make_runtime_id(getattr(config, "instance_id", ""))
         self._thread = QThread(self)

@@ -17,7 +17,7 @@
 - 右键菜单测试用 monkeypatch 替换了 QMenu.exec()（立即返回），只验证
   _context_menu_open 同步块内的 begin/end 配对；真实 exec() 的 nested event
   loop、子菜单、菜单期间切角色/隐藏、action 退出等场景不在单测覆盖内。
-- 窗口测试未走真实 PetApp.switch_character()；旧窗口迟到事件用直接调用
+- 窗口测试未走真实 AppShell/PetInstance.switch_character()；旧窗口迟到事件用直接调用
   _on_frame/_on_clip_finished 模拟（生产路径是 hide() 后 Qt 队列中的残留信号）。
 """
 from __future__ import annotations

@@ -577,13 +577,13 @@ def test_pet_app_assigns_distinct_offsets_to_spawned_pets(tmp_path, monkeypatch)
     from PySide6.QtWidgets import QApplication
 
     import pet.app as app_mod
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
     offsets = []
     monkeypatch.setattr(app_mod, "launch_new_pet", lambda index: offsets.append(index))
-    owner = PetApp(app, Config(tmp_path))
+    owner = AppShell(app, Config(tmp_path))
     owner.spawn_pet()
     owner.spawn_pet()
     assert offsets == [1, 2]
@@ -2749,7 +2749,7 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
     from PySide6.QtWidgets import QApplication
 
     import pet.app as app_mod
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     QApplication.instance() or QApplication([])
@@ -2774,20 +2774,20 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
             self.saved += 1
 
     monkeypatch.setattr(app_mod.QTimer, "singleShot", lambda *a, **k: None)
-    owner = PetApp(FakeApp(), Config(tmp_path))
-    owner._create_ui = lambda cid: None
-    owner._apply_spawn_offset = lambda: None
+    owner = AppShell(FakeApp(), Config(tmp_path))
+    owner.instance._create_ui = lambda cid: None
+    owner.instance._apply_spawn_offset = lambda: None
     owner._apply_balance_timer = lambda: None
 
     old = FakeWin()
-    owner.win = old
+    owner.instance.win = old
     owner.start()
     owner.start()  # 重复 start 不得叠加 connect
     assert len(owner.app.connections) == 1
     assert owner.app.connections[0] == owner._on_about_to_quit
 
     current = FakeWin()
-    owner.win = current
+    owner.instance.win = current
     owner.app.connections[0]()  # 触发 aboutToQuit
     assert current.saved == 1
     assert old.saved == 0  # 旧窗口不再被保存
@@ -2932,11 +2932,11 @@ def test_check_update_failure_reports_and_reentry_guard(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication
 
     from pet import app as app_mod
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
-    owner = PetApp(app, Config(tmp_path))
+    owner = AppShell(app, Config(tmp_path))
 
     gate = threading.Event()
 

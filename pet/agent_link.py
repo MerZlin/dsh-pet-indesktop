@@ -1356,7 +1356,7 @@ class AgentLinkManager(QObject):
       AgentLinkPresentation（气泡/音效/动画调度），并完成信号接线；
     - 监视器生命周期：pause / resume / shutdown / apply_config；
     - set_enabled 安装/卸载编排（授权弹窗、后台安装、hooks 注入/移除）；
-    - 对既有调用面（PetWindow / PetApp / ProactiveScreenWatcher / 测试）的
+    - 对既有调用面（PetWindow / AppShell / ProactiveScreenWatcher / 测试）的
       薄转发。状态机与呈现逻辑分别位于 agent_link_reducer / agent_link_presentation。
     """
 

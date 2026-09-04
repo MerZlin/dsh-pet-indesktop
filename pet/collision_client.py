@@ -74,7 +74,7 @@ class CollisionClient(QObject):
     # 会话 attach/detach 与策略同步
     # ------------------------------------------------------------------
     def attach(self, session) -> None:
-        """绑定 PetApp 持有的 IPC facade，GUI 不接触 socket。"""
+        """绑定 AppShell 持有的 IPC facade，GUI 不接触 socket。"""
         self.detach()
         if session is None or not bool(self._win.cfg.get('collision_enabled', True)):
             return

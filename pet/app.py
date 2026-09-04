@@ -6,6 +6,13 @@
 - 右键桌宠 →「切换角色」
 - 托盘菜单 →「切换角色」
 切换后会热加载对应形象的 webm，并保留位置/朝向等配置。
+
+批5.1（纯重构）把原 PetApp 按「进程级 / 每窗」拆成两块，行为逐位不变、
+运行时仍一进程一窗：
+- ``AppShell``：进程级服务（托盘、灵动岛、dock 菜单、更新、余额、系统通知、
+  碰撞会话、broker、aboutToQuit 收口），并持有唯一的 ``PetInstance``。
+- ``PetInstance``：每窗容器（config/lib/win/聊天窗/设置窗/气泡），持 backref
+  到 ``AppShell``，窗口级操作都从这里路由，``self.win`` 单窗假设据此收敛。
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from . import catalog
 from . import click_sound
 from . import slot_manager as slot_manager_mod
 from . import updater
+from . import webm_clip as webm_clip_mod
 from .config import APP_DIR_NAME, Config, _default_base
 from .context_menus.shared import open_deepseek_web
 from .desktop_notify import DesktopNotification, position_stack
@@ -192,29 +200,475 @@ def _cleanup_stale_runtime_dirs() -> None:
     for directory, error in result.failed.items():
         logging.warning("清理 PyInstaller 缓存目录失败: %s (%s)", directory, error)
 
-class PetApp:
-    """管理桌宠窗口、托盘与角色热切换。"""
 
-    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True, slot_handle=None, slot_id: int | None = None) -> None:
-        self.app = app
+class PetInstance:
+    """每窗容器 —— config/lib/win/聊天窗/设置窗/气泡与全部窗口级操作。
+
+    批5.1（纯重构）拆自原 PetApp 的「每窗」半边，行为逐位不变，运行时仍
+    一进程一窗。持 backref 到所属 ``AppShell``；窗口级逻辑集中于本类后，
+    ``self.win`` 单窗假设只有一个归属点，便于批5.2 扩成多窗集合。
+    """
+
+    def __init__(self, shell: "AppShell", config: Config, enable_chat: bool = True,
+                 slot_handle=None, slot_id: int | None = None) -> None:
+        self.shell: AppShell = shell
         self.config = config
         self.enable_chat = bool(enable_chat)
         self.slot_handle = slot_handle
         self.slot_id = slot_id
         self.win: PetWindow | None = None
-        self.tray: QSystemTrayIcon | None = None
-        self.dock_menu: QMenu | None = None
-        self._notification_click_callback = None
-        self._toast_windows: list[DesktopNotification] = []
+        self.lib = None
         self.chat_window = None
         self.legacy_chat_window = None
         self.modern_chat_window = None
         self.chat_settings_dialog = None
         self.modern_settings_dialog = None
-        self.island = None
         self.quick_chat = None
-        self._spawned_pet_count = 0
         self._pending_dialog_opens: set[str] = set()
+
+    # ------------------------------------------------------------ 窗口构建
+    def _create_library(self, character_id: str) -> MovieLibrary:
+        # 预热策略：默认 balanced（高频交互链预热首帧，随机动作池只取元数据
+        # 按需解码）；省电模式（闲置降帧开关）强制 minimal（连高频链也不预热，
+        # 常驻内存最低）。media_prewarm 配置键保留给手改 config 的高级用户
+        # （可显式设 full），但被省电模式覆盖。
+        prewarm = str(self.config.get("media_prewarm", "balanced") or "balanced")
+        if self.config.get("idle_low_fps_enabled", False):
+            prewarm = "minimal"
+        # 首帧缓存全局预算（高级用户可在 config.json 调小，省电/低配机用）；
+        # 进程级设置，幂等，切角色重复调用无害。
+        webm_clip_mod.set_first_frame_budget(
+            int(self.config.get("first_frame_cache_max_mb", 32)) * 1024 * 1024
+        )
+        lib = MovieLibrary(
+            character_id=character_id,
+            prewarm_policy=prewarm,
+        )
+        # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.5s 错峰），
+        # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
+        lib.schedule_high_priority_warm()
+        lib.schedule_low_priority_warm()
+        logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
+        return lib
+
+    def _wire_window(self, win: PetWindow) -> None:
+        """绑定新窗口的回调接线（创建与角色切换共用，两处历史逐行重复）。
+
+        两段原始代码逐行一致（并集 = 该段本身，未发现任一方多设回调），
+        后续新增回调只改这一处即可保证两个入口同步。
+        进程级操作（余额/更新/生小肥鱼/系统通知）经 ``self.shell`` 路由，
+        其余均为本窗操作。
+        """
+        win.on_switch_character = self.switch_character
+        win.on_open_chat = self.open_chat if self.enable_chat else None
+        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
+        win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
+        win.on_show_balance = self.shell.show_balance if self.enable_chat else None
+        win.on_check_update = self.shell.check_update
+        win.on_look_synced = self.sync_look_to_chat if self.enable_chat else None
+        win.on_look_screen = win.look_at_screen if self.enable_chat and hasattr(win, "look_at_screen") else None
+        win.on_open_legacy_settings = None
+        win.on_open_modern_settings = self.open_modern_settings
+        win.on_spawn_pet = self.shell.spawn_pet
+        win.on_restore_fun_windows = restore_ojingjing_windows
+        win.on_hidden = self._notify_pet_hidden
+
+    def _build_window(self, character_id: str, lib: MovieLibrary | None = None) -> PetWindow:
+        """创建新窗口/托盘并完成接线、音效预热与旧对象延迟销毁（创建与切换共用）。
+
+        从 _create_ui 与 switch_character 两处历史逐行重复的公共序列（约 25 行）
+        抽出：步骤顺序与 deleteLater / QTimer.singleShot 时序与原实现完全一致。
+        lib 可预传入（switch_character 先预创建、失败则保留当前角色），
+        缺省时按 character_id 创建（_create_ui 启动路径）。
+        托盘为进程级（AppShell 持有），经 ``self.shell`` 路由。
+        """
+        if lib is None:
+            lib = self._create_library(character_id)
+        win = PetWindow(lib, self.config, collision_session=self.shell.collision_ipc,
+                        broker_facade=self.shell.broker_facade)
+        self._wire_window(win)
+        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
+        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
+        # 首次点击 Q 弹卡顿。音效关闭时不预热，避免无谓拉起 QtMultimedia 池。
+        if self.config.get("click_sound_enabled", True) or self.config.get("collision_sound_enabled", True):
+            click_sound.warm_click_sound_effects(
+                self.config.get("click_sound_pack"),
+                data_dir=self.config.dir,
+            )
+        win.show()
+
+        tray = self.shell._build_tray(win)
+
+        # 清理旧对象（热切换时使用）
+        old_win = self.win
+        old_tray = self.shell.tray
+        self.win = win
+        self.shell.tray = tray
+
+        if old_win is not None:
+            old_win.hide(notify=False)
+            if old_tray is not None:
+                old_tray.hide()
+            QTimer.singleShot(0, old_win.deleteLater)
+            if old_tray is not None:
+                QTimer.singleShot(0, old_tray.deleteLater)
+        return win
+
+    def _create_ui(self, character_id: str) -> None:
+        self._build_window(character_id)
+
+    # ------------------------------------------------------------ 角色切换
+    def switch_character(self, character_id: str) -> None:
+        if self.win is None:
+            return
+        current = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
+        if character_id == current:
+            return
+
+        # 先保存配置，即使后续加载失败也记住用户选择
+        self.config.set('character', character_id)
+        self.config.save()
+
+        try:
+            # 预创建新库，失败则保留当前角色（在动旧窗口之前完成）
+            lib = self._create_library(character_id)
+        except Exception as exc:
+            logging.exception('切换角色失败: %s', character_id)
+            _show_startup_error('切换角色失败', str(exc))
+            return
+
+        logging.info('切换角色: %s -> %s', current, character_id)
+
+        # 先停旧窗口的碰撞会话与 Agent 监视器 worker，再重建 IPC 会话：
+        # 否则旧窗口 deleteLater 后其 worker 线程仍经引用链保活并继续轮询
+        # （B9 一审发现）。新窗口/托盘由 _build_window 创建（含旧对象延迟销毁）。
+        #
+        # 批5.1 保持既有「热切换重建 IPC/broker」语义与原实现逐位一致；
+        # 碰撞会话/broker 属进程级（AppShell），故经 ``self.shell`` 路由。
+        old_win = self.win
+        old_win.detach_collision_session()
+        # P3 broker：旧窗口/旧 ipc 退场前中止其仍在发布的全部 session
+        # （publish_abort 全部 session → 消费端本地回退；旧 facade 随旧 ipc 退役）。
+        self.shell.broker_facade.shutdown()
+        if getattr(old_win, 'agent_link_manager', None) is not None:
+            old_win.agent_link_manager.shutdown()
+        self.shell.collision_ipc.stop()
+        self.shell.collision_ipc = CollisionIpcSession(self.config, self.shell)
+        # P3 broker：新 ipc 配新 facade（同 CollisionIpcSession 生命周期；
+        # bind 由新窗口 attach_collision_session 尾部完成）。
+        self.shell.broker_facade = BrokerFacade(
+            enabled=bool(self.config.get('decode_broker_enabled', False)))
+        self.shell.collision_ipc.start()
+        self._build_window(character_id, lib=lib)
+        if self.enable_chat:
+            for chat_window in (self.legacy_chat_window, self.modern_chat_window):
+                if chat_window is not None:
+                    chat_window.set_pet_window(self.win)
+                    chat_window.switch_character(character_id)
+        if getattr(self.shell, "island", None) is not None:
+            self.shell.island.refresh_from_config()
+
+    def _apply_spawn_offset(self) -> None:
+        """让新孵化的桌宠与母桌宠错开，避免两个窗口完全重叠。"""
+        if self.win is None:
+            return
+        try:
+            index = max(0, int(os.environ.get('DSH_PET_SPAWN_OFFSET_INDEX', '0')))
+        except ValueError:
+            index = 0
+        if index <= 0:
+            return
+        scr = self.win.screen_available()
+        if scr is None:
+            return
+        available = scr.availableGeometry()
+        horizontal = -1 if self.win.geometry().center().x() > available.center().x() else 1
+        vertical = -1 if self.win.geometry().center().y() > available.center().y() else 1
+        x = self.win.x() + horizontal * 48 * index
+        y = self.win.y() + vertical * 32 * index
+        # 小屏（可用区比窗口还窄/矮）时上界 < 下界，min/max 会互相打架把
+        # 窗口推出屏幕外；先判边界再钳制。
+        max_x = available.right() - self.win.width() + 1
+        max_y = available.bottom() - self.win.height() + 1
+        x = available.left() if max_x < available.left() else min(max(x, available.left()), max_x)
+        y = available.top() if max_y < available.top() else min(max(y, available.top()), max_y)
+        self.win.move(x, y)
+
+    # ------------------------------------------------------------ 聊天窗
+    def open_chat(self) -> None:
+        """Open the configured chat UI; menus only need this stable dispatcher."""
+        if str(self.config.get("chat_ui_style", "modern")) == "classic":
+            self.open_legacy_chat()
+        else:
+            self.open_modern_chat()
+
+    def open_quick_chat(self) -> None:
+        """打开快速对话气泡；与完整聊天窗共用会话历史。"""
+        if not self.enable_chat or self.win is None:
+            return
+        # Cocoa 原生 QMenu 跟踪期间 activePopupWidget() 可能为 None，且其
+        # 嵌套事件循环会把这个 singleShot 留到菜单关闭后再派发。若是 Qt
+        # 自绘 popup，下一层仍通过 _defer_while_popup_active 等待其关闭。
+        QTimer.singleShot(0, self._show_quick_chat)
+
+    def _show_quick_chat(self) -> None:
+        if not self.enable_chat or self.win is None:
+            return
+        if self._defer_while_popup_active("quick-chat", self._show_quick_chat):
+            return
+        from .quick_chat import QuickChatBubble
+
+        if self.quick_chat is None:
+            self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
+            self.quick_chat.open_chat_callback = self.open_chat
+        else:
+            self.quick_chat.pet_window = self.win
+            self.quick_chat.settings = self.config.chat_settings()
+            self.quick_chat.refresh_session()
+        self.quick_chat.show_for_pet(self.win)
+
+    def open_legacy_chat(self) -> None:
+        if not self.enable_chat or self.win is None:
+            return
+        if self._defer_while_popup_active("legacy-chat", self.open_chat):
+            return
+        from .chat.legacy_widgets import ChatWindow
+        if self.legacy_chat_window is None:
+            self.legacy_chat_window = ChatWindow(
+                self.config,
+                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
+                pet_window=self.win,
+                notifier=self.shell.system_notify,
+                auth_callback=self.open_chat_settings,
+            )
+        else:
+            self.legacy_chat_window.set_pet_window(self.win)
+        self.chat_window = self.legacy_chat_window
+        self._present_dialog(self.legacy_chat_window, lambda: self.legacy_chat_window.position_near_pet(self.win))
+
+    def open_modern_chat(self) -> None:
+        if not self.enable_chat or self.win is None:
+            return
+        if self._defer_while_popup_active("modern-chat", self.open_modern_chat):
+            return
+        from .chat.widgets import ChatWindow
+        if self.modern_chat_window is None:
+            self.modern_chat_window = ChatWindow(
+                self.config,
+                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
+                pet_window=self.win,
+                notifier=self.shell.system_notify,
+                auth_callback=self.open_chat_settings,
+            )
+        else:
+            self.modern_chat_window.set_pet_window(self.win)
+        self.chat_window = self.modern_chat_window
+        self._present_dialog(self.modern_chat_window, lambda: self.modern_chat_window.position_near_pet(self.win))
+
+    def _defer_while_popup_active(self, key: str, callback) -> bool:
+        """Avoid constructing a heavy dialog inside QMenu.exec()."""
+        if QApplication.activePopupWidget() is None:
+            self._pending_dialog_opens.discard(key)
+            return False
+        if key in self._pending_dialog_opens:
+            return True
+        self._pending_dialog_opens.add(key)
+
+        def retry() -> None:
+            if QApplication.activePopupWidget() is not None:
+                QTimer.singleShot(50, retry)
+                return
+            self._pending_dialog_opens.discard(key)
+            callback()
+
+        QTimer.singleShot(50, retry)
+        return True
+
+    def _present_dialog(self, dialog, before_present=None, attempt: int = 0) -> None:
+        """延迟呈现非模态窗口，直到任何弹出菜单关闭。
+
+        macOS 的右键/托盘菜单是原生 NSMenu 跟踪会话（menu.exec 阻塞期间），
+        菜单项动作触发时会话尚未结束，此时新建窗口的 show/raise/activate
+        会被 AppKit 抑制——表现为首次点击「AI 设置 / 桌宠设置」无反应，
+        需要再点一次（此时窗口实例已存在，直接 show 成功）。
+        延迟到菜单关闭后再呈现即可稳定弹出；Qt 自绘菜单（Windows）同样
+        覆盖：弹窗仍显示时重试等待。重试 60 次（约 3.6 秒）后放弃，
+        防止弹窗长期不消失时无限空转。
+        """
+        if attempt > 60:
+            return
+        if QApplication.activePopupWidget() is not None:
+            QTimer.singleShot(60, lambda: self._present_dialog(dialog, before_present, attempt + 1))
+            return
+        if before_present is not None:
+            before_present()
+        if dialog.isMinimized():
+            dialog.showNormal()
+        else:
+            dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    # ------------------------------------------------------------ 设置
+    def open_chat_settings(self) -> None:
+        """Open settings without blocking the desktop pet window.
+
+        QDialog.exec() makes the dialog application-modal, which prevents the
+        user from dragging or interacting with the pet while editing settings.
+        Keep one modeless dialog alive instead, and refresh the chat window
+        after the dialog reports an accepted save.
+        """
+        if not self.enable_chat:
+            return
+        from .chat.settings_dialog import ChatSettingsDialog
+        if self.chat_settings_dialog is None:
+            dialog = ChatSettingsDialog(self.config, self.chat_window)
+            dialog.setModal(False)
+            dialog.setWindowModality(Qt.WindowModality.NonModal)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dialog.finished.connect(self._chat_settings_finished)
+            self.chat_settings_dialog = dialog
+        self._update_bubble_suppression_for_settings()
+        self._present_dialog(self.chat_settings_dialog)
+
+    def _chat_settings_finished(self, result: int) -> None:
+        dialog = self.chat_settings_dialog
+        self.chat_settings_dialog = None
+        self._update_bubble_suppression_for_settings()
+        if result:
+            self._refresh_chat_windows()
+
+    def _refresh_chat_windows(self) -> None:
+        """Refresh both independently styled chat windows after shared settings change."""
+        for chat_window in (self.legacy_chat_window, self.modern_chat_window):
+            if chat_window is not None:
+                chat_window.refresh_settings()
+
+    def _update_bubble_suppression_for_settings(self) -> None:
+        """任一设置窗口打开时暂停桌宠气泡，避免气泡盖住设置界面。"""
+        if getattr(self, "win", None) is None:
+            return
+        any_open = (
+            getattr(self, "modern_settings_dialog", None) is not None
+            or getattr(self, "chat_settings_dialog", None) is not None
+        )
+        self.win.set_bubble_suppressed(any_open)
+
+    def open_modern_settings(self) -> None:
+        from .modern_settings_dialog import ModernSettingsDialog
+        if self.modern_settings_dialog is None:
+            dialog = ModernSettingsDialog(
+                self.config,
+                self.win,
+                include_ai=self.enable_chat,
+            )
+            dialog.finished.connect(self._modern_settings_finished)
+            self.modern_settings_dialog = dialog
+        self._update_bubble_suppression_for_settings()
+        # 在 show 之前定位，避免 Windows 上窗口先显示默认位置再跳走（闪现小窗）
+        self._present_dialog(
+            self.modern_settings_dialog,
+            before_present=self.modern_settings_dialog.move_away_from_pet,
+        )
+
+    def _modern_settings_finished(self, result: int) -> None:
+        self.modern_settings_dialog = None
+        self._update_bubble_suppression_for_settings()
+        # 新版设置在关闭时一律落盘（closeEvent 自动保存，「保存并退出」同样走
+        # _write_config），因此无论 Accepted/Rejected 都把改动应用到桌宠。
+        # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
+        if self.win is not None:
+            self.win.refresh_pet_settings()
+        self.shell._sync_dynamic_island()
+        self.shell._apply_balance_timer()
+        self._refresh_chat_windows()
+        _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
+
+    # ------------------------------------------------------------ 其它窗口级
+    def sync_look_to_chat(self, user_text: str, reply: str) -> None:
+        """把「看看屏幕/主动识屏」的问答同步进 AI 对话记录（issue #24）。
+
+        聊天窗口已创建 → 走窗口内同步（含界面即时刷新）；
+        聊天窗口从未打开 → 直接写入当前角色最新会话（无则新建），之后再打开
+        聊天窗口即可在历史里回看全文——气泡里被省略/分页的内容不再无处可查。
+        """
+        if not self.enable_chat or not str(reply or "").strip():
+            return
+        if self.chat_window is not None and hasattr(self.chat_window, "append_look_sync"):
+            self.chat_window.append_look_sync(user_text, reply)
+            return
+        try:
+            from .chat.models import ChatMessage
+            from .chat.session_store import SessionStore
+
+            store = SessionStore(self.config.dir, getattr(self.config, "instance_id", ""))
+            character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
+            sessions = store.list(character_id)
+            if sessions:
+                session = sessions[0]
+            else:
+                settings = self.config.chat_settings()
+                session = store.create(
+                    character_id,
+                    settings.active_provider,
+                    settings.default_system_prompt,
+                )
+            msgs = [ChatMessage("user", str(user_text)), ChatMessage("assistant", str(reply))]
+            synced, _absorbed = store.append_messages(session, msgs)
+            if synced is None:
+                # 会话已被并发删除等边界：本地兜底（保持旧行为）
+                session.messages.extend(msgs)
+                store.save(session)
+        except Exception:
+            logging.exception("同步识屏问答到会话记录失败")
+
+    def _set_autostart(self, enabled: bool, win=None) -> bool:
+        ok = autostart_mod.set_enabled(bool(enabled))
+        self.config.set("autostart_wanted", bool(enabled))
+        self.config.save()
+        target = win or self.win
+        if target is not None and not ok:
+            target.show_bubble("开机自启写入失败，请检查系统登录项或安全软件设置。", duration_ms=6000)
+        return ok
+
+    def _check_autostart_wanted(self) -> None:
+        if self.config.get("autostart_wanted", False) and not autostart_mod.is_enabled() and self.win is not None:
+            self.win.show_bubble("检测到开机自启已被系统或安全软件关闭，可在设置中重新启用。", duration_ms=7000)
+
+    def _notify_pet_hidden(self) -> None:
+        """用户主动隐藏桌宠后弹托盘提示，指明恢复入口。"""
+        if getattr(self.shell, "island", None) is not None:
+            self.shell.island.set_pet_visible(False)
+        if self.shell.tray is None:
+            return
+        self.shell.tray.showMessage(
+            "桌宠已隐藏",
+            "点击托盘图标或 Dock 图标即可恢复。",
+            QSystemTrayIcon.MessageIcon.Information,
+            4000,
+        )
+
+
+class AppShell:
+    """进程级外壳 —— 托盘、灵动岛、dock 菜单、更新、余额、系统通知、碰撞会话、broker。
+
+    批5.1（纯重构）拆自原 PetApp 的「进程级」半边，行为逐位不变，运行时仍
+    一进程一窗。持有唯一的 ``PetInstance``（``self.instance``），窗口级操作
+    统一经实例路由；aboutToQuit 收口在 ``_on_about_to_quit``（含窗级/进程级
+    资源的分段释放，见 REVIEW_batch5_glm53 §1.2-E2 / R5）。
+    """
+
+    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True,
+                 slot_handle=None, slot_id: int | None = None) -> None:
+        self.app = app
+        self.config = config
+        self.enable_chat = bool(enable_chat)
+        self.tray: QSystemTrayIcon | None = None
+        self.dock_menu: QMenu | None = None
+        self._notification_click_callback = None
+        self._toast_windows: list[DesktopNotification] = []
+        self.island = None
+        self._spawned_pet_count = 0
         self._balance_busy = False
         self._balance_cache = None
         self._balance_bridge = None
@@ -224,10 +678,15 @@ class PetApp:
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
         self.collision_ipc = CollisionIpcSession(config, self)
-        # P3 broker：PetApp 持有 BrokerFacade（随 collision_ipc 同生命周期）。
+        # P3 broker：AppShell 持有 BrokerFacade（随 collision_ipc 同生命周期）。
         # bind 在窗口 attach_collision_session 尾部完成（facade 需绑定到窗口实际
         # attach 的会话），此处只创建（含开关位），不提前 bind（避免双重连接）。
         self.broker_facade = BrokerFacade(enabled=bool(config.get('decode_broker_enabled', False)))
+        # 每窗容器：批5.1 单进程单窗，仅一个实例（self.instance 即当前窗）。
+        # 在 __init__ 就建好，使窗口级操作在 any time 均可路由到实例。
+        self.instance = PetInstance(
+            self, config, enable_chat=self.enable_chat, slot_handle=slot_handle, slot_id=slot_id,
+        )
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -240,12 +699,69 @@ class PetApp:
         self.collision_ipc.start()
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
-        self._create_ui(character_id)
+        self.instance._create_ui(character_id)
         self._install_macos_dock_menu()
         self._sync_dynamic_island()
-        self._apply_spawn_offset()
+        self.instance._apply_spawn_offset()
         self._apply_balance_timer()
-        QTimer.singleShot(3500, self._check_autostart_wanted)
+        QTimer.singleShot(3500, self.instance._check_autostart_wanted)
+
+    # ------------------------------------------------------------ 退出收口
+    def _on_about_to_quit(self) -> None:
+        """退出前保存当前有效窗口的位置并释放资源。
+
+        aboutToQuit 只绑定一次自本控制器；切换角色会重建桌宠窗口，信号
+        触发时读取当前窗口（经 ``self.instance.win``），避免调用已延迟销毁
+        的旧窗口。
+
+        批5.1 只处理唯一实例，保持原实现「窗级项（位置/预热/Agent/各窗会话/
+        slot 锁）逐窗收口 + 进程级项（broker/collision/close_all_writers）只
+        停一次」的切分顺序（R5）。多窗时循环展开即可。
+        """
+        inst = self.instance
+        win = inst.win
+        if win is not None:
+            win.save_position()
+        # 退出前暂停动画预热：低优预热队列（ThreadPoolExecutor 的 worker 非
+        # daemon）在解释器退出期会被排空执行——不暂停的话退出会被拖住数秒
+        # 并继续拉起 ffmpeg（审查 DS-M1）
+        try:
+            if win is not None and getattr(win, 'lib', None) is not None:
+                win.lib.pause_warm()
+        except Exception:
+            logging.exception("退出时暂停预热失败")
+        # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
+        if win is not None and getattr(win, 'agent_link_manager', None) is not None:
+            win.agent_link_manager.shutdown()
+        # 进程级资源：只停一次，与窗口无关
+        # P3 broker：退出前中止本实例全部发布 session（aborted → 其它实例本地回退）
+        try:
+            self.broker_facade.shutdown()
+        except Exception:
+            logging.exception("退出时关闭 broker facade 失败")
+        self.collision_ipc.stop()
+        # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
+        # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
+        try:
+            from .chat import session_store as _session_store
+            for _w in (inst.legacy_chat_window, inst.modern_chat_window, inst.quick_chat):
+                _session = getattr(_w, 'session', None)
+                _store = getattr(_w, 'store', None)
+                if _session is not None and _store is not None:
+                    try:
+                        _store.save(_session)
+                    except Exception:
+                        logging.exception("退出前保存会话失败")
+            if not _session_store.close_all_writers(permanent=True):
+                logging.warning("退出时会话写盘 worker 未干净关闭")
+        except Exception:
+            logging.exception("退出时关闭会话写盘 worker 失败")
+        if inst.slot_handle is not None:
+            try:
+                slot_manager_mod._unlock_file(inst.slot_handle)
+            except Exception:
+                pass
+            inst.slot_handle = None
 
     def _sync_dynamic_island(self) -> None:
         """按配置创建/隐藏灵动岛；桌宠隐藏后灵动岛仍可常驻。"""
@@ -262,14 +778,15 @@ class PetApp:
             self.island.clicked.connect(self._toggle_pet_from_island)
         self.island.refresh_from_config()
         pet_visible = True
-        if self.win is not None:
-            is_visible = getattr(self.win, "isVisible", None)
+        win = self.instance.win
+        if win is not None:
+            is_visible = getattr(win, "isVisible", None)
             pet_visible = bool(is_visible()) if callable(is_visible) else True
         self.island.set_pet_visible(pet_visible)
         self.island.show()
 
     def _toggle_pet_from_island(self) -> None:
-        win = self.win
+        win = self.instance.win
         if win is None:
             return
         if win.isVisible():
@@ -278,67 +795,6 @@ class PetApp:
             win.show()
         if getattr(self, "island", None) is not None:
             self.island.set_pet_visible(win.isVisible())
-
-    def _on_about_to_quit(self) -> None:
-        """退出前保存当前有效窗口的位置并释放资源。
-
-        aboutToQuit 只绑定一次自本控制器；切换角色会重建桌宠窗口，信号
-        触发时读取当前窗口（self.win），避免调用已延迟销毁的旧窗口。
-        """
-        if self.win is not None:
-            self.win.save_position()
-        # 退出前暂停动画预热：低优预热队列（ThreadPoolExecutor 的 worker 非
-        # daemon）在解释器退出期会被排空执行——不暂停的话退出会被拖住数秒
-        # 并继续拉起 ffmpeg（审查 DS-M1）
-        try:
-            if self.win is not None and getattr(self.win, 'lib', None) is not None:
-                self.win.lib.pause_warm()
-        except Exception:
-            logging.exception("退出时暂停预热失败")
-        # 停掉 Agent 监视器 worker 线程（不依赖 closeEvent 是否来得及触发）
-        if self.win is not None and getattr(self.win, 'agent_link_manager', None) is not None:
-            self.win.agent_link_manager.shutdown()
-        # P3 broker：退出前中止本实例全部发布 session（aborted → 其它实例本地回退）
-        try:
-            self.broker_facade.shutdown()
-        except Exception:
-            logging.exception("退出时关闭 broker facade 失败")
-        self.collision_ipc.stop()
-        # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
-        # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
-        try:
-            from .chat import session_store as _session_store
-            for _w in (self.legacy_chat_window, self.modern_chat_window, self.quick_chat):
-                _session = getattr(_w, 'session', None)
-                _store = getattr(_w, 'store', None)
-                if _session is not None and _store is not None:
-                    try:
-                        _store.save(_session)
-                    except Exception:
-                        logging.exception("退出前保存会话失败")
-            if not _session_store.close_all_writers(permanent=True):
-                logging.warning("退出时会话写盘 worker 未干净关闭")
-        except Exception:
-            logging.exception("退出时关闭会话写盘 worker 失败")
-        if self.slot_handle is not None:
-            try:
-                slot_manager_mod._unlock_file(self.slot_handle)
-            except Exception:
-                pass
-            self.slot_handle = None
-
-    def _set_autostart(self, enabled: bool, win=None) -> bool:
-        ok = autostart_mod.set_enabled(bool(enabled))
-        self.config.set("autostart_wanted", bool(enabled))
-        self.config.save()
-        target = win or self.win
-        if target is not None and not ok:
-            target.show_bubble("开机自启写入失败，请检查系统登录项或安全软件设置。", duration_ms=6000)
-        return ok
-
-    def _check_autostart_wanted(self) -> None:
-        if self.config.get("autostart_wanted", False) and not autostart_mod.is_enabled() and self.win is not None:
-            self.win.show_bubble("检测到开机自启已被系统或安全软件关闭，可在设置中重新启用。", duration_ms=7000)
 
     def _apply_balance_timer(self) -> None:
         self._balance_timer.stop()
@@ -365,8 +821,9 @@ class PetApp:
         )
         self.island.set_balance_info(hint, text)
 
+    # ------------------------------------------------------------ 余额
     def show_balance(self, parent=None) -> None:
-        win = parent or self.win
+        win = parent or self.instance.win
         if win is None or self._balance_busy or not win.isVisible():
             return
         now = time.monotonic()
@@ -465,12 +922,13 @@ class PetApp:
         except OSError:
             pass
 
+    # ------------------------------------------------------------ 更新
     def check_update(self, parent=None) -> None:
         # 重入防护（审查 GLM-L3）：连点不应起多个检查线程/叠气泡
         if getattr(self, "_update_checking", False):
             return
         self._update_checking = True
-        target = parent or self.win
+        target = parent or self.instance.win
         if target is not None:
             target.show_bubble("正在检查更新…", duration_ms=6000)
         bridge = _UpdateBridge(target)
@@ -491,269 +949,7 @@ class PetApp:
 
         threading.Thread(target=worker, daemon=True, name="pet-update-check").start()
 
-    def sync_look_to_chat(self, user_text: str, reply: str) -> None:
-        """把「看看屏幕/主动识屏」的问答同步进 AI 对话记录（issue #24）。
-
-        聊天窗口已创建 → 走窗口内同步（含界面即时刷新）；
-        聊天窗口从未打开 → 直接写入当前角色最新会话（无则新建），之后再打开
-        聊天窗口即可在历史里回看全文——气泡里被省略/分页的内容不再无处可查。
-        """
-        if not self.enable_chat or not str(reply or "").strip():
-            return
-        if self.chat_window is not None and hasattr(self.chat_window, "append_look_sync"):
-            self.chat_window.append_look_sync(user_text, reply)
-            return
-        try:
-            from .chat.models import ChatMessage
-            from .chat.session_store import SessionStore
-
-            store = SessionStore(self.config.dir, getattr(self.config, "instance_id", ""))
-            character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
-            sessions = store.list(character_id)
-            if sessions:
-                session = sessions[0]
-            else:
-                settings = self.config.chat_settings()
-                session = store.create(
-                    character_id,
-                    settings.active_provider,
-                    settings.default_system_prompt,
-                )
-            msgs = [ChatMessage("user", str(user_text)), ChatMessage("assistant", str(reply))]
-            synced, _absorbed = store.append_messages(session, msgs)
-            if synced is None:
-                # 会话已被并发删除等边界：本地兜底（保持旧行为）
-                session.messages.extend(msgs)
-                store.save(session)
-        except Exception:
-            logging.exception("同步识屏问答到会话记录失败")
-
-    def _apply_spawn_offset(self) -> None:
-        """让新孵化的桌宠与母桌宠错开，避免两个窗口完全重叠。"""
-        if self.win is None:
-            return
-        try:
-            index = max(0, int(os.environ.get('DSH_PET_SPAWN_OFFSET_INDEX', '0')))
-        except ValueError:
-            index = 0
-        if index <= 0:
-            return
-        scr = self.win.screen_available()
-        if scr is None:
-            return
-        available = scr.availableGeometry()
-        horizontal = -1 if self.win.geometry().center().x() > available.center().x() else 1
-        vertical = -1 if self.win.geometry().center().y() > available.center().y() else 1
-        x = self.win.x() + horizontal * 48 * index
-        y = self.win.y() + vertical * 32 * index
-        # 小屏（可用区比窗口还窄/矮）时上界 < 下界，min/max 会互相打架把
-        # 窗口推出屏幕外；先判边界再钳制。
-        max_x = available.right() - self.win.width() + 1
-        max_y = available.bottom() - self.win.height() + 1
-        x = available.left() if max_x < available.left() else min(max(x, available.left()), max_x)
-        y = available.top() if max_y < available.top() else min(max(y, available.top()), max_y)
-        self.win.move(x, y)
-
-    def _create_library(self, character_id: str) -> MovieLibrary:
-        # 预热策略：默认 balanced（高频交互链预热首帧，随机动作池只取元数据
-        # 按需解码）；省电模式（闲置降帧开关）强制 minimal（连高频链也不预热，
-        # 常驻内存最低）。media_prewarm 配置键保留给手改 config 的高级用户
-        # （可显式设 full），但被省电模式覆盖。
-        prewarm = str(self.config.get("media_prewarm", "balanced") or "balanced")
-        if self.config.get("idle_low_fps_enabled", False):
-            prewarm = "minimal"
-        lib = MovieLibrary(
-            character_id=character_id,
-            prewarm_policy=prewarm,
-        )
-        # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.5s 错峰），
-        # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
-        lib.schedule_high_priority_warm()
-        lib.schedule_low_priority_warm()
-        logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
-        return lib
-
-    def _wire_window(self, win: PetWindow) -> None:
-        """绑定新窗口的回调接线（创建与角色切换共用，两处历史逐行重复）。
-
-        两段原始代码逐行一致（并集 = 该段本身，未发现任一方多设回调），
-        后续新增回调只改这一处即可保证两个入口同步。
-        """
-        win.on_switch_character = self.switch_character
-        win.on_open_chat = self.open_chat if self.enable_chat else None
-        win.on_open_quick_chat = self.open_quick_chat if self.enable_chat else None
-        win.on_open_chat_settings = self.open_chat_settings if self.enable_chat else None
-        win.on_show_balance = self.show_balance if self.enable_chat else None
-        win.on_check_update = self.check_update
-        win.on_look_synced = self.sync_look_to_chat if self.enable_chat else None
-        win.on_look_screen = win.look_at_screen if self.enable_chat and hasattr(win, "look_at_screen") else None
-        win.on_open_legacy_settings = None
-        win.on_open_modern_settings = self.open_modern_settings
-        win.on_spawn_pet = self.spawn_pet
-        win.on_restore_fun_windows = restore_ojingjing_windows
-        win.on_hidden = self._notify_pet_hidden
-
-    def _build_window(self, character_id: str, lib: MovieLibrary | None = None) -> PetWindow:
-        """创建新窗口/托盘并完成接线、音效预热与旧对象延迟销毁（创建与切换共用）。
-
-        从 _create_ui 与 switch_character 两处历史逐行重复的公共序列（约 25 行）
-        抽出：步骤顺序与 deleteLater / QTimer.singleShot 时序与原实现完全一致。
-        lib 可预传入（switch_character 先预创建、失败则保留当前角色），
-        缺省时按 character_id 创建（_create_ui 启动路径）。
-        """
-        if lib is None:
-            lib = self._create_library(character_id)
-        win = PetWindow(lib, self.config, collision_session=self.collision_ipc,
-                        broker_facade=self.broker_facade)
-        self._wire_window(win)
-        # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
-        # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
-        # 首次点击 Q 弹卡顿。音效关闭时不预热，避免无谓拉起 QtMultimedia 池。
-        if self.config.get("click_sound_enabled", True) or self.config.get("collision_sound_enabled", True):
-            click_sound.warm_click_sound_effects(
-                self.config.get("click_sound_pack"),
-                data_dir=self.config.dir,
-            )
-        win.show()
-
-        tray = self._build_tray(win)
-
-        # 清理旧对象（热切换时使用）
-        old_win = self.win
-        old_tray = self.tray
-        self.win = win
-        self.tray = tray
-
-        if old_win is not None:
-            old_win.hide(notify=False)
-            if old_tray is not None:
-                old_tray.hide()
-            QTimer.singleShot(0, old_win.deleteLater)
-            if old_tray is not None:
-                QTimer.singleShot(0, old_tray.deleteLater)
-        return win
-
-    def _create_ui(self, character_id: str) -> None:
-        self._build_window(character_id)
-
-    # ------------------------------------------------------------ 角色切换
-    def switch_character(self, character_id: str) -> None:
-        if self.win is None:
-            return
-        current = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
-        if character_id == current:
-            return
-
-        # 先保存配置，即使后续加载失败也记住用户选择
-        self.config.set('character', character_id)
-        self.config.save()
-
-        try:
-            # 预创建新库，失败则保留当前角色（在动旧窗口之前完成）
-            lib = self._create_library(character_id)
-        except Exception as exc:
-            logging.exception('切换角色失败: %s', character_id)
-            _show_startup_error('切换角色失败', str(exc))
-            return
-
-        logging.info('切换角色: %s -> %s', current, character_id)
-
-        # 先停旧窗口的碰撞会话与 Agent 监视器 worker，再重建 IPC 会话：
-        # 否则旧窗口 deleteLater 后其 worker 线程仍经引用链保活并继续轮询
-        # （B9 一审发现）。新窗口/托盘由 _build_window 创建（含旧对象延迟销毁）。
-        old_win = self.win
-        old_win.detach_collision_session()
-        # P3 broker：旧窗口/旧 ipc 退场前中止其仍在发布的全部 session
-        # （publish_abort 全部 session → 消费端本地回退；旧 facade 随旧 ipc 退役）。
-        self.broker_facade.shutdown()
-        if getattr(old_win, 'agent_link_manager', None) is not None:
-            old_win.agent_link_manager.shutdown()
-        self.collision_ipc.stop()
-        self.collision_ipc = CollisionIpcSession(self.config, self)
-        # P3 broker：新 ipc 配新 facade（同 CollisionIpcSession 生命周期；
-        # bind 由新窗口 attach_collision_session 尾部完成）。
-        self.broker_facade = BrokerFacade(
-            enabled=bool(self.config.get('decode_broker_enabled', False)))
-        self.collision_ipc.start()
-        self._build_window(character_id, lib=lib)
-        if self.enable_chat:
-            for chat_window in (self.legacy_chat_window, self.modern_chat_window):
-                if chat_window is not None:
-                    chat_window.set_pet_window(self.win)
-                    chat_window.switch_character(character_id)
-        if getattr(self, "island", None) is not None:
-            self.island.refresh_from_config()
-
-    def open_chat(self) -> None:
-        """Open the configured chat UI; menus only need this stable dispatcher."""
-        if str(self.config.get("chat_ui_style", "modern")) == "classic":
-            self.open_legacy_chat()
-        else:
-            self.open_modern_chat()
-
-    def open_quick_chat(self) -> None:
-        """打开快速对话气泡；与完整聊天窗共用会话历史。"""
-        if not self.enable_chat or self.win is None:
-            return
-        # Cocoa 原生 QMenu 跟踪期间 activePopupWidget() 可能为 None，且其
-        # 嵌套事件循环会把这个 singleShot 留到菜单关闭后再派发。若是 Qt
-        # 自绘 popup，下一层仍通过 _defer_while_popup_active 等待其关闭。
-        QTimer.singleShot(0, self._show_quick_chat)
-
-    def _show_quick_chat(self) -> None:
-        if not self.enable_chat or self.win is None:
-            return
-        if self._defer_while_popup_active("quick-chat", self._show_quick_chat):
-            return
-        from .quick_chat import QuickChatBubble
-
-        if self.quick_chat is None:
-            self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
-            self.quick_chat.open_chat_callback = self.open_chat
-        else:
-            self.quick_chat.pet_window = self.win
-            self.quick_chat.settings = self.config.chat_settings()
-            self.quick_chat.refresh_session()
-        self.quick_chat.show_for_pet(self.win)
-
-    def open_legacy_chat(self) -> None:
-        if not self.enable_chat or self.win is None:
-            return
-        if self._defer_while_popup_active("legacy-chat", self.open_chat):
-            return
-        from .chat.legacy_widgets import ChatWindow
-        if self.legacy_chat_window is None:
-            self.legacy_chat_window = ChatWindow(
-                self.config,
-                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
-                pet_window=self.win,
-                notifier=self.system_notify,
-                auth_callback=self.open_chat_settings,
-            )
-        else:
-            self.legacy_chat_window.set_pet_window(self.win)
-        self.chat_window = self.legacy_chat_window
-        self._present_dialog(self.legacy_chat_window, lambda: self.legacy_chat_window.position_near_pet(self.win))
-
-    def open_modern_chat(self) -> None:
-        if not self.enable_chat or self.win is None:
-            return
-        if self._defer_while_popup_active("modern-chat", self.open_modern_chat):
-            return
-        from .chat.widgets import ChatWindow
-        if self.modern_chat_window is None:
-            self.modern_chat_window = ChatWindow(
-                self.config,
-                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
-                pet_window=self.win,
-                notifier=self.system_notify,
-                auth_callback=self.open_chat_settings,
-            )
-        else:
-            self.modern_chat_window.set_pet_window(self.win)
-        self.chat_window = self.modern_chat_window
-        self._present_dialog(self.modern_chat_window, lambda: self.modern_chat_window.position_near_pet(self.win))
-
+    # ------------------------------------------------------------ 托盘
     def spawn_pet(self) -> None:
         """启动一个完全独立的新桌宠进程。"""
         try:
@@ -764,95 +960,6 @@ class PetApp:
             logging.exception('生小肥鱼失败')
             _show_startup_error('生小肥鱼失败', str(exc))
 
-    def _defer_while_popup_active(self, key: str, callback) -> bool:
-        """Avoid constructing a heavy dialog inside QMenu.exec()."""
-        if QApplication.activePopupWidget() is None:
-            self._pending_dialog_opens.discard(key)
-            return False
-        if key in self._pending_dialog_opens:
-            return True
-        self._pending_dialog_opens.add(key)
-
-        def retry() -> None:
-            if QApplication.activePopupWidget() is not None:
-                QTimer.singleShot(50, retry)
-                return
-            self._pending_dialog_opens.discard(key)
-            callback()
-
-        QTimer.singleShot(50, retry)
-        return True
-
-    def _present_dialog(self, dialog, before_present=None, attempt: int = 0) -> None:
-        """延迟呈现非模态窗口，直到任何弹出菜单关闭。
-
-        macOS 的右键/托盘菜单是原生 NSMenu 跟踪会话（menu.exec 阻塞期间），
-        菜单项动作触发时会话尚未结束，此时新建窗口的 show/raise/activate
-        会被 AppKit 抑制——表现为首次点击「AI 设置 / 桌宠设置」无反应，
-        需要再点一次（此时窗口实例已存在，直接 show 成功）。
-        延迟到菜单关闭后再呈现即可稳定弹出；Qt 自绘菜单（Windows）同样
-        覆盖：弹窗仍显示时重试等待。重试 60 次（约 3.6 秒）后放弃，
-        防止弹窗长期不消失时无限空转。
-        """
-        if attempt > 60:
-            return
-        if QApplication.activePopupWidget() is not None:
-            QTimer.singleShot(60, lambda: self._present_dialog(dialog, before_present, attempt + 1))
-            return
-        if before_present is not None:
-            before_present()
-        if dialog.isMinimized():
-            dialog.showNormal()
-        else:
-            dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-
-    def open_chat_settings(self) -> None:
-        """Open settings without blocking the desktop pet window.
-
-        QDialog.exec() makes the dialog application-modal, which prevents the
-        user from dragging or interacting with the pet while editing settings.
-        Keep one modeless dialog alive instead, and refresh the chat window
-        after the dialog reports an accepted save.
-        """
-        if not self.enable_chat:
-            return
-        from .chat.settings_dialog import ChatSettingsDialog
-        if self.chat_settings_dialog is None:
-            dialog = ChatSettingsDialog(self.config, self.chat_window)
-            dialog.setModal(False)
-            dialog.setWindowModality(Qt.WindowModality.NonModal)
-            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-            dialog.finished.connect(self._chat_settings_finished)
-            self.chat_settings_dialog = dialog
-        self._update_bubble_suppression_for_settings()
-        self._present_dialog(self.chat_settings_dialog)
-
-    def _chat_settings_finished(self, result: int) -> None:
-        dialog = self.chat_settings_dialog
-        self.chat_settings_dialog = None
-        self._update_bubble_suppression_for_settings()
-        if result:
-            self._refresh_chat_windows()
-
-    def _refresh_chat_windows(self) -> None:
-        """Refresh both independently styled chat windows after shared settings change."""
-        for chat_window in (self.legacy_chat_window, self.modern_chat_window):
-            if chat_window is not None:
-                chat_window.refresh_settings()
-
-    def _update_bubble_suppression_for_settings(self) -> None:
-        """任一设置窗口打开时暂停桌宠气泡，避免气泡盖住设置界面。"""
-        if getattr(self, "win", None) is None:
-            return
-        any_open = (
-            getattr(self, "modern_settings_dialog", None) is not None
-            or getattr(self, "chat_settings_dialog", None) is not None
-        )
-        self.win.set_bubble_suppressed(any_open)
-
-    # ------------------------------------------------------------ 托盘
     def _install_macos_dock_menu(self) -> QMenu | None:
         """Install the native Dock context menu as an independent recovery path."""
         if sys.platform != "darwin":
@@ -861,7 +968,7 @@ class PetApp:
         menu = QMenu()
 
         def show_pet() -> None:
-            win = self.win
+            win = self.instance.win
             if win is None:
                 return
             win.show()
@@ -870,9 +977,9 @@ class PetApp:
                 self.island.set_pet_visible(True)
 
         menu.addAction("显示桌宠", show_pet)
-        menu.addAction("桌宠设置", self.open_modern_settings)
+        menu.addAction("桌宠设置", self.instance.open_modern_settings)
         if self.enable_chat:
-            menu.addAction("AI 对话", self.open_chat)
+            menu.addAction("AI 对话", self.instance.open_chat)
         menu.addSeparator()
         quit_callback = getattr(self.app, "quit", None)
         if callable(quit_callback):
@@ -884,49 +991,6 @@ class PetApp:
         menu.setProperty("dockMenuInstalled", dock_menu_installed)
         self.dock_menu = menu
         return menu
-
-    def open_modern_settings(self) -> None:
-        from .modern_settings_dialog import ModernSettingsDialog
-        if self.modern_settings_dialog is None:
-            dialog = ModernSettingsDialog(
-                self.config,
-                self.win,
-                include_ai=self.enable_chat,
-            )
-            dialog.finished.connect(self._modern_settings_finished)
-            self.modern_settings_dialog = dialog
-        self._update_bubble_suppression_for_settings()
-        # 在 show 之前定位，避免 Windows 上窗口先显示默认位置再跳走（闪现小窗）
-        self._present_dialog(
-            self.modern_settings_dialog,
-            before_present=self.modern_settings_dialog.move_away_from_pet,
-        )
-
-    def _modern_settings_finished(self, result: int) -> None:
-        self.modern_settings_dialog = None
-        self._update_bubble_suppression_for_settings()
-        # 新版设置在关闭时一律落盘（closeEvent 自动保存，「保存并退出」同样走
-        # _write_config），因此无论 Accepted/Rejected 都把改动应用到桌宠。
-        # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
-        if self.win is not None:
-            self.win.refresh_pet_settings()
-        self._sync_dynamic_island()
-        self._apply_balance_timer()
-        self._refresh_chat_windows()
-        _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
-
-    def _notify_pet_hidden(self) -> None:
-        """用户主动隐藏桌宠后弹托盘提示，指明恢复入口。"""
-        if getattr(self, "island", None) is not None:
-            self.island.set_pet_visible(False)
-        if self.tray is None:
-            return
-        self.tray.showMessage(
-            "桌宠已隐藏",
-            "点击托盘图标或 Dock 图标即可恢复。",
-            QSystemTrayIcon.MessageIcon.Information,
-            4000,
-        )
 
     def system_notify(self, title: str, message: str, *, on_click=None, duration_ms: int = 5000) -> None:
         """Show a bottom-right desktop notification (self-drawn, tray-independent)."""
@@ -982,10 +1046,10 @@ class PetApp:
         island_action.toggled.connect(toggle_island)
 
         if self.enable_chat:
-            menu.addAction('AI 对话', self.open_chat)
-            menu.addAction('快速对话（气泡）', self.open_quick_chat)
-            menu.addAction('AI 设置', self.open_chat_settings)
-        menu.addAction('桌宠设置', self.open_modern_settings)
+            menu.addAction('AI 对话', self.instance.open_chat)
+            menu.addAction('快速对话（气泡）', self.instance.open_quick_chat)
+            menu.addAction('AI 设置', self.instance.open_chat_settings)
+        menu.addAction('桌宠设置', self.instance.open_modern_settings)
 
         m_char = menu.addMenu('切换角色')
         current = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
@@ -993,7 +1057,7 @@ class PetApp:
             act = m_char.addAction(cid)
             act.setCheckable(True)
             act.setChecked(cid == current)
-            act.triggered.connect(lambda checked=False, cid=cid: self.switch_character(cid))
+            act.triggered.connect(lambda checked=False, cid=cid: self.instance.switch_character(cid))
 
         mouse_through = menu.addAction('鼠标穿透')
         mouse_through.setCheckable(True)
@@ -1005,7 +1069,7 @@ class PetApp:
         auto = menu.addAction('开机自启')
         auto.setCheckable(True)
         auto.setChecked(autostart_mod.is_enabled())
-        auto.toggled.connect(lambda enabled: self._set_autostart(enabled, win))
+        auto.toggled.connect(lambda enabled: self.instance._set_autostart(enabled, win))
 
         def sync_tray_checks() -> None:
             # 设置对话框/右键菜单里改过的开关，弹出托盘菜单前同步复选状态
@@ -1139,13 +1203,14 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         config = Config(instance_id=instance_id)
         _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
         _setup_logging(config)
+
         logging.info("dsh-pet-standalone 启动 (slot: %s, instance: %s)", slot_id, instance_id)
         _cleanup_stale_runtime_dirs()
         stale_removed = autostart_mod.cleanup_stale_entries()
         if stale_removed:
             logging.info("已清理 %d 个指向不存在路径的开机自启项", stale_removed)
 
-        controller = PetApp(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id)
+        controller = AppShell(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id)
         try:
             controller.start()
         except Exception as exc:

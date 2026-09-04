@@ -76,7 +76,7 @@ def test_quick_chat_waits_for_popup_menu_to_close(tmp_path: Path, monkeypatch):
     import time
 
     import pet.app as app_mod
-    from pet.app import PetApp
+    from pet.app import PetInstance
 
     app = QApplication.instance() or QApplication([])
     state = {"popup": True}
@@ -87,7 +87,7 @@ def test_quick_chat_waits_for_popup_menu_to_close(tmp_path: Path, monkeypatch):
             return object() if state["popup"] else None
 
     monkeypatch.setattr(app_mod, "QApplication", FakeQApp)
-    owner = PetApp.__new__(PetApp)
+    owner = PetInstance.__new__(PetInstance)
     owner.config = _config(tmp_path)
     owner.enable_chat = True
     owner.win = object()
@@ -112,10 +112,10 @@ def test_quick_chat_waits_for_popup_menu_to_close(tmp_path: Path, monkeypatch):
 
 def test_quick_chat_open_is_deferred_to_next_event_turn(tmp_path: Path):
     """Cocoa 原生菜单不可被 activePopupWidget 发现，打开动作仍须异步派发。"""
-    from pet.app import PetApp
+    from pet.app import PetInstance
 
     app = QApplication.instance() or QApplication([])
-    owner = PetApp.__new__(PetApp)
+    owner = PetInstance.__new__(PetInstance)
     owner.config = _config(tmp_path)
     owner.enable_chat = True
     owner.win = object()

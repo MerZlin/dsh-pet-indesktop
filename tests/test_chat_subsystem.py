@@ -297,19 +297,20 @@ def test_streaming_scroll_only_follows_when_already_near_bottom(tmp_path: Path):
 def test_ai_settings_is_modeless_so_pet_can_still_move(tmp_path: Path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
-    owner = PetApp(app, Config(tmp_path))
-    owner.open_chat_settings()
-    dialog = owner.chat_settings_dialog
+    owner = AppShell(app, Config(tmp_path))
+    # 设置对话框/气泡为每窗状态，经 AppShell 路由到唯一的 PetInstance（批5.1）
+    owner.instance.open_chat_settings()
+    dialog = owner.instance.chat_settings_dialog
     assert dialog is not None
     assert dialog.isModal() is False
     assert dialog.windowModality() == Qt.WindowModality.NonModal
     dialog.reject()
     app.processEvents()
-    assert owner.chat_settings_dialog is None
+    assert owner.instance.chat_settings_dialog is None
 
 
 def test_present_dialog_defers_until_popup_menu_closes(tmp_path: Path, monkeypatch):
@@ -322,11 +323,11 @@ def test_present_dialog_defers_until_popup_menu_closes(tmp_path: Path, monkeypat
 
     import pet.app as app_mod
     from PySide6.QtWidgets import QApplication, QDialog
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
-    owner = PetApp(app, Config(tmp_path))
+    owner = AppShell(app, Config(tmp_path))
     state = {"popup": True}
 
     class FakeQApp:
@@ -336,7 +337,7 @@ def test_present_dialog_defers_until_popup_menu_closes(tmp_path: Path, monkeypat
 
     monkeypatch.setattr(app_mod, "QApplication", FakeQApp)
     dialog = QDialog()
-    owner._present_dialog(dialog)
+    owner.instance._present_dialog(dialog)
     app.processEvents()
     assert not dialog.isVisible(), "菜单仍打开时不应立即显示窗口"
     state["popup"] = False
@@ -354,11 +355,11 @@ def test_heavy_chat_creation_is_deferred_until_context_menu_closes(tmp_path: Pat
 
     import pet.app as app_mod
     from PySide6.QtWidgets import QApplication
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
-    owner = PetApp(app, Config(tmp_path))
+    owner = AppShell(app, Config(tmp_path))
     state = {"popup": True}
     calls = []
 
@@ -368,7 +369,7 @@ def test_heavy_chat_creation_is_deferred_until_context_menu_closes(tmp_path: Pat
             return object() if state["popup"] else None
 
     monkeypatch.setattr(app_mod, "QApplication", FakeQApp)
-    assert owner._defer_while_popup_active("modern-chat", lambda: calls.append("create")) is True
+    assert owner.instance._defer_while_popup_active("modern-chat", lambda: calls.append("create")) is True
     assert calls == []
     state["popup"] = False
     deadline = time.time() + 1
@@ -654,12 +655,12 @@ def test_legacy_and_modern_chat_windows_use_independent_modules_and_styles(tmp_p
 
 
 def test_chat_ui_style_defaults_modern_and_dispatches_classic_on_request(tmp_path: Path):
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     config = Config(tmp_path)
     assert config.get("chat_ui_style") == "modern"
-    manager = PetApp(object(), config, enable_chat=True)
+    manager = AppShell(object(), config, enable_chat=True).instance
     manager.win = object()
     calls = []
     manager.open_modern_chat = lambda: calls.append("modern")
@@ -1826,16 +1827,16 @@ def test_long_conversation_scrolls_only_after_timeline_overflows(tmp_path: Path)
 def test_present_dialog_restores_a_minimized_chat_window(tmp_path: Path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QDialog
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
-    owner = PetApp(app, Config(tmp_path))
+    owner = AppShell(app, Config(tmp_path))
     dialog = QDialog()
     dialog.showMinimized()
     app.processEvents()
     assert dialog.windowState() & Qt.WindowState.WindowMinimized
-    owner._present_dialog(dialog)
+    owner.instance._present_dialog(dialog)
     app.processEvents()
     assert not dialog.windowState() & Qt.WindowState.WindowMinimized
     assert dialog.isVisible()

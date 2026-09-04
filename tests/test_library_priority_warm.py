@@ -174,19 +174,19 @@ def test_app_create_library_prewarm_derivation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_mod, "MovieLibrary", FakeLib)
 
-    app = app_mod.PetApp(object(), Config(tmp_path / "a"))
-    app._create_library("shenshen")
+    app = app_mod.AppShell(object(), Config(tmp_path / "a"))
+    app.instance._create_library("shenshen")
     assert captured["prewarm_policy"] == "balanced"
 
     cfg = Config(tmp_path / "b")
     cfg.set("media_prewarm", "full")
-    app = app_mod.PetApp(object(), cfg)
-    app._create_library("shenshen")
+    app = app_mod.AppShell(object(), cfg)
+    app.instance._create_library("shenshen")
     assert captured["prewarm_policy"] == "full"
 
     cfg = Config(tmp_path / "c")
     cfg.set("media_prewarm", "full")
     cfg.set("idle_low_fps_enabled", True)
-    app = app_mod.PetApp(object(), cfg)
-    app._create_library("shenshen")
+    app = app_mod.AppShell(object(), cfg)
+    app.instance._create_library("shenshen")
     assert captured["prewarm_policy"] == "minimal"

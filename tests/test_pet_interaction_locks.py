@@ -328,7 +328,7 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QWidget
 
-    from pet.app import PetApp
+    from pet.app import AppShell
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
@@ -351,7 +351,7 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
 
     win = Win(config)
     win._speech_bubble = QWidget()
-    manager = PetApp(app, config, enable_chat=True)
+    manager = AppShell(app, config, enable_chat=True)
     tray = manager._build_tray(win)
     menu = tray.contextMenu()
     action = next(a for a in menu.actions() if a.text() == "鼠标穿透")
