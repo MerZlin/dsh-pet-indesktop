@@ -599,7 +599,10 @@ class Config:
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
-            "first_frame_cache_max_mb": 32,  # 首帧缓存全局预算（MB），低配机可调小
+            # 批10-A3：默认 32→8MB。预测式预热（批10-A1）落地后，首帧 LRU 只需
+            # 装「瞬时交互核 pinned（click/turn/drag）+ 1-2 个预测位」；idle/move
+            # 由预测机制与 LRU 热度自然覆盖，不再常驻。
+            "first_frame_cache_max_mb": 8,  # 首帧缓存全局预算（MB），低配机可调小
             # 批10-A1 预测式接力预热：当前动画墙钟剩余 ≤ 该提前量（毫秒）时，
             # 帧驱动提前掷骰决定下一动画并在后台预解码其首帧进 LRU（Phase 1）。
             "predict_prewarm_lead_ms": 350,  # 提前量（ms），范围 200-600
@@ -876,9 +879,10 @@ class Config:
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
         self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
-        self.data["first_frame_cache_max_mb"] = int(_float_or_default(
-            self.data.get("first_frame_cache_max_mb"), 32, 4, 64
-        ))
+        # 批10-A3：默认 32→8（预测式预热使能）；32 是批9 引入仅一天的旧默认，
+        # 视为遗留值一并迁移（想调大可设 16/64 等非 32 值，32 本身被保留为迁移哨兵）。
+        _ffb = _float_or_default(self.data.get("first_frame_cache_max_mb"), 8, 4, 64)
+        self.data["first_frame_cache_max_mb"] = 8 if int(_ffb) == 32 else int(_ffb)
         # 批10-A1 预测式预热提前量：夹到 [200, 600] 毫秒（默认 350）。
         self.data["predict_prewarm_lead_ms"] = int(_float_or_default(
             self.data.get("predict_prewarm_lead_ms"), 350, 200, 600

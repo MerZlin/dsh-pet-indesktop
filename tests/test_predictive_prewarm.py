@@ -526,29 +526,35 @@ class TestDistributionParity:
                  "acts": [f"a{k}" for k in range(20)], "moves": ["m1", "m2", "m3"]}
         acts_set = set(pools["acts"])
         moves_set = set(pools["moves"])
+        # 注意：产品掷骰走模块级 random——seed 后必须恢复现场，否则确定性
+        # 随机流会污染同进程后续测试（实测曾污染低优预热去重用例）。
+        rng_state = _r.getstate()
         _r.seed(20260905)
-        counts = {"i": 0, "t": 0, "a": 0, "m": 0}
-        chains = 20000
-        for _ in range(chains):
-            pp = PredictivePrewarm(
-                roll=lambda ex: roll_next(pools, ex),
-                warm=lambda n: None,
-                should_predict=lambda n: n in acts_set or n in moves_set,
-            )
-            cur = "a0"
-            # 模拟 lead 窗口内逐帧驱动（100 帧动画、24fps、lead=0.35s → n=92..100）
-            for n in range(92, 101):
-                pp.on_frame(cur, n, 100, 24.0, 1, 0.35, exclude=cur)
-            name = pp.consume(context_anim=cur, exclude=cur, gap_active=False)
-            assert name is not None, "同 context 同代次的预测必须可消费"
-            if name in pools["idles"]:
-                counts["i"] += 1
-            elif name in pools["turns"]:
-                counts["t"] += 1
-            elif name in moves_set:
-                counts["m"] += 1
-            else:
-                counts["a"] += 1
+        try:
+            counts = {"i": 0, "t": 0, "a": 0, "m": 0}
+            chains = 20000
+            for _ in range(chains):
+                pp = PredictivePrewarm(
+                    roll=lambda ex: roll_next(pools, ex),
+                    warm=lambda n: None,
+                    should_predict=lambda n: n in acts_set or n in moves_set,
+                )
+                cur = "a0"
+                # 模拟 lead 窗口内逐帧驱动（100 帧动画、24fps、lead=0.35s → n=92..100）
+                for n in range(92, 101):
+                    pp.on_frame(cur, n, 100, 24.0, 1, 0.35, exclude=cur)
+                name = pp.consume(context_anim=cur, exclude=cur, gap_active=False)
+                assert name is not None, "同 context 同代次的预测必须可消费"
+                if name in pools["idles"]:
+                    counts["i"] += 1
+                elif name in pools["turns"]:
+                    counts["t"] += 1
+                elif name in moves_set:
+                    counts["m"] += 1
+                else:
+                    counts["a"] += 1
+        finally:
+            _r.setstate(rng_state)
         total = chains
         assert abs(counts["i"] / total - 0.30) < 0.015, counts
         assert abs(counts["t"] / total - 0.10) < 0.010, counts

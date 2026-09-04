@@ -2,7 +2,8 @@
 """素材库懒加载 + 默认优先级预热行为的回归测试。
 
 锁定两点：
-1. MovieLibrary 构造时只创建高优先级动画（idle/turn/click/drag/move），
+1. MovieLibrary 构造时只创建高优先级动画（批10-A3 起 = 瞬时交互核
+   click/turn/drag；idle/move 由预测式预热覆盖，不再 pinned 常驻），
    随机动作池按需创建，不一次性 new 出全部 91 个播放器；
 2. 随机动作池预热由应用层 schedule_low_priority_warm() 延迟触发，
    不在库构造时自动启动（避免测试/非事件循环环境凭空拉线程）。
@@ -52,41 +53,49 @@ def _make_lib(tmp_path, monkeypatch, prewarm_policy="balanced"):
 def test_lazy_creates_only_high_priority_at_start(tmp_path, monkeypatch):
     lib = _make_lib(tmp_path, monkeypatch)
 
+    # 批10-A3：高优先级（eager 创建 + pinned 首帧）= 瞬时交互核 click/turn/drag；
+    # idle/move 移出 pinned（预测式预热 + LRU 热度覆盖）。
     high_expected = {
-        catalog.IDLE,
         catalog.TURN,
-        catalog.MOVES[0],
         catalog.CLICKS[0],
         catalog.DRAG,
     }
     assert set(lib._movies.keys()) == high_expected
     assert {"写代码", "吃白饭"} <= set(lib.names())
     assert "写代码" not in lib._movies
+    # idle/move 不 eager 创建，但按需可取
+    assert catalog.IDLE not in lib._movies
+    assert catalog.MOVES[0] not in lib._movies
 
     clip = lib.movie("写代码")
     assert "写代码" in lib._movies
     assert clip.path.name == "写代码.webm"
+    idle_clip = lib.movie(catalog.IDLE)
+    assert idle_clip.path.name == "待机呼吸休闲.webm"
 
 
 def test_priority_names_split(tmp_path, monkeypatch):
     lib = _make_lib(tmp_path, monkeypatch)
     high, low = lib._priority_names()
 
-    assert catalog.IDLE in high
+    assert catalog.IDLE in low  # 批10-A3：idle 不再 pinned，走预测预热
+    assert catalog.MOVES[0] in low
+    assert catalog.TURN in high
     assert catalog.DRAG in high
+    assert catalog.CLICKS[0] in high
     assert "写代码" in low
     assert "吃白饭" in low
     assert set(high).isdisjoint(low)
 
 
-def test_priority_names_click_before_idle(tmp_path, monkeypatch):
+def test_priority_names_click_before_others(tmp_path, monkeypatch):
     lib = _make_lib(tmp_path, monkeypatch)
     high, _ = lib._priority_names()
 
-    # 点击回应必须优先于 idle/turn/move 预热：首次点击最怕同步 ffmpeg 解码卡顿。
-    assert high.index(catalog.CLICKS[0]) < high.index(catalog.IDLE)
+    # 点击回应必须在瞬时交互核内最先预热：首次点击最怕同步 ffmpeg 解码卡顿。
+    # （批10-A3：idle/move 已移出 pinned 核，不再参与此排序。）
     assert high.index(catalog.CLICKS[0]) < high.index(catalog.TURN)
-    assert high.index(catalog.CLICKS[0]) < high.index(catalog.MOVES[0])
+    assert high.index(catalog.CLICKS[0]) < high.index(catalog.DRAG)
 
 
 def test_low_priority_warm_not_auto_started_then_scheduled(tmp_path, monkeypatch):

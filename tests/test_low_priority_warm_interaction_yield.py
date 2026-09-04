@@ -97,9 +97,11 @@ def _make_lib(tmp_path, monkeypatch, clip_cls=FakeClip, lib_cls=None):
     monkeypatch.setattr(library_mod, "WebMClip", clip_cls)
     videos = tmp_path / "videos"
     folders = {
-        "idle": ["待机呼吸休闲.webm"],
+        # 批10-A3：idle/move 移入低优先级池后，本文件的编舞（BlockableClip 逐段
+        # 阻塞放行「写代码/吃白饭」）会被前置的 idle/move 假 clip 打乱——这里
+        # 锁定的是让路/代次闸门机制，与池构成无关，故夹具只保留交互核 + 随机池。
+        # 池构成的拆分断言由 test_library_priority_warm.py 专项覆盖。
         "turn": ["东张西望.webm"],
-        "move": ["螃蟹走路.webm"],
         "click": ["点击回应 - 开心跃动.webm"],
         "drag": ["被鼠标拖拽悬空反馈.webm"],
         "random": ["写代码.webm", "吃白饭.webm"],
@@ -417,7 +419,7 @@ def test_high_priority_warm_unaffected_by_interaction(tmp_path, monkeypatch):
     lib._warm_all_meta_background()  # 高优先级：与调度线程相同的同步路径
     assert lib._movies[catalog.CLICKS[0]].warmed_meta is True
     assert lib._movies[catalog.CLICKS[0]].warmed_frame is True
-    assert lib._movies[catalog.IDLE].warmed_meta is True
+    assert lib._movies[catalog.TURN].warmed_meta is True
     assert lib._movies[catalog.DRAG].warmed_meta is True
 
 
@@ -429,7 +431,7 @@ def test_high_priority_warm_skipped_while_paused(tmp_path, monkeypatch):
     lib._warm_all_meta_background()
     assert lib._movies[catalog.CLICKS[0]].warmed_meta is False
     assert lib._movies[catalog.CLICKS[0]].warmed_frame is False
-    assert lib._movies[catalog.IDLE].warmed_meta is False
+    assert lib._movies[catalog.TURN].warmed_meta is False
     assert lib._movies[catalog.DRAG].warmed_meta is False
 
 
@@ -452,7 +454,7 @@ def test_high_priority_warm_aborts_when_paused_during_sleep(tmp_path, monkeypatc
     assert sleep_calls["n"] == 1, "高优先级预热必须经历随机错峰 sleep"
     assert lib._movies[catalog.CLICKS[0]].warmed_meta is False, "sleep 期间暂停，本批必须作废"
     assert lib._movies[catalog.CLICKS[0]].warmed_frame is False
-    assert lib._movies[catalog.IDLE].warmed_meta is False
+    assert lib._movies[catalog.TURN].warmed_meta is False
     assert lib._movies[catalog.DRAG].warmed_meta is False
 
     # 恢复后新代次批次可正常预热（门控不放错、不误伤）
@@ -461,7 +463,7 @@ def test_high_priority_warm_aborts_when_paused_during_sleep(tmp_path, monkeypatc
     lib._warm_all_meta_background()
     assert lib._movies[catalog.CLICKS[0]].warmed_meta is True
     assert lib._movies[catalog.CLICKS[0]].warmed_frame is True
-    assert lib._movies[catalog.IDLE].warmed_meta is True
+    assert lib._movies[catalog.TURN].warmed_meta is True
 
 
 def test_high_priority_warm_aborts_mid_batch_when_paused(tmp_path, monkeypatch):

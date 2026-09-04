@@ -186,8 +186,30 @@ def test_config_first_frame_budget_normalized(tmp_path):
     from pet.config import Config
 
     cfg = Config(tmp_path)
-    assert cfg.get("first_frame_cache_max_mb") == 32
+    assert cfg.get("first_frame_cache_max_mb") == 8  # 批10-A3：默认 32→8
     cfg.set("first_frame_cache_max_mb", 999)
     assert cfg.get("first_frame_cache_max_mb") == 64  # 夹到上限
     cfg.set("first_frame_cache_max_mb", "abc")
-    assert cfg.get("first_frame_cache_max_mb") == 32  # 非法值回默认
+    assert cfg.get("first_frame_cache_max_mb") == 8  # 非法值回默认
+
+
+def test_config_first_frame_budget_legacy_32_migrates_to_8(tmp_path):
+    """批10-A3：批9 引入仅一天的旧默认 32 视为遗留值，加载时迁移到 8；
+    其它显式值（如 16/64）不被动。"""
+    import json
+
+    from pet.config import Config
+
+    cfg = Config(tmp_path)
+    cfg.save()  # 确保配置文件落盘（构造不一定立即写）
+    path = cfg.path
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["first_frame_cache_max_mb"] = 32
+    path.write_text(json.dumps(data), encoding="utf-8")
+    cfg2 = Config(tmp_path)
+    assert cfg2.get("first_frame_cache_max_mb") == 8, "旧默认 32 应迁移到 8"
+
+    data["first_frame_cache_max_mb"] = 16
+    path.write_text(json.dumps(data), encoding="utf-8")
+    cfg3 = Config(tmp_path)
+    assert cfg3.get("first_frame_cache_max_mb") == 16, "显式非 32 值不得被迁移"

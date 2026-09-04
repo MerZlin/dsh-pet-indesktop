@@ -437,10 +437,10 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
         clip._ffr_evict_token = None  # 新登记/置顶 = 取消悬挂中的逐出
         while _first_frame_bytes > _first_frame_budget_bytes and len(_first_frame_reg) > 1:
             # 从 LRU 头部找首个可逐出项：死引用/已清缓存顺手清账摘出；
-            # _ffr_pinned（高频交互链：click/idle/turn/move/drag，由
-            # MovieLibrary 标记）跳过不逐——否则低优先级随机动作池的预热
+            # _ffr_pinned（瞬时交互核：click/turn/drag，由 MovieLibrary 标记，
+            # 批10-A3 起 idle/move 改由预测式预热覆盖）跳过不逐——否则预热
             # 浪涌会把交互首帧挤出去，用户点击/拖拽时被迫 GUI 同步解码
-            # （实测：42 段低优先级 ≈38MB > 32MB 预算，交互首帧被逐出后
+            # （实测：42 段低优先级 ≈38MB > 预算，交互首帧被逐出后
             # 看门狗抓到 117~160ms 切换卡顿）。
             victim = None
             removed_dead = False

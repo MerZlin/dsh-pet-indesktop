@@ -399,10 +399,11 @@ class PetWindow(QWidget):
         # 批10-A1 预测式预热（控制器在 predictive_prewarm.py）；提前量默认 350ms，可配 200-600。
         self.predict_prewarm_lead_ms = max(200, min(600, int(config.get('predict_prewarm_lead_ms', 350))))
         # should_predict 只闸「预热」不闸「预测」（P1-1 语义）；no_move 时不预热移动（P2-4）。
+        # 批10-A3：idles 移出 pinned 后，idle-return 的首帧由预测预热覆盖 → idles 纳入预热。
         self.predictive_prewarm = PredictivePrewarm(
             roll=self._roll_next,
             warm=lambda name: getattr(self.lib, 'warm_predicted', lambda n: None)(name),
-            should_predict=lambda name: name in self.acts
+            should_predict=lambda name: name in self.acts or name in self.idles
             or (name in self.moves and not self.no_move),
         )
 

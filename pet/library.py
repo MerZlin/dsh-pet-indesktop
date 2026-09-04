@@ -252,12 +252,13 @@ class MovieLibrary(QObject):
         # 凭空拉起 ffmpeg 预热线程。
 
     def _priority_names(self) -> tuple[list[str], list[str]]:
-        """默认优先级：高频交互动画立刻预热，随机动作池延迟预热。
+        """默认优先级：瞬时交互核立刻预热并常驻，其余动画按需/预测预热。
 
-        高优先级来自状态机必然/高频路径：
-          idle（启动即播）、turn（10% + 间隔期）、click（点击）、
-          drag（拖拽）、move（20% + 手动触发）。
-        低优先级 = 随机动作池（42 个，单个命中率低）。
+        高优先级（pinned 首帧）= 用户手指的瞬时事件，零预测提前量：
+          click（点击）、drag（拖拽）、turn（拖拽变向/掷骰转向）。
+        低优先级 = idle / move / 随机动作池：idle-return 与 move 由批10-A1
+        预测式预热覆盖（播放点前 ~350ms 后台预解码），且 idle 常播在 LRU 里
+        永远热，不需要 pinned 常驻（批10-A3 瘦身，首帧预算随之 32→8MB）。
         """
         names = list(self._manifest)
         cats = catalog.build_categories(
@@ -269,11 +270,11 @@ class MovieLibrary(QObject):
         # 点击回应优先级最高：首次点击最怕同步 ffmpeg 解码（实测可达 600ms+），
         # 先预热点击动画，避免用户刚启动就点击时卡顿。
         high = list(dict.fromkeys(
-            [*(cats['clicks'] or []), *(cats['idles'] or []),
-             *(cats['turns'] or []), *(cats['moves'] or [])]
+            [*(cats['clicks'] or []), *(cats['turns'] or [])]
             + ([cats['drag']] if cats.get('drag') else [])
         ))
-        low = [n for n in cats.get('acts', []) if n not in high]
+        low = [n for n in (*(cats['idles'] or []), *(cats['moves'] or []),
+                           *(cats['acts'] or [])) if n not in high]
         return high, low
 
     def _warm_objects(
