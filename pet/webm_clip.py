@@ -397,21 +397,35 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
         _first_frame_bytes += current
         clip._ffr_evict_token = None  # 新登记/置顶 = 取消悬挂中的逐出
         while _first_frame_bytes > _FIRST_FRAME_BUDGET_BYTES and len(_first_frame_reg) > 1:
-            victim = _first_frame_reg[0][0]()
+            # 从 LRU 头部找首个可逐出项：死引用/已清缓存顺手清账摘出；
+            # _ffr_pinned（高频交互链：click/idle/turn/move/drag，由
+            # MovieLibrary 标记）跳过不逐——否则低优先级随机动作池的预热
+            # 浪涌会把交互首帧挤出去，用户点击/拖拽时被迫 GUI 同步解码
+            # （实测：42 段低优先级 ≈38MB > 32MB 预算，交互首帧被逐出后
+            # 看门狗抓到 117~160ms 切换卡顿）。
+            victim = None
+            removed_dead = False
+            for i, (ref, nbytes) in enumerate(_first_frame_reg):
+                c = ref()
+                if c is None or c._first_image is None:
+                    _first_frame_bytes -= nbytes  # 死引用/已清缓存：清账摘出，不算逐出
+                    _first_frame_reg.pop(i)
+                    removed_dead = True
+                    break
+                if getattr(c, '_ffr_pinned', False):
+                    continue
+                victim = (c, i)
+                break
+            if removed_dead:
+                continue
             if victim is None:
-                _first_frame_bytes -= _first_frame_reg[0][1]
-                _first_frame_reg.pop(0)
-                continue
-            if victim._first_image is None:
-                # 缓存已空（cleanup 清过）：账目一并清，不算逐出
-                _first_frame_bytes -= _first_frame_reg[0][1]
-                _first_frame_reg.pop(0)
-                continue
+                break  # 剩余全是常驻：预算对常驻条目转软上限
+            c, i = victim
             _ffr_evict_seq += 1
-            victim._ffr_evict_token = _ffr_evict_seq
-            victims.append((victim, _ffr_evict_seq))
-            _first_frame_bytes -= _first_frame_reg[0][1]
-            _first_frame_reg.pop(0)
+            c._ffr_evict_token = _ffr_evict_seq
+            victims.append((c, _ffr_evict_seq))
+            _first_frame_bytes -= _first_frame_reg[i][1]
+            _first_frame_reg.pop(i)
     return victims
 
 
@@ -1407,10 +1421,14 @@ class WebMClip(QObject):
         victims = []
         if self._first_frame_lock.acquire(blocking=False):
             try:
+                if perfstats.ENABLED:
+                    perfstats.note('webm.ff_gui_decode')  # GUI 线程亲自解码首帧（~166ms 冻结，P0 定案测量）
                 victims = self._decode_first_qimage_and_cache(gen=gen)
             finally:
                 self._first_frame_lock.release()
         else:
+            if perfstats.ENABLED:
+                perfstats.note('webm.ff_gui_wait')  # GUI 等后台预热（有界等待，P0 定案测量）
             if not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0):
                 img = self._decode_first_qimage(gen=gen)
                 victims = self._commit_first_frame_escape(img, gen=gen)

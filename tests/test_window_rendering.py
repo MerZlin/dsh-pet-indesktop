@@ -784,7 +784,13 @@ def test_move_event_refreshes_frame_on_dpr_change():
     assert calls["rebuild"] == 1
     assert calls["update"] == 1
 
-    # 移回 DPR 1 的屏幕：再次重建
+    # moveEvent 的 DPR 兜底轮询已限频 10Hz（主路径是 screenChanged 信号，
+    # 见 PetWindow.moveEvent 注释）：100ms 窗口期内的 DPR 变化不重建
     fake._screen_dpr = 1.0
+    window_mod.PetWindow.moveEvent(fake, QMoveEvent(QPoint(0, 0), QPoint(20, 20)))
+    assert calls["rebuild"] == 1  # 限频窗口内：兜底轮询不触发
+
+    # 越过限频窗口（模拟 100ms 后）移回 DPR 1 的屏幕：再次重建
+    fake._last_dpr_poll_at = 0.0
     window_mod.PetWindow.moveEvent(fake, QMoveEvent(QPoint(0, 0), QPoint(20, 20)))
     assert calls["rebuild"] == 2
