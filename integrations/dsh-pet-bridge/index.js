@@ -6,22 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
-// Keep the bridge loadable when DSH resolves this plugin through an absolute
-// link (for example from a packaged _internal directory).  In that layout
-// Node resolves dependencies from the link target, not from the DSH profile,
-// so importing DSH's internal LLM package at module load time is unsafe.  The
-// bridge only needs the standard user-message envelope for steer/diagnosis.
-function createUserMessage(input) {
-  const message = {
-    ...input,
-    role: "user",
-    id: randomUUID(),
-  };
-  return typeof structuredClone === "function"
-    ? Object.freeze(structuredClone(message))
-    : Object.freeze(message);
-}
+// The bridge uses DSH's canonical user-message envelope for steer/diagnosis.
 
 const MAX_BYTES = 1024 * 1024; // 事件文件超过 1MB 时轮转（保留 .1 备份，防无限增长）
 const PLUGIN_ID = "dsh-pet-bridge";
@@ -503,14 +490,14 @@ function toolResultInfo(data) {
   };
 }
 
-const pendingTools = new Map(); // callId -> {tool, argsKey, t0}
+const pendingTools = new Map(); // callId -> {tool, argsKey, command, sessionId, t0}
 const writtenToolCallIds = new Set(); // callId -> 已写入过 tool/call 记录（去重）
 
-function noteToolCall(callId, tool, args) {
+function noteToolCall(callId, tool, args, sessionId = "") {
   if (!callId || pendingTools.has(callId)) return;
   pendingTools.set(callId, {
     tool: String(tool || ""), argsKey: summarizeArgs(args),
-    command: commandFromArgs(args), t0: Date.now(),
+    command: commandFromArgs(args), sessionId: String(sessionId || ""), t0: Date.now(),
   });
   if (pendingTools.size > 512) { // 防无限增长
     const now = Date.now();
@@ -527,24 +514,38 @@ function consumeToolCall(callId) {
   return info;
 }
 
-// ===== 审批命令提取：最近 tool/call arguments 缓存 =====
-// 实测 approval/asked 事件的 data.arguments 为空（DSH 只在 tool/call 里携带
-// 完整参数）。因此缓存最近一次 tool/call 的完整 arguments，approval 到达时
-// 用它提取「被审批命令的完整内容」，让桌宠气泡直接展示、不必回 DSH 界面看。
-let lastToolCall = { tool: "", args: null, ts: 0 };
+// 审批命令只允许从同 session、同工具、且时间窗口内的最近 tool/call 回填。
+// 不再使用进程级 lastToolCall，避免并发 session 把普通命令串到审批上。
+const recentToolCalls = new Map(); // sessionId -> [{tool, args, callId, ts}]
+const APPROVAL_COMMAND_MAX_AGE_MS = 2000;
 
-function noteLatestToolCall(tool, args) {
-  lastToolCall = { tool: String(tool || ""), args, ts: Date.now() };
+function noteLatestToolCall(tool, args, sessionId = "", callId = "") {
+  const key = String(sessionId || "session:unknown");
+  const list = recentToolCalls.get(key) || [];
+  list.push({ tool: String(tool || ""), args, callId: String(callId || ""), ts: Date.now() });
+  while (list.length > 16) list.shift();
+  recentToolCalls.set(key, list);
 }
 
-function latestCommandFor(toolName, args) {
-  // 优先用 approval 自带的 arguments；为空时回退最近 tool/call 的参数
-  const cmd = extractCommand(args) || (lastToolCall.args ? extractCommand(lastToolCall.args) : "");
-  if (!cmd && lastToolCall.tool && (lastToolCall.ts && Date.now() - lastToolCall.ts < 10000)) {
-    // 极端回退：approval 未带 tool 时用最近调用名（不展示命令全文）
-    return cmd;
+function latestCommandFor(toolName, args, sessionId = "", callId = "") {
+  const direct = extractCommand(args);
+  if (direct) return direct;
+  const key = String(sessionId || "session:unknown");
+  const list = recentToolCalls.get(key) || [];
+  const expectedTool = String(toolName || "").trim();
+  const expectedCall = String(callId || "").trim();
+  const now = Date.now();
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const item = list[i];
+    if (now - item.ts > APPROVAL_COMMAND_MAX_AGE_MS) continue;
+    if (expectedCall && item.callId && item.callId === expectedCall) {
+      return extractCommand(item.args);
+    }
+    if (expectedTool && item.tool === expectedTool) {
+      return extractCommand(item.args);
+    }
   }
-  return cmd;
+  return "";
 }
 
 // ===== v1 DSH state linkage =====
@@ -611,18 +612,11 @@ const WATCHDOG_EVENT_TYPES = new Set([
   "user_action",
 ]);
 
-// 审批请求提醒：一次性事件，桌宠端收到即弹「有审批等你点」气泡。
-// 不切 state：DSH 等待审批时 agent/status 仍为 running（agent 还在任务中）；
-// 若强行写 attention 会被紧随的 working 顶掉或抖动。审批是"需要你注意一下"的
-// 瞬时提醒，不是持续状态——用事件 + tool 字段表达，与 tool/call 同级。
-// command 字段携带被审批命令的完整内容（来自 arguments），桌宠气泡直接展示，
-// 用户不用去 DSH 界面才能看到要批准什么。
-function writeApprovalRequest(toolName, command) {
-  const extra = { event: "approval/request" };
-  if (toolName) extra.tool = toolName;
-  if (command) extra.command = command;
-  writeRecordDedup(extra);
-}
+// 审批 UI 请求只由权威 mux 帧（approval/requested，带 rpcId+sessionId）产生
+// （见下方 mux 中继）。这里不再提供 writeApprovalRequest：approval/asked 等
+// session/event 只是状态/审计信号，绝不能升级成桌宠的审批弹窗——普通工具调用
+// （如 pwsh 跑 Get-Location）一旦被宿主标成 approval/asked 就会误弹无法关闭的
+// sticky 审批气泡。
 
 // 从审批 arguments 里提取「将要执行的命令」完整内容：
 //   bash/shell/pwsh 等命令型工具 → arguments.command / .cmd / .shell / .script
@@ -662,6 +656,10 @@ function extractCommand(arguments_) {
 const QUESTION_TOOL = "ask_user_question";
 const pendingQuestionCallIds = new Set();
 
+function questionCallIdentity(callId, sessionId) {
+  return `${String(sessionId || "")}|${String(callId || "")}`;
+}
+
 function extractQuestions(arguments_) {
   if (!arguments_) return [];
   let args = arguments_;
@@ -673,21 +671,19 @@ function extractQuestions(arguments_) {
     }
   }
   if (!args || typeof args !== "object" || !Array.isArray(args.questions)) return [];
-  return args.questions
-    .map((item) => ({
-      id: item && item.id,
-      question: item && item.question,
-      header: item && item.header,
-      options: item && Array.isArray(item.options) ? item.options.map((o) => ({ label: o && o.label, description: o && o.description })) : [],
-      multiSelect: !!(item && item.multiSelect),
-    }))
-    .filter((q) => q && q.question);
+  // DSH's question contract is extensible.  Do not project/flatten it: retain
+  // every question and option field (including intent and future fields), while
+  // cloning so later DSH mutations cannot alter the JSONL record.
+  return typeof structuredClone === "function"
+    ? structuredClone(args.questions)
+    : JSON.parse(JSON.stringify(args.questions));
 }
 
 function writeQuestionRequest(callId, questions, sessionId) {
   const id = String(callId || "");
-  if (!id || pendingQuestionCallIds.has(id)) return; // 已写过，去重
-  pendingQuestionCallIds.add(id);
+  const key = questionCallIdentity(id, sessionId);
+  if (!id || pendingQuestionCallIds.has(key)) return; // 已写过，去重
+  pendingQuestionCallIds.add(key);
   // 两个路径（tool/call + mux）都无条件写，由 writeRecordDedup 去重：
   // mux 正常时保留 rpcId 版本（可交互）；mux 不可用/连接失败时兜底写提示
   // （无按钮但至少弹窗出现，不会丢问题）。
@@ -701,8 +697,9 @@ function writeQuestionRequest(callId, questions, sessionId) {
 
 function resolveQuestion(callId, sessionId) {
   const id = String(callId || "");
-  if (!id || !pendingQuestionCallIds.has(id)) return;
-  pendingQuestionCallIds.delete(id);
+  const key = questionCallIdentity(id, sessionId);
+  if (!id || !pendingQuestionCallIds.has(key)) return;
+  pendingQuestionCallIds.delete(key);
   // 收尾记录不 gate mux：重复的 question/resolved 无害（桌宠幂等），
   // 但若 mux 在问题中途才连上、丢了对应的 resolved 帧，这里必须兜底写，
   // 否则桌宠会卡死在 waiting_question。
@@ -779,7 +776,16 @@ function muxConnect() {
     const p = msg.payload;
     try {
       if (p.type === "approval/requested") {
-        writeRecordDedup({ event: "approval/request", rpcId: msg.rpcId, sessionId: p.sessionId, approvalId: p.approvalId, toolName: p.toolName, command: latestCommandFor(p.toolName, p.arguments) });
+        // 权威 UI 审批请求：必须带 rpcId + sessionId 才可作为桌宠可交互审批落盘
+        // （approvalId 正常也会带，供 resolved 精确配对）。缺身份/空占位帧一律
+        // 忽略（只留日志），防止误弹无法关闭的审批气泡。
+        const rpcId = String(msg.rpcId || "");
+        const sessionId = String(p.sessionId || "");
+        if (rpcId && sessionId) {
+          writeRecordDedup({ event: "approval/request", rpcId, sessionId, approvalId: String(p.approvalId || ""), toolName: p.toolName, command: latestCommandFor(p.toolName, p.arguments) });
+        } else {
+          console.warn(`[${PLUGIN_ID}] 忽略缺身份的 mux 审批帧: rpcId=${rpcId ? "yes" : "no"} sessionId=${sessionId ? "yes" : "no"}`);
+        }
       } else if (p.type === "approval/resolved") {
         writeRecord({ event: "approval/resolved", rpcId: msg.rpcId, sessionId: p.sessionId, approvalId: p.approvalId, outcome: p.outcome });
         writeInteractionResolved("approval", p.sessionId, { rpcId: msg.rpcId, approvalId: p.approvalId }, p.outcome || "approved");
@@ -795,14 +801,15 @@ function muxConnect() {
       } else if (p.type === "question/requested") {
         writeRecordDedup({ event: "question/requested", rpcId: msg.rpcId, sessionId: p.sessionId, questions: p.questions });
       } else if (p.type === "question/resolved") {
-        writeRecord({ event: "question/resolved", rpcId: msg.rpcId, sessionId: p.sessionId, outcome: p.outcome });
-        writeInteractionResolved("question", p.sessionId, { rpcId: msg.rpcId }, p.outcome || "answered");
+        const questionRpcId = p.questionRpcId || msg.rpcId;
+        writeRecord({ event: "question/resolved", rpcId: questionRpcId, sessionId: p.sessionId, outcome: p.outcome });
+        writeInteractionResolved("question", p.sessionId, { rpcId: questionRpcId }, p.outcome || "answered");
         // 用户介入信号
         writeRecord({
           event: "user_action",
           action: "question_resolved",
           outcome: String(p.outcome || ""),
-          rpcId: msg.rpcId,
+          rpcId: questionRpcId,
           sessionId: p.sessionId,
         });
       }
@@ -878,11 +885,12 @@ function writeRecord(extra) {
   }
 }
 
-// ===== 审批/问题双路径写盘去重（P0 竞态防线） =====
-// 同一条审批可能经 approval/asked（session 事件）与 approval/requested（mux 帧）
-// 各写一次；问题同理。这里按可得的稳定身份去重：短窗口内同一条审批/问题
-// 只落一条记录，杜绝「先弹无按钮气泡、交互版被队列压住」的重复气泡竞态。
-// 优先保留带 rpcId 的可交互版本。
+// ===== 审批/问题写盘去重（P0 竞态防线） =====
+// approval/request 现在只由权威 mux 帧（approval/requested）产生，但 mux 重连/
+// 重复投递仍可能对同一条审批多次触发；question/requested 仍走 tool/call + mux
+// 双通道。这里按可得的稳定身份去重：短窗口内同一条审批/问题只落一条记录，
+// 杜绝「先弹无按钮气泡、交互版被队列压住」的重复气泡竞态。优先保留带 rpcId
+// 的可交互版本。
 const INTERACTION_DEDUP_MS = 8000;
 const interactionSeen = new Map(); // key -> { ts, hasRpcId }
 const resolvedInteractionIds = new Set();
@@ -956,8 +964,7 @@ function writeRecordDedup(extra) {
   writeRecord(extra);
 }
 
-// 写 record 去重前的代理：writeApprovalRequest 和 mux 交互记录都走 writeRecordDedup，其余事件（状态/工具/结果/错误）直接走 writeRecord。
-// 为确保兼容，将 writeApprovalRequest 和 mux 的写盘改为调用 writeRecordDedup。
+// 写 record 去重前的代理：mux 交互记录（审批/问题）走 writeRecordDedup，其余事件（状态/工具/结果/错误）直接走 writeRecord。
 
 export function apply(ctx) {
   // Make the resolved runtime destination observable for packaged builds.
@@ -1021,6 +1028,7 @@ export function apply(ctx) {
             errorCode: errCode.slice(0, 48) || "RATE_LIMIT",
             errorMessage: truncate(errMsg),
             sessionId: retrySessionKey,
+            consecutiveRetryCount: retryConnectionStats.get(retrySessionKey)?.count || RETRY_EVENT_THRESHOLD,
           });
         } else if (!isRateLimitError(errCode, errMsg)) {
           resetRetryConnection(retrySessionKey);
@@ -1037,6 +1045,21 @@ export function apply(ctx) {
         aggregateWrite();
       };
     }, `${PLUGIN_ID}.agent()`);
+  });
+
+  const cordisRequestSessions = new Map();
+  ctx.on("cordis/request-run", (request) => {
+    if (!request || request.requiresApproval !== true) return;
+    const requestId = String(request.requestId || "");
+    cordisRequestSessions.set(requestId, String(request.agentId || ""));
+    writeRecord({ event: "cordis/request-run", source: "dsh", agentId: String(request.agentId || ""), sessionId: String(request.agentId || ""), kind: "cordis", payload: request, requestId });
+  });
+  ctx.on("cordis/request-run-resolved", (resolved) => {
+    if (!resolved) return;
+    const requestId = String(resolved.requestId || "");
+    const sessionId = cordisRequestSessions.get(requestId) || "";
+    cordisRequestSessions.delete(requestId);
+    writeRecord({ event: "cordis/request-run-resolved", source: "dsh", kind: "cordis", requestId, agentId: sessionId, sessionId, outcome: String(resolved.outcome || "") });
   });
 
   // 过程汇报：session/event 在插件/根/agent 三层上下文都可达（实测验证）。
@@ -1121,27 +1144,20 @@ export function apply(ctx) {
         }
       }
 
-      // 2) 审批请求提醒：approval/asked → 一次性 approval/request 事件。
-      //    不抢 answerer，只读 session 日志事件——与 dsh-web-notification 同一事件源。
-      //    不切 state：审批等待时 agent 仍处于 running（任务未结束），状态机保持 working；
-      //    审批是"瞬时提醒"而非"持续状态"，用独立事件+tool 字段表达。
-      //    command 字段携带被审批命令全文（approval 自身 arguments 或最近 tool/call 缓存）。
-      //    两个路径（session/asked + mux/requested）都无条件写，由 writeRecordDedup
-      //    按审批身份去重：mux 正常时保留 rpcId 版本（可交互）；mux 不可用/连接失败时
-      //    session 路径兜底写提示（无按钮但至少弹窗出现，不会丢审批）。
-      //    不能 return 整个回调——approval/asked 仍需经 STATE_EVENT_TYPES 转发，
-      //    驱动桌宠 waiting_approval 状态锁存。
+      // 2) 审批请求：approval/asked 只是 DSH 的会话/审计信号（供 dsh_state 锁存
+      //    waiting_approval），**不代表 Web UI 存在待确认的真实审批，绝不能由此
+      //    驱动桌宠审批弹窗**——普通工具调用（如 pwsh 跑 Get-Location）一旦被宿主
+      //    标成 approval/asked，桥接再升级成 approval/request，桌宠就会挂出一个
+      //    永远等不到 approval/resolved 的 sticky 审批气泡。
+      //    UI 层审批请求只由权威 mux 帧 approval/requested（带 rpcId+sessionId）
+      //    产生（见下方 mux 中继）。approval/asked 仍经 STATE_EVENT_TYPES 转发为
+      //    状态/审计事件，不写 approval/request。
       if (type === "approval/decided") {
         const data = event.data || {};
         writeInteractionResolved("approval", sessionId, { rpcId: data.rpcId, approvalId: data.approvalId, callId: data.callId }, data.outcome || data.decision || "approved");
       }
-
-      if (type === "approval/asked") {
-        const data = event.data || {};
-        const toolName = data.toolName ? String(data.toolName) : "";
-        const command = latestCommandFor(toolName, data.arguments);
-        writeApprovalRequest(toolName, command);
-      }
+      // approval/asked：仅保留状态/审计转发（下方 STATE_EVENT_TYPES 统一处理），
+      // 不再生成 approval/request，杜绝「普通/审计事件 → UI 审批弹窗」的误升级。
 
       // 2.5) 用户问题交互（阻塞型，与审批同等待遇）：ask_user_question 会暂停
       //     Agent 直到用户选择/回答。tool/call 是权威请求信号，tool/result 用
@@ -1263,6 +1279,7 @@ export function apply(ctx) {
             errorCode: errorCode.slice(0, 48) || "RATE_LIMIT",
             errorMessage: truncate(errorMessage),
             sessionId,
+            consecutiveRetryCount: RETRY_EVENT_THRESHOLD,
             retry: typeof d.retry === "number" ? d.retry : 0,
           });
         }

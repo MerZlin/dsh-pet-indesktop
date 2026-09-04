@@ -9,6 +9,17 @@
   },
   "description": "dsh-pet 桌宠桥接：把 DSH agent 状态事件写入本地 jsonl，并提供可选的 watchdog 控制（仅本地文件，无任何网络请求）",
   "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/cosmokit": "^1.8.3",
+    "@deepseek-ai/dsh-attachment": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-brand": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-invariants": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-llm": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-timeout": "^0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "@standard-schema/spec": "^1.1.0"
+  },
   "files": [
     "index.js",
     "cordis.patch.yml"
