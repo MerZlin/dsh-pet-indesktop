@@ -192,7 +192,14 @@ def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
     from pet.config import Config
     app = QApplication.instance() or QApplication([])
     owner = PetApp(app, Config(base=tmp_path))
-    owner.win = type("Win", (), {"isVisible": lambda self: True})()
+    owner.win = type("Win", (), {
+        "isVisible": lambda self: True,
+        # 线程启动失败路径会排队 singleShot(done.emit(错误文案))：
+        # 弹窗桩方法必须存在，且队列必须在本测试内清空（见结尾 processEvents），
+        # 否则事件泄漏到下一个测试的 processEvents 里引爆（Win 桩无 show_bubble）。
+        "show_bubble": lambda self, *a, **k: None,
+        "show_alert": lambda self, *a, **k: None,
+    })()
     monkeypatch.setattr(owner, "_read_balance_file_cache", lambda *_: None)
     class Settings:
         active_config = type("Provider", (), {"id":"x", "base_url":"https://x", "api_key":"k", "verify_ssl":True})()
@@ -204,6 +211,8 @@ def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
     monkeypatch.setattr("pet.app.threading.Thread", BrokenThread)
     owner.show_balance(owner.win)
     assert owner._balance_busy is False
+    # 清空本测试排队的 singleShot(done.emit(...))，不泄漏给下一个测试
+    app.processEvents()
 
 
 def test_menu_balance_action_calls_bound_window_callback():
