@@ -14,7 +14,7 @@ feature flag ``experimental_single_process_spawn`` 关（现状）时本模块�
 - **proactive**：一份截屏/探测 → 广播到各窗；限流器保持**全局**语义
   （绑定主窗 config 目录下同名的 ``proactive_screen_state.json``，R8）。
 - **全屏 watcher**：一份探测线程（1Hz 全屏 + 20Hz 光标轮询）→ 广播到各窗；
-  ``MultiWindowProxy`` 只在「任一窗仍可见/需要」时才继续轮询（G1 守卫保留）。
+  ``MultiWindowProxy`` 只在「任一窗仍需要」时才继续轮询（G1 守卫保留）。
 """
 
 from __future__ import annotations

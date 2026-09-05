@@ -813,12 +813,13 @@ class WebMClip(QObject):
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(self._timer_interval())
         self._timer.timeout.connect(self._poll)
-        # P3 broker（共享解码，默认 None = 今天的行为逐位不变）：
-        # - _publish_sink：coordinator 播放时置（facade 在 start() 前设置）——
-        #   reader 线程每解码一帧回调 sink.on_frame(data, src_idx)，只做镜像；
+        # 共享解码（默认 None = 今天的行为逐位不变）：
+        # - _publish_sink：发布端（首发窗）播放时置（facade 在 start() 前设置）
+        #   ——reader 线程每解码一帧回调 sink.on_frame(data, src_idx)，扇出到
+        #   各订阅者环形缓冲；
         # - _feed_source：消费端置（facade 在 start() 前设置）——reader 线程
-        #   先有界等待 grant（feed-pending，≤600ms），grant 后从共享内存取帧
-        #   入队；deny/超时/断流 → 同一 reader 线程内回退本地 ffmpeg（帧 0）。
+        #   经 FanoutFeed 立即就绪（ready 恒 True），从环取帧入队；断流/中止
+        #   → 同一 reader 线程内回退本地 ffmpeg（帧 0）。
         self._publish_sink = None
         self._feed_source = None
         # cleanup 后 clip 终结：不再启动新 reader；退役池回收由模块级
@@ -1890,14 +1891,13 @@ class WebMClip(QObject):
     # ------------------------------------------------------------ reader
     def _reader(self, stop_evt: threading.Event, generation: int,
                 ready_evt: threading.Event | None = None) -> None:
-        """reader 线程入口：feed 模式（P3 broker）与本地解码的分派。
+        """reader 线程入口：feed 模式（进程内扇出）与本地解码的分派。
 
         - ``_feed_source`` 为 None（默认/灰度关）：逐位走 ``_reader_local``，
           与历史行为零差异；
-        - ``_feed_source`` 已置（client 消费端，facade 在 start() 前设置）：
-          先有界等待 grant（feed-pending，≤SUBSCRIBE_BUDGET_MS，stop 感知），
-          成功后从共享内存取帧入队（沿用本地同款有界 put/丢帧契约）；
-          grant 失败/被拒/超时/中途断流/中止 → **同一 reader 线程内**回退
+        - ``_feed_source`` 已置（消费端，facade 在 start() 前设置）：经
+          FanoutFeed 立即就绪（ready 恒 True），从订阅环取帧入队（沿用本地
+          同款有界 put/丢帧契约）；断流/超时/中止 → **同一 reader 线程内**回退
           本地 ffmpeg 解码（帧 0 起播，重入 _reader_local 的拉起序列——
           capture/登记/兜底全复用，绝不复刻一个绕过追踪的新拉起，P1-1）。
         """
@@ -1920,7 +1920,7 @@ class WebMClip(QObject):
             if stop_evt.is_set() or self._generation != generation:
                 return
             self._drain_queue_for_local()
-            logger.info('broker feed 回退本地解码（帧 0 起播）: %s', self.path)
+            logger.info('fan-out feed 回退本地解码（帧 0 起播）: %s', self.path)
         self._reader_local(stop_evt, generation, ready_evt)
 
     def _reader_local(self, stop_evt: threading.Event, generation: int,
@@ -2037,11 +2037,10 @@ class WebMClip(QObject):
                 q,
                 lambda: stop_evt.is_set() or self._generation != generation,
                 throttled=lambda: self._decode_throttle_divisor > 1,
-                # P3 broker：发布镜像（coordinator 播放时置 _publish_sink）。
+                # 共享解码：发布镜像（发布端播放时置 _publish_sink）。
                 # reader 只做每帧回调（逐帧读当前 sink——续圈后 facade 重建
-                # 会话换 sink，不换 reader/进程仍发布到新会话）；自然播完/
-                # 中止的会话收尾由 facade 经 movie finished/stop 在 GUI 侧
-                # 驱动（P1-2），reader 不写标记。
+                # 会话换 sink，不换 reader/进程仍发布到新会话）；节拍/收尾由
+                # facade 在 GUI 侧驱动（P1-2），reader 不写标记。
                 on_frame=self._mirror_frame_to_sink,
                 loop_frame_count=loop_frame_count,
                 on_loop_boundary=_on_loop_boundary,
@@ -2112,14 +2111,14 @@ class WebMClip(QObject):
     def _reader_feed(self, feed, stop_evt: threading.Event, generation: int,
                      ready_evt: threading.Event | None = None) -> bool:
         """feed 分支（reader 线程内）。返回 True = 本轮已由 feed 完整处理
-        （grant 成功并流完自然结束 / 或已被 stop 打断）；False = 需要回退
-        本地解码（grant 失败/被拒/超时/断流/中止）。
+        （feed 就绪并流完自然结束 / 或已被 stop 打断）；False = 需要回退
+        本地解码（feed 就绪前超时/断流/中止——测试桩驱动该等待路径）。
 
-        只在该 WebMClip 以消费端（client）身份、facade 在 start() 前设置了
+        只在该 WebMClip 以消费端身份、facade 在 start() 前设置了
         ``_feed_source`` 时进入。feed 等待/读取期间不持有任何锁；有界 put
         沿用本地同款丢帧契约（队列满丢帧、源帧号照常推进）。
         """
-        # 1) feed-pending：grant 有界等待（reader 线程内，≤SUBSCRIBE_BUDGET_MS）
+        # 1) feed-pending：有界等待 feed 就绪（reader 线程内，≤SUBSCRIBE_BUDGET_MS）
         budget_ms = getattr(feed, 'budget_ms', None) or _SUBSCRIBE_BUDGET_MS
         deadline = time.monotonic() + max(1, int(budget_ms)) / 1000.0
         while not (stop_evt.is_set() or self._generation != generation):
@@ -2140,7 +2139,7 @@ class WebMClip(QObject):
             # expire 闭锁本 feed：晚到的 grant 命中已闭锁句柄 → 立即 close，
             # 不再 complete（reader 已不再等待该 Event）。
             feed.expire()
-            logger.info('broker feed 授权失败（deny/超时），回退本地解码: %s', self.path)
+            logger.info('fan-out feed 授权失败（deny/超时），回退本地解码: %s', self.path)
             return False
         if ready_evt is not None:
             ready_evt.set()  # feed 已就绪：等价于本地 ffmpeg 拉起完成的信号
@@ -2156,11 +2155,11 @@ class WebMClip(QObject):
                             perfstats.note('webm.queue_drop')
                         pass  # 队列满丢帧：源帧号照常推进（本地同款契约）
                 elif kind == 'end':
-                    # 发布端自然播完（run_ended_natural）：结束标记 → finished
+                    # 源帧号回绕合成 end：结束标记 → finished
                     self._put_end_marker(q, stop_evt, generation)
                     return True
                 elif kind == 'abort':
-                    logger.warning('broker feed 断流/中止，回退本地解码: %s', self.path)
+                    logger.warning('fan-out feed 断流/中止，回退本地解码: %s', self.path)
                     return False
                 else:  # 'none'：暂无新帧，微让步避免忙等
                     time.sleep(0.002)
@@ -2312,11 +2311,11 @@ class WebMClip(QObject):
         return True
 
     def _mirror_frame_to_sink(self, frame, src_idx) -> None:
-        """broker 发布镜像（P3）：每解码一帧回调当前 publish sink。
+        """共享解码发布镜像：每解码一帧回调当前 publish sink。
 
         圈边界续圈后共享会话由 facade 重建（_publish_sink 换实例），逐帧
         读当前 sink 而非 reader 启动时绑定——续圈不换 reader/进程，帧仍
-        发布到新会话。sink 为 None（broker 关/非发布端）时为空操作。
+        发布到新会话。sink 为 None（共享关/非发布端）时为空操作。
         """
         sink = self._publish_sink
         if sink is not None:
@@ -2345,9 +2344,9 @@ class WebMClip(QObject):
         入队成功后推进——被阻塞重试的帧绝不丢失、绝不虚占时间线槽位。
         throttled=None（默认）＝永不节流：与历史行为逐位一致（超时丢帧）。
 
-        on_frame（P3 broker）：可选回调 on_frame(frame_bytes, src_idx)，
+        on_frame（共享解码）：可选回调 on_frame(frame_bytes, src_idx)，
         每解码一帧调用一次（在节流/丢帧决策之前，即"解码节奏"镜像——
-        发布端 coordinator 的共享 session 按此节奏发布帧，见 WebMClip
+        发布端按此节奏把帧扇出到各订阅者，见 WebMClip
         ``_publish_sink`` 钩子）。None（默认）＝零行为差异。
 
         loop_frame_count（批8 进程内循环）：>0 时按它把解码序号取模回绕成

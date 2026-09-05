@@ -1183,8 +1183,8 @@ class PetWindow(QWidget):
             return  # 未完整初始化（测试桩/构造早期）无可暂停
         if self.movie is not None:
             self.movie.stop()
-            # P3 broker：窗口停播（隐藏/暂停）→ shareable idle 会话中止
-            # （publish_abort/subscribe_end，消费端本地回退）；broker 关 = no-op。
+            # 共享解码：窗口停播（隐藏/暂停）→ shareable idle 会话中止
+            # （订阅者回绕合成 end，消费端本地回退）；broker 关 = no-op。
             self._broker_unregister(self.anim, self.movie, natural=False)
         # 隐藏期间不重试被拒动画：停掉待重试并清空状态（恢复显示时重新切换）
         self._cancel_pending_switch_retry()
@@ -1251,7 +1251,7 @@ class PetWindow(QWidget):
             facade.unbind()
             facade.bind(session)
 
-    # ---- P3 broker：窗口侧接线（只经 BrokerFacade 公开接口）----------------
+    # ---- 共享解码：窗口侧接线（只经 DecodeFanoutHub 公开接口）-------------
     def _broker_active(self) -> bool:
         """fan-out 是否参与本窗口：facade（DecodeFanoutHub）注入且启用。
         批5.3 起共享解码与碰撞角色解耦（不再骑 collision_enabled QLocal 通道）。
@@ -1266,8 +1266,8 @@ class PetWindow(QWidget):
         return self._broker_active() and name in self.idles
 
     def _broker_register(self, name, movie) -> None:
-        """shareable movie 即将 start() 前调用：按当时角色（is_coordinator）
-        经 facade 分流 publish_start/subscribe_start。失败不影响本地播放。
+        """shareable movie 即将 start() 前调用：facade 按源存活/速度匹配
+        分流 publish/feed。失败不影响本地播放。
 
         终审 P1-2：注册成功（非 'local'）时记录身份 (name, movie)，收尾
         （_broker_unregister）按身份执行，不再依赖当下开关状态。注册前若
@@ -1290,8 +1290,8 @@ class PetWindow(QWidget):
     def _broker_unregister(self, name, movie, natural: bool) -> None:
         """shareable movie 停播/自然播完：通知 facade 解注册。
 
-        natural=True = 自然播完（run_ended_natural 广播）；False = 停播/切走
-        （publish_abort / subscribe_end）。幂等；broker 关时 no-op。
+        natural 仅透传给 shareable_end——当前 hub 实现不区分打断/自然结束
+        （订阅者对两者一律回绕合成 'end'，提前 ≤1 圈）。幂等；broker 关时 no-op。
 
         终审 P1-2（=DS 终审 P2-1）：收尾资格看「本窗口是否注册过该
         (name, movie)」，不看当下 _broker_shareable()——运行期关闭
@@ -1316,9 +1316,9 @@ class PetWindow(QWidget):
         """解绑碰撞会话：发 leave、断开信号、停定时器并清空客户端预测状态。
 
         P3 broker（P3A P2-2 + 终审 P1-2）：解绑 = broker teardown——先按
-        注册身份收尾当前 movie 的 broker 会话（unbind 只断信号/作废
-        pending，不中止发布 session；不先收尾则运行期关碰撞后发布记录
-        残留到 shutdown），再 facade.unbind()，最后摘掉当前 movie 的
+        注册身份收尾当前 movie 的 broker 会话（unbind 为 no-op，hub 无会话
+        可绑；收尾由 _broker_unregister 驱动，不先收尾则运行期关碰撞后发布
+        记录残留到 shutdown），再 facade.unbind()，最后摘掉当前 movie 的
         发布/订阅钩子，避免 broker 停用期间复用旧 clip（同素材重播/回退）
         时误用上一轮的 sink/feed。正在 stream 的 feed 由 movie 的 stop/
         自然结束收尾（reader 的 finally 必 close feed session），此处不
@@ -1735,9 +1735,8 @@ class PetWindow(QWidget):
         prev_movie = self.movie
         prev_click_hold = self._click_hold
         prev_bounds = self._collision_local_bounds
-        # P3 broker：离开上一个可共享素材（idle 类）时通知 facade 解注册——
-        # 自然播完（_ended_fired=True，末帧已处理）→ run_ended_natural；
-        # 打断/切走（仍播放中）→ publish_abort/subscribe_end（消费端本地回退）。
+        # 共享解码：离开上一个可共享素材（idle 类）时通知 facade 解注册——
+        # natural=_ended_fired（自然播完/打断切走均透传，hub 不区分）。
         # 终审 P1-2：不按当下 _broker_shareable() 门控——运行期关碰撞后开关
         # 已变，门控会让已注册的会话收不到收尾；是否收尾由 _broker_unregister
         # 按注册身份判定。
@@ -1770,8 +1769,8 @@ class PetWindow(QWidget):
         self._push_recycle(movie)
         self._ended_fired = False
         self._rebuild_frame()
-        # P3 broker：shareable（idle 类）素材 start() 前注册——发布/订阅由
-        # facade 依当时角色（is_coordinator）分流；非 shareable/关 = no-op。
+        # 共享解码：shareable（idle 类）素材 start() 前注册——facade 按源存活/
+        # 速度匹配分流 publish/feed；非 shareable/关 = no-op。
         self._broker_register(name, movie)
         if movie.start() is False:
             # 启动被拒：先撤销刚注册的 broker 会话（movie 未真正起播），再降级
@@ -1820,9 +1819,9 @@ class PetWindow(QWidget):
         restored = False
         registered_prev = False
         if prev_movie is not None:
-            # P3 broker：回退上一动画并（重新）起播。若上一素材可共享且其 clip
+            # 共享解码：回退上一动画并（重新）起播。若上一素材可共享且其 clip
             # 当前未在播（自然播完/被停后重播 = 新一轮），start() 会拉起新 reader
-            # → start() 前按当前角色注册发布/订阅；仍在播则 start() 为 no-op
+            # → start() 前注册发布/订阅；仍在播则 start() 为 no-op
             # （其会话已在 _switch 顶部按自然/中止收尾），不必重复注册。
             if (self._broker_shareable(prev_anim)
                     and not getattr(prev_movie, '_running', False)):
@@ -1872,7 +1871,7 @@ class PetWindow(QWidget):
             movie.set_playback_speed(self.playback_speed)
         self._push_recycle(movie)  # 批11-B1：同 _switch 推送回收阈值到回退 idle clip
         self._rebuild_frame()
-        # P3 broker：回退到可共享 idle 起播前注册（按当前角色分流）。
+        # 共享解码：回退到可共享 idle 起播前注册（hub 按源存活分流）。
         self._broker_register(idle_name, movie)
         if movie.start() is False:
             # 极端：idle 也被拒——保留最后渲染帧，释放 hold，等重试恢复
@@ -4302,8 +4301,8 @@ class PetWindow(QWidget):
                 movie.stop()
             except RuntimeError:
                 pass  # movie 的 C++ 侧已随库销毁（半销毁场景）：不得中断 closeEvent 后续清理
-            # P3 broker：窗口关闭 = 停播 → shareable idle 会话中止（aborted
-            # 广播，消费端本地回退）；broker 关 = no-op。
+            # 共享解码：窗口关闭 = 停播 → shareable idle 会话中止（订阅者
+            # 回绕合成 end，消费端本地回退）；broker 关 = no-op。
             try:
                 self._broker_unregister(getattr(self, 'anim', None), movie,
                                         natural=False)

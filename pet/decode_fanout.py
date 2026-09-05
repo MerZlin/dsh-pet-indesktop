@@ -25,7 +25,7 @@
 - **handover**：发布者离开且有订阅者时，摘旧 sink，把最老订阅者扶正为**新**
   发布者（``_publish_sink=source.sink`` + abort 其 feed 会话 → 其 reader 在
   ``_reader_feed`` 返回 False 后落回本地 ffmpeg 帧 0 起播，其 ``on_frame`` 开始
-  喂源 → 其余订阅者环自动续供）。
+  喂源 → 其余订阅者环续到回绕帧为止，随后按圈末语义正常切走）。
 - **节流/速度调和**（§2.4）：有效解码 divisor = min(在挂消费者期望值)；hub
   把有效值经 ``movie.set_decode_throttle`` 推给源 clip；源窗自身视觉降帧走
   ``_on_frame`` 既有跳帧分支（``decode_pace_external`` 标志置位后源窗
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 环形缓冲容量（drop-oldest，保低延迟；对齐 queue(8) 语义减半）
 RING_CAPACITY = 4
-# 看门狗无帧预算（1000ms+ε，> park 宽限 1s，杜绝合法驻留误判）
+# 看门狗无帧预算（覆盖合法无帧叠加链，杜绝驻留误判）
 # 复审 P2-4（批5.3）：合法无帧窗口会叠加——park 宽限 1.0s + re-arm ack 超时
 # 0.5s + fresh ffmpeg 拉起 ~250ms（病态但合法，GUI 拥塞/连点风暴）可超 1.1s。
 # 预算放宽到 1.9s 覆盖叠加链，避免误判 abort → 订阅者全部本地回退。
@@ -125,10 +125,6 @@ class _SourceSink:
             except ValueError:
                 pass
 
-    def has_subscribers(self) -> bool:
-        with self._lock:
-            return bool(self._subscribers)
-
     def close(self) -> None:
         with self._lock:
             self._open = False
@@ -152,7 +148,6 @@ class _FanoutFeedSession:
         self._last_src = -1
         self._stall_deadline = time.monotonic() + WATCHDOG_BUDGET_MS / 1000.0
         self._aborted = False
-        self._closed = False
         self._lock = threading.Lock()
 
     def abort(self) -> None:
@@ -190,7 +185,6 @@ class _FanoutFeedSession:
 
     def close(self) -> None:
         with self._lock:
-            self._closed = True
             self._ring.clear()
 
 
@@ -292,20 +286,11 @@ class DecodeFanoutHub:
     def __init__(self, *, enabled: bool = True) -> None:
         self._enabled = bool(enabled)
         self._sources: dict[str, _Source] = {}
-        self._closed = False
 
     # ---- 开关 / 角色 -------------------------------------------------------
     @property
     def enabled(self) -> bool:
         return self._enabled
-
-    def role_known(self) -> bool:
-        """角色即时可知（idle 类共享与碰撞角色解耦）→ 首个 idle 不再延迟起播。"""
-        return True
-
-    def is_coordinator(self) -> bool:
-        """兼容窗口既有分支（实际不用于分流）。"""
-        return True
 
     # ---- 绑定 / 解绑（hub 无会话可绑；保留签名平稳窗口调用点）---------------
     def bind(self, ipc_session) -> None:
@@ -329,7 +314,7 @@ class DecodeFanoutHub:
         5. 其余 → 挂订阅：``movie._feed_source = FanoutFeed(session)``
            （ready=True, result=session 立即就绪）→ ``'feed'``。
         """
-        if not self._enabled or self._closed:
+        if not self._enabled:
             return 'local'
         if not (hasattr(movie, '_publish_sink') and hasattr(movie, '_feed_source')):
             return 'local'  # GifClip/测试桩：无 fan-out 能力
@@ -361,7 +346,7 @@ class DecodeFanoutHub:
 
     def shareable_end(self, name, movie, natural: bool = True) -> None:
         """shareable movie 播完/停播后调用，幂等。"""
-        if not self._enabled or self._closed:
+        if not self._enabled:
             return
         asset = self._asset_of(movie, None)
         source = self._sources.get(asset) if asset else None
@@ -439,7 +424,7 @@ class DecodeFanoutHub:
     def _report_desired_throttle(self, movie, divisor: int) -> None:
         """窗口上报本窗期望解码 divisor（源窗被 pace_external 接管后也走这里
         而非直接推 movie）。hub 据此重算源 pace。"""
-        if not self._enabled or self._closed:
+        if not self._enabled:
             return
         divisor = max(1, int(divisor))
         for source in self._sources.values():
