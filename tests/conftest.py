@@ -32,6 +32,17 @@ def _mute_qt_audio(monkeypatch):
         return
     monkeypatch.setattr(QSoundEffect, "play", lambda self: None)
     monkeypatch.setattr(QMediaPlayer, "play", lambda self: None)
+    # 只静音 play() 不够：warm_click_sound_effects / ensure_qt_player 仍会真实
+    # 创建 QSoundEffect/QMediaPlayer/QAudioOutput。真实桌面会话上这些音频后端
+    # 对象反复初始化/释放是全量套件原生崩溃的炸点（崩溃点漂移，常在后续测试
+    # 的 processEvents 引爆）。测试进程内一律不创建原生 QtMultimedia 对象；
+    # 需要测音效逻辑的用例自行替换 qt_multimedia_classes 注入 Fake
+    # （test_click_sound.py 即如此，用例级 monkeypatch 会覆盖这里的 stub）。
+    from pet import click_sound
+
+    pool = click_sound._pool
+    monkeypatch.setattr(pool, "qt_multimedia_classes", lambda: None, raising=True)
+    monkeypatch.setattr(pool, "ensure_qt_player", lambda: None, raising=True)
 
 
 @pytest.fixture(autouse=True)
