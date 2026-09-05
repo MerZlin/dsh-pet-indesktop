@@ -411,6 +411,51 @@ def test_field_default_factory_and_individual_memory(tmp_path):
     assert slot2.get("click_sound_volume") == 0.99
 
 
+def test_fresh_spawn_reseeds_existing_slot_config_from_main(tmp_path, monkeypatch):
+    """显式“生小肥鱼”（DSH_PET_SPAWN_FRESH=1）即使复用旧 slot 配置也继承主配置。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    master = Config(base=tmp_path)
+    master.set("character", "shenshen")
+    master.set("playback_speed", 2.0)
+    master.set("click_sound_volume", 0.8)
+    master.save()
+
+    old_slot = Config(base=tmp_path, instance_id="slot-1")
+    old_slot.set("character", "dundun")
+    old_slot.set("playback_speed", 0.5)
+    old_slot.set("click_sound_volume", 0.2)
+    old_slot.save()
+
+    monkeypatch.setenv("DSH_PET_SPAWN_FRESH", "1")
+    fresh_slot = Config(base=tmp_path, instance_id="slot-1")
+    assert fresh_slot.get("character") == "shenshen"
+    assert fresh_slot.get("playback_speed") == 2.0
+    assert fresh_slot.get("click_sound_volume") == 0.8
+    # 副槽化字段仍不复制主鱼位置/自启
+    assert fresh_slot.get("rx") is None
+    assert fresh_slot.get("autostart_wanted") is False
+
+
+def test_normal_reopen_keeps_existing_slot_config(tmp_path, monkeypatch):
+    """普通重启/复用 slot 未带 SPAWN_FRESH 时，已有个体配置不被主配置覆盖。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    master = Config(base=tmp_path)
+    master.set("character", "shenshen")
+    master.save()
+
+    slot = Config(base=tmp_path, instance_id="slot-1")
+    slot.set("character", "dundun")
+    slot.save()
+
+    monkeypatch.delenv("DSH_PET_SPAWN_FRESH", raising=False)
+    reopened = Config(base=tmp_path, instance_id="slot-1")
+    assert reopened.get("character") == "dundun"
+
+
 def test_corrupt_config_backup_unique_timestamp(tmp_path):
     """场景 6：损坏配置唯一备份名，连续恢复不覆盖旧备份。"""
     config_dir = tmp_path / APP_DIR_NAME

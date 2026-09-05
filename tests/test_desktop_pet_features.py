@@ -567,6 +567,7 @@ def test_launch_new_pet_uses_detached_process(monkeypatch):
 
     assert captured["command"] == ["pet-program"]
     assert captured["kwargs"]["env"]["DSH_PET_SPAWN_OFFSET_INDEX"] == "1"
+    assert captured["kwargs"]["env"]["DSH_PET_SPAWN_FRESH"] == "1"
     if sys.platform == "win32":
         assert captured["kwargs"]["creationflags"]
     else:
