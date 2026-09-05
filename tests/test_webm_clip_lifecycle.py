@@ -35,9 +35,9 @@ def test_rapid_start_stop_no_leaked_running_threads():
     clip.cleanup()
     app.processEvents()
 
-    # 断言 clip._retired 中的线程已全部结束
-    for t in clip._retired:
-        assert not t.is_alive()
+    # 断言 clip._retired 中的 reader（线程+进程句柄记录）已全部结束
+    for r in clip._retired:
+        assert not r.thread.is_alive()
 
     # 断言无残留运行中的 reader 线程（或整体 threading 运行线程无残留）。
     # 线程退出是异步的，给一点宽限时间再断言，避免 CI 偶发“线程尚未完全回收”。
@@ -50,6 +50,54 @@ def test_rapid_start_stop_no_leaked_running_threads():
         time.sleep(0.05)
         app.processEvents()
     assert len(new_alive) == 0, f"Remaining unexpected threads: {new_alive}"
+
+
+def test_reader_cancelled_before_ffmpeg_process_start(monkeypatch):
+    clip = WebMClip(__file__)
+    stop_evt = threading.Event()
+    stop_evt.set()
+    calls = []
+    monkeypatch.setattr(
+        "pet.webm_clip.imageio_ffmpeg.read_frames",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    clip._reader(stop_evt, generation=clip._generation)
+
+    assert calls == []
+    clip.cleanup()
+
+
+def test_reader_cancelled_during_metadata_handshake_does_not_request_a_frame(monkeypatch):
+    clip = WebMClip(__file__)
+    stop_evt = threading.Event()
+    metadata_started = threading.Event()
+    release_metadata = threading.Event()
+    frame_requests = []
+
+    def controlled_frames(*_args, **_kwargs):
+        metadata_started.set()
+        assert release_metadata.wait(1.0)
+        yield {"fps": 24.0, "duration": 1.0}
+        frame_requests.append(True)
+        yield b""
+
+    monkeypatch.setattr("pet.webm_clip.imageio_ffmpeg.read_frames", controlled_frames)
+    reader = threading.Thread(
+        target=clip._reader,
+        args=(stop_evt, clip._generation),
+        daemon=True,
+    )
+    reader.start()
+    assert metadata_started.wait(1.0)
+
+    stop_evt.set()
+    release_metadata.set()
+    reader.join(timeout=1.0)
+
+    assert not reader.is_alive()
+    assert frame_requests == []
+    clip.cleanup()
 
 
 def test_stale_generation_reader_writes_dropped(monkeypatch):

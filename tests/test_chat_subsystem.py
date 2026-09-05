@@ -45,6 +45,17 @@ def test_sse_parser_ignores_keep_alive_and_empty_choices():
     assert parser.feed(b'data: {"choices":[]}\n\n') == []
 
 
+def test_sse_parser_empty_data_keepalive_and_buffer_cap():
+    """审查修复回归：空 data: 心跳行不解析不中止（DS-L20）；缓冲超 1MB 抛错（GLM-M5）。"""
+    parser = SSEParser()
+    # 空 data 行（部分 OpenAI 兼容服务的心跳）+ 正常内容混排：只取内容
+    out = parser.feed(b'data:\n\ndata: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: \n\n')
+    assert out == ['ok']
+    # 缓冲无界增长防护：超过 1MB 未分隔数据 → ProviderError
+    with pytest.raises(ProviderError):
+        parser.feed(b'x' * (1024 * 1024 + 1))
+
+
 def test_prompt_priority_and_limits(tmp_path: Path):
     character_dir = tmp_path / "assets" / "characters" / "cat"
     character_dir.mkdir(parents=True)
@@ -86,6 +97,8 @@ def test_session_store_atomic_roundtrip_and_corruption(tmp_path: Path):
     assert loaded is not None
     assert loaded.messages[0].content == "hi"
     loaded_path = tmp_path / "sessions" / "cat" / f"{session.session_id}.json"
+    # 异步写盘（B8）：直接 poke 磁盘路径前先确保已落盘
+    assert store.flush()
     loaded_path.write_text("{bad", encoding="utf-8")
     recovered = store.load(session.session_id)
     assert recovered is None
@@ -97,8 +110,27 @@ def test_provider_error_is_safe():
     assert "401" in str(error)
     assert "api_key" not in str(error).lower()
 
-def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path):
+def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path, monkeypatch):
     from pet.config import Config
+
+    # 内存假 keyring：加载时明文迁移（_migrate_plaintext_keys_to_keyring）会把
+    # legacy chat_api_key 搬进去，不碰真实系统钥匙串。
+    class _FakeStore:
+        shared = {}
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, ref):
+            return self.shared.get(ref, "") if ref else ""
+
+        def set(self, ref, value):
+            self.shared[ref] = value
+            return True
+
+    _FakeStore.shared = {}
+    monkeypatch.setattr("pet.chat.models.SecretStore", _FakeStore)
+
     root = tmp_path / "appdata"
     cfg_dir = root / "dsh-pet-standalone"
     cfg_dir.mkdir(parents=True)
@@ -115,7 +147,10 @@ def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path):
     assert settings.default_system_prompt == "legacy prompt"
     assert settings.active_config.base_url == "https://deepseek.example/v1/"
     assert settings.active_config.model == "deepseek-chat"
-    assert settings.active_config.api_key == "secret-value"
+    # 明文 key 已迁移进 keyring：内存 api_key 置空，经 keyring 优先序仍可解析
+    assert settings.active_config.api_key == ""
+    assert _FakeStore.shared["provider/openai-main"] == "secret-value"
+    assert cfg.resolve_api_key(settings.active_config) == "secret-value"
     cfg.save()
     assert json.loads((cfg_dir / "config.json").read_text(encoding="utf-8"))["version"] == 4
 
@@ -1879,32 +1914,6 @@ def test_pet_animation_and_self_talk_defaults_are_persisted(tmp_path: Path):
     assert loaded.get("self_talk_texts") == ["one", "two"]
 
 
-
-def test_pet_settings_dialog_saves_animation_gap_and_self_talk(tmp_path: Path):
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication
-    from pet.config import Config
-    from pet.settings_dialog import PetSettingsDialog
-
-    app = QApplication.instance() or QApplication([])
-    config = Config(tmp_path)
-    dialog = PetSettingsDialog(config)
-    assert dialog.isModal() is False
-    assert dialog.windowModality() == Qt.WindowModality.NonModal
-    dialog.gap_spin.setValue(4.5)
-    dialog.self_talk_check.setChecked(True)
-    dialog.min_spin.setValue(7)
-    dialog.max_spin.setValue(12)
-    dialog.texts_edit.setPlainText("自定义一\n自定义二")
-    dialog._save()
-    assert config.get("animation_gap_seconds") == 4.5
-    assert config.get("self_talk_enabled") is True
-    assert config.get("self_talk_min_interval") == 7.0
-    assert config.get("self_talk_max_interval") == 12.0
-    assert config.get("self_talk_texts") == ["自定义一", "自定义二"]
-    app.processEvents()
-
-
 def test_reference_animation_materials_are_folder_classified():
     from pet import catalog
 
@@ -2177,4 +2186,237 @@ def test_chat_settings_dialog_warns_when_keyring_unavailable(tmp_path, monkeypat
     assert len(warnings) == 1
     assert "系统安全存储" in str(warnings[0][2])
     assert dialog.settings.active_config.api_key == "sk-new"
+    app.processEvents()
+
+
+def test_chat_window_system_notification_when_not_active(tmp_path):
+    """聊天窗口非活动时发送系统通知；点击回调可聚焦窗口。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    calls = []
+    win = ChatWindow(
+        Config(tmp_path),
+        "shenshen",
+        notifier=lambda title, message, on_click=None: calls.append((title, message, on_click)),
+    )
+    try:
+        win._show_system_notice("对话完成", "AI 已回复完成，点击查看。")
+        assert len(calls) == 1
+        assert calls[0][0] == "对话完成"
+        assert calls[0][1] == "AI 已回复完成，点击查看。"
+        # 点击默认回调应把窗口带回前台（能调用不抛异常即可）
+        calls[0][2]()
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_chat_window_authorization_error_opens_settings(tmp_path):
+    """认证失败类系统通知的点击回调应打开 AI 设置。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    settings_opened = []
+    notices = []
+    win = ChatWindow(
+        Config(tmp_path),
+        "shenshen",
+        notifier=lambda title, message, on_click=None: notices.append((title, on_click)),
+        auth_callback=lambda: settings_opened.append(1),
+    )
+    try:
+        assert win._looks_like_authorization_error("HTTP 401 Unauthorized")
+        assert win._looks_like_authorization_error("认证失败：invalid api key")
+        assert not win._looks_like_authorization_error("connection reset")
+        win._show_system_notice("需要授权", "请检查 API Key", on_click=win._focus_auth_settings)
+        assert len(notices) == 1
+        notices[0][1]()
+        assert settings_opened == [1]
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_system_notification_respects_disabled_setting(tmp_path):
+    """关闭“系统通知”设置后，即使窗口非活动也不再弹系统通知。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    cfg.set("system_notifications_enabled", False)
+    cfg.save()
+    calls = []
+    win = ChatWindow(
+        cfg,
+        "shenshen",
+        notifier=lambda title, message, on_click=None: calls.append((title, message)),
+    )
+    try:
+        win._show_system_notice("对话完成", "不应弹出")
+        assert calls == []
+    finally:
+        win.close()
+        _app.processEvents()
+
+
+def test_chat_settings_dialog_persists_system_notification_toggle(tmp_path):
+    """AI 设置中的“系统通知”开关应能保存并重新读取。"""
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.settings_dialog import ChatSettingsDialog
+    from pet.config import Config
+
+    _app = QApplication.instance() or QApplication([])
+    cfg = Config(tmp_path)
+    dlg = ChatSettingsDialog(cfg)
+    try:
+        assert dlg.system_notify_check.isChecked() is True
+        dlg.system_notify_check.setChecked(False)
+        dlg.save()
+        assert Config(tmp_path).get("system_notifications_enabled") is False
+    finally:
+        dlg.close()
+        _app.processEvents()
+
+
+def test_delete_current_session_during_streaming_resets_typewriter(tmp_path: Path, monkeypatch):
+    """审查 DS-M6 回归（modern）：删除当前会话时停打字机并丢弃未排空输出，
+    防幻影消息写入新加载的会话。"""
+    from PySide6.QtWidgets import QApplication, QDialog
+    from pet.chat import widgets as chat_widgets
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = chat_widgets.ChatWindow(Config(tmp_path), "shenshen")
+    old_id = window.session.session_id
+    window._pending_output = "残文"
+    window._pending_finish_text = "最终"
+    window._active_request_id = "req-1"
+
+    monkeypatch.setattr(
+        chat_widgets.DeleteConversationDialog, "exec",
+        lambda _d: QDialog.DialogCode.Accepted,
+    )
+    window._delete_sessions([old_id])
+
+    assert window.session.session_id != old_id
+    assert window._pending_output == ""
+    assert window._pending_finish_text is None
+    assert window._active_request_id is None
+    assert window.session.messages == []
+    window.close()
+    app.processEvents()
+
+
+def test_legacy_delete_current_session_calls_reset(tmp_path: Path, monkeypatch):
+    """审查 DS-M6 回归（legacy）：删除当前会话同样走 _reset 收口。"""
+    from PySide6.QtWidgets import QApplication
+    from pet.chat.legacy_widgets import ChatWindow as LegacyChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = LegacyChatWindow(Config(tmp_path), "shenshen")
+    calls = []
+    monkeypatch.setattr(window, "_reset", lambda: calls.append(1))
+    window.delete_current_session()
+    assert calls == [1]
+    window.close()
+    app.processEvents()
+
+
+def test_append_message_atomic_across_store_instances(tmp_path: Path):
+    """审查 R3 P1 回归：append_message 原子「读-追加-提交」——两个
+    SessionStore 实例（模拟 modern/legacy/QuickChat 各持一份）交错发送
+    互不覆盖；吸收外部消息时 absorbed=True；会话已删返回 (None, False)。"""
+    from pet.chat.models import ChatMessage
+    from pet.chat.session_store import SessionStore
+
+    store_a = SessionStore(tmp_path, instance_id="shared")
+    store_b = SessionStore(tmp_path, instance_id="shared")  # 同实例目录，另一前端
+    s = store_a.create("shenshen", "p", "prompt")
+    store_a.save(s)
+    store_a.flush()
+
+    # A 先发送（B 的内存快照此后变陈旧）
+    out, absorbed = store_a.append_message(s, ChatMessage("user", "A 的消息"))
+    assert out is not None and absorbed is False
+    store_a.flush()
+
+    # B 用陈旧快照发送：必须吸收 A 的消息而不是覆盖
+    out_b, absorbed_b = store_b.append_message(s, ChatMessage("user", "B 的消息"))
+    assert out_b is not None and absorbed_b is True
+    texts = [m.content for m in out_b.messages]
+    assert "A 的消息" in texts and "B 的消息" in texts
+
+    # 会话已删 → (None, False)
+    store_a.delete(out_b)
+    store_a.flush()
+    ghost, absorbed_ghost = store_b.append_message(out_b, ChatMessage("user", "x"))
+    assert ghost is None and absorbed_ghost is False
+
+
+def test_append_message_concurrent_no_lost_messages(tmp_path: Path):
+    """并发压力：两个前端各发 20 条，最终 40 条全在。"""
+    import threading
+
+    from pet.chat.models import ChatMessage
+    from pet.chat.session_store import SessionStore
+
+    store_a = SessionStore(tmp_path, instance_id="shared")
+    store_b = SessionStore(tmp_path, instance_id="shared")
+    s = store_a.create("shenshen", "p", "prompt")
+    store_a.save(s)
+    store_a.flush()
+
+    def blast(store, tag):
+        for i in range(20):
+            store.append_message(s, ChatMessage("user", f"{tag}-{i}"))
+
+    t1 = threading.Thread(target=blast, args=(store_a, "A"))
+    t2 = threading.Thread(target=blast, args=(store_b, "B"))
+    t1.start(); t2.start(); t1.join(); t2.join()
+    store_a.flush()
+
+    final = store_a.load(s.session_id, "shenshen")
+    contents = {m.content for m in final.messages}
+    assert len(contents) == 40
+    assert all(f"A-{i}" in contents for i in range(20))
+    assert all(f"B-{i}" in contents for i in range(20))
+
+
+def test_send_message_resyncs_stale_session_from_disk(tmp_path: Path, monkeypatch):
+    """审查 DS-M7 回归：另一前端写过同一会话后，本窗发送先对齐磁盘，
+    两条消息都保留（陈旧快照不再整体覆盖）。"""
+    from PySide6.QtWidgets import QApplication
+    from pet.chat import widgets as chat_widgets
+    from pet.chat.models import ChatMessage
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = chat_widgets.ChatWindow(Config(tmp_path), "shenshen")
+    session_id = window.session.session_id
+
+    disk = window.store.load(session_id, "shenshen")
+    disk.messages.append(ChatMessage("user", "来自另一窗口"))
+    window.store.save(disk)
+    window.store.flush()
+
+    window.input.setPlainText("本窗发送")
+    monkeypatch.setattr(window, "_begin_generation", lambda *a, **k: None)
+    window.send_message()
+
+    texts = [m.content for m in window.session.messages]
+    assert "来自另一窗口" in texts
+    assert "本窗发送" in texts
+    window.close()
     app.processEvents()

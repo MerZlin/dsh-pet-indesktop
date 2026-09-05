@@ -5,3 +5,11 @@ keyring>=25
 certifi>=2024.0.0
 pycaw>=0.0.13; platform_system == "Windows"
 tzdata>=2024.1
+
+# —— 开发依赖（测试 + 静态检查）——
+# pytest：测试套件入口（README「测试与验证」与本仓库 CI 都依赖它）。
+# ruff：`ruff check pet/ tests/` 用的静态检查器（规则基线见 pyproject.toml
+# 的 [tool.ruff]，仅 F 级）。不参与运行时；声明在此使 fresh environment
+# 能按 requirements 复现静态检查（FINAL_REVIEW_GPT.md 提交卫生项，批10 补）。
+pytest>=8
+ruff>=0.5

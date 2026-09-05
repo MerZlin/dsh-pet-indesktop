@@ -78,8 +78,13 @@ sequenceDiagram
   event loops and process boundaries; mock only operating-system or network
   boundaries that cannot run deterministically.
 - A fix is complete when the focused regression is red before the product
-  change, green afterward, the related test file passes, and the full suite
-  passes.
+  change, green afterward, and verification matches the risk gate below.
+- Run the full suite for shared models/config migrations, application lifecycle,
+  threading/IPC, packaging/dependencies, platform branches, changes spanning
+  multiple test domains, or the final accumulated branch before merge.
+- Focused plus related tests are sufficient for a local presentation token or
+  isolated widget behavior when interfaces, persisted data, lifecycle, and
+  platform dispatch are unchanged. Record why the full suite was skipped.
 - Keep `CollisionIpcSession.stop()` ordering intact: stop producers, send leave,
   close local endpoints and timers, then quit/wait for the worker thread.
 - Keep QLocal test server names short. POSIX converts names to Unix socket paths,
@@ -90,6 +95,39 @@ Run focused tests before `python -m pytest -q`. Set
 sandbox may deny Unix socket creation; rerun QLocalServer tests with local IPC
 permission rather than treating errno 1 as a product failure.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs use Local Markdown under `.scratch/<feature-slug>/`. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical local triage states. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use the single-context layout: root `CONTEXT.md` and system ADRs under
+`docs/adr/`. See `docs/agents/domain.md`.
+
+### Qt UI review
+
+Use `.agents/skills/qt-ui-review/SKILL.md` when reviewing settings, menus,
+overlays, QSS, accessibility, or cross-platform desktop presentation.
+
+### Qt UI development
+
+Use `.agents/skills/desktop-pet-ui-style/SKILL.md` when adding or materially
+restyling settings, menus, dialogs, overlays, or desktop widgets.
+
+### Work handoff
+
+For unfinished multi-ticket work, read and refresh the feature's
+`.scratch/<feature-slug>/HANDOFF.md` before ending or resuming work. Keep the
+exact breakpoint there; see `docs/agents/handoff.md`.
+
 ## Context pointers
 
 - Read `docs/ISSUE-42-POSIX-COLLISION-IPC-2026-08-31.md` when changing collision
@@ -97,5 +135,9 @@ permission rather than treating errno 1 as a product failure.
 - Read `docs/ONEDIR_PACKAGING.md` when changing PyInstaller specs, bundled
   resources, or platform build scripts.
 - Read `docs/STABLE_BUILDS.md` when changing release/build workflows.
+- Read `docs/CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md` when changing
+  context-menu structure, styling, interaction, or platform behavior.
+- Read `docs/SETTINGS-CHANGE-GATES.md` before adding, moving, removing, or
+  changing a persistent setting or its settings-page interaction.
 - Treat `assets/characters/<id>/videos/` plus its manifest as one character
   package; preserve relative paths and case because packaged platforms differ.

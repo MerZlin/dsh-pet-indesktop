@@ -36,6 +36,12 @@ fi
 
 mkdir -p "$DIST_DIR" "$WORK_DIR"
 
+# 按当前 PySide6 Qt 精确版本构建 Fcitx 插件，避免系统 Qt6 插件的私有 ABI 不匹配。
+FCITX5_PLUGIN_DIR="$(mktemp -d /tmp/dsh-pet-fcitx-package.XXXXXX)"
+trap 'rm -rf "$FCITX5_PLUGIN_DIR"' EXIT
+FCITX5_PLUGIN="$FCITX5_PLUGIN_DIR/libfcitx5platforminputcontextplugin.so"
+"$ROOT/scripts/build_pyside6_fcitx_plugin.sh" "$PYTHON_BIN" "$FCITX5_PLUGIN"
+
 IFS=',' read -ra variant_list <<< "$VARIANTS"
 for variant in "${variant_list[@]}"; do
     case "$variant" in
@@ -59,6 +65,7 @@ for variant in "${variant_list[@]}"; do
         --collect-all imageio_ffmpeg
         --collect-all certifi
         --collect-all PySide6.QtMultimedia
+        --add-binary "$FCITX5_PLUGIN:PySide6/Qt/plugins/platforminputcontexts"
         --add-data "$assets:$assets"
         --add-data "assets/sounds:assets/sounds"
         --add-data "assets/chat:assets/chat"
@@ -66,6 +73,10 @@ for variant in "${variant_list[@]}"; do
         --add-data "pet/menu_templates:pet/menu_templates"
         --add-data "integrations:integrations"
     )
+    # 设置页样式表（批6-7 从 modern_settings_dialog.py 抽出）：全部变体都需要
+    args+=(--add-data "pet/settings_styles.qss:pet")
+    args+=(--add-data "pet/settings_styles_dark.qss:pet")
+    args+=(--add-data "pet/settings_styles_dark_browser.qss:pet")
     if [[ "$name" == *-chat ]]; then
         args+=(--collect-all keyring)
         args+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")

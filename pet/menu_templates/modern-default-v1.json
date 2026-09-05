@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "layout_id": "modern-default-v1",
+  "nodes": [
+    {"type": "action", "id": "ojingjing", "visible": true, "section": "profile"},
+    {"type": "separator", "id": "default.separator-profile", "visible": true},
+    {"type": "action", "id": "chat", "visible": true, "section": "interaction"},
+    {"type": "action", "id": "look_screen", "visible": true, "section": "interaction"},
+    {"type": "separator", "id": "default.separator-interaction", "visible": true},
+    {"type": "action", "id": "animations_hub", "visible": true, "section": "playback"},
+    {"type": "action", "id": "character", "visible": true, "section": "playback"},
+    {"type": "action", "id": "playback_speed", "visible": true, "section": "playback"},
+    {"type": "action", "id": "size", "visible": true, "section": "playback"},
+    {"type": "separator", "id": "default.separator-playback", "visible": true},
+    {
+      "type": "submenu",
+      "id": "pet_controls",
+      "label": "桌宠控制",
+      "visible": true,
+      "section": "pet",
+      "children": [
+        {"type": "action", "id": "drag_physics", "visible": true},
+        {"type": "action", "id": "no_move", "visible": true},
+        {"type": "action", "id": "mouse_through", "visible": true},
+        {"type": "action", "id": "on_top", "visible": true},
+        {"type": "action", "id": "autostart", "visible": true},
+        {"type": "action", "id": "return_corner", "visible": true},
+        {"type": "action", "id": "hide_pet", "visible": true},
+        {"type": "action", "id": "spawn_pet", "visible": true}
+      ]
+    },
+    {"type": "action", "id": "quick_launch", "visible": true, "section": "pet"},
+    {"type": "separator", "id": "default.separator-pet", "visible": true},
+    {
+      "type": "submenu",
+      "id": "tools_help",
+      "label": "工具与帮助",
+      "visible": true,
+      "section": "tools",
+      "children": [
+        {"type": "action", "id": "balance", "visible": true},
+        {"type": "action", "id": "harness", "visible": true},
+        {"type": "action", "id": "deepseek_web", "visible": true},
+        {"type": "action", "id": "check_update", "visible": true},
+        {"type": "action", "id": "github_project", "visible": true},
+        {"type": "action", "id": "quark_download", "visible": true}
+      ]
+    },
+    {"type": "action", "id": "agent_link", "visible": true, "section": "tools"},
+    {"type": "action", "id": "proactive_screen", "visible": true, "section": "tools"},
+    {"type": "action", "id": "todo_panel", "visible": true, "section": "tools"},
+    {"type": "separator", "id": "default.separator-tools", "visible": true},
+    {"type": "action", "id": "modern_settings", "visible": true, "section": "system"},
+    {"type": "action", "id": "quit", "visible": true, "section": "system"}
+  ]
+}

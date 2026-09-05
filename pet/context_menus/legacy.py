@@ -58,7 +58,10 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     build_size_menu(menu, pet, icons=False)
 
     menu.addSeparator()
-    add_harness(menu, pet, icons=False)
+    # 纯桌宠（无 Chat/DSH 联动）版本不再显示“启动 DeepSeek Harness”，
+    # 仅保留“打开网页版 DeepSeek”。
+    if getattr(pet, "on_open_chat", None) is not None:
+        add_harness(menu, pet, icons=False)
     add_deepseek_web(menu, icons=False)
     add_proactive_menu(menu, pet)
     add_agent_link_menu(menu, pet)

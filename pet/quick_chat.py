@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -61,6 +62,7 @@ class QuickChatBubble(QFrame):
         self._reply_text = ""
         self._page = 0
         self._pages: list[str] = []
+        self._deactivate_check_pending = False
 
         self._build()
         self._connect()
@@ -200,6 +202,10 @@ class QuickChatBubble(QFrame):
         sessions = self.store.list(self.character_id)
         return sessions[0] if sessions else self._new_session()
 
+    def refresh_session(self) -> None:
+        """从磁盘重取最近会话（公开 seam；角色切换后外部刷新用，替代私访 _get_session）。"""
+        self.session = self._get_session()
+
     def _new_session(self):
         session = self.store.create(
             self.character_id,
@@ -247,8 +253,15 @@ class QuickChatBubble(QFrame):
         if not text:
             return
         self.input.clear()
-        self.session.messages.append(ChatMessage("user", text))
-        self.store.save(self.session)
+        # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」
+        synced, _absorbed = self.store.append_message(
+            self.session, ChatMessage("user", text)
+        )
+        if synced is None:
+            self.session.messages.append(ChatMessage("user", text))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         self.output.setText("")
         self._reply_text = ""
         self._page = 0
@@ -277,8 +290,12 @@ class QuickChatBubble(QFrame):
         if request_id != self._active_request_id:
             return
         self._reply_text = str(text or "")
-        self.session.messages.append(ChatMessage("assistant", self._reply_text))
-        self.store.save(self.session)
+        synced, _absorbed = self.store.append_message(self.session, ChatMessage("assistant", self._reply_text))
+        if synced is None:
+            self.session.messages.append(ChatMessage("assistant", self._reply_text))
+            self.store.save(self.session)
+        else:
+            self.session = synced
         self._active_request_id = None
         self.hint_label.setText("")
         self._render_reply()
@@ -325,6 +342,22 @@ class QuickChatBubble(QFrame):
             pet.on_open_chat()
         elif hasattr(self, "open_chat_callback") and callable(self.open_chat_callback):
             self.open_chat_callback()
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.WindowDeactivate and self.isVisible():
+            # Cocoa 在另一个应用内窗口仍活动时首次 show/activate Tool 窗口，
+            # 会产生一次过渡性的 WindowDeactivate；此时同步 close 会留下只
+            # 有原生灰色底板的空白窗口。下一事件轮的 activeWindow 已稳定，
+            # 可以区分这次过渡和用户真正切走焦点。
+            if not self._deactivate_check_pending:
+                self._deactivate_check_pending = True
+                QTimer.singleShot(0, self, self._close_if_still_inactive)
+        return super().event(event)
+
+    def _close_if_still_inactive(self) -> None:
+        self._deactivate_check_pending = False
+        if self.isVisible() and QApplication.activeWindow() is not self:
+            self.close()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.service.busy:

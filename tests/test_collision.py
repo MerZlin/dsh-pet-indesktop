@@ -20,6 +20,7 @@ import math
 import pytest
 
 from pet import collision
+from pet import collision_codec
 from pet import physics
 
 
@@ -135,8 +136,8 @@ class TestCollisionCircleChain:
         assert collision.check_collision_circles(circles_a, circles_b)[0] is True
 
     def test_member_without_circles_uses_ellipse_fallback(self):
-        a = collision.MemberState("a", 0, 0, 50, 20)
-        b = collision.MemberState("b", 55, 55, 20, 50)
+        a = collision.MemberState(runtime_id="a", x=0.0, y=0.0, radius_x=50.0, radius_y=20.0)
+        b = collision.MemberState(runtime_id="b", x=55.0, y=55.0, radius_x=20.0, radius_y=50.0)
         assert collision.check_collision_members(a, b)[0] is False
 
     def test_swept_circle_chain_detects_fast_crossing(self):
@@ -585,13 +586,13 @@ class TestProtocolFrameEncodingAndDecoding:
             "scale": 0.72,
             "flags": 1,
         }
-        frame_bytes = collision.encode_frame(msg)
+        frame_bytes = collision_codec.encode_frame(msg)
         assert len(frame_bytes) > 4
         # 头部 4 字节为载荷长度
         payload_len = int.from_bytes(frame_bytes[:4], byteorder="big")
         assert payload_len == len(frame_bytes) - 4
 
-        decoder = collision.FrameStreamDecoder()
+        decoder = collision_codec.FrameStreamDecoder()
         results = decoder.feed(frame_bytes)
         assert len(results) == 1
         assert results[0] == msg
@@ -601,11 +602,11 @@ class TestProtocolFrameEncodingAndDecoding:
         msg1 = {"type": "hello", "runtime_id": "p1"}
         msg2 = {"type": "leave", "runtime_id": "p1"}
 
-        b1 = collision.encode_frame(msg1)
-        b2 = collision.encode_frame(msg2)
+        b1 = collision_codec.encode_frame(msg1)
+        b2 = collision_codec.encode_frame(msg2)
         combined = b1 + b2
 
-        decoder = collision.FrameStreamDecoder()
+        decoder = collision_codec.FrameStreamDecoder()
 
         # 分 3 个任意切片喂入
         chunk1 = combined[:10]
@@ -654,24 +655,24 @@ class TestProtocolFrameEncodingAndDecoding:
             "members": members,
         }
 
-        frame = collision.encode_frame(snapshot)
-        assert len(frame) - collision.HEADER_SIZE > 4096
-        assert collision.FrameStreamDecoder().feed(frame) == [snapshot]
+        frame = collision_codec.encode_frame(snapshot)
+        assert len(frame) - collision_codec.HEADER_SIZE > 4096
+        assert collision_codec.FrameStreamDecoder().feed(frame) == [snapshot]
 
     def test_encoder_rejects_payload_over_protocol_limit(self):
         """发送端和接收端必须共享同一个最大帧边界。"""
         with pytest.raises(ValueError, match="exceeds limit"):
-            collision.encode_frame({"blob": "x" * collision.FRAME_MAX_LENGTH})
+            collision_codec.encode_frame({"blob": "x" * collision_codec.FRAME_MAX_LENGTH})
 
     def test_empty_frame_corrupted_json_and_oversized_frame_no_exception(self):
         """坏 JSON、空帧、超长帧返回 DecodeError 且不抛未捕获异常。"""
-        decoder = collision.FrameStreamDecoder(max_frame_len=4096)
+        decoder = collision_codec.FrameStreamDecoder(max_frame_len=4096)
 
         # 1. 空帧 (长度 0)
         empty_header = (0).to_bytes(4, byteorder="big")
         res_empty = decoder.feed(empty_header)
         assert len(res_empty) == 1
-        assert isinstance(res_empty[0], collision.DecodeError)
+        assert isinstance(res_empty[0], collision_codec.DecodeError)
         assert "Empty frame" in res_empty[0].reason
 
         # 2. 坏 JSON 载荷
@@ -679,7 +680,7 @@ class TestProtocolFrameEncodingAndDecoding:
         bad_frame = len(bad_json_payload).to_bytes(4, byteorder="big") + bad_json_payload
         res_bad = decoder.feed(bad_frame)
         assert len(res_bad) == 1
-        assert isinstance(res_bad[0], collision.DecodeError)
+        assert isinstance(res_bad[0], collision_codec.DecodeError)
         assert "JSON decode error" in res_bad[0].reason
 
         # 3. 超长帧 (> 4096 字节)
@@ -687,7 +688,7 @@ class TestProtocolFrameEncodingAndDecoding:
         oversized_header = oversized_len.to_bytes(4, byteorder="big") + b"x" * 20
         res_over = decoder.feed(oversized_header)
         assert len(res_over) == 1
-        assert isinstance(res_over[0], collision.DecodeError)
+        assert isinstance(res_over[0], collision_codec.DecodeError)
         assert "exceeds limit" in res_over[0].reason
 
 
@@ -696,7 +697,7 @@ class TestWatermarkDeduplication:
 
     def test_watermark_deduplication_lifecycle(self):
         """测试同一个 epoch 下单调递增，以及新 epoch 的重置。"""
-        dedup = collision.WatermarkDeduplicator()
+        dedup = collision_codec.WatermarkDeduplicator()
 
         epoch1 = "epoch-20260830-001"
         pair_ab = "petA|petB"

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 import pet.agent_link as agent_link
 from pet.agent_link import (
     AgentLinkManager,
+    AgentEvent,
     BaseAgentMonitor,
     ByteOffsetTailer,
     DirGlobTailer,
@@ -34,6 +36,103 @@ from pet.agent_link import (
 from pet.config import Config
 from pet.config import _clean_agent_link_data, _clean_custom_agents
 from pet.speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
+
+
+class TestMainlineAgentLinkHardening:
+    def test_monitor_polling_uses_worker_and_stops(self, tmp_path):
+        """监视器轮询不占 GUI 线程，stop 后 worker 必须退出。"""
+        app = QApplication.instance() or QApplication([])
+        seen = []
+        ready = threading.Event()
+
+        class ProbeMonitor(BaseAgentMonitor):
+            _POLL_INTERVAL_S = 0.01
+
+            def _poll(self, gen=None):
+                seen.append(threading.get_ident())
+                self._emit_state("working", self._emit_gen if gen is None else gen)
+                ready.set()
+                self._worker_stop.set()
+
+        monitor = ProbeMonitor("probe", tmp_path)
+        events = []
+        monitor.state_event.connect(events.append)
+        monitor.start()
+        assert ready.wait(1.0)
+        app.processEvents()
+        assert seen and seen[0] != threading.get_ident()
+        assert events and isinstance(events[0], AgentEvent)
+        assert events[0].gen == monitor._gen
+        monitor.stop()
+        assert monitor._worker is not None and not monitor._worker.is_alive()
+
+    def test_pause_buffers_events_until_resume(self, tmp_path):
+        """隐藏期间落在 poll 中的状态事件在 resume 时补发。"""
+        monitor = BaseAgentMonitor("probe", tmp_path)
+        events = []
+        monitor.state_event.connect(events.append)
+        monitor.start()
+        monitor.pause()
+        monitor._emit_state("working", monitor._emit_gen)
+        assert events == []
+        monitor.resume()
+        assert [event.state for event in events] == ["working"]
+        monitor.stop()
+
+    def test_stale_generation_is_rejected_at_manager(self, tmp_path):
+        class Win:
+            def isVisible(self):
+                return True
+
+            def mark_activity(self):
+                pass
+
+        mgr = AgentLinkManager(Win(), Config(base=tmp_path), min_interval=0.0)
+        monitor = mgr.monitors["cursor"]
+        monitor.start()
+        old_gen = monitor._emit_gen
+        monitor.stop()
+        monitor.start()
+        current_gen = monitor._emit_gen
+        mgr._on_agent_state_event(AgentEvent("cursor", "state", gen=old_gen, state="working"))
+        assert "cursor" not in mgr._last_raw
+        mgr._on_agent_state_event(AgentEvent("cursor", "state", gen=current_gen, state="working"))
+        assert mgr._last_raw["cursor"] == "working"
+        mgr.shutdown()
+
+    def test_install_completion_from_old_token_is_dropped(self, tmp_path):
+        bubbles = []
+
+        class Win:
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(Win(), cfg)
+        mgr._install_pending["dsh"] = 11
+        mgr._on_install_finished("dsh", True, "ok", 10)
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert mgr._install_pending["dsh"] == 11
+        assert bubbles == []
+        mgr.shutdown()
+
+    def test_state_and_activity_refresh_idle_activity_anchor(self, tmp_path):
+        class Win:
+            def __init__(self):
+                self.activity_count = 0
+
+            def isVisible(self):
+                return True
+
+            def mark_activity(self):
+                self.activity_count += 1
+
+        win = Win()
+        mgr = AgentLinkManager(win, Config(base=tmp_path), min_interval=0.0)
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_agent_activity("dsh", "read")
+        assert win.activity_count == 2
+        mgr.shutdown()
 
 
 # ============================================================================
@@ -519,22 +618,26 @@ class TestAgentMenuRebound:
         cfg = Config(base=tmp_path)
         lib = MovieLibrary(character_id="shenshen")
         win = PetWindow(lib, cfg)
+        try:
+            class FakeAction:
+                def __init__(self):
+                    self.checked = True  # 用户刚勾上
+                    self._blocked = []
 
-        class FakeAction:
-            def __init__(self):
-                self.checked = True  # 用户刚勾上
-                self._blocked = []
+                def blockSignals(self, b):
+                    self._blocked.append(b)
 
-            def blockSignals(self, b):
-                self._blocked.append(b)
+                def setChecked(self, v):
+                    self.checked = v
 
-            def setChecked(self, v):
-                self.checked = v
-
-        act = FakeAction()
-        win._toggle_agent_link("claude", True, act)
-        assert act.checked is False  # 回滚
-        assert cfg.data["agent_link"]["claude"] is False  # 配置未开启
+            act = FakeAction()
+            win._toggle_agent_link("claude", True, act)
+            assert act.checked is False  # 回滚
+            assert cfg.data["agent_link"]["claude"] is False  # 配置未开启
+        finally:
+            win.close()
+            win.deleteLater()
+            app.processEvents()
 
     def test_bom_prefixed_file_tolerated(self, tmp_path):
         """PowerShell Add-Content -Encoding UTF8 会在新建文件首行写 BOM，
@@ -569,6 +672,7 @@ class TestRealFormatMappers:
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "assistant"}})) == ""
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-start"}})) == "working"
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish"}})) == "idle"
+        assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}})) == ""
         assert opencode_event_state("session.updated.1", "{}") == ""
         assert opencode_event_state("message.part.updated.1", "not json") == ""
 
@@ -609,16 +713,58 @@ class TestOpenCodeSqliteTail:
         assert received == ["thinking", "working"]  # session.updated 被忽略
         mon.stop()
 
+    def test_database_replacement_restarts_backfill(self, tmp_path):
+        """OpenCode 重建数据库后不沿用旧 rowid，也不重放新库历史行。"""
+        import os
+        import sqlite3
+        from pet.agent_link import OpenCodeMonitor
+
+        db_path = tmp_path / "opencode.db"
+
+        def make_db(path, rows):
+            db = sqlite3.connect(path)
+            db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+            for seq, event_type, data in rows:
+                db.execute("INSERT INTO event VALUES ('s1', ?, ?, ?)", (seq, event_type, data))
+            db.commit()
+            db.close()
+
+        make_db(db_path, [(1, "session.created.1", "{}")])
+        mon = OpenCodeMonitor(tmp_path / "cfg", db_path=db_path)
+        received = []
+        mon.state_changed.connect(lambda _agent, state: received.append(state))
+        mon._poll()
+
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('s1', 2, 'message.updated.1', '{\"info\":{\"role\":\"user\"}}')")
+        db.commit()
+        db.close()
+        mon._poll()
+        assert received == ["thinking"]
+
+        replacement = tmp_path / "opencode-new.db"
+        make_db(replacement, [(1, "message.updated.1", '{"info":{"role":"user"}}')])
+        os.replace(replacement, db_path)
+        mon._poll()  # 新库既有内容只用于 backfill，不能重放
+        assert received == ["thinking"]
+
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('s1', 2, 'message.part.updated.1', '{\"part\":{\"type\":\"step-start\"}}')")
+        db.commit()
+        db.close()
+        mon._poll()
+        assert received == ["thinking", "working"]
+
 
 class TestCooldownUnits:
     def test_seconds_and_minutes_conversion(self, tmp_path):
         """冷却间隔秒/分钟双单位：45 秒应存为 0.75 分钟。"""
         from PySide6.QtWidgets import QApplication
-        from pet.settings_dialog import PetSettingsDialog
+        from pet.modern_settings_dialog import ModernSettingsDialog
 
         app = QApplication.instance() or QApplication([])
         cfg = Config(base=tmp_path)
-        dlg = PetSettingsDialog(cfg)
+        dlg = ModernSettingsDialog(cfg)
         if not hasattr(dlg, "pro_cooldown_unit"):
             import pytest
             pytest.skip("非 Windows 无主动识屏设置组")
@@ -626,7 +772,7 @@ class TestCooldownUnits:
         # 切到秒，设 45 秒
         dlg.pro_cooldown_unit.setCurrentIndex(1)
         dlg.pro_cooldown_spin.setValue(45)
-        assert abs(dlg._cooldown_minutes_value() - 0.75) < 1e-9
+        assert abs(dlg._pro_cooldown_minutes() - 0.75) < 1e-9
 
         # 切回分钟应自动换算显示
         dlg.pro_cooldown_unit.setCurrentIndex(0)
@@ -1742,11 +1888,14 @@ class TestCustomAgentMenu:
             def __init__(self):
                 self.cfg = cfg
 
-            def _toggle_agent_link(self, key, on, action=None):
+            def toggle_agent_link(self, key, on, action=None):
                 toggles.append((key, on))
 
-            def _set_agent_link_option(self, key, on):
+            def set_agent_link_option(self, key, on):
                 options.append((key, on))
+
+            _toggle_agent_link = toggle_agent_link
+            _set_agent_link_option = set_agent_link_option
 
         menu = QMenu()
         try:

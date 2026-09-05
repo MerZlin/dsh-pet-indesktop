@@ -24,7 +24,7 @@
 #endif
 #ifndef MyAppId
 ; NOTE: value must include the double-brace escaping required by AppId ({{GUID})
-#define MyAppId "{{BE859155-E238-4D47-B16D-F1B2AC2AFB0E}"
+#define MyAppId "{{3424d6cc-af3c-4383-8797-ab520b923aa6}"
 #endif
 #ifndef MyAppDisplay
 #define MyAppDisplay "dsh-pet-standalone (WebM Chat)"
@@ -32,7 +32,7 @@
 #ifndef MyAppVersion
 ; 默认版本与 pet/__init__.py 的 __version__ 一致；CI 构建时通过
 ; /DMyAppVersion=<版本> 从单一来源注入（见 build-windows.yml）。
-#define MyAppVersion "4.0.5"
+#define MyAppVersion "4.1.0"
 #endif
 
 [Setup]

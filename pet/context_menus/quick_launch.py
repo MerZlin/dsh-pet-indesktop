@@ -83,11 +83,13 @@ def launch_quick_app(item: dict) -> bool:
     return bool(QProcess.startDetached(path, []))
 
 
-def add_quick_launch_menu(menu: QMenu, config) -> QMenu | None:
+def add_quick_launch_menu(menu: QMenu, config) -> QMenu:
     apps = configured_quick_apps(config)
-    if not apps:
-        return None
     submenu = add_submenu(menu, "快捷启动", "application")
+    if not apps:
+        placeholder = submenu.addAction("尚未配置快捷项")
+        placeholder.setEnabled(False)
+        return submenu
     for item in apps:
         action = submenu.addAction(quick_app_icon(submenu, item), str(item.get("name") or "应用"))
         action.setProperty("closeOnTrigger", True)

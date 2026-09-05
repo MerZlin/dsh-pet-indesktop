@@ -2,7 +2,7 @@
 
 一个基于 **Python + PySide6** 的独立桌面宠物。项目脱离 DSH 运行时，提供透明无边框、置顶、可拖动、角色切换、动画播放、系统托盘和可选 AI 对话能力。
 
-> **当前版本：v4.0.5**（2026-08 功能版，新增音效体系/弹弓弹射/光标隐藏自动穿透/点击卡顿修复等）。发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。
+> **当前版本：v4.1.0**（2026-09 累计版，自 v4.0.0 以来的功能与修复汇总：多开碰撞、灵动岛、快速对话气泡、API/Provider 列表、三平台 CI 等）。发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。
 
 ## 目录
 
@@ -76,7 +76,7 @@ v4.0.0 是一次大版本升级：在 v3.1.1 的桌宠基础上，合并了社�
 
 DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，本项目的实现为桌宠内置的轻量版（菜单「DeepSeek 余额」+ 可选自动刷新，通过 DeepSeek 官方 `/user/balance` 接口查询，详见 [DeepSeek API 查询余额文档](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)）。
 
-当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 91 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
+当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 97 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
 
 
 </details>
@@ -86,7 +86,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 
 ## 当前状态
 
-- **开发版（v4.0.5 之后）**：多开碰撞、灵动岛、快速对话气泡、自定义 Agent 联动通道、POSIX 碰撞 IPC 重选修复、右键菜单 LTR、碰撞协议加固、拖动不触发点击音效、点击音效切换修复、Cloudflare 请求头优化、CI 稳定性加固等（PR #36/#39/#40/#41/#44/#46/#47/#49/#50/#52/#53/#54）。
+- **v4.1.0（累计版）**：自 v4.0.0 以来的功能与修复汇总——多开碰撞、灵动岛、快速对话气泡、自定义 Agent 联动通道、API/Provider 列表、右键菜单 LTR、三平台 CI 等（PR #36/#39/#40/#41/#44/#46/#47/#49/#50/#52/#53/#54/#55/#56/#59/#60）。
 - **v4.0.5**：功能版——音效体系升级（点击音效包/Agent 联动音效）、甩出力度档位、弹弓弹射、光标隐藏自动穿透、点击 Q 弹卡顿修复、自启变体独立（PR #33/#34/#35）。
 - **v4.0.4**：功能版——余额分档动画、DeepSeek 峰谷提示（可自定义文案与颜色）、后台音乐自动唱歌、点击音效打断、移动动画调整、位置记忆修复、自启残留清理、thinking 专属气泡文案等（PR #29/#30/#31/#32）。
 - **v4.0.3**：紧急修复版——修复 Windows 透明像素点击穿透、DSH 桥接插件自动安装 pnpm，以及 Windows 官方包中文乱码（PR #27/#28）。
@@ -124,7 +124,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 - **只需要桌宠陪伴**：装无 Chat 版，包体更小、启动更轻。
 - **不想安装、追求便携**：用绿色版 zip，解压到任意目录双击即用。
 
-> 两个版本使用同一套高清 WebM 素材（91 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
+> 两个版本使用同一套高清 WebM 素材（97 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
 >
 > 旧版 GIF 超大单文件（约 800 MB，运行时会在 C 盘临时目录解压并可能残留缓存）不再默认发布；确有需要可参考本文档「打包发布」一节自行构建 GIF 变体。
 >
@@ -329,6 +329,13 @@ pythonw -m pet
 
 - 点击桌宠触发 Q 弹时播放短促音效（内置合成音，可在桌宠设置中关闭）。
 - 可自定义声音：把 `click.wav` 放到桌宠数据目录 `sounds/` 下即可替换内置音效。
+
+### 多开共享解码（实验特性，默认关闭）
+
+- 多开同一角色时，所有实例空闲状态播的是同一份待机素材；开启后由协调者实例统一解码、其他实例经共享内存读帧——双开待机时 ffmpeg 解码进程从 2 个减到 1 个，待机解码 CPU 约减半。
+- 开启方式（暂无设置 UI）：编辑数据目录下的 `config.json`，把 `decode_broker_enabled` 改为 `true`（前置条件：`collision_enabled` 保持开启——broker 复用碰撞的实例间通道）。
+- 仅 Windows x86/x64 可用（跨进程共享内存的时序协议只在 x86/x64 强内存序下可靠；Windows ARM64 与其他平台即使开启也会自动按关闭处理）。
+- 失败无感回退：无协调者、授权超时、共享内存异常、对方退出等任何情况下，消费端都会自动回退本地解码，播放行为与关闭时一致（杀协调者实例后消费端约 0.6 秒内从帧 0 重新起播，可见一次跳变）。
 
 
 </details>
@@ -612,7 +619,7 @@ assets/
             └── random/
 ```
 
-- `assets/characters` 是 WebM 动画源目录，包含 91 个 WebM 动画。
+- `assets/characters` 是 WebM 动画源目录，包含 97 个 WebM 动画。
 - GIF 目录（`assets/characters_gif`）仅在构建 GIF 变体时生成。
 - 没有稳定静态头像时，不强制从 WebM/GIF 截取首帧，以避免启动变慢和打包兼容性问题。
 
@@ -654,7 +661,7 @@ python normalize_step03.py
 python encode_thumbs.py
 ```
 
-> 参考项目全部 91 个动作均采用**路线 B（PR 手工抠像）**：对含第三方物品/透明边缘复杂的动作，自动 HSV 抠像易残边或误抠；`chroma_step02.py` 保留为自动化兜底。中间产物 step01~04 由脚本生成、不入仓库；`video/` 源视频与 `scripts/` 是成果、入库维护。
+> 参考项目全部 97 个动作均采用**路线 B（PR 手工抠像）**：对含第三方物品/透明边缘复杂的动作，自动 HSV 抠像易残边或误抠；`chroma_step02.py` 保留为自动化兜底。中间产物 step01~04 由脚本生成、不入仓库；`video/` 源视频与 `scripts/` 是成果、入库维护。
 
 #### ③ 透明动画 → 接入本项目
 
@@ -671,7 +678,7 @@ python encode_thumbs.py
    ```
 
 2. 保持几何约定与播放器一致：画布 **640×360**、24fps、**VP9 alpha 透明**；角色脚底对齐画布 y=330（`catalog.py` 中 `FEET_Y=330`、落地偏移 `PAD=30`），这样桌宠窗口的脚底落地对齐才准确。
-3. 命名保持稳定、避免重复；可参考 `assets/characters/shenshen/videos/` 现有 91 段动画的组织方式。
+3. 命名保持稳定、避免重复；可参考 `assets/characters/shenshen/videos/` 现有 97 段动画的组织方式。
 4. 如需 GIF 变体，运行 `python scripts/convert_to_gif.py --force --clean` 同步生成。
 
 > 不想重新打包？把做好的透明 WebM 按「切换角色」的外部角色目录结构直接放入 `characters/<角色ID>/videos/`，右键菜单即可热加载新角色。
@@ -719,34 +726,79 @@ python scripts/convert_to_gif.py --force --clean
 ```text
 pet/
 ├── app.py                 # 应用入口、托盘、角色切换和聊天集成
-├── config.py              # 配置读取、迁移和持久化
-├── window.py              # 桌宠主窗口、透明/mask/鼠标穿透和动画状态机
+├── config.py              # 配置读取、迁移和持久化（reload 白名单 + schema 测试）
+├── config_domains.py      # 配置域 facade（chat/agent_link/proactive/collision/menu）
+├── window.py              # 桌宠主窗口（组合根；碰撞/平台层已拆出，见下行）
+├── collision.py           # 碰撞物理核心（纯 Python，无 Qt）
+├── collision_client.py    # 窗口侧碰撞客户端（预测/对账/上报节流/squash 冷却）
+├── collision_codec.py     # 碰撞 IPC 帧编解码 + 水位去重 + 协议 TypedDict（纯 Python）
+├── collision_ipc.py       # 碰撞协调者选举与成员协议（QLocalServer 控制面）
+├── collision_debug.py     # 碰撞调试日志
+├── decode_broker.py       # 多开共享解码 broker（共享内存 ring + seqlock，灰度默认关）
+├── frame_cache.py         # 帧预缩放缓存（字节硬预算 LRU）
+├── perfstats.py           # 性能打点（PET_PERF_STATS=1 启用，atexit 落盘）
+├── platform_win.py        # Windows 平台层（鼠标穿透/全屏判定/PerPixel 输入）
+├── platform_mac.py        # macOS 平台层（NSWindow level/激活策略）
 ├── catalog.py             # 角色和动画素材发现
 ├── library.py             # 动画库访问（懒加载 + 优先级预热）
-├── webm_clip.py           # WebM 播放和速率控制
+├── webm_clip.py           # WebM 播放（reader 线程/解码节流/broker 钩子）
 ├── gif_clip.py            # GIF/QMovie 播放
-├── speech_bubble.py       # 自言自语与状态气泡定位
-├── fun_image_popup.py     # 彩蛋图片弹窗
-├── proactive.py           # 主动识屏陪伴（白名单/门限/冷却/记忆）
-├── agent_link.py          # 多 Agent 联动状态机
+├── speech_bubble.py       # 气泡绘制与交互
+├── speech_bubble_text.py  # 气泡分页/定位纯函数
+├── click_sound.py         # 点击音效（ClickSoundPool 单例封装）
+├── desktop_notify.py      # 自绘右下角系统通知
+├── slot_manager.py        # 多开 slot 文件锁
+├── proactive.py           # 主动识屏陪伴（Watcher 编排）
+├── proactive_limiter.py   # 主动识屏频控
+├── proactive_memory.py    # 主动识屏记忆
+├── agent_link.py          # Agent 联动监视器（多 Agent 事件源：CLI/IDE/SQLite 轮询）
+├── agent_link_reducer.py  # 联动状态机（去抖/节流/完成确认，纯状态）
+├── agent_link_presentation.py # 联动表现层（气泡/音效）
 ├── vision.py              # 视觉模型调用（看看屏幕/主动识屏）
 ├── harness_launcher.py    # DeepSeek Harness 一键启动
 ├── instance_launcher.py   # 「生小肥鱼」多开孵化
 ├── modern_settings_dialog.py  # 新版侧边栏设置对话框
+├── settings_widgets.py    # 设置页共享控件库（ToggleSwitch 等 13 类）
 ├── settings_dialog.py     # 旧版设置对话框
 ├── context_menus/         # 新旧菜单模板、图标、彩蛋入口
 ├── chat/                  # 独立 AI 对话子系统（现代双栏 + 经典手机式）
-│   ├── models.py
-│   ├── providers.py
-│   ├── prompt.py
-│   ├── service.py
-│   ├── session_store.py
+│   ├── models.py          # 数据模型（ProviderConfig/ChatSession/...）
+│   ├── providers.py       # Provider 请求与连接测试
+│   ├── service.py         # 对话服务
+│   ├── session_store.py   # 会话持久化（异步 writer + 注册表）
+│   ├── geometry.py        # 聊天窗跟随定位（双 UI 共享纯函数）
+│   ├── utils.py           # 会话标题/时间格式化（双 UI 共享）
+│   ├── themes.py          # 聊天窗背景主题
 │   ├── widgets.py         # 新版聊天窗
 │   ├── legacy_widgets.py  # 经典手机式聊天窗
-│   ├── themes.py          # 聊天窗背景主题
 │   ├── modern_styles.qss / legacy_styles.qss / styles.qss
 │   └── ...
 └── updater.py             # 检查更新与发布资产解析
+
+integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
+packaging/
+├── pet_entry.py           # Chat 构建入口
+├── pet_entry_no_chat.py   # 无 Chat 构建入口
+└── dsh-pet.iss            # Inno Setup 通用安装包脚本（/D 参数编译各变体）
+
+scripts/
+├── build_onedir.ps1       # Windows onedir 构建 + zip 绿色版打包（本地与 CI 共用入口）
+├── build_macos.sh         # macOS .app 构建（本地与 CI 共用入口）
+├── build_linux.sh         # Linux onedir 构建（本地与 CI 共用入口）
+├── check_bundle_encoding.py # 产物中文编码自检（issue #26，构建脚本内自动调用）
+├── make_icon.py           # 从待机动画提取封面帧生成应用图标（assets/icon.ico）
+├── convert_to_gif.py      # WebM → GIF 全量同步脚本
+└── cleanup_mei_cache.py   # 检查/清理旧 onefile 版本遗留的 _MEI 缓存（默认预览）
+
+tests/                     # 单元测试、Qt offscreen 测试和构建相关验证
+                           # （含 test_architecture.py 架构红线：依赖方向 /
+                           #  window 私有面冻结 / window.py 行数预算）
+```
+
+**给 window.py 加功能前必读**：[docs/WINDOW_PY_SPLIT_GUIDE.md](docs/WINDOW_PY_SPLIT_GUIDE.md)
+——window.py 处于「只许瘦不许胖」的增量拆分公约下（CI 有行数预算红线），
+新功能先按公约拆对应控制器再动手。
+
 
 integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
 packaging/
@@ -777,6 +829,7 @@ tests/                     # 单元测试、Qt offscreen 测试和构建相关�
 在项目根目录执行：
 
 ```powershell
+pip install -r requirements.txt   # 运行时 + 开发依赖（含 pytest/ruff）
 $env:QT_QPA_PLATFORM = "offscreen"
 python -m pytest -q
 python -m compileall pet packaging scripts
@@ -844,7 +897,7 @@ bash scripts/build_linux.sh --variants webm-chat,webm
 E:\tools\InnoSetup6\ISCC.exe packaging\dsh-pet.iss
 
 # WebM 无 Chat 版
-E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-webm /DMyAppExeName=dsh-pet-standalone-webm.exe /DMyAppDir=..\dist-onedir\dsh-pet-standalone-webm "/DMyAppId={{ED2590E4-A968-4E8D-B7C4-75DFE012D0E9}}" "/DMyAppDisplay=dsh-pet-standalone (WebM)" packaging\dsh-pet.iss
+E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-webm /DMyAppExeName=dsh-pet-standalone-webm.exe /DMyAppDir=..\dist-onedir\dsh-pet-standalone-webm "/DMyAppId={{3424d6cc-af3c-4383-8797-ab520b923aa6}}" "/DMyAppDisplay=dsh-pet-standalone (WebM)" packaging\dsh-pet.iss
 ```
 
 完整命令（含 GIF 变体）与安装包特性见 [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)。
@@ -869,24 +922,14 @@ PyInstaller **不支持交叉编译**，Linux 包必须在 Linux 上构建。推
 1. Actions 页面手动运行 **Build Linux App**（`workflow_dispatch`），或打 `v*` tag 自动触发并发布到 Release。
 2. 产物：`dsh-pet-standalone-<变体>-linux-x86_64.zip`（onedir 目录，保留可执行权限）。Linux 发布两个 WebM 变体（`webm-chat` / `webm`）；GIF 变体包体约 800 MB，不发布。
 
-本地构建（在 Linux 机器上）：
+本地构建（在 Linux 机器上）——**以正式脚本为准**（手工 PyInstaller 命令
+长期与脚本漂移、会漏菜单模板/QSS 等资源，审查 P2-07）：
 
 ```bash
-python -m pip install pyinstaller
-# WebM Chat 版（VARIANT 取值 webm-chat / webm / gif-chat / gif）
-echo "VARIANT = 'webm-chat'" > packaging/build_variant.py
-python -m PyInstaller --noconfirm --clean --onedir --paths . \
-  --collect-all imageio_ffmpeg --collect-all certifi \
-  --add-data "assets/sounds:assets/sounds" \
-  --add-data "assets/chat:assets/chat" \
-  --add-data "pet/chat/styles.qss:pet/chat" \
-  --add-data "assets/characters:assets/characters" \
-  --name dsh-pet-standalone-webm-chat packaging/pet_entry.py
-cd dist && zip -r dsh-pet-standalone-webm-chat-linux-x86_64.zip dsh-pet-standalone-webm-chat/
+bash scripts/build_linux.sh webm-chat   # 变体：webm-chat / webm / gif-chat / gif
 ```
 
-> GIF 变体需先运行 `python scripts/convert_to_gif.py --force --clean` 并把 `--add-data` 换成 `assets/characters_gif`。
-> Linux 上 PyInstaller 忽略 `--icon`（仅 Windows/macOS 生效），窗口/托盘图标由程序运行时设置。
+> GIF 变体需先运行 `python scripts/convert_to_gif.py --force --clean`。
 
 
 </details>
@@ -929,6 +972,14 @@ python scripts/cleanup_mei_cache.py --delete
 <summary><b>最近修复（2026-08）</b></summary>
 
 ## 最近修复（2026-08）
+
+### v4.1.0（累计版）
+
+- **发布 v4.1.0**：自 v4.0.0 以来的功能与修复完整汇总（详见 GitHub Release）。
+- **API / Provider 列表（PR #59）**：AI 设置新增 API 列表，可快速添加 / 删除 / 切换模型服务 Provider，并修复 Provider id 复用与 Key 草稿覆盖问题。
+- **灵动岛余额峰谷颜色同步（PR #60）**：灵动岛余额峰谷文字颜色跟随设置的峰谷提示颜色开关（高峰红 / 低谷绿）。
+- **纯桌宠菜单入口收敛（PR #60）**：无 Chat 的纯桌宠版本去掉“启动 DeepSeek Harness”入口，只保留“打开网页版 DeepSeek”。
+- **系统通知（暂未成功实现）**：对话完成 / 生成失败 / 需要授权时的桌面右下角系统通知目前仍无法可靠触发，本版本不将其视为可用功能，后续继续修复。
 
 ### v4.0.5 之后（开发版）
 
@@ -994,7 +1045,7 @@ python scripts/cleanup_mei_cache.py --delete
 - **动画边缘毛边/暗边修复**：帧渲染改为**预乘 alpha 缩放**（直通 alpha 缩放会让透明像素的 RGB 渗入半透明边缘，产生暗边/彩边）；Windows 上点击命中测试由 setMask 的 1-bit 裁剪改为**逐像素命中测试**（WM_NCHITTEST + HTTRANSPARENT，透明区域鼠标穿透、可见区域可点击），不再破坏 `WA_TranslucentBackground` 的逐像素半透明边缘。
 - **Harness 启动兼容旧版 dsh**：启动前探测 `web --help` 是否支持 `--no-open`（按命令缓存）——旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；不支持时不传，由 dsh 自己打开浏览器，桌宠不重复打开。
 - **动画帧率精度**：视频帧时长按 24fps 精确值（40ms → 42ms = 1000/24）修正，动画播放定时器改用精确定时器（PreciseTimer），消除粗略定时器漂移导致的节奏/移动插值偏差。
-- **右键菜单启动提速与避让**：动画分类子菜单**首次展开才填充**动作（根菜单构建不再遍历 91 个动画，首次右键不再卡顿数秒）；菜单弹出位置智能选择——优先角色右侧（子菜单向右展开）、屏幕不够时放左侧并让子菜单向左展开（RTL）、再不行放屏幕远角，根菜单与子菜单都不再遮挡角色；快捷启动应用图标按 (类型, 路径) 缓存（QFileIconProvider 首次取图标慢）。
+- **右键菜单启动提速与避让**：动画分类子菜单**首次展开才填充**动作（根菜单构建不再遍历 97 个动画，首次右键不再卡顿数秒）；菜单弹出位置智能选择——优先角色右侧（子菜单向右展开）、屏幕不够时放左侧并让子菜单向左展开（RTL）、再不行放屏幕远角，根菜单与子菜单都不再遮挡角色；快捷启动应用图标按 (类型, 路径) 缓存（QFileIconProvider 首次取图标慢）。
 - **设置窗口打开期间暂停气泡**：新版设置/聊天设置任一打开时，桌宠气泡暂停显示（关闭后恢复），不再盖住设置界面。
 - **macOS/Linux 打包补 integrations 资源（PR #22）**：onedir 构建显式打包 `integrations/`（含 DSH 桥接插件），修复 macOS/Linux 上「启动 DeepSeek Harness → 一键安装桥接插件」因资源缺失而失败的问题；构建后增加断言检查，漏打包直接报错。
 - **Chat 版显式收集 keyring（API Key 系统安全存储）**：Windows/Linux/macOS 构建均显式 `--collect-all keyring`，确保 Chat 版 API Key 走系统凭据存储可用。

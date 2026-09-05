@@ -22,12 +22,13 @@ import json
 import logging
 import os
 import re
-import shutil
+import shutil  # compatibility namespace for existing integrations/tests
 import subprocess
 import sys
 import threading
 import time
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -39,11 +40,20 @@ from .agent_event_protocol import parse_agent_event
 from .agent_event_normalizer import normalize_event
 from .agent_event_runtime import AgentEventRuntime
 from .rate_limit_tracker import RateLimitTracker
+from .node_runtime import augmented_path as _augmented_path
 
 from .persona_phrases import PhrasePicker
 from .speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
 
 log = logging.getLogger("dsh-pet-standalone")
+
+
+def _which(name: str) -> str | None:
+    """Node runtime lookup with the historical ``shutil.which`` seam retained."""
+    try:
+        return shutil.which(name, path=_augmented_path())
+    except TypeError:  # compatibility with tests/integrations patching which(name)
+        return shutil.which(name)
 
 # ----------------------------------------------------------------------
 # DSH 桥接安装辅助（绕开 dsh CLI 的空格路径缺陷）
@@ -80,13 +90,16 @@ def _find_pnpm_cli() -> str | None:
     env = os.environ.get("DSH_PNPM_BIN")
     if env and Path(env).is_file():
         return env
-    pnpm = shutil.which("pnpm")
+    pnpm = _which("pnpm")
     if pnpm:
-        for base in (Path(pnpm).parent, Path(pnpm).resolve().parent):
+        resolved = Path(pnpm).resolve()
+        if resolved.is_file() and resolved.suffix.lower() in {".js", ".cjs", ".mjs"}:
+            return str(resolved)
+        for base in (Path(pnpm).parent, resolved.parent):
             cand = base / "node_modules" / "pnpm" / "bin" / "pnpm.mjs"
             if cand.is_file():
                 return str(cand)
-    npm = shutil.which("npm")
+    npm = _which("npm")
     if npm:
         cand = Path(npm).parent / "node_modules" / "pnpm" / "bin" / "pnpm.mjs"
         if cand.is_file():
@@ -96,7 +109,7 @@ def _find_pnpm_cli() -> str | None:
 
 def _npm_cli() -> str | None:
     """定位 npm 的 JS CLI 入口（由 node 直调，绕开 .cmd 的空格引号坑）。"""
-    npm = shutil.which("npm")
+    npm = _which("npm")
     if not npm:
         return None
     resolved = Path(npm).resolve()
@@ -114,7 +127,7 @@ def _pnpm_cli() -> str | None:
     cli = _find_pnpm_cli()
     if cli:
         return cli
-    node = shutil.which("node")
+    node = _which("node")
     npm_cli = _npm_cli()
     if not node or not npm_cli:
         return None
@@ -122,6 +135,7 @@ def _pnpm_cli() -> str | None:
         proc = subprocess.run(
             [node, npm_cli, "install", "-g", "pnpm"],
             capture_output=True, text=True, timeout=300, shell=False,
+            env={**os.environ, "PATH": _augmented_path()},
         )
     except Exception:
         return None
@@ -132,7 +146,7 @@ def _pnpm_cli() -> str | None:
 
 def _run_pnpm(profile_dir: Path, *args: str) -> tuple[int, str]:
     """node 直调 pnpm CLI（数组传参，无 cmd 中转），返回 (返回码, 合并输出)。"""
-    node = shutil.which("node")
+    node = _which("node")
     cli = _pnpm_cli()
     if not node:
         return 127, "找不到 node，请先安装 Node.js"
@@ -142,6 +156,7 @@ def _run_pnpm(profile_dir: Path, *args: str) -> tuple[int, str]:
         proc = subprocess.run(
             [node, cli, *args], capture_output=True, text=True,
             timeout=300, shell=False, cwd=str(profile_dir),
+            env={**os.environ, "PATH": _augmented_path()},
         )
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except Exception as exc:
@@ -258,6 +273,7 @@ def opencode_event_state(event_type: str, data_raw: str) -> str:
 
     - message.updated 且 role=user → thinking
     - part type=step-start → working；reasoning → thinking；step-finish → idle
+      （reason="tool-calls" 表示模型停笔等工具结果，回合未完，忽略）
     - session.created → idle
     其余忽略。data 解析失败返回 ""。"""
     try:
@@ -270,7 +286,10 @@ def opencode_event_state(event_type: str, data_raw: str) -> str:
         role = str((data.get("info") or {}).get("role", ""))
         return "thinking" if role == "user" else ""
     if event_type.startswith("message.part.updated"):
-        pt = str((data.get("part") or {}).get("type", ""))
+        part = data.get("part") or {}
+        pt = str(part.get("type", ""))
+        if pt == "step-finish" and str(part.get("reason") or "") == "tool-calls":
+            return ""
         return {"step-start": "working", "reasoning": "thinking", "step-finish": "idle"}.get(pt, "")
     if event_type.startswith("session.created"):
         return "idle"
@@ -487,11 +506,26 @@ class ByteOffsetTailer:
         return [line.strip() for line in lines if line.strip()]
 
 
+@dataclass(frozen=True)
+class AgentEvent:
+    """监视器向管理器传递的状态/工具事件及其启动代次。"""
+
+    agent: str
+    kind: str
+    gen: int = 0
+    state: str = ""
+    tool: str = ""
+
+
 class BaseAgentMonitor(QObject):
     """Agent 监视器抽象基类。"""
 
     state_changed = Signal(str, str)  # (agent_key, state)
     activity = Signal(str, str)       # (agent_key, 工具名) —— 过程汇报用，仅事件带工具名时发
+    # Worker 事件载荷：保留上面的旧信号作为测试/外部兼容 API，管理器使用
+    # 带代次的事件信号做接收端校验。
+    state_event = Signal(object)
+    activity_event = Signal(object)
     approval_requested = Signal(str, object)  # (agent_key, payload) —— 审批请求（含 rpcId 时可交互）
     approval_resolved = Signal(str, object)   # (agent_key, payload) —— 审批已结束，气泡应消失
     question_requested = Signal(str, object)  # (agent_key, payload) —— ask_user_question 阻塞交互
@@ -522,38 +556,200 @@ class BaseAgentMonitor(QObject):
         self.events_file = self.events_dir / f"{agent_key}.jsonl"
         self._running = False
         self._paused = False
-        self._timer = QTimer(self)
-        self._timer.setInterval(1500)
-        self._timer.timeout.connect(self._poll)
         self._tailer = ByteOffsetTailer(self.events_file)
+        self._worker: threading.Thread | None = None
+        self._worker_stop = threading.Event()
+        self._gen = 0
+        self._emit_gen = 0
+        self._mkdir_on_start = True
+        self._outbox: list[tuple] = []
+        self._outbox_lock = threading.Lock()
+        self._OUTBOX_CAP = 500
+        # QObject 的 destroyed 槽在 PySide6 下不可靠地调用 bound method；
+        # 连接无 receiver 的 callable，避免窗口销毁后遗留 daemon worker。
+        self._destroyed_conn = self.destroyed.connect(
+            lambda *_: BaseAgentMonitor._destroyed_guard(self)
+        )
+        self._destroy_guard_ran = False
+        self._destroy_guard_lock = threading.Lock()
 
     def is_running(self) -> bool:
         return self._running and not self._paused
 
-    def start(self) -> None:
+    def start(self) -> bool:
+        if self._worker is not None and self._worker.is_alive():
+            log.warning("Agent 监视器 [%s] 旧 worker 未退出，拒绝重启", self.agent_key)
+            return False
+        if self._destroyed_conn is None:
+            self._destroyed_conn = self.destroyed.connect(
+                lambda *_: BaseAgentMonitor._destroyed_guard(self)
+            )
+        with self._destroy_guard_lock:
+            self._destroy_guard_ran = False
+        self._worker_stop.set()
+        self._worker_stop = threading.Event()
+        self._gen += 1
+        self._emit_gen = self._gen
         self._running = True
         self._paused = False
-        self.events_dir.mkdir(parents=True, exist_ok=True)
+        if self._mkdir_on_start:
+            self.events_dir.mkdir(parents=True, exist_ok=True)
         self._tailer.reset()
-        if not self._timer.isActive():
-            self._timer.start()
+        gen = self._gen
+        self._worker = threading.Thread(
+            target=self._work_loop, args=(gen,), daemon=True,
+            name=f"agent-monitor-{self.agent_key}",
+        )
+        self._worker.start()
         log.info("Agent 监视器 [%s] 已启动", self.agent_key)
+        return True
 
-    def stop(self) -> None:
+    def begin_stop(self) -> None:
+        """作废当前代次并发出停止信号，不阻塞 GUI。"""
+        self._emit_gen = -1
         self._running = False
         self._paused = False
-        self._timer.stop()
+        with self._outbox_lock:
+            self._outbox.clear()
+        self._worker_stop.set()
+
+    def finish_stop(self, deadline: float | None = None) -> None:
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            remaining = self._STOP_JOIN_TIMEOUT_S if deadline is None else max(
+                0.0, deadline - time.monotonic()
+            )
+            worker.join(timeout=remaining)
+            if worker.is_alive():
+                log.warning("Agent 监视器 [%s] worker 退出超时", self.agent_key)
+        conn = getattr(self, "_destroyed_conn", None)
+        if conn is not None:
+            try:
+                self.destroyed.disconnect(conn)
+            except RuntimeError:
+                pass
+            self._destroyed_conn = None
+
+    def stop(self) -> None:
+        self.begin_stop()
+        self.finish_stop()
         log.info("Agent 监视器 [%s] 已停止", self.agent_key)
 
     def pause(self) -> None:
         if self._running:
             self._paused = True
-            self._timer.stop()
 
     def resume(self) -> None:
         if self._running and self._paused:
             self._paused = False
-            self._timer.start()
+            with self._outbox_lock:
+                pending = list(self._outbox)
+                self._outbox.clear()
+            for signal, args in pending:
+                signal.emit(*args)
+
+    @staticmethod
+    def _destroyed_guard(mon: "BaseAgentMonitor") -> None:
+        with mon._destroy_guard_lock:
+            if mon._destroy_guard_ran:
+                return
+            mon._destroy_guard_ran = True
+        try:
+            conn = getattr(mon, "_destroyed_conn", None)
+            if conn is not None:
+                try:
+                    mon.destroyed.disconnect(conn)
+                except RuntimeError:
+                    pass
+                mon._destroyed_conn = None
+            mon._worker_stop.set()
+            mon._emit_gen = -1
+            mon._running = False
+            mon._paused = False
+            worker = mon._worker
+            if worker is not None and worker.is_alive():
+                threading.Thread(
+                    target=BaseAgentMonitor._reap_worker,
+                    args=(worker, mon._STOP_JOIN_TIMEOUT_S, mon.agent_key),
+                    daemon=True, name=f"agent-monitor-reap-{mon.agent_key}",
+                ).start()
+        except Exception:
+            log.debug("Agent 监视器 [%s] 销毁兜底异常", mon.agent_key, exc_info=True)
+
+    @staticmethod
+    def _reap_worker(worker: threading.Thread, timeout: float, agent_key: str) -> None:
+        worker.join(timeout=timeout)
+        if worker.is_alive():
+            log.warning("Agent 监视器 [%s] 销毁兜底 worker 退出超时", agent_key)
+
+    def _emit_state(self, state: str, gen: int) -> None:
+        event = AgentEvent(self.agent_key, "state", gen=gen, state=state)
+        self._emit_pair(
+            self.state_changed, (self.agent_key, state),
+            self.state_event, (event,), state=state,
+        )
+
+    def _emit_tool(self, tool: str, gen: int) -> None:
+        event = AgentEvent(self.agent_key, "tool", gen=gen, tool=tool)
+        self._emit_pair(
+            self.activity, (self.agent_key, tool),
+            self.activity_event, (event,), state=None,
+        )
+
+    def _emit_pair(self, legacy_signal, legacy_args: tuple,
+                   event_signal, event_args: tuple, *, state: str | None) -> None:
+        """Emit legacy + generation-aware signals as one pause-buffered unit."""
+        if not (self._paused and self._running):
+            legacy_signal.emit(*legacy_args)
+            event_signal.emit(*event_args)
+            return
+        with self._outbox_lock:
+            if state is not None:
+                for signal, args in reversed(self._outbox):
+                    if signal is self.state_event and args[0].state == state:
+                        return
+            while len(self._outbox) + 2 > self._OUTBOX_CAP:
+                for i, (signal, _) in enumerate(self._outbox):
+                    if signal in (self.activity, self.activity_event):
+                        del self._outbox[i]
+                        break
+                else:
+                    if state is None:
+                        return
+                    break
+            self._outbox.extend(((legacy_signal, legacy_args), (event_signal, event_args)))
+
+    def _emit(self, signal, args: tuple) -> None:
+        if self._paused and self._running:
+            with self._outbox_lock:
+                if len(self._outbox) >= self._OUTBOX_CAP:
+                    for i, (sig, _) in enumerate(self._outbox):
+                        if sig in (self.activity, self.activity_event):
+                            del self._outbox[i]
+                            break
+                    else:
+                        if signal in (self.activity, self.activity_event):
+                            return
+                self._outbox.append((signal, args))
+            return
+        signal.emit(*args)
+
+    _POLL_INTERVAL_S = 1.5
+    _STOP_JOIN_TIMEOUT_S = 2.0
+
+    def _work_loop(self, gen: int) -> None:
+        # 首轮等待一个周期，避免测试直调 _poll 与 worker 争抢 tailer。
+        self._worker_started()
+        while not self._worker_stop.wait(self._POLL_INTERVAL_S):
+            if self._paused:
+                continue
+            try:
+                self._poll(gen=gen)
+            except Exception:
+                log.debug("Agent 监视器 [%s] 轮询异常", self.agent_key, exc_info=True)
+
+    def _worker_started(self) -> None:
+        """供具体监视器在 worker 线程初始化其独占状态。"""
 
     def _emit_unified_event(self, data: dict) -> None:
         try:
@@ -564,7 +760,8 @@ class BaseAgentMonitor(QObject):
         except Exception:
             log.debug("统一 AgentEvent 解析失败", exc_info=True)
 
-    def _poll(self) -> None:
+    def _poll(self, gen: int | None = None) -> None:
+        emit_gen = self._emit_gen if gen is None else gen
         lines = self._tailer.read_new_lines()
         for line in lines:
             try:
@@ -587,7 +784,7 @@ class BaseAgentMonitor(QObject):
                 except Exception:
                     log.debug("统一 AgentEvent 解析失败", exc_info=True)
                 # 原始记录转发（兼容旧消费者）
-                self.raw_record.emit(self.agent_key, data)
+                self._emit(self.raw_record, (self.agent_key, data))
                 # 审批请求提醒：一次性事件，收到即发信号（不进入状态机，
                 # 因为 DSH 等审批时 agent 仍在 running，状态还是 working）。
                 # 只收桥接后的 UI 事件 approval/request（权威 mux 来源）与兼容旧名
@@ -597,47 +794,47 @@ class BaseAgentMonitor(QObject):
                 # 也不能误触发。
                 # payload 带 rpcId/sessionId/approvalId 时可交互（气泡内直接点选回写）。
                 if ev in ("approval/request", "approval/requested"):
-                    self.approval_requested.emit(self.agent_key, data)
+                    self._emit(self.approval_requested, (self.agent_key, data))
                 # 审批已结束（approval/decided 会话事件 或 approval/resolved mux 帧）：
                 # 审批气泡应消失。
                 if ev in ("approval/decided", "approval/resolved"):
-                    self.approval_resolved.emit(self.agent_key, data)
+                    self._emit(self.approval_resolved, (self.agent_key, data))
                 # 用户问题（ask_user_question 阻塞交互）：与审批同等待遇，
                 # question/requested 常驻气泡、question/resolved 收尾；payload 带 rpcId
                 # 时可交互（气泡内选项直接点选回写）。
                 if ev == "question/requested":
-                    self.question_requested.emit(self.agent_key, data)
+                    self._emit(self.question_requested, (self.agent_key, data))
                 if ev == "question/resolved":
-                    self.question_resolved.emit(self.agent_key, data)
+                    self._emit(self.question_resolved, (self.agent_key, data))
                 if ev == "cordis/request-run" and data.get("requiresApproval") is True:
-                    self.cordis_requested.emit(self.agent_key, data)
+                    self._emit(self.cordis_requested, (self.agent_key, data))
                 if ev == "cordis/request-run-resolved":
-                    self.cordis_resolved.emit(self.agent_key, data)
+                    self._emit(self.cordis_resolved, (self.agent_key, data))
                 # 硬失败（execution/failed）：DSH 已决定本轮不再继续，不经行为分析直接提醒
                 if ev == "execution/failed":
-                    self.execution_failed.emit(self.agent_key, data)
+                    self._emit(self.execution_failed, (self.agent_key, data))
                 if tool:
-                    self.activity.emit(self.agent_key, tool)
+                    self._emit_tool(tool, emit_gen)
                 # 会话元数据：session/meta 事件 → 信号转发给 Manager 缓存
                 meta_type = str(data.get("type", ""))
                 if meta_type == "session/meta":
-                    self.session_meta.emit(self.agent_key, data)
+                    self._emit(self.session_meta, (self.agent_key, data))
                 # 调试输出：debug/session-shape（仅首次，之后可通过配置关闭）
                 if meta_type == "debug/session-shape":
                     log.info("[dsh-pet-bridge] session shape: %s", json.dumps(data, ensure_ascii=False)[:500])
                 # 限流事件：rate_limit（errorCode=429）→ 信号转发给 Manager 显示提醒
                 if ev == "rate_limit":
-                    self.rate_limit.emit(self.agent_key, data)
+                    self._emit(self.rate_limit, (self.agent_key, data))
                 # LLM API 错误事件：llm_error（errorCode=PI_AI_ERROR）→ 信号转发给 Manager
                 if ev == "llm_error":
-                    self.llm_error.emit(self.agent_key, data)
+                    self._emit(self.llm_error, (self.agent_key, data))
                 # 用户介入信号：user_action（审批决定/回答）→ 关闭对应弹窗
                 if ev == "user_action":
-                    self.user_action.emit(self.agent_key, data)
+                    self._emit(self.user_action, (self.agent_key, data))
                 normalized = normalize_event_state(ev, st)
                 if not normalized:
                     continue  # 不认识的事件类型：忽略，不误报为 working
-                self.state_changed.emit(self.agent_key, normalized)
+                self._emit_state(normalized, emit_gen)
             except Exception:
                 pass
 
@@ -754,7 +951,7 @@ class DshMonitor(BaseAgentMonitor):
         plugin = cls.bundled_plugin_dir()
         if plugin is None:
             return False, "找不到内置桥接插件（integrations/dsh-pet-bridge）"
-        if shutil.which("node") is None:
+        if _which("node") is None:
             return False, "找不到 node，请先安装 Node.js（需包含 npm）"
         if _pnpm_cli() is None:
             return False, "需要 pnpm，自动安装失败，请手动运行: npm install -g pnpm"
@@ -815,7 +1012,7 @@ class DshMonitor(BaseAgentMonitor):
 
         幂等：未安装的 profile 直接视为成功；不再依赖 dsh CLI（同 install_bridge）。
         """
-        if shutil.which("node") is None or _pnpm_cli() is None:
+        if _which("node") is None or _pnpm_cli() is None:
             return True  # 没有运行环境视为无残留
         ok = True
         for profile in _real_profiles():
@@ -1044,9 +1241,10 @@ class CursorMonitor(BaseAgentMonitor):
         self._scan_interval = 30.0  # 目录发现降频：30s 一次（tail 仍 1.5s）
         self._last_scan = 0.0
 
-    def _poll(self) -> None:
+    def _poll(self, gen: int | None = None) -> None:
         # 首先检查统一 jsonl
-        super()._poll()
+        super()._poll(gen=gen)
+        emit_gen = self._emit_gen if gen is None else gen
 
         if not self.cursor_base.is_dir():
             return
@@ -1086,11 +1284,11 @@ class CursorMonitor(BaseAgentMonitor):
                     self._emit_unified_event(data)
                     tool = cursor_line_tool(data)
                     if tool:
-                        self.activity.emit("cursor", tool)
+                        self._emit_tool(tool, emit_gen)
                     norm = cursor_line_state(data)
                     if not norm:
                         continue  # 未知 transcript 行类型：忽略
-                    self.state_changed.emit("cursor", norm)
+                    self._emit_state(norm, emit_gen)
                 except Exception:
                     pass
 
@@ -1110,18 +1308,32 @@ class OpenCodeMonitor(BaseAgentMonitor):
         )
         self._last_rowid: int = 0
         self._db_ready: bool = False
+        self._db_file_id: tuple[int, ...] | None = None
 
-    def start(self) -> None:
+    def _worker_started(self) -> None:
         self._db_ready = False
-        super().start()
+        self._last_rowid = 0
+        self._db_file_id = None
 
-    def _poll(self) -> None:
+    def _poll(self, gen: int | None = None) -> None:
         # 统一 jsonl 通道（兼容未来插件/手动注入）
-        super()._poll()
+        super()._poll(gen=gen)
+        emit_gen = self._emit_gen if gen is None else gen
 
         if not self.db_path.is_file():
             return
         import sqlite3
+
+        try:
+            # OpenCode 更新/删库重建会替换 inode；沿用旧 rowid 会静默漏掉新库，
+            # 因此新文件重新执行 backfill。
+            st = self.db_path.stat()
+            file_id = (st.st_dev, st.st_ino)
+            if file_id != self._db_file_id:
+                self._db_file_id = file_id
+                self._db_ready = False
+        except OSError:
+            return
 
         try:
             # 只读连接；WAL 模式下只读不阻塞 OpenCode 写入
@@ -1182,10 +1394,10 @@ class OpenCodeMonitor(BaseAgentMonitor):
             data_raw = json.dumps(data)
             state = opencode_event_state(ev_type, data_raw)
             if state:
-                self.state_changed.emit("opencode", state)
+                self._emit_state(state, emit_gen)
             tool = opencode_event_tool(ev_type, data_raw)
             if tool:
-                self.activity.emit("opencode", tool)
+                self._emit_tool(tool, emit_gen)
 
 
 class CustomAgentMonitor(BaseAgentMonitor):
@@ -1200,16 +1412,42 @@ class CustomAgentMonitor(BaseAgentMonitor):
         self.events_file = Path(events_path).expanduser()
         self.events_dir = self.events_file.parent
         self._tailer = ByteOffsetTailer(self.events_file)
+        self._mkdir_on_start = False
 
-    def start(self) -> None:
+    def start(self) -> bool:
         # 覆写基类 start：基类会 mkdir 事件目录，这里只读监听外部文件，
         # 不替用户在任意路径创建目录
-        self._running = True
-        self._paused = False
-        self._tailer.reset()
-        if not self._timer.isActive():
-            self._timer.start()
+        ok = super().start()
+        if not ok:
+            return False
         log.info("Agent 监视器 [%s] 已启动 (%s)", self.agent_key, self.events_file)
+        return True
+
+
+def other_instances_use_agent(config, agent_key: str) -> bool:
+    """Return whether another local variant still uses a global Agent integration."""
+    config_dir = Path(config.dir)
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    try:
+        candidates.append(config_dir / "config.json")
+        candidates.extend(config_dir.glob("config-*.json"))
+        candidates.extend(config_dir.parent.glob("dsh-pet-standalone*/config*.json"))
+    except OSError:
+        pass
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        if config.path and path == config.path:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict) and bool((data.get("agent_link") or {}).get(agent_key, False)):
+            return True
+    return False
 
 
 # ----------------------------------------------------------------------
@@ -1222,7 +1460,7 @@ class AgentLinkManager(QObject):
     挂载于 PetWindow，持有 4 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
     """
 
-    install_finished = Signal(str, bool, str)  # (agent_key, ok, message)
+    install_finished = Signal(str, bool, str, int)  # (agent_key, ok, message, install_token)
     # DSH 回写结果（后台线程 emit，队列投递回主线程）：(ok, detail)
     _respond_result = Signal(bool, str)
     _exploration_control_result = Signal(str, str, bool, str)  # session, operation, ok, detail
@@ -1255,6 +1493,9 @@ class AgentLinkManager(QObject):
         self.win = window
         self.cfg = config
         self.config_dir = config.dir
+        self._shutdown = False
+        self._install_token = 0
+        self._install_pending: dict[str, int] = {}
         # 状态节流：同一 Agent 相同状态去抖；同 Agent 两次动作切换最小间隔
         # （Cursor 等 transcript 密集写入时防止动画"抽搐"）
         self._min_interval = float(min_interval)
@@ -1352,8 +1593,8 @@ class AgentLinkManager(QObject):
             mon.raw_record.connect(self._remember_dialogue_record)
             mon.normalized_event.connect(self._event_runtime.dispatch)
             mon.normalized_event.connect(self._on_normalized_event)
-            mon.state_changed.connect(self._on_agent_state)
-            mon.activity.connect(self._on_agent_activity)
+            mon.state_event.connect(self._on_agent_state_event)
+            mon.activity_event.connect(self._on_agent_activity_event)
             mon.approval_requested.connect(self._on_approval_request)
             mon.approval_resolved.connect(self._on_approval_resolved)
             mon.question_requested.connect(self._on_question_request)
@@ -1376,8 +1617,8 @@ class AgentLinkManager(QObject):
         self._respond_result.connect(self._on_respond_result)
         self.install_finished.connect(self._on_install_finished)
         # 联动动作链：一次性动作播完后若仍有 Agent 在忙，由 window 回调取下一个动作
-        if hasattr(self.win, "_pending_link_anim"):
-            self.win._link_next_provider = self._next_busy_anim
+        if hasattr(self.win, "set_link_next_provider"):
+            self.win.set_link_next_provider(self._next_busy_anim)
 
         self.apply_config()
 
@@ -1434,10 +1675,16 @@ class AgentLinkManager(QObject):
         self._behavior_detector.get_config_overrides(agent_cfg if isinstance(agent_cfg, dict) else {})
         self._exploration_watchdog.configure(agent_cfg if isinstance(agent_cfg, dict) else {})
 
-    def _install_dsh_worker(self) -> None:
+    def _install_dsh_worker(self, token: int) -> None:
         """后台线程：安装 DSH 桥接插件，完成后信号回主线程。"""
         ok, msg = DshMonitor.install_bridge()
-        self.install_finished.emit("dsh", ok, msg)
+        if token != self._install_token:
+            log.info("DSH 桥接安装结果已过期，丢弃")
+            return
+        try:
+            self.install_finished.emit("dsh", ok, msg, token)
+        except RuntimeError:
+            log.debug("DSH 桥接安装完成但管理器已销毁，丢弃结果")
 
     def _warn_if_agent_absent(self, agent_key: str) -> None:
         """开启了联动但本机没装对应 Agent 时给用户提示（不然勾了永远没反应）。"""
@@ -1466,8 +1713,16 @@ class AgentLinkManager(QObject):
                 duration_ms=6000,
             )
 
-    def _on_install_finished(self, agent_key: str, ok: bool, msg: str) -> None:
+    def _on_install_finished(self, agent_key: str, ok: bool, msg: str,
+                             token: int | None = None) -> None:
         """安装完成：成功则正式开启联动，失败则提示。"""
+        if self._shutdown:
+            return
+        if token is not None and self._install_pending.get(agent_key) != token:
+            log.info("安装完成回调已过期，丢弃: %s", agent_key)
+            return
+        if token is not None:
+            self._install_pending.pop(agent_key, None)
         if ok:
             ag_cfg = dict(self.cfg.get("agent_link", {}))
             ag_cfg[agent_key] = True
@@ -1486,20 +1741,7 @@ class AgentLinkManager(QObject):
     def _other_instances_enabled(self, agent_key: str) -> bool:
         """其他多开实例（含默认实例）是否也开着该 Agent 联动。
         hooks/桥接插件是全局状态，别的实例还在用就不能卸。"""
-        try:
-            candidates = [self.config_dir / "config.json"] + list(self.config_dir.glob("config-*.json"))
-            for f in candidates:
-                if self.cfg.path and f == self.cfg.path:
-                    continue
-                try:
-                    data = json.loads(f.read_text(encoding="utf-8"))
-                    if isinstance(data, dict) and bool((data.get("agent_link") or {}).get(agent_key, False)):
-                        return True
-                except Exception:
-                    continue
-        except Exception:
-            pass
-        return False
+        return other_instances_use_agent(self.cfg, agent_key)
 
     def set_enabled(self, agent_key: str, enabled: bool) -> bool:
         """开启或关闭指定 Agent 监视器（必要时弹出确认框）。
@@ -1541,15 +1783,22 @@ class AgentLinkManager(QObject):
                     return False
                 # 安装走后台线程（pnpm 解析可能数十秒，绝不在 UI 线程阻塞）；
                 # 菜单先回弹，安装完成后自动开启并气泡告知
+                self._install_token += 1
+                token = self._install_token
+                self._install_pending["dsh"] = token
                 if hasattr(self.win, "show_bubble"):
                     name = self.AGENT_NAMES.get(agent_key, agent_key)
                     self.win.show_bubble(self._dialogue("bridge.install.pending", "正在安装 DSH 桥接插件…", name=name), duration_ms=4000)
                 import threading
                 threading.Thread(
-                    target=self._install_dsh_worker, daemon=True, name="dsh-bridge-install",
+                    target=self._install_dsh_worker, args=(token,), daemon=True,
+                    name="dsh-bridge-install",
                 ).start()
                 return False
         else:
+            if agent_key == "dsh":
+                self._install_pending.pop("dsh", None)
+                self._install_token += 1
             # 关闭联动时移除我们注入的内容（只删自己的，用户自有配置不碰）；
             # 其他多开实例仍在使用则保留（hooks/插件是全局状态）
             if agent_key == "claude":
@@ -1585,8 +1834,8 @@ class AgentLinkManager(QObject):
             mon.pause()
         self._stuck_detector.pause()
         self._behavior_detector.pause()
-        if hasattr(self.win, "_pending_link_anim"):
-            self.win._pending_link_anim = None
+        if hasattr(self.win, "clear_pending_link_anim"):
+            self.win.clear_pending_link_anim()
         for key in list(self._done_pending):
             self._cancel_done_check(key)
         self._sound_last_event.clear()
@@ -1598,8 +1847,37 @@ class AgentLinkManager(QObject):
         self._stuck_detector.resume()
         self._behavior_detector.resume()
 
-    def _on_agent_state(self, agent_key: str, state: str) -> None:
+    def shutdown(self) -> None:
+        """窗口销毁/角色切换时停止所有 monitor worker，且作废安装回调。"""
+        self._shutdown = True
+        self._install_pending.clear()
+        self._install_token += 1
+        for mon in self.monitors.values():
+            mon.begin_stop()
+        active = [
+            mon for mon in self.monitors.values()
+            if mon._worker is not None and mon._worker.is_alive()
+        ]
+        if not active:
+            return
+        deadline = time.monotonic() + BaseAgentMonitor._STOP_JOIN_TIMEOUT_S
+        for mon in active:
+            mon.finish_stop(deadline)
+
+    def _gen_current(self, agent_key: str, gen: int) -> bool:
+        mon = self.monitors.get(agent_key)
+        return mon is not None and gen == mon._emit_gen
+
+    def _on_agent_state_event(self, event: AgentEvent) -> None:
+        self._on_agent_state(event.agent, event.state, event.gen)
+
+    def _on_agent_activity_event(self, event: AgentEvent) -> None:
+        self._on_agent_activity(event.agent, event.tool, event.gen)
+
+    def _on_agent_state(self, agent_key: str, state: str, gen: int = 0) -> None:
         """接收 Agent 状态变更并调度桌宠动作/气泡（带去抖与节流）。"""
+        if not self._gen_current(agent_key, gen):
+            return
         # 兜底：该 agent 已回待机（任务结束）但审批/问题还没收到 resolved → 交互必然失效。
         # 放在可见性判断之前：窗口隐藏期间也要清 pending，避免恢复显示时挂出陈旧气泡。
         if state in ("idle", "sleeping"):
@@ -1617,6 +1895,10 @@ class AgentLinkManager(QObject):
 
         if not hasattr(self.win, "isVisible") or not self.win.isVisible():
             return
+
+        mark = getattr(self.win, "mark_activity", None)
+        if callable(mark):
+            mark()
 
         now = self._clock()
         # --- 原始状态流（绕开去抖/节流）：busy→idle 完成检测 ---
@@ -1678,8 +1960,8 @@ class AgentLinkManager(QObject):
             # 回到待机：一次性动作播完自然回，待机/移动中立即回
             if hasattr(self.win, "request_link_idle"):
                 self.win.request_link_idle()
-            elif hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles:
-                self.win._switch(self.win._pick(self.win.idles))
+            elif hasattr(self.win, "switch_clip") and getattr(self.win, "idles", None):
+                self.win.switch_clip(self.win.idles[0])
 
     # ------------------------------------------------------------------
     # 联动动作池（写代码/吃Token 交替为主，每第 3 次插播短摸鱼）
@@ -1688,6 +1970,21 @@ class AgentLinkManager(QObject):
     _LINK_BREAK = ("轻快记录", "漂浮踏步")
     _LINK_MAIN_KEYWORDS = ("代码", "工作", "写", "打字", "敲")
     _LINK_BREAK_KEYWORDS = ("记录", "踏步", "伸懒腰")
+
+    def any_busy(self) -> bool:
+        """Return whether an enabled monitor currently reports active work.
+
+        ``_last_raw`` intentionally keeps the latest state after a monitor is
+        stopped, so it must be paired with the monitor lifecycle flag here.
+        Using ``is_running()`` would incorrectly treat a paused monitor as
+        disabled; ``_running`` is the lifecycle state used by ``apply_config``
+        and is therefore the authoritative check for the idle-FPS gate.
+        """
+        return any(
+            bool(getattr(monitor, "_running", False))
+            and self._last_raw.get(agent_key) in self._BUSY_STATES
+            for agent_key, monitor in self.monitors.items()
+        )
 
     def _next_link_anim_rotation(self) -> str | None:
         """下一个联动动作：主动作严格交替；每第 3 次插播摸鱼（独立节奏）。"""
@@ -1814,9 +2111,14 @@ class AgentLinkManager(QObject):
                 important=False, duration_ms=3000,
             )
 
-    def _on_agent_activity(self, agent_key: str, tool: str) -> None:
+    def _on_agent_activity(self, agent_key: str, tool: str, gen: int = 0) -> None:
         """过程汇报气泡（可选，默认关）：「DSH 正在读文件…」这类。
         白名单工具映射 + 三重限流（同 Agent 10s / 同文案 60s / 全局 8s）。"""
+        if not self._gen_current(agent_key, gen):
+            return
+        mark = getattr(self.win, "mark_activity", None)
+        if callable(mark):
+            mark()
         agent_cfg = self.cfg.get("agent_link", {})
         if not agent_cfg.get("notify_activity", False):
             return
@@ -2464,9 +2766,8 @@ class AgentLinkManager(QObject):
                    for k, s in self._last_raw.items()):
             if hasattr(self.win, "request_link_idle"):
                 self.win.request_link_idle()
-            elif hasattr(self.win, "idles") and hasattr(self.win, "_pick") and self.win.idles \
-                    and hasattr(self.win, "_switch"):
-                self.win._switch(self.win._pick(self.win.idles))
+            elif hasattr(self.win, "switch_clip") and getattr(self.win, "idles", None):
+                self.win.switch_clip(self.win.idles[0])
             self._last_applied[agent_key] = ("idle", now)
         self._show_link_bubble(text, important=True)
 

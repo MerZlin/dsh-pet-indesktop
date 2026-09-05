@@ -234,11 +234,11 @@ def build_animation_categories(
     leaf_role_icons: bool = False,
 ) -> None:
     categories = (
-        ("待机", pet.idles, pet._switch),
-        ("转向", pet.turns, pet._switch),
-        ("移动", pet.moves, pet._trigger_move),
-        ("点击回应", pet.clicks, pet._switch),
-        ("随机动作", pet.acts, pet._switch),
+        ("待机", pet.idles, pet.switch_clip),
+        ("转向", pet.turns, pet.switch_clip),
+        ("移动", pet.moves, pet.trigger_move),
+        ("点击回应", pet.clicks, pet.switch_clip),
+        ("随机动作", pet.acts, pet.switch_clip),
     )
     for label, entries, callback in categories:
         if not entries:
@@ -284,9 +284,9 @@ def build_character_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
         action.setChecked(character_id == current)
         group.addAction(action)
         action.setProperty("closeOnTrigger", True)
-        connect_action(action, lambda character_id=character_id: pet._request_switch_character(character_id))
+        connect_action(action, lambda character_id=character_id: pet.request_switch_character(character_id))
     # 角色显示名别名（空名恢复默认）
-    rename = getattr(pet, "_rename_character", None)
+    rename = getattr(pet, "rename_character", None)
     if callable(rename):
         submenu.addSeparator()
         add_action(submenu, "重命名当前角色…", None, rename, close_on_trigger=True)
@@ -312,15 +312,15 @@ def add_proactive_menu(menu: QMenu, pet) -> None:
         act.toggled.connect(handler)
         return act
 
-    _toggle('开启主动识屏', pro_cfg.get('enabled', False), pet._toggle_proactive_enabled)
+    _toggle('开启主动识屏', pro_cfg.get('enabled', False), pet.toggle_proactive_enabled)
     _toggle('鼠标穿透时仍允许主动识屏', pro_cfg.get('allow_when_mouse_through', True),
-            lambda on: pet._set_proactive_option('allow_when_mouse_through', on))
+            lambda on: pet.set_proactive_option('allow_when_mouse_through', on))
     _toggle('触发前先兆提示', pro_cfg.get('pre_cue', True),
-            lambda on: pet._set_proactive_option('pre_cue', on))
+            lambda on: pet.set_proactive_option('pre_cue', on))
     _toggle('仅当我闲置时触发', pro_cfg.get('require_idle', False),
-            lambda on: pet._set_proactive_option('require_idle', on))
+            lambda on: pet.set_proactive_option('require_idle', on))
     _toggle('dry-run 验证模式', pro_cfg.get('dry_run', False),
-            lambda on: pet._set_proactive_option('dry_run', on))
+            lambda on: pet.set_proactive_option('dry_run', on))
     sub.addSeparator()
     open_settings = getattr(pet, 'on_open_modern_settings', None) or getattr(pet, 'on_open_legacy_settings', None)
     if open_settings is not None:
@@ -340,7 +340,7 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act = sub.addAction(agent_label)
         act.setCheckable(True)
         act.setChecked(bool(agent_cfg.get(agent_key, False)))
-        act.toggled.connect(lambda on, k=agent_key, a=act: pet._toggle_agent_link(k, on, a))
+        act.toggled.connect(lambda on, k=agent_key, a=act: pet.toggle_agent_link(k, on, a))
     # 自定义联动 Agent（config.json 的 agent_link.custom_agents，只读监听）
     for item in (agent_cfg.get('custom_agents') or []):
         key = str(item.get('key') or '')
@@ -349,7 +349,7 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act = sub.addAction(str(item.get('name') or key))
         act.setCheckable(True)
         act.setChecked(bool(agent_cfg.get(key, False)))
-        act.toggled.connect(lambda on, k=key, a=act: pet._toggle_agent_link(k, on, a))
+        act.toggled.connect(lambda on, k=key, a=act: pet.toggle_agent_link(k, on, a))
     sub.addSeparator()
     for opt_key, opt_label in (
         ('notify_state', '开始干活气泡提醒'),
@@ -359,7 +359,7 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act = sub.addAction(opt_label)
         act.setCheckable(True)
         act.setChecked(bool(agent_cfg.get(opt_key, opt_key == 'notify_done')))
-        act.toggled.connect(lambda on, k=opt_key: pet._set_agent_link_option(k, on))
+        act.toggled.connect(lambda on, k=opt_key: pet.set_agent_link_option(k, on))
 
     # ---- 卡住检测配置子菜单（开关 + 阈值/窗口/冷却/文案）----
     sub.addSeparator()
@@ -367,7 +367,7 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
     act = stuck.addAction("启用卡住检测（钻牛角尖时建议人工介入）")
     act.setCheckable(True)
     act.setChecked(bool(agent_cfg.get('stuck_detect', False)))
-    act.toggled.connect(lambda on: pet._set_agent_link_option('stuck_detect', on))
+    act.toggled.connect(lambda on: pet.set_agent_link_option('stuck_detect', on))
     stuck.addSeparator()
     _add_stuck_config_rows(stuck, pet, agent_cfg)
 
@@ -386,14 +386,14 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
     act = pattern.addAction("启用循环检测（识别重复 Search/Read/Think）")
     act.setCheckable(True)
     act.setChecked(bool(agent_cfg.get('exploration_watchdog_enabled', True)))
-    act.toggled.connect(lambda on: pet._set_agent_link_option('exploration_watchdog_enabled', on))
+    act.toggled.connect(lambda on: pet.set_agent_link_option('exploration_watchdog_enabled', on))
     mode = str(agent_cfg.get('exploration_watchdog_mode', 'manual')).lower()
     manual = pattern.addAction('手动模式')
     manual.setCheckable(True); manual.setChecked(mode != 'auto')
-    manual.triggered.connect(lambda: pet._set_agent_link_mode('manual'))
+    manual.triggered.connect(lambda: pet.set_agent_link_mode('manual'))
     auto = pattern.addAction('自动模式')
     auto.setCheckable(True); auto.setChecked(mode == 'auto')
-    auto.triggered.connect(lambda: pet._set_agent_link_mode('auto'))
+    auto.triggered.connect(lambda: pet.set_agent_link_mode('auto'))
     pattern.addSeparator()
     _add_pattern_config_rows(pattern, pet, agent_cfg)
 
@@ -409,12 +409,12 @@ def _add_stuck_config_rows(stuck: QMenu, pet, agent_cfg: dict) -> None:
         act = stuck.addAction(f"{label}：{current} {unit}")
         act.triggered.connect(
             lambda _=False, k=key, lb=label, un=unit, df=default, mn=minimum, mx=maximum:
-            pet._edit_agent_link_int(k, lb, un, df, mn, mx)
+            pet.edit_agent_link_int(k, lb, un, df, mn, mx)
         )
 
     def _text_row(key: str, label: str) -> None:
         act = stuck.addAction(label)
-        act.triggered.connect(lambda _=False, k=key, lb=label: pet._edit_agent_link_text(k, lb))
+        act.triggered.connect(lambda _=False, k=key, lb=label: pet.edit_agent_link_text(k, lb))
 
     _int_row('stuck_worried_threshold', '担忧动画阈值', '分', 3, 1, 20)
     _int_row('stuck_intervene_threshold', '介入提醒阈值', '分', 5, 2, 50)
@@ -435,7 +435,7 @@ def _add_pattern_config_rows(pattern: QMenu, pet, agent_cfg: dict) -> None:
         act = pattern.addAction(f"{label}：{current} {unit}")
         act.triggered.connect(
             lambda _=False, k=key, lb=label, un=unit, df=default, mn=minimum, mx=maximum:
-            pet._edit_agent_link_int(k, lb, un, df, mn, mx)
+            pet.edit_agent_link_int(k, lb, un, df, mn, mx)
         )
 
     _int_row('exploration_watchdog_warning_threshold', 'Warning threshold', '分', 3, 1, 20)
@@ -446,9 +446,9 @@ def _add_pattern_config_rows(pattern: QMenu, pet, agent_cfg: dict) -> None:
     _int_row('exploration_watchdog_long_run_minutes', '长时间运行', '分钟', 10, 2, 240)
     _int_row('exploration_watchdog_long_think_seconds', '单次超长 Think', '秒', 120, 10, 1800)
     model = pattern.addAction(f"Judge model：{agent_cfg.get('exploration_watchdog_judge_model') or '默认'}")
-    model.triggered.connect(lambda: pet._edit_agent_link_text('exploration_watchdog_judge_model', 'Judge model'))
+    model.triggered.connect(lambda: pet.edit_agent_link_text('exploration_watchdog_judge_model', 'Judge model'))
     provider = pattern.addAction(f"Judge API：{agent_cfg.get('exploration_watchdog_judge_provider') or '当前聊天 API'}")
-    provider.triggered.connect(lambda: pet._edit_agent_link_text('exploration_watchdog_judge_provider', 'Judge API provider ID'))
+    provider.triggered.connect(lambda: pet.edit_agent_link_text('exploration_watchdog_judge_provider', 'Judge API provider ID'))
     pattern.addSeparator()
     open_watchdog = pattern.addAction("循环检测设置…")
     open_watchdog.triggered.connect(lambda: getattr(pet, 'on_open_watchdog_settings', None) and pet.on_open_watchdog_settings())
@@ -477,7 +477,7 @@ def add_drag_physics(menu: QMenu, pet, *, icons: bool = True):
 
 
 def add_return_corner(menu: QMenu, pet, *, icons: bool = True):
-    return add_action(menu, "回到右下角", "corner" if icons else None, pet._go_default_corner)
+    return add_action(menu, "回到右下角", "corner" if icons else None, pet.go_default_corner)
 
 
 def add_hide_pet(menu: QMenu, pet, *, icons: bool = True):
@@ -586,4 +586,4 @@ def add_template_switch(menu: QMenu, pet, label: str, target: str, *, icons: boo
 
 
 def add_quit(menu: QMenu, pet, *, icons: bool = True):
-    return add_action(menu, "退出", "exit" if icons else None, pet._request_quit, close_on_trigger=True)
+    return add_action(menu, "退出", "exit" if icons else None, pet.request_quit, close_on_trigger=True)

@@ -1,0 +1,24 @@
+
+QDialog { background: #202024; color: #e4e4e9; }
+QFrame#sidebarPane { background: #26262b; border-right: 1px solid #34343a; }
+QStackedWidget { background: #202024; }
+QLineEdit#settingsSearch { background: #2e2e35; color: #e4e4e9; }
+QPushButton#saveAndExit { color: #e4e4e9; }
+QPushButton#saveAndExit:hover { background: #33333c; }
+QListWidget#settingsSidebar::item { color: #b8b8c0; }
+QListWidget#settingsSidebar::item:hover { background: #2e2e36; color: #f0f0f5; }
+QListWidget#settingsSidebar::item:selected { background: #3a3a46; color: #ffffff; }
+QLabel#pageTitle { color: #f0f0f5; }
+QLabel#sectionTitle { color: #d8d8e0; }
+QFrame#settingsCard { background: #2a2a30; border: 1px solid #3a3a42; }
+QFrame#cardSeparator { background: #33333a; }
+QLabel#settingLabel { color: #e0e0e6; }
+QLabel#settingHint { color: #9a9aa3; }
+QLabel#settingLabel:disabled, QLabel#settingHint:disabled { color: #66666e; }
+SettingRow[searchMatch="true"] { background: #2c3a4e; }
+QListWidget#quickLaunchList { background: #26262c; border: 1px solid #3c3c44; }
+QListWidget#quickLaunchList::item:selected { background: #3a3a46; color: #ffffff; }
+QPushButton { background: #3a3a42; border: 1px solid #4a4a54; color: #e4e4e9; }
+QPushButton:hover { background: #44444e; }
+QToolButton { color: #e4e4e9; }
+QCheckBox, QRadioButton, QComboBox, QListWidget, QTreeWidget, QTableView { color: #e4e4e9; }
