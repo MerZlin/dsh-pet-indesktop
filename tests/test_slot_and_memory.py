@@ -456,6 +456,30 @@ def test_normal_reopen_keeps_existing_slot_config(tmp_path, monkeypatch):
     assert reopened.get("character") == "dundun"
 
 
+def test_spawn_seed_respects_inherit_size_switch(tmp_path, monkeypatch):
+    """生小肥鱼继承大小开关：开启保留主 scale，关闭改用 spawn_scale。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    # 开启继承：主鱼 1.0，新鱼也应为 1.0
+    master = Config(base=tmp_path)
+    master.set("scale", 1.0)
+    master.set("spawn_inherit_size", True)
+    master.set("spawn_scale", 0.5)
+    master.save()
+    monkeypatch.setenv("DSH_PET_SPAWN_FRESH", "1")
+    slot_inherit = Config(base=tmp_path, instance_id="slot-1")
+    assert slot_inherit.get("scale") == 1.0
+
+    # 关闭继承：主鱼仍是 1.0，但新鱼应使用 spawn_scale=0.5
+    master.set("spawn_inherit_size", False)
+    master.save()
+    slot_custom = Config(base=tmp_path, instance_id="slot-2")
+    assert slot_custom.get("scale") == 0.5
+    assert slot_custom.get("spawn_inherit_size") is False
+    assert slot_custom.get("spawn_scale") == 0.5
+
+
 def test_corrupt_config_backup_unique_timestamp(tmp_path):
     """场景 6：损坏配置唯一备份名，连续恢复不覆盖旧备份。"""
     config_dir = tmp_path / APP_DIR_NAME

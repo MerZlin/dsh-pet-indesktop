@@ -528,6 +528,8 @@ class Config:
             "screen_name": None,
             "facing": "left",
             "scale": catalog.DEFAULT_SCALE,
+            "spawn_inherit_size": True,  # 生小肥鱼继承主肥鱼大小（False 用 spawn_scale）
+            "spawn_scale": catalog.DEFAULT_SCALE,  # 关闭继承时生小肥鱼使用的尺寸
             "on_top": True,
             "show_dock_icon": True,
             "no_move": False,
@@ -654,6 +656,15 @@ class Config:
         seed["ry"] = None
         seed["screen_name"] = None
         seed["autostart_wanted"] = False
+        # 生小肥鱼大小策略：开启继承 → 保留主配置 scale；
+        # 关闭继承 → 用主配置里给“小肥鱼”单独选择的 spawn_scale。
+        inherit_size = _bool_or_default(seed.get("spawn_inherit_size"), True)
+        seed["spawn_inherit_size"] = inherit_size
+        if not inherit_size:
+            try:
+                seed["scale"] = float(seed.get("spawn_scale", catalog.DEFAULT_SCALE))
+            except (TypeError, ValueError):
+                seed["scale"] = catalog.DEFAULT_SCALE
         chat = seed.get("chat")
         if isinstance(chat, dict):
             providers = chat.get("providers")
@@ -745,6 +756,7 @@ class Config:
                         merged_provider["vision_api_key"] = previous_provider["vision_api_key"]
         for key in (
             "rx", "ry", "screen_name", "facing", "scale", "on_top", "show_dock_icon", "no_move", "character",
+            "spawn_inherit_size", "spawn_scale",
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
@@ -875,6 +887,12 @@ class Config:
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
         self.data["cursor_hidden_passthrough"] = _bool_or_default(
             self.data.get("cursor_hidden_passthrough"), True
+        )
+        self.data["spawn_inherit_size"] = _bool_or_default(
+            self.data.get("spawn_inherit_size"), True
+        )
+        self.data["spawn_scale"] = _float_or_default(
+            self.data.get("spawn_scale"), catalog.DEFAULT_SCALE, 0.1, 4.0
         )
         self.data["show_dock_icon"] = bool(self.data.get("show_dock_icon", True))
         self.data["self_talk_texts"] = _clean_self_talk_texts(self.data.get("self_talk_texts"))
@@ -1040,6 +1058,7 @@ class Config:
             "slingshot_enabled", "throw_strength", "agent_link",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
             "animation_prewarm_enabled",
+            "spawn_inherit_size", "spawn_scale",
             "todo_reminder_enabled", "todo_reminder_lead_minutes",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:

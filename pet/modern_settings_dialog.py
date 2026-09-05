@@ -2870,6 +2870,14 @@ class ModernSettingsDialog(QDialog):
             SettingRow("lock_position", "锁定位置", "桌宠固定不动，无法拖动（点击互动仍有效）。", self.lock_position_check),
             SettingRow("shift_drag", "SHIFT+左键拖动", "开启后必须按住 SHIFT 再左键才能拖动桌宠。", self.shift_drag_check),
         ], behavior_content))
+        behavior_layout.addWidget(SettingsSection("生小肥鱼", [
+            SettingRow("spawn_inherit_size", "生小肥鱼继承大小",
+                       "开启后生成的小肥鱼与主肥鱼大小一致；关闭后使用下方为小肥鱼单独选择的大小。",
+                       self.spawn_inherit_size_check),
+            SettingRow("spawn_scale", "小肥鱼大小",
+                       "关闭“继承大小”时，新生成小肥鱼使用的桌面尺寸。",
+                       self.spawn_scale_combo, stacked=True),
+        ], behavior_content))
         behavior_layout.addWidget(SettingsSection("多开碰撞", [
             SettingRow("collision_enabled", "碰撞开关", "多开桌宠之间发生碰撞物理互动。开启鼠标穿透的桌宠仍会参与碰撞，锁定位置的桌宠作为固定障碍。", self.collision_enabled_check),
             SettingRow("collision_restitution", "弹性系数", "碰撞反弹的能量保留程度（0~1.00，默认 0.82）。", self.collision_restitution_spin),
@@ -3068,6 +3076,7 @@ class ModernSettingsDialog(QDialog):
         if hasattr(self, "pro_enabled_check"):
             self.pro_enabled_check.toggled.connect(self._update_proactive_controls)
             self.pro_idle_check.toggled.connect(self._update_proactive_idle_controls)
+        self.spawn_inherit_size_check.toggled.connect(self._update_spawn_size_controls)
         self._update_self_talk_controls(self.self_talk_check.isChecked())
         self._update_translucency_controls(self.menu_translucent_check.isChecked())
         self._update_island_controls(self.island_enabled_check.isChecked())
@@ -3076,6 +3085,7 @@ class ModernSettingsDialog(QDialog):
         self._update_collision_controls(self.collision_enabled_check.isChecked())
         if hasattr(self, "pro_enabled_check"):
             self._update_proactive_controls(self.pro_enabled_check.isChecked())
+        self._update_spawn_size_controls(self.spawn_inherit_size_check.isChecked())
         # 初始同步须在全部 SettingRow 构建完成后执行，否则 findChild 找不到行
         self._update_click_sound_controls(self.click_sound_check.isChecked())
         self._update_agent_sound_controls(self.agent_sound_check.isChecked())
@@ -3102,6 +3112,19 @@ class ModernSettingsDialog(QDialog):
         for scale in scales:
             self.scale_combo.addItem(f"{int(round(catalog.CANVAS_W * scale))} px", scale)
         self.scale_combo.setCurrentIndex(self.scale_combo.findData(current_scale))
+
+        # 生小肥鱼尺寸策略：默认继承主肥鱼大小；关闭后使用 spawn_scale 独立选择。
+        self.spawn_inherit_size_check = ToggleSwitch(self)
+        self.spawn_inherit_size_check.setChecked(bool(self.config.get("spawn_inherit_size", True)))
+        self.spawn_scale_combo = ModernSelect(self, width=132)
+        current_spawn_scale = float(self.config.get("spawn_scale", catalog.DEFAULT_SCALE))
+        spawn_scales = list(catalog.SCALE_STEPS)
+        if not any(abs(current_spawn_scale - value) < 0.001 for value in spawn_scales):
+            spawn_scales.append(current_spawn_scale)
+            spawn_scales.sort()
+        for scale in spawn_scales:
+            self.spawn_scale_combo.addItem(f"{int(round(catalog.CANVAS_W * scale))} px", scale)
+        self.spawn_scale_combo.setCurrentIndex(self.spawn_scale_combo.findData(current_spawn_scale))
 
         self.on_top_check = ToggleSwitch(self)
         self.on_top_check.setChecked(bool(self.config.get("on_top", True)))
@@ -3890,6 +3913,14 @@ class ModernSettingsDialog(QDialog):
     def _update_translucency_controls(self, enabled: bool) -> None:
         self._set_setting_rows_visible(("menu_opacity",), enabled)
 
+    def _update_spawn_size_controls(self, inherit_size: bool) -> None:
+        """“生小肥鱼继承大小”关闭时才显示独立小肥鱼大小选择。"""
+        self._set_setting_rows_visible(
+            ("spawn_scale",),
+            not bool(inherit_size),
+            dependency="spawn_inherit_size",
+        )
+
     def _apply_agent_sound_enabled_now(self, checked: bool) -> None:
         """音效总开关即时生效，不等对话框关闭（合并写回，不动其他 agent_link 键）。"""
         agent_cfg = dict(self.config.get("agent_link", {}))
@@ -4036,6 +4067,7 @@ class ModernSettingsDialog(QDialog):
             ("显示", claim("scale", "pet_opacity")),
             ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "animation_prewarm", "no_move", "music_sing")),
             ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
+            ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale")),
             ("多开碰撞", collision_primary),
             ("碰撞参数（高级）", collision_advanced, True),
         ])
@@ -4266,6 +4298,8 @@ class ModernSettingsDialog(QDialog):
         maximum = max(self.min_spin.value(), self.max_spin.value())
         texts = [line.strip()[:120] for line in self.texts_edit.toPlainText().splitlines() if line.strip()]
         self.config.set("scale", float(self.scale_combo.currentData()))
+        self.config.set("spawn_inherit_size", self.spawn_inherit_size_check.isChecked())
+        self.config.set("spawn_scale", float(self.spawn_scale_combo.currentData()))
         self.config.set("on_top", self.on_top_check.isChecked())
         if self.dock_icon_check is not None:
             self.config.set("show_dock_icon", self.dock_icon_check.isChecked())
