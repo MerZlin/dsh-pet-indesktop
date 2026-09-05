@@ -35,6 +35,14 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # +1 行。详见 _plan/current/memory/REVIEW_flicker_glm53.md）。
 WINDOW_PY_LINE_BUDGET = 4367
 
+# modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
+# 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
+# re-export 留守本文件；控件库 / 菜单布局编辑器 / AI 设置页 / 主题 QSS 已分别拆至
+# settings_widgets / settings_menu_layout_editor / chat/ai_settings_page /
+# settings_theme_qss。预算 = 1857 + 50 行余量；再往上帝类里塞新页面时只许降不涨。
+# 2026-09-05 建立（perf/memory-footprint 拆分批）。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 1907
+
 
 def _read(name: str) -> str:
     return (PET_DIR / name).read_text(encoding="utf-8")
@@ -74,6 +82,14 @@ def test_window_py_line_budget():
         f"window.py 涨到 {lines} 行（预算 {WINDOW_PY_LINE_BUDGET}）。"
         "新功能请先拆对应控制器（docs/WINDOW_PY_SPLIT_GUIDE.md），"
         "确需上调预算时在 PR 说明理由。"
+    )
+
+
+def test_modern_settings_dialog_py_line_budget():
+    lines = len(_read("modern_settings_dialog.py").splitlines())
+    assert lines <= MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET, (
+        f"modern_settings_dialog.py 涨到 {lines} 行（预算 {MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET}）。"
+        "控件库/菜单布局编辑器/AI 设置页/主题 QSS 已拆出；确需上调预算时在 PR 说明理由。"
     )
 
 
