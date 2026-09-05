@@ -630,7 +630,7 @@ def test_context_menu_open_holds_gate_until_closed(app, tmp_path, monkeypatch):
     win = PetWindow(lib, Config(base=tmp_path))
     monkeypatch.setattr(window_mod, "_populate_context_menu", lambda menu, pet: None)
     # 局限（见文件头注释）：真实 QMenu.exec() nested loop 不在单测覆盖内
-    monkeypatch.setattr(QMenu, "exec", lambda self, *args, **kwargs: None)
+    monkeypatch.setattr(PetWindow, "_exec_context_menu", lambda self, menu, pos: None)
 
     win._show_context_menu(QPoint(100, 100))
     assert lib.begins == 1, "右键菜单打开期间应持有让路闸门"

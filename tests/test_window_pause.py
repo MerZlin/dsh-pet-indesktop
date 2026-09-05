@@ -7,6 +7,7 @@ mask，多开时属于纯白烧。此测试锁定 hideEvent 暂停、showEvent �
 from __future__ import annotations
 
 import pytest
+import shiboken6
 from PySide6.QtCore import QObject, QRect, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
@@ -103,12 +104,16 @@ class WarmRecordingLibrary(FakeLibrary):
         super().__init__()
         self.pause_calls = 0
         self.resume_calls = 0
+        self.shutdown_calls = 0
 
     def pause_warm(self):
         self.pause_calls += 1
 
     def resume_warm(self):
         self.resume_calls += 1
+
+    def shutdown(self):
+        self.shutdown_calls += 1
 
 
 @pytest.fixture
@@ -223,9 +228,16 @@ def test_native_set_visible_cycle_recovers_warm(app, tmp_path):
     app.processEvents()
     assert win._hidden_paused is False
     assert lib.resume_calls >= 1, "原生隐藏→显示周期后必须恢复预热，不得永久停用"
+    assert lib.shutdown_calls == 0, "隐藏是可恢复生命周期，不得永久关闭素材库"
 
+    bubble = win._speech_bubble
     win.close()
     app.processEvents()
+    assert lib.shutdown_calls == 1, "真正关闭窗口时才应永久关闭素材库"
+    assert not shiboken6.isValid(bubble), "关闭窗口时应同步销毁外置气泡"
+    win.close()
+    app.processEvents()
+    assert lib.shutdown_calls == 1, "重复 close 不得重复关闭素材库"
 
 
 def test_fullscreen_geometry_hit_requires_borderless(app, tmp_path):

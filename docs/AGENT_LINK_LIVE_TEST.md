@@ -144,3 +144,11 @@ python -m pet
 - 疑似 bug 清单：无 / 具体问题
 - 建议：可进入下一步 / 需先修复 xxx
 ```
+
+## 8. Qt 生命周期与后台资源收口
+
+AgentLink 的实机验证结束后，不要只关闭可见窗口：`PetWindow.closeEvent()` 会按 owner 顺序停止 AgentLink monitor、全屏 watcher、碰撞输入、素材库、当前 movie reader 和相关 timer。测试环境还会在每个测试后调用 AgentLink、MovieLibrary 与 session writer 的测试收口，在 session 结束对遗留 `webm-reader-*` 做有界 cleanup。
+
+不要用全局 `QApplication.sendPostedEvents(None, QEvent.DeferredDelete)` 清理局部菜单或气泡；这会处理其他测试留下的 QObject。无父级 `PetSpeechBubble` 由 `PetWindow.closeEvent()` 先断开信号、再 `dismiss()`/`close()`，最后在 GUI 线程同步释放。完整 Windows offscreen 结果与排查规则见 `docs/QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md`。
+
+最终回归顺序固定为：先运行非压力主套件，确认没有 native abort，再单独运行跨进程高并发 broker 测试。

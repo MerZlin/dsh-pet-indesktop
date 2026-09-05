@@ -32,6 +32,17 @@ def _mute_qt_audio(monkeypatch):
         return
     monkeypatch.setattr(QSoundEffect, "play", lambda self: None)
     monkeypatch.setattr(QMediaPlayer, "play", lambda self: None)
+    # 只静音 play() 不够：warm_click_sound_effects / ensure_qt_player 仍会真实
+    # 创建 QSoundEffect/QMediaPlayer/QAudioOutput。真实桌面会话上这些音频后端
+    # 对象反复初始化/释放是全量套件原生崩溃的炸点（崩溃点漂移，常在后续测试
+    # 的 processEvents 引爆）。测试进程内一律不创建原生 QtMultimedia 对象；
+    # 需要测音效逻辑的用例自行替换 qt_multimedia_classes 注入 Fake
+    # （test_click_sound.py 即如此，用例级 monkeypatch 会覆盖这里的 stub）。
+    from pet import click_sound
+
+    pool = click_sound._pool
+    monkeypatch.setattr(pool, "qt_multimedia_classes", lambda: None, raising=True)
+    monkeypatch.setattr(pool, "ensure_qt_player", lambda: None, raising=True)
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +71,41 @@ def _close_session_writers():
     try:
         from pet.chat import session_store
         session_store.reset_writers_for_tests()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _clear_click_sound_pool():
+    """每测后清空点击音效池（测试债防线）。
+
+    conftest 只静音了 play()，但设置保存等路径的 warm_click_sound_effects
+    会真实创建 QSoundEffect/QMediaPlayer/QAudioOutput。这些 QtMultimedia
+    原生对象跨测试累积后，在共享 QApplication 下随机 access violation /
+    Fatal abort（全量套件崩溃点会漂移：click_sound 预热循环、气泡图片
+    processEvents 均观测到）。每测后 clear() 复位原生对象缓存。
+    """
+    yield
+    try:
+        from pet import click_sound
+        click_sound._pool.clear()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _close_qt_top_level_widgets():
+    """在测试后收口仍存活的应用级后台资源。"""
+    yield
+    try:
+        from pet.agent_link import AgentLinkManager, BaseAgentMonitor
+        AgentLinkManager._shutdown_live_for_tests()
+        BaseAgentMonitor._shutdown_live_for_tests()
+    except Exception:
+        pass
+    try:
+        from pet.library import MovieLibrary
+        MovieLibrary._shutdown_live_for_tests()
     except Exception:
         pass
 

@@ -6,12 +6,16 @@ import logging
 import os
 import sys
 import threading
+import json
 from pathlib import Path
 
 import shiboken6
 
 from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFontDatabase, QIcon, QImageReader, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import (
+    QAction, QColor, QClipboard, QFontDatabase, QIcon, QImageReader, QPainter,
+    QPainterPath, QPen, QPixmap,
+)
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
@@ -78,6 +82,45 @@ from .menu_layout import (
     resolve_menu_layout,
 )
 from .speech_bubble import BUBBLE_STYLE_PRESETS
+from .persona_phrases import phrase_keys, default_phrases
+from .persona_template import PARAMETERS, build_persona_template, template_json
+
+
+# 语言配置页只展示用户能理解的事件名称；内部 key 仍用于保存和渲染。
+DIALOGUE_LABELS = {
+    "start": "开始工作", "thinking": "思考", "activity.read": "读取文件",
+    "activity.search": "搜索或查找", "activity.edit": "编辑代码",
+    "activity.run": "运行或测试", "activity.default": "其他工具操作",
+    "agent.attention": "需要用户处理", "agent.error": "Agent 出错",
+    "agent.missing": "未找到 Agent", "bridge.install.pending": "安装桥接中",
+    "bridge.install.success": "桥接安装成功", "bridge.install.failed": "桥接安装失败",
+    "bridge.uninstall.failed": "桥接卸载失败", "dsh.writeback.failed": "回写 DSH 失败",
+    "approval.command": "审批命令", "approval.tool": "审批工具",
+    "approval.generic": "审批提示", "question.empty": "等待选择",
+    "question.one": "单个用户问题", "question.many": "多个用户问题",
+    "watchdog.warning": "循环检测警告", "watchdog.intervention": "循环检测干预",
+    "watchdog.unknown": "循环判断不可用", "rate_limit.one": "单次限流",
+    "rate_limit.many": "连续限流", "llm_error.api": "AI 服务错误",
+    "done.success": "任务完成",
+    "done.attention": "任务暂停待确认", "failure.retry": "重试后失败",
+    "failure.tool": "工具执行失败", "failure.generic": "执行失败",
+    "control.replan.pending": "重新规划处理中", "control.replan.success": "重新规划完成",
+    "control.interrupt.pending": "终止处理中", "control.interrupt.success": "终止完成",
+    "control.failed": "控制请求失败", "stuck.reminder": "卡住提醒",
+    "pattern.warning": "行为重复警告", "pattern.control": "行为重复干预",
+    "balance.loading": "查询余额中", "balance.result": "余额结果",
+}
+
+DIALOGUE_PARAMS = {
+    "name": "Agent 名称", "command": "待审批命令", "label": "工具标签",
+    "body": "问题内容", "count": "数量", "reasons": "判断原因",
+    "detail": "错误详情", "text": "显示文本",
+    "tool": "原始工具名", "target": "操作目标", "callId": "工具调用 ID",
+    "step": "步骤序号", "ok": "是否成功",
+}
+
+# 与 persona_template.PARAMETERS 保持同一真相源：调用点注入什么，这里就宣称什么。
+DIALOGUE_KEY_PARAMS = dict(PARAMETERS)
 
 
 def _system_font_families() -> tuple[str, ...]:
@@ -2943,6 +2986,31 @@ class ModernSettingsDialog(QDialog):
             SettingRow("agent_sound_cooldown", "冷却时间", "防止短时间内频繁触发音效；0 表示无时间冷却（仍单次去重）。", self.agent_sound_cooldown_spin),
         ]
         behavior_layout.addWidget(SettingsSection("Agent 联动 · 提示音效", agent_sound_rows, behavior_content))
+        labels = DIALOGUE_LABELS
+        behavior_layout.addWidget(SettingsSection("表达风格", [
+            SettingRow("dialogue_mode", "表达风格", "控制桌宠自言自语、候选内容和主动气泡的说话方式；同时覆盖 Agent 状态、审批、提问、错误、限流等所有气泡。内置「原有模式」与「鲸鱼娘女仆模式」不可编辑；选择「自定义台词」后，可粘贴下方 JSON 一键导入全部弹窗文案。", self.dialogue_mode_select),
+        ], behavior_content))
+        behavior_layout.addWidget(SettingsCard([
+            SettingRow(
+                "dialogue_template_actions", "弹窗文案模板（JSON）",
+                "一键复制当前全部弹窗内容模板到剪贴板；把复制的 JSON 粘贴回「导入模板」可一次覆盖所有「自定义台词」，也可以直接发给 AI 依角色卡改写。事件留空时自动沿用原有模式文案；模板占位符会自动读取上游事件字段。",
+                self.dialogue_template_actions,
+                stacked=True,
+            ),
+        ], behavior_content))
+        behavior_layout.addWidget(SettingsCard([
+            SettingRow(
+                f"dialogue_{key}",
+                labels.get(key, key),
+                "留空则使用基础模式台词。可用参数："
+                + "、".join("{" + item + "}" for item in DIALOGUE_KEY_PARAMS.get(key, ()))
+                if DIALOGUE_KEY_PARAMS.get(key)
+                else "留空则使用基础模式台词。可用参数：无",
+                edit,
+                stacked=True,
+            )
+            for key, edit in self.dialogue_phrase_edits.items()
+        ], behavior_content))
         behavior_layout.addWidget(SettingsSection("待办提醒", [
             SettingRow("todo_reminder_enabled", "待办提醒",
                        "到点通过气泡或桌面通知提醒；待办条目在右键菜单「待办提醒」面板中管理。",
@@ -3060,6 +3128,10 @@ class ModernSettingsDialog(QDialog):
         # widget to a QScrollArea: that creates a second Qt ownership path when
         # its rows are reparented into the shared card system.
 
+        # Agent Exploration Loop Watchdog 独立设置页
+        from .exploration_watchdog_settings import WatchdogSettingsPage
+        agent_link_cfg = self.config.get("agent_link", {})
+        self.watchdog_page = WatchdogSettingsPage(self.config, agent_link_cfg, self)
         self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
@@ -3359,7 +3431,56 @@ class ModernSettingsDialog(QDialog):
             edit.setClearButtonEnabled(True)
             self.thinking_text_edits[agent_key] = edit
 
-        # Agent 联动：音效控件群
+        self.dialogue_mode_select = ModernSelect(self, width=190)
+        for label, value in (("原有模式", "legacy"), ("鲸鱼娘女仆模式", "whale_maid"), ("自定义台词", "custom")):
+            self.dialogue_mode_select.addItem(label, value)
+        self.dialogue_mode_select.setCurrentData(str(self.config.get("dialogue_mode", "legacy") or "legacy"))
+        configured_phrases = self.config.get("dialogue_phrases", {})
+        self.dialogue_phrase_edits: dict[str, QPlainTextEdit] = {}
+        for key in phrase_keys():
+            edit = QPlainTextEdit(self)
+            raw_value = configured_phrases.get(key, "")
+            if isinstance(raw_value, list):
+                edit.setPlainText("\n".join(str(item) for item in raw_value if isinstance(item, str)))
+            else:
+                edit.setPlainText(str(raw_value or ""))
+            edit.setMinimumHeight(48)
+            edit.setMaximumHeight(120)
+            params = DIALOGUE_KEY_PARAMS.get(key, ())
+            if params:
+                param_text = "、".join(
+                    "{" + item + "}（" + DIALOGUE_PARAMS[item] + "）"
+                    for item in params
+                )
+                placeholder = "留空使用基础模式台词；本事件支持：" + param_text
+            else:
+                placeholder = "留空使用基础模式台词；本事件无可替换参数"
+            edit.setPlaceholderText(placeholder)
+            self.dialogue_phrase_edits[key] = edit
+
+        self.dialogue_template_import_edit = QPlainTextEdit(self)
+        self.dialogue_template_import_edit.setObjectName("dialogueTemplateImportEdit")
+        self.dialogue_template_import_edit.setPlaceholderText(
+            "粘贴 persona-phrases/v1 JSON 模板到这里，然后点击“导入模板”"
+        )
+        self.dialogue_template_import_edit.setMinimumHeight(92)
+        self.dialogue_template_import_edit.setMaximumHeight(180)
+        self.dialogue_template_export_btn = QPushButton("一键复制模板", self)
+        self.dialogue_template_export_btn.setObjectName("dialogueTemplateExportButton")
+        self.dialogue_template_export_btn.clicked.connect(self._export_dialogue_template)
+        self.dialogue_template_import_btn = QPushButton("导入模板", self)
+        self.dialogue_template_import_btn.setObjectName("dialogueTemplateImportButton")
+        self.dialogue_template_import_btn.clicked.connect(self._import_dialogue_template_json)
+        self.dialogue_template_actions = QWidget(self)
+        dialogue_template_actions_layout = QVBoxLayout(self.dialogue_template_actions)
+        dialogue_template_actions_layout.setContentsMargins(0, 0, 0, 0)
+        dialogue_template_actions_layout.setSpacing(6)
+        dialogue_template_actions_layout.addWidget(self.dialogue_template_import_edit)
+        dialogue_template_buttons = QHBoxLayout()
+        dialogue_template_buttons.setContentsMargins(0, 0, 0, 0)
+        dialogue_template_buttons.addWidget(self.dialogue_template_export_btn)
+        dialogue_template_buttons.addWidget(self.dialogue_template_import_btn)
+        dialogue_template_actions_layout.addLayout(dialogue_template_buttons)
         self.agent_sound_check = ToggleSwitch(self)
         self.agent_sound_check.setChecked(bool(agent_link_cfg.get("sound_enabled", False)))
 
@@ -3890,6 +4011,95 @@ class ModernSettingsDialog(QDialog):
             vol = float(self.agent_sound_volume_spin.value()) / 100.0
             play_sound(target, volume=vol)
 
+    def _import_dialogue_template(self) -> None:
+        """导入默认台词模板：将所有预设台词填充到自定义编辑框。"""
+        defaults = default_phrases()
+        for key, edit in self.dialogue_phrase_edits.items():
+            if key in defaults:
+                edit.setPlainText(defaults[key])
+        QMessageBox.information(self, "导入成功", "已导入全部默认台词模板。")
+
+    def _import_dialogue_template_json(self) -> None:
+        """Import a complete persona template from the inline JSON editor."""
+        raw = self.dialogue_template_import_edit.toPlainText().strip()
+        if not raw:
+            QMessageBox.warning(self, "导入失败", "请先粘贴 JSON 模板。")
+            return
+        try:
+            document = json.loads(raw)
+            if not isinstance(document, dict):
+                raise ValueError("模板根节点必须是 JSON 对象")
+            template_name = str(document.get("template", "") or "")
+            if template_name and not template_name.startswith("persona-phrases/"):
+                raise ValueError("不是兼容的 persona-phrases 模板")
+            phrases = document.get("phrases")
+            if not isinstance(phrases, dict):
+                phrases = document.get("dialogue_phrases")
+            if not isinstance(phrases, dict):
+                raise ValueError("模板缺少 phrases 对象")
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            QMessageBox.warning(self, "导入失败", f"JSON 模板无效：{exc}")
+            return
+        for key, edit in self.dialogue_phrase_edits.items():
+            value = phrases.get(key, "")
+            if isinstance(value, list):
+                edit.setPlainText("\n".join(str(item) for item in value if isinstance(item, str)))
+            elif value is not None:
+                edit.setPlainText(str(value))
+        # entries[].phrases 兜底：顶层 phrases 缺失/为空的 key 用 entries 补齐
+        #（顶层有内容时以顶层为准，不被 entries 覆盖）。
+        entries = document.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                edit = self.dialogue_phrase_edits.get(str(entry.get("key") or "").strip())
+                if edit is None:
+                    continue
+                current = phrases.get(entry["key"])
+                has_top = (
+                    (isinstance(current, list) and any(isinstance(i, str) and i.strip() for i in current))
+                    or (isinstance(current, str) and current.strip())
+                )
+                if has_top or edit.toPlainText().strip():
+                    continue
+                value = entry.get("phrases")
+                if isinstance(value, list):
+                    text = "\n".join(str(item) for item in value if isinstance(item, str) and item.strip())
+                    if text:
+                        edit.setPlainText(text)
+        self.dialogue_mode_select.setCurrentData("custom")
+        self.dialogue_template_import_edit.clear()
+        QMessageBox.information(self, "导入成功", "已导入全部弹窗内容模板；点击“保存并退出”后生效。")
+
+    def _dialogue_phrase_values(self) -> dict[str, list[str]]:
+        return {
+            key: [line.strip() for line in edit.toPlainText().splitlines() if line.strip()]
+            for key, edit in self.dialogue_phrase_edits.items()
+        }
+
+    def _current_dialogue_template(self) -> dict:
+        return build_persona_template({
+            "dialogue_mode": self.dialogue_mode_select.currentData() or "legacy",
+            "dialogue_phrases": self._dialogue_phrase_values(),
+        })
+
+    def _export_dialogue_template(self) -> None:
+        """Export the complete current template to the clipboard (no file dialog)."""
+        try:
+            clipboard = QApplication.clipboard()
+            if clipboard is None:
+                raise RuntimeError("系统剪贴板不可用")
+            clipboard.setText(json.dumps(self._current_dialogue_template(), ensure_ascii=False, indent=2) + "\n")
+        except Exception as exc:
+            QMessageBox.warning(self, "导出失败", f"无法写入系统剪贴板：{exc}")
+            return
+        QMessageBox.information(
+            self, "导出成功",
+            "模板已复制到剪贴板：可直接粘贴给 AI 依角色卡改写，"
+            "或粘贴回「导入模板」输入框一键导回。",
+        )
+
     def _update_click_sound_controls(self, enabled: bool) -> None:
         for row_key in ("click_sound_pack", "click_sound_volume", "click_sound_preview"):
             row = self.findChild(SettingRow, f"settingRow_{row_key}")
@@ -4107,6 +4317,7 @@ class ModernSettingsDialog(QDialog):
             ("输入", claim("mouse_through")),
             ("点击反馈", claim_prefix("click_")),
             ("自言自语", claim("self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min", "self_talk_max", "self_talk_texts", "self_talk_images", "self_talk_image_scale")),
+            ("表达风格", claim_prefix("dialogue_")),
         ])
         # click_talk_bindings shares the click_ prefix and remains in interaction.
         menu = SettingsTabContainer(self)
@@ -4157,11 +4368,14 @@ class ModernSettingsDialog(QDialog):
 
         proactive_rows = list(old_pages.get("主动识屏", QWidget()).findChildren(SettingRow))
         claimed.update(proactive_rows)
+        watchdog_rows = list(self.watchdog_page.findChildren(SettingRow))
+        claimed.update(watchdog_rows)
         automation = page_content([
             ("Agent 文案", claim_prefix("agent_thinking_")),
             ("Agent 提示音", claim_prefix("agent_sound_")),
             ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
             ("主动感知", proactive_rows),
+            ("循环检测", watchdog_rows),
         ])
 
         # Preserve any newly added row until it receives an explicit domain decision.
@@ -4407,6 +4621,11 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
         self.config.set("self_talk_image_scale", self.self_talk_image_scale_spin.value())
         # Agent 联动：自定义 thinking 文案与音效（合并写回，不覆盖 agent_link 其他开关）
+        self.config.set("dialogue_mode", str(self.dialogue_mode_select.currentData() or "legacy"))
+        self.config.set("dialogue_phrases", {
+            key: lines for key, lines in self._dialogue_phrase_values().items() if lines
+        })
+        # Agent 联动：自定义 thinking 文案（合并写回，不覆盖 agent_link 其他开关）
         agent_cfg = dict(self.config.get("agent_link", {}))
         agent_cfg["thinking_texts"] = {
             key: edit.text().strip()
@@ -4414,6 +4633,9 @@ class ModernSettingsDialog(QDialog):
             if edit.text().strip()
         }
         agent_cfg.pop("thinking_text", None)  # 旧的全局字段已迁移到 thinking_texts
+        # 循环检测设置页（合并写回，不覆盖 agent_link 其他字段）
+        if self.watchdog_page is not None:
+            agent_cfg = self.watchdog_page.apply_to_config(agent_cfg)
 
         # Agent 联动音效写回
         agent_cfg["sound_enabled"] = self.agent_sound_check.isChecked()

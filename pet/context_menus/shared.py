@@ -361,6 +361,89 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act.setChecked(bool(agent_cfg.get(opt_key, opt_key == 'notify_done')))
         act.toggled.connect(lambda on, k=opt_key: pet.set_agent_link_option(k, on))
 
+    # ---- 卡住检测配置子菜单（开关 + 阈值/窗口/冷却/文案）----
+    sub.addSeparator()
+    stuck = add_submenu(sub, "卡住检测", None)
+    act = stuck.addAction("启用卡住检测（钻牛角尖时建议人工介入）")
+    act.setCheckable(True)
+    act.setChecked(bool(agent_cfg.get('stuck_detect', False)))
+    act.toggled.connect(lambda on: pet.set_agent_link_option('stuck_detect', on))
+    stuck.addSeparator()
+    _add_stuck_config_rows(stuck, pet, agent_cfg)
+
+    # ---- Exploration Loop Watchdog（开关 + 模式 + 风险/冷却参数）----
+    sub.addSeparator()
+    pattern = add_submenu(sub, "循环检测", None)
+    act = pattern.addAction("启用循环检测（识别重复 Search/Read/Think）")
+    act.setCheckable(True)
+    act.setChecked(bool(agent_cfg.get('exploration_watchdog_enabled', True)))
+    act.toggled.connect(lambda on: pet.set_agent_link_option('exploration_watchdog_enabled', on))
+    mode = str(agent_cfg.get('exploration_watchdog_mode', 'manual')).lower()
+    manual = pattern.addAction('手动模式')
+    manual.setCheckable(True); manual.setChecked(mode != 'auto')
+    manual.triggered.connect(lambda: pet.set_agent_link_mode('manual'))
+    auto = pattern.addAction('自动模式')
+    auto.setCheckable(True); auto.setChecked(mode == 'auto')
+    auto.triggered.connect(lambda: pet.set_agent_link_mode('auto'))
+    pattern.addSeparator()
+    _add_pattern_config_rows(pattern, pet, agent_cfg)
+
+
+def _add_stuck_config_rows(stuck: QMenu, pet, agent_cfg: dict) -> None:
+    """卡住检测参数行：显示当前值，点击弹输入框编辑（阈值/窗口/冷却/文案）。"""
+    def _int_row(key: str, label: str, unit: str, default: int, minimum: int, maximum: int) -> None:
+        current = agent_cfg.get(key, default)
+        try:
+            current = int(current)
+        except (TypeError, ValueError):
+            current = default
+        act = stuck.addAction(f"{label}：{current} {unit}")
+        act.triggered.connect(
+            lambda _=False, k=key, lb=label, un=unit, df=default, mn=minimum, mx=maximum:
+            pet.edit_agent_link_int(k, lb, un, df, mn, mx)
+        )
+
+    def _text_row(key: str, label: str) -> None:
+        act = stuck.addAction(label)
+        act.triggered.connect(lambda _=False, k=key, lb=label: pet.edit_agent_link_text(k, lb))
+
+    _int_row('stuck_worried_threshold', '担忧动画阈值', '分', 3, 1, 20)
+    _int_row('stuck_intervene_threshold', '介入提醒阈值', '分', 5, 2, 50)
+    _int_row('stuck_window_seconds', '滑动窗口', '秒', 90, 10, 3600)
+    _int_row('stuck_cooldown_seconds', '提醒冷却', '秒', 300, 10, 7200)
+    stuck.addSeparator()
+    _text_row('stuck_reminder_text', '自定义提醒文案…')
+
+
+def _add_pattern_config_rows(pattern: QMenu, pet, agent_cfg: dict) -> None:
+    """行为模式检测参数行：显示当前值，点击弹输入框编辑（双窗口阈值/step/冷却）。"""
+    def _int_row(key: str, label: str, unit: str, default: int, minimum: int, maximum: int) -> None:
+        current = agent_cfg.get(key, default)
+        try:
+            current = int(current)
+        except (TypeError, ValueError):
+            current = default
+        act = pattern.addAction(f"{label}：{current} {unit}")
+        act.triggered.connect(
+            lambda _=False, k=key, lb=label, un=unit, df=default, mn=minimum, mx=maximum:
+            pet.edit_agent_link_int(k, lb, un, df, mn, mx)
+        )
+
+    _int_row('exploration_watchdog_warning_threshold', 'Warning threshold', '分', 3, 1, 20)
+    _int_row('exploration_watchdog_control_threshold', 'Control threshold', '分', 5, 1, 30)
+    _int_row('exploration_watchdog_judge_timeout', 'Judge timeout', '秒', 8, 1, 120)
+    _int_row('exploration_watchdog_cooldown_steps', 'Cooldown steps', '步', 3, 1, 20)
+    _int_row('exploration_watchdog_early_grace_minutes', '早期宽限', '分钟', 5, 1, 30)
+    _int_row('exploration_watchdog_long_run_minutes', '长时间运行', '分钟', 10, 2, 240)
+    _int_row('exploration_watchdog_long_think_seconds', '单次超长 Think', '秒', 120, 10, 1800)
+    model = pattern.addAction(f"Judge model：{agent_cfg.get('exploration_watchdog_judge_model') or '默认'}")
+    model.triggered.connect(lambda: pet.edit_agent_link_text('exploration_watchdog_judge_model', 'Judge model'))
+    provider = pattern.addAction(f"Judge API：{agent_cfg.get('exploration_watchdog_judge_provider') or '当前聊天 API'}")
+    provider.triggered.connect(lambda: pet.edit_agent_link_text('exploration_watchdog_judge_provider', 'Judge API provider ID'))
+    pattern.addSeparator()
+    open_watchdog = pattern.addAction("循环检测设置…")
+    open_watchdog.triggered.connect(lambda: getattr(pet, 'on_open_watchdog_settings', None) and pet.on_open_watchdog_settings())
+
 
 def build_size_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
     submenu = add_submenu(menu, "大小", "size" if icons else None)

@@ -87,7 +87,6 @@ def test_rapid_start_stop_leaks_no_threads_or_processes(app):
 
     clip.cleanup()
     app.processEvents()
-
     # 退役池不超过硬上限。回收由注册表 sweep 驱动（需事件循环轮次），
     # CI 高负载下一次 processEvents 可能不够——给有界泵循环（登记册 flake）
     reap_deadline = time.monotonic() + 5.0
@@ -184,7 +183,6 @@ def test_start_never_blocks_gui_when_retired_reader_stuck(app):
     clip.stop()
     clip.cleanup()
     app.processEvents()
-
 
 def test_cleanup_keeps_tracking_alive_reader(app):
     """cleanup() 在 reader 仍存活时不得丢失追踪（保持记录，等待后续回收）。"""
@@ -702,4 +700,3 @@ def test_reader_register_race_never_leaves_untracked_live_proc(app, monkeypatch)
     assert proc.poll() is not None, "最终进程必须确认退出"
     clip.cleanup()
     app.processEvents()
-

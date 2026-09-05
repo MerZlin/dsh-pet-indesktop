@@ -98,6 +98,9 @@ for variant in "${variant_list[@]}"; do
     "$PYTHON_BIN" -m PyInstaller "${args[@]}" "$entry"
     # 中文编码自检（issue #26）：字节码/资源/文件名被编码污染即中止。
     "$PYTHON_BIN" scripts/check_bundle_encoding.py --dir "$DIST_DIR/$name.app"
+    # Bridge node_modules 自包含修复（issue: Cannot find package '@deepseek-ai/cosmokit'）：
+    # --add-data 复制 pnpm 符号链接布局可能损坏，展开为真实目录树并在副本上冒烟。
+    "$PYTHON_BIN" scripts/fix_bridge_bundle.py --app-dir "$DIST_DIR/$name.app"
     codesign --force --deep --sign - "$DIST_DIR/$name.app"
 done
 

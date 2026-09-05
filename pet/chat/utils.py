@@ -38,4 +38,3 @@ def _short_title(session, *, localize_time: bool = True) -> str:
         return "新会话 · " + created.strftime("%H:%M")
     except (TypeError, ValueError):
         return "新会话"
-

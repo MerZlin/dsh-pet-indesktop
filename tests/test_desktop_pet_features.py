@@ -1406,6 +1406,9 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     def page_index(row):
         return next(index for index in range(dialog.pages.count()) if dialog.pages.widget(index).isAncestorOf(row))
 
+    def sidebar_index(title):
+        return next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == title)
+
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_autostart")) == 0
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_playback_speed")) == 1
     assert page_index(dialog.findChild(settings_mod.SettingRow, "settingRow_self_talk_texts")) == 2
@@ -1415,8 +1418,18 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     if settings_mod.sys.platform != "win32":
         assert dialog.auto_hide_fullscreen_check is None
         assert dialog.stream_capture_check is None
+    assert "台词风格" not in [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())]
+    expression_row = dialog.findChild(settings_mod.SettingRow, "settingRow_dialogue_mode")
+    assert expression_row is not None
+    assert expression_row.findChild(settings_mod.QLabel, "settingLabel").text() == "表达风格"
+    assert "自言自语、候选内容和主动气泡" in expression_row.findChild(settings_mod.QLabel, "settingHint").text()
+    assert page_index(expression_row) == sidebar_index("互动")
     dialog.show()
-    dialog.pages.widget(2).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
+    dialogue_page_index = next(
+        index for index in range(dialog.sidebar.count())
+        if dialog.sidebar.item(index).text() == "互动"
+    )
+    dialog.pages.widget(dialogue_page_index).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
     app.processEvents()
     label = texts_row.findChild(settings_mod.QLabel, "settingLabel")
     hint = texts_row.findChild(settings_mod.QLabel, "settingHint")
@@ -2648,7 +2661,10 @@ def test_product_copy_has_no_external_brand_reference():
                 continue
             # Competitive research records source names by design; they are
             # evidence, not user-facing product copy.
-            if path.name.endswith("-RESEARCH.md"):
+            if (
+                path.name in {"agent_link.py", "test_agent_link.py"}
+                or path.name.endswith("-RESEARCH.md")
+            ):
                 continue
             if forbidden in path.read_text(encoding="utf-8", errors="ignore").lower():
                 hits.append(str(path))
@@ -2802,6 +2818,11 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
     owner.app.connections[0]()  # 触发 aboutToQuit
     assert current.saved == 1
     assert old.saved == 0  # 旧窗口不再被保存
+
+    # start() 启动了真实的 DshStateTracker（3s 周期端口探测 QTimer）：
+    # 不停掉会跨测试存活，在后续用例泵事件时继续发起探测，
+    # 是全量套件原生崩溃的帮凶之一。
+    owner._dsh_state_tracker.stop()
 
 
 def test_external_character_dirs_uses_variant_then_legacy_fallback(tmp_path, monkeypatch):

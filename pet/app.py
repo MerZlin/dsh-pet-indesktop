@@ -31,12 +31,14 @@ from . import click_sound
 from . import slot_manager as slot_manager_mod
 from . import updater
 from .config import APP_DIR_NAME, Config, _default_base
+from .dsh_state import DshStateTracker
 from .context_menus.shared import open_deepseek_web
 from .desktop_notify import DesktopNotification, position_stack
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
 from .library import MovieLibrary
 from .window import PetWindow
+from .persona_phrases import PhrasePicker
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 # 可选服务模块按需在 _ensure_* 中局部导入：功能关闭时不让这些模块
@@ -59,11 +61,30 @@ class _BalanceBridge(_BackgroundResult):
         if self.win is None or not shiboken6.isValid(self.win):
             return
         if not ok:
-            self.win.show_bubble(str(payload), duration_ms=6000)
+            text = str(payload)
+            if (getattr(self.win, "_alert_current", None) is not None
+                    or getattr(self.win, "_bubble_suppressed", False)):
+                self.win.show_alert(text, duration_ms=6000, sticky=False,
+                                    priority=2, alert_type="balance")
+            else:
+                self.win.show_bubble(text, duration_ms=6000)
             return
         _show_balance_payload(self.win, payload)
         if self.owner is not None and hasattr(self.owner, "_update_island_balance"):
             self.owner._update_island_balance(payload)
+
+
+_PERSONA_PICKER = PhrasePicker()
+
+
+def _persona_text(win, key: str, fallback: str, **values) -> str:
+    cfg = getattr(win, "cfg", None)
+    if cfg is None:
+        return fallback
+    mode = str(cfg.get("dialogue_mode", "legacy") or "legacy")
+    if mode == "custom":
+        return _PERSONA_PICKER.custom(cfg.get("dialogue_phrases", {}), key, fallback, **values)
+    return _PERSONA_PICKER.get(mode, key, fallback, **values)
 
 
 def _show_balance_payload(win, payload) -> None:
@@ -94,10 +115,18 @@ def _show_balance_payload(win, payload) -> None:
         subtitle = balance_mod.deepseek_pricing_hint(
             peak_label=peak_label, idle_label=idle_label,
         )
-    win.show_bubble(
-        text, duration_ms=6000,
-        subtitle=subtitle,
-    )
+    text = _persona_text(win, "balance.result", text, text=text)
+    if (getattr(win, "_alert_current", None) is not None
+            or getattr(win, "_bubble_suppressed", False)):
+        win.show_alert(
+            text, subtitle=subtitle, duration_ms=6000, sticky=False,
+            priority=2, alert_type="balance",
+        )
+    else:
+        win.show_bubble(
+            text, duration_ms=6000,
+            subtitle=subtitle,
+        )
     # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
     p = balance_mod.balance_percent(info.get("total"))
     if p is not None:
@@ -211,6 +240,7 @@ class PetApp:
         self.modern_chat_window = None
         self.chat_settings_dialog = None
         self.modern_settings_dialog = None
+        self.watchdog_settings_dialog = None
         self.island = None
         self.quick_chat = None
         self._spawned_pet_count = 0
@@ -228,6 +258,9 @@ class PetApp:
         self.collision_ipc = None
         self.todo_service = None
         self.broker_facade = None
+        # DSH 状态跟踪器独立于可选服务，保持常驻以便 bridge 状态在离线时收敛。
+        self._dsh_state_tracker = DshStateTracker(config.dir)
+        self._dsh_state_tracker.state_changed.connect(self._on_dsh_state_changed)
         self.todo_panel = None
         if self._collision_wanted():
             self._ensure_collision_ipc()
@@ -364,6 +397,8 @@ class PetApp:
         self._sync_dynamic_island()
         self._apply_spawn_offset()
         self._apply_balance_timer()
+        # 启动 DSH 状态跟踪（DSH 未运行也不影响桌宠启动，只切 offline）
+        self._dsh_state_tracker.start()
         self._sync_todo_service()
         QTimer.singleShot(3500, self._check_autostart_wanted)
 
@@ -399,6 +434,27 @@ class PetApp:
         if getattr(self, "island", None) is not None:
             self.island.set_pet_visible(win.isVisible())
 
+    def _on_dsh_state_changed(self, from_state: str, to_state: str) -> None:
+        """订阅 DSH 统一状态变化。
+
+        第一版只做订阅 + 关键兜底（状态日志已由 dsh_state 在 transition 时写出）；
+        后续的状态动画映射 / Windows Toast / 系统声音等在此挂接，不塞进 dsh_state。
+        """
+        if to_state == "offline" and self.win is not None:
+            # DSH 断开/重启：审批/问题等阻塞交互必然失效，收掉一直挂着的常驻气泡；
+            # 卡住检测的旧评分与行为模式检测的旧窗口也一并清零（重启后是全新任务，
+            # 不沿用旧状态）。
+            alm = getattr(self.win, "agent_link_manager", None)
+            if alm is not None:
+                if hasattr(alm, "dismiss_all_interactions"):
+                    alm.dismiss_all_interactions()
+                detector = getattr(alm, "_stuck_detector", None)
+                if detector is not None and hasattr(detector, "reset_all"):
+                    detector.reset_all()
+                pattern = getattr(alm, "_behavior_detector", None)
+                if pattern is not None and hasattr(pattern, "reset_all"):
+                    pattern.reset_all()
+
     def _on_about_to_quit(self) -> None:
         """退出前保存当前有效窗口的位置并释放资源。
 
@@ -422,6 +478,8 @@ class PetApp:
         self._stop_collision_ipc()
         if getattr(self, "todo_service", None) is not None:
             self.todo_service.stop()
+        # DSH 状态跟踪器同样随进程退出停止（QTimer/探测线程不跨退出存活）
+        self._dsh_state_tracker.stop()
         # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
         # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
         try:
@@ -513,16 +571,33 @@ class PetApp:
             return
         self._balance_busy = True
         # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
-        # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
-        # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
-        QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
+        # AppKit 抑制；回调再次探活，避免窗口销毁后触碰 Qt 对象。
+        def window_is_visible() -> bool:
+            try:
+                return win is not None and shiboken6.isValid(win) and win.isVisible()
+            except (TypeError, RuntimeError, AttributeError):
+                return False
+
+        def show_loading() -> None:
+            if window_is_visible():
+                win.show_bubble(
+                    _persona_text(win, "balance.loading", "让我看看余额…"), duration_ms=6000
+                )
+        QTimer.singleShot(0, show_loading)
         bridge = _BalanceBridge(win, owner=self)
         self._balance_bridge = bridge
-        threading.Thread(
-            target=self._balance_worker,
-            args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
-            daemon=True, name='pet-balance',
-        ).start()
+        try:
+            threading.Thread(
+                target=self._balance_worker,
+                args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
+                daemon=True, name='pet-balance',
+            ).start()
+        except Exception as exc:  # 线程创建/启动失败也不能永久 busy
+            self._balance_busy = False
+            if window_is_visible():
+                QTimer.singleShot(0, lambda error_text=f"余额查询失败：{exc}": bridge.done.emit(
+                    False, error_text
+                ))
 
     def _balance_worker(self, bridge, base_url: str, api_key: str, verify_ssl: bool, provider_key: str = '') -> None:
         try:
@@ -712,6 +787,7 @@ class PetApp:
         win.on_look_screen = win.look_at_screen if self.enable_chat and hasattr(win, "look_at_screen") else None
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self.open_modern_settings
+        win.on_open_watchdog_settings = self.open_watchdog_settings
         win.on_spawn_pet = self.spawn_pet
         win.on_clear_spawned_pets = self.clear_spawned_pets
         win.on_restore_fun_windows = restore_ojingjing_windows
@@ -1042,6 +1118,25 @@ class PetApp:
             before_present=self.modern_settings_dialog.move_away_from_pet,
         )
 
+    def open_watchdog_settings(self) -> None:
+        from .exploration_watchdog_settings import WatchdogSettingsDialog
+        if self.watchdog_settings_dialog is None:
+            dialog = WatchdogSettingsDialog(self.config, self.win)
+            dialog.set_pet_instance(self.win)
+            dialog.settings_saved.connect(self._watchdog_settings_finished)
+            self.watchdog_settings_dialog = dialog
+        self._update_bubble_suppression_for_settings()
+        self._present_dialog(
+            self.watchdog_settings_dialog,
+            before_present=self.watchdog_settings_dialog.move_away_from_pet,
+        )
+
+    def _watchdog_settings_finished(self) -> None:
+        self.watchdog_settings_dialog = None
+        self._update_bubble_suppression_for_settings()
+        if self.win is not None:
+            self.win.refresh_pet_settings()
+
     def _modern_settings_finished(self, result: int) -> None:
         self.modern_settings_dialog = None
         self._update_bubble_suppression_for_settings()
@@ -1297,7 +1392,10 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
 
     try:
         try:
-            slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config_dir, preferred_slot=preferred_slot)
+            slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(
+                config_dir,
+                preferred_slot=preferred_slot,
+            )
         except Exception as exc:
             logging.exception("获取桌宠槽位锁失败")
             _show_startup_error("dsh-pet-standalone", str(exc))
@@ -1306,20 +1404,53 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         instance_id = slot_manager_mod.slot_to_instance_id(slot_id)
         os.environ["DSH_PET_INSTANCE"] = instance_id
 
-        # 迁移旧 spawn 实例（主槽或无并发运行旧实例时触发）
+        # 迁移旧 spawn 实例
         if slot_id == 0:
             slot_manager_mod.migrate_legacy_spawns(config_dir)
 
         config = Config(instance_id=instance_id)
+
         _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))
+
         _setup_logging(config)
-        logging.info("dsh-pet-standalone 启动 (slot: %s, instance: %s)", slot_id, instance_id)
+
+        try:
+            source_path = Path(__file__).resolve()
+            source_mtime = source_path.stat().st_mtime
+        except Exception:
+            source_path = "unknown"
+            source_mtime = 0
+
+        logging.info(
+            "dsh-pet-standalone 启动 "
+            "slot=%s instance=%s runtime_version=%s "
+            "app_version=%s source=%s executable=%s build_mtime=%s",
+            slot_id,
+            instance_id,
+            "pet-runtime-2026-09-01.1",
+            getattr(updater, "APP_VERSION", "unknown"),
+            source_path,
+            sys.executable,
+            source_mtime,
+        )
+
         _cleanup_stale_runtime_dirs()
+
         stale_removed = autostart_mod.cleanup_stale_entries()
         if stale_removed:
-            logging.info("已清理 %d 个指向不存在路径的开机自启项", stale_removed)
+            logging.info(
+                "已清理 %d 个指向不存在路径的开机自启项",
+                stale_removed,
+            )
 
-        controller = PetApp(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id)
+        controller = PetApp(
+            app,
+            config,
+            enable_chat=enable_chat,
+            slot_handle=slot_handle,
+            slot_id=slot_id,
+        )
+
         try:
             controller.start()
         except Exception as exc:

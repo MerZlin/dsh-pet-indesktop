@@ -55,15 +55,22 @@ class TestWorkerLifecycle:
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()
         received = []
-        mon.state_changed.connect(lambda ev: received.append(ev.state))
+        mon.state_event.connect(lambda ev: received.append(ev.state))
         polls = []
+        first_poll_done = threading.Event()
         orig_poll = mon._poll
-        mon._poll = lambda gen=None: (polls.append(1), orig_poll(gen=gen))
+        def tracked_poll(gen=None):
+            polls.append(1)
+            try:
+                return orig_poll(gen=gen)
+            finally:
+                first_poll_done.set()
+        mon._poll = tracked_poll
         assert mon.start() is True
         try:
             # 先等 worker 完成首轮轮询（tailer backfill 跳到文件末尾），
             # 否则写入的事件会被 backfill 防护当成历史跳过
-            assert wait_until(lambda: len(polls) >= 1)
+            assert wait_until(first_poll_done.is_set)
             mon.pause()
             time.sleep(0.15)  # 确保 worker 至少空转过了一轮 pause
             with open(mon.events_file, "a", encoding="utf-8") as f:
@@ -99,10 +106,17 @@ class TestWorkerLifecycle:
         mon.events_file.touch()
         # 等 worker 完成首轮 backfill 再写事件，否则被当历史跳过
         polls = []
+        first_poll_done = threading.Event()
         orig_poll = mon._poll
-        mon._poll = lambda gen=None: (polls.append(1), orig_poll(gen=gen))
+        def tracked_poll(gen=None):
+            polls.append(1)
+            try:
+                return orig_poll(gen=gen)
+            finally:
+                first_poll_done.set()
+        mon._poll = tracked_poll
         assert mon.start() is True
-        assert wait_until(lambda: len(polls) >= 1)
+        assert wait_until(first_poll_done.is_set)
         gen1 = mon._emit_gen
         with open(mon.events_file, "a", encoding="utf-8") as f:
             f.write(json.dumps({"state": "working"}) + "\n")
@@ -110,7 +124,7 @@ class TestWorkerLifecycle:
         # 停止：当前代次立即作废，旧代次信号被拒收
         mon.stop()
         n_after_stop = len(win.switched)
-        mon.state_changed.emit(AgentEvent(agent="dsh", kind="state", state="working", gen=gen1))  # 迟到旧信号（直发=同步派发）
+        mon.state_event.emit(AgentEvent(agent="dsh", kind="state", state="working", gen=gen1))  # 迟到旧信号（直发=同步派发）
         app.processEvents()
         assert len(win.switched) == n_after_stop         # 被丢弃
         # 重启后新代次正常
@@ -139,7 +153,7 @@ class TestWorkerLifecycle:
         gen = mon._emit_gen
         mon.stop()
         # stop 后带 stop 前代次的信号到达：必须被拒（_emit_gen 已作废为 -1）
-        mon.state_changed.emit(AgentEvent(agent="dsh", kind="state", state="working", gen=gen))
+        mon.state_event.emit(AgentEvent(agent="dsh", kind="state", state="working", gen=gen))
         app.processEvents()
         assert win.switched == []
 
@@ -381,7 +395,7 @@ class TestOutboxPolicy:
             mon._emit_tool(f"tool{i}", 1)
         for s in ["working", "thinking", "attention"]:
             mon._emit_state(s, 1)
-        states = [a[0] for sig, a in mon._outbox if sig is mon.state_changed]
+        states = [a[0] for sig, a in mon._outbox if sig is mon.state_event]
         assert [e.state for e in states] == ["working", "thinking", "attention"]  # 尾部全保留
         assert len(mon._outbox) <= mon._OUTBOX_CAP  # 容量有界
 
@@ -392,14 +406,14 @@ class TestOutboxPolicy:
         mon._paused = True
         for _ in range(100):
             mon._emit_state("working", 1)
-        states = [a[0] for sig, a in mon._outbox if sig is mon.state_changed]
+        states = [a[0] for sig, a in mon._outbox if sig is mon.state_event]
         assert len(states) == 1
 
     def test_resume_flushes_outbox(self, tmp_path, app):
         """resume 把 pause 期间暂存的发射补发出去。"""
         mon = _make_monitor(tmp_path)
         received = []
-        mon.state_changed.connect(lambda ev: received.append(ev.state))
+        mon.state_event.connect(lambda ev: received.append(ev.state))
         mon._running = True
         mon._paused = True
         mon._emit_state("working", 1)
@@ -421,7 +435,7 @@ class TestOpenCodeDbRotation:
         mon = OpenCodeMonitor(cfg_dir, db_path=db1)
         mon._running = True
         received = []
-        mon.state_changed.connect(lambda ev: received.append(ev.state))
+        mon.state_event.connect(lambda ev: received.append(ev.state))
         mon._worker_started()  # 模拟 worker 开场（worker 线程独占初始化）
         mon._poll()  # 首轮 backfill：跳到末尾
         assert received == []

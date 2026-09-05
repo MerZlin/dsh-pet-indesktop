@@ -60,7 +60,22 @@ E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-gif /DMyAppExeN
 3. exe 同目录无 `_MEI*` 残留
 4. 退出后进程全部结束
 
-## 四、注意事项
+## 四、无 Chat 变体兼容性
+
+无 Chat 入口使用 `packaging/pet_entry_no_chat.py`，构建规格明确排除 `pet.chat`
+和 `keyring`。配置仍可能来自曾经启用 Chat 的用户目录，因此运行时
+`Config._migrate_plaintext_keys_to_keyring()` 对缺失的 `pet.chat` 只跳过迁移，
+不能让配置加载失败；除该明确缺失模块外的导入错误仍应抛出。
+
+打包验收至少包含：
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+python -m pytest -q tests/test_chat_subsystem.py::test_no_chat_packaging_uses_isolated_entrypoint
+python -m pytest -q tests/test_config_key_migration.py
+```
+
+## 五、注意事项
 
 - **开机自启**：onedir 不需要 `start /D` 切目录（无解压），`pet/autostart.py` 现有命令无害可保留
 - **旧 onefile 遗留清理**：`pet/app.py` 启动时的 `_cleanup_stale_runtime_dirs` 保留，会顺带清掉旧 onefile 版本在系统 Temp 留下的 `_MEI` 目录

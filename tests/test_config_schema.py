@@ -5,7 +5,7 @@ pet/config.py 里 __init__ 的默认值 dict（约 498-566 行）与 reload() �
 元组（约 656-691 行）是两份独立维护的键列表。本测试把现状文档化并加护栏：
 
 实测两集合**不一致**（现状文档化，不修产品代码）：
-- 默认值 dict 共 75 键；reload 白名单共 71 键。
+- 默认值 dict 共 77 键；reload 白名单共 73 键。
 - 差异 = 默认值多出 4 键：{version, proactive_screen, agent_link, chat}。
   这 4 键在 reload() 里走专门路径（version 末尾强制回写 4；
   proactive_screen / agent_link / chat 分别经 _merge_*_data 合并），
@@ -42,6 +42,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "dynamic_island", "facing",
     "idle_low_fps_enabled", "idle_low_fps_threshold",
     "animation_prewarm_enabled", "lock_position",
+    "dialogue_mode", "dialogue_phrases",
     "menu_easter_egg", "modern_chat_background", "modern_chat_background_fill",
     "modern_chat_background_opacity", "modern_chat_card_opacity", "mouse_through",
     "music_sing_enabled", "no_move", "on_top", "pet_opacity", "playback_speed",
@@ -57,7 +58,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。
 SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat"})
 
-# 默认值 dict 键集合现状快照（75 键）= 白名单 ∪ 特例键。
+# 默认值 dict 键集合现状快照（77 键）= 白名单 ∪ 特例键。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

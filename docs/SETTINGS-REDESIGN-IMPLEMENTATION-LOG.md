@@ -1,7 +1,7 @@
 # 设置与菜单重构：实现及踩坑记录
 
-日期：2026-09-01  
-工作树：`/Users/ushio/github/dsh-pet-indesktop-settings-redesign`  
+日期：2026-09-01
+工作树：`/Users/ushio/github/dsh-pet-indesktop-settings-redesign`
 分支信息与精确续作断点见 `.scratch/settings-redesign/HANDOFF.md`。
 
 ## 已实现

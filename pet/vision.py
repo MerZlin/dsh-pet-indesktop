@@ -118,30 +118,36 @@ def foreground_window_info() -> dict | None:
             return None
 
         # 检查是否被 DWM 隐藏/幽灵（如虚拟桌面切换、UWP 挂起）
-        # DWMWA_CLOAKED = 14
-        cloaked = ctypes.c_int(0)
-        dwmapi = ctypes.windll.dwmapi
-        dwmapi.DwmGetWindowAttribute.argtypes = [
-            ctypes.wintypes.HWND, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
-        ]
-        dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
-        if dwmapi.DwmGetWindowAttribute(
-            hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
-        ) == 0 and cloaked.value != 0:
-            return None
+        # DWMWA_CLOAKED = 14；DWM 不可用时继续使用 User32 信息。
+        dwmapi = None
+        try:
+            dwmapi = ctypes.windll.dwmapi
+            dwmapi.DwmGetWindowAttribute.argtypes = [
+                ctypes.wintypes.HWND, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+            ]
+            dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+            cloaked = ctypes.c_int(0)
+            if dwmapi.DwmGetWindowAttribute(
+                hwnd, 14, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
+            ) == 0 and cloaked.value != 0:
+                return None
+        except (AttributeError, OSError, TypeError, RuntimeError):
+            dwmapi = None
 
         # 获取窗口矩形边界：优先 DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS = 9)
-        # 注意：ctypes.wintypes 必须在模块顶部导入——函数体内 import 会让 ctypes
-        # 成为局部变量，函数开头的 ctypes.windll 访问直接 UnboundLocalError。
-        rect_dwm = ctypes.wintypes.RECT()
         rect: tuple[int, int, int, int] | None = None
-        if dwmapi.DwmGetWindowAttribute(
-            hwnd, 9, ctypes.byref(rect_dwm), ctypes.sizeof(rect_dwm)
-        ) == 0:
-            w = rect_dwm.right - rect_dwm.left
-            h = rect_dwm.bottom - rect_dwm.top
-            if w > 0 and h > 0:
-                rect = (rect_dwm.left, rect_dwm.top, w, h)
+        if dwmapi is not None:
+            try:
+                rect_dwm = ctypes.wintypes.RECT()
+                if dwmapi.DwmGetWindowAttribute(
+                    hwnd, 9, ctypes.byref(rect_dwm), ctypes.sizeof(rect_dwm)
+                ) == 0:
+                    w = rect_dwm.right - rect_dwm.left
+                    h = rect_dwm.bottom - rect_dwm.top
+                    if w > 0 and h > 0:
+                        rect = (rect_dwm.left, rect_dwm.top, w, h)
+            except (AttributeError, OSError, TypeError, RuntimeError):
+                pass
 
         if rect is None:
             rect_raw = ctypes.wintypes.RECT()

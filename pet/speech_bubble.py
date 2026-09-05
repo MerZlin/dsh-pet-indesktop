@@ -16,16 +16,23 @@ macOS 焦点问题由气泡窗口自身解决：`WindowDoesNotAcceptFocus`、
 """
 from __future__ import annotations
 
+import logging
+import re
 import sys
+
+log = logging.getLogger(__name__)
 from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen,
     QPixmap, QTransform,
 )
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PySide6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QSizePolicy, QVBoxLayout,
+    QWidget,
+)
 
 # 批6-2 拆分后纯函数区 re-export（维持既有 import 兼容；外部调用点本批不改）
 from .speech_bubble_text import (
@@ -55,6 +62,100 @@ __all__ = [
 ]
 
 _MAC = sys.platform == "darwin"
+
+# 交互按钮行里除 ``(label, callback)`` 按钮外的结构化行标记：
+# - (SECTION_HEADER_LABEL, text) —— 分支/小节标题（独占一行、加粗）
+# - (SECTION_HINT_LABEL, text)  —— 灰色提示行（独占一行）
+# 由 agent_link 的多分支问题收集模式生成，SpeechBubble 负责渲染。
+SECTION_HEADER_LABEL = "__pet_section_header__"
+SECTION_HINT_LABEL = "__pet_section_hint__"
+
+
+class FlowLayout(QLayout):
+    """流式布局：子项超出可用宽度时自动换行（按钮行专用）。
+
+    审批/选择题气泡的按钮行用 QHBoxLayout 时，选项一多就把气泡整个撑宽。
+    FlowLayout 让按钮在气泡固定宽度内自动折行，气泡宽度封顶、不被拉长。
+    """
+
+    def __init__(self, parent=None, h_spacing: int = 6, v_spacing: int = 6) -> None:
+        super().__init__(parent)
+        self._items: list[QLayout.Item] = []
+        self._h_spacing = h_spacing
+        self._v_spacing = v_spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def __del__(self) -> None:
+        while self.count():
+            self.takeAt(0)
+
+    def addItem(self, item) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect: QRect, *, test_only: bool) -> int:
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+        for item in self._items:
+            hint = item.sizeHint()
+            space_x = self._h_spacing if self._h_spacing >= 0 else item.widget().style().layoutSpacing(
+                QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
+                Qt.Orientation.Horizontal,
+            )
+            space_y = self._v_spacing if self._v_spacing >= 0 else item.widget().style().layoutSpacing(
+                QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
+                Qt.Orientation.Vertical,
+            )
+            next_x = x + hint.width() + space_x
+            if next_x - space_x > effective.right() and line_height > 0:
+                # 放不下且本行已有内容：换行
+                x = effective.x()
+                y = y + line_height + space_y
+                next_x = x + hint.width() + space_x
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + m.bottom()
 
 
 # Each preset deliberately combines a distinct surface treatment with a preferred
@@ -93,6 +194,10 @@ class PetSpeechBubble(QFrame):
 
     clicked = Signal()
 
+    # 气泡被隐藏（自动超时 / dismiss / 窗口隐藏）时发出，供上层在仍有
+    # 待处理审批时自动恢复展示。
+    hidden_signal = Signal()
+
     def __init__(self, parent=None, style_id: str = "classic_top"):
         super().__init__(parent)
         self._interactive = False
@@ -126,6 +231,15 @@ class PetSpeechBubble(QFrame):
         self._layout.addWidget(self.label)
         self._subtitle_label = QLabel(self)
         self._subtitle_label.setObjectName("pet-speech-subtitle")
+        # The subtitle is user/LLM supplied (for example the watchdog's
+        # recommendation).  Keep it inside the same text column as the main
+        # message; QLabel otherwise reports the full unwrapped line as its
+        # sizeHint and can stretch an interactive bubble across the chat UI.
+        self._subtitle_label.setWordWrap(True)
+        self._subtitle_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self._subtitle_label.setMaximumWidth(248)
         self._subtitle_label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
@@ -138,6 +252,18 @@ class PetSpeechBubble(QFrame):
         )
         self._page_indicator.hide()
         self._layout.addWidget(self._page_indicator, 0, Qt.AlignmentFlag.AlignRight)
+        # 交互按钮行（审批「同意/拒绝」、问题「A/B/C」等）：默认隐藏，仅
+        # show_text(buttons=...) 时出现。气泡平时对鼠标全透明，交互时临时关闭
+        # 该属性让按钮可点，dismiss/隐藏时恢复穿透。
+        # 用 FlowLayout 代替 QHBoxLayout，选项多时自动换行，不被撑宽。
+        self._button_row = QWidget(self)
+        self._button_row.setObjectName("pet-speech-buttons")
+        self._button_layout = FlowLayout(self._button_row, h_spacing=6, v_spacing=6)
+        self._button_layout.setContentsMargins(0, 4, 0, 0)
+        self._button_row.hide()
+        self._layout.addWidget(self._button_row)
+        self._interactive_active = False
+        self._interactive_buttons: list[QPushButton] = []
         # 长文本分页状态：页列表 + 当前页 + 自动翻页定时器。
         # 气泡对鼠标全透明（WA_TransparentForMouseEvents），无法靠点击翻页，
         # 因此采用「每页停留一小段后自动翻下一页」的方式保证全文可读完。
@@ -316,9 +442,28 @@ class PetSpeechBubble(QFrame):
         *,
         pet_scale: float | None = None,
         subtitle: str = "",
+        sticky: bool = False,
+        buttons: list[tuple[str, object]] | None = None,
     ) -> None:
+        """显示文本气泡。
+
+        ``sticky=True`` 时不启动自动隐藏定时器，气泡一直停留直到上层调用
+        :meth:`dismiss`（用于「审批一直挂着直到审批结束」这类需要主动关闭的气泡）。
+        审批文案短、无需分页，sticky 时强制单页展示。
+
+        ``buttons`` 为 ``[(label, callback), ...]`` 时进入「交互气泡」模式：气泡内
+        排一行可点按钮（审批同意/拒绝、问题 A/B/C），点击即回调并把决策交还上层
+        （如回写 DSH）。交互气泡自动 sticky，且临时关闭鼠标穿透让按钮可点，
+        收起/隐藏时恢复穿透。
+        """
         text = str(text).strip()
         if not text:
+            return
+        interactive = bool(buttons)
+        # 交互提醒（如循环检测的三按钮弹窗）必须保持按钮和回调绑定。
+        # 动画/普通气泡偶尔会在之后尝试重绘同一窗口；若允许无按钮的
+        # show_text 覆盖这里，视觉上文字还在，但按钮已被 teardown。
+        if self._interactive_active and not interactive:
             return
         self._content_kind = "text"
         self._raw_text = text
@@ -334,7 +479,14 @@ class PetSpeechBubble(QFrame):
             self._subtitle_label.hide()
         self.label.show()
         metrics = QFontMetrics(self.label.font())
-        if self._preset.get("shape") == "breath_bubble":
+        if interactive:
+            # 交互气泡：不自动消失 + 显示按钮 + 临时关闭鼠标穿透
+            self._setup_buttons(buttons)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+            self._interactive_active = True
+        else:
+            self._teardown_interactive()
+        if self._preset.get("shape") == "breath_bubble" and not interactive:
             self._configure_breath_content(anchor_rect, pet_scale)
         else:
             # 长文本分页：每页不超过 bubble_max_lines 行，自动翻页直到全文展示完，
@@ -343,7 +495,7 @@ class PetSpeechBubble(QFrame):
                 metrics, text, 248, bubble_max_lines(text)
             )
             display_text = pages[0] if pages else ""
-            if len(pages) > 1:
+            if len(pages) > 1 and not sticky and not interactive:
                 per_page = max(2200, min(5000, duration_ms // len(pages)))
                 total_ms = max(duration_ms, per_page * len(pages))
                 self._pages = pages
@@ -376,7 +528,116 @@ class PetSpeechBubble(QFrame):
         self.show()
         if not _MAC:
             self.raise_()
-        self._hide_timer.start(max(500, int(duration_ms)))
+        if sticky or interactive:
+            # 审批等需主动关闭的气泡：不启动自动隐藏，由上层 dismiss() 收尾
+            self._hide_timer.stop()
+        else:
+            self._hide_timer.start(max(500, int(duration_ms)))
+
+    def _setup_buttons(self, buttons: list[tuple[str, object]]) -> None:
+        """清空旧按钮并按元素重建按钮行（仅交互气泡用）。
+
+        元素除普通 ``(label, callback)`` 按钮外，还支持两类结构化行：
+        - ``("__header__", text)``：分支标题行（独占一行、加粗）——多分支问题
+          弹窗按分支分组展示的标题。
+        - ``("__hint__", text)``：灰色提示行（独占一行）——例如自由文本问题
+          「请到 DSH 界面输入文本回答」。
+        """
+        while self._button_layout.count():
+            item = self._button_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._interactive_buttons = []
+        for label, callback in buttons:
+            if label == SECTION_HEADER_LABEL:
+                header = QLabel(str(callback), self._button_row)
+                header.setObjectName("pet-speech-branch-header")
+                header.setWordWrap(True)
+                header.setFixedWidth(220)
+                header.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                header.setStyleSheet(
+                    "QLabel { background: transparent; border: none;"
+                    " font-weight:600; font-size:11px; color:#2b3a4a;"
+                    " padding:2px 0 0 0; }"
+                )
+                self._button_layout.addWidget(header)
+                continue
+            if label == SECTION_HINT_LABEL:
+                hint = QLabel(str(callback), self._button_row)
+                hint.setObjectName("pet-speech-branch-hint")
+                hint.setWordWrap(True)
+                hint.setFixedWidth(220)
+                hint.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+                hint.setStyleSheet(
+                    "QLabel { background: transparent; border: none;"
+                    " font-size:10px; color:#7a8a9a; padding:1px 0 0 0; }"
+                )
+                self._button_layout.addWidget(hint)
+                continue
+            btn = QPushButton(str(label), self._button_row)
+            btn.setObjectName("pet-speech-button")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            btn.setStyleSheet(
+                "QPushButton {"
+                " background:#ffffff; border:1px solid #c9d4e0; border-radius:11px;"
+                " padding:4px 12px; font-size:11px; color:#2b3a4a;"
+                "}"
+                "QPushButton:hover { background:#eef6ff; border-color:#8ab8e8; }"
+                "QPushButton:pressed { background:#dcebfa; }"
+            )
+            btn.clicked.connect(lambda _checked=False, cb=callback: self._on_interactive_click(cb))
+            self._interactive_buttons.append(btn)
+            self._button_layout.addWidget(btn)
+        self._button_row.show()
+
+    def _on_interactive_click(self, callback) -> None:
+        """交互按钮被点：先回调决策（上层清 _alert_current 并 dismiss），再隐藏收尾。
+
+        时序很关键：若先 hide() 会触发 hidden_signal → 上层 _on_speech_bubble_hidden
+        看到 _alert_current 还在会把审批气泡重新挂上，导致「点了同意/拒绝弹窗却不消失」。
+        先回调让上层完成 hide_bubble()/dismiss()，再隐藏收尾。
+
+        注意：callback() 内部通过 _resolve_interaction → resolve_alert →
+        _speech_bubble.dismiss() 已经关闭了当前气泡，并通过 _on_speech_bubble_hidden
+        → sticky restore 显示了下一个弹窗。此处不再调用 self.hide()——
+        否则会二次隐藏已替换为下一条内容的气泡，导致其按钮被 deleteLater 清除、
+        鼠标事件错乱（「第一个弹窗点击导致第二个弹窗也接收事件」）。
+        """
+        self._teardown_interactive()
+        self._hide_timer.stop()
+        try:
+            callback()
+        except Exception:
+            log.exception("交互气泡回调异常")
+
+    def _teardown_interactive(self) -> None:
+        """退出交互态：恢复鼠标穿透、清空按钮行。隐藏/收起时都必须调用。"""
+        if self._interactive_active:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self._interactive_active = False
+        while self._button_layout.count():
+            item = self._button_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._interactive_buttons = []
+        self._button_row.hide()
+
+    def dismiss(self) -> None:
+        """立即关闭当前气泡（停掉自动隐藏/翻页定时器）。供 sticky 气泡主动收尾。"""
+        self._hide_timer.stop()
+        self._page_timer.stop()
+        self._reset_paging()
+        self._teardown_interactive()
+        self.hide()
+
+    def hideEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
+        """气泡被隐藏（超时 / dismiss / 父窗口隐藏）时通知上层。"""
+        super().hideEvent(event)
+        self._teardown_interactive()
+        self.hidden_signal.emit()
 
     def _reset_paging(self) -> None:
         """停止自动翻页并隐藏页码指示（单页内容/图片/换内容时调用）。"""

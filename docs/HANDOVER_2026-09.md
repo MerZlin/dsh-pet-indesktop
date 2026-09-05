@@ -39,14 +39,11 @@
 
 ### 结构线
 
-- window.py 行数变迁（全部可由 git 历史复核）：结构线前 4307 →
-  结构线收官（5eef896）3853 → broker 接线等（ad3daa1）4198 →
-  合并上游 v4.1.0（6cc4aed）4229 → 当前 HEAD 4239。
-  拆出的模块：collision_client / platform_win / platform_mac / broker 接线；
+- 结构治理拆出的模块：collision_client / platform_win / platform_mac / broker 接线；
   agent_link 拆 Reducer/Presentation；chat 双 UI 共享 geometry/utils；
   设置框控件库 + QSS 剥离。
 - 机器化防线：`.github/workflows/pr-test.yml`（PR 三平台 pytest + ruff 门禁）、
-  `tests/test_architecture.py`（依赖方向 / 窗口私有面 / 行数预算 4300）、
+  `tests/test_architecture.py`（依赖方向 / 窗口私有面）、
   `tests/test_config_schema.py`（配置键白名单快照）、ruff F 级基线
   （pyproject.toml）。
 
@@ -93,7 +90,26 @@ $env:QT_QPA_PLATFORM = "offscreen"
 | 碰撞 orphan registry 锁协议 | 未证实存在死锁（审查原文如此），暂缓重设计 | 出现真实症状或改动该区域时再评估 |
 | AppId 历史不一致 | 本轮已对齐：`.iss` 默认值、CI、README 统一为发布线值（3424d6cc…） | 更早发布的安装包身份无法追溯修复 |
 
-## 4. 继续开发的入口
+## 3.1 本轮 Qt 生命周期收口（2026-09）
+
+本轮全量测试中发现的 Windows 原生 abort 已按 owner 收口，没有新增独立的全局生命周期管理器：
+
+- `PetWindow.closeEvent()` 增加 `_close_event_done` 幂等闸门，避免重复 close 重复 shutdown。
+- 无父级 `PetSpeechBubble` 在关闭时先断开真实信号，再 `dismiss()`、`close()`，最后由 GUI 线程 `shiboken6.delete()`，并清空窗口引用。
+- 右键菜单保留生产 `QMenu.exec()`，新增 `_exec_context_menu()` Python seam，测试不再 monkeypatch PySide C++ 方法。
+- 测试 fixture 沿用 AgentLink、MovieLibrary、session writer 与 WebM reader 的既有 shutdown/cleanup 入口；不扫描所有顶层窗口，也不全局冲刷 `DeferredDelete`。
+- 无 Chat 配置迁移在 `pet.chat` 被打包排除时安全跳过，其他导入错误继续抛出。
+
+验证顺序固定为：先运行非压力主套件，再单独运行跨进程高并发测试。最终结果：
+
+```text
+主套件（排除压力项）：1421 passed, 7 skipped, 1 deselected
+跨进程压力测试：1 passed
+```
+
+详细诊断、生命周期归属表、撤回的实验方案和复现规则见
+`docs/QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md`。
+
 
 - **加功能前**：读 `docs/WINDOW_PY_SPLIT_GUIDE.md`（建议性质，非强制规范）
 - **加配置键**：普通顶层键需三处登记——默认值 dict + reload 白名单 +

@@ -33,6 +33,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller pytest
 
+      # 桥接插件依赖（issue: Cannot find package '@deepseek-ai/cosmokit'）：
+      # fix_bridge_bundle.py 需要源码 node_modules 展开复制进 dist；
+      # --frozen-lockfile 让 lock 与 package.json 失配时直接失败。
+      - name: Install bridge plugin dependencies
+        shell: pwsh
+        run: |
+          node --version
+          npm install -g pnpm
+          pnpm --version
+          cd integrations\dsh-pet-bridge
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { throw "pnpm install (bridge) failed" }
+
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 

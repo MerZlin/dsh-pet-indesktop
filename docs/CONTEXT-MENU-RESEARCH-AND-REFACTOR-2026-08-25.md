@@ -1,5 +1,19 @@
 # 右键菜单图标调研与双模板重构记录
 
+## 2026-09 生命周期收口补充
+
+生产路径仍由 `PetWindow._show_context_menu()` 调用真实 `QMenu.exec()`，不改变菜单的
+嵌套事件循环语义。为避免 offscreen 测试直接进入原生 popup，窗口增加
+`_exec_context_menu(menu, position)` Python seam；测试替换该 seam，而不是
+monkeypatch PySide 的 C++ `QMenu.exec` 方法。旧的 duck-typed 调用者没有 seam 时
+仍回退到 `menu.exec()`。
+
+菜单测试的局部 `QMenu` 由测试自己定向销毁；不使用
+`QApplication.sendPostedEvents(None, QEvent.DeferredDelete)`，因为它会处理共享
+QApplication 中其他测试遗留的 QObject，并可能把原生崩溃暴露在无关用例中。相关
+Windows 全量验证顺序是先完成非压力套件，最后再运行跨进程高并发测试。
+
+
 日期：2026-08-25
 
 ## 问题与目标

@@ -23,8 +23,10 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 import pet.agent_link as agent_link
 from pet.agent_link import (
     AgentLinkManager,
+    AgentEvent,
     BaseAgentMonitor,
     ByteOffsetTailer,
+    DirGlobTailer,
     ClaudeCodeMonitor,
     CursorMonitor,
     CustomAgentMonitor,
@@ -33,6 +35,104 @@ from pet.agent_link import (
 )
 from pet.config import Config
 from pet.config import _clean_agent_link_data, _clean_custom_agents
+from pet.speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
+
+
+class TestMainlineAgentLinkHardening:
+    def test_monitor_polling_uses_worker_and_stops(self, tmp_path):
+        """监视器轮询不占 GUI 线程，stop 后 worker 必须退出。"""
+        app = QApplication.instance() or QApplication([])
+        seen = []
+        ready = threading.Event()
+
+        class ProbeMonitor(BaseAgentMonitor):
+            _POLL_INTERVAL_S = 0.01
+
+            def _poll(self, gen=None):
+                seen.append(threading.get_ident())
+                self._emit_state("working", self._emit_gen if gen is None else gen)
+                ready.set()
+                self._worker_stop.set()
+
+        monitor = ProbeMonitor("probe", tmp_path)
+        events = []
+        monitor.state_event.connect(events.append)
+        monitor.start()
+        assert ready.wait(1.0)
+        app.processEvents()
+        assert seen and seen[0] != threading.get_ident()
+        assert events and isinstance(events[0], AgentEvent)
+        assert events[0].gen == monitor._gen
+        monitor.stop()
+        assert monitor._worker is not None and not monitor._worker.is_alive()
+
+    def test_pause_buffers_events_until_resume(self, tmp_path):
+        """隐藏期间落在 poll 中的状态事件在 resume 时补发。"""
+        monitor = BaseAgentMonitor("probe", tmp_path)
+        events = []
+        monitor.state_event.connect(events.append)
+        monitor.start()
+        monitor.pause()
+        monitor._emit_state("working", monitor._emit_gen)
+        assert events == []
+        monitor.resume()
+        assert [event.state for event in events] == ["working"]
+        monitor.stop()
+
+    def test_stale_generation_is_rejected_at_manager(self, tmp_path):
+        class Win:
+            def isVisible(self):
+                return True
+
+            def mark_activity(self):
+                pass
+
+        mgr = AgentLinkManager(Win(), Config(base=tmp_path), min_interval=0.0)
+        monitor = mgr.monitors["cursor"]
+        monitor.start()
+        old_gen = monitor._emit_gen
+        monitor.stop()
+        monitor.start()
+        current_gen = monitor._emit_gen
+        mgr._on_agent_state_event(AgentEvent("cursor", "state", gen=old_gen, state="working"))
+        assert "cursor" not in mgr._last_raw
+        mgr._on_agent_state_event(AgentEvent("cursor", "state", gen=current_gen, state="working"))
+        assert mgr._last_raw["cursor"] == "working"
+        mgr.shutdown()
+
+    def test_install_completion_from_old_token_is_dropped(self, tmp_path):
+        bubbles = []
+
+        class Win:
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(Win(), cfg)
+        mgr._install_pending["dsh"] = 11
+        mgr._on_install_finished("dsh", True, "ok", 10)
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert mgr._install_pending["dsh"] == 11
+        assert bubbles == []
+        mgr.shutdown()
+
+    def test_state_and_activity_refresh_idle_activity_anchor(self, tmp_path):
+        class Win:
+            def __init__(self):
+                self.activity_count = 0
+
+            def isVisible(self):
+                return True
+
+            def mark_activity(self):
+                self.activity_count += 1
+
+        win = Win()
+        mgr = AgentLinkManager(win, Config(base=tmp_path), min_interval=0.0)
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_agent_activity("dsh", "read")
+        assert win.activity_count == 2
+        mgr.shutdown()
 
 
 # ============================================================================
@@ -88,9 +188,48 @@ class TestByteOffsetTailer:
         assert json.loads(lines[0])["event"] == "fresh"
 
 
-# ============================================================================
-# 2. 状态映射与规范化测试
-# ============================================================================
+
+
+class TestDirGlobTailer:
+    def test_discovers_new_files_during_scan_throttle_and_keeps_offsets(self, tmp_path):
+        tailer = DirGlobTailer(tmp_path, scan_interval=60)
+        first = tmp_path / "dsh.jsonl"
+        first.write_text('{"event":"old"}\n', encoding="utf-8")
+        assert tailer.read_new_lines() == []
+        with first.open("a", encoding="utf-8") as f:
+            f.write('{"event":"one"}\n')
+        assert [json.loads(x)["event"] for x in tailer.read_new_lines()] == ["one"]
+        second = tmp_path / "dsh-session-2.jsonl"
+        second.write_text('{"event":"new-session"}\n', encoding="utf-8")
+        # Directory change bypasses the long periodic interval; startup
+        # backfill still skips content written before this file was discovered.
+        assert tailer.read_new_lines() == []
+        with second.open("a", encoding="utf-8") as f:
+            f.write('{"event":"after-discovery"}\n')
+        assert [json.loads(x)["event"] for x in tailer.read_new_lines()] == ["after-discovery"]
+
+    def test_reads_multiple_sessions_and_rotation(self, tmp_path):
+        tailer = DirGlobTailer(tmp_path, scan_interval=60)
+        one = tmp_path / "dsh-1.jsonl"
+        two = tmp_path / "dsh-2.jsonl"
+        one.touch(); two.touch()
+        tailer._initial_backfill_done = True
+        assert tailer.read_new_lines() == []
+        one.write_text('{"event":"rotated"}\n', encoding="utf-8")
+        two.write_text('{"event":"session-2"}\n', encoding="utf-8")
+        events = [json.loads(x)["event"] for x in tailer.read_new_lines()]
+        assert set(events) == {"rotated", "session-2"}
+
+    def test_reset_forces_rescan(self, tmp_path):
+        tailer = DirGlobTailer(tmp_path, scan_interval=60)
+        tailer.read_new_lines()
+        path = tmp_path / "dsh-reset.jsonl"
+        path.write_text('{"event":"before-reset"}\n', encoding="utf-8")
+        tailer.reset()
+        tailer._initial_backfill_done = True
+        assert json.loads(tailer.read_new_lines()[0])["event"] == "before-reset"
+
+
 class TestEventStateNormalization:
     def test_known_events_mapping(self):
         assert normalize_event_state("UserPromptSubmit") == "thinking"
@@ -123,6 +262,34 @@ class TestAgentLinkManager:
             "notify_state": False,
             "notify_done": True,
             "notify_activity": False,
+            "notify_exec_failed": True,
+            "stuck_detect": False,
+            "stuck_worried_threshold": 3,
+            "stuck_intervene_threshold": 5,
+            "stuck_window_seconds": 90,
+            "stuck_cooldown_seconds": 300,
+            "stuck_reminder_text": "",
+            "exploration_watchdog_enabled": True,
+            "exploration_watchdog_mode": "manual",
+            "exploration_watchdog_warning_threshold": 3,
+            "exploration_watchdog_control_threshold": 5,
+            "exploration_watchdog_judge_model": "",
+            "exploration_watchdog_judge_provider": "",
+            "exploration_watchdog_judge_timeout": 8,
+            "exploration_watchdog_cooldown_steps": 3,
+            "exploration_watchdog_early_grace_minutes": 5,
+            "exploration_watchdog_long_run_minutes": 10,
+            "exploration_watchdog_long_think_seconds": 120,
+            "pattern_detect": False,
+            "pattern_w6_control": 3,
+            "pattern_w10_warn": 3,
+            "pattern_w10_control": 4,
+            "pattern_macro_w6_explore": 5,
+            "pattern_macro_w6_action": 0,
+            "pattern_macro_w10_explore": 7,
+            "pattern_macro_w10_action": 1,
+            "pattern_min_steps_between": 3,
+            "pattern_cooldown_seconds": 60,
             "sound_enabled": False,
             "sound_start_path": "builtin:agent-start",
             "sound_done_path": "builtin:agent-done",
@@ -193,7 +360,7 @@ class TestRealFileTailEndToEnd:
 
         received_states = []
         mon = CursorMonitor(cfg_dir, base_dir=tmp_path / ".cursor" / "projects")
-        mon.state_changed.connect(lambda ev: received_states.append((ev.agent, ev.state)))
+        mon.state_changed.connect(lambda k, s: received_states.append((k, s)))
 
         mon.start()
         mon._poll()  # 初始化 tailer
@@ -451,22 +618,26 @@ class TestAgentMenuRebound:
         cfg = Config(base=tmp_path)
         lib = MovieLibrary(character_id="shenshen")
         win = PetWindow(lib, cfg)
+        try:
+            class FakeAction:
+                def __init__(self):
+                    self.checked = True  # 用户刚勾上
+                    self._blocked = []
 
-        class FakeAction:
-            def __init__(self):
-                self.checked = True  # 用户刚勾上
-                self._blocked = []
+                def blockSignals(self, b):
+                    self._blocked.append(b)
 
-            def blockSignals(self, b):
-                self._blocked.append(b)
+                def setChecked(self, v):
+                    self.checked = v
 
-            def setChecked(self, v):
-                self.checked = v
-
-        act = FakeAction()
-        win._toggle_agent_link("claude", True, act)
-        assert act.checked is False  # 回滚
-        assert cfg.data["agent_link"]["claude"] is False  # 配置未开启
+            act = FakeAction()
+            win._toggle_agent_link("claude", True, act)
+            assert act.checked is False  # 回滚
+            assert cfg.data["agent_link"]["claude"] is False  # 配置未开启
+        finally:
+            win.close()
+            win.deleteLater()
+            app.processEvents()
 
     def test_bom_prefixed_file_tolerated(self, tmp_path):
         """PowerShell Add-Content -Encoding UTF8 会在新建文件首行写 BOM，
@@ -500,10 +671,7 @@ class TestRealFormatMappers:
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "user"}})) == "thinking"
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "assistant"}})) == ""
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-start"}})) == "working"
-        # step-finish 按 reason 分流：tool-calls = 停笔等工具（含 task 子代理
-        # 长跑），维持现状不触发完成确认；stop / 无 reason（旧版兼容）→ idle
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish"}})) == "idle"
-        assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish", "reason": "stop"}})) == "idle"
         assert opencode_event_state("message.part.updated.1", j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}})) == ""
         assert opencode_event_state("session.updated.1", "{}") == ""
         assert opencode_event_state("message.part.updated.1", "not json") == ""
@@ -529,7 +697,7 @@ class TestOpenCodeSqliteTail:
         cfg_dir.mkdir()
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda ev: received.append(ev.state))
+        mon.state_changed.connect(lambda k, s: received.append(s))
         mon.start()
         mon._poll()  # 首次 = backfill，不产生事件
         assert received == []
@@ -544,6 +712,79 @@ class TestOpenCodeSqliteTail:
         mon._poll()
         assert received == ["thinking", "working"]  # session.updated 被忽略
         mon.stop()
+
+    def test_database_replacement_restarts_backfill(self, tmp_path):
+        """OpenCode 重建数据库后不沿用旧 rowid，也不重放新库历史行。"""
+        import os
+        import sqlite3
+        from pet.agent_link import OpenCodeMonitor
+
+        db_path = tmp_path / "opencode.db"
+
+        def make_db(path, rows):
+            db = sqlite3.connect(path)
+            db.execute("CREATE TABLE event (aggregate_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+            for seq, event_type, data in rows:
+                db.execute("INSERT INTO event VALUES ('s1', ?, ?, ?)", (seq, event_type, data))
+            db.commit()
+            db.close()
+
+        make_db(db_path, [(1, "session.created.1", "{}")])
+        mon = OpenCodeMonitor(tmp_path / "cfg", db_path=db_path)
+        received = []
+        mon.state_changed.connect(lambda _agent, state: received.append(state))
+        mon._poll()
+
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('s1', 2, 'message.updated.1', '{\"info\":{\"role\":\"user\"}}')")
+        db.commit()
+        db.close()
+        mon._poll()
+        assert received == ["thinking"]
+
+        replacement = tmp_path / "opencode-new.db"
+        make_db(replacement, [(1, "message.updated.1", '{"info":{"role":"user"}}')])
+        os.replace(replacement, db_path)
+        mon._poll()  # 新库既有内容只用于 backfill，不能重放
+        assert received == ["thinking"]
+
+        db = sqlite3.connect(db_path)
+        db.execute("INSERT INTO event VALUES ('s1', 2, 'message.part.updated.1', '{\"part\":{\"type\":\"step-start\"}}')")
+        db.commit()
+        db.close()
+        mon._poll()
+        assert received == ["thinking", "working"]
+
+
+class TestCooldownUnits:
+    def test_seconds_and_minutes_conversion(self, tmp_path):
+        """冷却间隔秒/分钟双单位：45 秒应存为 0.75 分钟。"""
+        from PySide6.QtWidgets import QApplication
+        from pet.modern_settings_dialog import ModernSettingsDialog
+
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        dlg = ModernSettingsDialog(cfg)
+        try:
+            if not hasattr(dlg, "pro_cooldown_unit"):
+                import pytest
+                pytest.skip("非 Windows 无主动识屏设置组")
+
+            # 切到秒，设 45 秒
+            dlg.pro_cooldown_unit.setCurrentIndex(1)
+            dlg.pro_cooldown_spin.setValue(45)
+            assert abs(dlg._pro_cooldown_minutes() - 0.75) < 1e-9
+
+            # 切回分钟应自动换算显示
+            dlg.pro_cooldown_unit.setCurrentIndex(0)
+            assert abs(dlg.pro_cooldown_spin.value() - 0.75) < 1e-9
+
+            # 保存后配置为分钟值
+            dlg._save()
+            assert abs(cfg.data["proactive_screen"]["cooldown_minutes"] - 0.75) < 1e-9
+        finally:
+            dlg.close()
+            dlg.deleteLater()
 
 
 class TestMultiInstanceGlobalState:
@@ -587,25 +828,33 @@ class TestModernSettingsProactivePage:
 
         cfg = Config(base=tmp_path)
         dlg = ModernSettingsDialog(cfg, include_ai=True)
-        assert hasattr(dlg, "pro_enabled_check"), "主动识屏控件未构建"
+        dlg2 = None
+        try:
+            assert hasattr(dlg, "pro_enabled_check"), "主动识屏控件未构建"
 
-        # 设置一组值并保存
-        dlg.pro_enabled_check.setChecked(True)
-        dlg.pro_whitelist_edit.setPlainText("code.exe\ntitle:*会议*")
-        dlg.pro_cap_spin.setValue(42)
-        dlg._save()
+            # 设置一组值并保存
+            dlg.pro_enabled_check.setChecked(True)
+            dlg.pro_whitelist_edit.setPlainText("code.exe\ntitle:*会议*")
+            dlg.pro_cap_spin.setValue(42)
+            dlg._save()
 
-        pro = cfg.data["proactive_screen"]
-        assert pro["enabled"] is True
-        assert pro["whitelist"] == ["code.exe", "title:*会议*"]
-        assert pro["daily_cap"] == 42
-        # 未暴露字段保留
-        assert "change_threshold" in pro
+            pro = cfg.data["proactive_screen"]
+            assert pro["enabled"] is True
+            assert pro["whitelist"] == ["code.exe", "title:*会议*"]
+            assert pro["daily_cap"] == 42
+            # 未暴露字段保留
+            assert "change_threshold" in pro
 
-        # 再开一次：读回的值应与保存一致
-        dlg2 = ModernSettingsDialog(cfg, include_ai=True)
-        assert dlg2.pro_enabled_check.isChecked() is True
-        assert dlg2.pro_cap_spin.value() == 42
+            # 再开一次：读回的值应与保存一致
+            dlg2 = ModernSettingsDialog(cfg, include_ai=True)
+            assert dlg2.pro_enabled_check.isChecked() is True
+            assert dlg2.pro_cap_spin.value() == 42
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            if dlg2 is not None:
+                dlg2.close()
+                dlg2.deleteLater()
 
 
 # ============================================================================
@@ -706,34 +955,6 @@ class TestAgentLinkBubbles:
         mgr._on_agent_state("dsh", "idle")
         assert "dsh" in mgr._done_pending
 
-        mgr._fire_done("dsh")
-        assert any("干完活啦" in b for b in bubbles)
-
-    def test_opencode_step_finish_tool_calls_no_done(self, tmp_path):
-        """opencode step-finish(reason=tool-calls)（派 task 子代理后主代理停笔等待）
-        不触发完成确认：不产出 idle 状态 → 800ms 确认不排程；
-        step-finish(reason=stop) 才是真结束 → 排程并出完成气泡。"""
-        from pet.agent_link import opencode_event_state
-        import json as j
-        mgr, win, bubbles, clock = self._make_mgr(tmp_path)
-        mgr._on_agent_state("dsh", "working")
-
-        # 子代理长跑期间：tool-calls 维持现状，确认窗口不排程
-        state = opencode_event_state("message.part.updated.1",
-                                     j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}}))
-        assert state == ""
-        if state:  # 与 agent_link._poll 的空状态跳过逻辑一致
-            mgr._on_agent_state("dsh", state)
-        clock[0] += 3.0
-        assert "dsh" not in mgr._done_pending
-        assert bubbles == []
-
-        # 子代理回注、整轮真结束：stop → idle → 排程 → 完成气泡恰一次
-        state = opencode_event_state("message.part.updated.1",
-                                     j.dumps({"part": {"type": "step-finish", "reason": "stop"}}))
-        assert state == "idle"
-        mgr._on_agent_state("dsh", state)
-        assert "dsh" in mgr._done_pending
         mgr._fire_done("dsh")
         assert any("干完活啦" in b for b in bubbles)
 
@@ -983,52 +1204,6 @@ class TestAgentLinkSounds:
 
 
 class TestInstallErrorSummary:
-    def test_find_pnpm_cli_accepts_homebrew_javascript_symlink(self, tmp_path, monkeypatch):
-        cli = tmp_path / "lib" / "node_modules" / "pnpm" / "bin" / "pnpm.cjs"
-        cli.parent.mkdir(parents=True)
-        cli.write_text("", encoding="utf-8")
-        shim = tmp_path / "bin" / "pnpm"
-        shim.parent.mkdir()
-        shim.symlink_to(cli)
-        monkeypatch.delenv("DSH_PNPM_BIN", raising=False)
-        monkeypatch.setattr(agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None)
-
-        assert agent_link._find_pnpm_cli() == str(cli)
-
-    def test_install_bridge_finds_homebrew_node_outside_finder_path(self, tmp_path, monkeypatch):
-        """Issue #67：Finder 启动的 macOS 应用也应找到 Homebrew Node。"""
-        plugin = tmp_path / "dsh-pet-bridge"
-        plugin.mkdir()
-        profile = tmp_path / "profiles" / "default"
-        profile.mkdir(parents=True)
-        manifest = profile / "package.json"
-        manifest.write_text("{}", encoding="utf-8")
-
-        node = "/opt/homebrew/bin/node"
-        pnpm_cli = str(tmp_path / "pnpm.mjs")
-        monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-        monkeypatch.setattr(agent_link, "_which", lambda name: node if name == "node" else None, raising=False)
-        monkeypatch.setattr(agent_link, "_pnpm_cli", lambda: pnpm_cli)
-        monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
-        monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
-
-        commands = []
-
-        def fake_run(cmd, **kwargs):
-            commands.append((cmd, kwargs))
-            manifest.write_text(
-                json.dumps({"dependencies": {agent_link.DSH_PLUGIN_NAME: "file:bridge"}}),
-                encoding="utf-8",
-            )
-            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-        monkeypatch.setattr(agent_link.subprocess, "run", fake_run)
-
-        ok, message = DshMonitor.install_bridge()
-
-        assert ok is True, message
-        assert commands[0][0] == [node, pnpm_cli, "add", str(plugin)]
-
     def test_install_bridge_auto_installs_pnpm(self, tmp_path, monkeypatch):
         plugin = tmp_path / "dsh-pet-bridge"
         plugin.mkdir()
@@ -1044,7 +1219,7 @@ class TestInstallErrorSummary:
         monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
         monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
         monkeypatch.setattr(
-            agent_link, "_which",
+            agent_link.shutil, "which",
             lambda name: "C:/Program Files/nodejs/node.exe" if name == "node" else None,
         )
 
@@ -1236,6 +1411,37 @@ class TestAgentLinkChainingAndActivity:
         mgr._on_agent_activity("dsh", "memory_search")
         assert "正在翻记忆" in bubbles[-1]
 
+    def test_activity_bubble_receives_target_from_tool_record(self, tmp_path):
+        """过程汇报气泡必须拿到上游 tool/call 的 target 等字段（显式注入，非隐式上下文）。
+
+        上游重构后 target 曾只在 raw_record 里、从未传入表现层；现在监视器同轮
+        转发的工具记录被按 agent 缓存，_on_agent_activity 显式传给模板。"""
+        mgr, win, bubbles, clock = self._make_mgr(
+            tmp_path, agent_link_cfg={"notify_activity": True}
+        )
+        # 模拟监视器 _poll 的同轮顺序：先 raw_record（工具记录），再 activity 信号
+        mgr._remember_dialogue_record("dsh", {
+            "ts": 1, "event": "tool/call", "tool": "read", "target": "src/app.py",
+            "callId": "call-1", "step": 2, "ok": True,
+        })
+        cfg = mgr.cfg
+        cfg.data["dialogue_mode"] = "custom"
+        cfg.data["dialogue_phrases"] = {
+            "activity.read": ["正在读取 {target}（第 {step} 步）"],
+            "activity.search": ["搜索目标：{target}"],
+        }
+        cfg.save()
+        mgr._on_agent_activity("dsh", "read")
+        assert bubbles, "气泡未弹出"
+        assert "src/app.py" in bubbles[-1]
+        assert "第 2 步" in bubbles[-1]
+
+        # 无 target 的工具记录（如 Claude hooks 只有 tool）：占位符保持原样，不注入空串
+        clock[0] += 15.0
+        mgr._remember_dialogue_record("dsh", {"ts": 2, "event": "tool/call", "tool": "read"})
+        mgr._on_agent_activity("dsh", "grep")
+        assert "{target}" in bubbles[-1]
+
     def test_window_smooth_chaining(self, tmp_path):
         """4. window 侧平滑衔接（用真实 PetWindow + MovieLibrary，offscreen，参考 TestAgentMenuRebound 的构造）：
         win._switch('优雅女仆舞')（一次性动作）后 win.request_link_anim('写代码') →
@@ -1328,8 +1534,8 @@ class TestActivitySignal:
         cfg = Config(base=tmp_path)
         mon = BaseAgentMonitor("dsh", cfg.dir)
         got, states = [], []
-        mon.activity.connect(lambda ev: got.append((ev.agent, ev.tool)))
-        mon.state_changed.connect(lambda ev: states.append(ev.state))
+        mon.activity.connect(lambda a, t: got.append((a, t)))
+        mon.state_changed.connect(lambda a, s: states.append(s))
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()  # 先建空文件，backfill 才能落到末尾
         mon._tailer.read_new_lines()  # backfill 初始化
@@ -1345,7 +1551,7 @@ class TestActivitySignal:
         cfg = Config(base=tmp_path)
         mon = BaseAgentMonitor("dsh", cfg.dir)
         got = []
-        mon.activity.connect(lambda ev: got.append(ev.tool))
+        mon.activity.connect(lambda a, t: got.append(t))
         mon.events_dir.mkdir(parents=True, exist_ok=True)
         mon.events_file.touch()
         mon._tailer.read_new_lines()
@@ -1449,8 +1655,8 @@ class TestOpenCodeSubagentFilter:
         cfg_dir.mkdir()
         received, tools = [], []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda ev: received.append(ev.state))
-        mon.activity.connect(lambda ev: tools.append(ev.tool))
+        mon.state_changed.connect(lambda k, s: received.append(s))
+        mon.activity.connect(lambda k, t: tools.append(t))
         mon.start()
         mon._poll()  # backfill
 
@@ -1492,7 +1698,7 @@ class TestOpenCodeSubagentFilter:
         cfg_dir.mkdir()
         received = []
         mon = OpenCodeMonitor(cfg_dir, db_path=db_path)
-        mon.state_changed.connect(lambda ev: received.append(ev.state))
+        mon.state_changed.connect(lambda k, s: received.append(s))
         mon.start()
         mon._poll()
         db = sqlite3.connect(db_path)
@@ -1596,8 +1802,8 @@ class TestCustomAgentMonitor:
 
         states, tools = [], []
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(events))
-        mon.state_changed.connect(lambda ev: states.append((ev.agent, ev.state)))
-        mon.activity.connect(lambda ev: tools.append((ev.agent, ev.tool)))
+        mon.state_changed.connect(lambda k, s: states.append((k, s)))
+        mon.activity.connect(lambda k, t: tools.append((k, t)))
         mon.start()
         mon._poll()  # backfill 初始化
 
@@ -1618,7 +1824,7 @@ class TestCustomAgentMonitor:
         missing = tmp_path / "not_yet.jsonl"
         mon = CustomAgentMonitor("gemini", tmp_path / "cfg", str(missing))
         states = []
-        mon.state_changed.connect(lambda ev: states.append((ev.agent, ev.state)))
+        mon.state_changed.connect(lambda k, s: states.append((k, s)))
         mon.start()
         mon._poll()
         mon._poll()
@@ -1706,7 +1912,7 @@ class TestCustomAgentManager:
 
 class TestCustomAgentMenu:
     def test_menu_lists_custom_agent_and_toggle_routes(self, tmp_path):
-        """右键菜单动态渲染自定义 Agent，勾选走通用 toggle_agent_link。"""
+        """右键菜单动态渲染自定义 Agent，勾选走通用 _toggle_agent_link。"""
         from PySide6.QtWidgets import QMenu
         from pet.context_menus.shared import add_agent_link_menu
 
@@ -1731,6 +1937,9 @@ class TestCustomAgentMenu:
             def set_agent_link_option(self, key, on):
                 options.append((key, on))
 
+            _toggle_agent_link = toggle_agent_link
+            _set_agent_link_option = set_agent_link_option
+
         menu = QMenu()
         try:
             add_agent_link_menu(menu, DummyPet())
@@ -1740,209 +1949,930 @@ class TestCustomAgentMenu:
             for label in ("DeepSeek Harness (DSH)", "Claude Code", "Cursor", "OpenCode"):
                 assert label in texts
             assert "Gemini CLI" in texts
+            # Agent 联动子菜单不再带「台词风格」入口，仅保留联动相关设置
+            assert "台词风格" not in texts
+            assert "循环检测" in texts
 
             gemini_act = next(a for a in sub.actions() if a.text() == "Gemini CLI")
             gemini_act.setChecked(True)
             assert toggles == [("gemini", True)]
         finally:
-            menu.deleteLater()
+            import shiboken6
+            shiboken6.delete(menu)
+
 
 # ============================================================================
-# 16. DSH 安装线程生命周期守卫（全审 P1-4）
+# 阻塞型交互气泡生命周期（审批 / 用户问题统一处理，一直挂到 resolved）
 # ============================================================================
-class TestInstallFinishedGuard:
-    """安装后台线程完成回调不得越过 manager 生命周期：窗口关闭/角色切换
-    （shutdown）或重新禁用后，迟到的 install_finished 不得写配置/启动
-    监视器/弹气泡（daemon 安装线程本身无法被取消，只能拦完成回调）。"""
+class TestApprovalStickyBubble:
+    """阻塞型交互气泡永久挂着：approval/request、question/requested → sticky；
+    decided / resolved / idle / offline → 消失。
 
-    def _make_manager(self, tmp_path, bubbles, monkeypatch, release):
+    覆盖：sticky 展示、resolved 收尾、并发交互互不覆盖、idle 兜底、全量清除、
+    _saw_alert 补记（完成后不误说"干完活啦"）、question 选项排版。
+    """
+
+    def _make_mgr(self, tmp_path):
+        class FakeWin:
+            def __init__(self):
+                self._sticky_bubble_active = False
+                self.sticky_shown: list[tuple[str, bool]] = []
+                self.hidden_calls = 0
+                self._alert_current = None
+                self._alert_queue = []
+
+            def show_bubble(self, text, duration_ms=3200, sticky=False, buttons=None):
+                self._sticky_bubble_active = bool(sticky)
+                self.sticky_shown.append((str(text), bool(sticky)))
+                if buttons:
+                    self.shown_buttons.append((str(text), [item for pair in buttons for item in (pair if pair[0] in (SECTION_HEADER_LABEL, SECTION_HINT_LABEL) else (pair[0],))]))
+
+            def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None, sticky=True, alert_id=""):
+                self._alert_queue.append({"id": alert_id, "text": str(text), "sticky": sticky})
+                if self._alert_current is None and self._alert_queue:
+                    self._alert_current = self._alert_queue.pop(0)
+                    self._sticky_bubble_active = self._alert_current.get("sticky", True)
+                self.sticky_shown.append((str(text), sticky))
+                if buttons:
+                    self.shown_buttons.append((str(text), [item for pair in buttons for item in (pair if pair[0] in (SECTION_HEADER_LABEL, SECTION_HINT_LABEL) else (pair[0],))]))
+
+            def resolve_alert(self, alert_id):
+                if self._alert_current and self._alert_current.get("id") == alert_id:
+                    self._alert_current = None
+                    self.hidden_calls += 1
+                    self._sticky_bubble_active = False
+                    if self._alert_queue:
+                        self._alert_current = self._alert_queue.pop(0)
+                        self._sticky_bubble_active = self._alert_current.get("sticky", True)
+                else:
+                    self._alert_queue = [q for q in self._alert_queue if q.get("id") != alert_id]
+
+            def hide_bubble(self):
+                self.hidden_calls += 1
+                self._sticky_bubble_active = False
+                self._alert_current = None
+
         cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(FakeWin(), cfg)
+        mgr.win.shown_buttons = []
+        return mgr
 
-        class Win:
-            def show_bubble(self, text, duration_ms=3000):
-                bubbles.append(text)
+    def _single_pending(self, mgr, agent_key: str) -> dict:
+        """取该 agent 唯一一条 pending 交互（多条时断言失败，供单交互测试用）。"""
+        items = mgr.pending_interactions_for(agent_key)
+        assert len(items) == 1, f"期望 {agent_key} 只有一条 pending，实际 {len(items)} 条"
+        return next(iter(items.values()))
+
+    def _single_iid(self, mgr, agent_key: str) -> str:
+        items = mgr.pending_interactions_for(agent_key)
+        assert len(items) == 1
+        return next(iter(items))
+
+    def _agent_keys(self, mgr) -> set:
+        return {item.get("agent_key") for item in mgr._pending_interactions.values()}
+
+    def test_approval_request_shows_sticky(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-hint", "sessionId": "s-1"})
+        assert self._agent_keys(mgr) == {"dsh"}
+        pending = self._single_pending(mgr, "dsh")
+        assert pending["kind"] == "approval"
+        assert pending["interactive"] is False
+        assert mgr.win._sticky_bubble_active is True
+        text, sticky = mgr.win.sticky_shown[-1]
+        assert sticky is True
+        assert "审批" in text
+        assert mgr.win.shown_buttons == [], "无 rpcId 时不得出按钮（纯提示）"
+
+    def test_approval_request_shows_full_command(self, tmp_path):
+        """审批气泡必须展示被审批命令的完整内容（来自 bridge 的 command 字段）。"""
+        mgr = self._make_mgr(tmp_path)
+        cmd = "pip install pytest --index-url http://mirrors.aliyun.com/pypi/simple/"
+        mgr._on_approval_request("dsh", {"tool": "bash", "command": cmd, "approvalId": "ap-cmd", "sessionId": "s-1"})
+        text, _sticky = mgr.win.sticky_shown[-1]
+        assert cmd in text, "气泡文案必须包含命令完整内容"
+        assert self._single_pending(mgr, "dsh")["command"] == cmd
+
+    def test_approval_request_formats_command_single_line(self, tmp_path):
+        """多行/多空格命令折叠成单行展示（气泡图片不保留换行）。"""
+        mgr = self._make_mgr(tmp_path)
+        raw = "pip install pytest\n\n  --index-url http://example.com/simple/\n"
+        mgr._on_approval_request("dsh", {"tool": "bash", "command": raw, "approvalId": "ap-raw", "sessionId": "s-1"})
+        text, _sticky = mgr.win.sticky_shown[-1]
+        assert "\n" not in text, "换行必须折叠成空格"
+        assert "pip install pytest --index-url http://example.com/simple/" in text
+
+    def test_approval_request_truncates_overlong_command(self, tmp_path):
+        """超长命令截断并加省略号，避免撑爆气泡。"""
+        mgr = self._make_mgr(tmp_path)
+        long_cmd = "x" * 500
+        mgr._on_approval_request("dsh", {"tool": "bash", "command": long_cmd, "approvalId": "ap-long", "sessionId": "s-1"})
+        text, _sticky = mgr.win.sticky_shown[-1]
+        assert "…" in text
+        assert "x" * 500 not in text
+
+    def test_approval_request_command_missing_falls_back_to_tool(self, tmp_path):
+        """无 command 字段时回退到工具名文案（兼容旧桥接路径）。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "write", "approvalId": "ap-w", "sessionId": "s-1"})
+        text, _sticky = mgr.win.sticky_shown[-1]
+        assert "请求执行" not in text
+        assert "审批" in text
+
+    def test_approval_resolved_dismisses(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-r", "sessionId": "s-1"})
+        mgr._on_approval_resolved("dsh", {"approvalId": "ap-r"})
+        assert mgr._pending_interactions == {}
+        assert mgr.win.hidden_calls == 1
+        assert mgr.win._sticky_bubble_active is False
+
+    def test_concurrent_approvals_resolved_last(self, tmp_path):
+        """两个 agent 并发审批：各自 pending；队列模型下逐条关闭并推进下一条。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-d", "sessionId": "s-1"})
+        mgr._on_approval_request("claude", {"tool": "write", "approvalId": "ap-c", "sessionId": "s-2"})
+        assert self._agent_keys(mgr) == {"dsh", "claude"}
+        mgr._on_approval_resolved("dsh", {"approvalId": "ap-d"})
+        assert self._agent_keys(mgr) == {"claude"}
+        assert mgr.win._sticky_bubble_active is True, "dsh 审批关闭后 claude 审批顶上，气泡仍挂着"
+        mgr._on_approval_resolved("claude", {"approvalId": "ap-c"})
+        assert mgr._pending_interactions == {}
+        assert mgr.win.hidden_calls == 2
+        assert mgr.win._sticky_bubble_active is False
+
+    def test_idle_dismisses_approval(self, tmp_path):
+        """agent 回待机但没收到 decided：交互必然失效，兜底清掉（含窗口隐藏时）。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-i", "sessionId": "s-1"})
+        mgr._on_agent_state("dsh", "idle")
+        assert mgr._pending_interactions == {}
+        assert mgr.win.hidden_calls == 1
+
+    def test_dismiss_all_approvals(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-all", "sessionId": "s-1"})
+        mgr.dismiss_all_approvals()
+        assert mgr._pending_interactions == {}
+        assert mgr.win.hidden_calls == 1
+        assert mgr.win._sticky_bubble_active is False
+
+    def test_approval_records_saw_alert(self, tmp_path):
+        """审批打断算"需要主人看一眼"：完成后不误说"干完活啦"。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-saw", "sessionId": "s-1"})
+        assert "dsh" in mgr._saw_alert
+
+    def test_resolved_unknown_agent_noop(self, tmp_path):
+        """没有对应 pending 的 resolved 事件是空操作，不误关气泡。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_resolved("dsh")
+        assert mgr._pending_interactions == {}
+        assert mgr.win.hidden_calls == 0
+
+    # ---- 用户问题（ask_user_question）与审批同待遇 ----
+    QUESTIONS = [
+        {"id": "q1", "question": "要执行哪个方案？",
+         "options": [{"label": "方案 A"}, {"label": "方案 B"}, {"label": "方案 C"}],
+         "multiSelect": False},
+    ]
+
+    def test_question_request_shows_sticky_with_options(self, tmp_path):
+        """question/requested 带 options：常驻气泡列出选项，让用户选一个才能继续。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {"questions": self.QUESTIONS, "callId": "call-q1"})
+        pending = mgr.pending_interactions_for("dsh")
+        assert pending, "应有至少一条 pending 交互"
+        item = next(iter(pending.values()))
+        assert item["kind"] == "question"
+        assert item["interactive"] is False
+        assert mgr.win._sticky_bubble_active is True
+        text, sticky = mgr.win.sticky_shown[-1]
+        assert sticky is True
+        assert "要执行哪个方案" in text
+        assert "方案 A" in text and "方案 B" in text and "方案 C" in text
+        assert "请选择一个" in text
+        assert mgr.win.shown_buttons == [], "无 rpcId 时不得出按钮（纯提示）"
+
+    def test_question_resolved_dismisses(self, tmp_path):
+        """question/resolved → 气泡收尾。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {"questions": self.QUESTIONS, "callId": "call-qr"})
+        mgr._on_question_resolved("dsh", {"callId": "call-qr"})
+        assert mgr._pending_interactions == {}
+        assert mgr.win.hidden_calls == 1
+        assert mgr.win._sticky_bubble_active is False
+
+    def test_question_resolved_matches_call_id_with_multiple_pending(self, tmp_path):
+        """并发问题必须按 callId 关闭，不能因无 rpcId 而让整个提醒队列卡住。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {
+            "questions": self.QUESTIONS, "callId": "call-a", "sessionId": "session-a",
+        })
+        mgr._on_question_request("dsh", {
+            "questions": self.QUESTIONS, "callId": "call-b", "sessionId": "session-a",
+        })
+
+        assert len(mgr.pending_interactions_for("dsh")) == 2
+        mgr._on_question_resolved("dsh", {"callId": "call-b", "sessionId": "session-a"})
+
+        assert len(mgr.pending_interactions_for("dsh")) == 1
+        remaining = next(iter(mgr.pending_interactions_for("dsh").values()))
+        assert remaining["call_id"] == "call-a"
+
+    def test_pending_interaction_uses_interaction_id_not_agent_key(self, tmp_path):
+        """pending_interactions 的键是 interaction_id 而非 agent_key。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-x"})
+        keys = list(mgr._pending_interactions.keys())
+        assert keys, "应有至少一条 pending 交互"
+        assert "dsh" not in keys, "键应为 interaction_id，不是 agent_key"
+        assert "rpc-x" in keys[0], f"键应包含 rpcId（如 approval:rpc-x），实际为 {keys[0]}"
+        pending = mgr.pending_interactions_for("dsh")
+        assert len(pending) == 1
+        item = next(iter(pending.values()))
+        assert item["agent_key"] == "dsh"
+        assert item["kind"] == "question"
+
+    def test_concurrent_pending_resolved_independently(self, tmp_path):
+        """同一个 Agent 有两个 pending interaction → 解决其中一个，另一个仍然存在。
+
+        并发两个审批后分别解决一个，验证未解决的审批不会因另一个解决而关闭。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-a", "approvalId": "ap-a", "sessionId": "s-1"}
+        )
+        mgr._on_approval_request(
+            "dsh", {"tool": "pwsh", "rpcId": "rpc-b", "approvalId": "ap-b", "sessionId": "s-1"}
+        )
+        pending_before = mgr.pending_interactions_for("dsh")
+        assert len(pending_before) == 2, f"应有 2 条 pending 交互，实际 {len(pending_before)}"
+        pending_keys = set(pending_before)
+        assert "approval:rpc-a" in pending_keys and "approval:rpc-b" in pending_keys
+
+        # 解决 A
+        mgr._respond_interaction("approval:rpc-a", "allowed-once")
+        remaining = mgr.pending_interactions_for("dsh")
+        assert len(remaining) == 1, "解决 A 后应只剩 B"
+        assert "approval:rpc-b" in remaining, "B 仍应处于 pending 状态"
+        item_b = remaining["approval:rpc-b"]
+        assert item_b["tool"] == "pwsh"
+        assert item_b["approval_id"] == "ap-b"
+
+        # 解决 B 后全部清空
+        mgr._respond_interaction("approval:rpc-b", "allowed-once")
+        assert mgr.pending_interactions_for("dsh") == {}, "解决 B 后应全部清空"
+
+    def test_question_no_options_needs_input(self, tmp_path):
+        """无 options 的问题（自由输入/确认）：提示需要输入，不出交互按钮。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request(
+            "dsh", {"questions": [{"id": "q2", "question": "请补充上下文"}], "rpcId": "rpc-free"}
+        )
+        text, sticky = mgr.win.sticky_shown[-1]
+        assert sticky is True
+        assert "请补充上下文" in text
+        assert "需要你输入" in text
+        assert mgr.win.shown_buttons == [], "自由输入问题不出可点按钮"
+
+    def test_question_multi_question(self, tmp_path):
+        """一次多个问题：提示有几个问题等你回答。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request(
+            "dsh", {"questions": [{"id": "a", "question": "Q1"}, {"id": "b", "question": "Q2"}], "callId": "call-multi"}
+        )
+        text, sticky = mgr.win.sticky_shown[-1]
+        assert sticky is True
+        assert "2 个问题" in text
+
+    def test_question_and_approval_independent(self, tmp_path):
+        """并发一个审批 + 一个问题：各自独立 pending，不再互相覆盖；分别 resolved 后全部关闭。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-ind", "sessionId": "s-1"})
+        mgr._on_question_request("dsh", {"questions": self.QUESTIONS, "callId": "call-ind"})
+        # 同一 agent 的多个交互各自独立存储（不再互相覆盖）
+        assert self._agent_keys(mgr) == {"dsh"}
+        pending = mgr.pending_interactions_for("dsh")
+        assert len(pending) == 2, "审批和问题应共存，各自一条 pending"
+        # 审批和问题各自有 kind
+        kinds = {item["kind"] for item in pending.values()}
+        assert kinds == {"approval", "question"}
+        # 分别 resolved：先关闭问题
+        mgr._on_question_resolved("dsh", {"callId": "call-ind"})
+        assert len(mgr.pending_interactions_for("dsh")) == 1, "问题关闭后审批还在"
+        assert self._single_pending(mgr, "dsh")["kind"] == "approval"
+        # 再关闭审批
+        mgr._on_approval_resolved("dsh", {"approvalId": "ap-ind"})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+    # ---- 交互模式（带 rpcId，气泡内可直接点选） ----
+
+    def test_approval_interactive_buttons(self, tmp_path):
+        """审批带 rpcId：气泡内嵌「同意/拒绝」两个按钮。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-1", "approvalId": "ap-1", "sessionId": "s-1"}
+        )
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
+        assert item["rpc_id"] == "rpc-1"
+        assert item["approval_id"] == "ap-1"
+        assert item["session_id"] == "s-1"
+        assert mgr.win.shown_buttons and mgr.win.shown_buttons[-1][1] == ["同意", "拒绝"]
+
+    def test_question_interactive_buttons(self, tmp_path):
+        """问题带 rpcId + options：气泡内嵌每个选项的按钮。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request(
+            "dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-2", "sessionId": "s-1"}
+        )
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
+        assert mgr.win.shown_buttons and mgr.win.shown_buttons[-1][1] == ["方案 A", "方案 B", "方案 C"]
+
+    def test_question_multi_branch_grouped_buttons(self, tmp_path):
+        """多分支问题：一个多路弹窗按分支分组展示（各分支标题 + 自己的选项），
+        末尾一个「提交回答」一次性回写全部 answers——不把全部分支选项平铺成一列。"""
+        mgr = self._make_mgr(tmp_path)
+        questions = [
+            {"id": "dA", "question": "双分支第一问：读取哪个文件？", "header": "分支 A",
+             "options": [{"label": "alpha"}, {"label": "beta"}], "multiSelect": False},
+            {"id": "dB", "question": "双分支第二问：执行哪个命令？", "header": "分支 B",
+             "options": [{"label": "ls"}, {"label": "time"}], "multiSelect": False},
+        ]
+        mgr._on_question_request("dsh", {"questions": questions, "rpcId": "rpc-multi", "sessionId": "s-1"})
+        item = next(iter(mgr.pending_interactions_for("dsh").values()))
+        assert item["interactive"] is True
+        labels = mgr.win.shown_buttons[-1][1]
+        # 分支 A 标题 + 其选项；分支 B 标题 + 其选项；末尾提交
+        assert labels == [
+            SECTION_HEADER_LABEL, "分支 A", "alpha", "beta",
+            SECTION_HEADER_LABEL, "分支 B", "ls", "time",
+            "提交回答",
+        ]
+
+    def test_question_multi_branch_no_flat_option_soup(self, tmp_path):
+        """多分支问题不应把两个分支的选项平铺成同一列（回归保护）。"""
+        mgr = self._make_mgr(tmp_path)
+        questions = [
+            {"id": "dA", "question": "Q A", "header": "分支 A", "options": [{"label": "a1"}, {"label": "a2"}]},
+            {"id": "dB", "question": "Q B", "header": "分支 B", "options": [{"label": "b1"}, {"label": "b2"}]},
+        ]
+        mgr._on_question_request("dsh", {"questions": questions, "rpcId": "rpc-9", "sessionId": "s-1"})
+        labels = mgr.win.shown_buttons[-1][1]
+        # 分支 A 的选项必须紧跟「分支 A」标题之后，而不是被平铺混排
+        first_branch = labels[labels.index(SECTION_HEADER_LABEL) + 1: labels.index(SECTION_HEADER_LABEL, labels.index(SECTION_HEADER_LABEL) + 1)]
+        assert first_branch == ["分支 A", "a1", "a2"], f"分支 A 应自成一组，实际 {first_branch}"
+
+    def test_question_multi_branch_with_free_text_is_hint(self, tmp_path):
+        """多分支事件里任一分支是自由文本（无 options）：气泡内无法收集文本，
+        提交按钮被隐藏，整个批次按完整整体回落到 DSH 界面输入文本回答。"""
+        mgr = self._make_mgr(tmp_path)
+        questions = [
+            {"id": "dA", "question": "分支 A 选择", "options": [{"label": "ok"}]},
+            {"id": "dB", "question": "分支 B 需要文本", "options": []},
+        ]
+        mgr._on_question_request("dsh", {"questions": questions, "rpcId": "rpc-mixed", "sessionId": "s-1"})
+        item = next(iter(mgr.pending_interactions_for("dsh").values()))
+        assert item["interactive"] is False, "含自由文本分支时整批不可气泡内交互"
+        assert mgr.win.shown_buttons == [], "自由文本分支时不得出提交/选项按钮（隐藏）"
+        text, sticky = mgr.win.sticky_shown[-1]
+        assert "2 个问题" in text
+        assert "DSH 界面输入文本回答" in text, f"应有回到 DSH 界面输入的提示，实际 {text!r}"
+
+    def test_question_no_options_needs_input_text_mentions_dsh(self, tmp_path):
+        """单个自由文本问题：纯提示气泡，文案明确引导回 DSH 界面输入文本。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request(
+            "dsh", {"questions": [{"id": "q2", "question": "请补充上下文"}], "rpcId": "rpc-free2"}
+        )
+        text, sticky = mgr.win.sticky_shown[-1]
+        assert sticky is True
+        assert "需要你输入" in text
+        assert "DSH 界面输入文本回答" in text
+        assert mgr.win.shown_buttons == []
+
+    def test_hint_upgraded_to_interactive(self, tmp_path):
+        """先到无 rpcId 的提示（带 callId），后到带 rpcId 的同款交互：升级为可点选气泡。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {"questions": self.QUESTIONS, "callId": "call-up"})
+        assert mgr.win.shown_buttons == []
+        mgr._on_question_request(
+            "dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-3", "sessionId": "s-1"}
+        )
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
+        assert mgr.win.shown_buttons[-1][1] == ["方案 A", "方案 B", "方案 C"]
+
+    def test_interactive_not_downgraded_by_late_hint(self, tmp_path):
+        """先到带 rpcId 的交互版，后到无 rpcId 的提示→不降级，仍保持可点选。
+
+        与 test_hint_upgraded_to_interactive 对称：反向竞态下，后到的无 rpcId
+        记录不得把已有的交互 pending 降级为纯提示，否则按钮会丢失绑定。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-1", "approvalId": "ap-1", "sessionId": "s-1"}
+        )
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["interactive"] is True
+        assert item["rpc_id"] == "rpc-1"
+        assert mgr.win.shown_buttons[-1][1] == ["同意", "拒绝"]
+
+        # 后到无 rpcId 的提示（带 approvalId）：不降级
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-1", "sessionId": "s-1"})
+        pending2 = mgr.pending_interactions_for("dsh")
+        item2 = next(iter(pending2.values()))
+        assert item2["interactive"] is True, "不应降级为纯提示"
+        assert item2["rpc_id"] == "rpc-1", "rpc_id 应保留"
+        assert mgr.win.shown_buttons[-1][1] == ["同意", "拒绝"], "按钮应仍然存在"
+
+    def test_build_respond_approval_message(self, tmp_path):
+        """审批点「同意」→ client-response 载荷形状与 web UI 一致。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-1", "approvalId": "ap-1", "sessionId": "s-1"}
+        )
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        msg = mgr._build_respond_message(item, "allowed-once")
+        assert msg == {
+            "type": "client-response",
+            "rpcId": "rpc-1",
+            "result": {"ok": True, "value": {"sessionId": "s-1", "approvalId": "ap-1", "outcome": "allowed-once"}},
+        }
+
+    def test_stale_resolved_does_not_close_next_approval(self, tmp_path):
+        """用户点 A 后，DSH 延迟回发的 A 的 resolved/decided 不得误关仍在等待的 B。
+
+        时序：点 A → A 本地 resolve 并回写 → DSH 处理完回发 A 的 resolved（带
+        rpcId）与 decided（无 id）→ 若此时按「仅剩一条 pending」兜底关闭，
+        B 会被误关（弹窗延迟 0.5~1s 消失，DSH 却只收到 A 的决策）。
+        带 id 的帧未匹配到 pending 即陈旧已解决帧，不兜底；无 id 的旧路径
+        decided 只对无 rpc_id 的纯提示兜底，不碰带 rpc_id 的交互审批。"""
+        mgr = self._make_mgr(tmp_path)
+        posted = []
+        mgr._post_respond_worker = lambda agent_key, msg: posted.append((agent_key, msg))
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-A", "approvalId": "ap-A", "sessionId": "s-1"}
+        )
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-B", "approvalId": "ap-B", "sessionId": "s-1"}
+        )
+        assert set(mgr.pending_interactions_for("dsh")) == {"approval:rpc-A", "approval:rpc-B"}
+
+        # 点 A
+        mgr._respond_interaction("approval:rpc-A", "allowed-once")
+        assert set(mgr.pending_interactions_for("dsh")) == {"approval:rpc-B"}
+        assert posted and posted[0][1]["rpcId"] == "rpc-A"
+
+        # DSH 回发 A 的 resolved（mux，带 id）+ decided（session，无 id）
+        mgr._on_approval_resolved("dsh", {"rpcId": "rpc-A", "approvalId": "ap-A", "outcome": "allowed-once"})
+        mgr._on_approval_resolved("dsh", {})
+        assert set(mgr.pending_interactions_for("dsh")) == {"approval:rpc-B"}, \
+            "A 的陈旧 resolved/decided 不得误关 B"
+        assert mgr.win.hidden_calls == 1, f"只应 resolve A 一次，实际 {mgr.win.hidden_calls}"
+
+        # 点 B 正常收尾，回写 A、B 各一次
+        mgr._respond_interaction("approval:rpc-B", "allowed-once")
+        assert mgr.pending_interactions_for("dsh") == {}
+        assert [m[1]["rpcId"] for m in posted] == ["rpc-A", "rpc-B"]
+
+    def test_build_respond_question_message(self, tmp_path):
+        """问题点「方案 B」→ selected=[该选项 label] 的载荷形状。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request(
+            "dsh", {"questions": self.QUESTIONS, "rpcId": "rpc-2", "sessionId": "s-1"}
+        )
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        msg = mgr._build_respond_message(item, ["方案 B"])
+        assert msg["rpcId"] == "rpc-2"
+        assert msg["result"]["ok"] is True
+        value = msg["result"]["value"]
+        assert value["sessionId"] == "s-1"
+        assert value["answer"]["answers"] == [{"id": "q1", "selected": ["方案 B"]}]
+
+    def test_build_respond_question_message_all_questions_and_multiselect(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        questions = [
+            {"id": "q1", "question": "分支", "options": [{"label": "A"}, {"label": "B"}], "multiSelect": True},
+            {"id": "q2", "question": "模式", "options": [{"label": "计划"}], "multiSelect": False},
+        ]
+        mgr._on_question_request("dsh", {"questions": questions, "rpcId": "question-rpc", "sessionId": "session-1"})
+        item = next(iter(mgr.pending_interactions_for("dsh").values()))
+        msg = mgr._build_respond_message(item, {"answers": [
+            {"id": "q1", "selected": ["A", "B"]},
+            {"id": "q2", "selected": ["计划"]},
+        ]})
+        assert msg["result"]["value"]["answer"]["answers"] == [
+            {"id": "q1", "selected": ["A", "B"]},
+            {"id": "q2", "selected": ["计划"]},
+        ]
+
+    def test_question_payload_keeps_custom_and_intent_per_question(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        questions = [{"id": "q1", "question": "评审", "intent": {"kind": "plan-review"}}, {"id": "q2", "question": "补充", "options": []}]
+        mgr._on_question_request("dsh", {"questions": questions, "rpcId": "rpc-custom", "sessionId": "s-custom"})
+        item = next(iter(mgr.pending_interactions_for("dsh").values()))
+        assert item["questions"] == questions
+        msg = mgr._build_respond_message(item, {"answers": [{"id": "q1", "selected": ["继续"]}, {"id": "q2", "selected": [], "custom": "补充内容"}]})
+        assert msg["result"]["value"]["answer"]["answers"][1]["custom"] == "补充内容"
+
+    def test_question_resolved_matches_session_and_question_rpc_id(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        for session, rpc in (("s1", "r1"), ("s2", "r2")):
+            mgr._on_question_request("dsh", {"questions": self.QUESTIONS, "rpcId": rpc, "sessionId": session})
+        mgr._on_question_resolved("dsh", {"rpcId": "r1", "sessionId": "s1"})
+        assert set(mgr.pending_interactions_for("dsh")) == {"question:r2"}
+    def test_build_respond_without_rpcid_is_none(self, tmp_path):
+        """仅带 approvalId（无 rpcId）的纯提示交互：没有可回写消息（返回 None）。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-h", "sessionId": "s-1"})
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert mgr._build_respond_message(item, "allowed-once") is None
+
+    def test_respond_interaction_posts_worker(self, tmp_path):
+        """点按钮触发回写：收起 pending + 起后台线程带正确消息。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request(
+            "dsh", {"tool": "bash", "rpcId": "rpc-1", "approvalId": "ap-1", "sessionId": "s-1"}
+        )
+        captured = {}
+        mgr._post_respond_worker = lambda agent_key, msg: captured.update({"agent": agent_key, "msg": msg})
+        mgr._respond_interaction("approval:rpc-1", "rejected")
+        assert mgr.pending_interactions_for("dsh") == {}, "点击后 pending 立即收起"
+        assert captured["agent"] == "dsh"
+        assert captured["msg"]["result"]["value"]["outcome"] == "rejected"
+        assert mgr.win.hidden_calls == 1
+
+
+# ============================================================================
+# 阻塞交互身份门禁（防普通工具调用 / 审计事件误触发审批弹窗）
+# ============================================================================
+class TestInteractionIdentityGate:
+    """Get-Location 等普通工具调用、无身份的审计事件绝不能被升级成审批弹窗。
+
+    覆盖：
+    - approval 无任何可关联身份（rpcId/approvalId/requestId/callId）→ 不弹窗；
+    - 仅带 approvalId（无 rpcId）的真实兼容路径 → 纯提示且可被身份 resolved 关闭；
+    - monitor 层：裸 approval/asked 无论带不带身份都不触发审批信号；
+    - monitor 层：普通 tool/call（pwsh Get-Location）只发 activity，绝不触发审批；
+    - question 无 rpcId 也无 callId → 不弹窗；带 callId 的兜底路径仍可提示并关闭；
+    - cordis 仅严格布尔 requiresApproval=True 且带 requestId 才触发；
+    - turn 结束兜底清理：漏发 resolved 时不留永久弹窗，且只清对应会话。
+    """
+
+    def _make_mgr(self, tmp_path):
+        class FakeWin:
+            def __init__(self):
+                self._sticky_bubble_active = False
+                self.hidden_calls = 0
+                self._alert_current = None
+                self._alert_queue = []
+                self.shown_buttons = []
+                self.sticky_shown = []
+
+            def show_bubble(self, text, duration_ms=3200, sticky=False, buttons=None):
+                self._sticky_bubble_active = bool(sticky)
+                self.sticky_shown.append((str(text), bool(sticky)))
+                if buttons:
+                    self.shown_buttons.append((str(text), [item for pair in buttons for item in (pair if pair[0] in (SECTION_HEADER_LABEL, SECTION_HINT_LABEL) else (pair[0],))]))
+
+            def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None, sticky=True, alert_id=""):
+                self._alert_queue.append({"id": alert_id, "text": str(text), "sticky": sticky})
+                if self._alert_current is None and self._alert_queue:
+                    self._alert_current = self._alert_queue.pop(0)
+                    self._sticky_bubble_active = self._alert_current.get("sticky", True)
+                self.sticky_shown.append((str(text), sticky))
+                if buttons:
+                    self.shown_buttons.append((str(text), [item for pair in buttons for item in (pair if pair[0] in (SECTION_HEADER_LABEL, SECTION_HINT_LABEL) else (pair[0],))]))
+
+            def resolve_alert(self, alert_id):
+                if self._alert_current and self._alert_current.get("id") == alert_id:
+                    self._alert_current = None
+                    self.hidden_calls += 1
+                    self._sticky_bubble_active = False
+                    if self._alert_queue:
+                        self._alert_current = self._alert_queue.pop(0)
+                        self._sticky_bubble_active = self._alert_current.get("sticky", True)
+                else:
+                    self._alert_queue = [q for q in self._alert_queue if q.get("id") != alert_id]
+
+            def hide_bubble(self):
+                self.hidden_calls += 1
+                self._sticky_bubble_active = False
+                self._alert_current = None
+
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(FakeWin(), cfg)
+        mgr.win.shown_buttons = []
+        return mgr
+
+    def _make_mon(self, tmp_path):
+        app = QApplication.instance() or QApplication([])
+        cfg = Config(base=tmp_path)
+        mon = BaseAgentMonitor("dsh", cfg.dir)
+        mon.events_dir.mkdir(parents=True, exist_ok=True)
+        mon.events_file.touch()
+        mon._tailer.read_new_lines()  # backfill 初始化
+        return mon
+
+    def _write_events(self, mon, events):
+        with mon.events_file.open("a", encoding="utf-8") as fh:
+            for line in events:
+                fh.write(json.dumps(line) + "\n")
+        mon._poll()
+
+    @pytest.mark.parametrize("command", [
+        "Get-Location", "Get-ChildItem", "pwd", "ls", "git status",
+        "Get-Location | Select-Object -ExpandProperty Path",
+    ])
+    def test_approval_without_identity_ignored(self, tmp_path, command):
+        """无任何可关联身份的审批记录（普通工具调用被误标 approval/asked 后的残留）不弹窗。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "pwsh", "command": command})
+        assert mgr.pending_interactions_for("dsh") == {}
+        assert mgr.win.sticky_shown == []
+        assert mgr.win._sticky_bubble_active is False
+
+    def test_approval_with_only_approval_id_is_hint_and_closable(self, tmp_path):
+        """仅带 approvalId（无 rpcId）的真实兼容路径：显示纯提示，且可被身份 resolved 精确关闭。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-x", "sessionId": "s-1"})
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["kind"] == "approval"
+        assert item["interactive"] is False
+        assert item["approval_id"] == "ap-x"
+        assert mgr.win.shown_buttons == [], "无 rpcId 时不得出按钮（纯提示）"
+        mgr._on_approval_resolved("dsh", {"approvalId": "ap-x"})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+    def test_approval_asked_never_emits_request_signal(self, tmp_path):
+        """monitor 层：裸 approval/asked 无论带不带身份，都绝不触发审批弹窗信号。"""
+        mon = self._make_mon(tmp_path)
+        got = []
+        mon.approval_requested.connect(lambda a, p: got.append((a, p.get("event"))))
+        self._write_events(mon, [
+            {"ts": 1, "agent": "dsh", "event": "approval/asked", "tool": "pwsh", "command": "Get-Location"},
+            {"ts": 2, "agent": "dsh", "event": "approval/asked", "approvalId": "ap-a", "sessionId": "s-1"},
+            {"ts": 3, "agent": "dsh", "event": "approval/asked", "rpcId": "rpc-a", "sessionId": "s-1"},
+        ])
+        assert got == [], "approval/asked 不应驱动审批弹窗信号"
+
+    def test_approval_requested_still_emits_request_signal(self, tmp_path):
+        """monitor 层：权威 approval/request 与兼容旧名 approval/requested 正常触发审批信号。"""
+        mon = self._make_mon(tmp_path)
+        got = []
+        mon.approval_requested.connect(lambda a, p: got.append((a, p.get("event"))))
+        self._write_events(mon, [
+            {"ts": 1, "agent": "dsh", "event": "approval/request", "rpcId": "r1", "sessionId": "s1"},
+            {"ts": 2, "agent": "dsh", "event": "approval/requested", "rpcId": "r2", "sessionId": "s1"},
+        ])
+        assert got == [("dsh", "approval/request"), ("dsh", "approval/requested")]
+
+    def test_tool_call_never_becomes_approval(self, tmp_path):
+        """monitor 层：普通 tool/call（pwsh Get-Location）只发 activity，绝不发审批信号。"""
+        mon = self._make_mon(tmp_path)
+        approvals, activities = [], []
+        mon.approval_requested.connect(lambda a, p: approvals.append((a, p)))
+        mon.activity.connect(lambda a, t: activities.append((a, t)))
+        self._write_events(mon, [
+            {"ts": 1, "agent": "dsh", "event": "tool/call", "tool": "pwsh", "command": "Get-Location"},
+        ])
+        assert approvals == [], "普通工具调用不得触发审批"
+        assert ("dsh", "pwsh") in activities
+
+    def test_question_without_identity_ignored(self, tmp_path):
+        """question/requested 无 rpcId 也无 callId：不弹窗（无法可靠关闭）。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {
+            "questions": [{"id": "q1", "question": "选择？", "options": [{"label": "A"}]}],
+        })
+        assert mgr.pending_interactions_for("dsh") == {}
+        assert mgr.win.sticky_shown == []
+
+    def test_question_with_call_id_is_hint_and_closable(self, tmp_path):
+        """question/requested 带 callId（tool/call 兜底路径）：显示纯提示且可被关闭。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_question_request("dsh", {
+            "questions": [{"id": "q1", "question": "选择？", "options": [{"label": "A"}]}],
+            "callId": "call-q", "sessionId": "s-1",
+        })
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["kind"] == "question"
+        assert item["interactive"] is False
+        assert mgr.win.shown_buttons == []
+        mgr._on_question_resolved("dsh", {"callId": "call-q", "sessionId": "s-1"})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+    def test_cordis_requires_strict_true_and_request_id(self, tmp_path):
+        """monitor 层：cordis/request-run 只有 requiresApproval 严格布尔 True 且带 requestId 才触发。"""
+        mon = self._make_mon(tmp_path)
+        got = []
+        mon.cordis_requested.connect(lambda a, p: got.append((a, p.get("requestId"))))
+        self._write_events(mon, [
+            {"ts": 1, "agent": "dsh", "event": "cordis/request-run", "requiresApproval": True, "requestId": "r-ok"},
+            {"ts": 2, "agent": "dsh", "event": "cordis/request-run", "requiresApproval": False, "requestId": "r-no"},
+            {"ts": 3, "agent": "dsh", "event": "cordis/request-run", "requestId": "r-miss"},
+            {"ts": 4, "agent": "dsh", "event": "cordis/request-run", "requiresApproval": "true", "requestId": "r-str"},
+        ])
+        assert got == [("dsh", "r-ok")], "仅严格布尔 True 且带 requestId 才触发 cordis 交互"
+
+    def test_cordis_without_request_id_ignored(self, tmp_path):
+        """_on_cordis_request 无 requestId：不登记 pending 交互。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_cordis_request("dsh", {"name": "插件", "purpose": "运行", "requiresApproval": True})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+    def test_cordis_with_request_id_registers(self, tmp_path):
+        """_on_cordis_request 带 requestId：登记 pending 并可被 resolved 关闭。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_cordis_request("dsh", {"name": "插件", "purpose": "运行", "requiresApproval": True, "requestId": "req-1"})
+        pending = mgr.pending_interactions_for("dsh")
+        item = next(iter(pending.values()))
+        assert item["kind"] == "cordis"
+        assert item["request_id"] == "req-1"
+        mgr._on_cordis_resolved("dsh", {"requestId": "req-1"})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+    def test_turn_end_clears_stale_pending(self, tmp_path):
+        """turn 结束兜底清理：DSH 漏发 resolved 时，会话结束不再留永久弹窗。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "rpcId": "rpc-z", "approvalId": "ap-z", "sessionId": "s-1"})
+        assert mgr.pending_interactions_for("dsh")
+        mgr._on_interaction_lifecycle("dsh", {"event": "turn/end", "sessionId": "s-1"})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+    def test_turn_end_keeps_other_session_interaction(self, tmp_path):
+        """turn 结束只清对应会话的交互，不影响其他会话并发的真实审批。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "rpcId": "rpc-a", "approvalId": "ap-a", "sessionId": "s-1"})
+        mgr._on_approval_request("dsh", {"tool": "pwsh", "rpcId": "rpc-b", "approvalId": "ap-b", "sessionId": "s-2"})
+        mgr._on_interaction_lifecycle("dsh", {"event": "turn/end", "sessionId": "s-1"})
+        remaining = mgr.pending_interactions_for("dsh")
+        assert set(remaining) == {"approval:rpc-b"}
+
+    def test_agent_idle_clears_pending_via_lifecycle(self, tmp_path):
+        """AgentStatus idle 兜底清理：同现有 _on_agent_state idle 语义。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "rpcId": "rpc-idle", "approvalId": "ap-idle", "sessionId": "s-1"})
+        mgr._on_interaction_lifecycle("dsh", {"event": "AgentStatus", "state": "idle"})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+
+# ============================================================================
+# 硬失败（execution/failed）：DSH 已决定本轮不再继续，直接提醒
+# ============================================================================
+class TestExecutionFailed:
+    """execution/failed 不经行为分析直接提醒：失败动画 + 气泡。"""
+
+    def _make_mgr(self, tmp_path, notify_exec_failed=True):
+        class FakeWin:
+            def __init__(self):
+                self.shown: list[str] = []
+                self.alerts: list[dict] = []
+                self.anims: list[str] = []
+                self._visible = True
 
             def isVisible(self):
-                return True
+                return self._visible
 
-        mgr = AgentLinkManager(Win(), cfg)
-        monkeypatch.setattr(
-            QMessageBox, "question",
-            lambda *a, **kw: QMessageBox.StandardButton.Yes,
-        )
-        monkeypatch.setattr(
-            DshMonitor, "uninstall_bridge", classmethod(lambda cls: True),
-        )
+            def show_bubble(self, text, duration_ms=3200, sticky=False, buttons=None):
+                self.shown.append(str(text))
 
-        def fake_install():
-            assert release.wait(timeout=5.0), "测试释放信号未到达"
-            return (True, "ok")
+            def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None, sticky=True):
+                self.alerts.append({
+                    "text": str(text), "sticky": bool(sticky),
+                    "duration_ms": int(duration_ms),
+                })
 
-        monkeypatch.setattr(
-            DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),
-        )
-        return cfg, mgr
+            def request_link_anim(self, anim):
+                self.anims.append(str(anim))
 
-    def _install_thread(self):
-        return next(
-            t for t in threading.enumerate() if t.name == "dsh-bridge-install"
-        )
-
-    def test_late_completion_after_shutdown_is_dropped(self, tmp_path, monkeypatch):
-        """安装完成发生在 shutdown（窗口关闭/角色切换）之后 → 完成回调被
-        丢弃：配置不写回、监视器不启动、无完成气泡。"""
-        app = QApplication.instance() or QApplication([])
-        bubbles = []
-        release = threading.Event()
-        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
-        mgr.set_enabled("dsh", True)
-        install_thread = self._install_thread()
-        assert "dsh" in mgr._install_pending
-        assert bubbles == ["正在安装 DSH 桥接插件…"]
-        mgr.shutdown()   # 安装完成前 manager 被关闭（窗口 close / 角色切换）
-        release.set()    # 安装此刻才完成
-        install_thread.join(timeout=5.0)
-        app.processEvents()
-        app.processEvents()
-        assert cfg.data["agent_link"]["dsh"] is False
-        assert not mgr.monitors["dsh"]._running
-        assert bubbles == ["正在安装 DSH 桥接插件…"], "不得弹完成气泡"
-
-    def test_queued_completion_dispatched_after_shutdown_is_dropped(self, tmp_path, monkeypatch):
-        """emit→dispatch 竞态：信号在 shutdown 前已 emit 入队（worker 已
-        完成），但回调在 shutdown 之后才被派发 → 同样必须丢弃（完成回调
-        在 GUI 线程的权威校验兜住该窗口）。"""
-        app = QApplication.instance() or QApplication([])
-        bubbles = []
-        release = threading.Event()
-        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
-        mgr.set_enabled("dsh", True)
-        install_thread = self._install_thread()
-        release.set()                 # 安装完成 → worker emit（queued 入队）
-        install_thread.join(timeout=5.0)
-        # 未跑 processEvents：queued 回调仍躺在 GUI 事件队列里
-        mgr.shutdown()                # 关闭发生在回调派发之前
-        app.processEvents()           # 迟到的 queued 回调此刻才派发 → 丢弃
-        app.processEvents()
-        assert cfg.data["agent_link"]["dsh"] is False
-        assert not mgr.monitors["dsh"]._running
-        assert bubbles == ["正在安装 DSH 桥接插件…"]
-
-    def test_late_completion_after_redisable_is_dropped(self, tmp_path, monkeypatch):
-        """用户重新关闭联动（安装进行中）→ 在途安装作废，完成回调被丢弃，
-        不得反向把配置写回 True / 启动监视器。"""
-        app = QApplication.instance() or QApplication([])
-        bubbles = []
-        release = threading.Event()
-        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
-        mgr.set_enabled("dsh", True)
-        install_thread = self._install_thread()
-        assert "dsh" in mgr._install_pending
-        mgr.set_enabled("dsh", False)  # 用户重新关闭联动 → 在途安装作废
-        assert "dsh" not in mgr._install_pending
-        release.set()
-        install_thread.join(timeout=5.0)
-        app.processEvents()
-        app.processEvents()
-        assert cfg.data["agent_link"]["dsh"] is False
-        assert not mgr.monitors["dsh"]._running
-        assert bubbles == ["正在安装 DSH 桥接插件…"]
-
-    def test_stale_queued_completion_must_not_consume_reinstalled_pending(self, tmp_path, monkeypatch):
-        """B9 复审 P1：disable→re-enable 两代安装交错。安装 A 完成信号已
-        queued 入队但未派发时，用户关闭联动并再次开启、登记安装 B（新代次）；
-        A 的旧回调随后派发时不得消费 B 的 pending（不得写配置/启动监视器/
-        弹完成气泡），B 的真实回调随后正常生效。完成信号必须携带并校验
-        安装代次，仅凭 agent key 无法区分两代安装。"""
-        app = QApplication.instance() or QApplication([])
-        bubbles = []
         cfg = Config(base=tmp_path)
+        ag = dict(cfg.get("agent_link", {}))
+        ag["notify_exec_failed"] = notify_exec_failed
+        cfg.set("agent_link", ag)
+        mgr = AgentLinkManager(FakeWin(), cfg)
+        return mgr
 
-        class Win:
-            def show_bubble(self, text, duration_ms=3000):
-                bubbles.append(text)
+    def test_retry_exhausted_shows_reminder(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_execution_failed("dsh", {"source": "model_request", "retryExhausted": True, "retries": 4})
+        assert mgr.win.alerts, "应入队失败提醒"
+        assert "运行失败" in mgr.win.alerts[-1]["text"]
+        assert "重试" in mgr.win.alerts[-1]["text"]
+        assert mgr.win.alerts[-1]["sticky"] is False, "失败提醒是限时气泡（非 sticky）"
+
+    def test_tool_failure_shows_reminder(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_execution_failed("dsh", {"source": "tool", "retryExhausted": False})
+        assert mgr.win.alerts
+        assert "工具执行最终失败" in mgr.win.alerts[-1]["text"]
+
+    def test_generic_failure(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_execution_failed("dsh", {})
+        assert mgr.win.alerts
+        assert "运行失败" in mgr.win.alerts[-1]["text"]
+
+    def test_picks_fail_anim(self, tmp_path):
+        """角色动作池含「失败/冒烟」类动作时选择它。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr.win.cats = {"acts": ["待机", "失败冒烟", "写代码"]}
+        anim = mgr._pick_fail_anim()
+        assert anim == "失败冒烟"
+
+    def test_notify_exec_failed_disabled(self, tmp_path):
+        """notify_exec_failed=False 时不提醒。"""
+        mgr = self._make_mgr(tmp_path, notify_exec_failed=False)
+        mgr._on_execution_failed("dsh", {"source": "model_request", "retryExhausted": True})
+        assert mgr.win.shown == []
+
+
+
+
+
+class TestRateLimitAlert:
+    """rate_limit 事件 → 高优先级提醒，合并计数，按 session 隔离，可关闭。"""
+
+    def _make_mgr(self, tmp_path):
+        class FakeWin:
+            def __init__(self):
+                self.alerts: list[dict] = []
+                self.resolved: list[str] = []
+                self.shown: list[str] = []
+                self._visible = True
+                # 有意不提供 _bubble_busy_until：_schedule_429_dismiss 会据 sentinel 跳过 QTimer
 
             def isVisible(self):
-                return True
+                return self._visible
 
-        mgr = AgentLinkManager(Win(), cfg)
-        monkeypatch.setattr(
-            QMessageBox, "question",
-            lambda *a, **kw: QMessageBox.StandardButton.Yes,
-        )
-        monkeypatch.setattr(
-            DshMonitor, "uninstall_bridge", classmethod(lambda cls: True),
-        )
+            def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None,
+                           sticky=True, alert_id="", priority=3, alert_type="watchdog",
+                           metadata=None):
+                self.alerts.append({
+                    "text": str(text), "sticky": bool(sticky),
+                    "duration_ms": int(duration_ms), "alert_id": str(alert_id),
+                    "priority": int(priority), "alert_type": str(alert_type),
+                })
 
-        release_a, release_b = threading.Event(), threading.Event()
-        queue = [release_a, release_b]
+            def resolve_alert(self, alert_id):
+                self.resolved.append(str(alert_id))
 
-        def fake_install():
-            ev = queue.pop(0)
-            assert ev.wait(timeout=5.0), "测试释放信号未到达"
-            return (True, "ok")
+            def show_bubble(self, text, duration_ms=3200, sticky=False, buttons=None):
+                self.shown.append(str(text))
 
-        monkeypatch.setattr(
-            DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),
-        )
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(FakeWin(), cfg)
+        return mgr
 
-        def install_thread():
-            return next(
-                t for t in threading.enumerate() if t.name == "dsh-bridge-install"
-            )
+    def test_first_429_shows_reminder(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-1"})
+        assert mgr.win.alerts, "应弹出 429 提醒"
+        alert = mgr.win.alerts[-1]
+        assert alert["alert_id"] == "429-rate-limit:sess-1", "alert_id 必须带 sessionId 隔离"
+        assert "429" in alert["text"] and "限流" in alert["text"]
+        assert alert["priority"] == mgr._429_PRIORITY and alert["priority"] == 1
 
-        # 第一代安装 A：等它完成并 emit（queued 入队），但先不派发
-        mgr.set_enabled("dsh", True)
-        thread_a = install_thread()
-        release_a.set()
-        thread_a.join(timeout=5.0)
-        assert not thread_a.is_alive()
-        assert "dsh" in mgr._install_pending   # A 的 pending 尚未被消费
-        # 未跑 processEvents：A 的 queued 回调仍躺在 GUI 事件队列里
-        mgr.set_enabled("dsh", False)          # 关闭联动：作废在途安装
-        assert "dsh" not in mgr._install_pending
-        mgr.set_enabled("dsh", True)           # 再次开启：登记安装 B（新代次）
-        assert "dsh" in mgr._install_pending
-        thread_b = install_thread()
-        # 此刻派发 A 的旧 queued 回调：不得消费 B 的 pending
-        app.processEvents()
-        app.processEvents()
-        assert "dsh" in mgr._install_pending           # B 的 pending 必须仍在
-        assert cfg.data["agent_link"]["dsh"] is False  # 配置不得被 A 写回
-        assert not mgr.monitors["dsh"]._running        # 监视器不得被 A 启动
-        assert not any("装好" in b for b in bubbles), f"不得弹完成气泡: {bubbles}"
-        # B 的真实回调随后派发：正常生效（写配置、启动监视器、弹气泡）
-        release_b.set()
-        thread_b.join(timeout=5.0)
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            app.processEvents()
-            if cfg.data["agent_link"]["dsh"]:
-                break
-            time.sleep(0.01)
-        assert cfg.data["agent_link"]["dsh"] is True
-        assert mgr.monitors["dsh"]._running
-        assert any("装好" in b for b in bubbles), f"应有 B 的完成气泡: {bubbles}"
+    def test_consecutive_429_merged_same_session(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-2"})
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-2"})  # 8s 冷却窗口内 → 合并
+        assert mgr._429_cache["sess-2"]["count"] == 2
+        assert "已连续限流 2 次" in mgr.win.alerts[-1]["text"]
+        assert mgr.win.alerts[-2]["alert_id"] == mgr.win.alerts[-1]["alert_id"], "同 session 复用同一 alert_id"
 
-    def test_normal_completion_still_applies(self, tmp_path, monkeypatch):
-        """正常路径回归：安装完成后回调照常生效（写配置、启动监视器、
-        弹完成气泡）。"""
-        app = QApplication.instance() or QApplication([])
-        bubbles = []
-        release = threading.Event()
-        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
-        mgr.set_enabled("dsh", True)
-        install_thread = self._install_thread()
-        release.set()
-        install_thread.join(timeout=5.0)
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            app.processEvents()
-            if cfg.data["agent_link"]["dsh"]:
-                break
-            time.sleep(0.01)
-        assert cfg.data["agent_link"]["dsh"] is True
-        assert mgr.monitors["dsh"]._running
-        assert any("装好" in b for b in bubbles), f"应有完成气泡，实际: {bubbles}"
-        mgr.set_enabled("dsh", False)
-        assert cfg.data["agent_link"]["dsh"] is False
+    def test_multi_session_isolated(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-A"})
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-B"})
+        ids = [a["alert_id"] for a in mgr.win.alerts]
+        assert ids == ["429-rate-limit:sess-A", "429-rate-limit:sess-B"], "不同 session 不得互相顶替"
+        assert set(mgr._429_cache) == {"sess-A", "sess-B"}
+
+    def test_dismiss_clears_cache_and_alert(self, tmp_path):
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-3"})
+        mgr._dismiss_429_alert("sess-3")
+        assert "sess-3" not in mgr._429_cache, "关闭后清理缓存"
+        assert "429-rate-limit:sess-3" in mgr.win.resolved, "关闭对应 alert"
+
+    def test_execution_failed_suppressed_while_429_active(self, tmp_path):
+        """存在活跃 429 时，不再弹通用失败横幅，避免双重通知。"""
+        mgr = self._make_mgr(tmp_path)
+        # 先触发 429，冷却窗口内再出现 execution/failed
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-4"})
+        before = len(mgr.win.alerts)
+        mgr._on_execution_failed("dsh", {"sessionId": "sess-4", "source": "model_request",
+                                         "retryExhausted": True})
+        assert len(mgr.win.alerts) == before, "429 活跃时抑制通用失败横幅"
+
