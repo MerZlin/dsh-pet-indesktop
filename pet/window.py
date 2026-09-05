@@ -3579,8 +3579,6 @@ class PetWindow(QWidget):
         lib = getattr(self, 'lib', None)
         if lib is not None and hasattr(lib, 'pause_warm'):
             lib.pause_warm()
-        if lib is not None and hasattr(lib, 'shutdown'):
-            lib.shutdown()
         # 必须与自定义 hide() 一致置位 _hidden_paused：showEvent 据此走
         # _resume_activity() → resume_warm()。缺了它，原生隐藏→显示循环后
         # 预热被永久停用（_warm_paused 永远无法复位）。重复置位是幂等 no-op。
@@ -4746,6 +4744,8 @@ class PetWindow(QWidget):
         lib = getattr(self, 'lib', None)
         if lib is not None and hasattr(lib, 'pause_warm'):
             lib.pause_warm()
+        if lib is not None and hasattr(lib, 'shutdown'):
+            lib.shutdown()
         # 显式停掉当前动画 reader（Fix D）：窗口关闭不再依赖 GC + destroyed
         # （已实证会失效的路径），关闭即 stop()——reader 收到停止信号、底层
         # ffmpeg 被 terminate、线程退役登记。_closing 已置位，迟到的动画事件

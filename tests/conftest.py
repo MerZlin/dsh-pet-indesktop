@@ -85,8 +85,10 @@ def _close_qt_top_level_widgets():
         app = QApplication.instance()
         if app is not None:
             for widget in tuple(app.topLevelWidgets()):
+                if not isinstance(widget, PetWindow):
+                    continue
                 try:
-                    widget.hide()
+                    widget.close()
                 except RuntimeError:
                     pass
     except Exception:

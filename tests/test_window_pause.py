@@ -103,12 +103,16 @@ class WarmRecordingLibrary(FakeLibrary):
         super().__init__()
         self.pause_calls = 0
         self.resume_calls = 0
+        self.shutdown_calls = 0
 
     def pause_warm(self):
         self.pause_calls += 1
 
     def resume_warm(self):
         self.resume_calls += 1
+
+    def shutdown(self):
+        self.shutdown_calls += 1
 
 
 @pytest.fixture
@@ -223,9 +227,11 @@ def test_native_set_visible_cycle_recovers_warm(app, tmp_path):
     app.processEvents()
     assert win._hidden_paused is False
     assert lib.resume_calls >= 1, "原生隐藏→显示周期后必须恢复预热，不得永久停用"
+    assert lib.shutdown_calls == 0, "隐藏是可恢复生命周期，不得永久关闭素材库"
 
     win.close()
     app.processEvents()
+    assert lib.shutdown_calls == 1, "真正关闭窗口时才应永久关闭素材库"
 
 
 def test_fullscreen_geometry_hit_requires_borderless(app, tmp_path):
