@@ -40,6 +40,9 @@ class _FakeMovie:
         self.decode_throttle_divisor = 1
         self.decode_pace_external = False
         self.throttle_calls: list = []
+        # 发布者存活判定输入（F2 复审 nit-3）：默认存活（运行中、未驻留）
+        self._running = True
+        self._soft_parked = False
 
     def set_decode_throttle(self, divisor: int) -> None:
         self.decode_throttle_divisor = max(1, int(divisor))
@@ -151,12 +154,12 @@ class TestRingAndFeed:
         # 0..4 依次 push->poll（每次独一帧，无 drop）
         for src in range(5):
             source.sink.on_frame(FRAME, src)
-            kind, data, got_src = session.poll()
+            kind, data, got_src, reason = session.poll()
             assert kind == "frame"
             assert got_src == src
         # 源帧号回绕（-stream_loop 从 4 回 0）→ 合成 'end'
         source.sink.on_frame(FRAME, 0)
-        assert session.poll() == ("end", None, None)
+        assert session.poll() == ("end", None, None, None)
 
     def test_drop_oldest_preserves_order(self):
         ring = _RingBuffer(4)
@@ -184,7 +187,7 @@ class TestRingAndFeed:
         got: list = []
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            kind, data, src = session.poll()
+            kind, data, src, _ = session.poll()
             if kind == "frame":
                 got.append(src)
             elif kind in ("abort", "end"):
@@ -213,21 +216,20 @@ class TestHandover:
         source = hub._sources[PATH]
         assert len(source.subscriptions) == 2
 
-        # 发布者离开（自然播完切走）→ handover 扶正最老订阅者 sub1
-        hub.shareable_end("idle", pub, natural=True)
+        # 发布者离开（中途打断/非自然切走）→ handover 扶正最老订阅者 sub1
+        hub.shareable_end("idle", pub, natural=False)
         assert source.publisher is sub1
         assert sub1._publish_sink is not None
         assert sub1._publish_sink is source.sink
         assert sub1._feed_source is None
-        # sub1 的 feed 被 abort → 其 reader 落回本地 ffmpeg（_reader_feed 返回 False）
-        sub1_rec = hub._sources[PATH].subscriptions[0] if hub._sources.get(PATH) else None
+        # sub1 的 feed 被 abort（reason='handover'）→ 其 reader 落回本地 ffmpeg
         assert sub2._feed_source is not None  # sub2 仍是订阅者
         # sub1 被扶正后不再出现在订阅者列表
         assert all(r.movie is not sub1 for r in source.subscriptions)
         # 其余订阅者环由新发布者 on_frame 续供
         source.sink.on_frame(FRAME, 10)
         sub2_rec = source.subscriptions[0]
-        kind, data, src = sub2_rec.session.poll()
+        kind, data, src, reason = sub2_rec.session.poll()
         assert kind == "frame" and src == 10
 
     def test_publisher_leave_no_subscriber_releases_source(self, hub):
@@ -248,13 +250,13 @@ class TestWatchdog:
         session = rec.session
         # 手动拨时钟到过去（零 sleep）：下次 poll 触发看门狗 'abort'
         session._stall_deadline = time.monotonic() - 0.001
-        assert session.poll() == ("abort", None, None)
+        assert session.poll() == ("abort", None, None, "watchdog")
 
     def test_abort_flag_overrides_watchdog(self, hub):
         pub = _FakeMovie(PATH)
         sub, source, rec = _subscribe(hub, pub)
-        rec.abort()
-        assert rec.session.poll() == ("abort", None, None)
+        rec.abort('handover')  # handover 主动 abort：reason 透传
+        assert rec.session.poll() == ("abort", None, None, "handover")
 
     def test_frames_reset_stall(self, hub):
         pub = _FakeMovie(PATH)
@@ -265,7 +267,7 @@ class TestWatchdog:
             assert session.poll()[0] == "frame"
         # 长时间无帧 → 看门狗触发（模拟发布者死亡/僵死）
         session._stall_deadline = time.monotonic() - 0.001
-        assert session.poll() == ("abort", None, None)
+        assert session.poll() == ("abort", None, None, "watchdog")
 
 
 # ---------------------------------------------------------------------------
@@ -342,9 +344,147 @@ def test_handover_resets_old_publisher_pace_external(hub):
     hub.shareable_start("idle", sub)
     assert pub.decode_pace_external is True, "发布者 pace 应被 hub 接管"
 
-    hub.shareable_end("idle", pub, natural=True)  # handover 扶正 sub
+    hub.shareable_end("idle", pub, natural=False)  # 中途打断 → handover 扶正 sub
 
     assert hub._sources[PATH].publisher is sub
     assert pub.decode_pace_external is False, \
         "旧发布者 pace 标志必须复位（P1-1）"
     assert sub.decode_pace_external is True, "新发布者接管 pace"
+
+
+# ---------------------------------------------------------------------------
+# F1：abort 原因透传（handover / stop_all / watchdog）
+# ---------------------------------------------------------------------------
+class TestF1AbortReason:
+    def test_stop_all_aborts_with_reason(self, hub):
+        pub = _FakeMovie(PATH)
+        hub.shareable_start("idle", pub)
+        sub = _FakeMovie(PATH)
+        hub.shareable_start("idle", sub)
+        source = hub._sources[PATH]
+        sub_rec = source.subscriptions[0]
+        hub.stop_all()
+        # 进程级收口 → abort(reason='stop_all')
+        assert sub_rec.session.poll() == ("abort", None, None, "stop_all")
+        assert not hub._sources
+
+    def test_watchdog_aborts_with_reason(self, hub):
+        pub = _FakeMovie(PATH)
+        sub, source, rec = _subscribe(hub, pub)
+        rec.session._stall_deadline = time.monotonic() - 0.001
+        assert rec.session.poll() == ("abort", None, None, "watchdog")
+
+
+# ---------------------------------------------------------------------------
+# F2：自然圈末解散（draining）vs 中途打断 handover
+# ---------------------------------------------------------------------------
+class TestF2NaturalDisband:
+    def test_natural_end_disband_no_abort_no_spawn(self, hub):
+        """圈末自然解散：发布者 natural=True 离开且仍有订阅者 → 不做 handover，
+        订阅者零 abort（零本地回退 spawn），随自身 is_last 自行 unregister，
+        最后一个离开时 _release_source。"""
+        pub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", pub) == "publish"
+        sub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", sub) == "feed"
+        source = hub._sources[PATH]
+        sub_rec = source.subscriptions[0]
+
+        # 圈末自然解散：标记 draining，不 handover
+        hub.shareable_end("idle", pub, natural=True)
+        assert source.draining is True
+        # 发布者仍为 pub（未被扶正）；订阅者 feed 会话未 abort（零 abort）
+        assert source.publisher is pub
+        assert sub_rec.session._aborted is False
+        # nit-2 加固：draining 不吞环尾帧——发布者回绕前最后一帧（src=240）
+        # 仍可被订阅者 poll 到（「吃到尾帧再自行收尾」是 F2 的核心契约）
+        source.sink.on_frame(FRAME, 240)
+        kind, data, src, reason = sub_rec.session.poll()
+        assert kind == "frame" and src == 240 and reason is None
+        # 订阅者 poll 不得出 'abort'（无本地回退 spawn 的 feed 侧前置）
+        assert sub_rec.session.poll()[0] != "abort"
+        # 订阅者随自身 is_last 自行 unregister → 最后一个 _release_source
+        hub.shareable_end("idle", sub, natural=True)
+        assert not hub._sources
+        assert sub._feed_source is None
+
+    def test_draining_new_window_builds_fresh_source(self, hub):
+        """draining 期新窗进场：不订阅已死源 → 释放旧源、以本窗建新源（publish）。"""
+        pub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", pub) == "publish"
+        sub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", sub) == "feed"
+        source = hub._sources[PATH]
+        sub_rec = source.subscriptions[0]
+        hub.shareable_end("idle", pub, natural=True)
+        assert source.draining is True
+
+        # draining 期新窗进场：不订阅死源 → 释放旧源、建新源（本窗为发布者）
+        new2 = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", new2) == "publish"
+        new_source = hub._sources[PATH]
+        assert new_source is not source
+        assert new_source.publisher is new2
+        assert new2._publish_sink is not None
+        assert new2._feed_source is None
+        # 旧源已收口：sink 关闭、订阅者列表清空（其 feed 被闭）
+        assert source.sink._open is False
+        assert source.subscriptions == []
+        # 复审 P1-1：被释放的存量订阅者必须先收到 'disband' abort（立即回退），
+        # 而不是在空环上白等看门狗（≤1.9s 冻结 + 整段重播）
+        assert sub_rec.session._aborted is True
+        assert sub_rec.session.poll() == ("abort", None, None, "disband")
+
+    def test_interrupt_handover_preserved(self, hub):
+        """中途打断（natural=False）：原 handover 语义不变，且被扶正者 feed
+        以 reason='handover' 被 abort（F1 透传）。"""
+        pub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", pub) == "publish"
+        sub1 = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", sub1) == "feed"
+        source = hub._sources[PATH]
+        sub1_rec = source.subscriptions[0]
+
+        hub.shareable_end("idle", pub, natural=False)
+        # handover 扶正 sub1（原语义逐位保留）
+        assert source.publisher is sub1
+        assert sub1._publish_sink is source.sink
+        assert sub1._feed_source is None
+        # 被扶正者 feed 以 reason='handover' 被 abort
+        assert sub1_rec.session.poll() == ("abort", None, None, "handover")
+
+
+class TestPublisherAlive:
+    """F2 复审 nit-3：_publisher_alive 两分支的单元覆盖（TOCTOU 回归哨兵）。"""
+
+    def test_dead_publisher_rebuilds_source(self, hub):
+        """发布者死（非 draining）：新窗 shareable_start → 释放旧源、建新源。"""
+        pub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", pub) == "publish"
+        sub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", sub) == "feed"
+        source = hub._sources[PATH]
+        sub_rec = source.subscriptions[0]
+        # 发布者死：未运行且未软停驻留（如窗口崩溃/异常退出未经 shareable_end）
+        pub._running = False
+        pub._soft_parked = False
+
+        new2 = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", new2) == "publish"
+        assert hub._sources[PATH] is not source
+        assert hub._sources[PATH].publisher is new2
+        # 存量订阅者立即收到 abort（不白等看门狗）
+        assert sub_rec.session.poll() == ("abort", None, None, "disband")
+
+    def test_soft_parked_publisher_counts_alive(self, hub):
+        """软停驻留（将被 re-arm 续圈）的发布者必须算存活：新窗正常 'feed' 订阅，
+        不得误判死而释放源。"""
+        pub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", pub) == "publish"
+        pub._running = False
+        pub._soft_parked = True  # 圈边界驻留中，等 re-arm
+
+        sub = _FakeMovie(PATH)
+        assert hub.shareable_start("idle", sub) == "feed"
+        assert hub._sources[PATH].publisher is pub
+        assert sub._feed_source is not None

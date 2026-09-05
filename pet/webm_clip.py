@@ -122,8 +122,10 @@ _MAX_RETIRED_READERS = 1
 # 强制回收最旧退役 reader 时的有界 join 时长（秒）；真实 reader 的 ffmpeg 已被
 # terminate，join 通常在毫秒级返回，此值只作为病态场景（卡死）的上限。
 _RECLAIM_JOIN_TIMEOUT = 0.5
-# 定时 sweep 对仍存活退役 reader 的 join 时长（秒）。
-_SWEEP_JOIN_TIMEOUT = 0.2
+# 定时 sweep 对仍存活退役 reader 的 join 时长（秒）。退役 reader 本就 ≤1s 自灭，
+# join 只是加速确认，不该让 GUI 每趟最多垫 0.2s×N（圈末 churn 批量慢死 reader
+# 时 2-3×0.2s ≈ 400-600ms，正是 444-499ms 卡顿簇候选主因之一，F3 下调到 0.05）。
+_SWEEP_JOIN_TIMEOUT = 0.05
 # terminate 后等待进程退出的有界时长（秒）；超时则 kill 强杀（P2）。
 # 在 GUI 线程调用时（stop/_reap_retired）该值同时是 GUI 阻塞上限，
 # 正常进程 terminate 后毫秒级退出，此值只作为病态场景的兜底。
@@ -164,8 +166,10 @@ _LOOP_REARM_GRACE_SECS = 1.0
 # re-arm 唤醒握手超时（秒，批8 P1-2）：re-arm 置位 gate 后等 reader 在
 # _loop_lock 内置 ack；超时 = reader 实际已在退出（is_alive 的 finally
 # 窗口），回滚并落回 fresh start——绝不让 start() 返回 True 却无 reader
-# 存活（动画链停摆）。正常路径 ack 毫秒级到达，此值只覆盖病态窗口。
-_LOOP_REARM_ACK_TIMEOUT = 0.5
+# 存活（动画链停摆）。正常路径 ack 毫秒级到达，正常预算毫秒级，0.5s 是病态
+# 预算；GUI 满等 0.5s 也是圈末卡顿簇候选主因之一（F3 下调到 0.15——回滚路径
+# fresh start 本就安全）。
+_LOOP_REARM_ACK_TIMEOUT = 0.15
 
 # 订阅授权有界等待预算（毫秒，批5.3）：进程内 fan-out 的 feed 立即就绪，
 # 实际不等待；常量本地化以替代对 decode_broker 的 import（该模块退役后
@@ -2146,7 +2150,13 @@ class WebMClip(QObject):
         q = self._queue
         try:
             while not (stop_evt.is_set() or self._generation != generation):
-                kind, data, src = feed_session.poll()
+                result = feed_session.poll()
+                kind = result[0]
+                data = result[1]
+                src = result[2]
+                # F1：poll 协议对 abort 透传 reason（'handover'|'disband'|
+                # 'stop_all'|'watchdog'）；兼容外部 feed 会话（测试桩）只返回 3 元组。
+                reason = result[3] if len(result) > 3 else None
                 if kind == 'frame':
                     try:
                         q.put((data, src), timeout=0.2)
@@ -2159,7 +2169,15 @@ class WebMClip(QObject):
                     self._put_end_marker(q, stop_evt, generation)
                     return True
                 elif kind == 'abort':
-                    logger.warning('fan-out feed 断流/中止，回退本地解码: %s', self.path)
+                    if reason in ('handover', 'disband'):
+                        # F1：handover 扶正为发布者 / disband 源解散重建都是设计内
+                        # 行为，不是故障——打 INFO（回退后由本窗后续切换收尾）。
+                        logger.info(
+                            'fan-out %s（设计内），本地解码重启: %s',
+                            reason, self.path)
+                    else:
+                        logger.warning(
+                            'fan-out feed 断流/中止，回退本地解码: %s', self.path)
                     return False
                 else:  # 'none'：暂无新帧，微让步避免忙等
                     time.sleep(0.002)
@@ -2304,6 +2322,11 @@ class WebMClip(QObject):
             return False
         if not got:
             logger.info('webm 圈边界宽限期满未续圈，reader 退出: %s', self.path)
+            # 复审 P2-1：复位软停驻留标记——reader 退出后 clip 处于
+            # 「_running=False, _soft_parked=True」的死而未僵状态，hub 的
+            # 发布者存活判定会对死发布者说谎（reader 写、GUI 读，GIL 原子
+            # bool，与 _reader_parked 同构）。
+            self._soft_parked = False
             return False
         self._loop_gate.clear()
         with self._loop_lock:

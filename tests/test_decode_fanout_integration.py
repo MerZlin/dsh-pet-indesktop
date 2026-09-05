@@ -43,6 +43,10 @@ def test_two_clips_share_single_decode(app):
     sub = WebMClip(SAMPLE_WEBM)
 
     assert hub.shareable_start("idle", pub) == "publish"
+    # F2 存活判定：发布者必须已起播（_running）才判定存活——生产流程中窗的
+    # _switch 是「register → start」原子同步完成，订阅窗的 shareable_start 只会
+    # 在发布者已起播之后到达；此处按生产顺序先起播发布者，再挂号订阅者。
+    assert pub.start() is True
     assert hub.shareable_start("idle", sub) == "feed"
     # 结构：单源记录、发布者=pub、订阅者=sub（进程内扇出已建立）
     source = hub._sources[str(SAMPLE_WEBM)]
@@ -59,7 +63,6 @@ def test_two_clips_share_single_decode(app):
     pub.errorOccurred.connect(errors.append)
     sub.errorOccurred.connect(errors.append)
     try:
-        assert pub.start() is True
         assert sub.start() is True
         # P1-3（复审）：订阅者绝不拉起 ffmpeg——reader 进程句柄恒为 None。
         assert sub._reader_proc is None, "订阅者不得拉起 ffmpeg（G-53-2 在库断言）"

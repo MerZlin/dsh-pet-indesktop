@@ -1290,8 +1290,9 @@ class PetWindow(QWidget):
     def _broker_unregister(self, name, movie, natural: bool) -> None:
         """shareable movie 停播/自然播完：通知 facade 解注册。
 
-        natural 仅透传给 shareable_end——当前 hub 实现不区分打断/自然结束
-        （订阅者对两者一律回绕合成 'end'，提前 ≤1 圈）。幂等；broker 关时 no-op。
+        natural 透传给 shareable_end——hub 据此区分打断/自然结束（F2：自然
+        圈末解散不 handover，走 draining 自愈；打断保留原 handover 语义）。
+        幂等；broker 关时 no-op。
 
         终审 P1-2（=DS 终审 P2-1）：收尾资格看「本窗口是否注册过该
         (name, movie)」，不看当下 _broker_shareable()——运行期关闭
@@ -1736,7 +1737,8 @@ class PetWindow(QWidget):
         prev_click_hold = self._click_hold
         prev_bounds = self._collision_local_bounds
         # 共享解码：离开上一个可共享素材（idle 类）时通知 facade 解注册——
-        # natural=_ended_fired（自然播完/打断切走均透传，hub 不区分）。
+        # natural=_ended_fired（自然播完/打断切走均透传，hub 据此区分：
+        # 自然圈末解散走 F2 draining，不加 abort/浪费 spawn）。
         # 终审 P1-2：不按当下 _broker_shareable() 门控——运行期关碰撞后开关
         # 已变，门控会让已注册的会话收不到收尾；是否收尾由 _broker_unregister
         # 按注册身份判定。
