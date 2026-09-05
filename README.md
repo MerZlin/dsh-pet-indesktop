@@ -330,12 +330,11 @@ pythonw -m pet
 - 点击桌宠触发 Q 弹时播放短促音效（内置合成音，可在桌宠设置中关闭）。
 - 可自定义声音：把 `click.wav` 放到桌宠数据目录 `sounds/` 下即可替换内置音效。
 
-### 多开共享解码（实验特性，默认关闭）
+### 多开共享解码（实验特性）
 
-- 多开同一角色时，所有实例空闲状态播的是同一份待机素材；开启后由协调者实例统一解码、其他实例经共享内存读帧——双开待机时 ffmpeg 解码进程从 2 个减到 1 个，待机解码 CPU 约减半。
-- 开启方式（暂无设置 UI）：编辑数据目录下的 `config.json`，把 `decode_broker_enabled` 改为 `true`（前置条件：`collision_enabled` 保持开启——broker 复用碰撞的实例间通道）。
-- 仅 Windows x86/x64 可用（跨进程共享内存的时序协议只在 x86/x64 强内存序下可靠；Windows ARM64 与其他平台即使开启也会自动按关闭处理）。
-- 失败无感回退：无协调者、授权超时、共享内存异常、对方退出等任何情况下，消费端都会自动回退本地解码，播放行为与关闭时一致（杀协调者实例后消费端约 0.6 秒内从帧 0 重新起播，可见一次跳变）。
+- 多开同一角色时，所有实例空闲状态播的是同一份待机素材；开启后由进程内帧扇出（`DecodeFanoutHub`）统一解码、其他实例经订阅环形缓冲读帧——多开待机时 ffmpeg 解码进程从 2 个减到 1 个，待机解码 CPU 约减半。
+- 双开关（暂无设置 UI）：编辑数据目录下的 `config.json`，把 `experimental_single_process_spawn` 改为 `true`（多窗）并保持 `experimental_shared_decode` 为 `true`（默认），即可启用进程内共享解码；机制与平台无关。
+- 失败无感回退：无发布者、断流等任何情况下，消费端都会自动回退本地解码，播放行为与关闭时一致。
 
 
 </details>
@@ -734,14 +733,15 @@ pet/
 ├── collision_codec.py     # 碰撞 IPC 帧编解码 + 水位去重 + 协议 TypedDict（纯 Python）
 ├── collision_ipc.py       # 碰撞协调者选举与成员协议（QLocalServer 控制面）
 ├── collision_debug.py     # 碰撞调试日志
-├── decode_broker.py       # 多开共享解码 broker（共享内存 ring + seqlock，灰度默认关）
+├── decode_fanout.py       # 同角色共享解码链（进程内帧扇出 DecodeFanoutHub）
 ├── frame_cache.py         # 通用字节预算 LRU（webm 元数据缓存等小缓存用）
 ├── perfstats.py           # 性能打点（PET_PERF_STATS=1 启用，atexit 落盘）
+├── predictive_prewarm.py  # 预测式预解码预热（切动画前预拉下一段）
 ├── platform_win.py        # Windows 平台层（鼠标穿透/全屏判定/PerPixel 输入）
 ├── platform_mac.py        # macOS 平台层（NSWindow level/激活策略）
 ├── catalog.py             # 角色和动画素材发现
 ├── library.py             # 动画库访问（懒加载 + 优先级预热）
-├── webm_clip.py           # WebM 播放（reader 线程/解码节流/broker 钩子）
+├── webm_clip.py           # WebM 播放（reader 线程/解码节流/fan-out 钩子）
 ├── speech_bubble.py       # 气泡绘制与交互
 ├── speech_bubble_text.py  # 气泡分页/定位纯函数
 ├── click_sound.py         # 点击音效（ClickSoundPool 单例封装）
@@ -753,6 +753,7 @@ pet/
 ├── agent_link.py          # Agent 联动监视器（多 Agent 事件源：CLI/IDE/SQLite 轮询）
 ├── agent_link_reducer.py  # 联动状态机（去抖/节流/完成确认，纯状态）
 ├── agent_link_presentation.py # 联动表现层（气泡/音效）
+├── multi_window_shared.py # 进程级多窗共享子系统（agent_link/proactive/全屏 watcher）
 ├── vision.py              # 视觉模型调用（看看屏幕/主动识屏）
 ├── harness_launcher.py    # DeepSeek Harness 一键启动
 ├── instance_launcher.py   # 「生小肥鱼」多开孵化
@@ -797,7 +798,6 @@ tests/                     # 单元测试、Qt offscreen 测试和构建相关�
 **给 window.py 加功能前必读**：[docs/WINDOW_PY_SPLIT_GUIDE.md](docs/WINDOW_PY_SPLIT_GUIDE.md)
 ——window.py 处于「只许瘦不许胖」的增量拆分公约下（CI 有行数预算红线），
 新功能先按公约拆对应控制器再动手。
-
 </details>
 
 <details>

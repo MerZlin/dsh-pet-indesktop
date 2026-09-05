@@ -10,9 +10,15 @@
 - ``_publish_sink``（发布端）：coordinator 本地解码每帧回调恰一次
   （on_frame(frame, src_idx) 每解码帧一次、按序、无重复），natural end
   触发 finished。
+
+批5.3：decode_broker 退役后，WebMClip 的 feed 协议由进程内 DecodeFanoutHub
+（FanoutFeed/FanoutFeedSession）继承。本文件改用本地 ``_StubFeed``（与 hub 的
+FanoutFeed 同形：ready/result/expire/budget_ms 鸭子类型）驱动同一 ``_reader_feed``
+协议，逐位锁定 WebMClip 的消费契约（帧序、end、abort→本地回退、发布 sink）。
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
@@ -20,13 +26,57 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from pet.decode_broker import BrokerFeed
 from pet.webm_clip import WebMClip
 
 SAMPLE_WEBM = Path("assets/characters/shenshen/videos/idle/待机呼吸休闲.webm")
 FRAME_BYTES = 640 * 360 * 4  # 921600
 # 可区分长度的单帧 RGBA 字节（内容无需逐帧唯一：帧身份由 src 标记）
 _FRAME = bytes(range(256)) * (FRAME_BYTES // 256)
+
+
+class _StubFeed:
+    """一次订阅尝试句柄（DecodeFanoutHub.FanoutFeed 的鸭子类型替身）。
+
+    GUI 侧 ``complete(result)`` 填 grant/deny；reader 线程经 ``ready``/
+    ``result``/``expire`` 读取。保留 ``budget_ms`` 以验证 ``_reader_feed`` 的
+    grant 有界等待路径（进程内 hub 立即就绪，不实际等待）。
+    """
+
+    def __init__(self, req_id: str, asset: str) -> None:
+        self.req_id = req_id
+        self.asset = asset
+        self.budget_ms = 600
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self._result = None
+        self._expired = False
+
+    def complete(self, result) -> None:
+        with self._lock:
+            if self._expired:
+                return
+            self._result = result
+            self._event.set()
+
+    def expire(self) -> None:
+        with self._lock:
+            if self._expired:
+                return
+            self._expired = True
+            self._event.set()
+
+    @property
+    def ready(self) -> bool:
+        return self._event.is_set()
+
+    @property
+    def expired(self) -> bool:
+        return self._expired
+
+    @property
+    def result(self):
+        with self._lock:
+            return self._result
 
 
 @pytest.fixture
@@ -124,7 +174,7 @@ def test_feed_frame_order_and_natural_end_fires_finished(app):
     clip._duration = 10.0  # 跳过 meta 探测（feed 模式不触 ffmpeg）
     frame_count = 12
     session = _PacedFeedSession(_FRAME, frame_count=frame_count)
-    feed = BrokerFeed("feed-order", str(SAMPLE_WEBM))
+    feed = _StubFeed("feed-order", str(SAMPLE_WEBM))
     feed.complete(session)  # grant 已落定（feed-pending 直接放行）
     clip._feed_source = feed
     srcs: list = []
@@ -190,7 +240,7 @@ def _drain_until_local_frame_zero(clip: WebMClip, timeout: float = 8.0) -> bool:
 def test_feed_grant_denied_falls_back_to_local_ffmpeg(app):
     assert SAMPLE_WEBM.exists()
     clip = WebMClip(SAMPLE_WEBM)
-    feed = BrokerFeed("deny-1", str(SAMPLE_WEBM))
+    feed = _StubFeed("deny-1", str(SAMPLE_WEBM))
     feed.complete(None)  # decode_deny：授权失败
     clip._feed_source = feed
     errors: list = []
@@ -208,7 +258,7 @@ def test_feed_grant_denied_falls_back_to_local_ffmpeg(app):
 def test_feed_grant_timeout_falls_back_to_local_ffmpeg(app):
     assert SAMPLE_WEBM.exists()
     clip = WebMClip(SAMPLE_WEBM)
-    feed = BrokerFeed("timeout-1", str(SAMPLE_WEBM))
+    feed = _StubFeed("timeout-1", str(SAMPLE_WEBM))
     feed.budget_ms = 120  # 缩短订阅预算：feed-pending 有界等待后超时
     clip._feed_source = feed  # 永不 complete → 超时回退
     errors: list = []
@@ -232,7 +282,7 @@ def test_feed_midstream_abort_falls_back_to_local_ffmpeg(app):
     clip = WebMClip(SAMPLE_WEBM)
     clip._duration = 10.0
     session = _PacedFeedSession(_FRAME, frame_count=100)
-    feed = BrokerFeed("abort-1", str(SAMPLE_WEBM))
+    feed = _StubFeed("abort-1", str(SAMPLE_WEBM))
     feed.complete(session)  # grant：先流 feed 帧
     clip._feed_source = feed
     srcs: list = []
@@ -252,6 +302,69 @@ def test_feed_midstream_abort_falls_back_to_local_ffmpeg(app):
         assert _drain_until_local_frame_zero(clip), "本地解码未从帧 0 起播"
         assert errors == []
         assert session.close_count == 1  # 断流收尾 close 恰一次
+    finally:
+        clip.cleanup()
+        app.processEvents()
+
+
+# ---------------------------------------------------------------------------
+# F1：abort 原因透传 → handover 打 INFO（不再 WARNING），watchdog/stop_all 留 WARNING
+# ---------------------------------------------------------------------------
+class _AbortReasonSession:
+    """3 元组之上透传 abort reason 的 feed session（F1 专测，直接驱动 _reader_feed）。"""
+
+    def __init__(self, reason: str) -> None:
+        self._reason = reason
+
+    def poll(self):
+        return ("abort", None, None, self._reason)
+
+    def close(self) -> None:
+        pass
+
+
+def _run_reader_feed_abort(reason: str):
+    """直接调用 ``clip._reader_feed`` 触发一次 abort 回退判定（零 ffmpeg）。
+    返回 (clip, feed, stop_evt, gen)；feed 与 clip 由调用方清理。"""
+    assert SAMPLE_WEBM.exists()
+    clip = WebMClip(SAMPLE_WEBM)
+    clip._duration = 10.0  # 跳过 meta 探测：feed 模式不触 ffmpeg
+    session = _AbortReasonSession(reason)
+    feed = _StubFeed(f"abort-{reason}", str(SAMPLE_WEBM))
+    feed.complete(session)
+    stop_evt = threading.Event()
+    gen = clip._generation
+    return clip, feed, stop_evt, gen
+
+
+def test_feed_handover_abort_logs_info_not_warning(app, caplog):
+    """F1：handover abort → 打 INFO（设计内行为），不再是 WARNING。"""
+    clip, feed, stop_evt, gen = _run_reader_feed_abort("handover")
+    try:
+        with caplog.at_level(logging.INFO, logger="pet.webm_clip"):
+            done = clip._reader_feed(feed, stop_evt, gen)
+        assert done is False  # 仍回退本地解码（_reader_feed 契约）
+        info = [r for r in caplog.records
+                if r.levelno == logging.INFO and "handover" in r.getMessage()]
+        assert info, "handover abort 应打 INFO"
+        warn = [r for r in caplog.records
+                if r.levelno == logging.WARNING and "断流" in r.getMessage()]
+        assert not warn, "handover abort 不得再打断流 WARNING"
+    finally:
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_feed_watchdog_abort_still_warns(app, caplog):
+    """F1：watchdog/stop_all abort → 保留 WARNING（真断流仍是故障信号）。"""
+    clip, feed, stop_evt, gen = _run_reader_feed_abort("watchdog")
+    try:
+        with caplog.at_level(logging.WARNING, logger="pet.webm_clip"):
+            done = clip._reader_feed(feed, stop_evt, gen)
+        assert done is False
+        warn = [r for r in caplog.records
+                if r.levelno == logging.WARNING and "断流" in r.getMessage()]
+        assert warn, "watchdog/stop_all abort 应保留 WARNING"
     finally:
         clip.cleanup()
         app.processEvents()

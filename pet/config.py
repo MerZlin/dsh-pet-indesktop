@@ -586,16 +586,6 @@ class Config:
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
             "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
-            # P3 broker（灰度默认关，不进设置 UI）：多开同角色空闲素材共享解码开关。
-            # 前置条件 = collision_enabled（broker 骑在碰撞 QLocal 通道上）。
-            # ⚠ 平台限定（P3A R2 P0-1 / R3 收口）：本键只在 Windows x86/x64
-            # （AMD64/x86_64，TSO）上生效——共享内存 seqlock 的 seq 提交词只经
-            # ctypes 普通 8B load/store，无 acquire/release/跨进程 barrier，
-            # 弱序平台（ARM macOS/Linux 及 **Windows ARM64**）上协议不作正确性
-            # 声明。非支持平台即使本键为 True，BrokerFacade 的 enabled 判定
-            # （decode_broker.broker_platform_supported()：OS + 架构双重检查）
-            # 也强制为 False：本键只是「用户请求」，平台门禁在启用点收口。
-            "decode_broker_enabled": False,
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             "todo_reminder_enabled": True,   # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
@@ -616,6 +606,10 @@ class Config:
             # 批5.2 spike（默认关）：开 = 「生小肥鱼」从 spawn 新进程改为进程内
             # 创建第二个 PetInstance。关 = 行为与现状逐位一致（回退保险）。
             "experimental_single_process_spawn": False,
+            # 批5.3：同角色共享解码链（进程内帧扇出）开关，默认开。仅当
+            # experimental_single_process_spawn（多窗）也为开时才真正激活——
+            # 单窗无共享可言，双门关任一即回每窗独立解码（批5.2 形态）。
+            "experimental_shared_decode": True,
             "chat": _default_chat_data(),
         }
         self.reload()
@@ -744,12 +738,12 @@ class Config:
             "collision_enabled", "collision_restitution", "collision_friction",
             "collision_mass_scale", "collision_impulse_cap",
             "collision_sound_enabled", "collision_sound_volume",
-            "decode_broker_enabled",
             "media_prewarm",
             "first_frame_cache_max_mb",
             "predict_prewarm_lead_ms",
             "ffmpeg_recycle_minutes",
             "experimental_single_process_spawn",
+            "experimental_shared_decode",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -758,6 +752,7 @@ class Config:
         if "agent_link" in raw:
             self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
         self._migrate_click_sound_config(raw)
+        self._migrate_decode_broker_config(raw)
         self.data["version"] = 4
 
     def _migrate_click_sound_config(self, raw: dict) -> None:
@@ -776,6 +771,20 @@ class Config:
                 }
             else:
                 self.data["click_sound_pack"] = _default_click_sound_pack()
+
+    def _migrate_decode_broker_config(self, raw: dict) -> None:
+        """批5.3：decode_broker_enabled 退役（shm broker 下线，共享解码改由
+        进程内 DecodeFanoutHub 承担）。迁移语义（SETTINGS-CHANGE-GATES）：读旧值
+        → 记一次 info → 忽略（键从 defaults/白名单移除，不再归一/进入 self.data）。"""
+        if getattr(self, "_decode_broker_migrated", False):
+            return
+        if "decode_broker_enabled" in raw:
+            old = raw.get("decode_broker_enabled")
+            logging.getLogger(__name__).info(
+                "配置键 decode_broker_enabled 已退役（批5.3 共享解码改为进程内 "
+                "fan-out），忽略旧值 %r", old)
+            raw.pop("decode_broker_enabled", None)
+        self._decode_broker_migrated = True
 
     def _normalize_pet_settings(self):
         from . import physics as physics_mod
@@ -864,22 +873,12 @@ class Config:
         self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
         # 闲置降帧（性能调研 §4.3）：开关默认关（灰度）；阈值夹到 [1, 3600] 秒
         # 终审 P1-3：必须用 _bool_or_default——bool("false") is True，字符串
-        # 布尔（外部手改配置/旧版导出）会被误开；与 decode_broker_enabled 同规。
+        # 布尔（外部手改配置/旧版导出）会被误开；与其它布尔键同规。
         self.data["idle_low_fps_enabled"] = _bool_or_default(
             self.data.get("idle_low_fps_enabled"), False
         )
         self.data["idle_low_fps_threshold"] = _float_or_default(
             self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
-        )
-        # P3 broker（灰度默认关）：多开同角色空闲素材共享解码开关。
-        # ⚠ 平台限定（P3A R2 P0-1 / R3，与 defaults 声明一致）：本键只在
-        # Windows x86/x64（AMD64/x86_64 TSO）上生效——非支持平台（非 Windows，
-        # 或 Windows ARM64 弱序）即使归一后为 True，BrokerFacade 的 enabled
-        # 判定也会与 broker_platform_supported()（Windows 且 AMD64/x86_64）
-        # 做与而强制关闭；此处归一只保证「类型为 bool」，「是否启用」由启用点
-        # 的平台门禁收口。
-        self.data["decode_broker_enabled"] = _bool_or_default(
-            self.data.get("decode_broker_enabled"), False
         )
         # 上游 #60 系统通知开关：同规防字符串布尔误开（bool("false") is True）。
         self.data["system_notifications_enabled"] = _bool_or_default(
@@ -907,9 +906,13 @@ class Config:
         # [2, 120]（默认 10）。
         _ffr = _float_or_default(self.data.get("ffmpeg_recycle_minutes"), 10, 0, 120)
         self.data["ffmpeg_recycle_minutes"] = 0 if _ffr <= 0 else int(max(2.0, _ffr))
-        # 批5.2 spike 开关：同 decode_broker_enabled 规约，防字符串布尔误开。
+        # 批5.2 spike 开关：同其它布尔键规约，防字符串布尔误开。
         self.data["experimental_single_process_spawn"] = _bool_or_default(
             self.data.get("experimental_single_process_spawn"), False
+        )
+        # 批5.3 共享解码链开关：同规防字符串布尔误开（默认开）。
+        self.data["experimental_shared_decode"] = _bool_or_default(
+            self.data.get("experimental_shared_decode"), True
         )
         self.data.update(_clean_collision_data(self.data))
 

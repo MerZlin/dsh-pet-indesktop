@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QPixmap
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import QApplication
 
 from pet import catalog
 from pet.config import Config
+from pet.decode_fanout import DecodeFanoutHub
 from pet.window import PetWindow
 
 NAMES = [
@@ -41,6 +44,17 @@ class FakeClip(QObject):
         self._pm.fill()
         self._publish_sink = None
         self._feed_source = None
+        # 批5.3：hub（DecodeFanoutHub）fan-out 接缝所需的最小属性
+        self.path = str(Path("assets/characters/shenshen/videos/idle/待机呼吸休闲.webm"))
+        self.playback_speed = 1.0
+        self.decode_throttle_divisor = 1
+        self.decode_pace_external = False
+
+    def set_decode_throttle(self, divisor):
+        self.decode_throttle_divisor = max(1, int(divisor))
+
+    def set_decode_pace_external(self, value):
+        self.decode_pace_external = bool(value)
 
     def stop(self):
         self._running = False
@@ -131,7 +145,12 @@ def _make_window(tmp_path):
 
 
 def test_unregister_follows_registered_identity_not_current_toggle(app, tmp_path):
-    """运行期关掉 collision_enabled 后，已注册会话的收尾仍须执行。"""
+    """运行期关掉共享解码后，已注册会话的收尾仍须执行。
+
+    批5.3：共享解码与 collision_enabled 解耦——`_broker_active` 只取决于
+    facade（DecodeFanoutHub）的 enabled。运行期停用 hub（facade.enabled=False）
+    等价于历史上关 collision：`_broker_shareable()` 变 False，但收尾仍按
+    「注册时的身份 (name, movie)」执行。"""
     win = _make_window(tmp_path)
     facade = FakeBrokerFacade()
     win._broker_facade = facade
@@ -139,8 +158,8 @@ def test_unregister_follows_registered_identity_not_current_toggle(app, tmp_path
     assert facade.started == [win.idle]
     assert win._broker_registered == (win.idle, win.movie)
 
-    # 运行期关闭碰撞：_broker_shareable() 变 False——收尾仍按身份执行
-    win.cfg.set("collision_enabled", False)
+    # 运行期停用共享解码 hub：_broker_shareable() 变 False——收尾仍按身份执行
+    facade.enabled = False
     assert win._broker_shareable(win.idle) is False
     win._broker_unregister(win.idle, win.movie, natural=False)
     assert facade.ended == [(win.idle, False)]
@@ -190,5 +209,30 @@ def test_detach_collision_session_tears_down_broker_first(app, tmp_path):
     # movie 钩子摘除：broker 停用期间复用旧 clip 不得误用上一轮 sink/feed
     assert win.movie._publish_sink is None
     assert win.movie._feed_source is None
+    win.close()
+    app.processEvents()
+
+
+def test_hub_register_unregister_teardown(app, tmp_path):
+    """批5.3：用真实 DecodeFanoutHub 走窗口接线——注册身份 (name, movie) 被
+    记录；收尾仍按身份执行、摘掉 movie 钩子并释放源（幂等）。"""
+    win = _make_window(tmp_path)
+    hub = DecodeFanoutHub(enabled=True)
+    win._broker_facade = hub
+    win._broker_register(win.idle, win.movie)
+    assert win._broker_registered == (win.idle, win.movie)
+    assert win.movie._publish_sink is not None, "首发窗应成为源发布者"
+    assert win.movie._feed_source is None
+    source = hub._sources[win.movie.path]
+    assert source.publisher is win.movie
+
+    win._broker_unregister(win.idle, win.movie, natural=False)
+    assert win._broker_registered is None
+    assert win.movie._publish_sink is None
+    assert win.movie._feed_source is None
+    assert not hub._sources, "无订阅者离开 → 源应被释放"
+    # 幂等：第二次收尾 no-op
+    win._broker_unregister(win.idle, win.movie, natural=False)
+    assert win._broker_registered is None
     win.close()
     app.processEvents()

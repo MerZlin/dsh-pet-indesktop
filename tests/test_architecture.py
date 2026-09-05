@@ -3,7 +3,7 @@
 
 三条红线，红了就是架构倒退，不许靠改测试放行：
 1. 依赖方向：纯逻辑层（collision/physics/collision_codec）不依赖 Qt；
-   decode_broker 不反向依赖 window/webm_clip（钩子经 movie 属性注入）。
+   decode_fanout 不反向依赖 window/webm_clip（钩子经 movie 属性注入）。
 2. 私有面冻结：PetWindow 私有成员（win._xxx）只许 window.py 自身与
    collision_client.py（窗口的碰撞客户端，半内部）访问；app.py /
    agent_link.py / context_menus/ 再出现即为违规（S2 已清零，防回潮）。
@@ -33,7 +33,9 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 2026-09-05 上调到 4367（频闪修复：Windows 穿透改原生 WS_EX_TRANSPARENT
 # 样式位、不再 setWindowFlag 重建窗口 +4 行含注释；hideEvent 补 [VIS] 观测
 # +1 行。详见 _plan/current/memory/REVIEW_flicker_glm53.md）。
-WINDOW_PY_LINE_BUDGET = 4367
+# 2026-09-05 批5.3 合入：删 broker 首个 idle 延迟与轮询（净 -44 行），
+# 频闪修复保留（+5），合并后实测 4261 行，预算按实测 +50 行余量收紧。
+WINDOW_PY_LINE_BUDGET = 4311
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
@@ -54,11 +56,11 @@ def test_pure_logic_modules_do_not_import_qt():
         assert "PySide6" not in src, f"{name} 引入了 Qt 依赖，破坏纯函数层定位"
 
 
-def test_decode_broker_does_not_depend_on_window_or_player():
-    src = _read("decode_broker.py")
+def test_decode_fanout_does_not_depend_on_window_or_player():
+    src = _read("decode_fanout.py")
     for banned in ("pet.window", "pet.webm_clip", "from .window", "from .webm_clip",
                    "import window", "import webm_clip"):
-        assert banned not in src, f"decode_broker 反向依赖 {banned}，破坏单向依赖"
+        assert banned not in src, f"decode_fanout 反向依赖 {banned}，破坏单向依赖"
 
 
 def test_window_private_surface_frozen():

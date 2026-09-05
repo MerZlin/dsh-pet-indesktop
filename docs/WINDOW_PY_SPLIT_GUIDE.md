@@ -25,7 +25,7 @@
 之上建立了三条架构红线（`tests/test_architecture.py`）：
 
 1. 纯逻辑层（collision / physics / collision_codec）不依赖 Qt；
-2. decode_broker 不反向依赖 window / webm_clip；
+2. decode_fanout 不反向依赖 window / webm_clip；
 3. window.py 行数不超过预算值（超出即测试失败）。
 
 注：红线 2 约束的是模块级 import 依赖方向，不等于「控制器不访问窗口
@@ -156,7 +156,7 @@
 | 碰撞客户端（窗口侧为薄委托） | collision_client.py |
 | 碰撞物理 / 协议 / IPC | collision.py / collision_codec.py / collision_ipc.py |
 | 平台层 | platform_win.py / platform_mac.py |
-| 共享解码 broker | decode_broker.py（窗口侧 `_broker_*` 块为接线+首播决策状态机，非纯转发） |
+| 共享解码 fan-out | decode_fanout.py（窗口侧 `_broker_*` 块为接线+首播决策状态机，非纯转发） |
 | 帧缓存 / 性能打点 | frame_cache.py / perfstats.py |
 
 ## 5. 参考范例：collision_client.py 的拆法
