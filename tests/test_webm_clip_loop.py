@@ -28,6 +28,7 @@ import threading
 import time
 
 import pytest
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
 from pet import webm_clip as webm_clip_mod
@@ -472,7 +473,7 @@ def test_no_rearm_grace_expires_and_kills_process(app, monkeypatch, tmp_path):
         while time.monotonic() < deadline and proc.poll() is None:
             time.sleep(0.02)
         assert proc.poll() is not None, "宽限期满未续圈必须杀掉 ffmpeg 进程"
-        assert not clip._thread.is_alive(), "宽限期满 reader 线程必须退出"
+        assert clip._thread is None, "宽限期满 reader 自行退出后 _thread 必须清空（B1）"
     finally:
         _close_all(spawns)
         clip.cleanup()
@@ -518,11 +519,11 @@ def test_grace_expired_rearm_falls_back_to_fresh_start(app, monkeypatch, tmp_pat
         assert _consume_until(clip, lambda: len(finished) == 1)
         clip.stop()
         assert clip._soft_parked is True
-        # 等宽限期满、reader 自行退出
+        # 等宽限期满、reader 自行退出（_thread 被 B1 finally 清空）
         deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and clip._thread.is_alive():
+        while time.monotonic() < deadline and clip._thread is not None:
             time.sleep(0.02)
-        assert not clip._thread.is_alive()
+        assert clip._thread is None, "宽限过期后 _thread 必须已清空（B1）"
         # 再 start()：reader 已死 → re-arm 失败 → 正常重启（新线程新流）
         assert clip.start() is True
         assert clip._reader_ready.wait(5.0)
@@ -635,12 +636,13 @@ def test_frame_count_unknown_falls_back_to_single_pass(app, monkeypatch, tmp_pat
         for _ in range(3):
             gen.release()
         assert _consume_until(clip, lambda: len(finished) == 1)
-        # 自然结束后 reader 线程退出（有限流 EOF，现状路径）
-        thread = clip._thread
+        # 自然结束后 reader 线程退出，且清理 _thread（B1：有限流 EOF 自然退出
+        # 不清 _thread 会让死 Thread 对象每 clip 钉 1 个 OS 线程句柄）。结束时
+        # 标记消费与 reader finally 清 _thread 存在良性竞态，等其清空再断言。
         deadline = time.monotonic() + 5.0
-        while thread.is_alive() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert not thread.is_alive(), "有限流自然结束后 reader 必须退出"
+        while time.monotonic() < deadline and clip._thread is not None:
+            time.sleep(0.005)
+        assert clip._thread is None, "有限流自然结束后 _thread 必须已清空（B1）"
         assert clip._timer.isActive() is False
     finally:
         _close_all(spawns)
@@ -844,7 +846,7 @@ def test_recycle_at_boundary_retires_process_and_fresh_spawns(app, monkeypatch, 
         while time.monotonic() < deadline and proc.poll() is None:
             time.sleep(0.02)
         assert proc.poll() is not None, "圈边界回收必须杀掉旧 ffmpeg 进程"
-        assert not clip._thread.is_alive(), "回收后 reader 线程必须退出"
+        assert clip._thread is None, "回收后 reader 自行退出，_thread 必须清空（B1）"
         assert _recycle_count() >= 1, "回收必须计入 perfstats ffmpeg.recycle"
         # 圈末 stop()：_reader_parked=False → 硬停（无软停驻留）
         clip.stop()
@@ -997,4 +999,179 @@ def test_recycle_skipped_when_rearm_pending(app, tmp_path):
         clip.cleanup()
         perfstats.disable()
         perfstats.reset()
+        app.processEvents()
+
+
+# ---------------------------------------------------------------------------
+# 批12-A1：显示槽清空——非显示 clip 释放 _current_image/_current_pixmap
+#          （正在显示的 clip 显示槽永不为 None / park 不清 / _switch 重启）
+# ---------------------------------------------------------------------------
+
+def test_hard_stop_clears_display_frame(app, monkeypatch, tmp_path):
+    """A1：硬停（切走/隐藏/关闭的 stop 都走 _hard_stop）后，旧 clip 的显示槽
+    必须清空——不再永久持有最后一帧的 QImage+QPixmap。"""
+    clip = _make_clip(tmp_path, frame_count=100)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    srcs: list = []
+    clip.frameChanged.connect(srcs.append)
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        spawns[0][1].release()
+        assert _consume_until(clip, lambda: srcs == [0])
+        assert clip.currentPixmap() is not None, "播放中显示槽必须持有当前帧"
+        clip.stop()  # 中途打断 = 硬停
+        assert clip._soft_parked is False
+        assert clip._current_image is None, "硬停后旧 clip 显示槽必须清空"
+        assert clip._current_pixmap is None
+        assert clip.currentPixmap() is None
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_playing_clip_display_frame_remains_non_none(app, monkeypatch, tmp_path):
+    """A1：正在播放/显示的 clip，其显示槽必须持续持有帧（非 None）——
+    只有非显示 clip 才被清空。"""
+    clip = _make_clip(tmp_path, frame_count=100)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    srcs: list = []
+    clip.frameChanged.connect(srcs.append)
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        for _ in range(3):
+            spawns[0][1].release()
+        assert _consume_until(clip, lambda: len(srcs) >= 3)
+        assert clip.currentPixmap() is not None, "正在显示 clip 的显示槽不得为 None"
+        assert clip._current_image is not None
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_park_rearm_keeps_display_frame(app, monkeypatch, tmp_path):
+    """A1：圈边界软停驻留（park）的 clip 仍是当前显示对象，显示槽不得清空；
+    re-arm 续圈后仍持有帧。park 路径（stop() 早退）绝不清显示槽。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    srcs: list = []
+    clip.frameChanged.connect(srcs.append)
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        gen = spawns[0][1]
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: srcs == [0, 1, 2]), f"srcs={srcs}"
+        assert _wait_parked(clip)
+        clip.stop()
+        assert clip._soft_parked is True
+        assert clip.currentPixmap() is not None, "软停驻留不得清空显示槽"
+        first_thread = clip._thread
+        # re-arm 续圈：同一 reader/进程，显示槽不清空
+        assert clip.start() is True
+        assert clip._thread is first_thread
+        assert clip.currentPixmap() is not None, "re-arm 后显示槽仍须持有帧"
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: len(srcs) >= 4)
+        assert clip.currentPixmap() is not None, "续圈播放中显示槽必须持有帧"
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_switch_restart_same_clip_sets_first_frame(app, tmp_path):
+    """A1：_switch 重启同 clip（stop→jumpToFrame(0)→start）后，显示槽必须被
+    jumpToFrame 重写为首帧——stop 清空无害，重启后显示槽=首帧非 None。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    first = QImage(2, 2, QImage.Format.Format_RGBA8888)
+    clip._first_image = first  # 模拟已缓存的 _first_image（warm/同步解码）
+    try:
+        clip.stop()          # _switch 的 movie.stop()
+        clip.jumpToFrame(0)  # _switch 的 movie.jumpToFrame(0)
+        assert clip._current_pixmap is not None, "重启后显示槽必须为首帧"
+        assert clip._current_image is first, "重启后显示槽必须复用首帧缓存"
+        assert not clip._current_pixmap.isNull()
+    finally:
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_parked_loop_reader_self_exit_keeps_display_frame(app, monkeypatch, tmp_path):
+    """A1 复审修订（REVIEW_batch12 P1-1）：park 后宽限期满 reader 自退**不得**
+    清显示槽——clip 侧无法区分「放弃」与「仍在显示」（hold 路径），显示槽只由
+    窗口 _switch 切走时按权威显示状态清（GUI 线程）。B1：reader 自退后
+    _thread 必须清空。"""
+    monkeypatch.setattr(webm_clip_mod, "_LOOP_REARM_GRACE_SECS", 0.2)
+    clip = _make_clip(tmp_path, frame_count=3)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    finished: list = []
+    clip.finished.connect(lambda: finished.append(True))
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        gen = spawns[0][1]
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: len(finished) == 1), f"finished={finished}"
+        clip.stop()  # 圈末软停驻留：reader 保活、显示槽保留
+        assert clip._soft_parked is True
+        assert clip.currentPixmap() is not None, "圈末 park 时显示槽不得清空"
+        # 不续圈 → 宽限期满 reader 自行退出：_thread 清空（B1），
+        # 但显示槽**不清**（复审 P1-1/P1-2：清槽是 GUI 线程的窗口侧职责）
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and clip._thread is not None:
+            time.sleep(0.02)
+        assert clip._thread is None, "reader 自退后 _thread 必须清空（B1）"
+        assert clip.currentPixmap() is not None, \
+            "reader 自退不得清显示槽（P1-1/P1-2：清槽归窗口 _switch 权威侧）"
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+# ---------------------------------------------------------------------------
+# 批12-B1：reader 自行退出后清 _thread——绝不残留死 Thread 对象钉 OS 线程句柄
+# ---------------------------------------------------------------------------
+
+def test_thread_none_after_recycle_self_exit(app, monkeypatch, tmp_path):
+    """B1：圈界回收后 reader 自行退出，_thread 必须被清 None——绝不残留死
+    Thread 对象（每 clip 钉 1 个 OS 线程句柄）；下圈 start 自然 fresh spawn。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    clip.set_recycle_minutes(10)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    finished: list = []
+    clip.finished.connect(lambda: finished.append(True))
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        proc, gen = spawns[0][0], spawns[0][1]
+        clip._reader_born_at = time.monotonic() - 1200.0  # 必达回收阈值
+        for _ in range(3):
+            gen.release()
+        assert _consume_until(clip, lambda: len(finished) == 1), f"srcs={finished}"
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.02)
+        assert proc.poll() is not None, "圈界回收必须杀掉旧 ffmpeg 进程"
+        assert clip._thread is None, "圈界回收后 _thread 必须清空（B1）"
+        # 下圈 start：fresh spawn（新 reader 线程，无死对象残留）
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        assert len(spawns) == 2
+        assert clip._thread is not None and clip._thread.is_alive()
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
         app.processEvents()

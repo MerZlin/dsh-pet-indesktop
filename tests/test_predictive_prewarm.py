@@ -55,8 +55,13 @@ class FakeClip(QObject):
         self.stop_count = 0
         self.start_count = 0
         self.recycle_minutes_calls: list = []
+        # 批12 A1：显示槽清理（窗口 _switch 切走时调用，窗口级测试用）
+        self.clear_display_calls = 0
         self._pm = QPixmap(2, 2)
         self._pm.fill()
+
+    def clear_display_frame(self):
+        self.clear_display_calls += 1
 
     def stop(self):
         self.stop_count += 1
@@ -608,6 +613,47 @@ def test_recycle_minutes_pushed_on_switch_and_refresh(tmp_path, app):
         assert len(clip.recycle_minutes_calls) > n_before, \
             "refresh_pet_settings 必须把新阈值推送到当前 clip"
         assert clip.recycle_minutes_calls[-1] == 0
+    finally:
+        win.close()
+        app.processEvents()
+
+
+def test_switch_clears_previous_clip_display_frame(tmp_path, app):
+    """批12 A1（复审修订）：_switch 切走成功时清空旧 clip 的显示槽
+    （窗口权威侧，GUI 线程）；新 clip 不清。"""
+    win = _make_window(tmp_path)
+    try:
+        prev_clip = win.lib.movie(win.anim)
+        win._switch("写代码")
+        assert win.anim == "写代码"
+        assert prev_clip.clear_display_calls == 1, \
+            "切走后旧 clip 显示槽必须被清一次"
+        assert win.lib.movie("写代码").clear_display_calls == 0, \
+            "新 clip 不得被清"
+        # 再切回 idle：写代码 的槽被清，idle（现为旧 clip）已被清过一次不重复累加错
+        win._switch(catalog.IDLE)
+        assert win.lib.movie("写代码").clear_display_calls == 1
+    finally:
+        win.close()
+        app.processEvents()
+
+
+def test_finished_signal_of_abandoned_clip_reclears_slots(tmp_path, app):
+    """批12 复审 N1：弃播 clip 残余帧流会把 _switch 清掉的显示槽重填——
+    其迟到的结束标记被消费时必须再清一次（FIFO 保证其后无新帧）。"""
+    win = _make_window(tmp_path)
+    try:
+        win._switch("写代码")
+        abandoned = win.lib.movie("写代码")
+        win._switch(catalog.IDLE)
+        assert abandoned.clear_display_calls == 1, "切走时清一次"
+        # 模拟：弃播 clip 的 reader 跑到结束，finished 信号迟到到达
+        abandoned.finished.emit()
+        assert abandoned.clear_display_calls == 2, \
+            "弃播 clip 的结束标记消费点必须补清显示槽（N1）"
+        # 当前动画的 finished 不受误伤：emit 后 idle 的清理计数不增加
+        # （idle 的 1 次来自它自己被切走的那一刻，属正常）
+        assert win.lib.movie(catalog.IDLE).clear_display_calls == 1
     finally:
         win.close()
         app.processEvents()

@@ -1823,6 +1823,13 @@ class PetWindow(QWidget):
                 is_link=_link_request,
             )
             return False
+        # 批12（A1，复审修订）：切走成功 —— 旧 clip 不再是显示对象，清空其
+        # 显示槽（~1.84MB/段原生位图）。park 续圈不切窗不经此处；hold 路径
+        #（不切走）绝不清——窗口是唯一权威显示判定（REVIEW_batch12 P1-1）。
+        if prev_movie is not None and prev_movie is not movie:
+            _clear = getattr(prev_movie, 'clear_display_frame', None)
+            if callable(_clear):  # 测试替身可无此方法（纯优化，非正确性调用）
+                _clear()
         # 启动成功：仅当待重试的正是本动画时才清除待重试状态——重试绑定
         # 目标动画身份，无关动画的成功切换不得吞掉其他动画的待重试
         # （B7 复审 R2）。
@@ -2581,6 +2588,12 @@ class PetWindow(QWidget):
         if self._hidden_paused or getattr(self, '_closing', False):
             return
         if name != self.anim or self.movie is None:
+            # 批12 复审 N1：弃播 clip（mid-play 切走/有限流 EOF）结束时残余帧流
+            # 会重填已清的显示槽——在结束标记消费点补清（FIFO 保证其后无新帧）。
+            old = self.lib.movies().get(name)
+            _clear = getattr(old, 'clear_display_frame', None)
+            if callable(_clear):
+                _clear()
             return
         if not self._ended_fired:
             self._ended_fired = True

@@ -25,8 +25,12 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 2026-09-05 上调到 4345（批11-B1：ffmpeg 圈边界定期回收——窗口层把
 # ffmpeg_recycle_minutes 经 _push_recycle 推送给播放 clip（_switch /
 # _fallback_playable_idle / 拖拽重启 / refresh_pet_settings 四处对齐），
-# 复审 P1-2 要求运行期可刷新。注：此前的注释日期「2026-11」为笔误。
-WINDOW_PY_LINE_BUDGET = 4345
+# 复审 P1-2 要求运行期可刷新。注：此前的注释日期「2026-11」为笔误）。
+# 2026-09-05 上调到 4352（批12：_switch 切走成功时清旧 clip 显示槽——
+# A1 修复的窗口权威侧，+6 行含注释；clip 侧清槽 API 在 webm_clip.py）。
+# 2026-09-05 上调到 4360（批12 复审 N1：_on_clip_finished 对弃播 clip
+# 在结束标记消费点补清显示槽，+6 行含注释）。
+WINDOW_PY_LINE_BUDGET = 4360
 
 
 def _read(name: str) -> str:

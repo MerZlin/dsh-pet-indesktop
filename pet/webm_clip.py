@@ -1205,6 +1205,20 @@ class WebMClip(QObject):
     def currentPixmap(self):
         return self._current_pixmap
 
+    def clear_display_frame(self) -> None:
+        """清空当前显示槽（A1：非显示 clip 释放 _current_image/_current_pixmap）。
+
+        **只在 GUI 线程调用**（窗口 `_switch` 切走旧 clip 时）。约 1.84MB/段的
+        原生位图随清空交给 Qt 回收，堵住「每个播过的 clip 永久持有最后一帧」
+        的慢涨（A1）。软停驻留（park）绝不清：park 的 clip 可能仍是当前显示
+        对象且可能被 re-arm 续圈——park 在 stop() 早退、不经 _hard_stop，
+        本方法不受影响。清空后 currentPixmap() 为 None，调用方（非当前显示
+        对象）已有 None 兜底（window._rebuild_frame 空图跳过、
+        animation_icon_pixmap 回退 icon_pixmap）。
+        """
+        self._current_image = None
+        self._current_pixmap = None
+
     # ------------------------------------------------------------ lifecycle
     def set_playback_speed(self, speed: float) -> None:
         self.playback_speed = max(0.1, float(speed))
@@ -1426,6 +1440,11 @@ class WebMClip(QObject):
             self._timer.stop()
         except RuntimeError:
             pass  # C++ QTimer 已随 clip 销毁（半销毁场景）：停止信号与进程终止已先行完成
+        # A1：硬停 = clip 不再被显示（切走旧 clip / 隐藏 / 关闭 / cleanup），
+        # 清空显示槽释放 ~1.84MB 原生位图。_switch 对新 clip 的
+        # stop→jumpToFrame→start 链会由 jumpToFrame 重写显示槽，清空无害；
+        # 软停驻留（park）在 stop() 早退、不到这里，显示槽保留。
+        self.clear_display_frame()
 
     def _rearm_loop_reader(self) -> bool:
         """圈边界续圈（批8）：软停驻留的循环 reader 直接续播下一圈，不重启
@@ -1869,6 +1888,11 @@ class WebMClip(QObject):
         if feed is not None:
             done = self._reader_feed(feed, stop_evt, generation, ready_evt)
             if done:
+                # P2-3（REVIEW_batch12）：feed 自退（自然结束/被停）不经
+                # _reader_local 的 finally，死 Thread 对象清理在此兜底。
+                with self._reader_lock:
+                    if self._thread is threading.current_thread():
+                        self._thread = None
                 return  # feed 已完整处理本轮（自然结束/停止）
             # 断流/被拒/超时 → 回退本地：清空 feed 残留帧后落本地路径
             if stop_evt.is_set() or self._generation != generation:
@@ -2020,6 +2044,18 @@ class WebMClip(QObject):
             with self._reader_lock:
                 if proc is not None and self._reader_proc is proc:
                     self._reader_proc = None
+                # B1：reader 自行退出的三条路径（软停宽限满 _loop_boundary
+                # gate 超时、批11 圈界回收、自然播完 _put_end_marker 返回）
+                # 都不清 self._thread → 死 Thread 对象每 clip 钉 1 个 OS 线程
+                # 句柄。仅当 _thread 仍指向本 reader 线程时置 None——复播换代
+                # 时 start() 既有摘取逻辑已把旧 thread 摘进退役池（或已置
+                # None），此时 _thread 指向新线程/None，绝不能误清（不要双清）。
+                if self._thread is threading.current_thread():
+                    self._thread = None
+            # A1 复审修订（REVIEW_batch12 P1-1/P1-2）：reader 线程**不清显示槽**
+            # ——clip 自己无法区分「park 后被放弃」与「park 但仍在显示」（hold
+            # 路径），且跨线程写 _current_pixmap 违反「Qt 操作只在主线程」。
+            # 清槽由窗口在 _switch 切走时按权威显示状态执行（GUI 线程）。
             if proc is not None or gen is not None:
                 # 批 6-8b：收尾操作（_terminate_proc 的 poll/terminate/wait/kill +
                 # gen.close() 的 poll/关管道）在 _proc_lock 内串行化——与 GUI
