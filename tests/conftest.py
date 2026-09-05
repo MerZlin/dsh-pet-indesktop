@@ -65,6 +65,24 @@ def _close_session_writers():
 
 
 @pytest.fixture(autouse=True)
+def _clear_click_sound_pool():
+    """每测后清空点击音效池（测试债防线）。
+
+    conftest 只静音了 play()，但设置保存等路径的 warm_click_sound_effects
+    会真实创建 QSoundEffect/QMediaPlayer/QAudioOutput。这些 QtMultimedia
+    原生对象跨测试累积后，在共享 QApplication 下随机 access violation /
+    Fatal abort（全量套件崩溃点会漂移：click_sound 预热循环、气泡图片
+    processEvents 均观测到）。每测后 clear() 复位原生对象缓存。
+    """
+    yield
+    try:
+        from pet import click_sound
+        click_sound._pool.clear()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _close_qt_top_level_widgets():
     """在测试后收口仍存活的应用级后台资源。"""
     yield

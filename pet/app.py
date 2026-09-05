@@ -370,6 +370,8 @@ class PetApp:
             logging.exception("退出时关闭 broker facade 失败")
         self.collision_ipc.stop()
         self.todo_service.stop()
+        # DSH 状态跟踪器同样随进程退出停止（QTimer/探测线程不跨退出存活）
+        self._dsh_state_tracker.stop()
         # 会话异步写盘（B8）：退出前先把各聊天窗口的当前会话提交保存，
         # 再永久关闭写盘 worker（关掉后迟到的 queued 回调提交会被明确拒绝）。
         try:

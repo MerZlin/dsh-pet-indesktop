@@ -2809,6 +2809,11 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
     assert current.saved == 1
     assert old.saved == 0  # 旧窗口不再被保存
 
+    # start() 启动了真实的 DshStateTracker（3s 周期端口探测 QTimer）：
+    # 不停掉会跨测试存活，在后续用例泵事件时继续发起探测，
+    # 是全量套件原生崩溃的帮凶之一。
+    owner._dsh_state_tracker.stop()
+
 
 def test_external_character_dirs_uses_variant_then_legacy_fallback(tmp_path, monkeypatch):
     """外部角色目录应优先变体目录，并保留旧 dsh-pet-standalone 目录兜底。"""
