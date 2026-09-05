@@ -30,7 +30,10 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # A1 修复的窗口权威侧，+6 行含注释；clip 侧清槽 API 在 webm_clip.py）。
 # 2026-09-05 上调到 4360（批12 复审 N1：_on_clip_finished 对弃播 clip
 # 在结束标记消费点补清显示槽，+6 行含注释）。
-WINDOW_PY_LINE_BUDGET = 4360
+# 2026-09-05 上调到 4367（频闪修复：Windows 穿透改原生 WS_EX_TRANSPARENT
+# 样式位、不再 setWindowFlag 重建窗口 +4 行含注释；hideEvent 补 [VIS] 观测
+# +1 行。详见 _plan/current/memory/REVIEW_flicker_glm53.md）。
+WINDOW_PY_LINE_BUDGET = 4367
 
 
 def _read(name: str) -> str:

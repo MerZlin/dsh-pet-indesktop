@@ -163,3 +163,34 @@ def test_fs_watch_loop_survives_transient_runtime_error(monkeypatch):
     assert calls >= 2
     assert emitted == ["HIDDEN"]
 
+
+def test_apply_mouse_through_windows_uses_native_style(monkeypatch):
+    """回归：Windows 上切换穿透必须走原生 WS_EX_TRANSPARENT，不得 setWindowFlag
+    重建窗口（重建 = 原生句柄销毁重建 = 用户可见的频闪）。"""
+    win = PetWindow.__new__(PetWindow)
+    win._user_mouse_through = False
+    win._auto_cursor_hidden = False
+    win.mouse_through = False
+    native_calls = []
+    monkeypatch.setattr('pet.window.os.name', 'nt')
+    monkeypatch.setattr('pet.window._set_windows_click_through',
+                        lambda hwnd, enabled: native_calls.append((hwnd, enabled)) or True)
+    monkeypatch.setattr(PetWindow, 'winId', lambda self: 43210)
+
+    def forbidden_flag_change(*args, **kwargs):
+        raise AssertionError('Windows 路径禁止 setWindowFlag 重建窗口')
+
+    monkeypatch.setattr(PetWindow, 'setWindowFlag', forbidden_flag_change)
+
+    win._apply_effective_mouse_through(True)
+    assert native_calls == [(43210, True)]
+    assert win.mouse_through is True
+
+    win._apply_effective_mouse_through(False)
+    assert native_calls == [(43210, True), (43210, False)]
+    assert win.mouse_through is False
+
+    # 同值短路：状态未变时不得再碰原生样式
+    win._apply_effective_mouse_through(False)
+    assert native_calls == [(43210, True), (43210, False)]
+

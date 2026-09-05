@@ -3517,6 +3517,7 @@ class PetWindow(QWidget):
         super().focusOutEvent(event)
 
     def hideEvent(self, event) -> None:  # noqa: N802
+        logging.info("[VIS] hideEvent spontaneous=%s anim=%s", event.spontaneous(), getattr(self, 'anim', '?'))  # 频闪排查观测
         if self._interaction_state == "SLINGSHOT_AIMING":
             self._cancel_slingshot_to_anchor()
         # 生命周期兜底：平台原生 hide（不经自定义 hide()/_pause_activity）同样
@@ -4070,6 +4071,12 @@ class PetWindow(QWidget):
         if effective == self.mouse_through:
             return
         self.mouse_through = effective
+        if os.name == 'nt':
+            # 原生切 WS_EX_TRANSPARENT（等价 Qt 的 WindowTransparentForInput 但
+            # 不销毁重建原生窗口，杜绝频闪）；若日后窗口被其它路径重建丢了样式，
+            # 逐像素控制器 10Hz 轮询会按 self.mouse_through 收敛（platform_win）。
+            _set_windows_click_through(int(self.winId()), effective)
+            return
         was_visible = self.isVisible()  # setWindowFlag 重建原生窗口会先隐藏，
         self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, effective)
         if was_visible:
