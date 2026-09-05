@@ -2978,7 +2978,7 @@ class ModernSettingsDialog(QDialog):
         behavior_layout.addWidget(SettingsCard([
             SettingRow(
                 "dialogue_template_actions", "弹窗文案模板（JSON）",
-                "一键导出当前全部弹窗内容模板；粘贴导出的 JSON 可一次覆盖所有「自定义台词」。事件留空时自动沿用原有模式文案；模板占位符会自动读取上游事件字段。",
+                "一键复制当前全部弹窗内容模板到剪贴板；把复制的 JSON 粘贴回「导入模板」可一次覆盖所有「自定义台词」，也可以直接发给 AI 依角色卡改写。事件留空时自动沿用原有模式文案；模板占位符会自动读取上游事件字段。",
                 self.dialogue_template_actions,
                 stacked=True,
             ),
@@ -3427,7 +3427,7 @@ class ModernSettingsDialog(QDialog):
         )
         self.dialogue_template_import_edit.setMinimumHeight(92)
         self.dialogue_template_import_edit.setMaximumHeight(180)
-        self.dialogue_template_export_btn = QPushButton("一键导出模板", self)
+        self.dialogue_template_export_btn = QPushButton("一键复制模板", self)
         self.dialogue_template_export_btn.setObjectName("dialogueTemplateExportButton")
         self.dialogue_template_export_btn.clicked.connect(self._export_dialogue_template)
         self.dialogue_template_import_btn = QPushButton("导入模板", self)
@@ -4047,27 +4047,20 @@ class ModernSettingsDialog(QDialog):
         })
 
     def _export_dialogue_template(self) -> None:
-        """Export the complete current template without changing configuration."""
-        path, _ = QFileDialog.getSaveFileName(self, "导出角色台词模板", "persona-phrases-custom.json", "JSON 文件 (*.json)")
-        if not path:
-            return
-        try:
-            Path(path).write_text(json.dumps(self._current_dialogue_template(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        except (OSError, ValueError, TypeError) as exc:
-            QMessageBox.warning(self, "导出失败", f"模板未能写入：{exc}")
-            return
-        QMessageBox.information(self, "导出成功", "角色台词模板已导出。")
-
-    def _copy_dialogue_template(self) -> None:
+        """Export the complete current template to the clipboard (no file dialog)."""
         try:
             clipboard = QApplication.clipboard()
             if clipboard is None:
                 raise RuntimeError("系统剪贴板不可用")
             clipboard.setText(json.dumps(self._current_dialogue_template(), ensure_ascii=False, indent=2) + "\n")
         except Exception as exc:
-            QMessageBox.warning(self, "复制失败", f"无法写入系统剪贴板：{exc}")
+            QMessageBox.warning(self, "导出失败", f"无法写入系统剪贴板：{exc}")
             return
-        QMessageBox.information(self, "复制成功", "模板已复制。")
+        QMessageBox.information(
+            self, "导出成功",
+            "模板已复制到剪贴板：可直接粘贴给 AI 依角色卡改写，"
+            "或粘贴回「导入模板」输入框一键导回。",
+        )
 
     def _update_click_sound_controls(self, enabled: bool) -> None:
         for row_key in ("click_sound_pack", "click_sound_volume", "click_sound_preview"):
