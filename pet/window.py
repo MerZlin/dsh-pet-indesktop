@@ -1134,6 +1134,7 @@ class PetWindow(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """窗口显示时校正层级（延迟执行，避免被 Qt 窗口重建覆盖）。"""
         super().showEvent(event)
+        logging.info("[VIS] 桌宠显示 anim=%s", getattr(self, 'anim', '?'))  # 频闪排查观测
         # 原生窗口此刻已就绪：接线 DPR 变化信号（跨屏/显示缩放 → 强制重建）。
         # 幂等；QWindow 被重建后再次 show 会重挂到新 handle。
         self._arm_dpr_change_watch()
@@ -1161,6 +1162,7 @@ class PetWindow(QWidget):
         if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
             self._cancel_slingshot_to_anchor()
         self._ensure_dock_icon_on_hide()
+        logging.info("[VIS] 桌宠隐藏 notify=%s anim=%s", notify, getattr(self, 'anim', '?'))  # 频闪排查观测
         self._hidden_paused = True
         self._pause_activity()
         super().hide()
