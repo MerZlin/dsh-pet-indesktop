@@ -21,6 +21,7 @@ from .shared import (
     add_agent_link_menu,
     add_autostart,
     add_balance,
+    add_clear_spawned_pets,
     add_deepseek_web,
     add_drag_physics,
     add_harness,
@@ -46,7 +47,8 @@ ACTION_LABELS = {
     "animations_hub": "播放动画", "character": "切换角色", "playback_speed": "播放速率",
     "size": "大小", "drag_physics": "拖动物理", "no_move": "不移动",
     "mouse_through": "鼠标穿透", "on_top": "窗口置顶", "autostart": "开机自启",
-    "return_corner": "回到右下角", "hide_pet": "隐藏桌宠", "spawn_pet": "生小肥鱼",
+    "return_corner": "回到右下角", "hide_pet": "隐藏桌宠",
+    "spawn_pet": "生小肥鱼", "clear_spawned_pets": "清除子肥鱼",
     "quick_launch": "快捷启动", "balance": "DeepSeek 余额",
     "harness": "启动 DeepSeek Harness", "deepseek_web": "打开网页版 DeepSeek",
     "check_update": "检查更新", "github_project": "GitHub 项目页",
@@ -66,7 +68,8 @@ ACTION_ICONS = {
     "animations_hub": "play", "character": "character", "playback_speed": "speed",
     "size": "size", "drag_physics": "physics", "no_move": "pause",
     "mouse_through": "interaction", "on_top": "pin", "autostart": "autostart",
-    "return_corner": "corner", "hide_pet": "hide", "spawn_pet": "spawn",
+    "return_corner": "corner", "hide_pet": "hide",
+    "spawn_pet": "spawn", "clear_spawned_pets": "clear",
     "quick_launch": "application", "balance": "balance", "harness": "harness",
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
@@ -80,7 +83,7 @@ CUSTOM_ICON_CHOICES = (
     ("角色", "character"), ("速度", "speed"), ("尺寸", "size"),
     ("桌宠", "pet"), ("交互", "interaction"), ("置顶", "pin"),
     ("隐藏", "hide"), ("应用", "application"), ("余额", "balance"),
-    ("网页", "web"), ("下载", "download"), ("更新", "update"),
+    ("清除", "clear"), ("网页", "web"), ("下载", "download"), ("更新", "update"),
     ("自动化", "automation"), ("设置", "settings"), ("待办", "todo"),
 )
 
@@ -167,6 +170,10 @@ class MenuActionRegistry:
             "return_corner": MenuActionSpec(add_return_corner),
             "hide_pet": MenuActionSpec(add_hide_pet),
             "spawn_pet": MenuActionSpec(add_spawn_pet, _callback_available("on_spawn_pet")),
+            "clear_spawned_pets": MenuActionSpec(
+                add_clear_spawned_pets,
+                _callback_available("on_clear_spawned_pets"),
+            ),
             "quick_launch": MenuActionSpec(
                 lambda menu, pet: add_quick_launch_menu(menu, pet.cfg),
                 enabled=lambda pet: bool(configured_quick_apps(pet.cfg)),

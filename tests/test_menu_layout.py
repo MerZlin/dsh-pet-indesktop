@@ -310,6 +310,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "return_corner",
         "hide_pet",
         "spawn_pet",
+        "clear_spawned_pets",
         "quick_launch",
         "balance",
         "harness",
@@ -490,6 +491,7 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         "回到右下角",
         "隐藏桌宠",
         "生小肥鱼",
+        "清除子肥鱼",
     ]
     tools = next(action.menu() for action in menu.actions() if action.text() == "工具与帮助")
     expected_tools = [

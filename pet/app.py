@@ -713,6 +713,7 @@ class PetApp:
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self.open_modern_settings
         win.on_spawn_pet = self.spawn_pet
+        win.on_clear_spawned_pets = self.clear_spawned_pets
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_open_todo_panel = self.open_todo_panel
         win.on_hidden = self._notify_pet_hidden
@@ -879,6 +880,28 @@ class PetApp:
             self._spawned_pet_count = max(0, self._spawned_pet_count - 1)
             logging.exception('生小肥鱼失败')
             _show_startup_error('生小肥鱼失败', str(exc))
+
+    def clear_spawned_pets(self) -> None:
+        """右键菜单快捷入口：确认后关闭所有小肥鱼并删除 slot 数据。"""
+        from .child_pet_cleanup import clear_spawned_pets as cleanup_slots
+
+        parent = self.win if self.win is not None and hasattr(self.win, "winId") else None
+        answer = QMessageBox.question(
+            parent,
+            "清除子肥鱼",
+            "将关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。\n\n此操作不可撤销，确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        result = cleanup_slots(self.config.dir)
+        QMessageBox.information(
+            parent,
+            "清除子肥鱼",
+            f"已关闭 {len(result['killed_pids'])} 个小肥鱼进程，"
+            f"并清除 {len(result['deleted'])} 个 slot 数据项。",
+        )
 
     def _defer_while_popup_active(self, key: str, callback) -> bool:
         """Avoid constructing a heavy dialog inside QMenu.exec()."""

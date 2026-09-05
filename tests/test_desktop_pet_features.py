@@ -633,10 +633,15 @@ def test_modern_pet_context_menu_has_spawn_action_with_avatar_icon(monkeypatch):
 
         def __init__(self):
             self.spawn_count = 0
+            self.clear_count = 0
             self.on_spawn_pet = self.spawn
+            self.on_clear_spawned_pets = self.clear_fish
 
         def spawn(self):
             self.spawn_count += 1
+
+        def clear_fish(self):
+            self.clear_count += 1
 
         def icon_pixmap(self, size=64):
             from PySide6.QtGui import QPixmap
@@ -662,6 +667,10 @@ def test_modern_pet_context_menu_has_spawn_action_with_avatar_icon(monkeypatch):
     assert not spawn_action.icon().isNull()
     spawn_action.trigger()
     assert pet.spawn_count == 1
+    clear_action = next(action for action in controls.actions() if action.text() == "清除子肥鱼")
+    assert not clear_action.icon().isNull()
+    clear_action.trigger()
+    assert pet.clear_count == 1
     menu.close()
     app.processEvents()
 

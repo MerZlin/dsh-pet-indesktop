@@ -26,7 +26,8 @@
         {"type": "action", "id": "autostart", "visible": true},
         {"type": "action", "id": "return_corner", "visible": true},
         {"type": "action", "id": "hide_pet", "visible": true},
-        {"type": "action", "id": "spawn_pet", "visible": true}
+        {"type": "action", "id": "spawn_pet", "visible": true},
+        {"type": "action", "id": "clear_spawned_pets", "visible": true}
       ]
     },
     {"type": "action", "id": "quick_launch", "visible": true, "section": "pet"},
