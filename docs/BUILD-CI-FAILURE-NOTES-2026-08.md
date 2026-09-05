@@ -192,7 +192,9 @@ git push origin v4.0.5
 ## 六、发布前检查清单
 
 - [ ] 构建前设置 `PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`
-- [ ] 本地全量测试通过（offscreen）
+- [ ] 本地先运行非压力主套件：`QT_QPA_PLATFORM=offscreen python -m pytest -q -k "not cross_process_concurrent_publish_read_stress"`
+- [ ] 非压力主套件完整结束且无 native abort 后，再单独运行
+      `tests/test_decode_broker_shm.py::test_cross_process_concurrent_publish_read_stress`
 - [ ] 确认 `tests/conftest.py` 的全局 QMessageBox mock 存在；新增弹窗相关测试注意自行 monkeypatch 覆盖
 - [ ] 平台条件导入属性用 `raising=False` 补挂
 - [ ] 无全局 `os.name` / `sys.platform` 污染

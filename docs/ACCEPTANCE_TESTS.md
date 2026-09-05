@@ -41,9 +41,23 @@ $env:QT_QPA_PLATFORM = "offscreen"
 python -m pytest -q tests/test_agent_link.py tests/test_dsh_state.py
 ```
 
-上述命令不引用不存在的测试路径，也不以空测试文件让命令返回成功。完整回归仍使用仓库默认收集配置：
+## Qt 生命周期与最终全量验收
+
+Windows/offscreen 的最终验证必须分两步执行，避免高并发跨进程压力测试掩盖普通
+Qt 生命周期问题：
 
 ```powershell
 $env:QT_QPA_PLATFORM = "offscreen"
-python -m pytest -q
+python -m pytest -q -k "not cross_process_concurrent_publish_read_stress"
+python -m pytest -q tests/test_decode_broker_shm.py::test_cross_process_concurrent_publish_read_stress
 ```
+
+第一步应先完整结束且无 native abort；第二步只能在第一步通过后运行。本轮实测结果：
+
+- 主套件：`1421 passed, 7 skipped, 1 deselected`；
+- 跨进程压力测试：`1 passed`。
+
+生命周期重点覆盖 `PetWindow.closeEvent()` 的幂等关闭、外置
+`PetSpeechBubble` 的 owner 清理、右键菜单执行 seam、AgentLink/WebM/session
+后台资源 teardown。详细说明见
+[`QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md`](QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md).

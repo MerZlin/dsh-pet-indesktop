@@ -765,22 +765,26 @@ class TestCooldownUnits:
         app = QApplication.instance() or QApplication([])
         cfg = Config(base=tmp_path)
         dlg = ModernSettingsDialog(cfg)
-        if not hasattr(dlg, "pro_cooldown_unit"):
-            import pytest
-            pytest.skip("非 Windows 无主动识屏设置组")
+        try:
+            if not hasattr(dlg, "pro_cooldown_unit"):
+                import pytest
+                pytest.skip("非 Windows 无主动识屏设置组")
 
-        # 切到秒，设 45 秒
-        dlg.pro_cooldown_unit.setCurrentIndex(1)
-        dlg.pro_cooldown_spin.setValue(45)
-        assert abs(dlg._pro_cooldown_minutes() - 0.75) < 1e-9
+            # 切到秒，设 45 秒
+            dlg.pro_cooldown_unit.setCurrentIndex(1)
+            dlg.pro_cooldown_spin.setValue(45)
+            assert abs(dlg._pro_cooldown_minutes() - 0.75) < 1e-9
 
-        # 切回分钟应自动换算显示
-        dlg.pro_cooldown_unit.setCurrentIndex(0)
-        assert abs(dlg.pro_cooldown_spin.value() - 0.75) < 1e-9
+            # 切回分钟应自动换算显示
+            dlg.pro_cooldown_unit.setCurrentIndex(0)
+            assert abs(dlg.pro_cooldown_spin.value() - 0.75) < 1e-9
 
-        # 保存后配置为分钟值
-        dlg._save()
-        assert abs(cfg.data["proactive_screen"]["cooldown_minutes"] - 0.75) < 1e-9
+            # 保存后配置为分钟值
+            dlg._save()
+            assert abs(cfg.data["proactive_screen"]["cooldown_minutes"] - 0.75) < 1e-9
+        finally:
+            dlg.close()
+            dlg.deleteLater()
 
 
 class TestMultiInstanceGlobalState:
@@ -824,25 +828,33 @@ class TestModernSettingsProactivePage:
 
         cfg = Config(base=tmp_path)
         dlg = ModernSettingsDialog(cfg, include_ai=True)
-        assert hasattr(dlg, "pro_enabled_check"), "主动识屏控件未构建"
+        dlg2 = None
+        try:
+            assert hasattr(dlg, "pro_enabled_check"), "主动识屏控件未构建"
 
-        # 设置一组值并保存
-        dlg.pro_enabled_check.setChecked(True)
-        dlg.pro_whitelist_edit.setPlainText("code.exe\ntitle:*会议*")
-        dlg.pro_cap_spin.setValue(42)
-        dlg._save()
+            # 设置一组值并保存
+            dlg.pro_enabled_check.setChecked(True)
+            dlg.pro_whitelist_edit.setPlainText("code.exe\ntitle:*会议*")
+            dlg.pro_cap_spin.setValue(42)
+            dlg._save()
 
-        pro = cfg.data["proactive_screen"]
-        assert pro["enabled"] is True
-        assert pro["whitelist"] == ["code.exe", "title:*会议*"]
-        assert pro["daily_cap"] == 42
-        # 未暴露字段保留
-        assert "change_threshold" in pro
+            pro = cfg.data["proactive_screen"]
+            assert pro["enabled"] is True
+            assert pro["whitelist"] == ["code.exe", "title:*会议*"]
+            assert pro["daily_cap"] == 42
+            # 未暴露字段保留
+            assert "change_threshold" in pro
 
-        # 再开一次：读回的值应与保存一致
-        dlg2 = ModernSettingsDialog(cfg, include_ai=True)
-        assert dlg2.pro_enabled_check.isChecked() is True
-        assert dlg2.pro_cap_spin.value() == 42
+            # 再开一次：读回的值应与保存一致
+            dlg2 = ModernSettingsDialog(cfg, include_ai=True)
+            assert dlg2.pro_enabled_check.isChecked() is True
+            assert dlg2.pro_cap_spin.value() == 42
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+            if dlg2 is not None:
+                dlg2.close()
+                dlg2.deleteLater()
 
 
 # ============================================================================
@@ -1906,12 +1918,16 @@ class TestCustomAgentMenu:
             for label in ("DeepSeek Harness (DSH)", "Claude Code", "Cursor", "OpenCode"):
                 assert label in texts
             assert "Gemini CLI" in texts
+            # Agent 联动子菜单不再带「台词风格」入口，仅保留联动相关设置
+            assert "台词风格" not in texts
+            assert "循环检测" in texts
 
             gemini_act = next(a for a in sub.actions() if a.text() == "Gemini CLI")
             gemini_act.setChecked(True)
             assert toggles == [("gemini", True)]
         finally:
-            menu.deleteLater()
+            import shiboken6
+            shiboken6.delete(menu)
 
 
 # ============================================================================

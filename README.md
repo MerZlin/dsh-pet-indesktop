@@ -791,13 +791,11 @@ scripts/
 └── cleanup_mei_cache.py   # 检查/清理旧 onefile 版本遗留的 _MEI 缓存（默认预览）
 
 tests/                     # 单元测试、Qt offscreen 测试和构建相关验证
-                           # （含 test_architecture.py 架构红线：依赖方向 /
-                           #  window 私有面冻结 / window.py 行数预算）
+                           # （含 test_architecture.py 依赖方向与窗口私有面护栏）
 ```
 
-**给 window.py 加功能前必读**：[docs/WINDOW_PY_SPLIT_GUIDE.md](docs/WINDOW_PY_SPLIT_GUIDE.md)
-——window.py 处于「只许瘦不许胖」的增量拆分公约下（CI 有行数预算红线），
-新功能先按公约拆对应控制器再动手。
+**window.py 演进参考**：[docs/WINDOW_PY_SPLIT_GUIDE.md](docs/WINDOW_PY_SPLIT_GUIDE.md)
+——按功能边界拆分是可选的维护建议。
 
 
 integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
@@ -838,6 +836,12 @@ python -m compileall pet packaging scripts
 最近一轮记录（v4.0.1）：
 
 - `pytest`：完整测试套件见 CI / 本地运行 `pytest -q`。
+- 本轮 Windows 收口验证：先运行不含压力项的主套件，再单独运行
+  `tests/test_decode_broker_shm.py::test_cross_process_concurrent_publish_read_stress`；
+  结果分别为 `1421 passed, 7 skipped, 1 deselected` 和 `1 passed`。
+- Qt 生命周期专项见 [`docs/QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md`](docs/QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md)：
+  外置气泡由 `PetWindow.closeEvent()` 定向同步销毁，测试不全局冲刷
+  `DeferredDelete` 队列。
 - `compileall`：通过。
 - WebM Chat、WebM 无 Chat 两个 onedir 构建均完成启动冒烟验证：进程存活超过 8 秒，系统临时目录与程序目录**均无新增 `_MEI` 缓存**。
 

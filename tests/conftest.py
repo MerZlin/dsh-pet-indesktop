@@ -66,7 +66,7 @@ def _close_session_writers():
 
 @pytest.fixture(autouse=True)
 def _close_qt_top_level_widgets():
-    """保留应用级 Qt 对象到其显式 owner 收口，避免跨用例重入 closeEvent。"""
+    """在测试后收口仍存活的应用级后台资源。"""
     yield
     try:
         from pet.agent_link import AgentLinkManager, BaseAgentMonitor
@@ -77,20 +77,6 @@ def _close_qt_top_level_widgets():
     try:
         from pet.library import MovieLibrary
         MovieLibrary._shutdown_live_for_tests()
-    except Exception:
-        pass
-    try:
-        from PySide6.QtWidgets import QApplication
-        from pet.window import PetWindow
-        app = QApplication.instance()
-        if app is not None:
-            for widget in tuple(app.topLevelWidgets()):
-                if not isinstance(widget, PetWindow):
-                    continue
-                try:
-                    widget.close()
-                except RuntimeError:
-                    pass
     except Exception:
         pass
 

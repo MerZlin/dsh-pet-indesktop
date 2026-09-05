@@ -619,6 +619,7 @@ class PetWindow(QWidget):
         self._lock_press_active = False   # 锁定位置下左键按住（不拖拽但仍是交互）
         self._click_hold = False          # 点击动画播放中持有让路闸门
         self._closing = False             # closeEvent 后丢弃迟到的动画事件
+        self._close_event_done = False     # closeEvent 幂等闸门
         self._slingshot_anchor_pos: QPoint | None = None
         self._slingshot_anchor_mouse: QPoint | None = None
         self._slingshot_mouse: QPoint | None = None
@@ -3591,6 +3592,10 @@ class PetWindow(QWidget):
         self._reset_press_hold_state()
         super().hideEvent(event)
 
+    def _exec_context_menu(self, menu: QMenu, position: QPoint) -> None:
+        """Execute a context menu through a patchable seam."""
+        menu.exec(position)
+
     def _show_context_menu(self, global_pos: QPoint) -> None:
         # 右键菜单弹出 = 用户交互：刷新闲置降帧的活跃锚点。
         # getattr 守卫：测试桩/最小替代对象可以不实现 mark_activity。
@@ -3648,7 +3653,11 @@ class PetWindow(QWidget):
         if callable(update_hold):
             update_hold()
         try:
-            menu.exec(transition_start)
+            executor = getattr(self, "_exec_context_menu", None)
+            if callable(executor):
+                executor(menu, transition_start)
+            else:
+                menu.exec(transition_start)
         finally:
             self._context_menu_open = False
             if callable(update_hold):
@@ -4719,7 +4728,39 @@ class PetWindow(QWidget):
                 logging.exception("\u684c\u5ba0\u4f4d\u7f6e\u76d1\u542c\u5668\u6267\u884c\u5931\u8d25")
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if getattr(self, '_close_event_done', False):
+            event.accept()
+            return
+        self._close_event_done = True
         self._closing = True  # 关闭后丢弃迟到的动画事件（生命周期守卫）
+        bubble = getattr(self, '_speech_bubble', None)
+        if bubble is not None:
+            # 气泡是独立 Tool 窗口，不能依赖 PetWindow 的 QObject 父链自动销毁。
+            # 先断开回调，避免 dismiss()/hideEvent 在关闭期间重新泵出提醒，
+            # 再停掉内部 timer、关闭窗口并交给 Qt 安全释放。
+            if isinstance(bubble, PetSpeechBubble):
+                try:
+                    bubble.clicked.disconnect(self._on_speech_bubble_clicked)
+                except (RuntimeError, TypeError, AttributeError):
+                    pass
+                try:
+                    bubble.hidden_signal.disconnect(self._on_speech_bubble_hidden)
+                except (RuntimeError, TypeError, AttributeError):
+                    pass
+            try:
+                dismiss = getattr(bubble, "dismiss", None)
+                if callable(dismiss):
+                    dismiss()
+                close = getattr(bubble, "close", None)
+                if callable(close):
+                    close()
+                if isinstance(bubble, PetSpeechBubble):
+                    # 独立 Tool 窗口在 GUI 线程同步销毁，避免全局 DeferredDelete
+                    # 队列在后续测试中触发旧 QObject。
+                    shiboken6.delete(bubble)
+            except (RuntimeError, TypeError, AttributeError):
+                pass
+            self._speech_bubble = None
         # 摘除 DPR 变化信号接线（与 showEvent 的 arm 对称）
         self._disarm_dpr_change_watch()
         # 停掉 Agent 监视器 worker 线程：worker 经引用链持有本窗口，
@@ -4739,7 +4780,6 @@ class PetWindow(QWidget):
         self._cancel_animation_gap()
         self._clear_drag_move()  # 生命周期兜底：停拖拽合帧 timer、丢 pending
         self._position_sync_pending = False  # 丢弃 moveEvent 同帧合并的在途去抖
-        self._speech_bubble.hide()
         # 关闭即销毁：暂停预热并对称释放交互让路闸门，避免库侧计数泄漏。
         lib = getattr(self, 'lib', None)
         if lib is not None and hasattr(lib, 'pause_warm'):

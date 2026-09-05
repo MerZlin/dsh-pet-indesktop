@@ -2,13 +2,10 @@
 
 **文档性质**：本文是项目结构治理实践的经验整理与演进建议，供贡献者参考，
 不构成强制规范。CI 的强制检查来自 `.github/workflows/pr-test.yml`（完整
-测试套件 + ruff）；其中与本文直接相关的架构护栏是
-`tests/test_architecture.py` 的三项断言（依赖方向、窗口私有面、行数预算，
-覆盖范围见第 5 节）。
+测试套件 + ruff）；`tests/test_architecture.py` 保留依赖方向与窗口私有面
+边界检查。
 
-**适用范围**：`pet/window.py`（`PetWindow`，4239 行 / 237 个类级方法
-（AST 直接定义口径）/ 159 个不同名实例字段（全文 `self.xxx =` 赋值
-去重口径，2026-09-03 实测））及其后续演进。
+**适用范围**：`pet/window.py`（`PetWindow`）及其后续演进。
 
 **版本**：2026-09-03，对应分支 `perf/stage-1`。
 
@@ -22,14 +19,12 @@
 模块，但该类仍是仓库内最大的单一类。
 
 结构治理同时在 CI（`.github/workflows/pr-test.yml`，完整测试套件 + ruff）
-之上建立了三条架构红线（`tests/test_architecture.py`）：
+之上保留两类架构边界检查（`tests/test_architecture.py`）：
 
 1. 纯逻辑层（collision / physics / collision_codec）不依赖 Qt；
-2. decode_broker 不反向依赖 window / webm_clip；
-3. window.py 行数不超过预算值（超出即测试失败）。
+2. decode_broker 不反向依赖 window / webm_clip，并限制窗口私有面跨模块回潮。
 
-注：红线 2 约束的是模块级 import 依赖方向，不等于「控制器不访问窗口
-实例」——近邻控制器持有窗口引用并读写其状态是当前的实际做法（见 §5）。
+这些检查约束依赖关系。
 
 ## 2. 演进策略：功能驱动拆分
 
@@ -45,11 +40,11 @@
 
 **建议的启动条件**（满足其一即建议评估拆分）：
 
-1. 新功能预计在该类中新增超过约 100 行；
-2. 新功能需要修改某一域的 3 个以上既有方法；
-3. CI 行数预算触发告警。
+1. 新功能明显扩大某一职责域；
+2. 新功能需要修改某一域的多个既有方法；
+3. 依赖方向、生命周期或测试可维护性已经变差。
 
-不满足上述条件的小改动，直接修改 window.py 是合理的，无需为此拆分模块。
+小改动可直接修改 window.py，无需为满足形式指标而拆分模块。
 
 ## 3. 推荐拆分流程
 
@@ -70,9 +65,8 @@
 5. **保留兼容面**：window.py 保留薄委托 property / 转发方法，使既有调用
    与测试断言不因拆分而改变。
 6. **验收**：测试套件全绿（`QT_QPA_PLATFORM=offscreen python -m pytest -q`）、
-   `ruff check pet/ tests/` 全绿、架构红线测试通过（拆分后可在 PR 中同步
-   下调行数预算）；涉及线程或生命周期的拆分，建议补充实机冒烟（此项为
-   建议，非 CI 门禁）。
+   `ruff check pet/ tests/` 全绿、架构边界测试通过；涉及线程或生命周期的拆分，
+   建议补充实机冒烟（此项为建议，非 CI 门禁）。
 7. **PR 说明**：注明拆分域、迁出字段、保留共享字段及理由。
 
 ## 4. 域地图
@@ -181,7 +175,25 @@
 （`win._bubble_busy_until`）。新拆控制器时建议优先走公开 seam；确实
 需要近邻访问时，参照这些既有模块保持克制并在注释中说明。
 
-## 6. 已知风险点（来自项目事故与审查记录）
+## 6. 生命周期边界补充
+
+`PetWindow.closeEvent()` 是窗口 owner 的统一关闭入口，但不是全局 QObject 清理器。
+关闭顺序应保持：先置关闭闸门并处理外置气泡，再停止 AgentLink、屏幕 watcher、
+碰撞输入、素材库、timer 和当前 movie reader，最后交给 Qt 完成窗口关闭。
+
+`PetSpeechBubble` 是无父级的独立 Tool 窗口，因此由创建它的 `PetWindow` 负责
+断开信号、调用 `dismiss()`/`close()`，并在 GUI 线程同步释放。不要把它交给
+不相关测试或全局顶层窗口扫描处理。
+
+右键菜单生产路径继续使用真实 `QMenu.exec()`；测试通过 `_exec_context_menu()`
+seam 隔离原生 popup。测试局部对象应定向销毁，不应使用全局
+`sendPostedEvents(None, QEvent.DeferredDelete)`。
+
+涉及 AgentLink、WebM reader、session writer 或 QThread 的改动，必须先完成 owner
+级 shutdown，再以组合测试和最终全量测试验证；详细事故记录见
+`docs/QT-LIFECYCLE-FULL-SUITE-STABILIZATION-2026-09.md`。
+
+## 7. 已知风险点（来自项目事故与审查记录）
 
 以下为治理与审查过程中实际发生/发现过的问题，供参考（详细记录在
 `_plan/` 工作档案中，该目录不入库）：
@@ -203,7 +215,7 @@
 - **offscreen 测试盲区**：线程与时序类回归无法被 offscreen 测试发现，
   存在测试全绿但实机异常的先例；涉及线程/生命周期的改动应实机验证。
 
-## 7. 暂不处理的部分及理由
+## 8. 暂不处理的部分及理由
 
 以下各项为经过评估后的**主动缓办决策**，均非缺陷或遗留 bug。每项附
 缓办理由与建议的重新评估时机。

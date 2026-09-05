@@ -800,7 +800,14 @@ class Config:
         providers = chat.get("providers") if isinstance(chat, dict) else None
         if not isinstance(providers, dict):
             return
-        from .chat.models import SecretStore  # 惰性导入，且只实例化一次
+        try:
+            from .chat.models import SecretStore  # 惰性导入，且只实例化一次
+        except ModuleNotFoundError as exc:
+            # 无聊天功能的独立打包会明确排除 pet.chat；配置仍可被
+            # 通用入口加载，因此不能让一次迁移检查阻止桌宠启动。
+            if exc.name == "pet.chat" or str(exc.name or "").startswith("pet.chat."):
+                return
+            raise
         store = SecretStore()
         for provider_id, provider in providers.items():
             if not isinstance(provider, dict):
