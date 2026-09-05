@@ -466,18 +466,26 @@ def test_spawn_seed_respects_inherit_size_switch(tmp_path, monkeypatch):
     master.set("scale", 1.0)
     master.set("spawn_inherit_size", True)
     master.set("spawn_scale", 0.5)
+    master.set("spawn_inherit_dynamic_island", True)
+    island = dict(master.get("dynamic_island"))
+    island["enabled"] = True
+    master.set("dynamic_island", island)
     master.save()
     monkeypatch.setenv("DSH_PET_SPAWN_FRESH", "1")
     slot_inherit = Config(base=tmp_path, instance_id="slot-1")
     assert slot_inherit.get("scale") == 1.0
+    assert slot_inherit.get("dynamic_island", {}).get("enabled") is True
 
-    # 关闭继承：主鱼仍是 1.0，但新鱼应使用 spawn_scale=0.5
+    # 关闭继承：主鱼仍是 1.0，但新鱼应使用 spawn_scale=0.5，且灵动岛不开启
     master.set("spawn_inherit_size", False)
+    master.set("spawn_inherit_dynamic_island", False)
     master.save()
     slot_custom = Config(base=tmp_path, instance_id="slot-2")
     assert slot_custom.get("scale") == 0.5
     assert slot_custom.get("spawn_inherit_size") is False
     assert slot_custom.get("spawn_scale") == 0.5
+    assert slot_custom.get("spawn_inherit_dynamic_island") is False
+    assert slot_custom.get("dynamic_island", {}).get("enabled") is False
 
 
 def test_corrupt_config_backup_unique_timestamp(tmp_path):

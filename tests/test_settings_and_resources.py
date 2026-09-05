@@ -61,6 +61,7 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
         assert dialog.agent_sound_volume_spin.value() == 65
         assert dialog.agent_sound_cooldown_spin.value() == 2.0
         assert dialog.spawn_inherit_size_check.isChecked() is True
+        assert dialog.spawn_inherit_dynamic_island_check.isChecked() is False
 
         # 2. 模拟用户修改各个设置项
         dialog.slingshot_check.setChecked(False)
@@ -69,6 +70,7 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
         dialog.click_sound_picker.set_pack({"kind": "builtin", "id": "duck", "path": ""})
         dialog.spawn_inherit_size_check.setChecked(False)
         dialog.spawn_scale_combo.setCurrentData(0.5)
+        dialog.spawn_inherit_dynamic_island_check.setChecked(True)
 
         dialog.agent_sound_check.setChecked(True)
         dialog.agent_sound_start_check.setChecked(True)
@@ -93,6 +95,7 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
     assert reloaded_cfg.get("click_sound_pack") == {"kind": "builtin", "id": "duck", "path": ""}
     assert reloaded_cfg.get("spawn_inherit_size") is False
     assert abs(reloaded_cfg.get("spawn_scale") - 0.5) < 1e-6
+    assert reloaded_cfg.get("spawn_inherit_dynamic_island") is True
 
     agent_cfg = reloaded_cfg.get("agent_link")
     assert agent_cfg["sound_enabled"] is True

@@ -530,6 +530,7 @@ class Config:
             "scale": catalog.DEFAULT_SCALE,
             "spawn_inherit_size": True,  # 生小肥鱼继承主肥鱼大小（False 用 spawn_scale）
             "spawn_scale": catalog.DEFAULT_SCALE,  # 关闭继承时生小肥鱼使用的尺寸
+            "spawn_inherit_dynamic_island": False,  # 生小肥鱼继承主肥鱼灵动岛（默认关=不开灵动岛）
             "on_top": True,
             "show_dock_icon": True,
             "no_move": False,
@@ -665,6 +666,15 @@ class Config:
                 seed["scale"] = float(seed.get("spawn_scale", catalog.DEFAULT_SCALE))
             except (TypeError, ValueError):
                 seed["scale"] = catalog.DEFAULT_SCALE
+        # 生小肥鱼灵动岛策略：默认不继承 → 小肥鱼不开启自己的灵动岛；
+        # 开启继承 → 保留主配置的 dynamic_island（含是否启用）。
+        inherit_island = _bool_or_default(seed.get("spawn_inherit_dynamic_island"), False)
+        seed["spawn_inherit_dynamic_island"] = inherit_island
+        island = seed.get("dynamic_island")
+        if isinstance(island, dict):
+            island["enabled"] = bool(inherit_island)
+        else:
+            seed["dynamic_island"] = {"enabled": bool(inherit_island)}
         chat = seed.get("chat")
         if isinstance(chat, dict):
             providers = chat.get("providers")
@@ -756,7 +766,7 @@ class Config:
                         merged_provider["vision_api_key"] = previous_provider["vision_api_key"]
         for key in (
             "rx", "ry", "screen_name", "facing", "scale", "on_top", "show_dock_icon", "no_move", "character",
-            "spawn_inherit_size", "spawn_scale",
+            "spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island",
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
@@ -893,6 +903,9 @@ class Config:
         )
         self.data["spawn_scale"] = _float_or_default(
             self.data.get("spawn_scale"), catalog.DEFAULT_SCALE, 0.1, 4.0
+        )
+        self.data["spawn_inherit_dynamic_island"] = _bool_or_default(
+            self.data.get("spawn_inherit_dynamic_island"), False
         )
         self.data["show_dock_icon"] = bool(self.data.get("show_dock_icon", True))
         self.data["self_talk_texts"] = _clean_self_talk_texts(self.data.get("self_talk_texts"))
@@ -1058,7 +1071,7 @@ class Config:
             "slingshot_enabled", "throw_strength", "agent_link",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
             "animation_prewarm_enabled",
-            "spawn_inherit_size", "spawn_scale",
+            "spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island",
             "todo_reminder_enabled", "todo_reminder_lead_minutes",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:

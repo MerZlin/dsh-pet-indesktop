@@ -2877,6 +2877,12 @@ class ModernSettingsDialog(QDialog):
             SettingRow("spawn_scale", "小肥鱼大小",
                        "关闭“继承大小”时，新生成小肥鱼使用的桌面尺寸。",
                        self.spawn_scale_combo, stacked=True),
+            SettingRow("spawn_inherit_dynamic_island", "生小肥鱼继承灵动岛",
+                       "默认关闭：新生成的小肥鱼不打开自己的灵动岛。开启后小肥鱼继承主肥鱼的灵动岛设置。",
+                       self.spawn_inherit_dynamic_island_check),
+            SettingRow("clear_spawned_pets", "一键清除子肥鱼",
+                       "关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。",
+                       self.clear_spawned_pets_btn),
         ], behavior_content))
         behavior_layout.addWidget(SettingsSection("多开碰撞", [
             SettingRow("collision_enabled", "碰撞开关", "多开桌宠之间发生碰撞物理互动。开启鼠标穿透的桌宠仍会参与碰撞，锁定位置的桌宠作为固定障碍。", self.collision_enabled_check),
@@ -3125,6 +3131,12 @@ class ModernSettingsDialog(QDialog):
         for scale in spawn_scales:
             self.spawn_scale_combo.addItem(f"{int(round(catalog.CANVAS_W * scale))} px", scale)
         self.spawn_scale_combo.setCurrentIndex(self.spawn_scale_combo.findData(current_spawn_scale))
+        self.spawn_inherit_dynamic_island_check = ToggleSwitch(self)
+        self.spawn_inherit_dynamic_island_check.setChecked(
+            bool(self.config.get("spawn_inherit_dynamic_island", False))
+        )
+        self.clear_spawned_pets_btn = QPushButton("一键清除…", self)
+        self.clear_spawned_pets_btn.clicked.connect(self._on_clear_spawned_pets)
 
         self.on_top_check = ToggleSwitch(self)
         self.on_top_check.setChecked(bool(self.config.get("on_top", True)))
@@ -3921,6 +3933,26 @@ class ModernSettingsDialog(QDialog):
             dependency="spawn_inherit_size",
         )
 
+    def _on_clear_spawned_pets(self) -> None:
+        """一键关闭并清除所有小肥鱼（slot-N）的配置/会话/待办数据。"""
+        answer = QMessageBox.question(
+            self,
+            "清除子肥鱼",
+            "将关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。\n\n此操作不可撤销，确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        from .child_pet_cleanup import clear_spawned_pets
+        result = clear_spawned_pets(self.config.dir)
+        QMessageBox.information(
+            self,
+            "清除子肥鱼",
+            f"已关闭 {len(result['killed_pids'])} 个小肥鱼进程，"
+            f"并清除 {len(result['deleted'])} 个 slot 数据项。",
+        )
+
     def _apply_agent_sound_enabled_now(self, checked: bool) -> None:
         """音效总开关即时生效，不等对话框关闭（合并写回，不动其他 agent_link 键）。"""
         agent_cfg = dict(self.config.get("agent_link", {}))
@@ -4067,7 +4099,7 @@ class ModernSettingsDialog(QDialog):
             ("显示", claim("scale", "pet_opacity")),
             ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "animation_prewarm", "no_move", "music_sing")),
             ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
-            ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale")),
+            ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island", "clear_spawned_pets")),
             ("多开碰撞", collision_primary),
             ("碰撞参数（高级）", collision_advanced, True),
         ])
@@ -4300,6 +4332,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("scale", float(self.scale_combo.currentData()))
         self.config.set("spawn_inherit_size", self.spawn_inherit_size_check.isChecked())
         self.config.set("spawn_scale", float(self.spawn_scale_combo.currentData()))
+        self.config.set("spawn_inherit_dynamic_island", self.spawn_inherit_dynamic_island_check.isChecked())
         self.config.set("on_top", self.on_top_check.isChecked())
         if self.dock_icon_check is not None:
             self.config.set("show_dock_icon", self.dock_icon_check.isChecked())
