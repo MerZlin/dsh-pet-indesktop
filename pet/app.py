@@ -378,9 +378,22 @@ class PetInstance:
         """
         if lib is None:
             lib = self._create_library(character_id)
-        win = PetWindow(lib, self.config, collision_session=self.collision_ipc,
-                        broker_facade=self.broker_facade,
-                        single_process_spawn=self.shell._single_process_spawn)
+        # 批5.2a：flag 开时各窗引用同一份进程级共享子系统（agent_link /
+        # proactive），flag 关时传 None → PetWindow 各自创建（现状逐位一致）。
+        shared = getattr(self.shell, "_shared", None)
+        # 批5.2a §③.5：窗自身构造期日志（恢复位置/runtime 标记等）加 [slot-N] 前缀
+        #（P2-2 残余尽力而为——运行时动画/物理等 GUI 线程日志不动 window.py，预算仅 4360）。
+        _prev_slot = getattr(_pet_log_slot, "slot", None)
+        if shared is not None and self.slot_id is not None:
+            _pet_log_slot.slot = f"slot-{self.slot_id}"
+        try:
+            win = PetWindow(lib, self.config, collision_session=self.collision_ipc,
+                            broker_facade=self.broker_facade,
+                            single_process_spawn=self.shell._single_process_spawn,
+                            agent_link_manager=shared.agent_link if shared else None,
+                            proactive_watcher=shared.proactive if shared else None)
+        finally:
+            _pet_log_slot.slot = _prev_slot
         # P1-2：窗级 runtime 标记版本化 / 日志前缀读进程级 flag 快照（不读每窗 config）。
         # N-1：快照经构造参数在 _restore_position 之前生效（窗构造期就会写标记）。
         self._wire_window(win)
@@ -402,11 +415,16 @@ class PetInstance:
         self.win = win
         if build_tray:
             self.shell.tray = tray
+        # 批5.2a（复审 P1-1）：接入共享联动链必须在 self.win = win 之后——
+        # 扇出按 instances[].win 动态遍历，早了会让新窗永远拿不到 provider。
+        if shared is not None:
+            self.shell._wire_shared_subsystems()
 
         if old_win is not None:
             old_win.hide(notify=False)
             QTimer.singleShot(0, old_win.deleteLater)
             # 仅主窗（build_tray=True）换托盘；非主窗绝不 hide/deleteLater 共享托盘。
+
             if build_tray and old_tray is not None:
                 old_tray.hide()
                 QTimer.singleShot(0, old_tray.deleteLater)
@@ -740,14 +758,22 @@ class PetInstance:
             self.win.show_bubble("检测到开机自启已被系统或安全软件关闭，可在设置中重新启用。", duration_ms=7000)
 
     def _notify_pet_hidden(self) -> None:
-        """用户主动隐藏桌宠后弹托盘提示，指明恢复入口。"""
+        """用户主动隐藏桌宠后弹托盘提示，指明恢复入口。
+
+        批5.2a：灵动岛按聚合可见态同步；非主窗（多窗）的提示文案指向
+        托盘菜单里的「显示 / 隐藏 [slot-N]」（P2-5 消除误导）。
+        """
         if getattr(self.shell, "island", None) is not None:
-            self.shell.island.set_pet_visible(False)
+            self.shell.island.set_pet_visible(self.shell._aggregate_pet_visible())
         if self.shell.tray is None:
             return
+        if self.shell._single_process_spawn and self is not self.shell.instance:
+            message = "点击托盘菜单中该窗口的「显示 / 隐藏」即可恢复。"
+        else:
+            message = "点击托盘图标或 Dock 图标即可恢复。"
         self.shell.tray.showMessage(
             "桌宠已隐藏",
-            "点击托盘图标或 Dock 图标即可恢复。",
+            message,
             QSystemTrayIcon.MessageIcon.Information,
             4000,
         )
@@ -796,6 +822,11 @@ class AppShell:
         # config-slot-N.json 里该键不再有任何作用，运行期手改 config.json
         # 翻 flag 也因此失效（需重启）。
         self._single_process_spawn = bool(config.get('experimental_single_process_spawn', False))
+        # 批5.2a §③.1/.2：flag 开时进程级共享子系统（agent_link / proactive /
+        # 全屏 watcher），各窗经 PetWindow 构造参数引用同一份，崩溃/换角色不重建；
+        # flag 关时保持 None = 每窗各自创建（现状逐位一致）。
+        #（位置在 _instances 就绪之后，共享 manager 构造期即遍历窗集合）。
+        self._shared = None
         # 批5.2 P1-1：碰撞会话/broker 移回各 PetInstance 自持（不再由 AppShell 持有）；
         # 每窗一个，经 collision_ipc._local_election_names 同进程收敛。
         # 每窗容器：批5.1 单进程单窗仅一个；批5.2 spike 扩成多窗集合
@@ -806,6 +837,10 @@ class AppShell:
             slot_id=slot_id, spawn_offset=spawn_offset,
         )
         self._instances.append(self.instance)
+        if self._single_process_spawn:
+            from .multi_window_shared import SharedSubsystems
+
+            self._shared = SharedSubsystems(self)
 
     @property
     def enable_chat(self) -> bool:
@@ -840,6 +875,10 @@ class AppShell:
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
         self.instance._create_ui(character_id)
+        # 批5.2a：进程级共享全屏 watcher 在主窗就绪后启动（自省任一窗是否需要，
+        # 无需窗——环则空转）；flag 关时 _shared 为 None，no-op。
+        if self._shared is not None:
+            self._shared.start()
         self._install_macos_dock_menu()
         self._sync_dynamic_island()
         self.instance._apply_spawn_offset()
@@ -910,6 +949,63 @@ class AppShell:
                 logging.warning("退出时会话写盘 worker 未干净关闭")
         except Exception:
             logging.exception("退出时关闭会话写盘 worker 失败")
+        # 批5.2a：进程级共享子系统收口（agent_link / proactive / 全屏 watcher）。
+        # 单窗关闭（退出这只）不触发——只有「全部退出」才停共享子系统。
+        if self._shared is not None:
+            try:
+                self._shared.stop_all()
+            except Exception:
+                logging.exception("退出时关闭共享子系统失败")
+
+    def _on_shared_fullscreen(self, hit: bool) -> None:
+        """批5.2a：共享全屏 watcher 广播 → 扇出到各窗的 _on_fullscreen_changed。
+
+        逐窗动态遍历（读 _instances 而非绑定某窗），任一窗退出/重建后自动忽略它。
+        经窗的公开信号全屏状态回传（避开 window 私有面冻结，见 test_architecture 红线2）。
+        """
+        if getattr(self, "_shared", None) is None:
+            return
+        for inst in self._instances:
+            win = inst.win
+            if win is None or not shiboken6.isValid(win):
+                continue
+            # 复审 P1-2：全屏广播按每窗配置过滤——关掉「全屏自动隐藏」的窗
+            # 不得被无关广播隐藏/恢复（光标路径的每窗 gate 在窗内已有，
+            # window._on_cursor_visibility_changed 首行自过滤，无需重复）。
+            if not getattr(win, "auto_hide_fullscreen", False):
+                continue
+            try:
+                win.fullscreen_changed.emit(hit)
+            except (AttributeError, RuntimeError):
+                logging.exception("扇出全屏状态到窗口失败")
+
+    def _on_shared_cursor(self, visibility: str) -> None:
+        """批5.2a：共享光标可见性广播 → 扇出到各窗的 _on_cursor_visibility_changed。"""
+        if getattr(self, "_shared", None) is None:
+            return
+        for inst in self._instances:
+            win = inst.win
+            if win is None or not shiboken6.isValid(win):
+                continue
+            try:
+                win.cursor_visibility_changed.emit(visibility)
+            except (AttributeError, RuntimeError):
+                logging.exception("扇出光标状态到窗口失败")
+
+    def _wire_shared_subsystems(self) -> None:
+        """批5.2a：把新窗接入进程级共享子系统（agent_link 联动动作链分发）。
+
+        共享 manager 在 AppShell.__init__ 已创建（此刻尚无窗，set_link_next_provider
+        落入空集），新窗出现后经 proxy 重新分发；proactive 经构造参数引用同一份；
+        全屏 watcher 经 _on_shared_fullscreen/_on_shared_cursor 动态遍历，无需单独连。
+        """
+        shared = self._shared
+        if shared is None:
+            return
+        try:
+            shared.proxy.set_link_next_provider(shared.agent_link._next_busy_anim)
+        except (AttributeError, RuntimeError):
+            logging.exception("把窗口接入共享 Agent 联动链失败")
 
     def _sync_dynamic_island(self) -> None:
         """按配置创建/隐藏灵动岛；桌宠隐藏后灵动岛仍可常驻。"""
@@ -925,26 +1021,32 @@ class AppShell:
             self.island = DynamicIsland(self.config)
             self.island.clicked.connect(self._toggle_pet_from_island)
         self.island.refresh_from_config()
-        pet_visible = True
-        win = self.instance.win
-        if win is not None:
-            is_visible = getattr(win, "isVisible", None)
-            pet_visible = bool(is_visible()) if callable(is_visible) else True
-        self.island.set_pet_visible(pet_visible)
+        # 批5.2a：灵动岛按**聚合**可见态同步（任一窗可见 = 可见），替代只看主窗。
+        self.island.set_pet_visible(self._aggregate_pet_visible())
         self.island.show()
 
+    def _aggregate_pet_visible(self) -> bool:
+        """是否有任一窗可见（聚合可见态——灵动岛按它同步 set_pet_visible）。"""
+        return any(
+            inst.win is not None and getattr(inst.win, "isVisible", lambda: True)()
+            for inst in self._instances
+        )
+
     def _toggle_pet_from_island(self) -> None:
-        if self.instance is None:  # N-7：末窗退出后 quit 前的防御性守卫
+        # 批5.2a §③.4：灵动岛单击 toggle **全部**窗（任一可见 → 全部隐藏；否则全部显示），
+        # 并按聚合可见态同步 set_pet_visible（替代 spike 只 toggle 主窗的 P2-5 缺口）。
+        wins = [inst.win for inst in self._instances if inst.win is not None]
+        if not wins:
             return
-        win = self.instance.win
-        if win is None:
-            return
-        if win.isVisible():
-            win.hide(notify=False)
+        any_visible = any(getattr(w, "isVisible", lambda: True)() for w in wins)
+        if any_visible:
+            for w in wins:
+                w.hide(notify=False)
         else:
-            win.show()
+            for w in wins:
+                w.show()
         if getattr(self, "island", None) is not None:
-            self.island.set_pet_visible(win.isVisible())
+            self.island.set_pet_visible(not any_visible)
 
     def _apply_balance_timer(self) -> None:
         self._balance_timer.stop()
@@ -1185,6 +1287,8 @@ class AppShell:
         self._instances.append(inst)
         inst._apply_spawn_offset()
         self._refresh_tray_menu()
+        # 批5.2a §③.4：_check_autostart_wanted 逐窗（读各自 config），新窗入列后补一次。
+        QTimer.singleShot(3500, inst._check_autostart_wanted)
         # N-5：msg 不手写 [slot-N] 前缀——_slot_wrap/_SlotLogFilter 会加调用方
         # 槽位前缀，叠加成双前缀纯噪音；新窗身份保留在正文里。
         logging.info("进程内新窗已创建 (slot=%s, instance=%s)", slot_id, instance_id)
@@ -1338,7 +1442,7 @@ class AppShell:
         else:
             win.show()
         if getattr(self, "island", None) is not None:
-            self.island.set_pet_visible(win.isVisible())
+            self.island.set_pet_visible(self._aggregate_pet_visible())
 
     def _install_macos_dock_menu(self) -> QMenu | None:
         """Install the native Dock context menu as an independent recovery path."""
@@ -1483,7 +1587,8 @@ class AppShell:
             menu.addAction('打开网页版 DeepSeek', open_deepseek_web)
         menu.addAction('检查更新', lambda: self.check_update(win))
 
-        # 批5.2 spike：多窗时在底部聚合「每窗：显示/隐藏、退出这只」（聚合美化留 5.2a）。
+        # 批5.2a §③.3：多窗时单托盘 + 每窗一个子菜单（显示/隐藏、切换角色、退出这只），
+        # 替代 spike 的平铺菜单项；图标仍单托盘，逐窗动作经子菜单路由。
         if len(self.instances) > 1:
             menu.addSeparator()
             for inst in self.instances:
@@ -1491,6 +1596,7 @@ class AppShell:
                 if win_i is None:
                     continue
                 slot_label = f"[slot-{inst.slot_id}]" if inst.slot_id is not None else ""
+                sub = menu.addMenu(f'桌宠 {slot_label}' if slot_label else '桌宠')
 
                 def _toggle(win=win_i) -> None:
                     if win.isVisible():
@@ -1498,11 +1604,21 @@ class AppShell:
                     else:
                         win.show()
 
+                sub.addAction('显示 / 隐藏', _toggle)
+                # 每窗独立的切换角色（读各自 config 的 current character）
+                m_char = sub.addMenu('切换角色')
+                cur = str(inst.config.get('character', catalog.DEFAULT_CHARACTER))
+                for cid in catalog.list_available_characters():
+                    act = m_char.addAction(cid)
+                    act.setCheckable(True)
+                    act.setChecked(cid == cur)
+                    act.triggered.connect(
+                        lambda checked=False, cid=cid, inst=inst: inst.switch_character(cid))
+
                 def _exit(inst=inst) -> None:
                     self._on_window_exit_requested(inst)
 
-                menu.addAction(f'显示 / 隐藏 {slot_label}', _toggle)
-                menu.addAction(f'退出这只 {slot_label}', _exit)
+                sub.addAction('退出这只', _exit)
 
         menu.addAction('退出', self.app.quit)
 

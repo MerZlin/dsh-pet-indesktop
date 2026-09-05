@@ -335,7 +335,7 @@ class PetWindow(QWidget):
     _last_dpr_poll_at = 0.0    # moveEvent 的 DPR 兜底轮询 10Hz 限频用
 
     def __init__(self, lib: MovieLibrary, config: Config, collision_session=None,
-                 broker_facade=None, *, clock=None, single_process_spawn: bool = False) -> None:
+                 broker_facade=None, *, clock=None, single_process_spawn: bool = False, agent_link_manager=None, proactive_watcher=None) -> None:
         super().__init__()
         self.lib = lib
         self.cfg = config
@@ -476,11 +476,11 @@ class PetWindow(QWidget):
 
         # 主动识屏后台观察器（必须作为 PetWindow 的子成员，随窗口销毁/重建）
         from .proactive import ProactiveScreenWatcher
-        self.proactive_watcher = ProactiveScreenWatcher(self, config)
+        self.proactive_watcher = (proactive_watcher if proactive_watcher is not None else ProactiveScreenWatcher(self, config))
 
-        # 多 Agent 状态感知管理器
+        # 多 Agent 状态感知管理器（批5.2a：flag 开注入共享 manager，关则各自建）
         from .agent_link import AgentLinkManager
-        self.agent_link_manager = AgentLinkManager(self, config)
+        self.agent_link_manager = (agent_link_manager if agent_link_manager is not None else AgentLinkManager(self, config))
 
         # ---- 全屏应用自动隐藏（Windows）----
         # 前台窗口覆盖整个屏幕几何（含任务栏区域）时自动隐藏桌宠，
@@ -1520,6 +1520,8 @@ class PetWindow(QWidget):
 
     def _start_fs_watch(self) -> None:
         """启动全屏监视线程（幂等）。"""
+        if self._single_process_spawn:  # 批5.2a：flag 开由共享 watcher 接管
+            return
         if self._fs_thread is not None and self._fs_thread.is_alive():
             return
         self._fs_stop.clear()
