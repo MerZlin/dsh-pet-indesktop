@@ -442,7 +442,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._music_sing_enabled = bool(config.get('music_sing_enabled', False))
         self._music_sing_active = False
         self._music_sing_timer = QTimer(self)
-        self._music_sing_timer.setInterval(4000)
+        # 1s 轮询：兼顾 COM 开销与“识别到音频后尽快触发”的体验。
+        self._music_sing_timer.setInterval(1000)
         self._music_sing_timer.timeout.connect(self._check_music_sing)
         # 重要气泡（主动识屏先兆/答复、Agent 联动提醒等）占用期间，自言自语让路，
         # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
@@ -481,6 +482,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         flags = build_window_flags(config, self.mouse_through, self._stream_capture_mode)
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # 透明桌宠不参与系统自动背景填充：减少偶发“频闪/背景闪一下”。
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         if self._stream_capture_mode:
             self.setWindowTitle(STREAM_CAPTURE_TITLE)
@@ -687,7 +690,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         else:
             self._switch(self.idle)
         if self._music_sing_enabled:
-            self._music_sing_timer.start()
+            self._start_music_sing_polling()
         self._schedule_self_talk()
         if self._watch_required():
             self._start_fs_watch()
@@ -1146,6 +1149,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             # 恢复显示 = 用户重新看着桌宠：重置闲置计时，重新以全帧率呈现
             # （只有再闲置 idle_low_fps_threshold 秒才进入降帧）
             self.mark_activity()
+        music_timer = getattr(self, "_music_sing_timer", None)
+        if getattr(self, "_music_sing_enabled", False) and music_timer is not None and music_timer.isActive():
+            QTimer.singleShot(0, self, self._check_music_sing)
         self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
@@ -1224,7 +1230,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._start_fs_watch()
         self._schedule_self_talk()
         if self._music_sing_enabled:
-            self._music_sing_timer.start()
+            self._start_music_sing_polling()
         if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
             self.proactive_watcher.resume()
         if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
@@ -3719,6 +3725,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if self._bubble_suppressed:
             self._speech_bubble.hide()
 
+    def _start_music_sing_polling(self) -> None:
+        """启动音乐检测并尽量立即检查一次，避免等一个轮询周期才唱歌。"""
+        if not self._music_sing_enabled:
+            return
+        self._music_sing_timer.start()
+        if self.isVisible():
+            QTimer.singleShot(0, self, self._check_music_sing)
+
     def _check_music_sing(self) -> None:
         """检测后台音乐并自动播放唱歌动画（可配置开关）。
 
@@ -3822,7 +3836,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if self._music_sing_enabled:
             # 隐藏期间保持停止，恢复显示时由 _resume_activity 按开关状态启动
             if self.isVisible():
-                self._music_sing_timer.start()
+                self._start_music_sing_polling()
         else:
             self._music_sing_active = False
             self._music_sing_timer.stop()

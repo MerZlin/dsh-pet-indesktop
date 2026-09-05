@@ -12,7 +12,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
-from pet.window import PetWindow
+from pet.window import SING_ANIM, PetWindow
 from tests.test_window_pause import FakeLibrary
 
 
@@ -21,10 +21,43 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _no_real_music_detection(monkeypatch):
+    """测试环境不读真实音频峰值；默认按“没有在放音乐”处理。"""
+    import pet.music_detect as music_detect
+    monkeypatch.setattr(music_detect, "is_music_playing", lambda: False)
+
+
 def _make_win(tmp_path, enabled: bool = False) -> PetWindow:
     cfg = Config(base=tmp_path)
     cfg.set("music_sing_enabled", enabled)
     return PetWindow(FakeLibrary(), cfg)
+
+
+class SingingLibrary(FakeLibrary):
+    """在核心动画基础上补唱歌动画，供“检测到音乐立即唱歌”测试使用。"""
+
+    def __init__(self):
+        super().__init__()
+        from tests.test_window_pause import FakeClip
+        self._clips[SING_ANIM] = FakeClip()
+
+
+def test_music_sing_starts_immediately_when_visible(app, tmp_path, monkeypatch):
+    """回归 issue #69-1：窗口可见且检测到音乐时应尽快进入唱歌，而不是等 4s 轮询。"""
+    import pet.music_detect as music_detect
+
+    cfg = Config(base=tmp_path)
+    cfg.set("music_sing_enabled", True)
+    win = PetWindow(SingingLibrary(), cfg)
+    try:
+        monkeypatch.setattr(music_detect, "is_music_playing", lambda: True)
+        win.show()
+        app.processEvents()
+        assert win.anim == SING_ANIM
+    finally:
+        win.close()
+        app.processEvents()
 
 
 def test_music_sing_timer_stopped_when_disabled(app, tmp_path):

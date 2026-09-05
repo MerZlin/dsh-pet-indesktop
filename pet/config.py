@@ -518,6 +518,8 @@ class Config:
             else self.dir / "config.json"
         )
         self._migrate_legacy_config(base)
+        if self.instance_id and not self.path.exists():
+            self._seed_slot_config_from_main()
         self.data = {
             "version": 4,
             "rx": None,
@@ -625,6 +627,52 @@ class Config:
                 shutil.copytree(src_sessions, self.dir / "sessions", dirs_exist_ok=True)
         except OSError:
             pass
+
+    def _seed_slot_config_from_main(self) -> None:
+        """新建副槽时继承主配置（issue #69-6），避免“生小肥鱼恢复默认设置”。
+
+        只在该槽位还没有个体配置文件时执行；已有 slot-N 配置保持独立记忆。
+        复制主 config.json 后做副槽化处理：位置回到自动摆放、开机自启仍只归
+        主槽所有。写盘副本沿用主配置的脱敏策略，不把明文 API Key 复制进副槽。
+        """
+        main_path = self.dir / "config.json"
+        if self.path.exists() or not main_path.is_file():
+            return
+        try:
+            raw = json.loads(main_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(raw, dict):
+            return
+        seed = copy.deepcopy(raw)
+        seed["version"] = 4
+        # 副槽不继承主桌宠的位置/屏幕，避免新鱼叠在旧鱼身上；自启仍仅主槽。
+        seed["rx"] = None
+        seed["ry"] = None
+        seed["screen_name"] = None
+        seed["autostart_wanted"] = False
+        chat = seed.get("chat")
+        if isinstance(chat, dict):
+            providers = chat.get("providers")
+            if isinstance(providers, dict):
+                for provider in providers.values():
+                    if isinstance(provider, dict):
+                        provider.pop("api_key", None)
+                        provider.pop("vision_api_key", None)
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            temp = self.path.with_name(f"{self.path.name}.{os.getpid()}.seed.tmp")
+            temp.write_text(
+                json.dumps(seed, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(temp, self.path)
+        except OSError as exc:
+            logging.warning("从主配置播种副槽配置失败: %s (%s)", self.path, exc)
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def reload(self):
         if not self.path.is_file():
