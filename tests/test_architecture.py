@@ -75,3 +75,24 @@ def test_window_py_line_budget():
         "新功能请先拆对应控制器（docs/WINDOW_PY_SPLIT_GUIDE.md），"
         "确需上调预算时在 PR 说明理由。"
     )
+
+
+def test_settings_widgets_orphan_cluster_guard():
+    """孤儿簇（批6-7 拆分被上游合并静默回退的死文件）防再发：settings_widgets.py
+    与 settings_styles*.qss 不允许「存在且零引用」态——要么已删除，要么被
+    pet/ 内某模块 import/读取（read_text/QFile）。"""
+    targets = (
+        "settings_widgets.py",
+        "settings_styles.qss",
+        "settings_styles_dark.qss",
+        "settings_styles_dark_browser.qss",
+    )
+    py_sources = [p.read_text(encoding="utf-8") for p in PET_DIR.rglob("*.py")]
+    for name in targets:
+        path = PET_DIR / name
+        if not path.exists():
+            continue  # 已删除：允许的终态
+        needle = name[:-3] if name.endswith(".py") else name
+        assert any(needle in src for src in py_sources), (
+            f"{name} 存在但零引用——批6-7 孤儿簇回退态，须删除或恢复接线"
+        )

@@ -472,17 +472,6 @@ def add_deepseek_web(menu: QMenu, *, icons: bool = True):
     return add_action(menu, "打开网页版 DeepSeek", "web" if icons else None, open_deepseek_web, close_on_trigger=True)
 
 
-def add_update_help(menu: QMenu, pet, *, icons: bool = True):
-    submenu = add_submenu(menu, "更新与帮助", "update" if icons else None)
-    callback = getattr(pet, "on_check_update", None)
-    if callback is not None:
-        add_action(submenu, "检查更新", "update" if icons else None, lambda: callback(pet), close_on_trigger=True)
-    add_action(submenu, "GitHub 项目页", "web" if icons else None, lambda: QDesktopServices.openUrl(QUrl(REPO_URL)), close_on_trigger=True)
-    if sys.platform == "win32":
-        add_action(submenu, "夸克网盘下载", "download" if icons else None, lambda: QDesktopServices.openUrl(QUrl(QUARK_PAN_URL)), close_on_trigger=True)
-    return submenu
-
-
 def add_template_switch(menu: QMenu, pet, label: str, target: str, *, icons: bool = True):
     def switch_and_reopen() -> None:
         pet.set_context_menu_template(target)

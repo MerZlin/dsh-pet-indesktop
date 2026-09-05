@@ -69,13 +69,6 @@ $chatData = if ($noChat) { @() } else {
         '--add-data', 'pet\chat\modern_styles.qss;pet\chat'
     )
 }
-# 设置页样式表（批6-7 从 modern_settings_dialog.py 抽出）：全部变体都需要
-$settingsQssData = @(
-    '--add-data', 'pet\settings_styles.qss;pet',
-    '--add-data', 'pet\settings_styles_dark.qss;pet',
-    '--add-data', 'pet\settings_styles_dark_browser.qss;pet'
-)
-
 # GIF variants: generate GIF assets from webm first (auto when missing, -Gif forces regen)
 if ($isGif -and -not $Gif -and -not (Test-Path 'assets\characters_gif')) {
     $Gif = $true
@@ -114,7 +107,6 @@ if (-not $SkipBuild) {
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
         --add-data "pet\menu_templates;pet\menu_templates" `
         @chatData `
-        @settingsQssData `
         --add-data "assets\sounds;assets\sounds" `
         --add-data "assets\chat;assets\chat" `
         --add-data "integrations;integrations" `

@@ -56,7 +56,7 @@ from .config import (
 from .library import MovieLibrary
 from .predictive_prewarm import PredictivePrewarm, pick_from_pool, roll_next
 from . import slot_manager as slot_manager_mod
-from .animation_thumbnail import decode_representative_frame, representative_frame_index
+from .animation_thumbnail import decode_representative_frame
 from .speech_bubble import PetSpeechBubble, list_self_talk_images
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
 from .context_menu import normalize_template_id, populate_context_menu as _populate_context_menu
@@ -2522,20 +2522,6 @@ class PetWindow(QWidget):
                          Qt.AspectRatioMode.KeepAspectRatio,
                          Qt.TransformationMode.SmoothTransformation)
 
-    def animation_icon_pixmap(self, name: str, size: int = 64) -> QPixmap:
-        """Synchronous compatibility path using a representative later frame."""
-        image = PetWindow.animation_icon_image(self, name)
-        if not image.isNull():
-            return PetWindow._crop_icon_pixmap(QPixmap.fromImage(image), size)
-        clip = self.lib.movie(name)
-        target = representative_frame_index(clip.frameCount())
-        if name != self.anim:
-            clip.jumpToFrame(target)
-        pm = clip.currentPixmap()
-        if pm is None or pm.isNull():
-            return self.icon_pixmap(size)
-        return PetWindow._crop_icon_pixmap(pm, size)
-
     def animation_icon_image(self, name: str) -> QImage:
         """Decode a representative frame as QImage; safe to call in a worker."""
         lock = getattr(self, "_animation_icon_cache_lock", None)
@@ -3902,41 +3888,6 @@ class PetWindow(QWidget):
         self.cfg.set('context_menu_template', template_id)
         self.cfg.save()
 
-    def set_animation_gap(self, seconds: float) -> None:
-        self.animation_gap_seconds = max(0.0, min(3600.0, float(seconds)))
-        self.cfg.set('animation_gap_seconds', self.animation_gap_seconds)
-        self.cfg.save()
-        if self.animation_gap_seconds <= 0:
-            self._cancel_animation_gap()
-
-    def set_self_talk_settings(
-        self,
-        enabled: bool,
-        minimum: float,
-        maximum: float,
-        texts,
-        *,
-        duration: float | None = None,
-        image_dir: str | None = None,
-    ) -> None:
-        self._self_talk_enabled = bool(enabled)
-        self._self_talk_min_interval = max(5.0, float(minimum))
-        self._self_talk_max_interval = max(self._self_talk_min_interval, float(maximum))
-        self._self_talk_texts = self._read_self_talk_texts(texts)
-        if duration is not None:
-            self._self_talk_duration_seconds = max(1.0, min(300.0, float(duration)))
-        if image_dir is not None:
-            self._self_talk_image_dir = str(image_dir or '').strip()
-            self._self_talk_images = list_self_talk_images(_resolve_self_talk_image_dir(self._self_talk_image_dir))
-        self.cfg.set('self_talk_enabled', self._self_talk_enabled)
-        self.cfg.set('self_talk_min_interval', self._self_talk_min_interval)
-        self.cfg.set('self_talk_max_interval', self._self_talk_max_interval)
-        self.cfg.set('self_talk_texts', list(self._self_talk_texts))
-        self.cfg.set('self_talk_duration_seconds', self._self_talk_duration_seconds)
-        self.cfg.set('self_talk_image_dir', self._self_talk_image_dir)
-        self.cfg.save()
-        self._schedule_self_talk()
-
     def set_chat_status(self, state: str, text: str = '') -> None:
         if not text:
             return
@@ -4082,14 +4033,6 @@ class PetWindow(QWidget):
         if was_visible:
             self.show()  # 只在原本可见时恢复：手动隐藏的桌宠不被设置保存意外唤出
 
-    def set_throw_strength(self, strength: str) -> None:
-        """设置甩出力度档位（gentle / standard / strong / crazy）。"""
-        self.throw_strength = physics_mod.normalize_throw_strength(strength)
-        self._throw_speed_cap = physics_mod.throw_speed_cap(self.throw_strength)
-        self.cfg.set('throw_strength', self.throw_strength)
-        self.cfg.set('throw_max_speed', self._throw_speed_cap)
-        self.cfg.save()
-
     def set_drag_physics(self, on: bool) -> None:
         """拖动物理开关。"""
         self.drag_physics = bool(on)
@@ -4097,14 +4040,6 @@ class PetWindow(QWidget):
         self.cfg.save()
         if not self.drag_physics:
             self._stop_physics()
-
-    def set_slingshot_enabled(self, on: bool) -> None:
-        """Enable or disable the independent slingshot interaction."""
-        self.slingshot_enabled = bool(on)
-        self.cfg.set('slingshot_enabled', self.slingshot_enabled)
-        self.cfg.save()
-        if not self.slingshot_enabled and self._interaction_state == SLINGSHOT_AIMING:
-            self._cancel_slingshot_to_anchor()
 
     def set_lock_position(self, on: bool) -> None:
         """锁定位置：开启后桌宠不可拖动（点击互动仍有效）。"""

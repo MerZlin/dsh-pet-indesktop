@@ -162,10 +162,3 @@ def download(
         return True, str(dest)
     except Exception as exc:
         return False, str(exc)
-
-
-def download_dir() -> Path:
-    """默认下载目录：~/Downloads（不存在时回退用户主目录）。"""
-    home = Path.home()
-    dl = home / 'Downloads'
-    return dl if dl.is_dir() else home

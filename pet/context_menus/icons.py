@@ -357,16 +357,6 @@ def pet_avatar_menu_icon(menu: QMenu, pet) -> QIcon:
     return fitted_pet_pixmap_icon(menu, source)
 
 
-def animation_avatar_menu_icon(menu: QMenu, pet, animation_name: str) -> QIcon:
-    size = small_icon_size(menu)
-    dpr = menu.devicePixelRatioF() or 1.0
-    render = getattr(pet, "animation_icon_pixmap", None)
-    source = render(animation_name, max(32, round(size * dpr * 2))) if callable(render) else None
-    if source is None or not hasattr(source, "isNull"):
-        source = pet.icon_pixmap(max(32, round(size * dpr * 2)))
-    return fitted_pet_pixmap_icon(menu, source)
-
-
 def fitted_pet_pixmap_icon(menu: QMenu, source: QPixmap) -> QIcon:
     size = small_icon_size(menu)
     dpr = menu.devicePixelRatioF() or 1.0

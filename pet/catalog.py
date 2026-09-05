@@ -139,11 +139,6 @@ assert len(ANIM_FILES) == 51, f"动画总数应为 51，实际 {len(ANIM_FILES)}
 assert len(ACTS) == 42, f"动作池应为 42，实际 {len(ACTS)}"
 
 
-def assets_dir() -> Path:
-    """兼容旧调用：默认形象 shenshen 的 webm 素材目录。"""
-    return webm_dir()
-
-
 def characters_dir() -> Path:
     """内置多形象根目录（项目根/assets/characters）。"""
     return Path(__file__).resolve().parent.parent / 'assets' / 'characters'
@@ -241,16 +236,6 @@ def list_available_characters() -> list[str]:
                     seen.add(cid)
                     ids.append(cid)
     return ids
-
-
-def webm_dir() -> Path:
-    """默认形象 shenshen 的 webm 素材目录（兼容旧调用）。"""
-    return character_video_dir(DEFAULT_CHARACTER)
-
-
-def legacy_assets_dir() -> Path:
-    """兼容旧名称：默认形象 webm 素材目录。"""
-    return webm_dir()
 
 
 def load_character_manifest(character_id: str, asset_dir: Path | str | None = None) -> dict | None:
@@ -475,10 +460,3 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         'drag': drag,
         'acts': acts,
     }
-
-
-def resolve_asset_path(name: str, filename: str, base_dir: Path | None = None) -> Path:
-    """解析 webm 素材路径；不存在时返回预期路径以便上层报错。"""
-    base_dir = Path(base_dir) if base_dir is not None else webm_dir()
-    path = base_dir / WEBM_FILES.get(name, filename)
-    return path

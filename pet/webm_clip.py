@@ -941,10 +941,6 @@ class WebMClip(QObject):
         else:
             _unregister_orphan(self)
 
-    def _sweep_retired(self) -> None:
-        """兼容别名：由模块级生命周期管理器驱动（_reap_orphaned_clips）。"""
-        self._reap_retired(join_timeout=_SWEEP_JOIN_TIMEOUT)
-
     def _reap_retired(self, join_timeout: float) -> None:
         """回收退役池：丢弃已确认退出的记录；对仍存活者有界 join；仍不退出
         或兜底确认失败则保留在池中（绝不静默丢弃追踪），由模块级管理器
@@ -1213,8 +1209,7 @@ class WebMClip(QObject):
         的慢涨（A1）。软停驻留（park）绝不清：park 的 clip 可能仍是当前显示
         对象且可能被 re-arm 续圈——park 在 stop() 早退、不经 _hard_stop，
         本方法不受影响。清空后 currentPixmap() 为 None，调用方（非当前显示
-        对象）已有 None 兜底（window._rebuild_frame 空图跳过、
-        animation_icon_pixmap 回退 icon_pixmap）。
+        对象）已有 None 兜底（window._rebuild_frame 空图跳过）。
         """
         self._current_image = None
         self._current_pixmap = None

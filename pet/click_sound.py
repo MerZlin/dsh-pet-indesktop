@@ -488,53 +488,17 @@ _pool = ClickSoundPool()
 
 
 # ---------------------------------------------------------------------------
-# 模块级函数：公开 API 为薄壳（调用点零改动）；私有 helper 亦保留为薄壳，
-# 以便测试沿用「替换模块级名称」的桩点（如 _qt_multimedia_classes）。
+# 模块级函数：公开 API 为薄壳（调用点零改动）；仅 _warm_player_pool 保留为
+# 测试桩点（替换模块级名称），其余模块级 helper 属生产内部实现。
 # ---------------------------------------------------------------------------
-
-def _qt_available() -> bool:
-    """惰性探测 QtMultimedia；失败只记一次日志。"""
-    return _pool.qt_available()
-
-
-def _ensure_qt_player():
-    """返回模块级单例播放器；不可用返回 None。"""
-    return _pool.ensure_qt_player()
-
-
-def _qt_multimedia_classes():
-    """Load multimedia classes lazily so headless/minimal installs can import this module."""
-    return _pool.qt_multimedia_classes()
-
-
-def _wav_duration(path: Path) -> float:
-    """Read and cache duration from a decoded WAV header."""
-    return _pool.wav_duration(path)
-
-
-def _effect_for(path: Path):
-    return _pool.effect_for(path)
-
-
-def _play_with_effect(path: Path, volume: float) -> bool:
-    return _pool.play_with_effect(path, volume)
-
 
 def _warm_player_pool() -> None:
     """预创建 QMediaPlayer 池，避免首次点击时初始化 QtMultimedia 造成卡顿。"""
     _pool.warm_player_pool()
 
 
-def _player_pool_play(path: Path, volume: float) -> bool:
-    return _pool.player_pool_play(path, volume)
-
-
 def _decode_to_wav(source: Path, cache: Path, volume: float) -> bool:
     return _pool.decode_to_wav(source, cache, volume)
-
-
-def _play_with_qt(path: Path, volume: float = 1.0) -> bool:
-    return _pool.play_with_qt(path, volume)
 
 
 def set_audio_volume(volume: float) -> float:

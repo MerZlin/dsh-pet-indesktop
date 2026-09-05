@@ -687,7 +687,6 @@ class BrokerBudget:
 
 
 BROKER_BUDGET = BrokerBudget()
-_BUDGET_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -796,7 +795,6 @@ class BrokerFeedSession:
 
     def __init__(self, session: BrokerShmSession, grant: dict[str, Any]) -> None:
         self._session = session
-        self.grant = grant
         # frame_count 缺省（旧版 grant/测试直构）时按 last_src+1 推导
         # （src 从 0 单调递增；-1 = 尚未发布 → 0）。
         fc = grant.get("frame_count")
@@ -1090,7 +1088,7 @@ class BrokerFacade:
                            asset, exc)
             return "local"
         record = _PublisherRecord(asset=asset, session=session, size=size,
-                                  fps=fps, total_frames=total, movie=movie)
+                                  total_frames=total, movie=movie)
         self._publishers[key] = record
         try:
             movie._publish_sink = session
@@ -1400,15 +1398,14 @@ class _PublisherRecord:
     release，同一素材的新一轮记录互不影响。
     """
 
-    __slots__ = ("asset", "session", "size", "fps", "total_frames",
+    __slots__ = ("asset", "session", "size", "total_frames",
                  "movie", "_terminal", "_closed", "_close_timer")
 
     def __init__(self, asset: str, session: "BrokerShmSession", size: int,
-                 fps: float, total_frames: int, movie=None) -> None:
+                 total_frames: int, movie=None) -> None:
         self.asset = asset
         self.session = session
         self.size = size
-        self.fps = fps
         self.total_frames = total_frames
         self.movie = movie
         self._terminal: str | None = None

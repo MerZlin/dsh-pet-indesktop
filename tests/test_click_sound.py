@@ -316,8 +316,8 @@ def test_second_pool_instance_state_is_isolated_from_singleton(tmp_path):
     other._qt_player_index = 7
     assert singleton._qt_player_index == index_before
 
-    # 3) 经实例方法写入只落在第二个实例：批4 前 play_with_effect 会经模块
-    #    薄壳 _effect_for 把音效写进单例 _pool._qt_effects（实例间串写）。
+    # 3) 经实例方法写入只落在第二个实例：批4 前 play_with_effect 会经实例
+    #    方法 effect_for 把音效写进单例 _pool._qt_effects（实例间串写）。
     wav = tmp_path / "tick.wav"
     with wave.open(str(wav), "wb") as out:
         out.setnchannels(1)

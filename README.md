@@ -742,7 +742,6 @@ pet/
 ├── catalog.py             # 角色和动画素材发现
 ├── library.py             # 动画库访问（懒加载 + 优先级预热）
 ├── webm_clip.py           # WebM 播放（reader 线程/解码节流/broker 钩子）
-├── gif_clip.py            # GIF/QMovie 播放
 ├── speech_bubble.py       # 气泡绘制与交互
 ├── speech_bubble_text.py  # 气泡分页/定位纯函数
 ├── click_sound.py         # 点击音效（ClickSoundPool 单例封装）
@@ -758,8 +757,6 @@ pet/
 ├── harness_launcher.py    # DeepSeek Harness 一键启动
 ├── instance_launcher.py   # 「生小肥鱼」多开孵化
 ├── modern_settings_dialog.py  # 新版侧边栏设置对话框
-├── settings_widgets.py    # 设置页共享控件库（ToggleSwitch 等 13 类）
-├── settings_dialog.py     # 旧版设置对话框
 ├── context_menus/         # 新旧菜单模板、图标、彩蛋入口
 ├── chat/                  # 独立 AI 对话子系统（现代双栏 + 经典手机式）
 │   ├── models.py          # 数据模型（ProviderConfig/ChatSession/...）
@@ -771,7 +768,7 @@ pet/
 │   ├── themes.py          # 聊天窗背景主题
 │   ├── widgets.py         # 新版聊天窗
 │   ├── legacy_widgets.py  # 经典手机式聊天窗
-│   ├── modern_styles.qss / legacy_styles.qss / styles.qss
+│   ├── modern_styles.qss / legacy_styles.qss
 │   └── ...
 └── updater.py             # 检查更新与发布资产解析
 
@@ -798,26 +795,6 @@ tests/                     # 单元测试、Qt offscreen 测试和构建相关�
 **给 window.py 加功能前必读**：[docs/WINDOW_PY_SPLIT_GUIDE.md](docs/WINDOW_PY_SPLIT_GUIDE.md)
 ——window.py 处于「只许瘦不许胖」的增量拆分公约下（CI 有行数预算红线），
 新功能先按公约拆对应控制器再动手。
-
-
-integrations/dsh-pet-bridge/  # DSH 桥接插件（Agent 联动）
-packaging/
-├── pet_entry.py           # Chat 构建入口
-├── pet_entry_no_chat.py   # 无 Chat 构建入口
-└── dsh-pet.iss            # Inno Setup 通用安装包脚本（/D 参数编译各变体）
-
-scripts/
-├── build_onedir.ps1       # Windows onedir 构建 + zip 绿色版打包（本地与 CI 共用入口）
-├── build_macos.sh         # macOS .app 构建（本地与 CI 共用入口）
-├── build_linux.sh         # Linux onedir 构建（本地与 CI 共用入口）
-├── check_bundle_encoding.py # 产物中文编码自检（issue #26，构建脚本内自动调用）
-├── make_icon.py           # 从待机动画提取封面帧生成应用图标（assets/icon.ico）
-├── convert_to_gif.py      # WebM → GIF 全量同步脚本
-└── cleanup_mei_cache.py   # 检查/清理旧 onefile 版本遗留的 _MEI 缓存（默认预览）
-
-tests/                     # 单元测试、Qt offscreen 测试和构建相关验证
-```
-
 
 </details>
 

@@ -1,8 +1,0 @@
-
-QLineEdit, QSpinBox, QDoubleSpinBox, QPlainTextEdit {
-    background: #2e2e35; color: #e4e4e9; border: 1px solid #45454f;
-}
-QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QPlainTextEdit:hover { border-color: #56565f; }
-QSpinBox::up-button, QDoubleSpinBox::up-button { border-left: 1px solid #45454f; border-bottom: 1px solid #45454f; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #55555e; }
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #6a6a74; }

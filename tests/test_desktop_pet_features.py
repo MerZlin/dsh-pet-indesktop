@@ -2330,48 +2330,6 @@ def test_disabled_on_top_does_not_raise_after_context_menu_hides():
     assert pet.levels == []
 
 
-def test_animation_icon_pixmap_reads_named_clip_without_switching_active_animation():
-    from PySide6.QtCore import QRect, Qt
-    from PySide6.QtGui import QPainter, QPixmap
-    from PySide6.QtWidgets import QApplication
-
-    from pet.window import PetWindow
-
-    app = QApplication.instance() or QApplication([])
-    source = QPixmap(100, 80)
-    source.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(source)
-    painter.fillRect(QRect(35, 10, 30, 60), Qt.GlobalColor.blue)
-    painter.end()
-
-    class Clip:
-        def __init__(self): self.jumps = []
-        def frameCount(self): return 50
-        def currentPixmap(self): return source
-        def jumpToFrame(self, frame): self.jumps.append(frame); return True
-
-    clip = Clip()
-
-    class Library:
-        def movie(self, name):
-            assert name == "动画-A"
-            return clip
-
-        def clip_path(self, name):
-            assert name == "动画-A"
-            return "/tmp/动画-A.webm"
-
-    class FakePet:
-        lib = Library()
-        anim = "当前动画"
-
-    icon = PetWindow.animation_icon_pixmap(FakePet(), "动画-A", 32)
-    assert clip.jumps == [30]
-    assert not icon.isNull()
-    assert max(icon.width(), icon.height()) >= 30
-    assert FakePet.anim == "当前动画"
-
-
 def test_representative_animation_frame_uses_the_later_middle():
     from pet.animation_thumbnail import representative_frame_index
 

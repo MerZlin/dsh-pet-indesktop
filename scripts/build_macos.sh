@@ -78,10 +78,7 @@ for variant in "${variant_list[@]}"; do
         --add-data "pet/menu_templates:pet/menu_templates"
         --add-data "integrations:integrations"
     )
-    # 设置页样式表（批6-7 从 modern_settings_dialog.py 抽出）：全部变体都需要
-    args+=(--add-data "pet/settings_styles.qss:pet")
-    args+=(--add-data "pet/settings_styles_dark.qss:pet")
-    args+=(--add-data "pet/settings_styles_dark_browser.qss:pet")
+    # 设置页样式表：已在 modern_settings_dialog.py 内联（_settings_stylesheet）
     if [[ "$name" == *-chat ]]; then
         args+=(--collect-all keyring)
         args+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")
