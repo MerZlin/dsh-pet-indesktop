@@ -229,6 +229,10 @@ class ModernSettingsDialog(QDialog):
                 SettingRow("stream_capture", "直播捕获兼容", "让 OBS 等工具能够枚举并捕获桌宠窗口。", self.stream_capture_check),
             ])
         general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
+        spawn_rows = [
+            SettingRow("single_process_spawn", "单进程多开（省内存）", "开启后「生小肥鱼」在同一进程内创建新桌宠，多窗共享解码链（同一段动画只解码一份），多开时内存与进程数显著降低；已有各只的设置存档保留不变。重启后生效。", self.single_process_spawn_check),
+        ]
+        general_layout.addWidget(SettingsSection("多开", spawn_rows, general_content))
         if self.balance_refresh_spin is not None:
             general_layout.addWidget(SettingsSection("后台服务", [
                 SettingRow("balance_refresh", "余额自动刷新", "设置后台刷新间隔；0 分钟表示关闭。", self.balance_refresh_spin),
@@ -523,6 +527,8 @@ class ModernSettingsDialog(QDialog):
             self.cursor_hidden_passthrough_check.setChecked(bool(self.config.get("cursor_hidden_passthrough", True)))
         self.drag_physics_check = ToggleSwitch(self)
         self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
+        self.single_process_spawn_check = ToggleSwitch(self)
+        self.single_process_spawn_check.setChecked(bool(self.config.get("experimental_single_process_spawn", False)))
 
         # 甩出力度四档：gentle (轻柔) / standard (标准) / strong (强力) / crazy (疯狂)
         self.throw_strength_select = ModernSelect(self, width=132)
@@ -1423,6 +1429,7 @@ class ModernSettingsDialog(QDialog):
         general = page_content([
             ("应用启动", claim("autostart")),
             ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
+            ("多开", claim("single_process_spawn")),
         ])
         collision_primary = claim("collision_enabled", "collision_sound_enabled")
         collision_advanced = claim(
@@ -1722,6 +1729,7 @@ class ModernSettingsDialog(QDialog):
             self.config.set("balance_tier_color_enabled", self.balance_tier_color_check.isChecked())
         if self.auto_hide_fullscreen_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
+        self.config.set("experimental_single_process_spawn", self.single_process_spawn_check.isChecked())
         if self.cursor_hidden_passthrough_check is not None:
             self.config.set("cursor_hidden_passthrough", self.cursor_hidden_passthrough_check.isChecked())
         if self.stream_capture_check is not None:
