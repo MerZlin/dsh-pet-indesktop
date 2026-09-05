@@ -64,6 +64,35 @@ def _close_session_writers():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _close_qt_top_level_widgets():
+    """保留应用级 Qt 对象到其显式 owner 收口，避免跨用例重入 closeEvent。"""
+    yield
+    try:
+        from pet.agent_link import AgentLinkManager, BaseAgentMonitor
+        AgentLinkManager._shutdown_live_for_tests()
+        BaseAgentMonitor._shutdown_live_for_tests()
+    except Exception:
+        pass
+    try:
+        from pet.library import MovieLibrary
+        MovieLibrary._shutdown_live_for_tests()
+    except Exception:
+        pass
+    try:
+        from PySide6.QtWidgets import QApplication
+        from pet.window import PetWindow
+        app = QApplication.instance()
+        if app is not None:
+            for widget in tuple(app.topLevelWidgets()):
+                try:
+                    widget.hide()
+                except RuntimeError:
+                    pass
+    except Exception:
+        pass
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _close_webm_readers_at_session_end():
     """session 结束强收口所有 webm reader（测试债 #2 防线）。

@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,9 @@ from .persona_phrases import PhrasePicker
 from .speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
 
 log = logging.getLogger("dsh-pet-standalone")
+
+_LIVE_AGENT_LINK_MANAGERS: weakref.WeakSet = weakref.WeakSet()
+_LIVE_AGENT_MONITORS: weakref.WeakSet = weakref.WeakSet()
 
 
 def _which(name: str) -> str | None:
@@ -550,6 +554,7 @@ class BaseAgentMonitor(QObject):
 
     def __init__(self, agent_key: str, config_dir: Path, parent=None) -> None:
         super().__init__(parent)
+        _LIVE_AGENT_MONITORS.add(self)
         self.agent_key = agent_key
         self.config_dir = Path(config_dir)
         self.events_dir = self.config_dir / "agent-events"
@@ -634,6 +639,15 @@ class BaseAgentMonitor(QObject):
         self.begin_stop()
         self.finish_stop()
         log.info("Agent 监视器 [%s] 已停止", self.agent_key)
+
+    @classmethod
+    def _shutdown_live_for_tests(cls) -> None:
+        """收口测试直接创建且未显式停止的 monitor worker。"""
+        for monitor in tuple(_LIVE_AGENT_MONITORS):
+            try:
+                monitor.stop()
+            except Exception:
+                log.debug("测试收口 Agent monitor 失败", exc_info=True)
 
     def pause(self) -> None:
         if self._running:
@@ -1494,6 +1508,9 @@ class AgentLinkManager(QObject):
         self.cfg = config
         self.config_dir = config.dir
         self._shutdown = False
+        self._respond_threads: set[threading.Thread] = set()
+        self._respond_threads_lock = threading.Lock()
+        _LIVE_AGENT_LINK_MANAGERS.add(self)
         self._install_token = 0
         self._install_pending: dict[str, int] = {}
         # 状态节流：同一 Agent 相同状态去抖；同 Agent 两次动作切换最小间隔
@@ -1858,11 +1875,28 @@ class AgentLinkManager(QObject):
             mon for mon in self.monitors.values()
             if mon._worker is not None and mon._worker.is_alive()
         ]
-        if not active:
-            return
-        deadline = time.monotonic() + BaseAgentMonitor._STOP_JOIN_TIMEOUT_S
-        for mon in active:
-            mon.finish_stop(deadline)
+        if active:
+            deadline = time.monotonic() + BaseAgentMonitor._STOP_JOIN_TIMEOUT_S
+            for mon in active:
+                mon.finish_stop(deadline)
+        response_deadline = time.monotonic() + BaseAgentMonitor._STOP_JOIN_TIMEOUT_S
+        with self._respond_threads_lock:
+            response_threads = tuple(self._respond_threads)
+        for worker in response_threads:
+            remaining = response_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if worker is not threading.current_thread() and worker.is_alive():
+                worker.join(remaining)
+
+    @classmethod
+    def _shutdown_live_for_tests(cls) -> None:
+        """收口未由测试显式持有的管理器，避免后台回写线程跨用例存活。"""
+        for manager in tuple(_LIVE_AGENT_LINK_MANAGERS):
+            try:
+                manager.shutdown()
+            except Exception:
+                log.debug("测试收口 AgentLinkManager 失败", exc_info=True)
 
     def _gen_current(self, agent_key: str, gen: int) -> bool:
         mon = self.monitors.get(agent_key)
@@ -2674,6 +2708,8 @@ class AgentLinkManager(QObject):
             worker = threading.Thread(
                 target=self._post_respond_worker, args=(pending.get("agent_key", ""), msg), daemon=True
             )
+            with self._respond_threads_lock:
+                self._respond_threads.add(worker)
             worker.start()
         except Exception:
             log.exception("DSH 回写线程启动失败")
@@ -2683,13 +2719,19 @@ class AgentLinkManager(QObject):
         """后台线程：找在线 DSH 端口并 POST /api/respond，结果经信号回主线程。"""
         try:
             from . import dsh_responder
-            ok, detail = dsh_responder.respond(msg, self._dsh_candidate_ports())
+            timeout_s = 0.1 if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen" else None
+            ok, detail = dsh_responder.respond(
+                msg, self._dsh_candidate_ports(), timeout_s=timeout_s,
+            )
         except Exception as exc:  # noqa: BLE001 —— 后台线程绝不允许把异常带进 Qt 事件循环
             ok, detail = False, str(exc)
         try:
             self._respond_result.emit(ok, detail)
         except Exception:
             pass
+        finally:
+            with self._respond_threads_lock:
+                self._respond_threads.discard(threading.current_thread())
 
     def _dsh_candidate_ports(self) -> list[int]:
         """DSH 可能运行的端口（web 默认 3080，被占时避让 38080，或 DSH_PORT 指定）。"""

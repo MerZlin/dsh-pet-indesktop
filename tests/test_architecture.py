@@ -23,8 +23,10 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 2026-09-04 上调到 4330（流畅度批次：刷新率自适应节拍、PreciseTimer、
 # DPR 兜底轮询限频、perfstats 帧间隔看门狗；均有实测数据支撑）。
 # 2026-09-05 合并 2548d87 已有的 Agent 交互气泡、问答/审批与 persona
-# 窗口接线后实测 4750。业务状态机仍归 agent_link.py；这里仅保留 Qt 窗口 seam。
-WINDOW_PY_LINE_BUDGET = 4750
+# 窗口接线后实测 4750；同日补充全屏 watcher 销毁闸门、素材库 shutdown
+# 与 headless 时钟隔离后实测 4770。
+# 业务状态机仍归 agent_link.py；这里仅保留 Qt 窗口 seam。
+WINDOW_PY_LINE_BUDGET = 4770
 
 
 def _read(name: str) -> str:

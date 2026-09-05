@@ -23,11 +23,14 @@ import math
 import random
 import sys
 import threading
-import time
+import time as _stdlib_time
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+time = SimpleNamespace(monotonic=_stdlib_time.monotonic)
+_fs_monotonic = time.monotonic
 
 import shiboken6
 
@@ -1588,7 +1591,7 @@ class PetWindow(QWidget):
         stop = self._fs_stop
         polls = 0
         consecutive_errors = 0
-        next_fullscreen = time.monotonic() + 1.0
+        next_fullscreen = _fs_monotonic() + 1.0
         while not stop.wait(0.05):
             # destroyed 连接使用的是同一个纯 Python Event；在访问 QObject
             # 包装器前再次检查，覆盖 wait 返回与 Qt 销毁之间的竞态窗口。
@@ -1624,7 +1627,7 @@ class PetWindow(QWidget):
                         logging.debug("光标状态降级发射瞬时异常 (%s), 退避 %ss 后重试", exc, backoff)
                         if stop.wait(backoff):
                             return
-            now = time.monotonic()
+            now = _fs_monotonic()
             if not self.auto_hide_fullscreen or now < next_fullscreen:
                 continue
             next_fullscreen = now + 1.0
@@ -1647,6 +1650,11 @@ class PetWindow(QWidget):
         return self._cursor_hidden_passthrough
 
     def _watch_required(self) -> bool:
+        # Offscreen Qt has no native foreground/fullscreen surface.  Avoid
+        # starting a Windows watcher against a headless QObject, where native
+        # teardown can race the polling thread during test/process shutdown.
+        if os.environ.get('QT_QPA_PLATFORM', '').lower() == 'offscreen':
+            return False
         return os.name == 'nt' and (self.auto_hide_fullscreen or self._cursor_hidden_passthrough_enabled())
 
     def _cursor_transition_blocked(self) -> bool:
@@ -3571,6 +3579,8 @@ class PetWindow(QWidget):
         lib = getattr(self, 'lib', None)
         if lib is not None and hasattr(lib, 'pause_warm'):
             lib.pause_warm()
+        if lib is not None and hasattr(lib, 'shutdown'):
+            lib.shutdown()
         # 必须与自定义 hide() 一致置位 _hidden_paused：showEvent 据此走
         # _resume_activity() → resume_warm()。缺了它，原生隐藏→显示循环后
         # 预热被永久停用（_warm_paused 永远无法复位）。重复置位是幂等 no-op。

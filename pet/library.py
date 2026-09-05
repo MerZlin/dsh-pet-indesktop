@@ -19,9 +19,11 @@ GifClip 基于 QMovie 播放透明 GIF（兼容旧 GIF 路线）。
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import logging
 import random
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -30,6 +32,8 @@ from PySide6.QtGui import QMovie
 
 from . import catalog
 from .webm_clip import WebMClip
+
+_LIVE_MOVIE_LIBRARIES: weakref.WeakSet = weakref.WeakSet()
 
 
 # QMovie 播放速度补偿（%）：GIF 路线使用，校准 QMovie 偏慢问题
@@ -124,6 +128,7 @@ class MovieLibrary(QObject):
         manifest: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__(parent)
+        _LIVE_MOVIE_LIBRARIES.add(self)
         self.character_id = character_id or catalog.DEFAULT_CHARACTER
         if asset_dir is not None:
             self._asset_dir = Path(asset_dir)
@@ -164,6 +169,7 @@ class MovieLibrary(QObject):
         # resume 重排可能并发触发），worker 收尾时在 finally 清除。
         self._low_warm_in_flight = False
         self._warm_state_lock = threading.Lock()  # 保护在飞标志与完成标志
+        self._shutdown = False
         # 交互中让路重排期：50ms 短间隔重试（交互一结束立即补上，不把 2s
         # 延迟原样再等一遍）；pause_warm 会停掉它，避免遗留 singleShot 在
         # pause 后仍触发起批。
@@ -365,6 +371,37 @@ class MovieLibrary(QObject):
             self._interaction_holders = 0
             self._interaction_active.clear()
             self._interaction_cond.notify_all()
+
+    def shutdown(self) -> None:
+        """关闭素材库并收口所有已创建的 WebM reader。"""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self.pause_warm()
+        for clip in tuple(self._movies.values()):
+            try:
+                cleanup = getattr(clip, 'cleanup', None)
+                if callable(cleanup):
+                    cleanup()
+                else:
+                    stop = getattr(clip, 'stop', None)
+                    if callable(stop):
+                        stop()
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    '素材库关闭时收口 clip 失败', exc_info=True,
+                )
+
+    @classmethod
+    def _shutdown_live_for_tests(cls) -> None:
+        """收口未由窗口持有的素材库，避免 reader 跨测试存活。"""
+        for library in tuple(_LIVE_MOVIE_LIBRARIES):
+            try:
+                library.shutdown()
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    '测试收口 MovieLibrary 失败', exc_info=True,
+                )
 
     def resume_warm(self) -> None:
         """窗口恢复显示时补齐预热：低优先级池未建完或首帧未预热完则重新排期。"""

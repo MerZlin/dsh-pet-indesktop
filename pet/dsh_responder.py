@@ -17,7 +17,7 @@ RESPOND_PATH = "/api/respond"
 TIMEOUT_S = 4.0
 
 
-def respond(message: dict, ports: list[int]) -> tuple[bool, str]:
+def respond(message: dict, ports: list[int], *, timeout_s: float | None = None) -> tuple[bool, str]:
     """POST 一条 client-response 到在线 DSH 端口，返回 (ok, detail)。
 
     ``ports`` 为候选端口（3080 / 38080 / DSH_PORT …），逐个尝试；任一返回 HTTP
@@ -28,6 +28,7 @@ def respond(message: dict, ports: list[int]) -> tuple[bool, str]:
     """
     if not isinstance(message, dict):
         return False, "bad-message"
+    timeout = TIMEOUT_S if timeout_s is None else max(0.01, float(timeout_s))
     body = json.dumps(message, ensure_ascii=False).encode("utf-8")
     last_err = "no-port"
     for port in ports:
@@ -38,7 +39,7 @@ def respond(message: dict, ports: list[int]) -> tuple[bool, str]:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read(1024).decode("utf-8", "replace")
             try:
                 parsed = json.loads(raw)
