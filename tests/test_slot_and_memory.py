@@ -5,7 +5,7 @@
 1. 真实子进程竞争同一临时配置根目录，依次获得 slot-0/1/2；指定槽竞争失败不降级，锁文件残留可复用。
 2. 子进程持有 slot-1 后 exit 或被终止，新子进程重新加锁 slot-1，读取个体配置与 sessions，不删 lock 文件。
 3. 真实子进程并发首次创建 slot 配置，最终 JSON 完整，PID 后缀 .tmp 不撞名。
-4. 主配置变更后，新 slot 采用出厂默认配置，不继承主配置修改；已有 slot 保持个体修改记忆；位置独立，自启仅主槽有效。
+4. 主配置变更后，新 slot 首次创建继承主配置（位置独立、自启仅主槽有效）；已有 slot 保持个体修改记忆。
 5. 损坏配置唯一备份名，连续恢复不覆盖旧备份。
 6. 旧 config.json 无槽位元数据仍作为 slot-0；旧 spawn 原子迁移到 slot-1/2，中断回滚与标记。
 7. slot-0 被占用时自启失败不拿 slot-1。
@@ -362,7 +362,7 @@ print("DONE2", flush=True)
 
 
 def test_field_default_factory_and_individual_memory(tmp_path):
-    """场景 4：新 slot 使用出厂默认值（不继承主配置修改），之后只保留个体记忆。"""
+    """场景 4：新 slot 首次创建继承主配置（位置/自启除外），之后只保留个体记忆。"""
     config_dir = tmp_path / APP_DIR_NAME
     config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -378,15 +378,15 @@ def test_field_default_factory_and_individual_memory(tmp_path):
     master.set("autostart_wanted", True)
     master.save()
 
-    # 新建 slot-1：未保存前直接读取，应完全使用出厂默认值，不继承主配置修改
+    # 新建 slot-1：未保存前直接读取，应继承主配置的非个体设置；
+    # 位置/屏幕与开机自启不复制，避免叠位和副槽自启。
     slot1 = Config(base=tmp_path, instance_id="slot-1")
-    default_config = Config(base=tmp_path / "dummy_clean")
-    assert slot1.get("character") == default_config.get("character")
-    assert slot1.get("playback_speed") == default_config.get("playback_speed")
-    assert slot1.get("click_sound_volume") == default_config.get("click_sound_volume")
-    assert slot1.get("click_sound_volume") == 0.70
-    assert slot1.get("on_top") == default_config.get("on_top")
-    assert slot1.get("show_dock_icon") == default_config.get("show_dock_icon")
+    assert slot1.get("character") == "shenshen"
+    assert slot1.get("playback_speed") == 1.5
+    assert slot1.get("click_sound_volume") == 0.33
+    assert slot1.get("on_top") is False
+    assert slot1.get("show_dock_icon") is False
+    assert slot1.get("chat_follow_pet") is True
     assert slot1.get("rx") is None
     assert slot1.get("ry") is None
     assert slot1.get("autostart_wanted") is False
@@ -405,10 +405,87 @@ def test_field_default_factory_and_individual_memory(tmp_path):
     assert slot1_reload.get("character") == "dundun"
     assert slot1_reload.get("click_sound_volume") == 0.55
 
-    # 新建 slot-2 依然使用出厂默认值，不继承主配置的修改
+    # 新建 slot-2 在首次创建时继承主配置当时的值（最新主配置），之后各自独立
     slot2 = Config(base=tmp_path, instance_id="slot-2")
-    assert slot2.get("character") == default_config.get("character")
-    assert slot2.get("click_sound_volume") == 0.70
+    assert slot2.get("character") == "master_new"
+    assert slot2.get("click_sound_volume") == 0.99
+
+
+def test_fresh_spawn_reseeds_existing_slot_config_from_main(tmp_path, monkeypatch):
+    """显式“生小肥鱼”（DSH_PET_SPAWN_FRESH=1）即使复用旧 slot 配置也继承主配置。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    master = Config(base=tmp_path)
+    master.set("character", "shenshen")
+    master.set("playback_speed", 2.0)
+    master.set("click_sound_volume", 0.8)
+    master.save()
+
+    old_slot = Config(base=tmp_path, instance_id="slot-1")
+    old_slot.set("character", "dundun")
+    old_slot.set("playback_speed", 0.5)
+    old_slot.set("click_sound_volume", 0.2)
+    old_slot.save()
+
+    monkeypatch.setenv("DSH_PET_SPAWN_FRESH", "1")
+    fresh_slot = Config(base=tmp_path, instance_id="slot-1")
+    assert fresh_slot.get("character") == "shenshen"
+    assert fresh_slot.get("playback_speed") == 2.0
+    assert fresh_slot.get("click_sound_volume") == 0.8
+    # 副槽化字段仍不复制主鱼位置/自启
+    assert fresh_slot.get("rx") is None
+    assert fresh_slot.get("autostart_wanted") is False
+
+
+def test_normal_reopen_keeps_existing_slot_config(tmp_path, monkeypatch):
+    """普通重启/复用 slot 未带 SPAWN_FRESH 时，已有个体配置不被主配置覆盖。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    master = Config(base=tmp_path)
+    master.set("character", "shenshen")
+    master.save()
+
+    slot = Config(base=tmp_path, instance_id="slot-1")
+    slot.set("character", "dundun")
+    slot.save()
+
+    monkeypatch.delenv("DSH_PET_SPAWN_FRESH", raising=False)
+    reopened = Config(base=tmp_path, instance_id="slot-1")
+    assert reopened.get("character") == "dundun"
+
+
+def test_spawn_seed_respects_inherit_size_switch(tmp_path, monkeypatch):
+    """生小肥鱼继承大小开关：开启保留主 scale，关闭改用 spawn_scale。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    # 开启继承：主鱼 1.0，新鱼也应为 1.0
+    master = Config(base=tmp_path)
+    master.set("scale", 1.0)
+    master.set("spawn_inherit_size", True)
+    master.set("spawn_scale", 0.5)
+    master.set("spawn_inherit_dynamic_island", True)
+    island = dict(master.get("dynamic_island"))
+    island["enabled"] = True
+    master.set("dynamic_island", island)
+    master.save()
+    monkeypatch.setenv("DSH_PET_SPAWN_FRESH", "1")
+    slot_inherit = Config(base=tmp_path, instance_id="slot-1")
+    assert slot_inherit.get("scale") == 1.0
+    assert slot_inherit.get("dynamic_island", {}).get("enabled") is True
+
+    # 关闭继承：主鱼仍是 1.0，但新鱼应使用 spawn_scale=0.5，且灵动岛不开启
+    master.set("spawn_inherit_size", False)
+    master.set("spawn_inherit_dynamic_island", False)
+    master.save()
+    slot_custom = Config(base=tmp_path, instance_id="slot-2")
+    assert slot_custom.get("scale") == 0.5
+    assert slot_custom.get("spawn_inherit_size") is False
+    assert slot_custom.get("spawn_scale") == 0.5
+    assert slot_custom.get("spawn_inherit_dynamic_island") is False
+    assert slot_custom.get("dynamic_island", {}).get("enabled") is False
 
 
 def test_corrupt_config_backup_unique_timestamp(tmp_path):

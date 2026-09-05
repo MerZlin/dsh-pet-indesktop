@@ -25,7 +25,7 @@ import re
 from pet import config as config_mod
 from pet.config import Config
 
-# reload() 白名单键集合现状快照（71 键，与 pet/config.py reload() 的
+# reload() 白名单键集合现状快照（73 键，与 pet/config.py reload() 的
 # "for key in (...)" 元组一致；任何增删必须同步更新本快照）。
 RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "animation_gap_seconds", "auto_hide_fullscreen", "autostart_wanted",
@@ -40,7 +40,8 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "collision_sound_volume", "context_menu_appearance", "context_menu_layout", "context_menu_template",
     "cursor_hidden_passthrough", "decode_broker_enabled", "drag_physics",
     "dynamic_island", "facing",
-    "idle_low_fps_enabled", "idle_low_fps_threshold", "lock_position",
+    "idle_low_fps_enabled", "idle_low_fps_threshold",
+    "animation_prewarm_enabled", "lock_position",
     "menu_easter_egg", "modern_chat_background", "modern_chat_background_fill",
     "modern_chat_background_opacity", "modern_chat_card_opacity", "mouse_through",
     "music_sing_enabled", "no_move", "on_top", "pet_opacity", "playback_speed",
@@ -48,6 +49,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "self_talk_bubble_style", "self_talk_duration_seconds", "self_talk_enabled",
     "self_talk_image_dir", "self_talk_image_scale", "self_talk_max_interval", "self_talk_min_interval",
     "self_talk_texts", "shift_drag", "show_dock_icon", "slingshot_enabled",
+    "spawn_inherit_dynamic_island", "spawn_inherit_size", "spawn_scale",
     "stream_capture_mode", "system_notifications_enabled", "throw_max_speed", "throw_strength",
     "todo_reminder_enabled", "todo_reminder_lead_minutes",
 })

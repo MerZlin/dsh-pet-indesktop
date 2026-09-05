@@ -46,6 +46,9 @@ def launch_new_pet(offset_index: int = 1):
         parent_index = 0
     child_index = parent_index + max(1, int(offset_index))
     env["DSH_PET_SPAWN_OFFSET_INDEX"] = str(child_index)
+    # 显式“生小肥鱼”标记：新进程即使复用旧的 slot-N 配置文件，
+    # 也会在 Config 初始化时从主配置重新播种，避免“新鱼恢复默认设置”。
+    env["DSH_PET_SPAWN_FRESH"] = "1"
     # 多开槽位机制：子进程自主竞争槽位（slot-1, slot-2, ...），
     # 不再生成 spawn{pid}x{n}，移除从父进程继承来的 DSH_PET_INSTANCE。
     env.pop("DSH_PET_INSTANCE", None)
