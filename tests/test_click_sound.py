@@ -52,6 +52,8 @@ class FakeQtEffect:
         self.source = None
         self.volumes = []
         self.play_count = 0
+        self.stop_count = 0
+        self.loop_counts = []
         self.__class__.instances.append(self)
 
     def setSource(self, source):
@@ -59,6 +61,12 @@ class FakeQtEffect:
 
     def setVolume(self, volume):
         self.volumes.append(volume)
+
+    def stop(self):
+        self.stop_count += 1
+
+    def setLoopCount(self, count):
+        self.loop_counts.append(count)
 
     def play(self):
         self.play_count += 1
@@ -99,6 +107,10 @@ def test_wav_restarts_qsound_effect_on_each_click(monkeypatch, tmp_path):
     assert len(FakeQtEffect.instances) >= 1
     assert FakeQtEffect.instances[-1].play_count == 2
     assert FakeQtEffect.instances[-1].volumes == [0.5, 0.5]
+    # 回归：同一 QSoundEffect 实例每次播放前先 stop，防止部分 FFmpeg
+    # 后端第二次 play 不重启导致“后续点击/试听无声”。
+    assert FakeQtEffect.instances[-1].stop_count >= 2
+    assert FakeQtEffect.instances[-1].loop_counts == [1, 1]
 
 
 def test_mp3_decode_failure_falls_back_to_player_pool(monkeypatch, tmp_path):
