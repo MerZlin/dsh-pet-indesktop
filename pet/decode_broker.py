@@ -696,7 +696,9 @@ class BrokerFeed:
     """一次订阅尝试的句柄：GUI 侧填 grant/deny 结果，reader 线程有界等待。
 
     - GUI（facade）在收到 decode_reply_ready 后调用 ``complete(result)``；
-    - reader 线程在 movie.start() 后调用 ``wait_result(timeout)``；
+    - reader 线程在 movie.start() 后的 feed 等待里轮询 ``feed.ready``（5ms
+      步进 + budget 截止，stop 感知，见 webm_clip._reader_local）；``wait_result``
+      仅测试用；
     - result 为 None 表示 deny/超时/通道不可用 → 调用方本地解码。
 
     所有权（P3A P1-2 修订）：本句柄同时是「attach 出的 session 必须有主」的

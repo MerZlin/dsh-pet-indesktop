@@ -42,7 +42,7 @@ WebM-backed clip library（webm 主路线）。
 - 所有 Qt GUI 操作只发生在主线程。
 - 同一 clip 最多 1 个 active reader + 有上限的退役 reader（_MAX_RETIRED_READERS）：
   stop() 主动 terminate 底层 ffmpeg 进程（_PopenCapture 捕获句柄），退役池超上限时
-  强制回收最旧的；start() 前清空退役池，池内仍有存活 reader 时拒绝启动（防无上限累积）。
+  强制回收最旧的；start() 前零等待清空退役池，存活 reader 累积超限仅日志告警，绝不拒绝启动。
 - cleanup() 对仍存活的退役 reader 保留追踪（绝不静默丢弃），等待后续 sweep 回收。
 - Popen 并发串行化（批 6-8b，Windows access violation 主凶修复）：clip 名下任一
   Popen 的「操作」（poll/terminate/wait/kill/关管道）任意时刻只允许一个线程执行。
@@ -403,7 +403,7 @@ def _unregister_orphan(clip: "WebMClip") -> None:
 # 解码（走既有 120ms 有界等待/逃生口路径），热门（待机/点击/最近播放）
 # 常驻。锁序：clip._first_frame_lock → 注册表锁（单向）；逐出在注册表锁外
 # 逐个取 victim 自己的锁，杜绝跨对象持锁嵌套（对照 P2-10 教训）。
-_FIRST_FRAME_BUDGET_BYTES = 32 * 1024 * 1024  # 32MB ≈ 36 段热动画常驻
+_FIRST_FRAME_BUDGET_BYTES = 32 * 1024 * 1024  # 模块兜底 32MB；应用层以 first_frame_cache_max_mb（默认 8MB，批10-A3）覆盖，32 亦为迁移哨兵值
 # 运行期可调的预算值（set_first_frame_budget 写入）；常量保留为默认值。
 _first_frame_budget_bytes = _FIRST_FRAME_BUDGET_BYTES
 _first_frame_reg_lock = threading.Lock()
@@ -1278,8 +1278,7 @@ class WebMClip(QObject):
     def start(self) -> bool:
         """启动播放；返回 True 表示已启动（或已在播），False 表示本次启动被拒绝。
 
-        拒绝原因：imageio_ffmpeg 不可用、clip 已 cleanup（终结），或退役
-        reader 池未清空（存在存活 reader，B7 硬上限）。
+        拒绝原因：imageio_ffmpeg 不可用、clip 已 cleanup（终结）。
 
         调用方（窗口层）必须把 False 当作「动画没有在播」并执行明确降级
         （回退上一动画/待机、安排重试），绝不能把动画状态切换与播放启动

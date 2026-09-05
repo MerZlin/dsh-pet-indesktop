@@ -252,10 +252,10 @@ class TodoStore:
 # ------------------------------------------------------------ 调度服务
 
 class TodoReminderService:
-    """待办提醒调度服务（PetApp 持有，GUI 线程）。
+    """待办提醒调度服务（AppShell 持有，GUI 线程）。
 
     同 ProactiveScreenWatcher：本类不继承 QObject（Qt 在 __init__ 内惰性
-    导入，模块顶层保持无 Qt），持有无主 QTimer，由 PetApp 持有引用保证
+    导入，模块顶层保持无 Qt），持有无主 QTimer，由 AppShell 持有引用保证
     生命周期。tick → 纯函数 advance_todo_state → 桌宠可见且设置未抑制时
     冒气泡，否则走 app.system_notify 桌面通知（受
     system_notifications_enabled 全局门控，关闭时该分支静默）；盖戳/归档
@@ -344,7 +344,7 @@ class TodoReminderService:
                    on_click=getattr(app, "open_todo_panel", None))
 
     def _bubble_suppressed(self) -> bool:
-        """设置窗口打开期间暂停气泡（与 PetApp._update_bubble_suppression_for_settings
+        """设置窗口打开期间暂停气泡（与 PetInstance._update_bubble_suppression_for_settings
         同一判定来源：抑制状态本就是 app 层根据对话框存在性设置的）。"""
         app = self._app
         return (

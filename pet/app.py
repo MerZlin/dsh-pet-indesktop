@@ -7,12 +7,13 @@
 - 托盘菜单 →「切换角色」
 切换后会热加载对应形象的 webm，并保留位置/朝向等配置。
 
-批5.1（纯重构）把原 PetApp 按「进程级 / 每窗」拆成两块，行为逐位不变、
-运行时仍一进程一窗：
+批5.1（纯重构）把原 PetApp 按「进程级 / 每窗」拆成两块，行为逐位不变；
+批5.2 spike 扩成多窗集合（AppShell 持有 ``_instances`` 列表，``self.instance``
+指主窗 = 列表头，兼容既有调用面）：
 - ``AppShell``：进程级服务（托盘、灵动岛、dock 菜单、更新、余额、系统通知、
-  碰撞会话、broker、aboutToQuit 收口），并持有唯一的 ``PetInstance``。
+  碰撞会话、broker、aboutToQuit 收口），持有 ``PetInstance`` 集合。
 - ``PetInstance``：每窗容器（config/lib/win/聊天窗/设置窗/气泡），持 backref
-  到 ``AppShell``，窗口级操作都从这里路由，``self.win`` 单窗假设据此收敛。
+  到 ``AppShell``，窗口级操作都从这里路由，``self.win`` 主窗单窗假设据此收敛。
 """
 
 from __future__ import annotations
@@ -295,13 +296,13 @@ class PetInstance:
         # 首帧缓存全局预算（高级用户可在 config.json 调小，省电/低配机用）；
         # 进程级设置，幂等，切角色重复调用无害。
         webm_clip_mod.set_first_frame_budget(
-            int(self.config.get("first_frame_cache_max_mb", 32)) * 1024 * 1024
+            int(self.config.get("first_frame_cache_max_mb", 8)) * 1024 * 1024
         )
         lib = MovieLibrary(
             character_id=character_id,
             prewarm_policy=prewarm,
         )
-        # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.5s 错峰），
+        # UI 就绪后统一调度预热：高优先级立即后台跑（带 0~0.05s 错峰），
         # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
         lib.schedule_high_priority_warm()
         lib.schedule_low_priority_warm()

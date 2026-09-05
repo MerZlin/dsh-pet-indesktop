@@ -470,6 +470,21 @@ def test_high_priority_warm_aborts_mid_batch_when_paused(tmp_path, monkeypatch):
     """P2：高优先级预热中途（metadata 解码期间）被 pause_warm——尚未开始的
     clip 不得再拉起 ffmpeg（非阻塞中途作废），首帧阶段整段跳过。"""
     lib = _make_lib(tmp_path, monkeypatch, clip_cls=BlockableClip)
+    # 批10-A3 后高优池 = clicks+turns+drag 共 3 素材 → workers=min(3,3)=3，
+    # 「排队中的 clip」场景结构性消失，使下方 skipped 断言沦为空洞通过。
+    # 本测要验证「pause 作废排队中的 clip」，故给高优池补 2 个假 clip：
+    # 高优至 5、workers 仍为 3，留下 2 个真实排队项。
+    queued_names = ["排队夹甲", "排队夹乙"]
+    for name in queued_names:
+        lib._movies[name] = BlockableClip(tmp_path / "videos" / f"{name}.webm")
+    real_priority_names = lib._priority_names
+
+    def five_high_priority_names():
+        high, low = real_priority_names()
+        return high + queued_names, low
+
+    monkeypatch.setattr(lib, "_priority_names", five_high_priority_names)
+
     results: dict = {}
     t = threading.Thread(
         target=lambda: (lib._warm_all_meta_background(), results.setdefault("done", True)),
@@ -479,10 +494,13 @@ def test_high_priority_warm_aborts_mid_batch_when_paused(tmp_path, monkeypatch):
     # 第一批（并发 3）已进入 warm_meta 阻塞：事件同步，不猜时序
     _wait_until(lambda: lib._movies[catalog.CLICKS[0]].meta_entered.is_set())
     lib.pause_warm()  # 隐藏/切角色：排队中的 clip 必须作废
-    for clip in list(lib._movies.values()):
-        if clip.meta_entered.is_set():
-            clip.meta_release.set()  # 放行已在跑的 metadata 探测
-    t.join(timeout=10.0)
+    # 放行所有已进入 warm_meta 的 clip：循环重查 entered 直到线程退出，
+    # 避免「快照后才进入」的 clip 阻塞在无人放行的 meta_release.wait(5.0)。
+    while t.is_alive():
+        for clip in list(lib._movies.values()):
+            if clip.meta_entered.is_set():
+                clip.meta_release.set()
+        t.join(timeout=0.05)
     assert not t.is_alive()
     assert results.get("done") is True
     # 首帧阶段整段跳过（暂停中，不得再拉起 ffmpeg）
@@ -493,6 +511,7 @@ def test_high_priority_warm_aborts_mid_batch_when_paused(tmp_path, monkeypatch):
     assert entered, "第一批高优先级 clip 必须已进入 warm_meta"
     assert all(c.meta_calls == 1 for c in entered)
     assert all(c.meta_calls == 0 for c in skipped), "暂停后排队中的 clip 不得再拉起 ffmpeg"
+    assert len(skipped) >= 2, "高优池必须留有真实排队项（否则 skipped 断言空洞）"
 
     # 恢复后新代次批次可完整跑完（门控不误伤）
     lib.resume_warm()

@@ -4,7 +4,7 @@
 锁定四点（全部事件/join/有界条件等待同步，不用 sleep 猜时序）：
 1. 快速连续 start/stop（Q 弹连点）不产生线程/ffmpeg 子进程泄漏；
 2. stop() 主动 terminate 底层 ffmpeg：stop 后进程句柄确实退出；
-3. 退役 reader 池有硬上限：池满且无法回收时拒绝启动新 reader；
+3. 退役 reader 池有硬上限：超限回收已确认退出者，存活者保留追踪；start() 绝不因池满拒绝（超限仅告警）；
 4. cleanup() 在 reader 仍存活时不丢失追踪（保持记录，等待后续回收）。
 """
 from __future__ import annotations

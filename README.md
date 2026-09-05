@@ -735,7 +735,7 @@ pet/
 ├── collision_ipc.py       # 碰撞协调者选举与成员协议（QLocalServer 控制面）
 ├── collision_debug.py     # 碰撞调试日志
 ├── decode_broker.py       # 多开共享解码 broker（共享内存 ring + seqlock，灰度默认关）
-├── frame_cache.py         # 帧预缩放缓存（字节硬预算 LRU）
+├── frame_cache.py         # 通用字节预算 LRU（webm 元数据缓存等小缓存用）
 ├── perfstats.py           # 性能打点（PET_PERF_STATS=1 启用，atexit 落盘）
 ├── platform_win.py        # Windows 平台层（鼠标穿透/全屏判定/PerPixel 输入）
 ├── platform_mac.py        # macOS 平台层（NSWindow level/激活策略）
@@ -757,6 +757,8 @@ pet/
 ├── harness_launcher.py    # DeepSeek Harness 一键启动
 ├── instance_launcher.py   # 「生小肥鱼」多开孵化
 ├── modern_settings_dialog.py  # 新版侧边栏设置对话框
+├── todo_reminder.py      # 待办提醒调度（气泡/桌面通知，PR72 合入）
+├── todo_panel.py         # 待办管理面板（右键菜单「待办提醒」打开）
 ├── context_menus/         # 新旧菜单模板、图标、彩蛋入口
 ├── chat/                  # 独立 AI 对话子系统（现代双栏 + 经典手机式）
 │   ├── models.py          # 数据模型（ProviderConfig/ChatSession/...）

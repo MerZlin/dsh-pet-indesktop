@@ -172,9 +172,10 @@ def _fg_fullscreen_probe() -> tuple[bool, str]:
     可在任意线程调用——不触碰 Qt 对象。判定链：
     1. foreground_window_info()（vision.py）：排除不可见/最小化/cloaked
        窗口，取 DWM 框架边界（物理像素，与本进程 DPI awareness 一致）；
-    2. 排除本进程与 shell 窗口；
-    3. 几何判定：窗口覆盖所在显示器完整几何（含任务栏），且无标题栏或置顶；
-    4. 兜底判定：Windows SHQueryUserNotificationState 报告全屏忙状态。
+    2. 排除本进程、已知覆盖层工具进程（_FS_SKIP_PROCS）与 shell 窗口；
+    3. 排除 WS_EX_TOOLWINDOW 工具窗口（截图覆盖层/输入法候选框/悬浮面板）；
+    4. 几何判定：窗口覆盖所在显示器完整几何（含任务栏），且无标题栏或置顶；
+    5. 兜底判定：Windows SHQueryUserNotificationState 报告全屏忙状态。
     """
     if os.name != 'nt':
         return False, "非 Windows"

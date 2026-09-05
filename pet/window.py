@@ -8,7 +8,7 @@
   - 点击回应 / 拖拽动画播完先回待机缓冲，待机播完再进随机链；
   - 移动：动画只提供"走路姿态"（3 选 1），位置由 QTimer 驱动，
     开头/结尾各 2s 不动，中间按播放进度插值；
-  - 透明区域鼠标穿透：每帧用当前帧 alpha 生成窗口 mask（等效原版命中层设计）。
+  - 透明区域鼠标穿透：非 Windows 每帧按当前帧 alpha 生成窗口 mask；Windows 改走逐像素 WS_EX_TRANSPARENT（platform_win），mask 只用于算 _mask_bounds。
 """
 
 from __future__ import annotations
@@ -93,7 +93,7 @@ from .platform_win import (
 # 后台播放音乐时自动播放的唱歌/哼歌动画
 SING_ANIM = '悠闲哼歌'
 
-# 动画启动被拒（movie.start() 返回 False，如退役 reader 卡死）时的降级策略：
+# 动画启动被拒（movie.start() 返回 False，如 imageio_ffmpeg 被杀毒软件隔离/clip 已 cleanup）时的降级策略：
 # 回退到上一个可播放动画/待机，并安排稍后重试被拒动画（B7 审查 P1-1）。
 # 重试有次数上限：病态 reader 永不退出时不再无限重试，避免 GUI 反复同步解码。
 _SWITCH_RETRY_DELAY_MS = 1500
@@ -996,7 +996,7 @@ class PetWindow(QWidget):
     def _pid_alive(pid: int) -> bool:
         """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。
 
-        实现已下沉到 slot_manager.pid_alive（多开避让与帧缓存预算均分共用），
+        实现已下沉到 slot_manager.pid_alive（多开位置避让），
         本方法保留作薄封装，外部对 PetWindow._pid_alive 的补丁仍生效。
         """
         return slot_manager_mod.pid_alive(pid)
@@ -1762,7 +1762,7 @@ class PetWindow(QWidget):
     def _switch(self, name: str, _link_request: bool = False) -> bool:
         """切换到指定动画（链式模型：全部一次性播放）。
 
-        若目标动画启动被拒绝（movie.start() 返回 False，如退役 reader 卡死），
+        若目标动画启动被拒绝（movie.start() 返回 False，如 imageio_ffmpeg 被杀毒软件隔离/clip 已 cleanup），
         执行明确降级（_switch_fallback）：回退到上一个可播放动画/待机并安排
         稍后重试——绝不留下「anim 已切换但 movie 未在播」的停滞态
         （B7 审查 P1-1）。
@@ -4025,7 +4025,7 @@ class PetWindow(QWidget):
         if os.name == 'nt':
             # 原生切 WS_EX_TRANSPARENT（等价 Qt 的 WindowTransparentForInput 但
             # 不销毁重建原生窗口，杜绝频闪）；若日后窗口被其它路径重建丢了样式，
-            # 逐像素控制器 10Hz 轮询会按 self.mouse_through 收敛（platform_win）。
+            # 逐像素控制器 100Hz（10ms）轮询会按 self.mouse_through 收敛（platform_win）。
             _set_windows_click_through(int(self.winId()), effective)
             return
         was_visible = self.isVisible()  # setWindowFlag 重建原生窗口会先隐藏，

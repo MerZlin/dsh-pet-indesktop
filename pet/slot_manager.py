@@ -480,7 +480,7 @@ def pid_alive(pid: int) -> bool:
 
 # --- 批5.2 R4：runtime 标记格式版本化（多窗每窗一份，旧 glob 不匹配）--------
 # 旧版（runtime-<pid>.json）用 glob('runtime-*.json') 读取；为避免新旧混跑时
-# 旧版把新版标记也计入「存活实例」而虚高计数（预算被错误压小），新版标记
+# 旧版把新版标记也计入「存活实例」而虚高计数（多开位置避让被干扰），新版标记
 # 改用不与 'runtime-*.json' 匹配的 pet-runtime-v2-<pid>-slot-<N>.json 前缀。
 _RUNTIME_V2_PREFIX = "pet-runtime-v2-"
 

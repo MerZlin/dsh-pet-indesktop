@@ -570,7 +570,7 @@ class MovieLibrary(QObject):
     def schedule_high_priority_warm(self) -> None:
         """应用层调用：UI 就绪后后台预热高优先级动画。
 
-        加入 0~0.5s 随机错峰，多开同时启动时避免 ffmpeg 进程洪峰。
+        加入 0~0.05s 随机错峰，多开同时启动时避免 ffmpeg 进程洪峰。
         """
         if not self._paths:
             return

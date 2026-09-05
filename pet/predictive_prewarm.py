@@ -7,8 +7,9 @@
 - 决策点前置：当前动画墙钟剩余 ≤ 提前量（帧驱动，按 decode_throttle_divisor
   修正闲置降帧的墙钟——不许用纯时间 QTimer），掷骰决定下一个动画，并在后台
   预解码其首帧进 LRU。
-- 只预测 ``_pick_next`` 的 acts/moves 分支产物；idle/turn/gap 步不预测（pinned
-  且常播，预测是纯浪费）。预测只存动画名，不预提交移动计划/位置/朝向。
+- 掷骰产物一律照存（含 idle/turn）——防稳态分布漂移（盲审 P1-1）；``_should_predict``
+  只闸预热不闸预测（idle/turn 时不预测会重塑稳态分布，预热才可能被跳过）。
+  预测只存动画名，不预提交移动计划/位置/朝向；gap 由窗口层 ``_animation_gap_active`` 守卫。
 - 预测记录单槽 ``{name, context_anim, gen}``。消费规则只有一条：context_anim
   与当前动画一致且代次未变（gap 期间另要求 gap 仍激活），不符即弃、现场掷骰
   —— 退化为现状行为。点击/拖拽/联动/唱歌打断全部经「换掉 self.anim」自然

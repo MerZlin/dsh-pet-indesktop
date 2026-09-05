@@ -606,7 +606,6 @@ def test_rearm_ack_timeout_falls_back_to_fresh_start(app, monkeypatch, tmp_path)
         assert len(spawns) == 1, "fresh start 必须拉起新 reader/进程"
         # 活性断言：fresh start 后有限时间内必有帧到达（门槛 #3）
         spawns[0][1].release()
-        assert _consume_until(clip, lambda: len(finished) == 0 and True) or True
         srcs: list = []
         clip.frameChanged.connect(srcs.append)
         spawns[0][1].release()

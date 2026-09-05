@@ -228,54 +228,65 @@ def test_worker_cancel_closes_only_its_own_response_and_does_not_close_others():
     assert resp_b.closed is True
 
 
-def test_provider_cancel_closes_blocking_response():
-    """b) fake provider 的 response 阻塞 read → cancel 后 close 被调用、read 返回"""
+def test_provider_cancel_closes_blocking_response(monkeypatch):
+    """真实 OpenAICompatibleProvider 的取消路径：经 cancel 事件驱动其真实 stream
+    循环——阻塞 read 被 cancel_response 的 response.close() 解除，stream 循环退出。
+
+    旧版全程未触被测对象（provider 构造即丢弃、断言的是测试自己调的 close）；
+    新版只在网络边界打桩（urllib.urlopen），生产 provider 的 stream 循环全真。
+    """
+    from pet.chat import providers
     from pet.chat.providers import OpenAICompatibleProvider
 
     class BlockingFakeResponse:
         def __init__(self):
             self.closed = False
             self.read_called = threading.Event()
-            self.unblock_event = threading.Event()
+            self.unblock = threading.Event()
 
         def read(self, size=4096):
             self.read_called.set()
-            # 阻塞直到 close() 被调用或 unblock
-            while not self.closed and not self.unblock_event.is_set():
+            # 模拟阻塞读：只有 close()（真实网络取消路径）或 unblock 才返回
+            while not self.closed and not self.unblock.is_set():
                 time.sleep(0.01)
             return b""
 
         def close(self):
             self.closed = True
-            self.unblock_event.set()
+            self.unblock.set()
 
-    provider = OpenAICompatibleProvider()
     fake_resp = BlockingFakeResponse()
-    responses = []
+    monkeypatch.setattr(
+        providers.urllib.request, "urlopen", lambda req, *a, **k: fake_resp
+    )
 
-    cancel_event = threading.Event()
-    finished = threading.Event()
+    app = _get_qapp()
+    service = ChatService(provider=OpenAICompatibleProvider())
+    cfg = ProviderConfig(
+        provider_id="test", name="test", base_url="http://invalid",
+        model="test", verify_ssl=False,
+    )
+    stopped: list[str] = []
+    service.stopped.connect(lambda rid: stopped.append(rid))
 
-    def _stream():
-        # 模拟 provider 循环
-        try:
-            responses.append(fake_resp)
-            while not cancel_event.is_set():
-                chunk = fake_resp.read(4096)
-                if not chunk:
-                    break
-        finally:
-            fake_resp.close()
-            finished.set()
+    service.send([{"role": "user", "content": "hi"}], cfg)
+    assert fake_resp.read_called.wait(timeout=2.0), "provider 未进入阻塞 read"
+    assert not fake_resp.closed, "cancel 前 response 不应被关闭"
 
-    t = threading.Thread(target=_stream)
-    t.start()
+    # 真实取消路径：service.stop() → worker.cancel_response() → response.close()
+    service.stop()
 
-    assert fake_resp.read_called.wait(timeout=2.0)
-    # 触发取消
-    cancel_event.set()
-    fake_resp.close()
+    # finished/stopped 经 QueuedConnection 投递到 GUI 线程，需 processEvents 驱动
+    deadline = time.monotonic() + 2.0
+    while not stopped and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    app.processEvents()
 
-    assert finished.wait(timeout=2.0), "cancel 路径未能在超时前中断阻塞的 read"
-    t.join(timeout=2.0)
-    assert fake_resp.closed is True
+    assert fake_resp.closed is True, "取消路径必须经 response.close() 解除阻塞读"
+    assert stopped, "真实 provider 的阻塞 read 未被取消路径解除（stream 循环未退出）"
+
+    # 清理：确保 worker 线程退出，避免 QThread 运行中被 GC 崩溃
+    if service._worker is not None:
+        service._worker.wait(2000)
+    service.shutdown()
