@@ -373,15 +373,6 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
 
     # ---- Exploration Loop Watchdog（开关 + 模式 + 风险/冷却参数）----
     sub.addSeparator()
-    # Dialogue wording is a presentation setting only; it does not alter the
-    # event stream or the Agent Link protocol.
-    dialogue = add_submenu(sub, "台词风格", None)
-    open_dialogue = dialogue.addAction("打开台词风格设置…")
-    open_dialogue.triggered.connect(
-        lambda: getattr(pet, 'on_open_modern_settings', None) and pet.on_open_modern_settings()
-    )
-
-    sub.addSeparator()
     pattern = add_submenu(sub, "循环检测", None)
     act = pattern.addAction("启用循环检测（识别重复 Search/Read/Think）")
     act.setCheckable(True)
