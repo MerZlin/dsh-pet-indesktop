@@ -731,6 +731,7 @@ class PetApp:
         win = PetWindow(lib, self.config, collision_session=self.collision_ipc,
                         broker_facade=self.broker_facade)
         self._wire_window(win)
+        win.install_file_eater()
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
         # 首次点击 Q 弹卡顿。这里保持无条件预热，避免首次点击/试听无声。

@@ -15,6 +15,7 @@ class WindowFeatureGateMixin:
     cfg: Any
     proactive_watcher: Any = None
     agent_link_manager: Any = None
+    _file_eater: Any = None
     _broker_facade: Any = None
 
     # ------------------------------------------------------------ 判定
@@ -45,6 +46,14 @@ class WindowFeatureGateMixin:
             from .agent_link import AgentLinkManager
             self.agent_link_manager = AgentLinkManager(self, self.cfg)
         return self.agent_link_manager
+
+    # ------------------------------------------------------------ 文件投喂
+    def install_file_eater(self):
+        """挂载“吃垃圾文件”拖放处理器（幂等，只对 PetWindow 实例调用）。"""
+        if self._file_eater is None:
+            from .file_eater import FileEaterDropHandler
+            self._file_eater = FileEaterDropHandler(self)
+        return self._file_eater
 
     # ------------------------------------------------------------ 同步
     def sync_optional_services(self) -> None:
