@@ -50,6 +50,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "self_talk_texts", "shift_drag", "show_dock_icon", "slingshot_enabled",
     "stream_capture_mode", "system_notifications_enabled", "throw_max_speed", "throw_strength",
     "experimental_single_process_spawn",
+    "todo_reminder_enabled", "todo_reminder_lead_minutes",
 })
 
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。

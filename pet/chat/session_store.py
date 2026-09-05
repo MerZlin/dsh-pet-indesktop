@@ -169,10 +169,30 @@ def _atomic_write(path: Path, payload: bytes) -> None:
             f.write(payload.decode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
-        os.replace(temp, path)
+        _replace_with_retry(temp, path)
     finally:
         temp.unlink(missing_ok=True)  # 异常路径清掉半成品 tmp
     _fsync_dir(path.parent)
+
+
+# Windows 上杀软/索引服务会短暂占用刚落盘的文件（WinError 5/32 →
+# PermissionError，CI windows-latest 实录），属可自愈的瞬时错误。
+_REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+def _replace_with_retry(temp: Path, path: Path) -> None:
+    """os.replace 带界退避重试：骑过目标文件的瞬时占用窗口。
+
+    只重试 PermissionError（真实权限错误多试几次代价仅秒级）；重试耗尽后
+    最后一次调用不捕获，真实失败照常上抛给 writer 线程诚实上报。
+    """
+    for delay in _REPLACE_RETRY_DELAYS:
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(temp, path)
 
 
 def _fsync_dir(folder: Path) -> None:

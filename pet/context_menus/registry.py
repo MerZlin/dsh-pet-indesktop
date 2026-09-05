@@ -51,7 +51,8 @@ ACTION_LABELS = {
     "harness": "启动 DeepSeek Harness", "deepseek_web": "打开网页版 DeepSeek",
     "check_update": "检查更新", "github_project": "GitHub 项目页",
     "quark_download": "夸克网盘下载", "agent_link": "Agent 联动",
-    "proactive_screen": "主动识屏", "modern_settings": "桌宠设置", "quit": "退出",
+    "proactive_screen": "主动识屏", "todo_panel": "待办提醒",
+    "modern_settings": "桌宠设置", "quit": "退出",
 }
 
 
@@ -69,7 +70,8 @@ ACTION_ICONS = {
     "quick_launch": "application", "balance": "balance", "harness": "harness",
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
-    "proactive_screen": "screen", "modern_settings": "settings", "quit": "quit",
+    "proactive_screen": "screen", "todo_panel": "todo",
+    "modern_settings": "settings", "quit": "quit",
 }
 
 CUSTOM_ICON_CHOICES = (
@@ -79,7 +81,7 @@ CUSTOM_ICON_CHOICES = (
     ("桌宠", "pet"), ("交互", "interaction"), ("置顶", "pin"),
     ("隐藏", "hide"), ("应用", "application"), ("余额", "balance"),
     ("网页", "web"), ("下载", "download"), ("更新", "update"),
-    ("自动化", "automation"), ("设置", "settings"),
+    ("自动化", "automation"), ("设置", "settings"), ("待办", "todo"),
 )
 
 
@@ -107,6 +109,10 @@ def _build_animations(menu, pet):
 
 def _build_settings(menu, pet):
     return add_action(menu, "桌宠设置", "settings", pet.on_open_modern_settings, close_on_trigger=True)
+
+
+def _build_todo_panel(menu, pet):
+    return add_action(menu, "待办提醒", "todo", pet.on_open_todo_panel, close_on_trigger=True)
 
 
 def _build_check_update(menu, pet):
@@ -179,6 +185,9 @@ class MenuActionRegistry:
             ),
             "modern_settings": MenuActionSpec(
                 _build_settings, _callback_available("on_open_modern_settings")
+            ),
+            "todo_panel": MenuActionSpec(
+                _build_todo_panel, _callback_available("on_open_todo_panel")
             ),
             "quit": MenuActionSpec(add_quit),
         }

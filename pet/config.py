@@ -597,6 +597,8 @@ class Config:
             # 也强制为 False：本键只是「用户请求」，平台门禁在启用点收口。
             "decode_broker_enabled": False,
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
+            "todo_reminder_enabled": True,   # 待办提醒总开关
+            "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             # 批10-A3：默认 32→8MB。预测式预热（批10-A1）落地后，首帧 LRU 只需
@@ -734,6 +736,7 @@ class Config:
             "chat_ui_style",
             "chat_follow_pet",
             "system_notifications_enabled",
+            "todo_reminder_enabled", "todo_reminder_lead_minutes",
             "character_aliases",
             "character_profiles",
             "chat_always_on_top",
@@ -882,6 +885,13 @@ class Config:
         self.data["system_notifications_enabled"] = _bool_or_default(
             self.data.get("system_notifications_enabled"), True
         )
+        # 待办提醒：开关同规防字符串布尔误开；提前量钳到 [0, 60] 分钟（0=不提前）。
+        self.data["todo_reminder_enabled"] = _bool_or_default(
+            self.data.get("todo_reminder_enabled"), True
+        )
+        self.data["todo_reminder_lead_minutes"] = int(_float_or_default(
+            self.data.get("todo_reminder_lead_minutes"), 5.0, 0.0, 60.0
+        ))
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
         self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
@@ -977,6 +987,7 @@ class Config:
             "idle_low_fps_enabled", "idle_low_fps_threshold",
             "media_prewarm", "first_frame_cache_max_mb", "predict_prewarm_lead_ms",
             "ffmpeg_recycle_minutes",
+            "todo_reminder_enabled", "todo_reminder_lead_minutes",
             "character_profiles", "chat_always_on_top", "dynamic_island",
         }:
             self._normalize_pet_settings()

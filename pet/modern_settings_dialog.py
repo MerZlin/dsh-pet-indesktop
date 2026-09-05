@@ -2928,6 +2928,14 @@ class ModernSettingsDialog(QDialog):
             SettingRow("agent_sound_cooldown", "冷却时间", "防止短时间内频繁触发音效；0 表示无时间冷却（仍单次去重）。", self.agent_sound_cooldown_spin),
         ]
         behavior_layout.addWidget(SettingsSection("Agent 联动 · 提示音效", agent_sound_rows, behavior_content))
+        behavior_layout.addWidget(SettingsSection("待办提醒", [
+            SettingRow("todo_reminder_enabled", "待办提醒",
+                       "到点通过气泡或桌面通知提醒；待办条目在右键菜单「待办提醒」面板中管理。",
+                       self.todo_reminder_check),
+            SettingRow("todo_reminder_lead_minutes", "提前提醒",
+                       "到点前提前提醒的分钟数（0~60，0 = 不提前，仅准点提醒一次）。",
+                       self.todo_reminder_lead_spin),
+        ], behavior_content))
         behavior_layout.addStretch(1)
         self._add_page("桌宠行为", "play", self._page_shell("桌宠行为", behavior_content))
 
@@ -3358,6 +3366,14 @@ class ModernSettingsDialog(QDialog):
         self.agent_sound_start_check.toggled.connect(lambda: self._update_agent_sound_subcontrols())
         self.agent_sound_done_check.toggled.connect(lambda: self._update_agent_sound_subcontrols())
         self.agent_sound_error_check.toggled.connect(lambda: self._update_agent_sound_subcontrols())
+
+        # 待办提醒：偏好两键（条目在右键菜单「待办提醒」面板中管理）
+        self.todo_reminder_check = ToggleSwitch(self)
+        self.todo_reminder_check.setChecked(bool(self.config.get("todo_reminder_enabled", True)))
+        self.todo_reminder_lead_spin = BrowserSpinBox(self)
+        self.todo_reminder_lead_spin.setRange(0, 60)
+        self.todo_reminder_lead_spin.setSuffix(" 分钟")
+        self.todo_reminder_lead_spin.setValue(int(self.config.get("todo_reminder_lead_minutes", 5) or 0))
 
         appearance = self.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
         self.menu_theme_select = ModernSelect(self, width=132)
@@ -4072,6 +4088,7 @@ class ModernSettingsDialog(QDialog):
         automation = page_content([
             ("Agent 文案", claim_prefix("agent_thinking_")),
             ("Agent 提示音", claim_prefix("agent_sound_")),
+            ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
             ("主动感知", proactive_rows),
         ])
 
@@ -4333,6 +4350,8 @@ class ModernSettingsDialog(QDialog):
         agent_cfg["sound_cooldown_seconds"] = float(self.agent_sound_cooldown_spin.value())
 
         self.config.set("agent_link", agent_cfg)
+        self.config.set("todo_reminder_enabled", self.todo_reminder_check.isChecked())
+        self.config.set("todo_reminder_lead_minutes", int(self.todo_reminder_lead_spin.value()))
         self.config.set("context_menu_appearance", {
             "theme": self.menu_theme_select.currentData(),
             "density": self.menu_density_select.currentData(),

@@ -49,6 +49,7 @@ from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .collision_ipc import CollisionIpcSession
 from .decode_broker import BrokerFacade
+from .todo_reminder import TodoReminderService
 
 
 class _BackgroundResult(QObject):
@@ -353,6 +354,7 @@ class PetInstance:
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self._slot_wrap(self.open_modern_settings)
         win.on_spawn_pet = self._slot_wrap(self.shell.spawn_pet)
+        win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._slot_wrap(self._notify_pet_hidden)
         # 批5.2 P0-2：右键「退出」注入窗级「退出这只」只在 flag 开（多窗）时；
@@ -683,6 +685,7 @@ class PetInstance:
             self.win.refresh_pet_settings()
         self.shell._sync_dynamic_island()
         self.shell._apply_balance_timer()
+        self.shell.todo_service.apply_config()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
 
@@ -788,6 +791,11 @@ class AppShell:
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
+        # 待办提醒：进程级单例（多窗共用一个调度器，避免每窗一个定时器重复通知）。
+        # win 引用在服务 tick 时经本类的 win 属性动态读取主窗，角色热切换重建
+        # 窗口后无需重绑（PR72 上游版挂在 PetApp；本分支进程级功能归 AppShell）。
+        self.todo_service = TodoReminderService(self)
+        self.todo_panel = None
         # 批5.2 P1-2/P2-6：进程级 flag 快照——启动期从主窗 config 读一次存
         # _single_process_spawn；窗级逻辑（runtime 标记版本化、日志前缀、
         # 退出分派、spawn 分发）一律读本快照，不读每窗 config。第二窗的
@@ -826,6 +834,25 @@ class AppShell:
     def instances(self) -> list[PetInstance]:
         return self._instances
 
+    # --- 进程级功能（todo 提醒等）的鸭式访问器：转发到主窗实例 ---
+    @property
+    def win(self) -> PetWindow | None:
+        """主窗窗口（TodoReminderService 的气泡锚点；无窗时 None）。"""
+        inst = getattr(self, 'instance', None)
+        return inst.win if inst is not None else None
+
+    @property
+    def modern_settings_dialog(self):
+        """转发主窗实例的设置对话框引用（TodoReminderService 气泡抑制判定用）。"""
+        inst = getattr(self, 'instance', None)
+        return getattr(inst, 'modern_settings_dialog', None) if inst is not None else None
+
+    @property
+    def chat_settings_dialog(self):
+        """转发主窗实例的对话设置引用（TodoReminderService 气泡抑制判定用）。"""
+        inst = getattr(self, 'instance', None)
+        return getattr(inst, 'chat_settings_dialog', None) if inst is not None else None
+
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
         # aboutToQuit 只在控制器层绑定一次：角色热切换会重建窗口，逐个
@@ -842,6 +869,7 @@ class AppShell:
         self._sync_dynamic_island()
         self.instance._apply_spawn_offset()
         self._apply_balance_timer()
+        self.todo_service.start()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
 
     # ------------------------------------------------------------ 退出收口
@@ -903,6 +931,7 @@ class AppShell:
                 logging.exception("退出时停止碰撞会话失败")
         # 会话异步写盘（B8）：全部会话已保存，再永久关闭写盘 worker
         #（关掉后迟到的 queued 回调提交会被明确拒绝）。
+        self.todo_service.stop()
         try:
             if not _session_store.close_all_writers(permanent=True):
                 logging.warning("退出时会话写盘 worker 未干净关闭")
@@ -1373,6 +1402,25 @@ class AppShell:
         menu.setProperty("dockMenuInstalled", dock_menu_installed)
         self.dock_menu = menu
         return menu
+
+    def open_todo_panel(self) -> None:
+        """打开待办管理面板（非模态单例；条目增删改即时落盘，PR72）。"""
+        from .todo_panel import TodoPanelDialog
+
+        if self.todo_panel is None:
+            dialog = TodoPanelDialog(self, parent=self.win)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dialog.finished.connect(self._todo_panel_finished)
+            self.todo_panel = dialog
+        # 展示走主窗实例的 _present_dialog（复用其置顶/聚焦与防重入逻辑）
+        inst = self.instance
+        if inst is not None:
+            inst._present_dialog(self.todo_panel)
+        else:
+            self.todo_panel.show()
+
+    def _todo_panel_finished(self, _result: int) -> None:
+        self.todo_panel = None
 
     def system_notify(self, title: str, message: str, *, on_click=None, duration_ms: int = 5000) -> None:
         """Show a bottom-right desktop notification (self-drawn, tray-independent)."""
