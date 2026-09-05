@@ -933,3 +933,36 @@ def test_non_primary_switch_builds_no_tray(tmp_path, app, monkeypatch):
         f"非主窗热切换不得触碰托盘，实际 build_tray 序列: {build_tray_calls}"
 
     _stop_sessions(shell.instance, sec)
+
+
+# ---------------------------------------------------------------- 新 slot 落种
+def test_seed_slot_config_follows_main_settings(tmp_path):
+    """新 slot 首次多开：配置跟随主设置（剔除每窗状态键）。"""
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    main_cfg = {"character": "shenshen", "click_sound_enabled": False,
+                "rx": 0.5, "ry": 0.9, "screen_name": "X", "facing": "left"}
+    (config_dir / "config.json").write_text(
+        json.dumps(main_cfg), encoding="utf-8")
+
+    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 2) is True
+    seeded = json.loads(
+        (config_dir / "config-slot-2.json").read_text(encoding="utf-8"))
+    assert seeded["click_sound_enabled"] is False  # 跟随主设置
+    assert seeded["character"] == "shenshen"
+    for k in ("rx", "ry", "screen_name", "facing"):
+        assert k not in seeded, f"每窗状态键 {k} 不得继承"
+
+
+def test_seed_slot_config_preserves_existing(tmp_path):
+    """已有存档（用户改过的）的 slot 不被落种覆盖。"""
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps({"character": "shenshen"}), encoding="utf-8")
+    existing = {"character": "other", "custom": 1}
+    (config_dir / "config-slot-3.json").write_text(
+        json.dumps(existing), encoding="utf-8")
+    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 3) is False
+    assert json.loads((config_dir / "config-slot-3.json").read_text(
+        encoding="utf-8")) == existing

@@ -1158,6 +1158,8 @@ class AppShell:
             raise slot_manager_mod.SlotManagerError(
                 "进程内生小肥鱼：前 128 个槽位均被占用或无法获取锁")
         instance_id = slot_manager_mod.slot_to_instance_id(slot_id)
+        # 新 slot 落种：首次多开跟随主设置（已有存档的 slot 不动）。
+        slot_manager_mod.seed_slot_config_from_main(self.config.dir, slot_id)
         # 复用主窗同一配置根目录（AppShell.config.dir 的父目录），使所有窗的
         # config-slot-N.json / sessions-slot-N 落在同一 APP_DIR_NAME 下，仅按
         # instance_id 区分；显式传 instance_id，不再依赖进程级 DSH_PET_INSTANCE。
@@ -1606,6 +1608,9 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         # 迁移旧 spawn 实例（主槽或无并发运行旧实例时触发）
         if slot_id == 0:
             slot_manager_mod.migrate_legacy_spawns(config_dir)
+
+        # 新 slot 落种：首次多开的实例跟随主设置（已有存档的 slot 不动）。
+        slot_manager_mod.seed_slot_config_from_main(config_dir, slot_id)
 
         config = Config(instance_id=instance_id)
         _mac_set_dock_icon_visible(bool(config.get("show_dock_icon", True)))

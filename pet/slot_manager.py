@@ -214,6 +214,36 @@ def get_config_path_for_slot(config_dir: Path | str, slot_id: int) -> Path:
     return config_path / "config.json" if slot_id == 0 else config_path / f"config-slot-{slot_id}.json"
 
 
+# 新 slot 落种时剔除的每窗状态键（位置/朝向不继承，其余设置跟随主配置）
+_SEED_EXCLUDE_KEYS = ("rx", "ry", "screen_name", "facing")
+
+
+def seed_slot_config_from_main(config_dir: Path | str, slot_id: int) -> bool:
+    """新 slot 的初始配置跟随主设置：slot 配置文件不存在时，用主 config.json
+    落种一份（剔除每窗状态键）。已有存档的 slot（用户改过的）一律不动。
+
+    用户反馈：多开出的新桌宠从零默认设置起步不合理，应跟随主设置。
+    返回 True 表示落了种。"""
+    if not slot_id:
+        return False
+    slot_path = get_config_path_for_slot(config_dir, slot_id)
+    if slot_path.exists():
+        return False  # 已有存档，不动
+    main_path = Path(config_dir) / "config.json"
+    try:
+        data = json.loads(main_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    for key in _SEED_EXCLUDE_KEYS:
+        data.pop(key, None)
+    try:
+        slot_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def get_sessions_dir_for_slot(config_dir: Path | str, slot_id: int) -> Path:
     """获取槽位对应的会话目录。"""
     config_path = Path(config_dir)
