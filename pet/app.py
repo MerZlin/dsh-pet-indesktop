@@ -286,13 +286,11 @@ class PetInstance:
 
     # ------------------------------------------------------------ 窗口构建
     def _create_library(self, character_id: str) -> MovieLibrary:
-        # 预热策略：默认 balanced（高频交互链预热首帧，随机动作池只取元数据
-        # 按需解码）；省电模式（闲置降帧开关）强制 minimal（连高频链也不预热，
-        # 常驻内存最低）。media_prewarm 配置键保留给手改 config 的高级用户
-        # （可显式设 full），但被省电模式覆盖。
+        # 预热策略：默认 balanced（瞬时交互核 pinned 预热首帧，随机动作池
+        # 按需解码）。省电模式（闲置降帧）与预热解耦——批10 预测式预热 +
+        # 批10-A3 的 8MB 预算接管后，「省电强制 minimal」的耦合已过时
+        # （残留清理：省电模式只保留降帧）。media_prewarm 键保留给高级用户。
         prewarm = str(self.config.get("media_prewarm", "balanced") or "balanced")
-        if self.config.get("idle_low_fps_enabled", False):
-            prewarm = "minimal"
         # 首帧缓存全局预算（高级用户可在 config.json 调小，省电/低配机用）；
         # 进程级设置，幂等，切角色重复调用无害。
         webm_clip_mod.set_first_frame_budget(

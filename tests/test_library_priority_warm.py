@@ -161,8 +161,8 @@ def test_low_warm_include_frames_by_policy(tmp_path, monkeypatch):
 
 
 def test_app_create_library_prewarm_derivation(tmp_path, monkeypatch):
-    """预热策略推导：默认 balanced；省电模式（idle_low_fps）强制 minimal；
-    手改 media_prewarm=full 的高级配置在非省电模式下生效、被省电模式覆盖。"""
+    """预热策略推导：默认 balanced；手改 media_prewarm=full 生效。
+    批10-A3 后省电模式与预热解耦（省电模式只降帧，不再强制 minimal）。"""
     from pet import app as app_mod
     from pet.config import Config
 
@@ -193,9 +193,10 @@ def test_app_create_library_prewarm_derivation(tmp_path, monkeypatch):
     app.instance._create_library("shenshen")
     assert captured["prewarm_policy"] == "full"
 
+    # 省电模式不再改写预热策略（解耦：省电模式 = 纯降帧）
     cfg = Config(tmp_path / "c")
     cfg.set("media_prewarm", "full")
     cfg.set("idle_low_fps_enabled", True)
     app = app_mod.AppShell(object(), cfg)
     app.instance._create_library("shenshen")
-    assert captured["prewarm_policy"] == "minimal"
+    assert captured["prewarm_policy"] == "full"

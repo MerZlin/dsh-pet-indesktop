@@ -2857,7 +2857,7 @@ class ModernSettingsDialog(QDialog):
         behavior_layout.addWidget(SettingsSection("动画", [
             SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
             SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
-            SettingRow("idle_low_fps", "省电模式", "一段时间不操作桌宠时，动画按半帧率呈现（24fps 素材 → 12fps 效果），任何交互立即恢复全帧率；同时不再预解码动画首帧，内存占用最低（首次交互可能微卡，切换角色或重启后完全生效）。", self.idle_low_fps_check),
+            SettingRow("idle_low_fps", "省电模式", "一段时间不操作桌宠时，动画按半帧率呈现（24fps 素材 → 12fps 效果），任何交互立即恢复全帧率。", self.idle_low_fps_check),
             SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
             SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
             SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
