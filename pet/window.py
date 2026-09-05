@@ -901,15 +901,37 @@ class PetWindow(QWidget):
             self._disarm_screen_restore_retry()
             return
         if time.monotonic() > self._screen_retry_deadline:
-            logging.info('等待屏幕 %s 超时（120s），放弃自动恢复', target)
+            # 超时也不能把窗口留在不可见的幻影屏上（启动时 Qt 可能枚举到
+            # 空名字/假几何的占位屏，show() 到上面真实桌面不可见）：强制
+            # 落到当前主屏并确保可见。宁可位置不理想，不可窗口消失。
+            logging.info('等待屏幕 %s 超时（120s），强制落到当前主屏', target)
             self._disarm_screen_restore_retry()
+            self._force_show_on_primary()
             return
         # _screen_available 找不到目标屏时回退当前屏（名字不匹配），找到才算上线
         scr = self._screen_available(target)
         if scr is not None and scr.name() == target:
             self._disarm_screen_restore_retry()
             self._restore_position()
+            self._ensure_visible_after_restore()
             logging.info('目标屏幕 %s 上线，已恢复到保存位置', target)
+
+    def _force_show_on_primary(self) -> None:
+        """幻影屏兜底：把窗口强制恢复到当前主屏并确保可见。
+
+        启动竞态下 QScreen 枚举可能给出空名字/假几何的占位屏，窗口 show()
+        到那个坐标系后真实桌面不可见（MainWindowHandle=0）。此路径保证
+        窗口最终一定落在真实可见的屏幕上。
+        """
+        self._restore_position()
+        self._awaiting_saved_screen = None
+        self._ensure_visible_after_restore()
+
+    def _ensure_visible_after_restore(self) -> None:
+        """恢复重试只 move() 不改可见性：若窗口曾被自动隐藏/未显示，
+        恢复后必须补一次 show()，否则窗口永远停在隐藏态（桌面无窗体）。"""
+        if not self.isVisible():
+            self.show()
 
     def _on_screen_added_restore(self, screen) -> None:
         """兼容入口：新屏幕上线 → 立即触发一次检查。"""

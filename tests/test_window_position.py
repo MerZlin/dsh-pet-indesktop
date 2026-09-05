@@ -122,10 +122,17 @@ def test_restore_defers_until_saved_screen_comes_online():
         def move(self, x, y):
             self.position = (x, y)
 
+        def isVisible(self):
+            return True  # 可见态：恢复后无需补 show
+
+        def show(self):
+            self.visible = True
+
         def _disarm_screen_restore_retry(self):
             self._awaiting_saved_screen = None
 
         _restore_position = PetWindow._restore_position
+        _ensure_visible_after_restore = PetWindow._ensure_visible_after_restore
         _screen_retry_tick = PetWindow._screen_retry_tick
 
     pet = FakePet()
@@ -198,3 +205,95 @@ def test_save_position_skipped_while_awaiting_saved_screen():
     pet._awaiting_saved_screen = None  # 恢复完成后正常保存
     PetWindow._save_position(pet)
     assert pet.cfg["screen_name"] == "primary"
+
+
+def test_retry_timeout_forces_restore_onto_primary_and_visible():
+    """幻影屏兜底：等目标屏超时后不允许放弃——窗口必须强制落到当前主屏并可见。
+
+    真实案例：打包 smoke 启动时 Qt 枚举到空名字/假几何（799x799）的占位屏，
+    窗口 show() 到幻影坐标系后桌面不可见（MainWindowHandle=0），旧逻辑超时
+    直接放弃，窗口永远不出现。"""
+    primary = _Screen("primary", QRect(0, 0, 1920, 1080))
+
+    class FakePet:
+        cfg = _Config(rx=0.5, ry=0.5, screen_name="secondary")
+        _w = 220
+        _h = 260
+        _awaiting_saved_screen = "secondary"
+        _screen_restore_armed = False
+        _screen_retry_deadline = -1.0  # 已超时
+        shown = 0
+
+        def _screen_available(self, screen_name=None):
+            return primary
+
+        def move(self, x, y):
+            self.position = (x, y)
+
+        def isVisible(self):
+            return False
+
+        def show(self):
+            self.shown += 1
+
+        def _disarm_screen_restore_retry(self):
+            self._awaiting_saved_screen = None
+
+        _restore_position = PetWindow._restore_position
+        _force_show_on_primary = PetWindow._force_show_on_primary
+        _ensure_visible_after_restore = PetWindow._ensure_visible_after_restore
+        _screen_retry_tick = PetWindow._screen_retry_tick
+
+    import time as _time
+    pet = FakePet()
+    pet.position = None
+    PetWindow._screen_retry_tick(pet)
+    assert pet._awaiting_saved_screen is None  # 兜底后撤防
+    assert pet.position is not None            # 已落到主屏
+    assert pet.shown == 1                      # 隐藏态下被强制显示
+
+
+def test_retry_success_ensures_visibility_after_restore():
+    """目标屏上线恢复后，若窗口此前不可见（自动隐藏/未显示），必须补 show()。"""
+    primary = _Screen("primary", QRect(0, 0, 1920, 1080))
+    secondary = _Screen("secondary", QRect(1920, 0, 1920, 1080))
+    screens = [primary, secondary]
+
+    class FakePet:
+        cfg = _Config(rx=0.5, ry=0.5, screen_name="secondary")
+        _w = 220
+        _h = 260
+        _awaiting_saved_screen = "secondary"
+        _screen_restore_armed = False
+        _screen_retry_deadline = float("inf")
+        shown = 0
+
+        def _screen_available(self, screen_name=None):
+            if screen_name:
+                for s in screens:
+                    if s.name() == screen_name:
+                        return s
+            return primary
+
+        def move(self, x, y):
+            self.position = (x, y)
+
+        def isVisible(self):
+            return False
+
+        def show(self):
+            self.shown += 1
+
+        def _disarm_screen_restore_retry(self):
+            self._awaiting_saved_screen = None
+
+        _restore_position = PetWindow._restore_position
+        _ensure_visible_after_restore = PetWindow._ensure_visible_after_restore
+        _screen_retry_tick = PetWindow._screen_retry_tick
+
+    pet = FakePet()
+    pet.position = None
+    PetWindow._screen_retry_tick(pet)
+    assert pet._awaiting_saved_screen is None
+    assert pet.position == (2770, 410)
+    assert pet.shown == 1
