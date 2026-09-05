@@ -83,7 +83,7 @@ from .menu_layout import (
 )
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 from .persona_phrases import phrase_keys, default_phrases
-from .persona_template import build_persona_template, template_json
+from .persona_template import PARAMETERS, build_persona_template, template_json
 
 
 # 语言配置页只展示用户能理解的事件名称；内部 key 仍用于保存和渲染。
@@ -112,33 +112,15 @@ DIALOGUE_LABELS = {
 }
 
 DIALOGUE_PARAMS = {
-    "name": "Agent 名称", "command": "待审批命令", "label": "工具名称",
+    "name": "Agent 名称", "command": "待审批命令", "label": "工具标签",
     "body": "问题内容", "count": "数量", "reasons": "判断原因",
     "detail": "错误详情", "text": "显示文本",
+    "tool": "原始工具名", "target": "操作目标", "callId": "工具调用 ID",
+    "step": "步骤序号", "ok": "是否成功",
 }
 
-DIALOGUE_KEY_PARAMS = {
-    "start": ("name",), "thinking": ("name",), "activity.read": ("name",),
-    "activity.search": ("name",), "activity.edit": ("name",), "activity.run": ("name",),
-    "activity.default": ("name",), "agent.attention": ("name",),
-    "agent.error": ("name",), "agent.missing": ("name",),
-    "bridge.install.pending": ("name",), "bridge.install.success": ("name",),
-    "bridge.install.failed": ("name", "detail"), "bridge.uninstall.failed": ("name",),
-    "dsh.writeback.failed": (), "approval.command": ("name", "command"),
-    "approval.tool": ("name", "label"), "approval.generic": ("name",),
-    "question.empty": (), "question.one": ("name", "body"),
-    "question.many": ("name", "count"), "watchdog.warning": ("name", "reasons"),
-    "watchdog.intervention": ("name", "reasons"), "watchdog.unknown": (),
-    "rate_limit.one": (), "rate_limit.many": ("count",), "llm_error.api": (),
-    "done.success": ("name",),
-    "done.attention": ("name",), "failure.retry": ("name",),
-    "failure.tool": ("name",), "failure.generic": ("name",),
-    "control.replan.pending": ("name",), "control.replan.success": ("name",),
-    "control.interrupt.pending": ("name",), "control.interrupt.success": ("name",),
-    "control.failed": ("name",), "stuck.reminder": ("name",),
-    "pattern.warning": ("name",), "pattern.control": ("name", "reasons"),
-    "balance.loading": (), "balance.result": ("text",),
-}
+# 与 persona_template.PARAMETERS 保持同一真相源：调用点注入什么，这里就宣称什么。
+DIALOGUE_KEY_PARAMS = dict(PARAMETERS)
 
 
 def _system_font_families() -> tuple[str, ...]:
@@ -4026,6 +4008,28 @@ class ModernSettingsDialog(QDialog):
                 edit.setPlainText("\n".join(str(item) for item in value if isinstance(item, str)))
             elif value is not None:
                 edit.setPlainText(str(value))
+        # entries[].phrases 兜底：顶层 phrases 缺失/为空的 key 用 entries 补齐
+        #（顶层有内容时以顶层为准，不被 entries 覆盖）。
+        entries = document.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                edit = self.dialogue_phrase_edits.get(str(entry.get("key") or "").strip())
+                if edit is None:
+                    continue
+                current = phrases.get(entry["key"])
+                has_top = (
+                    (isinstance(current, list) and any(isinstance(i, str) and i.strip() for i in current))
+                    or (isinstance(current, str) and current.strip())
+                )
+                if has_top or edit.toPlainText().strip():
+                    continue
+                value = entry.get("phrases")
+                if isinstance(value, list):
+                    text = "\n".join(str(item) for item in value if isinstance(item, str) and item.strip())
+                    if text:
+                        edit.setPlainText(text)
         self.dialogue_mode_select.setCurrentData("custom")
         self.dialogue_template_import_edit.clear()
         QMessageBox.information(self, "导入成功", "已导入全部弹窗内容模板；点击“保存并退出”后生效。")

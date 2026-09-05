@@ -1411,6 +1411,37 @@ class TestAgentLinkChainingAndActivity:
         mgr._on_agent_activity("dsh", "memory_search")
         assert "正在翻记忆" in bubbles[-1]
 
+    def test_activity_bubble_receives_target_from_tool_record(self, tmp_path):
+        """过程汇报气泡必须拿到上游 tool/call 的 target 等字段（显式注入，非隐式上下文）。
+
+        上游重构后 target 曾只在 raw_record 里、从未传入表现层；现在监视器同轮
+        转发的工具记录被按 agent 缓存，_on_agent_activity 显式传给模板。"""
+        mgr, win, bubbles, clock = self._make_mgr(
+            tmp_path, agent_link_cfg={"notify_activity": True}
+        )
+        # 模拟监视器 _poll 的同轮顺序：先 raw_record（工具记录），再 activity 信号
+        mgr._remember_dialogue_record("dsh", {
+            "ts": 1, "event": "tool/call", "tool": "read", "target": "src/app.py",
+            "callId": "call-1", "step": 2, "ok": True,
+        })
+        cfg = mgr.cfg
+        cfg.data["dialogue_mode"] = "custom"
+        cfg.data["dialogue_phrases"] = {
+            "activity.read": ["正在读取 {target}（第 {step} 步）"],
+            "activity.search": ["搜索目标：{target}"],
+        }
+        cfg.save()
+        mgr._on_agent_activity("dsh", "read")
+        assert bubbles, "气泡未弹出"
+        assert "src/app.py" in bubbles[-1]
+        assert "第 2 步" in bubbles[-1]
+
+        # 无 target 的工具记录（如 Claude hooks 只有 tool）：占位符保持原样，不注入空串
+        clock[0] += 15.0
+        mgr._remember_dialogue_record("dsh", {"ts": 2, "event": "tool/call", "tool": "read"})
+        mgr._on_agent_activity("dsh", "grep")
+        assert "{target}" in bubbles[-1]
+
     def test_window_smooth_chaining(self, tmp_path):
         """4. window 侧平滑衔接（用真实 PetWindow + MovieLibrary，offscreen，参考 TestAgentMenuRebound 的构造）：
         win._switch('优雅女仆舞')（一次性动作）后 win.request_link_anim('写代码') →

@@ -1536,6 +1536,10 @@ class AgentLinkManager(QObject):
         # intentionally data-driven: newly added bridge fields become usable
         # without another per-event adapter change.
         self._dialogue_context: dict[str, Any] = {}
+        # 最近一条工具记录（tool/call，含 target/callId/step/ok），按 agent 缓存：
+        # 过程汇报气泡与 tool 信号同轮触发，用它把 target 等字段显式送进气泡，
+        # 不再依赖「恰好是最后一条记录」的隐式上下文。
+        self._last_tool_records: dict[str, dict[str, Any]] = {}
         self._event_runtime = AgentEventRuntime()
         self._rate_limit_tracker = RateLimitTracker()
         # 待处理阻塞型交互：interaction_id → {"agent_key", "kind": "approval"|"question",
@@ -2092,6 +2096,8 @@ class AgentLinkManager(QObject):
         context.setdefault("agent", agent_key)
         context.setdefault("agent_name", self.agent_names.get(agent_key, agent_key))
         self._dialogue_context = context
+        if str(context.get("tool") or "").strip() or str(context.get("event") or "") == "tool/call":
+            self._last_tool_records[agent_key] = context
 
     def _dialogue(self, key: str, fallback: str, **values) -> str:
         """Render an event with explicit aliases plus latest upstream fields."""
@@ -2181,7 +2187,16 @@ class AgentLinkManager(QObject):
             key = "activity.run"
         else:
             key = "activity.default"
-        text = self._dialogue(key, f"{name} {label}…", name=name)
+        # tool 信号与 tool/call 记录同轮到达（监视器 _poll 先发 raw_record 再发
+        # activity），按 agent 取最近一条工具记录，把 target/callId/step/ok 显式
+        # 送进气泡；缺失的字段不传，占位符保持原样（不注入空串撑脏文案）。
+        tool_record = self._last_tool_records.get(agent_key) or {}
+        values: dict[str, Any] = {"name": name, "tool": str(tool).strip(), "label": label}
+        for field in ("target", "callId", "step", "ok"):
+            value = tool_record.get(field)
+            if value not in (None, ""):
+                values[field] = value
+        text = self._dialogue(key, f"{name} {label}…", **values)
         self._show_link_bubble(text, important=False, duration_ms=2600)
 
     def _on_approval_request(self, agent_key: str, payload: dict) -> None:

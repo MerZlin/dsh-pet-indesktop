@@ -99,6 +99,51 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
     assert abs(agent_cfg["sound_cooldown_seconds"] - 3.5) < 1e-4
 
 
+def test_import_dialogue_template_reads_entries_and_top_level_phrases(tmp_path, monkeypatch):
+    """导入模板必须同时读取顶层 phrases 与 entries[].phrases（既有 bug 回归）。"""
+    import json
+
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: QMessageBox.StandardButton.Ok)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Ok)
+    cfg = Config(tmp_path / "appdata")
+    dialog = ModernSettingsDialog(cfg, include_ai=False)
+    try:
+        # 1) 只改了 entries[].phrases（顶层缺失/为空）的模板也要生效
+        entries_only = {
+            "template": "persona-phrases/v1",
+            "mode": "custom",
+            "phrases": {},
+            "entries": [
+                {"key": "start", "description": "start", "sources": [], "parameters": [],
+                 "displayHint": "", "phrases": ["entries 里的台词 {name}"]},
+                {"key": "done.success", "description": "done", "sources": [], "parameters": [],
+                 "displayHint": "", "phrases": []},
+            ],
+        }
+        dialog.dialogue_template_import_edit.setPlainText(json.dumps(entries_only, ensure_ascii=False))
+        dialog._import_dialogue_template_json()
+        assert dialog.dialogue_phrase_edits["start"].toPlainText() == "entries 里的台词 {name}"
+        assert dialog.dialogue_mode_select.currentData() == "custom"
+
+        # 2) 顶层 phrases 有内容时以顶层为准，不被 entries 覆盖
+        both = {
+            "template": "persona-phrases/v1",
+            "mode": "custom",
+            "phrases": {"start": ["顶层台词 {name}"]},
+            "entries": [
+                {"key": "start", "description": "start", "sources": [], "parameters": [],
+                 "displayHint": "", "phrases": ["entries 不应覆盖"]},
+            ],
+        }
+        dialog.dialogue_template_import_edit.setPlainText(json.dumps(both, ensure_ascii=False))
+        dialog._import_dialogue_template_json()
+        assert dialog.dialogue_phrase_edits["start"].toPlainText() == "顶层台词 {name}"
+    finally:
+        dialog.deleteLater()
+
+
 def test_agent_sound_controls_visibility_and_subcontrols(qapp, tmp_path: Path):
     """总开关隐藏子项；单事件开关隐藏路径和试听，但保留自身以便恢复。"""
     cfg_root = tmp_path / "appdata"
@@ -128,3 +173,20 @@ def test_agent_sound_controls_visibility_and_subcontrols(qapp, tmp_path: Path):
         assert dialog.agent_sound_start_preview.isHidden() is False
     finally:
         dialog.deleteLater()
+
+def test_dialogue_key_params_match_runtime_call_sites():
+    """设置页每 key 的“可用参数”提示直接派生自 PARAMETERS（单一真相源）。
+
+    上游重构曾让设置页提示与运行时注入漂移；现在 DIALOGUE_KEY_PARAMS 由
+    persona_template.PARAMETERS 派生，这里验证派生关系与代表性条目。"""
+    from pet.modern_settings_dialog import DIALOGUE_KEY_PARAMS, DIALOGUE_PARAMS
+    from pet.persona_template import PARAMETERS
+
+    assert DIALOGUE_KEY_PARAMS == dict(PARAMETERS)
+    # 展示名必须覆盖全部宣称的参数（对话框 hint 渲染用 DIALOGUE_PARAMS[item]）
+    advertised = {f for fields in PARAMETERS.values() for f in fields}
+    assert advertised <= set(DIALOGUE_PARAMS), sorted(advertised - set(DIALOGUE_PARAMS))
+    # activity 组把上游 target 等字段送到表现层后的代表条目
+    assert "target" in DIALOGUE_KEY_PARAMS["activity.read"]
+    assert DIALOGUE_KEY_PARAMS["rate_limit.one"] == ("count",)
+    assert DIALOGUE_KEY_PARAMS["dsh.writeback.failed"] == ()

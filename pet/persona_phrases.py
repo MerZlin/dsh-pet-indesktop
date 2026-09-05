@@ -162,7 +162,7 @@ _PHRASES = {
 for _key in (
     "control.replan.pending", "control.replan.success", "control.interrupt.pending",
     "control.interrupt.success", "control.failed", "stuck.reminder", "pattern.warning",
-    "pattern.control", "balance.query",
+    "pattern.control", "balance.loading", "balance.result",
 ):
     _PHRASES.setdefault(_key, [])
 
