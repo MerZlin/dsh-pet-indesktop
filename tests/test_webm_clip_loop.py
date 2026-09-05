@@ -1175,3 +1175,33 @@ def test_thread_none_after_recycle_self_exit(app, monkeypatch, tmp_path):
         _close_all(spawns)
         clip.cleanup()
         app.processEvents()
+
+
+def test_parked_subscriber_clip_start_goes_feed_not_rearm(app, monkeypatch, tmp_path):
+    """P1-2 回归（批5.3 复审）：parked 且已是订阅者（_feed_source 置位）的
+    clip，start() 不得走 re-arm——驻留的旧 reader 会继续本地解码、绕过 feed
+    分派 = 静默双 ffmpeg。必须落 fresh start 进 feed 分派。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    rearm_calls: list = []
+    feed_calls: list = []
+    monkeypatch.setattr(clip, "_rearm_loop_reader",
+                        lambda: rearm_calls.append(1) or True)
+    monkeypatch.setattr(clip, "_reader_feed",
+                        lambda *a, **k: feed_calls.append(1) or True)
+    clip._soft_parked = True
+    clip._feed_source = object()  # 已是订阅者身份
+    try:
+        assert clip.start() is True
+        assert rearm_calls == [], "订阅者身份的 parked clip 绝不得 re-arm（P1-2）"
+        assert feed_calls == [1], "必须 fresh start 并进 feed 分派"
+        # 等 fresh reader 线程自然结束（feed 立即返回 True），避免遗留
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and clip._thread is not None:
+            time.sleep(0.02)
+        assert clip._thread is None
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()

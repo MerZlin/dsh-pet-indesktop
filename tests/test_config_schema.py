@@ -38,7 +38,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "collision_enabled", "collision_friction", "collision_impulse_cap",
     "collision_mass_scale", "collision_restitution", "collision_sound_enabled",
     "collision_sound_volume", "context_menu_appearance", "context_menu_layout", "context_menu_template",
-    "cursor_hidden_passthrough", "decode_broker_enabled", "drag_physics",
+    "cursor_hidden_passthrough", "drag_physics",
     "dynamic_island", "facing",
     "idle_low_fps_enabled", "idle_low_fps_threshold", "lock_position",
     "menu_easter_egg", "media_prewarm", "first_frame_cache_max_mb", "predict_prewarm_lead_ms", "ffmpeg_recycle_minutes", "modern_chat_background", "modern_chat_background_fill",
@@ -49,13 +49,13 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "self_talk_image_dir", "self_talk_image_scale", "self_talk_max_interval", "self_talk_min_interval",
     "self_talk_texts", "shift_drag", "show_dock_icon", "slingshot_enabled",
     "stream_capture_mode", "system_notifications_enabled", "throw_max_speed", "throw_strength",
-    "experimental_single_process_spawn",
+    "experimental_single_process_spawn", "experimental_shared_decode",
 })
 
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。
 SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat"})
 
-# 默认值 dict 键集合现状快照（76 键）= 白名单 ∪ 特例键。
+# 默认值 dict 键集合现状快照（77 键）= 白名单 ∪ 特例键。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

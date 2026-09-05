@@ -3,7 +3,7 @@
 
 三条红线，红了就是架构倒退，不许靠改测试放行：
 1. 依赖方向：纯逻辑层（collision/physics/collision_codec）不依赖 Qt；
-   decode_broker 不反向依赖 window/webm_clip（钩子经 movie 属性注入）。
+   decode_fanout 不反向依赖 window/webm_clip（钩子经 movie 属性注入）。
 2. 私有面冻结：PetWindow 私有成员（win._xxx）只许 window.py 自身与
    collision_client.py（窗口的碰撞客户端，半内部）访问；app.py /
    agent_link.py / context_menus/ 再出现即为违规（S2 已清零，防回潮）。
@@ -30,7 +30,13 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # A1 修复的窗口权威侧，+6 行含注释；clip 侧清槽 API 在 webm_clip.py）。
 # 2026-09-05 上调到 4360（批12 复审 N1：_on_clip_finished 对弃播 clip
 # 在结束标记消费点补清显示槽，+6 行含注释）。
-WINDOW_PY_LINE_BUDGET = 4360
+# 2026-09-05 批5.3 下调到 4340：同角色共享解码链（进程内帧扇出）——窗口侧
+# 删除 P3 broker 首个 idle 延迟与轮询（_broker_delays_first_idle /
+# _broker_arm_first_idle_if_pending / _broker_first_idle_tick，约 45 行）并
+# 去掉 broker 首个 idle 延迟分支（__init__），净减 ~44 行；新增逻辑全部进
+# 新模块 pet/decode_fanout.py（hub/feed/ring/看门狗），窗口侧仅 `_sync_movie_throttle`
+# 加 decode_pace_external 守卫（hub 接管源 pace 时上报而非直推）。
+WINDOW_PY_LINE_BUDGET = 4340
 
 
 def _read(name: str) -> str:
@@ -43,11 +49,11 @@ def test_pure_logic_modules_do_not_import_qt():
         assert "PySide6" not in src, f"{name} 引入了 Qt 依赖，破坏纯函数层定位"
 
 
-def test_decode_broker_does_not_depend_on_window_or_player():
-    src = _read("decode_broker.py")
+def test_decode_fanout_does_not_depend_on_window_or_player():
+    src = _read("decode_fanout.py")
     for banned in ("pet.window", "pet.webm_clip", "from .window", "from .webm_clip",
                    "import window", "import webm_clip"):
-        assert banned not in src, f"decode_broker 反向依赖 {banned}，破坏单向依赖"
+        assert banned not in src, f"decode_fanout 反向依赖 {banned}，破坏单向依赖"
 
 
 def test_window_private_surface_frozen():

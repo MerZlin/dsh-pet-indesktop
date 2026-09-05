@@ -99,6 +99,24 @@ class _FakeWindow:
         pass
 
 
+class _FanoutMovie:
+    """与 DecodeFanoutHub fan-out 接缝兼容的最小替身（批5.3 生命周期断言用）。"""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.playback_speed = 1.0
+        self._publish_sink = None
+        self._feed_source = None
+        self.decode_throttle_divisor = 1
+        self.decode_pace_external = False
+
+    def set_decode_throttle(self, divisor: int) -> None:
+        self.decode_throttle_divisor = max(1, int(divisor))
+
+    def set_decode_pace_external(self, value: bool) -> None:
+        self.decode_pace_external = bool(value)
+
+
 def _make_primary_with_slot(tmp_path):
     """建一个持有 slot-0 锁的主窗 AppShell（spawn 第二个实例会拿到 slot-1）。"""
     config = Config(tmp_path)
@@ -222,22 +240,27 @@ def test_exit_window_cleans_window_resources_only(tmp_path, app, monkeypatch):
         session_store_mod, "close_writer_for_root",
         lambda root, timeout=10.0: closed_roots.append(str(root)) or True)
 
-    # 进程级资源打点：本窗的会话/broker 应停；主窗（其它窗）的绝不应停
+    # 进程级资源打点：本窗碰撞会话应停；共享解码 hub（进程级）绝不被单窗退出
+    # 拆除（各窗共用；真收口只在全部退出的 stop_all）。主窗（其它窗）的会话/资源
+    # 绝不应被动。
     sec_ipc_stop = []
-    sec_broker_shutdown = []
     primary_ipc_stop = []
-    primary_broker_shutdown = []
     permanent_calls = []
     monkeypatch.setattr(sec.collision_ipc, "stop", lambda: sec_ipc_stop.append(1))
-    monkeypatch.setattr(sec.broker_facade, "shutdown",
-                        lambda: sec_broker_shutdown.append(1))
     monkeypatch.setattr(shell.instance.collision_ipc, "stop",
                         lambda: primary_ipc_stop.append(1))
-    monkeypatch.setattr(shell.instance.broker_facade, "shutdown",
-                        lambda: primary_broker_shutdown.append(1))
     monkeypatch.setattr(
         session_store_mod, "close_all_writers",
         lambda timeout=10.0, permanent=False: permanent_calls.append(permanent) or True)
+
+    # 批5.3：各窗共用同一进程级 hub（共享解码），单窗退出绝不拆它——先在此
+    # 建一个共享源，退出后仍应存活（hub 不因单窗退出而清空）。
+    hub = shell._decode_hub
+    pub_movie = _FanoutMovie(str(tmp_path / "idle.webm"))
+    assert hub is sec.broker_facade is shell.instance.broker_facade, \
+        "批5.3：broker_facade 已是进程级共享 hub"
+    assert hub.shareable_start("idle", pub_movie) == "publish"
+    assert hub._sources, "共享源已建立（发布者）"
 
     assert len(shell.instances) == 2
     shell._on_window_exit_requested(sec)
@@ -249,12 +272,12 @@ def test_exit_window_cleans_window_resources_only(tmp_path, app, monkeypatch):
     assert not marker.exists(), "「退出这只」应删除本窗 runtime 标记"
     assert sec.slot_handle is None, "「退出这只」应释放本窗 slot 锁"
     assert closed_roots == [str(sec_root)], "只关本窗 sessions-slot-N 的 writer"
-    # 本窗的会话/broker 被停；主窗（其它窗）的未被动
+    # 本窗碰撞会话被停；主窗（其它窗）的未被动
     assert sec_ipc_stop == [1]
-    assert sec_broker_shutdown == [1]
     assert primary_ipc_stop == []
-    assert primary_broker_shutdown == []
     assert permanent_calls == []
+    # 共享解码 hub 不被单窗退出拆除（进程级：各窗共用，真收口仅在全部退出）
+    assert hub._sources, "单窗退出不得清空共享解码 hub 的源表"
     # 主窗仍在（非最后一窗不触全进程退出）
     assert len(shell.instances) == 1
 
@@ -311,11 +334,14 @@ def test_switch_character_rebuilds_own_session_and_broker(tmp_path, app, monkeyp
 
     shell.instance.switch_character(target)
 
-    # 本窗旧会话/资源被收口；会话/broker 被重建（对象 id 变化）
+    # 本窗旧碰撞会话被停并被重建（对象 id 变化）；进程级共享 hub 不被重建
+    #（各窗共用，批5.3）。
     assert ipc_stop == [1], "switch_character 应停本窗旧碰撞会话"
-    assert broker_shutdown == [1], "switch_character 应关闭本窗旧 broker"
+    assert broker_shutdown == [], \
+        "switch_character 不应关进程级共享解码 hub（批5.3 各窗共用）"
     assert shell.instance.collision_ipc is not old_ipc, "本窗 collision_ipc 应重建"
-    assert shell.instance.broker_facade is not old_broker, "本窗 broker_facade 应重建"
+    assert shell.instance.broker_facade is old_broker, \
+        "进程级解码 hub 不被重建（各窗共用同一份）"
     assert shell.instance.collision_ipc._thread.isRunning(), "新会话应被 start"
     # 其它窗的会话/资源未被动
     assert id(sec.collision_ipc) == sec_ipc_id
@@ -718,19 +744,20 @@ def test_enable_chat_setter_does_not_write_shell(tmp_path, app):
     assert bare.enable_chat is False
 
 
-def test_in_process_spawn_disables_broker_when_enabled(tmp_path, app, monkeypatch):
-    """P1-6：主窗 decode_broker_enabled 为真时，进程内 spawn 记 warning 并
-    停用新窗 broker（不 bind），避免共享 facade 的跨窗干扰。"""
-    import pet.decode_broker as decode_broker_mod
-    monkeypatch.setattr(decode_broker_mod, "broker_platform_supported", lambda: True)
+def test_in_process_spawn_shares_process_hub(tmp_path, app, monkeypatch):
+    """批5.3：P1-6 移除——进程内多窗与``decode_broker_enabled``的互斥声明作废。
+    新窗与主窗共用同一进程级``DecodeFanoutHub``（experimental_shared_decode 默认
+    开 且 experimental_single_process_spawn 开 → hub 启用），不再有「停用新窗
+    broker（不 bind）」的限制。"""
     config = Config(tmp_path)
     config.set("experimental_single_process_spawn", True)
-    config.set("decode_broker_enabled", True)
+    config.set("experimental_shared_decode", True)
     config.save()
     slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config.dir, preferred_slot=0)
     shell = AppShell(QApplication.instance(), config, enable_chat=True,
                      slot_handle=slot_handle, slot_id=slot_id)
-    # 主窗 broker 启用（平台假定为支持）
+    # 双门开 → 进程级 hub 启用
+    assert shell._decode_hub.enabled is True
     assert shell.instance.broker_facade.enabled is True
 
     def fake_build_window(self, character_id, lib=None, build_tray=True):
@@ -745,12 +772,29 @@ def test_in_process_spawn_disables_broker_when_enabled(tmp_path, app, monkeypatc
 
     second = shell.spawn_in_process_window(1)
     assert second is not shell.instance
-    assert second.broker_facade.enabled is False, "P1-6：进程内 spawn 应停用新窗 broker"
+    # 新窗与主窗共用同一进程级 hub（不是停用/独立 broker）
+    assert second.broker_facade is shell.instance.broker_facade
+    assert second.broker_facade.enabled is True
 
     _stop_sessions(second)
     second.win.close()
     slot_manager_mod._unlock_file(second.slot_handle)
     second.slot_handle = None
+    slot_manager_mod._unlock_file(slot_handle)
+
+
+def test_in_process_spawn_hub_disabled_when_shared_decode_off(tmp_path, app, monkeypatch):
+    """experimental_shared_decode 关 → 进程级 hub 不激活（各窗独立解码）。"""
+    config = Config(tmp_path)
+    config.set("experimental_single_process_spawn", True)
+    config.set("experimental_shared_decode", False)
+    config.save()
+    slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config.dir, preferred_slot=0)
+    shell = AppShell(QApplication.instance(), config, enable_chat=True,
+                     slot_handle=slot_handle, slot_id=slot_id)
+    assert shell._decode_hub.enabled is False
+    assert shell.instance.broker_facade.enabled is False
+    assert shell.instance.broker_facade.shareable_start("idle", _FanoutMovie("x.webm")) == "local"
     slot_manager_mod._unlock_file(slot_handle)
 
 

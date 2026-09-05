@@ -193,9 +193,14 @@ class _ThrottleFakeClip(FakeClip):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.decode_throttle_divisor = 1
+        # 批5.3：hub 接管源解码 pace 后的标志（_sync_movie_throttle 据此不直推）
+        self.decode_pace_external = False
 
     def set_decode_throttle(self, divisor: int) -> None:
         self.decode_throttle_divisor = max(1, int(divisor))
+
+    def set_decode_pace_external(self, value: bool) -> None:
+        self.decode_pace_external = bool(value)
 
 
 # ============================================================================
@@ -956,6 +961,38 @@ class TestWindowDecodeThrottleLinkage:
             assert target.decode_throttle_divisor == IDLE_LOW_FPS_DIVISOR
             win.mark_activity()
             assert target.decode_throttle_divisor == 1
+        finally:
+            win.close()
+            app.processEvents()
+
+    def test_hub_paced_source_window_keeps_timeline_skip_when_reduced(self, app, tmp_path):
+        # 批5.3：源窗被 hub 定 pace（decode_pace_external=True, divisor=1）。
+        # 即使源窗闲置降帧激活，_sync_movie_throttle 也不直接推 divisor（改经
+        # hub 上报，本例无 hub → no-op），movie 保持 hub 定的 divisor=1 →
+        # _movie_decode_throttled() False → 走既有时间线跳帧分支（非节流路径）。
+        cfg = _make_config(tmp_path, enabled=True, threshold=0.0)
+        clock = FakeClock()
+        lib = FakeLibrary(frame_count=10)
+        win = PetWindow(lib, cfg, clock=clock)
+        win.show()
+        app.processEvents()
+        try:
+            clock.advance(60)
+            assert win._idle_reduction_active() is True
+            hub_paced = _ThrottleFakeClip()
+            hub_paced.decode_pace_external = True
+            hub_paced.decode_throttle_divisor = 1  # hub 仲裁有效 pace = 1
+            win.movie = hub_paced
+            calls = []
+            orig = win._rebuild_frame
+            win._rebuild_frame = lambda: (calls.append(1), orig())[1]
+            anim = win.anim
+            win._on_frame(anim, 1)
+            # 奇数帧走跳帧分支：不发布（重建未触发），divisor 保持 hub 定的 1
+            assert len(calls) == 0
+            assert hub_paced.decode_throttle_divisor == 1
+            win._on_frame(anim, 2)
+            assert len(calls) == 1  # 偶数帧照常发布
         finally:
             win.close()
             app.processEvents()

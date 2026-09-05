@@ -167,6 +167,11 @@ _LOOP_REARM_GRACE_SECS = 1.0
 # 存活（动画链停摆）。正常路径 ack 毫秒级到达，此值只覆盖病态窗口。
 _LOOP_REARM_ACK_TIMEOUT = 0.5
 
+# 订阅授权有界等待预算（毫秒，批5.3）：进程内 fan-out 的 feed 立即就绪，
+# 实际不等待；常量本地化以替代对 decode_broker 的 import（该模块退役后
+# webm_clip 不再反向依赖 broker）。
+_SUBSCRIBE_BUDGET_MS = 600
+
 # ------------------------------------------------------------ ffmpeg exe 探测串行化（批 6-8b）
 # imageio 的 get_ffmpeg_exe() 在缓存未命中时用 subprocess.check_call 跑
 # `ffmpeg -version` 探测（**无限等待**）。并发 reader 同时冷启动会各自拉起
@@ -788,6 +793,11 @@ class WebMClip(QObject):
         # 与 _generation 的跨线程读取同一模式）。必须在 _timer 初始化前
         # 赋值（_timer_interval 会读它）。
         self._decode_throttle_divisor = 1
+        # 批5.3 共享解码：hub 接管源 clip 的解码 pace（有效 divisor =
+        # min(在挂消费者期望值)）。置位后窗口层 _sync_movie_throttle 不再直接
+        # 推 divider（改经 hub._report_desired_throttle 上报），避免覆盖 hub 仲裁。
+        # 主线程写（hub GUI 线程）、窗口 setter 读；bool 赋值在 CPython GIL 下原子。
+        self._decode_pace_external = False
         # 批11-B1：ffmpeg 圈边界定期回收阈值（秒；0 = 关闭回收）。窗口层经
         # set_recycle_minutes 推送 config 的 ffmpeg_recycle_minutes（分钟，
         # 默认 10）。构造默认 0（关闭）：未经窗口推送的 clip（直接测试等）
@@ -1231,6 +1241,15 @@ class WebMClip(QObject):
         """当前解码节流比率（1 = 不节流）。窗口层读取以协调发布语义。"""
         return self._decode_throttle_divisor
 
+    @property
+    def decode_pace_external(self) -> bool:
+        """解码 pace 是否由共享 hub 接管（批5.3）。置位后窗口层不直接推 divider。"""
+        return self._decode_pace_external
+
+    def set_decode_pace_external(self, value: bool) -> None:
+        """置/清共享 hub 外部 pace（批5.3；hub GUI 线程调用）。"""
+        self._decode_pace_external = bool(value)
+
     def set_decode_throttle(self, divisor: int) -> None:
         """设置解码节流比率（闲置降帧联动，批11；主线程调用）。
 
@@ -1302,7 +1321,10 @@ class WebMClip(QObject):
         # 批8 续圈：圈边界软停（_soft_parked）且循环 reader 仍存活 → re-arm
         # 直接续播下一圈，不重启 reader/ffmpeg（消灭每圈进程 churn）。
         # re-arm 失败（reader 已退出/异常）则落回正常启动路径。
-        if self._soft_parked and self._rearm_loop_reader():
+        # 复审 P1-2（批5.3）：本 clip 已被登记为订阅者（_feed_source 已置）时
+        # 绝不可以 re-arm——驻留的旧 reader 在 _reader_local 里只会继续本地
+        # 解码，绕过 feed 分派 = 静默双 ffmpeg。必须落 fresh start 进 feed。
+        if self._soft_parked and self._feed_source is None and self._rearm_loop_reader():
             return True
 
         # 上一轮 natural end 残留的 active 线程先退役（其 ffmpeg 已自行退出）
@@ -2098,8 +2120,7 @@ class WebMClip(QObject):
         沿用本地同款丢帧契约（队列满丢帧、源帧号照常推进）。
         """
         # 1) feed-pending：grant 有界等待（reader 线程内，≤SUBSCRIBE_BUDGET_MS）
-        from . import decode_broker as broker_mod
-        budget_ms = getattr(feed, 'budget_ms', None) or broker_mod.SUBSCRIBE_BUDGET_MS
+        budget_ms = getattr(feed, 'budget_ms', None) or _SUBSCRIBE_BUDGET_MS
         deadline = time.monotonic() + max(1, int(budget_ms)) / 1000.0
         while not (stop_evt.is_set() or self._generation != generation):
             if feed.ready:

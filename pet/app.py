@@ -48,7 +48,7 @@ from .window import PetWindow
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .collision_ipc import CollisionIpcSession
-from .decode_broker import BrokerFacade
+from .decode_fanout import DecodeFanoutHub
 
 
 class _BackgroundResult(QObject):
@@ -259,13 +259,15 @@ class PetInstance:
         self._pending_dialog_opens: set[str] = set()
         # E2（REVIEW_batch51）：enable_chat 单源在 AppShell（进程级），本类只读转发。
         self.enable_chat = bool(enable_chat)
-        # 批5.2 P1-1：碰撞会话/broker 移回**本窗**自持（每窗一个，经
+        # 批5.2 P1-1：碰撞会话移回**本窗**自持（每窗一个，经
         # collision_ipc._local_election_names 同进程收敛成「一协调者 + N 客户端」），
         # 每窗 runtime_id 由各自 instance_id 派生 → 两窗互撞与多进程双开等价；
         # 「退出这只」只停本窗，switch_character 只重建本窗（C2 地雷随之消解）。
         self.collision_ipc = CollisionIpcSession(config, self.shell)
-        self.broker_facade = BrokerFacade(
-            enabled=bool(config.get('decode_broker_enabled', False)))
+        # 批5.3：进程级共享解码 hub（AppShell 持有，各窗共用同一份）。此前
+        # broker 是每窗一个 shm facade；现换成进程级 DecodeFanoutHub（fan-out
+        # 与碰撞角色解耦，不骑 QLocal），窗口调用点/参数名零改。
+        self.broker_facade = getattr(self.shell, '_decode_hub', None)
 
     @property
     def enable_chat(self) -> bool:
@@ -461,18 +463,12 @@ class PetInstance:
         # IPC/broker）随「不再共享」自然消解。
         old_win = self.win
         old_win.detach_collision_session()
-        # 停本窗旧会话/facade 并重建（影响仅限本窗，不碰其它窗）
+        # 停本窗旧碰撞会话并重建（影响仅限本窗，不碰其它窗）
         try:
             self.collision_ipc.stop()
         except Exception:
             logging.exception("切换角色：停止本窗碰撞会话失败")
-        try:
-            self.broker_facade.shutdown()
-        except Exception:
-            logging.exception("切换角色：关闭本窗 broker 失败")
         self.collision_ipc = CollisionIpcSession(self.config, self.shell)
-        self.broker_facade = BrokerFacade(
-            enabled=bool(self.config.get('decode_broker_enabled', False)))
         self.collision_ipc.start()
         if getattr(old_win, 'agent_link_manager', None) is not None:
             old_win.agent_link_manager.shutdown()
@@ -822,6 +818,12 @@ class AppShell:
         # config-slot-N.json 里该键不再有任何作用，运行期手改 config.json
         # 翻 flag 也因此失效（需重启）。
         self._single_process_spawn = bool(config.get('experimental_single_process_spawn', False))
+        # 批5.3：进程级共享解码 hub（同角色帧扇出）——`experimental_shared_decode`
+        # 默认开，但 `experimental_single_process_spawn` 关时整条 fan-out 不激活
+        #（单窗无共享可言）。门关 = 每窗各自独立解码（批5.2 形态，hub 恒回 local）。
+        self._decode_hub = DecodeFanoutHub(
+            enabled=bool(config.get('experimental_shared_decode', True))
+            and self._single_process_spawn)
         # 批5.2a §③.1/.2：flag 开时进程级共享子系统（agent_link / proactive /
         # 全屏 watcher），各窗经 PetWindow 构造参数引用同一份，崩溃/换角色不重建；
         # flag 关时保持 None = 每窗各自创建（现状逐位一致）。
@@ -956,6 +958,12 @@ class AppShell:
                 self._shared.stop_all()
             except Exception:
                 logging.exception("退出时关闭共享子系统失败")
+        # 批5.3：进程级共享解码 hub 收口（全部退出时才停；各窗的源/订阅早已
+        # 由窗 closeEvent/_switch 的 shareable_end 逐素材收敛）。
+        try:
+            self._decode_hub.stop_all()
+        except Exception:
+            logging.exception("退出时关闭共享解码 hub 失败")
 
     def _on_shared_fullscreen(self, hit: bool) -> None:
         """批5.2a：共享全屏 watcher 广播 → 扇出到各窗的 _on_fullscreen_changed。
@@ -971,7 +979,7 @@ class AppShell:
                 continue
             # 复审 P1-2：全屏广播按每窗配置过滤——关掉「全屏自动隐藏」的窗
             # 不得被无关广播隐藏/恢复（光标路径的每窗 gate 在窗内已有，
-            # window._on_cursor_visibility_changed 首行自过滤，无需重复）。
+            # 该窗的 _on_cursor_visibility_changed 首行自过滤，无需重复）。
             if not getattr(win, "auto_hide_fullscreen", False):
                 continue
             try:
@@ -1271,16 +1279,9 @@ class AppShell:
             self, new_config, enable_chat=self.enable_chat,
             slot_handle=slot_handle, slot_id=slot_id, spawn_offset=offset_index,
         )
-        # 批5.2 P1-6：spike 声明「进程内多窗 × decode_broker_enabled」组合不支持
-        #（共享 facade 的跨窗干扰，见 REVIEW_batch52 P1-6）——主窗/新窗 config
-        # 里 broker 为真时记 warning 并停用新窗 broker（不 bind），批5.3 共享
-        # 解码链落地后移除本限制。
-        if self.config.get('decode_broker_enabled', False) or new_config.get('decode_broker_enabled', False):
-            logging.warning(
-                "进程内多窗与 decode_broker_enabled 组合在 spike 阶段不支持："
-                "新窗 %s 停用 broker（不 bind），批5.3 前有效", instance_id)
-            inst.broker_facade = BrokerFacade(enabled=False)
-        # P1-1：每窗自持碰撞会话需先 start，新窗 attach 才走 QLocal 收敛。
+        # 批5.3：P1-6 移除——进程内多窗不再停用任何窗的共享解码；新窗与主窗
+        # 共用同一进程级 DecodeFanoutHub（同素材首窗发布、同速窗进食）。
+        # 新窗自持碰撞会话需先 start，新窗 attach 才走 QLocal 收敛。
         inst.collision_ipc.start()
         # build_tray=False：非主窗不再新建/替换进程级托盘，改由 _refresh_tray_menu 聚合。
         inst._build_window(character_id, build_tray=False)
