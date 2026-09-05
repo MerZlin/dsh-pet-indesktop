@@ -60,12 +60,17 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
         assert dialog.agent_sound_check.isChecked() is False
         assert dialog.agent_sound_volume_spin.value() == 65
         assert dialog.agent_sound_cooldown_spin.value() == 2.0
+        assert dialog.spawn_inherit_size_check.isChecked() is True
+        assert dialog.spawn_inherit_dynamic_island_check.isChecked() is False
 
         # 2. 模拟用户修改各个设置项
         dialog.slingshot_check.setChecked(False)
         dialog.throw_strength_select.setCurrentData("crazy")
         dialog.click_sound_volume_spin.setValue(85)
         dialog.click_sound_picker.set_pack({"kind": "builtin", "id": "duck", "path": ""})
+        dialog.spawn_inherit_size_check.setChecked(False)
+        dialog.spawn_scale_combo.setCurrentData(0.5)
+        dialog.spawn_inherit_dynamic_island_check.setChecked(True)
 
         dialog.agent_sound_check.setChecked(True)
         dialog.agent_sound_start_check.setChecked(True)
@@ -88,6 +93,9 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
     assert reloaded_cfg.get("throw_max_speed") == 9000.0
     assert reloaded_cfg.get("click_sound_volume") == 0.85
     assert reloaded_cfg.get("click_sound_pack") == {"kind": "builtin", "id": "duck", "path": ""}
+    assert reloaded_cfg.get("spawn_inherit_size") is False
+    assert abs(reloaded_cfg.get("spawn_scale") - 0.5) < 1e-6
+    assert reloaded_cfg.get("spawn_inherit_dynamic_island") is True
 
     agent_cfg = reloaded_cfg.get("agent_link")
     assert agent_cfg["sound_enabled"] is True
@@ -140,6 +148,27 @@ def test_import_dialogue_template_reads_entries_and_top_level_phrases(tmp_path, 
         dialog.dialogue_template_import_edit.setPlainText(json.dumps(both, ensure_ascii=False))
         dialog._import_dialogue_template_json()
         assert dialog.dialogue_phrase_edits["start"].toPlainText() == "顶层台词 {name}"
+
+
+    finally:
+        dialog.deleteLater()
+
+
+def test_spawn_size_controls_visibility(qapp, tmp_path: Path):
+    """生小肥鱼继承大小开启时隐藏自定义大小；关闭后显示。"""
+    cfg_root = tmp_path / "appdata"
+    cfg = Config(cfg_root)
+    dialog = ModernSettingsDialog(cfg, include_ai=False)
+    try:
+        row = dialog.findChild(SettingRow, "settingRow_spawn_scale")
+        assert row is not None
+        assert row.isHidden() is True, "默认继承大小，不应显示自定义小肥鱼大小"
+
+        dialog.spawn_inherit_size_check.setChecked(False)
+        assert row.isHidden() is False
+
+        dialog.spawn_inherit_size_check.setChecked(True)
+        assert row.isHidden() is True
     finally:
         dialog.deleteLater()
 

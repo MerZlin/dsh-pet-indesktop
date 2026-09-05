@@ -153,8 +153,17 @@ class ClickSoundPool:
         if effect is None:
             return False
         try:
+            # 显式 stop 再 play：QSoundEffect 在部分 QtMultimedia/FFmpeg
+            # 后端上对同一实例的第二次 play 可能不重启（只响第一次）。
+            # 先 stop 可把内部播放状态复位，再 play 保证连点/试听每次都能响。
+            stop = getattr(effect, "stop", None)
+            if callable(stop):
+                stop()
+            set_loop_count = getattr(effect, "setLoopCount", None)
+            if callable(set_loop_count):
+                set_loop_count(1)
             effect.setVolume(volume)
-            effect.play()  # QSoundEffect.play() restarts the short sound immediately.
+            effect.play()
             return True
         except Exception:
             log.exception("QSoundEffect 播放失败: %s", path)

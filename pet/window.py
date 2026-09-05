@@ -88,7 +88,6 @@ from .speech_bubble import PetSpeechBubble, list_self_talk_images
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
 from .context_menu import normalize_template_id, populate_context_menu as _populate_context_menu
 from .context_menus.shared import take_deferred_menu_callbacks
-from . import vision as vision_mod
 from . import physics as physics_mod
 from .collision_client import CollisionClient
 from .click_sound import (
@@ -97,6 +96,7 @@ from .click_sound import (
 )
 from .proactive import effective_proactive_config
 from .updater import QUARK_PAN_URL, REPO_URL
+from .window_optional_services import WindowFeatureGateMixin
 
 from . import platform_win
 from .platform_mac import _keep_macos_tool_window_visible, _mac_set_window_level
@@ -349,7 +349,7 @@ def _set_speech_bubble_interactive(pet) -> None:
         setter(callable(getattr(pet, "on_open_quick_chat", None)))
 
 
-class PetWindow(QWidget):
+class PetWindow(QWidget, WindowFeatureGateMixin):
     """桌宠窗口本体。"""
 
     look_done = Signal(str, str, bool)
@@ -401,6 +401,7 @@ class PetWindow(QWidget):
         self.on_open_watchdog_settings = None
         self.on_restore_fun_windows = None
         self.on_spawn_pet = None
+        self.on_clear_spawned_pets = None
         self.on_hidden = None  # 由 app 注入：用户主动隐藏时弹托盘提示
         self._position_listeners = []
         self._position_sync_pending = False  # moveEvent 同帧合并：气泡/监听器 0ms 去抖待处理
@@ -471,7 +472,8 @@ class PetWindow(QWidget):
         self._music_sing_enabled = bool(config.get('music_sing_enabled', False))
         self._music_sing_active = False
         self._music_sing_timer = QTimer(self)
-        self._music_sing_timer.setInterval(4000)
+        # 1s 轮询：兼顾 COM 开销与“识别到音频后尽快触发”的体验。
+        self._music_sing_timer.setInterval(1000)
         self._music_sing_timer.timeout.connect(self._check_music_sing)
         # 重要气泡（主动识屏先兆/答复、Agent 联动提醒等）占用期间，自言自语让路，
         # 避免"让我看看……"刚出来就被自言自语顶掉、答复又顶掉自言自语的连环抢占。
@@ -496,13 +498,10 @@ class PetWindow(QWidget):
         self._link_anim_current: str | None = None
         self._link_next_provider = None  # AgentLinkManager 注入：()->str|None
 
-        # 主动识屏后台观察器（必须作为 PetWindow 的子成员，随窗口销毁/重建）
-        from .proactive import ProactiveScreenWatcher
-        self.proactive_watcher = ProactiveScreenWatcher(self, config)
-
-        # 多 Agent 状态感知管理器
-        from .agent_link import AgentLinkManager
-        self.agent_link_manager = AgentLinkManager(self, config)
+        # Phase 1 开关式加载：主动识屏/Agent 联动默认不构造；首次启用时由
+        # _ensure_* 懒创建（模块与 Qt 对象都只在功能打开后进入运行期）。
+        self.proactive_watcher = None
+        self.agent_link_manager = None
 
         # ---- 全屏应用自动隐藏（Windows）----
         # 前台窗口覆盖整个屏幕几何（含任务栏区域）时自动隐藏桌宠，
@@ -529,6 +528,8 @@ class PetWindow(QWidget):
         flags = build_window_flags(config, self.mouse_through, self._stream_capture_mode)
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # 透明桌宠不参与系统自动背景填充：减少偶发“频闪/背景闪一下”。
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         if self._stream_capture_mode:
             self.setWindowTitle(STREAM_CAPTURE_TITLE)
@@ -736,7 +737,7 @@ class PetWindow(QWidget):
         else:
             self._switch(self.idle)
         if self._music_sing_enabled:
-            self._music_sing_timer.start()
+            self._start_music_sing_polling()
         self._schedule_self_talk()
         if self._watch_required():
             self._start_fs_watch()
@@ -1217,6 +1218,9 @@ class PetWindow(QWidget):
             # 恢复显示 = 用户重新看着桌宠：重置闲置计时，重新以全帧率呈现
             # （只有再闲置 idle_low_fps_threshold 秒才进入降帧）
             self.mark_activity()
+        music_timer = getattr(self, "_music_sing_timer", None)
+        if getattr(self, "_music_sing_enabled", False) and music_timer is not None and music_timer.isActive():
+            QTimer.singleShot(0, self, self._check_music_sing)
         self._restore_dock_icon_preference()
 
     def hide(self, *, notify: bool = True) -> None:
@@ -1295,7 +1299,7 @@ class PetWindow(QWidget):
             self._start_fs_watch()
         self._schedule_self_talk()
         if self._music_sing_enabled:
-            self._music_sing_timer.start()
+            self._start_music_sing_polling()
         if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
             self.proactive_watcher.resume()
         if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
@@ -1612,6 +1616,8 @@ class PetWindow(QWidget):
     def _fs_watch_loop(self) -> None:
         """后台轮询光标与前台窗口，分别使用 20Hz 与 1Hz 节拍。"""
         stop = self._fs_stop
+        # Phase 1：避免纯桌宠启动即加载 PIL；该线程真正需要检测光标时才导入。
+        from . import vision as vision_mod
         polls = 0
         consecutive_errors = 0
         next_fullscreen = _fs_monotonic() + 1.0
@@ -3900,6 +3906,14 @@ class PetWindow(QWidget):
                 if callable(pump):
                     pump()
 
+    def _start_music_sing_polling(self) -> None:
+        """启动音乐检测并尽量立即检查一次，避免等一个轮询周期才唱歌。"""
+        if not self._music_sing_enabled:
+            return
+        self._music_sing_timer.start()
+        if self.isVisible():
+            QTimer.singleShot(0, self, self._check_music_sing)
+
     def _check_music_sing(self) -> None:
         """检测后台音乐并自动播放唱歌动画（可配置开关）。
 
@@ -4212,7 +4226,7 @@ class PetWindow(QWidget):
         if self._music_sing_enabled:
             # 隐藏期间保持停止，恢复显示时由 _resume_activity 按开关状态启动
             if self.isVisible():
-                self._music_sing_timer.start()
+                self._start_music_sing_polling()
         else:
             self._music_sing_active = False
             self._music_sing_timer.stop()
@@ -4237,8 +4251,8 @@ class PetWindow(QWidget):
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))
         self.click_show_self_talk = bool(self.cfg.get('click_show_self_talk', False))
         self._schedule_self_talk()
-        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
-            self.proactive_watcher.apply_config()
+        # Phase 1：主动识屏/Agent 联动按配置懒装配或同步。
+        self.sync_optional_services()
 
     def set_context_menu_template(self, template_id: str) -> None:
         """Persist the selected right-click menu template for the next open."""
@@ -4303,7 +4317,10 @@ class PetWindow(QWidget):
         pro_data['enabled'] = bool(on)
         self.cfg.set('proactive_screen', pro_data)
         self.cfg.save()
-        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+        # Phase 1：开启时懒创建观察器；关闭时仅同步已存在实例。
+        if on:
+            self._ensure_proactive_watcher().apply_config()
+        elif self.proactive_watcher is not None:
             self.proactive_watcher.apply_config()
         if on:
             eff = effective_proactive_config(self.cfg.get('proactive_screen', {}))
@@ -4325,7 +4342,9 @@ class PetWindow(QWidget):
         pro_data[key] = value
         self.cfg.set('proactive_screen', pro_data)
         self.cfg.save()
-        if hasattr(self, 'proactive_watcher') and self.proactive_watcher is not None:
+        if self._proactive_wanted():
+            self._ensure_proactive_watcher().apply_config()
+        elif self.proactive_watcher is not None:
             self.proactive_watcher.apply_config()
 
     def set_proactive_option(self, key: str, value: Any) -> None:
@@ -4337,7 +4356,10 @@ class PetWindow(QWidget):
 
         set_enabled 返回 False（用户拒绝授权 / hooks 安装失败）时，
         必须把菜单勾选态回滚，否则 UI 显示已开启而实际未生效。"""
-        if hasattr(self, 'agent_link_manager') and self.agent_link_manager is not None:
+        if on:
+            # Phase 1：开启时先懒创建管理器，再走完整 set_enabled 编排。
+            self._ensure_agent_link_manager()
+        if self.agent_link_manager is not None:
             ok = self.agent_link_manager.set_enabled(agent_key, on)
             if not ok:
                 if action is not None:

@@ -126,6 +126,7 @@ class MovieLibrary(QObject):
         character_id: str | None = None,
         asset_dir: Path | str | None = None,
         manifest: Mapping[str, str] | None = None,
+        prewarm_enabled: bool = True,
     ) -> None:
         super().__init__(parent)
         _LIVE_MOVIE_LIBRARIES.add(self)
@@ -165,6 +166,9 @@ class MovieLibrary(QObject):
         # 只释放同代次持有：pause_warm 换代的迟到 release 成为 no-op，
         # 不会误释放换代后新交互的持有（可重入配对不被 pause 破坏）。
         self._warm_generation = 0
+        # Phase 2：动画预热总开关（默认开）。关闭时不启动高/低优先级预热，
+        # 也不在窗口恢复显示时自动 resume 预热；首次播放/交互按需同步解码。
+        self._prewarm_enabled = bool(prewarm_enabled)
         # 低优先级批次去重：同一时间最多一个在飞批次（timer 到点/50ms 重试/
         # resume 重排可能并发触发），worker 收尾时在 finally 清除。
         self._low_warm_in_flight = False
@@ -348,6 +352,23 @@ class MovieLibrary(QObject):
                 self._interaction_cond.wait(timeout=0.05)
             return not self._warm_paused and generation == self._warm_generation
 
+    def set_prewarm_enabled(self, enabled: bool, *, visible: bool | None = None) -> None:
+        """运行时开关动画预热（Phase 2）。
+
+        关闭：立即取消在飞/未开始的预热；窗口后续显示也不会自动 resume。
+        开启：可见时立即补跑；隐藏时保持暂停，等 showEvent 的 resume_warm 再启动。
+        """
+        enabled = bool(enabled)
+        if self._prewarm_enabled == enabled:
+            return
+        self._prewarm_enabled = enabled
+        if not enabled:
+            self.pause_warm()
+        elif visible is not False:
+            self._warm_paused = False
+            self.schedule_high_priority_warm()
+            self.schedule_low_priority_warm()
+
     def pause_warm(self) -> None:
         """窗口隐藏时暂停预热：停掉延迟定时器与让路重试，在飞线程尽快收尾。"""
         self._warm_paused = True
@@ -405,6 +426,8 @@ class MovieLibrary(QObject):
 
     def resume_warm(self) -> None:
         """窗口恢复显示时补齐预热：低优先级池未建完或首帧未预热完则重新排期。"""
+        if not self._prewarm_enabled:
+            return  # Phase 2：动画预热关闭时，隐藏/恢复都不再自动拉起预热
         self._warm_paused = False
         try:
             _, low = self._priority_names()
@@ -574,7 +597,7 @@ class MovieLibrary(QObject):
         避免完成标志被旧批次置 False 后无人再排期（去重保证不会双批并发）。
         """
         try:
-            if self._warm_paused:
+            if self._warm_paused or not self._prewarm_enabled:
                 return
             _, low = self._priority_names()
             with self._warm_state_lock:
@@ -591,13 +614,16 @@ class MovieLibrary(QObject):
         """应用层调用：UI 就绪后后台预热高优先级动画。
 
         加入 0~0.5s 随机错峰，多开同时启动时避免 ffmpeg 进程洪峰。
+        Phase 2：动画预热关闭时不启动。
         """
-        if not self._paths:
+        if not self._paths or not self._prewarm_enabled:
             return
         threading.Thread(target=self._warm_all_meta_background, daemon=True).start()
 
     def schedule_low_priority_warm(self) -> None:
         """应用层调用：UI 就绪后延迟补全随机动作池预热（2s 后 1 worker）。"""
+        if not self._prewarm_enabled:
+            return
         self._low_warm_timer.start()
 
     def movie(self, name: str):

@@ -57,6 +57,12 @@ class DynamicIsland(QWidget):
         self._info_timer.timeout.connect(self._refresh)
         self._info_timer.start()
 
+        # 余额峰谷档位切换的准点刷新：单次定时到下一切换边界，刷新后再排下一次。
+        self._tier_tick_timer = QTimer(self)
+        self._tier_tick_timer.setSingleShot(True)
+        self._tier_tick_timer.timeout.connect(self._on_balance_tier_tick)
+        self._schedule_next_balance_tier_refresh()
+
         self._apply_position()
 
     # ------------------------------------------------------------ 对外
@@ -71,7 +77,52 @@ class DynamicIsland(QWidget):
 
     def refresh_from_config(self) -> None:
         self._cfg = _cfg_dict(self.config)
+        self._schedule_next_balance_tier_refresh()
         self._refresh()
+
+    # ------------------------------------------------------------ 余额峰谷
+    def _balance_tier_display_text(self) -> str:
+        """按系统时间直接生成余额峰谷文案：当前档位标签 + 下一档切换时间。
+
+        不依赖余额查询；档位标签使用设置里的高峰/空闲（或梁文峰/梁文谷/自定义）。
+        """
+        from . import balance as balance_mod
+
+        now = balance_mod.beijing_now()
+        peak_label, idle_label = balance_mod.resolve_tier_labels(
+            str(self.config.get("balance_tier_labels_mode", "default") or "default"),
+            str(self.config.get("balance_tier_label_peak", "") or ""),
+            str(self.config.get("balance_tier_label_idle", "") or ""),
+        )
+        # 保持无参调用以兼容现有测试/调用面（函数内部使用同一北京时间）。
+        tier = balance_mod.deepseek_pricing_tier()
+        label = peak_label if tier == "peak" else idle_label
+        try:
+            _next_tier, next_time = balance_mod.next_pricing_switch(now)
+            time_text = balance_mod.format_switch_time(now, next_time)
+            return f"{label} → {time_text}"
+        except Exception:
+            return label
+
+    def _on_balance_tier_tick(self) -> None:
+        """到达预设档位切换点：刷新显示，并排下一次准点刷新。"""
+        self._refresh()
+        self._schedule_next_balance_tier_refresh()
+
+    def _schedule_next_balance_tier_refresh(self) -> None:
+        """在下一个峰谷切换边界安排一次单发刷新（只在余额峰谷模式启用）。"""
+        if str(self._cfg.get("info_mode") or "time") != "balance_tier":
+            self._tier_tick_timer.stop()
+            return
+        try:
+            from . import balance as balance_mod
+
+            _next_tier, next_time = balance_mod.next_pricing_switch()
+            now = balance_mod.beijing_now()
+            delay_ms = max(250, int((next_time - now).total_seconds() * 1000) + 250)
+            self._tier_tick_timer.start(delay_ms)
+        except Exception:
+            self._tier_tick_timer.stop()
 
     def _refresh(self) -> None:
         """内容变化后立即重算尺寸、夹回屏幕并重绘。"""
@@ -95,7 +146,7 @@ class DynamicIsland(QWidget):
         if mode == "custom":
             return str(self._cfg.get("custom_text") or "").strip() or "自定义"
         if mode == "balance_tier":
-            return self._balance_tier_text
+            return self._balance_tier_display_text()
         if mode == "balance":
             return self._balance_text
         from PySide6.QtCore import QTime

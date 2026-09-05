@@ -543,6 +543,20 @@ def add_spawn_pet(menu: QMenu, pet):
     return action
 
 
+def add_clear_spawned_pets(menu: QMenu, pet, *, icons: bool = True):
+    """右键菜单快捷入口：清除所有小肥鱼（slot-N）数据。"""
+    callback = getattr(pet, "on_clear_spawned_pets", None)
+    if callback is None:
+        return None
+    return add_action(
+        menu,
+        "清除子肥鱼",
+        "clear" if icons else None,
+        callback,
+        close_on_trigger=True,
+    )
+
+
 def add_harness(menu: QMenu, pet, *, icons: bool = True):
     return add_action(menu, "启动 DeepSeek Harness", "harness" if icons else None, lambda: launch_harness_gui(pet), close_on_trigger=True)
 

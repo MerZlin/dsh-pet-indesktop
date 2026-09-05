@@ -358,7 +358,8 @@ class TestCloseEventStopsMonitors:
         from tests.test_collision_window import _make_pet_window
 
         win, _ = _make_pet_window(tmp_path, "b9-close")
-        mgr = win.agent_link_manager
+        # Phase 1：默认 Agent 联动全关，窗口不会自动创建管理器；测试显式装配。
+        mgr = win._ensure_agent_link_manager()
         mon = mgr.monitors["dsh"]
         mon._POLL_INTERVAL_S = 0.05
         mon.start()

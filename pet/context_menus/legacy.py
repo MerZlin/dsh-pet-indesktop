@@ -13,6 +13,7 @@ from .shared import (
     add_agent_link_menu,
     add_proactive_menu,
     add_autostart,
+    add_clear_spawned_pets,
     add_drag_physics,
     add_deepseek_web,
     add_harness,
@@ -55,6 +56,7 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     add_mouse_through(menu, pet, icons=False)
     add_autostart(menu, icons=False)
     add_spawn_pet(menu, pet)
+    add_clear_spawned_pets(menu, pet, icons=False)
     build_size_menu(menu, pet, icons=False)
 
     menu.addSeparator()
