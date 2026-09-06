@@ -32,6 +32,11 @@ def _mute_qt_audio(monkeypatch):
         return
     monkeypatch.setattr(QSoundEffect, "play", lambda self: None)
     monkeypatch.setattr(QMediaPlayer, "play", lambda self: None)
+    # 阻止 QSoundEffect 真正异步加载音频源：headless CI 上即使不 play，
+    # setSource 后的异步加载与 processEvents 也可能在 QtMultimedia 后端触发
+    # 原生 access violation。把 status 直接置 Ready 也让预热等待循环零泵事件。
+    monkeypatch.setattr(QSoundEffect, "setSource", lambda self, source: None)
+    monkeypatch.setattr(QSoundEffect, "status", lambda self: QSoundEffect.Status.Ready)
 
 
 @pytest.fixture(autouse=True)
