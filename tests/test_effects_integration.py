@@ -106,8 +106,14 @@ def test_legacy_menu_has_golden_spin_and_edge_probe():
     app.processEvents()
 
 
-def test_settings_dialog_has_effect_toggles_and_writes_config(tmp_path):
+def test_settings_dialog_has_effect_toggles_and_writes_config(tmp_path, monkeypatch):
     app = _qapp()
+    # 该用例只验证设置写回，不验证音频预热；在 Windows headless CI 上触发
+    # QSoundEffect 异步加载的 processEvents 可能产生 access violation。
+    monkeypatch.setattr(
+        "pet.modern_settings_dialog.warm_click_sound_effects",
+        lambda *args, **kwargs: None,
+    )
     cfg = Config(tmp_path)
     dialog = ModernSettingsDialog(cfg, include_ai=False)
     assert dialog.golden_spin_click_check is not None

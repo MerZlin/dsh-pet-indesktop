@@ -102,6 +102,13 @@ def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, mo
 
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    # 本用例只验证音效包行初始隐藏，不验证音频预热；Windows headless CI 上
+    # QSoundEffect 异步加载的 processEvents 可能 access violation，因此跳过预热。
+    monkeypatch.setattr(
+        settings_mod,
+        "warm_click_sound_effects",
+        lambda *args, **kwargs: None,
+    )
     config = Config(tmp_path)
     config.set("click_sound_enabled", False)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
