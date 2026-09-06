@@ -35,6 +35,25 @@ def _mute_qt_audio(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mute_settings_audio_prewarm(monkeypatch):
+    """设置对话框写回时不真正预热 QSoundEffect。
+
+    真实预热属于产品启动/勾选音效开关的职责，测试环境无需创建 QtMultimedia
+    音频对象并泵事件等待加载；Windows headless CI 上该路径可能触发原生
+    access violation。test_click_sound.py 已用 fake QtMultimedia 覆盖预热逻辑。
+    """
+    try:
+        import pet.modern_settings_dialog as settings_mod
+    except Exception:
+        return
+    monkeypatch.setattr(
+        settings_mod,
+        "warm_click_sound_effects",
+        lambda *args, **kwargs: None,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _no_modal_message_boxes(monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
