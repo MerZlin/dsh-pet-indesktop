@@ -1793,14 +1793,28 @@ class ModernSettingsDialog(QDialog):
         self.config.set("lock_position", self.lock_position_check.isChecked())
         self.config.set("shift_drag", self.shift_drag_check.isChecked())
         self.config.set("pet_opacity", int(self.pet_opacity_spin.value()))
-        self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
-        self.config.set("click_sound_pack", self.click_sound_picker.value())
-        self.config.set("click_sound_volume", float(self.click_sound_volume_spin.value()) / 100.0)
-        # 保持无条件预热，避免试听/首次点击时 QSoundEffect 尚未加载完成导致无声。
-        warm_click_sound_effects(
-            self.config.get("click_sound_pack"),
-            data_dir=self.config.dir,
+        click_sound_enabled = self.click_sound_check.isChecked()
+        click_sound_pack = self.click_sound_picker.value()
+        click_sound_volume = float(self.click_sound_volume_spin.value()) / 100.0
+        click_sound_pack_changed = (
+            self.config.get("click_sound_pack") != click_sound_pack
         )
+        click_sound_enabled_changed = (
+            self.config.get("click_sound_enabled") != click_sound_enabled
+        )
+        self.config.set("click_sound_enabled", click_sound_enabled)
+        self.config.set("click_sound_pack", click_sound_pack)
+        self.config.set("click_sound_volume", click_sound_volume)
+        # 只在真正需要时预热：点击音效处于启用状态，且本次写回改变了启用开关或音效包。
+        # 音量变化/未改动不需要重建 QSoundEffect；开关从关到开已由勾选回调即时预热，
+        # 因此普通“打开设置再关闭”不应在每次落盘都创建 QtMultimedia 音频对象。
+        if click_sound_enabled and (
+            click_sound_enabled_changed or click_sound_pack_changed
+        ):
+            warm_click_sound_effects(
+                click_sound_pack,
+                data_dir=self.config.dir,
+            )
         existing_island = self.config.get("dynamic_island", {})
         if not isinstance(existing_island, dict):
             existing_island = {}
