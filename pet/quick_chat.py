@@ -294,6 +294,9 @@ class QuickChatBubble(QFrame):
                 self.raise_()
                 self.activateWindow()
                 self.input.setFocus()
+        else:
+            # 子模式重挂主窗后不能随父窗显示而自动弹出空白窗。
+            self.hide()
 
     def show_for_pet(self, pet_window=None) -> None:
         if pet_window is not None:

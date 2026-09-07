@@ -69,6 +69,26 @@ def test_speech_bubble_capture_compat_becomes_child_and_restores():
         app.processEvents()
 
 
+def test_capture_child_hidden_bubble_does_not_appear_with_parent_show():
+    """启动/隐藏态的气泡重挂主窗后，不能随主窗显示而冒出空白小气泡。"""
+    app = _qapp()
+    host = QWidget()
+    host.setGeometry(0, 0, 640, 390)
+    bubble = PetSpeechBubble()
+    try:
+        bubble.set_capture_compat(True, host)
+        host.show()
+        app.processEvents()
+        assert not bubble.isVisibleTo(host), "无内容的捕获子气泡不得随主窗显示"
+        assert not bubble.isVisible()
+    finally:
+        bubble.close()
+        host.close()
+        bubble.deleteLater()
+        host.deleteLater()
+        app.processEvents()
+
+
 def test_capture_compat_places_bubble_inside_host_bounds():
     app = _qapp()
     host = QWidget()

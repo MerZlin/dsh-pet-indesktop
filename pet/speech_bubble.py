@@ -339,6 +339,10 @@ class PetSpeechBubble(QFrame):
             self.show()
             if not on and not _MAC:
                 self.raise_()
+        else:
+            # 子模式重挂到主窗后，Qt 会随父窗显示把未显式隐藏的子控件一起显示；
+            # 启动期/无内容时不能因此冒出空白小气泡。
+            self.hide()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if self._interactive and event.button() == Qt.MouseButton.LeftButton:
