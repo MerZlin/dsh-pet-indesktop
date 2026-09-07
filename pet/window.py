@@ -1639,6 +1639,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         elif not self._auto_hidden:
             self._stop_fs_watch()
 
+    def set_quick_chat_capture_widget(self, widget) -> None:
+        """注册/清空快速对话气泡的捕获子控件引用并同步当前捕获模式。"""
+        self._quick_chat_capture_widget = widget
+        if widget is not None and callable(getattr(widget, "set_capture_compat", None)):
+            widget.set_capture_compat(self._stream_capture_mode, host=self)
+
     def set_stream_capture_mode(self, on: bool) -> None:
         """直播捕获兼容模式：Tool → 普通顶层窗口 + 标题。
 
@@ -1659,6 +1665,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if was_visible:
             self.show()  # 只在原本可见时恢复：手动/自动隐藏的桌宠不被意外唤出
         self._speech_bubble.set_capture_compat(on, host=self)
+        if getattr(self, "_quick_chat_capture_widget", None) is not None and shiboken6.isValid(self._quick_chat_capture_widget):
+            self._quick_chat_capture_widget.set_capture_compat(on, host=self)
 
     def _arm_dock_reactivate_restore(self) -> None:
         """macOS：隐藏后点击 Dock 图标激活应用时自动恢复桌宠（一次性监听）。
@@ -2340,8 +2348,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             and getattr(bubble, "_interactive", False)
             and bubble.geometry().contains(local)
         ):
-            # 直播捕获子模式下，可点击气泡必须作为非透明命中区交给 Qt/Windows 命中测试，
-            # 否则父窗逐像素穿透会把它当透明像素，导致点击气泡无法打开快速对话。
+            # 直播捕获子模式下，可点击气泡必须作为非透明命中区，否则逐像素穿透会把它当透明。
+            return False
+        quick = getattr(self, "_quick_chat_capture_widget", None)
+        if quick is not None and shiboken6.isValid(quick) and quick.isVisible() and quick.geometry().contains(local):
             return False
         if self._frame_pixmap is None or self._frame_pixmap.isNull():
             return False

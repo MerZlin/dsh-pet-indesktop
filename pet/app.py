@@ -548,6 +548,8 @@ class PetInstance:
             self.quick_chat.pet_window = self.win
             self.quick_chat.settings = self.config.chat_settings()
             self.quick_chat.refresh_session()
+        if hasattr(self.win, "set_quick_chat_capture_widget"):
+            self.win.set_quick_chat_capture_widget(self.quick_chat)
         self.quick_chat.show_for_pet(self.win)
 
     def open_legacy_chat(self) -> None:

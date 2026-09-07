@@ -136,6 +136,10 @@ def test_capture_child_interactive_bubble_is_non_transparent_hit_target():
     # 该点位于帧绘制矩形上方，未加气泡守卫时 _is_transparent_at 返回 True。
     assert PetWindow._is_transparent_at(fake, QPoint(10, 2)) is False
 
+    # 快速对话子控件同样必须是非透明命中区。
+    fake._quick_chat_capture_widget = _FakeBubble(fake, QRect(0, 50, 100, 50))
+    assert PetWindow._is_transparent_at(fake, QPoint(10, 60)) is False
+
 
 class _FakeQuickBubble:
     """子模式气泡：geometry 是父坐标，mapToGlobal 模拟父窗口偏移。"""
@@ -165,6 +169,61 @@ def test_try_open_quick_chat_from_bubble_works_in_child_mode():
     # 气泡外点击不触发快速对话。
     assert PetWindow._try_open_quick_chat_from_bubble(pet, QPoint(300, 300)) is False
     assert opened == [True]
+
+
+def test_quick_chat_capture_compat_becomes_child_and_restores(tmp_path):
+    """快速对话气泡在直播捕获模式下也作为主窗子内容渲染。"""
+    app = _qapp()
+    from pet.quick_chat import QuickChatBubble
+
+    host = QWidget()
+    host.setGeometry(0, 0, 640, 390)
+    bubble = QuickChatBubble(Config(base=tmp_path))
+    try:
+        assert bubble.parentWidget() is None
+        assert _window_type_mask(bubble.windowFlags()) == Qt.WindowType.Tool
+
+        bubble.set_capture_compat(True, host)
+        assert bubble.parentWidget() is host
+        assert _window_type_mask(bubble.windowFlags()) == Qt.WindowType.Widget
+
+        bubble.set_capture_compat(False)
+        assert bubble.parentWidget() is None
+        assert _window_type_mask(bubble.windowFlags()) == Qt.WindowType.Tool
+    finally:
+        bubble.close()
+        host.close()
+        bubble.deleteLater()
+        host.deleteLater()
+        app.processEvents()
+
+
+class _FakeQuickCaptureWidget:
+    def __init__(self):
+        self.calls = []
+
+    def set_capture_compat(self, on, host=None):
+        self.calls.append((on, host))
+
+
+def test_pet_window_stream_capture_syncs_registered_quick_chat_widget(tmp_path):
+    app = _qapp()
+    win = _make_pet(tmp_path, capture_on=False)
+    quick = _FakeQuickCaptureWidget()
+    try:
+        win.set_quick_chat_capture_widget(quick)
+        assert quick.calls == [(False, win)], "注册时应立即同步当前非捕获状态"
+
+        quick.calls.clear()
+        win.set_stream_capture_mode(True)
+        assert quick.calls[-1] == (True, win)
+
+        win.set_stream_capture_mode(False)
+        assert quick.calls[-1] == (False, win)
+    finally:
+        win.close()
+        win.deleteLater()
+        app.processEvents()
 
 
 def test_pet_window_runtime_capture_mode_syncs_bubble(tmp_path):
