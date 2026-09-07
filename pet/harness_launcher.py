@@ -65,9 +65,14 @@ def _candidate_ports(port: int = DEFAULT_PORT) -> list[int]:
 
 
 def _wrap_cmd(command: list[str]) -> list[str]:
-    """Windows 上 .cmd/.bat shim 必须经 cmd 启动并立即返回（start /b）。"""
+    """Windows 上 .cmd/.bat shim 必须经 cmd 启动。
+
+    Popen 本身就是异步的，不需要 start /b 让 cmd 立即返回；相反
+    start /b + DETACHED_PROCESS 的组合会让控制台窗口可见地弹出
+    （实测复现：dsh 日志打进一个可见 cmd 窗口，用户关掉窗口即杀掉
+    整棵进程树）。"""
     if os.name == "nt" and command[0].lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", "start", "/b", "", *command]
+        return ["cmd.exe", "/c", *command]
     return command
 
 
@@ -181,7 +186,12 @@ def _reap_children() -> None:
 
 
 def _spawn(command: list[str]) -> None:
-    """后台拉起进程：Windows 隐藏窗口并脱离；POSIX 新会话脱离终端。
+    """后台拉起进程：Windows 隐藏控制台窗口；POSIX 新会话脱离终端。
+
+    Windows 只用 CREATE_NO_WINDOW（隐藏窗口但保留隐藏控制台，子进程的
+    npm/node 输出有处可去且不可见）——不要再叠加 DETACHED_PROCESS：
+    两者组合的语义冲突实测会弹出可见 cmd 窗口，用户关窗即杀整树。
+    隐藏控制台的子进程不随父进程退出而被杀，无需 DETACHED 脱离。
 
     macOS 上 Finder 启动的 .app 环境 PATH 极简：dsh/npx 是带 shebang
     （/usr/bin/env node）的 shell 脚本，执行时用的是**子进程环境**的 PATH，
@@ -196,7 +206,7 @@ def _spawn(command: list[str]) -> None:
         "env": {**os.environ, "PATH": _augmented_path()},
     }
     if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     else:
         kwargs["start_new_session"] = True
     _reap_children()
@@ -205,20 +215,25 @@ def _spawn(command: list[str]) -> None:
         _LAUNCHED_CHILDREN.append(proc)
 
 
-def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
-    """启动 harness 并确保浏览器被打开。
+def launch_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True) -> tuple[str, str]:
+    """启动 harness；open_browser=True 时确保浏览器被打开。
+
+    open_browser=False（随桌宠自启动场景）：只起服务不开浏览器——已有实例
+    直接返回，新起实例不等就绪、不开页面。注意旧版 dsh 不支持 --no-open
+    时会自己开浏览器，此参数无法阻止（启动前无法可靠探测）。
 
     返回 (status, url)：
-    - already   已有实例在运行（配置端口或官方默认 3080），已打开浏览器
-    - started   已后台启动；命令带 --no-open 时由桌宠等待就绪后打开浏览器，
-                否则由 dsh 自己开浏览器（桌宠不重复打开）
+    - already   已有实例在运行（配置端口或官方默认 3080）；open_browser 时已打开浏览器
+    - started   已后台启动；open_browser 且命令带 --no-open 时由桌宠等待就绪后
+                打开浏览器，否则由 dsh 自己开浏览器（桌宠不重复打开）
     - not-found 未找到 dsh 命令
     - error     启动异常（info 为异常信息）
     """
     for candidate in _candidate_ports(port):
         if is_running(candidate):
             url = f"http://127.0.0.1:{candidate}"
-            webbrowser.open(url)
+            if open_browser:
+                webbrowser.open(url)
             return "already", url
     url = f"http://127.0.0.1:{int(port)}"
     command = _find_launch_command(port)
@@ -232,6 +247,9 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
     if "--no-open" not in command:
         # 未传 --no-open：dsh 会自己打开浏览器，桌宠不再重复打开
         return "started", url
+
+    if not open_browser:
+        return "started", url  # 只起服务：不等就绪、不开页面
 
     def _wait_and_open() -> None:
         deadline = time.monotonic() + _READY_TIMEOUT_SECONDS

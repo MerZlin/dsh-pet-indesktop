@@ -39,7 +39,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "collision_mass_scale", "collision_restitution", "collision_sound_enabled",
     "collision_sound_volume", "context_menu_appearance", "context_menu_layout", "context_menu_template",
     "cursor_hidden_passthrough", "drag_physics",
-    "dynamic_island", "facing",
+    "dynamic_island", "facing", "harness_autostart",
     "idle_low_fps_enabled", "idle_low_fps_threshold", "lock_position",
     "menu_easter_egg", "media_prewarm", "first_frame_cache_max_mb", "predict_prewarm_lead_ms", "ffmpeg_recycle_minutes",
     "modern_chat_background", "modern_chat_background_fill",

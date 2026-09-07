@@ -574,6 +574,7 @@ class Config:
             "balance_tier_color_enabled": True,  # 峰谷提示颜色：高峰红/低谷绿
             "music_sing_enabled": False,   # 检测到后台播放音乐时自动播放唱歌动画
             "autostart_wanted": False,     # 用户曾开启过开机自启（用于启动自检：被安全软件清理时提醒）
+            "harness_autostart": False,    # 随桌宠启动自动拉起 dsh web 服务（只起服务，不开浏览器）
             "stream_capture_mode": False,  # 直播捕获兼容模式（Windows：Tool 窗口直播姬/OBS 枚举不到）
             "chat_background": "",  # 肥鱼牌小手机背景：空=纯色；builtin:* = 内置主题；否则为图片路径
             "modern_chat_background": "",  # 肥鱼版 DeepSeek 背景：空=纯色；否则为自定义图片路径
@@ -664,6 +665,7 @@ class Config:
         seed["ry"] = None
         seed["screen_name"] = None
         seed["autostart_wanted"] = False
+        seed["harness_autostart"] = False
         # 生小肥鱼大小策略：开启继承 → 保留主配置 scale；
         # 关闭继承 → 用主配置里给“小肥鱼”单独选择的 spawn_scale。
         inherit_size = _bool_or_default(seed.get("spawn_inherit_size"), True)
@@ -789,7 +791,7 @@ class Config:
             "slingshot_enabled", "throw_strength",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
             "click_show_balance", "click_show_self_talk",
-            "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
+            "balance_refresh_minutes", "autostart_wanted", "harness_autostart", "stream_capture_mode",
             "music_sing_enabled",
             "balance_tier_labels_mode", "balance_tier_label_peak",
             "balance_tier_label_idle", "balance_tier_color_enabled",

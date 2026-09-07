@@ -61,6 +61,27 @@ def test_modern_chat_header_uses_current_pet_image(tmp_path):
     app.processEvents()
 
 
+def test_harness_autostart_toggle_persisted(tmp_path, monkeypatch):
+    """「随桌宠启动 dsh 服务」开关：默认关，开启后保存并持久化。"""
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    assert config.get("harness_autostart") is False
+
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
+    assert dialog.harness_autostart_check.isChecked() is False
+    dialog.harness_autostart_check.setChecked(True)
+    assert dialog._write_config() is True
+    assert Config(tmp_path).get("harness_autostart") is True
+    dialog.close()
+    app.processEvents()
+
+
 def test_click_sound_path_is_linked_to_enable_toggle_and_persisted(tmp_path, monkeypatch):
     from PySide6.QtWidgets import QApplication
 
