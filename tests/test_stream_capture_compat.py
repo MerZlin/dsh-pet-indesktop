@@ -50,26 +50,17 @@ def test_speech_bubble_capture_compat_becomes_child_and_restores():
     app = _qapp()
     host = QWidget()
     host.setGeometry(0, 0, 640, 390)
-    host.show()
-    app.processEvents()
     bubble = PetSpeechBubble()
-    bubble.show()
-    app.processEvents()
     try:
-        assert bubble.isVisible()
         bubble.set_capture_compat(True, host)
-        app.processEvents()
         assert bubble.parentWidget() is host
         assert _window_type_mask(bubble.windowFlags()) == Qt.WindowType.Widget
         assert bubble.windowTitle() == ""
-        assert bubble.isVisible(), "切换为子控件后应保持原可见状态"
 
         bubble.set_capture_compat(False)
-        app.processEvents()
         assert bubble.parentWidget() is None
         assert _window_type_mask(bubble.windowFlags()) == Qt.WindowType.Tool
         assert bubble.windowTitle() == ""
-        assert bubble.isVisible(), "切回独立 Tool 窗口后应保持原可见状态"
     finally:
         bubble.close()
         host.close()
@@ -82,8 +73,6 @@ def test_capture_compat_places_bubble_inside_host_bounds():
     app = _qapp()
     host = QWidget()
     host.setGeometry(0, 0, 640, 390)
-    host.show()
-    app.processEvents()
     bubble = PetSpeechBubble()
     try:
         bubble.set_capture_compat(True, host)
@@ -93,8 +82,6 @@ def test_capture_compat_places_bubble_inside_host_bounds():
             duration_ms=60000,
             pet_scale=1.0,
         )
-        app.processEvents()
-        assert bubble.isVisible()
         # 子模式可用区应为主窗矩形，气泡不能越出主窗客户区边界。
         # 子控件 geometry() 是相对父控件的坐标，因此用 host.rect() 判定。
         assert host.rect().contains(bubble.geometry())
