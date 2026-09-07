@@ -25,8 +25,12 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def wait_until(pred, timeout=3.0):
-    """事件驱动等待：处理 Qt 事件直到条件满足或硬超时。"""
+def wait_until(pred, timeout=10.0):
+    """事件驱动等待：处理 Qt 事件直到条件满足或硬超时。
+
+    超时给 10s：worker 线程 + Qt 事件循环在共享 CI runner（尤其 macOS）
+    上调度延迟大，3s 窗口偶发等不到（test_restart_drops_stale_generation_
+    signals 曾在 macOS runner 上 flake）。超时只影响失败路径的速度。"""
     app = QApplication.instance()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
