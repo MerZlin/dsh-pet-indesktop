@@ -29,7 +29,6 @@ def test_legacy_click_sound_path_migration(tmp_path: Path):
     assert cfg.get("click_sound_volume") == 0.70
     assert cfg.get("slingshot_enabled") is True
     assert cfg.get("throw_strength") == "standard"
-    assert cfg.get("throw_max_speed") == 4800.0
 
 
 def test_legacy_click_sound_path_empty_migrates_to_builtin(tmp_path: Path):
@@ -93,7 +92,6 @@ def test_invalid_sound_and_physics_config_normalization(tmp_path: Path):
     assert cfg.get("click_sound_volume") == 0.70
     assert cfg.get("click_sound_pack") == {"kind": "builtin", "id": "default", "path": ""}
     assert cfg.get("throw_strength") == "standard"
-    assert cfg.get("throw_max_speed") == 4800.0
 
 
 def test_throw_physics_substep_long_frame():

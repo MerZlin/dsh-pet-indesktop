@@ -34,7 +34,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "character", "character_aliases", "character_profiles", "chat_always_on_top",
     "chat_background", "chat_background_fill", "chat_background_opacity", "chat_bg_crops",
     "chat_follow_pet", "chat_ui_style", "click_show_balance", "click_show_self_talk",
-    "click_sound_enabled", "click_sound_pack", "click_sound_path", "click_sound_volume",
+    "click_sound_enabled", "click_sound_pack", "click_sound_volume",
     "collision_enabled", "collision_friction", "collision_impulse_cap",
     "collision_mass_scale", "collision_restitution", "collision_sound_enabled",
     "collision_sound_volume", "context_menu_appearance", "context_menu_layout", "context_menu_template",
@@ -50,7 +50,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "self_talk_image_dir", "self_talk_image_scale", "self_talk_max_interval", "self_talk_min_interval",
     "self_talk_texts", "shift_drag", "show_dock_icon", "slingshot_enabled",
     "spawn_inherit_dynamic_island", "spawn_inherit_size", "spawn_scale",
-    "stream_capture_mode", "system_notifications_enabled", "throw_max_speed", "throw_strength",
+    "stream_capture_mode", "system_notifications_enabled", "throw_strength",
     "experimental_single_process_spawn", "experimental_shared_decode",
     "todo_reminder_enabled", "todo_reminder_lead_minutes",
 })

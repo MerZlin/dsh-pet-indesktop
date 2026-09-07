@@ -559,12 +559,10 @@ class Config:
             "quick_launch_apps": [dict(item) for item in DEFAULT_QUICK_LAUNCH_APPS],
             "auto_hide_fullscreen": True,  # 全屏应用自动隐藏（Windows）
             "click_sound_enabled": True,   # 点击 Q 弹音效
-            "click_sound_path": "",        # 自定义点击音效文件绝对路径（空=内置默认）
             "click_sound_pack": _default_click_sound_pack(),
             "click_sound_volume": 0.70,
             "slingshot_enabled": True,     # 弹弓弹射
             "throw_strength": "standard",  # gentle / standard / strong / crazy
-            "throw_max_speed": 4800.0,     # 由 throw_strength 导出
             "idle_low_fps_enabled": False,  # 闲置降帧（灰度默认关）：长时间无交互时动画隔帧呈现
             "idle_low_fps_threshold": 30.0,  # 闲置阈值（秒）：超过该时长无交互且窗口可见才降帧
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
@@ -786,9 +784,9 @@ class Config:
             "lock_position", "shift_drag", "pet_opacity",
             "context_menu_appearance", "quick_launch_apps",
             "menu_easter_egg", "auto_hide_fullscreen",
-            "click_sound_enabled", "click_sound_path",
+            "click_sound_enabled",
             "click_sound_pack", "click_sound_volume",
-            "slingshot_enabled", "throw_strength", "throw_max_speed",
+            "slingshot_enabled", "throw_strength",
             "idle_low_fps_enabled", "idle_low_fps_threshold",
             "click_show_balance", "click_show_self_talk",
             "balance_refresh_minutes", "autostart_wanted", "stream_capture_mode",
@@ -988,7 +986,6 @@ class Config:
         self.data["slingshot_enabled"] = bool(self.data.get("slingshot_enabled", True))
         strength = physics_mod.normalize_throw_strength(str(self.data.get("throw_strength") or "standard"))
         self.data["throw_strength"] = strength
-        self.data["throw_max_speed"] = physics_mod.throw_speed_cap(strength)
         # 闲置降帧（性能调研 §4.3）：开关默认关（灰度）；阈值夹到 [1, 3600] 秒
         # 终审 P1-3：必须用 _bool_or_default——bool("false") is True，字符串
         # 布尔（外部手改配置/旧版导出）会被误开；与其它布尔键同规。

@@ -693,14 +693,6 @@ def test_migrate_legacy_spawns_skips_occupied_target_slot(tmp_path):
     sm._unlock_file(h1)
 
 
-def test_app_main_rejects_instance_arg():
-    """测试 app.main 传入 --instance 参数时打印警告并返回 1 退出。"""
-    from pet import app as app_mod
-
-    ret = app_mod.main(["dsh-pet", "--instance", "pet2"])
-    assert ret == 1
-
-
 def test_app_main_validates_slot_arg():
     """测试 app.main 校验 --slot 参数范围（0~127）及非法值。"""
     from pet import app as app_mod

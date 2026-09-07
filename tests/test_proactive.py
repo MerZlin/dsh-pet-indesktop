@@ -728,7 +728,7 @@ class TestPhase3VisionLinkAndDryRun:
         # mock vision._post_vision_request（模拟真实请求消耗一次预算）
         from pet import vision
 
-        def _fake_post(jpeg_bytes, app_str, prompt, p, memory_context="", consume_budget=None):
+        def _fake_post(jpeg_bytes, app_str, prompt, p, memory_context="", consume_budget=None, pet_name=""):
             if consume_budget is not None:
                 consume_budget()
             return "看到你在写 Python 呢！"
@@ -1007,7 +1007,7 @@ class TestPhase5ShortTermMemory:
         recorded_contexts = []
         from pet import vision
 
-        def _fake_post(jpeg_bytes, app_str, prompt, p, memory_context="", consume_budget=None):
+        def _fake_post(jpeg_bytes, app_str, prompt, p, memory_context="", consume_budget=None, pet_name=""):
             recorded_contexts.append(memory_context)
             return "好呀"
 

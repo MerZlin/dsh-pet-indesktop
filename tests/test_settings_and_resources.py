@@ -90,7 +90,6 @@ def test_modern_settings_dialog_round_trip(qapp, tmp_path: Path):
     reloaded_cfg = Config(cfg_root)
     assert reloaded_cfg.get("slingshot_enabled") is False
     assert reloaded_cfg.get("throw_strength") == "crazy"
-    assert reloaded_cfg.get("throw_max_speed") == 9000.0
     assert reloaded_cfg.get("click_sound_volume") == 0.85
     assert reloaded_cfg.get("click_sound_pack") == {"kind": "builtin", "id": "duck", "path": ""}
     assert reloaded_cfg.get("spawn_inherit_size") is False

@@ -155,6 +155,27 @@ def test_independent_vision_prefers_own_key_over_chat_key(monkeypatch):
     assert "sk-chat-secret" not in str(auth)
 
 
+def test_vision_request_includes_self_recognition_hint(monkeypatch):
+    """视觉请求 user 文本应携带自我识别提示（认出截图里的桌宠是自己）。"""
+    import json
+    from pet import vision
+    from pet.chat.models import ProviderConfig
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=None, context=None):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeResponse({"choices": [{"message": {"content": "好"}, "finish_reason": "stop"}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-x"})
+    vision._post_vision_request(b"fake-jpeg", "code.exe | t", "sys", p, pet_name="大肥鱼")
+    user_msg = captured["body"]["messages"][1]["content"][0]["text"]
+    assert "那就是你自己「大肥鱼」" in user_msg
+    # 系统提示词不被污染：提示只加在 user 文本里
+    assert captured["body"]["messages"][0]["content"] == "sys"
+
+
 def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeypatch):
     """回归测试：看看屏幕 worker 接收快照，不改写主线程 ProviderConfig 共享对象。"""
     from pet.chat.models import ProviderConfig, ChatSettings
@@ -172,6 +193,7 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
     win.cfg = SimpleNamespace(
         chat_settings=lambda: shared_settings,
         resolve_api_key=lambda p: "sk-resolved-secret",
+        get=lambda k, d=None: d,
     )
     win._last_look_ts = 0.0
     win._look_busy = False
@@ -184,10 +206,12 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
 
     assert len(threads) == 1
     passed_args = threads[0]["args"]
-    passed_provider, passed_system_prompt = passed_args
+    passed_provider, passed_system_prompt, passed_pet_name = passed_args
     # 传递给 worker 的 provider 是快照，含有已解析的 key
     assert passed_provider.api_key == "sk-resolved-secret"
     assert passed_provider is not shared_provider
+    # 自我识别提示用的角色名一并传入 worker（字符串，可能为空）
+    assert isinstance(passed_pet_name, str)
     # 共享对象未被污染改写
     assert shared_provider.api_key == "unresolved_or_empty"
 

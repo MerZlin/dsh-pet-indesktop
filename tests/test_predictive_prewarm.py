@@ -396,6 +396,20 @@ class TestWarmPredicted:
         time.sleep(0.05)
         assert clip.warm_calls == 0
 
+    def test_warm_predicted_noop_when_prewarm_disabled(self, tmp_path, monkeypatch):
+        """省电模式（prewarm_enabled=False）下预测预热不启动——冷启动省电
+        时 _warm_paused 为 False，必须另有 _prewarm_enabled 总闸。"""
+        monkeypatch.setattr(library_mod, "WebMClip", _NoopWarmClip)
+        videos = tmp_path / "videos"
+        directory = videos / "random"
+        directory.mkdir(parents=True)
+        (directory / "写代码.webm").write_bytes(b"fake")
+        lib = library_mod.MovieLibrary(asset_dir=videos, prewarm_policy="minimal", prewarm_enabled=False)
+        clip = lib.movie("写代码")
+        lib.warm_predicted("写代码")
+        time.sleep(0.05)
+        assert clip.warm_calls == 0
+
 
 # ============================================================================
 # 窗口级集成：a) 预测+预热触发  b) 消费 hit  c) 交互打断 miss_invalid

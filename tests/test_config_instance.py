@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多开配置隔离：--instance 使用独立 config 文件，单开行为不变。"""
+"""多开配置隔离：instance_id（--slot / 生小肥鱼）使用独立 config 文件，单开行为不变。"""
 from __future__ import annotations
 
 import json

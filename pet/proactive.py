@@ -607,12 +607,15 @@ class ProactiveScreenWatcher:
         gen: int = -1,
     ) -> None:
         """后台线程：发起大模型视觉请求，处理重试/熔断，并通过桥接信号在桌宠冒泡。"""
-        from . import vision
+        from . import catalog, vision
 
+        pet_name = catalog.character_display_name(
+            str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+        )
         try:
             reply = vision._post_vision_request(
                 jpeg_bytes, app_str, system_prompt, provider, memory_context=memory_ctx,
-                consume_budget=self.limiter.consume_budget,
+                consume_budget=self.limiter.consume_budget, pet_name=pet_name,
             )
             # 代次隔离：请求在飞期间用户关闭功能/隐藏窗口（pause 翻转代次）时，
             # 迟到答复一律丢弃——不冒泡、不耗额度计数、不写陪伴记忆。

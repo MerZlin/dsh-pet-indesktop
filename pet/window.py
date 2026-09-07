@@ -423,7 +423,6 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.shift_drag: bool = bool(config.get('shift_drag', False))
         self.pet_opacity: int = int(_float_or_default(config.get('pet_opacity', 100), 100, 10, 100))
         self._applied_opacity: float | None = None  # 已应用到窗口的不透明度
-        self.click_sound_path: str = str(config.get('click_sound_path', '') or '')
         self.click_show_balance: bool = bool(config.get('click_show_balance', False))
         self.click_show_self_talk: bool = bool(config.get('click_show_self_talk', False))
         self.animation_gap_seconds: float = max(0.0, min(3600.0, float(config.get('animation_gap_seconds', 0.0))))
@@ -3400,10 +3399,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         provider = copy.copy(settings.active_config)
         provider.api_key = self.cfg.resolve_api_key(provider)
         system_prompt = settings.default_system_prompt
+        # 自我识别提示用的角色显示名（截图里的桌宠就是它自己）
+        pet_name = catalog.character_display_name(
+            str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
+        )
 
         threading.Thread(
             target=self._look_worker,
-            args=(provider, system_prompt),
+            args=(provider, system_prompt, pet_name),
             daemon=True,
             name="pet-look-screen",
         ).start()
@@ -3412,14 +3415,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         """公开转发：触发一次"看看屏幕"识别（等价 _on_look_screen）。"""
         self._on_look_screen()
 
-    def _look_worker(self, provider: Any, system_prompt: str) -> None:
+    def _look_worker(self, provider: Any, system_prompt: str, pet_name: str = "") -> None:
         # 延迟导入：无 Chat / 不使用「看看屏幕」的实例启动时不加载 PIL
         from . import vision as vision_mod
         try:
             shot = vision_mod.capture_screen_bytes()
             app_info = vision_mod.foreground_app_info()
             reply = vision_mod.ask_about_screen(
-                shot, app_info, system_prompt, provider
+                shot, app_info, system_prompt, provider, pet_name=pet_name
             )
             if shiboken6.isValid(self) is False:
                 return  # 窗口已销毁（退出/切角色），不再触碰信号
@@ -3850,7 +3853,6 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._self_talk_image_scale = max(0.5, min(3.0, float(self.cfg.get('self_talk_image_scale', 100)) / 100.0))
         self._self_talk_min_interval = max(5.0, float(self.cfg.get('self_talk_min_interval', DEFAULT_SELF_TALK_MIN_INTERVAL)))
         self._self_talk_max_interval = max(self._self_talk_min_interval, float(self.cfg.get('self_talk_max_interval', DEFAULT_SELF_TALK_MAX_INTERVAL)))
-        self.click_sound_path = str(self.cfg.get('click_sound_path', '') or '')
         self._throw_speed_cap = physics_mod.throw_speed_cap(self.cfg.get('throw_strength'))
         self.click_show_balance = bool(self.cfg.get('click_show_balance', False))
         self.click_show_self_talk = bool(self.cfg.get('click_show_self_talk', False))

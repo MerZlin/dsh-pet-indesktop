@@ -70,8 +70,6 @@ def test_click_sound_path_is_linked_to_enable_toggle_and_persisted(tmp_path, mon
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     config = Config(tmp_path)
-    assert config.get("click_sound_path") == ""
-
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     row = dialog.findChild(
         settings_mod.SettingRow, "settingRow_click_sound_pack"
