@@ -552,7 +552,7 @@ def test_macos_hide_pet_respects_dock_icon_hidden_preference(tmp_path, monkeypat
             win = PetWindow.__new__(PetWindow)
             win.cfg = Config(tmp_path)
             win.cfg.set("show_dock_icon", pref)
-            PetWindow.hide(win)
+            PetWindow.hide(win, notify=False)
             mock_hide.assert_called_once()
             assert win.cfg.get("show_dock_icon") is pref
             pet.app._mac_set_dock_icon_visible.assert_not_called()
