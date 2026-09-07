@@ -35,7 +35,13 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # +1 行。详见 _plan/current/memory/REVIEW_flicker_glm53.md）。
 # 2026-09-05 批5.3 合入：删 broker 首个 idle 延迟与轮询（净 -44 行），
 # 频闪修复保留（+5），合并后实测 4261 行，预算按实测 +50 行余量收紧。
-WINDOW_PY_LINE_BUDGET = 4311
+# 2026-09-06 黄金回旋 + 边缘探头：窗口仅保留薄钩子（绘制/mask/命中/拖拽/
+# 点击/隐藏冻结/动画约束），控制器实现在 golden_spin.py / edge_probe.py /
+# window_optional_services.py；window.py 净增约 47 行、实测 4333，
+# 预算上调到 4340（+7 余量，理由见本注释）。
+# 2026-09-07 上调到 4350（探头/回旋第四批微调：go_default_corner 在回到右下角前
+# 取消激活中的边缘探头会话，防止宠物斜着出现在右下角；实测 4350）。
+WINDOW_PY_LINE_BUDGET = 4350
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的

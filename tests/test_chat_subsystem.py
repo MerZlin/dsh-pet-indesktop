@@ -1935,6 +1935,19 @@ def test_reference_animation_materials_are_folder_classified():
     assert categories["turn"] == "东张西望"
     assert "点击回应-元气挥手" in categories["clicks"]
     assert "小幅度原地360度旋转展示" in categories["acts"]
+    # 上游同步：工作状态与碎碎念动画应进入随机动作池。
+    for synced_name in (
+        "工作状态-原地踱步张望",
+        "工作状态-垂头叹气冒汗",
+        "工作状态-忙碌点按",
+        "工作状态-思考冒泡",
+        "工作状态-清点归档",
+        "工作状态-雀跃庆祝",
+        "碎碎念-发呆碎碎念",
+        "碎碎念-对屏碎碎念",
+        "碎碎念-擦桌碎碎念",
+    ):
+        assert synced_name in categories["acts"], synced_name
 
 def test_pet_speech_bubble_prefers_centered_position_above_character():
     from PySide6.QtCore import QRect

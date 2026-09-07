@@ -16,6 +16,8 @@ from .shared import (
     add_clear_spawned_pets,
     add_drag_physics,
     add_deepseek_web,
+    add_edge_probe,
+    add_golden_spin,
     add_harness,
     add_mouse_through,
     add_no_move,
@@ -57,6 +59,8 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     add_autostart(menu, icons=False)
     add_spawn_pet(menu, pet)
     add_clear_spawned_pets(menu, pet, icons=False)
+    add_golden_spin(menu, pet, icons=False)
+    add_edge_probe(menu, pet, icons=False)
     build_size_menu(menu, pet, icons=False)
 
     menu.addSeparator()

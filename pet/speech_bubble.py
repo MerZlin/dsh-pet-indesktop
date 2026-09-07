@@ -25,7 +25,7 @@ from PySide6.QtGui import (
     QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen,
     QPixmap, QTransform,
 )
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 # 批6-2 拆分后纯函数区 re-export（维持既有 import 兼容；外部调用点本批不改）
 from .speech_bubble_text import (
@@ -96,6 +96,8 @@ class PetSpeechBubble(QFrame):
     def __init__(self, parent=None, style_id: str = "classic_top"):
         super().__init__(parent)
         self._interactive = False
+        self._capture_compat = False
+        self._capture_host: QWidget | None = None
         self.setObjectName("pet-speech-bubble")
         flags = (
             Qt.WindowType.Tool
@@ -301,6 +303,47 @@ class PetSpeechBubble(QFrame):
         self._interactive = bool(on)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not self._interactive)
 
+    def set_capture_compat(self, on: bool, host: QWidget | None = None) -> None:
+        """直播捕获兼容：把气泡作为桌宠主窗的子内容渲染（issue #62）。
+
+        开启后气泡不再是独立 Tool 窗口，而成为主窗子控件；OBS/直播姬捕获
+        主窗时即可看到气泡。放置可用区从整个屏幕收窄为主窗矩形，避免子控件
+        越出主窗边界被裁掉。关闭后恢复原独立置顶 Tool 窗口形态。
+        """
+        on = bool(on)
+        if on == self._capture_compat:
+            return
+        if on and host is None:
+            return
+        was_visible = self.isVisible()
+        self._capture_compat = on
+        if on:
+            self._capture_host = host
+            self.setWindowFlags(Qt.WindowType.Widget)
+            self.setParent(host)
+        else:
+            self._capture_host = None
+            self.setParent(None)
+            flags = (
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+                | Qt.WindowType.WindowDoesNotAcceptFocus
+            )
+            self.setWindowFlags(flags)
+            if _MAC:
+                self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        if not self._anchor_rect.isEmpty():
+            self._place(self._anchor_rect)
+        if was_visible:
+            self.show()
+            if not on and not _MAC:
+                self.raise_()
+        else:
+            # 子模式重挂到主窗后，Qt 会随父窗显示把未显式隐藏的子控件一起显示；
+            # 启动期/无内容时不能因此冒出空白小气泡。
+            self.hide()
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if self._interactive and event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
@@ -461,6 +504,11 @@ class PetSpeechBubble(QFrame):
         if screen is None:
             return
         avail = screen.availableGeometry()
+        host = self._capture_host if self._capture_compat else None
+        if host is not None and not host.geometry().isEmpty():
+            # 捕获子模式下只允许气泡落在主窗范围内，避免子控件越界被裁掉；
+            # bubble_rect_for_anchor 会按“上方→侧边→下方”在受限可用区选位。
+            avail = host.geometry()
         # Image breath bubbles hide the QLabel because the parent paints the
         # clipped image below its decorations. Their sizeHint therefore only
         # contains layout margins; position the real fixed-size window instead.
@@ -479,7 +527,10 @@ class PetSpeechBubble(QFrame):
             top = min(max(top, avail.top()), avail.bottom() - rect.height() + 1)
             rect.moveTop(top)
         self._anchor_rect = QRect(anchor_rect)
-        self.move(rect.topLeft())
+        if host is not None:
+            self.move(host.mapFromGlobal(rect.topLeft()))
+        else:
+            self.move(rect.topLeft())
         self._update_surface_geometry(rect)
 
     def _update_surface_geometry(self, global_rect: QRect) -> None:

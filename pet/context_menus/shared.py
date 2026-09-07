@@ -474,6 +474,29 @@ def add_clear_spawned_pets(menu: QMenu, pet, *, icons: bool = True):
     )
 
 
+def add_golden_spin(menu: QMenu, pet, *, icons: bool = True):
+    """右键菜单快捷入口：让桌宠原地逆时针旋转一圈。"""
+    callback = getattr(pet, "trigger_golden_spin", None)
+    return add_action(
+        menu,
+        "黄金回旋",
+        "play" if icons else None,
+        callback,
+        close_on_trigger=True,
+    )
+
+
+def add_edge_probe(menu: QMenu, pet, *, icons: bool = True):
+    """右键菜单开关：开启/关闭拖到屏幕边缘后的自动探头。"""
+    action = add_action(menu, "边缘探头", "corner" if icons else None)
+    action.setCheckable(True)
+    action.setChecked(bool(pet.cfg.get("edge_probe_enabled", False)))
+    action.toggled.connect(
+        lambda enabled, pet=pet: pet.set_edge_probe_enabled(enabled)
+    )
+    return action
+
+
 def add_harness(menu: QMenu, pet, *, icons: bool = True):
     return add_action(menu, "启动 DeepSeek Harness", "harness" if icons else None, lambda: launch_harness_gui(pet), close_on_trigger=True)
 

@@ -285,6 +285,11 @@ class ModernSettingsDialog(QDialog):
             SettingRow("lock_position", "锁定位置", "桌宠固定不动，无法拖动（点击互动仍有效）。", self.lock_position_check),
             SettingRow("shift_drag", "SHIFT+左键拖动", "开启后必须按住 SHIFT 再左键才能拖动桌宠。", self.shift_drag_check),
         ], behavior_content))
+        behavior_layout.addWidget(SettingsSection("边缘探头", [
+            SettingRow("edge_probe", "边缘探头",
+                       "拖到屏幕左/右边缘后自动以 45° 探头姿态窥视；点击真实角色会拉直约 5 秒后自动退回。",
+                       self.edge_probe_check),
+        ], behavior_content))
         behavior_layout.addWidget(SettingsSection("生小肥鱼", [
             SettingRow("spawn_inherit_size", "生小肥鱼继承大小",
                        "开启后生成的小肥鱼与主肥鱼大小一致；关闭后使用下方为小肥鱼单独选择的大小。",
@@ -319,6 +324,12 @@ class ModernSettingsDialog(QDialog):
             SettingRow("click_sound_volume", "音效音量", "调整点击音效播放音量。", self.click_sound_volume_spin),
             SettingRow("click_sound_preview", "试听音效", "测试当前选择的点击音效。", self.click_sound_preview_btn),
             SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容。", self.click_self_talk_check),
+            SettingRow("golden_spin_click", "点击触发黄金回旋",
+                       "开启后点击桌宠触发原地逆时针 360° 旋转；下方子开关可选择跳过点击动画直接回旋。",
+                       self.golden_spin_click_check),
+            SettingRow("golden_spin_direct", "点击回旋跳过动画",
+                       "开启后点击直接开始黄金回旋，不播放 Q 弹与点击素材；连续点击会累计旋转圈数并逐圈加速。",
+                       self.golden_spin_direct_check, stacked=True),
         ]
         if self.click_balance_check is not None:
             click_rows.insert(4, SettingRow(
@@ -498,6 +509,7 @@ class ModernSettingsDialog(QDialog):
             self.pro_enabled_check.toggled.connect(self._update_proactive_controls)
             self.pro_idle_check.toggled.connect(self._update_proactive_idle_controls)
         self.spawn_inherit_size_check.toggled.connect(self._update_spawn_size_controls)
+        self.golden_spin_click_check.toggled.connect(self._update_golden_spin_controls)
         self._update_self_talk_controls(self.self_talk_check.isChecked())
         self._update_translucency_controls(self.menu_translucent_check.isChecked())
         self._update_island_controls(self.island_enabled_check.isChecked())
@@ -509,6 +521,7 @@ class ModernSettingsDialog(QDialog):
         self._update_spawn_size_controls(self.spawn_inherit_size_check.isChecked())
         # 初始同步须在全部 SettingRow 构建完成后执行，否则 findChild 找不到行
         self._update_click_sound_controls(self.click_sound_check.isChecked())
+        self._update_golden_spin_controls(self.golden_spin_click_check.isChecked())
         self._update_agent_sound_controls(self.agent_sound_check.isChecked())
         self._update_agent_sound_subcontrols()
 
@@ -668,6 +681,12 @@ class ModernSettingsDialog(QDialog):
         self.click_self_talk_check.setChecked(bool(self.config.get("click_show_self_talk", False)))
         self.music_sing_check = ToggleSwitch(self)
         self.music_sing_check.setChecked(bool(self.config.get("music_sing_enabled", False)))
+        self.golden_spin_click_check = ToggleSwitch(self)
+        self.golden_spin_click_check.setChecked(bool(self.config.get("golden_spin_on_click", False)))
+        self.golden_spin_direct_check = ToggleSwitch(self)
+        self.golden_spin_direct_check.setChecked(bool(self.config.get("golden_spin_direct", False)))
+        self.edge_probe_check = ToggleSwitch(self)
+        self.edge_probe_check.setChecked(bool(self.config.get("edge_probe_enabled", False)))
         self.balance_refresh_spin = None
         self.balance_tier_mode_select = None
         self.balance_tier_peak_edit = None
@@ -1321,6 +1340,15 @@ class ModernSettingsDialog(QDialog):
                 if isinstance(card, SettingsCard):
                     card.refresh_separators()
 
+    def _update_golden_spin_controls(self, enabled: bool) -> None:
+        """“点击触发黄金回旋”总开关控制“跳过动画”子开关可见性。"""
+        row = self.findChild(SettingRow, "settingRow_golden_spin_direct")
+        if row is not None:
+            row.setVisible(bool(enabled))
+            card = row.parentWidget()
+            if isinstance(card, SettingsCard):
+                card.refresh_separators()
+
     def _update_agent_sound_controls(self, enabled: bool) -> None:
         """Agent 音效总开关联动控制整组子项可见性/可用性。"""
         for row_key in ("agent_sound_start", "agent_sound_done", "agent_sound_error", "agent_sound_volume", "agent_sound_cooldown"):
@@ -1522,13 +1550,14 @@ class ModernSettingsDialog(QDialog):
             ("显示", claim("scale", "pet_opacity")),
             ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "no_move", "music_sing")),
             ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
+            ("边缘探头", claim("edge_probe")),
             ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island", "clear_spawned_pets")),
             ("多开碰撞", collision_primary),
             ("碰撞参数（高级）", collision_advanced, True),
         ])
         interaction = page_content([
             ("输入", claim("mouse_through")),
-            ("点击反馈", claim_prefix("click_")),
+            ("点击反馈", claim_prefix("click_") + claim("golden_spin_click", "golden_spin_direct")),
             ("自言自语", claim("self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min", "self_talk_max", "self_talk_texts", "self_talk_images", "self_talk_image_scale")),
         ])
         # click_talk_bindings shares the click_ prefix and remains in interaction.
@@ -1774,14 +1803,28 @@ class ModernSettingsDialog(QDialog):
         self.config.set("lock_position", self.lock_position_check.isChecked())
         self.config.set("shift_drag", self.shift_drag_check.isChecked())
         self.config.set("pet_opacity", int(self.pet_opacity_spin.value()))
-        self.config.set("click_sound_enabled", self.click_sound_check.isChecked())
-        self.config.set("click_sound_pack", self.click_sound_picker.value())
-        self.config.set("click_sound_volume", float(self.click_sound_volume_spin.value()) / 100.0)
-        # 保持无条件预热，避免试听/首次点击时 QSoundEffect 尚未加载完成导致无声。
-        warm_click_sound_effects(
-            self.config.get("click_sound_pack"),
-            data_dir=self.config.dir,
+        click_sound_enabled = self.click_sound_check.isChecked()
+        click_sound_pack = self.click_sound_picker.value()
+        click_sound_volume = float(self.click_sound_volume_spin.value()) / 100.0
+        click_sound_pack_changed = (
+            self.config.get("click_sound_pack") != click_sound_pack
         )
+        click_sound_enabled_changed = (
+            self.config.get("click_sound_enabled") != click_sound_enabled
+        )
+        self.config.set("click_sound_enabled", click_sound_enabled)
+        self.config.set("click_sound_pack", click_sound_pack)
+        self.config.set("click_sound_volume", click_sound_volume)
+        # 只在真正需要时预热：点击音效处于启用状态，且本次写回改变了启用开关或音效包。
+        # 音量变化/未改动不需要重建 QSoundEffect；开关从关到开已由勾选回调即时预热，
+        # 因此普通“打开设置再关闭”不应在每次落盘都创建 QtMultimedia 音频对象。
+        if click_sound_enabled and (
+            click_sound_enabled_changed or click_sound_pack_changed
+        ):
+            warm_click_sound_effects(
+                click_sound_pack,
+                data_dir=self.config.dir,
+            )
         existing_island = self.config.get("dynamic_island", {})
         if not isinstance(existing_island, dict):
             existing_island = {}
@@ -1802,6 +1845,9 @@ class ModernSettingsDialog(QDialog):
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
         self.config.set("music_sing_enabled", self.music_sing_check.isChecked())
+        self.config.set("golden_spin_on_click", self.golden_spin_click_check.isChecked())
+        self.config.set("golden_spin_direct", self.golden_spin_direct_check.isChecked())
+        self.config.set("edge_probe_enabled", self.edge_probe_check.isChecked())
         if self.balance_refresh_spin is not None:
             self.config.set("balance_refresh_minutes", int(self.balance_refresh_spin.value()))
             self.config.set(

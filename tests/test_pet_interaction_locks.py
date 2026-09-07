@@ -338,6 +338,7 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
     class Win:
         def __init__(self, config):
             self.config = config
+            self.corner_calls = 0
 
         def icon_pixmap(self, _size=None):
             return QPixmap(2, 2)
@@ -345,6 +346,9 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
         def set_mouse_through(self, on):
             self.config.set("mouse_through", bool(on))
             self.config.save()
+
+        def go_default_corner(self):
+            self.corner_calls += 1
 
         def _speech_bubble(self):  # pragma: no cover - 占位
             raise NotImplementedError
@@ -363,6 +367,10 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
     # 反向：托盘里点掉 → config 落盘
     action.setChecked(False)
     assert config.get("mouse_through") is False
+    # “回到右下角”应路由到该窗的 go_default_corner
+    home = next(a for a in menu.actions() if a.text() == "回到右下角")
+    home.trigger()
+    assert win.corner_calls == 1
     tray.hide()
     app.processEvents()
 
@@ -424,6 +432,76 @@ def test_click_sound_pair_is_cleared_when_resolution_fails(app, tmp_path, monkey
     win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(400, 400)))
     assert press_calls == [pair_a, pair_b]
     assert release_calls == [pair_a, pair_b]
+
+    win.close()
+    app.processEvents()
+
+
+class _ProbeForSoundTest:
+    def __init__(self, active: bool):
+        self.active = active
+        self.clicked = 0
+
+    def on_clicked(self):
+        self.clicked += 1
+
+    def on_release(self, was_dragging: bool):
+        return None
+
+
+def test_edge_probe_click_does_not_play_click_sound(app, tmp_path, monkeypatch):
+    """边缘探头激活时的点击不播 press/release 音效，但普通点击仍播放。"""
+    from pathlib import Path
+
+    win = _make_win(app, tmp_path)
+    press_calls = []
+    release_calls = []
+    pair = (Path("press.wav"), Path("release.wav"))
+    monkeypatch.setattr("pet.window.resolve_click_sound_pair",
+                        lambda pack, data_dir=None: pair)
+    monkeypatch.setattr("pet.window.play_press_sound",
+                        lambda sound_pair, volume: press_calls.append(sound_pair))
+    monkeypatch.setattr("pet.window.play_release_sound",
+                        lambda sound_pair, volume: release_calls.append(sound_pair))
+
+    probe = _ProbeForSoundTest(active=True)
+    win._edge_probe = probe
+
+    # 探头激活：点击被探头消费，且不播音效。
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(200, 200)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(200, 200)))
+    assert probe.clicked == 1
+    assert press_calls == []
+    assert release_calls == []
+
+    # 探头未激活：普通点击照常播放 press+release。
+    probe.active = False
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(300, 300)))
+    win.mouseReleaseEvent(_release(QPointF(10, 10), QPointF(300, 300)))
+    assert len(press_calls) == 1
+    assert len(release_calls) == 1
+
+    win.close()
+    app.processEvents()
+
+
+def test_go_default_corner_cancels_active_edge_probe(app, tmp_path):
+    """回右下角前必须取消探头会话，避免宠物斜着出现在右下角。"""
+    win = _make_win(app, tmp_path)
+
+    class Probe:
+        active = True
+        cancelled = []
+
+        def cancel(self, reason="", restore=False):
+            self.cancelled.append((reason, restore))
+            self.active = False
+
+    probe = Probe()
+    win._edge_probe = probe
+    win.go_default_corner()
+    assert probe.cancelled == [("return_corner", False)]
+    assert probe.active is False
 
     win.close()
     app.processEvents()

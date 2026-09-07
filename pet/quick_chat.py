@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QTimer, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -45,6 +45,8 @@ class QuickChatBubble(QFrame):
         )
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._capture_compat = False
+        self._capture_host: QWidget | None = None
         self.setMinimumWidth(320)
         self.setMaximumWidth(460)
 
@@ -220,20 +222,81 @@ class QuickChatBubble(QFrame):
         if pet is None or not hasattr(pet, "visible_content_rect"):
             return
         anchor = pet.visible_content_rect()
-        screen = QGuiApplication.screenAt(anchor.center())
-        available = screen.availableGeometry() if screen else QGuiApplication.primaryScreen().availableGeometry()
+        host = self._capture_host if self._capture_compat else None
+        if host is not None and not host.geometry().isEmpty():
+            available = host.geometry()
+        else:
+            screen = QGuiApplication.screenAt(anchor.center())
+            available = screen.availableGeometry() if screen else QGuiApplication.primaryScreen().availableGeometry()
         self.adjustSize()
         w = self.width()
         h = self.height()
         x = anchor.center().x() - w // 2
         y = anchor.top() - h - 8
         self._tail_up = False
+        if host is not None and y < available.top():
+            # 子模式默认只允许落在主窗内，会把气泡挤到下方/遮挡宠物。
+            # 先向主窗申请透明头顶空间，尽量恢复“向上生成”的原生位置。
+            screen = QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()
+            if screen is not None:
+                screen_top = screen.availableGeometry().top()
+                desired_top = y - 4
+                if desired_top >= screen_top:
+                    desired_h = available.top() - desired_top
+                    setter = getattr(host, "set_capture_headroom", None)
+                    if desired_h > 0 and setter is not None and setter(desired_h):
+                        return self.position_near_pet()
         if y < available.top():
             y = anchor.bottom() + 8
             self._tail_up = True
         x = max(available.left() + 4, min(x, available.right() - w - 4))
-        self.move(x, y)
+        if host is not None:
+            # 直播捕获子模式下只允许落在主窗矩形内；空间不足时夹到窗内，
+            # 避免子控件被主窗边界裁掉。
+            if h <= available.height():
+                y = max(available.top() + 4, min(y, available.bottom() - h - 4))
+            else:
+                y = available.top() + 4
+            self.move(host.mapFromGlobal(QPoint(x, y)))
+        else:
+            self.move(x, y)
         self.update()
+
+    def set_capture_compat(self, on: bool, host: QWidget | None = None) -> None:
+        """直播捕获兼容：把快速对话气泡作为桌宠主窗的子内容渲染（issue #62）。
+
+        开启后快速对话不再是独立 Tool 窗口，而成为主窗子控件，捕获主窗时即可
+        看到并操作它；关闭后恢复独立置顶 Tool 窗口形态。
+        """
+        on = bool(on)
+        if on == self._capture_compat:
+            return
+        if on and host is None:
+            return
+        was_visible = self.isVisible()
+        self._capture_compat = on
+        self._capture_host = host if on else None
+        if on:
+            self.setWindowFlags(Qt.WindowType.Widget)
+            self.setParent(host)
+        else:
+            self.setParent(None)
+            flags = (
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint
+            )
+            self.setWindowFlags(flags)
+        if was_visible:
+            self.position_near_pet()
+            self.show()
+            if not on:
+                self.raise_()
+                self.activateWindow()
+                self.input.setFocus()
+        else:
+            # 子模式重挂主窗后不能随父窗显示而自动弹出空白窗。
+            self.hide()
 
     def show_for_pet(self, pet_window=None) -> None:
         if pet_window is not None:
@@ -362,4 +425,11 @@ class QuickChatBubble(QFrame):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.service.busy:
             self.service.stop()
+        if self._capture_compat and self._capture_host is not None:
+            setter = getattr(self._capture_host, "set_capture_headroom", None)
+            if setter is not None:
+                try:
+                    setter(0)
+                except RuntimeError:
+                    pass  # 宿主窗口已在销毁中
         super().closeEvent(event)

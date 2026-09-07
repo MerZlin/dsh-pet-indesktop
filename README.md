@@ -1,5 +1,16 @@
 # dsh-pet-indesktop
 
+<p align="center">
+  <a href="https://github.com/MerZlin/dsh-pet-indesktop/releases"><img alt="版本" src="https://img.shields.io/github/v/release/MerZlin/dsh-pet-indesktop?label=%E7%89%88%E6%9C%AC&color=blue"></a>
+  <a href="https://github.com/MerZlin/dsh-pet-indesktop/releases"><img alt="总下载" src="https://img.shields.io/github/downloads/MerZlin/dsh-pet-indesktop/total?label=%E6%80%BB%E4%B8%8B%E8%BD%BD&color=brightgreen"></a>
+  <a href="https://github.com/MerZlin/dsh-pet-indesktop"><img alt="Stars" src="https://img.shields.io/github/stars/MerZlin/dsh-pet-indesktop?style=social"></a>
+  <a href="https://github.com/MerZlin/dsh-pet-indesktop/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/MerZlin/dsh-pet-indesktop?color=orange"></a>
+  <a href="https://github.com/MerZlin/dsh-pet-indesktop"><img alt="Repo size" src="https://img.shields.io/github/repo-size/MerZlin/dsh-pet-indesktop"></a>
+  <a href="https://github.com/MerZlin/dsh-pet-indesktop/issues"><img alt="Issues" src="https://img.shields.io/github/issues/MerZlin/dsh-pet-indesktop"></a>
+  <img alt="平台" src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-8A2BE2">
+  <img alt="动画素材" src="https://img.shields.io/badge/%E5%8A%A8%E7%94%BB-dynamic%20animations-ff69b4">
+</p>
+
 一个基于 **Python + PySide6** 的独立桌面宠物。项目脱离 DSH 运行时，提供透明无边框、置顶、可拖动、角色切换、动画播放、系统托盘和可选 AI 对话能力。
 
 > **当前开发版（main，2026-09-06）**：已合并 PR #73 与 PR #76。相比 v4.1.0 发布版，当前主线新增了桌宠内存专项治理（长时运行不再单调上涨）、单进程多窗与共享解码链（3 窗 1 进程 1 解码器）、打字频闪根治、设置对话框拆分与死代码清理等结构治理；同时固化了一批开发约束与规则（见下节）。发布形态仍为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。
@@ -105,7 +116,7 @@ v4.0.0 是一次大版本升级：在 v3.1.1 的桌宠基础上，合并了社�
 
 DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget)，本项目的实现为桌宠内置的轻量版（菜单「DeepSeek 余额」+ 可选自动刷新，通过 DeepSeek 官方 `/user/balance` 接口查询，详见 [DeepSeek API 查询余额文档](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)）。
 
-当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 97 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
+当前动画素材已同步参考项目近期更新后的高清 WebM 资源。项目以 WebM 目录为动画源；`assets/characters` 包含 106 个 WebM 动画文件。GIF 目录仅在构建 GIF 变体时生成。后续新增或替换动画时，请更新 WebM，需要构建 GIF 变体时再生成对应 GIF。
 
 
 </details>
@@ -154,7 +165,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 - **只需要桌宠陪伴**：装无 Chat 版，包体更小、启动更轻。
 - **不想安装、追求便携**：用绿色版 zip，解压到任意目录双击即用。
 
-> 两个版本使用同一套高清 WebM 素材（97 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
+> 两个版本使用同一套高清 WebM 素材（106 段动画），只是入口不同：Chat 版会加载聊天子系统，无 Chat 版完全不携带 AI 对话依赖。
 >
 > 旧版 GIF 超大单文件（约 800 MB，运行时会在 C 盘临时目录解压并可能残留缓存）不再默认发布；确有需要可参考本文档「打包发布」一节自行构建 GIF 变体。
 >
@@ -235,6 +246,7 @@ DeepSeek 余额显示（气泡/小部件思路）参考了 [MeteorNOX/DeepSeek-B
 4. **数据目录**：`~/Library/Application Support/dsh-pet-standalone-<变体>/`（各变体相互独立，与 Windows 行为一致）。
 5. **开机自启**：托盘/右键菜单勾选「开机自启」（按变体生成独立 LaunchAgent）。
 6. **启动 DeepSeek Harness**：需安装 Node.js（`brew install node`）；启动器会自动探测 Homebrew/nvm 等路径并回退 `npx @deepseek-ai/dsh`。
+7. **关闭 Dock 图标**：在「桌宠设置 → 常规 → 显示 Dock 图标」取消勾选后，Dock 隐藏会彻底生效——隐藏桌宠也不会把 Dock 图标临时唤回；恢复入口是菜单栏托盘图标（显示 / 隐藏、鼠标穿透、桌宠设置）。开启鼠标穿透或关闭 Dock 图标时，桌宠会气泡提示恢复位置。
 
 > Intel Mac：当前 CI 只构建 arm64；Intel 用户请从源码运行（见下），或在 Intel 机器上自行构建。
 
@@ -424,7 +436,7 @@ pythonw -m pet
 - **SHIFT+左键拖动**：开启后普通拖动被禁用，必须**按住 SHIFT 再左键拖**才能移动桌宠——适合防止误拖，或桌面有别的操作需要普通左键时使用。
 - **不透明度**：10%–100%，数值越小桌宠越透明（半透明效果），保存立即生效。
 
-> 三者与「鼠标穿透」的区别：锁定/SHIFT 只是禁止拖动，点击互动（点头、音效、彩蛋）照常；鼠标穿透是桌宠完全不接收鼠标事件（点击会落到下层窗口），需要从托盘或右键菜单关闭。
+> 三者与「鼠标穿透」的区别：锁定/SHIFT 只是禁止拖动，点击互动（点头、音效、彩蛋）照常；鼠标穿透是桌宠完全不接收鼠标事件（点击会落到下层窗口），需要从托盘或右键菜单关闭。开启「鼠标穿透」时桌宠会气泡提示恢复位置。
 
 ### 开机自启
 
@@ -474,6 +486,8 @@ pythonw -m pet
 解决办法：在「桌宠设置」中勾选**「直播捕获兼容模式」**（Windows），保存后立即生效：
 
 - 桌宠变为普通顶层窗口并显示标题「dsh-pet 桌宠」，直播姬/OBS 的窗口捕获列表即可看到并选中它
+- 自言自语与快速对话气泡也会临时变成桌宠主窗的**子内容**：捕获「dsh-pet 桌宠」这一个源即可同时看到桌宠和气泡，不需要为气泡另加窗口源
+- 气泡在捕获模式下会在桌宠窗口范围内自动选位（上方空间不足时放侧面/下方），避免被主窗边界裁掉；关闭捕获模式后恢复原本的独立浮出定位
 - 代价：任务栏会出现桌宠图标（不开直播时取消勾选即可恢复原样）
 - 开启后窗口置顶、鼠标穿透等其余行为不受影响
 
@@ -678,7 +692,7 @@ assets/
             └── random/
 ```
 
-- `assets/characters` 是 WebM 动画源目录，包含 97 个 WebM 动画。
+- `assets/characters` 是 WebM 动画源目录，包含 106 个 WebM 动画。
 - GIF 目录（`assets/characters_gif`）仅在构建 GIF 变体时生成。
 - 没有稳定静态头像时，不强制从 WebM/GIF 截取首帧，以避免启动变慢和打包兼容性问题。
 
@@ -720,7 +734,7 @@ python normalize_step03.py
 python encode_thumbs.py
 ```
 
-> 参考项目全部 97 个动作均采用**路线 B（PR 手工抠像）**：对含第三方物品/透明边缘复杂的动作，自动 HSV 抠像易残边或误抠；`chroma_step02.py` 保留为自动化兜底。中间产物 step01~04 由脚本生成、不入仓库；`video/` 源视频与 `scripts/` 是成果、入库维护。
+> 参考项目全部 106 个动作均采用**路线 B（PR 手工抠像）**：对含第三方物品/透明边缘复杂的动作，自动 HSV 抠像易残边或误抠；`chroma_step02.py` 保留为自动化兜底。中间产物 step01~04 由脚本生成、不入仓库；`video/` 源视频与 `scripts/` 是成果、入库维护。
 
 #### ③ 透明动画 → 接入本项目
 
@@ -737,7 +751,7 @@ python encode_thumbs.py
    ```
 
 2. 保持几何约定与播放器一致：画布 **640×360**、24fps、**VP9 alpha 透明**；角色脚底对齐画布 y=330（`catalog.py` 中 `FEET_Y=330`、落地偏移 `PAD=30`），这样桌宠窗口的脚底落地对齐才准确。
-3. 命名保持稳定、避免重复；可参考 `assets/characters/shenshen/videos/` 现有 97 段动画的组织方式。
+3. 命名保持稳定、避免重复；可参考 `assets/characters/shenshen/videos/` 现有 106 段动画的组织方式。
 4. 如需 GIF 变体，运行 `python scripts/convert_to_gif.py --force --clean` 同步生成。
 
 > 不想重新打包？把做好的透明 WebM 按「切换角色」的外部角色目录结构直接放入 `characters/<角色ID>/videos/`，右键菜单即可热加载新角色。
@@ -1134,7 +1148,7 @@ python scripts/cleanup_mei_cache.py --delete
 - **动画边缘毛边/暗边修复**：帧渲染改为**预乘 alpha 缩放**（直通 alpha 缩放会让透明像素的 RGB 渗入半透明边缘，产生暗边/彩边）；Windows 上点击命中测试由 setMask 的 1-bit 裁剪改为**逐像素命中测试**（WM_NCHITTEST + HTTRANSPARENT，透明区域鼠标穿透、可见区域可点击），不再破坏 `WA_TranslucentBackground` 的逐像素半透明边缘。
 - **Harness 启动兼容旧版 dsh**：启动前探测 `web --help` 是否支持 `--no-open`（按命令缓存）——旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；不支持时不传，由 dsh 自己打开浏览器，桌宠不重复打开。
 - **动画帧率精度**：视频帧时长按 24fps 精确值（40ms → 42ms = 1000/24）修正，动画播放定时器改用精确定时器（PreciseTimer），消除粗略定时器漂移导致的节奏/移动插值偏差。
-- **右键菜单启动提速与避让**：动画分类子菜单**首次展开才填充**动作（根菜单构建不再遍历 97 个动画，首次右键不再卡顿数秒）；菜单弹出位置智能选择——优先角色右侧（子菜单向右展开）、屏幕不够时放左侧并让子菜单向左展开（RTL）、再不行放屏幕远角，根菜单与子菜单都不再遮挡角色；快捷启动应用图标按 (类型, 路径) 缓存（QFileIconProvider 首次取图标慢）。
+- **右键菜单启动提速与避让**：动画分类子菜单**首次展开才填充**动作（根菜单构建不再遍历 106 个动画，首次右键不再卡顿数秒）；菜单弹出位置智能选择——优先角色右侧（子菜单向右展开）、屏幕不够时放左侧并让子菜单向左展开（RTL）、再不行放屏幕远角，根菜单与子菜单都不再遮挡角色；快捷启动应用图标按 (类型, 路径) 缓存（QFileIconProvider 首次取图标慢）。
 - **设置窗口打开期间暂停气泡**：新版设置/聊天设置任一打开时，桌宠气泡暂停显示（关闭后恢复），不再盖住设置界面。
 - **macOS/Linux 打包补 integrations 资源（PR #22）**：onedir 构建显式打包 `integrations/`（含 DSH 桥接插件），修复 macOS/Linux 上「启动 DeepSeek Harness → 一键安装桥接插件」因资源缺失而失败的问题；构建后增加断言检查，漏打包直接报错。
 - **Chat 版显式收集 keyring（API Key 系统安全存储）**：Windows/Linux/macOS 构建均显式 `--collect-all keyring`，确保 Chat 版 API Key 走系统凭据存储可用。

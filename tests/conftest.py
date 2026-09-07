@@ -21,6 +21,8 @@
    monkeypatch（test_agent_link / test_proactive 已如此）。
 """
 
+import sys
+
 import pytest
 
 
@@ -32,6 +34,22 @@ def _mute_qt_audio(monkeypatch):
         return
     monkeypatch.setattr(QSoundEffect, "play", lambda self: None)
     monkeypatch.setattr(QMediaPlayer, "play", lambda self: None)
+    # 阻止 QSoundEffect 真正异步加载音频源：headless CI 上即使不 play，
+    # setSource 后的异步加载与 processEvents 也可能在 QtMultimedia 后端触发
+    # 原生 access violation。把 status 直接置 Ready 也让预热等待循环零泵事件。
+    monkeypatch.setattr(QSoundEffect, "setSource", lambda self, source: None)
+    monkeypatch.setattr(QSoundEffect, "status", lambda self: QSoundEffect.Status.Ready)
+    # Windows headless 上 WAV 之外的音效预热会启动真实 QAudioDecoder 异步解码，
+    # 其 processEvents 等待循环可能原生崩溃（macOS/Linux 无此现象）。此全局
+    # 打桩只作用于 Windows，避免影响其它平台 QtMultimedia 退出时的析构顺序。
+    if sys.platform == "win32":
+        # 测试如需验证音效逻辑，应像 test_click_sound 一样局部替换
+        # click_sound._pool.qt_multimedia_classes 为假类。
+        try:
+            from pet import click_sound as _click_sound_mod
+        except Exception:
+            return
+        monkeypatch.setattr(_click_sound_mod._pool, "qt_multimedia_classes", lambda: None)
 
 
 @pytest.fixture(autouse=True)

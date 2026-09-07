@@ -311,6 +311,8 @@ def test_missing_user_layout_resolves_versioned_default():
         "hide_pet",
         "spawn_pet",
         "clear_spawned_pets",
+        "golden_spin",
+        "edge_probe",
         "quick_launch",
         "balance",
         "harness",
@@ -492,6 +494,8 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         "隐藏桌宠",
         "生小肥鱼",
         "清除子肥鱼",
+        "黄金回旋",
+        "边缘探头",
     ]
     tools = next(action.menu() for action in menu.actions() if action.text() == "工具与帮助")
     expected_tools = [
