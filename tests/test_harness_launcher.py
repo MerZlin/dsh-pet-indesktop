@@ -87,6 +87,44 @@ def test_supports_no_open_probe_failure_defaults_false(monkeypatch):
     assert hl._supports_no_open(["dsh"]) is False
 
 
+def test_launch_harness_reuses_existing_instance_on_alt_port(monkeypatch):
+    """已有 dsh web 跑在官方默认 3080 时，直接复用打开，不再新起 38080。"""
+    from pet import harness_launcher as hl
+
+    opened = []
+    monkeypatch.setattr(hl.webbrowser, "open", lambda url: opened.append(url))
+    # 38080 无监听，3080 有
+    monkeypatch.setattr(hl, "is_running", lambda port=None: int(port or 38080) == 3080)
+
+    def _no_spawn(command):  # 不应走到启动分支
+        raise AssertionError("已有实例运行时不应再 spawn")
+
+    monkeypatch.setattr(hl, "_spawn", _no_spawn)
+    status, url = hl.launch_harness()
+    assert status == "already"
+    assert url == "http://127.0.0.1:3080"
+    assert opened == ["http://127.0.0.1:3080"]
+
+
+def test_launch_harness_prefers_configured_port(monkeypatch):
+    """配置端口已有实例时优先复用它，不再探测 3080。"""
+    from pet import harness_launcher as hl
+
+    opened = []
+    probed = []
+    monkeypatch.setattr(hl.webbrowser, "open", lambda url: opened.append(url))
+
+    def _probe(port=None):
+        probed.append(int(port or 38080))
+        return True  # 第一个候选（配置端口）即有监听
+
+    monkeypatch.setattr(hl, "is_running", _probe)
+    status, url = hl.launch_harness(port=38080)
+    assert status == "already"
+    assert probed == [38080]
+    assert opened == ["http://127.0.0.1:38080"]
+
+
 def test_launch_harness_browser_ownership(monkeypatch):
     from pet import harness_launcher as hl
 

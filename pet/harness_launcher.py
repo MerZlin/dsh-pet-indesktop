@@ -51,6 +51,19 @@ def is_running(port: int = DEFAULT_PORT) -> bool:
         return False
 
 
+def _candidate_ports(port: int = DEFAULT_PORT) -> list[int]:
+    """复用已有实例的候选端口：配置端口优先，其次官方默认 3080。
+
+    用户可能已自行跑着一个 dsh web（比如官方默认 3080——3080 只是
+    Windows 上不宜**绑定**，作为客户端去连接没有问题）。先复用再新起，
+    避免用户机器上同时跑两个 dsh web 互相不认识。"""
+    ports: list[int] = []
+    for p in (int(port), 3080):
+        if p not in ports:
+            ports.append(p)
+    return ports
+
+
 def _wrap_cmd(command: list[str]) -> list[str]:
     """Windows 上 .cmd/.bat shim 必须经 cmd 启动并立即返回（start /b）。"""
     if os.name == "nt" and command[0].lower().endswith((".cmd", ".bat")):
@@ -196,16 +209,18 @@ def launch_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
     """启动 harness 并确保浏览器被打开。
 
     返回 (status, url)：
-    - already   已在运行，已打开浏览器
+    - already   已有实例在运行（配置端口或官方默认 3080），已打开浏览器
     - started   已后台启动；命令带 --no-open 时由桌宠等待就绪后打开浏览器，
                 否则由 dsh 自己开浏览器（桌宠不重复打开）
     - not-found 未找到 dsh 命令
     - error     启动异常（info 为异常信息）
     """
+    for candidate in _candidate_ports(port):
+        if is_running(candidate):
+            url = f"http://127.0.0.1:{candidate}"
+            webbrowser.open(url)
+            return "already", url
     url = f"http://127.0.0.1:{int(port)}"
-    if is_running(port):
-        webbrowser.open(url)
-        return "already", url
     command = _find_launch_command(port)
     if command is None:
         return "not-found", url
@@ -248,6 +263,11 @@ def launch_harness_gui(parent=None) -> None:
         status = result.get("status")
         info = result.get("info", "")
         if status in ("already", "started"):
+            if status == "started":
+                # 首次运行 npx 拉包 + dsh 自举可能要几分钟，不给反馈用户会以为没反应
+                bubble = getattr(parent, "show_bubble", None)
+                if callable(bubble):
+                    bubble("正在后台启动 dsh web（首次运行需下载组件，可能要几分钟），就绪后会自动打开浏览器……", 6000)
             return
         if status == "not-found":
             QMessageBox.warning(
