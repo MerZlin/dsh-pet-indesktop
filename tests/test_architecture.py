@@ -90,12 +90,24 @@ def test_window_private_surface_frozen():
     assert not offenders, "window 私有面回潮：\n" + "\n".join(offenders)
 
 
+# —— 行数预算的意图与使用约定（给所有贡献者，含 AI 驱动）——
+# 为什么有预算：window.py / modern_settings_dialog.py 这类文件膨胀到几千行后，
+# 人和 AI 都难读难改、定位问题成本高、合并冲突频发。预算只是倒逼拆分的
+# 「绊线」，本身不是目的，更不是红线。触发时的正确动作按优先级：
+#   1. 首选：把新内容拆到独立模块/控制器（window.py 见 docs/WINDOW_PY_SPLIT_GUIDE.md）；
+#   2. 实在拆不动或强拆更伤可读性时：把预算常量校准到新实测值，注明日期+理由，
+#      并在 PR 里说明（超一点没关系，说清楚就行）。
+# 禁止的反向优化：靠压缩行宽/合并语句/删注释把行数硬塞回预算内——
+# 那比超预算本身更伤维护性。宁可校准预算，不要压行。
+
 def test_window_py_line_budget():
     lines = len(_read("window.py").splitlines())
     assert lines <= WINDOW_PY_LINE_BUDGET, (
         f"window.py 涨到 {lines} 行（预算 {WINDOW_PY_LINE_BUDGET}）。"
-        "新功能请先拆对应控制器（docs/WINDOW_PY_SPLIT_GUIDE.md），"
-        "确需上调预算时在 PR 说明理由。"
+        "预算是防膨胀的绊线（文件太大则难读难改、合并冲突多、问题定位难），"
+        "不是红线：新功能优先拆对应控制器（docs/WINDOW_PY_SPLIT_GUIDE.md）；"
+        "拆不动可把预算校准到新实测值（带日期注释）并在 PR 说明理由。"
+        "请勿为达标压缩行宽/合并语句——那是反向优化。"
     )
 
 
@@ -103,7 +115,10 @@ def test_modern_settings_dialog_py_line_budget():
     lines = len(_read("modern_settings_dialog.py").splitlines())
     assert lines <= MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET, (
         f"modern_settings_dialog.py 涨到 {lines} 行（预算 {MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET}）。"
-        "控件库/菜单布局编辑器/AI 设置页/主题 QSS 已拆出；确需上调预算时在 PR 说明理由。"
+        "预算是防膨胀的绊线（文件太大则难读难改、合并冲突多、问题定位难），"
+        "不是红线：新页面/新控件组优先拆出（控件库/布局编辑器/AI 设置页/"
+        "主题 QSS 已是先例）；拆不动可校准预算到新实测值（带日期注释）并说明理由。"
+        "请勿为达标压缩行宽/合并语句。"
     )
 
 
