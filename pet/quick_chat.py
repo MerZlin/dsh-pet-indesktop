@@ -234,6 +234,18 @@ class QuickChatBubble(QFrame):
         x = anchor.center().x() - w // 2
         y = anchor.top() - h - 8
         self._tail_up = False
+        if host is not None and y < available.top():
+            # 子模式默认只允许落在主窗内，会把气泡挤到下方/遮挡宠物。
+            # 先向主窗申请透明头顶空间，尽量恢复“向上生成”的原生位置。
+            screen = QGuiApplication.screenAt(anchor.center()) or QGuiApplication.primaryScreen()
+            if screen is not None:
+                screen_top = screen.availableGeometry().top()
+                desired_top = y - 4
+                if desired_top >= screen_top:
+                    desired_h = available.top() - desired_top
+                    setter = getattr(host, "set_capture_headroom", None)
+                    if desired_h > 0 and setter is not None and setter(desired_h):
+                        return self.position_near_pet()
         if y < available.top():
             y = anchor.bottom() + 8
             self._tail_up = True
@@ -410,4 +422,11 @@ class QuickChatBubble(QFrame):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.service.busy:
             self.service.stop()
+        if self._capture_compat and self._capture_host is not None:
+            setter = getattr(self._capture_host, "set_capture_headroom", None)
+            if setter is not None:
+                try:
+                    setter(0)
+                except RuntimeError:
+                    pass  # 宿主窗口已在销毁中
         super().closeEvent(event)

@@ -198,6 +198,63 @@ def test_quick_chat_capture_compat_becomes_child_and_restores(tmp_path):
         app.processEvents()
 
 
+def test_quick_chat_capture_requests_headroom_and_stays_above(tmp_path):
+    """直播捕获子模式下快速对话应申请透明头顶空间，保持“向上生成”。"""
+    app = _qapp()
+    from pet.quick_chat import QuickChatBubble
+
+    win = _make_pet(tmp_path, capture_on=True)
+    # 给主窗一帧可定位的角色内容，并放到屏幕底部附近。
+    win.movie = win.lib.movie(win.idle)
+    win._rebuild_frame()
+    avail = app.primaryScreen().availableGeometry()
+    win.move(avail.right() - win.width() - 20, avail.bottom() - win.height())
+    app.processEvents()
+    anchor = QRect(win.visible_content_rect())
+
+    bubble = QuickChatBubble(Config(base=tmp_path), pet_window=win)
+    try:
+        win.set_quick_chat_capture_widget(bubble)
+        bubble.adjustSize()
+        bubble.position_near_pet()
+        global_rect = QRect(bubble.mapToGlobal(QPoint(0, 0)), bubble.size())
+        assert win._capture_headroom > 0, "子模式应申请头顶空间"
+        assert global_rect.bottom() <= anchor.top(), "气泡应仍位于角色上方"
+        assert not bubble._tail_up, "朝上放置时尾尖应指向下方角色"
+
+        bubble.close()
+        assert win._capture_headroom == 0, "关闭快速对话后应回收头顶空间"
+    finally:
+        if bubble.parentWidget() is not None:
+            bubble.close()
+        win.close()
+        bubble.deleteLater()
+        win.deleteLater()
+        app.processEvents()
+
+
+def test_pet_window_capture_headroom_preserves_bottom(tmp_path):
+    """头顶透明空间只向上扩展窗口，不能改变人物/窗口底边位置。"""
+    app = _qapp()
+    win = _make_pet(tmp_path)
+    try:
+        before_h = win.height()
+        win.setGeometry(120, 300, win.width(), win.height())
+        bottom = win.geometry().bottom()
+        assert win.set_capture_headroom(80) is True
+        assert win.height() == before_h + 80
+        assert win._capture_headroom == 80
+        assert win.geometry().bottom() == bottom
+        assert win.set_capture_headroom(80) is False
+        assert win.set_capture_headroom(0) is True
+        assert win.height() == before_h
+        assert win.geometry().bottom() == bottom
+    finally:
+        win.close()
+        win.deleteLater()
+        app.processEvents()
+
+
 class _FakeQuickCaptureWidget:
     def __init__(self):
         self.calls = []
