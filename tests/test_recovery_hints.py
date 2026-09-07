@@ -74,6 +74,7 @@ def test_enabling_mouse_through_shows_recovery_hint(tmp_path, monkeypatch):
         assert len(hints) == 2
     finally:
         win.close()
+        win.deleteLater()
         app.processEvents()
 
 
@@ -96,6 +97,7 @@ def test_enabling_mouse_through_hint_suppressed_when_hidden_or_suppressed(tmp_pa
         assert hints == [], "桌宠隐藏时不应尝试在不可见窗口上弹提示"
     finally:
         win.close()
+        win.deleteLater()
         app.processEvents()
 
 

@@ -39,6 +39,8 @@ def test_speech_bubble_default_is_independent_tool_window():
         assert bubble.windowTitle() == ""
     finally:
         bubble.close()
+        bubble.deleteLater()
+        _qapp().processEvents()
 
 
 def test_speech_bubble_capture_compat_becomes_child_and_restores():
@@ -68,6 +70,9 @@ def test_speech_bubble_capture_compat_becomes_child_and_restores():
     finally:
         bubble.close()
         host.close()
+        bubble.deleteLater()
+        host.deleteLater()
+        app.processEvents()
 
 
 def test_capture_compat_places_bubble_inside_host_bounds():
@@ -93,6 +98,9 @@ def test_capture_compat_places_bubble_inside_host_bounds():
     finally:
         bubble.close()
         host.close()
+        bubble.deleteLater()
+        host.deleteLater()
+        app.processEvents()
 
 
 def test_pet_window_runtime_capture_mode_syncs_bubble(tmp_path):
@@ -111,6 +119,7 @@ def test_pet_window_runtime_capture_mode_syncs_bubble(tmp_path):
         assert _window_type_mask(win._speech_bubble.windowFlags()) == Qt.WindowType.Tool
     finally:
         win.close()
+        win.deleteLater()
         app.processEvents()
 
 
@@ -123,4 +132,5 @@ def test_pet_window_starts_capture_mode_with_child_bubble(tmp_path):
         assert _window_type_mask(win._speech_bubble.windowFlags()) == Qt.WindowType.Widget
     finally:
         win.close()
+        win.deleteLater()
         app.processEvents()
