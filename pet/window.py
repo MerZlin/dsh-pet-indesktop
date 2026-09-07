@@ -2332,6 +2332,17 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     def _is_transparent_at(self, local: QPoint) -> bool:
         """判断窗口局部坐标处是否透明（供 Windows 命中测试使用）。"""
+        bubble = getattr(self, "_speech_bubble", None)
+        if (
+            bubble is not None
+            and callable(getattr(bubble, "isVisible", None)) and bubble.isVisible()
+            and callable(getattr(bubble, "parentWidget", None)) and bubble.parentWidget() is self
+            and getattr(bubble, "_interactive", False)
+            and bubble.geometry().contains(local)
+        ):
+            # 直播捕获子模式下，可点击气泡必须作为非透明命中区交给 Qt/Windows 命中测试，
+            # 否则父窗逐像素穿透会把它当透明像素，导致点击气泡无法打开快速对话。
+            return False
         if self._frame_pixmap is None or self._frame_pixmap.isNull():
             return False
         rect = self._frame_draw_rect()
@@ -3336,7 +3347,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         bubble = getattr(self, "_speech_bubble", None)
         if bubble is None or not bubble.isVisible():
             return False
-        if not bubble.geometry().contains(global_pos):
+        bubble_origin = bubble.mapToGlobal(QPoint(0, 0))
+        bubble_global = QRect(bubble_origin, bubble.size())
+        if not bubble_global.contains(global_pos):
             return False
         callback()
         return True

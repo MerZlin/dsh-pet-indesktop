@@ -7,7 +7,10 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from types import SimpleNamespace
+
+from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QWidget
 
 from pet.config import Config
@@ -101,6 +104,80 @@ def test_capture_compat_places_bubble_inside_host_bounds():
         bubble.deleteLater()
         host.deleteLater()
         app.processEvents()
+
+
+class _FakeBubble:
+    def __init__(self, parent, geometry):
+        self._parent = parent
+        self._geometry = geometry
+        self._interactive = True
+
+    def isVisible(self):
+        return True
+
+    def parentWidget(self):
+        return self._parent
+
+    def geometry(self):
+        return self._geometry
+
+
+class _FakeHitPet:
+    _frame_draw_rect = PetWindow._frame_draw_rect
+    _is_transparent_at = PetWindow._is_transparent_at
+
+    def __init__(self, bubble):
+        self._speech_bubble = bubble
+        self.scale = 0.1
+        self._w = 64
+        self._h = 39
+        self._squash_active = False
+        self._frame_pixmap = QPixmap(64, 36)
+        self._frame_pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(self._frame_pixmap)
+        p.fillRect(0, 0, 64, 36, QColor(255, 255, 255, 255))
+        p.end()
+        self._hit_alpha_image = None
+
+
+def test_capture_child_interactive_bubble_is_non_transparent_hit_target():
+    """子模式气泡在 Windows 逐像素穿透判定中必须是可点击命中区。"""
+    _qapp()
+    fake = _FakeHitPet(None)
+    bubble = _FakeBubble(fake, QRect(0, 0, 100, 50))
+    fake._speech_bubble = bubble
+    # 该点位于帧绘制矩形上方，未加气泡守卫时 _is_transparent_at 返回 True。
+    assert PetWindow._is_transparent_at(fake, QPoint(10, 2)) is False
+
+
+class _FakeQuickBubble:
+    """子模式气泡：geometry 是父坐标，mapToGlobal 模拟父窗口偏移。"""
+
+    def __init__(self):
+        self._origin = QPoint(100, 20)
+
+    def isVisible(self):
+        return True
+
+    def mapToGlobal(self, point):
+        return self._origin + point
+
+    def size(self):
+        return QRect(0, 0, 120, 50).size()
+
+
+def test_try_open_quick_chat_from_bubble_works_in_child_mode():
+    """子模式气泡 geometry 是父坐标；快速对话命中判断必须换算回全局坐标。"""
+    _qapp()
+    opened = []
+    bubble = _FakeQuickBubble()
+    pet = SimpleNamespace(on_open_quick_chat=lambda: opened.append(True), _speech_bubble=bubble)
+    # 子模式全局命中：气泡左上角在 (100,20)，点击内部 (110,30) 应命中。
+    assert PetWindow._try_open_quick_chat_from_bubble(pet, QPoint(110, 30)) is True
+    assert opened == [True]
+    # 气泡外点击不触发快速对话。
+    assert PetWindow._try_open_quick_chat_from_bubble(pet, QPoint(300, 300)) is False
+    assert opened == [True]
 
 
 def test_pet_window_runtime_capture_mode_syncs_bubble(tmp_path):
