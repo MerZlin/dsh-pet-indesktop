@@ -57,36 +57,46 @@ def _bare_instance(tmp_path):
 
 
 def test_enabling_mouse_through_shows_recovery_hint(tmp_path, monkeypatch):
+    app = _qapp()
     win = _make_win(tmp_path, monkeypatch)
-    hints = []
-    monkeypatch.setattr(win, "isVisible", lambda: True)
-    monkeypatch.setattr(win, "show_bubble", lambda text, **kw: hints.append(text))
+    try:
+        hints = []
+        monkeypatch.setattr(win, "isVisible", lambda: True)
+        monkeypatch.setattr(win, "show_bubble", lambda text, **kw: hints.append(text))
 
-    win.set_mouse_through(True)
-    assert len(hints) == 1, "开启鼠标穿透应提示一次恢复位置"
-    assert "鼠标穿透" in hints[0]
+        win.set_mouse_through(True)
+        assert len(hints) == 1, "开启鼠标穿透应提示一次恢复位置"
+        assert "鼠标穿透" in hints[0]
 
-    # 关闭方向不需要提示；再次开启才提示。
-    win.set_mouse_through(False)
-    win.set_mouse_through(True)
-    assert len(hints) == 2
+        # 关闭方向不需要提示；再次开启才提示。
+        win.set_mouse_through(False)
+        win.set_mouse_through(True)
+        assert len(hints) == 2
+    finally:
+        win.close()
+        app.processEvents()
 
 
 def test_enabling_mouse_through_hint_suppressed_when_hidden_or_suppressed(tmp_path, monkeypatch):
+    app = _qapp()
     win = _make_win(tmp_path, monkeypatch)
-    hints = []
-    monkeypatch.setattr(win, "isVisible", lambda: True)
-    monkeypatch.setattr(win, "show_bubble", lambda text, **kw: hints.append(text))
+    try:
+        hints = []
+        monkeypatch.setattr(win, "isVisible", lambda: True)
+        monkeypatch.setattr(win, "show_bubble", lambda text, **kw: hints.append(text))
 
-    win._bubble_suppressed = True
-    win.set_mouse_through(True)
-    assert hints == [], "设置窗口打开（气泡抑制）期间不应弹恢复提示"
+        win._bubble_suppressed = True
+        win.set_mouse_through(True)
+        assert hints == [], "设置窗口打开（气泡抑制）期间不应弹恢复提示"
 
-    win._bubble_suppressed = False
-    monkeypatch.setattr(win, "isVisible", lambda: False)
-    win.set_mouse_through(False)
-    win.set_mouse_through(True)
-    assert hints == [], "桌宠隐藏时不应尝试在不可见窗口上弹提示"
+        win._bubble_suppressed = False
+        monkeypatch.setattr(win, "isVisible", lambda: False)
+        win.set_mouse_through(False)
+        win.set_mouse_through(True)
+        assert hints == [], "桌宠隐藏时不应尝试在不可见窗口上弹提示"
+    finally:
+        win.close()
+        app.processEvents()
 
 
 def test_dock_hidden_recovery_hint_uses_bubble_when_visible(tmp_path, monkeypatch):
