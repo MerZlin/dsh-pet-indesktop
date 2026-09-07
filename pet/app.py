@@ -680,6 +680,7 @@ class PetInstance:
     def open_modern_settings(self) -> None:
         from .modern_settings_dialog import ModernSettingsDialog
         if self.modern_settings_dialog is None:
+            self._dock_icon_before_settings = bool(self.config.get("show_dock_icon", True))
             dialog = ModernSettingsDialog(
                 self.config,
                 self.win,
@@ -709,6 +710,34 @@ class PetInstance:
         self._sync_animation_prewarm()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
+        if (
+            getattr(self, "_dock_icon_before_settings", None) is True
+            and not bool(self.config.get("show_dock_icon", True))
+        ):
+            self._hint_dock_hidden_recovery()
+
+
+    def _dock_hidden_recovery_message(self) -> str:
+        return (
+            "已隐藏 Dock 图标，桌宠仍会常驻。需要恢复时：点菜单栏托盘图标 → "
+            "「桌宠设置」→ 重新勾选「显示 Dock 图标」；找不到桌宠也从托盘菜单「显示 / 隐藏」恢复。"
+        )
+
+    def _hint_dock_hidden_recovery(self) -> None:
+        if sys.platform != "darwin":
+            return
+        win = self.win
+        if win is not None and callable(getattr(win, "show_bubble", None)) and win.isVisible():
+            win.show_bubble(self._dock_hidden_recovery_message(), duration_ms=7000)
+            return
+        tray = getattr(self.shell, "tray", None)
+        if tray is not None and callable(getattr(tray, "showMessage", None)):
+            tray.showMessage(
+                "桌宠设置",
+                self._dock_hidden_recovery_message(),
+                QSystemTrayIcon.MessageIcon.Information,
+                7000,
+            )
 
     def _sync_animation_prewarm(self) -> None:
         """设置保存后把预热状态同步到当前素材库（幂等）。
@@ -792,7 +821,10 @@ class PetInstance:
         if self.shell._single_process_spawn and self is not self.shell.instance:
             message = "点击托盘菜单中该窗口的「显示 / 隐藏」即可恢复。"
         else:
-            message = "点击托盘图标或 Dock 图标即可恢复。"
+            if sys.platform == "darwin" and not bool(self.config.get("show_dock_icon", True)):
+                message = "点击托盘菜单「显示 / 隐藏」即可恢复。"
+            else:
+                message = "点击托盘图标或 Dock 图标即可恢复。"
         self.shell.tray.showMessage(
             "桌宠已隐藏",
             message,

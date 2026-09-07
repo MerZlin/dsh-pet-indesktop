@@ -527,12 +527,12 @@ def test_windows_ojingjing_children_do_not_intercept_hover():
     app.processEvents()
 
 
-def test_macos_hide_pet_enables_dock_icon(tmp_path, monkeypatch):
-    """macOS 隐藏桌宠时应临时打开 Dock 图标（运行期策略，不写回配置）。
+def test_macos_hide_pet_respects_dock_icon_hidden_preference(tmp_path, monkeypatch):
+    """macOS 关闭「显示 Dock 图标」后，隐藏桌宠不得再临时唤回 Dock 图标。
 
-    回归背景：旧实现把 show_dock_icon 直接改成 True（内存态污染，且会经
-    其他路径的 cfg.save() 落盘覆盖用户偏好）；现在改为 _dock_icon_forced
-    运行期标志，恢复显示时按偏好还原。
+    issue #74：托盘（菜单栏）菜单已承担恢复入口（显示/隐藏、鼠标穿透、
+    桌宠设置），因此隐藏桌宠应尊重用户关闭 Dock 图标的偏好，不再把
+    activation policy 临时改回 Regular，也不写回配置。
     """
     import sys
 
@@ -546,33 +546,16 @@ def test_macos_hide_pet_enables_dock_icon(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(pet.app, "_mac_set_dock_icon_visible", mock.Mock())
-    config = Config(tmp_path)
-    config.set("show_dock_icon", False)
 
-    class FakePet:
-        cfg = config
-
-    fake = FakePet()
-    PetWindow._ensure_dock_icon_on_hide(fake)
-    assert config.get("show_dock_icon") is False, "隐藏不得覆盖用户偏好配置"
-    assert getattr(fake, "_dock_icon_forced", False) is True
-    pet.app._mac_set_dock_icon_visible.assert_called_once_with(True)
-
-    # 恢复显示：按偏好还原 Dock 策略（pref=False → Accessory）
-    pet.app._mac_set_dock_icon_visible.reset_mock()
-    PetWindow._restore_dock_icon_preference(fake)
-    assert getattr(fake, "_dock_icon_forced", True) is False
-    pet.app._mac_set_dock_icon_visible.assert_called_once_with(False)
-
-    # hide() 组合：先临时打开再真正隐藏（QWidget.hide 被 mock 拦截）
-    with mock.patch.object(QWidget, "hide") as mock_hide:
-        win = PetWindow.__new__(PetWindow)
-        win.cfg = Config(tmp_path)
-        win.cfg.set("show_dock_icon", False)
-        PetWindow.hide(win)
-        mock_hide.assert_called_once()
-        assert win.cfg.get("show_dock_icon") is False
-        assert getattr(win, "_dock_icon_forced", False) is True
+    for pref in (False, True):
+        with mock.patch.object(QWidget, "hide") as mock_hide:
+            win = PetWindow.__new__(PetWindow)
+            win.cfg = Config(tmp_path)
+            win.cfg.set("show_dock_icon", pref)
+            PetWindow.hide(win)
+            mock_hide.assert_called_once()
+            assert win.cfg.get("show_dock_icon") is pref
+            pet.app._mac_set_dock_icon_visible.assert_not_called()
 
 
 def test_windows_settings_has_no_orphan_macos_dock_toggle(tmp_path, monkeypatch):

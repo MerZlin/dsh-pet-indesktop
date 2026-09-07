@@ -506,6 +506,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         if self._stream_capture_mode:
             self.setWindowTitle(STREAM_CAPTURE_TITLE)
+        self._speech_bubble.set_capture_compat(self._stream_capture_mode, host=self)
         # Cocoa hides Tool windows when an accessory application deactivates.
         # Visibility and z-order are separate: always keep the pet visible,
         # then use WindowStaysOnTopHint/NSWindow level for the on-top setting.
@@ -1171,19 +1172,16 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         music_timer = getattr(self, "_music_sing_timer", None)
         if getattr(self, "_music_sing_enabled", False) and music_timer is not None and music_timer.isActive():
             QTimer.singleShot(0, self, self._check_music_sing)
-        self._restore_dock_icon_preference()
         self._effects_on_shown()
 
     def hide(self, *, notify: bool = True) -> None:
         """隐藏桌宠。
 
-        macOS 同步打开 Dock 图标；notify=False 供角色切换等内部替换使用
-        （不弹托盘提示、不 arm Dock 点击恢复监听）。
+        notify=False 供角色切换等内部替换使用（不弹托盘提示、不 arm Dock 点击恢复监听）。
         隐藏即暂停动画解码与全部活动定时器（低功耗：不可见就零消耗）。
         """
         if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
             self._cancel_slingshot_to_anchor()
-        self._ensure_dock_icon_on_hide()
         logging.info("[VIS] 桌宠隐藏 notify=%s anim=%s", notify, getattr(self, 'anim', '?'))  # 频闪排查观测
         self._hidden_paused = True
         self._effects_on_hidden()
@@ -1660,6 +1658,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.setWindowTitle(STREAM_CAPTURE_TITLE if on else '')
         if was_visible:
             self.show()  # 只在原本可见时恢复：手动/自动隐藏的桌宠不被意外唤出
+        self._speech_bubble.set_capture_compat(on, host=self)
 
     def _arm_dock_reactivate_restore(self) -> None:
         """macOS：隐藏后点击 Dock 图标激活应用时自动恢复桌宠（一次性监听）。
@@ -1684,35 +1683,6 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             return
         self._dock_reactivate_armed = False
         self.show()
-
-    def _ensure_dock_icon_on_hide(self) -> None:
-        """macOS：隐藏桌宠时临时开启 Dock 图标，供点击恢复。
-
-        只改运行期策略、绝不写回配置：show_dock_icon 是用户偏好，
-        一次隐藏不能把它覆盖掉，也不能经其他路径的 cfg.save() 落盘。
-        恢复显示时由 _restore_dock_icon_preference 按偏好还原。
-        """
-        if sys.platform != 'darwin' or bool(self.cfg.get('show_dock_icon', True)):
-            return
-        if getattr(self, "_dock_icon_forced", False):
-            return
-        self._dock_icon_forced = True
-        try:
-            from .app import _mac_set_dock_icon_visible
-            _mac_set_dock_icon_visible(True)
-        except Exception:
-            self._dock_icon_forced = False
-
-    def _restore_dock_icon_preference(self) -> None:
-        """macOS：桌宠恢复显示后按用户偏好还原 Dock 图标策略。"""
-        if sys.platform != 'darwin' or not getattr(self, "_dock_icon_forced", False):
-            return
-        self._dock_icon_forced = False
-        try:
-            from .app import _mac_set_dock_icon_visible
-            _mac_set_dock_icon_visible(bool(self.cfg.get('show_dock_icon', True)))
-        except Exception:
-            pass
 
     def set_no_move(self, on: bool) -> None:
         """切换「不移动」：禁用自动移动；勾选瞬间若正在移动则立即停下回待机。"""
@@ -4063,6 +4033,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.cfg.save()
         self._apply_effective_mouse_through()
         self._submit_collision_state(force=True)
+        if on and self.isVisible() and not getattr(self, "_bubble_suppressed", False):
+            tray_label = "点菜单栏托盘图标" if sys.platform == "darwin" else "右键系统托盘图标"
+            self.show_bubble(
+                f"已开启鼠标穿透～我现在点不动啦。需要恢复点击时，{tray_label} → 取消勾选「鼠标穿透」，或到桌宠设置里关闭。",
+                duration_ms=7000,
+            )
 
     def _apply_effective_mouse_through(self, enabled: bool | None = None) -> None:
         effective = (bool(self._user_mouse_through or self._auto_cursor_hidden)
