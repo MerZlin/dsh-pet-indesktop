@@ -224,6 +224,9 @@ class EdgeProbeController:
         self._timer.stop()
         if was_active and reason == "collision_throw":
             self._reentry_armed = True
+            _egg = getattr(self.win, "_throw_egg", None)
+            if _egg is not None:
+                _egg.arm()
         else:
             self._reentry_armed = False
         self._cancel_reentry()

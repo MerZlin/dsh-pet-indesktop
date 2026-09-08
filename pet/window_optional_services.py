@@ -25,6 +25,7 @@ class WindowFeatureGateMixin:
     _broker_facade: Any = None
     _golden_spin: Any = None
     _edge_probe: Any = None
+    _throw_egg: Any = None
 
     # ------------------------------------------------------------ 判定
     def _proactive_wanted(self) -> bool:
@@ -72,6 +73,9 @@ class WindowFeatureGateMixin:
         if self._golden_spin is None:
             from .golden_spin import GoldenSpinController
             self._golden_spin = GoldenSpinController(self)
+        if self._throw_egg is None:
+            from .throw_egg import ThrowEggController
+            self._throw_egg = ThrowEggController(self)
         return self
 
     def trigger_golden_spin(self) -> None:
@@ -97,6 +101,9 @@ class WindowFeatureGateMixin:
     def _effects_current_angle(self) -> float:
         if self._effects_probe_active():
             return float(self._edge_probe.current_angle_deg())
+        egg = getattr(self, "_throw_egg", None)
+        if egg is not None and egg.active:
+            return float(egg.current_angle_deg())
         spin = getattr(self, "_golden_spin", None)
         if spin is not None and spin.active:
             return float(spin.current_angle_deg())
@@ -118,9 +125,11 @@ class WindowFeatureGateMixin:
         return unrotate_point(point, rect, self._effects_current_angle())
 
     def _effects_filter_switch(self, name: str) -> str:
-        """边缘探头会话期间只允许待机/转向动画；其它请求降级到随机待机。"""
+        """边缘探头/彩蛋飞行会话期间只允许待机/转向动画；其它请求降级到随机待机。"""
         if not self._effects_probe_active():
-            return name
+            egg = getattr(self, "_throw_egg", None)
+            if egg is None or not egg.active:
+                return name
         idles = list(getattr(self, "idles", ()) or ())
         turns = list(getattr(self, "turns", ()) or ())
         if name in idles or name in turns or not idles:

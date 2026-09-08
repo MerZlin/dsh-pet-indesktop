@@ -4140,6 +4140,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._interaction_state = IDLE
         self._phys_vel[:] = [0.0, 0.0]
         self._submit_collision_state(force=True)
+        _te = getattr(self, '_throw_egg', None)
+        if _te is not None:
+            _te.end()
 
     def _enter_physics_mode(self, mode: str) -> None:
         """进入物理模式（'drag'/'throw'）：统一取消自主移动计划与动画间隔，
@@ -4208,6 +4211,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
         self._phys_pos[:] = [px, py]
         self._phys_vel[:] = [vx, vy]
+        _te = getattr(self, '_throw_egg', None)
+        if _te is not None:
+            _te.update(vx, vy, px <= left + 1e-6 or px >= right - 1e-6 or py >= bottom - 1e-6)
         predict_bounce = getattr(self, '_predict_collision_bounce', None)
         if callable(predict_bounce):
             predict_bounce(start_px, start_py)

@@ -367,6 +367,9 @@ class CollisionClient(QObject):
         if speed > win._throw_speed_cap:
             clamped = physics_mod.soft_clamp_speed(speed, win._throw_speed_cap)
             win._phys_vel[:] = [win._phys_vel[0] * clamped / speed, win._phys_vel[1] * clamped / speed]
+        egg = getattr(win, '_throw_egg', None)
+        if egg is not None and egg.active:
+            egg.on_pet_contact(math.hypot(*win._phys_vel))
         if abs(dx) > 1e-9 or abs(dy) > 1e-9:
             win._cancel_move()
             win._cancel_animation_gap()
@@ -509,6 +512,9 @@ class CollisionClient(QObject):
                 clamped = physics_mod.soft_clamp_speed(speed, win._throw_speed_cap)
                 win._phys_vel[:] = [win._phys_vel[0] * clamped / speed,
                                      win._phys_vel[1] * clamped / speed]
+            egg = getattr(win, '_throw_egg', None)
+            if egg is not None and egg.active:
+                egg.on_pet_contact(math.hypot(*win._phys_vel))
             self.predicted_bounces[pair] = now
             self.pending_predicted_bounce = (float(bounce_vx), float(bounce_vy))
             self.pending_predicted_contact = (
