@@ -2,7 +2,8 @@
 """批 D 彩蛋：边缘探头状态被击飞时飞行整帧旋转跟随速度方向。
 
 覆盖：arm 条件双向（碰撞取消才 arm）、角度四方向、低速碰边界恢复、
-低速碰桌宠恢复、高速不恢复、_stop_physics 兜底、end 幂等与重 arm。
+低速碰桌宠恢复、高速不恢复、_stop_physics 兜底、end 幂等与重 arm；
+批 E 补：恢复阈值 240、飞行 8 秒硬上限兜底（速度降不下来也不卡死）。
 """
 from __future__ import annotations
 
@@ -11,7 +12,11 @@ from PySide6.QtCore import QObject, QRect
 from PySide6.QtWidgets import QApplication
 
 from pet.edge_probe import PEEKING, EdgeProbeController
-from pet.throw_egg import ThrowEggController
+from pet.throw_egg import (
+    THROW_EGG_MAX_FLIGHT_SECONDS,
+    THROW_EGG_RECOVER_SPEED,
+    ThrowEggController,
+)
 
 
 def _qapp():
@@ -98,13 +103,13 @@ def test_angle_follows_four_directions():
     win = _FakeWin()
     egg = ThrowEggController(win)
     egg.arm()
-    egg.update(150.0, 0.0, False)
+    egg.update(300.0, 0.0, False)
     assert egg.current_angle_deg() == pytest.approx(90.0)
-    egg.update(0.0, 150.0, False)
+    egg.update(0.0, 300.0, False)
     assert egg.current_angle_deg() == pytest.approx(180.0)
-    egg.update(0.0, -150.0, False)
+    egg.update(0.0, -300.0, False)
     assert egg.current_angle_deg() == pytest.approx(0.0)
-    egg.update(-150.0, 0.0, False)
+    egg.update(-300.0, 0.0, False)
     assert egg.current_angle_deg() == pytest.approx(270.0)
 
 
@@ -113,7 +118,7 @@ def test_angle_debounces_below_speed_threshold():
     win = _FakeWin()
     egg = ThrowEggController(win)
     egg.arm()
-    egg.update(150.0, 0.0, False)
+    egg.update(300.0, 0.0, False)
     before = egg.current_angle_deg()
     egg.update(30.0, 0.0, False)
     assert egg.active
@@ -125,7 +130,7 @@ def test_low_speed_touching_boundary_recovers():
     egg = ThrowEggController(win)
     egg.arm()
     # 高速贴边：不恢复，角度仍更新。
-    egg.update(200.0, 0.0, True)
+    egg.update(300.0, 0.0, True)
     assert egg.active
     assert egg.current_angle_deg() == pytest.approx(90.0)
     # 低速贴边：恢复正常姿态。
@@ -147,11 +152,73 @@ def test_high_speed_contact_does_not_recover():
     win = _FakeWin()
     egg = ThrowEggController(win)
     egg.arm()
-    egg.on_pet_contact(200.0)
+    egg.on_pet_contact(300.0)
     assert egg.active
-    egg.update(200.0, 0.0, True)
+    egg.update(300.0, 0.0, True)
     assert egg.active
     assert egg.current_angle_deg() == pytest.approx(90.0)
+
+
+def test_recover_speed_threshold_raised_to_240():
+    """批 E：阈值 120→240，多只桌宠互撞时速度不再长期卡在阈值之上。"""
+    assert THROW_EGG_RECOVER_SPEED == 240.0
+
+
+def test_speed_above_old_threshold_recovers_at_boundary():
+    """批 E 回归：200 px/s 贴边在旧阈值(120)下会卡住，新阈值(240)下应恢复。"""
+    win = _FakeWin()
+    egg = ThrowEggController(win)
+    egg.arm()
+    egg.update(200.0, 0.0, True)
+    assert not egg.active
+    assert egg.current_angle_deg() == 0.0
+
+
+def test_threshold_boundary_recovery_only_below_240():
+    """阈值边界：241 px/s 贴边仍激活，239 px/s 贴边恢复。"""
+    win = _FakeWin()
+    egg = ThrowEggController(win)
+    egg.arm()
+    egg.update(241.0, 0.0, True)
+    assert egg.active
+    egg.update(239.0, 0.0, True)
+    assert not egg.active
+
+
+def test_max_flight_seconds_backstop_ends_high_speed_flight(monkeypatch):
+    """批 E：飞行超过 8 秒无条件 end（速度降不下来也不卡死），与是否贴边无关。"""
+    import pet.throw_egg as throw_egg_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(throw_egg_mod.time, "monotonic", lambda: clock["t"])
+    win = _FakeWin()
+    egg = ThrowEggController(win)
+    egg.arm()
+    clock["t"] += THROW_EGG_MAX_FLIGHT_SECONDS - 0.1
+    egg.update(1000.0, 0.0, False)
+    assert egg.active, "未到 8 秒硬上限：高速飞行应继续激活"
+    clock["t"] += 0.2
+    egg.update(1000.0, 0.0, False)
+    assert not egg.active, "超过 8 秒硬上限：无条件恢复正常姿态"
+    assert egg.current_angle_deg() == 0.0
+
+
+def test_max_flight_timer_restarts_on_rearm(monkeypatch):
+    """硬上限起点在 arm() 时记录：end 后重新 arm 重新计时。"""
+    import pet.throw_egg as throw_egg_mod
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(throw_egg_mod.time, "monotonic", lambda: clock["t"])
+    win = _FakeWin()
+    egg = ThrowEggController(win)
+    egg.arm()
+    clock["t"] += THROW_EGG_MAX_FLIGHT_SECONDS + 1.0
+    egg.update(1000.0, 0.0, False)
+    assert not egg.active
+    egg.arm()
+    clock["t"] += 0.5
+    egg.update(1000.0, 0.0, False)
+    assert egg.active
 
 
 def test_end_idempotent_and_rearm():

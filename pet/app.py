@@ -24,6 +24,7 @@ import os
 import sys
 import threading
 import time
+import weakref
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -902,6 +903,8 @@ class AppShell:
         # 每窗容器：批5.1 单进程单窗仅一个；批5.2 spike 扩成多窗集合
         #（self.instance 指主窗 = instances[0]，兼容既有调用面）。
         self._instances: list[PetInstance] = []
+        # 批 E：清除子肥鱼链式关闭进行中标记（重复点击忽略，保持幂等）。
+        self._clear_spawned_pending = False
         self.instance = PetInstance(
             self, config, enable_chat=self.enable_chat, slot_handle=slot_handle,
             slot_id=slot_id, spawn_offset=spawn_offset,
@@ -1377,6 +1380,9 @@ class AppShell:
         """右键菜单快捷入口：确认后关闭所有小肥鱼并删除 slot 数据。"""
         from .child_pet_cleanup import clear_spawned_pets as cleanup_slots
 
+        if self._clear_spawned_pending:
+            # 链式关闭进行中：重复点击直接忽略（同一任务会清干净，保持幂等）。
+            return
         parent = self.win if self.win is not None and hasattr(self.win, "winId") else None
         answer = QMessageBox.question(
             parent,
@@ -1388,36 +1394,55 @@ class AppShell:
         if answer != QMessageBox.StandardButton.Yes:
             return
         # 单进程模式前置：进程内「非主窗」小肥鱼（PID=主进程）会被文件级清理的
-        # pid==os.getpid() 自我保护跳过而永远清不掉，先按进程内子窗登记表枚举
-        # 并关闭它们；再走文件级清理杀多进程子进程。两条路径都幂等，清完不留
-        # runtime 标记残留（不依赖子进程标记里的单进程 flag——那是冻结值）。
-        self._close_spawned_in_process_windows()
-        result = cleanup_slots(self.config.dir)
+        # pid==os.getpid() 自我保护跳过而永远清不掉，先按进程内子窗登记表枚举。
+        # 关闭走 QTimer.singleShot(0) 逐只链式执行（每只之间让出事件循环）：每窗
+        # 子写盘 writer 关闭最多阻塞 2s、还有 agent 关闭等重操作，N 只同步执行
+        # 就是 N 倍 UI 冻结（半透明窗冻结时出黑框）。全部关完再走文件级清理杀
+        # 多进程子进程并弹结果框。两条路径都幂等，清完不留 runtime 标记残留。
+        refs = [weakref.ref(inst) for inst in self._instances
+                if inst is not self.instance]
+        if not refs:
+            self._finish_clear_spawned_pets(cleanup_slots, parent)
+            return
+        self._clear_spawned_pending = True
+        QTimer.singleShot(
+            0, lambda: self._clear_spawned_chain(refs, 0, cleanup_slots, parent))
+
+    def _clear_spawned_chain(self, refs, index: int, cleanup_slots, parent) -> None:
+        """逐只异步关闭进程内子窗（每只之间让出事件循环，UI 不冻结）。
+
+        窗口已销毁（弱引用失效）或已被关闭（不在登记表）则跳过；链尾执行
+        文件级清理并弹结果框。异常只记录不中断，保证进行中标记一定复位。
+        """
+        if index >= len(refs):
+            self._finish_clear_spawned_pets(cleanup_slots, parent)
+            return
+        inst = refs[index]()
+        if inst is not None and inst in self._instances:
+            try:
+                self._on_window_exit_requested(inst)
+            except Exception:
+                logging.exception(
+                    "清除子肥鱼：关闭进程内小肥鱼失败 (slot=%s)",
+                    getattr(inst, "slot_id", None))
+        QTimer.singleShot(
+            0, lambda: self._clear_spawned_chain(refs, index + 1, cleanup_slots, parent))
+
+    def _finish_clear_spawned_pets(self, cleanup_slots, parent) -> None:
+        """链式关闭收口：文件级清理 + 结果框，并复位进行中标记（异常也复位）。"""
+        try:
+            result = cleanup_slots(self.config.dir)
+        finally:
+            self._clear_spawned_pending = False
+        if parent is not None and not shiboken6.isValid(parent):
+            # 链式让出事件循环期间主窗可能已销毁：结果框降级为无父窗。
+            parent = None
         QMessageBox.information(
             parent,
             "清除子肥鱼",
             f"已关闭 {len(result['killed_pids'])} 个小肥鱼进程，"
             f"并清除 {len(result['deleted'])} 个 slot 数据项。",
         )
-
-    def _close_spawned_in_process_windows(self) -> list[PetInstance]:
-        """单进程模式前置：关闭所有进程内「非主窗」小肥鱼实例。
-
-        单进程 spawn 的子肥鱼是进程内窗口（PID = 主进程），会被
-        ``child_pet_cleanup`` 的 ``pid == os.getpid()`` 自我保护跳过。这里按进程
-        内子窗登记表（``self._instances``）枚举并逐窗走「退出这只」收口（删
-        runtime 标记、释放 slot 锁、关本窗 writer），确保单进程与多进程两种模式
-        下都被清干净。幂等：无子窗时为空操作；重复调用无残留。
-        """
-        primary = self.instance
-        children = [inst for inst in self._instances if inst is not primary]
-        for inst in children:
-            try:
-                self._on_window_exit_requested(inst)
-            except Exception:
-                logging.exception(
-                    "清除子肥鱼：关闭进程内小肥鱼失败 (slot=%s)", inst.slot_id)
-        return children
 
     def spawn_in_process_window(self, offset_index: int = 1) -> PetInstance:
         """批5.2 spike：进程内创建第二个 PetInstance（不共享库/Config/SessionStore）。

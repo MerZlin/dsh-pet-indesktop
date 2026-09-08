@@ -1193,6 +1193,8 @@ def test_clear_spawned_pets_closes_in_process_children_no_residue(
 
     assert len(shell.instances) == 2
     shell.clear_spawned_pets()
+    # 批 E：进程内子窗关闭改为 QTimer.singleShot(0) 逐只链式执行，需转事件循环收口。
+    _pump(0.5)
 
     # 子窗被关闭并移除；主窗保留
     assert len(shell.instances) == 1
@@ -1207,6 +1209,7 @@ def test_clear_spawned_pets_closes_in_process_children_no_residue(
 
     # 幂等：再跑一遍无残留、不报错
     shell.clear_spawned_pets()
+    _pump(0.2)
     assert len(shell.instances) == 1
     assert shell.instance is primary
     assert primary_marker.exists()
@@ -1253,3 +1256,162 @@ def test_clear_spawned_pets_multi_process_flag_off_no_in_process_children(
     assert not (root / "config-slot-1.json").exists()
     assert len(shell.instances) == 1
     assert shell.instance is shell.instances[0]
+
+
+# --------------------------------------------------------------------------
+# 批 E：清除子肥鱼——进程内子窗 QTimer.singleShot(0) 链式关闭（不冻 UI）
+# --------------------------------------------------------------------------
+def _add_child_instance(shell, tmp_path, config, preferred_slot, monkeypatch):
+    """建一个进程内子窗实例（fake window + 会话打桩），返回 (inst, win)。"""
+    slot_id, handle = slot_manager_mod.acquire_pet_slot(
+        config.dir, preferred_slot=preferred_slot)
+    inst = PetInstance(shell, Config(base=tmp_path, instance_id=f"slot-{slot_id}"),
+                       enable_chat=True, slot_handle=handle, slot_id=slot_id)
+    win = _FakeWindow()
+    win.cfg = inst.config
+    win._single_process_spawn = True
+    inst.win = win
+    shell._instances.append(inst)
+    monkeypatch.setattr(inst.collision_ipc, "stop", lambda: None)
+    monkeypatch.setattr(inst.broker_facade, "shutdown", lambda: None)
+    return inst, win
+
+
+def test_clear_spawned_pets_chained_close_defers_until_event_loop(
+        tmp_path, app, monkeypatch):
+    """批 E：子窗关闭经 QTimer.singleShot(0) 逐只执行——clear_spawned_pets
+    同步返回时尚未触碰任何子窗（每只之间让出事件循环，UI 不冻结/不出黑框），
+    事件循环转起来后才逐只关完，全部关完再执行文件级清理并弹一次结果框。"""
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+    children = [
+        _add_child_instance(shell, tmp_path, config, slot, monkeypatch)
+        for slot in (1, 2)
+    ]
+
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "question",
+        lambda *a, **kw: app_mod.QMessageBox.StandardButton.Yes)
+    infos = []
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "information",
+        lambda *a, **kw: infos.append(a))
+
+    shell.clear_spawned_pets()
+    # 同步返回：关闭被 singleShot(0) 延后，一只都还没关（旧实现同步关 N 只）。
+    assert all(win.calls == [] for _inst, win in children)
+    assert infos == []
+
+    _pump(0.5)
+    for inst, win in children:
+        assert win.calls == ["save", "marker_del", "close"]
+        assert inst not in shell.instances
+        assert inst.slot_handle is None
+    assert len(infos) == 1
+    assert shell.instance is shell.instances[0]
+    slot_manager_mod._unlock_file(primary_handle)
+
+
+def test_clear_spawned_pets_repeat_click_during_chain_is_idempotent(
+        tmp_path, app, monkeypatch):
+    """批 E：链式关闭进行中重复点击「一键清除」→ 忽略（不再确认、不重复关闭）。"""
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+    children = [
+        _add_child_instance(shell, tmp_path, config, slot, monkeypatch)
+        for slot in (1, 2)
+    ]
+
+    questions = []
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "question",
+        lambda *a, **kw: (questions.append(1),
+                          app_mod.QMessageBox.StandardButton.Yes)[1])
+    infos = []
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "information",
+        lambda *a, **kw: infos.append(a))
+
+    shell.clear_spawned_pets()
+    shell.clear_spawned_pets()  # 链式进行中重复点击
+    assert questions == [1], "进行中重复点击不应再次弹确认框"
+
+    _pump(0.5)
+    assert len(infos) == 1, "结果框只弹一次"
+    for _inst, win in children:
+        assert win.calls == ["save", "marker_del", "close"], "每只只关一次"
+    slot_manager_mod._unlock_file(primary_handle)
+
+
+def test_clear_spawned_pets_chain_skips_removed_or_destroyed_child(
+        tmp_path, app, monkeypatch):
+    """批 E：链式过程中子窗已销毁/已关闭（弱引用失效或不在登记表）→ 跳过不报错，
+    其余子窗照常关完，清理与结果框照常收口。"""
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+    gone, gone_win = _add_child_instance(shell, tmp_path, config, 1, monkeypatch)
+    kept, kept_win = _add_child_instance(shell, tmp_path, config, 2, monkeypatch)
+
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "question",
+        lambda *a, **kw: app_mod.QMessageBox.StandardButton.Yes)
+    infos = []
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "information",
+        lambda *a, **kw: infos.append(a))
+
+    shell.clear_spawned_pets()
+    # 链式执行前该子窗已自行关闭（移出登记表）：快照仍在，但存活校验应跳过。
+    shell._instances.remove(gone)
+
+    _pump(0.5)
+    assert gone_win.calls == [], "已销毁/已关闭的子窗不应再被触碰"
+    assert kept_win.calls == ["save", "marker_del", "close"]
+    assert len(infos) == 1
+    assert shell._clear_spawned_pending is False, "收口后必须复位进行中标记"
+
+    if gone.slot_handle is not None:
+        slot_manager_mod._unlock_file(gone.slot_handle)
+        gone.slot_handle = None
+    slot_manager_mod._unlock_file(primary_handle)
+
+
+def test_settings_dialog_clear_button_routes_through_shell_chain(
+        tmp_path, app, monkeypatch):
+    """批 E：设置界面「一键清除」经 win.on_clear_spawned_pets（真实接线 =
+    shell.clear_spawned_pets）走到进程内子窗链式关闭——单进程模式子肥鱼清得掉，
+    对话框自身不再二次确认。"""
+    from PySide6.QtWidgets import QMessageBox, QWidget
+
+    from pet.modern_settings_dialog import ModernSettingsDialog
+
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+    child, child_win = _add_child_instance(shell, tmp_path, config, 1, monkeypatch)
+
+    questions = []
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: (questions.append(a),
+                          QMessageBox.StandardButton.Yes)[1])
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    # 对话框父窗 = 已接线 on_clear_spawned_pets 的 PetWindow（app.py:361 形态）。
+    pet_win = QWidget()
+    pet_win.on_clear_spawned_pets = shell.clear_spawned_pets
+    dialog = ModernSettingsDialog(config, pet_win, include_ai=False)
+    try:
+        dialog.clear_spawned_pets_btn.click()
+        # 只弹 shell 那一次确认（对话框不重复确认）。
+        assert len(questions) == 1
+        # 关闭被 singleShot(0) 延后：点击后同步阶段尚未触碰子窗。
+        assert child_win.calls == []
+        _pump(0.5)
+        assert child_win.calls == ["save", "marker_del", "close"]
+        assert child not in shell.instances
+        assert shell.instance is shell.instances[0]
+    finally:
+        dialog.close()
+        pet_win.close()
+        app.processEvents()
+
+    if child.slot_handle is not None:
+        slot_manager_mod._unlock_file(child.slot_handle)
+        child.slot_handle = None
+    slot_manager_mod._unlock_file(primary_handle)

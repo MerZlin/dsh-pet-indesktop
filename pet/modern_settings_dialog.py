@@ -1384,7 +1384,16 @@ class ModernSettingsDialog(QDialog):
         )
 
     def _on_clear_spawned_pets(self) -> None:
-        """一键关闭并清除所有小肥鱼（slot-N）的配置/会话/待办数据。"""
+        """一键关闭并清除所有小肥鱼（slot-N）的配置/会话/待办数据。
+
+        优先走 PetWindow 上已接线的 ``on_clear_spawned_pets``（= AppShell 路径，
+        自带确认框与进程内子窗前置于关闭，单进程模式才清得掉）；拿不到回调时
+        回退为原有的「确认 + 直接文件级清理」。
+        """
+        callback = getattr(self.parentWidget(), "on_clear_spawned_pets", None)
+        if callable(callback):
+            callback()
+            return
         answer = QMessageBox.question(
             self,
             "清除子肥鱼",

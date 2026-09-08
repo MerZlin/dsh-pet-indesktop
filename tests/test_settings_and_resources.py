@@ -199,3 +199,97 @@ def test_position_autosave_does_not_set_user_customized(tmp_path):
     assert cfg.get("user_customized") is False
     reloaded = Config(cfg_root, instance_id="slot-2")
     assert reloaded.get("user_customized") is False
+
+
+def test_clear_spawned_pets_button_routes_through_shell_callback(
+        qapp, tmp_path: Path, monkeypatch):
+    """批 E：设置界面「一键清除」优先调 PetWindow 已接线的 on_clear_spawned_pets
+    （= AppShell 路径，自带确认框与进程内子窗前置于关闭）——对话框不再二次确认，
+    也不直接走文件级清理。"""
+    from PySide6.QtWidgets import QMessageBox, QWidget
+
+    import pet.child_pet_cleanup as cleanup_mod
+
+    calls = []
+    parent = QWidget()
+    parent.on_clear_spawned_pets = lambda: calls.append("shell")
+    cfg = Config(tmp_path / "appdata")
+    questions = []
+    cleanup_calls = []
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: (questions.append(a),
+                          QMessageBox.StandardButton.Cancel)[1])
+    monkeypatch.setattr(
+        cleanup_mod, "clear_spawned_pets",
+        lambda *a, **kw: cleanup_calls.append(a) or
+        {"killed_pids": [], "deleted": []})
+    dialog = ModernSettingsDialog(cfg, parent, include_ai=False)
+    try:
+        dialog.clear_spawned_pets_btn.click()
+        assert calls == ["shell"], "应调用 win.on_clear_spawned_pets 回调"
+        assert questions == [], "走 shell 回调时对话框不应二次确认"
+        assert cleanup_calls == [], "走 shell 回调时不应直接文件级清理"
+    finally:
+        dialog.deleteLater()
+        parent.close()
+        qapp.processEvents()
+
+
+def test_clear_spawned_pets_button_falls_back_without_callback(
+        qapp, tmp_path: Path, monkeypatch):
+    """批 E：拿不到 win.on_clear_spawned_pets（无父窗/旧接线）时回退原有
+    「确认 + 直接文件级清理」路径。"""
+    from PySide6.QtWidgets import QMessageBox
+
+    import pet.child_pet_cleanup as cleanup_mod
+
+    cfg = Config(tmp_path / "appdata")
+    cleaned = []
+    monkeypatch.setattr(
+        cleanup_mod, "clear_spawned_pets",
+        lambda cfg_dir: (cleaned.append(cfg_dir),
+                         {"killed_pids": [1], "deleted": ["a", "b"]})[1])
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.StandardButton.Yes)
+    infos = []
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *a, **kw: infos.append(a))
+    dialog = ModernSettingsDialog(cfg, include_ai=False)
+    try:
+        dialog._on_clear_spawned_pets()
+        assert cleaned == [cfg.dir]
+        assert len(infos) == 1
+    finally:
+        dialog.deleteLater()
+        qapp.processEvents()
+
+
+def test_clear_spawned_pets_button_fallback_cancel_does_nothing(
+        qapp, tmp_path: Path, monkeypatch):
+    """批 E：回退路径下用户取消 → 不清理、不弹结果框。"""
+    from PySide6.QtWidgets import QMessageBox
+
+    import pet.child_pet_cleanup as cleanup_mod
+
+    cfg = Config(tmp_path / "appdata")
+    cleanup_calls = []
+    monkeypatch.setattr(
+        cleanup_mod, "clear_spawned_pets",
+        lambda *a, **kw: cleanup_calls.append(a) or
+        {"killed_pids": [], "deleted": []})
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.StandardButton.Cancel)
+    infos = []
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *a, **kw: infos.append(a))
+    dialog = ModernSettingsDialog(cfg, include_ai=False)
+    try:
+        dialog._on_clear_spawned_pets()
+        assert cleanup_calls == []
+        assert infos == []
+    finally:
+        dialog.deleteLater()
+        qapp.processEvents()

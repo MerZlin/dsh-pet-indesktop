@@ -58,8 +58,12 @@ WINDOW_PY_LINE_BUDGET = 4358
 # （实测 1942），预算随实测校准。
 # 2026-09-08 上调到 1996：新增「随桌宠启动 dsh 服务」开关行（+4，实测 1996）。
 # 2026-09-08 上调到 2000：批 C 落种占位语义在保存路径加 user_customized 置位（+4，实测 2000）。
+# 2026-09-08 上调到 2009：批 E 清除子肥鱼走 shell 已接线回调（+9，实测 2009）——
+# _on_clear_spawned_pets 优先调 win.on_clear_spawned_pets（自带确认框与进程内
+# 子窗前置于关闭），拿不到回调时回退原有确认+直接清理；按文件约定校准预算，
+# 不为达标压缩行宽/合并语句。
 # 本文件拆分仍是待办，拆分前预算只随实测校准。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2000
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2009
 
 
 def _read(name: str) -> str:
