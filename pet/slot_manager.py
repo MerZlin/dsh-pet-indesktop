@@ -214,10 +214,6 @@ def get_config_path_for_slot(config_dir: Path | str, slot_id: int) -> Path:
     return config_path / "config.json" if slot_id == 0 else config_path / f"config-slot-{slot_id}.json"
 
 
-# 新 slot 落种时剔除的每窗状态键（位置/朝向不继承，其余设置跟随主配置）
-_SEED_EXCLUDE_KEYS = ("rx", "ry", "screen_name", "facing")
-
-
 def seed_slot_config_from_main(config_dir: Path | str, slot_id: int) -> bool:
     """新 slot 的初始配置跟随主设置：slot 配置文件不存在时，用主 config.json
     落种一份（剔除每窗状态键）。已有存档的 slot（用户改过的）一律不动。
@@ -234,10 +230,14 @@ def seed_slot_config_from_main(config_dir: Path | str, slot_id: int) -> bool:
         data = json.loads(main_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    for key in _SEED_EXCLUDE_KEYS:
-        data.pop(key, None)
+    if not isinstance(data, dict):
+        return False
+    from .slot_seed import build_slot_seed
+    seed = build_slot_seed(data)
+    if seed is None:
+        return False
     try:
-        slot_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+        slot_path.write_text(json.dumps(seed, ensure_ascii=False, indent=2),
                              encoding="utf-8")
     except OSError:
         return False

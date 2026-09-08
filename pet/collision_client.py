@@ -165,6 +165,9 @@ class CollisionClient(QObject):
             flags |= collision.FLAG_AUTO_CURSOR_HIDDEN
         if bool(win.cfg.get('collision_enabled', True)):
             flags |= collision.FLAG_COLLISION_ENABLED
+        group_cfg = win.cfg.get('group_gathering') or {}
+        if isinstance(group_cfg, dict) and bool(group_cfg.get('enabled', False)):
+            flags |= collision.FLAG_GROUP_ENABLED
         if self.pending_predicted_bounce is not None:
             flags |= collision.FLAG_PREDICTED_BOUNCE
         return flags

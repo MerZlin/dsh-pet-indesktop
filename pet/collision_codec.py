@@ -122,9 +122,23 @@ class ImpulseMessage(TypedDict, total=False):
     dy_b: float
 
 
+class GroupMessage(TypedDict, total=False):
+    """围圈聚集互动指令帧：由碰撞协调者作为单会话权威中继。"""
+    type: Literal["group"]
+    kind: Literal["begin", "ready", "action", "cancel", "done"]
+    token: str
+    leader: str
+    preset_id: str
+    clip: str
+    targets: list[dict[str, Any]]
+    screen: dict[str, float]
+    start_delta_ms: int
+    reason: str
+
+
 WireMessage = Union[
     ProbeMessage, CoordinatorMessage, HelloMessage, WelcomeMessage,
-    LeaveMessage, StateMessage, SnapshotMessage, ImpulseMessage,
+    LeaveMessage, StateMessage, SnapshotMessage, ImpulseMessage, GroupMessage,
 ]
 
 

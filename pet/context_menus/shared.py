@@ -362,6 +362,33 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act.toggled.connect(lambda on, k=opt_key: pet.set_agent_link_option(k, on))
 
 
+def add_group_gathering_menu(menu: QMenu, pet, *, icons: bool = True):
+    """围圈聚集入口：按设置里的聚集动画直接发起一次围圈/面对面同播。
+
+    参与者在右键时刻不足/没有共有动画时置灰并给出 tooltip 原因，
+    不再展示“空内容”的二级菜单；具体动画列表改到设置 → 多开。
+    """
+    wanted = getattr(pet, "group_gather_wanted", None)
+    if not callable(wanted) or not wanted():
+        return None
+    trigger = getattr(pet, "trigger_group_gather", None)
+    action = add_action(
+        menu,
+        "聚集互动",
+        "play" if icons else None,
+        trigger if callable(trigger) else None,
+        close_on_trigger=True,
+    )
+    ready = getattr(pet, "group_gather_ready", None)
+    reason = ""
+    if callable(ready):
+        reason = "" if ready() else str(getattr(pet, "group_gather_block_reason", lambda: "")() or "")
+    if not callable(ready) or not ready() or reason:
+        action.setEnabled(False)
+        action.setToolTip(reason or "当前无法发起聚集互动")
+    return action
+
+
 def build_size_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
     submenu = add_submenu(menu, "大小", "size" if icons else None)
     group = QActionGroup(submenu)

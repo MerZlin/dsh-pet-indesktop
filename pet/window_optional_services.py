@@ -25,6 +25,7 @@ class WindowFeatureGateMixin:
     _broker_facade: Any = None
     _golden_spin: Any = None
     _edge_probe: Any = None
+    _group_gathering: Any = None
 
     # ------------------------------------------------------------ 判定
     def _proactive_wanted(self) -> bool:
@@ -189,6 +190,86 @@ class WindowFeatureGateMixin:
     def _effects_skip_turn_facing(self) -> bool:
         return self._effects_probe_active()
 
+    # ------------------------------------------------------------ 围圈聚集
+    def _group_gathering_enabled(self) -> bool:
+        raw = self.cfg.get("group_gathering", {}) or {}
+        return (
+            isinstance(raw, dict)
+            and bool(raw.get("enabled", False))
+            and getattr(self, "_collision_app_session", None) is not None
+        )
+
+    def _ensure_group_gathering(self):
+        """首次启用聚集互动时懒创建控制器；已有则原样返回。"""
+        if self._group_gathering is None and self._group_gathering_enabled():
+            from .group_gathering import GroupGatheringController
+            self._group_gathering = GroupGatheringController(
+                self,
+                session=getattr(self, "_collision_app_session", None),
+                parent=self,
+            )
+        return self._group_gathering
+
+    def group_peer_snapshots(self):
+        """聚集控制器读取当前 peer 快照的公开 seam（避免跨模块访问窗口私有字段）。"""
+        return dict(getattr(self, "_collision_peer_snapshots", {}) or {})
+
+    def group_gather_wanted(self) -> bool:
+        """右键可用性：功能开且碰撞会话在。具体参与者在菜单展开时再算。"""
+        return self._group_gathering_enabled()
+
+    def group_common_presets(self):
+        """右键菜单展开时读取当前同屏共同预设；未启用/人数不足返回空。"""
+        controller = self._group_gathering
+        if controller is None:
+            return []
+        return controller._common_presets()
+
+    def start_group_gather(self, preset_id: str) -> bool:
+        """按具体预设点播：由当前窗作为发起者提交一次围圈 begin。"""
+        controller = self._ensure_group_gathering()
+        if controller is None:
+            return False
+        return controller.request_group(str(preset_id))
+
+    def group_gather_ready(self) -> bool:
+        """右键可用性：同屏参与者足够且存在可发起的共有动画。"""
+        controller = self._group_gathering
+        if controller is None:
+            return False
+        return controller.can_trigger()
+
+    def group_gather_block_reason(self) -> str:
+        """当前为何不能发起聚集（空字符串 = 可发起），用于菜单 tooltip。"""
+        controller = self._group_gathering
+        if controller is None:
+            return "需先开启「聚集互动」并开启碰撞"
+        return controller.block_reason()
+
+    def trigger_group_gather(self) -> bool:
+        """右键默认触发：按设置固定动画（或随机共有）发起一次聚集。"""
+        controller = self._ensure_group_gathering()
+        if controller is None:
+            return False
+        return controller.trigger_default()
+
+    def _group_on_user_interaction(self) -> None:
+        controller = self._group_gathering
+        if controller is not None and controller._active:
+            controller.abort("interacted")
+
+    def _group_on_hidden(self) -> None:
+        controller = self._group_gathering
+        if controller is not None and controller._active:
+            controller.abort("hidden")
+
+    def _group_on_detach(self) -> None:
+        controller = self._group_gathering
+        if controller is not None:
+            controller.shutdown()
+            self._group_gathering = None
+
+
     # ------------------------------------------------------------ 同步
     def sync_optional_services(self) -> None:
         """设置刷新公共入口：按配置懒装配/同步主动识屏、Agent 联动与效果控制器。"""
@@ -202,6 +283,13 @@ class WindowFeatureGateMixin:
             self.agent_link_manager.apply_config()
         self._install_effect_services()
         self._edge_probe.set_enabled(bool(self.cfg.get("edge_probe_enabled", False)))
+        if self._group_gathering_enabled():
+            controller = self._ensure_group_gathering()
+            if controller is not None:
+                controller.sync_config()
+        elif self._group_gathering is not None:
+            self._group_gathering.shutdown()
+            self._group_gathering = None
 
     def set_broker_facade(self, broker_facade: Any) -> None:
         """替换窗口持有的 broker facade（app 层经公开 seam 注入，不碰私有面）。"""

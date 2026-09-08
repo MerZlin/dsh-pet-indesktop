@@ -485,6 +485,49 @@ def test_spawn_seed_respects_inherit_size_switch(tmp_path):
     assert slot_custom.get("dynamic_island", {}).get("enabled") is False
 
 
+def test_production_seed_path_applies_spawn_scale_and_island_rules(tmp_path):
+    """真实生产 seed 路径（slot_manager 先写文件再建 Config）也必须应用
+    spawn_scale：修复「关闭继承后子肥鱼仍是主鱼/最大号」的回归护栏。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    master = Config(base=tmp_path)
+    master.set("scale", 1.0)
+    master.set("spawn_inherit_size", False)
+    master.set("spawn_scale", 0.5)
+    master.set("spawn_inherit_dynamic_island", False)
+    island = dict(master.get("dynamic_island"))
+    island["enabled"] = True
+    master.set("dynamic_island", island)
+    master.set("autostart_wanted", True)
+    master.set("harness_autostart", True)
+    master.save()
+
+    assert sm.seed_slot_config_from_main(config_dir, 1) is True
+    child = Config(base=tmp_path, instance_id="slot-1")
+    assert child.get("scale") == 0.5
+    assert child.get("spawn_inherit_size") is False
+    assert child.get("spawn_scale") == 0.5
+    assert child.get("dynamic_island", {}).get("enabled") is False
+    assert child.get("autostart_wanted") is False
+    assert child.get("harness_autostart") is False
+
+
+def test_production_seed_path_keeps_master_scale_when_inherit_enabled(tmp_path):
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    master = Config(base=tmp_path)
+    master.set("scale", 1.0)
+    master.set("spawn_inherit_size", True)
+    master.set("spawn_scale", 0.5)
+    master.save()
+
+    assert sm.seed_slot_config_from_main(config_dir, 1) is True
+    child = Config(base=tmp_path, instance_id="slot-1")
+    assert child.get("scale") == 1.0
+
+
 def test_corrupt_config_backup_unique_timestamp(tmp_path):
     """场景 6：损坏配置唯一备份名，连续恢复不覆盖旧备份。"""
     config_dir = tmp_path / APP_DIR_NAME

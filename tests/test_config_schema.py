@@ -57,7 +57,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
 })
 
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。
-SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat"})
+SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat", "group_gathering"})
 
 # 默认值 dict 键集合现状快照（77 键）= 白名单 ∪ 特例键。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
