@@ -384,12 +384,17 @@ class GroupGatheringController(QObject):
         try:
             start_left = float(win.x())
             start_top = float(win.y())
+            start_cx, start_cy = _window_center(win)
         except Exception:
-            start_left, start_top = 0.0, 0.0
+            start_left, start_top, start_cx, start_cy = 0.0, 0.0, 0.0, 0.0
         self._walk_start_left = start_left
         self._walk_start_top = start_top
         self._walk_started_at = self._clock()
         self._walk_done = False
+        # 保持“内容中心 → 窗口左上角”的偏移量不变，避免碰撞/内容中心与窗口
+        # 中心不一致时走位终点出现跳变。
+        self._walk_target_left = target_x - (start_cx - start_left)
+        self._walk_target_top = target_y - (start_cy - start_top)
 
         move_name = None
         moves = getattr(win, "moves", None) or []
@@ -421,11 +426,8 @@ class GroupGatheringController(QObject):
             self._walk_timer.stop()
             return
         win = self.win
-        target_x, target_y = self._target_center or (0.0, 0.0)
-        window_w = _window_width(win)
-        window_h = _window_height(win)
-        target_left = target_x - window_w / 2.0
-        target_top = target_y - window_h / 2.0
+        target_left = self._walk_target_left
+        target_top = self._walk_target_top
         progress = (self._clock() - self._walk_started_at) / self._walk_duration_seconds
         if progress >= 1.0:
             self._walk_timer.stop()
