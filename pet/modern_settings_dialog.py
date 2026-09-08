@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
 
 from . import autostart as autostart_mod
 from . import catalog
+from . import group_presets
 from .agent_link import AgentLinkManager
 from .click_sound import warm_click_sound_effects
 from .config import (
@@ -235,8 +236,9 @@ class ModernSettingsDialog(QDialog):
         general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
         spawn_rows = [
             SettingRow("single_process_spawn", "单进程多开（省内存）", "开启后「生小肥鱼」在同一进程内创建新桌宠，多窗共享解码链（同一段动画只解码一份），多开时内存与进程数显著降低；已有各只的设置存档保留不变。重启后生效。", self.single_process_spawn_check),
-            SettingRow("group_gathering_enabled", "聚集互动", "多只桌宠可聚在一起同播一个动作；需开启碰撞。关闭时无任何额外开销。", self.group_gathering_enabled_check),
+            SettingRow("group_gathering_enabled", "聚集互动", "多只桌宠可聚在一起同播一个动作；需开启碰撞。关闭时无任何额外开销。只对当前这只生效，其它已运行的小肥鱼需各自开启（清除后重新生成会跟随主设置）。", self.group_gathering_enabled_check),
             SettingRow("group_gathering_auto", "靠近时自动聚一聚", "多只桌宠靠近时偶尔自发围圈并随机播放一个共同动作；不移动/省电/隐藏时不会自动触发。", self.group_gathering_auto_check, stacked=True),
+            SettingRow("group_gathering_preset", "聚集动画", "选择右键「聚集互动」与自动偶遇想播放的固定动画；选择“随机”则每次从双方共有动画里挑。", self.group_gathering_preset_combo, stacked=True),
         ]
         general_layout.addWidget(SettingsSection("多开", spawn_rows, general_content))
         if self.balance_refresh_spin is not None:
@@ -593,6 +595,14 @@ class ModernSettingsDialog(QDialog):
         self.group_gathering_auto_check.setChecked(
             bool(group_cfg.get("auto_enabled", False)) and bool(group_cfg.get("enabled", False))
         )
+        self.group_gathering_preset_combo = ModernSelect(self, width=132)
+        current_preset = str(group_cfg.get("preset") or "").strip()
+        self.group_gathering_preset_combo.addItem("随机（每次从共有动画里挑）", "")
+        character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
+        for preset in group_presets.available_presets_for_character(character_id):
+            self.group_gathering_preset_combo.addItem(str(preset.get("label") or preset.get("id")), preset.get("id"))
+        index = self.group_gathering_preset_combo.findData(current_preset)
+        self.group_gathering_preset_combo.setCurrentIndex(index if index >= 0 else 0)
 
         # 甩出力度四档：gentle (轻柔) / standard (标准) / strong (强力) / crazy (疯狂)
         self.throw_strength_select = ModernSelect(self, width=132)
@@ -1232,14 +1242,16 @@ class ModernSettingsDialog(QDialog):
 
     def _update_group_gathering_controls(self, enabled: bool) -> None:
         collision_on = self.collision_enabled_check.isChecked()
+        visible = enabled and collision_on
         self._set_setting_rows_visible(
-            ("group_gathering_auto",),
-            enabled and collision_on,
+            ("group_gathering_auto", "group_gathering_preset"),
+            visible,
             dependency="group_gathering_enabled",
         )
         for key, control_visible in (
             ("group_gathering_enabled", True),
-            ("group_gathering_auto", enabled and collision_on),
+            ("group_gathering_auto", visible),
+            ("group_gathering_preset", visible),
         ):
             row = self.findChild(SettingRow, f"settingRow_{key}")
             if row is None:
@@ -1568,7 +1580,7 @@ class ModernSettingsDialog(QDialog):
         general = page_content([
             ("应用启动", claim("autostart", "harness_autostart")),
             ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
-            ("多开", claim("single_process_spawn", "group_gathering_enabled", "group_gathering_auto")),
+            ("多开", claim("single_process_spawn", "group_gathering_enabled", "group_gathering_auto", "group_gathering_preset")),
         ])
         collision_primary = claim("collision_enabled", "collision_sound_enabled")
         collision_advanced = claim(
@@ -1893,9 +1905,11 @@ class ModernSettingsDialog(QDialog):
             self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
         self.config.set("experimental_single_process_spawn", self.single_process_spawn_check.isChecked())
         group_gathering_enabled = self.group_gathering_enabled_check.isChecked()
+        group_preset = str(self.group_gathering_preset_combo.currentData() or "") if group_gathering_enabled else ""
         self.config.set("group_gathering", {
             "enabled": group_gathering_enabled,
             "auto_enabled": self.group_gathering_auto_check.isChecked() and group_gathering_enabled,
+            "preset": group_preset,
         })
         if self.cursor_hidden_passthrough_check is not None:
             self.config.set("cursor_hidden_passthrough", self.cursor_hidden_passthrough_check.isChecked())

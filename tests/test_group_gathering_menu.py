@@ -9,19 +9,24 @@ from pet.context_menus.shared import add_group_gathering_menu
 
 
 class FakePet:
-    def __init__(self, wanted=True, presets=None):
+    def __init__(self, wanted=True, ready=True, reason=""):
         self._wanted = wanted
-        self.presets = presets or []
-        self.started = []
+        self._ready = ready
+        self._reason = reason
+        self.triggered = []
 
     def group_gather_wanted(self):
         return self._wanted
 
-    def group_common_presets(self):
-        return list(self.presets)
+    def group_gather_ready(self):
+        return self._ready
 
-    def start_group_gather(self, preset_id):
-        self.started.append(preset_id)
+    def group_gather_block_reason(self):
+        return self._reason
+
+    def trigger_group_gather(self):
+        self.triggered.append(1)
+        return True
 
 
 def _qapp():
@@ -41,31 +46,26 @@ def test_add_group_menu_returns_none_when_disabled():
     menu.deleteLater()
 
 
-def test_add_group_menu_populates_common_presets_on_open():
+def test_add_group_menu_disables_with_reason_when_not_ready():
     _qapp()
     menu = QMenu()
-    pet = FakePet(presets=[
-        {"id": "breakfast", "label": "一起吃早餐"},
-        {"id": "lunch", "label": "一起吃午餐"},
-    ])
-    sub = add_group_gathering_menu(menu, pet, icons=False)
-    assert sub is not None
-    sub.aboutToShow.emit()
-    labels = [action.text() for action in sub.actions()]
-    assert labels == ["一起吃早餐", "一起吃午餐"]
-    # 触发第二个动作并确保写回发起者
-    actions = sub.actions()
-    actions[1].trigger()
-    assert pet.started == ["lunch"]
+    pet = FakePet(wanted=True, ready=False, reason="需要至少 2 只同屏桌宠")
+    action = add_group_gathering_menu(menu, pet, icons=False)
+    assert action is not None
+    assert action.isEnabled() is False
+    assert "需要至少 2 只" in action.toolTip()
+    action.trigger()
+    assert pet.triggered == []
     menu.deleteLater()
 
 
-def test_add_group_menu_shows_disabled_empty_state_when_no_presets():
+def test_add_group_menu_triggers_configured_gather_when_ready():
     _qapp()
     menu = QMenu()
-    pet = FakePet(presets=[])
-    sub = add_group_gathering_menu(menu, pet, icons=False)
-    sub.aboutToShow.emit()
-    assert len(sub.actions()) == 1
-    assert sub.actions()[0].isEnabled() is False
+    pet = FakePet(wanted=True, ready=True)
+    action = add_group_gathering_menu(menu, pet, icons=False)
+    assert action is not None
+    assert action.isEnabled() is True
+    action.trigger()
+    assert pet.triggered == [1]
     menu.deleteLater()

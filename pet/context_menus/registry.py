@@ -192,7 +192,7 @@ class MenuActionRegistry:
                     callable(getattr(pet, "group_gather_wanted", None))
                     and pet.group_gather_wanted()
                 ),
-                disabled_reason="需先开启「聚集互动」并开启碰撞",
+                disabled_reason="需至少 2 只同屏桌宠且都开启「聚集互动」（碰撞开启）",
             ),
             "quick_launch": MenuActionSpec(
                 lambda menu, pet: add_quick_launch_menu(menu, pet.cfg),

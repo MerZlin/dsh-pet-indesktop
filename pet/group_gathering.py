@@ -44,6 +44,17 @@ def _cfg_auto_enabled(win: Any) -> bool:
     return isinstance(group, dict) and bool(group.get("auto_enabled", False))
 
 
+def _cfg_preset_id(win: Any) -> str:
+    """读取设置里用户选择的聚集动画预设 id（空字符串 = 随机）。"""
+    value = getattr(win, "cfg", None)
+    if value is None or not callable(getattr(value, "get", None)):
+        return ""
+    group = value.get("group_gathering") or {}
+    if not isinstance(group, dict):
+        return ""
+    return str(group.get("preset") or "").strip()
+
+
 def _screen_dict(win: Any) -> dict[str, float] | None:
     screen_available = getattr(win, "screen_available", None)
     try:
@@ -283,6 +294,45 @@ class GroupGatheringController(QObject):
                 # 其它进程角色素材在本机同一 assets/数据目录下，只读扫名。
                 pets.append({"character": character})
         return group_presets.common_presets(pets)
+
+    def configured_preset_id(self) -> str:
+        return _cfg_preset_id(self.win)
+
+    def _pick_preset_id(self) -> str | None:
+        """按设置选择本次要发起的预设 id；固定预设不可用时回退随机共有。"""
+        common = self._common_presets()
+        if not common:
+            return None
+        configured = _cfg_preset_id(self.win)
+        if configured:
+            for preset in common:
+                if str(preset.get("id") or "") == configured:
+                    return configured
+        return str(random.choice(common).get("id") or "")
+
+    def block_reason(self) -> str:
+        """当前不可聚集时的分级原因；为空表示可以发起。"""
+        if self._session is None:
+            return "碰撞会话未就绪"
+        if self._active:
+            return "已有聚集互动进行中"
+        if len(self._participant_members()) < 2:
+            return "需要至少 2 只同屏桌宠且都开启「聚集互动」（碰撞开启）"
+        if not self._common_presets():
+            return "当前没有双方共有、可一起播放的动画"
+        return ""
+
+    def can_trigger(self) -> bool:
+        return not bool(self.block_reason())
+
+    def trigger_default(self) -> bool:
+        """右键默认入口：按设置固定动画发起，随机/不可用则回退随机共有。"""
+        if self._session is None or self._active:
+            return False
+        preset_id = self._pick_preset_id()
+        if preset_id is None:
+            return False
+        return self.request_group(preset_id)
 
     # ------------------------------------------------------------ 手动入口
     def request_group(self, preset_id: str) -> bool:
@@ -575,6 +625,10 @@ class GroupGatheringController(QObject):
         common = group_presets.common_presets(pets)
         if not common:
             return
-        preset = random.choice(common)
-        self._last_auto_at = now
-        self.request_group(preset["id"])
+        configured = _cfg_preset_id(self.win)
+        if configured and any(str(p.get("id") or "") == configured for p in common):
+            preset_id = configured
+        else:
+            preset_id = str(random.choice(common).get("id") or "")
+        if self.request_group(preset_id):
+            self._last_auto_at = now

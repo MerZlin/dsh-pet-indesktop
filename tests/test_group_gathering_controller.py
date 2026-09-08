@@ -15,9 +15,13 @@ class FakeScreen:
 
 
 class FakeConfig:
-    def __init__(self, enabled=True, auto_enabled=False, character="shenshen"):
+    def __init__(self, enabled=True, auto_enabled=False, preset="", character="shenshen"):
         self.data = {
-            "group_gathering": {"enabled": enabled, "auto_enabled": auto_enabled},
+            "group_gathering": {
+                "enabled": enabled,
+                "auto_enabled": auto_enabled,
+                "preset": preset,
+            },
             "character": character,
         }
 
@@ -50,9 +54,12 @@ class FakeSession(QObject):
 
 
 class FakeWin:
-    def __init__(self, session, peer_snapshots=None, enabled=True, auto_enabled=False):
+    def __init__(self, session, peer_snapshots=None, enabled=True, auto_enabled=False,
+                 preset=""):
         self._session = session
-        self.cfg = FakeConfig(enabled=enabled, auto_enabled=auto_enabled)
+        self.cfg = FakeConfig(
+            enabled=enabled, auto_enabled=auto_enabled, preset=preset,
+        )
         self.lib = FakeLib()
         self._collision_app_session = session
         self._collision_peer_snapshots = peer_snapshots or {}
@@ -130,7 +137,9 @@ def test_disabled_controller_not_created_by_mixin_path():
     # controller 构造本身不检查 enabled（由 mixin 决定懒创建）；这里验证配置读取
     session = FakeSession("slot-0")
     win = FakeWin(session, enabled=False)
-    assert win.cfg.get("group_gathering") == {"enabled": False, "auto_enabled": False}
+    assert win.cfg.get("group_gathering") == {
+        "enabled": False, "auto_enabled": False, "preset": "",
+    }
 
 
 def test_request_group_submits_begin_with_two_targets():
@@ -156,6 +165,62 @@ def test_request_group_requires_common_preset():
 
     assert controller.request_group("breakfast") is False
     assert session.sent == []
+    controller.shutdown()
+
+
+def test_trigger_default_uses_configured_preset():
+    session, win = _session_and_win()
+    win.cfg = FakeConfig(enabled=True, auto_enabled=False, preset="breakfast")
+    controller = GroupGatheringController(win, session=session)
+
+    assert controller.trigger_default() is True
+    assert session.sent and session.sent[-1]["kind"] == "begin"
+    assert session.sent[-1]["preset_id"] == "breakfast"
+    assert session.sent[-1]["clip"] == "吃早餐"
+    controller.shutdown()
+
+
+def test_trigger_default_falls_back_to_random_common_when_configured_missing():
+    session, win = _session_and_win()
+    win.cfg = FakeConfig(enabled=True, auto_enabled=False, preset="breakfast")
+    # 本窗素材只有吃午餐，因此 breakfast 不可用；唯一共有 = 吃午餐
+    win.lib = FakeLib(names=["吃午餐"])
+    controller = GroupGatheringController(win, session=session)
+
+    assert controller.trigger_default() is True
+    assert session.sent and session.sent[-1]["kind"] == "begin"
+    assert session.sent[-1]["preset_id"] == "lunch"
+    assert session.sent[-1]["clip"] == "吃午餐"
+    controller.shutdown()
+
+
+def test_trigger_default_false_when_no_participants():
+    session = FakeSession("slot-0")
+    win = FakeWin(session, peer_snapshots={})
+    controller = GroupGatheringController(win, session=session)
+
+    assert controller.trigger_default() is False
+    assert session.sent == []
+    controller.shutdown()
+
+
+def test_block_reason_reports_missing_participants():
+    session = FakeSession("slot-0")
+    win = FakeWin(session, peer_snapshots={})
+    controller = GroupGatheringController(win, session=session)
+
+    assert controller.can_trigger() is False
+    reason = controller.block_reason()
+    assert "至少 2 只" in reason
+    controller.shutdown()
+
+
+def test_block_reason_empty_when_ready():
+    session, win = _session_and_win()
+    controller = GroupGatheringController(win, session=session)
+
+    assert controller.block_reason() == ""
+    assert controller.can_trigger() is True
     controller.shutdown()
 
 

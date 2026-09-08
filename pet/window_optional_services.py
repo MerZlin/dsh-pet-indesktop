@@ -226,11 +226,32 @@ class WindowFeatureGateMixin:
         return controller._common_presets()
 
     def start_group_gather(self, preset_id: str) -> bool:
-        """右键点播：由当前窗作为发起者提交一次围圈 begin。"""
+        """按具体预设点播：由当前窗作为发起者提交一次围圈 begin。"""
         controller = self._ensure_group_gathering()
         if controller is None:
             return False
         return controller.request_group(str(preset_id))
+
+    def group_gather_ready(self) -> bool:
+        """右键可用性：同屏参与者足够且存在可发起的共有动画。"""
+        controller = self._group_gathering
+        if controller is None:
+            return False
+        return controller.can_trigger()
+
+    def group_gather_block_reason(self) -> str:
+        """当前为何不能发起聚集（空字符串 = 可发起），用于菜单 tooltip。"""
+        controller = self._group_gathering
+        if controller is None:
+            return "需先开启「聚集互动」并开启碰撞"
+        return controller.block_reason()
+
+    def trigger_group_gather(self) -> bool:
+        """右键默认触发：按设置固定动画（或随机共有）发起一次聚集。"""
+        controller = self._ensure_group_gathering()
+        if controller is None:
+            return False
+        return controller.trigger_default()
 
     def _group_on_user_interaction(self) -> None:
         controller = self._group_gathering

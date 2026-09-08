@@ -363,29 +363,30 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
 
 
 def add_group_gathering_menu(menu: QMenu, pet, *, icons: bool = True):
-    """围圈聚集二级菜单：每次展开按当前同屏参与者刷新公共预设。"""
+    """围圈聚集入口：按设置里的聚集动画直接发起一次围圈/面对面同播。
+
+    参与者在右键时刻不足/没有共有动画时置灰并给出 tooltip 原因，
+    不再展示“空内容”的二级菜单；具体动画列表改到设置 → 多开。
+    """
     wanted = getattr(pet, "group_gather_wanted", None)
     if not callable(wanted) or not wanted():
         return None
-    sub = add_submenu(menu, "聚集互动", "play" if icons else None)
-
-    def populate() -> None:
-        if shiboken6.isValid(sub) is False:
-            return
-        sub.clear()
-        presets = pet.group_common_presets()
-        if not presets:
-            action = sub.addAction("当前没有可一起播放的动作")
-            action.setEnabled(False)
-            return
-        for preset in presets:
-            action = sub.addAction(str(preset.get("label") or preset.get("id")))
-            action.setProperty("closeOnTrigger", True)
-            preset_id = str(preset.get("id") or "")
-            connect_action(action, lambda pid=preset_id: pet.start_group_gather(pid))
-
-    sub.aboutToShow.connect(populate)
-    return sub
+    trigger = getattr(pet, "trigger_group_gather", None)
+    action = add_action(
+        menu,
+        "聚集互动",
+        "play" if icons else None,
+        trigger if callable(trigger) else None,
+        close_on_trigger=True,
+    )
+    ready = getattr(pet, "group_gather_ready", None)
+    reason = ""
+    if callable(ready):
+        reason = "" if ready() else str(getattr(pet, "group_gather_block_reason", lambda: "")() or "")
+    if not callable(ready) or not ready() or reason:
+        action.setEnabled(False)
+        action.setToolTip(reason or "当前无法发起聚集互动")
+    return action
 
 
 def build_size_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:

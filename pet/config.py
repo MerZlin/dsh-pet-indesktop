@@ -420,10 +420,15 @@ def _clean_self_talk_texts(value):
 
 
 def _default_group_gathering_data() -> dict:
-    """多桌宠围圈聚集互动默认配置：总开关默认关，自动偶遇随总开关关。"""
+    """多桌宠围圈聚集互动默认配置：总开关默认关，自动偶遇随总开关关。
+
+    preset 为聚集动画预设 id（如 ``breakfast`` / ``lunch``）；空字符串 =
+    随机从当前共有动画里选。
+    """
     return {
         "enabled": False,
         "auto_enabled": False,
+        "preset": "",
     }
 
 
@@ -437,6 +442,12 @@ def _clean_group_gathering_data(value) -> dict:
     result["auto_enabled"] = (
         _bool_or_default(result["auto_enabled"], False) if result["enabled"] else False
     )
+    preset = str(result.get("preset") or "").strip()
+    if preset:
+        from .group_presets import resolve_group_preset
+        if resolve_group_preset(preset) is None:
+            preset = ""
+    result["preset"] = preset
     return result
 
 
@@ -683,40 +694,10 @@ class Config:
             return
         if not isinstance(raw, dict):
             return
-        seed = copy.deepcopy(raw)
-        seed["version"] = 4
-        # 副槽不继承主桌宠的位置/屏幕，避免新鱼叠在旧鱼身上；自启仍仅主槽。
-        seed["rx"] = None
-        seed["ry"] = None
-        seed["screen_name"] = None
-        seed["autostart_wanted"] = False
-        seed["harness_autostart"] = False
-        # 生小肥鱼大小策略：开启继承 → 保留主配置 scale；
-        # 关闭继承 → 用主配置里给“小肥鱼”单独选择的 spawn_scale。
-        inherit_size = _bool_or_default(seed.get("spawn_inherit_size"), True)
-        seed["spawn_inherit_size"] = inherit_size
-        if not inherit_size:
-            try:
-                seed["scale"] = float(seed.get("spawn_scale", catalog.DEFAULT_SCALE))
-            except (TypeError, ValueError):
-                seed["scale"] = catalog.DEFAULT_SCALE
-        # 生小肥鱼灵动岛策略：默认不继承 → 小肥鱼不开启自己的灵动岛；
-        # 开启继承 → 保留主配置的 dynamic_island（含是否启用）。
-        inherit_island = _bool_or_default(seed.get("spawn_inherit_dynamic_island"), False)
-        seed["spawn_inherit_dynamic_island"] = inherit_island
-        island = seed.get("dynamic_island")
-        if isinstance(island, dict):
-            island["enabled"] = bool(inherit_island)
-        else:
-            seed["dynamic_island"] = {"enabled": bool(inherit_island)}
-        chat = seed.get("chat")
-        if isinstance(chat, dict):
-            providers = chat.get("providers")
-            if isinstance(providers, dict):
-                for provider in providers.values():
-                    if isinstance(provider, dict):
-                        provider.pop("api_key", None)
-                        provider.pop("vision_api_key", None)
+        from .slot_seed import build_slot_seed
+        seed = build_slot_seed(raw)
+        if seed is None:
+            return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             temp = self.path.with_name(f"{self.path.name}.{os.getpid()}.seed.tmp")
