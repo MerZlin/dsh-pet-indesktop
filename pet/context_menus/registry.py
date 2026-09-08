@@ -50,7 +50,7 @@ ACTION_LABELS = {
     "size": "大小", "drag_physics": "拖动物理", "no_move": "不移动",
     "mouse_through": "鼠标穿透", "on_top": "窗口置顶", "autostart": "开机自启",
     "return_corner": "回到右下角", "hide_pet": "隐藏桌宠",
-    "spawn_pet": "生小肥鱼", "clear_spawned_pets": "清除子肥鱼",
+    "spawn_pet": "生小肥鱼", "clear_spawned_pets": "退出子肥鱼",
     "golden_spin": "黄金回旋", "edge_probe": "边缘探头",
     "quick_launch": "快捷启动", "balance": "DeepSeek 余额",
     "harness": "启动 DeepSeek Harness", "deepseek_web": "打开网页版 DeepSeek",

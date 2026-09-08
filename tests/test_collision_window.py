@@ -963,12 +963,12 @@ def test_probe_collision_throw_arms_egg_and_rotation_follows_velocity(tmp_path, 
     assert egg.active is True
     assert egg.current_angle_deg() == 0.0
 
-    # 飞行中向右飞（300 px/s，高于批 E 上调后的恢复阈值 240）：_tick_throw_physics
+    # 飞行中向右飞（500 px/s，高于批 F 上调后的恢复阈值 400）：_tick_throw_physics
     # 每 tick 调 update → 角度跟随速度。
     win._physics_mode = "throw"
     win._interaction_state = THROWN
     win._phys_pos[:] = [float(avail.center().x()), float(avail.center().y())]
-    win._phys_vel[:] = [300.0, 0.0]
+    win._phys_vel[:] = [500.0, 0.0]
     win._tick_throw_physics(0.016)
     assert egg.active
     # 角度 = 90 + atan2(vy, vx)（含重力,实际速度方向为右下，略大于 90°）。

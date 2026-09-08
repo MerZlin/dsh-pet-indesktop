@@ -461,13 +461,13 @@ def add_spawn_pet(menu: QMenu, pet):
 
 
 def add_clear_spawned_pets(menu: QMenu, pet, *, icons: bool = True):
-    """右键菜单快捷入口：清除所有小肥鱼（slot-N）数据。"""
+    """右键菜单快捷入口：退出所有小肥鱼（slot-N），设置与数据保留。"""
     callback = getattr(pet, "on_clear_spawned_pets", None)
     if callback is None:
         return None
     return add_action(
         menu,
-        "清除子肥鱼",
+        "退出子肥鱼",
         "clear" if icons else None,
         callback,
         close_on_trigger=True,

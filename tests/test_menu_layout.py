@@ -493,7 +493,7 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         "回到右下角",
         "隐藏桌宠",
         "生小肥鱼",
-        "清除子肥鱼",
+        "退出子肥鱼",
         "黄金回旋",
         "边缘探头",
     ]

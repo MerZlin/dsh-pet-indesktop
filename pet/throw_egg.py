@@ -4,25 +4,19 @@
 > 批 D / 通用约束：非探头状态被击飞维持批 A 现状；不加配置开关，彩蛋常开。
 > 控制器只维护激活状态与当前角度；整帧旋转由 PetWindow 经 pet/window_effects.py
 > 应用（与 edge_probe / golden_spin 同一绘制管线，begin_rotation/end_rotation）。
-> 落地停稳（_stop_physics 兜底）、低速触碰屏幕边界或其它桌宠、或飞行超过
-> THROW_EGG_MAX_FLIGHT_SECONDS 后恢复正常（角度归零）。
+> 落地停稳（_stop_physics 兜底）、低速触碰屏幕边界或其它桌宠后恢复正常
+> （角度归零）。用户明确要求不设飞行时间硬上限。
 """
 from __future__ import annotations
 
 import math
-import time
 from typing import Any
 
 # 速度低于该阈值（并触碰边界/桌宠）时结束彩蛋、恢复正常姿态。
 # 量级参照 physics.is_at_rest 的静止判定（REST_VY / REST_VX 为几十 px/s 量级）。
-# 120 太低：多只桌宠互撞时 _predict_collision_bounce 不断补速度，速度长期
-# 在 120~240 徘徊降不到阈值 → 彩蛋卡死，故提到 240（另见时间硬上限兜底）。
-THROW_EGG_RECOVER_SPEED = 240.0  # px/s
-
-# 飞行时间硬上限（秒）：超过即无条件结束彩蛋。
-# 纯速度阈值在「多只桌宠互撞、速度被反复补充」时可能永远不满足，
-# 必须有一条与速度无关的时间兜底，保证彩蛋不会永久卡死。
-THROW_EGG_MAX_FLIGHT_SECONDS = 8.0
+# 120/240 都太低：多只桌宠互撞时 _predict_collision_bounce 不断补速度，速度
+# 降不到阈值 → 彩蛋卡死，故拉到 400（用户实机要求，明确不要时间硬上限）。
+THROW_EGG_RECOVER_SPEED = 400.0  # px/s
 
 
 class ThrowEggController:
@@ -30,16 +24,13 @@ class ThrowEggController:
 
     每个 PetWindow 持有同一实例；仅在边缘探头激活被撞时由 arm() 开启。
     飞行中每 tick 以 update() 跟随速度方向更新角度；落地停稳（_stop_physics
-    兜底）、低速触碰边界或桌宠、或飞行超过时间硬上限时 end() 结束并恢复
-    正常姿态。不依赖素材。
+    兜底）、低速触碰边界或桌宠时 end() 结束并恢复正常姿态。不依赖素材。
     """
 
     def __init__(self, win: Any) -> None:
         self.win = win
         self._active = False
         self._angle_deg = 0.0
-        # arm() 起点（time.monotonic）：飞行时间硬上限兜底用。
-        self._armed_at = 0.0
 
     # ------------------------------------------------------------ 查询
     @property
@@ -54,20 +45,15 @@ class ThrowEggController:
         """仅探头激活被撞时由 edge_probe.cancel 调用 → 开始头部跟随速度。"""
         self._active = True
         self._angle_deg = 0.0
-        self._armed_at = time.monotonic()
         self._notify()
 
     def update(self, vx: float, vy: float, touching_boundary: bool) -> None:
-        """每 tick 由 _tick_throw_physics 调用；低速贴界或超时则恢复正常姿态。
+        """每 tick 由 _tick_throw_physics 调用；低速贴界则恢复正常姿态。
 
         速度高于阈值时才更新角度（低于阈值保持当前角，防抖）；
-        速度低于阈值且触碰边界 → end()；飞行超过 THROW_EGG_MAX_FLIGHT_SECONDS
-        无条件 end()（多只桌宠互撞时速度可能永远降不到阈值，时间兜底防卡死）。
+        速度低于阈值且触碰边界 → end()。不设飞行时间上限（用户明确要求）。
         """
         if not self._active:
-            return
-        if time.monotonic() - self._armed_at >= THROW_EGG_MAX_FLIGHT_SECONDS:
-            self.end()
             return
         speed = math.hypot(vx, vy)
         if speed >= THROW_EGG_RECOVER_SPEED:

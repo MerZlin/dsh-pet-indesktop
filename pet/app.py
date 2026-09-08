@@ -1377,7 +1377,7 @@ class AppShell:
             _show_startup_error('生小肥鱼失败', str(exc))
 
     def clear_spawned_pets(self) -> None:
-        """右键菜单快捷入口：确认后关闭所有小肥鱼并删除 slot 数据。"""
+        """右键菜单快捷入口：确认后退出所有小肥鱼（设置与数据保留）。"""
         from .child_pet_cleanup import clear_spawned_pets as cleanup_slots
 
         if self._clear_spawned_pending:
@@ -1386,8 +1386,8 @@ class AppShell:
         parent = self.win if self.win is not None and hasattr(self.win, "winId") else None
         answer = QMessageBox.question(
             parent,
-            "清除子肥鱼",
-            "将关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。\n\n此操作不可撤销，确定继续吗？",
+            "退出子肥鱼",
+            "将退出所有已生成的小肥鱼。\n\n它们的设置与数据会保留，下次生成时原样恢复。确定继续吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -1412,7 +1412,8 @@ class AppShell:
         """逐只异步关闭进程内子窗（每只之间让出事件循环，UI 不冻结）。
 
         窗口已销毁（弱引用失效）或已被关闭（不在登记表）则跳过；链尾执行
-        文件级清理并弹结果框。异常只记录不中断，保证进行中标记一定复位。
+        文件级收尾（杀残余多进程子进程）并弹结果框。异常只记录不中断，
+        保证进行中标记一定复位。
         """
         if index >= len(refs):
             self._finish_clear_spawned_pets(cleanup_slots, parent)
@@ -1429,7 +1430,7 @@ class AppShell:
             0, lambda: self._clear_spawned_chain(refs, index + 1, cleanup_slots, parent))
 
     def _finish_clear_spawned_pets(self, cleanup_slots, parent) -> None:
-        """链式关闭收口：文件级清理 + 结果框，并复位进行中标记（异常也复位）。"""
+        """链式关闭收口：文件级退出残余子进程 + 结果框，并复位进行中标记。"""
         try:
             result = cleanup_slots(self.config.dir)
         finally:
@@ -1439,9 +1440,9 @@ class AppShell:
             parent = None
         QMessageBox.information(
             parent,
-            "清除子肥鱼",
-            f"已关闭 {len(result['killed_pids'])} 个小肥鱼进程，"
-            f"并清除 {len(result['deleted'])} 个 slot 数据项。",
+            "退出子肥鱼",
+            f"已退出 {len(result['killed_pids'])} 个小肥鱼进程；"
+            f"它们的设置与数据已保留。",
         )
 
     def spawn_in_process_window(self, offset_index: int = 1) -> PetInstance:

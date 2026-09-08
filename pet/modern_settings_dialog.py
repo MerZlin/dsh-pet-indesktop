@@ -300,7 +300,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("spawn_inherit_dynamic_island", "生小肥鱼继承灵动岛",
                        "默认关闭：新生成的小肥鱼不打开自己的灵动岛。开启后小肥鱼继承主肥鱼的灵动岛设置。",
                        self.spawn_inherit_dynamic_island_check),
-            SettingRow("clear_spawned_pets", "一键清除子肥鱼",
+            SettingRow("clear_spawned_pets", "一键退出子肥鱼",
                        "关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。",
                        self.clear_spawned_pets_btn),
         ], behavior_content))
@@ -563,7 +563,7 @@ class ModernSettingsDialog(QDialog):
         self.spawn_inherit_dynamic_island_check.setChecked(
             bool(self.config.get("spawn_inherit_dynamic_island", False))
         )
-        self.clear_spawned_pets_btn = QPushButton("一键清除…", self)
+        self.clear_spawned_pets_btn = QPushButton("一键退出…", self)
         self.clear_spawned_pets_btn.clicked.connect(self._on_clear_spawned_pets)
 
         self.on_top_check = ToggleSwitch(self)
@@ -1384,11 +1384,11 @@ class ModernSettingsDialog(QDialog):
         )
 
     def _on_clear_spawned_pets(self) -> None:
-        """一键关闭并清除所有小肥鱼（slot-N）的配置/会话/待办数据。
+        """一键退出所有小肥鱼（slot-N）；它们的设置与数据保留。
 
         优先走 PetWindow 上已接线的 ``on_clear_spawned_pets``（= AppShell 路径，
         自带确认框与进程内子窗前置于关闭，单进程模式才清得掉）；拿不到回调时
-        回退为原有的「确认 + 直接文件级清理」。
+        回退为「确认 + 直接文件级退出」。
         """
         callback = getattr(self.parentWidget(), "on_clear_spawned_pets", None)
         if callable(callback):
@@ -1396,8 +1396,8 @@ class ModernSettingsDialog(QDialog):
             return
         answer = QMessageBox.question(
             self,
-            "清除子肥鱼",
-            "将关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。\n\n此操作不可撤销，确定继续吗？",
+            "退出子肥鱼",
+            "将退出所有已生成的小肥鱼。\n\n它们的设置与数据会保留，下次生成时原样恢复。确定继续吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -1407,9 +1407,9 @@ class ModernSettingsDialog(QDialog):
         result = clear_spawned_pets(self.config.dir)
         QMessageBox.information(
             self,
-            "清除子肥鱼",
-            f"已关闭 {len(result['killed_pids'])} 个小肥鱼进程，"
-            f"并清除 {len(result['deleted'])} 个 slot 数据项。",
+            "退出子肥鱼",
+            f"已退出 {len(result['killed_pids'])} 个小肥鱼进程；"
+            f"它们的设置与数据已保留。",
         )
 
     def _apply_agent_sound_enabled_now(self, checked: bool) -> None:

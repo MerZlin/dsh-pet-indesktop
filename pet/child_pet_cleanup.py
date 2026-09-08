@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""一键清除子肥鱼：关闭所有小肥鱼进程并删除 slot 配置/会话/待办数据。
+"""一键退出子肥鱼：关闭所有小肥鱼进程并清理 runtime 标记。
 
-只操作 config 目录下“非当前进程”的 runtime 标记与 slot-* 数据文件；
-主肥鱼（slot-0/config.json）不受影响。
+只退出子肥鱼进程/窗口（相当于一键退出其他所有子肥鱼），**不删除**它们的
+slot 配置、会话与待办数据——子肥鱼的设置（含 user_customized 占位）全部
+保留，下次生成时按占位语义恢复。主肥鱼（slot-0/config.json）不受影响。
 """
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import signal
 import subprocess
 import time
@@ -69,16 +69,17 @@ def _terminate_pet_process(pid: int) -> None:
 
 
 def clear_spawned_pets(config_dir: Path | str) -> dict:
-    """关闭并清理所有小肥鱼（slot-N）数据。
+    """关闭所有小肥鱼（slot-N）进程并清理其 runtime 标记。
 
-    返回 {"killed_pids": [...], "deleted": [路径...]}。
-    只处理非当前进程的 runtime 标记；slot-0 主肥鱼配置不会被删除。
+    只退出进程，**不删除** slot 配置/会话/待办数据（子肥鱼设置保留，
+    下次生成按占位语义恢复）。只处理非当前进程的 runtime 标记；
+    slot-0 主肥鱼不受影响。
+    返回 {"killed_pids": [...]}。
     """
     root = Path(config_dir)
     killed_pids: list[int] = []
-    deleted: list[str] = []
 
-    # 1) 关闭仍在运行的子肥鱼进程，并清理 runtime 标记。
+    # 关闭仍在运行的子肥鱼进程，并清理 runtime 标记。
     # 同时认旧名 runtime-*.json 与批5.2 版本化新名 pet-runtime-v2-*.json
     #（多进程模式只写 v2 名，旧 glob 匹配不到 → 子进程杀不掉）。
     markers = slot_manager_mod.list_runtime_marker_files(root)
@@ -98,25 +99,4 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
         except OSError:
             pass
 
-    # 2) 删除 slot-N 的配置、会话与待办数据（主 config.json / sessions / todo_items.json 不碰）。
-    for pattern in ("config-slot-*.json", "todo_items-slot-*.json"):
-        try:
-            matches = list(root.glob(pattern))
-        except OSError:
-            matches = []
-        for path in matches:
-            try:
-                path.unlink()
-                deleted.append(str(path))
-            except OSError:
-                pass
-    try:
-        session_dirs = list(root.glob("sessions-slot-*"))
-    except OSError:
-        session_dirs = []
-    for directory in session_dirs:
-        if directory.is_dir():
-            shutil.rmtree(directory, ignore_errors=True)
-            deleted.append(str(directory))
-
-    return {"killed_pids": killed_pids, "deleted": deleted}
+    return {"killed_pids": killed_pids}

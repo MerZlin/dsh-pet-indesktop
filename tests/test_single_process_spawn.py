@@ -1250,10 +1250,10 @@ def test_clear_spawned_pets_multi_process_flag_off_no_in_process_children(
     assert len(shell.instances) == 1
     shell.clear_spawned_pets()
 
-    # 多进程子进程被文件级清理杀/删；主窗保留
+    # 多进程子进程被文件级收尾杀掉；批 F 起 slot 数据保留；主窗保留
     assert terminated == [555]
     assert not v2.exists()
-    assert not (root / "config-slot-1.json").exists()
+    assert (root / "config-slot-1.json").exists()
     assert len(shell.instances) == 1
     assert shell.instance is shell.instances[0]
 
