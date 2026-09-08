@@ -1387,6 +1387,11 @@ class AppShell:
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
+        # 单进程模式前置：进程内「非主窗」小肥鱼（PID=主进程）会被文件级清理的
+        # pid==os.getpid() 自我保护跳过而永远清不掉，先按进程内子窗登记表枚举
+        # 并关闭它们；再走文件级清理杀多进程子进程。两条路径都幂等，清完不留
+        # runtime 标记残留（不依赖子进程标记里的单进程 flag——那是冻结值）。
+        self._close_spawned_in_process_windows()
         result = cleanup_slots(self.config.dir)
         QMessageBox.information(
             parent,
@@ -1394,6 +1399,25 @@ class AppShell:
             f"已关闭 {len(result['killed_pids'])} 个小肥鱼进程，"
             f"并清除 {len(result['deleted'])} 个 slot 数据项。",
         )
+
+    def _close_spawned_in_process_windows(self) -> list[PetInstance]:
+        """单进程模式前置：关闭所有进程内「非主窗」小肥鱼实例。
+
+        单进程 spawn 的子肥鱼是进程内窗口（PID = 主进程），会被
+        ``child_pet_cleanup`` 的 ``pid == os.getpid()`` 自我保护跳过。这里按进程
+        内子窗登记表（``self._instances``）枚举并逐窗走「退出这只」收口（删
+        runtime 标记、释放 slot 锁、关本窗 writer），确保单进程与多进程两种模式
+        下都被清干净。幂等：无子窗时为空操作；重复调用无残留。
+        """
+        primary = self.instance
+        children = [inst for inst in self._instances if inst is not primary]
+        for inst in children:
+            try:
+                self._on_window_exit_requested(inst)
+            except Exception:
+                logging.exception(
+                    "清除子肥鱼：关闭进程内小肥鱼失败 (slot=%s)", inst.slot_id)
+        return children
 
     def spawn_in_process_window(self, offset_index: int = 1) -> PetInstance:
         """批5.2 spike：进程内创建第二个 PetInstance（不共享库/Config/SessionStore）。

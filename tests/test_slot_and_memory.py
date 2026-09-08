@@ -693,6 +693,48 @@ def test_migrate_legacy_spawns_skips_occupied_target_slot(tmp_path):
     sm._unlock_file(h1)
 
 
+def test_list_runtime_marker_files_returns_legacy_and_v2(tmp_path):
+    """批 B：list_runtime_marker_files 同时认旧名与版本化新名 runtime 标记。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "runtime-111.json").write_text("{}", encoding="utf-8")
+    (config_dir / "pet-runtime-v2-222-slot-1.json").write_text("{}", encoding="utf-8")
+    (config_dir / "pet-runtime-v2-333-slot-2.json").write_text("{}", encoding="utf-8")
+    (config_dir / "config-slot-1.json").write_text("{}", encoding="utf-8")
+    (config_dir / "sessions-slot-1").mkdir()
+
+    names = {p.name for p in sm.list_runtime_marker_files(config_dir)}
+    # 新旧两种命名都被列出
+    assert {"runtime-111.json",
+            "pet-runtime-v2-222-slot-1.json",
+            "pet-runtime-v2-333-slot-2.json"} <= names
+    # 非 runtime 标记文件不得被误列
+    assert "config-slot-1.json" not in names
+    assert "sessions-slot-1" not in names
+
+
+def test_migrate_legacy_spawns_skips_when_v2_marker_alive(tmp_path):
+    """批 B：migrate_legacy_spawns 检测 v2 版本化 runtime 标记（多进程模式只写
+    新名），发现存活实例时跳过迁移。旧 glob 只认 runtime-*.json 会误放行。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    old_cfg = config_dir / "config-spawn100x1.json"
+    old_cfg.write_text(json.dumps({"character": "spawn1"}), encoding="utf-8")
+    (config_dir / "sessions-spawn100x1").mkdir(parents=True, exist_ok=True)
+
+    # v2 标记用当前（必然存活）进程 pid
+    v2 = config_dir / f"pet-runtime-v2-{os.getpid()}-slot-1.json"
+    v2.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+
+    assert sm.migrate_legacy_spawns(config_dir) is False
+    # 旧配置未被迁移（检测到存活实例跳过）
+    assert old_cfg.exists()
+    assert not (config_dir / "config-slot-1.json").exists()
+    assert not (config_dir / "migration-spawns.done").exists()
+
+
 def test_app_main_validates_slot_arg():
     """测试 app.main 校验 --slot 参数范围（0~127）及非法值。"""
     from pet import app as app_mod

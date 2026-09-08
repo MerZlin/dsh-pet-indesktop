@@ -14,6 +14,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import slot_manager as slot_manager_mod
+
 
 def _pid_alive(pid: int) -> bool:
     """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。"""
@@ -77,10 +79,9 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
     deleted: list[str] = []
 
     # 1) 关闭仍在运行的子肥鱼进程，并清理 runtime 标记。
-    try:
-        markers = list(root.glob("runtime-*.json"))
-    except OSError:
-        markers = []
+    # 同时认旧名 runtime-*.json 与批5.2 版本化新名 pet-runtime-v2-*.json
+    #（多进程模式只写 v2 名，旧 glob 匹配不到 → 子进程杀不掉）。
+    markers = slot_manager_mod.list_runtime_marker_files(root)
     for marker in markers:
         try:
             data = json.loads(marker.read_text(encoding="utf-8"))

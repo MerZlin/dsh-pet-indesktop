@@ -341,8 +341,9 @@ def migrate_legacy_spawns(config_dir: Path | str) -> bool:
             pass
         return True
 
-    # 检查是否有旧实例正在运行（通过 runtime marker 探测）
-    for runtime_file in config_path.glob("runtime-*.json"):
+    # 检查是否有旧实例正在运行（通过 runtime marker 探测；同时认旧名与
+    # 批5.2 版本化新名，否则多进程模式的新标记匹配不到、迁移被误放行）
+    for runtime_file in list_runtime_marker_files(config_path):
         try:
             data = json.loads(runtime_file.read_text(encoding="utf-8"))
             pid = data.get("pid")
@@ -547,6 +548,22 @@ def delete_runtime_marker(config_dir: Path | str, instance_id: str = "",
                 path.unlink()
         except OSError:
             pass
+
+
+def list_runtime_marker_files(config_dir: Path | str) -> list[Path]:
+    """列出 config 目录内全部 runtime 标记文件。
+
+    同时认旧名 ``runtime-<pid>.json`` 与批5.2 版本化新名
+    ``pet-runtime-v2-<pid>-slot-<N>.json``。清理/迁移必须覆盖两种命名，否则
+    多进程模式下的新标记（只写 v2 名）匹配不到、子进程杀不掉/迁移被误放行。
+    """
+    root = Path(config_dir)
+    try:
+        files = list(root.glob("runtime-*.json"))
+        files.extend(root.glob(f"{_RUNTIME_V2_PREFIX}*.json"))
+        return files
+    except OSError:
+        return []
 
 
 def read_live_instances(

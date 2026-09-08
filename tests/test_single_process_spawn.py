@@ -1010,3 +1010,118 @@ def test_seed_slot_config_preserves_existing(tmp_path):
     assert slot_manager_mod.seed_slot_config_from_main(config_dir, 3) is False
     assert json.loads((config_dir / "config-slot-3.json").read_text(
         encoding="utf-8")) == existing
+
+
+# --------------------------------------------------------------------------
+# 批 B：clear_spawned_pets 单进程模式（进程内子窗）前置关闭
+# --------------------------------------------------------------------------
+def test_clear_spawned_pets_closes_in_process_children_no_residue(
+        tmp_path, app, monkeypatch):
+    """批 B：单进程模式下 clear_spawned_pets 先关闭进程内「非主窗」子肥鱼窗口、
+    删除其 runtime 标记，主窗保留；重复调用幂等无残留。
+
+    子肥鱼在单进程模式是进程内窗口（PID=主进程），会被文件级清理的
+    pid==os.getpid() 自我保护跳过而永远不会被关；修复后先按进程内子窗登记表
+    （self._instances）枚举并关闭，再走文件级清理杀多进程子进程。
+    """
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+
+    # 主窗窗身 + 主窗 runtime 标记（主肥鱼不清，须保留）
+    primary = shell.instance
+    primary_win = _FakeWindow()
+    primary_win.cfg = config
+    primary_win._single_process_spawn = True
+    primary.win = primary_win
+    primary_marker = slot_manager_mod.runtime_marker_path(
+        config.dir, config.instance_id, versioned=True)
+    primary_marker.write_text(
+        json.dumps({"pid": os.getpid(), "x": 0, "y": 0, "w": 100, "h": 100}),
+        encoding="utf-8")
+
+    # 第二个实例（进程内子窗，同 pid=主进程）
+    slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(
+        config.dir, preferred_slot=1)
+    sec = PetInstance(shell, Config(base=tmp_path, instance_id="slot-1"),
+                      enable_chat=True, slot_handle=slot_handle, slot_id=slot_id)
+    sec_win = _FakeWindow()
+    sec_win.cfg = sec.config
+    sec_win._single_process_spawn = True
+    sec.win = sec_win
+    shell._instances.append(sec)
+    sec_marker = slot_manager_mod.runtime_marker_path(
+        config.dir, sec.config.instance_id, versioned=True)
+    sec_marker.write_text(
+        json.dumps({"pid": os.getpid(), "x": 100, "y": 100, "w": 100, "h": 100}),
+        encoding="utf-8")
+
+    # 子窗会话/broker 打桩（避免真实 QLocal/共享 hub 收口的副作用）
+    monkeypatch.setattr(sec.collision_ipc, "stop", lambda: None)
+    monkeypatch.setattr(sec.broker_facade, "shutdown", lambda: None)
+
+    # 确认对话框返回 Yes
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "question",
+        lambda *a, **kw: app_mod.QMessageBox.StandardButton.Yes)
+
+    assert len(shell.instances) == 2
+    shell.clear_spawned_pets()
+
+    # 子窗被关闭并移除；主窗保留
+    assert len(shell.instances) == 1
+    assert shell.instance is primary
+    assert sec not in shell.instances
+    assert sec_win.calls == ["save", "marker_del", "close"]
+    # 子窗 v2 标记被删；主窗标记保留（主肥鱼仍在跑）
+    assert not sec_marker.exists()
+    assert primary_marker.exists()
+    # 子窗 slot 锁已释放
+    assert sec.slot_handle is None
+
+    # 幂等：再跑一遍无残留、不报错
+    shell.clear_spawned_pets()
+    assert len(shell.instances) == 1
+    assert shell.instance is primary
+    assert primary_marker.exists()
+
+    slot_manager_mod._unlock_file(primary_handle)
+
+
+def test_clear_spawned_pets_multi_process_flag_off_no_in_process_children(
+        tmp_path, app, monkeypatch):
+    """批 B：多进程模式（flag 关）clear_spawned_pets 无进程内子窗时，前置路径
+    为空操作，随后文件级清理照常跑通、主窗保留（幂等、不误关主窗）。"""
+    import pet.child_pet_cleanup as cleanup_mod
+
+    config = Config(tmp_path)
+    config.set("experimental_single_process_spawn", False)
+    config.save()
+    shell = AppShell(QApplication.instance(), config, enable_chat=True)
+
+    primary_win = _FakeWindow()
+    primary_win.cfg = config
+    shell.instance.win = primary_win
+
+    # 模拟多进程子肥鱼：一个 v2 存活标记（假 PID）+ slot 数据
+    root = config.dir
+    (root / "config-slot-1.json").write_text("{}", encoding="utf-8")
+    v2 = root / "pet-runtime-v2-555-slot-1.json"
+    v2.write_text(json.dumps({"pid": 555}), encoding="utf-8")
+
+    terminated = []
+    monkeypatch.setattr(cleanup_mod, "_pid_alive", lambda pid: pid == 555)
+    monkeypatch.setattr(
+        cleanup_mod, "_terminate_pet_process", lambda pid: terminated.append(pid))
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "question",
+        lambda *a, **kw: app_mod.QMessageBox.StandardButton.Yes)
+
+    # 无进程内子窗（flag 关），只有主窗
+    assert len(shell.instances) == 1
+    shell.clear_spawned_pets()
+
+    # 多进程子进程被文件级清理杀/删；主窗保留
+    assert terminated == [555]
+    assert not v2.exists()
+    assert not (root / "config-slot-1.json").exists()
+    assert len(shell.instances) == 1
+    assert shell.instance is shell.instances[0]
