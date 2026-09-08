@@ -325,8 +325,17 @@ def test_terminate_uses_create_no_window_on_windows(monkeypatch):
     import pet.child_pet_cleanup as mod
 
     calls = []
-    monkeypatch.setattr(mod.subprocess, "run",
-                        lambda *a, **kw: calls.append(kw))
+
+    class _FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(*a, **kw):
+        calls.append(kw)
+        return _FakeProc()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
     mod._terminate_pet_process(12345)
     assert len(calls) == 1
     assert calls[0].get("creationflags") == sp.CREATE_NO_WINDOW

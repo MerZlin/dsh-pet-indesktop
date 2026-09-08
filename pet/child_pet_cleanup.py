@@ -45,19 +45,27 @@ def _pid_alive(pid: int) -> bool:
 
 def _terminate_pet_process(pid: int) -> None:
     """终止子肥鱼进程。Windows 使用 taskkill /T /F（CREATE_NO_WINDOW 防 GUI 应用
-    每杀一只弹一个空白控制台窗口——实机反馈），POSIX 先 SIGTERM 再补 SIGKILL。"""
+    每杀一只弹一个空白控制台窗口——实机反馈），POSIX 先 SIGTERM 再补 SIGKILL。
+
+    taskkill 的输出不再吞掉：返回码/stdout/stderr 写日志——实机上出现过
+    「taskkill 跑完进程还在」且零线索可查（20:56 事件），失败原因必须可见。
+    """
     if os.name == "nt":
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                capture_output=True, text=True,
                 timeout=5,
                 # GUI 进程（无控制台）里起 taskkill 会弹空白控制台窗口
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
+            if proc.returncode != 0:
+                logging.warning(
+                    "退出子肥鱼：taskkill pid=%d 返回码 %s: %s%s",
+                    pid, proc.returncode,
+                    (proc.stdout or "").strip(), (proc.stderr or "").strip())
         except Exception:
-            pass
+            logging.exception("退出子肥鱼：taskkill pid=%d 执行异常", pid)
         return
     try:
         os.kill(pid, signal.SIGTERM)
@@ -185,8 +193,10 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
             killed_pids.append(pid)
         else:
             failed_pids.append(pid)
+            # 诊断：杀不掉时记录存活者到底是谁（pid 复用？还是真没杀掉）
             logging.warning(
-                "退出子肥鱼：pid=%d 未能退出，保留标记供下次重试", pid)
+                "退出子肥鱼：pid=%d 未能退出，存活者镜像=%s，保留标记供下次重试",
+                pid, _pid_image_path(pid))
 
     # 第一枚举源：runtime 标记（旧名 runtime-*.json + v2 新名
     # pet-runtime-v2-*.json，多进程模式只写旧名、单进程模式写 v2 名）。
