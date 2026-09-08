@@ -24,6 +24,8 @@ EDGE_ENTER_MS = 300
 EDGE_STRAIGHTEN_MS = 250
 EDGE_RETURN_MS = 300
 EDGE_IDLE_SECONDS = 5.0
+# 碰撞撞飞落地停稳后允许重新进入探头吸附前的等待秒数（批 A）。
+EDGE_REENTRY_SECONDS = 5.0
 
 OFF = "OFF"
 ENTERING = "ENTERING"
@@ -92,6 +94,13 @@ class EdgeProbeController:
         self._transition_to_exposure = 1.0
         self._hidden = False
         self._paused_at = 0.0
+        # 批 A：碰撞撞飞取消会话后，是否等待/正在执行“落地停稳→边缘重进”流程。
+        # _reentry_armed    True 表示本次撞飞取消源于碰撞，落地后可重新进入探头。
+        # _reentry_active   True 表示 5 秒重进倒计时正在进行。
+        # _reentry_remaining 剩余秒数。
+        self._reentry_armed = False
+        self._reentry_active = False
+        self._reentry_remaining = 0.0
         self._timer = QTimer(win)
         self._timer.setInterval(16)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -139,6 +148,9 @@ class EdgeProbeController:
         # 非拖拽点击走窗口 _on_click -> _effects_consume_click -> on_clicked
 
     def on_drag_started(self) -> None:
+        if self._reentry_active:
+            # 批 A：重新进入探头吸附的倒计时期间发生拖拽，作废本次倒计时。
+            self._cancel_reentry()
         if self.active and self.enabled and not self._hidden:
             self.cancel("drag_away", restore=False)
 
@@ -166,8 +178,43 @@ class EdgeProbeController:
             # 已在转直/进入中，不重复打断；若已接近转直则重置倒计时稍后由状态落定处理。
             pass
 
+    def on_throw_settled(self) -> None:
+        """碰撞撞飞落地停稳后触发（由 CollisionClient 在 throw 物理结束时回调）。
+
+        若会话此前因碰撞被取消（_reentry_armed）且当前静止于屏幕边缘，则开始
+        5 秒重进倒计时；倒计时内拖拽作废（on_drag_started），到期仍静止于边缘
+        则重新进入探头吸附。幂等：未 armed、被禁用/隐藏、已激活或不在边缘时直接返回。
+        """
+        if not self._reentry_armed:
+            return
+        self._reentry_armed = False
+        if not self.enabled or self._hidden or self.active:
+            return
+        scr = self.win.screen_available()
+        avail = scr.availableGeometry() if scr is not None else None
+        if avail is None:
+            return
+        if edge_side_at_rest(self.win, avail) is None:
+            return
+        self._reentry_active = True
+        self._reentry_remaining = EDGE_REENTRY_SECONDS
+        self._last_tick_time = self._clock()
+        self._timer.start()
+
+    def _cancel_reentry(self) -> None:
+        """作废正在执行的重进倒计时（拖拽/取消会话/到期前被打断时调用）。幂等。"""
+        if not self._reentry_active:
+            return
+        self._reentry_active = False
+        self._reentry_remaining = 0.0
+        self._timer.stop()
+
     def cancel(self, reason: str = "", restore: bool = False) -> None:
-        """取消会话。restore=True 时恢复进入探头前的窗口 x（用于关闭功能/角色切换）。"""
+        """取消会话。restore=True 时恢复进入探头前的窗口 x（用于关闭功能/角色切换）。
+
+        批 A：碰撞撞飞（reason == "collision_throw"）并确实处于激活会话时，标记
+        落地后允许重新进入探头（_reentry_armed），由 on_throw_settled 接续。
+        """
         was_active = self.active
         self._mode = OFF
         self._side = None
@@ -175,6 +222,11 @@ class EdgeProbeController:
         self._exposure = 1.0
         self._idle_remaining = 0.0
         self._timer.stop()
+        if was_active and reason == "collision_throw":
+            self._reentry_armed = True
+        else:
+            self._reentry_armed = False
+        self._cancel_reentry()
         restore_x = self._restore_x
         self._restore_x = None
         self._vis_local = None
@@ -204,7 +256,7 @@ class EdgeProbeController:
         if not self._hidden:
             return
         self._hidden = False
-        if not self.active:
+        if not self.active and not self._reentry_active:
             return
         now = self._clock()
         if self._mode in _TRANSITION_MODES:
@@ -212,7 +264,7 @@ class EdgeProbeController:
             elapsed_at_pause = max(0.0, self._paused_at - self._transition_start)
             self._transition_start = now - elapsed_at_pause
         self._last_tick_time = now
-        if self._mode in _TRANSITION_MODES or self._mode == STRAIGHTENED:
+        if self._mode in _TRANSITION_MODES or self._mode == STRAIGHTENED or self._reentry_active:
             self._timer.start()
 
     # ------------------------------------------------------------ 状态机
@@ -275,6 +327,14 @@ class EdgeProbeController:
         if self._hidden:
             return
         now = self._clock()
+        if self._reentry_active:
+            dt = max(0.0, now - self._last_tick_time)
+            self._last_tick_time = now
+            self._reentry_remaining = max(0.0, self._reentry_remaining - dt)
+            if self._reentry_remaining <= 0.0:
+                self._cancel_reentry()
+                self._maybe_enter()
+            return
         if self._mode in _TRANSITION_MODES:
             self._tick_transition(now)
         elif self._mode == STRAIGHTENED:

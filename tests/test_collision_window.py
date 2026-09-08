@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from pet import catalog, collision
 from pet import physics as physics_mod
 from pet.config import Config
+from pet.edge_probe import EDGE_REENTRY_SECONDS
 from pet.window import PetWindow, THROWN
 
 NAMES = [
@@ -907,4 +908,32 @@ def test_self_talk_prunes_images_deleted_while_running(tmp_path, app):
     img.unlink()  # 运行期间被删
     assert win._show_random_self_talk() is False  # 无文本无图 → 不弹
     assert win._self_talk_images == []            # 惰性剔除生效
+    win.close()
+
+
+def test_real_collision_impulse_cancels_edge_probe_and_settle_arms_reentry(tmp_path, app):
+    """批 A 集成：探头激活→真实撞击→会话被取消→撞飞落地停稳后启动重进倒计时。"""
+    win, session = _make_pet_window(tmp_path, "pet_probe")
+    avail = win.screen_available().availableGeometry()
+    local = win.character_local_region()
+    win.move(avail.left() - local.left(), 100)
+    win.cfg.set("edge_probe_enabled", True)
+    win.sync_optional_services()
+    probe = win._edge_probe
+    probe.on_release(was_dragging=True)
+    assert probe.active
+
+    msg = {"a": "pet_probe", "b": "other", "pair": "other|pet_probe",
+           "dvx_a": 400.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0}
+    win._on_collision_impulse(msg)
+    # 真实撞击进入 throw 物理前已取消探头会话（不回拉位置）。
+    assert probe.active is False
+    assert probe.mode == "OFF"
+    assert probe._reentry_armed is True
+
+    # 撞飞落地停稳：_stop_physics 会先把 _physics_mode 置 None 再回调状态提交，
+    # 由 CollisionClient 检测到 throw 结束并通知边缘探头开始重进倒计时。
+    win._stop_physics()
+    assert probe._reentry_active is True
+    assert abs(probe._reentry_remaining - EDGE_REENTRY_SECONDS) < 1e-6
     win.close()

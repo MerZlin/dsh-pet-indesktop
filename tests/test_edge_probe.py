@@ -11,8 +11,10 @@ from pet.edge_probe import (
     EDGE_IDLE_SECONDS,
     EDGE_PEEK_EXPOSURE,
     EDGE_PROBE_ANGLE,
+    EDGE_REENTRY_SECONDS,
     EDGE_RETURN_MS,
     EDGE_STRAIGHTEN_MS,
+    OFF,
     PEEKING,
     STRAIGHTENED,
     EdgeProbeController,
@@ -236,3 +238,83 @@ def test_feature_off_cancels_and_restores_position():
     ctrl.set_enabled(False)
     assert not ctrl.active
     assert ctrl.win.x() == -100
+
+
+def _activate_probe_at_left_edge(ctrl, times):
+    ctrl.win.move(-100, 100)
+    ctrl.win.anim = "idle"
+    ctrl.on_release(was_dragging=True)
+    times[0] += EDGE_ENTER_MS / 1000.0
+    ctrl._on_timer()
+    assert ctrl.mode == PEEKING
+
+
+def test_collision_throw_cancels_and_settle_reenters_probe():
+    """批 A：碰撞撞飞取消探头会话→落地停稳后 5 秒到期重新进入探头吸附。"""
+    _qapp()
+    ctrl, times = _controller_and_clock()
+    _activate_probe_at_left_edge(ctrl, times)
+    # 真实撞击：取消会话（物理引擎接管位置，不回拉），并标记落地后可重进。
+    ctrl.cancel("collision_throw", restore=False)
+    assert not ctrl.active
+    assert ctrl.mode == OFF
+    assert ctrl._reentry_armed
+    # 落地停稳（仍静止于左边缘）→ 开始 5s 重进倒计时。
+    ctrl.on_throw_settled()
+    assert ctrl._reentry_active
+    assert abs(ctrl._reentry_remaining - EDGE_REENTRY_SECONDS) < 1e-6
+    # 倒计时内未拖拽 → 到期重新进入探头。
+    times[0] += EDGE_REENTRY_SECONDS + 0.1
+    ctrl._on_timer()
+    assert not ctrl._reentry_active
+    assert ctrl.active
+    assert ctrl.mode == "ENTERING"
+    times[0] += EDGE_ENTER_MS / 1000.0
+    ctrl._on_timer()
+    assert ctrl.mode == PEEKING
+    assert ctrl.win.x() == -220
+    ctrl.cancel(restore=True)
+
+
+def test_collision_throw_reentry_countdown_cancelled_by_drag():
+    """批 A：重进倒计时期间发生拖拽 → 作废本次倒计时，不再重新进入探头。"""
+    _qapp()
+    ctrl, times = _controller_and_clock()
+    _activate_probe_at_left_edge(ctrl, times)
+    ctrl.cancel("collision_throw", restore=False)
+    ctrl.on_throw_settled()
+    assert ctrl._reentry_active
+    ctrl.on_drag_started()
+    assert not ctrl._reentry_active
+    # 倒计时已被作废：即便时间走到 5 秒也不再重新进入探头。
+    times[0] += EDGE_REENTRY_SECONDS + 0.1
+    ctrl._on_timer()
+    assert not ctrl.active
+    assert ctrl.mode == OFF
+    ctrl.cancel(restore=True)
+
+
+def test_non_collision_cancel_does_not_arm_reentry():
+    """批 A：非碰撞导致的取消（如拖离）不标记落地后重进。"""
+    _qapp()
+    ctrl, times = _controller_and_clock()
+    _activate_probe_at_left_edge(ctrl, times)
+    ctrl.cancel("drag_away", restore=False)
+    assert not ctrl._reentry_armed
+    ctrl.on_throw_settled()
+    assert not ctrl._reentry_active
+    assert not ctrl.active
+    ctrl.cancel(restore=True)
+
+
+def test_collision_throw_settle_off_edge_does_not_start_countdown():
+    """批 A：撞飞落地后静止于屏幕中央（非边缘）时不开始重进倒计时。"""
+    _qapp()
+    ctrl, times = _controller_and_clock()
+    _activate_probe_at_left_edge(ctrl, times)
+    ctrl.cancel("collision_throw", restore=False)
+    ctrl.win.move(400, 300)  # 中央，不在左/右边缘
+    ctrl.on_throw_settled()
+    assert not ctrl._reentry_active
+    assert not ctrl.active
+    ctrl.cancel(restore=True)
