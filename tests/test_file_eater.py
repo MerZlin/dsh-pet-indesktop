@@ -146,3 +146,49 @@ def test_format_bytes_has_human_readable_units():
     assert format_bytes(2048) == "2.0 KB"
     assert format_bytes(3 * 1024 * 1024) == "3.0 MB"
     assert format_bytes(4 * 1024 * 1024 * 1024) == "4.0 GB"
+
+
+def test_petinstance_build_window_wires_file_eater(tmp_path, monkeypatch):
+    """回归：PR73 在 _build_window 里接线 install_file_eater()，#76 重构时被
+    丢掉——真实建窗路径必须把文件投喂 handler 挂到每只桌宠上。
+
+    用记录替身窗锁定 app 层 seam（install_file_eater 幂等/acceptDrops 的
+    mixin 行为由 test_install_file_eater_is_idempotent_and_accepts_drops
+    单独覆盖）。
+    """
+    import pet.app as app_mod
+    from pet.app import AppShell
+    from pet.config import Config
+    from tests.test_predictive_prewarm import FakeLibrary
+
+    app = _qapp()
+
+    class _SpyWindow:
+        def __init__(self, *args, **kwargs):
+            self.file_eater_install_calls = 0
+
+        def install_file_eater(self):
+            self.file_eater_install_calls += 1
+
+        def show(self):
+            pass
+
+    real_petwindow = app_mod.PetWindow
+    monkeypatch.setattr(app_mod, "PetWindow", _SpyWindow)
+    try:
+        cfg = Config(tmp_path)
+        cfg.set("todo_reminder_enabled", False)
+        cfg.set("collision_enabled", False)
+        cfg.set("click_sound_enabled", False)
+        cfg.set("collision_sound_enabled", False)
+        shell = AppShell(app, cfg, enable_chat=False)
+        try:
+            spy = shell.instance._build_window("shenshen", lib=FakeLibrary(), build_tray=False)
+            assert spy.file_eater_install_calls == 1, "建窗路径必须调用 install_file_eater()（PR73 接线，#76 后丢失）"
+        finally:
+            try:
+                shell.instance.collision_ipc.stop()
+            except Exception:
+                pass
+    finally:
+        monkeypatch.setattr(app_mod, "PetWindow", real_petwindow)

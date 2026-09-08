@@ -409,6 +409,9 @@ class PetInstance:
         # P1-2：窗级 runtime 标记版本化 / 日志前缀读进程级 flag 快照（不读每窗 config）。
         # N-1：快照经构造参数在 _restore_position 之前生效（窗构造期就会写标记）。
         self._wire_window(win)
+        # 文件投喂（拖文件模拟吃掉）：PR73 引入的接线在批5.2 重构时被丢，
+        # 必须随每只窗的创建（启动/切角色/多窗）挂载，缺失则拖放无效。
+        win.install_file_eater()
         # 预热点击音效：首次创建 QSoundEffect/QMediaPlayer 池并等待加载完成，
         # 在显示窗口前完成，避免窗口出现后主线程被音频初始化阻塞、
         # 首次点击 Q 弹卡顿。音效关闭时不预热，避免无谓拉起 QtMultimedia 池。
