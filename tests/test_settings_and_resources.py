@@ -154,3 +154,48 @@ def test_agent_sound_controls_visibility_and_subcontrols(qapp, tmp_path: Path):
         assert dialog.agent_sound_start_preview.isHidden() is False
     finally:
         dialog.deleteLater()
+
+
+def test_subfish_settings_save_sets_user_customized(qapp, tmp_path: Path):
+    """批 C：子肥鱼自己的设置界面保存会置位 user_customized=True。"""
+    cfg_root = tmp_path / "appdata"
+    cfg = Config(cfg_root, instance_id="slot-1")
+    dialog = ModernSettingsDialog(cfg, include_ai=False)
+    try:
+        ok = dialog._write_config()
+        assert ok is True
+    finally:
+        dialog.deleteLater()
+    assert cfg.get("user_customized") is True
+    reloaded = Config(cfg_root, instance_id="slot-1")
+    assert reloaded.get("user_customized") is True
+
+
+def test_main_settings_save_does_not_set_user_customized(qapp, tmp_path: Path):
+    """批 C：主配置（slot 0/主肥鱼）保存不置位 user_customized（保持默认假）。"""
+    cfg_root = tmp_path / "appdata"
+    cfg = Config(cfg_root)
+    dialog = ModernSettingsDialog(cfg, include_ai=False)
+    try:
+        ok = dialog._write_config()
+        assert ok is True
+    finally:
+        dialog.deleteLater()
+    assert cfg.get("user_customized") is False
+    reloaded = Config(cfg_root)
+    assert reloaded.get("user_customized") is False
+
+
+def test_position_autosave_does_not_set_user_customized(tmp_path):
+    """批 C：位置自动保存等后台写盘不得置位 user_customized（保留默认假）。"""
+    cfg_root = tmp_path / "appdata"
+    cfg = Config(cfg_root, instance_id="slot-2")
+    # 模拟窗口 _save_position：写位置键 + save()，不经过设置界面。
+    cfg.set("rx", 0.5)
+    cfg.set("ry", 0.5)
+    cfg.set("screen_name", "X")
+    cfg.set("facing", "right")
+    cfg.save()
+    assert cfg.get("user_customized") is False
+    reloaded = Config(cfg_root, instance_id="slot-2")
+    assert reloaded.get("user_customized") is False

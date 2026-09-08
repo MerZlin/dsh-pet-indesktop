@@ -32,7 +32,7 @@ from pet.app import AppShell, PetInstance, _read_spawn_offset_env
 from pet.chat import session_store as session_store_mod
 from pet.chat.session_store import SessionStore
 from pet.collision_ipc import CollisionIpcSession
-from pet.config import Config
+from pet.config import APP_DIR_NAME, Config
 from pet.window import PetWindow
 
 
@@ -981,7 +981,7 @@ def test_non_primary_switch_builds_no_tray(tmp_path, app, monkeypatch):
 
 # ---------------------------------------------------------------- 新 slot 落种
 def test_seed_slot_config_follows_main_settings(tmp_path):
-    """新 slot 首次多开：配置跟随主设置（剔除每窗状态键）。"""
+    """新 slot 首次多开：配置跟随主设置（剔除每窗状态键，落种含 user_customized=False）。"""
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
     main_cfg = {"character": "shenshen", "click_sound_enabled": False,
@@ -994,22 +994,150 @@ def test_seed_slot_config_follows_main_settings(tmp_path):
         (config_dir / "config-slot-2.json").read_text(encoding="utf-8"))
     assert seeded["click_sound_enabled"] is False  # 跟随主设置
     assert seeded["character"] == "shenshen"
+    assert seeded.get("user_customized") is False  # 落种默认不置位
     for k in ("rx", "ry", "screen_name", "facing"):
         assert k not in seeded, f"每窗状态键 {k} 不得继承"
 
 
-def test_seed_slot_config_preserves_existing(tmp_path):
-    """已有存档（用户改过的）的 slot 不被落种覆盖。"""
+def test_seed_slot_config_applies_spawn_inherit_logic(tmp_path):
+    """批 C：落种遵循 spawn_inherit_size / spawn_scale / spawn_inherit_dynamic_island。"""
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(json.dumps({
+        "scale": 1.0,
+        "spawn_inherit_size": False,
+        "spawn_scale": 0.5,
+        "spawn_inherit_dynamic_island": True,
+        "dynamic_island": {"enabled": True},
+    }), encoding="utf-8")
+
+    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 7) is True
+    seeded = json.loads(
+        (config_dir / "config-slot-7.json").read_text(encoding="utf-8"))
+    # 关闭继承大小 → 用主配置为小肥鱼选定的 spawn_scale；继承灵动岛 → enabled=True
+    assert seeded["scale"] == 0.5
+    assert seeded["spawn_inherit_size"] is False
+    assert seeded["spawn_scale"] == 0.5
+    assert seeded["spawn_inherit_dynamic_island"] is True
+    assert seeded["dynamic_island"]["enabled"] is True
+    assert seeded.get("user_customized") is False
+
+
+def test_seed_slot_config_refreshes_non_customized_slot(tmp_path):
+    """批 C：slot 存在但 user_customized 为假（含旧存档无此键）→ 按当前主设置重新刷新。"""
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps({"character": "shenshen", "spawn_inherit_size": True}),
+        encoding="utf-8")
+    # 旧存档（无 user_customized 键）按假处理 → 应被刷新成主设置。
+    existing = {"character": "other", "custom": 1}
+    (config_dir / "config-slot-3.json").write_text(json.dumps(existing), encoding="utf-8")
+
+    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 3) is True
+    refreshed = json.loads(
+        (config_dir / "config-slot-3.json").read_text(encoding="utf-8"))
+    assert refreshed["character"] == "shenshen"  # 跟随主设置
+    assert refreshed.get("user_customized") is False
+
+
+def test_seed_slot_config_preserves_customized_slot(tmp_path):
+    """批 C：slot 存在且 user_customized 为真 → 整个跳过，一个键都不碰。"""
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(
         json.dumps({"character": "shenshen"}), encoding="utf-8")
-    existing = {"character": "other", "custom": 1}
-    (config_dir / "config-slot-3.json").write_text(
-        json.dumps(existing), encoding="utf-8")
-    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 3) is False
-    assert json.loads((config_dir / "config-slot-3.json").read_text(
+    existing = {"character": "other", "custom": 1, "user_customized": True}
+    (config_dir / "config-slot-4.json").write_text(json.dumps(existing), encoding="utf-8")
+
+    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 4) is False
+    assert json.loads((config_dir / "config-slot-4.json").read_text(
         encoding="utf-8")) == existing
+
+
+def test_seed_slot_config_refresh_preserves_slot_position(tmp_path):
+    """批 C：落种/刷新永不写位置键——刷新不覆盖 slot 自己拖动后自存的位置。"""
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    # 主配置的位置键是另一个值；刷新后 slot 应保留自己的位置，不被主配置覆盖。
+    (config_dir / "config.json").write_text(json.dumps({
+        "character": "shenshen",
+        "rx": 0.1, "ry": 0.2, "screen_name": "MAIN", "facing": "left",
+    }), encoding="utf-8")
+    existing = {"character": "other",
+                "rx": 0.6, "ry": 0.7, "screen_name": "SLOT", "facing": "right"}
+    (config_dir / "config-slot-5.json").write_text(json.dumps(existing), encoding="utf-8")
+
+    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 5) is True
+    refreshed = json.loads(
+        (config_dir / "config-slot-5.json").read_text(encoding="utf-8"))
+    assert refreshed["rx"] == 0.6
+    assert refreshed["ry"] == 0.7
+    assert refreshed["screen_name"] == "SLOT"
+    assert refreshed["facing"] == "right"
+
+
+def test_multi_process_start_seed_then_config_roundtrip(tmp_path):
+    """批 C：多进程启动路径（main 先 seed 再构造 Config）落种含 spawn 逻辑，Config 可读回。"""
+    config_dir = tmp_path / APP_DIR_NAME
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.json").write_text(json.dumps({
+        "scale": 1.0,
+        "spawn_inherit_size": False,
+        "spawn_scale": 0.5,
+        "spawn_inherit_dynamic_island": True,
+        "dynamic_island": {"enabled": True},
+    }), encoding="utf-8")
+
+    # 与 main() 的 seed → Config(instance_id) 次序一致。
+    assert slot_manager_mod.seed_slot_config_from_main(config_dir, 2) is True
+    cfg = Config(base=tmp_path, instance_id="slot-2")
+    assert cfg.get("scale") == 0.5
+    assert cfg.get("spawn_inherit_size") is False
+    assert cfg.get("spawn_scale") == 0.5
+    assert cfg.get("dynamic_island", {}).get("enabled") is True
+    assert cfg.get("user_customized") is False
+
+
+def test_spawn_in_process_window_routes_through_shared_seed(tmp_path, app, monkeypatch):
+    """批 C：进程内 spawn 调用点统一走共享落种函数（传对 slot_id），并产出 spawn 逻辑。"""
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+    real_seed = slot_manager_mod.seed_slot_config_from_main
+    calls = []
+
+    def spy(seed_dir, seed_slot):
+        calls.append((str(seed_dir), seed_slot))
+        return real_seed(seed_dir, seed_slot)
+
+    def fake_build_window(self, character_id, lib=None, build_tray=True):
+        win = _FakeWindow()
+        win.cfg = self.config
+        win._single_process_spawn = self.shell._single_process_spawn
+        self.win = win
+        return win
+
+    monkeypatch.setattr(slot_manager_mod, "seed_slot_config_from_main", spy)
+    monkeypatch.setattr(app_mod.PetInstance, "_build_window", fake_build_window)
+    monkeypatch.setattr(app_mod.PetInstance, "_apply_spawn_offset", lambda self: None)
+    monkeypatch.setattr(
+        app_mod.PetInstance, "_check_autostart_wanted", lambda self: None)
+
+    second = shell.spawn_in_process_window(1)
+
+    assert calls, "进程内 spawn 调用点应经共享落种函数"
+    # 共享落种函数收到的是主窗配置根 + 新 slot id
+    assert calls[0][1] == 1
+    # spawn 产物 slot 配置存在且落种 mark 默认假
+    seed_path = config.dir.parent / APP_DIR_NAME / "config-slot-1.json"
+    assert seed_path.exists()
+    seeded = json.loads(seed_path.read_text(encoding="utf-8"))
+    assert seeded.get("user_customized") is False
+
+    _stop_sessions(second)
+    second.win.close()
+    slot_manager_mod._unlock_file(second.slot_handle)
+    second.slot_handle = None
+    slot_manager_mod._unlock_file(primary_handle)
 
 
 # --------------------------------------------------------------------------

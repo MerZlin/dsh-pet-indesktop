@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -15,6 +16,9 @@ import time
 import re
 from pathlib import Path
 from typing import Any, BinaryIO
+
+from . import catalog
+from .config import _bool_or_default
 
 # 定长 PID 格式（16字节，右补空格与换行）
 PID_RECORD_LEN = 16
@@ -214,30 +218,91 @@ def get_config_path_for_slot(config_dir: Path | str, slot_id: int) -> Path:
     return config_path / "config.json" if slot_id == 0 else config_path / f"config-slot-{slot_id}.json"
 
 
-# 新 slot 落种时剔除的每窗状态键（位置/朝向不继承，其余设置跟随主配置）
+# 新 slot 落种/刷新时剔除的每窗状态键（位置/朝向不继承，其余设置跟随主配置）。
+# 批 C：落种/刷新永不写位置键（位置由各子肥鱼拖动后自存自管，生成逻辑不碰）。
 _SEED_EXCLUDE_KEYS = ("rx", "ry", "screen_name", "facing")
 
 
 def seed_slot_config_from_main(config_dir: Path | str, slot_id: int) -> bool:
-    """新 slot 的初始配置跟随主设置：slot 配置文件不存在时，用主 config.json
-    落种一份（剔除每窗状态键）。已有存档的 slot（用户改过的）一律不动。
+    """新 slot 的初始配置跟随主设置；对目标 slot 三分支（批 C）：
+
+    - slot 配置文件不存在 → 按当前主设置落种（含 spawn_inherit_size /
+      spawn_scale / spawn_inherit_dynamic_island 逻辑）；
+    - slot 存在但 ``user_customized`` 为假（含旧存档无此键）→ 按当前主设置
+      重新刷新一遍（仍保留该 slot 自己拖动后自存的位置键）；
+    - slot 存在且 ``user_customized`` 为真 → 整个跳过，一个键都不碰。
+
+    落种/刷新**永不写位置键**（_SEED_EXCLUDE_KEYS）：位置由各子肥鱼拖动后
+    自存自管，生成逻辑不碰——同时根治"原来位置的设置被顶掉"。
 
     用户反馈：多开出的新桌宠从零默认设置起步不合理，应跟随主设置。
-    返回 True 表示落了种。"""
+    返回 True 表示落种/刷新成功；False 表示跳过（slot 0 / 已自定义 / 读取失败）。
+    """
     if not slot_id:
         return False
+    config_dir = Path(config_dir)
     slot_path = get_config_path_for_slot(config_dir, slot_id)
+    main_path = config_dir / "config.json"
+    # 已自定义的 slot 不碰；刷新时先保留其自存位置键（旧存档无 user_customized
+    # 一律按假处理 -> 刷新跟随主设置）。
     if slot_path.exists():
-        return False  # 已有存档，不动
-    main_path = Path(config_dir) / "config.json"
+        try:
+            existing = json.loads(slot_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        if _bool_or_default(existing.get("user_customized"), False):
+            return False  # 用户在该子肥鱼自己的设置界面保存过 -> 整个跳过
+        existing_position = {k: existing.get(k) for k in _SEED_EXCLUDE_KEYS}
+    else:
+        existing_position = {}
     try:
         data = json.loads(main_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return False
+    if not isinstance(data, dict):
+        return False
+    seed = copy.deepcopy(data)
+    seed["version"] = 4
+    # 副槽不继承主桌宠的位置/屏幕，避免新鱼叠在旧鱼身上；自启仍仅主槽。
+    seed["autostart_wanted"] = False
+    seed["harness_autostart"] = False
+    # 生小肥鱼大小策略：开启继承 → 保留主配置 scale；
+    # 关闭继承 → 用主配置里给“小肥鱼”单独选择的 spawn_scale。
+    inherit_size = _bool_or_default(seed.get("spawn_inherit_size"), True)
+    seed["spawn_inherit_size"] = inherit_size
+    if not inherit_size:
+        try:
+            seed["scale"] = float(seed.get("spawn_scale", catalog.DEFAULT_SCALE))
+        except (TypeError, ValueError):
+            seed["scale"] = catalog.DEFAULT_SCALE
+    # 生小肥鱼灵动岛策略：默认不继承 → 小肥鱼不开启自己的灵动岛；
+    # 开启继承 → 保留主配置的 dynamic_island（含是否启用）。
+    inherit_island = _bool_or_default(seed.get("spawn_inherit_dynamic_island"), False)
+    seed["spawn_inherit_dynamic_island"] = inherit_island
+    island = seed.get("dynamic_island")
+    if isinstance(island, dict):
+        island["enabled"] = bool(inherit_island)
+    else:
+        seed["dynamic_island"] = {"enabled": bool(inherit_island)}
+    chat = seed.get("chat")
+    if isinstance(chat, dict):
+        providers = chat.get("providers")
+        if isinstance(providers, dict):
+            for provider in providers.values():
+                if isinstance(provider, dict):
+                    provider.pop("api_key", None)
+                    provider.pop("vision_api_key", None)
+    # 落种/刷新永不写位置键：剔除从主配置继承的位置键，再还原本 slot 自存的位置。
     for key in _SEED_EXCLUDE_KEYS:
-        data.pop(key, None)
+        seed.pop(key, None)
+    for key, value in existing_position.items():
+        if value is not None:
+            seed[key] = value
+    seed["user_customized"] = False
     try:
-        slot_path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+        slot_path.write_text(json.dumps(seed, ensure_ascii=False, indent=2),
                              encoding="utf-8")
     except OSError:
         return False

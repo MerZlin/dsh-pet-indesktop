@@ -1454,7 +1454,9 @@ class AppShell:
             raise slot_manager_mod.SlotManagerError(
                 "进程内生小肥鱼：前 128 个槽位均被占用或无法获取锁")
         instance_id = slot_manager_mod.slot_to_instance_id(slot_id)
-        # 新 slot 落种：首次多开跟随主设置（已有存档的 slot 不动）。
+        # 新 slot 落种：走共享落种函数。无存档 slot 按主设置落种；存在但未在该
+        # 子肥鱼设置界面自定义过的 slot 按主设置刷新；已自定义（user_customized）
+        # 的 slot 一个键都不碰。落种/刷新永不写位置键。
         slot_manager_mod.seed_slot_config_from_main(self.config.dir, slot_id)
         # 复用主窗同一配置根目录（AppShell.config.dir 的父目录），使所有窗的
         # config-slot-N.json / sessions-slot-N 落在同一 APP_DIR_NAME 下，仅按
@@ -1947,7 +1949,9 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         if slot_id == 0:
             slot_manager_mod.migrate_legacy_spawns(config_dir)
 
-        # 新 slot 落种：首次多开的实例跟随主设置（已有存档的 slot 不动）。
+        # 新 slot 落种：走共享落种函数。无存档 slot 按主设置落种；存在但未在该
+        # 子肥鱼设置界面自定义过的 slot 按主设置刷新；已自定义（user_customized）
+        # 的 slot 一个键都不碰。落种/刷新永不写位置键。
         slot_manager_mod.seed_slot_config_from_main(config_dir, slot_id)
 
         config = Config(instance_id=instance_id)

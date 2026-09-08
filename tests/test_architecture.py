@@ -54,8 +54,9 @@ WINDOW_PY_LINE_BUDGET = 4352
 # 2026-09-06 上调到 1992：合入上游 main（PR73）带来动画预热开关等 +85 行
 # （实测 1942），预算随实测校准。
 # 2026-09-08 上调到 1996：新增「随桌宠启动 dsh 服务」开关行（+4，实测 1996）。
+# 2026-09-08 上调到 2000：批 C 落种占位语义在保存路径加 user_customized 置位（+4，实测 2000）。
 # 本文件拆分仍是待办，拆分前预算只随实测校准。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 1996
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2000
 
 
 def _read(name: str) -> str:

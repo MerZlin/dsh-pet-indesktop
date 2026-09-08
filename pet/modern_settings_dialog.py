@@ -1959,6 +1959,10 @@ class ModernSettingsDialog(QDialog):
             self.config.set("proactive_screen", pro_data)
         self.config.set("autostart_wanted", self.autostart_check.isChecked())
         self.config.set("harness_autostart", self.harness_autostart_check.isChecked())
+        # 批 C：落种占位语义——仅当用户在该子肥鱼自己的设置界面保存过才置真；
+        # 位置自动保存等一切后台写盘不得置位。主配置（slot 0/主肥鱼）保存不置位。
+        if self.config.instance_id:
+            self.config.set("user_customized", True)
         ok = self.config.save()
         if not ok:
             QMessageBox.warning(

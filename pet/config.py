@@ -532,6 +532,7 @@ class Config:
             "spawn_inherit_size": True,  # 生小肥鱼继承主肥鱼大小（False 用 spawn_scale）
             "spawn_scale": catalog.DEFAULT_SCALE,  # 关闭继承时生小肥鱼使用的尺寸
             "spawn_inherit_dynamic_island": False,  # 生小肥鱼继承主肥鱼灵动岛（默认关=不开灵动岛）
+            "user_customized": False,  # 批 C：仅当用户在该子肥鱼自己的设置界面保存过才置真
             "on_top": True,
             "show_dock_icon": True,
             "no_move": False,
@@ -645,70 +646,26 @@ class Config:
             pass
 
     def _seed_slot_config_from_main(self) -> None:
-        """新建副槽时继承主配置（issue #69-6），避免“生小肥鱼恢复默认设置”。
+        """新建副槽时继承主配置（批 C）：委托 slot_manager 的共享落种函数。
 
-        只在该槽位还没有个体配置文件时执行；已有存档的 slot-N 配置（用户
-        改过的）一律保持独立记忆，「生小肥鱼」复用旧槽位也不覆盖。复制主
-        config.json 后做副槽化处理：位置回到自动摆放、开机自启仍只归主槽
-        所有。写盘副本沿用主配置的脱敏策略，不把明文 API Key 复制进副槽。
+        只在该槽位还没有个体配置文件时执行；已有存档的 slot-N 配置（用户改过
+        的）一律保持独立记忆，「生小肥鱼」复用旧槽位也不覆盖。副本生成逻辑
+        （spawn_inherit_size / spawn_scale / spawn_inherit_dynamic_island、位置键
+        剔除、脱敏、user_customized 置假）统一收敛在
+        ``slot_manager.seed_slot_config_from_main``，这里只负责把 instance_id
+        解析成 slot_id 后转发。
         """
-        main_path = self.dir / "config.json"
-        if self.path.exists() or not main_path.is_file():
+        if not self.instance_id:
             return
-        try:
-            raw = json.loads(main_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        if not self.instance_id.startswith("slot-"):
             return
-        if not isinstance(raw, dict):
+        suffix = self.instance_id[len("slot-"):]
+        if not suffix.isdigit():
+            # 非数值 slot 标识（如碰撞 IPC 测试用 slot-a/slot-p）不做落种。
             return
-        seed = copy.deepcopy(raw)
-        seed["version"] = 4
-        # 副槽不继承主桌宠的位置/屏幕，避免新鱼叠在旧鱼身上；自启仍仅主槽。
-        seed["rx"] = None
-        seed["ry"] = None
-        seed["screen_name"] = None
-        seed["autostart_wanted"] = False
-        seed["harness_autostart"] = False
-        # 生小肥鱼大小策略：开启继承 → 保留主配置 scale；
-        # 关闭继承 → 用主配置里给“小肥鱼”单独选择的 spawn_scale。
-        inherit_size = _bool_or_default(seed.get("spawn_inherit_size"), True)
-        seed["spawn_inherit_size"] = inherit_size
-        if not inherit_size:
-            try:
-                seed["scale"] = float(seed.get("spawn_scale", catalog.DEFAULT_SCALE))
-            except (TypeError, ValueError):
-                seed["scale"] = catalog.DEFAULT_SCALE
-        # 生小肥鱼灵动岛策略：默认不继承 → 小肥鱼不开启自己的灵动岛；
-        # 开启继承 → 保留主配置的 dynamic_island（含是否启用）。
-        inherit_island = _bool_or_default(seed.get("spawn_inherit_dynamic_island"), False)
-        seed["spawn_inherit_dynamic_island"] = inherit_island
-        island = seed.get("dynamic_island")
-        if isinstance(island, dict):
-            island["enabled"] = bool(inherit_island)
-        else:
-            seed["dynamic_island"] = {"enabled": bool(inherit_island)}
-        chat = seed.get("chat")
-        if isinstance(chat, dict):
-            providers = chat.get("providers")
-            if isinstance(providers, dict):
-                for provider in providers.values():
-                    if isinstance(provider, dict):
-                        provider.pop("api_key", None)
-                        provider.pop("vision_api_key", None)
-        try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            temp = self.path.with_name(f"{self.path.name}.{os.getpid()}.seed.tmp")
-            temp.write_text(
-                json.dumps(seed, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            os.replace(temp, self.path)
-        except OSError as exc:
-            logging.warning("从主配置播种副槽配置失败: %s (%s)", self.path, exc)
-            try:
-                temp.unlink(missing_ok=True)
-            except OSError:
-                pass
+        slot_id = int(suffix)
+        from . import slot_manager as slot_manager_mod
+        slot_manager_mod.seed_slot_config_from_main(self.dir, slot_id)
 
     def reload(self):
         if not self.path.is_file():
@@ -779,6 +736,7 @@ class Config:
         for key in (
             "rx", "ry", "screen_name", "facing", "scale", "on_top", "show_dock_icon", "no_move", "character",
             "spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island",
+            "user_customized",
             "playback_speed", "animation_gap_seconds", "self_talk_enabled",
             "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
             "self_talk_duration_seconds", "self_talk_image_dir",
