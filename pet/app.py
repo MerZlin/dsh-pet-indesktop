@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import sys
 import threading
 import time
@@ -359,7 +360,12 @@ class PetInstance:
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self._slot_wrap(self.open_modern_settings)
         win.on_spawn_pet = self._slot_wrap(self.shell.spawn_pet)
-        win.on_clear_spawned_pets = self._slot_wrap(self.shell.clear_spawned_pets)
+        # 「退出子肥鱼」只挂给主肥鱼（instance_id 为空）：子肥鱼进程里该入口的
+        # pid==os.getpid() 自我保护会跳过子鱼自己、把主鱼当子鱼 taskkill 掉
+        #（实机事故：从子鱼触发清除 → 主鱼被杀、触发的那只子鱼存活）。
+        win.on_clear_spawned_pets = (
+            self._slot_wrap(self.shell.clear_spawned_pets)
+            if not self.config.instance_id else None)
         win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._slot_wrap(self._notify_pet_hidden)
@@ -1395,16 +1401,20 @@ class AppShell:
             return
         # 单进程模式前置：进程内「非主窗」小肥鱼（PID=主进程）会被文件级清理的
         # pid==os.getpid() 自我保护跳过而永远清不掉，先按进程内子窗登记表枚举。
-        # 关闭走 QTimer.singleShot(0) 逐只链式执行（每只之间让出事件循环）：每窗
-        # 子写盘 writer 关闭最多阻塞 2s、还有 agent 关闭等重操作，N 只同步执行
-        # 就是 N 倍 UI 冻结（半透明窗冻结时出黑框）。全部关完再走文件级清理杀
-        # 多进程子进程并弹结果框。两条路径都幂等，清完不留 runtime 标记残留。
+        # 关闭走 QTimer.singleShot(0) 逐只链式执行（每只之间让出事件循环），且
+        # 每窗的重资源回收（writer 关闭/agent shutdown/碰撞会话停止，各有界
+        # 阻塞秒级）挪到后台 reaper 线程（批 G，_on_window_exit_requested 的
+        # defer_heavy_teardown 路径），UI 线程只留关窗/摘标记等毫秒级必做步骤。
+        # 全部关完再走文件级清理杀多进程子进程（同样在后台线程跑，taskkill
+        # 不再冻 UI）并弹结果框。两条路径都幂等，清完不留 runtime 标记残留。
         refs = [weakref.ref(inst) for inst in self._instances
                 if inst is not self.instance]
+        # 进行中标记两条路径统一前置：链式与纯文件级清理都覆盖（批 G 起文件级
+        # 清理改后台线程，执行期间重复点击同样忽略）。
+        self._clear_spawned_pending = True
         if not refs:
             self._finish_clear_spawned_pets(cleanup_slots, parent)
             return
-        self._clear_spawned_pending = True
         QTimer.singleShot(
             0, lambda: self._clear_spawned_chain(refs, 0, cleanup_slots, parent))
 
@@ -1421,7 +1431,9 @@ class AppShell:
         inst = refs[index]()
         if inst is not None and inst in self._instances:
             try:
-                self._on_window_exit_requested(inst)
+                # 批 G：链式路径重资源回收后台化（writer/agent/碰撞的有界 join
+                # 移出 UI 线程），每窗 UI 线程单步阻塞压到毫秒级。
+                self._on_window_exit_requested(inst, defer_heavy_teardown=True)
             except Exception:
                 logging.exception(
                     "清除子肥鱼：关闭进程内小肥鱼失败 (slot=%s)",
@@ -1430,20 +1442,41 @@ class AppShell:
             0, lambda: self._clear_spawned_chain(refs, index + 1, cleanup_slots, parent))
 
     def _finish_clear_spawned_pets(self, cleanup_slots, parent) -> None:
-        """链式关闭收口：文件级退出残余子进程 + 结果框，并复位进行中标记。"""
-        try:
-            result = cleanup_slots(self.config.dir)
-        finally:
-            self._clear_spawned_pending = False
+        """链式关闭收口：文件级退出残余子进程 + 结果框，并复位进行中标记。
+
+        批 G：文件级清理（逐 pid taskkill，每个一次 subprocess 调用 + 杀后
+        确认轮询）移到后台线程——在 UI 线程同步执行会冻结主桌宠（实机复现）；
+        结果经 QTimer.singleShot 回 UI 线程弹框。进行中标记在回调里复位，
+        清理执行期间重复点击被忽略（幂等）。
+        """
+        config_dir = self.config.dir
+
+        def sweep() -> None:
+            try:
+                result = cleanup_slots(config_dir)
+            except Exception:
+                logging.exception("退出子肥鱼：文件级清理失败")
+                result = {"killed_pids": [], "failed_pids": []}
+            # 带 context 的 singleShot：从后台线程安全投递回 UI 线程。
+            QTimer.singleShot(
+                0, self.app,
+                lambda: self._show_clear_spawned_result(result, parent))
+
+        threading.Thread(
+            target=sweep, daemon=True, name="pet-clear-spawned-sweep").start()
+
+    def _show_clear_spawned_result(self, result: dict, parent) -> None:
+        """文件级清理完成回调（UI 线程）：复位进行中标记并弹结果框。"""
+        self._clear_spawned_pending = False
         if parent is not None and not shiboken6.isValid(parent):
             # 链式让出事件循环期间主窗可能已销毁：结果框降级为无父窗。
             parent = None
-        QMessageBox.information(
-            parent,
-            "退出子肥鱼",
-            f"已退出 {len(result['killed_pids'])} 个小肥鱼进程；"
-            f"它们的设置与数据已保留。",
-        )
+        killed = len(result.get("killed_pids", []))
+        failed = len(result.get("failed_pids", []))
+        text = f"已退出 {killed} 个小肥鱼进程；它们的设置与数据已保留。"
+        if failed:
+            text += f"\n\n{failed} 个小肥鱼未能退出（仍在运行），可再次执行或手动关闭。"
+        QMessageBox.information(parent, "退出子肥鱼", text)
 
     def spawn_in_process_window(self, offset_index: int = 1) -> PetInstance:
         """批5.2 spike：进程内创建第二个 PetInstance（不共享库/Config/SessionStore）。
@@ -1509,7 +1542,8 @@ class AppShell:
         logging.info("进程内新窗已创建 (slot=%s, instance=%s)", slot_id, instance_id)
         return inst
 
-    def _on_window_exit_requested(self, instance: PetInstance) -> None:
+    def _on_window_exit_requested(self, instance: PetInstance,
+                                  *, defer_heavy_teardown: bool = False) -> None:
         """窗级「退出这只」（R5 切分）：只收口本窗，不碰其它窗的进程级资源。
 
         顺序：存本窗位置 → 停本窗预热/Agent → 保存本窗三聊天窗 live session
@@ -1520,8 +1554,18 @@ class AppShell:
         从集合移除；若退的是主窗则把列表头提升为新主窗（P1-3）；若为最后一窗
         则触发全部退出（app.quit）。进程级仅剩 ``close_all_writers(permanent=True)``
         只在「全部退出」（托盘退出 / _on_about_to_quit）收口。
+
+        ``defer_heavy_teardown=True``（批 G，仅「退出子肥鱼」链式路径使用）：
+        把有界但秒级的重资源回收——本窗 sessions writer 关闭（最多 2s join）、
+        agent_link shutdown（最多 2s 共享 join）、碰撞会话停止（最多 3s+1s
+        wait）——挪到进程级后台 reaper 线程串行执行；UI 线程只保留关窗、
+        摘 runtime 标记、释放 slot 锁、从登记表移除等毫秒级必做步骤，
+        N 只连清时主桌宠不再冻结。默认 False = 「退出这只」单窗路径保持
+        既有同步语义逐位不变。重回收只做线程 join / queued 调用 / 纯 Python
+        注册表操作，不触碰 Qt 对象，后台执行安全。
         """
         win = instance.win
+        heavy_jobs: list[tuple[str, object]] = []  # defer 模式的重回收任务
         if win is not None:
             try:
                 win.save_position()
@@ -1532,11 +1576,18 @@ class AppShell:
                     win.lib.pause_warm()
             except Exception:
                 logging.exception("退出这只：暂停预热失败")
-            if getattr(win, 'agent_link_manager', None) is not None:
-                try:
-                    win.agent_link_manager.shutdown()
-                except Exception:
-                    logging.exception("退出这只：关闭 Agent 失败")
+            agent_mgr = getattr(win, 'agent_link_manager', None)
+            if agent_mgr is not None:
+                if defer_heavy_teardown:
+                    # 摘下引用再关窗：closeEvent 也会调 shutdown()，不在 UI
+                    # 线程重复 join（reaper 统一收口，shutdown 幂等）。
+                    win.agent_link_manager = None
+                    heavy_jobs.append(("关闭 Agent", agent_mgr.shutdown))
+                else:
+                    try:
+                        agent_mgr.shutdown()
+                    except Exception:
+                        logging.exception("退出这只：关闭 Agent 失败")
         # 批5.2 P0-2：先保存本窗三聊天窗的 live session，再关写盘 writer
         #（对齐 aboutToQuit 安全网：退出该窗不丢内存态会话）。
         for _w in (instance.legacy_chat_window, instance.modern_chat_window, instance.quick_chat):
@@ -1558,7 +1609,14 @@ class AppShell:
                 except Exception:
                     logging.exception("退出这只：删除 runtime 标记失败")
         # 批5.2 P1-7：运行期关窗不许冻 GUI 10s——只关本窗 writer，timeout 降到 2s。
-        self._close_instance_session_writer(instance)
+        # 批 G：defer 模式下这 2s 有界 join 也挪到 reaper 线程（会话保存已在
+        # 上方同步完成，顺序由 reaper 串行保证）。
+        if defer_heavy_teardown:
+            heavy_jobs.append(
+                ("关闭会话写盘 worker",
+                 lambda: self._close_instance_session_writer(instance)))
+        else:
+            self._close_instance_session_writer(instance)
         if instance.slot_handle is not None:
             try:
                 slot_manager_mod._unlock_file(instance.slot_handle)
@@ -1568,10 +1626,15 @@ class AppShell:
         # 批5.2 P1-1：停本窗自持的碰撞会话（只影响本窗）。批5.3 起 broker_facade
         # 指向进程级 DecodeFanoutHub，其 shutdown() 为 no-op——保留调用仅为
         # 形态对齐，不会误停共享 hub。
-        try:
-            instance.collision_ipc.stop()
-        except Exception:
-            logging.exception("退出这只：停止碰撞会话失败")
+        # 批 G：defer 模式下碰撞会话的 stop（QThread.wait 最多 3s+1s）挪到
+        # reaper 线程；stop 内部对 worker 的调用是 queued 语义，线程安全。
+        if defer_heavy_teardown:
+            heavy_jobs.append(("停止碰撞会话", instance.collision_ipc.stop))
+        else:
+            try:
+                instance.collision_ipc.stop()
+            except Exception:
+                logging.exception("退出这只：停止碰撞会话失败")
         try:
             instance.broker_facade.shutdown()
         except Exception:
@@ -1589,9 +1652,41 @@ class AppShell:
             # 托盘/灵动岛/Dock 动作永远指向存活实例，防「复活」已退出的主窗。
             self.instance = self._instances[0] if self._instances else None
         self._refresh_tray_menu()
+        if heavy_jobs:
+            self._enqueue_heavy_teardown(instance, heavy_jobs)
         if not self._instances:
             # 最后一窗关闭 → 走全部退出语义（进程级 broker/碰撞/permanent writer 收口）
             self.app.quit()
+
+    def _teardown_reaper_queue(self) -> "queue.Queue":
+        """懒创建的进程级重资源回收队列（批 G）：单条 daemon 线程串行执行
+        各窗退出时的 writer 关闭 / agent shutdown / 碰撞停止（都是有界但
+        秒级的线程 join/wait），UI 线程因此不被阻塞。daemon：进程退出不强等
+        （aboutToQuit 的进程级收口另有兜底），队列任务失败只记录不中断。"""
+        q = getattr(self, "_teardown_queue", None)
+        if q is None:
+            q = queue.Queue()
+
+            def reap() -> None:
+                while True:
+                    jobs = q.get()
+                    for label, fn in jobs:
+                        try:
+                            fn()
+                        except Exception:
+                            logging.exception("退出子肥鱼：后台重回收失败 (%s)", label)
+
+            threading.Thread(
+                target=reap, daemon=True, name="pet-teardown-reaper").start()
+            self._teardown_queue = q
+        return q
+
+    def _enqueue_heavy_teardown(self, instance: PetInstance, jobs: list) -> None:
+        """把一窗的重回收任务排进 reaper（幂等：同一实例只排一次）。"""
+        if getattr(instance, "_heavy_teardown_enqueued", False):
+            return
+        instance._heavy_teardown_enqueued = True
+        self._teardown_reaper_queue().put(jobs)
 
     def _close_instance_subwindows(self, instance: PetInstance) -> None:
         """批5.2 P1-5：关闭本窗拥有的聊天窗/设置窗并断开引用。

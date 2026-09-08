@@ -3,7 +3,7 @@
 
 覆盖：arm 条件双向（碰撞取消才 arm）、角度四方向、低速碰边界恢复、
 低速碰桌宠恢复、高速不恢复、_stop_physics 兜底、end 幂等与重 arm；
-批 F：恢复阈值提到 400 且按用户要求移除飞行时间硬上限。
+批 F：恢复阈值提到 780 且按用户要求移除飞行时间硬上限。
 """
 from __future__ import annotations
 
@@ -99,13 +99,13 @@ def test_angle_follows_four_directions():
     win = _FakeWin()
     egg = ThrowEggController(win)
     egg.arm()
-    egg.update(500.0, 0.0, False)
+    egg.update(900.0, 0.0, False)
     assert egg.current_angle_deg() == pytest.approx(90.0)
-    egg.update(0.0, 500.0, False)
+    egg.update(0.0, 900.0, False)
     assert egg.current_angle_deg() == pytest.approx(180.0)
-    egg.update(0.0, -500.0, False)
+    egg.update(0.0, -900.0, False)
     assert egg.current_angle_deg() == pytest.approx(0.0)
-    egg.update(-500.0, 0.0, False)
+    egg.update(-900.0, 0.0, False)
     assert egg.current_angle_deg() == pytest.approx(270.0)
 
 
@@ -114,7 +114,7 @@ def test_angle_debounces_below_speed_threshold():
     win = _FakeWin()
     egg = ThrowEggController(win)
     egg.arm()
-    egg.update(500.0, 0.0, False)
+    egg.update(900.0, 0.0, False)
     before = egg.current_angle_deg()
     egg.update(30.0, 0.0, False)
     assert egg.active
@@ -126,7 +126,7 @@ def test_low_speed_touching_boundary_recovers():
     egg = ThrowEggController(win)
     egg.arm()
     # 高速贴边：不恢复，角度仍更新。
-    egg.update(500.0, 0.0, True)
+    egg.update(900.0, 0.0, True)
     assert egg.active
     assert egg.current_angle_deg() == pytest.approx(90.0)
     # 低速贴边：恢复正常姿态。
@@ -148,16 +148,16 @@ def test_high_speed_contact_does_not_recover():
     win = _FakeWin()
     egg = ThrowEggController(win)
     egg.arm()
-    egg.on_pet_contact(500.0)
+    egg.on_pet_contact(900.0)
     assert egg.active
-    egg.update(500.0, 0.0, True)
+    egg.update(900.0, 0.0, True)
     assert egg.active
     assert egg.current_angle_deg() == pytest.approx(90.0)
 
 
-def test_recover_speed_threshold_raised_to_400():
-    """批 F：阈值 240→400（用户实机要求再拉高，且不设时间硬上限）。"""
-    assert THROW_EGG_RECOVER_SPEED == 400.0
+def test_recover_speed_threshold_raised_to_780():
+    """批 F：阈值拉到 780——低速贴地连续碰撞时角度不再快速翻转（用户实机反馈）。"""
+    assert THROW_EGG_RECOVER_SPEED == 780.0
 
 
 def test_speed_above_old_threshold_recovers_at_boundary():
@@ -170,14 +170,14 @@ def test_speed_above_old_threshold_recovers_at_boundary():
     assert egg.current_angle_deg() == 0.0
 
 
-def test_threshold_boundary_recovery_only_below_400():
-    """阈值边界：401 px/s 贴边仍激活，399 px/s 贴边恢复。"""
+def test_threshold_boundary_recovery_only_below_780():
+    """阈值边界：781 px/s 贴边仍激活，779 px/s 贴边恢复。"""
     win = _FakeWin()
     egg = ThrowEggController(win)
     egg.arm()
-    egg.update(401.0, 0.0, True)
+    egg.update(781.0, 0.0, True)
     assert egg.active
-    egg.update(399.0, 0.0, True)
+    egg.update(779.0, 0.0, True)
     assert not egg.active
 
 

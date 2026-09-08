@@ -14,9 +14,10 @@ from typing import Any
 
 # 速度低于该阈值（并触碰边界/桌宠）时结束彩蛋、恢复正常姿态。
 # 量级参照 physics.is_at_rest 的静止判定（REST_VY / REST_VX 为几十 px/s 量级）。
-# 120/240 都太低：多只桌宠互撞时 _predict_collision_bounce 不断补速度，速度
-# 降不到阈值 → 彩蛋卡死，故拉到 400（用户实机要求，明确不要时间硬上限）。
-THROW_EGG_RECOVER_SPEED = 400.0  # px/s
+# 120/240/400 都太低：低速贴地时会快速连续碰撞，速度方向反复翻转导致鱼头
+# 快速来回变向（用户实机反馈"很奇怪"），故拉到 780——低速弹跳段直接不再
+# 更新角度且一碰就回正（用户实机要求，明确不要时间硬上限）。
+THROW_EGG_RECOVER_SPEED = 780.0  # px/s
 
 
 class ThrowEggController:

@@ -920,6 +920,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 self.visible_content_rect(), pet_scale=self.scale
             )
         self.update()
+        # 右键菜单改大小属于用户主动设置：子肥鱼置位 user_customized（占位），
+        # 下次生成不被主设置刷新；位置自存等后台写盘不置位（_save_position 不动旗）。
+        if getattr(getattr(self, "cfg", None), "instance_id", None):
+            self.cfg.set("user_customized", True)
         self._save_position()
 
     # ================================================================ 位置
@@ -1172,6 +1176,13 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._submit_collision_state(force=True)
         self._schedule_macos_window_level(bool(self.cfg.get('on_top', True)))
         self._apply_opacity()
+        # 启动即登记 runtime 标记：否则没被拖动过的新生小肥鱼没有标记，
+        # 「退出子肥鱼」按标记枚举时根本看不见它（实机：总有一只清不掉）。
+        # 尽力而为：登记失败不影响窗口显示。
+        try:
+            self._write_runtime_marker()
+        except Exception:
+            logging.debug("登记 runtime 标记失败", exc_info=True)
         # 隐藏期暂停的活动在此恢复（与 hide() 中的 _pause_activity 配对）
         if self._hidden_paused:
             self._hidden_paused = False

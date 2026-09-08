@@ -565,6 +565,11 @@ class ModernSettingsDialog(QDialog):
         )
         self.clear_spawned_pets_btn = QPushButton("一键退出…", self)
         self.clear_spawned_pets_btn.clicked.connect(self._on_clear_spawned_pets)
+        if self.config.instance_id:
+            # 「退出子肥鱼」只对主肥鱼开放：子肥鱼进程里执行会把主鱼当子鱼
+            # 杀掉（pid==os.getpid() 只跳过自己），故子鱼对话框禁用该按钮。
+            self.clear_spawned_pets_btn.setEnabled(False)
+            self.clear_spawned_pets_btn.setToolTip("请在主肥鱼的设置里操作")
 
         self.on_top_check = ToggleSwitch(self)
         self.on_top_check.setChecked(bool(self.config.get("on_top", True)))
@@ -1393,6 +1398,10 @@ class ModernSettingsDialog(QDialog):
         callback = getattr(self.parentWidget(), "on_clear_spawned_pets", None)
         if callable(callback):
             callback()
+            return
+        if self.config.instance_id:
+            # 双保险：子肥鱼不开放该操作（按钮已禁用；即便被旧接线调到也不执行，
+            # 否则子鱼进程会把主鱼当子鱼杀掉）。
             return
         answer = QMessageBox.question(
             self,

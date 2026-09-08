@@ -46,7 +46,10 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 2026-09-08 上调到 4358：批 D 彩蛋（边缘探头被击飞时飞行中整帧旋转跟随速度方向）——
 # window.py 仅保留薄钩子（_tick_throw_physics 调 throw_egg.update、_stop_physics 调
 # throw_egg.end），控制器实现在 throw_egg.py；实测 4358。
-WINDOW_PY_LINE_BUDGET = 4358
+# 2026-09-08 上调到 4369：批 G——change_scale 子肥鱼置位 user_customized（+4）、
+# showEvent 启动即登记 runtime 标记（+7，含 try 兜底，修「退出子肥鱼」漏清未
+# 拖动过的小肥鱼），实测 4369。
+WINDOW_PY_LINE_BUDGET = 4369
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
@@ -62,8 +65,10 @@ WINDOW_PY_LINE_BUDGET = 4358
 # _on_clear_spawned_pets 优先调 win.on_clear_spawned_pets（自带确认框与进程内
 # 子窗前置于关闭），拿不到回调时回退原有确认+直接清理；按文件约定校准预算，
 # 不为达标压缩行宽/合并语句。
+# 2026-09-08 上调到 2018：批 G——「退出子肥鱼」按钮对子肥鱼禁用（+5）+
+# _on_clear_spawned_pets 加 instance_id 双保险（+5，含注释折行），实测 2018。
 # 本文件拆分仍是待办，拆分前预算只随实测校准。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2009
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2018
 
 
 def _read(name: str) -> str:

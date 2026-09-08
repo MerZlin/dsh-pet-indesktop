@@ -1239,16 +1239,29 @@ def test_clear_spawned_pets_multi_process_flag_off_no_in_process_children(
     v2.write_text(json.dumps({"pid": 555}), encoding="utf-8")
 
     terminated = []
-    monkeypatch.setattr(cleanup_mod, "_pid_alive", lambda pid: pid == 555)
+    alive = {555}
     monkeypatch.setattr(
-        cleanup_mod, "_terminate_pet_process", lambda pid: terminated.append(pid))
+        cleanup_mod, "_pid_alive", lambda pid: pid in alive)
+
+    def fake_terminate(pid):
+        terminated.append(pid)
+        alive.discard(pid)  # 批 G：杀后确认——进程真的退出
+
+    monkeypatch.setattr(
+        cleanup_mod, "_terminate_pet_process", fake_terminate)
     monkeypatch.setattr(
         app_mod.QMessageBox, "question",
         lambda *a, **kw: app_mod.QMessageBox.StandardButton.Yes)
+    infos = []
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "information",
+        lambda *a, **kw: infos.append(a))
 
     # 无进程内子窗（flag 关），只有主窗
     assert len(shell.instances) == 1
     shell.clear_spawned_pets()
+    # 批 G：文件级清理移到后台线程（taskkill 不冻 UI），结果经事件循环回弹。
+    _pump(0.5)
 
     # 多进程子进程被文件级收尾杀掉；批 F 起 slot 数据保留；主窗保留
     assert terminated == [555]
@@ -1256,6 +1269,8 @@ def test_clear_spawned_pets_multi_process_flag_off_no_in_process_children(
     assert (root / "config-slot-1.json").exists()
     assert len(shell.instances) == 1
     assert shell.instance is shell.instances[0]
+    assert len(infos) == 1
+    assert shell._clear_spawned_pending is False
 
 
 # --------------------------------------------------------------------------
@@ -1373,6 +1388,51 @@ def test_clear_spawned_pets_chain_skips_removed_or_destroyed_child(
     slot_manager_mod._unlock_file(primary_handle)
 
 
+def test_clear_spawned_pets_defers_heavy_teardown_to_reaper_thread(
+        tmp_path, app, monkeypatch):
+    """批 G：链式「退出子肥鱼」把每窗的重资源回收（writer 关闭 / agent
+    shutdown / 碰撞会话停止——各有界阻塞秒级）挪到进程级 reaper 线程执行；
+    UI 线程只保留关窗/摘标记/释放锁等毫秒级步骤，主桌宠不再冻结。"""
+    import threading
+
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+    inst, win = _add_child_instance(shell, tmp_path, config, 1, monkeypatch)
+
+    heavy_threads = []
+    monkeypatch.setattr(
+        inst.collision_ipc, "stop",
+        lambda: heavy_threads.append(
+            ("collision", threading.current_thread().name)))
+    monkeypatch.setattr(
+        win.agent_link_manager, "shutdown",
+        lambda: heavy_threads.append(
+            ("agent", threading.current_thread().name)))
+    monkeypatch.setattr(
+        app_mod.AppShell, "_close_instance_session_writer",
+        lambda self, _inst: heavy_threads.append(
+            ("writer", threading.current_thread().name)))
+    monkeypatch.setattr(
+        app_mod.QMessageBox, "question",
+        lambda *a, **kw: app_mod.QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(app_mod.QMessageBox, "information", lambda *a, **kw: None)
+
+    shell.clear_spawned_pets()
+    _pump(0.5)
+
+    # UI 必做步骤照常同步完成（关窗/摘标记/移除登记表）
+    assert win.calls == ["save", "marker_del", "close"]
+    assert inst not in shell.instances
+    # 重回收全部发生，且都在 reaper 线程而非 UI 主线程
+    labels = sorted(label for label, _t in heavy_threads)
+    assert labels == ["agent", "collision", "writer"]
+    assert all(t == "pet-teardown-reaper" for _label, t in heavy_threads)
+    # defer 模式下关窗前摘下 agent 引用：closeEvent 不在 UI 线程重复 join
+    assert win.agent_link_manager is None
+    assert shell._clear_spawned_pending is False
+
+    slot_manager_mod._unlock_file(primary_handle)
+
+
 def test_settings_dialog_clear_button_routes_through_shell_chain(
         tmp_path, app, monkeypatch):
     """批 E：设置界面「一键清除」经 win.on_clear_spawned_pets（真实接线 =
@@ -1415,3 +1475,45 @@ def test_settings_dialog_clear_button_routes_through_shell_chain(
         slot_manager_mod._unlock_file(child.slot_handle)
         child.slot_handle = None
     slot_manager_mod._unlock_file(primary_handle)
+
+
+def test_clear_spawned_entry_wired_only_on_primary(tmp_path, app, monkeypatch):
+    """批 G：「退出子肥鱼」入口只挂给主肥鱼（instance_id 为空）；子肥鱼窗
+    该回调为 None——否则子鱼进程里 pid==os.getpid() 只跳过自己，会把主鱼
+    当子鱼 taskkill 掉（实机事故）。"""
+    shell, config, primary_handle = _make_primary_with_slot(tmp_path)
+    try:
+        main_win = _FakeWindow()
+        main_win.cfg = config
+        shell.instance._wire_window(main_win)
+        assert callable(main_win.on_clear_spawned_pets), "主肥鱼必须有入口"
+
+        inst, _win = _add_child_instance(shell, tmp_path, config, 1, monkeypatch)
+        child_win = _FakeWindow()
+        child_win.cfg = inst.config
+        inst._wire_window(child_win)
+        assert child_win.on_clear_spawned_pets is None, "子肥鱼不得有入口"
+    finally:
+        slot_manager_mod._unlock_file(primary_handle)
+
+
+def test_runtime_marker_written_on_first_show(tmp_path, app):
+    """批 G：窗口首次显示即登记 runtime 标记——没被拖动过的新生小肥鱼也有
+    标记，「退出子肥鱼」按标记枚举时不会漏掉它。"""
+    from tests.test_collision_window import FakeCollisionSession, FakeLibrary
+
+    from pet.window import PetWindow
+
+    config = Config(tmp_path)
+    config.set("collision_enabled", False)
+    config.save()
+    win = PetWindow(FakeLibrary(), config,
+                    collision_session=FakeCollisionSession("pet_marker_boot"))
+    win.show()
+    QApplication.instance().processEvents()
+    # 默认（flag 关）写旧名 runtime-<pid>.json
+    marker = config.dir / f"runtime-{os.getpid()}.json"
+    assert marker.exists(), "首次显示必须登记 runtime 标记"
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["pid"] == os.getpid()
+    win.close()

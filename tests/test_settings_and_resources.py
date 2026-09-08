@@ -293,3 +293,16 @@ def test_clear_spawned_pets_button_fallback_cancel_does_nothing(
     finally:
         dialog.deleteLater()
         qapp.processEvents()
+
+
+def test_clear_spawned_pets_button_disabled_for_child_config(qapp, tmp_path):
+    """批 G：子肥鱼（slot-N）的设置对话框禁用「一键退出」按钮——该操作只对
+    主肥鱼开放（子鱼进程执行会把主鱼当子鱼杀掉）。"""
+    cfg = Config(tmp_path / "appdata", instance_id="slot-1")
+    dialog = ModernSettingsDialog(cfg, include_ai=False)
+    try:
+        assert not dialog.clear_spawned_pets_btn.isEnabled()
+        assert dialog.clear_spawned_pets_btn.toolTip()
+    finally:
+        dialog.deleteLater()
+        qapp.processEvents()
