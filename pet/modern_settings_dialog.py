@@ -1389,11 +1389,12 @@ class ModernSettingsDialog(QDialog):
         )
 
     def _on_clear_spawned_pets(self) -> None:
-        """一键退出所有小肥鱼（slot-N）；它们的设置与数据保留。
+        """一键静默退出所有小肥鱼（slot-N）；它们的设置与数据保留。
 
         优先走 PetWindow 上已接线的 ``on_clear_spawned_pets``（= AppShell 路径，
-        自带确认框与进程内子窗前置于关闭，单进程模式才清得掉）；拿不到回调时
-        回退为「确认 + 直接文件级退出」。
+        含进程内子窗前置于关闭，单进程模式才清得掉）；拿不到回调时回退为
+        直接文件级退出。批 I：无确认框无结果框（操作不删数据可重新生成，
+        子肥鱼消失即反馈）。
         """
         callback = getattr(self.parentWidget(), "on_clear_spawned_pets", None)
         if callable(callback):
@@ -1403,23 +1404,11 @@ class ModernSettingsDialog(QDialog):
             # 双保险：子肥鱼不开放该操作（按钮已禁用；即便被旧接线调到也不执行，
             # 否则子鱼进程会把主鱼当子鱼杀掉）。
             return
-        answer = QMessageBox.question(
-            self,
-            "退出子肥鱼",
-            "将退出所有已生成的小肥鱼。\n\n它们的设置与数据会保留，下次生成时原样恢复。确定继续吗？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
         from .child_pet_cleanup import clear_spawned_pets
         result = clear_spawned_pets(self.config.dir)
-        QMessageBox.information(
-            self,
-            "退出子肥鱼",
-            f"已退出 {len(result['killed_pids'])} 个小肥鱼进程；"
-            f"它们的设置与数据已保留。",
-        )
+        logging.info(
+            "退出子肥鱼：已退出 %d 只，未能退出 %d 只",
+            len(result.get("killed_pids", [])), len(result.get("failed_pids", [])))
 
     def _apply_agent_sound_enabled_now(self, checked: bool) -> None:
         """音效总开关即时生效，不等对话框关闭（合并写回，不动其他 agent_link 键）。"""

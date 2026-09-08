@@ -177,6 +177,7 @@ def test_clear_spawned_pets_kill_failure_keeps_marker_and_reports(
         tmp_path, monkeypatch):
     """批 G：杀进程失败（taskkill 异常/超时、权限不足等）不再静默吞掉——
     保留 runtime 标记（不毁灭痕迹，供下次重试），pid 记入 failed_pids。
+    批 I：两段式杀法（先全杀再统一等确认），不再有逐只重试。
 
     实机复现：旧实现杀失败照删标记 → 子肥鱼存活且清理方无迹可查。
     """
@@ -194,20 +195,18 @@ def test_clear_spawned_pets_kill_failure_keeps_marker_and_reports(
         child_pet_cleanup, "_terminate_pet_process",
         lambda pid: terminated.append(pid),  # 杀不动：进程始终存活
     )
-    # 加速：确认轮询不真的等满 2s×2
-    monkeypatch.setattr(child_pet_cleanup, "_wait_pid_dead", lambda pid: False)
 
     result = child_pet_cleanup.clear_spawned_pets(root)
 
     assert result["killed_pids"] == []
     assert result["failed_pids"] == [777]
-    assert terminated == [777, 777], "杀失败重试一次"
+    assert terminated == [777], "两段式杀法：每只只杀一次，统一等确认"
     assert live_marker.exists(), "进程仍活时标记必须保留"
 
 
-def test_clear_spawned_pets_retry_succeeds_on_second_attempt(
+def test_clear_spawned_pets_kill_success_removes_marker(
         tmp_path, monkeypatch):
-    """批 G：第一次杀不死、重试成功 → 计入 killed_pids 并正常删标记。"""
+    """批 I 两段式：杀成功 → 计入 killed_pids 并正常删标记。"""
     root = tmp_path / "dsh-pet-standalone"
     root.mkdir(parents=True)
 
@@ -222,8 +221,7 @@ def test_clear_spawned_pets_retry_succeeds_on_second_attempt(
 
     def fake_terminate(pid):
         terminated.append(pid)
-        if len(terminated) >= 2:
-            alive.discard(pid)  # 第二次才杀死
+        alive.discard(pid)
 
     monkeypatch.setattr(
         child_pet_cleanup, "_terminate_pet_process", fake_terminate)
@@ -232,7 +230,7 @@ def test_clear_spawned_pets_retry_succeeds_on_second_attempt(
 
     assert result["killed_pids"] == [888]
     assert result["failed_pids"] == []
-    assert terminated == [888, 888]
+    assert terminated == [888]
     assert not live_marker.exists()
 
 
@@ -339,3 +337,25 @@ def test_terminate_uses_create_no_window_on_windows(monkeypatch):
     mod._terminate_pet_process(12345)
     assert len(calls) == 1
     assert calls[0].get("creationflags") == sp.CREATE_NO_WINDOW
+
+
+def test_pid_alive_false_after_child_killed_with_handle_held():
+    """批 I 回归（实机事故）：父进程持有子进程句柄时，子进程被杀后其进程
+    对象仍可被 OpenProcess 打开——_pid_alive 必须用 GetExitCodeProcess 判定
+    真死活，否则杀成功的子鱼被误判存活，白等重试两轮并误报「未能退出」。"""
+    import subprocess
+    import sys
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert child_pet_cleanup._pid_alive(proc.pid)
+        proc.kill()
+        proc.wait()  # 已死，但 Popen 对象仍持有进程句柄（不 close/del）
+        assert not child_pet_cleanup._pid_alive(proc.pid), (
+            "句柄未释放不等于存活：必须读退出码判定")
+    finally:
+        try:
+            proc.kill()
+        except Exception:
+            pass

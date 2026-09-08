@@ -260,15 +260,15 @@ def test_clear_spawned_pets_button_falls_back_without_callback(
     try:
         dialog._on_clear_spawned_pets()
         assert cleaned == [cfg.dir]
-        assert len(infos) == 1
+        assert infos == [], "批 I：结果弹窗已移除（结果写日志）"
     finally:
         dialog.deleteLater()
         qapp.processEvents()
 
 
-def test_clear_spawned_pets_button_fallback_cancel_does_nothing(
+def test_clear_spawned_pets_button_fallback_runs_without_dialogs(
         qapp, tmp_path: Path, monkeypatch):
-    """批 E：回退路径下用户取消 → 不清理、不弹结果框。"""
+    """批 I：回退路径无确认框无结果框，一键直接静默执行。"""
     from PySide6.QtWidgets import QMessageBox
 
     import pet.child_pet_cleanup as cleanup_mod
@@ -279,17 +279,20 @@ def test_clear_spawned_pets_button_fallback_cancel_does_nothing(
         cleanup_mod, "clear_spawned_pets",
         lambda *a, **kw: cleanup_calls.append(a) or
         {"killed_pids": [], "deleted": []})
+    questions = []
     monkeypatch.setattr(
         QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.StandardButton.Cancel)
+        lambda *a, **kw: (questions.append(1),
+                          QMessageBox.StandardButton.Cancel)[1])
     infos = []
     monkeypatch.setattr(
         QMessageBox, "information", lambda *a, **kw: infos.append(a))
     dialog = ModernSettingsDialog(cfg, include_ai=False)
     try:
         dialog._on_clear_spawned_pets()
-        assert cleanup_calls == []
-        assert infos == []
+        assert questions == [], "批 I：无确认框"
+        assert cleanup_calls != [], "回退路径直接执行清理"
+        assert infos == [], "批 I：无结果框"
     finally:
         dialog.deleteLater()
         qapp.processEvents()

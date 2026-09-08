@@ -20,20 +20,31 @@ from . import slot_manager as slot_manager_mod
 
 
 def _pid_alive(pid: int) -> bool:
-    """跨平台探活：Windows 用 OpenProcess，其余用 kill(pid, 0)。"""
+    """跨平台探活：Windows 用 GetExitCodeProcess==STILL_ACTIVE 判定真死活，
+    其余用 kill(pid, 0)。
+
+    注意不能用「OpenProcess 能不能打开」当死活：父进程 spawn 子进程后持有
+    子进程句柄，子进程被 taskkill 杀掉后其进程对象仍因句柄存活而可被打开
+    ——实机事故：杀成功了却被误判存活，白等重试两轮还误报「未能退出」。
+    """
     if pid <= 0:
         return False
     if os.name == "nt":
         try:
             import ctypes
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            from ctypes import wintypes
             handle = ctypes.windll.kernel32.OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-            )
+                0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
             if not handle:
                 return False
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
+            try:
+                code = wintypes.DWORD()
+                if not ctypes.windll.kernel32.GetExitCodeProcess(
+                        handle, ctypes.byref(code)):
+                    return False
+                return code.value == 259  # STILL_ACTIVE
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
         except Exception:
             return False
     try:
@@ -79,16 +90,6 @@ def _terminate_pet_process(pid: int) -> None:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-
-
-def _wait_pid_dead(pid: int, timeout: float = 2.0) -> bool:
-    """杀进程后确认其真的退出（taskkill 返回 ≠ 目标进程已消失）。有界轮询。"""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _pid_alive(pid):
-            return True
-        time.sleep(0.05)
-    return not _pid_alive(pid)
 
 
 def _pid_image_path(pid: int) -> str | None:
@@ -173,31 +174,20 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
     标记的 pid 可能已被无关进程复用，误杀会杀死无辜进程/打不动受保护进程
     （实机事故：0 杀 2 失败），识别为复用的按陈旧标记直接清理；③taskkill
     加 CREATE_NO_WINDOW，GUI 下不再每杀一只弹空白控制台窗口。
+
+    批 I：①探活改 GetExitCodeProcess==STILL_ACTIVE——OpenProcess 对「已死但
+    父进程还持有句柄」的子进程仍可打开，旧探活把杀成功的子鱼误判存活
+    （实机：杀了还白等两轮 2s 并误报未能退出）；②两段式杀法——先一口气
+    全部结束再统一等确认，N 只也只需一次等待窗口（旧逐只杀等串行 N×2s）；
+    ③逐只重试取消（探活准确后重试无意义）。
     """
     root = Path(config_dir)
     killed_pids: list[int] = []
     failed_pids: list[int] = []
     seen: set[int] = {os.getpid(), 0}  # 自己的 pid 永远跳过；两枚举源去重
+    targets: list[tuple[int, Path | None]] = []  # (pid, 对应标记文件或 None)
 
-    def _kill_one(pid: int, source: str) -> None:
-        logging.info("退出子肥鱼：结束子进程 pid=%d (%s)", pid, source)
-        dead = False
-        for attempt in (1, 2):
-            _terminate_pet_process(pid)
-            if _wait_pid_dead(pid):
-                dead = True
-                break
-            logging.warning(
-                "退出子肥鱼：第 %d 次结束 pid=%d 后进程仍存活", attempt, pid)
-        if dead:
-            killed_pids.append(pid)
-        else:
-            failed_pids.append(pid)
-            # 诊断：杀不掉时记录存活者到底是谁（pid 复用？还是真没杀掉）
-            logging.warning(
-                "退出子肥鱼：pid=%d 未能退出，存活者镜像=%s，保留标记供下次重试",
-                pid, _pid_image_path(pid))
-
+    # 第一阶段：收集目标。陈旧（进程已死 / pid 已被无关进程复用）的标记直接删。
     # 第一枚举源：runtime 标记（旧名 runtime-*.json + v2 新名
     # pet-runtime-v2-*.json，多进程模式只写旧名、单进程模式写 v2 名）。
     markers = slot_manager_mod.list_runtime_marker_files(root)
@@ -226,9 +216,8 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
                     "退出子肥鱼：标记 %s 的 pid=%d 已被无关进程复用，按陈旧标记清理",
                     marker.name, pid)
             else:
-                _kill_one(pid, marker.name)
-                if pid in failed_pids:
-                    continue  # 进程仍活：保留标记，不毁灭痕迹
+                targets.append((pid, marker))
+                continue  # 标记留待杀成后删（杀失败则保留供重试）
         try:
             marker.unlink()
         except OSError:
@@ -240,6 +229,33 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
             continue
         seen.add(pid)
         if _pid_alive(pid) and _is_pet_process(pid):
-            _kill_one(pid, "slot 锁")
+            targets.append((pid, None))
+
+    # 第二阶段：先一口气全部结束，再统一等确认——旧实现逐只「杀→等 2s 确认」，
+    # N 只串行等 N×2s（实机反馈太慢）；两段式 N 只也只需一次等待窗口。
+    for pid, marker in targets:
+        logging.info("退出子肥鱼：结束子进程 pid=%d (%s)",
+                     pid, marker.name if marker is not None else "slot 锁")
+        _terminate_pet_process(pid)
+    remaining = {pid for pid, _m in targets}
+    deadline = time.monotonic() + 2.0
+    while remaining and time.monotonic() < deadline:
+        remaining = {pid for pid in remaining if _pid_alive(pid)}
+        if remaining:
+            time.sleep(0.05)
+    for pid, marker in targets:
+        if pid in remaining:
+            failed_pids.append(pid)
+            # 诊断：杀不掉时记录存活者到底是谁（pid 复用？还是真没杀掉）
+            logging.warning(
+                "退出子肥鱼：pid=%d 未能退出，存活者镜像=%s，保留标记供下次重试",
+                pid, _pid_image_path(pid))
+        else:
+            killed_pids.append(pid)
+            if marker is not None:
+                try:
+                    marker.unlink()
+                except OSError:
+                    pass
 
     return {"killed_pids": killed_pids, "failed_pids": failed_pids}

@@ -1383,21 +1383,15 @@ class AppShell:
             _show_startup_error('生小肥鱼失败', str(exc))
 
     def clear_spawned_pets(self) -> None:
-        """右键菜单快捷入口：确认后退出所有小肥鱼（设置与数据保留）。"""
+        """右键菜单快捷入口：一键静默退出所有小肥鱼（设置与数据保留）。
+
+        批 I：按用户要求去掉确认框与结果框——操作本身不删数据、子肥鱼可
+        随时重新生成，无需确认；子肥鱼消失本身就是反馈，结果写日志。
+        """
         from .child_pet_cleanup import clear_spawned_pets as cleanup_slots
 
         if self._clear_spawned_pending:
             # 链式关闭进行中：重复点击直接忽略（同一任务会清干净，保持幂等）。
-            return
-        parent = self.win if self.win is not None and hasattr(self.win, "winId") else None
-        answer = QMessageBox.question(
-            parent,
-            "退出子肥鱼",
-            "将退出所有已生成的小肥鱼。\n\n它们的设置与数据会保留，下次生成时原样恢复。确定继续吗？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
             return
         # 单进程模式前置：进程内「非主窗」小肥鱼（PID=主进程）会被文件级清理的
         # pid==os.getpid() 自我保护跳过而永远清不掉，先按进程内子窗登记表枚举。
@@ -1406,19 +1400,19 @@ class AppShell:
         # 阻塞秒级）挪到后台 reaper 线程（批 G，_on_window_exit_requested 的
         # defer_heavy_teardown 路径），UI 线程只留关窗/摘标记等毫秒级必做步骤。
         # 全部关完再走文件级清理杀多进程子进程（同样在后台线程跑，taskkill
-        # 不再冻 UI）并弹结果框。两条路径都幂等，清完不留 runtime 标记残留。
+        # 不再冻 UI）。两条路径都幂等，清完不留 runtime 标记残留。
         refs = [weakref.ref(inst) for inst in self._instances
                 if inst is not self.instance]
         # 进行中标记两条路径统一前置：链式与纯文件级清理都覆盖（批 G 起文件级
         # 清理改后台线程，执行期间重复点击同样忽略）。
         self._clear_spawned_pending = True
         if not refs:
-            self._finish_clear_spawned_pets(cleanup_slots, parent)
+            self._finish_clear_spawned_pets(cleanup_slots)
             return
         QTimer.singleShot(
-            0, lambda: self._clear_spawned_chain(refs, 0, cleanup_slots, parent))
+            0, lambda: self._clear_spawned_chain(refs, 0, cleanup_slots))
 
-    def _clear_spawned_chain(self, refs, index: int, cleanup_slots, parent) -> None:
+    def _clear_spawned_chain(self, refs, index: int, cleanup_slots) -> None:
         """逐只异步关闭进程内子窗（每只之间让出事件循环，UI 不冻结）。
 
         窗口已销毁（弱引用失效）或已被关闭（不在登记表）则跳过；链尾执行
@@ -1426,7 +1420,7 @@ class AppShell:
         保证进行中标记一定复位。
         """
         if index >= len(refs):
-            self._finish_clear_spawned_pets(cleanup_slots, parent)
+            self._finish_clear_spawned_pets(cleanup_slots)
             return
         inst = refs[index]()
         if inst is not None and inst in self._instances:
@@ -1439,15 +1433,14 @@ class AppShell:
                     "清除子肥鱼：关闭进程内小肥鱼失败 (slot=%s)",
                     getattr(inst, "slot_id", None))
         QTimer.singleShot(
-            0, lambda: self._clear_spawned_chain(refs, index + 1, cleanup_slots, parent))
+            0, lambda: self._clear_spawned_chain(refs, index + 1, cleanup_slots))
 
-    def _finish_clear_spawned_pets(self, cleanup_slots, parent) -> None:
-        """链式关闭收口：文件级退出残余子进程 + 结果框，并复位进行中标记。
+    def _finish_clear_spawned_pets(self, cleanup_slots) -> None:
+        """链式关闭收口：文件级退出残余子进程，并复位进行中标记。
 
-        批 G：文件级清理（逐 pid taskkill，每个一次 subprocess 调用 + 杀后
-        确认轮询）移到后台线程——在 UI 线程同步执行会冻结主桌宠（实机复现）；
-        结果经 QTimer.singleShot 回 UI 线程弹框。进行中标记在回调里复位，
-        清理执行期间重复点击被忽略（幂等）。
+        批 G：文件级清理（逐 pid taskkill）移到后台线程——在 UI 线程同步执行
+        会冻结主桌宠（实机复现）；完成经 QTimer.singleShot 回 UI 线程复位标记。
+        批 I：按用户要求去掉结果弹窗——子肥鱼消失本身就是反馈，结果写日志。
         """
         config_dir = self.config.dir
 
@@ -1457,26 +1450,19 @@ class AppShell:
             except Exception:
                 logging.exception("退出子肥鱼：文件级清理失败")
                 result = {"killed_pids": [], "failed_pids": []}
+            logging.info(
+                "退出子肥鱼：已退出 %d 只，未能退出 %d 只",
+                len(result.get("killed_pids", [])),
+                len(result.get("failed_pids", [])))
             # 带 context 的 singleShot：从后台线程安全投递回 UI 线程。
-            QTimer.singleShot(
-                0, self.app,
-                lambda: self._show_clear_spawned_result(result, parent))
+            QTimer.singleShot(0, self.app, self._clear_spawned_sweep_done)
 
         threading.Thread(
             target=sweep, daemon=True, name="pet-clear-spawned-sweep").start()
 
-    def _show_clear_spawned_result(self, result: dict, parent) -> None:
-        """文件级清理完成回调（UI 线程）：复位进行中标记并弹结果框。"""
+    def _clear_spawned_sweep_done(self) -> None:
+        """文件级清理完成回调（UI 线程）：复位进行中标记。"""
         self._clear_spawned_pending = False
-        if parent is not None and not shiboken6.isValid(parent):
-            # 链式让出事件循环期间主窗可能已销毁：结果框降级为无父窗。
-            parent = None
-        killed = len(result.get("killed_pids", []))
-        failed = len(result.get("failed_pids", []))
-        text = f"已退出 {killed} 个小肥鱼进程；它们的设置与数据已保留。"
-        if failed:
-            text += f"\n\n{failed} 个小肥鱼未能退出（仍在运行），可再次执行或手动关闭。"
-        QMessageBox.information(parent, "退出子肥鱼", text)
 
     def spawn_in_process_window(self, offset_index: int = 1) -> PetInstance:
         """批5.2 spike：进程内创建第二个 PetInstance（不共享库/Config/SessionStore）。
