@@ -16,6 +16,7 @@ nvm、volta、bun、pnpm 等常见安装目录后回退 npx；需要机器装有
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -87,18 +88,73 @@ _HIDDEN_KWARGS: dict = (
 )
 
 
-def _supports_no_open(base_command: list[str]) -> bool:
-    """探测 `web --help` 是否支持 --no-open。
+def _probe_cache_path() -> Path:
+    """--no-open 探测结果的落盘缓存路径（桌宠数据目录下）。"""
+    try:
+        from . import config as _config_mod
+        app_dir = str(getattr(_config_mod, "APP_DIR_NAME", "dsh-pet-standalone"))
+    except Exception:
+        app_dir = "dsh-pet-standalone"
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+    return base / app_dir / "harness_probe_cache.json"
 
-    旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；探测失败/
-    超时默认 False，宁可少传参数也不能让启动命令报 unknown option。
-    注意 dsh web --help 要初始化插件栈，热机也要 ~9s，超时给 30s
-    （开机等高负载场景 15s 会被打爆，误判为不支持 → 不带 --no-open →
-    dsh 自己弹浏览器，实测复现）。
+
+def _dsh_version(base_command: list[str]) -> str | None:
+    """快速取 dsh 版本（--version 不加载插件栈，秒回；失败返回 None）。"""
+    try:
+        result = subprocess.run(
+            [*base_command, "--version"],
+            capture_output=True, text=True, timeout=8,
+            cwd=str(Path.home()),
+            env={**os.environ, "PATH": _augmented_path()},
+            **_HIDDEN_KWARGS,
+        )
+        return (result.stdout or "").strip() or (result.stderr or "").strip() or None
+    except Exception:
+        return None
+
+
+def _no_open_disk_cache_read(base_command: list[str], *, allow_stale: bool = False) -> bool | None:
+    """读落盘缓存：默认仅当缓存的命令行与当前 dsh 版本都匹配才命中；
+    allow_stale=True 时跳过版本校验（仅作探测失败时的兜底）；否则 None。"""
+    try:
+        cache = json.loads(_probe_cache_path().read_text(encoding="utf-8"))
+        if cache.get("cmd") != [str(part) for part in base_command]:
+            return None
+        if not allow_stale:
+            version = _dsh_version(base_command)
+            if version is None or version != cache.get("version"):
+                return None
+        return bool(cache.get("no_open"))
+    except Exception:
+        return None
+
+
+def _no_open_disk_cache_write(base_command: list[str], supported: bool) -> None:
+    """慢探测成功后写落盘缓存（失败探测不写，避免把超时误判固化）。"""
+    try:
+        version = _dsh_version(base_command)
+        if version is None:
+            return
+        path = _probe_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "cmd": [str(part) for part in base_command],
+            "version": version,
+            "no_open": bool(supported),
+        }), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _probe_no_open(base_command: list[str]) -> tuple[bool, bool]:
+    """慢探测 `web --help`：返回 (supported, probe_ok)。
+
+    超时/异常时 probe_ok=False——这是「不知道」，不是「不支持」，不得写缓存。
     """
-    key = tuple(str(part) for part in base_command)
-    if key in _NO_OPEN_CACHE:
-        return _NO_OPEN_CACHE[key]
     try:
         result = subprocess.run(
             [*base_command, "web", "--help"],
@@ -110,8 +166,33 @@ def _supports_no_open(base_command: list[str]) -> bool:
             **_HIDDEN_KWARGS,
         )
         supported = "--no-open" in (result.stdout or "") or "--no-open" in (result.stderr or "")
+        return supported, True
     except Exception:
-        supported = False
+        return False, False
+
+
+def _supports_no_open(base_command: list[str]) -> bool:
+    """探测 `web --help` 是否支持 --no-open。
+
+    三级缓存：进程内 dict → 落盘缓存（按 `dsh --version` 匹配——慢探测要初始
+    化插件栈，热机 ~9s，开机高负载 30s 也会超时；缓存使命中后零探测）→
+    慢探测。旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；探测
+    失败/超时默认 False，宁可少传参数也不能让启动命令报 unknown option。
+    """
+    key = tuple(str(part) for part in base_command)
+    if key in _NO_OPEN_CACHE:
+        return _NO_OPEN_CACHE[key]
+    supported = _no_open_disk_cache_read(base_command)
+    if supported is None:
+        supported, probe_ok = _probe_no_open(base_command)
+        if probe_ok:
+            _no_open_disk_cache_write(base_command, supported)
+        else:
+            # 慢探测失败（开机高负载超时）：用旧版本缓存兜底——命令行匹配说明
+            # 是同一个 dsh 安装，dsh 跨版本移除 CLI 参数的概率远低于探测超时
+            stale = _no_open_disk_cache_read(base_command, allow_stale=True)
+            if stale is not None:
+                supported = stale
     _NO_OPEN_CACHE[key] = supported
     return supported
 

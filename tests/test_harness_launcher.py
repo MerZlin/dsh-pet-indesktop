@@ -56,10 +56,11 @@ def test_find_launch_command_fallback_without_dsh(monkeypatch):
     assert os.path.basename(command[0]).lower() in allowed
 
 
-def test_supports_no_open_probes_help(monkeypatch):
+def test_supports_no_open_probes_help(monkeypatch, tmp_path):
     from pet import harness_launcher as hl
 
     hl._NO_OPEN_CACHE.clear()
+    monkeypatch.setattr(hl, "_probe_cache_path", lambda: tmp_path / "nope.json")
 
     def fake_run(*args, **kwargs):
         return SimpleNamespace(returncode=0, stdout="--no-open  Do not open browser", stderr="")
@@ -75,16 +76,56 @@ def test_supports_no_open_probes_help(monkeypatch):
     assert hl._supports_no_open(["dsh"]) is False
 
 
-def test_supports_no_open_probe_failure_defaults_false(monkeypatch):
+def test_supports_no_open_probe_failure_defaults_false(monkeypatch, tmp_path):
     from pet import harness_launcher as hl
 
     hl._NO_OPEN_CACHE.clear()
+    monkeypatch.setattr(hl, "_probe_cache_path", lambda: tmp_path / "nope.json")
 
     def fake_run_fail(*args, **kwargs):
         raise TimeoutError("probe timeout")
 
     monkeypatch.setattr(hl.subprocess, "run", fake_run_fail)
     assert hl._supports_no_open(["dsh"]) is False
+
+
+def test_supports_no_open_disk_cache(monkeypatch, tmp_path):
+    """落盘缓存：版本匹配时直接用缓存零探测；版本变了才重新慢探测。"""
+    import json as _json
+    from pet import harness_launcher as hl
+
+    cache_file = tmp_path / "cache.json"
+    monkeypatch.setattr(hl, "_probe_cache_path", lambda: cache_file)
+    monkeypatch.setattr(hl, "_dsh_version", lambda cmd: "0.1.1-rc.2")
+    hl._NO_OPEN_CACHE.clear()
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("缓存命中时不应再跑慢探测")
+
+    # 缓存命中：probe 爆炸也不应被调用
+    cache_file.write_text(_json.dumps(
+        {"cmd": ["dsh"], "version": "0.1.1-rc.2", "no_open": True}), encoding="utf-8")
+    monkeypatch.setattr(hl, "_probe_no_open", _explode)
+    assert hl._supports_no_open(["dsh"]) is True
+
+    # 版本变了：缓存失效，回落到慢探测
+    monkeypatch.setattr(hl, "_dsh_version", lambda cmd: "0.1.2")
+    hl._NO_OPEN_CACHE.clear()
+    monkeypatch.setattr(hl, "_probe_no_open", lambda cmd: (False, True))
+    assert hl._supports_no_open(["dsh"]) is False
+
+    # 探测失败（probe_ok=False）不写缓存，避免把超时误判固化
+    hl._NO_OPEN_CACHE.clear()
+    monkeypatch.setattr(hl, "_probe_no_open", lambda cmd: (False, False))
+    assert hl._supports_no_open(["dsh"]) is False
+    # 缓存应保持第二段写入的 0.1.2 版本内容，未被失败探测覆盖
+    assert _json.loads(cache_file.read_text(encoding="utf-8"))["version"] == "0.1.2"
+
+    # 探测失败 + 版本不匹配的旧缓存 → 兜底沿用旧答案（开机超时不再误判）
+    cache_file.write_text(_json.dumps(
+        {"cmd": ["dsh"], "version": "9.9.9", "no_open": True}), encoding="utf-8")
+    hl._NO_OPEN_CACHE.clear()
+    assert hl._supports_no_open(["dsh"]) is True
 
 
 def test_launch_harness_reuses_existing_instance_on_alt_port(monkeypatch):
