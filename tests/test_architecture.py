@@ -43,7 +43,10 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 取消激活中的边缘探头会话，防止宠物斜着出现在右下角；实测 4350）。
 # 2026-09-08 上调到 4352：合入识屏自我识别 pet_name 传递（+4）与死键清理（-2），
 # 实测 4352。window.py 分块拆分仍是待办，拆分前预算只随实测校准。
-WINDOW_PY_LINE_BUDGET = 4352
+# 2026-09-08 上调到 4366：围圈聚集互动——仅保留 3 组薄钩子（初始化懒装配、
+# 左键交互取消、隐藏取消、detach 清理），控制器实现在 group_gathering.py /
+# window_optional_services.py；实测 4366。
+WINDOW_PY_LINE_BUDGET = 4366
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
@@ -54,8 +57,9 @@ WINDOW_PY_LINE_BUDGET = 4352
 # 2026-09-06 上调到 1992：合入上游 main（PR73）带来动画预热开关等 +85 行
 # （实测 1942），预算随实测校准。
 # 2026-09-08 上调到 1996：新增「随桌宠启动 dsh 服务」开关行（+4，实测 1996）。
-# 本文件拆分仍是待办，拆分前预算只随实测校准。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 1996
+# 2026-09-08 上调到 2033：围圈聚集互动设置两行 + 依赖显隐/保存回写（+37，
+# 实测 2033）。本文件拆分仍是待办，拆分前预算只随实测校准。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2033
 
 
 def _read(name: str) -> str:

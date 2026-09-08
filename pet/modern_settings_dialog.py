@@ -235,6 +235,8 @@ class ModernSettingsDialog(QDialog):
         general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
         spawn_rows = [
             SettingRow("single_process_spawn", "单进程多开（省内存）", "开启后「生小肥鱼」在同一进程内创建新桌宠，多窗共享解码链（同一段动画只解码一份），多开时内存与进程数显著降低；已有各只的设置存档保留不变。重启后生效。", self.single_process_spawn_check),
+            SettingRow("group_gathering_enabled", "聚集互动", "多只桌宠可聚在一起同播一个动作；需开启碰撞。关闭时无任何额外开销。", self.group_gathering_enabled_check),
+            SettingRow("group_gathering_auto", "靠近时自动聚一聚", "多只桌宠靠近时偶尔自发围圈并随机播放一个共同动作；不移动/省电/隐藏时不会自动触发。", self.group_gathering_auto_check, stacked=True),
         ]
         general_layout.addWidget(SettingsSection("多开", spawn_rows, general_content))
         if self.balance_refresh_spin is not None:
@@ -510,6 +512,7 @@ class ModernSettingsDialog(QDialog):
             self.pro_idle_check.toggled.connect(self._update_proactive_idle_controls)
         self.spawn_inherit_size_check.toggled.connect(self._update_spawn_size_controls)
         self.golden_spin_click_check.toggled.connect(self._update_golden_spin_controls)
+        self.group_gathering_enabled_check.toggled.connect(self._update_group_gathering_controls)
         self._update_self_talk_controls(self.self_talk_check.isChecked())
         self._update_translucency_controls(self.menu_translucent_check.isChecked())
         self._update_island_controls(self.island_enabled_check.isChecked())
@@ -522,6 +525,7 @@ class ModernSettingsDialog(QDialog):
         # 初始同步须在全部 SettingRow 构建完成后执行，否则 findChild 找不到行
         self._update_click_sound_controls(self.click_sound_check.isChecked())
         self._update_golden_spin_controls(self.golden_spin_click_check.isChecked())
+        self._update_group_gathering_controls(self.group_gathering_enabled_check.isChecked())
         self._update_agent_sound_controls(self.agent_sound_check.isChecked())
         self._update_agent_sound_subcontrols()
 
@@ -581,6 +585,14 @@ class ModernSettingsDialog(QDialog):
         self.drag_physics_check.setChecked(bool(self.config.get("drag_physics", False)))
         self.single_process_spawn_check = ToggleSwitch(self)
         self.single_process_spawn_check.setChecked(bool(self.config.get("experimental_single_process_spawn", False)))
+        group_cfg = self.config.get("group_gathering", {}) or {}
+        group_cfg = group_cfg if isinstance(group_cfg, dict) else {}
+        self.group_gathering_enabled_check = ToggleSwitch(self)
+        self.group_gathering_enabled_check.setChecked(bool(group_cfg.get("enabled", False)))
+        self.group_gathering_auto_check = ToggleSwitch(self)
+        self.group_gathering_auto_check.setChecked(
+            bool(group_cfg.get("auto_enabled", False)) and bool(group_cfg.get("enabled", False))
+        )
 
         # 甩出力度四档：gentle (轻柔) / standard (标准) / strong (强力) / crazy (疯狂)
         self.throw_strength_select = ModernSelect(self, width=132)
@@ -1216,6 +1228,26 @@ class ModernSettingsDialog(QDialog):
             "collision_mass_scale", "collision_impulse_cap", "collision_sound_volume",
         ), enabled, dependency="collision_enabled")
         self._update_collision_sound_controls(self.collision_sound_check.isChecked())
+        self._update_group_gathering_controls(self.group_gathering_enabled_check.isChecked())
+
+    def _update_group_gathering_controls(self, enabled: bool) -> None:
+        collision_on = self.collision_enabled_check.isChecked()
+        self._set_setting_rows_visible(
+            ("group_gathering_auto",),
+            enabled and collision_on,
+            dependency="group_gathering_enabled",
+        )
+        for key, control_visible in (
+            ("group_gathering_enabled", True),
+            ("group_gathering_auto", enabled and collision_on),
+        ):
+            row = self.findChild(SettingRow, f"settingRow_{key}")
+            if row is None:
+                continue
+            row.setEnabled(collision_on)
+            control = getattr(row, "control", None)
+            if control is not None:
+                control.setEnabled(collision_on and control_visible)
 
     def _update_collision_sound_controls(self, enabled: bool) -> None:
         self._set_setting_rows_visible(
@@ -1536,7 +1568,7 @@ class ModernSettingsDialog(QDialog):
         general = page_content([
             ("应用启动", claim("autostart", "harness_autostart")),
             ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
-            ("多开", claim("single_process_spawn")),
+            ("多开", claim("single_process_spawn", "group_gathering_enabled", "group_gathering_auto")),
         ])
         collision_primary = claim("collision_enabled", "collision_sound_enabled")
         collision_advanced = claim(
@@ -1860,6 +1892,11 @@ class ModernSettingsDialog(QDialog):
         if self.auto_hide_fullscreen_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
         self.config.set("experimental_single_process_spawn", self.single_process_spawn_check.isChecked())
+        group_gathering_enabled = self.group_gathering_enabled_check.isChecked()
+        self.config.set("group_gathering", {
+            "enabled": group_gathering_enabled,
+            "auto_enabled": self.group_gathering_auto_check.isChecked() and group_gathering_enabled,
+        })
         if self.cursor_hidden_passthrough_check is not None:
             self.config.set("cursor_hidden_passthrough", self.cursor_hidden_passthrough_check.isChecked())
         if self.stream_capture_check is not None:

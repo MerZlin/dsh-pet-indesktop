@@ -313,6 +313,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "clear_spawned_pets",
         "golden_spin",
         "edge_probe",
+        "gather",
         "quick_launch",
         "balance",
         "harness",

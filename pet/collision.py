@@ -40,6 +40,7 @@ FLAG_AUTO_CURSOR_HIDDEN: int = 1 << 7   # 128: 自动光标穿透/隐藏
 FLAG_PAUSED: int = 1 << 8               # 256: 暂停活动
 FLAG_COLLISION_ENABLED: int = 1 << 9    # 512: 开启碰撞
 FLAG_PREDICTED_BOUNCE: int = 1 << 10    # 1024: 客户端已预测的反弹事件
+FLAG_GROUP_ENABLED: int = 1 << 11       # 2048: 参与多桌宠围圈聚集互动
 
 
 @dataclass

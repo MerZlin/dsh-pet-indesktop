@@ -419,6 +419,27 @@ def _clean_self_talk_texts(value):
     return texts or list(DEFAULT_SELF_TALK_TEXTS)
 
 
+def _default_group_gathering_data() -> dict:
+    """多桌宠围圈聚集互动默认配置：总开关默认关，自动偶遇随总开关关。"""
+    return {
+        "enabled": False,
+        "auto_enabled": False,
+    }
+
+
+def _clean_group_gathering_data(value) -> dict:
+    defaults = _default_group_gathering_data()
+    if not isinstance(value, dict):
+        return dict(defaults)
+    result = dict(defaults)
+    result.update({k: v for k, v in value.items() if k in defaults})
+    result["enabled"] = _bool_or_default(result["enabled"], False)
+    result["auto_enabled"] = (
+        _bool_or_default(result["auto_enabled"], False) if result["enabled"] else False
+    )
+    return result
+
+
 def _default_dynamic_island_data() -> dict:
     """灵动岛默认配置：默认开启常驻，位置留空由首次显示时自动定位。"""
     return {
@@ -598,6 +619,7 @@ class Config:
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             "todo_reminder_enabled": True,   # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
+            "group_gathering": _default_group_gathering_data(),
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             # 批10-A3：默认 32→8MB。预测式预热（批10-A1）落地后，首帧 LRU 只需
@@ -827,6 +849,8 @@ class Config:
             self.data["proactive_screen"] = _merge_proactive_screen_data(raw["proactive_screen"])
         if "agent_link" in raw:
             self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
+        if "group_gathering" in raw:
+            self.data["group_gathering"] = _clean_group_gathering_data(raw["group_gathering"])
         self._migrate_click_sound_config(raw)
         self._migrate_decode_broker_config(raw)
         self.data["version"] = 4
@@ -967,6 +991,9 @@ class Config:
         self.data["chat_always_on_top"] = bool(self.data.get("chat_always_on_top", False))
         self.data["dynamic_island"] = _clean_dynamic_island_data(
             self.data.get("dynamic_island")
+        )
+        self.data["group_gathering"] = _clean_group_gathering_data(
+            self.data.get("group_gathering")
         )
         for prefix in ("chat_background", "modern_chat_background"):
             opacity_key = f"{prefix}_opacity"
@@ -1123,6 +1150,7 @@ class Config:
             "spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island",
             "todo_reminder_enabled", "todo_reminder_lead_minutes",
             "character_profiles", "chat_always_on_top", "dynamic_island",
+            "group_gathering",
         }:
             self._normalize_pet_settings()
 

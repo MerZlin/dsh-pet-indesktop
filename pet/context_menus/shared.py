@@ -362,6 +362,32 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act.toggled.connect(lambda on, k=opt_key: pet.set_agent_link_option(k, on))
 
 
+def add_group_gathering_menu(menu: QMenu, pet, *, icons: bool = True):
+    """围圈聚集二级菜单：每次展开按当前同屏参与者刷新公共预设。"""
+    wanted = getattr(pet, "group_gather_wanted", None)
+    if not callable(wanted) or not wanted():
+        return None
+    sub = add_submenu(menu, "聚集互动", "play" if icons else None)
+
+    def populate() -> None:
+        if shiboken6.isValid(sub) is False:
+            return
+        sub.clear()
+        presets = pet.group_common_presets()
+        if not presets:
+            action = sub.addAction("当前没有可一起播放的动作")
+            action.setEnabled(False)
+            return
+        for preset in presets:
+            action = sub.addAction(str(preset.get("label") or preset.get("id")))
+            action.setProperty("closeOnTrigger", True)
+            preset_id = str(preset.get("id") or "")
+            connect_action(action, lambda pid=preset_id: pet.start_group_gather(pid))
+
+    sub.aboutToShow.connect(populate)
+    return sub
+
+
 def build_size_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
     submenu = add_submenu(menu, "大小", "size" if icons else None)
     group = QActionGroup(submenu)

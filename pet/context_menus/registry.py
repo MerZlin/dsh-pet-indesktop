@@ -26,6 +26,7 @@ from .shared import (
     add_drag_physics,
     add_edge_probe,
     add_golden_spin,
+    add_group_gathering_menu,
     add_harness,
     add_hide_pet,
     add_look_screen,
@@ -52,6 +53,7 @@ ACTION_LABELS = {
     "return_corner": "回到右下角", "hide_pet": "隐藏桌宠",
     "spawn_pet": "生小肥鱼", "clear_spawned_pets": "清除子肥鱼",
     "golden_spin": "黄金回旋", "edge_probe": "边缘探头",
+    "gather": "聚集互动",
     "quick_launch": "快捷启动", "balance": "DeepSeek 余额",
     "harness": "启动 DeepSeek Harness", "deepseek_web": "打开网页版 DeepSeek",
     "check_update": "检查更新", "github_project": "GitHub 项目页",
@@ -74,6 +76,7 @@ ACTION_ICONS = {
     "return_corner": "corner", "hide_pet": "hide",
     "spawn_pet": "spawn", "clear_spawned_pets": "clear",
     "golden_spin": "play", "edge_probe": "corner",
+    "gather": "play",
     "quick_launch": "application", "balance": "balance", "harness": "harness",
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
@@ -183,6 +186,14 @@ class MenuActionRegistry:
                 _callback_available("trigger_golden_spin"),
             ),
             "edge_probe": MenuActionSpec(add_edge_probe),
+            "gather": MenuActionSpec(
+                add_group_gathering_menu,
+                available=lambda pet: bool(
+                    callable(getattr(pet, "group_gather_wanted", None))
+                    and pet.group_gather_wanted()
+                ),
+                disabled_reason="需先开启「聚集互动」并开启碰撞",
+            ),
             "quick_launch": MenuActionSpec(
                 lambda menu, pet: add_quick_launch_menu(menu, pet.cfg),
                 enabled=lambda pet: bool(configured_quick_apps(pet.cfg)),

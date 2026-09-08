@@ -31,7 +31,9 @@ RUNTIME_ID_MAX_LENGTH = 128
 CHARACTER_MAX_LENGTH = 512
 MAX_COLLISION_CIRCLES = 3
 ACTIVE_MEMBER_MAX_AGE = 1.2
-_KNOWN_FLAGS_MASK = (1 << 11) - 1
+_KNOWN_FLAGS_MASK = (1 << 12) - 1
+_GROUP_TTL_MS = 20_000
+_GROUP_ACTION_DELAY_MS = 80
 
 
 def _bounded_text(value: Any, max_bytes: int) -> str:
@@ -142,6 +144,7 @@ class _CollisionWorker(QObject):
     snapshot_ready = Signal(object)
     policy_changed = Signal(object)
     role_changed = Signal(bool, str)
+    group_message_ready = Signal(object)
     error = Signal(str)
     _local_election_names: set[str] = set()
 
@@ -186,6 +189,8 @@ class _CollisionWorker(QObject):
         # P3 broker：GUI 侧同步查询用角色状态（角色是否已定 + 是否 coordinator）。
         # 角色未定（选举进行中/刚断线）时 broker 决策等待 ≤600ms 或直接本地。
         self._role_ready = False
+        # 围圈聚集会话（仅协调者维护；客户端收到广播后转发给 GUI）。
+        self._active_group: dict[str, Any] | None = None
 
     @Slot()
     def start(self) -> None:
@@ -499,6 +504,111 @@ class _CollisionWorker(QObject):
             # 字段缺省/多余由各分支的 .get 容错处理，见 _handle_message）
             self._handle_message(socket, cast(collision_codec.WireMessage, message))
 
+    # ------------------------------------------------------------ 围圈聚集
+    def _broadcast_group(self, message: collision_codec.GroupMessage) -> None:
+        """协调者把组指令同时发给所有 peer 与本地 GUI（协调者自身也是参与者）。"""
+        self._broadcast(self.peers, message)
+        self.group_message_ready.emit(message)
+
+    @staticmethod
+    def _group_target_ids(message: dict[str, Any]) -> set[str]:
+        targets = message.get("targets")
+        if not isinstance(targets, list):
+            return set()
+        return {
+            str(item.get("runtime_id") or "").strip()
+            for item in targets
+            if isinstance(item, dict) and str(item.get("runtime_id") or "").strip()
+        }
+
+    @Slot()
+    def _expire_group(self) -> None:
+        active = self._active_group
+        if active is None:
+            return
+        token = str(active.get("token") or "")
+        self._broadcast_group({
+            "type": "group", "kind": "cancel", "token": token, "reason": "timeout",
+        })
+        self._active_group = None
+
+    def _clear_active_group(self) -> None:
+        active = self._active_group
+        self._active_group = None
+        if active is not None:
+            timer = active.get("timer")
+            if isinstance(timer, QTimer):
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+                timer.deleteLater()
+
+    def _handle_group_message(self, message: dict[str, Any], origin_id: str = "") -> None:
+        """协调者权威处理；origin_id 为发送方 runtime_id（本地提交传自己）。"""
+        kind = str(message.get("kind") or "")
+        token = str(message.get("token") or "")
+        if not token or kind not in {"begin", "ready", "action", "cancel", "done"}:
+            return
+        active = self._active_group
+        if kind == "begin":
+            if active is not None:
+                return  # 已有会话：忽略并发 begin
+            target_ids = self._group_target_ids(message)
+            if not target_ids:
+                return
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._expire_group)
+            timer.start(_GROUP_TTL_MS)
+            self._active_group = {
+                "token": token,
+                "clip": str(message.get("clip") or ""),
+                "target_ids": target_ids,
+                "ready": set(),
+                "done": set(),
+                "timer": timer,
+            }
+            self._broadcast_group(message)
+            return
+        if active is None or str(active.get("token") or "") != token:
+            return
+        if kind == "cancel":
+            self._broadcast_group(message)
+            self._clear_active_group()
+            return
+        if kind == "ready":
+            if origin_id and origin_id in active["target_ids"]:
+                active["ready"].add(origin_id)
+                if len(active["ready"]) >= len(active["target_ids"]):
+                    self._broadcast_group({
+                        "type": "group", "kind": "action", "token": token,
+                        "clip": str(active.get("clip") or ""),
+                        "start_delta_ms": _GROUP_ACTION_DELAY_MS,
+                    })
+            return
+        if kind == "done":
+            if origin_id and origin_id in active["target_ids"]:
+                active["done"].add(origin_id)
+                if len(active["done"]) >= len(active["target_ids"]):
+                    self._clear_active_group()
+            return
+        # action 只由协调者在 ready 齐时生成；客户端不应单独提交。
+
+    @Slot(object)
+    def submit_group_message(self, message: dict[str, Any]) -> None:
+        """GUI -> worker 队列入口：本地会话提交组指令。
+
+        协调者直接走权威处理；客户端发给远端协调者。
+        """
+        if self._stopping or not isinstance(message, dict):
+            return
+        if self.server is not None:
+            self._handle_group_message(message, origin_id=self.runtime_id)
+        elif self.socket is not None:
+            self._send(self.socket, dict(message))
+
+
     def _handle_message(self, socket, message: collision_codec.WireMessage) -> None:
         kind = message.get("type")
         if socket is self._probe and kind == "coordinator":
@@ -556,6 +666,10 @@ class _CollisionWorker(QObject):
                 self._membership_dirty = self._membership_dirty or is_new
             elif kind == "leave":
                 self._remove_member(self.peers.get(socket, ""))
+            elif kind == "group":
+                self._handle_group_message(
+                    message, origin_id=str(self.peers.get(socket, "") or "")
+                )
         elif kind == "coordinator":
             self._resign_to(str(message.get("runtime_id") or ""))
         elif kind == "welcome":
@@ -586,6 +700,9 @@ class _CollisionWorker(QObject):
             if message.get("epoch", self.epoch) == self.epoch:
                 self._last_control_message = self._now()
                 self.snapshot_ready.emit(message)
+        elif kind == "group":
+            # 客户端只负责把协调者广播的组指令交给 GUI；不二次仲裁。
+            self.group_message_ready.emit(message)
         elif kind == "impulse":
             pair = str(message.get("pair") or "")
             try:
@@ -640,6 +757,13 @@ class _CollisionWorker(QObject):
             self._probe = None
         self._membership_dirty = False
         self._clear_solver_history()
+        if self._active_group is not None:
+            self._broadcast_group({
+                "type": "group", "kind": "cancel",
+                "token": str(self._active_group.get("token") or ""),
+                "reason": "coordinator_changed",
+            })
+        self._clear_active_group()
         for timer in self._timers:
             timer.stop()
             timer.deleteLater()
@@ -1095,10 +1219,12 @@ class CollisionIpcSession(QObject):
     state_submitted = Signal(object)
     policy_submitted = Signal(object)
     leave_submitted = Signal()
+    group_submitted = Signal(object)
     impulse_ready = Signal(object)
     snapshot_ready = Signal(object)
     policy_changed = Signal(object)
     role_changed = Signal(bool, str)
+    group_message_ready = Signal(object)
 
     def __init__(self, config, parent=None, server_name: str | None = None):
         # AppShell 是普通控制器而非 QObject；生命周期由其属性持有。
@@ -1120,9 +1246,15 @@ class CollisionIpcSession(QObject):
         self._worker.snapshot_ready.connect(self.snapshot_ready, Qt.ConnectionType.QueuedConnection)
         self._worker.policy_changed.connect(self.policy_changed, Qt.ConnectionType.QueuedConnection)
         self._worker.role_changed.connect(self.role_changed, Qt.ConnectionType.QueuedConnection)
+        self._worker.group_message_ready.connect(
+            self.group_message_ready, Qt.ConnectionType.QueuedConnection
+        )
         self.state_submitted.connect(self._worker.submit_state, Qt.ConnectionType.QueuedConnection)
         self.policy_submitted.connect(self._worker.set_policy, Qt.ConnectionType.QueuedConnection)
         self.leave_submitted.connect(self._worker.submit_leave, Qt.ConnectionType.QueuedConnection)
+        self.group_submitted.connect(
+            self._worker.submit_group_message, Qt.ConnectionType.QueuedConnection
+        )
 
     def start(self) -> None:
         self._thread.start()
@@ -1137,6 +1269,10 @@ class CollisionIpcSession(QObject):
     def submit_leave(self) -> None:
         """主动向协调者发 leave：成员即时移除，不等 stale 超时。"""
         self.leave_submitted.emit()
+
+    def submit_group_message(self, message: dict[str, Any]) -> None:
+        """提交一条围圈聚集指令（begin/ready/cancel/done）。"""
+        self.group_submitted.emit(dict(message))
 
     def stop(self) -> None:
         if self._thread.isRunning():

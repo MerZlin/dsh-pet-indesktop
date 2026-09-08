@@ -313,6 +313,12 @@ class DynamicIsland(QWidget):
         painter.end()
 
     # ------------------------------------------------------------ 鼠标
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        """右键弹出精简菜单：仅即时切换信息槽内容与外观风格。"""
+        from .dynamic_island_menu import show_island_context_menu
+        show_island_context_menu(self, event.globalPos())
+        event.accept()
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_global = event.globalPosition().toPoint()

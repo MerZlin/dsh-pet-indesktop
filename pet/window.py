@@ -698,6 +698,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
         self.attach_collision_session(collision_session)
         self._install_effect_services()
+        if getattr(self, '_group_gathering_enabled', lambda: False)():
+            self._ensure_group_gathering()
 
     @property
     def click_sound_enabled(self) -> bool:
@@ -1197,6 +1199,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         logging.info("[VIS] 桌宠隐藏 notify=%s anim=%s", notify, getattr(self, 'anim', '?'))  # 频闪排查观测
         self._hidden_paused = True
         self._effects_on_hidden()
+        group_hidden = getattr(self, '_group_on_hidden', None)
+        if callable(group_hidden):
+            group_hidden()
         self._pause_activity()
         super().hide()
         self._submit_collision_state(force=True)
@@ -1355,6 +1360,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         打断播放。
         """
         self._collision_client.detach()
+        group_detach = getattr(self, '_group_on_detach', None)
+        if callable(group_detach):
+            group_detach()
         movie = getattr(self, 'movie', None)
         if movie is not None:
             self._broker_unregister(self.anim, movie, natural=False)
@@ -3171,6 +3179,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if event.button() == Qt.MouseButton.LeftButton:
             if not self._is_in_interactive_area(event.position().toPoint()):
                 return  # 左右留白区域不参与点击/拖拽
+            group_interact = getattr(self, '_group_on_user_interaction', None)
+            if callable(group_interact):
+                group_interact()
             if self.click_sound_enabled:
                 pair = resolve_click_sound_pair(self.cfg.get("click_sound_pack"), data_dir=self.cfg.dir)
                 # 每次按下都重置：解析失败/切换音效包时不能复用上一次的旧 pair
@@ -3553,6 +3564,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # 预热被永久停用（_warm_paused 永远无法复位）。重复置位是幂等 no-op。
         self._hidden_paused = True
         self._effects_on_hidden()
+        group_hidden = getattr(self, '_group_on_hidden', None)
+        if callable(group_hidden):
+            group_hidden()
         # 原生隐藏直进路径（不经自定义 hide()/_pause_activity）同样复位全部
         # 按住状态：只清点击/菜单标志而残留 _press_global/_dragging 时，
         # 重新显示后 _resume_activity → _switch → _update_interaction_hold
