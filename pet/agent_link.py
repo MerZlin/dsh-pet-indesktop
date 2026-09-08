@@ -62,6 +62,12 @@ log = logging.getLogger("dsh-pet-standalone")
 DSH_PLUGIN_NAME = "@dsh-pet/bridge"
 DSH_PROFILE_HOME = Path(os.environ.get("DSH_HOME", str(Path.home() / ".dsh")))
 
+# Windows 探测/安装子进程隐藏窗口（与 harness_launcher 同款）：桌宠是无控制台
+# 的 GUI 进程，node/cmd 子进程不隐藏会弹出可见终端窗口。
+_HIDDEN_KWARGS: dict = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+)
+
 
 def _real_profiles() -> list[Path]:
     """真实存在的 dsh profile：profiles 目录下含 package.json 的子目录。
@@ -149,6 +155,7 @@ def _run_pnpm(profile_dir: Path, *args: str) -> tuple[int, str]:
             [node, cli, *args], capture_output=True, text=True,
             timeout=300, shell=False, cwd=str(profile_dir),
             env={**os.environ, "PATH": _augmented_path()},
+            **_HIDDEN_KWARGS,
         )
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except Exception as exc:

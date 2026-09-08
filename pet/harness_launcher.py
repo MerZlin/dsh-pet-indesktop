@@ -79,12 +79,22 @@ def _wrap_cmd(command: list[str]) -> list[str]:
 # 按基础命令缓存 `web --help` 是否包含 --no-open，避免每次点击菜单都探测
 _NO_OPEN_CACHE: dict[tuple[str, ...], bool] = {}
 
+# Windows 探测子进程必须隐藏窗口：桌宠是无控制台的 GUI 进程，console 类子进程
+# （cmd/node）不隐藏就会弹出可见终端窗口（开机自启场景实测复现：空终端窗口
+# 挂十几秒后消失）。
+_HIDDEN_KWARGS: dict = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+)
+
 
 def _supports_no_open(base_command: list[str]) -> bool:
     """探测 `web --help` 是否支持 --no-open。
 
     旧版 dsh（如 0.1.0-rc.3）没有该选项，强行传参会启动失败；探测失败/
     超时默认 False，宁可少传参数也不能让启动命令报 unknown option。
+    注意 dsh web --help 要初始化插件栈，热机也要 ~9s，超时给 30s
+    （开机等高负载场景 15s 会被打爆，误判为不支持 → 不带 --no-open →
+    dsh 自己弹浏览器，实测复现）。
     """
     key = tuple(str(part) for part in base_command)
     if key in _NO_OPEN_CACHE:
@@ -94,9 +104,10 @@ def _supports_no_open(base_command: list[str]) -> bool:
             [*base_command, "web", "--help"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=30,
             cwd=str(Path.home()),
             env={**os.environ, "PATH": _augmented_path()},
+            **_HIDDEN_KWARGS,
         )
         supported = "--no-open" in (result.stdout or "") or "--no-open" in (result.stderr or "")
     except Exception:
@@ -121,6 +132,7 @@ def _npm_global_roots() -> list[Path]:
             result = subprocess.run(
                 [npm, "root", "-g"], capture_output=True, text=True, timeout=15,
                 env={**os.environ, "PATH": _augmented_path()},
+                **_HIDDEN_KWARGS,
             )
             if result.returncode == 0 and result.stdout.strip():
                 roots.append(Path(result.stdout.strip()))
