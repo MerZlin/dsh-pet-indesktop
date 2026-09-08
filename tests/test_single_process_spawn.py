@@ -1240,6 +1240,8 @@ def test_clear_spawned_pets_multi_process_flag_off_no_in_process_children(
 
     terminated = []
     alive = {555}
+    # 批 H：杀前有 exe 身份核验（防 pid 复用误杀），假 pid 打桩为本程序
+    monkeypatch.setattr(cleanup_mod, "_is_pet_process", lambda pid: True)
     monkeypatch.setattr(
         cleanup_mod, "_pid_alive", lambda pid: pid in alive)
 

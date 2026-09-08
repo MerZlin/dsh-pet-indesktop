@@ -3,8 +3,18 @@
 from __future__ import annotations
 
 import json
+import os
+
+import pytest
 
 from pet import child_pet_cleanup
+from pet import slot_manager as slot_manager_mod
+
+
+def _stub_pet_identity(monkeypatch):
+    """批 H：杀前用 exe 路径核验 pid 身份（防 pid 复用误杀）。测试用假 pid，
+    统一打桩为「是本程序」；身份核验本身由专门用例覆盖。"""
+    monkeypatch.setattr(child_pet_cleanup, "_is_pet_process", lambda pid: True)
 
 
 def test_clear_spawned_pets_kills_processes_and_keeps_slot_data(tmp_path, monkeypatch):
@@ -30,6 +40,7 @@ def test_clear_spawned_pets_kills_processes_and_keeps_slot_data(tmp_path, monkey
 
     terminated = []
     alive = {222}
+    _stub_pet_identity(monkeypatch)
     monkeypatch.setattr(
         child_pet_cleanup,
         "_pid_alive",
@@ -89,6 +100,7 @@ def test_clear_spawned_pets_removes_v2_markers_and_keeps_slot_data(tmp_path, mon
 
     terminated = []
     alive = {444}
+    _stub_pet_identity(monkeypatch)
     monkeypatch.setattr(
         child_pet_cleanup,
         "_pid_alive",
@@ -135,6 +147,7 @@ def test_clear_spawned_pets_handles_legacy_and_v2_together_idempotent(
 
     terminated = []
     alive = {111, 222}
+    _stub_pet_identity(monkeypatch)
     monkeypatch.setattr(
         child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
 
@@ -174,6 +187,7 @@ def test_clear_spawned_pets_kill_failure_keeps_marker_and_reports(
     live_marker.write_text(json.dumps({"pid": 777}), encoding="utf-8")
 
     terminated = []
+    _stub_pet_identity(monkeypatch)
     monkeypatch.setattr(
         child_pet_cleanup, "_pid_alive", lambda pid: pid == 777)
     monkeypatch.setattr(
@@ -202,6 +216,7 @@ def test_clear_spawned_pets_retry_succeeds_on_second_attempt(
 
     terminated = []
     alive = {888}
+    _stub_pet_identity(monkeypatch)
     monkeypatch.setattr(
         child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
 
@@ -233,6 +248,7 @@ def test_clear_spawned_pets_never_kills_slot0_v2_marker(tmp_path, monkeypatch):
 
     alive = {999, 888}
     terminated = []
+    _stub_pet_identity(monkeypatch)
     monkeypatch.setattr(
         child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
 
@@ -248,3 +264,69 @@ def test_clear_spawned_pets_never_kills_slot0_v2_marker(tmp_path, monkeypatch):
     assert result["killed_pids"] == [888]
     assert main_v2.exists(), "主肥鱼标记必须保留"
     assert not child_v2.exists()
+
+
+def test_clear_spawned_pets_recycled_pid_treated_as_stale_marker(tmp_path, monkeypatch):
+    """批 H：陈旧标记的 pid 被无关进程复用（存活但不是本程序）→ 不误杀、
+    按陈旧标记删除，不计入 failed_pids（实机事故：0 杀 2 失败）。"""
+    root = tmp_path / "dsh-pet-standalone"
+    root.mkdir(parents=True)
+    marker = root / "runtime-777.json"
+    marker.write_text(json.dumps({"pid": 777}), encoding="utf-8")
+
+    monkeypatch.setattr(child_pet_cleanup, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(child_pet_cleanup, "_is_pet_process", lambda pid: False)
+    terminated = []
+    monkeypatch.setattr(
+        child_pet_cleanup, "_terminate_pet_process",
+        lambda pid: terminated.append(pid))
+
+    result = child_pet_cleanup.clear_spawned_pets(root)
+    assert terminated == [], "pid 被无关进程复用时不得 taskkill"
+    assert result["killed_pids"] == []
+    assert result["failed_pids"] == []
+    assert not marker.exists(), "复用 pid 的陈旧标记应被清理"
+
+
+def test_clear_spawned_pets_slot_lock_as_second_source(tmp_path, monkeypatch):
+    """批 H：没写过 runtime 标记的小肥鱼也持有 slots/slot-N.lock（内含 pid），
+    锁文件作为第二枚举源把这类漏网之鱼杀掉；slot-0（主肥鱼）跳过。"""
+    root = tmp_path / "dsh-pet-standalone"
+    (root / "slots").mkdir(parents=True)
+    (root / "slots" / "slot-0.lock").write_bytes(
+        slot_manager_mod._format_pid_record(999))
+    (root / "slots" / "slot-2.lock").write_bytes(
+        slot_manager_mod._format_pid_record(888))
+
+    alive = {999, 888}
+    terminated = []
+    monkeypatch.setattr(
+        child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(child_pet_cleanup, "_is_pet_process", lambda pid: True)
+
+    def fake_terminate(pid):
+        terminated.append(pid)
+        alive.discard(pid)
+
+    monkeypatch.setattr(
+        child_pet_cleanup, "_terminate_pet_process", fake_terminate)
+
+    result = child_pet_cleanup.clear_spawned_pets(root)
+    assert terminated == [888], "slot-2（子肥鱼）杀掉，slot-0（主肥鱼）跳过"
+    assert result["killed_pids"] == [888]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="CREATE_NO_WINDOW 仅 Windows 有")
+def test_terminate_uses_create_no_window_on_windows(monkeypatch):
+    """批 H：Windows 下 taskkill 必须带 CREATE_NO_WINDOW——GUI 进程无控制台，
+    裸 subprocess 会每杀一只弹一个空白终端窗口（实机反馈）。"""
+    import subprocess as sp
+
+    import pet.child_pet_cleanup as mod
+
+    calls = []
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda *a, **kw: calls.append(kw))
+    mod._terminate_pet_process(12345)
+    assert len(calls) == 1
+    assert calls[0].get("creationflags") == sp.CREATE_NO_WINDOW
