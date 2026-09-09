@@ -3265,6 +3265,7 @@ class TestDetectorAlertThrottle:
                 self.alerts = []
                 self.anims = []
                 self._visible = True
+                self._bubble_suppressed = False
 
             def isVisible(self):
                 return self._visible
@@ -3273,6 +3274,9 @@ class TestDetectorAlertThrottle:
                 self.anims.append(str(anim))
 
             def show_alert(self, text, *, duration_ms=0, sticky=True, **kw):
+                # 与 window_alerts.show_alert 一致：设置窗打开期间普通提醒被丢弃。
+                if self._bubble_suppressed:
+                    return
                 self.alerts.append({"text": str(text), "sticky": bool(sticky)})
 
             def show_bubble(self, text, duration_ms=3000):
@@ -3328,3 +3332,33 @@ class TestDetectorAlertThrottle:
         # 随后 stuck severity2（升级）不受影响
         mgr._on_stuck_intervention("dsh", {"severity": 2})
         assert len(mgr.win.alerts) == 1
+
+    def test_same_tier_stuck_escalation_is_throttled(self, tmp_path):
+        """N2-b：同级重复升级（stuck 档位 2 → 档位 2）应被节流，不再连环换弹。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_stuck_intervention("dsh", {"severity": 2})
+        assert len(mgr.win.alerts) == 1
+        mgr._throttle_now[0] += 5.0
+        mgr._on_stuck_intervention("dsh", {"severity": 2})
+        assert len(mgr.win.alerts) == 1, "同档重复升级应被节流"
+
+    def test_pattern_control_then_stuck_same_tier_is_throttled(self, tmp_path):
+        """N2-b：pattern control 已弹窗后，同档 stuck 档位 2 应被节流（对称）。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_pattern_control("dsh", {"verdict": "REPLAN", "reason": "loop",
+                                        "class": "search", "count": 8, "window": "10"})
+        assert len(mgr.win.alerts) == 1
+        mgr._throttle_now[0] += 5.0
+        mgr._on_stuck_intervention("dsh", {"severity": 2})
+        assert len(mgr.win.alerts) == 1, "同档提醒应被节流"
+
+    def test_suppressed_alert_does_not_consume_throttle_slot(self, tmp_path):
+        """N2-a：设置窗打开期间提醒被 show_alert 丢弃，不得占用 30s 节流槽。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr.win._bubble_suppressed = True
+        mgr._on_exploration_warning("sess-1", {"agent_key": "dsh", "reasons": ["search"], "steps": []})
+        assert mgr.win.alerts == [], "设置窗打开期间普通提醒应被丢弃"
+        mgr.win._bubble_suppressed = False
+        mgr._throttle_now[0] += 1.0
+        mgr._on_exploration_warning("sess-1", {"agent_key": "dsh", "reasons": ["search"], "steps": []})
+        assert len(mgr.win.alerts) == 1, "被丢弃的提醒不该占用节流槽"

@@ -152,6 +152,8 @@ DIALOGUE_LABELS = {
     "approval.generic": "审批提示", "question.empty": "等待选择",
     "question.one": "单个用户问题", "question.many": "多个用户问题",
     "watchdog.warning": "循环检测警告", "rate_limit.one": "单次限流",
+    "watchdog.control": "循环检测控制告警",
+    "watchdog.control.result": "循环检测控制回执",
     "rate_limit.many": "连续限流", "llm_error.api": "AI 服务错误",
     "done.success": "任务完成",
     "done.attention": "任务暂停待确认", "failure.retry": "重试后失败",

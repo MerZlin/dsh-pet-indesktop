@@ -403,7 +403,6 @@ class ExplorationWatchdog(QObject):
                     "reasons": ["单次 Think 持续超过阈值"],
                     "steps": [s.payload() for s in self._window(state, 10)],
                     "session_id": session,
-                    "mode": self.mode,
                     "goal": state.get("goal", ""),
                     "agent_key": state.get("agent_key", ""),
                     "agent_name": state.get("agent_name") or state.get("agent_key", ""),
@@ -576,7 +575,9 @@ class ExplorationWatchdog(QObject):
         score, reasons = self._score(w6, w10)
         if score < warning_threshold:
             return None
-        level = "warning"
+        # 档位判定与 warning 共用同一 cooldown/相位阈值：达到控制阈值才升级，
+        # 否则维持普通提醒（payload.level 由此不再恒为 warning）。
+        level = "control" if score >= control_threshold else "warning"
         state["last_inspected_seq"] = current_seq
         payload = {"type": "pet/exploration-watchdog", "level": level, "risk": score,
                    "generation_id": uuid.uuid4().hex,
@@ -584,7 +585,7 @@ class ExplorationWatchdog(QObject):
                    "riskScore": score,
                    "targetCount": len({t for s in w10 for t in s.exploration_targets}),
                    "targets": sorted({t for s in w10 for t in s.exploration_targets}),
-                   "session_id": session, "mode": self.mode, "goal": state.get("goal", ""),
+                   "session_id": session, "goal": state.get("goal", ""),
                    "agent_key": state.get("agent_key", ""),
                    "agent_name": state.get("agent_name") or state.get("agent_key", ""),
                    "elapsed_seconds": round(elapsed), "threshold_phase": phase,

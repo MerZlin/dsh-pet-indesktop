@@ -938,8 +938,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._collision_local_bounds = None
         self.move(self.x(), old_bottom - self._h + 1)
         self._rebuild_frame()
-        if self._speech_bubble.isVisible():
-            self._speech_bubble.reflow(
+        bubble = getattr(self, "_speech_bubble", None)
+        if bubble is not None and bubble.isVisible():
+            bubble.reflow(
                 self.visible_content_rect(), pet_scale=self.scale
             )
         self.update()
@@ -1214,6 +1215,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 bubble.show_text(
                     self._sticky_text, self.visible_content_rect(), 0,
                     pet_scale=self.scale, subtitle=self._sticky_subtitle, sticky=True,
+                    buttons=self._sticky_buttons,
                 )
 
     def attach_collision_session(self, session) -> None:

@@ -315,3 +315,28 @@ def test_timed_alert_not_sticky(win):
     win.show_alert("硬失败", duration_ms=6000, sticky=False)
     assert win._speech_bubble.shown[-1]["sticky"] is False
     assert win._speech_bubble.shown[-1]["duration_ms"] == 6000
+
+
+def test_resume_activity_restores_sticky_alert_buttons(win, app):
+    """P1-3：全屏隐藏→恢复后重挂 sticky 审批气泡，必须带回按钮。
+
+    _pause_activity 隐藏气泡时按钮行被拆除；_resume_activity 只重挂文本、
+    漏传 buttons 会让审批气泡变成没有「同意/拒绝」的死气泡。
+    """
+    win.show_alert(
+        "需要批准", buttons=[("同意", lambda: None), ("拒绝", lambda: None)],
+        sticky=True, alert_id="interaction:approval:r1", alert_type="approval",
+        priority=0,
+    )
+    assert win._sticky_buttons is not None
+    assert win._speech_bubble.shown[-1]["buttons"] is not None
+
+    win.hide()
+    app.processEvents()
+    win.show()
+    app.processEvents()
+
+    shown = win._speech_bubble.shown[-1]
+    assert shown["sticky"] is True
+    assert shown["buttons"] is not None, "恢复显示时 sticky 气泡必须带回按钮"
+    assert [b[0] for b in shown["buttons"]] == ["同意", "拒绝"]

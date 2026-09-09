@@ -69,3 +69,33 @@ def test_settings_suppression_still_drops_ordinary_alerts():
 
     assert pet._alert_current is None
     assert list(pet._alert_queue) == []
+
+
+def test_settings_suppression_advances_past_swallowed_ordinary_alert():
+    """P1-2：设置窗打开前已在展示的普通限时提醒，关闭设置窗时被吞掉，
+    必须结束它并推进队列，否则后续提醒永远不弹。"""
+    _app()
+    pet = _pet()
+    PetWindow.show_alert(pet, "普通提醒1", duration_ms=1000, sticky=False,
+                         alert_type="watchdog")
+    PetWindow.show_alert(pet, "普通提醒2", duration_ms=1000, sticky=False,
+                         alert_type="watchdog")
+    assert pet._alert_current["text"] == "普通提醒1"
+    assert len(pet._alert_queue) == 1
+
+    PetWindow.set_bubble_suppressed(pet, True)
+    PetWindow.set_bubble_suppressed(pet, False)
+
+    assert pet._alert_current is not None, "被吞掉的普通提醒应结束并推进队列"
+    assert pet._alert_current["text"] == "普通提醒2"
+    assert pet._speech_bubble.shown[-1][0] == "普通提醒2"
+
+
+def test_set_bubble_suppressed_with_destroyed_bubble_is_noop():
+    """N7：closeEvent 置 _speech_bubble=None 后，设置窗开/关不得 AttributeError。"""
+    _app()
+    pet = _pet()
+    pet._speech_bubble = None
+
+    PetWindow.set_bubble_suppressed(pet, True)
+    PetWindow.set_bubble_suppressed(pet, False)

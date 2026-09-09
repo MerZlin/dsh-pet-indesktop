@@ -22,9 +22,10 @@ from PySide6.QtWidgets import QApplication
 import pet.app as app_mod
 import pet.slot_manager as slot_manager_mod
 from pet import catalog
+from pet.agent_link import AgentLinkManager
 from pet.app import AppShell, PetInstance
 from pet.config import Config
-from pet.multi_window_shared import SharedProactiveWatcher
+from pet.multi_window_shared import MultiWindowProxy, SharedProactiveWatcher
 
 
 @pytest.fixture
@@ -165,7 +166,8 @@ def _stop_sessions(*insts):
 
 
 def test_flag_on_agent_link_single_manager_fans_out(tmp_path, app, monkeypatch):
-    """§③.1 / 验收①：flag 开时同一份 AgentLinkManager 服务两窗，呈现扇出到两窗。"""
+    """§③.1 / 验收①：flag 开时同一份 AgentLinkManager 服务两窗；
+    联动气泡只发首个可见窗（多窗不重复弹），联动动画仍扇出到各可见窗。"""
     shell, config, primary_handle = _make_flag_on_shell(tmp_path)
     try:
         primary_win = _make_primary_record_win(shell, config)
@@ -177,10 +179,10 @@ def test_flag_on_agent_link_single_manager_fans_out(tmp_path, app, monkeypatch):
         mgr = shell._shared.agent_link
         assert len(shell.instances) == 2
 
-        # 触发一次联动气泡呈现 → 两窗都收到
+        # 触发一次联动气泡呈现 → 仅首个可见窗收到（多窗不重复弹）
         mgr.presentation.show_link_bubble("全体跳舞", important=True, duration_ms=2000)
         assert "全体跳舞" in primary_win.bubbles
-        assert "全体跳舞" in second_win.bubbles
+        assert "全体跳舞" not in second_win.bubbles
 
         # 「全体跳舞」动画扇出：state_applied 忙状态 → request_link_anim 到两可见窗
         primary_win.bubbles.clear()
@@ -304,7 +306,8 @@ def test_flag_on_island_toggle_all_windows(tmp_path, app, monkeypatch):
 
 
 def test_flag_on_shared_proactive_broadcasts_bubble(tmp_path, app, monkeypatch):
-    """§③.2：共享 proactive watcher 单一实例（限流器全局）且气泡广播到各可见窗。"""
+    """§③.2：共享 proactive watcher 单一实例（限流器全局）；
+    气泡只发首个可见窗（多窗不重复弹，与 proxy.show_alert 同策）。"""
     shell, config, primary_handle = _make_flag_on_shell(tmp_path)
     try:
         primary_win = _make_primary_record_win(shell, config)
@@ -316,10 +319,10 @@ def test_flag_on_shared_proactive_broadcasts_bubble(tmp_path, app, monkeypatch):
         assert shell._shared.proactive.limiter.state_path == \
             (config.dir / "proactive_screen_state.json")
 
-        # 「我看」先兆气泡广播到两可见窗
+        # 「我看」先兆气泡只发首个可见窗
         shell._shared.proactive._bridge._forward_bubble("hello", 1000)
         assert "hello" in primary_win.bubbles
-        assert "hello" in second_win.bubbles
+        assert "hello" not in second_win.bubbles
     finally:
         _stop_sessions(*getattr(shell, "instances", []))
         if getattr(shell, "_shared", None) is not None:
@@ -423,3 +426,208 @@ def test_shared_fullscreen_broadcast_respects_per_window_config(tmp_path, app):
         if sec.slot_handle is not None:
             slot_manager_mod._unlock_file(sec.slot_handle)
         app.processEvents()
+
+
+# ======================================================================
+# PR57 根因修复：共享 AgentLinkManager 的 win 是 MultiWindowProxy，
+# 但它缺 show_alert / resolve_alert，导致单进程多窗下所有交互式提醒
+# （审批/问题/控制级 Watchdog）全部静默退化为无按钮纯文本气泡。
+# 这里给 proxy 补上 alert 扇出面，并用红→绿测试钉住行为。
+# ======================================================================
+
+
+class _AlertRecordWin:
+    """记录 show_alert / show_bubble / resolve_alert 的多窗替身，供 proxy 扇出断言。"""
+
+    def __init__(self, visible=True):
+        self.is_shown = bool(visible)
+        self.alerts: list[dict] = []
+        self.bubbles: list[dict] = []
+        self.resolved: list[str] = []
+        self.cleared = 0
+        self.hidden = 0
+        self._bubble_suppressed = False
+        self._sticky_bubble_active = False
+        self.cfg = None
+        self._bubble_busy_until = 0.0
+        self._dragging = False
+        self._physics_mode = None
+        self._click_effect_phase = 0
+        self.mouse_through = False
+        self.cats = {"idle": "idle", "acts": ["写代码"], "moves": [], "turns": []}
+
+    # ---- 代理/呈现接口 ----
+    def isVisible(self):
+        return self.is_shown
+
+    def show_bubble(self, text, duration_ms=4500, sticky=False, buttons=None):
+        self.bubbles.append({"text": str(text), "sticky": bool(sticky), "buttons": buttons})
+
+    def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None, sticky=True,
+                   alert_id="", priority=3, alert_type="watchdog", metadata=None):
+        self.alerts.append({
+            "text": str(text), "subtitle": str(subtitle), "buttons": buttons,
+            "sticky": bool(sticky), "duration_ms": int(duration_ms),
+            "alert_id": str(alert_id), "priority": int(priority),
+            "alert_type": str(alert_type), "metadata": dict(metadata or {}),
+        })
+
+    def resolve_alert(self, alert_id):
+        self.resolved.append(str(alert_id))
+
+    def clear_alerts(self):
+        self.cleared += 1
+
+    def hide_bubble(self):
+        self.hidden += 1
+
+    def request_link_anim(self, anim):
+        pass
+
+    def request_link_idle(self):
+        pass
+
+    def set_link_next_provider(self, p):
+        pass
+
+    def mark_activity(self):
+        pass
+
+    def clear_pending_link_anim(self):
+        pass
+
+    def hold_bubble(self, seconds):
+        self._bubble_busy_until = seconds
+
+    def on_look_synced(self, user_text, reply):
+        pass
+
+    def hide(self, notify=True):
+        self.is_shown = False
+
+    def show(self):
+        self.is_shown = True
+
+    def deleteLater(self):
+        pass
+
+
+class _ProxyShell:
+    """只读 window 替身集合，满足 MultiWindowProxy 的 shell.instances/config 访问面。"""
+
+    def __init__(self, config, windows):
+        self.config = config
+        self.instances = [type("_Inst", (), {"win": w})() for w in windows]
+        self._shared = None
+
+
+def _proxy_payload(**over):
+    payload = {
+        "type": "pet/exploration-watchdog",
+        "level": "control",
+        "risk": 6,
+        "riskScore": 6,
+        "reasons": ["W6 同类重复"],
+        "steps": [{"behaviors": ["READ"], "targets": ["src/a.py"]}],
+        "session_id": "sess-1",
+        "goal": "修好登录",
+        "agent_key": "dsh",
+        "agent_name": "DSH",
+        "targetCount": 1,
+        "targets": ["src/a.py"],
+    }
+    payload.update(over)
+    return payload
+
+
+def _make_proxy_manager(tmp_path, windows):
+    """构造共享 manager，win 为只读 MultiWindowProxy 集合（生产 320 行同构）。"""
+    config = Config(base=tmp_path)
+    proxy = MultiWindowProxy(_ProxyShell(config, windows))
+    mgr = AgentLinkManager(proxy, config)
+    mgr._clock = lambda: 1000.0
+    return proxy, mgr
+
+
+def _control_buttons(alert):
+    return [name for name, _ in (alert["buttons"] or [])]
+
+
+def test_proxy_control_alert_fans_out_buttons(tmp_path, app):
+    """红→绿：无 show_alert 的 proxy 会把控制提醒退化为无按钮气泡（按钮丢失）。
+    现行语义：交互式提醒只入队首个可见窗（多窗不重复轰炸），按钮不丢。"""
+    w1, w2 = _AlertRecordWin(visible=True), _AlertRecordWin(visible=True)
+    _, mgr = _make_proxy_manager(tmp_path, [w1, w2])
+    try:
+        mgr._on_exploration_warning("sess-1", _proxy_payload())
+        assert w1.alerts, "首个可见窗应收到控制提醒（而非退化气泡）"
+        alert = w1.alerts[-1]
+        assert alert["alert_type"] == "control"
+        assert _control_buttons(alert) == ["自动优化", "终止", "忽略"]
+        assert alert["sticky"] is True
+        assert not w2.alerts, "交互式提醒只在首个可见窗展示，不多窗重复"
+    finally:
+        mgr.shutdown()
+
+
+def test_proxy_interaction_approval_buttons_fan_out(tmp_path, app):
+    """红→绿：审批按钮也要经 show_alert 展示，不因 proxy 缺面而退化无按钮。"""
+    w1, w2 = _AlertRecordWin(visible=True), _AlertRecordWin(visible=True)
+    _, mgr = _make_proxy_manager(tmp_path, [w1, w2])
+    try:
+        mgr._pending_interactions["itest"] = {
+            "kind": "approval", "text": "DSH 请求执行：rm -rf，请选择：",
+            "interactive": True, "rpc_id": "rpc-1", "alert_id": "interaction:itest",
+            "session_id": "s1", "agent_key": "dsh",
+        }
+        mgr._show_interaction_bubble("itest")
+        assert w1.alerts, "审批应经 show_alert 展示（同意/拒绝按钮不丢）"
+        assert _control_buttons(w1.alerts[-1]) == ["同意", "拒绝"]
+        assert not w2.alerts, "审批只在首个可见窗展示"
+    finally:
+        mgr.shutdown()
+
+
+def test_proxy_resolve_alert_collapses_all_windows(tmp_path, app):
+    """新行为：任一窗点「忽略」，其它窗的同款控制气泡也必须被收起。"""
+    w1, w2 = _AlertRecordWin(visible=True), _AlertRecordWin(visible=True)
+    proxy, mgr = _make_proxy_manager(tmp_path, [w1, w2])
+    try:
+        mgr._on_exploration_warning("sess-1", _proxy_payload())
+        ignore = next(cb for name, cb in w1.alerts[-1]["buttons"] if name == "忽略")
+        ignore()
+        assert w1.resolved == ["exploration-control:sess-1"]
+        assert w2.resolved == ["exploration-control:sess-1"], "其它窗同款气泡也要收起"
+    finally:
+        mgr.shutdown()
+
+
+def test_proxy_control_uses_show_alert_not_bubble_fallback(tmp_path, app):
+    """钉住 :3175 的 TypeError 兜底：proxy 有 show_alert 后，控制提醒绝不落入
+    show_bubble 兜底（否则按钮会随兜底退化掉）。提醒只在首个可见窗入队。"""
+    w1, w2 = _AlertRecordWin(visible=True), _AlertRecordWin(visible=True)
+    _, mgr = _make_proxy_manager(tmp_path, [w1, w2])
+    try:
+        mgr._on_exploration_warning("sess-1", _proxy_payload())
+        assert w1.alerts, "首个可见窗应走 show_alert 通路"
+        for win in (w1, w2):
+            assert win.bubbles == [], "不得退化到 show_bubble 的 TypeError 兜底路径"
+    finally:
+        mgr.shutdown()
+
+
+def test_proxy_bubble_suppressed_aggregates_any(tmp_path, app):
+    """新行为：任一见窗打开设置(suppressed)则共享 manager 读到的抑制态为 True。"""
+    w1, w2 = _AlertRecordWin(visible=True), _AlertRecordWin(visible=True)
+    proxy, mgr = _make_proxy_manager(tmp_path, [w1, w2])
+    try:
+        assert proxy._bubble_suppressed is False
+        w1._bubble_suppressed = True
+        assert proxy._bubble_suppressed is True, "任一窗抑制则全局抑制"
+        w1._bubble_suppressed = False
+        w2._bubble_suppressed = True
+        assert proxy._bubble_suppressed is True
+        w2._bubble_suppressed = False
+        assert proxy._bubble_suppressed is False
+    finally:
+        mgr.shutdown()

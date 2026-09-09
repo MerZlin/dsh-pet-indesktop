@@ -12,7 +12,7 @@
   "activity.read": [
     "主人，{name}正在读取{label}，人家也帮您瞄两眼～",
     "哼，{tool}正在处理{argsKey}，第{step}步还挺认真嘛。",
-    "{name}正在{projectName}里的{sessionName}继续读取，调用号是{callId}，人家替您盯着～"
+    "{name}正在{projectName}里的{sessionName}继续读取，人家替您盯着～"
   ],
   "activity.search": [
     "主人，{name}正在搜索{label}，人家也下去帮忙捞线索啦～",
@@ -22,12 +22,12 @@
   "activity.edit": [
     "主人，{name}正在编辑{label}，人家帮您看着别让它乱改～",
     "哼，{tool}正在处理{argsKey}，已经做到第{step}步啦。",
-    "{name}正在{projectName}里的{sessionName}继续修改，调用号{callId}人家也记着呢～"
+    "{name}正在{projectName}里的{sessionName}继续修改，人家替您盯着改动～"
   ],
   "activity.run": [
     "主人，{name}正在运行{label}，结果很快就会出来～",
     "哼，{tool}已经跑起来了，第{step}步最好一次通过哦。",
-    "{name}正在{projectName}里的{sessionName}执行任务，调用号是{callId}～"
+    "{name}正在{projectName}里的{sessionName}执行任务，结果马上就来～"
   ],
   "activity.default": [
     "主人，{name}正在处理{label}，人家替您守着～",
@@ -108,6 +108,16 @@
     "主人，{name}最近好像在重复探索：{reasons}。",
     "哼，{name}又开始绕圈圈了，原因是{reasons}，看得人家尾鳍都累。",
     "{name}的行为有点可疑：{reasons}，主人最好过来看一眼嘛～"
+  ],
+  "watchdog.control": [
+    "主人，{name}好像陷进圈圈里出不来啦：{reasons}。要不要让人家帮它换个方向，或者直接喊停？",
+    "哼，{name}绕圈绕到控制阈值了，原因是{reasons}，主人说句话嘛，人家好动手。",
+    "{name}一直在重复探索：{reasons}，再拖下去就是浪费米饭，主人决定吧～"
+  ],
+  "watchdog.control.result": [
+    "主人，{name}那边有回音啦：{detail}",
+    "哼，{name}的事办完了：{detail}",
+    "{name}的控制回执来啦：{detail}"
   ],
   "rate_limit.one": [
     "呜呜，又被限流挡住啦，错误码是{errorCode}，主人等会儿再试吧。",

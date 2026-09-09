@@ -27,7 +27,7 @@
   "activity.run": [
     "{name} 正在运行 {label}。",
     "{name} 已通过 {tool} 开始执行，当前为第 {step} 步。",
-    "{name} 正在 {projectName} 的 {sessionName} 中运行任务，调用 ID：{callId}。"
+    "{name} 正在 {projectName} 的 {sessionName} 中运行任务。"
   ],
   "activity.default": [
     "{name} 正在处理 {label}。",
@@ -108,6 +108,16 @@
     "{name} 最近可能存在重复探索行为：{reasons}",
     "检测到 {name} 的执行轨迹存在重复迹象：{reasons}",
     "{name} 当前的探索行为需要留意：{reasons}"
+  ],
+  "watchdog.control": [
+    "{name} 可能已陷入无效探索循环：{reasons}，建议重新规划方向或终止本次运行。",
+    "{name} 的重复探索已达到控制阈值：{reasons}，可以自动优化方向，也可以直接终止。",
+    "检测到 {name} 持续重复探索且缺少实质进展：{reasons}"
+  ],
+  "watchdog.control.result": [
+    "{name}：{detail}",
+    "控制结果——{name}：{detail}",
+    "{name} 的控制请求已回执：{detail}"
   ],
   "rate_limit.one": [
     "当前请求受到限流，请稍后再试。",

@@ -57,9 +57,98 @@ class MultiWindowProxy:
 
     # ---- 呈现扇出（只发给可见窗）----
     def show_bubble(self, text: str, duration_ms: int = 4500) -> None:
+        # 联动气泡只发首个可见窗（与 show_alert 同策）：多窗同弹一条过程汇报
+        # 既吵又重复，单窗展示即可；隐藏窗不弹的语义保持不变。
         for w in self._visible_windows():
             if hasattr(w, "show_bubble"):
                 w.show_bubble(text, duration_ms=duration_ms)
+                return
+
+    # ---- 提醒扇出（交互式提醒：审批/问题/控制级 Watchdog）----
+    def show_alert(self, text: str, *, subtitle: str = "", duration_ms: int = 0,
+                   buttons: list | None = None, sticky: bool = True,
+                   alert_id: str = "", priority: int = 3,
+                   alert_type: str = "watchdog", metadata: dict | None = None) -> None:
+        """把交互式提醒入队到**首个可见窗**（多窗只弹一处，避免每只桌宠重复轰炸）。
+
+        ``agent_link`` 会先 ``hasattr(win, "show_alert")`` 决定是否走队列提醒；本方法
+        确保共享 manager 的 ``win`` 是 proxy 时仍走交互式提醒（审批/控制按钮不丢失）。
+        首个可见窗缺失 ``show_alert`` 时回退 ``show_bubble``（绝不因签名差异崩溃）。
+        收起仍由 ``resolve_alert`` 全窗扇出兜底。
+        """
+        for w in self._visible_windows():
+            method = getattr(w, "show_alert", None)
+            if callable(method):
+                method(text, subtitle=subtitle, duration_ms=duration_ms,
+                       buttons=buttons, sticky=sticky, alert_id=alert_id,
+                       priority=priority, alert_type=alert_type, metadata=metadata)
+                return
+        # 可见窗都不支持 show_alert：退化到首个可见窗的 show_bubble
+        for w in self._visible_windows():
+            if hasattr(w, "show_bubble"):
+                try:
+                    w.show_bubble(text, sticky=sticky, buttons=buttons,
+                                  duration_ms=duration_ms if not sticky else 0)
+                except TypeError:
+                    w.show_bubble(text, duration_ms=max(duration_ms, 4500))
+                return
+
+    def resolve_alert(self, alert_id: str) -> None:
+        """按 alert_id 在所有窗收起该提醒（含隐藏窗）：任意窗点按钮即全局收起。
+
+        ``agent_link`` 的按钮回调/审批回写都经 ``self.win.resolve_alert`` 关闭气泡；
+        扇出到全部窗，保证一个窗上点按钮/忽略后，其它窗上的同款气泡一并收起。
+        """
+        if not alert_id:
+            return
+        for w in self._windows():
+            method = getattr(w, "resolve_alert", None)
+            if callable(method):
+                method(alert_id)
+            elif hasattr(w, "hide_bubble"):
+                w.hide_bubble()
+
+    def clear_alerts(self) -> None:
+        """清空所有窗的提醒队列并关闭当前提醒（DSH 离线/重启收口）。"""
+        for w in self._windows():
+            method = getattr(w, "clear_alerts", None)
+            if callable(method):
+                method()
+
+    def hide_bubble(self) -> None:
+        """主动收起所有窗当前气泡（审批结束/离线兜底）。"""
+        for w in self._windows():
+            method = getattr(w, "hide_bubble", None)
+            if callable(method):
+                method()
+
+    @property
+    def _bubble_suppressed(self) -> bool:
+        # 设置窗抑制的聚合视图：任一窗打开设置窗即视为全局抑制。共享 manager 的
+        # N2-a 节流门禁 ``getattr(self.win, "_bubble_suppressed", False)`` 据此读到
+        # True，避免单窗设置期间共享管理器继续弹提醒/白占节流槽。
+        return any(getattr(w, "_bubble_suppressed", False) for w in self._windows())
+
+    @property
+    def _sticky_bubble_active(self) -> bool:
+        # 任一窗仍有常驻粘滞气泡（审批/控制提醒）时记为 True，供
+        # ``dismiss_all_interactions`` 的提前返回判定使用（避免漏清理）。
+        return any(getattr(w, "_sticky_bubble_active", False) for w in self._windows())
+
+    @property
+    def _alert_current(self):
+        # 任一见窗当前正在展示提醒时返回该提醒，否则 None（_show_link_bubble 据此
+        # 让联动气泡让路，避免在提醒/审批展示期间被普通联动气泡覆盖）。
+        for w in self._windows():
+            cur = getattr(w, "_alert_current", None)
+            if cur is not None:
+                return cur
+        return None
+
+    @property
+    def _alert_queue(self) -> bool:
+        # 聚合视图：任一窗提醒队列非空即视为激活（_show_link_bubble 据此让路）。
+        return any(getattr(w, "_alert_queue", None) for w in self._windows())
 
     def request_link_anim(self, name: str) -> None:
         for w in self._visible_windows():

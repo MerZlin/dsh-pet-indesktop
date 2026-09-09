@@ -32,19 +32,34 @@ def set_bubble_suppressed(host, suppressed: bool) -> None:
     """设置窗口打开期间暂停气泡显示；True 时立即隐藏当前气泡。"""
     host._bubble_suppressed = bool(suppressed)
     if host._bubble_suppressed:
-        host._speech_bubble.hide()
+        bubble = getattr(host, "_speech_bubble", None)
+        if bubble is not None:
+            bubble.hide()
     else:
         current = getattr(host, "_alert_current", None)
         if current is not None and alert_survives_suppression(
                 current.get("alertType", ""), sticky=bool(current.get("sticky")),
                 buttons=current.get("buttons"), priority=int(current.get("priority", 3))):
             if current.get("sticky"):
-                host._speech_bubble.show_text(
-                    current["text"], host.visible_content_rect(), 0,
-                    pet_scale=host.scale, subtitle=current.get("subtitle", ""),
-                    sticky=True, buttons=current.get("buttons"),
-                )
+                bubble = getattr(host, "_speech_bubble", None)
+                if bubble is not None:
+                    bubble.show_text(
+                        current["text"], host.visible_content_rect(), 0,
+                        pet_scale=host.scale, subtitle=current.get("subtitle", ""),
+                        sticky=True, buttons=current.get("buttons"),
+                    )
         elif current is None:
+            pump = getattr(host, "_pump_alerts", None)
+            if callable(pump):
+                pump()
+        else:
+            # 抑制期间已被隐藏的普通限时提醒（非 sticky 且不存活）：
+            # 结束它并推进队列，否则后续提醒会被永久吞掉。
+            host._sticky_bubble_active = False
+            host._sticky_text = ""
+            host._sticky_subtitle = ""
+            host._sticky_buttons = None
+            host._alert_current = None
             pump = getattr(host, "_pump_alerts", None)
             if callable(pump):
                 pump()

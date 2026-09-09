@@ -338,6 +338,44 @@ def test_pet_scale_change_reflows_visible_bubble_after_rebuilding_mask():
     assert events[3] == ("reflow", QRect(25, 35, 160, 210), 1.0)
 
 
+def test_change_scale_with_destroyed_bubble_is_noop():
+    """N7：closeEvent 置 _speech_bubble=None 后，迟到的 change_scale 不得 AttributeError。"""
+    from PySide6.QtCore import QRect
+
+    from pet.window import PetWindow
+
+    class FakePet:
+        scale = 1.0
+        _h = 100
+        _speech_bubble = None
+
+        def geometry(self):
+            return QRect(0, 0, 100, self._h)
+
+        def x(self):
+            return 0
+
+        def _apply_scale(self):
+            self._h = 200
+
+        def move(self, x, y):
+            pass
+
+        def _rebuild_frame(self):
+            pass
+
+        def visible_content_rect(self):
+            return QRect(0, 0, 100, 200)
+
+        def update(self):
+            pass
+
+        def _save_position(self):
+            pass
+
+    PetWindow.change_scale(FakePet(), 1.5)
+
+
 def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(tmp_path, monkeypatch):
     from PIL import Image
 
