@@ -2942,7 +2942,11 @@ class AgentLinkManager(QObject):
             # 兼容旧路径：审批等一直挂着的气泡优先
             return
         busy_until = getattr(self.win, "_bubble_busy_until", 0.0)
-        if time.time() < busy_until:
+        # window.hold_bubble 以 time.monotonic() 写入 _bubble_busy_until，这里必须
+        # 用同一时钟域比较——曾误用 time.time()（epoch 秒），在真实桌宠上恒判
+        # "未被占用"，让位/重试门禁失效（普通气泡顶掉识屏占位、重要气泡不排队
+        # 重试直接覆盖）。同步修正于 PR57 合并后审计（F1）。
+        if time.monotonic() < busy_until:
             if not important or _retried >= 4:
                 return
             QTimer.singleShot(2500, self,
@@ -3551,7 +3555,10 @@ class AgentLinkManager(QObject):
             return
         payload = payload if isinstance(payload, dict) else {}
         name = self.AGENT_NAMES.get(agent_key, agent_key)
-        # 若该 session 有活跃的 429 提醒，不再重复弹通用失败横幅（避免双重通知）
+        # 若该 session 有活跃的 429 提醒，不再重复弹通用失败横幅（避免双重通知）。
+        # 抑制条件从「429 距上次触发 8s cooldown 内」收紧为「存在未 dismiss 的活跃
+        # 429 提醒」：429 alert 展示 15s > cooldown 8s，turn/end 的 execution/failed
+        # 常在 8~15s 窗口到达（同一次限流的终局），旧条件会绕过抑制造成双弹（F2）。
         session_key = str(payload.get("sessionId") or agent_key)
         active_429 = self._429_cache.get(session_key)
         error_code = str(payload.get("errorCode") or "").strip().upper()
@@ -3561,8 +3568,8 @@ class AgentLinkManager(QObject):
         retry_exhausted = bool(payload.get("retryExhausted"))
         source = str(payload.get("source") or "").strip()
         suppress_as_429 = is_rate_limit_failure or (retry_exhausted and source != "tool" and not error_code)
-        if active_429 and not active_429.get("_dismissed") and \
-                self._clock() - active_429.get("_ts", 0) < self._429_COOLDOWN_S and suppress_as_429:
+        if active_429 and not active_429.get("_dismissed") and suppress_as_429:
+            # 429 提醒仍挂起：同一次失败的终局结论已由限流提醒表达，通用失败横幅让路。
             return
         # 失败动画（若角色素材有）；没有就保持当前动作，仅弹气泡
         anim = self._pick_fail_anim()

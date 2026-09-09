@@ -604,7 +604,6 @@ class Config:
             "throw_strength": "standard",  # gentle / standard / strong / crazy
             "idle_low_fps_enabled": False,  # 闲置降帧（灰度默认关）：长时间无交互时动画隔帧呈现
             "idle_low_fps_threshold": 30.0,  # 闲置阈值（秒）：超过该时长无交互且窗口可见才降帧
-            "animation_prewarm_enabled": True,  # 动画素材后台预热开关
             "click_show_balance": False,   # 点击显示 DeepSeek 余额
             "click_show_self_talk": False, # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
@@ -814,7 +813,6 @@ class Config:
             "collision_mass_scale", "collision_impulse_cap",
             "collision_sound_enabled", "collision_sound_volume",
             "media_prewarm",
-            "animation_prewarm_enabled",
             "first_frame_cache_max_mb",
             "predict_prewarm_lead_ms",
             "ffmpeg_recycle_minutes",

@@ -32,6 +32,7 @@ from pet.agent_link import (
     CustomAgentMonitor,
     DshMonitor,
     normalize_event_state,
+    opencode_event_state,
 )
 from pet.config import Config
 from pet.config import _clean_agent_link_data, _clean_custom_agents
@@ -1105,9 +1106,13 @@ class TestAgentLinkBubbles:
 
     def test_bubble_busy_until_occupancy(self, tmp_path, monkeypatch):
         """7. _show_link_bubble 在 win._bubble_busy_until 为未来时间时：
-        important=False 直接丢弃；important=True 时不立即弹（走 QTimer.singleShot 延后重试，测试里只需断言没有立即调用 show_bubble）。"""
+        important=False 直接丢弃；important=True 时不立即弹（走 QTimer.singleShot 延后重试，测试里只需断言没有立即调用 show_bubble）。
+
+        回归锚点（F1）：hold_bubble 写 time.monotonic() 域（真实 window 行为），
+        _show_link_bubble 必须用同域比较——曾误用 time.time()（epoch 秒）导致
+        门禁恒失效。stub 以 monotonic 未来时刻模拟占用。"""
         mgr, win, bubbles, clock = self._make_mgr(tmp_path)
-        win._bubble_busy_until = time.time() + 100.0
+        win._bubble_busy_until = time.monotonic() + 100.0
 
         # important=False 丢弃
         mgr._show_link_bubble("普通消息", important=False)
@@ -1159,6 +1164,36 @@ class TestAgentLinkBubbles:
         switched_before = len(win2.switched)
         mgr2._fire_done("claude")
         assert len(win2.switched) == switched_before  # 没有切回待机
+
+    def test_opencode_step_finish_tool_calls_no_done(self, tmp_path):
+        """回归（PR57 合并时丢失的 main 侧用例）：opencode step-finish
+        (reason=tool-calls)（派 task 子代理后主代理停笔等待）不触发完成确认——
+        不产出 idle 状态 → 800ms 确认不排程；step-finish(reason=stop) 才是
+        真结束 → 排程并出完成气泡。产品逻辑（opencode_event_state 的
+        tool-calls→""）仍存在，恢复端到端守卫。"""
+        import json as j
+
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path)
+        mgr._on_agent_state("dsh", "working")
+
+        # 子代理长跑期间：tool-calls 维持现状，确认窗口不排程
+        state = opencode_event_state("message.part.updated.1",
+                                     j.dumps({"part": {"type": "step-finish", "reason": "tool-calls"}}))
+        assert state == ""
+        if state:  # 与 agent_link._poll 的空状态跳过逻辑一致
+            mgr._on_agent_state("dsh", state)
+        clock[0] += 3.0
+        assert "dsh" not in mgr._done_pending
+        assert bubbles == []
+
+        # 子代理回注、整轮真结束：stop → idle → 排程 → 完成气泡恰一次
+        state = opencode_event_state("message.part.updated.1",
+                                     j.dumps({"part": {"type": "step-finish", "reason": "stop"}}))
+        assert state == "idle"
+        mgr._on_agent_state("dsh", state)
+        assert "dsh" in mgr._done_pending
+        mgr._fire_done("dsh")
+        assert any("已完成" in b for b in bubbles), f"应弹完成气泡: {bubbles}"
 
 
 class TestAgentLinkSounds:
@@ -1281,6 +1316,25 @@ class TestInstallErrorSummary:
         assert json.loads(manifest.read_text(encoding="utf-8"))["dsh"]["profile"]["bundles"] == [
             agent_link.DSH_PLUGIN_NAME
         ]
+
+    def test_find_pnpm_cli_accepts_homebrew_javascript_symlink(self, tmp_path, monkeypatch):
+        """回归（PR57 合并时丢失的 main 侧用例）：homebrew 的 pnpm 是
+        bin/pnpm → lib/node_modules/pnpm/bin/pnpm.cjs 的符号链接，
+        _find_pnpm_cli 必须经 resolve() 落到真实 JS CLI。
+        注：Windows 无管理员权限创建 symlink 会失败（WinError 1314），
+        该用例在 Linux/macOS CI 执行；本地 Windows 跳过。"""
+        try:
+            cli = tmp_path / "lib" / "node_modules" / "pnpm" / "bin" / "pnpm.cjs"
+            cli.parent.mkdir(parents=True)
+            cli.write_text("", encoding="utf-8")
+            shim = tmp_path / "bin" / "pnpm"
+            shim.parent.mkdir()
+            shim.symlink_to(cli)
+        except OSError:
+            pytest.skip("symlink 权限不可用（Windows 无管理员）")
+        monkeypatch.delenv("DSH_PNPM_BIN", raising=False)
+        monkeypatch.setattr(agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None)
+        assert agent_link._find_pnpm_cli() == str(cli)
 
     def test_extract_err_pnpm_line(self):
         output = """
@@ -2918,6 +2972,28 @@ class TestRateLimitAlert:
                                          "retryExhausted": True})
         assert len(mgr.win.alerts) == before, "429 活跃时抑制通用失败横幅"
 
+    def test_execution_failed_suppressed_beyond_cooldown_while_429_alive(self, tmp_path):
+        """F2 回归：429 提醒展示 15s > 合并冷却 8s，turn/end 的 execution/failed 常
+        在 8~15s 窗口到达——只要 429 提醒仍未 dismiss，通用失败横幅必须继续抑制
+        （旧实现按 8s cooldown 判断会绕过抑制造成双弹）。dismiss 后新失败正常提醒。"""
+        mgr = self._make_mgr(tmp_path)
+        now = [1000.0]
+        mgr._clock = lambda: now[0]
+        mgr._on_rate_limit("dsh", {"sessionId": "sess-f2",
+                                   "errorCode": "RATE_LIMIT", "consecutiveRetryCount": 1})
+        assert len(mgr.win.alerts) == 1
+        now[0] += 10.0  # 超出 8s cooldown，仍在 15s 展示寿命内
+        mgr._on_execution_failed("dsh", {"sessionId": "sess-f2", "source": "model_request",
+                                         "retryExhausted": True, "retries": 5,
+                                         "errorCode": "RATE_LIMIT"})
+        assert len(mgr.win.alerts) == 1, "429 提醒存活期间不得二次弹通用失败横幅"
+        # 收起 429 后：新的（非限流）失败应正常提醒
+        mgr._dismiss_429_alert("sess-f2")
+        mgr._on_execution_failed("dsh", {"sessionId": "sess-f2", "source": "tool",
+                                         "retryExhausted": False, "retries": 0,
+                                         "errorCode": ""})
+        assert len(mgr.win.alerts) == 2, "429 已收起后工具失败应正常提醒"
+
 
 class TestSessionNameTruthfulness:
     """{sessionName} 只注入真实会话显示名，绝不把 sessionId 截短占位冒充（字段真实性）。
@@ -2980,3 +3056,201 @@ class TestSessionNameTruthfulness:
         mgr._dialogue = lambda key, fallback, **kw: (captured.update(kw), fallback)[1]
         mgr._show_429_alert("session-abcdef12", 1)
         assert "sessionName" not in captured, "429 无会话元数据时不得注入 sessionName"
+
+
+class TestInstallFinishedGuard:
+    """安装后台线程完成回调不得越过 manager 生命周期：窗口关闭/角色切换
+    （shutdown）或重新禁用后，迟到的 install_finished 不得写配置/启动
+    监视器/弹气泡（daemon 安装线程本身无法被取消，只能拦完成回调）。"""
+
+    def _make_manager(self, tmp_path, bubbles, monkeypatch, release):
+        cfg = Config(base=tmp_path)
+
+        class Win:
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+            def isVisible(self):
+                return True
+
+        mgr = AgentLinkManager(Win(), cfg)
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **kw: QMessageBox.StandardButton.Yes,
+        )
+        monkeypatch.setattr(
+            DshMonitor, "uninstall_bridge", classmethod(lambda cls: True),
+        )
+
+        def fake_install():
+            assert release.wait(timeout=5.0), "测试释放信号未到达"
+            return (True, "ok")
+
+        monkeypatch.setattr(
+            DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),
+        )
+        return cfg, mgr
+
+    def _install_thread(self):
+        return next(
+            t for t in threading.enumerate() if t.name == "dsh-bridge-install"
+        )
+
+    def test_late_completion_after_shutdown_is_dropped(self, tmp_path, monkeypatch):
+        """安装完成发生在 shutdown（窗口关闭/角色切换）之后 → 完成回调被
+        丢弃：配置不写回、监视器不启动、无完成气泡。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        assert "dsh" in mgr._install_pending
+        assert bubbles == ["正在为 DSH 安装通信桥。"]  # persona legacy: bridge.install.pending
+        mgr.shutdown()   # 安装完成前 manager 被关闭（窗口 close / 角色切换）
+        release.set()    # 安装此刻才完成
+        install_thread.join(timeout=5.0)
+        app.processEvents()
+        app.processEvents()
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert not mgr.monitors["dsh"]._running
+        assert bubbles == ["正在为 DSH 安装通信桥。"], "不得弹完成气泡"
+
+    def test_queued_completion_dispatched_after_shutdown_is_dropped(self, tmp_path, monkeypatch):
+        """emit→dispatch 竞态：信号在 shutdown 前已 emit 入队（worker 已
+        完成），但回调在 shutdown 之后才被派发 → 同样必须丢弃（完成回调
+        在 GUI 线程的权威校验兜住该窗口）。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        release.set()                 # 安装完成 → worker emit（queued 入队）
+        install_thread.join(timeout=5.0)
+        # 未跑 processEvents：queued 回调仍躺在 GUI 事件队列里
+        mgr.shutdown()                # 关闭发生在回调派发之前
+        app.processEvents()           # 迟到的 queued 回调此刻才派发 → 丢弃
+        app.processEvents()
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert not mgr.monitors["dsh"]._running
+        assert bubbles == ["正在为 DSH 安装通信桥。"], "不得弹完成气泡"
+
+    def test_late_completion_after_redisable_is_dropped(self, tmp_path, monkeypatch):
+        """用户重新关闭联动（安装进行中）→ 在途安装作废，完成回调被丢弃，
+        不得反向把配置写回 True / 启动监视器。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        assert "dsh" in mgr._install_pending
+        mgr.set_enabled("dsh", False)  # 用户重新关闭联动 → 在途安装作废
+        assert "dsh" not in mgr._install_pending
+        release.set()
+        install_thread.join(timeout=5.0)
+        app.processEvents()
+        app.processEvents()
+        assert cfg.data["agent_link"]["dsh"] is False
+        assert not mgr.monitors["dsh"]._running
+        assert bubbles == ["正在为 DSH 安装通信桥。"], "不得弹完成气泡"
+
+    def test_stale_queued_completion_must_not_consume_reinstalled_pending(self, tmp_path, monkeypatch):
+        """B9 复审 P1：disable→re-enable 两代安装交错。安装 A 完成信号已
+        queued 入队但未派发时，用户关闭联动并再次开启、登记安装 B（新代次）；
+        A 的旧回调随后派发时不得消费 B 的 pending（不得写配置/启动监视器/
+        弹完成气泡），B 的真实回调随后正常生效。完成信号必须携带并校验
+        安装代次，仅凭 agent key 无法区分两代安装。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        cfg = Config(base=tmp_path)
+
+        class Win:
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+            def isVisible(self):
+                return True
+
+        mgr = AgentLinkManager(Win(), cfg)
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **kw: QMessageBox.StandardButton.Yes,
+        )
+        monkeypatch.setattr(
+            DshMonitor, "uninstall_bridge", classmethod(lambda cls: True),
+        )
+
+        release_a, release_b = threading.Event(), threading.Event()
+        queue = [release_a, release_b]
+
+        def fake_install():
+            ev = queue.pop(0)
+            assert ev.wait(timeout=5.0), "测试释放信号未到达"
+            return (True, "ok")
+
+        monkeypatch.setattr(
+            DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),
+        )
+
+        def install_thread():
+            return next(
+                t for t in threading.enumerate() if t.name == "dsh-bridge-install"
+            )
+
+        # 第一代安装 A：等它完成并 emit（queued 入队），但先不派发
+        mgr.set_enabled("dsh", True)
+        thread_a = install_thread()
+        release_a.set()
+        thread_a.join(timeout=5.0)
+        assert not thread_a.is_alive()
+        assert "dsh" in mgr._install_pending   # A 的 pending 尚未被消费
+        # 未跑 processEvents：A 的 queued 回调仍躺在 GUI 事件队列里
+        mgr.set_enabled("dsh", False)          # 关闭联动：作废在途安装
+        assert "dsh" not in mgr._install_pending
+        mgr.set_enabled("dsh", True)           # 再次开启：登记安装 B（新代次）
+        assert "dsh" in mgr._install_pending
+        thread_b = install_thread()
+        # 此刻派发 A 的旧 queued 回调：不得消费 B 的 pending
+        app.processEvents()
+        app.processEvents()
+        assert "dsh" in mgr._install_pending           # B 的 pending 必须仍在
+        assert cfg.data["agent_link"]["dsh"] is False  # 配置不得被 A 写回
+        assert not mgr.monitors["dsh"]._running        # 监视器不得被 A 启动
+        assert not any("安装完成" in b for b in bubbles), f"不得弹完成气泡: {bubbles}"
+        # B 的真实回调随后派发：正常生效（写配置、启动监视器、弹气泡）
+        release_b.set()
+        thread_b.join(timeout=5.0)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            app.processEvents()
+            if cfg.data["agent_link"]["dsh"]:
+                break
+            time.sleep(0.01)
+        assert cfg.data["agent_link"]["dsh"] is True
+        assert mgr.monitors["dsh"]._running
+        assert any("安装完成" in b for b in bubbles), f"应有 B 的完成气泡: {bubbles}"
+
+    def test_normal_completion_still_applies(self, tmp_path, monkeypatch):
+        """正常路径回归：安装完成后回调照常生效（写配置、启动监视器、
+        弹完成气泡）。"""
+        app = QApplication.instance() or QApplication([])
+        bubbles = []
+        release = threading.Event()
+        cfg, mgr = self._make_manager(tmp_path, bubbles, monkeypatch, release)
+        mgr.set_enabled("dsh", True)
+        install_thread = self._install_thread()
+        release.set()
+        install_thread.join(timeout=5.0)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            app.processEvents()
+            if cfg.data["agent_link"]["dsh"]:
+                break
+            time.sleep(0.01)
+        assert cfg.data["agent_link"]["dsh"] is True
+        assert mgr.monitors["dsh"]._running
+        assert any("安装完成" in b for b in bubbles), f"应有完成气泡，实际: {bubbles}"
+        mgr.set_enabled("dsh", False)
+        assert cfg.data["agent_link"]["dsh"] is False
