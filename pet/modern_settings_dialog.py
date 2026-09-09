@@ -466,7 +466,7 @@ class ModernSettingsDialog(QDialog):
         behavior_layout.addWidget(SettingsSection("Agent 联动 · 提示音效", agent_sound_rows, behavior_content))
         labels = DIALOGUE_LABELS
         behavior_layout.addWidget(SettingsSection("表达风格", [
-            SettingRow("dialogue_mode", "表达风格", "控制桌宠自言自语、候选内容和主动气泡的说话方式；同时覆盖 Agent 状态、审批、提问、错误、限流等所有气泡。内置「默认模式」与「鲸鱼娘女仆模式」不可编辑；选择「自定义台词」后，可粘贴下方 JSON 一键导入全部弹窗文案。", self.dialogue_mode_select),
+            SettingRow("dialogue_mode", "表达风格", "统一 Agent 联动相关提示气泡的说话方式：覆盖 Agent 状态、过程汇报、完成、审批、提问、错误、限流、卡住与循环检测等联动提醒，以及余额气泡。随机自言自语与点击台词在「桌宠行为 → 自言自语」中单独配置，不受本项影响。内置「默认模式」「鲸鱼娘女仆模式」不可编辑；选「自定义台词」后可粘贴下方 JSON 一键导入弹窗文案。", self.dialogue_mode_select),
             SettingRow("dialogue_scope", "专属文案对象(仅在自定义模式生效)", "下方逐事件编辑针对的对象：默认（全局文案）或某 Agent 的专属文案。留空的事件自动沿用全局（或默认模式）文案。", self.dialogue_scope_select, stacked=True),
         ], behavior_content))
         behavior_layout.addWidget(SettingsCard([
