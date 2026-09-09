@@ -1336,7 +1336,10 @@ class ModernSettingsDialog(QDialog):
         watchdog_rows = list(self.watchdog_page.findChildren(SettingRow))
         claimed.update(watchdog_rows)
         automation = page_content([
-            ("Agent 联动文案风格", claim_prefix("dialogue_")),
+            ("Agent 联动文案风格", claim("dialogue_mode")),
+            # 逐事件自定义编辑默认折叠：不用自定义台词时不占版面（用户反馈），
+            # 展开后仍是完整的 scope/模板导入/逐事件编辑。
+            ("自定义台词编辑（高级，选「自定义台词」后使用）", claim_prefix("dialogue_"), True),
             ("Agent 提示音", claim_prefix("agent_sound_")),
             ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
             ("主动感知", proactive_rows),
