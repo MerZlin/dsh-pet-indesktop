@@ -15,7 +15,7 @@ const PLUGIN_ID = "dsh-pet-bridge";
 // These services are resolved by DSH when the plugin is loaded.  The bridge
 // uses them only for the watchdog's isolated diagnosis request; normal event
 // forwarding remains usable even when no model is configured.
-const inject = ["llm", "agentDefaultModel", "apiProxy"];
+const inject = ["llm", "agentDefaultModel"];
 const CONTROL_POLL_MS = 150;
 const CONTROL_MAX_CONTEXT = 12000;
 const CONTROL_MAX_REQUEST_AGE_MS = 10 * 60 * 1000;
@@ -107,6 +107,65 @@ function controlAgentState(agent) {
   return String(agent?.status || agent?.state || "unknown");
 }
 
+// ===== 子代理 → 根会话归一 =====
+// DSH 的会话在持久化 header 里携带谱系：parentSession（直接父会话 id）、
+// delegationDepth（顶层为 0/缺省，子代理 = 父级深度 + 1）、origin === "subagent"
+// （直接子代理标记）。运行时 Agent 经 session.header 暴露该 header。
+// 控制动作（interrupt/replan）打在一个子代理上时，主 agent 会立刻补派新的
+// 子代理——用户视角「终止没用」。因此把控制归一到目标会话的根会话：
+//   子代理链上的 agent 统一作用到其最高可解析的存活祖先（根）；
+//   顶层 session 直接作用自身。
+// 返回的对象同时给出 wasSubagent / appliedToRoot / rootSessionId / subagentChain，
+// 供 pet 侧区分「已终止会话（含子代理）」与「已终止子代理（主代理仍在运行）」。
+function resolveControlRoot(agent, sessionLookup) {
+  const sessionIdOf = (a) => String(a?.id || a?.session?.id || "");
+  const headerOf = (a) => (a && a.session && a.session.header) || null;
+  const isSubagentHeader = (a) => {
+    const h = headerOf(a);
+    if (!h) return false;
+    return Number(h.delegationDepth || 0) > 0 ||
+      String(h.origin || "") === "subagent" ||
+      String(h.parentSession || "") !== "";
+  };
+  const targetSessionId = sessionIdOf(agent);
+  if (!isSubagentHeader(agent)) {
+    return {
+      targetSessionId,
+      wasSubagent: false,
+      appliedToRoot: false,
+      rootAgent: agent,
+      rootSessionId: targetSessionId,
+      subagentChain: [],
+    };
+  }
+  // 沿 parentSession 谱系向上，尽可能解析到最高存活的祖先。
+  const chain = [];
+  let current = agent;
+  const seen = new Set();
+  while (current) {
+    const sid = sessionIdOf(current);
+    if (!sid || seen.has(sid)) break;
+    seen.add(sid);
+    chain.push(sid);
+    const h = headerOf(current);
+    const parent = h && h.parentSession ? String(h.parentSession) : "";
+    if (!parent) break;
+    const parentAgent = (typeof sessionLookup === "function") ? sessionLookup(parent) : null;
+    if (!parentAgent || parentAgent === current) break;
+    current = parentAgent;
+  }
+  const appliedToRoot = chain.length > 1 && current !== agent;
+  const rootAgent = appliedToRoot ? current : agent;
+  return {
+    targetSessionId,
+    wasSubagent: true,
+    appliedToRoot,
+    rootAgent,
+    rootSessionId: sessionIdOf(rootAgent),
+    subagentChain: chain,
+  };
+}
+
 async function waitAgentIdle(agent, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -148,18 +207,25 @@ async function runBridgeDiagnosis(ctx, request, signal) {
     source: { kind: "plugin", plugin: PLUGIN_ID },
   })];
   let output = "";
+  let reasoning = "";
   for await (const chunk of ctx.llm.stream({
     provider: selection.provider,
     model: selection.model,
     messages,
-    maxTokens: 700,
+    // 推理型模型会先消耗 token 在 reasoning 上，700 经常被吃光导致正文为空
+    // （实机复现：empty-diagnosis）。给足预算，正文才出得来。
+    maxTokens: 2048,
     purpose: "dsh-pet-watchdog-replan",
     signal,
   })) {
     if (chunk?.type === "text-delta") output += String(chunk.text || "");
+    else if (chunk?.type === "reasoning-delta" || chunk?.type === "reasoning") reasoning += String(chunk.text || "");
   }
   output = output.trim();
-  if (!output) throw new Error("empty-diagnosis");
+  if (!output) {
+    console.warn(`[${PLUGIN_ID}] diagnosis empty (reasoning ${reasoning.length} chars, model ${selection.provider}/${selection.model})`);
+    throw new Error("empty-diagnosis");
+  }
   return output.slice(0, CONTROL_MAX_CONTEXT);
 }
 
@@ -183,20 +249,36 @@ async function handleControlRequest(ctx, request) {
     }
     return { ok: false, operation, sessionId, phase: "not-found", error: "session-not-found", foundAgent: false, cancelInvoked: false };
   }
+  // 把控制归一到根会话：子代理 → 其最高存活祖先；顶层 session → 自身。
+  // 这样 interrupt 停根 agent 的当前回合（主 agent 不会再补派新子代理），
+  // replan 给根 agent 注入重规划建议，而不是只作用于空转的子代理。
+  const resolved = resolveControlRoot(agent, (sid) => liveAgents.get(String(sid)));
+  const controlTarget = resolved.appliedToRoot ? resolved.rootAgent : agent;
+  const rootNorm = {
+    wasSubagent: resolved.wasSubagent,
+    appliedToRoot: resolved.appliedToRoot,
+    rootSessionId: resolved.rootSessionId,
+    subagentChain: resolved.subagentChain,
+  };
   let cancelInvoked = false;
   try {
     if (operation === "interrupt") {
       // Terminate means terminate: discard pending watchdog/user steering too.
-      await agent.cancel("dsh-pet-watchdog", { keepInbox: false });
+      await controlTarget.cancel("dsh-pet-watchdog", { keepInbox: false });
       cancelInvoked = true;
-      if (await waitAgentIdle(agent)) {
-        return { ok: true, operation, sessionId, phase: "cancelled", alreadyIdle: false, foundAgent: true, cancelInvoked };
+      // 用户点的是这个子代理：主 agent 的回合取消未必级联到已发布的子代理
+      // 自身 driver，显式再停一次目标，确保用户看到的那个空转子代理确实停下。
+      if (resolved.appliedToRoot && agent !== controlTarget) {
+        try { agent.cancel("dsh-pet-watchdog", { keepInbox: false }); } catch {}
       }
-      return { ok: false, operation, sessionId, phase: "timeout", error: "cancel-timeout", foundAgent: true, cancelInvoked };
+      if (await waitAgentIdle(controlTarget)) {
+        return { ok: true, operation, sessionId, phase: "cancelled", alreadyIdle: false, foundAgent: true, cancelInvoked, ...rootNorm };
+      }
+      return { ok: false, operation, sessionId, phase: "timeout", error: "cancel-timeout", foundAgent: true, cancelInvoked, ...rootNorm };
     }
     // Stop the active driver first.  keepInbox is essential: it prevents a
     // watchdog request from deleting ordinary queued Agent input.
-    await agent.cancel("dsh-pet-watchdog-replan", { keepInbox: true });
+    await controlTarget.cancel("dsh-pet-watchdog-replan", { keepInbox: true });
     cancelInvoked = true;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(request.timeoutMs || 8000)));
@@ -206,14 +288,14 @@ async function handleControlRequest(ctx, request) {
     } finally {
       clearTimeout(timeout);
     }
-    await agent.steer(createUserMessage({
+    await controlTarget.steer(createUserMessage({
       content: [{ type: "text", text: plan }],
       source: { kind: "plugin", plugin: PLUGIN_ID },
     }));
-    return { ok: true, operation, sessionId, phase: "replanned", plan, foundAgent: true, cancelInvoked };
+    return { ok: true, operation, sessionId, phase: "replanned", plan, foundAgent: true, cancelInvoked, ...rootNorm };
   } catch (err) {
     console.warn(`[${PLUGIN_ID}] control failed: ${String(err?.message || err)}`);
-    return { ok: false, operation, sessionId, phase: "failed", error: "bridge-internal-error", foundAgent: true, cancelInvoked };
+    return { ok: false, operation, sessionId, phase: "failed", error: "bridge-internal-error", foundAgent: true, cancelInvoked, ...rootNorm };
   }
 }
 
@@ -221,7 +303,9 @@ function writeControlOutcome(id, request, result) {
   const controlResult = { source: "bridge", requestId: id, operation: request.operation,
     sessionId: request.sessionId, ok: !!result.ok, phase: result.phase || "",
     error: result.error || "", alreadyIdle: !!result.alreadyIdle,
-    foundAgent: !!result.foundAgent, cancelInvoked: !!result.cancelInvoked };
+    foundAgent: !!result.foundAgent, cancelInvoked: !!result.cancelInvoked,
+    wasSubagent: !!result.wasSubagent, appliedToRoot: !!result.appliedToRoot,
+    rootSessionId: String(result.rootSessionId || "") };
   writeControlResponse(id, result);
   writeRecord({ event: "bridge/control-result", ...controlResult });
   writeRecord({ event: "watchdog/control-result", ...controlResult });
@@ -449,12 +533,40 @@ function extractSessionMeta(agent, session, summary = null, workspace = null) {
   return { sessionId, sessionName, projectName, agentName, displayLabel };
 }
 
+// apiProxy 缺失（当前 dsh 发布版无此服务）时的真实标题兜底：
+// dsh 把会话标题/工作目录缓存在 ~/.dsh/storages/session_projcache/sessions/<sid>.json。
+function readProjcacheSummary(sessionId) {
+  const sid = String(sessionId || "");
+  if (!sid) return null;
+  const candidates = sid.startsWith("session-") ? [sid] : [sid, `session-${sid}`];
+  for (const name of candidates) {
+    try {
+      const file = path.join(os.homedir(), ".dsh", "storages", "session_projcache", "sessions", `${name}.json`);
+      const data = JSON.parse(fs.readFileSync(file, "utf8"));
+      const title = data?.record?.rows?.title?.val;
+      const cwd = data?.record?.identity?.cwd;
+      if (!title && !cwd) continue;
+      return { sessionId: name, cwd: cwd || "", projections: { values: { title: title || "" } } };
+    } catch { /* 缓存不存在或损坏：跳过 */ }
+  }
+  return null;
+}
+
 async function refreshSessionMetadata(ctx) {
   if (metadataRefreshPromise) return metadataRefreshPromise;
   metadataRefreshPromise = (async () => {
     try {
-      const api = ctx?.apiProxy;
-      if (!api?.sessions?.list || !api?.workspace?.list) return;
+      // apiProxy 不进 inject（当前 dsh 发布版无此服务，强依赖会让插件无法激活）；
+      // 用 ctx.get 免 inject 读取，缺失时返回 undefined。
+      const api = typeof ctx?.get === "function" ? ctx.get("apiProxy", false) : undefined;
+      if (!api?.sessions?.list || !api?.workspace?.list) {
+        // 兜底：读 dsh 本地会话缓存投影出 summary，复用同一条写 meta 通路。
+        for (const [id, agent] of liveAgents) {
+          const sid = String(agent?.session?.id || id);
+          writeSessionMeta(agent, agent?.session, readProjcacheSummary(sid), null);
+        }
+        return;
+      }
       const request = () => ({ rpcId: randomUUID(), payload: {} });
       const [sessionsResponse, workspacesResponse] = await Promise.all([
         api.sessions.list(request()),
@@ -994,10 +1106,16 @@ function _interactionDedupKeys(extra) {
     // 的同 session 事件上去重（如两个不同审批在同一 session 中先后到达）。
     if (extra.approvalId && extra.sessionId) keys.push(`ap:se:${extra.sessionId}:${extra.approvalId}`);
     else if (extra.rpcId && extra.sessionId) keys.push(`ap:se:${extra.sessionId}:${extra.rpcId}`);
-    // tool+command 作为降级去重键（同 agent 的同一命令审批不应重复）
+    // tool+command 降级去重键：仅在没有任何稳定审批身份（approvalId/rpcId）
+    // 时才使用——无条件加入会让同一会话内两条身份不同的审批（同命令）在 8s
+    // 窗口内互相吞掉（P1-4）。有 sessionId 时拼进键里做基本隔离。
     const tool = extra.toolName || extra.tool || "";
     const cmd = extra.command || "";
-    if (tool || cmd) keys.push(`ap:tc:${tool}|${cmd}`);
+    const session = extra.sessionId || "";
+    const hasIdentity = Boolean(extra.approvalId || extra.rpcId);
+    if (!hasIdentity && (tool || cmd)) {
+      keys.push(session ? `ap:tc:${session}:${tool}|${cmd}` : `ap:tc:${tool}|${cmd}`);
+    }
   } else if (ev === "question/requested" || ev === "question/resolved") {
     if (extra.rpcId) keys.push(`qu:${extra.rpcId}`);
     // sessionId 同理：与 rpcId 组合
@@ -1265,7 +1383,10 @@ export function apply(ctx) {
         }
       } else if (type === "tool/result") {
         const d = event.data || {};
-        const callId = d.message && d.message.callId;
+        // 与 toolResultInfo 同一取数路径：当前 dsh 版本 callId 也可能只挂在
+        // message.source 下，只看 message.callId 会导致 resolveQuestion 永远
+        // 收不到 callId——question/resolved 写不出，桌宠端提醒队列卡死。
+        const callId = d.message && (d.message.callId || (d.message.source && d.message.source.callId));
         if (callId) resolveQuestion(callId, sessionId);
         // 用户介入信号：ask_user_question 回答后
         if (callId && pendingQuestionCallIds.has(String(callId))) {
