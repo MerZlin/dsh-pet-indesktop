@@ -386,7 +386,10 @@ def test_click_suppressed_for_120ms_after_impulse(tmp_path, app):
 
 
 def test_animation_gap_timeout_resumes_animation_chain(tmp_path, app):
-    """动画等待间隔结束后必须继续选择下一段动画，而不是停在待机。"""
+    """动画等待间隔结束后必须继续选择下一段动画，而不是停在待机。
+
+    N6：gap 超时只结束 gap 状态，不打断正在播的 gap step——正在播的
+    待机/转向自然播完后由 _on_anim_ended 走 _pick_next 续链。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     win.animation_gap_seconds = 10.0
     win._animation_gap_active = True
@@ -396,7 +399,44 @@ def test_animation_gap_timeout_resumes_animation_chain(tmp_path, app):
     win._on_animation_gap_timeout()
 
     assert win._animation_gap_active is False
+    # 超时本身不立即强制续链（不打断正在播的待机步）
+    assert calls == []
+    # 当前 gap step（待机）自然播完 → _on_anim_ended 续链
+    win._on_anim_ended("待机呼吸")
     assert calls == ["next"]
+    win.close()
+
+
+def test_animation_gap_timeout_does_not_interrupt_playing_idle(tmp_path, app):
+    """N6 回归：gap 超时时正在播待机/转向 step，不得被 _pick_next 硬切打断——
+    让它自然播完再续链（消融对比 main vs PR57 后恢复 main 语义）。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win.animation_gap_seconds = 10.0
+    win._animation_gap_active = True
+    win.anim = "待机呼吸"  # gap step 正在播
+    calls = []
+    win._pick_next = lambda: calls.append("next")
+
+    win._on_animation_gap_timeout()
+
+    assert win._animation_gap_active is False
+    assert calls == [], "超时不得打断正在播的待机步"
+    win.close()
+
+
+def test_non_gap_anim_end_during_gap_resumes_chain(tmp_path, app):
+    """N6 回归：gap 期间意外出现非待机/转向动画结束（外部切走又播完）→
+    兜底 _pick_next 续链，不停帧到 gap 超时。"""
+    win, session = _make_pet_window(tmp_path, "pet_a")
+    win.animation_gap_seconds = 10.0
+    win._animation_gap_active = True
+    win.anim = "写代码"  # 异常：gap 期间在播非 gap clip
+    calls = []
+    win._pick_next = lambda: calls.append("next")
+
+    win._on_anim_ended("写代码")
+
+    assert calls == ["next"], "异常结束应立即兜底续链，不停帧"
     win.close()
 
 

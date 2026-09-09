@@ -3254,3 +3254,77 @@ class TestInstallFinishedGuard:
         assert any("安装完成" in b for b in bubbles), f"应有完成气泡，实际: {bubbles}"
         mgr.set_enabled("dsh", False)
         assert cfg.data["agent_link"]["dsh"] is False
+
+class TestDetectorAlertThrottle:
+    """N2 跨检测器弹窗节流：stuck/pattern/watchdog 同 agent 30s 内只弹一次窗
+    （动画照常），升级档位放行，不同 scope 互不影响。"""
+
+    def _make_mgr(self, tmp_path):
+        class FakeWin:
+            def __init__(self):
+                self.alerts = []
+                self.anims = []
+                self._visible = True
+
+            def isVisible(self):
+                return self._visible
+
+            def request_link_anim(self, anim):
+                self.anims.append(str(anim))
+
+            def show_alert(self, text, *, duration_ms=0, sticky=True, **kw):
+                self.alerts.append({"text": str(text), "sticky": bool(sticky)})
+
+            def show_bubble(self, text, duration_ms=3000):
+                self.alerts.append({"text": str(text), "bubble": True})
+
+        cfg = Config(base=tmp_path)
+        mgr = AgentLinkManager(FakeWin(), cfg)
+        mgr._clock = lambda: mgr._throttle_now[0]
+        mgr._throttle_now = [1000.0]
+        return mgr
+
+    def test_watchdog_suppressed_after_stuck_within_window(self, tmp_path):
+        """stuck(severity2) 弹窗后 30s 内 watchdog warning 到达 → 弹窗被抑制。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_stuck_intervention("dsh", {"severity": 2})
+        assert len(mgr.win.alerts) == 1
+        mgr._throttle_now[0] += 10.0
+        mgr._on_exploration_warning("sess-1", {"agent_key": "dsh", "reasons": ["search"], "steps": []})
+        assert len(mgr.win.alerts) == 1, "30s 窗口内 watchdog 弹窗应被抑制"
+
+    def test_watchdog_allowed_after_cooldown_expired(self, tmp_path):
+        """超过 30s 后同 agent 再触发 watchdog → 正常弹窗。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_stuck_intervention("dsh", {"severity": 2})
+        assert len(mgr.win.alerts) == 1
+        mgr._throttle_now[0] += 31.0
+        mgr._on_exploration_warning("sess-2", {"agent_key": "dsh", "reasons": ["search"], "steps": []})
+        assert len(mgr.win.alerts) == 2, "冷却结束后 watchdog 应正常弹窗"
+
+    def test_escalation_pattern_control_overrides_previous(self, tmp_path):
+        """watchdog 弹窗后 pattern control（升级/控制级）到达 → 放行（覆盖低档）。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_exploration_warning("sess-3", {"agent_key": "dsh", "reasons": ["search"], "steps": []})
+        assert len(mgr.win.alerts) == 1
+        mgr._throttle_now[0] += 5.0
+        mgr._on_pattern_control("dsh", {"verdict": "REPLAN", "reason": "loop", "class": "search", "count": 8, "window": "10"})
+        assert len(mgr.win.alerts) == 2, "升级到 control 应放行（覆盖低档提醒）"
+
+    def test_different_scope_not_throttled(self, tmp_path):
+        """不同 agent scope 互不影响：agent B 弹窗不受 agent A 的节流记录约束。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_stuck_intervention("agent-a", {"severity": 2})
+        assert len(mgr.win.alerts) == 1
+        mgr._throttle_now[0] += 5.0
+        mgr._on_exploration_warning("sess-b", {"agent_key": "agent-b", "reasons": ["search"], "steps": []})
+        assert len(mgr.win.alerts) == 2, "不同 agent scope 不受节流影响"
+
+    def test_pattern_warning_no_alert_but_records_gate(self, tmp_path):
+        """pattern warning 只播动画不弹窗、也不该占用节流槽（非弹窗事件）。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_pattern_warning("dsh", {})
+        assert mgr.win.alerts == []
+        # 随后 stuck severity2（升级）不受影响
+        mgr._on_stuck_intervention("dsh", {"severity": 2})
+        assert len(mgr.win.alerts) == 1

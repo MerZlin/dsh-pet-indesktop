@@ -1630,6 +1630,11 @@ class AgentLinkManager(QObject):
         self.monitors["dsh"].rate_limit.connect(self._on_rate_limit)
         self.monitors["dsh"].llm_error.connect(self._on_llm_error)
         self.monitors["dsh"].user_action.connect(self._on_user_action)
+        # 检测器提醒跨模块节流（N2）：stuck / pattern / exploration watchdog 三个
+        # 检测器各有独立 cooldown，但同一 busy 周期可能先后各自弹窗造成连环换弹。
+        # 按 agent/session 记最近一次**任一**检测器弹窗时刻，窗口内其余检测器
+        # 只播动画、不再弹窗（升级档位放行）。_clock 与其它计时同域。
+        self._detector_alert_at: dict[str, float] = {}
         # 429 限流缓存：session_key → { "count": int, "_ts": float, "_first_ts": float, "_dismissed": bool }
         self._429_cache: dict[str, dict] = {}
         self._429_timers: dict[str, QTimer] = {}   # session_key → 自动收起定时器
@@ -2960,6 +2965,24 @@ class AgentLinkManager(QObject):
     # ------------------------------------------------------------------
     _STUCK_WORRIED_KEYWORDS = ("焦急", "着急", "气急败坏", "抓狂", "拍打", "敲桌", "烦恼", "抓狂")
     _STUCK_REMINDER_MS = 20000   # 建议介入提醒持续 20s（非 sticky，避免与审批/问题常驻气泡冲突）
+    # N2：跨检测器弹窗节流窗口——同 agent/session 30s 内任一检测器弹过窗，
+    # 其余检测器本次只播动画不弹窗（避免 stuck/pattern/watchdog 连环换弹）。
+    _DETECTOR_ALERT_COOLDOWN_S = 30.0
+
+    def _detector_alert_gate(self, scope_key: str, *, is_escalation: bool = False) -> bool:
+        """跨检测器弹窗节流：返回 True 表示本次允许弹窗（并记录触发时刻）。
+
+        - 同 scope 窗口内已有任检测器弹窗：非升级（is_escalation=False）被抑制；
+        - 升级（stuck 档位 2 / pattern control 高于已展示档位）放行并刷新时刻，
+          让"情况恶化"的更强提醒能覆盖低档提醒；
+        - 不同 scope（不同 agent/session）互不影响。
+        """
+        now = self._clock()
+        last = self._detector_alert_at.get(scope_key)
+        if last is not None and not is_escalation and now - last < self._DETECTOR_ALERT_COOLDOWN_S:
+            return False
+        self._detector_alert_at[scope_key] = now
+        return True
 
     def _pick_stuck_anim(self) -> str | None:
         """从当前角色动作池里按语义挑选「焦急」动画；缺素材静默跳过。"""
@@ -2981,6 +3004,10 @@ class AgentLinkManager(QObject):
             self.win.request_link_anim(anim)
         if severity < 2:
             return  # 档位 1：只播动画，不弹气泡
+        # N2 跨检测器节流：档位 2 属升级（重要介入），放行；但同 scope 若已
+        # 弹过同档提醒（如 pattern control/watchdog）则由 gate 抑制重复换弹。
+        if not self._detector_alert_gate(agent_key, is_escalation=True):
+            return
         # 档位 2：持续提醒（可自定义文案；{name} 占位 = Agent 显示名）
         from .stuck_detector import stuck_reminder_text
         name = self.AGENT_NAMES.get(agent_key, agent_key)
@@ -3048,6 +3075,9 @@ class AgentLinkManager(QObject):
             )
         key = "pattern.control" if verdict in ("STOP", "ASK_USER", "REPLAN") else "pattern.warning"
         text = self._dialogue(key, text, name=name, reasons=reason)
+        # N2 跨检测器节流：pattern control 属升级（控制级），放行并覆盖低档提醒。
+        if not self._detector_alert_gate(agent_key, is_escalation=True):
+            return
         if hasattr(self.win, "show_alert"):
             self.win.show_alert(text, duration_ms=self._PATTERN_REMINDER_MS, sticky=False)
         elif hasattr(self.win, "show_bubble"):
@@ -3060,6 +3090,13 @@ class AgentLinkManager(QObject):
 
     def _on_exploration_warning(self, session_key: str, payload: dict) -> None:
         if not hasattr(self.win, "isVisible") or not self.win.isVisible():
+            return
+        # N2 跨检测器节流：watchdog 提醒是非升级普通提醒——同 agent 30s 内
+        # 已有 stuck/pattern/watchdog 弹窗则本次抑制（播动画由上游完成）。
+        # scope 归一到 agent_key：payload 携带 state 记录的 agent_key，
+        # 缺失时用 session_key 前缀近似（dsh 联动同一会话即同一 agent）。
+        scope_key = str((payload or {}).get("agent_key") or "") or f"session:{session_key}"
+        if not self._detector_alert_gate(scope_key, is_escalation=False):
             return
         reasons = self._format_exploration_reasons((payload or {}).get("reasons", []), (payload or {}).get("steps", []))
         name = self._exploration_name(payload, session_key)
