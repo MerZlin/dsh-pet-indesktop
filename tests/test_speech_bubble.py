@@ -8,8 +8,11 @@ from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication
 
 from pet.speech_bubble import (
+    BUBBLE_TEXT_COLUMN,
+    BUBBLE_TEXT_SLACK,
     FlowLayout,
     PetSpeechBubble,
+    bubble_label_size,
     bubble_max_lines,
     elide_bubble_text,
     normalize_bubble_text,
@@ -186,6 +189,120 @@ def test_sticky_bubble_dismiss_emits_hidden_signal():
     bubble.show_text("审批", QRect(0, 0, 120, 120), 3200, sticky=True)
     bubble.dismiss()
     assert len(hidden_log) == 1
+
+
+# ============================================================================
+# 文本行必须完整落在 label 矩形内（行尾字被气泡切掉的回归）
+# ============================================================================
+
+# 用户截图里的原句（鲸鱼娘女仆模式的 start 台词）及其带空格变体：
+# 换行按整型 horizontalAdvance 累加，而 label 宽度过去是用
+# QFontMetrics.boundingRect(..., TextWordWrap) 二次排版量的，两者可以差一个字，
+# label 比真实行窄时 QLabel（wordWrap=False）就把行尾那个字切在边界上。
+CLIPPING_TEXTS = [
+    "主人～DSH开始干活啦，人家会帮您盯着它的～",
+    "主人～ DSH 开始干活啦，人家会帮您盯着它的～",
+    "主人～DSH开始干活啦，人家会帮您盯 着它的～",
+    "主人～DSH开始干活啦，人家会帮您盯着它 的～",
+    "主人，DSH 正在读取 dsh-pet-indesktop/pet/speech_bubble.py，人家也帮您瞄两眼～",
+]
+
+
+def _rendered_metrics(bubble):
+    bubble.label.ensurePolished()
+    return QFontMetrics(bubble.label.font())
+
+
+def _overflow_lines(bubble, lines) -> list[tuple[str, int, int]]:
+    """返回 (行文本, 行宽度, label 宽度) 中放不进 label 的行。"""
+    metrics = _rendered_metrics(bubble)
+    width = bubble.label.width()
+    return [
+        (line, metrics.horizontalAdvance(line), width)
+        for line in lines
+        if metrics.horizontalAdvance(line) > width
+    ]
+
+
+def test_displayed_lines_fit_label_rect():
+    """回归：真正绘制的每一行都必须放得进 label 矩形。
+
+    过去 label 宽度由 boundingRect(TextWordWrap) 决定，而显示的是
+    paginate_bubble_text 按整型 advance 逐字折出来的行；两套折行差一个字时，
+    行尾最后一个字被 label 右边界切掉半个（截图里 '盯着它' 的 '它' 只剩一条边，
+    下一行从 '的～' 开始）。
+    """
+    _get_app()
+    for text in CLIPPING_TEXTS:
+        bubble = PetSpeechBubble(style_id="classic_top")
+        bubble.show_text(text, QRect(0, 0, 120, 120), 3200, sticky=True)
+        assert bubble.label.wordWrap() is False
+        assert _overflow_lines(bubble, bubble.label.text().split("\n")) == [], text
+        bubble.dismiss()
+
+
+def test_every_page_line_fits_label_width():
+    """分页文本的每一页、每一行都必须放得进 label 矩形（宽度按所有页定死）。"""
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    # 长度取得足够大：任何平台的字体都会超过单页 6 行上限（不赌字体度量），
+    # 保证这条用例在 Windows/Linux/macOS CI 上都真的走到分页分支。
+    text = "主人～DSH开始干活啦，人家会帮您盯着它的～" * 20
+    bubble.show_text(text, QRect(0, 0, 120, 120), 40000)
+    assert bubble._pages, f"长文本应进入分页展示（{len(text)} 字）"
+    assert len(bubble._pages) > 1
+
+    for page in bubble._pages:
+        assert _overflow_lines(bubble, page.split("\n")) == [], page
+
+
+def test_bubble_label_stays_inside_painted_surface():
+    """文本 label 必须落在气泡绘制区内（右侧留白足够，字不会被边框压住）。"""
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    bubble.show_text(
+        "主人～DSH开始干活啦，人家会帮您盯着它的～",
+        QRect(0, 0, 120, 120),
+        3200,
+        sticky=True,
+    )
+    surface = bubble._surface_rect
+    assert bubble.label.geometry().left() >= surface.left()
+    assert bubble.label.geometry().right() <= surface.right()
+    assert bubble.label.geometry().top() >= surface.top()
+    assert bubble.label.geometry().bottom() <= surface.bottom()
+
+
+def test_bubble_label_size_measures_painted_lines():
+    """bubble_label_size 的宽度取“最长的那一行”，高度取“行数最多的一页”。
+
+    用假的 metrics 固定度量，避免依赖平台字体：宽度必须是行宽 + 余量（而不是
+    二次排版的结果），高度按所有页里最多行数算，翻页时 label 不会变。
+    """
+    class _StubMetrics:
+        def __init__(self, per_char: int, spacing: int):
+            self.per_char = per_char
+            self.spacing = spacing
+
+        def horizontalAdvance(self, text: str) -> int:
+            return self.per_char * len(text)
+
+        def lineSpacing(self) -> int:
+            return self.spacing
+
+    metrics = _StubMetrics(per_char=40, spacing=16)
+    size = bubble_label_size(metrics, ["一二三\n四五", "六七"])
+    assert size.width() == 3 * 40 + BUBBLE_TEXT_SLACK
+    assert size.height() == 2 * 16 + 2
+
+    # 宽度不超过内容列上限
+    wide = bubble_label_size(_StubMetrics(per_char=20, spacing=16), ["一" * 30])
+    assert wide.width() <= BUBBLE_TEXT_COLUMN
+
+    # 短文本仍受最小尺寸约束
+    tiny = bubble_label_size(metrics, [])
+    assert tiny.width() == 96
+    assert tiny.height() == 20
 
 
 # ============================================================================

@@ -23,6 +23,17 @@ SELF_TALK_IMAGE_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
 }
 
+# 气泡文本列的最大像素宽（气泡整体宽度上限的由来），以及 label 矩形相对
+# 最长行的余量。换行预算必须是 ``列宽 - 余量``：整型 horizontalAdvance 累加
+# 与绘制时的自然（分数）宽度有亚像素差，余量同时吸收这个差，行尾才不会切字。
+BUBBLE_TEXT_COLUMN = 248
+BUBBLE_TEXT_SLACK = 4
+
+
+def bubble_wrap_width(column: int = BUBBLE_TEXT_COLUMN, slack: int = BUBBLE_TEXT_SLACK) -> int:
+    """Text wrapping budget: always leaves ``slack`` px inside the column."""
+    return max(1, int(column) - int(slack))
+
 
 def breath_bubble_size_for_anchor(anchor_rect: QRect) -> QSize:
     """Scale the decorative water bubble with the pet's visible silhouette.
@@ -100,6 +111,34 @@ def elide_bubble_text(
     if current:
         lines.append(current)
     return "\n".join(lines[:max_lines])
+
+
+def bubble_label_size(
+    metrics: QFontMetrics,
+    pages: list[str],
+    column: int = BUBBLE_TEXT_COLUMN,
+    slack: int = BUBBLE_TEXT_SLACK,
+    min_width: int = 96,
+    min_height: int = 20,
+) -> QSize:
+    """Return the label rect that holds **every line that will be painted**.
+
+    必须用与换行相同的度量、并直接量真正的行宽，不能再用
+    ``QFontMetrics.boundingRect(..., TextWordWrap)`` 二次排版来推宽度：
+    那次排版按自然（分数）宽度断行，而 ``paginate_bubble_text`` 按整型
+    ``horizontalAdvance`` 累加，两者可以差一个字；label 一旦比真实行窄，
+    QLabel（wordWrap=False）就会把行尾那个字切在边界上，看起来像被气泡挡掉。
+
+    宽度按所有页里最长的一行 + ``slack`` 计算（页间切换不再改 label 尺寸）；
+    高度按行数 × ``lineSpacing`` 计算（所有页里行数最多的一页决定）。
+    """
+    lines = [line for page in pages for line in page.split("\n")] or [""]
+    widest = max(metrics.horizontalAdvance(line) for line in lines)
+    line_count = max((len(page.split("\n")) for page in pages), default=1)
+    return QSize(
+        max(min_width, min(column, widest + slack)),
+        max(min_height, line_count * metrics.lineSpacing() + 2),
+    )
 
 
 def paginate_bubble_text(

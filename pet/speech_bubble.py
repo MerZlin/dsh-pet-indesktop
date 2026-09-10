@@ -40,11 +40,15 @@ from PySide6.QtWidgets import (
 
 # 批6-2 拆分后纯函数区 re-export（维持既有 import 兼容；外部调用点本批不改）
 from .speech_bubble_text import (
+    BUBBLE_TEXT_COLUMN,
+    BUBBLE_TEXT_SLACK,
     SELF_TALK_IMAGE_SUFFIXES,
     breath_bubble_size_for_anchor,
     breath_bubble_size_for_scale,
+    bubble_label_size,
     bubble_max_lines,
     bubble_rect_for_anchor,
+    bubble_wrap_width,
     elide_bubble_text,
     list_self_talk_images,
     normalize_bubble_text,
@@ -52,12 +56,16 @@ from .speech_bubble_text import (
 )
 
 __all__ = [
+    "BUBBLE_TEXT_COLUMN",
+    "BUBBLE_TEXT_SLACK",
     "SELF_TALK_IMAGE_SUFFIXES",
     "BUBBLE_STYLE_PRESETS",
     "breath_bubble_size_for_anchor",
     "breath_bubble_size_for_scale",
+    "bubble_label_size",
     "bubble_max_lines",
     "bubble_rect_for_anchor",
+    "bubble_wrap_width",
     "elide_bubble_text",
     "list_self_talk_images",
     "normalize_bubble_text",
@@ -402,6 +410,7 @@ class PetSpeechBubble(QFrame):
         else:
             self.label.show()
             self.label.setPixmap(QPixmap())
+            self.label.ensurePolished()
             self.label.setText(elide_bubble_text(
                 QFontMetrics(self.label.font()),
                 self._raw_text,
@@ -525,6 +534,10 @@ class PetSpeechBubble(QFrame):
             self._subtitle_label.setText("")
             self._subtitle_label.hide()
         self.label.show()
+        # 量文本前必须先让 label 落到最终字体上：样式表里的 font-size 只在
+        # polish 时写进 label.font()，若此时量到的还是旧字体，换行与绘制就
+        # 用了两套度量（行尾字会被 label 右边界切掉）。这里显式 polish 兜底。
+        self.label.ensurePolished()
         metrics = QFontMetrics(self.label.font())
         if interactive:
             # 交互气泡：不自动消失 + 显示按钮 + 临时关闭鼠标穿透
@@ -539,7 +552,7 @@ class PetSpeechBubble(QFrame):
             # 长文本分页：每页不超过 bubble_max_lines 行，自动翻页直到全文展示完，
             # 底部显示「1/3」页码指示。总时长按页数扩展，保证每页可读完。
             pages = paginate_bubble_text(
-                metrics, text, 248, bubble_max_lines(text)
+                metrics, text, bubble_wrap_width(), bubble_max_lines(text)
             )
             display_text = pages[0] if pages else ""
             if len(pages) > 1 and not sticky and not interactive:
@@ -556,20 +569,9 @@ class PetSpeechBubble(QFrame):
                 self._reset_paging()
             self.label.setPixmap(QPixmap())
             self.label.setText(display_text)
-            # 固定尺寸必须按所有页的最大测量值计算：后续页可能出现更宽的行，
-            # 若只按第一页设置，翻页后 wordWrap=False 会把后续页文本裁掉。
-            max_width = 0
-            max_height = 0
-            for page in pages:
-                page_bounds = metrics.boundingRect(
-                    QRect(0, 0, 248, 600), Qt.TextFlag.TextWordWrap, page
-                )
-                max_width = max(max_width, page_bounds.width())
-                max_height = max(max_height, page_bounds.height())
-            self.label.setFixedSize(
-                max(96, min(248, max_width + 3)),
-                max(20, max_height + 2),
-            )
+            # 固定尺寸按真正会绘制的行计算（所有页里最长的一行 + 行数最多的一页），
+            # 翻页后 wordWrap=False 也不会裁字；详见 bubble_label_size 的说明。
+            self.label.setFixedSize(bubble_label_size(metrics, pages))
         self.adjustSize()
         self._place(anchor_rect)
         self.show()
