@@ -42,6 +42,10 @@ class SingingLibrary(FakeLibrary):
         from tests.test_window_pause import FakeClip
         self._clips[SING_ANIM] = FakeClip()
 
+    def names(self):
+        # names() 必须与 _clips 一致：真实素材库收录了唱歌动画，names 就该报告它
+        return super().names() + [SING_ANIM]
+
 
 def test_music_sing_starts_immediately_when_visible(app, tmp_path, monkeypatch):
     """回归 issue #69-1：窗口可见且检测到音乐时应尽快进入唱歌，而不是等 4s 轮询。"""

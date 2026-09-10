@@ -1061,7 +1061,7 @@ class AppShell:
         self._dsh_state_tracker.start()
         character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
         logging.info('当前形象: %s', character_id)
-        self.instance._create_ui(character_id)
+        self._create_ui_with_character_fallback(character_id)
         # 批5.2a：进程级共享全屏 watcher 在主窗就绪后启动（自省任一窗是否需要，
         # 无需窗——环则空转）；flag 关时 _shared 为 None，no-op。
         if self._shared is not None:
@@ -1073,6 +1073,20 @@ class AppShell:
         self._sync_todo_service()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
         QTimer.singleShot(4000, self._maybe_autostart_harness)
+
+    def _create_ui_with_character_fallback(self, character_id: str) -> None:
+        """启动路径创建主窗；配置记住的角色素材目录已被删/搬走（如 DLC 卸载）
+        时回退默认角色重试一次，而不是直接弹错退出。默认角色也缺素材则照常
+        抛出，由上层弹启动错误。"""
+        try:
+            self.instance._create_ui(character_id)
+        except FileNotFoundError:
+            if character_id == catalog.DEFAULT_CHARACTER:
+                raise
+            logging.warning('角色 %s 素材缺失，回退默认角色 %s', character_id, catalog.DEFAULT_CHARACTER)
+            character_id = catalog.DEFAULT_CHARACTER
+            self.config.set('character', character_id)
+            self.instance._create_ui(character_id)
 
     def _maybe_autostart_harness(self) -> None:
         """「随桌宠启动 dsh 服务」：主窗就绪后拉起 dsh web（只起服务，全程静默）。

@@ -6,8 +6,6 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
@@ -23,11 +21,16 @@ from . import catalog
 
 
 def _discover_click_names(character_id: str) -> list[str]:
-    """从素材目录发现当前角色的点击动画名；目录缺失时回退 catalog 常量。"""
-    base = Path(__file__).resolve().parent.parent / "assets" / "characters"
-    click_dir = base / str(character_id) / "videos" / "click"
+    """从当前角色的有效素材目录发现点击动画名；目录缺失时回退 catalog 常量。
+
+    走 catalog.resolve_character_video_dir（外部 DLC 目录 > 内置 webm >
+    内置 gif），不读死内置路径；webm/gif 都识别。"""
+    click_dir = catalog.resolve_character_video_dir(str(character_id)) / "click"
     if click_dir.is_dir():
-        names = sorted(p.stem for p in click_dir.glob("*.webm"))
+        names = sorted(
+            {p.stem for p in click_dir.glob("*.webm")}
+            | {p.stem for p in click_dir.glob("*.gif")}
+        )
         if names:
             return names
     return list(catalog.CLICKS)

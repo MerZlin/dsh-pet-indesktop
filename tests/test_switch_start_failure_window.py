@@ -466,3 +466,29 @@ def test_link_idle_keeps_non_link_retry(app, tmp_path):
 
     win.close()
     app.processEvents()
+
+
+def test_switch_unknown_animation_name_is_refused_safely(app, tmp_path):
+    """DLC 守卫：目标动画名不在素材库时 _switch 判失败且不崩溃、不换动画。
+
+    换角色（同路径替换素材）后，写死名的直传路径（余额档位/唱歌等）可能
+    请求当前角色没有的动画；lib.movie(name) 的 KeyError 绝不能崩进 GUI 线程。
+    """
+    lib = FakeLibrary()
+    win = _make_win(tmp_path, lib)
+    assert win.anim == catalog.IDLE
+    assert win.movie._running is True
+
+    ok = win._switch("这个角色根本没有的动画")
+    assert ok is False
+    assert win.anim == catalog.IDLE, "缺失动画不得改变当前动画"
+    assert win.movie is lib.movie(catalog.IDLE)
+    assert win.movie._running is True
+
+    # 联动直传路径（余额档位动画入口）同样安全
+    win.request_link_anim("余额-钱袋满溢")
+    app.processEvents()
+    assert win.anim == catalog.IDLE
+
+    win.close()
+    app.processEvents()

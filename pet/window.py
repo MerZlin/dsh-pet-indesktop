@@ -1583,6 +1583,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         filter_switch = getattr(self, '_effects_filter_switch', None)
         if callable(filter_switch):
             name = filter_switch(name)
+        if name not in self.lib.names():
+            # DLC/同路径换角色守卫：目标动画名不在当前素材库（写死名直传路径
+            # 的兜底，如余额档位/唱歌动画）。判失败返回，绝不让 lib.movie(name)
+            # 的 KeyError 崩进 GUI 线程；池化消费路径本就预过滤，不受影响。
+            logger.warning("动画 %r 不在当前角色素材库，跳过本次切换", name)
+            return False
         prev_anim = self.anim
         prev_movie = self.movie
         prev_click_hold = self._click_hold
