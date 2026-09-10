@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from .click_sound import play_sound, resolve_builtin_sound
@@ -1521,6 +1521,9 @@ class AgentLinkManager(QObject):
         self._shutdown = False
         self._respond_threads: set[threading.Thread] = set()
         self._respond_threads_lock = threading.Lock()
+        # 后台回写/控制 worker 的取消信号：shutdown 时置位，让 30s 阻塞轮询的
+        # 控制 worker 立刻退出，保证 join 在预算内完成、worker 不比 manager 活得久。
+        self._worker_cancel = threading.Event()
         _LIVE_AGENT_LINK_MANAGERS.add(self)
         self._install_token = 0
         self._install_pending: dict[str, int] = {}
@@ -1886,6 +1889,7 @@ class AgentLinkManager(QObject):
     def shutdown(self) -> None:
         """窗口销毁/角色切换时停止所有 monitor worker，且作废安装回调。"""
         self._shutdown = True
+        self._worker_cancel.set()
         self._install_pending.clear()
         self._install_token += 1
         for mon in self.monitors.values():
@@ -1907,6 +1911,29 @@ class AgentLinkManager(QObject):
                 break
             if worker is not threading.current_thread() and worker.is_alive():
                 worker.join(remaining)
+        # 停掉 manager 自带的全部单发定时器（完成确认/429 收起/LLM 错误收起）：
+        # 下方会把 Python 持有的 manager 过继给 QApplication，对象将存活到进程
+        # 退出——若不停表，滞留定时器会在后续无关时刻触发槽函数。
+        for timer_dict in (self._done_pending, self._429_timers, self._llm_error_timers):
+            for timer in timer_dict.values():
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass
+            timer_dict.clear()
+        # parent=None（测试桩/多窗代理）时 C++ 对象是 Python 持有的：wrapper 经
+        # 信号连接/闭包成环，只能等循环 GC——而 GC 可能在任意线程（含 monitor
+        # worker 线程）触发，跨线程删除带 QTimer 子对象/信号连接的 QObject 会
+        # 腐化 Qt 事件队列（CI Windows 在 conftest processEvents access
+        # violation、macOS bus error 的根因）。过继给 QApplication（主线程、
+        # 与进程同寿）后，C++ 侧不再随 wrapper 的 GC 删除，wrapper 何时何线程
+        # 回收都只是空壳析构。真窗口场景由父链销毁在先，RuntimeError 兜底跳过。
+        try:
+            app = QCoreApplication.instance()
+            if self.parent() is None and app is not None and self.thread() is app.thread():
+                self.setParent(app)
+        except RuntimeError:
+            pass
 
     @classmethod
     def _shutdown_live_for_tests(cls) -> None:
@@ -2826,7 +2853,10 @@ class AgentLinkManager(QObject):
         except Exception as exc:  # noqa: BLE001 —— 后台线程绝不允许把异常带进 Qt 事件循环
             ok, detail = False, str(exc)
         try:
-            self._respond_result.emit(ok, detail)
+            # shutdown 后不再投递结果：结果气泡已无意义，且此时 manager 可能
+            # 已进入事件循环销毁流程。
+            if not self._shutdown:
+                self._respond_result.emit(ok, detail)
         except Exception:
             pass
         finally:
@@ -3230,12 +3260,15 @@ class AgentLinkManager(QObject):
                 context=self._exploration_control_context(payload),
                 timeout=self._EXPLORATION_CONTROL_TIMEOUT_S,
                 alert_id=self._exploration_control_alert_id(session_key),
+                cancel=self._worker_cancel,
             )
         except Exception as exc:  # noqa: BLE001 —— 后台线程不得把异常带进 Qt 事件循环
             ok, detail = False, f"control-request-error:{exc}"
         try:
-            self._exploration_control_result.emit(
-                session_key, operation, bool(ok), str(detail))
+            # shutdown 后不再投递结果（manager 可能已进入事件循环销毁流程）。
+            if not self._shutdown:
+                self._exploration_control_result.emit(
+                    session_key, operation, bool(ok), str(detail))
         except Exception:
             pass
         finally:

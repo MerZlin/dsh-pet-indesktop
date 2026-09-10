@@ -277,7 +277,8 @@ class TestControlRequestThreading:
         calls = threading.Event()
 
         def fake_request(operation, session_id, text="", ports=None, *, goal="",
-                         context="", provider="", model="", timeout=30.0, alert_id=""):
+                         context="", provider="", model="", timeout=30.0, alert_id="",
+                         cancel=None):
             captured.append({
                 "operation": operation, "session_id": session_id, "goal": goal,
                 "context": context, "alert_id": alert_id, "timeout": timeout,
@@ -326,7 +327,8 @@ class TestControlRequestThreading:
         started = threading.Event()
 
         def fake_request(operation, session_id, text="", ports=None, *, goal="",
-                         context="", provider="", model="", timeout=30.0, alert_id=""):
+                         context="", provider="", model="", timeout=30.0, alert_id="",
+                         cancel=None):
             started.set()
             release.wait(5.0)
             return True, '{"ok": true, "phase": "replanned"}'
@@ -349,7 +351,8 @@ class TestControlRequestThreading:
         count = []
 
         def fake_request(operation, session_id, text="", ports=None, *, goal="",
-                         context="", provider="", model="", timeout=30.0, alert_id=""):
+                         context="", provider="", model="", timeout=30.0, alert_id="",
+                         cancel=None):
             count.append(operation)
             release.wait(5.0)
             return True, '{"ok": true, "phase": "cancelled"}'
