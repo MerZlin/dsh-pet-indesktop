@@ -747,7 +747,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._arm_screen_restore_retry()
 
         self.attach_collision_session(collision_session)
-        self._install_effect_services()
+        # 启动即按配置装配/同步可选服务（主动识屏、Agent 联动、效果控制器）。
+        # 不能只调 _install_effect_services()：AgentLinkManager 是懒创建的，
+        # 监视器真正启动靠 apply_config()，此前启动路径无人调用，导致重启后
+        # 已开启的 Agent 联动必须手工展开一次菜单/开关设置对话框才生效（#99）。
+        # sync_optional_services() 自身以 _install_effect_services() 收尾。
+        self.sync_optional_services()
 
     @property
     def click_sound_enabled(self) -> bool:
