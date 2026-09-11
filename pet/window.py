@@ -2608,12 +2608,19 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         """计划一次朝 facing 方向的移动；返回 False 表示未建立移动计划。
 
         name 给定时使用指定动画（手动触发），否则随机选一个移动姿态。
-        返回 False 的两种情况：屏幕空间不够（目标动画未尝试）；或移动动画
-        start() 被拒——此时 _switch 已回退到可播放动画并安排重试，移动计划
-        绝不建立（B7 审查 P1-1 / 复审 R2）。
+        边缘探头会话激活时直接返回 False（不建立位移计划，防止挂着探头
+        姿态被平移出屏幕边缘）。返回 False 的两种情况：屏幕空间不够（目标
+        动画未尝试）；或移动动画 start() 被拒——此时 _switch 已回退到可播放
+        动画并安排重试，移动计划绝不建立（B7 审查 P1-1 / 复审 R2）。
         """
         if (self._physics_mode is not None
                 or self._interaction_state in (THROWN, DRAGGING)):
+            return False
+        # 边缘探头会话期间禁止位移：移动动画虽会被效果闸门降级为待机/转向
+        # （_effects_filter_switch），但移动计划一旦建立就会把窗口从屏幕
+        # 边缘平移出去——挂着探头姿态滑走。这里整体拦住自动/手动移动。
+        probe_active = getattr(self, '_effects_probe_active', None)
+        if callable(probe_active) and probe_active():
             return False
         if self._move_plan is not None:
             return True  # 已在移动/已计划

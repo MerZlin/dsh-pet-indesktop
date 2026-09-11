@@ -2,6 +2,7 @@
 """黄金回旋/边缘探头在右键菜单与设置页中的集成测试。"""
 from __future__ import annotations
 
+from PySide6.QtCore import QRect
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QMenu
 
@@ -222,6 +223,59 @@ def test_real_window_direct_golden_spin_on_click_accumulates(tmp_path):
         # 真实 paint/mask 路径带旋转调用不应抛错（角度是否已推进取决于定时器调度）。
         win.grab()
         spin.cancel()
+    finally:
+        win.close()
+        app.processEvents()
+
+
+def test_real_window_move_blocked_during_edge_probe(tmp_path, monkeypatch):
+    """回归：边缘探头会话期间自动/手动移动都不得建立位移计划。
+
+    之前 _try_move 不检查探头状态：掷骰掷中移动（或右键菜单手动触发）时，
+    移动动画被 _effects_filter_switch 降级为待机且 _switch 返回 True，于是
+    移动计划照常建立，窗口挂着探头姿态被平移出屏幕边缘。
+    """
+    from tests.test_collision_window import FakeLibrary
+
+    from pet.edge_probe import OFF, PEEKING
+    from pet.window import PetWindow
+
+    class _Scr:
+        def availableGeometry(self):
+            return QRect(0, 0, 1920, 1080)
+
+        def devicePixelRatio(self):
+            return 1.0
+
+    app = _qapp()
+    cfg = Config(tmp_path)
+    cfg.set("auto_hide_fullscreen", False)
+    cfg.set("collision_enabled", False)
+    cfg.set("edge_probe_enabled", True)
+    win = PetWindow(FakeLibrary(), cfg)
+    try:
+        assert win.moves, "FakeLibrary 应提供移动动画"
+        monkeypatch.setattr(win, "_screen_available", lambda: _Scr())
+        win.facing = "right"
+        win.move(400, 300)
+        win._edge_probe._mode = PEEKING  # 探头稳态（直接置位，跳过进入过渡）
+
+        # 自动掷骰路径：必须直接拒绝，不建位移计划。
+        assert win._try_move() is False
+        assert win._move_plan is None
+        assert not win._move_timer.isActive()
+        # 手动触发（右键菜单“移动”）同样不得位移。
+        win._trigger_move(win.moves[0])
+        assert win._move_plan is None
+        assert not win._move_timer.isActive()
+
+        # 退出探头会话后移动恢复可用（正向对照，证明上面是闸门拦的，
+        # 而非环境本身放不下）。
+        win._edge_probe._mode = OFF
+        win._edge_probe._side = None
+        assert win._try_move() is True
+        assert win._move_plan is not None
+        win._cancel_move()
     finally:
         win.close()
         app.processEvents()

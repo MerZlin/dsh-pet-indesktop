@@ -3,7 +3,9 @@
 
 状态机由 PetWindow 侧控制器持有，随窗口生命周期存在。隐藏时 pause() 冻结
 当前状态与倒计时，恢复后 resume() 从原进度继续。探头会话期间只允许待机/
-转向动画，由 WindowFeatureGateMixin._effects_on_switch 在窗口 _switch 入口过滤。
+转向动画，由 WindowFeatureGateMixin._effects_filter_switch 在窗口 _switch
+入口过滤；位移（自动/手动移动）由 PetWindow._try_move 入口的
+_effects_probe_active 闸门整体拦截，防止挂着探头姿态被平移出屏幕边缘。
 """
 from __future__ import annotations
 
