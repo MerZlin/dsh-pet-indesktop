@@ -1028,6 +1028,70 @@ def test_real_collision_impulse_cancels_edge_probe_and_settle_arms_reentry(tmp_p
     win.close()
 
 
+def test_probe_active_soft_hit_displacement_is_discarded(tmp_path, app):
+    """探头会话期间软撞（非真实撞击）的分离位移不得移动窗口。
+
+    实机 bug：探头（PEEKING）稳态无 timer 归位，软撞位移把窗口顶偏后
+    桌宠"卡"在错误的露出量上（身体多露出/少露出一截）。探头会话期间
+    位置归探头控制器管；真实撞击仍进入 throw 并取消会话（上方测试覆盖）。
+    """
+    win, session = _make_pet_window(tmp_path, "pet_probe_soft")
+    avail = win.screen_available().availableGeometry()
+    local = win.character_local_region()
+    win.move(avail.left() - local.left(), 100)
+    win.cfg.set("edge_probe_enabled", True)
+    win.sync_optional_services()
+    probe = win._edge_probe
+    probe.on_release(was_dragging=True)
+    assert probe.active
+    x_before, y_before = win.x(), win.y()
+
+    # 软撞：dv 低于真实撞击阈值，但带分离位移 dx/dy。
+    soft_dv = win._collision_client._hit_min_dv / 2.0
+    msg = {"a": "pet_probe_soft", "b": "other", "pair": "other|pet_probe_soft",
+           "dvx_a": soft_dv, "dvy_a": 0.0, "dx_a": 5.0, "dy_a": 3.0}
+    win._on_collision_impulse(msg)
+
+    assert win.x() == x_before and win.y() == y_before  # 位置未被顶偏
+    assert probe.active is True                          # 探头会话不受影响
+    assert win._physics_mode is None                     # 软撞不进入 throw
+    win.close()
+
+
+def test_squash_paint_keeps_effects_rotation(tmp_path, app):
+    """碰撞 Q 弹（squash 220ms）期间彩蛋/探头旋转不丢：头槌被撞不闪回正。
+
+    实机 bug：头槌（throw-egg）飞行中被其他桌宠碰撞触发 squash，
+    paintEvent 的 squash 分支不经过旋转管线 → 闪一瞬间回正再恢复
+    （_sync_mask 的旋转路径一直在转，丢失还造成画面与轮廓错位）。
+    """
+    win, session = _make_pet_window(tmp_path, "pet_squash_rot")
+    if win._frame_pixmap is None:
+        win._rebuild_frame()
+
+    class _FakeEgg:
+        active = True
+
+        def current_angle_deg(self):
+            return 90.0
+
+    win._throw_egg = _FakeEgg()
+    win._squash_active = True
+    win._squash_progress = 0.5
+
+    calls = []
+    orig = win._effects_paint
+
+    def _spy(painter, rect):
+        calls.append(1)
+        return orig(painter, rect)
+
+    win._effects_paint = _spy
+    win.grab()  # 触发 paintEvent（offscreen 可渲染，不经过 _rebuild_frame）
+    assert calls, "squash 分支绘制未经过旋转管线（实机：头槌被撞闪回正）"
+    win.close()
+
+
 def test_probe_collision_throw_arms_egg_and_rotation_follows_velocity(tmp_path, app):
     """批 D 集成：探头激活→真实撞击 arm 彩蛋→飞行整帧旋转跟随速度→落地停稳兜底恢复。"""
     win, session = _make_pet_window(tmp_path, "pet_probe_egg")

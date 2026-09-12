@@ -2312,7 +2312,20 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                         int(round(catalog.CANVAS_H * self.scale)),
                         self._squash_progress,
                     )
-                painter.drawPixmap(x, y, w, h, self._frame_pixmap)
+                # 彩蛋/探头旋转在 squash 期间必须保持：碰撞触发 220ms Q 弹时丢
+                # 旋转会让头槌飞行中的桌宠闪一瞬间回正姿态（实机观感反馈），
+                # 且 _sync_mask 的旋转路径一直在转——不转会导致画面与 mask
+                # 轮廓错位。路径与 mask 分支一致：平移到绘制矩形左上角后绕中心旋转。
+                effects_angle = getattr(self, '_effects_current_angle', None)
+                sq_angle = effects_angle() if callable(effects_angle) else 0.0
+                if abs(sq_angle) > 1e-6:
+                    painter.translate(x, y)
+                    sq_rect = QRect(0, 0, w, h)
+                    self._effects_paint(painter, sq_rect)
+                    painter.drawPixmap(0, 0, w, h, self._frame_pixmap)
+                    self._effects_paint_end(painter, sq_rect)
+                else:
+                    painter.drawPixmap(x, y, w, h, self._frame_pixmap)
             else:
                 # 落地对齐：整帧贴窗口底线；捕获头顶空间经 _content_frame_rect 上移
                 content_rect = _content_frame_rect(self)
