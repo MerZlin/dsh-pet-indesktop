@@ -23,13 +23,17 @@ log = logging.getLogger(__name__)
 from math import ceil
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen,
     QPixmap, QTransform,
 )
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QLabel,
     QLayout,
     QPushButton,
@@ -42,6 +46,10 @@ from PySide6.QtWidgets import (
 from .speech_bubble_text import (
     BUBBLE_TEXT_COLUMN,
     BUBBLE_TEXT_SLACK,
+    PAGE_DWELL_MAX_MS,
+    PAGE_DWELL_MIN_MS,
+    PAGE_FADE_IN_MS,
+    PAGE_FADE_OUT_MS,
     SELF_TALK_IMAGE_SUFFIXES,
     breath_bubble_size_for_anchor,
     breath_bubble_size_for_scale,
@@ -52,12 +60,16 @@ from .speech_bubble_text import (
     elide_bubble_text,
     list_self_talk_images,
     normalize_bubble_text,
+    page_dots,
+    page_dwell_ms,
     paginate_bubble_text,
 )
 
 __all__ = [
     "BUBBLE_TEXT_COLUMN",
     "BUBBLE_TEXT_SLACK",
+    "PAGE_DWELL_MAX_MS",
+    "PAGE_DWELL_MIN_MS",
     "SELF_TALK_IMAGE_SUFFIXES",
     "BUBBLE_STYLE_PRESETS",
     "breath_bubble_size_for_anchor",
@@ -69,6 +81,8 @@ __all__ = [
     "elide_bubble_text",
     "list_self_talk_images",
     "normalize_bubble_text",
+    "page_dots",
+    "page_dwell_ms",
     "paginate_bubble_text",
     "PetSpeechBubble",
 ]
@@ -278,15 +292,18 @@ class PetSpeechBubble(QFrame):
         self._layout.addWidget(self._button_row)
         self._interactive_active = False
         self._interactive_buttons: list[QPushButton] = []
-        # 长文本分页状态：页列表 + 当前页 + 自动翻页定时器。
+        # 长文本分页状态：页列表 + 当前页 + 逐页停留表 + 自动翻页定时器。
         # 气泡对鼠标全透明（WA_TransparentForMouseEvents），无法靠点击翻页，
-        # 因此采用「每页停留一小段后自动翻下一页」的方式保证全文可读完。
+        # 因此采用「每页按字数停留一段后自动翻下一页」的方式保证全文可读完。
         self._pages: list[str] = []
         self._page_index = 0
-        self._page_interval_ms = 0
+        self._page_dwells: list[int] = []
         self._page_timer = QTimer(self)
         self._page_timer.setSingleShot(True)
         self._page_timer.timeout.connect(self._on_page_timeout)
+        # 翻页淡入淡出：当前动画句柄 + 懒创建的 label 透明度效果。
+        self._page_fade: QPropertyAnimation | None = None
+        self._label_opacity: QGraphicsOpacityEffect | None = None
         self._style_id = ""
         self._preset = BUBBLE_STYLE_PRESETS["classic_top"]
         self._anchor_rect = QRect()
@@ -550,20 +567,20 @@ class PetSpeechBubble(QFrame):
             self._configure_breath_content(anchor_rect, pet_scale)
         else:
             # 长文本分页：每页不超过 bubble_max_lines 行，自动翻页直到全文展示完，
-            # 底部显示「1/3」页码指示。总时长按页数扩展，保证每页可读完。
+            # 底部显示圆点页码（● ○ ○）。每页停留按该页字数自适应，总时长相应扩展。
             pages = paginate_bubble_text(
                 metrics, text, bubble_wrap_width(), bubble_max_lines(text)
             )
             display_text = pages[0] if pages else ""
             if len(pages) > 1 and not sticky and not interactive:
-                per_page = max(2200, min(5000, duration_ms // len(pages)))
-                total_ms = max(duration_ms, per_page * len(pages))
+                dwells = [page_dwell_ms(page) for page in pages]
+                total_ms = max(duration_ms, sum(dwells))
                 self._pages = pages
                 self._page_index = 0
-                self._page_interval_ms = per_page
-                self._page_indicator.setText(f"1/{len(pages)}")
+                self._page_dwells = dwells
+                self._page_indicator.setText(page_dots(0, len(pages)))
                 self._page_indicator.show()
-                self._page_timer.start(per_page)
+                self._page_timer.start(dwells[0])
                 duration_ms = total_ms
             else:
                 self._reset_paging()
@@ -698,17 +715,66 @@ class PetSpeechBubble(QFrame):
     def hideEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         """气泡被隐藏（超时 / dismiss / 父窗口隐藏）时通知上层。"""
         super().hideEvent(event)
+        self._stop_page_fade()
         self._teardown_interactive()
         self.hidden_signal.emit()
 
     def _reset_paging(self) -> None:
         """停止自动翻页并隐藏页码指示（单页内容/图片/换内容时调用）。"""
         self._page_timer.stop()
+        self._stop_page_fade()
         self._pages = []
         self._page_index = 0
-        self._page_interval_ms = 0
+        self._page_dwells = []
         self._page_indicator.setText("")
         self._page_indicator.hide()
+
+    def _label_opacity_effect(self) -> QGraphicsOpacityEffect:
+        """懒创建 label 透明度效果（仅分页翻页时用到，单页气泡零开销）。"""
+        if self._label_opacity is None:
+            self._label_opacity = QGraphicsOpacityEffect(self.label)
+            self._label_opacity.setOpacity(1.0)
+            self.label.setGraphicsEffect(self._label_opacity)
+        return self._label_opacity
+
+    def _stop_page_fade(self) -> None:
+        """打断进行中的翻页动画并把透明度复位（隐藏/换内容/连翻时兜底）。"""
+        anim, self._page_fade = self._page_fade, None
+        if anim is not None:
+            anim.stop()  # stop() 不触发 finished，换字回调不会执行
+        if self._label_opacity is not None:
+            self._label_opacity.setOpacity(1.0)
+
+    def _flip_to_page(self, index: int) -> None:
+        """翻到指定页：短淡出 → 换文本与页码 → 淡入。"""
+        self._stop_page_fade()
+        effect = self._label_opacity_effect()
+        fade_out = QPropertyAnimation(effect, b"opacity", self)
+        fade_out.setDuration(PAGE_FADE_OUT_MS)
+        fade_out.setStartValue(1.0)
+        fade_out.setEndValue(0.0)
+
+        def _swap_and_fade_in() -> None:
+            if self._page_fade is not fade_out:
+                return  # 已被 _stop_page_fade 打断
+            self.label.setText(self._pages[index])
+            self._page_indicator.setText(page_dots(index, len(self._pages)))
+            fade_in = QPropertyAnimation(effect, b"opacity", self)
+            fade_in.setDuration(PAGE_FADE_IN_MS)
+            fade_in.setStartValue(0.0)
+            fade_in.setEndValue(1.0)
+
+            def _fade_in_done() -> None:
+                if self._page_fade is fade_in:
+                    self._page_fade = None
+
+            fade_in.finished.connect(_fade_in_done)
+            self._page_fade = fade_in
+            fade_in.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+        fade_out.finished.connect(_swap_and_fade_in)
+        self._page_fade = fade_out
+        fade_out.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _on_page_timeout(self) -> None:
         """自动翻到下一页；最后一页展示完后由 _hide_timer 收尾隐藏。"""
@@ -717,11 +783,9 @@ class PetSpeechBubble(QFrame):
             return
         self._page_index += 1
         if self._content_kind == "text":
-            self.label.setText(self._pages[self._page_index])
-            self._page_indicator.setText(
-                f"{self._page_index + 1}/{len(self._pages)}"
-            )
-            self._page_timer.start(self._page_interval_ms)
+            self._flip_to_page(self._page_index)
+            if self._page_index < len(self._page_dwells):
+                self._page_timer.start(self._page_dwells[self._page_index])
 
     def show_image(
         self,

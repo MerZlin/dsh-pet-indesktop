@@ -121,6 +121,41 @@ def test_angle_debounces_below_speed_threshold():
     assert egg.current_angle_deg() == before
 
 
+def test_airborne_low_speed_keeps_following():
+    """空中（未触界）低速仍跟随速度方向：780 是贴地防抖阈值，不适用于空中。
+
+    用户实机反馈：抛起后自然减速但还未落地时，鱼头固定在最后一次角度
+    （视觉上像"变回探头角度"）。空中没有贴地那种快速连续碰撞，跟随
+    阈值降到 AIR_FOLLOW（150），只防近零速 atan2 抖动。
+    """
+    win = _FakeWin()
+    egg = ThrowEggController(win)
+    egg.arm()
+    egg.update(900.0, 0.0, False)
+    assert egg.current_angle_deg() == pytest.approx(90.0)
+    # 300 px/s 空中减速向右下：旧实现冻结在 90°，新实现继续跟随。
+    egg.update(300.0, 300.0, False)
+    assert egg.active
+    assert egg.current_angle_deg() == pytest.approx(135.0)
+    # 近零速（<150）空中仍防抖，且不会因"未触界"误恢复。
+    before = egg.current_angle_deg()
+    egg.update(100.0, 0.0, False)
+    assert egg.active
+    assert egg.current_angle_deg() == before
+
+
+def test_touching_boundary_still_uses_high_threshold():
+    """贴地/触界维持 780 高阈值：低速弹跳段不更新角度且一碰即回正。"""
+    win = _FakeWin()
+    egg = ThrowEggController(win)
+    egg.arm()
+    egg.update(900.0, 0.0, False)
+    # 300 px/s 触界：角度不跟随（若按空中阈值会更新到 135°），且低速触界回正。
+    egg.update(300.0, 300.0, True)
+    assert not egg.active
+    assert egg.current_angle_deg() == 0.0
+
+
 def test_low_speed_touching_boundary_recovers():
     win = _FakeWin()
     egg = ThrowEggController(win)

@@ -371,16 +371,24 @@ class CollisionClient(QObject):
         if egg is not None and egg.active:
             egg.on_pet_contact(math.hypot(*win._phys_vel))
         if abs(dx) > 1e-9 or abs(dy) > 1e-9:
-            win._cancel_move()
-            win._cancel_animation_gap()
-            clamped_x, clamped_y = win._collision_clamp_pos(win.x() + dx, win.y() + dy)
-            left, top = win._collision_clamp_pos(float('-inf'), float('-inf'))
-            right, bottom = win._collision_clamp_pos(float('inf'), float('inf'))
-            win.move(
-                min(max(int(round(clamped_x)), math.ceil(left)), math.floor(right)),
-                min(max(int(round(clamped_y)), math.ceil(top)), math.floor(bottom)),
-            )
-            win._phys_pos[:] = [float(win.x()), float(win.y())]
+            # 边缘探头会话期间位置归探头控制器管（PEEKING 稳态无 timer，
+            # 被位移顶偏后不会自动归位，会"卡"在错误的露出量上），软撞的
+            # 分离位移直接丢弃；真实撞击下方会进入 throw 并取消探头会话，
+            # 位移照常应用。
+            probe_holds_pose = bool(
+                getattr(getattr(win, '_edge_probe', None), 'active', False)
+            ) and not (is_real_hit and not contact_deviation)
+            if not probe_holds_pose:
+                win._cancel_move()
+                win._cancel_animation_gap()
+                clamped_x, clamped_y = win._collision_clamp_pos(win.x() + dx, win.y() + dy)
+                left, top = win._collision_clamp_pos(float('-inf'), float('-inf'))
+                right, bottom = win._collision_clamp_pos(float('inf'), float('inf'))
+                win.move(
+                    min(max(int(round(clamped_x)), math.ceil(left)), math.floor(right)),
+                    min(max(int(round(clamped_y)), math.ceil(top)), math.floor(bottom)),
+                )
+                win._phys_pos[:] = [float(win.x()), float(win.y())]
         if has_velocity_impulse:
             win._just_dragged = True
             QTimer.singleShot(120, win, win._clear_just_dragged)

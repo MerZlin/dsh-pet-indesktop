@@ -19,6 +19,12 @@ from typing import Any
 # 更新角度且一碰就回正（用户实机要求，明确不要时间硬上限）。
 THROW_EGG_RECOVER_SPEED = 780.0  # px/s
 
+# 空中（未触碰边界/桌宠）继续跟随速度方向的最低速度。
+# 780 的贴地防抖阈值若也用于空中，会把"抛起后自然减速但未落地"的
+# 中段飞行角度提前冻结（用户实机反馈"慢下来鱼头就固定住了"）；空中没有
+# 贴地那种快速连续碰撞，跟随阈值可以低得多，只防近零速的 atan2 抖动。
+THROW_EGG_AIR_FOLLOW_SPEED = 150.0  # px/s
+
 
 class ThrowEggController:
     """管理“被击飞时头部跟随速度方向”的旋转会话。
@@ -51,13 +57,18 @@ class ThrowEggController:
     def update(self, vx: float, vy: float, touching_boundary: bool) -> None:
         """每 tick 由 _tick_throw_physics 调用；低速贴界则恢复正常姿态。
 
-        速度高于阈值时才更新角度（低于阈值保持当前角，防抖）；
-        速度低于阈值且触碰边界 → end()。不设飞行时间上限（用户明确要求）。
+        速度高于阈值时才更新角度（低于阈值保持当前角，防抖）；阈值分档：
+        触碰边界用 THROW_EGG_RECOVER_SPEED（贴地弹跳防抖），空中用
+        THROW_EGG_AIR_FOLLOW_SPEED（空中无连续碰撞，低速也继续跟随）。
+        速度低于贴地阈值且触碰边界 → end()。不设飞行时间上限（用户明确要求）。
         """
         if not self._active:
             return
         speed = math.hypot(vx, vy)
-        if speed >= THROW_EGG_RECOVER_SPEED:
+        follow_threshold = (
+            THROW_EGG_RECOVER_SPEED if touching_boundary else THROW_EGG_AIR_FOLLOW_SPEED
+        )
+        if speed >= follow_threshold:
             # 屏幕坐标 y 朝下：向右飞=90°、向下=180°、向上=0°、向左=270°。
             self._angle_deg = 90.0 + math.degrees(math.atan2(vy, vx))
         if speed < THROW_EGG_RECOVER_SPEED and touching_boundary:

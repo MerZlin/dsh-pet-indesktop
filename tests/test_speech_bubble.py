@@ -5,17 +5,23 @@ from __future__ import annotations
 from math import ceil
 from PySide6.QtCore import QRect, QSize
 from PySide6.QtGui import QFont, QFontMetrics
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+import pet.speech_bubble as speech_bubble_module
 from pet.speech_bubble import (
     BUBBLE_TEXT_COLUMN,
     BUBBLE_TEXT_SLACK,
+    PAGE_DWELL_MAX_MS,
+    PAGE_DWELL_MIN_MS,
     FlowLayout,
     PetSpeechBubble,
     bubble_label_size,
     bubble_max_lines,
     elide_bubble_text,
     normalize_bubble_text,
+    page_dots,
+    page_dwell_ms,
     paginate_bubble_text,
 )
 
@@ -118,6 +124,119 @@ def test_paginate_bubble_text_multiple_pages_keeps_full_content():
     pages_long = paginate_bubble_text(metrics, char * 37, line_w, max_lines=6)
     assert len(pages_long) == 2
     assert "\n".join(pages_long).replace("\n", "") == char * 37
+
+
+def test_paginate_bubble_text_no_orphan_punctuation_page():
+    # 避头尾（kinsoku）：闭标点不允许出现在行首。无禁则时，15 字 + "！"
+    # 会让 "！" 被挤到第 4 行行首 → 第 2 页只剩一个 "！"（孤字页）。
+    _get_app()
+    font = QFont("Arial", 12)
+    metrics = QFontMetrics(font)
+    char = "测"
+    line_w = metrics.horizontalAdvance(char * 5)
+
+    text = char * 15 + "！"
+    pages = paginate_bubble_text(metrics, text, line_w, max_lines=3)
+    assert len(pages) == 2
+    for page in pages:
+        for line in page.split("\n"):
+            assert not line.startswith("！")
+    # 全文无损
+    assert "\n".join(pages).replace("\n", "") == text
+
+
+def test_paginate_bubble_text_rebalances_single_line_last_page():
+    # 孤行控制：末页只剩 1 行时从前一页匀一行（3+1 → 2+2）
+    _get_app()
+    font = QFont("Arial", 12)
+    metrics = QFontMetrics(font)
+    char = "测"
+    line_w = metrics.horizontalAdvance(char * 5)
+
+    pages = paginate_bubble_text(metrics, char * 16, line_w, max_lines=3)
+    assert len(pages) == 2
+    assert [len(page.split("\n")) for page in pages] == [2, 2]
+    assert "\n".join(pages).replace("\n", "") == char * 16
+
+
+def test_page_dwell_ms_scales_with_length():
+    # 短页钳到下限、满页（约 50 字）落在中段、超长页钳到上限
+    assert page_dwell_ms("") == PAGE_DWELL_MIN_MS
+    assert page_dwell_ms("短") == PAGE_DWELL_MIN_MS
+    mid = page_dwell_ms("字" * 50)
+    assert mid == 1200 + 50 * 60
+    assert PAGE_DWELL_MIN_MS < mid < PAGE_DWELL_MAX_MS
+    assert page_dwell_ms("字" * 500) == PAGE_DWELL_MAX_MS
+    # 换行符不计入字数
+    assert page_dwell_ms("字\n字") == page_dwell_ms("字字")
+
+
+def test_page_dots_rendering():
+    assert page_dots(0, 1) == ""
+    assert page_dots(0, 3) == "● ○ ○"
+    assert page_dots(1, 3) == "○ ● ○"
+    assert page_dots(2, 3) == "○ ○ ●"
+    # 越界索引钳到最后一页
+    assert page_dots(9, 2) == "○ ●"
+
+
+def test_paged_bubble_uses_adaptive_dwells_and_dots():
+    """多页气泡：逐页停留表与页数一致，页码指示为圆点。"""
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    text = "主人～DSH开始干活啦，人家会帮您盯着它的～" * 20
+    bubble.show_text(text, QRect(0, 0, 120, 120), 40000)
+    try:
+        assert len(bubble._pages) > 1
+        assert len(bubble._page_dwells) == len(bubble._pages)
+        for page, dwell in zip(bubble._pages, bubble._page_dwells):
+            assert dwell == page_dwell_ms(page)
+        assert bubble._page_indicator.text() == page_dots(0, len(bubble._pages))
+    finally:
+        bubble.dismiss()
+
+
+def test_paged_bubble_flip_fades_and_updates_dots(monkeypatch):
+    """翻页：淡出→换字→淡入走完后，文本/圆点页码更新且透明度复位。"""
+    _get_app()
+    # 动画时长压到 1ms，避免测试依赖真实动画时长
+    monkeypatch.setattr(speech_bubble_module, "PAGE_FADE_OUT_MS", 1)
+    monkeypatch.setattr(speech_bubble_module, "PAGE_FADE_IN_MS", 1)
+    bubble = PetSpeechBubble(style_id="classic_top")
+    text = "主人～DSH开始干活啦，人家会帮您盯着它的～" * 20
+    bubble.show_text(text, QRect(0, 0, 120, 120), 40000)
+    try:
+        pages = list(bubble._pages)
+        assert len(pages) > 1
+        bubble._on_page_timeout()
+        QTest.qWait(150)  # 等淡出 → 换字 → 淡入走完
+        assert bubble.label.text() == pages[1]
+        assert bubble._page_indicator.text() == page_dots(1, len(pages))
+        assert bubble._page_fade is None
+        assert bubble._label_opacity is not None
+        assert bubble._label_opacity.opacity() == 1.0
+    finally:
+        bubble.dismiss()
+
+
+def test_paged_bubble_reset_stops_fade_and_restores_opacity(monkeypatch):
+    """翻页动画进行中换内容：动画被打断、透明度复位，不会留下隐形 label。"""
+    _get_app()
+    # 拉长动画，保证 _reset_paging 落在动画进行中
+    monkeypatch.setattr(speech_bubble_module, "PAGE_FADE_OUT_MS", 60000)
+    bubble = PetSpeechBubble(style_id="classic_top")
+    text = "主人～DSH开始干活啦，人家会帮您盯着它的～" * 20
+    bubble.show_text(text, QRect(0, 0, 120, 120), 40000)
+    try:
+        bubble._on_page_timeout()
+        assert bubble._page_fade is not None  # 淡出进行中
+        bubble._reset_paging()
+        assert bubble._page_fade is None
+        assert bubble._label_opacity.opacity() == 1.0
+        assert bubble._pages == []
+        assert not bubble._page_timer.isActive()
+    finally:
+        bubble.dismiss()
 
 
 def test_breath_size_for_content_short_text_matches_legacy():
