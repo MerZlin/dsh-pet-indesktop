@@ -159,5 +159,9 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   dialogue preset files (`pet/persona_presets/*.json`), phrase loading
   (`persona_phrases.py`), or expression-style semantics
   (`dialogue_mode`/`dialogue_phrases`).
+- Read `docs/PR-MERGE-LESSONS-2026-09-12.md` before merging PRs: stacked-PR
+  conflicts after squashing the parent, budget/red-line changes that only break
+  when two PRs combine, and timing-test flake discipline (poll state with a wide
+  budget instead of fixed sleeps).
 - Treat `assets/characters/<id>/videos/` plus its manifest as one character
   package; preserve relative paths and case because packaged platforms differ.
