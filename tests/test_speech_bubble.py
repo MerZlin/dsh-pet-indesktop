@@ -120,6 +120,39 @@ def test_paginate_bubble_text_multiple_pages_keeps_full_content():
     assert "\n".join(pages_long).replace("\n", "") == char * 37
 
 
+def test_paginate_bubble_text_no_orphan_punctuation_page():
+    # 避头尾（kinsoku）：闭标点不允许出现在行首。无禁则时，15 字 + "！"
+    # 会让 "！" 被挤到第 4 行行首 → 第 2 页只剩一个 "！"（孤字页）。
+    _get_app()
+    font = QFont("Arial", 12)
+    metrics = QFontMetrics(font)
+    char = "测"
+    line_w = metrics.horizontalAdvance(char * 5)
+
+    text = char * 15 + "！"
+    pages = paginate_bubble_text(metrics, text, line_w, max_lines=3)
+    assert len(pages) == 2
+    for page in pages:
+        for line in page.split("\n"):
+            assert not line.startswith("！")
+    # 全文无损
+    assert "\n".join(pages).replace("\n", "") == text
+
+
+def test_paginate_bubble_text_rebalances_single_line_last_page():
+    # 孤行控制：末页只剩 1 行时从前一页匀一行（3+1 → 2+2）
+    _get_app()
+    font = QFont("Arial", 12)
+    metrics = QFontMetrics(font)
+    char = "测"
+    line_w = metrics.horizontalAdvance(char * 5)
+
+    pages = paginate_bubble_text(metrics, char * 16, line_w, max_lines=3)
+    assert len(pages) == 2
+    assert [len(page.split("\n")) for page in pages] == [2, 2]
+    assert "\n".join(pages).replace("\n", "") == char * 16
+
+
 def test_breath_size_for_content_short_text_matches_legacy():
     _get_app()
     bubble = PetSpeechBubble(style_id="breath_bubble")

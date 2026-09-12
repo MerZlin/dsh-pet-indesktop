@@ -84,6 +84,39 @@ def bubble_max_lines(text: str) -> int:
     return 3 if len(normalize_bubble_text(text)) <= 40 else 6
 
 
+# 避头尾（kinsoku）行首禁则字符：闭标点不允许出现在行首。逐字换行时若
+# 新行的首字符落在本集合内，就把上一行的末字符拉下来陪它——否则长句
+# 末尾的 "！" 会独占一行，分页时变成一个标点符号撑起一整页（孤字页）。
+# 开引号（" ' “ ‘）不在此列：它们出现在行首是合法的。
+LINE_START_FORBIDDEN = frozenset(
+    "，。、；：？！…·～）】》」』”’"
+    ",.;:!?)]}"
+)
+
+
+def _wrap_bubble_lines(
+    metrics: QFontMetrics, value: str, width: int
+) -> list[str]:
+    """Wrap ``value`` char-by-char into lines within ``width`` px (kinsoku-aware)."""
+    lines: list[str] = []
+    current = ""
+    for char in value:
+        candidate = current + char
+        if current and metrics.horizontalAdvance(candidate) > width:
+            if char in LINE_START_FORBIDDEN and len(current) > 1:
+                # 行首禁则：上一行末字符下沉，与闭标点同行，避免标点孤字行。
+                lines.append(current[:-1])
+                current = current[-1] + char
+            else:
+                lines.append(current)
+                current = char
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
 def elide_bubble_text(
     metrics: QFontMetrics,
     text: str,
@@ -94,23 +127,14 @@ def elide_bubble_text(
     value = normalize_bubble_text(text)
     if not value:
         return ""
-    lines: list[str] = []
-    current = ""
-    for index, char in enumerate(value):
-        candidate = current + char
-        if current and metrics.horizontalAdvance(candidate) > width:
-            lines.append(current)
-            if len(lines) >= max_lines:
-                lines[-1] = metrics.elidedText(
-                    current + value[index:], Qt.TextElideMode.ElideRight, width
-                )
-                return "\n".join(lines)
-            current = char
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return "\n".join(lines[:max_lines])
+    lines = _wrap_bubble_lines(metrics, value, width)
+    if len(lines) > max_lines:
+        remainder = "".join(lines[max_lines:])
+        lines = lines[:max_lines]
+        lines[-1] = metrics.elidedText(
+            lines[-1] + remainder, Qt.TextElideMode.ElideRight, width
+        )
+    return "\n".join(lines)
 
 
 def bubble_label_size(
@@ -157,23 +181,18 @@ def paginate_bubble_text(
     value = normalize_bubble_text(text)
     if not value:
         return []
-    lines: list[str] = []
-    current = ""
-    for index, char in enumerate(value):
-        candidate = current + char
-        if current and metrics.horizontalAdvance(candidate) > width:
-            lines.append(current)
-            current = char
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
+    lines = _wrap_bubble_lines(metrics, value, width)
     if len(lines) <= max_lines:
         return ["\n".join(lines)]
-    return [
-        "\n".join(lines[start : start + max_lines])
+    pages = [
+        lines[start : start + max_lines]
         for start in range(0, len(lines), max_lines)
     ]
+    if len(pages) >= 2 and len(pages[-1]) == 1 and len(pages[-2]) > 1:
+        # 孤行控制：最后一页只剩一行时，从前一页匀一行过来（3+1 → 2+2），
+        # 避免末页只有零星几个字、看起来像气泡被截断。
+        pages[-2], pages[-1] = pages[-2][:-1], [pages[-2][-1]] + pages[-1]
+    return ["\n".join(page) for page in pages]
 
 
 def bubble_rect_for_anchor(
