@@ -123,6 +123,13 @@ def _clear_click_sound_pool():
 def _close_qt_top_level_widgets():
     """在测试后收口仍存活的应用级后台资源与 collision IPC 会话。"""
     yield
+    # webm_clip 的「会话结束」闸门是进程级 latch（issue #111）：测试里置位后
+    # 不复位会让后续用例静默拒绝一切 reader 启动（报错点离真因很远）。
+    try:
+        from pet import webm_clip as _webm_clip_mod
+        _webm_clip_mod._reset_session_ending_for_tests()
+    except Exception:
+        pass
     # collision IPC：stop 仍存活的 CollisionIpcSession（finally 语义）。
     # 会话若在测试里未 stop，其 QThread 被 GC 时仍在跑 → 后续无关测试的
     # processEvents 处 native abort（QThread: Destroyed while thread is still
@@ -258,3 +265,11 @@ def _close_webm_readers_at_session_end():
             )
     except Exception:
         pass  # 防线 fixture：任何异常都不应让套件本身变红
+    # 会话结束闸门是进程级 latch（issue #111）：在最靠后的收口点再复位一次，
+    # 保证无论哪个用例置位过都不会串到后续用例（那会让 reader 静默拒绝启动，
+    # 报错点离真因很远）。
+    try:
+        from pet import webm_clip as _webm_clip_mod
+        _webm_clip_mod._reset_session_ending_for_tests()
+    except Exception:
+        pass

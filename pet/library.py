@@ -31,7 +31,7 @@ from PySide6.QtGui import QMovie
 
 from . import catalog
 from . import perfstats
-from .webm_clip import WebMClip
+from .webm_clip import WebMClip, session_ending
 
 _LIVE_MOVIE_LIBRARIES: weakref.WeakSet = weakref.WeakSet()
 
@@ -553,7 +553,8 @@ class MovieLibrary(QObject):
             self._warm_clips(
                 high, workers=min(3, len(high)),
                 generation=generation,
-                cancelled=lambda: self._warm_paused or generation != self._warm_generation,
+                cancelled=lambda: (self._warm_paused or session_ending()
+                                   or generation != self._warm_generation),
                 include_frames=(self._prewarm_policy != "minimal"),
             )
         except Exception:
@@ -672,6 +673,26 @@ class MovieLibrary(QObject):
             return
         self._low_warm_timer.start()
 
+    def stop_all_clips(self) -> None:
+        """停止全部已建 clip 的 reader（会话结束/关机专用，issue #111）。
+
+        与 ``shutdown()`` 的区别：只调 ``stop()``（置停止信号 + terminate ffmpeg，
+        有界不阻塞 GUI 线程），**不**离线销毁 clip/清缓存/登记孤儿——关机时进程
+        随即退出，那些收尾既无收益又会拉长清理窗口。
+
+        逐 clip 兜异常：半销毁（C++ 侧已删）或 stop() 抛错的 clip 不得阻断其余
+        clip 的收口，本路径必须尽力而为。
+        """
+        for clip in tuple(self._movies.values()):
+            try:
+                stop = getattr(clip, 'stop', None)
+                if callable(stop):
+                    stop()
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    '会话结束时停止 clip 失败', exc_info=True,
+                )
+
     def warm_predicted(self, name: str) -> None:
         """批10-A1：后台预解码预测动画的首帧（Phase 1，尽力而为）。
 
@@ -691,6 +712,8 @@ class MovieLibrary(QObject):
         """
         if self._warm_paused or not self._prewarm_enabled:
             return
+        if session_ending():
+            return  # 会话结束（关机/注销）：绝不起预热线程拉 ffmpeg（issue #111）
         clip = self.movie(name)
         generation = self._warm_generation
 

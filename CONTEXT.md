@@ -91,3 +91,13 @@ bubble-phrase rows of its own event class, so a gate sits next to what it
 controls. It is expanded by default and auto-expands when a search matches a row
 inside it.
 _Avoid_: Hidden advanced panel, per-feature switch list
+
+**Session-End Spawn Freeze**:
+The process-wide latch armed when the operating system announces that the
+session is ending (`WM_QUERYENDSESSION`/`WM_ENDSESSION`, or Qt's session
+signals as a fallback). While armed, no child ffmpeg process may be spawned and
+existing readers are stopped, because a process created inside a tearing-down
+Windows session fails DLL initialization (0xc0000142) and blocks shutdown.
+The freeze is one-way: a process that survives a cancelled shutdown stays
+frozen rather than resuming animation.
+_Avoid_: Shutdown option, ffmpeg kill switch

@@ -253,6 +253,86 @@ def test_pause_activity_drops_pending_switch_retry(app, tmp_path):
     app.processEvents()
 
 
+# ============================================================================
+# issue #111：会话结束（关机/注销）时窗口层必须停止一切动画派生
+# ============================================================================
+
+def test_match_shutdown_freezes_window_and_stops_animation_chain(app, tmp_path):
+    """会话结束时窗口冻结：动画不再切换、定时器收口、拒绝复活 reader。
+
+    回归背景：关机/注销窗口期内动画链仍在正常运转，随时拉起新 ffmpeg；新进程
+    在已拆除的会话里以 0xc0000142 弹窗阻塞关机。match_shutdown 必须复用既有
+    隐藏/关闭语义把整条链停住（而非依赖系统随后的 closeEvent）。
+    """
+    lib = FakeLibrary()
+    win = _make_win(tmp_path, lib)
+    prev_clip = win.movie
+    assert prev_clip._running is True
+
+    win.match_shutdown()
+
+    assert getattr(win, "_closing", False) is True, "必须置位关闭守卫（丢迟到动画事件）"
+    assert prev_clip._running is False, "当前 clip 必须停播（terminate 底层 ffmpeg）"
+    assert win._hidden_paused is True, "_pause_activity 的隐藏暂停语义必须生效"
+    assert win._switch_retry_timer.isActive() is False
+    assert win._pending_switch is None
+    assert win._move_timer.isActive() is False
+
+    # 迟到帧事件不得再推进动画链（否则会重新切换动画 → 重新拉起 reader）
+    win._on_frame(win.anim, 999)
+    assert win.movie is prev_clip, "会话结束后不得因迟到帧切换到别的 clip"
+
+    win.close()
+    app.processEvents()
+
+
+def test_match_shutdown_is_idempotent(app, tmp_path):
+    lib = FakeLibrary()
+    win = _make_win(tmp_path, lib)
+
+    win.match_shutdown()
+    win.match_shutdown()  # 重复的 WM_QUERYENDSESSION/WM_ENDSESSION 必须无副作用
+
+    assert getattr(win, "_closing", False) is True
+    assert win.movie._running is False
+    win.close()
+    app.processEvents()
+
+
+def test_resume_activity_does_not_revive_reader_after_shutdown(app, tmp_path):
+    """showEvent 路径（_resume_activity）不得在会话结束后重新拉起 reader。
+
+    关机期间窗口可能因全屏切换/托盘操作被 show 回来，_resume_activity 若照旧
+    调 _switch 就会重新 start() 出 ffmpeg。
+    """
+    lib = FakeLibrary()
+    win = _make_win(tmp_path, lib)
+    win.match_shutdown()
+    assert win.movie._running is False
+
+    win._resume_activity()
+
+    assert win.movie._running is False, "会话结束后 _resume_activity 不得复活 clip"
+    win.close()
+    app.processEvents()
+
+
+def test_pause_activity_is_noop_after_shutdown(app, tmp_path):
+    """会话结束后的 _pause_activity 必须短路——它不该再触碰 reader/定时器。"""
+    lib = FakeLibrary()
+    win = _make_win(tmp_path, lib)
+    win.match_shutdown()
+
+    calls: list = []
+    win.movie.stop = lambda: calls.append(1)  # type: ignore[method-assign]
+
+    win._pause_activity()
+
+    assert calls == [], "已置位 _closing 后不得再动 clip"
+    win.close()
+    app.processEvents()
+
+
 def test_library_pause_warm_cancels_inflight_first_frame_warm(app, tmp_path, monkeypatch):
     """P1-2：pause_warm（隐藏/切角色）必须取消在飞的首帧预热。"""
     import pet.library as library_mod

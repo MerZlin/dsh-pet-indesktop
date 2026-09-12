@@ -6,7 +6,10 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+import shiboken6
 
 from .window_effects import (
     begin_rotation,
@@ -194,6 +197,49 @@ class WindowFeatureGateMixin:
         edge = getattr(self, "_edge_probe", None)
         if edge is not None:
             edge.resume()
+
+    def match_shutdown(self) -> None:
+        """会话结束（Windows 关机/注销）收口本窗（issue #111）。
+
+        必须由 ``WM_QUERYENDSESSION`` 这一层触发、而不是等 ``closeEvent``：
+        关机窗口期内本进程每多活一秒、动画链每多切一次，都可能 CreateProcess
+        新的 ffmpeg；新进程在已拆除的会话里会以 0xc0000142 弹窗阻塞关机。
+
+        步骤与理由（**顺序不可颠倒**）：
+        1. 先 ``_pause_activity()``：停当前 reader、停全部活动 timer、
+           ``pause_warm()``、清预测预热。必须**先**做——它自身在 ``_closing``
+           置位后是短路 no-op（那是给「已关闭/会话结束后迟到的 hideEvent」用的），
+           先置 ``_closing`` 会让停机一步都做不到；
+        2. 再置 ``_closing``（closeEvent 同款生命周期守卫）——帧驱动的动画切换
+           （_on_frame/移动/自动移动）、``_resume_activity`` 与预测预热都会据此
+           短路，reader 自此不会被复活；
+        3. ``detach_collision_session()`` 关闭本窗 IPC 端点（避免关机期 socket
+           半关闭告警），与 closeEvent 的收尾保持一致。
+
+        不调 ``close()``：会话结束时进程随即退出，closeEvent 的写盘/销毁链既非
+        必需又会拖长清理窗口。每步独立兜异常（半销毁窗口不得阻断其余收口）。
+        """
+        try:
+            if not shiboken6.isValid(self):
+                return  # C++ 侧已销毁的半死窗口：无可收口
+        except Exception:
+            pass
+        # 与 hideEvent 同款置位「窗口不可见」暂停态：会话结束后没有任何可见效果，
+        # 该标志还让 _on_frame/_on_switch_retry_timeout 等入口一并短路（双保险）。
+        self._hidden_paused = True
+        try:
+            pause = getattr(self, "_pause_activity", None)
+            if callable(pause):
+                pause()
+        except Exception:
+            logging.getLogger(__name__).debug("会话结束时暂停窗口活动失败", exc_info=True)
+        self._closing = True
+        try:
+            detach = getattr(self, "detach_collision_session", None)
+            if callable(detach):
+                detach()
+        except Exception:
+            logging.getLogger(__name__).debug("会话结束时断开碰撞会话失败", exc_info=True)
 
     def _effects_skip_turn_facing(self) -> bool:
         return self._effects_probe_active()
