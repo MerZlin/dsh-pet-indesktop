@@ -1171,6 +1171,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         """暂停动画解码与所有活动定时器（窗口不可见时没有任何可见效果）。"""
         if not hasattr(self, 'movie'):
             return  # 未完整初始化（测试桩/构造早期）无可暂停
+        if getattr(self, '_closing', False):
+            return  # 会话结束/已关闭：绝不再触碰 reader（issue #111 静默退出）
         if self.movie is not None:
             self.movie.stop()
             # 共享解码：窗口停播（隐藏/暂停）→ shareable idle 会话中止
@@ -1205,6 +1207,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         """显示时恢复动画与所需定时器（状态与隐藏前一致）。"""
         if not hasattr(self, 'movie'):
             return  # 未完整初始化（测试桩/构造早期）无可恢复
+        if getattr(self, '_closing', False):
+            return  # 会话结束/已关闭：不得复活 reader（issue #111）
         if self.movie is not None:
             # 从当前动画第一帧重新开始：隐藏期间用户看不到，观感无差异；
             # 若隐藏前正在移动，_cancel_move 已清掉移动计划，不会出现"瞬移"。

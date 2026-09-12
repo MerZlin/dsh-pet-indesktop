@@ -66,7 +66,13 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # （window.py +13，实测 4425）。前者是探头旋转保持/软撞位移旁路/鱼头空中低速跟随的
 # 内联守卫，与 #108 同属窗口生命周期共享状态，拆出去会切断 _enter_physics_mode 与
 # 碰撞回写链；按维护者约定 klxxya 的修复可越过本红线，预算仍只随实测校准。
-WINDOW_PY_LINE_BUDGET = 4425
+# 2026-09-12 再上调到 4429：#111 Windows 关机/注销 ffmpeg 0xc0000142 修复
+# （window.py +4，实测 4429）——_pause_activity/_resume_activity 各加一句
+# 「_closing 已置位则 return」守卫，防止会话结束后仍有路径触碰/复活 reader。
+# 两处都是 3 行内联守卫，拆出去会切断 _pause_activity 与 _closing 共享状态流
+# （更关键的是顺序语义：match_shutdown 必须**先**暂停再置 _closing，见
+# pet/window_optional_services.py）；拆分待办不变，预算仍只随实测校准。
+WINDOW_PY_LINE_BUDGET = 4429
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的

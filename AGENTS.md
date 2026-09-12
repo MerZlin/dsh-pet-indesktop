@@ -148,6 +148,10 @@ exact breakpoint there; see `docs/agents/handoff.md`.
 
 - Read `docs/ISSUE-42-POSIX-COLLISION-IPC-2026-08-31.md` when changing collision
   election, QLocal IPC, coordinator locking, or their process-level tests.
+- Read `docs/ISSUE-111-WINDOWS-SESSION-END-FFMPEG-2026-09-12.md` when changing
+  ffmpeg spawning (`webm_clip` reader/first-frame/meta/exe probes), warm
+  scheduling, or anything that runs during Windows shutdown/logoff
+  (`session_watcher`, `match_shutdown`, `AppShell._on_session_end`).
 - Read `docs/ONEDIR_PACKAGING.md` when changing PyInstaller specs, bundled
   resources, or platform build scripts.
 - Read `docs/STABLE_BUILDS.md` when changing release/build workflows.

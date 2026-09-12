@@ -207,6 +207,51 @@ _FFMPEG_INPUT_PARAMS = [
     '-threads', '1',
 ]
 
+# ------------------------------------------------------------ 会话结束（关机/注销）spawn 闸门（issue #111）
+# 现象：Windows 关机/注销时必弹「ffmpeg-*.exe - 应用程序无法正常启动
+# (0xc0000142)」并阻塞关机流程。
+#
+# 机制：0xc0000142 = STATUS_DLL_INIT_FAILED。关机时系统先发
+# WM_QUERYENDSESSION，随后开始拆除本次登录会话（窗口站、桌面堆、CSRSS 等）。
+# 若本进程在这之后仍 CreateProcess 新的 ffmpeg，进程虽然创建成功，其
+# user32/gdi32 却初始化失败——系统于是弹出错误对话框。桌宠的 ffmpeg 启停
+# 极其频繁（冷首帧预热 / reader 换代 / 元数据探测 / 圈末回收后 fresh spawn），
+# 撞上关机窗口的概率因此几乎为 100%。
+#
+# 闸门语义：一旦收到会话结束通知就**永久**置位（进程正在退出，不需要复位），
+# 之后所有 ffmpeg spawn 路径一律拒绝。调用方契约零改动——被拒的路径都已有
+# 既有降级：start() 返回 False（窗口层回退上一动画/待机，见
+# tests/test_switch_start_failure_window.py），首帧解码返回 None（走缓存帧），
+# 元数据探测保留默认值（后续按需再取）。
+#
+# 权威置位点：pet/session_watcher.py（Windows 原生 WM_QUERYENDSESSION /
+# WM_ENDSESSION 过滤器 + Qt 会话信号兜底）。进程级 bool，跨线程读写安全
+# （读者只判真假，无复合不变量），无需加锁——本闸门在热路径上被每帧读取。
+_SESSION_ENDING = False
+
+
+def session_ending() -> bool:
+    """会话是否已结束（Windows 关机/注销已开始）。置位后绝不再 spawn ffmpeg。"""
+    return _SESSION_ENDING
+
+
+def set_session_ending(armed: bool = True) -> None:
+    """置位/复位会话结束闸门（幂等；产品代码只置位，复位仅供测试收口）。"""
+    global _SESSION_ENDING
+    if _SESSION_ENDING == bool(armed):
+        return
+    _SESSION_ENDING = bool(armed)
+    logger.info(
+        '会话结束闸门%s：此后不再派生 ffmpeg 子进程（issue #111）',
+        '已置位' if _SESSION_ENDING else '已复位',
+    )
+
+
+def _reset_session_ending_for_tests() -> None:
+    """仅测试用：复位进程级闸门（否则会串到后续用例，静默不起 reader）。"""
+    global _SESSION_ENDING
+    _SESSION_ENDING = False
+
 
 def _ensure_ffmpeg_exe() -> None:
     """串行化首次 ffmpeg exe 探测并预热缓存（幂等，任意线程可调用）。
@@ -214,8 +259,13 @@ def _ensure_ffmpeg_exe() -> None:
     imageio_ffmpeg 不可用 / 探测失败时为无操作（read_frames 内部会再报错）。
     锁内探测保证并发调用方不重复拉起探测进程；探测完成后 lru_cache 命中，
     后续 get_ffmpeg_exe() 零子进程开销。
+
+    会话结束（Windows 关机/注销）时直接放弃探测：`get_ffmpeg_exe()` 冷缓存下
+    会跑 `ffmpeg -version`，同样是一次 spawn（参见 _SESSION_ENDING 说明）。
     """
     if imageio_ffmpeg is None:
+        return
+    if session_ending():
         return
     with _FFMPEG_EXE_LOCK:
         try:
@@ -1192,6 +1242,8 @@ class WebMClip(QObject):
             _META_CACHE[cache_key] = (self._frame_count, self._duration)
             return
         try:
+            if session_ending():
+                return  # 会话结束：不跑 count_frames_and_secs 探测（保留默认值，不告警）
             frames, secs = imageio_ffmpeg.count_frames_and_secs(key)
             if frames and frames > 0:
                 self._frame_count = int(frames)
@@ -1343,6 +1395,11 @@ class WebMClip(QObject):
             return False
         if imageio_ffmpeg is None:
             self.errorOccurred.emit(str(_IMPORT_ERROR or 'imageio_ffmpeg 不可用'))
+            return False
+        if session_ending():
+            # 会话结束（关机/注销）：绝不再拉起新的取帧进程（issue #111）。
+            # 沿用既有「启动被拒」契约 —— 调用方按 False 走降级/重试。
+            logger.info('会话结束中，拒绝启动 reader: %s', self.path)
             return False
 
         # 批8 续圈：圈边界软停（_soft_parked）且循环 reader 仍存活 → re-arm
@@ -1603,6 +1660,8 @@ class WebMClip(QObject):
         """
         if imageio_ffmpeg is None:
             return None
+        if session_ending():
+            return None  # 会话结束：绝不为首帧拉起解码进程（走既有 None 降级）
         # 批 6-8b：探测串行化预热——与播放 reader 同源，避免首帧解码路径
         # 并发跑 ffmpeg -version 探测（read_frames 内部本就会探测，此处仅
         # 提前到统一入口并串行化）。
@@ -1634,6 +1693,10 @@ class WebMClip(QObject):
 
             if perfstats.ENABLED:
                 _ff_t0 = perfstats.clock()
+            if session_ending():
+                # 会话结束（issue #111）：门禁之后、Popen 之前再复查一次，
+                # 收紧并发关机窗口；proc 仍为 None，finally 无句柄可收。
+                return None
             with _PopenCapture(on_process=_register):
                 g = imageio_ffmpeg.read_frames(
                     str(self.path),
@@ -1932,6 +1995,11 @@ class WebMClip(QObject):
         # 与延迟，也杜绝 stop 无法解除的探测/解码等待）。
         if stop_evt.is_set() or self._generation != generation:
             return
+        if session_ending():
+            # 会话结束（关机/注销）：reader 线程绝不拉起 ffmpeg（issue #111）——
+            # 关机窗口期内新起的进程会以 0xc0000142 弹窗阻塞关机。
+            logger.info('会话结束中，reader 拒绝拉起 ffmpeg: %s', self.path)
+            return
         feed = self._feed_source
         if feed is not None:
             done = self._reader_feed(feed, stop_evt, generation, ready_evt)
@@ -1961,6 +2029,11 @@ class WebMClip(QObject):
         _ensure_ffmpeg_exe()
         if stop_evt.is_set() or self._generation != generation:
             return  # 探测期间被 stop：不拉起解码进程，直接退出
+        if session_ending():
+            # 会话结束（关机/注销）：本地解码路径绝不 spawn（issue #111）。
+            # 覆盖 feed 回退本地与任何绕过 start() 的迟到 reader。
+            logger.info('会话结束中，本地 reader 拒绝拉起 ffmpeg: %s', self.path)
+            return
         gen = None
         proc = None
         try:
@@ -2014,6 +2087,10 @@ class WebMClip(QObject):
             # feed 路径（不拉起 ffmpeg）不会走到这里，_reader_born_at 保持 0。
             self._reader_born_at = time.monotonic()
             self._reader_loops = 0
+            if session_ending():
+                # 会话结束（issue #111）：门禁检查之后、Popen 之前再复查一次，
+                # 收紧并发的关机窗口；随后由 finally 走既有收尾（无句柄泄漏）。
+                return
             with _PopenCapture(on_process=_register) as capture:
                 gen = imageio_ffmpeg.read_frames(
                     str(self.path),

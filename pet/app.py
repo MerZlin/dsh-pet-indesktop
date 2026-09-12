@@ -50,6 +50,7 @@ from .library import MovieLibrary
 from .window import PetWindow
 from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
+from .session_watcher import install_session_watcher
 from .collision_ipc import CollisionIpcSession
 from .decode_fanout import DecodeFanoutHub
 from .todo_reminder import TodoReminderService
@@ -1092,6 +1093,72 @@ class AppShell:
         self._sync_todo_service()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
         QTimer.singleShot(4000, self._maybe_autostart_harness)
+        # issue #111：会话结束（Windows 关机/注销）探测器。必须在窗口就绪后安装
+        # ——它要在关机窗口期到来**之前**就位，才能抢在会话拆除前关掉 ffmpeg
+        # 派生（否则系统会弹 0xc0000142 阻塞关机）。
+        self._install_session_watcher()
+
+    def _install_session_watcher(self) -> None:
+        """安装会话结束探测器（幂等；实例属性强引用保活，不跨实例共享）。"""
+        if getattr(self, "_session_watcher", None) is not None:
+            return
+        try:
+            self._session_watcher = install_session_watcher(
+                app=self.app, on_session_end=self._on_session_end,
+            )
+        except Exception:
+            logging.exception("安装会话结束探测器失败")
+
+    def _on_session_end(self) -> None:
+        """会话结束（关机/注销）：冻结各窗并停止全部 ffmpeg reader（issue #111）。
+
+        幂等：重复的会话结束信号（WM_QUERYENDSESSION 之后又有 WM_ENDSESSION、
+        Qt 的 commitDataRequest/aboutToQuit）只收口一次。
+
+        只做正常退出路径（``_on_about_to_quit``）不做、且关机场景必需的三件事：
+        关 ffmpeg spawn 闸门、冻结窗口动画（``match_shutdown``）、把各窗素材库
+        里**已建的全部 clip** 一起停掉（不只是各窗当前在播的那个：圈末软停驻留
+        的 clip 仍持有一个存活但空闲的 ffmpeg 进程，关机时一并收口）、留一行日志。
+
+        刻意**不**做会话保存/写盘/槽位解锁：关机时登录会话已在拆除，那些收尾
+        既非必需（多开文件锁由操作系统在进程退出时释放）又会拉长清理窗口，
+        与「静默、快速、不再派生任何进程」的目标相反。
+        """
+        if getattr(self, "_session_end_done", False):
+            return
+        self._session_end_done = True
+        self._mark_session_ending()
+        stopped = 0
+        for inst in self._instances:
+            win = getattr(inst, "win", None)
+            match_shutdown = getattr(win, "match_shutdown", None)
+            if callable(match_shutdown):
+                try:
+                    match_shutdown()
+                except Exception:
+                    logging.exception("会话结束时冻结窗口失败")
+            lib = getattr(win, "lib", None)
+            stop_all = getattr(lib, "stop_all_clips", None)
+            if callable(stop_all):
+                try:
+                    stop_all()
+                    stopped += 1
+                except Exception:
+                    logging.exception("会话结束时停止素材库 clip 失败")
+        logging.info(
+            "会话结束：已停止全部 ffmpeg reader（%d 个素材库收口），进入静默退出", stopped,
+        )
+
+    def _mark_session_ending(self) -> None:
+        """置位进程级 ffmpeg spawn 闸门（webm_clip.set_session_ending）。
+
+        覆盖「已进入退出流程、但原生 WM_QUERYENDSESSION 未被观测到」的路径
+        （如托盘退出、Qt aboutToQuit、测试直接调收口）。
+        """
+        try:
+            webm_clip_mod.set_session_ending(True)
+        except Exception:
+            logging.exception("置位会话结束闸门失败")
 
     def _create_ui_with_character_fallback(self, character_id: str) -> None:
         """启动路径创建主窗；配置记住的角色素材目录已被删/搬走（如 DLC 卸载）
@@ -1179,6 +1246,9 @@ class AppShell:
         （这也是「退出这只」与「全部退出」的核心差异）。
         """
         from .chat import session_store as _session_store
+        # issue #111：先关 ffmpeg spawn 闸门，再走正常退出收口——正常退出路径
+        # （托盘退出/最后窗口关闭）同样落在关机前后，绝不能在里面再派生 reader。
+        self._mark_session_ending()
         # 窗级收口：逐窗保存位置、停本窗预热与 Agent、提交本窗会话、释放本窗 slot 锁
         for inst in self._instances:
             win = inst.win
