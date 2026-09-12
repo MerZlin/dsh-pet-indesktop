@@ -62,7 +62,11 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # _stop_physics 落地回待机（实机卡顿定案：观测 26 次 >100ms 卡顿中 19 次为
 # GUI 冷解码首帧）。全部是窗口生命周期内联守卫，拆控制器会切断与
 # _switch/_pending_switch/回收推送的共享状态流；拆分待办不变。
-WINDOW_PY_LINE_BUDGET = 4420
+# 2026-09-12 再上调到 4425：#109 探头/头槌体验三连修 + 气泡分页避头尾在同一批落地
+# （window.py +13，实测 4425）。前者是探头旋转保持/软撞位移旁路/鱼头空中低速跟随的
+# 内联守卫，与 #108 同属窗口生命周期共享状态，拆出去会切断 _enter_physics_mode 与
+# 碰撞回写链；按维护者约定 klxxya 的修复可越过本红线，预算仍只随实测校准。
+WINDOW_PY_LINE_BUDGET = 4425
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
