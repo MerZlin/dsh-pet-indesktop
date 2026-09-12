@@ -97,6 +97,22 @@ class _RingBuffer:
                 return None
             return self._dq.popleft()
 
+    def pop_with_cursor(self):
+        """一次临界区内取帧，并返回 ``(item, last_pushed_src)``；空时 item 为 None。
+
+        为什么必须**同一个临界区**：消费端要据「pop 为空」+「高水位线是否已推进」
+        两者一起判断「真空」还是「帧在两次取锁之间被 push 进来」。若分两次取锁
+        （先 pop、再读 ``last_pushed_src``），生产端恰好完成 push 会让第二次读拿到
+        **过期**的高水位线 → 消费端误判真空并返回 ``none``，而已 push 的帧留在环中
+        未被取走（实测 300 轮复现 3 次：``poll()`` 返回 none 且环里仍躺着 src=19，
+        直接导致 ``tests/test_decode_fanout.py::test_cross_thread_fanout`` 在慢 runner
+        上偶发 ``max(got) == 18``，CI run #151 macOS）。
+        """
+        with self._lock:
+            if not self._dq:
+                return None, self._last_pushed_src
+            return self._dq.popleft(), self._last_pushed_src
+
     def clear(self) -> None:
         with self._lock:
             self._dq.clear()
@@ -226,25 +242,24 @@ class _FanoutFeedSession:
                     'fanout feed 看门狗超时（%dms 无帧无 end），回退本地解码',
                     WATCHDOG_BUDGET_MS)
                 return ("abort", None, None, 'watchdog')
-        item = self._ring.pop()
+        item = None
+        # 跨线程可见性防护（一次原子取帧）：环空**未必**是真空——生产端可能恰在
+        # 消费端取帧前后完成 push。判据用「**取帧前后**高水位线是否推进」：环空且
+        # 水位相比取帧前已推进 ⇒ 期间有帧进环 ⇒ 立即重试一次（不 sleep、不阻塞——
+        # poll 非阻塞契约与 stall 看门狗都不变）。
+        #
+        # 注意这里**不试图**把「环暂空」变成「等到有帧」：消费端在末帧尚未 push 时
+        # 返回 none 是正确的（产品契约：非阻塞 poll + 看门狗兜底），调用方（含
+        # tests/test_decode_fanout.py::test_cross_thread_fanout）**不得**把一次
+        # none 当作「生产端已结束」——该用例原先正是这么断言的，因而在慢 runner 上
+        # 会早退丢末帧（CI run #151 macOS：max(got)==18）。此处的价值只在于让
+        # 「已有帧已进环」这一种情形不被延迟到下一次 poll 才看见。
+        before = self._ring.last_pushed_src
+        item, _ = self._ring.pop_with_cursor()
+        if item is None and self._ring.last_pushed_src != before:
+            item, _ = self._ring.pop_with_cursor()
         if item is None:
-            # 跨线程可见性防护：ring pop 返回 None 可能是暂空（生产端已 push
-            # 但 ring lock 调度延迟导致 pop 看不到），而非真空。检查 ring 的
-            # 高水位线（last_pushed_src，与 push 同锁更新）是否已超过消费端
-            # 最后消费的 src（last_consumed_src）。如果是，说明有帧被 push
-            # 但消费端尚未 pop 到——retry 一次。若 retry 仍空，说明帧已被
-            # drop-oldest 丢弃（最后一帧不会被 drop，所以如果 last_pushed
-            # 是末帧，retry 一定能 pop 到）。
-            with self._lock:
-                consumed = self._last_src
-            pushed = self._ring.last_pushed_src
-            if pushed > consumed:
-                # 有更新的帧被 push 但消费端尚未 pop 到——retry。
-                # 这消除了「pop 返回 None → 消费端看到 produced["done"] →
-                # 提前 break → 末帧遗留在 ring 中未被消费」的竞态。
-                item = self._ring.pop()
-            if item is None:
-                return ("none", None, None, None)
+            return ("none", None, None, None)
         data, src = item
         src = int(src)
         with self._lock:

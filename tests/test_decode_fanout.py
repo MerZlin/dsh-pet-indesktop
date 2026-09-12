@@ -199,7 +199,50 @@ class TestRingAndFeed:
         # 冒烟：帧到达、单调不减（drop-oldest 下允许跳帧，绝不乱序/重复后续）
         assert got, "跨线程消费未收到任何帧"
         assert all(got[i] <= got[i + 1] for i in range(len(got) - 1)), f"乱序: {got}"
-        assert max(got) >= 19
+        # 末帧可达性：生产端**已完成**（done 置位且线程 join 返回）时环里至多还剩
+        # RING_CAPACITY 帧，此时排空必然取到末帧。
+        #
+        # 回归背景（CI run #151 macOS 红，`assert 18 >= 19`）：旧写法在「kind==none
+        # 且 done」处直接 break，而消费端在**末帧尚未 push**时返回 none 是合法行为
+        # （poll 是非阻塞契约），慢 runner 上一次调度交错就让 max(got) 停在 18。
+        # 该断言不是「等末帧」（那会变成赌时序）：若末帧真的丢在环里，排空同样能
+        # 取到它、断言照样通过；只有 poll 把环里已有帧漏掉（真实回归）才会失败。
+        assert produced["done"] is True, "生产端未在预算内完成"
+        drain_deadline = time.monotonic() + 5.0
+        while time.monotonic() < drain_deadline:
+            kind, data, src, _ = session.poll()
+            if kind != "frame":
+                break
+            got.append(src)
+        assert max(got) >= 19, (
+            f"生产端已结束，排空后仍未见末帧（丢弃/漏读）: {got}"
+        )
+
+    def test_drain_after_producer_done_yields_last_frame_deterministically(self):
+        """确定性锁死「生产端已结束 → 排空必得末帧」（不赌调度）。
+
+        直接调 poll()，消费端与生产端同线程交替：生产端全部推完后，逐次 poll 必须
+        把环里剩下的帧（含末帧）全部取到；只在 poll 漏掉环内已有帧（真实回归）时红。
+        """
+        hub = DecodeFanoutHub(enabled=True)
+        pub = _FakeMovie(PATH)
+        sub, source, rec = _subscribe(hub, pub)
+        session = rec.session
+        try:
+            for src in range(20):
+                source.sink.on_frame(FRAME, src)
+            drained: list = []
+            while True:
+                kind, data, src, _ = session.poll()
+                if kind != "frame":
+                    assert kind == "none", f"无 abort/end 触发时应为 none: {kind}"
+                    break
+                drained.append(src)
+                assert len(drained) <= 20
+            assert drained, "排空期间未取到任何帧"
+            assert max(drained) == 19, f"排空后未见末帧: {drained}"
+        finally:
+            hub.stop_all()
 
 
 # ---------------------------------------------------------------------------
