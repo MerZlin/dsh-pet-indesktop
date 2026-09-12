@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 <#
 .SYNOPSIS
     dsh-pet-standalone onedir build + portable zip packaging.
