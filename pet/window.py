@@ -167,6 +167,12 @@ COLLISION_CONTACT_DV_FLOOR = 50.0
 # 每 tick 只消费最新目标做 self.move，丢弃中间过期位置。
 DRAG_MOVE_COALESCE_MS = 8
 
+# 弹射飞行低速段阈值（px/s）：低于此速度（滚动/滑动阶段）动画链允许在
+# idle/turn 池内切换（两池首帧必热：idle 起飞时已预热、turn pinned 常驻）；
+# 高于此速度固定循环悬空动画。量级参照 throw_egg.THROW_EGG_RECOVER_SPEED
+# （780 贴地回正）——400 是"视觉上明显已减速"的中段。
+THROW_SLOW_ANIM_SPEED = 400.0
+
 # ---- 闲置降帧（性能调研 §4.3；批11 联动解码节流）----
 # 长时间不碰桌宠且可见时动画降帧。批11 起解码/消费联动降速：
 # reader 入队由超时丢帧改为有界阻塞，被丢弃的帧在 reader 侧未解码。
@@ -2473,6 +2479,41 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 self._switch_retry_count = 0
                 self._switch_retry_timer.stop()
             return
+        # 弹射飞行途中不推进随机动画链（实测定案：弹射切换是事件驱动，
+        # 预测式预热覆盖不到——拖拽打断早已作废预测代次，松手/半空的现场
+        # 掷骰会切到冷首帧动画，GUI 线程同步拉 ffmpeg 解码 ~100ms 起；
+        # 观测实机 26 次 >100ms 卡顿中 19 次即此路径）。规则：当前动作
+        # 播完若仍在飞行，固定切到"悬空"动画（拖拽 clip，pinned 首帧必热，
+        # 被拎着悬空的视觉恰好契合被击飞）并循环，落地停稳由 _stop_physics
+        # 切回待机恢复正常链。无拖拽素材时退化为循环当前动画（同一 clip
+        # 首帧必热，零成本）。
+        # 低速段（滚动/滑动，< THROW_SLOW_ANIM_SPEED）放宽动画切换
+        # （用户实机要求"低速也可以播动作"）：先按正常链掷骰，目标首帧
+        # 已热（播过留在 LRU / pinned / 起飞预热）就直接播——滚动段也能
+        # 看到动作/移动，且越滚越丰富；冷目标绝不追（GUI 同步解码卡顿
+        # 零容忍），退回必热的 idle/turn 池（idle 起飞时已由
+        # _warm_landing_idles 预热、turn 在 pinned 常驻集）。
+        if self._physics_mode == 'throw':
+            speed = math.hypot(*self._phys_vel)
+            if speed < THROW_SLOW_ANIM_SPEED and self._throw_low_speed_switch(name):
+                return
+            flight = self.drag or (self.idles[0] if self.idles else None)
+            if flight is not None and name != flight:
+                self._switch(flight)
+                return
+            self._push_recycle(self.movie)  # 同拖拽重启：不经 _switch，补推送
+            self.movie.jumpToFrame(0)
+            self._ended_fired = False
+            if self.movie.start() is False:
+                self._fallback_playable_idle(name)
+                self._schedule_switch_retry(name)
+                return
+            if self._pending_switch == name:
+                self._pending_switch = None
+                self._pending_switch_link = False
+                self._switch_retry_count = 0
+                self._switch_retry_timer.stop()
+            return
         # Agent 联动：待播动作优先接上（平滑衔接，不打断刚播完的动作）
         if self._pending_link_anim:
             self._play_pending_link_anim()
@@ -3189,8 +3230,11 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                     self.move(g - self._grab_offset)  # 停在松手处
                 self._save_position()
             self._position_sync_now()  # 松手后的最终位置立即同步（气泡/监听器），不等去抖
-            if self.idles:
-                self._switch(self._pick(self.idles))  # 回待机缓冲
+            if self.idles and self._physics_mode != 'throw':
+                # 回待机缓冲；弹射起飞时不在此切换——飞行途中由 _on_anim_ended
+                # 的飞行循环规则接管（当前动作播完后循环悬空动画，落地回待机），
+                # 避免松手帧现场掷骰切到冷首帧动画造成 GUI 同步解码卡顿。
+                self._switch(self._pick(self.idles))
         elif dist < catalog.DRAG_THRESHOLD * self.scale:
             # 边缘探头激活时，点击是“拉直/重置倒计时”的探头操作，不是普通点击反馈，
             # 不播点击音效。
@@ -4033,6 +4077,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._applied_opacity = opacity
 
     def _stop_physics(self) -> None:
+        was_throw = self._physics_mode == 'throw'
         self._physics_timer.stop()
         self._physics_mode = None
         if getattr(self, '_interaction_state', IDLE) == THROWN:
@@ -4042,6 +4087,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         _te = getattr(self, '_throw_egg', None)
         if _te is not None:
             _te.end()
+        if was_throw and self.drag and self.anim == self.drag and self.idles:
+            # 弹射落地：飞行中循环的悬空动画切回待机（首帧在起飞时已由
+            # _warm_landing_idles 预热），动画链从待机自然恢复。
+            self._switch(self._pick(self.idles))
 
     def _enter_physics_mode(self, mode: str) -> None:
         """进入物理模式（'drag'/'throw'）：统一取消自主移动计划与动画间隔，
@@ -4049,6 +4098,67 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._cancel_move()
         self._cancel_animation_gap()
         self._physics_mode = mode
+        if mode == 'throw':
+            self._throw_slow_switched = False  # 每次弹射只允许一次降速过渡
+            self._warm_landing_idles()
+
+    def _first_frame_warm(self, name) -> bool:
+        """目标动画首帧是否已在缓存（播过留 LRU / pinned / 预热完成）。
+
+        弹射低速段放行链式掷骰时用作"只播热的"闸门：冷目标不追，
+        避免 GUI 线程同步解码。读 clip 的 _first_image 缓存位（WebMClip
+        内部字段；接口不稳定时 getattr 兜底为冷，退化为 idle/turn 池）。
+        """
+        lib = getattr(self, 'lib', None)
+        movie = getattr(lib, 'movie', None)
+        if not callable(movie):
+            return False
+        try:
+            return getattr(movie(name), '_first_image', None) is not None
+        except Exception:
+            return False
+
+    def _throw_low_speed_switch(self, name) -> bool:
+        """弹射低速段的动画切换：掷骰命中首帧已热的目标直接播，冷目标退回
+        必热的 idle/turn 池。返回 True 表示发生了切换。
+
+        两个调用点：_tick_throw_physics 降速入段的即时过渡（不等 clip
+        自然播完——拖拽 clip 可能比整个低速段还长）；_on_anim_ended
+        低速段的链式推进。
+        """
+        if not (self.idles or self.turns):
+            return False
+        nxt = self._roll_next(exclude=name)
+        if nxt is not None and nxt != name and self._first_frame_warm(nxt):
+            self._switch(nxt)
+            return True
+        pool = [*self.idles, *self.turns]
+        nxt = self._pick(pool, exclude=name)
+        if nxt is not None and nxt != name:
+            self._switch(nxt)
+            return True
+        return False
+
+    def _warm_landing_idles(self) -> None:
+        """弹射起飞时后台预热 idle 首帧（落地回待机的切换目标）。
+
+        预测式预热覆盖不到这里：弹射是事件触发（拖拽打断早已把预测代次
+        作废），且交互让路闸门在拖拽/弹射期间会挡住 warm_predicted——
+        故直接调 clip 级 warm_first_frame（幂等、后台线程、可被取消），
+        绕过闸门。idle 池极小（通常 1-3 个），代价可忽略；不暖的话落地
+        切换可能命中冷首帧，GUI 线程同步拉 ffmpeg 解码（实测 ~100ms）。
+        """
+        lib = getattr(self, 'lib', None)
+        movie = getattr(lib, 'movie', None)
+        if not callable(movie):
+            return
+        for name in self.idles or ():
+            try:
+                warm = getattr(movie(name), 'warm_first_frame', None)
+                if callable(warm):
+                    warm()
+            except Exception:
+                pass  # 预热失败不致命：落地切换退化为现状（按需同步解码）
 
     def _on_physics_tick(self) -> None:
         if perfstats.ENABLED:
@@ -4118,6 +4228,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             predict_bounce(start_px, start_py)
         self.move(int(round(self._phys_pos[0])), int(round(self._phys_pos[1])))
         speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
+        # 低速段入口过渡：一降速就切出悬空动画，不等 clip 自然播完
+        # （拖拽 clip 时长可能超过整个低速段，等播完就永远看不到切换——
+        # 实机反馈"低速滚动还是悬空姿势"）。每次弹射只过渡一次，之后
+        # 低速段的动画推进由 _on_anim_ended 的低速分支接力。
+        if (not getattr(self, '_throw_slow_switched', False)
+                and speed < THROW_SLOW_ANIM_SPEED):
+            self._throw_slow_switched = True
+            self._throw_low_speed_switch(self.anim)
         # 在地面上且水平速度也很低时，彻底停下
         if physics_mod.is_at_rest(
             self._phys_pos[1], self._phys_vel[0], self._phys_vel[1], bottom, bounced_any, speed
