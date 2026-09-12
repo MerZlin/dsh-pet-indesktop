@@ -339,7 +339,15 @@ class CollisionClient(QObject):
         radius_x = max(1.0, rect.width() / 2.0)
         radius_y = max(1.0, rect.height() / 2.0)
         hit_dv = math.hypot(dvx, dvy)
-        is_real_hit = hit_dv >= self._hit_min_dv
+        # 撞静态布景（灵动岛果冻墙）放宽命中阈值：岛的语义就是"撞上去会弹"，
+        # 漫游/走路蹭到（dv 常在 60~300 之间）也该有看得见的反弹，
+        # 而不是被 300 的通用阈值吃掉只剩缓慢推出。
+        other_id = str(message.get('b') if message.get('a') == runtime_id
+                       else message.get('a') or '')
+        other = self.peer_snapshots.get(other_id) or {}
+        hit_floor = 60.0 if int(other.get('flags', 0)) & collision.FLAG_STATIC \
+            else self._hit_min_dv
+        is_real_hit = hit_dv >= hit_floor
         has_velocity_impulse = abs(dvx) > 1e-9 or abs(dvy) > 1e-9
         # 偏差豁免的本意是"协调者眼中的我已经过期就别瞬移我"——直接比较
         # 协调者 tick 时认定的我方中心（ax/ay 或 bx/by）与当前实际中心，
@@ -504,7 +512,7 @@ class CollisionClient(QObject):
                     radius_x, radius_y,
                     scale=float(raw_peer.get('scale', collision.DEFAULT_BASE_SCALE) or collision.DEFAULT_BASE_SCALE),
                     collision_mass_scale=float(win.cfg.get('collision_mass_scale', 1.0))),
-                is_infinite_mass=bool(flags & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION)),
+                is_infinite_mass=bool(flags & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION | collision.FLAG_STATIC)),
                 flags=flags,
                 circles=peer_circles,
             )

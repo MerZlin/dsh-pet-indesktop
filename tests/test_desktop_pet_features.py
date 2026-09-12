@@ -1567,8 +1567,11 @@ def test_modern_settings_toggle_dependencies_hide_complete_setting_groups(tmp_pa
         row(key) for key in (
             "dynamic_island_icon", "dynamic_island_name", "dynamic_island_info",
             "dynamic_island_status", "dynamic_island_info_mode",
-            "dynamic_island_style", "dynamic_island_icon_value",
-            "dynamic_island_custom_text",
+            "dynamic_island_style", "dynamic_island_opacity",
+            "dynamic_island_accent", "dynamic_island_icon_value",
+            "dynamic_island_custom_text", "dynamic_island_click_action",
+            "dynamic_island_event_effects", "dynamic_island_edge_dock",
+            "dynamic_island_collision",
         )
     ]
     dialog.island_enabled_check.setChecked(False)

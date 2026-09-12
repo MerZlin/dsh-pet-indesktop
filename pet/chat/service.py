@@ -37,6 +37,20 @@ class _Worker(QThread):
             self.stopped_by_user.emit() if self.cancel.is_set() else self.failed.emit(str(exc))
 class ChatService(QObject):
     started=Signal(str); delta=Signal(str,str); finished=Signal(str,str); error=Signal(str,str); stopped=Signal(str)
+    # 进程级「回复完成」订阅（灵动岛事件动效等）：AppShell 注册一次，
+    # 回调总在 GUI 线程执行（worker→本对象的链路全是 QueuedConnection）。
+    _global_finished_listeners: list = []
+
+    @classmethod
+    def register_global_finished(cls, callback):
+        if callback not in cls._global_finished_listeners:
+            cls._global_finished_listeners.append(callback)
+
+    @classmethod
+    def unregister_global_finished(cls, callback):
+        if callback in cls._global_finished_listeners:
+            cls._global_finished_listeners.remove(callback)
+
     def __init__(self,provider=None,parent=None):
         super().__init__(parent); self.provider=provider or OpenAICompatibleProvider(); self._request_id=None; self._cancel=None; self._worker=None; self._workers=set()
         # 退出时先取消并短等在飞 worker，避免 QThread 运行中被销毁导致崩溃
@@ -87,7 +101,11 @@ class ChatService(QObject):
     def _delta(self,rid,text):
         if self._current(rid): self.delta.emit(rid,text)
     def _finished(self,rid,text):
-        if self._current(rid): self.finished.emit(rid,text)
+        if self._current(rid):
+            self.finished.emit(rid,text)
+            for cb in list(type(self)._global_finished_listeners):
+                try: cb(text)
+                except Exception: pass
     def _error(self,rid,text):
         if self._current(rid): self.error.emit(rid,text)
     def _stopped(self,rid):

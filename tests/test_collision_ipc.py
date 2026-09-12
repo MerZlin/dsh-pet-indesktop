@@ -883,6 +883,68 @@ def test_coordinator_suppresses_repeated_position_only_contact():
     assert len(received) == first_count
 
 
+def test_static_member_gets_freshness_grace():
+    """FLAG_STATIC 成员（灵动岛）新鲜度宽限 3s：GUI 卡顿不该让岛掉出碰撞世界。"""
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    island = {"runtime_id": "island", "seq": 1, "x": 0.0, "y": 0.0,
+              "radius_x": 100.0, "radius_y": 22.0, "circles": [[0.0, 0.0, 22.0]],
+              "vx": 0.0, "vy": 0.0, "flags": flags | collision.FLAG_STATIC}
+    pet = {"runtime_id": "a", "seq": 1, "x": 300.0, "y": 0.0,
+           "radius_x": 30.0, "radius_y": 30.0, "circles": [[300.0, 0.0, 30.0]],
+           "vx": 0.0, "vy": 0.0, "flags": flags}
+    worker = _coordinator_with_members(island, pet)
+    # 双方状态都 2s 没更新（模拟 GUI 卡顿）：静态岛仍在，普通成员过期
+    worker.members["island"]["last_seen"] = 1.0 - 2.0
+    worker.members["a"]["last_seen"] = 1.0 - 2.0
+    fresh_ids = {m["runtime_id"] for m in worker._fresh_member_values(1.0)}
+    assert "island" in fresh_ids
+    assert "a" not in fresh_ids
+    # 超过 3s 宽限（进程真死了）→ 岛也移出
+    worker.members["island"]["last_seen"] = 1.0 - 3.5
+    fresh_ids = {m["runtime_id"] for m in worker._fresh_member_values(1.0)}
+    assert "island" not in fresh_ids
+
+
+def test_new_member_seeds_previous_frame_for_swept():
+    """FLAG_STATIC 新成员（岛）首帧用当前帧垫底：swept 退化为静态检测；
+    普通桌宠成员保持旧语义（首帧无 previous，不垫底）。"""
+    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
+        "collision_enabled": True, "collision_restitution": .82,
+        "collision_friction": .08, "collision_mass_scale": 1.0,
+        "collision_impulse_cap": 9000.0,
+    })
+    worker.server = object()
+    worker.epoch = "epoch-a"
+    worker._now = staticmethod(lambda: 1.0)
+    socket = FakeSocket()
+    worker.peers[socket] = ""
+    worker._handle_message(socket, {"type": "hello", "runtime_id": "a"})
+    flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
+    state = {
+        "type": "state", "seq": 5, "x": 0.0, "y": 0.0,
+        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
+        "vx": 0.0, "vy": 0.0,
+    }
+    # 普通桌宠成员：首帧不垫底（旧行为不变）
+    worker._handle_message(socket, {**state, "flags": flags})
+    assert "a" in worker.members
+    assert "a" not in worker.previous_members
+    # FLAG_STATIC 成员（岛）：首帧垫底，swept 退化为静态检测
+    worker._handle_message(socket, {"type": "hello", "runtime_id": "island"})
+    worker._handle_message(socket, {
+        **state, "runtime_id": "island", "flags": flags | collision.FLAG_STATIC,
+    })
+    assert "island" in worker.members
+    assert worker.previous_members["island"]["seq"] == 5
+    # 第二帧起 previous 正常滚动
+    worker._handle_message(socket, {
+        **state, "runtime_id": "island", "seq": 6, "x": 10.0,
+        "circles": [[10.0, 0.0, 30.0]], "flags": flags | collision.FLAG_STATIC,
+    })
+    assert worker.previous_members["island"]["seq"] == 5
+    assert worker.members["island"]["seq"] == 6
+
+
 def test_client_watchdog_stays_alive_while_snapshots_arrive(monkeypatch):
     worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "client", "", {})
     worker.epoch = "epoch-a"

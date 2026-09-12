@@ -40,6 +40,17 @@ FLAG_AUTO_CURSOR_HIDDEN: int = 1 << 7   # 128: 自动光标穿透/隐藏
 FLAG_PAUSED: int = 1 << 8               # 256: 暂停活动
 FLAG_COLLISION_ENABLED: int = 1 << 9    # 512: 开启碰撞
 FLAG_PREDICTED_BOUNCE: int = 1 << 10    # 1024: 客户端已预测的反弹事件
+FLAG_STATIC: int = 1 << 11              # 2048: 静态布景（无限质量但保留弹性）。
+# 注意：FLAG_STATIC 的 IPC 链路（碰撞世界静态成员注册/结算）当前**生产代码
+# 不可达**——灵动岛碰撞走本进程直连（island_collision.py），不注册进 IPC
+# 碰撞世界。该链路为「多进程实例的桌宠撞岛」预留，启用前需在岛场景实测
+# 保活/快照时序（此前的穿透问题正出自那条链路）。STATIC_RESTITUTION 由
+# 直连路径使用，不受此影响。
+
+# 静态布景（灵动岛果冻墙）专用恢复系数：>1 表示撞岛被"加速弹开"——
+# 撞到岛像撞到弹床，比撞墙更活泼；只作用于 FLAG_STATIC 参与的碰撞，
+# 鱼撞鱼/撞拖拽鱼仍走 collision_restitution 配置。
+STATIC_RESTITUTION: float = 1.3
 
 
 @dataclass
@@ -379,7 +390,17 @@ def solve_collision_impulse(
 
     e = max(0.0, min(1.0, float(restitution)))
     if state_a.is_infinite_mass or state_b.is_infinite_mass:
-        e = 0.0
+        # 无限质量体（拖拽/锁定中的肥鱼）吸能 e=0：被握着的一方不动，
+        # 撞来的也贴停不弹飞。但 FLAG_STATIC 静态布景（灵动岛果冻墙）
+        # 用 STATIC_RESTITUTION 加速弹开——撞岛像撞弹床，吸停会显得岛"不存在"。
+        static_involved = (
+            (state_a.is_infinite_mass and state_a.flags & FLAG_STATIC)
+            or (state_b.is_infinite_mass and state_b.flags & FLAG_STATIC)
+        )
+        if static_involved:
+            e = STATIC_RESTITUTION
+        else:
+            e = 0.0
     if vn >= -IMPULSE_MIN_APPROACH_SPEED:
         e = 0.0
     sum_inv_m = inv_m_a + inv_m_b
