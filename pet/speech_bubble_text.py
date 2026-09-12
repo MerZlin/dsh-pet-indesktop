@@ -3,7 +3,8 @@
 
 批6-2 从 pet/speech_bubble.py 整体迁出（纯搬移，逻辑/默认值零改动）：
 - 文本规整与行数上限（normalize_bubble_text / bubble_max_lines）；
-- 省略与分页（elide_bubble_text / paginate_bubble_text）；
+- 省略与分页（elide_bubble_text / paginate_bubble_text，换行带避头尾禁则）；
+- 分页节奏与页码（page_dwell_ms / page_dots 与 PAGE_* 常量）；
 - 定位与尺寸（bubble_rect_for_anchor / breath_bubble_size_for_anchor /
   breath_bubble_size_for_scale）；
 - 自言自语图片清单（list_self_talk_images + SELF_TALK_IMAGE_SUFFIXES）。
@@ -193,6 +194,35 @@ def paginate_bubble_text(
         # 避免末页只有零星几个字、看起来像气泡被截断。
         pages[-2], pages[-1] = pages[-2][:-1], [pages[-2][-1]] + pages[-1]
     return ["\n".join(page) for page in pages]
+
+
+# —— 分页节奏与页码 ——
+# 每页停留时长按该页字数自适应：基础停留 + 每字阅读时长，钳制在
+# [PAGE_DWELL_MIN, PAGE_DWELL_MAX]。满页 3 行约 45-60 字 → 约 3.9-4.8s；
+# 稀疏短页（孤行重平衡后的两行短页）相应缩短，不再一刀切。
+PAGE_DWELL_BASE_MS = 1200
+PAGE_DWELL_PER_CHAR_MS = 60
+PAGE_DWELL_MIN_MS = 2500
+PAGE_DWELL_MAX_MS = 8000
+
+# 翻页过渡：淡出略快、淡入略慢，视觉更顺。
+PAGE_FADE_OUT_MS = 110
+PAGE_FADE_IN_MS = 150
+
+
+def page_dwell_ms(page_text: str) -> int:
+    """一页气泡文本的建议停留时长（按字数自适应）。"""
+    chars = len(str(page_text or "").replace("\n", ""))
+    dwell = PAGE_DWELL_BASE_MS + chars * PAGE_DWELL_PER_CHAR_MS
+    return max(PAGE_DWELL_MIN_MS, min(PAGE_DWELL_MAX_MS, dwell))
+
+
+def page_dots(index: int, total: int) -> str:
+    """页码圆点：当前页实心 ●、其余空心 ○；单页返回空串。"""
+    if total <= 1:
+        return ""
+    index = max(0, min(int(index), total - 1))
+    return " ".join("●" if i == index else "○" for i in range(total))
 
 
 def bubble_rect_for_anchor(
