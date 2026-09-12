@@ -2,6 +2,7 @@
 """Speech bubble unit tests."""
 from __future__ import annotations
 
+import time
 from math import ceil
 from PySide6.QtCore import QRect, QSize
 from PySide6.QtGui import QFont, QFontMetrics
@@ -28,6 +29,20 @@ from pet.speech_bubble import (
 
 def _get_app():
     return QApplication.instance() or QApplication([])
+
+
+def _wait_until(predicate, timeout_ms: int = 5000, step_ms: int = 10) -> bool:
+    """推进事件循环直到 predicate 成立，返回是否在预算内成立。
+
+    禁止用固定 sleep 猜时序：动画的 ``finished`` 派发时刻随平台/负载漂移
+    （macOS CI 上 1ms 动画也可能晚于固定窗口），只轮询目标状态并给宽预算。
+    """
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        QTest.qWait(step_ms)
+    return bool(predicate())
 
 
 def test_bubble_max_lines_threshold():
@@ -209,10 +224,14 @@ def test_paged_bubble_flip_fades_and_updates_dots(monkeypatch):
         pages = list(bubble._pages)
         assert len(pages) > 1
         bubble._on_page_timeout()
-        QTest.qWait(150)  # 等淡出 → 换字 → 淡入走完
+        # 等淡出 → 换字 → 淡入走完：轮询目标状态 + 宽预算，不猜固定时长
+        # （macOS CI 上 1ms 动画的 finished 派发可能晚于固定窗口 -> 曾确定性红）。
+        assert _wait_until(lambda: bubble._page_fade is None), (
+            "翻页动画未在预算内收尾："
+            f"_page_fade={bubble._page_fade!r} "
+            f"opacity={bubble._label_opacity.opacity() if bubble._label_opacity else None}")
         assert bubble.label.text() == pages[1]
         assert bubble._page_indicator.text() == page_dots(1, len(pages))
-        assert bubble._page_fade is None
         assert bubble._label_opacity is not None
         assert bubble._label_opacity.opacity() == 1.0
     finally:
