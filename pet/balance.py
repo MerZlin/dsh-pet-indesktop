@@ -51,6 +51,28 @@ class BalanceError(RuntimeError):
     pass
 
 
+def _pick_balance_info(infos):
+    """多币种 balance_infos 挑选：优先有余额的一条，同分优先 CNY，全为 0 退回首条。
+
+    官方 GET /user/balance 可能返回多条记录（如 CNY + USD）且顺序不保证；
+    盲目取 infos[0] 会在 USD 排前时把 0.00 当成余额（issue #106）。
+    """
+    if not isinstance(infos, list):
+        return infos
+
+    def _rank(item):
+        if not isinstance(item, dict):
+            return (False, False)
+        try:
+            positive = float(item.get('total_balance') or 0) > 0
+        except (TypeError, ValueError):
+            positive = False
+        cny = str(item.get('currency', '')).upper() == 'CNY'
+        return (positive, cny)
+
+    return max(infos, key=_rank)
+
+
 def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0,
                   verify_ssl: bool = True) -> dict:
     """查询余额。
@@ -84,7 +106,7 @@ def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0,
     infos = data.get('balance_infos') if isinstance(data, dict) else None
     if not infos:
         raise BalanceError('响应中没有余额信息')
-    info = infos[0] if isinstance(infos, list) else infos
+    info = _pick_balance_info(infos)
     return {
         'is_available': bool(data.get('is_available', True)),
         'total': str(info.get('total_balance', '')),
