@@ -159,18 +159,23 @@ class SessionWatcher(QObject):
         return (False, 0)
 
     # ------------------------------------------------------------ 触发
-    def arm(self, reason: str = '') -> None:
+    def arm(self, reason='') -> None:
         """置位会话结束（幂等）：先关 spawn 闸门，再跑安全网回调。
 
         顺序不可颠倒：闸门先落，后续任何代码路径、任何回调异常都不可能再让
         ffmpeg 起来。回调只跑一次（重复的 WM_QUERYENDSESSION/WM_ENDSESSION 与
         aboutToQuit 都会到这里）。
+
+        ``reason`` 是日志标签：Qt 的 ``commitDataRequest`` 会把 ``QSessionManager``
+        作为信号参数传进来（实测打包产物日志里出现过对象 repr），非字符串一律
+        归一成 ``unknown``——日志是关机阶段唯一的排查入口，不能印对象地址。
         """
         if self._armed:
             return
         self._armed = True
+        label = reason if isinstance(reason, str) and reason else 'unknown'
         logger.info(
-            '收到会话结束通知（%s）：停止派生 ffmpeg 子进程并静默退出', reason or 'unknown',
+            '收到会话结束通知（%s）：停止派生 ffmpeg 子进程并静默退出', label,
         )
         self.apply_session_ending()
         if self._on_session_end is not None:

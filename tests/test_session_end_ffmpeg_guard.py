@@ -409,6 +409,25 @@ def test_qt_session_signals_arm_through_real_signal_connections(fake_app):
     assert webm_clip_mod.session_ending() is True, "正常退出也必须在 spawn 门前置位"
 
 
+def test_arm_normalises_non_string_reason_for_logs(fake_app, caplog):
+    """日志标签必须可读：Qt 的 commitDataRequest 会传 QSessionManager 对象。
+
+    回归背景：打包产物实测日志里出现「收到会话结束通知（<PySide6.QtGui.
+    QSessionManager(0x...) at 0x...>）」——关机阶段日志是唯一排查入口，
+    绝不能印对象地址。
+    """
+    import logging
+
+    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None,
+                             install_native_filter=False)
+    with caplog.at_level(logging.INFO, logger="pet.session_watcher"):
+        watcher.arm(object())  # 模拟 Qt 传进来的 QSessionManager 实例
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("会话结束通知（unknown）" in m for m in messages), messages
+    assert watcher.armed is True
+
+
 def test_install_without_qapplication_is_a_noop():
     """无 QApplication（测试收尾/无 GUI 变体）时 install 不得抛。"""
     watcher = SessionWatcher(app=None, on_session_end=lambda: None)
