@@ -84,6 +84,32 @@ def test_fetch_balance_errors(monkeypatch):
         balance.fetch_balance("https://api.deepseek.com", "sk-x")
 
 
+def test_fetch_balance_multi_currency_picks_positive_cny(monkeypatch):
+    """issue #106：balance_infos 多币种且顺序不保证时，不得盲取首条。"""
+    cny = {"currency": "CNY", "total_balance": "66.47",
+           "granted_balance": "0.00", "topped_up_balance": "66.47"}
+    usd = {"currency": "USD", "total_balance": "0.00",
+           "granted_balance": "0.00", "topped_up_balance": "0.00"}
+
+    def run_with(infos):
+        body = json.dumps({"is_available": True, "balance_infos": infos}).encode()
+        monkeypatch.setattr(balance.urllib.request, "urlopen",
+                            lambda req, *a, **k: io.BytesIO(body))
+        return balance.fetch_balance("https://api.deepseek.com", "sk-test")
+
+    # USD 排前（复现原 bug：旧实现取 infos[0] 得到 0.00）
+    assert run_with([usd, cny])["total"] == "66.47"
+    # CNY 排前不回归
+    assert run_with([cny, usd])["total"] == "66.47"
+    # 全为 0：退回首条
+    assert run_with([usd, {**cny, "total_balance": "0.00"}])["total"] == "0.00"
+    # 首条非法/非数值：仍选有余额的一条
+    bad = {"currency": "USD", "total_balance": None}
+    assert run_with([bad, cny])["total"] == "66.47"
+    # 非 list 的 balance_infos（单条 dict）原样兼容
+    assert run_with(cny)["total"] == "66.47"
+
+
 def test_balance_percent_and_event_index():
     # 余额 20 元 → 未消耗 0%；10 元 → 50%；0/负数 → 100%；非法 → None
     assert balance.balance_percent("20") == 0
