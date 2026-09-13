@@ -27,6 +27,7 @@ param(
     [string]$StagedDir = '',
     [string]$RustTarget = 'x86_64-pc-windows-msvc',
     [switch]$SkipInstall,
+    [switch]$SkipBuild,
     [switch]$SkipVerify
 )
 
@@ -36,21 +37,66 @@ Set-Location $root
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
 
+function Resolve-ReleaseDir {
+    # Cargo 工作区在仓库根时产物在 <repo>\target\...，老布局在 src-tauri\target\...
+    # （实测上游 master 是前者），两种布局 + 有无 --target 三元组都要能命中。
+    param([string]$Repo, [string]$Triple)
+    $candidates = @(
+        (Join-Path $Repo "target\$Triple\release"),
+        (Join-Path $Repo 'target\release'),
+        (Join-Path $Repo "src-tauri\target\$Triple\release"),
+        (Join-Path $Repo 'src-tauri\target\release')
+    )
+    foreach ($candidate in $candidates) {
+        if (Test-Path (Join-Path $candidate '*.exe')) { return $candidate }
+    }
+    throw "找不到构建产物目录（尝试过：$($candidates -join '；')）"
+}
+
+function Resolve-BuiltExe {
+    # cargo 包名是 bongo-cat（产物 bongo-cat.exe），Tauri 打包时才改名成
+    # 产品名 BongoCat.exe；--no-bundle 不会改名，所以这里统一收敛成
+    # BongoCat.exe（桌宠侧按这个名字查找运行时）。
+    param([string]$Dir)
+    foreach ($name in @('BongoCat.exe', 'bongo-cat.exe')) {
+        $candidate = Join-Path $Dir $name
+        if (Test-Path $candidate) { return $candidate }
+    }
+    $fallback = Get-ChildItem -LiteralPath $Dir -Filter '*.exe' -File |
+        Sort-Object Length -Descending | Select-Object -First 1
+    if (-not $fallback) { throw "构建产物目录里没有 exe: $Dir" }
+    Write-Host "[bongo] 未找到预期 exe 名，改用 $($fallback.Name)" -ForegroundColor Yellow
+    return $fallback.FullName
+}
+
 function Copy-RuntimePayload {
-    param([string]$From, [string]$To)
-    if (-not (Test-Path (Join-Path $From 'BongoCat.exe'))) {
-        throw "运行时缺 BongoCat.exe: $From"
-    }
-    if (-not (Test-Path (Join-Path $From 'assets\models\standard\cat.model3.json'))) {
-        throw "运行时缺 assets\models\standard（Live2D 预置模型）: $From"
-    }
+    param([string]$From, [string]$To, [string]$AssetsSource = '')
+    $exe = Resolve-BuiltExe $From
     if (Test-Path $To) { Remove-Item -LiteralPath $To -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $To | Out-Null
     Copy-Item -Path (Join-Path $From '*') -Destination $To -Recurse -Force
+    $targetExe = Join-Path $To 'BongoCat.exe'
+    if ($exe -ne $targetExe) { Copy-Item -LiteralPath $exe -Destination $targetExe -Force }
+    # tauri --no-bundle 不保证把 bundle.resources 复制到 exe 同级目录（实测
+    # 上游是「有时在、有时不在」），缺了就从 src-tauri\assets 按相对路径补，
+    # 保证 resolveResource('assets/models') 能命中。
+    $modelRel = 'assets\models\standard\cat.model3.json'
+    if (-not (Test-Path (Join-Path $To $modelRel))) {
+        if (-not $AssetsSource -or -not (Test-Path (Join-Path $AssetsSource 'models'))) {
+            throw "运行时缺 assets\models（Live2D 预置模型）：$To（来源 $From，assets 源 '$AssetsSource'）"
+        }
+        Write-Host "[bongo] 产物未带资源，从 $AssetsSource 补齐 assets\" -ForegroundColor Yellow
+        Copy-Item -Path (Join-Path $AssetsSource '*') -Destination (Join-Path $To 'assets') -Recurse -Force
+    }
+    if (-not (Test-Path $targetExe)) { throw "运行时缺 BongoCat.exe: $To" }
+    if (-not (Test-Path (Join-Path $To $modelRel))) {
+        throw "运行时缺 assets\models\standard（Live2D 预置模型）: $To"
+    }
     Write-Host "[bongo] 运行时已就绪: $To" -ForegroundColor Green
 }
 
-$output = Join-Path $root $OutputDir
+# OutputDir 允许绝对路径（本地联调/换盘打包）；相对路径按仓库根解析。
+$output = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $root $OutputDir }
 
 if ($StagedDir) {
     Write-Host "[bongo] 直接采用现成运行时: $StagedDir" -ForegroundColor Cyan
@@ -64,21 +110,22 @@ if ($StagedDir) {
     Push-Location $repo
     try {
         if (-not $SkipInstall) {
-            Write-Host "[bongo] pnpm install（含 tauri CLI）..." -ForegroundColor Cyan
-            pnpm install --frozen-lockfile
-            if ($LASTEXITCODE -ne 0) { throw "pnpm install 失败" }
+        Write-Host "[bongo] pnpm install（含 tauri CLI）..." -ForegroundColor Cyan
+        pnpm install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { throw "pnpm install 失败" }
         }
-        Write-Host "[bongo] pnpm tauri build --no-bundle（目标 $RustTarget）..." -ForegroundColor Cyan
-        pnpm tauri build --no-bundle --target $RustTarget
-        if ($LASTEXITCODE -ne 0) { throw "tauri build 失败" }
+        if ($SkipBuild) {
+            Write-Host "[bongo] -SkipBuild：复用已有构建产物" -ForegroundColor Yellow
+        } else {
+            Write-Host "[bongo] pnpm tauri build --no-bundle（目标 $RustTarget）..." -ForegroundColor Cyan
+            pnpm tauri build --no-bundle --target $RustTarget
+            if ($LASTEXITCODE -ne 0) { throw "tauri build 失败" }
+        }
     } finally {
         Pop-Location
     }
-    # Tauri 构建产物布局：target\<triple>\release\ 下为 exe，
-    # bundle 资源按 tauri.conf.json 的 resources 相对路径一并复制到该目录。
-    $release = Join-Path $repo "src-tauri\target\$RustTarget\release"
-    if (-not (Test-Path $release)) { $release = Join-Path $repo 'src-tauri\target\release' }
-    Copy-RuntimePayload -From $release -To $output
+    $release = Resolve-ReleaseDir -Repo $repo -Triple $RustTarget
+    Copy-RuntimePayload -From $release -To $output -AssetsSource (Join-Path $repo 'src-tauri\assets')
 }
 
 if (-not $SkipVerify) {
