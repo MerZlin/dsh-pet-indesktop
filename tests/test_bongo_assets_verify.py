@@ -165,3 +165,52 @@ def test_json_report_shape(tmp_path, capsys):
 
     assert payload["errors"] >= 1
     assert "standard" in payload["models"]
+
+
+# ---------------------------------------------- 上游预置素材的真实约定（实测）
+
+
+def test_upstream_texture_is_1024x512_for_1024_directory(tmp_path):
+    """上游三套预置模型的贴图实际是 1024×512：目录名后缀 = 宽度，不是正方形边长。"""
+    verifier = _load_verifier()
+    model_dir = tmp_path / "standard"
+    _write_model3(model_dir)
+    _png(model_dir / "demomodel.1024" / "texture_00.png", (1024, 512))
+
+    report, _ = verifier.verify(tmp_path)
+
+    assert "texture-size-mismatch" not in {item.code for item in report.findings()}
+    assert report.errors == []
+
+
+def test_standard_model_without_right_keys_is_only_a_warning(tmp_path):
+    """standard 预置模型本来就没有 resources/right-keys：缺目录只提示，不是错误。"""
+    verifier = _load_verifier()
+    model_dir = tmp_path / "standard"
+    _write_model3(model_dir)
+    _png(model_dir / "demomodel.1024" / "texture_00.png", (1024, 512))
+    _write_keys(model_dir, keys=("KeyA", "Space"))
+    (model_dir / "resources" / "right-keys" / "UpArrow.png").unlink()
+    (model_dir / "resources" / "right-keys").rmdir()
+
+    report, _ = verifier.verify(tmp_path)
+
+    assert report.errors == []
+    assert "missing-key-group" in {item.code for item in report.warnings}
+    assert verifier.main(["--dir", str(model_dir)]) == 0
+
+
+def test_gamepad_model_is_not_checked_against_keyboard_key_names(tmp_path):
+    verifier = _load_verifier()
+    model_dir = tmp_path / "gamepad"
+    _write_model3(model_dir)
+    _png(model_dir / "demomodel.1024" / "texture_00.png", (1024, 512))
+    _png(model_dir / "resources" / "left-keys" / "DPadUp.png", (32, 32))
+    _png(model_dir / "resources" / "left-keys" / "LeftTrigger.png", (32, 32))
+    _png(model_dir / "resources" / "right-keys" / "South.png", (32, 32))
+
+    report, _ = verifier.verify(tmp_path)
+    messages = " ".join(item.message for item in report.warnings)
+
+    assert report.errors == []
+    assert "KeyA" not in messages  # 不拿键盘键名去套手柄模型

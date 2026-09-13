@@ -11,10 +11,12 @@
 
 * 模型目录含一个 `*.model3.json`，其 `FileReferences` 引用的 moc3 / 贴图 /
   表情 / 动作文件都必须存在；
-* 贴图放在 `<name>.<尺寸>/texture_XX.png`（原版为 `.1024` = 1024×1024）；
+* 贴图放在 `<name>.<宽>/texture_XX.png`：目录名后缀是**贴图宽度**（原版三套模型
+  都是 `.1024` = 宽 1024、高 512），同一模型的贴图必须同尺寸；
 * `resources/background.png`、`resources/cover.png` 为可选的窗口背景/封面；
 * `resources/left-keys|right-keys/<Key>.png` 是按键覆盖图：同一目录内必须
-  同尺寸，缺件只警告（BongoCat 对缺键就是不显示覆盖图），`--strict` 时升级为错误。
+  同尺寸；缺目录/缺键只警告（BongoCat 对缺键就是不显示覆盖图，且 `standard`
+  模型本身就没有 `right-keys`），`--strict` 时升级为错误。
 
 用法::
 
@@ -41,15 +43,25 @@ except Exception:  # pragma: no cover - 仅在极端环境触发
 MODEL_NAMES = ("standard", "keyboard", "gamepad")
 TEXTURE_SIZE_DIR_PREFIX = "."
 
-# 原版 standard/keyboard 预置模型的键覆盖图清单（缺件按警告处理）。
-EXPECTED_LEFT_KEYS = (
+# 原版预置模型的键覆盖图清单（缺件按警告处理）。键名来源：上游 keyboard 预置模型；
+# gamepad 模型用的是手柄键名，未知模型不做键名覆盖检查。
+KEYBOARD_LEFT_KEYS = (
     "Alt", "AltGr", "BackQuote", "Backspace", "CapsLock", "Control", "ControlLeft",
     "ControlRight", "Delete", "Escape", "Fn",
     *[f"Key{letter}" for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
     "Meta", *[f"Num{digit}" for digit in "0123456789"],
     "Return", "Shift", "ShiftLeft", "ShiftRight", "Slash", "Space", "Tab",
 )
-EXPECTED_RIGHT_KEYS = ("DownArrow", "LeftArrow", "RightArrow", "UpArrow")
+KEYBOARD_RIGHT_KEYS = ("DownArrow", "LeftArrow", "RightArrow", "UpArrow")
+GAMEPAD_LEFT_KEYS = ("DPadDown", "DPadLeft", "DPadRight", "DPadUp", "LeftTrigger", "LeftTrigger2")
+GAMEPAD_RIGHT_KEYS = ("East", "North", "RightTrigger", "RightTrigger2", "South", "West")
+
+# model 目录名 → (left-keys 期望, right-keys 期望)；None = 不做键名覆盖检查。
+EXPECTED_KEYS_BY_MODEL: dict[str, tuple[tuple[str, ...] | None, tuple[str, ...] | None]] = {
+    "standard": (KEYBOARD_LEFT_KEYS, None),
+    "keyboard": (KEYBOARD_LEFT_KEYS, KEYBOARD_RIGHT_KEYS),
+    "gamepad": (GAMEPAD_LEFT_KEYS, GAMEPAD_RIGHT_KEYS),
+}
 
 ERROR = "error"
 WARN = "warn"
@@ -106,13 +118,13 @@ def _has_alpha(path: Path) -> bool:
         return True
 
 
-def _declared_texture_size(directory_name: str) -> int | None:
-    """从贴图目录名（如 ``demomodel.1024``）解析约定的正方形边长。"""
+def _declared_texture_width(directory_name: str) -> int | None:
+    """从贴图目录名（如 ``demomodel.1024``）解析约定的贴图宽度。"""
     _, dot, suffix = directory_name.rpartition(TEXTURE_SIZE_DIR_PREFIX)
     if not dot or not suffix.isdigit():
         return None
-    size = int(suffix)
-    return size if 64 <= size <= 8192 else None
+    width = int(suffix)
+    return width if 64 <= width <= 8192 else None
 
 
 def discover_model_dirs(root: Path) -> list[Path]:
@@ -193,6 +205,7 @@ def _check_textures(model: str, model_dir: Path, references: dict, report: Repor
     if not isinstance(textures, list) or not textures:
         report.add(model, ERROR, "no-textures", "model3.json 未声明贴图", model_dir)
         return
+    sizes: set[tuple[int, int]] = set()
     for item in textures:
         if not isinstance(item, str):
             continue
@@ -200,18 +213,25 @@ def _check_textures(model: str, model_dir: Path, references: dict, report: Repor
         if not path.is_file():
             continue  # missing-reference 已报告
         size = _image_size(path)
-        expected = _declared_texture_size(path.parent.name)
+        expected_width = _declared_texture_width(path.parent.name)
         if size is None:
             report.add(model, WARN, "unreadable-texture", f"贴图无法读取：{item}", path)
             continue
-        if expected is not None and size != (expected, expected):
+        sizes.add(size)
+        if expected_width is not None and size[0] != expected_width:
             report.add(
                 model, ERROR, "texture-size-mismatch",
-                f"贴图 {item} 为 {size[0]}×{size[1]}，目录名约定 {expected}×{expected}",
+                f"贴图 {item} 宽 {size[0]}，目录名约定宽度 {expected_width}",
                 path,
             )
         if not _has_alpha(path):
             report.add(model, WARN, "texture-no-alpha", f"贴图 {item} 无透明通道", path)
+    if len(sizes) > 1:
+        report.add(
+            model, WARN, "texture-size-inconsistent",
+            f"同一模型的贴图尺寸不一致：{sorted(sizes)}（重绘替换时容易错位）",
+            model_dir,
+        )
 
 
 def _check_resources(model: str, model_dir: Path, report: Report) -> None:
@@ -223,14 +243,16 @@ def _check_resources(model: str, model_dir: Path, report: Report) -> None:
             continue
         if not _has_alpha(path):
             report.add(model, WARN, "resource-no-alpha", f"{name} 无透明通道", path)
-    for group, expected in (("left-keys", EXPECTED_LEFT_KEYS), ("right-keys", EXPECTED_RIGHT_KEYS)):
+    expected_left, expected_right = EXPECTED_KEYS_BY_MODEL.get(model, (None, None))
+    for group, expected in (("left-keys", expected_left), ("right-keys", expected_right)):
         _check_key_group(model, resources / group, group, expected, report)
 
 
 def _check_key_group(
-    model: str, group_dir: Path, group: str, expected: tuple[str, ...], report: Report
+    model: str, group_dir: Path, group: str, expected: tuple[str, ...] | None, report: Report
 ) -> None:
     if not group_dir.is_dir():
+        # `standard` 预置模型本身就没有 right-keys：缺目录只作提示，不算问题。
         report.add(
             model, WARN, "missing-key-group",
             f"缺少按键覆盖图目录 resources/{group}", group_dir,
@@ -271,6 +293,8 @@ def _check_key_group(
             model, ERROR, "key-overlay-size-inconsistent",
             f"resources/{group} 内覆盖图尺寸不一致：{sorted(sizes)}", group_dir,
         )
+    if expected is None:
+        return
     missing = [key for key in expected if key not in names]
     if missing:
         report.add(

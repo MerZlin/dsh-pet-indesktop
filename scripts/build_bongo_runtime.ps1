@@ -92,6 +92,14 @@ function Copy-RuntimePayload {
     if (-not (Test-Path (Join-Path $To $modelRel))) {
         throw "运行时缺 assets\models\standard（Live2D 预置模型）: $To"
     }
+    # 资源确实复制过来了（不能只有一个空的 assets 目录）
+    $leftKeys = Join-Path $To 'assets\models\standard\resources\left-keys'
+    if (-not (Test-Path $leftKeys) -or -not (Get-ChildItem $leftKeys -Filter '*.png' -File)) {
+        throw "运行时缺按键覆盖图 resources\left-keys\*.png: $To"
+    }
+    if (-not (Test-Path (Join-Path $To 'assets\models\standard\demomodel.moc3'))) {
+        throw "运行时缺 Live2D 模型数据 demomodel.moc3: $To"
+    }
     Write-Host "[bongo] 运行时已就绪: $To" -ForegroundColor Green
 }
 
@@ -130,7 +138,9 @@ if ($StagedDir) {
 
 if (-not $SkipVerify) {
     Write-Host "[bongo] 素材自检..." -ForegroundColor Cyan
-    python scripts\verify_bongo_assets.py --runtime $output --strict
+    # 不用 --strict：缺件（缺某个键的覆盖图、standard 没有 right-keys）是上游
+    # 预置素材的正常状态；这里只把结构/尺寸/PNG 类错误当作门禁。
+    python scripts\verify_bongo_assets.py --runtime $output
     if ($LASTEXITCODE -ne 0) { throw "键鼠跟随素材自检失败" }
 }
 

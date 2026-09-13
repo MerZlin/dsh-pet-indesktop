@@ -27,7 +27,7 @@
 | --- | --- | --- | --- |
 | `cat.model3.json` | 是 | JSON | Live2D 模型清单；替换贴图时**不要**改文件名与引用 |
 | `demomodel.moc3` | 是 | 二进制 | Cubism 模型数据；只有重做绑定才会变 |
-| `demomodel.1024/texture_00.png` `texture_01.png` `texture_02.png` | 是 | 各 1024×1024，RGBA | 模型贴图。目录名里的 `.1024` 就是边长约定；重绘必须保持尺寸与部件布局 |
+| `demomodel.1024/texture_00.png` `texture_01.png` `texture_02.png` | 是 | 各 **1024×512**，RGBA | 模型贴图。目录名里的 `.1024` 是**宽度**约定（上游三套预置模型实测均为宽 1024、高 512）；重绘必须保持尺寸与部件布局 |
 | `demomodel.cdi3.json`、`live2d_expression*.exp3.json`、`exp_*.exp3.json` | 是 | JSON | 表情/显示信息；一般不动 |
 | `live2d_motion1.motion3.json`、`live2d_motion2.motion3.json`（+ `live2d_motion1.flac`） | 是 | JSON/FLAC | 动作；一般不动 |
 | `resources/background.png` | 否 | PNG，建议带透明通道 | 桌宠窗口背景图；缺省则无背景 |
@@ -40,7 +40,10 @@
 - `left-keys`：`Alt` `AltGr` `BackQuote` `Backspace` `CapsLock` `Control` `ControlLeft`
   `ControlRight` `Delete` `Escape` `Fn` `KeyA`…`KeyZ` `Meta` `Num0`…`Num9` `Return`
   `Shift` `ShiftLeft` `ShiftRight` `Slash` `Space` `Tab`
-- `right-keys`：`DownArrow` `LeftArrow` `RightArrow` `UpArrow`
+- `right-keys`（键盘模型）：`DownArrow` `LeftArrow` `RightArrow` `UpArrow`
+  —— **`standard` 预置模型没有这个目录**，属正常状态（`--strict` 才会把它报成失败）。
+- 手柄模型（`gamepad`）另一套键名：左 `DPadUp` `DPadDown` `DPadLeft` `DPadRight`
+  `LeftTrigger` `LeftTrigger2`；右 `North` `South` `East` `West` `RightTrigger` `RightTrigger2`。
 
 ## 3. 三种替换路线（按投入从低到高）
 
@@ -65,7 +68,7 @@ GPT 一次生成 50 多张逐键图并不现实，可行做法是：
 ### 路线 C：重绘模型贴图（换角色形象，需要耐心）
 
 把 `demomodel.1024/texture_00..02.png` 当作画布做 **img2img 重绘**（提示词 P4）：
-保持 1024×1024、部件位置与透明区域不变，只改画风/配色/花纹。**不要**移动部件位置，
+保持 1024×512（宽×高）、部件位置与透明区域不变，只改画风/配色/花纹。**不要**移动部件位置，
 否则网格 UV 会错位、模型会撕裂。重绘后逐张替换并跑校验脚本。
 
 ### 路线 D（进阶）：完整自制模型
@@ -148,7 +151,7 @@ GPT 一次生成 50 多张逐键图并不现实，可行做法是：
 
 ```text
 以我提供的这张 Live2D 贴图为底图做重绘，严格保持：
-- 画布尺寸 1024×1024；
+- 画布尺寸 1024×512（宽×高，与输入图完全一致）；
 - 每个部件的形状、位置、朝向、面积与透明区域完全不变（不要移动、缩放、增删部件）；
 - 部件之间的留白与接缝位置保持不变。
 
@@ -182,5 +185,9 @@ python scripts\verify_bongo_assets.py `
 报告要点：`texture-size-mismatch`（贴图尺寸与目录名约定不符）、
 `missing-reference`（model3.json 引用的文件缺失）、`key-overlay-size-inconsistent`
 （同目录覆盖图尺寸不一致）、`missing-key-overlay`（缺键，严格模式下失败）。
+
+`--strict` 只用于「你自己要求素材必须齐全」的场景；随包内置素材的 CI 校验用默认
+模式（缺件是上游预置素材的正常状态：例如 `standard` 没有 `right-keys`），
+只把结构、尺寸、PNG 类错误当门禁。
 
 替换完退出并重新进入一次键鼠跟随模式（或重启 `BongoCat.exe`）即可生效。
