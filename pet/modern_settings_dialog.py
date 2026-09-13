@@ -306,11 +306,47 @@ class ModernSettingsDialog(QDialog):
         ):
             self.island_style_select.addItem(label, value)
         self.island_style_select.setCurrentData(str(island_cfg.get("style") or "dark"))
+        self.island_opacity_spin = BrowserDoubleSpinBox(self)
+        self.island_opacity_spin.setRange(0.4, 1.0)
+        self.island_opacity_spin.setSingleStep(0.05)
+        self.island_opacity_spin.setDecimals(2)
+        try:
+            _island_opacity = float(island_cfg.get("opacity", 1.0))
+        except (TypeError, ValueError):
+            _island_opacity = 1.0
+        self.island_opacity_spin.setValue(max(0.4, min(1.0, _island_opacity)))
+        self.island_accent_select = ModernSelect(self, width=160)
+        for label, value in (
+            ("海洋蓝", "blue"),
+            ("草绿", "green"),
+            ("葡萄紫", "purple"),
+            ("樱花粉", "pink"),
+            ("落日橙", "orange"),
+        ):
+            self.island_accent_select.addItem(label, value)
+        self.island_accent_select.setCurrentData(str(island_cfg.get("accent") or "blue"))
         self.island_icon_select = ModernSelect(self, width=160)
         for emoji in ("🐳", "🐟", "🐙", "🦭", "🐧", "🐱", "🐶", "🌟", "⚡", "❤️"):
             self.island_icon_select.addItem(emoji, emoji)
         self.island_icon_select.setCurrentData(str(island_cfg.get("icon") or "🐳"))
         self.island_custom_text_edit = _line_edit(str(island_cfg.get("custom_text") or ""), width=220)
+        self.island_click_action_select = ModernSelect(self, width=160)
+        for label, value in (
+            ("展开快捷卡片", "expand"),
+            ("切换桌宠显隐", "toggle_pet"),
+        ):
+            self.island_click_action_select.addItem(label, value)
+        self.island_click_action_select.setCurrentData(
+            str(island_cfg.get("click_action") or "expand"))
+        self.island_event_effects_check = ToggleSwitch(self)
+        self.island_event_effects_check.setChecked(
+            bool(island_cfg.get("event_effects", True)))
+        self.island_edge_dock_check = ToggleSwitch(self)
+        self.island_edge_dock_check.setChecked(
+            bool(island_cfg.get("edge_dock", True)))
+        self.island_collision_check = ToggleSwitch(self)
+        self.island_collision_check.setChecked(
+            bool(island_cfg.get("collision_enabled", True)))
 
         if include_ai:
             # 延迟 import：no-chat 打包变体 excludes=['pet.chat']，顶层导入会在
@@ -372,9 +408,15 @@ class ModernSettingsDialog(QDialog):
             SettingRow("dynamic_island_info", "显示信息槽", "显示时间/余额/自定义短文本等信息。", self.island_info_check),
             SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
             SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
-            SettingRow("dynamic_island_style", "背景风格", "黑色 / 白色 / 苹果式玻璃质感。", self.island_style_select),
+            SettingRow("dynamic_island_style", "背景风格", "黑色 / 白色 / 苹果式玻璃质感；配合下方不透明度可调出半透明质感（纯自绘，低占用）。", self.island_style_select),
+            SettingRow("dynamic_island_opacity", "背景不透明度", "越低越透（0.4~1.0）；配合深色底在低占用下做出半透明质感。", self.island_opacity_spin),
+            SettingRow("dynamic_island_accent", "主题色", "图标底圈、事件闪光、停靠描边共用的点缀色。", self.island_accent_select),
             SettingRow("dynamic_island_icon_value", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
             SettingRow("dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True),
+            SettingRow("dynamic_island_click_action", "单击行为", "单击胶囊：展开快捷卡片（余额/最近消息/快捷按钮）或直接切换桌宠显隐。", self.island_click_action_select),
+            SettingRow("dynamic_island_event_effects", "事件动效", "AI 回复到达、余额刷新、峰谷切换时果冻弹跳提示；dsh 工作时状态灯变蓝。静止时零额外开销。", self.island_event_effects_check),
+            SettingRow("dynamic_island_edge_dock", "靠边半隐藏", "拖到屏幕任意边缘（上下左右）收成细条，鼠标靠近自动滑出；顶部被占时可停靠侧边。", self.island_edge_dock_check),
+            SettingRow("dynamic_island_collision", "果冻墙（参与碰撞）", "岛注册为静态碰撞体：肥鱼被甩到岛上会弹开，岛原地果冻摆动。岛的位置不会被撞动。", self.island_collision_check),
         ], island_content))
         island_layout.addStretch(1)
         self._add_page("灵动岛", "island", self._page_shell("灵动岛", island_content))
@@ -1643,7 +1685,15 @@ class ModernSettingsDialog(QDialog):
             "custom_text": self.island_custom_text_edit.text().strip(),
             "show_status": self.island_status_check.isChecked(),
             "style": str(self.island_style_select.currentData() or "dark"),
+            "opacity": float(self.island_opacity_spin.value()),
+            "accent": str(self.island_accent_select.currentData() or "blue"),
             "icon": str(self.island_icon_select.currentData() or "🐳"),
+            "click_action": str(self.island_click_action_select.currentData() or "expand"),
+            "event_effects": self.island_event_effects_check.isChecked(),
+            "edge_dock": self.island_edge_dock_check.isChecked(),
+            "collision_enabled": self.island_collision_check.isChecked(),
+            # 拖拽落点写入的停靠边与位置：设置页不回写，原样保留。
+            "dock_edge": existing_island.get("dock_edge", "none"),
             "x": existing_island.get("x"),
             "y": existing_island.get("y"),
         })

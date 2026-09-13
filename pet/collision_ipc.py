@@ -31,7 +31,10 @@ RUNTIME_ID_MAX_LENGTH = 128
 CHARACTER_MAX_LENGTH = 512
 MAX_COLLISION_CIRCLES = 3
 ACTIVE_MEMBER_MAX_AGE = 1.2
-_KNOWN_FLAGS_MASK = (1 << 11) - 1
+# 静态布景（灵动岛）的新鲜度宽限：位置不变、保活在 GUI 线程，宽限内
+# 最多成为 3s 的"残影墙"（进程崩溃场景），远小于甩丢一只鱼的体感代价。
+STATIC_MEMBER_MAX_AGE = 3.0
+_KNOWN_FLAGS_MASK = (1 << 12) - 1  # 含 FLAG_STATIC(2048)：静态布景果冻墙
 
 
 def _bounded_text(value: Any, max_bytes: int) -> str:
@@ -428,6 +431,9 @@ class _CollisionWorker(QObject):
         is_new = self.runtime_id not in self.members
         if not is_new:
             self.previous_members[self.runtime_id] = dict(self.members[self.runtime_id])
+        elif int(member.get("flags", 0)) & collision.FLAG_STATIC:
+            # 同另两条路径：静态布景（岛）首帧用当前帧垫底，保住 swept 覆盖
+            self.previous_members[self.runtime_id] = dict(member)
         self.members[self.runtime_id] = member
         self._membership_dirty = self._membership_dirty or is_new
 
@@ -451,11 +457,21 @@ class _CollisionWorker(QObject):
         return {k: v for k, v in member.items() if k != "last_seen"}
 
     def _fresh_member_values(self, now: float) -> list[dict[str, Any]]:
-        """Return members inside the shared solver/publication freshness window."""
-        return [
-            value for value in self.members.values()
-            if now - float(value.get("last_seen", now)) <= ACTIVE_MEMBER_MAX_AGE
-        ]
+        """Return members inside the shared solver/publication freshness window.
+
+        FLAG_STATIC 成员（灵动岛）放宽到 STATIC_MEMBER_MAX_AGE：它的位置只随
+        用户拖拽变化，保活定时器又跑在繁忙的 GUI 线程——一次事件循环卡顿
+        不该让岛瞬间从碰撞世界消失（"甩上去直接穿过"的根因）。
+        """
+        fresh = []
+        for value in self.members.values():
+            age = now - float(value.get("last_seen", now))
+            max_age = STATIC_MEMBER_MAX_AGE \
+                if int(value.get("flags", 0)) & collision.FLAG_STATIC \
+                else ACTIVE_MEMBER_MAX_AGE
+            if age <= max_age:
+                fresh.append(value)
+        return fresh
 
     def _send(self, socket, message: collision_codec.WireMessage) -> None:
         try:
@@ -552,6 +568,11 @@ class _CollisionWorker(QObject):
                 is_new = runtime_id not in self.members
                 if not is_new:
                     self.previous_members[runtime_id] = dict(self.members[runtime_id])
+                elif int(member.get("flags", 0)) & collision.FLAG_STATIC:
+                    # 静态布景（岛）首帧没有"上一帧"：用当前帧垫底，swept
+                    # 退化为静态检测——否则岛（重）加入的头两帧内高速甩来的
+                    # 桌宠会隧道穿透（预留链路，见 collision.FLAG_STATIC 注释）
+                    self.previous_members[runtime_id] = dict(member)
                 self.members[runtime_id] = member
                 self._membership_dirty = self._membership_dirty or is_new
             elif kind == "leave":
@@ -686,6 +707,9 @@ class _CollisionWorker(QObject):
             is_new = self.runtime_id not in self.members
             if not is_new:
                 self.previous_members[self.runtime_id] = dict(self.members[self.runtime_id])
+            elif int(member.get("flags", 0)) & collision.FLAG_STATIC:
+                # 同 peer 侧：静态布景（岛）首帧用当前帧垫底，保住 swept 覆盖
+                self.previous_members[self.runtime_id] = dict(member)
             self.members[self.runtime_id] = member
             self._membership_dirty = self._membership_dirty or is_new
             if collision_debug.ENABLED:
@@ -812,8 +836,11 @@ class _CollisionWorker(QObject):
                 keys = ("runtime_id", "x", "y", "radius_x", "radius_y", "vx", "vy", "mass",
                          "is_infinite_mass", "flags", "instance_id", "character", "scale", "w", "h", "circles")
                 values = {key: state.get(key, defaults.get(key, 0.0)) for key in keys}
-                # 无限质量只认"被拖拽中"（用户手里握着）；lock_position 只是防拖拽，仍可被撞飞（碰碰车/台球需要）
-                values["is_infinite_mass"] = bool(int(values["flags"]) & collision.FLAG_DRAGGING)
+                # 无限质量认"被拖拽中"（用户手里握着）与 FLAG_STATIC 静态布景
+                # （灵动岛果冻墙）；lock_position 只是防拖拽，仍可被撞飞（碰碰车/台球需要）。
+                # 两者的弹性差异由 solve_collision_impulse 按 FLAG_STATIC 区分。
+                values["is_infinite_mass"] = bool(
+                    int(values["flags"]) & (collision.FLAG_DRAGGING | collision.FLAG_STATIC))
                 values["mass"] = collision.calculate_mass(
                     values["radius_x"], values["radius_y"],
                     scale=float(values.get("scale", 0.72) or 0.72),
@@ -845,7 +872,7 @@ class _CollisionWorker(QObject):
             if bounce_vx is None or bounce_vy is None:
                 continue
             pred_flags = int(snap.get("flags", 0))
-            pred_is_inf = bool(pred_flags & collision.FLAG_DRAGGING)
+            pred_is_inf = bool(pred_flags & (collision.FLAG_DRAGGING | collision.FLAG_STATIC))
             pred_rx = float(snap.get("radius_x", 0.0))
             pred_ry = float(snap.get("radius_y", 0.0))
             pred_x = float(snap.get("bounce_x", snap.get("x", 0.0)))

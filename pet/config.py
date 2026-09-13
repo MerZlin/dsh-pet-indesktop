@@ -486,7 +486,14 @@ def _default_dynamic_island_data() -> dict:
         "custom_text": "",
         "show_status": True,
         "style": "dark",           # dark / light / glass
+        "opacity": 1.0,            # 背景不透明度 0.4~1.0
+        "accent": "blue",          # 主题色：blue / green / purple / pink / orange
         "icon": "🐳",
+        "click_action": "expand",  # expand（展开卡片）/ toggle_pet（切换显隐，旧行为）
+        "event_effects": True,     # 事件动效：AI 回复/余额刷新/峰谷切换弹跳
+        "edge_dock": True,         # 拖到屏幕边缘收成细条，鼠标靠近滑出
+        "dock_edge": "none",       # none / top / bottom / left / right（拖拽落点写入）
+        "collision_enabled": True,  # 果冻墙：岛注册为静态碰撞体，肥鱼撞到会弹开
         "x": None,
         "y": None,
     }
@@ -508,7 +515,24 @@ def _clean_dynamic_island_data(value) -> dict:
     result["custom_text"] = str(result.get("custom_text") or "")[:80]
     style = str(result.get("style") or "dark").strip()
     result["style"] = style if style in {"dark", "light", "glass"} else "dark"
+    try:
+        result["opacity"] = max(0.4, min(1.0, float(result.get("opacity", 1.0))))
+    except (TypeError, ValueError):
+        result["opacity"] = 1.0
+    accent = str(result.get("accent") or "blue").strip()
+    result["accent"] = accent if accent in {"blue", "green", "purple", "pink", "orange"} else "blue"
     result["icon"] = str(result.get("icon") or "🐳").strip()[:8] or "🐳"
+    click_action = str(result.get("click_action") or "expand").strip()
+    result["click_action"] = click_action if click_action in {"expand", "toggle_pet"} else "expand"
+    # 布尔键必须用 _bool_or_default：bool("false") is True，字符串/None
+    # 会被误翻（同文件既有规则）；int 0/1 是旧配置的合法布尔编码，先归一
+    for _key in ("event_effects", "edge_dock", "collision_enabled"):
+        _v = result[_key]
+        if isinstance(_v, int) and not isinstance(_v, bool):
+            _v = bool(_v)
+        result[_key] = _bool_or_default(_v, defaults[_key])
+    edge = str(result.get("dock_edge") or "none").strip()
+    result["dock_edge"] = edge if edge in {"none", "top", "bottom", "left", "right"} else "none"
     # 至少保留一个组件：全部关闭时强制显示信息槽，避免空胶囊。
     if not (result["show_icon"] or result["show_name"] or result["show_info"] or result["show_status"]):
         result["show_info"] = True
