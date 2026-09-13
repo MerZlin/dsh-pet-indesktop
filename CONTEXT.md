@@ -101,3 +101,12 @@ Windows session fails DLL initialization (0xc0000142) and blocks shutdown.
 The freeze is one-way: a process that survives a cancelled shutdown stays
 frozen rather than resuming animation.
 _Avoid_: Shutdown option, ffmpeg kill switch
+
+**Alternate Mode**:
+The desktop-pet experience that is not the classic PySide6 pet but is still
+reached only through the pet's own mode switch. An alternate mode owns its own
+runtime, assets, and lifecycle; while it runs, classic pet windows are hidden
+and deeply paused (no decode, no timers, no detectors), and the alternate
+runtime's process exit is the single restoration signal. Modes never share
+state beyond the switch itself.
+_Avoid_: Second app, plugin, chibi mode

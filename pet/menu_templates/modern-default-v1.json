@@ -32,6 +32,17 @@
         {"type": "action", "id": "edge_probe", "visible": true}
       ]
     },
+    {
+      "type": "submenu",
+      "id": "mode_switch",
+      "label": "模式切换",
+      "visible": true,
+      "section": "pet",
+      "children": [
+        {"type": "action", "id": "mode_classic", "visible": true},
+        {"type": "action", "id": "mode_key_mouse", "visible": true}
+      ]
+    },
     {"type": "action", "id": "quick_launch", "visible": true, "section": "pet"},
     {"type": "separator", "id": "default.separator-pet", "visible": true},
     {

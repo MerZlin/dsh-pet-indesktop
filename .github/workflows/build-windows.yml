@@ -44,6 +44,42 @@ jobs:
           $langDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\Languages'
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl' -OutFile (Join-Path $langDir 'ChineseSimplified.isl')
 
+      # 键鼠跟随模式的运行时（BongoCat）——我们 fork 的 MerZlin/BongoCat，
+      # dsh-pet 分支只含最小改动（加「切回原桌宠」菜单项、隔离 identifier、
+      # 禁用自动更新、自启默认关）。上游同步策略见 docs/KEY-MOUSE-MODE-2026-09-13.md。
+      - name: Checkout BongoCat fork (key-mouse mode runtime)
+        uses: actions/checkout@v4
+        with:
+          repository: MerZlin/BongoCat
+          ref: dsh-pet
+          path: .bongo-src
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Build key-mouse runtime
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE\scripts\build_bongo_runtime.ps1" -SourceRepo "$env:GITHUB_WORKSPACE\.bongo-src"
+          if ($LASTEXITCODE -ne 0) { throw "key-mouse runtime build failed" }
+
+      - name: Smoke test key-mouse runtime
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'external\bongocat\BongoCat.exe'
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 10
+          if ($proc.HasExited) { throw "[smoke] BongoCat exited early (code $($proc.ExitCode))" }
+          $proc.Refresh()
+          if ($proc.MainWindowHandle -eq 0) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            throw "[smoke] BongoCat running but no main window appeared"
+          }
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "[smoke] key-mouse runtime started OK" -ForegroundColor Green
+
       # 与 Linux/macOS 一致：构建前先跑测试套件，避免发布损坏产物。
       # 命令与 PR 门禁（pr-test.yml）保持同一套：时序 flake 家族从主套件里
       # 隔离成独立步骤——它们会让整个 pytest 进程原生崩溃（exit 139/access
@@ -70,7 +106,7 @@ jobs:
         run: |
           foreach ($VARIANT in 'webm-chat', 'webm') {
             Write-Host "==> building $VARIANT"
-            & "$env:GITHUB_WORKSPACE\scripts\build_onedir.ps1" -Variant $VARIANT
+            & "$env:GITHUB_WORKSPACE\scripts\build_onedir.ps1" -Variant $VARIANT -RequireKeyMouseRuntime
             if ($LASTEXITCODE -ne 0) { throw "$VARIANT build failed" }
           }
 

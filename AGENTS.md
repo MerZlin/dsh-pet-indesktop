@@ -159,6 +159,10 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   context-menu structure, styling, interaction, or platform behavior.
 - Read `docs/SETTINGS-CHANGE-GATES.md` before adding, moving, removing, or
   changing a persistent setting or its settings-page interaction.
+- Read `docs/KEY-MOUSE-MODE-2026-09-13.md` (and
+  `docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md` for model assets) when changing
+  `pet/key_mouse_mode.py`, the `mode_switch` menu subtree, the `pet_mode`
+  config key, or the `external/bongocat` build/CI wiring.
 - Read `docs/PERSONA-PHRASES-PRESET-STORAGE-2026-09-08.md` before changing
   dialogue preset files (`pet/persona_presets/*.json`), phrase loading
   (`persona_phrases.py`), or expression-style semantics

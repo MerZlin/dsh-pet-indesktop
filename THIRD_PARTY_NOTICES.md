@@ -47,3 +47,43 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+---
+
+## 3. BongoCat runtime（键鼠跟随模式）
+
+- **Files**: 打包产物内的 `external/bongocat/**`（`BongoCat.exe` 与 Live2D 预置模型
+  `assets/models/**`）。**本仓库不提交这些二进制**：它们由 CI 在打包时从我们
+  fork 的仓库构建并复制进来（见 `scripts/build_bongo_runtime.ps1`）。
+- **Origin / Source Repository**: [ayangweb/BongoCat](https://github.com/ayangweb/BongoCat)
+  （fork：[MerZlin/BongoCat](https://github.com/MerZlin/BongoCat) 的 `dsh-pet` 分支）
+- **License**: MIT License
+- **Notes**: 该运行时只在用户主动切到「键鼠跟随」模式时启动，作为独立进程运行；
+  我们的 fork 只做最小改动（新增「切回原桌宠」菜单项、隔离应用标识、禁用自动更新、
+  开机自启默认关闭），改动清单见 `docs/KEY-MOUSE-MODE-2026-09-13.md`。
+
+### MIT License Text
+
+```text
+MIT License
+
+Copyright (c) 2024 ayangweb
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

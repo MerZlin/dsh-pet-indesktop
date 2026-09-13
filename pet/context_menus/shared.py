@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QMenu
 from .. import autostart as autostart_mod
 from .. import catalog
 from ..harness_launcher import launch_harness_gui
+from ..key_mouse_mode import MODE_CLASSIC, MODE_KEY_MOUSE, PET_MODE_KEY, normalize_mode
 from ..report_gates import REPORT_GATE_DEFAULTS
 from ..updater import QUARK_PAN_URL, REPO_URL
 from .icons import fitted_pet_pixmap_icon, pet_avatar_menu_icon, vector_menu_icon
@@ -402,6 +403,89 @@ def add_return_corner(menu: QMenu, pet, *, icons: bool = True):
 def add_hide_pet(menu: QMenu, pet, *, icons: bool = True):
     # close_on_trigger：隐藏后菜单随之关闭，避免菜单悬空无法找回桌宠
     return add_action(menu, "隐藏桌宠", "hide" if icons else None, pet.hide, close_on_trigger=True)
+
+
+def _pet_mode_state(pet) -> str:
+    """读取窗口上报的当前模式；旧窗/测试桩缺回调时按经典模式处理。"""
+    getter = getattr(pet, "pet_mode_state", None)
+    if callable(getter):
+        try:
+            return normalize_mode(getter())
+        except Exception:  # noqa: BLE001 - 菜单渲染不允许因状态读取失败整树崩掉
+            pass
+    cfg = getattr(pet, "cfg", None)
+    if cfg is not None:
+        try:
+            return normalize_mode(cfg.get(PET_MODE_KEY))
+        except Exception:  # noqa: BLE001
+            pass
+    return MODE_CLASSIC
+
+
+def _mode_switch_enabled(pet) -> tuple[bool, str]:
+    """返回（是否可切到键鼠跟随, 不可用原因）。"""
+    if not bool(getattr(pet, "mode_switch_allowed", True)):
+        return False, "请在主桌宠（第一只）处切换模式"
+    available = getattr(pet, "key_mouse_mode_available", None)
+    if callable(available):
+        try:
+            if available():
+                return True, ""
+        except Exception:  # noqa: BLE001
+            pass
+        return False, "未找到键鼠跟随运行时（BongoCat）；可重装本程序或设置 DSH_PET_BONGOCAT_DIR"
+    return True, ""
+
+
+def _add_mode_action(menu: QMenu, pet, mode: str, label: str, icon_name: str | None):
+    action = add_action(menu, label, icon_name)
+    action.setProperty("modeId", mode)
+    action.setCheckable(True)
+    action.setChecked(_pet_mode_state(pet) == mode)
+    setter = getattr(pet, "on_set_pet_mode", None)
+    if mode == MODE_KEY_MOUSE:
+        enabled, reason = _mode_switch_enabled(pet)
+        action.setEnabled(enabled)
+        if not enabled:
+            action.setToolTip(reason)
+    if callable(setter):
+        action.triggered.connect(lambda _checked=False, mode=mode, setter=setter: setter(mode))
+    else:
+        action.setEnabled(False)
+        action.setToolTip("当前窗口不支持模式切换")
+    return action
+
+
+def add_mode_classic(menu: QMenu, pet, *, icons: bool = True):
+    return _add_mode_action(menu, pet, MODE_CLASSIC, "经典桌宠", "pet" if icons else None)
+
+
+def add_mode_key_mouse(menu: QMenu, pet, *, icons: bool = True):
+    return _add_mode_action(menu, pet, MODE_KEY_MOUSE, "键鼠跟随", "interaction" if icons else None)
+
+
+def sync_mode_switch_menu(menu: QMenu, pet) -> None:
+    """按当前模式刷新勾选；托盘菜单复用一份 QMenu，需要弹出前同步。"""
+    current = _pet_mode_state(pet)
+    for action in menu.actions():
+        mode = action.property("modeId")
+        if not mode:
+            continue
+        action.setChecked(str(mode) == current)
+        if str(mode) == MODE_KEY_MOUSE:
+            enabled, reason = _mode_switch_enabled(pet)
+            action.setEnabled(enabled)
+            action.setToolTip(reason if not enabled else "")
+
+
+def add_mode_switch_menu(menu: QMenu, pet, *, icons: bool = True):
+    """模式切换子菜单：经典桌宠 / 键鼠跟随（互斥勾选）。"""
+    if not callable(getattr(pet, "on_set_pet_mode", None)):
+        return None
+    submenu = add_submenu(menu, "模式切换", "settings" if icons else None)
+    add_mode_classic(submenu, pet, icons=icons)
+    add_mode_key_mouse(submenu, pet, icons=icons)
+    return submenu
 
 
 def add_look_screen(menu: QMenu, pet, *, icons: bool = True):
