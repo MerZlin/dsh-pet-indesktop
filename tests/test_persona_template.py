@@ -163,7 +163,16 @@ def test_all_advertised_fields_reach_presentation_layer():
     assert "balance.query" not in entries
 
     # ── 上下文字段层：桥接插件确实写出这些字段（或 Pet 侧注入）──
-    bridge_src = (root / "integrations" / "dsh-pet-bridge" / "index.js").read_text(encoding="utf-8")
+    # 桥接已拆分为稳定壳 index.js + impl/<version>/ 实现层：字段由实现层写出，
+    # 因此把壳与**当前 package.json.version 对应的 impl** 合并作为"桥接插件
+    # 源码"检查（与壳 probeDisk 的精确选中语义一致；不合并全部历史版本，
+    # 否则旧版本残留字段会让已删除字段的新版本误通过）。
+    bridge_root = root / "integrations" / "dsh-pet-bridge"
+    bridge_pkg = json.loads((bridge_root / "package.json").read_text(encoding="utf-8"))
+    bridge_src = (bridge_root / "index.js").read_text(encoding="utf-8")
+    impl_dir = bridge_root / "impl" / str(bridge_pkg.get("version", ""))
+    bridge_src += "\n" + (impl_dir / "index.js").read_text(encoding="utf-8")
+    # 实现层版本注册表只做 re-export，无字段；此处不合并历史版本目录。
     agent_link_src = (root / "pet" / "agent_link.py").read_text(encoding="utf-8")
     pet_side_fields = {"agent_key"}
     for group, fields in UPSTREAM_FIELDS.items():

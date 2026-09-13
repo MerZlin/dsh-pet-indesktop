@@ -433,6 +433,18 @@ def build_pet_controls(host) -> None:
     host.agent_sound_cooldown_spin.setSuffix(" 秒")
     host.agent_sound_cooldown_spin.setValue(float(agent_link_cfg.get("sound_cooldown_seconds", 2.0)))
 
+    # 状态气泡时间门（thinking/start 共用）：控制「开始干活」/「正在思考」气泡
+    # 的最小间隔。概率门（state）控要不要弹，时间门控多快能再弹一次——DSH
+    # 短时间内反复 working↔thinking 时防止状态气泡刷屏。0 = 无时间门。
+    host.state_bubble_min_interval_spin = BrowserDoubleSpinBox(host)
+    host.state_bubble_min_interval_spin.setRange(0.0, 30.0)
+    host.state_bubble_min_interval_spin.setSingleStep(0.5)
+    host.state_bubble_min_interval_spin.setDecimals(1)
+    host.state_bubble_min_interval_spin.setSuffix(" 秒")
+    host.state_bubble_min_interval_spin.setValue(
+        float(agent_link_cfg.get("state_bubble_min_interval", 2.0))
+    )
+
     # 事件气泡触发概率（0.00–1.00 滑块，无开关）：按事件聚合类别逐类调通过概率。
     # 0.00 = 该类完全不汇报（等同关闭），1.00 = 全部汇报。滑块是唯一控制项，
     # 右键菜单只给 0/1 两端快捷入口；键名即门名（见 pet/report_gates.py）。

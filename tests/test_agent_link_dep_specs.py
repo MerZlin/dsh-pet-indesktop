@@ -170,7 +170,7 @@ class TestInstallFailureDiagnostics:
             agent_link, "_run_pnpm", lambda profile_dir, *args: (1, "ERR_PNPM_ ... 0.12.80")
         )
 
-        ok, message = DshMonitor.install_bridge()
+        ok, message, _ = DshMonitor.install_bridge()
 
         assert ok is False
         assert profile.name in message
@@ -451,7 +451,7 @@ class TestSpecRepair:
 
         monkeypatch.setattr(agent_link, "_run_pnpm", fake_run)
 
-        ok, message = DshMonitor.install_bridge()
+        ok, message, _ = DshMonitor.install_bridge()
 
         assert ok is True, message
         assert len(calls) == 2, "修正后必须重试一次"
@@ -472,7 +472,7 @@ class TestSpecRepair:
 
         monkeypatch.setattr(agent_link, "_run_pnpm", fake_run)
 
-        ok, message = DshMonitor.install_bridge()
+        ok, message, _ = DshMonitor.install_bridge()
 
         assert ok is False
         assert len(calls) == 1, "没有可修正项就不该重试"
@@ -511,7 +511,7 @@ class TestInstallBridgeScaffoldsMissingProfile:
 
         monkeypatch.setattr(agent_link, "_run_pnpm", fake_run)
 
-        ok, message = DshMonitor.install_bridge()
+        ok, message, _ = DshMonitor.install_bridge()
 
         assert ok is True, message
         assert calls == ["web"], "应先补出默认 web profile 再在其中安装"

@@ -85,9 +85,17 @@ _AGENT_STATUS_STATE = {
 # 桥接「简单事件」（DSH 原始 session/event 类型）→ 统一状态。
 # 事件名来自 DSH dsh-session/known-event-types.js 的真实词汇。
 _EVENT_TO_STATE = {
-    # 用户提交 / turn 开始 → 思考
+    # 用户提交 → 思考（真人消息）：桥接转发 user/message，语义为"开始思考"。
+    # assistant/chunk（流式）与 plan/mode **不被桥接转发**（impl L978 明确
+    # 不转发流式），不得留在状态表（dead key——会让状态表看起来覆盖了并不
+    # 存在的事件，测试 test_dead_event_keys_removed_from_state_map 锁死）。
     "user/message": DshState.THINKING,
-    "turn/start": DshState.THINKING,
+    # turn/start：回合**开始执行**，属 working，不是思考。
+    # 启动/新回合瞬间 DSH 会先发 AgentStatus working 再发 turn/start（间隔
+    # ~2ms），若 turn/start 标 thinking 会把刚亮的 working 顶掉——用户看到
+    # 「启动事件被 think 覆盖」（working 存活仅 1-2ms，约 1.2s 后又回 working）。
+    # 思考语义由 user/message（真人消息）表达。
+    "turn/start": DshState.WORKING,
     # 工具 / 步骤 / 命令执行 → working
     "assistant/message": DshState.WORKING,
     "tool/call": DshState.WORKING,
@@ -109,6 +117,10 @@ _EVENT_TO_STATE = {
     "turn/end": DshState.SUCCESS,
     "llm/retry": DshState.ERROR,
     "llm_error": DshState.ERROR,  # API 级错误（errorCode 为真实上游码如 bad_response_status_code）
+    # 斜杠拼写保留为旧 producer 兼容（consumer 契约测试锁死 legacy slash 仍接受）。
+    "llm/error": DshState.ERROR,
+    # 上下文压缩（context compaction，DSH 长会话自动触发）：仍在工作。
+    "context_compacted": DshState.WORKING,
 }
 
 

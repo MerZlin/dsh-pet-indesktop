@@ -84,9 +84,16 @@ def _drag_to(win, *globals_):
 
 def test_drag_coalesce_timer_is_about_120hz(app, tmp_path):
     win = _make_win(app, tmp_path)
-    # 8ms ≈ 125Hz：每显示帧至多消费一次最新目标
-    assert 1000 / win._drag_move_timer.interval() >= 120.0
-    assert win._drag_move_timer.interval() == DRAG_MOVE_COALESCE_MS
+    # 合帧节拍上限 8ms ≈ 125Hz（每显示帧至多消费一次最新目标）。
+    # 高刷屏上节拍对齐显示帧间隔（pet/window.py L691-692：
+    # setInterval(min(DRAG_MOVE_COALESCE_MS, _tick_ms))），165Hz 屏为 6ms、
+    # 240Hz 屏为 4ms——因此这里断言「不超过 8ms」而非「恒等于 8ms」，
+    # 否则在 120Hz+ 显示器环境中误报（见 window.py 的 _tick_ms 计算）。
+    interval = win._drag_move_timer.interval()
+    assert 4 <= interval <= DRAG_MOVE_COALESCE_MS, (
+        f"合帧节拍必须在 4-8ms（显示帧间隔对齐），实际 {interval}ms"
+    )
+    assert 1000 / interval >= 120.0
     assert win._drag_move_pending is None
     win.close()
     app.processEvents()

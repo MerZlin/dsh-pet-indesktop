@@ -207,6 +207,11 @@ def _default_agent_link_data() -> dict:
         # 「自动化与联动 → 事件气泡触发概率」下的可折叠框，按事件聚合类别逐类调。
         # 值是**通过概率** 0.00–1.00（0 = 该类完全不汇报，1 = 全部汇报），没有布尔开关。
         "report_gates": dict(REPORT_GATE_DEFAULTS),
+        # 状态气泡最小间隔（秒）：thinking/start（开始干活/思考）气泡的**时间门**。
+        # 概率门（report_gates.state）控"要不要弹"，时间门控"多快能再弹一次"——
+        # 防止 DSH 短时间内反复 working↔thinking 时状态气泡刷屏。0 = 无时间门
+        # （仅概率门 + 去抖），此时可感知到思考气泡每次出现都会展示。
+        "state_bubble_min_interval": 2.0,
         # 卡住检测（默认开）：DSH 联动开启时，根据工具成败/超时/错误
         # 推断「Agent 钻牛角尖了」，档位 1 播焦急动画、档位 2 弹持续提醒气泡。
         "stuck_detect": True,
@@ -330,6 +335,10 @@ def _clean_agent_link_data(raw: Any) -> dict:
     if "sound_cooldown_seconds" in raw:
         result["sound_cooldown_seconds"] = _float_or_default(
             raw.get("sound_cooldown_seconds"), defaults["sound_cooldown_seconds"], 0.0, 30.0
+        )
+    if "state_bubble_min_interval" in raw:
+        result["state_bubble_min_interval"] = _float_or_default(
+            raw.get("state_bubble_min_interval"), defaults["state_bubble_min_interval"], 0.0, 30.0
         )
     # 事件汇报概率门：新形状（report_gates 字典）优先；旧键一次性迁移——
     # 布尔开关 → 1.0/0.0，旧百分比 report_probability(0-100) → activity 概率。

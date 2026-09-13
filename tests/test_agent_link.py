@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -281,6 +282,28 @@ class TestDirGlobTailer:
         tailer._initial_backfill_done = True
         assert json.loads(tailer.read_new_lines()[0])["event"] == "before-reset"
 
+    def test_glob_capped_prefers_recently_written(self, tmp_path):
+        """max_files 封顶时必须优先跟踪**最近写入**的文件（活跃 DSH 实例）。
+
+        回归背景：多 DSH 实例分区写入后，桥目录会累积 64+ 个历史 dsh-*.jsonl。
+        旧实现按文件名字典序截断（`sorted(glob)`），当前活跃实例的 PID 大小
+        随机，随时可能被挤出 64 上限——现象是桥接正常写盘、pet 却读不到任何
+        事件（无联动、无弹窗）。修复：按 st_mtime_ns 降序，持续追加的活跃文件
+        永远排最前。"""
+        tailer = DirGlobTailer(tmp_path, scan_interval=60, max_files=4)
+        # 造 5 个文件：4 个陈旧（较早 mtime），1 个"活跃"（最新 mtime）。
+        names = [f"dsh-{pid}.jsonl" for pid in (11111, 22222, 33333, 44444, 55555)]
+        for i, name in enumerate(names):
+            p = tmp_path / name
+            p.write_text(f'{{"event":"e{i}"}}\n', encoding="utf-8")
+            ts = 1_000_000 + i  # 0..4 递增 → 55555 最新
+            os.utime(p, (ts, ts))
+        tailer._initial_backfill_done = True
+        tailer.read_new_lines()
+        tracked = {Path(p).name for p in tailer._tailers}
+        assert "dsh-55555.jsonl" in tracked, "最新写入的文件必须被跟踪"
+        assert "dsh-11111.jsonl" not in tracked, "最旧的文件应被挤出 64 上限"
+
 
 class TestEventStateNormalization:
     def test_known_events_mapping(self):
@@ -328,6 +351,7 @@ class TestAgentLinkManager:
                 "stuck": 1.0,
                 "bridge": 1.0,
             },
+            "state_bubble_min_interval": 2.0,
             "stuck_detect": True,
             "stuck_worried_threshold": 3,
             "stuck_intervene_threshold": 5,
@@ -471,9 +495,12 @@ class TestRealFileTailEndToEnd:
 
         cfg = Config(base=tmp_path)
         # 本用例验的是「状态 → 桌宠动作 + 完成提醒」的映射，所以显式开 done 门
-        # （基线其它门全关；见文件头 _AGENT_GATE_BASELINE）。
+        # （基线其它门全关；见文件头 _AGENT_GATE_BASELINE），并关掉状态气泡
+        # 时间门（=0）——动画/气泡限频由 test_throttled_within_interval 单独覆盖，
+        # 这里聚焦映射本身不受限频干扰。
         ag = dict(cfg.get("agent_link", {}))
         ag["report_gates"] = _agent_gates(done=1.0)
+        ag["state_bubble_min_interval"] = 0.0
         cfg.set("agent_link", ag)
         win = DummyPetWindow()
         mgr = AgentLinkManager(win, cfg, min_interval=0.0)  # 测试关闭节流，逐个验证状态映射
@@ -661,14 +688,27 @@ class TestAgentStateDebounce:
         assert switched == ["写代码"]  # 只切一次
 
     def test_throttled_within_interval(self, tmp_path):
+        """状态气泡**时间门**（state_bubble_min_interval）对动画与气泡同频限频。
+
+        回归背景：移除 busy↔busy 节流后，working↔thinking 每 2-5s 切换让动作池
+        轮换名每次不同 → window 侧立即 _switch → 反复启停 ffmpeg 解码进程
+        （pet 性能下降，实测多个 reader 同时退出）。修复：动画与气泡共用一次
+        时间门（_state_bubble_gate），门内都不出现，到期都恢复（保轮换语义）。"""
         mgr, switched, clock = self._make_mgr(tmp_path)
         mgr._on_agent_state("claude", "working")
-        clock[0] += 1.0  # 1s < 2s 节流间隔
+        n1 = len(switched)
+        assert n1 >= 1  # working 触发动画
+        clock[0] += 1.0  # 1s < 2s 时间门
         mgr._on_agent_state("claude", "thinking")
-        assert switched == ["写代码"]  # 被节流
-        clock[0] += 2.0  # 超过间隔
+        assert len(switched) == n1, "时间门内 thinking 不得重复请求动画（性能回归）"
+        # 交替（working→thinking 换态）但仍在门内：也不切
+        clock[0] += 0.5  # 累计 1.5s < 2s
+        mgr._on_agent_state("claude", "working")
+        assert len(switched) == n1, "门内交替状态也不得重复请求动画"
+        # 超出门：动画按轮换序列恢复
+        clock[0] += 2.1  # 累计 3.6s > 2s
         mgr._on_agent_state("claude", "thinking")
-        assert switched == ["写代码", "吃Token"]  # 动作池轮换：写代码→吃Token
+        assert len(switched) > n1, "时间门到期后动画恢复轮换"
 
 
 class TestAgentMenuRebound:
@@ -1162,6 +1202,37 @@ class TestAgentLinkBubbles:
         assert len(done_bubbles) == 1
         assert not any("已完成本轮任务" in b or "执行完成" in b for b in bubbles)
 
+    def test_done_suppressed_while_pending_interaction(self, tmp_path):
+        """有未决审批/选择时不弹「干完活啦」：等待用户交互的回合不算完成。
+
+        回归背景：DSH 审批/选择等待期间 agent 状态可能短暂 idle（step 间隙），
+        旧实现会弹完成气泡——用户看到"交互还没结束就报完成"。修复：_fire_done
+        在存在该 agent 的 pending 阻塞交互时直接不弹。"""
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"done": 1.0})
+        # 登记一条未决审批（模拟 DSH 正在等用户决定）。
+        mgr._on_approval_request("dsh", {"tool": "bash", "rpcId": "rpc-done-gate", "approvalId": "ap-done", "sessionId": "s-1"})
+        assert mgr.pending_interactions_for("dsh")
+        # busy → idle（期间未决审批仍在）→ 确认到期：不得弹完成（气泡里只有
+        # 审批常驻气泡本身，绝无"干完活啦"等完成文案）。
+        mgr._on_agent_state("dsh", "working")
+        clock[0] += 2.0
+        mgr._on_agent_state("dsh", "idle")
+        mgr._fire_done("dsh")
+        assert not any("干完活啦" in b or "已完成本轮任务" in b or "执行完成" in b for b in bubbles), \
+            f"有未决审批时不得弹完成气泡，实际: {bubbles}"
+        # resolved 关闭审批后，回合结束时仍可报完成——但交互发生过，_saw_alert
+        # 保留（本次修复：busy 不再清 _saw_alert），done 走「停下待确认」文案
+        # 而非「干完活啦」——用户不得在刚交互过的回合末尾再被"成功完成"打扰。
+        mgr._on_approval_resolved("dsh", {"rpcId": "rpc-done-gate"})
+        assert mgr.pending_interactions_for("dsh") == {}
+        clock[0] += 6.0
+        mgr._on_agent_state("dsh", "idle")  # 再次 idle（resolved 后）
+        mgr._fire_done("dsh")
+        assert not any("干完活啦" in b or "已完成本轮任务" in b or "执行完成" in b for b in bubbles), \
+            "刚交互过的回合结束不得误报成功完成"
+        assert any("已停止" in b or "待确认" in b for b in bubbles), \
+            f"交互后的 done 应走「停下待确认」中性收尾，实际: {bubbles}"
+
     def test_bubble_busy_until_occupancy(self, tmp_path, monkeypatch):
         """7. _show_link_bubble 在 win._bubble_busy_until 为未来时间时：
         important=False 直接丢弃；important=True 时不立即弹（走 QTimer.singleShot 延后重试，测试里只需断言没有立即调用 show_bubble）。
@@ -1180,6 +1251,37 @@ class TestAgentLinkBubbles:
         mgr._show_link_bubble("重要消息", important=True)
         assert bubbles == []
 
+    def test_idle_to_working_same_batch_not_throttled(self, tmp_path):
+        """同批到达的 idle→working（时间差 <2s）不得被节流吞掉「开始干活」气泡。
+
+        回归背景：DSH 桥接 80ms 批量 flush，idle（心跳）与 working（开始干活）
+        经常落同一批，时间差 <2s。旧节流逻辑对「任意状态切换」生效，把进入
+        工作的 working 吞掉——实测启动后 start/think 气泡整轮消失（只有音效）。
+        修复：节流只对 busy↔busy 互跳生效，idle/sleeping→busy 的进入工作不节流。"""
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"state": 1.0})
+        mgr._on_agent_state("dsh", "idle")
+        clock[0] += 0.1  # < min_interval(2.0)
+        mgr._on_agent_state("dsh", "working")
+        assert any("已开始执行任务" in b or "开始干活" in b for b in bubbles), \
+            f"idle→working 同批不得被节流吞掉开始干活气泡: {bubbles}"
+
+    def test_busy_to_busy_still_throttled(self, tmp_path):
+        """busy↔busy 互跳（working↔thinking）在 2 秒内仍被节流（思考/工作文案不刷屏）。"""
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"state": 1.0})
+        mgr._on_agent_state("dsh", "idle")
+        clock[0] += 0.1
+        mgr._on_agent_state("dsh", "working")
+        n1 = len(bubbles)
+        clock[0] += 0.5  # < 2s
+        mgr._on_agent_state("dsh", "thinking")
+        n2 = len(bubbles)
+        assert n2 == n1, "busy→busy 互跳在 2s 内不得再弹气泡"
+        clock[0] += 2.1  # > 2s
+        mgr._on_agent_state("dsh", "idle")
+        clock[0] += 0.1
+        mgr._on_agent_state("dsh", "working")
+        assert len(bubbles) > n2, "idle→working 再次进入工作应正常弹"
+
     def test_busy_to_attention_counts_as_done(self, tmp_path):
         """8. Claude 风格：working→attention(Stop) 进入完成确认，不弹立即提醒，
         确认后弹完成气泡（因见过 attention 用中性文案）。"""
@@ -1193,6 +1295,29 @@ class TestAgentLinkBubbles:
         mgr._fire_done("claude")
         assert any("已停止" in b for b in bubbles)
         assert not any("已完成本轮任务" in b or "执行完成" in b for b in bubbles)
+
+    def test_thinking_after_working_emits_bubble_gated_by_time(self, tmp_path):
+        """working → thinking 弹思考气泡（旧节流曾把 thinking 与工作动画一起
+        挡掉，用户实测状态机收敛但无思考气泡；DSH 是 working→thinking→working
+        →thinking 交替，非连续 thinking）；状态气泡共用 state_bubble_min_interval
+        时间门（默认 2.0s）：working 弹过后 2s 内的 thinking 被限频跳过，
+        间隔足够后交替的 thinking 放行——防刷屏同时保证 thinking 可感知。"""
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"state": 1.0})
+        # working（AgentStatus）先到 → 开始干活气泡
+        mgr._on_agent_state("dsh", "working")
+        n0 = len(bubbles)
+        assert n0 == 1
+        # 0.5s 后 thinking：时间门内 → 跳过（防刷屏）
+        clock[0] += 0.5
+        mgr._on_agent_state("dsh", "thinking")
+        assert len(bubbles) == n0, f"working 后 2s 内 thinking 被时间门限频: {bubbles}"
+        # 回到 working（DSH 交替），再隔 2.1s 到 thinking：时间门到期 → 弹
+        clock[0] += 0.5
+        mgr._on_agent_state("dsh", "working")
+        clock[0] += 2.1
+        mgr._on_agent_state("dsh", "thinking")
+        assert len(bubbles) > n0, f"时间门到期后交替 thinking 应弹思考气泡: {bubbles}"
+        assert any("思考" in b for b in bubbles), "思考气泡应含思考文案"
 
     def test_standalone_attention_immediate_bubble(self, tmp_path):
         """9. 非 busy 后独立出现的 attention：立即提醒，不进完成流程。"""
@@ -1367,7 +1492,7 @@ class TestInstallErrorSummary:
 
         monkeypatch.setattr(agent_link.subprocess, "run", fake_run)
 
-        ok, message = DshMonitor.install_bridge()
+        ok, message, _ = DshMonitor.install_bridge()
 
         assert ok is True
         assert "1 个 dsh 实例" in message
@@ -2374,13 +2499,23 @@ class TestApprovalStickyBubble:
         assert mgr.win.hidden_calls == 2
         assert mgr.win._sticky_bubble_active is False
 
-    def test_idle_dismisses_approval(self, tmp_path):
-        """agent 回待机但没收到 decided：交互必然失效，兜底清掉（含窗口隐藏时）。"""
+    def test_idle_does_not_dismiss_approval(self, tmp_path):
+        """agent 短暂回 idle（step 间隙/空闲心跳）不得兜底清掉未决审批。
+
+        回归背景：DSH 的 AgentStatus idle 每 2-5s 出现（working→idle→working），
+        旧实现把 idle 当"任务结束"清 pending，导致仍在等待用户决定的审批/选择
+        常驻气泡被误清（用户报告"审批/选择失去常驻显示直到交互完成"）。
+        现在 idle 不再清：未决审批由 approval/resolved 权威帧精确关闭，
+        兜底只走 _INTERACTION_END_EVENTS（turn/end 等）与 dismiss_all。"""
         mgr = self._make_mgr(tmp_path)
         mgr._on_approval_request("dsh", {"tool": "bash", "approvalId": "ap-i", "sessionId": "s-1"})
+        assert mgr._pending_interactions, "审批应先登记"
         mgr._on_agent_state("dsh", "idle")
+        assert mgr._pending_interactions, "idle 不得清掉未决审批"
+        assert mgr.win.hidden_calls == 0, "idle 不得主动隐藏气泡"
+        # 权威 resolved 帧正常关闭。
+        mgr._on_approval_resolved("dsh", {"approvalId": "ap-i"})
         assert mgr._pending_interactions == {}
-        assert mgr.win.hidden_calls == 1
 
     def test_dismiss_all_approvals(self, tmp_path):
         mgr = self._make_mgr(tmp_path)
@@ -3101,11 +3236,36 @@ class TestInteractionIdentityGate:
         remaining = mgr.pending_interactions_for("dsh")
         assert set(remaining) == {"approval:rpc-b"}
 
-    def test_agent_idle_clears_pending_via_lifecycle(self, tmp_path):
-        """AgentStatus idle 兜底清理：同现有 _on_agent_state idle 语义。"""
+    def test_agent_idle_does_not_clear_pending_via_lifecycle(self, tmp_path):
+        """AgentStatus idle **不再**兜底清理 pending 阻塞交互。
+
+        回归背景：DSH 的 AgentStatus idle 是空闲心跳/step 间隙（实测
+        working→idle→working 每 2-5s 出现），并非回合结束。旧实现把 idle
+        当 ended 清 pending，导致仍在进行的审批/选择常驻气泡被误清（用户
+        报告"审批/选择能传过来但失去常驻显示直到交互完成"）。现在 idle
+        不再清：审批/问题由各自 resolved 帧精确关闭，兜底只走权威
+        _INTERACTION_END_EVENTS（turn/end 等）与 dismiss_all_interactions。"""
         mgr = self._make_mgr(tmp_path)
         mgr._on_approval_request("dsh", {"tool": "bash", "rpcId": "rpc-idle", "approvalId": "ap-idle", "sessionId": "s-1"})
+        assert mgr.pending_interactions_for("dsh"), "审批应先登记"
+        # idle（step 间隙/空闲心跳）不得清掉 pending 审批。
+        mgr._on_agent_state("dsh", "idle")
+        assert mgr.pending_interactions_for("dsh"), "idle 不得清 pending 审批"
+        # 权威 resolved 帧正常关闭。
+        mgr._on_approval_resolved("dsh", {"rpcId": "rpc-idle"})
+        assert mgr.pending_interactions_for("dsh") == {}
+
+    def test_lifecycle_only_clears_on_authoritative_ends(self, tmp_path):
+        """_on_interaction_lifecycle 只认权威结束事件，AgentStatus idle 不算。"""
+        mgr = self._make_mgr(tmp_path)
+        mgr._on_approval_request("dsh", {"tool": "bash", "rpcId": "rpc-lc", "approvalId": "ap-lc", "sessionId": "s-1"})
+        # idle/sleeping 不得触发清空。
         mgr._on_interaction_lifecycle("dsh", {"event": "AgentStatus", "state": "idle"})
+        assert mgr.pending_interactions_for("dsh"), "AgentStatus idle 不得视为结束"
+        mgr._on_interaction_lifecycle("dsh", {"event": "AgentStatus", "state": "sleeping"})
+        assert mgr.pending_interactions_for("dsh"), "sleeping 不得视为结束"
+        # turn/end 权威结束 → 清对应会话。
+        mgr._on_interaction_lifecycle("dsh", {"event": "turn/end", "sessionId": "s-1"})
         assert mgr.pending_interactions_for("dsh") == {}
 
 
@@ -3480,7 +3640,7 @@ class TestInstallFinishedGuard:
 
         def fake_install():
             assert release.wait(timeout=5.0), "测试释放信号未到达"
-            return (True, "ok")
+            return (True, "ok", False)
 
         monkeypatch.setattr(
             DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),
@@ -3588,7 +3748,7 @@ class TestInstallFinishedGuard:
         def fake_install():
             ev = queue.pop(0)
             assert ev.wait(timeout=5.0), "测试释放信号未到达"
-            return (True, "ok")
+            return (True, "ok", False)
 
         monkeypatch.setattr(
             DshMonitor, "install_bridge", classmethod(lambda cls: fake_install()),

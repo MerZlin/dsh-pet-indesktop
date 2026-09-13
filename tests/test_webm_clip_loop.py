@@ -132,7 +132,13 @@ def _install_fake_ffmpeg(monkeypatch, clip, spawns: list) -> None:
 
     是否无限循环由真实参数决定（-stream_loop 在参数里才无限）——参数被误删/
     误加时假件行为跟着变，测试能钉住参数回归（自欺清单 #7）。
+
+    默认把版本探测钉为 5：测试代表「支持 -readrate 的新版 ffmpeg」语义——既有
+    readrate 参数断言（P2-4）在假流下继续成立。生产旧版（4.2.2）的降级行为
+    由 test_readrate_omitted_on_old_ffmpeg 单独验证（patch 版本=4）。
     """
+    monkeypatch.setattr(webm_clip_mod, "_ffmpeg_major_version", lambda: 5)
+
     def _fake_read_frames(*args, **kwargs):
         proc = _FakeProc()
         params = list(kwargs.get('input_params') or [])
@@ -679,6 +685,28 @@ def test_readrate_scales_with_playback_speed(app, monkeypatch, tmp_path):
         params = spawns[0][2]
         assert '-stream_loop' in params
         assert params[params.index('-readrate') + 1] == '1.5'
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_readrate_omitted_on_old_ffmpeg(app, monkeypatch, tmp_path):
+    """回归：ffmpeg < 5 不上 -readrate（imageio 捆绑的 4.2.2 不认该选项，
+    会 Unrecognized option 'readrate' 导致循环播放 webm 全部解码失败、
+    动画不播放）。旧版退化为自然帧率循环：-stream_loop 保留（进程内循环
+    的 churn 收益仍在），-readrate 省略（背压等效于 readrate=1）。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    clip.set_playback_speed(1.5)  # speed>1 也应降级（旧版不支持提速）
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    monkeypatch.setattr(webm_clip_mod, "_ffmpeg_major_version", lambda: 4)  # 覆盖 install 内钉的 5
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        params = spawns[0][2]
+        assert '-stream_loop' in params, "旧版仍应进程内循环（消灭每圈重启 churn）"
+        assert '-readrate' not in params, f"旧版 ffmpeg 不得带 -readrate: {params}"
     finally:
         _close_all(spawns)
         clip.cleanup()

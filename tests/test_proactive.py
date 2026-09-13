@@ -883,7 +883,7 @@ class TestPhase4UIAndMenuIntegration:
         from PySide6.QtWidgets import QMessageBox
         from pet.agent_link import DshMonitor
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Yes)
-        monkeypatch.setattr(DshMonitor, "install_bridge", classmethod(lambda cls: (True, "ok")))
+        monkeypatch.setattr(DshMonitor, "install_bridge", classmethod(lambda cls: (True, "ok", False)))
         monkeypatch.setattr(DshMonitor, "uninstall_bridge", classmethod(lambda cls: None))
 
         win._toggle_agent_link("dsh", True)

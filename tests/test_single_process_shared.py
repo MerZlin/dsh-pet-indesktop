@@ -563,7 +563,7 @@ def test_proxy_control_alert_fans_out_buttons(tmp_path, app):
         assert w1.alerts, "首个可见窗应收到控制提醒（而非退化气泡）"
         alert = w1.alerts[-1]
         assert alert["alert_type"] == "control"
-        assert _control_buttons(alert) == ["自动优化", "终止", "忽略"]
+        assert _control_buttons(alert) == ["终止", "忽略"]  # B2：自动优化已移除
         assert alert["sticky"] is True
         assert not w2.alerts, "交互式提醒只在首个可见窗展示，不多窗重复"
     finally:

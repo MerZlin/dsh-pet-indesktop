@@ -73,6 +73,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -81,6 +82,7 @@ import time
 import types
 import json
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -270,8 +272,33 @@ def _ensure_ffmpeg_exe() -> None:
     with _FFMPEG_EXE_LOCK:
         try:
             imageio_ffmpeg.get_ffmpeg_exe()
+            # 预热版本缓存（同锁内只探测一次 0 个子进程的版本解析）。
+            _ffmpeg_major_version()
         except Exception:
             pass
+
+
+@lru_cache(maxsize=1)
+def _ffmpeg_major_version() -> int | None:
+    """ffmpeg 主版本号（支持 -readrate 的判据），不可用返回 None。
+
+    ``-readrate``（输入帧率钳制）是 ffmpeg **5.0 起**才支持的选项；imageio_ffmpeg
+    提供的捆绑二进制直到 4.2.2（ffmpeg-win64-v4.2.2.exe）都不认它。若对旧版
+    传 ``-readrate``，解码进程启动即报 ``Unrecognized option 'readrate'``，
+    精确帧数已知的循环播放 webm（写代码/吃Token 等）全部解码失败——动画
+    不播放（实测：ffmpeg 4.2.2 下联动动画整体消失，只有待机/一次性可播）。
+    因此只在主版本 >= 5 时附加该参数，旧版退化为自然帧率循环（背压仍然生效）。
+    """
+    if imageio_ffmpeg is None:
+        return None
+    try:
+        version = imageio_ffmpeg.get_ffmpeg_version()
+    except Exception:
+        return None
+    match = re.match(r"^\D*(\d+)", str(version or ""))
+    if not match:
+        return None
+    return int(match.group(1))
 
 # ------------------------------------------------------------ 孤儿 sweep 生命周期管理器（B7 审查 P2）
 # 退役 reader 的回收由「独立生命周期管理器」持有：注册表记录所有
@@ -2080,8 +2107,16 @@ class WebMClip(QObject):
             )
             input_params = list(_FFMPEG_INPUT_PARAMS)
             if loop_frame_count > 0:
-                input_params += ['-stream_loop', '-1',
-                                 '-readrate', str(max(1.0, self.playback_speed))]
+                input_params += ['-stream_loop', '-1']
+                # -readrate 仅 ffmpeg >= 5.0 支持（imageio_ffmpeg 捆绑的
+                # 4.2.2 不认，会 Unrecognized option 'readrate' 导致循环
+                # 播放 webm 全部解码失败、动画不播放）。旧版退化为自然帧率
+                # 循环：-stream_loop -1 仍常驻单进程，背压（队列写满阻塞
+                # decode）等效于 speed<=1 的 readrate=1；speed>1 的提速在
+                # 旧版 ffmpeg 上不可达（保持现状语义，不自作主张改帧率）。
+                major = _ffmpeg_major_version()
+                if major is not None and major >= 5:
+                    input_params += ['-readrate', str(max(1.0, self.playback_speed))]
             # 批11-B1：记录当前 ffmpeg 进程出生时刻并清零圈数（圈边界回收
             # 判定/日志用；reader 线程写，Reader 读同线程）。只在此处记录一次，
             # feed 路径（不拉起 ffmpeg）不会走到这里，_reader_born_at 保持 0。

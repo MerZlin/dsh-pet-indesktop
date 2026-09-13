@@ -1,9 +1,12 @@
 {
   "name": "@dsh-pet/bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test --test-force-exit test/*.test.mjs"
+  },
   "exports": {
     ".": "./index.js"
   },
@@ -11,7 +14,8 @@
   "license": "MIT",
   "files": [
     "index.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "impl/"
   ],
   "dsh": {
     "bundle": {
