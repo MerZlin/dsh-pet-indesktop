@@ -41,6 +41,20 @@ def test_runtime_build_script_builds_fork_and_verifies():
     assert "verify_bongo_assets.py --runtime" in text
 
 
+def test_runtime_build_script_copies_whitelist_not_whole_release_dir():
+    """只搬 exe + 同级 DLL + assets\\。
+
+    回归背景：整目录复制 cargo 的 release\ 目录会把 deps\/build\/incremental\/*.pdb
+    一起搬进包里，随包产物从 650MB 涨到 1.77GB（CI run 34852586015 实测）。
+    """
+    text = _read("scripts/build_bongo_runtime.ps1")
+
+    assert "Get-ChildItem -LiteralPath $From -Filter '*.dll' -File" in text
+    assert "$targetAssets = Join-Path $To 'assets'" in text  # 目标目录先建，避免压平
+    assert "异常膨胀" in text                                # 体积守门
+    assert "Copy-Item -Path (Join-Path $From '*') -Destination $To -Recurse" not in text
+
+
 def test_windows_workflow_builds_runtime_before_packaging():
     text = _read(".github/workflows/build-windows.yml")
 

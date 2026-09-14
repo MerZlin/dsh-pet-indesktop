@@ -74,19 +74,29 @@ function Copy-RuntimePayload {
     $exe = Resolve-BuiltExe $From
     if (Test-Path $To) { Remove-Item -LiteralPath $To -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $To | Out-Null
-    Copy-Item -Path (Join-Path $From '*') -Destination $To -Recurse -Force
     $targetExe = Join-Path $To 'BongoCat.exe'
-    if ($exe -ne $targetExe) { Copy-Item -LiteralPath $exe -Destination $targetExe -Force }
-    # tauri --no-bundle 不保证把 bundle.resources 复制到 exe 同级目录（实测
-    # 上游是「有时在、有时不在」），缺了就从 src-tauri\assets 按相对路径补，
-    # 保证 resolveResource('assets/models') 能命中。
+    Copy-Item -LiteralPath $exe -Destination $targetExe -Force
+    # 严格白名单：cargo 的 release 目录里还有 deps\ build\ incremental\ *.pdb
+    # 等中间产物，整目录复制会让随包产物从 650MB 涨到 1.77GB
+    # （CI run 34852586015 实测）。运行时只需要 exe + 同级 DLL + assets\。
+    Get-ChildItem -LiteralPath $From -Filter '*.dll' -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $To $_.Name) -Force }
+    # tauri --no-bundle 不保证把 bundle.resources 复制到 exe 同级目录，缺了就从
+    # src-tauri\assets 按相对路径补，保证 resolveResource('assets/models') 能命中。
     $modelRel = 'assets\models\standard\cat.model3.json'
-    if (-not (Test-Path (Join-Path $To $modelRel))) {
+    $releaseAssets = Join-Path $From 'assets'
+    # 目标 assets\ 必须先存在：否则 Copy-Item <src>\* 会把唯一的子项当成目标名
+    # 拷贝（models\ 被压平成 assets\standard\...），资源路径就错了。
+    $targetAssets = Join-Path $To 'assets'
+    New-Item -ItemType Directory -Force -Path $targetAssets | Out-Null
+    if (Test-Path (Join-Path $releaseAssets 'models')) {
+        Copy-Item -Path (Join-Path $releaseAssets '*') -Destination $targetAssets -Recurse -Force
+    } else {
         if (-not $AssetsSource -or -not (Test-Path (Join-Path $AssetsSource 'models'))) {
             throw "运行时缺 assets\models（Live2D 预置模型）：$To（来源 $From，assets 源 '$AssetsSource'）"
         }
         Write-Host "[bongo] 产物未带资源，从 $AssetsSource 补齐 assets\" -ForegroundColor Yellow
-        Copy-Item -Path (Join-Path $AssetsSource '*') -Destination (Join-Path $To 'assets') -Recurse -Force
+        Copy-Item -Path (Join-Path $AssetsSource '*') -Destination $targetAssets -Recurse -Force
     }
     if (-not (Test-Path $targetExe)) { throw "运行时缺 BongoCat.exe: $To" }
     if (-not (Test-Path (Join-Path $To $modelRel))) {
@@ -100,7 +110,13 @@ function Copy-RuntimePayload {
     if (-not (Test-Path (Join-Path $To 'assets\models\standard\demomodel.moc3'))) {
         throw "运行时缺 Live2D 模型数据 demomodel.moc3: $To"
     }
-    Write-Host "[bongo] 运行时已就绪: $To" -ForegroundColor Green
+    # 体积守门：正常约 20-40MB；异常膨胀即失败，别把 cargo 中间产物发出去。
+    $sizeMb = [math]::Round(
+        ((Get-ChildItem -LiteralPath $To -Recurse -File | Measure-Object Length -Sum).Sum / 1MB), 1)
+    if ($sizeMb -gt 250) {
+        throw "运行时目录异常膨胀（$sizeMb MB）：只应包含 BongoCat.exe + 同级 DLL + assets\"
+    }
+    Write-Host "[bongo] 运行时已就绪: $To（$sizeMb MB）" -ForegroundColor Green
 }
 
 # OutputDir 允许绝对路径（本地联调/换盘打包）；相对路径按仓库根解析。
