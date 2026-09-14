@@ -323,30 +323,39 @@ def test_island_velocity_estimate_zero_when_still(tmp_path):
         island.deleteLater()
 
 
-def test_island_velocity_survives_high_freq_submit(tmp_path):
+def test_island_velocity_survives_high_freq_submit(tmp_path, monkeypatch):
     """拖拽中高频几何回调（dt<0.01）不再把岛速清零（实机回归）。
 
     旧逻辑在 dt<0.01 时清零并刷新采样点：拖拽的 mouseMove 频率远超
     30Hz，岛速被反复清零，"拖岛拍鱼"退化成只推挤不弹飞。
+
+    时钟固定为可控假时钟：本用例原本用真实 monotonic 采样 50ms 间隔，
+    CI 慢 runner 上多花几毫秒就落到 800px/s 的 5% 容差之外（2026-09-13
+    CI run 34767996516 实测红）。改为假时钟后断言与机器快慢无关。
     """
     _qapp()
     island, body = _make_body(tmp_path)
     try:
         island.show()
         rect = island.geometry()
-        now = time.monotonic()
-        # 上一次有效采样：50ms 前、中心靠左 40px → 拖拽速度约 800px/s
-        body._last_center = (float(rect.center().x()) - 40.0,
-                             float(rect.center().y()))
-        body._last_motion_ts = now - 0.05
-        body._update_motion()
-        assert math.isclose(body._vx, 800.0, rel_tol=0.05)
-        sampled_ts = body._last_motion_ts
-        # 紧跟一波高频回调（间隔远小于 10ms）：速度保留、采样点不刷新
-        for _ in range(5):
+        with monkeypatch.context() as frozen:
+            clock = {"t": 1000.0}
+            frozen.setattr(time, "monotonic", lambda: clock["t"])
+            # 上一次有效采样：50ms 前、中心靠左 40px → 拖拽速度恰好 800px/s
+            body._last_center = (float(rect.center().x()) - 40.0,
+                                 float(rect.center().y()))
+            body._last_motion_ts = clock["t"] - 0.05
             body._update_motion()
-        assert math.isclose(body._vx, 800.0, rel_tol=0.05)
-        assert body._last_motion_ts == sampled_ts
+            assert math.isclose(body._vx, 800.0, rel_tol=0.05)
+            sampled_ts = body._last_motion_ts
+            # 紧跟一波高频回调：跳过判据是「距上次被采纳的采样 < 10ms」，
+            # 所以每次只推进 1ms（累计 5ms 仍在该阈值内）——速度保留、
+            # 采样点不刷新；推进过多会命中真实的重新采样分支（位移为 0 → 清零）。
+            for _ in range(5):
+                clock["t"] += 0.001
+                body._update_motion()
+            assert math.isclose(body._vx, 800.0, rel_tol=0.05)
+            assert body._last_motion_ts == sampled_ts
     finally:
         island.hide()
         island.deleteLater()

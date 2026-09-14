@@ -110,12 +110,16 @@ class FakeProcess(QObject):
 
 
 def _make_controller(shell, config, tmp_path, *, command=None, source=None, factory=FakeProcess):
+    # 测试必须与环境无关：不显式给 source 时也不能让本机/CI 上真实存在的
+    # external\bongocat（CI 恰好会先构建它）泄漏进来，因此默认指向一个不存在的
+    # 运行时目录；需要真实解析链路的用例请显式传 source。
+    runtime_source = Path(source) if source is not None else Path(tmp_path) / "missing-runtime"
     return KeyMouseModeController(
         shell,
         config=config,
         config_dir=Path(tmp_path),
         command=command,
-        runtime_source=Path(source) if source is not None else None,
+        runtime_source=runtime_source,
         process_factory=factory,
     )
 
@@ -200,17 +204,18 @@ def test_ensure_runtime_copy_creates_and_reuses_marker(tmp_path):
     marker = runtime / ".runtime-ok"
     assert marker.is_file()
 
-    # 已同步且指纹一致时直接复用（不重建 → 目录 mtime 不变）
-    before = runtime.stat().st_mtime_ns
+    # 已同步且指纹一致时直接复用：放一个哨兵文件，重建会把整个目录换掉
+    sentinel = runtime / "sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
     assert ensure_runtime_copy(source, runtime) is True
-    assert runtime.stat().st_mtime_ns == before
+    assert sentinel.is_file()
 
-    # 模板变化（大小/mtime 变）→ 重建
-    time.sleep(0.01)
+    # 模板变化（大小变）→ 重建：产物被刷新、哨兵消失
     (source / BONGOCAT_EXE).write_bytes(b"stub-changed")
     assert ensure_runtime_copy(source, runtime) is True
     assert marker.read_text(encoding="utf-8") != ""
-    assert runtime.stat().st_mtime_ns != before
+    assert (runtime / BONGOCAT_EXE).read_bytes() == b"stub-changed"
+    assert not sentinel.exists()
 
 
 def test_ensure_runtime_copy_reports_failure_without_exe(tmp_path):
