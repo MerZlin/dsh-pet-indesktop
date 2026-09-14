@@ -44,7 +44,7 @@ def test_runtime_build_script_builds_fork_and_verifies():
 def test_runtime_build_script_copies_whitelist_not_whole_release_dir():
     """只搬 exe + 同级 DLL + assets 目录。
 
-    回归背景：整目录复制 cargo 的 release\ 目录会把 deps\/build\/incremental\/*.pdb
+    回归背景：整目录复制 cargo 的 release 目录会把 deps/build/incremental/*.pdb
     一起搬进包里，随包产物从 650MB 涨到 1.77GB（CI run 34852586015 实测）。
     """
     text = _read("scripts/build_bongo_runtime.ps1")
