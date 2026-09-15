@@ -67,6 +67,19 @@ ERROR = "error"
 WARN = "warn"
 
 
+def _ensure_utf8_console() -> None:
+    """Windows 控制台可能是 cp1252/GBK：中文报告会 UnicodeEncodeError。
+
+    CI/打包脚本靠 PYTHONUTF8 掩盖了这个问题，用户直接手敲命令时会炸，
+    所以在脚本里自己把标准输出改成 UTF-8（与仓库 issue #26 的编码纪律一致）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 @dataclass
 class Finding:
     level: str
@@ -337,6 +350,7 @@ def format_report(report: Report, dirs: list[Path], *, strict: bool = False) -> 
 
 
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_console()
     parser = argparse.ArgumentParser(description="BongoCat 模型素材校验（键鼠跟随模式）")
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--dir", help="模型目录（含 *.model3.json）")

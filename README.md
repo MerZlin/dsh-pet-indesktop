@@ -445,6 +445,12 @@ pythonw -m pet
   素材契约、替换步骤与可直接使用的 GPT 出图提示词见
   [docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md](docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md)，
   自检用 `python scripts/verify_bongo_assets.py --dir <模型目录> --strict`。
+- **做自己的角色版本**：有角色三视图就能开工——按
+  [docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md](docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md)
+  走：`scripts/prepare_bongo_own_character.py` 一键准备可编辑工作区与"结构参考"预览图 →
+  按文档里现成的 GPT 提示词重绘贴图/按键高亮/背景 →
+  `scripts/restyle_bongo_key_overlays.py` 用一张高亮图批量换掉整套按键覆盖图 →
+  校验并放回数据目录。
 - 运行时（BongoCat）由 CI 从 [MerZlin/BongoCat](https://github.com/MerZlin/BongoCat) 的
   `dsh-pet` 分支构建并随包分发（MIT，见 `THIRD_PARTY_NOTICES.md`）；本地开发没有产物时
   会回退使用你已安装的 BongoCat，或用环境变量 `DSH_PET_BONGOCAT_DIR` 指定目录。

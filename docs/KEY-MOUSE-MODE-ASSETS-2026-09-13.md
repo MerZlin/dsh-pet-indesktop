@@ -3,6 +3,8 @@
 - 日期：2026-09-13
 - 适用：模式「键鼠跟随」（复用 BongoCat 运行时，见 `docs/KEY-MOUSE-MODE-2026-09-13.md`）
 - 校验工具：`python scripts/verify_bongo_assets.py --dir <模型目录>`（`--strict` 把缺件警告升级为失败）
+- **要做"自己的角色版本"（用三视图生成素材）请看专文**：
+  `docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md`（含可粘贴的 GPT 提示词与两个辅助脚本）
 
 ## 1. 素材放在哪
 

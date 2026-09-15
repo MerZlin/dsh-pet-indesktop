@@ -163,6 +163,10 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   `docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md` for model assets) when changing
   `pet/key_mouse_mode.py`, the `mode_switch` menu subtree, the `pet_mode`
   config key, or the `external/bongocat` build/CI wiring.
+- Read `docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md` when changing the
+  asset tooling (`scripts/prepare_bongo_own_character.py`,
+  `scripts/restyle_bongo_key_overlays.py`, `scripts/verify_bongo_assets.py`) or
+  the user-facing prompts for building a custom key-mouse character.
 - Read `docs/PERSONA-PHRASES-PRESET-STORAGE-2026-09-08.md` before changing
   dialogue preset files (`pet/persona_presets/*.json`), phrase loading
   (`persona_phrases.py`), or expression-style semantics
