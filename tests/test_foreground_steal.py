@@ -18,7 +18,6 @@ import os
 import subprocess
 import sys
 import time
-from ctypes import wintypes
 from pathlib import Path
 
 import pytest
@@ -32,9 +31,12 @@ from tests.test_window_pause import FakeLibrary
 # （GetWindowLongW 拿不到扩展样式），也没有真实前台窗口可判定。
 # headless CI / 本地 offscreen 套件自动跳过；Windows 桌面环境（含 CI runner）
 # 会真正执行。
+_WINDOWS_REAL_DISPLAY = (
+    sys.platform == 'win32'
+    and os.environ.get('QT_QPA_PLATFORM', '').lower() != 'offscreen'
+)
 pytestmark = pytest.mark.skipif(
-    sys.platform != 'win32'
-    or os.environ.get('QT_QPA_PLATFORM', '').lower() == 'offscreen',
+    not _WINDOWS_REAL_DISPLAY,
     reason='需要真实窗口系统（原生扩展样式 + 真实前台窗口）',
 )
 
@@ -45,23 +47,42 @@ INPUT_MOUSE = 0
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
 
-u32 = ctypes.windll.user32
-u32.GetForegroundWindow.restype = wintypes.HWND
-u32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-u32.WindowFromPoint.restype = wintypes.HWND
-u32.WindowFromPoint.argtypes = [wintypes.POINT]
+# Win32 句柄/结构只在 Windows 上有意义，且 ctypes.windll 在 macOS/Linux 上
+# 根本不存在——这些必须**惰性**构造：模块级触碰会让非 Windows 平台的
+# collection 直接 AttributeError，skip 标记救不了（CI 实测）。
+_u32 = None
 
 
-class _MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ('dx', wintypes.LONG), ('dy', wintypes.LONG), ('mouseData', wintypes.DWORD),
-        ('dwFlags', wintypes.DWORD), ('time', wintypes.DWORD),
-        ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
-    ]
+def _user32():
+    """惰性取得已声明签名的 user32（仅在 _WINDOWS_REAL_DISPLAY 下调用）。"""
+    global _u32
+    if _u32 is None:
+        from ctypes import wintypes as wt
+
+        lib = ctypes.windll.user32
+        lib.GetForegroundWindow.restype = wt.HWND
+        lib.GetWindowLongW.argtypes = [wt.HWND, ctypes.c_int]
+        lib.WindowFromPoint.restype = wt.HWND
+        lib.WindowFromPoint.argtypes = [wt.POINT]
+        _u32 = lib
+    return _u32
 
 
-class _INPUT(ctypes.Structure):
-    _fields_ = [('type', wintypes.DWORD), ('mi', _MOUSEINPUT)]
+def _mouse_input_structs():
+    """惰性定义 MOUSEINPUT/INPUT（依赖 wintypes，非 Windows 上不可用）。"""
+    from ctypes import wintypes as wt
+
+    class _MouseInput(ctypes.Structure):
+        _fields_ = [
+            ('dx', wt.LONG), ('dy', wt.LONG), ('mouseData', wt.DWORD),
+            ('dwFlags', wt.DWORD), ('time', wt.DWORD),
+            ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class _Input(ctypes.Structure):
+        _fields_ = [('type', wt.DWORD), ('mi', _MouseInput)]
+
+    return _MouseInput, _Input
 
 
 def _hwnd(value) -> int:
@@ -74,7 +95,9 @@ def _hwnd(value) -> int:
 
 
 def _ex_style(hwnd: int) -> int:
-    return int(u32.GetWindowLongW(wintypes.HWND(hwnd), GWL_EXSTYLE))
+    from ctypes import wintypes as wt
+
+    return int(_user32().GetWindowLongW(wt.HWND(hwnd), GWL_EXSTYLE))
 
 
 def _pump(app, times: int = 30) -> None:
@@ -85,11 +108,14 @@ def _pump(app, times: int = 30) -> None:
 def _click_at(x: int, y: int) -> None:
     """真实鼠标点击（SendInput）：Qt 的 activateWindow 对后台进程会被系统拒绝，
     无法复现用户点击，必须用真实输入事件。"""
+    mouse_input, input_struct = _mouse_input_structs()
+    u32 = _user32()
     u32.SetCursorPos(int(x), int(y))
     time.sleep(0.15)
     for flag in (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP):
-        message = _INPUT(type=INPUT_MOUSE, mi=_MOUSEINPUT(0, 0, 0, flag, 0, None))
-        u32.SendInput(1, ctypes.byref(message), ctypes.sizeof(_INPUT))
+        message = input_struct(type=INPUT_MOUSE,
+                               mi=mouse_input(0, 0, 0, flag, 0, None))
+        u32.SendInput(1, ctypes.byref(message), ctypes.sizeof(input_struct))
         time.sleep(0.05)
 
 
@@ -147,8 +173,11 @@ def test_clicking_pet_does_not_steal_foreground(tmp_path):
         _pump(app, 40)
         pet_hwnd = int(win.winId())
 
-        rect = wintypes.RECT()
-        u32.GetWindowRect(wintypes.HWND(pet_hwnd), ctypes.byref(rect))
+        from ctypes import wintypes as wt
+
+        u32 = _user32()
+        rect = wt.RECT()
+        u32.GetWindowRect(wt.HWND(pet_hwnd), ctypes.byref(rect))
         bounds = win._mask_bounds
         if bounds is not None and not bounds.isEmpty():
             lx, ly = bounds.center().x(), bounds.center().y()
@@ -157,7 +186,7 @@ def test_clicking_pet_does_not_steal_foreground(tmp_path):
         cx, cy = rect.left + lx, rect.top + ly
 
         # 安全哨兵：只有光标下确实是桌宠窗口时才发真实点击，绝不误点别的应用
-        under = _hwnd(u32.WindowFromPoint(wintypes.POINT(cx, cy)))
+        under = _hwnd(u32.WindowFromPoint(wt.POINT(cx, cy)))
         if under != pet_hwnd:
             pytest.skip(f'桌宠未处于光标所在位置（under={under:#x}），跳过真实点击')
 
