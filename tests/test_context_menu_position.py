@@ -9,7 +9,10 @@ import sys
 
 from PySide6.QtCore import QPoint, QRect, Qt
 
-from pet.window import pick_context_menu_position
+# 菜单定位/动画纯函数已抽到轻量模块 pet/menu_animation.py——测试只测纯函数，
+# 不应经 window.py（连带 webm_clip/MovieLibrary 等重依赖，import ~1.3s 让
+# CI 慢 runner 上的 subprocess 逼近超时上限）。
+from pet.menu_animation import pick_context_menu_position
 
 
 def _menu_size(width: int = 120, height: int = 220):
@@ -88,7 +91,7 @@ import time
 from PySide6.QtCore import QPoint
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMenu
-from pet.window import animate_context_menu_to
+from pet.menu_animation import animate_context_menu_to
 
 app = QApplication([])
 menu = QMenu()

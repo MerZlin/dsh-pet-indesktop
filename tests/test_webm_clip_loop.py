@@ -22,6 +22,7 @@ ffmpeg 进程，无平台限定。
 """
 from __future__ import annotations
 
+import logging
 import queue
 import subprocess
 import threading
@@ -132,7 +133,13 @@ def _install_fake_ffmpeg(monkeypatch, clip, spawns: list) -> None:
 
     是否无限循环由真实参数决定（-stream_loop 在参数里才无限）——参数被误删/
     误加时假件行为跟着变，测试能钉住参数回归（自欺清单 #7）。
+
+    默认把版本探测钉为 5：测试代表「支持 -readrate 的新版 ffmpeg」语义——既有
+    readrate 参数断言（P2-4）在假流下继续成立。生产旧版（4.2.2）的降级行为
+    由 test_readrate_omitted_on_old_ffmpeg 单独验证（patch 版本=4）。
     """
+    monkeypatch.setattr(webm_clip_mod, "_ffmpeg_major_version", lambda: 5)
+
     def _fake_read_frames(*args, **kwargs):
         proc = _FakeProc()
         params = list(kwargs.get('input_params') or [])
@@ -683,6 +690,109 @@ def test_readrate_scales_with_playback_speed(app, monkeypatch, tmp_path):
         _close_all(spawns)
         clip.cleanup()
         app.processEvents()
+
+
+def test_readrate_omitted_on_old_ffmpeg(app, monkeypatch, tmp_path):
+    """回归：ffmpeg < 5 不上 -readrate（imageio 捆绑的 4.2.2 不认该选项，
+    会 Unrecognized option 'readrate' 导致循环播放 webm 全部解码失败、
+    动画不播放）。旧版退化为自然帧率循环：-stream_loop 保留（进程内循环
+    的 churn 收益仍在），-readrate 省略（背压等效于 readrate=1）。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    clip.set_playback_speed(1.5)  # speed>1 也应降级（旧版不支持提速）
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    monkeypatch.setattr(webm_clip_mod, "_ffmpeg_major_version", lambda: 4)  # 覆盖 install 内钉的 5
+    try:
+        assert clip.start() is True
+        assert clip._reader_ready.wait(5.0)
+        params = spawns[0][2]
+        assert '-stream_loop' in params, "旧版仍应进程内循环（消灭每圈重启 churn）"
+        assert '-readrate' not in params, f"旧版 ffmpeg 不得带 -readrate: {params}"
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_readrate_fallback_is_logged_on_old_ffmpeg(app, monkeypatch, tmp_path, caplog):
+    """回归（评审 🟠）：-readrate 被门槛挡下时必须留日志。
+
+    静默丢参数恰好落在本参数要治理的方向上（解码/内存抖动、速度档位不生效），
+    此前只降级不吭声，事后排查日志里一片空白。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    clip.set_playback_speed(1.5)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    # 覆盖 _install_fake_ffmpeg 钉的版本=5；并复位"只记一次"闩（跨用例全局）。
+    monkeypatch.setattr(webm_clip_mod, "_ffmpeg_major_version", lambda: 4)
+    monkeypatch.setattr(webm_clip_mod, "_readrate_fallback_logged", False)
+    try:
+        with caplog.at_level(logging.INFO, logger=webm_clip_mod.logger.name):
+            assert clip.start() is True
+            assert clip._reader_ready.wait(5.0)
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("不支持 -readrate" in msg for msg in messages), messages
+        assert '-readrate' not in spawns[0][2]
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_readrate_fallback_is_logged_when_version_probe_fails(
+    app, monkeypatch, tmp_path, caplog,
+):
+    """回归（评审 🟠）：版本探测失败（None）同样不得静默丢参数。
+
+    探测不出与"旧版"是两种不同的降级：前者是"不知道支不支持"，留给运维一条
+    可检索的日志（版本串无法解析时 _ffmpeg_major_version 另有 warning）。"""
+    clip = _make_clip(tmp_path, frame_count=3)
+    spawns = []
+    _install_fake_ffmpeg(monkeypatch, clip, spawns)
+    monkeypatch.setattr(webm_clip_mod, "_ffmpeg_major_version", lambda: None)
+    monkeypatch.setattr(webm_clip_mod, "_readrate_fallback_logged", False)
+    try:
+        with caplog.at_level(logging.INFO, logger=webm_clip_mod.logger.name):
+            assert clip.start() is True
+            assert clip._reader_ready.wait(5.0)
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("主版本未知" in msg for msg in messages), messages
+        assert '-readrate' not in spawns[0][2]
+    finally:
+        _close_all(spawns)
+        clip.cleanup()
+        app.processEvents()
+
+
+def test_ffmpeg_major_version_warns_when_probe_fails(monkeypatch, caplog):
+    """探测失败/版本串不可解析必须在 _ffmpeg_major_version 内留 warning。"""
+    # 绕过 lru_cache 的一次性语义：直接测未缓存的原始函数体。
+    probe = webm_clip_mod._ffmpeg_major_version.__wrapped__
+
+    class _Boom:
+        @staticmethod
+        def get_ffmpeg_version():
+            raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(webm_clip_mod, "imageio_ffmpeg", _Boom)
+    with caplog.at_level(logging.WARNING, logger=webm_clip_mod.logger.name):
+        assert probe() is None
+    assert any("版本探测失败" in record.getMessage() for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]
+
+    class _Unparsable:
+        @staticmethod
+        def get_ffmpeg_version():
+            return "not-a-version"
+
+    caplog.clear()
+    monkeypatch.setattr(webm_clip_mod, "imageio_ffmpeg", _Unparsable)
+    with caplog.at_level(logging.WARNING, logger=webm_clip_mod.logger.name):
+        assert probe() is None
+    assert any("无法解析主版本号" in record.getMessage() for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]
 
 
 def test_first_frame_decode_never_loops(app, monkeypatch, tmp_path):

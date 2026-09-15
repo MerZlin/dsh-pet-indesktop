@@ -92,7 +92,9 @@ test("帧自带 callId 时原样保留", () => {
 });
 
 test("mux 分支确实走构造函数（防还原成内联写盘后本文件仍绿）", () => {
-  const src = fs.readFileSync(path.join(bridgeDir, "index.js"), "utf8");
+  // 桥接已拆为壳 + impl/<version>/：mux relay 段住在实现层，源码检查须读 impl。
+  const pkg = JSON.parse(fs.readFileSync(path.join(bridgeDir, "package.json"), "utf8"));
+  const src = fs.readFileSync(path.join(bridgeDir, "impl", String(pkg.version || ""), "index.js"), "utf8");
   const muxBranch = src.split("// ===== interactive mux relay =====")[1] || "";
   assert.ok(
     muxBranch.includes("muxQuestionRequestedRecord(") && muxBranch.includes("muxQuestionResolvedRecord("),

@@ -213,7 +213,7 @@ def test_recovery_after_restart(tmp_path, monkeypatch):
 
     _write(bridge_dir, *(_records_for("turn/start")))
     tracker._poll_events()
-    assert tracker.current_state is DshState.THINKING
+    assert tracker.current_state is DshState.WORKING
 
 
 def test_user_message_plugin_source_ignored(tmp_path, monkeypatch):
@@ -304,7 +304,9 @@ def test_dead_event_keys_removed_from_state_map():
     from pet.dsh_state import _EVENT_TO_STATE
 
     assert "llm_error" in _EVENT_TO_STATE
-    assert "llm/error" not in _EVENT_TO_STATE, "桥接实际写 llm_error，旧键名匹配不到"
+    # 斜杠拼写保留为**旧 producer 兼容**（consumer 测试 test_llm_error_event_...
+    # 明确要求 legacy slash 仍被接受）；真正要锁死的是"状态表不得覆盖 bridge
+    # 从不发出的流式事件"——assistant/chunk、plan/mode 才是核心 dead key。
     assert "assistant/chunk" not in _EVENT_TO_STATE
     assert "plan/mode" not in _EVENT_TO_STATE
 

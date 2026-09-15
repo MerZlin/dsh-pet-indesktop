@@ -19,7 +19,10 @@ Windows：Explorer / 开机自启的进程环境块是登录时的旧值，除�
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -31,6 +34,8 @@ from .node_runtime import augmented_path as _augmented_path
 from .node_runtime import global_node_modules_roots
 from .node_runtime import static_node_modules_roots
 from .node_runtime import which as _which
+
+log = logging.getLogger("dsh-pet-standalone")
 
 # 3080 会落入 Windows winnat/Hyper-V 动态保留段（EACCES），默认改用 38080；
 # 与环境变量 DSH_PORT 保持一致（dsh-launcher 三件套也读它）。
@@ -58,6 +63,73 @@ def _candidate_ports(port: int = DEFAULT_PORT) -> list[int]:
         if p not in ports:
             ports.append(p)
     return ports
+
+
+# ---------------------------------------------------------------- DSH 进程枚举（桥接健康自检用）
+# 用途：判断"正在跑的 DSH 到底有没有加载桥接插件"。插件 apply 时会写
+# `<桥目录>/dsh-<dsh pid>.jsonl`（hello + diagnostic 必写），所以拿到 DSH 的 pid
+# 就能精确判断——比"桥目录最近有没有活动"可靠得多：DSH 空闲时本来就不写记录，
+# 拿"最近无活动"当判据会稳定误报。
+_DSH_PROCESS_PS = (
+    "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
+    "ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }"
+)
+
+
+def dsh_process_listing() -> str:
+    """返回 "<pid> <命令行>" 逐行的进程清单；拿不到时返回空串（调用方按"不知道"处理）。
+
+    只做只读枚举，不依赖第三方库（Windows 走 Get-CimInstance，POSIX 走 ps）。
+    任何失败都静默返回空——健康自检宁可"不提示"，也不能因枚举失败打扰用户。
+    """
+    if os.name == "nt":
+        # 与模块内其它派生点同一写法：Windows 必须隐藏控制台窗口（issue #82 教训：
+        # 探测子进程弹常驻终端）。
+        command = [shutil.which("powershell") or "powershell", "-NoProfile",
+                   "-NonInteractive", "-Command", _DSH_PROCESS_PS]
+        kwargs: dict = {"creationflags": subprocess.CREATE_NO_WINDOW}
+    else:
+        command = ["ps", "-A", "-o", "pid=,args="]
+        kwargs = {}
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=8.0,
+            encoding="utf-8", errors="replace", **kwargs,
+        )
+    except Exception:
+        log.debug("DSH 进程枚举失败", exc_info=True)
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout or ""
+
+
+def parse_dsh_server_pids(listing: str, profile_names) -> list[int]:
+    """从进程清单里挑出 DSH 服务进程 pid：命令行含 `bin.js` 且带目标 profile 名。
+
+    只认"跑着我们关心的那个 profile 的 DSH"——别的 profile（或开发用的其它 dsh
+    进程）不会加载桥接插件，把它们算进来会造成"明明没配却一直提示重启"的误报。
+    """
+    wanted = {str(name) for name in (profile_names or []) if str(name)}
+    if not wanted:
+        return []
+    pids: list[int] = []
+    for line in (listing or "").splitlines():
+        line = line.strip()
+        if not line or "bin.js" not in line:
+            continue
+        head, _, tail = line.partition(" ")
+        if not head.isdigit():
+            continue
+        if not wanted & set(re.split(r"[\s\"']+", tail)):
+            continue
+        pids.append(int(head))
+    return sorted(set(pids))
+
+
+def dsh_server_pids(profile_names) -> list[int]:
+    """当前正在运行的、加载目标 profile 的 DSH 服务进程 pid（拿不到则空列表）。"""
+    return parse_dsh_server_pids(dsh_process_listing(), profile_names)
 
 
 def _wrap_cmd(command: list[str]) -> list[str]:

@@ -78,7 +78,13 @@ class TestWorkerLifecycle:
             mon.pause()
             time.sleep(0.15)  # 确保 worker 至少空转过了一轮 pause
             with open(mon.events_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps({"state": "working"}) + "\n")
+                # 契约合规记录（DshMonitor 已开启契约校验）
+                f.write(json.dumps({
+                    "event": "AgentStatus",
+                    "state": "working",
+                    "bridgeProtocolVersion": 1,
+                    "bridgeVersion": "0.3.0",
+                }) + "\n")
             time.sleep(0.15)
             assert received == []  # pause 期间不得读取/发射
             mon.resume()
@@ -123,7 +129,14 @@ class TestWorkerLifecycle:
         assert wait_until(first_poll_done.is_set)
         gen1 = mon._emit_gen
         with open(mon.events_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"state": "working"}) + "\n")
+            # 契约合规记录：DshMonitor 开启 _enforce_bridge_contract 后，
+            # 裸记录（无协议/版本/事件名）会被 validate_bridge_record 拒绝。
+            f.write(json.dumps({
+                "event": "AgentStatus",
+                "state": "working",
+                "bridgeProtocolVersion": 1,
+                "bridgeVersion": "0.3.0",
+            }) + "\n")
         assert wait_until(lambda: len(win.switched) >= 1)
         # 停止：当前代次立即作废，旧代次信号被拒收
         mon.stop()

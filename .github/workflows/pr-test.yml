@@ -56,14 +56,22 @@ jobs:
       # 用户 profile，link 不装依赖、链接目标常是打包版 _internal 副本（无
       # node_modules）——任何外部 bare import 都会让用户开联动后整个 dsh
       # 插件树加载失败。此前这类回归无任何 CI 覆盖。
-      # 两层校验：node --test 跑全部 7 个 bridge 契约测试（原地 import 捕获
-      # 静态外部依赖回归）；verify_import.mjs 做 hermetic 校验（拷进无
-      # node_modules 的临时目录 import + 清单零依赖 + envelope 形状 + 动态
-      # import/require 静态禁令 + 临时目录祖先链污染探测）。
-      # 注意：新增 bridge 测试文件时必须同步下面的显式清单（Node 20 无 glob）。
+      # 三层校验：
+      # 1) node --test 跑仓库级 7 个 bridge 契约测试（原地 import 捕获静态
+      #    外部依赖回归）；
+      # 2) node --test 跑桥包自带 test/*.mjs（当前 10 例热重载 + 4 例壳/实现
+      #    契约，共 14 例）——它们与仓库级用例是**两套**清单，漏登记就等于 CI
+      #    永不执行（热重载的 dispose 幂等/hello 一次性/不泄漏/agent 重放一旦
+      #    回归门禁不会红）；
+      # 3) verify_import.mjs 做 hermetic 校验（拷进无 node_modules 的临时目录
+      #    import + 清单零依赖 + envelope 形状 + 动态 import/require 静态禁令 +
+      #    临时目录祖先链污染探测）。
+      # 注意：新增 bridge 测试文件（两处任何一处）时必须同步下面的显式清单
+      # （Node 20 无 glob）。
       - name: Bridge plugin zero-dependency gate
         run: |
           node --test tests/test_bridge_hardfailure.js tests/test_bridge_interaction_dedup.js tests/test_bridge_manifest.js tests/test_bridge_question_callid.js tests/test_bridge_retry.js tests/test_bridge_root_control.js tests/test_bridge_user_action_guard.js
+          node --test integrations/dsh-pet-bridge/test/bridge-contract.test.mjs integrations/dsh-pet-bridge/test/hot-reload.test.mjs
           node integrations/dsh-pet-bridge/verify_import.mjs
 
       - name: Pytest (main suite)

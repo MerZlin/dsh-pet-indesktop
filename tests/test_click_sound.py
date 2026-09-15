@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import time
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -111,6 +112,121 @@ def test_wav_restarts_qsound_effect_on_each_click(monkeypatch, tmp_path):
     # 后端第二次 play 不重启导致“后续点击/试听无声”。
     assert FakeQtEffect.instances[-1].stop_count >= 2
     assert FakeQtEffect.instances[-1].loop_counts == [1, 1]
+
+
+def test_idle_effect_is_rebuilt_after_long_inactivity(monkeypatch, tmp_path):
+    """长时间放置后点击音效消失的回归：QSoundEffect 实例闲置超阈值要重建。
+
+    Windows 上 QtMultimedia 会把长期不播的音频会话休眠/回收，同一实例
+    再 play() 不报错但无声。闲置（_EFFECT_IDLE_REBUILD_S）后应丢弃缓存
+    实例、走新建重新加载路径（自愈）；未闲置则复用同一实例（保持预热
+    低延迟开局）。"""
+    monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "_effect_last_play", {})
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(
+        click_sound._pool, "_EFFECT_IDLE_REBUILD_S", 300.0,
+    )
+    path_wav = _make_file(tmp_path, "click.wav")
+
+    before = len(FakeQtEffect.instances)
+    assert click_sound.play_sound(path_wav, volume=1.0) is True
+    after_first = len(FakeQtEffect.instances)
+    assert after_first == before + 1, "首次播放应新建一个 QSoundEffect 实例"
+
+    # 未闲置：连续播放复用同一实例（不新建）
+    assert click_sound.play_sound(path_wav, volume=1.0) is True
+    assert len(FakeQtEffect.instances) == after_first, "未闲置不得重建实例"
+
+    # 闲置超阈值：回收缓存实例 → 再次播放重建（自愈）
+    key = str(path_wav.resolve())
+    click_sound._pool._effect_last_play[key] -= click_sound._pool._EFFECT_IDLE_REBUILD_S + 1
+    assert click_sound.play_sound(path_wav, volume=1.0) is True
+    assert len(FakeQtEffect.instances) == after_first + 1, \
+        "闲置超阈值后应重建 QSoundEffect 实例（自愈无声）"
+    assert FakeQtEffect.instances[-1].play_count == 1, "重建实例应重新加载/播放"
+
+
+def test_idle_reset_rebuilds_the_player_pool_too(monkeypatch, tmp_path):
+    """长时间放置后「全部音效消失」：闲置自愈必须同时覆盖播放器池。
+
+    压缩音频（mp3/ogg）解码缓存未就绪时走 QMediaPlayer 池 + 各自的
+    QAudioOutput；Windows 上闲置久了这批对象的音频会话同样被回收/休眠，
+    只重建 QSoundEffect 的话用户看到的仍是"点哪个都没声"。"""
+    monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_decoders", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound._pool, "_qt_player_index", 0)
+    monkeypatch.setattr(click_sound._pool, "_qt_player", None)
+    monkeypatch.setattr(click_sound._pool, "_qt_audio", None)
+    monkeypatch.setattr(click_sound._pool, "_last_play_at", time.monotonic())
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
+    monkeypatch.setattr(click_sound, "_sound_cache_dir", lambda: tmp_path / "cache")
+    path = _make_file(tmp_path, "click.mp3")
+
+    assert click_sound.play_click_sound(path) is True
+    pool_before = [player for player, _audio in click_sound._pool._qt_player_pool]
+    assert pool_before, "首次播放必须建池（否则本用例空转）"
+
+    # 未闲置：复用同一批播放器对象（不重建，保持预热收益）
+    assert click_sound.play_click_sound(path) is True
+    assert [p for p, _a in click_sound._pool._qt_player_pool] == pool_before, \
+        "未闲置不得重建播放器池"
+
+    # 闲置超阈值：整池重建 → 下一次播放拿到全新对象（自愈无声）
+    click_sound._pool._last_play_at -= click_sound._pool._EFFECT_IDLE_REBUILD_S + 1
+    assert click_sound.play_click_sound(path) is True
+    pool_after = [player for player, _audio in click_sound._pool._qt_player_pool]
+    assert pool_after, "闲置后仍须有可用播放器"
+    assert all(p not in pool_before for p in pool_after), \
+        "闲置超阈值后播放器池必须整体重建（旧对象可能已被系统休眠）"
+    assert click_sound._pool._idle_rebuild_count == 1, "闲置重建只应发生一次"
+
+
+def test_first_play_after_warmup_reuses_the_warmed_effect(monkeypatch, tmp_path):
+    """预热后首次点击必须复用预热实例。
+
+    回归：闲置判定此前用 `now - self._effect_last_play.get(key, 0.0)`——缺条目
+    等于"自开机起一直闲置"（monotonic 是开机秒数），于是预热刚建好的
+    QSoundEffect 会在第一次点击时被当场丢弃重建，预热白做、首次点击重新背上
+    加载延迟。现在创建时即登记时刻，缺条目按"不闲置"处理。"""
+    monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "_effect_last_play", {})
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
+    path_wav = _make_file(tmp_path, "click.wav")
+
+    click_sound._pool.effect_for(path_wav)  # 预热：创建并登记
+    before = len(FakeQtEffect.instances)
+    assert click_sound.play_sound(path_wav, volume=1.0) is True
+    assert len(FakeQtEffect.instances) == before, \
+        "预热实例不得在首次播放时被当成闲置而重建"
+
+
+def test_idle_reset_clears_effect_cache_and_shared_audio(monkeypatch, tmp_path):
+    """闲置重建要连 effect 缓存与共享 QAudioOutput/QMediaPlayer 一起丢掉。"""
+    monkeypatch.setattr(click_sound, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(click_sound._pool, "_qt_effects", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_player_pool", [])
+    monkeypatch.setattr(click_sound._pool, "_qt_decoders", {})
+    monkeypatch.setattr(click_sound._pool, "_qt_player_index", 0)
+    monkeypatch.setattr(click_sound._pool, "_last_play_at", time.monotonic())
+    monkeypatch.setattr(click_sound._pool, "qt_multimedia_classes", _fake_classes)
+    path_wav = _make_file(tmp_path, "click.wav")
+    assert click_sound.play_sound(path_wav, volume=1.0) is True
+    assert click_sound._pool._qt_effects, "首次播放后应有 effect 缓存"
+
+    click_sound._pool._last_play_at -= click_sound._pool._EFFECT_IDLE_REBUILD_S + 1
+    shared_player, shared_audio = FakeQtAudio(), FakeQtAudio()
+    monkeypatch.setattr(click_sound._pool, "_qt_player", shared_player)
+    monkeypatch.setattr(click_sound._pool, "_qt_audio", shared_audio)
+    assert click_sound.play_sound(path_wav, volume=1.0) is True
+    assert click_sound._pool._qt_player is not shared_player, \
+        "共享 QMediaPlayer 必须在闲置重建时丢弃（按需重建）"
+    assert click_sound._pool._qt_audio is not shared_audio
+    assert len(click_sound._pool._qt_effects) >= 1, "重建后仍要能播出（新 effect 已就绪）"
 
 
 def test_mp3_decode_failure_falls_back_to_player_pool(monkeypatch, tmp_path):

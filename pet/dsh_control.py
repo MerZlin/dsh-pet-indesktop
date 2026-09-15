@@ -8,17 +8,15 @@ import tempfile
 import time
 import uuid
 
+from .bridge_contract import resolve_bridge_dir
+
 TIMEOUT_S = 30.0
 POLL_S = 0.08
 
 
 def _bridge_dir() -> str:
-    if os.name == "nt":
-        root = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(root, "dsh-pet-bridge")
-    if os.sys.platform == "darwin":
-        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "dsh-pet-bridge")
-    return os.path.join(os.path.expanduser("~"), ".config", "dsh-pet-bridge")
+    """桥目录（与插件同源解析：显式覆盖 > 平台默认）。见 bridge_contract.resolve_bridge_dir。"""
+    return str(resolve_bridge_dir())
 
 
 def _atomic_json(path: str, value: dict) -> None:

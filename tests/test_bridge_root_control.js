@@ -5,8 +5,9 @@
 // 「终止没用」。修复方向：把控制归一到其根 session（interrupt = 停根 agent
 // 的当前回合；replan = 给根 agent 注入重规划建议）。
 //
-// 本测试聚焦纯函数 `resolveControlRoot`：给定目标 agent 与一个 session→agent
-// 的查找函数，返回它是否为子代理、是否已归一化到根、根 session 与父子链。
+// 本测试聚焦新引入的纯函数 `resolveControlRoot`：给定目标 agent 与一个
+// session→agent 的查找函数，返回它是否为子代理、是否已归一化到根、根 session
+// 与父子链。它不依赖 DSH 运行时（@deepseek-ai/* 未安装时整份模块无法 import），
 // 与仓库既有 bridge 契约测试一致：从源码中提取纯函数求值。
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -15,12 +16,17 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const sourcePath = path.resolve(here, "../integrations/dsh-pet-bridge/index.js");
+// 实现层：只读 package.json.version 对应的 impl/<version>/index.js（与壳的
+// probeDisk 精确选中语义一致，不扫描全部历史版本，避免多版本并存时测到旧版）。
+const bridgeRoot = path.resolve(here, "../integrations/dsh-pet-bridge");
+const pkg = JSON.parse(fs.readFileSync(path.join(bridgeRoot, "package.json"), "utf8"));
+const sourcePath = path.join(bridgeRoot, "impl", String(pkg.version || ""), "index.js");
+assert.ok(fs.existsSync(sourcePath), `impl/${pkg.version}/index.js 应存在（与 package.json.version 对应）`);
 const source = fs.readFileSync(sourcePath, "utf8");
 
 function loadResolveControlRoot() {
   const match = source.match(/function resolveControlRoot\(agent, sessionLookup\) \{[\s\S]*?\n\}/);
-  assert.ok(match, "index.js 应定义 resolveControlRoot");
+  assert.ok(match, "桥接实现层应定义 resolveControlRoot");
   return new Function(`${match[0]}; return resolveControlRoot;`)();
 }
 

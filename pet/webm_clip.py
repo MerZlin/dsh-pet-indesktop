@@ -73,6 +73,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -81,6 +82,7 @@ import time
 import types
 import json
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -270,8 +272,94 @@ def _ensure_ffmpeg_exe() -> None:
     with _FFMPEG_EXE_LOCK:
         try:
             imageio_ffmpeg.get_ffmpeg_exe()
+            # 预热版本缓存（同锁内只探测一次 0 个子进程的版本解析）。
+            _ffmpeg_major_version()
         except Exception:
             pass
+
+
+@lru_cache(maxsize=1)
+def _ffmpeg_major_version() -> int | None:
+    """ffmpeg 主版本号（``-readrate`` 支持的判据），不可用返回 None。
+
+    ``-readrate``（输入帧率钳制）**不是**老选项：upstream 的
+    ``ffmpeg: add option readrate`` 合入 master 于 2021-07（commit c320b78e，
+    https://git.v0l.io/ffmpeg/ffmpeg/commit/c320b78e95bab2a71a636dc4da905522c4646b35 ），
+    晚于 4.4 的切分支（2021-04），因此 **4.4 及更早 release 分支不含该选项**。
+    它究竟落在 4.4 的某个点版本还是 5.0 首个正式版，上游 release 记录没有给出
+    可引用的结论（PR #110 审查意见认为「4.4 引入」，与「合入 master 晚于 4.4
+    切分支」不矛盾但也不可据以放宽门槛）——门槛取主版本 >= 5 在两种口径下都
+    只可能偏保守，代价仅 playback_speed>1 时的提速不可达。
+    imageio_ffmpeg 旧版捆绑的二进制（``ffmpeg-win64-v4.2.2.exe``）不认它——这不是
+    推断，是实测：
+
+    - 环境：imageio-ffmpeg 0.4.9 → ``…/imageio_ffmpeg/binaries/
+      ffmpeg-win64-v4.2.2.exe``，``ffmpeg version 4.2.2``；
+    - 形状：pet 的真实参数形状（与 ``imageio_ffmpeg.read_frames`` 内部
+      ``cmd += input_params + ["-i", path]`` 的拼装一致）——
+      ``-c:v libvpx-vp9 -threads 1 -stream_loop -1 -readrate 1.0 -i <webm>``；
+    - 结果：stderr 逐字 ``Unrecognized option 'readrate'.`` +
+      ``Error splitting the argument list: Option not found``，
+      ``read_frames`` 抛 ``OSError: Could not load meta information``；
+    - 生产证据：``%APPDATA%/dsh-pet-standalone-webm-chat/pet-11540.log``
+      （2026-09-12 13:16，onedir 打包版）里同一段 stderr（ffmpeg 4.2.2 +
+      Unrecognized option 'readrate'）挂在「webm 解码失败」上——精确帧数已知的
+      循环播放 webm（写代码/吃Token 等）全部解码失败，只有待机/一次性可播。
+
+    新版捆绑（如 imageio-ffmpeg 0.6.0 → ffmpeg 7.1）接受同一形状，所以门槛只对
+    旧环境生效、新环境行为不变。因此只在主版本 >= ``_READRATE_MIN_MAJOR`` 时附加
+    该参数，旧版退化为自然帧率循环（``-stream_loop`` 常驻与背压仍然生效）。
+
+    探测失败/版本串解析不出时同样按「不支持」处理，但**必须留日志**——静默丢参数
+    恰好落在本参数要治理的解码/内存抖动方向上，事后无从排查。
+    """
+    if imageio_ffmpeg is None:
+        logger.warning('imageio_ffmpeg 不可用，按不支持 -readrate 处理（退化为自然帧率循环）')
+        return None
+    try:
+        version = imageio_ffmpeg.get_ffmpeg_version()
+    except Exception:
+        logger.warning('ffmpeg 版本探测失败，按不支持 -readrate 处理', exc_info=True)
+        return None
+    match = re.match(r"^\D*(\d+)", str(version or ""))
+    if not match:
+        logger.warning('ffmpeg 版本串无法解析主版本号: %r，按不支持 -readrate 处理', version)
+        return None
+    return int(match.group(1))
+
+
+# ``-readrate`` 门槛：主版本 >= 该值才附加。取 5 是保守值——**本机实测会踩坑的
+# 是 4.2.2（见 _ffmpeg_major_version 的取证），而 PR #110 审查者在
+# imageio-ffmpeg 0.6.0 → ffmpeg 7.1 上实测同一参数形状可用**；两者之间的
+# 4.4/5.0 边界上游没有可引用的结论，因此门槛宁可偏保守：够不到门槛即降级，
+# 而降级代价只是 playback_speed>1 时的提速不可达（背压仍在）。
+_READRATE_MIN_MAJOR = 5
+_readrate_fallback_logged = False
+
+
+def _log_readrate_fallback(major: int | None) -> None:
+    """``-readrate`` 被门槛挡下时留一行日志（每进程一次，避免每次起播刷屏）。
+
+    探测失败（major is None，不知道支不支持）与旧版（major < 门槛，明确不支持）
+    都要留痕：两者都会让主播放 reader 退化为自然帧率循环——只留用户侧表现
+    「速度档位不生效」而没有日志，排查时无从下手。
+    """
+    global _readrate_fallback_logged
+    if _readrate_fallback_logged:
+        return
+    _readrate_fallback_logged = True
+    if major is None:
+        logger.info(
+            'ffmpeg 主版本未知：主播放 reader 不附加 -readrate，退化为自然帧率循环'
+            '（-stream_loop 常驻与背压仍在）'
+        )
+    else:
+        logger.info(
+            'ffmpeg %s < %s 不支持 -readrate：主播放 reader 退化为自然帧率循环'
+            '（-stream_loop 常驻与背压仍在；playback_speed>1 的提速不可达）',
+            major, _READRATE_MIN_MAJOR,
+        )
+
 
 # ------------------------------------------------------------ 孤儿 sweep 生命周期管理器（B7 审查 P2）
 # 退役 reader 的回收由「独立生命周期管理器」持有：注册表记录所有
@@ -2096,8 +2184,21 @@ class WebMClip(QObject):
             )
             input_params = list(_FFMPEG_INPUT_PARAMS)
             if loop_frame_count > 0:
-                input_params += ['-stream_loop', '-1',
-                                 '-readrate', str(max(1.0, self.playback_speed))]
+                input_params += ['-stream_loop', '-1']
+                # -readrate 只有 ffmpeg >= _READRATE_MIN_MAJOR 才认（详见
+                # _ffmpeg_major_version 的实测取证：旧捆绑 4.2.2 会
+                # Unrecognized option 'readrate'，循环播放 webm 全部解码失败、
+                # 动画不播放）。旧版/探测不出时退化为自然帧率循环：
+                # -stream_loop -1 仍常驻单进程，背压（队列写满阻塞
+                # decode）等效于 speed<=1 的 readrate=1；speed>1 的提速在
+                # 旧版 ffmpeg 上不可达（保持现状语义，不自作主张改帧率）。
+                major = _ffmpeg_major_version()
+                if major is not None and major >= _READRATE_MIN_MAJOR:
+                    input_params += ['-readrate', str(max(1.0, self.playback_speed))]
+                else:
+                    # 门挡下（旧版或探测失败）必须留痕：参数被静默丢掉的话，
+                    # 排查「速度档位不生效/解码抖动」时日志里什么都看不到。
+                    _log_readrate_fallback(major)
             # 批11-B1：记录当前 ffmpeg 进程出生时刻并清零圈数（圈边界回收
             # 判定/日志用；reader 线程写，Reader 读同线程）。只在此处记录一次，
             # feed 路径（不拉起 ffmpeg）不会走到这里，_reader_born_at 保持 0。

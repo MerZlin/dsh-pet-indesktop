@@ -2074,6 +2074,65 @@ def test_windows_build_regenerates_the_icon_before_pyinstaller():
     assert "pet/menu_templates:pet/menu_templates" in mac_build_script
 
 
+def test_windows_build_script_keeps_its_utf8_bom():
+    """build_onedir.ps1 必须带 UTF-8 BOM（2026-09-14 回归）。
+
+    PowerShell 5.1 读 .ps1 时若无 BOM 就按系统 ANSI 码页（本机 GBK）解码：中文
+    注释/字符串变乱码，字节序列还可能吃掉引号或反引号，把**函数签名**解析坏
+    （实测症状：调用自定义函数时报 "Parameter set cannot be resolved"，
+    看起来像参数集问题，实际是编码问题）。仓库此前专门补过这个 BOM
+    （commit "build(windows): build_onedir.ps1 补 UTF-8 BOM"），而用常见编辑器/
+    代理工具改写该文件会静默把 BOM 去掉——这条断言让它当场变红，而不是等到
+    打包时才炸。
+    """
+    raw = Path("scripts/build_onedir.ps1").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf"), (
+        "scripts/build_onedir.ps1 丢了 UTF-8 BOM：PowerShell 5.1 会按 ANSI 解码中文，"
+        "函数定义可能被解析坏。请以 UTF-8 with BOM 保存。"
+    )
+
+
+def test_windows_build_refuses_to_wipe_a_locked_output_dir():
+    """打包前必须探测输出目录占用（2026-09-14 事故回归）。
+
+    事故链：PyInstaller --noconfirm --clean 会**先清空**输出目录；若目录被占用
+    （最典型是一个停在里面的资源管理器窗口——Windows 登录会恢复上次窗口，所以
+    重启电脑无效），删除失败抛 WinError 32，而目录内容已被清空 = "构建失败 +
+    上一次安装被毁"。桌宠的 DSH 联动插件就在
+    <产物>/_internal/integrations/dsh-pet-bridge，目录一空连 `dsh web` 都起不来
+    （profile 的 link: 目标消失 → cannot resolve profile bundle "@dsh-pet/bridge"）。
+    脚本必须在调用 PyInstaller **之前**探测并中止，把上一次的安装原样留着。
+    """
+    script = Path("scripts/build_onedir.ps1").read_text(encoding="utf-8-sig")
+    assert "function Assert-OutputDirNotLocked" in script
+    guard_call = script.index("Assert-OutputDirNotLocked -Path")
+    pyinstaller = script.index("python -m PyInstaller")
+    assert guard_call < pyinstaller, "占用预检必须在 PyInstaller 之前执行"
+    # 探测手段是"改名再改回"（资源管理器持有目录句柄，只能这样发现）
+    assert "Rename-Item -LiteralPath $Path -NewName $probeLeaf" in script
+    # profile link 预警（DSH 若把插件 link 到构建输出，构建期间会占用该目录）
+    assert "Get-BridgeLinkedProfile" in script
+
+
+def test_windows_build_smoke_polls_for_a_cold_start_instead_of_a_fixed_wait():
+    """冒烟等待启动必须轮询，且不能只信窗口句柄（2026-09-14 两次误判回归）。
+
+    原实现是 `Start-Sleep -Seconds 10` 后只看一次 MainWindowHandle：
+    1) 全新构建产物第一次启动时 Defender/索引器要扫描数百 MB 的 `_internal`——冷启动
+       实测 >10s、热启动恰好 ~10s，于是"构建其实成功"被误判成"启动失败"；
+    2) 窗口句柄还依赖会话/桌面显示状态：构建跑在"目标屏幕暂不在线"的会话里时
+       （实测 avail=(0,0,799,799) dpr=1.0），窗口创建在查不到句柄的桌面上，同样误判。
+    现在轮询到 45 秒，并接受应用自己日志里的启动标记（pet/window.py 的 "[VIS] 桌宠显示"
+    / pet/app.py 的 "进入事件循环"）作为通过证据；失败时附上应用日志尾部。
+    """
+    script = Path("scripts/build_onedir.ps1").read_text(encoding="utf-8-sig")
+    assert "Start-Sleep -Seconds 10" not in script, "冒烟不得再用固定 10 秒等待"
+    assert "$smokeDeadline" in script and "AddSeconds(45)" in script
+    assert "[VIS] 桌宠显示" in script and "进入事件循环" in script, \
+        "冒烟必须接受应用日志里的启动标记（窗口句柄依赖显示会话，不可靠）"
+    assert "Get-AppLogTail" in script, "冒烟失败必须带上应用日志尾部（否则无法区分崩溃与慢启动）"
+
+
 def test_modern_animation_leaf_icons_are_loaded_only_when_category_opens(monkeypatch):
     import time
 

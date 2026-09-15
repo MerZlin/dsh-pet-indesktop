@@ -234,7 +234,8 @@ class TestControlBubbleButtons:
         mgr._on_exploration_warning("sess-1", _payload())
         alert = mgr.win.alerts[-1]
         labels = [name for name, _ in (alert["buttons"] or [])]
-        assert labels == ["自动优化", "终止", "忽略"]
+        # B2：「自动优化」实效不可靠已移除，只保留「终止 / 忽略」。
+        assert labels == ["终止", "忽略"]
         assert alert["sticky"] is True, "带按钮的控制提醒必须常驻，否则按钮会随超时消失"
         assert alert["alert_id"] == "exploration-control:sess-1"
         assert alert["alert_type"] == "control"
@@ -292,15 +293,16 @@ class TestControlRequestThreading:
         monkeypatch.setattr(dsh_control, "request", fake_request)
         return captured, calls
 
-    def test_replan_button_runs_request_off_gui_thread(self, app, mgr, monkeypatch):
+    def test_terminate_button_runs_request_off_gui_thread(self, app, mgr, monkeypatch):
+        # B2：「自动优化」已移除（实效不可靠），线程性验证改走「终止」按钮。
         captured, calls = self._capture(monkeypatch)
         mgr._on_exploration_warning("sess-1", _payload())
-        _button(mgr.win.alerts[-1], "自动优化")()
+        _button(mgr.win.alerts[-1], "终止")()
         assert calls.wait(5.0), "按钮回调应真的发起控制请求"
         assert _wait_for(lambda: len(mgr.win.alerts) >= 2, app), "应回显控制结果"
         call = captured[-1]
         assert call["thread"] is not threading.main_thread(), "请求绝不许跑在 GUI 线程"
-        assert call["operation"] == "replan"
+        assert call["operation"] == "interrupt"
         assert call["session_id"] == "sess-1"
         assert call["goal"] == "修好登录"
         assert "W6 同类重复" in call["context"]
@@ -335,7 +337,8 @@ class TestControlRequestThreading:
 
         monkeypatch.setattr(dsh_control, "request", fake_request)
         mgr._on_exploration_warning("sess-1", _payload())
-        callback = _button(mgr.win.alerts[-1], "自动优化")
+        # B2：「自动优化」已移除，用「终止」按钮验证不阻塞 GUI 线程
+        callback = _button(mgr.win.alerts[-1], "终止")
         begin = time.monotonic()
         callback()
         elapsed = time.monotonic() - begin

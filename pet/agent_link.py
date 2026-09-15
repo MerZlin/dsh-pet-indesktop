@@ -42,6 +42,12 @@ from .click_sound import play_sound, resolve_builtin_sound
 from .report_gates import should_report, should_report_event
 from .agent_event_protocol import parse_agent_event
 from .agent_event_normalizer import normalize_event
+from .bridge_contract import (
+    BRIDGE_PROTOCOL_VERSION,
+    BRIDGE_VERSION,
+    resolve_bridge_dir,
+    validate_bridge_record,
+)
 from .model_access_tracker import ModelAccessTracker
 from .node_runtime import augmented_path as _augmented_path
 from .node_runtime import global_node_modules_roots
@@ -85,6 +91,29 @@ _RAW_BRIDGE_KNOWN_EVENTS: frozenset[str] = frozenset({
     "web_search_end",
     "context_compacted",
     "pet/control-queued",
+})
+
+# _poll 里走**专用信号**直通的事件（契约测试 test_declared_events_have_an_
+# effect_consumer 以本集合 + 语义层 + 状态机 + 看门狗分类四路共同判定「有真实
+# 消费者」；新增事件必须至少命中一路）。与 _RAW_BRIDGE_KNOWN_EVENTS 的区别：
+# 那是「未知判定豁免名单」，这里是「有专门信号分支转发」的显式清单。
+_POLL_SIGNAL_EVENTS: frozenset[str] = frozenset({
+    "bridge/hello",
+    "bridge/diagnostic",
+    "bridge/control-received",
+    "model_access",
+    "llm_error",
+    "user_action",
+    "execution/failed",
+    "approval/request",
+    "approval/decided",
+    "approval/resolved",
+    "question/requested",
+    "question/resolved",
+    "cordis/request-run",
+    "cordis/request-run-resolved",
+    "bridge/control-result",
+    "watchdog/control-result",
 })
 
 
@@ -485,6 +514,15 @@ def _read_manifest(profile_dir: Path) -> dict | None:
 
 def _manifest_has_plugin(pkg: dict) -> bool:
     return DSH_PLUGIN_NAME in ((pkg.get("dependencies") or {}) or {})
+
+
+def _manifest_bundle_enabled(pkg: dict) -> bool:
+    """插件是否在 `dsh.profile.bundles` 里（不在 = DSH 根本不会加载它）。"""
+    try:
+        bundles = ((pkg.get("dsh") or {}).get("profile") or {}).get("bundles") or []
+    except AttributeError:
+        return False
+    return DSH_PLUGIN_NAME in bundles
 
 
 def _manifest_set_bundle(pkg: dict, profile_dir: Path, present: bool) -> bool:
@@ -1035,7 +1073,16 @@ class DirGlobTailer:
         try:
             if not self.directory.is_dir():
                 return
-            files = sorted(self.directory.glob(self.pattern))
+            # max_files 封顶时按"最近写入优先"排序：活跃 DSH 实例的文件持续追加，
+            # 必须永远排在最前被跟踪。按字典序截断会让生命周期较短的当前实例
+            # （PID 排名随机）被历史文件挤出 64 上限，pet 因此读不到最新桥接事件
+            # （现象：桥接正常写盘、pet 无任何联动/弹窗）。测试
+            # test_glob_capped_prefers_recently_written 锁定该行为。
+            files = sorted(
+                self.directory.glob(self.pattern),
+                key=lambda f: f.stat().st_mtime_ns,
+                reverse=True,
+            )
             files = files[: self.max_files]
             candidates = {str(f) for f in files}
             for stale in [k for k in self._tailers if k not in candidates]:
@@ -1194,6 +1241,10 @@ class BaseAgentMonitor(QObject):
     question_resolved = Signal(str, object)   # (agent_key, payload) —— 问题已解决，气泡应消失
     cordis_requested = Signal(str, object)
     cordis_resolved = Signal(str, object)
+    # Generic monitors (including user-supplied JSONL adapters) do not carry
+    # the DSH bridge envelope.  DshMonitor enables this gate for the bundled
+    # producer while preserving the generic monitor's established seam.
+    _enforce_bridge_contract = False
     # 原始桥接记录转发（供 stuck_detector 等消费）：(agent_key, record)
     # 只挂 DSH 监视器；其他 Agent（claude/cursor/…）不产生这类增强记录。
     raw_record = Signal(str, object)
@@ -1213,6 +1264,13 @@ class BaseAgentMonitor(QObject):
     # 未知桥接事件（DSH 桥接写出的、Pet 全部识别路径都不认识的事件名）：
     # (agent_key, record) —— Manager 侧据此提醒用户更新/重装 bridge。
     unknown_bridge_event = Signal(str, object)
+    # (agent_key, validation-detail) —— 桥接契约校验失败（版本化 hello/记录不
+    # 符合 Pet 期望）：Manager 弹「桥接与桌宠版本不对齐」提示。
+    bridge_incompatible = Signal(str, object)
+    # (agent_key, record) —— 桥接自诊断记录（bridge/diagnostic）。severity=error
+    # 的必须让用户看见：壳拒绝一次契约不符的热重载时只剩这条通道（否则用户只
+    # 看到"桌宠没反应"）——Manager 弹「需重启 DSH」提示，其余只留日志。
+    bridge_diagnostic = Signal(str, object)
 
     def __init__(self, agent_key: str, config_dir: Path, parent=None) -> None:
         super().__init__(parent)
@@ -1449,6 +1507,23 @@ class BaseAgentMonitor(QObject):
                     flattened = dict(data)
                     flattened.update(nested)
                     data = flattened
+                # The same directory also contains Pet-authored
+                # dsh-pet-control-*.jsonl audit records. They are local
+                # telemetry, not bridge output, so they use a separate seam.
+                is_bridge_record = data.get("agent") != "pet"
+                if self._enforce_bridge_contract and is_bridge_record:
+                    validation = validate_bridge_record(data)
+                    if not validation:
+                        self._emit(self.bridge_incompatible, (self.agent_key, {
+                            "record": data,
+                            "reason": validation.reason,
+                            "receivedProtocolVersion": validation.received_protocol,
+                            "receivedBridgeVersion": validation.received_version,
+                            "expectedProtocolVersion": BRIDGE_PROTOCOL_VERSION,
+                            "expectedBridgeVersion": BRIDGE_VERSION,
+                            "receivedEventInventory": list(validation.received_inventory),
+                        }))
+                        continue
                 ev = str(data.get("event", ""))
                 st = str(data.get("state", ""))
                 tool = str(data.get("tool", "") or "").strip()
@@ -1508,6 +1583,11 @@ class BaseAgentMonitor(QObject):
                 # 用户介入信号：user_action（审批决定/回答）→ 关闭对应弹窗
                 if ev == "user_action":
                     self._emit(self.user_action, (self.agent_key, data))
+                # 桥接自诊断：桥进程启动时的常规 diagnostic 只留日志；severity=error
+                # 的（壳拒绝一次契约不符的热重载：需重启 DSH 更新协议）必须让用户
+                # 看见——否则症状只是"桌宠莫名没反应"，日志里也无迹可寻。
+                if ev == "bridge/diagnostic":
+                    self._emit(self.bridge_diagnostic, (self.agent_key, data))
                 # 未知桥接事件：DSH 桥接写出的、Pet 全部识别路径（语义层/状态机/
                 # 直通名单）都不认识的事件名 → 大概率 bridge 与桌宠版本不匹配，
                 # 呈递给 Manager 弹「更新/重装 bridge」提醒。claude/cursor 的
@@ -1519,6 +1599,11 @@ class BaseAgentMonitor(QObject):
                     and normalized is None
                     and not normalize_event_state(ev, "")
                     and ev not in _RAW_BRIDGE_KNOWN_EVENTS
+                    # 契约已校验通过的桥接记录必然是已知事件（hello/版本化清单
+                    # 在 validate_bridge_record 里查过 BRIDGE_EVENT_INVENTORY），
+                    # 不得再落 unknown 兜底——否则 bridge/hello 等会被误报「未知
+                    # 桥接事件 → 提醒更新/重装」。
+                    and not (self._enforce_bridge_contract and is_bridge_record)
                     and meta_type not in ("session/meta", "debug/session-shape")
                 ):
                     self._emit(self.unknown_bridge_event, (self.agent_key, data))
@@ -1543,13 +1628,31 @@ class DshMonitor(BaseAgentMonitor):
     """
 
     PLUGIN_NAME = "@dsh-pet/bridge"
+    # 桥接健康自检发现问题：(agent_key, reason, message)。reason 是稳定的短码
+    # （not-installed / disabled / link-missing / not-loaded），message 是给用户看
+    # 的可操作结论（例如"重启 DSH"）。Manager 据此弹气泡并落日志。
+    bridge_health_issue = Signal(str, str, str)
+    # DSH 桥接是随桌宠捆绑的**版本化契约生产者**：每条记录都被逐条校验
+    # （pet/bridge_contract.py::validate_bridge_record），fail-closed——校验不过
+    # 直接拒绝该记录并弹「更新/重装 bridge」。必需字段就地对应如下：
+    #   1) bridgeProtocolVersion：必须存在且 == BRIDGE_PROTOCOL_VERSION（写盘信封
+    #      里每条都带，不是 hello 专属）；
+    #   2) bridgeVersion：必须存在且是合法 semver 的字符串（版本号本身不参与
+    #      比较——热重载后版本前进不误报）；
+    #   3) event：必须是 BRIDGE_EVENT_INVENTORY 内的名字；
+    #   4) 事件清单（emittedEvents 等四个别名之一）：hello **必须**携带，普通记录
+    #      可选，但一旦携带就必须与 Pet 清单作为集合完全相等（无重复项）；
+    #   5) capabilities：仅 hello 校验，必须与 BRIDGE_CAPABILITIES 完全相等。
+    # 契约不符的提示与日志见 _on_bridge_incompatible（含 reason/版本对照）。
+    _enforce_bridge_contract = True
 
     def __init__(self, agent_key: str, config_dir: Path, parent=None) -> None:
         super().__init__(agent_key, config_dir, parent)
         # 桥目录与变体无关：config_dir = <base>/dsh-pet-standalone[-variant] → parent = <base>
-        # 不变量：插件写 <base>/dsh-pet-bridge/（win32 即 %APPDATA%），
-        # 若未来数据目录支持自定义根，两侧必须同步改（当前 Config 结构保证 parent==base）。
-        self.events_dir = self.config_dir.parent / "dsh-pet-bridge"
+        # 不变量：插件写 <base>/dsh-pet-bridge/（win32 即 %APPDATA%）。
+        # 两侧同源解析：显式覆盖（DSH_PET_BRIDGE_DIR）优先，未设时等价于
+        # config_dir.parent/"dsh-pet-bridge"——与插件 impl 的 bridgeDir() 同一口径。
+        self.events_dir = resolve_bridge_dir(self.config_dir)
         # 多 DSH 实例分区写入（P0-2）：生产端每个实例写 dsh-{pid}.jsonl，
         # 消费端 glob 全部 dsh*.jsonl（兼容旧版单文件 dsh.jsonl）。
         # events_file 保留为旧字段名（兼容既有调用/测试），实际读取走 DirGlobTailer。
@@ -1662,14 +1765,97 @@ class DshMonitor(BaseAgentMonitor):
         ).start()
 
     def _refresh_links_worker(self) -> None:
-        """后台刷新陈旧 link：失败只记日志（自检是静默修复，不打扰用户）。"""
+        """后台自检：刷新陈旧 link（静默修复）+ 桥接健康检查（必要时提示重启 DSH）。
+
+        为什么两步都要：刷新 link 只解决"profile 里的路径已经不对"，而**正在运行的
+        DSH 仍然不会加载**刚修好的插件——2026-09-14 实测的故障正是这一类：打包失败
+        清空了插件目录 → DSH 启动时解析不到就跳过 → 桌宠再也收不到桥接事件，而桌宠
+        只在"首次安装"时提示过重启，对这种状态毫无感知，用户只能看到"联动突然没了"。
+        健康检查把这种状态变成一条明确的、可操作的提示。
+        """
         try:
             refreshed = self.refresh_stale_bridge_links()
         except Exception:
             log.exception("桥接 link 自检失败")
+        else:
+            if refreshed:
+                log.info("桥接 link 已刷新为当前构建: %s", ", ".join(refreshed))
+        try:
+            ok, reason, message = self.bridge_health()
+        except Exception:
+            log.exception("桥接健康自检失败")
             return
-        if refreshed:
-            log.info("桥接 link 已刷新为当前构建: %s", ", ".join(refreshed))
+        if ok:
+            log.info("[dsh-pet-bridge] 桥接健康自检通过：profile 已启用插件且运行中的 DSH 已加载")
+            return
+        log.warning("[dsh-pet-bridge] 桥接健康自检发现问题（%s）：%s", reason, message)
+        self._emit(self.bridge_health_issue, (self.agent_key, reason, message))
+
+    def bridge_health(self, *, profile_dirs=None, pids=None) -> tuple[bool, str, str]:
+        """桥接健康自检：返回 `(ok, reason, message)`。
+
+        判据按优先级（任一命中即返回），全部只依赖"可观测事实"，不猜：
+          not-installed  没有任何 profile 声明桥接插件（用户还没装）
+          disabled       声明了但不在 `dsh.profile.bundles`（DSH 不会加载它）
+          link-missing   link 目标不存在（换构建目录 / 打包失败清空目录后常见）
+          not-loaded     有 DSH 服务进程在跑，但桥目录里没有它自己那份
+                         `dsh-<pid>.jsonl`——插件 apply 必写 hello+diagnostic，
+                         没有就说明"这个 DSH 根本没加载插件"（多半是它启动时
+                         插件还没就位）。这一条是本次故障的核心缺口。
+
+        `profile_dirs` / `pids` 仅为测试注入；默认走真实探测。
+        桥目录用 `self.events_dir`（= bridge_contract.resolve_bridge_dir(config_dir)），
+        与插件侧 `bridgeDir()` 同一口径，两侧不会各看各的目录。
+        """
+        profiles = list(profile_dirs) if profile_dirs is not None else _real_profiles()
+        declaring: list[tuple[Path, dict]] = []
+        for profile in profiles:
+            pkg = _read_manifest(Path(profile))
+            if pkg is not None and _manifest_has_plugin(pkg):
+                declaring.append((Path(profile), pkg))
+        if not declaring:
+            return (
+                False,
+                "not-installed",
+                "桥接插件还没装到 DSH——在「Agent 联动」菜单里安装一次，然后重启一次 DSH",
+            )
+        for profile, pkg in declaring:
+            if not _manifest_bundle_enabled(pkg):
+                return (
+                    False,
+                    "disabled",
+                    f"桥接插件在 profile「{profile.name}」里没有启用（DSH 不会加载它）——"
+                    "重启一次 DSH，或把联动开关关掉再打开一次",
+                )
+        for profile, pkg in declaring:
+            spec = str((pkg.get("dependencies") or {}).get(DSH_PLUGIN_NAME) or "")
+            target = _path_spec_target(spec, profile)
+            if target is not None and not target.exists():
+                return (
+                    False,
+                    "link-missing",
+                    "桥接插件文件缺失（换构建目录或打包中断后常见）——请重新安装桥接，再重启一次 DSH",
+                )
+        names = [profile.name for profile, _pkg in declaring]
+        if pids is not None:
+            running = list(pids)
+        else:
+            # 局部导入：与文件内其它 harness_launcher 用法保持一致（避免模块级循环导入）。
+            from . import harness_launcher
+
+            running = harness_launcher.dsh_server_pids(names)
+        if running:
+            bridge_dir = Path(self.events_dir)
+            missing = [pid for pid in running if not (bridge_dir / f"dsh-{pid}.jsonl").exists()]
+            if missing:
+                listed = "、".join(str(pid) for pid in missing)
+                return (
+                    False,
+                    "not-loaded",
+                    f"检测到 DSH（pid {listed}）没有加载桥接插件——"
+                    "通常是它在插件就位之前就已经启动；重启一次 DSH 即可恢复联动",
+                )
+        return True, "", ""
 
     @staticmethod
     def _summarize_install_error(output: str) -> str:
@@ -1744,6 +1930,10 @@ class DshMonitor(BaseAgentMonitor):
         failed = []
         succeeded = []
         repaired_notes: list[str] = []
+        # 是否发生过「首次安装」（装之前 profile 没有该插件）。已安装的刷新
+        # 不算——那不需要重启 DSH（壳已在跑，热重载接手）。返回给 UI 决定
+        # 是否提示「请重启 DSH」（仅首次安装需要）。
+        saw_first_install = False
         for profile in profiles:
             pkg = _read_manifest(profile)
             if pkg is None:
@@ -1774,6 +1964,8 @@ class DshMonitor(BaseAgentMonitor):
                     continue
                 succeeded.append(profile.name)
                 continue
+            # 首次安装：此前 profile manifest 没有该插件（L1846 之前无插件分支）
+            saw_first_install = True
             rc, out, repaired = _run_pnpm_repairing_specs(profile, "add", str(plugin))
             if rc != 0:
                 failed.append(
@@ -1795,14 +1987,14 @@ class DshMonitor(BaseAgentMonitor):
             succeeded.append(profile.name)
         if failed:
             # 不做整批回滚：已装成功的保持不动（旧版回滚会把刚装好的反而卸掉）
-            return False, "部分实例安装失败（已装成功的保持不动）——" + "；".join(failed)
+            return False, "部分实例安装失败（已装成功的保持不动）——" + "；".join(failed), saw_first_install
         note = ""
         if repaired_notes:
             note = (
                 "；已自动修正失效的依赖路径（原文件备份为 package.json.bak-*）："
                 + "；".join(repaired_notes)
             )
-        return True, f"桥接插件已安装到 {len(succeeded)} 个 dsh 实例（{', '.join(succeeded)}）{note}"
+        return True, f"桥接插件已安装到 {len(succeeded)} 个 dsh 实例（{', '.join(succeeded)}）{note}", saw_first_install
 
     @classmethod
     def uninstall_bridge(cls) -> bool:
@@ -2290,7 +2482,7 @@ class AgentLinkManager(QObject):
     挂载于 PetWindow，持有 4 个 Agent 的监视器，并根据状态驱动桌宠动作与气泡。
     """
 
-    install_finished = Signal(str, bool, str, int)  # (agent_key, ok, message, install_token)
+    install_finished = Signal(str, bool, str, int, bool)  # (agent_key, ok, message, install_token, first_install)
     # DSH 回写结果（后台线程 emit，队列投递回主线程）：(ok, detail)
     _respond_result = Signal(bool, str)
     # 探索 Watchdog 控制结果（后台线程 emit，队列投递回主线程）：
@@ -2343,6 +2535,11 @@ class AgentLinkManager(QObject):
         # 汇报抽稀随机源（可注入：测试用确定序列，避免 60% 抽样导致用例不确定）
         self._rng = rng
         self._last_applied: dict[str, tuple[str, float]] = {}
+        # 状态气泡（开始干活/思考）时间门：agent → 最近一次状态气泡时刻
+        # （_clock 域）。与 _last_applied 去抖不同——thinking 每次出现都可见，
+        # 但受 state_bubble_min_interval 时间门限频（防 DSH working↔thinking
+        # 反复时刷屏）。
+        self._state_bubble_at: dict[str, float] = {}
         # 原始状态流（不受去抖/节流影响）：用于 busy→idle 完成检测。
         # 不能用 _last_applied 做完成判定——节流会丢掉紧跟其后的 idle，导致完成通知丢失。
         self._last_raw: dict[str, str] = {}
@@ -2446,6 +2643,9 @@ class AgentLinkManager(QObject):
         self.monitors["dsh"].llm_error.connect(self._on_llm_error)
         self.monitors["dsh"].user_action.connect(self._on_user_action)
         self.monitors["dsh"].unknown_bridge_event.connect(self._on_unknown_bridge_event)
+        self.monitors["dsh"].bridge_incompatible.connect(self._on_bridge_incompatible)
+        self.monitors["dsh"].bridge_diagnostic.connect(self._on_bridge_diagnostic)
+        self.monitors["dsh"].bridge_health_issue.connect(self._on_bridge_health_issue)
         # 检测器提醒跨模块节流（N2）：stuck / pattern / exploration watchdog 三个
         # 检测器各有独立 cooldown，但同一 busy 周期可能先后各自弹窗造成连环换弹。
         # 按 agent/session 记最近一次**任一**检测器弹窗时刻与档位，窗口内同档
@@ -2534,12 +2734,12 @@ class AgentLinkManager(QObject):
 
     def _install_dsh_worker(self, token: int) -> None:
         """后台线程：安装 DSH 桥接插件，完成后信号回主线程。"""
-        ok, msg = DshMonitor.install_bridge()
+        ok, msg, first_install = DshMonitor.install_bridge()
         if token != self._install_token:
             log.info("DSH 桥接安装结果已过期，丢弃")
             return
         try:
-            self.install_finished.emit("dsh", ok, msg, token)
+            self.install_finished.emit("dsh", ok, msg, token, first_install)
         except RuntimeError:
             log.debug("DSH 桥接安装完成但管理器已销毁，丢弃结果")
 
@@ -2570,9 +2770,39 @@ class AgentLinkManager(QObject):
                 duration_ms=6000,
             )
 
+    def _dsh_online_now(self) -> bool:
+        """此刻 DSH 是否在运行（同步探测，用于首次安装提示区分「重启/启动」）。
+
+        探测 127.0.0.1 的候选端口（3080 / 38080 / DSH_PORT）任一有监听即在线；
+        与 dsh_state 的在线基线同一判据。异常绝不外抛（提示降级为「重启」）。
+        """
+        try:
+            from . import harness_launcher
+            ports: set[int] = set()
+            env_port = __import__("os").environ.get("DSH_PORT")
+            if env_port:
+                try:
+                    ports.add(int(env_port))
+                except (TypeError, ValueError):
+                    pass
+            ports.update((3080, 38080))
+            return any(
+                harness_launcher.is_running(p) for p in sorted(ports)
+            )
+        except Exception:
+            log.debug("DSH 在线探测异常（按重启提示）", exc_info=True)
+            # 探测失败保守提示「重启」（若 DSH 真没跑，用户启动即可，无歧义）
+            return True
+
     def _on_install_finished(self, agent_key: str, ok: bool, msg: str,
-                             token: int | None = None) -> None:
-        """安装完成：成功则正式开启联动，失败则提示。"""
+                             token: int | None = None,
+                             first_install: bool = False) -> None:
+        """安装完成：成功则正式开启联动，失败则提示。
+
+        first_install=True（装之前 profile 没有该插件）才提示重启 DSH——
+        运行中的 DSH（cordis 启动时扫描 profile）不会自动加载新装插件；
+        已安装的刷新不算（壳已在跑，热重载接手，无需重启）。
+        """
         if self._shutdown:
             return
         if token is not None and self._install_pending.get(agent_key) != token:
@@ -2589,7 +2819,24 @@ class AgentLinkManager(QObject):
             if hasattr(self.win, "show_bubble"):
                 name = self.AGENT_NAMES.get(agent_key, agent_key)
                 if self._report_allowed(self.cfg.get("agent_link", {}), "bridge.install.success"):
-                    self.win.show_bubble(self._dialogue("bridge.install.success", "DSH 桥接插件已装好，联动开启～", name=name), duration_ms=4000)
+                    # 走 _dialogue（保证 persona 模板与 name 注入对齐——AST 契约
+                    # 测试 test_all_advertised_fields... 锁死 install.success 宣称
+                    # name 必须注入）。重启/启动提示作为**追加行**跟在模板文案后：
+                    # 不绕过 _dialogue（避免模板契约失配），又保留首次安装的必要
+                    # 说明（运行中的 DSH 不自动加载新装插件）。
+                    base = self._dialogue(
+                        "bridge.install.success",
+                        "DSH 桥接插件已装好，联动开启～",
+                        name=name,
+                    )
+                    if first_install:
+                        action = self._dsh_online_now() and "重启" or "启动"
+                        text = f"{base}\n首次安装请{action} DSH 生效（仅这一次；之后升级都自动生效）"
+                        duration = 7000
+                    else:
+                        text = f"{base}（无需重启）"
+                        duration = 4000
+                    self.win.show_bubble(text, duration_ms=duration)
         else:
             log.warning("DSH 桥接插件安装失败: %s", msg)
             if hasattr(self.win, "show_bubble"):
@@ -2813,21 +3060,13 @@ class AgentLinkManager(QObject):
         """接收 Agent 状态变更并调度桌宠动作/气泡（带去抖与节流）。"""
         if not self._gen_current(agent_key, gen):
             return
-        # 兜底：该 agent 已回待机（任务结束）但审批/问题还没收到 resolved → 交互必然失效。
-        # 放在可见性判断之前：窗口隐藏期间也要清 pending，避免恢复显示时挂出陈旧气泡。
-        if state in ("idle", "sleeping"):
-            # 改为按交互 id 遍历清理（同一 agent 可能有多个并发审批/问题）
-            for iid in [i for i, v in self._pending_interactions.items()
-                        if v.get("agent_key") == agent_key]:
-                item = self._pending_interactions.pop(iid, None)
-                if item is None:
-                    continue
-                alert_id = item.get("alert_id", "")
-                if alert_id and hasattr(self.win, "resolve_alert"):
-                    self.win.resolve_alert(alert_id)
-                elif hasattr(self.win, "hide_bubble"):
-                    self.win.hide_bubble()
-
+        # 注意：这里**不再**按 idle 清 pending 阻塞交互——DSH 的 AgentStatus idle
+        # 是空闲心跳/step 间隙（实测 working→idle→working 每 2-5s 出现），并非
+        # 回合结束。若把 idle 当结束清 pending，会让仍在进行的审批/选择常驻气泡
+        # 被误清（用户报告的不再常驻显示）。审批/问题由各自的 resolved 帧精确
+        # 关闭（_on_approval_resolved / _on_question_resolved），兜底只走权威
+        # _INTERACTION_END_EVENTS（turn/end 等）与 dismiss_all_interactions
+        # （DSH 离线/重启，见 _on_bridge_offline / pause 路径）。
         if not hasattr(self.win, "isVisible") or not self.win.isVisible():
             return
 
@@ -2846,7 +3085,12 @@ class AgentLinkManager(QObject):
             self._emit_sound("error", agent_key)
         if state in self._BUSY_STATES:
             self._cancel_done_check(agent_key)
-            self._saw_alert.discard(agent_key)
+            # 注意：**不**在此清 _saw_alert——审批/选择交互登记时设置过它
+            # （_register_interaction），用来让随后的 done 走「停下待确认」而非
+            # 「干完活啦」。若这里在 busy 时 discard，交互刚解决后的回合结束
+            # （working→success→idle）会误报成功完成（用户报告「操作后弹窗
+            # 重复出现一次，以普通气泡形式」）。_saw_alert 只在 _fire_done
+            # 真正弹出后（L3752）再清除。
             if prev_raw != "error":
                 self._saw_error.discard(agent_key)
         elif state in ("attention", "error") and prev_raw in self._BUSY_STATES:
@@ -2866,21 +3110,33 @@ class AgentLinkManager(QObject):
         last = self._last_applied.get(agent_key)
         if last is not None and last[0] == state:
             return
-        # 节流：同一 Agent 两次动作/气泡切换最小间隔
-        if last is not None and (now - last[1]) < self._min_interval:
-            return
+        # 防刷屏由 report_gates 概率门兜底（thinking/start 同属 state 门），这里
+        # 不做额外节流：DSH 序列里 working（AgentStatus）常先于 thinking
+        # （user/message 收敛）到达，若节流 thinking 会让真人消息引发的思考
+        # 气泡永不出现。thinking 该弹就弹；working「开始干活」由
+        # _maybe_notify_start 的 prev 判断（仅非 busy→busy）控频。
         self._last_applied[agent_key] = (state, now)
 
         log.debug("Agent 状态变更 [%s]: %s", agent_key, state)
 
         # 状态 -> 桌宠行为映射（手册 §8.2）
         if state in ("thinking", "working"):
-            # busy 动作池轮换（写代码/吃Token 为主，每第 3 次插播短摸鱼），
-            # 经 request_link_anim 平滑衔接：正在播的一次性动作不被打断
+            # 动画与状态气泡**共用状态气泡时间门**（state_bubble_min_interval）：
+            # 移除 busy↔busy 节流后，DSH working↔thinking 每 2-5s 切换会让
+            # _next_link_anim_rotation 每次返回不同动作名 → window 侧判"当前
+            # anim 非动作池"立即 _switch → 反复启停 ffmpeg 解码进程（实测多个
+            # reader 同时退出、pet 性能下降）。时间门内不重复 request（当前动画
+            # 继续播），门到期才按轮换序列切下一个动作——保轮换语义又防风暴。
+            gate_ok = self._state_bubble_gate(agent_key)
             anim = self._next_link_anim_rotation()
-            if anim and hasattr(self.win, "request_link_anim"):
+            if (
+                gate_ok
+                and anim
+                and hasattr(self.win, "request_link_anim")
+            ):
                 self.win.request_link_anim(anim)
-            self._maybe_notify_start(agent_key, prev_raw, state)
+            # 气泡共用同一 gate 判定（由 `gate_ok` 传入，避免双判把气泡挡掉/不同频）
+            self._maybe_notify_start(agent_key, prev_raw, state, gate_ok=gate_ok)
         elif state == "attention":
             # busy 后的 attention（如 Claude Stop=回合结束）由完成确认流程接管，
             # 避免「需要看一眼」和「完成通知」双气泡；独立出现的才立即提醒
@@ -3094,13 +3350,45 @@ class AgentLinkManager(QObject):
             gates = {}
         return should_report_event(gates, event_key, self._rng())
 
-    def _maybe_notify_start(self, agent_key: str, prev_raw: str | None, state: str = "working") -> None:
-        """开始干活气泡：仅「非 busy → busy」时提示（thinking↔working 互跳不弹）。
-        低优先级：气泡位被占时直接丢弃。thinking 状态用更有趣的文案。"""
+    def _state_bubble_gate(self, agent_key: str) -> bool:
+        """状态气泡/动画时间门：同 agent 两次状态气泡（开始干活/思考）最小间隔
+        （agent_link.state_bubble_min_interval，默认 2.0s）。返回 True 表示本次
+        放行（并记录时刻）；门内再次调用返回 False。动画与气泡共用此门——
+        DSH working↔thinking 反复切换时，动画与气泡同频限频，避免反复启停
+        ffmpeg 解码进程（性能回归修复）。"""
+        agent_cfg = self.cfg.get("agent_link", {})
+        min_gap = float(agent_cfg.get("state_bubble_min_interval", 2.0) or 0.0)
+        if min_gap <= 0:
+            return True  # 0 = 无时间门
+        last_bubble = self._state_bubble_at.get(agent_key, None)
+        now = self._clock()
+        if last_bubble is not None and (now - last_bubble) < min_gap:
+            return False
+        self._state_bubble_at[agent_key] = now
+        return True
+
+    def _maybe_notify_start(self, agent_key: str, prev_raw: str | None, state: str = "working",
+                            gate_ok: bool = True) -> None:
+        """开始干活/思考气泡。
+
+        - working「开始干活」：仅「非 busy → busy」时提示（thinking↔working
+          互跳不弹，避免刷屏）；
+        - thinking「正在思考」：**不受 busy→busy 抑制**——DSH 序列里 AgentStatus
+          working 常先于 user/message（→thinking）到达，thinking 的 prev_raw
+          总是 working（busy），若按互跳抑制则真人消息引发的思考气泡永不出现
+          （用户实测：状态机收敛 thinking 但宠无思考气泡）。thinking 是独立
+          语义（用户提问/模型推理），应在其出现时可见。
+
+        防刷屏双门：概率门（report_gates.state）控"要不要弹"；时间门
+        （agent_link.state_bubble_min_interval，默认 2.0s）控"多快能再弹一次"。
+        gate_ok 由动画路径统一判定一次（_state_bubble_gate）传入——动画与气泡
+        同频：时间门内都不出现（防 ffmpeg 反复启停的性能回归），到期都恢复。"""
+        if not gate_ok:
+            return
         agent_cfg = self.cfg.get("agent_link", {})
         if not self._report_allowed(agent_cfg, "thinking" if state == "thinking" else "start"):
             return
-        if prev_raw in self._BUSY_STATES:
+        if state != "thinking" and prev_raw in self._BUSY_STATES:
             return
         name = self.agent_names.get(agent_key, agent_key)
         if state == "thinking":
@@ -3818,6 +4106,10 @@ class AgentLinkManager(QObject):
             return  # 隐藏中不弹不切（pause 已取消计时器，这里是兜底）
         if self._last_raw.get(agent_key) in self._BUSY_STATES:
             return
+        # 有未决审批/选择时不弹"完成"：DSH 等待用户交互的回合不算完成，
+        # 且交互气泡本身常驻展示——此时说"干完活啦"是误报。
+        if self.pending_interactions_for(agent_key):
+            return
         if agent_key not in self._saw_error:
             self._emit_sound("done", agent_key)
         agent_cfg = self.cfg.get("agent_link", {})
@@ -3885,7 +4177,7 @@ class AgentLinkManager(QObject):
                 getattr(self.win, "_alert_queue", None):
             return
         if not important and getattr(self.win, "_sticky_bubble_active", False):
-            # 兼容旧路径：审批等一直挂着的气泡优先
+            # 兼容旧路径：审批等一直挂着的气泡优先（让路，不打扰）
             return
         busy_until = getattr(self.win, "_bubble_busy_until", 0.0)
         # window.hold_bubble 以 time.monotonic() 写入 _bubble_busy_until，这里必须
@@ -4131,10 +4423,13 @@ class AgentLinkManager(QObject):
 
     def _exploration_control_buttons(self, session_key: str, payload: dict,
                                     alert_id: str) -> list[tuple[str, object]]:
-        """控制气泡按钮：replan=自动优化、interrupt=终止、忽略=关闭气泡。"""
+        """控制气泡按钮：interrupt=终止、忽略=关闭气泡。
+
+        不再展示「自动优化」（replan）：其桥接路径（runBridgeDiagnosis + steer
+        注入）在目标 DSH 上实效不可靠，点了形同虚设反而误导用户——只有真正
+        可用的「终止」与「忽略」。（B2 修复：不可用功能不展示）"""
         context = dict(payload or {})
         return [
-            ("自动优化", lambda sk=session_key, p=context: self._request_exploration_control("replan", sk, p)),
             ("终止", lambda sk=session_key, p=context: self._request_exploration_control("interrupt", sk, p)),
             ("忽略", lambda aid=alert_id: self._dismiss_exploration_control(aid)),
         ]
@@ -4323,13 +4618,20 @@ class AgentLinkManager(QObject):
     }
 
     def _on_interaction_lifecycle(self, agent_key: str, record: dict) -> None:
-        """会话/turn 结束或 Agent 停止时，清掉对应会话/agent 的 pending 阻塞交互。"""
+        """会话/turn 结束或 Agent 停止时，清掉对应会话/agent 的 pending 阻塞交互。
+
+        只认权威结束信号（turn/end、task_complete、execution/failed、
+        thread_rolled_back）。**不含 AgentStatus idle**：DSH 的 idel 是空闲心跳/
+        step 间隙（实测 working→idle→working 每 2-5s 出现），并非回合结束，
+        若把它当 ended 会把仍在进行的审批/选择常驻气泡误清（用户报告的不再
+        常驻显示）。带 rpcId/approvalId 的真实审批/问题由各自的 resolved 帧
+        精确关闭（_on_approval_resolved / _on_question_resolved），兜底只给
+        无 id 的旧路径提示。"""
         if not isinstance(record, dict):
             return
         event = str(record.get("event") or "")
         session = str(record.get("sessionId") or record.get("session_id") or "")
-        ended = (event in self._INTERACTION_END_EVENTS or
-                 (event == "AgentStatus" and str(record.get("state") or "") in {"idle", "sleeping"}))
+        ended = event in self._INTERACTION_END_EVENTS
         if not ended:
             return
         for iid in [i for i, v in self._pending_interactions.items()
@@ -4636,6 +4938,118 @@ class AgentLinkManager(QObject):
             call_id = str(record.get("callId") or "")
             rpc_id = str(record.get("rpcId") or "")
             self._close_interaction_by_id("question", rpc_id, call_id, session_key)
+
+    def _on_bridge_incompatible(self, agent_key: str, detail: dict) -> None:
+        """DSH 桥接契约校验失败（hello/记录版本或事件清单不符）→ 提醒更新/重装。
+
+        DshMonitor 对每条桥接记录做 validate_bridge_record（producer 是随桌宠
+        捆绑的版本化契约），不兼容即拒绝该记录并弹此事件。**不兼容是必需健康
+        反馈，不受事件汇报概率门控制**（门 0 也弹——否则版本不对齐会被静默
+        吞掉、桌宠一直收不到状态）；仅按冷却窗口限频（不兼容记录可能成串）。
+
+        为什么必须同时落日志：这条路径此前只有气泡（还带限频），出现"契约
+        fail-closed 后桌宠整体没反应"时用户和排查者都拿不到原因——日志里
+        必须有 reason/收到与期望的版本，才能区分"桥接版本不对齐"与"桥接没跑"。
+        """
+        if not isinstance(detail, dict):
+            return
+        now = self._clock()
+        last = self._unknown_bridge_reminded_at.get(agent_key)
+        if last is not None and now - last < self._UNKNOWN_BRIDGE_REMIND_COOLDOWN_S:
+            log.debug(
+                "[dsh-pet-bridge] 桥接契约校验失败（限频窗口内不再提醒）: %s",
+                json.dumps(detail, ensure_ascii=False, default=str)[:400],
+            )
+            return
+        self._unknown_bridge_reminded_at[agent_key] = now
+        name = self.agent_names.get(agent_key, agent_key)
+        received = detail.get("receivedBridgeVersion")
+        expected = detail.get("expectedBridgeVersion")
+        recv_proto = detail.get("receivedProtocolVersion")
+        expected_proto = detail.get("expectedProtocolVersion")
+        log.warning(
+            "[dsh-pet-bridge] 桥接契约校验失败，已拒绝该记录：reason=%s；"
+            "收到 bridge=%s/协议=%s，期望 bridge=%s/协议=%s；事件清单=%s",
+            detail.get("reason") or "(未标注)",
+            received or "?",
+            recv_proto if recv_proto is not None else "?",
+            expected or "?",
+            expected_proto,
+            json.dumps(detail.get("receivedEventInventory") or [], ensure_ascii=False)[:300],
+        )
+        version_hint = ""
+        if received or recv_proto:
+            version_hint = (
+                f"（bridge {received or '?'} / 协议 {recv_proto or '?'} → "
+                f"桌宠需 {expected or '?'} / 协议 {expected_proto or '?'}）"
+            )
+        # 直接 show_bubble（不用 _dialogue：不兼容提醒是**必需健康反馈**，
+        # 不应被 persona 文案模板替换，且不受事件汇报概率门控制）。
+        self.win.show_bubble(
+            f"{name} 检测到 DSH bridge 与桌宠不兼容（版本不对齐）{version_hint}——"
+            "请更新或重装 bridge 插件",
+            duration_ms=6000,
+        )
+
+    def _on_bridge_diagnostic(self, agent_key: str, record: dict) -> None:
+        """桥接自诊断记录（bridge/diagnostic）：error 级必须让用户看见。
+
+        常规 diagnostic 是桥进程启动时写一次的环境信息（bridgeDir/instanceFile/
+        appData），没有 severity——只留 debug 日志。severity=error 的是桥侧主动
+        上报的异常，目前唯一来源是**壳拒绝一次契约不符的热重载**：新实现的协议/
+        事件清单与壳不一致，壳保留旧实现并提示"需重启 DSH 以更新桥接协议"。
+        这条通道必须弹气泡——否则用户侧症状只是"桌宠没反应"，日志里也没有。
+        与 _on_bridge_incompatible 同属**必需健康反馈**：不受事件汇报概率门控制，
+        仅按冷却窗口限频（诊断可能成串上报）。
+        """
+        if not isinstance(record, dict):
+            return
+        severity = str(record.get("severity") or "").strip().lower()
+        reason = str(record.get("reason") or "").strip()
+        message = str(record.get("message") or "").strip()
+        if severity != "error":
+            log.debug(
+                "[dsh-pet-bridge] 桥接诊断（severity=%s）: %s",
+                severity or "(无)",
+                json.dumps(record, ensure_ascii=False, default=str)[:300],
+            )
+            return
+        log.warning(
+            "[dsh-pet-bridge] 桥接自诊断 severity=error reason=%s：%s",
+            reason or "(未标注)",
+            message or json.dumps(record, ensure_ascii=False, default=str)[:400],
+        )
+        # 冷却窗口按 (agent, 诊断) 命名空间计数：不能与"未知事件/不兼容"提醒互相
+        # 挤掉（同一 agent 两类健康反馈可能同时出现）。
+        key = f"{agent_key}:diagnostic"
+        now = self._clock()
+        last = self._unknown_bridge_reminded_at.get(key)
+        if last is not None and now - last < self._UNKNOWN_BRIDGE_REMIND_COOLDOWN_S:
+            return
+        self._unknown_bridge_reminded_at[key] = now
+        name = self.agent_names.get(agent_key, agent_key)
+        text = message or "桥接上报了异常诊断"
+        self.win.show_bubble(f"{name} {text[:200]}", duration_ms=6000)
+
+    def _on_bridge_health_issue(self, agent_key: str, reason: str, message: str) -> None:
+        """桥接健康自检发现问题 → 必须让用户看见（否则用户只看到"联动突然没了"）。
+
+        与 _on_bridge_incompatible / _on_bridge_diagnostic 同属**必需健康反馈**：
+        不受事件汇报概率门控制，仅按冷却窗口限频（按 reason 命名空间分开计，避免
+        不同原因互相挤掉）。自检目前每监视器实例只跑一次，限频是为将来改成周期
+        自检时仍不刷屏。
+        """
+        if not message:
+            return
+        key = f"{agent_key}:health:{reason or 'unknown'}"
+        now = self._clock()
+        last = self._unknown_bridge_reminded_at.get(key)
+        if last is not None and now - last < self._UNKNOWN_BRIDGE_REMIND_COOLDOWN_S:
+            return
+        self._unknown_bridge_reminded_at[key] = now
+        log.warning("[dsh-pet-bridge] 桥接健康提示（%s）：%s", reason or "?", message)
+        name = self.agent_names.get(agent_key, agent_key)
+        self.win.show_bubble(f"{name} {message[:200]}", duration_ms=8000)
 
     def _on_unknown_bridge_event(self, agent_key: str, record: dict) -> None:
         """DSH 桥接写出的未知事件 → 提醒用户更新/重装 bridge。

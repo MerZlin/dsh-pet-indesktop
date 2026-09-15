@@ -119,6 +119,91 @@ if ($Gif -and -not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "convert_to_gif failed: $LASTEXITCODE" }
 }
 
+# ---------------------------------------------------------------------------
+# 输出目录占用预检（2026-09-14 事故回归防线）
+#
+# 现象：PyInstaller --noconfirm --clean 会**先删掉**上一次的输出目录。若该目录被
+# 别的程序占着，删除失败并抛 WinError 32（"另一个程序正在使用此文件"），而此时
+# 目录内容**已经被清空**——结果是"构建失败 + 上一次的安装被毁"，二者同时发生。
+#
+# 最典型的占用者是**一个停在 .\dist-onedir\<name>\ 里的资源管理器窗口**：Windows
+# 在登录时会恢复上次的资源管理器窗口，所以"重启电脑"完全无效。其次是正在运行的
+# 桌宠（<name>.exe，脚本下面会尝试按进程名结束它），以及正在运行的 DSH——它的
+# profile 把 @dsh-pet/bridge 以 link: 指向本目录内，DSH 加载该插件即握住这里的文件。
+#
+# 为什么必须"先探测再构建"：桌宠的 DSH 联动依赖
+# <产物>/_internal/integrations/dsh-pet-bridge；目录一旦被清空，DSH 连启动都会
+# 失败（cannot resolve profile bundle "@dsh-pet/bridge"），用户看到的是"桌宠联动
+# 打不开 + dsh web 起不来"，与打包错误看似无关。锁着就中止，把上次的安装原样
+# 留着，比"构建失败顺便毁掉在线安装"好得多。
+# ---------------------------------------------------------------------------
+function Assert-OutputDirNotLocked {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    # 注意：Split-Path 的 -LiteralPath 与 -Parent/-Leaf 不属于同一参数集（会抛
+    # "Parameter set cannot be resolved"），这里用 .NET 解析，避免参数集陷阱。
+    $parent = [System.IO.Path]::GetDirectoryName($Path)
+    $leaf = [System.IO.Path]::GetFileName($Path)
+    $probeLeaf = "$leaf.__lockprobe__"
+    try {
+        # 用"改名再改回"探测目录句柄：Windows 上这是唯一不需要管理员、也不破坏
+        # 内容就能判断"目录是否被占用"的办法（资源管理器持有的是目录句柄，
+        # Restart Manager 只报文件级占用者，看不到它）。
+        Rename-Item -LiteralPath $Path -NewName $probeLeaf -ErrorAction Stop
+    } catch {
+        $msg = "Build output dir is in use; aborting BEFORE PyInstaller wipes it: $Path`n" +
+               "  reason: $($_.Exception.Message)`n" +
+               "  likely holders:`n" +
+               "    1) an Explorer window left open in that folder (Windows restores it on logon, so REBOOTING DOES NOT HELP);`n" +
+               "    2) a running $leaf.exe;`n" +
+               "    3) a running DSH whose profile links @dsh-pet/bridge into that folder.`n" +
+               "  Close the holder and re-run this script."
+        throw $msg
+    }
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            Rename-Item -LiteralPath (Join-Path $parent $probeLeaf) -NewName $leaf -ErrorAction Stop
+            return
+        } catch {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    throw "Lock probe could not restore the directory name: $parent\$probeLeaf (please rename it back to $leaf)"
+}
+
+# DSH profile 若把桥接插件 link 到构建输出目录，构建期间 DSH 就会占用它；
+# 构建失败还会让 DSH 起不来（link 目标消失）。这里只提示，不擅自改用户 profile。
+function Get-BridgeLinkedProfile {
+    param([Parameter(Mandatory = $true)][string]$AppDirName)
+    $profiles = Join-Path $env:USERPROFILE '.dsh\profiles'
+    if (-not (Test-Path -LiteralPath $profiles)) { return }
+    Get-ChildItem -LiteralPath $profiles -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $pkg = Join-Path $_.FullName 'package.json'
+        if (-not (Test-Path -LiteralPath $pkg)) { return }
+        $raw = Get-Content -LiteralPath $pkg -Raw -Encoding UTF8
+        foreach ($m in [regex]::Matches($raw, '"@dsh-pet/bridge"\s*:\s*"link:([^"]+)"')) {
+            $target = $m.Groups[1].Value -replace '/', '\'
+            if ($target -like "*$AppDirName*") {
+                [pscustomobject]@{ Name = $_.Name; Target = $target }
+            }
+        }
+    }
+}
+
+# 冒烟失败时把应用**自己的**日志尾部带进错误信息：只报一句"没出现主窗口"时无法
+# 区分"启动崩了"和"还在加载资产 / 被杀毒软件拖慢"，实测就误判过一次（见下方轮询
+# 说明）。日志是 UTF-8，必须显式指定编码，否则 PS 5.1 按 ANSI 读出乱码。
+function Get-AppLogTail {
+    param([string]$AppName, [int]$Lines = 15)
+    $dir = Join-Path $env:APPDATA $AppName
+    if (-not (Test-Path -LiteralPath $dir)) { return "  (no log dir: $dir)" }
+    $log = Get-ChildItem -LiteralPath $dir -Filter 'pet-*.log' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $log) { return "  (no pet-*.log in $dir)" }
+    $tail = (Get-Content -LiteralPath $log.FullName -Tail $Lines -Encoding UTF8) -join "`n  "
+    return "  $($log.FullName)`n  $tail"
+}
+
 if (-not $SkipBuild) {
     Write-Host "[0/3] Generating app icon..." -ForegroundColor Cyan
     python scripts\make_icon.py
@@ -148,6 +233,13 @@ if (-not $SkipBuild) {
     }
 
     Write-Host "[1/3] PyInstaller --onedir building $name ..." -ForegroundColor Cyan
+    # profile link 提示先给（信息更完整），再做占用预检；预检会 throw，锁着就不动上一次的安装。
+    Get-BridgeLinkedProfile -AppDirName $name | ForEach-Object {
+        Write-Host "[warn] DSH profile '$($_.Name)' links @dsh-pet/bridge into the build output;" -ForegroundColor Yellow
+        Write-Host "[warn]   stop DSH before building (it locks that folder, and a failed build breaks DSH boot)" -ForegroundColor DarkYellow
+        Write-Host "[warn]   link target: $($_.Target)" -ForegroundColor DarkYellow
+    }
+    Assert-OutputDirNotLocked -Path (Join-Path $root "dist-onedir\$name")
     # 注入变体标识：配置目录/会话/开机自启按变体隔离（pet/config.py 读取）。
     # 必须写 BOM-free UTF-8：PowerShell 5.1 的 Set-Content -Encoding UTF8 会带
     # BOM，且内容若含中文再被旧编辑器按 GBK 另存就会污染产物（issue #26）。
@@ -360,17 +452,49 @@ Write-Host "[smoke] bundle DLL chain OK" -ForegroundColor Green
 
 Write-Host "[smoke] Launching $exePath ..." -ForegroundColor Cyan
 $proc = Start-Process -FilePath $exePath -PassThru
-Start-Sleep -Seconds 10
-if ($proc.HasExited) {
-    throw "[smoke] exe exited early (code $($proc.ExitCode)) - runtime dependency broken"
+# 轮询等待启动证据，**不要固定 sleep**：全新构建产物第一次启动时，Defender/索引器要
+# 扫描数百 MB 的 _internal，冷启动实测 >10s（热启动约 10s）——固定 10 秒会把一次成功
+# 的构建误判为"启动失败"（2026-09-14 实测）。
+#
+# 判据用两个信号，任一成立即通过：
+#   a) 进程主窗口句柄出现；
+#   b) **应用自己的日志**出现 "桌宠显示" / "进入事件循环"（pet/window.py、pet/app.py 写）。
+# 为什么必须加 b)：窗口句柄依赖当前会话/桌面的显示状态——构建跑在"目标屏幕暂不在线"的
+# 会话里时（实测日志 avail=(0,0,799,799) dpr=1.0），窗口可能创建在查询不到句柄的桌面上，
+# 于是"包其实是好的"被判成启动失败，还把人往 'Failed to execute script' 方向带。应用
+# 日志里的这两个标记才是不依赖显示会话的权威证据。
+$smokeDeadline = (Get-Date).AddSeconds(45)
+$smokeStarted = $false
+$smokeSignal = ''
+$smokeLog = Join-Path (Join-Path $env:APPDATA $name) "pet-$($proc.Id).log"
+while ((Get-Date) -lt $smokeDeadline) {
+    Start-Sleep -Milliseconds 500
+    if ($proc.HasExited) { break }
+    $proc.Refresh()
+    if ($proc.MainWindowHandle -ne 0) {
+        $smokeStarted = $true
+        $smokeSignal = "main window (handle $($proc.MainWindowHandle))"
+        break
+    }
+    if (Test-Path -LiteralPath $smokeLog) {
+        $appLogText = ''
+        try { $appLogText = Get-Content -LiteralPath $smokeLog -Raw -Encoding UTF8 -ErrorAction Stop } catch { $appLogText = '' }
+        if ($appLogText -and ($appLogText.Contains('[VIS] 桌宠显示') -or $appLogText.Contains('进入事件循环'))) {
+            $smokeStarted = $true
+            $smokeSignal = "app log marker (pet-$($proc.Id).log)"
+            break
+        }
+    }
 }
-$proc.Refresh()
-if ($proc.MainWindowHandle -eq 0) {
+if ($proc.HasExited) {
+    throw "[smoke] exe exited early (code $($proc.ExitCode)) - runtime dependency broken`n  app log tail:`n$(Get-AppLogTail -AppName $name)"
+}
+if (-not $smokeStarted) {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    throw "[smoke] exe running but no main window appeared - startup failed (likely 'Failed to execute script')"
+    throw "[smoke] no main window and no startup marker in the app log within 45s - startup failed`n  app log tail:`n$(Get-AppLogTail -AppName $name)"
 }
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-Write-Host "[smoke] exe started OK" -ForegroundColor Green
+Write-Host "[smoke] exe started OK ($smokeSignal)" -ForegroundColor Green
 
 if (-not $SkipZip) {
     Write-Host "[2/3] Packing portable zip..." -ForegroundColor Cyan

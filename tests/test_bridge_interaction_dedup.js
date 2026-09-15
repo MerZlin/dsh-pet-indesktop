@@ -1,8 +1,12 @@
 // P1-4：审批/问题写盘去重的降级键必须带 sessionId。
 //
 // 背景：`ap:tc:<tool>|<command>` 不含 session/审批身份，8 秒内两个不同审批
-// （同命令）会被静默丢弃。本测试直接从源码提取并求值纯函数
-// `_interactionDedupKeys`（与仓库既有 bridge 契约测试一致）。
+// （同命令）会被静默丢弃。本测试直接读取并求值桥接实现层的纯函数
+// `_interactionDedupKeys`（桥接已拆为稳定壳 index.js + impl/<version>/
+// 实现层，纯函数住在实现层），避免拉起 DSH 运行时依赖（@deepseek-ai/* 未
+// 安装时整份模块无法 import）。只测 package.json.version 对应的实现——与壳
+// probeDisk 的精确选中语义一致（不扫描全部历史版本，避免将来多版本并存时
+// 测到旧版函数）。
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,12 +14,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const sourcePath = path.resolve(here, "../integrations/dsh-pet-bridge/index.js");
+const bridgeRoot = path.resolve(here, "../integrations/dsh-pet-bridge");
+const pkg = JSON.parse(fs.readFileSync(path.join(bridgeRoot, "package.json"), "utf8"));
+const sourcePath = path.join(bridgeRoot, "impl", String(pkg.version || ""), "index.js");
+assert.ok(fs.existsSync(sourcePath), `impl/${pkg.version}/index.js 应存在（与 package.json.version 对应）`);
 const source = fs.readFileSync(sourcePath, "utf8");
 
 function loadInteractionDedupKeys() {
   const match = source.match(/function _interactionDedupKeys\(extra\) \{[\s\S]*?\n\}/);
-  assert.ok(match, "index.js 应定义 _interactionDedupKeys");
+  assert.ok(match, "桥接实现层应定义 _interactionDedupKeys");
   return new Function(`${match[0]}; return _interactionDedupKeys;`)();
 }
 
