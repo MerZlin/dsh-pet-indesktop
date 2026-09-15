@@ -29,6 +29,10 @@ GWL_EXSTYLE = -20           # GetWindowLongW：取扩展样式
 _WS_CAPTION = 0x00C00000    # WS_BORDER | WS_DLGFRAME（带标题栏）
 _WS_EX_TOPMOST = 0x00000008  # 置顶：真全屏游戏/视频几乎必带，普通最大化窗口不带
 _WS_EX_TRANSPARENT = 0x00000020
+# 不接收激活：鼠标点击不夺前台（issue #98）。工具窗口（Tool）不带该位时，
+# 点击桌宠会把它变成前台窗口，用户随后的键盘输入全部落到桌宠上，而桌宠不处理
+# Ctrl+C/Ctrl+V —— 观感就是"整机复制粘贴失效"，点回原窗口或退出桌宠才恢复。
+_WS_EX_NOACTIVATE = 0x08000000
 
 
 class _WinRect(ctypes.Structure):
@@ -47,6 +51,25 @@ def _set_windows_click_through(hwnd: int, enabled: bool, user32=None) -> bool:
     user32 = user32 or ctypes.windll.user32
     style = int(user32.GetWindowLongW(hwnd, GWL_EXSTYLE))
     updated = style | _WS_EX_TRANSPARENT if enabled else style & ~_WS_EX_TRANSPARENT
+    if updated == style:
+        return False
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, updated)
+    return True
+
+
+def _set_windows_no_activate(hwnd: int, user32=None) -> bool:
+    """置位 WS_EX_NOACTIVATE：鼠标点击桌宠不再夺走前台/键盘焦点（issue #98）。
+
+    只影响"激活"：窗口照样收到鼠标与键盘消息（点击、拖拽、逐像素穿透判定都不
+    受影响，实测点击仍能进 mousePressEvent），但不会成为前台窗口，因此用户正在
+    编辑的应用保持前台与输入焦点——Ctrl+C/Ctrl+V 不会再落到桌宠上。
+
+    与改 flags 不同，这里只改扩展样式位，不重建原生窗口。
+    返回 True 表示本次真的改了样式。
+    """
+    user32 = user32 or ctypes.windll.user32
+    style = int(user32.GetWindowLongW(hwnd, GWL_EXSTYLE))
+    updated = style | _WS_EX_NOACTIVATE
     if updated == style:
         return False
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, updated)

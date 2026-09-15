@@ -79,7 +79,14 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 常驻内存零增长），增量行数几乎全是线程安全性/实机教训注释；这些守卫与
 # _enter_physics_mode/_stop_physics 共享窗口状态流，拆控制器反而切断调用链，
 # 按约定只校准预算。
-WINDOW_PY_LINE_BUDGET = 4478
+# 2026-09-15 再上调到 4507：issue #98「点击桌宠导致全局复制粘贴失效」修复
+# （window.py +29，实测 4507）——新增 _apply_windows_no_activate() 在 showEvent
+# 置位 WS_EX_NOACTIVATE，使点击桌宠不再夺走前台/键盘焦点。原生样式操作本体放在
+# pet/platform_win.py（+23，与 _set_windows_click_through 同处），window.py 侧只留
+# 一个带完整实机取证说明的委托方法：它必须留在 PetWindow 上（showEvent 是唯一
+# 可靠的"原生窗口已就绪/可能被重建"注入点，拆到独立模块反而会产生跨模块的
+# 窗口生命周期耦合）。按约定只校准预算，不为达标压行。
+WINDOW_PY_LINE_BUDGET = 4507
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
