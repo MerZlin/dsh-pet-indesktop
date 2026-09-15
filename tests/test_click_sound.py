@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import random
+import sys
+import types
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -360,6 +362,22 @@ def test_second_pool_instance_state_is_isolated_from_singleton(tmp_path):
     assert str(wav.resolve()) not in singleton._qt_effects
 
 
+class _StubQSoundEffect:
+    """QSoundEffect 的最小替身：只提供产品代码判定所需的 Status 成员。
+
+    Ubuntu CI runner 没有 libpulse，``import PySide6.QtMultimedia`` 会直接
+    ImportError，因此测试不能依赖真实 QtMultimedia 可用性（否则同一用例在
+    Windows 绿、Linux 红）。测试通过 ``_stub_qt_multimedia`` 把它注入
+    ``sys.modules``，让 click_sound 的惰性 import 与本替身同源。
+    """
+
+    class Status:
+        Null = "Null"
+        Loading = "Loading"
+        Ready = "Ready"
+        Error = "Error"
+
+
 class _StickyErrorEffect:
     """复刻 QSoundEffect 的错误态粘滞：status()==Error 时 play() 是静默空操作。
 
@@ -368,20 +386,12 @@ class _StickyErrorEffect:
     False，既不抛异常也不打日志——调用方只能靠 status 识别，且只有重建对象
     才能恢复（真实表现就是"日志照打但没声"）。
 
-    status() 返回真实的 ``QSoundEffect.Status`` 成员（与产品代码判定同型）。
     注意 PySide6 该枚举只有 Null/Loading/Ready/Error 四个成员，"正在播放"
     是 ``isPlaying`` 属性而非状态值，所以可播状态记为 Ready。
     """
 
-    @staticmethod
-    def _status_members():
-        from PySide6.QtMultimedia import QSoundEffect
-
-        return {"Error": QSoundEffect.Status.Error, "Ready": QSoundEffect.Status.Ready}
-
     def __init__(self, path, status_value=None):
-        self._members = self._status_members()
-        self.status_value = self._members["Error"] if status_value is None else status_value
+        self.status_value = _StubQSoundEffect.Status.Error if status_value is None else status_value
         self._path = path
         self.play_calls = 0
         self.source = None
@@ -403,27 +413,21 @@ class _StickyErrorEffect:
 
     def play(self):
         self.play_calls += 1
-        if self.status_value is self._members["Error"]:
+        if self.status_value == _StubQSoundEffect.Status.Error:
             return  # 与真实 Qt 一致：静默无效
-        self.status_value = self._members["Ready"]
-
-    def _error_status(self):
-        try:
-            from PySide6.QtMultimedia import QSoundEffect
-
-            return QSoundEffect.Status.Error
-        except Exception:
-            return "Error"
+        self.status_value = _StubQSoundEffect.Status.Ready
 
 
-def _qt_status(name: str):
-    """取真实 QSoundEffect.Status 成员；无 QtMultimedia 时降级为字符串。"""
-    try:
-        from PySide6.QtMultimedia import QSoundEffect
+def _stub_qt_multimedia(monkeypatch):
+    """把 PySide6.QtMultimedia 换成只含 QSoundEffect 的桩模块。
 
-        return getattr(QSoundEffect.Status, name)
-    except Exception:
-        return name
+    click_sound 的错误判定走 ``from PySide6.QtMultimedia import QSoundEffect``，
+    桩化后该 import 在任何平台都成立，用例不再受本机音频库缺失影响。
+    """
+    module = types.ModuleType("PySide6.QtMultimedia")
+    module.QSoundEffect = _StubQSoundEffect
+    monkeypatch.setitem(sys.modules, "PySide6.QtMultimedia", module)
+    return _StubQSoundEffect
 
 
 def _click_wav(tmp_path, name="Ya1.wav"):
@@ -447,7 +451,8 @@ def _install_effect_factory(pool, *, fresh_error: bool = False):
     def factory():
         # 重建出来的新对象：默认可用（模拟真实设备恢复后的情形）；
         # fresh_error=True 表示音频设备整体不可用，新对象依旧停在 Error。
-        effect = _StickyErrorEffect(None, None if fresh_error else _qt_status("Ready"))
+        effect = _StickyErrorEffect(
+            None, None if fresh_error else _StubQSoundEffect.Status.Ready)
         created.append(effect)
         return effect
 
@@ -455,13 +460,14 @@ def _install_effect_factory(pool, *, fresh_error: bool = False):
     return created
 
 
-def test_play_with_effect_recovers_from_sticky_qt_error(tmp_path):
+def test_play_with_effect_recovers_from_sticky_qt_error(tmp_path, monkeypatch):
     """回归（issue #116）：音效对象粘在 Error 后，下一次点击必须重新出声。
 
     现象：小黄鸭音效（Ya1/Ya2 缓存 WAV）首次点击正常，放置一段时间后
     （音频端点被切换/休眠/独占）再点就没声音，日志却照打——因为池复用
     status==Error 的旧对象，而 Qt 对 Error 对象的 play() 是永久空操作。
     """
+    _stub_qt_multimedia(monkeypatch)
     wav = _click_wav(tmp_path)
     pool = click_sound.ClickSoundPool()
     created = _install_effect_factory(pool)
@@ -472,7 +478,7 @@ def test_play_with_effect_recovers_from_sticky_qt_error(tmp_path):
 
     # 期间音频端点被切走 → 缓存里的对象落到粘滞错误态
     cached = created[0]
-    cached.status_value = _qt_status("Error")
+    cached.status_value = _StubQSoundEffect.Status.Error
     key = str(wav.resolve())
     assert pool._qt_effects.get(key) is cached
 
@@ -481,12 +487,13 @@ def test_play_with_effect_recovers_from_sticky_qt_error(tmp_path):
     assert len(created) == 2, "错误态旧对象未被丢弃重建，点击音效会永久静音"
     rebuilt = created[1]
     assert rebuilt.play_calls == 1, "重建后的对象必须真的被播放"
-    assert rebuilt.status_value is _qt_status("Ready"), "重建后的对象必须回到可播状态"
+    assert rebuilt.status_value == _StubQSoundEffect.Status.Ready, "重建后的对象必须回到可播状态"
     assert pool._qt_effects.get(key) is rebuilt, "缓存必须换成本次重建的可用对象"
 
 
-def test_play_with_effect_returns_false_when_error_persists(tmp_path):
+def test_play_with_effect_returns_false_when_error_persists(tmp_path, monkeypatch):
     """重建后仍无法播放（音频设备整体不可用）时如实返回 False，不再谎报成功。"""
+    _stub_qt_multimedia(monkeypatch)
     wav = _click_wav(tmp_path)
     pool = click_sound.ClickSoundPool()
     created = _install_effect_factory(pool, fresh_error=True)  # 新对象也停在 Error
