@@ -347,7 +347,12 @@ class ExternalModeController(QObject):
         return self.enter(mode_id)
 
     def enter(self, mode_id: str) -> bool:
-        """进入指定外接模式；失败时保持在经典模式并给出提示。"""
+        """进入指定外接模式；失败时保持在经典模式并给出提示。
+
+        从经典模式进入时先暂停桌宠窗口再拉起程序；**从另一个外接模式直切时窗口
+        全程保持隐藏**——不能经由 ``exit_mode()``（那会把恢复显示的窗口交给下一次
+        进入再隐藏，桌面上会闪过一帧桌宠）。启动失败才把窗口恢复回经典模式。
+        """
         if self._closing:
             return False
         spec = self.mode(mode_id)
@@ -356,24 +361,32 @@ class ExternalModeController(QObject):
             return False
         if self._mode == spec.mode_value:
             return True
-        if self._mode != MODE_CLASSIC:
-            self.exit_mode()
+        was_classic = self._mode == MODE_CLASSIC
+        if not was_classic:
+            self._stop_current_process()   # 停旧进程，但窗口保持隐藏
         if self._command_override is None and not spec.available():
             self.notice.emit("外接模式", f"无法启动「{spec.name}」：{spec.unavailable_reason()}")
+            if not was_classic:
+                self.exit_mode()           # 旧模式已收掉：回经典，不能让窗口留在隐藏态
             return False
         command = (
             list(self._command_override) if self._command_override is not None else spec.command()
         )
-        self._restore_visible = self._visible_instances()
-        self._pause_windows()
+        if was_classic:
+            self._restore_visible = self._visible_instances()
+            self._pause_windows()
         process = self._process_factory(command, spec.work_dir() or None, self)
         self._process = process
         process.finished.connect(self._on_process_finished)
         if not process.start():
             self._release_process(process)
             self._process = None
-            self._resume_windows()
-            self.notice.emit("外接模式", f"「{spec.name}」启动失败，已保持经典桌宠模式。")
+            if was_classic:
+                self._resume_windows()
+                self.notice.emit("外接模式", f"「{spec.name}」启动失败，已保持经典桌宠模式。")
+            else:
+                self.notice.emit("外接模式", f"「{spec.name}」启动失败，已恢复经典桌宠。")
+                self.exit_mode()
             return False
         self._set_mode(spec.mode_value)
         self._warn_multi_process(spec)
@@ -383,29 +396,28 @@ class ExternalModeController(QObject):
         """退出外接模式并恢复原桌宠；已处于经典模式时返回 False。"""
         if self._mode == MODE_CLASSIC and self._process is None:
             return False
-        process, self._process = self._process, None
-        if process is not None:
-            self._release_process(process)
-            try:
-                process.stop()
-            except RuntimeError:
-                pass
+        self._stop_current_process()
         self._resume_windows()
         self._set_mode(MODE_CLASSIC)
         return True
 
+    def _stop_current_process(self) -> None:
+        """脱离并终止当前子进程，**不动窗口可见性**（调用方决定何时恢复）。"""
+        process, self._process = self._process, None
+        if process is None:
+            return
+        self._release_process(process)
+        try:
+            process.stop()
+        except RuntimeError:
+            pass
+
     def shutdown(self) -> None:
         """应用退出/会话结束：终止子进程并禁止再进入模式。"""
         self._closing = True
-        process, self._process = self._process, None
-        if process is not None:
-            self._release_process(process)
-            try:
-                process.stop()
-            except RuntimeError:
-                pass
+        self._stop_current_process()
         if self._mode != MODE_CLASSIC:
-            self._restore_visible = []
+            self._restore_visible = []   # 退出中：不恢复窗口，避免退出瞬间闪一下
             self._set_mode(MODE_CLASSIC)
 
     # ------------------------------------------------------------ 内部实现

@@ -276,6 +276,64 @@ def test_switching_between_external_modes_stops_previous(tmp_path):
     assert controller.state == second.mode_value
 
 
+def test_switching_between_external_modes_never_shows_windows(tmp_path):
+    """外接模式之间直切：桌宠窗口全程不得可见（否则切换瞬间会闪一下）。
+
+    旧实现先走 exit_mode() —— 那会把「切换前可见」的窗口恢复显示，紧接着
+    又被下一次进入暂停，桌面上闪过一帧桌宠。这里用 show_calls 钉住该回归。
+    """
+    _app()
+    a, b = _exe(tmp_path, "a.exe"), _exe(tmp_path, "b.exe")
+    win = FakeWindow()
+    config = FakeConfig(**{
+        EXTERNAL_MODES_KEY: [{"exe": str(a), "name": "A"}, {"exe": str(b), "name": "B"}]
+    })
+    controller = _controller(FakeShell([FakeInstance(win)]), config, tmp_path)
+    first, second = controller.modes()
+
+    assert controller.enter(first.id) is True
+    assert win.isVisible() is False
+    assert win.show_calls == 0
+
+    assert controller.enter(second.id) is True
+
+    assert controller.state == second.mode_value
+    assert win.isVisible() is False        # 新程序起来前保持隐藏
+    assert win.show_calls == 0             # 中途一次都没露过面
+
+    # 正常退出时仍然按「切换前可见」恢复，语义不变
+    assert controller.exit_mode() is True
+    assert win.isVisible() is True
+    assert win.show_calls == 1
+
+
+def test_switching_to_external_mode_that_fails_stays_paused(tmp_path):
+    """外接模式之间直切、新程序启动失败：回退到经典桌宠并恢复窗口，不留在半途。"""
+    _app()
+    a, b = _exe(tmp_path, "a.exe"), _exe(tmp_path, "b.exe")
+    win = FakeWindow()
+    config = FakeConfig(**{
+        EXTERNAL_MODES_KEY: [{"exe": str(a), "name": "A"}, {"exe": str(b), "name": "B"}]
+    })
+    created: list[FakeProcess] = []
+
+    def factory(command, cwd, parent=None):
+        process = FakeProcess(command, cwd, parent)
+        process.fail_start = len(created) == 1     # 只有第二次（切到 B）失败
+        created.append(process)
+        return process
+
+    controller = _controller(FakeShell([FakeInstance(win)]), config, tmp_path, factory=factory)
+    first, second = controller.modes()
+
+    assert controller.enter(first.id) is True
+    assert controller.enter(second.id) is False
+
+    assert controller.state == MODE_CLASSIC
+    assert win.isVisible() is True
+    assert win.show_calls == 1
+
+
 def test_add_and_remove_mode(tmp_path):
     _app()
     exe = _exe(tmp_path)
