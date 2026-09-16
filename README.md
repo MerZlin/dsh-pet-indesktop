@@ -1263,9 +1263,11 @@ python scripts/cleanup_mei_cache.py --delete
 - **POSIX 碰撞 IPC 测试失败（issue #42）**：Linux/macOS 上协调者被强杀后 `QLocalServer` 的 Unix socket 文件残留，幸存者 `listen()` 报 `AddressInUseError` 导致重选死循环；`submit_leave` 成员表为空属于同批时序问题。处理：先探测活监听者、确认无人应答再清理残留并重试；补 `bytesAvailable()` 兜底读取；测试服务名缩短规避 macOS socket 路径长度上限（PR #46/#49）。
 - **WebM 线程回收偶发失败**：`test_rapid_start_stop_no_leaked_running_threads` 在 Linux/macOS 偶发断言残留新出现的非预期线程（含 reader 线程）。处理：线程退出是异步的，断言前给 5s 宽限等待；若仍偶发可重跑定位是否负载相关。
 - **macOS 右键菜单动画时序失败**：`test_context_menu_transitions_smoothly_to_safe_target` 原先固定 `qWait(50)` 采样动画中间位置，macOS offscreen 子进程定时器调度延迟时会采样到尚未推进的帧（`middle.x == 40`）。处理：改为轮询等待菜单位置首次变化（上限 2s）后再采样，并等待 `duration + margin` 验证最终位置；恢复严格下界断言（PR #53/#54）。
+- **本机缺新声明依赖 → 设置页类用例整族红（2026-09-16，PR #127/#128/#129）**：合并新增了运行时依赖的 PR（`lunar-python`、`winrt-Windows.*`）后本机跑套件，`test_menu_layout.py` 一次红 20 条、`test_architecture.py`/`test_config_schema.py` 也有红，**看着像合并把设置页改坏**。根因是第三方库只在叶子模块导入（`pet/festival_calendar.py` 里的 `lunar_python`），而 `ModernSettingsDialog.__init__` 在**导入期**就 import 设置页，于是所有构造设置页的用例都在 import 阶段炸；CI 会自动 `pip install -r requirements.txt`，所以各 PR 自己的 CI 都是绿的。判定：红的是同一族 + 报错是 `ModuleNotFoundError` + **在合并前的分支上对照组也红** ⇒ 环境问题，不是合并。修复：`pip install -r requirements.txt`。详见 `docs/BUILD-CI-FAILURE-NOTES-2026-08.md` 第 2.4 节。
 - **经验总结**：
   - 本地 Windows 全量通过 ≠ 三平台通过；QLocalServer、子进程、UI 动画等平台敏感测试必须跑真实 Linux/macOS。
   - 固定短等待采样 UI 中间态是 flaky 主要来源，应轮询“状态变化”而非假设固定帧率/调度。
+  - 合并"新增了运行时依赖"的 PR 后，**先同步依赖再判定红**；报红前先确认本机环境与 CI 等价（`requirements.txt` 是唯一权威清单）。
   - `workflow_dispatch` 手动触发 CI 只测试+构建+上传 artifact，不创建/修改 Release，适合合并前/后验证。
   - 遇到平台相关 flaky 先定位根因，不要简单放宽断言到“永远通过”。
   - 更完整记录见 `docs/BUILD-CI-FAILURE-NOTES-2026-08.md`。

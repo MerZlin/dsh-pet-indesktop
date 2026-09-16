@@ -100,6 +100,39 @@ monkeypatch.setattr("pet.proactive.sys", SimpleNamespace(platform="darwin"))
 
 **检查方式**：grep 测试代码确认没有 `setattr(..., "sys.platform", ...)` / `setattr(..., "os.name", ...)`。
 
+### 2.4 本机没装新声明依赖：设置页构造在导入期炸，看着像合并坏了（2026-09-16，PR #127/#128/#129）
+
+**现象**：把 #127（节日提醒）与 #128（歌词／消费统计）合并后在本机跑套件，`tests/test_menu_layout.py` **一次红 20 条**，`test_architecture.py` / `test_config_schema.py` 也有红。看着像合并把设置页改坏了，实际与合并无关：
+
+```
+pet\modern_settings_dialog.py:944: in __init__
+    from .festival_settings import FestivalSettingsPage
+pet\festival_settings.py:39: in <module>
+    from .festival import (
+pet\festival.py:31: in <module>
+    from .festival_calendar import (
+pet\festival_calendar.py:  from lunar_python import Lunar, Solar
+ModuleNotFoundError: No module named 'lunar_python'
+```
+
+**根因**：新增的运行时依赖（`lunar-python`、`winrt-Windows.*`）**只在叶子模块里导入**（第三方历法库集中在 `festival_calendar.py` 一处，这是有意设计：换历法后端只动一个文件）。而 `ModernSettingsDialog.__init__` 在**导入期**就 import 设置页，于是所有"构造设置页"的用例全部在 import 阶段炸。CI 会执行 `pip install -r requirements.txt`，所以每个 PR 自己的 CI 都是绿的——**只有本机复现会踩**，而且表现酷似回归。
+
+**判定手法（别再当合并问题排查）**：
+
+1. 看红的是不是**同一族**（设置页／菜单类，集中在 `test_menu_layout.py`）；
+2. 看报错是 `ModuleNotFoundError` 还是断言失败——前者先怀疑依赖，不要先怀疑逻辑；
+3. **对照组**：在合并前的分支上跑同一条用例。它若一样红，就不是本次合并引入的（本次即如此：#128 分支未合并时同样红 20 条）。
+
+**修复**：
+
+```bash
+pip install -r requirements.txt      # lunar-python、winrt-Windows.* 都在里面
+```
+
+补装后同一棵树：`test_architecture.py` + `test_config_schema.py` + `test_menu_layout.py` **77 passed**，全量 **2356 passed / 10 skipped / 0 failed**。
+
+**经验**：合并"新增了运行时依赖"的 PR 之后，**先同步依赖再判定红**；`requirements.txt` 是唯一权威清单。这条与 2.2 / 2.3 同族：平台条件导入、新增依赖都会让"本机与 CI 结论不一致"，报告红之前先确认两边环境是否等价。
+
 ---
 
 ## 三、平台特有经验
