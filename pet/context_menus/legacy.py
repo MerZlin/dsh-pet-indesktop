@@ -19,6 +19,7 @@ from .shared import (
     add_edge_probe,
     add_golden_spin,
     add_harness,
+    add_external_mode_menu,
     add_mouse_through,
     add_no_move,
     add_on_top,
@@ -74,6 +75,10 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
 
     menu.addSeparator()
     add_template_switch(menu, pet, str(template["switch_label"]), str(template["switch_to"]), icons=False)
+
+    # 模式切换（经典桌宠 / 外接启动模式）：新旧两套菜单语义一致，
+    # 托盘菜单复用同一构建函数（见 shared.add_external_mode_menu）。
+    add_external_mode_menu(menu, pet, icons=False)
 
     menu.addSeparator()
     add_quit(menu, pet, icons=False)

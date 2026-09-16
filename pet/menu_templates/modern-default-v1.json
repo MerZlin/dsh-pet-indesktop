@@ -32,6 +32,7 @@
         {"type": "action", "id": "edge_probe", "visible": true}
       ]
     },
+    {"type": "action", "id": "mode_switch", "visible": true, "section": "pet"},
     {"type": "action", "id": "quick_launch", "visible": true, "section": "pet"},
     {"type": "separator", "id": "default.separator-pet", "visible": true},
     {

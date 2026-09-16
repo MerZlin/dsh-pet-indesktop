@@ -101,3 +101,13 @@ Windows session fails DLL initialization (0xc0000142) and blocks shutdown.
 The freeze is one-way: a process that survives a cancelled shutdown stays
 frozen rather than resuming animation.
 _Avoid_: Shutdown option, ffmpeg kill switch
+
+**Alternate Mode**:
+A user-registered external program reachable only through the pet's own mode
+switch (for example a keyboard/mouse-following pet installed separately). The
+pet never builds or bundles it: the user adds an executable, and the pet owns
+only the launch, the mutual exclusion, and the restore. While an alternate mode
+runs, classic pet windows are hidden and deeply paused (no decode, no timers,
+no detectors), and that program's process exit is the single restoration
+signal. Modes never share state beyond the switch itself.
+_Avoid_: Bundled runtime, forked third-party app, plugin, chibi mode

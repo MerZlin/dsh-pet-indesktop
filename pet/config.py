@@ -643,6 +643,11 @@ class Config:
             "context_menu_layout": None,
             "context_menu_appearance": dict(DEFAULT_CONTEXT_MENU_APPEARANCE),
             "menu_easter_egg": dict(DEFAULT_MENU_EASTER_EGG),
+            # 模式切换：classic（经典桌宠，默认）/ external:<id>（外接启动模式，如
+            # BongoCat 键鼠跟随桌宠）。external_modes 是模式清单（菜单里可加/可删）。
+            # 进程级偏好：多开时以主桌宠的这份配置为准（见 pet/external_mode.py）。
+            "pet_mode": "classic",
+            "external_modes": [],
             "quick_launch_apps": [dict(item) for item in DEFAULT_QUICK_LAUNCH_APPS],
             "auto_hide_fullscreen": True,  # 全屏应用自动隐藏（Windows）
             "click_sound_enabled": True,  # 点击 Q 弹音效
@@ -875,6 +880,8 @@ class Config:
             "quick_launch_apps",
             "menu_easter_egg",
             "auto_hide_fullscreen",
+            "pet_mode",
+            "external_modes",
             "click_sound_enabled",
             "click_sound_pack",
             "click_sound_volume",

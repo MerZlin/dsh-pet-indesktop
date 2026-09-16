@@ -44,6 +44,7 @@ jobs:
           $langDir = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\Languages'
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl' -OutFile (Join-Path $langDir 'ChineseSimplified.isl')
 
+
       # 与 Linux/macOS 一致：构建前先跑测试套件，避免发布损坏产物。
       # 命令与 PR 门禁（pr-test.yml）保持同一套：时序 flake 家族从主套件里
       # 隔离成独立步骤——它们会让整个 pytest 进程原生崩溃（exit 139/access
