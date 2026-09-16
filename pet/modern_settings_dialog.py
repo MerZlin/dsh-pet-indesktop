@@ -1795,26 +1795,30 @@ class ModernSettingsDialog(QDialog):
                 ("行为重复检测", pattern_rows),
             ]
         )
-        # 「事件气泡触发概率」＝一个可折叠框：按**事件聚合类别**分组，每组是
-        # 「该类触发概率滑块 + 该类气泡文案行」，让设置位置与真正控制的位置绑定。
+        # 「事件气泡触发概率」＝一个可折叠框：按**事件聚合类别**分组，每组只放
+        # 该类触发概率滑块（紧凑、常用，默认展开）。
+        # 逐事件自定义文案行单独收进第二个折叠框并**默认折叠**（不用自定义台词的用户
+        # 不该翻过整页文案框；搜索命中时两个框都会自动展开，见 _search_settings）。
         gates_box = CollapsibleGroup("事件气泡触发概率", automation)
+        phrases_box = CollapsibleGroup("自定义台词（逐事件文案）", automation)
         gate_row_by_id = {row.objectName(): row for row in gate_rows}
         phrase_rows_by_gate: dict[str, list] = {}
         for row in dialogue_rows:
             event_key = row.objectName()[len("settingRow_dialogue_") :]
             phrase_rows_by_gate.setdefault(gate_for_event(event_key) or "", []).append(row)
         for gate in REPORT_GATE_KEYS:
-            rows = []
             gate_row = gate_row_by_id.get(f"settingRow_report_gate_{gate}")
             if gate_row is not None:
-                rows.append(gate_row)
-            rows.extend(phrase_rows_by_gate.get(gate, []))
-            if rows:
-                gates_box.add_group(REPORT_GATE_LABELS[gate], rows)
+                gates_box.add_group(REPORT_GATE_LABELS[gate], [gate_row])
+            phrase_rows = phrase_rows_by_gate.get(gate, [])
+            if phrase_rows:
+                phrases_box.add_group(REPORT_GATE_LABELS[gate], phrase_rows)
         # 默认展开：这些文案行改造前就在该页可见，折叠框只提供"可以收起来"，
         # 不把原有入口藏起来；搜索命中时也会自动展开（见 _search_settings）。
         gates_box.set_expanded(True)
+        phrases_box.set_expanded(False)
         self.report_gates_box = gates_box
+        self.dialogue_phrases_box = phrases_box
         automation_layout = automation.layout()
         # dialogue_* 里有一类行**不属于任何事件门**（表达风格、专属文案对象、弹窗文案
         # 模板 JSON）：它们不是某个事件的气泡文案，而是文案风格的全局控件，因此
@@ -1833,6 +1837,8 @@ class ModernSettingsDialog(QDialog):
             )
             insert_at += 1
         automation_layout.insertWidget(insert_at, gates_box)
+        insert_at += 1
+        automation_layout.insertWidget(insert_at, phrases_box)
 
         # Preserve any newly added row until it receives an explicit domain decision.
         leftovers = [row for row in all_rows if row not in claimed and (self.ai_page is None or not self.ai_page.isAncestorOf(row))]

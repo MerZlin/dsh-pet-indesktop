@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .speech_bubble import BUBBLE_STYLE_PRESETS
+from .speech_bubble_text import truncate_bubble_text
 
 from .chat.models import ChatMessage
 from .chat.prompt import PromptBuilder
@@ -30,6 +31,11 @@ from .chat.service import ChatService
 from .chat.session_store import SessionStore
 
 _PAGE_SIZE = 500
+
+# 气泡内 AI 回答的展示上限：超长回答不进气泡（头顶气泡只有几百像素），
+# 截断到 _REPLY_PREVIEW_LIMIT 字并提示全文在聊天窗（气泡内提供直达按钮）。
+_REPLY_PREVIEW_LIMIT = 150
+_REPLY_PREVIEW_SUFFIX = "…（全文见聊天窗）"
 
 
 class QuickChatBubble(QFrame):
@@ -61,7 +67,9 @@ class QuickChatBubble(QFrame):
         self.session = self._get_session()
         self.service = ChatService(parent=self)
         self._active_request_id: str | None = None
-        self._reply_text = ""
+        self._reply_full = ""       # AI 回答全文（会话历史/聊天窗用，不截断）
+        self._reply_text = ""       # 气泡内展示文本（超上限截断 + 提示看聊天窗）
+        self._reply_truncated = False
         self._page = 0
         self._pages: list[str] = []
         self._deactivate_check_pending = False
@@ -326,7 +334,7 @@ class QuickChatBubble(QFrame):
         else:
             self.session = synced
         self.output.setText("")
-        self._reply_text = ""
+        self._set_reply_text("")
         self._page = 0
         self._pages = []
         self.page_widget.setVisible(False)
@@ -346,16 +354,17 @@ class QuickChatBubble(QFrame):
     def _delta(self, request_id: str, text: str) -> None:
         if request_id != self._active_request_id:
             return
-        self._reply_text += str(text)
+        self._set_reply_text(self._reply_full + str(text))
         self._render_reply()
 
     def _finished(self, request_id: str, text: str) -> None:
         if request_id != self._active_request_id:
             return
-        self._reply_text = str(text or "")
-        synced, _absorbed = self.store.append_message(self.session, ChatMessage("assistant", self._reply_text))
+        # 落库/聊天窗用全文；气泡展示文本另行截断（见 _set_reply_text）。
+        self._set_reply_text(text)
+        synced, _absorbed = self.store.append_message(self.session, ChatMessage("assistant", self._reply_full))
         if synced is None:
-            self.session.messages.append(ChatMessage("assistant", self._reply_text))
+            self.session.messages.append(ChatMessage("assistant", self._reply_full))
             self.store.save(self.session)
         else:
             self.session = synced
@@ -368,7 +377,7 @@ class QuickChatBubble(QFrame):
             return
         self._active_request_id = None
         self.hint_label.setText("")
-        self._reply_text = f"请求失败：{text}"
+        self._set_reply_text(f"请求失败：{text}")
         self._render_reply()
 
     def _stopped(self, request_id: str) -> None:
@@ -378,17 +387,37 @@ class QuickChatBubble(QFrame):
         self.hint_label.setText("已停止")
 
     # ------------------------------------------------------------ 显示
+    def _set_reply_text(self, full_text: str) -> None:
+        """记录 AI 回答全文，并算出气泡内展示文本（超限截断 + 提示全文位置）。
+
+        全文与展示文本分开：会话历史/聊天窗始终拿全文，气泡只展示开头一段，
+        免得长回答把头顶气泡撑成一堵墙。
+        """
+        self._reply_full = str(full_text or "")
+        self._reply_text = truncate_bubble_text(
+            self._reply_full, _REPLY_PREVIEW_LIMIT, _REPLY_PREVIEW_SUFFIX
+        )
+        self._reply_truncated = self._reply_text != self._reply_full
+
+    def _set_page_controls_visible(self, on: bool) -> None:
+        """显示/隐藏分页箭头与页码（截断预览时只保留「去聊天窗」按钮）。"""
+        for widget in (self.prev_btn, self.page_label, self.next_btn):
+            widget.setVisible(on)
+
     def _render_reply(self) -> None:
         text = self._reply_text
         if len(text) > _PAGE_SIZE:
             self._pages = [text[i:i + _PAGE_SIZE] for i in range(0, len(text), _PAGE_SIZE)]
             self._show_page(0)
+            self._set_page_controls_visible(True)
             self.page_widget.setVisible(True)
-            self.open_chat_btn.setVisible(True)
-        else:
-            self._pages = []
-            self.page_widget.setVisible(False)
-            self.output.setText(text)
+            return
+        self._pages = []
+        # 截断预览：文案末尾已提示「全文见聊天窗」，这里只露出直达按钮；
+        # 分页箭头/页码对一段预览没有意义，隐藏。
+        self._set_page_controls_visible(not self._reply_truncated)
+        self.page_widget.setVisible(self._reply_truncated)
+        self.output.setText(text)
 
     def _show_page(self, index: int) -> None:
         if not self._pages:
