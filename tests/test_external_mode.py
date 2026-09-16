@@ -328,10 +328,19 @@ def test_pick_args_linux_accepts_extensionless_binaries(tmp_path):
     assert name_filter == "所有文件 (*)"
 
 
-def test_pick_args_falls_back_to_empty_dir_when_nothing_exists(tmp_path):
-    """目录都不存在时给空字符串（让系统决定），不能给一个不存在的路径。"""
-    start, _ = external_mode_pick_args("darwin", {"HOME": str(tmp_path / "nope")})
-    assert start == ""
+def test_pick_args_start_dir_is_always_an_existing_dir(tmp_path):
+    """起始目录要么是真实存在的目录，要么是空串（交给系统决定）。
+
+    不写死成 ""：macOS 上 /Applications 本来就存在，会（也应当）被当成兜底目录选出来；
+    这条断言的是不变式——绝不返回一个不存在的路径。
+    """
+    for platform, env in (
+        ("darwin", {"HOME": str(tmp_path / "nope")}),
+        ("linux", {"HOME": str(tmp_path / "nope")}),
+        ("win32", {"LOCALAPPDATA": str(tmp_path / "nope"), "ProgramFiles": str(tmp_path / "nope")}),
+    ):
+        start, _ = external_mode_pick_args(platform, env)
+        assert start == "" or Path(start).is_dir(), f"{platform} 给了不存在的目录：{start}"
 
 
 def test_pick_external_mode_registers_resolved_spec(tmp_path, monkeypatch):
