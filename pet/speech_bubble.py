@@ -45,14 +45,17 @@ from PySide6.QtWidgets import (
 # 批6-2 拆分后纯函数区 re-export（维持既有 import 兼容；外部调用点本批不改）
 from .speech_bubble_text import (
     BUBBLE_TEXT_COLUMN,
+    BUBBLE_TEXT_COLUMN_MAX,
     BUBBLE_TEXT_SLACK,
     PAGE_DWELL_MAX_MS,
     PAGE_DWELL_MIN_MS,
     PAGE_FADE_IN_MS,
     PAGE_FADE_OUT_MS,
+    PAGE_RETURN_PAUSE_MS,
     SELF_TALK_IMAGE_SUFFIXES,
     breath_bubble_size_for_anchor,
     breath_bubble_size_for_scale,
+    bubble_column_for_text,
     bubble_label_size,
     bubble_max_lines,
     bubble_rect_for_anchor,
@@ -62,18 +65,23 @@ from .speech_bubble_text import (
     normalize_bubble_text,
     page_dots,
     page_dwell_ms,
+    page_dwells_ms,
     paginate_bubble_text,
+    truncate_bubble_text,
 )
 
 __all__ = [
     "BUBBLE_TEXT_COLUMN",
+    "BUBBLE_TEXT_COLUMN_MAX",
     "BUBBLE_TEXT_SLACK",
     "PAGE_DWELL_MAX_MS",
     "PAGE_DWELL_MIN_MS",
+    "PAGE_RETURN_PAUSE_MS",
     "SELF_TALK_IMAGE_SUFFIXES",
     "BUBBLE_STYLE_PRESETS",
     "breath_bubble_size_for_anchor",
     "breath_bubble_size_for_scale",
+    "bubble_column_for_text",
     "bubble_label_size",
     "bubble_max_lines",
     "bubble_rect_for_anchor",
@@ -83,7 +91,9 @@ __all__ = [
     "normalize_bubble_text",
     "page_dots",
     "page_dwell_ms",
+    "page_dwells_ms",
     "paginate_bubble_text",
+    "truncate_bubble_text",
     "PetSpeechBubble",
 ]
 
@@ -566,14 +576,23 @@ class PetSpeechBubble(QFrame):
         if self._preset.get("shape") == "breath_bubble" and not interactive:
             self._configure_breath_content(anchor_rect, pet_scale)
         else:
+            # 自适应列宽：短文案维持 248px，长文案逐步放宽到 360px 上限
+            # （bubble_column_for_text）。审批/提问气泡有自己的布局（按钮行 +
+            # 强制单页展示），保持既有列宽，不受本项影响。
+            column = (
+                BUBBLE_TEXT_COLUMN
+                if interactive or sticky
+                else self._column_for_text(text, anchor_rect)
+            )
             # 长文本分页：每页不超过 bubble_max_lines 行，自动翻页直到全文展示完，
-            # 底部显示圆点页码（● ○ ○）。每页停留按该页字数自适应，总时长相应扩展。
+            # 底部显示圆点页码（● ○ ○）。每页停留按该页字数自适应（首页 ×2、
+            # 末页多压一拍回首页停顿），总时长相应扩展。
             pages = paginate_bubble_text(
-                metrics, text, bubble_wrap_width(), bubble_max_lines(text)
+                metrics, text, bubble_wrap_width(column), bubble_max_lines(text)
             )
             display_text = pages[0] if pages else ""
             if len(pages) > 1 and not sticky and not interactive:
-                dwells = [page_dwell_ms(page) for page in pages]
+                dwells = page_dwells_ms(pages)
                 total_ms = max(duration_ms, sum(dwells))
                 self._pages = pages
                 self._page_index = 0
@@ -588,7 +607,7 @@ class PetSpeechBubble(QFrame):
             self.label.setText(display_text)
             # 固定尺寸按真正会绘制的行计算（所有页里最长的一行 + 行数最多的一页），
             # 翻页后 wordWrap=False 也不会裁字；详见 bubble_label_size 的说明。
-            self.label.setFixedSize(bubble_label_size(metrics, pages))
+            self.label.setFixedSize(bubble_label_size(metrics, pages, column))
         self.adjustSize()
         self._place(anchor_rect)
         self.show()
@@ -843,16 +862,40 @@ class PetSpeechBubble(QFrame):
         if self.isVisible():
             self._place(anchor_rect)
 
-    def _place(self, anchor_rect: QRect) -> None:
+    def _available_geometry(self, anchor_rect: QRect) -> QRect | None:
+        """气泡可用区：普通模式取所在屏幕，直播捕获子模式收窄为主窗矩形。
+
+        捕获子模式下气泡是主窗子控件，只有落在主窗矩形内才不会被裁掉；
+        ``_place`` 与自适应列宽共用同一口径。
+        """
         screen = QGuiApplication.screenAt(anchor_rect.center()) or QGuiApplication.primaryScreen()
         if screen is None:
-            return
-        avail = screen.availableGeometry()
+            return None
         host = self._capture_host if self._capture_compat else None
         if host is not None and not host.geometry().isEmpty():
-            # 捕获子模式下只允许气泡落在主窗范围内，避免子控件越界被裁掉；
-            # bubble_rect_for_anchor 会按“上方→侧边→下方”在受限可用区选位。
-            avail = host.geometry()
+            return host.geometry()
+        return screen.availableGeometry()
+
+    def _column_for_text(self, text: str, anchor_rect: QRect) -> int:
+        """文案自适应列宽，再按可用区宽度收敛。
+
+        更宽的气泡（列宽上限 360px）在窄屏 / 直播捕获子模式（可用区=主窗矩形，
+        可能只有 320px 宽）下会越出可用区被裁；这里把「列宽 + 左右内边距」
+        收进可用区，宁可列窄一点也不越界（不会低于基础列宽 248px）。
+        """
+        column = bubble_column_for_text(text)
+        avail = self._available_geometry(anchor_rect)
+        if avail is None:
+            return column
+        margins = self._layout.contentsMargins()
+        chrome = margins.left() + margins.right()
+        return max(BUBBLE_TEXT_COLUMN, min(column, avail.width() - chrome - 8))
+
+    def _place(self, anchor_rect: QRect) -> None:
+        host = self._capture_host if self._capture_compat else None
+        avail = self._available_geometry(anchor_rect)
+        if avail is None:
+            return
         # Image breath bubbles hide the QLabel because the parent paints the
         # clipped image below its decorations. Their sizeHint therefore only
         # contains layout margins; position the real fixed-size window instead.

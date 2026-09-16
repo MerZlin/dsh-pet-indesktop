@@ -329,7 +329,7 @@ def add_proactive_menu(menu: QMenu, pet) -> None:
 
 
 def add_agent_link_menu(menu: QMenu, pet) -> None:
-    """Agent 联动二级菜单（4 个 Agent 独立开关 + 自定义 Agent + 气泡提醒选项，失败/拒绝自动回滚勾选）。"""
+    """Agent 联动二级菜单（4 个 Agent 独立开关 + 自定义 Agent 三级子菜单 + 气泡提醒选项，失败/拒绝自动回滚勾选）。"""
     sub = add_submenu(menu, "Agent 联动", None)
     agent_cfg = dict(pet.cfg.get('agent_link', {}))
     for agent_key, agent_label in (
@@ -342,15 +342,20 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act.setCheckable(True)
         act.setChecked(bool(agent_cfg.get(agent_key, False)))
         act.toggled.connect(lambda on, k=agent_key, a=act: pet.toggle_agent_link(k, on, a))
-    # 自定义联动 Agent（config.json 的 agent_link.custom_agents，只读监听）
-    for item in (agent_cfg.get('custom_agents') or []):
-        key = str(item.get('key') or '')
-        if not key:
-            continue
-        act = sub.addAction(str(item.get('name') or key))
-        act.setCheckable(True)
-        act.setChecked(bool(agent_cfg.get(key, False)))
-        act.toggled.connect(lambda on, k=key, a=act: pet.toggle_agent_link(k, on, a))
+    # 自定义联动 Agent（config.json 的 agent_link.custom_agents，只读监听）：
+    # 收进三级子菜单，避免用户配了多个自定义通道后把联动菜单撑长。
+    custom_items = [
+        item for item in (agent_cfg.get('custom_agents') or [])
+        if str(item.get('key') or '')
+    ]
+    if custom_items:
+        custom_sub = add_submenu(sub, "自定义联动 Agent", None)
+        for item in custom_items:
+            key = str(item.get('key'))
+            act = custom_sub.addAction(str(item.get('name') or key))
+            act.setCheckable(True)
+            act.setChecked(bool(agent_cfg.get(key, False)))
+            act.toggled.connect(lambda on, k=key, a=act: pet.toggle_agent_link(k, on, a))
     sub.addSeparator()
     # 事件气泡触发概率：与设置页「事件气泡触发概率」同一份数据（agent_link.report_gates）。
     # 菜单只做 0/1 两端快捷入口（勾选=1.0 全报，取消=0.0 静音），细粒度概率

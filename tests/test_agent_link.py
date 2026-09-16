@@ -1711,6 +1711,42 @@ class TestAgentLinkChainingAndActivity:
         assert "{step}" not in bubbles[-1]
         assert "{argsKey}" not in bubbles[-1]
 
+    def test_activity_bubble_text_is_truncated_at_source(self, tmp_path):
+        """过程汇报文案源头截断：自定义模板塞进超长命令时截到 80 字 + 「…」。
+
+        过程汇报只是一句状态提示，不进分页/滚动；审批/提问气泡走
+        _show_interaction_bubble，不受该截断影响。
+        """
+        mgr, win, bubbles, clock = self._make_mgr(
+            tmp_path, agent_link_cfg={"report_gates": _agent_gates(activity=1.0)}
+        )
+        # 先缓存 tool/call 记录（监视器 _poll 的同轮顺序），命令长到必定超上限
+        mgr._remember_dialogue_record("dsh", {
+            "ts": 1, "event": "tool/call", "tool": "bash",
+            "command": "x" * 200, "step": 3,
+        })
+        cfg = mgr.cfg
+        cfg.data["dialogue_mode"] = "custom"
+        cfg.data["dialogue_phrases"] = {"activity.run": ["正在跑命令（{command}）"]}
+        cfg.save()
+
+        mgr._on_agent_activity("dsh", "bash")
+        assert bubbles, "气泡未弹出"
+        text = bubbles[-1]
+        assert text.startswith("正在跑命令（")
+        assert len(text) == AgentLinkManager._ACTIVITY_TEXT_LIMIT + 1
+        assert text.endswith("…")
+
+        # 上限内的文案原样展示（不追加省略号）
+        clock[0] += 15.0
+        mgr._remember_dialogue_record("dsh", {
+            "ts": 2, "event": "tool/call", "tool": "read", "command": "cat a.py",
+        })
+        cfg.data["dialogue_phrases"] = {"activity.read": ["正在读取 {command}"]}
+        cfg.save()
+        mgr._on_agent_activity("dsh", "read")
+        assert bubbles[-1] == "正在读取 cat a.py"
+
     def test_window_smooth_chaining(self, tmp_path):
         """4. window 侧平滑衔接（用真实 PetWindow + MovieLibrary，offscreen，参考 TestAgentMenuRebound 的构造）：
         win._switch('优雅女仆舞')（一次性动作）后 win.request_link_anim('写代码') →
@@ -2184,7 +2220,7 @@ class TestCustomAgentManager:
 
 class TestCustomAgentMenu:
     def test_menu_lists_custom_agent_and_toggle_routes(self, tmp_path):
-        """右键菜单动态渲染自定义 Agent，勾选走通用 _toggle_agent_link。"""
+        """右键菜单动态渲染自定义 Agent（收进「自定义联动 Agent」三级子菜单），勾选走通用 _toggle_agent_link。"""
         from PySide6.QtWidgets import QMenu
         from pet.context_menus.shared import add_agent_link_menu
 
@@ -2217,15 +2253,18 @@ class TestCustomAgentMenu:
             add_agent_link_menu(menu, DummyPet())
             sub = menu.actions()[0].menu()
             texts = [a.text() for a in sub.actions()]
-            # 内置 4 项仍在，自定义项按显示名插入
+            # 内置 4 项仍在顶层，自定义项收进三级子菜单「自定义联动 Agent」
             for label in ("DeepSeek Harness (DSH)", "Claude Code", "Cursor", "OpenCode"):
                 assert label in texts
-            assert "Gemini CLI" in texts
+            assert "Gemini CLI" not in texts
+            custom_sub = next(a.menu() for a in sub.actions() if a.text() == "自定义联动 Agent")
+            custom_texts = [a.text() for a in custom_sub.actions()]
+            assert "Gemini CLI" in custom_texts
             # Agent 联动子菜单不再带「台词风格」「循环检测/卡住检测」入口——
             # 检测类配置已收敛到设置页（自动化与联动），仅保留联动相关设置
             assert "台词风格" not in texts
 
-            gemini_act = next(a for a in sub.actions() if a.text() == "Gemini CLI")
+            gemini_act = next(a for a in custom_sub.actions() if a.text() == "Gemini CLI")
             gemini_act.setChecked(True)
             assert toggles == [("gemini", True)]
         finally:

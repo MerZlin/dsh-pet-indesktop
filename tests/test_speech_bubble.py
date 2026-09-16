@@ -7,23 +7,29 @@ from math import ceil
 from PySide6.QtCore import QRect, QSize
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 import pet.speech_bubble as speech_bubble_module
 from pet.speech_bubble import (
     BUBBLE_TEXT_COLUMN,
+    BUBBLE_TEXT_COLUMN_MAX,
     BUBBLE_TEXT_SLACK,
     PAGE_DWELL_MAX_MS,
     PAGE_DWELL_MIN_MS,
+    PAGE_RETURN_PAUSE_MS,
     FlowLayout,
     PetSpeechBubble,
+    bubble_column_for_text,
     bubble_label_size,
     bubble_max_lines,
+    bubble_rect_for_anchor,
     elide_bubble_text,
     normalize_bubble_text,
     page_dots,
     page_dwell_ms,
+    page_dwells_ms,
     paginate_bubble_text,
+    truncate_bubble_text,
 )
 
 
@@ -67,6 +73,22 @@ def test_bubble_max_lines_threshold():
     assert bubble_max_lines(md_text_41) == 6
 
 
+def test_bubble_column_for_text_grows_for_long_text():
+    """自适应列宽：≤60 字保持 248px，之后逐步放宽、上限 360px。"""
+    assert bubble_column_for_text("") == BUBBLE_TEXT_COLUMN
+    assert bubble_column_for_text("字" * 60) == BUBBLE_TEXT_COLUMN
+
+    short = bubble_column_for_text("字" * 61)
+    mid = bubble_column_for_text("字" * 110)
+    assert BUBBLE_TEXT_COLUMN < short < mid < BUBBLE_TEXT_COLUMN_MAX
+    # 160 字到达上限，再长也不超过上限
+    assert bubble_column_for_text("字" * 160) == BUBBLE_TEXT_COLUMN_MAX
+    assert bubble_column_for_text("字" * 5000) == BUBBLE_TEXT_COLUMN_MAX
+
+    # 长度口径与换行口径一致：Markdown 标记先规整掉再算字数
+    assert bubble_column_for_text("**" + "字" * 60 + "**") == BUBBLE_TEXT_COLUMN
+
+
 def test_elide_bubble_text_max_lines_6():
     _get_app()
     font = QFont("Arial", 12)
@@ -94,6 +116,23 @@ def test_elide_bubble_text_max_lines_6():
     lines_35 = elided_35.split("\n")
     assert len(lines_35) == 6
     assert "…" in lines_35[-1] or "..." in lines_35[-1]
+
+
+def test_truncate_bubble_text_limits_and_marks():
+    """源头截断纯函数：只按字数硬截断 + 追加标记，未超长原样返回。"""
+    assert truncate_bubble_text("", 5) == ""
+    assert truncate_bubble_text(None, 5) == ""
+    # 边界：恰好等于上限不截断
+    assert truncate_bubble_text("字" * 5, 5) == "字" * 5
+    assert truncate_bubble_text("字" * 4, 5) == "字" * 4
+    # 超长：截到上限再追加标记（标记不计入上限）
+    assert truncate_bubble_text("字" * 6, 5) == "字" * 5 + "…"
+    assert (
+        truncate_bubble_text("字" * 200, 150, "…（全文见聊天窗）")
+        == "字" * 150 + "…（全文见聊天窗）"
+    )
+    # limit <= 0 视为不限长
+    assert truncate_bubble_text("字" * 10, 0) == "字" * 10
 
 
 def test_paginate_bubble_text_single_page():
@@ -174,6 +213,27 @@ def test_paginate_bubble_text_rebalances_single_line_last_page():
     assert "\n".join(pages).replace("\n", "") == char * 16
 
 
+def test_paginate_bubble_text_rebalances_two_line_last_page():
+    """孤行控制收紧到 ≤2 行：末页只剩 2 行时同样重平衡（3+2 → 2+3）。"""
+    _get_app()
+    font = QFont("Arial", 12)
+    metrics = QFontMetrics(font)
+    char = "测"
+    line_w = metrics.horizontalAdvance(char * 5)
+
+    # 40 字 = 8 行，3 行一页 → 3+3+2，末页 2 行也要从上一页匀一行 → 3+2+3
+    pages = paginate_bubble_text(metrics, char * 40, line_w, max_lines=3)
+    assert [len(page.split("\n")) for page in pages] == [3, 2, 3]
+    assert "\n".join(pages).replace("\n", "") == char * 40
+    for page in pages:
+        assert len(page.split("\n")) <= 3
+
+    # max_lines=6：8 行 = 6+2 → 5+3，末页不再是两行短尾
+    pages_6 = paginate_bubble_text(metrics, char * 40, line_w, max_lines=6)
+    assert [len(page.split("\n")) for page in pages_6] == [5, 3]
+    assert "\n".join(pages_6).replace("\n", "") == char * 40
+
+
 def test_page_dwell_ms_scales_with_length():
     # 短页钳到下限、满页（约 50 字）落在中段、超长页钳到上限
     assert page_dwell_ms("") == PAGE_DWELL_MIN_MS
@@ -186,6 +246,19 @@ def test_page_dwell_ms_scales_with_length():
     assert page_dwell_ms("字\n字") == page_dwell_ms("字字")
 
 
+def test_page_dwells_ms_adds_return_pause():
+    """多页停留表：末页多压一拍「回首页」停顿；单页/空页不加权。"""
+    pages = ["字" * 50, "字" * 40, "字" * 30]
+    dwells = page_dwells_ms(pages)
+    assert len(dwells) == len(pages)
+    assert dwells[0] == page_dwell_ms(pages[0])
+    assert dwells[1] == page_dwell_ms(pages[1])
+    assert dwells[-1] == page_dwell_ms(pages[-1]) + PAGE_RETURN_PAUSE_MS
+
+    assert page_dwells_ms(["字" * 50]) == [page_dwell_ms("字" * 50)]
+    assert page_dwells_ms([]) == []
+
+
 def test_page_dots_rendering():
     assert page_dots(0, 1) == ""
     assert page_dots(0, 3) == "● ○ ○"
@@ -196,7 +269,7 @@ def test_page_dots_rendering():
 
 
 def test_paged_bubble_uses_adaptive_dwells_and_dots():
-    """多页气泡：逐页停留表与页数一致，页码指示为圆点。"""
+    """多页气泡：逐页停留表与页数一致（末页含回首页停顿），页码为圆点。"""
     _get_app()
     bubble = PetSpeechBubble(style_id="classic_top")
     text = "主人～DSH开始干活啦，人家会帮您盯着它的～" * 20
@@ -204,8 +277,10 @@ def test_paged_bubble_uses_adaptive_dwells_and_dots():
     try:
         assert len(bubble._pages) > 1
         assert len(bubble._page_dwells) == len(bubble._pages)
-        for page, dwell in zip(bubble._pages, bubble._page_dwells):
-            assert dwell == page_dwell_ms(page)
+        assert bubble._page_dwells == page_dwells_ms(bubble._pages)
+        # 末页多压一拍「回首页」停顿，其余页按字数自适应
+        assert bubble._page_dwells[0] == page_dwell_ms(bubble._pages[0])
+        assert bubble._page_dwells[-1] == page_dwell_ms(bubble._pages[-1]) + PAGE_RETURN_PAUSE_MS
         assert bubble._page_indicator.text() == page_dots(0, len(bubble._pages))
     finally:
         bubble.dismiss()
@@ -394,6 +469,60 @@ def test_every_page_line_fits_label_width():
         assert _overflow_lines(bubble, page.split("\n")) == [], page
 
 
+def test_long_text_bubble_uses_wider_column():
+    """长文本走自适应列宽：label 比基础列宽更宽，但不超过 360px 上限。
+
+    短文本（CLIPPING_TEXTS 那一组）仍走原有 248px 列宽，视觉不回归。
+    """
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    text = "主人～DSH开始干活啦，人家会帮您盯着它的～" * 10
+    bubble.show_text(text, QRect(0, 0, 120, 120), 40000)
+    try:
+        assert bubble.label.width() > BUBBLE_TEXT_COLUMN
+        assert bubble.label.width() <= BUBBLE_TEXT_COLUMN_MAX
+        assert bubble._pages
+        for page in bubble._pages:
+            assert _overflow_lines(bubble, page.split("\n")) == [], page
+    finally:
+        bubble.dismiss()
+
+    # 短文本：列宽仍然是基础 248px（气泡整体宽度也随之不变）
+    short = PetSpeechBubble(style_id="classic_top")
+    short.show_text("短文本", QRect(0, 0, 120, 120), 3200, sticky=True)
+    try:
+        assert short.label.width() <= BUBBLE_TEXT_COLUMN
+    finally:
+        short.dismiss()
+
+
+def test_wide_bubble_column_clamped_to_narrow_capture_host():
+    """直播捕获子模式：可用区=主窗矩形，长文本列宽必须收进主窗。
+
+    列宽上限 360px + 左右内边距会让气泡比 320px 宽的主窗还宽，子控件越界
+    会被裁掉；_column_for_text 按可用区收敛列宽后，气泡仍完整落在主窗内。
+    """
+    _get_app()
+    host = QWidget()
+    host.setGeometry(0, 0, 320, 320)
+    bubble = PetSpeechBubble(style_id="classic_top")
+    try:
+        bubble.set_capture_compat(True, host)
+        text = "主人～DSH开始干活啦，人家会帮您盯着它的～" * 10
+        bubble.show_text(text, host.geometry(), 40000)
+        assert bubble.width() <= host.width()
+        assert host.rect().contains(bubble.geometry())
+        for page in bubble._pages:
+            assert _overflow_lines(bubble, page.split("\n")) == [], page
+    finally:
+        bubble.dismiss()
+        bubble.set_capture_compat(False)
+        host.close()
+        bubble.deleteLater()
+        host.deleteLater()
+        _get_app().processEvents()
+
+
 def test_bubble_label_stays_inside_painted_surface():
     """文本 label 必须落在气泡绘制区内（右侧留白足够，字不会被边框压住）。"""
     _get_app()
@@ -441,6 +570,24 @@ def test_bubble_label_size_measures_painted_lines():
     tiny = bubble_label_size(metrics, [])
     assert tiny.width() == 96
     assert tiny.height() == 20
+
+
+def test_bubble_rect_for_anchor_wide_bubble_stays_on_screen():
+    """更宽的气泡（列宽上限 360 → 气泡约 386px）定位仍正确。
+
+    正常屏幕：优先选到「避开桌宠」的位置；窄屏放不下时退化为贴边钳位，
+    但结果仍必须完整落在可用区内（不允许气泡越出屏幕/主窗被裁）。
+    """
+    available = QRect(0, 0, 1920, 1080)
+    anchor = QRect(900, 500, 120, 120)
+    rect = bubble_rect_for_anchor(anchor, QSize(386, 220), available, "top")
+    assert available.contains(rect)
+    assert not rect.intersects(anchor)
+
+    narrow = QRect(0, 0, 320, 300)
+    packed_anchor = QRect(80, 80, 160, 160)
+    clamped = bubble_rect_for_anchor(packed_anchor, QSize(280, 100), narrow, "top")
+    assert narrow.contains(clamped)
 
 
 # ============================================================================
