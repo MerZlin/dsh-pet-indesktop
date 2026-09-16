@@ -20,7 +20,7 @@ from PySide6.QtCore import (
     QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import (
-    QColor, QGuiApplication, QLinearGradient, QPainter, QPen,
+    QColor, QGuiApplication, QLinearGradient, QPainter, QPen, QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
@@ -185,6 +185,9 @@ class DynamicIsland(QWidget):
         self._scale_v = 0.0
         self._breathe_until = 0.0
         self._hover_scale_target = 1.0
+        # 内容层位图缓存（paintEvent 的文字绘制是实测大头，见 _content_cache）
+        self._content_pixmap: QPixmap | None = None
+        self._content_cache_key: tuple | None = None
         self._geo_from: QRect | None = None
         self._geo_to: QRect | None = None
         self._geo_t = 0.0
@@ -963,6 +966,84 @@ class DynamicIsland(QWidget):
                 (rect.width() - dot_size) / 2, (rect.height() - dot_size) / 2,
                 dot_size, dot_size))
 
+    def _content_cache(self) -> QPixmap:
+        """内容层（图标/名称/信息/状态灯）的缓存位图。
+
+        为什么缓存（拖岛扫鱼实测定案）：paintEvent 均值 6.2ms，大头是 CJK
+        文字的 shaping/回退字体解析；而内容只在刷新（时间跳变/余额刷新/
+        配置变更）时变化，拖拽/弹簧期间逐帧重画纯属浪费。缓存后每帧一次
+        blit（亚毫秒）。blit 走同一 painter 的整窗变换（kick 为整数平移，
+        文字锐利口径不变）；squish 只调制胶囊外形、本来就不碰内容层。
+        key 覆盖所有影响像素的输入（可见项/文本/颜色/字体/DPR/宽度），
+        任一变化自动重建，无需显式失效钩子。
+        """
+        icon, name, info, status = self._visible_parts()
+        _background, primary_color, secondary_color = self._style_palette()
+        info_color = self._info_color(secondary_color)
+        dpr = self.devicePixelRatioF()
+        key = (
+            icon, name, info, status,
+            self._icon_text() if icon else "",
+            self._character_name() if name else "",
+            self._info_text() if info else "",
+            self._accent_color().name() if icon else "",
+            primary_color.name() if name else "",
+            info_color.name() if info else "",
+            self._status_dot_color().name() if status else "",
+            self.font().toString(), dpr, self.width(),
+        )
+        if self._content_pixmap is not None and self._content_cache_key == key:
+            return self._content_pixmap
+        pm = QPixmap(max(1, round(self.width() * dpr)),
+                     max(1, round(_CAPSULE_HEIGHT * dpr)))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(self.font())
+        x = _CAPSULE_INSET + 13.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        if icon:
+            painter.setBrush(self._accent_color())
+            painter.drawEllipse(QRectF(x, (_CAPSULE_HEIGHT - 26) / 2, 26, 26))
+            painter.setPen(QColor(255, 255, 255))
+            fm = self.fontMetrics()
+            painter.drawText(
+                QRectF(x, (_CAPSULE_HEIGHT - fm.height()) / 2 - 1, 26, fm.height()),
+                Qt.AlignmentFlag.AlignCenter,
+                self._icon_text(),
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            x += 26 + 8
+        painter.setPen(primary_color)
+        if name:
+            text = self._character_name()
+            painter.drawText(
+                QRectF(x, 0, self.fontMetrics().horizontalAdvance(text), _CAPSULE_HEIGHT),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                text,
+            )
+            x += self.fontMetrics().horizontalAdvance(text) + 8
+        if info:
+            info_text = self._info_text()
+            painter.setPen(info_color)
+            painter.drawText(
+                QRectF(x, 0, self.fontMetrics().horizontalAdvance(info_text), _CAPSULE_HEIGHT),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                info_text,
+            )
+            x += self.fontMetrics().horizontalAdvance(info_text) + 8
+        if status:
+            dot_size = 10
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._status_dot_color())
+            painter.drawEllipse(QRectF(x, (_CAPSULE_HEIGHT - dot_size) / 2, dot_size, dot_size))
+            x += dot_size + 12
+        painter.end()
+        self._content_pixmap = pm
+        self._content_cache_key = key
+        return pm
+
     def _paint_capsule(self, painter: QPainter) -> None:
         # 展开时先画卡片底板（胶囊下方一整块，圆角连续；内容区遵守同心圆角）
         if self._mode == "expanded":
@@ -989,8 +1070,9 @@ class DynamicIsland(QWidget):
             painter.setBrush(QColor(0, 0, 0, 46))
             painter.drawRoundedRect(shadow, radius, radius)
 
-        # 胶囊主体（白色 / 黑色 / 玻璃质感）
-        background, primary_color, secondary_color = self._style_palette()
+        # 胶囊主体（白色 / 黑色 / 玻璃质感）；内容层已下沉到 _content_cache，
+        # 主/次文字色在这里不再使用
+        background, _primary_color, _secondary_color = self._style_palette()
         painter.setBrush(background)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(rect, radius, radius)
@@ -1006,50 +1088,10 @@ class DynamicIsland(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5)
 
-        # 内容（图标/名称/信息/状态灯）：按未形变的静止位绘制，绝不参与形变
-        icon, name, info, status = self._visible_parts()
-        x = _CAPSULE_INSET + 13.0
-        painter.setPen(Qt.PenStyle.NoPen)
-        if icon:
-            painter.setBrush(self._accent_color())
-            painter.drawEllipse(QRectF(x, (_CAPSULE_HEIGHT - 26) / 2, 26, 26))
-            painter.setPen(QColor(255, 255, 255))
-            fm = self.fontMetrics()
-            icon_text = self._icon_text()
-            painter.drawText(
-                QRectF(x, (_CAPSULE_HEIGHT - fm.height()) / 2 - 1, 26, fm.height()),
-                Qt.AlignmentFlag.AlignCenter,
-                icon_text,
-            )
-            painter.setPen(Qt.PenStyle.NoPen)
-            x += 26 + 8
-
-        painter.setPen(primary_color)
-        if name:
-            text = self._character_name()
-            painter.drawText(
-                QRectF(x, 0, self.fontMetrics().horizontalAdvance(text), _CAPSULE_HEIGHT),
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                text,
-            )
-            x += self.fontMetrics().horizontalAdvance(text) + 8
-
-        if info:
-            info_text = self._info_text()
-            painter.setPen(self._info_color(secondary_color))
-            painter.drawText(
-                QRectF(x, 0, self.fontMetrics().horizontalAdvance(info_text), _CAPSULE_HEIGHT),
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                info_text,
-            )
-            x += self.fontMetrics().horizontalAdvance(info_text) + 8
-
-        if status:
-            dot_size = 10
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(self._status_dot_color())
-            painter.drawEllipse(QRectF(x, (_CAPSULE_HEIGHT - dot_size) / 2, dot_size, dot_size))
-            x += dot_size + 12
+        # 内容层（图标/名称/信息/状态灯）：缓存位图 blit——文字逐帧重画是
+        # 实测大头（见 _content_cache）；内容绝不参与形变，口径与原"按未
+        # 形变静止位绘制"一致
+        painter.drawPixmap(0, 0, self._content_cache())
 
     # ------------------------------------------------------------ 显隐休眠
     def hideEvent(self, event) -> None:  # noqa: N802

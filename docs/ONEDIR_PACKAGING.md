@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: e1503192c50cbf4a9392ca071882b90f_d44cd8a3b12211f18039525400461939
+    ReservedCode1: 5WS8ZIlf31sY8kOZGi3OuLj7wtTR4orlRD+uQa4vpN/zbG9icu3IcPiWHfrwX3FNAnkDwfOlDoaC6pO5on6QU9u6BhQY8Zvk9FgkMQ7xBy5xT9qvgmVNFq1i/Rd205JLy3QoCQjQoilIbKr0n59e8Zxm5NeUzvEkLeDmjfwJRUMj8DxzCVnfPdOP0Hs=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: e1503192c50cbf4a9392ca071882b90f_d44cd8a3b12211f18039525400461939
+    ReservedCode2: 5WS8ZIlf31sY8kOZGi3OuLj7wtTR4orlRD+uQa4vpN/zbG9icu3IcPiWHfrwX3FNAnkDwfOlDoaC6pO5on6QU9u6BhQY8Zvk9FgkMQ7xBy5xT9qvgmVNFq1i/Rd205JLy3QoCQjQoilIbKr0n59e8Zxm5NeUzvEkLeDmjfwJRUMj8DxzCVnfPdOP0Hs=
+---
+
 # onedir 打包流水线（绿色版 zip + Inno Setup 安装包）
 
 目标：**运行期零解压**——不再产生 `C:\...\Temp\_MEIxxxxxx` 缓存。
@@ -24,6 +35,16 @@ dist-onedir\dsh-pet-standalone-webm-chat-portable.zip
 ```
 
 绿色版用法：解压 zip 到任意盘（E:\、D:\、U 盘均可），双击 exe 即用；无安装、无缓存。
+
+### 包体瘦身（默认开启，`-SkipSlim` 可关闭）
+
+构建在 Qt runtime 复制之后、中文编码自检之前自动执行 `python scripts\slim_bundle.py`：
+
+- **移除白名单**：Qt Quick/QML 栈（`Qt6Quick` / `Qt6Qml*`）、`Qt6VirtualKeyboard` + 平台输入法插件、`Qt6OpenGL`、`Qt6Pdf` + `qpdf.dll` 图像插件、`opengl32sw.dll`、非中英 `*.qm` 翻译（保留 12 个中英）、PIL `_avif` 扩展 —— 合计 124 文件 / 53 MB；
+- **安全校验**：移除前做依赖闭包校验（pefile 反向 import 检测，保留的二进制若仍引用待删文件即中止）与必需清单校验（核心运行文件齐全），任一失败即中止构建；
+- **效果**：onedir 目录 309 MB → 256 MB，portable zip 176.2 MB → 146.5 MB（−12.8%）；
+- 后续需要完整 Qt 栈（例如启用 QML 界面）时加 `-SkipSlim`；
+- 冒烟建议：把配置切到 `voice_chime_schedule=every_minute` 启动 exe，确认 `%APPDATA%\dsh-pet-standalone-<variant>\voice_chime_cache` 新增 mp3（edge-tts 合成落盘），验证完恢复配置。
 
 ## 二、Inno Setup 安装包（正式分发）
 
@@ -81,3 +102,4 @@ python -m pytest -q tests/test_config_key_migration.py
 - **旧 onefile 遗留清理**：`pet/app.py` 启动时的 `_cleanup_stale_runtime_dirs` 保留，会顺带清掉旧 onefile 版本在系统 Temp 留下的 `_MEI` 目录
 - **本机遗留旧自启项**：注册表 `HKCU\...\Run` 里的 `DesktopPet = E:\software\AI\AI的有用工具\打字统计\dist\DesktopPet.exe` 是 7 月的旧 onefile 构建（无 `start /D`、解压在 C 盘 Temp），建议删除或替换，避免开机双桌宠 + 继续污染 C 盘
 - GIF 变体体积大（800MB+），zip/安装包较慢；WebM 变体约 124MB
+*（内容由AI生成，仅供参考）*

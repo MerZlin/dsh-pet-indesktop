@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """配置读取与持久化；兼容旧版平铺 chat_* 字段的迁移。"""
+
 from __future__ import annotations
 
 import copy
@@ -45,7 +46,11 @@ DEFAULT_COLLISION_SETTINGS = {
     "collision_sound_volume": 0.70,
 }
 SELF_TALK_BUBBLE_STYLES = {
-    "classic_top", "paper_left", "glass_right", "soft_blue_top", "breath_bubble",
+    "classic_top",
+    "paper_left",
+    "glass_right",
+    "soft_blue_top",
+    "breath_bubble",
 }
 DEFAULT_CONTEXT_MENU_APPEARANCE = {
     "theme": "system",
@@ -112,8 +117,12 @@ def _clean_menu_appearance(value):
         "opacity": _float_or_default(value.get("opacity"), 0.94, 0.72, 1.0),
     }
     for key in (
-        "light_background", "light_foreground", "light_hover",
-        "dark_background", "dark_foreground", "dark_hover",
+        "light_background",
+        "light_foreground",
+        "light_hover",
+        "dark_background",
+        "dark_foreground",
+        "dark_hover",
     ):
         result[key] = _clean_color(value.get(key), defaults[key])
     return result
@@ -143,12 +152,8 @@ def _normalize_fun_asset_path(candidate: str, default: str) -> str:
 def _clean_menu_easter_egg(value):
     value = value if isinstance(value, dict) else {}
     defaults = DEFAULT_MENU_EASTER_EGG
-    avatar = _normalize_fun_asset_path(
-        str(value.get("avatar") or defaults["avatar"]).strip()[:500], defaults["avatar"]
-    )
-    image_dir = _normalize_fun_asset_path(
-        str(value.get("image_dir") or defaults["image_dir"]).strip()[:500], defaults["image_dir"]
-    )
+    avatar = _normalize_fun_asset_path(str(value.get("avatar") or defaults["avatar"]).strip()[:500], defaults["avatar"])
+    image_dir = _normalize_fun_asset_path(str(value.get("image_dir") or defaults["image_dir"]).strip()[:500], defaults["image_dir"])
     return {
         "enabled": bool(value.get("enabled", defaults["enabled"])),
         "title": str(value.get("title") or defaults["title"]).strip()[:40],
@@ -316,8 +321,14 @@ def _clean_agent_link_data(raw: Any) -> dict:
     result.update(raw)
     result["custom_agents"] = _clean_custom_agents(raw.get("custom_agents"))
     for key in (
-        "dsh", "claude", "cursor", "opencode",
-        "sound_enabled", "sound_start_enabled", "sound_done_enabled", "sound_error_enabled",
+        "dsh",
+        "claude",
+        "cursor",
+        "opencode",
+        "sound_enabled",
+        "sound_start_enabled",
+        "sound_done_enabled",
+        "sound_error_enabled",
     ):
         if key in raw:
             result[key] = bool(raw[key])
@@ -328,9 +339,7 @@ def _clean_agent_link_data(raw: Any) -> dict:
     if "sound_volume" in raw:
         result["sound_volume"] = _float_or_default(raw.get("sound_volume"), defaults["sound_volume"], 0.0, 1.0)
     if "sound_cooldown_seconds" in raw:
-        result["sound_cooldown_seconds"] = _float_or_default(
-            raw.get("sound_cooldown_seconds"), defaults["sound_cooldown_seconds"], 0.0, 30.0
-        )
+        result["sound_cooldown_seconds"] = _float_or_default(raw.get("sound_cooldown_seconds"), defaults["sound_cooldown_seconds"], 0.0, 30.0)
     # 事件汇报概率门：新形状（report_gates 字典）优先；旧键一次性迁移——
     # 布尔开关 → 1.0/0.0，旧百分比 report_probability(0-100) → activity 概率。
     # 迁移后**不再写出旧键**，配置里不留兼容别名（用户可编辑文案的键名另见
@@ -343,9 +352,7 @@ def _clean_agent_link_data(raw: Any) -> dict:
                 gates[gate] = 1.0 if bool(raw[legacy_key]) else 0.0
         for legacy_key, gate in LEGACY_PERCENT_GATES.items():
             if legacy_key in raw:
-                percent = _float_or_default(
-                    raw.get(legacy_key), REPORT_GATE_DEFAULTS[gate] * 100.0, 0.0, 100.0
-                )
+                percent = _float_or_default(raw.get(legacy_key), REPORT_GATE_DEFAULTS[gate] * 100.0, 0.0, 100.0)
                 gates[gate] = min(1.0, max(0.0, percent / 100.0))
     result["report_gates"] = gates
     for legacy_key in (*LEGACY_SWITCH_GATES, *LEGACY_PERCENT_GATES):
@@ -433,6 +440,7 @@ def _app_dir_name() -> str:
     """
     try:
         from build_variant import VARIANT  # 仅打包产物中存在
+
         name = str(VARIANT).strip()
         if name:
             return f"dsh-pet-standalone-{name}"
@@ -457,9 +465,9 @@ def _bool_or_default(value, default):
         return value
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if normalized in {'true', '1', 'yes', 'on'}:
+        if normalized in {"true", "1", "yes", "on"}:
             return True
-        if normalized in {'false', '0', 'no', 'off'}:
+        if normalized in {"false", "0", "no", "off"}:
             return False
     return bool(default)
 
@@ -482,17 +490,17 @@ def _default_dynamic_island_data() -> dict:
         "show_icon": True,
         "show_name": True,
         "show_info": True,
-        "info_mode": "time",       # time / balance_tier / balance / custom
+        "info_mode": "time",  # time / balance_tier / balance / custom
         "custom_text": "",
         "show_status": True,
-        "style": "dark",           # dark / light / glass
-        "opacity": 1.0,            # 背景不透明度 0.4~1.0
-        "accent": "blue",          # 主题色：blue / green / purple / pink / orange
+        "style": "dark",  # dark / light / glass
+        "opacity": 1.0,  # 背景不透明度 0.4~1.0
+        "accent": "blue",  # 主题色：blue / green / purple / pink / orange
         "icon": "🐳",
         "click_action": "expand",  # expand（展开卡片）/ toggle_pet（切换显隐，旧行为）
-        "event_effects": True,     # 事件动效：AI 回复/余额刷新/峰谷切换弹跳
-        "edge_dock": True,         # 拖到屏幕边缘收成细条，鼠标靠近滑出
-        "dock_edge": "none",       # none / top / bottom / left / right（拖拽落点写入）
+        "event_effects": True,  # 事件动效：AI 回复/余额刷新/峰谷切换弹跳
+        "edge_dock": True,  # 拖到屏幕边缘收成细条，鼠标靠近滑出
+        "dock_edge": "none",  # none / top / bottom / left / right（拖拽落点写入）
         "collision_enabled": True,  # 果冻墙：岛注册为静态碰撞体，肥鱼撞到会弹开
         "x": None,
         "y": None,
@@ -574,14 +582,12 @@ def _clean_collision_data(value: dict) -> dict:
     """
     result = dict(value)
     result["collision_enabled"] = _bool_or_default(value.get("collision_enabled"), True)
-    result["collision_restitution"] = _float_or_default(value.get("collision_restitution"), .82, 0.0, 1.0)
-    result["collision_friction"] = _float_or_default(value.get("collision_friction"), .08, 0.0, .30)
-    result["collision_mass_scale"] = _float_or_default(value.get("collision_mass_scale"), 1.0, .5, 2.0)
+    result["collision_restitution"] = _float_or_default(value.get("collision_restitution"), 0.82, 0.0, 1.0)
+    result["collision_friction"] = _float_or_default(value.get("collision_friction"), 0.08, 0.0, 0.30)
+    result["collision_mass_scale"] = _float_or_default(value.get("collision_mass_scale"), 1.0, 0.5, 2.0)
     result["collision_impulse_cap"] = _float_or_default(value.get("collision_impulse_cap"), 9000.0, 1000.0, 12000.0)
     result["collision_sound_enabled"] = bool(value.get("collision_sound_enabled", True))
-    result["collision_sound_volume"] = _float_or_default(
-        value.get("collision_sound_volume"), 0.70, 0.0, 1.0
-    )
+    result["collision_sound_volume"] = _float_or_default(value.get("collision_sound_volume"), 0.70, 0.0, 1.0)
     return result
 
 
@@ -592,11 +598,7 @@ class Config:
         # 多开隔离：--instance <id> 或 DSH_PET_INSTANCE 时使用独立配置文件，
         # 位置/大小/朝向等不再互相覆盖；不传时完全保持原行为。
         self.instance_id = (instance_id or os.environ.get("DSH_PET_INSTANCE", "") or "").strip()
-        self.path = (
-            self.dir / f"config-{self.instance_id}.json"
-            if self.instance_id
-            else self.dir / "config.json"
-        )
+        self.path = self.dir / f"config-{self.instance_id}.json" if self.instance_id else self.dir / "config.json"
         self._migrate_legacy_config(base)
         # 副槽落种仅在该槽位还没有个体配置时进行；已有存档的 slot（用户改过
         # 的）一律不动——「生小肥鱼」复用旧槽位时同样保留原槽设置。
@@ -635,8 +637,8 @@ class Config:
             "cursor_hidden_passthrough": True,
             "drag_physics": False,
             "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
-            "shift_drag": False,     # 按住 SHIFT+左键才能拖动
-            "pet_opacity": 100,      # 桌宠窗口不透明度 10-100
+            "shift_drag": False,  # 按住 SHIFT+左键才能拖动
+            "pet_opacity": 100,  # 桌宠窗口不透明度 10-100
             "context_menu_template": "modern",
             "context_menu_layout": None,
             "context_menu_appearance": dict(DEFAULT_CONTEXT_MENU_APPEARANCE),
@@ -648,26 +650,26 @@ class Config:
             "external_modes": [],
             "quick_launch_apps": [dict(item) for item in DEFAULT_QUICK_LAUNCH_APPS],
             "auto_hide_fullscreen": True,  # 全屏应用自动隐藏（Windows）
-            "click_sound_enabled": True,   # 点击 Q 弹音效
+            "click_sound_enabled": True,  # 点击 Q 弹音效
             "click_sound_pack": _default_click_sound_pack(),
             "click_sound_volume": 0.70,
-            "slingshot_enabled": True,     # 弹弓弹射
+            "slingshot_enabled": True,  # 弹弓弹射
             "throw_strength": "standard",  # gentle / standard / strong / crazy
             "idle_low_fps_enabled": False,  # 闲置降帧（灰度默认关）：长时间无交互时动画隔帧呈现
             "idle_low_fps_threshold": 30.0,  # 闲置阈值（秒）：超过该时长无交互且窗口可见才降帧
-            "click_show_balance": False,   # 点击显示 DeepSeek 余额
-            "click_show_self_talk": False, # 点击随机显示自定义自言自语
+            "click_show_balance": False,  # 点击显示 DeepSeek 余额
+            "click_show_self_talk": False,  # 点击随机显示自定义自言自语
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
             "balance_tier_labels_mode": "default",  # 峰谷提示文案：default / liangwen / custom
             "balance_tier_label_peak": "",  # 自定义“高峰”文本（custom 模式）
             "balance_tier_label_idle": "",  # 自定义“空闲”文本（custom 模式）
             "balance_tier_color_enabled": True,  # 峰谷提示颜色：高峰红/低谷绿
-            "music_sing_enabled": False,   # 检测到后台播放音乐时自动播放唱歌动画
-            "golden_spin_on_click": False, # 点击回应动画结束后自动接一段黄金回旋
-            "golden_spin_direct": False,   # 点击触发黄金回旋时跳过点击动画，直接回旋并逐圈加速
-            "edge_probe_enabled": False,   # 拖到屏幕左右边缘后自动进入探头姿态
-            "autostart_wanted": False,     # 用户曾开启过开机自启（用于启动自检：被安全软件清理时提醒）
-            "harness_autostart": False,    # 随桌宠启动自动拉起 dsh web 服务（只起服务，不开浏览器）
+            "music_sing_enabled": False,  # 检测到后台播放音乐时自动播放唱歌动画
+            "golden_spin_on_click": False,  # 点击回应动画结束后自动接一段黄金回旋
+            "golden_spin_direct": False,  # 点击触发黄金回旋时跳过点击动画，直接回旋并逐圈加速
+            "edge_probe_enabled": False,  # 拖到屏幕左右边缘后自动进入探头姿态
+            "autostart_wanted": False,  # 用户曾开启过开机自启（用于启动自检：被安全软件清理时提醒）
+            "harness_autostart": False,  # 随桌宠启动自动拉起 dsh web 服务（只起服务，不开浏览器）
             # 手动指定 pnpm 入口（文件 / 目录 / 包装脚本都行，语义同 DSH_PNPM_BIN）。
             # 默认空 = 走内置的自动发现（PATH/注册表/各版本管理器/多布局）；
             # 面向"环境特殊又不想改环境变量"的用户，属于开发者向高级键，不进设置页。
@@ -680,7 +682,7 @@ class Config:
             "modern_chat_background_opacity": 100,
             "modern_chat_background_fill": "cover",
             "modern_chat_card_opacity": 84,
-            "chat_bg_crops": {},    # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
+            "chat_bg_crops": {},  # 每个背景的用户自定义取景框 {背景标识: [x,y,w,h] 归一化}
             "character_aliases": {},  # 角色显示名别名 {角色id: 自定义名}，空名=恢复默认
             "character_profiles": {},  # 角色档案：{角色id: {click_talk_bindings: {动画id: [台词]}}}
             "chat_always_on_top": False,  # 聊天窗置顶
@@ -688,10 +690,22 @@ class Config:
             "proactive_screen": _default_proactive_screen_data(),
             "agent_link": _default_agent_link_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
-            "chat_follow_pet": False,   # 聊天窗口是否跟随桌宠移动
+            "chat_follow_pet": False,  # 聊天窗口是否跟随桌宠移动
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
-            "todo_reminder_enabled": True,   # 待办提醒总开关
+            "todo_reminder_enabled": True,  # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
+            # 语音报时（edge-tts 在线 TTS + 台词/歌词按 8 小时整体换批、批内轮换）
+            "voice_chime_enabled": True,  # 语音报时总开关
+            "voice_chime_schedule": "hourly",  # hourly / every_30 / every_15 / every_5 / every_minute / custom
+            "voice_chime_custom_times": "",  # 自定义时间点（HH:MM 逗号分隔，custom 模式生效）
+            "voice_chime_voice": "zh-CN-XiaoxiaoNeural",  # edge-tts 音色
+            "voice_chime_rate": 0,  # 语速偏移（%），-100~100
+            "voice_chime_pitch": 0,  # 音调偏移（Hz），-50~50
+            "voice_chime_volume": 80,  # 播放音量（0~100）
+            "voice_chime_show_bubble": True,  # 报时气泡开关
+            "voice_chime_show_quote": True,  # 台词/歌词开关
+            "voice_chime_custom_quotes_zh": "",  # 自定义中文台词/歌词（一行一条，留空回退内置库）
+            "voice_chime_custom_quotes_en": "",  # 自定义英文台词/歌词（一行一条，留空回退内置库）
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             # 批10-A3：默认 32→8MB。预测式预热（批10-A1）落地后，首帧 LRU 只需
@@ -752,12 +766,13 @@ class Config:
             return
         if not self.instance_id.startswith("slot-"):
             return
-        suffix = self.instance_id[len("slot-"):]
+        suffix = self.instance_id[len("slot-") :]
         if not suffix.isdigit():
             # 非数值 slot 标识（如碰撞 IPC 测试用 slot-a/slot-p）不做落种。
             return
         slot_id = int(suffix)
         from . import slot_manager as slot_manager_mod
+
         slot_manager_mod.seed_slot_config_from_main(self.dir, slot_id)
 
     def reload(self):
@@ -767,10 +782,12 @@ class Config:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             from . import slot_manager as slot_manager_mod
+
             slot_manager_mod.backup_corrupt_config(self.path)
             return
         if not isinstance(raw, dict):
             from . import slot_manager as slot_manager_mod
+
             slot_manager_mod.backup_corrupt_config(self.path)
             return
         try:
@@ -804,9 +821,7 @@ class Config:
         # 从磁盘重载）把用户未重启就丢掉的 key 覆盖成空。新旧两套设置对话框都走
         # 这条 reload() 路径，一处修复全覆盖。
         previous_chat = self.data.get("chat")
-        previous_providers = (
-            previous_chat.get("providers") if isinstance(previous_chat, dict) else None
-        )
+        previous_providers = previous_chat.get("providers") if isinstance(previous_chat, dict) else None
         merged_chat = _merge_chat_data(merged)
         self.data["chat"] = merged_chat
         if isinstance(previous_providers, dict):
@@ -827,49 +842,103 @@ class Config:
                     if "vision_api_key" not in raw_provider and previous_provider.get("vision_api_key"):
                         merged_provider["vision_api_key"] = previous_provider["vision_api_key"]
         for key in (
-            "rx", "ry", "screen_name", "facing", "scale", "on_top", "show_dock_icon", "no_move", "character",
-            "spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island",
+            "rx",
+            "ry",
+            "screen_name",
+            "facing",
+            "scale",
+            "on_top",
+            "show_dock_icon",
+            "no_move",
+            "character",
+            "spawn_inherit_size",
+            "spawn_scale",
+            "spawn_inherit_dynamic_island",
             "user_customized",
-            "playback_speed", "animation_gap_seconds", "self_talk_enabled",
-            "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
-            "self_talk_duration_seconds", "self_talk_image_dir",
+            "playback_speed",
+            "animation_gap_seconds",
+            "self_talk_enabled",
+            "self_talk_min_interval",
+            "self_talk_max_interval",
+            "self_talk_texts",
+            "self_talk_duration_seconds",
+            "self_talk_image_dir",
             "self_talk_image_scale",
             "self_talk_bubble_style",
-            "mouse_through", "cursor_hidden_passthrough", "drag_physics", "context_menu_template",
+            "mouse_through",
+            "cursor_hidden_passthrough",
+            "drag_physics",
+            "context_menu_template",
             "dialogue_mode",
             "dialogue_phrases",
             "dialogue_last_scope",
             "context_menu_layout",
-            "lock_position", "shift_drag", "pet_opacity",
-            "context_menu_appearance", "quick_launch_apps",
-            "menu_easter_egg", "auto_hide_fullscreen",
-            "pet_mode", "external_modes",
+            "lock_position",
+            "shift_drag",
+            "pet_opacity",
+            "context_menu_appearance",
+            "quick_launch_apps",
+            "menu_easter_egg",
+            "auto_hide_fullscreen",
+            "pet_mode",
+            "external_modes",
             "click_sound_enabled",
-            "click_sound_pack", "click_sound_volume",
-            "slingshot_enabled", "throw_strength",
-            "idle_low_fps_enabled", "idle_low_fps_threshold",
-            "click_show_balance", "click_show_self_talk",
-            "balance_refresh_minutes", "autostart_wanted", "harness_autostart", "stream_capture_mode",
+            "click_sound_pack",
+            "click_sound_volume",
+            "slingshot_enabled",
+            "throw_strength",
+            "idle_low_fps_enabled",
+            "idle_low_fps_threshold",
+            "click_show_balance",
+            "click_show_self_talk",
+            "balance_refresh_minutes",
+            "autostart_wanted",
+            "harness_autostart",
+            "stream_capture_mode",
             "pnpm_bin",
-            "music_sing_enabled", "golden_spin_on_click", "golden_spin_direct", "edge_probe_enabled",
-            "balance_tier_labels_mode", "balance_tier_label_peak",
-            "balance_tier_label_idle", "balance_tier_color_enabled",
-            "chat_background", "modern_chat_background",
-            "chat_background_opacity", "chat_background_fill",
-            "modern_chat_background_opacity", "modern_chat_background_fill",
+            "music_sing_enabled",
+            "golden_spin_on_click",
+            "golden_spin_direct",
+            "edge_probe_enabled",
+            "balance_tier_labels_mode",
+            "balance_tier_label_peak",
+            "balance_tier_label_idle",
+            "balance_tier_color_enabled",
+            "chat_background",
+            "modern_chat_background",
+            "chat_background_opacity",
+            "chat_background_fill",
+            "modern_chat_background_opacity",
+            "modern_chat_background_fill",
             "modern_chat_card_opacity",
             "chat_bg_crops",
             "chat_ui_style",
             "chat_follow_pet",
             "system_notifications_enabled",
-            "todo_reminder_enabled", "todo_reminder_lead_minutes",
+            "todo_reminder_enabled",
+            "todo_reminder_lead_minutes",
+            "voice_chime_enabled",
+            "voice_chime_schedule",
+            "voice_chime_custom_times",
+            "voice_chime_voice",
+            "voice_chime_rate",
+            "voice_chime_pitch",
+            "voice_chime_volume",
+            "voice_chime_show_bubble",
+            "voice_chime_show_quote",
+            "voice_chime_custom_quotes_zh",
+            "voice_chime_custom_quotes_en",
             "character_aliases",
             "character_profiles",
             "chat_always_on_top",
             "dynamic_island",
-            "collision_enabled", "collision_restitution", "collision_friction",
-            "collision_mass_scale", "collision_impulse_cap",
-            "collision_sound_enabled", "collision_sound_volume",
+            "collision_enabled",
+            "collision_restitution",
+            "collision_friction",
+            "collision_mass_scale",
+            "collision_impulse_cap",
+            "collision_sound_enabled",
+            "collision_sound_volume",
             "media_prewarm",
             "first_frame_cache_max_mb",
             "predict_prewarm_lead_ms",
@@ -933,9 +1002,7 @@ class Config:
     def _migrate_click_sound_config(self, raw: dict) -> None:
         """旧版 click_sound_path 迁移为 click_sound_pack。"""
         # 如果 raw 里面没有明确合法的 click_sound_pack，但有旧 click_sound_path
-        has_explicit_pack = isinstance(raw.get("click_sound_pack"), dict) and bool(
-            raw.get("click_sound_pack", {}).get("kind")
-        )
+        has_explicit_pack = isinstance(raw.get("click_sound_pack"), dict) and bool(raw.get("click_sound_pack", {}).get("kind"))
         if not has_explicit_pack:
             old_path = str(raw.get("click_sound_path") or "").strip()
             if old_path:
@@ -955,9 +1022,7 @@ class Config:
             return
         if "decode_broker_enabled" in raw:
             old = raw.get("decode_broker_enabled")
-            logging.getLogger(__name__).info(
-                "配置键 decode_broker_enabled 已退役（批5.3 共享解码改为进程内 "
-                "fan-out），忽略旧值 %r", old)
+            logging.getLogger(__name__).info("配置键 decode_broker_enabled 已退役（批5.3 共享解码改为进程内 fan-out），忽略旧值 %r", old)
             raw.pop("decode_broker_enabled", None)
         self._decode_broker_migrated = True
 
@@ -1062,15 +1127,9 @@ class Config:
         from . import physics as physics_mod
 
         self.data["playback_speed"] = _float_or_default(self.data.get("playback_speed"), 1.0, 0.1, 8.0)
-        self.data["animation_gap_seconds"] = _float_or_default(
-            self.data.get("animation_gap_seconds"), DEFAULT_ANIMATION_GAP_SECONDS, 0.0, 3600.0
-        )
-        minimum = _float_or_default(
-            self.data.get("self_talk_min_interval"), DEFAULT_SELF_TALK_MIN_INTERVAL, 5.0, 3600.0
-        )
-        maximum = _float_or_default(
-            self.data.get("self_talk_max_interval"), DEFAULT_SELF_TALK_MAX_INTERVAL, 5.0, 3600.0
-        )
+        self.data["animation_gap_seconds"] = _float_or_default(self.data.get("animation_gap_seconds"), DEFAULT_ANIMATION_GAP_SECONDS, 0.0, 3600.0)
+        minimum = _float_or_default(self.data.get("self_talk_min_interval"), DEFAULT_SELF_TALK_MIN_INTERVAL, 5.0, 3600.0)
+        maximum = _float_or_default(self.data.get("self_talk_max_interval"), DEFAULT_SELF_TALK_MAX_INTERVAL, 5.0, 3600.0)
         self.data["self_talk_min_interval"] = min(minimum, maximum)
         self.data["self_talk_max_interval"] = max(minimum, maximum)
         self.data["self_talk_duration_seconds"] = _float_or_default(
@@ -1079,55 +1138,28 @@ class Config:
             1.0,
             300.0,
         )
-        self.data["self_talk_image_dir"] = str(
-            self.data.get("self_talk_image_dir") or ""
-        ).strip()[:500]
-        self.data["self_talk_image_scale"] = int(_float_or_default(
-            self.data.get("self_talk_image_scale"), 100.0, 50.0, 300.0
-        ))
+        self.data["self_talk_image_dir"] = str(self.data.get("self_talk_image_dir") or "").strip()[:500]
+        self.data["self_talk_image_scale"] = int(_float_or_default(self.data.get("self_talk_image_scale"), 100.0, 50.0, 300.0))
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
-        self.data["cursor_hidden_passthrough"] = _bool_or_default(
-            self.data.get("cursor_hidden_passthrough"), True
-        )
-        self.data["spawn_inherit_size"] = _bool_or_default(
-            self.data.get("spawn_inherit_size"), True
-        )
-        self.data["spawn_scale"] = _float_or_default(
-            self.data.get("spawn_scale"), catalog.DEFAULT_SCALE, 0.1, 4.0
-        )
-        self.data["spawn_inherit_dynamic_island"] = _bool_or_default(
-            self.data.get("spawn_inherit_dynamic_island"), False
-        )
+        self.data["cursor_hidden_passthrough"] = _bool_or_default(self.data.get("cursor_hidden_passthrough"), True)
+        self.data["spawn_inherit_size"] = _bool_or_default(self.data.get("spawn_inherit_size"), True)
+        self.data["spawn_scale"] = _float_or_default(self.data.get("spawn_scale"), catalog.DEFAULT_SCALE, 0.1, 4.0)
+        self.data["spawn_inherit_dynamic_island"] = _bool_or_default(self.data.get("spawn_inherit_dynamic_island"), False)
         self.data["show_dock_icon"] = bool(self.data.get("show_dock_icon", True))
         self.data["self_talk_texts"] = _clean_self_talk_texts(self.data.get("self_talk_texts"))
         bubble_style = str(self.data.get("self_talk_bubble_style") or "")
-        self.data["self_talk_bubble_style"] = (
-            bubble_style if bubble_style in SELF_TALK_BUBBLE_STYLES
-            else DEFAULT_SELF_TALK_BUBBLE_STYLE
-        )
+        self.data["self_talk_bubble_style"] = bubble_style if bubble_style in SELF_TALK_BUBBLE_STYLES else DEFAULT_SELF_TALK_BUBBLE_STYLE
         if self.data.get("context_menu_template") not in {"legacy", "modern"}:
             self.data["context_menu_template"] = "modern"
-        self.data["context_menu_layout"] = _clean_menu_layout_override(
-            self.data.get("context_menu_layout")
-        )
-        self.data["context_menu_appearance"] = _clean_menu_appearance(
-            self.data.get("context_menu_appearance")
-        )
-        self.data["menu_easter_egg"] = _clean_menu_easter_egg(
-            self.data.get("menu_easter_egg")
-        )
-        self.data["quick_launch_apps"] = _clean_quick_launch_apps(
-            self.data.get("quick_launch_apps")
-        )
+        self.data["context_menu_layout"] = _clean_menu_layout_override(self.data.get("context_menu_layout"))
+        self.data["context_menu_appearance"] = _clean_menu_appearance(self.data.get("context_menu_appearance"))
+        self.data["menu_easter_egg"] = _clean_menu_easter_egg(self.data.get("menu_easter_egg"))
+        self.data["quick_launch_apps"] = _clean_quick_launch_apps(self.data.get("quick_launch_apps"))
         if self.data.get("chat_ui_style") not in {"modern", "classic"}:
             self.data["chat_ui_style"] = "modern"
-        self.data["character_profiles"] = _clean_character_profiles(
-            self.data.get("character_profiles")
-        )
+        self.data["character_profiles"] = _clean_character_profiles(self.data.get("character_profiles"))
         self.data["chat_always_on_top"] = bool(self.data.get("chat_always_on_top", False))
-        self.data["dynamic_island"] = _clean_dynamic_island_data(
-            self.data.get("dynamic_island")
-        )
+        self.data["dynamic_island"] = _clean_dynamic_island_data(self.data.get("dynamic_island"))
         for prefix in ("chat_background", "modern_chat_background"):
             opacity_key = f"{prefix}_opacity"
             fill_key = f"{prefix}_fill"
@@ -1154,33 +1186,17 @@ class Config:
         # 闲置降帧（性能调研 §4.3）：开关默认关（灰度）；阈值夹到 [1, 3600] 秒
         # 终审 P1-3：必须用 _bool_or_default——bool("false") is True，字符串
         # 布尔（外部手改配置/旧版导出）会被误开；与其它布尔键同规。
-        self.data["idle_low_fps_enabled"] = _bool_or_default(
-            self.data.get("idle_low_fps_enabled"), False
-        )
-        self.data["idle_low_fps_threshold"] = _float_or_default(
-            self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0
-        )
+        self.data["idle_low_fps_enabled"] = _bool_or_default(self.data.get("idle_low_fps_enabled"), False)
+        self.data["idle_low_fps_threshold"] = _float_or_default(self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0)
         # 上游 #60 系统通知开关：同规防字符串布尔误开（bool("false") is True）。
-        self.data["system_notifications_enabled"] = _bool_or_default(
-            self.data.get("system_notifications_enabled"), True
-        )
+        self.data["system_notifications_enabled"] = _bool_or_default(self.data.get("system_notifications_enabled"), True)
         # 待办提醒：开关同规防字符串布尔误开；提前量钳到 [0, 60] 分钟（0=不提前）。
-        self.data["todo_reminder_enabled"] = _bool_or_default(
-            self.data.get("todo_reminder_enabled"), True
-        )
-        self.data["todo_reminder_lead_minutes"] = int(_float_or_default(
-            self.data.get("todo_reminder_lead_minutes"), 5.0, 0.0, 60.0
-        ))
+        self.data["todo_reminder_enabled"] = _bool_or_default(self.data.get("todo_reminder_enabled"), True)
+        self.data["todo_reminder_lead_minutes"] = int(_float_or_default(self.data.get("todo_reminder_lead_minutes"), 5.0, 0.0, 60.0))
         # 黄金回旋 / 边缘探头：与其它布尔键同规，防手改字符串布尔误开。
-        self.data["golden_spin_on_click"] = _bool_or_default(
-            self.data.get("golden_spin_on_click"), False
-        )
-        self.data["golden_spin_direct"] = _bool_or_default(
-            self.data.get("golden_spin_direct"), False
-        )
-        self.data["edge_probe_enabled"] = _bool_or_default(
-            self.data.get("edge_probe_enabled"), False
-        )
+        self.data["golden_spin_on_click"] = _bool_or_default(self.data.get("golden_spin_on_click"), False)
+        self.data["golden_spin_direct"] = _bool_or_default(self.data.get("golden_spin_direct"), False)
+        self.data["edge_probe_enabled"] = _bool_or_default(self.data.get("edge_probe_enabled"), False)
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
         self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
@@ -1189,21 +1205,15 @@ class Config:
         _ffb = _float_or_default(self.data.get("first_frame_cache_max_mb"), 8, 4, 64)
         self.data["first_frame_cache_max_mb"] = 8 if int(_ffb) == 32 else int(_ffb)
         # 批10-A1 预测式预热提前量：夹到 [200, 600] 毫秒（默认 350）。
-        self.data["predict_prewarm_lead_ms"] = int(_float_or_default(
-            self.data.get("predict_prewarm_lead_ms"), 350, 200, 600
-        ))
+        self.data["predict_prewarm_lead_ms"] = int(_float_or_default(self.data.get("predict_prewarm_lead_ms"), 350, 200, 600))
         # 批11-B1：ffmpeg 圈边界回收阈值（分钟）。0 = 关闭回收；否则夹到
         # [2, 120]（默认 10）。
         _ffr = _float_or_default(self.data.get("ffmpeg_recycle_minutes"), 10, 0, 120)
         self.data["ffmpeg_recycle_minutes"] = 0 if _ffr <= 0 else int(max(2.0, _ffr))
         # 批5.2 spike 开关：同其它布尔键规约，防字符串布尔误开。
-        self.data["experimental_single_process_spawn"] = _bool_or_default(
-            self.data.get("experimental_single_process_spawn"), False
-        )
+        self.data["experimental_single_process_spawn"] = _bool_or_default(self.data.get("experimental_single_process_spawn"), False)
         # 批5.3 共享解码链开关：同规防字符串布尔误开（默认开）。
-        self.data["experimental_shared_decode"] = _bool_or_default(
-            self.data.get("experimental_shared_decode"), True
-        )
+        self.data["experimental_shared_decode"] = _bool_or_default(self.data.get("experimental_shared_decode"), True)
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
@@ -1267,27 +1277,48 @@ class Config:
     def set(self, key, value):
         self.data[key] = value
         if key in {
-            "playback_speed", "animation_gap_seconds", "self_talk_enabled",
-            "self_talk_min_interval", "self_talk_max_interval", "self_talk_texts",
-            "self_talk_duration_seconds", "self_talk_image_dir",
+            "playback_speed",
+            "animation_gap_seconds",
+            "self_talk_enabled",
+            "self_talk_min_interval",
+            "self_talk_max_interval",
+            "self_talk_texts",
+            "self_talk_duration_seconds",
+            "self_talk_image_dir",
             "self_talk_image_scale",
             "self_talk_bubble_style",
-            "context_menu_appearance", "context_menu_layout", "quick_launch_apps",
+            "context_menu_appearance",
+            "context_menu_layout",
+            "quick_launch_apps",
             "menu_easter_egg",
-            "click_sound_enabled", "click_sound_pack", "click_sound_volume",
-            "collision_sound_enabled", "collision_sound_volume",
-            "slingshot_enabled", "throw_strength", "agent_link",
-            "idle_low_fps_enabled", "idle_low_fps_threshold",
-            "media_prewarm", "first_frame_cache_max_mb", "predict_prewarm_lead_ms",
+            "click_sound_enabled",
+            "click_sound_pack",
+            "click_sound_volume",
+            "collision_sound_enabled",
+            "collision_sound_volume",
+            "slingshot_enabled",
+            "throw_strength",
+            "agent_link",
+            "idle_low_fps_enabled",
+            "idle_low_fps_threshold",
+            "media_prewarm",
+            "first_frame_cache_max_mb",
+            "predict_prewarm_lead_ms",
             "ffmpeg_recycle_minutes",
-            "spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island",
-            "todo_reminder_enabled", "todo_reminder_lead_minutes",
-            "character_profiles", "chat_always_on_top", "dynamic_island",
+            "spawn_inherit_size",
+            "spawn_scale",
+            "spawn_inherit_dynamic_island",
+            "todo_reminder_enabled",
+            "todo_reminder_lead_minutes",
+            "character_profiles",
+            "chat_always_on_top",
+            "dynamic_island",
         }:
             self._normalize_pet_settings()
 
     def chat_settings(self):
         from .chat.models import ChatSettings
+
         return ChatSettings.from_dict(self.data.get("chat", {}))
 
     def set_chat_settings(self, settings):
@@ -1298,26 +1329,32 @@ class Config:
     # _merge_*/_clean_* 函数；facade 只读，不写盘、不碰 secret 保留/version 迁移。
     def chat_config(self):
         from .config_domains import ChatConfig
+
         return ChatConfig.from_dict(self.data.get("chat", {}))
 
     def agent_link_config(self):
         from .config_domains import AgentLinkConfig
+
         return AgentLinkConfig.from_dict(self.data.get("agent_link", {}))
 
     def proactive_config(self):
         from .config_domains import ProactiveConfig
+
         return ProactiveConfig.from_dict(self.data.get("proactive_screen", {}))
 
     def collision_config(self):
         from .config_domains import CollisionConfig
+
         return CollisionConfig.from_dict(self.data)
 
     def menu_config(self):
         from .config_domains import MenuConfig
+
         return MenuConfig.from_dict(self.data)
 
     def resolve_api_key(self, provider):
         from .chat.models import SecretStore
+
         return SecretStore().get(provider.api_key_ref) or provider.api_key
 
     def _redacted_data(self) -> dict:

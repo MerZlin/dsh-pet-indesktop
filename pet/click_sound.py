@@ -152,6 +152,22 @@ class ClickSoundPool:
         effect = self.effect_for(path)
         if effect is None:
             return False
+        key = str(path.resolve())
+        if _effect_status_is_error(effect):
+            # QSoundEffect 的错误态是粘滞的：status==Error 后 play() 变成静默
+            # 空操作（不抛异常、不打日志），反复点击也不会有声——issue #116
+            # 的"放一会儿再点就没声音"。实测唯一可靠的做法是丢弃旧对象重建
+            # （重新 setSource 在部分后端上只会停在 Loading，仍不出声）。
+            self._drop_effect(key)
+            effect = self.effect_for(path)
+            if effect is None:
+                return False
+            if _effect_status_is_error(effect):
+                # 重建后仍错误 = 音频设备整体不可用：如实返回 False 并丢弃该
+                # 对象，避免把一个坏对象留在缓存里永久污染后续点击。
+                log.warning("音效设备不可用，本次播放跳过: %s", path)
+                self._drop_effect(key)
+                return False
         try:
             # 显式 stop 再 play：QSoundEffect 在部分 QtMultimedia/FFmpeg
             # 后端上对同一实例的第二次 play 可能不重启（只响第一次）。
@@ -168,6 +184,18 @@ class ClickSoundPool:
         except Exception:
             log.exception("QSoundEffect 播放失败: %s", path)
             return False
+
+    def _drop_effect(self, key: str) -> None:
+        """从缓存丢弃一个音效对象（错误态对象的唯一归宿）。"""
+        effect = self._qt_effects.pop(key, None)
+        if effect is None:
+            return
+        try:
+            stop = getattr(effect, "stop", None)
+            if callable(stop):
+                stop()
+        except Exception:
+            pass
 
     def warm_player_pool(self) -> None:
         """预创建 QMediaPlayer 池，避免首次点击时初始化 QtMultimedia 造成卡顿。"""
@@ -592,6 +620,23 @@ def _effect_is_ready(effect: Any) -> bool:
         return status() == QSoundEffect.Status.Ready
     except Exception:
         return True
+
+
+def _effect_status_is_error(effect: Any) -> bool:
+    """判断音效对象是否处于粘滞错误态（issue #116）。
+
+    QSoundEffect 一旦进入 Error，play() 就是永久静默空操作，且 Qt 不会自愈；
+    必须靠重建对象恢复。无 status 的测试替身/旧版本按"非错误"处理。
+    """
+    status = getattr(effect, "status", None)
+    if not callable(status):
+        return False
+    try:
+        from PySide6.QtMultimedia import QSoundEffect
+
+        return status() == QSoundEffect.Status.Error
+    except Exception:
+        return False
 
 
 def _play_with_system_player(path: Path) -> bool:

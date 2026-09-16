@@ -84,9 +84,12 @@ def _drag_to(win, *globals_):
 
 def test_drag_coalesce_timer_is_about_120hz(app, tmp_path):
     win = _make_win(app, tmp_path)
-    # 8ms ≈ 125Hz：每显示帧至多消费一次最新目标
+    # 合帧节拍 = min(8ms ≈ 125Hz 上限, 显示帧间隔)：高刷屏（如 165Hz → 6ms）
+    # 跟随显示帧，低刷屏维持 8ms（pet/window.py 里 _tick_ms 的刷新率推导，
+    # 与 _physics_timer 同源）。每显示帧至多消费一次最新目标。
+    expected = min(DRAG_MOVE_COALESCE_MS, win._physics_timer.interval())
+    assert win._drag_move_timer.interval() == expected
     assert 1000 / win._drag_move_timer.interval() >= 120.0
-    assert win._drag_move_timer.interval() == DRAG_MOVE_COALESCE_MS
     assert win._drag_move_pending is None
     win.close()
     app.processEvents()

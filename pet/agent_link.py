@@ -49,6 +49,7 @@ from .node_runtime import global_node_modules_roots
 from .persona_phrases import PhrasePicker
 from .persona_template import CONDITIONAL_PARAMETERS
 from .speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
+from .speech_bubble_text import truncate_bubble_text
 
 log = logging.getLogger("dsh-pet-standalone")
 
@@ -2315,6 +2316,7 @@ class AgentLinkManager(QObject):
     _ACTIVITY_MIN_INTERVAL = 10.0    # 同 Agent 过程气泡最小间隔
     _ACTIVITY_GLOBAL_MIN = 8.0       # 全局最小间隔（多 Agent 并发防刷屏）
     _ACTIVITY_SAME_LABEL = 60.0      # 同一工具文案 60s 内不重复
+    _ACTIVITY_TEXT_LIMIT = 80        # 过程汇报气泡文案上限（超出截断加「…」）
     _BUSY_STATES = ("working", "thinking")
     _DONE_CONFIRM_MS = 800   # busy→idle 稳定确认窗口（过滤 working→idle→working 抖动）
     _DONE_COOLDOWN_S = 5.0   # 同 Agent 完成气泡最小间隔（最后一道保险）
@@ -3166,7 +3168,12 @@ class AgentLinkManager(QObject):
         values["name"] = name
         values["tool"] = str(tool).strip()
         values["label"] = label
-        text = self._dialogue(key, f"{name} {label}…", agent_key=agent_key, **values)
+        # 源头截断：用户自定义文案模板可能带很长的命令/参数，过程汇报气泡只做
+        # 一句提示，超过 _ACTIVITY_TEXT_LIMIT 字就截断加「…」（不进分页/滚动）。
+        text = truncate_bubble_text(
+            self._dialogue(key, f"{name} {label}…", agent_key=agent_key, **values),
+            self._ACTIVITY_TEXT_LIMIT,
+        )
         self._show_link_bubble(text, important=False, duration_ms=2600)
 
     def _on_approval_request(self, agent_key: str, payload: dict) -> None:

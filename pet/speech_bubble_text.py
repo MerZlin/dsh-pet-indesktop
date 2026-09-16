@@ -4,7 +4,8 @@
 批6-2 从 pet/speech_bubble.py 整体迁出（纯搬移，逻辑/默认值零改动）：
 - 文本规整与行数上限（normalize_bubble_text / bubble_max_lines）；
 - 省略与分页（elide_bubble_text / paginate_bubble_text，换行带避头尾禁则）；
-- 分页节奏与页码（page_dwell_ms / page_dots 与 PAGE_* 常量）；
+- 自适应列宽（bubble_column_for_text）与源头截断（truncate_bubble_text）；
+- 分页节奏与页码（page_dwell_ms / page_dwells_ms / page_dots 与 PAGE_* 常量）；
 - 定位与尺寸（bubble_rect_for_anchor / breath_bubble_size_for_anchor /
   breath_bubble_size_for_scale）；
 - 自言自语图片清单（list_self_talk_images + SELF_TALK_IMAGE_SUFFIXES）。
@@ -15,6 +16,7 @@ Qt 依赖面最小化：只导入纯函数实际使用的 Qt 类型。
 from __future__ import annotations
 
 import re
+from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
@@ -24,16 +26,40 @@ SELF_TALK_IMAGE_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
 }
 
-# 气泡文本列的最大像素宽（气泡整体宽度上限的由来），以及 label 矩形相对
-# 最长行的余量。换行预算必须是 ``列宽 - 余量``：整型 horizontalAdvance 累加
-# 与绘制时的自然（分数）宽度有亚像素差，余量同时吸收这个差，行尾才不会切字。
+# 气泡文本列的基础像素宽（短文案列宽，也是气泡整体宽度的由来），以及 label
+# 矩形相对最长行的余量。换行预算必须是 ``列宽 - 余量``：整型 horizontalAdvance
+# 累加与绘制时的自然（分数）宽度有亚像素差，余量同时吸收这个差，行尾才不会切字。
 BUBBLE_TEXT_COLUMN = 248
 BUBBLE_TEXT_SLACK = 4
+
+# 自适应列宽：短文案维持 248px（视觉与旧版一致），文案变长后逐步放宽到
+# 360px 上限。加宽换来每行装更多字——长文案的总行数、翻页次数与「末页孤行」
+# 概率一起下降；上限兼顾气泡观感与桌宠贴边时剩余的可用空间。
+BUBBLE_TEXT_COLUMN_MAX = 360
+BUBBLE_TEXT_COLUMN_GROWTH_CHARS = 60   # 超过这个字数才开始放宽
+BUBBLE_TEXT_COLUMN_GROWTH_SPAN = 100   # 再长 100 字到达列宽上限
 
 
 def bubble_wrap_width(column: int = BUBBLE_TEXT_COLUMN, slack: int = BUBBLE_TEXT_SLACK) -> int:
     """Text wrapping budget: always leaves ``slack`` px inside the column."""
     return max(1, int(column) - int(slack))
+
+
+def bubble_column_for_text(text: str) -> int:
+    """按文案长度选择文本列宽：≤60 字保持 248px，之后逐步放宽、上限 360px。
+
+    只与「规整后的字数」有关（与换行度量无关），因此同一段文案在分页、量宽
+    与绘制三处拿到的是同一个列宽；空文案/短文案走原列宽，行为零变化。
+    """
+    length = len(normalize_bubble_text(text))
+    if length <= BUBBLE_TEXT_COLUMN_GROWTH_CHARS:
+        return BUBBLE_TEXT_COLUMN
+    grown = BUBBLE_TEXT_COLUMN + ceil(
+        (length - BUBBLE_TEXT_COLUMN_GROWTH_CHARS)
+        * (BUBBLE_TEXT_COLUMN_MAX - BUBBLE_TEXT_COLUMN)
+        / BUBBLE_TEXT_COLUMN_GROWTH_SPAN
+    )
+    return min(BUBBLE_TEXT_COLUMN_MAX, grown)
 
 
 def breath_bubble_size_for_anchor(anchor_rect: QRect) -> QSize:
@@ -138,6 +164,20 @@ def elide_bubble_text(
     return "\n".join(lines)
 
 
+def truncate_bubble_text(text: str, limit: int, suffix: str = "…") -> str:
+    """源头截断：文案超过 ``limit`` 字时硬截断并追加 ``suffix``（纯函数）。
+
+    与 :func:`elide_bubble_text` 的区别：本函数在**进气泡之前**按字数动手，
+    不做换行/度量，因此可以给不同通路配不同上限与提示语（过程汇报「…」、
+    快速对话「…（全文见聊天窗）」）。``limit <= 0`` 视为不限长；未超长时
+    原样返回（含空串），便于调用方直接替换。
+    """
+    value = str(text or "")
+    if limit <= 0 or len(value) <= limit:
+        return value
+    return value[:limit] + suffix
+
+
 def bubble_label_size(
     metrics: QFontMetrics,
     pages: list[str],
@@ -177,7 +217,10 @@ def paginate_bubble_text(
     Unlike :func:`elide_bubble_text`, no content is ever cut: long text is
     split into several pages so the whole message can be shown by flipping
     pages.  Returns a list of page strings (each already contains ``\n``
-    line breaks); a single-element list means one page suffices.
+    line breaks); a single-element list means one page suffices.  The tail
+    pages are rebalanced: when the last page would hold only one or two
+    lines, one line is borrowed from the page before it (3+2 -> 2+3) so the
+    tail never looks cut off.
     """
     value = normalize_bubble_text(text)
     if not value:
@@ -189,9 +232,11 @@ def paginate_bubble_text(
         lines[start : start + max_lines]
         for start in range(0, len(lines), max_lines)
     ]
-    if len(pages) >= 2 and len(pages[-1]) == 1 and len(pages[-2]) > 1:
-        # 孤行控制：最后一页只剩一行时，从前一页匀一行过来（3+1 → 2+2），
-        # 避免末页只有零星几个字、看起来像气泡被截断。
+    if len(pages) >= 2 and len(pages[-1]) <= 2 and len(pages[-2]) > 2:
+        # 孤行控制（收紧到 ≤2 行）：末页只剩 1~2 行时都重新平衡——从前一页
+        # 匀一行过来（3+1 → 2+2、3+2 → 2+3），避免末页零星几行看起来像气泡
+        # 被截断。借行后前一页仍有 ≥2 行、末页不超过 max_lines（max_lines≥3），
+        # 因此不需要让末页突破 max_lines 并页，气泡高度也不会变。
         pages[-2], pages[-1] = pages[-2][:-1], [pages[-2][-1]] + pages[-1]
     return ["\n".join(page) for page in pages]
 
@@ -205,6 +250,11 @@ PAGE_DWELL_PER_CHAR_MS = 60
 PAGE_DWELL_MIN_MS = 2500
 PAGE_DWELL_MAX_MS = 8000
 
+# 「回到第一页」停顿（只作用于多页气泡）：末页播完再压一拍，翻完一轮
+# 回到第一页/收起前不会显得被硬切。（曾加过首页 ×2 权重，主人评审后去掉：
+# 截断 + 自适应宽度落地后多页气泡本就罕见，首页双倍停留反而拖节奏。）
+PAGE_RETURN_PAUSE_MS = 800
+
 # 翻页过渡：淡出略快、淡入略慢，视觉更顺。
 PAGE_FADE_OUT_MS = 110
 PAGE_FADE_IN_MS = 150
@@ -215,6 +265,19 @@ def page_dwell_ms(page_text: str) -> int:
     chars = len(str(page_text or "").replace("\n", ""))
     dwell = PAGE_DWELL_BASE_MS + chars * PAGE_DWELL_PER_CHAR_MS
     return max(PAGE_DWELL_MIN_MS, min(PAGE_DWELL_MAX_MS, dwell))
+
+
+def page_dwells_ms(pages: list[str]) -> list[int]:
+    """多页气泡的逐页停留表：末页额外压一拍「回首页」停顿。
+
+    表长与 ``pages`` 相同，末页那一格加上 ``PAGE_RETURN_PAUSE_MS``——末页
+    播完到下一轮/收起之间的停顿落在这一格里，翻页状态机不需要新增字段。
+    单页/空页时退化为 ``[page_dwell_ms(page)]``，与逐页自适应口径一致。
+    """
+    dwells = [page_dwell_ms(page) for page in pages]
+    if len(dwells) > 1:
+        dwells[-1] += PAGE_RETURN_PAUSE_MS
+    return dwells
 
 
 def page_dots(index: int, total: int) -> str:

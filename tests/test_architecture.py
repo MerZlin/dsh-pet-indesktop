@@ -72,7 +72,21 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 两处都是 3 行内联守卫，拆出去会切断 _pause_activity 与 _closing 共享状态流
 # （更关键的是顺序语义：match_shutdown 必须**先**暂停再置 _closing，见
 # pet/window_optional_services.py）；拆分待办不变，预算仍只随实测校准。
-WINDOW_PY_LINE_BUDGET = 4429
+# 2026-09-13 再上调到 4478：肥鱼互撞卡顿修复批（window.py 净 +49，实测 4478）——
+# _warm_landing_idles 从 GUI 线程同步 ffmpeg 首帧解码改为 daemon 线程预热
+# （实测定案：碰撞风暴下每次撞飞堵 GUI ~100ms，看门狗连续抓 200ms+ 卡顿），
+# 起飞/落地 pin-unpin 保护落地首帧不在飞行窗口被预热浪涌逐出（8MB 预算不动，
+# 常驻内存零增长），增量行数几乎全是线程安全性/实机教训注释；这些守卫与
+# _enter_physics_mode/_stop_physics 共享窗口状态流，拆控制器反而切断调用链，
+# 按约定只校准预算。
+# 2026-09-15 再上调到 4507：issue #98「点击桌宠导致全局复制粘贴失效」修复
+# （window.py +29，实测 4507）——新增 _apply_windows_no_activate() 在 showEvent
+# 置位 WS_EX_NOACTIVATE，使点击桌宠不再夺走前台/键盘焦点。原生样式操作本体放在
+# pet/platform_win.py（+23，与 _set_windows_click_through 同处），window.py 侧只留
+# 一个带完整实机取证说明的委托方法：它必须留在 PetWindow 上（showEvent 是唯一
+# 可靠的"原生窗口已就绪/可能被重建"注入点，拆到独立模块反而会产生跨模块的
+# 窗口生命周期耦合）。按约定只校准预算，不为达标压行。
+WINDOW_PY_LINE_BUDGET = 4507
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
@@ -90,8 +104,11 @@ WINDOW_PY_LINE_BUDGET = 4429
 # 不为达标压缩行宽/合并语句。
 # 2026-09-08 上调到 2018：批 G——「退出子肥鱼」按钮对子肥鱼禁用（+5）+
 # _on_clear_spawned_pets 加 instance_id 双保险（+5，含注释折行），实测 2018。
+# 2026-09-15 上调到 2270：语音报时设置页接入（页面实例化/SettingRow 收集/
+# _write_config 写回/试听透传回调）与两开关、音色下拉改造，实测 2255；
+# 按文件约定预算只随实测校准，不为达标压缩行宽/合并语句；拆分仍是待办。
 # 本文件拆分仍是待办，拆分前预算只随实测校准。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2018
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2270
 
 
 

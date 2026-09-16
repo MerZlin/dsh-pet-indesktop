@@ -6,6 +6,7 @@
 settings_widgets / settings_menu_layout_editor / chat/ai_settings_page / settings_theme_qss。
 本文件保留这些符号的 re-export，供 tests 与 pet/ 既有调用向后兼容。
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,8 +20,16 @@ import shiboken6
 
 from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QAction, QColor, QClipboard, QFontDatabase, QIcon, QImageReader, QPainter,
-    QPainterPath, QPen, QPixmap,
+    QAction,
+    QColor,
+    QClipboard,
+    QFontDatabase,
+    QIcon,
+    QImageReader,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -145,39 +154,67 @@ from .report_gates import REPORT_GATE_KEYS, REPORT_GATE_LABELS, gate_for_event
 
 # 语言配置页只展示用户能理解的事件名称；内部 key 仍用于保存和渲染。
 DIALOGUE_LABELS = {
-    "start": "开始工作", "thinking": "思考", "activity.read": "读取文件",
-    "activity.search": "搜索或查找", "activity.edit": "编辑代码",
-    "activity.run": "运行或测试", "activity.default": "其他工具操作",
-    "agent.attention": "需要用户处理", "agent.error": "Agent 出错",
-    "agent.missing": "未找到 Agent", "bridge.install.pending": "安装桥接中",
-    "bridge.install.success": "桥接安装成功", "bridge.install.failed": "桥接安装失败",
-    "bridge.uninstall.failed": "桥接卸载失败", "dsh.writeback.failed": "agent 写回失败",
-    "approval.command": "审批命令", "approval.tool": "审批工具",
-    "approval.generic": "审批提示", "question.empty": "等待选择",
-    "question.one": "单个用户问题", "question.many": "多个用户问题",
-    "watchdog.warning": "循环检测警告", "model_access.one": "模型访问失败（单次）",
-    "model_access.many": "模型访问失败（连续）", "llm_error.api": "AI 服务错误",
+    "start": "开始工作",
+    "thinking": "思考",
+    "activity.read": "读取文件",
+    "activity.search": "搜索或查找",
+    "activity.edit": "编辑代码",
+    "activity.run": "运行或测试",
+    "activity.default": "其他工具操作",
+    "agent.attention": "需要用户处理",
+    "agent.error": "Agent 出错",
+    "agent.missing": "未找到 Agent",
+    "bridge.install.pending": "安装桥接中",
+    "bridge.install.success": "桥接安装成功",
+    "bridge.install.failed": "桥接安装失败",
+    "bridge.uninstall.failed": "桥接卸载失败",
+    "dsh.writeback.failed": "agent 写回失败",
+    "approval.command": "审批命令",
+    "approval.tool": "审批工具",
+    "approval.generic": "审批提示",
+    "question.empty": "等待选择",
+    "question.one": "单个用户问题",
+    "question.many": "多个用户问题",
+    "watchdog.warning": "循环检测警告",
+    "model_access.one": "模型访问失败（单次）",
+    "model_access.many": "模型访问失败（连续）",
+    "llm_error.api": "AI 服务错误",
     "done.success": "任务完成",
-    "done.attention": "任务暂停待确认", "failure.retry": "重试后失败",
-    "failure.tool": "工具执行失败", "failure.generic": "执行失败",
+    "done.attention": "任务暂停待确认",
+    "failure.retry": "重试后失败",
+    "failure.tool": "工具执行失败",
+    "failure.generic": "执行失败",
     "stuck.reminder": "卡住提醒",
-    "pattern.warning": "行为重复警告", "pattern.control": "行为重复干预",
-    "balance.loading": "查询余额中", "balance.result": "余额结果",
+    "pattern.warning": "行为重复警告",
+    "pattern.control": "行为重复干预",
+    "balance.loading": "查询余额中",
+    "balance.result": "余额结果",
 }
 
 DIALOGUE_PARAMS = {
-    "name": "Agent 名称", "command": "命令文本", "label": "标签（工具标签/会话标签随事件而定）",
-    "body": "问题内容", "count": "数量", "reasons": "判断原因",
-    "detail": "错误详情", "text": "显示文本",
+    "name": "Agent 名称",
+    "command": "命令文本",
+    "label": "标签（工具标签/会话标签随事件而定）",
+    "body": "问题内容",
+    "count": "数量",
+    "reasons": "判断原因",
+    "detail": "错误详情",
+    "text": "显示文本",
     "event": "未知事件名（bridge.unknown）",
-    "tool": "原始工具名", "callId": "工具调用 ID",
+    "tool": "原始工具名",
+    "callId": "工具调用 ID",
     "step": "步骤序号",
-    "toolName": "审批原始工具名", "argsKey": "工具参数摘要键",
-    "sessionName": "会话显示名", "projectName": "项目名",
-    "errorCode": "错误码（llm_error 为上游真实码，如 bad_response_status_code）", "errorMessage": "错误信息原文",
+    "toolName": "审批原始工具名",
+    "argsKey": "工具参数摘要键",
+    "sessionName": "会话显示名",
+    "projectName": "项目名",
+    "errorCode": "错误码（llm_error 为上游真实码，如 bad_response_status_code）",
+    "errorMessage": "错误信息原文",
     "errorKind": "错误分类（api=AI API 请求失败）",
-    "consecutiveRetryCount": "连续模型访问失败次数", "retry": "重试序号",
-    "retries": "已重试次数", "retryExhausted": "是否重试耗尽",
+    "consecutiveRetryCount": "连续模型访问失败次数",
+    "retry": "重试序号",
+    "retries": "已重试次数",
+    "retryExhausted": "是否重试耗尽",
     "failureType": "失败类型",
 }
 
@@ -336,22 +373,19 @@ class ModernSettingsDialog(QDialog):
             ("切换桌宠显隐", "toggle_pet"),
         ):
             self.island_click_action_select.addItem(label, value)
-        self.island_click_action_select.setCurrentData(
-            str(island_cfg.get("click_action") or "expand"))
+        self.island_click_action_select.setCurrentData(str(island_cfg.get("click_action") or "expand"))
         self.island_event_effects_check = ToggleSwitch(self)
-        self.island_event_effects_check.setChecked(
-            bool(island_cfg.get("event_effects", True)))
+        self.island_event_effects_check.setChecked(bool(island_cfg.get("event_effects", True)))
         self.island_edge_dock_check = ToggleSwitch(self)
-        self.island_edge_dock_check.setChecked(
-            bool(island_cfg.get("edge_dock", True)))
+        self.island_edge_dock_check.setChecked(bool(island_cfg.get("edge_dock", True)))
         self.island_collision_check = ToggleSwitch(self)
-        self.island_collision_check.setChecked(
-            bool(island_cfg.get("collision_enabled", True)))
+        self.island_collision_check.setChecked(bool(island_cfg.get("collision_enabled", True)))
 
         if include_ai:
             # 延迟 import：no-chat 打包变体 excludes=['pet.chat']，顶层导入会在
             # 产物运行时抛 ModuleNotFoundError，导致设置界面整体打不开。
             from .chat.ai_settings_page import _AiSettingsPage
+
             self.ai_page = _AiSettingsPage(config, self)
 
         general_content = QWidget()
@@ -361,39 +395,72 @@ class ModernSettingsDialog(QDialog):
         autostart_desc = "登录系统后自动启动桌宠。" if not self.config.instance_id else "登录系统后自动启动桌宠。（仅主桌宠可设置）"
         launch_rows = [
             SettingRow("autostart", "开机自启", autostart_desc, self.autostart_check),
-            SettingRow("harness_autostart", "随桌宠启动 dsh 服务",
-                       "桌宠启动后自动在后台静默拉起 dsh web 服务（只起服务，不开浏览器、不弹窗口；"
-                       "需要使用时点「启动 DeepSeek Harness」秒开页面）。仅主桌宠生效。",
-                       self.harness_autostart_check),
+            SettingRow(
+                "harness_autostart",
+                "随桌宠启动 dsh 服务",
+                "桌宠启动后自动在后台静默拉起 dsh web 服务（只起服务，不开浏览器、不弹窗口；需要使用时点「启动 DeepSeek Harness」秒开页面）。仅主桌宠生效。",
+                self.harness_autostart_check,
+            ),
         ]
         if sys.platform == "darwin":
-            launch_rows.append(SettingRow(
-                "dock_icon", "显示 Dock 图标", "在 macOS Dock 中显示桌宠应用；关闭后仍可通过桌宠和托盘操作。",
-                self.dock_icon_check,
-            ))
+            launch_rows.append(
+                SettingRow(
+                    "dock_icon",
+                    "显示 Dock 图标",
+                    "在 macOS Dock 中显示桌宠应用；关闭后仍可通过桌宠和托盘操作。",
+                    self.dock_icon_check,
+                )
+            )
         general_layout.addWidget(SettingsSection("应用启动", launch_rows, general_content))
         window_rows = [
             SettingRow("on_top", "窗口置顶", "始终将桌宠保持在其他窗口上方。", self.on_top_check),
         ]
         if sys.platform == "win32":
-            window_rows.extend([
-                SettingRow("auto_hide_fullscreen", "全屏时自动隐藏", "全屏游戏或视频期间自动隐藏桌宠。", self.auto_hide_fullscreen_check),
-                SettingRow("cursor_hidden_passthrough", "光标隐藏时自动穿透", "Windows 光标隐藏后，桌宠自动穿透点击；光标出现立即恢复。适用于游戏，也可能影响自动隐藏光标的视频播放器。", self.cursor_hidden_passthrough_check),
-                SettingRow("stream_capture", "直播捕获兼容", "让 OBS 等工具能够枚举并捕获桌宠窗口。", self.stream_capture_check),
-            ])
+            window_rows.extend(
+                [
+                    SettingRow("auto_hide_fullscreen", "全屏时自动隐藏", "全屏游戏或视频期间自动隐藏桌宠。", self.auto_hide_fullscreen_check),
+                    SettingRow(
+                        "cursor_hidden_passthrough",
+                        "光标隐藏时自动穿透",
+                        "Windows 光标隐藏后，桌宠自动穿透点击；光标出现立即恢复。适用于游戏，也可能影响自动隐藏光标的视频播放器。",
+                        self.cursor_hidden_passthrough_check,
+                    ),
+                    SettingRow("stream_capture", "直播捕获兼容", "让 OBS 等工具能够枚举并捕获桌宠窗口。", self.stream_capture_check),
+                ]
+            )
         general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
         spawn_rows = [
-            SettingRow("single_process_spawn", "单进程多开（省内存）", "开启后「生小肥鱼」在同一进程内创建新桌宠，多窗共享解码链（同一段动画只解码一份），多开时内存与进程数显著降低；已有各只的设置存档保留不变。重启后生效。", self.single_process_spawn_check),
+            SettingRow(
+                "single_process_spawn",
+                "单进程多开（省内存）",
+                "开启后「生小肥鱼」在同一进程内创建新桌宠，多窗共享解码链（同一段动画只解码一份），多开时内存与进程数显著降低；已有各只的设置存档保留不变。重启后生效。",
+                self.single_process_spawn_check,
+            ),
         ]
         general_layout.addWidget(SettingsSection("多开", spawn_rows, general_content))
         if self.balance_refresh_spin is not None:
-            general_layout.addWidget(SettingsSection("后台服务", [
-                SettingRow("balance_refresh", "余额自动刷新", "设置后台刷新间隔；0 分钟表示关闭。", self.balance_refresh_spin),
-                SettingRow("balance_tier_mode", "峰谷提示文案", "选择 DeepSeek 高峰/空闲提示的显示风格。", self.balance_tier_mode_select),
-                SettingRow("balance_tier_peak", "高峰自定义文本", "仅“自定义”模式生效；留空回退默认“高峰”。", self.balance_tier_peak_edit, stacked=True),
-                SettingRow("balance_tier_idle", "空闲自定义文本", "仅“自定义”模式生效；留空回退默认“空闲”。", self.balance_tier_idle_edit, stacked=True),
-                SettingRow("balance_tier_color", "峰谷提示颜色", "开启后高峰显示红色、低谷显示绿色；关闭则使用普通气泡文字颜色。", self.balance_tier_color_check),
-            ], general_content))
+            general_layout.addWidget(
+                SettingsSection(
+                    "后台服务",
+                    [
+                        SettingRow("balance_refresh", "余额自动刷新", "设置后台刷新间隔；0 分钟表示关闭。", self.balance_refresh_spin),
+                        SettingRow("balance_tier_mode", "峰谷提示文案", "选择 DeepSeek 高峰/空闲提示的显示风格。", self.balance_tier_mode_select),
+                        SettingRow(
+                            "balance_tier_peak", "高峰自定义文本", "仅“自定义”模式生效；留空回退默认“高峰”。", self.balance_tier_peak_edit, stacked=True
+                        ),
+                        SettingRow(
+                            "balance_tier_idle", "空闲自定义文本", "仅“自定义”模式生效；留空回退默认“空闲”。", self.balance_tier_idle_edit, stacked=True
+                        ),
+                        SettingRow(
+                            "balance_tier_color",
+                            "峰谷提示颜色",
+                            "开启后高峰显示红色、低谷显示绿色；关闭则使用普通气泡文字颜色。",
+                            self.balance_tier_color_check,
+                        ),
+                    ],
+                    general_content,
+                )
+            )
         general_layout.addStretch(1)
         self._add_page("常规", "settings", self._page_shell("常规", general_content))
 
@@ -401,23 +468,56 @@ class ModernSettingsDialog(QDialog):
         island_layout = QVBoxLayout(island_content)
         island_layout.setContentsMargins(0, 0, 0, 0)
         island_layout.setSpacing(18)
-        island_layout.addWidget(SettingsSection("灵动岛", [
-            SettingRow("dynamic_island_enabled", "启用灵动岛", "显示独立胶囊小窗；桌宠隐藏后仍可常驻。", self.island_enabled_check),
-            SettingRow("dynamic_island_icon", "显示图标", "在胶囊左侧显示角色图标。", self.island_icon_check),
-            SettingRow("dynamic_island_name", "显示名称", "显示当前角色名称。", self.island_name_check),
-            SettingRow("dynamic_island_info", "显示信息槽", "显示时间/余额/自定义短文本等信息。", self.island_info_check),
-            SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
-            SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
-            SettingRow("dynamic_island_style", "背景风格", "黑色 / 白色 / 苹果式玻璃质感；配合下方不透明度可调出半透明质感（纯自绘，低占用）。", self.island_style_select),
-            SettingRow("dynamic_island_opacity", "背景不透明度", "越低越透（0.4~1.0）；配合深色底在低占用下做出半透明质感。", self.island_opacity_spin),
-            SettingRow("dynamic_island_accent", "主题色", "图标底圈、事件闪光、停靠描边共用的点缀色。", self.island_accent_select),
-            SettingRow("dynamic_island_icon_value", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
-            SettingRow("dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True),
-            SettingRow("dynamic_island_click_action", "单击行为", "单击胶囊：展开快捷卡片（余额/最近消息/快捷按钮）或直接切换桌宠显隐。", self.island_click_action_select),
-            SettingRow("dynamic_island_event_effects", "事件动效", "AI 回复到达、余额刷新、峰谷切换时果冻弹跳提示；dsh 工作时状态灯变蓝。静止时零额外开销。", self.island_event_effects_check),
-            SettingRow("dynamic_island_edge_dock", "靠边半隐藏", "拖到屏幕任意边缘（上下左右）收成细条，鼠标靠近自动滑出；顶部被占时可停靠侧边。", self.island_edge_dock_check),
-            SettingRow("dynamic_island_collision", "果冻墙（参与碰撞）", "岛注册为静态碰撞体：肥鱼被甩到岛上会弹开，岛原地果冻摆动。岛的位置不会被撞动。", self.island_collision_check),
-        ], island_content))
+        island_layout.addWidget(
+            SettingsSection(
+                "灵动岛",
+                [
+                    SettingRow("dynamic_island_enabled", "启用灵动岛", "显示独立胶囊小窗；桌宠隐藏后仍可常驻。", self.island_enabled_check),
+                    SettingRow("dynamic_island_icon", "显示图标", "在胶囊左侧显示角色图标。", self.island_icon_check),
+                    SettingRow("dynamic_island_name", "显示名称", "显示当前角色名称。", self.island_name_check),
+                    SettingRow("dynamic_island_info", "显示信息槽", "显示时间/余额/自定义短文本等信息。", self.island_info_check),
+                    SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
+                    SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
+                    SettingRow(
+                        "dynamic_island_style",
+                        "背景风格",
+                        "黑色 / 白色 / 苹果式玻璃质感；配合下方不透明度可调出半透明质感（纯自绘，低占用）。",
+                        self.island_style_select,
+                    ),
+                    SettingRow("dynamic_island_opacity", "背景不透明度", "越低越透（0.4~1.0）；配合深色底在低占用下做出半透明质感。", self.island_opacity_spin),
+                    SettingRow("dynamic_island_accent", "主题色", "图标底圈、事件闪光、停靠描边共用的点缀色。", self.island_accent_select),
+                    SettingRow("dynamic_island_icon_value", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
+                    SettingRow(
+                        "dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True
+                    ),
+                    SettingRow(
+                        "dynamic_island_click_action",
+                        "单击行为",
+                        "单击胶囊：展开快捷卡片（余额/最近消息/快捷按钮）或直接切换桌宠显隐。",
+                        self.island_click_action_select,
+                    ),
+                    SettingRow(
+                        "dynamic_island_event_effects",
+                        "事件动效",
+                        "AI 回复到达、余额刷新、峰谷切换时果冻弹跳提示；dsh 工作时状态灯变蓝。静止时零额外开销。",
+                        self.island_event_effects_check,
+                    ),
+                    SettingRow(
+                        "dynamic_island_edge_dock",
+                        "靠边半隐藏",
+                        "拖到屏幕任意边缘（上下左右）收成细条，鼠标靠近自动滑出；顶部被占时可停靠侧边。",
+                        self.island_edge_dock_check,
+                    ),
+                    SettingRow(
+                        "dynamic_island_collision",
+                        "果冻墙（参与碰撞）",
+                        "岛注册为静态碰撞体：肥鱼被甩到岛上会弹开，岛原地果冻摆动。岛的位置不会被撞动。",
+                        self.island_collision_check,
+                    ),
+                ],
+                island_content,
+            )
+        )
         island_layout.addStretch(1)
         self._add_page("灵动岛", "island", self._page_shell("灵动岛", island_content))
 
@@ -425,49 +525,93 @@ class ModernSettingsDialog(QDialog):
         behavior_layout = QVBoxLayout(behavior_content)
         behavior_layout.setContentsMargins(0, 0, 0, 0)
         behavior_layout.setSpacing(16)
-        behavior_layout.addWidget(SettingsSection("动画", [
-            SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
-            SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
-            SettingRow("idle_low_fps", "省电模式", "一段时间不操作桌宠时，动画按半帧率呈现（24fps 素材 → 12fps 效果）并停止后台动画预热，任何交互立即恢复全帧率。", self.idle_low_fps_check),
-            SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
-            SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
-            SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
-        ], behavior_content))
-        behavior_layout.addWidget(SettingsSection("拖拽与弹射", [
-            SettingRow("drag_physics", "拖动物理", "启用拖拽惯性、重力和边缘反弹。", self.drag_physics_check),
-            SettingRow("throw_strength", "甩出力度", "控制桌宠被甩出或弹射发射时的最大速度限制。", self.throw_strength_select),
-            SettingRow("slingshot_enabled", "弹弓弹射", "拖拽桌宠时点击右键进入蓄力瞄准，松开左键弹射飞出（Esc或右键取消）。", self.slingshot_check),
-            SettingRow("lock_position", "锁定位置", "桌宠固定不动，无法拖动（点击互动仍有效）。", self.lock_position_check),
-            SettingRow("shift_drag", "SHIFT+左键拖动", "开启后必须按住 SHIFT 再左键才能拖动桌宠。", self.shift_drag_check),
-        ], behavior_content))
-        behavior_layout.addWidget(SettingsSection("边缘探头", [
-            SettingRow("edge_probe", "边缘探头",
-                       "拖到屏幕左/右边缘后自动以 45° 探头姿态窥视；点击真实角色会拉直约 5 秒后自动退回。",
-                       self.edge_probe_check),
-        ], behavior_content))
-        behavior_layout.addWidget(SettingsSection("生小肥鱼", [
-            SettingRow("spawn_inherit_size", "生小肥鱼继承大小",
-                       "开启后生成的小肥鱼与主肥鱼大小一致；关闭后使用下方为小肥鱼单独选择的大小。",
-                       self.spawn_inherit_size_check),
-            SettingRow("spawn_scale", "小肥鱼大小",
-                       "关闭“继承大小”时，新生成小肥鱼使用的桌面尺寸。",
-                       self.spawn_scale_combo, stacked=True),
-            SettingRow("spawn_inherit_dynamic_island", "生小肥鱼继承灵动岛",
-                       "默认关闭：新生成的小肥鱼不打开自己的灵动岛。开启后小肥鱼继承主肥鱼的灵动岛设置。",
-                       self.spawn_inherit_dynamic_island_check),
-            SettingRow("clear_spawned_pets", "一键退出子肥鱼",
-                       "关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。",
-                       self.clear_spawned_pets_btn),
-        ], behavior_content))
-        behavior_layout.addWidget(SettingsSection("多开碰撞", [
-            SettingRow("collision_enabled", "碰撞开关", "多开桌宠之间发生碰撞物理互动。开启鼠标穿透的桌宠仍会参与碰撞，锁定位置的桌宠作为固定障碍。", self.collision_enabled_check),
-            SettingRow("collision_restitution", "弹性系数", "碰撞反弹的能量保留程度（0~1.00，默认 0.82）。", self.collision_restitution_spin),
-            SettingRow("collision_friction", "摩擦系数", "擦边碰撞时的切向摩擦阻力（0~0.30，默认 0.08）。", self.collision_friction_spin),
-            SettingRow("collision_mass_scale", "质量倍率", "桌宠的基础质量加权倍率（0.5~2.0，默认 1.0）。", self.collision_mass_scale_spin),
-            SettingRow("collision_impulse_cap", "冲量上限", "单次碰撞能施加的最大冲量上限（1000~12000，默认 9000）。", self.collision_impulse_cap_spin),
-            SettingRow("collision_sound_enabled", "碰撞音效", "碰撞时播放音效反馈。", self.collision_sound_check),
-            SettingRow("collision_sound_volume", "碰撞音量", "调整碰撞音效播放音量。", self.collision_sound_volume_spin),
-        ], behavior_content))
+        behavior_layout.addWidget(
+            SettingsSection(
+                "动画",
+                [
+                    SettingRow("playback_speed", "播放速率", "控制所有桌宠动画的播放速度。", self.speed_select),
+                    SettingRow("animation_gap", "动作等待间隔", "非待机动作之间的休息时间；0 秒表示连续播放。", self.gap_spin),
+                    SettingRow(
+                        "idle_low_fps",
+                        "省电模式",
+                        "一段时间不操作桌宠时，动画按半帧率呈现（24fps 素材 → 12fps 效果）并停止后台动画预热，任何交互立即恢复全帧率。",
+                        self.idle_low_fps_check,
+                    ),
+                    SettingRow("no_move", "不移动", "暂停桌宠在桌面上的自动移动。", self.no_move_check),
+                    SettingRow("mouse_through", "鼠标穿透", "开启后桌宠不接收鼠标事件，点击穿透到下层窗口。", self.mouse_through_check),
+                    SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
+                ],
+                behavior_content,
+            )
+        )
+        behavior_layout.addWidget(
+            SettingsSection(
+                "拖拽与弹射",
+                [
+                    SettingRow("drag_physics", "拖动物理", "启用拖拽惯性、重力和边缘反弹。", self.drag_physics_check),
+                    SettingRow("throw_strength", "甩出力度", "控制桌宠被甩出或弹射发射时的最大速度限制。", self.throw_strength_select),
+                    SettingRow("slingshot_enabled", "弹弓弹射", "拖拽桌宠时点击右键进入蓄力瞄准，松开左键弹射飞出（Esc或右键取消）。", self.slingshot_check),
+                    SettingRow("lock_position", "锁定位置", "桌宠固定不动，无法拖动（点击互动仍有效）。", self.lock_position_check),
+                    SettingRow("shift_drag", "SHIFT+左键拖动", "开启后必须按住 SHIFT 再左键才能拖动桌宠。", self.shift_drag_check),
+                ],
+                behavior_content,
+            )
+        )
+        behavior_layout.addWidget(
+            SettingsSection(
+                "边缘探头",
+                [
+                    SettingRow(
+                        "edge_probe", "边缘探头", "拖到屏幕左/右边缘后自动以 45° 探头姿态窥视；点击真实角色会拉直约 5 秒后自动退回。", self.edge_probe_check
+                    ),
+                ],
+                behavior_content,
+            )
+        )
+        behavior_layout.addWidget(
+            SettingsSection(
+                "生小肥鱼",
+                [
+                    SettingRow(
+                        "spawn_inherit_size",
+                        "生小肥鱼继承大小",
+                        "开启后生成的小肥鱼与主肥鱼大小一致；关闭后使用下方为小肥鱼单独选择的大小。",
+                        self.spawn_inherit_size_check,
+                    ),
+                    SettingRow("spawn_scale", "小肥鱼大小", "关闭“继承大小”时，新生成小肥鱼使用的桌面尺寸。", self.spawn_scale_combo, stacked=True),
+                    SettingRow(
+                        "spawn_inherit_dynamic_island",
+                        "生小肥鱼继承灵动岛",
+                        "默认关闭：新生成的小肥鱼不打开自己的灵动岛。开启后小肥鱼继承主肥鱼的灵动岛设置。",
+                        self.spawn_inherit_dynamic_island_check,
+                    ),
+                    SettingRow(
+                        "clear_spawned_pets", "一键退出子肥鱼", "关闭所有已生成的小肥鱼，并删除它们的配置、会话与待办数据。", self.clear_spawned_pets_btn
+                    ),
+                ],
+                behavior_content,
+            )
+        )
+        behavior_layout.addWidget(
+            SettingsSection(
+                "多开碰撞",
+                [
+                    SettingRow(
+                        "collision_enabled",
+                        "碰撞开关",
+                        "多开桌宠之间发生碰撞物理互动。开启鼠标穿透的桌宠仍会参与碰撞，锁定位置的桌宠作为固定障碍。",
+                        self.collision_enabled_check,
+                    ),
+                    SettingRow("collision_restitution", "弹性系数", "碰撞反弹的能量保留程度（0~1.00，默认 0.82）。", self.collision_restitution_spin),
+                    SettingRow("collision_friction", "摩擦系数", "擦边碰撞时的切向摩擦阻力（0~0.30，默认 0.08）。", self.collision_friction_spin),
+                    SettingRow("collision_mass_scale", "质量倍率", "桌宠的基础质量加权倍率（0.5~2.0，默认 1.0）。", self.collision_mass_scale_spin),
+                    SettingRow("collision_impulse_cap", "冲量上限", "单次碰撞能施加的最大冲量上限（1000~12000，默认 9000）。", self.collision_impulse_cap_spin),
+                    SettingRow("collision_sound_enabled", "碰撞音效", "碰撞时播放音效反馈。", self.collision_sound_check),
+                    SettingRow("collision_sound_volume", "碰撞音量", "调整碰撞音效播放音量。", self.collision_sound_volume_spin),
+                ],
+                behavior_content,
+            )
+        )
         self.collision_policy_note = QLabel("碰撞参数由当前协调者桌宠的设置决定")
         self.collision_policy_note.setObjectName("settingHint")
         self.collision_policy_note.setWordWrap(True)
@@ -479,29 +623,53 @@ class ModernSettingsDialog(QDialog):
             SettingRow("click_sound_volume", "音效音量", "调整点击音效播放音量。", self.click_sound_volume_spin),
             SettingRow("click_sound_preview", "试听音效", "测试当前选择的点击音效。", self.click_sound_preview_btn),
             SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容。", self.click_self_talk_check),
-            SettingRow("golden_spin_click", "点击触发黄金回旋",
-                       "开启后点击桌宠触发原地逆时针 360° 旋转；下方子开关可选择跳过点击动画直接回旋。",
-                       self.golden_spin_click_check),
-            SettingRow("golden_spin_direct", "点击回旋跳过动画",
-                       "开启后点击直接开始黄金回旋，不播放 Q 弹与点击素材；连续点击会累计旋转圈数并逐圈加速。",
-                       self.golden_spin_direct_check, stacked=True),
+            SettingRow(
+                "golden_spin_click",
+                "点击触发黄金回旋",
+                "开启后点击桌宠触发原地逆时针 360° 旋转；下方子开关可选择跳过点击动画直接回旋。",
+                self.golden_spin_click_check,
+            ),
+            SettingRow(
+                "golden_spin_direct",
+                "点击回旋跳过动画",
+                "开启后点击直接开始黄金回旋，不播放 Q 弹与点击素材；连续点击会累计旋转圈数并逐圈加速。",
+                self.golden_spin_direct_check,
+                stacked=True,
+            ),
         ]
         if self.click_balance_check is not None:
-            click_rows.insert(4, SettingRow(
-                "click_balance", "点击显示余额", "点击桌宠时查询并用气泡展示模型服务余额。",
-                self.click_balance_check,
-            ))
+            click_rows.insert(
+                4,
+                SettingRow(
+                    "click_balance",
+                    "点击显示余额",
+                    "点击桌宠时查询并用气泡展示模型服务余额。",
+                    self.click_balance_check,
+                ),
+            )
         behavior_layout.addWidget(SettingsSection("点击反馈", click_rows, behavior_content))
-        behavior_layout.addWidget(SettingsSection("自言自语", [
-            SettingRow("self_talk", "气泡自言自语", "让桌宠偶尔显示一条随机思考气泡。", self.self_talk_check),
-            SettingRow("self_talk_duration", "显示时间", "每条文字或图片气泡保持显示的时间。", self.self_talk_duration_spin),
-            SettingRow("self_talk_min", "最短间隔", "上一条气泡消失后，到下一条出现前的最短空闲时间。", self.min_spin),
-            SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
-            SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
-            SettingRow("self_talk_images", "图片目录", "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。", self.self_talk_image_dir_picker, stacked=True),
-            SettingRow("self_talk_image_scale", "配图大小", "气泡里配图的显示尺寸（100% 为默认）。", self.self_talk_image_scale_spin),
-            SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
-        ], behavior_content))
+        behavior_layout.addWidget(
+            SettingsSection(
+                "自言自语",
+                [
+                    SettingRow("self_talk", "气泡自言自语", "让桌宠偶尔显示一条随机思考气泡。", self.self_talk_check),
+                    SettingRow("self_talk_duration", "显示时间", "每条文字或图片气泡保持显示的时间。", self.self_talk_duration_spin),
+                    SettingRow("self_talk_min", "最短间隔", "上一条气泡消失后，到下一条出现前的最短空闲时间。", self.min_spin),
+                    SettingRow("self_talk_max", "最长间隔", "上一条气泡消失后，到下一条出现前的最长空闲时间。", self.max_spin),
+                    SettingRow("self_talk_texts", "候选内容", "每行一条；留空时恢复内置文本。", self.texts_edit, stacked=True),
+                    SettingRow(
+                        "self_talk_images",
+                        "图片目录",
+                        "从目录中的常见图片格式随机选择；默认使用内置彩蛋图片池，留空时只显示文本。",
+                        self.self_talk_image_dir_picker,
+                        stacked=True,
+                    ),
+                    SettingRow("self_talk_image_scale", "配图大小", "气泡里配图的显示尺寸（100% 为默认）。", self.self_talk_image_scale_spin),
+                    SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
+                ],
+                behavior_content,
+            )
+        )
         # Agent 联动：音效设置
         agent_sound_rows = [
             SettingRow("agent_sound_enabled", "Agent 音效联动", "当 Agent 开始工作、任务完成或发生错误时播放提示音。", self.agent_sound_check),
@@ -536,36 +704,70 @@ class ModernSettingsDialog(QDialog):
         # 认领后本卡片为空（不残留空标题小节）。与气泡文案行同一处理方式。
         behavior_layout.addWidget(SettingsCard(report_gate_rows, behavior_content))
         labels = DIALOGUE_LABELS
-        behavior_layout.addWidget(SettingsSection("表达风格", [
-            SettingRow("dialogue_mode", "表达风格", "控制桌宠自言自语、候选内容和主动气泡的说话方式；同时覆盖 Agent 状态、审批、提问、错误、模型访问失败等所有气泡。内置「默认模式」与「鲸鱼娘女仆模式」不可编辑；选择「自定义台词」后，可粘贴下方 JSON 一键导入全部弹窗文案。", self.dialogue_mode_select),
-            SettingRow("dialogue_scope", "专属文案对象(仅在自定义模式生效)", "下方逐事件编辑针对的对象：默认（全局文案）或某 Agent 的专属文案。留空的事件自动沿用全局（或默认模式）文案。", self.dialogue_scope_select, stacked=True),
-        ], behavior_content))
-        behavior_layout.addWidget(SettingsCard([
-            SettingRow(
-                "dialogue_template_actions", "弹窗文案模板（JSON）",
-                "一键复制当前全部弹窗内容模板到剪贴板；把复制的 JSON 粘贴回「导入模板」可一次覆盖所有「自定义台词」，也可以直接发给 AI 依角色卡改写。事件留空时自动沿用默认模式文案；模板占位符会自动读取上游事件字段。",
-                self.dialogue_template_actions,
-                stacked=True,
-            ),
-        ], behavior_content))
-        behavior_layout.addWidget(SettingsCard([
-            SettingRow(
-                f"dialogue_{key}",
-                labels.get(key, key),
-                "留空则使用基础模式台词。可用参数：" + (dialogue_params_hint(key) or "无"),
-                edit,
-                stacked=True,
+        behavior_layout.addWidget(
+            SettingsSection(
+                "表达风格",
+                [
+                    SettingRow(
+                        "dialogue_mode",
+                        "表达风格",
+                        "控制桌宠自言自语、候选内容和主动气泡的说话方式；同时覆盖 Agent 状态、审批、提问、错误、模型访问失败等所有气泡。内置「默认模式」与「鲸鱼娘女仆模式」不可编辑；选择「自定义台词」后，可粘贴下方 JSON 一键导入全部弹窗文案。",
+                        self.dialogue_mode_select,
+                    ),
+                    SettingRow(
+                        "dialogue_scope",
+                        "专属文案对象(仅在自定义模式生效)",
+                        "下方逐事件编辑针对的对象：默认（全局文案）或某 Agent 的专属文案。留空的事件自动沿用全局（或默认模式）文案。",
+                        self.dialogue_scope_select,
+                        stacked=True,
+                    ),
+                ],
+                behavior_content,
             )
-            for key, edit in self.dialogue_phrase_edits.items()
-        ], behavior_content))
-        behavior_layout.addWidget(SettingsSection("待办提醒", [
-            SettingRow("todo_reminder_enabled", "待办提醒",
-                       "到点通过气泡或桌面通知提醒；待办条目在右键菜单「待办提醒」面板中管理。",
-                       self.todo_reminder_check),
-            SettingRow("todo_reminder_lead_minutes", "提前提醒",
-                       "到点前提前提醒的分钟数（0~60，0 = 不提前，仅准点提醒一次）。",
-                       self.todo_reminder_lead_spin),
-        ], behavior_content))
+        )
+        behavior_layout.addWidget(
+            SettingsCard(
+                [
+                    SettingRow(
+                        "dialogue_template_actions",
+                        "弹窗文案模板（JSON）",
+                        "一键复制当前全部弹窗内容模板到剪贴板；把复制的 JSON 粘贴回「导入模板」可一次覆盖所有「自定义台词」，也可以直接发给 AI 依角色卡改写。事件留空时自动沿用默认模式文案；模板占位符会自动读取上游事件字段。",
+                        self.dialogue_template_actions,
+                        stacked=True,
+                    ),
+                ],
+                behavior_content,
+            )
+        )
+        behavior_layout.addWidget(
+            SettingsCard(
+                [
+                    SettingRow(
+                        f"dialogue_{key}",
+                        labels.get(key, key),
+                        "留空则使用基础模式台词。可用参数：" + (dialogue_params_hint(key) or "无"),
+                        edit,
+                        stacked=True,
+                    )
+                    for key, edit in self.dialogue_phrase_edits.items()
+                ],
+                behavior_content,
+            )
+        )
+        behavior_layout.addWidget(
+            SettingsSection(
+                "待办提醒",
+                [
+                    SettingRow(
+                        "todo_reminder_enabled", "待办提醒", "到点通过气泡或桌面通知提醒；待办条目在右键菜单「待办提醒」面板中管理。", self.todo_reminder_check
+                    ),
+                    SettingRow(
+                        "todo_reminder_lead_minutes", "提前提醒", "到点前提前提醒的分钟数（0~60，0 = 不提前，仅准点提醒一次）。", self.todo_reminder_lead_spin
+                    ),
+                ],
+                behavior_content,
+            )
+        )
         behavior_layout.addStretch(1)
         self._add_page("桌宠行为", "play", self._page_shell("桌宠行为", behavior_content))
 
@@ -573,43 +775,74 @@ class ModernSettingsDialog(QDialog):
         appearance_layout = QVBoxLayout(appearance_content)
         appearance_layout.setContentsMargins(0, 0, 0, 0)
         appearance_layout.setSpacing(16)
-        appearance_layout.addWidget(SettingsSection("桌宠显示", [
-            SettingRow("scale", "桌宠大小", "调整桌宠在桌面上的显示尺寸。", self.scale_combo),
-            SettingRow("pet_opacity", "不透明度", "调整桌宠窗口的整体透明度；100% 为完全不透明。", self.pet_opacity_spin),
-            SettingRow(
-                "self_talk_bubble_style", "气泡方案",
-                "选择气泡视觉与相对桌宠的位置；贴近屏幕边缘时自动换位。",
-                self.bubble_style_select,
-            ),
-        ], appearance_content))
-        appearance_layout.addWidget(SettingsSection("菜单外观", [
-            SettingRow("menu_theme", "颜色主题", "可跟随系统，或固定使用浅色/深色菜单。", self.menu_theme_select),
-            SettingRow("menu_density", "菜单密度", "调整新版右键菜单的菜单项高度和分组留白。", self.menu_density_select),
-            SettingRow("menu_radius", "圆角大小", "调整新版右键菜单和子菜单的外轮廓圆角。", self.menu_radius_select),
-            SettingRow("menu_font", "UI 字体", "设置新版菜单使用的界面字体。", self.menu_font_select),
-            SettingRow("menu_font_size", "UI 字号", "同步调整主菜单与多级菜单的字号。", self.menu_font_size_select),
-            SettingRow("menu_translucent", "半透明菜单", "使用接近 Modern 的半透明浮层表面。", self.menu_translucent_check),
-            SettingRow("menu_opacity", "表面不透明度", "调整菜单背景透出桌面内容的程度。", self.menu_opacity_spin),
-        ], appearance_content))
+        appearance_layout.addWidget(
+            SettingsSection(
+                "桌宠显示",
+                [
+                    SettingRow("scale", "桌宠大小", "调整桌宠在桌面上的显示尺寸。", self.scale_combo),
+                    SettingRow("pet_opacity", "不透明度", "调整桌宠窗口的整体透明度；100% 为完全不透明。", self.pet_opacity_spin),
+                    SettingRow(
+                        "self_talk_bubble_style",
+                        "气泡方案",
+                        "选择气泡视觉与相对桌宠的位置；贴近屏幕边缘时自动换位。",
+                        self.bubble_style_select,
+                    ),
+                ],
+                appearance_content,
+            )
+        )
+        appearance_layout.addWidget(
+            SettingsSection(
+                "菜单外观",
+                [
+                    SettingRow("menu_theme", "颜色主题", "可跟随系统，或固定使用浅色/深色菜单。", self.menu_theme_select),
+                    SettingRow("menu_density", "菜单密度", "调整新版右键菜单的菜单项高度和分组留白。", self.menu_density_select),
+                    SettingRow("menu_radius", "圆角大小", "调整新版右键菜单和子菜单的外轮廓圆角。", self.menu_radius_select),
+                    SettingRow("menu_font", "UI 字体", "设置新版菜单使用的界面字体。", self.menu_font_select),
+                    SettingRow("menu_font_size", "UI 字号", "同步调整主菜单与多级菜单的字号。", self.menu_font_size_select),
+                    SettingRow("menu_translucent", "半透明菜单", "使用接近 Modern 的半透明浮层表面。", self.menu_translucent_check),
+                    SettingRow("menu_opacity", "表面不透明度", "调整菜单背景透出桌面内容的程度。", self.menu_opacity_spin),
+                ],
+                appearance_content,
+            )
+        )
         if self.ai_page is not None:
             appearance_layout.addWidget(SettingsSection("AI 对话外观", self.ai_page.appearance_rows(), appearance_content))
-        appearance_layout.addWidget(SettingsSection("浅色主题", [
-            SettingRow("light_background", "背景色", "浅色菜单的浮层背景。", self.light_background_picker),
-            SettingRow("light_foreground", "文字色", "浅色菜单的主要文字与图标颜色。", self.light_foreground_picker),
-            SettingRow("light_hover", "悬停色", "鼠标悬停菜单项时的背景。", self.light_hover_picker),
-        ], appearance_content))
-        appearance_layout.addWidget(SettingsSection("深色主题", [
-            SettingRow("dark_background", "背景色", "深色菜单的浮层背景。", self.dark_background_picker),
-            SettingRow("dark_foreground", "文字色", "深色菜单的主要文字与图标颜色。", self.dark_foreground_picker),
-            SettingRow("dark_hover", "悬停色", "鼠标悬停菜单项时的背景。", self.dark_hover_picker),
-        ], appearance_content))
-        appearance_layout.addWidget(SettingsSection("彩蛋入口", [
-            SettingRow("egg_enabled", "显示彩蛋", "控制新版菜单首行彩蛋入口是否显示。", self.egg_enabled_check),
-            SettingRow("egg_title", "入口标题", "显示在圆形头像右侧的文字。", self.egg_title_edit),
-            SettingRow("egg_hint", "右侧提示", "显示在鼠标指针图标后的短提示。", self.egg_hint_edit),
-            SettingRow("egg_avatar", "头像图片", "使用绝对路径；支持常见图片格式。", self.egg_avatar_picker),
-            SettingRow("egg_image_dir", "弹窗图片目录", "使用绝对路径；每次点击会随机选择一张图片。", self.egg_image_dir_picker),
-        ], appearance_content))
+        appearance_layout.addWidget(
+            SettingsSection(
+                "浅色主题",
+                [
+                    SettingRow("light_background", "背景色", "浅色菜单的浮层背景。", self.light_background_picker),
+                    SettingRow("light_foreground", "文字色", "浅色菜单的主要文字与图标颜色。", self.light_foreground_picker),
+                    SettingRow("light_hover", "悬停色", "鼠标悬停菜单项时的背景。", self.light_hover_picker),
+                ],
+                appearance_content,
+            )
+        )
+        appearance_layout.addWidget(
+            SettingsSection(
+                "深色主题",
+                [
+                    SettingRow("dark_background", "背景色", "深色菜单的浮层背景。", self.dark_background_picker),
+                    SettingRow("dark_foreground", "文字色", "深色菜单的主要文字与图标颜色。", self.dark_foreground_picker),
+                    SettingRow("dark_hover", "悬停色", "鼠标悬停菜单项时的背景。", self.dark_hover_picker),
+                ],
+                appearance_content,
+            )
+        )
+        appearance_layout.addWidget(
+            SettingsSection(
+                "彩蛋入口",
+                [
+                    SettingRow("egg_enabled", "显示彩蛋", "控制新版菜单首行彩蛋入口是否显示。", self.egg_enabled_check),
+                    SettingRow("egg_title", "入口标题", "显示在圆形头像右侧的文字。", self.egg_title_edit),
+                    SettingRow("egg_hint", "右侧提示", "显示在鼠标指针图标后的短提示。", self.egg_hint_edit),
+                    SettingRow("egg_avatar", "头像图片", "使用绝对路径；支持常见图片格式。", self.egg_avatar_picker),
+                    SettingRow("egg_image_dir", "弹窗图片目录", "使用绝对路径；每次点击会随机选择一张图片。", self.egg_image_dir_picker),
+                ],
+                appearance_content,
+            )
+        )
         appearance_layout.addStretch(1)
         self._add_page("外观", "appearance", self._page_shell("外观", appearance_content))
 
@@ -620,9 +853,7 @@ class ModernSettingsDialog(QDialog):
         self.menu_template_select = ModernSelect(menu_content, width=156)
         self.menu_template_select.addItem("新版菜单", "modern")
         self.menu_template_select.addItem("旧版兼容菜单", "legacy")
-        self.menu_template_select.setCurrentData(
-            str(self.config.get("context_menu_template", "modern") or "modern")
-        )
+        self.menu_template_select.setCurrentData(str(self.config.get("context_menu_template", "modern") or "modern"))
         menu_available_actions = set(MENU_ACTIONS.ids)
         if sys.platform != "win32":
             menu_available_actions.discard("proactive_screen")
@@ -640,10 +871,16 @@ class ModernSettingsDialog(QDialog):
             available_actions=menu_available_actions,
             enabled_actions=menu_enabled_actions,
         )
-        menu_page_layout.addWidget(SettingsSection("内容与布局", [
-            SettingRow("menu_template", "菜单模式", "旧版仅用于迁移期兼容；内容编排只作用于新版菜单。", self.menu_template_select),
-            SettingRow("context_menu_layout", "菜单编排", "调整显示、顺序和层级；左侧编辑，右侧同步预览。", self.menu_layout_editor, stacked=True),
-        ], menu_content))
+        menu_page_layout.addWidget(
+            SettingsSection(
+                "内容与布局",
+                [
+                    SettingRow("menu_template", "菜单模式", "旧版仅用于迁移期兼容；内容编排只作用于新版菜单。", self.menu_template_select),
+                    SettingRow("context_menu_layout", "菜单编排", "调整显示、顺序和层级；左侧编辑，右侧同步预览。", self.menu_layout_editor, stacked=True),
+                ],
+                menu_content,
+            )
+        )
         menu_page_layout.addStretch(1)
         self._add_page("菜单", "application", self._page_shell("菜单", menu_content))
 
@@ -655,15 +892,21 @@ class ModernSettingsDialog(QDialog):
             self.config.get("quick_launch_apps", DEFAULT_QUICK_LAUNCH_APPS),
             launcher_content,
         )
-        launcher_layout.addWidget(SettingsSection("已配置应用", [
-            SettingRow(
-                "quick_launch_apps",
-                "应用快捷启动",
-                "这些应用将按图标和名称显示在新版右键菜单的“快捷启动”子菜单中。",
-                self.quick_launch_editor,
-                stacked=True,
-            ),
-        ], launcher_content))
+        launcher_layout.addWidget(
+            SettingsSection(
+                "已配置应用",
+                [
+                    SettingRow(
+                        "quick_launch_apps",
+                        "应用快捷启动",
+                        "这些应用将按图标和名称显示在新版右键菜单的“快捷启动”子菜单中。",
+                        self.quick_launch_editor,
+                        stacked=True,
+                    ),
+                ],
+                launcher_content,
+            )
+        )
         launcher_layout.addStretch(1)
         self._add_page("快捷启动", "application", self._page_shell("快捷启动", launcher_content))
 
@@ -677,8 +920,15 @@ class ModernSettingsDialog(QDialog):
 
         # Agent Exploration Loop Watchdog 独立设置页
         from .exploration_watchdog_settings import WatchdogSettingsPage
+
         agent_link_cfg = self.config.get("agent_link", {})
         self.watchdog_page = WatchdogSettingsPage(self.config, agent_link_cfg, self)
+
+        # 语音报时设置页（行在 _rebuild_domain_navigation 中并入 automation 域）
+        from .voice_chime_settings import VoiceChimeSettingsPage
+
+        self.voice_chime_page = VoiceChimeSettingsPage(self.config, self)
+        self.voice_chime_page.preview_requested.connect(self._on_voice_chime_preview)
         self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
@@ -839,6 +1089,7 @@ class ModernSettingsDialog(QDialog):
 
     def _on_pro_preset_changed(self, _index: int) -> None:
         from .proactive import PRESET_DEFAULTS
+
         vals = PRESET_DEFAULTS.get(self.pro_preset_select.currentData())
         if vals:
             self.pro_dwell_spin.setValue(vals["dwell_seconds"])
@@ -854,6 +1105,7 @@ class ModernSettingsDialog(QDialog):
         self.pro_add_btn.setEnabled(True)
         self.pro_add_btn.setText("从当前前台窗口添加…")
         from . import vision
+
         info = vision.foreground_window_info()
         if not info:
             QMessageBox.information(self, "添加前台窗口", "未能检测到有效的前台窗口，请将目标软件置顶后再试。")
@@ -863,9 +1115,7 @@ class ModernSettingsDialog(QDialog):
         box = QMessageBox(self)
         box.setWindowTitle("添加到白名单")
         box.setIcon(QMessageBox.Icon.Question)
-        box.setText(
-            f"检测到前台窗口：\n进程：{proc or '（未知）'}\n标题：{title or '（空）'}\n\n要按哪种方式关注它？"
-        )
+        box.setText(f"检测到前台窗口：\n进程：{proc or '（未知）'}\n标题：{title or '（空）'}\n\n要按哪种方式关注它？")
         btn_proc = box.addButton("按软件（推荐）", QMessageBox.ButtonRole.AcceptRole)
         btn_title = box.addButton("按标题关键词", QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Cancel)
@@ -883,6 +1133,7 @@ class ModernSettingsDialog(QDialog):
 
     def _on_pro_clear_memory(self) -> None:
         from .proactive import ProactiveMemory
+
         ProactiveMemory(self.config.dir / "proactive_screen_memory.json").clear()
         QMessageBox.information(self, "陪伴记忆", "已清空主动识屏的短期陪伴记忆。")
 
@@ -891,49 +1142,74 @@ class ModernSettingsDialog(QDialog):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(18)
-        layout.addWidget(SettingsSection("总开关与节奏", [
-            SettingRow("proactive_enabled", "开启主动识屏",
-                       "她会偶尔看一眼你在用的软件并说句话。截图只在内存处理、不落盘、不写入会话。",
-                       self.pro_enabled_check),
-            SettingRow("proactive_dry_run", "dry-run 验证模式",
-                       "开启后满足条件只写日志、不调用模型、不消耗额度。", self.pro_dryrun_check),
-            SettingRow("proactive_preset", "陪伴节奏预设",
-                       "平衡 45s/5min/15次；安静 90s/10min/8次；活跃 20s/3min/25次（停留/冷却/每日上限）。",
-                       self.pro_preset_select),
-        ], content))
-        layout.addWidget(SettingsSection("频率参数（自定义预设时生效）", [
-            SettingRow("proactive_dwell", "窗口停留门限（秒）", "同一前台窗口持续停留该时长才可能触发。",
-                       self.pro_dwell_spin),
-            SettingRow("proactive_cooldown", "关怀冷却间隔", "两次关怀的最短间隔，支持秒/分钟。",
-                       self._pro_cooldown_row()),
-            SettingRow("proactive_min_interval", "最小请求间隔（秒）", "免费模型的硬保护，不建议调太小。",
-                       self.pro_min_interval_spin),
-            SettingRow("proactive_daily_cap", "每日请求上限", "DeepSeek 视觉单次约 ¥0.003；上限 9999 约等于不限。",
-                       self.pro_cap_spin),
-        ], content))
-        layout.addWidget(SettingsSection("触发条件", [
-            SettingRow("proactive_require_idle", "仅当我闲置时触发", "勾选后，敲键盘/动鼠标时不打扰。",
-                       self.pro_idle_check),
-            SettingRow("proactive_idle_seconds", "闲置判定秒数", "勾选上方后，闲置该秒数才触发。",
-                       self.pro_idle_spin),
-            SettingRow("proactive_through", "鼠标穿透时仍识屏", "桌宠处于鼠标穿透状态时是否继续工作。",
-                       self.pro_through_check),
-            SettingRow("proactive_pre_cue", "触发前先兆提示", "触发前先冒一句「让我看看……」。",
-                       self.pro_precue_check),
-            SettingRow("proactive_free", "识屏优先用独立视觉配置", "开：服务商配了独立视觉端点（如免费的智谱 GLM-4.6V-Flash）时识屏走它；关：始终跟随聊天模型。",
-                       self.pro_free_check),
-        ], content))
-        layout.addWidget(SettingsSection("白名单", [
-            SettingRow("proactive_whitelist",
-                       "白名单（每行一条）",
-                       "进程名（如 msedge.exe）= 关注这个软件；title:关键词 = 只关注标题含该词的窗口。留空 = 不识屏。",
-                       self.pro_whitelist_edit, stacked=True),
-            SettingRow("proactive_whitelist_add", "快捷添加",
-                       "点击后 3 秒内切换到目标窗口，自动采样进程名/标题。", self.pro_add_btn),
-            SettingRow("proactive_memory_clear", "陪伴记忆",
-                       "只存进程名和活动分类（不落标题、不存截图），可随时清空。",
-                       self.pro_clear_mem_btn),
-        ], content))
+        layout.addWidget(
+            SettingsSection(
+                "总开关与节奏",
+                [
+                    SettingRow(
+                        "proactive_enabled",
+                        "开启主动识屏",
+                        "她会偶尔看一眼你在用的软件并说句话。截图只在内存处理、不落盘、不写入会话。",
+                        self.pro_enabled_check,
+                    ),
+                    SettingRow("proactive_dry_run", "dry-run 验证模式", "开启后满足条件只写日志、不调用模型、不消耗额度。", self.pro_dryrun_check),
+                    SettingRow(
+                        "proactive_preset",
+                        "陪伴节奏预设",
+                        "平衡 45s/5min/15次；安静 90s/10min/8次；活跃 20s/3min/25次（停留/冷却/每日上限）。",
+                        self.pro_preset_select,
+                    ),
+                ],
+                content,
+            )
+        )
+        layout.addWidget(
+            SettingsSection(
+                "频率参数（自定义预设时生效）",
+                [
+                    SettingRow("proactive_dwell", "窗口停留门限（秒）", "同一前台窗口持续停留该时长才可能触发。", self.pro_dwell_spin),
+                    SettingRow("proactive_cooldown", "关怀冷却间隔", "两次关怀的最短间隔，支持秒/分钟。", self._pro_cooldown_row()),
+                    SettingRow("proactive_min_interval", "最小请求间隔（秒）", "免费模型的硬保护，不建议调太小。", self.pro_min_interval_spin),
+                    SettingRow("proactive_daily_cap", "每日请求上限", "DeepSeek 视觉单次约 ¥0.003；上限 9999 约等于不限。", self.pro_cap_spin),
+                ],
+                content,
+            )
+        )
+        layout.addWidget(
+            SettingsSection(
+                "触发条件",
+                [
+                    SettingRow("proactive_require_idle", "仅当我闲置时触发", "勾选后，敲键盘/动鼠标时不打扰。", self.pro_idle_check),
+                    SettingRow("proactive_idle_seconds", "闲置判定秒数", "勾选上方后，闲置该秒数才触发。", self.pro_idle_spin),
+                    SettingRow("proactive_through", "鼠标穿透时仍识屏", "桌宠处于鼠标穿透状态时是否继续工作。", self.pro_through_check),
+                    SettingRow("proactive_pre_cue", "触发前先兆提示", "触发前先冒一句「让我看看……」。", self.pro_precue_check),
+                    SettingRow(
+                        "proactive_free",
+                        "识屏优先用独立视觉配置",
+                        "开：服务商配了独立视觉端点（如免费的智谱 GLM-4.6V-Flash）时识屏走它；关：始终跟随聊天模型。",
+                        self.pro_free_check,
+                    ),
+                ],
+                content,
+            )
+        )
+        layout.addWidget(
+            SettingsSection(
+                "白名单",
+                [
+                    SettingRow(
+                        "proactive_whitelist",
+                        "白名单（每行一条）",
+                        "进程名（如 msedge.exe）= 关注这个软件；title:关键词 = 只关注标题含该词的窗口。留空 = 不识屏。",
+                        self.pro_whitelist_edit,
+                        stacked=True,
+                    ),
+                    SettingRow("proactive_whitelist_add", "快捷添加", "点击后 3 秒内切换到目标窗口，自动采样进程名/标题。", self.pro_add_btn),
+                    SettingRow("proactive_memory_clear", "陪伴记忆", "只存进程名和活动分类（不落标题、不存截图），可随时清空。", self.pro_clear_mem_btn),
+                ],
+                content,
+            )
+        )
         layout.addStretch(1)
         return content
 
@@ -948,8 +1224,13 @@ class ModernSettingsDialog(QDialog):
 
     def _update_self_talk_controls(self, enabled: bool) -> None:
         keys = (
-            "self_talk_duration", "self_talk_min", "self_talk_max",
-            "self_talk_texts", "self_talk_images", "self_talk_image_scale", "click_self_talk",
+            "self_talk_duration",
+            "self_talk_min",
+            "self_talk_max",
+            "self_talk_texts",
+            "self_talk_images",
+            "self_talk_image_scale",
+            "click_self_talk",
             "click_talk_bindings",
         )
         self._set_setting_rows_visible(keys, enabled)
@@ -974,10 +1255,18 @@ class ModernSettingsDialog(QDialog):
         )
 
     def _update_collision_controls(self, enabled: bool) -> None:
-        self._set_setting_rows_visible((
-            "collision_sound_enabled", "collision_restitution", "collision_friction",
-            "collision_mass_scale", "collision_impulse_cap", "collision_sound_volume",
-        ), enabled, dependency="collision_enabled")
+        self._set_setting_rows_visible(
+            (
+                "collision_sound_enabled",
+                "collision_restitution",
+                "collision_friction",
+                "collision_mass_scale",
+                "collision_impulse_cap",
+                "collision_sound_volume",
+            ),
+            enabled,
+            dependency="collision_enabled",
+        )
         self._update_collision_sound_controls(self.collision_sound_check.isChecked())
 
     def _update_collision_sound_controls(self, enabled: bool) -> None:
@@ -988,13 +1277,26 @@ class ModernSettingsDialog(QDialog):
         )
 
     def _update_proactive_controls(self, enabled: bool) -> None:
-        self._set_setting_rows_visible((
-            "proactive_dry_run", "proactive_preset", "proactive_dwell",
-            "proactive_cooldown", "proactive_min_interval", "proactive_daily_cap",
-            "proactive_require_idle", "proactive_idle_seconds", "proactive_through",
-            "proactive_pre_cue", "proactive_free", "proactive_whitelist",
-            "proactive_whitelist_add", "proactive_memory_clear",
-        ), enabled, dependency="proactive_enabled")
+        self._set_setting_rows_visible(
+            (
+                "proactive_dry_run",
+                "proactive_preset",
+                "proactive_dwell",
+                "proactive_cooldown",
+                "proactive_min_interval",
+                "proactive_daily_cap",
+                "proactive_require_idle",
+                "proactive_idle_seconds",
+                "proactive_through",
+                "proactive_pre_cue",
+                "proactive_free",
+                "proactive_whitelist",
+                "proactive_whitelist_add",
+                "proactive_memory_clear",
+            ),
+            enabled,
+            dependency="proactive_enabled",
+        )
         self._update_proactive_idle_controls(self.pro_idle_check.isChecked())
 
     def _update_proactive_idle_controls(self, enabled: bool) -> None:
@@ -1193,10 +1495,9 @@ class ModernSettingsDialog(QDialog):
             # 否则子鱼进程会把主鱼当子鱼杀掉）。
             return
         from .child_pet_cleanup import clear_spawned_pets
+
         result = clear_spawned_pets(self.config.dir)
-        logging.info(
-            "退出子肥鱼：已退出 %d 只，未能退出 %d 只",
-            len(result.get("killed_pids", [])), len(result.get("failed_pids", [])))
+        logging.info("退出子肥鱼：已退出 %d 只，未能退出 %d 只", len(result.get("killed_pids", [])), len(result.get("failed_pids", [])))
 
     def _apply_agent_sound_enabled_now(self, checked: bool) -> None:
         """音效总开关即时生效，不等对话框关闭（合并写回，不动其他 agent_link 键）。"""
@@ -1289,10 +1590,7 @@ class ModernSettingsDialog(QDialog):
 
     def _rebuild_domain_navigation(self) -> None:
         """Move existing rows into stable capability domains without cloning state."""
-        old_pages = {
-            self.sidebar.item(index).text(): self.pages.widget(index)
-            for index in range(self.pages.count())
-        }
+        old_pages = {self.sidebar.item(index).text(): self.pages.widget(index) for index in range(self.pages.count())}
         all_rows = list(self.findChildren(SettingRow))
         claimed: set[SettingRow] = set()
 
@@ -1319,20 +1617,24 @@ class ModernSettingsDialog(QDialog):
                 title, rows, *options = section
                 rows = [row for row in rows if row is not None]
                 if rows:
-                    layout.addWidget(SettingsSection(
-                        title,
-                        rows,
-                        content,
-                        advanced=bool(options and options[0]),
-                    ))
+                    layout.addWidget(
+                        SettingsSection(
+                            title,
+                            rows,
+                            content,
+                            advanced=bool(options and options[0]),
+                        )
+                    )
             layout.addStretch(1)
             return content
 
-        general = page_content([
-            ("应用启动", claim("autostart", "harness_autostart")),
-            ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
-            ("多开", claim("single_process_spawn")),
-        ])
+        general = page_content(
+            [
+                ("应用启动", claim("autostart", "harness_autostart")),
+                ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
+                ("多开", claim("single_process_spawn")),
+            ]
+        )
         collision_primary = claim("collision_enabled", "collision_sound_enabled")
         collision_advanced = claim(
             "collision_restitution",
@@ -1341,36 +1643,78 @@ class ModernSettingsDialog(QDialog):
             "collision_impulse_cap",
             "collision_sound_volume",
         )
-        pet = page_content([
-            ("显示", claim("scale", "pet_opacity")),
-            ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "no_move", "music_sing")),
-            ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
-            ("边缘探头", claim("edge_probe")),
-            ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island", "clear_spawned_pets")),
-            ("多开碰撞", collision_primary),
-            ("碰撞参数（高级）", collision_advanced, True),
-        ])
-        interaction = page_content([
-            ("输入", claim("mouse_through")),
-            ("点击反馈", claim_prefix("click_") + claim("golden_spin_click", "golden_spin_direct")),
-            ("自言自语", claim("self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min", "self_talk_max", "self_talk_texts", "self_talk_images", "self_talk_image_scale")),
-        ])
+        pet = page_content(
+            [
+                ("显示", claim("scale", "pet_opacity")),
+                ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "no_move", "music_sing")),
+                ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
+                ("边缘探头", claim("edge_probe")),
+                ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island", "clear_spawned_pets")),
+                ("多开碰撞", collision_primary),
+                ("碰撞参数（高级）", collision_advanced, True),
+            ]
+        )
+        interaction = page_content(
+            [
+                ("输入", claim("mouse_through")),
+                ("点击反馈", claim_prefix("click_") + claim("golden_spin_click", "golden_spin_direct")),
+                (
+                    "自言自语",
+                    claim(
+                        "self_talk_bubble_style",
+                        "self_talk",
+                        "self_talk_duration",
+                        "self_talk_min",
+                        "self_talk_max",
+                        "self_talk_texts",
+                        "self_talk_images",
+                        "self_talk_image_scale",
+                    ),
+                ),
+            ]
+        )
         # click_talk_bindings shares the click_ prefix and remains in interaction.
         menu = SettingsTabContainer(self)
-        menu.addTab("layout", "菜单编排", page_content([
-            ("内容与布局", claim("menu_template", "context_menu_layout")),
-        ]))
-        menu.addTab("launcher", "快捷启动", page_content([
-            ("已配置应用", claim("quick_launch_apps")),
-        ]))
-        menu.addTab("appearance", "外观", page_content([
-            ("菜单外观", claim("menu_theme", "menu_density", "menu_radius", "menu_font", "menu_font_size", "menu_translucent", "menu_opacity")),
-            ("高级配色", claim(
-                "light_background", "light_foreground", "light_hover",
-                "dark_background", "dark_foreground", "dark_hover",
-            ), True),
-            ("彩蛋入口", claim_prefix("egg_")),
-        ]))
+        menu.addTab(
+            "layout",
+            "菜单编排",
+            page_content(
+                [
+                    ("内容与布局", claim("menu_template", "context_menu_layout")),
+                ]
+            ),
+        )
+        menu.addTab(
+            "launcher",
+            "快捷启动",
+            page_content(
+                [
+                    ("已配置应用", claim("quick_launch_apps")),
+                ]
+            ),
+        )
+        menu.addTab(
+            "appearance",
+            "外观",
+            page_content(
+                [
+                    ("菜单外观", claim("menu_theme", "menu_density", "menu_radius", "menu_font", "menu_font_size", "menu_translucent", "menu_opacity")),
+                    (
+                        "高级配色",
+                        claim(
+                            "light_background",
+                            "light_foreground",
+                            "light_hover",
+                            "dark_background",
+                            "dark_foreground",
+                            "dark_hover",
+                        ),
+                        True,
+                    ),
+                    ("彩蛋入口", claim_prefix("egg_")),
+                ]
+            ),
+        )
         menu.setProperty("contentMaxWidth", 1240)
         island_rows = list(old_pages.get("灵动岛", QWidget()).findChildren(SettingRow))
         claimed.update(island_rows)
@@ -1379,23 +1723,47 @@ class ModernSettingsDialog(QDialog):
         ai_sections = None
         if self.ai_page is not None:
             balance_rows = claim_prefix("balance_")
-            appearance_rows = claim("chat_ui_style", "chat_background", "chat_background_file", "chat_background_opacity", "chat_background_fill", "modern_chat_card_opacity")
-            ai_sections = page_content([
-                ("API 列表", claim("provider_list")),
-                ("模型与连接", claim(
-                    "provider_name", "api_url", "model", "api_key",
-                    "system_prompt", "connection_test",
-                )),
-                ("系统通知", claim("system_notifications_enabled")),
-                ("视觉能力", claim(
-                    "vision_same", "vision_model", "vision_url", "vision_key",
-                )),
-                ("生成参数（高级）", claim(
-                    "timeout", "temperature", "max_tokens", "skip_ssl",
-                ), True),
-                ("对话窗口", appearance_rows),
-                ("余额与服务状态", balance_rows),
-            ])
+            appearance_rows = claim(
+                "chat_ui_style", "chat_background", "chat_background_file", "chat_background_opacity", "chat_background_fill", "modern_chat_card_opacity"
+            )
+            ai_sections = page_content(
+                [
+                    ("API 列表", claim("provider_list")),
+                    (
+                        "模型与连接",
+                        claim(
+                            "provider_name",
+                            "api_url",
+                            "model",
+                            "api_key",
+                            "system_prompt",
+                            "connection_test",
+                        ),
+                    ),
+                    ("系统通知", claim("system_notifications_enabled")),
+                    (
+                        "视觉能力",
+                        claim(
+                            "vision_same",
+                            "vision_model",
+                            "vision_url",
+                            "vision_key",
+                        ),
+                    ),
+                    (
+                        "生成参数（高级）",
+                        claim(
+                            "timeout",
+                            "temperature",
+                            "max_tokens",
+                            "skip_ssl",
+                        ),
+                        True,
+                    ),
+                    ("对话窗口", appearance_rows),
+                    ("余额与服务状态", balance_rows),
+                ]
+            )
             ai_sections.setObjectName("settingsDomain_ai")
             # Keep the control owner alive for save/dependency behavior, but
             # visible rows now belong directly to the shared domain layout.
@@ -1406,43 +1774,51 @@ class ModernSettingsDialog(QDialog):
         claimed.update(proactive_rows)
         watchdog_rows = list(self.watchdog_page.findChildren(SettingRow))
         claimed.update(watchdog_rows)
+        voice_chime_rows = list(self.voice_chime_page.findChildren(SettingRow))
+        claimed.update(voice_chime_rows)
         # WatchdogSettingsPage 现同时承载「循环检测」（watchdog/long_think）、
         # 「卡住检测」（stuck_*）与「行为重复检测」（pattern_*）三组行，
         # 按 objectName 前缀分组显示。
         stuck_rows = [r for r in watchdog_rows if r.objectName().startswith("settingRow_stuck_")]
         pattern_rows = [r for r in watchdog_rows if r.objectName().startswith("settingRow_pattern_")]
-        loop_rows = [r for r in watchdog_rows
-                     if not r.objectName().startswith(("settingRow_stuck_", "settingRow_pattern_"))]
+        loop_rows = [r for r in watchdog_rows if not r.objectName().startswith(("settingRow_stuck_", "settingRow_pattern_"))]
         dialogue_rows = claim_prefix("dialogue_")
         gate_rows = claim_prefix("report_gate_")
-        automation = page_content([
-            ("Agent 提示音", claim_prefix("agent_sound_")),
-            ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
-            ("主动感知", proactive_rows),
-            ("循环检测", loop_rows),
-            ("卡住检测", stuck_rows),
-            ("行为重复检测", pattern_rows),
-        ])
-        # 「事件气泡触发概率」＝一个可折叠框：按**事件聚合类别**分组，每组是
-        # 「该类触发概率滑块 + 该类气泡文案行」，让设置位置与真正控制的位置绑定。
+        automation = page_content(
+            [
+                ("Agent 提示音", claim_prefix("agent_sound_")),
+                ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
+                ("语音报时", voice_chime_rows),
+                ("主动感知", proactive_rows),
+                ("循环检测", loop_rows),
+                ("卡住检测", stuck_rows),
+                ("行为重复检测", pattern_rows),
+            ]
+        )
+        # 「事件气泡触发概率」＝一个可折叠框：按**事件聚合类别**分组，每组只放
+        # 该类触发概率滑块（紧凑、常用，默认展开）。
+        # 逐事件自定义文案行单独收进第二个折叠框并**默认折叠**（不用自定义台词的用户
+        # 不该翻过整页文案框；搜索命中时两个框都会自动展开，见 _search_settings）。
         gates_box = CollapsibleGroup("事件气泡触发概率", automation)
+        phrases_box = CollapsibleGroup("自定义台词（逐事件文案）", automation)
         gate_row_by_id = {row.objectName(): row for row in gate_rows}
         phrase_rows_by_gate: dict[str, list] = {}
         for row in dialogue_rows:
-            event_key = row.objectName()[len("settingRow_dialogue_"):]
+            event_key = row.objectName()[len("settingRow_dialogue_") :]
             phrase_rows_by_gate.setdefault(gate_for_event(event_key) or "", []).append(row)
         for gate in REPORT_GATE_KEYS:
-            rows = []
             gate_row = gate_row_by_id.get(f"settingRow_report_gate_{gate}")
             if gate_row is not None:
-                rows.append(gate_row)
-            rows.extend(phrase_rows_by_gate.get(gate, []))
-            if rows:
-                gates_box.add_group(REPORT_GATE_LABELS[gate], rows)
+                gates_box.add_group(REPORT_GATE_LABELS[gate], [gate_row])
+            phrase_rows = phrase_rows_by_gate.get(gate, [])
+            if phrase_rows:
+                phrases_box.add_group(REPORT_GATE_LABELS[gate], phrase_rows)
         # 默认展开：这些文案行改造前就在该页可见，折叠框只提供"可以收起来"，
         # 不把原有入口藏起来；搜索命中时也会自动展开（见 _search_settings）。
         gates_box.set_expanded(True)
+        phrases_box.set_expanded(False)
         self.report_gates_box = gates_box
+        self.dialogue_phrases_box = phrases_box
         automation_layout = automation.layout()
         # dialogue_* 里有一类行**不属于任何事件门**（表达风格、专属文案对象、弹窗文案
         # 模板 JSON）：它们不是某个事件的气泡文案，而是文案风格的全局控件，因此
@@ -1461,13 +1837,11 @@ class ModernSettingsDialog(QDialog):
             )
             insert_at += 1
         automation_layout.insertWidget(insert_at, gates_box)
+        insert_at += 1
+        automation_layout.insertWidget(insert_at, phrases_box)
 
         # Preserve any newly added row until it receives an explicit domain decision.
-        leftovers = [
-            row for row in all_rows
-            if row not in claimed
-            and (self.ai_page is None or not self.ai_page.isAncestorOf(row))
-        ]
+        leftovers = [row for row in all_rows if row not in claimed and (self.ai_page is None or not self.ai_page.isAncestorOf(row))]
         if leftovers:
             layout = automation.layout()
             layout.insertWidget(max(0, layout.count() - 1), SettingsSection("待分类（开发期）", leftovers, automation))
@@ -1507,10 +1881,7 @@ class ModernSettingsDialog(QDialog):
             self._search_index = -1
             self.search_status.hide()
             return
-        matches = [
-            row for row in self._search_rows
-            if query in f"{row.label.text()} {row.hint_label.text()} {row.objectName()}".lower()
-        ]
+        matches = [row for row in self._search_rows if query in f"{row.label.text()} {row.hint_label.text()} {row.objectName()}".lower()]
         if not matches:
             self._search_matches = []
             self._search_index = -1
@@ -1545,17 +1916,11 @@ class ModernSettingsDialog(QDialog):
         scroll = page.findChild(QScrollArea, "settingsScroll")
         if scroll is not None:
             scroll.ensureWidgetVisible(row, 0, 24)
-        self.search_status.setText(
-            f"{self._search_index + 1}/{len(matches)} · {row.label.text()}"
-        )
+        self.search_status.setText(f"{self._search_index + 1}/{len(matches)} · {row.label.text()}")
         self.search_status.show()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if (
-            watched is self.search_edit
-            and event.type() == QEvent.Type.KeyPress
-            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-        ):
+        if watched is self.search_edit and event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._search_settings(self.search_edit.text(), advance=True)
             return True
         return super().eventFilter(watched, event)
@@ -1579,7 +1944,6 @@ class ModernSettingsDialog(QDialog):
         theme = self.menu_theme_select.currentData() if hasattr(self, "menu_theme_select") else "system"
         return _settings_stylesheet(str(theme or "system"))
 
-
     def _apply_autostart(self) -> None:
         """应用「开机自启」开关：仅在实际改动时写入系统登录项。
 
@@ -1592,8 +1956,7 @@ class ModernSettingsDialog(QDialog):
                 QMessageBox.warning(
                     self,
                     "开机自启设置失败",
-                    "写入开机自启失败：可能被安全软件拦截。\n"
-                    "可稍后在托盘菜单重试，或检查安全软件/系统优化工具的拦截记录。",
+                    "写入开机自启失败：可能被安全软件拦截。\n可稍后在托盘菜单重试，或检查安全软件/系统优化工具的拦截记录。",
                 )
 
     def _save(self) -> None:
@@ -1654,21 +2017,15 @@ class ModernSettingsDialog(QDialog):
         click_sound_enabled = self.click_sound_check.isChecked()
         click_sound_pack = self.click_sound_picker.value()
         click_sound_volume = float(self.click_sound_volume_spin.value()) / 100.0
-        click_sound_pack_changed = (
-            self.config.get("click_sound_pack") != click_sound_pack
-        )
-        click_sound_enabled_changed = (
-            self.config.get("click_sound_enabled") != click_sound_enabled
-        )
+        click_sound_pack_changed = self.config.get("click_sound_pack") != click_sound_pack
+        click_sound_enabled_changed = self.config.get("click_sound_enabled") != click_sound_enabled
         self.config.set("click_sound_enabled", click_sound_enabled)
         self.config.set("click_sound_pack", click_sound_pack)
         self.config.set("click_sound_volume", click_sound_volume)
         # 只在真正需要时预热：点击音效处于启用状态，且本次写回改变了启用开关或音效包。
         # 音量变化/未改动不需要重建 QSoundEffect；开关从关到开已由勾选回调即时预热，
         # 因此普通“打开设置再关闭”不应在每次落盘都创建 QtMultimedia 音频对象。
-        if click_sound_enabled and (
-            click_sound_enabled_changed or click_sound_pack_changed
-        ):
+        if click_sound_enabled and (click_sound_enabled_changed or click_sound_pack_changed):
             warm_click_sound_effects(
                 click_sound_pack,
                 data_dir=self.config.dir,
@@ -1676,27 +2033,30 @@ class ModernSettingsDialog(QDialog):
         existing_island = self.config.get("dynamic_island", {})
         if not isinstance(existing_island, dict):
             existing_island = {}
-        self.config.set("dynamic_island", {
-            "enabled": self.island_enabled_check.isChecked(),
-            "show_icon": self.island_icon_check.isChecked(),
-            "show_name": self.island_name_check.isChecked(),
-            "show_info": self.island_info_check.isChecked(),
-            "info_mode": str(self.island_info_mode_select.currentData() or "time"),
-            "custom_text": self.island_custom_text_edit.text().strip(),
-            "show_status": self.island_status_check.isChecked(),
-            "style": str(self.island_style_select.currentData() or "dark"),
-            "opacity": float(self.island_opacity_spin.value()),
-            "accent": str(self.island_accent_select.currentData() or "blue"),
-            "icon": str(self.island_icon_select.currentData() or "🐳"),
-            "click_action": str(self.island_click_action_select.currentData() or "expand"),
-            "event_effects": self.island_event_effects_check.isChecked(),
-            "edge_dock": self.island_edge_dock_check.isChecked(),
-            "collision_enabled": self.island_collision_check.isChecked(),
-            # 拖拽落点写入的停靠边与位置：设置页不回写，原样保留。
-            "dock_edge": existing_island.get("dock_edge", "none"),
-            "x": existing_island.get("x"),
-            "y": existing_island.get("y"),
-        })
+        self.config.set(
+            "dynamic_island",
+            {
+                "enabled": self.island_enabled_check.isChecked(),
+                "show_icon": self.island_icon_check.isChecked(),
+                "show_name": self.island_name_check.isChecked(),
+                "show_info": self.island_info_check.isChecked(),
+                "info_mode": str(self.island_info_mode_select.currentData() or "time"),
+                "custom_text": self.island_custom_text_edit.text().strip(),
+                "show_status": self.island_status_check.isChecked(),
+                "style": str(self.island_style_select.currentData() or "dark"),
+                "opacity": float(self.island_opacity_spin.value()),
+                "accent": str(self.island_accent_select.currentData() or "blue"),
+                "icon": str(self.island_icon_select.currentData() or "🐳"),
+                "click_action": str(self.island_click_action_select.currentData() or "expand"),
+                "event_effects": self.island_event_effects_check.isChecked(),
+                "edge_dock": self.island_edge_dock_check.isChecked(),
+                "collision_enabled": self.island_collision_check.isChecked(),
+                # 拖拽落点写入的停靠边与位置：设置页不回写，原样保留。
+                "dock_edge": existing_island.get("dock_edge", "none"),
+                "x": existing_island.get("x"),
+                "y": existing_island.get("y"),
+            },
+        )
         if self.click_balance_check is not None:
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
@@ -1745,9 +2105,7 @@ class ModernSettingsDialog(QDialog):
                 agents_delta[str(scope)] = values
         # 兼容旧扁平存储：双层仅当存在 agents delta 或原配置已是双层时启用
         current_phrases = self.config.get("dialogue_phrases", {})
-        was_preset = isinstance(current_phrases, dict) and (
-            "global" in current_phrases or "agents" in current_phrases
-        )
+        was_preset = isinstance(current_phrases, dict) and ("global" in current_phrases or "agents" in current_phrases)
         if agents_delta or was_preset:
             self.config.set("dialogue_phrases", {"global": new_global, "agents": agents_delta})
         else:
@@ -1778,64 +2136,78 @@ class ModernSettingsDialog(QDialog):
         self.config.set("agent_link", agent_cfg)
         self.config.set("todo_reminder_enabled", self.todo_reminder_check.isChecked())
         self.config.set("todo_reminder_lead_minutes", int(self.todo_reminder_lead_spin.value()))
-        self.config.set("context_menu_appearance", {
-            "theme": self.menu_theme_select.currentData(),
-            "density": self.menu_density_select.currentData(),
-            "corner_radius": self.menu_radius_select.currentData(),
-            "ui_font": self.menu_font_select.currentData(),
-            "ui_font_size": self.menu_font_size_select.currentData(),
-            "translucent": self.menu_translucent_check.isChecked(),
-            "opacity": self.menu_opacity_spin.value(),
-            "light_background": self.light_background_picker.text(),
-            "light_foreground": self.light_foreground_picker.text(),
-            "light_hover": self.light_hover_picker.text(),
-            "dark_background": self.dark_background_picker.text(),
-            "dark_foreground": self.dark_foreground_picker.text(),
-            "dark_hover": self.dark_hover_picker.text(),
-        })
+        # 语音报时设置页写回（仅写 voice_chime_* 11 键）
+        if self.voice_chime_page is not None:
+            self.voice_chime_page.apply_to_config()
+        self.config.set(
+            "context_menu_appearance",
+            {
+                "theme": self.menu_theme_select.currentData(),
+                "density": self.menu_density_select.currentData(),
+                "corner_radius": self.menu_radius_select.currentData(),
+                "ui_font": self.menu_font_select.currentData(),
+                "ui_font_size": self.menu_font_size_select.currentData(),
+                "translucent": self.menu_translucent_check.isChecked(),
+                "opacity": self.menu_opacity_spin.value(),
+                "light_background": self.light_background_picker.text(),
+                "light_foreground": self.light_foreground_picker.text(),
+                "light_hover": self.light_hover_picker.text(),
+                "dark_background": self.dark_background_picker.text(),
+                "dark_foreground": self.dark_foreground_picker.text(),
+                "dark_hover": self.dark_hover_picker.text(),
+            },
+        )
         self.config.set("context_menu_template", self.menu_template_select.currentData())
         default_menu_nodes = load_default_menu_layout().get("nodes", [])
         self.config.set(
             "context_menu_layout",
             None if menu_layout_value.get("nodes") == default_menu_nodes else menu_layout_value,
         )
-        self.config.set("menu_easter_egg", {
-            "enabled": self.egg_enabled_check.isChecked(),
-            "title": self.egg_title_edit.text(),
-            "hint": self.egg_hint_edit.text(),
-            # 内置 assets 内的路径归一化回相对值，保持 portable（目录移动/自更新后仍可用）
-            "avatar": store_fun_asset(self.egg_avatar_picker.text(), oijingjing_image_path()),
-            "image_dir": store_fun_asset(self.egg_image_dir_picker.text(), oijingjing_image_path().parent),
-        })
+        self.config.set(
+            "menu_easter_egg",
+            {
+                "enabled": self.egg_enabled_check.isChecked(),
+                "title": self.egg_title_edit.text(),
+                "hint": self.egg_hint_edit.text(),
+                # 内置 assets 内的路径归一化回相对值，保持 portable（目录移动/自更新后仍可用）
+                "avatar": store_fun_asset(self.egg_avatar_picker.text(), oijingjing_image_path()),
+                "image_dir": store_fun_asset(self.egg_image_dir_picker.text(), oijingjing_image_path().parent),
+            },
+        )
         self.config.set("quick_launch_apps", self.quick_launch_editor.apps())
         if self.ai_page is not None:
             self.ai_page.save()
         if sys.platform == "win32" and self.include_ai and hasattr(self, "pro_enabled_check"):
             from .proactive import PRESET_DEFAULTS
+
             pro_data = dict(self.config.get("proactive_screen", {}) or {})
             preset = self.pro_preset_select.currentData()
             # 非 custom 预设下改了数值 → 自动落为 custom，否则运行时会被预设覆盖（gemini 审查发现）
             if preset in PRESET_DEFAULTS:
                 pv = PRESET_DEFAULTS[preset]
-                if (self.pro_dwell_spin.value() != pv["dwell_seconds"]
-                        or abs(self._pro_cooldown_minutes() - pv["cooldown_minutes"]) > 1e-6
-                        or self.pro_cap_spin.value() != pv["daily_cap"]):
+                if (
+                    self.pro_dwell_spin.value() != pv["dwell_seconds"]
+                    or abs(self._pro_cooldown_minutes() - pv["cooldown_minutes"]) > 1e-6
+                    or self.pro_cap_spin.value() != pv["daily_cap"]
+                ):
                     preset = "custom"
-            pro_data.update({
-                "enabled": self.pro_enabled_check.isChecked(),
-                "dry_run": self.pro_dryrun_check.isChecked(),
-                "preset": preset,
-                "dwell_seconds": self.pro_dwell_spin.value(),
-                "cooldown_minutes": self._pro_cooldown_minutes(),
-                "min_request_interval_seconds": self.pro_min_interval_spin.value(),
-                "daily_cap": self.pro_cap_spin.value(),
-                "require_idle": self.pro_idle_check.isChecked(),
-                "min_idle_seconds": self.pro_idle_spin.value(),
-                "allow_when_mouse_through": self.pro_through_check.isChecked(),
-                "pre_cue": self.pro_precue_check.isChecked(),
-                "prefer_free_provider": self.pro_free_check.isChecked(),
-                "whitelist": [x.strip() for x in self.pro_whitelist_edit.toPlainText().splitlines() if x.strip()],
-            })
+            pro_data.update(
+                {
+                    "enabled": self.pro_enabled_check.isChecked(),
+                    "dry_run": self.pro_dryrun_check.isChecked(),
+                    "preset": preset,
+                    "dwell_seconds": self.pro_dwell_spin.value(),
+                    "cooldown_minutes": self._pro_cooldown_minutes(),
+                    "min_request_interval_seconds": self.pro_min_interval_spin.value(),
+                    "daily_cap": self.pro_cap_spin.value(),
+                    "require_idle": self.pro_idle_check.isChecked(),
+                    "min_idle_seconds": self.pro_idle_spin.value(),
+                    "allow_when_mouse_through": self.pro_through_check.isChecked(),
+                    "pre_cue": self.pro_precue_check.isChecked(),
+                    "prefer_free_provider": self.pro_free_check.isChecked(),
+                    "whitelist": [x.strip() for x in self.pro_whitelist_edit.toPlainText().splitlines() if x.strip()],
+                }
+            )
             self.config.set("proactive_screen", pro_data)
         self.config.set("autostart_wanted", self.autostart_check.isChecked())
         self.config.set("harness_autostart", self.harness_autostart_check.isChecked())
@@ -1848,10 +2220,19 @@ class ModernSettingsDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "保存失败",
-                "配置未能写入磁盘，改动可能在重启后丢失。\n\n配置路径："
-                + str(self.config.path),
+                "配置未能写入磁盘，改动可能在重启后丢失。\n\n配置路径：" + str(self.config.path),
             )
         return ok
+
+    def _on_voice_chime_preview(self, text: str) -> None:
+        """语音报时设置页「试听」：透传父级 AppShell 的手动报时入口。
+
+        父级（PetWindow / 对话框宿主）通过 on_voice_chime_now 暴露该能力；
+        未接线时静默忽略（仅设置界面无副作用）。
+        """
+        cb = getattr(self.parent(), "on_voice_chime_now", None)
+        if callable(cb):
+            cb(text)
 
     def reject(self) -> None:  # noqa: N802 - Qt API
         """Esc 路径与关闭按钮一致：保存设置并应用开机自启。"""

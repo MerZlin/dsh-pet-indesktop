@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 <#
 .SYNOPSIS
     dsh-pet-standalone onedir build + portable zip packaging.
@@ -20,15 +20,26 @@
       (scripts\check_bundle_encoding.py) scans the bundle's bytecode/resources/
       filenames for known Chinese literals and fails the build if any are garbled.
 
+    Bundle slimming (2026-09):
+      After PyInstaller + the Qt runtime copy, scripts\slim_bundle.py removes
+      statically-unreferenced modules/resources from the bundle (Qt Quick/QML/
+      VirtualKeyboard stack, QtPdf, Mesa opengl32sw, non zh/en Qt translations,
+      Pillow AVIF plugin). The script aborts if any kept binary still imports a
+      removal candidate, and re-checks a required-file manifest right after the
+      removal, so an incomplete runtime can never be shipped. -SkipSlim keeps
+      the bundle untouched.
+
     Examples:
       powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1
       powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm -SkipZip
+      powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -SkipSlim
 #>
 param(
     [string]$Variant = 'webm-chat',
     [switch]$SkipBuild,
     [switch]$SkipZip,
     [switch]$SkipCheck,
+    [switch]$SkipSlim,
     [switch]$Gif
 )
 
@@ -119,6 +130,16 @@ if ($Gif -and -not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "convert_to_gif failed: $LASTEXITCODE" }
 }
 
+# 停掉正在运行的旧 exe：无论是否重跑 PyInstaller，产物都可能被活进程占用
+# （进程加载的 Qt 插件会锁住 PySide6\*.dll / translations，导致瘦身删除报
+#  WinError 5 拒绝访问）。属构建期自愈，不触碰用户数据。
+$running = Get-Process -Name $name -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "[build] stopping running $name before build/post-processing..." -ForegroundColor Yellow
+    $running | Stop-Process -Force
+    Start-Sleep -Milliseconds 800
+}
+
 if (-not $SkipBuild) {
     Write-Host "[0/3] Generating app icon..." -ForegroundColor Cyan
     python scripts\make_icon.py
@@ -138,15 +159,8 @@ if (-not $SkipBuild) {
             $_ -notmatch '(?i)MiKTeX[\\/]miktex[\\/]bin'
     }) -join ';'
 
-    # PyInstaller must replace the previous onedir executable.  A prior
-    # smoke test or manual launch may still hold the file open on Windows.
-    $running = Get-Process -Name $name -ErrorAction SilentlyContinue
-    if ($running) {
-        Write-Host "[build] stopping running $name before rebuild..." -ForegroundColor Yellow
-        $running | Stop-Process -Force
-        Start-Sleep -Milliseconds 500
-    }
-
+    # 注：运行中的旧 exe 已在进入本块之前统一停掉（见上面的 $running 段），
+    # 否则 PyInstaller 无法覆盖 exe，后续瘦身也会因 DLL 被活进程锁定而失败。
     Write-Host "[1/3] PyInstaller --onedir building $name ..." -ForegroundColor Cyan
     # 注入变体标识：配置目录/会话/开机自启按变体隔离（pet/config.py 读取）。
     # 必须写 BOM-free UTF-8：PowerShell 5.1 的 Set-Content -Encoding UTF8 会带
@@ -165,6 +179,9 @@ if (-not $SkipBuild) {
         --collect-all imageio_ffmpeg `
         --collect-all certifi `
         --collect-all PySide6.QtMultimedia `
+        --collect-all edge_tts `
+        --collect-all aiofiles `
+        --collect-all tzdata `
         @keyringCollect `
         --add-data $datas `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
@@ -333,10 +350,25 @@ if ($badIcu -or $badQt) {
         "that excludes conda Library\bin and MiKTeX miktex\bin."
 }
 
+# ---------- onedir 瘦身（scripts\slim_bundle.py，2026-09） ----------
+# 移除静态零引用 + 代码零使用的模块与冗余资源：Qt Quick/QML/VirtualKeyboard
+# 栈、QtPdf、Mesa 软件 OpenGL 后备（opengl32sw.dll）、非 zh/en 的 Qt 翻译、
+# Pillow AVIF 插件。slim_bundle.py 先做依赖闭包校验（任一保留二进制仍 import
+# 待删文件即中止），删除后再校验必需清单（Qt 核心/平台插件/ffmpeg 多媒体插件/
+# Python 绑定），任何一步失败都 throw，绝不静默产出残缺包。
+# 位置约束：必须在上面 Qt runtime 复制之后——否则复制会把刚删掉的 DLL 带回来。
+# 输出消息保持纯 ASCII——PowerShell 5.1 按 ANSI 码页解析可执行字符串。
+if (-not $SkipSlim) {
+    Write-Host "[1.5/3] Slimming bundle (unused Qt modules / redundant resources)..." -ForegroundColor Cyan
+    python scripts\slim_bundle.py --app-dir $appDir
+    if ($LASTEXITCODE -ne 0) { throw "Bundle slimming failed: $LASTEXITCODE" }
+    Write-Host "[slim] bundle slimmed" -ForegroundColor Green
+}
+
 # 中文编码自检（issue #26）：字节码字面量/文本资源/中文文件名任一项被
 # 编码污染即中止，绝不把乱码包发出去。
 if (-not $SkipCheck) {
-    Write-Host "[1.5/3] Chinese-encoding self-check on bundle..." -ForegroundColor Cyan
+    Write-Host "[1.6/3] Chinese-encoding self-check on bundle..." -ForegroundColor Cyan
     python scripts\check_bundle_encoding.py --dir $appDir
     if ($LASTEXITCODE -ne 0) {
         throw "Bundle encoding check failed - refusing to package garbled output (issue #26)"

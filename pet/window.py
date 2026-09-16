@@ -116,6 +116,7 @@ from .platform_win import (
     _WinRect as _WinRect,
     _WinMonitorInfo as _WinMonitorInfo,
     _set_windows_click_through as _set_windows_click_through,
+    _set_windows_no_activate as _set_windows_no_activate,
     WindowsPerPixelInputController as WindowsPerPixelInputController,
     _FS_SKIP_CLASSES as _FS_SKIP_CLASSES,
     _fullscreen_geometry_hit as _fullscreen_geometry_hit,
@@ -1099,6 +1100,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # 原生窗口此刻已就绪：接线 DPR 变化信号（跨屏/显示缩放 → 强制重建）。
         # 幂等；QWindow 被重建后再次 show 会重挂到新 handle。
         self._arm_dpr_change_watch()
+        # 原生窗口此刻已就绪：置位 WS_EX_NOACTIVATE，点击桌宠不夺前台（issue #98）。
+        # 放在 showEvent 是因为改 flags / 重建原生窗口都可能丢掉扩展样式位。
+        self._apply_windows_no_activate()
         self._submit_collision_state(force=True)
         self._schedule_macos_window_level(bool(self.cfg.get('on_top', True)))
         self._apply_opacity()
@@ -4017,6 +4021,31 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if self.movie is not None and hasattr(self.movie, 'set_playback_speed'):
             self.movie.set_playback_speed(self.playback_speed)
 
+    def _apply_windows_no_activate(self) -> None:
+        """Windows：置位 WS_EX_NOACTIVATE，点击桌宠不夺走前台（issue #98）。
+
+        现场症状：全局 Ctrl+C/Ctrl+V 失效（右键复制粘贴同样无效），退出桌宠后
+        恢复。根因是桌宠虽是 Tool 窗口但**可以**被点击激活——鼠标点击后它成为
+        前台窗口，用户随后的按键（含 Ctrl+C/Ctrl+V）全部投递给桌宠；而桌宠既不
+        处理这两个快捷键、也没有任何控件持有键盘焦点，于是观感就是"整机剪切板
+        坏了"。实测（SendInput 真实点击，跨进程）：修复前 fg=桌宠，修复后
+        fg 仍是用户原来的应用，且桌宠照样收到 press/release。
+
+        WS_EX_NOACTIVATE 只关掉"激活"：窗口仍接收鼠标/键盘消息（点击、拖拽、
+        逐像素穿透判定都照旧），但不会成为前台窗口，用户正在编辑的应用始终保有
+        输入焦点。代价是桌宠不再获得键盘焦点，弹弓的 ESC 取消随之失效（右键仍
+        可取消；focusOut 取消在"永不激活"下也不再触发）。
+
+        无原生 handle 的平台（offscreen 等）与异常一律静默跳过：这只是体验加固，
+        绝不能反过来影响启动。
+        """
+        if os.name != 'nt':
+            return
+        try:
+            _set_windows_no_activate(int(self.winId()))
+        except (AttributeError, OSError, RuntimeError):
+            logging.debug('置位 WS_EX_NOACTIVATE 失败', exc_info=True)
+
     def set_mouse_through(self, on: bool) -> None:
         """鼠标穿透：开启后桌宠不接收鼠标事件，点击会穿透到下层。"""
         self._user_mouse_through = bool(on)
@@ -4097,6 +4126,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         was_throw = self._physics_mode == 'throw'
         self._physics_timer.stop()
         self._physics_mode = None
+        self._unpin_landing_idles()  # 飞行结束：摘掉起飞首帧保护（pin 只在飞行期存在）
         if getattr(self, '_interaction_state', IDLE) == THROWN:
             self._interaction_state = IDLE
         self._phys_vel[:] = [0.0, 0.0]
@@ -4118,6 +4148,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if mode == 'throw':
             self._throw_slow_switched = False  # 每次弹射只允许一次降速过渡
             self._warm_landing_idles()
+        else:
+            # 飞行被拖拽打断（空中抓住）：起飞预热/首帧 pin 的落地语义已不存在
+            self._unpin_landing_idles()
 
     def _first_frame_warm(self, name) -> bool:
         """目标动画首帧是否已在缓存（播过留 LRU / pinned / 预热完成）。
@@ -4161,9 +4194,56 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
         预测式预热覆盖不到这里：弹射是事件触发（拖拽打断早已把预测代次
         作废），且交互让路闸门在拖拽/弹射期间会挡住 warm_predicted——
-        故直接调 clip 级 warm_first_frame（幂等、后台线程、可被取消），
-        绕过闸门。idle 池极小（通常 1-3 个），代价可忽略；不暖的话落地
-        切换可能命中冷首帧，GUI 线程同步拉 ffmpeg 解码（实测 ~100ms）。
+        故直接调 clip 级 warm_first_frame（幂等、可被取消），绕过闸门。
+        idle 池极小（通常 1-3 个），代价可忽略；不暖的话落地切换可能命中
+        冷首帧，GUI 线程同步拉 ffmpeg 解码（实测 ~100ms）。
+
+        线程安全：warm_first_frame 只在调用线程跑解码（QImage 级，无 GUI
+        对象访问），与前台 _decode_first_frame_sync 经 _first_frame_lock
+        原子互斥（N4），与 library 预热调度器从后台线程调用它的语义完全
+        一致。clip 解析在 GUI 线程完成（MovieLibrary.movie 不保证线程安全），
+        后台线程只持有 clip 引用。
+        实机教训：本方法曾在 GUI 线程同步执行预热——碰撞风暴下每次撞飞进
+        throw 都同步拉起 ffmpeg（~100ms/只），多鱼互撞时连续 200ms+ 级
+        卡顿（GUI 看门狗实测）；挪到 daemon 线程后起飞路径零阻塞。
+        """
+        lib = getattr(self, 'lib', None)
+        movie = getattr(lib, 'movie', None)
+        if not callable(movie):
+            return
+        clips = []
+        for name in self.idles or ():
+            try:
+                clips.append(movie(name))
+            except Exception:
+                pass
+        if not clips:
+            return
+        # 飞行期间禁止逐出（GUI 线程打标记，warm 在后台完成）：多鱼同进程
+        # 的预热浪涌会在 8MB 预算内把刚暖好的落地首帧挤掉（实测定案：8MB
+        # + 后台预热下风暴期仍有 105~399ms 落地冷解码卡顿）。pin 只覆盖
+        # 起飞→落地窗口（idle 池极小，~1MB/窗），落地/飞行中断即摘除
+        #（_stop_physics / 进拖拽），常驻内存零增长——不碰 8MB 预算本体。
+        for clip in clips:  # 独立标志：绝不与 library 常驻 _ffr_pinned 混用
+            clip._ffr_landing_pinned = True
+
+        def _warm() -> None:
+            for clip in clips:
+                try:
+                    warm = getattr(clip, 'warm_first_frame', None)
+                    if callable(warm):
+                        warm()
+                except Exception:
+                    pass  # 预热失败不致命：落地切换退化为现状（按需同步解码）
+
+        threading.Thread(
+            target=_warm, daemon=True, name='pet-warm-landing-idles').start()
+
+    def _unpin_landing_idles(self) -> None:
+        """摘掉起飞时给 idle 首帧打的飞行期 pin（见 _warm_landing_idles）。
+
+        落地（_stop_physics）/ 飞行被拖拽打断（_enter_physics_mode('drag')）
+        时调用；只摘 _ffr_landing_pinned，library 常驻 _ffr_pinned 绝不动。
         """
         lib = getattr(self, 'lib', None)
         movie = getattr(lib, 'movie', None)
@@ -4171,11 +4251,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             return
         for name in self.idles or ():
             try:
-                warm = getattr(movie(name), 'warm_first_frame', None)
-                if callable(warm):
-                    warm()
+                movie(name)._ffr_landing_pinned = False
             except Exception:
-                pass  # 预热失败不致命：落地切换退化为现状（按需同步解码）
+                pass
 
     def _on_physics_tick(self) -> None:
         if perfstats.ENABLED:

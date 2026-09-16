@@ -483,6 +483,19 @@ def _clip_first_frame_bytes(clip) -> int:
     return 0 if img is None else img.width() * img.height() * 4
 
 
+def _ffr_is_pinned(clip) -> bool:
+    """clip 首帧是否受「绝不逐出」保护（登记选型与清空前复查共用）。
+
+    两类 pin 生命周期不同，必须都认且不可混用同一标志：
+    - _ffr_pinned：library 标记的高频交互核常驻（click/turn/drag，永不来摘）；
+    - _ffr_landing_pinned：弹射飞行期的落地首帧保护（window 起飞打、落地/
+      飞行中断摘）。idle 池可与高频交互常驻集重叠，混用会让落地摘 pin 顺手
+      摘掉常驻保护，点击/拖拽首帧重新暴露在预热浪涌的逐出路径下。
+    """
+    return bool(getattr(clip, '_ffr_pinned', False)
+                or getattr(clip, '_ffr_landing_pinned', False))
+
+
 def _ffr_touch(clip, added_bytes: int = 0) -> list:
     """登记/置顶 clip 并记账；返回待逐出 (clip, token) 列表（调用方锁外处理）。
 
@@ -509,10 +522,9 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
         clip._ffr_evict_token = None  # 新登记/置顶 = 取消悬挂中的逐出
         while _first_frame_bytes > _first_frame_budget_bytes and len(_first_frame_reg) > 1:
             # 从 LRU 头部找首个可逐出项：死引用/已清缓存顺手清账摘出；
-            # _ffr_pinned（瞬时交互核：click/turn/drag，由 MovieLibrary 标记，
-            # 批10-A3 起 idle/move 改由预测式预热覆盖）跳过不逐——否则预热
-            # 浪涌会把交互首帧挤出去，用户点击/拖拽时被迫 GUI 同步解码
-            # （实测：42 段低优先级 ≈38MB > 预算，交互首帧被逐出后
+            # _ffr_is_pinned（常驻交互核 + 飞行期落地 pin，见其文档）跳过不逐
+            # ——否则预热浪涌会把交互首帧挤出去，用户点击/拖拽时被迫 GUI
+            # 同步解码（实测：42 段低优先级 ≈38MB > 预算，交互首帧被逐出后
             # 看门狗抓到 117~160ms 切换卡顿）。
             victim = None
             removed_dead = False
@@ -523,7 +535,7 @@ def _ffr_touch(clip, added_bytes: int = 0) -> list:
                     _first_frame_reg.pop(i)
                     removed_dead = True
                     break
-                if getattr(c, '_ffr_pinned', False):
+                if _ffr_is_pinned(c):
                     continue
                 victim = (c, i)
                 break
@@ -573,6 +585,10 @@ def _ffr_evict(victims) -> None:
             with victim._first_frame_lock:
                 if victim._ffr_evict_token != token:
                     continue  # 摘表后被重新登记/置顶：本次逐出决定已过期
+                if _ffr_is_pinned(victim):
+                    continue  # 选型后被 pin（如起飞保护落地首帧）：逐出决定已
+                    # 过期——"绝不逐出"语义下，登记处选型与这里清空之间有
+                    # 窗口期，必须按 _ffr_is_pinned 复查（常驻 + 飞行期 pin）
                 victim._first_image = None
                 victim._ffr_evict_token = None
         except Exception:
