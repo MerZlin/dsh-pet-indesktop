@@ -92,6 +92,8 @@ ACTION_ICONS = {
     "quark_download": "download", "agent_link": "automation",
     "proactive_screen": "screen", "todo_panel": "todo",
     "modern_settings": "settings", "quit": "quit",
+    "voice_chime_now": "chat", "voice_chime_toggle": "chat",
+    "festival_now": "todo", "festival_toggle": "todo",
 }
 
 CUSTOM_ICON_CHOICES = (
@@ -153,6 +155,17 @@ def _build_voice_chime_toggle(menu, pet):
     enabled = bool(cfg.get("voice_chime_enabled", True)) if cfg is not None else True
     label = "关闭语音报时" if enabled else "启用语音报时"
     return add_action(menu, label, "chat", pet.on_toggle_voice_chime, close_on_trigger=True)
+
+
+def _build_festival_now(menu, pet):
+    return add_action(menu, "今日节日", "todo", pet.on_festival_now, close_on_trigger=True)
+
+
+def _build_festival_toggle(menu, pet):
+    cfg = getattr(pet, "cfg", None)
+    enabled = bool(cfg.get("festival_reminder_enabled", False)) if cfg is not None else False
+    label = "关闭节日提醒" if enabled else "启用节日提醒"
+    return add_action(menu, label, "todo", pet.on_toggle_festival, close_on_trigger=True)
 
 
 def _build_check_update(menu, pet):
@@ -250,6 +263,12 @@ class MenuActionRegistry:
             ),
             "voice_chime_toggle": MenuActionSpec(
                 _build_voice_chime_toggle, _callback_available("on_toggle_voice_chime")
+            ),
+            "festival_now": MenuActionSpec(
+                _build_festival_now, _callback_available("on_festival_now")
+            ),
+            "festival_toggle": MenuActionSpec(
+                _build_festival_toggle, _callback_available("on_toggle_festival")
             ),
             "quit": MenuActionSpec(add_quit),
         }

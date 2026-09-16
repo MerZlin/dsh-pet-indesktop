@@ -154,6 +154,15 @@ class VoiceChimeService:
         self._pending_bubble: str | None = None
         # 停止作废标记：stop()（关闭开关/退出）后，飞行中的合成结果不再回放
         self._stopped = False
+        # 外部播报（节日提醒）经 speak() 复用本服务的音频通道：通道忙时进深度 1
+        # 待播队列，当前一段播完再播——不打断、不叠音。None 表示无待播。
+        self._pending_speech: str | None = None
+        # 媒体终止态枚举；_ensure_player 成功时填充，未创建播放器时为空元组。
+        self._terminal_statuses: tuple = ()
+        # 让位钩子：由 AppShell 注入 Callable[[str], bool]，入参是本分钟的报时槽位，
+        # 返回 True 表示该槽位让位给节日提醒（报时本分钟不说）。None = 无人让位。
+        # 用注入而不是让报时反查节日服务，是为了保持本模块对外零依赖。
+        self.yield_slot = None
         self._bridge: _AudioBridge | None = None
         self._player = None
         self._audio_out = None
@@ -170,6 +179,8 @@ class VoiceChimeService:
     def stop(self) -> None:
         """停止调度；飞行中的合成结果一并作废（见 _on_synthesized）。"""
         self._stopped = True
+        # 待播队列同样作废：关掉开关/退出后不该再补播一条排队的语音。
+        self._pending_speech = None
         self._timer.stop()
 
     def is_running(self) -> bool:
@@ -209,6 +220,31 @@ class VoiceChimeService:
             return
         self._fire(build_chime_sentence(now, self._cfg), now, build_bubble_sentence(now, self._cfg))
 
+    def speak(self, text: str, *, log_tag: str = "外部播报") -> bool:
+        """向本服务（进程内唯一的音频通道）提交一段**纯语音**播报，不含气泡。
+
+        供节日提醒等功能复用：合成、缓存、播放与报时**共用同一套**，因此结构上
+        不可能与报时叠音。通道忙（合成中或正在出声）时不打断也不丢弃，进深度 1
+        的待播队列，当前一段播完后自动播；队列已有待播时后来的覆盖前面的
+        （只留最新一条，避免堆积出已过期的内容）。
+
+        气泡刻意不在这里做：节日提醒有自己的一套气泡（含 show_quote 开关与更长
+        的展示时长），若再走报时的 ``_bubble`` 会被 ``voice_chime_show_bubble``
+        二次影响，也会出现"两个气泡"。
+
+        返回 False 仅表示文本为空；edge-tts 不可用时只记日志、不出声（调用方的
+        气泡照常）。
+        """
+        stripped = (text or "").strip()
+        if not stripped:
+            return False
+        if self._busy or self._player_busy():
+            self._pending_speech = stripped
+            logger.info("%s：音频通道忙，已排队待播", log_tag)
+            return True
+        self._fire(stripped, datetime.now(), None, show_bubble=False, role="speak")
+        return True
+
     # ------------------------------------------------------------ 调度
     def _on_tick(self, now: datetime | None = None) -> None:
         now = now or datetime.now()
@@ -220,6 +256,15 @@ class VoiceChimeService:
         slot = chime_slot(now, self._cfg)
         if slot:
             if slot == self._last_slot:
+                return
+            # 让位检查必须在盖戳之前，且让位同样要消费该槽位——否则本分钟后续
+            # tick（20s 一次）会反复询问，并在让位条件变化时补报，产生意外发声。
+            # 用 getattr 取钩子：部分构造的服务对象（测试替身走 object.__new__）
+            # 没有该属性，不该因此让 tick 抛异常。
+            yield_slot = getattr(self, "yield_slot", None)
+            if callable(yield_slot) and yield_slot(slot):
+                self._last_slot = slot
+                logger.info("报时让位给节日提醒：%s", slot)
                 return
             self._last_slot = slot
             precache_bubble = self._precache_bubble  # 消费前取用（consume 会清空预合成状态）
@@ -314,11 +359,15 @@ class VoiceChimeService:
         self._precache_path = None
         return None
 
-    def _fire(self, sentence: str, now: datetime, bubble_text: str | None = None) -> None:
-        """播报一次报时。
+    def _fire(self, sentence: str, now: datetime, bubble_text: str | None = None,
+              *, show_bubble: bool = True, role: str = "play") -> None:
+        """播报一次。
 
-        语音用中文口播文本 ``sentence``（同时作为合成输入与缓存键）；气泡用
+        语音用口播文本 ``sentence``（同时作为合成输入与缓存键）；气泡用
         ``bubble_text``（阿拉伯数字为主，缺省按 ``now`` 现算），二者解耦。
+
+        ``show_bubble=False`` / ``role="speak"`` 是给外部播报（节日提醒）用的：
+        只出声、不出气泡（气泡由调用方自己管），合成完成回调据此走 ``_play_only``。
         """
         if not _EDGE_TTS_AVAILABLE:
             self._notify_missing_tts()
@@ -337,15 +386,18 @@ class VoiceChimeService:
         out_path = self._cache_dir / f"{key}.mp3"
         # 缓存命中（含预合成已完成）直接播放，零网络延迟；合成中不阻塞缓存播放。
         if out_path.exists():
-            self._play_and_bubble(str(out_path), sentence, bubble)
+            if show_bubble:
+                self._play_and_bubble(str(out_path), sentence, bubble)
+            else:
+                self._play_only(str(out_path))
             return
         if self._busy:
             logger.info("语音报时仍在合成中，跳过本次：%s", sentence[:20])
             return
         self._busy = True
         self._busy_since = time.monotonic()
-        self._synthesis_role = "play"
-        self._pending_bubble = bubble
+        self._synthesis_role = role
+        self._pending_bubble = bubble if show_bubble else None
         # 本次合成有效：清掉上一次 stop() 留下的作废标记，
         # 否则新起的合成结果会被当成"迟到结果"丢弃。
         self._stopped = False
@@ -389,6 +441,10 @@ class VoiceChimeService:
             self._precache_path = str(path)
             logger.info("预合成完成：%s", Path(path).name)
             return
+        if role == "speak":
+            # 外部播报（节日提醒）：只出声，气泡由调用方自己展示。
+            self._play_only(path)
+            return
         self._play_and_bubble(path, text, self._pending_bubble)
 
     def _play_and_bubble(self, path: str, text: str, bubble_text: str | None = None) -> None:
@@ -412,6 +468,54 @@ class VoiceChimeService:
             return
         self._bubble(bubble_text if bubble_text is not None else text)
 
+    def _play_only(self, path: str) -> bool:
+        """只播放音频、不展示气泡（外部播报用，气泡由调用方自己管）。
+
+        返回是否成功起播；失败只记日志——外部的气泡/提示由调用方决定，
+        这里再插一条报时风格的气泡会与对方的展示重复。
+        """
+        if not self._ensure_player():
+            logger.warning("播放器不可用，外部播报跳过播放：%s", Path(path).name)
+            return False
+        try:
+            from PySide6.QtCore import QUrl
+
+            self._audio_out.setVolume(self._cfg["volume"] / 100.0)
+            self._player.setSource(QUrl.fromLocalFile(path))
+            self._player.play()
+            return True
+        except Exception:
+            logger.exception("外部播报播放失败：%s", path)
+            return False
+
+    def _player_busy(self) -> bool:
+        """音频通道当前是否正在出声（判断能否立即播报）。"""
+        if self._player is None:
+            return False
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer
+
+            return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        except Exception:
+            return False
+
+    def _on_media_status(self, status) -> None:
+        """一条音频播完后，播放待播队列里的那一条（若有）。
+
+        **刻意不在本方法里 import QtMultimedia**：终止态枚举在 ``_ensure_player``
+        成功创建播放器时缓存到 ``self._terminal_statuses``。这样本方法没有 Qt
+        导入（Linux 上 QtMultimedia 会拖 libpulse 等系统库，缺失即 ImportError），
+        也让单元测试无需为了拿枚举值去导入 QtMultimedia——CI 的 ubuntu 作业正是
+        因为测试里那次导入而红过。
+        """
+        if status not in getattr(self, "_terminal_statuses", ()):
+            return
+        pending = self._pending_speech
+        self._pending_speech = None
+        if not pending or self._stopped:
+            return
+        self._fire(pending, datetime.now(), None, show_bubble=False, role="speak")
+
     def _ensure_player(self) -> bool:
         if self._player is not None:
             return True
@@ -421,6 +525,13 @@ class VoiceChimeService:
             self._player = QMediaPlayer()
             self._audio_out = QAudioOutput()
             self._player.setAudioOutput(self._audio_out)
+            # 缓存终止态枚举，供 _on_media_status 判空时使用（见该方法的说明）。
+            self._terminal_statuses = (
+                QMediaPlayer.MediaStatus.EndOfMedia,
+                QMediaPlayer.MediaStatus.InvalidMedia,
+            )
+            # 播完一条后排空待播队列（外部播报排队用）。
+            self._player.mediaStatusChanged.connect(self._on_media_status)
             return True
         except Exception:
             logger.exception("创建 QMediaPlayer 失败（检查 QtMultimedia ffmpegmediaplugin）")

@@ -5,6 +5,15 @@ keyring>=25
 certifi>=2024.0.0
 pycaw>=0.0.13; platform_system == "Windows"
 tzdata>=2024.1
+# 节日提醒（pet/festival_calendar.py）的农历与 24 节气换算。
+#
+# 许可证是硬约束：**不要换成流传更广的 lunardate / zhdate**。那两个都是
+# GPL-3.0-or-later（同源于 1988 年 Fung F. Lee / Ricky Yeung 的 GPLv2
+# lunar 项目），而本项目是 MIT，引入即造成 copyleft 传染。lunar-python
+# (6tail) 为 MIT，纯 Python，无数据文件、无传递依赖，PyInstaller 静态
+# 分析可完整收集（无需 --collect-all）。其农历与节气日已实测校验。
+lunar-python>=1.4.8
+
 # 语音报时（pet/voice_chime_service.py）的在线 TTS：edge-tts 走微软免费在线
 # 语音服务合成 mp3 后缓存播放。缺失时服务降级为仅气泡提示（不崩溃），但
 # 打包版用户无法自行 pip 安装——所以在此声明为运行时依赖，并在三个构建

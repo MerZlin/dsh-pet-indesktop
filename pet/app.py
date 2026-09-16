@@ -53,6 +53,7 @@ from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .session_watcher import install_session_watcher
 from .collision_ipc import CollisionIpcSession
 from .decode_fanout import DecodeFanoutHub
+from .festival_service import FestivalReminderService
 from .todo_reminder import TodoReminderService
 from .voice_chime_service import VoiceChimeService
 from .dsh_state import DshStateTracker
@@ -439,6 +440,8 @@ class PetInstance:
         win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
         win.on_voice_chime_now = self._slot_wrap(self.shell.trigger_voice_chime_now)
         win.on_toggle_voice_chime = self._slot_wrap(self.shell.toggle_voice_chime)
+        win.on_festival_now = self._slot_wrap(self.shell.trigger_festival_now)
+        win.on_toggle_festival = self._slot_wrap(self.shell.toggle_festival_reminder)
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._slot_wrap(self._notify_pet_hidden)
         # 批5.2 P0-2：右键「退出」注入窗级「退出这只」只在 flag 开（多窗）时；
@@ -792,6 +795,7 @@ class PetInstance:
         # Phase 1/2：设置保存后按配置同步可选服务（todo 懒启停）与动画预热
         self.shell._sync_todo_service()
         self.shell._sync_chime_service()
+        self.shell._sync_festival_service()
         self._sync_animation_prewarm()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
@@ -992,6 +996,11 @@ class AppShell:
         self.voice_chime_service = None
         if self._chime_wanted():
             self._ensure_chime_service()
+        # 节日提醒：进程级单例（多窗共用调度器）。**默认关闭** → 不创建服务；
+        # 由用户在设置里开启后 _sync_festival_service 才创建并跑 30s tick。
+        self.festival_service = None
+        if self._festival_wanted():
+            self._ensure_festival_service()
         # 批5.2 P1-2/P2-6：进程级 flag 快照——启动期从主窗 config 读一次存
         # _single_process_spawn；窗级逻辑（runtime 标记版本化、日志前缀、
         # 退出分派、spawn 分发）一律读本快照，不读每窗 config。第二窗的
@@ -1104,14 +1113,38 @@ class AppShell:
                 self.todo_service = None
 
     # ------------------------------------------------------------ 功能门控（语音报时）
+    def _festival_speak_wanted(self) -> bool:
+        """节日语音是否开启——它复用报时服务的音频通道，因此会连带影响通道生命周期。"""
+        return bool(
+            self.config.get("festival_reminder_enabled", False)
+            and self.config.get("festival_reminder_speak", False)
+        )
+
     def _chime_wanted(self) -> bool:
-        return bool(self.config.get("voice_chime_enabled", True))
+        # 报时自身开启，或节日语音需要这条音频通道（两者共用一套合成与播放，
+        # 因此"通道是否存在"取决于两者之一是否需要）。
+        return bool(self.config.get("voice_chime_enabled", True)) or self._festival_speak_wanted()
 
     def _ensure_chime_service(self):
-        """懒创建语音报时服务（仅在使用报时/手动触发时创建）。"""
+        """懒创建语音报时服务（报时 / 手动触发 / 节日语音播报共用）。"""
         if getattr(self, "voice_chime_service", None) is None:
-            self.voice_chime_service = VoiceChimeService(self)
+            service = VoiceChimeService(self)
+            # 让位钩子：报时每次到点前先问节日提醒这一分钟要不要说话。
+            # 用钩子而非让节日去"抢"通道，是为了与两个 QTimer 的触发先后解耦。
+            service.yield_slot = self._chime_should_yield
+            self.voice_chime_service = service
         return self.voice_chime_service
+
+    def _chime_should_yield(self, chime_slot: str) -> bool:
+        """报时让位判定（注入到 VoiceChimeService.yield_slot）。"""
+        service = getattr(self, "festival_service", None)
+        if service is None:
+            return False
+        return service.should_speak_at(chime_slot)
+
+    def ensure_audio_channel(self):
+        """对外暴露的音频通道（节日提醒语音复用报时服务的合成与播放）。"""
+        return self._ensure_chime_service()
 
     def _sync_chime_service(self) -> None:
         """按配置启停语音报时服务；关闭时释放服务对象。"""
@@ -1128,6 +1161,36 @@ class AppShell:
             except Exception:
                 logging.exception("停止语音报时服务失败")
             self.voice_chime_service = None
+
+    # ------------------------------------------------------------ 功能门控（节日提醒）
+    def _festival_wanted(self) -> bool:
+        # 总开关默认关闭：主动打扰型功能，升级后不应突然冒出来。
+        return bool(self.config.get("festival_reminder_enabled", False))
+
+    def _ensure_festival_service(self):
+        """懒创建节日提醒服务（仅在开启提醒/手动触发时创建）。"""
+        if getattr(self, "festival_service", None) is None:
+            self.festival_service = FestivalReminderService(self)
+        return self.festival_service
+
+    def _sync_festival_service(self) -> None:
+        """按配置启停节日提醒服务；关闭时释放服务对象。"""
+        if self._festival_wanted():
+            service = self._ensure_festival_service()
+            if service.is_running():
+                # 已在运行：设置保存只刷新配置，不重置 tick。
+                service.apply_config()
+            else:
+                service.start()
+        elif getattr(self, "festival_service", None) is not None:
+            try:
+                self.festival_service.stop()
+            except Exception:
+                logging.exception("停止节日提醒服务失败")
+            self.festival_service = None
+        # 节日语音复用报时服务的音频通道：本开关变化会改变"通道是否需要存在"，
+        # 故必须连带同步通道生命周期（关掉节日语音后若报时也关，通道应释放）。
+        self._sync_chime_service()
 
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
@@ -1151,6 +1214,9 @@ class AppShell:
         self.instance._apply_spawn_offset()
         self._apply_balance_timer()
         self._sync_todo_service()
+        # 先同步节日服务：报时服务在 start() 里会立刻 tick 一次，那一刻就需要能问到
+        # "本分钟是否让位"。顺序反了会出现"报时先响、节日后响"从而两者都出声。
+        self._sync_festival_service()
         self._sync_chime_service()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
         QTimer.singleShot(4000, self._maybe_autostart_harness)
@@ -1384,6 +1450,9 @@ class AppShell:
         # 飞行中的合成线程会经信号桥回 GUI 线程回放、触碰正在析构的窗口。
         if self.voice_chime_service is not None:
             self.voice_chime_service.stop()
+        # 节日提醒同为进程级懒服务，退出必须一并停（理由同 voice_chime_service）。
+        if self.festival_service is not None:
+            self.festival_service.stop()
         try:
             self._dsh_state_tracker.stop()
         except Exception:
@@ -1439,6 +1508,13 @@ class AppShell:
                     except Exception:
                         logging.debug("测试收口语音报时服务失败", exc_info=True)
                     shell.voice_chime_service = None
+                service = getattr(shell, "festival_service", None)
+                if service is not None:
+                    try:
+                        service.stop()
+                    except Exception:
+                        logging.debug("测试收口节日提醒服务失败", exc_info=True)
+                    shell.festival_service = None
                 if getattr(shell, "instance", None) is not None:
                     win = getattr(shell.instance, "win", None)
                     lib = getattr(win, "lib", None)
@@ -2317,6 +2393,24 @@ class AppShell:
         self.config.set("voice_chime_enabled", not bool(self.config.get("voice_chime_enabled", True)))
         self.config.save()
         self._sync_chime_service()
+
+    def trigger_festival_now(self) -> None:
+        """手动提醒「今日节日」：右键菜单入口。
+
+        与语音报时的手动触发同语义——**无视总开关**，服务懒创建；当天没有
+        节日/节气时给出明确文案，不做静默无反应。
+        """
+        service = self._ensure_festival_service()
+        service.remind_now()
+
+    def toggle_festival_reminder(self) -> None:
+        """右键菜单「启用节日提醒」开关：翻转配置并同步服务启停。"""
+        self.config.set(
+            "festival_reminder_enabled",
+            not bool(self.config.get("festival_reminder_enabled", False)),
+        )
+        self.config.save()
+        self._sync_festival_service()
 
     def system_notify(self, title: str, message: str, *, on_click=None, duration_ms: int = 5000) -> None:
         """Show a bottom-right desktop notification (self-drawn, tray-independent)."""

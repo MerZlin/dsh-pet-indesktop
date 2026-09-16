@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 
+import pytest
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
@@ -357,6 +359,60 @@ def test_toggle_voice_chime_flips_config_and_syncs(tmp_path):
     shell.toggle_voice_chime()
     assert cfg.get("voice_chime_enabled") is True
     assert shell.voice_chime_service is not None
+
+
+def test_audio_channel_survives_on_festival_speak_alone(tmp_path):
+    """报时关闭但节日语音开启时，音频通道必须仍然存在。
+
+    节日语音复用报时服务作为进程内唯一音频通道；若通道随报时开关一起被释放，
+    节日播报就会静默失效（有气泡没声音）——这是本功能最隐蔽的接线坑。
+    """
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    cfg.set("voice_chime_enabled", False)
+    cfg.set("festival_reminder_enabled", True)
+    cfg.set("festival_reminder_speak", True)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    shell._sync_chime_service()
+    assert shell.voice_chime_service is not None, "节日语音需要通道，不能因报时关闭而释放"
+
+    # 关掉节日语音后，两个开关都关 → 通道应释放
+    cfg.set("festival_reminder_speak", False)
+    shell._sync_festival_service()
+    assert shell.voice_chime_service is None
+
+
+def test_audio_channel_is_not_created_when_nobody_needs_it(tmp_path):
+    """两个开关都关时不该白建通道（保持既有懒创建语义）。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    cfg.set("voice_chime_enabled", False)
+    cfg.set("festival_reminder_enabled", True)
+    cfg.set("festival_reminder_speak", False)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    shell._sync_chime_service()
+    assert shell.voice_chime_service is None
+
+
+def test_appshell_injects_yield_hook_into_chime_service(tmp_path):
+    """让位钩子必须在创建通道时注入——没注入就等于节日与报时会各说各的。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    service = shell.voice_chime_service
+    assert service is not None
+    assert service.yield_slot is not None
+    # 没有节日服务时应判定为"不让位"，报时照常
+    assert shell._chime_should_yield("2026-02-17T09:00#hourly") is False
     shell.voice_chime_service.stop()
 
 
@@ -442,3 +498,238 @@ def test_about_to_quit_stops_voice_chime_service(tmp_path, monkeypatch):
 
     assert service.is_running() is False, "退出收口必须停掉语音报时的 tick"
     owner._dsh_state_tracker.stop()
+
+
+# ============================================================ 共享音频通道（节日语音）
+# 节日提醒的语音复用本报时服务作为进程内唯一音频通道。下列用例锁住三件事：
+#   1) speak() 只出声、不出气泡（气泡归调用方，避免与节日自己的气泡重复/被
+#      voice_chime_show_bubble 二次影响）；
+#   2) 通道忙时不打断也不丢弃，进深度 1 待播队列，播完自动接上；
+#   3) yield_slot 钩子让报时在"节日要说话的那一分钟"整分钟让位，且让位同样
+#      消费槽位（否则 20s 一次的 tick 会在本分钟内反复询问）。
+
+
+def _cache_mp3(service, text: str) -> Path:
+    """按服务当前配置把一段文本的缓存 mp3 造出来（跳过真实合成）。"""
+    key = cache_key(
+        text,
+        {
+            "voice": service._cfg["voice"],
+            "rate": service._cfg["rate"],
+            "pitch": service._cfg["pitch"],
+        },
+    )
+    service._cache_dir.mkdir(parents=True, exist_ok=True)
+    path = service._cache_dir / f"{key}.mp3"
+    path.write_bytes(b"\x00fake-mp3")
+    return path
+
+
+def test_speak_plays_from_cache_and_never_bubbles(tmp_path, monkeypatch):
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    text = "今天是春节。爆竹声中一岁除。"
+    _cache_mp3(service, text)
+
+    assert service.speak(text) is True
+
+    assert service._player.plays == 1
+    assert app.win.bubbles == [], "外部播报的气泡由调用方自己展示，本服务不得再插一条"
+
+
+def test_speak_queues_instead_of_interrupting_when_channel_is_busy(tmp_path, monkeypatch):
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    service._busy = True  # 正在合成
+
+    assert service.speak("今天是中秋节。") is True
+
+    assert service._pending_speech == "今天是中秋节。"
+    assert service._player.plays == 0, "通道忙时不得抢播（会打断当前音频）"
+
+
+def test_speak_keeps_only_the_latest_pending(tmp_path, monkeypatch):
+    """队列深度 1：后来的覆盖前面的，避免堆积出已过期内容。"""
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    service._busy = True
+
+    service.speak("第一条")
+    service.speak("第二条")
+
+    assert service._pending_speech == "第二条"
+
+
+def test_pending_speech_plays_after_current_audio_ends(tmp_path, monkeypatch):
+    # 刻意**不导入 QtMultimedia**：Linux CI 上它依赖 libpulse.so.0 等系统库，
+    # 缺失即 ImportError（ubuntu 作业曾因此红）。终止态枚举由生产代码在创建
+    # 播放器时缓存，这里用哨兵值即可覆盖判空与消费逻辑。
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    text = "今天是重阳节。"
+    _cache_mp3(service, text)
+    service._pending_speech = text
+    service._terminal_statuses = ("END", "BAD")
+
+    service._on_media_status("END")
+
+    assert service._pending_speech is None
+    assert service._player.plays == 1
+
+
+def test_media_status_ignores_non_terminal_states(tmp_path, monkeypatch):
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    service._pending_speech = "排队中"
+    service._terminal_statuses = ("END", "BAD")
+
+    service._on_media_status("LOADING")  # 非终止态
+
+    assert service._pending_speech == "排队中", "加载中不得提前消费待播"
+    assert service._player.plays == 0
+
+
+def test_speak_ignores_blank_text(tmp_path, monkeypatch):
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+
+    assert service.speak("   ") is False
+    assert service._pending_speech is None
+
+
+def test_stop_clears_pending_speech(tmp_path, monkeypatch):
+    """关闭开关/退出后不该再补播一条排队的语音。"""
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    service.apply_config()
+    service._pending_speech = "排队中"
+
+    service.stop()
+
+    assert service._pending_speech is None
+
+
+def test_yield_slot_hook_makes_chime_give_up_the_whole_minute(tmp_path, monkeypatch):
+    """报时让位：本分钟不发声，且槽位被消费，同分钟后续 tick 不再询问。"""
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    cfg.set("voice_chime_schedule", "hourly")
+    service.apply_config()
+    monkeypatch.setattr(service, "_fire", lambda *a, **k: pytest.fail("让位时不得报时"))
+
+    asked: list[str] = []
+    service.yield_slot = lambda slot: asked.append(slot) or True
+
+    service._on_tick(datetime(2026, 2, 17, 9, 0, 5))
+    # 槽位带调度后缀（chime_slot 的契约是 "YYYY-MM-DDTHH:MM#<schedule>"）；
+    # 让位钩子的入参就是它，消费方按前 16 位取时间即可。
+    assert asked == ["2026-02-17T09:00#hourly"]
+    assert service._last_slot == "2026-02-17T09:00#hourly", "让位必须消费槽位"
+
+    # 同分钟后一次 tick：槽位已消费，不该再问第二次
+    service._on_tick(datetime(2026, 2, 17, 9, 0, 25))
+    assert asked == ["2026-02-17T09:00#hourly"]
+
+
+def test_chime_still_fires_when_hook_declines(tmp_path, monkeypatch):
+    """钩子说"不让位"时，报时照常发声——让位是例外而非常态。"""
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    cfg.set("voice_chime_schedule", "hourly")
+    service.apply_config()
+    service.yield_slot = lambda slot: False
+    fired: list[str] = []
+    monkeypatch.setattr(service, "_fire", lambda sentence, now, bubble=None, **k: fired.append(sentence))
+
+    service._on_tick(datetime(2026, 2, 17, 9, 0, 5))
+
+    assert len(fired) == 1
+    assert service._last_slot == "2026-02-17T09:00#hourly"
+
+
+def test_service_without_hook_behaves_exactly_as_before(tmp_path, monkeypatch):
+    """默认无钩子（未注入）时报时行为不变——这是对既有功能的回归防线。"""
+    service, app, cfg = _service(tmp_path, monkeypatch)
+    cfg.set("voice_chime_schedule", "hourly")
+    service.apply_config()
+    assert service.yield_slot is None
+    fired: list[str] = []
+    monkeypatch.setattr(service, "_fire", lambda sentence, now, bubble=None, **k: fired.append(sentence))
+
+    service._on_tick(datetime(2026, 2, 17, 9, 0, 5))
+
+    assert len(fired) == 1
+
+
+# ============================================================ 端到端：不与报时冲突
+# 用户的硬要求："节日语音不要跟时间播报产生冲突"。这里用真实 AppShell（两个服务
+# 都真的建起来）+ 打桩发声来验证最终行为，而不是只测单侧逻辑：
+#   1) 同一分钟两者都到点 → 只有节日说话；
+#   2) 该结论**与两个 QTimer 的触发先后无关**（报时先 tick 也要让位）。
+
+
+def _duet_shell(tmp_path):
+    """建一个"报时每小时 + 节日 09:00 播报"的 AppShell，返回 (shell, chime, festival)。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    cfg.set("voice_chime_enabled", True)
+    cfg.set("voice_chime_schedule", "hourly")
+    cfg.set("festival_reminder_enabled", True)
+    cfg.set("festival_reminder_speak", True)
+    cfg.set("festival_reminder_mode", "custom")
+    cfg.set("festival_reminder_times", "09:00")
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+    # 镜像 AppShell.start() 的同步顺序（节日先于报时）——顺序本身也是被测契约：
+    # 报时 start() 会立刻 tick 一次，那一刻必须已经能问到"是否让位"。
+    shell._sync_festival_service()
+    shell._sync_chime_service()
+    return shell, shell.voice_chime_service, shell.festival_service
+
+
+def test_festival_and_chime_never_both_speak_in_the_same_minute(tmp_path, monkeypatch):
+    """节日先 tick：报时到点必须让位，本分钟只有节日出声。"""
+    shell, chime, festival = _duet_shell(tmp_path)
+    assert chime is not None and festival is not None
+
+    chime_said: list[str] = []
+    festival_said: list[str] = []
+    monkeypatch.setattr(chime, "_fire", lambda s, now, bubble=None, **k: chime_said.append(s))
+    monkeypatch.setattr(festival, "_speak", lambda text: festival_said.append(text))
+
+    when = datetime(2026, 2, 17, 9, 0, 5)  # 春节 + 整点 + 节日提醒点，三者重合
+    festival._on_tick(when)
+    chime._on_tick(when)
+
+    assert festival_said, "节日应当播报"
+    assert chime_said == [], "同一分钟报时不得再说话（会叠音或抢通道）"
+    shell._on_about_to_quit()
+
+
+def test_chime_yields_even_when_it_ticks_first(tmp_path, monkeypatch):
+    """报时先 tick 也必须让位——这是不能用"节日去抢通道"实现的原因。"""
+    shell, chime, festival = _duet_shell(tmp_path)
+
+    chime_said: list[str] = []
+    festival_said: list[str] = []
+    monkeypatch.setattr(chime, "_fire", lambda s, now, bubble=None, **k: chime_said.append(s))
+    monkeypatch.setattr(festival, "_speak", lambda text: festival_said.append(text))
+
+    when = datetime(2026, 2, 17, 9, 0, 5)
+    chime._on_tick(when)      # 报时先到
+    festival._on_tick(when)   # 节日后到
+
+    assert chime_said == [], "报时先 tick 时同样要让位"
+    assert festival_said, "节日仍应播报"
+    shell._on_about_to_quit()
+
+
+def test_chime_speaks_normally_on_a_plain_day(tmp_path, monkeypatch):
+    """没有节日的整点，报时照常发声——让位不能变成常态静音。"""
+    shell, chime, festival = _duet_shell(tmp_path)
+
+    chime_said: list[str] = []
+    monkeypatch.setattr(chime, "_fire", lambda s, now, bubble=None, **k: chime_said.append(s))
+
+    chime._on_tick(datetime(2026, 1, 2, 9, 0, 5))  # 已核实：该日无任何节日/节气
+
+    assert len(chime_said) == 1
+    shell._on_about_to_quit()

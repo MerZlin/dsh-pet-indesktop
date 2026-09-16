@@ -706,6 +706,21 @@ class Config:
             "voice_chime_show_quote": True,  # 台词/歌词开关
             "voice_chime_custom_quotes_zh": "",  # 自定义中文台词/歌词（一行一条，留空回退内置库）
             "voice_chime_custom_quotes_en": "",  # 自定义英文台词/歌词（一行一条，留空回退内置库）
+            # 节日提醒（农历/24 节气/西方节日；命中当日用气泡告知并附氛围匹配文案）。
+            # 总开关默认关闭：属"主动打扰"型功能，升级后不应突然冒出来，由用户显式开启。
+            "festival_reminder_enabled": False,  # 节日提醒总开关
+            "festival_reminder_cn": True,  # 中国节日
+            "festival_reminder_solar_terms": True,  # 24 节气
+            "festival_reminder_west": True,  # 西方节日
+            "festival_reminder_mode": "times",  # times（按次数）/ custom（自定义时间点）
+            "festival_reminder_count": 2,  # times 模式提醒次数（1~6，均匀铺在 09:00–21:00）
+            "festival_reminder_times": "09:00",  # custom 模式时间点（HH:MM 逗号分隔）
+            "festival_reminder_show_quote": True,  # 是否附诗词/引文
+            # 节日语音播报：复用语音报时服务的音频通道（音色/语速/音调/音量同报时），
+            # 故不新增独立的语音参数键。默认关闭。开启后同一分钟由节日让报时让位。
+            "festival_reminder_speak": False,  # 节日提醒是否语音播报
+            "festival_custom_quotes_cn": "",  # 自定义中文文案（一行一条，追加到内置库）
+            "festival_custom_quotes_west": "",  # 自定义西文文案（一行一条，追加到内置库）
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             # 批10-A3：默认 32→8MB。预测式预热（批10-A1）落地后，首帧 LRU 只需
@@ -931,6 +946,17 @@ class Config:
             "voice_chime_show_quote",
             "voice_chime_custom_quotes_zh",
             "voice_chime_custom_quotes_en",
+            "festival_reminder_enabled",
+            "festival_reminder_cn",
+            "festival_reminder_solar_terms",
+            "festival_reminder_west",
+            "festival_reminder_mode",
+            "festival_reminder_count",
+            "festival_reminder_times",
+            "festival_reminder_show_quote",
+            "festival_reminder_speak",
+            "festival_custom_quotes_cn",
+            "festival_custom_quotes_west",
             "character_aliases",
             "character_profiles",
             "chat_always_on_top",

@@ -939,6 +939,11 @@ class ModernSettingsDialog(QDialog):
 
         self.voice_chime_page = VoiceChimeSettingsPage(self.config, self)
         self.voice_chime_page.preview_requested.connect(self._on_voice_chime_preview)
+
+        # 节日提醒设置页（行在 _rebuild_domain_navigation 中并入 automation 域）
+        from .festival_settings import FestivalSettingsPage
+
+        self.festival_page = FestivalSettingsPage(self.config, self)
         self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
@@ -1787,6 +1792,8 @@ class ModernSettingsDialog(QDialog):
         claimed.update(watchdog_rows)
         voice_chime_rows = list(self.voice_chime_page.findChildren(SettingRow))
         claimed.update(voice_chime_rows)
+        festival_rows = list(self.festival_page.findChildren(SettingRow))
+        claimed.update(festival_rows)
         # WatchdogSettingsPage 现同时承载「循环检测」（watchdog/long_think）、
         # 「卡住检测」（stuck_*）与「行为重复检测」（pattern_*）三组行，
         # 按 objectName 前缀分组显示。
@@ -1799,6 +1806,7 @@ class ModernSettingsDialog(QDialog):
             [
                 ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
                 ("语音报时", voice_chime_rows),
+                ("节日提醒", festival_rows),
                 ("主动感知", proactive_rows),
                 ("循环检测", loop_rows),
                 ("卡住检测", stuck_rows),
@@ -2178,6 +2186,9 @@ class ModernSettingsDialog(QDialog):
         # 语音报时设置页写回（仅写 voice_chime_* 11 键）
         if self.voice_chime_page is not None:
             self.voice_chime_page.apply_to_config()
+        # 节日提醒设置页写回（仅写 festival_reminder_* / festival_custom_* 10 键）
+        if self.festival_page is not None:
+            self.festival_page.apply_to_config()
         self.config.set(
             "context_menu_appearance",
             {

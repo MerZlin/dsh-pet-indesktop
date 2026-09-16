@@ -133,6 +133,19 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "voice_chime_schedule",
         "voice_chime_show_bubble",
         "voice_chime_show_quote",
+        "festival_custom_quotes_cn",
+        "festival_custom_quotes_west",
+        "festival_reminder_cn",
+        "festival_reminder_count",
+        "festival_reminder_enabled",
+        "festival_reminder_mode",
+        "festival_reminder_show_quote",
+        "festival_reminder_solar_terms",
+        "festival_reminder_speak",
+        "festival_reminder_times",
+        "festival_reminder_west",
+        "voice_chime_custom_quotes_en",
+        "voice_chime_custom_quotes_zh",
         "voice_chime_voice",
         "voice_chime_volume",
     }
@@ -141,7 +154,8 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。
 SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat"})
 
-# 默认值 dict 键集合现状快照（87 键）= 白名单 ∪ 特例键。
+# 默认值 dict 键集合现状快照（115 键）= 白名单 ∪ 特例键。
+# 2026-09-16 加入节日提醒 10 键后实测：白名单 111 + 特例 4 = 115。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

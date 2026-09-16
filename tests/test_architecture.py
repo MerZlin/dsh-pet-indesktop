@@ -112,7 +112,12 @@ WINDOW_PY_LINE_BUDGET = 4507
 # （3 行 SettingRow）+「消费统计」一级分组，实测 2300；按文件约定预算只随
 # 实测校准，不为达标压缩行宽/合并语句；拆分仍是待办。
 # 本文件拆分仍是待办，拆分前预算只随实测校准。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2300
+# 2026-09-16 上调到 2300：#128「歌词/消费统计/音乐菜单」接入设置页，实测 2300。
+# 2026-09-16 再上调到 2311：#127 节日提醒设置页（+11）与 #128 叠加后实测 2311——
+# 这正是「红线是组合性质」：两个 PR 各自合并时 CI 都绿，合到一起才越线
+# （见 docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。按文件约定只随实测校准，
+# 不为达标压缩行宽/合并语句；拆分仍是待办。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2311
 
 
 
@@ -121,7 +126,16 @@ def _read(name: str) -> str:
 
 
 def test_pure_logic_modules_do_not_import_qt():
-    for name in ("collision.py", "physics.py", "collision_codec.py"):
+    # 节日提醒的纯逻辑/纯数据模块同样必须零 Qt（2026-09-16 加入，随功能一起
+    # 把"纯逻辑层零 Qt"从约定升级为机器化守卫；festival_service/festival_settings
+    # 不在本列——前者属服务层、后者属 UI 层，本就不受此约束）。
+    for name in (
+        "collision.py", "physics.py", "collision_codec.py",
+        "festival_calendar.py", "festival_data.py", "festival.py",
+        "festival_quotes_cn.py", "festival_quotes_west.py",
+        "festival_quotes_west_movie.py", "festival_quotes_west_game.py",
+        "festival_quotes_west_song.py",
+    ):
         src = _read(name)
         assert "PySide6" not in src, f"{name} 引入了 Qt 依赖，破坏纯函数层定位"
 

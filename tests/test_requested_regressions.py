@@ -1064,6 +1064,7 @@ def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypat
     # Phase 1 门控后 todo 服务走 _sync_todo_service（懒启停）；测试只测桌宠刷新
     owner.shell._sync_todo_service = lambda: None
     owner.shell._sync_chime_service = lambda: None  # 语音报时同样懒启停，本用例只测桌宠刷新
+    owner.shell._sync_festival_service = lambda: None  # 节日提醒同样懒启停（其内部会连带同步报时通道）
     owner._refresh_chat_windows = lambda: None
     owner._sync_animation_prewarm = lambda: None
     monkeypatch.setattr(app_mod, "_mac_set_dock_icon_visible", lambda *a, **k: None)

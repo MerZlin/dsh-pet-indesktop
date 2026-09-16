@@ -888,6 +888,8 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     expected_labels.extend([
         "立即报时",
         "关闭语音报时",
+        "今日节日",
+        "启用节日提醒",  # 节日提醒总开关默认关闭，故菜单显示「启用」
         "桌宠设置",
         "退出",
     ])
