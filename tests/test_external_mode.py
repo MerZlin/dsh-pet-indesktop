@@ -159,12 +159,24 @@ def test_normalize_mode_value():
     assert normalize_mode_value("external:") == MODE_CLASSIC
 
 
-def test_detect_bongo_cat_uses_local_appdata(tmp_path):
+def test_detect_bongo_cat_uses_local_appdata(tmp_path, monkeypatch):
+    # 该探测只走 Windows 分支（sys.platform != "win32" 时按设计返回 []）；
+    # 用例在任何平台上都强制 win32，否则 Linux/macOS CI 上会静默退化成"什么都检测不到"。
+    monkeypatch.setattr(sys, "platform", "win32")
     exe = _exe(tmp_path / "Programs" / "BongoCat", "BongoCat.exe")
     env = {"LOCALAPPDATA": str(tmp_path), "ProgramFiles": str(tmp_path / "pf")}
 
     assert detect_bongo_cat(env) == exe
     assert detect_bongo_cat({"LOCALAPPDATA": str(tmp_path / "nope")}) is None
+
+
+def test_detect_bongo_cat_returns_empty_on_non_windows(tmp_path, monkeypatch):
+    """非 Windows 平台按设计不检测（这条是上面那个用例的对照，防止把平台闸门测没了）。"""
+    monkeypatch.setattr(sys, "platform", "linux")
+    _exe(tmp_path / "Programs" / "BongoCat", "BongoCat.exe")
+    env = {"LOCALAPPDATA": str(tmp_path), "ProgramFiles": str(tmp_path / "pf")}
+
+    assert detect_bongo_cat(env) is None
 
 
 # ------------------------------------------------------------------ 模式状态机
@@ -364,8 +376,11 @@ def test_add_mode_is_idempotent_per_exe(tmp_path):
     assert [item.name for item in controller.modes()] == ["新名"]
 
 
-def test_detected_candidates_skips_configured(tmp_path):
+def test_detected_candidates_skips_configured(tmp_path, monkeypatch):
     _app()
+    # 自动检测同样是 Windows-only 分支（见 test_detect_bongo_cat_*）：强制 win32，
+    # 否则这条在 Linux/macOS CI 上会因为没有候选而失败。
+    monkeypatch.setattr(sys, "platform", "win32")
     env = {"LOCALAPPDATA": str(tmp_path), "ProgramFiles": str(tmp_path / "pf")}
     exe = _exe(tmp_path / "Programs" / "BongoCat", "BongoCat.exe")
     controller = _controller(FakeShell([]), FakeConfig(), tmp_path, env=env)
