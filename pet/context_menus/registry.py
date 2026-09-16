@@ -122,6 +122,17 @@ def _build_todo_panel(menu, pet):
     return add_action(menu, "待办提醒", "todo", pet.on_open_todo_panel, close_on_trigger=True)
 
 
+def _build_voice_chime_now(menu, pet):
+    return add_action(menu, "立即报时", "chat", pet.on_voice_chime_now, close_on_trigger=True)
+
+
+def _build_voice_chime_toggle(menu, pet):
+    cfg = getattr(pet, "cfg", None)
+    enabled = bool(cfg.get("voice_chime_enabled", True)) if cfg is not None else True
+    label = "关闭语音报时" if enabled else "启用语音报时"
+    return add_action(menu, label, "chat", pet.on_toggle_voice_chime, close_on_trigger=True)
+
+
 def _build_check_update(menu, pet):
     return add_action(menu, "检查更新", "update", lambda: pet.on_check_update(pet), close_on_trigger=True)
 
@@ -204,6 +215,12 @@ class MenuActionRegistry:
             ),
             "todo_panel": MenuActionSpec(
                 _build_todo_panel, _callback_available("on_open_todo_panel")
+            ),
+            "voice_chime_now": MenuActionSpec(
+                _build_voice_chime_now, _callback_available("on_voice_chime_now")
+            ),
+            "voice_chime_toggle": MenuActionSpec(
+                _build_voice_chime_toggle, _callback_available("on_toggle_voice_chime")
             ),
             "quit": MenuActionSpec(add_quit),
         }

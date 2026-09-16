@@ -64,6 +64,8 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset({
     "stream_capture_mode", "system_notifications_enabled", "throw_strength",
     "experimental_single_process_spawn", "experimental_shared_decode",
     "todo_reminder_enabled", "todo_reminder_lead_minutes",
+    "voice_chime_enabled", "voice_chime_schedule", "voice_chime_custom_times",
+    "voice_chime_voice", "voice_chime_rate", "voice_chime_pitch", "voice_chime_volume",
 })
 
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。

@@ -687,6 +687,14 @@ class Config:
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             "todo_reminder_enabled": True,   # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
+            # 语音报时（edge-tts 在线 TTS + 随机台词/歌词）
+            "voice_chime_enabled": True,      # 语音报时总开关
+            "voice_chime_schedule": "hourly",  # hourly / every_30 / every_15 / every_5 / every_minute / custom
+            "voice_chime_custom_times": "",   # 自定义时间点（HH:MM 逗号分隔，custom 模式生效）
+            "voice_chime_voice": "zh-CN-XiaoxiaoNeural",  # edge-tts 音色
+            "voice_chime_rate": 0,            # 语速偏移（%），-100~100
+            "voice_chime_pitch": 0,           # 音调偏移（Hz），-50~50
+            "voice_chime_volume": 80,         # 播放音量（0~100）
             **DEFAULT_COLLISION_SETTINGS,
             "media_prewarm": "balanced",  # full / balanced / minimal 素材首帧预热力度
             # 批10-A3：默认 32→8MB。预测式预热（批10-A1）落地后，首帧 LRU 只需
@@ -857,6 +865,8 @@ class Config:
             "chat_follow_pet",
             "system_notifications_enabled",
             "todo_reminder_enabled", "todo_reminder_lead_minutes",
+            "voice_chime_enabled", "voice_chime_schedule", "voice_chime_custom_times",
+            "voice_chime_voice", "voice_chime_rate", "voice_chime_pitch", "voice_chime_volume",
             "character_aliases",
             "character_profiles",
             "chat_always_on_top",

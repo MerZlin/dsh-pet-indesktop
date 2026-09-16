@@ -679,6 +679,11 @@ class ModernSettingsDialog(QDialog):
         from .exploration_watchdog_settings import WatchdogSettingsPage
         agent_link_cfg = self.config.get("agent_link", {})
         self.watchdog_page = WatchdogSettingsPage(self.config, agent_link_cfg, self)
+
+        # 语音报时设置页（行在 _rebuild_domain_navigation 中并入 automation 域）
+        from .voice_chime_settings import VoiceChimeSettingsPage
+        self.voice_chime_page = VoiceChimeSettingsPage(self.config, self)
+        self.voice_chime_page.preview_requested.connect(self._on_voice_chime_preview)
         self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
@@ -1406,6 +1411,8 @@ class ModernSettingsDialog(QDialog):
         claimed.update(proactive_rows)
         watchdog_rows = list(self.watchdog_page.findChildren(SettingRow))
         claimed.update(watchdog_rows)
+        voice_chime_rows = list(self.voice_chime_page.findChildren(SettingRow))
+        claimed.update(voice_chime_rows)
         # WatchdogSettingsPage 现同时承载「循环检测」（watchdog/long_think）、
         # 「卡住检测」（stuck_*）与「行为重复检测」（pattern_*）三组行，
         # 按 objectName 前缀分组显示。
@@ -1418,6 +1425,7 @@ class ModernSettingsDialog(QDialog):
         automation = page_content([
             ("Agent 提示音", claim_prefix("agent_sound_")),
             ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
+            ("语音报时", voice_chime_rows),
             ("主动感知", proactive_rows),
             ("循环检测", loop_rows),
             ("卡住检测", stuck_rows),
@@ -1784,6 +1792,9 @@ class ModernSettingsDialog(QDialog):
         self.config.set("agent_link", agent_cfg)
         self.config.set("todo_reminder_enabled", self.todo_reminder_check.isChecked())
         self.config.set("todo_reminder_lead_minutes", int(self.todo_reminder_lead_spin.value()))
+        # 语音报时设置页写回（仅写 voice_chime_* 7 键）
+        if self.voice_chime_page is not None:
+            self.voice_chime_page.apply_to_config()
         self.config.set("context_menu_appearance", {
             "theme": self.menu_theme_select.currentData(),
             "density": self.menu_density_select.currentData(),
@@ -1858,6 +1869,16 @@ class ModernSettingsDialog(QDialog):
                 + str(self.config.path),
             )
         return ok
+
+    def _on_voice_chime_preview(self, text: str) -> None:
+        """语音报时设置页「试听」：透传父级 AppShell 的手动报时入口。
+
+        父级（PetWindow / 对话框宿主）通过 on_voice_chime_now 暴露该能力；
+        未接线时静默忽略（仅设置界面无副作用）。
+        """
+        cb = getattr(self.parent(), "on_voice_chime_now", None)
+        if callable(cb):
+            cb(text)
 
     def reject(self) -> None:  # noqa: N802 - Qt API
         """Esc 路径与关闭按钮一致：保存设置并应用开机自启。"""

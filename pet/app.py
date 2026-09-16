@@ -54,6 +54,7 @@ from .session_watcher import install_session_watcher
 from .collision_ipc import CollisionIpcSession
 from .decode_fanout import DecodeFanoutHub
 from .todo_reminder import TodoReminderService
+from .voice_chime_service import VoiceChimeService
 from .dsh_state import DshStateTracker
 from .persona_phrases import PhrasePicker
 
@@ -436,6 +437,8 @@ class PetInstance:
             self._slot_wrap(self.shell.clear_spawned_pets)
             if not self.config.instance_id else None)
         win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
+        win.on_voice_chime_now = self._slot_wrap(self.shell.trigger_voice_chime_now)
+        win.on_toggle_voice_chime = self._slot_wrap(self.shell.toggle_voice_chime)
         win.on_restore_fun_windows = restore_ojingjing_windows
         win.on_hidden = self._slot_wrap(self._notify_pet_hidden)
         # 批5.2 P0-2：右键「退出」注入窗级「退出这只」只在 flag 开（多窗）时；
@@ -788,6 +791,7 @@ class PetInstance:
         self.shell._apply_balance_timer()
         # Phase 1/2：设置保存后按配置同步可选服务（todo 懒启停）与动画预热
         self.shell._sync_todo_service()
+        self.shell._sync_chime_service()
         self._sync_animation_prewarm()
         self._refresh_chat_windows()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
@@ -982,6 +986,12 @@ class AppShell:
         self.todo_panel = None
         if self._todo_wanted():
             self._ensure_todo_service()
+        # 语音报时：进程级单例（多窗共用调度器）。默认启用 → 启动即创建并
+        # 跑 20s tick；设置关闭后 stop 并释放。edge-tts 合成在后台线程，
+        # 播放与气泡走 GUI 线程（QtMultimedia + win.show_bubble）。
+        self.voice_chime_service = None
+        if self._chime_wanted():
+            self._ensure_chime_service()
         # 批5.2 P1-2/P2-6：进程级 flag 快照——启动期从主窗 config 读一次存
         # _single_process_spawn；窗级逻辑（runtime 标记版本化、日志前缀、
         # 退出分派、spawn 分发）一律读本快照，不读每窗 config。第二窗的
@@ -1093,6 +1103,32 @@ class AppShell:
             if getattr(self, "todo_panel", None) is None:
                 self.todo_service = None
 
+    # ------------------------------------------------------------ 功能门控（语音报时）
+    def _chime_wanted(self) -> bool:
+        return bool(self.config.get("voice_chime_enabled", True))
+
+    def _ensure_chime_service(self):
+        """懒创建语音报时服务（仅在使用报时/手动触发时创建）。"""
+        if getattr(self, "voice_chime_service", None) is None:
+            self.voice_chime_service = VoiceChimeService(self)
+        return self.voice_chime_service
+
+    def _sync_chime_service(self) -> None:
+        """按配置启停语音报时服务；关闭时释放服务对象。"""
+        if self._chime_wanted():
+            service = self._ensure_chime_service()
+            if service.is_running():
+                # 已在运行：设置保存只刷新配置，不重置 20s tick。
+                service.apply_config()
+            else:
+                service.start()
+        elif getattr(self, "voice_chime_service", None) is not None:
+            try:
+                self.voice_chime_service.stop()
+            except Exception:
+                logging.exception("停止语音报时服务失败")
+            self.voice_chime_service = None
+
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
         # aboutToQuit 只在控制器层绑定一次：角色热切换会重建窗口，逐个
@@ -1115,6 +1151,7 @@ class AppShell:
         self.instance._apply_spawn_offset()
         self._apply_balance_timer()
         self._sync_todo_service()
+        self._sync_chime_service()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
         QTimer.singleShot(4000, self._maybe_autostart_harness)
         # issue #111：会话结束（Windows 关机/注销）探测器。必须在窗口就绪后安装
@@ -1341,6 +1378,12 @@ class AppShell:
         #（关掉后迟到的 queued 回调提交会被明确拒绝）。
         if self.todo_service is not None:
             self.todo_service.stop()
+        # 语音报时同为进程级懒服务，退出必须一并停：其无主 QTimer 的 timeout
+        # 连接从 Qt C++ 侧强引用住整个对象图（理由同 todo_service，见
+        # _shutdown_live_for_tests 注释）；不停则退出期仍在跑 20s tick，且
+        # 飞行中的合成线程会经信号桥回 GUI 线程回放、触碰正在析构的窗口。
+        if self.voice_chime_service is not None:
+            self.voice_chime_service.stop()
         try:
             self._dsh_state_tracker.stop()
         except Exception:
@@ -1389,6 +1432,13 @@ class AppShell:
                     shell.todo_service = None
                 if getattr(shell, "_shared", None) is not None:
                     shell._shared.stop_all()
+                service = getattr(shell, "voice_chime_service", None)
+                if service is not None:
+                    try:
+                        service.stop()
+                    except Exception:
+                        logging.debug("测试收口语音报时服务失败", exc_info=True)
+                    shell.voice_chime_service = None
                 if getattr(shell, "instance", None) is not None:
                     win = getattr(shell.instance, "win", None)
                     lib = getattr(win, "lib", None)
@@ -2253,6 +2303,20 @@ class AppShell:
 
     def _todo_panel_finished(self, _result: int) -> None:
         self.todo_panel = None
+
+    def trigger_voice_chime_now(self, text: str = "") -> None:
+        """手动报时：右键菜单「立即报时」/ 设置页试听共用。
+
+        无论报时总开关是否开启都会执行（试听/手动触发语义），服务懒创建。
+        """
+        service = self._ensure_chime_service()
+        service.say_now(text=text)
+
+    def toggle_voice_chime(self) -> None:
+        """右键菜单「启用语音报时」开关：翻转配置并同步服务启停。"""
+        self.config.set("voice_chime_enabled", not bool(self.config.get("voice_chime_enabled", True)))
+        self.config.save()
+        self._sync_chime_service()
 
     def system_notify(self, title: str, message: str, *, on_click=None, duration_ms: int = 5000) -> None:
         """Show a bottom-right desktop notification (self-drawn, tray-independent)."""

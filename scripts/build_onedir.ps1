@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 <#
 .SYNOPSIS
     dsh-pet-standalone onedir build + portable zip packaging.
@@ -165,6 +165,7 @@ if (-not $SkipBuild) {
         --collect-all imageio_ffmpeg `
         --collect-all certifi `
         --collect-all PySide6.QtMultimedia `
+        --collect-all edge_tts `
         @keyringCollect `
         --add-data $datas `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
