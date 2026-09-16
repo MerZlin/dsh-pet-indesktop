@@ -29,12 +29,7 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipZip,
     [switch]$SkipCheck,
-    [switch]$Gif,
-    # 键鼠跟随模式的外部运行时（BongoCat）来源目录；CI 由
-    # scripts/build_bongo_runtime.ps1 先构建到这里。
-    [string]$KeyMouseRuntimeDir = 'external\bongocat',
-    # CI 打包要求必须带上运行时（缺件直接失败）；本地开发构建可不带。
-    [switch]$RequireKeyMouseRuntime
+    [switch]$Gif
 )
 
 $ErrorActionPreference = 'Stop'
@@ -375,30 +370,6 @@ if ($proc.MainWindowHandle -eq 0) {
 }
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 Write-Host "[smoke] exe started OK" -ForegroundColor Green
-
-# ---------- 键鼠跟随运行时（BongoCat）打入包内 ----------
-# 模式切换（经典桌宠 ⇄ 键鼠跟随）复用原版 BongoCat 构建产物：exe + assets/
-# 必须整体随包分发（安装目录只读 → 首次使用时复制到数据目录的可写副本）。
-# 开发构建缺件时只警告；CI 通过 -RequireKeyMouseRuntime 强制要求。
-$runtimeSrc = Join-Path $root $KeyMouseRuntimeDir
-if (Test-Path $runtimeSrc) {
-    $runtimeDst = Join-Path $appDir 'external\bongocat'
-    New-Item -ItemType Directory -Force -Path $runtimeDst | Out-Null
-    Copy-Item -Path (Join-Path $runtimeSrc '*') -Destination $runtimeDst -Recurse -Force
-    $runtimeExe = Join-Path $runtimeDst 'BongoCat.exe'
-    $runtimeModel = Join-Path $runtimeDst 'assets\models\standard\cat.model3.json'
-    if (-not (Test-Path $runtimeExe)) { throw "键鼠跟随运行时缺 BongoCat.exe: $runtimeDst" }
-    if (-not (Test-Path $runtimeModel)) { throw "键鼠跟随运行时缺 assets/models/standard: $runtimeDst" }
-    Write-Host "[2.5/3] 已打入键鼠跟随运行时: $runtimeDst" -ForegroundColor Cyan
-    # 不加 --strict：上游预置素材本来就有「缺某个键的覆盖图 / standard 无
-    # right-keys」这类警告，门禁只认结构、尺寸、PNG 类错误。
-    python scripts\verify_bongo_assets.py --runtime $runtimeDst
-    if ($LASTEXITCODE -ne 0) { throw "键鼠跟随素材自检失败（scripts/verify_bongo_assets.py）" }
-} elseif ($RequireKeyMouseRuntime) {
-    throw "缺少键鼠跟随运行时（-RequireKeyMouseRuntime）: $runtimeSrc"
-} else {
-    Write-Host "[2.5/3] 跳过键鼠跟随运行时（未找到 $runtimeSrc）——本地开发包不含新模式" -ForegroundColor Yellow
-}
 
 if (-not $SkipZip) {
     Write-Host "[2/3] Packing portable zip..." -ForegroundColor Cyan

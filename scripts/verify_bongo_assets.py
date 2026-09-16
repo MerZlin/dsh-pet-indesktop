@@ -5,7 +5,7 @@
 
 1. 用户上传/替换素材后自查（尺寸、命名、透明通道、缺件）；
 2. 开发时校验 `<数据目录>/bongocat/models/<model>/` 覆盖层；
-3. CI 校验随包内置的 `external/bongocat/assets/models/**`。
+3. 把模型交给 BongoCat 的「导入模型」之前，检查整份模型目录是否自洽。
 
 素材契约（与原版 BongoCat 一致）：
 

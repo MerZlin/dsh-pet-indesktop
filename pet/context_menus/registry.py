@@ -29,8 +29,7 @@ from .shared import (
     add_harness,
     add_hide_pet,
     add_look_screen,
-    add_mode_classic,
-    add_mode_key_mouse,
+    add_external_mode_menu,
     add_mouse_through,
     add_no_move,
     add_on_top,
@@ -59,7 +58,7 @@ ACTION_LABELS = {
     "check_update": "检查更新", "github_project": "GitHub 项目页",
     "quark_download": "夸克网盘下载", "agent_link": "Agent 联动",
     "proactive_screen": "主动识屏", "todo_panel": "待办提醒",
-    "mode_switch": "模式切换", "mode_classic": "经典桌宠", "mode_key_mouse": "键鼠跟随",
+    "mode_switch": "模式切换",
     "modern_settings": "桌宠设置", "quit": "退出",
 }
 
@@ -81,7 +80,7 @@ ACTION_ICONS = {
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
     "proactive_screen": "screen", "todo_panel": "todo",
-    "mode_switch": "settings", "mode_classic": "pet", "mode_key_mouse": "interaction",
+    "mode_switch": "settings",
     "modern_settings": "settings", "quit": "quit",
 }
 
@@ -203,17 +202,11 @@ class MenuActionRegistry:
                 add_proactive_menu,
                 lambda pet: sys.platform == "win32" and callable(getattr(pet, "on_open_chat", None)),
             ),
-            # 模式切换（首版仅 Windows）：available 只表达平台能力，
-            # 运行时就绪/是否主桌宠由 shared.add_mode_* 在渲染期判定并给出
-            # 各自的 tooltip，因此这里不从 enabled 集合里剔除（避免 populate
-            # 用静态 disabled_reason 覆盖掉更具体的动态原因）。
-            "mode_classic": MenuActionSpec(
-                lambda menu, pet: add_mode_classic(menu, pet),
-                lambda _pet: sys.platform == "win32",
-            ),
-            "mode_key_mouse": MenuActionSpec(
-                lambda menu, pet: add_mode_key_mouse(menu, pet),
-                lambda _pet: sys.platform == "win32",
+            # 模式切换：经典桌宠 + 用户配置的外接启动模式（动态子菜单）。
+            # 外接程序是否存在、是否主桌宠由 shared.add_external_mode_menu 在
+            # 渲染期判定并给出具体 tooltip，因此不从这里剔除 enable 状态。
+            "mode_switch": MenuActionSpec(
+                lambda menu, pet: add_external_mode_menu(menu, pet),
             ),
             "modern_settings": MenuActionSpec(
                 _build_settings, _callback_available("on_open_modern_settings")

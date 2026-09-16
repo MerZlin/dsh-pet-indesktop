@@ -159,14 +159,16 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   context-menu structure, styling, interaction, or platform behavior.
 - Read `docs/SETTINGS-CHANGE-GATES.md` before adding, moving, removing, or
   changing a persistent setting or its settings-page interaction.
-- Read `docs/KEY-MOUSE-MODE-2026-09-13.md` (and
-  `docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md` for model assets) when changing
-  `pet/key_mouse_mode.py`, the `mode_switch` menu subtree, the `pet_mode`
-  config key, or the `external/bongocat` build/CI wiring.
-- Read `docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md` when changing the
-  asset tooling (`scripts/prepare_bongo_own_character.py`,
+- Read `docs/EXTERNAL-MODE-2026-09-16.md` when changing `pet/external_mode.py`,
+  the `mode_switch` menu subtree, or the `pet_mode` / `external_modes` config
+  keys. The pet launches user-installed programs; it must never build or bundle
+  a third-party desktop pet (that forked-build design is retired, see
+  `docs/KEY-MOUSE-MODE-2026-09-13.md`).
+- Read `docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md` (asset contract in
+  `docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md`) when changing the asset tooling
+  (`scripts/prepare_bongo_own_character.py`,
   `scripts/restyle_bongo_key_overlays.py`, `scripts/verify_bongo_assets.py`) or
-  the user-facing prompts for building a custom key-mouse character.
+  the user-facing prompts for building a custom model.
 - Read `docs/PERSONA-PHRASES-PRESET-STORAGE-2026-09-08.md` before changing
   dialogue preset files (`pet/persona_presets/*.json`), phrase loading
   (`persona_phrases.py`), or expression-style semantics

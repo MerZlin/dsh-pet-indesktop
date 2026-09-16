@@ -428,32 +428,27 @@ pythonw -m pet
 - 配置缺失回默认模板；损坏/不支持的 schema 只保留「桌宠设置 / 退出」安全菜单；旧自定义树自动补入新默认项；动作缺条件置灰 + tooltip。
 - 同页 Tab 还有「快捷启动」（双行应用列表编辑，无配置时子菜单显示禁用占位「尚未配置快捷项」）与「外观」（主题即时生效、开关从属项「开显关隐」）。
 
-### 键鼠跟随模式（模式切换）
+### 模式切换（外接启动模式）
 
-- 右键桌宠或托盘 →「模式切换」→「键鼠跟随」，即可切到基于 [BongoCat](https://github.com/ayangweb/BongoCat)
-  的键鼠跟随桌宠（猫跟着你敲键盘、动鼠标）；选「经典桌宠」切回。
-- 切换语义：进入新模式时**全部桌宠窗口隐藏并深度暂停**（停解码、停定时器、停识屏与联动，
-  CPU 占用≈0，进程常驻以便秒切回），然后拉起独立的 BongoCat 进程；
-  BongoCat 退出（右键「切回原桌宠」、被任务管理器结束或崩溃）即自动恢复原桌宠。
-- 模式记忆：停在键鼠跟随模式时退出/重启，下次启动会直接进入该模式；运行时不就绪时
-  自动回落经典桌宠并提示一次。
+- 右键桌宠或托盘 →「模式切换」，可以把**任意外部桌宠程序**登记成一个模式：
+  「添加外接模式…」选它的可执行文件；装了官方 [BongoCat](https://github.com/ayangweb/BongoCat)
+  的话菜单里会直接出现「添加 BongoCat」，一键登记。子菜单里点该模式即进入，点「经典桌宠」切回。
+- 切换语义：进入外接模式时**全部桌宠窗口隐藏并深度暂停**（停解码、停定时器、停识屏与联动，
+  CPU 占用≈0，进程常驻以便秒切回），然后拉起外部程序；该程序退出（在它自己的菜单里退出、
+  被任务管理器结束或崩溃）即自动恢复原桌宠。
+- 模式记忆：停在外接模式时退出/重启，下次启动会直接进入该模式；程序被移动/删除时
+  自动回落经典桌宠并提示一次，菜单项同时置灰并说明原因。
 - 多开：开启「单进程多开（省内存）」时所有窗口一起切；默认多进程多开时只暂停主桌宠
-  （子肥鱼继续运行，切换时会提示一次）。
-- 只有主桌宠能切换模式；首版仅 Windows。
-- **换素材**：把图片放进 `%APPDATA%\dsh-pet-standalone[-变体]\bongocat\models\standard\`
-  （背景/封面/按键覆盖图/贴图重绘都支持），下次进入模式自动生效；
-  素材契约、替换步骤与可直接使用的 GPT 出图提示词见
-  [docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md](docs/KEY-MOUSE-MODE-ASSETS-2026-09-13.md)，
-  自检用 `python scripts/verify_bongo_assets.py --dir <模型目录> --strict`。
-- **做自己的角色版本**：有角色三视图就能开工——按
+  （子肥鱼继续运行，切换时会提示一次）。只有主桌宠能切换模式。
+- **本程序不编译、不内置任何第三方桌宠**：BongoCat 由你自己安装，它的模型与设置都由它自己管理
+  （用它的「导入模型」换素材）。详见
+  [docs/EXTERNAL-MODE-2026-09-16.md](docs/EXTERNAL-MODE-2026-09-16.md)。
+- **想做自己的角色模型**：用我们的创作工具链——`scripts/prepare_bongo_own_character.py`
+  导出工作区与"结构参考"预览图 → 按
   [docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md](docs/KEY-MOUSE-MODE-OWN-CHARACTER-2026-09-15.md)
-  走：`scripts/prepare_bongo_own_character.py` 一键准备可编辑工作区与"结构参考"预览图 →
-  按文档里现成的 GPT 提示词重绘贴图/按键高亮/背景 →
-  `scripts/restyle_bongo_key_overlays.py` 用一张高亮图批量换掉整套按键覆盖图 →
-  校验并放回数据目录。
-- 运行时（BongoCat）由 CI 从 [MerZlin/BongoCat](https://github.com/MerZlin/BongoCat) 的
-  `dsh-pet` 分支构建并随包分发（MIT，见 `THIRD_PARTY_NOTICES.md`）；本地开发没有产物时
-  会回退使用你已安装的 BongoCat，或用环境变量 `DSH_PET_BONGOCAT_DIR` 指定目录。
+  里现成的 GPT 提示词重绘贴图/按键高亮/背景 →
+  `scripts/restyle_bongo_key_overlays.py` 用一张高亮图批量替换整套按键覆盖图 →
+  `scripts/verify_bongo_assets.py` 校验后用 BongoCat「导入模型」加载。
 
 ### 省电模式
 

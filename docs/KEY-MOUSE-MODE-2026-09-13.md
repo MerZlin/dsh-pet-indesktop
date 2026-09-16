@@ -1,5 +1,9 @@
 # 键鼠跟随模式（复用 BongoCat 运行时）
 
+> **已废弃（2026-09-16）**：本方案要求 fork BongoCat 并由本仓库 CI 编译运行时，
+> 已改为「外接启动模式」——主桌宠只负责启动用户自己安装的程序，不编译、不内置。
+> 现行方案见 `docs/EXTERNAL-MODE-2026-09-16.md`；本文仅作历史记录保留。
+
 - 日期：2026-09-13
 - 状态：已实现（Windows 首版）
 - 关联代码：`pet/key_mouse_mode.py`、`pet/context_menus/{registry,shared,legacy}.py`、

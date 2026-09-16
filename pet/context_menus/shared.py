@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QMenu
 from .. import autostart as autostart_mod
 from .. import catalog
 from ..harness_launcher import launch_harness_gui
-from ..key_mouse_mode import MODE_CLASSIC, MODE_KEY_MOUSE, PET_MODE_KEY, normalize_mode
+from ..external_mode import MODE_CLASSIC, MODE_PREFIX, PET_MODE_KEY, normalize_mode_value
 from ..report_gates import REPORT_GATE_DEFAULTS
 from ..updater import QUARK_PAN_URL, REPO_URL
 from .icons import fitted_pet_pixmap_icon, pet_avatar_menu_icon, vector_menu_icon
@@ -410,81 +410,128 @@ def _pet_mode_state(pet) -> str:
     getter = getattr(pet, "pet_mode_state", None)
     if callable(getter):
         try:
-            return normalize_mode(getter())
+            return normalize_mode_value(getter())
         except Exception:  # noqa: BLE001 - 菜单渲染不允许因状态读取失败整树崩掉
             pass
     cfg = getattr(pet, "cfg", None)
     if cfg is not None:
         try:
-            return normalize_mode(cfg.get(PET_MODE_KEY))
+            return normalize_mode_value(cfg.get(PET_MODE_KEY))
         except Exception:  # noqa: BLE001
             pass
     return MODE_CLASSIC
 
 
-def _mode_switch_enabled(pet) -> tuple[bool, str]:
-    """返回（是否可切到键鼠跟随, 不可用原因）。"""
-    if not bool(getattr(pet, "mode_switch_allowed", True)):
-        return False, "请在主桌宠（第一只）处切换模式"
-    available = getattr(pet, "key_mouse_mode_available", None)
-    if callable(available):
-        try:
-            if available():
-                return True, ""
-        except Exception:  # noqa: BLE001
-            pass
-        return False, "未找到键鼠跟随运行时（BongoCat）；可重装本程序或设置 DSH_PET_BONGOCAT_DIR"
-    return True, ""
+def _external_modes(pet) -> list:
+    getter = getattr(pet, "external_mode_list", None)
+    if not callable(getter):
+        return []
+    try:
+        return list(getter())
+    except Exception:  # noqa: BLE001
+        return []
 
 
-def _add_mode_action(menu: QMenu, pet, mode: str, label: str, icon_name: str | None):
+def _detected_modes(pet) -> list:
+    getter = getattr(pet, "detected_external_mode_list", None)
+    if not callable(getter):
+        return []
+    try:
+        return list(getter())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _add_mode_radio(menu: QMenu, pet, *, mode_value: str, label: str, icon_name: str | None,
+                    enabled: bool = True, reason: str = "", mode_id: str = ""):
     action = add_action(menu, label, icon_name)
-    action.setProperty("modeId", mode)
+    action.setProperty("modeId", mode_value)
     action.setCheckable(True)
-    action.setChecked(_pet_mode_state(pet) == mode)
+    action.setChecked(_pet_mode_state(pet) == mode_value)
     setter = getattr(pet, "on_set_pet_mode", None)
-    if mode == MODE_KEY_MOUSE:
-        enabled, reason = _mode_switch_enabled(pet)
-        action.setEnabled(enabled)
-        if not enabled:
-            action.setToolTip(reason)
-    if callable(setter):
-        action.triggered.connect(lambda _checked=False, mode=mode, setter=setter: setter(mode))
-    else:
+    if not callable(setter):
         action.setEnabled(False)
         action.setToolTip("当前窗口不支持模式切换")
+        return action
+    if not enabled:
+        action.setEnabled(False)
+        action.setToolTip(reason)
+        return action
+    action.triggered.connect(
+        lambda _checked=False, value=mode_value, setter=setter: setter(value)
+    )
     return action
 
 
-def add_mode_classic(menu: QMenu, pet, *, icons: bool = True):
-    return _add_mode_action(menu, pet, MODE_CLASSIC, "经典桌宠", "pet" if icons else None)
-
-
-def add_mode_key_mouse(menu: QMenu, pet, *, icons: bool = True):
-    return _add_mode_action(menu, pet, MODE_KEY_MOUSE, "键鼠跟随", "interaction" if icons else None)
-
-
 def sync_mode_switch_menu(menu: QMenu, pet) -> None:
-    """按当前模式刷新勾选；托盘菜单复用一份 QMenu，需要弹出前同步。"""
+    """按当前模式刷新勾选；托盘菜单复用一份 QMenu，需要弹出前同步。
+
+    外接程序是否还在（缺文件 → 置灰）也在弹出前重新判定，避免移动/删除程序后
+    菜单仍显示可点。
+    """
     current = _pet_mode_state(pet)
+    modes = {spec.id: spec for spec in _external_modes(pet)}
     for action in menu.actions():
-        mode = action.property("modeId")
-        if not mode:
+        mode_value = action.property("modeId")
+        if not mode_value:
             continue
-        action.setChecked(str(mode) == current)
-        if str(mode) == MODE_KEY_MOUSE:
-            enabled, reason = _mode_switch_enabled(pet)
-            action.setEnabled(enabled)
-            action.setToolTip(reason if not enabled else "")
+        mode_value = str(mode_value)
+        action.setChecked(mode_value == current)
+        if mode_value.startswith(MODE_PREFIX):
+            spec = modes.get(mode_value[len(MODE_PREFIX):])
+            if spec is None:
+                continue
+            available = spec.available() and bool(
+                getattr(pet, "mode_switch_allowed", True)
+            )
+            action.setEnabled(available)
+            action.setToolTip("" if available else spec.unavailable_reason())
 
 
-def add_mode_switch_menu(menu: QMenu, pet, *, icons: bool = True):
-    """模式切换子菜单：经典桌宠 / 键鼠跟随（互斥勾选）。"""
+def add_external_mode_menu(menu: QMenu, pet, *, icons: bool = True):
+    """模式切换子菜单：经典桌宠 + 已配置的外接模式 + 添加/移除入口。"""
     if not callable(getattr(pet, "on_set_pet_mode", None)):
         return None
+    allowed = bool(getattr(pet, "mode_switch_allowed", True))
     submenu = add_submenu(menu, "模式切换", "settings" if icons else None)
-    add_mode_classic(submenu, pet, icons=icons)
-    add_mode_key_mouse(submenu, pet, icons=icons)
+    _add_mode_radio(
+        submenu, pet, mode_value=MODE_CLASSIC, label="经典桌宠",
+        icon_name="pet" if icons else None,
+    )
+    for spec in _external_modes(pet):
+        enabled = allowed and spec.available()
+        reason = "请在主桌宠（第一只）处切换模式" if not allowed else spec.unavailable_reason()
+        _add_mode_radio(
+            submenu, pet, mode_value=spec.mode_value, label=spec.name,
+            icon_name="interaction" if icons else None,
+            enabled=enabled, reason=reason, mode_id=spec.id,
+        )
+    submenu.addSeparator()
+    picker = getattr(pet, "on_pick_external_mode_exe", None)
+    if callable(picker):
+        add_action(submenu, "添加外接模式…", "application" if icons else None, picker,
+                   close_on_trigger=True)
+    add_mode = getattr(pet, "on_add_external_mode", None)
+    for spec in _detected_modes(pet):
+        if not callable(add_mode):
+            break
+        add_action(
+            submenu,
+            f"添加 {spec.name.split('（')[0]}",
+            "harness" if icons else None,
+            lambda spec=spec, add_mode=add_mode: add_mode(spec),
+            close_on_trigger=True,
+        )
+    modes = _external_modes(pet)
+    remove_mode = getattr(pet, "on_remove_external_mode", None)
+    if modes and callable(remove_mode):
+        remove_menu = add_submenu(submenu, "移除外接模式")
+        for spec in modes:
+            add_action(
+                remove_menu, spec.name, None,
+                lambda mode_id=spec.id, remove_mode=remove_mode: remove_mode(mode_id),
+                close_on_trigger=True,
+            )
     return submenu
 
 

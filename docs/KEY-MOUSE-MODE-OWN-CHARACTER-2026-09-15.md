@@ -22,14 +22,19 @@ A + B 可以叠加：先用 A 把猫换成你的角色，再用 B 统一按键�
 
 ---
 
-## 1. 准备工作区（别在运行时目录里原地改）
+## 1. 准备工作区
 
-运行时目录会在升级/重建副本时被覆盖，所以先把素材复制成一份工作区：
+> 现行流程（2026-09-16 起）：模型由 **BongoCat 自己的「导入模型」** 加载，
+> 所以我们只做"产出一份合格的模型文件夹"，不再碰 dsh-pet 的运行时副本。
+> 来源目录可以是：已安装 BongoCat 的模型目录（`%LOCALAPPDATA%\Programs\BongoCat\assets\models\standard`）
+> 或官方安装包解包出来的同名目录。
+
+先把素材复制成一份可编辑工作区：
 
 ```powershell
 # 1) 准备：复制出一套可编辑素材 + 生成"结构参考"预览图
 python scripts\prepare_bongo_own_character.py `
-  --model-dir "$env:APPDATA\dsh-pet-standalone\bongocat\runtime\assets\models\standard" `
+  --model-dir "$env:LOCALAPPDATA\Programs\BongoCat\assets\models\standard" `
   --out D:\dsh-pet-mycat --name mycat
 
 # 2) 看一眼清单：哪些是"结构必须逐像素保留"的贴图、哪些可自由替换
@@ -273,22 +278,16 @@ GPT 只能给你静态素材，接下来必须在 Live2D Cubism Editor 里手动
 
 ---
 
-## 5. 检查与安装
+## 5. 检查与导入
 
 ```powershell
 # 1) 校验素材（尺寸/引用/透明通道/覆盖图一致性）
 python scripts\verify_bongo_assets.py --dir D:\dsh-pet-mycat\mycat
 
-# 2) 安装到数据目录的覆盖层（进入模式时会自动同步进运行时副本）
-#    默认模型名是 standard；换角色时不改目录名，只替换里面的文件
-Copy-Item -Recurse -Force D:\dsh-pet-mycat\mycat\* `
-  "$env:APPDATA\dsh-pet-standalone\bongocat\models\standard\"
-
-# 3) 生效：退出并重新进入一次「键鼠跟随」模式（或在任务管理器结束 BongoCat.exe 后重进）
+# 2) 用 BongoCat 自己的「导入模型」把 D:\dsh-pet-mycat\mycat 加进去
+#    （它的偏好设置里有导入入口；导入后可在模型列表里切换）
+# 3) 生效：在 BongoCat 里切到新模型即可
 ```
-
-> 打包变体的数据目录名不同（如 `dsh-pet-standalone-webm-chat`），
-> 以你实际使用的变体目录为准。
 
 ---
 
@@ -301,7 +300,7 @@ Copy-Item -Recurse -Force D:\dsh-pet-mycat\mycat\* `
 | 按键高亮位置对不上 | 直接让 GPT 重绘了整张覆盖图并"优化构图" | 用 `restyle_bongo_key_overlays.py`：位置永远取自原图 alpha |
 | 三张贴图风格不一致 | 分散在不同会话里生成 | 同一会话连做三张，或把上一张成品一起上传做对照 |
 | 键盘模式（keyboard 模型）没有颜色变化 | 只替换了 standard 模型 | 想换键盘模型就同样替换 `models\keyboard\` |
-| 运行后还是旧素材 | 没有退出重进模式，或放错数据目录 | 退出并重进模式；确认目录是 `<数据目录>\bongocat\models\<模型名>\` |
+| 运行后还是旧素材 | 导入的是旧文件夹，或没在 BongoCat 里切换模型 | 用「导入模型」重新导入工作区，并在模型列表里选中它 |
 | 校验报 `texture-size-mismatch` | 贴图宽度与目录名约定不符 | 目录名 `.1024` 表示宽 1024；把贴图等比缩放到宽 1024 |
 
 ---

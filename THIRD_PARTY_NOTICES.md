@@ -50,17 +50,15 @@ SOFTWARE.
 
 ---
 
-## 3. BongoCat runtime（键鼠跟随模式）
+## 3. BongoCat（可选的外部模式，不由本项目分发）
 
-- **Files**: 打包产物内的 `external/bongocat/**`（`BongoCat.exe` 与 Live2D 预置模型
-  `assets/models/**`）。**本仓库不提交这些二进制**：它们由 CI 在打包时从我们
-  fork 的仓库构建并复制进来（见 `scripts/build_bongo_runtime.ps1`）。
+- **Files**: 无。本项目**不再内置、不再编译、不再分发**任何 BongoCat 二进制。
 - **Origin / Source Repository**: [ayangweb/BongoCat](https://github.com/ayangweb/BongoCat)
-  （fork：[MerZlin/BongoCat](https://github.com/MerZlin/BongoCat) 的 `dsh-pet` 分支）
-- **License**: MIT License
-- **Notes**: 该运行时只在用户主动切到「键鼠跟随」模式时启动，作为独立进程运行；
-  我们的 fork 只做最小改动（新增「切回原桌宠」菜单项、隔离应用标识、禁用自动更新、
-  开机自启默认关闭），改动清单见 `docs/KEY-MOUSE-MODE-2026-09-13.md`。
+- **License**: MIT License（由用户从上游自行安装时的许可）
+- **Notes**: 「模式切换」允许用户把**自己安装的**外部桌宠程序（例如 BongoCat）登记为一个
+  模式；本程序只负责启动它、暂停原桌宠、并在它退出后恢复。相关实现见
+  `docs/EXTERNAL-MODE-2026-09-16.md`。历史方案（fork 后自建编译并随包分发）已于
+  2026-09-16 废弃，见 `docs/KEY-MOUSE-MODE-2026-09-13.md`。
 
 ### MIT License Text
 

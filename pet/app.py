@@ -32,7 +32,7 @@ from pathlib import Path
 import shiboken6
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import autostart as autostart_mod
 from . import balance as balance_mod
@@ -42,13 +42,15 @@ from . import slot_manager as slot_manager_mod
 from . import updater
 from . import webm_clip as webm_clip_mod
 from .config import APP_DIR_NAME, Config, _default_base
-from .key_mouse_mode import (
-    MODE_KEY_MOUSE,
-    KeyMouseModeController,
-    normalize_mode,
+from .external_mode import (
+    MODE_CLASSIC,
+    MODE_PREFIX,
+    ExternalModeController,
+    make_spec,
+    normalize_mode_value,
 )
 from .context_menus.shared import (
-    add_mode_switch_menu,
+    add_external_mode_menu,
     open_deepseek_web,
     sync_mode_switch_menu,
 )
@@ -450,11 +452,13 @@ class PetInstance:
         # 模式切换：进程级状态由 shell 持有，窗口只做只读转发与转发调用；
         # mode_switch_allowed 让子肥鱼（非主窗）上的入口置灰并解释原因。
         win.pet_mode_state = self.shell.pet_mode_state
+        win.external_mode_list = self.shell.external_mode_list
+        win.detected_external_mode_list = self.shell.detected_external_mode_list
         win.on_set_pet_mode = self._slot_wrap(self.shell.set_pet_mode)
-        win.key_mouse_mode_available = self.shell.key_mouse_runtime_available
-        win.mode_switch_allowed = bool(
-            self is self.shell.instance and sys.platform == "win32"
-        )
+        win.on_pick_external_mode_exe = self._slot_wrap(self.shell.pick_external_mode_exe)
+        win.on_add_external_mode = self.shell.add_external_mode
+        win.on_remove_external_mode = self.shell.remove_external_mode
+        win.mode_switch_allowed = bool(self is self.shell.instance)
         # 批5.2 P0-2：右键「退出」注入窗级「退出这只」只在 flag 开（多窗）时；
         # flag 关（单窗）不注入 → _request_quit 走旧 app.quit 分支，逐位一致。
         if self.shell._single_process_spawn:
@@ -1032,11 +1036,9 @@ class AppShell:
             from .multi_window_shared import SharedSubsystems
 
             self._shared = SharedSubsystems(self)
-        # 模式切换（经典桌宠 ⇄ 键鼠跟随）：进程级唯一权威，主桌宠为准。
-        self.key_mouse_mode = KeyMouseModeController(
-            self, config=self.config, config_dir=self.config.dir,
-        )
-        self.key_mouse_mode.notice.connect(self._on_key_mouse_notice)
+        # 模式切换（经典桌宠 ⇄ 外接启动模式）：进程级唯一权威，主桌宠为准。
+        self.external_mode = ExternalModeController(self, config=self.config)
+        self.external_mode.notice.connect(self._on_external_mode_notice)
         _LIVE_SHELLS.add(self)
 
     @property
@@ -1143,9 +1145,9 @@ class AppShell:
         # ——它要在关机窗口期到来**之前**就位，才能抢在会话拆除前关掉 ffmpeg
         # 派生（否则系统会弹 0xc0000142 阻塞关机）。
         self._install_session_watcher()
-        # 模式记忆：上次停在键鼠跟随且运行时就绪 → 启动即隐藏桌宠并拉起 BongoCat；
-        # 运行时不就绪时回落经典模式并给一次托盘提示（见 key_mouse_mode）。
-        self.key_mouse_mode.start_for_saved_mode()
+        # 模式记忆：上次停在外接模式且程序仍在 → 启动即隐藏桌宠并拉起它；
+        # 程序已不可用时回落经典模式并给一次托盘提示（见 external_mode）。
+        self.external_mode.start_for_saved_mode()
 
     def _install_session_watcher(self) -> None:
         """安装会话结束探测器（幂等；实例属性强引用保活，不跨实例共享）。"""
@@ -1177,12 +1179,12 @@ class AppShell:
             return
         self._session_end_done = True
         self._mark_session_ending()
-        # 模式收尾：会话结束/关机时绝不再拉起键鼠跟随运行时，并收掉已拉起的子进程
+        # 模式收尾：会话结束/关机时绝不再拉起外接模式，并收掉已拉起的子进程
         # （与 issue #111 同一纪律：关机窗口期不再派生新进程）。
         try:
-            self.key_mouse_mode.shutdown()
+            self.external_mode.shutdown()
         except Exception:
-            logging.exception("会话结束时收尾键鼠跟随模式失败")
+            logging.exception("会话结束时收尾外接模式失败")
         stopped = 0
         for inst in self._instances:
             win = getattr(inst, "win", None)
@@ -1308,11 +1310,11 @@ class AppShell:
         # issue #111：先关 ffmpeg spawn 闸门，再走正常退出收口——正常退出路径
         # （托盘退出/最后窗口关闭）同样落在关机前后，绝不能在里面再派生 reader。
         self._mark_session_ending()
-        # 模式收尾：退出前先终止键鼠跟随子进程（不重启派生），再做逐窗收口。
+        # 模式收尾：退出前先终止外接模式子进程（不重启派生），再做逐窗收口。
         try:
-            self.key_mouse_mode.shutdown()
+            self.external_mode.shutdown()
         except Exception:
-            logging.exception("退出时收尾键鼠跟随模式失败")
+            logging.exception("退出时收尾外接模式失败")
         # 窗级收口：逐窗保存位置、停本窗预热与 Agent、提交本窗会话、释放本窗 slot 锁
         for inst in self._instances:
             win = inst.win
@@ -2235,25 +2237,71 @@ class AppShell:
     # ------------------------------------------------------------ 模式切换
     @property
     def pet_mode(self) -> str:
-        """当前模式：``classic``（经典桌宠）或 ``key_mouse``（键鼠跟随）。"""
-        return self.key_mouse_mode.state
+        """当前模式：``classic``（经典桌宠）或 ``external:<id>``（外接启动模式）。"""
+        return self.external_mode.state
 
     def pet_mode_state(self) -> str:
         """窗口/菜单侧读取当前模式的回调形式（``pet_mode`` 属性的调用版）。"""
-        return self.key_mouse_mode.state
+        return self.external_mode.state
 
     @property
     def single_process_spawn(self) -> bool:
         """进程级「单进程多开」快照（模式切换据此判断子肥鱼能否一起暂停）。"""
         return bool(self._single_process_spawn)
 
-    def key_mouse_runtime_available(self) -> bool:
-        """键鼠跟随运行时（BongoCat）是否就绪；决定菜单项可点与否。"""
+    def external_mode_list(self):
+        """已配置的外接启动模式（菜单渲染用）。"""
         try:
-            return bool(self.key_mouse_mode.runtime_available())
+            return self.external_mode.modes()
         except Exception:
-            logging.exception("检测键鼠跟随运行时失败")
+            logging.exception("读取外接模式配置失败")
+            return []
+
+    def detected_external_mode_list(self):
+        """自动检测到、可一键添加的外接模式（目前是已安装的 BongoCat）。"""
+        try:
+            return self.external_mode.detected_candidates()
+        except Exception:
+            logging.exception("检测外接程序失败")
+            return []
+
+    def pick_external_mode_exe(self):
+        """菜单入口：让用户选一个可执行文件，登记为外接启动模式。"""
+        parent = getattr(self.instance, "win", None)
+        start_dir = ""
+        if sys.platform == "win32":
+            start_dir = str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs")
+        path, _selected = QFileDialog.getOpenFileName(
+            parent, "选择外接模式的程序", start_dir,
+            "程序 (*.exe)" if sys.platform == "win32" else "所有文件 (*)",
+        )
+        if not path:
+            return None
+        return self.add_external_mode(make_spec(path))
+
+    def add_external_mode(self, spec):
+        """登记一个外接模式（同一程序重复添加只更新名称）。"""
+        try:
+            if not self.external_mode.add_mode(spec):
+                return None
+        except Exception:
+            logging.exception("添加外接模式失败")
+            self.system_notify("外接模式", "保存外接模式失败，请查看日志。")
+            return None
+        self._refresh_tray_menu()
+        self.system_notify("外接模式", f"已添加「{spec.name}」：在「模式切换」里选择它即可进入。")
+        return spec
+
+    def remove_external_mode(self, mode_id: str) -> bool:
+        """移除外接模式；若它正在运行则先退出回经典桌宠。"""
+        try:
+            removed = bool(self.external_mode.remove_mode(mode_id))
+        except Exception:
+            logging.exception("移除外接模式失败")
             return False
+        if removed:
+            self._refresh_tray_menu()
+        return removed
 
     def on_pet_visibility_changed(self) -> None:
         """任一窗口可见性变化后的进程级收口（灵动岛跟随；模式切换也走这里）。"""
@@ -2265,19 +2313,19 @@ class AppShell:
 
     def set_pet_mode(self, mode) -> bool:
         """菜单入口：切到指定模式，返回是否真的发生了状态变化。"""
-        target = normalize_mode(mode)
-        if target == MODE_KEY_MOUSE:
-            changed = bool(self.key_mouse_mode.enter())
+        target = normalize_mode_value(mode)
+        if target == MODE_CLASSIC:
+            changed = bool(self.external_mode.exit_mode())
         else:
-            changed = bool(self.key_mouse_mode.exit_mode())
+            changed = bool(self.external_mode.enter(target[len(MODE_PREFIX):]))
         self._refresh_tray_menu()
         return changed
 
-    def _on_key_mouse_notice(self, title: str, message: str) -> None:
+    def _on_external_mode_notice(self, title: str, message: str) -> None:
         try:
             self.system_notify(title, message)
         except Exception:
-            logging.exception("键鼠跟随模式提示失败")
+            logging.exception("外接模式提示失败")
 
     def _install_macos_dock_menu(self) -> QMenu | None:
         """Install the native Dock context menu as an independent recovery path."""
@@ -2413,9 +2461,9 @@ class AppShell:
             menu.addAction('AI 设置', self.instance.open_chat_settings)
         menu.addAction('桌宠设置', self.instance.open_modern_settings)
 
-        # 模式切换（经典桌宠 / 键鼠跟随）与右键菜单同一份构建函数，
+        # 模式切换（经典桌宠 / 外接启动模式）与右键菜单同一份构建函数，
         # 保证两处语义、勾选与禁用原因一致。
-        mode_menu = add_mode_switch_menu(menu, win, icons=False)
+        mode_menu = add_external_mode_menu(menu, win, icons=False)
 
         m_char = track_menu(menu.addMenu('切换角色'))
         current = str(self.config.get('character', catalog.DEFAULT_CHARACTER))

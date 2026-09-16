@@ -324,8 +324,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "agent_link",
         "proactive_screen",
         "todo_panel",
-        "mode_classic",
-        "mode_key_mouse",
+        "mode_switch",
         "modern_settings",
         "quit",
     }
