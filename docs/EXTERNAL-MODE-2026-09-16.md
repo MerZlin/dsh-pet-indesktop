@@ -46,13 +46,24 @@ stateDiagram-v2
 入口在**右键菜单与托盘菜单同一处**：`模式切换` 子菜单。
 
 1. **自动检测**：装了官方 BongoCat 的话，子菜单里会直接出现「添加 BongoCat」，
-   点一下即登记（检测位置：`%LOCALAPPDATA%\Programs\BongoCat\BongoCat.exe`、
-   `%LOCALAPPDATA%\BongoCat\BongoCat.exe`、`%ProgramFiles%\BongoCat\BongoCat.exe`）。
-2. **手动添加**：「添加外接模式…」→ 选任意可执行文件（Windows 为 `*.exe`）。
+   点一下即登记。检测位置按平台（Windows / macOS / Linux 都覆盖）：
+
+   | 平台 | 检测位置 |
+   | --- | --- |
+   | Windows | `%LOCALAPPDATA%\Programs\BongoCat\BongoCat.exe`、`%LOCALAPPDATA%\BongoCat\BongoCat.exe`、`%ProgramFiles%\BongoCat\BongoCat.exe` |
+   | macOS | `/Applications/BongoCat.app`、`~/Applications/BongoCat.app`（dmg 拖进「应用程序」即可） |
+   | Linux | `/usr/bin/BongoCat`、`/usr/local/bin/BongoCat`（deb/rpm 安装）、`~/.local/bin/BongoCat`、`~/Applications/BongoCat`、`~/Applications/BongoCat*.AppImage` |
+
+2. **手动添加**：「添加外接模式…」→ 选程序。起始目录按平台给（Windows 是
+   `%LOCALAPPDATA%\Programs`，macOS 是 `~/Applications` 再退到 `/Applications`，
+   Linux 是 `~/.local/bin`）；macOS 上**可以直接选 `.app` 包**，会登记包内的
+   真实可执行文件；Linux 上过滤器是「所有文件」，因为 deb/rpm 装出来的可执行文件没有扩展名。
 3. **切换**：在同一个子菜单里点该模式（互斥勾选，当前模式带勾）。
 4. **移除**：「移除外接模式 → <名字>」；若它正在运行，会先退出回经典桌宠。
 
 程序被移动/删除后，菜单项会自动置灰并把原因写在 tooltip 里（不会静默失败）。
+Linux 上还会额外查**可执行位**：文件在但没有 `+x` 时会明确提示
+「程序没有可执行权限：…（可执行 chmod +x 修复）」，而不是等到启动才失败。
 
 ## 4. 配置（都是主配置里的普通键）
 
@@ -83,7 +94,8 @@ stateDiagram-v2
 ## 5. BongoCat 键鼠跟随：完整用法
 
 1. 从 [BongoCat 官方 Release](https://github.com/ayangweb/BongoCat/releases) 安装官方版
-   （u 官方安装包即可，不需要我们编译）。
+   （用官方安装包即可，不需要我们编译）。上游是 Tauri 应用，三平台都有产物：
+   Windows `*-setup.exe`、macOS `x64/aarch64.dmg`、Linux `.deb`（amd64/arm64）/ `.rpm` / `AppImage`。
 2. 右键桌宠 →「模式切换 → 添加 BongoCat」（或手动添加它的 exe）。
 3. 切到该模式：桌宠隐藏，BongoCat 出现并跟随你的键鼠；在 BongoCat 里点「退出」
    （或任务管理器结束它）即自动恢复原桌宠。
@@ -97,6 +109,20 @@ stateDiagram-v2
      （位置取自原图 alpha，永远不会跑位）；
    - `scripts/verify_bongo_assets.py`：导入前校验尺寸/引用/透明通道/覆盖图一致性。
    校验通过后把整个模型目录用 BongoCat 的「导入模型」加进去即可。
+
+### 5.1 各平台注意事项
+
+- **Windows**：`%LOCALAPPDATA%\Programs\BongoCat\` 是安装器默认位置，装上就能被自动检测到。
+- **macOS**：dmg 拖进「应用程序」即可；首次启动若被 Gatekeeper 拦（应用来源未验证），
+  在「系统设置 → 隐私与安全性」里允许一次。注册的模式是 `BongoCat.app/Contents/MacOS/BongoCat`
+  （包内真实可执行文件），所以别把 `.app` 单独拖出 `/Applications` 目录结构。
+- **Linux**：
+  - **deb/rpm**：装完 `/usr/bin/BongoCat` 由包管理器链接好，直接可用；
+  - **AppImage**：需要可执行位和 FUSE（`sudo apt install libfuse2` 视发行版而定）。
+    把 `BongoCat_<版本>_<arch>.AppImage` 放到 `~/Applications/` 就能被自动检测到
+    （`chmod +x` 之后也可直接手动添加）；缺可执行位时菜单会给出 `chmod +x` 提示。
+  - 键鼠跟随依赖全局键盘/鼠标事件：**Wayland 会话下** BongoCat 自身可能拿不到全局事件
+    （这是上游与合成器的限制，不是本程序的模式切换问题）；X11 会话正常。
 
 ## 6. 迁移说明
 

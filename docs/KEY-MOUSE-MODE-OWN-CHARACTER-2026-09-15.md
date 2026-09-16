@@ -26,7 +26,9 @@ A + B 可以叠加：先用 A 把猫换成你的角色，再用 B 统一按键�
 
 > 现行流程（2026-09-16 起）：模型由 **BongoCat 自己的「导入模型」** 加载，
 > 所以我们只做"产出一份合格的模型文件夹"，不再碰 dsh-pet 的运行时副本。
-> 来源目录可以是：已安装 BongoCat 的模型目录（`%LOCALAPPDATA%\Programs\BongoCat\assets\models\standard`）
+> 来源目录可以是：已安装 BongoCat 的模型目录（Windows：`%LOCALAPPDATA%\Programs\BongoCat\assets\models\standard`；
+> macOS：`/Applications/BongoCat.app/Contents/Resources/assets/models/standard`；
+> Linux（deb/rpm）：`/usr/lib/BongoCat/assets/models/standard`；AppImage 则先解包再取同名路径）
 > 或官方安装包解包出来的同名目录。
 
 先把素材复制成一份可编辑工作区：
@@ -39,6 +41,20 @@ python scripts\prepare_bongo_own_character.py `
 
 # 2) 看一眼清单：哪些是"结构必须逐像素保留"的贴图、哪些可自由替换
 #    （脚本已经打印；预览图在 D:\dsh-pet-mycat\preview\）
+```
+
+macOS / Linux 上把第一步换成对应路径即可（工具本身跨平台，只用 Pillow）：
+
+```bash
+# macOS
+python scripts/prepare_bongo_own_character.py \
+  --model-dir "/Applications/BongoCat.app/Contents/Resources/assets/models/standard" \
+  --out ~/dsh-pet-mycat --name mycat
+
+# Linux（deb/rpm 安装）
+python scripts/prepare_bongo_own_character.py \
+  --model-dir /usr/lib/BongoCat/assets/models/standard \
+  --out ~/dsh-pet-mycat --name mycat
 ```
 
 你会得到：

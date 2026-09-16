@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,16 +68,16 @@ class ExternalModeSpec:
         return str(Path(self.exe).parent) if self.exe else ""
 
     def available(self) -> bool:
-        try:
-            return bool(self.exe) and Path(self.exe).is_file()
-        except OSError:
-            return False
+        return bool(self.exe) and executable_ok(self.exe)
 
     def unavailable_reason(self) -> str:
         if not self.exe:
             return "未配置可执行文件路径"
         if not Path(self.exe).is_file():
             return f"找不到程序：{self.exe}"
+        if not executable_ok(self.exe):
+            # Linux/AppImage 常见：文件在但没可执行位，直接说清怎么修。
+            return f"程序没有可执行权限：{self.exe}（可执行 chmod +x 修复）"
         return ""
 
     def to_config(self) -> dict:
@@ -95,7 +96,8 @@ def slug_for_exe(exe: str) -> str:
 
 
 def make_spec(exe, *, name: str = "", args: Iterable[str] = (), cwd: str = "") -> ExternalModeSpec:
-    exe_text = str(exe or "").strip()
+    # macOS 用户在选择器里点到的可能是 .app 包：登记包内真实可执行文件。
+    exe_text = str(resolve_executable(exe) or "").strip()
     label = (name or "").strip() or (Path(exe_text).stem if exe_text else "外接模式")
     return ExternalModeSpec(
         id=slug_for_exe(exe_text),
@@ -139,30 +141,203 @@ def normalize_mode_value(value) -> str:
     return MODE_CLASSIC
 
 
-def bongo_cat_candidates(env: Mapping[str, str] | None = None) -> list[Path]:
-    """已安装 BongoCat 的常见位置（Windows）。"""
-    if sys.platform != "win32":
-        return []
+def _permission_bits_allow_execute(mode: int, platform: str | None = None) -> bool:
+    """给定 st_mode，判断该平台是否允许执行（Windows 不看权限位）。
+
+    单独抽出来是为了能在任何开发机上验证 POSIX 分支——Windows 的 os.chmod
+    改不出 0o111，只靠真实文件根本测不到这段逻辑。
+    """
+    if (sys.platform if platform is None else platform) == "win32":
+        return True
+    return bool(mode & 0o111)
+
+
+def executable_ok(path) -> bool:
+    """路径是否存在且可执行。
+
+    非 Windows 上「文件存在」不等于「能执行」：AppImage / 手动拷出来的二进制常常
+    缺可执行位，少了这一步会在启动时才失败，用户只能看到一句「启动失败」。
+    """
+    try:
+        target = Path(path)
+        if not target.is_file():
+            return False
+        return _permission_bits_allow_execute(target.stat().st_mode)
+    except OSError:
+        return False
+
+
+def _app_bundle_executable(bundle: Path) -> Path | None:
+    """macOS 的 .app 是个目录，真正要启动的是包内 Contents/MacOS/<可执行文件>。"""
+    if bundle.suffix != ".app" or not bundle.is_dir():
+        return None
+    macos_dir = bundle / "Contents" / "MacOS"
+    name = bundle.stem
+    plist = bundle / "Contents" / "Info.plist"
+    try:
+        if plist.is_file():
+            text = plist.read_text(encoding="utf-8", errors="ignore")
+            match = re.search(
+                r"<key>\s*CFBundleExecutable\s*</key>\s*<string>([^<]+)</string>", text
+            )
+            if match:
+                name = match.group(1).strip()
+    except OSError:
+        pass
+    candidate = macos_dir / name
+    if candidate.is_file():
+        return candidate
+    try:  # 名字对不上时退一步：包内唯一的可执行文件
+        for entry in sorted(macos_dir.iterdir()):
+            if entry.is_file() and os.access(entry, os.X_OK):
+                return entry
+    except OSError:
+        pass
+    return None
+
+
+def resolve_executable(path) -> str:
+    """把用户给的东西归一成「可启动的文件路径」。
+
+    * macOS 的 ``.app`` 包 → 包内真实可执行文件；
+    * 其余原样返回。
+    """
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    target = Path(text)
+    if target.suffix == ".app" and target.is_dir():
+        inner = _app_bundle_executable(target)
+        return str(inner) if inner is not None else text
+    return text
+
+
+# 各平台已安装 BongoCat 的常见位置（上游同时发 Windows/macOS/Linux 产物，
+# 见 https://github.com/ayangweb/BongoCat/releases）。
+_PLATFORM_BONGO_CAT: dict[str, list[tuple[str, ...]]] = {
+    "win32": [
+        ("LOCALAPPDATA", "Programs", "BongoCat", "BongoCat.exe"),
+        ("LOCALAPPDATA", "BongoCat", "BongoCat.exe"),
+        ("ProgramFiles", "BongoCat", "BongoCat.exe"),
+    ],
+    "darwin": [
+        ("", "/Applications/BongoCat.app"),          # 系统级安装（dmg 拖进「应用程序」）
+        ("HOME", "Applications/BongoCat.app"),       # dmg 装到用户目录
+    ],
+    "linux": [
+        ("", "/usr/bin/BongoCat"),                   # .deb / .rpm 安装
+        ("", "/usr/local/bin/BongoCat"),
+        ("HOME", ".local/bin/BongoCat"),
+        ("HOME", "Applications/BongoCat"),             # AppImage 改名/软链到这两个名字之一
+        ("HOME", "Applications/BongoCat.AppImage"),    # 或直接用原文件名
+        ("HOME", "Applications/BongoCat*.AppImage"),   # 带版本号的原名（BongoCat_1.1.0_amd64.AppImage）
+    ],
+}
+
+
+def _candidate_executables(path: Path) -> list[Path]:
+    """候选路径 → 实际可启动的文件（macOS 的 .app 要落到包内可执行文件）。
+
+    候选里允许带 glob："AppImage 的文件名带版本号"（BongoCat_1.1.0_amd64.AppImage），
+    写死某个版本号会一直失效，所以按前缀匹配；匹配不到时退回字面路径，
+    让上层给出「找不到程序：<路径>」这种能照做的提示。
+    """
+    if path.suffix == ".app":
+        inner = _app_bundle_executable(path)
+        return [inner if inner is not None else path]
+    if "*" in path.name:
+        try:
+            matched = sorted(p for p in path.parent.glob(path.name) if p.is_file())
+        except OSError:
+            matched = []
+        return matched or [path]
+    return [path]
+
+
+def _platform_key(platform: str | None = None) -> str:
+    name = sys.platform if platform is None else platform
+    if name == "win32":
+        return "win32"
+    if name == "darwin":
+        return "darwin"
+    if str(name).startswith("linux"):
+        return "linux"
+    return ""
+
+
+def bongo_cat_candidates(
+    env: Mapping[str, str] | None = None, platform: str | None = None
+) -> list[Path]:
+    """该平台下 BongoCat 的候选可执行文件位置（升序优先级）。"""
     env = os.environ if env is None else env
     candidates: list[Path] = []
-    local = str(env.get("LOCALAPPDATA") or "").strip()
-    if local:
-        candidates.append(Path(local) / "Programs" / "BongoCat" / "BongoCat.exe")
-        candidates.append(Path(local) / "BongoCat" / "BongoCat.exe")
-    program_files = str(env.get("ProgramFiles") or "").strip()
-    if program_files:
-        candidates.append(Path(program_files) / "BongoCat" / "BongoCat.exe")
+    for parts in _PLATFORM_BONGO_CAT.get(_platform_key(platform), ()):
+        if parts[0] == "":                       # 绝对路径（macOS/Linux）
+            candidates.append(Path(*parts[1:]))
+            continue
+        root = str(env.get(parts[0]) or "").strip()
+        if root:
+            candidates.append(Path(root).joinpath(*parts[1:]))
     return candidates
 
 
-def detect_bongo_cat(env: Mapping[str, str] | None = None) -> Path | None:
-    for candidate in bongo_cat_candidates(env):
+def detect_bongo_cat(
+    env: Mapping[str, str] | None = None, platform: str | None = None
+) -> Path | None:
+    for candidate in bongo_cat_candidates(env, platform):
+        for target in _candidate_executables(candidate):
+            try:
+                if target.is_file():
+                    return target
+            except OSError:
+                continue
+    return None
+
+
+# 「添加外接模式…」选择器的默认落地目录与文件过滤器（按平台）。
+_PICK_ALL_FILES = "所有文件 (*)"
+_PICK_FILTERS: dict[str, str] = {
+    "win32": "程序 (*.exe)",
+    "darwin": f"应用程序 (*.app);;{_PICK_ALL_FILES}",   # dmg 装出来是 .app 包，必须能选到
+    "linux": _PICK_ALL_FILES,                            # deb/rpm 装的是无扩展名可执行文件
+}
+_PICK_START_DIRS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    # (先看哪个环境变量目录, 再排哪些固定目录)
+    "win32": (("LOCALAPPDATA", "Programs"),),
+    "darwin": (("HOME", "Applications"), ("/Applications",)),
+    "linux": (("HOME", ".local/bin"), ("HOME", "Applications"), ("/usr/bin",)),
+}
+
+
+def _first_existing_dir(candidates) -> str:
+    for candidate in candidates:
         try:
-            if candidate.is_file():
-                return candidate
+            if Path(candidate).is_dir():
+                return str(candidate)
         except OSError:
             continue
-    return None
+    return ""
+
+
+def external_mode_pick_args(
+    platform: str | None = None, env: Mapping[str, str] | None = None
+) -> tuple[str, str]:
+    """选择器的 ``(起始目录, 文件名过滤器)``——登录平台各有各的默认位置。"""
+    key = _platform_key(platform)
+    env = os.environ if env is None else env
+    start = ""
+    starts = _PICK_START_DIRS.get(key, ())
+    if starts:
+        first = starts[0]
+        root = str(env.get(first[0]) or "").strip()
+        candidates = [Path(root).joinpath(*first[1:])] if root else []
+        if key == "win32":                      # Windows 上退到程序安装总目录
+            program_files = str(env.get("ProgramFiles") or "").strip()
+            if program_files:
+                candidates.append(Path(program_files))
+        candidates.extend(Path(item[0]) for item in starts[1:])
+        start = _first_existing_dir(candidates)
+    return start, _PICK_FILTERS.get(key, _PICK_ALL_FILES)
 
 
 # --------------------------------------------------------------- 子进程包装

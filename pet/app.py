@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import weakref
+from collections.abc import Mapping
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from .external_mode import (
     MODE_CLASSIC,
     MODE_PREFIX,
     ExternalModeController,
+    external_mode_pick_args,
     make_spec,
     normalize_mode_value,
 )
@@ -2315,15 +2317,12 @@ class AppShell:
             logging.exception("检测外接程序失败")
             return []
 
-    def pick_external_mode_exe(self):
+    def pick_external_mode_exe(self, env: Mapping[str, str] | None = None):
         """菜单入口：让用户选一个可执行文件，登记为外接启动模式。"""
         parent = getattr(self.instance, "win", None)
-        start_dir = ""
-        if sys.platform == "win32":
-            start_dir = str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs")
+        start_dir, name_filter = external_mode_pick_args(sys.platform, env)
         path, _selected = QFileDialog.getOpenFileName(
-            parent, "选择外接模式的程序", start_dir,
-            "程序 (*.exe)" if sys.platform == "win32" else "所有文件 (*)",
+            parent, "选择外接模式的程序", start_dir, name_filter
         )
         if not path:
             return None

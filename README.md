@@ -435,6 +435,12 @@ pythonw -m pet
 - 右键桌宠或托盘 →「模式切换」，可以把**任意外部桌宠程序**登记成一个模式：
   「添加外接模式…」选它的可执行文件；装了官方 [BongoCat](https://github.com/ayangweb/BongoCat)
   的话菜单里会直接出现「添加 BongoCat」，一键登记。子菜单里点该模式即进入，点「经典桌宠」切回。
+- **三平台都支持**（BongoCat 上游同时发 Windows / macOS / Linux 产物）：
+  Windows 认 `%LOCALAPPDATA%\Programs\BongoCat\`；macOS 认 `/Applications/BongoCat.app`
+  与 `~/Applications/BongoCat.app`（dmg 拖进「应用程序」即可，也能直接选 `.app` 包）；
+  Linux 认 `/usr/bin/BongoCat`、`/usr/local/bin/BongoCat`、`~/.local/bin/BongoCat`
+  与 `~/Applications/` 下的 AppImage（deb/rpm 装完即可用；AppImage 需 `chmod +x`，
+  缺可执行位时菜单会直接提示怎么修）。
 - 切换语义：进入外接模式时**全部桌宠窗口隐藏并深度暂停**（停解码、停定时器、停识屏与联动，
   CPU 占用≈0，进程常驻以便秒切回），然后拉起外部程序；该程序退出（在它自己的菜单里退出、
   被任务管理器结束或崩溃）即自动恢复原桌宠。

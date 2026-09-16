@@ -11,15 +11,23 @@
 
 用法::
 
-    # 运行时副本（推荐）：
-    python scripts/prepare_bongo_own_character.py `
-        --model-dir "%APPDATA%\\dsh-pet-standalone\\bongocat\\runtime\\assets\\models\\standard" `
+    # Windows（已装好的官方 BongoCat）：
+    python scripts\\prepare_bongo_own_character.py ^
+        --model-dir "%LOCALAPPDATA%\\Programs\\BongoCat\\assets\\models\\standard" ^
         --out D:\\dsh-pet-mycat --name mycat
 
-    # 也可指向已装好的官方 BongoCat：
-    python scripts/prepare_bongo_own_character.py `
-        --model-dir "%LOCALAPPDATA%\\Programs\\BongoCat\\assets\\models\\standard" `
-        --out D:\\dsh-pet-mycat --name mycat
+    # macOS：
+    python scripts/prepare_bongo_own_character.py \
+        --model-dir "/Applications/BongoCat.app/Contents/Resources/assets/models/standard" \
+        --out ~/dsh-pet-mycat --name mycat
+
+    # Linux（deb/rpm 安装；AppImage 先解包再取同名路径）：
+    python scripts/prepare_bongo_own_character.py \
+        --model-dir /usr/lib/BongoCat/assets/models/standard \
+        --out ~/dsh-pet-mycat --name mycat
+
+（旧方案里 `%APPDATA%\\dsh-pet-standalone\\bongocat\\runtime\\...` 的运行时副本已随
+fork 方案一并废弃，见 docs/EXTERNAL-MODE-2026-09-16.md。）
 """
 from __future__ import annotations
 

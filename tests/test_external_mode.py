@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -20,7 +21,10 @@ from pet.external_mode import (
     PET_MODE_KEY,
     ExternalModeController,
     ExternalProcess,
+    _permission_bits_allow_execute,
+    bongo_cat_candidates,
     detect_bongo_cat,
+    external_mode_pick_args,
     make_spec,
     normalize_mode_value,
     parse_external_modes,
@@ -111,9 +115,16 @@ class FakeProcess(QObject):
 
 
 def _exe(tmp_path: Path, name: str = "app.exe") -> Path:
+    """造一个"真的能启动"的程序桩：POSIX 上补上可执行位。
+
+    不补的话，凡是带 sys.platform=非 win32 的用例（跨平台探测那批）在 Linux/macOS CI
+    上都会因为 available() 判否而红——而那是权限语义，不是被测逻辑。
+    """
     tmp_path.mkdir(parents=True, exist_ok=True)
     path = tmp_path / name
     path.write_bytes(b"stub")
+    if os.name != "nt":
+        os.chmod(path, 0o755)
     return path
 
 
@@ -179,7 +190,226 @@ def test_detect_bongo_cat_returns_empty_on_non_windows(tmp_path, monkeypatch):
     assert detect_bongo_cat(env) is None
 
 
+# ------------------------------------------------- 跨平台检测（macOS / Linux）
+
+
+def test_detect_bongo_cat_macos_resolves_app_bundle(tmp_path, monkeypatch):
+    """macOS：/Applications 与 ~/Applications 下的 .app 包，探测要落到包内真实可执行文件。"""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    home = tmp_path / "home"
+    exe = _exe(home / "Applications" / "BongoCat.app" / "Contents" / "MacOS", "BongoCat")
+    env = {"HOME": str(home)}
+
+    assert detect_bongo_cat(env) == exe
+
+
+def test_detect_bongo_cat_macos_reads_bundle_executable_name(tmp_path, monkeypatch):
+    """可执行文件名优先取 Info.plist 的 CFBundleExecutable（不写死 BongoCat）。"""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    home = tmp_path / "home"
+    bundle = home / "Applications" / "BongoCat.app"
+    exe = _exe(bundle / "Contents" / "MacOS", "bongo-cat")
+    (bundle / "Contents").mkdir(parents=True, exist_ok=True)
+    (bundle / "Contents" / "Info.plist").write_text(
+        '<?xml version="1.0"?><plist><dict>'
+        "<key>CFBundleExecutable</key><string>bongo-cat</string>"
+        "</dict></plist>",
+        encoding="utf-8",
+    )
+
+    assert detect_bongo_cat({"HOME": str(home)}) == exe
+
+
+def test_detect_bongo_cat_linux_paths(tmp_path, monkeypatch):
+    """Linux：/usr/bin、/usr/local/bin、~/.local/bin、~/Applications 都看一眼。"""
+    monkeypatch.setattr(sys, "platform", "linux")
+    home = tmp_path / "home"
+    candidates = bongo_cat_candidates({"HOME": str(home)})
+    assert Path("/usr/bin/BongoCat") in candidates
+    assert Path("/usr/local/bin/BongoCat") in candidates
+    assert home / ".local" / "bin" / "BongoCat" in candidates
+    assert home / "Applications" / "BongoCat" in candidates
+
+    exe = _exe(home / "Applications", "BongoCat")
+    assert detect_bongo_cat({"HOME": str(home)}) == exe
+
+
+def test_detect_bongo_cat_accepts_appimage(tmp_path, monkeypatch):
+    """AppImage 走 ~/Applications 时也认得出来（用户把 .AppImage 放那儿即可）。"""
+    monkeypatch.setattr(sys, "platform", "linux")
+    home = tmp_path / "home"
+    appimage = _exe(home / "Applications", "BongoCat_1.1.0_amd64.AppImage")
+
+    assert detect_bongo_cat({"HOME": str(home)}) == appimage
+
+
+def test_make_spec_resolves_macos_app_bundle(tmp_path, monkeypatch):
+    """用户在选择器里点了 .app 包：登记的应是包内可执行文件，而不是那个目录。"""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    bundle = tmp_path / "BongoCat.app"
+    exe = _exe(bundle / "Contents" / "MacOS", "BongoCat")
+    if os.name != "nt":
+        # 上面的 monkeypatch 不是真的 macOS，权限位按被测平台给了：这里只放宽权限，
+        # 让本机也能验证「解析后的路径是那个包内文件」。
+        os.chmod(exe, 0o755)
+
+    spec = make_spec(bundle)
+
+    assert spec.exe == str(exe)
+    assert spec.name == "BongoCat"
+    assert spec.command() == [str(exe)]
+
+
+def test_permission_bits_gate_on_posix_but_not_windows():
+    """权限位判定的两个分支都能在任意开发机上验证（Windows 造不出 0o644 文件）。"""
+    assert _permission_bits_allow_execute(0o644, "linux") is False
+    assert _permission_bits_allow_execute(0o755, "linux") is True
+    assert _permission_bits_allow_execute(0o644, "darwin") is False
+    assert _permission_bits_allow_execute(0o600, "win32") is True   # Windows 不看权限位
+
+
+def test_available_rejects_non_executable_file(tmp_path, monkeypatch):
+    """Linux 上「文件存在」不等于「能执行」：缺可执行位要说明怎么修，而不是静默启动失败。
+
+    权限位只在 POSIX 上有意义（Windows 的 os.chmod 只动只读位，改不出 0o111），
+    所以走真实文件的那半在 Windows 开发机上跳过、由 ubuntu/macos CI 覆盖；
+    判定逻辑本身的覆盖见上一条。
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+    plain = tmp_path / "BongoCat"
+    plain.write_bytes(b"stub")
+    if os.name == "nt":
+        pytest.skip("Windows 改不出 POSIX 可执行位；该分支由 ubuntu/macos CI 覆盖")
+    os.chmod(plain, 0o644)
+    spec = make_spec(plain)
+
+    assert spec.available() is False
+    reason = spec.unavailable_reason()
+    assert "可执行权限" in reason and "chmod +x" in reason
+
+    os.chmod(plain, 0o755)
+    assert spec.available() is True
+    assert spec.unavailable_reason() == ""
+
+
+# ------------------------------------------- 选择器默认位置 / 过滤器（按平台）
+
+
+def test_pick_args_windows_targets_programs_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    programs = tmp_path / "Programs"
+    programs.mkdir()
+
+    start, name_filter = external_mode_pick_args("win32", {"LOCALAPPDATA": str(tmp_path)})
+
+    assert start == str(programs)
+    assert name_filter == "程序 (*.exe)"
+
+
+def test_pick_args_macos_offers_app_bundle_filter(tmp_path):
+    home = tmp_path / "home"
+    (home / "Applications").mkdir(parents=True)
+
+    start, name_filter = external_mode_pick_args("darwin", {"HOME": str(home)})
+
+    assert start == str(home / "Applications")
+    assert "*.app" in name_filter          # dmg 装出来是 .app 包，选不到就没法添加
+    assert "所有文件" in name_filter
+
+
+def test_pick_args_linux_accepts_extensionless_binaries(tmp_path):
+    """deb/rpm 装的是无扩展名的 /usr/bin/BongoCat，过滤器不能把「程序(*.exe)」那套搬过来。"""
+    home = tmp_path / "home"
+    (home / ".local" / "bin").mkdir(parents=True)
+
+    start, name_filter = external_mode_pick_args("linux", {"HOME": str(home)})
+
+    assert start == str(home / ".local" / "bin")
+    assert name_filter == "所有文件 (*)"
+
+
+def test_pick_args_falls_back_to_empty_dir_when_nothing_exists(tmp_path):
+    """目录都不存在时给空字符串（让系统决定），不能给一个不存在的路径。"""
+    start, _ = external_mode_pick_args("darwin", {"HOME": str(tmp_path / "nope")})
+    assert start == ""
+
+
+def test_pick_external_mode_registers_resolved_spec(tmp_path, monkeypatch):
+    """菜单入口端到端：选中 .app 包 → 登记的是包内可执行文件。"""
+    from pet import app as app_mod
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    bundle = tmp_path / "BongoCat.app"
+    exe = _exe(bundle / "Contents" / "MacOS", "BongoCat")
+    monkeypatch.setattr(
+        app_mod.QFileDialog, "getOpenFileName",
+        staticmethod(lambda *a, **k: (str(bundle), "")),
+    )
+    added = []
+
+    class FakePicker:
+        instance = None
+
+        def add_external_mode(self, spec):
+            added.append(spec)
+            return spec
+
+    result = app_mod.AppShell.pick_external_mode_exe(FakePicker(), {"HOME": str(tmp_path)})
+
+    assert result is added[0]
+    assert added[0].exe == str(exe)
+    assert added[0].name == "BongoCat"
+
+
+def test_pick_external_mode_returns_none_when_cancelled(monkeypatch):
+    from pet import app as app_mod
+
+    monkeypatch.setattr(
+        app_mod.QFileDialog, "getOpenFileName", staticmethod(lambda *a, **k: ("", ""))
+    )
+
+    class FakePicker:
+        instance = None
+
+        def add_external_mode(self, spec):     # pragma: no cover - 取消时不该被调用
+            raise AssertionError("取消选择不应登记任何模式")
+
+    assert app_mod.AppShell.pick_external_mode_exe(FakePicker()) is None
+
+
 # ------------------------------------------------------------------ 模式状态机
+
+
+def test_detected_bongo_cat_can_be_registered_and_entered(tmp_path, monkeypatch):
+    """跨平台端到端：自动检测 → 登记 → 进入 → 退出恢复。
+
+    整条链（候选路径、可执行位判定、QProcess 启动参数）都在非 Windows 平台上跑一遍，
+    权限位那步只在 POSIX 上成立，所以本机（Windows）跳过、由 ubuntu/macos CI 覆盖。
+    """
+    _app()
+    if os.name == "nt":
+        pytest.skip("整链依赖 POSIX 可执行位；Windows 上由上面各条分平台用例覆盖")
+    monkeypatch.setattr(sys, "platform", "linux")
+    home = tmp_path / "home"
+    exe = _exe(home / "Applications", "BongoCat")
+    win = FakeWindow()
+    config = FakeConfig()
+    controller = _controller(
+        FakeShell([FakeInstance(win)]), config, tmp_path, env={"HOME": str(home)}
+    )
+
+    spec = controller.detected_candidates()[0]
+    assert spec.exe == str(exe)
+    assert controller.add_mode(spec) is True
+
+    assert controller.enter(spec.id) is True
+    assert controller.state == spec.mode_value
+    assert win.isVisible() is False
+    assert controller.process.command == [str(exe)]
+
+    assert controller.exit_mode() is True
+    assert win.isVisible() is True
+    assert config.data[PET_MODE_KEY] == MODE_CLASSIC
 
 
 def test_enter_hides_windows_launches_and_persists(tmp_path):
