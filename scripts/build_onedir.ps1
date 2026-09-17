@@ -182,6 +182,7 @@ if (-not $SkipBuild) {
         --collect-all edge_tts `
         --collect-all aiofiles `
         --collect-all tzdata `
+        --collect-all psutil `
         @keyringCollect `
         --add-data $datas `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
