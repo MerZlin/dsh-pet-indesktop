@@ -33,6 +33,15 @@ from . import collision_debug
 from . import physics as physics_mod
 
 
+def _virtual_xy(win) -> tuple[float, float]:
+    """虚拟窗口坐标（物理/碰撞的坐标系）；无该接口的轻量桩回退实际位置。"""
+    vp_fn = getattr(win, '_virtual_pos', None)
+    if callable(vp_fn):
+        vp = vp_fn()
+        return float(vp.x()), float(vp.y())
+    return float(win.x()), float(win.y())
+
+
 class CollisionClient(QObject):
     """PetWindow 的碰撞客户端子系统（GUI 线程，由窗口组合持有）。"""
 
@@ -389,14 +398,22 @@ class CollisionClient(QObject):
             if not probe_holds_pose:
                 win._cancel_move()
                 win._cancel_animation_gap()
-                clamped_x, clamped_y = win._collision_clamp_pos(win.x() + dx, win.y() + dy)
-                left, top = win._collision_clamp_pos(float('-inf'), float('-inf'))
-                right, bottom = win._collision_clamp_pos(float('inf'), float('inf'))
-                win.move(
-                    min(max(int(round(clamped_x)), math.ceil(left)), math.floor(right)),
-                    min(max(int(round(clamped_y)), math.ceil(top)), math.floor(bottom)),
-                )
-                win._phys_pos[:] = [float(win.x()), float(win.y())]
+                # 物理/抛掷都在虚拟窗口坐标系：分离位移要加在虚拟位置上，
+                # 经统一出口落窗（贴边时实际窗口被钳在工作区内）。
+                vp = _virtual_xy(win)
+                clamped_x, clamped_y = win._collision_clamp_pos(vp[0] + dx, vp[1] + dy)
+                mover = getattr(win, '_move_window_towards', None)
+                if callable(mover):
+                    mover(clamped_x, clamped_y)
+                else:
+                    left, top = win._collision_clamp_pos(float('-inf'), float('-inf'))
+                    right, bottom = win._collision_clamp_pos(float('inf'), float('inf'))
+                    win.move(
+                        min(max(int(round(clamped_x)), math.ceil(left)), math.floor(right)),
+                        min(max(int(round(clamped_y)), math.ceil(top)), math.floor(bottom)),
+                    )
+                vp = _virtual_xy(win)
+                win._phys_pos[:] = [float(vp[0]), float(vp[1])]
         if has_velocity_impulse:
             win._just_dragged = True
             QTimer.singleShot(120, win, win._clear_just_dragged)
@@ -407,7 +424,7 @@ class CollisionClient(QObject):
         if is_real_hit and not contact_deviation:
             win._interaction_state = self._thrown
             win._enter_physics_mode('throw')
-            win._phys_pos[:] = [float(win.x()), float(win.y())]
+            win._phys_pos[:] = list(_virtual_xy(win))
             win._last_physics_tick_time = None
             win._physics_timer.start()
             # 批 A：真实撞击进入飞行前取消边缘探头会话（restore=False，物理引擎
@@ -450,7 +467,8 @@ class CollisionClient(QObject):
             return
 
         rect = win.collision_content_rect()
-        dx, dy = win._phys_pos[0] - win.x(), win._phys_pos[1] - win.y()
+        _vx, _vy = _virtual_xy(win)
+        dx, dy = win._phys_pos[0] - _vx, win._phys_pos[1] - _vy
         current_circles = collision.circles_from_rect(
             rect.x() + dx, rect.y() + dy, rect.width(), rect.height())
         previous_circles = [[x - (win._phys_pos[0] - start_x),
