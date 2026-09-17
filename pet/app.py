@@ -308,6 +308,31 @@ def _read_spawn_offset_env() -> int:
         return 0
 
 
+# 播放器路径预热的错峰延迟：排在动画预热之后，避开多开启动期的 IO 洪峰。
+_MUSIC_PLAYER_WARM_DELAY_MS = 2500
+
+
+def _warm_music_player_paths() -> None:
+    """后台线程暖音乐播放器路径缓存（幂等，可重复调用）。
+
+    右键菜单「打开网易云/QQ音乐并播放」的 builder 在 GUI 线程只读缓存（冷缓存
+    时乐观启用）：真正的目录浅扫在这里的 daemon 线程里做，否则冷缓存下首次开
+    菜单要在 MainThread 上扫 6s+。
+    """
+    from . import music_players
+
+    for player_key in ("netease", "qqmusic"):
+        music_players.warm_cache_async(player_key)
+
+
+def _schedule_music_player_warm() -> None:
+    """UI 就绪后统一预热点的一环：延迟几秒再后台暖播放器路径缓存。
+
+    用单次 QTimer 错峰，**不阻塞任何线程**（这里只是登记一个延迟任务）。
+    """
+    QTimer.singleShot(_MUSIC_PLAYER_WARM_DELAY_MS, _warm_music_player_paths)
+
+
 class PetInstance:
     """每窗容器 —— config/lib/win/聊天窗/设置窗/气泡与全部窗口级操作。
 
@@ -382,6 +407,8 @@ class PetInstance:
         # 随机动作池延迟 2s 补全，避免多开启动时 ffmpeg 进程洪峰。
         lib.schedule_high_priority_warm()
         lib.schedule_low_priority_warm()
+        # 同批低优先级预热：播放器路径缓存（右键菜单只读缓存，冷缓存时后台先扫）。
+        _schedule_music_player_warm()
         logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
         return lib
 
@@ -755,16 +782,26 @@ class PetInstance:
                 chat_window.refresh_settings()
 
     def _update_bubble_suppression_for_settings(self) -> None:
-        """任一设置窗口打开时暂停桌宠气泡，避免气泡盖住设置界面。"""
+        """任一设置窗口打开/独立设置进程存活时暂停桌宠气泡，避免气泡盖住设置界面。"""
         if getattr(self, "win", None) is None:
             return
+        shell = getattr(self, "shell", None)
+        # 独立设置进程在跑时主进程没有对话框对象，只能看 shell 上的存活标记：
+        # 锁文件存在期由 AppShell 维护（watcher 立即 + 3s 轮询兜底清除）。
+        external_settings = bool(getattr(shell, "_settings_child_active", False)) if shell is not None else False
         any_open = (
             getattr(self, "modern_settings_dialog", None) is not None
             or getattr(self, "chat_settings_dialog", None) is not None
+            or external_settings
         )
         self.win.set_bubble_suppressed(any_open)
 
     def open_modern_settings(self) -> None:
+        # 默认路径：设置页拉到独立进程（关窗即进程退出，OS 回收首开留下的
+        # 字体/样式/模块高水位）。只有开关关闭或 startDetached 失败时才回退
+        # 下面的进程内路径——功能绝不丢。
+        if self._try_open_settings_process():
+            return
         from .modern_settings_dialog import ModernSettingsDialog
         if self.modern_settings_dialog is None:
             self._dock_icon_before_settings = bool(self.config.get("show_dock_icon", True))
@@ -782,23 +819,44 @@ class PetInstance:
             before_present=self.modern_settings_dialog.move_away_from_pet,
         )
 
+    def _try_open_settings_process(self) -> bool:
+        """尝试走独立设置进程；True = 已交给独立进程（不要再开进程内对话框）。"""
+        shell = getattr(self, "shell", None)
+        opener = getattr(shell, "open_settings_process", None)
+        if not callable(opener):
+            return False
+        try:
+            return bool(opener(self))
+        except Exception:
+            logging.exception("独立设置进程链路异常，回退进程内设置页")
+            return False
+
     def _modern_settings_finished(self, result: int) -> None:
         self.modern_settings_dialog = None
         self._update_bubble_suppression_for_settings()
         # 新版设置在关闭时一律落盘（closeEvent 自动保存，「保存并退出」同样走
         # _write_config），因此无论 Accepted/Rejected 都把改动应用到桌宠。
         # 此前只有 Accepted 才刷新：直接 X 关闭时保存生效但桌宠不更新。
-        if self.win is not None:
-            self.win.refresh_pet_settings()
-        self.shell._sync_dynamic_island()
-        self.shell._apply_balance_timer()
-        # Phase 1/2：设置保存后按配置同步可选服务（todo 懒启停）与动画预热
-        self.shell._sync_todo_service()
-        self.shell._sync_chime_service()
-        self.shell._sync_festival_service()
-        self._sync_animation_prewarm()
-        self._refresh_chat_windows()
-        _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
+        #
+        # 应用链与 watcher 路径共用 AppShell._apply_external_config_change；但
+        # 旧测试桩（AppShell.__new__ + 只打桩原内联 seam，没有 _instances）仍走
+        # 原内联序列，保证进程内路径的既有测试/时序逐位不变。
+        shell = self.shell
+        apply_change = getattr(shell, "_apply_external_config_change", None)
+        if callable(apply_change) and getattr(shell, "_instances", None) is not None:
+            apply_change()
+        else:
+            if self.win is not None:
+                self.win.refresh_pet_settings()
+            shell._sync_dynamic_island()
+            shell._apply_balance_timer()
+            # Phase 1/2：设置保存后按配置同步可选服务（todo 懒启停）与动画预热
+            shell._sync_todo_service()
+            shell._sync_chime_service()
+            shell._sync_festival_service()
+            self._sync_animation_prewarm()
+            self._refresh_chat_windows()
+            _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
         if (
             getattr(self, "_dock_icon_before_settings", None) is True
             and not bool(self.config.get("show_dock_icon", True))
@@ -1025,6 +1083,14 @@ class AppShell:
         self._instances: list[PetInstance] = []
         # 批 E：清除子肥鱼链式关闭进行中标记（重复点击忽略，保持幂等）。
         self._clear_spawned_pending = False
+        # 设置进程隔离：独立设置进程存活标记 + config 目录 watcher/定时器
+        #（懒安装，见 _install_config_watcher）。默认关的键下完全不用它们。
+        self._settings_child_active = False
+        self._settings_launch_at = 0.0
+        self._config_watcher = None
+        self._config_reload_timer = None
+        self._settings_watch_timer = None
+        self._last_config_signature = None
         self.instance = PetInstance(
             self, config, enable_chat=self.enable_chat, slot_handle=slot_handle,
             slot_id=slot_id, spawn_offset=spawn_offset,
@@ -1192,6 +1258,268 @@ class AppShell:
         # 故必须连带同步通道生命周期（关掉节日语音后若报时也关，通道应释放）。
         self._sync_chime_service()
 
+    # ------------------------------------------------------------ 设置进程隔离
+    def _apply_external_config_change(self) -> None:
+        """把「配置已在别处落盘」同步到运行期（独立设置进程 / watcher 路径）。
+
+        与进程内对话框 finished 的应用链同源（PetInstance._modern_settings_finished
+        在真实壳上委托到这里）；多实例时扇出到每个 PetInstance 的窗口，而不是
+        只看主窗——外部改配置的那个实例不一定是主窗。
+        """
+        for inst in getattr(self, "_instances", []):
+            win = getattr(inst, "win", None)
+            if win is not None:
+                win.refresh_pet_settings()
+        self._sync_dynamic_island()
+        self._apply_balance_timer()
+        # Phase 1/2：设置保存后按配置同步可选服务（todo 懒启停）与动画预热
+        self._sync_todo_service()
+        self._sync_chime_service()
+        self._sync_festival_service()
+        for inst in getattr(self, "_instances", []):
+            prewarm = getattr(inst, "_sync_animation_prewarm", None)
+            if callable(prewarm):
+                prewarm()
+        for inst in getattr(self, "_instances", []):
+            refresh = getattr(inst, "_refresh_chat_windows", None)
+            if callable(refresh):
+                refresh()
+        _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
+
+    def open_settings_process(self, instance=None) -> bool:
+        """拉起独立设置进程；True = 已交给独立进程（不得再开进程内对话框）。
+
+        False = 开关关闭或 startDetached 失败，由调用方回退进程内设置页。
+        """
+        if not bool(self.config.get("settings_process_isolation", True)):
+            return False
+        self._install_config_watcher()
+        if self._settings_process_running():
+            # 单实例：已有设置进程在跑（可能不是本主进程拉起的）→ 不再拉起，
+            # 但仍按"设置开着"抑制气泡并盯住它的锁文件。
+            logging.info("独立设置进程已在运行，不重复拉起")
+            self._mark_settings_child(True)
+            return True
+        if self._settings_launch_pending():
+            # 刚拉起、子进程还没来得及建锁：连点场景视为已在启动，避免双开。
+            self._mark_settings_child(True)
+            return True
+        if not self._launch_settings_process(instance):
+            return False
+        self._settings_launch_at = time.monotonic()
+        self._mark_settings_child(True)
+        return True
+
+    def _settings_process_running(self) -> bool:
+        """settings.lock 是否被活着的设置进程持有。
+
+        QLockFile 会把「pid 已死」的残留锁判为陈旧并接管，因此设置进程崩溃
+        残留的锁文件不会永久堵住设置入口。
+        """
+        from PySide6.QtCore import QLockFile
+
+        lock_path = self.config.dir / "settings.lock"
+        lock = QLockFile(str(lock_path))
+        lock.setStaleLockTime(30000)
+        try:
+            if lock.tryLock(0):
+                lock.unlock()
+                return False
+        except Exception:
+            logging.exception("探测设置进程锁失败")
+            return True  # 探测异常按"已在运行"保守处理，宁可不开第二份
+        if not lock_path.exists():
+            # 拿不到锁但锁文件并不存在 = 目录不可写之类的环境错误，不是"已有设置
+            # 进程"；否则用户会彻底打不开设置页。
+            logging.warning("设置进程锁探测失败且锁文件不存在：%s", lock_path)
+            return False
+        return True
+
+    def _settings_launch_pending(self) -> bool:
+        """刚拉起独立设置进程的启动窗口（子进程建锁前的连点保护）。"""
+        started = float(getattr(self, "_settings_launch_at", 0.0) or 0.0)
+        return bool(started) and (time.monotonic() - started) <= 5.0
+
+    def _launch_settings_process(self, instance=None) -> bool:
+        """startDetached 独立设置进程；冻结包与源码运行分流。
+
+        源码运行要走 `-m pet`（工作目录取仓库根），冻结包直接复用 exe 的参数
+        分流入口（--settings）——与 --uninstall-cleanup 同一范式。
+        """
+        from PySide6.QtCore import QProcess
+
+        if getattr(sys, "frozen", False):
+            program = sys.executable
+            arguments = ["--settings"]
+            workdir = str(Path(sys.executable).parent)
+        else:
+            program = sys.executable
+            arguments = ["-m", "pet", "--settings"]
+            workdir = str(Path(__file__).resolve().parent.parent)
+        if not program:
+            logging.warning("sys.executable 为空，无法拉起独立设置进程")
+            return False
+        instance_id = str(getattr(getattr(instance, "config", None), "instance_id", "") or "")
+        if instance_id and instance_id != (os.environ.get("DSH_PET_INSTANCE") or "").strip():
+            # 进程内多窗（experimental_single_process_spawn）下第二窗的 instance_id
+            # 不等于进程级 env：显式传参，否则独立设置进程会打开主窗的配置。
+            # 主窗/独立槽位进程 env 已一致，命令保持 ["--settings"] 原样。
+            arguments += ["--instance", instance_id]
+        try:
+            started, _pid = QProcess.startDetached(program, arguments, workdir)
+        except Exception:
+            logging.exception("拉起独立设置进程异常")
+            return False
+        if not started:
+            logging.warning("startDetached 未启动独立设置进程，回退进程内设置页")
+        return bool(started)
+
+    def _mark_settings_child(self, active: bool) -> None:
+        """记录独立设置进程存活态，并同步各窗气泡抑制与存活轮询。"""
+        self._settings_child_active = bool(active)
+        timer = getattr(self, "_settings_watch_timer", None)
+        if timer is not None:
+            if active:
+                if not timer.isActive():
+                    timer.start()
+            else:
+                self._settings_launch_at = 0.0
+                timer.stop()
+        for inst in getattr(self, "_instances", []):
+            update = getattr(inst, "_update_bubble_suppression_for_settings", None)
+            if not callable(update):
+                continue
+            try:
+                update()
+            except Exception:
+                logging.exception("同步设置期气泡抑制状态失败")
+
+    def _poll_settings_process(self) -> None:
+        """设置进程存活轮询：崩溃/漏事件时兜底解除气泡抑制。"""
+        if not bool(getattr(self, "_settings_child_active", False)):
+            return
+        if self._settings_process_running():
+            # 子进程已建锁 = 启动窗口结束：此后锁一消失就可立即解除抑制。
+            self._settings_launch_at = 0.0
+            return
+        if self._settings_launch_pending():
+            return
+        self._mark_settings_child(False)
+
+    def _install_config_watcher(self) -> None:
+        """盯 config.json 所在目录 + 文件，把外部写盘合并进运行期（幂等）。
+
+        盯目录而不是只盯文件：config.save() 用 os.replace 落盘会换 inode，
+        QFileSystemWatcher 对消失的路径会停止监视，只盯文件必丢后续事件。
+        目录信号不带文件名，故 basename 过滤交给 fileChanged（带路径），
+        目录信号负责换 inode 后重新 addPath、以及 settings.lock 出现/消失。
+        300ms 去抖：一次保存可能伴随目录多次变动。进程内保存同样触发——
+        去抖窗口内合并即可；finished 路径不改成走 watcher，保持原时序语义。
+        """
+        if getattr(self, "_config_watcher", None) is not None:
+            return
+        if not bool(self.config.get("settings_process_isolation", True)):
+            return
+        from PySide6.QtCore import QFileSystemWatcher, QTimer
+
+        try:
+            self.config.dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logging.warning("配置目录不可创建，跳过 config 变更监视：%s", self.config.dir)
+            return
+        watcher = QFileSystemWatcher()
+        watcher.directoryChanged.connect(self._on_config_dir_changed)
+        watcher.fileChanged.connect(self._on_config_file_changed)
+        if not watcher.addPath(str(self.config.dir)):
+            logging.warning("无法监视配置目录：%s", self.config.dir)
+            return
+        self._config_watcher = watcher
+        self._last_config_signature = self._config_signature()
+        self._config_reload_timer = QTimer()
+        self._config_reload_timer.setSingleShot(True)
+        self._config_reload_timer.setInterval(300)
+        self._config_reload_timer.timeout.connect(self._on_config_change_debounced)
+        self._settings_watch_timer = QTimer()
+        self._settings_watch_timer.setInterval(3000)
+        self._settings_watch_timer.timeout.connect(self._poll_settings_process)
+        self._watch_config_file()
+
+    def _watch_config_file(self) -> None:
+        """确保 config.json 在监视列表里（os.replace 换 inode 后被 Qt 自动移除）。"""
+        watcher = getattr(self, "_config_watcher", None)
+        if watcher is None:
+            return
+        try:
+            path = str(self.config.path)
+            if self.config.path.exists() and path not in watcher.files():
+                watcher.addPath(path)
+        except OSError:
+            pass
+
+    def _config_signature(self):
+        """(mtime_ns, size) 签名：目录信号不带文件名，用它兜底判断 config 是否变了。"""
+        try:
+            stat = self.config.path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _arm_config_reload(self) -> None:
+        """重启去抖窗口：窗口内的多次变动合并成一次 reload+应用。"""
+        timer = getattr(self, "_config_reload_timer", None)
+        if timer is not None:
+            timer.start()
+
+    def _on_config_file_changed(self, path: str) -> None:
+        if Path(path).name != self.config.path.name:
+            return  # 只认本配置文件的 basename（同目录还有 settings.lock 等）
+        self._watch_config_file()
+        self._arm_config_reload()
+
+    def _on_config_dir_changed(self, path: str) -> None:
+        self._watch_config_file()
+        if self._config_signature() != getattr(self, "_last_config_signature", None):
+            self._arm_config_reload()
+        # 锁文件出现 = 设置进程已起来（启动窗口结束）；锁文件消失 = 设置进程
+        # 退出（QLockFile 解锁即删文件）→ 立即解除气泡抑制。
+        lock_path = self.config.dir / "settings.lock"
+        if lock_path.exists():
+            self._settings_launch_at = 0.0
+        elif (bool(getattr(self, "_settings_child_active", False))
+                and not self._settings_launch_pending()):
+            self._mark_settings_child(False)
+
+    def _on_config_change_debounced(self) -> None:
+        self.config.reload()
+        try:
+            self._apply_external_config_change()
+        except Exception:
+            logging.exception("应用外部配置变更失败")
+        finally:
+            self._last_config_signature = self._config_signature()
+
+    def _teardown_config_watcher(self) -> None:
+        """释放 watcher 与两个定时器（退出/测试收口共用）。"""
+        watcher = getattr(self, "_config_watcher", None)
+        if watcher is not None:
+            for signal, slot in (
+                (watcher.directoryChanged, self._on_config_dir_changed),
+                (watcher.fileChanged, self._on_config_file_changed),
+            ):
+                try:
+                    signal.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
+            self._config_watcher = None
+        for name in ("_config_reload_timer", "_settings_watch_timer"):
+            timer = getattr(self, name, None)
+            if timer is None:
+                continue
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
+
     # ------------------------------------------------------------ 启动
     def start(self) -> None:
         # aboutToQuit 只在控制器层绑定一次：角色热切换会重建窗口，逐个
@@ -1218,6 +1546,9 @@ class AppShell:
         # "本分钟是否让位"。顺序反了会出现"报时先响、节日后响"从而两者都出声。
         self._sync_festival_service()
         self._sync_chime_service()
+        # 设置页进程隔离：启动即装 config 目录 watcher，独立设置进程落盘后由它
+        # 合并进运行期（开关关闭时不装，完全走旧路径）。
+        self._install_config_watcher()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
         QTimer.singleShot(4000, self._maybe_autostart_harness)
         # issue #111：会话结束（Windows 关机/注销）探测器。必须在窗口就绪后安装
@@ -1475,6 +1806,9 @@ class AppShell:
             self._decode_hub.stop_all()
         except Exception:
             logging.exception("退出时关闭共享解码 hub 失败")
+        # 设置页进程隔离：释放 config 目录 watcher 与两个定时器（无主 QTimer 的
+        # timeout 连接会从 Qt C++ 侧强引用住本对象图，不停则阻碍回收）。
+        self._teardown_config_watcher()
 
     @classmethod
     def _shutdown_live_for_tests(cls) -> None:
@@ -1534,6 +1868,15 @@ class AppShell:
                         body.stop()
                     except Exception:
                         logging.debug("测试收口灵动岛碰撞体失败", exc_info=True)
+                # 设置页进程隔离：watcher/定时器同属"无主 Qt 对象"一族，收口
+                #（不停会让后续测试凭空多一条 3s 轮询，并阻碍对象图回收）。
+                teardown_watcher = getattr(shell, "_teardown_config_watcher", None)
+                if callable(teardown_watcher):
+                    try:
+                        teardown_watcher()
+                    except Exception:
+                        logging.debug("测试收口 config watcher 失败", exc_info=True)
+                shell._settings_child_active = False
                 try:
                     from .chat.service import ChatService as _ChatService
                     _ChatService.unregister_global_finished(shell._on_global_chat_finished)
@@ -1608,6 +1951,9 @@ class AppShell:
             from .dynamic_island import DynamicIsland
 
             self.island = DynamicIsland(self.config)
+            # 岛图标默认取鱼本体头像（图片路径不碰 emoji 字体栈，见 dynamic_island
+            # 的 _icon_pixmap 注释）；帧未就绪时岛侧只画底圈并稍后重试
+            self.island.set_icon_provider(self._island_icon_pixmap)
             self.island.clicked.connect(self._toggle_pet_from_island)
             self.island.toggle_pet_requested.connect(self._toggle_pet_from_island)
             self.island.open_chat_requested.connect(self._open_chat_from_island)
@@ -1718,6 +2064,16 @@ class AppShell:
         minutes = max(0, int(self.config.get("balance_refresh_minutes", 0) or 0))
         if minutes:
             self._balance_timer.start(minutes * 60000)
+
+    def _island_icon_pixmap(self):
+        """灵动岛"鱼本体头像"：取首个桌宠窗的当前帧图标；无窗/无帧返回 None（岛侧会重试）。"""
+        for inst in getattr(self, "_instances", []):
+            win = getattr(inst, "win", None)
+            if win is not None:
+                pm = win.icon_pixmap(64)
+                if pm is not None and not pm.isNull():
+                    return pm
+        return None
 
     def _island_tier_hint(self) -> str:
         """灵动岛余额峰谷提示文案（与 _update_island_balance / 静默查询共用）。"""

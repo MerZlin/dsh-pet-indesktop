@@ -5,12 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
-from PySide6.QtGui import QGuiApplication, QMouseEvent
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
 from pet.dynamic_island import (
     DynamicIsland,
+    _CAPSULE_HEIGHT,
+    _CAPSULE_INSET,
     _STRIP_THICKNESS,
     dock_edge_for,
     spring_step,
@@ -470,3 +472,144 @@ def test_apply_position_does_not_hijack_expanded_card(tmp_path):
     finally:
         island.hide()
         island.deleteLater()
+
+
+# ------------------------------------------------------------ 图标图片化
+def _solid_pixmap(color: str = "#ff0000", size: int = 64) -> QPixmap:
+    pm = QPixmap(size, size)
+    pm.fill(QColor(color))
+    return pm
+
+
+def test_default_icon_is_auto(tmp_path):
+    """默认图标是 auto（鱼本体头像/图片路径），不再是 emoji 🐳。
+
+    首次 emoji 绘制会触发 DirectWrite 彩色字体栈一次性 +33.6MB 私有内存，
+    默认值必须避开它。
+    """
+    cfg = Config(base=tmp_path)
+    assert cfg.get("dynamic_island")["icon"] == "auto"
+
+
+def test_auto_icon_uses_provider_pixmap(tmp_path):
+    """auto 模式：provider 的头像真的画进底圈，_icon_pixmap 返回同一张图。"""
+    _qapp()
+    island = _island(tmp_path, icon="auto")
+    try:
+        island.show()
+        pm = _solid_pixmap()
+        island.set_icon_provider(lambda: pm)
+        assert island._icon_pixmap() is pm
+        content = island._content_cache()
+        assert not content.isNull()
+        dpr = island.devicePixelRatioF()
+        img = content.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        # 图标槽中心（26px 底圈圆心）必须被红色头像盖住
+        cx = round((_CAPSULE_INSET + 13.0 + 13.0) * dpr)
+        cy = round(_CAPSULE_HEIGHT / 2.0 * dpr)
+        center = img.pixelColor(cx, cy)
+        assert center.alpha() > 200 and center.red() > 200, \
+            "auto 模式没把 provider 头像画进底圈"
+    finally:
+        island.hide()
+        island.deleteLater()
+
+
+def test_auto_icon_none_result_is_not_cached(tmp_path):
+    """provider 返回 None（帧未就绪）不得缓存：下次还会再问一次。"""
+    _qapp()
+    island = _island(tmp_path, icon="auto")
+    calls: list[int] = []
+
+    def provider():
+        calls.append(1)
+        return None
+
+    try:
+        island.set_icon_provider(provider)
+        assert island._icon_pixmap() is None
+        assert island._icon_pixmap() is None
+        assert len(calls) == 2, "provider 返回 None 被缓存了，头像永远不会补上"
+        # 没头像时内容层照样出图（只画底圈）
+        content = island._content_cache()
+        assert not content.isNull()
+    finally:
+        island.hide()
+        island.deleteLater()
+
+
+def test_auto_icon_retries_provider_and_repaints_on_refresh(tmp_path):
+    """provider 就绪后（内容层重建路径）头像补上；换形象也走同一条清缓存路径。"""
+    _qapp()
+    island = _island(tmp_path, icon="auto", info_mode="custom", custom_text="占位")
+    state = {"pm": None}
+    try:
+        island.show()
+        island.set_icon_provider(lambda: state["pm"])
+        assert island._icon_pixmap() is None
+        state["pm"] = _solid_pixmap()
+        # 内容层 key 未变 → 仍用旧缓存；refresh_from_config（换形象/设置保存）后重取
+        data = dict(island._cfg)
+        data["custom_text"] = "变了"
+        island.config.set("dynamic_island", data)
+        island.refresh_from_config()
+        assert island._icon_pixmap() is state["pm"]
+        assert island._content_cache() is not None
+    finally:
+        island.hide()
+        island.deleteLater()
+
+
+def test_emoji_icon_mode_keeps_text_path(tmp_path):
+    """emoji 模式行为不变：_icon_text 返回配置字符串，且不走图片路径。"""
+    _qapp()
+    island = _island(tmp_path, icon="🐟")
+    try:
+        assert island._icon_text() == "🐟"
+        assert island._icon_pixmap() is None
+    finally:
+        island.hide()
+        island.deleteLater()
+
+
+def test_img_icon_mode_loads_file_once_and_caches_failure(tmp_path):
+    """img: 模式：文件在则取图并缓存；缺失时失败结果也缓存（免每帧磁盘 IO）。"""
+    _qapp()
+    png = tmp_path / "icon.png"
+    assert _solid_pixmap("#00ff00").save(str(png))
+    island = _island(tmp_path, icon=f"img:{png}")
+    try:
+        first = island._icon_pixmap()
+        assert first is not None and not first.isNull()
+        assert island._icon_pixmap() is first, "img: 成功结果必须缓存"
+
+        island.config.set("dynamic_island", {
+            **dict(island._cfg), "icon": f"img:{tmp_path / 'missing.png'}",
+        })
+        island.refresh_from_config()
+        assert island._icon_pixmap() is None
+        assert island._icon_img_failed is True, "失败结果必须记住"
+    finally:
+        island.hide()
+        island.deleteLater()
+
+
+def test_config_icon_normalization(tmp_path):
+    """icon 归一化：缺省/空 → auto；img: 路径保留（限长 260）；emoji 原样留着。"""
+    cfg = Config(base=tmp_path)
+    cfg.set("dynamic_island", {"enabled": True})
+    assert cfg.get("dynamic_island")["icon"] == "auto"
+
+    cfg.set("dynamic_island", {"enabled": True, "icon": "   "})
+    assert cfg.get("dynamic_island")["icon"] == "auto"
+
+    cfg.set("dynamic_island", {"enabled": True, "icon": "img:C:/pics/fish.png"})
+    assert cfg.get("dynamic_island")["icon"] == "img:C:/pics/fish.png"
+
+    long_path = "img:" + "a" * 400
+    cfg.set("dynamic_island", {"enabled": True, "icon": long_path})
+    assert cfg.get("dynamic_island")["icon"] == long_path[:260]
+
+    # 存量用户配置里的 emoji 视为用户选择，不做迁移
+    cfg.set("dynamic_island", {"enabled": True, "icon": "🐳"})
+    assert cfg.get("dynamic_island")["icon"] == "🐳"

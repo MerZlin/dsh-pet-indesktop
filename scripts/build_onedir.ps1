@@ -112,6 +112,21 @@ if ($nodeExe) {
 $datas = if ($isGif) { 'assets/characters_gif;assets/characters_gif' } else { 'assets/characters;assets/characters' }
 # No-chat builds exclude the chat subsystem and keyring (kept out of the bundle)
 $excludes = if ($noChat) { @('--exclude-module', 'pet.chat', '--exclude-module', 'keyring') } else { @() }
+# PyOpenGL 与本应用无关（Qt 用自带 OpenGL），但其 freeglut_README.txt 是
+# CP1252 编码，会触发 check_bundle_encoding 的 UTF-8 严格校验（该自检针对
+# 中文资源，第三方 README 属误伤）；排除后包体也更小。
+$excludes += @('--exclude-module', 'OpenGL')
+# 本机 Python 环境里的 ML/数据科学全家桶（torch/transformers/datasets/
+# langchain/pandas/spacy/cv2/playwright 等）会被 PyInstaller 模块图连带收集，
+# 包体从 ~350M 膨胀到 5G+。全仓 grep 确认应用代码零引用，一律排除。
+# 注意：这份排除清单是「打包机 Python 环境」的函数——换机/重装环境/新装库后
+# 必须复查（新装的大库会再被连带收集）。
+foreach ($m in @('torch','transformers','datasets','langchain','langchain_core',
+                 'langchain_openai','langsmith','langgraph','wandb','sentry_sdk',
+                 'pandas','numba','llvmlite','pyarrow','polars','_polars_runtime_32',
+                 'spacy','cv2','playwright','narwhals','sympy','fsspec')) {
+    $excludes += @('--exclude-module', $m)
+}
 # Chat 版必须显式收集 keyring（API Key 系统安全存储）；no-chat 不收集
 $keyringCollect = if ($noChat) { @() } else { @('--collect-all', 'keyring') }
 $chatData = if ($noChat) { @() } else {
@@ -402,6 +417,40 @@ if ($proc.MainWindowHandle -eq 0) {
 }
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 Write-Host "[smoke] exe started OK" -ForegroundColor Green
+
+# ---------- --settings 分流冒烟（设置页进程隔离） ----------
+# exe 必须能按参数分流到独立设置进程：起的是一个设置窗口（不是又一只桌宠），
+# 并且持有 settings.lock。用隔离的 APPDATA，避免冒烟配置写进用户目录。
+Write-Host "[smoke] Launching $exePath --settings ..." -ForegroundColor Cyan
+$smokeBase = Join-Path $env:TEMP ("dsh-settings-smoke-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $smokeBase -Force | Out-Null
+$oldAppData = $env:APPDATA
+$env:APPDATA = $smokeBase
+$settingsProc = $null
+try {
+    $settingsProc = Start-Process -FilePath $exePath -ArgumentList '--settings' -PassThru
+    Start-Sleep -Seconds 10
+    if ($settingsProc.HasExited) {
+        throw "[smoke] --settings exited early (code $($settingsProc.ExitCode)) - arg routing broken"
+    }
+    $settingsProc.Refresh()
+    if ($settingsProc.MainWindowHandle -eq 0) {
+        throw "[smoke] --settings running but no settings window appeared"
+    }
+    # 配置目录名随打包变体走（= $name，如 dsh-pet-standalone-webm-chat），
+    # 写死基础名会让 webm-chat 等变体误报"没拿到锁"（实机踩过）
+    $settingsLock = Join-Path (Join-Path $smokeBase $name) 'settings.lock'
+    if (-not (Test-Path $settingsLock)) {
+        throw "[smoke] --settings did not acquire settings.lock"
+    }
+} finally {
+    if ($settingsProc -and -not $settingsProc.HasExited) {
+        Stop-Process -Id $settingsProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    $env:APPDATA = $oldAppData
+    Remove-Item $smokeBase -Recurse -Force -ErrorAction SilentlyContinue
+}
+Write-Host "[smoke] --settings started OK" -ForegroundColor Green
 
 if (-not $SkipZip) {
     Write-Host "[2/3] Packing portable zip..." -ForegroundColor Cyan

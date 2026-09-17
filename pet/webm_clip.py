@@ -88,7 +88,9 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from . import catalog
+from . import mem_debug
 from . import perfstats
+from . import win_job
 from .frame_cache import ByteBudgetLru
 
 logger = logging.getLogger(__name__)
@@ -600,6 +602,66 @@ def _reap_orphaned_clips() -> None:
     _ORPHAN_REGISTRY.reap()
 
 
+# ------------------------------------------------------------ 内存取证（DSPET_MEM_DEBUG=1）
+# 诊断专用（机制见 pet/mem_debug.py）：登记本模块的 reader 帧队列、首帧
+# 缓存、spawn/消费计数，供 ticker 每 60s 输出一行，与外部采样的
+# PrivateMemorySize64 曲线按时间轴对齐，找出「跟内存同涨」的那个计数。
+# 关闭（默认）时所有计数点被 `mem_debug.ENABLED` 短路——正常路径零行为、
+# 零额外分配；队列用 weakref 登记，绝不延长 reader/clip 寿命。
+_MEM_CLIPS: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def _mem_debug_collector() -> dict:
+    samples = mem_debug.live_readers()
+    q_frames = sum(n for _label, n, _b in samples)
+    q_bytes = sum(b for _label, _n, b in samples)
+    with _first_frame_reg_lock:
+        ff_clips = sum(1 for ref, _n in _first_frame_reg if ref() is not None)
+        ff_bytes = _first_frame_bytes
+    # 显示槽保留（原生内存嫌疑点，2026-09-17）：QImage/QPixmap 的像素数据由
+    # Qt 侧 malloc，tracemalloc 看不见——若某条切换路径没清旧 clip 的显示槽，
+    # 就会以「每段动画 ~1.8MB」的速度在原生堆上累积（Python 堆保持全平）。
+    img_clips = img_bytes = pm_clips = pm_bytes = 0
+    try:
+        for clip in list(_MEM_CLIPS):
+            img = getattr(clip, '_current_image', None)
+            if img is not None:
+                try:
+                    img_clips += 1
+                    img_bytes += img.width() * img.height() * 4
+                except RuntimeError:
+                    pass
+            pm = getattr(clip, '_current_pixmap', None)
+            if pm is not None:
+                try:
+                    pm_clips += 1
+                    pm_bytes += pm.width() * pm.height() * 4
+                except RuntimeError:
+                    pass
+    except RuntimeError:
+        pass
+    detail = ','.join(
+        f'{label}:{n}f/{b // 1024}K' for label, n, b in samples
+    ) or '-'
+    return {
+        'clips': len(_MEM_CLIPS),
+        'readers': len(samples),
+        'q_frames': q_frames,
+        'q_bytes': q_bytes,
+        'ff_bytes': ff_bytes,
+        'ff_clips': ff_clips,
+        'img_clips': img_clips,
+        'img_bytes': img_bytes,
+        'pm_clips': pm_clips,
+        'pm_bytes': pm_bytes,
+        'reader_q': detail,
+    }
+
+
+if mem_debug.ENABLED:
+    mem_debug.register_collector(_mem_debug_collector)
+
+
 class _Reader:
     """一个 reader 线程 + 其持有的底层 ffmpeg 进程句柄。
 
@@ -633,6 +695,11 @@ class _PopenCapture:
       _procs 列表并可即时回调（on_process）；其余线程完全无感。
     - 即时回调让 stop() 在 reader 尚处于 ffmpeg 头部解析（可能卡住）时也能
       拿到进程句柄并主动 terminate，而不是等 reader 自己退。
+    - 孤儿防护（2026-09-17）：**每一个**经本漏斗拉起的 ffmpeg 子进程在 Popen
+      返回后立即挂进模块级 Job Object（KILL_ON_JOB_CLOSE）——父进程被
+      Stop-Process/任务管理器强杀（TerminateProcess，任何清理代码都不执行）
+      时由内核连带终止，修「每次强杀残留一个 ffmpeg」的实机问题。实现与
+      取舍见 pet/win_job.py；非 Windows / job 创建失败时为空操作。
     """
 
     _install_lock = threading.Lock()
@@ -685,6 +752,18 @@ class _PopenCapture:
     @classmethod
     def _wrapped(cls, *args, **kwargs):
         proc = cls._real_popen(*args, **kwargs)
+        # 孤儿防护：挂早不挂晚（Popen 刚返回，进程几乎不可能已退出）。这里
+        # 是所有 imageio-ffmpeg 解码进程的唯一漏斗（read_frames/write_frames
+        # 都经它），失败只降级为「不防护」，绝不影响播放路径。
+        win_job.adopt(proc)
+        if mem_debug.ENABLED:
+            # 取证（DSPET_MEM_DEBUG=1）：区分解码进程（-i 素材）与 exe 探测。
+            try:
+                argv = args[0] if args else None
+                decode = isinstance(argv, (list, tuple)) and "-i" in argv
+                mem_debug.bump('ff_spawn_dec' if decode else 'ff_spawn_probe')
+            except Exception:
+                pass
         state = getattr(cls._local, "capture", None)
         if state is not None:
             state._procs.append(proc)
@@ -823,6 +902,8 @@ class WebMClip(QObject):
 
     def __init__(self, path, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        if mem_debug.ENABLED:
+            _MEM_CLIPS.add(self)  # 取证用弱引用登记（clip 存活数；不延长寿命）
         self.path = path
         self._w = catalog.CANVAS_W
         self._h = catalog.CANVAS_H
@@ -1479,6 +1560,14 @@ class WebMClip(QObject):
         )
         with self._reader_lock:
             self._thread = thread
+        if mem_debug.ENABLED:
+            # 取证：把本代 reader 的帧队列（本代真正被 reader 持有的那个）登记
+            # 进排查表——换代后旧队列仍被旧 reader 引用，只有按 reader 登记才
+            # 能看到「某代退役但队列未释放」。weakref，不影响生命周期。
+            mem_debug.note_reader(
+                f'{os.path.basename(str(self.path))}#{gen_id}',
+                self._queue, thread, self._w * self._h * self._bpp,
+            )
         thread.start()
         self._timer.start()
         return True
@@ -1746,6 +1835,8 @@ class WebMClip(QObject):
             return None
         finally:
             if proc is not None:
+                if mem_debug.ENABLED:
+                    mem_debug.bump('ff_done')  # 取证：已收尾的解码进程数
                 with self._reader_lock:
                     self._first_frame_procs.discard(proc)
             if g is not None:
@@ -2216,6 +2307,8 @@ class WebMClip(QObject):
                 #   仍必被终止，只是时间更长）。
                 with self._proc_lock:
                     if proc is not None:
+                        if mem_debug.ENABLED:
+                            mem_debug.bump('ff_done')  # 取证：已收尾的解码进程数
                         # 兜底 terminate：正常情况下 stop() 已解除阻塞/终止；
                         # 自然播完/解码失败时进程已自行退出（poll()!=None），
                         # 此处为无操作。
@@ -2506,6 +2599,8 @@ class WebMClip(QObject):
                 frame = next(it)
             except StopIteration:
                 break
+            if mem_debug.ENABLED:
+                mem_debug.bump('frames_dec')  # 取证：reader 侧解码帧数
             if is_stopped():
                 break
             timeline_idx = (src_idx % loop_frame_count) if loop_frame_count > 0 else src_idx
@@ -2549,6 +2644,8 @@ class WebMClip(QObject):
                     return  # 停止/续圈被拒/宽限超时：退出（调用方 finally 收尾）
 
     def _process_frame(self, item) -> None:
+        if mem_debug.ENABLED:
+            mem_debug.bump('frames_cons')  # 取证：GUI 侧消费/渲染帧数
         data, src_idx = item
         expect = self._w * self._h * self._bpp
         if len(data) != expect:

@@ -53,6 +53,23 @@ def _mute_qt_audio(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mute_winmm_audio(monkeypatch):
+    """winmm 直放后端在测试里必须"不可用"（对齐 _mute_qt_audio 的口径）。
+
+    pet/sound_winmm.py 是真实触碰声卡的路径：不拦的话，"设置里点试听"这类
+    用例会在跑测试时真的把 wav 交给 waveOut 发声，还会在无人值守 runner 上
+    打开真实音频设备。默认把默认后端置为不可用，产品代码因此走与改动前
+    逐位一致的 Qt 路径；要验证 winmm 语义的用例自行注入替身后端
+    （tests/test_winmm_sound.py 用 _new_winmm_pool / WinmmSoundPool(api=...)）。
+    """
+    try:
+        from pet import sound_winmm
+    except Exception:
+        return
+    monkeypatch.setattr(sound_winmm, "default_api", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_modal_message_boxes(monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 
@@ -117,12 +134,25 @@ def _clear_click_sound_pool():
         click_sound._pool.clear()
     except Exception:
         pass
+    # 用例可能自建 winmm 池（替身后端也持句柄/可选 timer）：一并收口。
+    try:
+        from pet import sound_winmm
+        sound_winmm._clear_live_pools_for_tests()
+    except Exception:
+        pass
 
 
 @pytest.fixture(autouse=True)
 def _close_qt_top_level_widgets():
     """在测试后收口仍存活的应用级后台资源与 collision IPC 会话。"""
     yield
+    # 内存取证（DSPET_MEM_DEBUG）是进程级开关 + 常驻 ticker 线程：用例打开后
+    # 不复位会让后续用例凭空多一条 60s 日志线（且 reader 登记表跨用例残留）。
+    try:
+        from pet import mem_debug as _mem_debug_mod
+        _mem_debug_mod._reset_for_tests()
+    except Exception:
+        pass
     # webm_clip 的「会话结束」闸门是进程级 latch（issue #111）：测试里置位后
     # 不复位会让后续用例静默拒绝一切 reader 启动（报错点离真因很远）。
     try:
