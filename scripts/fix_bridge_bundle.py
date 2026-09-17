@@ -61,6 +61,12 @@ def main() -> int:
                     help="onedir/.app 输出目录（内含 integrations/dsh-pet-bridge）")
     args = ap.parse_args()
 
+    # 归一为绝对路径：CI 以 `--dist dist`（相对）调用构建脚本并透传到此，
+    # 若保持相对，下面 subprocess.run(..., cwd=dst_bridge) 会让 node 相对
+    # 自己的 cwd 再拼一次 smoke 路径（双重嵌套 → Cannot find module，
+    # Linux/macOS 构建红；Windows 走 build_onedir.ps1 绝对路径不受影响）。
+    args.app_dir = os.path.abspath(args.app_dir)
+
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src_bridge = os.path.join(root, "integrations", "dsh-pet-bridge")
 
