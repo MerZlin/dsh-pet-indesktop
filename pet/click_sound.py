@@ -1,9 +1,17 @@
 # -*- coding: utf-8 -*-
 """通用音效播放器与点击音效包支持。
 
-取消 Windows winsound 路径，WAV/MP3/OGG/FLAC/M4A 全部走 QtMultimedia 以支持音量控制；
-QtMultimedia 不可用时静默失败并记录 warning，绝不使用系统提示音替代。
-非 Windows 平台在 QtMultimedia 缺失时回退到系统播放器。
+播放路由（P1：winmm 直放）：
+- .wav（含压缩音频的转码产物）优先走 ``pet.sound_winmm`` 的 waveOut 直放，
+  全程不 import QtMultimedia——QtMultimedia 只要被 QSoundEffect 触碰一次，
+  ffmpeg 后端（avcodec/avutil/avformat/MFCORE）就常驻进程（本机实测：最小
+  进程放一个 wav 多 ~10MB，正式程序常驻约 40MB）；
+- winmm 不可用（非 Windows/加载失败/打开设备失败/异常）时逐级回退既有
+  QtMultimedia 路径（QSoundEffect + QMediaPlayer 池），行为与改动前逐位一致；
+- 压缩音频未命中转码缓存时仍由 QAudioDecoder 转码 + QMediaPlayer 池出声
+  （首次一次性代价），缓存落地后的每次播放都走 winmm；
+- QtMultimedia 与系统播放器都不可用时静默失败并记录 warning，绝不使用系统
+  提示音替代；非 Windows 平台在 QtMultimedia 缺失时回退到系统播放器。
 """
 from __future__ import annotations
 
@@ -20,6 +28,8 @@ import wave
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+from . import sound_winmm
 
 log = logging.getLogger("pet.click_sound")
 
@@ -48,9 +58,15 @@ class ClickSoundPool:
     - 进程级单例，应用存活期间不复位——播放器/音效必须持久化，否则
       Python GC 会在播放开始前回收对象；
     - close()/clear() 语义：停止全部音效与播放器对象、清空对象缓存/
-      播放器池/解码器注册表、复位播放游标与时长/配对缓存。本池不拥有
-      任何后台线程，close 无 join/等待语义；调用方须在 GUI 线程调用。
+      播放器池/解码器注册表、复位播放游标与时长/配对缓存，并释放 winmm
+      直放池（关设备/回收 header）。本池不拥有任何后台线程，close 无
+      join/等待语义；调用方须在 GUI 线程调用。
       生产路径不调用（生命周期=进程），主要供测试隔离与模块热重载场景。
+
+    winmm 直放（P1）：
+    - ``winmm_pool()`` 惰性建一个 ``sound_winmm.WinmmSoundPool``；不可用时
+      置 ``_winmm_unavailable`` 并永远回退 Qt 路径（只探一次，避免每次点击
+      都去加载 DLL）。测试替换点是模块级 ``_new_winmm_pool``。
     """
 
     _PLAYER_POOL_SIZE = 4
@@ -66,6 +82,66 @@ class ClickSoundPool:
         self._qt_classes: tuple[Any, ...] | None = None
         self._wav_duration_cache: dict[str, float] = {}
         self._click_pair_state: dict[tuple[str, str], dict[str, Any]] = {}
+        self._winmm_pool: sound_winmm.WinmmSoundPool | None = None
+        self._winmm_unavailable = False
+
+    # ---------------- winmm 直放（GUI 线程，惰性） ----------------
+
+    def winmm_pool(self) -> sound_winmm.WinmmSoundPool | None:
+        """返回 winmm 直放池；不可用返回 None（探测结果缓存，只探一次）。"""
+        if self._winmm_pool is not None:
+            return self._winmm_pool
+        if self._winmm_unavailable:
+            return None
+        pool = _new_winmm_pool()
+        if pool is None or not pool.available():
+            self._winmm_unavailable = True
+            return None
+        self._winmm_pool = pool
+        return pool
+
+    def play_with_winmm(self, path: Path, volume: float = 1.0) -> bool:
+        """wav（含转码产物）优先走 waveOut 直放；返回 True = 已交给 winmm。
+
+        路由与回退：
+        - PCM16 wav → 直接喂；其它整型 PCM wav（8/24/32 位）→ 先落标准 wav
+          缓存再喂缓存，本次与以后都不碰 QtMultimedia；
+        - 压缩音频 → 命中转码缓存就走 winmm，未命中返回 False（交给既有 Qt
+          解码/播放器池路径，首次一次性代价）；
+        - 读不了（浮点/压缩 wav、多声道）/ winmm 不可用 / 设备打开或写入失败
+          → 返回 False，逐级回退 Qt 路径，行为与改动前一致。
+        """
+        pool = self.winmm_pool()
+        if pool is None:
+            return False
+        try:
+            if path.suffix.lower() != ".wav":
+                cache = _cache_path(path)
+                if not cache.is_file():
+                    return False
+                return pool.play(cache, volume)
+            return self._play_wav_with_winmm(pool, path, volume)
+        except Exception:
+            log.warning("winmm 直放异常，回退 Qt 路径: %s", path, exc_info=True)
+            return False
+
+    def _play_wav_with_winmm(self, pool: sound_winmm.WinmmSoundPool, path: Path, volume: float) -> bool:
+        clip = sound_winmm.read_pcm16(path)
+        if clip is not None and not clip.converted:
+            # 绝大多数情况：PCM16 wav 直接喂，连缓存目录都不用碰
+            return pool.play_clip(clip, volume)
+        # 不标准 wav：先看转码缓存（可能是别的路线留下的），没有就自己落一份
+        # 标准 wav 再走 winmm。QSoundEffect 只认整型 PCM，这里统一按标准 wav 走。
+        cache = _cache_path(path)
+        if cache.is_file():
+            return pool.play(cache, volume)
+        if clip is not None:
+            if sound_winmm.write_pcm16_wav(clip, cache):
+                return pool.play(cache, volume)
+            return pool.play_clip(clip, volume)     # 写盘失败也别丢这一声
+        # clip is None：`wave` 读不了（浮点/压缩/多声道 wav）→ 交给现有 Qt 路径，
+        # 行为与改动前逐位一致。
+        return False
 
     # ---------------- QtMultimedia 探测与对象创建（GUI 线程） ----------------
 
@@ -307,12 +383,19 @@ class ClickSoundPool:
         return self.player_pool_play(path, volume)
 
     def set_audio_volume(self, volume: float) -> float:
-        """设置音频输出音量 (0.0..1.0)，返回 clamp 后的实际音量。"""
+        """设置音频输出音量 (0.0..1.0)，返回 clamp 后的实际音量。
+
+        winmm 可用时只设 waveOut 设备音量（与 QAudioOutput 的全局音量同义），
+        不创建任何 QtMultimedia 对象；winmm 不可用时维持原有行为。
+        """
         try:
             v = float(volume)
         except (TypeError, ValueError):
             v = 1.0
         v = max(0.0, min(1.0, v))
+        pool = self.winmm_pool()
+        if pool is not None:
+            return pool.set_volume(v)
         self.ensure_qt_player()
         if self._qt_audio is not None:
             try:
@@ -327,12 +410,36 @@ class ClickSoundPool:
         data_dir: Path | None = None,
         limit: int = 8,
     ) -> None:
-        """预创建点击音效对象，避免首次点击时初始化 QtMultimedia 造成卡顿。
+        """预创建点击音效资源，避免首次点击时初始化音频后端造成卡顿。
 
-        启动或切换音效包后调用：WAV/已缓存音频预创建 QSoundEffect 并等待加载完成；
-        未缓存的压缩音频启动异步解码并等待缓存生成；同时预创建 QMediaPlayer 池。
-        limit 用于限制自定义文件夹随机音效的预热数量，避免一次创建过多对象。
+        winmm 可用时（P1 关键路径）：**只预热 winmm 池**——为候选 wav 与已转码
+        缓存各开满一个 waveOut 小池子（4 路句柄，waveOutOpen 实测 ~70ms/个，
+        必须一次开满，否则快速连点会在 GUI 线程上逐个付开设备的钱），绝不创建
+        QSoundEffect/QMediaPlayer，也绝不 import QtMultimedia（那正是 40MB 常驻
+        ffmpeg 后端的来源）。此时未转码的压缩音频（如 duck mp3 首次使用）不预热：
+        等第一次真的点击时才走 Qt 转码缓存路线（一次性代价，之后命中缓存全部走
+        winmm）。
+
+        winmm 不可用时维持原有 Qt 预热：WAV/已缓存音频预创建 QSoundEffect 并等待
+        加载完成；未缓存的压缩音频启动异步解码并等待缓存生成；同时预创建
+        QMediaPlayer 池。limit 限制自定义文件夹随机音效的预热数量。
         """
+        pool = self.winmm_pool()
+        if pool is not None:
+            try:
+                candidates = resolve_click_sound_candidates(pack, data_dir)[:limit]
+                ready: list[Path] = []
+                for path in candidates:
+                    if path.suffix.lower() == ".wav":
+                        ready.append(path)
+                        continue
+                    cache = _cache_path(path)
+                    if cache.is_file():
+                        ready.append(cache)
+                pool.warm(ready)
+            except Exception:
+                log.exception("winmm 点击音效预热失败")
+            return
         if not self.qt_available():
             return
         try:
@@ -393,14 +500,20 @@ class ClickSoundPool:
     def play_press_sound(self, pair: tuple[Path, Path], volume: float = 1.0) -> bool:
         """Restart press and cancel any release currently playing."""
         press, release = pair
-        release_effect = self.effect_for(release)
-        if release_effect is not None:
-            try:
-                release_effect.stop()
-                release_effect.setLoopCount(1)
-                release_effect.setVolume(volume)
-            except Exception:
-                pass
+        if self.winmm_pool() is None:
+            # Qt 路径：QSoundEffect 复用同一对象，必须显式 stop 上一次的 release，
+            # 否则新 press 期间旧 release 还会继续响。
+            # winmm 可用时这里刻意不碰 effect_for——它会 import QtMultimedia，
+            # 而"没播过的 release"本来就被下面的 generation 门挡掉；已经在播的
+            # release 会自然播完（小黄鸭尾巴，代价可接受），换来 40MB 不常驻。
+            release_effect = self.effect_for(release)
+            if release_effect is not None:
+                try:
+                    release_effect.stop()
+                    release_effect.setLoopCount(1)
+                    release_effect.setVolume(volume)
+                except Exception:
+                    pass
         state = self._click_pair_state.setdefault((str(press), str(release)), {})
         state["generation"] = int(state.get("generation", 0)) + 1
         state["press_started_at"] = time.monotonic()
@@ -462,6 +575,11 @@ class ClickSoundPool:
         except Exception:
             pass
 
+        # 优先 winmm 直放（wav + 转码产物）：QtMultimedia 只要被触碰一次就会
+        # 常驻 ffmpeg 后端（实测约 40MB）。不可用/失败时逐级回退 Qt 路径。
+        if self.play_with_winmm(target, volume):
+            return True
+
         # WAV and decoded short effects use QSoundEffect; compressed sources use
         # the decoder/cache path and a small player pool while warming up.
         if self.play_with_qt(target, volume):
@@ -485,9 +603,19 @@ class ClickSoundPool:
 
         停止并丢弃全部 QSoundEffect / QMediaPlayer / QAudioDecoder 引用，
         清空音效缓存、解码器注册表与播放器池，复位播放游标与时长/配对
-        缓存。保留 _qt_classes / _qt_import_failed 的惰性探测结果（不清
-        除导入失败记忆，维持"失败只记一次日志"语义）。
+        缓存；winmm 直放池一并释放（reset + 回收 header + waveOutClose）并
+        复位"不可用"记忆，使下一次点击重新探测。保留 _qt_classes /
+        _qt_import_failed 的惰性探测结果（不清除导入失败记忆，维持"失败只记
+        一次日志"语义）。
         """
+        winmm = self._winmm_pool
+        self._winmm_pool = None
+        self._winmm_unavailable = False
+        if winmm is not None:
+            try:
+                winmm.clear()
+            except Exception:
+                log.debug("释放 winmm 直放池失败", exc_info=True)
         for effect in list(self._qt_effects.values()):
             try:
                 effect.stop()
@@ -532,6 +660,11 @@ _pool = ClickSoundPool()
 def _warm_player_pool() -> None:
     """预创建 QMediaPlayer 池，避免首次点击时初始化 QtMultimedia 造成卡顿。"""
     _pool.warm_player_pool()
+
+
+def _new_winmm_pool() -> sound_winmm.WinmmSoundPool:
+    """winmm 直放池工厂（模块级测试替换点：注入替身后端跑真实产品路由）。"""
+    return sound_winmm.WinmmSoundPool()
 
 
 def _decode_to_wav(source: Path, cache: Path, volume: float) -> bool:
@@ -595,10 +728,30 @@ def _sound_cache_dir() -> Path:
     return result
 
 
+_DIGEST_MEMO: dict[tuple[str, int, int], str] = {}
+
+
 def _cache_path(source: Path) -> Path:
+    # 键用文件内容哈希而非 mtime：重新部署/复制素材会刷新 mtime 但内容没变，
+    # 用 mtime 做键会让每次部署后首次点击都重转码并因此拉起 QtMultimedia
+    # ffmpeg 后端（实机：+40~74MB 常驻，本机 DLL 取证实锤）。内容哈希经
+    # (path, mtime, size) memo 只算一次——用户自定义音效包可能含大文件，
+    # 不能每次点击都整读一遍（实审 P2-5）。读不到内容时退回 stat 键，
+    # 绝不让缓存键计算炸掉播放路径。
     stat = source.stat()
-    key = hashlib.sha256(f"{source.resolve()}:{stat.st_mtime_ns}:{stat.st_size}".encode()).hexdigest()[:20]
-    return _sound_cache_dir() / f"{source.stem}-{key}.wav"
+    memo_key = (str(source.resolve()), stat.st_mtime_ns, stat.st_size)
+    digest = _DIGEST_MEMO.get(memo_key)
+    if digest is None:
+        try:
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()[:20]
+        except OSError:
+            digest = hashlib.sha256(
+                f"{memo_key[0]}:{memo_key[1]}:{memo_key[2]}".encode()
+            ).hexdigest()[:20]
+        if len(_DIGEST_MEMO) > 512:  # 卫生上限：memo 无界增长没意义
+            _DIGEST_MEMO.clear()
+        _DIGEST_MEMO[memo_key] = digest
+    return _sound_cache_dir() / f"{source.stem}-{digest}.wav"
 
 
 def _audio_buffer_bytes(buffer) -> bytes:

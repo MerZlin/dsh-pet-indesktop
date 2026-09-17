@@ -546,3 +546,61 @@ def test_click_sound_immediate_toggle_in_dialog_affects_pet_window(tmp_path, mon
     app.processEvents()
 
 
+
+
+def test_cache_path_stable_across_mtime_change(tmp_path):
+    """转码缓存键用内容哈希：mtime 变（重新部署素材）不应对缓存失配。
+
+    回归：键曾是 path:mtime:size——每次重新部署（文件复制刷新 mtime）后
+    首次点击必重转码，并因此拉起 QtMultimedia ffmpeg 后端常驻 +40~74MB。
+    """
+    from pet import click_sound
+
+    src = tmp_path / "ding.mp3"
+    src.write_bytes(b"fake-mp3-content")
+    first = click_sound._cache_path(src)
+    # 同一内容、mtime 变了（模拟重新部署）
+    import os
+    st = src.stat()
+    os.utime(src, ns=(st.st_atime_ns + 1_000_000_000, st.st_mtime_ns + 1_000_000_000))
+    assert click_sound._cache_path(src) == first
+    # 内容变了才换键
+    src.write_bytes(b"different-content")
+    assert click_sound._cache_path(src) != first
+
+
+def test_cache_path_memoizes_content_hash(tmp_path, monkeypatch):
+    """内容哈希经 (path,mtime,size) memo 只算一次（点击热路径不反复整读）。"""
+    from pet import click_sound
+
+    src = tmp_path / "ding.mp3"
+    src.write_bytes(b"fake-mp3-content")
+    click_sound._DIGEST_MEMO.clear()
+    calls = []
+    real_read_bytes = type(src).read_bytes
+
+    def counting_read_bytes(self):
+        calls.append(1)
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(type(src), "read_bytes", counting_read_bytes)
+    assert click_sound._cache_path(src) == click_sound._cache_path(src)
+    assert len(calls) == 1
+    click_sound._DIGEST_MEMO.clear()
+
+
+def test_cache_path_falls_back_to_stat_key_when_unreadable(tmp_path, monkeypatch):
+    """内容读不到（ACL/独占）时退回 stat 键，绝不让缓存键计算炸掉播放。"""
+    from pet import click_sound
+
+    src = tmp_path / "locked.mp3"
+    src.write_bytes(b"x")
+    click_sound._DIGEST_MEMO.clear()
+
+    def boom(self):
+        raise OSError("locked")
+
+    monkeypatch.setattr(type(src), "read_bytes", boom)
+    path = click_sound._cache_path(src)  # 不抛错
+    assert path.suffix == ".wav"
+    click_sound._DIGEST_MEMO.clear()

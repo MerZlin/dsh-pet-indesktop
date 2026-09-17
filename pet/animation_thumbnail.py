@@ -8,6 +8,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QImageReader
 
 from . import catalog
@@ -21,11 +22,25 @@ except Exception:  # pragma: no cover - optional dependency in GIF-only installs
 REPRESENTATIVE_FRACTION = 0.62
 _CACHE_LIMIT = 128
 _DISK_CACHE_LIMIT = 256
+# 缓存只存 128px 缩略图：菜单图标槽位 ~18 逻辑像素（HiDPI ×2~3 也够），
+# 原尺寸（640×390+ RGBA ≈1MB/张）整帧缓存 106 段动画就是 100MB+ 常驻
+# （实机：右键逛动画菜单 90→231MB 且不回落）。视觉无损，内存两个量级。
+_THUMBNAIL_MAX_SIDE = 128
 _DISK_CACHE_DIR = Path(tempfile.gettempdir()) / "dsh-pet-thumbs"
 _DECODE_SEMAPHORE = threading.BoundedSemaphore(2)
 _cache_lock = threading.Lock()
 _image_cache: dict[tuple[str, int, int], QImage] = {}
 _inflight: dict[tuple[str, int, int], threading.Event] = {}
+
+
+def _as_thumbnail(image: QImage) -> QImage:
+    """把任意来源的代表帧收进 128px 缩略图（含旧版磁盘缓存里的全尺寸条目）。"""
+    if image.isNull() or max(image.width(), image.height()) <= _THUMBNAIL_MAX_SIDE:
+        return image
+    return image.scaled(
+        _THUMBNAIL_MAX_SIDE, _THUMBNAIL_MAX_SIDE,
+        Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation,
+    )
 
 
 def representative_frame_index(frame_count: int, fraction: float = REPRESENTATIVE_FRACTION) -> int:
@@ -158,7 +173,7 @@ def decode_representative_frame(path: str | Path) -> QImage:
         cached = _image_cache.get(key)
         if cached is not None:
             return QImage(cached)
-        disk_cached = _read_disk_cache(key)
+        disk_cached = _as_thumbnail(_read_disk_cache(key))
         if not disk_cached.isNull():
             _image_cache[key] = QImage(disk_cached)
             return disk_cached
@@ -175,7 +190,7 @@ def decode_representative_frame(path: str | Path) -> QImage:
 
     try:
         with _DECODE_SEMAPHORE:
-            image = _decode_representative_frame(path)
+            image = _as_thumbnail(_decode_representative_frame(path))
         if not image.isNull():
             with _cache_lock:
                 if len(_image_cache) >= _CACHE_LIMIT:
