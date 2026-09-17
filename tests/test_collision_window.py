@@ -1133,3 +1133,73 @@ def test_probe_collision_throw_arms_egg_and_rotation_follows_velocity(tmp_path, 
     assert not egg.active
     assert egg.current_angle_deg() == 0.0
     win.close()
+
+
+def test_collision_bounds_cache_restored_on_revisit(tmp_path, app):
+    """稳定边界按动画缓存：播过的动画切回时直接复原并集，不归零重长。
+
+    回归：切动画曾一律清零 _collision_local_bounds，轮换/无缝续播每圈
+    都从零重长，气泡锚点（bubble_anchor_rect）跟着周期性漂移（实机探针：
+    8.5s 一圈的随机动画轮换让气泡每秒 ±5-15px 游走）。
+    """
+    win, _ = _make_pet_window(tmp_path, "pet_bounds_cache")
+    a, b = NAMES[0], NAMES[1]
+    win._switch(a)
+    # 模拟 a 播过一圈长出的并集（放一个画布外的点，确保与纯 mask 区分）
+    seed = QRect(-50, -50, 10, 10)
+    win._collision_local_bounds = QRect(seed)
+    win._sync_mask()  # 并集更新并写回缓存
+    cached_a = win._collision_bounds_cache.get(a)
+    assert cached_a is not None and cached_a.contains(seed)
+
+    win._switch(b)  # b 没播过：不得继承 a 的并集
+    assert win._collision_local_bounds != cached_a
+
+    win._switch(a)  # 切回：从缓存复原，不再归零
+    assert win._collision_local_bounds == cached_a
+    win.close()
+
+
+def test_collision_bounds_cache_cleared_on_scale_change(tmp_path, app):
+    """缩放改变画布几何：缓存整体作废（否则旧几何的并集会被错误复原）。"""
+    win, _ = _make_pet_window(tmp_path, "pet_bounds_cache_scale")
+    win._collision_bounds_cache["x"] = QRect(1, 2, 3, 4)
+    win.change_scale(0.75)
+    # 旧几何的条目必须作废；缩放后重建帧会立刻把当前动画按新几何写回，属正常
+    assert "x" not in win._collision_bounds_cache
+    win.close()
+
+
+def test_squash_frames_do_not_pollute_stable_bounds_or_cache(tmp_path, app):
+    """Q 弹瞬态帧不并入碰撞稳定边界、不写动画缓存（实审 P2-1）。
+
+    squash 帧画面被拉宽，若并入"只增不减"的并集会把它永久撑胖，
+    气泡锚点（bubble_anchor_rect）跟着平移。
+    """
+    win, _ = _make_pet_window(tmp_path, "pet_squash_bounds")
+    win._switch(NAMES[0])
+    win._sync_mask()
+    clean_bounds = QRect(win._collision_local_bounds)
+    clean_cache = dict(win._collision_bounds_cache)
+
+    win._squash_active = True
+    win._sync_mask()
+    assert win._collision_local_bounds == clean_bounds, "squash 帧不得并入并集"
+    assert dict(win._collision_bounds_cache) == clean_cache, "squash 帧不得写缓存"
+    win._squash_active = False
+    win.close()
+
+
+def test_bounds_cache_restore_returns_copy_not_alias(tmp_path, app):
+    """缓存复原必须是拷贝：就地改活体并集不得污染缓存（实审 T-1）。"""
+    win, _ = _make_pet_window(tmp_path, "pet_bounds_alias")
+    a, b = NAMES[0], NAMES[1]
+    win._switch(a)
+    win._sync_mask()
+    cached = win._collision_bounds_cache[a]
+    win._switch(b)
+    win._sync_mask()
+    win._switch(a)
+    restored = win._collision_local_bounds
+    assert restored == cached and restored is not cached
+    win.close()

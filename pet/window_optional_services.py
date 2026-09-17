@@ -115,6 +115,28 @@ class WindowFeatureGateMixin:
         controller.apply_lead()  # 提前量可能刚在设置里改过，先同步再启停
         controller.sync_enabled(enabled)
 
+    def pause_music_lyric(self) -> None:
+        """窗口隐藏：停掉歌词的 1s 轮询（`_effects_on_hidden` 调用）。
+
+        控制器只停表不复位：``_on_tick`` 本就在不可见时短路，隐藏期间进度基准
+        同样不推进，"停表"与"继续空转"的观感一致；复位反而会顺带清掉纯音乐
+        标志。显示时由 ``_effects_on_shown`` → ``sync_music_lyric`` 按配置恢复。
+        """
+        controller = getattr(self, "_music_lyric", None)
+        if controller is not None:
+            controller.pause()
+
+    def shutdown_music_lyric(self) -> None:
+        """窗口关闭/会话结束：停掉歌词轮询（与 agent_link.shutdown 同处收口）。
+
+        关闭后 ``win.close()`` 只隐藏不销毁，残留的 QTimer 会继续对半销毁
+        窗口触发；会话结束（关机/注销）路径上更不该再每秒起一次
+        ``asyncio.run`` + WinRT SMTC 调用（issue #111 的纪律）。
+        """
+        controller = getattr(self, "_music_lyric", None)
+        if controller is not None:
+            controller.shutdown()
+
     def trigger_golden_spin(self) -> None:
         """右键菜单入口：立即开始黄金回旋（边缘探头激活时不叠加）。"""
         self._install_effect_services()
@@ -226,11 +248,17 @@ class WindowFeatureGateMixin:
         spin = getattr(self, "_golden_spin", None)
         if spin is not None:
             spin.cancel()
+        # 歌词轮询同属"不可见即零消耗"：隐藏期间停表，显示时由
+        # _effects_on_shown → sync_music_lyric 按配置恢复。
+        self.pause_music_lyric()
 
     def _effects_on_shown(self) -> None:
         edge = getattr(self, "_edge_probe", None)
         if edge is not None:
             edge.resume()
+        # 首次显示时若配置已开也在这里装上（sync_music_lyric 幂等）；
+        # 隐藏期间用户可能刚改过开关，故恢复也要重读配置而不是无条件 start。
+        self.sync_music_lyric()
 
     def match_shutdown(self) -> None:
         """会话结束（Windows 关机/注销）收口本窗（issue #111）。
@@ -247,7 +275,9 @@ class WindowFeatureGateMixin:
         2. 再置 ``_closing``（closeEvent 同款生命周期守卫）——帧驱动的动画切换
            （_on_frame/移动/自动移动）、``_resume_activity`` 与预测预热都会据此
            短路，reader 自此不会被复活；
-        3. ``detach_collision_session()`` 关闭本窗 IPC 端点（避免关机期 socket
+        3. ``shutdown_music_lyric()``：歌词的 1s 轮询会在 GUI 线程起
+           ``asyncio.run`` + WinRT SMTC 调用，关机窗口期内同样不该再有生产者；
+        4. ``detach_collision_session()`` 关闭本窗 IPC 端点（避免关机期 socket
            半关闭告警），与 closeEvent 的收尾保持一致。
 
         不调 ``close()``：会话结束时进程随即退出，closeEvent 的写盘/销毁链既非
@@ -268,6 +298,10 @@ class WindowFeatureGateMixin:
         except Exception:
             logging.getLogger(__name__).debug("会话结束时暂停窗口活动失败", exc_info=True)
         self._closing = True
+        try:
+            self.shutdown_music_lyric()
+        except Exception:
+            logging.getLogger(__name__).debug("会话结束时停止歌词轮询失败", exc_info=True)
         try:
             detach = getattr(self, "detach_collision_session", None)
             if callable(detach):

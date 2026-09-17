@@ -200,6 +200,22 @@ def visible_content_rect(host) -> QRect:
     return frame_rect
 
 
+def bubble_anchor_rect(host) -> QRect:
+    """气泡定位锚点：碰撞稳定边界（当前动画各帧轮廓的并集）换算到全局坐标。
+
+    不能用当前帧轮廓（visible_content_rect 的 _mask_bounds 分支）做气泡
+    锚点——待机动画每帧的 alpha 包围盒都在小幅晃动，歌词气泡每秒重放
+    一次就会跟着每秒跳一次（实机探针实测：鱼静止时气泡每秒 ±10px 抖动、
+    偶发 40px 候选位跳变）。并集边界在同一段动画内恒定，气泡只在鱼真正
+    移动/换动画/缩放时才挪。轮廓还没算出来时回退当前帧轮廓。
+    """
+    local = getattr(host, "_collision_local_bounds", None)
+    if local is None or local.isEmpty():
+        return host.visible_content_rect()
+    frame_rect = host.frameGeometry()
+    return QRect(frame_rect.topLeft() + local.topLeft(), local.size())
+
+
 def restore_position(host) -> None:
     """恢复上次位置（按屏幕比例），无记录则落右下角。
     保存位置时所在的屏幕此刻不在线（如开机自启时副屏未就绪）→

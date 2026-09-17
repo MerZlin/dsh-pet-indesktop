@@ -15,6 +15,7 @@ from collections import deque
 from PySide6.QtCore import QTimer
 
 from . import catalog
+from . import window_placement
 
 # 确认"音乐真的停了"所需的持续静音时长（秒）。歌曲的前奏/间奏/轻声段会让
 # 音频峰值瞬时跌到阈值下，太小会导致唱歌状态反复退出。
@@ -49,7 +50,7 @@ def set_bubble_suppressed(host, suppressed: bool) -> None:
                 bubble = getattr(host, "_speech_bubble", None)
                 if bubble is not None:
                     bubble.show_text(
-                        current["text"], host.visible_content_rect(), 0,
+                        current["text"], window_placement.bubble_anchor_rect(host), 0,
                         pet_scale=host.scale, subtitle=current.get("subtitle", ""),
                         sticky=True, buttons=current.get("buttons"),
                     )
@@ -110,7 +111,7 @@ def show_alert(host, text: str, *, subtitle: str = "", duration_ms: int = 0,
             host._sticky_buttons = item["buttons"]
             if item["sticky"]:
                 host._speech_bubble.show_text(
-                    item["text"], host.visible_content_rect(), 0,
+                    item["text"], window_placement.bubble_anchor_rect(host), 0,
                     pet_scale=host.scale, subtitle=item["subtitle"],
                     sticky=True, buttons=item["buttons"],
                 )
@@ -181,14 +182,14 @@ def pump_alerts(host) -> None:
         host._sticky_subtitle = item.get("subtitle", "")
         host._sticky_buttons = item.get("buttons")
         host._speech_bubble.show_text(
-            item["text"], host.visible_content_rect(), 0,
+            item["text"], window_placement.bubble_anchor_rect(host), 0,
             pet_scale=host.scale, subtitle=item.get("subtitle", ""),
             sticky=True, buttons=item.get("buttons"),
         )
     else:
         duration_ms = item.get("duration_ms") or 6000
         host._speech_bubble.show_text(
-            item["text"], host.visible_content_rect(), duration_ms,
+            item["text"], window_placement.bubble_anchor_rect(host), duration_ms,
             pet_scale=host.scale, subtitle=item.get("subtitle", ""),
         )
 
@@ -234,7 +235,7 @@ def on_speech_bubble_hidden(host) -> None:
                 return
             host._last_sticky_restore = now
             host._speech_bubble.show_text(
-                cur["text"], host.visible_content_rect(), 0,
+                cur["text"], window_placement.bubble_anchor_rect(host), 0,
                 pet_scale=host.scale, subtitle=cur.get("subtitle", ""),
                 sticky=True, buttons=cur.get("buttons"),
             )
@@ -246,7 +247,7 @@ def on_speech_bubble_hidden(host) -> None:
     # 旧路径兼容：sticky 审批气泡（不经队列）被盖掉后恢复
     if host._sticky_bubble_active and host._sticky_text:
         host._speech_bubble.show_text(
-            host._sticky_text, host.visible_content_rect(), 0,
+            host._sticky_text, window_placement.bubble_anchor_rect(host), 0,
             pet_scale=host.scale, subtitle=host._sticky_subtitle, sticky=True,
             buttons=host._sticky_buttons,
         )
@@ -296,7 +297,7 @@ def show_self_talk_text(host, text: str) -> bool:
     if getattr(host, "_bubble_suppressed", False):
         return False
     duration_ms = int(round(host._self_talk_duration_seconds * 1000))
-    anchor = host.visible_content_rect()
+    anchor = window_placement.bubble_anchor_rect(host)
     _set_speech_bubble_interactive(host)
     host._speech_bubble.show_text(
         text, anchor, duration_ms, pet_scale=host.scale
@@ -336,7 +337,7 @@ def show_random_self_talk(host) -> bool:
     duration_ms = int(
         round(host._self_talk_duration_seconds * 1000)
     )
-    anchor = host.visible_content_rect()
+    anchor = window_placement.bubble_anchor_rect(host)
 
     _set_speech_bubble_interactive(host)
 

@@ -632,3 +632,69 @@ def test_hidden_bubble_is_not_treated_as_taken():
     ctrl._title_line = "我在唱《夜曲》"
     win._speech_bubble._visible = False
     assert ctrl._bubble_taken_by_other() is False
+
+
+# ------------------------------------------------- 配置的缓存上限真正生效（P2-c）
+
+
+class _CfgStub:
+    """控制器只读的配置面替身（get 语义与 Config 一致）。"""
+
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
+
+def _only_source(monkeypatch, lines):
+    """把三源压成一个立即返回的假源（绕过网络）。"""
+    lyrics = Lyrics(lines=tuple(lines))
+    monkeypatch.setattr(music_lyric, "_SOURCES", (("qq", lambda t, a: lyrics),))
+    monkeypatch.setattr(music_lyric, "_read_cache", lambda *a, **k: None)
+
+
+def test_fetch_lyrics_prunes_cache_to_given_limit(monkeypatch, tmp_path):
+    """``fetch_lyrics(cache_limit=...)`` 的条目上限必须传给淘汰逻辑（P2-c 消费点）。"""
+    monkeypatch.setattr(music_lyric, "cache_dir", lambda: tmp_path)
+    _only_source(monkeypatch, (LyricLine(1.0, "x"),))
+
+    for i in range(4):
+        music_lyric.fetch_lyrics(f"歌{i}", "手", cache_limit=2)
+
+    assert len(list(tmp_path.glob("*.json"))) == 2
+
+
+def test_fetch_worker_uses_configured_cache_limit(monkeypatch, tmp_path):
+    """取词线程把配置里的 ``music_lyric_cache_limit`` 真正交给淘汰（P2-c）。
+
+    回归：该键此前默认值/白名单/归一化齐备，但 ``_prune_cache`` 恒用模块常量
+    ``CACHE_LIMIT``，用户手改的上限完全不起作用（死开关）。
+    """
+    from pet.music_lyric_controller import MusicLyricController
+
+    monkeypatch.setattr(music_lyric, "cache_dir", lambda: tmp_path)
+    _only_source(monkeypatch, (LyricLine(1.0, "x"),))
+
+    win = _FakeWin()
+    win.cfg = _CfgStub({"music_lyric_cache_limit": 2})
+    ctrl = MusicLyricController(win)
+
+    for i in range(4):
+        ctrl._fetch_worker((f"t{i}", "a"), f"t{i}", "a")
+
+    assert len(list(tmp_path.glob("*.json"))) == 2
+
+
+def test_announce_with_empty_title_still_resets_width_lock():
+    """无标题曲目也必须复位锁宽标志（锁宽/锁高重置链路依赖它）。
+
+    回归（实审 P2-3）：_width_locked=False 曾排在空标题提前 return 之后，
+    无标题曲目沿用上一首列宽、锁高棘轮整会话不复位。
+    """
+    from pet.music_lyric_controller import MusicLyricController
+
+    ctrl = MusicLyricController(_FakeWin())
+    ctrl._width_locked = True
+    ctrl._announce("", "")
+    assert ctrl._width_locked is False

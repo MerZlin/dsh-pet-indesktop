@@ -86,13 +86,34 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 一个带完整实机取证说明的委托方法：它必须留在 PetWindow 上（showEvent 是唯一
 # 可靠的"原生窗口已就绪/可能被重建"注入点，拆到独立模块反而会产生跨模块的
 # 窗口生命周期耦合）。按约定只校准预算，不为达标压行。
-WINDOW_PY_LINE_BUDGET = 4507
+# 2026-09-17 再上调到 4509：合并后 P1 修复——closeEvent 收口歌词控制器的 1s
+# 轮询（+2 行含注释）。此前 MusicLyricController.shutdown() 全仓没有调用方，
+# 关闭后残留的 QTimer 仍会对半销毁窗口触发；控制器本体在
+# music_lyric_controller.py，window.py 侧只是必须与窗口关闭时机同点的收口调用
+# （隐藏/显示走 window_optional_services 的钩子，不占本文件行数）。
+# 按约定只随实测校准，不为达标压行。
+# 2026-09-17 再上调到 4512：唱歌动画无缝续播保留碰撞稳定边界（+3 行含注释，
+# 实测 4512）——_on_anim_ended 的 SING_ANIM 续播过去走完整 _switch，每圈
+# 清零 _collision_local_bounds，歌词气泡锚点（window_placement.bubble_anchor_rect）
+# 跟着骑"清零→重长"波形（实机探针：8 秒周期、y 向 49px 往复）；同 clip 续播
+# 帧内容不变，边界保存/恢复即可。守卫逻辑必须在 _on_anim_ended 的续播分支里
+# （_switch 无法区分"无缝续播"与"同名换素材"），不宜外拆。
+# 2026-09-17 再上调到 4519：碰撞稳定边界按动画缓存（+6 行含注释，实测 4519）
+# ——_collision_bounds_cache 在 _sync_mask 写回、_switch 复原、缩放/余量变化
+# 清空；锚点链路因此跨轮换恒定。随后续播保留改由缓存统一覆盖，_on_anim_ended
+# 的专项保存/恢复已回退（缓存是更通用的同一机制）。
+# 2026-09-18 再上调到 4545：审查修复批落在 window.py 的部分（+26 行含注释，
+# 实测 4545）——squash 瞬态帧不并入/不写缓存、缓存写读双侧 QRect 拷贝、素材
+# 原地替换按签名作废缓存条目。三处都必须与 _sync_mask/_switch/_rebuild_frame
+# 的现有状态流同点更新，外拆会切断不变量，按约定校准预算。
+WINDOW_PY_LINE_BUDGET = 4545
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
 # re-export 留守本文件；控件库 / 菜单布局编辑器 / AI 设置页 / 主题 QSS 已分别拆至
 # settings_widgets / settings_menu_layout_editor / chat/ai_settings_page /
-# settings_theme_qss。预算 = 实测 + 50 行余量；再往上帝类里塞新页面时只许降不涨。
+# settings_theme_qss。预算随实测校准（早期口径为「实测 + 50 行余量」，2026-09-17
+# 起按实测值锁定，见下方逐次记录）；再往上帝类里塞新页面时只许降不涨。
 # 2026-09-05 建立（perf/memory-footprint 拆分批）。
 # 2026-09-06 上调到 1992：合入上游 main（PR73）带来动画预热开关等 +85 行
 # （实测 1942），预算随实测校准。
@@ -117,7 +138,21 @@ WINDOW_PY_LINE_BUDGET = 4507
 # 这正是「红线是组合性质」：两个 PR 各自合并时 CI 都绿，合到一起才越线
 # （见 docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。按文件约定只随实测校准，
 # 不为达标压缩行宽/合并语句；拆分仍是待办。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2311
+# 2026-09-17 上调到 2327：新增「语音」总域，并按主人定稿口径只收鱼开口说话
+# （TTS）类设置——语音报时整组 12 行 + 节日提醒 12 行（原「自动化与联动」域，带
+# speak/TTS 播报能力）；音效类回各自功能分组：点击音效 4 行回「互动 · 点击反馈」
+# （click_ 前缀整组认领，与 HEAD 行为一致）、碰撞音效 2 行回「桌宠」碰撞组，Agent 提示音效
+# （agent_sound_*）留在 Agent 联动折叠框内。实测 2327；按文件约定只随实测校准，
+# 不为达标压缩行宽/合并语句；拆分仍是待办。
+# 2026-09-17 上调到 2341：灵动岛图标下拉框新增「鱼本体头像（推荐）」项，原 10 个
+# emoji 选项标签改中文（data 仍是 emoji）——设置页自己渲染 emoji 也会付同一笔
+# DirectWrite 彩色字体栈税额（约 33MB）；标签逐项成对写，实测 2341。
+# 2026-09-17 上调到 2371：设置页进程隔离（standalone）——__init__ 的 standalone
+# 形参/属性、末尾接线 install_standalone_hooks、move_away_from_pet 的 runtime
+# 避让分支、_on_voice_chime_preview 的本地试听分支、_write_config 注释共 +30；
+# 试听/避让/节日演示的实现全在 pet/settings_standalone.py，本文件仍只做接线；
+# 按文件约定预算只随实测校准，不为达标压缩行宽/合并语句；拆分仍是待办。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2371
 
 
 

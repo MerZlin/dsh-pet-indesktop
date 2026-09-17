@@ -126,3 +126,4 @@ def test_disabled_switch_stops_immediately(monkeypatch):
     host._music_sing_enabled = False
     window_alerts.check_music_sing(host)
     assert host._music_sing_active is False
+

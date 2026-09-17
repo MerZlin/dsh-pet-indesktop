@@ -299,6 +299,47 @@ def test_pet_window_visible_content_rect_uses_alpha_mask():
     app.processEvents()
 
 
+def test_pet_window_bubble_anchor_prefers_stable_collision_bounds():
+    """气泡锚点优先用碰撞稳定边界：同一段动画内恒定，不随单帧轮廓晃动。
+
+    回归：气泡锚点曾取当前帧 alpha 轮廓（_mask_bounds），待机动画每帧
+    包围盒小幅晃动 → 歌词气泡每秒重放就跟着每秒跳一次（实机探针实测
+    鱼静止时气泡每秒 ±10px 抖动、偶发 40px 候选位跳变）。
+    """
+    from PySide6.QtCore import QPoint, QRect, QSize
+
+    from pet import window_placement
+
+    class FakePet:
+        _collision_local_bounds = QRect(10, 20, 100, 150)
+
+        def frameGeometry(self):
+            return QRect(300, 200, 544, 332)
+
+        def visible_content_rect(self):
+            raise AssertionError("有稳定边界时不应回退到当前帧轮廓")
+
+    assert window_placement.bubble_anchor_rect(FakePet()) == QRect(QPoint(310, 220), QSize(100, 150))
+
+
+def test_pet_window_bubble_anchor_falls_back_without_collision_bounds():
+    """碰撞边界还没算出来（启动首帧）时回退当前帧轮廓，不许崩。"""
+    from PySide6.QtCore import QRect
+
+    from pet import window_placement
+
+    class FakePet:
+        _collision_local_bounds = None
+
+        def frameGeometry(self):
+            return QRect(300, 200, 544, 332)
+
+        def visible_content_rect(self):
+            return QRect(136, 224, 72, 112)
+
+    assert window_placement.bubble_anchor_rect(FakePet()) == QRect(136, 224, 72, 112)
+
+
 def test_streaming_scroll_only_follows_when_already_near_bottom(tmp_path: Path):
     from PySide6.QtWidgets import QApplication
     from pet.chat.widgets import ChatWindow

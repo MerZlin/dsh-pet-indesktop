@@ -179,7 +179,7 @@ def _read_cache(title: str, artist: str) -> Lyrics | None:
         return None
 
 
-def _write_cache(title: str, artist: str, lyrics: Lyrics) -> None:
+def _write_cache(title: str, artist: str, lyrics: Lyrics, limit: int | None = None) -> None:
     if not lyrics.lines and not lyrics.instrumental:
         return
     path = _cache_path(title, artist)
@@ -201,11 +201,15 @@ def _write_cache(title: str, artist: str, lyrics: Lyrics) -> None:
     except Exception:
         log.debug("写入歌词缓存失败: %s", path, exc_info=True)
         return
-    _prune_cache()
+    _prune_cache(CACHE_LIMIT if limit is None else limit)
 
 
 def _prune_cache(limit: int = CACHE_LIMIT) -> None:
-    """条目超上限时，按修改时间淘汰最旧的若干条（LRU 近似）。"""
+    """条目超上限时，按修改时间淘汰最旧的若干条（LRU 近似）。
+
+    ``limit`` 由调用方决定：生产路径传配置里的 ``music_lyric_cache_limit``
+    （见 :func:`fetch_lyrics` 的 ``cache_limit``），不传则用模块默认。
+    """
     try:
         entries = [p for p in cache_dir().glob("*.json") if p.is_file()]
         if len(entries) <= limit:
@@ -404,12 +408,18 @@ _SOURCES = (
 _PRIORITY_GRACE = 1.2
 
 
-def fetch_lyrics(title: str, artist: str, *, use_cache: bool = True) -> Lyrics | None:
+def fetch_lyrics(
+    title: str, artist: str, *, use_cache: bool = True, cache_limit: int | None = None
+) -> Lyrics | None:
     """取歌词：缓存 → 三源并发（QQ音乐 → lrclib → 网易云，按质量优先）。
 
     三个源同时发起请求，因此总耗时约等于**最慢的那个**而不是三者之和。
     靠前的源在优势窗口内返回即采用，保证匹配质量；窗口过期后接受任何已成功的
     结果，不让慢源拖住整次取词。
+
+    ``cache_limit`` 是磁盘缓存条目上限（生产路径传配置的
+    ``music_lyric_cache_limit``，见 ``music_lyric_controller``）；``None`` 用
+    模块默认 :data:`CACHE_LIMIT`。调用方负责夹到合法区间。
 
     返回 :class:`Lyrics`；``instrumental=True`` 表示纯音乐（曲目存在但无词），
     调用方据此不显示歌词、也不播唱歌动画。全部失败时返回 ``None``，调用方应
@@ -471,7 +481,7 @@ def fetch_lyrics(title: str, artist: str, *, use_cache: bool = True) -> Lyrics |
 
         best = _best_found(found, rank)
         if best is not None:
-            _write_cache(title, artist, best)
+            _write_cache(title, artist, best, cache_limit)
         return best
     finally:
         # 不等剩余请求收尾：已经拿到结果，慢源在后台自然结束即可。

@@ -21,7 +21,6 @@
 from __future__ import annotations
 
 import logging
-import random
 import threading
 import time
 from typing import Any
@@ -34,11 +33,6 @@ log = logging.getLogger(__name__)
 
 # 轮询间隔：与现有 music_sing 一致，兼顾开销与切歌响应速度。
 POLL_MS = 1000
-
-# 歌词换句时允许气泡重新选位的概率。气泡位置由"当前尺寸"算得，而每句歌词
-# 长短不同，若每句都重算就会一路乱跳；只在换句时以小概率允许移动，
-# 其余时候钉在原位（用户要求"不要经常性改变位置"）。
-LYRIC_REPOSITION_CHANCE = 0.25
 
 # 别的气泡（点击台词、被动弹窗等）占用时，歌词让路多久（秒）。
 # 歌词每拍都会重发，若不拦一道就会把刚弹出的提示瞬间盖掉；用户要求这类
@@ -270,8 +264,6 @@ class MusicLyricController(QObject):
         self._hint: str = ""
         # 上一句歌词。同一句持续期间用它重发，避免气泡闪烁。
         self._last_lyric: str = ""
-        # 气泡上一次的落点，用于抵消"尺寸变化导致的位置漂移"。
-        self._bubble_pos: Any = None
         # 让路截止时刻：别的弹窗占用期间歌词停发（见 LYRIC_YIELD_SECONDS）。
         self._lyric_yield_until: float = 0.0
         # 右键菜单「退出音乐模式」的临时开关（仅本次运行，不写配置）。
@@ -316,7 +308,18 @@ class MusicLyricController(QObject):
         value = max(LEAD_MIN_SECONDS, min(LEAD_MAX_SECONDS, value))
         self._tracker.lead = value
 
+    def pause(self) -> None:
+        """窗口隐藏：停掉 1s 轮询（显示时由窗口钩子按配置恢复）。
+
+        只停表、**不复位状态**：``_on_tick`` 本来就在不可见时短路，隐藏期间
+        进度基准同样不推进，所以"停表"与"继续空转"的观感完全一致，而复位会
+        顺带清掉纯音乐标志（``_reset`` 清它是给"关掉功能"用的，见那里的说明），
+        桌宠恢复显示后就可能对着纯音乐唱起来。
+        """
+        self._timer.stop()
+
     def shutdown(self) -> None:
+        """窗口关闭 / 会话结束：停表并复位（不可恢复的收口）。"""
         self._timer.stop()
         self._reset()
 
@@ -429,10 +432,12 @@ class MusicLyricController(QObject):
         标题走气泡的 ``subtitle``（放在最上方、与正文同字号），歌词走正文。
 
         位置策略（用户要求「不要经常性改变位置」）：气泡的 `_place()` 是
-        按"当前尺寸"确定性算的，而歌词每句长短不同 → 尺寸变 → 位置跟着跳。
-        所以这里做粘滞处理：**只在歌词真的换句时**、且只在
-        ``LYRIC_REPOSITION_CHANCE`` 的概率下才允许重新定位，其余时候沿用
-        上一次的位置，避免气泡每句都乱蹦。
+        按"当前尺寸 + 鱼的当前位置"确定性算的；尺寸侧由气泡的真锁宽兜住
+        （同首歌沿用第一句的列宽，见 speech_bubble 的 `_locked_column`），
+        于是每次放置结果天然稳定，**且始终跟着鱼走**。
+
+        注意：不要改成"记住绝对坐标钉回去"——鱼会游走，钉绝对坐标会把
+        气泡丢在原地单飞（2026-09-17 实机踩坑）。
 
         - ``hold_bubble`` 占位，避免刚显示就被自言自语顶掉。
         - 每拍都要重送一次以续期，否则气泡会先于句子超时消失、闪一下再来。
@@ -449,9 +454,6 @@ class MusicLyricController(QObject):
         if not callable(shower):
             return
 
-        # 歌词是否换句：换句才考虑挪位置。
-        changed = lyric != self._last_lyric
-        allow_move = bool(changed and random.random() < LYRIC_REPOSITION_CHANCE)
         self._last_lyric = lyric
 
         try:
@@ -464,36 +466,8 @@ class MusicLyricController(QObject):
             self._last_shown = (text, subtitle)
             # 首句显示完就把宽度定下来，后续同首歌不再改宽。
             self._width_locked = True
-            if allow_move:
-                self._remember_bubble_position()
-            else:
-                self._pin_bubble_position()
         except Exception:
             log.debug("歌词气泡显示失败", exc_info=True)
-
-    def _pin_bubble_position(self) -> None:
-        """把气泡钉回上一次的位置，抵消尺寸变化引起的漂移。"""
-        bubble = getattr(self.win, "_speech_bubble", None)
-        if bubble is None:
-            return
-        pos = getattr(self, "_bubble_pos", None)
-        if pos is None:
-            return
-        try:
-            bubble.move(pos)
-        except Exception:
-            log.debug("钉住气泡位置失败", exc_info=True)
-
-    def _remember_bubble_position(self) -> None:
-        """记下气泡当前落点，供下一次粘滞回位。"""
-        bubble = getattr(self.win, "_speech_bubble", None)
-        if bubble is None:
-            return
-        try:
-            if bubble.isVisible():
-                self._bubble_pos = bubble.pos()
-        except Exception:
-            log.debug("记录气泡位置失败", exc_info=True)
 
     # ------------------------------------------------------------ 主循环
 
@@ -590,14 +564,16 @@ class MusicLyricController(QObject):
         同时充当取词期间的内容——否则切歌后会有几秒什么都不显示。
         """
         title = str(title or "").strip()
+        # 新歌重新量宽：上一首的宽度不一定合适。必须在空标题 return 之前
+        # 复位——否则无标题曲目沿用上一首的列宽，锁高棘轮也整会话不复位
+        # （实审 P2-3）。
+        self._width_locked = False
         if not title:
             return
         self._track_title = title
         self._title_line = NOW_SINGING_TEMPLATE.format(title=title)
         self._instrumental = False
         self._hint = ""
-        # 新歌重新量宽：上一首的宽度不一定合适。
-        self._width_locked = False
         self._set_instrumental_flag(False)
         if self._bubble_blocked():
             return
@@ -634,10 +610,22 @@ class MusicLyricController(QObject):
             except Exception:
                 log.debug("设置纯音乐标志失败", exc_info=True)
 
+    def _cache_limit(self) -> int:
+        """磁盘歌词缓存条数上限：读配置（config 归一化已夹到 [1, 100000]）。
+
+        在取词线程上执行，任何"取不到配置"（最小窗口替身 / 脏值）都回落模块
+        默认：坏配置不能把整次取词炸掉。
+        """
+        try:
+            raw = self.win.cfg.get("music_lyric_cache_limit", music_lyric.CACHE_LIMIT)
+            return max(1, int(raw))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return music_lyric.CACHE_LIMIT
+
     def _fetch_worker(self, key, title: str, artist: str) -> None:
         started = time.monotonic()
         try:
-            lyrics = music_lyric.fetch_lyrics(title, artist)
+            lyrics = music_lyric.fetch_lyrics(title, artist, cache_limit=self._cache_limit())
         except Exception:
             log.debug("歌词取词线程异常", exc_info=True)
             lyrics = None

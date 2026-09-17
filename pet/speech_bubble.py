@@ -24,7 +24,7 @@ from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
+    QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -319,6 +319,8 @@ class PetSpeechBubble(QFrame):
         # 翻页淡入淡出：当前动画句柄 + 懒创建的 label 透明度效果。
         self._page_fade: QPropertyAnimation | None = None
         self._label_opacity: QGraphicsOpacityEffect | None = None
+        # 位置滑动动画（懒创建）：气泡每次改位置都滑过去而非瞬移。
+        self._pos_anim: QPropertyAnimation | None = None
         self._style_id = ""
         self._preset = BUBBLE_STYLE_PRESETS["classic_top"]
         self._anchor_rect = QRect()
@@ -354,6 +356,14 @@ class PetSpeechBubble(QFrame):
         self._title_first = False
         # 本次显示是否已经锁过宽度（同一首歌的后续刷新沿用同一宽度）。
         self._width_locked = False
+        # 锁宽时真正沿用的列宽：在「同首歌第一句」（未锁宽的 title_first
+        # 显示）时记下，后续锁宽句复用。不逐句重算——否则每换一句歌词
+        # 气泡宽度就变一次，视觉上一直在跳。
+        self._locked_column: int | None = None
+        # 与锁宽配套的锁高（行数）：换句时歌词 1 行/2 行反复横跳会让气泡
+        # 顶边一跳一跳（底边锚着鱼头顶，高度一变顶边就动）。行数只单向
+        # 往大涨，涨过一次就稳在那，整首歌不再随句子长短上下伸缩。
+        self._locked_lines: int | None = None
         self._source_pixmap = QPixmap()
         self._pet_scale: float | None = None
         self._image_scale: float = 1.0
@@ -631,9 +641,22 @@ class PetSpeechBubble(QFrame):
                 if interactive or sticky
                 else self._column_for_text(text, anchor_rect)
             )
+            if self._title_first:
+                if not self._width_locked or self._locked_column is None:
+                    # 未锁宽帧定列宽并记下，后续锁宽句复用——同首歌气泡宽度
+                    # 恒定，不逐句改宽。产品链路里这一帧通常是「取词中」的
+                    # 纯标题帧（歌词还没回来），所以实测列宽多为标题宽度；
+                    # 标题/正文取较长者只是兜底——首帧恰好已带歌词行时才用到。
+                    basis = text if len(text) >= len(subtitle) else subtitle
+                    self._locked_column = max(
+                        self._column_for_text(basis, anchor_rect), TITLE_FIRST_COLUMN
+                    )
+                    # 重锁宽（新歌）时锁高一起作废，从新首句重新累计。
+                    self._locked_lines = None
+                column = self._locked_column
             # 长文本分页：每页不超过 bubble_max_lines 行，自动翻页直到全文展示完，
-            # 底部显示圆点页码（● ○ ○）。每页停留按该页字数自适应（首页 ×2、
-            # 末页多压一拍回首页停顿），总时长相应扩展。
+            # 底部显示圆点页码（● ○ ○）。每页停留按该页字数自适应，
+            # 末页多压一拍回首页停顿，总时长相应扩展。
             pages = paginate_bubble_text(
                 metrics,
                 text,
@@ -658,12 +681,22 @@ class PetSpeechBubble(QFrame):
             self.label.setText(display_text)
             # 固定尺寸按真正会绘制的行计算（所有页里最长的一行 + 行数最多的一页），
             # 翻页后 wordWrap=False 也不会裁字；详见 bubble_label_size 的说明。
-            if self._title_first and self._width_locked:
-                # 锁宽：按整栏宽排版，避免逐句改宽导致气泡左右跳。
+            if self._title_first:
+                # 歌词气泡：列宽取第一句定下的值（上面 _locked_column 逻辑），
+                # 从标题出场到整首歌结束宽度恒定，不随句子长短伸缩。
+                # 高度同理锁行数：底边锚在鱼头顶，行数一变顶边就跳——所以
+                # 行数只单向往大涨（_locked_lines），涨到本首歌最胖的一句后
+                # 彻底稳定；短句不再把气泡顶边拉回来。
+                line_count = max(
+                    (len(page.split("\n")) for page in pages), default=1
+                )
+                if self._locked_lines is None or line_count > self._locked_lines:
+                    self._locked_lines = line_count
                 self.label.setFixedSize(
                     bubble_label_size(
-                        metrics, pages, max(column, TITLE_FIRST_COLUMN),
+                        metrics, pages, column,
                         min_width=TITLE_FIRST_COLUMN,
+                        min_height=self._locked_lines * metrics.lineSpacing() + 2,
                     )
                 )
             else:
@@ -916,11 +949,12 @@ class PetSpeechBubble(QFrame):
         if self._preset.get("shape") == "breath_bubble":
             self._configure_breath_content(anchor_rect, self._pet_scale)
             self.adjustSize()
-        self._place(anchor_rect)
+        self._place(anchor_rect, animate=False)
 
     def reposition(self, anchor_rect: QRect) -> None:
+        # 鱼移动触发的跟随：直移零延迟（连续跟随走动画会拖尾滞后）。
         if self.isVisible():
-            self._place(anchor_rect)
+            self._place(anchor_rect, animate=False)
 
     def _available_geometry(self, anchor_rect: QRect) -> QRect | None:
         """气泡可用区：普通模式取所在屏幕，直播捕获子模式收窄为主窗矩形。
@@ -951,7 +985,7 @@ class PetSpeechBubble(QFrame):
         chrome = margins.left() + margins.right()
         return max(BUBBLE_TEXT_COLUMN, min(column, avail.width() - chrome - 8))
 
-    def _place(self, anchor_rect: QRect) -> None:
+    def _place(self, anchor_rect: QRect, *, animate: bool = True) -> None:
         host = self._capture_host if self._capture_compat else None
         avail = self._available_geometry(anchor_rect)
         if avail is None:
@@ -975,10 +1009,48 @@ class PetSpeechBubble(QFrame):
             rect.moveTop(top)
         self._anchor_rect = QRect(anchor_rect)
         if host is not None:
-            self.move(host.mapFromGlobal(rect.topLeft()))
+            target = host.mapFromGlobal(rect.topLeft())
         else:
-            self.move(rect.topLeft())
+            target = rect.topLeft()
+        if animate:
+            self._move_smooth(target)
+        else:
+            # 跟随鱼移动（moveEvent/缩放）直移：跟随场景每帧都在来新位置，
+            # 走动画会不停重启、气泡永远拖着延迟尾巴，用户实测"跟不上"。
+            anim = self._pos_anim
+            if anim is not None:
+                anim.stop()
+            self.move(target)
         self._update_surface_geometry(rect)
+
+    def _move_smooth(self, pos: QPoint) -> None:
+        """移动到目标点：已显示时走 260ms 缓动滑动，未显示时直接落位。
+
+        歌词气泡每秒重放 / 锚点微修过去是瞬移，视觉上"一帧一帧跳"。
+        改为滑动后：换句的细微修正变成缓慢的漂移（实测 120ms 偏快，
+        260ms 才有"被轻轻推动"的慵懒感）。仅用于离散修正；连续跟随
+        （拖动/游走）由 _place(animate=False) 直移，不经过这里。
+        首次显示（尚未 visible）直接落位，避免气泡从旧位置"飞过来"。
+        """
+        if not self.isVisible():
+            # 隐藏中可能有残留动画（dismiss/hide 不停表）：重显示前必须停掉，
+            # 否则它会继续 tick 把控件拽回旧 endValue（实审 P2-2 探针实测）。
+            if self._pos_anim is not None:
+                self._pos_anim.stop()
+            self.move(pos)
+            return
+        if self.pos() == pos:
+            return
+        anim = self._pos_anim
+        if anim is None:
+            anim = QPropertyAnimation(self, b"pos", self)
+            anim.setDuration(260)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._pos_anim = anim
+        anim.stop()
+        anim.setStartValue(self.pos())
+        anim.setEndValue(pos)
+        anim.start()
 
     def _update_surface_geometry(self, global_rect: QRect) -> None:
         local = self.rect()
@@ -986,7 +1058,10 @@ class PetSpeechBubble(QFrame):
             self._build_breath_bubble_geometry(local)
             self.update()
             return
-        anchor_center = self.mapFromGlobal(self._anchor_rect.center())
+        # 用目标矩形（而非 self 当前位置）换算锚点局部坐标：_place 先起滑动
+        # 动画再算几何，此刻窗口还停在旧位置，mapFromGlobal 会把尾巴算歪且
+        # 之后再无重算（实审 P1：偏移实测达 108px）。
+        anchor_center = self._anchor_rect.center() - global_rect.topLeft()
         if global_rect.bottom() < self._anchor_rect.top():
             self._surface_rect = local.adjusted(4, 3, -4, -10)
             tip_x = min(max(anchor_center.x(), 20), local.width() - 20)

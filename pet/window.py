@@ -594,6 +594,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # 碰撞体稳定边界：当前动画各帧 _mask_bounds 的并集（只增不减，
         # 切换动画/缩放时重置），避免圆链随动画帧缩放跳动导致漏判
         self._collision_local_bounds: QRect | None = None
+        # 各动画稳定边界的缓存：同一段动画的并集是确定的，播过一次就记住，
+        # 轮换/续播回来直接复原，不再每圈从零重长（气泡锚点跟着漂移）。
+        # 缩放/余量变化（画布几何变了）时整体清空。
+        self._collision_bounds_cache: dict[str, QRect] = {}
         self._hit_alpha_image: QImage | None = None
         # 已重建帧的输入签名：movie 身份 + 完整帧签名（素材路径+mtime+大小、
         # 帧号、朝向、镜像、scale、DPR、动画名）。相同签名重复 rebuild 时整条
@@ -937,6 +941,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._apply_scale()
         self.move(self.x(), old_bottom - self._h + 1)
         self._collision_local_bounds = None
+        self._collision_bounds_cache.clear()  # 画布几何变了，缓存全部作废
         self._sync_mask()
         self.update()
         return True
@@ -949,12 +954,13 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.scale = scale
         self._apply_scale()
         self._collision_local_bounds = None
+        self._collision_bounds_cache.clear()  # 画布几何变了，缓存全部作废
         self.move(self.x(), old_bottom - self._h + 1)
         self._rebuild_frame()
         bubble = getattr(self, "_speech_bubble", None)
         if bubble is not None and bubble.isVisible():
             bubble.reflow(
-                self.visible_content_rect(), pet_scale=self.scale
+                window_placement.bubble_anchor_rect(self), pet_scale=self.scale
             )
         self.update()
         # 右键菜单改大小属于用户主动设置：子肥鱼置位 user_customized（占位），
@@ -1233,7 +1239,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             bubble = getattr(self, "_speech_bubble", None)
             if bubble is not None:
                 bubble.show_text(
-                    self._sticky_text, self.visible_content_rect(), 0,
+                    self._sticky_text, window_placement.bubble_anchor_rect(self), 0,
                     pet_scale=self.scale, subtitle=self._sticky_subtitle, sticky=True,
                     buttons=self._sticky_buttons,
                 )
@@ -1631,7 +1637,13 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         pp = getattr(self, 'predictive_prewarm', None)
         if pp is not None:
             pp.begin_anim(name)
-        self._collision_local_bounds = None
+        # 切动画：稳定边界优先从缓存复原（播过的动画并集是确定的），
+        # 没播过的才归零重长——轮换回来不再每圈从零漂移。复原拷一份
+        # （QRect 值语义假象：直接赋同一对象会被就地修改反向污染缓存）。
+        cached_bounds = self._collision_bounds_cache.get(name)
+        self._collision_local_bounds = (
+            QRect(cached_bounds) if cached_bounds is not None else None
+        )
         movie = self.lib.movie(name)
         self._connect_movie(name, movie)
         self.movie = movie
@@ -2014,6 +2026,20 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 perfstats.note('rebuild.skip')
                 perfstats.time('rebuild.total', perfstats.clock() - _rf_t0)
             return
+        # 素材原地替换（签名里素材身份四项：路径/mtime/大小/指纹）：该动画的
+        # 稳定边界缓存与活体并集作废——否则旧轮廓会被"只增不减"地带到新素材
+        # 上（实审 P2-4）。首见只登记不清除：缓存并集本来就出自这份素材。
+        asset_stamp = key[1][:4]
+        stamps = getattr(self, '_asset_stamps', None)
+        if stamps is None:
+            stamps = self._asset_stamps = {}
+        prev_stamp = stamps.get(self.anim)
+        stamps[self.anim] = asset_stamp
+        if prev_stamp is not None and prev_stamp != asset_stamp:
+            cache = getattr(self, '_collision_bounds_cache', None)
+            if cache is not None:
+                cache.pop(self.anim, None)
+            self._collision_local_bounds = None
         pm = self.movie.currentPixmap()
         if pm is None or pm.isNull():
             # ffmpeg 缺失/素材损坏时首帧解码可能失败返回 None，跳过本帧而不是崩溃
@@ -2193,11 +2219,21 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         elif not self.mask().isEmpty():
             self.clearMask()  # Windows：清掉历史遗留 mask（本路径不 setMask）
         if not self._mask_bounds.isEmpty():
-            stable = getattr(self, '_collision_local_bounds', None)
-            if stable is None:
-                self._collision_local_bounds = QRect(self._mask_bounds)
+            if getattr(self, '_squash_active', False):
+                # Q 弹瞬态帧不并入稳定边界/缓存：拉宽轮廓会把"只增不减"的
+                # 并集（及动画缓存）永久撑胖，气泡锚点跟着平移（实审 P2-1
+                # 实测左右各 +22px）。
+                pass
             else:
-                self._collision_local_bounds = stable.united(self._mask_bounds)
+                stable = getattr(self, '_collision_local_bounds', None)
+                if stable is None:
+                    self._collision_local_bounds = QRect(self._mask_bounds)
+                else:
+                    self._collision_local_bounds = stable.united(self._mask_bounds)
+                # 写回缓存：同段动画再切回来时 _switch 直接复原，不用重长一圈。
+                # QRect 拷一份再存——缓存与活体共享同一对象时，任何就地修改
+                # （adjust/setLeft）都会静默污染缓存。
+                self._collision_bounds_cache[self.anim] = QRect(self._collision_local_bounds)
         if perfstats.ENABLED:
             # mask 生成（canvas 绘制 + createAlphaMask + QRegion，P0 观测）。
             perfstats.time('rebuild.mask', perfstats.clock() - _mask_t0)
@@ -3738,7 +3774,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._sticky_buttons = list(buttons) if buttons else None
             # sticky 不 hold 气泡位（否则会永久挡自言自语）；靠 _sticky_bubble_active 挡
             self._speech_bubble.show_text(
-                self._sticky_text, self.visible_content_rect(), 0,
+                self._sticky_text, window_placement.bubble_anchor_rect(self), 0,
                 pet_scale=self.scale, subtitle=self._sticky_subtitle, sticky=True,
                 buttons=self._sticky_buttons,
             )
@@ -3746,7 +3782,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         _set_speech_bubble_interactive(self)
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
-            str(text), self.visible_content_rect(), duration_ms, pet_scale=self.scale,
+            str(text), window_placement.bubble_anchor_rect(self), duration_ms, pet_scale=self.scale,
             subtitle=str(subtitle or ""), title_first=title_first, width_locked=width_locked)
 
     def hide_bubble(self, *args, **kwargs):
@@ -3890,7 +3926,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             return
         _set_speech_bubble_interactive(self)
         self._speech_bubble.show_text(
-            text, self.visible_content_rect(), duration_ms=2200,
+            text, window_placement.bubble_anchor_rect(self), duration_ms=2200,
             pet_scale=self.scale,
         )
 
@@ -4416,7 +4452,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         bubble = getattr(self, "_speech_bubble", None)
         if bubble is None:
             return  # 窗口已关闭/气泡已销毁：丢弃迟到回调
-        bubble.reposition(self.visible_content_rect())
+        bubble.reposition(window_placement.bubble_anchor_rect(self))
         for listener in tuple(self._position_listeners):
             try:
                 listener(self)
@@ -4463,6 +4499,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # 不主动停会让旧窗口在 deleteLater 之后仍被轮询线程保活（B9）
         if getattr(self, 'agent_link_manager', None) is not None:
             self.agent_link_manager.shutdown()
+        # 歌词控制器同持轮询 timer，关闭路径一并收口（close 只隐藏不销毁窗口）
+        self.shutdown_music_lyric()
         if getattr(self, "_interaction_state", IDLE) == SLINGSHOT_AIMING:
             self._cancel_slingshot_to_anchor()
         self._disarm_screen_restore_retry()  # 窗口销毁前摘掉 screenAdded 监听/超时回调

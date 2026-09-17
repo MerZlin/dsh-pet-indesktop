@@ -47,7 +47,9 @@ class _FakePet:
         self._frame_pixmap = None
         self._mask_bounds = None
         self._collision_local_bounds = None
+        self._collision_bounds_cache = {}
         self._hit_alpha_image = None
+        self.anim = "idle"
 
 
 def _fake_pet(scale: float = 0.1) -> _FakePet:
@@ -325,7 +327,9 @@ def test_windows_mask_bounds_follows_squash_geometry(monkeypatch):
     expected = _reference_mask_bounds(pm, fake._w, fake._h, rect)
     assert not expected.isEmpty()
     assert fake._mask_bounds == expected
-    assert fake._collision_local_bounds is not None
+    # squash 瞬态帧只更新 _mask_bounds，不并入稳定边界/缓存——否则拉宽轮廓
+    # 会被"只增不减"的并集永久固化（气泡锚点跟着虚胖平移，实审 P2-1）。
+    assert fake._collision_local_bounds is None
 
 
 def test_windows_mask_bounds_semi_transparent_edge_threshold(monkeypatch):

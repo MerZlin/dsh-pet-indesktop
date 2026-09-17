@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from math import ceil
-from PySide6.QtCore import QRect, QSize
+from PySide6.QtCore import QPropertyAnimation, QRect, QSize
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
@@ -666,3 +666,136 @@ def test_interactive_long_option_stays_inside_bubble():
     assert button.geometry().left() >= 0
     assert button.geometry().right() <= row.width()
 
+
+
+def test_lyric_width_lock_reuses_first_line_column():
+    """歌词锁宽：同首歌后续长句必须沿用第一句的列宽，不逐句改宽。
+
+    回归：锁宽分支过去只拿 max(当句列宽, TITLE_FIRST_COLUMN) 做下限，
+    长句仍会撑宽气泡（15 字→248px、80 字→264px），每换一句歌词气泡
+    就横向伸缩一次，实机看起来一直在跳。
+    """
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    anchor = QRect(0, 0, 120, 120)
+    # 第一句（新歌，未锁宽）：记下这句的列宽
+    bubble.show_text("短句歌词", anchor, 5000, subtitle="歌名", title_first=True, width_locked=False)
+    first_width = bubble.label.width()
+    # 同首歌后续长句（锁宽）：必须沿用第一句的宽度
+    bubble.show_text("这是一句明显更长的歌词" * 6, anchor, 5000, subtitle="歌名", title_first=True, width_locked=True)
+    assert bubble.label.width() == first_width, (
+        f"锁宽后长句不应改宽：首句 {first_width}px vs 长句 {bubble.label.width()}px"
+    )
+    bubble.dismiss()
+
+
+def test_lyric_height_lock_ratchet_keeps_top_edge_stable():
+    """歌词锁高：换句后行数回落时气泡高度不许缩回去（顶边不跳）。
+
+    回归：锁宽只锁了列宽，高度仍按当句行数算——长句（2 行）→短句（1 行）
+    时气泡底边锚着鱼头顶不动、顶边往下掉一行，每换一句歌词气泡就上下
+    跳一次。现在行数锁只单向往大涨，回落时保持已涨到的行数。
+    """
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    anchor = QRect(0, 0, 120, 120)
+    # 新歌首句（未锁宽）：一行短歌词
+    bubble.show_text("短句歌词", anchor, 5000, subtitle="歌名", title_first=True, width_locked=False)
+    one_line_height = bubble.label.height()
+    # 换成长句（锁宽）：折成多行，高度涨上去
+    bubble.show_text("这是一句明显更长的歌词" * 6, anchor, 5000, subtitle="歌名", title_first=True, width_locked=True)
+    multi_line_height = bubble.label.height()
+    assert multi_line_height > one_line_height
+    # 再换回短句（锁宽）：高度必须保持涨到的值，不许缩回一行高
+    bubble.show_text("短句歌词", anchor, 5000, subtitle="歌名", title_first=True, width_locked=True)
+    assert bubble.label.height() == multi_line_height, (
+        f"锁高后短句不应缩高：多行 {multi_line_height}px vs 短句 {bubble.label.height()}px"
+    )
+    bubble.dismiss()
+
+
+def test_bubble_move_glides_after_first_show():
+    """气泡二次定位走滑动动画而非瞬移（首次显示仍直接落位）。
+
+    歌词气泡每秒重放时锚点有像素级修正，瞬移看起来"一帧帧跳"；
+    改为 260ms 缓动滑动后呈现"被推动"的流畅感。
+    """
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    anchor = QRect(100, 100, 120, 120)
+    bubble.show_text("第一句歌词", anchor, 5000)
+    first_pos = bubble.pos()
+    assert bubble._pos_anim is None or bubble._pos_anim.state() == QPropertyAnimation.State.Stopped
+
+    bubble.show_text("第二句歌词来了", anchor.translated(60, 0), 5000)
+    anim = bubble._pos_anim
+    assert anim is not None, "二次定位应走滑动动画"
+    assert anim.state() == QPropertyAnimation.State.Running
+    assert anim.startValue() == first_pos
+    assert anim.endValue() != first_pos
+    # 动画播完落点必须精确到达目标（无累积误差）
+    anim.setCurrentTime(anim.duration())
+    assert bubble.pos() == anim.endValue()
+    bubble.dismiss()
+
+
+def test_bubble_reposition_is_direct_not_animated():
+    """鱼移动触发的跟随（reposition）必须直移，不走滑动动画。
+
+    跟随场景每帧来新位置，走动画会不停重启导致气泡永远拖着延迟尾巴
+    （实机用户反馈"拖动时气泡跟不上"）；只有歌词节拍这类离散修正
+    才走滑动。
+    """
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    bubble.show_text("一句歌词", QRect(100, 100, 120, 120), 5000)
+    if bubble._pos_anim is not None:
+        bubble._pos_anim.stop()
+    before = bubble.pos()
+    bubble.reposition(QRect(300, 100, 120, 120))
+    assert bubble._pos_anim is None or bubble._pos_anim.state() == QPropertyAnimation.State.Stopped
+    assert bubble.pos() != before, "reposition 应立即落位"
+    bubble.dismiss()
+
+
+def test_bubble_tail_computed_for_target_position_not_current():
+    """滑动期间算尾巴几何必须用目标落点坐标系，不是控件当前位置。
+
+    回归（实审 P1-1）：_place 先起滑动动画再算 surface 几何，
+    mapFromGlobal 用的是动画前的旧位置，尾巴永久指错（实测偏 108px）。
+    """
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    anchor = QRect(500, 500, 120, 120)
+    bubble.show_text("第一句歌词", anchor, 5000)
+    if bubble._pos_anim is not None:
+        bubble._pos_anim.stop()
+    # 锚点右移 60px，再显示触发滑动
+    bubble.show_text("第二句歌词", anchor.translated(60, 0), 5000)
+    anim = bubble._pos_anim
+    assert anim is not None
+    anim.setCurrentTime(anim.duration())  # 直接到终点
+    # 尾巴尖 x 应等于锚点中心在气泡局部坐标里的位置（夹在 20..w-20）
+    expected = min(max(anchor.translated(60, 0).center().x() - bubble.pos().x(), 20),
+                   bubble.width() - 20)
+    assert abs(bubble._tail_tip.x() - expected) < 1.0, (
+        f"尾巴应按目标落点算：期望 {expected}，实际 {bubble._tail_tip.x()}"
+    )
+    bubble.dismiss()
+
+
+def test_bubble_reshow_after_dismiss_not_dragged_back():
+    """dismiss 后再显示：残留动画不得把控件拽回旧落点（实审 P2-2）。"""
+    _get_app()
+    bubble = PetSpeechBubble(style_id="classic_top")
+    bubble.show_text("第一句", QRect(100, 100, 120, 120), 5000)
+    bubble.show_text("第二句", QRect(500, 100, 120, 120), 5000)  # 起动画去 B
+    bubble.dismiss()
+    # 隐藏中残留动画仍在跑；重显示必须停表并直接落位
+    bubble.show_text("第三句", QRect(100, 600, 120, 120), 5000)
+    assert bubble._pos_anim.state() == QPropertyAnimation.State.Stopped
+    from pet.speech_bubble_text import bubble_rect_for_anchor
+    # 位置就是 C 的落点，不再回 B
+    QTest.qWait(350)
+    assert bubble._pos_anim.state() == QPropertyAnimation.State.Stopped
+    bubble.dismiss()

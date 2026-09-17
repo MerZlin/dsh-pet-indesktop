@@ -305,6 +305,7 @@ def test_pet_scale_change_reflows_visible_bubble_after_rebuilding_mask():
         scale = 0.5
         _h = 100
         _speech_bubble = Bubble()
+        _collision_bounds_cache = {}
 
         def geometry(self):
             return QRect(20, 30, 100, self._h)
@@ -348,6 +349,7 @@ def test_change_scale_with_destroyed_bubble_is_noop():
         scale = 1.0
         _h = 100
         _speech_bubble = None
+        _collision_bounds_cache = {}
 
         def geometry(self):
             return QRect(0, 0, 100, self._h)
@@ -1385,7 +1387,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert dialog.findChild(settings_mod.QFrame, "sidebarPane").width() == 200
     assert isinstance(dialog.sidebar, QListWidget)
     assert isinstance(dialog.pages, QStackedWidget)
-    expected_pages = ["常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动"]
+    expected_pages = ["常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动", "语音"]
     assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == expected_pages
     assert dialog.pages.count() == len(expected_pages)
     assert dialog.search_edit.placeholderText() == "搜索设置…"
@@ -1399,6 +1401,8 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         "应用启动", "窗口与系统", "动画与移动", "点击反馈", "自言自语",
         "显示", "菜单外观", "对话窗口", "已配置应用", "内容与布局",
         "模型与连接", "视觉能力",
+        # 「语音」总域只收 TTS 类设置（2026-09-17 定稿口径）：语音报时 + 节日提醒
+        "语音报时", "节日提醒",
     }.issubset(set(section_titles))
     advanced_titles = [
         button.text()
