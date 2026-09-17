@@ -455,7 +455,9 @@ APP_DIR_NAME = _app_dir_name()
 def _float_or_default(value, default, minimum, maximum):
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError：json.loads 会把超长整数字面量解析成 Python int，
+        # float(10**400) 直接抛——不接住就是 Config() 构造失败、启动崩。
         return default
     return max(minimum, min(maximum, number))
 
@@ -470,6 +472,26 @@ def _bool_or_default(value, default):
         if normalized in {"false", "0", "no", "off"}:
             return False
     return bool(default)
+
+
+def _clean_music_player_paths(value) -> dict:
+    """手动指定的播放器可执行文件路径 {播放器键: 路径}。
+
+    键只认 music_players.PLAYERS 里的两个播放器（其余键丢弃，避免手改配置塞进
+    任何多余东西）；值必须是字符串路径，空串/非字符串一律丢弃。限长与其它路径键
+    同规（500 字符），只做配置面清洗，不碰文件系统——路径是否存在由消费方判定。
+    """
+    if not isinstance(value, dict):
+        return {}
+    cleaned = {}
+    for key in ("netease", "qqmusic"):
+        raw = value.get(key)
+        if not isinstance(raw, str):
+            continue
+        path = raw.strip()
+        if path:
+            cleaned[key] = path[:500]
+    return cleaned
 
 
 def _clean_self_talk_texts(value):
@@ -496,7 +518,9 @@ def _default_dynamic_island_data() -> dict:
         "style": "dark",  # dark / light / glass
         "opacity": 1.0,  # 背景不透明度 0.4~1.0
         "accent": "blue",  # 主题色：blue / green / purple / pink / orange
-        "icon": "🐳",
+        # 图标：auto=鱼本体头像图片（默认，不碰 emoji 字体栈）；img:<路径>=自定义
+        # 图片；其余字符串=文字/emoji（用户主动选择，愿意付首次绘制的一次性税额）
+        "icon": "auto",
         "click_action": "expand",  # expand（展开卡片）/ toggle_pet（切换显隐，旧行为）
         "event_effects": True,  # 事件动效：AI 回复/余额刷新/峰谷切换弹跳
         "edge_dock": True,  # 拖到屏幕边缘收成细条，鼠标靠近滑出
@@ -529,7 +553,16 @@ def _clean_dynamic_island_data(value) -> dict:
         result["opacity"] = 1.0
     accent = str(result.get("accent") or "blue").strip()
     result["accent"] = accent if accent in {"blue", "green", "purple", "pink", "orange"} else "blue"
-    result["icon"] = str(result.get("icon") or "🐳").strip()[:8] or "🐳"
+    # 图标归一化：auto 原样；img:<路径> 按路径保留（限长 260）；其余当文字/emoji
+    # 截到 8 字符；空值回 "auto"（默认走头像图片，不回退 emoji——首次 emoji 绘制
+    # 会触发 DirectWrite 彩色字体栈加载，实测定案一次性 +33.6MB 私有内存）
+    icon = str(result.get("icon") or "auto").strip()
+    if icon == "auto":
+        result["icon"] = "auto"
+    elif icon.startswith("img:"):
+        result["icon"] = icon[:260]
+    else:
+        result["icon"] = icon[:8] or "auto"
     click_action = str(result.get("click_action") or "expand").strip()
     result["click_action"] = click_action if click_action in {"expand", "toggle_pet"} else "expand"
     # 布尔键必须用 _bool_or_default：bool("false") is True，字符串/None
@@ -664,6 +697,9 @@ class Config:
             "music_lyric_enabled": False,  # 在气泡里显示当前播放歌曲的歌词（Windows SMTC）
             "music_lyric_lead_seconds": 1.0,  # 歌词提前量（秒）：正值=歌词抢先于音频
             "music_lyric_cache_limit": 2000,  # 歌词缓存条数上限，超出按最旧淘汰
+            # 手动指定播放器路径 {netease|qqmusic: exe 路径}：自动搜索找不到时的
+            # 逃生口，只能手改 config.json（暂无设置页控件），空 = 走自动搜索。
+            "music_player_paths": {},
             "agent_cost_enabled": False,  # Agent 本轮结束时显示消费金额（用余额差值估算）
             "golden_spin_on_click": False,  # 点击回应动画结束后自动接一段黄金回旋
             "golden_spin_direct": False,  # 点击触发黄金回旋时跳过点击动画，直接回旋并逐圈加速
@@ -742,6 +778,10 @@ class Config:
             # experimental_single_process_spawn（多窗）也为开时才真正激活——
             # 单窗无共享可言，双门关任一即回每窗独立解码（批5.2 形态）。
             "experimental_shared_decode": True,
+            # 设置页进程隔离：默认开 = 设置页拉到独立进程（--settings），关窗即
+            # 进程退出，OS 连锅端走首开留下的字体/样式/模块高水位（无卸载 API）；
+            # False = 完全回退进程内对话框旧路径（排障/回退保险，不新增控件）。
+            "settings_process_isolation": True,
             "chat": _default_chat_data(),
         }
         self.reload()
@@ -914,6 +954,7 @@ class Config:
             "music_lyric_enabled",
             "music_lyric_cache_limit",
             "music_lyric_lead_seconds",
+            "music_player_paths",
             "agent_cost_enabled",
             "golden_spin_on_click",
             "golden_spin_direct",
@@ -974,6 +1015,7 @@ class Config:
             "ffmpeg_recycle_minutes",
             "experimental_single_process_spawn",
             "experimental_shared_decode",
+            "settings_process_isolation",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]
@@ -1227,6 +1269,43 @@ class Config:
         self.data["golden_spin_direct"] = _bool_or_default(self.data.get("golden_spin_direct"), False)
         self.data["edge_probe_enabled"] = _bool_or_default(self.data.get("edge_probe_enabled"), False)
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
+        # 音乐关联 / 消费统计（#129 新增的 5 键）：此前只在默认值与 reload 白名单
+        # 里登记、没进归一化——手改成脏值后数值键会让设置页构造直接抛
+        # ValueError（float('abc') 打死整个设置页），字符串布尔键被 bool() 误开
+        # （bool('false') is True，歌词功能自己打开）。布尔走 _bool_or_default、
+        # 数值夹回消费端可用区间，与其它键同规。
+        self.data["music_lyric_enabled"] = _bool_or_default(self.data.get("music_lyric_enabled"), False)
+        self.data["agent_cost_enabled"] = _bool_or_default(self.data.get("agent_cost_enabled"), False)
+        # 唱歌动画检测开关：同族漏网的第六个键（交付前审查 P2-b）——字符串
+        # "false" 被 bool() 判真，用户明确关掉的开关会自己打开，与上面两键同规。
+        self.data["music_sing_enabled"] = _bool_or_default(self.data.get("music_sing_enabled"), False)
+        # 持续静音判定时长：下限 1s（低于它就退回"瞬时静音即退出"的老问题），
+        # 上限必须有——否则手改 1e9 会让唱歌状态永不退出。
+        self.data["music_sing_grace_seconds"] = _float_or_default(
+            self.data.get("music_sing_grace_seconds"), 6.0, 1.0, 3600.0
+        )
+        # 歌词提前量的区间与设置页滑块**同源**（music_lyric_controller 的常量），
+        # 不再抄一份边界。惰性导入：config.py 顶层不引 Qt。
+        from .music_lyric_controller import (
+            LEAD_MAX_SECONDS,
+            LEAD_MIN_SECONDS,
+            LYRIC_LEAD_SECONDS,
+        )
+        self.data["music_lyric_lead_seconds"] = _float_or_default(
+            self.data.get("music_lyric_lead_seconds"),
+            LYRIC_LEAD_SECONDS,
+            LEAD_MIN_SECONDS,
+            LEAD_MAX_SECONDS,
+        )
+        # 歌词缓存条数上限：非数值回落默认（music_lyric.CACHE_LIMIT），
+        # 负数/0 无意义，夹到至少 1 条。消费方是 music_lyric_controller 的取词
+        # 线程（fetch_lyrics(cache_limit=...) → _prune_cache），不是摆设。
+        self.data["music_lyric_cache_limit"] = int(
+            _float_or_default(self.data.get("music_lyric_cache_limit"), 2000.0, 1.0, 100000.0)
+        )
+        # 手动播放器路径：此前只有消费方读、没有 schema 登记，手改 config.json 会
+        # 被 reload() 静默丢弃（交付前审查 P1-3）。清洗成 {netease|qqmusic: 路径}。
+        self.data["music_player_paths"] = _clean_music_player_paths(self.data.get("music_player_paths"))
         prewarm = str(self.data.get("media_prewarm", "balanced") or "balanced").strip().lower()
         self.data["media_prewarm"] = prewarm if prewarm in {"full", "balanced", "minimal"} else "balanced"
         # 批10-A3：默认 32→8（预测式预热使能）；32 是批9 引入仅一天的旧默认，
@@ -1243,6 +1322,8 @@ class Config:
         self.data["experimental_single_process_spawn"] = _bool_or_default(self.data.get("experimental_single_process_spawn"), False)
         # 批5.3 共享解码链开关：同规防字符串布尔误开（默认开）。
         self.data["experimental_shared_decode"] = _bool_or_default(self.data.get("experimental_shared_decode"), True)
+        # 设置页进程隔离：同规防字符串布尔误开；默认开（关掉 = 回退进程内设置页）。
+        self.data["settings_process_isolation"] = _bool_or_default(self.data.get("settings_process_isolation"), True)
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
@@ -1339,6 +1420,13 @@ class Config:
             "spawn_inherit_dynamic_island",
             "todo_reminder_enabled",
             "todo_reminder_lead_minutes",
+            "music_sing_enabled",
+            "music_sing_grace_seconds",
+            "music_lyric_enabled",
+            "music_lyric_lead_seconds",
+            "music_lyric_cache_limit",
+            "agent_cost_enabled",
+            "music_player_paths",
             "character_profiles",
             "chat_always_on_top",
             "dynamic_island",

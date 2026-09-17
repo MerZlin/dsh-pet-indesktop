@@ -3838,9 +3838,13 @@ class AgentLinkManager(QObject):
             self._emit_sound("done", agent_key)
         agent_cfg = self.cfg.get("agent_link", {})
         if not self._report_allowed(agent_cfg, "done.success"):
+            # 同"窗口隐藏"路径：完成气泡不弹也要丢掉消费统计状态，否则该
+            # agent 永远留在 _busy 里，下次开始干活会被误判成并发。
+            self._cost.abort(agent_key)
             return
         now = self._clock()
         if now - self._done_cooldown.get(agent_key, 0.0) < self._DONE_COOLDOWN_S:
+            self._cost.abort(agent_key)
             return
         self._done_cooldown[agent_key] = now
         name = self.agent_names.get(agent_key, agent_key)
@@ -3964,6 +3968,9 @@ class AgentLinkManager(QObject):
         不走同步等待——余额查询要 0.2s 网络往返，阻塞主线程会卡住界面。
         """
         if not self._cost_enabled():
+            # 开关中途被关掉：不能裸 return——_busy 里还留着这个 agent 的
+            # 进行态，开关再打开后下次 begin() 会把残留误判成并发。
+            self._cost.abort(agent_key)
             return
         if not self._cost.is_tracking(agent_key):
             return

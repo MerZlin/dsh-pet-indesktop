@@ -1146,6 +1146,101 @@ class TestAgentLinkBubbles:
         assert len(bubbles) == 2
         assert "执行完成" in bubbles[1]  # 第二次 done.success 轮换到第二句
 
+    def test_done_swallowed_by_cooldown_releases_cost_tracking(self, tmp_path, monkeypatch):
+        """P1：完成气泡被冷却掐掉时必须丢弃消费统计状态。
+
+        回归背景：``_fire_done`` 的四条早退里只有"窗口隐藏"那条调了
+        ``_cost.abort``；冷却/概率门这两条会把 agent 永久留在 ``_busy`` 里，
+        此后它每次 ``begin`` 都被判成"有别的会话在跑"——金额气泡永远挂
+        「（含其他会话）」，自己本轮的金额也不再显示。
+
+        余额结果由真实槽 ``_on_cost_balance``（后台查询回主线程的信号处理）
+        注入，只有网络边界不真跑；其余全程走 ``_on_agent_state``/``_fire_done``
+        的真实入口。
+        """
+        # 钥匙串边界：不让测试进程真去读 keyring（有 key 会起线程打真接口）。
+        monkeypatch.setattr(Config, "resolve_api_key", lambda self, provider: "")
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"done": 1.0})
+        mgr.cfg.set("agent_cost_enabled", True)
+
+        # 第一轮：正常完成，把基线/结算链路走完整
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_cost_balance("dsh", "baseline", 10.00)
+        clock[0] += 3.0
+        mgr._on_agent_state("dsh", "idle")
+        mgr._fire_done("dsh")
+        mgr._on_cost_balance("dsh", "done", 9.90)
+        assert bubbles[-1] == "本轮消费 ¥0.10"
+
+        # 第二轮：距上次完成不足 _DONE_COOLDOWN_S 又结束 → 冷却早退
+        clock[0] += 1.0
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_cost_balance("dsh", "baseline", 10.00)
+        assert mgr._cost.is_tracking("dsh") is True
+        clock[0] += 2.0
+        mgr._on_agent_state("dsh", "idle")
+        count = len(bubbles)
+        mgr._fire_done("dsh")
+        assert len(bubbles) == count, "冷却期内不得弹完成气泡"
+        assert mgr._cost.is_tracking("dsh") is False, (
+            "完成被冷却掐掉后必须一并丢弃消费统计状态，否则该 agent 永久滞留 _busy"
+        )
+
+        # 第三轮：同一 agent 再次 begin → 不得被误判成"有别的会话在跑"
+        clock[0] += 10.0
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_cost_balance("dsh", "baseline", 10.00)
+        clock[0] += 1.0
+        mgr._on_agent_state("dsh", "idle")
+        mgr._fire_done("dsh")
+        mgr._on_cost_balance("dsh", "done", 9.90)
+        assert bubbles[-1] == "本轮消费 ¥0.10", f"不得误挂并发标注: {bubbles[-1]}"
+
+    def test_reentry_within_confirm_window_not_marked_concurrent(self, tmp_path, monkeypatch):
+        """P1：「idle → 800ms 确认窗口内回忙」的重入不经过任何结束路径
+        （_cancel_done_check 直接停掉确认定时器，_fire_done 根本不执行），
+        begin() 必须把还留在 _busy 里的自己排除出并发判定——否则同一 Agent
+        单人会话也会被误标「（含其他会话）」。"""
+        monkeypatch.setattr(Config, "resolve_api_key", lambda self, provider: "")
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"done": 1.0})
+        mgr.cfg.set("agent_cost_enabled", True)
+
+        # 第一轮干活 → idle（确认定时器挂着，但不手动 _fire_done——模拟 800ms
+        # 窗口内就被下一段 working 打断，定时器被 _cancel_done_check 停掉）
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_cost_balance("dsh", "baseline", 10.00)
+        clock[0] += 2.0
+        mgr._on_agent_state("dsh", "idle")
+        clock[0] += 0.3  # < 800ms 确认窗口
+        mgr._on_agent_state("dsh", "working")  # 重入：begin() 时 _busy 还留着自己
+        mgr._on_cost_balance("dsh", "baseline", 10.00)
+        assert mgr._cost._saw_concurrent is False, "同一 Agent 重入不得算并发"
+
+        clock[0] += 3.0
+        mgr._on_agent_state("dsh", "idle")
+        mgr._fire_done("dsh")
+        mgr._on_cost_balance("dsh", "done", 9.90)
+        assert bubbles[-1] == "本轮消费 ¥0.10", f"不得误挂并发标注: {bubbles[-1]}"
+
+    def test_done_blocked_by_probability_gate_releases_cost_tracking(self, tmp_path, monkeypatch):
+        """完成气泡被概率门掐掉时必须丢弃消费统计状态（与冷却路径同一不变量）：
+        否则 agent 永久滞留 _busy，后续每轮 begin 都被误判成并发。"""
+        monkeypatch.setattr(Config, "resolve_api_key", lambda self, provider: "")
+        mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"done": 0.0})
+        mgr.cfg.set("agent_cost_enabled", True)
+
+        mgr._on_agent_state("dsh", "working")
+        mgr._on_cost_balance("dsh", "baseline", 10.00)
+        assert mgr._cost.is_tracking("dsh") is True
+        clock[0] += 3.0
+        mgr._on_agent_state("dsh", "idle")
+        count = len(bubbles)
+        mgr._fire_done("dsh")
+        assert len(bubbles) == count, "概率门关死时不得弹完成气泡"
+        assert mgr._cost.is_tracking("dsh") is False, (
+            "完成被概率门掐掉后必须一并丢弃消费统计状态，否则该 agent 永久滞留 _busy"
+        )
+
     def test_error_during_busy_done_bubble_text(self, tmp_path):
         """6. busy 期间出现 error 再 idle：完成气泡文案含「自己看一眼」而不是「干完活啦」。"""
         mgr, win, bubbles, clock = self._make_mgr(tmp_path, gates={"done": 1.0})

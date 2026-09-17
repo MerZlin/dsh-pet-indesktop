@@ -85,8 +85,11 @@ class AgentCostTracker:
 
         必须先清旧的——否则上一轮遗留的数字会被当成这一轮的起点。
         """
-        # 先记并发态再加自己：加完再判会让"同一 Agent 重入"也看成并发。
-        was_concurrent = len(self._busy) > 0
+        # 先看并发态再加自己：加完再判会把"本轮刚加入的自己"也算成并发。
+        # 排除 agent_key 自身：同一 Agent「idle→800ms 内回忙」的重入不经过
+        # 任何结束路径（_cancel_done_check 直接停掉确认定时器），旧状态还留
+        # 在 _busy 里——不排除自身就会把重入误判成"有别的会话在跑"。
+        was_concurrent = bool(self._busy - {agent_key})
         self._busy.add(agent_key)
         # 会话期间"是否曾并发"要持续累计：两个 Agent 并行时，**后结束**的那个
         # 结算时 _busy 只剩自己，若在结算时判并发就会漏标注。
@@ -102,6 +105,11 @@ class AgentCostTracker:
         """查询失败 / 会话结束：丢弃这个 Agent 的状态。"""
         self._busy.discard(agent_key)
         self._baselines.pop(agent_key, None)
+        # 与 finish 的收口对齐：abort 摘走的是最后一个 busy agent 时，
+        # "曾并发"标志一并复位——否则多 Agent 场景会留下一次多余的
+        # 「（含其他会话）」标注（虽下一次 finish 会自愈，但没必要留这帧）。
+        if not self._busy:
+            self._saw_concurrent = False
 
     def clear(self) -> None:
         self._busy.clear()
