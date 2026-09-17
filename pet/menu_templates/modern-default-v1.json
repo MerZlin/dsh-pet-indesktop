@@ -14,6 +14,7 @@
     {"type": "submenu", "id": "music", "label": "音乐", "visible": true, "section": "playback", "children": [
       {"type": "action", "id": "music_pause", "visible": true},
       {"type": "action", "id": "music_next", "visible": true},
+      {"type": "action", "id": "music_prev", "visible": true},
       {"type": "action", "id": "music_quit", "visible": true},
       {"type": "separator", "id": "music.separator-launch", "visible": true},
       {"type": "action", "id": "music_open_netease", "visible": true},

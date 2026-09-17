@@ -67,6 +67,33 @@ def _import_winrt():
     return _Manager
 
 
+def player_process_running(exe_name: str) -> bool:
+    """指定可执行名的进程是否在跑。纯进程扫描，不碰 WinRT。
+
+    按调用方传入的 exe 名精确匹配，**不维护播放器白名单**——白名单会把
+    名单外的播放器（如 LX Music）静默挡掉。
+    扫描失败时返回 True（不拦截），宁可多试一次也不误伤。
+    """
+    wanted = str(exe_name or "").strip().lower()
+    if not wanted:
+        return False
+    try:
+        import psutil
+    except Exception:
+        return True
+    try:
+        for proc in psutil.process_iter(["name"]):
+            try:
+                name = str(proc.info.get("name") or "").lower()
+            except Exception:
+                continue
+            if name == wanted:
+                return True
+    except Exception:
+        return True
+    return False
+
+
 def available() -> bool:
     """SMTC 是否可用（winrt 是否装得上）。供设置页决定是否禁用开关。"""
     if sys.platform != "win32":
@@ -178,7 +205,9 @@ def _utc_now():
 
 
 async def _pick_playback_session():
-    """取当前应操作的 SMTC 会话（优先正在播放的那个）。"""
+    """取当前应操作的 SMTC 会话（优先正在播放的那个）。
+
+    """
     manager_cls = _import_winrt()
     if manager_cls is None:
         return None
@@ -252,6 +281,10 @@ def resume_playback() -> bool:
 async def _play_session_async(exe_name: str) -> bool:
     manager_cls = _import_winrt()
     if manager_cls is None:
+        return False
+    # 该播放器进程不在就直接放弃：既省掉一次可能永久阻塞的调用，
+    # 也让调用方可以据此判断"需要先启动它"。
+    if not player_process_running(exe_name):
         return False
     manager = await manager_cls.request_async()
     wanted = str(exe_name or "").strip().lower()

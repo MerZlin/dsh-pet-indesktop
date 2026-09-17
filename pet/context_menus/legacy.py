@@ -24,6 +24,7 @@ from .shared import (
     add_music_open_netease,
     add_music_open_qqmusic,
     add_music_pause,
+    add_music_prev,
     add_music_quit,
     add_harness,
     add_mouse_through,
@@ -72,6 +73,7 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     music_menu = add_submenu(menu, "音乐")
     add_music_pause(music_menu, pet, icons=False)
     add_music_next(music_menu, pet, icons=False)
+    add_music_prev(music_menu, pet, icons=False)
     add_music_quit(music_menu, pet, icons=False)
     music_menu.addSeparator()
     add_music_open_netease(music_menu, pet, icons=False)

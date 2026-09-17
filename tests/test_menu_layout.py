@@ -320,6 +320,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "music",
         "music_pause",
         "music_next",
+        "music_prev",
         "music_quit",
         "music_open_netease",
         "music_open_qqmusic",

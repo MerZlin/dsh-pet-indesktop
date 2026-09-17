@@ -233,6 +233,11 @@ class MusicLyricController(QObject):
     # 后台取词完成：(曲目标识, 歌词行列表或 None)
     _lyrics_ready = Signal(object, object)
 
+    # 后台 SMTC 采样完成：Playback 或 None。
+    # 采样必须离开主线程——get_now_playing() 内部走 asyncio.run() 调 WinRT，
+    # 一旦该调用不返回就会**永久阻塞 Qt 主线程**（窗口未响应）。
+    _playback_ready = Signal(object)
+
     # 类级默认：单测直接驱动 _on_lyrics_ready 时未走过 _start_track，
     # 没有这个默认会 AttributeError（同文件既有约定：回调路径的属性要有默认）。
     _pending_playback: Any = None
@@ -245,6 +250,12 @@ class MusicLyricController(QObject):
         self._timer.timeout.connect(self._on_tick)
         self._tracker = LyricTracker()
 
+        # 采样在途标志：后台线程还在跑就不再派发新的，避免堆积。
+        self._sampling: bool = False
+        # 常驻采样线程（懒启动）：见 _sample_loop 说明为何不每拍新建。
+        self._sample_thread: threading.Thread | None = None
+        self._sample_wake = threading.Event()
+        self._sample_stop = threading.Event()
         self._current_key: tuple[str, str] | None = None
         # 本次播放已尝试过取词但失败的曲目——避免反复请求同一首无词的歌。
         self._no_lyric_keys: set[tuple[str, str]] = set()
@@ -276,6 +287,7 @@ class MusicLyricController(QObject):
         # 所以必须留在实例上（也要有类级默认，便于单测直接驱动回调）。
         self._pending_playback: Any = None
         self._lyrics_ready.connect(self._on_lyrics_ready)
+        self._playback_ready.connect(self._on_playback_ready)
 
     # ------------------------------------------------------------ 生命周期
 
@@ -289,11 +301,27 @@ class MusicLyricController(QObject):
         if on and getattr(self, "_user_mode_off", False):
             return
         if on:
+            self._start_sample_thread()
             self._timer.start()
             self._on_tick()
         else:
             self._timer.stop()
+            self._stop_sample_thread()
             self._reset()
+
+    def _stop_sample_thread(self) -> None:
+        """停掉采样线程（幂等）。卡在 WinRT 调用时不强杀——daemon 线程
+        随进程退出即可，主线程不受它影响。
+
+        **仍存活的线程保留引用**，不置 None：它可能正卡在 WinRT 里，丢掉引用
+        就变成孤儿，之后醒来仍会 emit，与新线程抢 ``_sampling``（同类教训见
+        pet/music_detect.py）。已退出的线程才清引用，供下次重建。
+        """
+        self._sample_stop.set()
+        self._sample_wake.set()
+        thread = self._sample_thread
+        if thread is not None and not thread.is_alive():
+            self._sample_thread = None
 
     def apply_lead(self) -> None:
         """从配置读歌词提前量（秒）。正直=歌词抢先于音频。
@@ -321,6 +349,7 @@ class MusicLyricController(QObject):
     def shutdown(self) -> None:
         """窗口关闭 / 会话结束：停表并复位（不可恢复的收口）。"""
         self._timer.stop()
+        self._stop_sample_thread()
         self._reset()
 
     # ------------------------------------------------------------ 右键菜单入口
@@ -472,9 +501,69 @@ class MusicLyricController(QObject):
     # ------------------------------------------------------------ 主循环
 
     def _on_tick(self) -> None:
+        """定时器回调（主线程）：只负责**派发采样**，绝不自己查询。
+
+        WinRT 的 SMTC 查询走 asyncio.run()，实测会在主线程永久阻塞
+        （窗口未响应）。所以这里起后台线程采样，结果经 _playback_ready
+        回主线程处理。
+        """
         if not getattr(self.win, "isVisible", lambda: False)():
             return
-        playback = now_playing.get_now_playing()
+        if self._sampling or self._sample_thread is None:
+            return  # 上一拍还没回来 / 线程未起：跳过，避免堆积
+        self._sampling = True
+        self._sample_wake.set()
+
+    def _sample_loop(self) -> None:
+        """**常驻**采样线程：等信号 → 采一次 → 回报，循环直到关闭。
+
+        刻意不每拍新建线程：winrt 会按线程初始化 COM apartment，每秒新建一个
+        线程等于每秒多一个 apartment，正是 pet/music_detect.py 记录过的
+        「句柄累积可能导致崩溃」（那里为此只初始化一次 COM 对象）。
+        常驻线程只初始化一次，且即使 WinRT 调用卡住也只影响本线程。
+        """
+        while not self._sample_stop.is_set():
+            self._sample_wake.wait()
+            self._sample_wake.clear()
+            if self._sample_stop.is_set():
+                break
+            try:
+                playback = now_playing.get_now_playing()
+            except Exception:
+                playback = None
+            try:
+                self._playback_ready.emit(playback)
+            except RuntimeError:
+                break  # 对象已销毁
+
+    def _start_sample_thread(self) -> None:
+        """确保有一条在跑的采样线程（幂等）。
+
+        **必须复位 ``_sample_stop``**：它一旦被 ``_stop_sample_thread`` 置位就没有
+        别的复位路径，而 ``_sample_loop`` 的 ``while not _sample_stop.is_set()``
+        会在进入时立刻退出——不复位的话「关闭歌词再打开」之后采样永久停摆
+        （歌词再也不随播放更新，直到重启桌宠）。
+        """
+        thread = self._sample_thread
+        if thread is not None and thread.is_alive():
+            current = threading.current_thread()
+            if thread is not current:
+                self._sample_stop.clear()
+                return  # 复用仍存活的线程，不新建（避免 COM apartment 堆积）
+        # 线程已退出（或从未起过）：复位标志后重建，否则新线程一进循环就退出。
+        # （clear 是幂等的，上面的复用分支已清过也不要紧。）
+        self._sample_stop.clear()
+        thread = threading.Thread(
+            target=self._sample_loop, name="music-lyric-sample", daemon=True,
+        )
+        self._sample_thread = thread
+        thread.start()
+
+    def _on_playback_ready(self, playback) -> None:
+        """采样回到主线程：在这里做原有的状态推进。"""
+        self._sampling = False
+        if not getattr(self.win, "isVisible", lambda: False)():
+            return
         if playback is None:
             # 播放器没了（退出/会话消失）：整体复位，下次从头来过。
             if self._last_playing:

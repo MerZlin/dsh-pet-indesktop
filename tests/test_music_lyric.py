@@ -698,3 +698,133 @@ def test_announce_with_empty_title_still_resets_width_lock():
     ctrl._width_locked = True
     ctrl._announce("", "")
     assert ctrl._width_locked is False
+
+
+# ---------------------------------------------------------------- 采样线程生命周期
+#
+# 背景（fb38824 引入的缺陷）：_stop_sample_thread 把 _sample_thread 置 None 并
+# set 了 _sample_stop，但 _sample_stop **没有复位路径**。于是「关闭歌词 → 再打开」
+# 之后，新建的采样线程一进 while 就 break，歌词永久不再更新，直到重启桌宠。
+# 这两个用例锁住该行为：线程可复用 + 重开后确实还在采样。
+
+
+class _FakeWinVisible(QObject):
+    """带 cfg 的窗口替身——sync_enabled 会经 apply_lead 读 win.cfg。"""
+
+    _alert_current = None
+    _sticky_bubble_active = False
+    _speech_bubble = None
+
+    def __init__(self):
+        super().__init__()
+        self.cfg: dict = {}
+        self.shown: list[tuple[str, str]] = []
+
+    def show_bubble(self, text, duration_ms=3200, subtitle=None, **kw):
+        self.shown.append((subtitle or "", text))
+
+    def hold_bubble(self, seconds=0.0):
+        pass
+
+    def isVisible(self):
+        return True
+
+
+def _wait_until(predicate, *, timeout=5.0, interval=0.02):
+    """宽预算轮询：CI 慢 runner 是本地数倍慢，禁止固定 sleep 赌时序。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
+
+
+def test_sample_thread_is_reused_across_disable_enable():
+    """关掉歌词再打开，必须复用同一条采样线程，不许再起一条。
+
+    旧线程可能正卡在 WinRT 里，丢掉引用只会让它变成孤儿：之后醒来仍会
+    emit，与新线程抢 _sampling 标志（同类教训见 pet/music_detect.py）。
+    """
+    from pet.music_lyric_controller import MusicLyricController
+
+    win = _FakeWinVisible()
+    ctrl = MusicLyricController(win)
+    try:
+        ctrl.sync_enabled(True)
+        first = ctrl._sample_thread
+        assert first is not None, "开启后应有采样线程"
+
+        ctrl.sync_enabled(False)
+        ctrl.sync_enabled(True)
+
+        assert ctrl._sample_thread is first, (
+            "关闭再开启后应复用原采样线程；"
+            "新建线程意味着旧线程被丢引用（孤儿），且 _sample_stop 未复位"
+        )
+    finally:
+        ctrl.sync_enabled(False)
+
+
+def test_sampling_resumes_after_disable_enable(monkeypatch):
+    """关掉歌词再打开，采样必须恢复——不是永久停摆。
+
+    这是用户可见的后果：一旦发生过一次开关，歌词再也不随播放更新。
+    """
+    from pet import now_playing
+    from pet.music_lyric_controller import MusicLyricController
+
+    calls = {"n": 0}
+
+    def fake_get_now_playing():
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(now_playing, "get_now_playing", fake_get_now_playing)
+
+    win = _FakeWinVisible()
+    ctrl = MusicLyricController(win)
+    try:
+        ctrl.sync_enabled(True)
+        assert _wait_until(lambda: calls["n"] >= 1), "首次开启后应采样"
+
+        before = calls["n"]
+        ctrl.sync_enabled(False)
+        ctrl.sync_enabled(True)
+        # 再派发一拍；线程若因 _sample_stop 未复位而退出，这里就永远等不到。
+        ctrl._sampling = False
+        ctrl._on_tick()
+
+        assert _wait_until(lambda: calls["n"] > before), (
+            "关闭再开启后采样必须恢复；"
+            "卡住说明 _sample_stop 仍是 set 状态，采样线程一进循环就退出了"
+        )
+    finally:
+        ctrl.sync_enabled(False)
+
+
+def test_shutdown_leaves_stop_flag_set():
+    """shutdown 之后 ``_sample_stop`` 必须保持置位。
+
+    这是「复位 _sample_stop」修复的反向保险：若写成无条件 clear（含关闭分支），
+    线程的退出信号就被抹掉了——采样线程退出后会被再次拉起，shutdown 形同虚设。
+    直接断言标志位，不依赖 sleep 时序。
+    """
+    from pet.music_lyric_controller import MusicLyricController
+
+    win = _FakeWinVisible()
+    ctrl = MusicLyricController(win)
+    ctrl.sync_enabled(True)
+    assert not ctrl._sample_stop.is_set(), "运行中不该处于停止态"
+
+    ctrl.shutdown()
+    assert ctrl._sample_stop.is_set(), (
+        "shutdown 后 _sample_stop 必须仍置位；"
+        "被 clear 说明复位逻辑把「关」也一起复掉了"
+    )
+
+    # 关闭路径同理：关掉歌词也要留下停止信号。
+    ctrl2 = MusicLyricController(_FakeWinVisible())
+    ctrl2.sync_enabled(True)
+    ctrl2.sync_enabled(False)
+    assert ctrl2._sample_stop.is_set(), "sync_enabled(False) 后应保持停止态"
