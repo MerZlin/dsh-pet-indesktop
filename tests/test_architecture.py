@@ -86,7 +86,12 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 一个带完整实机取证说明的委托方法：它必须留在 PetWindow 上（showEvent 是唯一
 # 可靠的"原生窗口已就绪/可能被重建"注入点，拆到独立模块反而会产生跨模块的
 # 窗口生命周期耦合）。按约定只校准预算，不为达标压行。
-WINDOW_PY_LINE_BUDGET = 4507
+# 2026-09-17 上调到 4575：Linux 贴边绘制补偿（issue #103）——GNOME/mutter 不允许
+# 窗口移出工作区，新增统一位置出口与身体框语义；换算实现已拆到
+# window_placement.py（move_window_towards/throw_bounds/stable_body_local_rect/
+# virtual_pos），window.py 只留薄委托 + 各移动路径接线（拖拽/抛掷/弹弓/漫游/
+# 缩放/碰撞夹取），实测 4564。
+WINDOW_PY_LINE_BUDGET = 4575
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的

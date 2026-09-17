@@ -115,11 +115,20 @@ def test_throw_physics_substep_long_frame():
     class FakePetWindow:
         _w = 300
         _h = 300
+        scale = 1.0
+        cfg = {}
+        _draw_delta = None  # None → 统一出口按零偏移处理
         _phys_pos = [500.0, 500.0]
         _phys_vel = [1200.0, -800.0]
         _moved_to = None
         _stopped = False
         _saved = False
+
+        # 抛掷边界/统一出口的真实现（贴边改造后 _tick_throw_physics 经这些
+        # seam 落窗；未声明 body_box 的角色回退"窗口即身体"，与旧语义同构）
+        _stable_body_local_rect = window_mod.PetWindow._stable_body_local_rect
+        _throw_bounds = window_mod.PetWindow._throw_bounds
+        _move_window_towards = window_mod.PetWindow._move_window_towards
 
         def _screen_available(self):
             return FakeScreen()

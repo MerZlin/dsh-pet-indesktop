@@ -254,21 +254,30 @@ def test_quick_chat_capture_requests_headroom_and_stays_above(tmp_path):
 
 
 def test_pet_window_capture_headroom_preserves_bottom(tmp_path):
-    """头顶透明空间只向上扩展窗口，不能改变人物/窗口底边位置。"""
+    """头顶透明空间只向上扩展窗口，不能改变人物脚底位置。
+
+    贴边改造后保持语义的权威对象是"角色脚底"（稳定身体框底边，虚拟窗口
+    坐标系）——窗口本体可能被钳在工作区内，窗口底边不再代表角色位置。
+    绘制偏移为零时，"脚底不动"与改造前的"窗口底边不动"逐像素一致。
+    """
     app = _qapp()
     win = _make_pet(tmp_path)
     try:
         before_h = win.height()
         win.setGeometry(120, 300, win.width(), win.height())
-        bottom = win.geometry().bottom()
+
+        def feet_y():
+            return win._virtual_pos().y() + win._stable_body_local_rect().bottom()
+
+        feet = feet_y()
         assert win.set_capture_headroom(80) is True
         assert win.height() == before_h + 80
         assert win._capture_headroom == 80
-        assert win.geometry().bottom() == bottom
+        assert feet_y() == feet
         assert win.set_capture_headroom(80) is False
         assert win.set_capture_headroom(0) is True
         assert win.height() == before_h
-        assert win.geometry().bottom() == bottom
+        assert feet_y() == feet
     finally:
         win.close()
         win.deleteLater()
