@@ -108,13 +108,16 @@ class FestivalReminderService:
         return bool(reminder_slot(when, cfg))
 
     # ------------------------------------------------------------ 调度
-    def _catch_up(self) -> None:
+    def _catch_up(self, now: datetime | None = None) -> None:
         """启动补提醒：当天有节日且已过首个提醒点时，立即补报一次。
 
         桌宠不保证常驻，用户可能中午才开机；没有这一步，当天的提醒点
         全部错过后就再也收不到，功能体感等于失效。
+
+        ``now`` 可注入（同 ``_on_tick``）：调用方传 ``None`` 即取当前时刻，
+        便于用例覆盖"恰好在提醒分钟内启动"这条只有真机重启才会踩到的路径。
         """
-        now = datetime.now()
+        now = now or datetime.now()
         slot = startup_slot(now, self._cfg)
         if not slot or slot in self._fired:
             return
@@ -124,6 +127,13 @@ class FestivalReminderService:
         if text:
             self._bubble(text)
             self._speak(text)
+            # 启动时刻恰好落在当天的某个提醒分钟内：把本分钟的正式槽位一并
+            # 盖戳。否则紧接着的 _on_tick 会命中同一分钟再播一次（两次气泡 +
+            # 两段 TTS），与 reminder_slot 承诺的"同一提醒时间只播报一次"矛盾。
+            # 只压这一分钟——晚些时候的提醒点仍走各自的正式槽位照常播报。
+            due = reminder_slot(now, self._cfg)
+            if due:
+                self._fired.add(due)
 
     def _on_tick(self, now: datetime | None = None) -> None:
         now = now or datetime.now()

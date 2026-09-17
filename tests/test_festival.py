@@ -615,6 +615,63 @@ def test_service_stays_silent_when_speak_disabled(tmp_path):
     assert len(app.win.bubbles) == 1, "不出声也必须有气泡"
 
 
+def test_startup_catch_up_suppresses_same_minute_scheduled_slot(tmp_path):
+    """P1：节日当天恰在提醒分钟内启动时，同一分钟不得播报两次。
+
+    回归背景：``_catch_up`` 只用独立槽位 ``{day}#startup`` 盖戳，而 ``_on_tick``
+    认的是 ``{day}T{HH:MM}``，两者互不压制；09:00:05 启动会先补报一次，
+    紧接着同一分钟的 tick 再播一次（两次气泡 + 两段 TTS），与 ``reminder_slot``
+    承诺的"同一天同一提醒时间只播报一次"矛盾。
+    """
+    channel = _Channel()
+    service, app = _service(_cfg_with(tmp_path, festival_reminder_speak=True), channel)
+    service.apply_config()
+
+    service._catch_up(dt.datetime(2026, 2, 17, 9, 0, 5))
+    assert len(app.win.bubbles) == 1, "启动补提醒应播报一次"
+    assert len(channel.spoken) == 1
+
+    # 同一分钟内的 tick（30s 间隔的那一拍）不得再播
+    service._on_tick(dt.datetime(2026, 2, 17, 9, 0, 35))
+    assert len(app.win.bubbles) == 1, "同一分钟不得重复播报"
+    assert len(channel.spoken) == 1, "同一分钟不得重复出声"
+
+    # 当天晚些时候的正式提醒点照常播报：补提醒只压当前这一分钟
+    service._on_tick(dt.datetime(2026, 2, 17, 21, 0, 30))
+    assert len(app.win.bubbles) == 2
+    assert len(channel.spoken) == 2
+
+
+def test_roll_day_resets_fired_slots_across_days(tmp_path):
+    """跨天复位：新一天的同一提醒分钟必须能再播，且次数索引从 0 重新起算。
+
+    回归背景：``_roll_day`` 是"提醒次数 → 文案索引"与"当天去重"的共同前提，
+    此前零覆盖；它一旦失效，第二天的提醒会被前一天的槽位永久压掉。
+    """
+    config = _cfg_with(tmp_path, festival_reminder_speak=True)
+    channel = _Channel()
+    service, app = _service(config, channel)
+    service.apply_config()
+
+    # 2026-02-16 除夕 09:00
+    service._on_tick(dt.datetime(2026, 2, 16, 9, 0, 5))
+    assert len(app.win.bubbles) == 1
+    assert app.win.bubbles[0].startswith("今天是除夕。")
+    # 同一天同一槽位再 tick 不重复
+    service._on_tick(dt.datetime(2026, 2, 16, 9, 0, 40))
+    assert len(app.win.bubbles) == 1
+
+    # 跨天（2026-02-17 春节）：同是 09:00 的槽位，必须重新可播
+    service._on_tick(dt.datetime(2026, 2, 17, 9, 0, 5))
+    assert len(app.win.bubbles) == 2
+    assert app.win.bubbles[1].startswith("今天是春节。")
+    # 跨天后"当天第几次提醒"从 0 重算（文案与当天的第一次提醒一致）
+    expected = F.build_festival_text(
+        dt.date(2026, 2, 17), F.normalize_festival_config(config), 0
+    )
+    assert app.win.bubbles[1] == expected
+
+
 def test_remind_now_speaks_and_bubbles(tmp_path):
     channel = _Channel()
     service, app = _service(_cfg_with(tmp_path, festival_reminder_speak=True), channel)

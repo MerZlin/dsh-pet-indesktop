@@ -143,7 +143,7 @@ def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, mo
 
 def test_click_sound_path_row_sits_directly_below_toggle(tmp_path, monkeypatch):
     """音效包行必须紧贴点击音效行下方（此前 click_balance 插入 index 1 把
-    音效包行挤到第三位）。"""
+    音效包行挤到第三位）；2026-09-17 定稿口径下这两行仍在「互动 · 点击反馈」。"""
     import pet.modern_settings_dialog as settings_mod
     from PySide6.QtWidgets import QApplication, QLabel
 

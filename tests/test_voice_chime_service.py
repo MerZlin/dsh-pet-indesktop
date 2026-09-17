@@ -733,3 +733,89 @@ def test_chime_speaks_normally_on_a_plain_day(tmp_path, monkeypatch):
 
     assert len(chime_said) == 1
     shell._on_about_to_quit()
+
+
+# ============================================================ edge-tts 懒加载
+# 现状（回归）：模块顶层 import edge_tts（实测 ~1.4s + 常驻内存），即使用户
+# voice_chime_enabled=False 也照付。改成：顶层只做 find_spec 惰性探测，真正的
+# import 推迟到 _TTSWorker 的合成线程；失败走既有 _notify_missing_tts 降级。
+
+
+def test_service_module_top_level_does_not_import_edge_tts(monkeypatch):
+    """全新加载一份 voice_chime_service：不得把 edge_tts 本体拉进 sys.modules。"""
+    import importlib.util
+    import sys
+
+    import pet.voice_chime_service as svc_mod
+
+    monkeypatch.delitem(sys.modules, "edge_tts", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "pet._voice_chime_service_probe", Path(svc_mod.__file__))
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+
+    assert "edge_tts" not in sys.modules, "模块顶层把 edge_tts import 进来了（白付 1.4s）"
+    assert fresh._EDGE_TTS_AVAILABLE is (
+        importlib.util.find_spec("edge_tts") is not None
+    ), "惰性探测结果必须与真实可导入性一致（否则会误报“请 pip install”）"
+
+
+def test_disabled_voice_chime_startup_does_not_import_edge_tts(tmp_path, monkeypatch):
+    """voice_chime_enabled=False 的启动路径：服务整个不 start，edge_tts 一次都不 import。"""
+    import sys
+
+    from pet.app import AppShell
+
+    monkeypatch.delitem(sys.modules, "edge_tts", raising=False)
+    _qapp()
+    cfg = Config(base=tmp_path)
+    cfg.set("voice_chime_enabled", False)
+    cfg.set("festival_reminder_enabled", False)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    assert shell.voice_chime_service is None
+    assert "edge_tts" not in sys.modules
+
+
+def test_tts_worker_reports_missing_edge_tts_instead_of_raising(tmp_path, monkeypatch):
+    """合成线程里 import edge_tts 失败：回调带回 EDGE_TTS_MISSING，不抛给调用方。"""
+    import sys
+
+    import pet.voice_chime_service as svc_mod
+
+    monkeypatch.setitem(sys.modules, "edge_tts", None)  # import edge_tts → ImportError
+    seen: list = []
+    worker = svc_mod._TTSWorker(
+        "现在是上午九点整。",
+        "zh-CN-XiaoxiaoNeural",
+        "+0%",
+        "+0Hz",
+        tmp_path / "chime.mp3",
+        lambda path, text, error: seen.append((path, text, error)),
+    )
+
+    worker.run()  # 真实 run()（不是替身）：验证 import 失败的降级分支
+
+    assert [item[2] for item in seen] == [svc_mod.EDGE_TTS_MISSING]
+
+
+def test_service_bubbles_install_hint_when_edge_tts_import_fails(tmp_path, monkeypatch):
+    """服务收到 EDGE_TTS_MISSING → 走既有「请 pip install edge-tts」降级文案。"""
+    import pet.voice_chime_service as svc_mod
+
+    service, app, _cfg = _service(tmp_path, monkeypatch)
+
+    class _MissingWorker:
+        def __init__(self, text, voice, rate, pitch, out_path, on_done) -> None:
+            self._out_path = out_path
+            self._on_done = on_done
+
+        def start(self) -> None:
+            self._on_done(
+                str(self._out_path), "现在是上午九点整。", svc_mod.EDGE_TTS_MISSING)
+
+    monkeypatch.setattr(svc_mod, "_TTSWorker", _MissingWorker)
+    service._fire("现在是上午九点整。", datetime(2026, 9, 15, 9, 0))
+
+    assert app.win.bubbles, "缺 edge-tts 时必须给用户可见提示（不能静默）"
+    assert "pip install edge-tts" in app.win.bubbles[-1][0]

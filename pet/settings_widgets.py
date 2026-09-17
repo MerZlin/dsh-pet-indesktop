@@ -84,6 +84,7 @@ SETTINGS_DOMAIN_NAV = (
     ("桌面组件", "island"),
     ("AI 与对话", "chat"),
     ("自动化与联动", "automation"),
+    ("语音", "sound"),
 )
 
 BROWSER_CONTROL_STYLESHEET = """

@@ -239,10 +239,15 @@ class ModernSettingsDialog(QDialog):
 
     settings_saved = Signal()
 
-    def __init__(self, config, parent=None, *, include_ai: bool = True):
+    def __init__(self, config, parent=None, *, include_ai: bool = True,
+                 standalone: bool = False):
         super().__init__(parent)
         self.config = config
         self.include_ai = bool(include_ai)
+        # standalone=True：本对话框跑在独立设置进程（python -m pet --settings）里，
+        # 没有桌宠窗口/AppShell 可依附。只影响下面几处显式分支，默认 False 时
+        # 全部行为与改动前逐位一致。
+        self.standalone = bool(standalone)
         self.ai_page = None
         self.setProperty("modernStyle", True)
         self.setProperty("menuStyle", "modern")
@@ -363,9 +368,23 @@ class ModernSettingsDialog(QDialog):
             self.island_accent_select.addItem(label, value)
         self.island_accent_select.setCurrentData(str(island_cfg.get("accent") or "blue"))
         self.island_icon_select = ModernSelect(self, width=160)
-        for emoji in ("🐳", "🐟", "🐙", "🦭", "🐧", "🐱", "🐶", "🌟", "⚡", "❤️"):
-            self.island_icon_select.addItem(emoji, emoji)
-        self.island_icon_select.setCurrentData(str(island_cfg.get("icon") or "🐳"))
+        # 标签用中文而不是 emoji 字符：下拉框自己也会渲染 emoji，一样要付
+        # DirectWrite 彩色字体栈的一次性税额（约 33MB），data 才是存的图标值
+        self.island_icon_select.addItem("鱼本体头像（推荐）", "auto")
+        for label, emoji in (
+            ("鲸鱼", "🐳"),
+            ("小鱼", "🐟"),
+            ("章鱼", "🐙"),
+            ("海豹", "🦭"),
+            ("企鹅", "🐧"),
+            ("小猫", "🐱"),
+            ("小狗", "🐶"),
+            ("星星", "🌟"),
+            ("闪电", "⚡"),
+            ("爱心", "❤️"),
+        ):
+            self.island_icon_select.addItem(label, emoji)
+        self.island_icon_select.setCurrentData(str(island_cfg.get("icon") or "auto"))
         self.island_custom_text_edit = _line_edit(str(island_cfg.get("custom_text") or ""), width=220)
         self.island_click_action_select = ModernSelect(self, width=160)
         for label, value in (
@@ -486,7 +505,7 @@ class ModernSettingsDialog(QDialog):
                     ),
                     SettingRow("dynamic_island_opacity", "背景不透明度", "越低越透（0.4~1.0）；配合深色底在低占用下做出半透明质感。", self.island_opacity_spin),
                     SettingRow("dynamic_island_accent", "主题色", "图标底圈、事件闪光、停靠描边共用的点缀色。", self.island_accent_select),
-                    SettingRow("dynamic_island_icon_value", "图标", "选择灵动岛左侧显示的预制 emoji 图标。", self.island_icon_select),
+                    SettingRow("dynamic_island_icon_value", "图标", "默认显示鱼本体头像；可选 emoji 图标，首次绘制会多占约 30MB 内存。", self.island_icon_select),
                     SettingRow(
                         "dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True
                     ),
@@ -934,13 +953,13 @@ class ModernSettingsDialog(QDialog):
         agent_link_cfg = self.config.get("agent_link", {})
         self.watchdog_page = WatchdogSettingsPage(self.config, agent_link_cfg, self)
 
-        # 语音报时设置页（行在 _rebuild_domain_navigation 中并入 automation 域）
+        # 语音报时设置页（行在 _rebuild_domain_navigation 中拾入「语音」总域）
         from .voice_chime_settings import VoiceChimeSettingsPage
 
         self.voice_chime_page = VoiceChimeSettingsPage(self.config, self)
         self.voice_chime_page.preview_requested.connect(self._on_voice_chime_preview)
 
-        # 节日提醒设置页（行在 _rebuild_domain_navigation 中并入 automation 域）
+        # 节日提醒设置页（行在 _rebuild_domain_navigation 中拾入「语音」总域）
         from .festival_settings import FestivalSettingsPage
 
         self.festival_page = FestivalSettingsPage(self.config, self)
@@ -987,6 +1006,13 @@ class ModernSettingsDialog(QDialog):
         self._apply_selected_theme()
         # 行全部就位后收敛台词编辑可见性：初始层若为某 Agent 专属则隐藏公共事件行
         settings_pet_controls._apply_dialogue_scope_rows(self)
+        if self.standalone:
+            # 独立进程本地宿主：试听改本地播放、节日试听本地演示、无 parent 时
+            # 读 runtime 状态文件避让桌宠。逻辑全在 pet/settings_standalone.py，
+            # 这里只做接线（本文件有行数预算）。
+            from .settings_standalone import install_standalone_hooks
+
+            install_standalone_hooks(self)
 
     def _sync_menu_action_states(self, *_args) -> None:
         enabled = set(self.menu_available_actions)
@@ -1544,6 +1570,15 @@ class ModernSettingsDialog(QDialog):
         parent = self.parentWidget()
         if parent is not None and parent.isVisible():
             self._move_away_from(parent.geometry())
+            return
+        if self.standalone:
+            # 独立进程没有桌宠窗口：改读配置目录 runtime 状态文件取桌宠位置；
+            # 读不到返回 None，保持默认位置（不许崩、也不许静默乱跳）。
+            from .settings_standalone import standalone_pet_geometry
+
+            pet_geo = standalone_pet_geometry(self.config)
+            if pet_geo is not None:
+                self._move_away_from(pet_geo)
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt 命名)
         super().showEvent(event)
@@ -1650,6 +1685,8 @@ class ModernSettingsDialog(QDialog):
                 ("多开", claim("single_process_spawn")),
             ]
         )
+        # 碰撞音效 2 行按 2026-09-17 定稿口径留在「桌宠」：开关紧跟碰撞开关，
+        # 音量随物理参数进「碰撞参数（高级）」。
         collision_primary = claim("collision_enabled", "collision_sound_enabled")
         collision_advanced = claim(
             "collision_restitution",
@@ -1673,6 +1710,8 @@ class ModernSettingsDialog(QDialog):
         interaction = page_content(
             [
                 ("输入", claim("mouse_through")),
+                # 点击音效 4 行按 2026-09-17 定稿口径留在「互动」：click_ 前缀整组
+                # 认领（原顺序即点击音效 4 行排在 click_self_talk 之前）。
                 ("点击反馈", claim_prefix("click_") + claim("golden_spin_click", "golden_spin_direct")),
                 (
                     "自言自语",
@@ -1689,7 +1728,8 @@ class ModernSettingsDialog(QDialog):
                 ),
             ]
         )
-        # click_talk_bindings shares the click_ prefix and remains in interaction.
+        # 点击音效 4 行与 click_self_talk / click_balance / click_talk_bindings
+        # 同享 click_ 前缀，按 2026-09-17 定稿口径整组留在 interaction 域。
         menu = SettingsTabContainer(self)
         menu.addTab(
             "layout",
@@ -1805,8 +1845,6 @@ class ModernSettingsDialog(QDialog):
         automation = page_content(
             [
                 ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
-                ("语音报时", voice_chime_rows),
-                ("节日提醒", festival_rows),
                 ("主动感知", proactive_rows),
                 ("循环检测", loop_rows),
                 ("卡住检测", stuck_rows),
@@ -1879,6 +1917,18 @@ class ModernSettingsDialog(QDialog):
         automation_layout.insertWidget(0, cost_section)
         automation_layout.insertWidget(1, agent_box)
 
+        # 「语音」总域（2026-09-17 定稿口径）：只收鱼开口说话（TTS）类设置——
+        # 语音报时整组 + 节日提醒 12 行（原「自动化与联动」域，带 speak/TTS 播报
+        # 能力）。音效类回各自功能分组：点击音效 4 行回「互动 · 点击反馈」、
+        # 碰撞音效 2 行回「桌宠」碰撞组；Agent 提示音效（agent_sound_*）留在
+        # Agent 联动折叠框内不动。
+        voice = page_content(
+            [
+                ("语音报时", voice_chime_rows),
+                ("节日提醒", festival_rows),
+            ]
+        )
+
         # Preserve any newly added row until it receives an explicit domain decision.
         leftovers = [row for row in all_rows if row not in claimed and (self.ai_page is None or not self.ai_page.isAncestorOf(row))]
         if leftovers:
@@ -1896,6 +1946,7 @@ class ModernSettingsDialog(QDialog):
             "桌面组件": desktop_components,
             "AI 与对话": ai_sections,
             "自动化与联动": automation,
+            "语音": voice,
         }
         for label, icon in SETTINGS_DOMAIN_NAV:
             content = domain_content.get(label)
@@ -2011,6 +2062,8 @@ class ModernSettingsDialog(QDialog):
         """把当前控件值写入 config 并落盘（按钮与直接关闭共用）。
 
         保存前从磁盘重读：吸收外部对本对话框未暴露字段的改动。
+        standalone 下这条尤其关键——主进程在设置开着期间会自己写 config
+        （托盘菜单开关等），不 reload 就把别人的改动回滚了。
         已知限制：已暴露字段仍是 last-writer-wins（对话框获胜）。
         返回是否成功落盘；失败时提示用户。
         """
@@ -2085,7 +2138,7 @@ class ModernSettingsDialog(QDialog):
                 "style": str(self.island_style_select.currentData() or "dark"),
                 "opacity": float(self.island_opacity_spin.value()),
                 "accent": str(self.island_accent_select.currentData() or "blue"),
-                "icon": str(self.island_icon_select.currentData() or "🐳"),
+                "icon": str(self.island_icon_select.currentData() or "auto"),
                 "click_action": str(self.island_click_action_select.currentData() or "expand"),
                 "event_effects": self.island_event_effects_check.isChecked(),
                 "edge_dock": self.island_edge_dock_check.isChecked(),
@@ -2280,6 +2333,13 @@ class ModernSettingsDialog(QDialog):
         父级（PetWindow / 对话框宿主）通过 on_voice_chime_now 暴露该能力；
         未接线时静默忽略（仅设置界面无副作用）。
         """
+        if self.standalone:
+            # 独立进程没有父级 AppShell：改走本地合成+播放通道（懒 import，
+            # 启动路径不加载 voice_chime_service/edge-tts）。
+            from .settings_standalone import preview_voice_chime
+
+            preview_voice_chime(self, text)
+            return
         cb = getattr(self.parent(), "on_voice_chime_now", None)
         if callable(cb):
             cb(text)

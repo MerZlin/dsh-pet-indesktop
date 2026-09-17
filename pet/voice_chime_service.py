@@ -11,6 +11,10 @@
   缓存键），气泡用阿拉伯数字文本（build_bubble_sentence），两者解耦；
 - 合成在后台线程跑 edge_tts（asyncio），完成后经 QObject 信号（queued）
   桥回 GUI 线程，用 QMediaPlayer + QAudioOutput 播放；
+- edge_tts **懒加载**：模块顶层只做 find_spec 探测（不 import 本体），真正的
+  import 推迟到 _TTSWorker 的合成线程里第一次合成时——edge_tts 首次 import
+  实测 ~1.4s 且常驻内存，而语音报时默认关闭、服务可能整个不 start，顶层 import
+  等于让每个用户白付这笔钱；
 - 音频缓存于 config.dir/voice_chime_cache，按“文本+音色+语速+音调”哈希
   去重，同句不重复合成；
 - 预合成降延迟：距下一报时点 ≤ 60s 时提前在后台线程合成该次报时音频并
@@ -20,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 import threading
 import time
@@ -46,13 +51,29 @@ _PRUNE_MIN_INTERVAL_S = 300.0
 # 超过该时限在调度 tick 中复位（正常合成 3-8s 完成，45s 余量充足）。
 _SYNTH_TIMEOUT_S = 45.0
 
-# 尝试导入 edge_tts：缺失时降级为“仅气泡提示”（用户可后续安装）。
-try:  # pragma: no cover - 环境探测
-    import edge_tts  # noqa: F401
+# 合成线程里 edge_tts 导入失败时的回调错误码：GUI 侧据此走 _notify_missing_tts
+# 降级（"请 pip install edge-tts"），而不是笼统的"合成失败"。
+EDGE_TTS_MISSING = "edge-tts-missing"
 
-    _EDGE_TTS_AVAILABLE = True
-except Exception:  # pragma: no cover
-    _EDGE_TTS_AVAILABLE = False
+
+def _edge_tts_available() -> bool:
+    """**不 import 本体**地探测 edge-tts 是否可用（惰性探测）。
+
+    ``importlib.util.find_spec`` 只问 import 系统找不找得到包，不执行模块代码，
+    因此不付 edge_tts 的 ~1.4s 导入成本、也不占常驻内存。真正的 import 推迟到
+    :class:`_TTSWorker` 的合成线程里第一次合成时；万一探测通过而 import 失败
+    （半装/被禁用），worker 会在回调里带回错误码 :data:`EDGE_TTS_MISSING`，走
+    同一套降级文案。
+    """
+    try:
+        return importlib.util.find_spec("edge_tts") is not None
+    except (ImportError, ValueError):
+        # 父包缺失 / sys.modules 里被置 None 等异常形态：一律按不可用处理。
+        return False
+
+
+# 惰性探测结果（模块顶层，但不 import 本体）。测试可 monkeypatch 本标志。
+_EDGE_TTS_AVAILABLE = _edge_tts_available()
 
 
 class _TTSWorker(threading.Thread):
@@ -74,6 +95,13 @@ class _TTSWorker(threading.Thread):
     def run(self) -> None:  # noqa: D102
         try:
             asyncio.run(self._synthesize())
+        except ImportError:
+            # edge_tts 本该在 _synthesize 里惰性导入（见 _edge_tts_available）：
+            # 探测通过但真导入失败（半装 / 被禁用）时也走这里，回 GUI 侧同一套
+            # "请 pip install edge-tts" 降级，而不是笼统的合成失败。
+            logger.warning("edge-tts 不可导入，降级为仅气泡提示")
+            self._on_done(str(self._out_path), self._text, EDGE_TTS_MISSING)
+            return
         except Exception as exc:  # noqa: BLE001
             logger.exception("edge-tts 合成失败")
             self._on_done(str(self._out_path), self._text, f"{type(exc).__name__}: {exc}")
@@ -81,6 +109,9 @@ class _TTSWorker(threading.Thread):
         self._on_done(str(self._out_path), self._text, "")
 
     async def _synthesize(self) -> None:
+        # 惰性导入：只在真的要合成的后台线程里付这笔 import 成本。
+        import edge_tts
+
         communicate = edge_tts.Communicate(
             self._text,
             self._voice,
@@ -425,6 +456,16 @@ class VoiceChimeService:
             logger.info("语音报时已停止，丢弃迟到的合成结果：%s", Path(path).name)
             return
         if error:
+            if error == EDGE_TTS_MISSING:
+                # 运行期才发现 edge-tts 缺失（顶层只做 find_spec 探测）：清掉可能
+                # 残留的预合成占位，再走既有缺依赖降级文案。
+                if role == "precache":
+                    self._precache_slot = None
+                    self._precache_text = None
+                    self._precache_bubble = None
+                    self._precache_path = None
+                self._notify_missing_tts()
+                return
             if role == "precache":
                 # 预合成失败：丢弃占位，到点走即时合成回退。
                 self._precache_slot = None

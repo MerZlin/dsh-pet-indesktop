@@ -14,7 +14,8 @@
 
 风格对齐 pet/exploration_watchdog_settings.py：自含 QWidget 页，
 提供 apply_to_config / refresh_from_config 与 settings_saved 信号，
-由 modern_settings_dialog.py 在 automation 域注册并参与 _write_config 保存。
+由 modern_settings_dialog.py 注册为侧边栏「语音」总域下的「语音报时」分组并参与
+_write_config 保存。
 """
 
 from __future__ import annotations
