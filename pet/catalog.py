@@ -10,6 +10,7 @@ assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）。
 - 落地偏移 PAD = 360 - 330 = 30px（绘制时把帧下移 PAD，让脚踩在窗口底线）
 """
 
+import functools
 import os
 import sys
 
@@ -274,6 +275,31 @@ def character_display_name(character_id: str) -> str:
         if name:
             return name
     return character_id
+
+
+@functools.lru_cache(maxsize=None)
+def character_body_box(character_id: str) -> tuple[int, int, int, int] | None:
+    """角色稳定身体框 (x1, y1, x2, y2)：源像素、640×360 画布坐标、已镜像对称化。
+
+    桌宠定位基准（贴边/碰撞边界/漫游空间都用它），必须取稳定量而非当前帧：
+    待机帧可见框几乎不抖，而特效动画逐帧可摆上百像素。来源是角色
+    manifest.json 的 body_box 字段；未声明（或非法）的角色包返回 None，
+    调用方回退为"窗口即身体"（保持改造前行为）。结果带缓存：该函数在
+    ~120Hz 的拖拽/物理热路径上被调用，不能每次都读文件。
+    """
+    manifest = load_character_manifest(character_id)
+    if not isinstance(manifest, dict):
+        return None
+    box = manifest.get('body_box')
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = (int(round(float(v))) for v in box)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= x1 < x2 <= CANVAS_W and 0 <= y1 < y2 <= CANVAS_H:
+        return (x1, y1, x2, y2)
+    return None
 
 
 def _manifest_name(value, names: set[str]) -> str | None:
