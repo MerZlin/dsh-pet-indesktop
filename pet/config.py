@@ -1349,6 +1349,14 @@ class Config:
             aliases.pop(character_id, None)
         self.save()
 
+    def character_display_name(self, character_id: str) -> str:
+        """角色显示名：用户别名优先，未设置回退目录显示名（manifest name/角色 id）。
+
+        展示给用户或注入 AI 提示（如识屏自我识别）的场合一律走本方法，
+        不要直取 catalog.character_display_name 而绕过用户重命名。
+        """
+        return self.character_alias(character_id) or catalog.character_display_name(character_id)
+
     def character_profile(self, character_id: str) -> dict:
         """返回角色档案；不存在时返回空档案。"""
         profiles = self.data.get("character_profiles")

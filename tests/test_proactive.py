@@ -1049,6 +1049,36 @@ class TestPhase5ShortTermMemory:
         assert latest["activity"] == "看视频"
         assert latest["process"] == "chrome.exe"
 
+    def test_worker_vision_uses_character_alias_as_pet_name(self, tmp_path, monkeypatch):
+        """主动识屏请求的身份提示用用户重命名后的别名，而不是默认角色名。"""
+        from PySide6.QtWidgets import QApplication
+        from pet.proactive import ProactiveScreenWatcher
+        from pet import vision
+
+        QApplication.instance() or QApplication([])
+
+        recorded_names = []
+
+        def _fake_post(jpeg_bytes, app_str, prompt, p, memory_context="", consume_budget=None, pet_name=""):
+            recorded_names.append(pet_name)
+            return "好呀"
+
+        monkeypatch.setattr(vision, "_post_vision_request", _fake_post)
+
+        cfg = Config(base=tmp_path)
+        cfg.set_character_alias("shenshen", "小鲸鱼")
+        watcher = ProactiveScreenWatcher(None, cfg)
+        watcher.limiter.dry_run = False
+
+        watcher._worker_request_vision(
+            b"fake_jpeg",
+            "chrome.exe | 页面",
+            "prompt",
+            cfg.chat_settings().active_config,
+        )
+
+        assert recorded_names == ["小鲸鱼"]
+
 
 
 

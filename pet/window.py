@@ -3510,8 +3510,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         provider = copy.copy(settings.active_config)
         provider.api_key = self.cfg.resolve_api_key(provider)
         system_prompt = settings.default_system_prompt
-        # 自我识别提示用的角色显示名（截图里的桌宠就是它自己）
-        pet_name = catalog.character_display_name(
+        # 自我识别提示用的角色显示名（截图里的桌宠就是它自己）；别名优先
+        pet_name = self.cfg.character_display_name(
             str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
         )
 
@@ -4089,14 +4089,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
     def _rename_character(self) -> None:
         """自定义当前角色的显示名（空输入 = 恢复默认目录名）。"""
         cid = str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
-        current = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
+        current = self.cfg.character_display_name(cid)
         name, ok = QInputDialog.getText(
             self, '重命名角色', f'给 {cid} 起个名字（留空恢复默认）：', text=current,
         )
         if not ok:
             return
         self.cfg.set_character_alias(cid, name)
-        shown = self.cfg.character_alias(cid) or catalog.character_display_name(cid)
+        shown = self.cfg.character_display_name(cid)
         self.show_bubble(f'角色名：{shown}')
 
     def rename_character(self) -> None:

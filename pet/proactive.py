@@ -609,7 +609,7 @@ class ProactiveScreenWatcher:
         """后台线程：发起大模型视觉请求，处理重试/熔断，并通过桥接信号在桌宠冒泡。"""
         from . import catalog, vision
 
-        pet_name = catalog.character_display_name(
+        pet_name = self.cfg.character_display_name(
             str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
         )
         try:
