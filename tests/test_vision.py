@@ -194,6 +194,8 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
         chat_settings=lambda: shared_settings,
         resolve_api_key=lambda p: "sk-resolved-secret",
         get=lambda k, d=None: d,
+        # Config.character_display_name：用户别名优先（回归：识屏链路曾直取默认名）
+        character_display_name=lambda cid: "小鲸鱼",
     )
     win._last_look_ts = 0.0
     win._look_busy = False
@@ -210,8 +212,8 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
     # 传递给 worker 的 provider 是快照，含有已解析的 key
     assert passed_provider.api_key == "sk-resolved-secret"
     assert passed_provider is not shared_provider
-    # 自我识别提示用的角色名一并传入 worker（字符串，可能为空）
-    assert isinstance(passed_pet_name, str)
+    # 自我识别提示用别名解析后的角色名
+    assert passed_pet_name == "小鲸鱼"
     # 共享对象未被污染改写
     assert shared_provider.api_key == "unresolved_or_empty"
 
