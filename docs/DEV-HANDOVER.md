@@ -11,47 +11,10 @@ AIGC:
 
 # dsh-pet 开发交接文档（DEV-HANDOVER）
 
-> 面向对象：接手本项目（含「语音报时」「节日提醒」定制功能）的开发者。
+> 面向对象：接手本项目（含「语音报时」定制功能）的开发者。
 > 目标：通读本文即可完成本地运行、改配置、加功能、跑测试、重新打包的全流程，不踩已知的坑。
-> 基线：上游 `main` @ `1b81fea`（#135 合并提交，内含 #134）。**已合并**的自有功能：语音报时 #118（`3cf70bc`）、语音报时 v2 #125（`eeb29bb`）、节日提醒 #127（`be9a6d0`）。
-> 上一轮（2026-09-17，节日动画 + 用户生日）：分支 `feat/festival-reminder-v2`，提交 `b79add5`，PR #131。
-> 本轮（2026-09-18，「歌词显示审计修复」）：分支 `feat/media-window-fallback`（从 `1ff3c39` 起，已 `merge origin/main`），
-> 9 个提交（`b79add5` … `6708091`）：自有修复见 `e6d5437`（33 files +1305/-203），承接上游 #134/#135 见 `6708091`。
-> 详见 `docs/PR-REPORT-LYRIC-DISPLAY-AUDIT-2026-09-18.md`（含根因、验证与合并口径）。
-> 生成日期：2026-09-17（本行于 2026-09-18 校准基线与本轮信息）。文档内的数字均为实测值，代码改动后请同步校准。
-
----
-
-## 〇、最近一轮：歌词显示审计修复（2026-09-18）
-
-用户现象：「歌词确实没有跟着显示，显示了一半就剩下歌名了。每次都是这样。」
-
-根因与修复（本地两批 + 与上游 #134/#135 合并）：
-
-1. **取词全军覆没（根因）**：系统代理被加速器打开但进程没在跑（实机 `ProxyEnable=1` → `127.0.0.1:33210` 无人监听），
-   `urllib` 仍照代理走 ⇒ QQ音乐 / lrclib / 网易云三个源全部 `ConnectionRefused` ⇒ 每首歌都被记成「无词」⇒ 气泡只剩歌名。
-   新增 `pet/http_util.py`（先按系统代理试，传输失败改直连并把结论固化在进程内），歌词、余额、识屏、AI 对话、
-   更新检查六处统一改走它。
-2. **显示层**：歌词每拍续期不再重置翻页（`_same_content`）——这是「只显示一半」的直接原因；锁宽真正生效
-   （`_locked_column`）；显示时长与 tick 解耦（`LYRIC_BUBBLE_MS=3000`，原先随 `POLL_MS` 缩到 1s 会闪）；
-   间奏空行保持上一句（`_lyric_for_index`，tick 与取词完成即时刷新两个入口都走它）；分页为空时回退原始文本。
-3. **选曲**：新增 `_pick_song`，歌名与歌手都必须匹配，同分优先非 Live/重制/伴奏（原先只校验歌手，
-   实机候选中紧跟「十年 (Live)」，取到现场版时间轴整首错位）。
-4. **气泡契约**：`PetWindow.show_bubble -> bool`（隐藏/被抑制/提醒占用 = False），多窗代理透传；
-   歌词控制器只在 True 时记账，不再把「没显示」当「已显示」。
-5. **菜单 / 配置 / 日志 / 采样**：暂停与切歌不再随歌词开关隐藏（改看 `now_playing.available()`）；
-   切歌直达播放器（原先绕歌词控制器，歌词关着时**静默无效**）；`music_player_paths` 与
-   `music_lyric_cache_limit` 接线生效；取词失败提升为 WARNING（同因只报一次）；多宠物空转降档
-   （0.3s → 1.2s）；删死接缝 `clear_cache` / `resume_playback` / `shutdown`。
-6. **与上游合并**：收下 #134 的「气泡跟随桌宠」（`_bubble_anchor`，拖桌宠时气泡不再停在原地）与
-   「上一首」菜单项、#135 的 psutil 进程预判 + 依赖声明 + `tests/test_runtime_dependencies.py` 守卫；
-   **不采纳**上游「每窗一条常驻采样线程 + `_playback_ready`」的第二套采样（本地已在 `now_playing` 内做
-   进程级单例 + 快照 + 空闲收摊 + 卡死摘牌），其 `shutdown()` 亦不需要。
-
-验证：定向回归 **507 passed / 2 skipped**；`ruff check pet/ tests/` 全绿；缺陷注入 **13/13** 变红。
-构建：`$env:PATH = 'D:\dsh-pet\.venv\Scripts;' + $env:PATH` 后执行
-`& .\scripts\build_onedir.ps1 -Variant webm-chat -SkipZip`（不挂 venv 会让 `python` 命中商店占位符 ⇒
-`make_icon failed: 9009`），安装到 `H:\dsh-pet-standalone-webm-chat`（旧目录先改名做回滚点）。
+> 基线：分支 `feat/voice-chime`，最新提交 `d3815b1 feat: 新增语音报时功能（voice_chime）`（上游基线 `20118c8 Merge pull request #114 from klxxya/fix/collision-perf`）。
+> 生成日期：2026-09-16。文档内的行数、用例数均为当日实测值，代码改动后请同步校准。
 
 ---
 
@@ -102,38 +65,31 @@ D:\dsh-pet\
 ├── requirements.txt / pyproject.toml / pytest.ini
 ├── run.bat                       # 本地源码启动脚本
 ├── dsh-pet-standalone-webm-chat.spec   # PyInstaller 规格（onedir）
-├── pet\                          # 应用源码（128 个 .py，含子包）
+├── pet\                          # 应用源码（112 个 .py，含子包）
 │   ├── __main__.py               # 入口：python -m pet
-│   ├── app.py                    # AppShell / PetInstance：进程级与每窗装配（2751 行）
-│   ├── window.py                 # 桌宠主窗口（组合根，4507 行，顶满行数预算红线 4507）
-│   ├── config.py                 # 配置读取/清洗/迁移/持久化（1436 行）
+│   ├── app.py                    # AppShell / PetInstance：进程级与每窗装配（2652 行）
+│   ├── window.py                 # 桌宠主窗口（组合根，4478 行，撞行数预算红线）
+│   ├── config.py                 # 配置读取/清洗/迁移/持久化（1390 行）
 │   ├── config_domains.py         # 配置域 facade（chat/agent_link/proactive/collision/menu）
-│   ├── modern_settings_dialog.py # 现代设置主对话框（2311 行，预算 2311，零余量）
+│   ├── modern_settings_dialog.py # 现代设置主对话框（2255 行，预算 2270）
 │   ├── settings_widgets.py       # 设置控件库（ToggleSwitch / SettingRow / ModernSelect …）
 │   ├── speech_bubble.py          # 气泡绘制与交互（1160 行）
 │   ├── speech_bubble_text.py     # 气泡分页/定位纯函数（272 行）
-│   ├── voice_chime.py            # ★ 语音报时纯逻辑层（460 行，零 Qt / 零 edge_tts）
-│   ├── voice_chime_service.py    # ★ 语音报时服务层（506 行，tick + 合成 + 播放）
-│   ├── voice_chime_settings.py   # ★ 语音报时设置页（250 行）
+│   ├── voice_chime.py            # ★ 语音报时纯逻辑层（459 行，零 Qt / 零 edge_tts）
+│   ├── voice_chime_service.py    # ★ 语音报时服务层（479 行，tick + 合成 + 播放）
+│   ├── voice_chime_settings.py   # ★ 语音报时设置页（245 行）
 │   ├── voice_chime_quotes.py     # ★ 台词/歌词纯数据库（96 行，中英各 40 条）
-│   ├── festival.py               # ★ 节日提醒纯逻辑层（395 行，零 Qt）
-│   ├── festival_data.py          # ★ 节日定义表 + 动态生日节日（158 行）
-│   ├── festival_animations.py    # ★ 节日 -> 动画映射（226 行，零第三方依赖；三级降级）
-│   ├── festival_service.py       # ★ 节日提醒服务层（279 行，30s tick + 气泡/语音/动画）
-│   ├── festival_settings.py      # ★ 节日提醒设置页（379 行；13 个配置键行 + 试听行）
 │   ├── context_menus\            # 右键菜单（registry.py 动作注册 + legacy/modern/fun_entry）
 │   ├── menu_templates\           # 菜单布局 JSON（modern-default-v1.json 为默认模板）
 │   ├── chat\                     # AI 对话子系统（Chat 版打包变体）
 │   └── persona_presets\          # 角色台词预设
-├── scripts\                      # 构建/校验脚本（build_onedir.ps1、slim_bundle.py 等 20 个）
+├── scripts\                      # 构建/校验脚本（build_onedir.ps1、slim_bundle.py 等 19 个）
 ├── packaging\                    # PyInstaller 入口 + Inno Setup 脚本（dsh-pet.iss）
-├── tests\                        # 129 个 py 测试文件 + tests\helpers\ 辅助模块 + 7 个 bridge js 测试
-├── docs\                         # 46 篇工程文档（含本文件）
+├── tests\                        # 123 个 py 测试文件 + 9 个 bridge js 测试
+├── docs\                         # 42 篇工程文档（含本文件）
 ├── assets\                       # 动画素材、图标
-└── dist-onedir\                  # 构建产物：dsh-pet-standalone-webm-chat\（目录）+ portable zip（146.53 MB，2026-09-16 18:06 生成）
+└── dist-onedir\                  # 构建产物（绿色版目录 + portable zip）
 ```
-
-**目录状态说明**：`build-onedir\`、`build\`、`dist\`、各 `__pycache__`、`.pytest_cache`、`.ruff_cache` 等可再生中间产物已在交付后清理（释放约 43.8 MB）；仅保留 `dist-onedir\` 交付包。重新构建时这些目录会自动再生。
 
 **profile 产物默认位置**：运行期配置与语音缓存位于 `%APPDATA%\dsh-pet-standalone-<variant>\`（例如 `%APPDATA%\dsh-pet-standalone-webm-chat\voice_chime_cache`）。
 
@@ -154,7 +110,7 @@ D:\dsh-pet\
 | 文件 | 职责要点 |
 |---|---|
 | `pet/__main__.py` | 入口，构造 `PetApp` 并进入 Qt 事件循环 |
-| `pet/app.py` | `PetInstance`（单窗装配）+ `AppShell`（进程级：托盘、多窗共享、配置、可选服务启停）。语音报时服务的懒创建/启停/收口都在这里（`_chime_wanted` / `_ensure_chime_service` / `_sync_chime_service`，1107-1130 行；菜单回调 `trigger_voice_chime_now` / `toggle_voice_chime`，2307-2319 行） |
+| `pet/app.py` | `PetInstance`（单窗装配）+ `AppShell`（进程级：托盘、多窗共享、配置、可选服务启停）。语音报时服务的懒创建/启停/收口都在这里（`_chime_wanted` / `_ensure_chime_service` / `_sync_chime_service`，约 1107-1131 行；菜单回调 `trigger_voice_chime_now` / `toggle_voice_chime` 约 2302-2314 行） |
 | `pet/window.py` | `PetWindow` 组合根：透明窗口、鼠标穿透、拖拽、动画切换、气泡位、碰撞钩子。**新功能优先拆控制器，不要往这里塞**（见第三章） |
 | `pet/config.py` | `Config` 类：默认值 dict、`reload()` 白名单、迁移、`set/get/save`。语音报时 11 键默认值在 693-703 行，reload 白名单在 913-923 行 |
 | `pet/modern_settings_dialog.py` | 现代设置主对话框：域导航（`_rebuild_domain_navigation`，1591 行起）、`SettingRow` 收集机制、`_write_config` 写回（2133 行起）。控件库/AI 设置页/菜单编辑器/主题 QSS 已拆出 |
@@ -227,21 +183,19 @@ modern_settings_dialog.py
 
 ## 三、架构红线与开发约束
 
-> 这些规则**由测试机器化守卫**，违反即本地/CI 直接红。对应测试：`tests/test_architecture.py`（220 行，7 个用例）。
+> 这些规则**由测试机器化守卫**，违反即本地/CI 直接红。对应测试：`tests/test_architecture.py`（213 行，7 个用例）。
 
 ### 3.1 行数预算（绊线，不是红线）
 
 | 文件 | 预算常量 | 当前预算 | 当前实测 |
 |---|---|---|---|
-| `pet/window.py` | `WINDOW_PY_LINE_BUDGET` | **4507** | 4507 |
-| `pet/modern_settings_dialog.py` | `MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET` | **2311** | 2311 |
-
-> `window.py` 预算于 2026-09-15 由 4478 上调到 4507：issue #98「点击桌宠导致全局复制粘贴失效」修复（`_apply_windows_no_activate()` 在 `showEvent` 置位 `WS_EX_NOACTIVATE`，window.py +29，原生样式操作本体在 `pet/platform_win.py`）。
+| `pet/window.py` | `WINDOW_PY_LINE_BUDGET` | **4478** | 4478 |
+| `pet/modern_settings_dialog.py` | `MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET` | **2270** | 2255 |
 
 **触发预算时的正确动作（优先级从高到低）**：
 
 1. **首选拆分**：新功能拆到独立模块/控制器（`window.py` 见 `docs/WINDOW_PY_SPLIT_GUIDE.md`；设置页拆到 `settings_*` / `chat/*` / 独立 `*_settings.py`）。
-2. **实在拆不动**：把预算常量校准到新实测值，**带日期 + 理由注释**，并在 PR 说明。例如 `modern_settings_dialog.py` 于 2026-09-15 因「语音报时设置页接入」由 2018 上调到 2270（实测 2255）；`window.py` 于同日因 issue #98 焦点修复由 4478 上调到 4507（实测 4507）。
+2. **实在拆不动**：把预算常量校准到新实测值，**带日期 + 理由注释**，并在 PR 说明。例如 `modern_settings_dialog.py` 于 2026-09-15 因「语音报时设置页接入」由 2018 上调到 2270（实测 2255）。
 3. **禁止反向优化**：靠压缩行宽 / 合并语句 / 删注释把行数塞回预算内——比超预算更伤维护性。
 
 ### 3.2 依赖方向
@@ -329,9 +283,9 @@ modern_settings_dialog.py
 
 | 文件 | 行数 | 层 | 职责 |
 |---|---|---|---|
-| `pet/voice_chime.py` | 460 | 纯逻辑 | 配置清洗、调度判定、槽位幂等、报时/气泡文本、台词批次轮换、edge 参数与缓存键。**零 Qt、零 edge_tts**，可脱离 GUI 直接单测 |
-| `pet/voice_chime_service.py` | 506 | 服务 | 20s tick、预合成、`edge-tts` 后台合成、`_AudioBridge` 信号桥、`QMediaPlayer` 播放、气泡落地、缓存裁剪、降级 |
-| `pet/voice_chime_settings.py` | 250 | UI | 设置页（全部控件包 `SettingRow`），`apply_to_config` / `refresh_from_config` |
+| `pet/voice_chime.py` | 459 | 纯逻辑 | 配置清洗、调度判定、槽位幂等、报时/气泡文本、台词批次轮换、edge 参数与缓存键。**零 Qt、零 edge_tts**，可脱离 GUI 直接单测 |
+| `pet/voice_chime_service.py` | 479 | 服务 | 20s tick、预合成、`edge-tts` 后台合成、`_AudioBridge` 信号桥、`QMediaPlayer` 播放、气泡落地、缓存裁剪、降级 |
+| `pet/voice_chime_settings.py` | 245 | UI | 设置页（全部控件包 `SettingRow`），`apply_to_config` / `refresh_from_config` |
 | `pet/voice_chime_quotes.py` | 96 | 数据 | 中英台词/歌词库各 40 条（`CHINESE_QUOTES` / `ENGLISH_QUOTES`），纯数据零依赖 |
 
 ### 5.1 六种调度与「槽位幂等」
@@ -384,8 +338,6 @@ _on_tick(now)
 - 缓存键 `cache_key(text, cfg)` = `sha1("文本|音色|+r%|+pHz")[:16]`，**只按语音文本**计算，因此同一时刻的气泡文本变化不会污染语音缓存。
 - 两者在同一时刻调用同一条 `pick_quote`，所以**语音与气泡台词一致**，仅时间表示不同。
 
-> **v2 定稿点（本项目现状）**：气泡文本（`build_chime_bubble_text` / `build_bubble_sentence`）与语音文本（`build_chime_text` / `build_chime_sentence`）**彻底解耦**——气泡走「中文时段词 + 24 小时制阿拉伯数字」（如 `现在晚上 18:25`），语音走中文数字口播（如 `现在是上午九点整`），彻底避免「下午一点05分」这类阿拉伯数字与中文数字混排；缓存键只认语音文本，气泡文案调整不会污染已合成语音。
-
 ### 5.5 台词/歌词：8 小时整批轮换 + 周期内顺序轮换
 
 - 常量：`QUOTE_ROTATION_HOURS = 8`；`_QUOTE_SLOTS_PER_DAY = 3`；`_QUOTE_BATCHES_PER_DAY = 3`。
@@ -393,8 +345,6 @@ _on_tick(now)
 - `quote_slot_serial(now)`：全局 8 小时周期序号 = `date.toordinal() * 3 + hour // 8`，相邻周期序号恰差 1（含跨天 16-24 → 次日 0-8 连续），取模即顺序换批、跨天不跳乱。
 - `chime_index_in_period(now, cfg)`：当前周期内的第几次报时（0 起，从周期起点逐分钟回溯统计命中数）。
 - `pick_quote(now, cfg)`：**批次 = 库的第 `serial % 批数` 批；条目 = 批次内第 `index % 批长` 条**。即「每 8 小时整体换一批，批内按报时次序轮换」。
-
-> **v2 定稿点**：早期实现语义为「每 8 小时顺序取下一句」（周期切换与批内轮换纠缠，语义含混）；v2 明确为**整批换批 + 批内顺序轮换**，由 `split_quote_batches`（按序均分 3 批）/ `quote_slot_serial`（全局 8 小时周期序号）/ `chime_index_in_period`（周期内第几次报时）三个纯函数合力实现，可脱离 GUI 直接单测。实测：源码版连续 12 次报时台词全不同、相邻零重复；打包 exe 同场景指纹与源码版一致。
 - 语言选择：`voice` 以 `zh` 开头用中文库，否则用英文库。
 - 自定义：`voice_chime_custom_quotes_zh/en` 非空时**整体替换**对应语言内置库（单条上限 120 字，去控制字符、去重保序）；只填 1 条时仅 1 批，等价于固定台词。
 - 新增台词只需往 `voice_chime_quotes.py` 的元组里加行，**无需登记任何配置**（批次数由库长自动均分）。
@@ -430,7 +380,7 @@ _on_tick(now)
 
 ### 6.1 组织方式
 
-- `tests/` 下 125 个 `.py` 测试文件 + `tests/helpers/` 辅助模块（`foreground_holder.py`，另含 7 个 bridge 的 JS 测试）；`pytest.ini` 指定 `testpaths = tests`。
+- `tests/` 下 123 个 `.py`（另含 bridge 的 JS 测试）；`pytest.ini` 指定 `testpaths = tests`。
 - `tests/conftest.py`（275 行）提供 autouse fixture：**静音音频**（测试不出声）、模态框直通、`no-real-dsh`（禁止真实拉起外部 dsh）、Qt 资源收口（防 offscreen 泄漏）等。
 - 打包与桥接验证脚本另存于 `scripts/`（如 `verify_bundle_qt.py`）、`tests/` 内的 smoke/手动校验脚本（如 `manual_ssl_proxy_check.py`，代理/证书诊断用）。
 
@@ -438,13 +388,12 @@ _on_tick(now)
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| `tests/test_voice_chime.py`（937 行） | 57 个 def / 参数化后 149 用例 | 11 键默认值与清洗、六种调度数学、`chime_slot` 幂等、`build_chime_text`/`build_chime_bubble_text` 解耦、8 小时批次轮换（`split_quote_batches`/`quote_slot_serial`/`chime_index_in_period`/`pick_quote`）、自定义台词清洗、预合成状态机、缓存裁剪、edge 参数格式化与 `cache_key` |
-| `tests/test_voice_chime_service.py`（444 行） | 15 | 服务层：tick 幂等、预合成消费顺序、失败降级、缓存裁剪节流 |
-| `tests/test_config_schema.py`（209 行） | 5 | 三处登记护栏：`DEFAULTS_SNAPSHOT`、`RELOAD_WHITELIST_SNAPSHOT`、`SPECIAL_CASED_KEYS`，代表用例 `test_every_defaults_key_is_whitelisted_or_special_cased` |
-| `tests/test_architecture.py`（220 行） | 7 | 纯逻辑零 Qt、依赖方向、窗口私有面冻结、`window.py` / `modern_settings_dialog.py` 行数预算、孤儿簇守卫 |
+| `tests/test_voice_chime.py`（937 行） | 57 | 11 键默认值与清洗、六种调度数学、`chime_slot` 幂等、`build_chime_text`/`build_chime_bubble_text` 解耦、8 小时批次轮换（`split_quote_batches`/`quote_slot_serial`/`chime_index_in_period`/`pick_quote`）、自定义台词清洗、预合成状态机、缓存裁剪、edge 参数格式化与 `cache_key` |
+| `tests/test_config_schema.py` | 5 | 三处登记护栏：`DEFAULTS_SNAPSHOT`、`RELOAD_WHITELIST_SNAPSHOT`、`SPECIAL_CASED_KEYS`，代表用例 `test_every_defaults_key_is_whitelisted_or_special_cased` |
+| `tests/test_architecture.py`（213 行） | 7 | 纯逻辑零 Qt、依赖方向、窗口私有面冻结、`window.py` / `modern_settings_dialog.py` 行数预算、孤儿簇守卫 |
 | `tests/test_menu_layout.py`（2108 行） | 65 | 菜单模板节点顺序、动作 resolve、populate 标签（含语音报时两项） |
 | `tests/test_desktop_pet_features.py`（3118 行） | 94 | 桌宠能力集成（含菜单标签断言） |
-| `tests/test_bundle_slim.py`（202 行） | 10 | `plan_removals` / `verify_no_live_reference` / `verify_required` / dry-run / 实际应用 / 拒绝越界 |
+| `tests/test_bundle_slim.py` | 10 | `plan_removals` / `verify_no_live_reference` / `verify_required` / dry-run / 实际应用 / 拒绝越界 |
 
 ### 6.3 运行方式
 
@@ -463,11 +412,10 @@ python -m compileall pet packaging scripts
 
 ### 6.4 已知环境性 flaky 与测试纪律
 
-- **`test_drag_move_coalescing.py::test_drag_coalesce_timer_is_about_120hz`（拖拽合并定时器）**：断言 `1000 / interval >= 120`（即 interval ≤ 8ms 档），环境调度抖动下 Qt 报 7ms / 8ms 边界值会假红（与语音报时无关）。**已在 `origin/main`（上游 `6626e4e`）独立 worktree 复现同样失败**，确认为既有环境性 flaky、非本分支引入；重跑单测确认即可，不要为它改产品逻辑。
+- **`test_drag_move_coalescing`（拖拽合并定时器）**：环境调度抖动会假红（历史现象为 8ms vs 7ms 定时精度，与语音报时无关）。重跑单测确认即可，不要为它改产品逻辑。
 - 写时序测试的硬纪律（`AGENTS.md`）：用事件同步（Event/Condition）+ 宽预算，禁止固定 `sleep` 猜时序、禁止赌目录枚举顺序、禁止用 `monotonic` 绝对值做回拨算术。
 - CI 中 webm 生命周期族、低优预热族被**隔离出主套件**并单独复跑（`.github/workflows/pr-test.yml`），避免概率性红污染 PR 门禁。
-- 最近实测记录（2026-09-17，`feat/festival-reminder-v2` @ `112a327`）：全量 **2376 passed / 10 skipped / 0 failed**（CI 三平台全绿）、`ruff` 干净；节日族（本轮新增 17 用例）+ 架构/配置/菜单/报时守卫族 226 passed；`.\run-gates.ps1` 汇总 ALL GATES PASSED。
-- 上一轮实测记录（2026-09-16，`feat/voice-chime-v2`，已合入上游 `main` `6626e4e`）：全量 **2181 passed / 8 skipped**（无 failed）、`ruff` 干净；语音报时族 `test_voice_chime.py`（参数化 149 用例）+ `test_voice_chime_service.py`（15 用例）全绿。对照上一轮（2026-09-15，`feat/voice-chime`）：全量 2166 passed / 7 skipped / 1 failed（即上述 flaky）。更早基线：`main`（PR #76 合并后，2026-09-06）为 1322 passed / 7 skipped。
+- 最近实测记录（2026-09-15，`feat/voice-chime` 分支）：全量 **2166 passed / 7 skipped / 1 failed**（即上述 flaky）；语音报时相关族 **161 passed**；`ruff` 干净。对比基线：`main`（PR #76 合并后，2026-09-06）为 1322 passed / 7 skipped。
 
 ---
 
@@ -482,7 +430,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 ```
 
 - 入口与规格：`packaging/pet_entry.py`（Chat 版）、`packaging/pet_entry_no_chat.py`（无 Chat 版）、`dsh-pet-standalone-webm-chat.spec`。
-- 产物：`dist-onedir\dsh-pet-standalone-webm-chat\`（目录）+ `dist-onedir\dsh-pet-standalone-webm-chat-portable.zip`（绿色版，**146.53 MB**，2026-09-16 18:06 生成；同一轮 `slim_bundle.py` 瘦身前为 176.2 MB）。
+- 产物：`dist-onedir\dsh-pet-standalone-webm-chat\`（目录）+ `dist-onedir\dsh-pet-standalone-webm-chat-portable.zip`（绿色版，实测约 146.5 MB）。
 - 其他平台/变体：`scripts/build_linux.sh`、`scripts/build_macos.sh`；GIF 变体用 `scripts/convert_to_gif.py` 同步生成；安装包用 Inno Setup 脚本 `packaging/dsh-pet.iss`（`/D` 参数选变体，免管理员）。
 - **onedir 特性**：运行期零解压，**不产生 `_MEI` 临时缓存**；历史 onefile 版遗留缓存可用 `scripts/cleanup_mei_cache.py` 检查/清理。
 
@@ -503,7 +451,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 
 ### 7.3 `slim_bundle.py` 瘦身白名单
 
-- **删除项（`REMOVAL_GLOBS`）**：Qt Quick/Qml、VirtualKeyboard、QtPdf、`opengl32sw.dll`、非 `zh`/`en` 的 `.qm` 翻译、PIL 的 AVIF 插件等（最近一轮实测移除 **124 个文件 / 53.03 MB**，zip 176.2 MB → 146.53 MB）。
+- **删除项（`REMOVAL_GLOBS`）**：Qt Quick/Qml、VirtualKeyboard、QtPdf、`opengl32sw.dll`、非 `zh`/`en` 的 `.qm` 翻译、PIL 的 AVIF 插件等（实测移除 124 个文件 / 约 53 MB）。
 - **必需项（`REQUIRED_GLOBS`）**：删除后逐一复检仍在。
 - **依赖闭包校验**：用 `pefile` 解析被删 DLL 的导入关系，确认无「活引用」（`verify_no_live_reference`），避免删掉仍被加载的库。
 - **安全兜底**：默认 dry-run（`plan_removals` 只输出计划），越界路径直接拒绝；`tests/test_bundle_slim.py` 的 10 个用例覆盖以上全部行为。
@@ -524,7 +472,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 
 ### 8.1 分支与提交
 
-- 命名：`feat/<slug>`、`fix/<slug>`、`docs/<slug>`；从 `main` 起分支。示例：`feat/voice-chime-v2`（承接已合并的 `feat/voice-chime`，见 8.2）。
+- 命名：`feat/<slug>`、`fix/<slug>`、`docs/<slug>`；从 `main` 起分支。示例：`feat/voice-chime`。
 - 提交信息：`<type>: <中文描述>`，必要时补范围，如
   - `feat: 新增语音报时功能（voice_chime）`
   - `fix: 语音报时预合成气泡文本残留`
@@ -537,8 +485,6 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 3. push 到自己的 fork，向上游 `main` 开 PR；
 4. PR 描述必须包含：变更点清单、验证证据（命令 + 结果数字）、风险门与回滚方式；
 5. 合并前阅读 `docs/PR-MERGE-LESSONS-2026-09-12.md`：叠放 PR 在父 PR squash 后的冲突、两个 PR 合并后才越线的预算/红线、时序测试写法。
-
-> **本仓库当前 PR 状态（2026-09-17）**：语音报时 #118（`3cf70bc`）、语音报时 v2 #125（`eeb29bb`）、节日提醒 #127（`be9a6d0`）以及 #128/#129/#130 均已合并。**注意 #124 本身未合并**——它被上游以 #125（`eeb29bb`，内容同、提交不同）接管落 main，这是"叠放 PR 在父 PR squash 后冲突"的已知陷阱（见教训 1）。当前 open 的自有 PR：[#131](https://github.com/MerZlin/dsh-pet-indesktop/pull/131)（`feat/festival-reminder-v2` @ `1ca34af`，承接 #127，11 files +844/-11）。后续同类改动沿用这一模式：**父 PR 合并后新建承接分支 + 承接 PR，PR 正文写明与前一 PR 的承接关系**。
 
 ### 8.3 PR 报告文档写法与存放位置
 
@@ -574,7 +520,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 3. **设置页控件必须包 `SettingRow`**：普通布局里的按钮在打包版**不可见**；且 `SettingRow` 的键在 `objectName`（`settingRow_<key>`），校验收集性要用 `objectName().startswith("settingRow_")`，不要按属性 `key` 查。
 4. **`modern_settings_dialog.py` 顶层禁止 import `pet.chat`**：no-chat 变体会 exclude `pet.chat`，顶层 import 会让设置界面整体打不开。
 5. **菜单动作四件套同步**：registry + 模板 JSON + 两处测试断言，缺一即红。
-6. **`window.py`「只许瘦不许胖」**：当前 4507 行已顶满预算（4507），下一个功能必须先拆控制器，再校准预算（并写日期+理由）。
+6. **`window.py`「只许瘦不许胖」**：当前 4478 行已顶满预算，下一个功能必须先拆控制器，再校准预算（并写日期+理由）。
 7. **纯逻辑层禁 Qt / 禁 edge_tts**：`voice_chime.py`、`voice_chime_quotes.py` 不得 import Qt 与 edge_tts；`edge-tts` 只在服务层惰性导入（缺失即降级为纯气泡）。
 8. **跨线程纪律**：`_TTSWorker` 中禁止触碰 QWidget/QMediaPlayer；一律经 `_AudioBridge` queued 信号回 GUI 线程。
 9. **预合成状态的清理时机**：`_consume_precache` 会清空整组状态，气泡文本必须先取后用（历史缺陷点）。
@@ -586,17 +532,14 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 15. **变体差异**：Chat 版含 `pet.chat`，no-chat 版 exclude；新功能若依赖 chat 需在两条链路都验证。
 16. **历史遗留清理**：旧 onefile 的 `_MEI*` 缓存、安装版旧自启项需 `scripts/cleanup_mei_cache.py` 等脚本清理，否则会出现「改了没生效」的错觉。
 17. **ruff 仅 F 级**：格式/风格问题不会让 CI 变红，别指望 CI 帮你抓格式。
-18. **环境性 flaky**：`test_drag_move_coalescing.py::test_drag_coalesce_timer_is_about_120hz` 等定时精度用例偶发假红（Qt 7ms vs 8ms），已在 `origin/main` 复现，重跑确认即可，不要改产品逻辑。
-19. **可再生中间产物及时清理**：`build-onedir/`、`build/`、`dist/`、`__pycache__/`、`.pytest_cache/`、`.ruff_cache/` 交付后应清理（本轮释放约 43.8 MB），仅保留 `dist-onedir/` 交付包与运行中的用户实例数据。
+18. **环境性 flaky**：`test_drag_move_coalescing` 等定时精度用例偶发假红，重跑确认即可。
 
 ### 9.2 后续待办
 
 | 优先级 | 事项 | 说明 / 切入点 |
 |---|---|---|
-| 高 | 承接 PR [#131](https://github.com/MerZlin/dsh-pet-indesktop/pull/131) 的评审与 CI 跟进 | 当前 open（`feat/festival-reminder-v2` @ `1ca34af` → `main`，11 files +844/-11，承接 #127）；合并后再有增量改动时，按 8.2 重新起承接分支 + 承接 PR |
-| 高 | `window.py` 增量拆分 | 预算已顶满（4507）；按 `docs/WINDOW_PY_SPLIT_GUIDE.md` 域地图拆控制器 |
-| 高 | `modern_settings_dialog.py` 再拆分 | 预算与实测同为 2311（**零余量**）；新设置页一律先拆到独立 `*_settings.py` |
-| 中 | 节日动画素材缺口补齐（复活节/母亲节/父亲节） | 补素材后从 `festival_animations.KNOWN_GAPS` 移除，对应用例会变红提醒 |
+| 高 | `window.py` 增量拆分 | 预算已顶满（4478）；按 `docs/WINDOW_PY_SPLIT_GUIDE.md` 域地图拆控制器 |
+| 高 | `modern_settings_dialog.py` 再拆分 | 余量仅 15 行（2255/2270）；新设置页应先拆到独立 `*_settings.py` |
 | 中 | 离线音色兜底（候选：Windows SAPI / pyttsx3） | 当前 edge-tts 不可用时仅气泡；可评估本地离线音色作为第二合成后端 |
 | 中 | 任务栏隐藏模式下的报时行为验证 | 隐藏/自动隐藏场景下气泡与播放位置的体验待专项验证 |
 | 中 | 报时缓存管理入口 | 设置页可加「清理语音缓存」按钮（当前仅自动裁剪 200 文件） |
@@ -619,7 +562,7 @@ python -m pet                        # 或 run.bat
 # 测试与检查
 $env:QT_QPA_PLATFORM = "offscreen"
 python -m pytest -q
-python -m pytest tests\test_voice_chime.py tests\test_voice_chime_service.py -q   # 语音报时纯逻辑 + 服务层（149 + 15 用例）
+python -m pytest tests\test_voice_chime.py -q
 python -m ruff check pet/ tests/
 python -m compileall pet packaging scripts
 
@@ -638,16 +581,15 @@ explorer "%APPDATA%\dsh-pet-standalone-webm-chat"
 | 语音报时 11 键默认值 | `pet/config.py` 693-703 行 |
 | 语音报时 reload 白名单 | `pet/config.py` 913-923 行 |
 | 配置键三处登记护栏 | `tests/test_config_schema.py`（`DEFAULTS_SNAPSHOT` / `RELOAD_WHITELIST_SNAPSHOT`） |
-| 语音报时纯逻辑总入口 | `pet/voice_chime.py`（`normalize_chime_config` 226 行、`chime_slot` 299 行、`build_chime_text` 314 行、`quote_slot_serial` 329 行、`chime_index_in_period` 339 行、`split_quote_batches` 361 行、`pick_quote` 382 行、`build_chime_bubble_text` 417 行、`build_bubble_sentence` 427 行、`cache_key` 455 行） |
-| 语音报时服务 | `pet/voice_chime_service.py`（常量 126-130 行、`_on_tick` 213 行、`_maybe_precache` 237 行、`_consume_precache` 295 行、`_play_and_bubble` 394 行、`_bubble` 430 行、`_prune_cache` 487 行） |
+| 语音报时纯逻辑总入口 | `pet/voice_chime.py`（`normalize_chime_config` 226 行、`chime_slot` 299 行、`build_chime_text` 313 行、`build_chime_bubble_text` 416 行、`pick_quote` 381 行、`cache_key` 454 行） |
+| 语音报时服务 | `pet/voice_chime_service.py`（常量 125-127 行、`_on_tick` 194 行、`_maybe_precache` 218 行、`_bubble` 403 行、`_prune_cache` 460 行） |
 | 语音报时设置页 | `pet/voice_chime_settings.py` |
 | 语音报时设置页接入 | `pet/modern_settings_dialog.py` 928-931（构造）、1777-1791（域收集）、2133-2135（写回）、2221（试听） |
-| 语音报时服务启停 | `pet/app.py` 1107-1130（`_chime_wanted` / `_ensure_chime_service` / `_sync_chime_service`）、2307-2319（`trigger_voice_chime_now` / `toggle_voice_chime`） |
+| 语音报时服务启停 | `pet/app.py` 1107-1131（`_chime_wanted` / `_ensure_chime_service` / `_sync_chime_service`）、2302-2314（`trigger_voice_chime_now` / `toggle_voice_chime`） |
 | 菜单动作注册 | `pet/context_menus/registry.py` 125-133、219-224 行 |
 | 菜单模板节点 | `pet/menu_templates/modern-default-v1.json` |
-| 行数预算常量 | `tests/test_architecture.py`（`WINDOW_PY_LINE_BUDGET` = 4507 / `MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET` = 2311） |
+| 行数预算常量 | `tests/test_architecture.py`（`WINDOW_PY_LINE_BUDGET` / `MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET`） |
 | 构建脚本 | `scripts/build_onedir.ps1`、`scripts/slim_bundle.py`、`scripts/check_bundle_encoding.py`、`scripts/verify_bundle_qt.py` |
-| 交付包与 PR | `dist-onedir\dsh-pet-standalone-webm-chat-portable.zip`（146.53 MB，2026-09-16 18:06）；[PR #131](https://github.com/MerZlin/dsh-pet-indesktop/pull/131)（承接 #127；#118/#125/#127 均已合并） |
 | 相关工程文档 | `docs/ONEDIR_PACKAGING.md`、`docs/SETTINGS-CHANGE-GATES.md`、`docs/WINDOW_PY_SPLIT_GUIDE.md`、`docs/PR-REPORT-VOICE-CHIME-2026-09-15.md`、`docs/PR-MERGE-LESSONS-2026-09-12.md` |
 
 *（内容由AI生成，仅供参考）*

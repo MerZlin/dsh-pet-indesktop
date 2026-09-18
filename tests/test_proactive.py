@@ -629,7 +629,7 @@ class TestPhase3VisionLinkAndDryRun:
             def read(self, *args):
                 return json.dumps(fake_resp).encode("utf-8")
 
-        monkeypatch.setattr(vision.http_util, "urlopen", lambda *a, **kw: FakeResponse())
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: FakeResponse())
 
         from pet.chat.models import ProviderConfig
         p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-123"})
@@ -1247,7 +1247,7 @@ class TestProactiveBudgetPerRequest:
             attempts.append(1)
             raise urllib.error.HTTPError(req.full_url, 429, "Too Many", {}, None)
 
-        monkeypatch.setattr(vision.http_util, "urlopen", fake_urlopen)
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
         # 去重试 sleep，避免测试被 2 秒拖慢
         monkeypatch.setattr(vision.time, "sleep", lambda s: None)
 
@@ -1273,7 +1273,7 @@ class TestProactiveBudgetPerRequest:
             calls.append(1)
             raise AssertionError("预算耗尽后不应发起请求")
 
-        monkeypatch.setattr(vision.http_util, "urlopen", fake_urlopen)
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
         p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-123"})
         with pytest.raises(vision.VisionError) as exc_info:
             vision._post_vision_request(b"fake-jpeg", "code.exe | t", "sys", p, consume_budget=lambda: False)

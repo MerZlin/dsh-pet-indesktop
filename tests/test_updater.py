@@ -80,7 +80,7 @@ def test_latest_release_parses_github_api(monkeypatch):
         }).encode()
         return io.BytesIO(body)
 
-    monkeypatch.setattr(updater.http_util, "urlopen", fake_ok)
+    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_ok)
     release = updater.latest_release()
     assert release["version"] == "3.0.1"  # v 前缀被剥离
     assert release["notes"] == "release notes"
@@ -108,7 +108,7 @@ def test_latest_release_falls_back_to_update_json(monkeypatch):
         }).encode()
         return io.BytesIO(body)
 
-    monkeypatch.setattr(updater.http_util, "urlopen", fake_urlopen)
+    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
     release = updater.latest_release()
     assert release is not None
     assert release["version"] == "3.0.1"
@@ -124,7 +124,7 @@ def test_latest_release_all_sources_fail(monkeypatch):
     def fake_fail(*args, **kwargs):
         raise urllib.error.URLError("boom")
 
-    monkeypatch.setattr(updater.http_util, "urlopen", fake_fail)
+    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_fail)
     assert updater.latest_release() is None
 
 

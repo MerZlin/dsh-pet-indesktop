@@ -109,10 +109,6 @@ class WindowFeatureGateMixin:
         的情况，导致功能再也起不来。
         """
         enabled = bool(self.cfg.get("music_lyric_enabled", False))
-        # 缓存上限（music_lyric_cache_limit）以前只在 config 里登记、从没人读：
-        # 顺手在这里接上，改配置即刻生效。
-        from . import music_lyric
-        music_lyric.set_cache_limit(self.cfg.get("music_lyric_cache_limit"))
         if not enabled and self._music_lyric is None:
             return  # 从未启用过：不为一个关着的功能白养一个定时器
         controller = self.install_music_lyric()

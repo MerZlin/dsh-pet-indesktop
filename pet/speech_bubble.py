@@ -347,7 +347,6 @@ class PetSpeechBubble(QFrame):
         )
         self._content_kind = "text"
         self._raw_text = ""
-        self._subtitle_text = ""
         # 多行模式：保留调用方写好的换行（如"标题一行 + 内容一行"）。
         # 由 show_text 的 subtitle 是否有内容推导，避免为它增加公开参数。
         self._multi_line = False
@@ -355,10 +354,6 @@ class PetSpeechBubble(QFrame):
         self._title_first = False
         # 本次显示是否已经锁过宽度（同一首歌的后续刷新沿用同一宽度）。
         self._width_locked = False
-        # 锁宽用的列宽基准：本首歌词第一句量出的列宽，后续句子一律沿用它。
-        self._locked_column: int | None = None
-        # 上次实际生效的隐藏时长（多页气泡会被拉长；续期时沿用同一个值）。
-        self._effective_duration_ms = 0
         self._source_pixmap = QPixmap()
         self._pet_scale: float | None = None
         self._image_scale: float = 1.0
@@ -570,28 +565,17 @@ class PetSpeechBubble(QFrame):
         # show_text 覆盖这里，视觉上文字还在，但按钮已被 teardown。
         if self._interactive_active and not interactive:
             return
-        subtitle = str(subtitle or "").strip()
-        width_locked = bool(width_locked) and bool(title_first)
-        # 内容完全没变（歌词每秒续期就是这种）：只续隐藏计时器，**不重建、不重置翻页**。
-        # 否则每拍都 `_reset_paging()` + 从第一页重排，页码计时器（≥2500ms）永远等不到，
-        # 多页文本永远只画第一页（实机表现为"歌词只显示一半"）。
-        if self._same_content(text, subtitle, title_first, width_locked, pet_scale):
-            self._hide_timer.start(max(500, int(getattr(self, "_effective_duration_ms", duration_ms))))
-            self.show()
-            if not _MAC:
-                self.raise_()
-            return
         self._content_kind = "text"
         self._raw_text = text
-        self._subtitle_text = subtitle
         # 带 subtitle 的气泡是"标题 + 内容"结构，正文里可能自带换行，
         # 必须保留（否则标题与首行会被折行拼接）。
-        self._multi_line = bool(subtitle)
+        self._multi_line = bool(str(subtitle or "").strip())
         self._title_first = bool(title_first)
-        self._width_locked = width_locked
+        self._width_locked = bool(width_locked) and self._title_first
         self._source_pixmap = QPixmap()
         self._pet_scale = pet_scale
         self._reset_paging()
+        subtitle = str(subtitle or "").strip()
         if subtitle:
             self._subtitle_label.setText(subtitle)
             self._subtitle_label.show()
@@ -642,17 +626,11 @@ class PetSpeechBubble(QFrame):
             # 自适应列宽：短文案维持 248px，长文案逐步放宽到 360px 上限
             # （bubble_column_for_text）。审批/提问气泡有自己的布局（按钮行 +
             # 强制单页展示），保持既有列宽，不受本项影响。
-            # 歌词（title_first）**锁定本首歌的列宽基准**：列宽原本按每句长度算，
-            # 会让气泡逐句变宽变高、左右上下跳；`width_locked` 从第二句起沿用第一句
-            # 量出的列宽（切歌时控制器会把 width_locked 置回 False 重新量）。
-            if self._title_first and self._width_locked and self._locked_column:
-                column = self._locked_column
-            elif interactive or sticky:
-                column = BUBBLE_TEXT_COLUMN
-            else:
-                column = self._column_for_text(text, anchor_rect)
-                if self._title_first:
-                    self._locked_column = column
+            column = (
+                BUBBLE_TEXT_COLUMN
+                if interactive or sticky
+                else self._column_for_text(text, anchor_rect)
+            )
             # 长文本分页：每页不超过 bubble_max_lines 行，自动翻页直到全文展示完，
             # 底部显示圆点页码（● ○ ○）。每页停留按该页字数自适应（首页 ×2、
             # 末页多压一拍回首页停顿），总时长相应扩展。
@@ -663,10 +641,6 @@ class PetSpeechBubble(QFrame):
                 bubble_max_lines(text, keep_breaks=self._multi_line),
                 keep_breaks=self._multi_line,
             )
-            if not pages:
-                # 规范化后为空（如 "***"/"###"）：回退到原始文本单页，别把正文留空
-                # （否则只剩标题，用户看到的就是"歌词没了"）。
-                pages = [text]
             display_text = pages[0] if pages else ""
             if len(pages) > 1 and not sticky and not interactive:
                 dwells = page_dwells_ms(pages)
@@ -685,11 +659,12 @@ class PetSpeechBubble(QFrame):
             # 固定尺寸按真正会绘制的行计算（所有页里最长的一行 + 行数最多的一页），
             # 翻页后 wordWrap=False 也不会裁字；详见 bubble_label_size 的说明。
             if self._title_first and self._width_locked:
-                # 锁宽：**宽度就取本首歌词的列宽基准**（min_width=column 会让结果恒为
-                # column）。原实现只把 min_width 抬到 248，实际宽度仍是
-                # min(column, widest+slack) ⇒ 长句短句宽度不同、气泡照样左右跳。
+                # 锁宽：按整栏宽排版，避免逐句改宽导致气泡左右跳。
                 self.label.setFixedSize(
-                    bubble_label_size(metrics, pages, column, min_width=column)
+                    bubble_label_size(
+                        metrics, pages, max(column, TITLE_FIRST_COLUMN),
+                        min_width=TITLE_FIRST_COLUMN,
+                    )
                 )
             else:
                 self.label.setFixedSize(bubble_label_size(metrics, pages, column))
@@ -702,27 +677,7 @@ class PetSpeechBubble(QFrame):
             # 审批等需主动关闭的气泡：不启动自动隐藏，由上层 dismiss() 收尾
             self._hide_timer.stop()
         else:
-            # 记住本次实际用的时长：多页气泡会被拉长，续期时必须沿用同一个值，
-            # 否则下一拍按基准时长重启计时器会把还在翻页的气泡提前藏掉。
-            self._effective_duration_ms = int(duration_ms)
             self._hide_timer.start(max(500, int(duration_ms)))
-
-    def _same_content(self, text: str, subtitle: str, title_first: bool,
-                      width_locked: bool, pet_scale) -> bool:
-        """本次内容是否与当前正在显示的一模一样（歌词每秒续期就是这种）。
-
-        只在"同一种气泡、已可见、文本/标题/排版参数都没变"时才算相同——
-        相同就只续时，不重建、不重置翻页（见调用点说明）。
-        """
-        if self._content_kind != "text" or not self.isVisible() or not self._raw_text:
-            return False
-        return (
-            text == self._raw_text
-            and subtitle == self._subtitle_text
-            and bool(title_first) == bool(self._title_first)
-            and bool(width_locked) == bool(self._width_locked)
-            and pet_scale == self._pet_scale
-        )
 
     def _setup_buttons(self, buttons: list[tuple[str, object]]) -> None:
         """清空旧按钮并按元素重建按钮行（仅交互气泡用）。

@@ -86,20 +86,12 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 一个带完整实机取证说明的委托方法：它必须留在 PetWindow 上（showEvent 是唯一
 # 可靠的"原生窗口已就绪/可能被重建"注入点，拆到独立模块反而会产生跨模块的
 # 窗口生命周期耦合）。按约定只校准预算，不为达标压行。
-# 2026-09-17 再上调到 4513：歌词/音乐自动唱歌 与 节日提醒/报时 的跨功能干扰修复
-# （window.py +6，实测 4513）——_on_anim_ended 的 SING_ANIM 续播分支必须先交付
-# 待播联动动作（节日提醒动画），否则唱歌循环会一直续播、把待播动画饿死；该分支与
-# _pending_link_anim / _play_pending_link_anim / _switch 共享窗口状态流，拆出去会切断
-# 调用链。按约定只校准预算，**不为达标压行**（初版误压了上方飞行链注释，已按约定回改）。
-# 2026-09-18 再上调到 4518：歌词显示审计修复批（window.py +5，实测 4518）——
-# show_bubble 改为**返回是否真的显示了**（True/False）：歌词每拍重发、需要知道自己
-# 有没有上屏（被提醒队列/设置窗口/按钮气泡丢弃时不能记账，否则让路与重试逻辑跟着错）。
-# 该返回值必须留在 PetWindow 上（所有冒泡路径的唯一收口），拆出去会切断与
-# _alert_current / _bubble_suppressed 的判定；按约定只校准预算，不为达标压行。
-# 2026-09-18 合并时再上调到 4576：#137 Linux 贴边绘制补偿（window.py 实测 4564）
-# 与上面这批叠加后实测 4576——两边各自的预算都低于合并结果，是「红线是组合性质」的
-# 又一实例（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。按约定只随实测校准。
-WINDOW_PY_LINE_BUDGET = 4576
+# 2026-09-17 上调到 4575：Linux 贴边绘制补偿（issue #103）——GNOME/mutter 不允许
+# 窗口移出工作区，新增统一位置出口与身体框语义；换算实现已拆到
+# window_placement.py（move_window_towards/throw_bounds/stable_body_local_rect/
+# virtual_pos），window.py 只留薄委托 + 各移动路径接线（拖拽/抛掷/弹弓/漫游/
+# 缩放/碰撞夹取），实测 4564。
+WINDOW_PY_LINE_BUDGET = 4575
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
@@ -145,7 +137,6 @@ def test_pure_logic_modules_do_not_import_qt():
     for name in (
         "collision.py", "physics.py", "collision_codec.py",
         "festival_calendar.py", "festival_data.py", "festival.py",
-        "festival_animations.py",
         "festival_quotes_cn.py", "festival_quotes_west.py",
         "festival_quotes_west_movie.py", "festival_quotes_west_game.py",
         "festival_quotes_west_song.py",

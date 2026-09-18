@@ -406,10 +406,6 @@ def check_music_sing(host) -> None:
         host._music_sing_silent_since = None
         return
     from . import music_detect
-    if music_detect.is_self_speaking():
-        # 桌宠自己在报时/节日播报：峰值来自自己的语音，不是音乐——既不开始唱歌，
-        # 也不推进静音退出计时（真在放音乐时唱歌照常持续，不被自己的播报打断）。
-        return
     playing = music_detect.is_music_playing()
     if host._music_sing_active:
         # 静音起点用 getattr 兜底读取：window.py 的行数预算已满，不新增字段。

@@ -2098,8 +2098,7 @@ def test_stream_surfaces_certificate_hint(monkeypatch):
             ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
         )
 
-    from pet.chat import providers as _providers
-    monkeypatch.setattr(_providers.http_util, "urlopen", fake_urlopen)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     provider = OpenAICompatibleProvider()
     with pytest.raises(ProviderError) as excinfo:
         list(provider.stream([{"role": "user", "content": "hi"}], ProviderConfig("t"), threading.Event()))
@@ -2115,8 +2114,7 @@ def test_connection_test_reports_certificate_hint(monkeypatch):
             ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
         )
 
-    from pet.chat import providers as _providers
-    monkeypatch.setattr(_providers.http_util, "urlopen", fake_urlopen)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     ok, msg = test_connection(ProviderConfig("t"))
     assert ok is False
     assert "跳过 SSL 证书验证" in msg

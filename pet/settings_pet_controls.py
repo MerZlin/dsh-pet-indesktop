@@ -205,14 +205,6 @@ def build_pet_controls(host) -> None:
     host.music_sing_check.setChecked(bool(host.config.get("music_sing_enabled", False)))
     host.music_lyric_check = ToggleSwitch(host)
     host.music_lyric_check.setChecked(bool(host.config.get("music_lyric_enabled", False)))
-    # 歌词走 Windows SMTC：非 Windows 或没装 winrt 时开关必须置灰并说明原因，
-    # 否则用户能打开一个静默无效的功能（now_playing.available() 以前没人调用）。
-    from . import now_playing
-    if not now_playing.available():
-        host.music_lyric_check.setEnabled(False)
-        host.music_lyric_check.setToolTip(
-            "当前系统读不到媒体会话（仅 Windows 且已安装 winrt 时可用）"
-        )
     host.agent_cost_check = ToggleSwitch(host)
     host.agent_cost_check.setChecked(bool(host.config.get("agent_cost_enabled", False)))
     host.music_lyric_lead_spin = BrowserDoubleSpinBox(host)

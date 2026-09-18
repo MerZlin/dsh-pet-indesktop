@@ -5,7 +5,7 @@ pet/config.py 里 __init__ 的默认值 dict（约 498-566 行）与 reload() �
 元组（约 656-691 行）是两份独立维护的键列表。本测试把现状文档化并加护栏：
 
 实测两集合**不一致**（现状文档化，不修产品代码）：
-- 默认值 dict 共 123 键；reload 白名单共 119 键。
+- 默认值 dict 共 80 键；reload 白名单共 75 键。
 - 差异 = 默认值多出 4 键：{version, proactive_screen, agent_link, chat}。
   这 4 键在 reload() 里走专门路径（version 末尾强制回写 4；
   proactive_screen / agent_link / chat 分别经 _merge_*_data 合并），
@@ -91,7 +91,6 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "music_lyric_cache_limit",
         "music_lyric_enabled",
         "music_lyric_lead_seconds",
-        "music_player_paths",
         "music_sing_enabled",
         "music_sing_grace_seconds",
         "no_move",
@@ -134,10 +133,8 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "voice_chime_schedule",
         "voice_chime_show_bubble",
         "voice_chime_show_quote",
-        "festival_birthday",
         "festival_custom_quotes_cn",
         "festival_custom_quotes_west",
-        "festival_reminder_animation",
         "festival_reminder_cn",
         "festival_reminder_count",
         "festival_reminder_enabled",
@@ -157,9 +154,8 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
 # 默认值 dict 里不走普通白名单、由 reload() 专门路径处理的键（现状文档化）。
 SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat"})
 
-# 默认值 dict 键集合现状快照（123 键）= 白名单 ∪ 特例键。
-# 纳入节日提醒 13 键（含 festival_reminder_animation / festival_birthday）后实测：
-# 白名单 119 + 特例 4 = 123。
+# 默认值 dict 键集合现状快照（115 键）= 白名单 ∪ 特例键。
+# 2026-09-16 加入节日提醒 10 键后实测：白名单 111 + 特例 4 = 115。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

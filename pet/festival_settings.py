@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """节日提醒设置页（现代设置对话框侧栏页）。
 
-配置键（config.py 顶层平铺键，共 13 个）：
+配置键（config.py 顶层平铺键，共 11 个）：
     festival_reminder_enabled / festival_reminder_cn /
     festival_reminder_solar_terms / festival_reminder_west /
     festival_reminder_mode / festival_reminder_count /
     festival_reminder_times / festival_reminder_show_quote /
-    festival_reminder_speak / festival_reminder_animation /
-    festival_birthday / festival_custom_quotes_cn /
+    festival_reminder_speak / festival_custom_quotes_cn /
     festival_custom_quotes_west
 
 语音播报（``festival_reminder_speak``）复用语音报时服务的音频通道，不新增音色/
@@ -89,15 +88,6 @@ class FestivalSettingsPage(QWidget):
 
         self.speak_check = ToggleSwitch(self)
         self.speak_check.setChecked(flag("festival_reminder_speak", False))
-
-        self.animation_check = ToggleSwitch(self)
-        self.animation_check.setChecked(flag("festival_reminder_animation", True))
-
-        # 用户生日（MM-DD；空 = 不提醒）。宽容 10-24 / 10/24 / 10月24日 等写法；
-        # 非法或不存在（02-30）由 clean_birthday 静默落空。
-        self.birthday_edit = QLineEdit(self)
-        self.birthday_edit.setText(str(self.config.get("festival_birthday", "") or ""))
-        self.birthday_edit.setPlaceholderText("如 10-24；留空 = 不提醒（2 月 29 日仅在闰年提醒）")
 
         # ---- 提醒时间 ----
         self.mode_select = ModernSelect(self, width=170)
@@ -193,24 +183,6 @@ class FestivalSettingsPage(QWidget):
                         "与语音报时共用同一条音频通道，因此不会叠音；两者恰好同一分钟时"
                         "由报时让位。需要 edge-tts，缺失时只出气泡不出声。",
                         self.speak_check,
-                    ),
-                    SettingRow(
-                        "festival_reminder_animation",
-                        "节日动画",
-                        "命中节日当天，让桌宠播一段与节日氛围匹配的内置动画"
-                        "（中秋「中秋赏月吃月饼」、端午「吃粽子」、腊八「吃腊八粥」等）。"
-                        "当天只播第一次，避免一天多次提醒把同一段动画播好几遍；"
-                        "右键「今日节日」与下方「立即试听」每次都播。"
-                        "当前角色素材里没有对应动画时静默跳过（只出气泡）。",
-                        self.animation_check,
-                    ),
-                    SettingRow(
-                        "festival_birthday",
-                        "我的生日",
-                        "填 MM-DD（如 10-24），当天按节日提醒处理，并播「端蛋糕送礼物」"
-                        "动画；留空则不提醒。生日是个人日期，不受上方三个类别开关约束，"
-                        "但需要先开启「启用节日提醒」。填 2 月 29 日时仅在闰年提醒。",
-                        self.birthday_edit,
                     ),
                 ],
                 self,
@@ -331,7 +303,7 @@ class FestivalSettingsPage(QWidget):
 
     # ------------------------------------------------------------ 配置读写
     def apply_to_config(self) -> None:
-        """把控件值合并写回 config（仅写节日提醒 13 键）。"""
+        """把控件值合并写回 config（仅写节日提醒 10 键）。"""
         if self.config is None:
             return
         self.config.set("festival_reminder_enabled", self.enabled_check.isChecked())
@@ -343,8 +315,6 @@ class FestivalSettingsPage(QWidget):
         self.config.set("festival_reminder_times", self.times_edit.text().strip())
         self.config.set("festival_reminder_show_quote", self.quote_check.isChecked())
         self.config.set("festival_reminder_speak", self.speak_check.isChecked())
-        self.config.set("festival_reminder_animation", self.animation_check.isChecked())
-        self.config.set("festival_birthday", self.birthday_edit.text().strip())
         self.config.set("festival_custom_quotes_cn", self.custom_cn_edit.toPlainText().strip())
         self.config.set("festival_custom_quotes_west", self.custom_west_edit.toPlainText().strip())
         self.settings_saved.emit()
@@ -367,8 +337,6 @@ class FestivalSettingsPage(QWidget):
         self.times_edit.setText(str(self.config.get("festival_reminder_times", DEFAULT_TIMES) or ""))
         self.quote_check.setChecked(flag("festival_reminder_show_quote", DEFAULT_SHOW_QUOTE))
         self.speak_check.setChecked(flag("festival_reminder_speak", False))
-        self.animation_check.setChecked(flag("festival_reminder_animation", True))
-        self.birthday_edit.setText(str(self.config.get("festival_birthday", "") or ""))
         self.custom_cn_edit.setPlainText(
             str(self.config.get("festival_custom_quotes_cn", "") or "")
         )

@@ -533,16 +533,11 @@ def _music_controller(pet):
     return controller if isinstance(controller, MusicLyricController) else None
 
 
-def _skip_track(direction: str) -> bool:
-    """菜单「切歌」：直接把指令发给播放器（SMTC）。
-
-    以前绕道歌词控制器：歌词功能一关（控制器压根没装配）这个菜单项就成了
-    **静默无效**——点了什么都不发生。切歌本来就是播放器操作，与"要不要显示歌词"
-    无关，所以直接走 :mod:`pet.now_playing`。
-    """
-    from .. import now_playing
-
-    return now_playing.skip_track(direction)
+def _skip_track(pet, direction: str) -> bool:
+    controller = _music_controller(pet)
+    if controller is None:
+        return False
+    return controller.skip_track(direction)
 
 
 def music_mode_active(pet) -> bool:
@@ -604,13 +599,22 @@ def _launch_player_and_play(player_key: str, pet) -> None:
     threading.Thread(target=worker, name="music-launch", daemon=True).start()
 
 
+def _run_off_main(callable_) -> None:
+    """把播放器控制丢到后台线程执行。
+
+    now_playing 的控制接口内部走 asyncio.run() 调 WinRT，实测会在主线程
+    永久阻塞（窗口未响应）。菜单回调都在主线程，必须挪走。
+    """
+    threading.Thread(target=callable_, name="music-menu", daemon=True).start()
+
+
 def add_music_pause(menu: QMenu, pet, *, icons: bool = True):
     """音乐子菜单：暂停 / 播放。"""
     from .. import now_playing
 
     return add_action(
         menu, "让人家歇一会儿嘛（暂停 / 播放）", "pause" if icons else None,
-        lambda: now_playing.toggle_play_pause(), close_on_trigger=True,
+        lambda: _run_off_main(now_playing.toggle_play_pause), close_on_trigger=True,
     )
 
 
@@ -618,7 +622,7 @@ def add_music_next(menu: QMenu, pet, *, icons: bool = True):
     """音乐子菜单：切歌。"""
     return add_action(
         menu, "给主人换一首（切歌）", "play" if icons else None,
-        lambda: _skip_track("next"), close_on_trigger=True,
+        lambda: _run_off_main(lambda: _skip_track(pet, "next")), close_on_trigger=True,
     )
 
 
@@ -626,7 +630,7 @@ def add_music_prev(menu: QMenu, pet, *, icons: bool = True):
     """音乐子菜单：切到上一首。"""
     return add_action(
         menu, "人家想再听刚才那首（上一首）", "play" if icons else None,
-        lambda: _skip_track("previous"), close_on_trigger=True,
+        lambda: _run_off_main(lambda: _skip_track(pet, "previous")), close_on_trigger=True,
     )
 
 

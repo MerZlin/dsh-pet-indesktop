@@ -664,7 +664,6 @@ class Config:
             "music_lyric_enabled": False,  # 在气泡里显示当前播放歌曲的歌词（Windows SMTC）
             "music_lyric_lead_seconds": 1.0,  # 歌词提前量（秒）：正值=歌词抢先于音频
             "music_lyric_cache_limit": 2000,  # 歌词缓存条数上限，超出按最旧淘汰
-            "music_player_paths": {},  # 播放器可执行文件手动路径 {播放器 key: 路径}（留空=自动搜索）
             "agent_cost_enabled": False,  # Agent 本轮结束时显示消费金额（用余额差值估算）
             "golden_spin_on_click": False,  # 点击回应动画结束后自动接一段黄金回旋
             "golden_spin_direct": False,  # 点击触发黄金回旋时跳过点击动画，直接回旋并逐圈加速
@@ -720,14 +719,6 @@ class Config:
             # 节日语音播报：复用语音报时服务的音频通道（音色/语速/音调/音量同报时），
             # 故不新增独立的语音参数键。默认关闭。开启后同一分钟由节日让报时让位。
             "festival_reminder_speak": False,  # 节日提醒是否语音播报
-            # 命中节日当天让桌宠播一段与节日匹配的内置动画（映射表见
-            # pet/festival_animations.py）。当天只播第一次；手动「今日节日」与
-            # 设置页「立即试听」每次都播。
-            "festival_reminder_animation": True,  # 节日提醒是否播匹配动画
-            # 用户生日（MM-DD，留空=不提醒）。当天按节日提醒处理：气泡 + 可选语音 +
-            # 「端蛋糕送礼物」动画（该素材随已安装版发布，仓库素材暂缺时静默跳过）。
-            # 生日是**个人日期**，不受「中国节日/24 节气/西方节日」三个类别开关约束。
-            "festival_birthday": "",
             "festival_custom_quotes_cn": "",  # 自定义中文文案（一行一条，追加到内置库）
             "festival_custom_quotes_west": "",  # 自定义西文文案（一行一条，追加到内置库）
             **DEFAULT_COLLISION_SETTINGS,
@@ -923,7 +914,6 @@ class Config:
             "music_lyric_enabled",
             "music_lyric_cache_limit",
             "music_lyric_lead_seconds",
-            "music_player_paths",
             "agent_cost_enabled",
             "golden_spin_on_click",
             "golden_spin_direct",
@@ -965,8 +955,6 @@ class Config:
             "festival_reminder_times",
             "festival_reminder_show_quote",
             "festival_reminder_speak",
-            "festival_reminder_animation",
-            "festival_birthday",
             "festival_custom_quotes_cn",
             "festival_custom_quotes_west",
             "character_aliases",

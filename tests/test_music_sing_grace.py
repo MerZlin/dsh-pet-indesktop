@@ -7,19 +7,7 @@
 """
 from __future__ import annotations
 
-import time
-
-import pytest
-
 from pet import music_detect, window_alerts
-
-
-@pytest.fixture(autouse=True)
-def _reset_self_speaking():
-    """「桌宠正在播报」是模块级登记：每个用例前后都清干净，避免串场。"""
-    music_detect.clear_self_speaking()
-    yield
-    music_detect.clear_self_speaking()
 
 
 class _FakeCfg:
@@ -138,59 +126,3 @@ def test_disabled_switch_stops_immediately(monkeypatch):
     host._music_sing_enabled = False
     window_alerts.check_music_sing(host)
     assert host._music_sing_active is False
-
-
-# --------------------------------------------------- 桌宠自己的播报不算音乐
-
-
-def test_pet_own_speech_does_not_start_singing(monkeypatch):
-    """报时/节日播报期间峰值来自自己：不该被当成音乐而开始唱歌。"""
-    monkeypatch.setattr(music_detect, "is_music_playing", lambda: True)
-    music_detect.mark_self_speaking(60.0)
-
-    host = _FakeHost()
-    window_alerts.check_music_sing(host)
-
-    assert host._music_sing_active is False
-    assert host.switches == []
-
-
-def test_pet_own_speech_does_not_advance_silence_grace(monkeypatch):
-    """真在放音乐时桌宠插话：唱歌持续，且不因自己的播报起算/推进静音计时。"""
-    state = {"playing": True}
-    monkeypatch.setattr(music_detect, "is_music_playing", lambda: state["playing"])
-    host = _FakeHost(grace=1.0)
-    window_alerts.check_music_sing(host)
-    assert host._music_sing_active is True
-
-    # 唯一的声音变成桌宠自己的播报（峰值检测仍会看到"有声音"）
-    state["playing"] = False
-    music_detect.mark_self_speaking(60.0)
-    window_alerts.check_music_sing(host)
-    assert getattr(host, "_music_sing_silent_since", None) is None, (
-        "自己的播报不能起算静音退出"
-    )
-    assert host._music_sing_active is True
-
-    # 播报结束、系统真的静音：恢复既有宽限期语义
-    music_detect.clear_self_speaking()
-    window_alerts.check_music_sing(host)
-    assert host._music_sing_silent_since is not None
-    assert host._music_sing_active is True
-
-
-def test_self_speaking_flag_expires_by_ttl():
-    """终止态回调丢失时的兜底：登记必须自己过期，不能永久屏蔽唱歌。"""
-    assert music_detect.is_self_speaking() is False
-    music_detect.mark_self_speaking(0.05)
-    assert music_detect.is_self_speaking() is True
-
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline and music_detect.is_self_speaking():
-        time.sleep(0.01)
-    assert music_detect.is_self_speaking() is False
-
-    # 显式清除同样生效
-    music_detect.mark_self_speaking(60.0)
-    music_detect.clear_self_speaking()
-    assert music_detect.is_self_speaking() is False

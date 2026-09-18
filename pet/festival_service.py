@@ -23,9 +23,7 @@ from .festival import (
     normalize_festival_config,
     reminder_slot,
     startup_slot,
-    today_festival,
 )
-from .festival_animations import pick_animation
 logger = logging.getLogger(__name__)
 
 
@@ -44,11 +42,6 @@ class FestivalReminderService:
         # 当天已触发的槽位；跨天自动清空（槽位本身含日期，这里只是防集合无界增长）
         self._slot_day: date | None = None
         self._fired: set[str] = set()
-        # 节日动画的「当天已确认播出」记账：{(日期, 节日id), ...}，跨天自动清空。
-        # 用 (日期, 节日id) 而不是只按日期：当天中途改配置导致命中节日变化时，
-        # 新节日仍然能播（否则会出现"气泡说生日、动画还是上午那个节日"）。
-        self._anim_day: str | None = None
-        self._anim_played: set[tuple[str, str]] = set()
         self._timer = QTimer()
         self._timer.setInterval(self.TICK_INTERVAL_MS)
         self._timer.timeout.connect(self._on_tick)
@@ -77,22 +70,17 @@ class FestivalReminderService:
         self._cfg = normalize_festival_config(config if config is not None else {})
 
     # ------------------------------------------------------------ 对外入口
-    def remind_now(self, now: datetime | None = None) -> None:
+    def remind_now(self) -> None:
         """手动提醒「今日节日」（右键菜单入口）。
 
         与语音报时的 say_now 同约定：**无视总开关**，由用户主动发起即执行；
         当天没有任何节日/节气时给出明确文案而不是静默无反应。
-
-        ``now`` 仅供测试注入（生产路径取系统当前时间），与 ``_on_tick`` 同构。
         """
         self.apply_config()
-        now = now or datetime.now()
+        now = datetime.now()
         text = build_festival_text(now.date(), self._cfg, 0) or NO_FESTIVAL_TEXT
         self._bubble(text)
         self._speak(text)
-        # 手动入口**每次都播**（force=True）：否则"想看一眼中秋动画"会因为当天已自动
-        # 播过而毫无反应，与试听"立刻演示一次"的语义不符。
-        self._play_festival_anim(now.date(), force=True)
 
     def should_speak_at(self, chime_slot: str) -> bool:
         """本分钟是否该让报时让位（由 AppShell 注入到报时服务的 yield_slot 钩子）。
@@ -136,7 +124,6 @@ class FestivalReminderService:
         if text:
             self._bubble(text)
             self._speak(text)
-            self._play_festival_anim(now.date())
 
     def _on_tick(self, now: datetime | None = None) -> None:
         now = now or datetime.now()
@@ -153,7 +140,6 @@ class FestivalReminderService:
         if text:
             self._bubble(text)
             self._speak(text)
-            self._play_festival_anim(now.date())
 
     def _roll_day(self, today: date) -> None:
         if self._slot_day != today:
@@ -186,55 +172,6 @@ class FestivalReminderService:
             channel.speak(text, log_tag="节日提醒")
         except Exception:
             logger.exception("节日提醒语音播报失败")
-
-    # ------------------------------------------------------------ 动画
-    def _play_festival_anim(self, day: date, *, force: bool = False) -> None:
-        """让桌宠播一段与今日节日匹配的内置动画（素材缺失时静默跳过）。
-
-        - **只播主窗**（与 ``_bubble`` 同口径）：多开的小肥鱼不跟着播。
-        - **当天只播第一次**（``force=False``）：一天最多 6 次提醒，每次都播同一段
-          「吃月饼」会很吵；手动「今日节日」与设置页试听传 ``force=True``，每次都播。
-        - **优先 ``request_link_anim``**：正在播的一次性动作（动作池/点击回应/移动）
-          不被打断，节日动画排队等它播完；退化到 ``switch_clip(link_request=True)``。
-        - **名字先按当前角色的动作池过滤**（``festival_animations.pick_animation``）：
-          换角色或外部角色包缺这段素材时静默 no-op，而不是每次提醒都打一条
-          "动画启动被拒绝"的 warning。动画播完的收尾（进 gap、回默认链）由窗口负责，
-          服务侧不做任何善后。
-        """
-        if not self._cfg.get("animation"):
-            return
-        # 与 build_festival_text 同口径取 hits[0]：一天命中多个节日时，
-        # 动画必须和文案指向同一个节日。
-        festival = today_festival(day, self._cfg)
-        if festival is None:
-            return
-        today = day.isoformat()
-        if self._anim_day != today:  # 跨天复位（记账集合只保留当天）
-            self._anim_day = today
-            self._anim_played.clear()
-        key = (today, festival.id)
-        if not force and key in self._anim_played:
-            return
-        win = getattr(self._app, "win", None)
-        if win is None or not win.isVisible():
-            return
-        name = pick_animation(festival.id, getattr(win, "acts", None) or ())
-        if not name:
-            return
-        play = getattr(win, "request_link_anim", None)
-        if callable(play):
-            play(name)
-            # 只有**确认真的上了屏**才记账：request_link_anim 在窗口正播一次性动作时
-            # 只是排队，队里的请求可能被 request_link_idle（Agent 回 idle）或新的联动
-            # 动作覆盖掉。没确认就留给下一个提醒点补播——宁可同一天补播一次，
-            # 也不要当天一次都不播。
-            if getattr(win, "anim", None) == name:
-                self._anim_played.add(key)
-            return
-        switch = getattr(win, "switch_clip", None)
-        if callable(switch):
-            if switch(name, link_request=True) is not False:
-                self._anim_played.add(key)
 
     # ------------------------------------------------------------ 提示
     def _bubble(self, text: str) -> None:

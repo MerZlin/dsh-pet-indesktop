@@ -11,8 +11,6 @@ import json
 import logging
 import urllib.request
 
-from . import http_util
-
 log = logging.getLogger("dsh-pet-standalone")
 
 RESPOND_PATH = "/api/respond"
@@ -41,7 +39,7 @@ def respond(message: dict, ports: list[int], *, timeout_s: float | None = None) 
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with http_util.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read(1024).decode("utf-8", "replace")
             try:
                 parsed = json.loads(raw)

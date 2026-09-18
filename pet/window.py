@@ -2527,12 +2527,6 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             # 不再每次播完都查一次音频 COM，降低长时间运行的崩溃风险。
             # 音乐停止由 _check_music_sing 定时检测后清掉 _music_sing_active。
             if self._music_sing_enabled and self._music_sing_active:
-                if self._pending_link_anim:
-                    # 唱歌循环会一直续播，待播联动动作（节日提醒动画）永远轮不到
-                    # 下面的消费点：圈末先交付它，唱歌交回每秒轮询重启。
-                    self._music_sing_active = False
-                    self._play_pending_link_anim()
-                    return
                 self._switch(SING_ANIM)
                 return
             self._music_sing_active = False
@@ -3783,7 +3777,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     def show_bubble(self, text: str, duration_ms: int = 3200, subtitle: str | None = None,
                     *, sticky: bool = False, buttons: list[tuple[str, object]] | None = None,
-                    title_first: bool = False, width_locked: bool = False) -> bool:
+                    title_first: bool = False, width_locked: bool = False) -> None:
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。
 
         ``sticky=True`` 显示「一直挂到主动关闭」的气泡（审批等）：不启动自动
@@ -3795,16 +3789,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         且自动 sticky（点选前一直挂着）。
 
         提醒消息队列激活期间（有审批/问题/硬失败/卡住提醒在展示），普通气泡
-        直接让路丢弃，不覆盖提醒弹窗。
-
-        **返回是否真的显示了**（True/False）。歌词这类"每拍重发 + 需要知道自己
-        有没有上屏"的调用方据此记账：被丢弃时必须返回 False，否则调用方会把
-        "没显示"当成"已显示"，让路/重试逻辑跟着错。"""
+        直接让路丢弃，不覆盖提醒弹窗。"""
         if not self.isVisible() or self._bubble_suppressed:
-            return False
+            return
         if not sticky and not buttons and getattr(self, "_alert_current", None) is not None:
             # 有提醒在展示：普通气泡让路，绝不覆盖审批弹窗
-            return False
+            return
         if sticky or buttons:
             self._sticky_bubble_active = True
             self._sticky_text = str(text)
@@ -3816,13 +3806,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 pet_scale=self.scale, subtitle=self._sticky_subtitle, sticky=True,
                 buttons=self._sticky_buttons,
             )
-            return True
+            return
         _set_speech_bubble_interactive(self)
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
             str(text), self.visible_content_rect(), duration_ms, pet_scale=self.scale,
             subtitle=str(subtitle or ""), title_first=title_first, width_locked=width_locked)
-        return True
 
     def hide_bubble(self, *args, **kwargs):
         """Compatibility delegation (window_alerts.hide_bubble)."""

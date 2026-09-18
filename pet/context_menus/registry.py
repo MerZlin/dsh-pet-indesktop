@@ -122,25 +122,12 @@ def _callback_available(name: str) -> Availability:
 
 
 def _music_lyric_configured(pet) -> bool:
-    """「进入/退出音乐模式」是否出现：只看设置里有没有开启歌词功能。
+    """音乐相关菜单项是否出现：只看设置里有没有开启歌词功能。
 
-    这个菜单项就是歌词功能的临时开关（``set_music_mode_enabled``），所以随歌词
-    配置走。**播放器控制项（暂停/切歌）不要用它门控**——见
-    :func:`_media_session_available`。
+    刻意**不**依赖实时播放状态——否则菜单结构会随"此刻有没有在放歌"变来变去
+    （测试也会因此依赖机器状态）。没在播时改为置灰（见 enabled）。
     """
     return bool(pet.cfg.get("music_lyric_enabled", False))
-
-
-def _media_session_available(pet) -> bool:
-    """暂停/切歌这类**播放器控制**是否出现：只看这台机器能不能读到媒体会话。
-
-    刻意**不**依赖实时播放状态（否则菜单结构会随"此刻有没有在放歌"变来变去）；
-    也刻意**不**再依赖 ``music_lyric_enabled``：用户关掉歌词气泡之后，暂停和切歌
-    照样该能用（旧行为把它们一起藏了，而切歌还额外是静默无效的）。
-    """
-    from .. import now_playing
-
-    return now_playing.available()
 
 
 def _build_chat(menu, pet):
@@ -241,9 +228,9 @@ class MenuActionRegistry:
             ),
             # 始终可用：消费统计与歌词无关，不该被歌词开关卡住。
             "agent_cost": MenuActionSpec(add_agent_cost),
-            "music_pause": MenuActionSpec(add_music_pause, _media_session_available),
-            "music_next": MenuActionSpec(add_music_next, _media_session_available),
-            "music_prev": MenuActionSpec(add_music_prev, _media_session_available),
+            "music_pause": MenuActionSpec(add_music_pause, _music_lyric_configured),
+            "music_next": MenuActionSpec(add_music_next, _music_lyric_configured),
+            "music_prev": MenuActionSpec(add_music_prev, _music_lyric_configured),
             "music_quit": MenuActionSpec(add_music_quit, _music_lyric_configured),
             "music_open_netease": MenuActionSpec(add_music_open_netease),
             "music_open_qqmusic": MenuActionSpec(add_music_open_qqmusic),

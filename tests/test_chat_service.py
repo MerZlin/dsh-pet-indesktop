@@ -257,7 +257,7 @@ def test_provider_cancel_closes_blocking_response(monkeypatch):
 
     fake_resp = BlockingFakeResponse()
     monkeypatch.setattr(
-        providers.http_util, "urlopen", lambda req, *a, **k: fake_resp
+        providers.urllib.request, "urlopen", lambda req, *a, **k: fake_resp
     )
 
     app = _get_qapp()

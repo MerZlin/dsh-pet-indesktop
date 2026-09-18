@@ -32,21 +32,8 @@ from . import music_lyric, now_playing
 
 log = logging.getLogger(__name__)
 
-# 轮询间隔（毫秒）：一拍越短，歌词换句越贴合人声——显示的换行时刻最多被拖后一拍。
-# 2026-09-17 实机反馈"歌词对不上"后由 1000 收紧到 500：兜底来源（窗口标题）没有播放
-# 进度，位置全靠本地时钟推算，一拍 1s 的相位误差是可感知的主要滞后项；500ms 下
-# 气泡每秒重送两次（仅一次重绘 + 续期），开销可忽略。
-POLL_MS = 500
-
-# 连续多少拍拿不到播放器才认定"播放器没了"并复位链路（500ms 一拍 → 2 秒）。
-# 单拍抖动（播放器切窗口/改标题/枚举抖动）不得让歌词从头再来。
-_MISS_RESET_TICKS = 4
-
-# 歌词气泡的显示时长与占位时长：**固定秒数**，不跟着 POLL_MS 走。
-# 曾经写成 POLL_MS*2 / POLL_MS*3，把 tick 从 1000ms 收紧到 500ms 后它们跟着缩到
-# 1.0s / 1.5s ⇒ 任何一次超过 1 秒的抖动都会让气泡先隐藏再重现（闪）。
-LYRIC_BUBBLE_MS = 3000
-LYRIC_HOLD_SECONDS = 3.0
+# 轮询间隔：与现有 music_sing 一致，兼顾开销与切歌响应速度。
+POLL_MS = 1000
 
 # 歌词换句时允许气泡重新选位的概率。气泡位置由"当前尺寸"算得，而每句歌词
 # 长短不同，若每句都重算就会一路乱跳；只在换句时以小概率允许移动，
@@ -252,6 +239,11 @@ class MusicLyricController(QObject):
     # 后台取词完成：(曲目标识, 歌词行列表或 None)
     _lyrics_ready = Signal(object, object)
 
+    # 后台 SMTC 采样完成：Playback 或 None。
+    # 采样必须离开主线程——get_now_playing() 内部走 asyncio.run() 调 WinRT，
+    # 一旦该调用不返回就会**永久阻塞 Qt 主线程**（窗口未响应）。
+    _playback_ready = Signal(object)
+
     # 类级默认：单测直接驱动 _on_lyrics_ready 时未走过 _start_track，
     # 没有这个默认会 AttributeError（同文件既有约定：回调路径的属性要有默认）。
     _pending_playback: Any = None
@@ -264,10 +256,13 @@ class MusicLyricController(QObject):
         self._timer.timeout.connect(self._on_tick)
         self._tracker = LyricTracker()
 
+        # 采样在途标志：后台线程还在跑就不再派发新的，避免堆积。
+        self._sampling: bool = False
+        # 常驻采样线程（懒启动）：见 _sample_loop 说明为何不每拍新建。
+        self._sample_thread: threading.Thread | None = None
+        self._sample_wake = threading.Event()
+        self._sample_stop = threading.Event()
         self._current_key: tuple[str, str] | None = None
-        # 连续拿不到播放器的拍数：只有连续多拍都拿不到才认为"播放器没了"（见
-        # _MISS_RESET_TICKS）。单拍抖动（播放器切窗口/改标题）不该让链路复位。
-        self._missing_ticks: int = 0
         # 本次播放已尝试过取词但失败的曲目——避免反复请求同一首无词的歌。
         self._no_lyric_keys: set[tuple[str, str]] = set()
         self._loading: set[tuple[str, str]] = set()
@@ -287,11 +282,8 @@ class MusicLyricController(QObject):
         # 上一句歌词。同一句持续期间用它重发，避免气泡闪烁。
         self._last_lyric: str = ""
         # 气泡上一次的落点，用于抵消"尺寸变化导致的位置漂移"。
-        self._bubble_pos: Any = None
-        # 记录上述落点时的桌宠矩形：桌宠挪过窝就不能再钉回旧坐标（见
-        # _pin_bubble_position）。承接上游 #134 的实机修复：
-        # 开着歌词拖桌宠时，气泡会被按在旧位置、停在原地不动。
         self._bubble_anchor: Any = None
+        self._bubble_pos: Any = None
         # 让路截止时刻：别的弹窗占用期间歌词停发（见 LYRIC_YIELD_SECONDS）。
         self._lyric_yield_until: float = 0.0
         # 右键菜单「退出音乐模式」的临时开关（仅本次运行，不写配置）。
@@ -304,6 +296,7 @@ class MusicLyricController(QObject):
         # 所以必须留在实例上（也要有类级默认，便于单测直接驱动回调）。
         self._pending_playback: Any = None
         self._lyrics_ready.connect(self._on_lyrics_ready)
+        self._playback_ready.connect(self._on_playback_ready)
 
     # ------------------------------------------------------------ 生命周期
 
@@ -317,11 +310,27 @@ class MusicLyricController(QObject):
         if on and getattr(self, "_user_mode_off", False):
             return
         if on:
+            self._start_sample_thread()
             self._timer.start()
             self._on_tick()
         else:
             self._timer.stop()
+            self._stop_sample_thread()
             self._reset()
+
+    def _stop_sample_thread(self) -> None:
+        """停掉采样线程（幂等）。卡在 WinRT 调用时不强杀——daemon 线程
+        随进程退出即可，主线程不受它影响。
+
+        **仍存活的线程保留引用**，不置 None：它可能正卡在 WinRT 里，丢掉引用
+        就变成孤儿，之后醒来仍会 emit，与新线程抢 ``_sampling``（同类教训见
+        pet/music_detect.py）。已退出的线程才清引用，供下次重建。
+        """
+        self._sample_stop.set()
+        self._sample_wake.set()
+        thread = self._sample_thread
+        if thread is not None and not thread.is_alive():
+            self._sample_thread = None
 
     def apply_lead(self) -> None:
         """从配置读歌词提前量（秒）。正直=歌词抢先于音频。
@@ -335,6 +344,11 @@ class MusicLyricController(QObject):
         # 与设置页的滑块范围保持一致，防止手改配置写出离谱的值。
         value = max(LEAD_MIN_SECONDS, min(LEAD_MAX_SECONDS, value))
         self._tracker.lead = value
+
+    def shutdown(self) -> None:
+        self._timer.stop()
+        self._stop_sample_thread()
+        self._reset()
 
     # ------------------------------------------------------------ 右键菜单入口
 
@@ -473,15 +487,10 @@ class MusicLyricController(QObject):
         try:
             hold = getattr(self.win, "hold_bubble", None)
             if callable(hold):
-                hold(LYRIC_HOLD_SECONDS)
-            # 时长给足一拍有余：真正的续期由每拍重新调用完成（气泡层对"内容没变"
-            # 的续期只续时、不重建，见 speech_bubble._same_content）。
-            shown = shower(text, duration_ms=LYRIC_BUBBLE_MS, subtitle=subtitle or None,
-                           title_first=True, width_locked=self._width_locked)
-            if shown is False:
-                # 窗口明确拒绝（当前有提醒/设置窗口打开/按钮气泡占用）：不记账，
-                # 下一拍再试；否则会把"没显示"当"已显示"，让路逻辑跟着错。
-                return
+                hold(POLL_MS / 1000.0 * 3)
+            # 时长给足一拍有余：真正的续期由每拍重新调用完成。
+            shower(text, duration_ms=POLL_MS * 2, subtitle=subtitle or None,
+                   title_first=True, width_locked=self._width_locked)
             self._last_shown = (text, subtitle)
             # 首句显示完就把宽度定下来，后续同首歌不再改宽。
             self._width_locked = True
@@ -493,12 +502,11 @@ class MusicLyricController(QObject):
             log.debug("歌词气泡显示失败", exc_info=True)
 
     def _pin_bubble_position(self) -> None:
-        """把气泡钉回上一次的位置，抵消**尺寸变化**引起的漂移。
+        """把气泡钉回上一次的位置，抵消"尺寸变化"引起的漂移。
 
-        **只适用于桌宠没动过的情况**：钉的是绝对屏幕坐标，一旦桌宠被拖走，
-        再钉就等于把气泡按在原地不动（实机 bug：开着歌词拖桌宠，气泡停在
-        旧位置）。所以先比对桌宠矩形，变了就什么都不做——交给气泡自己的
-        reposition 正常跟随。
+        **只适用于桌宠没移动的情况**：钉的是绝对屏幕坐标，一旦桌宠动了就
+        会把它按在旧位置（实机 bug：开着歌词拖桌宠，气泡停在原地）。
+        所以先比对桌宠矩形，变了就交给 reposition() 正常跟随。
         """
         bubble = getattr(self.win, "_speech_bubble", None)
         if bubble is None:
@@ -519,7 +527,7 @@ class MusicLyricController(QObject):
         """记下气泡当前落点**与当时的桌宠矩形**，供下一次粘滞回位。
 
         必须一起记桌宠矩形：只记气泡坐标的话，桌宠移动后再钉回去就会把气泡
-        留在旧位置（`_pin_bubble_position` 靠这个矩形判断桌宠有没有动过）。
+        留在旧位置（实机 bug：开着歌词拖桌宠，气泡停在原地不动）。
         """
         bubble = getattr(self.win, "_speech_bubble", None)
         if bubble is None:
@@ -527,6 +535,8 @@ class MusicLyricController(QObject):
         try:
             if bubble.isVisible():
                 self._bubble_pos = bubble.pos()
+                # 一并记下当时的桌宠矩形：_pin_bubble_position 靠它判断
+                # 桌宠有没有移动过（移动过就不能钉回旧坐标）。
                 anchor_fn = getattr(self.win, "visible_content_rect", None)
                 if callable(anchor_fn):
                     self._bubble_anchor = anchor_fn()
@@ -536,18 +546,75 @@ class MusicLyricController(QObject):
     # ------------------------------------------------------------ 主循环
 
     def _on_tick(self) -> None:
+        """定时器回调（主线程）：只负责**派发采样**，绝不自己查询。
+
+        WinRT 的 SMTC 查询走 asyncio.run()，实测会在主线程永久阻塞
+        （窗口未响应）。所以这里起后台线程采样，结果经 _playback_ready
+        回主线程处理。
+        """
         if not getattr(self.win, "isVisible", lambda: False)():
             return
-        playback = now_playing.get_now_playing()
-        if playback is None:
-            # 播放器没了（退出/会话消失）：**连续几拍**都拿不到才复位，单拍抖动不该
-            # 让整条链路重来（实机症状：歌词显示一半就只剩歌名、时间轴从 0 秒重唱）。
-            self._missing_ticks += 1
-            if self._last_playing and self._missing_ticks >= _MISS_RESET_TICKS:
-                self._reset()
-                self._last_playing = False
+        if self._sampling or self._sample_thread is None:
+            return  # 上一拍还没回来 / 线程未起：跳过，避免堆积
+        self._sampling = True
+        self._sample_wake.set()
+
+    def _sample_loop(self) -> None:
+        """**常驻**采样线程：等信号 → 采一次 → 回报，循环直到关闭。
+
+        刻意不每拍新建线程：winrt 会按线程初始化 COM apartment，每秒新建一个
+        线程等于每秒多一个 apartment，正是 pet/music_detect.py 记录过的
+        「句柄累积可能导致崩溃」（那里为此只初始化一次 COM 对象）。
+        常驻线程只初始化一次，且即使 WinRT 调用卡住也只影响本线程。
+        """
+        while not self._sample_stop.is_set():
+            self._sample_wake.wait()
+            self._sample_wake.clear()
+            if self._sample_stop.is_set():
+                break
+            try:
+                playback = now_playing.get_now_playing()
+            except Exception:
+                playback = None
+            try:
+                self._playback_ready.emit(playback)
+            except RuntimeError:
+                break  # 对象已销毁
+
+    def _start_sample_thread(self) -> None:
+        """确保有一条在跑的采样线程（幂等）。
+
+        **必须复位 ``_sample_stop``**：它一旦被 ``_stop_sample_thread`` 置位就没有
+        别的复位路径，而 ``_sample_loop`` 的 ``while not _sample_stop.is_set()``
+        会在进入时立刻退出——不复位的话「关闭歌词再打开」之后采样永久停摆
+        （歌词再也不随播放更新，直到重启桌宠）。
+        """
+        thread = self._sample_thread
+        if thread is not None and thread.is_alive():
+            current = threading.current_thread()
+            if thread is not current:
+                self._sample_stop.clear()
+                return  # 复用仍存活的线程，不新建（避免 COM apartment 堆积）
+        # 线程已退出（或从未起过）：复位标志后重建，否则新线程一进循环就退出。
+        # （clear 是幂等的，上面的复用分支已清过也不要紧。）
+        self._sample_stop.clear()
+        thread = threading.Thread(
+            target=self._sample_loop, name="music-lyric-sample", daemon=True,
+        )
+        self._sample_thread = thread
+        thread.start()
+
+    def _on_playback_ready(self, playback) -> None:
+        """采样回到主线程：在这里做原有的状态推进。"""
+        self._sampling = False
+        if not getattr(self.win, "isVisible", lambda: False)():
             return
-        self._missing_ticks = 0
+        if playback is None:
+            # 播放器没了（退出/会话消失）：整体复位，下次从头来过。
+            if self._last_playing:
+                self._reset()
+            self._last_playing = False
+            return
 
         track = playback.track
         key = track.key()
@@ -585,22 +652,10 @@ class MusicLyricController(QObject):
             self._tracker.position(now, reported=playback.position)
             return
         index = self._tracker.advance(now, reported=playback.position)
-        self._last_lyric = self._lyric_for_index(index)
-        # 每拍都重送：一是续期（防气泡先于句子超时消失），二是标题必须一直在。
-        self._show(self._last_lyric, title=self._title_line, force=True)
-
-    def _lyric_for_index(self, index: int) -> str:
-        """取当前该显示的歌词；空行（间奏）保持上一句，别把正文清空。
-
-        LRC 里间奏常常只留一个时间戳、正文为空。原实现直接把空串送进气泡：
-        `split_bubble_text` 于是把标题挪进正文（正文空时不渲染），用户看到的就是
-        "歌词突然没了、只剩正在听《…》"。**两个入口都要走这里**：每拍 tick 与
-        取词完成时的即时刷新（后者正是实测撞上的那一处）。
-        """
         lyric = self._tracker.text_at(index) if index >= 0 else self._last_lyric
-        if not lyric.strip():
-            lyric = self._last_lyric
-        return lyric
+        self._last_lyric = lyric
+        # 每拍都重送：一是续期（防气泡先于句子超时消失），二是标题必须一直在。
+        self._show(lyric, title=self._title_line, force=True)
 
     def _start_track(self, key, title, artist, playback, now: float) -> None:
         """切歌：先判断能否定位，再决定是否后台取词。"""
@@ -611,18 +666,18 @@ class MusicLyricController(QObject):
         # 每首歌都重新记，避免用上一首的旧值把基准带到新歌上。
         self._detected_at = now
 
+        # 功能刚开启时，歌可能已经唱了一半。此时：
+        # - 播放器报真实进度（如 QQ 音乐）→ 直接对齐，不受影响；
+        # - 播放器不报进度（如网易云）  → 无从推断已唱到第几秒，猜一个起点
+        #   只会让歌词一路错位。按约定跳过这首，等下一次可信的切歌边界。
         first_key = not self._primed
         self._primed = True
-        # 先亮出歌名：一是给用户即时反馈（也让"监听确实在工作"看得见），二是填上取词
-        # 那几秒的空窗——否则切歌后会有 3~5 秒什么都不显示。
-        self._announce(title, artist)
         if playback.position is None and first_key:
-            # 桌宠刚起来/歌词刚开启时，歌可能已经唱了一半：
-            # - 播放器报真实进度（如 QQ 音乐）→ 上面已按进度对齐，不受影响；
-            # - 不报进度的（如网易云、窗口标题兜底）→ 无从推断已唱到第几秒，猜一个
-            #   起点只会让歌词一路错位 ⇒ 只留歌名，歌词等下一次可信的切歌边界
-            #   （桌宠运行期间观察到的换歌）再跟。
             return
+
+        # 先亮出歌名：一是给用户即时反馈，二是填上取词那几秒的空窗——
+        # 否则切歌后会有 3~5 秒什么都不显示。
+        self._announce(title, artist)
 
         if key in self._no_lyric_keys or key in self._loading:
             return
@@ -737,5 +792,5 @@ class MusicLyricController(QObject):
             return
         # 立即用「标题 + 当前歌词」刷新，不必等下一拍。
         index = self._tracker.advance(now)
-        self._last_lyric = self._lyric_for_index(index)
+        self._last_lyric = self._tracker.text_at(index) if index >= 0 else ""
         self._show(self._last_lyric, title=self._title_line, force=True)

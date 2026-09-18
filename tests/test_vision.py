@@ -108,7 +108,7 @@ def test_independent_vision_empty_key_never_uses_chat_key(monkeypatch):
     from pet.chat.models import ProviderConfig
 
     calls = []
-    monkeypatch.setattr(vision.http_util, "urlopen", lambda *a, **kw: calls.append(a) or _FakeResponse({}))
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: calls.append(a) or _FakeResponse({}))
 
     p = ProviderConfig.from_dict("test", {
         "model": "deepseek-v4-flash",
@@ -137,7 +137,7 @@ def test_independent_vision_prefers_own_key_over_chat_key(monkeypatch):
         called_with["headers"] = dict(req.header_items())
         return _FakeResponse({"choices": [{"message": {"content": "好呀"}, "finish_reason": "stop"}]})
 
-    monkeypatch.setattr(vision.http_util, "urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     p = ProviderConfig.from_dict("test", {
         "model": "deepseek-v4-flash",
@@ -167,7 +167,7 @@ def test_vision_request_includes_self_recognition_hint(monkeypatch):
         captured["body"] = json.loads(req.data.decode("utf-8"))
         return _FakeResponse({"choices": [{"message": {"content": "好"}, "finish_reason": "stop"}]})
 
-    monkeypatch.setattr(vision.http_util, "urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-x"})
     vision._post_vision_request(b"fake-jpeg", "code.exe | t", "sys", p, pet_name="大肥鱼")
     user_msg = captured["body"]["messages"][1]["content"][0]["text"]

@@ -2186,7 +2186,7 @@ class ModernSettingsDialog(QDialog):
         # 语音报时设置页写回（仅写 voice_chime_* 11 键）
         if self.voice_chime_page is not None:
             self.voice_chime_page.apply_to_config()
-        # 节日提醒设置页写回（仅写 festival_reminder_* / festival_birthday / festival_custom_* 13 键）
+        # 节日提醒设置页写回（仅写 festival_reminder_* / festival_custom_* 10 键）
         if self.festival_page is not None:
             self.festival_page.apply_to_config()
         self.config.set(

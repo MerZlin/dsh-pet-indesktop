@@ -46,7 +46,7 @@ def test_fetch_balance_parses_response(monkeypatch):
         assert req.get_header("Accept-language", "") != ""
         return io.BytesIO(body)
 
-    monkeypatch.setattr(balance.http_util, "urlopen", fake_urlopen)
+    monkeypatch.setattr(balance.urllib.request, "urlopen", fake_urlopen)
     info = balance.fetch_balance("https://api.deepseek.com", "sk-test")
     assert info["total"] == "12.34"
     assert info["granted"] == "2.34"
@@ -63,7 +63,7 @@ def test_fetch_balance_errors(monkeypatch):
     def fake_http(req, *args, **kwargs):
         raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
 
-    monkeypatch.setattr(balance.http_util, "urlopen", fake_http)
+    monkeypatch.setattr(balance.urllib.request, "urlopen", fake_http)
     with pytest.raises(balance.BalanceError):
         balance.fetch_balance("https://api.deepseek.com", "sk-x")
 
@@ -71,7 +71,7 @@ def test_fetch_balance_errors(monkeypatch):
     def fake_net(req, *args, **kwargs):
         raise urllib.error.URLError("timeout")
 
-    monkeypatch.setattr(balance.http_util, "urlopen", fake_net)
+    monkeypatch.setattr(balance.urllib.request, "urlopen", fake_net)
     with pytest.raises(balance.BalanceError):
         balance.fetch_balance("https://api.deepseek.com", "sk-x")
 
@@ -79,7 +79,7 @@ def test_fetch_balance_errors(monkeypatch):
     def fake_empty(req, *args, **kwargs):
         return io.BytesIO(json.dumps({"is_available": True}).encode())
 
-    monkeypatch.setattr(balance.http_util, "urlopen", fake_empty)
+    monkeypatch.setattr(balance.urllib.request, "urlopen", fake_empty)
     with pytest.raises(balance.BalanceError):
         balance.fetch_balance("https://api.deepseek.com", "sk-x")
 
@@ -93,7 +93,7 @@ def test_fetch_balance_multi_currency_picks_positive_cny(monkeypatch):
 
     def run_with(infos):
         body = json.dumps({"is_available": True, "balance_infos": infos}).encode()
-        monkeypatch.setattr(balance.http_util, "urlopen",
+        monkeypatch.setattr(balance.urllib.request, "urlopen",
                             lambda req, *a, **k: io.BytesIO(body))
         return balance.fetch_balance("https://api.deepseek.com", "sk-test")
 

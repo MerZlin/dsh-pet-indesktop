@@ -6,8 +6,6 @@ from .models import ProviderConfig
 
 import re as _re
 
-from .. import http_util
-
 try:
     import certifi
 except Exception:  # 未安装/未打进包时回退系统默认 CA 库
@@ -59,7 +57,7 @@ def test_connection(config, timeout: float = 10.0):
         headers = build_browser_headers({'Content-Type': 'application/json'})
         if config.api_key: headers['Authorization'] = f'Bearer {config.api_key}'
         req = urllib.request.Request(endpoint, data=json.dumps(payload, ensure_ascii=False).encode('utf-8'), headers=headers, method='POST')
-        with http_util.urlopen(req, timeout=timeout, context=_make_ssl_context(config.verify_ssl)) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_make_ssl_context(config.verify_ssl)) as resp:
             resp.read(4096)
             return True, f'连接成功（HTTP {resp.status}）'
     except urllib.error.HTTPError as exc:
@@ -120,7 +118,7 @@ class OpenAICompatibleProvider:
         headers=build_browser_headers({'Content-Type':'application/json','Accept':'text/event-stream'})
         if config.api_key: headers['Authorization']=f'Bearer {config.api_key}'
         req=urllib.request.Request(endpoint,data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),headers=headers,method='POST')
-        try: response=http_util.urlopen(req,timeout=config.timeout,context=_make_ssl_context(config.verify_ssl))
+        try: response=urllib.request.urlopen(req,timeout=config.timeout,context=_make_ssl_context(config.verify_ssl))
         except urllib.error.HTTPError as exc:
             detail=exc.read(2048).decode('utf-8','replace'); raise ProviderError(_safe_error_detail(detail),exc.code) from exc
         except urllib.error.URLError as exc:

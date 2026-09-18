@@ -22,8 +22,6 @@ from datetime import datetime, time, timedelta, timezone
 from html import escape
 from zoneinfo import ZoneInfo
 
-from . import http_util
-
 BALANCE_PATH = '/user/balance'
 
 # DeepSeek 满额基准（¥）：余额 ≥ 该值视为 100%（未消耗），余额按比例折算为已用百分比
@@ -89,7 +87,7 @@ def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0,
     headers = build_browser_headers({'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'})
     req = urllib.request.Request(endpoint, headers=headers)
     try:
-        with http_util.urlopen(req, timeout=timeout,
+        with urllib.request.urlopen(req, timeout=timeout,
                                     context=_ssl_context(verify_ssl)) as resp:
             data = json.loads(resp.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:

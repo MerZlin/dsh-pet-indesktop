@@ -51,7 +51,6 @@ KIND_LUNAR_LAST = "lunar_last"    # 腊月最后一天（除夕）
 KIND_SOLAR_TERM = "solar_term"    # 24 节气当日
 KIND_EASTER = "easter"            # 复活节（西方教会算法）
 KIND_NTH_WEEKDAY = "nth_weekday"  # 某月第 n 个星期 w
-KIND_BIRTHDAY = "birthday"        # 用户生日（日期来自配置，见 BIRTHDAY_FESTIVAL）
 
 
 @dataclass(frozen=True)
@@ -76,14 +75,6 @@ class Festival:
 
 
 _SUN = 6
-
-#: 用户生日（**动态节日**）：日期来自用户配置而非静态表，故**不进** ``FESTIVALS`` /
-#: ``FESTIVALS_BY_ID``，也不参与 id 冻结快照与文案库键集合校验；由
-#: ``festival.festivals_on`` 在命中当天把它插到命中列表最前面（生日优先）。
-#: 文案走中文库（``QUOTES_CN`` 无该键 -> 只有"今天是你的生日。"，用户自定义中文
-#: 文案仍会按既有规则追加）。
-BIRTHDAY_ID = "shengri"
-BIRTHDAY_FESTIVAL = Festival(BIRTHDAY_ID, "你的生日", (CATEGORY_CN,), KIND_BIRTHDAY)
 
 # —— 中国节日（14 项；清明节见下方节气表，带 cn 类别）——
 _CN_FESTIVALS: tuple[Festival, ...] = (

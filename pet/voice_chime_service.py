@@ -26,7 +26,6 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import music_detect
 from .voice_chime import (
     build_bubble_sentence,
     build_chime_sentence,
@@ -182,8 +181,6 @@ class VoiceChimeService:
         self._stopped = True
         # 待播队列同样作废：关掉开关/退出后不该再补播一条排队的语音。
         self._pending_speech = None
-        # 自我播报登记也要撤：残留会让音乐自动唱歌被永久屏蔽。
-        music_detect.clear_self_speaking()
         self._timer.stop()
 
     def is_running(self) -> bool:
@@ -464,9 +461,6 @@ class VoiceChimeService:
 
             self._audio_out.setVolume(self._cfg["volume"] / 100.0)
             self._player.setSource(QUrl.fromLocalFile(path))
-            # 登记"桌宠在自己的通道出声"：否则这条语音会被音频峰值检测当成音乐
-            # 而触发唱歌动画（见 music_detect 的说明）。
-            music_detect.mark_self_speaking()
             self._player.play()
         except Exception:
             logger.exception("语音报时播放失败：%s", path)
@@ -488,7 +482,6 @@ class VoiceChimeService:
 
             self._audio_out.setVolume(self._cfg["volume"] / 100.0)
             self._player.setSource(QUrl.fromLocalFile(path))
-            music_detect.mark_self_speaking()
             self._player.play()
             return True
         except Exception:
@@ -517,8 +510,6 @@ class VoiceChimeService:
         """
         if status not in getattr(self, "_terminal_statuses", ()):
             return
-        # 一条播完了：撤销自我播报登记（TTL 只是回调丢失时的兜底）。
-        music_detect.clear_self_speaking()
         pending = self._pending_speech
         self._pending_speech = None
         if not pending or self._stopped:

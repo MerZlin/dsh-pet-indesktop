@@ -201,27 +201,3 @@ AppShell.start()
 | 行数预算 | `window.py` 未改动；`modern_settings_dialog.py` 按实测校准 2270→2272 |
 
 **回滚**：总开关默认关闭，一键可停；删除 10 个新增源码文件 + 回退 15 个修改文件的 diff 即可完全回滚，不污染既有链路。
-
----
-
-## 七、第二轮迭代（2026-09-17）：节日 × 内置动画绑定
-
-> 承接关系：本节是 `#127`（合并提交 `be9a6d0`）的**增量迭代**，按 `DEV-HANDOVER` §8.2
-> 从 `main` 新起承接分支 **`feat/festival-reminder-v2`**，不修改已合并的既往章节
-> （§8.3：迭代在同一文档追加新章节，保留新旧对照）。
-
-| 项 | 内容 |
-|---|---|
-| 核心特性 | 命中节日当天，桌宠在气泡（可选语音）之外**再播一段与节日氛围匹配的内置动画**：中秋「中秋赏月吃月饼」、端午「吃粽子」、腊八「吃腊八粥」…… |
-| 新增文件 | `pet/festival_animations.py`（纯数据+纯函数，零 import）、`docs/PR-REPORT-FESTIVAL-ANIMATION-2026-09-17.md`（本轮详细报告） |
-| 修改文件 | `festival_service.py`（`_play_festival_anim` + 三处触发点）、`festival.py`（`DEFAULT_ANIMATION` / `today_festival()` / 清洗键）、`config.py`（新键）、`festival_settings.py`（「节日动画」行）、4 个测试/文档文件 |
-| 新配置键 | `festival_reminder_animation`（默认 **True**，三处登记齐全） |
-| 降级策略 | 精确表 → 关键词表 → 节气季节兜底 → 无则**静默跳过**（只出气泡）；素材名一律先按当前角色 `acts` 过滤，换角色/外部 DLC 缺素材不会报错、不刷日志 |
-| 去重 | 当天只播第一次；右键「今日节日」与设置页「立即试听」每次都播 |
-| 未触碰 | `window.py`（4507/4507）、`modern_settings_dialog.py`（2311/2311）——两个零余量文件一行未改；`catalog.ANIM_FILES` 未碰 |
-| 验证 | 门1 ruff 通过；门2 守卫族 226 passed；门3 全量 **2376 passed / 10 skipped / 0 failed**；CI 三平台全绿（head `112a327`） |
-| 已知限制 | 复活节/母亲节/父亲节无相符素材（刻意保留缺口，`KNOWN_GAPS` + 用例锁死）；`端蛋糕送礼物` 仅随已安装版发布、仓库素材暂缺；多开的小肥鱼不跟着播；GIF 变体共存未验证 |
-
-第一轮（§一~§六）的气泡/语音/让位/幂等语义**逐位未变**——动画是并列的第三个副作用，
-三处调用点都在既有 `if text:` 之内，无命中时不播；动画播完的收尾（进 gap、回随机链）
-由窗口负责，服务侧不做善后。详见 `docs/PR-REPORT-FESTIVAL-ANIMATION-2026-09-17.md`。

@@ -27,7 +27,6 @@
 from __future__ import annotations
 
 import datetime as _dt
-import re as _re
 
 from .festival_calendar import (
     easter,
@@ -37,14 +36,12 @@ from .festival_calendar import (
     solar_to_lunar,
 )
 from .festival_data import (
-    BIRTHDAY_FESTIVAL,
     CATEGORY_CN,
     CATEGORY_ORDER,
     CATEGORY_SOLAR_TERM,
     CATEGORY_WEST,
     FESTIVALS,
     Festival,
-    KIND_BIRTHDAY,
     KIND_EASTER,
     KIND_LUNAR,
     KIND_LUNAR_LAST,
@@ -108,14 +105,6 @@ _WINDOW_END_MINUTE = 21 * 60
 
 DEFAULT_SHOW_QUOTE = True
 
-#: 命中节日当天是否让桌宠播一段与节日匹配的内置动画（映射表见 festival_animations.py）。
-#: 默认开启：它是提醒的"画面部分"，随用户的显式选择一起生效（总开关关闭即不提醒）。
-DEFAULT_ANIMATION = True
-
-#: 生日的专属祝福语。生日是**个人日期**：套用古诗词/引文不如一句直白的祝福，
-#: 故作为生日当天的主句（用户自定义中文文案仍会按既有规则追加在其后）。
-BIRTHDAY_TEXT = "今日是你的生日，祝你生日快乐，健健康康。"
-
 #: 手动「今日节日」入口在当天无任何命中时的提示文案（自动提醒不会用它：
 #: 自动路径下无命中直接不打扰，只有用户主动点击才需要给出明确回应）。
 NO_FESTIVAL_TEXT = "今天没有特别的节日或节气。"
@@ -141,32 +130,6 @@ def clean_count(value) -> int:
     return max(MIN_COUNT, min(MAX_COUNT, number))
 
 
-def clean_birthday(value) -> str:
-    """清洗用户生日为 ``"MM-DD"``；未设置或非法一律回落空串（= 不提醒）。
-
-    宽容常见写法（``10-24`` / ``10/24`` / ``10.24`` / ``10月24日``），但拒绝
-    02-30、13-01 这类**不存在的日期**——宁可静默不提醒，也不要每年在错误的日子
-    跳出来。02-29 合法（闰年生日，平年自动不命中）。
-    """
-    text = str(value or "").strip()
-    if not text or len(text) > 32:
-        return ""
-    if _re.search(r"\d{3,}", text):
-        # 带年份（2005-03-15）或任何 3 位以上数字段：不做猜测。曾经用不锚定的
-        # search 取"第一组数字"，会把 2005-03-15 解析成 05-03 并在**错误的日子**
-        # 每年提醒（实测 972 个 YYYY-MM-DD 输入里 144 个错日、828 个落空、0 个正确）。
-        return ""
-    match = _re.fullmatch(r"(\d{1,2})\D+(\d{1,2})\D*", text)
-    if match is None:
-        return ""
-    month, day = int(match.group(1)), int(match.group(2))
-    try:
-        _dt.date(2000, month, day)  # 2000 是闰年：02-29 合法，02-30 抛 ValueError
-    except ValueError:
-        return ""
-    return f"{month:02d}-{day:02d}"
-
-
 def normalize_festival_config(config) -> dict:
     """把任意来源的配置清洗成内部统一结构（非法值一律回落默认，绝不抛异常）。
 
@@ -188,10 +151,6 @@ def normalize_festival_config(config) -> dict:
             get("festival_reminder_show_quote", DEFAULT_SHOW_QUOTE), DEFAULT_SHOW_QUOTE
         ),
         "speak": clean_flag(get("festival_reminder_speak", False), False),
-        "animation": clean_flag(
-            get("festival_reminder_animation", DEFAULT_ANIMATION), DEFAULT_ANIMATION
-        ),
-        "birthday": clean_birthday(get("festival_birthday", "")),
         "custom_quotes_cn": clean_custom_quotes(get("festival_custom_quotes_cn", "")),
         "custom_quotes_west": clean_custom_quotes(get("festival_custom_quotes_west", "")),
     }
@@ -242,35 +201,14 @@ def _matches(festival: Festival, day: _dt.date) -> bool:
 
 
 def festivals_on(day: _dt.date, cfg: dict) -> tuple[Festival, ...]:
-    """返回该公历日命中的全部节日/节气，按「生日 → 中国节日 → 节气 → 西方节日」排序。
+    """返回该公历日命中的全部节日/节气，按「中国节日 -> 节气 -> 西方节日」排序。
 
     同一天可能命中多个（例如腊八节与小寒同日、除夕与立春同日）。
-    用户生日是**动态节日**（日期来自配置，`BIRTHDAY_FESTIVAL`）：命中当天排在最前，
-    因为"今天是我生日"比特地撞上的节气更值得先说；它也不受三个类别开关约束。
     """
     hits = [f for f in FESTIVALS if is_festival_enabled(f, cfg) and _matches(f, day)]
-    if str(cfg.get("birthday") or "") == f"{day.month:02d}-{day.day:02d}":
-        hits.append(BIRTHDAY_FESTIVAL)
     order = {name: index for index, name in enumerate(CATEGORY_ORDER)}
-    hits.sort(
-        key=lambda f: (
-            0 if f.kind == KIND_BIRTHDAY else 1,
-            min((order.get(c, 99) for c in f.categories), default=99),
-            f.name,
-        )
-    )
+    hits.sort(key=lambda f: (min(order.get(c, 99) for c in f.categories), f.name))
     return tuple(hits)
-
-
-def today_festival(day: _dt.date, cfg: dict) -> Festival | None:
-    """返回该公历日命中的**第一个**节日/节气（无命中返回 ``None``）。
-
-    口径与 ``build_festival_text`` 完全一致（那里也只取 ``hits[0]`` 的文案）：
-    一天命中多个节日时，提醒文案与节日动画必须指向同一个节日，否则会出现
-    「文案写清明、动画在过复活节」这种自相矛盾。
-    """
-    hits = festivals_on(day, cfg)
-    return hits[0] if hits else None
 
 
 def reminder_times(cfg: dict) -> tuple[str, ...]:
@@ -331,22 +269,13 @@ def pick_quote(festival: Festival, day: _dt.date, index: int, cfg: dict) -> str:
 def build_festival_text(day: _dt.date, cfg: dict, index: int = 0) -> str:
     """组装提醒文案：先点明今天是什么节日/节气，再附一句氛围匹配的文案。
 
-    生日是特例：用 ``BIRTHDAY_TEXT`` 作主句（用户自定义中文文案仍会追加）。
     无命中或分类全关时返回空串（调用方据此跳过本次提醒）。
     """
     hits = festivals_on(day, cfg)
     if not hits:
         return ""
-    if any(festival.kind == KIND_BIRTHDAY for festival in hits):
-        # 生日与节日撞同一天时：生日祝福在前（与 hits[0] 的排序一致），
-        # 后面补一句"今天也是…"，两条信息都不丢。
-        others = [f.name for f in hits if f.kind != KIND_BIRTHDAY]
-        text = BIRTHDAY_TEXT
-        if others:
-            text += f"今天也是{'、'.join(others)}。"
-    else:
-        names = "、".join(festival.name for festival in hits)
-        text = f"今天是{names}。"
+    names = "、".join(festival.name for festival in hits)
+    text = f"今天是{names}。"
     if cfg.get("show_quote", DEFAULT_SHOW_QUOTE):
         quote = pick_quote(hits[0], day, index, cfg)
         if quote:
