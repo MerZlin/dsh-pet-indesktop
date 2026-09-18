@@ -631,3 +631,121 @@ def test_proxy_bubble_suppressed_aggregates_any(tmp_path, app):
         assert proxy._bubble_suppressed is False
     finally:
         mgr.shutdown()
+
+
+# ============================================================================
+# 哨兵语义：_physics_mode 的哨兵是 None（非 False）
+#
+# 单窗 PetWindow._physics_mode 的取值域是 None / 'drag' / 'throw'，消费方
+# （proactive G1 守卫）按 `is not None` 读哨兵。代理早期实现返回 `any(...)`
+# 的 bool，把「无人处于物理模式」表达成 False——`False is not None` 恒真，
+# 于是共享模式下 interacting 恒为 True、每次 tick 都在 G1 被静默拦截，
+# 「主动识屏从不触发」且用户侧开关无效（拿到的是同一个共享实例）。
+# 红→绿：修复前 proxy._physics_mode is False。
+# ============================================================================
+
+
+def test_proxy_physics_mode_is_none_when_nobody_in_physics(tmp_path, app):
+    """红→绿：所有窗都不在物理模式时，代理必须返回哨兵 None（不是 False）。
+
+    这是 G1 守卫的契约：False 与 None 在布尔上等价，但在 `is not None` 上
+    天差地别。返回 False 等于对守卫谎报「有人正在拖拽/抛掷」。
+    """
+    w1, w2 = _RecordWin(visible=True), _RecordWin(visible=True)
+    proxy = MultiWindowProxy(_ProxyShell(Config(base=tmp_path), [w1, w2]))
+    value = proxy._physics_mode
+    assert value is not False, "不得用 False 冒充「无物理模式」——G1 读的是 is not None"
+    assert value is None, "无窗处于物理模式时哨兵必须是 None"
+
+
+def test_proxy_physics_mode_reports_active_mode(tmp_path, app):
+    """任一窗进入物理模式时，代理按哨兵语义报出该模式（任一窗生效）。"""
+    w1, w2 = _RecordWin(visible=True), _RecordWin(visible=True)
+    proxy = MultiWindowProxy(_ProxyShell(Config(base=tmp_path), [w1, w2]))
+    assert proxy._physics_mode is None
+    w2._physics_mode = "throw"
+    assert proxy._physics_mode == "throw", "任一生效即视为全局处于物理模式（G1 拦话）"
+    w2._physics_mode = None
+    w1._physics_mode = "drag"
+    assert proxy._physics_mode == "drag"
+    w1._physics_mode = None
+    assert proxy._physics_mode is None
+
+
+def test_shared_watcher_tick_survives_idle_windows(tmp_path, app, monkeypatch):
+    """红→绿：端到端——共享 watcher 在无人交互时，tick 必须越过 G1 守卫。
+
+    修复前 proxy._physics_mode 恒为 False → `is not None` 恒真 → G1 恒定拦截，
+    `_on_tick` 在守卫处 return，连前台窗口探测都不发生（用户的实测现象：
+    零日志、零状态文件）。这里用「前台窗口查询被调用」作为越过守卫的证据。
+    """
+    w1, w2 = _RecordWin(visible=True), _RecordWin(visible=True)
+    config = Config(base=tmp_path)
+    config.set("proactive_screen", {"enabled": True, "whitelist": ["*"]})
+    proxy = MultiWindowProxy(_ProxyShell(config, [w1, w2]))
+    watcher = SharedProactiveWatcher(proxy, config)
+    try:
+        from pet import vision
+
+        probed: list[int] = []
+        # 返回 None：守卫之后的第一步（前台窗口信息），且不会触发截图/网络，
+        # 该分支只清状态、不产生副作用。
+        monkeypatch.setattr(
+            vision, "foreground_window_info",
+            lambda: (probed.append(1), None)[1])
+
+        watcher._on_tick()
+        assert probed, (
+            "无人交互时 G1 守卫不得拦截——否则共享模式（experimental_"
+            "single_process_spawn=true）下主动识屏永不触发")
+    finally:
+        watcher.stop_all()
+
+
+def test_flag_on_production_watcher_reads_proxy_sentinel(tmp_path, app, monkeypatch):
+    """端到端（真实装配）：flag 开时 AppShell 注入的共享 watcher，其 ``win``
+    就是 ``MultiWindowProxy``——G1 读的正是这个对象，这里直接对生产装配面取值。
+
+    前两条用例手工构造 proxy；本条钉的是**生产接线**：``app.py`` 把
+    ``shared.proactive`` 注入各窗（``PetWindow.proactive_watcher``），而它的
+    ``win`` 是 ``shared.proxy``。修复前这条路径读到的 ``_physics_mode`` 是
+    ``False``，G1 恒真拦截——用户看到的「右键开关无效」也源于此（同一实例）。
+    """
+    shell, config, primary_handle = _make_flag_on_shell(tmp_path)
+    try:
+        assert shell._shared is not None, "flag 开必须实例化共享子系统"
+        proxy = shell._shared.proxy
+        watcher = shell._shared.proactive
+        assert watcher.win is proxy, (
+            "共享 watcher 的 win 必须是代理——G1 守卫就是通过它读聚合态")
+
+        # 生产形态：真实装配出的 proxy，所有替身窗都不在物理模式
+        _make_primary_record_win(shell, config)
+        _make_second_record_win(shell, tmp_path, monkeypatch)
+        assert len(proxy._windows()) == 2
+        assert proxy._physics_mode is None, (
+            "真实装配下无人拖拽/抛掷时，G1 读到的必须是哨兵 None；"
+            "返回 False 会让 `is not None` 恒真、识屏永不触发")
+
+        # 任一窗进入物理模式仍要拦住（聚合语义不能被修复改坏）
+        shell.instance.win._physics_mode = "throw"
+        assert proxy._physics_mode == "throw"
+        shell.instance.win._physics_mode = None
+        assert proxy._physics_mode is None
+
+        # 并且真实 tick 能越过 G1（前台窗口查询被调用即证明）
+        from pet import vision
+
+        # _on_tick 只读 effective config（与平台守卫无关），无需 apply_config 起表
+        config.set("proactive_screen", {"enabled": True, "whitelist": ["*"]})
+        probed: list[int] = []
+        monkeypatch.setattr(
+            vision, "foreground_window_info",
+            lambda: (probed.append(1), None)[1])
+        watcher._on_tick()
+        assert probed, "生产装配下 tick 也必须越过 G1 守卫"
+    finally:
+        _stop_sessions(*getattr(shell, "instances", []))
+        if getattr(shell, "_shared", None) is not None:
+            shell._shared.stop_all()
+        slot_manager_mod._unlock_file(primary_handle)

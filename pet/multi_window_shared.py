@@ -220,8 +220,21 @@ class MultiWindowProxy:
         return any(getattr(w, "_dragging", False) for w in self._windows())
 
     @property
-    def _physics_mode(self) -> bool:
-        return any(getattr(w, "_physics_mode", None) is not None for w in self._windows())
+    def _physics_mode(self):
+        # 聚合视图：任一窗处于物理模式（'drag'/'throw'）即返回该模式，否则 None。
+        #
+        # 这里必须保持单窗 PetWindow._physics_mode 的**哨兵语义**（None 表示
+        # 「不在物理模式」），不能返回 ``any(...)`` 的 bool：消费方 proactive 的
+        # G1 守卫读的是 `getattr(win, "_physics_mode", None) is not None`，
+        # 而 ``False is not None`` 恒为 True → 共享模式下 interacting 恒真、
+        # 每个 tick 都在 G1 被静默拦截，主动识屏永不触发（实验依据：dry_run +
+        # change_threshold=0 下仍零输出零状态文件，排除截图/频控/dHash/API）。
+        # 右键开关拿到的也是这份共享实例，用户侧无法绕过，故必须在此修正契约。
+        for w in self._windows():
+            mode = getattr(w, "_physics_mode", None)
+            if mode is not None:
+                return mode
+        return None
 
     @property
     def _click_effect_phase(self) -> int:

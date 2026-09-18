@@ -1093,6 +1093,15 @@ python scripts/cleanup_mei_cache.py --delete
 
 > 按时间倒序记录。v4.2.0 及更早版本的完整清单见 [`docs/RELEASE-v4.2.0.md`](docs/RELEASE-v4.2.0.md) 与 [GitHub Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases)。
 
+### PR #145（2026-09-19 合并，MerZlin）——单进程多开下主动识屏永不触发（`_physics_mode` 哨兵类型不匹配）
+
+- **问题**（用户报告，v4.2.0 安装版）：`experimental_single_process_spawn: true` 时**主动识屏从不触发**——零日志、`proactive_screen_state.json` 从不创建；手动「看看屏幕」一切正常；`dry_run=true` + `change_threshold=0` 组合下仍零输出（已排除截图/频控/dHash/API 全部环节）；右键反复开关无效。
+- **根因**：`MultiWindowProxy._physics_mode` 是聚合属性，早期实现返回 `any(...)` 的 **bool**；而 `pet/proactive.py` 的 G1 守卫按**哨兵语义**读取 `getattr(self.win, "_physics_mode", None) is not None`。单窗 `PetWindow._physics_mode` 的取值域是 `None` / `'drag'` / `'throw'`，代理把「无人处于物理模式」表达成 `False`——`False is not None` 恒真 → `interacting` 恒真 → `should_watch()` 恒假 → **每次 8s tick 都在 G1 被静默拦截**。又因 `app.py` 把 `shared.proactive` 注入为窗口的 `proactive_watcher`，右键开关拿到的是同一个共享实例，**用户侧无法绕过**。
+- **修复**：代理保持哨兵契约——遍历各窗取第一个非 `None` 的模式返回，无窗处于物理模式时返回 `None`（本地实测 `python -c` 复现：修复前 `proxy._physics_mode` 为 `False`）。
+- **验证**：新增 3 条用例（`tests/test_single_process_shared.py`）——「无人物理模式时哨兵必须是 `None`」「任一窗进入物理模式时报出该模式」「**端到端**：无人交互时 tick 必须越过 G1 守卫（前台窗口探测被调用）」；修复前 3 条全红、修复后全绿。
+- **附带确认**：用户同报的第二个问题（`spawn=false` 路径下配置已 enabled 的主动识屏/DSH 监视器重启后不自启）属 **v4.2.0 已存在的缺口，main 上已由 #100 / #102 修掉**（`PetWindow.__init__` 收尾 `sync_optional_services()`，见下方同名条目）。本次补上该修复**缺的主动识屏侧回归**（既有 #99 用例只钉了 agent_link 通道）：新增 `test_petwindow_proactive_enabled_at_startup_starts_watcher`，并实测「把 `__init__` 收尾改回 `_install_effect_services()` 即红」。
+- **顺带清理**：#140（squash）误把合并冲突用的临时文件 `window.py.base/.ours/.theirs`、`wp.base/.ours/.theirs`（合计约 726 KB，非源码、v4.2.0 中不存在）提交进了 main，本次一并删除。
+
 ### PR #112（2026-09-12 合并，MerZlin）——Windows 关机/注销不再弹 `0xc0000142`（issue #111）
 
 - **问题**：每次关机/注销必弹「`ffmpeg-win-x86_64-v7.1.exe` - 应用程序无法正常启动 (0xc0000142)」并**阻塞关机流程**；桌宠未运行时不弹。
