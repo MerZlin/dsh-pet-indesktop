@@ -96,7 +96,10 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 有没有上屏（被提醒队列/设置窗口/按钮气泡丢弃时不能记账，否则让路与重试逻辑跟着错）。
 # 该返回值必须留在 PetWindow 上（所有冒泡路径的唯一收口），拆出去会切断与
 # _alert_current / _bubble_suppressed 的判定；按约定只校准预算，不为达标压行。
-WINDOW_PY_LINE_BUDGET = 4518
+# 2026-09-18 合并时再上调到 4576：#137 Linux 贴边绘制补偿（window.py 实测 4564）
+# 与上面这批叠加后实测 4576——两边各自的预算都低于合并结果，是「红线是组合性质」的
+# 又一实例（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。按约定只随实测校准。
+WINDOW_PY_LINE_BUDGET = 4576
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的

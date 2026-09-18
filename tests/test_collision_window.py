@@ -644,8 +644,13 @@ def test_window_deduplicates_same_epoch_pair_tick(tmp_path, app):
 def test_predicted_bounce_reports_contact_geometry(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_a")
     win._physics_mode = "throw"
+    # 贴边改造后碰撞体是"窗口内可见部分"（帧被窗口边缘裁掉的部分不进
+    # mask），且随播放积累——显式钉为满帧矩形，使圆链形状/法线方向确定。
+    win._collision_local_bounds = QRect(
+        0, int(round(catalog.PAD * win.scale)),
+        win._w, int(round(catalog.CANVAS_H * win.scale)))
     rect = win.collision_content_rect()
-    win._phys_pos[:] = [float(win.x()), float(win.y())]
+    win._phys_pos[:] = [float(win._virtual_pos().x()), float(win._virtual_pos().y())]
     win._phys_vel[:] = [0.0, 0.0]
     peer_x = float(rect.center().x() + 45.0)
     peer_y = float(rect.center().y())
@@ -656,7 +661,7 @@ def test_predicted_bounce_reports_contact_geometry(tmp_path, app):
                    "flags": collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED}
     }
     win._phys_vel[:] = [800.0, 0.0]
-    win._predict_collision_bounce(float(win.x()) - 20.0, float(win.y()))
+    win._predict_collision_bounce(win._phys_pos[0] - 20.0, win._phys_pos[1])
     state = session.submitted_states[-1]
     assert "bounce_x" in state
     assert "bounce_y" in state
@@ -691,7 +696,9 @@ def test_contact_deviation_threshold_expands_with_velocity(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_fast")
     rect = win.visible_content_rect()
     win._phys_vel[:] = [1000.0, 0.0]
-    start_pos = (win.x(), win.y())
+    # 贴边改造后位置冲量作用在虚拟窗口坐标系：窗口可能已被钳在工作区
+    # 边缘，位移由绘制偏移兑现，窗口本身可以不动。
+    start_virtual_x = win._virtual_pos().x()
     session.impulse_ready.emit({
         "a": "pet_fast", "b": "pet_b", "dvx_a": 400.0, "dvy_a": 0.0,
         "dx_a": 10.0, "dy_a": 0.0,
@@ -699,7 +706,7 @@ def test_contact_deviation_threshold_expands_with_velocity(tmp_path, app):
     })
     app.processEvents()
     assert win._phys_vel[0] > 1000.0
-    assert win.x() != start_pos[0]
+    assert win._virtual_pos().x() != start_virtual_x
     win.close()
 
 
@@ -713,7 +720,8 @@ def test_collision_impulse_syncs_physics_position(tmp_path, app):
         "dx_a": 5.0, "dy_a": 3.0,
     })
     app.processEvents()
-    assert win._phys_pos == [float(win.x()), float(win.y())]
+    # 物理坐标与虚拟窗口坐标一致（贴边时实际窗口被钳，不代表角色位置）
+    assert win._phys_pos == [float(win._virtual_pos().x()), float(win._virtual_pos().y())]
     win.close()
 
 
@@ -813,7 +821,12 @@ def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path,
     win, session = _make_pet_window(tmp_path, "pet_a")
     win._physics_mode = "throw"
     win._interaction_state = "THROWN"
-    win._phys_pos[:] = [float(win.x()), float(win.y())]
+    # 显式钉住碰撞体（满帧矩形）：圆链密度/最深穿透圆对的法线方向不随
+    # mask 积累时序与窗口裁剪变化（贴边改造后碰撞体=窗口内可见部分）
+    win._collision_local_bounds = QRect(
+        0, int(round(catalog.PAD * win.scale)),
+        win._w, int(round(catalog.CANVAS_H * win.scale)))
+    win._phys_pos[:] = [float(win._virtual_pos().x()), float(win._virtual_pos().y())]
     win._phys_vel[:] = [9000.0, 0.0]
     win.cfg.set("collision_impulse_cap", 20000.0)
     peer = _prediction_peer(win, flags=collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED |
@@ -835,11 +848,13 @@ def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path,
 
     predicted_velocity = tuple(win._phys_vel)
     predicted_position = (win.x(), win.y())
+    predicted_virtual = (win._virtual_pos().x(), win._virtual_pos().y())
     session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b",
                                 "dvx_a": 4000.0, "dvy_a": 0.0, "dx_a": 9.0, "dy_a": 0.0})
     app.processEvents()
     assert tuple(win._phys_vel) == predicted_velocity
     assert (win.x(), win.y()) == predicted_position
+    assert (win._virtual_pos().x(), win._virtual_pos().y()) == predicted_virtual
     win.close()
 
 
@@ -1004,8 +1019,9 @@ def test_real_collision_impulse_cancels_edge_probe_and_settle_arms_reentry(tmp_p
     """批 A 集成：探头激活→真实撞击→会话被取消→撞飞落地停稳后启动重进倒计时。"""
     win, session = _make_pet_window(tmp_path, "pet_probe")
     avail = win.screen_available().availableGeometry()
-    local = win.character_local_region()
-    win.move(avail.left() - local.left(), 100)
+    # 摆位到左缘：经统一出口按身体框贴边（贴边改造后窗口被钳在工作区内、
+    # 角色由绘制偏移贴边；直接 move 窗口到负坐标不再代表"角色贴边"）。
+    win._move_window_towards(avail.left() - win._stable_body_local_rect().x(), 100)
     win.cfg.set("edge_probe_enabled", True)
     win.sync_optional_services()
     probe = win._edge_probe
@@ -1037,8 +1053,9 @@ def test_probe_active_soft_hit_displacement_is_discarded(tmp_path, app):
     """
     win, session = _make_pet_window(tmp_path, "pet_probe_soft")
     avail = win.screen_available().availableGeometry()
-    local = win.character_local_region()
-    win.move(avail.left() - local.left(), 100)
+    # 摆位到左缘：经统一出口按身体框贴边（贴边改造后窗口被钳在工作区内、
+    # 角色由绘制偏移贴边；直接 move 窗口到负坐标不再代表"角色贴边"）。
+    win._move_window_towards(avail.left() - win._stable_body_local_rect().x(), 100)
     win.cfg.set("edge_probe_enabled", True)
     win.sync_optional_services()
     probe = win._edge_probe
@@ -1096,8 +1113,9 @@ def test_probe_collision_throw_arms_egg_and_rotation_follows_velocity(tmp_path, 
     """批 D 集成：探头激活→真实撞击 arm 彩蛋→飞行整帧旋转跟随速度→落地停稳兜底恢复。"""
     win, session = _make_pet_window(tmp_path, "pet_probe_egg")
     avail = win.screen_available().availableGeometry()
-    local = win.character_local_region()
-    win.move(avail.left() - local.left(), 100)
+    # 摆位到左缘：经统一出口按身体框贴边（贴边改造后窗口被钳在工作区内、
+    # 角色由绘制偏移贴边；直接 move 窗口到负坐标不再代表"角色贴边"）。
+    win._move_window_towards(avail.left() - win._stable_body_local_rect().x(), 100)
     win.cfg.set("edge_probe_enabled", True)
     win.sync_optional_services()
     probe = win._edge_probe

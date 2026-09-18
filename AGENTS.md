@@ -169,3 +169,7 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   budget instead of fixed sleeps).
 - Treat `assets/characters/<id>/videos/` plus its manifest as one character
   package; preserve relative paths and case because packaged platforms differ.
+  The manifest may declare `body_box` (`[x1, y1, x2, y2]` in source pixels,
+  mirror-symmetrized): the stable body rect used as the placement/edge-clamp
+  anchor (`pet/catalog.py character_body_box`); measure it at alpha≥128 to
+  match the mask/visual edge, and omit it to fall back to full-canvas behavior.

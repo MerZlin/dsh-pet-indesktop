@@ -15,13 +15,34 @@ test_collision_window 锁定，本文件不改动它）。
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import QCloseEvent, QHideEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
 from pet.window import DRAG_MOVE_COALESCE_MS, PetWindow
 from tests.test_window_pause import FakeLibrary
+
+
+class _BigScreen:
+    """合帧/跟手语义测试需要"无边界"环境：offscreen 默认屏只有 800×600，
+    本文件的合成事件坐标贴近其边缘时会触发贴边钳位与绘制补偿（该语义由
+    tests/test_edge_reachability.py 专门锁定，不在此重复）。"""
+
+    def name(self):
+        return "big"
+
+    def availableGeometry(self):
+        return QRect(0, 0, 1920, 1200)
+
+    def geometry(self):
+        return QRect(0, 0, 1920, 1200)
+
+    def devicePixelRatio(self):
+        return 1.0
+
+
+_BIG_SCREEN = _BigScreen()
 
 
 @pytest.fixture
@@ -69,6 +90,7 @@ def _make_win(app, tmp_path, **overrides):
         cfg.set(key, value)
     win = PetWindow(FakeLibrary(), cfg)
     win._is_in_interactive_area = lambda pos: True  # 测试聚焦拖拽判定
+    win._screen_available = lambda *a, **k: _BIG_SCREEN
     return win
 
 
@@ -103,17 +125,17 @@ def test_normal_drag_records_latest_target_and_drops_intermediate(app, tmp_path)
     win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
     assert win._interaction_state == "DRAGGING"
     first_target = QPoint(400, 300) - win._grab_offset
-    assert win.pos() == first_target
+    assert win._virtual_pos() == first_target
     # 同一显示帧内连续多次移动：只记录最新目标，不逐事件 move
     win.mouseMoveEvent(_move(QPointF(70, 70), QPointF(500, 350)))
     win.mouseMoveEvent(_move(QPointF(80, 80), QPointF(600, 380)))
     win.mouseMoveEvent(_move(QPointF(90, 90), QPointF(700, 420)))
-    assert win.pos() == first_target, "中间移动不应在消费前生效"
+    assert win._virtual_pos() == first_target, "中间移动不应在消费前生效"
     assert win._drag_move_pending == QPoint(700, 420) - win._grab_offset
     assert win._drag_move_timer.isActive()
     # 一次消费：只应用最新目标，中间位置全部丢弃
     win._consume_drag_move()
-    assert win.pos() == QPoint(700, 420) - win._grab_offset
+    assert win._virtual_pos() == QPoint(700, 420) - win._grab_offset
     assert win._drag_move_pending is None
     win.close()
     app.processEvents()
@@ -131,7 +153,7 @@ def test_drag_timer_wired_to_consume_slot(app, tmp_path):
     win.mouseMoveEvent(_move(QPointF(80, 80), QPointF(600, 380)))
     assert win._drag_move_timer.isActive()
     win._drag_move_timer.timeout.emit()  # 等价于一次真实 tick
-    assert win.pos() == QPoint(600, 380) - win._grab_offset
+    assert win._virtual_pos() == QPoint(600, 380) - win._grab_offset
     assert win._drag_move_pending is None
     win.close()
     app.processEvents()
@@ -147,7 +169,7 @@ def test_release_flushes_last_target_and_stops_timer(app, tmp_path):
     assert win._drag_move_timer.isActive()
     win.mouseReleaseEvent(_release(QPointF(80, 80), QPointF(620, 400)))
     # 松手位置（而非最后一次 move 的过期目标）为最终位置
-    assert win.pos() == QPoint(620, 400) - offset
+    assert win._virtual_pos() == QPoint(620, 400) - offset
     assert win._dragging is False
     assert win._press_global is None
     assert win._drag_move_pending is None
@@ -165,9 +187,10 @@ def test_slingshot_enter_flushes_last_target_before_anchor(app, tmp_path):
     assert win._drag_move_timer.isActive()
     win.mousePressEvent(_right_press(QPointF(80, 80), QPointF(600, 380)))
     assert win._interaction_state == "SLINGSHOT_AIMING"
-    # 进入瞄准前最后一次跟手位置已强制应用：锚点 = 当前窗口位置
-    assert win.pos() == QPoint(600, 380) - win._grab_offset
-    assert win._slingshot_anchor_pos == win.pos()
+    # 进入瞄准前最后一次跟手位置已强制应用：锚点 = 当前虚拟窗口位置
+    # （贴边时实际窗口被钳在工作区内，锚点语义是角色/物理所在的虚拟坐标系）
+    assert win._virtual_pos() == QPoint(600, 380) - win._grab_offset
+    assert win._slingshot_anchor_pos == win._virtual_pos()
     assert win._drag_move_pending is None
     assert not win._drag_move_timer.isActive(), "进入弹弓后必须停止合帧 timer"
     win.close()
@@ -261,7 +284,7 @@ def test_release_frame_syncs_position_immediately(app, tmp_path, monkeypatch):
     win.mouseReleaseEvent(_release(QPointF(80, 80), QPointF(620, 400)))
     # 松手后的最终位置立即同步（不等去抖）
     assert seen[-1] == (win.pos().x(), win.pos().y())
-    assert win.pos() == QPoint(620, 400) - offset
+    assert win._virtual_pos() == QPoint(620, 400) - offset
     win.close()
     app.processEvents()
 

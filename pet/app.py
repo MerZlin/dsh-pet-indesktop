@@ -30,7 +30,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import shiboken6
-from PySide6.QtCore import QObject, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
@@ -592,8 +592,16 @@ class PetInstance:
         available = scr.availableGeometry()
         horizontal = -1 if self.win.geometry().center().x() > available.center().x() else 1
         vertical = -1 if self.win.geometry().center().y() > available.center().y() else 1
-        x = self.win.x() + horizontal * 48 * index
-        y = self.win.y() + vertical * 32 * index
+        # 虚拟窗口坐标：贴边状态下实际窗口位置不含绘制偏移，错开要按
+        # 角色自然位置算；未支持统一出口的窗口回退实际位置（= 改造前）。
+        vp_fn = getattr(self.win, '_virtual_pos', None)
+        base = vp_fn() if callable(vp_fn) else QPoint(self.win.x(), self.win.y())
+        x = base.x() + horizontal * 48 * index
+        y = base.y() + vertical * 32 * index
+        mover = getattr(self.win, '_move_window_towards', None)
+        if callable(mover):
+            mover(x, y)  # 统一出口自带工作区钳位（含小屏兜底）
+            return
         # 小屏（可用区比窗口还窄/矮）时上界 < 下界，min/max 会互相打架把
         # 窗口推出屏幕外；先判边界再钳制。
         max_x = available.right() - self.win.width() + 1
