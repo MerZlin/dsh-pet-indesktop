@@ -86,27 +86,12 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 一个带完整实机取证说明的委托方法：它必须留在 PetWindow 上（showEvent 是唯一
 # 可靠的"原生窗口已就绪/可能被重建"注入点，拆到独立模块反而会产生跨模块的
 # 窗口生命周期耦合）。按约定只校准预算，不为达标压行。
-# 2026-09-17 再上调到 4509：合并后 P1 修复——closeEvent 收口歌词控制器的 1s
-# 轮询（+2 行含注释）。此前 MusicLyricController.shutdown() 全仓没有调用方，
-# 关闭后残留的 QTimer 仍会对半销毁窗口触发；控制器本体在
-# music_lyric_controller.py，window.py 侧只是必须与窗口关闭时机同点的收口调用
-# （隐藏/显示走 window_optional_services 的钩子，不占本文件行数）。
-# 按约定只随实测校准，不为达标压行。
-# 2026-09-17 再上调到 4512：唱歌动画无缝续播保留碰撞稳定边界（+3 行含注释，
-# 实测 4512）——_on_anim_ended 的 SING_ANIM 续播过去走完整 _switch，每圈
-# 清零 _collision_local_bounds，歌词气泡锚点（window_placement.bubble_anchor_rect）
-# 跟着骑"清零→重长"波形（实机探针：8 秒周期、y 向 49px 往复）；同 clip 续播
-# 帧内容不变，边界保存/恢复即可。守卫逻辑必须在 _on_anim_ended 的续播分支里
-# （_switch 无法区分"无缝续播"与"同名换素材"），不宜外拆。
-# 2026-09-17 再上调到 4519：碰撞稳定边界按动画缓存（+6 行含注释，实测 4519）
-# ——_collision_bounds_cache 在 _sync_mask 写回、_switch 复原、缩放/余量变化
-# 清空；锚点链路因此跨轮换恒定。随后续播保留改由缓存统一覆盖，_on_anim_ended
-# 的专项保存/恢复已回退（缓存是更通用的同一机制）。
-# 2026-09-18 再上调到 4545：审查修复批落在 window.py 的部分（+26 行含注释，
-# 实测 4545）——squash 瞬态帧不并入/不写缓存、缓存写读双侧 QRect 拷贝、素材
-# 原地替换按签名作废缓存条目。三处都必须与 _sync_mask/_switch/_rebuild_frame
-# 的现有状态流同点更新，外拆会切断不变量，按约定校准预算。
-WINDOW_PY_LINE_BUDGET = 4545
+# 2026-09-18 合并 #140 时按实测校准到 4605：#140 的碰撞稳定边界缓存（字段/切换复原/
+# 素材替换作废/缩放清空）与 main 已含的 #137 Linux 贴边绘制补偿（虚拟位置 + 稳定
+# 身体框）**叠加**后实测 4605——两边各自的预算都低于合并结果，是「红线是组合性质」
+# 的又一实例（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。按文件约定只随实测校准，
+# 不为达标压行/合并语句。
+WINDOW_PY_LINE_BUDGET = 4605
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的

@@ -12,9 +12,21 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from PySide6.QtCore import QEasingCurve, QRect, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QPoint, QRect, Qt, QTimer
 
 from .window_effects import eased_progress, rotated_region_bounds
+
+
+def _win_delta(win) -> QPoint:
+    """贴边绘制偏移；轻量桩没有该属性时为零（语义=改造前）。"""
+    delta = getattr(win, "_draw_delta", None)
+    return delta if delta is not None else QPoint(0, 0)
+
+
+def _virtual_xy(win) -> tuple[int, int]:
+    """虚拟窗口坐标 = 实际位置 + 绘制偏移（角色无约束时窗口该在的位置）。"""
+    delta = _win_delta(win)
+    return win.x() + delta.x(), win.y() + delta.y()
 
 EDGE_PROBE_ANGLE = 45.0
 # 露出比例以“当前姿态（含 ±45° 旋转）的投影 bbox 宽度”为分母；0.55 使常驻探头
@@ -40,10 +52,12 @@ _TRANSITION_MODES = {ENTERING, STRAIGHTENING, RETURNING}
 
 
 def probe_window_x(side: str, exposure: float, vis_local, avail) -> int:
-    """把真实可见角色按曝光比例放到屏幕边缘的窗口 x 坐标。
+    """把真实可见角色按曝光比例放到屏幕边缘的（虚拟）窗口 x 坐标。
 
     left：左侧 off-screen 一部分，保留从中心往右的 exposure；
     right：右侧 off-screen 一部分，保留从中心往左的 exposure。
+    返回值为虚拟窗口坐标（vis_local 同为虚拟窗口坐标系）：GNOME 不允许
+    窗口出屏，"藏出屏"由 PetWindow._move_window_towards 的绘制偏移兑现。
     """
     exposure = max(0.0, min(1.0, float(exposure)))
     offscreen = (1.0 - exposure) * vis_local.width()
@@ -55,7 +69,24 @@ def probe_window_x(side: str, exposure: float, vis_local, avail) -> int:
 
 
 def edge_side_at_rest(win, avail) -> str | None:
-    """按真实可见区域判断桌宠是否贴在屏幕左/右边缘。"""
+    """判断桌宠是否贴在屏幕左/右边缘。
+
+    优先用稳定身体框（虚拟窗口坐标）：与贴边 clamp 同源，且不受素材羽化
+    边缘影响（alpha 16..128 的半透明过渡带不进 mask，像素口径会留出
+    十几像素判定间隙导致永远判不上——GNOME 上该功能曾因此静默失效）。
+    无身体框接口的轻量桩回退 mask 像素口径（旧行为）。
+    """
+    vp_fn = getattr(win, "_virtual_pos", None)
+    sbr_fn = getattr(win, "_stable_body_local_rect", None)
+    if callable(vp_fn) and callable(sbr_fn):
+        sbr = sbr_fn()
+        if not sbr.isEmpty():
+            vp = vp_fn()
+            if vp.x() + sbr.left() <= avail.left():
+                return "left"
+            if vp.x() + sbr.right() >= avail.right():
+                return "right"
+            return None
     local = win.character_local_region()
     if local is None or local.isEmpty():
         return None
@@ -237,7 +268,11 @@ class EdgeProbeController:
         self._vis_local = None
         if was_active and restore and restore_x is not None:
             try:
-                self.win.move(restore_x, self.win.y())
+                mover = getattr(self.win, "_move_window_towards", None)
+                if callable(mover):
+                    mover(restore_x, _virtual_xy(self.win)[1])
+                else:
+                    self.win.move(restore_x, self.win.y())
             except Exception:
                 pass
         if was_active:
@@ -284,8 +319,10 @@ class EdgeProbeController:
         if side is None:
             return
         self._side = side
-        self._vis_local = self.win.character_local_region()
-        self._restore_x = self.win.x()
+        # 可见区转虚拟窗口坐标系：它相对"虚拟窗口位置"的偏移不随绘制补偿
+        # 变化，探头姿态期间 delta 改变也不会让曝光量算漂。
+        self._vis_local = self.win.character_local_region().translated(_win_delta(self.win))
+        self._restore_x = _virtual_xy(self.win)[0]
         # 会话期间只允许 idle/turn：当前若不是，先回 idle。
         anim = getattr(self.win, "anim", None)
         idles = list(getattr(self.win, "idles", ()) or ())
@@ -397,16 +434,32 @@ class EdgeProbeController:
         avail = scr.availableGeometry() if scr is not None else None
         if avail is None:
             return
-        # 旋转中心与 paint/_sync_mask 一致：帧绘制矩形中心。探头姿态 ±45° 时
-        # 角色水平投影会变宽，必须用旋转后投影 bbox 作为露出量分母，否则实际
-        # 可见像素远小于目标（例如只剩一只眼）。
+        # 旋转中心与 paint/_sync_mask 一致：帧绘制矩形中心（虚拟窗口坐标系）。
+        # 探头姿态 ±45° 时角色水平投影会变宽，必须用旋转后投影 bbox 作为
+        # 露出量分母，否则实际可见像素远小于目标（例如只剩一只眼）。
         frame_fn = getattr(self.win, "_frame_draw_rect", None)
-        pivot = frame_fn() if callable(frame_fn) else QRect(
+        delta = _win_delta(self.win)
+        pivot = frame_fn().translated(delta) if callable(frame_fn) else QRect(
             0, 0, getattr(self.win, "_w", 0), getattr(self.win, "_h", 0)
         )
         bounds = rotated_region_bounds(self._vis_local, pivot, self._angle_deg)
         x = probe_window_x(self._side, self._exposure, bounds, avail)
-        if x != self.win.x():
+        vx, vy = _virtual_xy(self.win)
+        mover = getattr(self.win, "_move_window_towards", None)
+        if callable(mover):
+            # 探头要把身体藏一部分出屏：放宽身体钳位区间；窗口本体仍被钳在
+            # 工作区内，"出屏"由绘制偏移兑现（GNOME 不允许窗口出屏）。
+            sbr_fn = getattr(self.win, "_stable_body_local_rect", None)
+            sbr = sbr_fn() if callable(sbr_fn) else None
+            body_bounds = None
+            if sbr is not None:
+                body_bounds = QRect(
+                    avail.left() - sbr.width(), avail.top(),
+                    avail.width() + 2 * sbr.width(), avail.height(),
+                )
+            if x != vx:
+                mover(x, vy, body_bounds=body_bounds)
+        elif x != self.win.x():
             self.win.move(x, self.win.y())
         try:
             self.win.update()

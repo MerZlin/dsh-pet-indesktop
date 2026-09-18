@@ -174,12 +174,34 @@ def _right_release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     )
 
 
+class _BigScreen:
+    """拖拽/锁位语义测试需要"无边界"环境：offscreen 默认屏只有 800×600，
+    合成事件坐标贴近其边缘时会触发贴边钳位与绘制补偿（该语义由
+    tests/test_edge_reachability.py 专门锁定，不在此重复）。"""
+
+    def name(self):
+        return "big"
+
+    def availableGeometry(self):
+        return QRect(0, 0, 1920, 1200)
+
+    def geometry(self):
+        return QRect(0, 0, 1920, 1200)
+
+    def devicePixelRatio(self):
+        return 1.0
+
+
+_BIG_SCREEN = _BigScreen()
+
+
 def _make_win(app, tmp_path, **overrides):
     cfg = Config(base=tmp_path)
     for key, value in overrides.items():
         cfg.set(key, value)
     win = PetWindow(FakeLibrary(), cfg)
     win._is_in_interactive_area = lambda pos: True  # 测试聚焦拖拽判定
+    win._screen_available = lambda *a, **k: _BIG_SCREEN
     return win
 
 
