@@ -317,6 +317,41 @@ def test_winrt_calls_do_not_churn_one_thread_per_action(monkeypatch):
     )
 
 
+def test_winrt_gate_blocks_a_second_caller_while_one_is_inside(monkeypatch):
+    """闸门本身：一条线程还在 WinRT 里时，另一条必须**进不去**（而不是排队硬闯）。
+
+    这是 access violation 的最后一道闸。用真实的 Lock（不替换锁实现）验证"第二个
+    调用被挡下且不进入 WinRT"——离线可复现，不依赖触发崩溃本身。
+    """
+    inside = threading.Event()
+    release = threading.Event()
+    entered: list[int] = []
+
+    def _slow():
+        entered.append(threading.get_ident())
+        inside.set()
+        release.wait(2.0)
+        return None
+
+    monkeypatch.setattr(now_playing, "_read_winrt", _slow)
+
+    first = threading.Thread(target=now_playing._read_blocking, daemon=True)
+    first.start()
+    assert inside.wait(BUDGET), "第一条线程未进入 WinRT"
+
+    second = threading.Thread(target=now_playing._read_blocking, daemon=True)
+    second.start()
+    second.join(BUDGET)
+    assert not second.is_alive(), "被闸门挡住的调用没有及时返回（不该阻塞调用方）"
+    assert len(entered) == 1, (
+        f"旧调用仍在 WinRT 里时又有 {len(entered)} 条线程进去了（并发使用同一套对象）"
+    )
+
+    release.set()
+    first.join(BUDGET)
+    assert len(entered) == 1
+
+
 def test_action_worker_is_reused_across_calls(monkeypatch):
     """操作线程必须复用（不是每次新建）：卡死时更不能靠"再开一条"绕过去。
 
