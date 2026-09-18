@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue
 import sys
 import threading
 import time
@@ -177,8 +178,8 @@ async def _read_async() -> Playback | None:
     return Playback(track=track, position=position, updated_at=time.monotonic())
 
 
-def _read_blocking() -> Playback | None:
-    """单次同步采样（**只允许在采样/工作线程里调用**）。
+def _read_winrt() -> Playback | None:
+    """单次同步采样（**只允许在持有 `_winrt_gate` 时调用**）。
 
     Windows 之外直接返回 None；任何异常都吞掉——歌词不能因为第三方接口异常
     影响桌宠本体。注意：本函数**可能永不返回**（SMTC 请求挂住），调用方
@@ -190,6 +191,30 @@ def _read_blocking() -> Playback | None:
         return asyncio.run(_read_async())
     except Exception:
         return None
+
+
+# WinRT 互斥闸门（事故 2026-09-18）。
+#
+# 现象：Windows CI 出现 C 级 ``access violation``，崩溃线程栈全部落在本模块的
+# asyncio/WinRT 调用里。根因是**多条线程并发使用同一套 WinRT 对象**——而 SMTC 的
+# await 既可能永不完结、又取消不掉，所以"卡住的线程"是常态：
+#   * ``_run_bounded`` 原先每次操作新建线程，超时后线程被抛弃却仍停在 WinRT 里；
+#   * 看门狗「摘牌重开」采样线程时，新线程会与卡在 WinRT 里的旧线程并存。
+#
+# 纪律：**任何线程进入 WinRT 前必须先拿到闸门**。卡住的线程会一直持有它，于是其他
+# 线程（包括新开的采样线程）根本进不去——宁可降级（这一拍不用 SMTC、退避到窗口
+# 标题兜底；菜单操作返回"不支持"），也绝不再并发。
+_winrt_gate = threading.Lock()
+
+
+def _read_blocking() -> Playback | None:
+    """带闸门的采样读取：拿不到闸门说明别人正卡在 WinRT 里，这一拍放弃 SMTC。"""
+    if not _winrt_gate.acquire(blocking=False):
+        return None
+    try:
+        return _read_winrt()
+    finally:
+        _winrt_gate.release()
 
 
 def _extrapolate(
@@ -521,24 +546,65 @@ def _stop_sampler() -> None:
         _smtc_last_at = 0.0       # 限速计时也归零
 
 
-def _run_bounded(factory: Callable[[], object], default):
-    """在工作线程里跑 ``factory()``，调用线程最多等 ``_ACTION_TIMEOUT`` 秒。
+_action_jobs: "queue.Queue" = queue.Queue()
+_action_thread: threading.Thread | None = None
 
-    超时按 ``default`` 返回（调用方语义 = 「无会话/不支持」）：SMTC 卡死时
-    用户点右键菜单也不会冻住窗口。卡死的工作线程是守护线程，不阻塞进程退出。
+
+def _action_loop() -> None:
+    """常驻操作线程：串行执行菜单动作，且每个动作都在闸门内跑。
+
+    取代「每次操作新建一条线程」——那样点 N 次就有 N 条线程，超时后还被抛弃在
+    WinRT 里，与下一条并发使用同一套对象（access violation 的直接成因）。
+    这里只有**一条**操作线程：动作排队执行，调用方仍只做有界等待。
     """
-    box: list = []
-
-    def _work() -> None:
+    while True:
+        job = _action_jobs.get()
+        if job is None:
+            return
+        factory, result = job
+        # 等闸门最多 _ACTION_TIMEOUT：卡住的旧调用会让后来者拿不到闸门，
+        # 此时按「不支持」收场，而不是绕过闸门硬闯。
+        acquired = _winrt_gate.acquire(timeout=_ACTION_TIMEOUT)
         try:
-            box.append(factory())
+            outcome = factory() if acquired else None
         except Exception:
             log.debug("播放器操作异常（按不支持处理）", exc_info=True)
+            outcome = None
+        finally:
+            if acquired:
+                _winrt_gate.release()
+        try:
+            result.put_nowait(outcome)
+        except Exception:
+            pass
 
-    thread = threading.Thread(target=_work, name="now-playing-action", daemon=True)
+
+def _ensure_action_thread() -> threading.Thread:
+    """懒启动唯一的操作线程（幂等）。"""
+    global _action_thread
+    thread = _action_thread
+    if thread is not None and thread.is_alive():
+        return thread
+    thread = threading.Thread(target=_action_loop, name="now-playing-action", daemon=True)
+    _action_thread = thread
     thread.start()
-    thread.join(_ACTION_TIMEOUT)
-    return box[0] if box else default
+    return thread
+
+
+def _run_bounded(factory: Callable[[], object], default):
+    """把 ``factory()`` 交给**唯一**操作线程执行，调用方最多等 ``_ACTION_TIMEOUT`` 秒。
+
+    超时按 ``default`` 返回（调用方语义 = 「无会话/不支持」）：SMTC 卡死时
+    用户点右键菜单也不会冻住窗口。超时**不**代表放弃执行——动作仍在操作线程里跑
+    （可能正卡在 WinRT 里），只是调用方不再等；这样绝不会为它再开一条线程。
+    """
+    _ensure_action_thread()
+    result: queue.Queue = queue.Queue(maxsize=1)
+    _action_jobs.put((factory, result))
+    try:
+        return result.get(timeout=_ACTION_TIMEOUT)
+    except queue.Empty:
+        return default
 
 
 def get_now_playing() -> Playback | None:

@@ -206,6 +206,139 @@ def test_get_now_playing_publishes_background_sample(monkeypatch):
     assert _wait_for_sample(sample) is sample
 
 
+# ------------------------------- WinRT 并发纪律（access violation 回归，2026-09-18）
+#
+# 事故：main 的 Windows CI 出现 C 级 ``access violation``，崩溃线程栈全部落在本模块的
+# asyncio/WinRT 调用里。成因是**多条线程并发使用同一套 WinRT 对象**：SMTC 的 await
+# 可能永不完结且取消不掉，于是"卡住的线程"是常态——旧实现还会为每次菜单操作新建
+# 一条线程、看门狗重启采样线程时与旧线程并存。
+#
+# 修复：进入 WinRT 必须持有进程级闸门 `_winrt_gate`；菜单操作由**唯一**操作线程串行
+# 执行。下面把这两条不变量钉死（可离线验证，不依赖触发那个竞态本身）。
+#
+# 三条用例都强制 `sys.platform = "win32"`：菜单操作入口（skip_track / toggle_play_pause /
+# play_session_for）在非 Windows 上会直接返回，不强制平台的话在 ubuntu/macOS CI 上
+# 会变成"空测试"（什么都没验证却显示通过）——实测确认过。
+
+
+def _force_win32(monkeypatch) -> None:
+    """让菜单操作真的走到 _run_bounded（否则非 Windows 上直接返回，用例形同虚设）。"""
+    monkeypatch.setattr(sys, "platform", "win32")
+
+
+def test_winrt_calls_never_overlap_across_threads(monkeypatch):
+    """并发操作 + 采样：同一时刻只允许一条线程在 WinRT 调用内。"""
+    _force_win32(monkeypatch)
+    lock = threading.Lock()
+    depth = 0
+    peak = 0
+    threads: set[int] = set()
+    gate = threading.Event()
+
+    def _slow_read():
+        nonlocal depth, peak
+        with lock:
+            depth += 1
+            peak = max(peak, depth)
+            threads.add(threading.get_ident())
+        gate.wait(0.2)          # 放大并发窗口：有重叠必被发现
+        with lock:
+            depth -= 1
+        return None
+
+    monkeypatch.setattr(now_playing, "_read_winrt", _slow_read)
+
+    async def _slow_action(*_a, **_k):
+        nonlocal depth, peak
+        with lock:
+            depth += 1
+            peak = max(peak, depth)
+            threads.add(threading.get_ident())
+        await asyncio.sleep(0.05)
+        with lock:
+            depth -= 1
+        return False
+
+    for name in ("_skip_async", "_play_pause_async", "_play_session_async"):
+        monkeypatch.setattr(now_playing, name, _slow_action)
+
+    now_playing.get_now_playing()
+    workers = [
+        threading.Thread(target=now_playing.skip_track, args=("next",), daemon=True),
+        threading.Thread(target=now_playing.toggle_play_pause, daemon=True),
+        threading.Thread(target=lambda: now_playing.play_session_for("x.exe"), daemon=True),
+    ]
+    for w in workers:
+        w.start()
+    time.sleep(0.1)
+    now_playing.get_now_playing()
+    for w in workers:
+        w.join(BUDGET)
+    gate.set()
+
+    assert peak == 1, f"出现 {peak} 条线程同时在 WinRT 调用内（access violation 的成因）"
+    # 角色线程只有两条：采样线程 + 唯一操作线程。数字随"操作次数"增长才是回归
+    # （旧实现每次操作新建一条线程）。
+    assert len(threads) <= 2, f"WinRT 调用散布在 {len(threads)} 条线程上：{sorted(threads)}"
+
+
+def test_winrt_calls_do_not_churn_one_thread_per_action(monkeypatch):
+    """连续多次操作 + 采样，WinRT 调用线程总数必须保持为 1。
+
+    旧实现每次操作新建线程（点 N 次 = N 条，且超时后被抛弃的线程仍可能停在 WinRT 里）。
+    """
+    _force_win32(monkeypatch)
+    threads: set[int] = set()
+
+    async def _quick(*_a, **_k):
+        threads.add(threading.get_ident())
+        await asyncio.sleep(0)
+        return True
+
+    for name in ("_skip_async", "_play_pause_async", "_play_session_async"):
+        monkeypatch.setattr(now_playing, name, _quick)
+    monkeypatch.setattr(
+        now_playing, "_read_winrt",
+        lambda: (threads.add(threading.get_ident()) or None),
+    )
+
+    now_playing.get_now_playing()
+    for _ in range(12):
+        now_playing.skip_track("next")
+        now_playing.toggle_play_pause()
+        now_playing.play_session_for("x.exe")
+        now_playing.get_now_playing()
+    time.sleep(0.1)
+
+    # 36 次操作 + 13 次采样之后，线程数仍应停在"采样线程 + 唯一操作线程"两条。
+    # 旧实现是每次操作一条线程（这里会到几十条）。
+    assert len(threads) <= 2, (
+        f"WinRT 调用散布在 {len(threads)} 条线程上（点一次菜单就多一条）：{sorted(threads)}"
+    )
+
+
+def test_action_worker_is_reused_across_calls(monkeypatch):
+    """操作线程必须复用（不是每次新建）：卡死时更不能靠"再开一条"绕过去。
+
+    ``skip_track`` 在非 Windows 上会直接返回（SMTC 只在 Windows 存在），所以这里
+    强制 win32 —— 与其他"只在 Windows 才有这条路"的用例同一处理方式；否则本用例
+    在 ubuntu/macOS CI 上会因为没有操作线程而红（实测踩过）。
+    """
+    _force_win32(monkeypatch)
+    monkeypatch.setattr(now_playing, "_read_blocking", lambda: None)
+
+    async def _quick(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(now_playing, "_skip_async", _quick)
+
+    now_playing.skip_track("next")
+    first = now_playing._action_thread
+    assert first is not None and first.is_alive()
+    for _ in range(5):
+        now_playing.skip_track("next")
+    assert now_playing._action_thread is first, "操作线程被重建了（应始终复用同一条）"
+
 def test_stalled_sampler_is_abandoned_and_recovers(monkeypatch):
     """采样线程卡死后必须被弃用重开，且陈旧结果不得发布。"""
     monkeypatch.setattr(now_playing, "_SAMPLE_STALL_LIMIT", 0.2)
