@@ -90,7 +90,7 @@ def main() -> int:
     win._on_anim_ended(catalog.TURN)
     assert win.facing != facing_before
 
-    # 8. 移动：空间足够则生成移动计划并推进插值
+    # 8. 移动：空间足够则生成移动计划（帧驱动位移：tick 只做守卫，位置随解码帧推进）
     win._cancel_move()
     ok = win._try_move()
     assert isinstance(ok, bool)
@@ -98,7 +98,7 @@ def main() -> int:
         assert win._move_plan is not None
         x0 = win.x()
         win._on_move_tick()
-        assert win.x() in (x0, win._move_plan["target_x"])  # 前后 2s 内位置不动或已到位
+        assert win.x() == x0  # tick 不再插值：位置完全由 _on_frame 帧驱动
         win._cancel_move()
 
     # 9. 「不移动」：状态机不再进入移动动画；手动移动仍可走动；开关持久化

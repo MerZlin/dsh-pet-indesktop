@@ -187,6 +187,8 @@ class MovieLibrary(QObject):
         self.low_warm_batch_finished.connect(self._on_low_warm_batch_finished)
         self.media_type: str = 'webm'
         self.no_mirror: set[str] = self._load_no_mirror()
+        self.move_strides: dict[str, float] = self._load_move_strides()
+        self.move_curves: dict[str, list[float]] = self._load_move_curves()
 
         self._load_all()
 
@@ -200,6 +202,61 @@ class MovieLibrary(QObject):
             return set()
         names = data.get('no_mirror', [])
         return {str(n) for n in names} if isinstance(names, list) else set()
+
+    def _load_move_strides(self) -> dict[str, float]:
+        '''加载 move_strides.json：移动动画每圈（scale=1.0）地面位移像素数。
+
+        缺文件/解析失败 → 空 dict（窗口回退 catalog.MOVE_STRIDE_DEFAULT_PX），
+        绝不抛异常。只收数值项与 {'stride': 数值} 对象项："_comment" 等备注
+        字段与其余项静默忽略。
+        '''
+        data = self._read_move_strides_json()
+        out: dict[str, float] = {}
+        for k, v in data.items():
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                out[str(k)] = float(v)
+            elif isinstance(v, dict) and isinstance(v.get('stride'), (int, float)) \
+                    and not isinstance(v.get('stride'), bool):
+                out[str(k)] = float(v['stride'])
+        return out
+
+    def _load_move_curves(self) -> dict[str, list[float]]:
+        '''加载 move_strides.json 对象项里的 curve：圈内逐帧位移曲线。
+
+        curve[i] = 播到源帧 i 时圈内累计进度（0..1，单调不减，首 0 尾 1）。
+        动画静帧段曲线走平 → 窗口停住；动帧段匀速 → 动帧才动、静帧不动。
+        校验不过（非列表/太短/越界/回退/首尾不符）静默跳过，绝不抛异常。
+        '''
+        data = self._read_move_strides_json()
+        out: dict[str, list[float]] = {}
+        for k, v in data.items():
+            if not isinstance(v, dict):
+                continue
+            curve = v.get('curve')
+            if not isinstance(curve, list) or len(curve) < 2:
+                continue
+            if any(isinstance(c, bool) or not isinstance(c, (int, float)) for c in curve):
+                continue
+            vals = [float(c) for c in curve]
+            if vals[0] != 0.0 or vals[-1] != 1.0:
+                continue
+            if any(c < 0.0 or c > 1.0 for c in vals):
+                continue
+            if any(b < a for a, b in zip(vals, vals[1:])):
+                continue
+            out[str(k)] = vals
+        return out
+
+    def _read_move_strides_json(self) -> dict:
+        import json
+        path = self._asset_dir / 'move_strides.json'
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def _load_all(self) -> None:
         if self._manifest is None:

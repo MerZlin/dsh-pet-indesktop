@@ -259,7 +259,7 @@ modern_settings_dialog.py
 
 | 键 | 含义 | 默认值 | 校验/清洗 |
 |---|---|---|---|
-| `voice_chime_enabled` | 语音报时总开关 | `True` | `clean_flag`（兼容 `"1"/"true"/"开"` 等字符串） |
+| `voice_chime_enabled` | 语音报时总开关 | `False`（新装默认；存量配置里的显式值保留） | `clean_flag`（兼容 `"1"/"true"/"开"` 等字符串） |
 | `voice_chime_schedule` | 调度模式 | `"hourly"` | `clean_schedule`：`hourly` / `every_30` / `every_15` / `every_5` / `every_minute` / `custom`，非法回落 `hourly` |
 | `voice_chime_custom_times` | 自定义时间点 | `""`（空串） | `clean_custom_times`：逗号/中文逗号/分号/空白分隔的 `HH:MM`，归一化为 `08:30` 形式，非法项丢弃 |
 | `voice_chime_voice` | edge-tts 音色名 | `"zh-CN-XiaoxiaoNeural"` | `clean_voice`：去空白、截断 64 字符，空值回落默认 |
@@ -362,7 +362,7 @@ _on_tick(now)
 |---|---|
 | 未安装 `edge-tts` | 合成直接失败 → `_notify_missing_tts()` 给出提示，**气泡照常**显示报时与台词，无声 |
 | 网络/代理异常导致合成失败 | 同上：有气泡无声音，日志留痕；已缓存的文本仍可直接播 |
-| `voice_chime_enabled=False` | AppShell 不创建服务；但右键「立即报时」与设置页试听仍可用（走 `trigger_voice_chime_now` → `say_now`，无视总开关） |
+| `voice_chime_enabled=False` | AppShell 不创建服务；「立即报时」菜单项（默认隐藏，菜单编辑器可加回）与设置页试听仍可用（走 `trigger_voice_chime_now` → `say_now`，无视总开关） |
 | `voice_chime_show_bubble=False` | 只出声不出气泡 |
 | `voice_chime_show_quote=False` | 只报时间，不带台词/歌词 |
 | 设置窗口打开导致 `window.show_bubble` 被抑制 | 报时属用户主动关注事件，`_bubble()` 检测到抑制时**直接经桌宠气泡位（`win._speech_bubble`）展示**，避免闪一下就丢 |
@@ -463,7 +463,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 1. 启动进程存活 >8 秒，无新增 `_MEI`。
 2. 设置页可见「语音报时」域全部行（含**试听按钮**）——这是 `SettingRow` 收集机制的历史事故点。
 3. 把 `voice_chime_schedule` 临时设为 `every_minute`，观察 1-2 分钟内：`%APPDATA%\dsh-pet-standalone-<variant>\voice_chime_cache\` 出现 mp3，气泡与语音内容一致，随后缓存文件数随裁剪策略收敛。
-4. 右键菜单「立即报时」「启用/关闭语音报时」可用且状态同步。
+4. 语音报时/节日四项默认不在右键菜单（模板 `visible:false`）；经菜单编辑器加回后「立即报时」「启用/关闭语音报时」可用且状态同步。
 5. 断网（或卸载 edge-tts）时仍有气泡、无崩溃。
 
 ---

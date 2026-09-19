@@ -412,9 +412,11 @@ def test_try_move_switch_rejection_builds_no_move_plan(app, tmp_path):
     win = _make_win(tmp_path, lib)
     win._screen_available = lambda: _FakeScreen()
     win.move(500, 300)
+    facing_before = win.facing
 
     assert win._try_move() is False, "移动动画被拒时不得建立移动计划"
     assert win._move_plan is None, "不得按失败移动动画建立移动计划"
+    assert win.facing == facing_before, "切换被拒时朝向不得凭空翻转（朝向只跟随实际发生的移动）"
     assert win._move_timer.isActive() is False, "不得启动移动定时器"
     assert win.anim == catalog.IDLE, "切换被拒必须回退到上一动画（idle）"
     assert win.movie is lib.movie(catalog.IDLE), "回退后 movie 必须是可播放的 idle"

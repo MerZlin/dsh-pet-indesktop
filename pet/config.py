@@ -751,7 +751,7 @@ class Config:
             "todo_reminder_enabled": True,  # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
             # 语音报时（edge-tts 在线 TTS + 台词/歌词按 8 小时整体换批、批内轮换）
-            "voice_chime_enabled": True,  # 语音报时总开关
+            "voice_chime_enabled": False,  # 语音报时总开关（默认关闭：主动打扰型功能，用户显式开启）
             "voice_chime_schedule": "hourly",  # hourly / every_30 / every_15 / every_5 / every_minute / custom
             "voice_chime_custom_times": "",  # 自定义时间点（HH:MM 逗号分隔，custom 模式生效）
             "voice_chime_voice": "zh-CN-XiaoxiaoNeural",  # edge-tts 音色

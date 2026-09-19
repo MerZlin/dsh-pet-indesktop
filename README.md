@@ -1403,6 +1403,7 @@ python scripts/cleanup_mei_cache.py --delete
 
 ## 项目文档
 
+- [`docs/INDEX.md`](docs/INDEX.md)：**全文档入口索引**——53 份文档按领域分组，每条一句话 + 何时必读；想给项目做东西先从这里找相关模块的文档。
 - [`AGENTS.md`](AGENTS.md)：工程指南与 CI 成本纪律（PR #76 后硬性规矩）。
 - [`docs/WINDOW_PY_SPLIT_GUIDE.md`](docs/WINDOW_PY_SPLIT_GUIDE.md)：`window.py` 演进指南、功能驱动拆分流程与架构红线说明。
 - [`docs/HANDOVER_2026-09.md`](docs/HANDOVER_2026-09.md)：2026-09 性能/结构线交付手册（含后续批次更新说明）。

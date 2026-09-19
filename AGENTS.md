@@ -146,6 +146,9 @@ exact breakpoint there; see `docs/agents/handoff.md`.
 
 ## Context pointers
 
+找文档先查 `docs/INDEX.md`（全文档入口索引：每条一句话 + 何时必读）；
+新文档入场必须按其中的规则登记并互链。高频专项指针：
+
 - Read `docs/ISSUE-42-POSIX-COLLISION-IPC-2026-08-31.md` when changing collision
   election, QLocal IPC, coordinator locking, or their process-level tests.
 - Read `docs/ISSUE-111-WINDOWS-SESSION-END-FFMPEG-2026-09-12.md` when changing

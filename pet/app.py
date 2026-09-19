@@ -1071,8 +1071,9 @@ class AppShell:
         self.todo_panel = None
         if self._todo_wanted():
             self._ensure_todo_service()
-        # 语音报时：进程级单例（多窗共用调度器）。默认启用 → 启动即创建并
-        # 跑 20s tick；设置关闭后 stop 并释放。edge-tts 合成在后台线程，
+        # 语音报时：进程级单例（多窗共用调度器）。默认关闭（2026-09-19 起，
+        # 主动打扰型功能改由用户显式开启）→ 启动不创建；开启后跑 20s tick，
+        # 设置关闭后 stop 并释放。edge-tts 合成在后台线程，
         # 播放与气泡走 GUI 线程（QtMultimedia + win.show_bubble）。
         self.voice_chime_service = None
         if self._chime_wanted():
@@ -1212,7 +1213,7 @@ class AppShell:
     def _chime_wanted(self) -> bool:
         # 报时自身开启，或节日语音需要这条音频通道（两者共用一套合成与播放，
         # 因此"通道是否存在"取决于两者之一是否需要）。
-        return bool(self.config.get("voice_chime_enabled", True)) or self._festival_speak_wanted()
+        return bool(self.config.get("voice_chime_enabled", False)) or self._festival_speak_wanted()
 
     def _ensure_chime_service(self):
         """懒创建语音报时服务（报时 / 手动触发 / 节日语音播报共用）。"""
@@ -2883,7 +2884,7 @@ class AppShell:
         self.todo_panel = None
 
     def trigger_voice_chime_now(self, text: str = "") -> None:
-        """手动报时：右键菜单「立即报时」/ 设置页试听共用。
+        """手动报时：菜单「立即报时」（默认隐藏，菜单编辑器可加回）/ 设置页试听共用。
 
         无论报时总开关是否开启都会执行（试听/手动触发语义），服务懒创建。
         """
@@ -2891,13 +2892,13 @@ class AppShell:
         service.say_now(text=text)
 
     def toggle_voice_chime(self) -> None:
-        """右键菜单「启用语音报时」开关：翻转配置并同步服务启停。"""
-        self.config.set("voice_chime_enabled", not bool(self.config.get("voice_chime_enabled", True)))
+        """菜单「启用语音报时」开关（默认隐藏）：翻转配置并同步服务启停。"""
+        self.config.set("voice_chime_enabled", not bool(self.config.get("voice_chime_enabled", False)))
         self.config.save()
         self._sync_chime_service()
 
     def trigger_festival_now(self) -> None:
-        """手动提醒「今日节日」：右键菜单入口。
+        """手动提醒「今日节日」：菜单入口（默认隐藏，菜单编辑器可加回）。
 
         与语音报时的手动触发同语义——**无视总开关**，服务懒创建；当天没有
         节日/节气时给出明确文案，不做静默无反应。
@@ -2906,7 +2907,7 @@ class AppShell:
         service.remind_now()
 
     def toggle_festival_reminder(self) -> None:
-        """右键菜单「启用节日提醒」开关：翻转配置并同步服务启停。"""
+        """菜单「启用节日提醒」开关（默认隐藏）：翻转配置并同步服务启停。"""
         self.config.set(
             "festival_reminder_enabled",
             not bool(self.config.get("festival_reminder_enabled", False)),

@@ -75,7 +75,7 @@ class VoiceChimeSettingsPage(QWidget):
 
         # ---- 基础设置 ----
         self.enabled_check = ToggleSwitch(self)
-        self.enabled_check.setChecked(bool(self.config.get("voice_chime_enabled", True)))
+        self.enabled_check.setChecked(bool(self.config.get("voice_chime_enabled", False)))
 
         # ---- 调度 ----
         self.schedule_select = ModernSelect(self, width=170)
@@ -237,7 +237,7 @@ class VoiceChimeSettingsPage(QWidget):
 
     def refresh_from_config(self) -> None:
         """用当前配置刷新控件（外部取消保存后回滚用）。"""
-        self.enabled_check.setChecked(bool(self.config.get("voice_chime_enabled", True)))
+        self.enabled_check.setChecked(bool(self.config.get("voice_chime_enabled", False)))
         self.schedule_select.setCurrentData(clean_schedule(self.config.get("voice_chime_schedule", "hourly")))
         self.custom_edit.setText(str(self.config.get("voice_chime_custom_times", "") or ""))
         _sync_voice_select(self.voice_select, self.config)

@@ -71,7 +71,7 @@ def test_default_chime_config_has_all_flat_keys():
         "voice_chime_custom_quotes_en",
     }
     assert cfg["voice_chime_schedule"] in SCHEDULE_KEYS
-    assert cfg["voice_chime_enabled"] is True
+    assert cfg["voice_chime_enabled"] is False  # 默认关闭：主动打扰型功能，用户显式开启
     assert cfg["voice_chime_voice"] == DEFAULT_VOICE
     assert cfg["voice_chime_rate"] == DEFAULT_RATE
     assert cfg["voice_chime_pitch"] == DEFAULT_PITCH
@@ -187,7 +187,7 @@ def test_clean_volume_clamps(value, expected):
 
 def test_normalize_chime_config_none_returns_defaults():
     cfg = normalize_chime_config(None)
-    assert cfg["enabled"] is True
+    assert cfg["enabled"] is False  # 默认关闭
     assert cfg["schedule"] == "hourly"
     assert cfg["custom_times"] == frozenset()
     assert cfg["voice"] == DEFAULT_VOICE

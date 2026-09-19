@@ -154,7 +154,7 @@ def _build_voice_chime_now(menu, pet):
 
 def _build_voice_chime_toggle(menu, pet):
     cfg = getattr(pet, "cfg", None)
-    enabled = bool(cfg.get("voice_chime_enabled", True)) if cfg is not None else True
+    enabled = bool(cfg.get("voice_chime_enabled", False)) if cfg is not None else False
     label = "关闭语音报时" if enabled else "启用语音报时"
     return add_action(menu, label, "chat", pet.on_toggle_voice_chime, close_on_trigger=True)
 

@@ -420,7 +420,7 @@ class IslandCollisionBody(QObject):
         self._pet_prev_ts[key] = now
 
     def _move_win(self, win, dx: float, dy: float) -> None:
-        # 先取消桌宠的自主移动计划：否则 33ms 后移动插值会把分离位置
+        # 先取消桌宠的自主移动计划：否则移动计划的帧驱动位移会把分离位置
         # 覆盖回去（表现为贴岛抖动/推不出去）；与权威冲量路径同口径
         cancel_move = getattr(win, "_cancel_move", None)
         if callable(cancel_move):
