@@ -398,6 +398,8 @@ class ModernSettingsDialog(QDialog):
         self.island_click_action_select.setCurrentData(str(island_cfg.get("click_action") or "expand"))
         self.island_event_effects_check = ToggleSwitch(self)
         self.island_event_effects_check.setChecked(bool(island_cfg.get("event_effects", True)))
+        self.island_hidden_chat_check = ToggleSwitch(self)
+        self.island_hidden_chat_check.setChecked(bool(island_cfg.get("hidden_chat", True)))
         self.island_edge_dock_check = ToggleSwitch(self)
         self.island_edge_dock_check.setChecked(bool(island_cfg.get("edge_dock", True)))
         self.island_collision_check = ToggleSwitch(self)
@@ -517,6 +519,12 @@ class ModernSettingsDialog(QDialog):
                         "单击行为",
                         "单击胶囊：展开快捷卡片（余额/最近消息/快捷按钮）或直接切换桌宠显隐。",
                         self.island_click_action_select,
+                    ),
+                    SettingRow(
+                        "dynamic_island_hidden_chat",
+                        "隐藏时对话气泡",
+                        "桌宠隐藏后岛变成对话入口：单击灵动岛弹出对话气泡，AI 回复到达时也会在岛上弹出预览（不抢焦点，超时自动收回）。",
+                        self.island_hidden_chat_check,
                     ),
                     SettingRow(
                         "dynamic_island_event_effects",
@@ -2152,6 +2160,7 @@ class ModernSettingsDialog(QDialog):
                 "accent": str(self.island_accent_select.currentData() or "blue"),
                 "icon": str(self.island_icon_select.currentData() or "auto"),
                 "click_action": str(self.island_click_action_select.currentData() or "expand"),
+                "hidden_chat": self.island_hidden_chat_check.isChecked(),
                 "event_effects": self.island_event_effects_check.isChecked(),
                 "edge_dock": self.island_edge_dock_check.isChecked(),
                 "collision_enabled": self.island_collision_check.isChecked(),

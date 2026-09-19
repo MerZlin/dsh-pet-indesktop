@@ -651,6 +651,13 @@ class PetInstance:
         """打开快速对话气泡；与完整聊天窗共用会话历史。"""
         if not self.enable_chat or self.win is None:
             return
+        # 桌宠全部隐藏：气泡锚不到桌宠，改弹到灵动岛上（岛是对话代理）。
+        # singleShot 与下方同口径：Cocoa 菜单跟踪期间延迟到菜单关闭再弹。
+        shell = getattr(self, "shell", None)
+        if shell is not None and not shell._aggregate_pet_visible() \
+                and shell._island_chat_available():
+            QTimer.singleShot(0, lambda: shell._show_island_chat(activate=True))
+            return
         # Cocoa 原生 QMenu 跟踪期间 activePopupWidget() 可能为 None，且其
         # 嵌套事件循环会把这个 singleShot 留到菜单关闭后再派发。若是 Qt
         # 自绘 popup，下一层仍通过 _defer_while_popup_active 等待其关闭。
@@ -1030,6 +1037,7 @@ class AppShell:
         self._toast_windows: list[DesktopNotification] = []
         self.island = None
         self.island_collision = None  # 果冻墙：岛的静态碰撞体（island_collision.py）
+        self.island_chat = None  # 岛对话气泡：桌宠隐藏时的交互面（island_chat.py）
         self._spawned_pet_count = 0
         self._balance_busy = False
         # 静默余额查询（岛卡片展开）独立忙标志与节流时间戳；
@@ -1781,6 +1789,22 @@ class AppShell:
                 _ChatService.unregister_global_finished(self._on_global_chat_finished)
             except Exception:
                 logging.exception("退出时注销全局聊天订阅失败")
+        # 岛对话气泡（进程级）：提交会话并关闭——每条消息本就即时落盘，
+        # 这里只兜底保存飞行中的流式回复（口径同各窗 quick_chat 的退出保存）
+        bubble = getattr(self, "island_chat", None)
+        if bubble is not None:
+            _island_session = getattr(bubble, "session", None)
+            _island_store = getattr(bubble, "store", None)
+            if _island_session is not None and _island_store is not None:
+                try:
+                    _island_store.save(_island_session)
+                except Exception:
+                    logging.exception("退出前保存灵动岛对话会话失败")
+            try:
+                bubble.close()
+            except Exception:
+                logging.exception("退出时关闭灵动岛对话气泡失败")
+            self.island_chat = None
         # 会话异步写盘（B8）：全部会话已保存，再永久关闭写盘 worker
         #（关掉后迟到的 queued 回调提交会被明确拒绝）。
         if self.todo_service is not None:
@@ -1968,6 +1992,8 @@ class AppShell:
             self.island.toggle_pet_requested.connect(self._toggle_pet_from_island)
             self.island.open_chat_requested.connect(self._open_chat_from_island)
             self.island.open_settings_requested.connect(self._open_settings_from_island)
+            # 桌宠隐藏时单击岛：弹/收锚定岛的对话气泡（hidden_chat 开启时）
+            self.island.chat_requested.connect(self._chat_from_island)
             # 卡片展开 → 静默刷新余额（不冒泡、不播动画，只更新岛卡片）
             self.island.card_expanded.connect(self._quiet_balance_refresh)
             # 进程级聊天完成订阅：AI 回复到达 → 岛播事件动效并记录最近消息。
@@ -2029,9 +2055,71 @@ class AppShell:
             if island is not None and shiboken6.isValid(island):
                 island.bump(1.5, 0.0, -1.0)
             return
+        # 桌宠全部隐藏：快速气泡锚不到桌宠，改弹到岛上（岛是对话代理）
+        if not self._aggregate_pet_visible() and self._island_chat_available():
+            self._show_island_chat(activate=True)
+            return
         inst = self.instance
         if inst is not None and callable(getattr(inst, "open_quick_chat", None)):
             inst.open_quick_chat()
+
+    # -------------------------------------------------------- 岛对话气泡
+    def _island_hidden_chat_enabled(self) -> bool:
+        island_cfg = self.config.get("dynamic_island", {})
+        if not isinstance(island_cfg, dict):
+            return False
+        return bool(island_cfg.get("hidden_chat", True))
+
+    def _island_chat_available(self) -> bool:
+        """岛对话气泡可用：聊天功能在 + 岛存在 + hidden_chat 开。"""
+        if not getattr(self, "enable_chat", True):
+            return False
+        island = getattr(self, "island", None)
+        if island is None or not shiboken6.isValid(island):
+            return False
+        return self._island_hidden_chat_enabled()
+
+    def _show_island_chat(self, *, activate: bool = True,
+                          reply_text: str | None = None) -> None:
+        """弹出锚定灵动岛的对话气泡（activate=False 为不抢焦点的预览弹出）。"""
+        if not self._island_chat_available():
+            return
+        from .island_chat import IslandChatBubble
+
+        if getattr(self, "island_chat", None) is None:
+            self.island_chat = IslandChatBubble(self.config)
+            self.island_chat.show_pet_requested.connect(self._show_pets_from_island_chat)
+        bubble = self.island_chat
+        bubble.open_chat_callback = self._open_full_chat_from_island_chat
+        bubble.settings = self.config.chat_settings()
+        bubble.refresh_session()
+        bubble.show_for_island(self.island, activate=activate, reply_text=reply_text)
+
+    def _chat_from_island(self) -> None:
+        """桌宠隐藏时单击岛：气泡已开则收起，否则弹出（交互式）。"""
+        bubble = getattr(self, "island_chat", None)
+        if bubble is not None and shiboken6.isValid(bubble) and bubble.isVisible():
+            bubble.close()
+            return
+        self._show_island_chat(activate=True)
+
+    def _open_full_chat_from_island_chat(self) -> None:
+        inst = getattr(self, "instance", None)
+        if inst is not None and callable(getattr(inst, "open_chat", None)):
+            inst.open_chat()
+
+    def _show_pets_from_island_chat(self) -> None:
+        """岛对话气泡里的「显示桌宠」：恢复全部窗并同步岛状态。"""
+        for inst in getattr(self, "_instances", []):
+            win = getattr(inst, "win", None)
+            if win is not None:
+                win.show()
+        island = getattr(self, "island", None)
+        if island is not None and shiboken6.isValid(island):
+            island.set_pet_visible(True)
+        bubble = getattr(self, "island_chat", None)
+        if bubble is not None and shiboken6.isValid(bubble):
+            bubble.close()
 
     def _open_settings_from_island(self) -> None:
         inst = self.instance
@@ -2045,6 +2133,19 @@ class AppShell:
             return
         island.set_last_message(text)
         island.notify_event("reply")
+        # 桌宠隐藏时岛是唯一常驻交互面：回复到达在岛上弹预览气泡（不抢焦点，
+        # 超时自动收回）。岛气泡在场时跳过——多半是气泡自己刚回完话，别再弹。
+        if not self._aggregate_pet_visible() and self._island_chat_available():
+            bubble = getattr(self, "island_chat", None)
+            if bubble is not None and shiboken6.isValid(bubble) and bubble.isVisible():
+                return
+            # 完整聊天窗已打开：回复已有去处，不再弹岛预览
+            for inst in getattr(self, "_instances", []):
+                for _attr in ("legacy_chat_window", "modern_chat_window"):
+                    _w = getattr(inst, _attr, None)
+                    if _w is not None and shiboken6.isValid(_w) and _w.isVisible():
+                        return
+            self._show_island_chat(activate=False, reply_text=text)
 
     def _aggregate_pet_visible(self) -> bool:
         """是否有任一窗可见（聚合可见态——灵动岛按它同步 set_pet_visible）。"""

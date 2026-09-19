@@ -539,6 +539,7 @@ def _default_dynamic_island_data() -> dict:
         # 图片；其余字符串=文字/emoji（用户主动选择，愿意付首次绘制的一次性税额）
         "icon": "auto",
         "click_action": "expand",  # expand（展开卡片）/ toggle_pet（切换显隐，旧行为）
+        "hidden_chat": True,  # 桌宠隐藏时：单击岛弹对话气泡；AI 回复到达时岛上弹预览
         "event_effects": True,  # 事件动效：AI 回复/余额刷新/峰谷切换弹跳
         "edge_dock": True,  # 拖到屏幕边缘收成细条，鼠标靠近滑出
         "dock_edge": "none",  # none / top / bottom / left / right（拖拽落点写入）
@@ -584,7 +585,7 @@ def _clean_dynamic_island_data(value) -> dict:
     result["click_action"] = click_action if click_action in {"expand", "toggle_pet"} else "expand"
     # 布尔键必须用 _bool_or_default：bool("false") is True，字符串/None
     # 会被误翻（同文件既有规则）；int 0/1 是旧配置的合法布尔编码，先归一
-    for _key in ("event_effects", "edge_dock", "collision_enabled"):
+    for _key in ("event_effects", "edge_dock", "collision_enabled", "hidden_chat"):
         _v = result[_key]
         if isinstance(_v, int) and not isinstance(_v, bool):
             _v = bool(_v)

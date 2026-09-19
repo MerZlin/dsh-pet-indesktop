@@ -85,6 +85,7 @@ class QuickChatBubble(QFrame):
         header = QHBoxLayout()
         title = QLabel("快速对话")
         title.setObjectName("quick-chat-title")
+        self.title_label = title  # 子类（灵动岛气泡）改标题用
         header.addWidget(title)
         header.addStretch(1)
         self.hint_label = QLabel("")

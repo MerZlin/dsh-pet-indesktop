@@ -137,13 +137,13 @@ WINDOW_PY_LINE_BUDGET = 4605
 # 避让分支、_on_voice_chime_preview 的本地试听分支、_write_config 注释共 +30；
 # 试听/避让/节日演示的实现全在 pet/settings_standalone.py，本文件仍只做接线；
 # 按文件约定预算只随实测校准，不为达标压缩行宽/合并语句；拆分仍是待办。
-# 2026-09-19 上调到 2384：新增「文件识别」设置域（拖文件解读）——对话框只做
-# 接线（import/控件安装/域导航挂页/_write_config 委托共 13 行），行全部在
-# pet/settings_file_interpret.py；拆分仍是待办。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2384
-
-
-
+# 2026-09-19 上调到 2393：两批设置改动**组合**后的实测值——拖文件解读新增
+# 「文件识别」域（对话框只做接线，实现全在 pet/settings_file_interpret.py）与灵动岛
+# 「隐藏时对话气泡」开关（控件 +2、SettingRow +6、_write_config 回写 +1）各自
+# 只按自己那批校准（2384 / 2380），合起来才是 2393：单个 PR 都不越线、只有两者
+# 同时进才红——又一次「红线是组合性质」的实例（PR-MERGE-LESSONS 第 2 条），
+# 故按文件约定只随实测校准，不为达标压缩行宽/合并语句；拆分仍是待办。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2393
 def _read(name: str) -> str:
     return (PET_DIR / name).read_text(encoding="utf-8")
 

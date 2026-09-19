@@ -553,7 +553,7 @@ def _update_island_controls(host, enabled: bool) -> None:
         "dynamic_island_icon_value",
         "dynamic_island_custom_text", "dynamic_island_click_action",
         "dynamic_island_event_effects", "dynamic_island_edge_dock",
-        "dynamic_island_collision",
+        "dynamic_island_collision", "dynamic_island_hidden_chat",
     ), enabled, dependency="island_enabled")
     _update_island_icon_controls(host, host.island_icon_check.isChecked())
     _update_island_info_controls(host, host.island_info_check.isChecked())

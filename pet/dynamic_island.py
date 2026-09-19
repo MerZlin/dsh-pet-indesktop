@@ -4,6 +4,7 @@
 - 常驻顶层小窗，可显示图标、名称、信息槽、状态灯；
 - 支持拖拽、四边停靠半隐藏（收成细条、鼠标靠近滑出）、位置持久化；
 - 单击胶囊按 ``click_action`` 展开卡片（余额/最近消息/快捷按钮）或切换桌宠显隐；
+  桌宠隐藏时（``hidden_chat`` 开启）单击改为弹岛对话气泡（island_chat.py）；
 - 事件动效（``event_effects``）：AI 回复/余额刷新/峰谷切换时位移弹跳 +
   表面轻压 + 短暂呼吸，静止时完全无定时器开销；dsh 工作时状态灯变蓝；
 - ``bump()`` 供碰撞系统调用：被撞时表面压扁回弹（史莱姆果冻形变只作用于
@@ -144,6 +145,7 @@ class DynamicIsland(QWidget):
     open_chat_requested = Signal()
     open_settings_requested = Signal()
     card_expanded = Signal()  # 卡片展开（AppShell 借此静默刷新余额）
+    chat_requested = Signal()  # 桌宠隐藏时单击胶囊（hidden_chat 开启）：弹岛对话气泡
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
@@ -250,6 +252,10 @@ class DynamicIsland(QWidget):
 
     def _click_action(self) -> str:
         return str(self._cfg.get("click_action") or "expand")
+
+    def _hidden_chat_enabled(self) -> bool:
+        """桌宠隐藏时的对话气泡开关（点击岛弹气泡 + 回复到达自动预览）。"""
+        return bool(self._cfg.get("hidden_chat", True))
 
     def _event_effects_enabled(self) -> bool:
         return bool(self._cfg.get("event_effects", True))
@@ -1308,6 +1314,10 @@ class DynamicIsland(QWidget):
                 self._dock_back_timer.start()
             elif self._click_action() == "toggle_pet":
                 self.clicked.emit()
+            elif self._hidden_chat_enabled() and not self._pet_visible:
+                # 桌宠隐藏时岛是唯一常驻交互面：单击直接弹对话气泡
+                #（恢复桌宠的入口由气泡内的「显示桌宠」按钮承接）
+                self.chat_requested.emit()
             else:
                 self.expand_card()
         else:
