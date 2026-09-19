@@ -121,10 +121,14 @@ class ChatSettingsDialog(QDialog):
         self.skip_ssl.setChecked(not p.verify_ssl)
         self.system_notify_check = QCheckBox('对话完成 / 生成失败 / 需要授权时，在桌面右下角弹系统通知')
         self.system_notify_check.setChecked(bool(config.get("system_notifications_enabled", True)))
+        # —— 看看屏幕二维码开关（本 fork 新增；config 级，非 provider 级，默认开）——
+        self.look_qr_check = QCheckBox('“看看屏幕”时识别屏幕上的二维码并输出内容（本地离线识别）')
+        self.look_qr_check.setChecked(bool(config.get("look_screen_qr_enabled", True)))
 
         form.insertRow(0, 'API 列表', provider_row)
         for label, w in [('Provider 名称', self.name), ('API 地址', self.url),
                          ('模型', self.model), ('', self.vsame), ('视觉模型', self.vmodel), ('视觉 API 地址', self.vurl), ('视觉 API Key', self.vkey),
+                         ('识别屏幕二维码', self.look_qr_check),  # 本 fork 新增
                          ('API Key', self.key), ('', self.key_hint),
                          ('系统通知', self.system_notify_check),
                          ('System Prompt', self.prompt),
@@ -430,6 +434,7 @@ class ChatSettingsDialog(QDialog):
         bg_val = '' if i == 0 else ('builtin:' + self._bg_keys[i - 1] if i <= len(self._bg_keys) else self.bg.text().strip())
         self.config.set('chat_background', bg_val)
         self.config.set('system_notifications_enabled', self.system_notify_check.isChecked())
+        self.config.set('look_screen_qr_enabled', self.look_qr_check.isChecked())  # 本 fork 新增
         self.config.set_chat_settings(self.settings)
         if not self.config.save():
             QMessageBox.warning(self, '保存失败', '配置未能写入磁盘，改动可能在重启后丢失。\n\n配置路径：' + str(self.config.path))

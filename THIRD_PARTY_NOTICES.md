@@ -63,6 +63,25 @@ SOFTWARE.
 
 ---
 
+## 3.1 zxing-cpp（「看看屏幕」二维码本地解码）
+
+- **Package**: [`zxing-cpp`](https://pypi.org/project/zxing-cpp/)（import 名 `zxingcpp`）
+- **Upstream**: [zxing-cpp/zxing-cpp](https://github.com/zxing-cpp/zxing-cpp)（ZXing C++ 移植版的 Python 绑定）
+- **License**: Apache License 2.0（与本项目 MIT 兼容；分发打包版时随附其 LICENSE 与 NOTICE）
+- **Used by**: `pet/vision.py::decode_qr_codes`（右键「看看屏幕」时在本地离线
+  解码屏幕上的二维码，内容直接输出，不依赖视觉模型）
+- **Notes**: 自含二进制扩展的官方 wheel，Windows/Linux/macOS 均无外部 DLL/SO
+  依赖；构建脚本以 `--collect-all zxingcpp` 收集。库缺失时该功能整体降级为
+  「不识别二维码」，主流程不受影响。
+
+```text
+Apache License 2.0 全文见
+https://www.apache.org/licenses/LICENSE-2.0
+（zxing-cpp 项目内附 LICENSE 文件）
+```
+
+---
+
 ## 4. 节日提醒内置文案（古诗词 / 公有领域引文）
 
 `pet/festival_quotes_cn.py` 与 `pet/festival_quotes_west.py` 内置的文案**全部取自公有领域作品**，

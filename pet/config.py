@@ -748,6 +748,7 @@ class Config:
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
             "chat_follow_pet": False,  # 聊天窗口是否跟随桌宠移动
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
+            "look_screen_qr_enabled": True,  # 本 fork 新增：看看屏幕时本地识别二维码并输出内容
             "todo_reminder_enabled": True,  # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
             # 语音报时（edge-tts 在线 TTS + 台词/歌词按 8 小时整体换批、批内轮换）
@@ -995,6 +996,7 @@ class Config:
             "chat_ui_style",
             "chat_follow_pet",
             "system_notifications_enabled",
+            "look_screen_qr_enabled",  # 本 fork 新增：看看屏幕二维码开关（独立设置进程写入需随 reload 存活）
             "todo_reminder_enabled",
             "todo_reminder_lead_minutes",
             "voice_chime_enabled",
@@ -1285,6 +1287,7 @@ class Config:
         self.data["idle_low_fps_threshold"] = _float_or_default(self.data.get("idle_low_fps_threshold"), 30.0, 1.0, 3600.0)
         # 上游 #60 系统通知开关：同规防字符串布尔误开（bool("false") is True）。
         self.data["system_notifications_enabled"] = _bool_or_default(self.data.get("system_notifications_enabled"), True)
+        self.data["look_screen_qr_enabled"] = _bool_or_default(self.data.get("look_screen_qr_enabled"), True)  # 本 fork 新增：同规防字符串布尔误开
         # 待办提醒：开关同规防字符串布尔误开；提前量钳到 [0, 60] 分钟（0=不提前）。
         self.data["todo_reminder_enabled"] = _bool_or_default(self.data.get("todo_reminder_enabled"), True)
         self.data["todo_reminder_lead_minutes"] = int(_float_or_default(self.data.get("todo_reminder_lead_minutes"), 5.0, 0.0, 60.0))

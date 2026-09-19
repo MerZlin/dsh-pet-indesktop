@@ -73,6 +73,7 @@ for variant in "${variant_list[@]}"; do
         --collect-all PySide6.QtMultimedia
         --collect-all edge_tts
         --collect-all psutil
+        --collect-all zxingcpp
         --add-data "$assets:$assets"
         --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish"
         --add-data "assets/chat:assets/chat"

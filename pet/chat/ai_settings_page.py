@@ -93,6 +93,9 @@ class _AiSettingsPage(QWidget):
         self.vision_model = _line_edit(provider.vision_model)
         self.vision_url = _line_edit(provider.vision_base_url)
         self.vision_key = _line_edit(password=True)
+        # —— 看看屏幕二维码开关（本 fork 新增；config 级，非 provider 级，默认开）——
+        self.look_qr_check = ToggleSwitch()
+        self.look_qr_check.setChecked(bool(config.get("look_screen_qr_enabled", True)))
 
         from .themes import theme_names
         self._background_themes = list(theme_names())
@@ -175,6 +178,15 @@ class _AiSettingsPage(QWidget):
         self._vision_override_rows = vision_rows[1:]
         self.vision_same.toggled.connect(self._update_vision_visibility)
         self._update_vision_visibility(self.vision_same.isChecked())
+        # 「识别屏幕二维码」独立成区（本 fork 纯新增行）：不并入 vision_rows，
+        # 复用聊天模型的显隐联动（_vision_override_rows）不应波及它。
+        root.addWidget(SettingsSection("看看屏幕二维码", [
+            SettingRow(
+                "look_screen_qr_enabled", "识别屏幕二维码",
+                "“看看屏幕”时在本地离线识别屏幕上的二维码，内容直接展示；关闭后不再识别。",
+                self.look_qr_check,
+            ),
+        ], self))
         self._test_row = self.findChild(SettingRow, "settingRow_connection_test")
         if self._test_row is not None:
             self.test_result = self._test_row.hint_label
@@ -515,4 +527,6 @@ class _AiSettingsPage(QWidget):
         self.config.set("modern_chat_background_fill", self._background_display["modern"]["fill"])
         self.config.set("modern_chat_card_opacity", self.message_card_opacity.value())
         self.config.set("system_notifications_enabled", self.system_notify_check.isChecked())
+        # 本 fork 新增：看看屏幕二维码开关随保存写回
+        self.config.set("look_screen_qr_enabled", self.look_qr_check.isChecked())
         self.config.set_chat_settings(self.settings)
