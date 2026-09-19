@@ -455,3 +455,160 @@ def test_lite_build_hides_the_harness_submenu(tmp_path, monkeypatch):
     menu.close()
     app.processEvents()
     del app, tmp_path, monkeypatch
+
+
+# ------------------------------------------------------------ GUI 线程模型（复审 P1-3/P1-4）
+def test_harness_submenu_actions_close_on_trigger(tmp_path, monkeypatch):
+    """三个 Harness 动作都必须 close_on_trigger：菜单先关闭、回调延迟执行，
+    确认框才不会在 macOS 原生菜单跟踪会话里被 AppKit 抑制。"""
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    app = QApplication.instance() or QApplication([])
+    from pet.context_menus.shared import add_harness
+
+    class _Pet:
+        pass
+
+    menu = QMenu()
+    add_harness(menu, _Pet())
+    submenu = _harness_submenu(menu)
+    assert _menu_labels(submenu) == ["启动并打开页面", "重启服务", "停止服务"]
+    for action in submenu.actions():
+        assert bool(action.property("closeOnTrigger")), action.text()
+    menu.close()
+    app.processEvents()
+    del app, tmp_path, monkeypatch
+
+
+def test_launch_harness_gui_probes_off_gui_thread(monkeypatch):
+    """停止/重启的进程反查（PowerShell，最长 10s）必须在 worker 线程执行：
+    点菜单后 GUI 线程不得被 describe_harness_process 阻塞。"""
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    gui_thread = threading.current_thread()
+    probe_threads: list = []
+
+    def fake_probe():
+        probe_threads.append(threading.current_thread())
+        return None
+
+    monkeypatch.setattr(hl, "describe_harness_process", fake_probe)
+    monkeypatch.setattr(hl, "_confirm_harness_stop",
+                        lambda parent, target, *, restart: False)
+
+    class _Pet:
+        def show_bubble(self, text, duration=0):
+            pass
+
+    hl.launch_harness_gui(_Pet(), action="stop")
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and not probe_threads:
+        app.processEvents()
+        time.sleep(0.01)
+    assert probe_threads, "停止动作必须先反查进程"
+    assert probe_threads[0] is not gui_thread, "反查不得在 GUI 线程同步执行"
+    del app
+
+
+def test_launch_harness_gui_stop_declined_never_calls_stop(monkeypatch):
+    """确认框取消：stop_harness 不得被调用（破坏性动作的闸门）。"""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    calls: list[str] = []
+    monkeypatch.setattr(hl, "describe_harness_process", lambda: None)
+    monkeypatch.setattr(hl, "_confirm_harness_stop",
+                        lambda parent, target, *, restart: False)
+    monkeypatch.setattr(hl, "stop_harness",
+                        lambda port=hl.DEFAULT_PORT: calls.append("stop") or ("stopped", "ok"))
+
+    class _Pet:
+        def show_bubble(self, text, duration=0):
+            pass
+
+    hl.launch_harness_gui(_Pet(), action="stop")
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert calls == []
+    del app
+
+
+def test_launch_harness_gui_stop_confirmed_runs_in_worker(monkeypatch):
+    """确认停止：stop_harness 在 worker 线程执行，结果经 singleShot 回 GUI 冒泡。"""
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    gui_thread = threading.current_thread()
+    stop_threads: list = []
+    bubbles: list[str] = []
+    monkeypatch.setattr(hl, "describe_harness_process", lambda: None)
+    monkeypatch.setattr(hl, "_confirm_harness_stop",
+                        lambda parent, target, *, restart: True)
+
+    def fake_stop(port=hl.DEFAULT_PORT):
+        stop_threads.append(threading.current_thread())
+        return "stopped", "已停止。"
+
+    monkeypatch.setattr(hl, "stop_harness", fake_stop)
+
+    class _Pet:
+        def show_bubble(self, text, duration=0):
+            bubbles.append(text)
+
+    hl.launch_harness_gui(_Pet(), action="stop")
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and not bubbles:
+        app.processEvents()
+        time.sleep(0.01)
+    assert stop_threads and stop_threads[0] is not gui_thread
+    assert bubbles == ["已停止。"]
+    del app
+
+
+def test_launch_harness_gui_confirm_raises_does_not_hang_worker(monkeypatch):
+    """确认框回调抛异常（父窗口销毁/对话框构造失败）：worker 必须收尾并
+    给出错误反馈，不得永久挂起零反馈，且不得执行停止。"""
+    import time
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(hl, "describe_harness_process", lambda: None)
+
+    def boom(parent, target, *, restart):
+        raise RuntimeError("parent destroyed")
+
+    monkeypatch.setattr(hl, "_confirm_harness_stop", boom)
+    criticals: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox, "critical",
+        lambda *a, **k: criticals.append(str(a[-1]) if a else ""))
+    stops: list = []
+    monkeypatch.setattr(
+        hl, "stop_harness",
+        lambda port=hl.DEFAULT_PORT: stops.append(1) or ("stopped", "ok"))
+
+    class _Pet:
+        def show_bubble(self, text, duration=0):
+            pass
+
+    hl.launch_harness_gui(_Pet(), action="stop")
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and not criticals:
+        app.processEvents()
+        time.sleep(0.01)
+    assert criticals, "确认框异常必须给出错误反馈（worker 不得静默挂死）"
+    assert "parent destroyed" in criticals[0]
+    assert stops == [], "确认框异常时不得执行停止"
+    del app

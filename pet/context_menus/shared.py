@@ -532,14 +532,20 @@ def add_harness(menu: QMenu, pet, *, icons: bool = True):
     """
     start_icon = "harness" if icons else None
     submenu = add_submenu(menu, "DeepSeek Harness", start_icon)
-    add_action(submenu, "启动并打开页面", start_icon, lambda: launch_harness_gui(pet))
+    # 三个动作都 close_on_trigger：菜单先关闭、回调延迟到菜单关闭后执行——
+    # 重启/停止的确认框是模态框，macOS 原生菜单跟踪会话中弹模态框会被
+    # AppKit 抑制（与设置对话框首次点击无反应同源）。
+    add_action(submenu, "启动并打开页面", start_icon, lambda: launch_harness_gui(pet),
+               close_on_trigger=True)
     add_action(
         submenu, "重启服务", "play" if icons else None,
         lambda: launch_harness_gui(pet, action="restart"),
+        close_on_trigger=True,
     )
     add_action(
         submenu, "停止服务", "quit" if icons else None,
         lambda: launch_harness_gui(pet, action="stop"),
+        close_on_trigger=True,
     )
     return submenu
 

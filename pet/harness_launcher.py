@@ -719,11 +719,13 @@ def restart_harness(port: int = DEFAULT_PORT, *, open_browser: bool = True) -> t
 
 
 def launch_harness_gui(parent=None, action: str = "start") -> None:
-    """GUI 菜单入口：探测/启动/停止放到后台线程，失败时在 GUI 线程弹窗提示。
+    """GUI 菜单入口：探测/确认/启动/停止全部离开 GUI 线程，结果回 GUI 线程提示。
 
-    命令解析可能同步执行 `npm root -g`（最长 15 秒），放在 GUI 线程会
-    卡住界面；弹窗延迟到菜单关闭后再显示（macOS 原生菜单跟踪会话中
-    弹模态框会被 AppKit 抑制，与设置对话框首次点击无反应同源）。
+    命令解析可能同步执行 `npm root -g`（最长 15 秒）、进程反查在 Windows 上
+    跑 PowerShell `Get-CimInstance`（最长 10 秒），放在 GUI 线程会卡住界面；
+    确认框经 ``QTimer.singleShot`` 回 GUI 线程弹出（worker 用 Event 等答复），
+    且菜单项已 close_on_trigger（回调延迟到菜单关闭后）——macOS 原生菜单跟踪
+    会话中弹模态框会被 AppKit 抑制，与设置对话框首次点击无反应同源。
 
     ``action``：
     - ``start``   启动/复用本机实例并打开页面（旧行为，唯一不弹确认框的动作）；
@@ -737,14 +739,12 @@ def launch_harness_gui(parent=None, action: str = "start") -> None:
     from PySide6.QtCore import QObject, QTimer
     from PySide6.QtWidgets import QMessageBox
 
-    if action in ("restart", "stop"):
-        target = describe_harness_process()
-        if not _confirm_harness_stop(parent, target, restart=(action == "restart")):
-            return
-
     result: dict = {}
-    # 创建于 GUI 线程，作为 singleShot 的 context：保证回调回到 GUI 线程
+    # 创建于 GUI 线程，作为 singleShot 的 context：保证回调回到 GUI 线程。
+    # 必须经闭包链持活到 _show 投递完成（worker 结束后若 bridge 被 GC，
+    # 已排队的回调会随 C++ 对象销毁被静默丢弃）。
     bridge = QObject()
+    holders = [bridge]
 
     def _bubble(text: str, duration: int = 6000) -> None:
         show = getattr(parent, "show_bubble", None)
@@ -752,6 +752,7 @@ def launch_harness_gui(parent=None, action: str = "start") -> None:
             show(text, duration)
 
     def _show() -> None:
+        holders.clear()  # 已投递：解除持活，bridge 随闭包链断开回收
         status = result.get("status")
         info = result.get("info", "")
         if status in ("already", "started"):
@@ -784,6 +785,37 @@ def launch_harness_gui(parent=None, action: str = "start") -> None:
             QMessageBox.critical(parent, "DeepSeek Harness", f"操作失败：{info}")
 
     def worker() -> None:
+        if action in ("restart", "stop"):
+            # 反查（PowerShell 最长 10s）在 worker 线程跑；确认框经
+            # singleShot 回 GUI 线程弹出，worker 用 Event 等答复——
+            # GUI 全程不被阻塞。
+            try:
+                target = describe_harness_process()
+            except Exception as exc:
+                result["status"], result["info"] = "error", str(exc)
+                QTimer.singleShot(0, bridge, _show)
+                return
+            confirmed: dict = {}
+            proceed = threading.Event()
+
+            def _ask() -> None:
+                try:
+                    confirmed["ok"] = _confirm_harness_stop(
+                        parent, target, restart=(action == "restart"))
+                except Exception as exc:  # 父窗口销毁/对话框构造失败
+                    confirmed["error"] = exc
+                finally:
+                    proceed.set()  # 任何结局都必须放行 worker，否则永久挂起零反馈
+
+            QTimer.singleShot(0, bridge, _ask)
+            proceed.wait()
+            if "error" in confirmed:
+                result["status"] = "error"
+                result["info"] = str(confirmed["error"])
+                QTimer.singleShot(0, bridge, _show)
+                return
+            if not confirmed.get("ok"):
+                return
         try:
             if action == "stop":
                 status, info = stop_harness()
