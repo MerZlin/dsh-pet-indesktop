@@ -28,6 +28,10 @@ from PySide6.QtWidgets import QApplication, QMenu
 
 from pet import music_players
 
+# 模块导入时捕获真实现：conftest 的禁扫桩会在用例运行期替换 _search，
+# 串行化用例需要显式恢复它（只替身扫描体 _search_filesystem）。
+_REAL_SEARCH = music_players._search
+
 
 def _qapp() -> QApplication:
     return QApplication.instance() or QApplication([])
@@ -536,3 +540,71 @@ def test_launch_bridge_registry_collects_finished_workers(monkeypatch):
         shared._LAUNCH_BRIDGES.clear()
         shared._LAUNCH_BRIDGES.update(saved)
 
+
+
+# ---------------------------------------------------------------------------
+# 事故 2026-09-19（PR #147 CI 取证 run 35408158831）：#140 的启动/菜单预热对
+# netease/qqmusic 各起一条后台扫描线程，两条线程并发对 C:/、D:/ 盘根做
+# iterdir+stat 风暴，Windows CI 上触发 C 级 access violation（faulthandler
+# dump：一线程 Garbage-collecting、一线程 _shallow_scan，exit -1073741819）。
+# 两层修复钉住：1) _search 全局串行化；2) conftest autouse 桩掉 _search。
+
+
+def test_search_is_serialized_across_player_keys(monkeypatch):
+    """不同 player_key 的盘扫描必须串行执行，不得交叠（并发扫盘 = AV 触发条件）。"""
+    events: list[tuple[str, str]] = []
+
+    def fake_scan(key: str) -> None:
+        events.append(("enter", key))
+        time.sleep(0.05)  # 放大交叠窗口：无锁时两条线程必然同时在场
+        events.append(("exit", key))
+
+    # 恢复真实现（覆盖 conftest 禁扫桩）——本用例测的就是锁本身；扫描体仍打桩
+    monkeypatch.setattr(music_players, "_search", _REAL_SEARCH)
+    monkeypatch.setattr(music_players, "_search_filesystem", fake_scan)
+    music_players.clear_cache()
+
+    start = threading.Event()
+
+    def run(key: str) -> None:
+        assert start.wait(5.0), "启动屏障超时"
+        music_players.find_player(key)
+
+    threads = [
+        threading.Thread(target=run, args=(key,), name=f"scan-probe-{key}", daemon=True)
+        for key in ("netease", "qqmusic")
+    ]
+    for t in threads:
+        t.start()
+    start.set()
+    for t in threads:
+        t.join(10.0)
+    assert not any(t.is_alive() for t in threads), "扫描线程 10s 内未收尾"
+
+    # 严格 enter/exit 交替：任何时刻至多一条线程在扫描
+    assert len(events) == 4, f"扫描事件数异常：{events}"
+    assert events[0][0] == "enter" and events[1][0] == "exit", f"扫描交叠：{events}"
+    assert events[2][0] == "enter" and events[3][0] == "exit", f"扫描交叠：{events}"
+    assert events[0][1] != events[2][1], "两个 key 都只扫了一次"
+
+
+def test_player_scan_never_runs_in_tests(monkeypatch, tmp_path):
+    """conftest 兜底回归：任何测试里 find_player 都不得真实扫盘。
+
+    事故里预热线程在 CI runner 上扫 C:/、D:/ 盘根三层（每 root 最多 200
+    目录）并与 GC 交叠触发 access violation。本用例变红说明有人移除了
+    conftest 的 _search 桩（需要真实扫描语义的用例应显式 monkeypatch）。
+    """
+    calls: list[str] = []
+
+    def spy_iterdir(self):
+        calls.append(str(self))
+        return iter(())
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", spy_iterdir)
+    monkeypatch.setattr(music_players, "_SEARCH_ROOTS", (str(tmp_path),))
+    music_players.clear_cache()
+
+    music_players.find_player("netease")
+
+    assert calls == [], "测试进程里发生了真实盘扫描"

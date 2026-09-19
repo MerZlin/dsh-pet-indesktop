@@ -51,6 +51,13 @@ CACHED_COLD = "cold"
 _warm_inflight: set[str] = set()
 _warm_lock = threading.Lock()
 
+# 全局扫描串行化（事故 2026-09-19，PR #147 CI 取证）：netease/qqmusic 各自的
+# 预热线程若并发扫同一批盘根（C:/、D:/ 三层浅扫），Windows 上与 GC 交叠触发
+# C 级 access violation（faulthandler dump：一线程 Garbage-collecting、一线程
+# _shallow_scan，exit -1073741819）。扫描只发生在后台线程（GUI 路径只读缓存），
+# 串行化的代价是第二条 key 多等几秒，可接受。
+_search_lock = threading.Lock()
+
 
 def player_label(player_key: str) -> str:
     return PLAYERS.get(player_key, (player_key, "", ()))[0]
@@ -146,6 +153,12 @@ def warm_cache_async(player_key: str, manual_path: str = "") -> bool:
 
 
 def _search(player_key: str) -> str | None:
+    """缓存未命中后的真实查找（测试常打桩的 seam）。**全局串行化**，见 _search_lock。"""
+    with _search_lock:
+        return _search_filesystem(player_key)
+
+
+def _search_filesystem(player_key: str) -> str | None:
     if sys.platform != "win32":
         return None
     _, exe_name, dir_names = PLAYERS[player_key]

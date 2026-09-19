@@ -143,6 +143,23 @@ def _clear_click_sound_pool():
 
 
 @pytest.fixture(autouse=True)
+def _no_filesystem_player_scan(monkeypatch):
+    """音乐播放器路径扫描（#140 的启动/菜单预热）绝不允许在测试里真实发生。
+
+    ``_search`` 会对 C:/、D:/ 等盘根做三层浅扫（每 root 最多 200 目录）；
+    测试进程里 netease/qqmusic 两条预热线程并发扫盘曾在 Windows CI 上触发
+    C 级 access violation（GC 与 scandir 交叠，PR #147 取证 dump：一线程
+    Garbage-collecting、一线程 _shallow_scan，exit -1073741819），且崩溃点
+    随套件进度漂移。需要真实扫描语义的用例自行 monkeypatch
+    （test_music_player_cache.py 全部用例自带打桩，不受影响）。
+    """
+    from pet import music_players
+
+    monkeypatch.setattr(music_players, "_search", lambda key: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _close_qt_top_level_widgets():
     """在测试后收口仍存活的应用级后台资源与 collision IPC 会话。"""
     yield
