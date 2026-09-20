@@ -447,3 +447,137 @@ def ask_about_screen(image, app_info: str, system_prompt: str, p, pet_name: str 
         image if isinstance(image, (bytes, bytearray)) else Path(image).read_bytes()
     )
     return _post_vision_request(bytes(jpeg_bytes), app_info, system_prompt, p, pet_name=pet_name)
+
+
+# ======================================================================
+# 二维码识别扩展（本 fork 新增，纯附加块：不改动上方任何 upstream 原文）
+# ----------------------------------------------------------------------
+# upstream 的「看看屏幕」链路固定调用 capture_screen_bytes() → ask_about_screen()。
+# 本块不改这两个函数的任何一行，而是在模块末尾把模块名重绑到二维码感知的包装：
+# pet/window.py 的 _look_worker 走 `vision_mod.<名字>` 属性查找（调用时解析），
+# 重绑对其透明。关闭开关、zxing-cpp 缺失或解码异常时，行为与 upstream 完全一致。
+#
+# 二维码在原始分辨率上本地离线解码（纯内存、不联网、不落盘）：upstream 的
+# 最长边 768 缩放会把屏幕上的小二维码缩到无法解码，故包装层先在原图解码、
+# 再用与 upstream 相同的缩放/编码参数出模型图（image_to_jpeg_bytes 与
+# upstream capture_screen_bytes 的主体逐行同款——若 upstream 改其缩放参数，
+# 此处需同步）。
+# ======================================================================
+
+MAX_QR_RESULTS = 3  # 单张截图最多输出的二维码条数（防刷屏）
+
+
+def capture_screen_image():
+    """抓取全屏（含多显示器）→ 原始分辨率 PIL Image，全程不落盘。"""
+    from PIL import ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
+    return ImageGrab.grab(all_screens=True)
+
+
+def image_to_jpeg_bytes(img) -> bytes:
+    """PIL Image → 缩到最长边 MAX_EDGE → 内存 JPEG bytes（不落盘）。"""
+    import io
+    from PIL import Image
+    w, h = img.size
+    scale = MAX_EDGE / max(w, h, 1)
+    if scale < 1.0:
+        img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.convert('RGB').save(buf, 'JPEG', quality=JPEG_QUALITY)
+    return buf.getvalue()
+
+
+def decode_qr_codes(img) -> list[str]:
+    """从截图（PIL Image）本地解码二维码内容：离线、纯内存、不联网。
+
+    只认 2D 码（QR / DataMatrix / Aztec / PDF417），1D 商品条码刻意排除——
+    屏幕上一维条码多为商品图/素材，识别出来是噪音。返回去重后的内容列表
+    （最多 MAX_QR_RESULTS 条）；zxing-cpp 缺失、解码异常或画面无码一律返回
+    空列表，绝不影响看看屏幕主流程。"""
+    if img is None:
+        return []
+    try:
+        import zxingcpp  # 懒导入：缺失时功能整体降级为「不识别二维码」
+        results = zxingcpp.read_barcodes(
+            img.convert('RGB'),
+            (
+                zxingcpp.BarcodeFormat.QRCode,
+                zxingcpp.BarcodeFormat.DataMatrix,
+                zxingcpp.BarcodeFormat.Aztec,
+                zxingcpp.BarcodeFormat.PDF417,
+            ),
+        )
+    except ImportError:
+        return []
+    except Exception:
+        log.exception('二维码解码失败（忽略，不影响看看屏幕主流程）')
+        return []
+    texts: list[str] = []
+    for r in results:
+        text = str(getattr(r, 'text', '') or '').strip()
+        if text and text not in texts:
+            texts.append(text)
+        if len(texts) >= MAX_QR_RESULTS:
+            break
+    return texts
+
+
+def format_qr_notice(texts: list[str]) -> str:
+    """把解码出的二维码内容格式化为直接展示的文本（多码时逐条编号）。"""
+    if len(texts) == 1:
+        return f'【二维码】{texts[0]}'
+    lines = [f'【二维码×{len(texts)}】']
+    lines.extend(f'{i}. {t}' for i, t in enumerate(texts, 1))
+    return '\n'.join(lines)
+
+
+def _look_qr_enabled() -> bool:
+    """「识别屏幕二维码」开关（config.json 键 look_screen_qr_enabled，默认开）。
+
+    每次看看屏幕时直接读盘而非依赖主进程内存态：独立设置进程保存后立即生效，
+    也无需等 config.reload()。读取失败一律按开处理。"""
+    try:
+        from .config import Config
+        return bool(Config().get('look_screen_qr_enabled', True))
+    except Exception:
+        return True
+
+
+# 最近一次截屏解码出的二维码内容；由 capture 包装写入、ask 包装读取并清空。
+_last_look_qr_texts: list[str] = []
+
+
+def _qr_aware_capture_screen_bytes() -> bytes:
+    """capture_screen_bytes 的二维码感知包装（签名/返回与 upstream 完全一致）。"""
+    img = capture_screen_image()
+    _last_look_qr_texts.clear()
+    if _look_qr_enabled():
+        _last_look_qr_texts.extend(decode_qr_codes(img))
+    return image_to_jpeg_bytes(img)
+
+
+def _qr_aware_ask_about_screen(image, app_info: str, system_prompt: str, p,
+                               pet_name: str = "") -> str:
+    """ask_about_screen 的二维码感知包装（签名/返回与 upstream 完全一致）。
+
+    二维码内容由本地解码保证准确，作为确定性前缀直接输出，不指望视觉模型
+    逐字复述（它基本读不出二维码）。模型请求失败时，已解出的二维码内容仍然
+    输出，不吞进错误气泡。"""
+    try:
+        reply = _upstream_ask_about_screen(image, app_info, system_prompt, p, pet_name=pet_name)
+    except VisionError as exc:
+        texts = _last_look_qr_texts[:]
+        _last_look_qr_texts.clear()
+        if texts:
+            return f'{format_qr_notice(texts)}\n（画面点评没发出来：{str(exc)[:40]}）'
+        raise
+    texts = _last_look_qr_texts[:]
+    _last_look_qr_texts.clear()
+    if texts:
+        return f'{format_qr_notice(texts)}\n{reply}'
+    return reply
+
+
+# —— 模块名重绑：调用时属性查找（vision_mod.capture_screen_bytes(...)）命中包装 ——
+_upstream_ask_about_screen = ask_about_screen
+capture_screen_bytes = _qr_aware_capture_screen_bytes  # noqa: F811
+ask_about_screen = _qr_aware_ask_about_screen  # noqa: F811

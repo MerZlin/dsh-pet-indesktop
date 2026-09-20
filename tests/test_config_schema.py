@@ -82,6 +82,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "idle_low_fps_enabled",
         "idle_low_fps_threshold",
         "lock_position",
+        "look_screen_qr_enabled",  # 本 fork 新增（config.py reload 白名单同步登记）
         "media_prewarm",
         "menu_easter_egg",
         "modern_chat_background",

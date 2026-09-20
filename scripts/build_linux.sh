@@ -67,6 +67,7 @@ for variant in "${variant_list[@]}"; do
         --collect-all PySide6.QtMultimedia
         --collect-all edge_tts
         --collect-all psutil
+        --collect-all zxingcpp
         --add-binary "$FCITX5_PLUGIN:PySide6/Qt/plugins/platforminputcontexts"
         --add-data "$assets:$assets"
         --add-data "assets/sounds:assets/sounds"

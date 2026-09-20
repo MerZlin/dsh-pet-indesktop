@@ -198,6 +198,7 @@ if (-not $SkipBuild) {
         --collect-all aiofiles `
         --collect-all tzdata `
         --collect-all psutil `
+        --collect-all zxingcpp `
         @keyringCollect `
         --add-data $datas `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
