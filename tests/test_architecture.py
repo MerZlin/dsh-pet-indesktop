@@ -157,7 +157,12 @@ WINDOW_PY_LINE_BUDGET = 4632
 # 3 行 SettingRow 展开式写法（6 行）+ _write_config 回写 1 行 + 布局编排认领 1 行；
 # 控件本体落在 pet/settings_pet_controls.py（与既有的「配图大小」同处），
 # 缩放实现全在 pet/speech_bubble*.py。按文件约定只随实测校准，不为达标压行。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2401
+# 2026-09-21 上调到 2440：灵动岛新增「网络」信息槽——info_mode 下拉加一项，
+# 三个指标开关（延迟/下行/上行，各 +1 控件 +1 SettingRow 展开式约 3 行）与
+# _write_config 回写 4 行，实测 2409。探测/格式化逻辑全在 pet/network_status.py，
+# 弹窗在 pet/network_info_panel.py，本文件仍只做接线；按文件约定预算只随实测
+# 校准（留约 30 行余量），不为达标压缩行宽/合并语句；拆分仍是待办。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2440
 def _read(name: str) -> str:
     return (PET_DIR / name).read_text(encoding="utf-8")
 

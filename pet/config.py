@@ -528,8 +528,16 @@ def _default_dynamic_island_data() -> dict:
         "show_icon": True,
         "show_name": True,
         "show_info": True,
-        "info_mode": "time",  # time / balance_tier / balance / custom
+        "info_mode": "time",  # time / balance_tier / balance / custom / network
         "custom_text": "",
+        # ---- 网络显示（info_mode == "network" 时生效；三个指标可独立开关）----
+        # 延迟要发 UDP 探测包（有流量成本，默认 1 秒）；上下行网速是读网卡
+        # 计数器得来的，零流量——所以网速比延迟便宜得多。
+        "network_show_latency": True,
+        "network_show_down_speed": True,
+        "network_show_up_speed": True,
+        # 探测间隔（秒）。1 秒是用户明确要求的高频档；调大即按比例省流量。
+        "network_probe_interval_seconds": 1,
         "show_status": True,
         "style": "dark",  # dark / light / glass
         "opacity": 1.0,  # 背景不透明度 0.4~1.0
@@ -560,7 +568,11 @@ def _clean_dynamic_island_data(value) -> dict:
     result["show_info"] = bool(result["show_info"])
     result["show_status"] = bool(result["show_status"])
     mode = str(result.get("info_mode") or "time").strip()
-    result["info_mode"] = mode if mode in {"time", "balance_tier", "balance", "custom"} else "time"
+    # ⚠️ 这里是硬编码白名单：新增 info_mode 取值时必须同步加进来，否则会被
+    # 静默改回 "time"（设置页选中项看起来"没生效"）。
+    result["info_mode"] = mode if mode in {
+        "time", "balance_tier", "balance", "custom", "network",
+    } else "time"
     result["custom_text"] = str(result.get("custom_text") or "")[:80]
     style = str(result.get("style") or "dark").strip()
     result["style"] = style if style in {"dark", "light", "glass"} else "dark"
@@ -584,11 +596,19 @@ def _clean_dynamic_island_data(value) -> dict:
     result["click_action"] = click_action if click_action in {"expand", "toggle_pet"} else "expand"
     # 布尔键必须用 _bool_or_default：bool("false") is True，字符串/None
     # 会被误翻（同文件既有规则）；int 0/1 是旧配置的合法布尔编码，先归一
-    for _key in ("event_effects", "edge_dock", "collision_enabled", "hidden_chat"):
+    for _key in ("event_effects", "edge_dock", "collision_enabled", "hidden_chat",
+                 "network_show_latency", "network_show_down_speed",
+                 "network_show_up_speed"):
         _v = result[_key]
         if isinstance(_v, int) and not isinstance(_v, bool):
             _v = bool(_v)
         result[_key] = _bool_or_default(_v, defaults[_key])
+    # 探测间隔：夹到 1~60 秒。整数化——配置里手改成 0 或负数会让定时器失效。
+    try:
+        _interval = int(result.get("network_probe_interval_seconds", 1))
+    except (TypeError, ValueError):
+        _interval = 1
+    result["network_probe_interval_seconds"] = max(1, min(60, _interval))
     edge = str(result.get("dock_edge") or "none").strip()
     result["dock_edge"] = edge if edge in {"none", "top", "bottom", "left", "right"} else "none"
     # 至少保留一个组件：全部关闭时强制显示信息槽，避免空胶囊。
@@ -749,6 +769,9 @@ class Config:
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             "todo_reminder_enabled": True,  # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
+            # 网络信息（右键菜单里的「网络信息」入口：公网 IP / 属地 / 外网连通性）
+            # 关掉后菜单项置灰；它只在用户点开弹窗时才联网查询，不后台跑。
+            "network_info_enabled": True,
             # 语音报时（edge-tts 在线 TTS + 台词/歌词按 8 小时整体换批、批内轮换）
             "voice_chime_enabled": False,  # 语音报时总开关（默认关闭：主动打扰型功能，用户显式开启）
             "voice_chime_schedule": "hourly",  # hourly / every_30 / every_15 / every_5 / every_minute / custom
@@ -996,6 +1019,7 @@ class Config:
             "system_notifications_enabled",
             "todo_reminder_enabled",
             "todo_reminder_lead_minutes",
+            "network_info_enabled",
             "voice_chime_enabled",
             "voice_chime_schedule",
             "voice_chime_custom_times",
@@ -1287,6 +1311,8 @@ class Config:
         # 待办提醒：开关同规防字符串布尔误开；提前量钳到 [0, 60] 分钟（0=不提前）。
         self.data["todo_reminder_enabled"] = _bool_or_default(self.data.get("todo_reminder_enabled"), True)
         self.data["todo_reminder_lead_minutes"] = int(_float_or_default(self.data.get("todo_reminder_lead_minutes"), 5.0, 0.0, 60.0))
+        # 网络信息：菜单入口开关，同规防字符串布尔误开。
+        self.data["network_info_enabled"] = _bool_or_default(self.data.get("network_info_enabled"), True)
         # 黄金回旋 / 边缘探头：与其它布尔键同规，防手改字符串布尔误开。
         self.data["golden_spin_on_click"] = _bool_or_default(self.data.get("golden_spin_on_click"), False)
         self.data["golden_spin_direct"] = _bool_or_default(self.data.get("golden_spin_direct"), False)
@@ -1461,6 +1487,7 @@ class Config:
             "spawn_inherit_dynamic_island",
             "todo_reminder_enabled",
             "todo_reminder_lead_minutes",
+            "network_info_enabled",
             "music_sing_enabled",
             "music_sing_grace_seconds",
             "music_lyric_enabled",

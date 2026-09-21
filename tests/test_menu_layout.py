@@ -29,6 +29,7 @@ def test_modern_default_v1_has_compact_root_and_safety_actions():
         "agent_link",
         "proactive_screen",
         "todo_panel",
+        "network_info",
         "voice_chime_now",
         "voice_chime_toggle",
         "festival_now",
@@ -336,6 +337,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "agent_link",
         "proactive_screen",
         "todo_panel",
+        "network_info",
         "voice_chime_now",
         "voice_chime_toggle",
         "festival_now",
@@ -367,6 +369,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "agent_link",
         "proactive_screen",
         "todo_panel",
+        "network_info",
         "modern_settings",
         "quit",
     ]
@@ -492,8 +495,10 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     if sys.platform == "win32":
         expected_root.insert(-2, "主动识屏")
         expected_root.insert(-2, "待办提醒")
+        expected_root.insert(-2, "网络信息")
     else:
         expected_root.insert(-2, "待办提醒")
+        expected_root.insert(-2, "网络信息")
     # 报时/节日四项默认不在菜单上（模板 visible: false，2026-09-19 起）
     assert root == expected_root
     rendered = ["|" if action.isSeparator() else action.text() for action in menu.actions()]
@@ -507,9 +512,10 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     ]
     if sys.platform == "win32":
         expected_rendered.insert(-3, "主动识屏")
-    # tools 段顺序：… Agent 联动 [主动识屏] 待办提醒 | 桌宠设置 退出
+    # tools 段顺序：… Agent 联动 [主动识屏] 待办提醒 网络信息 | 桌宠设置 退出
     # （报时/节日四项默认 visible: false，不渲染）
     expected_rendered.insert(-3, "待办提醒")
+    expected_rendered.insert(-3, "网络信息")
     assert rendered == expected_rendered
     pet_controls = next(action.menu() for action in menu.actions() if action.text() == "桌宠控制")
     assert [action.text() for action in pet_controls.actions() if not action.isSeparator()] == [

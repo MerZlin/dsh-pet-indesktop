@@ -470,6 +470,7 @@ class PetInstance:
             self._slot_wrap(self.shell.clear_spawned_pets)
             if not self.config.instance_id else None)
         win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
+        win.on_open_network_info = self._slot_wrap(self.shell.open_network_info)
         win.on_voice_chime_now = self._slot_wrap(self.shell.trigger_voice_chime_now)
         win.on_toggle_voice_chime = self._slot_wrap(self.shell.toggle_voice_chime)
         win.on_festival_now = self._slot_wrap(self.shell.trigger_festival_now)
@@ -1069,6 +1070,8 @@ class AppShell:
         # 角色热切换重建窗口后无需重绑（PR72 上游版挂 PetApp；本分支归 AppShell）。
         self.todo_service = None
         self.todo_panel = None
+        # 网络信息面板：纯按需创建（不常驻），打开时才起后台查询线程。
+        self.network_info_panel = None
         if self._todo_wanted():
             self._ensure_todo_service()
         # 语音报时：进程级单例（多窗共用调度器）。默认关闭（2026-09-19 起，
@@ -2882,6 +2885,30 @@ class AppShell:
 
     def _todo_panel_finished(self, _result: int) -> None:
         self.todo_panel = None
+
+    def open_network_info(self) -> None:
+        """打开网络信息面板（非模态单例；打开时自动查询）。
+
+        查询走后台线程——实测属地 400~500 ms、连通性 3.5~6 秒，
+        绝不能在 GUI 线程里等（fb38824 修的就是这类阻塞）。
+        """
+        from .network_info_panel import NetworkInfoDialog
+
+        if self.network_info_panel is None:
+            dialog = NetworkInfoDialog(self, parent=self.win)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dialog.finished.connect(self._network_info_finished)
+            self.network_info_panel = dialog
+        inst = self.instance
+        if inst is not None:
+            inst._present_dialog(self.network_info_panel)
+        else:
+            self.network_info_panel.show()
+        # 每次都重查：用户点开就是想看**此刻**的情况
+        self.network_info_panel.refresh_now()
+
+    def _network_info_finished(self, _result: int) -> None:
+        self.network_info_panel = None
 
     def trigger_voice_chime_now(self, text: str = "") -> None:
         """手动报时：设置页试听入口与菜单编排加回的「立即报时」共用（该菜单项默认隐藏）。
