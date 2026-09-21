@@ -110,6 +110,9 @@ class LyricTracker:
         self._anchor_pos: float = 0.0          # 基准处的播放位置
         self._paused: bool = False
         self._paused_pos: float | None = None   # 暂停时冻结的位置
+        # 本曲是否见过播放器上报的真实进度。见过就说明位置可信，手动对齐
+        # 必须让路（见 reanchor / MusicLyricController.align_available）。
+        self._reported_position: bool = False
 
     # ------------------------------------------------------------ 状态
 
@@ -121,6 +124,11 @@ class LyricTracker:
     def index(self) -> int:
         return self._index
 
+    @property
+    def uses_reported_position(self) -> bool:
+        """位置是否来自播放器上报（True 时不该手动对齐）。"""
+        return self._reported_position
+
     def reset(self) -> None:
         """清空全部状态（切歌或停止显示时调用）。"""
         self._lines = []
@@ -129,6 +137,7 @@ class LyricTracker:
         self._anchor_pos = 0.0
         self._paused = False
         self._paused_pos = None
+        self._reported_position = False
 
     def load(self, lines: list[music_lyric.LyricLine], *, now: float,
              position: float | None) -> None:
@@ -137,6 +146,7 @@ class LyricTracker:
         self._index = -1
         self._paused = False
         self._paused_pos = None
+        self._reported_position = position is not None
         if position is None:
             # 无真实进度：从现在开始本地累加（此刻视为 0）。
             self._anchor_at = now
@@ -151,6 +161,7 @@ class LyricTracker:
         """当前位置（秒）。``reported`` 为播放器上报值，有则以它为准。"""
         if reported is not None:
             # 真实进度可用：顺带校正本地基准，避免两套数据打架。
+            self._reported_position = True
             self._anchor_at = now
             self._anchor_pos = reported
             self._paused_pos = reported if self._paused else None
@@ -212,6 +223,53 @@ class LyricTracker:
             return self._lines[index].text
         return ""
 
+    # ------------------------------------------------- 手动对齐（快进 / 中途开始）
+
+    def reanchor(self, position: float, *, now: float) -> None:
+        """把本地时钟的基准挪到 ``position``，即"此刻唱到第 position 秒"。
+
+        存在的理由（2026-09-21 实测）：网易云音乐通过 SMTC **完全不上报**播放
+        进度（position/end_time 恒为 0，播放中、暂停、切歌、快进都一样），此时
+        位置只能靠本地时钟累加，而本地时钟原理上感知不到快进——用户拖一次
+        进度条，歌词就永久错位。有了这个入口，用户可以一键把歌词重新对到
+        当前正在唱的那句上。
+
+        只影响本地累加模式：``position(reported=...)`` 一旦拿到真实进度就以
+        真值优先，手动基准会被覆盖（也正是我们想要的——绝不与真值打架）。
+        """
+        self._anchor_at = now
+        self._anchor_pos = max(0.0, float(position))
+        if self._paused:
+            # 暂停中也要一起挪，否则恢复播放会弹回旧位置。
+            self._paused_pos = self._anchor_pos
+
+    def reanchor_to_line(self, delta: int, *, now: float) -> bool:
+        """以"当前句再走 ``delta`` 句"那一行为准；越界返回 False。"""
+        if not self._lines:
+            return False
+        # 还没唱到第一句时（_index == -1），"下一句"应当是第一句本身。
+        base = self._index if self._index >= 0 else -1
+        target = base + int(delta)
+        if not (0 <= target < len(self._lines)):
+            return False
+        # 查行时会叠加 lead，这里先把它减掉，保证"按一次走一句"——否则行距比
+        # 提前量短（快歌/说唱）时按一次会跳过一句。
+        self.reanchor(max(0.0, self._lines[target].at - self.lead), now=now)
+        self._index = target
+        return True
+
+    def line_now(self, now: float, *, reported: float | None = None) -> int:
+        """返回当前位置对应的行号，**并把 ``_index`` 同步成该值（含 -1）**。
+
+        与 :meth:`advance` 的区别：``advance`` 用 ``-1`` 同时表示"没有行可显示"
+        和"与上一拍相同"（供调用方去重），两者混在一起时，调用方在"拖回第一句
+        之前"这种情形下会分不清，只能沿用上一句，于是气泡继续显示错位的旧歌词。
+        这里给需要"当前到底是哪一句"的调用方一个不含糊的读数。
+        """
+        index = self.line_at(self.position(now, reported=reported))
+        self._index = index
+        return index
+
 
 class MusicLyricController(QObject):
     """驱动"读曲目 → 取词 → 按进度更新气泡"的完整链路。"""
@@ -252,6 +310,12 @@ class MusicLyricController(QObject):
         # 检测到切歌的时刻。对不上报进度的播放器（网易云），这是唯一可信的
         # 「这首歌从第 0 秒开始」的锚点，必须用它而不是取词完成时刻。
         self._detected_at: float | None = None
+        # 当前跟踪的播放器标识（Playback.app_id）。带上它去采样，会话选取才会
+        # 留在同一个播放器上——本机实测同时有网易云与浏览器会话，丢了这个标识
+        # 就会在"暂停一下"时跳到浏览器里那首歌上。
+        self._tracked_app_id: str = ""
+        # 「该播放器不上报播放进度」的提示每个会话只发一次。
+        self._estimated_hint_shown: bool = False
         # 常驻标题行（如「我在唱《歌名》」），固定在气泡第一行长期显示。
         self._title_line: str | None = None
         # 当前曲名（纯音乐时要据此换「正在听《歌名》」标题）。
@@ -376,6 +440,7 @@ class MusicLyricController(QObject):
         self._loading.clear()
         self._primed = False
         self._detected_at = None
+        self._tracked_app_id = ""
         self._title_line = None
         self._last_lyric = ""
         self._last_shown = None
@@ -514,7 +579,7 @@ class MusicLyricController(QObject):
             if self._sample_stop.is_set():
                 break
             try:
-                playback = now_playing.get_now_playing()
+                playback = now_playing.get_now_playing(self._tracked_app_id)
             except Exception:
                 playback = None
             try:
@@ -560,6 +625,8 @@ class MusicLyricController(QObject):
         track = playback.track
         key = track.key()
         now = time.monotonic()
+        # 记住这次跟的是哪个播放器，下一拍带上它去采样（会话选取据此粘住）。
+        self._tracked_app_id = str(getattr(playback, "app_id", "") or "")
 
         if not track.playing:
             # 暂停：只冻结进度，**不要** reset——否则恢复播放时同一首歌会被
@@ -592,14 +659,17 @@ class MusicLyricController(QObject):
             # 让路期间不推进显示，但位置照常累计，告警结束后能接上。
             self._tracker.position(now, reported=playback.position)
             return
-        index = self._tracker.advance(now, reported=playback.position)
-        lyric = self._tracker.text_at(index) if index >= 0 else self._last_lyric
+        index = self._tracker.line_now(now, reported=playback.position)
+        # index < 0 = 当前位置早于第一句歌词（例如向后拖回开头）。此时必须让
+        # 歌词位空出来、只留歌名——沿用 self._last_lyric 会把上一句留在屏幕上，
+        # 这是"拖回去歌词还对不上"的根因。
+        lyric = self._tracker.text_at(index) if index >= 0 else ""
         self._last_lyric = lyric
         # 每拍都重送：一是续期（防气泡先于句子超时消失），二是标题必须一直在。
         self._show(lyric, title=self._title_line, force=True)
 
     def _start_track(self, key, title, artist, playback, now: float) -> None:
-        """切歌：先判断能否定位，再决定是否后台取词。"""
+        """切歌：先亮歌名，再决定是否后台取词。"""
         self._current_key = key
         self._tracker.reset()
         self._last_shown = None
@@ -607,14 +677,20 @@ class MusicLyricController(QObject):
         # 每首歌都重新记，避免用上一首的旧值把基准带到新歌上。
         self._detected_at = now
 
-        # 功能刚开启时，歌可能已经唱了一半。此时：
-        # - 播放器报真实进度（如 QQ 音乐）→ 直接对齐，不受影响；
-        # - 播放器不报进度（如网易云）  → 无从推断已唱到第几秒，猜一个起点
-        #   只会让歌词一路错位。按约定跳过这首，等下一次可信的切歌边界。
-        first_key = not self._primed
+        # 现象与取舍（用户反馈「识别不到我放到一半的歌」，2026-09-21 实测）：
+        # - 播放器报真实进度（QQ 音乐 / Chrome）→ 直接用真值，不受影响；
+        # - 播放器不报进度（网易云音乐，实测 position / end_time 恒为 0，播放
+        #   中、暂停、切歌、快进四个状态采样完全一致）→ 功能开启时歌可能已经
+        #   唱了一半，而无从推断已唱到第几秒。
+        # 旧实现在这里直接 return，结果是**连歌名都不显示**、整段空白。现在改为：
+        # 照常亮出歌名、把此刻当作第 0 秒往下走，并提示一次可手动对齐——位置
+        # 可能偏，但用户一键就能纠正（右键菜单「音乐 → 歌词对齐」），总好过
+        # 什么都不显示。
+        first_boundary = not self._primed
         self._primed = True
-        if playback.position is None and first_key:
-            return
+        if playback.position is None and first_boundary:
+            # 只有"开启功能时已在播"这一首的位置是猜出来的，才值得提示。
+            self._maybe_hint_estimated_progress()
 
         # 先亮出歌名：一是给用户即时反馈，二是填上取词那几秒的空窗——
         # 否则切歌后会有 3~5 秒什么都不显示。
@@ -632,6 +708,92 @@ class MusicLyricController(QObject):
             name="music-lyric-fetch",
             daemon=True,
         ).start()
+
+    # ------------------------------------------------ 手动对齐（快进 / 中途开始）
+
+    def align_available(self) -> bool:
+        """当前是否值得提供"手动对齐"。
+
+        只有「有歌词 + 位置靠本地时钟估算」时才需要：播放器报了真实进度
+        （Chrome / QQ 音乐）时位置本来就跟得上快进，手动对齐反而会跟真值打架。
+        """
+        if self._instrumental:
+            return False
+        if not self._tracker.has_lyrics:
+            return False
+        return not self._tracker.uses_reported_position
+
+    def resync_to_start(self) -> bool:
+        """「回到开头」：把此刻正在唱的那句当作歌曲开头。"""
+        return self._resync(0.0)
+
+    def resync_to_line(self, delta: int) -> bool:
+        """「上一句 / 下一句」：按歌词行的时间戳重定位。
+
+        比"±N 秒"更贴合用户心智——他听到的是"现在唱这句"，而不是"现在第几秒"，
+        所以对准通常两三下就够。越界或不可对齐时返回 False（不动作）。
+        """
+        if not self.align_available():
+            return False
+        if not self._tracker.reanchor_to_line(delta, now=time.monotonic()):
+            return False
+        self._refresh_lyric_now()
+        return True
+
+    def nudge(self, seconds: float) -> bool:
+        """「±5 秒」：在当前基准上平移，用于微调。"""
+        if not self.align_available():
+            return False
+        now = time.monotonic()
+        current = self._tracker.position(now)
+        if current is None:
+            return False
+        return self._resync(current + float(seconds))
+
+    def _resync(self, position: float) -> bool:
+        """把本地时钟基准挪到 ``position`` 并立即刷新气泡。"""
+        if not self.align_available():
+            return False
+        self._tracker.reanchor(max(0.0, float(position)), now=time.monotonic())
+        self._refresh_lyric_now()
+        return True
+
+    def _refresh_lyric_now(self) -> None:
+        """按当前基准立刻刷新一次气泡，不必等下一拍定时器。"""
+        if self._instrumental or not self._tracker.has_lyrics:
+            return
+        index = self._tracker.line_now(time.monotonic())
+        self._last_lyric = self._tracker.text_at(index) if index >= 0 else ""
+        if self._bubble_blocked():
+            return
+        self._show(self._last_lyric, title=self._title_line, force=True)
+
+    def _maybe_hint_estimated_progress(self) -> None:
+        """不报进度的播放器：每个会话只提示一次「快进后用菜单对齐」。
+
+        实测网易云音乐完全不上报播放进度，歌词只能按本地时钟估算——快进与
+        中途开始播放都会错位，而且没有任何自动信号可依赖（SMTC 时间轴恒为 0、
+        UIA 树里也没有进度控件）。与其让用户以为功能坏了，不如把可用的纠正
+        入口告诉他一次。
+        """
+        if self._estimated_hint_shown:
+            return
+        self._estimated_hint_shown = True
+        alert = getattr(self.win, "show_alert", None)
+        if not callable(alert):
+            return
+        try:
+            alert(
+                "这个播放器不上报播放进度，歌词按开始时间估算。"
+                "快进或从中途开始播放后，用右键菜单「音乐 → 歌词对齐」校正。",
+                sticky=False,
+                duration_ms=12000,
+                alert_id="music-lyric-estimated",
+                priority=1,
+                alert_type="music_lyric",
+            )
+        except Exception:
+            log.debug("进度估算提示显示失败", exc_info=True)
 
     def _announce(self, title: str, artist: str) -> None:
         """建立常驻标题（歌名固定显示在气泡第一行）。

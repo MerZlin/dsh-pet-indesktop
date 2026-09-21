@@ -743,9 +743,11 @@ def test_sampling_resumes_after_disable_enable(monkeypatch):
     from pet.music_lyric_controller import MusicLyricController
 
     calls = {"n": 0}
+    seen: list = []
 
-    def fake_get_now_playing():
+    def fake_get_now_playing(tracked_app_id=None):
         calls["n"] += 1
+        seen.append(tracked_app_id)
         return None
 
     monkeypatch.setattr(now_playing, "get_now_playing", fake_get_now_playing)
@@ -755,6 +757,8 @@ def test_sampling_resumes_after_disable_enable(monkeypatch):
     try:
         ctrl.sync_enabled(True)
         assert _wait_until(lambda: calls["n"] >= 1), "首次开启后应采样"
+        # 采样必须带上"当前跟踪的播放器"，否则会话选取会在两个播放器之间乱跳
+        assert seen and seen[0] == "", seen
 
         before = calls["n"]
         ctrl.sync_enabled(False)
@@ -796,3 +800,343 @@ def test_shutdown_leaves_stop_flag_set():
     ctrl2.sync_enabled(True)
     ctrl2.sync_enabled(False)
     assert ctrl2._sample_stop.is_set(), "sync_enabled(False) 后应保持停止态"
+
+
+# ------------------------------------------------- 快进 / 中途开始播放的对齐
+#
+# 背景（2026-09-21 本机实测）：网易云音乐（cloudmusic.exe）通过 SMTC **完全
+# 不上报播放进度**——position / end_time 恒为 0.0，播放中、暂停、切歌、快进
+# 四种状态下采样结果完全一样。此时控制器只能走 LyricTracker 的本地时钟推算，
+# 而本地时钟原理上感知不到快进。因此需要"一次操作即对齐"的手动入口，并修掉
+# 由此暴露的两处缺陷：
+#   缺陷 1：功能开启时歌已在播 → 连歌名都不显示（整段空白）。
+#   缺陷 2：向后拖到第一句歌词之前 → 气泡继续显示旧句。
+
+
+class _Clock:
+    """受控时钟：只替换 monotonic，其余属性透传给真 time 模块。"""
+
+    def __init__(self, now: float = 100.0):
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def _patch_clock(monkeypatch, now: float = 100.0) -> _Clock:
+    import pet.music_lyric_controller as mod
+
+    clock = _Clock(now)
+    monkeypatch.setattr(mod, "time", clock)
+    return clock
+
+
+def _playback(position=None, *, title="t", artist="a", playing=True):
+    from pet.now_playing import Playback, Track
+
+    return Playback(
+        track=Track(title=title, artist=artist, playing=playing),
+        position=position,
+        updated_at=0.0,
+    )
+
+
+def _aligned_controller(monkeypatch, *, lines=None, position=None, now=100.0):
+    """建一个已装载歌词、标题就绪的控制器（取词线程打桩，保持离线）。"""
+    import pet.music_lyric_controller as mod
+
+    clock = _patch_clock(monkeypatch, now)
+    win = _FakeWin()
+    ctrl = mod.MusicLyricController(win)
+    monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: None)
+    ctrl._current_key = ("t", "a")
+    ctrl._primed = True
+    ctrl._title_line = "我在唱《t》"
+    ctrl._tracker.lead = 0.0
+    ctrl._tracker.load(list(lines if lines is not None else LINES), now=now,
+                       position=position)
+    return win, ctrl, clock
+
+
+def test_tracker_reanchor_moves_local_clock():
+    """本地时钟模式下重定位：锚点之后的推算必须跟着走。"""
+    t = LyricTracker()
+    t.lead = 0.0
+    t.load(LINES, now=0.0, position=None)
+    assert t.position(3.0) == 3.0
+    t.reanchor(30.0, now=3.0)
+    assert t.position(5.0) == 32.0
+    assert t.text_at(t.line_at(t.position(5.0))) == "D"
+
+
+def test_tracker_reanchor_keeps_frozen_position_while_paused():
+    """暂停中对齐：冻结位置也要一起改，否则恢复播放会弹回旧值。"""
+    t = LyricTracker()
+    t.load(LINES, now=0.0, position=None)
+    t.set_paused(True, now=2.0)
+    t.reanchor(20.0, now=2.0)
+    assert t.position(999.0) == 20.0
+
+
+def test_tracker_reanchor_does_not_beat_reported_position():
+    """报进度的播放器：手动对齐不得覆盖真值。"""
+    t = LyricTracker()
+    t.load(LINES, now=0.0, position=None)
+    t.reanchor(30.0, now=0.0)
+    assert t.position(0.0, reported=11.0) == 11.0
+
+
+def test_tracker_uses_reported_position_flag():
+    t = LyricTracker()
+    t.load(LINES, now=0.0, position=None)
+    assert t.uses_reported_position is False
+    t.position(0.0, reported=1.0)
+    assert t.uses_reported_position is True
+    t.reset()
+    assert t.uses_reported_position is False
+
+
+def test_tracker_line_now_reports_no_line_and_syncs_index():
+    """回到第一句之前必须报 -1 **并把 index 同步成 -1**。
+
+    这是缺陷 2 的根：advance() 用 -1 表示"本拍没有变化"，调用方无法区分
+    "当前没有行可显示"，于是继续显示上一句；而 _index 不更新又让后续
+    每一步都建立在错误状态上。
+    """
+    t = LyricTracker()
+    t.lead = 0.0
+    t.load([LyricLine(5.0, "A"), LyricLine(9.0, "B")], now=0.0, position=None)
+    assert t.line_now(0.0) == -1
+    assert t.index == -1
+    assert t.line_now(6.0) == 0
+    assert t.index == 0
+    # 与 advance() 的区别：同一句也照常返回行号，不做去重
+    assert t.line_now(6.5) == 0
+
+
+def test_tracker_line_now_without_lyrics_is_minus_one():
+    t = LyricTracker()
+    assert t.line_now(10.0) == -1
+    assert t.index == -1
+
+
+def test_backward_seek_before_first_line_clears_stale_lyric(monkeypatch):
+    """缺陷 2 回归：向后拖到第一句之前，气泡必须不再显示旧句。"""
+    from pet.music_lyric import LyricLine as _LL
+
+    win, ctrl, clock = _aligned_controller(
+        monkeypatch, lines=[_LL(5.0, "A"), _LL(9.0, "B")],
+    )
+    clock.now = 111.0                      # 本地时钟推到 11s → 第二句
+    ctrl._on_playback_ready(_playback(None))
+    assert win.shown[-1] == ("我在唱《t》", "B"), win.shown[-1]
+
+    clock.now = 100.0                      # 拖回开头 → 位置 0s，早于第一句
+    ctrl._on_playback_ready(_playback(None))
+    assert win.shown[-1] == ("", "我在唱《t》"), win.shown[-1]
+
+
+def test_resync_to_start_realigns_local_clock(monkeypatch):
+    """快进之后的救命入口：一键把"现在这句"当作开头。"""
+    win, ctrl, clock = _aligned_controller(monkeypatch)
+    clock.now = 111.0
+    ctrl._on_playback_ready(_playback(None))
+    assert ctrl._tracker.text_at(ctrl._tracker.index) == "C"   # LINES: A0 B5 C10 D15
+
+    assert ctrl.resync_to_start() is True
+    assert win.shown[-1] == ("我在唱《t》", "A"), win.shown[-1]
+
+    # 对齐后继续按本地时钟推进
+    clock.now = 116.0
+    ctrl._on_playback_ready(_playback(None))
+    assert ctrl._tracker.text_at(ctrl._tracker.index) == "B"
+
+
+def test_resync_to_line_steps_along_lyrics(monkeypatch):
+    """「上一句 / 下一句」按歌词行的时间戳重定位。"""
+    win, ctrl, clock = _aligned_controller(monkeypatch)
+    clock.now = 111.0
+    ctrl._on_playback_ready(_playback(None))
+    assert ctrl._tracker.text_at(ctrl._tracker.index) == "C"
+
+    assert ctrl.resync_to_line(1) is True
+    assert win.shown[-1] == ("我在唱《t》", "D"), win.shown[-1]
+
+    assert ctrl.resync_to_line(-1) is True
+    assert win.shown[-1] == ("我在唱《t》", "C"), win.shown[-1]
+
+    # 越界不动作
+    assert ctrl.resync_to_line(99) is False
+    assert ctrl.resync_to_line(-99) is False
+
+
+def test_resync_to_line_lands_exactly_one_line_with_lead(monkeypatch):
+    """有提前量时「下一句」也只能走一句。
+
+    查行时会叠加 ``lead``（默认 1 秒，用户可调到 3 秒），所以按行步进必须先把
+    提前量减掉——否则行距比提前量短（快歌/说唱）时，按一次会直接跳过一句。
+    """
+    from pet.music_lyric import LyricLine as _LL
+
+    lines = [_LL(0.0, "A"), _LL(2.0, "B"), _LL(3.0, "C")]
+    win, ctrl, clock = _aligned_controller(monkeypatch, lines=lines)
+    ctrl._tracker.lead = 1.0                     # 提前量 > 行距
+    ctrl._tracker.load(list(lines), now=100.0, position=None)
+    clock.now = 100.0
+    ctrl._on_playback_ready(_playback(None))
+    assert win.shown[-1] == ("我在唱《t》", "A"), win.shown[-1]
+
+    assert ctrl.resync_to_line(1) is True
+    assert win.shown[-1] == ("我在唱《t》", "B"), win.shown[-1]
+
+    assert ctrl.resync_to_line(1) is True
+    assert win.shown[-1] == ("我在唱《t》", "C"), win.shown[-1]
+
+
+def test_nudge_seconds_shifts_lyric(monkeypatch):
+    """±5 秒微调：以当前位置为基准平移。"""
+    win, ctrl, clock = _aligned_controller(monkeypatch)
+    clock.now = 111.0
+    ctrl._on_playback_ready(_playback(None))
+
+    assert ctrl.nudge(-6.0) is True        # 11s → 5s → 落在 B(5.0)
+    assert win.shown[-1] == ("我在唱《t》", "B"), win.shown[-1]
+
+    assert ctrl.nudge(5.0) is True         # 5s → 10s → 落在 C(10.0)
+    assert win.shown[-1] == ("我在唱《t》", "C"), win.shown[-1]
+
+    # 不能推到负数
+    assert ctrl.nudge(-999.0) is True
+    assert ctrl._tracker.position(clock.now) >= 0.0
+
+
+def test_resync_is_noop_for_reported_position(monkeypatch):
+    """报进度的播放器（Chrome / QQ 音乐）：三个入口都必须 no-op。"""
+    win, ctrl, clock = _aligned_controller(monkeypatch, position=11.0)
+    ctrl._on_playback_ready(_playback(11.0))
+    assert ctrl._tracker.uses_reported_position is True
+
+    assert ctrl.resync_to_start() is False
+    assert ctrl.resync_to_line(1) is False
+    assert ctrl.nudge(5.0) is False
+    # 位置仍完全听真值
+    assert ctrl._tracker.position(clock.now, reported=2.0) == 2.0
+
+
+def test_align_available_gates(monkeypatch):
+    """菜单闸门：无词 / 纯音乐 / 报进度 都不可手动对齐。"""
+    win, ctrl, clock = _aligned_controller(monkeypatch)     # 本地时钟 + 有词
+    assert ctrl.align_available() is True
+
+    ctrl._tracker.reset()                                   # 无词
+    assert ctrl.align_available() is False
+
+    win2, ctrl2, _ = _aligned_controller(monkeypatch, position=1.0)   # 报进度
+    ctrl2._on_playback_ready(_playback(1.0))
+    assert ctrl2.align_available() is False
+
+    win3, ctrl3, _ = _aligned_controller(monkeypatch)       # 纯音乐
+    ctrl3._tracker.reset()
+    ctrl3._instrumental = True
+    assert ctrl3.align_available() is False
+
+
+def test_start_track_first_song_without_position_still_announces_title(monkeypatch):
+    """缺陷 1 回归：功能开启时歌已在播且播放器不报进度，必须至少亮出歌名。
+
+    旧实现在 _announce() 之前就 return，用户看到的是一片空白，于是"识别不到
+    我放到一半的歌"。
+    """
+    import pet.music_lyric_controller as mod
+
+    _patch_clock(monkeypatch, 100.0)
+    win = _FakeWin()
+    ctrl = mod.MusicLyricController(win)
+    monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: None)
+    assert ctrl._primed is False            # 首次边界：正是"开启时已在播"
+
+    ctrl._start_track(("夜曲", "周杰伦"), "夜曲", "周杰伦", _playback(None), 100.0)
+
+    assert win.shown == [("", "我在唱《夜曲》")], win.shown
+    assert ctrl._title_line == "我在唱《夜曲》"
+    # 锚点就是"检测到这首歌的时刻"——即把此刻当作第 0 秒
+    assert ctrl._detected_at == 100.0
+
+
+def test_start_track_first_song_without_position_fetches_lyrics(monkeypatch):
+    """同一情形下不能因为"猜不到进度"就跳过取词——用户要的是看到歌词。"""
+    import threading
+
+    import pet.music_lyric_controller as mod
+
+    _patch_clock(monkeypatch, 100.0)
+    win = _FakeWin()
+    ctrl = mod.MusicLyricController(win)
+    started = threading.Event()
+    monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: started.set())
+
+    ctrl._start_track(("夜曲", "周杰伦"), "夜曲", "周杰伦", _playback(None), 100.0)
+
+    assert ("夜曲", "周杰伦") in ctrl._loading, "应已进入取词中"
+    assert ctrl._pending_playback is not None
+    assert started.wait(5.0), "取词线程应被启动"
+
+
+def test_estimated_progress_hint_shown_once_per_session(monkeypatch):
+    """不报进度的播放器：提示一次"快进后请用菜单对齐"，不反复打扰。"""
+    import pet.music_lyric_controller as mod
+
+    class _HintWin(_FakeWin):
+        def __init__(self):
+            super().__init__()
+            self.alerts: list = []
+
+        def show_alert(self, text, **kw):
+            self.alerts.append(text)
+
+    _patch_clock(monkeypatch, 100.0)
+    win = _HintWin()
+    ctrl = mod.MusicLyricController(win)
+    monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: None)
+
+    ctrl._start_track(("夜曲", "周杰伦"), "夜曲", "周杰伦", _playback(None), 100.0)
+    assert len(win.alerts) == 1, win.alerts
+    assert "对齐" in win.alerts[0]
+
+    # 切到下一首（同样不报进度）不再重复提示
+    ctrl._start_track(("晴天", "周杰伦"), "晴天", "周杰伦", _playback(None), 200.0)
+    assert len(win.alerts) == 1, win.alerts
+
+
+def test_no_hint_when_player_reports_progress(monkeypatch):
+    """报进度的播放器不该看到这条提示。"""
+    import pet.music_lyric_controller as mod
+
+    class _HintWin(_FakeWin):
+        def __init__(self):
+            super().__init__()
+            self.alerts: list = []
+
+        def show_alert(self, text, **kw):
+            self.alerts.append(text)
+
+    _patch_clock(monkeypatch, 100.0)
+    win = _HintWin()
+    ctrl = mod.MusicLyricController(win)
+    monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: None)
+
+    ctrl._start_track(("夜曲", "周杰伦"), "夜曲", "周杰伦", _playback(30.0), 100.0)
+    assert win.alerts == [], win.alerts
+
+
+def test_resync_ignored_when_no_lyrics(monkeypatch):
+    """还没取到词 / 无词歌：对齐入口不动作，也不该抛异常。"""
+    win, ctrl, clock = _aligned_controller(monkeypatch)
+    ctrl._tracker.reset()
+    assert ctrl.resync_to_start() is False
+    assert ctrl.resync_to_line(1) is False
+    assert ctrl.nudge(5.0) is False
+

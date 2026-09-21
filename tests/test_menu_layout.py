@@ -322,6 +322,7 @@ def test_missing_user_layout_resolves_versioned_default():
         "music_next",
         "music_prev",
         "music_quit",
+        "music_lyric_align",
         "music_open_netease",
         "music_open_qqmusic",
         "golden_spin",
@@ -548,6 +549,23 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         "启动并打开页面",
         "重启服务",
         "停止服务",
+    ]
+    # 音乐子菜单里的「歌词对齐」：实测网易云音乐完全不上报播放进度，快进 / 中途
+    # 开始播放后只能手动对准，五个手柄必须齐全（同样挂在单一 id 上，老布局免迁移）。
+    music_action = next(action for action in menu.actions() if action.text() == "音乐")
+    music_menu = music_action.menu()
+    assert music_menu is not None
+    align_action = next(
+        action for action in music_menu.actions() if action.text() == "歌词对齐"
+    )
+    align_menu = align_action.menu()
+    assert align_menu is not None
+    assert [action.text() for action in align_menu.actions()] == [
+        "回到开头（现在这句算开头）",
+        "上一句",
+        "下一句",
+        "后退 5 秒",
+        "前进 5 秒",
     ]
     menu.close()
     app.processEvents()
@@ -2472,3 +2490,80 @@ def test_pending_preview_refresh_is_cancelled_when_editor_destroyed():
     assert editor._preview_refresh_pending is True
     shiboken6.delete(editor)  # 同步销毁：等价于窗口关闭后 C++ 对象消失
     app.processEvents()  # 不得抛 RuntimeError（旧实现此处必红）
+
+
+def test_music_align_ready_and_callback_routing(monkeypatch):
+    """「歌词对齐」的可用性判定与回调路由。
+
+    实测依据（2026-09-21）：网易云音乐不上报播放进度 → 位置只能本地估算 →
+    快进后必须手动对齐；而报了进度的播放器（Chrome / QQ 音乐）位置本来就跟着
+    走，此时必须置灰（否则手动对齐会与真值打架）。
+    """
+    from PySide6.QtCore import QObject
+    from PySide6.QtWidgets import QApplication
+
+    from pet.context_menus import registry as registry_mod
+    from pet.context_menus import shared as shared_mod
+    from pet.music_lyric import LyricLine
+    from pet.music_lyric_controller import MusicLyricController
+
+    app = QApplication.instance() or QApplication([])
+
+    class Win(QObject):
+        _alert_current = None
+        _sticky_bubble_active = False
+        _speech_bubble = None
+
+        def isVisible(self):
+            return True
+
+        def show_bubble(self, *args, **kwargs):
+            return None
+
+        def hold_bubble(self, *args, **kwargs):
+            return None
+
+    class Cfg:
+        def get(self, key, default=None):
+            return default
+
+    class Pet:
+        cfg = Cfg()
+
+    ctrl = MusicLyricController(Win())
+    ctrl._tracker.load(
+        [LyricLine(0.0, "A"), LyricLine(5.0, "B")], now=0.0, position=None,
+    )
+    pet = Pet()
+    pet._music_lyric = ctrl
+    assert registry_mod._music_align_ready(pet) is True     # 本地时钟 + 有词
+
+    # 报进度的播放器：位置本就跟着快进走，不该提供手动对齐
+    ctrl._tracker.position(0.0, reported=1.0)
+    assert registry_mod._music_align_ready(pet) is False
+
+    # 宿主 __getattr__ 兜底返回可调用对象时，不能把它当成控制器
+    class Loose:
+        cfg = Cfg()
+
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+
+    assert registry_mod._music_align_ready(Loose()) is False
+
+    # 五个手柄各自路由到控制器对应方法
+    calls: list = []
+    monkeypatch.setattr(ctrl, "resync_to_start", lambda: calls.append("start") or True)
+    monkeypatch.setattr(
+        ctrl, "resync_to_line", lambda d: calls.append(("line", d)) or True,
+    )
+    monkeypatch.setattr(ctrl, "nudge", lambda s: calls.append(("nudge", s)) or True)
+
+    for kind in ("start", "prev", "next", "back5", "fwd5"):
+        assert shared_mod._align_lyric(pet, kind) is True
+    assert calls == [
+        "start", ("line", -1), ("line", 1), ("nudge", -5.0), ("nudge", 5.0),
+    ]
+    assert shared_mod._align_lyric(pet, "不存在的动作") is False
+    ctrl.shutdown()
+    app.processEvents()

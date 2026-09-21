@@ -741,6 +741,56 @@ def add_music_quit(menu: QMenu, pet, *, icons: bool = True):
     return action
 
 
+def _align_lyric(pet, kind: str) -> bool:
+    """执行一次歌词对齐；返回是否真的动作了。
+
+    **纯内存操作，必须留在 GUI 线程**（其余音乐菜单项走 ``_run_off_main`` 是因为
+    它们要调 WinRT）。这里只改 LyricTracker 的本地时钟基准，微秒级。
+    """
+    controller = _music_controller(pet)
+    if controller is None:
+        return False
+    if kind == "start":
+        return controller.resync_to_start()
+    if kind == "prev":
+        return controller.resync_to_line(-1)
+    if kind == "next":
+        return controller.resync_to_line(1)
+    if kind == "back5":
+        return controller.nudge(-5.0)
+    if kind == "fwd5":
+        return controller.nudge(5.0)
+    return False
+
+
+def add_music_lyric_align(menu: QMenu, pet, *, icons: bool = True):
+    """「歌词对齐」子菜单：纠正快进 / 中途开始播放造成的歌词错位。
+
+    为什么是"一个 id 挂子菜单"而不是五个平级项：与 ``add_harness`` 同一个理由——
+    菜单模板与用户自己编排过的布局里只会出现 ``music_lyric_align`` 这一个 id。
+
+    为什么用「上一句 / 下一句」做主手柄：用户听到的是"现在唱这句"，而不是
+    "现在第几秒"，按行步进比按秒微调快得多；±5 秒留给最后一点偏差。
+
+    实测依据（2026-09-21）：网易云音乐完全不上报播放进度，歌词只能按本地时钟
+    估算，快进或中途开始播放后必然错位，且没有任何自动信号可利用——所以给用户
+    一个一次点击就能对准的入口，是这个功能唯一诚实的做法。
+    """
+    icon = "play" if icons else None
+    submenu = add_submenu(menu, "歌词对齐", icon)
+    add_action(submenu, "回到开头（现在这句算开头）", icon,
+               lambda: _align_lyric(pet, "start"), close_on_trigger=True)
+    add_action(submenu, "上一句", icon,
+               lambda: _align_lyric(pet, "prev"), close_on_trigger=True)
+    add_action(submenu, "下一句", icon,
+               lambda: _align_lyric(pet, "next"), close_on_trigger=True)
+    add_action(submenu, "后退 5 秒", icon,
+               lambda: _align_lyric(pet, "back5"), close_on_trigger=True)
+    add_action(submenu, "前进 5 秒", icon,
+               lambda: _align_lyric(pet, "fwd5"), close_on_trigger=True)
+    return submenu
+
+
 def _music_player_builder(player_key: str):
     """生成"打开某播放器并播放"的 builder（两个播放器共用一套逻辑）。"""
 
