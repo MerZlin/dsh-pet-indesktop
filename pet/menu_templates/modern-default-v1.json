@@ -62,6 +62,7 @@
     {"type": "action", "id": "agent_link", "visible": true, "section": "tools"},
     {"type": "action", "id": "proactive_screen", "visible": true, "section": "tools"},
     {"type": "action", "id": "todo_panel", "visible": true, "section": "tools"},
+    {"type": "action", "id": "network_info", "visible": true, "section": "tools"},
     {"type": "action", "id": "voice_chime_now", "visible": false, "section": "tools"},
     {"type": "action", "id": "voice_chime_toggle", "visible": false, "section": "tools"},
     {"type": "action", "id": "festival_now", "visible": false, "section": "tools"},

@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import time
+from typing import Any
 
 from PySide6.QtCore import (
     QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import catalog
+from . import network_status as ns
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +180,17 @@ class DynamicIsland(QWidget):
         self._pet_visible = True
         self._agent_active = False
         self._last_message = ""
+        # ---- 网络信息槽（info_mode == "network"）----
+        # 探测是**节流**的：灵动岛的刷新拍（30 秒 _info_timer）远密于用户设的
+        # 探测间隔（默认 1 秒），但两者都可能被更频繁地触发（切模式、窗口事件），
+        # 所以按「距上次探测的毫秒数」判断，而不是依赖调用方。
+        self._net_latency: Any = None          # LatencySample
+        self._net_speed: Any = None            # Throughput（含瞬时速度）
+        self._net_last_probe_ms: float = 0.0
+        self._net_prev_counters: Any = None    # Throughput（上次累计值，用于求差）
+        self._net_prev_probe_at: float = 0.0
+        self._net_smoothed_ms: float | None = None   # EMA 平滑后的延迟
+        self._net_peak_ms: float = 0.0               # 本次会话峰值
         # 几何变化回调（果冻墙碰撞体挂这里跟踪拖拽/停靠滑动）：AppShell 注入。
         self.on_geometry_changed = None
         # 桌宠聚合可见性回调（碰撞体据此挂起/恢复）：AppShell 注入。
@@ -353,7 +366,13 @@ class DynamicIsland(QWidget):
     def refresh_from_config(self) -> None:
         old_edge = self.dock_edge
         old_icon = self._icon_spec()
+        old_mode_value = str(self._cfg.get("info_mode") or "time")
         self._cfg = _cfg_dict(self.config)
+        # 刚切到网络模式：立即探测一次，否则要等一个间隔才有数字（用户会以为没生效）
+        if str(self._cfg.get("info_mode") or "time") == "network" and old_mode_value != "network":
+            self._net_prev_probe_at = 0.0
+            self._net_prev_counters = None
+            self._refresh_network(force=True)
         self._schedule_next_balance_tier_refresh()
         self._sync_card_labels()
         # 头像必须跟着刷新作废：provider 取的是**当前形象**的帧，而角色热切换
@@ -418,6 +437,7 @@ class DynamicIsland(QWidget):
 
     def _refresh(self) -> None:
         """内容变化后立即重算尺寸、夹回屏幕并重绘。"""
+        self._refresh_network()
         if self._mode == "docked" and not self._hover_peek:
             self.update()
             return
@@ -686,9 +706,110 @@ class DynamicIsland(QWidget):
             return self._balance_tier_display_text()
         if mode == "balance":
             return self._balance_text
+        if mode == "network":
+            return self._network_info_text()
         from PySide6.QtCore import QTime
 
         return QTime.currentTime().toString("HH:mm")
+
+    # ------------------------------------------------------------ 网络信息槽
+
+    def _network_metric_flags(self) -> tuple[bool, bool, bool]:
+        """(显示延迟, 显示下行, 显示上行)。三个指标各由自己的开关控制。"""
+        c = self._cfg
+        return (
+            bool(c.get("network_show_latency", True)),
+            bool(c.get("network_show_down_speed", True)),
+            bool(c.get("network_show_up_speed", True)),
+        )
+
+    def _network_info_text(self) -> str:
+        """网络模式的短文本：延迟一行，上下行一行（按开关裁剪）。
+
+        三个指标全关时退回时间——胶囊显示空串会变成一块空白，不如给个有用的。
+        """
+        want_latency, want_down, want_up = self._network_metric_flags()
+        if not (want_latency or want_down or want_up):
+            from PySide6.QtCore import QTime
+
+            return QTime.currentTime().toString("HH:mm")
+
+        parts: list[str] = []
+        if want_latency:
+            sample = self._net_latency
+            if sample is None:
+                parts.append("…")
+            elif not sample.ok:
+                parts.append("离线")
+            elif self._net_smoothed_ms is not None:
+                parts.append(ns.format_latency(self._net_smoothed_ms))
+            else:
+                parts.append(ns.format_latency(sample.rtt_ms or 0.0))
+
+        speeds: list[str] = []
+        if want_down:
+            speeds.append("↓" + self._net_speed_text(down=True))
+        if want_up:
+            speeds.append("↑" + self._net_speed_text(down=False))
+        if speeds:
+            parts.append(" ".join(speeds))
+
+        return "  ".join(parts)
+
+    def _net_speed_text(self, *, down: bool) -> str:
+        speed = self._net_speed
+        if speed is None:
+            return "--"
+        return ns.format_speed(speed.down_bps if down else speed.up_bps)
+
+    def _network_probe_due(self) -> bool:
+        """距上次探测是否已超过设定间隔（秒）。"""
+        try:
+            interval = int(self._cfg.get("network_probe_interval_seconds", 1))
+        except (TypeError, ValueError):
+            interval = 1
+        interval = max(1, min(60, interval))
+        elapsed = time.monotonic() - self._net_prev_probe_at
+        return self._net_last_probe_ms <= 0.0 or elapsed >= interval
+
+    def _network_probe_visible(self) -> bool:
+        """用户此刻是否**看得见**这个信息槽。
+
+        只看停靠状态，不看 ``isVisible()``——后者在窗口尚未 show / 无头环境下
+        为假，会让探测被静默跳过（表现为信息槽一直显示占位的 ``…``）。
+        窗口真正隐藏时 ``_info_timer`` 会停，探测自然也不会被触发。
+        """
+        return not (self._mode == "docked" and not self._hover_peek)
+
+    def _refresh_network(self, *, force: bool = False) -> None:
+        """按需探测网络。``force`` 绕过节流（切到该模式 / 用户刚打开时用）。
+
+        ⚠️ 探测会发 UDP 包（延迟）与读网卡计数器（网速）。延迟按用户的间隔设置
+        节流，避免灵动岛被频繁重绘时反复发包。
+        """
+        if str(self._cfg.get("info_mode") or "time") != "network":
+            return
+        if not self._network_probe_visible():
+            return
+        if not force and not self._network_probe_due():
+            return
+
+        now = time.monotonic()
+        self._net_latency = ns.measure_latency()
+        if self._net_latency.ok and self._net_latency.rtt_ms is not None:
+            rtt = float(self._net_latency.rtt_ms)
+            self._net_smoothed_ms = ns.ema_smooth(self._net_smoothed_ms, rtt)
+            self._net_peak_ms = max(self._net_peak_ms, rtt)
+
+        current = ns.read_throughput()
+        if self._net_prev_counters is None:
+            self._net_speed = current
+        else:
+            elapsed = now - self._net_prev_probe_at
+            self._net_speed = ns.speed_from_delta(self._net_prev_counters, current, elapsed)
+        self._net_prev_counters = current
+        self._net_prev_probe_at = now
+        self._net_last_probe_ms = 1.0
 
     def _info_color(self, fallback: QColor) -> QColor:
         """余额峰谷信息槽跟随设置的峰谷提示颜色开关。

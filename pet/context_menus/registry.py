@@ -69,6 +69,7 @@ ACTION_LABELS = {
     "check_update": "检查更新", "github_project": "GitHub 项目页",
     "quark_download": "夸克网盘下载", "agent_link": "Agent 联动",
     "proactive_screen": "主动识屏", "todo_panel": "待办提醒",
+    "network_info": "网络信息",
     "modern_settings": "桌宠设置", "quit": "退出",
 }
 
@@ -93,6 +94,7 @@ ACTION_ICONS = {
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
     "proactive_screen": "screen", "todo_panel": "todo",
+    "network_info": "web",
     "modern_settings": "settings", "quit": "quit",
     "voice_chime_now": "chat", "voice_chime_toggle": "chat",
     "festival_now": "todo", "festival_toggle": "todo",
@@ -146,6 +148,10 @@ def _build_settings(menu, pet):
 
 def _build_todo_panel(menu, pet):
     return add_action(menu, "待办提醒", "todo", pet.on_open_todo_panel, close_on_trigger=True)
+
+
+def _build_network_info(menu, pet):
+    return add_action(menu, "网络信息", "web", pet.on_open_network_info, close_on_trigger=True)
 
 
 def _build_voice_chime_now(menu, pet):
@@ -277,6 +283,13 @@ class MenuActionRegistry:
             ),
             "todo_panel": MenuActionSpec(
                 _build_todo_panel, _callback_available("on_open_todo_panel")
+            ),
+            # 网络信息：受配置开关门控（关掉则置灰并说明原因，不悄悄消失）。
+            "network_info": MenuActionSpec(
+                _build_network_info,
+                _callback_available("on_open_network_info"),
+                enabled=lambda pet: bool(pet.cfg.get("network_info_enabled", True)),
+                disabled_reason="网络信息已在设置中关闭",
             ),
             "voice_chime_now": MenuActionSpec(
                 _build_voice_chime_now, _callback_available("on_voice_chime_now")

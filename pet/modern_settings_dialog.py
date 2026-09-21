@@ -337,10 +337,18 @@ class ModernSettingsDialog(QDialog):
             ("当前时间", "time"),
             ("余额峰谷", "balance_tier"),
             ("余额数值", "balance"),
+            ("网络延迟/网速", "network"),
             ("自定义短文本", "custom"),
         ):
             self.island_info_mode_select.addItem(label, value)
         self.island_info_mode_select.setCurrentData(str(island_cfg.get("info_mode") or "time"))
+        # 网络信息槽的三个指标开关（仅 info_mode == "network" 时生效）
+        self.island_net_latency_check = ToggleSwitch(self)
+        self.island_net_latency_check.setChecked(bool(island_cfg.get("network_show_latency", True)))
+        self.island_net_down_check = ToggleSwitch(self)
+        self.island_net_down_check.setChecked(bool(island_cfg.get("network_show_down_speed", True)))
+        self.island_net_up_check = ToggleSwitch(self)
+        self.island_net_up_check.setChecked(bool(island_cfg.get("network_show_up_speed", True)))
         self.island_style_select = ModernSelect(self, width=160)
         for label, value in (
             ("黑色", "dark"),
@@ -500,6 +508,9 @@ class ModernSettingsDialog(QDialog):
                     SettingRow("dynamic_island_info", "显示信息槽", "显示时间/余额/自定义短文本等信息。", self.island_info_check),
                     SettingRow("dynamic_island_status", "显示状态灯", "显示右侧状态圆点。", self.island_status_check),
                     SettingRow("dynamic_island_info_mode", "信息槽内容", "选择信息槽显示的内容；自定义文本在下方填写。", self.island_info_mode_select),
+                    SettingRow("dynamic_island_net_latency", "网络：显示延迟", "信息槽内容选「网络延迟/网速」时生效。延迟需发探测包（有流量开销）。", self.island_net_latency_check),
+                    SettingRow("dynamic_island_net_down", "网络：显示下载速度", "读网卡计数器得到，零流量开销。", self.island_net_down_check),
+                    SettingRow("dynamic_island_net_up", "网络：显示上传速度", "读网卡计数器得到，零流量开销。", self.island_net_up_check),
                     SettingRow(
                         "dynamic_island_style",
                         "背景风格",
@@ -2149,6 +2160,14 @@ class ModernSettingsDialog(QDialog):
                 "show_name": self.island_name_check.isChecked(),
                 "show_info": self.island_info_check.isChecked(),
                 "info_mode": str(self.island_info_mode_select.currentData() or "time"),
+                # 网络信息槽的三个指标开关：不写回的话，用户保存一次设置就会把
+                # 这些键从配置里抹掉（保存是整体重建 dict）。
+                "network_show_latency": self.island_net_latency_check.isChecked(),
+                "network_show_down_speed": self.island_net_down_check.isChecked(),
+                "network_show_up_speed": self.island_net_up_check.isChecked(),
+                "network_probe_interval_seconds": int(
+                    (self.config.get("dynamic_island") or {}).get(
+                        "network_probe_interval_seconds", 1) or 1),
                 "custom_text": self.island_custom_text_edit.text().strip(),
                 "show_status": self.island_status_check.isChecked(),
                 "style": str(self.island_style_select.currentData() or "dark"),
