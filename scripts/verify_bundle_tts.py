@@ -10,17 +10,21 @@ not a package``）就继续构建，产物静默缺 TTS；用户拿到包后点�
 
 **怎么判**（不依赖网络、不启动 GUI）：
 
-1. 在**打包机环境**里算出 edge-tts 的导入闭包（`import edge_tts` 后
-   `sys.modules` 去掉标准库/内建），这就是应用运行时真正要用的模块集；
+1. 在**打包机环境**里算出 edge-tts 的导入闭包，这就是应用运行时真正要用的模块集；
    打包机装不上 edge-tts 就直接判失败——那正是上面那个静默失败的前提。
 2. 从**产物 exe** 里读真实清单：CArchive → 内嵌 `PYZ.pyz` → 模块名集合，
    再并上 `_internal` 目录里落盘的 `.py/.pyd/.so`（`--collect-all` 会把包源码
    作为数据文件复制一份，两条路都要认）。
 3. 闭包里缺任何一个 → 中止构建。
 
-注意一个**踩过的坑**：只看 `_internal/` 目录会假阴性。纯 Python 依赖（实测
-`tabulate`）只进 exe 内嵌的 PYZ，磁盘上根本没有对应目录——`edge_tts/util.py`
-是 `from tabulate import tabulate`，漏了它运行时就是 ImportError。
+注意两个**踩过的坑**，都会让判定假红（构建期中止一个本来正常的产物）：
+
+* 只看 `_internal/` 目录会假阴性。纯 Python 依赖（实测 `tabulate`）只进 exe 内嵌
+  的 PYZ，磁盘上根本没有对应目录——`edge_tts/util.py` 是
+  `from tabulate import tabulate`，漏了它运行时就是 ImportError。
+* 闭包不能按「`import edge_tts` 之后 `sys.modules` 里所有非标准库模块」算：那样会
+  把启动期注入的模块（`.pth` / `sitecustomize`）与运行时合成模块一并算成"必须有"。
+  实际踩到的假红见 `_has_packable_source` 与 `import_closure` 的说明。
 
 用法：
     python scripts/verify_bundle_tts.py --app-dir dist-onedir/dsh-pet-standalone-webm-chat
@@ -50,25 +54,68 @@ MINIMUM_MODULES = (
 )
 
 
+def _has_packable_source(module) -> bool:
+    """这个模块有值得打进包的源码吗？
+
+    两个「不算」的情形（2026-09-22 在装了 matplotlib/PyQt5 的普通 CPython 3.11
+    上实测踩到，两条都曾让真产物被判红）：
+
+    * **运行时合成模块**：``cython_runtime`` 没有 ``__file__``——它由 Cython 生成的
+      扩展在 import 时现造，任何产物都不可能也不该为它准备文件；``__file__`` 指向
+      已消失路径的残留条目同理。
+    * **pkgutil 风格 namespace 空壳**：``backports`` 的 ``__init__.py`` 只有一行
+      ``extend_path``，自身没有代码。aiohttp 的 ``from backports.zstd import ...``
+      会先把这个空壳建出来再失败（``backports.zstd`` 只是 aiohttp 的 speedups
+      extra，未装且包在 ``try/except ImportError`` 里），于是它出现在
+      ``sys.modules`` 里——要求一个空壳进包是假要求。
+    """
+    path = getattr(module, "__file__", None)
+    if not path:
+        return False
+    source_file = Path(path)
+    if not source_file.is_file():
+        return False
+    if source_file.name == "__init__.py":
+        try:
+            source = source_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return True
+        if "extend_path(" in source:
+            return False
+    return True
+
+
 def import_closure(module_name: str = "edge_tts") -> set[str] | None:
     """打包机环境里 ``module_name`` 的导入闭包（去掉标准库与内建）。
+
+    三条过滤，缺一条就会把无关模块算成"必须有"（都是实测踩出来的）：
+
+    * **按导入前后做差**：``.pth`` / ``sitecustomize`` 在解释器启动时就塞进
+      ``sys.modules`` 的模块与被检查的库无关——实测这台打包机启动时已有 ``google``
+      / ``mpl_toolkits`` / ``pywin32_bootstrap``（来自 Dev-Cpp 自带的
+      site-packages）。只认"这次 ``import`` 新拉进来的"。
+    * **只认有源码的模块**（``_has_packable_source``）。
+    * 标准库与内建模块不算。
 
     返回 ``None`` 表示这个模块在打包机上不可导入——对构建脚本来说这是**失败**，
     不是"跳过"。
     """
+    stdlib = set(getattr(sys, "stdlib_module_names", ()))
+    before = set(sys.modules)
     try:
         __import__(module_name)
     except Exception:  # noqa: BLE001 - 任何导入失败都等同"没装"
         return None
-    stdlib = set(getattr(sys, "stdlib_module_names", ()))
     closure: set[str] = set()
-    for name in list(sys.modules):
+    for name, module in list(sys.modules.items()):
+        if name in before or module is None:
+            continue
         top = name.split(".")[0]
         if not top or top.startswith("_"):
             continue
         if top in stdlib or top in sys.builtin_module_names:
             continue
-        if sys.modules.get(name) is None:
+        if not _has_packable_source(module):
             continue
         closure.add(name)
     return closure
