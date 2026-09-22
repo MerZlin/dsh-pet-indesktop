@@ -279,6 +279,22 @@ class VoiceChimeService:
         self._fire(stripped, datetime.now(), None, show_bubble=False, role="speak")
         return True
 
+    def play_file(self, path: str, *, log_tag: str = "本地语音") -> bool:
+        """直接播放一个**本地音频文件**（预缓存台词走这条路：零延迟、不联网）。
+
+        与 ``speak()`` 共用同一个播放器（进程内唯一音频通道），所以同样不会与
+        报时叠音。区别是刻意**不排队**：预缓存的是点击台词，点击那一刻已经过去
+        了，晚几秒才冒出来反而突兀——通道忙就直接放弃这次出声（返回 False），
+        由调用方决定是否回退到在线合成。
+        """
+        target = Path(path)
+        if not target.is_file():
+            return False
+        if self._busy or self._player_busy():
+            logger.info("%s：音频通道忙，本次本地播报跳过：%s", log_tag, target.name)
+            return False
+        return self._play_only(str(target))
+
     # ------------------------------------------------------------ 调度
     def _on_tick(self, now: datetime | None = None) -> None:
         now = now or datetime.now()

@@ -157,7 +157,15 @@ WINDOW_PY_LINE_BUDGET = 4632
 # 3 行 SettingRow 展开式写法（6 行）+ _write_config 回写 1 行 + 布局编排认领 1 行；
 # 控件本体落在 pet/settings_pet_controls.py（与既有的「配图大小」同处），
 # 缩放实现全在 pet/speech_bubble*.py。按文件约定只随实测校准，不为达标压行。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2401
+# 2026-09-22 上调到 2419：点击台词朗读 / 台词自动预缓存 / 配图概率共 3 个 SettingRow
+# 接入「互动」域已存在的两组（点击反馈 + 自言自语），逐项为 SettingRow 展开式写法、
+# 随组显隐名单、归属 claim、_write_config 写回，实测 2419；控件本体落在
+# pet/settings_pet_controls.py，朗读/预缓存实现全在 pet/self_talk_voice.py 与
+# pet/window_alerts.py。同页同组连续加控件，拆出来只会把这组设置割成两半；
+# 按文件约定只随实测校准，不为达标压行。设置页拆分仍是待办。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2419
+
+
 def _read(name: str) -> str:
     return (PET_DIR / name).read_text(encoding="utf-8")
 

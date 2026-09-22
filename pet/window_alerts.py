@@ -339,6 +339,49 @@ def show_self_talk_text(host, text: str) -> bool:
     return True
 
 
+DEFAULT_IMAGE_CHANCE = 30  # 与 config.py 的 DEFAULT_SELF_TALK_IMAGE_CHANCE 保持一致
+
+
+def self_talk_image_chance(host) -> int:
+    """自言自语出图概率（百分比 0~100）。
+
+    与 ``self_talk_speak_enabled`` 同样在运行时读配置、不缓存到窗口字段：概率随时
+    会改，而且读不到配置时要按默认值走——不让一次读取失败变成"点了不出图"。
+    """
+    cfg = getattr(host, "cfg", None)
+    if cfg is None:
+        return DEFAULT_IMAGE_CHANCE
+    try:
+        value = float(cfg.get("self_talk_image_chance", DEFAULT_IMAGE_CHANCE))
+    except Exception:
+        return DEFAULT_IMAGE_CHANCE
+    return int(max(0.0, min(100.0, value)))
+
+
+def pick_self_talk_choice(texts, images, image_chance):
+    """按出图概率抽一条自言自语，返回 ``(kind, value)``；两边都空返回 None。
+
+    为什么要先掷骰子：图片目录常有几十张图，和文本混在一起**等权随机**会让图片
+    彻底压过文本——实测 24 张图 + 5 句文本 → 出图概率 82.8%，点击桌宠几乎总是
+    弹图。现在先决定"这次出图还是出文本"，再在对应池里等权选一条，用户设的百分比
+    就是真实概率（0 = 只出文本，100 = 只出图）。
+
+    只有一边有内容时不掷骰子：必须显示那一边，否则这一次点击会什么都不出现。
+    """
+    clean_texts = [text for text in (texts or []) if str(text).strip()]
+    image_list = list(images or [])
+    if not clean_texts and not image_list:
+        return None
+    if not image_list:
+        return ("text", random.choice(clean_texts))
+    if not clean_texts:
+        return ("image", random.choice(image_list))
+    chance = max(0.0, min(100.0, float(image_chance)))
+    if random.random() * 100.0 < chance:
+        return ("image", random.choice(image_list))
+    return ("text", random.choice(clean_texts))
+
+
 def show_random_self_talk(host) -> bool:
     from .window import _set_speech_bubble_interactive
     if getattr(host, "_bubble_suppressed", False):
@@ -356,18 +399,13 @@ def show_random_self_talk(host) -> bool:
     if len(live_images) != len(host._self_talk_images):
         host._self_talk_images = live_images
 
-    choices = [
-                  ("text", text)
-                  for text in host._self_talk_texts
-              ] + [
-                  ("image", path)
-                  for path in host._self_talk_images
-              ]
-
-    if not choices:
+    picked = pick_self_talk_choice(
+        host._self_talk_texts, live_images, self_talk_image_chance(host)
+    )
+    if picked is None:
         return False
 
-    kind, value = random.choice(choices)
+    kind, value = picked
     duration_ms = int(
         round(host._self_talk_duration_seconds * 1000)
     )
@@ -376,6 +414,8 @@ def show_random_self_talk(host) -> bool:
     _set_speech_bubble_interactive(host)
 
     if kind == "image":
+        # 图片气泡没有可朗读的文本：显式记 None，点击路径据此保持安静。
+        host._last_self_talk_text = None
         return host._speech_bubble.show_image(
             value,
             anchor,
@@ -384,16 +424,60 @@ def show_random_self_talk(host) -> bool:
             image_scale=host._self_talk_image_scale,
         )
 
+    host._last_self_talk_text = value
     return host._show_self_talk_text(value)
 
 
+def self_talk_speak_enabled(host) -> bool:
+    """点击自言自语是否朗读（缺配置或配置损坏时按默认开启，与 config.py 一致）。"""
+    cfg = getattr(host, "cfg", None)
+    if cfg is None:
+        return False
+    try:
+        return bool(cfg.get("self_talk_speak_enabled", True))
+    except Exception:
+        return True
+
+
+def speak_click_self_talk(host, text: str) -> None:
+    """把点击自言自语**实际显示的那句话**交给语音通道读出来。
+
+    刻意复用语音报时服务的音频通道（窗口的 ``on_self_talk_speak`` 由 app 接线到
+    ``AppShell.speak_self_talk``）：报时 / 节日提醒 / 点击自言自语共用一条音频
+    通道，才能像节日提醒那样在结构上保证不叠音。
+
+    通道缺失、开关关闭或播报失败都只降级为「有气泡没声音」，绝不影响点击本身。
+    """
+    stripped = str(text or "").strip()
+    if not stripped or not self_talk_speak_enabled(host):
+        return
+    speaker = getattr(host, "on_self_talk_speak", None)
+    if not callable(speaker):
+        return
+    try:
+        speaker(stripped)
+    except Exception:
+        logging.getLogger("dsh-pet-standalone").exception("点击自言自语语音播报失败")
+
+
 def show_click_self_talk(host, click_name: str) -> bool:
-    """优先播放当前点击动画绑定的台词；未绑定则回退全局随机自言自语。"""
+    """优先播放当前点击动画绑定的台词；未绑定则回退全局随机自言自语。
+
+    显示成功后把实际显示的文本一并朗读（图片气泡没有文本，自然不出声），
+    使"听到的"与"看到的"永远是同一句。
+    """
     character_id = str(host.cfg.get('character', catalog.DEFAULT_CHARACTER))
     texts = host.cfg.click_talk_texts_for(character_id, click_name)
     if texts:
-        return host._show_self_talk_text(random.choice(texts))
-    return host._show_random_self_talk()
+        value = random.choice(texts)
+        shown = host._show_self_talk_text(value)
+    else:
+        host._last_self_talk_text = None
+        shown = host._show_random_self_talk()
+        value = getattr(host, "_last_self_talk_text", None)
+    if shown and value:
+        speak_click_self_talk(host, value)
+    return shown
 
 
 def on_self_talk_timeout(host) -> None:

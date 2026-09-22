@@ -501,6 +501,15 @@ def test_self_talk_scheduling_and_random_talk_dispatch(tmp_path, monkeypatch):
         _self_talk_min_interval = 5.0
         _self_talk_max_interval = 5.0
         _self_talk_duration_seconds = 7.5
+        # 出图概率改成显式配置项后，派发不再"等权随机"：这里钉 100% 才能确定性地
+        # 验证"派发到图片"这条支路（默认 30% 会让本用例随机变成文本分支）。
+        cfg = {"self_talk_image_chance": 100}
+
+        def _show_self_talk_text(self, text):
+            # 文本分支最终落到窗口的 _show_self_talk_text（真实实现见 window_alerts）
+            return self._speech_bubble.show_text(
+                text, QRect(10, 20, 180, 240), 7500, pet_scale=self.scale
+            )
 
     monkeypatch.setattr("pet.window.random.uniform", lambda *_: 5.0)
     PetWindow._schedule_self_talk(FakePet(), after_display=True)
@@ -513,6 +522,10 @@ def test_self_talk_scheduling_and_random_talk_dispatch(tmp_path, monkeypatch):
             shown.append((Path(path), anchor, duration, pet_scale, image_scale))
             return True
 
+        def show_text(self, text, anchor, duration, *, pet_scale):
+            shown.append((text, anchor, duration, pet_scale))
+            return True
+
     runtime_pet = FakePet()
     runtime_pet._speech_bubble = Bubble()
     runtime_pet.scale = 0.72
@@ -520,6 +533,15 @@ def test_self_talk_scheduling_and_random_talk_dispatch(tmp_path, monkeypatch):
     monkeypatch.setattr("pet.window.random.choice", lambda choices: choices[-1])
     assert PetWindow._show_random_self_talk(runtime_pet)
     assert shown == [(image_dir / "one.png", QRect(10, 20, 180, 240), 7500, 0.72, 1.0)]
+
+    # 0% = 只出文本：即使图片池里有图、choice 又总挑最后一个，也必须走文本分支。
+    text_pet = FakePet()
+    text_pet.cfg = {"self_talk_image_chance": 0}
+    text_pet._speech_bubble = Bubble()
+    text_pet.scale = 0.72
+    text_pet.visible_content_rect = lambda: QRect(10, 20, 180, 240)
+    assert PetWindow._show_random_self_talk(text_pet)
+    assert shown[1] == ("hello", QRect(10, 20, 180, 240), 7500, 0.72)
 
 
 def test_speech_bubble_tail_is_one_surface_and_shadow_has_no_graphics_effect():
@@ -1535,6 +1557,9 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
         for key in (
             "self_talk_duration", "self_talk_min", "self_talk_max",
             "self_talk_texts", "self_talk_images", "self_talk_image_scale", "click_self_talk",
+            "self_talk_image_chance",
+            "click_self_talk_speak",
+            "click_self_talk_precache",
             "click_talk_bindings",
         )
     ]

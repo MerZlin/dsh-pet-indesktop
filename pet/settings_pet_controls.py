@@ -33,6 +33,7 @@ from .config import (
     DEFAULT_MENU_EASTER_EGG,
     DEFAULT_SELF_TALK_BUBBLE_STYLE,
     DEFAULT_SELF_TALK_DURATION_SECONDS,
+    DEFAULT_SELF_TALK_IMAGE_CHANCE,
     DEFAULT_SELF_TALK_MAX_INTERVAL,
     DEFAULT_SELF_TALK_MIN_INTERVAL,
     DEFAULT_SELF_TALK_TEXTS,
@@ -201,6 +202,12 @@ def build_pet_controls(host) -> None:
         host.click_balance_check.setChecked(bool(host.config.get("click_show_balance", False)))
     host.click_self_talk_check = ToggleSwitch(host)
     host.click_self_talk_check.setChecked(bool(host.config.get("click_show_self_talk", False)))
+    host.click_self_talk_speak_check = ToggleSwitch(host)
+    host.click_self_talk_speak_check.setChecked(bool(host.config.get("self_talk_speak_enabled", True)))
+    host.self_talk_voice_precache_check = ToggleSwitch(host)
+    host.self_talk_voice_precache_check.setChecked(
+        bool(host.config.get("self_talk_voice_precache_enabled", False))
+    )
     host.music_sing_check = ToggleSwitch(host)
     host.music_sing_check.setChecked(bool(host.config.get("music_sing_enabled", False)))
     host.music_lyric_check = ToggleSwitch(host)
@@ -313,6 +320,12 @@ def build_pet_controls(host) -> None:
     host.self_talk_image_scale_spin.setRange(50, 300)
     host.self_talk_image_scale_spin.setSuffix(" %")
     host.self_talk_image_scale_spin.setValue(int(host.config.get("self_talk_image_scale", 100)))
+    host.self_talk_image_chance_spin = BrowserSpinBox(host)
+    host.self_talk_image_chance_spin.setRange(0, 100)
+    host.self_talk_image_chance_spin.setSuffix(" %")
+    host.self_talk_image_chance_spin.setValue(
+        int(host.config.get("self_talk_image_chance", DEFAULT_SELF_TALK_IMAGE_CHANCE))
+    )
     # 气泡文字大小：与配图大小并列的独立系数（气泡与字号一起等比放大）
     host.bubble_text_scale_spin = BrowserSpinBox(host)
     host.bubble_text_scale_spin.setRange(50, 300)
