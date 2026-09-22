@@ -30,6 +30,7 @@ from .shared import (
     add_hide_pet,
     add_look_screen,
     add_agent_cost,
+    add_music_lyric_align,
     add_music_next,
     add_music_open_netease,
     add_music_open_qqmusic,
@@ -63,6 +64,7 @@ ACTION_LABELS = {
     "music_prev": "上一首",
     "music_quit": "退出音乐模式", "music_open_netease": "打开网易云并播放",
     "music_open_qqmusic": "打开QQ音乐并播放",
+    "music_lyric_align": "歌词对齐",
     "agent_cost": "显示本轮消费",
     "quick_launch": "快捷启动", "balance": "DeepSeek 余额",
     "harness": "启动 DeepSeek Harness", "deepseek_web": "打开网页版 DeepSeek",
@@ -88,7 +90,7 @@ ACTION_ICONS = {
     "golden_spin": "play", "edge_probe": "corner",
     "music_next": "play", "music_prev": "play", "music_quit": "stop", "agent_cost": "balance",
     "music": "play", "music_pause": "pause", "music_open_netease": "play",
-    "music_open_qqmusic": "play",
+    "music_open_qqmusic": "play", "music_lyric_align": "play",
     "quick_launch": "application", "balance": "balance", "harness": "harness",
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
@@ -128,6 +130,22 @@ def _music_lyric_configured(pet) -> bool:
     （测试也会因此依赖机器状态）。没在播时改为置灰（见 enabled）。
     """
     return bool(pet.cfg.get("music_lyric_enabled", False))
+
+
+def _music_align_ready(pet) -> bool:
+    """「歌词对齐」是否可用：只有位置靠本地时钟估算时才有意义。
+
+    播放器报了真实进度（Chrome / QQ 音乐）时位置本来就跟着快进走，手动对齐
+    只会跟真值打架；还没有歌词可对齐时同理。**必须 isinstance 校验**——宿主
+    可能用 ``__getattr__`` 兜底返回任意对象（测试替身就这么干），只判 None 会
+    把无关对象当成控制器（同 ``shared._music_controller`` 的教训）。
+    """
+    from ..music_lyric_controller import MusicLyricController
+
+    controller = getattr(pet, "_music_lyric", None)
+    if not isinstance(controller, MusicLyricController):
+        return False
+    return bool(controller.align_available())
 
 
 def _build_chat(menu, pet):
@@ -249,6 +267,12 @@ class MenuActionRegistry:
             "music_next": MenuActionSpec(add_music_next, _music_lyric_configured),
             "music_prev": MenuActionSpec(add_music_prev, _music_lyric_configured),
             "music_quit": MenuActionSpec(add_music_quit, _music_lyric_configured),
+            "music_lyric_align": MenuActionSpec(
+                add_music_lyric_align,
+                _music_lyric_configured,
+                enabled=_music_align_ready,
+                disabled_reason="当前不需要手动对齐（播放器会上报进度，或还没有歌词）",
+            ),
             "music_open_netease": MenuActionSpec(add_music_open_netease),
             "music_open_qqmusic": MenuActionSpec(add_music_open_qqmusic),
             "golden_spin": MenuActionSpec(

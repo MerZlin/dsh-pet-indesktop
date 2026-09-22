@@ -49,11 +49,17 @@ class Playback:
 
     ``position`` 为 ``None`` 表示当前播放器不上报进度，调用方应回退到
     本地计时推算；``updated_at`` 是读到该值的本地时刻，供调用方换算。
+
+    ``app_id`` 是该会话的 ``source_app_user_model_id``（如 ``cloudmusic.exe``）。
+    调用方把它带回下一次采样，用于"粘住当前跟踪的播放器"——本机实测同时存在
+    多个会话时（网易云在播 + 浏览器标签页待机），没有这个标识就有可能在
+    两者之间乱跳。
     """
 
     track: Track
     position: float | None
     updated_at: float
+    app_id: str = ""
 
 
 def _import_winrt():
@@ -94,31 +100,66 @@ def player_process_running(exe_name: str) -> bool:
     return False
 
 
-async def _pick_playing_session(manager):
-    """选出应跟踪的会话：优先正在播放的，其次第一个。
+def _session_status(session) -> int | None:
+    """读会话的播放状态；读不到返回 ``None``（不抛，视作未知）。"""
+    try:
+        # PlaybackStatus.PLAYING == 4
+        return int(session.get_playback_info().playback_status)
+    except Exception:
+        return None
 
-    实机常见同时存在多个会话（如网易云在播 + QQ 音乐待机），
-    此时必须跟随真正在播的那个。
+
+def _session_app_id(session) -> str:
+    try:
+        return str(getattr(session, "source_app_user_model_id", "") or "")
+    except Exception:
+        return ""
+
+
+async def _pick_playing_session(manager, tracked_app_id: str | None = None):
+    """选出应跟踪的会话。
+
+    实机常见同时存在多个会话（如网易云在播 + 浏览器标签页待机），必须跟随
+    真正在播的那个；但**不能**在用户只是暂停一下的时候跳到别的会话上去。
+
+    规则（按优先级）：
+    1. 当前跟踪的会话仍在播 → 保持它（多会话同播时不被抢走）。
+    2. 否则取正在播的会话（多个时按会话枚举顺序取第一个）。
+    3. 全都没在播 → **留在当前跟踪的会话上**。旧实现直接退回
+       ``sessions[0]``，实测那条正是 Chrome（浏览器标签页），于是用户暂停
+       网易云的瞬间，桌宠就跳到浏览器里那首歌上去了。
+    4. 没有跟踪对象也无人在播 → 退回第一个（保持旧兼容行为）。
+
+    只读一次每个会话的状态，不额外增加 WinRT 往返。
     """
     sessions = list(manager.get_sessions())
     if not sessions:
         return None
+    wanted = str(tracked_app_id or "").strip().lower()
+    tracked_session = None
+    tracked_status: int | None = None
+    playing: list = []
     for session in sessions:
-        try:
-            # PlaybackStatus.PLAYING == 4
-            if int(session.get_playback_info().playback_status) == 4:
-                return session
-        except Exception:
-            continue
+        status = _session_status(session)
+        if wanted and _session_app_id(session).strip().lower() == wanted:
+            tracked_session, tracked_status = session, status
+        if status == 4:  # PLAYING
+            playing.append(session)
+    if tracked_session is not None and tracked_status == 4:
+        return tracked_session
+    if playing:
+        return playing[0]
+    if tracked_session is not None:
+        return tracked_session
     return sessions[0]
 
 
-async def _read_async() -> Playback | None:
+async def _read_async(tracked_app_id: str | None = None) -> Playback | None:
     manager_cls = _import_winrt()
     if manager_cls is None:
         return None
     manager = await manager_cls.request_async()
-    session = await _pick_playing_session(manager)
+    session = await _pick_playing_session(manager, tracked_app_id)
     if session is None:
         return None
 
@@ -154,7 +195,12 @@ async def _read_async() -> Playback | None:
         duration=end_time if has_timeline else 0.0,
         playing=is_playing,
     )
-    return Playback(track=track, position=position, updated_at=time.monotonic())
+    return Playback(
+        track=track,
+        position=position,
+        updated_at=time.monotonic(),
+        app_id=_session_app_id(session),
+    )
 
 
 def _extrapolate(
@@ -197,7 +243,7 @@ def _utc_now():
     return datetime.now(timezone.utc)
 
 
-async def _pick_playback_session():
+async def _pick_playback_session(tracked_app_id: str | None = None):
     """取当前应操作的 SMTC 会话（优先正在播放的那个）。
 
     """
@@ -205,7 +251,7 @@ async def _pick_playback_session():
     if manager_cls is None:
         return None
     manager = await manager_cls.request_async()
-    return await _pick_playing_session(manager)
+    return await _pick_playing_session(manager, tracked_app_id)
 
 
 async def _skip_async(to_previous: bool) -> bool:
@@ -280,14 +326,17 @@ def play_session_for(exe_name: str) -> bool:
         return False
 
 
-def get_now_playing() -> Playback | None:
+def get_now_playing(tracked_app_id: str | None = None) -> Playback | None:
     """返回当前播放信息；无播放器/无会话/任何异常时返回 ``None``。
+
+    ``tracked_app_id`` 是上一次采样得到的 ``Playback.app_id``，用于让会话选取
+    粘住当前跟踪的播放器（见 :func:`_pick_playing_session`）。
 
     本函数绝不抛异常——歌词只是锦上添花，不能因为第三方接口异常影响桌宠本体。
     """
     if sys.platform != "win32":
         return None
     try:
-        return asyncio.run(_read_async())
+        return asyncio.run(_read_async(tracked_app_id))
     except Exception:
         return None

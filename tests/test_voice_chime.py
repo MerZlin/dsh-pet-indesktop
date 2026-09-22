@@ -605,12 +605,18 @@ def test_build_bubble_sentence_show_quote_off_returns_bubble_text_only():
 
 
 def test_voice_options_cover_20plus_bilingual():
-    """音色下拉内置 20+ 项，中英文（zh / en）音色均有且标签非空。"""
+    """音色下拉内置 20+ 项，中英文（zh / en）音色均有且标签非空。
+
+    2026-09-22 按微软在线音色表重建清单后，中文音色从 21 降到 14（微软下架了
+    晓涵/晓辰/晓梦等 10 款），所以下界按**现实**校准到 12/12，而不是硬留旧数字。
+    真实可用性另有运行期兜底：配置音色不在在线表里时自动改用默认音色并提示
+    （见 tests/test_voice_chime_edge_voice.py）。
+    """
     assert len(VOICE_OPTIONS) >= 20
     zh_voices = [value for value, _label in VOICE_OPTIONS if value.startswith("zh")]
     en_voices = [value for value, _label in VOICE_OPTIONS if value.startswith("en")]
-    assert len(zh_voices) >= 15
-    assert len(en_voices) >= 8
+    assert len(zh_voices) >= 12
+    assert len(en_voices) >= 12
     assert all(label.strip() for _value, label in VOICE_OPTIONS)
     # 任务点名的关键音色必须在列
     assert "zh-CN-XiaoxiaoNeural" in zh_voices

@@ -77,6 +77,7 @@
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [`CHAT-BACKGROUND-DISPLAY-2026-08-27.md`](CHAT-BACKGROUND-DISPLAY-2026-08-27.md) | AI 对话背景显示调整记录：两套窗口各自的背景图片/不透明度/填充模式，以及消息卡片可读性方案。 | 改对话窗口背景、`cover`/`contain`/`stretch` 语义、或消息区 QSS（`message-bubble` vs `message-surface`、`QScrollArea` 调色板）时。 |
+| [`ISSUE-EDGE-TTS-VOICE-DEPRECATION-2026-09-22.md`](ISSUE-EDGE-TTS-VOICE-DEPRECATION-2026-09-22.md) | 事故档案：edge 合成「没声音」的两条根因（微软下架音色 + 连发偶发空音频）与对策（音色表兜底、重试、非空缓存判定）。 | **改语音报时的合成/缓存路径、或再遇到「配置了却没声音」时必读**；它记录了 `NoAudioReceived` 为什么不等于网络问题的判断链。 |
 | [`grill-2026-08-21-ai-chat.md`](grill-2026-08-21-ai-chat.md) | AI 对话功能的需求对齐记录：多 Provider、流式、多轮上下文、JSON 会话、system prompt 优先级等已确认决策。 | 质疑"聊天窗口为什么这样设计/为什么用标准库 HTTP 而不是某个 SDK"时；这是原始决策依据。 |
 
 ---
@@ -138,6 +139,7 @@
 | [`PR-REPORT-SELF-TALK-IMAGE-CHANCE-2026-09-20.md`](PR-REPORT-SELF-TALK-IMAGE-CHANCE-2026-09-20.md) | 自言自语「配图概率」（`self_talk_image_chance`，默认 30）：把"文本+图片等权随机"（实测出图 82.8%）改成先掷骰子再在池内等权选。 | 改 `show_random_self_talk` 的抽签逻辑、或需要"为什么默认值从等权变成 30%"的依据与回滚口径时。 |
 | [`PR-REPORT-MUSIC-PLAYER-PATHS-2026-09-22.md`](PR-REPORT-MUSIC-PLAYER-PATHS-2026-09-22.md) | 音乐播放器路径设置（`music_player_paths`）PR 报告：设置页两行路径 + 后台「自动检测」、路径变了才清缓存、菜单提示改指设置页；含真机端到端与缺陷注入记录。 | 改 `pet/settings_music.py`、`pet/music_players.py` 的路径解析/缓存、或右键菜单「打开…给主人放歌」的可用性与提示文案时。 |
 | [`PR-REPORT-SETTINGS-INTERACTION-TABS-2026-09-22.md`](PR-REPORT-SETTINGS-INTERACTION-TABS-2026-09-22.md) | 「互动」域设置页分页 PR 报告：页内任务标签（点击与音效 / 自言自语）+ 整域抽成 `pet/settings_interaction.py`（对话框净减 94 行、预算首次因拆分下调）；含"功能不丢"的机器化断言与三档宽度截图。 | 改互动域的行/分组/标签、把某个域也改成分页、或调整 `scripts/capture_settings_pages.py` 的截图入口时。 |
+| [`PR-REPORT-music-lyric-align-2026-09-22.md`](PR-REPORT-music-lyric-align-2026-09-22.md) | 歌词对齐（`music_lyric_align`）PR 报告：手动校准快进/半途起播、会话选择与会话粘滞、`advance` 与 `line_now` 的分工；含性能实测表与网易云「不上报进度」的实机复现记录。 | 改歌词位置来源/对齐入口/多播放器会话选择时；或需要「为什么不做自动识别快进」的排查证据（桌面歌词不可读探针）时。 |
 | [`PR-REPORT-LOCAL-WIP-BATCH-2026-09-22.md`](PR-REPORT-LOCAL-WIP-BATCH-2026-09-22.md) | 本地 WIP 批次 PR 报告：交付证据纪律（三份证据 + 机器化校验）、`build_onedir.ps1` 的 Qt 绑定排他（不修则构建被 PyInstaller 中止）、产物 TTS 自检脚本（真产物假红 → 修掉）、`character_head_box()` 与 shenshen 头部框数据。 | 改 `scripts/build_onedir.ps1` 的排除清单、`scripts/verify_bundle_tts.py` 的闭包判定、`pet/catalog.py` 的 `body_box`/`head_box` 取值，或要写新的 PR 报告（含三个必备章节的实例）时。 |
 
 ---
