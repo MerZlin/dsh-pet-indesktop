@@ -55,10 +55,14 @@ from .voice_chime import (
 
 
 def _sync_voice_select(select: ModernSelect, config) -> None:
-    """按配置值刷新音色下拉：配置音色不在预设列表时追加“自定义”项并选中。"""
+    """按配置值刷新音色下拉：配置音色不在预设列表时追加一项并选中。
+
+    配置值可能是手改的、也可能是**微软已经下架**的音色：显式标成「不在清单里」，
+    别让用户以为它还是有效选项（服务层会自动改用默认音色并给一次提示）。
+    """
     current = clean_voice(config.get("voice_chime_voice", DEFAULT_VOICE))
     if select.findData(current) < 0:
-        select.addItem(f"自定义：{current}", current)
+        select.addItem(f"不在清单里：{current}", current)
     select.setCurrentData(current)
 
 
@@ -163,7 +167,8 @@ class VoiceChimeSettingsPage(QWidget):
                     SettingRow(
                         "voice_chime_voice",
                         "音色",
-                        "内置 20+ 款中英文音色（edge-tts 在线合成，无需 API Key）；配置值不在列表时自动追加“自定义”项。",
+                        "内置中英文音色（edge-tts 在线合成，无需 API Key）；"
+                        "微软会下架音色——选到已不存在的音色时会自动改用默认音色并提示一次。",
                         self.voice_select,
                     ),
                     SettingRow("voice_chime_rate", "语速", "语速偏移百分比：0 为正常，正数更快，负数更慢。", self.rate_spin),

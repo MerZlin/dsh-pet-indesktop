@@ -32,14 +32,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .voice_chime import (
+    DEFAULT_VOICE,
+    VOICE_OPTIONS,
     build_bubble_sentence,
     build_chime_sentence,
     cache_key,
     chime_slot,
+    clean_voice,
     edge_pitch_arg,
     edge_rate_arg,
     next_chime_in_seconds,
     normalize_chime_config,
+    voice_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +79,89 @@ def _edge_tts_available() -> bool:
 # 惰性探测结果（模块顶层，但不 import 本体）。测试可 monkeypatch 本标志。
 _EDGE_TTS_AVAILABLE = _edge_tts_available()
 
+# 合成失败的重试与间隔：微软这个接口在**连发**时会偶发返回空音频（实机：同一批
+# en-US 音色间隔 6 秒逐个重试全部成功，连发则整批 NoAudioReceived）。
+EDGE_RETRY_TIMES = 2
+EDGE_RETRY_DELAY_S = 1.5
+# 在线音色表缓存时长：厂家会下架音色，配置里存的是「当时有效」的值
+VOICE_LIST_TTL_S = 6 * 3600
+
+#: 同一条音色替换提示每个进程只弹一次（避免每次报时都刷屏）
+_VOICE_SUBSTITUTION_NOTICES: set[str] = set()
+
+_live_voices: frozenset[str] | None = None
+_live_voices_at = 0.0
+_voice_lock = threading.Lock()
+
+
+def _bundled_voices() -> frozenset[str]:
+    """内置（随包发布）音色集合——拿不到在线表时的校验集。"""
+    return frozenset(value for value, _label in VOICE_OPTIONS)
+
+
+def known_voices() -> frozenset[str]:
+    """当前可用于校验的音色集合：有在线缓存就用在线表，否则退回内置清单。**不联网。**"""
+    with _voice_lock:
+        return _live_voices if _live_voices else _bundled_voices()
+
+
+def refresh_voice_list(*, force: bool = False, timeout: float = 10.0) -> frozenset[str] | None:
+    """拉一次微软在线音色表并缓存（**会联网**，只该在后台合成线程里调）。
+
+    失败/超时返回 ``None`` 并保留旧缓存——联网失败不该让报时跟着失败。
+    """
+    global _live_voices, _live_voices_at
+    now = time.time()
+    with _voice_lock:
+        if not force and _live_voices and now - _live_voices_at < VOICE_LIST_TTL_S:
+            return _live_voices
+    try:
+        import edge_tts
+
+        raw = asyncio.run(asyncio.wait_for(edge_tts.list_voices(), timeout=timeout))
+        voices = frozenset(str(item.get("ShortName") or "") for item in raw if item)
+    except Exception as exc:  # noqa: BLE001 —— 拉不到不是错误，用旧的就够
+        logger.debug("拉取在线音色表失败（沿用内置/旧表）：%s", exc)
+        return None
+    voices = frozenset(name for name in voices if name)
+    if not voices:
+        return None
+    with _voice_lock:
+        _live_voices = voices
+        _live_voices_at = now
+    return voices
+
+
+def resolve_voice(configured) -> tuple[str, str]:
+    """把配置音色解析成「这次真要用哪把嗓子」，必要时换成默认音色并给出说明。
+
+    厂家会下架音色，而用户配置里存的是当时有效的值：配上已下架的音色时接口返回的
+    是空音频（``NoAudioReceived``），用户只会觉得「声音没了」。这里**不联网**——
+    用在线表缓存（没有就用内置清单）判定，联网刷新在后台合成线程里做。
+    """
+    voice = clean_voice(configured)
+    if not _EDGE_TTS_AVAILABLE or voice in known_voices():
+        return voice, ""
+    note = (
+        f"音色「{voice_label(voice)}」已不在微软在线音色表里（多半被下架了），"
+        f"本次改用默认音色「{voice_label(DEFAULT_VOICE)}」；"
+        "可在 设置 → 语音 → 语音报时 → 音色 里换一个可用的。"
+    )
+    return DEFAULT_VOICE, note
+
+
+def _cache_hit(path: Path) -> bool:
+    """缓存命中判定：文件存在**且非空**。
+
+    只判 ``exists()`` 不够——失败的合成会留下 0 字节/半截文件（``edge_tts.save``
+    先建文件再写），那会被当成「已有缓存」，于是播出一声静音且不再重新合成
+    （实机在缓存目录里抓到过一串 0 字节 mp3）。
+    """
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
 
 class _TTSWorker(threading.Thread):
     """后台线程：edge-tts 合成 mp3 后经回调返回。
@@ -93,28 +180,59 @@ class _TTSWorker(threading.Thread):
         self._on_done = on_done
 
     def run(self) -> None:  # noqa: D102
-        try:
-            asyncio.run(self._synthesize())
-        except ImportError:
-            # edge_tts 本该在 _synthesize 里惰性导入（见 _edge_tts_available）：
-            # 探测通过但真导入失败（半装 / 被禁用）时也走这里，回 GUI 侧同一套
-            # "请 pip install edge-tts" 降级，而不是笼统的合成失败。
-            logger.warning("edge-tts 不可导入，降级为仅气泡提示")
-            self._on_done(str(self._out_path), self._text, EDGE_TTS_MISSING)
-            return
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("edge-tts 合成失败")
-            self._on_done(str(self._out_path), self._text, f"{type(exc).__name__}: {exc}")
-            return
-        self._on_done(str(self._out_path), self._text, "")
+        # 在线音色表顺手刷新（有网就更新缓存，失败无所谓）——只在这个后台线程里联网
+        refresh_voice_list()
+        # 主音色反复失败（下架 / 限流 / 参数被拒）时退到默认音色再试一轮
+        candidates = [self._voice]
+        if self._voice != DEFAULT_VOICE:
+            candidates.append(DEFAULT_VOICE)
+        errors: list[str] = []
+        for candidate in candidates:
+            for attempt in range(1, EDGE_RETRY_TIMES + 1):
+                try:
+                    asyncio.run(self._synthesize(candidate))
+                except ImportError:
+                    # edge_tts 本该在 _synthesize 里惰性导入（见 _edge_tts_available）：
+                    # 探测通过但真导入失败（半装 / 被禁用）时也走这里，回 GUI 侧同一套
+                    # "请 pip install edge-tts" 降级，而不是笼统的合成失败。
+                    logger.warning("edge-tts 不可导入，降级为仅气泡提示")
+                    self._on_done(str(self._out_path), self._text, EDGE_TTS_MISSING)
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{candidate} 第{attempt}次: {type(exc).__name__}: {exc}")
+                    logger.warning("edge-tts 合成失败（%s 第%d次）：%s", candidate, attempt, exc)
+                    self._discard_partial()
+                    if attempt < EDGE_RETRY_TIMES and candidate != candidates[-1]:
+                        time.sleep(EDGE_RETRY_DELAY_S)
+                    continue
+                if self._out_path.exists() and self._out_path.stat().st_size > 0:
+                    if candidate != self._voice:
+                        logger.warning(
+                            "音色 %s 合成失败，已改用默认音色 %s", self._voice, candidate
+                        )
+                    self._on_done(str(self._out_path), self._text, "")
+                    return
+                # 服务端「成功」但没给音频（0 字节）：也算失败，别留下空缓存
+                errors.append(f"{candidate} 第{attempt}次: 服务端未返回音频（空文件）")
+                self._discard_partial()
+        self._on_done(
+            str(self._out_path), self._text, "edge-tts 合成失败 → " + "；".join(errors[-4:])
+        )
 
-    async def _synthesize(self) -> None:
+    def _discard_partial(self) -> None:
+        """删掉失败留下的半截产物：留在缓存目录会被下一次当成「已有缓存」。"""
+        try:
+            self._out_path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("清理半截合成产物失败：%s", self._out_path)
+
+    async def _synthesize(self, voice: str) -> None:
         # 惰性导入：只在真的要合成的后台线程里付这笔 import 成本。
         import edge_tts
 
         communicate = edge_tts.Communicate(
             self._text,
-            self._voice,
+            voice,
             rate=self._rate,
             pitch=self._pitch,
         )
@@ -352,10 +470,13 @@ class VoiceChimeService:
             return
         sentence = build_chime_sentence(next_at, self._cfg)
         bubble = build_bubble_sentence(next_at, self._cfg)
+        voice, note = resolve_voice(self._cfg["voice"])
+        if note:
+            self._announce_voice_substitution(note)
         key = cache_key(
             sentence,
             {
-                "voice": self._cfg["voice"],
+                "voice": voice,
                 "rate": self._cfg["rate"],
                 "pitch": self._cfg["pitch"],
             },
@@ -366,8 +487,8 @@ class VoiceChimeService:
         self._precache_slot = next_slot
         self._precache_text = sentence
         self._precache_bubble = bubble
-        self._precache_path = str(out_path) if out_path.exists() else None
-        if out_path.exists():
+        self._precache_path = str(out_path) if _cache_hit(out_path) else None
+        if _cache_hit(out_path):
             logger.info("预合成命中已有缓存：%s", out_path.name)
             return
         self._busy = True
@@ -423,7 +544,9 @@ class VoiceChimeService:
             self._notify_missing_tts()
             return
         bubble = bubble_text if bubble_text is not None else build_bubble_sentence(now, self._cfg)
-        voice = self._cfg["voice"]
+        voice, note = resolve_voice(self._cfg["voice"])
+        if note:
+            self._announce_voice_substitution(note)
         key = cache_key(
             sentence,
             {
@@ -435,7 +558,9 @@ class VoiceChimeService:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         out_path = self._cache_dir / f"{key}.mp3"
         # 缓存命中（含预合成已完成）直接播放，零网络延迟；合成中不阻塞缓存播放。
-        if out_path.exists():
+        # 命中要求文件非空：失败的合成会留下 0 字节/半截文件，只判 exists() 会把
+        # 它当成「已有缓存」→ 播出一声静音且再也不重新合成。
+        if _cache_hit(out_path):
             if show_bubble:
                 self._play_and_bubble(str(out_path), sentence, bubble)
             else:
@@ -665,6 +790,15 @@ class VoiceChimeService:
         msg = "语音报时需要 edge-tts 库：请运行 pip install edge-tts 后重试"
         logger.warning(msg)
         self._bubble(msg)
+
+    def _announce_voice_substitution(self, note: str) -> None:
+        """配置音色已失效的说明：同一进程只弹一次，别每次报时都刷屏。"""
+        if note in _VOICE_SUBSTITUTION_NOTICES:
+            logger.debug("已提示过：%s", note)
+            return
+        _VOICE_SUBSTITUTION_NOTICES.add(note)
+        logger.warning(note)
+        self._bubble(note)
 
     def _release_stale_busy(self) -> None:
         """合成线程异常未回调时复位 _busy；否则报时/预合成会被永久跳过。"""

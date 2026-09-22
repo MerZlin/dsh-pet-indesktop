@@ -58,39 +58,73 @@ _QUOTE_BATCHES_PER_DAY = _QUOTE_SLOTS_PER_DAY  # 台词库均分批数（一天 
 _MAX_CUSTOM_QUOTE_LEN = 120  # 自定义单条台词长度上限（超长截断，防误粘长文）
 
 # edge-tts 中英文音色下拉列表（value=音色名，label=友好中文标签）。
+# 2026-09-22 按微软在线音色表（``edge_tts.list_voices()``，322 款）重建：老清单里
+# 有 10 款中文音色已被下架（晓涵/晓辰/晓梦/晓墨/晓秋/晓睿/晓双/晓萱/晓颜/晓悠），
+# 留着它们只会让用户选到「合成没有声音」；这里同时补上了在线的新音色。
+# 服务层另有「配置音色不在在线表里 → 自动改用默认音色并提示」的兜底（见
+# voice_chime_service.resolve_voice），所以这份清单是快照而非唯一真相。
 VOICE_OPTIONS: tuple[tuple[str, str], ...] = (
     ("zh-CN-XiaoxiaoNeural", "晓晓（女 · 自然）"),
     ("zh-CN-XiaoyiNeural", "晓伊（女 · 活泼）"),
     ("zh-CN-YunjianNeural", "云健（男 · 浑厚）"),
     ("zh-CN-YunxiNeural", "云希（男 · 阳光）"),
+    ("zh-CN-YunxiaNeural", "云夏（男 · 少年）"),
     ("zh-CN-YunyangNeural", "云扬（男 · 新闻播报）"),
-    ("zh-CN-XiaochenNeural", "晓辰（女 · 电台）"),
-    ("zh-CN-XiaohanNeural", "晓涵（女 · 温柔）"),
-    ("zh-CN-XiaomengNeural", "晓梦（女 · 甜美）"),
-    ("zh-CN-XiaomoNeural", "晓墨（女 · 知性）"),
-    ("zh-CN-XiaoqiuNeural", "晓秋（女 · 柔和）"),
-    ("zh-CN-XiaoruiNeural", "晓睿（女 · 老人音）"),
-    ("zh-CN-XiaoshuangNeural", "晓双（女 · 童声）"),
-    ("zh-CN-XiaoxuanNeural", "晓萱（女 · 甜妹）"),
-    ("zh-CN-XiaoyanNeural", "晓颜（女 · 儿童）"),
-    ("zh-CN-XiaoyouNeural", "晓悠（女 · 童声）"),
     ("zh-CN-liaoning-XiaobeiNeural", "晓北（女 · 东北腔）"),
     ("zh-CN-shaanxi-XiaoniNeural", "晓妮（女 · 陕西腔）"),
     ("zh-TW-HsiaoChenNeural", "曉臻（女 · 台灣腔）"),
+    ("zh-TW-HsiaoYuNeural", "曉雨（女 · 台灣腔）"),
     ("zh-TW-YunJheNeural", "雲哲（男 · 台灣腔）"),
     ("zh-HK-HiuGaaiNeural", "曉佳（女 · 粵語）"),
     ("zh-HK-HiuMaanNeural", "曉文（女 · 粵語）"),
+    ("zh-HK-WanLungNeural", "雲龍（男 · 粵語）"),
     ("en-US-AriaNeural", "Aria（英文女声 · 自然）"),
     ("en-US-JennyNeural", "Jenny（英文女声 · 甜美）"),
-    ("en-US-GuyNeural", "Guy（英文男声 · 沉稳）"),
-    ("en-US-AnaNeural", "Ana（英文女声 · 童声）"),
     ("en-US-MichelleNeural", "Michelle（英文女声 · 温暖）"),
+    ("en-US-AnaNeural", "Ana（英文女声 · 童声）"),
+    ("en-US-AvaNeural", "Ava（英文女声 · 新一代）"),
+    ("en-US-EmmaNeural", "Emma（英文女声 · 新一代）"),
+    ("en-US-GuyNeural", "Guy（英文男声 · 沉稳）"),
     ("en-US-ChristopherNeural", "Christopher（英文男声 · 沉稳）"),
     ("en-US-EricNeural", "Eric（英文男声 · 年轻）"),
     ("en-US-RogerNeural", "Roger（英文男声 · 成熟）"),
+    ("en-US-AndrewNeural", "Andrew（英文男声 · 新一代）"),
+    ("en-US-BrianNeural", "Brian（英文男声 · 新一代）"),
+    ("en-US-SteffanNeural", "Steffan（英文男声 · 沉稳）"),
+    ("en-US-AvaMultilingualNeural", "Ava（多语言女声）"),
+    ("en-US-EmmaMultilingualNeural", "Emma（多语言女声）"),
+    ("en-US-AndrewMultilingualNeural", "Andrew（多语言男声）"),
+    ("en-US-BrianMultilingualNeural", "Brian（多语言男声）"),
     ("en-GB-SoniaNeural", "Sonia（英音女声）"),
     ("en-GB-RyanNeural", "Ryan（英音男声）"),
+    ("en-GB-LibbyNeural", "Libby（英音女声）"),
+    ("en-GB-MaisieNeural", "Maisie（英音女童）"),
+    ("en-GB-ThomasNeural", "Thomas（英音男声）"),
 )
+
+#: 2026-09-22 实测已从微软在线音色表下线的音色（老清单里的 10 款）。只用于把
+#: 「你配的那个音色已经没了」说成人话——用户看到的应当是「晓涵」而不是音色 id。
+DEPRECATED_VOICE_LABELS = {
+    "zh-CN-XiaochenNeural": "晓辰",
+    "zh-CN-XiaohanNeural": "晓涵",
+    "zh-CN-XiaomengNeural": "晓梦",
+    "zh-CN-XiaomoNeural": "晓墨",
+    "zh-CN-XiaoqiuNeural": "晓秋",
+    "zh-CN-XiaoruiNeural": "晓睿",
+    "zh-CN-XiaoshuangNeural": "晓双",
+    "zh-CN-XiaoxuanNeural": "晓萱",
+    "zh-CN-XiaoyanNeural": "晓颜",
+    "zh-CN-XiaoyouNeural": "晓悠",
+}
+
+
+def voice_label(value) -> str:
+    """音色的中文名：内置清单 → 已下线映射 → 原样返回 id。给用户看的提示用它。"""
+    voice = str(value or "").strip()
+    for name, label in VOICE_OPTIONS:
+        if name == voice:
+            return label.split("（")[0]
+    return DEPRECATED_VOICE_LABELS.get(voice, voice)
 
 _CUSTOM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 _RATE_RE = re.compile(r"^[+-]?\d+$")
