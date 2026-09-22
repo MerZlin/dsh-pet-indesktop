@@ -19,14 +19,20 @@
 | 功能 | 出口代码 | 端点 | 开着系统代理时的表现 | 结论 / 应对 |
 |---|---|---|---|---|
 | **歌词取词** | `pet/music_lyric.py` | `c.y.qq.com`、`lrclib.net`、`music.163.com` | 三源单次 **41.28 / 22.14 / 20.39 秒**，全部超过 `HTTP_TIMEOUT`（8s）→ 每首未缓存曲目都是 `0行, 耗时 9.00s`；直连 **0.58 / 0.83 / 0.25 秒** | **代码已改为一律直连**（PR #181，`ProxyHandler({})`），用户无需再设置 |
-| **TTS 语音合成**（语音报时 / 点击台词朗读 / 节日语音，edge-tts） | `pet/voice_chime_service.py`（`edge_tts.list_voices` 与 `Communicate`）、`pet/self_talk_voice.py` | `speech.platform.bing.com`（Microsoft） | 音色列表端点**直连 2.08s 成功**；走代理 2.26s（也成功）——两者差异不大 | 两边都可用。**不要**为修歌词把它一起绕掉：海外用户/直连不稳的网络需要它走代理 |
+| **TTS 语音合成**（语音报时 / 点击台词朗读 / 节日语音 / 设置页试听，edge-tts） | `pet/voice_chime_service.py`（`edge_tts.list_voices` 与 `Communicate`）、`pet/settings_standalone.py`（独立设置进程试听，同一条通道） | `speech.platform.bing.com`（Microsoft） | 音色列表端点**直连 2.08s 成功**；走代理 2.26s（也成功）——两者差异不大 | 两边都可用。**不要**为修歌词把它一起绕掉：海外用户/直连不稳的网络需要它走代理 |
 | **本机 CosyVoice 语音预缓存**（可选，需自建服务） | `pet/self_talk_voice.py`（`DEFAULT_SERVER = "http://127.0.0.1:9880"`） | **本地** `127.0.0.1:9880` | 若代理把 localhost 也吃了 → `/health` 连不上、预缓存整批失败 | 代理设置里**必须保留** `localhost;127.*` 绕过（Windows 默认的 `ProxyOverride` 就含它，别删） |
-| **DSH / Harness 联动** | `pet/dsh_responder.py`（`http://127.0.0.1:<port>`） | **本地** | 同上：localhost 被代理 → 联动请求发不出去 | 同上 |
+| **DSH / Harness 联动与本地探活** | `pet/dsh_responder.py`（`http://127.0.0.1:<port>`）、`pet/harness_launcher.py`（`socket.create_connection(("127.0.0.1", port))`） | **本地** | 同上：localhost 被代理 → 联动请求发不出去、Harness 端口探活误判 | 同上 |
 | **更新检查** | `pet/updater.py` | `api.github.com`、`cdn/fastly/gcore.jsdelivr.net`、`pan.quark.cn` | **jsdelivr 直连失败**（`WinError 10054 远程主机强迫关闭了一个现有的连接`），**走代理 1.45s 成功**；GitHub API 直连 0.69s / 走代理 1.41s 都可用 | 这一类**需要代理**（或把 jsdelivr 域名在分流里指向代理） |
 | **余额 / 峰谷提示** | `pet/balance.py` | 用户自配 `base_url`（常见 `api.deepseek.com`） | 取决于端点在国内还是海外 | 按端点分流；国内端点直连即可 |
 | **主动识屏（视觉）** | `pet/vision.py` | 用户自配视觉端点（超时下限 60s） | 慢代理下会一直等到超时（用户观感：点了没反应） | 按端点分流；排查时看日志里的请求耗时 |
 | **AI 对话** | `pet/chat/providers.py` | 用户自配对话端点 | 同上（海外端点通常需要代理，国内端点直连更快） | 按端点分流 |
 | **点击音效** | `pet/click_sound.py` | **不联网**：本地素材 + 本地转码缓存 `sounds_cache/` | 无影响 | 与代理无关。（先前报告里误写成"音效下载"，此处更正） |
+
+> **测量口径**：歌词/更新/GitHub 的数字是**直连与走代理各打一次真实请求**；
+> TTS 那一行测的是 edge-tts 的**音色列表端点**（HTTPS，与合成同一个主机），
+> 合成走的是同主机的 WSS——本次**没有**单独测 WSS 握手耗时，只测了同主机的 HTTPS 可达性。
+> 音效"不联网"这一条是读代码确认的（`pet/click_sound.py` 只做本地转码，素材在
+> `assets/sounds/`），不是靠观察推断。
 
 ## 二、30 秒判断"是不是代理干的"
 
@@ -95,7 +101,7 @@ qq（c.y.qq.com，2 次请求）  走系统代理 41.28s → 39 行   直连 0.5
 lrclib.net                 走系统代理 22.14s → 35 行   直连 0.83s / 3.47s / 1.28s → 35 行
 music.163.com              走系统代理 20.39s            直连 0.25s
 
-# 真实网易云会话（par: 蝴蝶 - 陶喆, position=None, app_id=cloudmusic.exe）
+# 真实网易云会话（蝴蝶 - 陶喆, position=None, app_id=cloudmusic.exe）
 修复前 fetch_lyrics: 9.01s → None（0 行）
 修复后 fetch_lyrics: 0.88s → 53 行
 
