@@ -127,6 +127,26 @@ foreach ($m in @('torch','transformers','datasets','langchain','langchain_core',
                  'spacy','cv2','playwright','narwhals','sympy','fsspec')) {
     $excludes += @('--exclude-module', $m)
 }
+# Qt 绑定互斥（2026-09-22 实测：构建被直接中止——不修好这一条，edge-tts 根本
+# 打不进包，因为 PyInstaller 在收集阶段就退出了）。
+# 打包机上装了 PyQt5 时，上面那批库（连同 matplotlib 这类经笔记本/绘图栈被连带
+# 收集的模块）里的 `qt_compat` 会**条件导入任意 Qt 绑定**，于是 hook-PyQt5 与
+# 先运行的 hook-PySide6 冲突，PyInstaller 直接终止：
+#   ERROR: Aborting build process due to attempt to collect multiple Qt bindings
+#   packages: attempting to run hook for 'PyQt5', while hook for 'PySide6' has
+#   already been run!
+# 本应用只用 PySide6。按 PyInstaller 报错里给出的处置方式排除其余绑定，构建就
+# 不再取决于打包机上恰好装了哪些 Qt 绑定（这正是「排除清单是打包机环境的函数」
+# 那条例外的镜像情形：环境多装一个包就能让构建红）。
+foreach ($m in @('PyQt5','PyQt6','PySide2')) {
+    $excludes += @('--exclude-module', $m)
+}
+# 再把「把 Qt 绑定拖进来的那条上游链」一并排除（全仓 grep 确认应用零引用；同时
+# 省下笔记本/绘图栈的几十 MB）。清单来自 2026-09-22 构建日志里实际出现的 hook。
+foreach ($m in @('matplotlib','matplotlib_inline','seaborn','IPython','ipykernel',
+                 'jupyter_client','jupyter_core','nbformat','zmq')) {
+    $excludes += @('--exclude-module', $m)
+}
 # Chat 版必须显式收集 keyring（API Key 系统安全存储）；no-chat 不收集
 $keyringCollect = if ($noChat) { @() } else { @('--collect-all', 'keyring') }
 $chatData = if ($noChat) { @() } else {
