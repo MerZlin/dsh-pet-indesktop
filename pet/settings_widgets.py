@@ -518,11 +518,16 @@ class ResourcePathPicker(QWidget):
     def __init__(
         self, value: str, *, directory: bool = False,
         name_filter: str = IMAGE_NAME_FILTER, image_preview: bool = False,
-        parent=None,
+        dialog_title: str | None = None, parent=None,
     ):
         super().__init__(parent)
         self.directory = bool(directory)
         self.name_filter = name_filter
+        # 选择对话框标题：默认沿用图片语义（既有调用方不变），非图片用途可覆盖
+        # （例如「音乐播放器程序」选 .exe 时不该写「选择图片」）。
+        self.dialog_title = str(
+            dialog_title or ("选择图片目录" if self.directory else "选择图片")
+        )
         self.edit = QLineEdit(self)
         self.edit.setMinimumWidth(250)
         self.edit.setText(str(value))
@@ -557,9 +562,9 @@ class ResourcePathPicker(QWidget):
         current = self.text()
         start = current if current else str(Path.home())
         if self.directory:
-            selected = QFileDialog.getExistingDirectory(self, "选择图片目录", start)
+            selected = QFileDialog.getExistingDirectory(self, self.dialog_title, start)
         else:
-            selected, _ = QFileDialog.getOpenFileName(self, "选择图片", start, self.name_filter)
+            selected, _ = QFileDialog.getOpenFileName(self, self.dialog_title, start, self.name_filter)
         if selected:
             self.setText(str(Path(selected).expanduser().resolve()))
 

@@ -832,6 +832,8 @@ def test_settings_sidebar_uses_stable_domains_and_owns_representative_rows(tmp_p
     assert owner("api_url") == "AI 与对话"
     assert owner("voice_chime_enabled") == "语音"
     assert owner("file_interpret_enabled") == "文件识别"
+    assert owner("music_player_netease") == "桌宠"
+    assert owner("music_player_qqmusic") == "桌宠"
     assert "待分类（开发期）" not in [
         label.text() for label in dialog.findChildren(settings_mod.QLabel)
     ]

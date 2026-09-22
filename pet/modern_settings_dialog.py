@@ -149,6 +149,7 @@ from .persona_template import (
     PARAMETERS,
 )
 from . import settings_file_interpret
+from . import settings_music
 from . import settings_pet_controls
 from .report_gates import REPORT_GATE_KEYS, REPORT_GATE_LABELS, gate_for_event
 
@@ -309,6 +310,8 @@ class ModernSettingsDialog(QDialog):
         self._build_pet_controls()
         # 「文件识别」域控件在本模块构建（行数预算原因），见 settings_file_interpret。
         self._build_file_interpret_controls()
+        # 「音乐播放器路径」控件同样在本模块构建（行数预算原因），见 settings_music。
+        settings_music.create_music_player_controls(self)
         # 「随桌宠启动 dsh 服务」开关（origin/main #80 合入带回）：构建留在
         # 对话框本体（upstream 代码所在宿主），供下方 launch_rows 引用。
         self.harness_autostart_check = ToggleSwitch(self)
@@ -1756,7 +1759,8 @@ class ModernSettingsDialog(QDialog):
             [
                 ("显示", claim("scale", "bubble_text_scale", "pet_opacity")),
                 ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "no_move")),
-                ("音乐关联", claim("music_sing", "music_lyric", "music_lyric_lead")),
+                ("音乐关联", claim("music_sing", "music_lyric", "music_lyric_lead")
+                 + settings_music.build_music_player_rows(self)),
                 ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
                 ("边缘探头", claim("edge_probe")),
                 ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island", "clear_spawned_pets")),
@@ -2345,6 +2349,7 @@ class ModernSettingsDialog(QDialog):
         if self.ai_page is not None:
             self.ai_page.save()
         settings_file_interpret.save_file_interpret_settings(self)
+        settings_music.save_music_player_settings(self)
         if sys.platform == "win32" and self.include_ai and hasattr(self, "pro_enabled_check"):
             from .proactive import PRESET_DEFAULTS
 
