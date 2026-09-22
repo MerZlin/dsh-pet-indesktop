@@ -53,6 +53,9 @@ DRAG_THRESHOLD = 5
 DEFAULT_SCALE = 0.72
 CORNER_MARGIN = 24  # 距屏幕右缘的默认间距
 
+# 未声明 head_box 时，头部框按身体框高度的这个比例从顶部截取（边缘探头锚点用）
+HEAD_FALLBACK_RATIO = 0.45
+
 # 可选的显示缩放档位（相对 640 宽：320px / 462px / 544px / 640px）
 SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
 
@@ -298,6 +301,35 @@ def character_body_box(character_id: str) -> tuple[int, int, int, int] | None:
     if 0 <= x1 < x2 <= CANVAS_W and 0 <= y1 < y2 <= CANVAS_H:
         return (x1, y1, x2, y2)
     return None
+
+
+@functools.lru_cache(maxsize=None)
+def character_head_box(character_id: str) -> tuple[int, int, int, int] | None:
+    """角色头部框 (x1, y1, x2, y2)：源像素、640×360 画布坐标。
+
+    边缘探头的锚点：45° 探头其实是把角色沿一条对角线推出屏幕，露出来的
+    是哪个部位完全由这条线切在哪里决定——所以要"只露头"，锚点必须是头，
+    而不是整只角色的可见轮廓（后者会让切面落到胸口，整条身子跟着探出来）。
+
+    来源：manifest.json 的 head_box 字段；未声明时按身体框上缘取 45% 高度
+    兜底（对直立角色足够接近"脖子以上"），身体框也没有则返回 None。
+    """
+    manifest = load_character_manifest(character_id)
+    if isinstance(manifest, dict):
+        box = manifest.get('head_box')
+        if isinstance(box, (list, tuple)) and len(box) == 4:
+            try:
+                x1, y1, x2, y2 = (int(round(float(v))) for v in box)
+            except (TypeError, ValueError):
+                x1 = y1 = x2 = y2 = -1
+            if 0 <= x1 < x2 <= CANVAS_W and 0 <= y1 < y2 <= CANVAS_H:
+                return (x1, y1, x2, y2)
+    body = character_body_box(character_id)
+    if body is None:
+        return None
+    x1, y1, x2, y2 = body
+    head_bottom = y1 + max(1, int(round((y2 - y1) * HEAD_FALLBACK_RATIO)))
+    return (x1, y1, x2, head_bottom)
 
 
 def _manifest_name(value, names: set[str]) -> str | None:
