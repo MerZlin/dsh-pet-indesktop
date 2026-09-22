@@ -16,6 +16,7 @@
       {"type": "action", "id": "music_next", "visible": true},
       {"type": "action", "id": "music_prev", "visible": true},
       {"type": "action", "id": "music_quit", "visible": true},
+      {"type": "action", "id": "music_lyric_align", "visible": true},
       {"type": "separator", "id": "music.separator-launch", "visible": true},
       {"type": "action", "id": "music_open_netease", "visible": true},
       {"type": "action", "id": "music_open_qqmusic", "visible": true}
