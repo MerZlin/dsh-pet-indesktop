@@ -4,7 +4,8 @@
 > **分支**：`fix/music-lyric-system-proxy`　**日期**：2026-09-22
 > **范围**：3 个代码/测试文件（实现 2、测试 1），另有本报告与 INDEX 登记
 > **关联**：[`PR-REPORT-music-lyric-align-2026-09-22.md`](PR-REPORT-music-lyric-align-2026-09-22.md)、
-> [`PR-REPORT-music-lyric-2026-09-16.md`](PR-REPORT-music-lyric-2026-09-16.md)
+> [`PR-REPORT-music-lyric-2026-09-16.md`](PR-REPORT-music-lyric-2026-09-16.md)、
+> [`NETWORK-PROXY-AND-VPN-2026-09-22.md`](NETWORK-PROXY-AND-VPN-2026-09-22.md)（代理/VPN 影响面清单）
 
 ## 一、核心特性
 
@@ -80,10 +81,11 @@
 
 ### 未改动（故意）
 
-- `pet/self_talk_voice.py`（edge-tts 语音预缓存）、`pet/click_sound.py`（音效）、
-  `pet/balance.py`、`pet/updater.py`、`pet/vision.py` 的代理行为**一律不动**：
-  TTS 很可能正依赖这条代理（用户就是开了代理之后才开始试点击台词朗读），
-  全局改代理策略会踩坏别的功能。
+- `pet/voice_chime_service.py`（edge-tts 合成）、`pet/self_talk_voice.py`（本机 CosyVoice 预缓存）、
+  `pet/click_sound.py`（音效，且它**不联网**）、`pet/balance.py`、`pet/updater.py`、
+  `pet/vision.py` 的代理行为**一律不动**：实测更新清单只有走代理才通、TTS 端点直连也
+  可用，所以"一刀切绕过代理"会踩坏别的功能（逐条数字见
+  [`NETWORK-PROXY-AND-VPN-2026-09-22.md`](NETWORK-PROXY-AND-VPN-2026-09-22.md)）。
 - `pet/music_lyric.py` 的三源并发与死线逻辑（`_PRIORITY_GRACE` / `HTTP_TIMEOUT + 1`）不变，
   失败路径仍然是 9 秒，不引入第二遍请求。
 - 未新增任何持久设置（否则要触发 `docs/SETTINGS-CHANGE-GATES.md` 的设置页/白名单/迁移工作量）。
@@ -207,8 +209,12 @@
   "继承一个慢代理"会让**所有人**的歌词在代理开启时静默失效。若将来真出现这种环境，
   再按"直连失败后走代理兜底"扩展（会牺牲失败路径耗时：9s → ~18s）。
 - 失败取词仍不自动重试（一首歌一次），与本模块"歌词是锦上添花"的既有取舍一致。
-- 未处理同类风险面：音效 / 语音 / 余额 / 更新 / 识屏同样继承系统代理，
-  它们在有慢代理时会同样变慢或失败——本轮刻意不动（TTS 可能正需要代理）。
+- 其余联网功能**本轮刻意不动**（保持"跟随系统代理"），实测依据：更新清单走
+  `cdn.jsdelivr.net` **直连失败、走代理 1.45s 成功**；edge-tts 的音色列表端点
+  直连 2.08s / 走代理 2.26s **都可用**——所以"全局绕过代理"会踩坏更新检查，
+  而"全局走代理"会踩坏歌词。逐功能的实测清单、30 秒探针与推荐分流配置见
+  [`NETWORK-PROXY-AND-VPN-2026-09-22.md`](NETWORK-PROXY-AND-VPN-2026-09-22.md)。
+  更正：点击音效**不联网**（本地素材 + 本地转码缓存），先前草稿把它列进"同类风险面"有误。
 
 ## 六、修改文件清单（供 PR 描述引用）
 
