@@ -9,6 +9,12 @@
 
 三个源都是明文 HTTP 接口，无需加密，也不下载任何音频（单曲响应约 10 KB）。
 
+**网络边界：歌词请求一律直连，不走系统代理。** 三个源都是公开接口、其中两个还是
+国内域名，走系统代理只会多绕一段路；2026-09-22 实机事故里，用户开着全局代理时
+三个源单次耗时 20~41 秒（全部超过 ``HTTP_TIMEOUT``），于是每首未缓存曲目都以
+「0 行」收场，看起来就像歌词功能被改坏了（详见
+``docs/PR-REPORT-MUSIC-LYRIC-SYSTEM-PROXY-2026-09-22.md``）。
+
 缓存放数据目录下的 ``lyrics_cache/``，只存歌词文本，不存音频、不存收听历史；
 条目数超过上限时按文件修改时间淘汰最旧的。用户可在设置页一键清空。
 
@@ -226,14 +232,69 @@ def _prune_cache(limit: int = CACHE_LIMIT) -> None:
 
 # ---------------------------------------------------------------- 网络
 
+# 「绕过了系统代理」这件事每个进程只记一行（见 _note_proxy_bypass_once）。
+_proxy_bypass_logged = False
+
+
+def _host_of(url: str) -> str:
+    """取 URL 的主机名，供日志定位（解析失败时回退成原串）。"""
+    try:
+        return urllib.parse.urlsplit(url).hostname or url
+    except Exception:
+        return url
+
+
+def _build_opener():
+    """歌词请求专用 opener：**显式禁用系统代理**（直连）。
+
+    为什么不用 ``urllib.request.urlopen``：它会自动套用系统代理
+    （Windows 注册表 / 环境变量，``urllib.request.getproxies()``）。用户开着
+    全局模式 VPN 时，本机实测三个源单次耗时变成 41.3 / 22.1 / 20.4 秒，全部
+    超过 ``HTTP_TIMEOUT``（8 秒），于是 ``fetch_lyrics`` 每次都在 9 秒死线处
+    放弃、返回「0 行」——表现就是"歌词功能坏了"（2026-09-22 实机事故）。
+
+    直连这三个公开接口实测 0.25~3.5 秒，与代理是否开启无关，行为可预期。
+
+    构造开销实测 122us/次，故每次请求现建、不缓存：用户中途开关代理不会
+    带出陈旧状态，也免掉跨线程共享 opener 的同步问题。
+    """
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _note_proxy_bypass_once() -> None:
+    """检测到系统代理时记一行 INFO，说明歌词请求改走直连。
+
+    排查这类"听起来像功能坏了"的问题，第一眼就该看出网络走了哪条路：
+    原先失败原因只写 ``log.debug``，而应用是 ``basicConfig(level=INFO)``，
+    日志里只剩「0行, 耗时 9.00s」，根因被静默吞掉。
+    """
+    global _proxy_bypass_logged
+    if _proxy_bypass_logged:
+        return
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        return
+    _proxy_bypass_logged = True
+    if proxies:
+        log.info("歌词请求直连：已绕过系统代理 %s",
+                 ", ".join(sorted({str(v) for v in proxies.values() if v})))
+
+
+def _open_direct(request: urllib.request.Request, *, timeout: float):
+    """用直连 opener 发请求（见 :func:`_build_opener`）。"""
+    _note_proxy_bypass_once()
+    return _build_opener().open(request, timeout=timeout)
+
 
 def _http_get_json(url: str, *, referer: str | None = None) -> dict | list | None:
     headers = {"User-Agent": _UA}
     if referer:
         headers["Referer"] = referer
     request = urllib.request.Request(url, headers=headers)
+    started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+        with _open_direct(request, timeout=HTTP_TIMEOUT) as response:
             raw = response.read()
         # 部分接口返回 JSONP，剥掉外层包裹后再解析。
         text = raw.decode("utf-8", "replace").strip()
@@ -243,8 +304,12 @@ def _http_get_json(url: str, *, referer: str | None = None) -> dict | list | Non
             if start != -1 and end > start:
                 text = text[start + 1:end]
         return json.loads(text)
-    except Exception:
-        log.debug("歌词请求失败: %s", url, exc_info=True)
+    except Exception as exc:
+        # 必须落在 INFO 可见的级别：取词失败时日志里只有「0 行」会被误当成
+        # "功能坏了"，这里把主机、耗时与异常类型留下（含超时 / 连接被拒）。
+        log.warning("歌词请求失败 %s（%.2fs）: %s: %s",
+                    _host_of(url), time.monotonic() - started,
+                    type(exc).__name__, exc)
         return None
 
 

@@ -1163,6 +1163,7 @@ python scripts/cleanup_mei_cache.py --delete
 - 会话文件保存在本地，不实现云端同步。
 - OpenAI 兼容接口的错误响应、网络异常和空响应会转换为界面错误状态，并保留用户消息供重试。
 - 当前消息按纯文本显示；不要把不可信的模型输出当作 HTML 或脚本执行。
+- **开了代理 / VPN 的用户**：桌宠的联网功能对「系统代理」的反应各不相同——歌词取词会因此超时失效，更新检查却只有走代理才通，本地服务（本机 TTS、DSH 联动）要求保留 `localhost;127.*` 绕过。逐条实测与推荐设置见 [`docs/NETWORK-PROXY-AND-VPN-2026-09-22.md`](docs/NETWORK-PROXY-AND-VPN-2026-09-22.md)。
 
 
 </details>
@@ -1174,6 +1175,15 @@ python scripts/cleanup_mei_cache.py --delete
 
 > 按时间倒序记录。v4.2.0 及更早版本的完整清单见 [`docs/RELEASE-v4.2.0.md`](docs/RELEASE-v4.2.0.md) 与 [GitHub Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases)。
 > v4.2.0 之后的**全部**变更（含本表未逐条展开的 #113 / #114 / #118 / #120 / #121 / #123 / #125 / #127–#130 / #135 / #137 / #139–#144 / #146–#152 / #155 / #157–#173）已在上方 [v4.2.0 以来的变更（v4.2.1 候选，未发布）](#v420-以来的变更v421-候选未发布) 按功能与修复汇总。
+
+### PR #181（2026-09-22，MerZlin）——歌词取词被系统代理拖死 + 网易云「歌词对齐」被误关
+
+- **问题**（用户反馈「合并前源码版还能识别网易云的歌词和快进进度，合并后不行了」）：未缓存曲目一律**只有歌名、没有歌词**——现场日志是 `歌词取词完成: 陶喆 - 讨厌红楼梦 -> 0行, 耗时 9.00s`（命中缓存的歌正常，`63行, 耗时 0.01s`）；右键「音乐 → 歌词对齐」整组点不动，而控制器刚弹过提示让用户去点它。
+- **根因一（不是合并改坏的）**：取词用 `urllib.request.urlopen`，会**继承系统代理**。用户开着全局模式 VPN（`127.0.0.1:12450`，进程 18:37:41 启动）时，实测三源单次 41.3 / 22.1 / 20.4 秒，全部超过 `HTTP_TIMEOUT`（8 秒），于是每首未缓存曲目都在 9 秒死线处放弃。`git diff 56f8ad2..main -- pet/music_lyric.py` **为空**（取词代码与合并前逐字节相同），而最后一次成功取词是 18:12:14（代理起来前 25 分钟）——两件事只是时间上撞在一起。
+- **根因二（真 bug）**：网易云通过 SMTC **不上报播放进度**，`_on_lyrics_ready` 给的是本地估算位置，却被 `LyricTracker.load` 按 `position is not None` 当成"播放器上报的真值" → `align_available()` 返回假 → 「歌词对齐」子菜单置灰（`registry._music_align_ready`）。既有用例都用 `_tracker.load(position=None)` 直接建状态、**绕过了生产路径**，所以旧实现全绿。
+- **修复**：歌词请求改用显式 `ProxyHandler({})` 的**直连 opener**（三源都是公开接口、两个还是国内域名）；失败原因由 `log.debug` 升到 `log.warning`（带主机、耗时、异常类型），检测到系统代理时记一行 INFO；`load()` 新增 `reported` 参数，生产路径显式传 `reported=reported is not None`。
+- **验证**：同机同曲（代理保持开启）`fetch_lyrics` **9.00s/None → 1.27s/62 行**（第二次命中缓存 0.02s）；真实网易云会话（《蝴蝶》- 陶喆，`position=None`）上实测 **9.01s/None → 0.88s/53 行**，控制器级端到端（真 SMTC + 真网络 + 真 Qt 事件循环）气泡出歌名+歌词、`align_available=True`、「下一句 / 前进5秒 / 回到开头」全部生效。新增 5 条离线用例（3 条代理与日志、2 条对齐闸门），修复前 **4 红 1 绿**；`test_music_lyric.py + test_menu_layout.py + test_now_playing_session.py` **165 passed**；全量 **2866 passed / 11 skipped**；ruff 全清。
+- **边界**：真上报进度的播放器（QQ 音乐 / Chrome）仍**不许**手动对齐（护栏用例钉住）；其余联网功能的代理行为**刻意不动**——实测更新清单（jsdelivr）**只有走代理才能通**、TTS 端点直连/代理都可用，全局绕过代理会踩坏它们。逐条影响面与 30 秒排查法见 [`docs/NETWORK-PROXY-AND-VPN-2026-09-22.md`](docs/NETWORK-PROXY-AND-VPN-2026-09-22.md)。实现细节见 [`docs/PR-REPORT-MUSIC-LYRIC-SYSTEM-PROXY-2026-09-22.md`](docs/PR-REPORT-MUSIC-LYRIC-SYSTEM-PROXY-2026-09-22.md)。
 
 ### 未发布（2026-09-19，MerZlin）——气泡文字大小可调 + Harness 启停 + 会话底线修复
 

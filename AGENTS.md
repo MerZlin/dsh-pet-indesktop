@@ -190,6 +190,13 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   conflicts after squashing the parent, budget/red-line changes that only break
   when two PRs combine, and timing-test flake discipline (poll state with a wide
   budget instead of fixed sleeps).
+- Read `docs/NETWORK-PROXY-AND-VPN-2026-09-22.md` when touching any networked
+  feature (music lyrics, edge-tts voice, updater, balance, vision, chat) or when
+  a report sounds like "X worked yesterday and now it doesn't": the Windows
+  system proxy / VPN is a first-class suspect — it made lyric fetching 20-41s
+  (all three sources timed out) on 2026-09-22, while jsdelivr update checks only
+  work *through* the proxy. Lyric requests deliberately bypass the proxy
+  (`pet/music_lyric.py::_build_opener`); other features keep following it.
 - Treat `assets/characters/<id>/videos/` plus its manifest as one character
   package; preserve relative paths and case because packaged platforms differ.
   The manifest may declare `body_box` (`[x1, y1, x2, y2]` in source pixels,

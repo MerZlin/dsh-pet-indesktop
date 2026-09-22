@@ -112,6 +112,7 @@ class LyricTracker:
         self._paused_pos: float | None = None   # 暂停时冻结的位置
         # 本曲是否见过播放器上报的真实进度。见过就说明位置可信，手动对齐
         # 必须让路（见 reanchor / MusicLyricController.align_available）。
+        # 注意"估算位置不算真值"：网易云给的估算值不算见过（见 load 的 reported）。
         self._reported_position: bool = False
 
     # ------------------------------------------------------------ 状态
@@ -126,7 +127,7 @@ class LyricTracker:
 
     @property
     def uses_reported_position(self) -> bool:
-        """位置是否来自播放器上报（True 时不该手动对齐）。"""
+        """位置是否来自播放器上报的真值（True 时不该手动对齐）。"""
         return self._reported_position
 
     def reset(self) -> None:
@@ -140,13 +141,26 @@ class LyricTracker:
         self._reported_position = False
 
     def load(self, lines: list[music_lyric.LyricLine], *, now: float,
-             position: float | None) -> None:
-        """装载一首歌的歌词并建立位置基准。"""
+             position: float | None, reported: bool | None = None) -> None:
+        """装载一首歌的歌词并建立位置基准。
+
+        ``reported`` 说明 ``position`` 的来源：``True`` = 播放器上报的真值；
+        ``False`` = 调用方按本地时钟**估算**出来的（网易云这类不上报进度的
+        播放器）。``None``（默认）沿用旧口径——``position`` 有值即当真值，
+        仅供内部/既有单测的调用点。
+
+        为什么必须区分：估算值不是真值。它若被当成真值，``align_available()``
+        就判定"播放器会自己跟快进"从而关掉手动对齐，于是网易云用户拖完进度条
+        再也没有纠正手段——而同一个控制器还在提示他去点那个被关掉的菜单
+        （2026-09-22 用户反馈「合并后快进进度不行了」）。
+        """
         self._lines = list(lines)
         self._index = -1
         self._paused = False
         self._paused_pos = None
-        self._reported_position = position is not None
+        self._reported_position = (
+            position is not None if reported is None else bool(reported)
+        )
         if position is None:
             # 无真实进度：从现在开始本地累加（此刻视为 0）。
             self._anchor_at = now
@@ -904,7 +918,10 @@ class MusicLyricController(QObject):
             detected = self._detected_at if self._detected_at is not None else now
             position = max(0.0, now - detected)
             log.info("歌词按检测时刻对齐: 已过去 %.2fs", position)
-        self._tracker.load(list(lyrics.lines), now=now, position=position)
+        # `reported` 必须一起带下去：这里的 position 在无进度时是**估算值**，
+        # 不能让它冒充真值，否则「歌词对齐」会被误判为没必要而整组置灰。
+        self._tracker.load(list(lyrics.lines), now=now, position=position,
+                           reported=reported is not None)
         if self._bubble_blocked():
             return
         # 立即用「标题 + 当前歌词」刷新，不必等下一拍。
