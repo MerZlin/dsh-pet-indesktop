@@ -173,7 +173,11 @@ WINDOW_PY_LINE_BUDGET = 4632
 # 又一次「红线是组合性质」的实例（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。
 # 实测 2441；随后即由「互动」域分页 + 抽 pet/settings_interaction.py 大幅下调，
 # 故这里只做一次性校准，不为达标压行。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2441
+# 2026-09-22 **下调到 2347**：兑现上一条的承诺——「互动」域整页搬进
+# pet/settings_interaction.py（页内任务标签「点击与音效 / 自言自语」），
+# 本文件净减 94 行（2441 → 2347）。这是本文件第一次**因拆分而下调**预算：
+# 靠搬代码而不是压行宽解决预算，正是预算作为「绊线」的预期用法。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2347
 
 
 def _read(name: str) -> str:
