@@ -2,6 +2,16 @@
 
 > 结论先说：点击自言自语与「点击动画台词绑定」里的台词，现在可以在**保存设置后 / 每次启动时自动在后台**合成为本机语音文件。命中缓存时点击**零延迟出声，且断网也能说**。开关**默认关闭**——本机没装本地语音服务是常态，不开就不发探测请求、不联网、不占线程。
 
+> **移植落地说明（2026-09-22）**：本文写于原作者基线 `1b81fea`（2026-09-18）。落到本仓库
+> `main`（`56f8ad2`）时上游已漂移，本文里的两处数字属于**原基线**，本仓库的对应值如下：
+> 行数预算不再是「2319 → 2330」，而是与本批「配图概率」一起合并校准为 **2401 → 2419**
+> （见 `tests/test_architecture.py` 的注释链）；全量表里的 passed 数按本仓库基线重跑为准
+> （本仓库的落地复验数字见文末「九、落地复验（本仓库 main，2026-09-22）」）。
+> 正文保留原始记录不改，避免篡改作者的实机证据。仓库外工具路径（`F:\dsh\tts\…`）是
+> **原作者本机**路径，这些脚本按交付约定**不随本次 PR 入库**。
+> 同批另一份：`docs/PR-REPORT-SELF-TALK-IMAGE-CHANCE-2026-09-20.md`；本功能复用的音频
+> 通道来源见 `docs/PR-REPORT-VOICE-CHIME-2026-09-15.md`。
+
 ---
 
 ## 一、功能亮点
@@ -105,6 +115,7 @@ recovery               服务不可用→整轮跳过并记日志；0 字节残f
 ### 5.5 行数预算
 
 `modern_settings_dialog.py` 实测 2330 行 > 预算 2319，按文件约定**校准预算到 2330**（带日期与理由注释），未压缩行宽/合并语句。
+（本仓库落地时该校准与「配图概率」那一次合并为一条 2401 → 2419，见文首移植说明。）
 
 ## 六、本地验证记录
 
@@ -148,3 +159,59 @@ recovery               服务不可用→整轮跳过并记日志；0 字节残f
 - **风险**：本机服务未装/未启动时开关若被误开，只会在日志里留一条"跳过"，不产生副作用（不发探测以外的请求、不起长时间线程）。
 - **回滚**：关掉开关（功能静默、点击回落在线合成）；或删除 `<配置目录>/self_talk_voice`；代码层回滚只需移除两个触发点（保存后 / 启动时）与设置行，其余代码路径在开关关闭时都是 no-op。
 - **遗留**：设置页视觉/放大字体验收与 macOS/Linux 真实 GUI 验收未完成（4.3 第 3、4、5 条已如实标注）。
+
+## 九、落地复验（本仓库 main，2026-09-22）
+
+移植到本仓库 `main`（`56f8ad2`）之后，由移植方在本机重新跑过的一轮（命令与原始输出见下）。
+环境：Windows、Python 3.11.1、PySide6 6.11.1、本机 CosyVoice（127.0.0.1:9880）**未运行**。
+
+**（1）测试与静态门禁**
+
+```text
+QT_QPA_PLATFORM=offscreen python -m pytest tests/test_self_talk_voice_precache.py \
+  tests/test_self_talk_image_chance.py tests/test_click_self_talk_speech.py \
+  tests/test_voice_chime_service.py tests/test_config_schema.py tests/test_menu_layout.py \
+  tests/test_architecture.py tests/test_desktop_pet_features.py -q
+-> 264 passed in 28.51s
+
+QT_QPA_PLATFORM=offscreen python -m pytest -q --basetemp=C:/pt
+-> 2774 passed, 11 skipped, 12 warnings in 220.50s (0:03:40)
+
+python -m ruff check pet/ tests/      -> All checks passed!
+git diff --check                      -> clean
+```
+
+受影响时序族（`test_voice_chime_service` / `test_click_self_talk_speech` /
+`test_self_talk_voice_precache` / `test_voice_chime`）**串行复跑 3 遍**（216 passed × 3）
+与**并发 3 进程**（各 310 passed）全部绿。
+
+**（2）真机端到端（隔离 `APPDATA`，未触碰本机真实配置）**
+
+`APPDATA=<临时目录> python -m pet`，并在该隔离配置里用产品自己的 `Config` 打开
+「点击触发自言自语 + 点击台词朗读 + 台词自动预缓存」：
+
+```text
+13:27:05,943 INFO 已开始后台预缓存台词语音（启动时）
+13:27:07,446 INFO 台词语音预缓存跳过：本地 TTS 服务不可用（<urlopen error timed out>）
+```
+
+= 启动后 9 秒的独立方法钩子确实跑到；服务不在线时**只落一条 info、不写文件、不抛异常**
+（本机没装 CosyVoice 的通用用户路径）。
+
+点击 A/B（真实 `PostMessage` 点击窗口中心，读日志计数）：
+
+| 配置 | 点击次数 | `点击自言自语的朗读` 日志 | `播放音效` 日志 |
+|---|---:|---:|---:|
+| `self_talk_image_chance=0` | 6 | **4**（文本气泡 → 朗读路径被调用） | 6 |
+| `self_talk_image_chance=100` | 8 | **0**（图片气泡按设计不出声） | 8 |
+
+这正是设计语义在真机上的可观测差异：**图片气泡 `_last_self_talk_text=None` → 不出声**，
+所以"出声次数"即"文本气泡次数"。本机没有本地缓存、在线合成排队，故日志是
+`点击自言自语：音频通道忙，已排队待播`（不叠音、不打断）。
+
+**（3）设置页视觉验收（三档宽度 × 放大字体）**
+
+`scripts/capture_settings_pages.py` + 定向截图（`docs/screenshots/self-talk-2026-09-22/`）：
+1100 / 900 / 720 px 三档宽度下三行新控件均可见、无横向溢出（控件右边界 ≤ 行宽），
+720 px + 1.3 倍字体下描述文本按字体度量换行、控件仍可达（这两项是原文 4.3 第 3、5 条
+标注"未做"的缺口，已在本轮补上；High DPI 缩放仍需真机显示缩放环境，未验收）。

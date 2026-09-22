@@ -2,6 +2,16 @@
 
 > 结论先说：点击桌宠时弹出的**配图**原先和文本**等权随机**——图片目录里图越多，文本越轮不到（实测某配置 24 张图 + 5 句文本 → 出图概率 **82.8%**）。现在改为**先掷一次骰子决定"这次出图还是出文本"**，骰子权重由新设置「配图概率」决定（0~100%，默认 **30%**，0% = 只出文本）。用户要的"调低"和"自己选"由这一个控件同时满足。
 
+> **移植落地说明（2026-09-22）**：本文写于原作者基线 `1b81fea`（2026-09-18）。落到本仓库
+> `main`（`56f8ad2`）时上游已漂移，本文里的两处数字属于**原基线**，本仓库的对应值如下：
+> 行数预算不是「2330 → 2340」，而是与「点击台词朗读 / 预缓存」一起合并校准为
+> **2401 → 2419**（见 `tests/test_architecture.py` 的注释链）；`test_config_schema.py`
+> 白名单快照不是 118，而是 **123（白名单字面量）+ 5（特殊路径）= 128**；
+> 全量表里的 passed 数按本仓库基线重跑为准（见文末「九、落地复验（本仓库 main，2026-09-22）」）。
+> 正文保留原始记录不改，避免篡改作者的实机证据。仓库外实测脚本路径（`F:\dsh\…`）是
+> **原作者本机**路径，这些脚本按交付约定**不随本次 PR 入库**。
+> 同批另一份：`docs/PR-REPORT-SELF-TALK-PRECACHE-2026-09-20.md`。
+
 ---
 
 ## 一、问题（实测数据）
@@ -101,11 +111,47 @@ recovery               值越界钳到 0~100；配置损坏按默认 30；不想
 - `pet/config.py`：常量 `DEFAULT_SELF_TALK_IMAGE_CHANCE`、默认值、reload 白名单、归一化、`set()` 清单
 - `pet/settings_pet_controls.py`：`self_talk_image_chance_spin`
 - `pet/modern_settings_dialog.py`：SettingRow + 归属 claim + 显隐名单 + 保存写回
-- `tests/test_self_talk_image_chance.py`（新）、`test_desktop_pet_features.py`、`test_config_schema.py`、`test_menu_layout.py`、`test_architecture.py`（预算 2330→2340，带日期理由）
-- 仓库外实测脚本：`F:\dsh\_measure_image_chance.py`
+- `tests/test_self_talk_image_chance.py`（新）、`test_desktop_pet_features.py`、`test_config_schema.py`、`test_menu_layout.py`、`test_architecture.py`（预算 2330→2340，带日期理由；**本仓库落地时合并为 2401→2419**）
+- 仓库外实测脚本：`F:\dsh\_measure_image_chance.py`（原作者本机路径，不随本次 PR 入库）
 
 ## 八、风险与回滚
 
 - **风险**：默认值变化会改变所有用户（含未打开设置页的人）看到的配图频率；这是有意为之，且控件就在同组内一行可调。
 - **回滚**：把「配图概率」设为 `图数/(图数+文本数)` 的百分比即可复现旧观感；设 100% 只出图、0% 只出文本；代码层回滚只需删除新键与 `pick_self_talk_choice`，恢复 `random.choice(choices)`（`show_random_self_talk` 的其余分支不变）。
 - **遗留**：设置页视觉/放大字体验收与 macOS/Linux 真实 GUI 验收未完成（5.3 第 3、4、5 条已标注）。
+
+## 九、落地复验（本仓库 main，2026-09-22）
+
+移植到本仓库 `main`（`56f8ad2`）后由移植方在本机重跑的一轮。环境：Windows、
+Python 3.11.1、PySide6 6.11.1。
+
+**（1）真机 A/B（真实 `PostMessage` 点击桌宠窗口中心，隔离 `APPDATA`，读日志计数）**
+
+概率门的语义在真机上可直接观测：图片气泡按设计 `_last_self_talk_text=None` → 不出声，
+所以日志里 `点击自言自语` 的条数 = 文本气泡的次数。
+
+| 配置 | 点击次数 | `点击自言自语` 日志 | `播放音效` 日志 | 结论 |
+|---|---:|---:|---:|---|
+| `self_talk_image_chance=0` | 6 | **4** | 6 | 只出文本（会朗读） |
+| `self_talk_image_chance=100` | 8 | **0** | 8 | 只出图（不出声） |
+
+（`点击自言自语` 少于点击数是因为连续点击时语音通道忙、按既有排队语义合并/排队，
+与本次改动无关。）
+
+**（2）测试与静态门禁**
+
+```text
+QT_QPA_PLATFORM=offscreen python -m pytest -q --basetemp=C:/pt
+-> 2774 passed, 11 skipped, 12 warnings in 220.50s (0:03:40)
+python -m ruff check pet/ tests/   -> All checks passed!
+git diff --check                   -> clean
+```
+
+`tests/test_self_talk_image_chance.py` 的统计带宽用例（25% 设定、1000 次落在 17%~33%）
+在本仓库同样绿；本轮**未**重复作者那套 18 次点击的统计采样（n=18 的分辨率不足以区分
+30% 与 39%，用 0% / 100% 两个确定性端点做真机验证更可靠）。
+
+**（3）设置页视觉验收**：1100 / 900 / 720 px 三档宽度 + 720 px/1.3 倍字体下，
+「配图概率」行（含 3 行换行的说明文本与 `30 %` 控件）均无裁切、控件可达，
+截图见 `docs/screenshots/self-talk-2026-09-22/互动-配图概率-720.png`
+（补上原文 5.3 第 3、5 条标注"未做"的缺口；High DPI 缩放未验收）。
