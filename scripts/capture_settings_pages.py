@@ -215,6 +215,31 @@ def capture(args: argparse.Namespace) -> None:
                 raise RuntimeError(f"failed to save screenshot: {target}")
             popup.close()
             app.processEvents()
+        if args.interaction_details:
+            interaction_index = next(
+                index
+                for index in range(dialog.sidebar.count())
+                if dialog.sidebar.item(index).text() == "互动"
+            )
+            dialog.sidebar.setCurrentRow(interaction_index)
+            page = dialog.pages.currentWidget()
+            tabs = page.findChild(SettingsTabContainer, "settingsTaskTabs")
+            if tabs is None:
+                raise RuntimeError("interaction task tabs were not found")
+            # 父开关打开：细项行（点击音效/点击自言自语/气泡自言自语）才显现，
+            # 否则截出来的是一个"只有顶层开关"的空壳页。
+            dialog.click_sound_check.setChecked(True)
+            dialog.click_self_talk_check.setChecked(True)
+            dialog.self_talk_check.setChecked(True)
+            for key, label in zip(tabs.keys(), tabs.labels()):
+                tabs.setCurrentKey(key)
+                for scroll in page.findChildren(QScrollArea):
+                    scroll.verticalScrollBar().setValue(0)
+                    scroll.horizontalScrollBar().setValue(0)
+                app.processEvents()
+                target = destination / f"03-互动-{_safe_filename(label)}.png"
+                if not dialog.grab().save(str(target)):
+                    raise RuntimeError(f"failed to save screenshot: {target}")
         if args.image_previews:
             interaction_index = next(
                 index
@@ -223,6 +248,12 @@ def capture(args: argparse.Namespace) -> None:
             )
             dialog.sidebar.setCurrentRow(interaction_index)
             dialog.self_talk_check.setChecked(True)
+            # 「图片目录」行在「自言自语」标签里：必须先把该标签切到前台，
+            # 否则 grab() 截的是「点击与音效」标签页，抽屉看上去"消失"了。
+            page = dialog.pages.currentWidget()
+            tabs = page.findChild(SettingsTabContainer, "settingsTaskTabs")
+            if tabs is not None:
+                tabs.setCurrentKey("self_talk")
             dialog.self_talk_image_dir_picker.setText(
                 str(Path(__file__).resolve().parents[1] / "assets" / "chat")
             )
@@ -248,6 +279,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--extreme-copy", action="store_true")
     parser.add_argument("--expanded-toggles", action="store_true")
     parser.add_argument("--menu-details", action="store_true")
+    parser.add_argument("--interaction-details", action="store_true")
     parser.add_argument("--image-previews", action="store_true")
     return parser.parse_args()
 

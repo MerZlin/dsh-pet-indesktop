@@ -667,7 +667,7 @@ def _launch_player_and_play(player_key: str, pet) -> None:
                 # 时它已经是个死对象，emit 会抛 RuntimeError（同 agent_link 的
                 # 防护写法）。这里必须吞掉——否则 daemon 线程以未捕获异常收尾。
                 try:
-                    bridge.notice.emit(f"找不到{label}，可在配置文件中手动指定路径")
+                    bridge.notice.emit(f"找不到{label}：可在 设置 → 桌宠 → 音乐关联 里指定它的程序位置")
                 except RuntimeError:
                     pass
                 return
@@ -815,7 +815,7 @@ def _music_player_builder(player_key: str):
         )
         if missing:
             action.setEnabled(False)
-            action.setToolTip(f"找不到{label}，可在配置文件中手动指定路径")
+            action.setToolTip(f"找不到{label}：可在 设置 → 桌宠 → 音乐关联 里指定它的程序位置")
         elif state == music_players.CACHED_COLD:
             music_players.warm_cache_async(player_key, manual)
         return action

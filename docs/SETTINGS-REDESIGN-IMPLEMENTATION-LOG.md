@@ -136,3 +136,27 @@
 - `QListWidget.setItemWidget()` 会让自定义整行控件接管原生 delegate 区域；即使视觉上仍有 indicator，也不能假设 delegate 会处理点击。
 - 顶层工具窗口内通常由输入框持有焦点；关闭“窗口失焦”应监听 `WindowDeactivate`，而不是只监听某个子控件的 `FocusOut`。
 - `mobility_client` 已包含 `imageio-ffmpeg 0.6.0` 和 `PyInstaller 6.22.2`。WebM + Chat 变体完成 PyInstaller、中文编码检查和 ad-hoc codesign；工作区旧 `build/macos` 带 `com.apple.provenance` 时 BUNDLE 写入会报 `Operation not permitted`，改用全新 `/private/tmp` dist 目录即可通过，这不是缺少 Python 模块。
+
+## 设置页分页续作：「互动」域（2026-09-22，Windows 工作树）
+
+判据沿用上面的口径（**同域内多个可独立完成的同级任务 → 页内标签；存在连续配置关系的
+不拆**）。互动域原先是 18 行 / 3 组**平铺、零折叠**，是当时最长的"无折叠"域，主人反馈
+"单页面太多东西"。
+
+- 「互动」域改为页内 `SettingsTabContainer` 两个标签：**点击与音效**（组：输入 / 点击反馈）
+  与 **自言自语**（组：自言自语）。组名不变——它们被 3 处用例硬编码断言
+  （`test_menu_layout` / `test_desktop_pet_features` / `test_requested_regressions`）。
+- 侧栏 9 个域与其顺序**不变**：域清单是外部契约（截图脚本按索引取页、多处用例按名称断言），
+  页内标签才是同域任务的正确容器。
+- 整域的行定义与页装配搬进新模块 `pet/settings_interaction.py`（与
+  `settings_file_interpret.py` / `settings_music.py` 同口径：行在模块内建、不进
+  `all_rows` 快照、因此不需要 `claim`）。`modern_settings_dialog.py` 由此净减 94 行
+  （2441 → 2347），并**首次因拆分下调行数预算**——预算作为"绊线"的预期用法。
+- 显隐联动与搜索索引不受影响：都按 `settingRow_<键>` 的 `objectName` 工作；搜索命中非默认
+  标签时会经 `SettingsTabContainer.activate_for_descendant` 自动切标签（与菜单域同机制）。
+- `scripts/capture_settings_pages.py` 同步：新增 `--interaction-details`（逐标签出图）；
+  `--image-previews` 先切到「自言自语」标签再截——否则它会静默截到另一个标签页，抽屉"消失"。
+- 分页后的"功能不丢"由机器化断言钉住：所有 `settingRow_*` 仍在某个域页里、
+  不出现「待分类（开发期）」、每行都能由其标签键路由且（父开关打开后）可见、
+  搜索能切到正确标签。
+

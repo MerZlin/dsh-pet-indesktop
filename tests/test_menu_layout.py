@@ -838,12 +838,20 @@ def test_settings_sidebar_uses_stable_domains_and_owns_representative_rows(tmp_p
         return next(expected[index] for index in range(dialog.pages.count()) if dialog.pages.widget(index).isAncestorOf(row))
 
     assert owner("mouse_through") == "互动"
+    # 台词自动预缓存必须留在「互动」域的「点击反馈」组：它的 setting_id 用 click_
+    # 前缀才会被 claim_prefix("click_") 认领，否则掉进「待分类（开发期）」——这正是
+    # 本功能第一版踩过的坑（全量测试因此红了一条）。
+    assert owner("click_self_talk_precache") == "互动"
+    # 配图概率属于「自言自语」组（必须是显式 claim 的成员，否则掉进「待分类」）。
+    assert owner("self_talk_image_chance") == "互动"
     assert owner("menu_theme") == "菜单"
     assert owner("quick_launch_apps") == "菜单"
     assert owner("dynamic_island_enabled") == "桌面组件"
     assert owner("api_url") == "AI 与对话"
     assert owner("voice_chime_enabled") == "语音"
     assert owner("file_interpret_enabled") == "文件识别"
+    assert owner("music_player_netease") == "桌宠"
+    assert owner("music_player_qqmusic") == "桌宠"
     assert "待分类（开发期）" not in [
         label.text() for label in dialog.findChildren(settings_mod.QLabel)
     ]

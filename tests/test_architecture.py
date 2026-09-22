@@ -157,7 +157,29 @@ WINDOW_PY_LINE_BUDGET = 4632
 # 3 行 SettingRow 展开式写法（6 行）+ _write_config 回写 1 行 + 布局编排认领 1 行；
 # 控件本体落在 pet/settings_pet_controls.py（与既有的「配图大小」同处），
 # 缩放实现全在 pet/speech_bubble*.py。按文件约定只随实测校准，不为达标压行。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2401
+# 2026-09-22 上调到 2419：点击台词朗读 / 台词自动预缓存 / 配图概率共 3 个 SettingRow
+# 接入「互动」域已存在的两组（点击反馈 + 自言自语），逐项为 SettingRow 展开式写法、
+# 随组显隐名单、归属 claim、_write_config 写回，实测 2419；控件本体落在
+# pet/settings_pet_controls.py，朗读/预缓存实现全在 pet/self_talk_voice.py 与
+# pet/window_alerts.py。同页同组连续加控件，拆出来只会把这组设置割成两半；
+# 按文件约定只随实测校准，不为达标压行。设置页拆分仍是待办。
+# 2026-09-22 上调到 2436：点击侧显隐解耦（+17）——点击自言自语不再依附周期气泡
+# 总开关，因此点击侧另立一个 _update_click_self_talk_controls（含函数 docstring 与
+# 两处接线），实测 2436。这是可用性修复（原实现让新开关在默认配置下整组隐藏），
+# 不是新功能；分页/拆分后预算会随实测下调（见「互动」域分页改造）。按文件约定
+# 只随实测校准，不为达标压行。
+# 2026-09-22 上调到 2441：**组合越线**——#176（点击侧显隐解耦，2436）与
+# #177（音乐播放器路径接线的 +5）各自合并时都在预算内，合到一起才越线，
+# 又一次「红线是组合性质」的实例（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。
+# 实测 2441；随后即由「互动」域分页 + 抽 pet/settings_interaction.py 大幅下调，
+# 故这里只做一次性校准，不为达标压行。
+# 2026-09-22 **下调到 2347**：兑现上一条的承诺——「互动」域整页搬进
+# pet/settings_interaction.py（页内任务标签「点击与音效 / 自言自语」），
+# 本文件净减 94 行（2441 → 2347）。这是本文件第一次**因拆分而下调**预算：
+# 靠搬代码而不是压行宽解决预算，正是预算作为「绊线」的预期用法。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2347
+
+
 def _read(name: str) -> str:
     return (PET_DIR / name).read_text(encoding="utf-8")
 
