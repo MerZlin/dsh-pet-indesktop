@@ -1220,13 +1220,13 @@ class AppShell:
     def _self_talk_speak_wanted(self) -> bool:
         """点击自言自语朗读是否开启——它同样复用报时服务的音频通道。
 
-        只有「点击自言自语」整条链路都开着才要求通道存在（点击显示开关 + 气泡
-        自言自语总开关 + 本朗读开关），避免给用不到的场景常驻一条音频通道。
+        只要求「点击触发自言自语」+ 本朗读开关：点击自言自语是独立开关，不与
+        「气泡自言自语」总开关（周期气泡）耦合，否则只想点击听声的用户永远拿不到
+        音频通道。避免给用不到的场景常驻一条音频通道。
         """
         return bool(
             self.config.get("self_talk_speak_enabled", True)
             and self.config.get("click_show_self_talk", False)
-            and self.config.get("self_talk_enabled", False)
         )
 
     def _chime_wanted(self) -> bool:

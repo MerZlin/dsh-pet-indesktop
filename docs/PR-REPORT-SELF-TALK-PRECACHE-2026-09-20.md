@@ -215,3 +215,25 @@ git diff --check                      -> clean
 1100 / 900 / 720 px 三档宽度下三行新控件均可见、无横向溢出（控件右边界 ≤ 行宽），
 720 px + 1.3 倍字体下描述文本按字体度量换行、控件仍可达（这两项是原文 4.3 第 3、5 条
 标注"未做"的缺口，已在本轮补上；High DPI 缩放仍需真机显示缩放环境，未验收）。
+
+**（4）可用性修复：点击侧与周期气泡解耦（2026-09-22 追加）**
+
+主人在真机上反馈「点击台词朗读既看不到也听不到」。定位到两个叠加原因，均已修：
+
+1. **设置行被藏**：`_update_self_talk_controls` 原先把 `click_self_talk` /
+   `click_self_talk_speak` / `click_self_talk_precache` / `click_talk_bindings` 与
+   `self_talk_*` 细项放在同一张显隐名单里，于是它们跟着「气泡自言自语」（默认关）
+   一起隐藏 —— 新功能在默认配置下**在设置页里不存在**。现在点击侧另立
+   `_update_click_self_talk_controls`：顶层「点击触发自言自语」常显，朗读 / 预缓存 /
+   台词绑定跟随它。
+2. **出声链路被卡**：`PetWindow._on_click` 原先要求 `click_show_self_talk and
+   _self_talk_enabled` 才显示气泡，`AppShell._self_talk_speak_wanted` 也要求
+   `self_talk_enabled` 才建音频通道 → 只想点击听声的用户必须额外打开周期气泡开关。
+   现在两者都只认 `click_show_self_talk`（+ 朗读开关），语义变更已在 PR 描述里声明。
+
+回归：`tests/test_click_self_talk_speech.py` 新增 4 条（走真实 `PetWindow._on_click`
+入口 + 真 seam 断言"显示什么/朗读什么"，含反向用例与朗读开关关闭用例）；
+`tests/test_desktop_pet_features.py` 新增 `test_click_self_talk_rows_follow_their_own_toggle`
+（默认配置下顶层开关可见、两个开关互不牵连），并按新口径收窄既有的
+`test_modern_settings_progressively_reveals_dependent_controls`（该用例原先**断言**
+点击侧随周期气泡隐藏 —— 正是本次要改的行为）。

@@ -163,7 +163,12 @@ WINDOW_PY_LINE_BUDGET = 4632
 # pet/settings_pet_controls.py，朗读/预缓存实现全在 pet/self_talk_voice.py 与
 # pet/window_alerts.py。同页同组连续加控件，拆出来只会把这组设置割成两半；
 # 按文件约定只随实测校准，不为达标压行。设置页拆分仍是待办。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2419
+# 2026-09-22 上调到 2436：点击侧显隐解耦（+17）——点击自言自语不再依附周期气泡
+# 总开关，因此点击侧另立一个 _update_click_self_talk_controls（含函数 docstring 与
+# 两处接线），实测 2436。这是可用性修复（原实现让新开关在默认配置下整组隐藏），
+# 不是新功能；分页/拆分后预算会随实测下调（见「互动」域分页改造）。按文件约定
+# 只随实测校准，不为达标压行。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2436
 
 
 def _read(name: str) -> str:

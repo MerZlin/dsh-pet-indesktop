@@ -1556,11 +1556,8 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
         dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
         for key in (
             "self_talk_duration", "self_talk_min", "self_talk_max",
-            "self_talk_texts", "self_talk_images", "self_talk_image_scale", "click_self_talk",
+            "self_talk_texts", "self_talk_images", "self_talk_image_scale",
             "self_talk_image_chance",
-            "click_self_talk_speak",
-            "click_self_talk_precache",
-            "click_talk_bindings",
         )
     ]
     opacity = dialog.findChild(settings_mod.SettingRow, "settingRow_menu_opacity")
@@ -1579,6 +1576,53 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
     assert opacity.isHidden()
     dialog.menu_translucent_check.setChecked(True)
     assert not opacity.isHidden()
+    dialog.close()
+    app.processEvents()
+
+
+def test_click_self_talk_rows_follow_their_own_toggle(tmp_path, monkeypatch):
+    """点击侧的朗读 / 预缓存 / 台词绑定跟随「点击触发自言自语」，不被周期气泡开关藏起来。
+
+    本轮用户反馈的直接原因：默认配置（两个开关都关）下这三个开关连同「点击触发
+    自言自语」一起被隐藏，新功能在设置页里等于不存在。现在只有周期气泡的细项随
+    「气泡自言自语」，点击侧跟随它自己的开关。
+    """
+    from PySide6.QtWidgets import QApplication
+
+    import pet.modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    config = Config(tmp_path)
+    assert config.get("click_show_self_talk") is False
+    assert config.get("self_talk_enabled") is False
+    dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
+
+    def row(key: str):
+        found = dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
+        assert found is not None, key
+        return found
+
+    click_side = ("click_self_talk_speak", "click_self_talk_precache", "click_talk_bindings")
+
+    # 默认：顶层开关可见（否则功能无从发现），它的后续项跟随它 → 关着时隐藏
+    assert not row("click_self_talk").isHidden()
+    assert all(row(key).isHidden() for key in click_side)
+
+    dialog.click_self_talk_check.setChecked(True)
+    assert all(not row(key).isHidden() for key in click_side)
+    # 周期气泡仍关着：它的细项保持隐藏，互不牵连
+    assert row("self_talk_duration").isHidden()
+
+    dialog.self_talk_check.setChecked(True)
+    assert not row("self_talk_duration").isHidden()
+    assert all(not row(key).isHidden() for key in click_side)
+
+    dialog.click_self_talk_check.setChecked(False)
+    assert all(row(key).isHidden() for key in click_side)
+    assert not row("self_talk_duration").isHidden()
+
     dialog.close()
     app.processEvents()
 

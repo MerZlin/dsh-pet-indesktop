@@ -660,7 +660,7 @@ class ModernSettingsDialog(QDialog):
             SettingRow("click_sound_pack", "音效音源", "选择预设音效包、自定义音频文件或文件夹随机播放。", self.click_sound_picker, stacked=True),
             SettingRow("click_sound_volume", "音效音量", "调整点击音效播放音量。", self.click_sound_volume_spin),
             SettingRow("click_sound_preview", "试听音效", "测试当前选择的点击音效。", self.click_sound_preview_btn),
-            SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容。", self.click_self_talk_check),
+            SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容；打开后可用下方两项把同一句读出来。", self.click_self_talk_check),
             SettingRow(
                 "click_self_talk_speak",
                 "点击台词朗读",
@@ -1024,7 +1024,9 @@ class ModernSettingsDialog(QDialog):
             self.pro_idle_check.toggled.connect(self._update_proactive_idle_controls)
         self.spawn_inherit_size_check.toggled.connect(self._update_spawn_size_controls)
         self.golden_spin_click_check.toggled.connect(self._update_golden_spin_controls)
+        self.click_self_talk_check.toggled.connect(self._update_click_self_talk_controls)
         self._update_self_talk_controls(self.self_talk_check.isChecked())
+        self._update_click_self_talk_controls(self.click_self_talk_check.isChecked())
         self._update_translucency_controls(self.menu_translucent_check.isChecked())
         self._update_island_controls(self.island_enabled_check.isChecked())
         self._update_egg_controls(self.egg_enabled_check.isChecked())
@@ -1305,6 +1307,12 @@ class ModernSettingsDialog(QDialog):
         return row
 
     def _update_self_talk_controls(self, enabled: bool) -> None:
+        """周期气泡（``self_talk``）的细项显隐。
+
+        点击侧（``click_self_talk*`` / ``click_talk_bindings``）**不在这里**：它们是
+        独立开关的后续项，见 :meth:`_update_click_self_talk_controls`。绑在一起会让
+        「只想点击听声」的用户在设置页里连开关都看不到。
+        """
         keys = (
             "self_talk_duration",
             "self_talk_min",
@@ -1313,12 +1321,21 @@ class ModernSettingsDialog(QDialog):
             "self_talk_images",
             "self_talk_image_scale",
             "self_talk_image_chance",
-            "click_self_talk",
+        )
+        self._set_setting_rows_visible(keys, enabled)
+
+    def _update_click_self_talk_controls(self, enabled: bool) -> None:
+        """点击自言自语（``click_self_talk``）的后续项显隐。
+
+        预缓存也跟这里：只有点击链路才会把台词**读出来**（周期气泡只显示不朗读），
+        所以点击开关关着时预缓存没有意义。
+        """
+        keys = (
             "click_self_talk_speak",
             "click_self_talk_precache",
             "click_talk_bindings",
         )
-        self._set_setting_rows_visible(keys, enabled)
+        self._set_setting_rows_visible(keys, enabled, dependency="click_self_talk")
 
     def _update_island_controls(self, enabled: bool) -> None:
         settings_pet_controls._update_island_controls(self, enabled)

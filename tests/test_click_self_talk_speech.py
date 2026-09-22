@@ -118,3 +118,122 @@ def test_speak_setting_defaults_on_and_persists(tmp_path):
     config.save()
 
     assert Config(base=tmp_path).get("self_talk_speak_enabled") is False
+
+
+# --------------------------------------------------------------- 点击侧与周期气泡解耦
+
+
+class _ClickCfg(_Cfg):
+    dir = None
+
+
+def _click_once(*, click_self_talk: bool, periodic: bool, speak_enabled: bool = True):
+    """走真实点击入口：``PetWindow._on_click`` + 最小宿主替身。
+
+    只提供该路径真正用到的属性/方法；``_show_click_self_talk`` 委托到真实 seam
+    （``window_alerts.show_click_self_talk``），所以"显示什么、朗读什么"由产品代码决定。
+    """
+    from pet.window import PetWindow
+
+    class _Pet:
+        _just_dragged = False
+        clicks = ["click-1"]
+        click_show_balance = False
+        on_show_balance = None
+        on_restore_fun_windows = None
+        _effects_consume_click = None
+        _effects_route_click_golden_spin = None
+
+        def __init__(self):
+            self.cfg = _ClickCfg({
+                "click_sound_pack": {"kind": "custom"},
+                "character": "shenshen",
+                "self_talk_speak_enabled": speak_enabled,
+            })
+            self.click_show_self_talk = click_self_talk
+            self._self_talk_enabled = periodic
+            self.shown: list[str] = []
+            self.spoken: list[str] = []
+            self.scheduled: list[bool] = []
+            self.on_self_talk_speak = self.spoken.append
+
+        def _pick(self, sequence):
+            return sequence[0]
+
+        def _cancel_move(self) -> None:
+            pass
+
+        def _start_squash(self) -> None:
+            pass
+
+        def _switch(self, name) -> None:
+            pass
+
+        def _schedule_click_sound(self) -> None:
+            pass
+
+        def _show_click_self_talk(self, click_name):
+            return window_alerts.show_click_self_talk(self, click_name)
+
+        def _show_self_talk_text(self, text):
+            self.shown.append(text)
+            self._last_self_talk_text = text
+            return True
+
+        def _show_random_self_talk(self):
+            self._last_self_talk_text = "再陪你一会儿。"
+            self.shown.append(self._last_self_talk_text)
+            return True
+
+        def _schedule_self_talk(self, *, after_display=False):
+            self.scheduled.append(bool(after_display))
+
+    pet = _Pet()
+    PetWindow._on_click(pet)
+    return pet
+
+
+def test_click_self_talk_speaks_without_periodic_bubbles():
+    """只开「点击触发自言自语」、关掉「气泡自言自语」也要出气泡并朗读。
+
+    本轮解耦的契约：点击自言自语是**独立开关**，不再依附周期气泡总开关
+    （原先 ``_on_click`` 要求两者同时开启，导致只想点击听声的用户无从开启）。
+    """
+    pet = _click_once(click_self_talk=True, periodic=False)
+
+    assert pet.shown == ["再陪你一会儿。"]
+    assert pet.spoken == ["再陪你一会儿。"]
+    assert pet.scheduled == [True]
+
+
+def test_click_self_talk_off_stays_silent_even_with_periodic_bubbles():
+    """反向：只开周期气泡、关掉「点击触发自言自语」时，点击不出气泡也不朗读。"""
+    pet = _click_once(click_self_talk=False, periodic=True)
+
+    assert pet.shown == []
+    assert pet.spoken == []
+    assert pet.scheduled == []
+
+
+def test_click_self_talk_speech_toggle_off_keeps_bubble_only_at_click():
+    """点击侧朗读开关关闭：仍然出气泡，只是不出声。"""
+    pet = _click_once(click_self_talk=True, periodic=False, speak_enabled=False)
+
+    assert pet.shown == ["再陪你一会儿。"]
+    assert pet.spoken == []
+
+
+def test_click_speech_alone_asks_for_the_audio_channel():
+    """音频通道存在性判定：只想要点击出声的用户也要拿到通道。"""
+    from pet.app import AppShell
+
+    class _Shell:
+        def __init__(self, **values):
+            self.config = _Cfg(values)
+
+    def wanted(**values) -> bool:
+        return AppShell._self_talk_speak_wanted(_Shell(**values))
+
+    assert wanted(self_talk_speak_enabled=True, click_show_self_talk=True, self_talk_enabled=False) is True
+    assert wanted(self_talk_speak_enabled=True, click_show_self_talk=False, self_talk_enabled=True) is False
+    assert wanted(self_talk_speak_enabled=False, click_show_self_talk=True, self_talk_enabled=True) is False
