@@ -227,7 +227,7 @@ def test_negative_cache_disables_action_with_hint(monkeypatch):
         action = shared._music_player_builder("netease")(menu, _QtPet())
         assert action.isEnabled() is False
         assert "找不到网易云音乐" in action.toolTip()
-        assert "手动指定路径" in action.toolTip()
+        assert "设置 → 桌宠 → 音乐关联" in action.toolTip()
         assert searches == [] and warms == [], "负缓存命中不该再扫/再预热"
     finally:
         shiboken6.delete(menu)
@@ -420,7 +420,7 @@ def test_launch_player_bubbles_hint_when_player_missing(monkeypatch):
         shiboken6.delete(pet)
 
     assert "找不到网易云音乐" in bubbles[0][0]
-    assert "可在配置文件中手动指定路径" in bubbles[0][0]
+    assert "设置 → 桌宠 → 音乐关联" in bubbles[0][0]
 
 
 def test_launch_player_reads_manual_path_from_config(monkeypatch):
