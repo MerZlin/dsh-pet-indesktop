@@ -109,6 +109,7 @@
 |---|---|---|
 | [`PROACTIVE_SCREEN_PLAN.md`](PROACTIVE_SCREEN_PLAN.md) | 主动识屏与多 Agent 感知的已验证设计方案 v1：低功耗、多开友好、默认关闭，逐条技术依据与出处。 | 追溯识屏机制（白名单、dHash 变化检测、软流控、负坐标多屏裁剪）的**设计依据与出处**时。 |
 | [`PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md`](PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md) | 主动识屏实施手册（K3 终审版）：分阶段实施步骤与验收清单。 | 需要了解识屏的分阶段实施顺序与原始验收项时；注意其"代码未动工"状态已失效（见文末过时清单）。 |
+| [`issue-draft-主动识屏v420.md`](issue-draft-主动识屏v420.md) | v4.2.0「主动识屏永不触发」的 issue 草稿（基线 v4.2.0）：`MultiWindowProxy._physics_mode` 返回 `bool` 破坏哨兵语义，G1 守卫恒为真从而每次 tick 静默拦截；附最小修复建议与同版本启动装配缺口。 | 排查 `proactive_screen` 不触发、或改 `multi_window_shared.py` 的 `_physics_mode` 聚合语义与启动装配时。 |
 
 ---
 
