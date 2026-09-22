@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
+import urllib.request
 
 from pet import music_lyric
 from pet.music_lyric import Lyrics, LyricLine, parse_lrc
@@ -1026,6 +1028,55 @@ def test_resync_is_noop_for_reported_position(monkeypatch):
     assert ctrl._tracker.position(clock.now, reported=2.0) == 2.0
 
 
+def test_align_available_after_net_ease_lyrics_arrive(monkeypatch):
+    """**生产路径**回归：网易云（不上报进度）取词完成后，「歌词对齐」必须可用。
+
+    `_on_lyrics_ready` 在没有真实进度时给的是**本地估算**位置（`now - detected`），
+    旧实现按 `position is not None` 就判定"播放器上报了真值"，于是
+    `align_available()` 返回 False —— 右键「歌词对齐」整组置灰。而同一个控制器
+    刚弹过「快进或从中途开始播放后，用右键菜单「音乐 → 歌词对齐」校正」的提示，
+    用户照着点却点不动（2026-09-22 用户反馈「合并后快进进度不行了」）。
+
+    既有用例都用 `_tracker.load(position=None)` 建状态，绕过了这条生产路径，
+    所以旧实现是绿的——这个用例刻意走 `_on_playback_ready → _on_lyrics_ready`。
+    """
+    import pet.music_lyric_controller as mod
+
+    _patch_clock(monkeypatch, 100.0)
+    win = _FakeWin()
+    ctrl = mod.MusicLyricController(win)
+    monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: None)
+
+    # 网易云式采样：SMTC 无时间轴 → position=None
+    ctrl._on_playback_ready(_playback(None, title="讨厌红楼梦", artist="陶喆"))
+    # 取词回到主线程：走生产路径（不是直接 load）
+    ctrl._on_lyrics_ready(("讨厌红楼梦", "陶喆"), Lyrics(lines=tuple(LINES)))
+
+    assert ctrl._tracker.has_lyrics is True
+    assert ctrl.align_available() is True, (
+        "网易云不上报进度，位置是估算的，手动对齐正是唯一纠正手段，不该被关掉"
+    )
+    assert ctrl.resync_to_line(1) is True
+    assert ctrl.nudge(5.0) is True
+
+
+def test_reported_position_still_disables_align(monkeypatch):
+    """真上报进度的播放器（QQ 音乐）：取词后仍不许手动对齐，位置听真值。"""
+    import pet.music_lyric_controller as mod
+
+    _patch_clock(monkeypatch, 100.0)
+    win = _FakeWin()
+    ctrl = mod.MusicLyricController(win)
+    monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: None)
+
+    ctrl._on_playback_ready(_playback(11.0, title="夜曲", artist="周杰伦"))
+    ctrl._on_lyrics_ready(("夜曲", "周杰伦"), Lyrics(lines=tuple(LINES)))
+
+    assert ctrl.align_available() is False
+    assert ctrl.resync_to_line(1) is False
+    assert ctrl._tracker.position(100.0, reported=2.0) == 2.0
+
+
 def test_align_available_gates(monkeypatch):
     """菜单闸门：无词 / 纯音乐 / 报进度 都不可手动对齐。"""
     win, ctrl, clock = _aligned_controller(monkeypatch)     # 本地时钟 + 有词
@@ -1139,4 +1190,106 @@ def test_resync_ignored_when_no_lyrics(monkeypatch):
     assert ctrl.resync_to_start() is False
     assert ctrl.resync_to_line(1) is False
     assert ctrl.nudge(5.0) is False
+
+
+# ------------------------------------------------- 网络边界（系统代理必须被绕过）
+
+
+class _FakeResponse:
+    """最小响应替身：只支持 ``with`` + ``read()``。"""
+
+    def __init__(self, raw: bytes) -> None:
+        self._raw = raw
+
+    def read(self) -> bytes:
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _RecordingOpener:
+    """假 opener：记录每次请求，返回固定 JSON 或抛指定异常。"""
+
+    def __init__(self, payload=None, error: Exception | None = None) -> None:
+        self.payload = payload
+        self.error = error
+        self.calls: list[tuple[str, float | None]] = []
+
+    def open(self, request, timeout=None):
+        self.calls.append((getattr(request, "full_url", str(request)), timeout))
+        if self.error is not None:
+            raise self.error
+        return _FakeResponse(json.dumps(self.payload).encode("utf-8"))
+
+
+def _stub_urllib(monkeypatch, opener):
+    """把 urllib 的 opener 构造换成记录桩，并假装系统里配着代理。"""
+    monkeypatch.setattr(
+        urllib.request, "getproxies", lambda: {"https": "http://127.0.0.1:12450"}
+    )
+    built: list[tuple] = []
+
+    def build(*handlers):
+        built.append(handlers)
+        return opener
+
+    monkeypatch.setattr(urllib.request, "build_opener", build)
+    return built
+
+
+def test_lyric_request_bypasses_system_proxy(monkeypatch):
+    """歌词请求必须自建直连 opener，不能用会继承系统代理的 urlopen。
+
+    2026-09-22 实机事故：系统代理（VPN 全局模式 127.0.0.1:12450）下三个源
+    单次 20~41 秒，全部超过 HTTP_TIMEOUT，于是每首未缓存曲目都以「0 行」收场
+    （日志 `歌词取词完成: ... -> 0行, 耗时 9.00s`）。直连实测 0.25~3.5 秒。
+    """
+    opener = _RecordingOpener({"ok": 1})
+    built = _stub_urllib(monkeypatch, opener)
+
+    assert music_lyric._http_get_json("https://c.y.qq.com/soso/x") == {"ok": 1}
+
+    assert built, (
+        "歌词请求没有自建 opener —— 仍在用 urllib.request.urlopen，会继承系统代理"
+    )
+    handlers = [h for h in built[0] if isinstance(h, urllib.request.ProxyHandler)]
+    assert handlers, "直连 opener 必须显式传 ProxyHandler({})，否则仍继承系统代理"
+    assert handlers[0].proxies == {}, handlers[0].proxies
+    assert opener.calls and opener.calls[0][1] == music_lyric.HTTP_TIMEOUT
+
+
+def test_lyric_request_failure_is_logged_at_warning(monkeypatch, caplog):
+    """取不到词的**原因**必须落在 INFO 级日志能看到的级别。
+
+    原先写的是 ``log.debug``，而应用是 ``basicConfig(level=INFO)``，
+    线上日志于是只剩「0行, 耗时 9.00s」——看不出是超时、解析失败还是被封。
+    """
+    opener = _RecordingOpener(error=TimeoutError("timed out"))
+    _stub_urllib(monkeypatch, opener)
+
+    url = "https://music.163.com/api/song/lyric?id=1"
+    with caplog.at_level(logging.WARNING):
+        assert music_lyric._http_get_json(url) is None
+
+    messages = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("music.163.com" in m and "TimeoutError" in m for m in messages), messages
+
+
+def test_bypassing_system_proxy_is_logged_once(monkeypatch, caplog):
+    """「绕过了系统代理」只记一行、且带上代理地址，供下次一眼定位。"""
+    monkeypatch.setattr(music_lyric, "_proxy_bypass_logged", False)
+    opener = _RecordingOpener({"ok": 1})
+    _stub_urllib(monkeypatch, opener)
+
+    with caplog.at_level(logging.INFO):
+        music_lyric._http_get_json("https://c.y.qq.com/soso/x")
+        music_lyric._http_get_json("https://c.y.qq.com/soso/y")
+
+    hits = [r.getMessage() for r in caplog.records if "系统代理" in r.getMessage()]
+    assert len(hits) == 1, hits
+    assert "127.0.0.1:12450" in hits[0], hits[0]
 
