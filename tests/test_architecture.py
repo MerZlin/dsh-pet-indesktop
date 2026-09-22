@@ -168,7 +168,12 @@ WINDOW_PY_LINE_BUDGET = 4632
 # 两处接线），实测 2436。这是可用性修复（原实现让新开关在默认配置下整组隐藏），
 # 不是新功能；分页/拆分后预算会随实测下调（见「互动」域分页改造）。按文件约定
 # 只随实测校准，不为达标压行。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2436
+# 2026-09-22 上调到 2441：**组合越线**——#176（点击侧显隐解耦，2436）与
+# #177（音乐播放器路径接线的 +5）各自合并时都在预算内，合到一起才越线，
+# 又一次「红线是组合性质」的实例（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2）。
+# 实测 2441；随后即由「互动」域分页 + 抽 pet/settings_interaction.py 大幅下调，
+# 故这里只做一次性校准，不为达标压行。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2441
 
 
 def _read(name: str) -> str:
