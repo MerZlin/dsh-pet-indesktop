@@ -110,11 +110,14 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "self_talk_bubble_style",
         "self_talk_duration_seconds",
         "self_talk_enabled",
+        "self_talk_image_chance",
         "self_talk_image_dir",
         "self_talk_image_scale",
         "self_talk_max_interval",
         "self_talk_min_interval",
+        "self_talk_speak_enabled",
         "self_talk_texts",
+        "self_talk_voice_precache_enabled",
         "settings_process_isolation",
         "shift_drag",
         "show_dock_icon",
@@ -160,8 +163,10 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
 SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "chat", "file_interpret"})
 
 # 默认值 dict 键集合现状快照 = 白名单 ∪ 特例键。
-# 2026-09-17 加入 music_player_paths（交付前审查 P1-3 登记）后实测：
-# 白名单 118 + 特例 4 = 122。
+# 2026-09-17 加入 music_player_paths（交付前审查 P1-3 登记）。
+# 2026-09-22 加入点击台词朗读 / 台词本地语音预缓存 / 自言自语配图概率 3 键
+# （self_talk_speak_enabled、self_talk_voice_precache_enabled、self_talk_image_chance）
+# 后实测：白名单字面量 123 + 特例 5 = 128。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

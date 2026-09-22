@@ -34,6 +34,10 @@ DEFAULT_SELF_TALK_TEXTS = [
     "\u518d\u966a\u4f60\u4e00\u4f1a\u513f\u3002",
 ]
 DEFAULT_SELF_TALK_BUBBLE_STYLE = "classic_top"
+# 自言自语出图概率（百分比 0~100）：先决定"这次出图还是出文本"，再在对应池里等权
+# 抽一条。默认 30%——图片目录常有几十张图，若与文本等权随机会让图片彻底压过文本
+# （实测某配置 24 图 + 5 句 → 出图 82.8%，点击几乎总是弹图）。
+DEFAULT_SELF_TALK_IMAGE_CHANCE = 30
 DEFAULT_DIALOGUE_PHRASES = {}
 DEFAULT_COLLISION_SETTINGS = {
     "collision_enabled": True,
@@ -676,6 +680,7 @@ class Config:
             "self_talk_max_interval": DEFAULT_SELF_TALK_MAX_INTERVAL,
             "self_talk_duration_seconds": DEFAULT_SELF_TALK_DURATION_SECONDS,
             "self_talk_image_scale": 100,  # 气泡配图显示尺寸百分比（50~300，100 = 默认）
+            "self_talk_image_chance": DEFAULT_SELF_TALK_IMAGE_CHANCE,  # 出图概率百分比（0~100）
             "bubble_text_scale": 100,  # 气泡文字显示尺寸百分比（50~300，100 = 默认；气泡与字号一起放大）
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "self_talk_image_dir": "assets/big_blue_fat_fish",
@@ -705,6 +710,8 @@ class Config:
             "idle_low_fps_threshold": 30.0,  # 闲置阈值（秒）：超过该时长无交互且窗口可见才降帧
             "click_show_balance": False,  # 点击显示 DeepSeek 余额
             "click_show_self_talk": False,  # 点击随机显示自定义自言自语
+            "self_talk_speak_enabled": True,  # 点击自言自语同句朗读（复用语音报时音频通道）
+            "self_talk_voice_precache_enabled": False,  # 台词/点击绑定本地语音预缓存（需本机 TTS 服务，默认关）
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
             "balance_tier_labels_mode": "default",  # 峰谷提示文案：default / liangwen / custom
             "balance_tier_label_peak": "",  # 自定义“高峰”文本（custom 模式）
@@ -938,6 +945,7 @@ class Config:
             "self_talk_duration_seconds",
             "self_talk_image_dir",
             "self_talk_image_scale",
+            "self_talk_image_chance",
             "bubble_text_scale",
             "self_talk_bubble_style",
             "mouse_through",
@@ -964,6 +972,8 @@ class Config:
             "idle_low_fps_threshold",
             "click_show_balance",
             "click_show_self_talk",
+            "self_talk_speak_enabled",
+            "self_talk_voice_precache_enabled",
             "balance_refresh_minutes",
             "autostart_wanted",
             "harness_autostart",
@@ -1233,8 +1243,11 @@ class Config:
         )
         self.data["self_talk_image_dir"] = str(self.data.get("self_talk_image_dir") or "").strip()[:500]
         self.data["self_talk_image_scale"] = int(_float_or_default(self.data.get("self_talk_image_scale"), 100.0, 50.0, 300.0))
+        self.data["self_talk_image_chance"] = int(_float_or_default(self.data.get("self_talk_image_chance"), float(DEFAULT_SELF_TALK_IMAGE_CHANCE), 0.0, 100.0))
         self.data["bubble_text_scale"] = int(_float_or_default(self.data.get("bubble_text_scale"), 100.0, 50.0, 300.0))
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
+        self.data["self_talk_speak_enabled"] = _bool_or_default(self.data.get("self_talk_speak_enabled"), True)
+        self.data["self_talk_voice_precache_enabled"] = _bool_or_default(self.data.get("self_talk_voice_precache_enabled"), False)
         self.data["cursor_hidden_passthrough"] = _bool_or_default(self.data.get("cursor_hidden_passthrough"), True)
         self.data["spawn_inherit_size"] = _bool_or_default(self.data.get("spawn_inherit_size"), True)
         self.data["spawn_scale"] = _float_or_default(self.data.get("spawn_scale"), catalog.DEFAULT_SCALE, 0.1, 4.0)
@@ -1435,8 +1448,10 @@ class Config:
             "self_talk_duration_seconds",
             "self_talk_image_dir",
             "self_talk_image_scale",
+            "self_talk_image_chance",
             "bubble_text_scale",
             "self_talk_bubble_style",
+            "self_talk_voice_precache_enabled",
             "context_menu_appearance",
             "context_menu_layout",
             "quick_launch_apps",

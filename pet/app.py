@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ from . import autostart as autostart_mod
 from . import balance as balance_mod
 from . import catalog
 from . import click_sound
+from . import self_talk_voice
 from . import slot_manager as slot_manager_mod
 from . import updater
 from . import webm_clip as webm_clip_mod
@@ -472,6 +474,8 @@ class PetInstance:
         win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
         win.on_voice_chime_now = self._slot_wrap(self.shell.trigger_voice_chime_now)
         win.on_toggle_voice_chime = self._slot_wrap(self.shell.toggle_voice_chime)
+        # 点击自言自语的朗读走同一条音频通道（AppShell 持有，进程内唯一）。
+        win.on_self_talk_speak = self._slot_wrap(self.shell.speak_self_talk)
         win.on_festival_now = self._slot_wrap(self.shell.trigger_festival_now)
         win.on_toggle_festival = self._slot_wrap(self.shell.toggle_festival_reminder)
         win.on_restore_fun_windows = restore_ojingjing_windows
@@ -879,6 +883,9 @@ class PetInstance:
             self._sync_animation_prewarm()
             self._refresh_chat_windows()
             _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
+        # 台词可能刚被改动：把还没有本地音频的句子交给后台补齐（开关默认关闭，
+        # 关着时这里是 no-op；点了「编辑点击动画绑定」后直接 Esc 关设置也能一起收）
+        self.shell.precache_self_talk_voice("设置保存后")
         if (
             getattr(self, "_dock_icon_before_settings", None) is True
             and not bool(self.config.get("show_dock_icon", True))
@@ -1210,10 +1217,26 @@ class AppShell:
             and self.config.get("festival_reminder_speak", False)
         )
 
+    def _self_talk_speak_wanted(self) -> bool:
+        """点击自言自语朗读是否开启——它同样复用报时服务的音频通道。
+
+        只要求「点击触发自言自语」+ 本朗读开关：点击自言自语是独立开关，不与
+        「气泡自言自语」总开关（周期气泡）耦合，否则只想点击听声的用户永远拿不到
+        音频通道。避免给用不到的场景常驻一条音频通道。
+        """
+        return bool(
+            self.config.get("self_talk_speak_enabled", True)
+            and self.config.get("click_show_self_talk", False)
+        )
+
     def _chime_wanted(self) -> bool:
-        # 报时自身开启，或节日语音需要这条音频通道（两者共用一套合成与播放，
-        # 因此"通道是否存在"取决于两者之一是否需要）。
-        return bool(self.config.get("voice_chime_enabled", False)) or self._festival_speak_wanted()
+        # 报时自身开启，或节日语音 / 点击自言自语朗读需要这条音频通道（三者共用
+        # 一套合成与播放，因此"通道是否存在"取决于其中之一是否需要）。
+        return (
+            bool(self.config.get("voice_chime_enabled", False))
+            or self._festival_speak_wanted()
+            or self._self_talk_speak_wanted()
+        )
 
     def _ensure_chime_service(self):
         """懒创建语音报时服务（报时 / 手动触发 / 节日语音播报共用）。"""
@@ -1235,6 +1258,91 @@ class AppShell:
     def ensure_audio_channel(self):
         """对外暴露的音频通道（节日提醒语音复用报时服务的合成与播放）。"""
         return self._ensure_chime_service()
+
+    def self_talk_voice_file(self, text: str) -> Path | None:
+        """预缓存台词音频的查找路径；没有就返回 None。
+
+        命名约定与产出脚本（F:\\dsh\\tts\\build_self_talk_voice.py）一致：
+        ``<配置目录>/self_talk_voice/<md5(文本)[:16]>.wav``。刻意放配置目录而不是
+        仓库 assets —— 它属于用户数据（换资源包/更新不该丢），与报时缓存
+        voice_chime_cache 同级。
+        """
+        directory = getattr(getattr(self, "config", None), "dir", None)
+        if directory is None:
+            return None
+        name = hashlib.md5(str(text).strip().encode("utf-8")).hexdigest()[:16] + ".wav"
+        path = Path(directory) / "self_talk_voice" / name
+        try:
+            # 0 字节的残file不算命中（合成写入被打断会留下它）：播静音比回落
+            # 在线合成更糟——主人只会觉得"点了没声/坏了"，日志里什么都看不到。
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            pass
+        return None
+
+    def speak_self_talk(self, text: str = "") -> bool:
+        """点击自言自语朗读：把同一句话送进报时服务的音频通道。
+
+        优先播预缓存的本地文件（零延迟、断网可用）；没有缓存才回落到在线合成。
+
+        与 ``say_now`` 同理，通道可能是为本次点击才懒创建的（例如报时关着、
+        只想要点击出声），此时服务里的 ``_cfg`` 还是模块默认音色；未在运行就
+        先 ``apply_config()`` 读一次用户配置，才能用上选定的音色/语速/音量。
+
+        返回 False 仅表示文本为空或通道不可用；合成/播放失败只记日志——气泡由
+        调用方照常展示，"看得见听不见"好过"点一下什么都不发生"。
+        """
+        stripped = str(text or "").strip()
+        if not stripped:
+            return False
+        try:
+            channel = self.ensure_audio_channel()
+        except Exception:
+            logging.exception("获取音频通道失败，点击自言自语仅出气泡")
+            return False
+        if channel is None:
+            return False
+        cached = self.self_talk_voice_file(stripped)
+        if cached is not None:
+            try:
+                if channel.play_file(str(cached), log_tag="点击自言自语"):
+                    # 落一条日志：本地播报与"偷偷回落到在线合成"必须能分辨，
+                    # 否则文件名对不上时只会表现为"声音怎么变了"却查不出原因。
+                    logging.getLogger("dsh-pet-standalone").info(
+                        "点击自言自语：播放预缓存台词 %s（本地，不走网络）", cached.name)
+                    return True
+            except Exception:
+                logging.exception("本地台词播放失败，回退在线合成：%s", cached.name)
+        try:
+            # 运行中的通道配置由 _sync_chime_service 在保存时刷新；未运行才需补读。
+            if not channel.is_running():
+                channel.apply_config()
+            channel.speak(stripped, log_tag="点击自言自语")
+        except Exception:
+            logging.exception("点击自言自语语音播报失败")
+            return False
+        return True
+
+    def precache_self_talk_voice(self, reason: str = "") -> bool:
+        """把还没有本地音频的点击台词（含点击动画绑定台词）交给后台补齐。
+
+        为什么必须后台：本机合成一句要 20 秒上下（还要 ASR 回读校验、不满意就
+        重抽），保存设置或点击那一刻同步做必然卡顿。开关
+        ``self_talk_voice_precache_enabled`` 默认关闭——本机没装本地 TTS 服务是
+        常态，不开就不该发探测请求；服务不在线时后台线程安静收工。
+
+        返回是否真的起了新一轮（上一轮没跑完时返回 False，不排队）。
+        """
+        try:
+            started = self_talk_voice.start_precache(self.config)
+        except Exception:
+            logging.exception("启动台词语音预缓存失败（不影响点击朗读）")
+            return False
+        if started:
+            logging.getLogger("dsh-pet-standalone").info(
+                "已开始后台预缓存台词语音%s", f"（{reason}）" if reason else "")
+        return started
 
     def _sync_chime_service(self) -> None:
         """按配置启停语音报时服务；关闭时释放服务对象。"""
@@ -1575,10 +1683,27 @@ class AppShell:
         self._install_config_watcher()
         QTimer.singleShot(3500, self.instance._check_autostart_wanted)
         QTimer.singleShot(4000, self._maybe_autostart_harness)
+        # 启动时补一次：点击动画绑定对话框不走设置页保存信号，改动要等下次启动才被
+        # 发现（合成一句约 20 秒，放晚一点，别和首帧/动画预热抢资源）。
+        QTimer.singleShot(9000, self._precache_self_talk_voice_on_start)
         # issue #111：会话结束（Windows 关机/注销）探测器。必须在窗口就绪后安装
         # ——它要在关机窗口期到来**之前**就位，才能抢在会话拆除前关掉 ffmpeg
         # 派生（否则系统会弹 0xc0000142 阻塞关机）。
         self._install_session_watcher()
+
+    def _precache_self_talk_voice_on_start(self) -> None:
+        """启动后补一次台词预缓存。
+
+        单独方法而不是塞进 lambda：Qt 槽里抛的异常在 pythonw 下只进 stderr（GUI
+        程序没有控制台），表现为"什么都没发生"——本功能的第一个版本写成
+        ``lambda: self.shell.…``，而 ``start()`` 属于 AppShell 自己（没有
+        ``self.shell``），于是每次启动都静默 AttributeError，预缓存从未运行。
+        这里显式兜住并落日志，让失败一定看得见。
+        """
+        try:
+            self.precache_self_talk_voice("启动时")
+        except Exception:
+            logging.exception("启动时预缓存台词语音失败")
 
     def _install_session_watcher(self) -> None:
         """安装会话结束探测器（幂等；实例属性强引用保活，不跨实例共享）。"""

@@ -880,3 +880,175 @@ def test_queued_fire_discarded_after_stop(tmp_path, monkeypatch):
 
     assert played == []
     assert len(_WorkerSpy.instances) == workers_before, "stop 后不得补播排队项"
+
+
+# ------------------------------------------------- 点击自言自语朗读（本地预缓存）
+
+
+def test_local_playback_skips_missing_file_and_busy_channel(tmp_path, monkeypatch):
+    """本地文件播报：文件不存在不播；通道忙时既不打断也不排队。"""
+    svc = object.__new__(VoiceChimeService)
+    svc._busy = False
+    svc._player = None
+    played: list[str] = []
+    monkeypatch.setattr(svc, "_play_only", lambda path: played.append(path) or True)
+
+    assert svc.play_file(str(tmp_path / "nope.wav")) is False
+    assert played == []
+
+    wav = tmp_path / "line.wav"
+    wav.write_bytes(b"RIFF0000WAVE")
+    assert svc.play_file(str(wav)) is True
+    assert played == [str(wav)]
+
+    svc._busy = True  # 合成中：点击台词晚几秒再冒出来反而突兀，直接放弃
+    played.clear()
+    assert svc.play_file(str(wav)) is False
+    assert played == []
+
+
+def test_audio_channel_survives_on_self_talk_speak_alone(tmp_path):
+    """报时关闭、只剩点击自言自语朗读时，通道同样不能被释放。
+
+    与节日语音同理：通道随报时开关一起被释放，点击朗读就会「有气泡没声音」。
+    """
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    cfg.set("voice_chime_enabled", False)
+    cfg.set("self_talk_enabled", True)
+    cfg.set("click_show_self_talk", True)
+    cfg.set("self_talk_speak_enabled", True)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    shell._sync_chime_service()
+    assert shell.voice_chime_service is not None, "点击朗读需要通道"
+
+    cfg.set("self_talk_speak_enabled", False)
+    shell._sync_chime_service()
+    assert shell.voice_chime_service is None, "三个消费者都关掉后通道应释放"
+
+
+def test_audio_channel_not_created_for_self_talk_speak_alone(tmp_path):
+    """只想朗读、但点击自言自语本身没开时不该白建通道（懒创建语义不变）。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    cfg.set("voice_chime_enabled", False)
+    cfg.set("self_talk_enabled", False)
+    cfg.set("click_show_self_talk", False)
+    cfg.set("self_talk_speak_enabled", True)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+    shell._sync_chime_service()
+    assert shell.voice_chime_service is None
+
+
+def _precached_wav(cfg, text: str) -> Path:
+    """按与产品一致的命名约定放一个假音频文件，返回其路径。"""
+    import hashlib
+
+    name = hashlib.md5(text.encode("utf-8")).hexdigest()[:16] + ".wav"
+    voice_dir = Path(cfg.dir) / "self_talk_voice"
+    voice_dir.mkdir(parents=True, exist_ok=True)
+    path = voice_dir / name
+    path.write_bytes(b"RIFF0000WAVE")
+    return path
+
+
+def _recording_channel(played: list, spoken: list, *, play_ok: bool = True):
+    class FakeChannel:
+        def is_running(self):
+            return True
+
+        def apply_config(self):
+            pass
+
+        def play_file(self, path, *, log_tag=""):
+            played.append(path)
+            return play_ok
+
+        def speak(self, text, *, log_tag=""):
+            spoken.append(text)
+            return True
+
+    return FakeChannel()
+
+
+def test_speak_self_talk_prefers_precached_file(tmp_path, monkeypatch):
+    """预缓存命中 → 直接播本地文件：零延迟、断网也能说。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    text = "今天也要认真工作呀。"
+    cached = _precached_wav(cfg, text)
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken))
+
+    assert shell.speak_self_talk(text) is True
+    assert played == [str(cached)]
+    assert spoken == [], "命中预缓存就不该再走在线合成"
+
+
+def test_speak_self_talk_ignores_empty_cache_file(tmp_path, monkeypatch):
+    """0 字节缓存不算命中：宁可回落在线合成出声，也不要播静音。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    text = "好女孩……"
+    _precached_wav(cfg, text).write_bytes(b"")  # 写到一半被打断留下的残file
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken))
+
+    assert shell.speak_self_talk(text) is True
+    assert played == [], "空文件不该交给播放器"
+    assert spoken == [text], "要回落在线上合成，别让这句话变成静音"
+
+
+def test_speak_self_talk_falls_back_to_synthesis_without_cache(tmp_path, monkeypatch):
+    """没有预缓存文件时（例如主人新加的台词）仍走在线合成。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken))
+
+    assert shell.speak_self_talk("一句还没预缓存的新台词。") is True
+    assert played == []
+    assert spoken == ["一句还没预缓存的新台词。"]
+
+
+def test_speak_self_talk_falls_back_when_local_playback_fails(tmp_path, monkeypatch):
+    """本地文件播不出来（通道忙/解码失败）时，这句话不能就此丢掉。"""
+    from pet.app import AppShell
+
+    _qapp()
+    cfg = Config(base=tmp_path)
+    shell = AppShell(_qapp(), cfg, enable_chat=False)
+
+    text = "再陪你一会儿。"
+    _precached_wav(cfg, text)
+    played: list[str] = []
+    spoken: list[str] = []
+    monkeypatch.setattr(shell, "ensure_audio_channel",
+                        lambda: _recording_channel(played, spoken, play_ok=False))
+
+    assert shell.speak_self_talk(text) is True
+    assert played, "先尝试本地文件"
+    assert spoken == [text], "本地播不了要回退在线合成"

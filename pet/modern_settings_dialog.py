@@ -660,7 +660,21 @@ class ModernSettingsDialog(QDialog):
             SettingRow("click_sound_pack", "音效音源", "选择预设音效包、自定义音频文件或文件夹随机播放。", self.click_sound_picker, stacked=True),
             SettingRow("click_sound_volume", "音效音量", "调整点击音效播放音量。", self.click_sound_volume_spin),
             SettingRow("click_sound_preview", "试听音效", "测试当前选择的点击音效。", self.click_sound_preview_btn),
-            SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容。", self.click_self_talk_check),
+            SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容；打开后可用下方两项把同一句读出来。", self.click_self_talk_check),
+            SettingRow(
+                "click_self_talk_speak",
+                "点击台词朗读",
+                "点击触发自言自语时，用语音报时的音色把这句话读出来（与报时共用音频通道，不会叠音）。",
+                self.click_self_talk_speak_check,
+            ),
+            SettingRow(
+                "click_self_talk_precache",
+                "台词自动预缓存",
+                "保存设置后，在后台把点击台词与点击动画绑定台词合成为本机语音文件，"
+                "点击时秒出、断网也能说（需要本机 CosyVoice 语音服务在运行；"
+                "没装本地语音服务时保持关闭即可，新台词仍走在线合成）。",
+                self.self_talk_voice_precache_check,
+            ),
             SettingRow(
                 "golden_spin_click",
                 "点击触发黄金回旋",
@@ -703,6 +717,13 @@ class ModernSettingsDialog(QDialog):
                         stacked=True,
                     ),
                     SettingRow("self_talk_image_scale", "配图大小", "气泡里配图的显示尺寸（100% 为默认）。", self.self_talk_image_scale_spin),
+                    SettingRow(
+                        "self_talk_image_chance",
+                        "配图概率",
+                        "点击/定时自言自语时显示配图的概率，其余显示文本；0% 表示只出文本。"
+                        "图片目录里往往有几十张图，这一项决定文本还能不能轮到（默认 30%）。",
+                        self.self_talk_image_chance_spin,
+                    ),
                     SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", self.click_talk_bindings_btn),
                 ],
                 behavior_content,
@@ -1003,7 +1024,9 @@ class ModernSettingsDialog(QDialog):
             self.pro_idle_check.toggled.connect(self._update_proactive_idle_controls)
         self.spawn_inherit_size_check.toggled.connect(self._update_spawn_size_controls)
         self.golden_spin_click_check.toggled.connect(self._update_golden_spin_controls)
+        self.click_self_talk_check.toggled.connect(self._update_click_self_talk_controls)
         self._update_self_talk_controls(self.self_talk_check.isChecked())
+        self._update_click_self_talk_controls(self.click_self_talk_check.isChecked())
         self._update_translucency_controls(self.menu_translucent_check.isChecked())
         self._update_island_controls(self.island_enabled_check.isChecked())
         self._update_egg_controls(self.egg_enabled_check.isChecked())
@@ -1284,6 +1307,12 @@ class ModernSettingsDialog(QDialog):
         return row
 
     def _update_self_talk_controls(self, enabled: bool) -> None:
+        """周期气泡（``self_talk``）的细项显隐。
+
+        点击侧（``click_self_talk*`` / ``click_talk_bindings``）**不在这里**：它们是
+        独立开关的后续项，见 :meth:`_update_click_self_talk_controls`。绑在一起会让
+        「只想点击听声」的用户在设置页里连开关都看不到。
+        """
         keys = (
             "self_talk_duration",
             "self_talk_min",
@@ -1291,10 +1320,22 @@ class ModernSettingsDialog(QDialog):
             "self_talk_texts",
             "self_talk_images",
             "self_talk_image_scale",
-            "click_self_talk",
-            "click_talk_bindings",
+            "self_talk_image_chance",
         )
         self._set_setting_rows_visible(keys, enabled)
+
+    def _update_click_self_talk_controls(self, enabled: bool) -> None:
+        """点击自言自语（``click_self_talk``）的后续项显隐。
+
+        预缓存也跟这里：只有点击链路才会把台词**读出来**（周期气泡只显示不朗读），
+        所以点击开关关着时预缓存没有意义。
+        """
+        keys = (
+            "click_self_talk_speak",
+            "click_self_talk_precache",
+            "click_talk_bindings",
+        )
+        self._set_setting_rows_visible(keys, enabled, dependency="click_self_talk")
 
     def _update_island_controls(self, enabled: bool) -> None:
         settings_pet_controls._update_island_controls(self, enabled)
@@ -1740,6 +1781,7 @@ class ModernSettingsDialog(QDialog):
                         "self_talk_texts",
                         "self_talk_images",
                         "self_talk_image_scale",
+                        "self_talk_image_chance",
                     ),
                 ),
             ]
@@ -2169,6 +2211,9 @@ class ModernSettingsDialog(QDialog):
         if self.click_balance_check is not None:
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
+        self.config.set("self_talk_speak_enabled", self.click_self_talk_speak_check.isChecked())
+        self.config.set("self_talk_voice_precache_enabled",
+                        self.self_talk_voice_precache_check.isChecked())
         self.config.set("music_sing_enabled", self.music_sing_check.isChecked())
         if getattr(self, "music_lyric_check", None) is not None:
             self.config.set("music_lyric_enabled", self.music_lyric_check.isChecked())
@@ -2208,6 +2253,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_texts", texts or list(DEFAULT_SELF_TALK_TEXTS))
         self.config.set("self_talk_image_dir", self.self_talk_image_dir_picker.text())
         self.config.set("self_talk_image_scale", self.self_talk_image_scale_spin.value())
+        self.config.set("self_talk_image_chance", self.self_talk_image_chance_spin.value())
         self.config.set("bubble_text_scale", self.bubble_text_scale_spin.value())
         # Agent 联动：自定义 thinking 文案与音效（合并写回，不覆盖 agent_link 其他开关）
         self.config.set("dialogue_mode", str(self.dialogue_mode_select.currentData() or "legacy"))

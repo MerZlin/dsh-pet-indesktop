@@ -3449,7 +3449,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._schedule_click_sound()
         if self.click_show_balance and callable(self.on_show_balance):
             self.on_show_balance(self)
-        elif self.click_show_self_talk and self._self_talk_enabled:
+        elif self.click_show_self_talk:
+            # 点击自言自语是**独立开关**：只认 ``click_show_self_talk``，不再搭
+            # 「气泡自言自语」总开关（那是周期气泡的开关；两者绑在一起会让"只想
+            # 点击听声"的用户无从开启——设置页里这三行也因此曾被一起隐藏）。
             if self._show_click_self_talk(click_name):
                 self._schedule_self_talk(after_display=True)
 

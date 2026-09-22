@@ -71,7 +71,7 @@ D:\dsh-pet\
 │   ├── window.py                 # 桌宠主窗口（组合根，4599 行，预算 4632）
 │   ├── config.py                 # 配置读取/清洗/迁移/持久化（1555 行）
 │   ├── config_domains.py         # 配置域 facade（chat/agent_link/proactive/collision/menu）
-│   ├── modern_settings_dialog.py # 现代设置主对话框（2390 行，预算 2401）
+│   ├── modern_settings_dialog.py # 现代设置主对话框（2436 行，预算 2436）
 │   ├── settings_widgets.py       # 设置控件库（ToggleSwitch / SettingRow / ModernSelect …）
 │   ├── speech_bubble.py          # 气泡绘制与交互（1160 行）
 │   ├── speech_bubble_text.py     # 气泡分页/定位纯函数（272 行）
@@ -190,7 +190,7 @@ modern_settings_dialog.py
 | 文件 | 预算常量 | 当前预算 | 当前实测 |
 |---|---|---|---|
 | `pet/window.py` | `WINDOW_PY_LINE_BUDGET` | **4632** | 4599 |
-| `pet/modern_settings_dialog.py` | `MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET` | **2401** | 2390 |
+| `pet/modern_settings_dialog.py` | `MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET` | **2436** | 2436 |
 
 **触发预算时的正确动作（优先级从高到低）**：
 
@@ -539,7 +539,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 | 优先级 | 事项 | 说明 / 切入点 |
 |---|---|---|
 | 高 | `window.py` 增量拆分 | 4599/4632；按 `docs/WINDOW_PY_SPLIT_GUIDE.md` 域地图拆控制器 |
-| 高 | `modern_settings_dialog.py` 再拆分 | 余量仅 11 行（2390/2401）；新设置页应先拆到独立 `*_settings.py` |
+| 高 | `modern_settings_dialog.py` 再拆分 | 余量 0 行（2436/2436，预算随实测校准）；「互动」域分页 + 抽 `pet/settings_interaction.py` 已在排期，届时预算随实测下调 |
 | 中 | 离线音色兜底（候选：Windows SAPI / pyttsx3） | 当前 edge-tts 不可用时仅气泡；可评估本地离线音色作为第二合成后端 |
 | 中 | 任务栏隐藏模式下的报时行为验证 | 隐藏/自动隐藏场景下气泡与播放位置的体验待专项验证 |
 | 中 | 报时缓存管理入口 | 设置页可加「清理语音缓存」按钮（当前仅自动裁剪 200 文件） |
