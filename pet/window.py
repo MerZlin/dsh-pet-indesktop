@@ -342,6 +342,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
     look_done = Signal(str, str, bool)
     fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
     cursor_visibility_changed = Signal(str)
+    # 首帧就绪（一次性）：v4.2.1 起 GUI 线程不再同步解码首帧（da8f291），窗口刚
+    # show() 时 icon_pixmap() 还是空图——托盘图标需要这个信号在上线后补画。
+    frame_ready = Signal()
 
     # 类级兜底默认值：测试里有绕过 __init__ 的轻量子类桩（_SignalPet 等），
     # 它们继承真实 moveEvent/_on_squash_tick——这些属性必须有类级默认。
@@ -578,6 +581,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._switch_retry_timer.setInterval(_SWITCH_RETRY_DELAY_MS)
         self._switch_retry_timer.timeout.connect(self._on_switch_retry_timeout)
         self._frame_pixmap: QPixmap | None = None
+        self._frame_ready_emitted = False  # 首帧就绪信号（frame_ready）只发一次
         # 角色可见轮廓（窗口局部坐标）与逐像素命中缓存；贴边功能复用 _mask_bounds
         self._mask_bounds: QRect | None = None
         # 碰撞体稳定边界：当前动画各帧 _mask_bounds 的并集（只增不减，
@@ -2121,6 +2125,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             # fromImage（浅共享）（P0 观测：重建的缩放段成本）。
             perfstats.time('rebuild.scale', perfstats.clock() - _scale_t0)
         self._frame_pixmap = pm
+        if not getattr(self, '_frame_ready_emitted', False):
+            # 首帧就绪：窗口刚 show() 时拿不到画面的下游（托盘图标）在此补画一次。
+            # 两层 getattr 兜底：测试里有只挂载 _rebuild_frame 的假窗口
+            #（_RebuildPet 等），既没有本标志也没有 frame_ready 信号。
+            self._frame_ready_emitted = True
+            signal = getattr(self, 'frame_ready', None)
+            if signal is not None:
+                signal.emit()
         # 命中测试复用这份缩放后的预乘图，避免 _is_transparent_at 再次 toImage
         self._hit_alpha_image = img
         self._frame_key = key
