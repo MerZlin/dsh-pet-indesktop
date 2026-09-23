@@ -342,6 +342,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
     look_done = Signal(str, str, bool)
     fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
     cursor_visibility_changed = Signal(str)
+    # 首帧就绪（一次性）：v4.2.1 起 GUI 线程不再同步解码首帧（da8f291），窗口刚
+    # show() 时 icon_pixmap() 还是空图——托盘图标需要这个信号在上线后补画。
+    frame_ready = Signal()
 
     # 类级兜底默认值：测试里有绕过 __init__ 的轻量子类桩（_SignalPet 等），
     # 它们继承真实 moveEvent/_on_squash_tick——这些属性必须有类级默认。
@@ -578,6 +581,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._switch_retry_timer.setInterval(_SWITCH_RETRY_DELAY_MS)
         self._switch_retry_timer.timeout.connect(self._on_switch_retry_timeout)
         self._frame_pixmap: QPixmap | None = None
+        self._frame_ready_emitted = False  # 首帧就绪信号（frame_ready）只发一次
         # 角色可见轮廓（窗口局部坐标）与逐像素命中缓存；贴边功能复用 _mask_bounds
         self._mask_bounds: QRect | None = None
         # 碰撞体稳定边界：当前动画各帧 _mask_bounds 的并集（只增不减，
@@ -674,6 +678,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._physics_timer.setTimerType(Qt.TimerType.PreciseTimer)  # 同上：抛掷/落地弹跳的位置节拍必须均匀
         self._physics_timer.timeout.connect(self._on_physics_tick)
         self._physics_mode: str | None = None  # None / 'drag' / 'throw'
+        # 多屏活动区域快照（window_placement.desktop_area）：一次拖拽/抛掷取一次，
+        # 物理 tick 里只读它，不重复枚举显示器；None = 单屏/几何异常，走本屏语义。
+        self._interaction_area = None
         self._phys_pos = [0.0, 0.0]
         self._phys_vel = [0.0, 0.0]
         self._drag_target: QPoint | None = None
@@ -2118,6 +2125,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             # fromImage（浅共享）（P0 观测：重建的缩放段成本）。
             perfstats.time('rebuild.scale', perfstats.clock() - _scale_t0)
         self._frame_pixmap = pm
+        if not getattr(self, '_frame_ready_emitted', False):
+            # 首帧就绪：窗口刚 show() 时拿不到画面的下游（托盘图标）在此补画一次。
+            # 两层 getattr 兜底：测试里有只挂载 _rebuild_frame 的假窗口
+            #（_RebuildPet 等），既没有本标志也没有 frame_ready 信号。
+            self._frame_ready_emitted = True
+            signal = getattr(self, 'frame_ready', None)
+            if signal is not None:
+                signal.emit()
         # 命中测试复用这份缩放后的预乘图，避免 _is_transparent_at 再次 toImage
         self._hit_alpha_image = img
         self._frame_key = key
@@ -3289,6 +3304,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 return
             self._dragging = True
             self._interaction_state = "DRAGGING"
+            # 多屏：拖拽期间允许越屏（一次交互取一次快照，物理 tick 里只读它）
+            self._interaction_area = window_placement.desktop_area()
             self._effects_on_drag_started()
             self._submit_collision_state(force=True)
             # 用户真正开始拖动 = 接管位置决策，撤销"等副屏上线自动恢复"
@@ -3379,6 +3396,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 if self._grab_offset is not None:
                     self._move_window_towards(g.x() - self._grab_offset.x(),
                                               g.y() - self._grab_offset.y())  # 停在松手处
+                self._interaction_area = None  # 普通拖拽结束：多屏快照释放，回本屏语义
                 self._save_position()
             self._position_sync_now()  # 松手后的最终位置立即同步（气泡/监听器），不等去抖
             if self.idles and self._physics_mode != 'throw':
@@ -4266,6 +4284,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         was_throw = self._physics_mode == 'throw'
         self._physics_timer.stop()
         self._physics_mode = None
+        self._interaction_area = None  # 物理结束：多屏活动范围快照随之释放
         getattr(self, 'movie', None) and self.movie.set_playback_speed(float(getattr(self, 'playback_speed', 1.0)))  # 飞行期动画加速复位（回用户速率，非 1.0）
         self._unpin_landing_idles()  # 飞行结束：摘掉起飞首帧保护（pin 只在飞行期存在）
         if getattr(self, '_interaction_state', IDLE) == THROWN:
@@ -4286,6 +4305,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._cancel_move()
         self._cancel_animation_gap()
         self._physics_mode = mode
+        # 多屏：拖拽/抛掷期间允许越屏。快照一次交互只取一次，物理 tick 里只读它。
+        self._interaction_area = (
+            window_placement.desktop_area() if mode in ('drag', 'throw') else None
+        )
         if mode == 'throw':
             self._throw_slow_switched = False  # 每次弹射只允许一次降速过渡
             self._warm_landing_idles()

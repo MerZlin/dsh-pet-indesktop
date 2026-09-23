@@ -33,7 +33,7 @@ from pathlib import Path
 import shiboken6
 from PySide6.QtCore import QObject, QPoint, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon, QWidget
 
 from . import autostart as autostart_mod
 from . import balance as balance_mod
@@ -44,6 +44,7 @@ from . import slot_manager as slot_manager_mod
 from . import updater
 from . import webm_clip as webm_clip_mod
 from .config import APP_DIR_NAME, Config, _default_base
+from .context_menus.icons import vector_menu_icon
 from .context_menus.shared import open_deepseek_web
 from .desktop_notify import DesktopNotification, position_stack
 from .harness_launcher import launch_harness_gui
@@ -3106,16 +3107,35 @@ class AppShell:
         ]
         position_stack(self._toast_windows)
 
+    def _tray_placeholder_icon(self) -> QIcon:
+        """首帧还没解码时的托盘占位图标：复用既有矢量图标语言，不用新素材。
+
+        刻意不把桌宠窗口传进去取主题色——_build_tray 的调用方可能是非 QWidget
+        的替身窗口（测试），而托盘观感本来就该跟窗口 QSS 无关。
+        """
+        return vector_menu_icon(QWidget(), "pet", 64)
+
     def _build_tray(self, win: PetWindow, tray: QSystemTrayIcon | None = None) -> QSystemTrayIcon:
         # 批5.2：可复用已有托盘（_refresh_tray_menu 传 self.tray），避免多窗各自
         # 建托盘图标；新建时绑定双击切换，复用时不重复连接（activated 只接一次）。
         if tray is None:
-            tray = QSystemTrayIcon(QIcon(win.icon_pixmap()))
+            icon = QIcon(win.icon_pixmap())
+            pending = icon.isNull()
+            if pending:
+                # 首帧还没解码时 icon_pixmap() 是空图：直接拿去建托盘会得到一个
+                # 没有图标的条目（用户反馈「托盘图标消失了」，且此后永不刷新）。
+                # 先用占位图标顶上，首帧就绪后再换角色头像。
+                icon = self._tray_placeholder_icon()
+            tray = QSystemTrayIcon(icon)
             tray.activated.connect(
                 lambda reason: self._toggle_primary_pet_visible()
                 if reason == QSystemTrayIcon.ActivationReason.DoubleClick
                 else None
             )
+            if pending:
+                ready = getattr(win, "frame_ready", None)
+                if ready is not None:
+                    ready.connect(lambda: tray.setIcon(QIcon(win.icon_pixmap())))
 
         def toggle_visible() -> None:
             if win.isVisible():
