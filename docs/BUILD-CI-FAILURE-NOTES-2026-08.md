@@ -248,6 +248,26 @@ git push origin v4.0.5
   一旦用子进程，就按上面两条硬约束写，否则 CI 会以"卡死"的形式红（比断言失败
   更难查：日志在 job 结束前不可见）。
 
+### 5.5 打包冒烟门禁「固定 sleep + 单次判定」= 假红（2026-09-23 实例）
+
+- **形态**：`scripts/build_onedir.ps1` 的 exe 冒烟原本是 `Start-Sleep -Seconds 10`
+  后只看一次 `MainWindowHandle`。而 runner 冷启动（首次读满 onedir 目录 + 杀毒逐
+  DLL 扫描）出窗时间本来就贴着 10 s，这门禁等于在赌时序。
+- **实例**：v4.2.1 同版本重构建 run `35890449637` 红在
+  `[smoke] --settings running but no settings window appeared`；对照**同依赖版本**的
+  上一次成功构建 run `35827896726`，`--settings` 是**10.05 s 压线通过**
+  （06:47:39.368 launched → 06:47:49.421 OK）。两次只差 0.2 s，而改动 diff 与设置
+  进程零关联（设置进程刻意不 import `pet.app`）——按「CI 红先读日志再动手」判定
+  为门禁脆弱而非产品回归，不修产品代码。
+- **本机实测**（当前 main 源码 + 重定向 APPDATA 隔离配置）：`python -m pet --settings`
+  **1.61 s** 出窗；已打包产物热盘 **1.42 s**；**从未跑过的 bundle 首启主窗 44.4 s**
+  （杀毒软件首扫 330 MB 目录）。「慢」是常态量级问题，不是异常。
+- **正确写法**：`Wait-SmokeWindow`（本次新增）——250 ms 轮询、90 s 宽预算、超时才
+  判死，并把实测出窗耗时打进日志（区分「慢」与「没来」）。主窗改用 `try/finally`
+  保证任何分支都回收进程。`build_macos.sh` / `build_linux.sh` 无 GUI 冒烟，不受影响。
+- **判据**：凡「等某异步事件发生」的门禁一律轮询到超时，禁止固定 sleep 后单次判定；
+  预算取已观测最坏值的 2 倍。
+
 ---
 
 ## 六、发布前检查清单

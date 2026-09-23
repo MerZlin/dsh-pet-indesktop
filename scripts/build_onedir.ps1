@@ -411,6 +411,37 @@ if (-not $SkipCheck) {
     }
 }
 
+# 窗口出现等待：轮询 + 宽预算，禁止「固定 sleep 后只判一次」。
+# 依据（2026-09-23 v4.2.1 同版本重构建实踩）：Windows runner 冷启动 ~10 s 才出窗，
+# 旧写法 sleep 10 s 后只判一次，上一次侥幸 10.05 s 过、这一次 >10 s 直接假红。
+# 本机更极端：从未跑过的 bundle 首启主窗实测 44.4 s（杀毒软件首扫 330 MB 目录），
+# 热盘时同一步只要 1.9 s。窗口出现是异步事件，只能轮询等；超时才判死。
+# 预算 90 s = 已观测最坏值的 2 倍，且每次都打印实测耗时，便于日后判假红。
+function Wait-SmokeWindow {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [string]$EarlyExitHint = 'runtime dependency broken',
+        [string]$NoWindowHint = "startup failed (likely 'Failed to execute script')",
+        [int]$TimeoutSec = 90
+    )
+    $t0 = Get-Date
+    $deadline = $t0.AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        if ($Process.HasExited) {
+            throw "[smoke] $Label exited early (code $($Process.ExitCode)) - $EarlyExitHint"
+        }
+        $Process.Refresh()
+        if ($Process.MainWindowHandle -ne 0) {
+            $elapsed = ((Get-Date) - $t0).TotalSeconds
+            Write-Host ("[smoke] $Label window appeared after {0:N1}s" -f $elapsed) -ForegroundColor DarkGray
+            return
+        }
+    }
+    throw "[smoke] $Label running but no window appeared within ${TimeoutSec}s - $NoWindowHint"
+}
+
 # ---------- exe smoke test（启动成功才继续打包） ----------
 # 注意：PyInstaller --windowed 在 import 失败时会弹错误对话框且进程存活，
 # 只看"进程 8 秒没退出"是假阳性。这里先做确定性加载链验证（从 bundle 布局
@@ -427,16 +458,11 @@ Write-Host "[smoke] bundle DLL chain OK" -ForegroundColor Green
 
 Write-Host "[smoke] Launching $exePath ..." -ForegroundColor Cyan
 $proc = Start-Process -FilePath $exePath -PassThru
-Start-Sleep -Seconds 10
-if ($proc.HasExited) {
-    throw "[smoke] exe exited early (code $($proc.ExitCode)) - runtime dependency broken"
+try {
+    Wait-SmokeWindow -Process $proc -Label 'exe'
+} finally {
+    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
 }
-$proc.Refresh()
-if ($proc.MainWindowHandle -eq 0) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    throw "[smoke] exe running but no main window appeared - startup failed (likely 'Failed to execute script')"
-}
-Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 Write-Host "[smoke] exe started OK" -ForegroundColor Green
 
 # ---------- --settings 分流冒烟（设置页进程隔离） ----------
@@ -450,14 +476,9 @@ $env:APPDATA = $smokeBase
 $settingsProc = $null
 try {
     $settingsProc = Start-Process -FilePath $exePath -ArgumentList '--settings' -PassThru
-    Start-Sleep -Seconds 10
-    if ($settingsProc.HasExited) {
-        throw "[smoke] --settings exited early (code $($settingsProc.ExitCode)) - arg routing broken"
-    }
-    $settingsProc.Refresh()
-    if ($settingsProc.MainWindowHandle -eq 0) {
-        throw "[smoke] --settings running but no settings window appeared"
-    }
+    Wait-SmokeWindow -Process $settingsProc -Label '--settings' `
+        -EarlyExitHint 'arg routing broken' `
+        -NoWindowHint 'no settings window appeared'
     # 配置目录名随打包变体走（= $name，如 dsh-pet-standalone-webm-chat），
     # 写死基础名会让 webm-chat 等变体误报"没拿到锁"（实机踩过）
     $settingsLock = Join-Path (Join-Path $smokeBase $name) 'settings.lock'
