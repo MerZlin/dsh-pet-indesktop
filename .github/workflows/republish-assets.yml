@@ -1,0 +1,80 @@
+# 把已构建好的产物（某个 run 的 Artifacts）搬进已存在的 Release，覆盖同名附件。
+#
+# 用途：发布后需要**同版本重构建**某个变体（例如纯桌宠版补丁）时使用——
+# 不必重打 tag、不必本地下载大文件、也不触发新的 Release 创建。
+#
+# 用法：Actions → Republish Release Assets → Run workflow，填：
+#   tag     : 目标 Release 的 tag（如 v4.2.1）
+#   run_ids : 产物来源的 run id，逗号分隔（例如 35827896726,35827899207,35827901927）
+#   globs   : 只搬这些文件名的附件（每行一个，支持 shell 通配；默认=纯桌宠版 4 件）
+#
+# 说明：`gh run download` 在 runner 上执行，产物**不出 GitHub**；上传用
+# `gh release upload --clobber`，同名附件被原子替换，其余附件与 tag/正文不受影响。
+
+name: Republish Release Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '目标 Release 的 tag（如 v4.2.1）'
+        required: true
+        default: 'v4.2.1'
+      run_ids:
+        description: '产物来源 run id（逗号分隔）'
+        required: true
+      globs:
+        description: '要覆盖的附件文件名（每行一个，支持通配；留空=纯桌宠版 4 件）'
+        required: false
+        default: |
+          dsh-pet-standalone-webm-portable.zip
+          dsh-pet-standalone-webm-setup.exe
+          dsh-pet-standalone-webm-macos-arm64.zip
+          dsh-pet-standalone-webm-linux-x86_64.zip
+
+permissions:
+  contents: write    # 覆盖 Release 附件
+  actions: read      # 读取其它 run 的 Artifacts
+
+jobs:
+  republish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch artifacts from source runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging upload
+          IFS=',' read -ra RUNS <<< "${{ inputs.run_ids }}"
+          for rid in "${RUNS[@]}"; do
+            rid="$(echo "$rid" | tr -d '[:space:]')"
+            [ -n "$rid" ] || continue
+            echo "==> 下载 run $rid 的产物"
+            gh run download "$rid" -R "${{ github.repository }}" -D "staging/run-$rid"
+          done
+          echo "==> 待搬运的文件（来源）"
+          find staging -type f -printf '%s\t%p\n' | sort -k2
+          echo "==> 按 globs 挑选"
+          : > /tmp/files.txt
+          while IFS= read -r pat; do
+            pat="$(echo "$pat" | tr -d '[:space:]')"
+            [ -n "$pat" ] || continue
+            find staging -type f -name "$pat" -print >> /tmp/files.txt
+          done <<< "${{ inputs.globs }}"
+          sort -u /tmp/files.txt | while read -r f; do cp -v "$f" upload/; done
+          echo "==> 待上传（$(find upload -type f | wc -l) 个）"
+          ls -l upload
+
+      - name: Upload to release (overwrite same names)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A upload)" ]; then
+            echo "!! 没有挑选到任何文件，中止（避免误删/误传）"; exit 1
+          fi
+          gh release upload "${{ inputs.tag }}" upload/* --clobber -R "${{ github.repository }}"
+          echo "==> 覆盖后的附件清单"
+          gh release view "${{ inputs.tag }}" -R "${{ github.repository }}" \
+            --json assets --jq '.assets[] | "\(.name)\t\(.size)\t\(.updatedAt)"'
