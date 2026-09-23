@@ -200,6 +200,9 @@ def test_anim_end_during_throw_low_speed_allows_warm_pool(tmp_path, app):
     win = _make_window(tmp_path)
     win._switch("写代码")
     win._enter_physics_mode('throw')
+    # 前提建模：idle/turn 池首帧已热（idle 起飞预热 / turn pinned 常驻）
+    for n in (*win.idles, *win.turns):
+        win.lib.movie(n)._first_image = object()
     win._phys_vel[:] = [120.0, 0.0]  # 低速段
     win._on_anim_ended("写代码")
     assert win.anim in (*win.idles, *win.turns)  # 只许必热池
@@ -211,6 +214,7 @@ def test_low_speed_pool_excludes_current(tmp_path, app):
     """低速段池切换排除当前动画（避免同名自切）。"""
     win = _make_window(tmp_path)
     win._enter_physics_mode('throw')
+    win.lib.movie(catalog.TURN)._first_image = object()  # 前提建模：turn pinned 常驻必热
     win._phys_vel[:] = [100.0, 0.0]
     win._switch(catalog.IDLE)
     win._on_anim_ended(catalog.IDLE)
@@ -271,6 +275,7 @@ def test_low_speed_cold_rolled_act_falls_back(tmp_path, app, monkeypatch):
     win = _make_window(tmp_path)
     win._switch(catalog.IDLE)
     win._enter_physics_mode('throw')
+    win.lib.movie(catalog.TURN)._first_image = object()  # 前提建模：turn pinned 常驻必热
     win._phys_vel[:] = [120.0, 0.0]
     win._on_anim_ended(catalog.IDLE)  # 写代码首帧冷 → 退回池排除 IDLE → turn
     assert win.anim == catalog.TURN
@@ -285,6 +290,9 @@ def test_tick_low_speed_transition_switches_out_of_drag(tmp_path, app):
     """
     win = _make_window(tmp_path)
     win._enter_physics_mode('throw')
+    # 前提建模：idle/turn 池首帧已热（idle 起飞预热 / turn pinned 常驻）
+    for n in (*win.idles, *win.turns):
+        win.lib.movie(n)._first_image = object()
     win._switch(catalog.DRAG)
     win._phys_pos[:] = [200.0, 200.0]
     win._phys_vel[:] = [900.0, 0.0]  # 高速段
@@ -297,4 +305,61 @@ def test_tick_low_speed_transition_switches_out_of_drag(tmp_path, app):
     assert win.anim != catalog.DRAG
     assert win.anim in (*win.idles, *win.turns, *win.acts, *win.moves)
     win._stop_physics()
+    win.close()
+
+def test_low_speed_all_cold_pool_restarts_current(tmp_path, app, monkeypatch):
+    """低速段回退池整体失温（首帧被逐出/起飞预热未竟）：绝不碰冷目标的
+    GUI 同步解码（~166ms 冻结），原地续播当前 clip（刚播完必热）。"""
+    import random as _random
+    monkeypatch.setattr(_random, "random", lambda: 0.5)   # 命中动作分支
+    monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
+    win = _make_window(tmp_path)
+    win._switch(catalog.IDLE)
+    win._enter_physics_mode('throw')
+    win._phys_vel[:] = [120.0, 0.0]
+    idle_clip = win.lib.movie(catalog.IDLE)
+    starts = idle_clip.start_count
+    switches = []
+    orig_switch = win._switch
+    monkeypatch.setattr(win, '_switch',
+                        lambda n, *a, **k: switches.append(n) or orig_switch(n, *a, **k))
+    win._on_anim_ended(catalog.IDLE)  # 池内 turn/acts 全冷 → 续播 IDLE
+    assert switches == []                       # 没有切向任何冷目标
+    assert win.anim == catalog.IDLE
+    assert idle_clip.start_count == starts + 1  # 原地续播
+    win._stop_physics()
+    win.close()
+
+def test_flight_anim_speed_follows_throw_and_restores(tmp_path, app):
+    """飞行期动画随抛掷速度加速（24fps 素材高速频闪修法），落地复位 1×。"""
+    win = _make_window(tmp_path)
+    win._enter_physics_mode('throw')
+    win._switch(catalog.DRAG)
+    clip = win.lib.movie(catalog.DRAG)
+    win._phys_pos[:] = [200.0, 200.0]
+    win._phys_vel[:] = [1400.0, 0.0]
+    win._tick_throw_physics(0.016)
+    assert clip.speed == pytest.approx(1.75, abs=0.01)  # 顶速 1.75×
+    win._phys_vel[:] = [350.0, 0.0]
+    win._tick_throw_physics(0.016)
+    assert clip.speed < 1.75  # 降速倍率随速度回落
+    win._stop_physics()
+    assert clip.speed == 1.0  # 落地复位
+    win.close()
+
+
+def test_flight_anim_speed_composes_with_user_playback_speed(tmp_path, app):
+    """评审 A2：飞行加速必须叠加在用户「播放速率」之上（非覆盖），
+    落地复位回用户速率（非 1.0）。"""
+    win = _make_window(tmp_path)
+    win.playback_speed = 1.5
+    win._enter_physics_mode('throw')
+    win._switch(catalog.DRAG)
+    clip = win.lib.movie(catalog.DRAG)
+    win._phys_pos[:] = [200.0, 200.0]
+    win._phys_vel[:] = [1400.0, 0.0]
+    win._tick_throw_physics(0.016)
+    assert clip.speed == pytest.approx(1.5 * 1.75, abs=0.01)  # 用户速率 × 飞行倍率
+    win._stop_physics()
+    assert clip.speed == pytest.approx(1.5)  # 复位回用户速率，不是 1.0
     win.close()

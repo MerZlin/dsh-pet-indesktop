@@ -35,6 +35,8 @@ _HIT_COOLDOWN_S = 0.15          # 每只桌宠的命中冷却（防一帧多弹/
 _SQUASH_INTERVAL_S = 0.25       # 每只桌宠的挤压动画错峰
 _CONTACT_VELOCITY_MAX_DT = 0.5  # 接触跟踪的有效间隔（超此按首次接触，无速度）
 _MAX_ISLAND_SPEED = 1500.0      # 岛速估计上限（px/s）：异常大的估计不进拍鱼结算
+_REMOTE_WALL_TTL_S = 8.0        # 远端硬墙 stale-keep：快照缺席后的本地保墙时长
+_PUB_HEARTBEAT_MS = 2000        # 岛几何发布心跳（几何变化时另有即时发布）
 
 
 def _rect_radial(rx: float, ry: float, nx: float, ny: float) -> float:
@@ -74,7 +76,7 @@ class IslandCollisionBody(QObject):
 
     def __init__(self, island, config, pets_provider=None, parent=None):
         super().__init__(parent if isinstance(parent, QObject) else None)
-        self._island = island
+        self._island = island  # None = 远端模式（多进程：本进程无岛 widget）
         self._config = config
         # 返回本进程全部桌宠窗口的回调（AppShell 注入）
         self._pets_provider = pets_provider or (lambda: ())
@@ -89,14 +91,34 @@ class IslandCollisionBody(QObject):
         self._contact: dict[int, tuple[float, float, float]] = {}
         self._hit_cooldown: dict[int, float] = {}
         self._pet_squash: dict[int, float] = {}
+        # ---- 远端模式状态（多进程：岛几何经碰撞 IPC 复制）----
+        self._remote_stadium: tuple[float, float, float, float, float] | None = None
+        self._remote_updated_at = 0.0
+        self._remote_active = False
+        # ---- 发布者状态（岛宿主进程：把岛几何注册进碰撞世界）----
+        self._pub_session = None
+        self._pub_seq = 0
+        self._pub_timer: QTimer | None = None
+        self._pub_last_at = 0.0  # 几何变化广播合流窗口（见 submit）
+
+    @property
+    def has_local_island(self) -> bool:
+        """本进程是否持有岛 widget（直连路径归它管；远端只认几何复制）。"""
+        return self._island is not None
 
     # ------------------------------------------------------------ 生命周期
     def _register_clamp_hooks(self) -> None:
-        """给全部桌宠窗口挂同步硬墙 hook（move_window_towwards 里按需调用）。"""
+        """给全部桌宠窗口挂同步硬墙 hook（move_window_towwards 里按需调用）。
+
+        同时把碰撞体自身挂到窗口上（_island_collision_body）：碰撞客户端
+        收到含静态布景成员的快照时经它回喂远端几何；宿主进程的客户端经它
+        判定「撞岛冲量归直连路径管」并丢弃协调者转发的岛冲量。
+        """
         try:
             for win in self._pets_provider():
                 if win is not None:
                     win._island_clamp_body = self._clamp_body
+                    win._island_collision_body = self
         except RuntimeError:
             pass  # 窗口已销毁
 
@@ -124,11 +146,25 @@ class IslandCollisionBody(QObject):
             return
         self._running = True
         self._register_clamp_hooks()
-        log.info("灵动岛碰撞体已启动（同步硬墙，无 30Hz 检测）")
+        if self._pub_session is not None and self._island is not None:
+            self._publish_static_state()  # 上任即报：远端进程尽快拿到几何
+            if self._pub_timer is None:
+                self._pub_timer = QTimer(self)
+                self._pub_timer.setInterval(_PUB_HEARTBEAT_MS)
+                self._pub_timer.timeout.connect(self._publish_static_state)
+            self._pub_timer.start()
+        log.info("灵动岛碰撞体已启动（同步硬墙，无 30Hz 检测%s）",
+                 "，远端模式" if self._island is None else "")
 
     def stop(self) -> None:
         if not self._running:
             return
+        # 撤墙前先把「暂停」广播出去：远端进程的墙在心跳级延迟内落下，
+        # 不等它们的本地 TTL 超时（显式停用是快路径，见 on_remote_snapshot）。
+        if self._pub_session is not None and self._island is not None:
+            self._publish_static_state(paused=True)
+        if self._pub_timer is not None:
+            self._pub_timer.stop()
         self._running = False
         self._clear_clamp_hooks()
         self._contact.clear()
@@ -138,7 +174,129 @@ class IslandCollisionBody(QObject):
         self._last_motion_ts = 0.0
         self._last_size = None
         self._vx = self._vy = 0.0
+        self._remote_stadium = None
+        self._remote_active = False
         log.info("灵动岛碰撞体已停止")
+
+    # ------------------------------------------------------------ 几何发布（宿主进程）
+    def attach_publisher(self, session) -> None:
+        """挂碰撞会话发布通道（岛宿主进程）：岛几何注册成碰撞世界的静态成员。
+
+        幂等（重复 attach 同会话是 no-op）；只存引用不接管会话生命周期
+        （会话归 AppShell/PetInstance）。本进程无碰撞会话（碰撞总开关关）时
+        不 attach——本进程直连硬墙不依赖 IPC，照样工作。
+        """
+        if session is None or session is self._pub_session:
+            return
+        self._pub_session = session
+        if self._running and self._island is not None:
+            self._publish_static_state()
+            if self._pub_timer is None:
+                self._pub_timer = QTimer(self)
+                self._pub_timer.setInterval(_PUB_HEARTBEAT_MS)
+                self._pub_timer.timeout.connect(self._publish_static_state)
+            self._pub_timer.start()
+
+    def detach_publisher(self) -> None:
+        """摘下碰撞会话发布通道（A5 评审修复：碰撞总开关关闭/会话失效时）。
+
+        attach 没有逆操作会导致：总开关关掉后 _pub_session 残留、2s 心跳
+        继续向已停会话发报。这里发一次 PAUSED（远端经墓碑快照立即撤墙，
+        见 collision_ipc._coordinator_tick 的墓碑机制）、停心跳、清引用。
+        幂等：未 attach 时是 no-op。
+        """
+        if self._pub_session is None and self._pub_timer is None:
+            return
+        if self._pub_session is not None and self._island is not None:
+            try:
+                self._publish_static_state(paused=True)
+            except Exception:
+                logging.debug("detach_publisher 发布 PAUSED 失败", exc_info=True)
+        self._pub_session = None
+        if self._pub_timer is not None:
+            self._pub_timer.stop()
+            self._pub_timer = None
+
+    def _publish_static_state(self, paused: bool = False) -> None:
+        """把岛几何作为静态成员状态提交到碰撞世界（成员 id = ISLAND_MEMBER_ID）。
+
+        paused=True 用 FLAG_PAUSED 标记「墙当前不生效」（岛隐藏/细条态/几何
+        动画/碰撞体停止）——远端收到立即撤墙，不等本地 TTL；几何照常附上，
+        恢复时远端按最新几何复墙。seq 由本发布者自维护单调递增。
+        """
+        session = self._pub_session
+        island = self._island
+        if session is None or island is None:
+            return
+        try:
+            rect = island.geometry()
+            ax0, ax1, ay, radius, _h = self._island_stadium()
+        except Exception:
+            return
+        self._pub_last_at = time.monotonic()
+        if self._pub_seq == 0:
+            log.info("灵动岛几何发布上线（成员 id=%s，2s 心跳）", collision.ISLAND_MEMBER_ID)
+        self._pub_seq += 1
+        left, top = float(rect.x()), float(rect.y())
+        width, height = float(rect.width()), float(rect.height())
+        flags = collision.FLAG_STATIC | collision.FLAG_COLLISION_ENABLED
+        if island.isVisible():
+            # 必须带 FLAG_VISIBLE：协调者 tick 会即时清退「不可见」成员
+            # （_coordinator_tick 的 paused/hidden purge），漏带 = 注册即被清。
+            flags |= collision.FLAG_VISIBLE
+        if paused or not self._wall_active():
+            flags |= collision.FLAG_PAUSED
+        circles = collision.circles_from_rect(left, top, width, height)
+        session.submit_static_state({
+            'member_id': collision.ISLAND_MEMBER_ID,
+            'seq': self._pub_seq,
+            'ts': time.monotonic(),
+            'x': left + width / 2.0, 'y': top + height / 2.0,
+            'w': width, 'h': height,
+            'radius_x': max(1.0, width / 2.0),
+            'radius_y': max(1.0, height / 2.0),
+            'circles': circles,
+            'vx': 0.0, 'vy': 0.0,
+            'flags': flags,
+            'character': '',
+            'scale': 1.0,
+        })
+
+    # ------------------------------------------------------------ 远端模式（多进程）
+    def on_remote_snapshot(self, member) -> None:
+        """远端模式：接收碰撞快照里的岛静态成员（由碰撞客户端回喂）。
+
+        member=None 只表示本次快照没有岛（协调者新鲜度/快照间隙），
+        **不撤墙**（stale-keep：本地 TTL 兜底，绝不因一阵静默把墙撤了——
+        失效方向必须保守）；带 FLAG_PAUSED = 显式停用（岛隐藏/碰撞体
+        停止/细条态），立即撤墙。几何变化时顺手把被压住的桌宠推出
+        （岛动桌宠没动的穿越，与本地 submit 的推挤同语义）。
+        """
+        if self._island is not None:
+            return  # 本进程有岛：直连路径优先，快照回喂不接管
+        if member is None:
+            return
+        self._remote_updated_at = time.monotonic()
+        if int(member.get('flags', 0)) & collision.FLAG_PAUSED:
+            if self._remote_active:
+                log.info("灵动岛远端墙停用（宿主广播暂停）")
+            self._remote_active = False
+            return
+        cx, cy = float(member.get('x', 0.0)), float(member.get('y', 0.0))
+        w, h = float(member.get('w', 0.0)), float(member.get('h', 0.0))
+        if w <= 0.0 or h <= 0.0:
+            return
+        height = min(h, _CAPSULE_HEIGHT)
+        radius = height / 2.0
+        left, top = cx - w / 2.0, cy - h / 2.0
+        new_stadium = (left + radius, left + w - radius, top + radius, radius, height)
+        changed = self._remote_stadium != new_stadium
+        self._remote_stadium = new_stadium
+        if not self._remote_active:
+            log.info("灵动岛远端墙上线（几何经碰撞 IPC 复制）")
+        self._remote_active = True
+        if changed:
+            self._push_out_covered_pets()
 
     def set_own_pet_visible(self, visible: bool) -> None:
         """本进程桌宠可见性回调（AppShell 接线保留）：本地版无挂起语义，
@@ -153,6 +311,21 @@ class IslandCollisionBody(QObject):
         拖岛拍鱼的相对速度在此参与结算——推出会触发 _clamp_body 的撞岛判定。
         """
         self._update_motion()
+        if self._pub_session is not None:
+            # 几何变化广播合流：岛拖拽/bump 动画的回调可达 100Hz+，逐次发布会
+            # 把协调者快照洪峰扇出到每个进程（实机遥测：撞岛 bump 期间多进程
+            # 同步卡顿）。合流到 ≤10Hz，尾沿由 2s 心跳兜底；本地墙读本地
+            # 几何，不受合流影响。
+            now = time.monotonic()
+            if now - self._pub_last_at >= 0.1:
+                self._pub_last_at = now
+                self._publish_static_state()
+        if not self._wall_active():
+            return
+        self._push_out_covered_pets()
+
+    def _push_out_covered_pets(self) -> None:
+        """把当前被岛（本地或远端几何）压住的桌宠经统一出口推出。"""
         if not self._wall_active():
             return
         try:
@@ -251,8 +424,15 @@ class IslandCollisionBody(QObject):
 
     # ------------------------------------------------------------ 几何
     def _wall_active(self) -> bool:
-        """墙是否生效：运行中 + 岛可见 + 非细条态 + 非几何动画。"""
-        if not self._running or not self._island.isVisible():
+        """墙是否生效：运行中 + 岛可见（远端：几何新鲜且在 TTL 内）+ 非细条态 + 非几何动画。"""
+        if not self._running:
+            return False
+        if self._island is None:
+            # 远端模式：显式停用即时落墙；静默则本地 TTL 兜底（stale-keep，
+            # 失效方向保守——墙多留几秒，绝不提前穿透）
+            return (self._remote_active and self._remote_stadium is not None
+                    and time.monotonic() - self._remote_updated_at <= _REMOTE_WALL_TTL_S)
+        if not self._island.isVisible():
             return False
         if getattr(self._island, "_mode", "") == "docked" \
                 and not getattr(self._island, "_hover_peek", False):
@@ -264,8 +444,14 @@ class IslandCollisionBody(QObject):
     def _island_stadium(self) -> tuple[float, float, float, float, float]:
         """岛的体育场形：(axis_x0, axis_x1, axis_y, radius, rect_height)。
 
-        展开卡片时只覆盖胶囊本体（卡片区域不设幽灵墙）。
+        展开卡片时只覆盖胶囊本体（卡片区域不设幽灵墙）。远端模式用碰撞
+        IPC 复制来的几何（on_remote_snapshot 写入），无几何时抛异常由
+        调用方按「无墙」处理（与本地几何查询失败同口径）。
         """
+        if self._island is None:
+            if self._remote_stadium is None:
+                raise ValueError("远端岛几何未就绪")
+            return self._remote_stadium
         rect = self._island.geometry()
         height = min(rect.height(), _CAPSULE_HEIGHT)
         radius = height / 2.0

@@ -2109,8 +2109,12 @@ class AppShell:
             if getattr(self, "island", None) is not None:
                 self.island.hide()
             body = getattr(self, "island_collision", None)
-            if body is not None:
+            if body is not None and body.has_local_island:
                 body.stop()
+            # 本进程无岛 ≠ 岛上没有墙：多进程下 slot 配置只对主进程开岛
+            # （子宠进程 enabled=False），但岛在别的进程真实存在——远端
+            # 硬墙照样要挂（几何经碰撞快照回喂），否则子肥鱼直接穿岛。
+            self._sync_island_collision(island_cfg)
             return
         if getattr(self, "island", None) is None:
             from .dynamic_island import DynamicIsland
@@ -2146,13 +2150,16 @@ class AppShell:
         self._sync_island_collision(island_cfg)
 
     def _sync_island_collision(self, island_cfg) -> None:
-        """果冻墙：按配置创建/启停岛的本进程碰撞体（island_collision.py）。
+        """果冻墙：按配置创建/启停岛的碰撞体（island_collision.py）。
 
+        本进程有岛（宿主）：同步硬墙直连 + 岛几何经碰撞 IPC 发布成静态成员
+        （attach_publisher），复制给远端进程。本进程无岛（多进程子宠进程）：
+        建远端模式碰撞体——几何由碰撞客户端从快照回喂，本地硬墙照常挂上
+        （stale-keep TTL 兜底，快照静默不撤墙）。
         同步硬墙（无 30Hz 检测/结算）：岛作为屏幕边界式位置墙，在统一位置
         出口 move_window_towwards 里逐次钳制——身体框任何移动都进不了岛区，
         杜绝采样间隙导致的穿透抽搐；岛被拖到桌宠身上由 on_geometry_changed
-        事件驱动推出。不走碰撞 IPC（IPC 版保活/快照时序在 GUI 卡顿时会让岛
-        掉出碰撞世界，实机教训）。
+        事件驱动推出。
         """
         enabled = bool(island_cfg.get("collision_enabled", True)) \
             if isinstance(island_cfg, dict) else True
@@ -2160,8 +2167,6 @@ class AppShell:
         if not enabled:
             if body is not None:
                 body.stop()
-            return
-        if self.island is None:
             return
         if body is None:
             from .island_collision import IslandCollisionBody
@@ -2172,8 +2177,25 @@ class AppShell:
                     inst.win for inst in self._instances if inst.win is not None
                 ])
             self.island_collision = body
-            self.island.on_geometry_changed = body.submit
-            self.island.on_pet_visibility_changed = body.set_own_pet_visible
+            if self.island is not None:
+                self.island.on_geometry_changed = body.submit
+                self.island.on_pet_visibility_changed = body.set_own_pet_visible
+        # 宿主进程：几何发布走第一个持有碰撞会话的实例（无会话=碰撞总开关
+        # 关，静默跳过——本进程直连硬墙不受影响）；远端模式无需 attach。
+        # 无可用会话时显式 detach（A5）：清掉残留发布通道与 2s 心跳，
+        # 否则总开关关闭后仍向已停会话持续发报。
+        attached = False
+        if self.island is not None and bool(self.config.get("collision_enabled", True)):
+            for inst in self._instances:
+                session = getattr(inst, "collision_ipc", None)
+                if session is not None:
+                    body.attach_publisher(session)
+                    attached = True
+                    break
+        if not attached:
+            detach = getattr(body, "detach_publisher", None)
+            if callable(detach):
+                detach()
         try:
             body.start()
         except Exception:

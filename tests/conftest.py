@@ -132,6 +132,7 @@ def _clear_click_sound_pool():
     try:
         from pet import click_sound
         click_sound._pool.clear()
+        click_sound._reset_caches_for_tests()
     except Exception:
         pass
     # 用例可能自建 winmm 池（替身后端也持句柄/可选 timer）：一并收口。

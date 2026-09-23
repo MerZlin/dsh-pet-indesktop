@@ -260,6 +260,30 @@ def test_window_play_click_sound_uses_pack(monkeypatch, tmp_path):
     assert sent == [(custom, 0.8)]
 
 
+def test_duck_candidates_cached_until_reset(monkeypatch, tmp_path):
+    duck = tmp_path / "assets" / "sounds" / "duck"
+    duck.mkdir(parents=True)
+    _make_file(duck, "Ya1.mp3")
+    _make_file(duck, "Ya2.mp3")
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    pack = {"kind": "builtin", "id": "duck"}
+
+    first = click_sound.resolve_click_sound_candidates(pack)
+    assert len(first) == 2
+
+    # 缓存生效：进程运行期目录内容变化不再触发重扫（打包资源本就静态）
+    _make_file(duck, "Ya3.mp3")
+    assert click_sound.resolve_click_sound_candidates(pack) == first
+
+    # 返回的是副本：调用方改动不污染缓存
+    first.append(duck / "bogus.wav")
+    assert len(click_sound.resolve_click_sound_candidates(pack)) == 2
+
+    # 测试复位后重新扫描
+    click_sound._reset_caches_for_tests()
+    assert len(click_sound.resolve_click_sound_candidates(pack)) == 3
+
+
 def test_resolve_click_sound_pair_duck_and_non_duck(monkeypatch, tmp_path):
     press = _make_file(tmp_path, "Ya1.mp3")
     release = _make_file(tmp_path, "Ya2.mp3")

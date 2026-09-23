@@ -108,8 +108,8 @@ def build_pet_controls(host) -> None:
         host.cursor_hidden_passthrough_check.setChecked(bool(host.config.get("cursor_hidden_passthrough", True)))
     host.drag_physics_check = ToggleSwitch(host)
     host.drag_physics_check.setChecked(bool(host.config.get("drag_physics", False)))
-    host.single_process_spawn_check = ToggleSwitch(host)
-    host.single_process_spawn_check.setChecked(bool(host.config.get("experimental_single_process_spawn", False)))
+    # 「单进程多开」开关不再创建（拓扑收口 Phase A：设置页隐藏；
+    # 游离 ToggleSwitch 会被孤儿开关测试拦截）。
 
     # 甩出力度四档：gentle (轻柔) / standard (标准) / strong (强力) / crazy (疯狂)
     host.throw_strength_select = ModernSelect(host, width=132)

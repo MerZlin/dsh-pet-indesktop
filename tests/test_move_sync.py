@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication
 from pet import catalog
 from pet.config import Config
 from pet.movement import move_position_at_frame, quantize_move
+import pet.window as window_mod
 from pet.window import PetWindow
 
 MOVE = catalog.MOVES[0]  # 螃蟹走路
@@ -183,6 +184,9 @@ def test_shenshen_move_curves_cover_move_clips():
     from pet.library import MovieLibrary
 
     lib = MovieLibrary(character_id='shenshen')
+    for name in catalog.MOVES:
+        lib.movie(name).warm_meta()  # 显式预热（生产由后台预热链完成；
+        # GUI 隐式探测已禁止——见 tests/test_meta_no_gui_probe.py）
     for name in catalog.MOVES:
         curve = lib.move_curves.get(name)
         assert curve, f'{name} 缺位移曲线'
@@ -555,5 +559,190 @@ def test_animation_gap_pool_excludes_dual_category_moves(app, tmp_path, monkeypa
         assert win.anim == catalog.IDLE
         assert win._move_plan is None
         assert win.facing == 'left'
+    finally:
+        _close(win, app)
+
+
+# ============================================================================
+# 墙钟亚帧补点（_on_move_anim_tick）：素材帧率（24-30Hz）远低于显示节拍时，
+# 两帧之间位置不动是"中低速抖动"主因。补点按墙钟把等效帧号推进到
+# ≤锚点+1 帧（含 curve 插值）；帧到达再锚定，帧号仍是位置权威。
+# ============================================================================
+
+
+class _FakeClock:
+    """可控 monotonic 时钟：window.py 经模块属性调用 time.monotonic。"""
+
+    def __init__(self, t: float = 1000.0):
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _setup_anim_tick_win(tmp_path, monkeypatch):
+    """真窗口 + 确定计划（stride=72 → 恰 2 圈/20 帧/2.0s，帧间隔 0.1s）
+    + 位置记录 + 假时钟（_try_move 前钉上，计划锚点时间取假时钟）。"""
+    lib = FakeLibrary(move_frames=10)
+    lib.move_strides = {MOVE: 100.0}
+    win = _make_win(tmp_path, monkeypatch, lib)
+    clock = _FakeClock()
+    monkeypatch.setattr(window_mod.time, 'monotonic', clock)  # window.py 测试 seam：pet.window.time 命名空间
+    _pin_rng(monkeypatch, distance=144)  # stride=72 → 恰 2 圈
+    monkeypatch.setattr(win, '_predict_prewarm', lambda *a: None)
+    moves = []
+    monkeypatch.setattr(win, '_move_window_towards',
+                        lambda x, y, **kw: moves.append((x, y)))
+    assert win._try_move(MOVE) is True
+    return win, win._move_plan, moves, clock
+
+
+def _plan_x_at(plan, frames_elapsed):
+    span = plan['target_x'] - plan['start_x']
+    return plan['start_x'] + span * frames_elapsed / plan['total_frames']
+
+
+def test_anim_tick_fills_between_frames(app, tmp_path, monkeypatch):
+    """两帧之间：墙钟把位置推进到亚帧位置（帧 5 → 5.5）。"""
+    win, plan, moves, clock = _setup_anim_tick_win(tmp_path, monkeypatch)
+    try:
+        win._on_frame(MOVE, 5)  # 锚定帧 5
+        assert moves[-1][0] == pytest.approx(_plan_x_at(plan, 5))
+        clock.t += 0.05  # 帧间隔 0.1s 的一半
+        win._on_move_anim_tick()
+        assert len(moves) == 2
+        assert moves[-1][0] == pytest.approx(_plan_x_at(plan, 5.5))
+    finally:
+        _close(win, app)
+
+
+def test_anim_tick_capped_one_frame_ahead(app, tmp_path, monkeypatch):
+    """解码 stall / 隐藏暂停后墙钟走远：位置最多停在锚点+1 帧处等待。"""
+    win, plan, moves, clock = _setup_anim_tick_win(tmp_path, monkeypatch)
+    try:
+        win._on_frame(MOVE, 5)
+        clock.t += 10.0  # 远超一帧
+        win._on_move_anim_tick()
+        assert moves[-1][0] == pytest.approx(_plan_x_at(plan, 6))
+    finally:
+        _close(win, app)
+
+
+def test_anim_tick_reanchor_on_frame_no_backtrack(app, tmp_path, monkeypatch):
+    """帧到达再锚定：补点到 5.5 后帧 6 到达，同一时刻 tick 不再动。"""
+    win, plan, moves, clock = _setup_anim_tick_win(tmp_path, monkeypatch)
+    try:
+        win._on_frame(MOVE, 5)
+        clock.t += 0.05
+        win._on_move_anim_tick()  # → 5.5
+        clock.t += 0.05
+        win._on_frame(MOVE, 6)    # 权威帧 6
+        pos6 = moves[-1]
+        win._on_move_anim_tick()  # fe=6 = 锚点 → no-op
+        assert moves[-1] == pos6
+        assert moves[-1][0] == pytest.approx(_plan_x_at(plan, 6))
+    finally:
+        _close(win, app)
+
+
+def test_anim_tick_timer_lifecycle_with_plan(app, tmp_path, monkeypatch):
+    """补点节拍随计划启停：_try_move 起表，_cancel_move 双表皆停。"""
+    win, plan, moves, clock = _setup_anim_tick_win(tmp_path, monkeypatch)
+    try:
+        assert win._move_anim_timer.isActive()
+        assert win._move_timer.isActive()
+        win._cancel_move()
+        assert not win._move_anim_timer.isActive()
+        assert not win._move_timer.isActive()
+        win._on_move_anim_tick()  # 无计划：no-op
+        assert moves == []
+    finally:
+        _close(win, app)
+
+
+def test_anim_tick_ignores_legacy_plan(app, tmp_path, monkeypatch):
+    """旧 schema 计划（无 total_frames/锚点键）：补点不介入（碰撞测试注入款）。"""
+    lib = FakeLibrary(move_frames=10)
+    win = _make_win(tmp_path, monkeypatch, lib)
+    clock = _FakeClock()
+    monkeypatch.setattr(window_mod.time, 'monotonic', clock)  # window.py 测试 seam：pet.window.time 命名空间
+    try:
+        win._switch(MOVE)
+        win._move_plan = {'start_x': 0, 'target_x': 20, 'start_y': 0,
+                          'target_y': 0, 'duration': 1.0}
+        moves = []
+        monkeypatch.setattr(win, '_move_window_towards',
+                            lambda x, y, **kw: moves.append((x, y)))
+        clock.t += 0.05
+        win._on_move_anim_tick()
+        assert moves == []
+    finally:
+        _close(win, app)
+
+
+def test_anim_tick_skips_when_hidden_paused(app, tmp_path, monkeypatch):
+    """隐藏暂停：补点冻结（帧驱动同样停），恢复后由帧到达再锚定。"""
+    win, plan, moves, clock = _setup_anim_tick_win(tmp_path, monkeypatch)
+    try:
+        win._on_frame(MOVE, 5)
+        win._hidden_paused = True
+        clock.t += 0.05
+        win._on_move_anim_tick()
+        assert len(moves) == 1  # 只有帧 5 那一次
+    finally:
+        _close(win, app)
+
+
+def test_anim_tick_respects_move_curve(app, tmp_path, monkeypatch):
+    """curve 素材：亚帧位置按曲线插值（静帧段走平、动帧段推进）。"""
+    lib = FakeLibrary(move_frames=10)
+    lib.move_strides = {MOVE: 100.0}
+    # 前 5 帧静止（progress 0），后 5 帧匀速到 1
+    lib.move_curves = {MOVE: [0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0]}
+    win = _make_win(tmp_path, monkeypatch, lib)
+    clock = _FakeClock()
+    monkeypatch.setattr(window_mod.time, 'monotonic', clock)  # window.py 测试 seam：pet.window.time 命名空间
+    try:
+        _pin_rng(monkeypatch, distance=144)
+        monkeypatch.setattr(win, '_predict_prewarm', lambda *a: None)
+        moves = []
+        monkeypatch.setattr(win, '_move_window_towards',
+                            lambda x, y, **kw: moves.append((x, y)))
+        assert win._try_move(MOVE) is True
+        plan = win._move_plan
+        span = plan['target_x'] - plan['start_x']
+        # 静帧段：帧 2 与 2.5 位置相同（曲线走平）
+        win._on_frame(MOVE, 2)
+        assert moves[-1][0] == pytest.approx(plan['start_x'])
+        clock.t += 0.05
+        win._on_move_anim_tick()
+        assert moves[-1][0] == pytest.approx(plan['start_x'])
+        # 动帧段：帧 6 → 6.5，intra_progress = 0.4+0.5*(0.6-0.4) = 0.5
+        win._on_frame(MOVE, 6)
+        clock.t += 0.05
+        win._on_move_anim_tick()
+        assert moves[-1][0] == pytest.approx(
+            plan['start_x'] + span * (0.5 / plan['loops']))
+    finally:
+        _close(win, app)
+
+
+def test_try_move_skips_when_meta_cold(app, tmp_path, monkeypatch):
+    """冷 meta 闸门（评审 A1）：duration()=0.0 / frames()=1 的冷素材不建
+    移动计划（位移会按错的总帧数瞬移），本轮放弃，后台 meta 到位后恢复。"""
+    class ColdMetaLibrary(FakeLibrary):
+        def duration(self, name):
+            return 0.0  # meta 后台化后冷素材的默认值
+
+        def frames(self, name):
+            return 1
+
+    lib = ColdMetaLibrary(move_frames=10)
+    win = _make_win(tmp_path, monkeypatch, lib)
+    try:
+        _pin_rng(monkeypatch, distance=240)
+        assert win._try_move(MOVE) is False
+        assert win._move_plan is None              # 不建坏计划
+        assert win.anim != MOVE or not win._move_timer.isActive()
     finally:
         _close(win, app)
