@@ -240,6 +240,14 @@ E:\AI\DSH\dsh-pet-indesktop> python scripts/probe_multi_screen_area.py
   的 QtMultimedia 断言本来就是子进程），并注入 `import edge_tts` 验证红：**2 failed**（修前同款红绿证据见 §6.1 口径）。
   竞态模式与判据已记入 [`BUILD-CI-FAILURE-NOTES-2026-08.md`](BUILD-CI-FAILURE-NOTES-2026-08.md) §5.4。
   这条修复是**测试专属**（零生产行为变更），直接推 main 以尽快恢复主分支绿。
+- **处置的处置（`adc70e4` → `aa9fbda`，诚实记录）**：第一版子进程写法让**同一棵树 push run 的
+  Ubuntu 主套件卡在 `in_progress` 20 分钟以上**（Windows 5m45s / macOS 5m0s 同期成功，上一棵树
+  `b3d3db1` 的 Ubuntu 是 4m18s 通过），只能取消该 run。两个可疑点一并堵掉：① 裸 `python -c` 里
+  没有 `tests/conftest.py` 的弹窗桩，子进程不再构造 `AppShell`（只做 import 级断言，"服务没被
+  启动"那一半留在进程内判）；② `capture_output=True` 改为输出重定向到临时文件——超时杀进程后
+  读管道等 EOF 会被持有管道的孙进程永久挂住，改文件后超时即杀即返回（`TimeoutExpired` 转
+  `returncode=124`）。加固后三平台绿：**Ubuntu 4m15s / macOS 5m0s / Windows 4m59s**
+  （run `35881734360`）。两条硬约束已写进 `_run_python` 的 docstring 与 CI 踩坑记录 §5.4。
 
 ---
 

@@ -234,10 +234,19 @@ git push origin v4.0.5
   `cwd=` 仓库根 + `QT_QPA_PLATFORM=offscreen`。仓库内已有同款先例：
   `tests/test_winmm_sound.py` 的 QtMultimedia 断言本来就是子进程写法。
   本次已把 `tests/test_voice_chime_service.py` 的两条改成子进程（注入
-  `import edge_tts` 可复现红；证据见
-  [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md) §6.6）。
+  `import edge_tts` 可复现红；证据见  [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md) §6.6）。
+- **子进程写法的两条硬约束**（第一版没守，当场付了代价：同一棵树 push run 的 Ubuntu
+  主套件卡在 `in_progress` **20 分钟以上**，只能取消；Windows/macOS 同期 5 分钟内跑完）：
+  1. **子进程脚本只做 import 级断言**，不构造 `AppShell`、不跑事件循环——裸
+     `python -c` 里没有 `tests/conftest.py` 的全局弹窗桩（QMessageBox mock），
+     模态对话框在那边没人能关；
+  2. 输出**重定向到临时文件**，不要 `capture_output=True`——超时杀掉子进程后，
+     `subprocess.run` 仍会读管道等 EOF，子进程留下的孙进程只要还持有该管道就会
+     **永久挂住**。改文件重定向后超时即杀即返回，整条路径封闭有界。
 - **判据**：以后要写「某模块没被 import」的断言，若没有子进程隔离就不要判全局
-  `sys.modules`——改为在子进程里判，或判「该模块对象的命名空间里没有它」。
+  `sys.modules`——改为在子进程里判，或判「该模块对象的命名空间里没有它」；
+  一旦用子进程，就按上面两条硬约束写，否则 CI 会以"卡死"的形式红（比断言失败
+  更难查：日志在 job 结束前不可见）。
 
 ---
 
