@@ -226,6 +226,21 @@ E:\AI\DSH\dsh-pet-indesktop> python scripts/probe_multi_screen_area.py
 1. **第一次全量红了 16 条**：`tests/test_window_rendering.py` / `test_perfstats.py` / `test_window_dpr_signals.py` 里有只挂载 `_rebuild_frame` 的假窗口（`_RebuildPet` 等，不是 `PetWindow` 子类），我的首帧标志直接属性访问导致 `AttributeError`。这正是「聚焦测试绿 ≠ 可合并」的典型形态：**三处桩都不在我改的模块的测试文件里**。修法：发射点改成 `getattr(self, '_frame_ready_emitted', False)` + `getattr(self, 'frame_ready', None)` 两层兜底（`getattr` 兜底是本仓既有惯例），并把这条写进 `pet/window.py` 的注释与本报告。修后这 3 个文件 **83 passed**。
 2. 因此 `window.py` 的行预算实测值从 4667 变成 **4671**（+23/−0），预算注释与数值同步校准。
 
+### 6.6 合并后主分支 CI 的 macOS 假红（已定位并修掉，非本批引入）
+
+- **现象**：合并后的 main push run（`35876529852`）macOS job 红，失败用例
+  `tests/test_voice_chime_service.py::test_service_module_top_level_does_not_import_edge_tts`；
+  同一次运行 Windows / Ubuntu 绿，**同一棵树的 PR run 的 macOS job 也是绿的**；重跑失败 job 仍红（第二次）。
+- **定位（三条证据）**：① 该断言的判据是**进程级 `sys.modules`**（"模块顶层没 import edge_tts"），
+  而全量套件是单进程跑的，前面用例的后台合成/台词预缓存线程会在任意时刻懒加载 `edge_tts`；
+  ② 本批 diff 与 TTS 零关联（`git diff 7d622db..HEAD -U0 | grep -i "edge_tts\|voice_chime"` 为空）；
+  ③ 把本批新增的两个测试文件放在该文件之前**本地复跑** → `68 passed`（没有污染）；
+  本机连跑三轮全量也全绿。→ 判定为**竞态假红**，不是本批回归。
+- **处置**：把该文件的两条 import 断言改成**子进程**写法（仓库既有先例：`tests/test_winmm_sound.py`
+  的 QtMultimedia 断言本来就是子进程），并注入 `import edge_tts` 验证红：**2 failed**（修前同款红绿证据见 §6.1 口径）。
+  竞态模式与判据已记入 [`BUILD-CI-FAILURE-NOTES-2026-08.md`](BUILD-CI-FAILURE-NOTES-2026-08.md) §5.4。
+  这条修复是**测试专属**（零生产行为变更），直接推 main 以尽快恢复主分支绿。
+
 ---
 
 ## 七、已知限制与后续

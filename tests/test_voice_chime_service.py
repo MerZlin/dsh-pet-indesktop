@@ -10,7 +10,10 @@
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +29,26 @@ from pet.voice_chime import (
     cache_key,
 )
 from pet.voice_chime_service import VoiceChimeService
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _run_python(script: str) -> subprocess.CompletedProcess:
+    """在**全新解释器**里跑一段脚本（cwd=仓库根，offscreen 免拖真实显示后端）。
+
+    进程级 import 断言（`edge_tts` 会不会被拉进 sys.modules）必须这么测：全量
+    套件是单进程的，别的用例的后台合成线程懒加载 edge_tts 的时机与本用例的断言
+    窗口撞车就会假红（2026-09-23：同一棵树 PR run 绿，push run 在 macOS 上连红
+    两次；本机连跑三轮全量全绿——属竞态而非回归）。子进程里"这个模块自己会不会
+    在顶层 import"是可确定判定的，与 `tests/test_winmm_sound.py` 的 QtMultimedia
+    同款写法。
+    """
+    env = dict(os.environ)
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, cwd=str(ROOT), env=env, timeout=120,
+    )
 
 
 def _qapp() -> QApplication:
@@ -751,40 +774,41 @@ def test_chime_speaks_normally_on_a_plain_day(tmp_path, monkeypatch):
 # import 推迟到 _TTSWorker 的合成线程；失败走既有 _notify_missing_tts 降级。
 
 
-def test_service_module_top_level_does_not_import_edge_tts(monkeypatch):
-    """全新加载一份 voice_chime_service：不得把 edge_tts 本体拉进 sys.modules。"""
-    import importlib.util
-    import sys
+def test_service_module_top_level_does_not_import_edge_tts():
+    """首次 import 一份 voice_chime_service：不得把 edge_tts 本体拉进 sys.modules。
 
-    import pet.voice_chime_service as svc_mod
-
-    monkeypatch.delitem(sys.modules, "edge_tts", raising=False)
-    spec = importlib.util.spec_from_file_location(
-        "pet._voice_chime_service_probe", Path(svc_mod.__file__))
-    fresh = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fresh)
-
-    assert "edge_tts" not in sys.modules, "模块顶层把 edge_tts import 进来了（白付 1.4s）"
-    assert fresh._EDGE_TTS_AVAILABLE is (
-        importlib.util.find_spec("edge_tts") is not None
-    ), "惰性探测结果必须与真实可导入性一致（否则会误报“请 pip install”）"
+    在全新解释器里做（见 `_run_python`）：比原来"同进程 re-exec 模块文件"更严——
+    没有任何先前状态，且断言不受同进程其它线程的懒加载影响。
+    """
+    proc = _run_python(
+        "import importlib.util, sys\n"
+        "import pet.voice_chime_service as svc\n"
+        "assert 'edge_tts' not in sys.modules, '模块顶层把 edge_tts import 进来了（白付 1.4s）'\n"
+        "assert svc._EDGE_TTS_AVAILABLE is (importlib.util.find_spec('edge_tts') is not None), "
+        "'惰性探测结果必须与真实可导入性一致（否则会误报“请 pip install”）'\n"
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_disabled_voice_chime_startup_does_not_import_edge_tts(tmp_path, monkeypatch):
-    """voice_chime_enabled=False 的启动路径：服务整个不 start，edge_tts 一次都不 import。"""
-    import sys
+def test_disabled_voice_chime_startup_does_not_import_edge_tts(tmp_path):
+    """voice_chime_enabled=False 的启动路径：服务整个不 start，edge_tts 一次都不 import。
 
-    from pet.app import AppShell
-
-    monkeypatch.delitem(sys.modules, "edge_tts", raising=False)
-    _qapp()
-    cfg = Config(base=tmp_path)
-    cfg.set("voice_chime_enabled", False)
-    cfg.set("festival_reminder_enabled", False)
-    shell = AppShell(_qapp(), cfg, enable_chat=False)
-
-    assert shell.voice_chime_service is None
-    assert "edge_tts" not in sys.modules
+    同样在子进程里断言（同上：进程内全局 sys.modules 会被别的用例的后台线程污染）。
+    """
+    proc = _run_python(
+        "import sys\n"
+        "from PySide6.QtWidgets import QApplication\n"
+        "from pet.app import AppShell\n"
+        "from pet.config import Config\n"
+        "app = QApplication.instance() or QApplication([])\n"
+        f"cfg = Config(base={str(tmp_path)!r})\n"
+        "cfg.set('voice_chime_enabled', False)\n"
+        "cfg.set('festival_reminder_enabled', False)\n"
+        "shell = AppShell(app, cfg, enable_chat=False)\n"
+        "assert shell.voice_chime_service is None\n"
+        "assert 'edge_tts' not in sys.modules\n"
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def test_tts_worker_reports_missing_edge_tts_instead_of_raising(tmp_path, monkeypatch):

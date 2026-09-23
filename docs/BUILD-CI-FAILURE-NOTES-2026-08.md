@@ -220,6 +220,25 @@ git push origin v4.0.5
 - 已修复 `tests/test_proactive.py` 中一处误改全局 `sys.platform` 的问题（改为替换模块内 `sys` 引用）；
 - 后续新增 Windows 专用测试时，继续遵守“替换模块属性，不改全局”。
 
+### 5.4 单进程全量里的「全局 import 断言」= 竞态（2026-09-23 实例）
+
+- **形态**：用例想断言「某个模块没有被懒加载」，判据却是进程级 `sys.modules`
+  （`assert "edge_tts" not in sys.modules`、`"PySide6.QtMultimedia" not in sys.modules`）。
+  全量套件是**单进程**跑的，同进程里前面用例的后台线程（语音合成 / 台词预缓存 /
+  QtMultimedia 播放器）会在任意时刻懒加载这些模块——断言窗口一撞车就假红。
+- **实例**：`tests/test_voice_chime_service.py::test_service_module_top_level_does_not_import_edge_tts`
+  在 macOS runner 上连红两次（`35876529852` 首次 + 重跑；同一棵树的 PR run macOS 却是绿的，
+  Windows/Ubuntu 也绿；本机连跑三轮全量全绿）。日志里只有这一条断言失败，改动 diff 与
+  TTS 零关联——按「CI 红先读日志再动手」判定为竞态而非回归。
+- **正确写法**：把 import 断言放进**子进程**（全新解释器，无同进程污染），
+  `cwd=` 仓库根 + `QT_QPA_PLATFORM=offscreen`。仓库内已有同款先例：
+  `tests/test_winmm_sound.py` 的 QtMultimedia 断言本来就是子进程写法。
+  本次已把 `tests/test_voice_chime_service.py` 的两条改成子进程（注入
+  `import edge_tts` 可复现红；证据见
+  [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md) §6.6）。
+- **判据**：以后要写「某模块没被 import」的断言，若没有子进程隔离就不要判全局
+  `sys.modules`——改为在子进程里判，或判「该模块对象的命名空间里没有它」。
+
 ---
 
 ## 六、发布前检查清单
