@@ -38,21 +38,30 @@ class _ProbeClip(WebMClip):
 
 
 def test_ensure_meta_never_probes_on_gui_thread(app, monkeypatch):
-    """硬不变量：GUI 线程冷 meta 不跑 ffprobe——踢后台、吃默认值。"""
+    """硬不变量：GUI 线程冷 meta 不跑 ffprobe——踢后台、吃默认值。
+
+    时序纪律：探测桩在事件闸门前阻塞，保证「踢出瞬间」的断言是确定性的；
+    探测放行后必须落在后台线程（事件同步，不赌线程启动速度）。
+    """
     clip = _ProbeClip("dummy.webm")
     calls = clip.probe_calls
-    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, 'count_frames_and_secs',
-                        lambda key: clip._probe())
+    gate = threading.Event()
+
+    def gated_probe(key):
+        gate.wait(5.0)
+        return clip._probe()
+
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, 'count_frames_and_secs', gated_probe)
     webm_clip_mod._META_CACHE.clear()
     monkeypatch.setattr(webm_clip_mod, '_get_meta_file_cache', lambda: {})  # 双级缓存 miss
     clip._ensure_meta()  # 主线程调用
-    assert calls == [], "GUI 线程不得拉起 ffprobe 探测"
-    assert clip._duration <= 0, "主线程探测被拦后保留默认值（reader 后续补充）"
-    # 后台预热已被踢出：等它完成探测
-    for _ in range(100):
-        if calls:
-            break
-        time.sleep(0.02)
+    assert calls == [], "踢出瞬间不得有任何探测（后台也未放行）"
+    assert clip._meta_bg_kicked, "主线程冷调用必须同步踢出后台预热"
+    assert clip._duration <= 0, "探测被拦期间保留默认值（reader 后续补充）"
+    gate.set()  # 放行后台探测
+    deadline = time.monotonic() + 5.0
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert len(calls) == 1, "后台预热必须接力探测一次"
     assert calls[0] != threading.get_ident(), "探测绝不允许落在 GUI 线程"
     clip.cleanup()

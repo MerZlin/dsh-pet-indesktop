@@ -139,10 +139,9 @@ GUI 线程绘制期空 d_ptr 近零解引用）。后续取证（反汇编 + 哨
    throw/spawn/first_frame/meta/click_sound，325 用例）高负载复跑 **3 遍
    全绿**（25.3s / 38.5s / 30.1s）。
 
-## 4. 评审与处置（push 前三方会审：K3 + DS + GLM，2026-09-23）
+## 4. 第二轮修正（合入前评审，2026-09-23）
 
-会审记录：`.scratch/single-overlay-window/_pr_review_ds.md`、
-`_pr_review_glm.md`、`_pr_review_glm_final.md`。逐项处置：
+合入前评审发现的问题与逐项处置：
 
 | 发现 | 严重度 | 处置 |
 |---|---|---|
