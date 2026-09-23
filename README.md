@@ -1240,6 +1240,13 @@ python scripts/cleanup_mei_cache.py --delete
 > 按时间倒序记录。v4.2.0 及更早版本的完整清单见 [`docs/RELEASE-v4.2.0.md`](docs/RELEASE-v4.2.0.md) 与 [GitHub Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases)。
 > v4.2.0 之后的**全部**变更（含本表未逐条展开的 #113 / #114 / #118 / #120 / #121 / #123 / #125 / #127–#130 / #135 / #137 / #139–#144 / #146–#152 / #155 / #157–#182）已在上方 [v4.2.0 以来的变更（v4.2.1）](#v420-以来的变更v421) 按功能与修复汇总；面向发布的逐项说明（含**发布前测试清单**与**视频预演脚本**）见 [`docs/RELEASE-v4.2.1.md`](docs/RELEASE-v4.2.1.md)。
 
+### 发布后补丁（2026-09-23，`main@1c3a59c`）——纯桌宠版：桌宠隐藏后单击灵动岛即可把桌宠叫回来
+
+- **问题**（用户反馈，纯桌宠版）：把桌宠**隐藏**后点击灵动岛**没有任何反应**，只能走托盘菜单「显示桌宠」找回。
+- **根因**：岛在「桌宠隐藏 + `hidden_chat` 默认开」时单击会发 `chat_requested`，落到 `AppShell._chat_from_island` → `_show_island_chat`；而无 Chat 的打包变体（spec `excludes=['pet.chat']`，`enable_chat=False`）里 `_island_chat_available()` 恒为假，该入口**直接 return**——请求发出后被静默吞掉。岛又是隐藏后唯一的常驻交互面，于是纯桌宠版被困住；有 Chat 的变体恰好被气泡里的「显示桌宠」按钮兜住，所以只有纯桌宠版暴露。
+- **修复**：`_chat_from_island` 先判可用性，没有对话能力时改调 `_show_pets_from_island_chat()`（显示全部窗 + 同步岛 `_pet_visible` + 收起气泡，正是气泡内「显示桌宠」按钮那条通路）→ **单击岛 = 显示桌宠**。有 Chat 的变体行为一字不变；`click_action=toggle_pet` 的偏好仍优先；`hidden_chat` 关闭时仍展开卡片。
+- **验证**：新增回归用例 `test_shell_click_when_no_chat_reshows_pets`（修复前红：`assert False is True`「点击后桌宠仍未恢复可见」，修复后绿）；`test_island_chat.py + test_island_shell_wiring.py` **23 passed**；全量 **2914 passed / 11 skipped**；ruff 全清。三平台 `workflow_dispatch` 重新构建纯桌宠产物并以 `gh release upload --clobber` **覆盖 Release v4.2.1 的 4 个无 Chat 附件**（版本号与 tag 不变）。详见 [`docs/PR-REPORT-ISLAND-RESHOW-NOCHAT-2026-09-23.md`](docs/PR-REPORT-ISLAND-RESHOW-NOCHAT-2026-09-23.md)。
+
 ### PR #182（2026-09-23 合并，klxxya）——流畅度/解码减负 + 岛远端硬墙 + 音效包缓存 + 设置收口
 
 - **问题**：走路动画的位置交付只有 **28.6Hz**（观感"卡"）；webm 冷路径在 **GUI 线程同步解码首帧**，碰撞压力下 >50ms 卡顿达 **133 次**；多进程下的子肥鱼会**穿岛**（本进程没有岛就以为岛上没墙）；音效包候选解析每帧 `iterdir` 扫盘；「多开」开关长期挂在设置页但拓扑尚未收口。
