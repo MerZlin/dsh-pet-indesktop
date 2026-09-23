@@ -1,6 +1,6 @@
 # v4.2.1
 
-> 从 **v4.2.0 到 v4.2.1** 的完整汇总：自 v4.2.0（2026-09-10 发布）之后合并进 `main` 的 **56 个已合并 PR、189 个提交**——其中三位外部贡献者各带了一整批：**#178**（KagurazakaChizuru，edge 音色下架兜底）、**#182**（klxxya，流畅度/解码/岛墙/音效缓存）、以及此前批次里的 #149 / #150 等。
+> 从 **v4.2.0 到 v4.2.1** 的完整汇总：自 v4.2.0（2026-09-10 发布）之后合并进 `main` 的 **57 个已合并 PR、192 个提交**，由 5 位外部贡献者（klxxya / Anguis-L / KagurazakaChizuru / Daliuq / lscatfish）与本仓维护者共同完成——逐项见文末 [🙏 致谢](#-致谢)。
 >
 > **本文件分两段用**：`## 📦 下载` 至 `## 🙏 致谢` 是**发布正文**（2026-09-23 已贴到 GitHub Release）；`RELEASE-BODY-END` 注释之后的三节（发布前测试清单 / 视频预演脚本 / 维护者清单）**只在仓库内使用，不随 Release 发布**（本版首次发布时误贴过，已撤回）。
 >
@@ -164,11 +164,14 @@
 
 ## 🙏 致谢
 
-感谢本版所有贡献者与上游：
+感谢本版所有贡献者与上游（按本版合入量排序；名单口径为 v4.2.0 tag 之后合并的 57 个 PR）：
 
-- [klxxya](https://github.com/klxxya)（#182 流畅度与解码减负、岛远端硬墙、音效包缓存、设置收口）
-- [KagurazakaChizuru](https://github.com/KagurazakaChizuru)（#178 edge 音色下架兜底 + 连发重试 + 非空缓存判定）
-- 以及上游 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的素材与实现基础；v4.2.0 及其之前的贡献者名单见 [`RELEASE-v4.2.0.md`](RELEASE-v4.2.0.md)。
+- [klxxya](https://github.com/klxxya)（26 个 PR：#101 / #104 / #105 / #107–#109 / #113 / #114 / #123 / #140 / #157–#170 / #173 / #182）——**灵动岛重做**与岛碰撞改同步硬墙、鱼-鱼碰撞体身体框与多进程远端硬墙；**性能与解码减负**（走路帧间补点 28.6Hz→~160Hz、webm 冷路径首帧不再阻塞 GUI、meta 探测后台化、抛掷飞行加速、音效包候选解析进程级缓存）；**移动-动画同步与朝向规则重写**；聊天背景取景渲染恢复与取景入口语义（#163 / #167 / #169 / #170）；Harness 停止/重启离开 GUI 线程（#158）；周期生命周期与提醒队列加固、看门狗误杀新连接等四则（#159 / #160）；删死代码净 −662 行（#162）与测试自欺修复（#161）；气泡长文本与设置页折叠收口（#123）；边缘探头会话期禁位移（#101）。
+- [Anguis-L](https://github.com/Anguis-L)（4 个 PR）：#144 识屏身份提示改用重命名后的角色别名；#151 桌宠隐藏时 DSH 联动反馈气泡改道灵动岛（补齐三层隐藏丢弃链）；#152 拖文件解读改有界读取，不再整文件读入卡死 GUI；#155 灵动岛左右停靠反复滑出/收回时细条持续上窜。
+- [KagurazakaChizuru](https://github.com/KagurazakaChizuru)（3 个 PR）：#118 新增**语音报时 `voice_chime`**（六种调度模式 + edge-tts 合成与缓存）；#127 新增**节日提醒 `festival_reminder`**（46 个日子 / 314 条文案，与报时共用音频通道且让位）；#178 **edge 音色下架自动兜底** + 连发重试（2 次 / 1.5 s）+ **0 字节缓存不算命中**，并把音色表按微软在线表重建为 36 款。
+- [Daliuq](https://github.com/Daliuq)（2 个 PR）：#97 事件汇报概率门 + 事件链路语义对齐（Closes #95）；#100 启动即按配置装配可选服务（Agent 联动与主动识屏不再需要先展开菜单/碰一次开关）。
+- [lscatfish](https://github.com/lscatfish)（2 个 PR）：#137 Linux 屏幕边缘无法贴边（GNOME/mutter 窗口钳位，改绘制补偿视口模型；边缘间距 154 px → 个位数 px）；#139 bridge 冒烟的 app-dir 归一为绝对路径，修 CI Linux/macOS 打包构建红。
+- 以及上游 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的素材与实现基础；v4.2.0 及其之前的贡献者名单（klxxya / Daliuq / ushio2026-alt / shinelon / MYming-yue / 0x18d）见 [`RELEASE-v4.2.0.md`](RELEASE-v4.2.0.md)。
 
 ---
 
