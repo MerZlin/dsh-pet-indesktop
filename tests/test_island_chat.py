@@ -265,6 +265,30 @@ def test_shell_click_toggles_island_chat_bubble(tmp_path):
         _teardown_shell(shell)
 
 
+def test_shell_click_when_no_chat_reshows_pets(tmp_path):
+    """纯桌宠版（打包时排除 `pet.chat`）：桌宠隐藏时单击岛必须把桌宠叫回来。
+
+    旧行为：岛按 `hidden_chat` 发 `chat_requested` → `_chat_from_island` →
+    `_show_island_chat` 因 `_island_chat_available()` 为假**直接返回**，整次点击
+    静默无响应（用户反馈「桌宠隐藏后点灵动岛没反应」，2026-09-23 修复）。
+    岛是纯桌宠版隐藏后唯一的常驻交互面，此时单击的合理语义就是「显示桌宠」。
+    """
+    _qapp()
+    shell = _make_shell(tmp_path)
+    try:
+        shell._sync_dynamic_island()
+        shell.island.set_pet_visible(False)   # 桌宠已隐藏（隐藏时由 on_hidden 同步）
+        shell.enable_chat = False             # 无 chat 的打包变体
+        assert shell._island_chat_available() is False
+
+        shell._chat_from_island()
+
+        assert shell.island._pet_visible is True, "点击后桌宠仍未恢复可见"
+        assert shell.island_chat is None, "无 chat 变体不该去建对话气泡"
+    finally:
+        _teardown_shell(shell)
+
+
 def test_shell_show_pets_from_island_chat(tmp_path):
     """气泡内「显示桌宠」：调 set_pet_visible(True) 并收起气泡（无实例时不出错）。"""
     _qapp()

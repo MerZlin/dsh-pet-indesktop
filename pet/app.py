@@ -2251,7 +2251,16 @@ class AppShell:
         bubble.show_for_island(self.island, activate=activate, reply_text=reply_text)
 
     def _chat_from_island(self) -> None:
-        """桌宠隐藏时单击岛：气泡已开则收起，否则弹出（交互式）。"""
+        """桌宠隐藏时单击岛：气泡已开则收起，否则弹出（交互式）。
+
+        **没有对话能力的变体（纯桌宠版，打包时排除 `pet.chat`）**走不到气泡：
+        岛是桌宠隐藏后唯一的常驻交互面，此时单击直接**把桌宠叫回来**。
+        旧行为是发完 `chat_requested` 后被 `_show_island_chat` 的可用性闸门
+        静默挡掉，用户点了完全没反应（2026-09-23 修复）。
+        """
+        if not self._island_chat_available():
+            self._show_pets_from_island_chat()
+            return
         bubble = getattr(self, "island_chat", None)
         if bubble is not None and shiboken6.isValid(bubble) and bubble.isVisible():
             bubble.close()
