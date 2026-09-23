@@ -835,6 +835,36 @@ def resolve_builtin_sound(sound_id: str) -> Path | None:
     return None
 
 
+_duck_candidates_cache: dict[str, tuple[Path, ...]] = {}
+
+
+def _reset_caches_for_tests() -> None:
+    """仅测试用：清空模块级解析缓存（生产进程内缓存随包静态，无需失效）。"""
+    _duck_candidates_cache.clear()
+
+
+def _duck_candidates(duck_dir: Path) -> list[Path]:
+    """内置小鸭包候选列表（带进程级缓存）。
+
+    包内素材是打包资源，运行期不会变；但点击（window 每次按下/确认点击）与
+    碰撞命中（collision_client/island_collision 每次真撞）都会走到这里，
+    不缓存就是 GUI 线程上每次命中一次目录扫描——碰撞瞬时尖峰来源之一。
+    返回副本，调用方的改动不污染缓存。
+    """
+    key = str(duck_dir)
+    cached = _duck_candidates_cache.get(key)
+    if cached is not None:
+        return list(cached)
+    candidates: list[Path] = []
+    if duck_dir.is_dir():
+        candidates = sorted(
+            p for p in duck_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
+        )
+    _duck_candidates_cache[key] = tuple(candidates)
+    return candidates
+
+
 def resolve_click_sound_candidates(pack: dict | None, data_dir: Path | None = None) -> list[Path]:
     """根据点击音效包配置解析候选音频文件列表。"""
     pack = pack if isinstance(pack, dict) else {}
@@ -847,14 +877,7 @@ def resolve_click_sound_candidates(pack: dict | None, data_dir: Path | None = No
 
     if kind == "builtin":
         if pack_id == "duck":
-            duck_dir = sounds_dir / "duck"
-            if duck_dir.is_dir():
-                candidates = [
-                    p for p in duck_dir.iterdir()
-                    if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
-                ]
-                return sorted(candidates)
-            return []
+            return _duck_candidates(sounds_dir / "duck")
         # default builtin
         candidates = []
         if data_dir is not None:
