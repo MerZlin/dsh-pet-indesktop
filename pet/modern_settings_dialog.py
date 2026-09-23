@@ -456,8 +456,9 @@ class ModernSettingsDialog(QDialog):
             )
         general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
         # 拓扑收口 Phase A：「单进程多开」实验开关从设置页隐藏（多进程为唯一
-        # 多宠拓扑方向；配置键照常读写，存量用户与回滚路径不受影响——
-        # 开关控件仍在 settings_pet_controls 构造并加载配置）。
+        # 多宠拓扑方向；开关控件已从 settings_pet_controls 移除，设置页不再
+        # 写该键；配置键 experimental_single_process_spawn 随 config.save()
+        # 原样回写，存量用户与回滚路径不受影响）。
         if self.balance_refresh_spin is not None:
             general_layout.addWidget(
                 SettingsSection(

@@ -9,7 +9,7 @@
 | 文件 | 增/删 | 改了什么 / 为什么 |
 |---|---|---|
 | `pet/movement.py` | +33/-1 | 新增 `move_anim_tick(host)`：走路位置在帧回调之间按墙钟外推等效帧号补点（锚点封顶 +1 帧防漂移）。旧路径走路位置更新仅 ~28.6Hz（24fps 素材帧驱动），高刷屏上每 ~6 显示帧才动一次，是"帧数低/不流畅"观感的直接来源 |
-| `pet/window.py` | +54/-32 | `_move_anim_timer`（_tick_ms/PreciseTimer）接线补点；`_rebuild_frame` 取帧回退为 `currentPixmap().toImage()` 私有深拷贝（见"崩溃消融"说明）；`_throw_low_speed_switch` 回退分支加 warm 池闸门；`gui_stall_sampler` 接线（>60ms 空窗落冻结现场） |
+| `pet/window.py` | +54/-32 | `_move_anim_timer`（_tick_ms/PreciseTimer）接线补点；`_rebuild_frame` 取帧改回经 `QPixmap.toImage()`（与 clip 显示槽/首帧缓存无共享别名，见"崩溃消融"说明）；`_throw_low_speed_switch` 回退分支加 warm 池闸门；`gui_stall_sampler` 接线（>60ms 空窗落冻结现场） |
 | `pet/webm_clip.py` | +54/-91 | `jumpToFrame(0)` 冷路径不再 GUI 同步解码首帧（旧帧由窗口顶着）；`_process_frame` 源帧 0 顺手写首帧缓存（try-acquire，GUI 不阻塞）；首帧缓存改存 `.copy()`（消融）；meta 探测主线程踢后台（`_ensure_meta` 后台化、`warm_meta` 用 `_from_warm=True` 放行）；新增 `currentImage()`/`clear_display_frame()`（新架构 sprite 使用，旧窗口路径不消费） |
 | `pet/library.py` | +21/-1 | 新增 `clip_current_image(clip)`（零拷贝取当前帧，空帧回退 `currentPixmap().toImage()`）；旧窗口路径已不消费，保留给 sprite 路径 |
 | `pet/physics.py` | +11/-0 | `flight_anim_speed`：抛掷飞行期动画速率随速度 1.0→1.75×（高速飞行不再"慢动作滑翔"） |
@@ -100,8 +100,8 @@ PySide6 6.11.2。测量工具：外挂 GetWindowRect 1ms 轮询（`probe_move_ca
 
 ### 2.5 崩溃消融的诚实记录（不许用沉默代替结论）
 
-开发期本分支窗口曾回退"零拷贝取帧"（`window.py` 改回 `toImage` 私有拷贝 +
-首帧缓存 `.copy()`）——背景是 2026-09-22 部署版出现 8 次 Qt6Gui
+开发期本分支窗口曾回退"零拷贝取帧"（`window.py` 改回经 `QPixmap.toImage()`
+取帧，与 clip 显示槽/首帧缓存无共享别名 + 首帧缓存 `.copy()`）——背景是 2026-09-22 部署版出现 8 次 Qt6Gui
 QRasterPaintEngine 原生崩溃（WER + 3 份 CrashDumps 栈链还原，全部
 GUI 线程绘制期空 d_ptr 近零解引用）。后续取证（反汇编 + 哨兵捕获
 `QBackingStore::endPaint() called with active painter`）证明真正机理是
