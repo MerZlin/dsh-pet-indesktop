@@ -78,13 +78,11 @@ def attach(win) -> None:
     if tid is None or tid in _attached:
         return
     sampler = _GuiStallSampler(tid)
-    _attached[tid] = sampler
     sampler.start()
+    _attached[tid] = sampler
     # 窗口销毁后停止采样线程（弱引用自清，不占 closeEvent 路径）
     ref = weakref.ref(win, lambda _r: _attached.pop(tid, _GuiStallSampler()).stop()
                       if tid in _attached else None)
-    _attached[tid] = sampler
-    _keepalive = ref  # noqa: F841  # 弱引用本体由 sampler 持有防提前回收
     sampler._win_ref = ref
 
 

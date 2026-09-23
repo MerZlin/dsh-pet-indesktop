@@ -374,7 +374,8 @@ def test_island_member_survives_coordinator_tick(app):
 
 
 def test_island_member_without_visible_flag_is_purged(app):
-    """回归钉：漏带 FLAG_VISIBLE 的成员会被 tick 清退（本 bug 的实锤语义）。"""
+    """回归钉：漏带 FLAG_VISIBLE 的成员会被清退——A4 起为两阶段：
+    首 tick 墓碑标记（带不可见标记进一次快照），下一 tick 正式清退。"""
     from pet.config import DEFAULT_COLLISION_SETTINGS
 
     worker = _CollisionWorker("test-tick", "self-pid1-cc", "inst",
@@ -387,4 +388,85 @@ def test_island_member_without_visible_flag_is_purged(app):
         'circles': collision.circles_from_rect(400.0, 178.0, 200.0, 44.0),
     })
     worker._coordinator_tick()
-    assert ISLAND not in worker.members
+    assert ISLAND in worker.members, "首 tick 墓碑期仍在（快照携带不可见标记）"
+    worker._coordinator_tick()
+    assert ISLAND not in worker.members, "下一 tick 正式清退"
+
+
+def test_paused_member_snapshotted_once_before_purge(app):
+    """A4 修复：PAUSED 成员先带标记进一次快照（远端据此立即撤墙），
+    下一 tick 才正式清退——不再被静默清退后靠 8s TTL 兜底。"""
+    from pet.config import DEFAULT_COLLISION_SETTINGS
+
+    worker = _CollisionWorker("test-tick", "self-pid1-dd", "inst",
+                              {**DEFAULT_COLLISION_SETTINGS, "collision_enabled": True})
+    worker.server = object()
+    worker.epoch = "e1"
+    worker.submit_static_state({
+        'member_id': ISLAND, 'seq': 1, 'x': 500.0, 'y': 200.0,
+        'w': 200.0, 'h': 44.0, 'flags': FLAGS_ACTIVE,
+        'circles': collision.circles_from_rect(400.0, 178.0, 200.0, 44.0),
+    })
+    worker.submit_static_state({
+        'member_id': ISLAND, 'seq': 2, 'x': 500.0, 'y': 200.0,
+        'w': 200.0, 'h': 44.0, 'flags': FLAGS_ACTIVE | collision.FLAG_PAUSED,
+        'circles': collision.circles_from_rect(400.0, 178.0, 200.0, 44.0),
+    })
+    snapshots = []
+    worker.snapshot_ready.connect(lambda payload: snapshots.append(payload))
+    worker._coordinator_tick()
+    assert ISLAND in worker.members, "首个 tick：墓碑期成员仍在（等待快照下发 PAUSED）"
+    paused_in_snapshot = [
+        m for m in (snapshots[-1].get('members', []) if snapshots else [])
+        if m.get('runtime_id') == ISLAND and (int(m.get('flags', 0)) & collision.FLAG_PAUSED)
+    ]
+    assert paused_in_snapshot, "PAUSED 标记必须随快照下发一次（远端立即撤墙的信道）"
+    worker._coordinator_tick()
+    assert ISLAND not in worker.members, "下一 tick：墓碑成员正式清退"
+
+
+def test_detach_publisher_stops_heartbeat_and_publishes_paused(app):
+    """A5 修复：detach 发一次 PAUSED + 停心跳 + 清会话引用（幂等）。"""
+    session = _FakeSession()
+    body = IslandCollisionBody(_FakeIsland(), SimpleNamespace())
+    body.attach_publisher(session)
+    body.start()
+    assert body._pub_session is session
+    assert body._pub_timer is not None and body._pub_timer.isActive()
+    count_before = len(session.submitted)
+    body.detach_publisher()
+    assert body._pub_session is None
+    assert body._pub_timer is None
+    assert len(session.submitted) == count_before + 1
+    assert session.submitted[-1]['flags'] & collision.FLAG_PAUSED
+    body.detach_publisher()  # 幂等：二次 detach 是 no-op
+    assert len(session.submitted) == count_before + 1
+    body.stop()
+
+
+def test_state_message_member_id_hijack_rejected(app):
+    """评审加固：非静态通道的 member_id 一律回退到连接自身 runtime_id——
+    冒名覆写其它成员状态的报文不生效。"""
+    worker = _make_worker(server=True)
+    from unittest.mock import MagicMock
+
+    victim_socket = MagicMock()
+    worker.peers[victim_socket] = "peer-victim"
+    worker.submit_static_state({
+        'member_id': ISLAND, 'seq': 1, 'x': 1.0, 'y': 1.0, 'w': 10.0, 'h': 10.0,
+        'flags': FLAGS_ACTIVE, 'circles': [],
+    })
+    # 冒名报文：声称自己是 island，但 flags 不带 FLAG_STATIC → 回退到发送方 id
+    worker._handle_message(victim_socket, {
+        'type': 'state', 'member_id': ISLAND, 'seq': 99,
+        'x': 777.0, 'y': 777.0, 'w': 10.0, 'h': 10.0,
+        'flags': collision.FLAG_COLLISION_ENABLED | collision.FLAG_VISIBLE, 'circles': [],
+    })
+    assert worker.members[ISLAND]['x'] == 1.0, "无 FLAG_STATIC 的冒名报文不得覆写 island 成员"
+    assert worker.members['peer-victim']['x'] == 777.0, "报文按发送方自身 runtime_id 入账"
+    # 合法静态通道：member_id=island + FLAG_STATIC → 正常覆盖
+    worker._handle_message(victim_socket, {
+        'type': 'state', 'member_id': ISLAND, 'seq': 2,
+        'x': 888.0, 'y': 1.0, 'w': 10.0, 'h': 10.0, 'flags': FLAGS_ACTIVE, 'circles': [],
+    })
+    assert worker.members[ISLAND]['x'] == 888.0, "合法静态布景通道必须照常工作"

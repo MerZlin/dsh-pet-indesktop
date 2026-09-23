@@ -197,6 +197,26 @@ class IslandCollisionBody(QObject):
                 self._pub_timer.timeout.connect(self._publish_static_state)
             self._pub_timer.start()
 
+    def detach_publisher(self) -> None:
+        """摘下碰撞会话发布通道（A5 评审修复：碰撞总开关关闭/会话失效时）。
+
+        attach 没有逆操作会导致：总开关关掉后 _pub_session 残留、2s 心跳
+        继续向已停会话发报。这里发一次 PAUSED（远端经墓碑快照立即撤墙，
+        见 collision_ipc._coordinator_tick 的墓碑机制）、停心跳、清引用。
+        幂等：未 attach 时是 no-op。
+        """
+        if self._pub_session is None and self._pub_timer is None:
+            return
+        if self._pub_session is not None and self._island is not None:
+            try:
+                self._publish_static_state(paused=True)
+            except Exception:
+                logging.debug("detach_publisher 发布 PAUSED 失败", exc_info=True)
+        self._pub_session = None
+        if self._pub_timer is not None:
+            self._pub_timer.stop()
+            self._pub_timer = None
+
     def _publish_static_state(self, paused: bool = False) -> None:
         """把岛几何作为静态成员状态提交到碰撞世界（成员 id = ISLAND_MEMBER_ID）。
 

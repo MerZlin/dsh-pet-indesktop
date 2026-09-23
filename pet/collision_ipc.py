@@ -164,6 +164,9 @@ class _CollisionWorker(QObject):
         self._socket_decoders: dict[QLocalSocket, collision_codec.FrameStreamDecoder] = {}
         self.members: dict[str, dict[str, Any]] = {}
         self._pending_predicted: dict[str, dict] = {}
+        # 墓碑集合（A4 评审修复）：暂停/不可见成员先带标记进一次快照
+        # （远端据此立即撤墙），下一 tick 才真正清退；见 _coordinator_tick。
+        self._tombstones: set[str] = set()
         self.previous_members: dict[str, dict[str, Any]] = {}
         self._swept_pair_versions: dict[str, tuple[int, int]] = {}
         self._predicted_pair_ticks: dict[str, int] = {}
@@ -555,12 +558,20 @@ class _CollisionWorker(QObject):
                     self._welcomed_peers.add(socket)
                     self._send(socket, self._welcome())
             elif kind == "state":
-                # member_id 覆盖（第二成员通道：灵动岛静态布景），缺省回退
-                # 到连接自身 runtime_id——旧版发送方不含该字段时行为不变。
-                runtime_id = _valid_runtime_id(message.get("member_id")) \
-                    or _valid_runtime_id(self.peers.get(socket, ""))
+                # member_id 覆盖（第二成员通道：灵动岛静态布景）仅限已登记的
+                # 静态布景成员（当前仅 ISLAND_MEMBER_ID）且报文带 FLAG_STATIC；
+                # 其余 member_id 一律回退到连接自身 runtime_id——防止意外或
+                # 恶意的成员状态冒名覆写（评审加固项）。
                 state = _normalize_state(message)
-                if not runtime_id or state is None:
+                if state is None:
+                    return
+                claimed = _valid_runtime_id(message.get("member_id"))
+                if claimed == collision.ISLAND_MEMBER_ID and (
+                        int(state.get("flags", 0)) & collision.FLAG_STATIC):
+                    runtime_id = claimed
+                else:
+                    runtime_id = _valid_runtime_id(self.peers.get(socket, ""))
+                if not runtime_id:
                     return
                 seq = int(state["seq"])
                 old = self.members.get(runtime_id, {})
@@ -888,8 +899,19 @@ class _CollisionWorker(QObject):
         for state in self._fresh_member_values(now):
             flags = int(state.get("flags", 0))
             if (flags & collision.FLAG_PAUSED) or not (flags & collision.FLAG_VISIBLE):
-                self._remove_member(str(state.get("runtime_id", "")))
+                rid = str(state.get("runtime_id", ""))
+                if rid not in self._tombstones:
+                    # 先快照后清退（A4 评审修复）：首个 tick 只做墓碑标记，
+                    # 让成员带着 PAUSED/不可见标记进一次快照——远端据此立即
+                    # 撤墙（island_collision.on_remote_snapshot 的 PAUSED 分支），
+                    # 而不是被静默清退后靠 _REMOTE_WALL_TTL_S 8s 兜底。
+                    self._tombstones.add(rid)
+                    self._membership_dirty = True
+                else:
+                    self._tombstones.discard(rid)
+                    self._remove_member(rid)
                 continue
+            self._tombstones.discard(str(state.get("runtime_id", "")))
             if state.get("flags", 0) & collision.FLAG_VISIBLE:
                 defaults = {"vx": 0.0, "vy": 0.0, "mass": 1.0, "is_infinite_mass": False,
                             "flags": 0, "instance_id": "", "character": "", "scale": 0.72,

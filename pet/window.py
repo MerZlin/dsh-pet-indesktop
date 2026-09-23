@@ -2833,6 +2833,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         stride = (getattr(self.lib, 'move_strides', None) or {}).get(move_name, catalog.MOVE_STRIDE_DEFAULT_PX) * self.scale
         # 步幅量化：位移锁到步态整圈（位置帧驱动后速度恒等于动画步态，不打滑）
         loops, distance, duration = quantize_move(distance, stride, room, self.lib.duration(move_name))
+        # 冷 meta 闸门（PR 评审 A1）：meta 后台化后，冷素材的 duration()
+        # 返回退化值 0.0（frames() 同步退化为 1），按它们建计划会让位移在
+        # 头几帧内按错的总帧数瞬间跑完（瞬移）。本轮放弃移动等后台 meta
+        # 到位，下一轮掷骰自然恢复——不建坏计划，也绝不在 GUI 线程回退同步
+        # 探测。判别只用 duration：真实单帧素材 duration>0 不受影响。
+        if duration <= 0.0:
+            logging.debug('移动取消：%s meta 未就绪（duration=%.3f）', move_name, duration)
+            return False
         target_cx = sp.cx + dir_sign * distance
         if not self._switch(move_name):
             # 切换被拒：_switch 已回退到上一动画/待机并安排重试（B7 审查
@@ -4258,7 +4266,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         was_throw = self._physics_mode == 'throw'
         self._physics_timer.stop()
         self._physics_mode = None
-        getattr(self, 'movie', None) and self.movie.set_playback_speed(1.0)  # 飞行期动画加速复位
+        getattr(self, 'movie', None) and self.movie.set_playback_speed(float(getattr(self, 'playback_speed', 1.0)))  # 飞行期动画加速复位（回用户速率，非 1.0）
         self._unpin_landing_idles()  # 飞行结束：摘掉起飞首帧保护（pin 只在飞行期存在）
         if getattr(self, '_interaction_state', IDLE) == THROWN:
             self._interaction_state = IDLE
@@ -4283,7 +4291,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._warm_landing_idles()
         else:
             # 飞行被拖拽打断（空中抓住）：起飞预热/首帧 pin 的落地语义已不存在
-            getattr(self, 'movie', None) and self.movie.set_playback_speed(1.0)  # 飞行期动画加速复位
+            getattr(self, 'movie', None) and self.movie.set_playback_speed(float(getattr(self, 'playback_speed', 1.0)))  # 飞行期动画加速复位（回用户速率，非 1.0）
             self._unpin_landing_idles()
 
     def _first_frame_warm(self, name) -> bool:
@@ -4450,10 +4458,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             predict_bounce(start_px, start_py)
         self._move_window_towards(self._phys_pos[0], self._phys_pos[1])
         speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
-        # 飞行期动画随速度加速（24fps 素材高速频闪的修法，physics.flight_anim_speed）
-        f = physics_mod.flight_anim_speed(speed)
+        # 飞行期动画随速度加速（叠加在用户播放速率之上；停飞由
+        # _stop_physics/_switch 复位回 self.playback_speed；physics.flight_anim_speed）
+        user_speed = float(getattr(self, 'playback_speed', 1.0))
+        f = user_speed * physics_mod.flight_anim_speed(speed)
         movie = getattr(self, 'movie', None)
-        if movie is not None and abs(getattr(movie, 'playback_speed', 1.0) - f) > 0.05:
+        if movie is not None and abs(getattr(movie, 'playback_speed', user_speed) - f) > 0.05:
             movie.set_playback_speed(f)
         # 低速段入口过渡：降速即切出悬空动画（每次弹射一次），之后由播完链接力。
         if (not getattr(self, '_throw_slow_switched', False)

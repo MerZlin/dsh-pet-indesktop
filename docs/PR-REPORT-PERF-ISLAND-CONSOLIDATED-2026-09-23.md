@@ -59,7 +59,7 @@ PySide6 6.11.2。测量工具：外挂 GetWindowRect 1ms 轮询（`probe_move_ca
 
 | 指标 | 修复前 | 修复后 | 样本 |
 |---|---|---|---|
-| 走路位置交付间隔 p50 | 35.0ms（~28.6Hz） | **6.2ms（~160Hz）** | cadence_225612.jsonl，n=168+ |
+| 走路位置交付间隔 p50 | 35.0ms（~28.6Hz） | **6.2ms（~160Hz）** | 基线 probe_move_cadence（n=168）；修复后 cadence_225612.jsonl（4634 次位置移动实测 p50 6.3ms） |
 | 走路位置交付间隔 p90/p99 | 36.5 / 39.5ms | 10.4 / 18.4ms | 同上 |
 | 单调走路子段零反向步 | — | 51/53（2 例最深 -2px 整数取整噪声，不可见） | cadence_000643.jsonl，300s 真人使用环境 |
 
@@ -138,3 +138,28 @@ GUI 线程绘制期空 d_ptr 近零解引用）。后续取证（反汇编 + 哨
    `All checks passed!`；受影响时序测试族（collision/island/webm/move_sync/
    throw/spawn/first_frame/meta/click_sound，325 用例）高负载复跑 **3 遍
    全绿**（25.3s / 38.5s / 30.1s）。
+
+## 4. 评审与处置（push 前三方会审：K3 + DS + GLM，2026-09-23）
+
+会审记录：`.scratch/single-overlay-window/_pr_review_ds.md`、
+`_pr_review_glm.md`、`_pr_review_glm_final.md`。逐项处置：
+
+| 发现 | 严重度 | 处置 |
+|---|---|---|
+| A1 冷 meta 首播瞬移（`_try_move` 吃到 meta 默认值建坏计划） | 阻断 | **已修**：`_try_move` 冷 meta 闸门（duration≤0 或 frames≤1 时本轮放弃移动，后台到位后自愈；不回退 GUI 同步探测）+ `test_try_move_skips_when_meta_cold` |
+| A2 飞行加速/复位硬编码 1.0，抹掉用户「播放速率」 | 应修 | **已修**：加速与复位均按 `self.playback_speed` 复合 + `test_flight_anim_speed_composes_with_user_playback_speed` |
+| A3「等效 ~42fps」无机制支撑（readrate 启动时固定） | 应修 | **措辞修正**：docstring 改为"跳帧加速"语义（动画在更短墙钟内播完，非解码端真交付 42fps）；readrate 跟随列入后续改进 |
+| A4 FLAG_PAUSED「立即撤墙」在协调者链路不可达（静默清退，远端靠 8s TTL） | 应修 | **已修**：协调者墓碑机制（`_tombstones`）——暂停/不可见成员先带标记进一次快照，下一 tick 才清退 + `test_paused_member_snapshotted_once_before_purge`（既有清退回归钉同步改两阶段语义） |
+| A5 碰撞总开关关闭后发布通道残留（2s 心跳持续发报） | 应修 | **已修**：新增 `IslandCollisionBody.detach_publisher()`（发一次 PAUSED + 停心跳 + 清引用）并在 `_sync_island_collision` 无可用会话分支调用 + `test_detach_publisher_stops_heartbeat_and_publishes_paused` |
+| member_id 任意值可被冒名覆写（协议放宽） | 建议 | **已加固**：member_id 覆盖仅限 `ISLAND_MEMBER_ID` + `FLAG_STATIC`，其余回退连接自身 runtime_id + `test_state_message_member_id_hijack_rejected` |
+| webm_clip `__init__` 注释「冷路径只 kick 后台 warm」与代码矛盾 | 应修 | **已修**：注释改为"不 kick 任何解码"（与 jumpToFrame 实现一致） |
+| `test_meta_no_gui_probe` 断言 `<=1` 过松（0 也通过） | 建议 | **已修**：断言收紧为「同步踢出 + 合计恰 1 次」 |
+| `gui_stall_sampler` 重复赋值与 `_keepalive` 死代码 | 建议 | **已修**：删冗余行（`sampler._win_ref` 已承担保活） |
+| `test_webm_first_frame_lock.py` 未用 `import time` | 建议 | **已修**：删除 |
+| 报告样本口径「n=168+」与实际不符 | 建议 | **已修**：基线（n=168）与修复后（4634 次位置移动）分开标注 |
+| `clip_current_image` 等三个 API 旧路径不消费（新架构依赖） | 应修（有记录） | **保留 + 明示**：为同树 sprite 路径的依赖（带完整测试），防两批断链；PR 描述中显式声明可无 sha 回退 |
+| `move_anim_tick` 从 movement 引入 window.time（分层瑕疵） | 建议 | 保留现状：它是测试接缝（monkeypatch 统一时钟），lazy import 无循环风险；后续可改为注入时钟 |
+| `_on_move_tick` 只停 `_move_timer` 不停 `_move_anim_timer` | 建议 | 潜伏不可达（plan/movie 同生共死），暂不加以免动语义 |
+| 多窗时 gui_stall_sampler 仅首窗生效 | 建议 | 观测工具语义，perfstats 默认关闭；多窗采样归后续 |
+| 隐藏「多开」后存量 True 用户无 UI 出口、SETTINGS-CHANGE-GATES/RELEASE 文档未同步 | 建议 | 记录在案：文档同步归 4.4 文档刀；存量用户可手改 config.json（键保留） |
+| 报告行预算碰撞（window.py 4635 vs 上游 +3） | — | 已按先例校准 4638（提交 f32e71a）；A1/A2 修复净增后再校准 4647（守卫必须贴着建计划点，未拆控制器，注释史逐行说明） |

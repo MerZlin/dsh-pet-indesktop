@@ -2182,12 +2182,20 @@ class AppShell:
                 self.island.on_pet_visibility_changed = body.set_own_pet_visible
         # 宿主进程：几何发布走第一个持有碰撞会话的实例（无会话=碰撞总开关
         # 关，静默跳过——本进程直连硬墙不受影响）；远端模式无需 attach。
+        # 无可用会话时显式 detach（A5）：清掉残留发布通道与 2s 心跳，
+        # 否则总开关关闭后仍向已停会话持续发报。
+        attached = False
         if self.island is not None and bool(self.config.get("collision_enabled", True)):
             for inst in self._instances:
                 session = getattr(inst, "collision_ipc", None)
                 if session is not None:
                     body.attach_publisher(session)
+                    attached = True
                     break
+        if not attached:
+            detach = getattr(body, "detach_publisher", None)
+            if callable(detach):
+                detach()
         try:
             body.start()
         except Exception:

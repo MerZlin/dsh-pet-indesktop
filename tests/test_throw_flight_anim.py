@@ -346,3 +346,20 @@ def test_flight_anim_speed_follows_throw_and_restores(tmp_path, app):
     win._stop_physics()
     assert clip.speed == 1.0  # 落地复位
     win.close()
+
+
+def test_flight_anim_speed_composes_with_user_playback_speed(tmp_path, app):
+    """评审 A2：飞行加速必须叠加在用户「播放速率」之上（非覆盖），
+    落地复位回用户速率（非 1.0）。"""
+    win = _make_window(tmp_path)
+    win.playback_speed = 1.5
+    win._enter_physics_mode('throw')
+    win._switch(catalog.DRAG)
+    clip = win.lib.movie(catalog.DRAG)
+    win._phys_pos[:] = [200.0, 200.0]
+    win._phys_vel[:] = [1400.0, 0.0]
+    win._tick_throw_physics(0.016)
+    assert clip.speed == pytest.approx(1.5 * 1.75, abs=0.01)  # 用户速率 × 飞行倍率
+    win._stop_physics()
+    assert clip.speed == pytest.approx(1.5)  # 复位回用户速率，不是 1.0
+    win.close()

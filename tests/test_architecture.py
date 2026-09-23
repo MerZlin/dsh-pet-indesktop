@@ -108,7 +108,12 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 2026-09-23 上调到 4638：rebase 合入上游 a7489ae（fix(self-talk): 点击自言自语
 # 与周期气泡解耦 + 恢复点击侧设置可见，window.py +4/-1）。与本分支各修复无
 # 组合冲突，叠加实测 4638（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2 常规校准）。
-WINDOW_PY_LINE_BUDGET = 4638
+# 2026-09-23 上调到 4648：三方会审（K3+DS+GLM，push 前）修复——A1 冷 meta 闸门
+# （_try_move 加 duration 退化值守卫 + 注释，+9）与 A2 飞行加速按用户
+# 「播放速率」复合（表达式改写 + getattr 防御测试替身，+2）。净增为守卫与
+# 注释，未拆控制器（守卫必须贴着 _try_move 的建计划点才有效），按预算规则
+# 校准。实测 4648。
+WINDOW_PY_LINE_BUDGET = 4648
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的

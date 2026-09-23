@@ -68,8 +68,12 @@ def test_ensure_meta_kicks_background_warm_only_once(app, monkeypatch):
     monkeypatch.setattr(webm_clip_mod, '_get_meta_file_cache', lambda: {})
     clip._ensure_meta()
     clip._ensure_meta()
+    assert clip._meta_bg_kicked, "主线程首次调用必须同步踢出后台预热"
     clip._ensure_meta()
-    assert len(clip.probe_calls) <= 1, "每 clip 只踢一次后台预热"
+    deadline = time.monotonic() + 2.0
+    while not clip.probe_calls and time.monotonic() < deadline:
+        app.processEvents()
+    assert len(clip.probe_calls) == 1, "两次主线程调用合计只踢一次后台预热"
     clip.cleanup()
     app.processEvents()
 

@@ -725,3 +725,24 @@ def test_anim_tick_respects_move_curve(app, tmp_path, monkeypatch):
             plan['start_x'] + span * (0.5 / plan['loops']))
     finally:
         _close(win, app)
+
+
+def test_try_move_skips_when_meta_cold(app, tmp_path, monkeypatch):
+    """冷 meta 闸门（评审 A1）：duration()=0.0 / frames()=1 的冷素材不建
+    移动计划（位移会按错的总帧数瞬移），本轮放弃，后台 meta 到位后恢复。"""
+    class ColdMetaLibrary(FakeLibrary):
+        def duration(self, name):
+            return 0.0  # meta 后台化后冷素材的默认值
+
+        def frames(self, name):
+            return 1
+
+    lib = ColdMetaLibrary(move_frames=10)
+    win = _make_win(tmp_path, monkeypatch, lib)
+    try:
+        _pin_rng(monkeypatch, distance=240)
+        assert win._try_move(MOVE) is False
+        assert win._move_plan is None              # 不建坏计划
+        assert win.anim != MOVE or not win._move_timer.isActive()
+    finally:
+        _close(win, app)

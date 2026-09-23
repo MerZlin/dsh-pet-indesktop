@@ -981,8 +981,8 @@ class WebMClip(QObject):
         self._ffr_evict_token = None  # 首帧预算 LRU 的逐出代次（见模块级注册表注释）
         # 首帧解码原子认领（N4）：warm_first_frame（后台线程）同一时间只有一个
         # 执行者；GUI 线程永不同步解码（冷路径 100-337ms 冻结，实测定案）——
-        # jumpToFrame 冷路径只 kick 后台 warm，播过留热由 _process_frame 的
-        # 源帧 0 顺手写缓存兜底。
+        # jumpToFrame 冷路径不 kick 任何解码，旧帧由窗口顶着，播过留热由
+        # _process_frame 的源帧 0 顺手写缓存兜底。
         self._first_frame_lock = threading.Lock()
         self._first_frame_done = threading.Event()
         # 首帧解码生命周期（P1-2）：与播放 reader 同一回收体系。
