@@ -3,11 +3,18 @@
 The functions in this module keep the runtime-marker policy independent from the
 Qt window implementation.  PetWindow retains thin compatibility methods that
 pass itself as the host, so existing callers and test patches continue to work.
+
+多显示器活动区域也在这里：``desktop_area()`` 取一次拖拽/抛掷的桌面快照
+（``DesktopArea``），``band_bounds()`` 按宠物当前所在的屏幕带收窄它，
+``move_window_towards`` / ``throw_bounds`` 在有快照时用它、没有快照时逐位退回
+本屏语义（单屏用户与漫游/落位/边缘探头不受影响）。见
+``docs/PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md``。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import logging
@@ -53,6 +60,76 @@ def stable_body_local_rect(host) -> QRect:
     )
 
 
+@dataclass(frozen=True)
+class DesktopArea:
+    """一次拖拽/抛掷交互的多屏桌面快照。
+
+    screens = 各屏可用区（沿用 availableGeometry，继续避开任务栏等系统保留区）；
+    bounds = 它们的包围矩形，作为交互的粗活动范围。多屏下"能不能越屏"由
+    ``band_bounds`` 按宠物当前所在的屏幕带再收窄，避免落进错位拼接的空洞。
+    """
+
+    bounds: QRect
+    screens: tuple[QRect, ...]
+
+
+def _valid_rect(rect: QRect | None) -> bool:
+    return rect is not None and rect.width() > 0 and rect.height() > 0
+
+
+def desktop_area() -> DesktopArea | None:
+    """取当前多屏桌面区域；有效屏不足 2 块或任一屏几何异常时返回 None。
+
+    None 表示"按单屏语义走"——单屏用户、屏几何拿不到时与改造前逐位一致。
+    只在一次拖拽/抛掷开始时调用（window 侧生命周期），不在物理 tick 里重复枚举。
+    """
+    try:
+        screens = list(QGuiApplication.screens() or ())
+    except Exception:  # 极端情况下 Qt 查询本身失败：退回本屏语义
+        return None
+    if len(screens) < 2:
+        return None
+    rects: list[QRect] = []
+    for screen in screens:
+        try:
+            area = QRect(screen.availableGeometry())
+        except Exception:
+            return None
+        if not _valid_rect(area):
+            return None
+        rects.append(area)
+    bounds = QRect(rects[0])
+    for rect in rects[1:]:
+        bounds = bounds.united(rect)
+    return DesktopArea(bounds=bounds, screens=tuple(rects))
+
+
+def band_bounds(area: DesktopArea, body: QRect) -> QRect:
+    """把桌面包围矩形收窄到"宠物当前所在的屏幕带"。
+
+    与身体框 x 带相交的屏决定上下边界，与 y 带相交的屏决定左右边界：错位拼接
+    （异分辨率/异缩放、上下错开）时包围矩形里有不属于任何显示器的空洞，直接用
+    包围矩形会让宠物停进空洞里看不见。收窄后身体框恒与某块屏的可用区相交
+    （身体框整个落在某条带之外时用另一条带的屏兜底，例如往主屏正下方的空洞里拖）。
+
+    拼接整齐的布局（同尺寸并列/上下堆叠）收窄结果恒等于包围矩形，常见双屏行为
+    不受影响；单屏路径根本不进这里（desktop_area 返回 None）。
+    """
+    vertical_band = [r for r in area.screens
+                     if r.right() >= body.left() and r.left() <= body.right()]
+    horizontal_band = [r for r in area.screens
+                       if r.bottom() >= body.top() and r.top() <= body.bottom()]
+    if not vertical_band and not horizontal_band:
+        return QRect(area.bounds)  # 请求整体在桌面之外：交给包围矩形钳回边缘
+    vertical_band = vertical_band or horizontal_band
+    horizontal_band = horizontal_band or vertical_band
+    left = min(r.left() for r in horizontal_band)
+    right = max(r.right() for r in horizontal_band)
+    top = min(r.top() for r in vertical_band)
+    bottom = max(r.bottom() for r in vertical_band)
+    return QRect(left, top, right - left + 1, bottom - top + 1)
+
+
 def virtual_pos(host) -> QPoint:
     """虚拟窗口位置 = 实际位置 + 绘制偏移（角色无约束时窗口该在的位置）。
 
@@ -66,7 +143,8 @@ def virtual_pos(host) -> QPoint:
 
 
 def move_window_towards(host, x: float, y: float,
-                        body_bounds: QRect | None = None) -> None:
+                        body_bounds: QRect | None = None,
+                        *, interaction_area: DesktopArea | None = None) -> None:
     """统一位置出口：按虚拟窗口位置 (x, y) 落窗。
 
     GNOME/mutter 会把移出工作区的窗口整体钳回（raw X11 XMoveWindow 同样
@@ -81,15 +159,27 @@ def move_window_towards(host, x: float, y: float,
        （画面/mask/碰撞体逐像素一致），并调度气泡/碰撞状态同步。
 
     屏幕中央请求时偏移恒为 (0,0)，Windows/macOS 行为与改造前逐像素一致。
+
+    ``interaction_area`` 是多屏拖拽/抛掷的活动区域快照：给定时活动范围换成该
+    快照（按宠物所在屏幕带收窄），角色得以跨屏；缺省时读 host 上缓存的快照
+    （window 侧一次交互写一次、结束即清），没有快照就走本屏语义——单屏用户与
+    漫游/落位/边缘探头逐位不变（显式 body_bounds 优先级最高，恒本屏）。
     """
     scr = host._screen_available()
     if scr is None:
         host.move(int(round(x)), int(round(y)))
         return
-    avail = scr.availableGeometry()
+    if interaction_area is None and body_bounds is None:
+        interaction_area = getattr(host, "_interaction_area", None)
     sbr = stable_body_local_rect(host)
-    bounds = avail if body_bounds is None else body_bounds
     xi, yi = int(round(x)), int(round(y))
+    if interaction_area is not None:
+        bounds = band_bounds(interaction_area, QRect(
+            xi + sbr.x(), yi + sbr.y(), sbr.width(), sbr.height()))
+        avail = bounds
+    else:
+        avail = scr.availableGeometry()
+        bounds = avail if body_bounds is None else body_bounds
     # 1. 身体框（= 虚拟位置 + 局部偏移）钳进工作区
     xi = clamp_span(xi + sbr.x(), bounds.left(), bounds.right(), sbr.width()) - sbr.x()
     yi = clamp_span(yi + sbr.y(), bounds.top(), bounds.bottom(), sbr.height()) - sbr.y()
@@ -129,15 +219,33 @@ def move_window_towards(host, x: float, y: float,
     host.move(wx, wy)
 
 
-def throw_bounds(host) -> tuple[float, float, float, float]:
+def throw_bounds(host, *,
+                 interaction_area: DesktopArea | None = None) -> tuple[float, float, float, float]:
     """抛掷/碰撞的虚拟窗口边界 (left, top, right, bottom)。
 
     语义 = 角色身体框贴到工作区四边（兑现原 `_w/3` 经验值注释里"让角色
     形象真正碰到边缘才反弹"的意图——该注释的前提"窗口可悬出屏幕"在
     GNOME 上不成立，改由绘制偏移兑现，边界算式随之改用身体框）。
+
+    多屏抛掷：``interaction_area`` 快照（缺省读 host 上缓存的那份）把边界换成
+    "宠物当前所在屏幕带"的范围，于是能从一块屏飞进相邻屏；单屏或没有快照时
+    仍用本屏 availableGeometry，逐位不变。无显示器（屏幕对象拿不到）时退化为
+    当前位置的零尺寸盒——冻结而不抛异常。
     """
-    avail = host._screen_available().availableGeometry()
+    if interaction_area is None:
+        interaction_area = getattr(host, "_interaction_area", None)
     sbr = stable_body_local_rect(host)
+    if interaction_area is not None:
+        pos = getattr(host, "_phys_pos", None) or (0.0, 0.0)
+        avail = band_bounds(interaction_area, QRect(
+            int(round(pos[0])) + sbr.x(), int(round(pos[1])) + sbr.y(),
+            sbr.width(), sbr.height()))
+    else:
+        scr = host._screen_available()
+        if scr is None:
+            pos = getattr(host, "_phys_pos", None) or (0.0, 0.0)
+            return (float(pos[0]), float(pos[1]), float(pos[0]), float(pos[1]))
+        avail = scr.availableGeometry()
     return (
         float(avail.left() - sbr.x()),
         float(avail.top() - sbr.y()),

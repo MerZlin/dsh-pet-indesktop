@@ -112,7 +112,15 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # duration 退化值守卫 + 注释，+9）与 A2 飞行加速按用户「播放速率」复合
 # （表达式改写 + getattr 防御测试替身，+2）。净增为守卫与注释，未拆控制器
 # （守卫必须贴着 _try_move 的建计划点才有效），按预算规则校准。实测 4648。
-WINDOW_PY_LINE_BUDGET = 4648
+# 2026-09-23 上调到 4667：本批两个用户可见缺陷的窗口侧接线（+19/-0）——
+# ① issue #186 多屏拖拽/抛掷：活动区域快照的取用与释放（__init__、拖拽起点、
+#    _enter_physics_mode、_stop_physics、普通拖拽松手各一处；几何判定/钳制/抛掷
+#    边界全在 pet/window_placement.py，物理 tick 里只读快照）；
+# ② 托盘图标可用性：frame_ready 一次性信号（声明 + 首帧标志 + _rebuild_frame
+#    里发一次）——4.2.1 起首帧不再在 GUI 线程同步解码，托盘要等它上线后补画。
+# 两处都必须贴着自己的控制流（拖拽/物理入口、帧构建尾部），拆控制器等于把同一条
+# 时序切断；按预算规则校准到实测值，不为达标压行。实测 4667。
+WINDOW_PY_LINE_BUDGET = 4667
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的

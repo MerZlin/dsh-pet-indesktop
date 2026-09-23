@@ -674,6 +674,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._physics_timer.setTimerType(Qt.TimerType.PreciseTimer)  # 同上：抛掷/落地弹跳的位置节拍必须均匀
         self._physics_timer.timeout.connect(self._on_physics_tick)
         self._physics_mode: str | None = None  # None / 'drag' / 'throw'
+        # 多屏活动区域快照（window_placement.desktop_area）：一次拖拽/抛掷取一次，
+        # 物理 tick 里只读它，不重复枚举显示器；None = 单屏/几何异常，走本屏语义。
+        self._interaction_area = None
         self._phys_pos = [0.0, 0.0]
         self._phys_vel = [0.0, 0.0]
         self._drag_target: QPoint | None = None
@@ -3289,6 +3292,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 return
             self._dragging = True
             self._interaction_state = "DRAGGING"
+            # 多屏：拖拽期间允许越屏（一次交互取一次快照，物理 tick 里只读它）
+            self._interaction_area = window_placement.desktop_area()
             self._effects_on_drag_started()
             self._submit_collision_state(force=True)
             # 用户真正开始拖动 = 接管位置决策，撤销"等副屏上线自动恢复"
@@ -3379,6 +3384,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                 if self._grab_offset is not None:
                     self._move_window_towards(g.x() - self._grab_offset.x(),
                                               g.y() - self._grab_offset.y())  # 停在松手处
+                self._interaction_area = None  # 普通拖拽结束：多屏快照释放，回本屏语义
                 self._save_position()
             self._position_sync_now()  # 松手后的最终位置立即同步（气泡/监听器），不等去抖
             if self.idles and self._physics_mode != 'throw':
@@ -4266,6 +4272,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         was_throw = self._physics_mode == 'throw'
         self._physics_timer.stop()
         self._physics_mode = None
+        self._interaction_area = None  # 物理结束：多屏活动范围快照随之释放
         getattr(self, 'movie', None) and self.movie.set_playback_speed(float(getattr(self, 'playback_speed', 1.0)))  # 飞行期动画加速复位（回用户速率，非 1.0）
         self._unpin_landing_idles()  # 飞行结束：摘掉起飞首帧保护（pin 只在飞行期存在）
         if getattr(self, '_interaction_state', IDLE) == THROWN:
@@ -4286,6 +4293,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._cancel_move()
         self._cancel_animation_gap()
         self._physics_mode = mode
+        # 多屏：拖拽/抛掷期间允许越屏。快照一次交互只取一次，物理 tick 里只读它。
+        self._interaction_area = (
+            window_placement.desktop_area() if mode in ('drag', 'throw') else None
+        )
         if mode == 'throw':
             self._throw_slow_switched = False  # 每次弹射只允许一次降速过渡
             self._warm_landing_idles()
