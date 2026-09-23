@@ -97,6 +97,18 @@ from .menu_layout import (
 )
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
+
+def _chat_feature_available() -> bool:
+    """本构建是否带聊天模块（纯桌宠版打包时排除 pet.chat，与 app.py
+    ChatService 导入守卫同一判定口径）。"""
+    try:
+        from .chat.service import ChatService  # noqa: F401
+    except ImportError as exc:
+        if str(getattr(exc, "name", "") or "").startswith("pet.chat"):
+            return False
+        raise
+    return True
+
 from .settings_widgets import (
     _system_font_families,
     BROWSER_CONTROL_SPEC,
@@ -517,12 +529,14 @@ class ModernSettingsDialog(QDialog):
                         "单击胶囊：展开快捷卡片（余额/最近消息/快捷按钮）或直接切换桌宠显隐。",
                         self.island_click_action_select,
                     ),
-                    SettingRow(
+                    *([SettingRow(
                         "dynamic_island_hidden_chat",
                         "隐藏时对话气泡",
                         "桌宠隐藏后岛变成对话入口：单击灵动岛弹出对话气泡，AI 回复到达时也会在岛上弹出预览（不抢焦点，超时自动收回）。",
                         self.island_hidden_chat_check,
-                    ),
+                    )] if _chat_feature_available() else []),
+                    # 纯桌宠版（无 pet.chat 打包变体）不展示该开关：开了也没有
+                    # 气泡可弹——运行时岛侧已由 chat_available 回退展开卡片
                     SettingRow(
                         "dynamic_island_event_effects",
                         "事件动效",

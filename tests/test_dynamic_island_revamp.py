@@ -676,3 +676,48 @@ def test_config_icon_normalization(tmp_path):
     # 存量用户配置里的 emoji 视为用户选择，不做迁移
     cfg.set("dynamic_island", {"enabled": True, "icon": "🐳"})
     assert cfg.get("dynamic_island")["icon"] == "🐳"
+
+
+def test_click_hidden_pet_without_chat_falls_back_to_card(tmp_path):
+    """纯桌宠版死锁回归（hidden_chat 路由）：
+
+    hidden_chat 开 + 桌宠隐藏 + 本构建无聊天能力 → 单击必须回退展开卡片
+    （卡片的「显示桌宠」是唯一恢复入口），不得路由到不存在的对话气泡
+    ——否则岛无任何反应、桌宠永远回不来。
+    """
+    _qapp()
+    island = _island(tmp_path, hidden_chat=True)
+    try:
+        island.show()
+        island.set_chat_available(False)  # 纯桌宠版：无聊天模块
+        island.set_pet_visible(False)
+        chat_hits, card_hits = [], []
+        island.chat_requested.connect(lambda: chat_hits.append(1))
+        island.card_expanded.connect(lambda: card_hits.append(1))
+        _click(island)
+        island._finish_animations()
+        assert chat_hits == []
+        assert card_hits == [1]
+    finally:
+        island.hide()
+        island.deleteLater()
+
+
+def test_click_hidden_pet_with_chat_requests_bubble(tmp_path):
+    """对照：有聊天能力的构建维持原路由（隐藏 + hidden_chat 开 → 弹气泡）。"""
+    _qapp()
+    island = _island(tmp_path, hidden_chat=True)
+    try:
+        island.show()
+        island.set_chat_available(True)
+        island.set_pet_visible(False)
+        chat_hits, card_hits = [], []
+        island.chat_requested.connect(lambda: chat_hits.append(1))
+        island.card_expanded.connect(lambda: card_hits.append(1))
+        _click(island)
+        island._finish_animations()
+        assert chat_hits == [1]
+        assert card_hits == []
+    finally:
+        island.hide()
+        island.deleteLater()
