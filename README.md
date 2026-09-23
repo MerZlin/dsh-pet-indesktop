@@ -622,7 +622,7 @@ pythonw -m pet
 | 操作 | 效果 |
 |---|---|
 | 左键点击桌宠 | 触发点击互动动画 |
-| 按住并拖动 | 移动桌宠；松开后根据拖动方向和速度处理转向、移动或惯性 |
+| 按住并拖动 | 移动桌宠；松开后根据拖动方向和速度处理转向、移动或惯性。**多显示器**下可以拖到 / 丢到任意一块屏（4.2.1 曾因 `#137` 的落位收口被限制在本屏，2026-09-23 修复，见下方发布后补丁） |
 | 按住 SHIFT + 左键拖动 | 开启了「SHIFT+左键拖动」时，这是唯一的拖动方式；未开启时 SHIFT 无特殊含义 |
 | 右键桌宠 | 打开带图标的上下文菜单；可切换新旧菜单模板，或选择「生小肥鱼」启动独立的新桌宠 |
 | 双击托盘图标 | 显示 / 隐藏桌宠 |
@@ -1246,6 +1246,13 @@ python scripts/cleanup_mei_cache.py --delete
 - **根因**：岛在「桌宠隐藏 + `hidden_chat` 默认开」时单击会发 `chat_requested`，落到 `AppShell._chat_from_island` → `_show_island_chat`；而无 Chat 的打包变体（spec `excludes=['pet.chat']`，`enable_chat=False`）里 `_island_chat_available()` 恒为假，该入口**直接 return**——请求发出后被静默吞掉。岛又是隐藏后唯一的常驻交互面，于是纯桌宠版被困住；有 Chat 的变体恰好被气泡里的「显示桌宠」按钮兜住，所以只有纯桌宠版暴露。
 - **修复**：`_chat_from_island` 先判可用性，没有对话能力时改调 `_show_pets_from_island_chat()`（显示全部窗 + 同步岛 `_pet_visible` + 收起气泡，正是气泡内「显示桌宠」按钮那条通路）→ **单击岛 = 显示桌宠**。有 Chat 的变体行为一字不变；`click_action=toggle_pet` 的偏好仍优先；`hidden_chat` 关闭时仍展开卡片。
 - **验证**：新增回归用例 `test_shell_click_when_no_chat_reshows_pets`（修复前红：`assert False is True`「点击后桌宠仍未恢复可见」，修复后绿）；`test_island_chat.py + test_island_shell_wiring.py` **23 passed**；全量 **2914 passed / 11 skipped**；ruff 全清。三平台 `workflow_dispatch` 重新构建纯桌宠产物并以 `gh release upload --clobber` **覆盖 Release v4.2.1 的 4 个无 Chat 附件**（版本号与 tag 不变）。详见 [`docs/PR-REPORT-ISLAND-RESHOW-NOCHAT-2026-09-23.md`](docs/PR-REPORT-ISLAND-RESHOW-NOCHAT-2026-09-23.md)。
+
+### 发布后补丁（2026-09-23）——多显示器跨屏拖/丢恢复 + 托盘图标消失 + 右键菜单去重
+
+- **① 丢不到副屏（issue #186，用户反馈）**：4.2.0 能把桌宠从主屏丢到副屏，4.2.1 不行。根因是 `#137`（`b418733`，不在 v4.2.0 里）把落位统一进 `move_window_towards`，把**身体框与窗口钳进当前屏工作区**，`throw_bounds` 同源——拖拽与抛掷都被钉在本屏。修法：拖拽/抛掷开始时取**一次**多屏活动区域快照（各屏可用区的包围矩形 + 逐屏可用区），物理 tick 只读快照；活动范围再按「宠物当前所在的屏幕带」收窄（`band_bounds`），错位拼接（异分辨率/异缩放）时不会落进没有显示器的空洞。单屏、几何异常、没有快照时逐位退回本屏语义（漫游/落位/边缘探头不受影响）。
+- **② 托盘图标消失**：4.2.1 起 webm 冷路径不再在 GUI 线程同步解码首帧，而建托盘时正取这份还没到的画面 → 托盘条目**没有图标**（且此后永不刷新）。修法：先用占位图标（既有矢量图标语言）保证可见，首帧就绪后经一次性信号 `frame_ready` 换成角色头像。
+- **③ 右键菜单「鼠标穿透」去重**：该开关原本同时挂在设置页、托盘菜单、右键菜单。按入口收敛只删右键菜单那份（modern 模板 + legacy 树 + 注册表 + 随之成死代码的 builder），设置页与托盘菜单保留——穿透开启后桌宠不再接收鼠标事件，托盘是唯一的一键恢复入口。用户旧 `context_menu_layout` 里的残留节点在配置载入时剔除。
+- **验证**：新增 `tests/test_multi_screen_interaction.py`（17 例，假双屏驱动真实钳制/边界代码）与 `tests/test_tray_icon_ready.py`（7 例）；两项**修前分别 15 failed / 5 failed，修后全绿**。真 Windows 平台实测托盘：建托盘瞬间 `icon_pixmap()` 为空（根因现场）→ 占位图标非空 → 首帧就绪后换成 50×64 角色帧。新增排障工具 `scripts/probe_multi_screen_area.py`（打印逐屏几何与「往每块屏拖」的修前/修后对照；本机只有一块屏 `DISPLAY1 1536×864@1.25`，真实双屏待用户在双屏机器上验收）。详见 [`docs/PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](docs/PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md)。
 
 ### PR #182（2026-09-23 合并，klxxya）——流畅度/解码减负 + 岛远端硬墙 + 音效包缓存 + 设置收口
 
