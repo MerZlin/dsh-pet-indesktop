@@ -291,6 +291,19 @@ class CollisionClient(QObject):
                 member['_received_at'] = now
                 peers[peer_id] = member
         self.peer_snapshots = peers
+        # 灵动岛几何复制（远端硬墙）：快照中的静态布景成员回喂本进程岛碰撞体。
+        # 快照缺席不撤墙（stale-keep，碰撞体本地 TTL 兜底，见 island_collision）。
+        body = getattr(self._win, '_island_collision_body', None)
+        feed = getattr(body, 'on_remote_snapshot', None)
+        if callable(feed):
+            island_member = next((m for m in peers.values()
+                                  if int(m.get('flags', 0)) & collision.FLAG_STATIC), None)
+            if collision_debug.ENABLED:
+                collision_debug.log(str(getattr(self.session, 'runtime_id', '')),
+                                    'island_feed', has_body=True,
+                                    found=island_member is not None,
+                                    members=len(peers))
+            feed(island_member)
 
     def _prune_collision_prediction_state(self, now: float) -> None:
         self.peer_snapshots = {
@@ -324,6 +337,15 @@ class CollisionClient(QObject):
                 return
             if not self.impulse_watermarks.should_apply(epoch, pair_for_watermark, tick_int):
                 discard('watermark')
+                return
+        # 撞岛冲量的归属：本进程持有岛 widget 时撞岛反应走本进程直连业务链
+        # （island_collision._apply_hit），协调者转发的岛冲量必须丢弃——
+        # 否则宿主进程的宠物撞岛被双重结算（音效/弹开各响两次）。
+        a_str, b_str = str(message.get('a') or ''), str(message.get('b') or '')
+        if collision.ISLAND_MEMBER_ID in (a_str, b_str):
+            body = getattr(win, '_island_collision_body', None)
+            if getattr(body, 'has_local_island', False):
+                discard('island_local_owned')
                 return
         if win._interaction_state == self._dragging or win._physics_mode == 'drag':
             discard('dragging')
