@@ -176,6 +176,9 @@ class DynamicIsland(QWidget):
         self._balance_tier_text = "余额峰谷 --"
         self._balance_text = "余额 --"
         self._pet_visible = True
+        # 本构建是否具备聊天能力（AppShell 按 enable_chat 喂入，默认 True
+        # 维持现状；纯桌宠版置 False 时 hidden_chat 单击路由回退展开卡片）
+        self._chat_available = True
         self._agent_active = False
         self._last_message = ""
         # 几何变化回调（果冻墙碰撞体挂这里跟踪拖拽/停靠滑动）：AppShell 注入。
@@ -308,6 +311,16 @@ class DynamicIsland(QWidget):
                 pass
         self._sync_card_labels()
         self.update()
+
+    def set_chat_available(self, available: bool) -> None:
+        """写入本构建是否具备聊天能力（AppShell 按 enable_chat 喂入）。
+
+        纯桌宠版（无 pet.chat 的打包变体）置 False：hidden_chat 开且桌宠
+        隐藏时，单击路由回退为展开卡片——卡片的「显示桌宠」是该形态下
+        唯一的恢复入口；否则单击被路由到不存在的对话气泡，岛无任何
+        反应，桌宠永远回不来（纯桌宠版实机死锁）。
+        """
+        self._chat_available = bool(available)
 
     def set_agent_active(self, active: bool) -> None:
         """dsh/agent 工作状态：点亮蓝色状态灯；上升沿弹一下提示开工。"""
@@ -1326,9 +1339,11 @@ class DynamicIsland(QWidget):
                 self._dock_back_timer.start()
             elif self._click_action() == "toggle_pet":
                 self.clicked.emit()
-            elif self._hidden_chat_enabled() and not self._pet_visible:
+            elif self._hidden_chat_enabled() and not self._pet_visible and self._chat_available:
                 # 桌宠隐藏时岛是唯一常驻交互面：单击直接弹对话气泡
-                #（恢复桌宠的入口由气泡内的「显示桌宠」按钮承接）
+                #（恢复桌宠的入口由气泡内的「显示桌宠」按钮承接）；
+                # 无聊天能力的构建（纯桌宠版）不进此分支——回退 else 展开
+                # 卡片，由卡片的「显示桌宠」按钮承接恢复入口
                 self.chat_requested.emit()
             else:
                 self.expand_card()

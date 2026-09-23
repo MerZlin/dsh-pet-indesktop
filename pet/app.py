@@ -2120,6 +2120,10 @@ class AppShell:
             from .dynamic_island import DynamicIsland
 
             self.island = DynamicIsland(self.config)
+            # 纯桌宠版（无聊天模块）：hidden_chat 的岛单击路由回退为展开卡片，
+            # 防"桌宠隐藏 → 岛点了没反应 → 无法恢复"的死锁。getattr 兼容
+            # __new__ 测试桩（property 内 AttributeError 时取默认 True）
+            self.island.set_chat_available(bool(getattr(self, "enable_chat", True)))
             # 岛图标默认取鱼本体头像（图片路径不碰 emoji 字体栈，见 dynamic_island
             # 的 _icon_pixmap 注释）；帧未就绪时岛侧只画底圈并稍后重试
             self.island.set_icon_provider(self._island_icon_pixmap)

@@ -188,7 +188,12 @@ WINDOW_PY_LINE_BUDGET = 4648
 # pet/settings_interaction.py（页内任务标签「点击与音效 / 自言自语」），
 # 本文件净减 94 行（2441 → 2347）。这是本文件第一次**因拆分而下调**预算：
 # 靠搬代码而不是压行宽解决预算，正是预算作为「绊线」的预期用法。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2347
+# 2026-09-23 上调到 2357：纯桌宠版岛隐藏死锁修复——新增
+# _chat_feature_available() 构建变体判定助手（+12）并将「隐藏时对话气泡」
+# SettingRow 改为按构建变体条件收录（净 +3，注释另计）：无 pet.chat 的
+# 打包变体不再展示该死路开关（运行时回退在 pet/dynamic_island.py 的
+# chat_available）。实测 2357；按文件约定只随实测校准，不为达标压行。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2357
 
 
 def _read(name: str) -> str:
