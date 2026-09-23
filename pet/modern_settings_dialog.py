@@ -455,15 +455,9 @@ class ModernSettingsDialog(QDialog):
                 ]
             )
         general_layout.addWidget(SettingsSection("窗口与系统", window_rows, general_content))
-        spawn_rows = [
-            SettingRow(
-                "single_process_spawn",
-                "单进程多开（省内存）",
-                "开启后「生小肥鱼」在同一进程内创建新桌宠，多窗共享解码链（同一段动画只解码一份），多开时内存与进程数显著降低；已有各只的设置存档保留不变。重启后生效。",
-                self.single_process_spawn_check,
-            ),
-        ]
-        general_layout.addWidget(SettingsSection("多开", spawn_rows, general_content))
+        # 拓扑收口 Phase A：「单进程多开」实验开关从设置页隐藏（多进程为唯一
+        # 多宠拓扑方向；配置键照常读写，存量用户与回滚路径不受影响——
+        # 开关控件仍在 settings_pet_controls 构造并加载配置）。
         if self.balance_refresh_spin is not None:
             general_layout.addWidget(
                 SettingsSection(
@@ -1666,7 +1660,7 @@ class ModernSettingsDialog(QDialog):
             [
                 ("应用启动", claim("autostart", "harness_autostart")),
                 ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
-                ("多开", claim("single_process_spawn")),
+                # 「多开」分组已随拓扑收口 Phase A 隐藏（见上方注释）
             ]
         )
         # 碰撞音效 2 行按 2026-09-17 定稿口径留在「桌宠」：开关紧跟碰撞开关，
@@ -2147,7 +2141,8 @@ class ModernSettingsDialog(QDialog):
             self.config.set("balance_tier_color_enabled", self.balance_tier_color_check.isChecked())
         if self.auto_hide_fullscreen_check is not None:
             self.config.set("auto_hide_fullscreen", self.auto_hide_fullscreen_check.isChecked())
-        self.config.set("experimental_single_process_spawn", self.single_process_spawn_check.isChecked())
+        # 「单进程多开」键不落盘控件值：开关已隐藏（拓扑收口 Phase A），
+        # 配置字典里加载的原值随 config.save() 原样回写（兼容保留）。
         if self.cursor_hidden_passthrough_check is not None:
             self.config.set("cursor_hidden_passthrough", self.cursor_hidden_passthrough_check.isChecked())
         if self.stream_capture_check is not None:
