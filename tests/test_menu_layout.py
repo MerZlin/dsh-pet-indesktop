@@ -400,6 +400,47 @@ def test_config_persists_menu_layout_override_without_copying_default(tmp_path):
     assert restored.get("context_menu_layout") == override
 
 
+def test_saved_layout_drops_removed_mouse_through_action(tmp_path):
+    """2026-09-23：右键菜单去掉「鼠标穿透」，旧布局里的残留节点载入时就地清掉。
+
+    渲染层本来就会丢弃未注册 id（只影响当次显示），但菜单编辑器没有「删除菜单项」
+    操作，会把残留节点按「此平台不可用」一直回存下去；入口收敛必须在配置层收口，
+    否则旧布局里会永久留着一条幽灵菜单项。
+    """
+    from pet.config import Config
+
+    config = Config(tmp_path)
+    config.set("context_menu_layout", {
+        "schema_version": 1,
+        "layout_id": "user",
+        "nodes": [
+            {"type": "action", "id": "modern_settings", "visible": True},
+            {
+                "type": "submenu", "id": "pet_controls", "label": "桌宠控制", "visible": True,
+                "children": [
+                    {"type": "action", "id": "no_move", "visible": True},
+                    {"type": "action", "id": "mouse_through", "visible": True},
+                ],
+            },
+            {"type": "action", "id": "quit", "visible": True},
+        ],
+    })
+    config.save()
+
+    nodes = Config(tmp_path).get("context_menu_layout")["nodes"]
+    assert [node["id"] for node in nodes] == ["modern_settings", "pet_controls", "quit"]
+    assert [child["id"] for child in nodes[1]["children"]] == ["no_move"]
+
+
+def test_menu_registry_no_longer_registers_mouse_through():
+    """入口收敛：右键菜单注册表里不再有「鼠标穿透」，开关只留在设置页与托盘菜单。"""
+    from pet.context_menus.registry import MENU_ACTIONS, ACTION_ICONS, ACTION_LABELS
+
+    assert "mouse_through" not in MENU_ACTIONS.ids
+    assert "mouse_through" not in ACTION_LABELS
+    assert "mouse_through" not in ACTION_ICONS
+
+
 def test_unknown_schema_uses_safe_fallback_with_migration_diagnostic():
     result = resolve_menu_layout(
         {
@@ -516,7 +557,6 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     assert [action.text() for action in pet_controls.actions() if not action.isSeparator()] == [
         "拖动物理",
         "不移动",
-        "鼠标穿透",
         "窗口置顶",
         "开机自启",
         "回到右下角",

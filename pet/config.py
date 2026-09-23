@@ -82,8 +82,37 @@ DEFAULT_QUICK_LAUNCH_APPS = [
 ]
 
 
+# 2026-09-23：右键菜单去掉「鼠标穿透」（该开关的唯一入口收敛到桌宠设置 + 托盘菜单），
+# 用户旧布局里残留的该节点在此一次性剔除——否则菜单编辑器会把它一直回存成「此平台
+# 不可用」，旧入口就没有干净去向（docs/SETTINGS-CHANGE-GATES.md「旧 key/旧入口有去向」）。
+# 同名 action id 若将来重新引入，删掉这里即可。
+_MENU_LAYOUT_DROPPED_ACTIONS = frozenset({"mouse_through"})
+
+
+def _drop_removed_menu_actions(nodes):
+    kept = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            kept.append(node)
+            continue
+        if (node.get("type") == "action"
+                and str(node.get("id") or "") in _MENU_LAYOUT_DROPPED_ACTIONS):
+            continue
+        children = node.get("children")
+        if isinstance(children, list):
+            node["children"] = _drop_removed_menu_actions(children)
+        kept.append(node)
+    return kept
+
+
 def _clean_menu_layout_override(value):
-    return copy.deepcopy(value) if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        return None
+    cleaned = copy.deepcopy(value)
+    nodes = cleaned.get("nodes")
+    if isinstance(nodes, list):
+        cleaned["nodes"] = _drop_removed_menu_actions(nodes)
+    return cleaned
 
 
 def _clean_color(value, default):

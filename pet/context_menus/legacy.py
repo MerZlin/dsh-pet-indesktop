@@ -27,7 +27,6 @@ from .shared import (
     add_music_prev,
     add_music_quit,
     add_harness,
-    add_mouse_through,
     add_no_move,
     add_on_top,
     add_quit,
@@ -63,7 +62,6 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     add_return_corner(menu, pet, icons=False)
     add_on_top(menu, pet, icons=False)
     add_no_move(menu, pet, icons=False)
-    add_mouse_through(menu, pet, icons=False)
     add_autostart(menu, icons=False)
     add_spawn_pet(menu, pet)
     add_clear_spawned_pets(menu, pet, icons=False)
