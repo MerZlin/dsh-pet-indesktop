@@ -66,6 +66,7 @@ from PySide6.QtWidgets import (
 
 from . import autostart as autostart_mod
 from . import catalog
+from . import gui_stall_sampler
 from . import perfstats
 from .config import (
     DEFAULT_SELF_TALK_BUBBLE_STYLE,
@@ -77,7 +78,7 @@ from .config import (
     _float_or_default,
 )
 from .library import MovieLibrary
-from .movement import body_reach, choose_move_direction, inward_facing, move_position_at_frame, quantize_move, wander_target_y
+from .movement import body_reach, choose_move_direction, inward_facing, move_anim_tick, move_position_at_frame, quantize_move, wander_target_y
 from .predictive_prewarm import PredictivePrewarm, pick_from_pool, roll_next
 from .report_gates import REPORT_GATE_DEFAULTS
 from . import window_placement
@@ -693,8 +694,14 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._drag_move_timer.timeout.connect(self._consume_drag_move)
         self._drag_move_pending: QPoint | None = None  # 尚未消费的最新拖拽目标
 
+        # ---- 走路位移帧间补点（movement.move_anim_tick：墙钟外推 ≤锚点+1 帧，帧号仍是权威）----
+        self._move_anim_timer = QTimer(self)
+        self._move_anim_timer.setInterval(_tick_ms)  # 跟随屏幕刷新率（同物理节拍）
+        self._move_anim_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._move_anim_timer.timeout.connect(self._on_move_anim_tick)
+
         # ---- GUI 帧间隔看门狗（仅观测模式启用，常态零开销）----
-        # >50ms 的 GUI 线程空窗按桶计数，>100ms 落日志（带现场状态归因）。
+        # >50ms 空窗按桶计数 + >100ms 落日志 + >150ms 落冻结现场（gui_stall_sampler）。
         if perfstats.ENABLED:
             self._jank_last = time.monotonic()
             self._jank_timer = QTimer(self)
@@ -702,11 +709,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._jank_timer.setTimerType(Qt.TimerType.PreciseTimer)
             self._jank_timer.timeout.connect(self._jank_check)
             self._jank_timer.start()
+            gui_stall_sampler.attach(self)  # 冻结现场采样（仅观测模式）
 
-        # ---- 碰撞客户端（组合）----
-        # 碰撞会话 attach/detach、状态上报、快照/冲量接收、predicted 本地预测
-        # 及碰撞相关状态字段已迁至 CollisionClient（批 6-4）；窗口保留组合与
-        # 薄委托，对外行为（碰撞反应、音效、弹开）一丝不变。
+        # ---- 碰撞客户端（组合）：会话/上报/快照/冲量/predicted 已迁至 CollisionClient（批 6-4）----
         self._collision_app_session = None  # AppShell 持有的 IPC facade（重挂用）
         self._collision_client = CollisionClient(
             self,
@@ -1888,7 +1893,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         is_last = n >= self.lib.frames(name) - 1  # n 是 0-based 源帧号：末帧判定不提前
         plan = self._move_plan
         if plan is not None and name == plan.get('anim') and 'total_frames' in plan:
-            self._move_window_towards(*move_position_at_frame(plan, plan['loops_done'] * plan['frames_per_loop'] + n))  # 帧驱动位移：与墙钟解耦
+            frames_elapsed = plan['loops_done'] * plan['frames_per_loop'] + n
+            plan['anchor_frames'] = float(frames_elapsed)  # 帧到达再锚定：帧号仍是位置权威
+            plan['anchor_time'] = time.monotonic()
+            self._move_window_towards(*move_position_at_frame(plan, frames_elapsed))  # 帧驱动位移：与墙钟解耦
         reduced = self._idle_reduction_active()
         # 批11 解码节流联动：把当前门控状态推给 movie（WebMClip 消费端
         # interval ×divisor + reader 背压阻塞，解码速率 ≈半帧率）。推送先于
@@ -2078,13 +2086,15 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             if cache is not None:
                 cache.pop(self.anim, None)
             self._collision_local_bounds = None
-        pm = self.movie.currentPixmap()
-        if pm is None or pm.isNull():
+        # 崩溃消融（2026-09-22 QRasterPaintEngine 三连崩）：零拷贝直取回退为
+        # toImage 私有深拷贝，切断 窗口↔显示槽↔首帧缓存 别名面（见 HANDOFF 崩溃案）。
+        pm0 = self.movie.currentPixmap()
+        img = pm0.toImage() if pm0 is not None else None
+        if img is None or img.isNull():
             # ffmpeg 缺失/素材损坏时首帧解码可能失败返回 None，跳过本帧而不是崩溃
             return
         if perfstats.ENABLED:
             _scale_t0 = perfstats.clock()
-        img = pm.toImage()
         # 含文字/方向性画面的动画登记在 lib.no_mirror，朝右时也不镜像（否则文字反显）
         if self.facing == 'right' and self.anim not in getattr(self.lib, 'no_mirror', frozenset()):
             img = img.mirrored(True, False)
@@ -2104,7 +2114,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         pm = QPixmap.fromImage(img)
         pm.setDevicePixelRatio(dpr)
         if perfstats.ENABLED:
-            # 重建路径的整条转换链：toImage→镜像→预乘→Smooth 缩放→
+            # 重建路径的整条转换链：取帧→镜像→预乘→Smooth 缩放→
             # fromImage（浅共享）（P0 观测：重建的缩放段成本）。
             perfstats.time('rebuild.scale', perfstats.clock() - _scale_t0)
         self._frame_pixmap = pm
@@ -2594,8 +2604,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # （用户实机要求"低速也可以播动作"）：先按正常链掷骰，目标首帧
         # 已热（播过留在 LRU / pinned / 起飞预热）就直接播——滚动段也能
         # 看到动作/移动，且越滚越丰富；冷目标绝不追（GUI 同步解码卡顿
-        # 零容忍），退回必热的 idle/turn 池（idle 起飞时已由
-        # _warm_landing_idles 预热、turn 在 pinned 常驻集）。
+        # 零容忍），退回 idle/turn 池的已热成员，全冷则续播当前 clip。
         if self._physics_mode == 'throw':
             speed = math.hypot(*self._phys_vel)
             if speed < THROW_SLOW_ANIM_SPEED and self._throw_low_speed_switch(name):
@@ -2855,8 +2864,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             'total_frames': loops * self.lib.frames(move_name),
             # 圈内逐帧位移曲线（动帧才动、静帧不动）；无曲线时帧驱动线性插值
             'curve': (getattr(self.lib, 'move_curves', None) or {}).get(move_name),
+            # 帧间补点锚点（帧到达时由 _on_frame 重锚定，外推封顶 +1 帧）
+            'anchor_frames': 0.0,
+            'anchor_time': time.monotonic(),
         }
         self._move_timer.start()
+        self._move_anim_timer.start()
         return True
 
     def _trigger_move(self, name: str) -> None:
@@ -2877,8 +2890,13 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if not self._move_plan or self.movie is None:
             self._move_timer.stop()
 
+    def _on_move_anim_tick(self) -> None:
+        """走路帧间补点（实现见 movement.move_anim_tick）。"""
+        move_anim_tick(self)
+
     def _cancel_move(self) -> None:
         self._move_timer.stop()
+        self._move_anim_timer.stop()
         self._move_plan = None
 
     def _collision_clamp_pos(self, x: float, y: float) -> tuple[float, float]:
@@ -3153,6 +3171,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             perfstats.note('jank.100ms+')
             logging.warning('GUI 卡顿 %.0fms state=%s anim=%s physics=%s',
                             gap * 1000, self._interaction_state, self.anim, self._physics_mode)
+            gap > 0.06 and gui_stall_sampler.dump_gap(gap)  # >60ms 落冻结现场（捕偶发小卡）
         elif gap > 0.05:
             perfstats.note('jank.50_100ms')
 
@@ -4239,6 +4258,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         was_throw = self._physics_mode == 'throw'
         self._physics_timer.stop()
         self._physics_mode = None
+        getattr(self, 'movie', None) and self.movie.set_playback_speed(1.0)  # 飞行期动画加速复位
         self._unpin_landing_idles()  # 飞行结束：摘掉起飞首帧保护（pin 只在飞行期存在）
         if getattr(self, '_interaction_state', IDLE) == THROWN:
             self._interaction_state = IDLE
@@ -4263,6 +4283,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self._warm_landing_idles()
         else:
             # 飞行被拖拽打断（空中抓住）：起飞预热/首帧 pin 的落地语义已不存在
+            getattr(self, 'movie', None) and self.movie.set_playback_speed(1.0)  # 飞行期动画加速复位
             self._unpin_landing_idles()
 
     def _first_frame_warm(self, name) -> bool:
@@ -4282,25 +4303,24 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             return False
 
     def _throw_low_speed_switch(self, name) -> bool:
-        """弹射低速段的动画切换：掷骰命中首帧已热的目标直接播，冷目标退回
-        必热的 idle/turn 池。返回 True 表示发生了切换。
-
-        两个调用点：_tick_throw_physics 降速入段的即时过渡（不等 clip
-        自然播完——拖拽 clip 可能比整个低速段还长）；_on_anim_ended
-        低速段的链式推进。
-        """
+        """弹射低速段的动画切换：掷骰命中首帧已热的目标直接播；否则退回
+        idle/turn 池的已热成员；全冷则续播当前 clip（刚播完必热）。"""
         if not (self.idles or self.turns):
             return False
         nxt = self._roll_next(exclude=name)
         if nxt is not None and nxt != name and self._first_frame_warm(nxt):
             self._switch(nxt)
             return True
-        pool = [*self.idles, *self.turns]
-        nxt = self._pick(pool, exclude=name)
-        if nxt is not None and nxt != name:
+        # 回退池同样绝不碰冷首帧：pinned 只防逐出、不保证已暖（起飞预热未竟
+        # 或风暴期浪涌），冷切换 = GUI 线程同步解码 ~166ms 冻结（实测定案）。
+        warm_pool = [n for n in (*self.idles, *self.turns)
+                     if n != name and self._first_frame_warm(n)]
+        nxt = self._pick(warm_pool) if warm_pool else None
+        if nxt is not None:
             self._switch(nxt)
             return True
-        return False
+        # 池整体失温：原地续播当前 clip（刚播完必热），下次播完再试。
+        return bool(self._restart_current_clip(name))
 
     def _warm_landing_idles(self) -> None:
         """弹射起飞时后台预热 idle 首帧（落地回待机的切换目标）。
@@ -4312,10 +4332,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         冷首帧，GUI 线程同步拉 ffmpeg 解码（实测 ~100ms）。
 
         线程安全：warm_first_frame 只在调用线程跑解码（QImage 级，无 GUI
-        对象访问），与前台 _decode_first_frame_sync 经 _first_frame_lock
-        原子互斥（N4），与 library 预热调度器从后台线程调用它的语义完全
-        一致。clip 解析在 GUI 线程完成（MovieLibrary.movie 不保证线程安全），
-        后台线程只持有 clip 引用。
+        对象访问），后台线程间经 _first_frame_lock 原子互斥（N4），与
+        library 预热调度器从后台线程调用它的语义完全一致。clip 解析在
+        GUI 线程完成（MovieLibrary.movie 不保证线程安全），后台线程只持有
+        clip 引用。
         实机教训：本方法曾在 GUI 线程同步执行预热——碰撞风暴下每次撞飞进
         throw 都同步拉起 ffmpeg（~100ms/只），多鱼互撞时连续 200ms+ 级
         卡顿（GUI 看门狗实测）；挪到 daemon 线程后起飞路径零阻塞。
@@ -4430,10 +4450,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             predict_bounce(start_px, start_py)
         self._move_window_towards(self._phys_pos[0], self._phys_pos[1])
         speed = math.hypot(self._phys_vel[0], self._phys_vel[1])
-        # 低速段入口过渡：一降速就切出悬空动画，不等 clip 自然播完
-        # （拖拽 clip 时长可能超过整个低速段，等播完就永远看不到切换——
-        # 实机反馈"低速滚动还是悬空姿势"）。每次弹射只过渡一次，之后
-        # 低速段的动画推进由 _on_anim_ended 的低速分支接力。
+        # 飞行期动画随速度加速（24fps 素材高速频闪的修法，physics.flight_anim_speed）
+        f = physics_mod.flight_anim_speed(speed)
+        movie = getattr(self, 'movie', None)
+        if movie is not None and abs(getattr(movie, 'playback_speed', 1.0) - f) > 0.05:
+            movie.set_playback_speed(f)
+        # 低速段入口过渡：降速即切出悬空动画（每次弹射一次），之后由播完链接力。
         if (not getattr(self, '_throw_slow_switched', False)
                 and speed < THROW_SLOW_ANIM_SPEED):
             self._throw_slow_switched = True

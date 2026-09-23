@@ -114,10 +114,6 @@ _META_FILE_CACHE_MAX_ENTRIES = 20000
 _META_FILE_CACHE: dict | None = None
 _META_CACHE_LOCK = threading.Lock()
 
-# 前台同步解码等待后台预热完成的有限时长（毫秒）：超过此时长前台放弃等待、
-# 直接自行解码，保证 GUI 线程不被后台首帧预热长时间卡住（N4）。
-_FIRST_FRAME_SYNC_WAIT_MS = 120
-
 # ------------------------------------------------------------ reader 生命周期（B7）
 # 同一 clip 允许的退役 reader 上限：1 个 active reader + 1 个 retiring reader。
 _MAX_RETIRED_READERS = 1
@@ -983,9 +979,10 @@ class WebMClip(QObject):
         self._current_pixmap: QPixmap | None = None
         self._first_image: QImage | None = None
         self._ffr_evict_token = None  # 首帧预算 LRU 的逐出代次（见模块级注册表注释）
-        # 首帧解码原子认领（N4）：warm_first_frame（后台）与 _decode_first_frame_sync
-        # （前台）同一时间只有一个执行者。_first_frame_done 在 _first_image 写入后
-        # set，供前台有界等待复用后台解码结果（零重复解码）。
+        # 首帧解码原子认领（N4）：warm_first_frame（后台线程）同一时间只有一个
+        # 执行者；GUI 线程永不同步解码（冷路径 100-337ms 冻结，实测定案）——
+        # jumpToFrame 冷路径只 kick 后台 warm，播过留热由 _process_frame 的
+        # 源帧 0 顺手写缓存兜底。
         self._first_frame_lock = threading.Lock()
         self._first_frame_done = threading.Event()
         # 首帧解码生命周期（P1-2）：与播放 reader 同一回收体系。
@@ -1308,7 +1305,7 @@ class WebMClip(QObject):
             self._proc_lock.release()
 
     # ------------------------------------------------------------ metadata
-    def _ensure_meta(self) -> None:
+    def _ensure_meta(self, _from_warm: bool = False) -> None:
         if self._duration > 0 or imageio_ffmpeg is None:
             return
         key = str(self.path)
@@ -1336,6 +1333,17 @@ class WebMClip(QObject):
         try:
             if session_ending():
                 return  # 会话结束：不跑 count_frames_and_secs 探测（保留默认值，不告警）
+            if not _from_warm and threading.current_thread() is threading.main_thread():
+                # GUI 线程绝不跑 ffprobe 子进程（实测定案：冷 meta 在 GUI 探测 =
+                # 使用中 100-250ms 成簇卡顿的元凶，冻结现场采样抓到现行）。
+                # 踢给后台预热（每 clip 只踢一次），本次先吃默认值——reader
+                # 会从码流 meta 补充；热身后下次 start 即中缓存。显式预热
+                # （warm_meta，含测试在主线程显式调用）不受此闸限制。
+                if not getattr(self, '_meta_bg_kicked', False):
+                    self._meta_bg_kicked = True
+                    threading.Thread(target=self._warm_meta_quiet,
+                                     daemon=True, name='pet-warm-meta').start()
+                return
             frames, secs = imageio_ffmpeg.count_frames_and_secs(key)
             if frames and frames > 0:
                 self._frame_count = int(frames)
@@ -1351,8 +1359,14 @@ class WebMClip(QObject):
             # 保留默认值，后续 reader 会尝试从 read_frames 的 meta 补充
 
     def warm_meta(self) -> None:
-        """预取元数据（可被线程池并行调用）。"""
-        self._ensure_meta()
+        """预取元数据（可被线程池并行调用；测试在主线程显式调用也允许探测）。"""
+        self._ensure_meta(_from_warm=True)
+
+    def _warm_meta_quiet(self) -> None:
+        try:
+            self.warm_meta()
+        except Exception:
+            pass  # 后台预热失败不致命：reader 会从码流 meta 补充
 
     def _timer_interval(self) -> int:
         base = (
@@ -1387,6 +1401,16 @@ class WebMClip(QObject):
 
     def currentPixmap(self):
         return self._current_pixmap
+
+    def currentImage(self):
+        """零拷贝显示帧通道：直返 _current_image（与 currentPixmap 同一帧）。
+
+        显示语义与 currentPixmap() 一致（同一帧、同一次提交），只是省掉调用方
+        的 QPixmap→QImage 全画布往返。线程安全：_current_image 的读写都在 GUI
+        线程（_process_frame/jumpToFrame 与窗口重建同线程），
+        故不加锁；调用方也不得跨线程读取或改写返回值。
+        """
+        return self._current_image
 
     def clear_display_frame(self) -> None:
         """清空当前显示槽（A1：非显示 clip 释放 _current_image/_current_pixmap）。
@@ -1742,7 +1766,14 @@ class WebMClip(QObject):
             else:
                 self._current_image = None
                 self._current_pixmap = None
-                self._decode_first_frame_sync()
+                # GUI 线程永不同步解码首帧（实测定案：冷路径 100-337ms 冻结）。
+                # 此处不 kick 任何解码：窗口在播放首帧到达前继续显示旧帧
+                # （_rebuild_frame 对空 pixmap 跳过，旧帧天然顶着）；播放路径
+                # 的 reader 会在后台解码交付，源帧 0 由 _process_frame 顺手写进
+                # 首帧缓存（播过留热），冷启动/切换全程无 GUI 阻塞。
+                # （曾短暂改为 kick 后台 warm 线程——套件内大量并发后台解码
+                # 导致全量测试 access violation，已移除；预热职责仍归 library
+                # 既有调度器与 warm 闸门。）
             return True
         return False
 
@@ -1874,86 +1905,6 @@ class WebMClip(QObject):
         if gen is not None and gen != self._first_frame_gen:
             return []  # 已被取消/换代：结果作废，不提交
         return self._store_first_frame(img)
-
-    def _apply_first_frame(self) -> None:
-        """把已缓存的 _first_image 应用到当前播放帧（仅主线程调用）。"""
-        if self._first_image is None:
-            return
-        self._current_image = self._first_image
-        self._current_pixmap = QPixmap.fromImage(self._first_image)
-
-    def _apply_first_frame_image(self, img) -> None:
-        """把解码得到的首帧图像直接应用到当前播放帧（仅主线程调用）。
-
-        不写入 _first_image 缓存：用于逃生口拿不到锁、无法经锁提交缓存的
-        场景（P1-3 / B7 复审 R2——绝不做无锁 check-then-store，缓存提交
-        只可能由持锁方完成）。
-        """
-        if img is None:
-            return
-        self._current_image = img
-        self._current_pixmap = QPixmap.fromImage(img)
-
-    def _decode_first_frame_sync(self) -> None:
-        """同步解码首帧（主线程），保证 jumpToFrame(0)/currentPixmap 在 start() 前有画面。
-
-        与后台 warm_first_frame 原子互斥：同一时间只有一个首帧解码执行者。
-        认领失败说明后台预热正在解码：最多等待 _FIRST_FRAME_SYNC_WAIT_MS
-        （后台完成则直接用其缓存，零重复解码）；超时则放弃等待直接自行解码，
-        前台播放绝不被后台预热长时间卡住（代价是极端情况下短暂双解码）。
-
-        逃生口（超时自行解码）允许与后台双解码，但缓存提交单胜者化
-        （P1-3 / B7 复审 R2）：始终经锁提交，拿不到锁就放弃写缓存、只把
-        图像直接应用到当前画面——绝不无锁 check-then-store（两个逃生提交者
-        并发时缓存胜者取决于调度顺序，且后台完成后的幂等检查会让先写入者
-        永久决定缓存）。
-
-        P1-2 / B7 复审 R2：同步路径在进入时捕获首帧代次并贯穿解码与提交，
-        在飞解码被取消（换代）后结果作废，不污染缓存——与后台 warm 同等
-        的代次取消语义。
-        """
-        gen = self._first_frame_gen
-        victims = []
-        if self._first_frame_lock.acquire(blocking=False):
-            try:
-                if perfstats.ENABLED:
-                    perfstats.note('webm.ff_gui_decode')  # GUI 线程亲自解码首帧（~166ms 冻结，P0 定案测量）
-                victims = self._decode_first_qimage_and_cache(gen=gen)
-            finally:
-                self._first_frame_lock.release()
-        else:
-            if perfstats.ENABLED:
-                perfstats.note('webm.ff_gui_wait')  # GUI 等后台预热（有界等待，P0 定案测量）
-            if not self._first_frame_done.wait(timeout=_FIRST_FRAME_SYNC_WAIT_MS / 1000.0):
-                img = self._decode_first_qimage(gen=gen)
-                victims = self._commit_first_frame_escape(img, gen=gen)
-        _ffr_evict(victims)  # 逐出延迟到本 clip 锁释放后（防跨对象持锁嵌套）
-        self._apply_first_frame()
-
-    def _commit_first_frame_escape(self, img, gen: int | None = None) -> list:
-        """逃生口（未持锁）的首帧缓存提交（P1-3 / B7 复审 R2）。
-
-        只允许两种结果：
-        1. 拿到锁：经 _store_first_frame 幂等提交（与后台写真正互斥）；
-        2. 拿不到锁（后台仍持锁卡住）：放弃写缓存，把本帧直接应用到当前
-           画面（主线程已拿到可显示首帧）——缓存提交只可能由持锁方完成，
-           明确单胜者，绝不在锁外触碰 _first_image。
-
-        绝不在逃生路径上阻塞等待锁：后台真卡死时持锁不释放，等待会把
-        「前台绝不被后台预热长时间卡住」的承诺重新变成 GUI 冻结。
-        gen：本次解码认领的首帧代次；解码期间被取消（换代）则结果作废。
-        """
-        if img is None:
-            return []
-        if gen is not None and gen != self._first_frame_gen:
-            return []  # 解码期间被取消/换代：结果作废，不提交（P1-2）
-        if self._first_frame_lock.acquire(blocking=False):
-            try:
-                return self._store_first_frame(img)
-            finally:
-                self._first_frame_lock.release()
-        self._apply_first_frame_image(img)
-        return []
 
     def warm_first_frame(self) -> None:
         """后台线程预解码首帧缓存（仅 QImage，线程安全）。
@@ -2654,6 +2605,18 @@ class WebMClip(QObject):
             return
         self._current_image = img.copy()
         self._current_pixmap = QPixmap.fromImage(self._current_image)
+        if src_idx == 0 and self._first_image is None:
+            # 播过留热：播放交付的源帧 0 顺手进首帧缓存（GUI 同步解码移除后
+            # 热池的主要来源；warm 闸门 _first_frame_warm 的语义来源不变）。
+            # try-acquire：warm 持锁解码中则跳过（它完成时会写），GUI 绝不阻塞。
+            if self._first_frame_lock.acquire(blocking=False):
+                try:
+                    # 私有深拷贝入缓存：首帧缓存与显示槽之间不共享别名
+                    # （2026-09-22 崩溃消融实验，与 window.py:2089 同批）。
+                    victims = self._store_first_frame(self._current_image.copy())
+                finally:
+                    self._first_frame_lock.release()
+                _ffr_evict(victims)  # 锁外逐出（与既有路径同序）
         # 显示帧索引 = 素材源时间线 0-based 帧号（reader 打标，丢帧后仍
         # 一致）；播放计数 _frame_index = 已消费帧数（1-based）。二者分离：
         # 降帧相位与末帧判断一律使用显示帧索引，绝不使用消费计数

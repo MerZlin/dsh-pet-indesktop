@@ -1,23 +1,16 @@
 # -*- coding: utf-8 -*-
 """N4：WebMClip 首帧解码原子认领（每实例锁）的回归测试。
 
-warm_first_frame()（后台预热）与 _decode_first_frame_sync()（前台首次播放）
-旧实现是非原子 check-then-act：可能并发解码同一文件（两个 ffmpeg 进程）。
-
-锁定三点：
+GUI 线程永不同步解码首帧（实测定案：冷路径 100-337ms 冻结）——jumpToFrame
+冷路径只 kick 后台 warm（tests/test_first_frame_no_gui_decode.py 钉硬不变量）；
+前台同步解码/逃生口机制已删除。本文件锁定其余语义：
 1. 同一时间只有一个首帧解码执行者：并发 warm_first_frame 认领失败的立即放弃；
-2. 前台同步解码在后台预热进行中时，等待后台完成并复用其缓存（不重复解码）；
-3. 前台同步解码绝不被后台预热长时间卡住：后台卡死时前台在有限等待后
-   放弃等待、直接自行解码（允许短暂双解码的逃生口，但不死锁）。
+2. 首帧进程登记与取消的竞态窗口闭合：登记回调在锁内复查代次/cleanup，
+   迟到登记（取消后）的进程必须自终止且不得进 _first_frame_procs；
+3. 取消（cancel_first_frame_warm/cleanup）换代：在飞解码结果作废不污染缓存；
+4. 取消超时的未确认进程由孤儿注册表 sweep 跟踪/补杀/有限重试放弃。
 
 全部用事件/锁同步，不用 sleep 猜时序。
-
-B7 复审（R2）遗留修复：
-4. 首帧进程登记与取消的竞态窗口闭掉：登记回调在锁内复查代次/cleanup，
-   迟到登记（取消后）的进程必须自终止且不得进 _first_frame_procs；
-5. 同步逃生解码纳入代次取消语义：在飞逃生解码被取消后结果作废；
-6. 逃生口缓存提交单胜者化：拿不到锁绝不无锁 check-then-store，只把
-   图像直接应用到当前画面，缓存提交只可能由持锁方完成。
 """
 from __future__ import annotations
 
@@ -85,26 +78,6 @@ class BlockingDecodeClip(WebMClip):
         return QImage(2, 2, QImage.Format.Format_RGBA8888)
 
 
-class OneShotBlockingClip(WebMClip):
-    """第一次 _decode_first_qimage 阻塞（模拟后台预热卡住），后续调用立即返回。"""
-
-    def __init__(self, path, parent=None):
-        super().__init__(path, parent)
-        self.first_entered = threading.Event()
-        self.first_release = threading.Event()
-        self.decode_count = 0
-        self._counter_lock = threading.Lock()
-
-    def _decode_first_qimage(self, gen=None):
-        with self._counter_lock:
-            self.decode_count += 1
-            n = self.decode_count
-        if n == 1:
-            self.first_entered.set()
-            self.first_release.wait(5.0)
-        return None
-
-
 def test_warm_first_frame_single_executor_atomic_claim(app):
     """同一时间只能有一个首帧解码执行者：第二个并发 warm 认领失败立即放弃。"""
     clip = BlockingDecodeClip("dummy.webm")
@@ -119,44 +92,6 @@ def test_warm_first_frame_single_executor_atomic_claim(app):
     t1.join(5.0)
     assert clip.decode_count == 1
     assert clip._first_image is not None, "后台解码完成应写入首帧缓存"
-    clip.cleanup()
-    app.processEvents()
-
-
-def test_sync_decode_waits_for_background_warm_then_uses_cache(app):
-    """前台同步解码在后台预热进行中时：等待其完成并复用缓存，不重复解码。"""
-    clip = BlockingDecodeClip("dummy.webm")
-    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
-    t.start()
-    assert clip.decode_entered.wait(5.0), "后台预热必须已认领并进入解码（持有锁）"
-
-    clip.decode_release.set()  # 放行后台：它完成解码后 set 完成事件
-    clip._decode_first_frame_sync()  # 前台认领失败 → 等后台完成 → 直接用其缓存
-    t.join(5.0)
-
-    assert clip.decode_count == 1, "前台必须复用后台缓存，不得重复解码"
-    assert clip._first_image is not None
-    assert clip._current_pixmap is not None, "前台同步路径必须拿到可显示首帧"
-    clip.cleanup()
-    app.processEvents()
-
-
-def test_sync_decode_abandons_wait_when_background_stuck(app):
-    """前台绝不被后台预热长时间卡住：后台卡死时前台有限等待后自行解码。"""
-    wait_ms = webm_clip_mod._FIRST_FRAME_SYNC_WAIT_MS
-    clip = OneShotBlockingClip("dummy.webm")
-    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
-    t.start()
-    assert clip.first_entered.wait(5.0), "后台第一次解码必须已卡住（持有锁）"
-
-    started = time.monotonic()
-    clip._decode_first_frame_sync()  # 前台：等待超时 → 放弃等待直接自行解码
-    elapsed = time.monotonic() - started
-    assert elapsed < (wait_ms / 1000.0) + 0.5, "前台等待后台预热的时间必须有界"
-    assert clip.decode_count == 2, "后台卡死时前台自行解码（短暂双解码是允许的逃生口）"
-
-    clip.first_release.set()  # 后台可正常收尾，互不阻塞
-    t.join(5.0)
     clip.cleanup()
     app.processEvents()
 
@@ -176,27 +111,6 @@ class _WarmBlockingClip(WebMClip):
             self.decode_count += 1
         self.decode_entered.set()
         self.decode_release.wait(5.0)
-        return QImage(2, 2, QImage.Format.Format_RGBA8888)
-
-
-class _FailThenSuccessClip(WebMClip):
-    """第一次解码阻塞后失败（模拟后台预热卡住后失败），后续解码成功。"""
-
-    def __init__(self, path, parent=None):
-        super().__init__(path, parent)
-        self.first_entered = threading.Event()
-        self.first_release = threading.Event()
-        self.decode_count = 0
-        self._counter_lock = threading.Lock()
-
-    def _decode_first_qimage(self, gen=None):
-        with self._counter_lock:
-            self.decode_count += 1
-            n = self.decode_count
-        if n == 1:
-            self.first_entered.set()
-            self.first_release.wait(5.0)
-            return None  # 后台解码失败
         return QImage(2, 2, QImage.Format.Format_RGBA8888)
 
 
@@ -234,100 +148,6 @@ def test_cleanup_cancels_inflight_warm_and_discards_result(app):
     app.processEvents()
 
 
-def test_sync_escape_commits_atomically_under_lock(app):
-    """P1-3：逃生口（超时自行解码）的缓存提交必须回到锁内原子完成。"""
-    clip = _WarmBlockingClip("dummy.webm")
-    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
-    t.start()
-    assert clip.decode_entered.wait(5.0), "后台预热必须已进入解码（持有锁）"
-
-    sync_done = threading.Event()
-
-    def _sync():
-        clip._decode_first_frame_sync()
-        sync_done.set()
-
-    sync_thread = threading.Thread(target=_sync, daemon=True)
-    sync_thread.start()
-    # 前台等待超时后自行解码（逃生口）——双解码进行中
-    deadline = time.monotonic() + 5.0
-    while clip.decode_count < 2 and time.monotonic() < deadline:
-        time.sleep(0.005)
-    assert clip.decode_count == 2, "后台卡住时前台必须自行解码（逃生口）"
-
-    clip.decode_release.set()  # 放行两个解码：两者都完成，缓存只提交一次
-    sync_thread.join(5.0)
-    t.join(5.0)
-
-    assert clip._first_image is not None, "至少一个解码成功则缓存必须被提交"
-    assert clip._first_frame_done.is_set(), "提交必须与完成事件一致"
-    assert clip._current_pixmap is not None, "前台同步路径必须拿到可显示首帧"
-    clip.cleanup()
-    app.processEvents()
-
-
-def test_sync_escape_commit_deferred_when_lock_unavailable(app):
-    """P1-3/R2：逃生口拿不到锁时放弃写缓存（单胜者=持锁方），只把图像直接
-    应用；后台（持锁方）失败时缓存保持空，前台画面仍可显示。"""
-    wait_ms = webm_clip_mod._FIRST_FRAME_SYNC_WAIT_MS
-    clip = _FailThenSuccessClip("dummy.webm")
-    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
-    t.start()
-    assert clip.first_entered.wait(5.0), "后台第一次解码必须已卡住（持有锁）"
-
-    started = time.monotonic()
-    clip._decode_first_frame_sync()  # 前台：超时 → 自行解码成功 → 锁不可用 → 只应用不写缓存
-    elapsed = time.monotonic() - started
-    assert elapsed < (wait_ms / 1000.0) + 0.5, "前台等待后台预热的时间必须有界"
-    assert clip.decode_count == 2, "后台卡住时前台必须自行解码（逃生口）"
-    assert clip._first_image is None, "锁不可用时逃生口不得写缓存（单胜者=持锁方）"
-    assert clip._current_pixmap is not None, "前台逃生解码结果必须直接应用到当前画面"
-
-    clip.first_release.set()  # 后台收尾：返回 None（失败）→ 缓存保持空
-    t.join(5.0)
-    assert clip._first_image is None, "后台失败时缓存必须保持空（无人提交）"
-    clip.cleanup()
-    app.processEvents()
-
-
-def test_escape_commits_never_write_cache_without_lock(app):
-    """P1-3/R2：多个逃生提交者在锁不可用时都不写缓存（无 check-then-store
-    竞态，缓存胜者不再取决于调度顺序）；提交只由持锁方（后台）完成。"""
-    clip = _WarmBlockingClip("dummy.webm")
-    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
-    t.start()
-    assert clip.decode_entered.wait(5.0), "后台预热必须已持锁卡住"
-
-    done = threading.Event()
-
-    def _sync():
-        clip._decode_first_frame_sync()
-        done.set()
-
-    s1 = threading.Thread(target=_sync, daemon=True)
-    s2 = threading.Thread(target=_sync, daemon=True)
-    s1.start()
-    s2.start()
-    deadline = time.monotonic() + 5.0
-    while clip.decode_count < 3 and time.monotonic() < deadline:
-        time.sleep(0.005)
-    assert clip.decode_count == 3, "后台 1 次 + 两个逃生口各 1 次解码"
-    assert clip._first_image is None, "锁不可用期间不得有任何无锁写缓存"
-    s1.join(5.0)
-    s2.join(5.0)
-    assert clip._current_pixmap is not None, "逃生口必须把解码结果应用到当前画面"
-
-    clip.decode_release.set()  # 后台（持锁方）完成 → 提交缓存
-    t.join(5.0)
-    assert clip._first_image is not None, "持锁方完成后缓存必须被提交"
-    assert clip._first_frame_done.is_set(), "提交必须与完成事件一致"
-    clip.cleanup()
-    app.processEvents()
-
-
-# ============================================================================
-# B7 复审（R2）遗留 3：首帧进程登记/取消竞态 + 同步逃生代次取消
-# ============================================================================
 class _FakePopenCapture:
     """替换 _PopenCapture：单例实例，捕获 on_process 登记回调，测试可精确
     控制「Popen 已创建但登记尚未完成」的竞态窗口。"""
@@ -465,65 +285,6 @@ def test_cancel_timeout_skip_registers_unconfirmed_and_sweep_kills(app, monkeypa
     app.processEvents()
 
 
-class _SyncEscapeCancelClip(WebMClip):
-    """第一次解码阻塞（后台 warm 卡住持锁）；第二次解码阻塞（逃生口在飞），
-    放行后返回有效 QImage——用于验证取消期间完成的逃生结果作废。"""
-
-    def __init__(self, path, parent=None):
-        super().__init__(path, parent)
-        self.bg_entered = threading.Event()
-        self.bg_release = threading.Event()
-        self.escape_entered = threading.Event()
-        self.escape_release = threading.Event()
-        self.decode_count = 0
-        self._counter_lock = threading.Lock()
-
-    def _decode_first_qimage(self, gen=None):
-        with self._counter_lock:
-            self.decode_count += 1
-            n = self.decode_count
-        if n == 1:
-            self.bg_entered.set()
-            self.bg_release.wait(5.0)
-            return QImage(2, 2, QImage.Format.Format_RGBA8888)
-        self.escape_entered.set()
-        self.escape_release.wait(5.0)
-        return QImage(3, 3, QImage.Format.Format_RGBA8888)
-
-
-def test_sync_escape_result_voided_by_cancel(app):
-    """P1-2/R2：同步逃生解码在飞期间发生取消（换代）→ 逃生结果作废，
-    不得写入缓存（与后台 warm 同等的代次取消语义）。"""
-    clip = _SyncEscapeCancelClip("dummy.webm")
-    t = threading.Thread(target=clip.warm_first_frame, daemon=True)
-    t.start()
-    assert clip.bg_entered.wait(5.0), "后台预热必须已持锁卡住"
-
-    sync_done = threading.Event()
-
-    def _sync():
-        clip._decode_first_frame_sync()
-        sync_done.set()
-
-    st = threading.Thread(target=_sync, daemon=True)
-    st.start()
-    assert clip.escape_entered.wait(5.0), "前台逃生解码必须已进入在飞"
-
-    clip.cancel_first_frame_warm()  # 取消：换代
-    clip.escape_release.set()  # 逃生解码完成 → 代次检查作废
-    st.join(5.0)
-    clip.bg_release.set()
-    t.join(5.0)
-
-    assert clip._first_image is None, "取消期间完成的逃生结果不得污染缓存"
-    assert clip._first_frame_done.is_set() is False
-    app.processEvents()
-
-
-# ============================================================================
-# 批 6-8b R3（R2 复审 P1 闭合）：_sweep_unconfirmed_procs 补杀失败保留追踪
-# + 有界重试 + 达上限告警标注放弃（绝不静默丢句柄）
-# ============================================================================
 class _UnkillableDecodeProc:
     """模拟首帧解码进程：terminate/kill 全部执行但进程永不退出（kill 无效）。"""
 

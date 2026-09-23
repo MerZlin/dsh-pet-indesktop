@@ -82,6 +82,17 @@ REST_VY = 40.0            # 落地时 |vy| 小于它直接停竖直
 REST_VX = 15.0            # 地面上 |vx| 小于它认为已静止
 
 
+def flight_anim_speed(speed_px_s: float) -> float:
+    """抛掷飞行期动画播放倍率（高速频闪修法）。
+
+    素材均 24fps：1400px/s 飞行时精灵每帧位移 ~58px，肉眼频闪即"帧数低"
+    的观感（实机遥测归因）。倍率随速度线性升到 1.75×（等效 ~42fps，每帧
+    位移缩到 ~33px），静止/低速=1× 不变速；被扔时"扑腾感"反而更自然。
+    """
+    s = max(0.0, float(speed_px_s))
+    return 1.0 + min(s / 1400.0, 1.0) * 0.75
+
+
 def soft_clamp_speed(speed: float, cap: float = MAX_THROW_SPEED) -> float:
     """软上限：cap*(1-e^(-s/cap))。硬钳会把所有快甩压成同一个速度
     （"甩多快都一样"），软膝曲线保证任意力度下速度仍单调可区分，

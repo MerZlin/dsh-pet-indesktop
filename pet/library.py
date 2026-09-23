@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtGui import QMovie
+from PySide6.QtGui import QImage, QMovie
 
 from . import catalog
 from . import perfstats
@@ -860,3 +860,23 @@ class MovieLibrary(QObject):
     def movies(self) -> dict[str, object]:
         """当前已创建（已加载）的 clip 映射，供窗口层连接信号。"""
         return dict(self._movies)
+
+
+def clip_current_image(clip):
+    """取 clip 当前显示帧为 QImage（零拷贝优先，只在 GUI 线程调用）。
+
+    WebMClip 已持有 _current_image，优先走 currentImage() 直取——省掉一次
+    QPixmap.fromImage→toImage 的全画布往返（GUI 减负 Step1b）。clip 无该
+    能力（GifClip）或当前无帧时，回退 currentPixmap().toImage()，与旧链
+    逐位一致。返回 None 表示当前没有可显示帧（首帧未就绪/素材损坏），
+    调用方按原有空判语义跳过本帧。
+    """
+    getter = getattr(clip, 'currentImage', None)
+    if callable(getter):
+        img = getter()
+        if isinstance(img, QImage) and not img.isNull():
+            return img
+    pm = clip.currentPixmap()
+    if pm is None or pm.isNull():
+        return None
+    return pm.toImage()

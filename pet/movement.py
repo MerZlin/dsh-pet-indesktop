@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 
 __all__ = ["body_reach", "choose_move_direction", "inward_facing",
-           "move_position_at_frame", "quantize_move", "wander_target_y"]
+           "move_anim_tick", "move_position_at_frame", "quantize_move", "wander_target_y"]
 
 
 def wander_target_y(
@@ -156,3 +156,35 @@ def move_position_at_frame(plan: dict, frames_elapsed: float) -> tuple[float, fl
     x = plan['start_x'] + (plan['target_x'] - plan['start_x']) * progress
     y = plan['start_y'] + (plan['target_y'] - plan['start_y']) * progress
     return x, y
+
+
+def move_anim_tick(host) -> None:
+    """走路帧间补点：两帧之间按墙钟把等效帧号推进到 ≤锚点+1 帧。
+
+    素材帧率（24-30fps）远低于显示节拍时，两帧之间位置长时间不动，是
+    中低速"抖动/帧数低"的主因（实机测量：走路位置更新 28.6Hz vs 170Hz
+    屏）。本函数在帧间按墙钟线性外推等效帧号（curve 素材经
+    move_position_at_frame 的小数帧插值，静帧段走平语义不变），封顶领先
+    锚点 1 帧——解码打滑/隐藏暂停时位置最多停在下一帧处等待，绝不超前
+    两帧以上；圈边界与末帧收口（末拍 progress=1 提交终点）仍由
+    _on_frame 帧驱动完成，帧到达时重锚定 anchor_frames/anchor_time，
+    帧号始终是位置权威。
+    """
+    from .window import time as _window_time  # 测试 seam：与 window 同读可补丁时钟
+
+    plan = host._move_plan
+    if (plan is None or 'total_frames' not in plan
+            or host._physics_mode is not None
+            or host._hidden_paused or host._closing):
+        return
+    duration = float(plan.get('duration') or 0.0)
+    total = float(plan.get('total_frames') or 0.0)
+    if duration <= 0.0 or total <= 0.0:
+        return
+    anchor_f = float(plan.get('anchor_frames', 0.0))
+    anchor_t = float(plan.get('anchor_time', 0.0))
+    fe = anchor_f + (_window_time.monotonic() - anchor_t) * total / duration
+    fe = min(fe, anchor_f + 1.0, total - 1.0)
+    if fe <= anchor_f + 1e-9:
+        return
+    host._move_window_towards(*move_position_at_frame(plan, fe))
