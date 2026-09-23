@@ -2,9 +2,10 @@
 
 > 从 **v4.2.0 到 v4.2.1** 的完整汇总：自 v4.2.0（2026-09-10 发布）之后合并进 `main` 的 **56 个已合并 PR、189 个提交**——其中三位外部贡献者各带了一整批：**#178**（KagurazakaChizuru，edge 音色下架兜底）、**#182**（klxxya，流畅度/解码/岛墙/音效缓存）、以及此前批次里的 #149 / #150 等。
 >
-> **本文件即 v4.2.1 的 Release 正文（2026-09-23 发布）**，已按此内容发到 GitHub Release。
-> 维护者复核用：[✅ 发布前测试清单](#-发布前测试清单) 与 [📋 发布前清单维护者](#-发布前清单维护者)；
-> 录制演示可照 [🎬 视频预演脚本](#-视频预演脚本建议录制顺序) 的顺序走。
+> **本文件分两段用**：`## 📦 下载` 至 `## 🙏 致谢` 是**发布正文**（2026-09-23 已贴到 GitHub Release）；`RELEASE-BODY-END` 注释之后的三节（发布前测试清单 / 视频预演脚本 / 维护者清单）**只在仓库内使用，不随 Release 发布**（本版首次发布时误贴过，已撤回）。
+>
+> 生成发布正文 = 取 `RELEASE-BODY-END` 注释行之前的内容（末尾 `---` 一并去掉）：
+> `python -c "import pathlib;L=pathlib.Path('docs/RELEASE-v4.2.1.md').read_text(encoding='utf-8').splitlines();i=[k for k,l in enumerate(L) if l.strip().startswith('<!--') and 'RELEASE-BODY-END' in l][0];pathlib.Path('body.md').write_text('\n'.join(L[:i]).rstrip().rstrip('-').rstrip()+'\n',encoding='utf-8')"` → `gh release edit v4.2.1 --notes-file body.md`。
 
 ---
 
@@ -161,6 +162,18 @@
 
 ---
 
+## 🙏 致谢
+
+感谢本版所有贡献者与上游：
+
+- [klxxya](https://github.com/klxxya)（#182 流畅度与解码减负、岛远端硬墙、音效包缓存、设置收口）
+- [KagurazakaChizuru](https://github.com/KagurazakaChizuru)（#178 edge 音色下架兜底 + 连发重试 + 非空缓存判定）
+- 以及上游 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的素材与实现基础；v4.2.0 及其之前的贡献者名单见 [`RELEASE-v4.2.0.md`](RELEASE-v4.2.0.md)。
+
+---
+
+<!-- RELEASE-BODY-END -->
+
 ## ✅ 发布前测试清单
 
 > 勾选式人工验证清单。**标了「需重启」的项，改完设置必须重启桌宠再验**。
@@ -264,16 +277,6 @@
 2. **测试构建（不打 tag、不产生 Release）**：GitHub Actions → `Build Windows App` / `Build macOS App` / `Build Linux App` → **Run workflow**（`workflow_dispatch`）。三平台各自产出 `dist-onedir/*` 并作为 **run 的 Artifacts**（保留 30 天）——用来跑上面的测试清单与录屏，安全无副作用。
 3. **产物自检**：`python scripts/verify_bundle_tts.py --app-dir dist-onedir/dsh-pet-standalone-webm-chat`（期望 `exit=0` + `bundle TTS stack OK`）。
 4. **正式发布**：`git tag v4.2.1 && git push origin v4.2.1` → 三平台构建 job 的 `Publish Release` 步骤（`if: startsWith(github.ref, 'refs/tags/')`）会自动创建 Release 并附上安装包 / 便携 zip。
-   ⚠️ **三个 workflow 都用了 `generate_release_notes: true`**——谁最后跑完谁把正文写成 GitHub 自动生成的 notes。所以发布后**必须再执行一次**：`gh release edit v4.2.1 --notes-file docs/RELEASE-v4.2.1.md`，把正文替换成本文件内容（本版已按此流程执行）。
+   ⚠️ **三个 workflow 都用了 `generate_release_notes: true`**——谁最后跑完谁把正文写成 GitHub 自动生成的 notes。所以发布后**必须再执行一次**：按文件头的一行命令生成 `body.md`（只含「下载」到「致谢」），再 `gh release edit v4.2.1 --notes-file body.md`。**不要**直接 `--notes-file docs/RELEASE-v4.2.1.md`——那会把文末的测试清单、录制脚本与维护者清单一起贴进公开发布页（本版首次发布时就是这么错的，已撤回）。
 5. **同步文档**：README 顶部状态块、「v4.2.0 以来的变更」、「当前状态」、「最近修复与变更记录」四处；`docs/INDEX.md` 登记本文件。
 6. **回滚**：本版无配置迁移，产物可直接换回 v4.2.0；若需回退某个改动，按 PR 粒度 `git revert` 对应合并提交即可。
-
----
-
-## 🙏 致谢
-
-感谢本版所有贡献者与上游：
-
-- [klxxya](https://github.com/klxxya)（#182 流畅度与解码减负、岛远端硬墙、音效包缓存、设置收口）
-- [KagurazakaChizuru](https://github.com/KagurazakaChizuru)（#178 edge 音色下架兜底 + 连发重试 + 非空缓存判定）
-- 以及上游 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 的素材与实现基础；v4.2.0 及其之前的贡献者名单见 [`RELEASE-v4.2.0.md`](RELEASE-v4.2.0.md)。
