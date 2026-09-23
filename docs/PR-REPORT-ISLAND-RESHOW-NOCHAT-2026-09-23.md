@@ -81,18 +81,23 @@ $ QT_QPA_PLATFORM=offscreen pytest -q    → 2914 passed / 11 skipped / 0 failed
 ```
 
 **③ 产物重建与覆盖（覆盖 Release v4.2.1 的纯桌宠附件）**——由三平台 `workflow_dispatch`
-（`--ref main`，即 `1c3a59c`）重新构建，构建日志里带各平台的全量测试结果；产物下载后
-以 `gh release upload v4.2.1 --clobber` 覆盖下列**纯桌宠（无 Chat）**附件：
+（`--ref main`，即 `1c3a59c`）重新构建，构建日志里带各平台的全量测试结果（三个 run 均 success：
+Windows `35827896726` / macOS `35827899207` / Linux `35827901927`）。
 
-| 附件 | 平台 / 变体 |
-|---|---|
-| `dsh-pet-standalone-webm-portable.zip` | Windows x64 · 绿色版 |
-| `dsh-pet-standalone-webm-setup.exe` | Windows x64 · 安装版 |
-| `dsh-pet-standalone-webm-macos-arm64.zip` | macOS arm64 |
-| `dsh-pet-standalone-webm-linux-x86_64.zip` | Linux x86_64 |
+搬运**在 GitHub 侧完成、不落地**：新增工作流 [`.github/workflows/republish-assets.yml`](../.github/workflows/republish-assets.yml)
+（`Actions → Republish Release Assets`，输入 tag + 来源 run id + 文件名 glob），runner 用
+`gh run download` 从上述 run 拉产物、`gh release upload --clobber` 原子替换同名附件。
+本次执行 run `35830022063`（success，挑出 4 个文件），覆盖结果（`gh release view` 实测）：
 
-有 Chat 的四个附件**未替换**：新代码路径在它们里不可达（`_island_chat_available()` 为真），
-产物行为与已发布版本逐字节等价的功能语义一致；替换只会让校验和变化而不带来任何差异。
+| 附件 | 替换前大小 → 替换后 | 替换时间（UTC） |
+|---|---|---|
+| `dsh-pet-standalone-webm-portable.zip`（Win 绿色版） | 156 189 779 → **156 189 298** | 2026-09-23T07:07:59Z |
+| `dsh-pet-standalone-webm-setup.exe`（Win 安装版） | 133 088 936 → **133 090 921** | 2026-09-23T07:07:57Z |
+| `dsh-pet-standalone-webm-macos-arm64.zip` | 150 469 919 → **150 469 341** | 2026-09-23T07:07:58Z |
+| `dsh-pet-standalone-webm-linux-x86_64.zip` | 272 122 408 → **272 122 676** | 2026-09-23T07:08:03Z |
+
+有 Chat 的四个附件**未替换**（时间戳仍是发布当刻的 05:25–05:28Z）：新代码路径在它们里不可达
+（`_island_chat_available()` 为真），产物行为与已发布版本一致，替换只会让校验和变化而不带来差异。
 
 **④ 为什么不重新打 tag**：用户要求「覆盖 release 里的对应内容」。`v4.2.1` 的 tag 与
 `pet/__init__.py` / `packaging/dsh-pet.iss` 的版本号保持 `4.2.1`，纯桌宠附件是**同版本重构建**，
