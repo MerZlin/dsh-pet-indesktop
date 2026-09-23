@@ -101,11 +101,14 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 # 2026-09-20 上调到 4632：delete_when_idle 轮询定时器绑定 menu context（+3：
 # 注释），窗口/菜单销毁后不再访问已删 C++ 对象。与 move-sync-facing 的 4629
 # 叠加，组合实测 4632（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2 又一实例）。
-# 2026-09-22 上调到 4633：崩溃消融回退（_rebuild_frame 零拷贝直取改回
+# 2026-09-22 上调到 4635：崩溃消融回退（_rebuild_frame 零拷贝直取改回
 # currentPixmap().toImage() 私有深拷贝，切断 窗口↔显示槽↔首帧缓存 别名面，
 # Qt6Gui QRasterPaintEngine 三连崩排查，见 .scratch/single-overlay-window/
 # HANDOFF.md 崩溃案），注释 +2 + currentPixmap→toImage 两行替代原一行直取（+3）。实测 4635。
-WINDOW_PY_LINE_BUDGET = 4635
+# 2026-09-23 上调到 4638：rebase 合入上游 a7489ae（fix(self-talk): 点击自言自语
+# 与周期气泡解耦 + 恢复点击侧设置可见，window.py +4/-1）。与本分支各修复无
+# 组合冲突，叠加实测 4638（docs/PR-MERGE-LESSONS-2026-09-12.md 教训 2 常规校准）。
+WINDOW_PY_LINE_BUDGET = 4638
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
 # 主对话框 ModernSettingsDialog + 对话框装配/配置写回 + 为 pet/ 与 tests/ 保留的
