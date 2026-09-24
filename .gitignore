@@ -33,6 +33,11 @@ build/
 dist/
 *.spec
 
+# 覆盖率与本地质量检查产物
+.coverage
+coverage.xml
+htmlcov/
+
 # 项目记忆文档随仓库维护；仅保留临时规划目录不入库。
 _plan/
 # onedir build artifacts

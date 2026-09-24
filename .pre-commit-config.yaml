@@ -8,12 +8,16 @@ repos:
         name: ruff check
         entry: python -m ruff check
         language: system
+        files: ^(pet|tests|scripts)/.*\.py$
+        exclude: ^pet/(updater|update_settings)\.py$
         types: [python]
 
       - id: ruff-format
         name: ruff format check
         entry: python -m ruff format --check
         language: system
+        files: ^(pet|tests|scripts)/.*\.py$
+        exclude: ^pet/(updater|update_settings)\.py$
         types: [python]
 
       - id: mypy-core

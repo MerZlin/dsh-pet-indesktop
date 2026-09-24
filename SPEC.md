@@ -63,20 +63,23 @@
 
 ```text
 python scripts/check.py --fast
+python scripts/check.py --quality
 python scripts/check.py --ci
 ```
+
+其中 `--fast` 用于本地快速反馈，`--quality` 对应 Python 3.11–3.13 的静态检查与 `unit` 测试矩阵，`--ci` 执行完整门禁。完整门禁会把已知 Qt/媒体时序敏感族拆到独立进程运行，并用 `coverage --append` 合并覆盖率后再判定阈值。
 
 阶段性门禁包括：
 
 1. `python -m pytest -q` 全量回归；
 2. 行为分类测试（`unit` / `integration` / `e2e` / `slow` / `platform` / `external` / `network`）；
-3. `python -m ruff check pet tests`；
-4. `python -m ruff format --check pet tests`；
+3. `python -m ruff check pet tests scripts`；
+4. `python -m ruff format --check pet tests scripts`；
 5. `python -m mypy pet/plugins pet/content pet/catalog.py pet/config.py`；
 6. Markdown 相对链接检查；
 7. import/build smoke 和覆盖率基线。
 
-当前覆盖率基线为 83%（39897 statements，2026-09-24 全量回归），在开发依赖和 CI 可复现后才作为门禁阈值使用。
+当前覆盖率基线为 83%（40117 statements，2026-09-24 完整门禁，包含隔离测试族合并结果），开发依赖和 CI 均通过 `requirements-dev.txt` 与统一检查入口复现。
 
 ## 6. 文档治理
 
