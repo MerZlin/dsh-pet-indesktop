@@ -201,7 +201,8 @@ WINDOW_PY_LINE_BUDGET = 4671
 # SettingRow 改为按构建变体条件收录（净 +3，注释另计）：无 pet.chat 的
 # 打包变体不再展示该死路开关（运行时回退在 pet/dynamic_island.py 的
 # chat_available）。实测 2357；按文件约定只随实测校准，不为达标压行。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2357
+# 2026-09-24：新增独立更新页后仅保留导航/深链/版本页脚接线，更新页主体已拆到 pet/update_settings.py。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2383
 
 
 def _read(name: str) -> str:

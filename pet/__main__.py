@@ -18,7 +18,7 @@ def _chat_available() -> bool:
         return False
 
 
-def _exec_settings(app, config, *, include_ai: bool = True) -> int:
+def _exec_settings(app, config, *, include_ai: bool = True, initial_page: str = "") -> int:
     """独立设置进程主体：锁 + 独立对话框 + 事件循环。
 
     单独拆一层是为了让测试能注入最小 QApplication/临时 Config，不必真的跑
@@ -40,7 +40,10 @@ def _exec_settings(app, config, *, include_ai: bool = True) -> int:
 
     # parent=None + standalone=True：没有桌宠窗口可依附，试听/避让由
     # pet.settings_standalone 提供进程内最小宿主。
-    dialog = ModernSettingsDialog(config, parent=None, include_ai=include_ai, standalone=True)
+    dialog_kwargs = {"include_ai": include_ai, "standalone": True}
+    if initial_page:
+        dialog_kwargs["initial_page"] = initial_page
+    dialog = ModernSettingsDialog(config, parent=None, **dialog_kwargs)
     dialog.finished.connect(lambda _result: app.quit())
     dialog.show()
     try:
@@ -58,6 +61,16 @@ def _settings_instance_id(argv) -> str:
     """
     try:
         index = argv.index("--instance")
+    except ValueError:
+        return ""
+    if index + 1 >= len(argv):
+        return ""
+    return str(argv[index + 1] or "").strip()
+
+
+def _settings_page(argv) -> str:
+    try:
+        index = argv.index("--settings-page")
     except ValueError:
         return ""
     if index + 1 >= len(argv):
@@ -89,7 +102,9 @@ def _run_settings(config=None) -> int:
         config.dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    return _exec_settings(app, config, include_ai=_chat_available())
+    return _exec_settings(
+        app, config, include_ai=_chat_available(), initial_page=_settings_page(sys.argv)
+    )
 
 
 def _main() -> int:

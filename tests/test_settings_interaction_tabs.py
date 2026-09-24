@@ -6,7 +6,7 @@
 把同域的多个同级任务分成页内标签（见 test_menu_layout 里的菜单域用例）。
 
 本文件钉住四件事：
-1. 互动域确实用页内标签组织，且**侧栏 9 个域不变**（域数量/顺序是外部契约）；
+1. 互动域确实用页内标签组织，且**侧栏 10 个域不变**（域数量/顺序是外部契约）；
 2. 每个设置行都能通过它的标签**到达**（切到对应标签后可见）——"整理后功能仍可用"；
 3. 设置搜索命中非默认标签里的行时，**自动切到那个标签**（否则结果不可见）；
 4. 全局不变量：所有 ``settingRow_*`` 仍落在某个域页里，不出现「待分类（开发期）」。
@@ -19,7 +19,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 EXPECTED_SIDEBAR = [
-    "常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动", "语音", "文件识别",
+    "常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动", "语音", "文件识别", "更新",
 ]
 # 标签键/名：键给代码（稳定），名给用户（可读）。顺序 = 使用顺序。
 EXPECTED_TABS = (("click", "点击与音效"), ("self_talk", "自言自语"))
@@ -75,7 +75,7 @@ def _row(dialog, key: str):
 
 
 def test_interaction_domain_uses_in_page_tabs_without_changing_sidebar(dialog):
-    """页内标签组织互动域，侧栏 9 个域不变（域契约是外部可见的）。"""
+    """页内标签组织互动域，侧栏 10 个域不变（域契约是外部可见的）。"""
     from pet.settings_widgets import SettingsTabContainer
 
     assert [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())] == EXPECTED_SIDEBAR

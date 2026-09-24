@@ -13,6 +13,10 @@ from .settings_widgets import _system_dark, BROWSER_CONTROL_STYLESHEET
 _DARK_OVERRIDE = """
 QDialog { background: #202024; color: #e4e4e9; }
 QFrame#sidebarPane { background: #26262b; border-right: 1px solid #34343a; }
+QLabel#settingsVersion { color: #92929b; font-size: 11px; padding-top: 4px; }
+QFrame#updateStatusCard, QFrame#updateNotesCard { background: #2a2a30; border: 1px solid #3a3a42; border-radius: 12px; }
+QLabel#updateCurrentVersion, QLabel#updateNotesTitle { color: #f0f0f5; font-weight: 600; }
+QLabel#updateStatus, QLabel#updateIntro, QLabel#updateNotes { color: #a8a8b0; }
 QStackedWidget { background: #202024; }
 QLineEdit#settingsSearch { background: #2e2e35; color: #e4e4e9; }
 QPushButton#saveAndExit { color: #e4e4e9; }
@@ -161,6 +165,10 @@ QLabel#searchStatus {
     color: #777b80;
     font-size: 11px;
 }
+QLabel#settingsVersion { color: #8a8f96; font-size: 11px; padding-top: 4px; }
+QFrame#updateStatusCard, QFrame#updateNotesCard { background: #ffffff; border: 1px solid #e2e4e8; border-radius: 12px; }
+QLabel#updateCurrentVersion, QLabel#updateNotesTitle { color: #202124; font-weight: 600; }
+QLabel#updateStatus, QLabel#updateIntro, QLabel#updateNotes { color: #62676d; }
 QListWidget#settingsSidebar {
     background: transparent;
     border: none;

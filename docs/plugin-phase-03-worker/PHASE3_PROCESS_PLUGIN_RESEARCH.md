@@ -1,6 +1,7 @@
 # Phase 3：独立进程 / 插件化容器调研与设计
 
 > 状态：调研/设计稿（不进入本轮代码实现）
+> 总路线见 [`../plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md`](../plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md)。
 > 范围：评估把 AI 聊天、Agent 联动、主动识屏等“可关功能”从主桌宠进程拆到
 > 独立进程或插件容器的成本与收益。
 
