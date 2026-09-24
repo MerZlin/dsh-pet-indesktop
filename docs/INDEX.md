@@ -28,6 +28,9 @@
 | [`../AGENTS.md`](../AGENTS.md) | 工程指南：项目结构、变更纪律、CI 成本纪律、"Context pointers" 触发表、agent skills 入口。 | 提交任何代码之前；尤其改动碰撞选举、ffmpeg 派生、打包、菜单、设置、PR 合并前，先查 "Context pointers"。 |
 | [`../CONTEXT.md`](../CONTEXT.md) | 领域术语表（Shared UX Contract / Settings System / Menu Action Model / Report Gate / Session-End Spawn Freeze 等）与禁用说法。 | 命名新概念、写设计文档、或需要确认"这个词在本项目里到底指什么"时；提案与既有术语冲突时必须先读。 |
 | [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) | 第三方素材与组件的授权声明。 | 新增/替换动画素材、图标、字体或第三方库时。 |
+| [`../SPEC.md`](../SPEC.md) | 当前目标、非目标、插件化边界、兼容性和工程质量门。 | 修改架构边界、公共 API、测试门禁或发布约束前必读。 |
+| [`../LOG.md`](../LOG.md) | 已完成变更、验证结果、风险和未完成项的事实日志。 | 交接、恢复中断工作或追溯某次规范化改动时。 |
+| [`../LOG-INDEX.md`](../LOG-INDEX.md) | `LOG.md` 的日期与主题索引。 | 快速定位某次实现、验证或交付记录时。 |
 
 ---
 

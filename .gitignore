@@ -33,10 +33,7 @@ build/
 dist/
 *.spec
 
-# 本地开发文档（不随仓库发布）
-LOG.md
-LOG-INDEX.md
-SPEC.md
+# 项目记忆文档随仓库维护；仅保留临时规划目录不入库。
 _plan/
 # onedir build artifacts
 dist-onedir/
