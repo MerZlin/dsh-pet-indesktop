@@ -106,3 +106,92 @@ def test_config_persists_click_behavior_keys(tmp_path):
     assert reloaded.get("click_sound_enabled", True) is False
     assert reloaded.get("click_show_balance", False) is True
     assert reloaded.get("click_show_self_talk", False) is True
+
+
+
+def test_structured_manifest_keeps_mirrors_and_integrity_fields(monkeypatch):
+    import io
+
+    def fake_ok(*args, **kwargs):
+        body = json.dumps({
+            "version": "4.3.0",
+            "assets": {
+                "dsh-pet-standalone-webm-chat-setup.exe": {
+                    "fileName": "dsh-pet-standalone-webm-chat-setup.exe",
+                    "urls": [
+                        "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.3.0/a.exe",
+                        "https://cdn.jsdelivr.net/gh/MerZlin/dsh-pet-indesktop@v4.3.0/a.exe",
+                    ],
+                    "size": 123,
+                    "sha256": "A" * 64,
+                    "platform": "windows",
+                    "kind": "installer",
+                },
+            },
+        }).encode()
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_ok)
+    release = updater.latest_release()
+    detail = release["asset_details"]["dsh-pet-standalone-webm-chat-setup.exe"]
+    assert detail["urls"][1].startswith("https://cdn.jsdelivr.net")
+    assert detail["size"] == 123
+    assert detail["sha256"] == "a" * 64
+
+
+def test_download_asset_verifies_size_and_sha256(tmp_path, monkeypatch):
+    import hashlib
+
+    payload = b"installer-payload"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    class Response:
+        headers = {"Content-Length": str(len(payload))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, size=-1):
+            nonlocal payload
+            chunk, payload = payload, b""
+            return chunk
+
+    monkeypatch.setattr(
+        updater.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: Response(),
+    )
+    path = updater.download_asset(
+        {
+            "name": "dsh-pet-standalone-webm-chat-setup.exe",
+            "urls": ["https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.3.0/a.exe"],
+            "size": len(b"installer-payload"),
+            "sha256": digest,
+        },
+        tmp_path,
+    )
+    assert path.read_bytes() == b"installer-payload"
+
+
+def test_download_asset_rejects_untrusted_origin(tmp_path):
+    import pytest
+
+    with pytest.raises(RuntimeError, match="untrusted URL"):
+        updater.download_asset(
+            {"name": "a.exe", "urls": ["http://evil.example/a.exe"]},
+            tmp_path,
+        )
+
+
+def test_select_windows_installer_supports_legacy_and_structured_assets(monkeypatch):
+    monkeypatch.setattr(updater.os, "name", "nt")
+    release = {
+        "assets": {"dsh-pet-standalone-webm-setup.exe": "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.3.0/a.exe"},
+        "asset_details": {},
+    }
+    asset = updater.select_windows_installer(release, include_chat=False)
+    assert asset["name"] == "dsh-pet-standalone-webm-setup.exe"
+    assert asset["urls"]

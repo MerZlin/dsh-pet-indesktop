@@ -53,6 +53,10 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; 在线更新会以静默方式覆盖现有 onedir；由 Inno 负责关闭占用文件的旧进程。
+CloseApplications=yes
+CloseApplicationsFilter=*.exe
+RestartApplications=no
 UninstallDisplayName={#MyAppDisplay}
 
 [Languages]
@@ -70,7 +74,7 @@ Name: "{autoprograms}\{#MyAppShortName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppShortName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppShortName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppShortName}}"; Flags: nowait postinstall
 
 [UninstallDelete]
 ; Defensive: remove any residual runtime dirs (onedir normally leaves none)

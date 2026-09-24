@@ -67,6 +67,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from . import autostart as autostart_mod
 from . import catalog
 from .click_sound import warm_click_sound_effects
@@ -96,6 +97,7 @@ from .menu_layout import (
     resolve_menu_layout,
 )
 from .speech_bubble import BUBBLE_STYLE_PRESETS
+from .update_settings import UpdatePage
 
 
 def _chat_feature_available() -> bool:
@@ -253,7 +255,7 @@ class ModernSettingsDialog(QDialog):
     """Settings window matching Modern's sidebar and rounded-card hierarchy."""
 
     def __init__(self, config, parent=None, *, include_ai: bool = True,
-                 standalone: bool = False):
+                 standalone: bool = False, initial_page: str | None = None):
         super().__init__(parent)
         self.config = config
         self.include_ai = bool(include_ai)
@@ -261,6 +263,7 @@ class ModernSettingsDialog(QDialog):
         # 没有桌宠窗口/AppShell 可依附。只影响下面几处显式分支，默认 False 时
         # 全部行为与改动前逐位一致。
         self.standalone = bool(standalone)
+        self.initial_page = str(initial_page or "").strip()
         self.ai_page = None
         self.setProperty("modernStyle", True)
         self.setProperty("menuStyle", "modern")
@@ -314,6 +317,11 @@ class ModernSettingsDialog(QDialog):
         self.sidebar.setIconSize(QSize(18, 18))
         self.sidebar.setSpacing(2)
         sidebar_layout.addWidget(self.sidebar, 1)
+        self.version_footer = QLabel(f"版本 v{__version__}", sidebar_pane)
+        self.version_footer.setObjectName("settingsVersion")
+        self.version_footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.version_footer.setToolTip("当前运行版本")
+        sidebar_layout.addWidget(self.version_footer)
 
         self.pages = QStackedWidget(self)
         body.addWidget(sidebar_pane)
@@ -936,9 +944,17 @@ class ModernSettingsDialog(QDialog):
         from .festival_settings import FestivalSettingsPage
 
         self.festival_page = FestivalSettingsPage(self.config, self)
+
+        # 更新页是命令/状态面板，不写入 Config；它与常规域同级，便于从菜单
+        # 和设置窗口进入同一套检查、下载、校验、安装流程。
+        self.update_page = UpdatePage(
+            self.config, include_chat=self.include_ai, parent=self
+        )
         self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
+        if self.initial_page:
+            self.select_page(self.initial_page)
         self._search_rows = self.findChildren(SettingRow)
         self._search_matches: list[SettingRow] = []
         self._search_index = -1
@@ -1625,6 +1641,15 @@ class ModernSettingsDialog(QDialog):
         layout.addWidget(scroll, 1)
         return page
 
+    def select_page(self, label: str) -> bool:
+        """按侧栏标题选中页面，供右键菜单/更新通知做深链接。"""
+        target = str(label or "").strip()
+        for index in range(self.sidebar.count()):
+            if self.sidebar.item(index).text() == target:
+                self.sidebar.setCurrentRow(index)
+                return True
+        return False
+
     def _add_page(self, label: str, icon_name: str, page: QWidget) -> None:
         item = QListWidgetItem(vector_widget_icon(self, icon_name, 16), label)
         item.setSizeHint(QSize(0, 34))
@@ -1929,6 +1954,7 @@ class ModernSettingsDialog(QDialog):
             "自动化与联动": automation,
             "语音": voice,
             "文件识别": file_interpret,
+            "更新": self.update_page,
         }
         for label, icon in SETTINGS_DOMAIN_NAV:
             content = domain_content.get(label)

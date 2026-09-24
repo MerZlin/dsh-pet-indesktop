@@ -194,9 +194,10 @@ def _show_balance_payload(win, payload) -> None:
 
 
 class _UpdateBridge(_BackgroundResult):
-    def __init__(self, parent):
+    def __init__(self, parent, owner=None):
         super().__init__()
         self.parent = parent
+        self.owner = owner
         self.done.connect(self._show)
 
     def _show(self, ok: bool, payload) -> None:
@@ -215,9 +216,14 @@ class _UpdateBridge(_BackgroundResult):
         if alive:
             self.parent.show_bubble(
                 f"发现新版本 v{tag}（当前 {updater.APP_VERSION}）。"
-                "可从“更新与帮助”打开项目页下载。",
+                "正在打开“更新”页，可直接下载并安装。",
                 duration_ms=9000,
             )
+            owner = self.owner
+            instance = getattr(owner, "instance", None) if owner is not None else None
+            open_settings = getattr(instance, "open_modern_settings", None)
+            if callable(open_settings):
+                QTimer.singleShot(0, lambda: open_settings(initial_page="更新"))
 
 
 # 批5.2 §③.7：多窗日志用 [slot-N] 前缀区分。单进程多窗共享一份日志文件，
@@ -823,11 +829,11 @@ class PetInstance:
         )
         self.win.set_bubble_suppressed(any_open)
 
-    def open_modern_settings(self) -> None:
+    def open_modern_settings(self, initial_page: str | None = None) -> None:
         # 默认路径：设置页拉到独立进程（关窗即进程退出，OS 回收首开留下的
         # 字体/样式/模块高水位）。只有开关关闭或 startDetached 失败时才回退
         # 下面的进程内路径——功能绝不丢。
-        if self._try_open_settings_process():
+        if self._try_open_settings_process(initial_page):
             return
         from .modern_settings_dialog import ModernSettingsDialog
         if self.modern_settings_dialog is None:
@@ -836,9 +842,14 @@ class PetInstance:
                 self.config,
                 self.win,
                 include_ai=self.enable_chat,
+                initial_page=initial_page,
             )
             dialog.finished.connect(self._modern_settings_finished)
             self.modern_settings_dialog = dialog
+        elif initial_page:
+            selector = getattr(self.modern_settings_dialog, "select_page", None)
+            if callable(selector):
+                selector(initial_page)
         self._update_bubble_suppression_for_settings()
         # 在 show 之前定位，避免 Windows 上窗口先显示默认位置再跳走（闪现小窗）
         self._present_dialog(
@@ -846,14 +857,18 @@ class PetInstance:
             before_present=self.modern_settings_dialog.move_away_from_pet,
         )
 
-    def _try_open_settings_process(self) -> bool:
+    def _try_open_settings_process(self, initial_page: str | None = None) -> bool:
         """尝试走独立设置进程；True = 已交给独立进程（不要再开进程内对话框）。"""
         shell = getattr(self, "shell", None)
         opener = getattr(shell, "open_settings_process", None)
         if not callable(opener):
             return False
         try:
-            return bool(opener(self))
+            try:
+                return bool(opener(self, page=initial_page))
+            except TypeError:
+                # 兼容旧测试桩/宿主：老 opener 只接受 instance。
+                return bool(opener(self))
         except Exception:
             logging.exception("独立设置进程链路异常，回退进程内设置页")
             return False
@@ -1419,7 +1434,7 @@ class AppShell:
                 refresh()
         _mac_set_dock_icon_visible(bool(self.config.get("show_dock_icon", True)))
 
-    def open_settings_process(self, instance=None) -> bool:
+    def open_settings_process(self, instance=None, page: str | None = None) -> bool:
         """拉起独立设置进程；True = 已交给独立进程（不得再开进程内对话框）。
 
         False = 开关关闭或 startDetached 失败，由调用方回退进程内设置页。
@@ -1437,7 +1452,7 @@ class AppShell:
             # 刚拉起、子进程还没来得及建锁：连点场景视为已在启动，避免双开。
             self._mark_settings_child(True)
             return True
-        if not self._launch_settings_process(instance):
+        if not self._launch_settings_process(instance, page=page):
             return False
         self._settings_launch_at = time.monotonic()
         self._mark_settings_child(True)
@@ -1473,7 +1488,7 @@ class AppShell:
         started = float(getattr(self, "_settings_launch_at", 0.0) or 0.0)
         return bool(started) and (time.monotonic() - started) <= 5.0
 
-    def _launch_settings_process(self, instance=None) -> bool:
+    def _launch_settings_process(self, instance=None, *, page: str | None = None) -> bool:
         """startDetached 独立设置进程；冻结包与源码运行分流。
 
         源码运行要走 `-m pet`（工作目录取仓库根），冻结包直接复用 exe 的参数
@@ -1493,6 +1508,8 @@ class AppShell:
             logging.warning("sys.executable 为空，无法拉起独立设置进程")
             return False
         instance_id = str(getattr(getattr(instance, "config", None), "instance_id", "") or "")
+        if page:
+            arguments += ["--settings-page", str(page)]
         if instance_id and instance_id != (os.environ.get("DSH_PET_INSTANCE") or "").strip():
             # 进程内多窗（experimental_single_process_spawn）下第二窗的 instance_id
             # 不等于进程级 env：显式传参，否则独立设置进程会打开主窗的配置。
@@ -2586,7 +2603,7 @@ class AppShell:
         target = parent or (self.instance.win if self.instance is not None else None)
         if target is not None:
             target.show_bubble("正在检查更新…", duration_ms=6000)
-        bridge = _UpdateBridge(target)
+        bridge = _UpdateBridge(target, owner=self)
         self._update_bridge = bridge
         # 完成后放行下一次检查（无论成败）
         bridge.done.connect(lambda *_: setattr(self, "_update_checking", False))
