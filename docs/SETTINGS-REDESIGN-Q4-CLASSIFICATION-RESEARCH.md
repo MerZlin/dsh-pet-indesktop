@@ -28,7 +28,7 @@
 外部原则只采纳平台或框架所有者发布的第一方资料：Apple Human Interface Guidelines、Microsoft Windows app design guidance、GNOME HIG/libadwaita 文档和 Qt 官方文档。仓库设置项以以下实现为准：
 
 - [`pet/modern_settings_dialog.py`](../pet/modern_settings_dialog.py)：新版设置页、侧栏、分组、搜索与控件。
-- [`pet/settings_dialog.py`](../pet/settings_dialog.py)：旧版设置能力与 Windows 主动识屏旧入口。
+- 旧版 `pet/settings_dialog.py` 已从仓库移除，现行合并实现见 [`pet/modern_settings_dialog.py`](../pet/modern_settings_dialog.py)。
 - [`pet/config.py`](../pet/config.py)：持久化默认值、嵌套配置和平台无关配置契约。
 - [`docs/SETTINGS-INFORMATION-ARCHITECTURE-2026-08-27.md`](SETTINGS-INFORMATION-ARCHITECTURE-2026-08-27.md)：上一轮 IA 结论与已知 Qt 陷阱。
 
@@ -85,14 +85,14 @@
 | 桌宠行为 | 动画、拖拽、碰撞、点击、自言自语、Agent 文案和音效 | 页面过长；Agent 联动不是桌宠物理行为 | [`modern_settings_dialog.py`](../pet/modern_settings_dialog.py) |
 | 外观 | 桌宠、菜单、AI 对话、主题色、彩蛋 | 混合了四种作用对象，用户难以预测归属 | [`modern_settings_dialog.py`](../pet/modern_settings_dialog.py) |
 | 快捷启动 | 一个应用列表编辑器 | 一级页信息量不足，且其结果只出现在右键菜单 | [`modern_settings_dialog.py`](../pet/modern_settings_dialog.py) |
-| 主动识屏 | Windows AI 陪伴触发与白名单 | 只在 Windows + AI 构建出现，导致侧栏跨平台漂移 | [`modern_settings_dialog.py`](../pet/modern_settings_dialog.py), [`settings_dialog.py`](../pet/settings_dialog.py) |
+| 主动识屏 | Windows AI 陪伴触发与白名单 | 只在 Windows + AI 构建出现，导致侧栏跨平台漂移 | [`modern_settings_dialog.py`](../pet/modern_settings_dialog.py) |
 | AI 设置 | 模型、视觉模型、生成参数 | 连接、生成和对话外观被拆到两个一级页 | [`modern_settings_dialog.py`](../pet/modern_settings_dialog.py) |
 
 ### 配置域事实
 
 `Config` 已经自然形成若干领域：桌宠窗口与动画、交互与气泡、右键菜单外观、快捷启动、聊天、灵动岛、主动识屏、Agent 联动和碰撞。它们适合成为 IA 的证据，但不应直接等同侧栏，因为配置持久化结构服务代码，而侧栏服务用户。[`config.py`](../pet/config.py)
 
-旧设置页仍暴露开机自启、全屏隐藏、光标隐藏穿透、鼠标穿透、碰撞、点击反馈、自言自语及 Windows 主动识屏。迁移时必须建立同一设置 schema，不能靠两套窗口各自维护分类和保存逻辑。[`settings_dialog.py`](../pet/settings_dialog.py)
+历史旧设置页曾暴露开机自启、全屏隐藏、光标隐藏穿透、鼠标穿透、碰撞、点击反馈、自言自语及 Windows 主动识屏；现行实现已合并到 [`modern_settings_dialog.py`](../pet/modern_settings_dialog.py)。迁移时必须建立同一设置 schema，不能靠两套窗口各自维护分类和保存逻辑。
 
 ## 建议侧栏分类与完整归属
 
@@ -107,7 +107,7 @@
 | 系统集成（macOS） | 显示 Dock 图标 | 仅 macOS 创建；明确标注平台。 |
 | 系统集成（Windows） | 全屏时自动隐藏、光标隐藏时自动穿透、直播捕获兼容 | 仅 Windows 创建；均描述桌宠与 Windows 窗口系统的关系。 |
 
-仓库来源：[`modern_settings_dialog.py`](../pet/modern_settings_dialog.py)、[`settings_dialog.py`](../pet/settings_dialog.py)、[`config.py`](../pet/config.py)。
+仓库来源：[`modern_settings_dialog.py`](../pet/modern_settings_dialog.py)、[`config.py`](../pet/config.py)。
 
 不归入常规：余额刷新与峰谷文案属于 AI 服务反馈，应移至“AI 与对话”。
 
@@ -138,7 +138,7 @@
 | 自言自语 | 气泡自言自语、气泡方案、显示时间、最短间隔、最长间隔、候选内容、图片目录 | 关闭总开关后隐藏或禁用依赖项并解释。 |
 | 台词绑定 | 点击动画台词绑定 | 作为自言自语的深入编辑入口，不扩展为新的侧栏页。 |
 
-仓库来源：[`modern_settings_dialog.py`](../pet/modern_settings_dialog.py)、[`settings_dialog.py`](../pet/settings_dialog.py)、[`config.py`](../pet/config.py)。
+仓库来源：[`modern_settings_dialog.py`](../pet/modern_settings_dialog.py)、[`config.py`](../pet/config.py)。
 
 “点击显示余额”虽然数据源属于 AI，但触发方式属于点击。保留在互动页并通过搜索别名“余额 / AI”可发现，比在两页重复同一开关更清晰。
 
@@ -198,7 +198,7 @@
 | 主动识屏 / 触发条件 | 闲置要求、闲置秒数、鼠标穿透时识屏、触发前提示、优先独立视觉配置 | 依赖主动识屏总开关。 |
 | 主动识屏 / 范围与数据 | 白名单、快捷添加、清除陪伴记忆 | 清除记忆是数据管理动作，紧邻其数据说明。 |
 
-仓库来源：[`modern_settings_dialog.py`](../pet/modern_settings_dialog.py)、[`settings_dialog.py`](../pet/settings_dialog.py)、[`config.py`](../pet/config.py)、[`agent_link.py`](../pet/agent_link.py)。
+仓库来源：[`modern_settings_dialog.py`](../pet/modern_settings_dialog.py)、[`config.py`](../pet/config.py)、[`agent_link.py`](../pet/agent_link.py)。
 
 把主动识屏并入“联动”后，macOS、Windows、Linux 都保留同一个侧栏目的地；Windows 只多一个明确标记的平台组，不再多出整页。若某个构建既没有 Agent 联动也没有主动识屏能力，才隐藏整个“联动”页。
 

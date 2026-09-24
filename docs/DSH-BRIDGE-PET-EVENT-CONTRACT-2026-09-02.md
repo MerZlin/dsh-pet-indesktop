@@ -364,8 +364,8 @@ Agent 原始事件 → agent-event/v1
 
 ## 代码依据
 
-- [Bridge](integrations/dsh-pet-bridge/index.js)
-- [AgentLinkManager 与监视器](pet/agent_link.py)
-- [统一事件协议](pet/agent_event_protocol.py)
-- [事件规范化](pet/agent_event_normalizer.py)
-- [PetWindow](pet/window.py)
+- [Bridge](../integrations/dsh-pet-bridge/index.js)
+- [AgentLinkManager 与监视器](../pet/agent_link.py)
+- [统一事件协议](../pet/agent_event_protocol.py)
+- [事件规范化](../pet/agent_event_normalizer.py)
+- [PetWindow](../pet/window.py)
