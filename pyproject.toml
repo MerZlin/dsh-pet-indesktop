@@ -1,8 +1,7 @@
-# dsh-pet 最小 ruff 基线（批 0a 建立，纯非行为变更）。
-# 目标：不改任何存量代码，仅靠配置让 `ruff check pet/ tests/` 全绿。
-# 只选 pyflakes(F) 级规则；E/W 风格规则与 format/isort 均不启用，
-# 避免给存量代码制造新的格式噪音（存量风格另走手工格式化批次）。
-
+# dsh-pet Ruff 基线（规范化阶段，纯工具链变更）。
+# 当前启用 E4/E7/E9/F/I；格式检查由 `ruff format --check` 单独执行。
+# 自动更新并行会话文件显式排除：pet/updater.py、pet/update_settings.py。
+# 存量豁免只保留有明确兼容或历史技术债理由的项目，后续按主题收紧。
 [tool.ruff]
 line-length = 160   # 与存量代码现状匹配（F 规则不检查行长，此值仅作基线声明）
 target-version = "py313"
@@ -12,8 +11,8 @@ exclude = ["pet/updater.py", "pet/update_settings.py"]
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
-# —— 存量 F 级违规豁免（基线策略：不改存量代码，仅靠配置全绿）——
-# 每类豁免均登记在批 0a 报告（含逐条违规清单）；后续结构优化批
+# —— 存量 lint 违规豁免（按文件登记原因，后续逐项收紧）——
+# 每类豁免均应登记原因；后续结构优化批
 # （见 _plan/current/STRUCT_PLAN_FINAL.md）逐条清理后，应同步收紧本表直至可删除。
 
 # pet/chat/__init__.py：包公开 API 的刻意再导出（re-export），F401 属预期用法。
