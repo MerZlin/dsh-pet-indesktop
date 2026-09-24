@@ -17,6 +17,8 @@ jobs:
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
 
     steps:
       - name: Checkout
@@ -33,30 +35,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller pytest
+          python -m pip install -r requirements-dev.txt pyinstaller
 
-      # 命令与 PR 门禁（pr-test.yml）保持同一套：时序 flake 家族从主套件里
-      # 隔离成独立步骤——它们会让整个 pytest 进程原生崩溃（exit 139/access
-      # violation），从而拖垮同一进程里其它测试的结果报告。隔离不掩盖失败：
-      # 每一族照常判红，只额外给一次重跑机会（与门禁一致）。
-      - name: Pytest (main suite)
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py
-
-      - name: Pytest (webm lifecycle family, isolated + one retry)
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q tests/test_webm_reader_lifecycle.py tests/test_webm_clip_lifecycle.py tests/test_webm_first_frame_lock.py || python -m pytest -q tests/test_webm_reader_lifecycle.py tests/test_webm_clip_lifecycle.py tests/test_webm_first_frame_lock.py
-
-      - name: Pytest (low-priority warm family, isolated + one retry)
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q tests/test_low_priority_warm_interaction_yield.py || python -m pytest -q tests/test_low_priority_warm_interaction_yield.py
+      # 构建前统一执行与 PR 门禁相同的质量、导入和完整回归检查。
+      - name: Unified pre-build gate
+        run: python scripts/check.py --ci
 
       # 构建入口与本地完全一致：scripts/build_linux.sh（PyInstaller 打包 +
       # 中文编码自检都在脚本内完成），CI 不内联任何构建命令，
