@@ -1,0 +1,9 @@
+# Reproducible development and CI toolchain.
+-r requirements.txt
+
+# Static analysis and formatting
+ruff>=0.16.6
+mypy>=1.13
+
+# Git hooks
+pre-commit>=4.0

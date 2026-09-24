@@ -48,3 +48,4 @@ psutil>=5.9
 # 能按 requirements 复现静态检查（FINAL_REVIEW_GPT.md 提交卫生项，批10 补）。
 pytest>=8
 ruff>=0.5
+pytest-cov>=5

@@ -321,3 +321,126 @@ def _close_webm_readers_at_session_end():
         _webm_clip_mod._reset_session_ending_for_tests()
     except Exception:
         pass
+
+# ---- Project test taxonomy -------------------------------------------------
+
+# The suite predates pytest markers and remains intentionally file-oriented.
+# This hook adds a small, reviewable taxonomy without forcing a risky rename of
+# 160+ test modules.  Unlisted legacy modules stay unmarked until their behavior
+# is reviewed; they still run in the default full suite.
+_TAXONOMY_MARKERS = {
+    "unit": {
+        "test_architecture.py",
+        "test_config_domains.py",
+        "test_config_instance.py",
+        "test_config_key_migration.py",
+        "test_config_schema.py",
+        "test_config_sound.py",
+        "test_content_dlc.py",
+        "test_feature_gating.py",
+        "test_festival.py",
+        "test_persona_presets.py",
+        "test_persona_template.py",
+        "test_persona_template_rendering.py",
+        "test_plugin_runtime.py",
+        "test_pr_report_discipline.py",
+        "test_report_gates.py",
+    },
+    "integration": {
+        "test_app_startup_fallback.py",
+        "test_click_talk_dialog.py",
+        "test_context_menu_lifecycle.py",
+        "test_festival.py",
+        "test_plugin_runtime.py",
+        "test_settings_process_isolation.py",
+        "test_voice_chime_service.py",
+    },
+    "e2e": {
+        "test_child_pet_cleanup.py",
+        "test_collision_ipc.py",
+        "test_dsh_control_client.py",
+        "test_harness_launcher.py",
+        "test_harness_lifecycle.py",
+        "test_single_process_shared.py",
+        "test_single_process_spawn.py",
+    },
+    "slow": {
+        "test_decode_fanout.py",
+        "test_decode_fanout_integration.py",
+        "test_first_frame_budget.py",
+        "test_first_frame_no_gui_decode.py",
+        "test_idle_low_fps.py",
+        "test_library_priority_warm.py",
+        "test_library_warm_priority.py",
+        "test_low_priority_warm_interaction_yield.py",
+        "test_mem_debug.py",
+        "test_meta_cache_budget.py",
+        "test_meta_no_gui_probe.py",
+        "test_predictive_prewarm.py",
+        "test_session_end_ffmpeg_guard.py",
+        "test_webm_clip_broker_feed.py",
+        "test_webm_clip_lifecycle.py",
+        "test_webm_first_frame_lock.py",
+        "test_webm_meta_cache.py",
+        "test_webm_reader_lifecycle.py",
+        "test_warm_landing_idles.py",
+    },
+    "platform": {
+        "test_autostart.py",
+        "test_ffmpeg_job_object.py",
+        "test_macos_activation.py",
+        "test_wayland_platform.py",
+        "test_windows_node_env.py",
+        "test_winmm_sound.py",
+    },
+    "external": {
+        "test_agent_link.py",
+        "test_agent_link_dep_specs.py",
+        "test_agent_link_threads.py",
+        "test_balance.py",
+        "test_ffmpeg_job_object.py",
+        "test_harness_launcher.py",
+        "test_harness_lifecycle.py",
+        "test_music_lyric.py",
+        "test_now_playing_session.py",
+        "test_updater.py",
+        "test_update_feature.py",
+        "test_vision.py",
+        "test_webm_clip_broker_feed.py",
+        "test_webm_clip_lifecycle.py",
+        "test_webm_reader_lifecycle.py",
+    },
+    "network": {
+        "test_agent_cost.py",
+        "test_agent_link.py",
+        "test_agent_link_dep_specs.py",
+        "test_agent_link_threads.py",
+        "test_api_provider_list.py",
+        "test_balance.py",
+        "test_chat_service.py",
+        "test_chat_subsystem.py",
+        "test_music_lyric.py",
+        "test_now_playing_session.py",
+        "test_updater.py",
+        "test_update_feature.py",
+        "test_vision.py",
+    },
+}
+
+
+def pytest_collection_modifyitems(items):
+    """Apply the initial behavior taxonomy by test module.
+
+    This is deliberately additive: a test may carry more than one boundary
+    marker (for example ``platform`` and ``external``), while unreviewed legacy
+    modules remain unmarked rather than being assigned an inaccurate category.
+    """
+
+    by_filename = {}
+    for marker_name, filenames in _TAXONOMY_MARKERS.items():
+        for filename in filenames:
+            by_filename.setdefault(filename, set()).add(marker_name)
+
+    for item in items:
+        for marker_name in by_filename.get(item.path.name, ()):
+            item.add_marker(marker_name)
