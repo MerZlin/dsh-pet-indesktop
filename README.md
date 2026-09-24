@@ -35,7 +35,7 @@ $env:QT_QPA_PLATFORM = "offscreen"
 - Python 支持范围：3.11–3.13。
 - 详细质量门、插件化边界和回滚纪律见 [`SPEC.md`](SPEC.md)。
 - 文档唯一入口见 [`docs/INDEX.md`](docs/INDEX.md)；变更事实日志见 [`LOG.md`](LOG.md)。
-- `scripts/check.py --ci` 是 CI 与本地完整门禁的统一入口（脚本在工程基建阶段逐步启用）。
+- `scripts/check.py --ci` 是 CI 与本地完整门禁的统一入口；快速反馈可使用 `scripts/check.py --fast`。
 
 > 发布形态为 **onedir 目录打包 + Inno Setup 安装包（`.exe`）+ 便携 zip 绿色版**：安装版与绿色版运行期都不解压、不产生临时缓存，启动快、卸载干净。v4.2.0 完整发布清单见 [`docs/RELEASE-v4.2.0.md`](docs/RELEASE-v4.2.0.md)，**v4.2.1 发布草稿（含测试清单与视频预演脚本）见 [`docs/RELEASE-v4.2.1.md`](docs/RELEASE-v4.2.1.md)**，产物见 [GitHub Releases](https://github.com/MerZlin/dsh-pet-indesktop/releases)。
 

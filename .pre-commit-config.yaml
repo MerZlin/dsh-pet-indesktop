@@ -1,0 +1,31 @@
+default_language_version:
+  python: python3
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: python -m ruff check
+        language: system
+        types: [python]
+
+      - id: ruff-format
+        name: ruff format check
+        entry: python -m ruff format --check
+        language: system
+        types: [python]
+
+      - id: mypy-core
+        name: mypy core boundary
+        entry: python -m mypy
+        language: system
+        types: [python]
+        files: ^pet/(plugins|content)/.*\.py$|^pet/(catalog|config)\.py$
+
+      - id: markdown-links
+        name: repository Markdown links
+        entry: python scripts/check_docs.py
+        language: system
+        files: \.md$
+        pass_filenames: false
