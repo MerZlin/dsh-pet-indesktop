@@ -110,6 +110,8 @@ if ($nodeExe) {
 
 # GIF builds ship assets/characters_gif (webm dir must NOT be bundled, else runtime prefers webm)
 $datas = if ($isGif) { 'assets/characters_gif;assets/characters_gif' } else { 'assets/characters;assets/characters' }
+# WebM builds bundle the official Starter DLC; GIF builds intentionally use the GIF legacy path.
+$contentData = if (-not $isGif) { @('--add-data', 'content;content') } else { @() }
 # No-chat builds exclude the chat subsystem and keyring (kept out of the bundle)
 $excludes = if ($noChat) { @('--exclude-module', 'pet.chat', '--exclude-module', 'keyring') } else { @() }
 # PyOpenGL 与本应用无关（Qt 用自带 OpenGL），但其 freeglut_README.txt 是
@@ -220,6 +222,7 @@ if (-not $SkipBuild) {
         --collect-all psutil `
         @keyringCollect `
         --add-data $datas `
+        @contentData `
         --add-data "assets\big_blue_fat_fish;assets\big_blue_fat_fish" `
         --add-data "pet\persona_presets;pet\persona_presets" `
         --add-data "pet\menu_templates;pet\menu_templates" `

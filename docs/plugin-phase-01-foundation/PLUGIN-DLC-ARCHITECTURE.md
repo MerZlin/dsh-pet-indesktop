@@ -1,6 +1,6 @@
 # 插件化 / DLC 化架构基线（v5 重建）
 
-> 状态：设计基线，**截至 2026-09-24 尚未代表代码已经完成迁移**。
+> 状态：设计基线；截至 2026-09-24，资源型 DLC Phase 1 已完成本地基础闭环与边界加固，但跨平台实机发布验收和 Core 全量插件化迁移仍未完成。
 > 总路线见 [`PLUGIN-DLC-ROADMAP-v5.md`](../plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md)。
 > API 字段以 [`PLUGIN-API-CONTRACT.md`](PLUGIN-API-CONTRACT.md) 为准，更新流程以 [`PLUGIN-UPDATE-PROTOCOL.md`](../plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) 为准，v4 数据迁移以 [`PLUGIN-MIGRATION-v4-to-v5.md`](PLUGIN-MIGRATION-v4-to-v5.md) 为准。
 
@@ -71,7 +71,7 @@ content/
   seasonal/
 ```
 
-现有 `assets/characters/<id>/videos/` 已接近内容 DLC 边界，但迁移必须保持相对路径、大小写和 manifest 语义兼容。迁移完成前，Core 可以继续读取当前内置资源作为 fallback；不能为了拆包破坏已有角色启动路径。完整 `shenshen` 应成为官方 Starter DLC，资源搬迁属于后续实施阶段。
+现有 `assets/characters/<id>/videos/` 已接近内容 DLC 边界，但迁移必须保持相对路径、大小写和 manifest 语义兼容。迁移完成前，Core 可以继续读取当前内置资源作为 fallback；不能为了拆包破坏已有角色启动路径。完整 `shenshen` 已作为仓库内官方 Starter DLC 放入 `content/characters/shenshen`；旧 `assets/characters` 仍保留为兼容 fallback。
 
 ## 5. 功能型 DLC
 
@@ -133,4 +133,6 @@ data/
 
 ## 10. 当前实现状态
 
-本文冻结的是重建边界，不表示所有阶段已经实现。当前项目已有角色目录、manifest 和外部资源目录等可复用基础；当前 `pet/updater.py` 与 `pet/update_settings.py` 的自动更新工作属于并行会话，本架构不得覆盖、回退或强行改造其接口。
+本文冻结的是重建边界，不表示所有阶段已经实现。Phase 1 已新增 `pet/content/` 资源包模型、manifest 校验、逻辑哈希、角色 Registry、目录/ZIP 安装、激活、升级、卸载和回滚服务，并将 `catalog` 公共接口接入 Registry。当前正式运行默认拒绝 unsigned 资源包；开发模式必须显式传入 `allow_unsigned=True`。空视频文件、非法 ZIP 路径、可执行文件、Core/platform 不兼容和坏 hash 均会被拒绝。仓库内 `content/characters/shenshen` 是带 SHA-256 的官方 Starter DLC；`assets/characters` 仍作为 legacy fallback。
+
+当前仍未实现：设置页 DLC 管理 UI、远程 catalog、签名强制校验、in-process/worker 插件迁移和 Steam Workshop。Linux/macOS 实机打包、三平台启动/内存/包体基线属于发布前验收，不在当前 Windows 工作区伪造结果。当前 `pet/updater.py` 与 `pet/update_settings.py` 的自动更新工作属于并行会话，本架构不得覆盖、回退或强行改造其接口。

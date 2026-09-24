@@ -58,6 +58,13 @@ for variant in "${variant_list[@]}"; do
     name="dsh-pet-standalone-$variant"
     printf "VARIANT = '%s'\n" "$variant" > packaging/build_variant.py
 
+    if [[ "$variant" == webm-* ]]; then
+        # WebM builds include the official Starter DLC; GIF builds retain the GIF legacy path.
+        content_data=(--add-data "content:content")
+    else
+        content_data=()
+    fi
+
     args=(
         --noconfirm
         --clean
@@ -74,6 +81,7 @@ for variant in "${variant_list[@]}"; do
         --collect-all edge_tts
         --collect-all psutil
         --add-data "$assets:$assets"
+        "${content_data[@]}"
         --add-data "assets/big_blue_fat_fish:assets/big_blue_fat_fish"
         --add-data "assets/chat:assets/chat"
         --add-data "assets/sounds:assets/sounds"

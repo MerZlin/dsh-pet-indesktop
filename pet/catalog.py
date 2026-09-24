@@ -200,43 +200,23 @@ def external_character_dirs() -> list[Path]:
 
 
 def resolve_character_video_dir(character_id: str) -> Path:
-    """按 外部 > 内置(webm) > 内置(gif) 返回形象视频目录；都不存在时回退 webm 路径，不报错。"""
-    for root in external_character_dirs():
-        candidate = root / character_id / 'videos'
-        if candidate.is_dir():
-            return candidate
-    webm_dir_path = character_video_dir(character_id)
-    if webm_dir_path.is_dir() and any(webm_dir_path.rglob('*.webm')):
-        return webm_dir_path
-    gif_dir_path = character_gif_video_dir(character_id)
-    if gif_dir_path.is_dir() and any(gif_dir_path.rglob('*.gif')):
-        return gif_dir_path
-    return webm_dir_path
+    """通过资源 Registry 解析角色视频目录，并保留旧路径兜底。"""
+    from .content.registry import CharacterRegistry
+
+    package = CharacterRegistry().get(character_id)
+    if package is not None:
+        return package.video_dir
+    return character_video_dir(character_id)
 
 
 def list_available_characters() -> list[str]:
-    """返回可切换角色列表：内置角色 + 外部目录中额外检测到的角色。
+    """返回 Registry 发现的角色；Registry 失效时保留默认角色。"""
+    from .content.registry import CharacterRegistry
 
-    外部目录不存在时静默跳过，不会报错。
-    """
-    ids: list[str] = list(CHARACTERS)
-    seen = set(ids)
-    for root in external_character_dirs():
-        if not root.is_dir():
-            continue
-        try:
-            entries = sorted(root.iterdir())
-        except OSError:
-            continue
-        for child in entries:
-            video_dir = child / 'videos'
-            if child.is_dir() and video_dir.is_dir() and (
-                any(video_dir.rglob('*.webm')) or any(video_dir.rglob('*.gif'))
-            ):
-                cid = child.name
-                if cid not in seen:
-                    seen.add(cid)
-                    ids.append(cid)
+    ids = [package.character_id for package in CharacterRegistry().list_available()]
+    for character_id in CHARACTERS:
+        if character_id not in ids:
+            ids.append(character_id)
     return ids
 
 

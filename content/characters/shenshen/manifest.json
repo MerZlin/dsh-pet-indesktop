@@ -1,0 +1,29 @@
+{
+  "id": "official.character.shenshen",
+  "name": "深深角色包",
+  "version": "1.0.0",
+  "kind": "content",
+  "api_version": "1",
+  "core_requires": ">=4.2.1,<5.0.0",
+  "platforms": [
+    "windows",
+    "macos",
+    "linux"
+  ],
+  "dependencies": [],
+  "capabilities": [
+    "character",
+    "animation",
+    "phrases"
+  ],
+  "entrypoint": null,
+  "content": {
+    "characters": [
+      "shenshen"
+    ]
+  },
+  "integrity": {
+    "sha256": "bf0e4492e66c50e1de75a8f2db46c3412a785bea22bca9dac4b044bcd246a9ff",
+    "signature": null
+  }
+}
