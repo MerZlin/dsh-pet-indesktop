@@ -5,6 +5,7 @@
 该对象只在专用 QThread 中运行。GUI 侧只通过 queued Signal 发送状态和接收结果。
 关闭顺序：停止状态生产 -> leave -> 关闭 socket/server -> 停 timer -> quit/wait。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -50,8 +51,7 @@ def _valid_runtime_id(value: Any) -> str:
         encoded = text.encode("utf-8")
     except UnicodeEncodeError:
         return ""
-    if (not text or len(encoded) > RUNTIME_ID_MAX_LENGTH
-            or "|" in text or "\0" in text):
+    if not text or len(encoded) > RUNTIME_ID_MAX_LENGTH or "|" in text or "\0" in text:
         return ""
     return text
 
@@ -71,11 +71,13 @@ def _normalize_circles(value: Any) -> list[list[float]] | None:
     for raw in value[:MAX_COLLISION_CIRCLES]:
         if not isinstance(raw, (list, tuple)) or len(raw) < 3:
             continue
-        circles.append([
-            _finite_float(raw[0]),
-            _finite_float(raw[1]),
-            _finite_float(raw[2]),
-        ])
+        circles.append(
+            [
+                _finite_float(raw[0]),
+                _finite_float(raw[1]),
+                _finite_float(raw[2]),
+            ]
+        )
     return circles
 
 
@@ -104,8 +106,7 @@ def _normalize_state(raw: dict[str, Any]) -> dict[str, Any] | None:
         "vy": _finite_float(raw.get("vy", 0.0)),
         "flags": flags,
         "character": _bounded_text(raw.get("character", ""), CHARACTER_MAX_LENGTH),
-        "scale": _finite_float(raw.get("scale", collision.DEFAULT_BASE_SCALE),
-                               collision.DEFAULT_BASE_SCALE),
+        "scale": _finite_float(raw.get("scale", collision.DEFAULT_BASE_SCALE), collision.DEFAULT_BASE_SCALE),
     }
     circles = _normalize_circles(raw.get("circles"))
     if circles is not None:
@@ -267,10 +268,12 @@ class _CollisionWorker(QObject):
             # AddressInUseError（Windows 命名管道随进程死亡回收，无此问题）。
             # 持有排他文件锁 ⇒ 旧协调者必死（flock 随进程死亡释放），先同步
             # 探测同名服务确实无人应答，再清残留文件重试 listen（issue #42）。
-            if (sys.platform != "win32"
-                    and server.serverError() == QAbstractSocket.SocketError.AddressInUseError
-                    and self._coordinator_lock is not None
-                    and not self._probe_live_server()):
+            if (
+                sys.platform != "win32"
+                and server.serverError() == QAbstractSocket.SocketError.AddressInUseError
+                and self._coordinator_lock is not None
+                and not self._probe_live_server()
+            ):
                 QLocalServer.removeServer(self.name)
                 if server.listen(self.name):
                     self._become_listener(server)
@@ -315,9 +318,15 @@ class _CollisionWorker(QObject):
         self._socket_decoders[probe] = collision_codec.FrameStreamDecoder(
             max_frame_len=collision_codec.STATE_FRAME_MAX_LENGTH,
         )
-        probe.connected.connect(lambda: self._send(probe, {
-            "type": "probe", "runtime_id": self.runtime_id,
-        }))
+        probe.connected.connect(
+            lambda: self._send(
+                probe,
+                {
+                    "type": "probe",
+                    "runtime_id": self.runtime_id,
+                },
+            )
+        )
         probe.readyRead.connect(lambda: self._read_socket(probe))
         probe.errorOccurred.connect(lambda _error: self._announce_coordinator())
         probe.connectToServer(self.name)
@@ -454,17 +463,18 @@ class _CollisionWorker(QObject):
     @staticmethod
     def _now() -> float:
         from time import monotonic
+
         return monotonic()
 
     def _welcome(self) -> collision_codec.WelcomeMessage:
-        return {"type": "welcome", "epoch": self.epoch, "coordinator_id": self.runtime_id,
-                "tick": self.tick, "policy": self.policy,
-                "members": (
-                    [self._public_member(v)
-                     for v in self._fresh_member_values(self._now())]
-                    if self.policy.get("collision_enabled", True)
-                    else []
-                )}
+        return {
+            "type": "welcome",
+            "epoch": self.epoch,
+            "coordinator_id": self.runtime_id,
+            "tick": self.tick,
+            "policy": self.policy,
+            "members": ([self._public_member(v) for v in self._fresh_member_values(self._now())] if self.policy.get("collision_enabled", True) else []),
+        }
 
     @staticmethod
     def _public_member(member: dict[str, Any]) -> dict[str, Any]:
@@ -480,20 +490,14 @@ class _CollisionWorker(QObject):
         fresh = []
         for value in self.members.values():
             age = now - float(value.get("last_seen", now))
-            max_age = STATIC_MEMBER_MAX_AGE \
-                if int(value.get("flags", 0)) & collision.FLAG_STATIC \
-                else ACTIVE_MEMBER_MAX_AGE
+            max_age = STATIC_MEMBER_MAX_AGE if int(value.get("flags", 0)) & collision.FLAG_STATIC else ACTIVE_MEMBER_MAX_AGE
             if age <= max_age:
                 fresh.append(value)
         return fresh
 
     def _send(self, socket, message: collision_codec.WireMessage) -> None:
         try:
-            max_frame_len = (
-                collision_codec.STATE_FRAME_MAX_LENGTH
-                if message.get("type") == "state"
-                else collision_codec.FRAME_MAX_LENGTH
-            )
+            max_frame_len = collision_codec.STATE_FRAME_MAX_LENGTH if message.get("type") == "state" else collision_codec.FRAME_MAX_LENGTH
             frame = collision_codec.encode_frame(message, max_frame_len=max_frame_len)
         except Exception:
             logging.debug("碰撞 IPC 编码失败", exc_info=True)
@@ -541,8 +545,7 @@ class _CollisionWorker(QObject):
                     if remote_id < self.runtime_id:
                         self._resign_to(remote_id)
                     else:
-                        self._send(socket, {"type": "coordinator", "runtime_id": self.runtime_id,
-                                            "epoch": self.epoch})
+                        self._send(socket, {"type": "coordinator", "runtime_id": self.runtime_id, "epoch": self.epoch})
                 else:
                     self._send(socket, self._welcome())
                 return
@@ -552,8 +555,7 @@ class _CollisionWorker(QObject):
                     return
                 self.peers[socket] = runtime_id
                 if collision_debug.ENABLED:
-                    collision_debug.log(self.runtime_id, 'hello_peer', runtime_id=runtime_id,
-                                        mapped_runtime_id=self.peers[socket])
+                    collision_debug.log(self.runtime_id, "hello_peer", runtime_id=runtime_id, mapped_runtime_id=self.peers[socket])
                 if socket not in self._welcomed_peers:
                     self._welcomed_peers.add(socket)
                     self._send(socket, self._welcome())
@@ -566,8 +568,7 @@ class _CollisionWorker(QObject):
                 if state is None:
                     return
                 claimed = _valid_runtime_id(message.get("member_id"))
-                if claimed == collision.ISLAND_MEMBER_ID and (
-                        int(state.get("flags", 0)) & collision.FLAG_STATIC):
+                if claimed == collision.ISLAND_MEMBER_ID and (int(state.get("flags", 0)) & collision.FLAG_STATIC):
                     runtime_id = claimed
                 else:
                     runtime_id = _valid_runtime_id(self.peers.get(socket, ""))
@@ -583,9 +584,7 @@ class _CollisionWorker(QObject):
                 member = self._member_from_state(runtime_id, state)
                 if member is None:
                     return
-                if (int(state.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE
-                        and state.get("bounce_vx") is not None
-                        and state.get("bounce_vy") is not None):
+                if int(state.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE and state.get("bounce_vx") is not None and state.get("bounce_vy") is not None:
                     self._pending_predicted[runtime_id] = {
                         **member,
                         "_captured_at": self._now(),
@@ -645,13 +644,11 @@ class _CollisionWorker(QObject):
                 if self.watermarks.should_apply(self.epoch, pair, tick):
                     self.impulse_ready.emit(message)
                     if collision_debug.ENABLED:
-                        collision_debug.log(self.runtime_id, 'impulse_queued', pair=pair, tick=tick)
+                        collision_debug.log(self.runtime_id, "impulse_queued", pair=pair, tick=tick)
                 elif collision_debug.ENABLED:
-                    collision_debug.log(self.runtime_id, 'impulse_discard', pair=pair, tick=tick,
-                                        reason='watermark')
+                    collision_debug.log(self.runtime_id, "impulse_discard", pair=pair, tick=tick, reason="watermark")
             elif collision_debug.ENABLED:
-                collision_debug.log(self.runtime_id, 'impulse_discard', pair=pair, tick=tick,
-                                    reason='epoch_mismatch')
+                collision_debug.log(self.runtime_id, "impulse_discard", pair=pair, tick=tick, reason="epoch_mismatch")
 
     def _resign_to(self, _winner: str) -> None:
         if self.server is None:
@@ -696,8 +693,7 @@ class _CollisionWorker(QObject):
     def _send_hello(self) -> None:
         if self.socket and not self._hello_sent:
             self._hello_sent = True
-            self._send(self.socket, {"type": "hello", "runtime_id": self.runtime_id,
-                                     "instance_id": self.instance_id, "pid": os.getpid(), "epoch": self.epoch})
+            self._send(self.socket, {"type": "hello", "runtime_id": self.runtime_id, "instance_id": self.instance_id, "pid": os.getpid(), "epoch": self.epoch})
 
     @Slot(object)
     def submit_state(self, state: dict[str, Any]) -> None:
@@ -722,9 +718,11 @@ class _CollisionWorker(QObject):
             # 协调者自身的预测反弹也要进捕获队列：本进程状态走进程内直送，
             # 不经过 _handle_message 的 socket 路径，漏掉会导致"主桌宠撞
             # 别人时目标收不到权威冲量"（只有协调者自己的 pet 会踩中）。
-            if (int(normalized.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE
-                    and normalized.get("bounce_vx") is not None
-                    and normalized.get("bounce_vy") is not None):
+            if (
+                int(normalized.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE
+                and normalized.get("bounce_vx") is not None
+                and normalized.get("bounce_vy") is not None
+            ):
                 self._pending_predicted[self.runtime_id] = {
                     **member,
                     "_captured_at": self._now(),
@@ -738,10 +736,16 @@ class _CollisionWorker(QObject):
             self.members[self.runtime_id] = member
             self._membership_dirty = self._membership_dirty or is_new
             if collision_debug.ENABLED:
-                collision_debug.log(self.runtime_id, 'state_arrive', runtime_id=self.runtime_id,
-                                    x=normalized.get('x'), y=normalized.get('y'),
-                                    vx=normalized.get('vx'), vy=normalized.get('vy'),
-                                    seq=normalized.get('seq'))
+                collision_debug.log(
+                    self.runtime_id,
+                    "state_arrive",
+                    runtime_id=self.runtime_id,
+                    x=normalized.get("x"),
+                    y=normalized.get("y"),
+                    vx=normalized.get("vx"),
+                    vy=normalized.get("vy"),
+                    seq=normalized.get("seq"),
+                )
         elif self.socket:
             self._send(self.socket, dict(normalized, type="state"))
 
@@ -784,13 +788,11 @@ class _CollisionWorker(QObject):
             self.members[member_id] = member
             self._membership_dirty = self._membership_dirty or is_new
             if collision_debug.ENABLED:
-                collision_debug.log(self.runtime_id, 'static_state_arrive',
-                                    member_id=member_id, seq=seq, is_new=is_new)
+                collision_debug.log(self.runtime_id, "static_state_arrive", member_id=member_id, seq=seq, is_new=is_new)
         elif self.socket:
             self._send(self.socket, dict(normalized, type="state", member_id=member_id))
             if collision_debug.ENABLED:
-                collision_debug.log(self.runtime_id, 'static_state_forward',
-                                    member_id=member_id)
+                collision_debug.log(self.runtime_id, "static_state_forward", member_id=member_id)
 
     @Slot(object)
     def set_policy(self, policy: dict[str, Any]) -> None:
@@ -877,11 +879,7 @@ class _CollisionWorker(QObject):
             "tick": self.tick,
             # solver disabled 时对客户端发布空权威表，阻断其本地预测反弹；
             # 内部 members 仍保留，重新启用后可恢复其中仍新鲜的成员。
-            "members": (
-                [self._public_member(value) for value in fresh_members]
-                if solver_enabled
-                else []
-            ),
+            "members": ([self._public_member(value) for value in fresh_members] if solver_enabled else []),
         }
         self._broadcast(self.peers, payload)
         self.snapshot_ready.emit(payload)
@@ -913,19 +911,45 @@ class _CollisionWorker(QObject):
                 continue
             self._tombstones.discard(str(state.get("runtime_id", "")))
             if state.get("flags", 0) & collision.FLAG_VISIBLE:
-                defaults = {"vx": 0.0, "vy": 0.0, "mass": 1.0, "is_infinite_mass": False,
-                            "flags": 0, "instance_id": "", "character": "", "scale": 0.72,
-                             "w": 0.0, "h": 0.0, "circles": None}
-                keys = ("runtime_id", "x", "y", "radius_x", "radius_y", "vx", "vy", "mass",
-                         "is_infinite_mass", "flags", "instance_id", "character", "scale", "w", "h", "circles")
+                defaults = {
+                    "vx": 0.0,
+                    "vy": 0.0,
+                    "mass": 1.0,
+                    "is_infinite_mass": False,
+                    "flags": 0,
+                    "instance_id": "",
+                    "character": "",
+                    "scale": 0.72,
+                    "w": 0.0,
+                    "h": 0.0,
+                    "circles": None,
+                }
+                keys = (
+                    "runtime_id",
+                    "x",
+                    "y",
+                    "radius_x",
+                    "radius_y",
+                    "vx",
+                    "vy",
+                    "mass",
+                    "is_infinite_mass",
+                    "flags",
+                    "instance_id",
+                    "character",
+                    "scale",
+                    "w",
+                    "h",
+                    "circles",
+                )
                 values = {key: state.get(key, defaults.get(key, 0.0)) for key in keys}
                 # 无限质量认"被拖拽中"（用户手里握着）与 FLAG_STATIC 静态布景
                 # （灵动岛果冻墙）；lock_position 只是防拖拽，仍可被撞飞（碰碰车/台球需要）。
                 # 两者的弹性差异由 solve_collision_impulse 按 FLAG_STATIC 区分。
-                values["is_infinite_mass"] = bool(
-                    int(values["flags"]) & (collision.FLAG_DRAGGING | collision.FLAG_STATIC))
+                values["is_infinite_mass"] = bool(int(values["flags"]) & (collision.FLAG_DRAGGING | collision.FLAG_STATIC))
                 values["mass"] = collision.calculate_mass(
-                    values["radius_x"], values["radius_y"],
+                    values["radius_x"],
+                    values["radius_y"],
                     scale=float(values.get("scale", 0.72) or 0.72),
                     collision_mass_scale=self.policy.get("collision_mass_scale", 1.0),
                 )
@@ -963,7 +987,8 @@ class _CollisionWorker(QObject):
             pred_circles = snap.get("bounce_circles") or snap.get("circles")
             pred_scale = float(snap.get("scale", 0.72) or 0.72)
             pred_mass = collision.calculate_mass(
-                pred_rx, pred_ry,
+                pred_rx,
+                pred_ry,
                 scale=pred_scale,
                 collision_mass_scale=self.policy.get("collision_mass_scale", 1.0),
             )
@@ -994,43 +1019,55 @@ class _CollisionWorker(QObject):
                 hit = collision.check_collision_members(event_member, other)
                 if not hit[0]:
                     previous = self.previous_members.get(pred_rid)
-                    if (previous and previous.get("circles") is not None
-                            and event_member.circles is not None and other.circles is not None):
-                        hit = collision.swept_circle_chain_collision(
-                            previous["circles"], event_member.circles,
-                            other.circles, other.circles)
+                    if previous and previous.get("circles") is not None and event_member.circles is not None and other.circles is not None:
+                        hit = collision.swept_circle_chain_collision(previous["circles"], event_member.circles, other.circles, other.circles)
                 if not hit[0]:
                     continue
                 _, nx, ny, overlap, cx, cy = hit
                 j, _, _, dvx_other, dvy_other = collision.solve_collision_impulse(
-                    event_member, other, nx, ny,
+                    event_member,
+                    other,
+                    nx,
+                    ny,
                     restitution=self.policy["collision_restitution"],
                     friction=self.policy["collision_friction"],
                     impulse_cap=self.policy["collision_impulse_cap"],
                 )
                 sep, _, _, dx_other, dy_other = collision.calculate_position_separation(
-                    overlap, nx, ny,
+                    overlap,
+                    nx,
+                    ny,
                     0.0 if event_member.is_infinite_mass else 1.0 / event_member.mass,
                     0.0 if other.is_infinite_mass else 1.0 / other.mass,
                 )
                 a, b = sorted((pred_rid, other.runtime_id))
                 other_is_a = other.runtime_id == a
-                predicted_results.append(collision.ImpulseResult(
-                    tick=self.tick, pair=pair, a=a, b=b, nx=nx, ny=ny, j=j, sep=sep,
-                    contact_x=cx, contact_y=cy,
-                    dvx_a=dvx_other if other_is_a else 0.0,
-                    dvy_a=dvy_other if other_is_a else 0.0,
-                    dvx_b=0.0 if other_is_a else dvx_other,
-                    dvy_b=0.0 if other_is_a else dvy_other,
-                    dx_a=dx_other if other_is_a else 0.0,
-                    dy_a=dy_other if other_is_a else 0.0,
-                    dx_b=0.0 if other_is_a else dx_other,
-                    dy_b=0.0 if other_is_a else dy_other,
-                    ax=event_member.x if a == pred_rid else other.x,
-                    ay=event_member.y if a == pred_rid else other.y,
-                    bx=other.x if b == other.runtime_id else event_member.x,
-                    by=other.y if b == other.runtime_id else event_member.y,
-                ))
+                predicted_results.append(
+                    collision.ImpulseResult(
+                        tick=self.tick,
+                        pair=pair,
+                        a=a,
+                        b=b,
+                        nx=nx,
+                        ny=ny,
+                        j=j,
+                        sep=sep,
+                        contact_x=cx,
+                        contact_y=cy,
+                        dvx_a=dvx_other if other_is_a else 0.0,
+                        dvy_a=dvy_other if other_is_a else 0.0,
+                        dvx_b=0.0 if other_is_a else dvx_other,
+                        dvy_b=0.0 if other_is_a else dvy_other,
+                        dx_a=dx_other if other_is_a else 0.0,
+                        dy_a=dy_other if other_is_a else 0.0,
+                        dx_b=0.0 if other_is_a else dx_other,
+                        dy_b=0.0 if other_is_a else dy_other,
+                        ax=event_member.x if a == pred_rid else other.x,
+                        ay=event_member.y if a == pred_rid else other.y,
+                        bx=other.x if b == other.runtime_id else event_member.x,
+                        by=other.y if b == other.runtime_id else event_member.y,
+                    )
+                )
                 predicted_pairs.add(pair)
                 break
             raw = state_by_id.get(pred_rid)
@@ -1042,30 +1079,27 @@ class _CollisionWorker(QObject):
                 raw.pop("bounce_y", None)
                 raw.pop("bounce_circles", None)
         for i, member_a in enumerate(sorted_active):
-            for member_b in sorted_active[i + 1:]:
+            for member_b in sorted_active[i + 1 :]:
                 prev_a, prev_b = active_previous.get(member_a.runtime_id), active_previous.get(member_b.runtime_id)
                 pair = f"{member_a.runtime_id}|{member_b.runtime_id}"
                 if pair in predicted_pairs or self._predicted_pair_ticks.get(pair, -2) >= self.tick - 1:
                     continue
-                version = (int(state_by_id[member_a.runtime_id].get("seq", -1)),
-                           int(state_by_id[member_b.runtime_id].get("seq", -1)))
+                version = (int(state_by_id[member_a.runtime_id].get("seq", -1)), int(state_by_id[member_b.runtime_id].get("seq", -1)))
                 if prev_a and prev_b and self._swept_pair_versions.get(pair) != version:
-                    swept[pair] = collision.swept_circle_chain_collision(
-                        prev_a.circles, member_a.circles, prev_b.circles, member_b.circles)
+                    swept[pair] = collision.swept_circle_chain_collision(prev_a.circles, member_a.circles, prev_b.circles, member_b.circles)
                     self._swept_pair_versions[pair] = version
         results, _, self.overlap_history = collision.solve_multi_body_collision(
-            active, self.tick, self.overlap_history,
-            restitution=self.policy["collision_restitution"], friction=self.policy["collision_friction"],
-            impulse_cap=self.policy["collision_impulse_cap"], swept_collisions=swept,
-            ignored_pairs=predicted_pairs | {
-                pair for pair, tick in self._predicted_pair_ticks.items()
-                if tick >= self.tick - 1
-            })
+            active,
+            self.tick,
+            self.overlap_history,
+            restitution=self.policy["collision_restitution"],
+            friction=self.policy["collision_friction"],
+            impulse_cap=self.policy["collision_impulse_cap"],
+            swept_collisions=swept,
+            ignored_pairs=predicted_pairs | {pair for pair, tick in self._predicted_pair_ticks.items() if tick >= self.tick - 1},
+        )
         results = predicted_results + results
-        self._predicted_pair_ticks = {
-            pair: tick for pair, tick in self._predicted_pair_ticks.items()
-            if self.tick - tick <= 1
-        }
+        self._predicted_pair_ticks = {pair: tick for pair, tick in self._predicted_pair_ticks.items() if self.tick - tick <= 1}
         for pair in predicted_pairs:
             self._predicted_pair_ticks[pair] = self.tick
         self._publish_snapshot_if_due(now)
@@ -1073,8 +1107,7 @@ class _CollisionWorker(QObject):
             if result.j == 0 and result.sep == 0:
                 continue
             if result.j == 0 and result.sep > 0:
-                signature = (round(result.dx_a, 3), round(result.dy_a, 3),
-                             round(result.dx_b, 3), round(result.dy_b, 3))
+                signature = (round(result.dx_a, 3), round(result.dy_a, 3), round(result.dx_b, 3), round(result.dy_b, 3))
                 previous = self._position_only_pairs.get(result.pair)
                 if previous is not None and self.tick - previous[1] < 15:
                     continue
@@ -1090,22 +1123,10 @@ class _CollisionWorker(QObject):
                 self._membership_dirty = True
             self._pending_predicted.pop(runtime_id, None)
             self.previous_members.pop(runtime_id, None)
-            self._swept_pair_versions = {
-                pair: version for pair, version in self._swept_pair_versions.items()
-                if runtime_id not in pair.split("|")
-            }
-            self._predicted_pair_ticks = {
-                pair: tick for pair, tick in self._predicted_pair_ticks.items()
-                if runtime_id not in pair.split("|")
-            }
-            self._position_only_pairs = {
-                pair: value for pair, value in self._position_only_pairs.items()
-                if runtime_id not in pair.split("|")
-            }
-            self.overlap_history = {
-                pair: count for pair, count in self.overlap_history.items()
-                if runtime_id not in pair.split("|")
-            }
+            self._swept_pair_versions = {pair: version for pair, version in self._swept_pair_versions.items() if runtime_id not in pair.split("|")}
+            self._predicted_pair_ticks = {pair: tick for pair, tick in self._predicted_pair_ticks.items() if runtime_id not in pair.split("|")}
+            self._position_only_pairs = {pair: value for pair, value in self._position_only_pairs.items() if runtime_id not in pair.split("|")}
+            self.overlap_history = {pair: count for pair, count in self.overlap_history.items() if runtime_id not in pair.split("|")}
 
     def _peer_lost(self, socket) -> None:
         self._welcomed_peers.discard(socket)
@@ -1219,6 +1240,7 @@ def _stop_live_sessions_for_tests() -> None:
 
 class CollisionIpcSession(QObject):
     """GUI 线程持有的 IPC facade；不暴露任何 socket 或成员表。"""
+
     state_submitted = Signal(object)
     static_state_submitted = Signal(object)
     policy_submitted = Signal(object)
@@ -1234,14 +1256,20 @@ class CollisionIpcSession(QObject):
         _live_sessions.add(self)
         self.runtime_id = make_runtime_id(getattr(config, "instance_id", ""))
         self._thread = QThread(self)
-        policy = {"collision_enabled": bool(config.get("collision_enabled", True)),
-                  "collision_restitution": float(config.get("collision_restitution", .82)),
-                  "collision_friction": float(config.get("collision_friction", .08)),
-                  "collision_mass_scale": float(config.get("collision_mass_scale", 1.0)),
-                  "collision_impulse_cap": float(config.get("collision_impulse_cap", 9000.0))}
-        self._worker = _CollisionWorker(server_name or collision_server_name(), self.runtime_id,
-                                        getattr(config, "instance_id", ""), policy,
-                                        lock_path=config.dir / "collision-coordinator.lock")
+        policy = {
+            "collision_enabled": bool(config.get("collision_enabled", True)),
+            "collision_restitution": float(config.get("collision_restitution", 0.82)),
+            "collision_friction": float(config.get("collision_friction", 0.08)),
+            "collision_mass_scale": float(config.get("collision_mass_scale", 1.0)),
+            "collision_impulse_cap": float(config.get("collision_impulse_cap", 9000.0)),
+        }
+        self._worker = _CollisionWorker(
+            server_name or collision_server_name(),
+            self.runtime_id,
+            getattr(config, "instance_id", ""),
+            policy,
+            lock_path=config.dir / "collision-coordinator.lock",
+        )
         self._worker.moveToThread(self._thread)
         self._thread.finished.connect(self._worker.deleteLater)
         self._thread.started.connect(self._worker.start)

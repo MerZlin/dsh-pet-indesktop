@@ -26,6 +26,7 @@ def run_uninstall_cleanup(config=None) -> dict:
 
     if config is None:
         from .config import Config
+
         config = Config()
 
     results = {"autostart": bool(autostart.disable())}

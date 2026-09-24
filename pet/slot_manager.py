@@ -4,6 +4,7 @@
 实现多开桌宠的槽位竞争、内核排他锁、配置播种与旧 spawn 迁移。
 纯 Python 实现，不依赖 Qt。
 """
+
 from __future__ import annotations
 
 import copy
@@ -302,8 +303,7 @@ def seed_slot_config_from_main(config_dir: Path | str, slot_id: int) -> bool:
             seed[key] = value
     seed["user_customized"] = False
     try:
-        slot_path.write_text(json.dumps(seed, ensure_ascii=False, indent=2),
-                             encoding="utf-8")
+        slot_path.write_text(json.dumps(seed, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         return False
     return True
@@ -416,6 +416,7 @@ def migrate_legacy_spawns(config_dir: Path | str) -> bool:
                 # 检查进程是否存活
                 if sys.platform == "win32":
                     import ctypes
+
                     kernel32 = ctypes.windll.kernel32
                     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
                     h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
@@ -531,6 +532,7 @@ def pid_alive(pid: int) -> bool:
         return False
     if sys.platform == "win32":
         import ctypes
+
         # PROCESS_QUERY_LIMITED_INFORMATION
         handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
         if not handle:
@@ -557,7 +559,7 @@ def _slot_label(instance_id: str) -> str:
     if not s or s == "slot-0":
         return "0"
     if s.startswith("slot-"):
-        return s[len("slot-"):] or "0"
+        return s[len("slot-") :] or "0"
     return re.sub(r"[^A-Za-z0-9_-]", "_", s) or "0"
 
 
@@ -571,15 +573,12 @@ def runtime_marker_name(instance_id: str = "", *, versioned: bool = False) -> st
     return f"runtime-{pid}.json"
 
 
-def runtime_marker_path(config_dir: Path | str, instance_id: str = "",
-                        *, versioned: bool = False) -> Path:
+def runtime_marker_path(config_dir: Path | str, instance_id: str = "", *, versioned: bool = False) -> Path:
     """返回某窗 runtime 标记的完整路径。"""
     return Path(config_dir) / runtime_marker_name(instance_id, versioned=versioned)
 
 
-def write_runtime_marker(config_dir: Path | str, instance_id: str,
-                         x: int, y: int, w: int, h: int,
-                         *, versioned: bool = False) -> Path:
+def write_runtime_marker(config_dir: Path | str, instance_id: str, x: int, y: int, w: int, h: int, *, versioned: bool = False) -> Path:
     """写入本窗 runtime 标记（旧格式仅主窗/pflag 关时用；versioned 多窗用）。
 
     写版本化标记时顺手清掉同 pid 的旧格式标记，避免同进程混用重复计数。
@@ -593,10 +592,18 @@ def write_runtime_marker(config_dir: Path | str, instance_id: str,
                     legacy.unlink()
             except OSError:
                 pass
-        path.write_text(json.dumps({
-            'pid': os.getpid(),
-            'x': int(x), 'y': int(y), 'w': int(w), 'h': int(h),
-        }), encoding='utf-8')
+        path.write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "x": int(x),
+                    "y": int(y),
+                    "w": int(w),
+                    "h": int(h),
+                }
+            ),
+            encoding="utf-8",
+        )
     except OSError:
         pass
     return path
@@ -652,21 +659,21 @@ def read_live_instances(
         exclude_names = set()
     instances: list[tuple[int, int, int, int, int]] = []
     try:
-        files = list(Path(config_dir).glob('runtime-*.json'))
-        files.extend(Path(config_dir).glob(f'{_RUNTIME_V2_PREFIX}*.json'))
+        files = list(Path(config_dir).glob("runtime-*.json"))
+        files.extend(Path(config_dir).glob(f"{_RUNTIME_V2_PREFIX}*.json"))
     except OSError:
         return instances
     for f in files:
         try:
-            data = json.loads(f.read_text(encoding='utf-8'))
-            pid = int(data.get('pid', 0))
+            data = json.loads(f.read_text(encoding="utf-8"))
+            pid = int(data.get("pid", 0))
             if exclude_pid is not None and pid == exclude_pid:
                 continue
             if f.name in exclude_names:
                 continue
             if not alive(pid):
-                raise OSError('stale marker')
-            x, y, w, h = (int(data.get(k, 0)) for k in ('x', 'y', 'w', 'h'))
+                raise OSError("stale marker")
+            x, y, w, h = (int(data.get(k, 0)) for k in ("x", "y", "w", "h"))
             instances.append((pid, x, y, w, h))
         except (OSError, ValueError, TypeError):
             try:

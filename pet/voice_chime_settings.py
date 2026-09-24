@@ -126,17 +126,13 @@ class VoiceChimeSettingsPage(QWidget):
         self.custom_zh_edit = QPlainTextEdit(self)
         self.custom_zh_edit.setMinimumSize(280, 84)
         self.custom_zh_edit.setMaximumHeight(180)
-        self.custom_zh_edit.setPlaceholderText(
-            "每行一条，例如：\n又是元气满满的一天～\n该起来喝口水、动一动啦。"
-        )
+        self.custom_zh_edit.setPlaceholderText("每行一条，例如：\n又是元气满满的一天～\n该起来喝口水、动一动啦。")
         self.custom_zh_edit.setPlainText(str(self.config.get("voice_chime_custom_quotes_zh", "") or ""))
 
         self.custom_en_edit = QPlainTextEdit(self)
         self.custom_en_edit.setMinimumSize(280, 84)
         self.custom_en_edit.setMaximumHeight(180)
-        self.custom_en_edit.setPlaceholderText(
-            "One quote per line, e.g.\nTake a short break and stretch.\nYou've got this!"
-        )
+        self.custom_en_edit.setPlaceholderText("One quote per line, e.g.\nTake a short break and stretch.\nYou've got this!")
         self.custom_en_edit.setPlainText(str(self.config.get("voice_chime_custom_quotes_en", "") or ""))
 
         self.preview_btn = QPushButton("立即试听", self)
@@ -152,7 +148,12 @@ class VoiceChimeSettingsPage(QWidget):
             SettingsSection(
                 "基础设置",
                 [
-                    SettingRow("voice_chime_enabled", "启用语音报时", "开启后按下方调度规则定时语音报时，并附台词/歌词（每 8 小时整体换一批，同周期内按序轮换）。", self.enabled_check),
+                    SettingRow(
+                        "voice_chime_enabled",
+                        "启用语音报时",
+                        "开启后按下方调度规则定时语音报时，并附台词/歌词（每 8 小时整体换一批，同周期内按序轮换）。",
+                        self.enabled_check,
+                    ),
                     SettingRow("voice_chime_schedule", "报时频率", "整点 / 每30分钟 / 每15分钟 / 每5分钟 / 每分钟 / 自定义时间点。", self.schedule_select),
                     SettingRow("voice_chime_custom_times", "自定义时间点", "仅「自定义时间点」模式生效；HH:MM 逗号分隔，如 08:30, 12:00。", self.custom_edit),
                 ],
@@ -167,15 +168,19 @@ class VoiceChimeSettingsPage(QWidget):
                     SettingRow(
                         "voice_chime_voice",
                         "音色",
-                        "内置中英文音色（edge-tts 在线合成，无需 API Key）；"
-                        "微软会下架音色——选到已不存在的音色时会自动改用默认音色并提示一次。",
+                        "内置中英文音色（edge-tts 在线合成，无需 API Key）；微软会下架音色——选到已不存在的音色时会自动改用默认音色并提示一次。",
                         self.voice_select,
                     ),
                     SettingRow("voice_chime_rate", "语速", "语速偏移百分比：0 为正常，正数更快，负数更慢。", self.rate_spin),
                     SettingRow("voice_chime_pitch", "音调", "音调偏移（Hz）：0 为正常，正数更尖锐，负数更低沉。", self.pitch_spin),
                     SettingRow("voice_chime_volume", "音量", "报时播放音量（0-100）。", self.volume_spin),
                     SettingRow("voice_chime_show_bubble", "报时气泡", "报时时在桌宠头顶显示气泡文字（含台词/歌词）。", self.bubble_check),
-                    SettingRow("voice_chime_show_quote", "台词/歌词", "报时时附带台词/歌词（每 8 小时整体换一批，同周期内每次报时按序取不同条目）；关闭后仅播报时间文本。", self.quote_check),
+                    SettingRow(
+                        "voice_chime_show_quote",
+                        "台词/歌词",
+                        "报时时附带台词/歌词（每 8 小时整体换一批，同周期内每次报时按序取不同条目）；关闭后仅播报时间文本。",
+                        self.quote_check,
+                    ),
                     SettingRow("voice_chime_preview", "立即试听", "按当前配置立即播报一句“报时文本 + 台词/歌词”，无需等待报时点。", self.preview_btn),
                 ],
                 self,

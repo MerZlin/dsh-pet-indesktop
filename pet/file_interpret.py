@@ -7,6 +7,7 @@ ChatService 的信号链本身是 QueuedConnection（worker→service 已跨线�
 这里不需要自建 worker 线程；pet.chat 的导入必须延迟到方法内（no-chat 打包
 变体 excludes=['pet.chat']，顶层导入会让设置/建窗路径整体炸）。
 """
+
 from __future__ import annotations
 
 import copy
@@ -25,12 +26,40 @@ logger = logging.getLogger(__name__)
 CONFIRM_ALERT_ID = "file_interpret:confirm"
 
 # 文本类后缀：聊天附件白名单（pet/chat/widgets.py _TEXT_EXTENSIONS）∪ 常见代码/配置后缀。
-_TEXT_EXTENSIONS = frozenset({
-    ".txt", ".md", ".json", ".csv", ".log", ".yaml", ".yml", ".xml",
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".sql",
-    ".sh", ".bat", ".ps1", ".ini", ".toml", ".cfg", ".conf",
-    ".java", ".c", ".h", ".cpp", ".go", ".rs", ".rb",
-})
+_TEXT_EXTENSIONS = frozenset(
+    {
+        ".txt",
+        ".md",
+        ".json",
+        ".csv",
+        ".log",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".html",
+        ".css",
+        ".sql",
+        ".sh",
+        ".bat",
+        ".ps1",
+        ".ini",
+        ".toml",
+        ".cfg",
+        ".conf",
+        ".java",
+        ".c",
+        ".h",
+        ".cpp",
+        ".go",
+        ".rs",
+        ".rb",
+    }
+)
 
 # 单次解读的文本字符预算（与聊天附件 MAX_TEXT_TOTAL_CHARS 同源口径）。
 _MAX_TEXT_CHARS = 200_000
@@ -40,10 +69,7 @@ _INTERVAL_DEFAULT_SECONDS = 15.0
 _INTERVAL_FLOOR_SECONDS = 0.05
 _INTERVAL_CEIL_SECONDS = 3600.0
 
-_INTERPRET_INSTRUCTION = (
-    "请解读以上文件内容：先用两三句话概括它是什么、讲什么，再列出关键信息点；"
-    "如果内容读不懂或像乱码，就直说。"
-)
+_INTERPRET_INSTRUCTION = "请解读以上文件内容：先用两三句话概括它是什么、讲什么，再列出关键信息点；如果内容读不懂或像乱码，就直说。"
 
 _PROGRESS_BUBBLE_MS = 3500
 
@@ -233,20 +259,14 @@ class FileInterpretController(QObject):
             self._service.error.connect(self._on_error)
             self._service.stopped.connect(self._on_stopped)
         if self._store is None:
-            self._store = (self._store_factory or SessionStore)(
-                self._win.cfg.dir, getattr(self._win.cfg, "instance_id", "")
-            )
+            self._store = (self._store_factory or SessionStore)(self._win.cfg.dir, getattr(self._win.cfg, "instance_id", ""))
         if self._prompt_builder is None:
-            self._prompt_builder = PromptBuilder(
-                Path(__file__).resolve().parent.parent / "assets" / "characters"
-            )
+            self._prompt_builder = PromptBuilder(Path(__file__).resolve().parent.parent / "assets" / "characters")
 
         character_id = str(self._win.cfg.get("character", DEFAULT_CHARACTER))
         system_prompt = self._prompt_builder.effective_system_prompt(settings, character_id)
         session = self._store.create(character_id, settings.active_provider, system_prompt)
-        session.custom_title = (
-            f"文件解读：{paths[0].name}" if len(paths) == 1 else f"文件解读：{len(paths)} 个文件"
-        )
+        session.custom_title = f"文件解读：{paths[0].name}" if len(paths) == 1 else f"文件解读：{len(paths)} 个文件"
         self._store.save(session)
 
         content, skipped = extract_text(paths)
@@ -259,9 +279,7 @@ class FileInterpretController(QObject):
         else:
             self._session = synced
 
-        messages = self._prompt_builder.build_messages(
-            settings, character_id, self._session.messages[:-1], user_text
-        )
+        messages = self._prompt_builder.build_messages(settings, character_id, self._session.messages[:-1], user_text)
         self._request_id = self._service.send(messages, provider)
 
         self._state = "running"

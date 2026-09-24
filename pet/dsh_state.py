@@ -52,8 +52,8 @@ BRIDGE_DIR_NAME = "dsh-pet-bridge"
 BRIDGE_FILE_NAME = "dsh.jsonl"
 
 # 在线探测 / 事件 tail 的轮询间隔
-_ONLINE_POLL_MS = 3000          # DSH 端口在线探测
-_EVENT_POLL_MS = 1200           # 桥接事件 tail
+_ONLINE_POLL_MS = 3000  # DSH 端口在线探测
+_EVENT_POLL_MS = 1200  # 桥接事件 tail
 # 审批锁存兜底：若 approval/decided 长时间未到，强制解除审批态回 working，
 # 避免桌宠卡死在 waiting_approval（DSH 异常漏发 decided 的防线）。
 _APPROVAL_LATCH_TIMEOUT_S = 120.0
@@ -61,6 +61,7 @@ _APPROVAL_LATCH_TIMEOUT_S = 120.0
 
 class DshState(str, Enum):
     """桌宠可见的 DSH 统一状态。"""
+
     OFFLINE = "offline"
     IDLE = "idle"
     THINKING = "thinking"
@@ -180,7 +181,7 @@ class DshStateTracker(QObject):
 
         self._online: Optional[bool] = None  # 上次在线探测结果（用于 edge 触发 offline/idle）
         self._probe_inflight = False  # 后台探测是否在途（防并发探测）
-        self._probe_generation = 0    # 探测代次：stop() 自增，作废在途结果
+        self._probe_generation = 0  # 探测代次：stop() 自增，作废在途结果
         self._started = False
 
         self._online_timer = QTimer(self)
@@ -321,7 +322,7 @@ class DshStateTracker(QObject):
                 ports.add(int(env_port))
             except (TypeError, ValueError):
                 pass
-        ports.add(3080)   # DSH web 默认端口
+        ports.add(3080)  # DSH web 默认端口
         ports.add(38080)  # harness_launcher 启动默认端口
         return sorted(ports)
 

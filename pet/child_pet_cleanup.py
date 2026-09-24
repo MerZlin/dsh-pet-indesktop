@@ -5,6 +5,7 @@
 slot 配置、会话与待办数据——子肥鱼的设置（含 user_customized 占位）全部
 保留，下次生成时按占位语义恢复。主肥鱼（slot-0/config.json）不受影响。
 """
+
 from __future__ import annotations
 
 import json
@@ -33,14 +34,13 @@ def _pid_alive(pid: int) -> bool:
         try:
             import ctypes
             from ctypes import wintypes
-            handle = ctypes.windll.kernel32.OpenProcess(
-                0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
             if not handle:
                 return False
             try:
                 code = wintypes.DWORD()
-                if not ctypes.windll.kernel32.GetExitCodeProcess(
-                        handle, ctypes.byref(code)):
+                if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
                     return False
                 return code.value == 259  # STILL_ACTIVE
             finally:
@@ -65,16 +65,14 @@ def _terminate_pet_process(pid: int) -> None:
         try:
             proc = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 timeout=5,
                 # GUI 进程（无控制台）里起 taskkill 会弹空白控制台窗口
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             if proc.returncode != 0:
-                logging.warning(
-                    "退出子肥鱼：taskkill pid=%d 返回码 %s: %s%s",
-                    pid, proc.returncode,
-                    (proc.stdout or "").strip(), (proc.stderr or "").strip())
+                logging.warning("退出子肥鱼：taskkill pid=%d 返回码 %s: %s%s", pid, proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip())
         except Exception:
             logging.exception("退出子肥鱼：taskkill pid=%d 执行异常", pid)
         return
@@ -102,14 +100,14 @@ def _pid_image_path(pid: int) -> str | None:
         try:
             import ctypes
             from ctypes import wintypes
+
             handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
             if not handle:
                 return None
             try:
                 buf = ctypes.create_unicode_buffer(1024)
                 size = wintypes.DWORD(1024)
-                ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(
-                    handle, 0, buf, ctypes.byref(size))
+                ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
                 return buf.value if ok else None
             finally:
                 ctypes.windll.kernel32.CloseHandle(handle)
@@ -130,8 +128,7 @@ def _is_pet_process(pid: int) -> bool:
     img = _pid_image_path(pid)
     if img is None:
         return os.name != "nt"
-    return (os.path.normcase(os.path.normpath(img))
-            == os.path.normcase(os.path.normpath(sys.executable)))
+    return os.path.normcase(os.path.normpath(img)) == os.path.normcase(os.path.normpath(sys.executable))
 
 
 def _slot_lock_pids(root: Path) -> list[int]:
@@ -147,7 +144,7 @@ def _slot_lock_pids(root: Path) -> list[int]:
         if lock.stem == "slot-0":
             continue  # 主肥鱼永不杀
         try:
-            raw = lock.read_bytes()[:slot_manager_mod.PID_RECORD_LEN]
+            raw = lock.read_bytes()[: slot_manager_mod.PID_RECORD_LEN]
             pid = int(raw.decode("ascii", errors="ignore").strip())
         except (OSError, ValueError):
             continue
@@ -192,9 +189,7 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
     # pet-runtime-v2-*.json，多进程模式只写旧名、单进程模式写 v2 名）。
     markers = slot_manager_mod.list_runtime_marker_files(root)
     if markers:
-        logging.info(
-            "退出子肥鱼：发现 %d 个 runtime 标记: %s",
-            len(markers), [m.name for m in markers])
+        logging.info("退出子肥鱼：发现 %d 个 runtime 标记: %s", len(markers), [m.name for m in markers])
     for marker in markers:
         # 兜底防御：v2 标记名带 slot 编号，slot-0 是主肥鱼，永不杀（即便调用方
         # 是子肥鱼进程——其 pid==os.getpid() 只跳过自己，主鱼标记会被误杀）。
@@ -212,9 +207,7 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
         if pid > 0 and _pid_alive(pid):
             if not _is_pet_process(pid):
                 # pid 复用：标记是陈旧的，指向无关进程——不杀，按陈旧标记清理
-                logging.info(
-                    "退出子肥鱼：标记 %s 的 pid=%d 已被无关进程复用，按陈旧标记清理",
-                    marker.name, pid)
+                logging.info("退出子肥鱼：标记 %s 的 pid=%d 已被无关进程复用，按陈旧标记清理", marker.name, pid)
             else:
                 targets.append((pid, marker))
                 continue  # 标记留待杀成后删（杀失败则保留供重试）
@@ -234,8 +227,7 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
     # 第二阶段：先一口气全部结束，再统一等确认——旧实现逐只「杀→等 2s 确认」，
     # N 只串行等 N×2s（实机反馈太慢）；两段式 N 只也只需一次等待窗口。
     for pid, marker in targets:
-        logging.info("退出子肥鱼：结束子进程 pid=%d (%s)",
-                     pid, marker.name if marker is not None else "slot 锁")
+        logging.info("退出子肥鱼：结束子进程 pid=%d (%s)", pid, marker.name if marker is not None else "slot 锁")
         _terminate_pet_process(pid)
     remaining = {pid for pid, _m in targets}
     deadline = time.monotonic() + 2.0
@@ -247,9 +239,7 @@ def clear_spawned_pets(config_dir: Path | str) -> dict:
         if pid in remaining:
             failed_pids.append(pid)
             # 诊断：杀不掉时记录存活者到底是谁（pid 复用？还是真没杀掉）
-            logging.warning(
-                "退出子肥鱼：pid=%d 未能退出，存活者镜像=%s，保留标记供下次重试",
-                pid, _pid_image_path(pid))
+            logging.warning("退出子肥鱼：pid=%d 未能退出，存活者镜像=%s，保留标记供下次重试", pid, _pid_image_path(pid))
         else:
             killed_pids.append(pid)
             if marker is not None:

@@ -7,6 +7,7 @@
 入口过滤；位移（自动/手动移动）由 PetWindow._try_move 入口的
 _effects_probe_active 闸门整体拦截，防止挂着探头姿态被平移出屏幕边缘。
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,6 +34,7 @@ def _virtual_xy(win) -> tuple[int, int]:
     """虚拟窗口坐标 = 实际位置 + 绘制偏移（角色无约束时窗口该在的位置）。"""
     delta = _win_delta(win)
     return win.x() + delta.x(), win.y() + delta.y()
+
 
 EDGE_PROBE_ANGLE = 45.0
 # 露出比例以“当前姿态（含 ±45° 旋转）的投影 bbox 宽度”为分母；0.55 使常驻探头
@@ -294,7 +296,9 @@ class EdgeProbeController:
         if was_active:
             log.info(
                 "[边缘探头] 退出 reason=%s side=%s restore=%s",
-                reason, side_before, restore,
+                reason,
+                side_before,
+                restore,
             )
         if was_active and restore and restore_x is not None:
             try:
@@ -359,11 +363,17 @@ class EdgeProbeController:
         # 定案日志：露出量的分母（vis_local）与身体框/画布各是多少、画布留白多少，
         # 「按框探」的签名是 vis_local.width() == 窗口宽（角色可见区没被量到）。
         log.info(
-            "[边缘探头] 入场 side=%s 虚拟x=%d 绘制偏移=(%d,%d) 窗口=%dx%d "
-            "身体框=%s 可见区(含偏移)=%s 画布留白左=%d 右=%d 可用区=%s",
-            side, vp[0], delta.x(), delta.y(), getattr(self.win, "_w", 0), getattr(self.win, "_h", 0),
-            sbr.getRect() if sbr is not None else None, vis_rect.getRect(),
-            vis_rect.left(), getattr(self.win, "_w", 0) - vis_rect.right() - 1,
+            "[边缘探头] 入场 side=%s 虚拟x=%d 绘制偏移=(%d,%d) 窗口=%dx%d 身体框=%s 可见区(含偏移)=%s 画布留白左=%d 右=%d 可用区=%s",
+            side,
+            vp[0],
+            delta.x(),
+            delta.y(),
+            getattr(self.win, "_w", 0),
+            getattr(self.win, "_h", 0),
+            sbr.getRect() if sbr is not None else None,
+            vis_rect.getRect(),
+            vis_rect.left(),
+            getattr(self.win, "_w", 0) - vis_rect.right() - 1,
             avail.getRect(),
         )
         # 可见区必须换算到虚拟窗口坐标系（= 窗口内容坐标，与 _draw_delta 无关）：
@@ -447,14 +457,8 @@ class EdgeProbeController:
             QEasingCurve.Type.OutCubic,
         )
         done = progress >= 1.0
-        self._angle_deg = (
-            self._transition_from_angle
-            + (self._transition_to_angle - self._transition_from_angle) * progress
-        )
-        self._exposure = (
-            self._transition_from_exposure
-            + (self._transition_to_exposure - self._transition_from_exposure) * progress
-        )
+        self._angle_deg = self._transition_from_angle + (self._transition_to_angle - self._transition_from_angle) * progress
+        self._exposure = self._transition_from_exposure + (self._transition_to_exposure - self._transition_from_exposure) * progress
         self._apply_pose()
         if not done:
             return
@@ -505,10 +509,15 @@ class EdgeProbeController:
         if now - self._last_pose_log_at >= 0.5:
             self._last_pose_log_at = now
             log.info(
-                "[边缘探头] 姿态 x=%d（当前虚拟x=%d）side=%s 曝光=%.2f 角度=%.1f "
-                "分母框=%s 可用区=%s 实际窗口x=%d",
-                x, vx, self._side, self._exposure, self._angle_deg,
-                bounds.getRect(), avail.getRect(), self.win.x(),
+                "[边缘探头] 姿态 x=%d（当前虚拟x=%d）side=%s 曝光=%.2f 角度=%.1f 分母框=%s 可用区=%s 实际窗口x=%d",
+                x,
+                vx,
+                self._side,
+                self._exposure,
+                self._angle_deg,
+                bounds.getRect(),
+                avail.getRect(),
+                self.win.x(),
             )
         mover = getattr(self.win, "_move_window_towards", None)
         if callable(mover):

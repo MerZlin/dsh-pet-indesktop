@@ -5,6 +5,7 @@
 POST 给 DSH 的 /api/respond（无鉴权，本机回环）。只在后台线程调用，绝不阻塞
 Qt 主线程；失败返回 (False, reason) 由上层提示"请到 DSH 界面处理"。
 """
+
 from __future__ import annotations
 
 import json
@@ -35,7 +36,8 @@ def respond(message: dict, ports: list[int], *, timeout_s: float | None = None) 
         try:
             url = f"http://127.0.0.1:{int(port)}{RESPOND_PATH}"
             req = urllib.request.Request(
-                url, data=body,
+                url,
+                data=body,
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )

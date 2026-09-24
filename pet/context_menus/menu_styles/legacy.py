@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Original/native menu appearance used exclusively by the legacy layout."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt

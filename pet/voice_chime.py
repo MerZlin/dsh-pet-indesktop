@@ -126,6 +126,7 @@ def voice_label(value) -> str:
             return label.split("（")[0]
     return DEPRECATED_VOICE_LABELS.get(voice, voice)
 
+
 _CUSTOM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 _RATE_RE = re.compile(r"^[+-]?\d+$")
 _PITCH_RE = re.compile(r"^[+-]?\d+$")

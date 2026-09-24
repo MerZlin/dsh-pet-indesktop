@@ -10,6 +10,7 @@
   并让后续每一圈比上一圈更快（GOLDEN_SPIN_ACCEL 加速，单圈时长下限
   GOLDEN_SPIN_MIN_REV_MS）。
 """
+
 from __future__ import annotations
 
 import time
@@ -21,8 +22,8 @@ from .window_effects import eased_progress
 
 GOLDEN_SPIN_DURATION_MS = 700
 GOLDEN_SPIN_END_ANGLE = -360.0  # Qt 正角=顺时针，负角=逆时针
-GOLDEN_SPIN_ACCEL = 0.82        # 直连模式逐圈加速系数：下一圈 = 上一圈 × 0.82
-GOLDEN_SPIN_MIN_REV_MS = 200    # 单圈时长下限，防长连击后转速失控
+GOLDEN_SPIN_ACCEL = 0.82  # 直连模式逐圈加速系数：下一圈 = 上一圈 × 0.82
+GOLDEN_SPIN_MIN_REV_MS = 200  # 单圈时长下限，防长连击后转速失控
 GOLDEN_SPIN_CLICK_RUSH_MS = 130  # 点击时把当前圈剩余角度快速转完的时长
 
 
@@ -143,10 +144,7 @@ class GoldenSpinController(QObject):
             self._rev_duration_ms,
         )
         done = progress >= 1.0
-        self._angle_deg = (
-            self._rev_start_angle_deg
-            + (self._rev_end_angle_deg - self._rev_start_angle_deg) * progress
-        )
+        self._angle_deg = self._rev_start_angle_deg + (self._rev_end_angle_deg - self._rev_start_angle_deg) * progress
         if not done:
             self.win.update()
             return

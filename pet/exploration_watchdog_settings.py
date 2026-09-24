@@ -35,6 +35,7 @@ Configuration keys live under the `agent_link` sub-dict:
     agent_link.pattern_min_steps_between
     agent_link.pattern_cooldown_seconds
 """
+
 from __future__ import annotations
 
 import logging
@@ -171,78 +172,96 @@ class WatchdogSettingsPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(18)
 
-        root.addWidget(SettingsSection("基础设置", [
-            SettingRow("watchdog_enabled", "启用循环检测",
-                        "识别重复的 Search/Read/Think 行为，防止 Agent 陷入无限探索循环。",
-                        self.enabled_check),
-        ], self))
+        root.addWidget(
+            SettingsSection(
+                "基础设置",
+                [
+                    SettingRow("watchdog_enabled", "启用循环检测", "识别重复的 Search/Read/Think 行为，防止 Agent 陷入无限探索循环。", self.enabled_check),
+                ],
+                self,
+            )
+        )
 
-        root.addWidget(SettingsSection("风险评分", [
-            SettingRow("warning_threshold", "Warning 阈值",
-                        "风险分数达到此值时发出警告提醒。", self.warning_spin),
-            SettingRow("control_threshold", "Control 阈值",
-                        "风险分数达到此值时发出高级别警告提醒。", self.control_spin),
-        ], self))
+        root.addWidget(
+            SettingsSection(
+                "风险评分",
+                [
+                    SettingRow("warning_threshold", "Warning 阈值", "风险分数达到此值时发出警告提醒。", self.warning_spin),
+                    SettingRow("control_threshold", "Control 阈值", "风险分数达到此值时发出高级别警告提醒。", self.control_spin),
+                ],
+                self,
+            )
+        )
 
-        root.addWidget(SettingsSection("Think 风控", [
-            SettingRow("cooldown_steps", "评估冷却步数",
-                        "两次风险检测之间的最小步数间隔，防止高频误报。", self.cooldown_spin),
-            SettingRow("early_grace_minutes", "启动宽限期",
-                        "Agent 启动后的前 N 分钟提高风险阈值，允许更多探索空间。", self.grace_spin),
-            SettingRow("long_run_minutes", "长运行降阈值",
-                        "连续运行超过 N 分钟后，风险阈值自动降低 1，提高敏感度。", self.long_run_spin),
-            SettingRow("long_think_seconds", "单次超长 Think",
-                        "单次思考超过该时长（秒）后直接提醒（不调整其他阈值）。", self.long_think_spin),
-        ], self))
+        root.addWidget(
+            SettingsSection(
+                "Think 风控",
+                [
+                    SettingRow("cooldown_steps", "评估冷却步数", "两次风险检测之间的最小步数间隔，防止高频误报。", self.cooldown_spin),
+                    SettingRow("early_grace_minutes", "启动宽限期", "Agent 启动后的前 N 分钟提高风险阈值，允许更多探索空间。", self.grace_spin),
+                    SettingRow("long_run_minutes", "长运行降阈值", "连续运行超过 N 分钟后，风险阈值自动降低 1，提高敏感度。", self.long_run_spin),
+                    SettingRow("long_think_seconds", "单次超长 Think", "单次思考超过该时长（秒）后直接提醒（不调整其他阈值）。", self.long_think_spin),
+                ],
+                self,
+            )
+        )
 
-        root.addWidget(SettingsSection("卡住检测", [
-            SettingRow("stuck_detect", "启用卡住检测",
-                        "DSH 联动时识别工具失败/超时/反复重试等钻牛角尖行为，建议人工介入。",
-                        self.stuck_enabled_check),
-            SettingRow("stuck_worried_threshold", "担忧动画阈值",
-                        "卡住评分达到该分值时播放担忧动画。", self.stuck_worried_spin),
-            SettingRow("stuck_intervene_threshold", "介入提醒阈值",
-                        "卡住评分达到该分值时持续提醒人工介入。", self.stuck_intervene_spin),
-            SettingRow("stuck_window_seconds", "滑动窗口",
-                        "卡住评分统计的时间窗口。", self.stuck_window_spin),
-            SettingRow("stuck_cooldown_seconds", "提醒冷却",
-                        "两次介入提醒之间的最小间隔。", self.stuck_cooldown_spin),
-            SettingRow("stuck_reminder_text", "自定义提醒文案",
-                        "留空使用默认文案。", self.stuck_reminder_edit, stacked=True),
-        ], self))
+        root.addWidget(
+            SettingsSection(
+                "卡住检测",
+                [
+                    SettingRow("stuck_detect", "启用卡住检测", "DSH 联动时识别工具失败/超时/反复重试等钻牛角尖行为，建议人工介入。", self.stuck_enabled_check),
+                    SettingRow("stuck_worried_threshold", "担忧动画阈值", "卡住评分达到该分值时播放担忧动画。", self.stuck_worried_spin),
+                    SettingRow("stuck_intervene_threshold", "介入提醒阈值", "卡住评分达到该分值时持续提醒人工介入。", self.stuck_intervene_spin),
+                    SettingRow("stuck_window_seconds", "滑动窗口", "卡住评分统计的时间窗口。", self.stuck_window_spin),
+                    SettingRow("stuck_cooldown_seconds", "提醒冷却", "两次介入提醒之间的最小间隔。", self.stuck_cooldown_spin),
+                    SettingRow("stuck_reminder_text", "自定义提醒文案", "留空使用默认文案。", self.stuck_reminder_edit, stacked=True),
+                ],
+                self,
+            )
+        )
 
-        root.addWidget(SettingsSection("行为重复检测", [
-            SettingRow("pattern_detect", "启用行为重复检测",
-                        "DSH 联动时用 W6/W10 双窗口识别慢性循环、短时爆发与纯探索无产出。",
-                        self.pattern_enabled_check),
-            SettingRow("pattern_w6_control", "W6 同类重复（控制）",
-                        "短窗口内同一行为类别重复达到该次数即控制级提醒。",
-                        self.pattern_w6_control_spin),
-            SettingRow("pattern_w10_warn", "W10 同类重复（警告）",
-                        "长窗口内同一行为类别重复达到该次数即警告。",
-                        self.pattern_w10_warn_spin),
-            SettingRow("pattern_w10_control", "W10 同类重复（控制）",
-                        "长窗口内同一行为类别重复达到该次数即控制级提醒。",
-                        self.pattern_w10_control_spin),
-            SettingRow("pattern_macro_w6_explore", "W6 大类探索步数",
+        root.addWidget(
+            SettingsSection(
+                "行为重复检测",
+                [
+                    SettingRow(
+                        "pattern_detect", "启用行为重复检测", "DSH 联动时用 W6/W10 双窗口识别慢性循环、短时爆发与纯探索无产出。", self.pattern_enabled_check
+                    ),
+                    SettingRow("pattern_w6_control", "W6 同类重复（控制）", "短窗口内同一行为类别重复达到该次数即控制级提醒。", self.pattern_w6_control_spin),
+                    SettingRow("pattern_w10_warn", "W10 同类重复（警告）", "长窗口内同一行为类别重复达到该次数即警告。", self.pattern_w10_warn_spin),
+                    SettingRow(
+                        "pattern_w10_control", "W10 同类重复（控制）", "长窗口内同一行为类别重复达到该次数即控制级提醒。", self.pattern_w10_control_spin
+                    ),
+                    SettingRow(
+                        "pattern_macro_w6_explore",
+                        "W6 大类探索步数",
                         "短窗口内探索类步骤数达到该值时参与「纯探索无产出」判定。",
-                        self.pattern_macro_w6_explore_spin),
-            SettingRow("pattern_macro_w6_action", "W6 大类行动步数上限",
+                        self.pattern_macro_w6_explore_spin,
+                    ),
+                    SettingRow(
+                        "pattern_macro_w6_action",
+                        "W6 大类行动步数上限",
                         "短窗口内行动（编辑/运行/测试）步骤数不超过该值时才算无产出。",
-                        self.pattern_macro_w6_action_spin),
-            SettingRow("pattern_macro_w10_explore", "W10 大类探索步数",
+                        self.pattern_macro_w6_action_spin,
+                    ),
+                    SettingRow(
+                        "pattern_macro_w10_explore",
+                        "W10 大类探索步数",
                         "长窗口内探索类步骤数达到该值时参与「纯探索无产出」判定。",
-                        self.pattern_macro_w10_explore_spin),
-            SettingRow("pattern_macro_w10_action", "W10 大类行动步数上限",
-                        "长窗口内行动步骤数不超过该值时才算无产出。",
-                        self.pattern_macro_w10_action_spin),
-            SettingRow("pattern_min_steps_between", "最小触发步数间隔",
-                        "两次行为重复提醒之间至少新增的 step 数。",
-                        self.pattern_min_steps_between_spin),
-            SettingRow("pattern_cooldown_seconds", "提醒冷却",
-                        "两次行为重复提醒之间的最小间隔。",
-                        self.pattern_cooldown_seconds_spin),
-        ], self))
+                        self.pattern_macro_w10_explore_spin,
+                    ),
+                    SettingRow(
+                        "pattern_macro_w10_action", "W10 大类行动步数上限", "长窗口内行动步骤数不超过该值时才算无产出。", self.pattern_macro_w10_action_spin
+                    ),
+                    SettingRow(
+                        "pattern_min_steps_between", "最小触发步数间隔", "两次行为重复提醒之间至少新增的 step 数。", self.pattern_min_steps_between_spin
+                    ),
+                    SettingRow("pattern_cooldown_seconds", "提醒冷却", "两次行为重复提醒之间的最小间隔。", self.pattern_cooldown_seconds_spin),
+                ],
+                self,
+            )
+        )
 
         root.addStretch(1)
 
@@ -276,4 +295,3 @@ class WatchdogSettingsPage(QWidget):
         updated["pattern_min_steps_between"] = self.pattern_min_steps_between_spin.value()
         updated["pattern_cooldown_seconds"] = self.pattern_cooldown_seconds_spin.value()
         return updated
-

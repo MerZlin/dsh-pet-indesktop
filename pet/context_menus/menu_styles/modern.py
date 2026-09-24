@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Compact macOS project-menu appearance used exclusively by modern layout."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
@@ -7,6 +8,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
 from .common import SYSTEM_FONT_STACK, system_ui_font
+
 
 def modern_menu_stylesheet(appearance: dict | None = None, *, dark: bool = False) -> str:
     appearance = appearance or {}
@@ -26,7 +28,7 @@ def modern_menu_stylesheet(appearance: dict | None = None, *, dark: bool = False
     translucent = bool(appearance.get("translucent", True))
     opacity = max(0.72, min(1.0, float(appearance.get("opacity") or 0.94)))
     if translucent and background.startswith("#") and len(background) == 7:
-        red, green, blue = (int(background[index:index + 2], 16) for index in (1, 3, 5))
+        red, green, blue = (int(background[index : index + 2], 16) for index in (1, 3, 5))
         background = f"rgba({red}, {green}, {blue}, {round(opacity * 255)})"
     return f"""
 QMenu {{
@@ -73,9 +75,7 @@ def apply_modern_menu_style(menu: QMenu, appearance: dict | None = None) -> None
             "corner_radius": parent.property("modernCornerRadius") or 12,
         }
     theme = str(appearance.get("theme") or "system")
-    dark = theme == "dark" or (
-        theme == "system" and menu.palette().color(QPalette.ColorRole.Window).lightness() < 128
-    )
+    dark = theme == "dark" or (theme == "system" and menu.palette().color(QPalette.ColorRole.Window).lightness() < 128)
     density = str(appearance.get("density") or "standard")
     radius = max(6, min(18, int(appearance.get("corner_radius") or 12)))
     menu.setObjectName("modernContextMenu")
@@ -100,9 +100,7 @@ def apply_modern_menu_style(menu: QMenu, appearance: dict | None = None) -> None
         border.show()
         border.raise_()
 
-    menu.aboutToShow.connect(
-        lambda menu=menu: QTimer.singleShot(0, menu, sync_border)
-    )
+    menu.aboutToShow.connect(lambda menu=menu: QTimer.singleShot(0, menu, sync_border))
     menu._modern_hairline_border = border
 
 
@@ -173,9 +171,7 @@ def install_modern_check_indicators(menu: QMenu) -> None:
         layer.raise_()
         layer.update()
 
-    menu.aboutToShow.connect(
-        lambda menu=menu: QTimer.singleShot(0, menu, sync_layer)
-    )
+    menu.aboutToShow.connect(lambda menu=menu: QTimer.singleShot(0, menu, sync_layer))
     menu.aboutToHide.connect(layer.hide)
     menu._modern_check_layer = layer
     for action in menu.actions():

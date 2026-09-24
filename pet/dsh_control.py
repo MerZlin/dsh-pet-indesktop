@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Client for the in-process DSH bridge watchdog control queue."""
+
 from __future__ import annotations
 
 import json
@@ -49,9 +50,20 @@ def _log_event(base_dir: str, event: str, **fields) -> None:
         pass
 
 
-def request(operation: str, session_id: str, text: str = "", ports: list[int] | None = None,
-            *, goal: str = "", context: str = "", provider: str = "", model: str = "",
-            timeout: float = TIMEOUT_S, alert_id: str = "", cancel=None) -> tuple[bool, str]:
+def request(
+    operation: str,
+    session_id: str,
+    text: str = "",
+    ports: list[int] | None = None,
+    *,
+    goal: str = "",
+    context: str = "",
+    provider: str = "",
+    model: str = "",
+    timeout: float = TIMEOUT_S,
+    alert_id: str = "",
+    cancel=None,
+) -> tuple[bool, str]:
     del ports  # retained for compatibility; bridge discovery is file based
     if not session_id or session_id.startswith("turn:"):
         return False, "missing-session-id"
@@ -75,14 +87,29 @@ def request(operation: str, session_id: str, text: str = "", ports: list[int] | 
     }
     try:
         _atomic_json(request_path, payload)
-        _log_event(directory, "pet/control-clicked", requestId=request_id, sessionId=session_id,
-                   operation=operation, alertId=alert_id)
-        _log_event(directory, "pet/control-queued", requestId=request_id, sessionId=session_id,
-                   operation=operation, requestPath=request_path, directory=directory, written=True)
+        _log_event(directory, "pet/control-clicked", requestId=request_id, sessionId=session_id, operation=operation, alertId=alert_id)
+        _log_event(
+            directory,
+            "pet/control-queued",
+            requestId=request_id,
+            sessionId=session_id,
+            operation=operation,
+            requestPath=request_path,
+            directory=directory,
+            written=True,
+        )
     except Exception as exc:
-        _log_event(directory, "pet/control-queued", requestId=request_id, sessionId=session_id,
-                   operation=operation, requestPath=request_path, directory=directory, written=False,
-                   error=str(exc))
+        _log_event(
+            directory,
+            "pet/control-queued",
+            requestId=request_id,
+            sessionId=session_id,
+            operation=operation,
+            requestPath=request_path,
+            directory=directory,
+            written=False,
+            error=str(exc),
+        )
         return False, f"queue-write-failed:{exc}"
 
     deadline = time.monotonic() + max(1.0, float(timeout))

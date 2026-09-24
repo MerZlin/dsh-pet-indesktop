@@ -32,6 +32,7 @@ PCM 缓冲与 WAVEHDR 由池持有，播完靠 ``reap()`` 轮询 WHDR_DONE 位�
 - ``pack_volume`` 把 0.0-1.0 映射成双声道 packed DWORD，配合 ``set_volume``
   （设备级，与 ``click_sound.set_audio_volume`` 对齐）。
 """
+
 from __future__ import annotations
 
 import array
@@ -55,9 +56,9 @@ MMSYSERR_NOERROR = 0
 WHDR_DONE = 0x00000001
 CALLBACK_NULL = 0x00000000
 
-DEFAULT_POOL_SIZE = 4          # 与 ClickSoundPool._PLAYER_POOL_SIZE 同规模
-MAX_FORMATS = 4                # 同时保持的 (声道, 采样率) 组数上限
-REAP_INTERVAL_MS = 250         # 兜底回收节拍
+DEFAULT_POOL_SIZE = 4  # 与 ClickSoundPool._PLAYER_POOL_SIZE 同规模
+MAX_FORMATS = 4  # 同时保持的 (声道, 采样率) 组数上限
+REAP_INTERVAL_MS = 250  # 兜底回收节拍
 
 
 class WinmmError(RuntimeError):
@@ -107,6 +108,7 @@ class _Voice:
 # 纯函数：wav 解析 / 归一化 / 音量
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class WavClip:
     """一段已经归一化为 PCM16 的音频数据（非 PCM16 源见 ``converted``）。"""
@@ -114,7 +116,7 @@ class WavClip:
     data: bytes
     channels: int
     sample_rate: int
-    converted: bool = False     # True = 源不是 PCM16，data 由本模块转换而来
+    converted: bool = False  # True = 源不是 PCM16，data 由本模块转换而来
 
 
 def clamp_volume(volume: Any) -> float:
@@ -173,7 +175,7 @@ def _to_pcm16(frames: bytes, width: int) -> bytes | None:
     if width == 3:
         usable = len(frames) - (len(frames) % 3)
         narrowed = bytearray(usable // 3 * 2)
-        narrowed[0::2] = frames[1:usable:3]   # 取高位两字节（小端）
+        narrowed[0::2] = frames[1:usable:3]  # 取高位两字节（小端）
         narrowed[1::2] = frames[2:usable:3]
         return _samples_from_bytes(bytes(narrowed))
     if width == 4:
@@ -232,6 +234,7 @@ def write_pcm16_wav(clip: WavClip, dest: str | Path) -> bool:
 # ctypes 边界：唯一的 winmm.dll 收敛点
 # ---------------------------------------------------------------------------
 
+
 class WinmmApi:
     """winmm.dll 的薄封装：句柄与 WAVEHDR 的生命周期都在这一层。
 
@@ -263,8 +266,12 @@ class WinmmApi:
         dll = self._dll
         dll.waveOutGetNumDevs.restype = ctypes.c_uint
         dll.waveOutOpen.argtypes = [
-            ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.POINTER(WAVEFORMATEX),
-            ctypes.c_size_t, ctypes.c_size_t, ctypes.c_uint,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_uint,
+            ctypes.POINTER(WAVEFORMATEX),
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.c_uint,
         ]
         dll.waveOutOpen.restype = ctypes.c_uint
         for name in ("waveOutPrepareHeader", "waveOutWrite", "waveOutUnprepareHeader"):
@@ -299,9 +306,7 @@ class WinmmApi:
         fmt.cbSize = 0
         handle = ctypes.c_void_p()
         self._check(
-            self._dll.waveOutOpen(
-                ctypes.byref(handle), WAVE_MAPPER, ctypes.byref(fmt),
-                0, 0, CALLBACK_NULL),
+            self._dll.waveOutOpen(ctypes.byref(handle), WAVE_MAPPER, ctypes.byref(fmt), 0, 0, CALLBACK_NULL),
             "waveOutOpen",
         )
         if not handle.value:
@@ -368,6 +373,7 @@ class WinmmApi:
 # ---------------------------------------------------------------------------
 # 池
 # ---------------------------------------------------------------------------
+
 
 class _FormatPool:
     """同 (声道, 采样率) 的一组 waveOut 句柄。"""
@@ -639,9 +645,9 @@ class WinmmSoundPool:
         """
         while len(self._formats) > self._max_formats:
             candidates = [
-                (pool.stamp, key, pool) for key, pool in self._formats.items()
-                if pool is not protect
-                and not any(api.pending_count(handle) for handle in pool.handles)
+                (pool.stamp, key, pool)
+                for key, pool in self._formats.items()
+                if pool is not protect and not any(api.pending_count(handle) for handle in pool.handles)
             ]
             if not candidates:
                 return

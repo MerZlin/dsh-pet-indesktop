@@ -60,8 +60,10 @@ from .settings_widgets import (
 )
 from .speech_bubble import BUBBLE_STYLE_PRESETS
 
+
 def build_pet_controls(host) -> None:
     from .modern_settings_dialog import dialogue_params_hint
+
     host.scale_combo = ModernSelect(host, width=132)
     current_scale = float(host.config.get("scale", catalog.DEFAULT_SCALE))
     scales = list(catalog.SCALE_STEPS)
@@ -85,9 +87,7 @@ def build_pet_controls(host) -> None:
         host.spawn_scale_combo.addItem(f"{int(round(catalog.CANVAS_W * scale))} px", scale)
     host.spawn_scale_combo.setCurrentIndex(host.spawn_scale_combo.findData(current_spawn_scale))
     host.spawn_inherit_dynamic_island_check = ToggleSwitch(host)
-    host.spawn_inherit_dynamic_island_check.setChecked(
-        bool(host.config.get("spawn_inherit_dynamic_island", False))
-    )
+    host.spawn_inherit_dynamic_island_check.setChecked(bool(host.config.get("spawn_inherit_dynamic_island", False)))
     host.clear_spawned_pets_btn = QPushButton("一键退出…", host)
     host.clear_spawned_pets_btn.clicked.connect(host._on_clear_spawned_pets)
     if host.config.instance_id:
@@ -205,9 +205,7 @@ def build_pet_controls(host) -> None:
     host.click_self_talk_speak_check = ToggleSwitch(host)
     host.click_self_talk_speak_check.setChecked(bool(host.config.get("self_talk_speak_enabled", True)))
     host.self_talk_voice_precache_check = ToggleSwitch(host)
-    host.self_talk_voice_precache_check.setChecked(
-        bool(host.config.get("self_talk_voice_precache_enabled", False))
-    )
+    host.self_talk_voice_precache_check.setChecked(bool(host.config.get("self_talk_voice_precache_enabled", False)))
     host.music_sing_check = ToggleSwitch(host)
     host.music_sing_check.setChecked(bool(host.config.get("music_sing_enabled", False)))
     host.music_lyric_check = ToggleSwitch(host)
@@ -219,9 +217,7 @@ def build_pet_controls(host) -> None:
     host.music_lyric_lead_spin.setSingleStep(0.1)
     host.music_lyric_lead_spin.setDecimals(1)
     host.music_lyric_lead_spin.setSuffix(" 秒")
-    host.music_lyric_lead_spin.setValue(
-        float(host.config.get("music_lyric_lead_seconds", LYRIC_LEAD_SECONDS))
-    )
+    host.music_lyric_lead_spin.setValue(float(host.config.get("music_lyric_lead_seconds", LYRIC_LEAD_SECONDS)))
     host.golden_spin_click_check = ToggleSwitch(host)
     host.golden_spin_click_check.setChecked(bool(host.config.get("golden_spin_on_click", False)))
     host.golden_spin_direct_check = ToggleSwitch(host)
@@ -242,9 +238,7 @@ def build_pet_controls(host) -> None:
         host.balance_tier_mode_select.addItem("空闲 / 高峰（默认）", "default")
         host.balance_tier_mode_select.addItem("梁文谷 / 梁文峰", "liangwen")
         host.balance_tier_mode_select.addItem("自定义", "custom")
-        host.balance_tier_mode_select.setCurrentData(
-            str(host.config.get("balance_tier_labels_mode", "default") or "default")
-        )
+        host.balance_tier_mode_select.setCurrentData(str(host.config.get("balance_tier_labels_mode", "default") or "default"))
         host.balance_tier_peak_edit = QLineEdit(host)
         host.balance_tier_peak_edit.setPlaceholderText("高峰文本，例如：梁文峰")
         host.balance_tier_peak_edit.setText(str(host.config.get("balance_tier_label_peak", "") or ""))
@@ -286,15 +280,11 @@ def build_pet_controls(host) -> None:
     host.self_talk_duration_spin.setSingleStep(0.5)
     host.self_talk_duration_spin.setDecimals(1)
     host.self_talk_duration_spin.setSuffix(" 秒")
-    host.self_talk_duration_spin.setValue(float(host.config.get(
-        "self_talk_duration_seconds", DEFAULT_SELF_TALK_DURATION_SECONDS
-    )))
+    host.self_talk_duration_spin.setValue(float(host.config.get("self_talk_duration_seconds", DEFAULT_SELF_TALK_DURATION_SECONDS)))
     host.bubble_style_select = ModernSelect(host, width=172)
     for value, preset in BUBBLE_STYLE_PRESETS.items():
         host.bubble_style_select.addItem(str(preset["label"]), value)
-    host.bubble_style_select.setCurrentData(
-        str(host.config.get("self_talk_bubble_style", DEFAULT_SELF_TALK_BUBBLE_STYLE))
-    )
+    host.bubble_style_select.setCurrentData(str(host.config.get("self_talk_bubble_style", DEFAULT_SELF_TALK_BUBBLE_STYLE)))
     host.min_spin = BrowserDoubleSpinBox(host)
     host.max_spin = BrowserDoubleSpinBox(host)
     for spin, value in (
@@ -323,9 +313,7 @@ def build_pet_controls(host) -> None:
     host.self_talk_image_chance_spin = BrowserSpinBox(host)
     host.self_talk_image_chance_spin.setRange(0, 100)
     host.self_talk_image_chance_spin.setSuffix(" %")
-    host.self_talk_image_chance_spin.setValue(
-        int(host.config.get("self_talk_image_chance", DEFAULT_SELF_TALK_IMAGE_CHANCE))
-    )
+    host.self_talk_image_chance_spin.setValue(int(host.config.get("self_talk_image_chance", DEFAULT_SELF_TALK_IMAGE_CHANCE)))
     # 气泡文字大小：与配图大小并列的独立系数（气泡与字号一起等比放大）
     host.bubble_text_scale_spin = BrowserSpinBox(host)
     host.bubble_text_scale_spin.setRange(50, 300)
@@ -361,10 +349,9 @@ def build_pet_controls(host) -> None:
     for agent_key, agent_name in AgentLinkManager.AGENT_NAMES.items():
         host.dialogue_scope_select.addItem(f"{agent_name} 专属文案", agent_key)
     # 自定义 Agent 也支持专属层（跟随 agent_link.custom_agents）
-    for item in (agent_link_cfg.get("custom_agents") or []):
+    for item in agent_link_cfg.get("custom_agents") or []:
         if isinstance(item, dict) and str(item.get("key") or "").strip():
-            host.dialogue_scope_select.addItem(
-                f"{str(item.get('name') or item.get('key'))} 专属文案", str(item["key"]).strip())
+            host.dialogue_scope_select.addItem(f"{str(item.get('name') or item.get('key'))} 专属文案", str(item["key"]).strip())
     # 记住并恢复上次编辑层（设置页保存时写 dialogue_last_scope；未知值回落全局）
     initial_scope = str(host.config.get("dialogue_last_scope", "") or "")
     if host.dialogue_scope_select.findData(initial_scope) < 0:
@@ -392,15 +379,12 @@ def build_pet_controls(host) -> None:
 
     # 每个 scope 的编辑缓冲快照（切换时 flush/load）
     host._dialogue_scope_buffer: dict[str, dict[str, str]] = {}
-    host._dialogue_scope_buffer[""] = {
-        key: edit.toPlainText() for key, edit in host.dialogue_phrase_edits.items()
-    }
+    host._dialogue_scope_buffer[""] = {key: edit.toPlainText() for key, edit in host.dialogue_phrase_edits.items()}
     for agent_key, agent_events in preset_agents.items():
         if not isinstance(agent_events, dict):
             continue
         host._dialogue_scope_buffer[str(agent_key)] = {
-            key: ("\n".join(str(i) for i in value) if isinstance(value, list) else str(value or ""))
-            for key, value in agent_events.items()
+            key: ("\n".join(str(i) for i in value) if isinstance(value, list) else str(value or "")) for key, value in agent_events.items()
         }
     if host._dialogue_scope:
         # 恢复上次编辑层：把该层缓冲载入编辑框（行可见性等对话框建完行后再收敛）
@@ -409,9 +393,7 @@ def build_pet_controls(host) -> None:
 
     host.dialogue_template_import_edit = QPlainTextEdit(host)
     host.dialogue_template_import_edit.setObjectName("dialogueTemplateImportEdit")
-    host.dialogue_template_import_edit.setPlaceholderText(
-        "粘贴 persona-phrases/v1 JSON 模板到这里，然后点击“导入模板”"
-    )
+    host.dialogue_template_import_edit.setPlaceholderText("粘贴 persona-phrases/v1 JSON 模板到这里，然后点击“导入模板”")
     host.dialogue_template_import_edit.setMinimumHeight(92)
     host.dialogue_template_import_edit.setMaximumHeight(180)
     host.dialogue_template_export_btn = QPushButton("一键复制模板", host)
@@ -446,14 +428,17 @@ def build_pet_controls(host) -> None:
         container = ResponsiveToggleActionRow(toggle, picker, preview_btn, host)
         return container, toggle, picker, preview_btn
 
-    (host.agent_sound_start_widget, host.agent_sound_start_check,
-     host.agent_sound_start_picker, host.agent_sound_start_preview) = _build_agent_event_row("start", "builtin:agent-start")
+    (host.agent_sound_start_widget, host.agent_sound_start_check, host.agent_sound_start_picker, host.agent_sound_start_preview) = _build_agent_event_row(
+        "start", "builtin:agent-start"
+    )
 
-    (host.agent_sound_done_widget, host.agent_sound_done_check,
-     host.agent_sound_done_picker, host.agent_sound_done_preview) = _build_agent_event_row("done", "builtin:agent-done")
+    (host.agent_sound_done_widget, host.agent_sound_done_check, host.agent_sound_done_picker, host.agent_sound_done_preview) = _build_agent_event_row(
+        "done", "builtin:agent-done"
+    )
 
-    (host.agent_sound_error_widget, host.agent_sound_error_check,
-     host.agent_sound_error_picker, host.agent_sound_error_preview) = _build_agent_event_row("error", "builtin:agent-error")
+    (host.agent_sound_error_widget, host.agent_sound_error_check, host.agent_sound_error_picker, host.agent_sound_error_preview) = _build_agent_event_row(
+        "error", "builtin:agent-error"
+    )
 
     host.agent_sound_volume_spin = BrowserSpinBox(host)
     host.agent_sound_volume_spin.setRange(0, 100)
@@ -476,9 +461,7 @@ def build_pet_controls(host) -> None:
         gates_cfg = {}
     host.report_gate_sliders = {}
     for gate in REPORT_GATE_KEYS:
-        slider = ProbabilitySlider(
-            host, value=float(gates_cfg.get(gate, REPORT_GATE_DEFAULTS[gate]))
-        )
+        slider = ProbabilitySlider(host, value=float(gates_cfg.get(gate, REPORT_GATE_DEFAULTS[gate])))
         slider.setObjectName(f"reportGateSlider_{gate}")
         host.report_gate_sliders[gate] = slider
 
@@ -552,10 +535,13 @@ def build_pet_controls(host) -> None:
     image_dir = resolve_fun_asset(egg.get("image_dir"), oijingjing_image_path().parent)
     host.egg_avatar_picker = ResourcePathPicker(str(avatar.resolve()), parent=host)
     host.egg_image_dir_picker = ResourcePathPicker(
-        str(image_dir.resolve()), directory=True, image_preview=True, parent=host,
+        str(image_dir.resolve()),
+        directory=True,
+        image_preview=True,
+        parent=host,
     )
 
-# ------------------------------------------------------------ 主动识屏
+    # ------------------------------------------------------------ 主动识屏
     if sys.platform == "win32" and host.include_ai:
         host._build_proactive_controls()
 
@@ -564,15 +550,27 @@ def build_pet_controls(host) -> None:
 
 
 def _update_island_controls(host, enabled: bool) -> None:
-    host._set_setting_rows_visible((
-        "dynamic_island_icon", "dynamic_island_name", "dynamic_island_info",
-        "dynamic_island_status", "dynamic_island_info_mode",
-        "dynamic_island_style", "dynamic_island_opacity", "dynamic_island_accent",
-        "dynamic_island_icon_value",
-        "dynamic_island_custom_text", "dynamic_island_click_action",
-        "dynamic_island_event_effects", "dynamic_island_edge_dock",
-        "dynamic_island_collision", "dynamic_island_hidden_chat",
-    ), enabled, dependency="island_enabled")
+    host._set_setting_rows_visible(
+        (
+            "dynamic_island_icon",
+            "dynamic_island_name",
+            "dynamic_island_info",
+            "dynamic_island_status",
+            "dynamic_island_info_mode",
+            "dynamic_island_style",
+            "dynamic_island_opacity",
+            "dynamic_island_accent",
+            "dynamic_island_icon_value",
+            "dynamic_island_custom_text",
+            "dynamic_island_click_action",
+            "dynamic_island_event_effects",
+            "dynamic_island_edge_dock",
+            "dynamic_island_collision",
+            "dynamic_island_hidden_chat",
+        ),
+        enabled,
+        dependency="island_enabled",
+    )
     _update_island_icon_controls(host, host.island_icon_check.isChecked())
     _update_island_info_controls(host, host.island_info_check.isChecked())
 
@@ -618,9 +616,7 @@ def _dialogue_flush_scope(host, scope: str | None = None) -> None:
     if not hasattr(host, "dialogue_scope_select") or not hasattr(host, "dialogue_phrase_edits"):
         return
     scope = host._dialogue_scope if scope is None else scope
-    host._dialogue_scope_buffer[str(scope)] = {
-        key: edit.toPlainText() for key, edit in host.dialogue_phrase_edits.items()
-    }
+    host._dialogue_scope_buffer[str(scope)] = {key: edit.toPlainText() for key, edit in host.dialogue_phrase_edits.items()}
 
 
 def _load_dialogue_scope_into_editors(host, scope: str) -> None:
@@ -664,11 +660,7 @@ def _on_dialogue_scope_changed(host, index: int) -> None:
 def _dialogue_scope_values(host, scope: str) -> dict[str, list[str]]:
     """scope buffer 某层的非空事件 → list[str]（供保存/导出）。"""
     buf = host._dialogue_scope_buffer.get(scope) or {}
-    return {
-        key: [line.strip() for line in str(text).splitlines() if line.strip()]
-        for key, text in buf.items()
-        if str(text or "").strip()
-    }
+    return {key: [line.strip() for line in str(text).splitlines() if line.strip()] for key, text in buf.items() if str(text or "").strip()}
 
 
 def _dialogue_phrase_values(host) -> dict[str, list[str]]:
@@ -680,15 +672,15 @@ def _current_dialogue_template(host) -> dict:
     # 供 AI 依角色卡从零撰写；当前台词如需备份请直接复制编辑框内容。
     # agents：为「全部 Agent（含自定义）」各生成一层事件脚手架（值空 = 沿用
     # global/内置），让 AI 能逐个 Agent 单独配台词。
-    agent_keys = [
-        str(host.dialogue_scope_select.itemData(index) or "")
-        for index in range(host.dialogue_scope_select.count())
-    ]
+    agent_keys = [str(host.dialogue_scope_select.itemData(index) or "") for index in range(host.dialogue_scope_select.count())]
     agent_keys = [key for key in agent_keys if key]
-    return build_persona_template({
-        "dialogue_mode": host.dialogue_mode_select.currentData() or "legacy",
-        "dialogue_phrases": {},
-    }, agent_keys=agent_keys or None)
+    return build_persona_template(
+        {
+            "dialogue_mode": host.dialogue_mode_select.currentData() or "legacy",
+            "dialogue_phrases": {},
+        },
+        agent_keys=agent_keys or None,
+    )
 
 
 def _export_dialogue_template(host) -> None:
@@ -702,9 +694,9 @@ def _export_dialogue_template(host) -> None:
         QMessageBox.warning(host, "导出失败", f"无法写入系统剪贴板：{exc}")
         return
     QMessageBox.information(
-        host, "导出成功",
-        "模板已复制到剪贴板：可直接粘贴给 AI 依角色卡改写，"
-        "或粘贴回「导入模板」输入框一键导回。",
+        host,
+        "导出成功",
+        "模板已复制到剪贴板：可直接粘贴给 AI 依角色卡改写，或粘贴回「导入模板」输入框一键导回。",
     )
 
 
@@ -736,7 +728,7 @@ def _import_dialogue_template_json(host) -> None:
         elif value is not None:
             edit.setPlainText(str(value))
     # entries[].phrases 兜底：顶层 phrases 缺失/为空的 key 用 entries 补齐
-    #（顶层有内容时以顶层为准，不被 entries 覆盖）。
+    # （顶层有内容时以顶层为准，不被 entries 覆盖）。
     entries = document.get("entries")
     if isinstance(entries, list):
         for entry in entries:
@@ -746,10 +738,7 @@ def _import_dialogue_template_json(host) -> None:
             if edit is None:
                 continue
             current = phrases.get(entry["key"])
-            has_top = (
-                (isinstance(current, list) and any(isinstance(i, str) and i.strip() for i in current))
-                or (isinstance(current, str) and current.strip())
-            )
+            has_top = (isinstance(current, list) and any(isinstance(i, str) and i.strip() for i in current)) or (isinstance(current, str) and current.strip())
             if has_top or edit.toPlainText().strip():
                 continue
             value = entry.get("phrases")
@@ -766,8 +755,7 @@ def _import_dialogue_template_json(host) -> None:
             if not isinstance(agent_events, dict):
                 continue
             host._dialogue_scope_buffer[str(agent_key)] = {
-                str(k): ("\n".join(str(i) for i in v) if isinstance(v, list) else str(v or ""))
-                for k, v in agent_events.items()
+                str(k): ("\n".join(str(i) for i in v) if isinstance(v, list) else str(v or "")) for k, v in agent_events.items()
             }
     host.dialogue_template_import_edit.clear()
     QMessageBox.information(host, "导入成功", "已导入全部弹窗内容模板；点击“保存并退出”后生效。")

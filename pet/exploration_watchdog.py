@@ -5,6 +5,7 @@ This module deliberately consumes the normalized DSH event stream instead of
 counting raw tool calls.  A step is the unit of agency: parallel calls in one
 step are merged, while sessions remain isolated.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -35,11 +36,16 @@ class WatchdogClass(str, Enum):
     OTHER = "OTHER"
 
 
-_EXPLORATION = frozenset({
-    WatchdogClass.SEARCH_WEB, WatchdogClass.SEARCH_CODE,
-    WatchdogClass.READ, WatchdogClass.GLOB, WatchdogClass.NAVIGATION,
-    WatchdogClass.THINK,
-})
+_EXPLORATION = frozenset(
+    {
+        WatchdogClass.SEARCH_WEB,
+        WatchdogClass.SEARCH_CODE,
+        WatchdogClass.READ,
+        WatchdogClass.GLOB,
+        WatchdogClass.NAVIGATION,
+        WatchdogClass.THINK,
+    }
+)
 _ACTION = frozenset({WatchdogClass.EDIT, WatchdogClass.RUN, WatchdogClass.TEST})
 _SEARCH_WORDS = re.compile(r"search|web.?search|browser|curl|wget|fetch", re.I)
 _CODE_SEARCH_WORDS = re.compile(r"\b(?:grep|rg|ripgrep)\b|search.?files|code.?search", re.I)
@@ -91,7 +97,7 @@ def _canonical_command(command) -> str:
         return ""
     match = _COMMAND_SEMANTIC_ENTRY.search(value)
     if match:
-        value = value[match.start():]
+        value = value[match.start() :]
     value = re.sub(r"\s+", " ", value).strip()
     return _text(value, 500)
 
@@ -115,7 +121,7 @@ def _target(record: dict, tool: str) -> str:
     args_key = _text(record.get("argsKey"), 180)
     match = re.search(r"(?:^|,)argv0:([^,]+)", args_key, re.I)
     if match:
-        return _canonical_command(match.group(1).strip('\\\"\''))
+        return _canonical_command(match.group(1).strip("\\\"'"))
     return _text(args) or _text(tool)
 
 
@@ -140,8 +146,7 @@ def classify_event(record: dict) -> WatchdogClass:
         return WatchdogClass.READ
     # Compatibility with older bridge records that only retained argv0 in
     # argsKey.  This is a generic command hint, not a tool/file special case.
-    if re.search(r"\b(?:get-content|type|cat|head|tail|read|read-file)\b",
-                 _text(record.get("argsKey")), re.I):
+    if re.search(r"\b(?:get-content|type|cat|head|tail|read|read-file)\b", _text(record.get("argsKey")), re.I):
         return WatchdogClass.READ
     if _GLOB_WORDS.search(tool):
         return WatchdogClass.GLOB
@@ -167,8 +172,7 @@ def make_fingerprint(record: dict, cls: WatchdogClass, target: str) -> str:
 
 def _think_key(record: dict, target: str) -> str:
     """Stable key for repeated reasoning, excluding presentation noise."""
-    text = (record.get("text") or record.get("summary") or
-            record.get("content") or target or "")
+    text = record.get("text") or record.get("summary") or record.get("content") or target or ""
     text = re.sub(r"\s+", " ", _text(text, 360)).strip().lower()
     return hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest()[:20] if text else ""
 
@@ -201,16 +205,24 @@ class _Step:
         self.closed = False
 
     def payload(self):
-        return {"step": self.step, "behaviors": sorted(c.value for c in self.classes),
-                "targets": sorted(self.targets), "fingerprints": sorted(self.fingerprints),
-                "think": self.think, "evidence": self.evidence, "evidence_new": self.evidence_new, "action": self.action,
-                "events": list(self.details),
-                "call_count": sum(self.call_fingerprints.values()),
-                "think_count": sum(self.think_fingerprints.values()),
-                "think_chars": self.think_chars,
-                "think_active": self.think_active,
-                "think_duration_seconds": round(max(0.0, time.monotonic() - self.think_started_at), 1)
-                if self.think_active and self.think_started_at is not None else 0}
+        return {
+            "step": self.step,
+            "behaviors": sorted(c.value for c in self.classes),
+            "targets": sorted(self.targets),
+            "fingerprints": sorted(self.fingerprints),
+            "think": self.think,
+            "evidence": self.evidence,
+            "evidence_new": self.evidence_new,
+            "action": self.action,
+            "events": list(self.details),
+            "call_count": sum(self.call_fingerprints.values()),
+            "think_count": sum(self.think_fingerprints.values()),
+            "think_chars": self.think_chars,
+            "think_active": self.think_active,
+            "think_duration_seconds": round(max(0.0, time.monotonic() - self.think_started_at), 1)
+            if self.think_active and self.think_started_at is not None
+            else 0,
+        }
 
 
 class ExplorationWatchdog(QObject):
@@ -250,12 +262,17 @@ class ExplorationWatchdog(QObject):
         绕过本方法直接 setdefault 会重新引入锚点被刷新的缺陷。
         """
         anchors = self._anchor_memory.get(session)
-        return {"steps": OrderedDict(), "current": None,
-                "last_inspected_seq": 0, "seq": 0, "goal": "",
-                "started_at": anchors[0] if anchors else now,
-                "grace_until": anchors[1] if anchors else now + self.early_grace_seconds,
-                "agent_name": _text(record.get("agentName") or record.get("agent") or agent_key),
-                "agent_key": agent_key}
+        return {
+            "steps": OrderedDict(),
+            "current": None,
+            "last_inspected_seq": 0,
+            "seq": 0,
+            "goal": "",
+            "started_at": anchors[0] if anchors else now,
+            "grace_until": anchors[1] if anchors else now + self.early_grace_seconds,
+            "agent_name": _text(record.get("agentName") or record.get("agent") or agent_key),
+            "agent_key": agent_key,
+        }
 
     def pause(self) -> None:
         """桌宠隐藏时暂停（产品决策：方案A）——停 1s 轮询并冻结全部计时锚点。
@@ -408,13 +425,32 @@ class ExplorationWatchdog(QObject):
                     current.exploration_targets.add(target)
                     current.exploration_fingerprints.add(fp)
             current.events.append(event)
-            current.details.append({k: _text(record.get(k), 500) for k in (
-                "event", "tool", "toolName", "argsKey", "target", "filePath",
-                "path", "pattern", "query", "command", "text", "summary",
-                "resultSummary", "evidence", "errorMessage", "ok", "timeout",
-            ) if record.get(k) is not None})
-            if cls in _EXPLORATION and event in {"tool/call", "command/run", "tool-workflow/run-start",
-                         "exec_command_begin", "mcp_tool_call_begin"}:
+            current.details.append(
+                {
+                    k: _text(record.get(k), 500)
+                    for k in (
+                        "event",
+                        "tool",
+                        "toolName",
+                        "argsKey",
+                        "target",
+                        "filePath",
+                        "path",
+                        "pattern",
+                        "query",
+                        "command",
+                        "text",
+                        "summary",
+                        "resultSummary",
+                        "evidence",
+                        "errorMessage",
+                        "ok",
+                        "timeout",
+                    )
+                    if record.get(k) is not None
+                }
+            )
+            if cls in _EXPLORATION and event in {"tool/call", "command/run", "tool-workflow/run-start", "exec_command_begin", "mcp_tool_call_begin"}:
                 current.call_classes[cls] += 1
                 current.call_targets[target] += 1
                 current.call_fingerprints[fp] += 1
@@ -457,24 +493,29 @@ class ExplorationWatchdog(QObject):
                     continue
                 current.long_think_reported = True
                 current_seq = state["seq"] + 1
-                pending.append((session, {
-                    "type": "pet/exploration-watchdog",
-                    "level": "warning",
-                    "risk": 0,
-                    "reasons": ["单次 Think 持续超过阈值"],
-                    "steps": [s.payload() for s in self._window(state, 10)],
-                    "session_id": session,
-                    "goal": state.get("goal", ""),
-                    "agent_key": state.get("agent_key", ""),
-                    "agent_name": state.get("agent_name") or state.get("agent_key", ""),
-                    "elapsed_seconds": round(max(0.0, now - state.get("started_at", now))),
-                    "threshold_phase": "long-think",
-                    "warning_threshold": self.warning_threshold,
-                    "control_threshold": self.control_threshold,
-                    "long_think_seconds": self.long_think_seconds,
-                    "think_duration_seconds": round(duration, 1),
-                    "current_step": current_seq,
-                }))
+                pending.append(
+                    (
+                        session,
+                        {
+                            "type": "pet/exploration-watchdog",
+                            "level": "warning",
+                            "risk": 0,
+                            "reasons": ["单次 Think 持续超过阈值"],
+                            "steps": [s.payload() for s in self._window(state, 10)],
+                            "session_id": session,
+                            "goal": state.get("goal", ""),
+                            "agent_key": state.get("agent_key", ""),
+                            "agent_name": state.get("agent_name") or state.get("agent_key", ""),
+                            "elapsed_seconds": round(max(0.0, now - state.get("started_at", now))),
+                            "threshold_phase": "long-think",
+                            "warning_threshold": self.warning_threshold,
+                            "control_threshold": self.control_threshold,
+                            "long_think_seconds": self.long_think_seconds,
+                            "think_duration_seconds": round(duration, 1),
+                            "current_step": current_seq,
+                        },
+                    )
+                )
         for session, payload in pending:
             self.warning.emit(session, payload)
 
@@ -495,11 +536,10 @@ class ExplorationWatchdog(QObject):
         for label, items in all_items:
             # Think frequency is expected in normal agent operation and has no
             # standalone risk meaning.  It is evaluated relationally below.
-            classes = Counter(c for s in items for c in s.classes
-                              if c in _EXPLORATION and c is not WatchdogClass.THINK)
+            classes = Counter(c for s in items for c in s.classes if c in _EXPLORATION and c is not WatchdogClass.THINK)
             targets = Counter(t for s in items for t in s.exploration_targets)
             fps = Counter(f for s in items for f in s.exploration_fingerprints)
-            class_limit, target_limit, fp_limit = ((3, 3, 2) if label == "W6" else (4, 4, 3))
+            class_limit, target_limit, fp_limit = (3, 3, 2) if label == "W6" else (4, 4, 3)
             # A few Reads are normal while orienting in a codebase.  Only let
             # Read alone contribute the class-repeat point after four steps;
             # target/fingerprint repetition still catches a genuine loop.
@@ -507,9 +547,11 @@ class ExplorationWatchdog(QObject):
                 class_limit = 4
             unique_targets = len({t for s in items for t in s.exploration_targets})
             if classes and max(classes.values()) >= class_limit:
-                class_repeat = True; reasons.append(f"{label} 同类重复")
+                class_repeat = True
+                reasons.append(f"{label} 同类重复")
             if targets and max(targets.values()) >= target_limit and unique_targets <= 1:
-                target_repeat = True; reasons.append(f"{label} target 重复")
+                target_repeat = True
+                reasons.append(f"{label} target 重复")
             if fps and max(fps.values()) >= fp_limit:
                 fingerprint_points = max(fingerprint_points, 2 if label == "W6" else 3)
                 reasons.append(f"{label} fingerprint 重复")
@@ -517,12 +559,14 @@ class ExplorationWatchdog(QObject):
             actions = sum(bool(set(s.classes) & _ACTION) for s in items)
             unique_targets = len({t for s in items for t in s.exploration_targets})
             if label == "W6" and explore >= 5 and unique_targets <= 1:
-                score += 3; reasons.append("W6 探索密集且 target 单一")
+                score += 3
+                reasons.append("W6 探索密集且 target 单一")
             # 高 target diversity 本身代表持续获得新信息；“无行动”规则只在
             # 探索对象也高度收敛时成立，避免误伤正常的资料梳理阶段。
             has_new_evidence = unique_targets >= 5 or any(s.evidence_new for s in items)
             if label == "W10" and explore >= 8 and actions == 0 and not has_new_evidence:
-                score += 2; reasons.append("W10 探索密集且无行动")
+                score += 2
+                reasons.append("W10 探索密集且无行动")
             think_fps = Counter(k for s in items for k in s.think_fingerprints)
             if think_fps:
                 think_limit = 3 if label == "W6" else 4
@@ -539,9 +583,11 @@ class ExplorationWatchdog(QObject):
             default=0,
         )
         if max_burst >= 5:
-            score += 4; reasons.append("单步相同命令批量重复")
+            score += 4
+            reasons.append("单步相同命令批量重复")
         elif max_burst >= 3:
-            score += 2; reasons.append("单步相同命令重复")
+            score += 2
+            reasons.append("单步相同命令重复")
 
         # Think-loop detection is relational: compare the decision/evidence
         # state produced after each completed reasoning step.  Frequency and
@@ -559,32 +605,36 @@ class ExplorationWatchdog(QObject):
             while cursor < len(completed) and not completed[cursor].think_fingerprints:
                 segment.append(completed[cursor])
                 cursor += 1
-            classes = tuple(sorted({c.value for s in segment for c in s.classes
-                                    if c is not WatchdogClass.THINK}))
+            classes = tuple(sorted({c.value for s in segment for c in s.classes if c is not WatchdogClass.THINK}))
             targets = tuple(sorted({t for s in segment for t in s.exploration_targets}))
             fingerprints = tuple(sorted({f for s in segment for f in s.exploration_fingerprints}))
-            cycles.append({
-                "signature": (classes, targets, fingerprints),
-                "progress": any(s.action or s.evidence for s in segment),
-                "think_chars": item.think_chars,
-            })
+            cycles.append(
+                {
+                    "signature": (classes, targets, fingerprints),
+                    "progress": any(s.action or s.evidence for s in segment),
+                    "think_chars": item.think_chars,
+                }
+            )
 
         recent3 = cycles[-3:]
         if len(recent3) == 3 and not any(c["progress"] for c in recent3):
             signatures = [c["signature"] for c in recent3]
             if all(not any(part for part in sig) for sig in signatures):
-                score += 3; reasons.append("连续 Think 未形成可执行决策")
+                score += 3
+                reasons.append("连续 Think 未形成可执行决策")
             elif len(set(signatures)) == 1:
-                score += 3; reasons.append("Think 后决策状态未变化")
+                score += 3
+                reasons.append("Think 后决策状态未变化")
             if sum(c["think_chars"] for c in recent3) >= 600 and len(set(signatures)) <= 1:
-                score += 1; reasons.append("推理输出增长但无状态推进")
+                score += 1
+                reasons.append("推理输出增长但无状态推进")
 
         recent4 = cycles[-4:]
         if len(recent4) == 4 and not any(c["progress"] for c in recent4):
             signatures = [c["signature"] for c in recent4]
-            if signatures[0] == signatures[2] and signatures[1] == signatures[3] \
-                    and signatures[0] != signatures[1]:
-                score += 2; reasons.append("Think 后决策在两个状态间往返")
+            if signatures[0] == signatures[2] and signatures[1] == signatures[3] and signatures[0] != signatures[1]:
+                score += 2
+                reasons.append("Think 后决策在两个状态间往返")
         # W6/W10 是两个观察尺度，不把同一风险维度重复加倍；否则正常的
         # 多目标 Read 序列会因同时满足两个窗口的“同类重复”而误报。
         score += int(class_repeat) + (2 if target_repeat else 0) + fingerprint_points
@@ -592,10 +642,12 @@ class ExplorationWatchdog(QObject):
         # window contributes, avoiding accidental double penalties.
         score += think_fingerprint_points
         if any(s.action for s in w6 + w10):
-            score -= 2; reasons.append("近期有 Edit/Run/Test")
+            score -= 2
+            reasons.append("近期有 Edit/Run/Test")
         unique = len({t for s in w10 for t in s.exploration_targets})
         if unique >= 5:
-            score -= 1; reasons.append("target diversity 较高")
+            score -= 1
+            reasons.append("target diversity 较高")
         # A new target after a Think, or concrete evidence from a tool result,
         # is a progression signal.  Do not interrupt a search that is visibly
         # narrowing the hypothesis.
@@ -609,9 +661,11 @@ class ExplorationWatchdog(QObject):
                 thought_then_new_target = True
             seen.update(item.targets)
         if thought_then_new_target:
-            score -= 1; reasons.append("Think 后访问新 target")
+            score -= 1
+            reasons.append("Think 后访问新 target")
         if any(s.evidence_new for s in w10):
-            score -= 1; reasons.append("近期获得新证据")
+            score -= 1
+            reasons.append("近期获得新证据")
         return max(0, score), reasons
 
     def _evaluate_locked(self, session, state):
@@ -640,20 +694,25 @@ class ExplorationWatchdog(QObject):
         # 否则维持普通提醒（payload.level 由此不再恒为 warning）。
         level = "control" if score >= control_threshold else "warning"
         state["last_inspected_seq"] = current_seq
-        payload = {"type": "pet/exploration-watchdog", "level": level, "risk": score,
-                   "reasons": reasons, "steps": [s.payload() for s in w10],
-                   "riskScore": score,
-                   "targetCount": len({t for s in w10 for t in s.exploration_targets}),
-                   "targets": sorted({t for s in w10 for t in s.exploration_targets}),
-                   "session_id": session, "goal": state.get("goal", ""),
-                   "agent_key": state.get("agent_key", ""),
-                   "agent_name": state.get("agent_name") or state.get("agent_key", ""),
-                   "elapsed_seconds": round(elapsed), "threshold_phase": phase,
-                   "warning_threshold": warning_threshold,
-                   "control_threshold": control_threshold}
+        payload = {
+            "type": "pet/exploration-watchdog",
+            "level": level,
+            "risk": score,
+            "reasons": reasons,
+            "steps": [s.payload() for s in w10],
+            "riskScore": score,
+            "targetCount": len({t for s in w10 for t in s.exploration_targets}),
+            "targets": sorted({t for s in w10 for t in s.exploration_targets}),
+            "session_id": session,
+            "goal": state.get("goal", ""),
+            "agent_key": state.get("agent_key", ""),
+            "agent_name": state.get("agent_name") or state.get("agent_key", ""),
+            "elapsed_seconds": round(elapsed),
+            "threshold_phase": phase,
+            "warning_threshold": warning_threshold,
+            "control_threshold": control_threshold,
+        }
         return payload
 
     def _emit_decision(self, session, payload):
         self.warning.emit(session, payload)
-
-

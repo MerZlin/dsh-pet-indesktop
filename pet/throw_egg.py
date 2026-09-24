@@ -7,6 +7,7 @@
 > 落地停稳（_stop_physics 兜底）、低速触碰屏幕边界或其它桌宠后恢复正常
 > （角度归零）。用户明确要求不设飞行时间硬上限。
 """
+
 from __future__ import annotations
 
 import math
@@ -65,9 +66,7 @@ class ThrowEggController:
         if not self._active:
             return
         speed = math.hypot(vx, vy)
-        follow_threshold = (
-            THROW_EGG_RECOVER_SPEED if touching_boundary else THROW_EGG_AIR_FOLLOW_SPEED
-        )
+        follow_threshold = THROW_EGG_RECOVER_SPEED if touching_boundary else THROW_EGG_AIR_FOLLOW_SPEED
         if speed >= follow_threshold:
             # 屏幕坐标 y 朝下：向右飞=90°、向下=180°、向上=0°、向左=270°。
             self._angle_deg = 90.0 + math.degrees(math.atan2(vy, vx))

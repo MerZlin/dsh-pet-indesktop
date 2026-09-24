@@ -4,6 +4,7 @@
 把主动识屏 / Agent 联动 / 文件投喂 / 黄金回旋 / 边缘探头等“配置关闭就不构造”
 的生命周期逻辑从 window.py 拆出，避免继续撑大 window.py（架构红线：行数预算）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,6 +50,7 @@ class WindowFeatureGateMixin:
             except Exception:
                 pass
         manager.pause()
+
     _broker_facade: Any = None
     _golden_spin: Any = None
     _edge_probe: Any = None
@@ -74,6 +76,7 @@ class WindowFeatureGateMixin:
         """首次启用主动识屏时懒创建观察器；已存在则原样返回。"""
         if self.proactive_watcher is None:
             from .proactive import ProactiveScreenWatcher
+
             self.proactive_watcher = ProactiveScreenWatcher(self, self.cfg)
         return self.proactive_watcher
 
@@ -81,6 +84,7 @@ class WindowFeatureGateMixin:
         """首次启用 Agent 联动时懒创建管理器；已存在则原样返回。"""
         if self.agent_link_manager is None:
             from .agent_link import AgentLinkManager
+
             self.agent_link_manager = AgentLinkManager(self, self.cfg)
         return self.agent_link_manager
 
@@ -89,6 +93,7 @@ class WindowFeatureGateMixin:
         """挂载“吃垃圾文件”拖放处理器（幂等，只对 PetWindow 实例调用）。"""
         if self._file_eater is None:
             from .file_eater import FileEaterDropHandler
+
             self._file_eater = FileEaterDropHandler(self)
         return self._file_eater
 
@@ -101,6 +106,7 @@ class WindowFeatureGateMixin:
         """
         if self._file_interpret is None:
             from .file_interpret import FileInterpretController
+
             self._file_interpret = FileInterpretController(self)
         self.install_file_eater().interpret_offer = self._file_interpret.offer
         return self._file_interpret
@@ -110,12 +116,15 @@ class WindowFeatureGateMixin:
         """安装效果控制器（幂等）。PetWindow 构造末尾调用一次。"""
         if self._edge_probe is None:
             from .edge_probe import EdgeProbeController
+
             self._edge_probe = EdgeProbeController(self)
         if self._golden_spin is None:
             from .golden_spin import GoldenSpinController
+
             self._golden_spin = GoldenSpinController(self)
         if self._throw_egg is None:
             from .throw_egg import ThrowEggController
+
             self._throw_egg = ThrowEggController(self)
         return self
 
@@ -124,6 +133,7 @@ class WindowFeatureGateMixin:
         """安装歌词显示控制器（幂等）。"""
         if self._music_lyric is None:
             from .music_lyric_controller import MusicLyricController
+
             self._music_lyric = MusicLyricController(self)
         return self._music_lyric
 

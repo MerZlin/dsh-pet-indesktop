@@ -47,7 +47,7 @@ def stable_body_local_rect(host) -> QRect:
     化）；未声明的角色包回退为整个窗口——语义等同"窗口即身体"，贴边补偿
     自动退化为纯窗口钳位（与改造前行为一致）。
     """
-    box = catalog.character_body_box(str(host.cfg.get('character', '') or ''))
+    box = catalog.character_body_box(str(host.cfg.get("character", "") or ""))
     if box is None:
         return QRect(0, 0, host._w, host._h)
     x1, y1, x2, y2 = box
@@ -115,10 +115,8 @@ def band_bounds(area: DesktopArea, body: QRect) -> QRect:
     拼接整齐的布局（同尺寸并列/上下堆叠）收窄结果恒等于包围矩形，常见双屏行为
     不受影响；单屏路径根本不进这里（desktop_area 返回 None）。
     """
-    vertical_band = [r for r in area.screens
-                     if r.right() >= body.left() and r.left() <= body.right()]
-    horizontal_band = [r for r in area.screens
-                       if r.bottom() >= body.top() and r.top() <= body.bottom()]
+    vertical_band = [r for r in area.screens if r.right() >= body.left() and r.left() <= body.right()]
+    horizontal_band = [r for r in area.screens if r.bottom() >= body.top() and r.top() <= body.bottom()]
     if not vertical_band and not horizontal_band:
         return QRect(area.bounds)  # 请求整体在桌面之外：交给包围矩形钳回边缘
     vertical_band = vertical_band or horizontal_band
@@ -142,9 +140,7 @@ def virtual_pos(host) -> QPoint:
     return host.pos() + delta
 
 
-def move_window_towards(host, x: float, y: float,
-                        body_bounds: QRect | None = None,
-                        *, interaction_area: DesktopArea | None = None) -> None:
+def move_window_towards(host, x: float, y: float, body_bounds: QRect | None = None, *, interaction_area: DesktopArea | None = None) -> None:
     """统一位置出口：按虚拟窗口位置 (x, y) 落窗。
 
     GNOME/mutter 会把移出工作区的窗口整体钳回（raw X11 XMoveWindow 同样
@@ -174,8 +170,7 @@ def move_window_towards(host, x: float, y: float,
     sbr = stable_body_local_rect(host)
     xi, yi = int(round(x)), int(round(y))
     if interaction_area is not None:
-        bounds = band_bounds(interaction_area, QRect(
-            xi + sbr.x(), yi + sbr.y(), sbr.width(), sbr.height()))
+        bounds = band_bounds(interaction_area, QRect(xi + sbr.x(), yi + sbr.y(), sbr.width(), sbr.height()))
         avail = bounds
     else:
         avail = scr.availableGeometry()
@@ -219,8 +214,7 @@ def move_window_towards(host, x: float, y: float,
     host.move(wx, wy)
 
 
-def throw_bounds(host, *,
-                 interaction_area: DesktopArea | None = None) -> tuple[float, float, float, float]:
+def throw_bounds(host, *, interaction_area: DesktopArea | None = None) -> tuple[float, float, float, float]:
     """抛掷/碰撞的虚拟窗口边界 (left, top, right, bottom)。
 
     语义 = 角色身体框贴到工作区四边（兑现原 `_w/3` 经验值注释里"让角色
@@ -237,9 +231,7 @@ def throw_bounds(host, *,
     sbr = stable_body_local_rect(host)
     if interaction_area is not None:
         pos = getattr(host, "_phys_pos", None) or (0.0, 0.0)
-        avail = band_bounds(interaction_area, QRect(
-            int(round(pos[0])) + sbr.x(), int(round(pos[1])) + sbr.y(),
-            sbr.width(), sbr.height()))
+        avail = band_bounds(interaction_area, QRect(int(round(pos[0])) + sbr.x(), int(round(pos[1])) + sbr.y(), sbr.width(), sbr.height()))
     else:
         scr = host._screen_available()
         if scr is None:
@@ -267,7 +259,7 @@ def pid_alive(pid: int) -> bool:
 
 def runtime_marker_versioned(host: Any) -> bool:
     """Return whether the host uses the versioned runtime-marker name."""
-    return bool(getattr(host, '_single_process_spawn', False))
+    return bool(getattr(host, "_single_process_spawn", False))
 
 
 def live_instance_rects(
@@ -325,6 +317,7 @@ def remove_runtime_marker(host: Any) -> None:
 def arm_screen_restore_retry(host) -> None:
     """目标副屏暂未就绪：启动 5s 轮询 + screenAdded 监听，等它上线。"""
     from .window import time as _window_time  # 兼容 seam：与 HEAD 同读 pet.window.time
+
     app = QGuiApplication.instance()
     if app is None:
         return
@@ -332,13 +325,13 @@ def arm_screen_restore_retry(host) -> None:
     if not host._screen_restore_armed:
         app.screenAdded.connect(host._screen_retry_tick)
         host._screen_restore_armed = True
-        logging.debug('已监听屏幕变化，等待 %s 上线', host._awaiting_saved_screen)
+        logging.debug("已监听屏幕变化，等待 %s 上线", host._awaiting_saved_screen)
     host._screen_retry_timer.start()  # start() 即重启，超时窗口随之刷新
 
 
 def disarm_screen_restore_retry(host) -> None:
     host._awaiting_saved_screen = None
-    if hasattr(host, '_screen_retry_timer'):
+    if hasattr(host, "_screen_retry_timer"):
         host._screen_retry_timer.stop()
     if not host._screen_restore_armed:
         return
@@ -354,6 +347,7 @@ def disarm_screen_restore_retry(host) -> None:
 def screen_retry_tick(host, *_args) -> None:
     """轮询/screenAdded 共用入口：目标屏一旦进入枚举立即恢复位置。"""
     from .window import time as _window_time  # 兼容 seam：与 HEAD 同读 pet.window.time
+
     target = host._awaiting_saved_screen
     if not target:
         host._disarm_screen_restore_retry()
@@ -362,7 +356,7 @@ def screen_retry_tick(host, *_args) -> None:
         # 超时也不能把窗口留在不可见的幻影屏上（启动时 Qt 可能枚举到
         # 空名字/假几何的占位屏，show() 到上面真实桌面不可见）：强制
         # 落到当前主屏并确保可见。宁可位置不理想，不可窗口消失。
-        logging.info('等待屏幕 %s 超时（120s），强制落到当前主屏', target)
+        logging.info("等待屏幕 %s 超时（120s），强制落到当前主屏", target)
         host._disarm_screen_restore_retry()
         host._force_show_on_primary()
         return
@@ -372,7 +366,7 @@ def screen_retry_tick(host, *_args) -> None:
         host._disarm_screen_restore_retry()
         host._restore_position()
         host._ensure_visible_after_restore()
-        logging.info('目标屏幕 %s 上线，已恢复到保存位置', target)
+        logging.info("目标屏幕 %s 上线，已恢复到保存位置", target)
 
 
 def force_show_on_primary(host) -> None:
@@ -449,16 +443,15 @@ def restore_position(host) -> None:
     """恢复上次位置（按屏幕比例），无记录则落右下角。
     保存位置时所在的屏幕此刻不在线（如开机自启时副屏未就绪）→
     落当前屏并记下目标屏，由 screenAdded 监听在它上线后重新恢复。"""
-    saved_screen = host.cfg.get('screen_name')
+    saved_screen = host.cfg.get("screen_name")
     scr = host._screen_available(saved_screen)
     if saved_screen and scr.name() != saved_screen:
         host._awaiting_saved_screen = saved_screen
-        logging.info('目标屏幕 %s 暂不在线，先落在 %s，等它上线后自动恢复',
-                     saved_screen, scr.name())
+        logging.info("目标屏幕 %s 暂不在线，先落在 %s，等它上线后自动恢复", saved_screen, scr.name())
     else:
         host._awaiting_saved_screen = None
     avail = scr.availableGeometry()
-    rx, ry = host.cfg.get('rx'), host.cfg.get('ry')
+    rx, ry = host.cfg.get("rx"), host.cfg.get("ry")
     if rx is None or ry is None:
         x, y = _default_corner_pos(host, avail)
     else:
@@ -468,7 +461,7 @@ def restore_position(host) -> None:
         y = min(max(y, avail.top()), avail.bottom() - host._h)
     # 多开避让：与其他存活实例重叠时逐级向左错开（含双击重复启动
     # 同一实例的场景——它和有名字的 --instance 一样会撞位置）
-    _rects_fn = getattr(host, '_live_instance_rects', None)
+    _rects_fn = getattr(host, "_live_instance_rects", None)
     others = _rects_fn() if callable(_rects_fn) else []
     if others:
         step = host._w + 48
@@ -479,18 +472,26 @@ def restore_position(host) -> None:
             if nx == x:
                 break  # 已经顶到屏幕左缘，无法再让
             x = nx
-    logging.info('恢复位置 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)',
-                 scr.name(), avail.left(), avail.top(), avail.right(),
-                 avail.bottom(), scr.devicePixelRatio(), x, y)
+    logging.info(
+        "恢复位置 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)",
+        scr.name(),
+        avail.left(),
+        avail.top(),
+        avail.right(),
+        avail.bottom(),
+        scr.devicePixelRatio(),
+        x,
+        y,
+    )
     _move_towards(host, x, y)
-    _marker_fn = getattr(host, '_write_runtime_marker', None)
+    _marker_fn = getattr(host, "_write_runtime_marker", None)
     if callable(_marker_fn):
         _marker_fn()
 
 
 def _move_towards(host, x: float, y: float) -> None:
     """经统一出口落窗（虚拟窗口坐标）；轻量桩没有该出口时回退直接 move。"""
-    mover = getattr(host, '_move_window_towards', None)
+    mover = getattr(host, "_move_window_towards", None)
     if callable(mover):
         mover(x, y)
     else:
@@ -505,14 +506,13 @@ def _default_corner_pos(host, avail) -> tuple[int, int]:
     边距（实测右侧 178px，而 CORNER_MARGIN 意图只有 24px）。无身体框
     （轻量桩/未声明 body_box 的角色包回退全窗口）时保持旧算式逐像素一致。
     """
-    sbr_fn = getattr(host, '_stable_body_local_rect', None)
+    sbr_fn = getattr(host, "_stable_body_local_rect", None)
     sbr = sbr_fn() if callable(sbr_fn) else None
     if sbr is not None and (sbr.width(), sbr.height()) != (host._w, host._h):
         x = avail.right() - catalog.CORNER_MARGIN + 1 - sbr.x() - sbr.width()
         y = avail.bottom() + 1 - sbr.y() - sbr.height()
         return int(x), int(y)
-    return (avail.right() - host._w - catalog.CORNER_MARGIN,
-            avail.bottom() - host._h)
+    return (avail.right() - host._w - catalog.CORNER_MARGIN, avail.bottom() - host._h)
 
 
 def save_position(host) -> None:
@@ -523,27 +523,27 @@ def save_position(host) -> None:
     avail = scr.availableGeometry()
     if avail.width() <= 0 or avail.height() <= 0:
         return
-    if not getattr(host, '_awaiting_saved_screen', None):
+    if not getattr(host, "_awaiting_saved_screen", None):
         # 存"虚拟窗口中心"比例：贴边时窗口被钳在工作区内，实际位置 + 绘制
         # 偏移才是角色的自然位置；偏移为零时与旧算式（窗口中心）逐像素一致。
-        vp_fn = getattr(host, '_virtual_pos', None)
+        vp_fn = getattr(host, "_virtual_pos", None)
         vp = vp_fn() if callable(vp_fn) else None
         cx = (vp.x() if vp is not None else host.x()) + host._w / 2
         cy = (vp.y() if vp is not None else host.y()) + (host._h + getattr(host, "_capture_headroom", 0)) / 2
-        host.cfg.set('rx', (cx - avail.left()) / avail.width())
-        host.cfg.set('ry', (cy - avail.top()) / avail.height())
-        host.cfg.set('screen_name', scr.name())
-    host.cfg.set('facing', host.facing)
-    host.cfg.set('scale', host.scale)
+        host.cfg.set("rx", (cx - avail.left()) / avail.width())
+        host.cfg.set("ry", (cy - avail.top()) / avail.height())
+        host.cfg.set("screen_name", scr.name())
+    host.cfg.set("facing", host.facing)
+    host.cfg.set("scale", host.scale)
     host.cfg.save()
-    _marker_fn = getattr(host, '_write_runtime_marker', None)
+    _marker_fn = getattr(host, "_write_runtime_marker", None)
     if callable(_marker_fn):
         _marker_fn()
 
 
 def go_default_corner(host) -> None:
     # 用户明确要求回右下角 = 手动位置决策，撤销"等副屏上线自动恢复"
-    _disarm = getattr(host, '_disarm_screen_restore_retry', None)
+    _disarm = getattr(host, "_disarm_screen_restore_retry", None)
     if callable(_disarm):
         _disarm()
     # Position can still be written by the animation interpolation timer or
@@ -555,8 +555,16 @@ def go_default_corner(host) -> None:
     scr = host._screen_available()
     avail = scr.availableGeometry()
     x, y = _default_corner_pos(host, avail)
-    logging.info('回到右下角 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)',
-                 scr.name(), avail.left(), avail.top(), avail.right(),
-                 avail.bottom(), scr.devicePixelRatio(), x, y)
+    logging.info(
+        "回到右下角 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)",
+        scr.name(),
+        avail.left(),
+        avail.top(),
+        avail.right(),
+        avail.bottom(),
+        scr.devicePixelRatio(),
+        x,
+        y,
+    )
     _move_towards(host, x, y)
     host._save_position()

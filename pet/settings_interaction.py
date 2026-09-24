@@ -63,7 +63,9 @@ def build_click_rows(dialog) -> list[SettingRow]:
         )
     rows.extend(
         [
-            SettingRow("click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容；打开后可用下方两项把同一句读出来。", dialog.click_self_talk_check),
+            SettingRow(
+                "click_self_talk", "点击触发自言自语", "点击时随机显示一条自言自语内容；打开后可用下方两项把同一句读出来。", dialog.click_self_talk_check
+            ),
             SettingRow(
                 "click_self_talk_speak",
                 "点击台词朗读",
@@ -122,8 +124,7 @@ def build_self_talk_rows(dialog) -> list[SettingRow]:
         SettingRow(
             "self_talk_image_chance",
             "配图概率",
-            "点击/定时自言自语时显示配图的概率，其余显示文本；0% 表示只出文本。"
-            "图片目录里往往有几十张图，这一项决定文本还能不能轮到（默认 30%）。",
+            "点击/定时自言自语时显示配图的概率，其余显示文本；0% 表示只出文本。图片目录里往往有几十张图，这一项决定文本还能不能轮到（默认 30%）。",
             dialog.self_talk_image_chance_spin,
         ),
     ]

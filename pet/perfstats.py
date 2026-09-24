@@ -44,6 +44,7 @@
 线程：记账不加锁 —— CPython GIL 下 dict 读改写近似原子；reader /
 解码线程与 GUI 线程并发打点可能丢最后一次累加，观测用途可接受。
 """
+
 from __future__ import annotations
 
 import atexit
@@ -129,10 +130,7 @@ def time(name: str, seconds: float) -> None:
 def snapshot() -> dict:
     """当前全部指标快照：{名字: {count, total}}，total 为调用方传入单位
     （计时打点为秒）。"""
-    return {
-        name: {"count": stat.count, "total": stat.total}
-        for name, stat in _stats.items()
-    }
+    return {name: {"count": stat.count, "total": stat.total} for name, stat in _stats.items()}
 
 
 def dump() -> dict:
@@ -160,7 +158,10 @@ def _log_snapshot(snap: dict) -> None:
         if count > 0 and total:
             logger.info(
                 "perfstats %s: count=%d total=%.6fs avg=%.3fms",
-                name, count, total, total / count * 1000.0,
+                name,
+                count,
+                total,
+                total / count * 1000.0,
             )
         else:
             logger.info("perfstats %s: count=%d", name, count)

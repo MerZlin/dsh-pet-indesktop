@@ -21,26 +21,26 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 # ---- 默认物理常量 ----
-DEFAULT_RESTITUTION: float = 0.82       # 默认恢复系数
-DEFAULT_FRICTION: float = 0.08          # 默认切向摩擦系数
-DEFAULT_MASS_SCALE: float = 1.0         # 默认质量倍率
-DEFAULT_IMPULSE_CAP: float = 9000.0     # 每单位质量等效冲量上限 (px/s)
+DEFAULT_RESTITUTION: float = 0.82  # 默认恢复系数
+DEFAULT_FRICTION: float = 0.08  # 默认切向摩擦系数
+DEFAULT_MASS_SCALE: float = 1.0  # 默认质量倍率
+DEFAULT_IMPULSE_CAP: float = 9000.0  # 每单位质量等效冲量上限 (px/s)
 IMPULSE_MIN_APPROACH_SPEED: float = 80.0  # 低于此接近速度只做位置分离 (px/s)
-DEFAULT_BASE_SCALE: float = 0.72        # 基准缩放
+DEFAULT_BASE_SCALE: float = 0.72  # 基准缩放
 
 # ---- 状态 Flags 位定义 (plan4 §2.1) ----
-FLAG_VISIBLE: int = 1 << 0              # 1: 可见
-FLAG_THROWN: int = 1 << 1               # 2: 正在抛掷中
-FLAG_DRAGGING: int = 1 << 2             # 4: 正在拖拽中 (无限质量)
-FLAG_SLINGSHOT_AIMING: int = 1 << 3     # 8: 弹弓蓄力中
-FLAG_LOCK_POSITION: int = 1 << 4        # 16: 锁定位置 (无限质量)
-FLAG_NO_MOVE: int = 1 << 5              # 32: 禁止自主漫游
-FLAG_MOUSE_THROUGH: int = 1 << 6        # 64: 鼠标穿透
-FLAG_AUTO_CURSOR_HIDDEN: int = 1 << 7   # 128: 自动光标穿透/隐藏
-FLAG_PAUSED: int = 1 << 8               # 256: 暂停活动
-FLAG_COLLISION_ENABLED: int = 1 << 9    # 512: 开启碰撞
-FLAG_PREDICTED_BOUNCE: int = 1 << 10    # 1024: 客户端已预测的反弹事件
-FLAG_STATIC: int = 1 << 11              # 2048: 静态布景（无限质量但保留弹性）。
+FLAG_VISIBLE: int = 1 << 0  # 1: 可见
+FLAG_THROWN: int = 1 << 1  # 2: 正在抛掷中
+FLAG_DRAGGING: int = 1 << 2  # 4: 正在拖拽中 (无限质量)
+FLAG_SLINGSHOT_AIMING: int = 1 << 3  # 8: 弹弓蓄力中
+FLAG_LOCK_POSITION: int = 1 << 4  # 16: 锁定位置 (无限质量)
+FLAG_NO_MOVE: int = 1 << 5  # 32: 禁止自主漫游
+FLAG_MOUSE_THROUGH: int = 1 << 6  # 64: 鼠标穿透
+FLAG_AUTO_CURSOR_HIDDEN: int = 1 << 7  # 128: 自动光标穿透/隐藏
+FLAG_PAUSED: int = 1 << 8  # 256: 暂停活动
+FLAG_COLLISION_ENABLED: int = 1 << 9  # 512: 开启碰撞
+FLAG_PREDICTED_BOUNCE: int = 1 << 10  # 1024: 客户端已预测的反弹事件
+FLAG_STATIC: int = 1 << 11  # 2048: 静态布景（无限质量但保留弹性）。
 # 灵动岛静态成员的碰撞世界成员 id（常量，全网唯一）：岛宿主进程以此 id 把岛
 # 几何注册进碰撞世界（几何复制给远端进程挂本地硬墙 + FLAG_STATIC 结算反弹）。
 # 穿透防御分层：远端本地硬墙（stale-keep TTL）兜底穿透，结算只负责反弹体验——
@@ -57,6 +57,7 @@ STATIC_RESTITUTION: float = 1.3
 @dataclass
 class MemberState:
     """参与碰撞检测的成员状态快照。"""
+
     runtime_id: str
     x: float
     y: float
@@ -78,6 +79,7 @@ class MemberState:
 @dataclass
 class ImpulseResult:
     """协调者计算生成的单对碰撞冲量结果。"""
+
     tick: int
     pair: str
     a: str
@@ -116,7 +118,7 @@ def calculate_mass(
     collision_mass_scale: float = DEFAULT_MASS_SCALE,
 ) -> float:
     """计算桌宠质量。
-    
+
     规则 (plan4 §4.1，实机手感修正)：
     质量按体型加权并限制在 0.5~2.5，优先保证街机碰撞手感。
     collision_mass_scale 是用户设置的全局倍率，照常参与。
@@ -125,13 +127,13 @@ def calculate_mass(
         raw = (radius_x * radius_y) / (base_radius_x * base_radius_y) * collision_mass_scale
     else:
         scale_ratio = scale / DEFAULT_BASE_SCALE if DEFAULT_BASE_SCALE > 0 else 1.0
-        raw = collision_mass_scale * (scale_ratio ** 2)
+        raw = collision_mass_scale * (scale_ratio**2)
     return max(0.5, min(2.5, float(raw)))
 
 
 def stable_hash_direction(id_a: str, id_b: str) -> tuple[float, float]:
     """当两中心完全重合时，根据两 ID 的稳定哈希生成固定的二维单位方向向量（禁用随机）。
-    
+
     使用排序后的组合计算哈希角度，确保无论输入参数顺序如何，分离方向都互为反向且确定。
     """
     ordered = sorted([str(id_a), str(id_b)])
@@ -155,15 +157,15 @@ def circles_from_rect(left: float, top: float, width: float, height: float) -> l
     radius = min(width, height) / 2.0
     cx, cy = left + width / 2.0, top + height / 2.0
     if width >= height:
-        return [[left + radius, cy, radius], [cx, cy, radius],
-                [left + width - radius, cy, radius]]
-    return [[cx, top + radius, radius], [cx, cy, radius],
-            [cx, top + height - radius, radius]]
+        return [[left + radius, cy, radius], [cx, cy, radius], [left + width - radius, cy, radius]]
+    return [[cx, top + radius, radius], [cx, cy, radius], [cx, top + height - radius, radius]]
 
 
 def check_collision_circles(
-    circles1: Sequence[Sequence[float]], circles2: Sequence[Sequence[float]],
-    id1: str = "", id2: str = "",
+    circles1: Sequence[Sequence[float]],
+    circles2: Sequence[Sequence[float]],
+    id1: str = "",
+    id2: str = "",
 ) -> tuple[bool, float, float, float, float, float]:
     """Check all circle pairs and return the deepest overlap."""
     best = None
@@ -195,8 +197,10 @@ def check_collision_circles(
 
 
 def swept_circle_chain_collision(
-    a_prev: Sequence[Sequence[float]], a_curr: Sequence[Sequence[float]],
-    b_prev: Sequence[Sequence[float]], b_curr: Sequence[Sequence[float]],
+    a_prev: Sequence[Sequence[float]],
+    a_curr: Sequence[Sequence[float]],
+    b_prev: Sequence[Sequence[float]],
+    b_curr: Sequence[Sequence[float]],
 ) -> tuple[bool, float, float, float, float, float]:
     """两圆链快照间的扫掠碰撞检测（首次接触时刻 TOI）。
 
@@ -219,8 +223,10 @@ def swept_circle_chain_collision(
 
 
 def swept_circle_chain_collision_at_t(
-    a_prev: Sequence[Sequence[float]], a_curr: Sequence[Sequence[float]],
-    b_prev: Sequence[Sequence[float]], b_curr: Sequence[Sequence[float]],
+    a_prev: Sequence[Sequence[float]],
+    a_curr: Sequence[Sequence[float]],
+    b_prev: Sequence[Sequence[float]],
+    b_curr: Sequence[Sequence[float]],
 ) -> tuple[bool, float, float, float, float, float, float]:
     """扫掠碰撞检测，同时返回首次接触的归一化时间 t。"""
     best = None  # (t, nx, ny, contact_x, contact_y)
@@ -283,20 +289,25 @@ def check_collision_members(a: MemberState, b: MemberState) -> tuple[bool, float
         if abs(b.x - a.x) >= a.radius_x + b.radius_x or abs(b.y - a.y) >= a.radius_y + b.radius_y:
             return False, 0.0, 0.0, 0.0, 0.0, 0.0
         return check_collision_circles(a.circles, b.circles, a.runtime_id, b.runtime_id)
-    return check_collision_ellipse(a.x, a.y, a.radius_x, a.radius_y,
-                                   b.x, b.y, b.radius_x, b.radius_y,
-                                   id1=a.runtime_id, id2=b.runtime_id)
+    return check_collision_ellipse(a.x, a.y, a.radius_x, a.radius_y, b.x, b.y, b.radius_x, b.radius_y, id1=a.runtime_id, id2=b.runtime_id)
 
 
 def check_collision_ellipse(
-    x1: float, y1: float, rx1: float, ry1: float,
-    x2: float, y2: float, rx2: float, ry2: float,
-    id1: str = "", id2: str = "",
+    x1: float,
+    y1: float,
+    rx1: float,
+    ry1: float,
+    x2: float,
+    y2: float,
+    rx2: float,
+    ry2: float,
+    id1: str = "",
+    id2: str = "",
 ) -> tuple[bool, float, float, float, float, float]:
     """两椭圆碰撞检测与法线/重叠量/接触点计算。
-    
+
     椭圆定义：中心 (x1, y1) 半轴 rx1, ry1；中心 (x2, y2) 半轴 rx2, ry2。
-    
+
     返回: (collided, nx, ny, overlap, contact_x, contact_y)
     - collided: 是否碰撞
     - nx, ny: 指向物体 2 的单位碰撞法线 (从 1 指向 2)
@@ -363,9 +374,9 @@ def solve_collision_impulse(
     impulse_cap: float = DEFAULT_IMPULSE_CAP,
 ) -> tuple[float, float, float, float, float]:
     """求解两体碰撞冲量 (带恢复系数、切向摩擦、库仑上限、每质量上限)。
-    
+
     nx, ny 为从 A 指向 B 的单位法线。
-    
+
     返回: (j_normal, dvx_a, dvy_a, dvx_b, dvy_b)
     """
     # 逆质量计算
@@ -394,10 +405,7 @@ def solve_collision_impulse(
         # 无限质量体（拖拽/锁定中的肥鱼）吸能 e=0：被握着的一方不动，
         # 撞来的也贴停不弹飞。但 FLAG_STATIC 静态布景（灵动岛果冻墙）
         # 用 STATIC_RESTITUTION 加速弹开——撞岛像撞弹床，吸停会显得岛"不存在"。
-        static_involved = (
-            (state_a.is_infinite_mass and state_a.flags & FLAG_STATIC)
-            or (state_b.is_infinite_mass and state_b.flags & FLAG_STATIC)
-        )
+        static_involved = (state_a.is_infinite_mass and state_a.flags & FLAG_STATIC) or (state_b.is_infinite_mass and state_b.flags & FLAG_STATIC)
         if static_involved:
             e = STATIC_RESTITUTION
         else:
@@ -455,14 +463,14 @@ def calculate_position_separation(
     force_full: bool = False,
 ) -> tuple[float, float, float, float, float]:
     """计算位置分离位移。
-    
+
     规则 (plan4 §4.2):
     - 逆质量分摊，固定方由动态方承担
     - 增加 0.5px slop 容差 (有效重叠 = max(0, overlap - slop))
     - 每次最多修正 60% 重叠 (overlap_ratio=0.6)
     - 最小 1px，最大 12px (min_sep=1.0, max_sep=12.0)
     - 连续 3 tick 强制完整分离时 (force_full=True): 修正 100% 重叠且单次最多 4 倍 max_sep；应用后重置该 pair 历史
-    
+
     返回: (sep_dist, dx_a, dy_a, dx_b, dy_b)
     """
     sum_inv_m = inv_m_a + inv_m_b
@@ -503,13 +511,13 @@ def solve_multi_body_collision(
     ignored_pairs: Optional[Set[str]] = None,
 ) -> tuple[List[ImpulseResult], Dict[str, tuple[float, float]], Dict[str, int]]:
     """三体及以上/同快照的多体碰撞求解。
-    
+
     步骤：
     1. 生成按 runtime_id 字典序排序的所有无序 pair；
     2. 检测碰撞并基于当前快照计算冲量；
     3. 位置分离采用最深重叠优先、最多 4 轮迭代；
     4. 对同一成员的冲量/位移做向量合并。
-    
+
     返回: (impulse_list, combined_impulses_by_id, updated_overlap_history)
     - combined_impulses_by_id: {runtime_id: (total_dvx, total_dvy, total_dx, total_dy)}
     - updated_overlap_history: 更新后的连续重叠计数器
@@ -542,8 +550,7 @@ def solve_multi_body_collision(
             if ignored_pairs and pair_key in ignored_pairs:
                 continue
             if not collided and swept_collisions:
-                collided, nx, ny, overlap, cx, cy = swept_collisions.get(
-                    pair_key, (False, 0.0, 0.0, 0.0, 0.0, 0.0))
+                collided, nx, ny, overlap, cx, cy = swept_collisions.get(pair_key, (False, 0.0, 0.0, 0.0, 0.0, 0.0))
                 was_swept = collided
             if collided and overlap >= 0.0:
                 consecutive = history.get(pair_key, 0) + 1
@@ -551,7 +558,10 @@ def solve_multi_body_collision(
 
                 # 速度冲量计算
                 jn, dvx_a, dvy_a, dvx_b, dvy_b = solve_collision_impulse(
-                    m1, m2, nx, ny,
+                    m1,
+                    m2,
+                    nx,
+                    ny,
                     restitution=restitution,
                     friction=friction,
                     impulse_cap=impulse_cap,
@@ -569,23 +579,25 @@ def solve_multi_body_collision(
                         dvx_a, dvy_a = -jn * nx * inv_a, -jn * ny * inv_a
                         dvx_b, dvy_b = jn * nx * inv_b, jn * ny * inv_b
 
-                pairs_data.append({
-                    "pair": pair_key,
-                    "m1": m1,
-                    "m2": m2,
-                    "nx": nx,
-                    "ny": ny,
-                    "overlap": overlap,
-                    "cx": cx,
-                    "cy": cy,
-                    "jn": jn,
-                    "dvx_a": dvx_a,
-                    "dvy_a": dvy_a,
-                    "dvx_b": dvx_b,
-                    "dvy_b": dvy_b,
-                    "consecutive": consecutive,
-                    "swept": was_swept,
-                })
+                pairs_data.append(
+                    {
+                        "pair": pair_key,
+                        "m1": m1,
+                        "m2": m2,
+                        "nx": nx,
+                        "ny": ny,
+                        "overlap": overlap,
+                        "cx": cx,
+                        "cy": cy,
+                        "jn": jn,
+                        "dvx_a": dvx_a,
+                        "dvy_a": dvy_a,
+                        "dvx_b": dvx_b,
+                        "dvy_b": dvy_b,
+                        "consecutive": consecutive,
+                        "swept": was_swept,
+                    }
+                )
 
     # 2. 迭代分离位置 (最深重叠优先，最多 max_separation_iterations 轮)
     # 维护临时的位置拷贝以进行迭代调整
@@ -603,8 +615,7 @@ def solve_multi_body_collision(
         m_a, m_b = p["m1"], p["m2"]
         inv_m_a = 0.0 if m_a.is_infinite_mass or m_a.mass <= 0 else 1.0 / m_a.mass
         inv_m_b = 0.0 if m_b.is_infinite_mass or m_b.mass <= 0 else 1.0 / m_b.mass
-        separation = calculate_position_separation(
-            p["overlap"], p["nx"], p["ny"], inv_m_a, inv_m_b)
+        separation = calculate_position_separation(p["overlap"], p["nx"], p["ny"], inv_m_a, inv_m_b)
         sep_dist, dxa, dya, dxb, dyb = separation
         pos_map[m_a.runtime_id][0] += dxa
         pos_map[m_a.runtime_id][1] += dya
@@ -627,13 +638,14 @@ def solve_multi_body_collision(
             p_x1, p_y1 = pos_map[id_a]
             p_x2, p_y2 = pos_map[id_b]
             m_a, m_b = p["m1"], p["m2"]
+
             def moved_member(member, x, y):
                 circles = member.circles
                 if circles is not None:
                     ox, oy = x - member.x, y - member.y
-                    circles = [[float(cx) + ox, float(cy) + oy, float(r)]
-                               for cx, cy, r in circles]
+                    circles = [[float(cx) + ox, float(cy) + oy, float(r)] for cx, cy, r in circles]
                 return MemberState(**{**member.__dict__, "x": x, "y": y, "circles": circles})
+
             a_at_pos = moved_member(m_a, p_x1, p_y1)
             b_at_pos = moved_member(m_b, p_x2, p_y2)
             c, cur_nx, cur_ny, cur_ov, _, _ = check_collision_members(a_at_pos, b_at_pos)
@@ -652,9 +664,13 @@ def solve_multi_body_collision(
             inv_m_a = 0.0 if m_a.is_infinite_mass or m_a.mass <= 0 else 1.0 / m_a.mass
             inv_m_b = 0.0 if m_b.is_infinite_mass or m_b.mass <= 0 else 1.0 / m_b.mass
 
-            force_full = (consecutive >= 3)
+            force_full = consecutive >= 3
             sep_dist, dxa, dya, dxb, dyb = calculate_position_separation(
-                cur_ov, cur_nx, cur_ny, inv_m_a, inv_m_b,
+                cur_ov,
+                cur_nx,
+                cur_ny,
+                inv_m_a,
+                inv_m_b,
                 force_full=force_full,
             )
             if force_full:
@@ -675,8 +691,7 @@ def solve_multi_body_collision(
     # 3. 构造输出 ImpulseResult 与成员累积冲量/位移
     impulse_list: List[ImpulseResult] = []
     combined_impulses_by_id: Dict[str, tuple[float, float, float, float]] = {
-        m.runtime_id: (0.0, 0.0, total_pos_deltas[m.runtime_id][0], total_pos_deltas[m.runtime_id][1])
-        for m in sorted_members
+        m.runtime_id: (0.0, 0.0, total_pos_deltas[m.runtime_id][0], total_pos_deltas[m.runtime_id][1]) for m in sorted_members
     }
 
     # 累加速度增量

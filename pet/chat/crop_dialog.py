@@ -18,8 +18,7 @@ VIEW_ASPECT = 430.0 / 780.0
 MIN_COVER = 0.12  # 选区最小覆盖画面宽度比例
 
 
-def clamp_box(x: float, y: float, w: float, art_ratio: float,
-              aspect: float = VIEW_ASPECT) -> tuple[float, float, float, float]:
+def clamp_box(x: float, y: float, w: float, art_ratio: float, aspect: float = VIEW_ASPECT) -> tuple[float, float, float, float]:
     """把选区夹回画面内并按 aspect 保纵横比。art_ratio = 图宽/图高。返回 (x, y, w, h)。"""
     aspect = aspect if aspect > 0 else VIEW_ASPECT  # 非法比例（0/负）回退缺省，避免除零或负尺寸
     # 选区像素纵横比 = aspect：(w*aw)/(h*ah) = aspect → h = w*art_ratio/aspect
@@ -36,8 +35,7 @@ def clamp_box(x: float, y: float, w: float, art_ratio: float,
 class CropCanvas(QWidget):
     """画布： contain 展示原图，选区外压暗，拖拽移动选区，滚轮缩放。"""
 
-    def __init__(self, pixmap: QPixmap, box: tuple[float, float, float, float], parent=None,
-                 view_aspect: float = VIEW_ASPECT):
+    def __init__(self, pixmap: QPixmap, box: tuple[float, float, float, float], parent=None, view_aspect: float = VIEW_ASPECT):
         super().__init__(parent)
         self._pix = pixmap
         self._box = box
@@ -61,8 +59,7 @@ class CropCanvas(QWidget):
     def _box_rect(self) -> QRectF:
         d = self._disp_rect()
         x, y, w, h = self._box
-        return QRectF(d.x() + x * d.width(), d.y() + y * d.height(),
-                      w * d.width(), h * d.height())
+        return QRectF(d.x() + x * d.width(), d.y() + y * d.height(), w * d.width(), h * d.height())
 
     def _emit(self) -> None:
         self.update()
@@ -81,8 +78,7 @@ class CropCanvas(QWidget):
         dx = (event.position().x() - self._drag_start.x()) / d.width()
         dy = (event.position().y() - self._drag_start.y()) / d.height()
         x0, y0, w, h = self._box_start
-        self._box = clamp_box(x0 + dx, y0 + dy, w, self._pix.width() / self._pix.height(),
-                              self._view_aspect)
+        self._box = clamp_box(x0 + dx, y0 + dy, w, self._pix.width() / self._pix.height(), self._view_aspect)
         self._emit()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
@@ -94,8 +90,7 @@ class CropCanvas(QWidget):
         x, y, w, h = self._box
         cx, cy = x + w / 2, y + h / 2
         nw = w * factor
-        nx, ny, nw, nh = clamp_box(cx - nw / 2, 0.0, nw, self._pix.width() / self._pix.height(),
-                                   self._view_aspect)
+        nx, ny, nw, nh = clamp_box(cx - nw / 2, 0.0, nw, self._pix.width() / self._pix.height(), self._view_aspect)
         # 以当前选区中心为目标中心重算，贴边时夹回（非严格定点）
         nx = min(max(cx - nw / 2, 0.0), 1.0 - nw)
         ny = min(max(cy - nh / 2, 0.0), 1.0 - nh)
@@ -122,10 +117,8 @@ class CropCanvas(QWidget):
         p.drawRect(box)
         p.setPen(QPen(QColor(255, 255, 255, 90), 1))
         for t in (1 / 3, 2 / 3):
-            p.drawLine(QPointF(box.x() + box.width() * t, box.y()),
-                       QPointF(box.x() + box.width() * t, box.y() + box.height()))
-            p.drawLine(QPointF(box.x(), box.y() + box.height() * t),
-                       QPointF(box.x() + box.width(), box.y() + box.height() * t))
+            p.drawLine(QPointF(box.x() + box.width() * t, box.y()), QPointF(box.x() + box.width() * t, box.y() + box.height()))
+            p.drawLine(QPointF(box.x(), box.y() + box.height() * t), QPointF(box.x() + box.width(), box.y() + box.height() * t))
         p.end()
 
 
@@ -140,10 +133,9 @@ class CropDialog(QDialog):
     选区形状与拖拽/缩放时的保比；缺省为经典窗比例。
     """
 
-    def __init__(self, pixmap: QPixmap, initial_box, parent=None, style_name: str = '',
-                 view_aspect: float = VIEW_ASPECT):
+    def __init__(self, pixmap: QPixmap, initial_box, parent=None, style_name: str = "", view_aspect: float = VIEW_ASPECT):
         super().__init__(parent)
-        self.setWindowTitle(f'裁切聊天背景（{style_name}）' if style_name else '裁切聊天背景')
+        self.setWindowTitle(f"裁切聊天背景（{style_name}）" if style_name else "裁切聊天背景")
         if initial_box is None:
             ar = pixmap.width() / pixmap.height()
             # 默认选区：宽度先取 0.9 上限，再交给 clamp_box 按 view_aspect 收边；
@@ -159,12 +151,12 @@ class CropDialog(QDialog):
             initial_box = clamp_box(initial_box[0], initial_box[1], initial_box[2], ar, view_aspect)
         self.canvas = CropCanvas(pixmap, initial_box, self, view_aspect)
 
-        hint = QLabel('拖拽移动选区，滚轮缩放；保存后重新打开聊天窗生效')
-        hint.setStyleSheet('color:#8a8175; font-size:11px;')
+        hint = QLabel("拖拽移动选区，滚轮缩放；保存后重新打开聊天窗生效")
+        hint.setStyleSheet("color:#8a8175; font-size:11px;")
         hint.setWordWrap(True)
-        reset = QPushButton('重置为主题默认')
-        cancel = QPushButton('取消')
-        save = QPushButton('保存选区')
+        reset = QPushButton("重置为主题默认")
+        cancel = QPushButton("取消")
+        save = QPushButton("保存选区")
         save.setDefault(True)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.accept)

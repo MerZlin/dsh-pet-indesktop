@@ -27,11 +27,7 @@ from .config import APP_DIR_NAME
 
 # macOS LaunchAgent 按变体隔离（plist 文件名/Label），避免多版本互覆盖
 _APP_BASE_ID = "com.merzlin.dsh-pet-standalone"
-PLIST_LABEL = (
-    _APP_BASE_ID
-    if APP_DIR_NAME == "dsh-pet-standalone"
-    else f"{_APP_BASE_ID}.{APP_DIR_NAME}"
-)
+PLIST_LABEL = _APP_BASE_ID if APP_DIR_NAME == "dsh-pet-standalone" else f"{_APP_BASE_ID}.{APP_DIR_NAME}"
 # Windows 自启注册表值名按变体隔离（如 dsh-pet-standalone-webm-chat）。
 # 每个变体只管理自己的值，避免“关无 Chat 版把 Chat 版也关了”。
 VALUE_NAME = APP_DIR_NAME
@@ -150,9 +146,7 @@ def cleanup_stale_entries() -> int:
         for name, command in _iter_known_win_values():
             if _win_command_target_exists(command):
                 continue
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE
-            ) as key:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
                 try:
                     winreg.DeleteValue(key, name)
                     removed += 1
@@ -171,18 +165,10 @@ def is_enabled() -> bool:
                 command, _ = winreg.QueryValueEx(key, VALUE_NAME)
                 # 兼容旧版：已开启但仍是旧命令（直接指向 exe，未切工作目录）时，
                 # 自动升级为新命令，避免开机自启因 CWD 不可写而解压失败。
-                if (
-                    getattr(sys, "frozen", False)
-                    and isinstance(command, str)
-                    and not _win_command_is_current(command)
-                ):
+                if getattr(sys, "frozen", False) and isinstance(command, str) and not _win_command_is_current(command):
                     try:
-                        with winreg.OpenKey(
-                            winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE
-                        ) as write_key:
-                            winreg.SetValueEx(
-                                write_key, VALUE_NAME, 0, winreg.REG_SZ, _win_command()
-                            )
+                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as write_key:
+                            winreg.SetValueEx(write_key, VALUE_NAME, 0, winreg.REG_SZ, _win_command())
                     except OSError:
                         # 只读场景（如权限异常）不强求升级，仍视为已启用
                         pass

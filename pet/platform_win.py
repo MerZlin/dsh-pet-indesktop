@@ -24,9 +24,9 @@ if TYPE_CHECKING:
 
 
 # ---- Win32：全屏判定用常量/结构 ----
-GWL_STYLE = -16             # GetWindowLongW：取窗口样式
-GWL_EXSTYLE = -20           # GetWindowLongW：取扩展样式
-_WS_CAPTION = 0x00C00000    # WS_BORDER | WS_DLGFRAME（带标题栏）
+GWL_STYLE = -16  # GetWindowLongW：取窗口样式
+GWL_EXSTYLE = -20  # GetWindowLongW：取扩展样式
+_WS_CAPTION = 0x00C00000  # WS_BORDER | WS_DLGFRAME（带标题栏）
 _WS_EX_TOPMOST = 0x00000008  # 置顶：真全屏游戏/视频几乎必带，普通最大化窗口不带
 _WS_EX_TRANSPARENT = 0x00000020
 # 不接收激活：鼠标点击不夺前台（issue #98）。工具窗口（Tool）不带该位时，
@@ -36,14 +36,13 @@ _WS_EX_NOACTIVATE = 0x08000000
 
 
 class _WinRect(ctypes.Structure):
-    _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
-                ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
 
 class _WinMonitorInfo(ctypes.Structure):
     """GetMonitorInfoW 的 MONITORINFO（只读 rcMonitor：显示器完整几何，物理像素）。"""
-    _fields_ = [('cbSize', ctypes.c_ulong), ('rcMonitor', _WinRect),
-                ('rcWork', _WinRect), ('dwFlags', ctypes.c_ulong)]
+
+    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _WinRect), ("rcWork", _WinRect), ("dwFlags", ctypes.c_ulong)]
 
 
 def _set_windows_click_through(hwnd: int, enabled: bool, user32=None) -> bool:
@@ -98,7 +97,7 @@ class WindowsPerPixelInputController:
         win = self._window
         if win.mouse_through:
             return True
-        if getattr(win, '_press_global', None) is not None or not win.isVisible():
+        if getattr(win, "_press_global", None) is not None or not win.isVisible():
             return False
         local = win.mapFromGlobal(global_pos)
         if not QRect(0, 0, win.width(), win.height()).contains(local):
@@ -138,17 +137,19 @@ class WindowsPerPixelInputController:
 
 
 _FS_SKIP_CLASSES = {
-    'Progman', 'WorkerW', 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd',
-    'Windows.UI.Core.CoreWindow',  # 开始菜单/通知中心全屏层
+    "Progman",
+    "WorkerW",
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "Windows.UI.Core.CoreWindow",  # 开始菜单/通知中心全屏层
 }
 
 # 已知覆盖层工具进程（截图/取色工具的全屏监听层不是"全屏应用"）：
 # 实测 PixPin（pixpin.exe）打字时热键监听闪现全屏覆盖层曾致桌宠误隐藏频闪
-_FS_SKIP_PROCS = {'pixpin.exe', 'snipaste.exe'}
+_FS_SKIP_PROCS = {"pixpin.exe", "snipaste.exe"}
 
 
-def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float,
-                             geom, has_caption: bool, topmost: bool = False) -> bool:
+def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float, geom, has_caption: bool, topmost: bool = False) -> bool:
     """覆盖整屏几何，且（无标题栏 或 置顶）= 真全屏。
 
     判据组合的原因：
@@ -176,7 +177,7 @@ def _fs_user_busy_state() -> tuple[bool, int]:
     而这个 API 是 Windows 自己（Focus Assist/通知静默）判定"用户正在
     全屏"的依据，游戏和全屏视频都会触发。返回 (是否全屏忙, 原始状态值)。
     """
-    if os.name != 'nt':
+    if os.name != "nt":
         return False, -1
     try:
         state = ctypes.c_int(0)
@@ -200,7 +201,7 @@ def _fg_fullscreen_probe() -> tuple[bool, str]:
     4. 几何判定：窗口覆盖所在显示器完整几何（含任务栏），且无标题栏或置顶；
     5. 兜底判定：Windows SHQueryUserNotificationState 报告全屏忙状态。
     """
-    if os.name != 'nt':
+    if os.name != "nt":
         return False, "非 Windows"
     u32 = ctypes.windll.user32
     # 句柄是 64 位指针：显式声明签名，避免 ctypes 默认 int32 截断
@@ -211,11 +212,11 @@ def _fg_fullscreen_probe() -> tuple[bool, str]:
     info = vision_mod.foreground_window_info()
     if not info:
         return False, "无可判定前台窗口(不可见/最小化/cloaked)"
-    hwnd = info['hwnd']
+    hwnd = info["hwnd"]
     # 排除本进程与其他变体/多开的桌宠进程（置顶小窗，几何不会误判，
     # 但 SHQueryUserNotificationState 兜底需要进程名兜底排除）
-    proc = info.get('process', '')
-    if info.get('pid') == os.getpid() or proc.lower().startswith('dsh-pet-'):
+    proc = info.get("process", "")
+    if info.get("pid") == os.getpid() or proc.lower().startswith("dsh-pet-"):
         return False, f"前台是桌宠自身 {proc}"
     # 已知覆盖层工具进程永不视为全屏（实测：PixPin 截屏覆盖层全屏无边框置顶，
     # 用户打字时其热键监听闪现覆盖层 → 误命中全屏 → 桌宠频闪）。
@@ -237,7 +238,7 @@ def _fg_fullscreen_probe() -> tuple[bool, str]:
     # 频闪（用户打字时 PixPin 覆盖层闪现 → 几何覆盖误判全屏）。
     if exstyle & 0x00000080:  # WS_EX_TOOLWINDOW
         return False, f"工具窗口 cls={cls} proc={info.get('process', '')}"
-    x, y, w, h = info['rect']
+    x, y, w, h = info["rect"]
     # 窗口所在显示器的完整几何（与 GetWindowRect/DWM 边界同为
     # 本进程 DPI awareness 下的坐标，天然一致）
     mon = u32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
@@ -245,18 +246,18 @@ def _fg_fullscreen_probe() -> tuple[bool, str]:
     mi.cbSize = ctypes.sizeof(_WinMonitorInfo)
     if not u32.GetMonitorInfoW(mon, ctypes.byref(mi)):
         return False, f"GetMonitorInfoW 失败 cls={cls}"
-    if _fullscreen_geometry_hit(
-            x, y, x + w, y + h, mi.rcMonitor, has_caption, topmost):
+    if _fullscreen_geometry_hit(x, y, x + w, y + h, mi.rcMonitor, has_caption, topmost):
         return True, f"几何覆盖 cls={cls} proc={info.get('process', '')}"
     busy, bstate = _fs_user_busy_state()
     if busy:
-        return True, (f"SHQueryUserNotificationState={bstate} "
-                      f"cls={cls} proc={info.get('process', '')}")
-    detail = (f"未命中 cls={cls} proc={info.get('process', '')} "
-              f"caption={has_caption} topmost={topmost} "
-              f"rect=({x},{y},{x + w},{y + h}) "
-              f"monitor=({mi.rcMonitor.left},{mi.rcMonitor.top},"
-              f"{mi.rcMonitor.right},{mi.rcMonitor.bottom}) busy={bstate}")
+        return True, (f"SHQueryUserNotificationState={bstate} cls={cls} proc={info.get('process', '')}")
+    detail = (
+        f"未命中 cls={cls} proc={info.get('process', '')} "
+        f"caption={has_caption} topmost={topmost} "
+        f"rect=({x},{y},{x + w},{y + h}) "
+        f"monitor=({mi.rcMonitor.left},{mi.rcMonitor.top},"
+        f"{mi.rcMonitor.right},{mi.rcMonitor.bottom}) busy={bstate}"
+    )
     return False, detail
 
 

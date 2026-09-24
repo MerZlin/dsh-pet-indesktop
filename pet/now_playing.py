@@ -203,9 +203,7 @@ async def _read_async(tracked_app_id: str | None = None) -> Playback | None:
     )
 
 
-def _extrapolate(
-    position: float, timeline, *, is_playing: bool, end: float
-) -> float:
+def _extrapolate(position: float, timeline, *, is_playing: bool, end: float) -> float:
     """把采样时刻的 position 外推到"现在"，消除轮询粒度造成的滞后。
 
     SMTC 的 ``position`` 不是连续快照，而是某个瞬间的采样值，
@@ -244,9 +242,7 @@ def _utc_now():
 
 
 async def _pick_playback_session(tracked_app_id: str | None = None):
-    """取当前应操作的 SMTC 会话（优先正在播放的那个）。
-
-    """
+    """取当前应操作的 SMTC 会话（优先正在播放的那个）。"""
     manager_cls = _import_winrt()
     if manager_cls is None:
         return None
@@ -263,9 +259,7 @@ async def _skip_async(to_previous: bool) -> bool:
     flag = "is_previous_enabled" if to_previous else "is_next_enabled"
     if not bool(getattr(controls, flag, False)):
         return False
-    method = (
-        session.try_skip_previous_async if to_previous else session.try_skip_next_async
-    )
+    method = session.try_skip_previous_async if to_previous else session.try_skip_next_async
     return bool(await method())
 
 

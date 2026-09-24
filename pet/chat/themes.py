@@ -15,90 +15,90 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 
 THEMES: dict[str, dict] = {
-    'whale': {
-        'name': '蓝色幻想 · 鲸鱼娘',
-        'file': 'whale.jpg',
-        'accent': '#4a5fa8',
-        'focus': (0.56, 0.04, 0.38, 0.94),  # 主体框（归一化）
-        'anchor': 'right',      # Q版鲸鱼娘在画面右侧
-        'dark': False,
-        'scrim': (253, 246, 236, 128),
+    "whale": {
+        "name": "蓝色幻想 · 鲸鱼娘",
+        "file": "whale.jpg",
+        "accent": "#4a5fa8",
+        "focus": (0.56, 0.04, 0.38, 0.94),  # 主体框（归一化）
+        "anchor": "right",  # Q版鲸鱼娘在画面右侧
+        "dark": False,
+        "scrim": (253, 246, 236, 128),
     },
-    'whale-v2': {
-        'name': '星海鲸裙',
-        'file': 'whale-v2.jpg',
-        'accent': '#5a7fc8',
-        'focus': (0.04, 0.05, 0.42, 0.9),  # 主体框（归一化）
-        'anchor': 'left',       # 少女在画面左侧
-        'dark': False,
-        'scrim': (240, 244, 252, 118),
+    "whale-v2": {
+        "name": "星海鲸裙",
+        "file": "whale-v2.jpg",
+        "accent": "#5a7fc8",
+        "focus": (0.04, 0.05, 0.42, 0.9),  # 主体框（归一化）
+        "anchor": "left",  # 少女在画面左侧
+        "dark": False,
+        "scrim": (240, 244, 252, 118),
     },
-    'whale-mom': {
-        'name': '鲸鱼妈妈',
-        'file': 'whale-mom.jpg',
-        'accent': '#d9a53c',
-        'focus': (0.25, 0.05, 0.5, 0.95),  # 主体框（归一化）：取景偏左，保住对白气泡
-        'anchor': 'center',     # 人物居中偏右，左侧对白气泡入镜也无妨
-        'dark': False,
-        'scrim': (247, 244, 252, 128),
+    "whale-mom": {
+        "name": "鲸鱼妈妈",
+        "file": "whale-mom.jpg",
+        "accent": "#d9a53c",
+        "focus": (0.25, 0.05, 0.5, 0.95),  # 主体框（归一化）：取景偏左，保住对白气泡
+        "anchor": "center",  # 人物居中偏右，左侧对白气泡入镜也无妨
+        "dark": False,
+        "scrim": (247, 244, 252, 128),
     },
-    'whale-song': {
-        'name': '鲸吟',
-        'file': 'whale-song.jpg',
-        'accent': '#4d8fd4',
-        'focus': (0.02, 0.05, 0.45, 0.9),  # 主体框（归一化）
-        'anchor': 'left',       # 少女与鲸群在画面左半
-        'dark': False,
-        'scrim': (244, 248, 253, 118),
+    "whale-song": {
+        "name": "鲸吟",
+        "file": "whale-song.jpg",
+        "accent": "#4d8fd4",
+        "focus": (0.02, 0.05, 0.45, 0.9),  # 主体框（归一化）
+        "anchor": "left",  # 少女与鲸群在画面左半
+        "dark": False,
+        "scrim": (244, 248, 253, 118),
     },
-    'furina': {
-        'name': '芙宁娜',
-        'file': 'furina.jpg',
-        'accent': '#4a5fb5',
-        'focus': (0.55, 0.1, 0.42, 0.85),  # 主体框（归一化）
-        'anchor': 'right',      # 芙宁娜在画面右侧
-        'dark': False,
-        'scrim': (240, 246, 252, 128),
+    "furina": {
+        "name": "芙宁娜",
+        "file": "furina.jpg",
+        "accent": "#4a5fb5",
+        "focus": (0.55, 0.1, 0.42, 0.85),  # 主体框（归一化）
+        "anchor": "right",  # 芙宁娜在画面右侧
+        "dark": False,
+        "scrim": (240, 246, 252, 128),
     },
-    'harbor': {
-        'name': '夕港',
-        'file': 'harbor.jpg',
-        'accent': '#ff9d5c',
-        'focus': (0.45, 0.05, 0.55, 0.95),  # 主体框（归一化）
-        'anchor': 'right',      # 女仆在画面右侧
-        'dark': False,
-        'scrim': (253, 244, 236, 138),  # 暮色图偏暗，纱罩略厚
+    "harbor": {
+        "name": "夕港",
+        "file": "harbor.jpg",
+        "accent": "#ff9d5c",
+        "focus": (0.45, 0.05, 0.55, 0.95),  # 主体框（归一化）
+        "anchor": "right",  # 女仆在画面右侧
+        "dark": False,
+        "scrim": (253, 244, 236, 138),  # 暮色图偏暗，纱罩略厚
     },
-    'cyber-night': {
-        'name': '赛博夜城',
-        'file': 'cyber-night.jpg',
-        'accent': '#00e5ff',
-        'focus': (0.25, 0.15, 0.5, 0.7),  # 主体框（归一化）
-        'anchor': 'center',
-        'dark': True,           # 深墨半透明面板 + 霓虹青
-        'scrim': (10, 14, 28, 110),
+    "cyber-night": {
+        "name": "赛博夜城",
+        "file": "cyber-night.jpg",
+        "accent": "#00e5ff",
+        "focus": (0.25, 0.15, 0.5, 0.7),  # 主体框（归一化）
+        "anchor": "center",
+        "dark": True,  # 深墨半透明面板 + 霓虹青
+        "scrim": (10, 14, 28, 110),
     },
-    'miku': {
-        'name': '电子歌姬',
-        'file': 'miku.jpg',
-        'accent': '#2e9bff',
-        'focus': (0.25, 0.05, 0.5, 0.9),  # 主体框（归一化）
-        'anchor': 'center',     # 人物居中
-        'dark': False,
-        'scrim': (238, 250, 248, 128),
+    "miku": {
+        "name": "电子歌姬",
+        "file": "miku.jpg",
+        "accent": "#2e9bff",
+        "focus": (0.25, 0.05, 0.5, 0.9),  # 主体框（归一化）
+        "anchor": "center",  # 人物居中
+        "dark": False,
+        "scrim": (238, 250, 248, 128),
     },
-    'summer': {
-        'name': '夏沫琉璃',
-        'file': 'summer.jpg',
-        'accent': '#2fa5b8',
-        'focus': (0.2, 0.2, 0.6, 0.6),  # 主体框（归一化）
-        'anchor': 'center',
-        'dark': False,
-        'scrim': (244, 250, 250, 122),
+    "summer": {
+        "name": "夏沫琉璃",
+        "file": "summer.jpg",
+        "accent": "#2fa5b8",
+        "focus": (0.2, 0.2, 0.6, 0.6),  # 主体框（归一化）
+        "anchor": "center",
+        "dark": False,
+        "scrim": (244, 250, 250, 122),
     },
 }
 
-ANCHOR_RATIO = {'left': 0.0, 'center': 0.5, 'right': 1.0}
+ANCHOR_RATIO = {"left": 0.0, "center": 0.5, "right": 1.0}
 
 # 明/暗两套面板叠加层模板；{accent} 由主题 accent 替换
 _OVERLAY_LIGHT = """
@@ -146,36 +146,36 @@ def get_theme(key: str) -> dict | None:
 
 def theme_names() -> list[tuple[str, str]]:
     """(key, 显示名) 列表，供设置界面填充下拉框。"""
-    return [(key, t['name']) for key, t in THEMES.items()]
+    return [(key, t["name"]) for key, t in THEMES.items()]
 
 
 # 对话窗口风格标识 → 展示名，设置界面的唯一来源：主设置窗的风格下拉项、裁切行
 # 标签/编辑器标题、老聊天设置对话框的裁切入口都从这里派生，避免多处字面量走样。
 # 顺序即下拉框顺序（modern 在前，classic 在后）。
-CHAT_UI_STYLE_LABELS: dict[str, str] = {'modern': '肥鱼版 DeepSeek', 'classic': '肥鱼牌小手机'}
+CHAT_UI_STYLE_LABELS: dict[str, str] = {"modern": "肥鱼版 DeepSeek", "classic": "肥鱼牌小手机"}
 
 # 对话窗口风格 → 裁切选区纵横比（宽/高），按各风格窗口默认尺寸取值（窗口可缩放，
 # 渲染端 cover 兜底）：
 # modern 现代窗默认 960x700（pet/chat/widgets.py:792），
 # classic 经典窗默认 430x780（pet/chat/legacy_widgets.py:262）。
 # 裁切编辑器据此选默认选区，保证选区形状与窗口里看到的取景一致。
-CHAT_UI_VIEW_ASPECT: dict[str, float] = {'modern': 960.0 / 700.0, 'classic': 430.0 / 780.0}
+CHAT_UI_VIEW_ASPECT: dict[str, float] = {"modern": 960.0 / 700.0, "classic": 430.0 / 780.0}
 
 
 def resolve_background_pixmap(config_value: str) -> QPixmap | None:
     """Resolve a built-in classic theme or an absolute custom image path."""
-    value = str(config_value or '').strip()
+    value = str(config_value or "").strip()
     if not value:
         return None
-    if value.startswith('builtin:'):
+    if value.startswith("builtin:"):
         theme = get_theme(value[8:])
         if theme is None:
             return None
         candidates = []
-        meipass = getattr(sys, '_MEIPASS', None)
+        meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
-            candidates.append(Path(meipass) / 'assets' / 'chat' / theme['file'])
-        candidates.append(Path(__file__).resolve().parents[2] / 'assets' / 'chat' / theme['file'])
+            candidates.append(Path(meipass) / "assets" / "chat" / theme["file"])
+        candidates.append(Path(__file__).resolve().parents[2] / "assets" / "chat" / theme["file"])
         path = next((candidate for candidate in candidates if candidate.is_file()), None)
     else:
         path = Path(value).expanduser()
@@ -186,21 +186,19 @@ def resolve_background_pixmap(config_value: str) -> QPixmap | None:
 
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
-    h = h.lstrip('#')
+    h = h.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
 def _mix_white(rgb: tuple[int, int, int], t: float) -> str:
-    return '#%02x%02x%02x' % tuple(round(c + (255 - c) * t) for c in rgb)
+    return "#%02x%02x%02x" % tuple(round(c + (255 - c) * t) for c in rgb)
 
 
 def build_overlay_qss(theme: dict) -> str:
-    '''按主题的明/暗模式生成面板叠加层 QSS；标题栏渐变由主题 accent 派生。'''
-    tpl = _OVERLAY_DARK if theme.get('dark') else _OVERLAY_LIGHT
-    base = _hex_to_rgb(theme['accent'])
-    return (tpl.replace('{accent}', theme['accent'])
-               .replace('{title0}', _mix_white(base, 0.18))
-               .replace('{title1}', _mix_white(base, 0.48)))
+    """按主题的明/暗模式生成面板叠加层 QSS；标题栏渐变由主题 accent 派生。"""
+    tpl = _OVERLAY_DARK if theme.get("dark") else _OVERLAY_LIGHT
+    base = _hex_to_rgb(theme["accent"])
+    return tpl.replace("{accent}", theme["accent"]).replace("{title0}", _mix_white(base, 0.18)).replace("{title1}", _mix_white(base, 0.48))
 
 
 def build_modern_custom_overlay_qss(accent: str, card_opacity: int = 84) -> str:
@@ -232,7 +230,10 @@ QFrame#chat-composer {{ background: rgba(255, 255, 255, 232); border-color: {acc
 
 
 def scale_background_pixmap(
-    pixmap: QPixmap, width: int, height: int, fill_mode: str = "cover",
+    pixmap: QPixmap,
+    width: int,
+    height: int,
+    fill_mode: str = "cover",
 ) -> QPixmap:
     """Scale a wallpaper using browser-like cover/contain/stretch semantics."""
     aspect_mode = {
@@ -240,13 +241,15 @@ def scale_background_pixmap(
         "stretch": Qt.AspectRatioMode.IgnoreAspectRatio,
     }.get(fill_mode, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
     return pixmap.scaled(
-        max(1, int(width)), max(1, int(height)), aspect_mode,
+        max(1, int(width)),
+        max(1, int(height)),
+        aspect_mode,
         Qt.TransformationMode.SmoothTransformation,
     )
 
 
 def scrim_rgba(theme: dict) -> tuple[int, int, int, int]:
-    return theme.get('scrim', (253, 246, 236, 128))
+    return theme.get("scrim", (253, 246, 236, 128))
 
 
 # 无主题（自定义图片背景）时的兜底取景框：画面中央竖条。
@@ -266,13 +269,18 @@ def background_focus_rect(theme: dict | None, crops, bg_value: str) -> tuple[flo
             return tuple(float(v) for v in custom)
         except (TypeError, ValueError):
             pass  # 手改坏的配置：回退主题默认取景
-    return tuple((theme or {}).get('focus', DEFAULT_FOCUS))
+    return tuple((theme or {}).get("focus", DEFAULT_FOCUS))
 
 
 def background_draw_offset(
-    target_x: float, target_y: float, target_w: float, target_h: float,
-    scaled_w: float, scaled_h: float,
-    focus: tuple[float, float, float, float], fill_mode: str = "cover",
+    target_x: float,
+    target_y: float,
+    target_w: float,
+    target_h: float,
+    scaled_w: float,
+    scaled_h: float,
+    focus: tuple[float, float, float, float],
+    fill_mode: str = "cover",
 ) -> tuple[int, int]:
     """计算背景缩放图的绘制偏移，让取景框完整可见。
 

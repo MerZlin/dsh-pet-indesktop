@@ -51,9 +51,9 @@ _DEFAULT_ACCENT = "#3994ff"
 
 # 附件上限（与发送逻辑共用，超限时明确提示而非静默跳过）
 MAX_ATTACHMENTS = 10
-MAX_IMAGE_BYTES = 10 * 1024 * 1024          # 单张图片 10MB 上限
-MAX_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024     # 图片总大小 20MB 上限
-MAX_TEXT_TOTAL_CHARS = 200_000               # 文本总长 20 万字符上限
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 单张图片 10MB 上限
+MAX_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024  # 图片总大小 20MB 上限
+MAX_TEXT_TOTAL_CHARS = 200_000  # 文本总长 20 万字符上限
 _TEXT_EXTENSIONS = {".txt", ".md", ".json", ".csv", ".py", ".log", ".yaml", ".yml", ".xml"}
 
 
@@ -196,9 +196,7 @@ class SessionListRow(QFrame):
         self.selector.setFixedSize(22, 22)
         self.selector.setText("✓")
         self.selector.setAccessibleName("选择会话")
-        self.selector.toggled.connect(
-            lambda checked: self.selection_requested.emit(self.session_id, checked)
-        )
+        self.selector.toggled.connect(lambda checked: self.selection_requested.emit(self.session_id, checked))
         self.selector.hide()
         layout.addWidget(self.selector)
         self.title = QLabel(_short_title(session), self)
@@ -245,9 +243,7 @@ class SessionListRow(QFrame):
             ("delete", "删除", "clear"),
         ):
             action = menu.addAction(vector_widget_icon(menu, icon, 16), text)
-            action.triggered.connect(
-                lambda _checked=False, key=key: self.action_requested.emit(self.session_id, key)
-            )
+            action.triggered.connect(lambda _checked=False, key=key: self.action_requested.emit(self.session_id, key))
         menu.popup(self.more.mapToGlobal(self.more.rect().bottomRight()))
 
 
@@ -283,9 +279,7 @@ class DeleteConversationDialog(QDialog):
         actions.addStretch(1)
         cancel = QPushButton("取消", self.card)
         cancel.setObjectName("cancel-delete-button")
-        confirm = QPushButton(
-            "删除该对话" if count == 1 else f"删除 {count} 个对话", self.card
-        )
+        confirm = QPushButton("删除该对话" if count == 1 else f"删除 {count} 个对话", self.card)
         confirm.setObjectName("confirm-delete-button")
         confirm.setDefault(True)
         cancel.clicked.connect(self.reject)
@@ -420,9 +414,7 @@ class MessageBubble(QFrame):
         tools.setContentsMargins(0, 0, 0, 0)
         tools.setSpacing(2)
         self.copy_button = _chat_tool_button(self.tools, "message-copy-button", "copy", "复制")
-        self.copy_button.clicked.connect(
-            lambda: QApplication.clipboard().setText(self.body.text())
-        )
+        self.copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.body.text()))
         tools.addWidget(self.copy_button)
         if role == "user":
             tools.insertStretch(0, 1)
@@ -1010,9 +1002,7 @@ class ChatWindow(QDialog):
         session_heading.setContentsMargins(0, 0, 0, 0)
         session_heading.setSpacing(4)
         session_heading.addWidget(self.session_caption, 1)
-        self.multi_select_button = _chat_tool_button(
-            context, "session-multi-select-button", "multi_select", "批量管理会话"
-        )
+        self.multi_select_button = _chat_tool_button(context, "session-multi-select-button", "multi_select", "批量管理会话")
         session_heading.addWidget(self.multi_select_button)
         context_layout.addLayout(session_heading)
         self.session_list = QListWidget(context)
@@ -1145,9 +1135,7 @@ class ChatWindow(QDialog):
         title_layout.addWidget(self.close_button)
         chat_main_layout.addWidget(self.title_bar)
 
-        self.content_top_spacer = QSpacerItem(
-            0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-        )
+        self.content_top_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         chat_main_layout.addSpacerItem(self.content_top_spacer)
 
         self.scroll = QScrollArea()
@@ -1174,13 +1162,9 @@ class ChatWindow(QDialog):
         self.timeline_host.setObjectName("message-timeline")
         self.message_host_layout = QVBoxLayout(self.timeline_host)
         self.message_horizontal_margin = 76
-        self.message_host_layout.setContentsMargins(
-            self.message_horizontal_margin, 30, self.message_horizontal_margin, 30
-        )
+        self.message_host_layout.setContentsMargins(self.message_horizontal_margin, 30, self.message_horizontal_margin, 30)
         self.message_host_layout.setSpacing(24)
-        self.message_bottom_spacer = QSpacerItem(
-            0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-        )
+        self.message_bottom_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         self.message_host_layout.addSpacerItem(self.message_bottom_spacer)
         self.message_stack.addWidget(self.empty_page)
         self.message_stack.addWidget(self.timeline_host)
@@ -1210,9 +1194,7 @@ class ChatWindow(QDialog):
         self.input = self.composer.input
         self.send = self.composer.send
         chat_main_layout.addWidget(self.composer_card)
-        self.content_bottom_spacer = QSpacerItem(
-            0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-        )
+        self.content_bottom_spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         chat_main_layout.addSpacerItem(self.content_bottom_spacer)
 
         self.sidebar_scrim = SidebarScrim(self.phone_shell)
@@ -1275,9 +1257,7 @@ class ChatWindow(QDialog):
         self.sidebar.setFixedWidth(drawer_width)
         self.sidebar.setGeometry(0, 0, drawer_width, rect.height())
         actual_width = self.sidebar.width()
-        self.sidebar_scrim.setGeometry(
-            actual_width, 0, max(0, rect.width() - actual_width), rect.height()
-        )
+        self.sidebar_scrim.setGeometry(actual_width, 0, max(0, rect.width() - actual_width), rect.height())
 
     def _update_responsive_layout(self) -> None:
         compact = self.width() < 880
@@ -1332,8 +1312,11 @@ class ChatWindow(QDialog):
         # fill uses the native panel palette before QSS and caused the empty
         # page to become a grey band whenever a new conversation was opened.
         for widget in (
-            self.scroll, self.scroll.viewport(), self.message_view,
-            self.empty_page, self.timeline_host,
+            self.scroll,
+            self.scroll.viewport(),
+            self.message_view,
+            self.empty_page,
+            self.timeline_host,
         ):
             widget.setAutoFillBackground(False)
 
@@ -1347,10 +1330,7 @@ class ChatWindow(QDialog):
         fill = str(self.config.get("modern_chat_background_fill", "cover") or "cover")
         self._bg_fill = fill if fill in {"cover", "contain", "stretch"} else "cover"
         # 宽屏现代窗同样支持内置主题壁纸（与小手机一致），命中主题时套用其纱罩配色
-        self._bg_theme = (
-            chat_themes.get_theme(self._bg_value[8:])
-            if self._bg_value.startswith("builtin:") else None
-        )
+        self._bg_theme = chat_themes.get_theme(self._bg_value[8:]) if self._bg_value.startswith("builtin:") else None
         return resolve_bg_pixmap(self._bg_value)
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -1365,15 +1345,26 @@ class ChatWindow(QDialog):
         painter.fillPath(clip, QColor("#ffffff"))
         if self._bg_scaled is None or self._bg_scaled_size != target.size():
             self._bg_scaled = chat_themes.scale_background_pixmap(
-                self._bg_pixmap, target.width(), target.height(), self._bg_fill,
+                self._bg_pixmap,
+                target.width(),
+                target.height(),
+                self._bg_fill,
             )
             self._bg_scaled_size = target.size()
         focus = chat_themes.background_focus_rect(
-            self._bg_theme, self.config.get('chat_bg_crops', {}), self._bg_value,
+            self._bg_theme,
+            self.config.get("chat_bg_crops", {}),
+            self._bg_value,
         )
         x, y = chat_themes.background_draw_offset(
-            target.x(), target.y(), target.width(), target.height(),
-            self._bg_scaled.width(), self._bg_scaled.height(), focus, self._bg_fill,
+            target.x(),
+            target.y(),
+            target.width(),
+            target.height(),
+            self._bg_scaled.width(),
+            self._bg_scaled.height(),
+            focus,
+            self._bg_fill,
         )
         painter.setOpacity(self._bg_opacity)
         painter.drawPixmap(x, y, self._bg_scaled)
@@ -1409,7 +1400,8 @@ class ChatWindow(QDialog):
             self.avatar_label.setText("")
             self.avatar_label.setPixmap(
                 pixmap.scaled(
-                    30, 30,
+                    30,
+                    30,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -1482,22 +1474,14 @@ class ChatWindow(QDialog):
             return
         empty = self.message_stack.currentWidget() is self.empty_page
         if empty:
-            self.content_top_spacer.changeSize(
-                0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-            )
-            self.content_bottom_spacer.changeSize(
-                0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding
-            )
+            self.content_top_spacer.changeSize(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+            self.content_bottom_spacer.changeSize(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
             self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.scroll.setFixedHeight(150)
             self.chat_main_layout.setStretchFactor(self.scroll, 0)
         else:
-            self.content_top_spacer.changeSize(
-                0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
-            )
-            self.content_bottom_spacer.changeSize(
-                0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
-            )
+            self.content_top_spacer.changeSize(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            self.content_bottom_spacer.changeSize(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             self.scroll.setMinimumHeight(0)
             self.scroll.setMaximumHeight(16777215)
             self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -1543,6 +1527,7 @@ class ChatWindow(QDialog):
             sessions = [self.session]
         self.session_list.blockSignals(True)
         self.session_list.clear()
+
         def session_order(value):
             try:
                 stamp = datetime.fromisoformat(value.updated_at).timestamp()
@@ -1618,9 +1603,7 @@ class ChatWindow(QDialog):
                 16,
             )
         )
-        self.multi_select_button.setToolTip(
-            "退出批量管理" if self._multi_select_mode else "批量管理会话"
-        )
+        self.multi_select_button.setToolTip("退出批量管理" if self._multi_select_mode else "批量管理会话")
         self._update_multi_select_caption()
         self._refresh_sessions()
 
@@ -1658,7 +1641,10 @@ class ChatWindow(QDialog):
             return
         if operation == "rename":
             title, accepted = QInputDialog.getText(
-                self, "重命名会话", "会话名称", text=_short_title(session),
+                self,
+                "重命名会话",
+                "会话名称",
+                text=_short_title(session),
             )
             if not accepted:
                 return
@@ -1748,9 +1734,7 @@ class ChatWindow(QDialog):
         正在生成回答时不插入，避免与在飞请求的流式输出交错。"""
         if self.service.busy:
             return
-        synced, absorbed = self.store.append_messages(
-            self.session, [ChatMessage("user", user_text), ChatMessage("assistant", reply)]
-        )
+        synced, absorbed = self.store.append_messages(self.session, [ChatMessage("user", user_text), ChatMessage("assistant", reply)])
         if synced is None:
             self.session.messages.append(ChatMessage("user", user_text))
             self.session.messages.append(ChatMessage("assistant", reply))
@@ -1809,9 +1793,7 @@ class ChatWindow(QDialog):
         self.composer.clear_attachments()
         # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」，
         # 另一前端在本窗打开期间的写入不会被覆盖
-        synced, absorbed = self.store.append_message(
-            self.session, ChatMessage("user", display_text)
-        )
+        synced, absorbed = self.store.append_message(self.session, ChatMessage("user", display_text))
         if synced is None:
             # 会话已被并发删除等边界：本地兜底（保持旧行为）
             self.session.messages.append(ChatMessage("user", display_text))
@@ -1833,10 +1815,7 @@ class ChatWindow(QDialog):
         self._remove_bubble(self._bubble)
         image_payloads = None
         if isinstance(self._last_user_payload, list):
-            image_payloads = [
-                item for item in self._last_user_payload
-                if isinstance(item, dict) and item.get("type") == "image_url"
-            ]
+            image_payloads = [item for item in self._last_user_payload if isinstance(item, dict) and item.get("type") == "image_url"]
         self._begin_generation(text, image_payloads=image_payloads)
 
     def _begin_generation(self, text: str, *, image_payloads: list[dict] | None = None) -> None:
@@ -1878,9 +1857,7 @@ class ChatWindow(QDialog):
 
     def _show_system_notice(self, title: str, message: str, *, on_click=None) -> None:
         """仅在聊天窗口不是当前活动窗口时弹系统通知；点击默认跳回本窗口。"""
-        if (self._system_notifier is None
-                or not bool(self.config.get("system_notifications_enabled", True))
-                or self.isActiveWindow()):
+        if self._system_notifier is None or not bool(self.config.get("system_notifications_enabled", True)) or self.isActiveWindow():
             return
         try:
             self._system_notifier(title, message, on_click=on_click or self._focus_chat)
@@ -1890,11 +1867,7 @@ class ChatWindow(QDialog):
     @staticmethod
     def _looks_like_authorization_error(text: str) -> bool:
         lowered = str(text or "").lower()
-        return any(
-            token in lowered
-            for token in ("401", "403", "unauthorized", "authentication", "api key",
-                          "认证失败", "未授权", "授权")
-        )
+        return any(token in lowered for token in ("401", "403", "unauthorized", "authentication", "api key", "认证失败", "未授权", "授权"))
 
     def notify_authorization_required(self, message: str = "有一条需要授权或确认的请求，点击查看。") -> None:
         """供“需要授权/审批”类事件调用：切走窗口时弹系统通知并跳回聊天页。"""
@@ -1954,7 +1927,7 @@ class ChatWindow(QDialog):
         # Reconcile the typewriter queue with the provider's authoritative
         # final response, including providers that emit no delta events.
         if text.startswith(self._text):
-            self._pending_output = text[len(self._text):]
+            self._pending_output = text[len(self._text) :]
         else:
             # final 与已输出不一致（服务端截断/重写）：回到公共前缀处重打，
             # 避免整段重复显示
@@ -2099,9 +2072,7 @@ class ChatWindow(QDialog):
         margin = 20 if self._compact_layout else 76
         self.composer_card_layout.setContentsMargins(margin, 7, margin, 14 if self._compact_layout else 20)
         self.message_horizontal_margin = 22 if self._compact_layout else 76
-        self.message_host_layout.setContentsMargins(
-            self.message_horizontal_margin, 24, self.message_horizontal_margin, 24
-        )
+        self.message_host_layout.setContentsMargins(self.message_horizontal_margin, 24, self.message_horizontal_margin, 24)
         self._update_bubble_widths()
         QTimer.singleShot(0, self, self._update_conversation_height)
         # 改尺寸会让所有气泡重新折行（_update_bubble_widths 改的是固定宽度），

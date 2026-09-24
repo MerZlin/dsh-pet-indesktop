@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """启动独立的第二只桌宠进程。"""
+
 from __future__ import annotations
 
 import os
@@ -53,9 +54,7 @@ def launch_new_pet(offset_index: int = 1):
     if getattr(sys, "frozen", False):
         kwargs["cwd"] = str(Path(sys.executable).resolve().parent)
     if sys.platform == "win32":
-        kwargs["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-        )
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
     else:
         kwargs["start_new_session"] = True
     _reap_children()

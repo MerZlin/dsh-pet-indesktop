@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Unified, bounded Agent event protocol."""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 import json
@@ -10,26 +11,36 @@ SCHEMA = "agent-event/v1"
 MAX_DATA_BYTES = 16 * 1024
 MAX_STRING_CHARS = 2000
 
+
 def _bounded(value: Any, depth: int = 0) -> Any:
-    if depth > 5: return "[truncated]"
-    if isinstance(value, str): return value[:MAX_STRING_CHARS]
-    if value is None or isinstance(value, (bool, int, float)): return value
+    if depth > 5:
+        return "[truncated]"
+    if isinstance(value, str):
+        return value[:MAX_STRING_CHARS]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
     if isinstance(value, Mapping):
         return {str(k)[:120]: _bounded(v, depth + 1) for k, v in list(value.items())[:128]}
-    if isinstance(value, (list, tuple)): return [_bounded(v, depth + 1) for v in list(value)[:128]]
+    if isinstance(value, (list, tuple)):
+        return [_bounded(v, depth + 1) for v in list(value)[:128]]
     return str(value)[:MAX_STRING_CHARS]
+
 
 def bounded_data(value: Any) -> dict[str, Any]:
     raw = _bounded(value if isinstance(value, Mapping) else {})
-    if not isinstance(raw, dict): raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
     while len(json.dumps(raw, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > MAX_DATA_BYTES and raw:
         raw.pop(next(reversed(raw)))
     return raw
 
+
 def _first(record: Mapping[str, Any], *names: str, default: Any = None) -> Any:
     for name in names:
-        if name in record and record[name] is not None: return record[name]
+        if name in record and record[name] is not None:
+            return record[name]
     return default
+
 
 @dataclass(frozen=True)
 class AgentEvent:
@@ -50,7 +61,8 @@ class AgentEvent:
 
     @classmethod
     def from_record(cls, record: Mapping[str, Any], *, source_hint: str = "", agent_name_hint: str = "") -> "AgentEvent":
-        if not isinstance(record, Mapping): record = {}
+        if not isinstance(record, Mapping):
+            record = {}
         source = str(_first(record, "source", "agent", default=source_hint) or source_hint)
         name = str(_first(record, "agentName", "agent_name", default=agent_name_hint or source) or source)
         session = str(_first(record, "sessionId", "session_id", default="") or "")
@@ -61,13 +73,55 @@ class AgentEvent:
         if not event and "state" in record:
             event = "AgentStatus"
         timestamp = _first(record, "ts", "timestamp", default=time.time())
-        try: timestamp = float(timestamp)
-        except (TypeError, ValueError): timestamp = time.time()
+        try:
+            timestamp = float(timestamp)
+        except (TypeError, ValueError):
+            timestamp = time.time()
         data = _first(record, "data", default=None)
         if not isinstance(data, Mapping):
-            excluded = {"schema", "ts", "timestamp", "source", "agent", "agentName", "agent_name", "projectId", "project_id", "projectName", "project_name", "sessionId", "session_id", "sessionName", "session_name", "turn", "step", "event", "type", "callId", "call_id", "requestId", "request_id"}
+            excluded = {
+                "schema",
+                "ts",
+                "timestamp",
+                "source",
+                "agent",
+                "agentName",
+                "agent_name",
+                "projectId",
+                "project_id",
+                "projectName",
+                "project_name",
+                "sessionId",
+                "session_id",
+                "sessionName",
+                "session_name",
+                "turn",
+                "step",
+                "event",
+                "type",
+                "callId",
+                "call_id",
+                "requestId",
+                "request_id",
+            }
             data = {k: v for k, v in record.items() if k not in excluded}
-        return cls(str(_first(record, "schema", default=SCHEMA) or SCHEMA), timestamp, source, name, project_id, project_name, session, session_name, _first(record, "turn"), _first(record, "step"), event, bounded_data(data), str(_first(record, "callId", "call_id", default="") or ""), str(_first(record, "requestId", "request_id", default="") or ""))
+        return cls(
+            str(_first(record, "schema", default=SCHEMA) or SCHEMA),
+            timestamp,
+            source,
+            name,
+            project_id,
+            project_name,
+            session,
+            session_name,
+            _first(record, "turn"),
+            _first(record, "step"),
+            event,
+            bounded_data(data),
+            str(_first(record, "callId", "call_id", default="") or ""),
+            str(_first(record, "requestId", "request_id", default="") or ""),
+        )
+
 
 def parse_agent_event(record: Mapping[str, Any], *, source_hint: str = "", agent_name_hint: str = "") -> AgentEvent:
     return AgentEvent.from_record(record, source_hint=source_hint, agent_name_hint=agent_name_hint)

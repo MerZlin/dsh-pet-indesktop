@@ -4,6 +4,7 @@
 重要边界：本模块只做视觉反馈与统计，绝不删除/移动/修改被拖入的文件。
 统计写到配置目录下的 file_eaten_stats.json，供用户查看累计吃了多少文件。
 """
+
 from __future__ import annotations
 
 import json
@@ -75,11 +76,11 @@ def format_bytes(size: int) -> str:
     size = max(0, int(size))
     if size < 1024:
         return f"{size} B"
-    if size < 1024 ** 2:
+    if size < 1024**2:
         return f"{size / 1024:.1f} KB"
-    if size < 1024 ** 3:
-        return f"{size / 1024 ** 2:.1f} MB"
-    return f"{size / 1024 ** 3:.1f} GB"
+    if size < 1024**3:
+        return f"{size / 1024**2:.1f} MB"
+    return f"{size / 1024**3:.1f} GB"
 
 
 def _path_size(path: Path) -> int:
@@ -119,10 +120,7 @@ def _pick_eating_animation(pet) -> str | None:
     for preferred in PREFERRED_EAT_ANIMATIONS:
         if preferred in acts:
             return preferred
-    candidates = [
-        name for name in acts
-        if any(keyword in name for keyword in EAT_KEYWORDS)
-    ]
+    candidates = [name for name in acts if any(keyword in name for keyword in EAT_KEYWORDS)]
     return random.choice(candidates) if candidates else random.choice(acts)
 
 
@@ -141,11 +139,7 @@ class FileEaterDropHandler(QObject):
     def _local_paths(self, mime) -> list[str]:
         if not mime.hasUrls():
             return []
-        return [
-            url.toLocalFile()
-            for url in mime.urls()
-            if isinstance(url, QUrl) and url.isLocalFile() and url.toLocalFile()
-        ]
+        return [url.toLocalFile() for url in mime.urls() if isinstance(url, QUrl) and url.isLocalFile() and url.toLocalFile()]
 
     def eventFilter(self, watched, event):  # noqa: N802 (Qt 命名)
         if watched is not self.pet:
@@ -200,12 +194,14 @@ class FileEaterDropHandler(QObject):
         stats["folder_count"] += max(0, folders)
         stats["item_count"] += max(0, items)
         stats["total_bytes"] += max(0, total_bytes)
-        stats["history"].append({
-            "time": datetime.now().isoformat(timespec="seconds"),
-            "files": max(0, files),
-            "folders": max(0, folders),
-            "bytes": max(0, total_bytes),
-        })
+        stats["history"].append(
+            {
+                "time": datetime.now().isoformat(timespec="seconds"),
+                "files": max(0, files),
+                "folders": max(0, folders),
+                "bytes": max(0, total_bytes),
+            }
+        )
         del stats["history"][:-STATS_HISTORY_LIMIT]
         _save_stats(self.stats_path, stats)
         return stats

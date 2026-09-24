@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Thread-safe representative-frame decoding for animation menu thumbnails."""
+
 from __future__ import annotations
 
 import threading
@@ -38,8 +39,10 @@ def _as_thumbnail(image: QImage) -> QImage:
     if image.isNull() or max(image.width(), image.height()) <= _THUMBNAIL_MAX_SIDE:
         return image
     return image.scaled(
-        _THUMBNAIL_MAX_SIDE, _THUMBNAIL_MAX_SIDE,
-        Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation,
+        _THUMBNAIL_MAX_SIDE,
+        _THUMBNAIL_MAX_SIDE,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
     )
 
 
@@ -89,7 +92,11 @@ def _decode_webm(path: Path) -> QImage:
             if len(frame) != expected:
                 return QImage()
             return QImage(
-                frame, width, height, width * 4, QImage.Format.Format_RGBA8888,
+                frame,
+                width,
+                height,
+                width * 4,
+                QImage.Format.Format_RGBA8888,
             ).copy()
     except Exception:
         return QImage()
@@ -135,9 +142,7 @@ def _trim_disk_cache() -> None:
 
 def _write_disk_cache(key: tuple[str, int, int], image: QImage) -> None:
     cache_path = _disk_cache_path(key)
-    tmp_path = cache_path.with_name(
-        f".{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
-    )
+    tmp_path = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         _DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         if image.save(str(tmp_path), "PNG"):

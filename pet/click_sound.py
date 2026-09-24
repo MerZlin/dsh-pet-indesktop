@@ -13,6 +13,7 @@
 - QtMultimedia 与系统播放器都不可用时静默失败并记录 warning，绝不使用系统
   提示音替代；非 Windows 平台在 QtMultimedia 缺失时回退到系统播放器。
 """
+
 from __future__ import annotations
 
 import logging
@@ -138,7 +139,7 @@ class ClickSoundPool:
         if clip is not None:
             if sound_winmm.write_pcm16_wav(clip, cache):
                 return pool.play(cache, volume)
-            return pool.play_clip(clip, volume)     # 写盘失败也别丢这一声
+            return pool.play_clip(clip, volume)  # 写盘失败也别丢这一声
         # clip is None：`wave` 读不了（浮点/压缩/多声道 wav）→ 交给现有 Qt 路径，
         # 行为与改动前逐位一致。
         return False
@@ -166,6 +167,7 @@ class ClickSoundPool:
             return None
         try:
             from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat, QAudioOutput, QMediaPlayer, QSoundEffect
+
             self._qt_classes = (QAudioDecoder, QAudioFormat, QAudioOutput, QMediaPlayer, QSoundEffect)
             return self._qt_classes
         except Exception as exc:
@@ -216,6 +218,7 @@ class ClickSoundPool:
         if effect is None:
             try:
                 from PySide6.QtCore import QUrl
+
                 effect = classes[4]()
                 effect.setSource(QUrl.fromLocalFile(str(path)))
                 self._qt_effects[key] = effect
@@ -304,6 +307,7 @@ class ClickSoundPool:
             audio.setVolume(volume)
             player.stop()
             from PySide6.QtCore import QUrl
+
             player.setSource(QUrl.fromLocalFile(str(path)))
             player.play()
             return True
@@ -328,11 +332,13 @@ class ClickSoundPool:
             except Exception:
                 log.warning("设置解码输出格式失败，按源格式解码: %s", source)
             state = {"chunks": [], "format": None}
+
             def on_buffer_ready():
                 while decoder.bufferAvailable():
                     buffer = decoder.read()
                     state["format"] = buffer.format()
                     state["chunks"].append(_audio_buffer_bytes(buffer))
+
             def on_finished():
                 self._qt_decoders.pop(str(source.resolve()), None)
                 fmt = state["format"]
@@ -342,8 +348,7 @@ class ClickSoundPool:
                 try:
                     sample_format = fmt.sampleFormat()
                     # PySide6 返回 SampleFormat 枚举（不能直接 int()），mock/旧版返回 int
-                    sample_width = {1: 1, 2: 2, 3: 4, 4: 4}.get(
-                        int(getattr(sample_format, "value", sample_format)), 2)
+                    sample_width = {1: 1, 2: 2, 3: 4, 4: 4}.get(int(getattr(sample_format, "value", sample_format)), 2)
                     cache.parent.mkdir(parents=True, exist_ok=True)
                     with wave.open(str(cache), "wb") as out:
                         out.setnchannels(fmt.channelCount())
@@ -352,12 +357,14 @@ class ClickSoundPool:
                         out.writeframes(b"".join(state["chunks"]))
                 except Exception:
                     log.exception("写入音效缓存失败: %s", cache)
+
             decoder.bufferReady.connect(on_buffer_ready)
             decoder.finished.connect(on_finished)
             error_signal = getattr(decoder, "error", None)
             if error_signal is not None and hasattr(error_signal, "connect"):
                 error_signal.connect(lambda *_: log.warning("音频解码失败: %s", source))
             from PySide6.QtCore import QUrl
+
             decoder.setSource(QUrl.fromLocalFile(str(source)))
             self._qt_decoders[str(source.resolve())] = decoder
             decoder.start()
@@ -523,7 +530,9 @@ class ClickSoundPool:
 
     def play_release_sound(
         self,
-        pair: tuple[Path, Path], volume: float = 1.0, press_started_at: float | None = None,
+        pair: tuple[Path, Path],
+        volume: float = 1.0,
+        press_started_at: float | None = None,
     ) -> bool:
         """Play release immediately or at the last 100ms of the press sound."""
         press, release = pair
@@ -539,11 +548,13 @@ class ClickSoundPool:
             return False
         state["release_scheduled"] = bool(delay_ms)
         generation = int(state.get("generation", 0))
+
         def play() -> None:
             if int(state.get("generation", 0)) == generation:
                 state["release_scheduled"] = False
                 state["release_played"] = True
                 self.play_sound(release, volume=volume)
+
         if delay_ms:
             try:
                 from PySide6.QtCore import QTimer
@@ -565,6 +576,7 @@ class ClickSoundPool:
         # 取证日志：任何宠物侧发声都必须留痕（排查"莫名音效"用）
         try:
             import traceback
+
             caller = ""
             for frame in reversed(traceback.extract_stack()[-6:-1]):
                 if "click_sound.py" not in frame.filename:
@@ -656,6 +668,7 @@ _pool = ClickSoundPool()
 # 测试桩点（替换模块级名称），其余模块级 helper 属生产内部实现。
 # ---------------------------------------------------------------------------
 
+
 # 测试 seam：仅供测试注入，产品侧无调用
 def _warm_player_pool() -> None:
     """预创建 QMediaPlayer 池，避免首次点击时初始化 QtMultimedia 造成卡顿。"""
@@ -696,7 +709,9 @@ def play_press_sound(pair: tuple[Path, Path], volume: float = 1.0) -> bool:
 
 
 def play_release_sound(
-    pair: tuple[Path, Path], volume: float = 1.0, press_started_at: float | None = None,
+    pair: tuple[Path, Path],
+    volume: float = 1.0,
+    press_started_at: float | None = None,
 ) -> bool:
     """Play release immediately or at the last 100ms of the press sound."""
     return _pool.play_release_sound(pair, volume, press_started_at)
@@ -716,9 +731,11 @@ def play_click_sound(path: Path | str, volume: float = 1.0) -> bool:
 # 无状态的纯 helper 与解析 API（不触碰池状态，保持模块级）。
 # ---------------------------------------------------------------------------
 
+
 def _sound_cache_dir() -> Path:
     try:
         from PySide6.QtCore import QStandardPaths
+
         base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
     except Exception:
         base = ""
@@ -745,9 +762,7 @@ def _cache_path(source: Path) -> Path:
         try:
             digest = hashlib.sha256(source.read_bytes()).hexdigest()[:20]
         except OSError:
-            digest = hashlib.sha256(
-                f"{memo_key[0]}:{memo_key[1]}:{memo_key[2]}".encode()
-            ).hexdigest()[:20]
+            digest = hashlib.sha256(f"{memo_key[0]}:{memo_key[1]}:{memo_key[2]}".encode()).hexdigest()[:20]
         if len(_DIGEST_MEMO) > 512:  # 卫生上限：memo 无界增长没意义
             _DIGEST_MEMO.clear()
         _DIGEST_MEMO[memo_key] = digest
@@ -812,7 +827,7 @@ def resolve_builtin_sound(sound_id: str) -> Path | None:
     """统一解析内置音频路径（支持源码目录与 PyInstaller sys._MEIPASS）。"""
     s_id = str(sound_id or "").strip()
     if s_id.startswith("builtin:"):
-        s_id = s_id[len("builtin:"):]
+        s_id = s_id[len("builtin:") :]
 
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
     sounds_dir = root / "assets" / "sounds"
@@ -857,10 +872,7 @@ def _duck_candidates(duck_dir: Path) -> list[Path]:
         return list(cached)
     candidates: list[Path] = []
     if duck_dir.is_dir():
-        candidates = sorted(
-            p for p in duck_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
-        )
+        candidates = sorted(p for p in duck_dir.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS)
     _duck_candidates_cache[key] = tuple(candidates)
     return candidates
 
@@ -902,10 +914,7 @@ def resolve_click_sound_candidates(pack: dict | None, data_dir: Path | None = No
             return []
         p = Path(path_str).expanduser()
         if p.is_dir():
-            candidates = [
-                f for f in p.iterdir()
-                if f.is_file() and f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
-            ]
+            candidates = [f for f in p.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS]
             candidates.sort()
             return candidates[:128]
         return []
@@ -924,6 +933,7 @@ def resolve_click_sound_pair(pack: dict | None, data_dir: Path | None = None) ->
     press, release = candidates.get("ya1"), candidates.get("ya2")
     if press is None or release is None:
         return None
+
     def cached(path: Path) -> Path:
         if path.suffix.lower() == ".wav":
             return path
@@ -932,6 +942,7 @@ def resolve_click_sound_pair(pack: dict | None, data_dir: Path | None = None) ->
             return cache
         _decode_to_wav(path, cache, 0.0)
         return cache if cache.is_file() else path
+
     return cached(press), cached(release)
 
 

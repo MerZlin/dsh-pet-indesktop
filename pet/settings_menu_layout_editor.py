@@ -3,6 +3,7 @@
 
 从 modern_settings_dialog.py 纯机械搬移。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -53,14 +54,16 @@ class MenuLayoutEditor(QWidget):
     changed = Signal()
 
     def __init__(
-        self, layout: dict | None, parent=None, *,
-        available_actions=None, enabled_actions=None,
+        self,
+        layout: dict | None,
+        parent=None,
+        *,
+        available_actions=None,
+        enabled_actions=None,
     ):
         super().__init__(parent)
         self.available_actions = frozenset(available_actions or MENU_ACTIONS.ids)
-        self.enabled_actions = frozenset(
-            enabled_actions if enabled_actions is not None else self.available_actions
-        )
+        self.enabled_actions = frozenset(enabled_actions if enabled_actions is not None else self.available_actions)
         self.tree = QTreeWidget(self)
         self.tree.setObjectName("menuLayoutTree")
         self.tree.setHeaderLabels(["菜单项", "状态", "位置"])
@@ -140,9 +143,7 @@ class MenuLayoutEditor(QWidget):
         self.rename_action = self.customize_menu.addAction("更换别名…")
         self.change_icon_action = self.customize_menu.addAction("选择内置图标…")
         self.choose_icon_file_action = self.customize_menu.addAction("选择图片文件…（最大 5 MB）")
-        self.choose_icon_file_action.setToolTip(
-            "支持 PNG、JPG、WebP、BMP、GIF、TIFF；作为静态方形菜单图标显示"
-        )
+        self.choose_icon_file_action.setToolTip("支持 PNG、JPG、WebP、BMP、GIF、TIFF；作为静态方形菜单图标显示")
         self.icon_display_menu = configure_settings_action_popup(SettingsPopupMenu("图片显示方式", self.customize_menu))
         self.icon_contain_action = self.icon_display_menu.addAction("完整显示")
         self.icon_cover_action = self.icon_display_menu.addAction("裁切填满")
@@ -153,12 +154,8 @@ class MenuLayoutEditor(QWidget):
         self.rename_action.triggered.connect(self._rename_selected)
         self.change_icon_action.triggered.connect(self._change_selected_icon)
         self.choose_icon_file_action.triggered.connect(self._choose_selected_file_icon)
-        self.icon_contain_action.triggered.connect(
-            lambda: self._set_selected_file_display("contain")
-        )
-        self.icon_cover_action.triggered.connect(
-            lambda: self._set_selected_file_display("cover")
-        )
+        self.icon_contain_action.triggered.connect(lambda: self._set_selected_file_display("contain"))
+        self.icon_cover_action.triggered.connect(lambda: self._set_selected_file_display("cover"))
         self.restore_presentation_action.triggered.connect(self._restore_selected_presentation)
         self.customize_button.setPopupMenu(self.customize_menu)
 
@@ -184,8 +181,11 @@ class MenuLayoutEditor(QWidget):
         self.toolbar_layout.setHorizontalSpacing(7)
         self.toolbar_layout.setVerticalSpacing(7)
         self.toolbar_buttons = (
-            self.order_button, self.move_button,
-            self.submenu_button, self.customize_button, self.more_button,
+            self.order_button,
+            self.move_button,
+            self.submenu_button,
+            self.customize_button,
+            self.more_button,
         )
         self._toolbar_mode = None
 
@@ -238,15 +238,9 @@ class MenuLayoutEditor(QWidget):
             self._reflow_toolbar(mode)
             self.editor_hint.setVisible(not compact)
             self.tree.setColumnHidden(2, compact)
-            self.split.setOrientation(
-                Qt.Orientation.Horizontal if mode == "wide" else Qt.Orientation.Vertical
-            )
+            self.split.setOrientation(Qt.Orientation.Horizontal if mode == "wide" else Qt.Orientation.Vertical)
             window_height = self.window().height()
-            preferred = (
-                min(760, max(540, window_height - 160))
-                if mode != "wide"
-                else min(620, max(360, window_height - 360))
-            )
+            preferred = min(760, max(540, window_height - 160)) if mode != "wide" else min(620, max(360, window_height - 360))
             self.setMinimumHeight(preferred)
 
     def _reflow_toolbar(self, mode: str) -> None:
@@ -268,10 +262,7 @@ class MenuLayoutEditor(QWidget):
             self.toolbar_layout.addWidget(button, index // columns, index % columns)
         for column in range(columns):
             self.toolbar_layout.setColumnStretch(column, 0 if mode == "wide" else 1)
-        self.toolbar_layout.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-            if mode == "wide" else Qt.AlignmentFlag.AlignTop
-        )
+        self.toolbar_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop if mode == "wide" else Qt.AlignmentFlag.AlignTop)
 
     def _sync_command_state(self, current=None, _previous=None) -> None:
         item = current or self.tree.currentItem()
@@ -279,25 +270,17 @@ class MenuLayoutEditor(QWidget):
         sibling_parent = parent or self.tree.invisibleRootItem()
         index = sibling_parent.indexOfChild(item) if item is not None else -1
         self.move_up_action.setEnabled(index > 0)
-        self.move_down_action.setEnabled(
-            item is not None and index < sibling_parent.childCount() - 1
-        )
+        self.move_down_action.setEnabled(item is not None and index < sibling_parent.childCount() - 1)
         data = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else {}
         node_type = data.get("type") if data else ""
         self.move_button.setEnabled(node_type == "action")
         self.customize_button.setEnabled(node_type in {"action", "submenu"})
         icon = data.get("icon") if data else None
-        self.icon_display_menu.setEnabled(
-            node_type in {"action", "submenu"}
-            and isinstance(icon, dict)
-            and icon.get("kind") == "file"
-        )
+        self.icon_display_menu.setEnabled(node_type in {"action", "submenu"} and isinstance(icon, dict) and icon.get("kind") == "file")
         display = icon.get("display") if isinstance(icon, dict) else ""
         self.icon_contain_action.setChecked(display == "contain")
         self.icon_cover_action.setChecked(display == "cover")
-        self.delete_submenu_action.setEnabled(
-            node_type == "submenu"
-        )
+        self.delete_submenu_action.setEnabled(node_type == "submenu")
         self.delete_separator_action.setEnabled(node_type == "separator")
 
     def _rebuild_move_menu(self) -> None:
@@ -314,14 +297,10 @@ class MenuLayoutEditor(QWidget):
             target_id = str(data.get("id") or "")
             action = self.move_menu.addAction(item.text(0))
             action.setData(target_id)
-            action.triggered.connect(
-                lambda _checked=False, target_id=target_id: self._move_selected_to(target_id)
-            )
+            action.triggered.connect(lambda _checked=False, target_id=target_id: self._move_selected_to(target_id))
 
     def set_layout(self, layout: dict) -> None:
-        layout, _diagnostics = merge_default_menu_actions(
-            layout, registered_actions=MENU_ACTIONS.ids
-        )
+        layout, _diagnostics = merge_default_menu_actions(layout, registered_actions=MENU_ACTIONS.ids)
         layout = materialize_implicit_separators(layout)
         self._pending_empty_submenus.clear()
         self.tree.blockSignals(True)
@@ -368,14 +347,18 @@ class MenuLayoutEditor(QWidget):
         if node_type == "separator":
             label = "— 分割线"
         item = QTreeWidgetItem([label, "", ""])
-        item.setData(0, Qt.ItemDataRole.UserRole, {
-            "type": node_type,
-            "id": node_id,
-            "section": node.get("section"),
-            "label": node.get("label"),
-            "alias": alias,
-            "icon": node.get("icon") if "icon" in node else None,
-        })
+        item.setData(
+            0,
+            Qt.ItemDataRole.UserRole,
+            {
+                "type": node_type,
+                "id": node_id,
+                "section": node.get("section"),
+                "label": node.get("label"),
+                "alias": alias,
+                "icon": node.get("icon") if "icon" in node else None,
+            },
+        )
         available = node_type != "action" or node_id in self.available_actions
         item.setData(0, Qt.ItemDataRole.UserRole + 1, available)
         enabled = node_type != "action" or node_id in self.enabled_actions
@@ -420,6 +403,7 @@ class MenuLayoutEditor(QWidget):
                 if found is not None:
                     return found
             return None
+
         return find(self.tree.invisibleRootItem())
 
     def value(self) -> dict:
@@ -442,12 +426,14 @@ class MenuLayoutEditor(QWidget):
                 node["label"] = str(data.get("label") or item.text(0)).strip()[:40]
                 node["children"] = [encode(item.child(i)) for i in range(item.childCount())]
             return node
+
         root = self.tree.invisibleRootItem()
         return {"schema_version": 1, "layout_id": "user", "nodes": [encode(root.child(i)) for i in range(root.childCount())]}
 
     def set_enabled_actions(self, enabled_actions) -> None:
         """Refresh runtime state styling without mutating the layout tree."""
         self.enabled_actions = frozenset(enabled_actions)
+
         def refresh(parent) -> None:
             for index in range(parent.childCount()):
                 item = parent.child(index)
@@ -455,6 +441,7 @@ class MenuLayoutEditor(QWidget):
                 enabled = data.get("type") != "action" or data.get("id") in self.enabled_actions
                 item.setData(0, Qt.ItemDataRole.UserRole + 2, enabled)
                 refresh(item)
+
         refresh(self.tree.invisibleRootItem())
         self._on_changed()
 
@@ -501,20 +488,27 @@ class MenuLayoutEditor(QWidget):
         owner = parent or self.tree.invisibleRootItem()
         index = owner.indexOfChild(target) + 1 if target is not None else owner.childCount()
         existing_ids: set[str] = set()
+
         def collect_ids(nodes) -> None:
             for node in nodes:
                 if not isinstance(node, dict):
                     continue
                 existing_ids.add(str(node.get("id") or ""))
                 collect_ids(node.get("children", []))
+
         collect_ids(self.value().get("nodes", []))
         number = 1
         while f"user.separator-{number}" in existing_ids:
             number += 1
         item = QTreeWidgetItem()
-        self._configure_detached_node(item, {
-            "type": "separator", "id": f"user.separator-{number}", "visible": True,
-        })
+        self._configure_detached_node(
+            item,
+            {
+                "type": "separator",
+                "id": f"user.separator-{number}",
+                "visible": True,
+            },
+        )
         owner.insertChild(index, item)
         self.tree.setCurrentItem(item)
         self._on_changed()
@@ -525,16 +519,20 @@ class MenuLayoutEditor(QWidget):
         node_id = str(node.get("id") or "")
         original = str(node.get("label") or MENU_ACTIONS.label(node_id))
         alias = str(node.get("alias") or "").strip()
-        label = (
-            "— 分割线" if node_type == "separator"
-            else f"{alias}（{original}）" if alias else original
-        )
+        label = "— 分割线" if node_type == "separator" else f"{alias}（{original}）" if alias else original
         item.setText(0, label)
-        item.setData(0, Qt.ItemDataRole.UserRole, {
-            "type": node_type, "id": node_id, "section": node.get("section"),
-            "label": node.get("label"), "alias": alias,
-            "icon": node.get("icon") if "icon" in node else None,
-        })
+        item.setData(
+            0,
+            Qt.ItemDataRole.UserRole,
+            {
+                "type": node_type,
+                "id": node_id,
+                "section": node.get("section"),
+                "label": node.get("label"),
+                "alias": alias,
+                "icon": node.get("icon") if "icon" in node else None,
+            },
+        )
         item.setData(0, Qt.ItemDataRole.UserRole + 1, True)
         item.setData(0, Qt.ItemDataRole.UserRole + 2, True)
         item.setFlags((item.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
@@ -561,18 +559,14 @@ class MenuLayoutEditor(QWidget):
         if data.get("type") == "separator":
             item.setIcon(0, QIcon())
             return
-        item.setIcon(0, MENU_ACTIONS.icon(
-            self, str(data.get("id") or ""), data.get("icon")
-        ))
+        item.setIcon(0, MENU_ACTIONS.icon(self, str(data.get("id") or ""), data.get("icon")))
 
     def _rename_selected(self) -> None:
         item = self.tree.currentItem()
         if item is None:
             return
         data = item.data(0, Qt.ItemDataRole.UserRole) or {}
-        text, accepted = QInputDialog.getText(
-            self, "更换菜单别名", "显示名称", text=str(data.get("alias") or "")
-        )
+        text, accepted = QInputDialog.getText(self, "更换菜单别名", "显示名称", text=str(data.get("alias") or ""))
         if accepted:
             self._set_item_alias(item, text)
 
@@ -680,6 +674,7 @@ class MenuLayoutEditor(QWidget):
             return
         target = None
         root = self.tree.invisibleRootItem()
+
         def find(parent):
             nonlocal target
             for index in range(parent.childCount()):
@@ -689,6 +684,7 @@ class MenuLayoutEditor(QWidget):
                     target = candidate
                     return
                 find(candidate)
+
         find(root)
         if target is None or target is item:
             return
@@ -706,20 +702,20 @@ class MenuLayoutEditor(QWidget):
         label = label.strip()
         if not accepted or not label:
             return
-        existing = {
-            str((self.tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) or {}).get("id") or "")
-            for i in range(self.tree.topLevelItemCount())
-        }
+        existing = {str((self.tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole) or {}).get("id") or "") for i in range(self.tree.topLevelItemCount())}
         index = 1
         while f"user.submenu-{index}" in existing:
             index += 1
-        self._append_node(None, {
-            "type": "submenu",
-            "id": f"user.submenu-{index}",
-            "label": label[:40],
-            "visible": True,
-            "children": [],
-        })
+        self._append_node(
+            None,
+            {
+                "type": "submenu",
+                "id": f"user.submenu-{index}",
+                "label": label[:40],
+                "visible": True,
+                "children": [],
+            },
+        )
         self._on_changed()
 
     def _delete_selected_submenu(self) -> None:
@@ -751,6 +747,7 @@ class MenuLayoutEditor(QWidget):
     def _on_changed(self, *_args) -> None:
         self.tree.blockSignals(True)
         self.preview.clear()
+
         def refresh_positions(source):
             for index in range(source.childCount()):
                 item = source.child(index)
@@ -772,12 +769,14 @@ class MenuLayoutEditor(QWidget):
                     item.setText(2, "根菜单" if item.parent() is None else item.parent().text(0))
                 item.setToolTip(2, item.text(2))
                 refresh_positions(item)
+
         refresh_positions(self.tree.invisibleRootItem())
         resolved = resolve_menu_layout(
             self.value(),
             registered_actions=MENU_ACTIONS.ids,
             available_actions=self.available_actions,
         )
+
         def add_preview(nodes, target):
             for node in nodes:
                 if node.get("type") == "separator":
@@ -795,6 +794,7 @@ class MenuLayoutEditor(QWidget):
                     clone.setToolTip(0, MENU_ACTIONS.disabled_reason(action_id))
                 target.addChild(clone)
                 add_preview(node.get("children", ()), clone)
+
         add_preview(resolved.nodes, self.preview.invisibleRootItem())
         self.preview.expandAll()
         self.tree.blockSignals(False)

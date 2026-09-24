@@ -106,10 +106,10 @@ class LyricTracker:
         # 更可接受（滞后会被明显察觉），故统一往前偏一点。
         self.lead: float = LYRIC_LEAD_SECONDS
         # 本地累加模式的状态
-        self._anchor_at: float | None = None   # 建立基准时的本地时刻
-        self._anchor_pos: float = 0.0          # 基准处的播放位置
+        self._anchor_at: float | None = None  # 建立基准时的本地时刻
+        self._anchor_pos: float = 0.0  # 基准处的播放位置
         self._paused: bool = False
-        self._paused_pos: float | None = None   # 暂停时冻结的位置
+        self._paused_pos: float | None = None  # 暂停时冻结的位置
         # 本曲是否见过播放器上报的真实进度。见过就说明位置可信，手动对齐
         # 必须让路（见 reanchor / MusicLyricController.align_available）。
         # 注意"估算位置不算真值"：网易云给的估算值不算见过（见 load 的 reported）。
@@ -140,8 +140,7 @@ class LyricTracker:
         self._paused_pos = None
         self._reported_position = False
 
-    def load(self, lines: list[music_lyric.LyricLine], *, now: float,
-             position: float | None, reported: bool | None = None) -> None:
+    def load(self, lines: list[music_lyric.LyricLine], *, now: float, position: float | None, reported: bool | None = None) -> None:
         """装载一首歌的歌词并建立位置基准。
 
         ``reported`` 说明 ``position`` 的来源：``True`` = 播放器上报的真值；
@@ -158,9 +157,7 @@ class LyricTracker:
         self._index = -1
         self._paused = False
         self._paused_pos = None
-        self._reported_position = (
-            position is not None if reported is None else bool(reported)
-        )
+        self._reported_position = position is not None if reported is None else bool(reported)
         if position is None:
             # 无真实进度：从现在开始本地累加（此刻视为 0）。
             self._anchor_at = now
@@ -446,7 +443,6 @@ class MusicLyricController(QObject):
         """
         return now_playing.skip_track(direction)
 
-
     def _reset(self) -> None:
         self._tracker.reset()
         self._current_key = None
@@ -555,8 +551,7 @@ class MusicLyricController(QObject):
             if callable(hold):
                 hold(POLL_MS / 1000.0 * 3)
             # 时长给足一拍有余：真正的续期由每拍重新调用完成。
-            shower(text, duration_ms=POLL_MS * 2, subtitle=subtitle or None,
-                   title_first=True, width_locked=self._width_locked)
+            shower(text, duration_ms=POLL_MS * 2, subtitle=subtitle or None, title_first=True, width_locked=self._width_locked)
             self._last_shown = (text, subtitle)
             # 首句显示完就把宽度定下来，后续同首歌不再改宽。
             self._width_locked = True
@@ -619,7 +614,9 @@ class MusicLyricController(QObject):
         # （clear 是幂等的，上面的复用分支已清过也不要紧。）
         self._sample_stop.clear()
         thread = threading.Thread(
-            target=self._sample_loop, name="music-lyric-sample", daemon=True,
+            target=self._sample_loop,
+            name="music-lyric-sample",
+            daemon=True,
         )
         self._sample_thread = thread
         thread.start()
@@ -798,8 +795,7 @@ class MusicLyricController(QObject):
             return
         try:
             alert(
-                "这个播放器不上报播放进度，歌词按开始时间估算。"
-                "快进或从中途开始播放后，用右键菜单「音乐 → 歌词对齐」校正。",
+                "这个播放器不上报播放进度，歌词按开始时间估算。快进或从中途开始播放后，用右键菜单「音乐 → 歌词对齐」校正。",
                 sticky=False,
                 duration_ms=12000,
                 alert_id="music-lyric-estimated",
@@ -883,7 +879,9 @@ class MusicLyricController(QObject):
         elapsed = time.monotonic() - started
         log.info(
             "歌词取词完成: %s - %s -> %s行%s, 耗时 %.2fs",
-            artist, title, len(lyrics.lines) if lyrics else 0,
+            artist,
+            title,
+            len(lyrics.lines) if lyrics else 0,
             "（纯音乐）" if (lyrics and lyrics.instrumental) else "",
             elapsed,
         )
@@ -920,8 +918,7 @@ class MusicLyricController(QObject):
             log.info("歌词按检测时刻对齐: 已过去 %.2fs", position)
         # `reported` 必须一起带下去：这里的 position 在无进度时是**估算值**，
         # 不能让它冒充真值，否则「歌词对齐」会被误判为没必要而整组置灰。
-        self._tracker.load(list(lyrics.lines), now=now, position=position,
-                           reported=reported is not None)
+        self._tracker.load(list(lyrics.lines), now=now, position=position, reported=reported is not None)
         if self._bubble_blocked():
             return
         # 立即用「标题 + 当前歌词」刷新，不必等下一拍。

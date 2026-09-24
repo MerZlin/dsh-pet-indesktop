@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Custom first row for the playful modern-menu image action."""
+
 from __future__ import annotations
 
 import logging
@@ -35,7 +36,10 @@ def _circle_photo(path: Path, size: int, dpr: float) -> QPixmap:
 
 class ClickAccessory(QWidget):
     def __init__(
-        self, parent: QWidget, text: str = "请点击", color: str = "#777777",
+        self,
+        parent: QWidget,
+        text: str = "请点击",
+        color: str = "#777777",
     ) -> None:
         super().__init__(parent)
         self.setObjectName("ojingjingClickAccessory")
@@ -50,7 +54,9 @@ class ClickAccessory(QWidget):
 
     def displayText(self) -> str:  # noqa: N802 - Qt-style diagnostic API
         return QFontMetrics(self.font()).elidedText(
-            self._text, Qt.TextElideMode.ElideRight, 39,
+            self._text,
+            Qt.TextElideMode.ElideRight,
+            39,
         )
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -87,7 +93,9 @@ class ElidedLabel(QLabel):
 
     def displayText(self) -> str:  # noqa: N802 - Qt-style diagnostic API
         return self.fontMetrics().elidedText(
-            self._full_text, Qt.TextElideMode.ElideRight, max(1, self.width()),
+            self._full_text,
+            Qt.TextElideMode.ElideRight,
+            max(1, self.width()),
         )
 
     def resizeEvent(self, event) -> None:  # noqa: N802
@@ -130,21 +138,15 @@ class OjingjingMenuEntry(QWidget):
         self.title_label.setFont(menu.font())
         appearance = menu.property("modernAppearance") or {}
         dark = bool(menu.property("modernDark"))
-        foreground = str(
-            appearance.get("dark_foreground" if dark else "light_foreground")
-            or ("#f3f3f3" if dark else "#171717")
-        )
-        self._hover_color = QColor(
-            str(
-                appearance.get("dark_hover" if dark else "light_hover")
-                or ("#3a3a3a" if dark else "#eeeeee")
-            )
-        )
+        foreground = str(appearance.get("dark_foreground" if dark else "light_foreground") or ("#f3f3f3" if dark else "#171717"))
+        self._hover_color = QColor(str(appearance.get("dark_hover" if dark else "light_hover") or ("#3a3a3a" if dark else "#eeeeee")))
         self.title_label.setStyleSheet(f"color: {foreground};")
         layout.addWidget(self.title_label)
         layout.addStretch(1)
         self.click_accessory = ClickAccessory(
-            self, str(self._config.get("hint") or "请点击"), foreground,
+            self,
+            str(self._config.get("hint") or "请点击"),
+            foreground,
         )
         self.click_accessory.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.click_accessory)

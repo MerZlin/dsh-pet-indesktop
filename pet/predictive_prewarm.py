@@ -24,6 +24,7 @@
 
 只在 GUI 线程使用（被 _on_frame / _pick_next / _switch 帧驱动触发）。
 """
+
 from __future__ import annotations
 
 import random
@@ -81,11 +82,11 @@ class PredictivePrewarm:
     """
 
     def __init__(self, *, roll, warm, should_predict) -> None:
-        self._roll = roll                 # (exclude) -> str | None
-        self._warm = warm                 # (name) -> None
+        self._roll = roll  # (exclude) -> str | None
+        self._warm = warm  # (name) -> None
         self._should_predict = should_predict  # (name) -> bool
-        self._prediction: dict | None = None   # {name, context_anim, gen}
-        self._gen: int = 0                # 动画代次（begin_anim 每次自增）
+        self._prediction: dict | None = None  # {name, context_anim, gen}
+        self._gen: int = 0  # 动画代次（begin_anim 每次自增）
         # 观测计数（供 perfstats 打点 / 测试直接断言）
         self.counts = {"made": 0, "hit": 0, "miss_invalid": 0}
 
@@ -167,8 +168,7 @@ class PredictivePrewarm:
         self.counts["made"] += 1
         return True
 
-    def consume(self, context_anim: str, exclude: str, gap_active: bool,
-                moves: frozenset | set | None = None) -> str | None:
+    def consume(self, context_anim: str, exclude: str, gap_active: bool, moves: frozenset | set | None = None) -> str | None:
         """_pick_next 消费预测。
 
         消费规则只有一条：context_anim 与当前动画一致且代次未变，不符即弃、
@@ -184,11 +184,7 @@ class PredictivePrewarm:
             return None
         self._prediction = None
         move_names = moves or ()
-        valid = (
-            pred["context_anim"] == context_anim
-            and pred["gen"] == self._gen
-            and (pred["name"] != exclude or pred["name"] in move_names)
-        )
+        valid = pred["context_anim"] == context_anim and pred["gen"] == self._gen and (pred["name"] != exclude or pred["name"] in move_names)
         if not valid:
             if perfstats.ENABLED:
                 perfstats.note("predict.miss_invalid")

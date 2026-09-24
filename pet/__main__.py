@@ -89,7 +89,7 @@ def _run_settings(config=None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     # 设置进程只有设置窗一个窗口：关窗即退出，OS 立刻回收全部内存
-    #（进程内设置页首开留下的字体/样式/模块高水位没有卸载 API，只能靠进程退出）。
+    # （进程内设置页首开留下的字体/样式/模块高水位没有卸载 API，只能靠进程退出）。
     app.setQuitOnLastWindowClosed(True)
     if config is None:
         from .config import Config
@@ -102,15 +102,14 @@ def _run_settings(config=None) -> int:
         config.dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    return _exec_settings(
-        app, config, include_ai=_chat_available(), initial_page=_settings_page(sys.argv)
-    )
+    return _exec_settings(app, config, include_ai=_chat_available(), initial_page=_settings_page(sys.argv))
 
 
 def _main() -> int:
     # 卸载清理走无 GUI 路径：不导入 pet.app（避免拉起 QApplication/事件循环）。
     if "--uninstall-cleanup" in sys.argv:
         from .uninstall_cleanup import run_uninstall_cleanup
+
         results = run_uninstall_cleanup()
         # 关键步骤失败（值为 False）返回非零，跳过（"skipped"）或成功（True）为 0
         failed = any(v is False for v in results.values())
@@ -119,6 +118,7 @@ def _main() -> int:
     if "--settings" in sys.argv:
         return _run_settings()
     from .app import main as app_main
+
     return app_main()
 
 

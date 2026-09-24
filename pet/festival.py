@@ -147,9 +147,7 @@ def normalize_festival_config(config) -> dict:
         "mode": clean_mode(get("festival_reminder_mode", DEFAULT_MODE)),
         "count": clean_count(get("festival_reminder_count", DEFAULT_COUNT)),
         "times": clean_custom_times(get("festival_reminder_times", DEFAULT_TIMES)),
-        "show_quote": clean_flag(
-            get("festival_reminder_show_quote", DEFAULT_SHOW_QUOTE), DEFAULT_SHOW_QUOTE
-        ),
+        "show_quote": clean_flag(get("festival_reminder_show_quote", DEFAULT_SHOW_QUOTE), DEFAULT_SHOW_QUOTE),
         "speak": clean_flag(get("festival_reminder_speak", False), False),
         "custom_quotes_cn": clean_custom_quotes(get("festival_custom_quotes_cn", "")),
         "custom_quotes_west": clean_custom_quotes(get("festival_custom_quotes_west", "")),
@@ -227,9 +225,7 @@ def reminder_times(cfg: dict) -> tuple[str, ...]:
         return (_fmt_minutes(_WINDOW_START_MINUTE),)
     span = _WINDOW_END_MINUTE - _WINDOW_START_MINUTE
     step = span / (count - 1)
-    return tuple(
-        _fmt_minutes(round(_WINDOW_START_MINUTE + index * step)) for index in range(count)
-    )
+    return tuple(_fmt_minutes(round(_WINDOW_START_MINUTE + index * step)) for index in range(count))
 
 
 def quote_pool(festival: Festival, cfg: dict) -> tuple[str, ...]:

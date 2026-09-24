@@ -201,8 +201,10 @@ _FFMPEG_EXE_LOCK = threading.Lock()
 # _reader_local 按 clip 追加（帧数未知/估算则退化为播一遍自然结束，
 # 现状路径）；首帧解码只读一帧即关，绝不带循环参数。
 _FFMPEG_INPUT_PARAMS = [
-    '-c:v', 'libvpx-vp9',
-    '-threads', '1',
+    "-c:v",
+    "libvpx-vp9",
+    "-threads",
+    "1",
 ]
 
 # ------------------------------------------------------------ 会话结束（关机/注销）spawn 闸门（issue #111）
@@ -240,8 +242,8 @@ def set_session_ending(armed: bool = True) -> None:
         return
     _SESSION_ENDING = bool(armed)
     logger.info(
-        '会话结束闸门%s：此后不再派生 ffmpeg 子进程（issue #111）',
-        '已置位' if _SESSION_ENDING else '已复位',
+        "会话结束闸门%s：此后不再派生 ffmpeg 子进程（issue #111）",
+        "已置位" if _SESSION_ENDING else "已复位",
     )
 
 
@@ -270,6 +272,7 @@ def _ensure_ffmpeg_exe() -> None:
             imageio_ffmpeg.get_ffmpeg_exe()
         except Exception:
             pass
+
 
 # ------------------------------------------------------------ 孤儿 sweep 生命周期管理器（B7 审查 P2）
 # 退役 reader 的回收由「独立生命周期管理器」持有：注册表记录所有
@@ -434,10 +437,10 @@ class _OrphanClipRegistry:
                         self._clips.discard(clip)
                 if self._clips:
                     for clip in self._clips:
-                        clip._orphan_reap_count = getattr(clip, '_orphan_reap_count', 0) + 1
+                        clip._orphan_reap_count = getattr(clip, "_orphan_reap_count", 0) + 1
                         if clip._orphan_reap_count >= self._LEAK_ATTEMPTS:
                             logger.warning(
-                                'webm 退役 reader 多次回收仍存活（疑似泄漏，进程已 terminate）: %s',
+                                "webm 退役 reader 多次回收仍存活（疑似泄漏，进程已 terminate）: %s",
                                 clip.path,
                             )
                     timer = self._ensure_timer()
@@ -491,8 +494,7 @@ def _ffr_is_pinned(clip) -> bool:
       飞行中断摘）。idle 池可与高频交互常驻集重叠，混用会让落地摘 pin 顺手
       摘掉常驻保护，点击/拖拽首帧重新暴露在预热浪涌的逐出路径下。
     """
-    return bool(getattr(clip, '_ffr_pinned', False)
-                or getattr(clip, '_ffr_landing_pinned', False))
+    return bool(getattr(clip, "_ffr_pinned", False) or getattr(clip, "_ffr_landing_pinned", False))
 
 
 def _ffr_touch(clip, added_bytes: int = 0) -> list:
@@ -616,14 +618,14 @@ def _mem_debug_collector() -> dict:
     img_clips = img_bytes = pm_clips = pm_bytes = 0
     try:
         for clip in list(_MEM_CLIPS):
-            img = getattr(clip, '_current_image', None)
+            img = getattr(clip, "_current_image", None)
             if img is not None:
                 try:
                     img_clips += 1
                     img_bytes += img.width() * img.height() * 4
                 except RuntimeError:
                     pass
-            pm = getattr(clip, '_current_pixmap', None)
+            pm = getattr(clip, "_current_pixmap", None)
             if pm is not None:
                 try:
                     pm_clips += 1
@@ -632,21 +634,19 @@ def _mem_debug_collector() -> dict:
                     pass
     except RuntimeError:
         pass
-    detail = ','.join(
-        f'{label}:{n}f/{b // 1024}K' for label, n, b in samples
-    ) or '-'
+    detail = ",".join(f"{label}:{n}f/{b // 1024}K" for label, n, b in samples) or "-"
     return {
-        'clips': len(_MEM_CLIPS),
-        'readers': len(samples),
-        'q_frames': q_frames,
-        'q_bytes': q_bytes,
-        'ff_bytes': ff_bytes,
-        'ff_clips': ff_clips,
-        'img_clips': img_clips,
-        'img_bytes': img_bytes,
-        'pm_clips': pm_clips,
-        'pm_bytes': pm_bytes,
-        'reader_q': detail,
+        "clips": len(_MEM_CLIPS),
+        "readers": len(samples),
+        "q_frames": q_frames,
+        "q_bytes": q_bytes,
+        "ff_bytes": ff_bytes,
+        "ff_clips": ff_clips,
+        "img_clips": img_clips,
+        "img_bytes": img_bytes,
+        "pm_clips": pm_clips,
+        "pm_bytes": pm_bytes,
+        "reader_q": detail,
     }
 
 
@@ -753,7 +753,7 @@ class _PopenCapture:
             try:
                 argv = args[0] if args else None
                 decode = isinstance(argv, (list, tuple)) and "-i" in argv
-                mem_debug.bump('ff_spawn_dec' if decode else 'ff_spawn_probe')
+                mem_debug.bump("ff_spawn_dec" if decode else "ff_spawn_probe")
             except Exception:
                 pass
         state = getattr(cls._local, "capture", None)
@@ -804,9 +804,7 @@ def _meta_cache_file_lock():
     且每个条目仍以（mtime+size）key 幂等）。锁文件与缓存文件分离：
     缓存文件用 tmp+replace 原子替换，锁文件固定不变（不随替换消失）。
     """
-    lock_path = _META_FILE_CACHE_PATH.with_suffix(
-        _META_FILE_CACHE_PATH.suffix + ".lock"
-    )
+    lock_path = _META_FILE_CACHE_PATH.with_suffix(_META_FILE_CACHE_PATH.suffix + ".lock")
     try:
         f = open(lock_path, "a+b")
     except OSError:
@@ -824,9 +822,11 @@ def _meta_cache_file_lock():
                 f.seek(0)
                 if os.name == "nt":
                     import msvcrt
+
                     msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
                 else:
                     import fcntl
+
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return f
             except OSError:
@@ -873,6 +873,7 @@ def _save_meta_file_cache_entry(key: str, frames: int, duration: float) -> None:
                         pass
     except OSError:
         pass
+
 
 try:
     import imageio_ffmpeg
@@ -1040,9 +1041,7 @@ class WebMClip(QObject):
         # callable；lambda 捕获 self 会形成引用环（clip→连接→lambda→clip），
         # 由 cleanup() 内显式断开（_destroyed_conn）打破，C++ 删除时 Qt 也会
         # 清理连接兜底。
-        self._destroyed_conn = self.destroyed.connect(
-            lambda *_: WebMClip._destroyed_cleanup(self)
-        )
+        self._destroyed_conn = self.destroyed.connect(lambda *_: WebMClip._destroyed_cleanup(self))
 
     @staticmethod
     def _destroyed_cleanup(clip: "WebMClip") -> None:
@@ -1068,9 +1067,10 @@ class WebMClip(QObject):
         # 引用环，显式断开让 Python GC 可回收；C++ 已删场景直接跳过——
         # 否则 libpyside 在 Python except 之前先打 RuntimeWarning 噪音
         # （审查 DS-L3）。
-        conn = getattr(self, '_destroyed_conn', None)
+        conn = getattr(self, "_destroyed_conn", None)
         if conn is not None:
             import shiboken6
+
             if shiboken6.isValid(self):
                 try:
                     self.destroyed.disconnect(conn)
@@ -1173,8 +1173,8 @@ class WebMClip(QObject):
         if r.kill_attempts >= _CONFIRM_KILL_MAX:
             r.abandoned = True
             logger.warning(
-                '退役 reader 进程补杀确认多次失败，标注放弃（保留追踪不再重试）: pid=%s path=%s',
-                getattr(r.proc, 'pid', '?'),
+                "退役 reader 进程补杀确认多次失败，标注放弃（保留追踪不再重试）: pid=%s path=%s",
+                getattr(r.proc, "pid", "?"),
                 self.path,
             )
         return False
@@ -1229,8 +1229,7 @@ class WebMClip(QObject):
             self._retired.pop(0)
 
     @staticmethod
-    def _terminate_proc(proc: subprocess.Popen | None,
-                        timeout: float = _PROC_TERMINATE_TIMEOUT) -> bool:
+    def _terminate_proc(proc: subprocess.Popen | None, timeout: float = _PROC_TERMINATE_TIMEOUT) -> bool:
         """主动终止 ffmpeg 子进程并确认退出（P2；R3 返回确认结果）。
 
         顺序：terminate() → 有界 wait() → 超时 kill() → 再次 wait()。
@@ -1260,8 +1259,8 @@ class WebMClip(QObject):
                     return True
                 except subprocess.TimeoutExpired:
                     logger.warning(
-                        'ffmpeg 进程 terminate+kill 后仍存活（保留句柄供 sweep 重试）: pid=%s',
-                        getattr(proc, 'pid', '?'),
+                        "ffmpeg 进程 terminate+kill 后仍存活（保留句柄供 sweep 重试）: pid=%s",
+                        getattr(proc, "pid", "?"),
                     )
                     return False
         except Exception:
@@ -1322,9 +1321,9 @@ class WebMClip(QObject):
                 self._frame_count_exact = True  # 源自 count_frames_and_secs
             return
         entry = _get_meta_file_cache().get(cache_key)
-        if isinstance(entry, dict) and entry.get('frames') and entry.get('duration'):
-            self._frame_count = int(entry['frames'])
-            self._duration = float(entry['duration'])
+        if isinstance(entry, dict) and entry.get("frames") and entry.get("duration"):
+            self._frame_count = int(entry["frames"])
+            self._duration = float(entry["duration"])
             if self._frame_count > 0 and self._duration > 0:
                 self._fps = self._frame_count / self._duration
                 self._frame_count_exact = True  # 源自 count_frames_and_secs
@@ -1339,10 +1338,9 @@ class WebMClip(QObject):
                 # 踢给后台预热（每 clip 只踢一次），本次先吃默认值——reader
                 # 会从码流 meta 补充；热身后下次 start 即中缓存。显式预热
                 # （warm_meta，含测试在主线程显式调用）不受此闸限制。
-                if not getattr(self, '_meta_bg_kicked', False):
+                if not getattr(self, "_meta_bg_kicked", False):
                     self._meta_bg_kicked = True
-                    threading.Thread(target=self._warm_meta_quiet,
-                                     daemon=True, name='pet-warm-meta').start()
+                    threading.Thread(target=self._warm_meta_quiet, daemon=True, name="pet-warm-meta").start()
                 return
             frames, secs = imageio_ffmpeg.count_frames_and_secs(key)
             if frames and frames > 0:
@@ -1355,7 +1353,7 @@ class WebMClip(QObject):
             _META_CACHE[cache_key] = (self._frame_count, self._duration)
             _save_meta_file_cache_entry(cache_key, self._frame_count, self._duration)
         except Exception as exc:
-            logger.warning('webm 元数据读取失败 %s: %s', self.path, exc)
+            logger.warning("webm 元数据读取失败 %s: %s", self.path, exc)
             # 保留默认值，后续 reader 会尝试从 read_frames 的 meta 补充
 
     def warm_meta(self) -> None:
@@ -1369,11 +1367,7 @@ class WebMClip(QObject):
             pass  # 后台预热失败不致命：reader 会从码流 meta 补充
 
     def _timer_interval(self) -> int:
-        base = (
-            max(1, int(round(1000 / (self._fps * self.playback_speed))))
-            if self._fps > 0
-            else max(1, int(round(catalog.FRAME_MS / self.playback_speed)))
-        )
+        base = max(1, int(round(1000 / (self._fps * self.playback_speed)))) if self._fps > 0 else max(1, int(round(catalog.FRAME_MS / self.playback_speed)))
         # 解码节流（批11）：interval ×ratio —— 消费端降速为
         # fps/ratio，配合 reader 的阻塞入队（背压）让 ffmpeg 解码速率
         # 联动下降到同一节奏。ratio=1（默认/非闲置）时与旧行为逐位一致。
@@ -1507,15 +1501,15 @@ class WebMClip(QObject):
         if self._running:
             return True
         if self._cleaned:
-            logger.warning('clip 已 cleanup，拒绝启动 reader: %s', self.path)
+            logger.warning("clip 已 cleanup，拒绝启动 reader: %s", self.path)
             return False
         if imageio_ffmpeg is None:
-            self.errorOccurred.emit(str(_IMPORT_ERROR or 'imageio_ffmpeg 不可用'))
+            self.errorOccurred.emit(str(_IMPORT_ERROR or "imageio_ffmpeg 不可用"))
             return False
         if session_ending():
             # 会话结束（关机/注销）：绝不再拉起新的取帧进程（issue #111）。
             # 沿用既有「启动被拒」契约 —— 调用方按 False 走降级/重试。
-            logger.info('会话结束中，拒绝启动 reader: %s', self.path)
+            logger.info("会话结束中，拒绝启动 reader: %s", self.path)
             return False
 
         # 批8 续圈：圈边界软停（_soft_parked）且循环 reader 仍存活 → re-arm
@@ -1542,8 +1536,9 @@ class WebMClip(QObject):
         self._reap_retired(join_timeout=0)
         if len(self._retired) > _MAX_RETIRED_READERS * 4:
             logger.warning(
-                'webm reader 退役池异常累积（%d 个存活）：%s',
-                len(self._retired), self.path,
+                "webm reader 退役池异常累积（%d 个存活）：%s",
+                len(self._retired),
+                self.path,
             )
 
         # 在 GUI 线程读取真实 fps 后再启动 QTimer，保证新动画的实际帧率
@@ -1575,7 +1570,7 @@ class WebMClip(QObject):
             target=self._reader,
             args=(stop_evt, gen_id, ready_evt),
             daemon=True,
-            name=f'webm-reader-{gen_id}',
+            name=f"webm-reader-{gen_id}",
         )
         with self._reader_lock:
             self._thread = thread
@@ -1584,8 +1579,10 @@ class WebMClip(QObject):
             # 进排查表——换代后旧队列仍被旧 reader 引用，只有按 reader 登记才
             # 能看到「某代退役但队列未释放」。weakref，不影响生命周期。
             mem_debug.note_reader(
-                f'{os.path.basename(str(self.path))}#{gen_id}',
-                self._queue, thread, self._w * self._h * self._bpp,
+                f"{os.path.basename(str(self.path))}#{gen_id}",
+                self._queue,
+                thread,
+                self._w * self._h * self._bpp,
             )
         thread.start()
         self._timer.start()
@@ -1706,7 +1703,7 @@ class WebMClip(QObject):
                 # （_reader_parked 只在标记投递后由 reader 置位），本分支
                 # 理论上不可达。防御性按「标记未发」处理并留告警——若真
                 # 到达，说明软停/驻留/标记的不变量被新改动破坏。
-                logger.warning('webm 续圈时结束标记未发出（不变量破坏）: %s', self.path)
+                logger.warning("webm 续圈时结束标记未发出（不变量破坏）: %s", self.path)
                 self._rearm_pending = True
             self._soft_parked = False
             self._natural_end_pending = False
@@ -1802,6 +1799,7 @@ class WebMClip(QObject):
         proc = None
         g = None
         try:
+
             def _register(p: subprocess.Popen, argv) -> None:
                 """解码进程 Popen 一拉起即登记（可被取消/cleanup 主动 terminate）。
 
@@ -1831,7 +1829,7 @@ class WebMClip(QObject):
             with _PopenCapture(on_process=_register):
                 g = imageio_ffmpeg.read_frames(
                     str(self.path),
-                    pix_fmt='rgba',
+                    pix_fmt="rgba",
                     bits_per_pixel=self._bpp * 8,
                     input_params=list(_FFMPEG_INPUT_PARAMS),
                 )
@@ -1840,29 +1838,28 @@ class WebMClip(QObject):
             if perfstats.ENABLED:
                 # 首帧解码核心段（ffmpeg 拉起 + 两帧交付）：同步路径的
                 # 点击卡顿与后台预热的耗时都在这里（P0 观测）。
-                perfstats.time('webm.first_frame', perfstats.clock() - _ff_t0)
+                perfstats.time("webm.first_frame", perfstats.clock() - _ff_t0)
             if gen is not None and gen != self._first_frame_gen:
                 return None  # 解码期间被取消/换代：结果作废
-            if meta.get('fps'):
-                self._fps = float(meta['fps'])
-            if meta.get('duration'):
-                self._duration = float(meta['duration'])
+            if meta.get("fps"):
+                self._fps = float(meta["fps"])
+            if meta.get("duration"):
+                self._duration = float(meta["duration"])
             if self._frame_count <= 0 and self._fps > 0 and self._duration > 0:
                 self._frame_count = int(round(self._fps * self._duration))
             expect = self._w * self._h * self._bpp
             if len(frame) == expect:
-                img = QImage(frame, self._w, self._h, self._w * self._bpp,
-                             QImage.Format.Format_RGBA8888)
+                img = QImage(frame, self._w, self._h, self._w * self._bpp, QImage.Format.Format_RGBA8888)
                 if not img.isNull():
                     return img.copy()
             return None
         except Exception as exc:
-            logger.warning('webm 首帧解码失败 %s: %s', self.path, exc)
+            logger.warning("webm 首帧解码失败 %s: %s", self.path, exc)
             return None
         finally:
             if proc is not None:
                 if mem_debug.ENABLED:
-                    mem_debug.bump('ff_done')  # 取证：已收尾的解码进程数
+                    mem_debug.bump("ff_done")  # 取证：已收尾的解码进程数
                 with self._reader_lock:
                     self._first_frame_procs.discard(proc)
             if g is not None:
@@ -2015,24 +2012,22 @@ class WebMClip(QObject):
             with self._reader_lock:
                 self._unconfirmed_procs.extend(still)
 
-    def _bump_unconfirmed(self, proc: subprocess.Popen, attempts: int,
-                          still: list) -> None:
+    def _bump_unconfirmed(self, proc: subprocess.Popen, attempts: int, still: list) -> None:
         """未确认退出的一次重试记账（R3）：递增 attempts；达到上限告警并
         标注 abandoned（条目保留在追踪中、不再重试），否则保留待下次 sweep
         重试——绝不静默丢弃句柄。"""
         attempts += 1
         if attempts >= _UNCONFIRMED_KILL_MAX:
             logger.warning(
-                '首帧进程取消后未确认退出，标注放弃（保留追踪不再重试）: pid=%s',
-                getattr(proc, 'pid', '?'),
+                "首帧进程取消后未确认退出，标注放弃（保留追踪不再重试）: pid=%s",
+                getattr(proc, "pid", "?"),
             )
             still.append([proc, attempts, True])
         else:
             still.append([proc, attempts, False])
 
     # ------------------------------------------------------------ reader
-    def _reader(self, stop_evt: threading.Event, generation: int,
-                ready_evt: threading.Event | None = None) -> None:
+    def _reader(self, stop_evt: threading.Event, generation: int, ready_evt: threading.Event | None = None) -> None:
         """reader 线程入口：feed 模式（进程内扇出）与本地解码的分派。
 
         - ``_feed_source`` 为 None（默认/灰度关）：逐位走 ``_reader_local``，
@@ -2051,7 +2046,7 @@ class WebMClip(QObject):
         if session_ending():
             # 会话结束（关机/注销）：reader 线程绝不拉起 ffmpeg（issue #111）——
             # 关机窗口期内新起的进程会以 0xc0000142 弹窗阻塞关机。
-            logger.info('会话结束中，reader 拒绝拉起 ffmpeg: %s', self.path)
+            logger.info("会话结束中，reader 拒绝拉起 ffmpeg: %s", self.path)
             return
         feed = self._feed_source
         if feed is not None:
@@ -2067,11 +2062,10 @@ class WebMClip(QObject):
             if stop_evt.is_set() or self._generation != generation:
                 return
             self._drain_queue_for_local()
-            logger.info('fan-out feed 回退本地解码（帧 0 起播）: %s', self.path)
+            logger.info("fan-out feed 回退本地解码（帧 0 起播）: %s", self.path)
         self._reader_local(stop_evt, generation, ready_evt)
 
-    def _reader_local(self, stop_evt: threading.Event, generation: int,
-                      ready_evt: threading.Event | None = None) -> None:
+    def _reader_local(self, stop_evt: threading.Event, generation: int, ready_evt: threading.Event | None = None) -> None:
         # 批 6-8b：线程启动前已被 stop/换代的 reader 零成本退出——绝不拉起
         # 任何 ffmpeg 进程（省掉「拉起→_register 发现 stale→自终止」的浪费
         # 与延迟，也杜绝 stop 无法解除的探测/解码等待）。
@@ -2085,7 +2079,7 @@ class WebMClip(QObject):
         if session_ending():
             # 会话结束（关机/注销）：本地解码路径绝不 spawn（issue #111）。
             # 覆盖 feed 回退本地与任何绕过 start() 的迟到 reader。
-            logger.info('会话结束中，本地 reader 拒绝拉起 ffmpeg: %s', self.path)
+            logger.info("会话结束中，本地 reader 拒绝拉起 ffmpeg: %s", self.path)
             return
         gen = None
         proc = None
@@ -2126,15 +2120,10 @@ class WebMClip(QObject):
             # -readrate 随 playback_speed 缩放（P2-4：speed>1 时钉死 1 会把
             # 解码封顶在原生帧率，消费端 36fps 对解码端 24fps → 队列饥饿）；
             # speed<=1 恒为 1。背压（队列/管道写满）在 readrate 之上仍然生效。
-            loop_frame_count = (
-                self._frame_count
-                if self._frame_count > 0 and self._frame_count_exact
-                else 0
-            )
+            loop_frame_count = self._frame_count if self._frame_count > 0 and self._frame_count_exact else 0
             input_params = list(_FFMPEG_INPUT_PARAMS)
             if loop_frame_count > 0:
-                input_params += ['-stream_loop', '-1',
-                                 '-readrate', str(max(1.0, self.playback_speed))]
+                input_params += ["-stream_loop", "-1", "-readrate", str(max(1.0, self.playback_speed))]
             # 批11-B1：记录当前 ffmpeg 进程出生时刻并清零圈数（圈边界回收
             # 判定/日志用；reader 线程写，Reader 读同线程）。只在此处记录一次，
             # feed 路径（不拉起 ffmpeg）不会走到这里，_reader_born_at 保持 0。
@@ -2147,7 +2136,7 @@ class WebMClip(QObject):
             with _PopenCapture(on_process=_register) as capture:
                 gen = imageio_ffmpeg.read_frames(
                     str(self.path),
-                    pix_fmt='rgba',
+                    pix_fmt="rgba",
                     bits_per_pixel=self._bpp * 8,
                     input_params=input_params,
                 )
@@ -2170,22 +2159,22 @@ class WebMClip(QObject):
             if stop_evt.is_set() or self._generation != generation:
                 return
             # 用实际流信息修正元数据
-            if meta.get('fps'):
-                self._fps = float(meta['fps'])
-            if meta.get('duration'):
-                self._duration = float(meta['duration'])
+            if meta.get("fps"):
+                self._fps = float(meta["fps"])
+            if meta.get("duration"):
+                self._duration = float(meta["duration"])
             if self._frame_count <= 0 and self._fps > 0 and self._duration > 0:
                 self._frame_count = int(round(self._fps * self._duration))
 
             # 批8 进程内循环：frame_count > 0 时按它回绕源帧号，每圈边界经
             # _loop_boundary 交付一次结束标记并驻留等续圈；loop_end 记录
             # 「圈边界已交付过结束标记后退出」，避免下方再重复放入一个。
-            loop_end = {'reported': False}
+            loop_end = {"reported": False}
 
             def _on_loop_boundary() -> bool:
                 ok = self._loop_boundary(q, stop_evt, generation)
                 if not ok:
-                    loop_end['reported'] = True
+                    loop_end["reported"] = True
                 return ok
 
             self._stamp_source_indices(
@@ -2201,7 +2190,7 @@ class WebMClip(QObject):
                 loop_frame_count=loop_frame_count,
                 on_loop_boundary=_on_loop_boundary,
             )
-            if loop_end['reported']:
+            if loop_end["reported"]:
                 return  # 圈边界已交付结束标记，finally 照常收尾杀进程
             # 正常播完（有限流，如测试桩）时放入结束标记。主线程可能正忙
             # （队列满、帧被丢弃），必须循环重试直到放入或收到停止信号；
@@ -2213,7 +2202,7 @@ class WebMClip(QObject):
         except Exception as exc:
             if self._generation != generation or stop_evt.is_set():
                 return
-            logger.exception('webm 解码失败: %s', self.path)
+            logger.exception("webm 解码失败: %s", self.path)
             self.errorOccurred.emit(str(exc))
             # 异常中断也要放入结束标记，避免动画链卡在最后一帧（同样有界）。
             self._put_end_marker(q, stop_evt, generation)
@@ -2254,7 +2243,7 @@ class WebMClip(QObject):
                 with self._proc_lock:
                     if proc is not None:
                         if mem_debug.ENABLED:
-                            mem_debug.bump('ff_done')  # 取证：已收尾的解码进程数
+                            mem_debug.bump("ff_done")  # 取证：已收尾的解码进程数
                         # 兜底 terminate：正常情况下 stop() 已解除阻塞/终止；
                         # 自然播完/解码失败时进程已自行退出（poll()!=None），
                         # 此处为无操作。
@@ -2266,8 +2255,7 @@ class WebMClip(QObject):
                             pass
 
     # ------------------------------------------------------------ P3 broker
-    def _reader_feed(self, feed, stop_evt: threading.Event, generation: int,
-                     ready_evt: threading.Event | None = None) -> bool:
+    def _reader_feed(self, feed, stop_evt: threading.Event, generation: int, ready_evt: threading.Event | None = None) -> bool:
         """feed 分支（reader 线程内）。返回 True = 本轮已由 feed 完整处理
         （feed 就绪并流完自然结束 / 或已被 stop 打断）；False = 需要回退
         本地解码（feed 就绪前超时/断流/中止——测试桩驱动该等待路径）。
@@ -2277,7 +2265,7 @@ class WebMClip(QObject):
         沿用本地同款丢帧契约（队列满丢帧、源帧号照常推进）。
         """
         # 1) feed-pending：有界等待 feed 就绪（reader 线程内，≤SUBSCRIBE_BUDGET_MS）
-        budget_ms = getattr(feed, 'budget_ms', None) or _SUBSCRIBE_BUDGET_MS
+        budget_ms = getattr(feed, "budget_ms", None) or _SUBSCRIBE_BUDGET_MS
         deadline = time.monotonic() + max(1, int(budget_ms)) / 1000.0
         while not (stop_evt.is_set() or self._generation != generation):
             if feed.ready:
@@ -2297,7 +2285,7 @@ class WebMClip(QObject):
             # expire 闭锁本 feed：晚到的 grant 命中已闭锁句柄 → 立即 close，
             # 不再 complete（reader 已不再等待该 Event）。
             feed.expire()
-            logger.info('fan-out feed 授权失败（deny/超时），回退本地解码: %s', self.path)
+            logger.info("fan-out feed 授权失败（deny/超时），回退本地解码: %s", self.path)
             return False
         if ready_evt is not None:
             ready_evt.set()  # feed 已就绪：等价于本地 ffmpeg 拉起完成的信号
@@ -2311,27 +2299,24 @@ class WebMClip(QObject):
                 # F1：poll 协议对 abort 透传 reason（'handover'|'disband'|
                 # 'stop_all'|'watchdog'）；兼容外部 feed 会话（测试桩）只返回 3 元组。
                 reason = result[3] if len(result) > 3 else None
-                if kind == 'frame':
+                if kind == "frame":
                     try:
                         q.put((data, src), timeout=0.2)
                     except queue.Full:
                         if perfstats.ENABLED:
-                            perfstats.note('webm.queue_drop')
+                            perfstats.note("webm.queue_drop")
                         pass  # 队列满丢帧：源帧号照常推进（本地同款契约）
-                elif kind == 'end':
+                elif kind == "end":
                     # 源帧号回绕合成 end：结束标记 → finished
                     self._put_end_marker(q, stop_evt, generation)
                     return True
-                elif kind == 'abort':
-                    if reason in ('handover', 'disband'):
+                elif kind == "abort":
+                    if reason in ("handover", "disband"):
                         # F1：handover 扶正为发布者 / disband 源解散重建都是设计内
                         # 行为，不是故障——打 INFO（回退后由本窗后续切换收尾）。
-                        logger.info(
-                            'fan-out %s（设计内），本地解码重启: %s',
-                            reason, self.path)
+                        logger.info("fan-out %s（设计内），本地解码重启: %s", reason, self.path)
                     else:
-                        logger.warning(
-                            'fan-out feed 断流/中止，回退本地解码: %s', self.path)
+                        logger.warning("fan-out feed 断流/中止，回退本地解码: %s", self.path)
                     return False
                 else:  # 'none'：暂无新帧，微让步避免忙等
                     time.sleep(0.002)
@@ -2364,7 +2349,7 @@ class WebMClip(QObject):
         except queue.Empty:
             if perfstats.ENABLED:
                 # 消费端空转（解码还没跟上/未开始）：P0 观测。
-                perfstats.note('webm.poll_empty')
+                perfstats.note("webm.poll_empty")
             return
 
         if item is None:
@@ -2394,7 +2379,8 @@ class WebMClip(QObject):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 logger.warning(
-                    'webm 结束标记放入超时放弃（队列持续满）: %s', self.path,
+                    "webm 结束标记放入超时放弃（队列持续满）: %s",
+                    self.path,
                 )
                 return False
             try:
@@ -2445,18 +2431,16 @@ class WebMClip(QObject):
             # 进程存活已达阈值，不做 park/re-arm，直接返回 False（reader 退出、
             # finally 杀进程），下一次 start() 自然 fresh spawn。只在圈边界
             # （本点）动手，绝不播放中途杀进程；判定幂等（每圈只在本点评估）。
-            if (delivered
-                    and not stop_evt.is_set()
-                    and self._generation == generation
-                    and self._recycle_due()):
+            if delivered and not stop_evt.is_set() and self._generation == generation and self._recycle_due():
                 self._reader_parked = False
                 logger.info(
-                    'webm 圈边界回收 ffmpeg（age=%.1fs loops=%d）: %s',
+                    "webm 圈边界回收 ffmpeg（age=%.1fs loops=%d）: %s",
                     time.monotonic() - self._reader_born_at,
-                    self._reader_loops, self.path,
+                    self._reader_loops,
+                    self.path,
                 )
                 if perfstats.ENABLED:
-                    perfstats.note('ffmpeg.recycle')
+                    perfstats.note("ffmpeg.recycle")
                 return False
         if stop_evt.is_set() or self._generation != generation:
             return False
@@ -2475,7 +2459,7 @@ class WebMClip(QObject):
         if stop_evt.is_set() or self._generation != generation:
             return False
         if not got:
-            logger.info('webm 圈边界宽限期满未续圈，reader 退出: %s', self.path)
+            logger.info("webm 圈边界宽限期满未续圈，reader 退出: %s", self.path)
             # 复审 P2-1：复位软停驻留标记——reader 退出后 clip 处于
             # 「_running=False, _soft_parked=True」的死而未僵状态，hub 的
             # 发布者存活判定会对死发布者说谎（reader 写、GUI 读，GIL 原子
@@ -2499,10 +2483,9 @@ class WebMClip(QObject):
             sink.on_frame(frame, src_idx)
 
     @staticmethod
-    def _stamp_source_indices(frames, q, is_stopped, timeout: float = 0.2,
-                              throttled=None, on_frame=None,
-                              loop_frame_count: int = 0,
-                              on_loop_boundary=None) -> None:
+    def _stamp_source_indices(
+        frames, q, is_stopped, timeout: float = 0.2, throttled=None, on_frame=None, loop_frame_count: int = 0, on_loop_boundary=None
+    ) -> None:
         """reader 线程把解码帧逐帧打上素材源时间线帧号后入队。
 
         队列项 = (RGBA 字节, 源时间线 0-based 帧号)。返回帧号即
@@ -2546,7 +2529,7 @@ class WebMClip(QObject):
             except StopIteration:
                 break
             if mem_debug.ENABLED:
-                mem_debug.bump('frames_dec')  # 取证：reader 侧解码帧数
+                mem_debug.bump("frames_dec")  # 取证：reader 侧解码帧数
             if is_stopped():
                 break
             timeline_idx = (src_idx % loop_frame_count) if loop_frame_count > 0 else src_idx
@@ -2555,7 +2538,7 @@ class WebMClip(QObject):
             if perfstats.ENABLED:
                 # 帧间隔 = ffmpeg 解码 + 管道交付一帧的耗时（reader 侧，
                 # P0 观测：不把下方入队阻塞计入解码耗时）。
-                perfstats.time('webm.decode', perfstats.clock() - _dec_t0)
+                perfstats.time("webm.decode", perfstats.clock() - _dec_t0)
             if throttled is not None and throttled():
                 # 节流路径：阻塞入队（背压），不丢帧、不虚推进源帧号。
                 if perfstats.ENABLED:
@@ -2568,7 +2551,7 @@ class WebMClip(QObject):
                     except queue.Full:
                         continue  # 队列仍满：同一帧继续阻塞重试
                 if perfstats.ENABLED:
-                    perfstats.time('webm.queue_wait', perfstats.clock() - _put_t0)
+                    perfstats.time("webm.queue_wait", perfstats.clock() - _put_t0)
             else:
                 if perfstats.ENABLED:
                     _put_t0 = perfstats.clock()
@@ -2576,31 +2559,28 @@ class WebMClip(QObject):
                     q.put((frame, timeline_idx), timeout=timeout)
                 except queue.Full:
                     if perfstats.ENABLED:
-                        perfstats.note('webm.queue_drop')
+                        perfstats.note("webm.queue_drop")
                     pass  # 丢弃该帧；源帧号照常推进（时间线槽位不因丢帧回退）
                 if perfstats.ENABLED:
-                    perfstats.time('webm.queue_wait', perfstats.clock() - _put_t0)
+                    perfstats.time("webm.queue_wait", perfstats.clock() - _put_t0)
                 src_idx += 1
             # 圈边界（批8）：末帧交付后回调（结束标记 + 驻留等续圈在回调里）。
             # 被停止的节流重试不触发边界（帧未交付，不算一圈播完）。
-            if (loop_frame_count > 0 and on_loop_boundary is not None
-                    and timeline_idx == loop_frame_count - 1
-                    and not is_stopped()):
+            if loop_frame_count > 0 and on_loop_boundary is not None and timeline_idx == loop_frame_count - 1 and not is_stopped():
                 if not on_loop_boundary():
                     return  # 停止/续圈被拒/宽限超时：退出（调用方 finally 收尾）
 
     def _process_frame(self, item) -> None:
         if mem_debug.ENABLED:
-            mem_debug.bump('frames_cons')  # 取证：GUI 侧消费/渲染帧数
+            mem_debug.bump("frames_cons")  # 取证：GUI 侧消费/渲染帧数
         data, src_idx = item
         expect = self._w * self._h * self._bpp
         if len(data) != expect:
-            logger.warning('webm 帧长度异常: got=%d expect=%d', len(data), expect)
+            logger.warning("webm 帧长度异常: got=%d expect=%d", len(data), expect)
             return
         if perfstats.ENABLED:
             _cons_t0 = perfstats.clock()
-        img = QImage(data, self._w, self._h, self._w * self._bpp,
-                     QImage.Format.Format_RGBA8888)
+        img = QImage(data, self._w, self._h, self._w * self._bpp, QImage.Format.Format_RGBA8888)
         if img.isNull():
             return
         self._current_image = img.copy()
@@ -2629,5 +2609,5 @@ class WebMClip(QObject):
             self._natural_end_pending = True
         if perfstats.ENABLED:
             # 主线程消费转换（RGBA→QImage→QPixmap）耗时（P0 观测）。
-            perfstats.time('webm.consume', perfstats.clock() - _cons_t0)
+            perfstats.time("webm.consume", perfstats.clock() - _cons_t0)
         self.frameChanged.emit(self._current_frame_index)

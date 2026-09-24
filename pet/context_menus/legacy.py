@@ -4,6 +4,7 @@
 Keep this module intentionally independent from ``modern.py``: preserving the
 original interaction model is more important than sharing layout code.
 """
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMenu

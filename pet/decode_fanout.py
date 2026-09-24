@@ -238,10 +238,8 @@ class _FanoutFeedSession:
             if self._aborted:
                 return ("abort", None, None, self._abort_reason)
             if time.monotonic() > self._stall_deadline:
-                logger.warning(
-                    'fanout feed 看门狗超时（%dms 无帧无 end），回退本地解码',
-                    WATCHDOG_BUDGET_MS)
-                return ("abort", None, None, 'watchdog')
+                logger.warning("fanout feed 看门狗超时（%dms 无帧无 end），回退本地解码", WATCHDOG_BUDGET_MS)
+                return ("abort", None, None, "watchdog")
         item = None
         # 跨线程可见性防护（一次原子取帧）：环空**未必**是真空——生产端可能恰在
         # 消费端取帧前后完成 push。判据用「**取帧前后**高水位线是否推进」：环空且
@@ -288,8 +286,7 @@ class FanoutFeed:
     经 ``_lock`` 串行化（跨线程安全）。
     """
 
-    def __init__(self, session: _FanoutFeedSession,
-                 budget_ms: int = FEED_BUDGET_MS) -> None:
+    def __init__(self, session: _FanoutFeedSession, budget_ms: int = FEED_BUDGET_MS) -> None:
         self._session = session
         self.budget_ms = int(budget_ms)
         self._lock = threading.Lock()
@@ -326,7 +323,7 @@ class _Subscription:
         self.session = _FanoutFeedSession(self.ring)
         self.feed = FanoutFeed(self.session)
         # 本窗期望解码 divisor（窗口经 _report_desired_throttle 上报；1=全速）
-        self.desired = int(getattr(movie, 'decode_throttle_divisor', 1) or 1)
+        self.desired = int(getattr(movie, "decode_throttle_divisor", 1) or 1)
 
     def abort(self, reason: str) -> None:
         """让本订阅者 feed 会话下一次 poll 立即返回 'abort'（handover/disband/收口用）。
@@ -356,8 +353,7 @@ class _Source:
         self.subscriptions: list[_Subscription] = []  # FIFO（最老在前 → handover 选它）
         # 发布窗期望解码 divisor（一旦 hub 接管 pace，源窗不再直接推 divisor，
         # 改经 _report_desired_throttle 上报）。默认读取源窗当前推送值。
-        self.publisher_desired = int(
-            getattr(publisher_movie, 'decode_throttle_divisor', 1) or 1)
+        self.publisher_desired = int(getattr(publisher_movie, "decode_throttle_divisor", 1) or 1)
         self._pace_external = False
         # F2：源发布者**自然圈末解散**标记（natural=True 且仍有订阅者）。置位后
         # 不做 handover——订阅者随自身 is_last 自行 unregister（最后一个离开时
@@ -400,8 +396,7 @@ class DecodeFanoutHub:
         pass
 
     # ---- 窗口层入口（window._switch 在 shareable movie start/end 时调用）-----
-    def shareable_start(self, name, movie, path=None, fps=None,
-                        total_frames=None) -> str:
+    def shareable_start(self, name, movie, path=None, fps=None, total_frames=None) -> str:
         """shareable（idle 类）movie 即将 start() 前调用。
 
         判定序（全 GUI 线程）：
@@ -415,12 +410,12 @@ class DecodeFanoutHub:
            （ready=True, result=session 立即就绪）→ ``'feed'``。
         """
         if not self._enabled:
-            return 'local'
-        if not (hasattr(movie, '_publish_sink') and hasattr(movie, '_feed_source')):
-            return 'local'  # GifClip/测试桩：无 fan-out 能力
+            return "local"
+        if not (hasattr(movie, "_publish_sink") and hasattr(movie, "_feed_source")):
+            return "local"  # GifClip/测试桩：无 fan-out 能力
         asset = self._asset_of(movie, path)
         if asset is None:
-            return 'local'
+            return "local"
         source = self._sources.get(asset)
         if source is None:
             source = _Source(asset, name, movie)
@@ -428,7 +423,7 @@ class DecodeFanoutHub:
             self._set_publish_sink(movie, source.sink)
             self._set_feed_source(movie, None)
             self._set_pace_external(movie, False)
-            return 'publish'
+            return "publish"
         # F2：发布者已停（未运行且未软停驻留）或源处于自然圈末解散（draining）
         # → 不订阅已死的源：释放它并按「无源首发窗」建新源（本窗起 reader）。
         # 存活判定必须把软停驻留（_soft_parked）计入存活——驻留中将被 re-arm 的
@@ -440,21 +435,20 @@ class DecodeFanoutHub:
             self._set_publish_sink(movie, source.sink)
             self._set_feed_source(movie, None)
             self._set_pace_external(movie, False)
-            return 'publish'
-        if abs(float(getattr(movie, 'playback_speed', 1.0))
-               - float(getattr(source.publisher, 'playback_speed', 1.0))) > SPEED_EPSILON:
-            return 'local'  # 速度不等不共享
+            return "publish"
+        if abs(float(getattr(movie, "playback_speed", 1.0)) - float(getattr(source.publisher, "playback_speed", 1.0))) > SPEED_EPSILON:
+            return "local"  # 速度不等不共享
         if movie is source.publisher:
             self._set_publish_sink(movie, source.sink)
             self._set_feed_source(movie, None)
-            return 'publish'
+            return "publish"
         sub = _Subscription(source, movie, name)
         source.subscriptions.append(sub)
         source.sink.attach(sub)
         self._set_feed_source(movie, sub.feed)
         self._set_publish_sink(movie, None)
         self._recompute_pace(source)
-        return 'feed'
+        return "feed"
 
     def shareable_end(self, name, movie, natural: bool = True) -> None:
         """shareable movie 播完/停播后调用，幂等。
@@ -491,15 +485,14 @@ class DecodeFanoutHub:
         # handover：选最老订阅者扶正为新发布者（仅中途打断/非自然离开触发）
         sub = source.subscriptions.pop(0)
         source.sink.detach(sub)
-        sub.abort('handover')  # 让 S 的 feed 会话返回 'abort' → 回退本地 ffmpeg 帧 0 起播
+        sub.abort("handover")  # 让 S 的 feed 会话返回 'abort' → 回退本地 ffmpeg 帧 0 起播
         source.publisher = sub.movie
         sub.movie._publish_sink = source.sink
         sub.movie._feed_source = None
         self._set_pace_external(sub.movie, True)
         # 新发布者（曾被订阅窗扇出）的期望 divisor 由其窗直接推（尚未被外部
         # pace 接管前），此处刷新以避免 handover 后第一拍用旧发布者的期望值。
-        source.publisher_desired = int(
-            getattr(sub.movie, 'decode_throttle_divisor', 1) or 1)
+        source.publisher_desired = int(getattr(sub.movie, "decode_throttle_divisor", 1) or 1)
         self._recompute_pace(source)
         # 复审 P1-1：handover 后旧发布者的外部 pace 标志必须复位——否则它日后
         # 以订阅者身份再进场时 divisor 永久卡在旧值（交互中画面半速不自愈）。
@@ -530,8 +523,7 @@ class DecodeFanoutHub:
             return
         if not source._pace_external:
             # 首次接管：把发布窗当前期望刷新（其窗口仍直接管理 divisor 时读取）
-            source.publisher_desired = int(
-                getattr(source.publisher, 'decode_throttle_divisor', 1) or 1)
+            source.publisher_desired = int(getattr(source.publisher, "decode_throttle_divisor", 1) or 1)
             self._set_pace_external(source.publisher, True)
             source._pace_external = True
         effective = source.publisher_desired
@@ -539,12 +531,12 @@ class DecodeFanoutHub:
             if sub.desired < effective:
                 effective = sub.desired
         effective = max(1, int(effective))
-        setter = getattr(source.publisher, 'set_decode_throttle', None)
+        setter = getattr(source.publisher, "set_decode_throttle", None)
         if callable(setter):
             try:
                 setter(effective)
             except Exception:
-                logger.exception('fanout pace 推送给源 clip 失败: %s', source.asset)
+                logger.exception("fanout pace 推送给源 clip 失败: %s", source.asset)
 
     def _report_desired_throttle(self, movie, divisor: int) -> None:
         """窗口上报本窗期望解码 divisor（源窗被 pace_external 接管后也走这里
@@ -579,7 +571,7 @@ class DecodeFanoutHub:
     def _asset_of(movie, path) -> str | None:
         p = path
         if p is None:
-            p = getattr(movie, 'path', None)
+            p = getattr(movie, "path", None)
             if p is None:
                 return None
         return os.fspath(p)
@@ -600,13 +592,13 @@ class DecodeFanoutHub:
 
     @staticmethod
     def _set_pace_external(movie, value: bool) -> None:
-        setter = getattr(movie, 'set_decode_pace_external', None)
+        setter = getattr(movie, "set_decode_pace_external", None)
         if callable(setter):
             try:
                 setter(bool(value))
             except Exception:
                 pass
-        elif hasattr(movie, 'decode_pace_external'):
+        elif hasattr(movie, "decode_pace_external"):
             try:
                 movie.decode_pace_external = bool(value)
             except Exception:
@@ -633,8 +625,8 @@ class DecodeFanoutHub:
         缺这两个属性的对象（测试桩/无此机制）默认按存活处理（保守：宁可不释放
         已死源，让订阅者走既有看门狗回退，也不误杀活源）。
         """
-        running = getattr(publisher, '_running', True)
-        parked = getattr(publisher, '_soft_parked', False)
+        running = getattr(publisher, "_running", True)
+        parked = getattr(publisher, "_soft_parked", False)
         return bool(running or parked)
 
     def _release_source(self, asset: str, source: _Source, publisher_movie) -> None:
@@ -647,7 +639,7 @@ class DecodeFanoutHub:
             # 复审 P1-1：释放存量订阅者必须先 abort 再 close——只 close 会让其
             # reader 在空环上白等看门狗（≤1.9s 冻结）再整段重播。disband 语义：
             # 源被解散/重建（设计内），消费端打 INFO 而非 WARNING。
-            sub.abort('disband')
+            sub.abort("disband")
             sub.close()
             # 复审 P2-2：清掉订阅者 movie 的 feed 残柄（对齐 _subscriber_leave），
             # 否则其 reader 会对已闭锁的会话空跑一次看门狗才回退本地解码。
@@ -662,9 +654,9 @@ class DecodeFanoutHub:
                 self._set_pace_external(source.publisher, False)
                 source.sink.close()
                 for sub in source.subscriptions:
-                    sub.abort('stop_all')
+                    sub.abort("stop_all")
                     sub.close()
                 source.subscriptions = []
             except Exception:
-                logger.exception('fanout 收口源失败: %s', asset)
+                logger.exception("fanout 收口源失败: %s", asset)
         self._sources.clear()

@@ -45,9 +45,7 @@ __all__ = [
 ]
 
 
-def match_process_whitelist(
-    rules: list[str] | None, process_name: str | None, window_title: str | None
-) -> bool:
+def match_process_whitelist(rules: list[str] | None, process_name: str | None, window_title: str | None) -> bool:
     """匹配前台窗口是否在白名单中。
 
     规则：
@@ -94,6 +92,7 @@ def image_dhash(img: Any) -> int:
     # 显式使用 NEAREST 采样，兼容各 Pillow 版本
     try:
         from PIL import Image
+
         resample = getattr(Image, "Resampling", Image).NEAREST
     except Exception:
         resample = 0
@@ -239,9 +238,7 @@ class ProactiveScreenWatcher:
                 super().__init__(parent)
                 self._watcher = watcher
 
-            def _forward_frame(
-                self, img: Any, app_str: str, hwnd: int, cur_hash: int, info_dict: dict
-            ) -> None:
+            def _forward_frame(self, img: Any, app_str: str, hwnd: int, cur_hash: int, info_dict: dict) -> None:
                 self._watcher._on_frame_ready(img, app_str, hwnd, cur_hash, info_dict)
 
             def _forward_bubble(self, text: str, duration_ms: int) -> None:
@@ -272,9 +269,7 @@ class ProactiveScreenWatcher:
         self._generation: int = 0  # 代次令牌：pause/关闭 时自增，使已派发/排队的任务失效
 
         state_path = self.cfg.dir / "proactive_screen_state.json"
-        self.limiter = ProactiveLimiter(
-            state_path, self.cfg.get("proactive_screen", {})
-        )
+        self.limiter = ProactiveLimiter(state_path, self.cfg.get("proactive_screen", {}))
 
         memory_path = self.cfg.dir / "proactive_screen_memory.json"
         self.memory = ProactiveMemory(memory_path)
@@ -299,11 +294,7 @@ class ProactiveScreenWatcher:
         # 隐藏由 _pause_activity → pause() 负责停止。
         # 无 Chat 变体（排除 pet.chat）的菜单/设置入口已隐藏，用户无法开启；
         # 即使手改 config 开启，真实请求会在 provider 解析阶段失败并计入熔断，不会崩溃。
-        should_run = (
-            sys.platform == "win32"
-            and eff["enabled"]
-            and bool(eff["whitelist"])
-        )
+        should_run = sys.platform == "win32" and eff["enabled"] and bool(eff["whitelist"])
         if should_run:
             if not self._timer.isActive():
                 self._timer.start()
@@ -340,9 +331,7 @@ class ProactiveScreenWatcher:
         # G1 桌宠守卫
         visible = getattr(self.win, "isVisible", lambda: True)()
         interacting = (
-            getattr(self.win, "_dragging", False)
-            or getattr(self.win, "_physics_mode", None) is not None
-            or getattr(self.win, "_click_effect_phase", 0) > 0
+            getattr(self.win, "_dragging", False) or getattr(self.win, "_physics_mode", None) is not None or getattr(self.win, "_click_effect_phase", 0) > 0
         )
         mouse_through = getattr(self.win, "mouse_through", False)
         allow_mouse_through = eff.get("allow_when_mouse_through", True)
@@ -414,6 +403,7 @@ class ProactiveScreenWatcher:
         """桥接 QObject 是否仍存活（窗口销毁后 daemon 线程的 emit 会崩）。"""
         try:
             import shiboken6
+
             return shiboken6.isValid(self._bridge)
         except Exception:
             return True  # 无法判定时按存活处理，异常由调用点兜底
@@ -438,9 +428,7 @@ class ProactiveScreenWatcher:
                 if not current or current.get("hwnd") != info.get("hwnd"):
                     return
                 cur_hash = image_dhash(img)
-                app_str = (
-                    f"{info.get('process', '')} | {info.get('title', '')}".strip(" |")
-                )
+                app_str = f"{info.get('process', '')} | {info.get('title', '')}".strip(" |")
                 payload = dict(info)
                 payload["_gen"] = gen
                 # 编码前先降采样（审查 DS-M3）：窗口全分辨率 JPEG 是 MB 级
@@ -451,12 +439,14 @@ class ProactiveScreenWatcher:
                 if scale < 1.0:
                     # vision 的 PIL 已下沉为函数内懒导入，这里自行局部导入
                     from PIL import Image
+
                     img = img.resize(
                         (max(1, round(w * scale)), max(1, round(h * scale))),
                         Image.LANCZOS,
                     )
                 # JPEG 编码放在 worker 线程，避免主线程卡顿
                 import io
+
                 buf = io.BytesIO()
                 img.convert("RGB").save(buf, "JPEG", quality=70)
                 jpeg_bytes = buf.getvalue()
@@ -471,9 +461,7 @@ class ProactiveScreenWatcher:
             if not emitted:
                 self._worker_busy = False
 
-    def _on_frame_ready(
-        self, img: Any, app_str: str, hwnd: int, cur_hash: int, info: dict | None = None
-    ) -> None:
+    def _on_frame_ready(self, img: Any, app_str: str, hwnd: int, cur_hash: int, info: dict | None = None) -> None:
         """主线程槽：接收后台截图计算结果，执行 dHash 差异与频控，进入真实请求或日志模式。"""
         try:
             info = info or {}
@@ -609,13 +597,16 @@ class ProactiveScreenWatcher:
         """后台线程：发起大模型视觉请求，处理重试/熔断，并通过桥接信号在桌宠冒泡。"""
         from . import catalog, vision
 
-        pet_name = self.cfg.character_display_name(
-            str(self.cfg.get('character', catalog.DEFAULT_CHARACTER))
-        )
+        pet_name = self.cfg.character_display_name(str(self.cfg.get("character", catalog.DEFAULT_CHARACTER)))
         try:
             reply = vision._post_vision_request(
-                jpeg_bytes, app_str, system_prompt, provider, memory_context=memory_ctx,
-                consume_budget=self.limiter.consume_budget, pet_name=pet_name,
+                jpeg_bytes,
+                app_str,
+                system_prompt,
+                provider,
+                memory_context=memory_ctx,
+                consume_budget=self.limiter.consume_budget,
+                pet_name=pet_name,
             )
             # 代次隔离：请求在飞期间用户关闭功能/隐藏窗口（pause 翻转代次）时，
             # 迟到答复一律丢弃——不冒泡、不耗额度计数、不写陪伴记忆。
@@ -633,13 +624,14 @@ class ProactiveScreenWatcher:
                 # 内容从此可在聊天历史/pet.log 里回看）。标记同样不含窗口标题，
                 # 与陪伴记忆的隐私约定一致。
                 import logging
+
                 logging.info(
                     "主动识屏回复全文: 前台进程=%s 活动=%s | %s",
-                    proc_name, current_act, reply,
+                    proc_name,
+                    current_act,
+                    reply,
                 )
-                self._bridge.reply_synced.emit(
-                    build_sync_marker(proc_name, current_act), reply
-                )
+                self._bridge.reply_synced.emit(build_sync_marker(proc_name, current_act), reply)
             else:
                 # 空回复视为失败（计入熔断，不冒泡、不写记忆）
                 self.limiter.record_failure()

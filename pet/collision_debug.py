@@ -1,4 +1,5 @@
 """Opt-in diagnostics for the multi-process collision path."""
+
 from __future__ import annotations
 
 import os

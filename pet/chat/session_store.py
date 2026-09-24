@@ -17,6 +17,7 @@
   函数只是委托给模块底部单例 `_registry` 的薄壳，公开重置接口
   `reset_writers_for_tests()` 供测试隔离（conftest 不再触碰 `_shutdown` 私有）。
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,10 @@ class _AsyncWriter:
     """每个会话目录一个串行写盘 worker（同目录的多个 SessionStore 共享）。"""
 
     def __init__(
-        self, root: Path, *, write: Callable[[Path, bytes], None] | None = None,
+        self,
+        root: Path,
+        *,
+        write: Callable[[Path, bytes], None] | None = None,
     ) -> None:
         """write = 落盘实现（默认 `_atomic_write`），构造时注入。
 
@@ -57,7 +61,9 @@ class _AsyncWriter:
         self._closing = False
         self._close_result: bool | None = None  # 粘滞：第一次 close 的真实结果
         self._thread = threading.Thread(
-            target=self._loop, daemon=True, name=f"session-writer-{root.name}",
+            target=self._loop,
+            daemon=True,
+            name=f"session-writer-{root.name}",
         )
         self._thread.start()
 
@@ -239,7 +245,8 @@ class _WriterRegistry:
     """
 
     def __init__(
-        self, writer_factory: Callable[[Path], _AsyncWriter] | None = None,
+        self,
+        writer_factory: Callable[[Path], _AsyncWriter] | None = None,
     ) -> None:
         """writer_factory = writer 构造器（默认 `_AsyncWriter`，即生产路径）。
 
@@ -406,14 +413,10 @@ class _WriterRegistry:
                 w.close(timeout=10.0)
         finally:
             with self._lock:
-                if (perm_closers_at_start == 0
-                        and self._permanent_epoch == perm_epoch_at_start):
+                if perm_closers_at_start == 0 and self._permanent_epoch == perm_epoch_at_start:
                     self._shutdown = False
                 else:
-                    log.warning(
-                        "reset_for_tests 与永久关闭交错，保留退出屏障"
-                        "（_shutdown 不复位）"
-                    )
+                    log.warning("reset_for_tests 与永久关闭交错，保留退出屏障（_shutdown 不复位）")
                 self._closing_depth -= 1
                 if self._closing_depth <= 0:
                     self._closing_depth = 0
@@ -469,14 +472,14 @@ def reset_writers_for_tests() -> None:
 
 
 class SessionStore:
-    def __init__(self, config_dir, instance_id=''):
+    def __init__(self, config_dir, instance_id=""):
         # 多开隔离：带实例 ID 时使用独立会话目录，避免多实例互覆同一会话；
         # 不传实例 ID 时保持原目录，历史会话无缝沿用。
-        suffix = f'-{instance_id}' if str(instance_id or '').strip() else ''
-        self.root = Path(config_dir) / f'sessions{suffix}'
+        suffix = f"-{instance_id}" if str(instance_id or "").strip() else ""
+        self.root = Path(config_dir) / f"sessions{suffix}"
 
     def _path(self, character_id, session_id):
-        return self.root / character_id / f'{session_id}.json'
+        return self.root / character_id / f"{session_id}.json"
 
     def create(self, character_id, provider_id, system_prompt):
         return ChatSession.create(character_id, provider_id, system_prompt)
@@ -537,16 +540,15 @@ class SessionStore:
         found, payload = _pending_for_session(self.root, session_id, character_id)
         if found:
             return None if payload is None else self._parse(payload)
-        paths = [self._path(character_id, session_id)] if character_id \
-            else list(self.root.glob(f'*/{session_id}.json'))
+        paths = [self._path(character_id, session_id)] if character_id else list(self.root.glob(f"*/{session_id}.json"))
         if not paths:
             return None
         path = paths[0]
         try:
-            return ChatSession.from_dict(json.loads(path.read_text(encoding='utf-8')))
+            return ChatSession.from_dict(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, ValueError, KeyError, TypeError):
             try:
-                os.replace(path, path.with_name(f'{path.stem}.corrupt-{int(time.time())}{path.suffix}'))
+                os.replace(path, path.with_name(f"{path.stem}.corrupt-{int(time.time())}{path.suffix}"))
             except OSError:
                 pass
             return None
@@ -556,7 +558,7 @@ class SessionStore:
         pending = _pending_for_dir(self.root, folder)
         result = {}
         if folder.is_dir():
-            for path in folder.glob('*.json'):
+            for path in folder.glob("*.json"):
                 result[path.stem] = path
         for path, payload in pending.items():
             if payload is None:
@@ -581,8 +583,7 @@ class SessionStore:
         if w is None:
             log.warning("会话删除被拒绝（写盘已全局关闭）: %s", session.session_id)
             return False
-        return w.submit(
-            self._path(session.character_id, session.session_id), None)
+        return w.submit(self._path(session.character_id, session.session_id), None)
 
     def clear(self, session):
         session.messages.clear()

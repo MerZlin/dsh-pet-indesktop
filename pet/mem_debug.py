@@ -30,7 +30,7 @@ import weakref
 
 logger = logging.getLogger(__name__)
 
-ENV_FLAG = 'DSPET_MEM_DEBUG'
+ENV_FLAG = "DSPET_MEM_DEBUG"
 
 # 热路径短路开关：所有计数点读它。关闭时整条取证链不存在。
 ENABLED = False
@@ -46,7 +46,7 @@ _interval_s = 60.0
 
 
 def _env_flag() -> bool:
-    return str(os.environ.get(ENV_FLAG, '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    return str(os.environ.get(ENV_FLAG, "")).strip().lower() in ("1", "true", "yes", "on")
 
 
 def bump(name: str, n: int = 1) -> None:
@@ -132,19 +132,19 @@ def snapshot() -> dict:
         if isinstance(extra, dict):
             data.update(extra)
     try:
-        data['py_blocks'] = sys.getallocatedblocks()
+        data["py_blocks"] = sys.getallocatedblocks()
     except Exception:
         pass
     return data
 
 
-def format_line(tag: str = 'MEM') -> str:
+def format_line(tag: str = "MEM") -> str:
     snap = snapshot()
     elapsed = time.monotonic() - _started_at if _started_at else 0.0
-    parts = [f'[{tag}]', f't={elapsed:.1f}s']
+    parts = [f"[{tag}]", f"t={elapsed:.1f}s"]
     for key in sorted(snap):
-        parts.append(f'{key}={snap[key]}')
-    return ' '.join(parts)
+        parts.append(f"{key}={snap[key]}")
+    return " ".join(parts)
 
 
 def _tick_loop() -> None:
@@ -167,12 +167,15 @@ def set_enabled(on: bool, interval_s: float = 60.0) -> None:
         _started_at = time.monotonic()
     if _ticker is None or not _ticker.is_alive():
         _ticker = threading.Thread(
-            target=_tick_loop, daemon=True, name='mem-debug-ticker',
+            target=_tick_loop,
+            daemon=True,
+            name="mem-debug-ticker",
         )
         _ticker.start()
     logger.info(
-        '内存取证已启用（%s=1，每 %.0fs 一行）——仅诊断，默认关闭',
-        ENV_FLAG, _interval_s,
+        "内存取证已启用（%s=1，每 %.0fs 一行）——仅诊断，默认关闭",
+        ENV_FLAG,
+        _interval_s,
     )
 
 

@@ -11,6 +11,7 @@
   胶囊外形，文字图标保持锐利）+ 按撞击方向轻微踢动；
 - 外观：黑/白/玻璃质感自绘 + 背景不透明度 + 主题色（五级）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -18,13 +19,30 @@ import math
 import time
 
 from PySide6.QtCore import (
-    QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
 )
 from PySide6.QtGui import (
-    QColor, QGuiApplication, QLinearGradient, QPainter, QPen, QPixmap,
+    QColor,
+    QGuiApplication,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QPixmap,
 )
 from PySide6.QtWidgets import (
-    QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from . import catalog
@@ -82,8 +100,12 @@ _ICON_STRIP_PX = 16  # 左右停靠细条里的头像尺寸
 
 
 def spring_step(
-    value: float, velocity: float, target: float, dt: float,
-    stiffness: float = _KICK_STIFFNESS, damping: float = _KICK_DAMPING,
+    value: float,
+    velocity: float,
+    target: float,
+    dt: float,
+    stiffness: float = _KICK_STIFFNESS,
+    damping: float = _KICK_DAMPING,
 ) -> tuple[float, float]:
     """阻尼弹簧积分一步（半隐式欧拉），返回新的 (value, velocity)。
 
@@ -102,7 +124,9 @@ def ease_out_cubic(t: float) -> float:
 
 
 def dock_edge_for(
-    rect: QRect, available: QRect, threshold: int = _DOCK_THRESHOLD,
+    rect: QRect,
+    available: QRect,
+    threshold: int = _DOCK_THRESHOLD,
 ) -> str:
     """按窗口矩形到屏幕可用区四边的距离判定停靠边，都不近则 "none"。
 
@@ -132,8 +156,7 @@ def strip_rect_for(rect: QRect, edge: str, available: QRect) -> QRect:
         x = available.left() if edge == "left" else available.right() - _STRIP_THICKNESS + 1
         length = min(_STRIP_SIDE, available.height())
         center_y = rect.top() + rect.height() // 2
-        y = max(available.top(), min(center_y - length // 2,
-                                     available.bottom() - length + 1))
+        y = max(available.top(), min(center_y - length // 2, available.bottom() - length + 1))
         return QRect(x, y, _STRIP_THICKNESS, length)
     return QRect(rect)
 
@@ -158,12 +181,7 @@ class DynamicIsland(QWidget):
         self.config = config
         self._cfg = _cfg_dict(config)
         self.setObjectName("dynamic-island")
-        flags = (
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
+        flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -454,8 +472,7 @@ class DynamicIsland(QWidget):
         self._card_message_label = QLabel(self._card_box)
         self._card_message_label.setWordWrap(True)
         self._card_message_label.setMaximumHeight(34)
-        for label in (self._card_balance_label, self._card_tier_label,
-                      self._card_message_label):
+        for label in (self._card_balance_label, self._card_tier_label, self._card_message_label):
             layout.addWidget(label)
         layout.addSpacing(2)
         button_row = QHBoxLayout()
@@ -466,8 +483,7 @@ class DynamicIsland(QWidget):
         self._card_toggle_btn.clicked.connect(self._on_card_toggle)
         self._card_chat_btn.clicked.connect(self._on_card_chat)
         self._card_settings_btn.clicked.connect(self._on_card_settings)
-        for btn in (self._card_toggle_btn, self._card_chat_btn,
-                    self._card_settings_btn):
+        for btn in (self._card_toggle_btn, self._card_chat_btn, self._card_settings_btn):
             button_row.addWidget(btn)
         layout.addLayout(button_row)
         self._card_box.hide()
@@ -480,8 +496,7 @@ class DynamicIsland(QWidget):
         primary_hex = primary.name() if isinstance(primary, QColor) else "#e5eaf5"
         secondary_hex = secondary.name() if isinstance(secondary, QColor) else "#a0aabe"
         accent_hex = self._accent_color().name()
-        self._card_balance_label.setStyleSheet(
-            f"color: {primary_hex}; font-weight: bold; font-size: 14px;")
+        self._card_balance_label.setStyleSheet(f"color: {primary_hex}; font-weight: bold; font-size: 14px;")
         self._card_tier_label.setStyleSheet(f"color: {secondary_hex}; font-size: 11px;")
         self._card_message_label.setStyleSheet(f"color: {secondary_hex}; font-size: 11px;")
         # 按钮：圆角 8px、描边跟随主题色、悬停加亮；不用系统默认灰按钮
@@ -492,25 +507,21 @@ class DynamicIsland(QWidget):
             f"QPushButton:hover {{ background: {accent_hex}; color: #ffffff; }}"
             f"QPushButton:pressed {{ background: {secondary_hex}; }}"
         )
-        for btn in (self._card_toggle_btn, self._card_chat_btn,
-                    self._card_settings_btn):
+        for btn in (self._card_toggle_btn, self._card_chat_btn, self._card_settings_btn):
             btn.setStyleSheet(button_style)
         self._card_balance_label.setText(self._balance_text)
         self._card_tier_label.setText(self._balance_tier_text)
         message = self._last_message or "（暂无最近消息）"
         # 摘要最多两行，超出省略（标签限高 34px 配合 wordWrap）
         metrics = self._card_message_label.fontMetrics()
-        elided = metrics.elidedText(
-            message, Qt.TextElideMode.ElideRight, max(40, (_CARD_WIDTH - 32) * 2))
+        elided = metrics.elidedText(message, Qt.TextElideMode.ElideRight, max(40, (_CARD_WIDTH - 32) * 2))
         self._card_message_label.setText(elided)
         self._card_toggle_btn.setText("隐藏桌宠" if self._pet_visible else "显示桌宠")
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         if hasattr(self, "_card_box"):
-            self._card_box.setGeometry(
-                0, _CAPSULE_HEIGHT, self.width(),
-                max(0, self.height() - _CAPSULE_HEIGHT))
+            self._card_box.setGeometry(0, _CAPSULE_HEIGHT, self.width(), max(0, self.height() - _CAPSULE_HEIGHT))
 
     def _on_card_toggle(self) -> None:
         self.toggle_pet_requested.emit()
@@ -579,9 +590,12 @@ class DynamicIsland(QWidget):
     def _animating(self) -> bool:
         return (
             self._geo_to is not None
-            or abs(self._kick_x) > 0.3 or abs(self._kick_y) > 0.3
-            or abs(self._kick_vx) > 5.0 or abs(self._kick_vy) > 5.0
-            or abs(self._squish - 1.0) > 0.004 or abs(self._squish_v) > 0.02
+            or abs(self._kick_x) > 0.3
+            or abs(self._kick_y) > 0.3
+            or abs(self._kick_vx) > 5.0
+            or abs(self._kick_vy) > 5.0
+            or abs(self._squish - 1.0) > 0.004
+            or abs(self._squish_v) > 0.02
             or abs(self._scale - self._hover_scale_target) > 0.001
             or abs(self._scale_v) > 0.005
             or abs(self._tilt) > 0.05
@@ -611,20 +625,12 @@ class DynamicIsland(QWidget):
                 self._set_free_geometry(self._target_rect())
 
         # 位移踢动回位 / 微缩放 / 受击倾斜 / 果冻形变回弹
-        self._kick_x, self._kick_vx = spring_step(
-            self._kick_x, self._kick_vx, 0.0, dt)
-        self._kick_y, self._kick_vy = spring_step(
-            self._kick_y, self._kick_vy, 0.0, dt)
-        self._scale, self._scale_v = spring_step(
-            self._scale, self._scale_v, self._hover_scale_target, dt,
-            stiffness=_SCALE_STIFFNESS, damping=_SCALE_DAMPING)
+        self._kick_x, self._kick_vx = spring_step(self._kick_x, self._kick_vx, 0.0, dt)
+        self._kick_y, self._kick_vy = spring_step(self._kick_y, self._kick_vy, 0.0, dt)
+        self._scale, self._scale_v = spring_step(self._scale, self._scale_v, self._hover_scale_target, dt, stiffness=_SCALE_STIFFNESS, damping=_SCALE_DAMPING)
         self._scale = max(_SCALE_MIN, min(_SCALE_MAX, self._scale))
-        self._tilt, self._tilt_v = spring_step(
-            self._tilt, self._tilt_v, 0.0, dt,
-            stiffness=_TILT_STIFFNESS, damping=_TILT_DAMPING)
-        self._squish, self._squish_v = spring_step(
-            self._squish, self._squish_v, 1.0, dt,
-            stiffness=_SQUISH_STIFFNESS, damping=_SQUISH_DAMPING)
+        self._tilt, self._tilt_v = spring_step(self._tilt, self._tilt_v, 0.0, dt, stiffness=_TILT_STIFFNESS, damping=_TILT_DAMPING)
+        self._squish, self._squish_v = spring_step(self._squish, self._squish_v, 1.0, dt, stiffness=_SQUISH_STIFFNESS, damping=_SQUISH_DAMPING)
         self._squish = max(_SQUISH_MIN, min(_SQUISH_MAX, self._squish))
         # 踢动位移钳制在窗口内（±5px）：弹簧过冲也不画出界被裁
         self._kick_x = max(-5.0, min(5.0, self._kick_x))
@@ -768,7 +774,7 @@ class DynamicIsland(QWidget):
                 return self._icon_pixmap_cache
             if self._icon_img_failed:
                 return None
-            path = spec[len(_ICON_IMG_PREFIX):].strip()
+            path = spec[len(_ICON_IMG_PREFIX) :].strip()
             pm = QPixmap(path) if path else QPixmap()
             if pm.isNull():
                 self._icon_img_failed = True
@@ -799,8 +805,7 @@ class DynamicIsland(QWidget):
             return None
         dpr = self.devicePixelRatioF()
         edge = max(1, round(logical_px * dpr))
-        scaled = pm.scaled(edge, edge, Qt.AspectRatioMode.KeepAspectRatio,
-                           Qt.TransformationMode.SmoothTransformation)
+        scaled = pm.scaled(edge, edge, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         scaled.setDevicePixelRatio(dpr)
         return scaled
 
@@ -862,8 +867,7 @@ class DynamicIsland(QWidget):
             rect = QRect(self.pos(), size)
             rect.moveTop(self.y() + self.height() // 2 - size.height() // 2)
             return strip_rect_for(rect, edge, screen.availableGeometry())
-        if edge != "none" and self._mode in ("docked", "expanded") \
-                and screen is not None:
+        if edge != "none" and self._mode in ("docked", "expanded") and screen is not None:
             # 从停靠边向内展开：顶/底锚定该边，左右以细条纵向中心展开
             available = screen.availableGeometry()
             rect = QRect(self.pos(), size)
@@ -893,11 +897,7 @@ class DynamicIsland(QWidget):
         if isinstance(x, (int, float)) and isinstance(y, (int, float)):
             pos = QPoint(int(x), int(y))
         else:
-            pos = (
-                QPoint(available.right() - self.width() - _EDGE_MARGIN,
-                       available.top() + _EDGE_MARGIN)
-                if available else QPoint(100, 100)
-            )
+            pos = QPoint(available.right() - self.width() - _EDGE_MARGIN, available.top() + _EDGE_MARGIN) if available else QPoint(100, 100)
         self.move(pos)
         self._clamp_to_screen()
         # 展开卡片态不被停靠劫持：卡片是用户当前的交互焦点，设置保存触发的
@@ -948,16 +948,14 @@ class DynamicIsland(QWidget):
         opacity = self._opacity()
         style = str(self._cfg.get("style") or "dark")
         if style == "light":
-            return (QColor(255, 255, 255, round(242 * opacity)),
-                    QColor(31, 35, 40), QColor(107, 114, 128))
+            return (QColor(255, 255, 255, round(242 * opacity)), QColor(31, 35, 40), QColor(107, 114, 128))
         if style == "glass":
             gradient = QLinearGradient(0, 0, 0, self.height())
             gradient.setColorAt(0.0, QColor(255, 255, 255, round(196 * opacity)))
             gradient.setColorAt(0.5, QColor(230, 242, 255, round(150 * opacity)))
             gradient.setColorAt(1.0, QColor(255, 255, 255, round(210 * opacity)))
             return gradient, QColor(35, 45, 60), QColor(90, 105, 125)
-        return (QColor(28, 30, 38, round(235 * opacity)),
-                QColor(235, 238, 245), QColor(160, 170, 190))
+        return (QColor(28, 30, 38, round(235 * opacity)), QColor(235, 238, 245), QColor(160, 170, 190))
 
     def _keyline_color(self) -> QColor:
         """深色底上的 1px 分界描边（暗壁纸下把胶囊轮廓勾出来）。"""
@@ -1031,13 +1029,10 @@ class DynamicIsland(QWidget):
         只返回外形的几何——文字/图标不在这里面变换，保持锐利。
         squish<1 时竖向压扁、横向鼓出（面积大致守恒），绕胶囊中心形变。
         """
-        base = QRectF(_CAPSULE_INSET, _CAPSULE_INSET,
-                      self.width() - _CAPSULE_INSET * 2,
-                      _CAPSULE_HEIGHT - _CAPSULE_INSET * 2)
+        base = QRectF(_CAPSULE_INSET, _CAPSULE_INSET, self.width() - _CAPSULE_INSET * 2, _CAPSULE_HEIGHT - _CAPSULE_INSET * 2)
         # 展开卡片态冻结形变（与整窗变换禁用同口径）：squish 鼓出会把
         # 贴边底板两侧的胶囊圆角削掉（实测 342.8px > 340px 窗口宽）
-        squish = 1.0 if self._mode == "expanded" else \
-            max(_SQUISH_MIN, min(_SQUISH_MAX, self._squish))
+        squish = 1.0 if self._mode == "expanded" else max(_SQUISH_MIN, min(_SQUISH_MAX, self._squish))
         if abs(squish - 1.0) < 0.002:
             return base, base.height() / 2.0
         sy = squish
@@ -1083,26 +1078,19 @@ class DynamicIsland(QWidget):
             # 就绪就只留状态点，绝不回退去画 🐳（那等于白付 33MB 税额）
             icon_pm = self._icon_pixmap_scaled(_ICON_STRIP_PX)
             if icon_pm is not None:
-                painter.drawPixmap(
-                    QPointF((rect.width() - _ICON_STRIP_PX) / 2.0, 8.0), icon_pm)
+                painter.drawPixmap(QPointF((rect.width() - _ICON_STRIP_PX) / 2.0, 8.0), icon_pm)
             elif not self._icon_image_mode():
                 painter.setPen(primary if isinstance(primary, QColor) else QColor(31, 35, 40))
                 icon_font = painter.font()
                 icon_font.setPixelSize(11)
                 painter.setFont(icon_font)
                 fm = painter.fontMetrics()
-                painter.drawText(
-                    QRectF(0, 8, rect.width(), fm.height()),
-                    Qt.AlignmentFlag.AlignCenter, self._icon_text())
+                painter.drawText(QRectF(0, 8, rect.width(), fm.height()), Qt.AlignmentFlag.AlignCenter, self._icon_text())
                 painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(self._status_dot_color())
-            painter.drawEllipse(QRectF(
-                (rect.width() - dot_size) / 2, rect.height() - dot_size - 8,
-                dot_size, dot_size))
+            painter.drawEllipse(QRectF((rect.width() - dot_size) / 2, rect.height() - dot_size - 8, dot_size, dot_size))
         else:
-            painter.drawEllipse(QRectF(
-                (rect.width() - dot_size) / 2, (rect.height() - dot_size) / 2,
-                dot_size, dot_size))
+            painter.drawEllipse(QRectF((rect.width() - dot_size) / 2, (rect.height() - dot_size) / 2, dot_size, dot_size))
 
     def _content_cache(self) -> QPixmap:
         """内容层（图标/名称/信息/状态灯）的缓存位图。
@@ -1120,7 +1108,10 @@ class DynamicIsland(QWidget):
         info_color = self._info_color(secondary_color)
         dpr = self.devicePixelRatioF()
         key = (
-            icon, name, info, status,
+            icon,
+            name,
+            info,
+            status,
             self._icon_text() if icon else "",
             self._character_name() if name else "",
             self._info_text() if info else "",
@@ -1128,7 +1119,9 @@ class DynamicIsland(QWidget):
             primary_color.name() if name else "",
             info_color.name() if info else "",
             self._status_dot_color().name() if status else "",
-            self.font().toString(), dpr, self.width(),
+            self.font().toString(),
+            dpr,
+            self.width(),
         )
         if self._content_pixmap is not None and self._content_cache_key == key:
             return self._content_pixmap
@@ -1140,8 +1133,7 @@ class DynamicIsland(QWidget):
             key = key + (self._icon_pixmap_token,)
             if self._content_pixmap is not None and self._content_cache_key == key:
                 return self._content_pixmap
-        pm = QPixmap(max(1, round(self.width() * dpr)),
-                     max(1, round(_CAPSULE_HEIGHT * dpr)))
+        pm = QPixmap(max(1, round(self.width() * dpr)), max(1, round(_CAPSULE_HEIGHT * dpr)))
         pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pm)
@@ -1154,10 +1146,7 @@ class DynamicIsland(QWidget):
             painter.drawEllipse(QRectF(x, (_CAPSULE_HEIGHT - 26) / 2, 26, 26))
             if icon_pm is not None:
                 # 头像居中画进底圈：drawPixmap 不碰文字/emoji 字体栈
-                painter.drawPixmap(
-                    QPointF(x + (26 - _ICON_PIXMAP_PX) / 2.0,
-                            (_CAPSULE_HEIGHT - _ICON_PIXMAP_PX) / 2.0),
-                    icon_pm)
+                painter.drawPixmap(QPointF(x + (26 - _ICON_PIXMAP_PX) / 2.0, (_CAPSULE_HEIGHT - _ICON_PIXMAP_PX) / 2.0), icon_pm)
             elif not self._icon_image_mode():
                 painter.setPen(QColor(255, 255, 255))
                 fm = self.fontMetrics()
@@ -1341,7 +1330,7 @@ class DynamicIsland(QWidget):
                 self.clicked.emit()
             elif self._hidden_chat_enabled() and not self._pet_visible and self._chat_available:
                 # 桌宠隐藏时岛是唯一常驻交互面：单击直接弹对话气泡
-                #（恢复桌宠的入口由气泡内的「显示桌宠」按钮承接）；
+                # （恢复桌宠的入口由气泡内的「显示桌宠」按钮承接）；
                 # 无聊天能力的构建（纯桌宠版）不进此分支——回退 else 展开
                 # 卡片，由卡片的「显示桌宠」按钮承接恢复入口
                 self.chat_requested.emit()
@@ -1358,14 +1347,16 @@ class DynamicIsland(QWidget):
                 edge = dock_edge_for(self.geometry(), available)
                 rect = self.geometry()
                 logger.info(
-                    "灵动岛拖拽落点 (%d,%d)：距四边 top=%d bottom=%d left=%d right=%d"
-                    "（阈值 %d）→ dock=%s",
-                    rect.x(), rect.y(),
+                    "灵动岛拖拽落点 (%d,%d)：距四边 top=%d bottom=%d left=%d right=%d（阈值 %d）→ dock=%s",
+                    rect.x(),
+                    rect.y(),
                     abs(rect.top() - available.top()),
                     abs(available.bottom() - rect.bottom()),
                     abs(rect.left() - available.left()),
                     abs(available.right() - rect.right()),
-                    _DOCK_THRESHOLD, edge)
+                    _DOCK_THRESHOLD,
+                    edge,
+                )
             self._save_dock_edge(edge)
             self._save_position()
             if edge != "none":

@@ -16,8 +16,7 @@ from __future__ import annotations
 # 静默失效——测试仍绿但确定性丢失。
 import random
 
-__all__ = ["body_reach", "choose_move_direction", "inward_facing",
-           "move_anim_tick", "move_position_at_frame", "quantize_move", "wander_target_y"]
+__all__ = ["body_reach", "choose_move_direction", "inward_facing", "move_anim_tick", "move_position_at_frame", "quantize_move", "wander_target_y"]
 
 
 def wander_target_y(
@@ -51,9 +50,7 @@ def body_reach(
     即身体框中心允许落到的端点；两侧剩余空间 = |cx - 对应 bound|。
     """
     half_w = body_width / 2
-    return (body_left + half_w,
-            avail_left + margin + half_w,
-            avail_right - margin - half_w)
+    return (body_left + half_w, avail_left + margin + half_w, avail_right - margin - half_w)
 
 
 def choose_move_direction(
@@ -130,11 +127,11 @@ def move_position_at_frame(plan: dict, frames_elapsed: float) -> tuple[float, fl
     窗口原地停住；动帧段匀速推进。动帧才动、静帧不动，且位置只跟解码帧号
     走（playback_speed 变化不失步）。
     """
-    curve = plan.get('curve')
+    curve = plan.get("curve")
     if curve:
-        per_loop = max(1, int(plan['frames_per_loop']))
-        loops = max(1, int(plan['loops']))
-        total = max(1, int(plan['total_frames']))
+        per_loop = max(1, int(plan["frames_per_loop"]))
+        loops = max(1, int(plan["loops"]))
+        total = max(1, int(plan["total_frames"]))
         f = min(float(total), max(0.0, frames_elapsed))
         loop_idx = min(int(f // per_loop), loops - 1)
         intra = f - loop_idx * per_loop
@@ -146,15 +143,15 @@ def move_position_at_frame(plan: dict, frames_elapsed: float) -> tuple[float, fl
         intra_progress = curve[lo] + (curve[min(lo + 1, last)] - curve[lo]) * frac
         progress = (loop_idx + intra_progress) / loops
     else:
-        total = max(1, int(plan['total_frames']))
+        total = max(1, int(plan["total_frames"]))
         # 帧号是 0-based：末拍 frames_elapsed == total-1，到位必须提交终点，
         # 否则窗口停在离目标 ~stride/frames 处（无 curve 角色）。
         if frames_elapsed >= total - 1:
             progress = 1.0
         else:
             progress = min(1.0, max(0.0, frames_elapsed / total))
-    x = plan['start_x'] + (plan['target_x'] - plan['start_x']) * progress
-    y = plan['start_y'] + (plan['target_y'] - plan['start_y']) * progress
+    x = plan["start_x"] + (plan["target_x"] - plan["start_x"]) * progress
+    y = plan["start_y"] + (plan["target_y"] - plan["start_y"]) * progress
     return x, y
 
 
@@ -173,16 +170,14 @@ def move_anim_tick(host) -> None:
     from .window import time as _window_time  # 测试 seam：与 window 同读可补丁时钟
 
     plan = host._move_plan
-    if (plan is None or 'total_frames' not in plan
-            or host._physics_mode is not None
-            or host._hidden_paused or host._closing):
+    if plan is None or "total_frames" not in plan or host._physics_mode is not None or host._hidden_paused or host._closing:
         return
-    duration = float(plan.get('duration') or 0.0)
-    total = float(plan.get('total_frames') or 0.0)
+    duration = float(plan.get("duration") or 0.0)
+    total = float(plan.get("total_frames") or 0.0)
     if duration <= 0.0 or total <= 0.0:
         return
-    anchor_f = float(plan.get('anchor_frames', 0.0))
-    anchor_t = float(plan.get('anchor_time', 0.0))
+    anchor_f = float(plan.get("anchor_frames", 0.0))
+    anchor_t = float(plan.get("anchor_time", 0.0))
     fe = anchor_f + (_window_time.monotonic() - anchor_t) * total / duration
     fe = min(fe, anchor_f + 1.0, total - 1.0)
     if fe <= anchor_f + 1e-9:

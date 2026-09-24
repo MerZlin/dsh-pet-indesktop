@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Modern context-menu adapter driven by the shared Menu Action Model."""
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import QMenu
@@ -16,6 +17,4 @@ def build_modern_menu(menu: QMenu, pet, template: dict) -> None:
         registered_actions=MENU_ACTIONS.ids,
         available_actions=MENU_ACTIONS.available_ids(pet),
     )
-    MENU_ACTIONS.populate(
-        menu, pet, result.nodes, enabled_actions=MENU_ACTIONS.enabled_ids(pet)
-    )
+    MENU_ACTIONS.populate(menu, pet, result.nodes, enabled_actions=MENU_ACTIONS.enabled_ids(pet))

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Configurable application shortcuts used only by the modern menu."""
+
 from __future__ import annotations
 
 import os

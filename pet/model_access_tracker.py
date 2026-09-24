@@ -4,6 +4,7 @@
 不体现在命名上），以及上游响应连接/超时类故障（TIMEOUT/ETIMEDOUT/连接断等）。
 识别口径与 bridge 端 ``isModelAccessError`` 保持一致（两端同仓同版本发布），
 保证桌宠侧按 session 统计的连续计数兜底与桥端写出的 model_access 事件对齐。"""
+
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
@@ -17,11 +18,23 @@ _MODEL_ACCESS_CODES = {"429", "RATE_LIMIT", "TOO_MANY_REQUESTS", "RESOURCE_EXHAU
 # response headers timed out before streaming started"）却零提醒——限流码之外的
 # 重试异常在两端都不进「模型访问失败」计数。超时/连接断同属「本次模型请求未
 # 成功、进入重试链」的异常，必须计入连续计数供提醒兜底。
-_MODEL_ACCESS_CONN_CODES = frozenset({
-    "TIMEOUT", "REQUEST_TIMEOUT", "UPSTREAM_TIMEOUT", "ETIMEDOUT",
-    "ESOCKETTIMEDOUT", "ECONNABORTED", "ECONNRESET", "ECONNREFUSED",
-    "EPIPE", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "NETWORK_ERROR",
-})
+_MODEL_ACCESS_CONN_CODES = frozenset(
+    {
+        "TIMEOUT",
+        "REQUEST_TIMEOUT",
+        "UPSTREAM_TIMEOUT",
+        "ETIMEDOUT",
+        "ESOCKETTIMEDOUT",
+        "ECONNABORTED",
+        "ECONNRESET",
+        "ECONNREFUSED",
+        "EPIPE",
+        "EAI_AGAIN",
+        "ENETUNREACH",
+        "EHOSTUNREACH",
+        "NETWORK_ERROR",
+    }
+)
 
 _MODEL_ACCESS_CONN_RE = re.compile(
     r"\btimed?\s?out\b|timed out before|connection (reset|refused|aborted|closed|reset by peer)|"
@@ -29,11 +42,13 @@ _MODEL_ACCESS_CONN_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 @dataclass
 class RetryStreak:
     count: int = 0
     provider: str = ""
     model: str = ""
+
 
 class ModelAccessTracker:
     def __init__(self) -> None:
@@ -76,7 +91,8 @@ class ModelAccessTracker:
     @staticmethod
     def _resets(event: AgentEvent) -> bool:
         name = event.event.lower()
-        if name in {"turn/start", "turn/end", "tool/call", "assistant/message", "assistant/chunk", "agent/status"}: return True
+        if name in {"turn/start", "turn/end", "tool/call", "assistant/message", "assistant/chunk", "agent/status"}:
+            return True
         if name == "tool/result":
             return event.data.get("ok", True) not in (False, 0, "false", "error")
         if name in {"error", "agent/request-error", "llm_error"}:

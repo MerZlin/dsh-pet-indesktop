@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Portable persona phrase template generation."""
+
 from __future__ import annotations
 
 import copy
@@ -104,14 +105,18 @@ DISPLAY_HINTS = {
 EVENT_SOURCES = {
     "start": ("状态机 thinking/working", "UserPromptSubmit", "turn/start"),
     "thinking": ("状态机 thinking", "UserPromptSubmit"),
-    "activity.read": ("tool/call",), "activity.search": ("tool/call",),
-    "activity.edit": ("tool/call",), "activity.run": ("tool/call",),
+    "activity.read": ("tool/call",),
+    "activity.search": ("tool/call",),
+    "activity.edit": ("tool/call",),
+    "activity.run": ("tool/call",),
     "activity.default": ("tool/call",),
     "agent.attention": ("状态机 attention（Stop / SubagentStop / state=attention）",),
     "agent.error": ("状态机 error（PostToolUseFailure / StopFailure / state=error）",),
     "agent.missing": ("Agent 监视器本地检测",),
-    "bridge.install.pending": ("Pet 桥接安装流程",), "bridge.install.success": ("Pet 桥接安装流程",),
-    "bridge.install.failed": ("Pet 桥接安装流程",), "bridge.uninstall.failed": ("Pet 桥接卸载流程",),
+    "bridge.install.pending": ("Pet 桥接安装流程",),
+    "bridge.install.success": ("Pet 桥接安装流程",),
+    "bridge.install.failed": ("Pet 桥接安装流程",),
+    "bridge.uninstall.failed": ("Pet 桥接卸载流程",),
     "bridge.unknown": ("DSH 桥接未知事件（Monitor 本地识别）",),
     "dsh.writeback.failed": ("Pet 回写 DSH 响应",),
     "approval.command": ("approval/request（兼容旧名 approval/requested）",),
@@ -121,14 +126,19 @@ EVENT_SOURCES = {
     "question.one": ("question/requested", "tool/call(ask_user_question)"),
     "question.many": ("question/requested", "tool/call(ask_user_question)"),
     "watchdog.warning": ("ExplorationWatchdog（本地检测）",),
-    "model_access.one": ("model_access 事件（bridge，上游模型访问失败）",), "model_access.many": ("model_access 事件（bridge，上游模型访问失败）",),
+    "model_access.one": ("model_access 事件（bridge，上游模型访问失败）",),
+    "model_access.many": ("model_access 事件（bridge，上游模型访问失败）",),
     "llm_error.api": ("llm_error（bridge）",),
     "done.success": ("状态机 idle（SessionEnd / turn/end / task_complete / state=idle）",),
     "done.attention": ("状态机 attention（Stop / SubagentStop）",),
-    "failure.retry": ("execution/failed",), "failure.tool": ("execution/failed",), "failure.generic": ("execution/failed",),
-    "pattern.warning": ("BehaviorPatternDetector（本地检测）",), "pattern.control": ("BehaviorPatternDetector（本地检测）",),
+    "failure.retry": ("execution/failed",),
+    "failure.tool": ("execution/failed",),
+    "failure.generic": ("execution/failed",),
+    "pattern.warning": ("BehaviorPatternDetector（本地检测）",),
+    "pattern.control": ("BehaviorPatternDetector（本地检测）",),
     "stuck.reminder": ("StuckDetector（本地检测）",),
-    "balance.loading": ("Pet 内置余额查询",), "balance.result": ("Pet 内置余额查询",),
+    "balance.loading": ("Pet 内置余额查询",),
+    "balance.result": ("Pet 内置余额查询",),
 }
 
 # 每个事件的一句话场景描述（写给 AI 看的语义说明，写入 entries[].description）。
@@ -181,21 +191,21 @@ EVENT_DESCRIPTIONS: dict[str, str] = {
 # 上游未提供/为空/为 null 时占位符自动隐藏，不会原样露出）。
 # 改调用点 kwargs 时必须同步改这里（有 AST 回归测试）。
 PARAMETERS: dict[str, tuple[str, ...]] = {
-    "start": ("name",), "thinking": ("name",),
-    "activity.read": ("name", "tool", "label", "command", "argsKey", "callId", "step",
-                      "sessionName", "projectName"),
-    "activity.search": ("name", "tool", "label", "command", "argsKey", "callId", "step",
-                        "sessionName", "projectName"),
-    "activity.edit": ("name", "tool", "label", "command", "argsKey", "callId", "step",
-                      "sessionName", "projectName"),
-    "activity.run": ("name", "tool", "label", "command", "argsKey", "callId", "step",
-                     "sessionName", "projectName"),
-    "activity.default": ("name", "tool", "label", "command", "argsKey", "callId", "step",
-                         "sessionName", "projectName"),
-    "agent.attention": ("name",), "agent.error": ("name",),
-    "agent.missing": ("name",), "bridge.install.pending": ("name",),
-    "bridge.install.success": ("name",), "bridge.install.failed": ("name", "detail"),
-    "bridge.uninstall.failed": ("name",), "dsh.writeback.failed": (),
+    "start": ("name",),
+    "thinking": ("name",),
+    "activity.read": ("name", "tool", "label", "command", "argsKey", "callId", "step", "sessionName", "projectName"),
+    "activity.search": ("name", "tool", "label", "command", "argsKey", "callId", "step", "sessionName", "projectName"),
+    "activity.edit": ("name", "tool", "label", "command", "argsKey", "callId", "step", "sessionName", "projectName"),
+    "activity.run": ("name", "tool", "label", "command", "argsKey", "callId", "step", "sessionName", "projectName"),
+    "activity.default": ("name", "tool", "label", "command", "argsKey", "callId", "step", "sessionName", "projectName"),
+    "agent.attention": ("name",),
+    "agent.error": ("name",),
+    "agent.missing": ("name",),
+    "bridge.install.pending": ("name",),
+    "bridge.install.success": ("name",),
+    "bridge.install.failed": ("name", "detail"),
+    "bridge.uninstall.failed": ("name",),
+    "dsh.writeback.failed": (),
     "bridge.unknown": ("name", "event"),
     "approval.command": ("name", "command", "toolName", "sessionName", "projectName", "label"),
     "approval.tool": ("name", "label", "toolName", "sessionName", "projectName"),
@@ -204,21 +214,19 @@ PARAMETERS: dict[str, tuple[str, ...]] = {
     "question.one": ("name", "body", "sessionName", "projectName", "label"),
     "question.many": ("name", "count", "sessionName", "projectName", "label"),
     "watchdog.warning": ("name", "reasons"),
-    "model_access.one": ("count", "errorCode", "errorMessage", "consecutiveRetryCount", "retry",
-                       "sessionName", "projectName"),
-    "model_access.many": ("count", "errorCode", "errorMessage", "consecutiveRetryCount", "retry",
-                        "sessionName", "projectName"),
+    "model_access.one": ("count", "errorCode", "errorMessage", "consecutiveRetryCount", "retry", "sessionName", "projectName"),
+    "model_access.many": ("count", "errorCode", "errorMessage", "consecutiveRetryCount", "retry", "sessionName", "projectName"),
     "llm_error.api": (),
-    "done.success": ("name",), "done.attention": ("name",),
-    "failure.retry": ("name", "failureType", "errorCode", "errorMessage", "retries", "retryExhausted",
-                      "sessionName", "projectName"),
-    "failure.tool": ("name", "failureType", "errorCode", "errorMessage", "retries", "retryExhausted",
-                     "sessionName", "projectName"),
-    "failure.generic": ("name", "failureType", "errorCode", "errorMessage", "retries", "retryExhausted",
-                        "sessionName", "projectName"),
+    "done.success": ("name",),
+    "done.attention": ("name",),
+    "failure.retry": ("name", "failureType", "errorCode", "errorMessage", "retries", "retryExhausted", "sessionName", "projectName"),
+    "failure.tool": ("name", "failureType", "errorCode", "errorMessage", "retries", "retryExhausted", "sessionName", "projectName"),
+    "failure.generic": ("name", "failureType", "errorCode", "errorMessage", "retries", "retryExhausted", "sessionName", "projectName"),
     "pattern.warning": ("name", "reasons"),
-    "pattern.control": ("name", "reasons"), "stuck.reminder": ("name",),
-    "balance.loading": (), "balance.result": ("text",),
+    "pattern.control": ("name", "reasons"),
+    "stuck.reminder": ("name",),
+    "balance.loading": (),
+    "balance.result": ("text",),
 }
 
 # 条件可用参数：调用点仅在上游记录提供该字段（非空/非 null）时才注入；缺失时
@@ -243,16 +251,11 @@ CONDITIONAL_PARAMETERS: dict[str, tuple[str, ...]] = {
     "question.empty": ("sessionName", "projectName", "label"),
     "question.one": ("sessionName", "projectName", "label"),
     "question.many": ("sessionName", "projectName", "label"),
-    "model_access.one": ("errorCode", "errorMessage", "consecutiveRetryCount", "retry",
-                       "sessionName", "projectName"),
-    "model_access.many": ("errorCode", "errorMessage", "consecutiveRetryCount", "retry",
-                        "sessionName", "projectName"),
-    "failure.retry": ("failureType", "errorCode", "errorMessage", "retries", "retryExhausted",
-                      "sessionName", "projectName"),
-    "failure.tool": ("failureType", "errorCode", "errorMessage", "retries", "retryExhausted",
-                     "sessionName", "projectName"),
-    "failure.generic": ("failureType", "errorCode", "errorMessage", "retries", "retryExhausted",
-                        "sessionName", "projectName"),
+    "model_access.one": ("errorCode", "errorMessage", "consecutiveRetryCount", "retry", "sessionName", "projectName"),
+    "model_access.many": ("errorCode", "errorMessage", "consecutiveRetryCount", "retry", "sessionName", "projectName"),
+    "failure.retry": ("failureType", "errorCode", "errorMessage", "retries", "retryExhausted", "sessionName", "projectName"),
+    "failure.tool": ("failureType", "errorCode", "errorMessage", "retries", "retryExhausted", "sessionName", "projectName"),
+    "failure.generic": ("failureType", "errorCode", "errorMessage", "retries", "retryExhausted", "sessionName", "projectName"),
 }
 
 
@@ -265,8 +268,7 @@ EXPORT_GUIDE: dict[str, Any] = {
         "本段（_说明）只是给人或 AI 阅读的注释，导入时会被自动忽略，整段删除也不影响使用。"
     ),
     "怎么改（最常用）": [
-        "1. 改 phrases：每个 key 是一类事件的文案，值是候选文案数组；数组里每项一句，实际弹出时轮换使用。"
-        "改成 [] 表示留空，该事件自动沿用默认模式台词。",
+        "1. 改 phrases：每个 key 是一类事件的文案，值是候选文案数组；数组里每项一句，实际弹出时轮换使用。改成 [] 表示留空，该事件自动沿用默认模式台词。",
         "2. 文案里可用 {变量} 占位符，弹出时自动代入真实信息，例如 {name}（Agent 名称）、{command}（待审批命令）。"
         "每种弹窗能代入的字段 = 它对应上游方法显式注入的参数，见各 entries 的 parameters："
         "未标注的参数保证会被替换；标注「上游记录提供时可用」的条件参数，在上游未提供/为空/为 null 时会自动隐藏"
@@ -350,7 +352,16 @@ def build_persona_template(config: dict[str, Any] | None, agent_keys=None) -> di
             value = []
         phrases[key] = copy.deepcopy(value)
         parameters = list(PARAMETERS.get(key, ()))
-        entries.append({"key": key, "description": EVENT_DESCRIPTIONS.get(key, key), "sources": list(EVENT_SOURCES.get(key, ())), "parameters": parameters, "displayHint": DISPLAY_HINTS.get(key, ""), "phrases": copy.deepcopy(value)})
+        entries.append(
+            {
+                "key": key,
+                "description": EVENT_DESCRIPTIONS.get(key, key),
+                "sources": list(EVENT_SOURCES.get(key, ())),
+                "parameters": parameters,
+                "displayHint": DISPLAY_HINTS.get(key, ""),
+                "phrases": copy.deepcopy(value),
+            }
+        )
     mode = str(config.get("dialogue_mode", "custom") or "custom")
     agents = None
     if agent_keys:

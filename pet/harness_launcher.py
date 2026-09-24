@@ -16,6 +16,7 @@ Windows：Explorer / 开机自启的进程环境块是登录时的旧值，除�
 行为：探测端口 —— 已在运行则直接打开浏览器；未运行则后台拉起
 （Windows 隐藏窗口脱离进程 / POSIX 新会话），就绪后自动打开浏览器。
 """
+
 from __future__ import annotations
 
 import json
@@ -41,6 +42,7 @@ from .node_runtime import which as _which
 DEFAULT_PORT = int(os.environ.get("DSH_PORT") or 38080)
 # npx 首次拉取 @deepseek-ai/dsh 可能较慢，预留 90 秒就绪窗口
 _READY_TIMEOUT_SECONDS = 90.0
+
 
 def is_running(port: int = DEFAULT_PORT) -> bool:
     """探测 127.0.0.1:port 是否有服务监听。"""
@@ -82,15 +84,14 @@ _NO_OPEN_CACHE: dict[tuple[str, ...], bool] = {}
 # Windows 探测子进程必须隐藏窗口：桌宠是无控制台的 GUI 进程，console 类子进程
 # （cmd/node）不隐藏就会弹出可见终端窗口（开机自启场景实测复现：空终端窗口
 # 挂十几秒后消失）。
-_HIDDEN_KWARGS: dict = (
-    {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-)
+_HIDDEN_KWARGS: dict = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 
 def _probe_cache_path() -> Path:
     """--no-open 探测结果的落盘缓存路径（桌宠数据目录下）。"""
     try:
         from . import config as _config_mod
+
         app_dir = str(getattr(_config_mod, "APP_DIR_NAME", "dsh-pet-standalone"))
     except Exception:
         app_dir = "dsh-pet-standalone"
@@ -106,7 +107,9 @@ def _dsh_version(base_command: list[str]) -> str | None:
     try:
         result = subprocess.run(
             [*base_command, "--version"],
-            capture_output=True, text=True, timeout=8,
+            capture_output=True,
+            text=True,
+            timeout=8,
             cwd=str(Path.home()),
             env={**os.environ, "PATH": _augmented_path()},
             **_HIDDEN_KWARGS,
@@ -140,11 +143,16 @@ def _no_open_disk_cache_write(base_command: list[str], supported: bool) -> None:
             return
         path = _probe_cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "cmd": [str(part) for part in base_command],
-            "version": version,
-            "no_open": bool(supported),
-        }), encoding="utf-8")
+        path.write_text(
+            json.dumps(
+                {
+                    "cmd": [str(part) for part in base_command],
+                    "version": version,
+                    "no_open": bool(supported),
+                }
+            ),
+            encoding="utf-8",
+        )
     except Exception:
         pass
 
@@ -213,7 +221,10 @@ def _npm_global_roots() -> list[Path]:
     if npm is not None:
         try:
             result = subprocess.run(
-                [npm, "root", "-g"], capture_output=True, text=True, timeout=15,
+                [npm, "root", "-g"],
+                capture_output=True,
+                text=True,
+                timeout=15,
                 env={**os.environ, "PATH": _augmented_path()},
                 **_HIDDEN_KWARGS,
             )
@@ -520,19 +531,21 @@ def process_command_line(pid: int) -> str | None:
         if os.name == "nt":
             result = subprocess.run(
                 [
-                    "powershell", "-NoProfile", "-NonInteractive", "-Command",
-                    f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}')"
-                    ".CommandLine",
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine",
                 ],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
             if result.returncode != 0:
                 return None
             return (result.stdout or "").strip() or None
-        return Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(
-            b"\x00", b" "
-        ).decode("utf-8", "replace").strip() or None
+        return Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace").strip() or None
     except Exception:
         logging.debug("读取进程命令行失败 pid=%s", pid, exc_info=True)
         return None
@@ -553,9 +566,7 @@ def _pid_image_path(pid: int) -> str | None:
             try:
                 buf = ctypes.create_unicode_buffer(1024)
                 size = wintypes.DWORD(1024)
-                ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(
-                    handle, 0, buf, ctypes.byref(size)
-                )
+                ok = ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
                 return buf.value if ok else None
             finally:
                 ctypes.windll.kernel32.CloseHandle(handle)
@@ -614,14 +625,18 @@ def _terminate_process_tree(pid: int) -> None:
     if os.name == "nt":
         result = subprocess.run(
             ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if result.returncode != 0:
             logging.warning(
                 "停止 dsh：taskkill pid=%d 返回码 %s: %s%s",
-                pid, result.returncode,
-                (result.stdout or "").strip(), (result.stderr or "").strip(),
+                pid,
+                result.returncode,
+                (result.stdout or "").strip(),
+                (result.stderr or "").strip(),
             )
         return
 
@@ -708,10 +723,7 @@ def stop_harness(port: int = DEFAULT_PORT) -> tuple[str, str]:
         for pid in pids:
             command_line = process_command_line(pid)
             if not _looks_like_harness(pid, command_line):
-                return "not-ours", (
-                    f"端口 {candidate} 由 PID {pid} 占用，命令行不是 dsh web："
-                    f"{command_line or '（读不到）'}"
-                )
+                return "not-ours", (f"端口 {candidate} 由 PID {pid} 占用，命令行不是 dsh web：{command_line or '（读不到）'}")
             targets.append(pid)
         for pid in targets:
             try:
@@ -795,9 +807,7 @@ def launch_harness_gui(parent=None, action: str = "start") -> None:
             QMessageBox.warning(
                 parent,
                 "启动 DeepSeek Harness",
-                "未找到 dsh 命令。请先安装 Node.js 后执行：\n"
-                "npm install -g @deepseek-ai/dsh\n"
-                "或直接使用：npx @deepseek-ai/dsh web",
+                "未找到 dsh 命令。请先安装 Node.js 后执行：\nnpm install -g @deepseek-ai/dsh\n或直接使用：npx @deepseek-ai/dsh web",
             )
         elif status == "error":
             QMessageBox.critical(parent, "DeepSeek Harness", f"操作失败：{info}")
@@ -818,8 +828,7 @@ def launch_harness_gui(parent=None, action: str = "start") -> None:
 
             def _ask() -> None:
                 try:
-                    confirmed["ok"] = _confirm_harness_stop(
-                        parent, target, restart=(action == "restart"))
+                    confirmed["ok"] = _confirm_harness_stop(parent, target, restart=(action == "restart"))
                 except Exception as exc:  # 父窗口销毁/对话框构造失败
                     confirmed["error"] = exc
                 finally:

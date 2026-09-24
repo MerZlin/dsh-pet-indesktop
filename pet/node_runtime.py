@@ -15,6 +15,7 @@
 Windows 是进程 PATH **优先**、额外目录追加在后面——Windows 上用户可能用 nvm 明确
 钉了某个 node 版本，前置公共目录会把用户的选择劫持掉。
 """
+
 from __future__ import annotations
 
 import os
@@ -25,8 +26,8 @@ from typing import Iterable, Mapping
 
 # POSIX：常见的包管理器 bin 目录（存在即前置）
 _POSIX_ABS_BIN_DIRS = (
-    "/opt/homebrew/bin",          # Apple Silicon Homebrew
-    "/usr/local/bin",             # Intel Homebrew / 官方 pkg
+    "/opt/homebrew/bin",  # Apple Silicon Homebrew
+    "/usr/local/bin",  # Intel Homebrew / 官方 pkg
     "/usr/bin",
     "/home/linuxbrew/.linuxbrew/bin",
 )
@@ -36,7 +37,7 @@ _POSIX_HOME_BIN_DIRS = (
     ".volta/bin",
     ".bun/bin",
     ".yarn/bin",
-    "Library/pnpm",              # macOS pnpm 独立安装
+    "Library/pnpm",  # macOS pnpm 独立安装
     ".local/share/pnpm",
     ".asdf/shims",
 )
@@ -259,9 +260,7 @@ def _version_manager_bin_dirs(env: Mapping[str, str], home: Path, *, windows: bo
 
     fnm_dir = _env_get(env, "FNM_DIR").strip()
     if windows:
-        fnm_root = Path(fnm_dir) if fnm_dir else (
-            home / "AppData" / "Roaming" / "fnm"
-        )
+        fnm_root = Path(fnm_dir) if fnm_dir else (home / "AppData" / "Roaming" / "fnm")
     else:
         fnm_root = _env_root_or_default(env, "FNM_DIR", home / ".local" / "share" / "fnm")
     for version in _safe_glob(fnm_root / "node-versions", "*"):
@@ -352,9 +351,7 @@ def _windows_registry_env(names: Iterable[str] = _MANAGER_ENV_NAMES) -> dict[str
                         break
                     index += 1
                     if str(name).lower() in wanted and str(value).strip():
-                        values.setdefault(
-                            str(name), _expand_windows_vars(str(value), {**values, **os.environ})
-                        )
+                        values.setdefault(str(name), _expand_windows_vars(str(value), {**values, **os.environ}))
         except OSError:
             continue
     return values

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Shared style tokens and submenu inheritance without layout assumptions."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt
@@ -24,6 +25,7 @@ class ResponsiveMenuStyle(QProxyStyle):
         if hint in overrides:
             return overrides[hint]
         return super().styleHint(hint, option, widget, return_data)
+
 
 def install_responsive_menu_style(menu: QMenu) -> None:
     for action in menu.actions():
@@ -82,12 +84,15 @@ def inherit_menu_style(parent: QMenu, submenu: QMenu) -> None:
     if style_id == "modern":
         from .modern import apply_modern_menu_style
 
-        apply_modern_menu_style(submenu, {
-            "theme": parent.property("modernTheme") or "system",
-            "density": parent.property("modernDensity") or "standard",
-            "corner_radius": parent.property("modernCornerRadius") or 12,
-            **dict(parent.property("modernAppearance") or {}),
-        })
+        apply_modern_menu_style(
+            submenu,
+            {
+                "theme": parent.property("modernTheme") or "system",
+                "density": parent.property("modernDensity") or "standard",
+                "corner_radius": parent.property("modernCornerRadius") or 12,
+                **dict(parent.property("modernAppearance") or {}),
+            },
+        )
     else:
         from .legacy import apply_legacy_menu_style
 

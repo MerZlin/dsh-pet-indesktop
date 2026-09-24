@@ -1,4 +1,5 @@
 """Versioned context-menu layout domain."""
+
 from __future__ import annotations
 
 import json
@@ -18,9 +19,7 @@ class ResolvedMenuLayout:
     diagnostics: tuple[str, ...]
 
 
-def _insert_at_template_anchor(
-    target: list[dict], node: dict, template: list[dict], template_index: int
-) -> None:
+def _insert_at_template_anchor(target: list[dict], node: dict, template: list[dict], template_index: int) -> None:
     """Insert beside the nearest template sibling without reordering user nodes."""
     target_ids = [str(candidate.get("id") or "") for candidate in target]
     for sibling in reversed(template[:template_index]):
@@ -82,9 +81,7 @@ def _merge_future_default_actions(
                 (
                     candidate
                     for candidate in target
-                    if isinstance(candidate, dict)
-                    and candidate.get("type") == "submenu"
-                    and str(candidate.get("id") or "") == node_id
+                    if isinstance(candidate, dict) and candidate.get("type") == "submenu" and str(candidate.get("id") or "") == node_id
                 ),
                 None,
             )
@@ -173,17 +170,11 @@ def materialize_implicit_separators(raw_layout: Mapping) -> dict:
     return layout
 
 
-def merge_default_menu_actions(
-    raw_layout: Mapping, *, registered_actions: Collection[str]
-) -> tuple[dict, tuple[str, ...]]:
+def merge_default_menu_actions(raw_layout: Mapping, *, registered_actions: Collection[str]) -> tuple[dict, tuple[str, ...]]:
     """Return an editable layout containing actions added by newer defaults."""
     merged = deepcopy(dict(raw_layout))
     nodes = merged.get("nodes")
-    if (
-        merged.get("schema_version") != 1
-        or merged.get("layout_id") != "user"
-        or not isinstance(nodes, list)
-    ):
+    if merged.get("schema_version") != 1 or merged.get("layout_id") != "user" or not isinstance(nodes, list):
         return merged, ()
     try:
         default_layout = load_default_menu_layout()
@@ -242,9 +233,7 @@ def resolve_menu_layout(
                 seen.add(action_id)
             if node.get("type") == "submenu":
                 if submenu_depth >= 1:
-                    diagnostics.append(
-                        f"submenu-depth-exceeded:{str(node.get('id') or '')}"
-                    )
+                    diagnostics.append(f"submenu-depth-exceeded:{str(node.get('id') or '')}")
                 visit(node.get("children", []), submenu_depth + 1)
 
     visit(raw_layout.get("nodes", []))
@@ -253,9 +242,7 @@ def resolve_menu_layout(
 
     working_layout = deepcopy(dict(raw_layout))
     if source == "user":
-        working_layout, migration_diagnostics = merge_default_menu_actions(
-            working_layout, registered_actions=registered
-        )
+        working_layout, migration_diagnostics = merge_default_menu_actions(working_layout, registered_actions=registered)
         normalization.extend(migration_diagnostics)
     working_nodes = working_layout.get("nodes", [])
 
@@ -268,11 +255,13 @@ def resolve_menu_layout(
             if node_type == "separator":
                 # Separators are explicit layout nodes. The renderer normalizes
                 # leading/trailing/consecutive dividers after capability filters.
-                resolved.append({
-                    "type": "separator",
-                    "id": str(node.get("id") or ""),
-                    "visible": True,
-                })
+                resolved.append(
+                    {
+                        "type": "separator",
+                        "id": str(node.get("id") or ""),
+                        "visible": True,
+                    }
+                )
                 continue
             if node_type == "action":
                 action_id = str(node.get("id") or "")
@@ -341,19 +330,11 @@ def resolve_menu_layout(
     resolved_nodes = list(resolve_nodes(working_nodes))
 
     def contains_action(nodes: tuple[dict, ...] | list[dict], action_id: str) -> bool:
-        return any(
-            (node.get("type") == "action" and node.get("id") == action_id)
-            or contains_action(node.get("children", ()), action_id)
-            for node in nodes
-        )
+        return any((node.get("type") == "action" and node.get("id") == action_id) or contains_action(node.get("children", ()), action_id) for node in nodes)
 
     for action_id in ("modern_settings", "quit"):
-        if action_id in registered and action_id in available and not contains_action(
-            resolved_nodes, action_id
-        ):
-            resolved_nodes.append(
-                {"type": "action", "id": action_id, "visible": True}
-            )
+        if action_id in registered and action_id in available and not contains_action(resolved_nodes, action_id):
+            resolved_nodes.append({"type": "action", "id": action_id, "visible": True})
             normalization.append(f"required-action-restored:{action_id}")
 
     return ResolvedMenuLayout(

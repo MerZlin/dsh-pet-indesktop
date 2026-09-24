@@ -13,6 +13,7 @@ QTimer 全程运行在 GUI 线程，无跨线程对象。
 出窗静默盖戳跳过（防休眠唤醒轰炸）；once 条目过 due+grace 自动归档
 （enabled=False，面板置灰可见）。
 """
+
 from __future__ import annotations
 
 import json
@@ -36,6 +37,7 @@ _HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
 # ------------------------------------------------------------ 纯函数
+
 
 def _normalize_hhmm(value) -> str:
     """归一化 HH:MM；接受单位数小时（9:05 → 09:05），非法返回空串。"""
@@ -81,8 +83,7 @@ def clean_todo_items(value) -> list[dict]:
     for raw in value[:TODO_ITEMS_LIMIT]:
         if not isinstance(raw, dict):
             continue
-        item = new_todo_item(raw.get("title"), raw.get("kind"),
-                             raw.get("time"), raw.get("date", ""))
+        item = new_todo_item(raw.get("title"), raw.get("kind"), raw.get("time"), raw.get("date", ""))
         if not item["title"]:
             continue
         item["id"] = str(raw.get("id") or item["id"]).strip()[:64] or item["id"]
@@ -116,8 +117,7 @@ def _fire_datetimes(item: dict, lead_minutes: int, now: datetime):
     return lead, due
 
 
-def advance_todo_state(items, prefs, now: datetime, *,
-                       grace_minutes: int = DEFAULT_GRACE_MINUTES):
+def advance_todo_state(items, prefs, now: datetime, *, grace_minutes: int = DEFAULT_GRACE_MINUTES):
     """推进待办触发状态，返回 (fires, new_items)。
 
     - prefs = {"enabled": bool, "lead_minutes": int}；总开关关闭时原样返回；
@@ -152,14 +152,15 @@ def advance_todo_state(items, prefs, now: datetime, *,
                 continue
             item[slot_key] = slot
             if now <= fire_dt + grace:
-                fires.append({
-                    "id": item["id"],
-                    "title": item["title"],
-                    "time": item["time"],
-                    "phase": phase,
-                })
-        if (item.get("kind") == "once" and due_dt is not None
-                and now > due_dt + grace):
+                fires.append(
+                    {
+                        "id": item["id"],
+                        "title": item["title"],
+                        "time": item["time"],
+                        "phase": phase,
+                    }
+                )
+        if item.get("kind") == "once" and due_dt is not None and now > due_dt + grace:
             item["enabled"] = False
         new_items.append(item)
     return fires, new_items
@@ -207,6 +208,7 @@ def summarize_next(items, now: datetime) -> str:
 
 # ------------------------------------------------------------ 条目存储
 
+
 def todo_items_path(config_dir, instance_id: str = "") -> Path:
     """条目文件路径：多开实例跟随 config 文件的 -<instance_id> 命名惯例。"""
     name = f"todo_items-{instance_id}.json" if instance_id else "todo_items.json"
@@ -235,9 +237,7 @@ class TodoStore:
         tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, self.path)
             return True
         except OSError:
@@ -250,6 +250,7 @@ class TodoStore:
 
 
 # ------------------------------------------------------------ 调度服务
+
 
 class TodoReminderService:
     """待办提醒调度服务（AppShell 持有，GUI 线程）。
@@ -270,10 +271,12 @@ class TodoReminderService:
 
         self._app = app
         config = getattr(app, "config", None)
-        self._store = TodoStore(todo_items_path(
-            getattr(config, "dir", Path(".")),
-            getattr(config, "instance_id", "") or "",
-        ))
+        self._store = TodoStore(
+            todo_items_path(
+                getattr(config, "dir", Path(".")),
+                getattr(config, "instance_id", "") or "",
+            )
+        )
         self._items: list[dict] = []
         self._prefs: dict = {"enabled": True, "lead_minutes": 0}
         self._notify_enabled = True
@@ -302,9 +305,7 @@ class TodoReminderService:
             "lead_minutes": max(0, min(60, lead)),
         }
         # 桌面通知分支与既有调用方（chat 等）同规：受全局通知开关门控
-        self._notify_enabled = (
-            bool(config.get("system_notifications_enabled", True)) if config else True
-        )
+        self._notify_enabled = bool(config.get("system_notifications_enabled", True)) if config else True
         self._items = self._store.load()
 
     def items(self) -> list[dict]:
@@ -320,9 +321,7 @@ class TodoReminderService:
     def _on_tick(self, now: datetime | None = None) -> None:
         if not self._prefs.get("enabled"):
             return
-        fires, new_items = advance_todo_state(
-            self._items, self._prefs, now or datetime.now()
-        )
+        fires, new_items = advance_todo_state(self._items, self._prefs, now or datetime.now())
         if new_items != self._items:
             self._items = new_items
             self._store.save(new_items)
@@ -340,14 +339,10 @@ class TodoReminderService:
             return
         notify = getattr(app, "system_notify", None)
         if callable(notify):
-            notify("待办提醒", f"{fire['title']}（{fire['time']}）",
-                   on_click=getattr(app, "open_todo_panel", None))
+            notify("待办提醒", f"{fire['title']}（{fire['time']}）", on_click=getattr(app, "open_todo_panel", None))
 
     def _bubble_suppressed(self) -> bool:
         """设置窗口打开期间暂停气泡（与 PetInstance._update_bubble_suppression_for_settings
         同一判定来源：抑制状态本就是 app 层根据对话框存在性设置的）。"""
         app = self._app
-        return (
-            getattr(app, "modern_settings_dialog", None) is not None
-            or getattr(app, "chat_settings_dialog", None) is not None
-        )
+        return getattr(app, "modern_settings_dialog", None) is not None or getattr(app, "chat_settings_dialog", None) is not None

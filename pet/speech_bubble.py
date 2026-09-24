@@ -14,6 +14,7 @@ macOS 焦点问题由气泡窗口自身解决：`WindowDoesNotAcceptFocus`、
   并对拆分出的纯函数做 re-export，维持既有 `from pet.speech_bubble import ...`
   兼容，外部调用点零改动。
 """
+
 from __future__ import annotations
 
 import logging
@@ -24,12 +25,26 @@ from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
+    QEasingCurve,
+    QPoint,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
-    QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen,
-    QPixmap, QTransform,
+    QColor,
+    QFontMetrics,
+    QGuiApplication,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QTransform,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -189,13 +204,27 @@ class FlowLayout(QLayout):
         line_height = 0
         for item in self._items:
             hint = item.sizeHint()
-            space_x = self._h_spacing if self._h_spacing >= 0 else item.widget().style().layoutSpacing(
-                QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
-                Qt.Orientation.Horizontal,
+            space_x = (
+                self._h_spacing
+                if self._h_spacing >= 0
+                else item.widget()
+                .style()
+                .layoutSpacing(
+                    QSizePolicy.Policy.PushButton,
+                    QSizePolicy.Policy.PushButton,
+                    Qt.Orientation.Horizontal,
+                )
             )
-            space_y = self._v_spacing if self._v_spacing >= 0 else item.widget().style().layoutSpacing(
-                QSizePolicy.Policy.PushButton, QSizePolicy.Policy.PushButton,
-                Qt.Orientation.Vertical,
+            space_y = (
+                self._v_spacing
+                if self._v_spacing >= 0
+                else item.widget()
+                .style()
+                .layoutSpacing(
+                    QSizePolicy.Policy.PushButton,
+                    QSizePolicy.Policy.PushButton,
+                    Qt.Orientation.Vertical,
+                )
             )
             next_x = x + hint.width() + space_x
             if next_x - space_x > effective.right() and line_height > 0:
@@ -215,29 +244,50 @@ class FlowLayout(QLayout):
 # anchor.  They are not colour-only aliases of the legacy bubble.
 BUBBLE_STYLE_PRESETS = {
     "classic_top": {
-        "label": "经典暖黄 · 正上方", "placement": "top",
-        "background": "#fffaf0", "border": "#efc261", "foreground": "#403725",
-        "radius": 14, "shadow": "#6b542b",
+        "label": "经典暖黄 · 正上方",
+        "placement": "top",
+        "background": "#fffaf0",
+        "border": "#efc261",
+        "foreground": "#403725",
+        "radius": 14,
+        "shadow": "#6b542b",
     },
     "paper_left": {
-        "label": "纸感卡片 · 左上方", "placement": "top_left",
-        "background": "#ffffff", "border": "#dce1e7", "foreground": "#252a32",
-        "radius": 11, "shadow": "#374151",
+        "label": "纸感卡片 · 左上方",
+        "placement": "top_left",
+        "background": "#ffffff",
+        "border": "#dce1e7",
+        "foreground": "#252a32",
+        "radius": 11,
+        "shadow": "#374151",
     },
     "glass_right": {
-        "label": "深色玻璃 · 右上方", "placement": "top_right",
-        "background": "#292d36", "border": "#4d5360", "foreground": "#f7f8fb",
-        "radius": 18, "shadow": "#111318",
+        "label": "深色玻璃 · 右上方",
+        "placement": "top_right",
+        "background": "#292d36",
+        "border": "#4d5360",
+        "foreground": "#f7f8fb",
+        "radius": 18,
+        "shadow": "#111318",
     },
     "soft_blue_top": {
-        "label": "柔蓝对话 · 正上方", "placement": "top",
-        "background": "#eef6ff", "border": "#a9c9ef", "foreground": "#24466f",
-        "radius": 16, "shadow": "#315f91",
+        "label": "柔蓝对话 · 正上方",
+        "placement": "top",
+        "background": "#eef6ff",
+        "border": "#a9c9ef",
+        "foreground": "#24466f",
+        "radius": 16,
+        "shadow": "#315f91",
     },
     "breath_bubble": {
-        "label": "吐气水泡 · 左上方", "placement": "top_left",
-        "background": "#fbfeff", "border": "#0e5968", "foreground": "#23444d",
-        "radius": 0, "shadow": "#0e5968", "shape": "breath_bubble",
+        "label": "吐气水泡 · 左上方",
+        "placement": "top_left",
+        "background": "#fbfeff",
+        "border": "#0e5968",
+        "foreground": "#23444d",
+        "radius": 0,
+        "shadow": "#0e5968",
+        "shape": "breath_bubble",
     },
 }
 
@@ -257,11 +307,7 @@ class PetSpeechBubble(QFrame):
         self._capture_compat = False
         self._capture_host: QWidget | None = None
         self.setObjectName("pet-speech-bubble")
-        flags = (
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
+        flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         # 气泡只是状态提示，在所有平台都不应该成为键盘焦点窗口。
         # WA_ShowWithoutActivating 在部分窗口系统上只是提示，而这个原生窗口
         # flag 才是防止定时 show() 抢走其他应用输入光标的硬约束。
@@ -291,20 +337,14 @@ class PetSpeechBubble(QFrame):
         # message; QLabel otherwise reports the full unwrapped line as its
         # sizeHint and can stretch an interactive bubble across the chat UI.
         self._subtitle_label.setWordWrap(True)
-        self._subtitle_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
+        self._subtitle_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._subtitle_label.setMaximumWidth(248)
-        self._subtitle_label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
+        self._subtitle_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._subtitle_label.hide()
         self._layout.addWidget(self._subtitle_label)
         self._page_indicator = QLabel(self)
         self._page_indicator.setObjectName("pet-page-indicator")
-        self._page_indicator.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        self._page_indicator.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self._page_indicator.hide()
         self._layout.addWidget(self._page_indicator, 0, Qt.AlignmentFlag.AlignRight)
         # 交互按钮行（审批「同意/拒绝」、问题「A/B/C」等）：默认隐藏，仅
@@ -422,9 +462,7 @@ class PetSpeechBubble(QFrame):
             self._shadow_alpha = 0
         else:
             self._layout.setContentsMargins(13, 10, 13, 17)
-            self._layout.setAlignment(
-                self.label, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-            )
+            self._layout.setAlignment(self.label, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
@@ -452,15 +490,9 @@ class PetSpeechBubble(QFrame):
         anchor_rect: QRect,
         pet_scale: float | None,
     ) -> None:
-        base_size = (
-            breath_bubble_size_for_scale(pet_scale)
-            if pet_scale is not None
-            else breath_bubble_size_for_anchor(anchor_rect)
-        )
+        base_size = breath_bubble_size_for_scale(pet_scale) if pet_scale is not None else breath_bubble_size_for_anchor(anchor_rect)
         # 内容缩放系数按形态选：配图吃「配图大小」，文字吃「气泡文字大小」。
-        content_scale = (
-            self._image_scale if self._content_kind == "image" else self._text_scale
-        )
+        content_scale = self._image_scale if self._content_kind == "image" else self._text_scale
         if content_scale != 1.0:
             base_size = QSize(
                 int(base_size.width() * content_scale),
@@ -478,16 +510,14 @@ class PetSpeechBubble(QFrame):
             )
         else:
             self._layout.setContentsMargins(
-                round(28 * scale), round(56 * scale),
-                round(52 * scale), round(44 * scale),
+                round(28 * scale),
+                round(56 * scale),
+                round(52 * scale),
+                round(44 * scale),
             )
         margins = self._layout.contentsMargins()
-        label_width = max(
-            92, bubble_size.width() - margins.left() - margins.right()
-        )
-        label_height = max(
-            42, bubble_size.height() - margins.top() - margins.bottom()
-        )
+        label_width = max(92, bubble_size.width() - margins.left() - margins.right())
+        label_height = max(42, bubble_size.height() - margins.top() - margins.bottom())
         self.label.setFixedSize(label_width, label_height)
         self.setFixedSize(bubble_size)
         if self._content_kind == "image" and not self._source_pixmap.isNull():
@@ -500,13 +530,15 @@ class PetSpeechBubble(QFrame):
             self.label.show()
             self.label.setPixmap(QPixmap())
             self.label.ensurePolished()
-            self.label.setText(elide_bubble_text(
-                QFontMetrics(self.label.font()),
-                self._raw_text,
-                label_width,
-                bubble_max_lines(self._raw_text, keep_breaks=self._multi_line),
-                keep_breaks=self._multi_line,
-            ))
+            self.label.setText(
+                elide_bubble_text(
+                    QFontMetrics(self.label.font()),
+                    self._raw_text,
+                    label_width,
+                    bubble_max_lines(self._raw_text, keep_breaks=self._multi_line),
+                    keep_breaks=self._multi_line,
+                )
+            )
 
     def _breath_size_for_content(self, base_size: QSize) -> QSize:
         """Grow the reference canvas when content needs more safe-area space.
@@ -529,9 +561,7 @@ class PetSpeechBubble(QFrame):
             length = len(normalize_bubble_text(self._raw_text))
             if length > 24:
                 width += min(104, ceil((length - 24) / 8) * 14)
-        content_scale = (
-            self._image_scale if self._content_kind == "image" else self._text_scale
-        )
+        content_scale = self._image_scale if self._content_kind == "image" else self._text_scale
         width = max(base_size.width(), min(int(round(320 * content_scale)), width))
         return QSize(width, int(width * 195 / 240 + 0.5))
 
@@ -561,12 +591,7 @@ class PetSpeechBubble(QFrame):
         else:
             self._capture_host = None
             self.setParent(None)
-            flags = (
-                Qt.WindowType.Tool
-                | Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-                | Qt.WindowType.WindowDoesNotAcceptFocus
-            )
+            flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus
             self.setWindowFlags(flags)
             if _MAC:
                 self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
@@ -688,11 +713,7 @@ class PetSpeechBubble(QFrame):
             # （bubble_column_for_text），整体再乘「气泡文字大小」系数——审批/
             # 提问气泡有自己的布局（按钮行 + 强制单页展示），保持既有列宽不动。
             text_slack = max(1, int(round(BUBBLE_TEXT_SLACK * self._text_scale)))
-            column = (
-                BUBBLE_TEXT_COLUMN
-                if interactive or sticky
-                else self._column_for_text(text, anchor_rect)
-            )
+            column = BUBBLE_TEXT_COLUMN if interactive or sticky else self._column_for_text(text, anchor_rect)
             if self._title_first:
                 if not self._width_locked or self._locked_column is None:
                     # 未锁宽帧定列宽并记下，后续锁宽句复用——同首歌气泡宽度
@@ -743,22 +764,21 @@ class PetSpeechBubble(QFrame):
                 # 高度同理锁行数：底边锚在鱼头顶，行数一变顶边就跳——所以
                 # 行数只单向往大涨（_locked_lines），涨到本首歌最胖的一句后
                 # 彻底稳定；短句不再把气泡顶边拉回来。
-                line_count = max(
-                    (len(page.split("\n")) for page in pages), default=1
-                )
+                line_count = max((len(page.split("\n")) for page in pages), default=1)
                 if self._locked_lines is None or line_count > self._locked_lines:
                     self._locked_lines = line_count
                 self.label.setFixedSize(
                     bubble_label_size(
-                        metrics, pages, column, text_slack,
+                        metrics,
+                        pages,
+                        column,
+                        text_slack,
                         min_width=int(round(TITLE_FIRST_COLUMN * self._text_scale)),
                         min_height=self._locked_lines * metrics.lineSpacing() + 2,
                     )
                 )
             else:
-                self.label.setFixedSize(
-                    bubble_label_size(metrics, pages, column, text_slack)
-                )
+                self.label.setFixedSize(bubble_label_size(metrics, pages, column, text_slack))
         self.adjustSize()
         self._place(anchor_rect)
         self.show()
@@ -792,11 +812,7 @@ class PetSpeechBubble(QFrame):
                 header.setWordWrap(True)
                 header.setFixedWidth(220)
                 header.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-                header.setStyleSheet(
-                    "QLabel { background: transparent; border: none;"
-                    " font-weight:600; font-size:11px; color:#2b3a4a;"
-                    " padding:2px 0 0 0; }"
-                )
+                header.setStyleSheet("QLabel { background: transparent; border: none; font-weight:600; font-size:11px; color:#2b3a4a; padding:2px 0 0 0; }")
                 self._button_layout.addWidget(header)
                 continue
             if label == SECTION_HINT_LABEL:
@@ -805,10 +821,7 @@ class PetSpeechBubble(QFrame):
                 hint.setWordWrap(True)
                 hint.setFixedWidth(220)
                 hint.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-                hint.setStyleSheet(
-                    "QLabel { background: transparent; border: none;"
-                    " font-size:10px; color:#7a8a9a; padding:1px 0 0 0; }"
-                )
+                hint.setStyleSheet("QLabel { background: transparent; border: none; font-size:10px; color:#7a8a9a; padding:1px 0 0 0; }")
                 self._button_layout.addWidget(hint)
                 continue
             button_text = str(label)
@@ -823,9 +836,7 @@ class PetSpeechBubble(QFrame):
             btn.setMaximumWidth(button_width)
             metrics = QFontMetrics(btn.font())
             available_width = button_width - 24 - 2
-            btn.setText(metrics.elidedText(
-                button_text, Qt.TextElideMode.ElideRight, available_width
-            ))
+            btn.setText(metrics.elidedText(button_text, Qt.TextElideMode.ElideRight, available_width))
             btn.setToolTip(button_text)
             btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             btn.setStyleSheet(
@@ -1227,77 +1238,114 @@ class PetSpeechBubble(QFrame):
         main = QPainterPath()
         main.moveTo(x + width * 0.17, y + height * 0.06)
         main.cubicTo(
-            x + width * 0.43, y - height * 0.03,
-            x + width * 0.73, y + height * 0.01,
-            x + width * 0.89, y + height * 0.20,
+            x + width * 0.43,
+            y - height * 0.03,
+            x + width * 0.73,
+            y + height * 0.01,
+            x + width * 0.89,
+            y + height * 0.20,
         )
         main.cubicTo(
-            x + width * 1.01, y + height * 0.35,
-            x + width * 1.01, y + height * 0.65,
-            x + width * 0.86, y + height * 0.83,
+            x + width * 1.01,
+            y + height * 0.35,
+            x + width * 1.01,
+            y + height * 0.65,
+            x + width * 0.86,
+            y + height * 0.83,
         )
         main.cubicTo(
-            x + width * 0.67, y + height * 1.02,
-            x + width * 0.33, y + height * 1.02,
-            x + width * 0.13, y + height * 0.84,
+            x + width * 0.67,
+            y + height * 1.02,
+            x + width * 0.33,
+            y + height * 1.02,
+            x + width * 0.13,
+            y + height * 0.84,
         )
         main.cubicTo(
-            x - width * 0.02, y + height * 0.68,
-            x - width * 0.04, y + height * 0.39,
-            x + width * 0.07, y + height * 0.22,
+            x - width * 0.02,
+            y + height * 0.68,
+            x - width * 0.04,
+            y + height * 0.39,
+            x + width * 0.07,
+            y + height * 0.22,
         )
         main.cubicTo(
-            x + width * 0.09, y + height * 0.16,
-            x + width * 0.12, y + height * 0.10,
-            x + width * 0.17, y + height * 0.06,
+            x + width * 0.09,
+            y + height * 0.16,
+            x + width * 0.12,
+            y + height * 0.10,
+            x + width * 0.17,
+            y + height * 0.06,
         )
         main.closeSubpath()
 
         # The two trailing bubbles intentionally use hand-drawn cubic contours,
         # not QPainterPath.addEllipse(), matching the reference's irregular rims.
         large_x, large_y, large_w, large_h = (
-            local.width() - 71.0 * sx, local.height() - 58.0 * sy,
-            31.0 * sx, 29.0 * sy,
+            local.width() - 71.0 * sx,
+            local.height() - 58.0 * sy,
+            31.0 * sx,
+            29.0 * sy,
         )
         large = QPainterPath()
         large.moveTo(large_x + large_w * 0.45, large_y)
         large.cubicTo(
-            large_x + large_w * 0.72, large_y - large_h * 0.05,
-            large_x + large_w * 1.02, large_y + large_h * 0.28,
-            large_x + large_w * 0.94, large_y + large_h * 0.58,
+            large_x + large_w * 0.72,
+            large_y - large_h * 0.05,
+            large_x + large_w * 1.02,
+            large_y + large_h * 0.28,
+            large_x + large_w * 0.94,
+            large_y + large_h * 0.58,
         )
         large.cubicTo(
-            large_x + large_w * 0.86, large_y + large_h * 0.91,
-            large_x + large_w * 0.38, large_y + large_h * 1.04,
-            large_x + large_w * 0.11, large_y + large_h * 0.78,
+            large_x + large_w * 0.86,
+            large_y + large_h * 0.91,
+            large_x + large_w * 0.38,
+            large_y + large_h * 1.04,
+            large_x + large_w * 0.11,
+            large_y + large_h * 0.78,
         )
         large.cubicTo(
-            large_x - large_w * 0.07, large_y + large_h * 0.55,
-            large_x + large_w * 0.12, large_y + large_h * 0.14,
-            large_x + large_w * 0.45, large_y,
+            large_x - large_w * 0.07,
+            large_y + large_h * 0.55,
+            large_x + large_w * 0.12,
+            large_y + large_h * 0.14,
+            large_x + large_w * 0.45,
+            large_y,
         )
         large.closeSubpath()
 
         small_x, small_y, small_w, small_h = (
-            local.width() - 39.0 * sx, local.height() - 37.0 * sy,
-            14.0 * sx, 13.0 * sy,
+            local.width() - 39.0 * sx,
+            local.height() - 37.0 * sy,
+            14.0 * sx,
+            13.0 * sy,
         )
         small = QPainterPath()
         small.moveTo(small_x + small_w * 0.40, small_y)
         small.cubicTo(
-            small_x + small_w * 0.75, small_y - small_h * 0.03,
-            small_x + small_w * 1.03, small_y + small_h * 0.31,
-            small_x + small_w * 0.92, small_y + small_h * 0.62,
+            small_x + small_w * 0.75,
+            small_y - small_h * 0.03,
+            small_x + small_w * 1.03,
+            small_y + small_h * 0.31,
+            small_x + small_w * 0.92,
+            small_y + small_h * 0.62,
         )
         small.cubicTo(
-            small_x + small_w * 0.78, small_y + small_h * 0.96,
-            small_x + small_w * 0.34, small_y + small_h * 1.04,
-            small_x + small_w * 0.08, small_y + small_h * 0.70,
+            small_x + small_w * 0.78,
+            small_y + small_h * 0.96,
+            small_x + small_w * 0.34,
+            small_y + small_h * 1.04,
+            small_x + small_w * 0.08,
+            small_y + small_h * 0.70,
         )
         small.cubicTo(
-            small_x - small_w * 0.05, small_y + small_h * 0.42,
-            small_x + small_w * 0.09, small_y + small_h * 0.10,
-            small_x + small_w * 0.40, small_y,
+            small_x - small_w * 0.05,
+            small_y + small_h * 0.42,
+            small_x + small_w * 0.09,
+            small_y + small_h * 0.10,
+            small_x + small_w * 0.40,
+            small_y,
         )
         small.closeSubpath()
         self._main_bubble_path = main
@@ -1368,10 +1416,15 @@ class PetSpeechBubble(QFrame):
             color.setAlpha(alpha)
             shadow_path = QTransform.fromTranslate(0, offset_y).map(path)
             painter.setBrush(color)
-            painter.setPen(QPen(
-                color, width, Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin,
-            ))
+            painter.setPen(
+                QPen(
+                    color,
+                    width,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin,
+                )
+            )
             painter.drawPath(shadow_path)
 
     def _paint_breath_bubble(self, painter: QPainter, background: QColor, border: QColor) -> None:
@@ -1381,11 +1434,7 @@ class PetSpeechBubble(QFrame):
         painter.drawPath(self._main_bubble_path)
 
         bounds = self._main_bubble_path.boundingRect()
-        if (
-            self._content_kind == "image"
-            and not self._source_pixmap.isNull()
-            and not self._breath_image_clip_path.isEmpty()
-        ):
+        if self._content_kind == "image" and not self._source_pixmap.isNull() and not self._breath_image_clip_path.isEmpty():
             painter.save()
             painter.setClipPath(self._breath_image_clip_path)
             painter.drawPixmap(
@@ -1399,14 +1448,20 @@ class PetSpeechBubble(QFrame):
         self._water_start_ratio = 0.48
         water.moveTo(bounds.left() - 2, bounds.top() + bounds.height() * self._water_start_ratio)
         water.cubicTo(
-            bounds.left() + bounds.width() * 0.13, bounds.top() + bounds.height() * 0.70,
-            bounds.left() + bounds.width() * 0.30, bounds.top() + bounds.height() * 0.88,
-            bounds.left() + bounds.width() * 0.52, bounds.top() + bounds.height() * 0.90,
+            bounds.left() + bounds.width() * 0.13,
+            bounds.top() + bounds.height() * 0.70,
+            bounds.left() + bounds.width() * 0.30,
+            bounds.top() + bounds.height() * 0.88,
+            bounds.left() + bounds.width() * 0.52,
+            bounds.top() + bounds.height() * 0.90,
         )
         water.cubicTo(
-            bounds.left() + bounds.width() * 0.72, bounds.top() + bounds.height() * 0.92,
-            bounds.left() + bounds.width() * 0.90, bounds.top() + bounds.height() * 0.82,
-            bounds.right() + 2, bounds.top() + bounds.height() * 0.69,
+            bounds.left() + bounds.width() * 0.72,
+            bounds.top() + bounds.height() * 0.92,
+            bounds.left() + bounds.width() * 0.90,
+            bounds.top() + bounds.height() * 0.82,
+            bounds.right() + 2,
+            bounds.top() + bounds.height() * 0.69,
         )
         water.lineTo(bounds.right() + 4, bounds.bottom() + 4)
         water.lineTo(bounds.left() - 4, bounds.bottom() + 4)
@@ -1430,9 +1485,12 @@ class PetSpeechBubble(QFrame):
         highlight_end = 0.85
         highlight.moveTo(bounds.left() + bounds.width() * highlight_start, bounds.top() + bounds.height() * 0.14)
         highlight.cubicTo(
-            bounds.left() + bounds.width() * 0.76, bounds.top() + bounds.height() * 0.17,
-            bounds.left() + bounds.width() * 0.82, bounds.top() + bounds.height() * 0.23,
-            bounds.left() + bounds.width() * highlight_end, bounds.top() + bounds.height() * 0.27,
+            bounds.left() + bounds.width() * 0.76,
+            bounds.top() + bounds.height() * 0.17,
+            bounds.left() + bounds.width() * 0.82,
+            bounds.top() + bounds.height() * 0.23,
+            bounds.left() + bounds.width() * highlight_end,
+            bounds.top() + bounds.height() * 0.27,
         )
         painter.setPen(QPen(border, max(2.0, 3.0 * self._breath_scale), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawPath(highlight)

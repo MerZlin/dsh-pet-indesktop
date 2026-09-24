@@ -8,6 +8,7 @@ Config 现有加载路径（reload + _normalize_pet_settings）对同一输入�
 本批**不迁移任何调用点**：设置对话框等继续走 Config 老路，facade 只建不用。
 secret 保留逻辑、version 迁移、reload 白名单行为均由 Config 负责，facade 不触碰。
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -96,11 +97,7 @@ class CollisionConfig(_DomainFacade):
     @classmethod
     def normalize(cls, raw: Any) -> dict:
         raw = raw if isinstance(raw, dict) else {}
-        known = {
-            key: value
-            for key, value in raw.items()
-            if key in DEFAULT_COLLISION_SETTINGS and value is not None
-        }
+        known = {key: value for key, value in raw.items() if key in DEFAULT_COLLISION_SETTINGS and value is not None}
         return _clean_collision_data(known)
 
 

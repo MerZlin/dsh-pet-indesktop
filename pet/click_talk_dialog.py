@@ -4,6 +4,7 @@
 每个点击动画可绑定多条专属自言自语台词；点击角色时优先播放当前动画
 绑定的台词，未绑定时回退全局随机自言自语。
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -27,10 +28,7 @@ def _discover_click_names(character_id: str) -> list[str]:
     内置 gif），不读死内置路径；webm/gif 都识别。"""
     click_dir = catalog.resolve_character_video_dir(str(character_id)) / "click"
     if click_dir.is_dir():
-        names = sorted(
-            {p.stem for p in click_dir.glob("*.webm")}
-            | {p.stem for p in click_dir.glob("*.gif")}
-        )
+        names = sorted({p.stem for p in click_dir.glob("*.webm")} | {p.stem for p in click_dir.glob("*.gif")})
         if names:
             return names
     return list(catalog.CLICKS)
@@ -44,20 +42,14 @@ class ClickTalkBindingsDialog(QDialog):
         self.config = config
         self.character_id = str(config.get("character", catalog.DEFAULT_CHARACTER))
         self.click_names = list(click_names) if click_names else _discover_click_names(self.character_id)
-        self.bindings = {
-            str(action_id): list(texts)
-            for action_id, texts in config.click_talk_bindings(self.character_id).items()
-        }
+        self.bindings = {str(action_id): list(texts) for action_id, texts in config.click_talk_bindings(self.character_id).items()}
 
         self.setWindowTitle("点击动画台词绑定")
         self.resize(560, 420)
         self.setMinimumSize(480, 360)
 
         layout = QVBoxLayout(self)
-        hint = QLabel(
-            "每个点击动画可绑定多条专属自言自语台词，每行一条。\n"
-            "点击桌宠时会优先播放当前动画绑定的台词；未绑定时回退全局随机自言自语。"
-        )
+        hint = QLabel("每个点击动画可绑定多条专属自言自语台词，每行一条。\n点击桌宠时会优先播放当前动画绑定的台词；未绑定时回退全局随机自言自语。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 

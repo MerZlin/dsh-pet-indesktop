@@ -32,9 +32,14 @@ PLAYERS = {
 }
 
 # 搜哪些根目录：两个常见盘符 + 用户的 AppData（部分安装器会装在这里）。
-_SEARCH_ROOTS = ("D:/", "C:/", "C:/Program Files", "C:/Program Files (x86)",
-                 "C:/Users/%s/AppData/Local" % os.environ.get("USERNAME", ""),
-                 "C:/Users/%s/AppData/Roaming" % os.environ.get("USERNAME", ""))
+_SEARCH_ROOTS = (
+    "D:/",
+    "C:/",
+    "C:/Program Files",
+    "C:/Program Files (x86)",
+    "C:/Users/%s/AppData/Local" % os.environ.get("USERNAME", ""),
+    "C:/Users/%s/AppData/Roaming" % os.environ.get("USERNAME", ""),
+)
 
 # 每个候选目录最多往下找几层（避免全盘递归）。
 _MAX_DEPTH = 3
@@ -146,9 +151,7 @@ def warm_cache_async(player_key: str, manual_path: str = "") -> bool:
             with _warm_lock:
                 _warm_inflight.discard(player_key)
 
-    threading.Thread(
-        target=_run, name=f"music-player-warm-{player_key}", daemon=True
-    ).start()
+    threading.Thread(target=_run, name=f"music-player-warm-{player_key}", daemon=True).start()
     return True
 
 

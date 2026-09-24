@@ -4,6 +4,7 @@
 从 modern_settings_dialog.py 纯机械搬移。现位于 pet/chat/ 下，原 `from .chat.xxx`
 相对导入改为 `from .xxx`（级别变化）。
 """
+
 from __future__ import annotations
 
 import threading
@@ -128,9 +129,7 @@ class _AiSettingsPage(QWidget):
         self.message_card_opacity = BrowserSpinBox(self)
         self.message_card_opacity.setRange(10, 100)
         self.message_card_opacity.setSuffix(" %")
-        self.message_card_opacity.setValue(
-            int(config.get("modern_chat_card_opacity", 84) or 84)
-        )
+        self.message_card_opacity.setValue(int(config.get("modern_chat_card_opacity", 84) or 84))
         self.background_fill = ModernSelect(self, width=160)
         self.background_fill.addItem("填充裁剪", "cover")
         self.background_fill.addItem("完整适应", "contain")
@@ -170,28 +169,48 @@ class _AiSettingsPage(QWidget):
             self.provider_combo,
             [self.add_provider_btn, self.delete_provider_btn],
         )
-        root.addWidget(SettingsSection("API 列表", [
-            SettingRow(
-                "provider_list", "API 列表",
-                "选择要编辑/切换的模型服务；保存后当前选中项会作为 active_provider 生效。",
-                provider_row,
-            ),
-        ], self))
-        root.addWidget(SettingsSection("模型与连接", [
-            SettingRow("provider_name", "Provider 名称", "用于区分当前使用的模型服务。", self.name),
-            SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
-            SettingRow("model", "模型", "发送请求时使用的模型标识。", self.model),
-            SettingRow("api_key", "API Key", "凭据优先保存到系统钥匙串。", self.key),
-            SettingRow("system_prompt", "System Prompt", "定义桌宠对话时的身份、语气和行为。", self.prompt, stacked=True),
-            SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
-        ], self))
-        root.addWidget(SettingsSection("系统通知", [
-            SettingRow(
-                "system_notifications_enabled", "系统通知",
-                "对话完成 / 生成失败 / 需要授权时，即使切走窗口也会在桌面右下角提醒。",
-                self.system_notify_check,
-            ),
-        ], self))
+        root.addWidget(
+            SettingsSection(
+                "API 列表",
+                [
+                    SettingRow(
+                        "provider_list",
+                        "API 列表",
+                        "选择要编辑/切换的模型服务；保存后当前选中项会作为 active_provider 生效。",
+                        provider_row,
+                    ),
+                ],
+                self,
+            )
+        )
+        root.addWidget(
+            SettingsSection(
+                "模型与连接",
+                [
+                    SettingRow("provider_name", "Provider 名称", "用于区分当前使用的模型服务。", self.name),
+                    SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
+                    SettingRow("model", "模型", "发送请求时使用的模型标识。", self.model),
+                    SettingRow("api_key", "API Key", "凭据优先保存到系统钥匙串。", self.key),
+                    SettingRow("system_prompt", "System Prompt", "定义桌宠对话时的身份、语气和行为。", self.prompt, stacked=True),
+                    SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
+                ],
+                self,
+            )
+        )
+        root.addWidget(
+            SettingsSection(
+                "系统通知",
+                [
+                    SettingRow(
+                        "system_notifications_enabled",
+                        "系统通知",
+                        "对话完成 / 生成失败 / 需要授权时，即使切走窗口也会在桌面右下角提醒。",
+                        self.system_notify_check,
+                    ),
+                ],
+                self,
+            )
+        )
         vision_rows = [
             SettingRow("vision_same", "视觉模型复用聊天模型", "开启后自动选择兼容的视觉模型，用于“看看屏幕”。", self.vision_same),
             SettingRow("vision_model", "视觉模型", "关闭复用后使用的多模态模型标识；留空则自动推导。", self.vision_model),
@@ -207,12 +226,19 @@ class _AiSettingsPage(QWidget):
         self._test_row = self.findChild(SettingRow, "settingRow_connection_test")
         if self._test_row is not None:
             self.test_result = self._test_row.hint_label
-        root.addWidget(SettingsSection("生成参数（高级）", [
-            SettingRow("timeout", "请求超时", "等待模型服务响应的最长时间。", self.timeout),
-            SettingRow("temperature", "Temperature", "数值越高，回答越随机。", self.temperature),
-            SettingRow("max_tokens", "最大输出 Token", "限制模型单次回复的最大长度。", self.tokens),
-            SettingRow("skip_ssl", "跳过 SSL 证书验证", "仅用于本地网关或自签名证书。", self.skip_ssl),
-        ], self, advanced=True))
+        root.addWidget(
+            SettingsSection(
+                "生成参数（高级）",
+                [
+                    SettingRow("timeout", "请求超时", "等待模型服务响应的最长时间。", self.timeout),
+                    SettingRow("temperature", "Temperature", "数值越高，回答越随机。", self.temperature),
+                    SettingRow("max_tokens", "最大输出 Token", "限制模型单次回复的最大长度。", self.tokens),
+                    SettingRow("skip_ssl", "跳过 SSL 证书验证", "仅用于本地网关或自签名证书。", self.skip_ssl),
+                ],
+                self,
+                advanced=True,
+            )
+        )
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         self.add_provider_btn.clicked.connect(self._add_provider)
         self.delete_provider_btn.clicked.connect(self._delete_provider)
@@ -223,12 +249,14 @@ class _AiSettingsPage(QWidget):
         """Controls visually owned by the Appearance page, persisted with AI settings."""
         rows = [
             SettingRow(
-                "chat_ui_style", "对话窗口",
+                "chat_ui_style",
+                "对话窗口",
                 "肥鱼版 DeepSeek 提供宽屏现代体验；肥鱼牌小手机保留紧凑经典体验。",
                 self.chat_ui_style,
             ),
             SettingRow(
-                "chat_background", "对话背景",
+                "chat_background",
+                "对话背景",
                 "肥鱼版 DeepSeek 与肥鱼牌小手机均支持纯色、内置主题或自定义图片。",
                 self.background_select,
             ),
@@ -237,7 +265,8 @@ class _AiSettingsPage(QWidget):
             SettingRow("chat_background_fill", "填充方式", "选择裁剪铺满、完整显示或拉伸铺满窗口；仅「填充裁剪」支持自定义取景。", self.background_fill),
             SettingRow("chat_bg_crops", "裁切取景", "拖拽移动 + 滚轮缩放选区，决定背景取哪一块；不裁则按主题默认主体取景。", self.background_crop_btn),
             SettingRow(
-                "modern_chat_card_opacity", "消息卡片不透明度",
+                "modern_chat_card_opacity",
+                "消息卡片不透明度",
                 "调节肥鱼版 DeepSeek 消息卡片透出背景的程度。",
                 self.message_card_opacity,
             ),
@@ -358,7 +387,7 @@ class _AiSettingsPage(QWidget):
         _unset = object()
         initial = self._bg_crop_edits.get(value, _unset)
         if initial is _unset:  # 会话编辑集里没有才读配置（上面已 reload 到磁盘最新）
-            initial = (self.config.get('chat_bg_crops', {}) or {}).get(value)
+            initial = (self.config.get("chat_bg_crops", {}) or {}).get(value)
         if initial is None and value.startswith("builtin:"):
             theme = get_theme(value[8:])
             initial = tuple(theme["focus"]) if theme else None
@@ -374,7 +403,7 @@ class _AiSettingsPage(QWidget):
     @staticmethod
     def _provider_label(p) -> str:
         name = str(p.name or p.provider_id)
-        model = str(p.model or '').strip()
+        model = str(p.model or "").strip()
         return f"{name} · {model}" if model else name
 
     def _capture_current_draft(self) -> None:

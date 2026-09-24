@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """待办管理面板：右键菜单「待办提醒」打开的非模态对话框。
 
 视觉上沿用 Shared UX Contract 令牌（references/visual-system.md）：卡片
@@ -7,6 +7,7 @@
 经 TodoReminderService.set_items）；提醒开关与提前量单一归属在设置页
 「自动化与联动」，面板仅以提示文案深链，不复制偏好控件。
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -311,9 +312,7 @@ class TodoPanelDialog(QDialog):
         # 无文本控件的可达名：屏幕阅读器朗读条目标题而非匿名 checkbox
         toggle.setAccessibleName(str(item["title"]))
         toggle.setAccessibleDescription("启用或停用此待办")
-        toggle.toggled.connect(
-            lambda checked, item_id=item["id"]: self._set_item_enabled(item_id, checked)
-        )
+        toggle.toggled.connect(lambda checked, item_id=item["id"]: self._set_item_enabled(item_id, checked))
         layout.addWidget(toggle)
 
         text_col = QVBoxLayout()
@@ -423,9 +422,7 @@ class TodoPanelDialog(QDialog):
             return
         kind = self._kind_combo.currentData()
         time_text = self._time_edit.time().toString("HH:mm")
-        date_text = (
-            self._date_edit.date().toString("yyyy-MM-dd") if kind == "once" else ""
-        )
+        date_text = self._date_edit.date().toString("yyyy-MM-dd") if kind == "once" else ""
         items = self._items()
         if self._editing_id is not None:
             merged = []
@@ -434,15 +431,17 @@ class TodoPanelDialog(QDialog):
                     merged.append(item)
                     continue
                 item = dict(item)
-                item.update({
-                    "title": title,
-                    "kind": kind,
-                    "time": time_text,
-                    "date": date_text,
-                    # 内容/时间变更后重新武装，避免沿用旧触发戳漏提醒
-                    "fired_lead_slot": None,
-                    "fired_due_slot": None,
-                })
+                item.update(
+                    {
+                        "title": title,
+                        "kind": kind,
+                        "time": time_text,
+                        "date": date_text,
+                        # 内容/时间变更后重新武装，避免沿用旧触发戳漏提醒
+                        "fired_lead_slot": None,
+                        "fired_due_slot": None,
+                    }
+                )
                 merged.append(item)
             self._save_items(merged)
         else:

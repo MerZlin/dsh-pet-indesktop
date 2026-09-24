@@ -8,6 +8,7 @@
 config.json 的 ``dialogue_phrases`` 键（按 agent_key 分层的统一预设），同样
 不落任何代码文件。
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -18,8 +19,10 @@ from string import Formatter
 from typing import Any, Mapping
 import re
 
+
 class _TemplateObject(dict):
     """Mapping that supports both ``field.key`` and ``field[key]`` syntax."""
+
     def __getattr__(self, key: str) -> Any:
         try:
             return self[key]
@@ -64,11 +67,11 @@ def _safe_get_field(field_name: str, values: Mapping[str, Any]) -> Any:
     root_end = field_name.find(".")
     bracket = field_name.find("[")
     ends = [pos for pos in (root_end, bracket) if pos >= 0]
-    root = field_name[:min(ends)] if ends else field_name
+    root = field_name[: min(ends)] if ends else field_name
     if root not in values:
         raise KeyError(root)
     current: Any = values[root]
-    rest = field_name[len(root):]
+    rest = field_name[len(root) :]
     while rest:
         if rest.startswith("."):
             end = len(rest)
@@ -93,7 +96,7 @@ def _safe_get_field(field_name: str, values: Mapping[str, Any]) -> Any:
                 if not isinstance(current, Mapping) or token not in current:
                     raise KeyError(token)
                 current = current[token]
-            rest = rest[end + 1:]
+            rest = rest[end + 1 :]
         else:
             raise KeyError(field_name)
     return current
@@ -281,8 +284,7 @@ class PhrasePicker:
         self._last[key] = index
         return render_template(variants[index], values, autohide=autohide)
 
-    def custom_for_agent(self, phrases: Mapping[str, Any] | None, route_agent: str, key: str,
-                         fallback: str, autohide=None, **values) -> str:
+    def custom_for_agent(self, phrases: Mapping[str, Any] | None, route_agent: str, key: str, fallback: str, autohide=None, **values) -> str:
         """Render a custom phrase with agent routing (ticket 02/05).
 
         Resolution: ``agents[route_agent][key]`` → ``global[key]``（route_agent="" 只查
@@ -314,11 +316,17 @@ def phrase_keys() -> tuple[str, ...]:
 # Pet/桥接级「公共事件」：不随具体 Agent 归属，编辑某 Agent 专属文案层时隐藏。
 # dsh.writeback.failed（写回 DSH 失败）属 Agent 操作回写，运行时按 agent_key 路由，
 # 归入 Agent 专属层，不在此集合。
-PUBLIC_DIALOGUE_EVENTS: frozenset[str] = frozenset({
-    "balance.loading", "balance.result",
-    "bridge.install.pending", "bridge.install.success", "bridge.install.failed",
-    "bridge.uninstall.failed", "bridge.unknown",
-})
+PUBLIC_DIALOGUE_EVENTS: frozenset[str] = frozenset(
+    {
+        "balance.loading",
+        "balance.result",
+        "bridge.install.pending",
+        "bridge.install.success",
+        "bridge.install.failed",
+        "bridge.uninstall.failed",
+        "bridge.unknown",
+    }
+)
 
 
 def default_phrases() -> dict[str, str]:

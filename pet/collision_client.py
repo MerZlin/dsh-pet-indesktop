@@ -19,6 +19,7 @@ collision_debug / physics），不反向依赖 window.py；交互状态常量（
 数值等价死线：本文件内任何冲量/分离/predicted 的数学参数、计算顺序、默认值
 都与抽取前的 window.py 逐行一致，禁止顺手调参。
 """
+
 from __future__ import annotations
 
 import math
@@ -35,7 +36,7 @@ from . import physics as physics_mod
 
 def _virtual_xy(win) -> tuple[float, float]:
     """虚拟窗口坐标（物理/碰撞的坐标系）；无该接口的轻量桩回退实际位置。"""
-    vp_fn = getattr(win, '_virtual_pos', None)
+    vp_fn = getattr(win, "_virtual_pos", None)
     if callable(vp_fn):
         vp = vp_fn()
         return float(vp.x()), float(vp.y())
@@ -45,8 +46,7 @@ def _virtual_xy(win) -> tuple[float, float]:
 class CollisionClient(QObject):
     """PetWindow 的碰撞客户端子系统（GUI 线程，由窗口组合持有）。"""
 
-    def __init__(self, win, *, thrown, dragging, slingshot_aiming,
-                 hit_min_dv, contact_dv_floor):
+    def __init__(self, win, *, thrown, dragging, slingshot_aiming, hit_min_dv, contact_dv_floor):
         super().__init__(win)
         self._win = win
         # 交互状态常量与碰撞阈值由宿主传入（window.py 模块级常量，避免循环导入）
@@ -67,13 +67,13 @@ class CollisionClient(QObject):
         # 单函数吃掉 GUI 的 13%）。
         self._last_predict_at = 0.0
         self.applied_policy = None  # 已同步到会话的碰撞策略
-        self.epoch = ''
+        self.epoch = ""
         self.peer_snapshots: dict[str, dict[str, Any]] = {}
         self.predicted_bounces: dict[str, float] = {}
         self.pending_predicted_bounce: tuple[float, float] | None = None
         self.pending_predicted_contact: tuple[float, float, list[list[float]]] | None = None
         self.impulse_watermarks = collision_codec.WatermarkDeduplicator()
-        self.last_collision_squash_at = float('-inf')
+        self.last_collision_squash_at = float("-inf")
         # 批 A：碰撞撞飞（is_real_hit 且非 contact_deviation）已发起 throw 物理；
         # 一旦 throw 落地停稳（_stop_physics 把 _physics_mode 置 None 并回调
         # _submit_collision_state）即通知边缘探头控制器开始重进倒计时。
@@ -89,7 +89,7 @@ class CollisionClient(QObject):
     def attach(self, session) -> None:
         """绑定 AppShell 持有的 IPC facade，GUI 不接触 socket。"""
         self.detach()
-        if session is None or not bool(self._win.cfg.get('collision_enabled', True)):
+        if session is None or not bool(self._win.cfg.get("collision_enabled", True)):
             return
         self.session = session
         session.impulse_ready.connect(self._on_collision_impulse, Qt.ConnectionType.QueuedConnection)
@@ -115,10 +115,10 @@ class CollisionClient(QObject):
             session.snapshot_ready.disconnect(self._on_collision_snapshot)
         except (RuntimeError, TypeError):
             pass
-        submit_leave = getattr(session, 'submit_leave', None)
+        submit_leave = getattr(session, "submit_leave", None)
         if callable(submit_leave):
             submit_leave()
-        self.epoch = ''
+        self.epoch = ""
         self.peer_snapshots.clear()
         self.predicted_bounces.clear()
         self.pending_predicted_bounce = None
@@ -136,13 +136,13 @@ class CollisionClient(QObject):
         if session is None:
             # 本地成员 detach 后，app-owned worker 仍可能是其他实例的协调者；
             # 策略必须继续同步，尤其是 collision_enabled=False（上游 #42）。
-            session = getattr(win, 'collision_app_session', None)
+            session = getattr(win, "collision_app_session", None)
         policy = {
-            'collision_enabled': bool(win.cfg.get('collision_enabled', True)),
-            'collision_restitution': float(win.cfg.get('collision_restitution', .82)),
-            'collision_friction': float(win.cfg.get('collision_friction', .08)),
-            'collision_mass_scale': float(win.cfg.get('collision_mass_scale', 1.0)),
-            'collision_impulse_cap': float(win.cfg.get('collision_impulse_cap', 9000.0)),
+            "collision_enabled": bool(win.cfg.get("collision_enabled", True)),
+            "collision_restitution": float(win.cfg.get("collision_restitution", 0.82)),
+            "collision_friction": float(win.cfg.get("collision_friction", 0.08)),
+            "collision_mass_scale": float(win.cfg.get("collision_mass_scale", 1.0)),
+            "collision_impulse_cap": float(win.cfg.get("collision_impulse_cap", 9000.0)),
         }
         if session is None:
             self.applied_policy = None
@@ -150,7 +150,7 @@ class CollisionClient(QObject):
         if policy == self.applied_policy:
             return
         self.applied_policy = policy
-        update_policy = getattr(session, 'update_policy', None)
+        update_policy = getattr(session, "update_policy", None)
         if callable(update_policy):
             update_policy(policy)
 
@@ -162,7 +162,7 @@ class CollisionClient(QObject):
         flags = collision.FLAG_VISIBLE if win.isVisible() else 0
         if not win.isVisible() or win._hidden_paused:
             flags |= collision.FLAG_PAUSED
-        if win._interaction_state == self._thrown or win._physics_mode == 'throw':
+        if win._interaction_state == self._thrown or win._physics_mode == "throw":
             flags |= collision.FLAG_THROWN
         if win._interaction_state == self._dragging:
             flags |= collision.FLAG_DRAGGING
@@ -176,7 +176,7 @@ class CollisionClient(QObject):
             flags |= collision.FLAG_MOUSE_THROUGH
         if win._auto_cursor_hidden:
             flags |= collision.FLAG_AUTO_CURSOR_HIDDEN
-        if bool(win.cfg.get('collision_enabled', True)):
+        if bool(win.cfg.get("collision_enabled", True)):
             flags |= collision.FLAG_COLLISION_ENABLED
         if self.pending_predicted_bounce is not None:
             flags |= collision.FLAG_PREDICTED_BOUNCE
@@ -200,23 +200,25 @@ class CollisionClient(QObject):
         vx, vy = self._collision_velocity()
         circles = collision.circles_from_rect(rect.x(), rect.y(), rect.width(), rect.height())
         state = {
-            'seq': self.seq,
-            'ts': time.monotonic(),
-            'x': float(rect.center().x()), 'y': float(rect.center().y()),
-            'w': float(win._w), 'h': float(win._h),
-            'radius_x': max(1.0, rect.width() / 2.0),
-            'radius_y': max(1.0, rect.height() / 2.0),
-            'circles': circles,
-            'vx': 0.0 if not win.isVisible() else vx,
-            'vy': 0.0 if not win.isVisible() else vy,
-            'flags': self._collision_flags(),
-            'character': str(win.cfg.get('character', '')),
-            'scale': float(win.scale),
+            "seq": self.seq,
+            "ts": time.monotonic(),
+            "x": float(rect.center().x()),
+            "y": float(rect.center().y()),
+            "w": float(win._w),
+            "h": float(win._h),
+            "radius_x": max(1.0, rect.width() / 2.0),
+            "radius_y": max(1.0, rect.height() / 2.0),
+            "circles": circles,
+            "vx": 0.0 if not win.isVisible() else vx,
+            "vy": 0.0 if not win.isVisible() else vy,
+            "flags": self._collision_flags(),
+            "character": str(win.cfg.get("character", "")),
+            "scale": float(win.scale),
         }
         if self.pending_predicted_bounce is not None:
-            state['bounce_vx'], state['bounce_vy'] = self.pending_predicted_bounce
+            state["bounce_vx"], state["bounce_vy"] = self.pending_predicted_bounce
             if self.pending_predicted_contact is not None:
-                state['bounce_x'], state['bounce_y'], state['bounce_circles'] = self.pending_predicted_contact
+                state["bounce_x"], state["bounce_y"], state["bounce_circles"] = self.pending_predicted_contact
         return state
 
     def _submit_collision_state(self, force: bool = False) -> None:
@@ -224,11 +226,11 @@ class CollisionClient(QObject):
         # 批 A：碰撞撞飞落地停稳（throw 物理结束）→ 通知边缘探头开始重进倒计时。
         # 判定依据：撞飞已 armed（_reentry_after_throw_armed）且当前已不在 throw
         # 物理模式（_stop_physics 已把 _physics_mode 置 None 并回调本方法）。
-        if self._reentry_after_throw_armed and win._physics_mode != 'throw':
+        if self._reentry_after_throw_armed and win._physics_mode != "throw":
             self._reentry_after_throw_armed = False
-            edge = getattr(win, '_edge_probe', None)
+            edge = getattr(win, "_edge_probe", None)
             if edge is not None:
-                on_settled = getattr(edge, 'on_throw_settled', None)
+                on_settled = getattr(edge, "on_throw_settled", None)
                 if callable(on_settled):
                     on_settled()
         session = self.session
@@ -244,12 +246,12 @@ class CollisionClient(QObject):
         state = self._collision_state()
         comparable = dict(state)
         # 时间戳不参与"状态是否变化"比较：ts 每次不同会让去重恒失效（死代码）
-        comparable.pop('seq', None)
-        comparable.pop('ts', None)
+        comparable.pop("seq", None)
+        comparable.pop("ts", None)
         if not force and comparable == self.last_state:
             return
         self.seq += 1
-        state['seq'] = self.seq
+        state["seq"] = self.seq
         self.last_state = comparable
         self.last_submit_at = now
         session.submit_state(state)
@@ -258,12 +260,16 @@ class CollisionClient(QObject):
             self.pending_predicted_contact = None
         if collision_debug.ENABLED:
             collision_debug.log(
-                getattr(session, 'runtime_id', ''), 'state_submit',
-                x=state['x'], y=state['y'], vx=state['vx'], vy=state['vy'],
-                seq=state['seq'], force=force,
+                getattr(session, "runtime_id", ""),
+                "state_submit",
+                x=state["x"],
+                y=state["y"],
+                vx=state["vx"],
+                vy=state["vy"],
+                seq=state["seq"],
+                force=force,
             )
-        moving = (win._interaction_state in (self._dragging, self._thrown)
-                   or math.hypot(*win._phys_vel) > 20.0)
+        moving = win._interaction_state in (self._dragging, self._thrown) or math.hypot(*win._phys_vel) > 20.0
         self.timer.setInterval(50 if moving else 500)
 
     # ------------------------------------------------------------------
@@ -271,7 +277,7 @@ class CollisionClient(QObject):
     # ------------------------------------------------------------------
     @Slot(object)
     def _on_collision_snapshot(self, message: dict[str, Any]) -> None:
-        epoch = str(message.get('epoch') or '')
+        epoch = str(message.get("epoch") or "")
         if not epoch:
             return
         if epoch != self.epoch:
@@ -281,90 +287,82 @@ class CollisionClient(QObject):
             self.pending_predicted_bounce = None
             self.pending_predicted_contact = None
         self.epoch = epoch
-        runtime_id = str(getattr(self.session, 'runtime_id', ''))
+        runtime_id = str(getattr(self.session, "runtime_id", ""))
         now = time.monotonic()
         peers = {}
-        for raw_member in message.get('members') or ():
+        for raw_member in message.get("members") or ():
             member = dict(raw_member)
-            peer_id = str(member.get('runtime_id') or '')
+            peer_id = str(member.get("runtime_id") or "")
             if peer_id and peer_id != runtime_id:
-                member['_received_at'] = now
+                member["_received_at"] = now
                 peers[peer_id] = member
         self.peer_snapshots = peers
         # 灵动岛几何复制（远端硬墙）：快照中的静态布景成员回喂本进程岛碰撞体。
         # 快照缺席不撤墙（stale-keep，碰撞体本地 TTL 兜底，见 island_collision）。
-        body = getattr(self._win, '_island_collision_body', None)
-        feed = getattr(body, 'on_remote_snapshot', None)
+        body = getattr(self._win, "_island_collision_body", None)
+        feed = getattr(body, "on_remote_snapshot", None)
         if callable(feed):
-            island_member = next((m for m in peers.values()
-                                  if int(m.get('flags', 0)) & collision.FLAG_STATIC), None)
+            island_member = next((m for m in peers.values() if int(m.get("flags", 0)) & collision.FLAG_STATIC), None)
             if collision_debug.ENABLED:
-                collision_debug.log(str(getattr(self.session, 'runtime_id', '')),
-                                    'island_feed', has_body=True,
-                                    found=island_member is not None,
-                                    members=len(peers))
+                collision_debug.log(
+                    str(getattr(self.session, "runtime_id", "")), "island_feed", has_body=True, found=island_member is not None, members=len(peers)
+                )
             feed(island_member)
 
     def _prune_collision_prediction_state(self, now: float) -> None:
-        self.peer_snapshots = {
-            runtime_id: member for runtime_id, member in self.peer_snapshots.items()
-            if now - float(member.get('_received_at', 0.0)) <= 1.5
-        }
-        self.predicted_bounces = {
-            pair: predicted_at for pair, predicted_at in self.predicted_bounces.items()
-            if now - predicted_at <= 0.5
-        }
+        self.peer_snapshots = {runtime_id: member for runtime_id, member in self.peer_snapshots.items() if now - float(member.get("_received_at", 0.0)) <= 1.5}
+        self.predicted_bounces = {pair: predicted_at for pair, predicted_at in self.predicted_bounces.items() if now - predicted_at <= 0.5}
 
     @Slot(object)
     def _on_collision_impulse(self, message: dict[str, Any]) -> None:
         win = self._win
-        runtime_id = str(getattr(self.session, 'runtime_id', ''))
+        runtime_id = str(getattr(self.session, "runtime_id", ""))
+
         def discard(reason: str) -> None:
             if collision_debug.ENABLED:
-                collision_debug.log(runtime_id, 'impulse_discard', reason=reason,
-                                    pair=message.get('pair', ''))
+                collision_debug.log(runtime_id, "impulse_discard", reason=reason, pair=message.get("pair", ""))
+
         if self.session is None or not win.isVisible() or win._hidden_paused:
-            discard('session_missing_or_hidden')
+            discard("session_missing_or_hidden")
             return
-        epoch = str(message.get('epoch') or '')
-        pair_for_watermark = str(message.get('pair') or '')
-        tick = message.get('tick')
+        epoch = str(message.get("epoch") or "")
+        pair_for_watermark = str(message.get("pair") or "")
+        tick = message.get("tick")
         if epoch and pair_for_watermark and tick is not None:
             try:
                 tick_int = int(tick)
             except (TypeError, ValueError, OverflowError):
-                discard('bad_tick')
+                discard("bad_tick")
                 return
             if not self.impulse_watermarks.should_apply(epoch, pair_for_watermark, tick_int):
-                discard('watermark')
+                discard("watermark")
                 return
         # 撞岛冲量的归属：本进程持有岛 widget 时撞岛反应走本进程直连业务链
         # （island_collision._apply_hit），协调者转发的岛冲量必须丢弃——
         # 否则宿主进程的宠物撞岛被双重结算（音效/弹开各响两次）。
-        a_str, b_str = str(message.get('a') or ''), str(message.get('b') or '')
+        a_str, b_str = str(message.get("a") or ""), str(message.get("b") or "")
         if collision.ISLAND_MEMBER_ID in (a_str, b_str):
-            body = getattr(win, '_island_collision_body', None)
-            if getattr(body, 'has_local_island', False):
-                discard('island_local_owned')
+            body = getattr(win, "_island_collision_body", None)
+            if getattr(body, "has_local_island", False):
+                discard("island_local_owned")
                 return
-        if win._interaction_state == self._dragging or win._physics_mode == 'drag':
-            discard('dragging')
+        if win._interaction_state == self._dragging or win._physics_mode == "drag":
+            discard("dragging")
             return
-        if message.get('a') == runtime_id:
-            dvx, dvy = float(message.get('dvx_a', 0)), float(message.get('dvy_a', 0))
-            dx, dy = float(message.get('dx_a', 0)), float(message.get('dy_a', 0))
-        elif message.get('b') == runtime_id:
-            dvx, dvy = float(message.get('dvx_b', 0)), float(message.get('dvy_b', 0))
-            dx, dy = float(message.get('dx_b', 0)), float(message.get('dy_b', 0))
+        if message.get("a") == runtime_id:
+            dvx, dvy = float(message.get("dvx_a", 0)), float(message.get("dvy_a", 0))
+            dx, dy = float(message.get("dx_a", 0)), float(message.get("dy_a", 0))
+        elif message.get("b") == runtime_id:
+            dvx, dvy = float(message.get("dvx_b", 0)), float(message.get("dvy_b", 0))
+            dx, dy = float(message.get("dx_b", 0)), float(message.get("dy_b", 0))
         else:
-            discard('runtime_id_mismatch')
+            discard("runtime_id_mismatch")
             return
-        pair = str(message.get('pair') or '|'.join(sorted((str(message.get('a') or ''),
-                                                           str(message.get('b') or '')))))
+        pair = str(message.get("pair") or "|".join(sorted((str(message.get("a") or ""), str(message.get("b") or "")))))
         now = time.monotonic()
         predicted_at = self.predicted_bounces.pop(pair, None)
         if predicted_at is not None and now - predicted_at <= 0.5:
-            discard('predicted_bounce_confirmed')
+            discard("predicted_bounce_confirmed")
             return
         rect = win.collision_content_rect()
         radius_x = max(1.0, rect.width() / 2.0)
@@ -373,40 +371,36 @@ class CollisionClient(QObject):
         # 撞静态布景（灵动岛果冻墙）放宽命中阈值：岛的语义就是"撞上去会弹"，
         # 漫游/走路蹭到（dv 常在 60~300 之间）也该有看得见的反弹，
         # 而不是被 300 的通用阈值吃掉只剩缓慢推出。
-        other_id = str(message.get('b') if message.get('a') == runtime_id
-                       else message.get('a') or '')
+        other_id = str(message.get("b") if message.get("a") == runtime_id else message.get("a") or "")
         other = self.peer_snapshots.get(other_id) or {}
-        hit_floor = 60.0 if int(other.get('flags', 0)) & collision.FLAG_STATIC \
-            else self._hit_min_dv
+        hit_floor = 60.0 if int(other.get("flags", 0)) & collision.FLAG_STATIC else self._hit_min_dv
         is_real_hit = hit_dv >= hit_floor
         has_velocity_impulse = abs(dvx) > 1e-9 or abs(dvy) > 1e-9
         # 偏差豁免的本意是"协调者眼中的我已经过期就别瞬移我"——直接比较
         # 协调者 tick 时认定的我方中心（ax/ay 或 bx/by）与当前实际中心，
         # 不从 contact/normal 反推（三种检测路径的 contact 语义不同，反推
         # 会系统性误判，导致所有位置分离被丢弃）
-        if message.get('a') == runtime_id:
-            expected_x = float(message.get('ax', rect.center().x()))
-            expected_y = float(message.get('ay', rect.center().y()))
+        if message.get("a") == runtime_id:
+            expected_x = float(message.get("ax", rect.center().x()))
+            expected_y = float(message.get("ay", rect.center().y()))
         else:
-            expected_x = float(message.get('bx', rect.center().x()))
-            expected_y = float(message.get('by', rect.center().y()))
+            expected_x = float(message.get("bx", rect.center().x()))
+            expected_y = float(message.get("by", rect.center().y()))
         threshold = min(radius_x, radius_y) * 0.1 + math.hypot(*win._phys_vel) * 0.2
         contact_deviation = math.hypot(rect.center().x() - expected_x, rect.center().y() - expected_y) > threshold
         if contact_deviation:
             dx = dy = 0.0
             dvx = dvy = 0.0
             if collision_debug.ENABLED:
-                collision_debug.log(runtime_id, 'impulse_position_discard',
-                                    reason='contact_deviation', pair=message.get('pair', ''))
-        if is_real_hit or (win._interaction_state == self._thrown
-                        and hit_dv >= self._contact_dv_floor):
+                collision_debug.log(runtime_id, "impulse_position_discard", reason="contact_deviation", pair=message.get("pair", ""))
+        if is_real_hit or (win._interaction_state == self._thrown and hit_dv >= self._contact_dv_floor):
             win._phys_vel[0] += dvx
             win._phys_vel[1] += dvy
         speed = math.hypot(*win._phys_vel)
         if speed > win._throw_speed_cap:
             clamped = physics_mod.soft_clamp_speed(speed, win._throw_speed_cap)
             win._phys_vel[:] = [win._phys_vel[0] * clamped / speed, win._phys_vel[1] * clamped / speed]
-        egg = getattr(win, '_throw_egg', None)
+        egg = getattr(win, "_throw_egg", None)
         if egg is not None and egg.active:
             egg.on_pet_contact(math.hypot(*win._phys_vel))
         if abs(dx) > 1e-9 or abs(dy) > 1e-9:
@@ -414,9 +408,7 @@ class CollisionClient(QObject):
             # 被位移顶偏后不会自动归位，会"卡"在错误的露出量上），软撞的
             # 分离位移直接丢弃；真实撞击下方会进入 throw 并取消探头会话，
             # 位移照常应用。
-            probe_holds_pose = bool(
-                getattr(getattr(win, '_edge_probe', None), 'active', False)
-            ) and not (is_real_hit and not contact_deviation)
+            probe_holds_pose = bool(getattr(getattr(win, "_edge_probe", None), "active", False)) and not (is_real_hit and not contact_deviation)
             if not probe_holds_pose:
                 win._cancel_move()
                 win._cancel_animation_gap()
@@ -424,12 +416,12 @@ class CollisionClient(QObject):
                 # 经统一出口落窗（贴边时实际窗口被钳在工作区内）。
                 vp = _virtual_xy(win)
                 clamped_x, clamped_y = win._collision_clamp_pos(vp[0] + dx, vp[1] + dy)
-                mover = getattr(win, '_move_window_towards', None)
+                mover = getattr(win, "_move_window_towards", None)
                 if callable(mover):
                     mover(clamped_x, clamped_y)
                 else:
-                    left, top = win._collision_clamp_pos(float('-inf'), float('-inf'))
-                    right, bottom = win._collision_clamp_pos(float('inf'), float('inf'))
+                    left, top = win._collision_clamp_pos(float("-inf"), float("-inf"))
+                    right, bottom = win._collision_clamp_pos(float("inf"), float("inf"))
                     win.move(
                         min(max(int(round(clamped_x)), math.ceil(left)), math.floor(right)),
                         min(max(int(round(clamped_y)), math.ceil(top)), math.floor(bottom)),
@@ -445,57 +437,48 @@ class CollisionClient(QObject):
                 win._play_collision_sound()
         if is_real_hit and not contact_deviation:
             win._interaction_state = self._thrown
-            win._enter_physics_mode('throw')
+            win._enter_physics_mode("throw")
             win._phys_pos[:] = list(_virtual_xy(win))
             win._last_physics_tick_time = None
             win._physics_timer.start()
             # 批 A：真实撞击进入飞行前取消边缘探头会话（restore=False，物理引擎
             # 已接管位置，回拉会抢位置）。撞飞落地停稳后由 _submit_collision_state
             # 触发边缘探头重进倒计时。
-            edge_probe = getattr(win, '_edge_probe', None)
+            edge_probe = getattr(win, "_edge_probe", None)
             if edge_probe is not None:
-                cancel = getattr(edge_probe, 'cancel', None)
+                cancel = getattr(edge_probe, "cancel", None)
                 if callable(cancel):
                     cancel("collision_throw", restore=False)
             self._reentry_after_throw_armed = True
         now = time.monotonic()
-        if (is_real_hit and not win._squash_active
-                and now - self.last_collision_squash_at >= 0.25):
+        if is_real_hit and not win._squash_active and now - self.last_collision_squash_at >= 0.25:
             self.last_collision_squash_at = now
             win._start_squash()
         self._submit_collision_state(force=True)
         if collision_debug.ENABLED:
-            collision_debug.log(runtime_id, 'impulse_apply', pair=message.get('pair', ''),
-                                dv=(dvx, dvy), displacement=(dx, dy), speed=speed)
+            collision_debug.log(runtime_id, "impulse_apply", pair=message.get("pair", ""), dv=(dvx, dvy), displacement=(dx, dy), speed=speed)
 
     # ------------------------------------------------------------------
     # predicted bounce 本地预测（throw 物理每 tick 结束后调用）
     # ------------------------------------------------------------------
-    def _predict_collision_bounce(self, start_x: float, start_y: float,
-                                  incoming_vx: float | None = None,
-                                  incoming_vy: float | None = None) -> None:
+    def _predict_collision_bounce(self, start_x: float, start_y: float, incoming_vx: float | None = None, incoming_vy: float | None = None) -> None:
         win = self._win
-        if (win._physics_mode != 'throw'
-                or not bool(win.cfg.get('collision_enabled', True))
-                or self.session is None):
+        if win._physics_mode != "throw" or not bool(win.cfg.get("collision_enabled", True)) or self.session is None:
             return
         now = time.monotonic()
         if now - self._last_predict_at < 0.030:
             return  # 预测限频 ~33Hz（见 __init__ 注释）
         self._last_predict_at = now
         self._prune_collision_prediction_state(now)
-        runtime_id = str(getattr(self.session, 'runtime_id', ''))
+        runtime_id = str(getattr(self.session, "runtime_id", ""))
         if not runtime_id:
             return
 
         rect = win.collision_content_rect()
         _vx, _vy = _virtual_xy(win)
         dx, dy = win._phys_pos[0] - _vx, win._phys_pos[1] - _vy
-        current_circles = collision.circles_from_rect(
-            rect.x() + dx, rect.y() + dy, rect.width(), rect.height())
-        previous_circles = [[x - (win._phys_pos[0] - start_x),
-                             y - (win._phys_pos[1] - start_y), radius]
-                            for x, y, radius in current_circles]
+        current_circles = collision.circles_from_rect(rect.x() + dx, rect.y() + dy, rect.width(), rect.height())
+        previous_circles = [[x - (win._phys_pos[0] - start_x), y - (win._phys_pos[1] - start_y), radius] for x, y, radius in current_circles]
         own = collision.MemberState(
             runtime_id=runtime_id,
             x=rect.center().x() + dx,
@@ -505,9 +488,11 @@ class CollisionClient(QObject):
             vx=win._phys_vel[0],
             vy=win._phys_vel[1],
             mass=collision.calculate_mass(
-                max(1.0, rect.width() / 2.0), max(1.0, rect.height() / 2.0),
+                max(1.0, rect.width() / 2.0),
+                max(1.0, rect.height() / 2.0),
                 scale=float(win.scale),
-                collision_mass_scale=float(win.cfg.get('collision_mass_scale', 1.0))),
+                collision_mass_scale=float(win.cfg.get("collision_mass_scale", 1.0)),
+            ),
             flags=self._collision_flags(),
             circles=current_circles,
         )
@@ -515,66 +500,69 @@ class CollisionClient(QObject):
         bounce_vy = own.vy if incoming_vy is None else incoming_vy
 
         for peer_id, raw_peer in self.peer_snapshots.items():
-            flags = int(raw_peer.get('flags', 0))
-            if (not flags & collision.FLAG_VISIBLE or flags & collision.FLAG_PAUSED
-                    or not flags & collision.FLAG_COLLISION_ENABLED):
+            flags = int(raw_peer.get("flags", 0))
+            if not flags & collision.FLAG_VISIBLE or flags & collision.FLAG_PAUSED or not flags & collision.FLAG_COLLISION_ENABLED:
                 continue
-            age = max(0.0, now - float(raw_peer['_received_at']))
+            age = max(0.0, now - float(raw_peer["_received_at"]))
             extrapolation = min(0.05, age)
-            peer_vx, peer_vy = float(raw_peer.get('vx', 0.0)), float(raw_peer.get('vy', 0.0))
+            peer_vx, peer_vy = float(raw_peer.get("vx", 0.0)), float(raw_peer.get("vy", 0.0))
             peer_dx, peer_dy = peer_vx * extrapolation, peer_vy * extrapolation
-            peer_circles = [[float(c[0]) + peer_dx, float(c[1]) + peer_dy, float(c[2])]
-                            for c in raw_peer.get('circles') or () if len(c) >= 3]
+            peer_circles = [[float(c[0]) + peer_dx, float(c[1]) + peer_dy, float(c[2])] for c in raw_peer.get("circles") or () if len(c) >= 3]
             if not peer_circles:
                 continue
-            pair = '|'.join(sorted((runtime_id, peer_id)))
+            pair = "|".join(sorted((runtime_id, peer_id)))
             if pair in self.predicted_bounces:
                 continue
             hit = collision.check_collision_circles(current_circles, peer_circles, runtime_id, peer_id)
             if not hit[0]:
-                hit = collision.swept_circle_chain_collision(
-                    previous_circles, current_circles, peer_circles, peer_circles)
+                hit = collision.swept_circle_chain_collision(previous_circles, current_circles, peer_circles, peer_circles)
             collided, nx, ny, _, _, _ = hit
             vn = (peer_vx - own.vx) * nx + (peer_vy - own.vy) * ny
             if not collided or vn >= -collision.IMPULSE_MIN_APPROACH_SPEED:
                 continue
-            radius_x = max(1.0, float(raw_peer.get('radius_x', 1.0)))
-            radius_y = max(1.0, float(raw_peer.get('radius_y', 1.0)))
+            radius_x = max(1.0, float(raw_peer.get("radius_x", 1.0)))
+            radius_y = max(1.0, float(raw_peer.get("radius_y", 1.0)))
             peer = collision.MemberState(
                 runtime_id=peer_id,
-                x=float(raw_peer.get('x', 0.0)) + peer_dx,
-                y=float(raw_peer.get('y', 0.0)) + peer_dy,
+                x=float(raw_peer.get("x", 0.0)) + peer_dx,
+                y=float(raw_peer.get("y", 0.0)) + peer_dy,
                 radius_x=radius_x,
                 radius_y=radius_y,
                 vx=peer_vx,
                 vy=peer_vy,
                 mass=collision.calculate_mass(
-                    radius_x, radius_y,
-                    scale=float(raw_peer.get('scale', collision.DEFAULT_BASE_SCALE) or collision.DEFAULT_BASE_SCALE),
-                    collision_mass_scale=float(win.cfg.get('collision_mass_scale', 1.0))),
+                    radius_x,
+                    radius_y,
+                    scale=float(raw_peer.get("scale", collision.DEFAULT_BASE_SCALE) or collision.DEFAULT_BASE_SCALE),
+                    collision_mass_scale=float(win.cfg.get("collision_mass_scale", 1.0)),
+                ),
                 is_infinite_mass=bool(flags & (collision.FLAG_DRAGGING | collision.FLAG_LOCK_POSITION | collision.FLAG_STATIC)),
                 flags=flags,
                 circles=peer_circles,
             )
             _, dvx, dvy, _, _ = collision.solve_collision_impulse(
-                own, peer, nx, ny,
-                restitution=float(win.cfg.get('collision_restitution', .82)),
-                friction=float(win.cfg.get('collision_friction', .08)),
-                impulse_cap=float(win.cfg.get('collision_impulse_cap', 9000.0)))
+                own,
+                peer,
+                nx,
+                ny,
+                restitution=float(win.cfg.get("collision_restitution", 0.82)),
+                friction=float(win.cfg.get("collision_friction", 0.08)),
+                impulse_cap=float(win.cfg.get("collision_impulse_cap", 9000.0)),
+            )
             win._phys_vel[0] += dvx
             win._phys_vel[1] += dvy
             speed = math.hypot(*win._phys_vel)
             if speed > win._throw_speed_cap:
                 clamped = physics_mod.soft_clamp_speed(speed, win._throw_speed_cap)
-                win._phys_vel[:] = [win._phys_vel[0] * clamped / speed,
-                                     win._phys_vel[1] * clamped / speed]
-            egg = getattr(win, '_throw_egg', None)
+                win._phys_vel[:] = [win._phys_vel[0] * clamped / speed, win._phys_vel[1] * clamped / speed]
+            egg = getattr(win, "_throw_egg", None)
             if egg is not None and egg.active:
                 egg.on_pet_contact(math.hypot(*win._phys_vel))
             self.predicted_bounces[pair] = now
             self.pending_predicted_bounce = (float(bounce_vx), float(bounce_vy))
             self.pending_predicted_contact = (
-                float(own.x), float(own.y),
+                float(own.x),
+                float(own.y),
                 [[float(c[0]), float(c[1]), float(c[2])] for c in current_circles],
             )
             win._play_collision_sound()

@@ -5,6 +5,7 @@ QSystemTrayIcon.showMessage 在 Windows 托盘图标被收进“隐藏的图标�
 弹窗。为了确保“切走窗口也能在右下角看到通知”，这里提供一个轻量置顶自绘气泡，
 点击可跳回调用方指定的页面。
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
@@ -27,12 +28,7 @@ class DesktopNotification(QWidget):
         self._message = str(message or "")
         self._on_click = on_click
         self.setObjectName("desktop-notification")
-        flags = (
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
+        flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)

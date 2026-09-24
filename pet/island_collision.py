@@ -17,6 +17,7 @@
 
 低占用：无定时器；只在落窗/岛几何变化时做几何查询与接触跟踪。
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,13 +31,13 @@ from . import physics as physics_mod
 
 log = logging.getLogger(__name__)
 
-_CAPSULE_HEIGHT = 44            # 胶囊视觉高度（与 dynamic_island._CAPSULE_HEIGHT 同步）
-_HIT_COOLDOWN_S = 0.15          # 每只桌宠的命中冷却（防一帧多弹/音效连发）
-_SQUASH_INTERVAL_S = 0.25       # 每只桌宠的挤压动画错峰
+_CAPSULE_HEIGHT = 44  # 胶囊视觉高度（与 dynamic_island._CAPSULE_HEIGHT 同步）
+_HIT_COOLDOWN_S = 0.15  # 每只桌宠的命中冷却（防一帧多弹/音效连发）
+_SQUASH_INTERVAL_S = 0.25  # 每只桌宠的挤压动画错峰
 _CONTACT_VELOCITY_MAX_DT = 0.5  # 接触跟踪的有效间隔（超此按首次接触，无速度）
-_MAX_ISLAND_SPEED = 1500.0      # 岛速估计上限（px/s）：异常大的估计不进拍鱼结算
-_REMOTE_WALL_TTL_S = 8.0        # 远端硬墙 stale-keep：快照缺席后的本地保墙时长
-_PUB_HEARTBEAT_MS = 2000        # 岛几何发布心跳（几何变化时另有即时发布）
+_MAX_ISLAND_SPEED = 1500.0  # 岛速估计上限（px/s）：异常大的估计不进拍鱼结算
+_REMOTE_WALL_TTL_S = 8.0  # 远端硬墙 stale-keep：快照缺席后的本地保墙时长
+_PUB_HEARTBEAT_MS = 2000  # 岛几何发布心跳（几何变化时另有即时发布）
 
 
 def _rect_radial(rx: float, ry: float, nx: float, ny: float) -> float:
@@ -153,8 +154,7 @@ class IslandCollisionBody(QObject):
                 self._pub_timer.setInterval(_PUB_HEARTBEAT_MS)
                 self._pub_timer.timeout.connect(self._publish_static_state)
             self._pub_timer.start()
-        log.info("灵动岛碰撞体已启动（同步硬墙，无 30Hz 检测%s）",
-                 "，远端模式" if self._island is None else "")
+        log.info("灵动岛碰撞体已启动（同步硬墙，无 30Hz 检测%s）", "，远端模式" if self._island is None else "")
 
     def stop(self) -> None:
         if not self._running:
@@ -247,20 +247,25 @@ class IslandCollisionBody(QObject):
         if paused or not self._wall_active():
             flags |= collision.FLAG_PAUSED
         circles = collision.circles_from_rect(left, top, width, height)
-        session.submit_static_state({
-            'member_id': collision.ISLAND_MEMBER_ID,
-            'seq': self._pub_seq,
-            'ts': time.monotonic(),
-            'x': left + width / 2.0, 'y': top + height / 2.0,
-            'w': width, 'h': height,
-            'radius_x': max(1.0, width / 2.0),
-            'radius_y': max(1.0, height / 2.0),
-            'circles': circles,
-            'vx': 0.0, 'vy': 0.0,
-            'flags': flags,
-            'character': '',
-            'scale': 1.0,
-        })
+        session.submit_static_state(
+            {
+                "member_id": collision.ISLAND_MEMBER_ID,
+                "seq": self._pub_seq,
+                "ts": time.monotonic(),
+                "x": left + width / 2.0,
+                "y": top + height / 2.0,
+                "w": width,
+                "h": height,
+                "radius_x": max(1.0, width / 2.0),
+                "radius_y": max(1.0, height / 2.0),
+                "circles": circles,
+                "vx": 0.0,
+                "vy": 0.0,
+                "flags": flags,
+                "character": "",
+                "scale": 1.0,
+            }
+        )
 
     # ------------------------------------------------------------ 远端模式（多进程）
     def on_remote_snapshot(self, member) -> None:
@@ -277,13 +282,13 @@ class IslandCollisionBody(QObject):
         if member is None:
             return
         self._remote_updated_at = time.monotonic()
-        if int(member.get('flags', 0)) & collision.FLAG_PAUSED:
+        if int(member.get("flags", 0)) & collision.FLAG_PAUSED:
             if self._remote_active:
                 log.info("灵动岛远端墙停用（宿主广播暂停）")
             self._remote_active = False
             return
-        cx, cy = float(member.get('x', 0.0)), float(member.get('y', 0.0))
-        w, h = float(member.get('w', 0.0)), float(member.get('h', 0.0))
+        cx, cy = float(member.get("x", 0.0)), float(member.get("y", 0.0))
+        w, h = float(member.get("w", 0.0)), float(member.get("h", 0.0))
         if w <= 0.0 or h <= 0.0:
             return
         height = min(h, _CAPSULE_HEIGHT)
@@ -338,8 +343,7 @@ class IslandCollisionBody(QObject):
                     continue
                 if getattr(win, "_hidden_paused", False):
                     continue
-                if getattr(win, "_physics_mode", "") == "drag" \
-                        or getattr(win, "_interaction_state", "") == "DRAGGING":
+                if getattr(win, "_physics_mode", "") == "drag" or getattr(win, "_interaction_state", "") == "DRAGGING":
                     continue  # 用户正在摆放这只，不抢位置
                 sbr_fn = getattr(win, "_stable_body_local_rect", None)
                 vp_fn = getattr(win, "_virtual_pos", None)
@@ -347,8 +351,7 @@ class IslandCollisionBody(QObject):
                 if not callable(sbr_fn) or not callable(vp_fn) or not callable(mover):
                     continue
                 vp = vp_fn()
-                (_xi, _yi), moved, _n = self._compute_clamped(
-                    stadium, float(vp.x()), float(vp.y()), sbr_fn())
+                (_xi, _yi), moved, _n = self._compute_clamped(stadium, float(vp.x()), float(vp.y()), sbr_fn())
                 if moved:
                     # 经统一出口：_clamp_body 会钳出（真撞一并走 _apply_hit 业务链）
                     mover(vp.x(), vp.y())
@@ -430,12 +433,10 @@ class IslandCollisionBody(QObject):
         if self._island is None:
             # 远端模式：显式停用即时落墙；静默则本地 TTL 兜底（stale-keep，
             # 失效方向保守——墙多留几秒，绝不提前穿透）
-            return (self._remote_active and self._remote_stadium is not None
-                    and time.monotonic() - self._remote_updated_at <= _REMOTE_WALL_TTL_S)
+            return self._remote_active and self._remote_stadium is not None and time.monotonic() - self._remote_updated_at <= _REMOTE_WALL_TTL_S
         if not self._island.isVisible():
             return False
-        if getattr(self._island, "_mode", "") == "docked" \
-                and not getattr(self._island, "_hover_peek", False):
+        if getattr(self._island, "_mode", "") == "docked" and not getattr(self._island, "_hover_peek", False):
             return False  # 细条态不设墙（stadium 水平轴假设不成立）
         if getattr(self._island, "_geo_to", None) is not None:
             return False  # 展开/停靠/归位动画中几何在变，不设墙
@@ -456,8 +457,7 @@ class IslandCollisionBody(QObject):
         height = min(rect.height(), _CAPSULE_HEIGHT)
         radius = height / 2.0
         axis_y = rect.y() + radius
-        return (rect.x() + radius, rect.x() + rect.width() - radius,
-                axis_y, radius, height)
+        return (rect.x() + radius, rect.x() + rect.width() - radius, axis_y, radius, height)
 
     @staticmethod
     def _axis_closest(stadium, px: float, py: float) -> tuple[float, float]:
@@ -466,7 +466,11 @@ class IslandCollisionBody(QObject):
         return (min(max(px, ax0), ax1), ay)
 
     def _compute_clamped(
-        self, stadium, xi: float, yi: float, sbr,
+        self,
+        stadium,
+        xi: float,
+        yi: float,
+        sbr,
     ) -> tuple[tuple[float, float], bool, tuple[float, float]]:
         """把身体框推出岛碰撞区的虚拟左上；未越界时原样返回。
 
@@ -495,8 +499,7 @@ class IslandCollisionBody(QObject):
         gap = radial + rr + 1.0
         target_cx = closest_x + nx * gap
         target_cy = ay + ny * gap
-        return ((target_cx - sbr.width() / 2.0 - sbr.x(),
-                 target_cy - sbr.height() / 2.0 - sbr.y()), True, (nx, ny))
+        return ((target_cx - sbr.width() / 2.0 - sbr.x(), target_cy - sbr.height() / 2.0 - sbr.y()), True, (nx, ny))
 
     # ------------------------------------------------------------ 撞岛反应
     def _clamp_body(self, host, xi: float, yi: float, sbr) -> tuple[float, float]:
@@ -515,8 +518,7 @@ class IslandCollisionBody(QObject):
             stadium = self._island_stadium()
         except Exception:
             return xi, yi
-        (nx_pos, ny_pos), moved, (nx, ny) = self._compute_clamped(
-            stadium, xi, yi, sbr)
+        (nx_pos, ny_pos), moved, (nx, ny) = self._compute_clamped(stadium, xi, yi, sbr)
         if not moved:
             return xi, yi
         key = id(host)
@@ -531,7 +533,7 @@ class IslandCollisionBody(QObject):
                 pet_vx = pet_vy = 0.0
         else:
             # 漫游是帧驱动位移不写 _phys_vel：用墙接触跟踪测接近速度
-            #（事件驱动、无定时器；首次接触/间隔过长视为无速度=轻贴）
+            # （事件驱动、无定时器；首次接触/间隔过长视为无速度=轻贴）
             pet_vx = pet_vy = 0.0
             prev = self._contact.get(key)
             if prev is not None:
@@ -584,14 +586,12 @@ class IslandCollisionBody(QObject):
             phys[:] = [float(nx_pos), float(ny_pos)]
         return nx_pos, ny_pos
 
-    def _apply_feedback(self, win, key, now, strength: float,
-                        dir_x: float, dir_y: float) -> None:
+    def _apply_feedback(self, win, key, now, strength: float, dir_x: float, dir_y: float) -> None:
         """命中反馈（音效/挤压/岛弹跳）——抛掷撞墙与 _apply_hit 共用。"""
         play_sound = getattr(win, "_play_collision_sound", None)
         if callable(play_sound):
             play_sound()
-        if not getattr(win, "_squash_active", False) \
-                and now - self._pet_squash.get(key, 0.0) >= _SQUASH_INTERVAL_S:
+        if not getattr(win, "_squash_active", False) and now - self._pet_squash.get(key, 0.0) >= _SQUASH_INTERVAL_S:
             self._pet_squash[key] = now
             squash = getattr(win, "_start_squash", None)
             if callable(squash):
@@ -616,8 +616,7 @@ class IslandCollisionBody(QObject):
         cap = float(getattr(win, "_throw_speed_cap", 4800.0) or 4800.0)
         if speed > cap:
             clamped = physics_mod.soft_clamp_speed(speed, cap)
-            win._phys_vel[:] = [win._phys_vel[0] * clamped / speed,
-                                win._phys_vel[1] * clamped / speed]
+            win._phys_vel[:] = [win._phys_vel[0] * clamped / speed, win._phys_vel[1] * clamped / speed]
         egg = getattr(win, "_throw_egg", None)
         if egg is not None and getattr(egg, "active", False):
             egg.on_pet_contact(math.hypot(*win._phys_vel))
@@ -630,7 +629,7 @@ class IslandCollisionBody(QObject):
                 cancel("island_hit", restore=False)
         win._interaction_state = "THROWN"
         # 与权威冲量路径（collision_client）补齐两个副作用：幽灵点击抑制
-        #（被撞飞的鱼落地不应触发点击动画）+ 落地后允许重新进入边缘探头
+        # （被撞飞的鱼落地不应触发点击动画）+ 落地后允许重新进入边缘探头
         clear_dragged = getattr(win, "_clear_just_dragged", None)
         if callable(clear_dragged):
             win._just_dragged = True

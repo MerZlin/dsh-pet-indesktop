@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Frameless, stackable image windows for the playful menu entry."""
+
 from __future__ import annotations
 
 import os
@@ -67,12 +68,7 @@ def _readable_image_paths(directory: Path) -> list[Path]:
         return []
     supported = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
     try:
-        return sorted(
-            path for path in directory.iterdir()
-            if path.is_file()
-            and path.suffix.lower() in supported
-            and QImageReader(str(path)).canRead()
-        )
+        return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in supported and QImageReader(str(path)).canRead())
     except OSError:
         return []
 
@@ -101,11 +97,7 @@ class OjingjingWindow(QWidget):
         self.setObjectName("ojingjingImageWindow")
         self.setProperty("sourceImage", str(image_path))
         self.setWindowTitle(str(title or "厉害了我的鲸"))
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
@@ -220,7 +212,9 @@ class OjingjingWindowManager:
         if show:
             self.restore_all()
         window = OjingjingWindow(
-            random.choice(paths), self.close_all, self._forget,
+            random.choice(paths),
+            self.close_all,
+            self._forget,
             title=str(config.get("title") or "厉害了我的鲸"),
         )
         offset = (len(self.windows) % 7) * 24

@@ -33,9 +33,7 @@ def _get_meter():
         from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
 
         device = AudioUtilities.GetSpeakers()._dev
-        interface = device.Activate(
-            IAudioMeterInformation._iid_, comtypes.CLSCTX_ALL, None
-        )
+        interface = device.Activate(IAudioMeterInformation._iid_, comtypes.CLSCTX_ALL, None)
         _meter = cast(interface, POINTER(IAudioMeterInformation))
     except Exception:
         _meter = None
@@ -44,7 +42,7 @@ def _get_meter():
 
 def is_music_playing() -> bool:
     """返回系统当前是否正在输出音频（Windows；其他平台恒 False）。"""
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         return False
     try:
         meter = _get_meter()

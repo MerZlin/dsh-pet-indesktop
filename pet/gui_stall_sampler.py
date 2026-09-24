@@ -11,6 +11,7 @@ Python 栈的顶部帧摘要存进环形缓冲；jank 看门狗发现 >_DUMP_THR
 格式化，每秒约 20 次，量级可忽略。产品默认路径（perfstats 关闭）完全不
 创建线程、不产生任何调用。
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,10 +23,10 @@ import weakref
 
 log = logging.getLogger(__name__)
 
-_SAMPLE_INTERVAL_S = 0.05      # 采样周期（20Hz，够覆盖 100ms+ 级卡顿）
-_RING_CAPACITY = 240           # 环形缓冲长度（12s 现场）
-_DUMP_THRESHOLD_S = 0.15       # 超过该 GUI 空窗即落样本（配合 jank 看门狗调用）
-_TOP_FRAMES = 6                # 每次采样保留的顶部帧数
+_SAMPLE_INTERVAL_S = 0.05  # 采样周期（20Hz，够覆盖 100ms+ 级卡顿）
+_RING_CAPACITY = 240  # 环形缓冲长度（12s 现场）
+_DUMP_THRESHOLD_S = 0.15  # 超过该 GUI 空窗即落样本（配合 jank 看门狗调用）
+_TOP_FRAMES = 6  # 每次采样保留的顶部帧数
 
 
 class _GuiStallSampler:
@@ -33,8 +34,7 @@ class _GuiStallSampler:
         self._main_tid = main_tid
         self._ring: list[tuple[float, str]] = []
         self._stop = threading.Event()
-        self._thread = threading.Thread(
-            target=self._loop, daemon=True, name='pet-gui-stall-sampler')
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="pet-gui-stall-sampler")
 
     def start(self) -> None:
         self._thread.start()
@@ -45,12 +45,10 @@ class _GuiStallSampler:
             if frame is None:
                 continue
             stack = traceback.extract_stack(frame, limit=_TOP_FRAMES)
-            summary = ' <- '.join(
-                f'{f.filename.rsplit("/", 1)[-1].rsplit(chr(92), 1)[-1]}:{f.lineno}:{f.name}'
-                for f in stack)
+            summary = " <- ".join(f"{f.filename.rsplit('/', 1)[-1].rsplit(chr(92), 1)[-1]}:{f.lineno}:{f.name}" for f in stack)
             self._ring.append((time.monotonic(), summary))
             if len(self._ring) > _RING_CAPACITY:
-                del self._ring[:len(self._ring) - _RING_CAPACITY]
+                del self._ring[: len(self._ring) - _RING_CAPACITY]
 
     def dump_gap(self, gap_s: float, now: float) -> None:
         """jank 看门狗回调：把覆盖 (now-gap, now] 窗口的样本落日志。"""
@@ -58,11 +56,11 @@ class _GuiStallSampler:
         samples = [s for s in self._ring if s[0] >= since]
         if not samples:
             return
-        log.warning('GUI 冻结现场（%.0fms，%d 个采样点，旧→新）：', gap_s * 1000, len(samples))
+        log.warning("GUI 冻结现场（%.0fms，%d 个采样点，旧→新）：", gap_s * 1000, len(samples))
         seen = None
         for ts, summary in samples:
             if summary != seen:  # 连续相同栈只打一条（冻结=栈不动，正好压缩）
-                log.warning('  [t-%.0fms] %s', (now - ts) * 1000, summary)
+                log.warning("  [t-%.0fms] %s", (now - ts) * 1000, summary)
                 seen = summary
 
     def stop(self) -> None:
@@ -81,8 +79,7 @@ def attach(win) -> None:
     sampler.start()
     _attached[tid] = sampler
     # 窗口销毁后停止采样线程（弱引用自清，不占 closeEvent 路径）
-    ref = weakref.ref(win, lambda _r: _attached.pop(tid, _GuiStallSampler()).stop()
-                      if tid in _attached else None)
+    ref = weakref.ref(win, lambda _r: _attached.pop(tid, _GuiStallSampler()).stop() if tid in _attached else None)
     sampler._win_ref = ref
 
 

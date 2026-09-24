@@ -21,6 +21,7 @@ Windows 上是否触发受 Qt 版本/会话管理器实现影响，不能单靠�
 平台：POSIX 上不安装原生过滤器（无此消息），仍保留闸门与信号接线，行为等价。
 线程：只在 GUI 线程创建/安装/触发（原生事件过滤器与 Qt 信号都在 GUI 线程）。
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -37,26 +38,26 @@ from . import webm_clip
 logger = logging.getLogger(__name__)
 
 WM_QUERYENDSESSION = 0x0011  # 会话即将结束：关机/注销前的最后一次询问
-WM_ENDSESSION = 0x0016       # 会话已结束（拆除开始）
+WM_ENDSESSION = 0x0016  # 会话已结束（拆除开始）
 
 # 只关心的消息号 → 日志用 reason。**先比对消息号再解引用**：事件过滤器每帧都
 # 会被调用，绝不能对任意消息都去读 lParam 指向的内存（非 WM_* 消息的 lParam
 # 是任意值，当作指针解引用会触发访问违规——实测在 CPython 上表现为
 # "Windows fatal exception: access violation"）。
 _SESSION_END_MESSAGES = {
-    WM_QUERYENDSESSION: 'native_query_end_session',
-    WM_ENDSESSION: 'native_end_session',
+    WM_QUERYENDSESSION: "native_query_end_session",
+    WM_ENDSESSION: "native_end_session",
 }
 
 # Windows MSG 结构（原生事件过滤器的 message 指针在 Windows 上即 MSG*）。
 # 必须用真实 ctypes 结构解析：字段布局错误会让解析静默失效（假绿）。
 _MSG_FIELDS = [
-    ('hwnd', wintypes.HWND),
-    ('message', wintypes.UINT),
-    ('wParam', wintypes.WPARAM),
-    ('lParam', wintypes.LPARAM),
-    ('time', wintypes.DWORD),
-    ('pt', wintypes.POINT),
+    ("hwnd", wintypes.HWND),
+    ("message", wintypes.UINT),
+    ("wParam", wintypes.WPARAM),
+    ("lParam", wintypes.LPARAM),
+    ("time", wintypes.DWORD),
+    ("pt", wintypes.POINT),
 ]
 
 
@@ -92,8 +93,7 @@ class SessionWatcher(QObject):
     生命周期：由 AppShell 创建并强引用持有，进程存活期间常驻。
     """
 
-    def __init__(self, app=None, on_session_end: Optional[Callable[[], None]] = None,
-                 install_native_filter: bool = True) -> None:
+    def __init__(self, app=None, on_session_end: Optional[Callable[[], None]] = None, install_native_filter: bool = True) -> None:
         super().__init__(None)
         self._app = app if app is not None else QCoreApplication.instance()
         self._on_session_end = on_session_end
@@ -116,13 +116,13 @@ class SessionWatcher(QObject):
         if self._app is None or not shiboken6.isValid(self._app):
             return False
         self.connect_app_signals()
-        if self._install_native_filter and os.name == 'nt':
+        if self._install_native_filter and os.name == "nt":
             try:
                 self._app.installNativeEventFilter(self)
             except AttributeError:
                 pass  # 鸭子类型替身（测试桩）没有该方法：只保留信号兜底路径
             except Exception:
-                logger.debug('安装会话结束原生事件过滤器失败', exc_info=True)
+                logger.debug("安装会话结束原生事件过滤器失败", exc_info=True)
         self._installed = True
         return True
 
@@ -131,15 +131,14 @@ class SessionWatcher(QObject):
         if self._signals_connected or self._app is None:
             return False
         connected = False
-        for name, reason in (('commitDataRequest', 'qt_commit_data_request'),
-                             ('aboutToQuit', 'about_to_quit')):
+        for name, reason in (("commitDataRequest", "qt_commit_data_request"), ("aboutToQuit", "about_to_quit")):
             signal = getattr(self._app, name, None)
             if signal is None:
                 continue
             try:
                 signal.connect(lambda _reason=reason: self.arm(_reason))
             except Exception:
-                logger.debug('连接 %s 会话信号失败', name, exc_info=True)
+                logger.debug("连接 %s 会话信号失败", name, exc_info=True)
             else:
                 connected = True
         self._signals_connected = connected
@@ -159,7 +158,7 @@ class SessionWatcher(QObject):
         return (False, 0)
 
     # ------------------------------------------------------------ 触发
-    def arm(self, reason='') -> None:
+    def arm(self, reason="") -> None:
         """置位会话结束（幂等）：先关 spawn 闸门，再跑安全网回调。
 
         顺序不可颠倒：闸门先落，后续任何代码路径、任何回调异常都不可能再让
@@ -173,23 +172,24 @@ class SessionWatcher(QObject):
         if self._armed:
             return
         self._armed = True
-        label = reason if isinstance(reason, str) and reason else 'unknown'
+        label = reason if isinstance(reason, str) and reason else "unknown"
         logger.info(
-            '收到会话结束通知（%s）：停止派生 ffmpeg 子进程并静默退出', label,
+            "收到会话结束通知（%s）：停止派生 ffmpeg 子进程并静默退出",
+            label,
         )
         self.apply_session_ending()
         if self._on_session_end is not None:
             try:
                 self._on_session_end()
             except Exception:
-                logger.exception('会话结束收口失败（闸门已置位，不再派生进程）')
+                logger.exception("会话结束收口失败（闸门已置位，不再派生进程）")
 
     def apply_session_ending(self) -> None:
         """只置位 spawn 闸门（安全网回调的前置步，异常隔离）。"""
         try:
             webm_clip.set_session_ending(True)
         except Exception:
-            logger.debug('置位会话结束闸门失败', exc_info=True)
+            logger.debug("置位会话结束闸门失败", exc_info=True)
 
 
 def install_session_watcher(app=None, on_session_end=None) -> SessionWatcher:

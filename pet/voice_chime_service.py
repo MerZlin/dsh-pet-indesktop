@@ -207,17 +207,13 @@ class _TTSWorker(threading.Thread):
                     continue
                 if self._out_path.exists() and self._out_path.stat().st_size > 0:
                     if candidate != self._voice:
-                        logger.warning(
-                            "音色 %s 合成失败，已改用默认音色 %s", self._voice, candidate
-                        )
+                        logger.warning("音色 %s 合成失败，已改用默认音色 %s", self._voice, candidate)
                     self._on_done(str(self._out_path), self._text, "")
                     return
                 # 服务端「成功」但没给音频（0 字节）：也算失败，别留下空缓存
                 errors.append(f"{candidate} 第{attempt}次: 服务端未返回音频（空文件）")
                 self._discard_partial()
-        self._on_done(
-            str(self._out_path), self._text, "edge-tts 合成失败 → " + "；".join(errors[-4:])
-        )
+        self._on_done(str(self._out_path), self._text, "edge-tts 合成失败 → " + "；".join(errors[-4:]))
 
     def _discard_partial(self) -> None:
         """删掉失败留下的半截产物：留在缓存目录会被下一次当成「已有缓存」。"""
@@ -530,8 +526,7 @@ class VoiceChimeService:
         self._precache_path = None
         return None
 
-    def _fire(self, sentence: str, now: datetime, bubble_text: str | None = None,
-              *, show_bubble: bool = True, role: str = "play") -> None:
+    def _fire(self, sentence: str, now: datetime, bubble_text: str | None = None, *, show_bubble: bool = True, role: str = "play") -> None:
         """播报一次。
 
         语音用口播文本 ``sentence``（同时作为合成输入与缓存键）；气泡用

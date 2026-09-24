@@ -75,8 +75,7 @@ def build_music_player_rows(dialog) -> list[SettingRow]:
             SettingRow(
                 _ROW_KEY[key],
                 f"{label}程序",
-                f"{label}的安装位置（指向可执行文件）。留空 = 自动搜索常见安装目录；"
-                "填了就以它为准（文件不存在时右键菜单会提示找不到，而不是偷偷回退）。",
+                f"{label}的安装位置（指向可执行文件）。留空 = 自动搜索常见安装目录；填了就以它为准（文件不存在时右键菜单会提示找不到，而不是偷偷回退）。",
                 getattr(dialog, _PICKER_ATTR[key]),
                 stacked=True,
             )
@@ -85,8 +84,7 @@ def build_music_player_rows(dialog) -> list[SettingRow]:
         SettingRow(
             "music_player_detect",
             "自动检测播放器",
-            "在后台按常见目录名搜一遍（几个盘符 + 用户目录，最多三层），找到就填进上面两行；"
-            "搜索在后台做，不会卡住设置页。",
+            "在后台按常见目录名搜一遍（几个盘符 + 用户目录，最多三层），找到就填进上面两行；搜索在后台做，不会卡住设置页。",
             dialog.music_player_detect_btn,
         )
     )

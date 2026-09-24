@@ -111,6 +111,7 @@ def _chat_feature_available() -> bool:
         raise
     return True
 
+
 from .settings_widgets import (
     _system_font_families,
     BROWSER_CONTROL_SPEC,
@@ -254,8 +255,7 @@ def dialogue_params_hint(key: str) -> str:
 class ModernSettingsDialog(QDialog):
     """Settings window matching Modern's sidebar and rounded-card hierarchy."""
 
-    def __init__(self, config, parent=None, *, include_ai: bool = True,
-                 standalone: bool = False, initial_page: str | None = None):
+    def __init__(self, config, parent=None, *, include_ai: bool = True, standalone: bool = False, initial_page: str | None = None):
         super().__init__(parent)
         self.config = config
         self.include_ai = bool(include_ai)
@@ -527,7 +527,9 @@ class ModernSettingsDialog(QDialog):
                     ),
                     SettingRow("dynamic_island_opacity", "背景不透明度", "越低越透（0.4~1.0）；配合深色底在低占用下做出半透明质感。", self.island_opacity_spin),
                     SettingRow("dynamic_island_accent", "主题色", "图标底圈、事件闪光、停靠描边共用的点缀色。", self.island_accent_select),
-                    SettingRow("dynamic_island_icon_value", "图标", "默认显示鱼本体头像；可选 emoji 图标，首次绘制会多占约 30MB 内存。", self.island_icon_select),
+                    SettingRow(
+                        "dynamic_island_icon_value", "图标", "默认显示鱼本体头像；可选 emoji 图标，首次绘制会多占约 30MB 内存。", self.island_icon_select
+                    ),
                     SettingRow(
                         "dynamic_island_custom_text", "自定义短文本", "信息槽选择“自定义短文本”时显示的内容。", self.island_custom_text_edit, stacked=True
                     ),
@@ -537,12 +539,18 @@ class ModernSettingsDialog(QDialog):
                         "单击胶囊：展开快捷卡片（余额/最近消息/快捷按钮）或直接切换桌宠显隐。",
                         self.island_click_action_select,
                     ),
-                    *([SettingRow(
-                        "dynamic_island_hidden_chat",
-                        "隐藏时对话气泡",
-                        "桌宠隐藏后岛变成对话入口：单击灵动岛弹出对话气泡，AI 回复到达时也会在岛上弹出预览（不抢焦点，超时自动收回）。",
-                        self.island_hidden_chat_check,
-                    )] if _chat_feature_available() else []),
+                    *(
+                        [
+                            SettingRow(
+                                "dynamic_island_hidden_chat",
+                                "隐藏时对话气泡",
+                                "桌宠隐藏后岛变成对话入口：单击灵动岛弹出对话气泡，AI 回复到达时也会在岛上弹出预览（不抢焦点，超时自动收回）。",
+                                self.island_hidden_chat_check,
+                            )
+                        ]
+                        if _chat_feature_available()
+                        else []
+                    ),
                     # 纯桌宠版（无 pet.chat 打包变体）不展示该开关：开了也没有
                     # 气泡可弹——运行时岛侧已由 chat_available 回退展开卡片
                     SettingRow(
@@ -597,8 +605,18 @@ class ModernSettingsDialog(QDialog):
                 "音乐关联",
                 [
                     SettingRow("music_sing", "音乐自动唱歌", "检测到后台播放音乐时，自动播放唱歌动画。", self.music_sing_check),
-                    SettingRow("music_lyric", "显示歌词", "在气泡里显示当前播放歌曲的歌词。仅 Windows 可用；需要播放器支持系统媒体控制（SMTC），酷狗等需在播放器设置里手动开启。网易云音乐不上报播放进度，歌词按开始时间估算——快进或从中途开始播放后，用右键菜单「音乐 → 歌词对齐」校正。", self.music_lyric_check),
-                    SettingRow("music_lyric_lead", "歌词提前量", "歌词相对音频的时间偏移。正值让歌词抢先显示，负值让它延后；唱得比音乐早一点通常更自然。", self.music_lyric_lead_spin),
+                    SettingRow(
+                        "music_lyric",
+                        "显示歌词",
+                        "在气泡里显示当前播放歌曲的歌词。仅 Windows 可用；需要播放器支持系统媒体控制（SMTC），酷狗等需在播放器设置里手动开启。网易云音乐不上报播放进度，歌词按开始时间估算——快进或从中途开始播放后，用右键菜单「音乐 → 歌词对齐」校正。",
+                        self.music_lyric_check,
+                    ),
+                    SettingRow(
+                        "music_lyric_lead",
+                        "歌词提前量",
+                        "歌词相对音频的时间偏移。正值让歌词抢先显示，负值让它延后；唱得比音乐早一点通常更自然。",
+                        self.music_lyric_lead_spin,
+                    ),
                 ],
                 behavior_content,
             )
@@ -791,8 +809,7 @@ class ModernSettingsDialog(QDialog):
                     SettingRow(
                         "bubble_text_scale",
                         "气泡文字大小",
-                        "气泡里文字的显示尺寸：气泡与字号一起等比放大（100% 为默认）。"
-                        "大屏上嫌气泡字小时调大；审批/提问气泡为固定布局，不随本项变化。",
+                        "气泡里文字的显示尺寸：气泡与字号一起等比放大（100% 为默认）。大屏上嫌气泡字小时调大；审批/提问气泡为固定布局，不随本项变化。",
                         self.bubble_text_scale_spin,
                     ),
                     SettingRow("pet_opacity", "不透明度", "调整桌宠窗口的整体透明度；100% 为完全不透明。", self.pet_opacity_spin),
@@ -947,9 +964,7 @@ class ModernSettingsDialog(QDialog):
 
         # 更新页是命令/状态面板，不写入 Config；它与常规域同级，便于从菜单
         # 和设置窗口进入同一套检查、下载、校验、安装流程。
-        self.update_page = UpdatePage(
-            self.config, include_chat=self.include_ai, parent=self
-        )
+        self.update_page = UpdatePage(self.config, include_chat=self.include_ai, parent=self)
         self._rebuild_domain_navigation()
         self.sidebar.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
@@ -1717,8 +1732,7 @@ class ModernSettingsDialog(QDialog):
             [
                 ("显示", claim("scale", "bubble_text_scale", "pet_opacity")),
                 ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "no_move")),
-                ("音乐关联", claim("music_sing", "music_lyric", "music_lyric_lead")
-                 + settings_music.build_music_player_rows(self)),
+                ("音乐关联", claim("music_sing", "music_lyric", "music_lyric_lead") + settings_music.build_music_player_rows(self)),
                 ("拖拽与弹射", claim("drag_physics", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
                 ("边缘探头", claim("edge_probe")),
                 ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale", "spawn_inherit_dynamic_island", "clear_spawned_pets")),
@@ -1782,7 +1796,13 @@ class ModernSettingsDialog(QDialog):
         if self.ai_page is not None:
             balance_rows = claim_prefix("balance_")
             appearance_rows = claim(
-                "chat_ui_style", "chat_background", "chat_background_file", "chat_background_opacity", "chat_background_fill", "chat_bg_crops", "modern_chat_card_opacity"
+                "chat_ui_style",
+                "chat_background",
+                "chat_background_file",
+                "chat_background_opacity",
+                "chat_background_fill",
+                "chat_bg_crops",
+                "modern_chat_card_opacity",
             )
             ai_sections = page_content(
                 [
@@ -1882,10 +1902,12 @@ class ModernSettingsDialog(QDialog):
         # 用现成的 CollapsibleGroup.add_group，不需要新造控件。
         agent_box = CollapsibleGroup("Agent 联动", automation)
         agent_cost_rows = [
-            SettingRow("agent_cost", "显示本轮消费",
-                       "Agent 每轮结束时查询一次余额，与开始时的余额相减得出本轮消费。"
-                       "仅 DeepSeek 提供余额接口；余额精度为分，不足 ¥0.01 的消耗测不出。",
-                       self.agent_cost_check),
+            SettingRow(
+                "agent_cost",
+                "显示本轮消费",
+                "Agent 每轮结束时查询一次余额，与开始时的余额相减得出本轮消费。仅 DeepSeek 提供余额接口；余额精度为分，不足 ¥0.01 的消耗测不出。",
+                self.agent_cost_check,
+            ),
         ]
         agent_box.add_group("提示音效", claim_prefix("agent_sound_"))
         agent_box.set_expanded(True)
@@ -2157,17 +2179,14 @@ class ModernSettingsDialog(QDialog):
             self.config.set("click_show_balance", self.click_balance_check.isChecked())
         self.config.set("click_show_self_talk", self.click_self_talk_check.isChecked())
         self.config.set("self_talk_speak_enabled", self.click_self_talk_speak_check.isChecked())
-        self.config.set("self_talk_voice_precache_enabled",
-                        self.self_talk_voice_precache_check.isChecked())
+        self.config.set("self_talk_voice_precache_enabled", self.self_talk_voice_precache_check.isChecked())
         self.config.set("music_sing_enabled", self.music_sing_check.isChecked())
         if getattr(self, "music_lyric_check", None) is not None:
             self.config.set("music_lyric_enabled", self.music_lyric_check.isChecked())
         if getattr(self, "agent_cost_check", None) is not None:
             self.config.set("agent_cost_enabled", self.agent_cost_check.isChecked())
         if getattr(self, "music_lyric_lead_spin", None) is not None:
-            self.config.set(
-                "music_lyric_lead_seconds", float(self.music_lyric_lead_spin.value())
-            )
+            self.config.set("music_lyric_lead_seconds", float(self.music_lyric_lead_spin.value()))
         self.config.set("golden_spin_on_click", self.golden_spin_click_check.isChecked())
         self.config.set("golden_spin_direct", self.golden_spin_direct_check.isChecked())
         self.config.set("edge_probe_enabled", self.edge_probe_check.isChecked())

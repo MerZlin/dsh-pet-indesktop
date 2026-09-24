@@ -5,6 +5,7 @@
 在 settings_widgets 中定义，被 _settings_stylesheet 引用；_DARK_POPUP_OVERRIDE 亦属
 settings_widgets（本模块未引用）。
 """
+
 from __future__ import annotations
 
 from .settings_widgets import _system_dark, BROWSER_CONTROL_STYLESHEET
@@ -111,6 +112,7 @@ QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #55555e
 QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #6a6a74; }
 """
 
+
 def _settings_stylesheet(theme: str = "system") -> str:
     """浅色基础 QSS + 显式控件文字色补丁；深色系统时追加深色覆盖段。"""
     light_patch = """
@@ -123,6 +125,7 @@ def _settings_stylesheet(theme: str = "system") -> str:
     if not dark:
         return base + BROWSER_CONTROL_STYLESHEET
     return base + _DARK_OVERRIDE + BROWSER_CONTROL_STYLESHEET + _DARK_BROWSER_OVERRIDE
+
 
 _LIGHT_SETTINGS_STYLESHEET = """
 QDialog {

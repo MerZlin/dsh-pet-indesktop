@@ -10,21 +10,21 @@ from __future__ import annotations
 import math
 
 # ---- 拖拽弹簧 ----
-SPRING_K = 200.0          # 弹簧刚度：越大跟手越紧
-SPRING_C = 30.0           # 阻尼：ζ=c/(2√k)≈1.06 过阻尼，不 overshoot
+SPRING_K = 200.0  # 弹簧刚度：越大跟手越紧
+SPRING_C = 30.0  # 阻尼：ζ=c/(2√k)≈1.06 过阻尼，不 overshoot
 
 # ---- 松手初速估算 ----
-TRAIL_KEEP_SEC = 0.15     # 拖拽途中只保留这么长的轨迹
+TRAIL_KEEP_SEC = 0.15  # 拖拽途中只保留这么长的轨迹
 RELEASE_WINDOW_SEC = 0.12  # 初速估算取末尾这段窗口
 RELEASE_STALE_SEC = 0.15  # 松手前停顿超过它 = 静止放下（不带残余速度）
-MIN_SPAN_SEC = 0.02       # 窗口太短视为不可估算
-SEG_MIN_DT = 0.008        # 分段速度的最小 dt：高回报率鼠标事件间隔可低至 1ms，
-                          # 过小的 dt 会把抖动放大成虚假峰值，短段向前合并
-DEAD_ZONE_SPEED = 500.0   # 低于此速度 = 原地放下（px/s）
+MIN_SPAN_SEC = 0.02  # 窗口太短视为不可估算
+SEG_MIN_DT = 0.008  # 分段速度的最小 dt：高回报率鼠标事件间隔可低至 1ms，
+# 过小的 dt 会把抖动放大成虚假峰值，短段向前合并
+DEAD_ZONE_SPEED = 500.0  # 低于此速度 = 原地放下（px/s）
 MAX_THROW_SPEED = 6000.0  # 甩出速度上限默认值（px/s）：软膝渐近值
-PEAK_WEIGHT = 0.5         # 初速大小 = 端点均值*(1-w) + 窗口峰值*w
-ACCEL_REF = 8000.0        # 参考加速度（px/s²）：末段加速达到它即吃满增益
-ACCEL_GAIN_MAX = 0.6      # 加速度增益上限：仍在加速的甩动最多放大 60%
+PEAK_WEIGHT = 0.5  # 初速大小 = 端点均值*(1-w) + 窗口峰值*w
+ACCEL_REF = 8000.0  # 参考加速度（px/s²）：末段加速达到它即吃满增益
+ACCEL_GAIN_MAX = 0.6  # 加速度增益上限：仍在加速的甩动最多放大 60%
 
 # ---- 甩出力度档位 ----
 THROW_STRENGTH_CAPS = {
@@ -54,8 +54,7 @@ SLINGSHOT_BASE_SPEED = 900.0
 SLINGSHOT_MAX_DEFORMATION = 1.3
 
 
-def slingshot_deformation(pull_x: float, pull_y: float, progress: float,
-                          maximum: float = SLINGSHOT_MAX_DEFORMATION) -> tuple[float, float]:
+def slingshot_deformation(pull_x: float, pull_y: float, progress: float, maximum: float = SLINGSHOT_MAX_DEFORMATION) -> tuple[float, float]:
     """Return smooth x/y scale factors for an anisotropic slingshot stretch.
 
     The stretch and compression axes are projected onto the widget axes, so
@@ -74,12 +73,13 @@ def slingshot_deformation(pull_x: float, pull_y: float, progress: float,
         math.hypot(stretch * uy, squeeze * ux),
     )
 
+
 # ---- 抛掷 ----
-GRAVITY = 1400.0          # px/s²
-RESTITUTION = 0.78        # 碰边恢复系数
-GROUND_FRICTION = 2.5     # 地面水平摩擦（/s）
-REST_VY = 40.0            # 落地时 |vy| 小于它直接停竖直
-REST_VX = 15.0            # 地面上 |vx| 小于它认为已静止
+GRAVITY = 1400.0  # px/s²
+RESTITUTION = 0.78  # 碰边恢复系数
+GROUND_FRICTION = 2.5  # 地面水平摩擦（/s）
+REST_VY = 40.0  # 落地时 |vy| 小于它直接停竖直
+REST_VX = 15.0  # 地面上 |vx| 小于它认为已静止
 
 
 def flight_anim_speed(speed_px_s: float) -> float:
@@ -115,22 +115,17 @@ def slingshot_speed(distance: float, minimum: float, maximum: float, cap: float)
     return soft_clamp_speed(raw, cap=cap)
 
 
-def slingshot_trajectory(vx: float, vy: float, duration: float = 0.8,
-                         points: int = 12, gravity: float = GRAVITY
-                         ) -> list[tuple[float, float]]:
+def slingshot_trajectory(vx: float, vy: float, duration: float = 0.8, points: int = 12, gravity: float = GRAVITY) -> list[tuple[float, float]]:
     """Sample a first-flight parabolic path relative to its launch point."""
     if duration <= 0.0 or points <= 0:
         return []
     if points == 1:
         return [(0.0, 0.0)]
     step = float(duration) / (points - 1)
-    return [(float(vx) * (i * step),
-             float(vy) * (i * step) + 0.5 * float(gravity) * (i * step) ** 2)
-            for i in range(points)]
+    return [(float(vx) * (i * step), float(vy) * (i * step) + 0.5 * float(gravity) * (i * step) ** 2) for i in range(points)]
 
 
-def spring_velocity(v: float, x: float, target: float, dt: float,
-                    k: float = SPRING_K, c: float = SPRING_C) -> float:
+def spring_velocity(v: float, x: float, target: float, dt: float, k: float = SPRING_K, c: float = SPRING_C) -> float:
     """过阻尼弹簧单轴速度步进（调用方随后 x += v*dt）。"""
     return v + ((target - x) * k - v * c) * dt
 
@@ -192,9 +187,9 @@ def estimate_release_velocity(trail: list, now: float, cap: float = MAX_THROW_SP
     return base_vx / base_speed * speed, base_vy / base_speed * speed
 
 
-def throw_step(px: float, py: float, vx: float, vy: float, dt: float,
-               left: float, top: float, right: float, bottom: float,
-               gravity: float = GRAVITY) -> tuple[float, float, float, float, bool]:
+def throw_step(
+    px: float, py: float, vx: float, vy: float, dt: float, left: float, top: float, right: float, bottom: float, gravity: float = GRAVITY
+) -> tuple[float, float, float, float, bool]:
     """抛掷单步积分 + 边界反弹。返回 (px, py, vx, vy, bounced)。"""
     vy += gravity * dt
     px += vx * dt

@@ -185,7 +185,7 @@ class MovieLibrary(QObject):
         self._low_warm_retry_timer.setInterval(50)
         self._low_warm_retry_timer.timeout.connect(self._warm_low_priority_background)
         self.low_warm_batch_finished.connect(self._on_low_warm_batch_finished)
-        self.media_type: str = 'webm'
+        self.media_type: str = "webm"
         self.no_mirror: set[str] = self._load_no_mirror()
         # move_strides.json 一次读取、一次遍历 → (步幅, 曲线) 两份结果：
         # 此前两个加载器各读一遍文件、各遍历一遍 dict（重复 IO，且两套口径
@@ -195,23 +195,24 @@ class MovieLibrary(QObject):
         self._load_all()
 
     def _load_no_mirror(self) -> set[str]:
-        '''加载 text_clips.json：内含文字的动画在朝向翻转时不镜像（防文字反显）。'''
+        """加载 text_clips.json：内含文字的动画在朝向翻转时不镜像（防文字反显）。"""
         import json
-        path = self._asset_dir / 'text_clips.json'
+
+        path = self._asset_dir / "text_clips.json"
         try:
-            data = json.loads(path.read_text(encoding='utf-8'))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return set()
-        names = data.get('no_mirror', [])
+        names = data.get("no_mirror", [])
         return {str(n) for n in names} if isinstance(names, list) else set()
 
     def _load_move_sidecar(self) -> tuple[dict[str, float], dict[str, list[float]]]:
-        '''加载 move_strides.json：一次读取、一次遍历 → (步幅, 曲线)。
+        """加载 move_strides.json：一次读取、一次遍历 → (步幅, 曲线)。
 
         缺文件/解析失败 → ({}, {})，绝不抛异常；「_comment」等备注字段与其余
         项静默忽略。两份结果共用同一份源数据，保证口径一致（此前两套读取器
         各读一遍文件、各遍历一遍 dict）。
-        '''
+        """
         data = self._read_move_strides_json()
         strides: dict[str, float] = {}
         curves: dict[str, list[float]] = {}
@@ -227,26 +228,25 @@ class MovieLibrary(QObject):
 
     @staticmethod
     def _move_stride_of(v) -> float | None:
-        '''单项步幅解析：数值项或 {'stride': 数值} 对象项，其余（含 bool）返回 None。'''
+        """单项步幅解析：数值项或 {'stride': 数值} 对象项，其余（含 bool）返回 None。"""
         if isinstance(v, bool):
             return None
         if isinstance(v, (int, float)):
             return float(v)
-        if isinstance(v, dict) and isinstance(v.get('stride'), (int, float)) \
-                and not isinstance(v.get('stride'), bool):
-            return float(v['stride'])
+        if isinstance(v, dict) and isinstance(v.get("stride"), (int, float)) and not isinstance(v.get("stride"), bool):
+            return float(v["stride"])
         return None
 
     @staticmethod
     def _move_curve_of(v) -> list[float] | None:
-        '''单项曲线解析：校验不过（非列表/太短/越界/回退/首尾不符）返回 None。
+        """单项曲线解析：校验不过（非列表/太短/越界/回退/首尾不符）返回 None。
 
         curve[i] = 播到源帧 i 时圈内累计进度（0..1，单调不减，首 0 尾 1）。
         动画静帧段曲线走平 → 窗口停住；动帧段匀速 → 动帧才动、静帧不动。
-        '''
+        """
         if not isinstance(v, dict):
             return None
-        curve = v.get('curve')
+        curve = v.get("curve")
         if not isinstance(curve, list) or len(curve) < 2:
             return None
         if any(isinstance(c, bool) or not isinstance(c, (int, float)) for c in curve):
@@ -261,26 +261,27 @@ class MovieLibrary(QObject):
         return vals
 
     def _load_move_strides(self) -> dict[str, float]:
-        '''加载 move_strides.json：移动动画每圈（scale=1.0）地面位移像素数。
+        """加载 move_strides.json：移动动画每圈（scale=1.0）地面位移像素数。
 
         缺文件/解析失败 → 空 dict（窗口回退 catalog.MOVE_STRIDE_DEFAULT_PX），
         绝不抛异常。只收数值项与 {'stride': 数值} 对象项："_comment" 等备注
         字段与其余项静默忽略。
-        '''
+        """
         return self._load_move_sidecar()[0]
 
     def _load_move_curves(self) -> dict[str, list[float]]:
-        '''加载 move_strides.json 对象项里的 curve：圈内逐帧位移曲线。
+        """加载 move_strides.json 对象项里的 curve：圈内逐帧位移曲线。
 
         校验不过（非列表/太短/越界/回退/首尾不符）静默跳过，绝不抛异常。
-        '''
+        """
         return self._load_move_sidecar()[1]
 
     def _read_move_strides_json(self) -> dict:
         import json
-        path = self._asset_dir / 'move_strides.json'
+
+        path = self._asset_dir / "move_strides.json"
         try:
-            data = json.loads(path.read_text(encoding='utf-8'))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
         return data if isinstance(data, dict) else {}
@@ -289,22 +290,18 @@ class MovieLibrary(QObject):
         if self._manifest is None:
             # 自动扫描该形象目录下的 webm 或 gif，支持不同角色有不同动作集
             if not self._asset_dir.is_dir():
-                raise FileNotFoundError(
-                    f"角色素材目录不存在: {self._asset_dir}（character_id={self.character_id}）"
-                )
-            webm_files = sorted(self._asset_dir.rglob('*.webm'))
-            gif_files = sorted(self._asset_dir.rglob('*.gif'))
+                raise FileNotFoundError(f"角色素材目录不存在: {self._asset_dir}（character_id={self.character_id}）")
+            webm_files = sorted(self._asset_dir.rglob("*.webm"))
+            gif_files = sorted(self._asset_dir.rglob("*.gif"))
             files = webm_files + gif_files
             if not files:
-                raise FileNotFoundError(
-                    f"角色素材目录中没有 webm/gif 文件: {self._asset_dir}"
-                )
+                raise FileNotFoundError(f"角色素材目录中没有 webm/gif 文件: {self._asset_dir}")
             if webm_files and gif_files:
-                self.media_type = 'mixed'
+                self.media_type = "mixed"
             elif webm_files:
-                self.media_type = 'webm'
+                self.media_type = "webm"
             else:
-                self.media_type = 'gif'
+                self.media_type = "gif"
             self._manifest = {}
             self.folder_map = {}
             self.folder_files = {}
@@ -312,7 +309,7 @@ class MovieLibrary(QObject):
                 rel = f.relative_to(self._asset_dir)
                 name = f.stem
                 self._manifest[name] = rel.as_posix()
-                folder = rel.parts[0].lower() if len(rel.parts) > 1 else ''
+                folder = rel.parts[0].lower() if len(rel.parts) > 1 else ""
                 self.folder_map[name] = folder
                 self.folder_files.setdefault(folder, []).append(name)
 
@@ -365,18 +362,12 @@ class MovieLibrary(QObject):
         )
         # 点击回应优先级最高：首次点击最怕同步 ffmpeg 解码（实测可达 600ms+），
         # 先预热点击动画，避免用户刚启动就点击时卡顿。
-        high = list(dict.fromkeys(
-            [*(cats['clicks'] or []), *(cats['turns'] or [])]
-            + ([cats['drag']] if cats.get('drag') else [])
-        ))
+        high = list(dict.fromkeys([*(cats["clicks"] or []), *(cats["turns"] or [])] + ([cats["drag"]] if cats.get("drag") else [])))
         # 低优先级也必须去重（与 high 同构）：build_categories 在无 idle 兜底时
         # 会把随机动作池里的一个 clip 同时归入 idles 与 acts（Safety fallback），
         # 若不去重则同一素材在单批里被预热两次（重复拉起 ffmpeg）。dict.fromkeys
         # 保序去重，绝不改变池构成。批10-A3 缩池后该路径暴露为 CI 负载 flake。
-        low = list(dict.fromkeys(
-            n for n in (*(cats['idles'] or []), *(cats['moves'] or []),
-                        *(cats['acts'] or [])) if n not in high
-        ))
+        low = list(dict.fromkeys(n for n in (*(cats["idles"] or []), *(cats["moves"] or []), *(cats["acts"] or [])) if n not in high))
         return high, low
 
     def _warm_objects(
@@ -427,16 +418,16 @@ class MovieLibrary(QObject):
             阶段被整个吞掉、批次被误标完成。这里用显式守护线程 + 锁保护下标推进，
             语义与 ``ex.map`` 一致（并发 ≤ workers、每个 clip 先让路/代次检查）。
             """
-            state = {'idx': 0, 'failed': False}
+            state = {"idx": 0, "failed": False}
             state_lock = threading.Lock()
 
             def _work() -> None:
                 while True:
                     with state_lock:
-                        if state['idx'] >= n:
+                        if state["idx"] >= n:
                             return
-                        i = state['idx']
-                        state['idx'] += 1
+                        i = state["idx"]
+                        state["idx"] += 1
                     clip = clips[i]
                     if yield_to_interaction and not self._await_interaction_clear(generation):
                         continue
@@ -447,9 +438,7 @@ class MovieLibrary(QObject):
                     except Exception:
                         pass  # 单个素材预热失败不拖垮整批（与顶层 try/except 一致）
 
-            threads = [
-                threading.Thread(target=_work, daemon=True) for _ in range(nworkers)
-            ]
+            threads = [threading.Thread(target=_work, daemon=True) for _ in range(nworkers)]
             for t in threads:
                 t.start()
             for t in threads:
@@ -461,7 +450,7 @@ class MovieLibrary(QObject):
 
         # 预解码各动画首帧（QImage 线程安全），首次播放时零阻塞切换，
         # 避免点击 Q 弹瞬间同步 ffmpeg 解码造成卡顿与旧动画帧残留。
-        _run_phase(lambda c: getattr(c, 'warm_first_frame', lambda: None)())
+        _run_phase(lambda c: getattr(c, "warm_first_frame", lambda: None)())
 
     def _await_interaction_clear(self, generation: int) -> bool:
         """低优先级预热让路：交互进行中阻塞等待，交互结束返回 True 继续。
@@ -508,7 +497,7 @@ class MovieLibrary(QObject):
         # 取消（换代 + 主动 terminate）回收，隐藏/切角色后不再有不受控的
         # 后台解码进程存活；恢复显示后新预热仍可正常进行（非终态）。
         for clip in list(self._movies.values()):
-            cancel = getattr(clip, 'cancel_first_frame_warm', None)
+            cancel = getattr(clip, "cancel_first_frame_warm", None)
             if callable(cancel):
                 try:
                     cancel()
@@ -530,16 +519,17 @@ class MovieLibrary(QObject):
         self.pause_warm()
         for clip in tuple(self._movies.values()):
             try:
-                cleanup = getattr(clip, 'cleanup', None)
+                cleanup = getattr(clip, "cleanup", None)
                 if callable(cleanup):
                     cleanup()
                 else:
-                    stop = getattr(clip, 'stop', None)
+                    stop = getattr(clip, "stop", None)
                     if callable(stop):
                         stop()
             except Exception:
                 logging.getLogger(__name__).debug(
-                    '素材库关闭时收口 clip 失败', exc_info=True,
+                    "素材库关闭时收口 clip 失败",
+                    exc_info=True,
                 )
 
     @classmethod
@@ -551,7 +541,8 @@ class MovieLibrary(QObject):
                 library.shutdown()
             except Exception:
                 logging.getLogger(__name__).debug(
-                    '测试收口 MovieLibrary 失败', exc_info=True,
+                    "测试收口 MovieLibrary 失败",
+                    exc_info=True,
                 )
 
     def resume_warm(self) -> None:
@@ -562,10 +553,7 @@ class MovieLibrary(QObject):
         try:
             _, low = self._priority_names()
             with self._warm_state_lock:
-                incomplete = (
-                    any(name not in self._movies for name in low)
-                    or not self._low_first_frames_done
-                )
+                incomplete = any(name not in self._movies for name in low) or not self._low_first_frames_done
             if incomplete and not self._low_warm_timer.isActive():
                 self._low_warm_timer.start()
         except Exception:
@@ -612,8 +600,10 @@ class MovieLibrary(QObject):
         if not names:
             return
         self._warm_objects(
-            [self.movie(name) for name in names], workers,
-            generation=generation, cancelled=cancelled,
+            [self.movie(name) for name in names],
+            workers,
+            generation=generation,
+            cancelled=cancelled,
             include_frames=include_frames,
         )
 
@@ -639,10 +629,10 @@ class MovieLibrary(QObject):
             # 并发过高会形成进程洪峰，提高杀毒软件拦截/误报概率。
             high, _ = self._priority_names()
             self._warm_clips(
-                high, workers=min(3, len(high)),
+                high,
+                workers=min(3, len(high)),
                 generation=generation,
-                cancelled=lambda: (self._warm_paused or session_ending()
-                                   or generation != self._warm_generation),
+                cancelled=lambda: self._warm_paused or session_ending() or generation != self._warm_generation,
                 include_frames=(self._prewarm_policy != "minimal"),
             )
         except Exception:
@@ -694,7 +684,8 @@ class MovieLibrary(QObject):
             def run() -> None:
                 try:
                     self._warm_objects(
-                        clips, 1,
+                        clips,
+                        1,
                         yield_to_interaction=True,
                         generation=generation,
                         include_frames=(self._prewarm_policy == "full"),
@@ -705,10 +696,7 @@ class MovieLibrary(QObject):
                     # 完成标志与在飞标志在同一锁内更新：批次唯一（去重）且
                     # 旧批次收尾不可能覆盖新批次的结果。
                     with self._warm_state_lock:
-                        self._low_first_frames_done = (
-                            not self._warm_paused
-                            and generation == self._warm_generation
-                        )
+                        self._low_first_frames_done = not self._warm_paused and generation == self._warm_generation
                         self._low_warm_in_flight = False
                     # 通知 GUI 线程：批次被 pause 作废（未完成）时由槽重新排期
                     self.low_warm_batch_finished.emit()
@@ -736,10 +724,7 @@ class MovieLibrary(QObject):
                 return
             _, low = self._priority_names()
             with self._warm_state_lock:
-                incomplete = (
-                    any(name not in self._movies for name in low)
-                    or not self._low_first_frames_done
-                )
+                incomplete = any(name not in self._movies for name in low) or not self._low_first_frames_done
             if incomplete and not self._low_warm_timer.isActive():
                 self._low_warm_timer.start()
         except Exception:
@@ -773,12 +758,13 @@ class MovieLibrary(QObject):
         """
         for clip in tuple(self._movies.values()):
             try:
-                stop = getattr(clip, 'stop', None)
+                stop = getattr(clip, "stop", None)
                 if callable(stop):
                     stop()
             except Exception:
                 logging.getLogger(__name__).debug(
-                    '会话结束时停止 clip 失败', exc_info=True,
+                    "会话结束时停止 clip 失败",
+                    exc_info=True,
                 )
 
     def warm_predicted(self, name: str) -> None:
@@ -811,13 +797,13 @@ class MovieLibrary(QObject):
                     return
                 if self._warm_paused or generation != self._warm_generation:
                     return
-                warm = getattr(clip, 'warm_first_frame', None)
+                warm = getattr(clip, "warm_first_frame", None)
                 if not callable(warm):
                     return
                 t0 = perfstats.clock() if perfstats.ENABLED else 0.0
                 warm()
                 if perfstats.ENABLED:
-                    perfstats.time('prewarm.ff_ms', perfstats.clock() - t0)
+                    perfstats.time("prewarm.ff_ms", perfstats.clock() - t0)
             except Exception:
                 pass  # 预热失败不致命，后续播放按需同步解码
 
@@ -834,7 +820,7 @@ class MovieLibrary(QObject):
         """
         if name not in self._movies:
             path = self._paths[name]
-            if path.suffix.lower() == '.gif':
+            if path.suffix.lower() == ".gif":
                 self._movies[name] = GifClip(path, parent=self)
             else:
                 self._movies[name] = WebMClip(path, parent=self)
@@ -871,7 +857,7 @@ def clip_current_image(clip):
     逐位一致。返回 None 表示当前没有可显示帧（首帧未就绪/素材损坏），
     调用方按原有空判语义跳过本帧。
     """
-    getter = getattr(clip, 'currentImage', None)
+    getter = getattr(clip, "currentImage", None)
     if callable(getter):
         img = getter()
         if isinstance(img, QImage) and not img.isNull():

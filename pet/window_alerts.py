@@ -21,14 +21,28 @@ from . import window_placement
 # 音频峰值瞬时跌到阈值下，太小会导致唱歌状态反复退出。
 MUSIC_SING_GRACE_SECONDS = 6.0
 
+
 def alert_survives_suppression(alert_type: str, *, sticky: bool, buttons, priority: int) -> bool:
     """Settings only suppress ordinary presentation; stateful events survive."""
     kind = str(alert_type or "").strip().lower()
     if kind in {
-        "approval", "question", "interaction", "approval/resolved", "question/resolved",
-        "interaction/resolved", "control", "control-result", "bridge/control-result",
-        "watchdog/control-result", "lifecycle", "turn/end", "task_complete",
-        "execution/failed", "agent/request-error", "session/end", "balance",
+        "approval",
+        "question",
+        "interaction",
+        "approval/resolved",
+        "question/resolved",
+        "interaction/resolved",
+        "control",
+        "control-result",
+        "bridge/control-result",
+        "watchdog/control-result",
+        "lifecycle",
+        "turn/end",
+        "task_complete",
+        "execution/failed",
+        "agent/request-error",
+        "session/end",
+        "balance",
     }:
         return True
     return bool(sticky or buttons) and int(priority) <= 1
@@ -44,15 +58,19 @@ def set_bubble_suppressed(host, suppressed: bool) -> None:
     else:
         current = getattr(host, "_alert_current", None)
         if current is not None and alert_survives_suppression(
-                current.get("alertType", ""), sticky=bool(current.get("sticky")),
-                buttons=current.get("buttons"), priority=int(current.get("priority", 3))):
+            current.get("alertType", ""), sticky=bool(current.get("sticky")), buttons=current.get("buttons"), priority=int(current.get("priority", 3))
+        ):
             bubble = getattr(host, "_speech_bubble", None)
             if current.get("sticky"):
                 if bubble is not None:
                     bubble.show_text(
-                        current["text"], window_placement.bubble_anchor_rect(host), 0,
-                        pet_scale=host.scale, subtitle=current.get("subtitle", ""),
-                        sticky=True, buttons=current.get("buttons"),
+                        current["text"],
+                        window_placement.bubble_anchor_rect(host),
+                        0,
+                        pet_scale=host.scale,
+                        subtitle=current.get("subtitle", ""),
+                        sticky=True,
+                        buttons=current.get("buttons"),
                     )
             elif bubble is not None:
                 # 存活但非 sticky 的 current（task_complete/turn/balance 等）：
@@ -61,9 +79,11 @@ def set_bubble_suppressed(host, suppressed: bool) -> None:
                 # 后续提醒全部被吞（队列死锁）。按原时长重挂，超时后走正常
                 # hidden → 清除 → 推进闭环。
                 bubble.show_text(
-                    current["text"], window_placement.bubble_anchor_rect(host),
+                    current["text"],
+                    window_placement.bubble_anchor_rect(host),
                     current.get("duration_ms") or 6000,
-                    pet_scale=host.scale, subtitle=current.get("subtitle", ""),
+                    pet_scale=host.scale,
+                    subtitle=current.get("subtitle", ""),
                 )
         elif current is None:
             pump = getattr(host, "_pump_alerts", None)
@@ -82,8 +102,7 @@ def set_bubble_suppressed(host, suppressed: bool) -> None:
                 pump()
 
 
-def redirect_hidden_bubble(host, text: str, *, subtitle: str = "",
-                           duration_ms: int = 3200) -> bool:
+def redirect_hidden_bubble(host, text: str, *, subtitle: str = "", duration_ms: int = 3200) -> bool:
     """桌宠隐藏时的气泡改道：交给注入的灵动岛反馈面（AppShell 经
     ``hidden_bubble_redirect`` 注入；island_chat 让岛在桌宠隐藏时代理交互面）。
 
@@ -100,20 +119,31 @@ def redirect_hidden_bubble(host, text: str, *, subtitle: str = "",
         return False
 
 
-def show_alert(host, text: str, *, subtitle: str = "", duration_ms: int = 0,
-               buttons: list[tuple[str, object]] | None = None,
-               sticky: bool = True, alert_id: str = "", priority: int = 3,
-               alert_type: str = "watchdog", metadata: dict | None = None) -> None:
+def show_alert(
+    host,
+    text: str,
+    *,
+    subtitle: str = "",
+    duration_ms: int = 0,
+    buttons: list[tuple[str, object]] | None = None,
+    sticky: bool = True,
+    alert_id: str = "",
+    priority: int = 3,
+    alert_type: str = "watchdog",
+    metadata: dict | None = None,
+) -> None:
     """提醒消息队列：需要用户注意的提醒统一入队，一次只展示一个。"""
     if not host.isVisible():
         # 桌宠隐藏：非交互提醒（无按钮）改道灵动岛反馈面；交互气泡与
         # 设置页抑制期维持原丢弃行为。
-        if not buttons and not getattr(host, "_bubble_suppressed", False) and redirect_hidden_bubble(
-                host, text, subtitle=subtitle, duration_ms=duration_ms or 3200):
+        if (
+            not buttons
+            and not getattr(host, "_bubble_suppressed", False)
+            and redirect_hidden_bubble(host, text, subtitle=subtitle, duration_ms=duration_ms or 3200)
+        ):
             return
         return
-    if host._bubble_suppressed and not alert_survives_suppression(
-            alert_type, sticky=sticky, buttons=buttons, priority=priority):
+    if host._bubble_suppressed and not alert_survives_suppression(alert_type, sticky=sticky, buttons=buttons, priority=priority):
         return
     item = {
         "id": alert_id or "",
@@ -132,7 +162,10 @@ def show_alert(host, text: str, *, subtitle: str = "", duration_ms: int = 0,
                 item[key] = metadata[key]
     logging.getLogger("dsh-pet-standalone").info(
         "alert enqueue alertType=%s priority=%s alertId=%s preemptedAlertId=%s",
-        item["alertType"], item["priority"], item["id"], item["preemptedAlertId"],
+        item["alertType"],
+        item["priority"],
+        item["id"],
+        item["preemptedAlertId"],
     )
     if alert_id:
         # 同 id 正在展示：就地替换（升级文案/按钮），不排队
@@ -145,15 +178,17 @@ def show_alert(host, text: str, *, subtitle: str = "", duration_ms: int = 0,
             host._sticky_buttons = item["buttons"]
             if item["sticky"]:
                 host._speech_bubble.show_text(
-                    item["text"], window_placement.bubble_anchor_rect(host), 0,
-                    pet_scale=host.scale, subtitle=item["subtitle"],
-                    sticky=True, buttons=item["buttons"],
+                    item["text"],
+                    window_placement.bubble_anchor_rect(host),
+                    0,
+                    pet_scale=host.scale,
+                    subtitle=item["subtitle"],
+                    sticky=True,
+                    buttons=item["buttons"],
                 )
             return
         # 同 id 在排队：移除旧条目，由新条目接管
-        host._alert_queue = deque(
-            q for q in host._alert_queue if q.get("id") != alert_id
-        )
+        host._alert_queue = deque(q for q in host._alert_queue if q.get("id") != alert_id)
     current = host._alert_current
     if current is not None and item["priority"] < int(current.get("priority", 3)):
         # High-priority interactions preempt low-priority watchdog/status
@@ -165,14 +200,15 @@ def show_alert(host, text: str, *, subtitle: str = "", duration_ms: int = 0,
         item["preemptedAlertId"] = old.get("id", "")
         logging.getLogger("dsh-pet-standalone").info(
             "alert preempted alertType=%s priority=%s alertId=%s by=%s",
-            old.get("alertType", ""), old.get("priority", 3), old.get("id", ""), item.get("id", ""),
+            old.get("alertType", ""),
+            old.get("priority", 3),
+            old.get("id", ""),
+            item.get("id", ""),
         )
         if old.get("sticky") and int(old.get("priority", 3)) >= 2:
             host._alert_queue.appendleft(old)
     host._alert_queue.append(item)
-    host._alert_queue = deque(sorted(
-        host._alert_queue, key=lambda queued: int(queued.get("priority", 3))
-    ))
+    host._alert_queue = deque(sorted(host._alert_queue, key=lambda queued: int(queued.get("priority", 3))))
     host._pump_alerts()
 
 
@@ -195,9 +231,7 @@ def resolve_alert(host, alert_id: str) -> None:
         host._pump_alerts()
         return
     # 在队列中：移除该条（不打断当前展示）
-    host._alert_queue = deque(
-        item for item in host._alert_queue if item.get("id") != alert_id
-    )
+    host._alert_queue = deque(item for item in host._alert_queue if item.get("id") != alert_id)
 
 
 def pump_alerts(host) -> None:
@@ -216,15 +250,22 @@ def pump_alerts(host) -> None:
         host._sticky_subtitle = item.get("subtitle", "")
         host._sticky_buttons = item.get("buttons")
         host._speech_bubble.show_text(
-            item["text"], window_placement.bubble_anchor_rect(host), 0,
-            pet_scale=host.scale, subtitle=item.get("subtitle", ""),
-            sticky=True, buttons=item.get("buttons"),
+            item["text"],
+            window_placement.bubble_anchor_rect(host),
+            0,
+            pet_scale=host.scale,
+            subtitle=item.get("subtitle", ""),
+            sticky=True,
+            buttons=item.get("buttons"),
         )
     else:
         duration_ms = item.get("duration_ms") or 6000
         host._speech_bubble.show_text(
-            item["text"], window_placement.bubble_anchor_rect(host), duration_ms,
-            pet_scale=host.scale, subtitle=item.get("subtitle", ""),
+            item["text"],
+            window_placement.bubble_anchor_rect(host),
+            duration_ms,
+            pet_scale=host.scale,
+            subtitle=item.get("subtitle", ""),
         )
 
 
@@ -258,6 +299,7 @@ def on_speech_bubble_hidden(host) -> None:
     sticky 恢复防抖：同一 sticky 内容在 300ms 内不重复 show_text，
     避免「审批被盖→恢复→再盖→再恢复」的卡顿循环。"""
     from .window import time as _window_time  # 兼容 seam：与 HEAD 同读 pet.window.time
+
     if not host.isVisible() or host._bubble_suppressed:
         return
     cur = host._alert_current
@@ -269,9 +311,13 @@ def on_speech_bubble_hidden(host) -> None:
                 return
             host._last_sticky_restore = now
             host._speech_bubble.show_text(
-                cur["text"], window_placement.bubble_anchor_rect(host), 0,
-                pet_scale=host.scale, subtitle=cur.get("subtitle", ""),
-                sticky=True, buttons=cur.get("buttons"),
+                cur["text"],
+                window_placement.bubble_anchor_rect(host),
+                0,
+                pet_scale=host.scale,
+                subtitle=cur.get("subtitle", ""),
+                sticky=True,
+                buttons=cur.get("buttons"),
             )
         else:
             # 限时提醒（硬失败/卡住）：展示结束，弹出下一条
@@ -281,14 +327,19 @@ def on_speech_bubble_hidden(host) -> None:
     # 旧路径兼容：sticky 审批气泡（不经队列）被盖掉后恢复
     if host._sticky_bubble_active and host._sticky_text:
         host._speech_bubble.show_text(
-            host._sticky_text, window_placement.bubble_anchor_rect(host), 0,
-            pet_scale=host.scale, subtitle=host._sticky_subtitle, sticky=True,
+            host._sticky_text,
+            window_placement.bubble_anchor_rect(host),
+            0,
+            pet_scale=host.scale,
+            subtitle=host._sticky_subtitle,
+            sticky=True,
             buttons=host._sticky_buttons,
         )
 
 
 def read_self_talk_texts(value) -> list[str]:
     from .window import DEFAULT_SELF_TALK_TEXTS
+
     if not isinstance(value, list):
         return list(DEFAULT_SELF_TALK_TEXTS)
     texts = []
@@ -301,11 +352,13 @@ def read_self_talk_texts(value) -> list[str]:
 
 def expression_style_text(host, text: str) -> str:
     from .window import DEFAULT_SELF_TALK_TEXTS
+
     """Apply the shared expression style only to built-in host-talk text."""
     if text not in DEFAULT_SELF_TALK_TEXTS:
         return text
     mode = str(host.cfg.get("dialogue_mode", "legacy") or "legacy")
     from .persona_phrases import PhrasePicker
+
     picker = getattr(host, "_expression_picker", None)
     if picker is None:
         picker = host._expression_picker = PhrasePicker()
@@ -316,9 +369,7 @@ def expression_style_text(host, text: str) -> str:
 
 def schedule_self_talk(host, *, after_display: bool = False) -> None:
     host._self_talk_timer.stop()
-    if not host._self_talk_enabled or not (
-        host._self_talk_texts or host._self_talk_images
-    ):
+    if not host._self_talk_enabled or not (host._self_talk_texts or host._self_talk_images):
         return
     delay = random.uniform(host._self_talk_min_interval, host._self_talk_max_interval)
     if after_display:
@@ -328,14 +379,13 @@ def schedule_self_talk(host, *, after_display: bool = False) -> None:
 
 def show_self_talk_text(host, text: str) -> bool:
     from .window import _set_speech_bubble_interactive
+
     if getattr(host, "_bubble_suppressed", False):
         return False
     duration_ms = int(round(host._self_talk_duration_seconds * 1000))
     anchor = window_placement.bubble_anchor_rect(host)
     _set_speech_bubble_interactive(host)
-    host._speech_bubble.show_text(
-        text, anchor, duration_ms, pet_scale=host.scale
-    )
+    host._speech_bubble.show_text(text, anchor, duration_ms, pet_scale=host.scale)
     return True
 
 
@@ -384,6 +434,7 @@ def pick_self_talk_choice(texts, images, image_chance):
 
 def show_random_self_talk(host) -> bool:
     from .window import _set_speech_bubble_interactive
+
     if getattr(host, "_bubble_suppressed", False):
         return False
 
@@ -392,23 +443,16 @@ def show_random_self_talk(host) -> bool:
         return False
 
     # 惰性剔除运行期间被删除的图片
-    live_images = [
-        path for path in host._self_talk_images
-        if path.is_file()
-    ]
+    live_images = [path for path in host._self_talk_images if path.is_file()]
     if len(live_images) != len(host._self_talk_images):
         host._self_talk_images = live_images
 
-    picked = pick_self_talk_choice(
-        host._self_talk_texts, live_images, self_talk_image_chance(host)
-    )
+    picked = pick_self_talk_choice(host._self_talk_texts, live_images, self_talk_image_chance(host))
     if picked is None:
         return False
 
     kind, value = picked
-    duration_ms = int(
-        round(host._self_talk_duration_seconds * 1000)
-    )
+    duration_ms = int(round(host._self_talk_duration_seconds * 1000))
     anchor = window_placement.bubble_anchor_rect(host)
 
     _set_speech_bubble_interactive(host)
@@ -466,7 +510,7 @@ def show_click_self_talk(host, click_name: str) -> bool:
     显示成功后把实际显示的文本一并朗读（图片气泡没有文本，自然不出声），
     使"听到的"与"看到的"永远是同一句。
     """
-    character_id = str(host.cfg.get('character', catalog.DEFAULT_CHARACTER))
+    character_id = str(host.cfg.get("character", catalog.DEFAULT_CHARACTER))
     texts = host.cfg.click_talk_texts_for(character_id, click_name)
     if texts:
         value = random.choice(texts)
@@ -482,6 +526,7 @@ def show_click_self_talk(host, click_name: str) -> bool:
 
 def on_self_talk_timeout(host) -> None:
     from .window import time as _window_time  # 兼容 seam：与 HEAD 同读 pet.window.time
+
     if _window_time.monotonic() < host._bubble_busy_until:
         # 重要气泡占用中：本次自言自语跳过，重新排队下一次
         host._schedule_self_talk()
@@ -512,6 +557,7 @@ def check_music_sing(host) -> None:
     会表现为"唱着唱着主动退出、然后静默不唱"。
     """
     from .window import SING_ANIM
+
     if not host.isVisible():
         return
     if not host._music_sing_enabled:
@@ -525,6 +571,7 @@ def check_music_sing(host) -> None:
         host._music_sing_silent_since = None
         return
     from . import music_detect
+
     playing = music_detect.is_music_playing()
     if host._music_sing_active:
         # 静音起点用 getattr 兜底读取：window.py 的行数预算已满，不新增字段。
@@ -535,9 +582,7 @@ def check_music_sing(host) -> None:
         elif silent_since is None:
             # 刚转为静音：起算宽限期，先不退出。
             host._music_sing_silent_since = time.monotonic()
-        elif (
-            time.monotonic() - silent_since >= music_sing_grace_seconds(host)
-        ):
+        elif time.monotonic() - silent_since >= music_sing_grace_seconds(host):
             host._music_sing_active = False
             host._music_sing_silent_since = None
         # 宽限期内：保持 _music_sing_active，动画继续循环。

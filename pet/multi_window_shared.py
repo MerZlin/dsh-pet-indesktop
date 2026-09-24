@@ -72,10 +72,19 @@ class MultiWindowProxy:
                 return
 
     # ---- 提醒扇出（交互式提醒：审批/问题/控制级 Watchdog）----
-    def show_alert(self, text: str, *, subtitle: str = "", duration_ms: int = 0,
-                   buttons: list | None = None, sticky: bool = True,
-                   alert_id: str = "", priority: int = 3,
-                   alert_type: str = "watchdog", metadata: dict | None = None) -> None:
+    def show_alert(
+        self,
+        text: str,
+        *,
+        subtitle: str = "",
+        duration_ms: int = 0,
+        buttons: list | None = None,
+        sticky: bool = True,
+        alert_id: str = "",
+        priority: int = 3,
+        alert_type: str = "watchdog",
+        metadata: dict | None = None,
+    ) -> None:
         """把交互式提醒入队到**首个可见窗**（多窗只弹一处，避免每只桌宠重复轰炸）。
 
         ``agent_link`` 会先 ``hasattr(win, "show_alert")`` 决定是否走队列提醒；本方法
@@ -86,16 +95,23 @@ class MultiWindowProxy:
         for w in self._visible_windows():
             method = getattr(w, "show_alert", None)
             if callable(method):
-                method(text, subtitle=subtitle, duration_ms=duration_ms,
-                       buttons=buttons, sticky=sticky, alert_id=alert_id,
-                       priority=priority, alert_type=alert_type, metadata=metadata)
+                method(
+                    text,
+                    subtitle=subtitle,
+                    duration_ms=duration_ms,
+                    buttons=buttons,
+                    sticky=sticky,
+                    alert_id=alert_id,
+                    priority=priority,
+                    alert_type=alert_type,
+                    metadata=metadata,
+                )
                 return
         # 可见窗都不支持 show_alert：退化到首个可见窗的 show_bubble
         for w in self._visible_windows():
             if hasattr(w, "show_bubble"):
                 try:
-                    w.show_bubble(text, sticky=sticky, buttons=buttons,
-                                  duration_ms=duration_ms if not sticky else 0)
+                    w.show_bubble(text, sticky=sticky, buttons=buttons, duration_ms=duration_ms if not sticky else 0)
                 except TypeError:
                     w.show_bubble(text, duration_ms=max(duration_ms, 4500))
                 return
@@ -345,12 +361,12 @@ class SharedFullscreenWatcher(QObject):
         self._thread: threading.Thread | None = None
         self._fs_last = False
         self._fs_polls = 0
+
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._loop, daemon=True, name="pet-shared-fs-watch")
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="pet-shared-fs-watch")
         self._thread.start()
         log.info("共享全屏监视线程已启动")
 
@@ -362,18 +378,13 @@ class SharedFullscreenWatcher(QObject):
 
     def _any_wants(self) -> bool:
         # 任一窗需要全屏自动隐藏或光标穿透（_watch_required 已含 Windows 平台判定）
-        return any(
-            getattr(w, "_watch_required", lambda: False)()
-            for w in self._windows())
+        return any(getattr(w, "_watch_required", lambda: False)() for w in self._windows())
 
     def _any_fullscreen_wants(self) -> bool:
-        return any(
-            getattr(w, "auto_hide_fullscreen", False) for w in self._windows())
+        return any(getattr(w, "auto_hide_fullscreen", False) for w in self._windows())
 
     def _any_cursor_wants(self) -> bool:
-        return any(
-            getattr(w, "_cursor_hidden_passthrough_enabled", lambda: False)()
-            for w in self._windows())
+        return any(getattr(w, "_cursor_hidden_passthrough_enabled", lambda: False)() for w in self._windows())
 
     def _probe_fullscreen(self) -> bool:
         try:
@@ -398,7 +409,7 @@ class SharedFullscreenWatcher(QObject):
             log.debug("共享光标状态检测瞬时异常 (%s)", exc)
         except Exception:
             try:
-                self.cursor_visibility_changed.emit('UNKNOWN')
+                self.cursor_visibility_changed.emit("UNKNOWN")
             except (RuntimeError, AttributeError) as exc:
                 log.debug("共享光标状态降级发射瞬时异常 (%s)", exc)
 
@@ -479,6 +490,7 @@ def _release_qt_lifetimes(subs: "SharedSubsystems") -> None:
     """
     try:
         from PySide6.QtCore import QCoreApplication
+
         app = QCoreApplication.instance()
         if app is None:
             return

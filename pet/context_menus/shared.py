@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Stable leaf-menu primitives shared by the two independent layouts."""
+
 from __future__ import annotations
 
 import logging
@@ -68,11 +69,7 @@ class _AnimationIconApplier(QObject):
         # setIcon() invalidates QMenu's action geometry. Doing
         # that dozens of times on a visible, scrollable menu
         # corrupts its scroll layout and blocks hover events.
-        if (
-            not submenu.isVisible()
-            and image is not None
-            and not image.isNull()
-        ):
+        if not submenu.isVisible() and image is not None and not image.isNull():
             self._action.setIcon(fitted_pet_pixmap_icon(submenu, QPixmap.fromImage(image)))
             submenu.update()
         pump = self._pump
@@ -100,9 +97,7 @@ def defer_menu_callback(menu: QMenu, callback) -> bool:
         callback()
         return False
     root = _root_menu(menu)
-    root._deferred_callbacks = list(
-        getattr(root, "_deferred_callbacks", ())
-    ) + [callback]
+    root._deferred_callbacks = list(getattr(root, "_deferred_callbacks", ())) + [callback]
     root.close()
     return True
 
@@ -110,11 +105,7 @@ def defer_menu_callback(menu: QMenu, callback) -> bool:
 def connect_action(action, callback) -> None:
     def invoke(_checked=False, action=action, callback=callback) -> None:
         parent = action.parent()
-        if (
-            bool(action.property("closeOnTrigger"))
-            and isinstance(parent, QMenu)
-            and parent.isVisible()
-        ):
+        if bool(action.property("closeOnTrigger")) and isinstance(parent, QMenu) and parent.isVisible():
             defer_menu_callback(parent, callback)
             return
         callback()
@@ -123,7 +114,11 @@ def connect_action(action, callback) -> None:
 
 
 def add_action(
-    menu: QMenu, text: str, icon_name: str | None, callback=None, *,
+    menu: QMenu,
+    text: str,
+    icon_name: str | None,
+    callback=None,
+    *,
     close_on_trigger: bool = False,
 ):
     action = menu.addAction(vector_menu_icon(menu, icon_name) if icon_name else QIcon(), text)
@@ -144,7 +139,11 @@ def add_submenu(menu: QMenu, text: str, icon_name: str | None = None) -> QMenu:
 
 
 def _populate_animation_category(
-    submenu: QMenu, pet, entries, callback, leaf_role_icons: bool,
+    submenu: QMenu,
+    pet,
+    entries,
+    callback,
+    leaf_role_icons: bool,
 ) -> None:
     """首次展开动画分类子菜单时才填充动作，避免根菜单构建时遍历 91 个动画。"""
     if getattr(submenu, "_animation_populated", False):
@@ -176,7 +175,9 @@ def _populate_animation_category(
     # the user actually opens in a two-thread pool and keep completed icons on
     # their QAction for later opens.
     def refresh_cached_icons(
-        submenu=submenu, icon_actions=tuple(icon_actions), pet=pet,
+        submenu=submenu,
+        icon_actions=tuple(icon_actions),
+        pet=pet,
     ) -> None:
         """Only alter QAction geometry before show or after hide."""
         # aboutToHide 会排队 singleShot 刷新，菜单可能已销毁
@@ -201,10 +202,7 @@ def _populate_animation_category(
             submenu._animation_icon_requested = set()
 
         def pump() -> None:
-            while (
-                len(submenu._animation_icon_workers) < 2
-                and submenu._animation_icon_pending
-            ):
+            while len(submenu._animation_icon_workers) < 2 and submenu._animation_icon_pending:
                 action, animation_name = submenu._animation_icon_pending.pop(0)
                 if animation_name in submenu._animation_icon_requested:
                     continue
@@ -215,9 +213,7 @@ def _populate_animation_category(
             worker = _AnimationIconWorker(loader, animation_name)
             # 解码完成信号经队列投递到 GUI 线程的 applier 槽：
             # 菜单销毁时连接随 applier（submenu 子对象）自动断开。
-            applier = _AnimationIconApplier(
-                submenu, action, worker, pump, parent=submenu
-            )
+            applier = _AnimationIconApplier(submenu, action, worker, pump, parent=submenu)
             worker.signals.ready.connect(applier.on_ready)
             submenu._animation_icon_workers.append(worker)
             submenu._animation_icon_pool.start(worker)
@@ -226,9 +222,7 @@ def _populate_animation_category(
 
     submenu.aboutToShow.connect(refresh_cached_icons)
     submenu.aboutToShow.connect(start_loading)
-    submenu.aboutToHide.connect(
-        lambda refresh=refresh_cached_icons, submenu=submenu: QTimer.singleShot(0, submenu, refresh)
-    )
+    submenu.aboutToHide.connect(lambda refresh=refresh_cached_icons, submenu=submenu: QTimer.singleShot(0, submenu, refresh))
     pool = QThreadPool(submenu)
     pool.setMaxThreadCount(2)
     submenu._animation_icon_pool = pool
@@ -238,7 +232,11 @@ def _populate_animation_category(
 
 
 def build_animation_categories(
-    menu: QMenu, pet, *, icons: bool, legacy_labels: bool = False,
+    menu: QMenu,
+    pet,
+    *,
+    icons: bool,
+    legacy_labels: bool = False,
     leaf_role_icons: bool = False,
 ) -> None:
     categories = (
@@ -258,10 +256,7 @@ def build_animation_categories(
         if icons:
             submenu.setIcon(vector_menu_icon(menu, "play"))
         # 首次展开该分类子菜单时才填充动作：根菜单构建不再遍历 91 个动画
-        submenu.aboutToShow.connect(
-            lambda s=submenu, e=entries, c=callback, l=leaf_role_icons, p=pet:
-                _populate_animation_category(s, p, e, c, l)
-        )
+        submenu.aboutToShow.connect(lambda s=submenu, e=entries, c=callback, l=leaf_role_icons, p=pet: _populate_animation_category(s, p, e, c, l))
 
 
 def build_speed_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
@@ -284,8 +279,8 @@ def build_character_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
     group.setExclusive(True)
     current = str(pet.cfg.get("character", catalog.DEFAULT_CHARACTER))
     for character_id in catalog.list_available_characters():
-        alias_fn = getattr(pet.cfg, 'character_alias', None)
-        alias = alias_fn(character_id) if callable(alias_fn) else ''
+        alias_fn = getattr(pet.cfg, "character_alias", None)
+        alias = alias_fn(character_id) if callable(alias_fn) else ""
         label = alias or catalog.character_display_name(character_id)
         action = submenu.addAction(label)
         action.setCheckable(True)
@@ -304,14 +299,15 @@ def build_character_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
 def add_proactive_menu(menu: QMenu, pet) -> None:
     """主动识屏二级菜单（仅 Windows 且有聊天/视觉能力时显示）。"""
     import sys as _sys
-    if _sys.platform != 'win32':
+
+    if _sys.platform != "win32":
         return
-    if getattr(pet, 'on_open_chat', None) is None:
+    if getattr(pet, "on_open_chat", None) is None:
         return
     from ..proactive import effective_proactive_config
 
     sub = add_submenu(menu, "主动识屏", None)
-    pro_cfg = effective_proactive_config(pet.cfg.get('proactive_screen', {}))
+    pro_cfg = effective_proactive_config(pet.cfg.get("proactive_screen", {}))
 
     def _toggle(text, checked, handler):
         act = sub.addAction(text)
@@ -320,30 +316,26 @@ def add_proactive_menu(menu: QMenu, pet) -> None:
         act.toggled.connect(handler)
         return act
 
-    _toggle('开启主动识屏', pro_cfg.get('enabled', False), pet.toggle_proactive_enabled)
-    _toggle('鼠标穿透时仍允许主动识屏', pro_cfg.get('allow_when_mouse_through', True),
-            lambda on: pet.set_proactive_option('allow_when_mouse_through', on))
-    _toggle('触发前先兆提示', pro_cfg.get('pre_cue', True),
-            lambda on: pet.set_proactive_option('pre_cue', on))
-    _toggle('仅当我闲置时触发', pro_cfg.get('require_idle', False),
-            lambda on: pet.set_proactive_option('require_idle', on))
-    _toggle('dry-run 验证模式', pro_cfg.get('dry_run', False),
-            lambda on: pet.set_proactive_option('dry_run', on))
+    _toggle("开启主动识屏", pro_cfg.get("enabled", False), pet.toggle_proactive_enabled)
+    _toggle("鼠标穿透时仍允许主动识屏", pro_cfg.get("allow_when_mouse_through", True), lambda on: pet.set_proactive_option("allow_when_mouse_through", on))
+    _toggle("触发前先兆提示", pro_cfg.get("pre_cue", True), lambda on: pet.set_proactive_option("pre_cue", on))
+    _toggle("仅当我闲置时触发", pro_cfg.get("require_idle", False), lambda on: pet.set_proactive_option("require_idle", on))
+    _toggle("dry-run 验证模式", pro_cfg.get("dry_run", False), lambda on: pet.set_proactive_option("dry_run", on))
     sub.addSeparator()
-    open_settings = getattr(pet, 'on_open_modern_settings', None) or getattr(pet, 'on_open_legacy_settings', None)
+    open_settings = getattr(pet, "on_open_modern_settings", None) or getattr(pet, "on_open_legacy_settings", None)
     if open_settings is not None:
-        add_action(sub, '打开设置…', None, open_settings, close_on_trigger=True)
+        add_action(sub, "打开设置…", None, open_settings, close_on_trigger=True)
 
 
 def add_agent_link_menu(menu: QMenu, pet) -> None:
     """Agent 联动二级菜单（4 个 Agent 独立开关 + 自定义 Agent 三级子菜单 + 气泡提醒选项，失败/拒绝自动回滚勾选）。"""
     sub = add_submenu(menu, "Agent 联动", None)
-    agent_cfg = dict(pet.cfg.get('agent_link', {}))
+    agent_cfg = dict(pet.cfg.get("agent_link", {}))
     for agent_key, agent_label in (
-        ('dsh', 'DeepSeek Harness (DSH)'),
-        ('claude', 'Claude Code'),
-        ('cursor', 'Cursor'),
-        ('opencode', 'OpenCode'),
+        ("dsh", "DeepSeek Harness (DSH)"),
+        ("claude", "Claude Code"),
+        ("cursor", "Cursor"),
+        ("opencode", "OpenCode"),
     ):
         act = sub.addAction(agent_label)
         act.setCheckable(True)
@@ -351,15 +343,12 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
         act.toggled.connect(lambda on, k=agent_key, a=act: pet.toggle_agent_link(k, on, a))
     # 自定义联动 Agent（config.json 的 agent_link.custom_agents，只读监听）：
     # 收进三级子菜单，避免用户配了多个自定义通道后把联动菜单撑长。
-    custom_items = [
-        item for item in (agent_cfg.get('custom_agents') or [])
-        if str(item.get('key') or '')
-    ]
+    custom_items = [item for item in (agent_cfg.get("custom_agents") or []) if str(item.get("key") or "")]
     if custom_items:
         custom_sub = add_submenu(sub, "自定义联动 Agent", None)
         for item in custom_items:
-            key = str(item.get('key'))
-            act = custom_sub.addAction(str(item.get('name') or key))
+            key = str(item.get("key"))
+            act = custom_sub.addAction(str(item.get("name") or key))
             act.setCheckable(True)
             act.setChecked(bool(agent_cfg.get(key, False)))
             act.toggled.connect(lambda on, k=key, a=act: pet.toggle_agent_link(k, on, a))
@@ -367,21 +356,19 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
     # 事件气泡触发概率：与设置页「事件气泡触发概率」同一份数据（agent_link.report_gates）。
     # 菜单只做 0/1 两端快捷入口（勾选=1.0 全报，取消=0.0 静音），细粒度概率
     # 由设置页滑块决定；勾选态按当前概率是否 > 0 呈现，并提示当前值。
-    gate_cfg = agent_cfg.get('report_gates')
+    gate_cfg = agent_cfg.get("report_gates")
     if not isinstance(gate_cfg, dict):
         gate_cfg = {}
     for gate_key, opt_label in (
-        ('state', '开始干活气泡提醒'),
-        ('done', '任务完成气泡提醒'),
-        ('activity', '过程汇报气泡（正在读文件/跑命令…）'),
+        ("state", "开始干活气泡提醒"),
+        ("done", "任务完成气泡提醒"),
+        ("activity", "过程汇报气泡（正在读文件/跑命令…）"),
     ):
         probability = float(gate_cfg.get(gate_key, REPORT_GATE_DEFAULTS[gate_key]) or 0.0)
         act = sub.addAction(opt_label)
         act.setCheckable(True)
         act.setChecked(probability > 0.0)
-        act.setToolTip(
-            f"当前通过概率 {probability:.2f}；设置页「事件气泡触发概率」可逐类调 0.00–1.00"
-        )
+        act.setToolTip(f"当前通过概率 {probability:.2f}；设置页「事件气泡触发概率」可逐类调 0.00–1.00")
         act.toggled.connect(lambda on, k=gate_key: pet.set_agent_link_option(k, on))
 
 
@@ -450,6 +437,7 @@ def add_autostart(menu: QMenu, pet=None, *, icons: bool = True):
     action = add_action(menu, "开机自启", "autostart" if icons else None)
     action.setCheckable(True)
     action.setChecked(autostart_mod.is_enabled())
+
     def toggle(enabled: bool) -> None:
         autostart_mod.set_enabled(enabled)
         if pet is not None:
@@ -505,9 +493,7 @@ def add_edge_probe(menu: QMenu, pet, *, icons: bool = True):
     action = add_action(menu, "边缘探头", "corner" if icons else None)
     action.setCheckable(True)
     action.setChecked(bool(pet.cfg.get("edge_probe_enabled", False)))
-    action.toggled.connect(
-        lambda enabled, pet=pet: pet.set_edge_probe_enabled(enabled)
-    )
+    action.toggled.connect(lambda enabled, pet=pet: pet.set_edge_probe_enabled(enabled))
     return action
 
 
@@ -526,15 +512,18 @@ def add_harness(menu: QMenu, pet, *, icons: bool = True):
     # 三个动作都 close_on_trigger：菜单先关闭、回调延迟到菜单关闭后执行——
     # 重启/停止的确认框是模态框，macOS 原生菜单跟踪会话中弹模态框会被
     # AppKit 抑制（与设置对话框首次点击无反应同源）。
-    add_action(submenu, "启动并打开页面", start_icon, lambda: launch_harness_gui(pet),
-               close_on_trigger=True)
+    add_action(submenu, "启动并打开页面", start_icon, lambda: launch_harness_gui(pet), close_on_trigger=True)
     add_action(
-        submenu, "重启服务", "play" if icons else None,
+        submenu,
+        "重启服务",
+        "play" if icons else None,
         lambda: launch_harness_gui(pet, action="restart"),
         close_on_trigger=True,
     )
     add_action(
-        submenu, "停止服务", "quit" if icons else None,
+        submenu,
+        "停止服务",
+        "quit" if icons else None,
         lambda: launch_harness_gui(pet, action="stop"),
         close_on_trigger=True,
     )
@@ -674,7 +663,7 @@ def _launch_player_and_play(player_key: str, pet) -> None:
                     QProcess.startDetached(exe, [])
             except Exception:
                 return
-            for _ in range(10):          # 最多等 10 秒
+            for _ in range(10):  # 最多等 10 秒
                 time.sleep(1.0)
                 if now_playing.play_session_for(exe_name):
                     return
@@ -702,24 +691,33 @@ def add_music_pause(menu: QMenu, pet, *, icons: bool = True):
     from .. import now_playing
 
     return add_action(
-        menu, "让人家歇一会儿嘛（暂停 / 播放）", "pause" if icons else None,
-        lambda: _run_off_main(now_playing.toggle_play_pause), close_on_trigger=True,
+        menu,
+        "让人家歇一会儿嘛（暂停 / 播放）",
+        "pause" if icons else None,
+        lambda: _run_off_main(now_playing.toggle_play_pause),
+        close_on_trigger=True,
     )
 
 
 def add_music_next(menu: QMenu, pet, *, icons: bool = True):
     """音乐子菜单：切歌。"""
     return add_action(
-        menu, "给主人换一首（切歌）", "play" if icons else None,
-        lambda: _run_off_main(lambda: _skip_track(pet, "next")), close_on_trigger=True,
+        menu,
+        "给主人换一首（切歌）",
+        "play" if icons else None,
+        lambda: _run_off_main(lambda: _skip_track(pet, "next")),
+        close_on_trigger=True,
     )
 
 
 def add_music_prev(menu: QMenu, pet, *, icons: bool = True):
     """音乐子菜单：切到上一首。"""
     return add_action(
-        menu, "人家想再听刚才那首（上一首）", "play" if icons else None,
-        lambda: _run_off_main(lambda: _skip_track(pet, "previous")), close_on_trigger=True,
+        menu,
+        "人家想再听刚才那首（上一首）",
+        "play" if icons else None,
+        lambda: _run_off_main(lambda: _skip_track(pet, "previous")),
+        close_on_trigger=True,
     )
 
 
@@ -769,16 +767,11 @@ def add_music_lyric_align(menu: QMenu, pet, *, icons: bool = True):
     """
     icon = "play" if icons else None
     submenu = add_submenu(menu, "歌词对齐", icon)
-    add_action(submenu, "回到开头（现在这句算开头）", icon,
-               lambda: _align_lyric(pet, "start"), close_on_trigger=True)
-    add_action(submenu, "上一句", icon,
-               lambda: _align_lyric(pet, "prev"), close_on_trigger=True)
-    add_action(submenu, "下一句", icon,
-               lambda: _align_lyric(pet, "next"), close_on_trigger=True)
-    add_action(submenu, "后退 5 秒", icon,
-               lambda: _align_lyric(pet, "back5"), close_on_trigger=True)
-    add_action(submenu, "前进 5 秒", icon,
-               lambda: _align_lyric(pet, "fwd5"), close_on_trigger=True)
+    add_action(submenu, "回到开头（现在这句算开头）", icon, lambda: _align_lyric(pet, "start"), close_on_trigger=True)
+    add_action(submenu, "上一句", icon, lambda: _align_lyric(pet, "prev"), close_on_trigger=True)
+    add_action(submenu, "下一句", icon, lambda: _align_lyric(pet, "next"), close_on_trigger=True)
+    add_action(submenu, "后退 5 秒", icon, lambda: _align_lyric(pet, "back5"), close_on_trigger=True)
+    add_action(submenu, "前进 5 秒", icon, lambda: _align_lyric(pet, "fwd5"), close_on_trigger=True)
     return submenu
 
 
@@ -800,7 +793,9 @@ def _music_player_builder(player_key: str):
         state, _path = music_players.cached_player(player_key, manual)
         missing = state == music_players.CACHED_MISSING
         action = add_action(
-            menu, f"打开{label}给主人放歌", None,
+            menu,
+            f"打开{label}给主人放歌",
+            None,
             (lambda: _launch_player_and_play(player_key, pet)) if not missing else None,
             close_on_trigger=True,
         )

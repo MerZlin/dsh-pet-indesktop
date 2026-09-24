@@ -592,8 +592,12 @@ class ChatWindow(QDialog):
     def _set_background_surface_transparency(self, enabled: bool) -> None:
         """Let the wallpaper show through the classic scroll viewport."""
         for widget in (
-            self.phone_shell, self.scroll, self.scroll.viewport(), self.message_view,
-            self.empty_page, self.timeline_host,
+            self.phone_shell,
+            self.scroll,
+            self.scroll.viewport(),
+            self.message_view,
+            self.empty_page,
+            self.timeline_host,
         ):
             widget.setAutoFillBackground(not enabled)
 
@@ -606,10 +610,7 @@ class ChatWindow(QDialog):
         self._bg_opacity = max(10, min(100, opacity)) / 100.0
         fill = str(self.config.get("chat_background_fill", "cover") or "cover")
         self._bg_fill = fill if fill in {"cover", "contain", "stretch"} else "cover"
-        self._bg_theme = (
-            chat_themes.get_theme(self._bg_value[8:])
-            if self._bg_value.startswith("builtin:") else None
-        )
+        self._bg_theme = chat_themes.get_theme(self._bg_value[8:]) if self._bg_value.startswith("builtin:") else None
         return chat_themes.resolve_background_pixmap(self._bg_value)
 
     def paintEvent(self, event) -> None:  # noqa: N802
@@ -624,15 +625,26 @@ class ChatWindow(QDialog):
         painter.fillPath(clip, QColor("#ffffff"))
         if self._bg_scaled is None or self._bg_scaled_size != target.size():
             self._bg_scaled = chat_themes.scale_background_pixmap(
-                self._bg_pixmap, target.width(), target.height(), self._bg_fill,
+                self._bg_pixmap,
+                target.width(),
+                target.height(),
+                self._bg_fill,
             )
             self._bg_scaled_size = target.size()
         focus = chat_themes.background_focus_rect(
-            self._bg_theme, self.config.get('chat_bg_crops', {}), self._bg_value,
+            self._bg_theme,
+            self.config.get("chat_bg_crops", {}),
+            self._bg_value,
         )
         x, y = chat_themes.background_draw_offset(
-            target.x(), target.y(), target.width(), target.height(),
-            self._bg_scaled.width(), self._bg_scaled.height(), focus, self._bg_fill,
+            target.x(),
+            target.y(),
+            target.width(),
+            target.height(),
+            self._bg_scaled.width(),
+            self._bg_scaled.height(),
+            focus,
+            self._bg_fill,
         )
         painter.setOpacity(self._bg_opacity)
         painter.drawPixmap(x, y, self._bg_scaled)
@@ -797,7 +809,10 @@ class ChatWindow(QDialog):
     def rename_current_session(self) -> None:
         """重命名当前会话（与新版窗口一致的交互：输入框预填当前标题）。"""
         title, accepted = QInputDialog.getText(
-            self, "重命名会话", "会话名称", text=_short_title(self.session),
+            self,
+            "重命名会话",
+            "会话名称",
+            text=_short_title(self.session),
         )
         if not accepted:
             return
@@ -847,9 +862,7 @@ class ChatWindow(QDialog):
         正在生成回答时不插入，避免与在飞请求的流式输出交错。"""
         if self.service.busy:
             return
-        synced, absorbed = self.store.append_messages(
-            self.session, [ChatMessage("user", user_text), ChatMessage("assistant", reply)]
-        )
+        synced, absorbed = self.store.append_messages(self.session, [ChatMessage("user", user_text), ChatMessage("assistant", reply)])
         if synced is None:
             self.session.messages.append(ChatMessage("user", user_text))
             self.session.messages.append(ChatMessage("assistant", reply))
@@ -896,9 +909,7 @@ class ChatWindow(QDialog):
             return
         self.input.clear()
         # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」
-        synced, absorbed = self.store.append_message(
-            self.session, ChatMessage("user", text)
-        )
+        synced, absorbed = self.store.append_message(self.session, ChatMessage("user", text))
         if synced is None:
             self.session.messages.append(ChatMessage("user", text))
         else:
@@ -949,9 +960,7 @@ class ChatWindow(QDialog):
 
     def _show_system_notice(self, title: str, message: str, *, on_click=None) -> None:
         """仅在聊天窗口不是当前活动窗口时弹系统通知；点击默认跳回本窗口。"""
-        if (self._system_notifier is None
-                or not bool(self.config.get("system_notifications_enabled", True))
-                or self.isActiveWindow()):
+        if self._system_notifier is None or not bool(self.config.get("system_notifications_enabled", True)) or self.isActiveWindow():
             return
         try:
             self._system_notifier(title, message, on_click=on_click or self._focus_chat)
@@ -961,11 +970,7 @@ class ChatWindow(QDialog):
     @staticmethod
     def _looks_like_authorization_error(text: str) -> bool:
         lowered = str(text or "").lower()
-        return any(
-            token in lowered
-            for token in ("401", "403", "unauthorized", "authentication", "api key",
-                          "认证失败", "未授权", "授权")
-        )
+        return any(token in lowered for token in ("401", "403", "unauthorized", "authentication", "api key", "认证失败", "未授权", "授权"))
 
     def notify_authorization_required(self, message: str = "有一条需要授权或确认的请求，点击查看。") -> None:
         """供“需要授权/审批”类事件调用：切走窗口时弹系统通知并跳回聊天页。"""
@@ -1065,6 +1070,7 @@ class ChatWindow(QDialog):
         # 切会话后布局更新可能晚于当前事件循环拍；加一拍兜底，
         # 保证切回长会话时落在底部（与新版窗口一致）。
         from PySide6.QtCore import QTimer
+
         QTimer.singleShot(80, self, lambda bar=bar: bar.setValue(bar.maximum()))
 
     def resizeEvent(self, event) -> None:

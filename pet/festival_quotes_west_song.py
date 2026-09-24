@@ -35,18 +35,18 @@ docstring 列清单——集中清单会随增删悄悄漂移，而该清单要�
 QUOTES_WEST_SONG: dict[str, tuple[str, ...]] = {
     # 平安夜（12/24）：静谧、温暖、团聚
     "christmas_eve": (
-        "Have yourself a merry little Christmas, let your heart be light.",      # Have Yourself a Merry Little Christmas (1944), Hugh Martin & Ralph Blane
+        "Have yourself a merry little Christmas, let your heart be light.",  # Have Yourself a Merry Little Christmas (1944), Hugh Martin & Ralph Blane
         "Chestnuts roasting on an open fire, Jack Frost nipping at your nose.",  # The Christmas Song (1945), Mel Tormé & Robert Wells
         "Oh the weather outside is frightful, but the fire is so delightful.",  # Let It Snow! Let It Snow! Let It Snow! (1945), Sammy Cahn & Jule Styne
         "I'm dreaming of a white Christmas, just like the ones I used to know.",  # White Christmas (1942), Irving Berlin
-        "Sleigh bells ring, are you listening?",                                # Winter Wonderland (1934), Felix Bernard & Richard B. Smith
+        "Sleigh bells ring, are you listening?",  # Winter Wonderland (1934), Felix Bernard & Richard B. Smith
     ),
     # 圣诞节（12/25）：欢庆、祝福、赠礼
     "christmas": (
-        "All I want for Christmas is you.",                                     # All I Want for Christmas Is You (1994), Mariah Carey & Walter Afanasieff
-        "You better watch out, you better not cry.",                            # Santa Claus Is Comin' to Town (1934), J. Fred Coots & Haven Gillespie
-        "Rockin' around the Christmas tree at the Christmas party hop.",        # Rockin' Around the Christmas Tree (1958), Johnny Marks
+        "All I want for Christmas is you.",  # All I Want for Christmas Is You (1994), Mariah Carey & Walter Afanasieff
+        "You better watch out, you better not cry.",  # Santa Claus Is Comin' to Town (1934), J. Fred Coots & Haven Gillespie
+        "Rockin' around the Christmas tree at the Christmas party hop.",  # Rockin' Around the Christmas Tree (1958), Johnny Marks
         "Rudolph with your nose so bright, won't you guide my sleigh tonight?",  # Rudolph the Red-Nosed Reindeer (1949), Johnny Marks
-        "Last Christmas, I gave you my heart.",                                 # Last Christmas (1984), George Michael
+        "Last Christmas, I gave you my heart.",  # Last Christmas (1984), George Michael
     ),
 }

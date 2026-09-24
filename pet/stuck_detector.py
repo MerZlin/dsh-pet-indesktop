@@ -27,18 +27,18 @@ log = logging.getLogger("dsh-pet-standalone")
 # ---------------------------------------------------------------------------
 
 # 卡住评分规则分值
-SCORE_CONSECUTIVE_FAILURES = 1      # 同一任务连续 2 次工具失败
-SCORE_REPEATED_TIMEOUTS = 1         # 60~90s 内 2 次 timeout
-SCORE_SAME_GOAL_LOOP = 1            # 连续 3 次工具调用围绕同一目标
-SCORE_SIMILAR_ERROR_TEXT = 1        # 连续失败错误文本高度相似
-SCORE_RETRY_LANGUAGE = 1            # 模型文本出现重试措辞
-SCORE_NO_PROGRESS_SAME_CAUSE = 2    # 相同根因连续 3 次无改善
+SCORE_CONSECUTIVE_FAILURES = 1  # 同一任务连续 2 次工具失败
+SCORE_REPEATED_TIMEOUTS = 1  # 60~90s 内 2 次 timeout
+SCORE_SAME_GOAL_LOOP = 1  # 连续 3 次工具调用围绕同一目标
+SCORE_SIMILAR_ERROR_TEXT = 1  # 连续失败错误文本高度相似
+SCORE_RETRY_LANGUAGE = 1  # 模型文本出现重试措辞
+SCORE_NO_PROGRESS_SAME_CAUSE = 2  # 相同根因连续 3 次无改善
 
 # 默认阈值
-DEFAULT_WORRIED_THRESHOLD = 3       # stuck_score >= 3 → 担忧动画
-DEFAULT_INTERVENE_THRESHOLD = 5     # stuck_score >= 5 → 建议介入提醒
-DEFAULT_WINDOW_SECONDS = 90.0       # 滑动窗口（秒）
-DEFAULT_COOLDOWN_SECONDS = 300.0    # 同 Agent 提醒冷却
+DEFAULT_WORRIED_THRESHOLD = 3  # stuck_score >= 3 → 担忧动画
+DEFAULT_INTERVENE_THRESHOLD = 5  # stuck_score >= 5 → 建议介入提醒
+DEFAULT_WINDOW_SECONDS = 90.0  # 滑动窗口（秒）
+DEFAULT_COOLDOWN_SECONDS = 300.0  # 同 Agent 提醒冷却
 
 # 重试措辞正则
 _RETRY_TEXT_RE = re.compile(
@@ -59,9 +59,8 @@ _TIMEOUT_RE = re.compile(
 _ERROR_SIMILARITY_THRESHOLD = 0.55
 
 # 默认提醒文案
-DEFAULT_STUCK_REMINDER = (
-    "主人，{name} 好像卡在环境/网络问题上转圈圈了…… 人工介入可能更快哦。"
-)
+DEFAULT_STUCK_REMINDER = "主人，{name} 好像卡在环境/网络问题上转圈圈了…… 人工介入可能更快哦。"
+
 
 # 干预原因代码
 class StuckReason(str, Enum):
@@ -72,12 +71,30 @@ class StuckReason(str, Enum):
     RETRY_LANGUAGE = "retry_language"
     NO_PROGRESS_SAME_CAUSE = "no_progress_same_root_cause"
 
+
 # 「同一目标」规则只看动作型工具：命令（带 argv0 指纹）或明确的动作工具。
 # 只读观察工具（read/grep/glob/…）反复调用是正常探索，不视为钻牛角尖。
 _ACTION_TOOLS = {
-    "bash", "shell", "pwsh", "powershell", "exec", "command", "run",
-    "pip", "pip3", "npm", "npx", "pnpm", "curl", "wget", "install",
-    "webfetch", "fetch", "web_search", "websearch", "browser",
+    "bash",
+    "shell",
+    "pwsh",
+    "powershell",
+    "exec",
+    "command",
+    "run",
+    "pip",
+    "pip3",
+    "npm",
+    "npx",
+    "pnpm",
+    "curl",
+    "wget",
+    "install",
+    "webfetch",
+    "fetch",
+    "web_search",
+    "websearch",
+    "browser",
 }
 
 
@@ -89,15 +106,17 @@ def _is_goal_candidate(e) -> bool:
         return True
     return e.tool.lower() in _ACTION_TOOLS
 
+
 # 严重程度
 class StuckSeverity(int, Enum):
-    WORRIED = 1          # 担忧——只播动画，不弹气泡
-    RECOMMEND = 2        # 建议介入——动画 + 持续提醒气泡
+    WORRIED = 1  # 担忧——只播动画，不弹气泡
+    RECOMMEND = 2  # 建议介入——动画 + 持续提醒气泡
 
 
 # ---------------------------------------------------------------------------
 # 辅助函数
 # ---------------------------------------------------------------------------
+
 
 @lru_cache(maxsize=512)
 def _normalize_error(text: str) -> str:
@@ -119,8 +138,10 @@ def _bigram_jaccard(a: str, b: str) -> float:
     """两个字符串的字符二元组 Jaccard 相似度（0~1）。"""
     if not a or not b:
         return 0.0
+
     def bigrams(s: str) -> set[str]:
-        return {s[i:i+2] for i in range(len(s) - 1)}
+        return {s[i : i + 2] for i in range(len(s) - 1)}
+
     ba = bigrams(a)
     bb = bigrams(b)
     if not ba and not bb:
@@ -155,9 +176,13 @@ def _error_code_fingerprint(record: dict) -> str:
         return ec
     # 从错误文本中提取常见错误码模式
     et = str(record.get("errorMessage", "") or "")
-    m = re.search(r"\b(ECONNREFUSED|ECONNRESET|EAI_AGAIN|ETIMEDOUT|"
-                  r"ESOCKETTIMEDOUT|ENOTFOUND|EACCES|EPERM|ENOENT|"
-                  r"HTTP_4\d{2}|HTTP_5\d{2}|4\d{2}|5\d{2})\b", et, re.IGNORECASE)
+    m = re.search(
+        r"\b(ECONNREFUSED|ECONNRESET|EAI_AGAIN|ETIMEDOUT|"
+        r"ESOCKETTIMEDOUT|ENOTFOUND|EACCES|EPERM|ENOENT|"
+        r"HTTP_4\d{2}|HTTP_5\d{2}|4\d{2}|5\d{2})\b",
+        et,
+        re.IGNORECASE,
+    )
     if m:
         return m.group(1).upper()
     return ""
@@ -167,11 +192,11 @@ def _error_code_fingerprint(record: dict) -> str:
 # 工具事件快照（滑动窗口中的一条记录）
 # ---------------------------------------------------------------------------
 
+
 class ToolEvent:
     """滑动窗口中的一条工具事件快照。"""
 
-    __slots__ = ("ts", "tool", "args_key", "ok", "duration_ms", "error_code",
-                 "error_text", "is_timeout", "event_type")
+    __slots__ = ("ts", "tool", "args_key", "ok", "duration_ms", "error_code", "error_text", "is_timeout", "event_type")
 
     def __init__(self, ts: float, record: dict) -> None:
         self.ts = ts
@@ -189,6 +214,7 @@ class ToolEvent:
 # ---------------------------------------------------------------------------
 # 卡住检测器
 # ---------------------------------------------------------------------------
+
 
 class StuckDetector(QObject):
     """Agent 卡住检测器：消费桥接事件，输出卡住评分与干预建议。
@@ -381,6 +407,7 @@ class StuckDetector(QObject):
         goal_events = [e for e in window if _is_goal_candidate(e) and e.event_type == "tool/call"]
         if len(goal_events) >= 3:
             from collections import Counter
+
             recent_goals = goal_events[-6:]
             fp_counts = Counter(_goal_fingerprint(e.tool, e.args_key) for e in recent_goals)
             most_common = fp_counts.most_common(1)
@@ -402,8 +429,7 @@ class StuckDetector(QObject):
 
         # +1 模型文本出现重试措辞，或窗口内出现过 LLM 层重试（llm/retry）
         last_text = self._last_assistant_text.get(agent_key, "")
-        retry_evidence = bool(last_text and _RETRY_TEXT_RE.search(last_text)) or \
-            any(e.event_type == "llm/retry" for e in window)
+        retry_evidence = bool(last_text and _RETRY_TEXT_RE.search(last_text)) or any(e.event_type == "llm/retry" for e in window)
         if retry_evidence:
             score += SCORE_RETRY_LANGUAGE
             reasons.append(StuckReason.RETRY_LANGUAGE)
@@ -412,19 +438,16 @@ class StuckDetector(QObject):
         # 检查最近的失败是否共享同一错误码指纹，且无成功间隔
         if len(failures) >= 3:
             recent_fails = failures[-3:]
-            fps = [_error_code_fingerprint({"errorCode": e.error_code, "errorMessage": e.error_text})
-                   for e in recent_fails]
+            fps = [_error_code_fingerprint({"errorCode": e.error_code, "errorMessage": e.error_text}) for e in recent_fails]
             # 检查是否有至少 3 个相同的非空指纹
             from collections import Counter
+
             fp_counts = Counter(f for f in fps if f)
             if fp_counts and fp_counts.most_common(1)[0][1] >= 3:
                 # 确认中间没有成功（只按结果事件计；tool/call / llm/retry 不算成功）
                 fail_indices = [i for i, e in enumerate(outcome_events) if not e.ok][-3:]
                 if len(fail_indices) >= 3:
-                    has_success_between = any(
-                        outcome_events[i].ok
-                        for i in range(fail_indices[0], fail_indices[-1] + 1)
-                    )
+                    has_success_between = any(outcome_events[i].ok for i in range(fail_indices[0], fail_indices[-1] + 1))
                     if not has_success_between:
                         score += SCORE_NO_PROGRESS_SAME_CAUSE
                         reasons.append(StuckReason.NO_PROGRESS_SAME_CAUSE)
@@ -446,25 +469,31 @@ class StuckDetector(QObject):
                 self._last_intervene_score[agent_key] = score
                 # 选最严重的原因为主原因
                 primary = self._pick_primary_reason(reasons, score)
-                self.intervention_recommended.emit(agent_key, {
-                    "type": "pet/intervention-recommended",
-                    "reason": primary,
-                    "severity": StuckSeverity.RECOMMEND,
-                    "score": score,
-                    "reasons": reasons,
-                })
+                self.intervention_recommended.emit(
+                    agent_key,
+                    {
+                        "type": "pet/intervention-recommended",
+                        "reason": primary,
+                        "severity": StuckSeverity.RECOMMEND,
+                        "score": score,
+                        "reasons": reasons,
+                    },
+                )
         elif score >= self._worried_threshold:
             # 担忧等级（仅动画，无气泡）
             # 不频繁发射：只在分数首次进入此区间时
             if old_score < self._worried_threshold:
                 primary = self._pick_primary_reason(reasons, score)
-                self.intervention_recommended.emit(agent_key, {
-                    "type": "pet/intervention-recommended",
-                    "reason": primary,
-                    "severity": StuckSeverity.WORRIED,
-                    "score": score,
-                    "reasons": reasons,
-                })
+                self.intervention_recommended.emit(
+                    agent_key,
+                    {
+                        "type": "pet/intervention-recommended",
+                        "reason": primary,
+                        "severity": StuckSeverity.WORRIED,
+                        "score": score,
+                        "reasons": reasons,
+                    },
+                )
         else:
             # 分数回到正常区间
             if old_score > 0 and old_score >= self._worried_threshold:
@@ -536,6 +565,7 @@ class StuckDetector(QObject):
 # ---------------------------------------------------------------------------
 # 帮助函数：生成提醒文案
 # ---------------------------------------------------------------------------
+
 
 def stuck_reminder_text(agent_name: str, custom_text: str = "") -> str:
     """生成卡住建议介入文案。"""

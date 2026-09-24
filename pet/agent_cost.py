@@ -131,7 +131,7 @@ class AgentCostTracker:
         baseline = self._baselines.pop(agent_key, None)
         self._busy.discard(agent_key)
         if not self._busy:
-            self._saw_concurrent = False   # 全部结束，复位
+            self._saw_concurrent = False  # 全部结束，复位
         if baseline is None:
             return None
         delta = max(0.0, baseline - float(total))

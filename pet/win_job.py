@@ -35,7 +35,7 @@ import threading
 
 logger = logging.getLogger(__name__)
 
-_IS_WINDOWS = sys.platform == 'win32'
+_IS_WINDOWS = sys.platform == "win32"
 
 # JobObjectExtendedLimitInformation（winnt.h 的枚举序号；传给
 # SetInformationJobObject 的 JobObjectInfoClass 参数）
@@ -49,42 +49,42 @@ _PROCESS_TERMINATE = 0x0001
 
 class _IO_COUNTERS(ctypes.Structure):
     _fields_ = [
-        ('ReadOperationCount', ctypes.c_ulonglong),
-        ('WriteOperationCount', ctypes.c_ulonglong),
-        ('OtherOperationCount', ctypes.c_ulonglong),
-        ('ReadTransferCount', ctypes.c_ulonglong),
-        ('WriteTransferCount', ctypes.c_ulonglong),
-        ('OtherTransferCount', ctypes.c_ulonglong),
+        ("ReadOperationCount", ctypes.c_ulonglong),
+        ("WriteOperationCount", ctypes.c_ulonglong),
+        ("OtherOperationCount", ctypes.c_ulonglong),
+        ("ReadTransferCount", ctypes.c_ulonglong),
+        ("WriteTransferCount", ctypes.c_ulonglong),
+        ("OtherTransferCount", ctypes.c_ulonglong),
     ]
 
 
 class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
     _fields_ = [
-        ('PerProcessUserTimeLimit', ctypes.c_longlong),
-        ('PerJobUserTimeLimit', ctypes.c_longlong),
-        ('LimitFlags', ctypes.c_uint32),
-        ('MinimumWorkingSetSize', ctypes.c_size_t),
-        ('MaximumWorkingSetSize', ctypes.c_size_t),
-        ('ActiveProcessLimit', ctypes.c_uint32),
-        ('Affinity', ctypes.c_size_t),
-        ('PriorityClass', ctypes.c_uint32),
-        ('SchedulingClass', ctypes.c_uint32),
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", ctypes.c_uint32),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", ctypes.c_uint32),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", ctypes.c_uint32),
+        ("SchedulingClass", ctypes.c_uint32),
     ]
 
 
 class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION_STRUCT(ctypes.Structure):
     _fields_ = [
-        ('BasicLimitInformation', _JOBOBJECT_BASIC_LIMIT_INFORMATION),
-        ('IoInfo', _IO_COUNTERS),
-        ('ProcessMemoryLimit', ctypes.c_size_t),
-        ('JobMemoryLimit', ctypes.c_size_t),
-        ('PeakProcessMemoryUsed', ctypes.c_size_t),
-        ('PeakJobMemoryUsed', ctypes.c_size_t),
+        ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", _IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
     ]
 
 
 _lock = threading.Lock()
-_job_handle = None      # c_void_p 值（int）；永不 CloseHandle，见模块头
+_job_handle = None  # c_void_p 值（int）；永不 CloseHandle，见模块头
 _configure_failed = False
 _kernel32 = None
 
@@ -94,12 +94,15 @@ def _api():
     global _kernel32
     if _kernel32 is not None:
         return _kernel32
-    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateJobObjectW.restype = ctypes.c_void_p
     kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
     kernel32.SetInformationJobObject.restype = ctypes.c_int
     kernel32.SetInformationJobObject.argtypes = [
-        ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
     ]
     kernel32.AssignProcessToJobObject.restype = ctypes.c_int
     kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
@@ -123,7 +126,7 @@ def _ensure_job():
             kernel32 = _api()
             handle = kernel32.CreateJobObjectW(None, None)
             if not handle:
-                raise OSError(ctypes.get_last_error(), 'CreateJobObjectW 失败')
+                raise OSError(ctypes.get_last_error(), "CreateJobObjectW 失败")
             info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION_STRUCT()
             info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             if not kernel32.SetInformationJobObject(
@@ -133,18 +136,18 @@ def _ensure_job():
                 ctypes.sizeof(info),
             ):
                 raise OSError(
-                    ctypes.get_last_error(), 'SetInformationJobObject 失败',
+                    ctypes.get_last_error(),
+                    "SetInformationJobObject 失败",
                 )
             _job_handle = handle
             logger.info(
-                'ffmpeg 孤儿防护已就绪：Job Object（KILL_ON_JOB_CLOSE）——'
-                '父进程被强杀时内核连带终止 ffmpeg 子进程',
+                "ffmpeg 孤儿防护已就绪：Job Object（KILL_ON_JOB_CLOSE）——父进程被强杀时内核连带终止 ffmpeg 子进程",
             )
         except Exception as exc:
             _configure_failed = True
             logger.warning(
-                'ffmpeg 孤儿防护不可用（Job Object 创建失败：%s）——'
-                '强杀桌宠时残留的 ffmpeg 子进程不会被内核回收', exc,
+                "ffmpeg 孤儿防护不可用（Job Object 创建失败：%s）——强杀桌宠时残留的 ffmpeg 子进程不会被内核回收",
+                exc,
             )
     return _job_handle
 
@@ -162,7 +165,7 @@ def adopt(proc) -> bool:
     if handle is None:
         return False
     try:
-        pid = int(getattr(proc, 'pid', 0) or 0)
+        pid = int(getattr(proc, "pid", 0) or 0)
     except Exception:
         return False
     if pid <= 0:
@@ -170,22 +173,27 @@ def adopt(proc) -> bool:
     child = None
     owned = False
     try:
-        raw = getattr(proc, '_handle', None)
+        raw = getattr(proc, "_handle", None)
         if raw:
             # Popen 自持的进程句柄（CreateProcess 返回，权限齐全）：借用，不关。
             child = ctypes.c_void_p(int(raw))
         else:
-            child = ctypes.c_void_p(_api().OpenProcess(
-                _PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid,
-            ))
+            child = ctypes.c_void_p(
+                _api().OpenProcess(
+                    _PROCESS_SET_QUOTA | _PROCESS_TERMINATE,
+                    False,
+                    pid,
+                )
+            )
             owned = True
             if not child:
                 return False
         if not _api().AssignProcessToJobObject(ctypes.c_void_p(handle), child):
             # 进程已退出（Assign 对已终止进程失败）是最常见的正常情形：忽略。
             logger.debug(
-                'AssignProcessToJobObject 失败（pid=%s err=%s）：进程可能已退出',
-                pid, ctypes.get_last_error(),
+                "AssignProcessToJobObject 失败（pid=%s err=%s）：进程可能已退出",
+                pid,
+                ctypes.get_last_error(),
             )
             return False
         return True

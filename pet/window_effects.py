@@ -5,6 +5,7 @@
 _sync_mask 使用同一 begin/end 旋转路径，保证非 Windows mask 与画面一致；
 _is_transparent_at 使用 unrotate_point 做逆变换，保证 Windows 逐像素命中一致。
 """
+
 from __future__ import annotations
 
 import math

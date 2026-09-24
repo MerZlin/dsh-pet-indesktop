@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Single maintained modern context-menu dispatcher."""
+
 from __future__ import annotations
 
 import json
@@ -82,9 +83,7 @@ def populate_context_menu(menu: QMenu, pet) -> None:
     # 按配置分发新旧菜单模板（legacy 仅供偏好旧交互的用户；「切换菜单模板」
     # 项通过 set_context_menu_template + reopen_context_menu 立即生效）
     cfg = getattr(pet, "cfg", None)
-    template_id = normalize_template_id(
-        cfg.get("context_menu_template", "modern") if cfg is not None else "modern"
-    )
+    template_id = normalize_template_id(cfg.get("context_menu_template", "modern") if cfg is not None else "modern")
     template = load_menu_template(template_id)
     if template_id == "legacy":
         build_legacy_menu(menu, pet, template)

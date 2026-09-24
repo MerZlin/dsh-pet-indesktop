@@ -4,6 +4,7 @@
 点击桌宠弹出的头顶小气泡输入框；回车发送，AI 回复在气泡内流式显示，
 与完整 AI 对话窗口共用同一会话历史（SessionStore / ChatService）。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -57,11 +58,7 @@ class QuickChatBubble(QFrame):
         self.config = config
         self.pet_window = pet_window
         self.setObjectName("quick-chat-bubble")
-        flags = (
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
+        flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._capture_compat = False
@@ -80,8 +77,8 @@ class QuickChatBubble(QFrame):
         self.session = self._get_session()
         self.service = ChatService(parent=self)
         self._active_request_id: str | None = None
-        self._reply_full = ""       # AI 回答全文（会话历史/聊天窗用，不截断）
-        self._reply_text = ""       # 气泡内展示文本（超上限截断 + 提示看聊天窗）
+        self._reply_full = ""  # AI 回答全文（会话历史/聊天窗用，不截断）
+        self._reply_text = ""  # 气泡内展示文本（超上限截断 + 提示看聊天窗）
         self._reply_truncated = False
         self._page = 0
         self._pages: list[str] = []
@@ -303,11 +300,7 @@ class QuickChatBubble(QFrame):
             self.setParent(host)
         else:
             self.setParent(None)
-            flags = (
-                Qt.WindowType.Tool
-                | Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-            )
+            flags = Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
             self.setWindowFlags(flags)
         if was_visible:
             self.position_near_pet()
@@ -339,9 +332,7 @@ class QuickChatBubble(QFrame):
             return
         self.input.clear()
         # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」
-        synced, _absorbed = self.store.append_message(
-            self.session, ChatMessage("user", text)
-        )
+        synced, _absorbed = self.store.append_message(self.session, ChatMessage("user", text))
         if synced is None:
             self.session.messages.append(ChatMessage("user", text))
             self.store.save(self.session)
@@ -355,9 +346,7 @@ class QuickChatBubble(QFrame):
         self.hint_label.setText("思考中…")
         config = self.settings.active_config
         config.api_key = self.config.resolve_api_key(config)
-        messages = self.prompt_builder.build_messages(
-            self.settings, self.character_id, self.session.messages[:-1], text
-        )
+        messages = self.prompt_builder.build_messages(self.settings, self.character_id, self.session.messages[:-1], text)
         self._active_request_id = self.service.send(messages, config)
 
     def _started(self, request_id: str) -> None:
@@ -408,9 +397,7 @@ class QuickChatBubble(QFrame):
         免得长回答把头顶气泡撑成一堵墙。
         """
         self._reply_full = str(full_text or "")
-        self._reply_text = truncate_bubble_text(
-            self._reply_full, _REPLY_PREVIEW_LIMIT, _REPLY_PREVIEW_SUFFIX
-        )
+        self._reply_text = truncate_bubble_text(self._reply_full, _REPLY_PREVIEW_LIMIT, _REPLY_PREVIEW_SUFFIX)
         self._reply_truncated = self._reply_text != self._reply_full
 
     def _set_page_controls_visible(self, on: bool) -> None:
@@ -421,7 +408,7 @@ class QuickChatBubble(QFrame):
     def _render_reply(self) -> None:
         text = self._reply_text
         if len(text) > _PAGE_SIZE:
-            self._pages = [text[i:i + _PAGE_SIZE] for i in range(0, len(text), _PAGE_SIZE)]
+            self._pages = [text[i : i + _PAGE_SIZE] for i in range(0, len(text), _PAGE_SIZE)]
             self._show_page(0)
             self._set_page_controls_visible(True)
             self.page_widget.setVisible(True)

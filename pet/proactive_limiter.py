@@ -113,9 +113,7 @@ def effective_proactive_config(raw: dict | None) -> dict[str, Any]:
     # cooldown 允许 0.5 分钟粒度（用户反馈整分钟太粗）
     result["cooldown_minutes"] = _clamp(result.get("cooldown_minutes"), 5.0, 0.5, 120.0)
     result["daily_cap"] = _clamp_int(result.get("daily_cap"), 15, 1, 9999)
-    result["min_request_interval_seconds"] = _clamp_int(
-        result.get("min_request_interval_seconds"), 60, 30, 3600
-    )
+    result["min_request_interval_seconds"] = _clamp_int(result.get("min_request_interval_seconds"), 60, 30, 3600)
     result["change_threshold"] = _clamp_int(result.get("change_threshold"), 8, 0, 32)
 
     raw_min_idle = _clamp_int(result.get("min_idle_seconds"), 30, 0, 3600)
@@ -186,6 +184,7 @@ class ProactiveLimiter:
             fh = open(self.state_path.with_suffix(self.state_path.suffix + ".lock"), "a+b")
             if sys.platform == "win32":
                 import msvcrt
+
                 fh.seek(0)  # append 模式初始位置在 EOF，锁/解锁必须落在同一字节
                 # 非阻塞+短重试：allow/try_acquire 会在 GUI 线程（_on_frame_ready）调用，
                 # 不能用 LK_LOCK 的 ~10s 阻塞重试；锁持有时间是微秒级，100ms 内必拿到，
@@ -201,6 +200,7 @@ class ProactiveLimiter:
                     fh = None
             else:
                 import fcntl
+
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         except OSError:
             if fh is not None:
@@ -213,10 +213,12 @@ class ProactiveLimiter:
                 try:
                     if sys.platform == "win32":
                         import msvcrt
+
                         fh.seek(0)
                         msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
                     else:
                         import fcntl
+
                         fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
                 except OSError:
                     pass

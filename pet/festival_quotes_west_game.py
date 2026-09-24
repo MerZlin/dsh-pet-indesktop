@@ -39,42 +39,42 @@ MIT 许可存在张力。维护者已知情，并明确要求把这些经典台�
 QUOTES_WEST_GAME: dict[str, tuple[str, ...]] = {
     # 情人节（2/14）：羁绊、珍视、不离不弃
     "valentine": (
-        "Despite everything, it's still you.",                                  # Undertale (2015)
+        "Despite everything, it's still you.",  # Undertale (2015)
         "I'm Commander Shepard, and this is my favorite store on the Citadel.",  # Mass Effect 2 (2010)
-        "Don't you dare go Hollow.",                                            # Dark Souls (2011)
+        "Don't you dare go Hollow.",  # Dark Souls (2011)
     ),
     # 愚人节（4/1）：玩笑、荒诞、真假难辨
     "april_fools": (
-        "The cake is a lie.",                                                   # Portal (2007)
-        "This was a triumph. I'm making a note here: huge success.",            # Portal 2 (2011)
+        "The cake is a lie.",  # Portal (2007)
+        "This was a triumph. I'm making a note here: huge success.",  # Portal 2 (2011)
         "I used to be an adventurer like you, then I took an arrow in the knee.",  # The Elder Scrolls V: Skyrim (2011)
-        "Would you kindly.",                                                    # BioShock (2007)
-        "Nothing is true, everything is permitted.",                            # Assassin's Creed (2007)
+        "Would you kindly.",  # BioShock (2007)
+        "Nothing is true, everything is permitted.",  # Assassin's Creed (2007)
     ),
     # 复活节：希望、重生、新生
     "easter": (
-        "Praise the Sun!",                                                      # Dark Souls (2011)
-        "Rise, ye Tarnished.",                                                  # Elden Ring (2022)
-        "Endure and survive.",                                                  # The Last of Us (2013)
-        "Tomorrow is in your hands.",                                           # Death Stranding (2019)
+        "Praise the Sun!",  # Dark Souls (2011)
+        "Rise, ye Tarnished.",  # Elden Ring (2022)
+        "Endure and survive.",  # The Last of Us (2013)
+        "Tomorrow is in your hands.",  # Death Stranding (2019)
     ),
     # 母亲节：母性与守护（游戏里广为流传的母性名句很少，故本键条目偏少）
     "mothers_day": (
-        "Hear me, Demigods. My children beloved.",                              # Elden Ring (2022)
-        "No cost too great.",                                                   # Hollow Knight (2017)
+        "Hear me, Demigods. My children beloved.",  # Elden Ring (2022)
+        "No cost too great.",  # Hollow Knight (2017)
     ),
     # 父亲节：父与子、教导、责任（游戏里最丰沛的一类主题）
     "fathers_day": (
-        "Do not be sorry. Be better.",                                          # God of War (2018)
+        "Do not be sorry. Be better.",  # God of War (2018)
         "Keep your expectations low, boy, and you will never be disappointed.",  # God of War (2018)
         "I struggled a long time with surviving. But no matter what, you keep finding something to fight for.",  # The Last of Us (2013)
     ),
     # 万圣节（10/31）：幽暗、亡灵、夜色（不涉血腥猎奇）
     "halloween": (
-        "Fear the old blood.",                                                  # Bloodborne (2015)
-        "I am Malenia, Blade of Miquella.",                                     # Elden Ring (2022)
-        "We're more ghosts than people.",                                       # Red Dead Redemption 2 (2018)
-        "50,000 people used to live here. Now it's a ghost town.",              # Call of Duty 4: Modern Warfare (2007)
-        "You are not expected to survive.",                                     # Battlefield 1 (2016)
+        "Fear the old blood.",  # Bloodborne (2015)
+        "I am Malenia, Blade of Miquella.",  # Elden Ring (2022)
+        "We're more ghosts than people.",  # Red Dead Redemption 2 (2018)
+        "50,000 people used to live here. Now it's a ghost town.",  # Call of Duty 4: Modern Warfare (2007)
+        "You are not expected to survive.",  # Battlefield 1 (2016)
     ),
 }

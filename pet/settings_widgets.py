@@ -3,6 +3,7 @@
 
 从 modern_settings_dialog.py 纯机械搬移（只搬代码 + 改 import，不改逻辑/行为/样式）。
 """
+
 from __future__ import annotations
 
 import os
@@ -59,13 +60,17 @@ def _system_font_families() -> tuple[str, ...]:
         _system_font_families._cache = tuple(QFontDatabase.families())
     return _system_font_families._cache
 
+
 _system_font_families._cache = None
+
 
 def _system_dark() -> bool:
     """按系统调色板判断深色模式（QSS 的 color 不自动级联到子控件，
     深色系统下未显式设 color 的控件会落到 palette 白字，白底上看不清）。"""
     from PySide6.QtGui import QGuiApplication
+
     return QGuiApplication.palette().window().color().lightness() < 128
+
 
 BROWSER_CONTROL_SPEC = {
     "field_height": 32,
@@ -148,6 +153,7 @@ QScrollBar::handle:horizontal {
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 """
 
+
 def _widget_dark(widget: QWidget | None = None) -> bool:
     current = widget
     while current is not None:
@@ -156,6 +162,7 @@ def _widget_dark(widget: QWidget | None = None) -> bool:
             return bool(explicit)
         current = current.parentWidget()
     return _system_dark()
+
 
 class ToggleSwitch(QAbstractButton):
     """Small native-looking toggle used by settings cards."""
@@ -178,9 +185,11 @@ class ToggleSwitch(QAbstractButton):
         painter.setPen(QPen(QColor("#c9c9c9"), 0.5))
         painter.drawEllipse(QRectF(knob_x, 2, 18, 18))
 
+
 IMAGE_NAME_FILTER = "图片文件 (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *.tiff)"
 
 AUDIO_NAME_FILTER = "音频文件 (*.wav *.mp3 *.ogg *.flac *.m4a)"
+
 
 class ClickSoundPackPicker(QWidget):
     """点击音效包选择器（内置默认/小黄鸭/自定义单文件/自定义文件夹）。"""
@@ -200,8 +209,8 @@ class ClickSoundPackPicker(QWidget):
 
         self.stack = QStackedWidget(self)
         empty_page = QWidget(self)
-        self.stack.addWidget(empty_page)         # 0: builtin (hidden)
-        self.stack.addWidget(self.file_picker)    # 1: file
+        self.stack.addWidget(empty_page)  # 0: builtin (hidden)
+        self.stack.addWidget(self.file_picker)  # 1: file
         self.stack.addWidget(self.folder_picker)  # 2: folder
 
         layout = QVBoxLayout(self)
@@ -268,6 +277,7 @@ class ClickSoundPackPicker(QWidget):
             self.stack.setCurrentIndex(0)
             self.stack.hide()
 
+
 class MasonryLayout(QLayout):
     """A true shortest-column layout whose cards retain their image ratios."""
 
@@ -327,6 +337,7 @@ class MasonryLayout(QLayout):
     def minimumSize(self) -> QSize:  # noqa: N802
         return QSize(300, self.heightForWidth(300))
 
+
 class MasonryImageCard(QWidget):
     """Aspect-ratio thumbnail with an elided filename caption."""
 
@@ -372,7 +383,8 @@ class MasonryImageCard(QWidget):
             painter.fillRect(image_rect, QColor("#e9ebee"))
         else:
             scaled = self.pixmap.scaled(
-                image_rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                image_rect.size().toSize(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                 Qt.TransformationMode.SmoothTransformation,
             )
             source_x = max(0, (scaled.width() - self.width()) // 2)
@@ -382,6 +394,7 @@ class MasonryImageCard(QWidget):
         painter.setPen(QColor("#d8d8e0" if _widget_dark(self) else "#404348"))
         text = painter.fontMetrics().elidedText(self.path.name, Qt.TextElideMode.ElideRight, max(0, self.width() - 4))
         painter.drawText(QRectF(2, image_height + 5, self.width() - 4, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
 
 class MasonryFlow(QWidget):
     def __init__(self, parent=None, *, column_count: int = 3):
@@ -408,6 +421,7 @@ class MasonryFlow(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._sync_height()
+
 
 class ImagePreviewDrawer(QFrame):
     """Right-side on-demand image browser; decoding is deferred until opening."""
@@ -494,10 +508,7 @@ class ImagePreviewDrawer(QFrame):
         paths: list[Path] = []
         if directory.is_dir():
             try:
-                candidates = sorted(
-                    path for path in directory.iterdir()
-                    if path.is_file() and path.suffix.lower() in CUSTOM_ICON_SUFFIXES
-                )
+                candidates = sorted(path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in CUSTOM_ICON_SUFFIXES)
                 paths = [path for path in candidates if QImageReader(str(path)).canRead()]
             except OSError:
                 paths = []
@@ -513,22 +524,26 @@ class ImagePreviewDrawer(QFrame):
         # 以 self 为 context 的 singleShot：抽屉销毁时 Qt 自动取消，不再在已删对象上回调。
         QTimer.singleShot(0, self, self._sync_flow_height)
 
+
 class ResourcePathPicker(QWidget):
     """Absolute-path field with a native file or directory chooser."""
 
     def __init__(
-        self, value: str, *, directory: bool = False,
-        name_filter: str = IMAGE_NAME_FILTER, image_preview: bool = False,
-        dialog_title: str | None = None, parent=None,
+        self,
+        value: str,
+        *,
+        directory: bool = False,
+        name_filter: str = IMAGE_NAME_FILTER,
+        image_preview: bool = False,
+        dialog_title: str | None = None,
+        parent=None,
     ):
         super().__init__(parent)
         self.directory = bool(directory)
         self.name_filter = name_filter
         # 选择对话框标题：默认沿用图片语义（既有调用方不变），非图片用途可覆盖
         # （例如「音乐播放器程序」选 .exe 时不该写「选择图片」）。
-        self.dialog_title = str(
-            dialog_title or ("选择图片目录" if self.directory else "选择图片")
-        )
+        self.dialog_title = str(dialog_title or ("选择图片目录" if self.directory else "选择图片"))
         self.edit = QLineEdit(self)
         self.edit.setMinimumWidth(250)
         self.edit.setText(str(value))
@@ -539,9 +554,7 @@ class ResourcePathPicker(QWidget):
         path_row.setContentsMargins(0, 0, 0, 0)
         path_row.setSpacing(6)
         path_row.addWidget(self.edit, 1)
-        self.preview_button = (
-            QPushButton("预览", self) if self.directory and image_preview else None
-        )
+        self.preview_button = QPushButton("预览", self) if self.directory and image_preview else None
         if self.preview_button is not None:
             self.preview_button.setIcon(vector_widget_icon(self, "screen", 14))
             self.preview_button.clicked.connect(self._open_preview)
@@ -576,6 +589,7 @@ class ResourcePathPicker(QWidget):
             drawer = ImagePreviewDrawer(host)
         drawer.open_directory(self.text())
 
+
 class ColorSwatchButton(QAbstractButton):
     """Compact painted color well that does not depend on native button CSS."""
 
@@ -601,6 +615,7 @@ class ColorSwatchButton(QAbstractButton):
         painter.setPen(QPen(QColor("#aeb3b8"), 1.0))
         painter.setBrush(self._color)
         painter.drawRoundedRect(QRectF(3.5, 3.5, self.width() - 7.0, self.height() - 7.0), 6, 6)
+
 
 class ColorPicker(QWidget):
     """Editable #RRGGBB field paired with the native color panel."""
@@ -633,6 +648,7 @@ class ColorPicker(QWidget):
         if color.isValid():
             self.button.setColor(color)
 
+
 def _draw_chevron(widget, center_y: float, *, down: bool) -> None:
     painter = QPainter(widget)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -642,6 +658,7 @@ def _draw_chevron(widget, center_y: float, *, down: bool) -> None:
     offset = 1.8 if down else -1.8
     painter.drawLine(QPointF(center_x - 2.6, center_y - offset), QPointF(center_x, center_y + offset))
     painter.drawLine(QPointF(center_x, center_y + offset), QPointF(center_x + 2.6, center_y - offset))
+
 
 SETTINGS_POPUP_OBJECT_NAME = "SettingsPopup"
 
@@ -669,11 +686,13 @@ QMenu#ModernSelectPopup::item { color: #e4e4e9; }
 QMenu#ModernSelectPopup::item:selected { background: #3a3a46; }
 """
 
+
 def settings_popup_stylesheet(widget: QWidget | None = None) -> str:
     style = SETTINGS_POPUP_STYLESHEET
     if _widget_dark(widget):
         style += _DARK_POPUP_OVERRIDE.replace("ModernSelectPopup", SETTINGS_POPUP_OBJECT_NAME)
     return style
+
 
 def configure_settings_action_popup(menu: QMenu) -> QMenu:
     """Apply the one shared settings popover surface to any menu."""
@@ -682,6 +701,7 @@ def configure_settings_action_popup(menu: QMenu) -> QMenu:
     menu.setProperty("menuStyle", "modern")
     menu.setProperty("settingsPopup", True)
     return menu
+
 
 class SettingsPopupAction(QAction):
     """Logical checked state painted by SettingsPopupMenu on the trailing edge."""
@@ -705,6 +725,7 @@ class SettingsPopupAction(QAction):
     def isChecked(self) -> bool:  # noqa: N802
         return self._settings_checked
 
+
 class SettingsPopupMenu(QMenu):
     """Shared menu surface for selectors and commands, including right checks."""
 
@@ -719,10 +740,14 @@ class SettingsPopupMenu(QMenu):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(
-            QColor("#a0a6b0" if _widget_dark(self) else "#454545"),
-            1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
-        ))
+        painter.setPen(
+            QPen(
+                QColor("#a0a6b0" if _widget_dark(self) else "#454545"),
+                1.5,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+            )
+        )
         for action in self.actions():
             if not action.isVisible() or not action.isCheckable() or not action.isChecked():
                 continue
@@ -731,6 +756,7 @@ class SettingsPopupMenu(QMenu):
             y = rect.center().y()
             painter.drawLine(QPointF(x - 4, y), QPointF(x - 1, y + 3))
             painter.drawLine(QPointF(x - 1, y + 3), QPointF(x + 5, y - 5))
+
 
 class SettingsMenuButton(QPushButton):
     """Command-menu trigger with the same anchor and chevron as ModernSelect."""
@@ -757,6 +783,7 @@ class SettingsMenuButton(QPushButton):
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
         _draw_chevron(self, self.height() / 2.0, down=True)
+
 
 class ModernSelect(QAbstractButton):
     """Custom-painted selector with a Modern-style popover, not a QComboBox."""
@@ -850,9 +877,7 @@ class ModernSelect(QAbstractButton):
             action = popup.addAction(text)
             action.setCheckable(True)
             action.setChecked(index == self._index)
-            action.triggered.connect(
-                lambda _checked=False, index=index: self.setCurrentIndex(index)
-            )
+            action.triggered.connect(lambda _checked=False, index=index: self.setCurrentIndex(index))
         popup.popup(self.mapToGlobal(QPoint(0, self.height() + 4)))
 
     def enterEvent(self, event) -> None:  # noqa: N802
@@ -881,6 +906,7 @@ class ModernSelect(QAbstractButton):
         painter.end()
         _draw_chevron(self, self.height() / 2.0, down=True)
 
+
 class BrowserSpinBox(QSpinBox):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -891,6 +917,7 @@ class BrowserSpinBox(QSpinBox):
         _draw_chevron(self, self.height() * 0.29, down=False)
         _draw_chevron(self, self.height() * 0.71, down=True)
 
+
 class BrowserDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -900,6 +927,7 @@ class BrowserDoubleSpinBox(QDoubleSpinBox):
         super().paintEvent(event)
         _draw_chevron(self, self.height() * 0.29, down=False)
         _draw_chevron(self, self.height() * 0.71, down=True)
+
 
 class SettingRow(QFrame):
     """A label and hint on the left, with one control aligned to the right."""
@@ -954,12 +982,8 @@ class SettingRow(QFrame):
         if layout is None:
             return
         copy_minimum = min(320, max(180, self.label.sizeHint().width()))
-        control_width = max(
-            self.control.minimumWidth(), self.control.sizeHint().width()
-        )
-        preferred_inline_width = getattr(
-            self.control, "preferred_inline_width", None
-        )
+        control_width = max(self.control.minimumWidth(), self.control.sizeHint().width())
+        preferred_inline_width = getattr(self.control, "preferred_inline_width", None)
         if callable(preferred_inline_width):
             control_width = max(control_width, preferred_inline_width())
         required_width = 32 + copy_minimum + 18 + control_width
@@ -967,19 +991,14 @@ class SettingRow(QFrame):
         if self.property("responsiveStacked") is stacked:
             return
         self.setProperty("responsiveStacked", stacked)
-        layout.setDirection(
-            QBoxLayout.Direction.TopToBottom
-            if stacked
-            else QBoxLayout.Direction.LeftToRight
-        )
+        layout.setDirection(QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight)
         layout.setSpacing(7 if stacked else 18)
         layout.setAlignment(
             self.control,
-            Qt.AlignmentFlag(0)
-            if stacked
-            else Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag(0) if stacked else Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
         self.updateGeometry()
+
 
 class ResponsiveActionRow(QWidget):
     """Keep a primary control and adjacent actions usable under localization."""
@@ -1003,9 +1022,7 @@ class ResponsiveActionRow(QWidget):
         )
 
     def preferred_inline_width(self) -> int:
-        widths = [self._effective_width(self.primary), *(
-            self._effective_width(action) for action in self.actions
-        )]
+        widths = [self._effective_width(self.primary), *(self._effective_width(action) for action in self.actions)]
         return sum(widths) + self.grid.horizontalSpacing() * (len(widths) - 1)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
@@ -1014,27 +1031,21 @@ class ResponsiveActionRow(QWidget):
             (widget.minimumWidth() or widget.minimumSizeHint().width() for widget in widgets),
             default=0,
         )
-        heights = [
-            widget.minimumHeight() or widget.minimumSizeHint().height()
-            for widget in widgets
-        ]
+        heights = [widget.minimumHeight() or widget.minimumSizeHint().height() for widget in widgets]
         if self._mode == "inline":
             height = max(heights, default=0)
         elif self._mode == "stacked":
             action_height = max(heights[1:], default=0)
-            height = heights[0] + (
-                self.grid.verticalSpacing() + action_height if self.actions else 0
-            )
+            height = heights[0] + (self.grid.verticalSpacing() + action_height if self.actions else 0)
         else:
             height = sum(heights) + self.grid.verticalSpacing() * max(0, len(heights) - 1)
         return QSize(width, height)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        action_row_width = sum(
-            max(action.minimumWidth(), action.sizeHint().width())
-            for action in self.actions
-        ) + self.grid.horizontalSpacing() * max(0, len(self.actions) - 1)
+        action_row_width = sum(max(action.minimumWidth(), action.sizeHint().width()) for action in self.actions) + self.grid.horizontalSpacing() * max(
+            0, len(self.actions) - 1
+        )
         if self.width() >= self.preferred_inline_width():
             mode = "inline"
         elif self.width() >= action_row_width:
@@ -1068,6 +1079,7 @@ class ResponsiveActionRow(QWidget):
         self.grid.setColumnStretch(0, 1)
         self.updateGeometry()
 
+
 class ResponsiveToggleActionRow(QWidget):
     """Reflow a toggle, an expanding detail editor, and one trailing action."""
 
@@ -1085,12 +1097,7 @@ class ResponsiveToggleActionRow(QWidget):
         self._reflow(True)
 
     def preferred_inline_width(self) -> int:
-        return (
-            self.toggle.sizeHint().width()
-            + self.detail.sizeHint().width()
-            + self.action.sizeHint().width()
-            + self.grid.horizontalSpacing() * 2
-        )
+        return self.toggle.sizeHint().width() + self.detail.sizeHint().width() + self.action.sizeHint().width() + self.grid.horizontalSpacing() * 2
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -1120,6 +1127,7 @@ class ResponsiveToggleActionRow(QWidget):
             self.grid.setColumnStretch(2, 0)
         self.updateGeometry()
 
+
 class SettingsCard(QFrame):
     def __init__(self, rows: list[SettingRow], parent=None):
         super().__init__(parent)
@@ -1146,6 +1154,7 @@ class SettingsCard(QFrame):
             if index:
                 self.separators[index - 1].setVisible(not row.isHidden() and visible_before)
             visible_before = visible_before or not row.isHidden()
+
 
 class SettingsDisclosureHeader(QPushButton):
     """QSS-owned one-level disclosure without platform-native tool chrome."""
@@ -1175,6 +1184,7 @@ class SettingsDisclosureHeader(QPushButton):
     def _sync_chevron(self, expanded: bool) -> None:
         self.chevron.setText("⌄" if expanded else "›")
 
+
 class SettingsSection(QWidget):
     def __init__(self, title: str, rows: list[SettingRow], parent=None, *, advanced: bool = False):
         super().__init__(parent)
@@ -1199,18 +1209,14 @@ class SettingsSection(QWidget):
 
     def refresh_dependency_visibility(self) -> None:
         """Hide a section when every row is suppressed by a parent setting."""
-        self.setVisible(any(
-            all(getattr(row, "_visibility_dependencies", {}).values())
-            for row in self.rows
-        ))
+        self.setVisible(any(all(getattr(row, "_visibility_dependencies", {}).values()) for row in self.rows))
 
     def _set_expanded(self, expanded: bool) -> None:
         self.card.setVisible(expanded)
         if self.toggle is not None:
-            self.toggle.setAccessibleName(
-                f"{'收起' if expanded else '展开'}{self.toggle.text()}"
-            )
+            self.toggle.setAccessibleName(f"{'收起' if expanded else '展开'}{self.toggle.text()}")
             self.toggle.update()
+
 
 class ProbabilitySlider(QWidget):
     """事件气泡触发概率滑块：0.00–1.00（步长 0.05），没有开关。
@@ -1222,8 +1228,8 @@ class ProbabilitySlider(QWidget):
 
     valueChanged = Signal(float)
 
-    _STEPS = 20          # 20 档 × 0.05
-    _VALUE_WIDTH = 40    # 固定宽度：值文本变化不引起控件抖动
+    _STEPS = 20  # 20 档 × 0.05
+    _VALUE_WIDTH = 40  # 固定宽度：值文本变化不引起控件抖动
 
     def __init__(self, parent=None, *, value: float = 1.0):
         super().__init__(parent)
@@ -1338,6 +1344,7 @@ class _CurrentPageStack(QStackedWidget):
         hint = current.minimumSizeHint()
         return QSize(0, hint.height())
 
+
 class SettingsTabContainer(QWidget):
     """Keyboard-accessible in-page tabs for peer tasks within one domain."""
 
@@ -1419,6 +1426,7 @@ class SettingsTabContainer(QWidget):
         self.setCurrentKey(key)
         return True
 
+
 class _SettingsPageShell(QWidget):
     """Keep the fixed page header aligned with the centered scroll content."""
 
@@ -1433,12 +1441,14 @@ class _SettingsPageShell(QWidget):
             available = max(0, self.width() - 30 - 28)
             self.heading_host.setFixedWidth(min(self.content_max_width, available))
 
+
 def _line_edit(text: str = "", *, password: bool = False, width: int = 240) -> QLineEdit:
     edit = QLineEdit(text)
     edit.setMinimumWidth(width)
     if password:
         edit.setEchoMode(QLineEdit.EchoMode.Password)
     return edit
+
 
 class QuickLaunchItemRow(QWidget):
     """Two-line quick-launch row; the owning list keeps selection and drag."""
@@ -1460,6 +1470,7 @@ class QuickLaunchItemRow(QWidget):
         copy.setSpacing(1)
         copy.addWidget(self.name_label)
         copy.addWidget(self.detail_label)
+
 
 class QuickLaunchEditor(QWidget):
     """Small application picker persisted into the modern menu."""
@@ -1574,19 +1585,13 @@ class QuickLaunchEditor(QWidget):
         self.changed.emit()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if (
-            watched is self.list.viewport()
-            and event.type() == QEvent.Type.MouseButtonRelease
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
+        if watched is self.list.viewport() and event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
             point = event.position().toPoint()
             item = self.list.itemAt(point)
             if item is not None:
                 row = self.list.visualItemRect(item)
                 if point.x() <= row.left() + 36:
                     checked = item.checkState() == Qt.CheckState.Checked
-                    item.setCheckState(
-                        Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked
-                    )
+                    item.setCheckState(Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked)
                     return True
         return super().eventFilter(watched, event)

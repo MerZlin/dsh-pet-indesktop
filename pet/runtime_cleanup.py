@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """安全清理 PyInstaller onefile 遗留的 ``_MEI*`` 临时目录。"""
+
 from __future__ import annotations
 
 import os

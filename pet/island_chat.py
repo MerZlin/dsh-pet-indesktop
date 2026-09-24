@@ -15,6 +15,7 @@
 - 附带「显示桌宠」按钮：桌宠隐藏时点击岛弹的是气泡而不是卡片，
   恢复桌宠的入口要留在气泡里。
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QTimer, Qt, Signal
@@ -54,8 +55,7 @@ class IslandChatBubble(QuickChatBubble):
         self._auto_collapse.timeout.connect(self._on_auto_collapse)
 
     # ------------------------------------------------------------ 弹出
-    def show_for_island(self, island: QWidget, *, activate: bool = True,
-                        reply_text: str | None = None) -> None:
+    def show_for_island(self, island: QWidget, *, activate: bool = True, reply_text: str | None = None) -> None:
         """在岛旁弹出：activate=True 交互式（点击触发），False 预览式（回复到达）。"""
         self._anchor = island
         if reply_text is not None:
@@ -78,8 +78,7 @@ class IslandChatBubble(QuickChatBubble):
         self._set_reply_text(str(text or ""))
         self._render_reply()
 
-    def show_feedback(self, island: QWidget, text: str, *, subtitle: str = "",
-                      duration_ms: int | None = None) -> None:
+    def show_feedback(self, island: QWidget, text: str, *, subtitle: str = "", duration_ms: int | None = None) -> None:
         """联动/系统反馈气泡：预览式弹出（不抢焦点），超时自动收回。
 
         供桌宠隐藏时的气泡改道使用（window_alerts.redirect_hidden_bubble →
@@ -103,8 +102,7 @@ class IslandChatBubble(QuickChatBubble):
             return
         geo = anchor.geometry()
         screen = QGuiApplication.screenAt(geo.center()) or QGuiApplication.primaryScreen()
-        available = (screen.availableGeometry() if screen is not None
-                     else QGuiApplication.primaryScreen().availableGeometry())
+        available = screen.availableGeometry() if screen is not None else QGuiApplication.primaryScreen().availableGeometry()
         self.adjustSize()
         w, h = self.width(), self.height()
         x = geo.center().x() - w // 2

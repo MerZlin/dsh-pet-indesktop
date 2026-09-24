@@ -39,11 +39,11 @@ CATEGORY_WEST = "west"
 CATEGORY_ORDER: tuple[str, ...] = (CATEGORY_CN, CATEGORY_SOLAR_TERM, CATEGORY_WEST)
 
 # —— 日期规则种类 ——
-KIND_SOLAR = "solar"              # 公历固定月日
-KIND_LUNAR = "lunar"              # 农历固定月日（非闰月）
-KIND_LUNAR_LAST = "lunar_last"    # 腊月最后一天（除夕）
-KIND_SOLAR_TERM = "solar_term"    # 24 节气当日
-KIND_EASTER = "easter"            # 复活节（西方教会算法）
+KIND_SOLAR = "solar"  # 公历固定月日
+KIND_LUNAR = "lunar"  # 农历固定月日（非闰月）
+KIND_LUNAR_LAST = "lunar_last"  # 腊月最后一天（除夕）
+KIND_SOLAR_TERM = "solar_term"  # 24 节气当日
+KIND_EASTER = "easter"  # 复活节（西方教会算法）
 KIND_NTH_WEEKDAY = "nth_weekday"  # 某月第 n 个星期 w
 
 
@@ -59,13 +59,13 @@ class Festival:
     name: str
     categories: tuple[str, ...]
     kind: str
-    month: int = 0          # KIND_SOLAR / KIND_NTH_WEEKDAY
-    day: int = 0            # KIND_SOLAR
-    lunar_month: int = 0    # KIND_LUNAR
-    lunar_day: int = 0      # KIND_LUNAR
-    term: str = ""          # KIND_SOLAR_TERM
-    weekday: int = 0        # KIND_NTH_WEEKDAY：周一=0 … 周日=6
-    nth: int = 0            # KIND_NTH_WEEKDAY
+    month: int = 0  # KIND_SOLAR / KIND_NTH_WEEKDAY
+    day: int = 0  # KIND_SOLAR
+    lunar_month: int = 0  # KIND_LUNAR
+    lunar_day: int = 0  # KIND_LUNAR
+    term: str = ""  # KIND_SOLAR_TERM
+    weekday: int = 0  # KIND_NTH_WEEKDAY：周一=0 … 周日=6
+    nth: int = 0  # KIND_NTH_WEEKDAY
 
 
 _SUN = 6

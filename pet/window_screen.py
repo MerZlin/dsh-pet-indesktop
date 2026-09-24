@@ -17,6 +17,7 @@ import shiboken6
 
 _fs_monotonic = time.monotonic
 
+
 def start_fs_watch(host) -> None:
     """启动全屏监视线程（幂等）。"""
     if host._single_process_spawn:  # 批5.2a：flag 开由共享 watcher 接管
@@ -24,8 +25,7 @@ def start_fs_watch(host) -> None:
     if host._fs_thread is not None and host._fs_thread.is_alive():
         return
     host._fs_stop.clear()
-    host._fs_thread = threading.Thread(
-        target=host._fs_watch_loop, daemon=True, name="pet-fs-watch")
+    host._fs_thread = threading.Thread(target=host._fs_watch_loop, daemon=True, name="pet-fs-watch")
     host._fs_thread.start()
     logging.info("全屏监视线程已启动")
 
@@ -50,6 +50,7 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
     stop = host._fs_stop
     # Phase 1：避免纯桌宠启动即加载 PIL；该线程真正需要检测光标时才导入。
     from . import vision as vision_mod
+
     polls = 0
     consecutive_errors = 0
     next_fullscreen = clock() + 1.0
@@ -79,7 +80,7 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
                 try:
                     if shiboken6.isValid(host) is False:
                         return
-                    host.cursor_visibility_changed.emit('UNKNOWN')
+                    host.cursor_visibility_changed.emit("UNKNOWN")
                 except (RuntimeError, AttributeError) as exc:
                     if shiboken6.isValid(host) is False:
                         return
@@ -116,14 +117,13 @@ def watch_required(host) -> bool:
     # Offscreen Qt has no native foreground/fullscreen surface.  Avoid
     # starting a Windows watcher against a headless QObject, where native
     # teardown can race the polling thread during test/process shutdown.
-    if os.environ.get('QT_QPA_PLATFORM', '').lower() == 'offscreen':
+    if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
         return False
-    return os.name == 'nt' and (host.auto_hide_fullscreen or host._cursor_hidden_passthrough_enabled())
+    return os.name == "nt" and (host.auto_hide_fullscreen or host._cursor_hidden_passthrough_enabled())
 
 
 def cursor_transition_blocked(host) -> bool:
-    return (host._press_global is not None or host._dragging or
-            host._interaction_state in ('DRAGGING', 'SLINGSHOT_AIMING', 'PRESS_CANDIDATE'))
+    return host._press_global is not None or host._dragging or host._interaction_state in ("DRAGGING", "SLINGSHOT_AIMING", "PRESS_CANDIDATE")
 
 
 def on_cursor_visibility_changed(host, visibility: str, *, monotonic=None) -> None:
@@ -134,13 +134,13 @@ def on_cursor_visibility_changed(host, visibility: str, *, monotonic=None) -> No
     clock = monotonic if monotonic is not None else time.monotonic
     now = clock()
     host._cursor_visibility = visibility
-    if visibility == 'HIDDEN':
+    if visibility == "HIDDEN":
         if host._cursor_hidden_since is None:
             host._cursor_hidden_since = now
         if now - host._cursor_hidden_since >= 0.2 and not host._cursor_transition_blocked():
             host._auto_cursor_hidden = True
             host._apply_effective_mouse_through()
-    elif visibility == 'SHOWING':
+    elif visibility == "SHOWING":
         host._cursor_hidden_since = None
         if host._cursor_transition_blocked():
             host._cursor_restore_pending = True
@@ -148,9 +148,9 @@ def on_cursor_visibility_changed(host, visibility: str, *, monotonic=None) -> No
             host._cursor_restore_pending = False
             host._auto_cursor_hidden = False
             host._apply_effective_mouse_through()
-    elif visibility == 'SUPPRESSED':
+    elif visibility == "SUPPRESSED":
         host._cursor_hidden_since = None
-        logging.debug('系统光标被触摸/笔输入抑制，保持当前自动穿透状态')
+        logging.debug("系统光标被触摸/笔输入抑制，保持当前自动穿透状态")
 
 
 def on_fullscreen_changed(host, hit: bool) -> None:
@@ -169,7 +169,7 @@ def on_fullscreen_changed(host, hit: bool) -> None:
 def set_auto_hide_fullscreen(host, on: bool) -> None:
     """全屏自动隐藏开关（供设置/菜单调用）。"""
     host.auto_hide_fullscreen = bool(on)
-    host.cfg.set('auto_hide_fullscreen', host.auto_hide_fullscreen)
+    host.cfg.set("auto_hide_fullscreen", host.auto_hide_fullscreen)
     host.cfg.save()
     if host._watch_required():
         host._start_fs_watch()
@@ -184,7 +184,7 @@ def set_cursor_hidden_passthrough(host, on: bool) -> None:
     """切换光标自动穿透，不改变用户手动穿透意图。"""
     on = bool(on)
     host._cursor_hidden_passthrough = on
-    host.cfg.set('cursor_hidden_passthrough', on)
+    host.cfg.set("cursor_hidden_passthrough", on)
     host.cfg.save()
     host._cursor_hidden_since = None
     host._cursor_restore_pending = False
@@ -206,15 +206,16 @@ def set_stream_capture_mode(host, on: bool) -> None:
     showEvent 会自动重新应用置顶。
     """
     from .window import STREAM_CAPTURE_TITLE, build_window_flags
+
     on = bool(on)
     if on == host._stream_capture_mode:
         return
     host._stream_capture_mode = on
-    host.cfg.set('stream_capture_mode', on)
+    host.cfg.set("stream_capture_mode", on)
     host.cfg.save()
     was_visible = host.isVisible()  # setWindowFlags 重建原生窗口会先隐藏
     host.setWindowFlags(build_window_flags(host.cfg, host.mouse_through, on))
-    host.setWindowTitle(STREAM_CAPTURE_TITLE if on else '')
+    host.setWindowTitle(STREAM_CAPTURE_TITLE if on else "")
     if was_visible:
         host.show()  # 只在原本可见时恢复：手动/自动隐藏的桌宠不被意外唤出
     host._speech_bubble.set_capture_compat(on, host=host)

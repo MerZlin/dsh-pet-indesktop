@@ -32,9 +32,7 @@ def clamp_point(point: QPoint, size: QSize, available: QRect) -> QPoint:
     return QPoint(x, y)
 
 
-def best_position_near_pet(
-    pet_rect: QRect, size: QSize, available: QRect, gap: int = 14
-) -> QPoint:
+def best_position_near_pet(pet_rect: QRect, size: QSize, available: QRect, gap: int = 14) -> QPoint:
     """选出聊天窗应放置的位置（返回窗口左上角坐标）。
 
     - 优先选视觉遮挡最小的方向：第一个完全落在可用工作区内的候选直接胜出。

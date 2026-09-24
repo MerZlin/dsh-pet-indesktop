@@ -86,11 +86,7 @@ _MACRO_OF: dict[BehaviorClass, BehaviorMacro] = {
 }
 
 # 参与细分类计数/触发规则的行为类（OTHER 不算「同类重复」）
-_TRACKED_CLASSES = frozenset(
-    c
-    for c in BehaviorClass
-    if c not in (BehaviorClass.OTHER,)
-)
+_TRACKED_CLASSES = frozenset(c for c in BehaviorClass if c not in (BehaviorClass.OTHER,))
 
 # ---------------------------------------------------------------------------
 # 行为分类（工具名 / 命令 argv0 → 行为类）
@@ -101,56 +97,161 @@ _TRACKED_CLASSES = frozenset(
 _CLASS_ALIASES: dict[BehaviorClass, frozenset[str]] = {
     BehaviorClass.SEARCH: frozenset(
         {
-            "web_search", "websearch", "search", "search_web", "search_internet",
-            "duckduckgo_search", "google_search", "bing_search", "search_google",
-            "browse_search", "search_the_web", "semantic_search", "web_search_tool",
+            "web_search",
+            "websearch",
+            "search",
+            "search_web",
+            "search_internet",
+            "duckduckgo_search",
+            "google_search",
+            "bing_search",
+            "search_google",
+            "browse_search",
+            "search_the_web",
+            "semantic_search",
+            "web_search_tool",
             "search_engine",
         }
     ),
     BehaviorClass.READ: frozenset(
         {
-            "read", "read_file", "read_files", "load_file", "open_file", "view",
-            "grep", "rg", "grep_file", "grep_in_files", "search_files_content",
-            "glob", "find_files", "list_files", "list_file", "ls_files",
-            "cat", "get-content", "get_content", "type", "head", "tail",
-            "less", "more", "read_multi", "read_multiple", "fetch_file",
-            "file_read", "read_text_file", "peek_file",
+            "read",
+            "read_file",
+            "read_files",
+            "load_file",
+            "open_file",
+            "view",
+            "grep",
+            "rg",
+            "grep_file",
+            "grep_in_files",
+            "search_files_content",
+            "glob",
+            "find_files",
+            "list_files",
+            "list_file",
+            "ls_files",
+            "cat",
+            "get-content",
+            "get_content",
+            "type",
+            "head",
+            "tail",
+            "less",
+            "more",
+            "read_multi",
+            "read_multiple",
+            "fetch_file",
+            "file_read",
+            "read_text_file",
+            "peek_file",
         }
     ),
     BehaviorClass.THINK: frozenset(
         {
-            "think", "thinking", "reason", "reasoning", "plan", "analyze",
-            "analyze_plan", "reflect", "reflection", "deliberate", "rethink",
+            "think",
+            "thinking",
+            "reason",
+            "reasoning",
+            "plan",
+            "analyze",
+            "analyze_plan",
+            "reflect",
+            "reflection",
+            "deliberate",
+            "rethink",
         }
     ),
     BehaviorClass.NAVIGATION: frozenset(
         {
-            "pwd", "getcwd", "cwd", "ls", "dir", "cd", "find", "realpath",
-            "which", "stat", "locate", "tree", "explore", "navigate",
-            "list_directory", "list_dir", "get_working_directory",
+            "pwd",
+            "getcwd",
+            "cwd",
+            "ls",
+            "dir",
+            "cd",
+            "find",
+            "realpath",
+            "which",
+            "stat",
+            "locate",
+            "tree",
+            "explore",
+            "navigate",
+            "list_directory",
+            "list_dir",
+            "get_working_directory",
         }
     ),
     BehaviorClass.EDIT: frozenset(
         {
-            "edit", "edit_file", "write", "write_file", "patch", "apply_patch",
-            "applypatch", "create_file", "append_file", "append_to_file",
-            "rewrite", "update_file", "modify", "replace", "insert", "edit_text",
-            "create", "create_or_replace", "file_write", "file_edit",
+            "edit",
+            "edit_file",
+            "write",
+            "write_file",
+            "patch",
+            "apply_patch",
+            "applypatch",
+            "create_file",
+            "append_file",
+            "append_to_file",
+            "rewrite",
+            "update_file",
+            "modify",
+            "replace",
+            "insert",
+            "edit_text",
+            "create",
+            "create_or_replace",
+            "file_write",
+            "file_edit",
         }
     ),
     BehaviorClass.EXECUTE: frozenset(
         {
-            "bash", "pwsh", "powershell", "shell", "exec", "command", "run",
-            "terminal", "cmd", "sh", "zsh", "execute_command", "run_command",
-            "run_terminal", "exec_command", "run_bash", "run_shell",
-            "execute", "tool_runner", "spawn", "system", "python_exec",
+            "bash",
+            "pwsh",
+            "powershell",
+            "shell",
+            "exec",
+            "command",
+            "run",
+            "terminal",
+            "cmd",
+            "sh",
+            "zsh",
+            "execute_command",
+            "run_command",
+            "run_terminal",
+            "exec_command",
+            "run_bash",
+            "run_shell",
+            "execute",
+            "tool_runner",
+            "spawn",
+            "system",
+            "python_exec",
         }
     ),
     BehaviorClass.TEST: frozenset(
         {
-            "pytest", "test", "run_tests", "npm_test", "npm test", "vitest",
-            "jest", "playwright", "run_test", "unit_test", "integration_test",
-            "test_runner", "check", "lint", "typecheck", "tsc", "mypy",
+            "pytest",
+            "test",
+            "run_tests",
+            "npm_test",
+            "npm test",
+            "vitest",
+            "jest",
+            "playwright",
+            "run_test",
+            "unit_test",
+            "integration_test",
+            "test_runner",
+            "check",
+            "lint",
+            "typecheck",
+            "tsc",
+            "mypy",
         }
     ),
 }
@@ -158,10 +259,27 @@ _CLASS_ALIASES: dict[BehaviorClass, frozenset[str]] = {
 # 命令型工具（按 argv0 判定命令意图）：bash/pwsh/shell/exec/command 等
 _CMD_TOOLS = frozenset(
     {
-        "bash", "pwsh", "powershell", "shell", "exec", "command", "run",
-        "terminal", "cmd", "sh", "zsh", "execute_command", "run_command",
-        "run_terminal", "exec_command", "run_bash", "run_shell", "execute",
-        "spawn", "system", "python_exec",
+        "bash",
+        "pwsh",
+        "powershell",
+        "shell",
+        "exec",
+        "command",
+        "run",
+        "terminal",
+        "cmd",
+        "sh",
+        "zsh",
+        "execute_command",
+        "run_command",
+        "run_terminal",
+        "exec_command",
+        "run_bash",
+        "run_shell",
+        "execute",
+        "spawn",
+        "system",
+        "python_exec",
     }
 )
 
@@ -199,7 +317,7 @@ def normalize_tool(tool: str) -> str:
     # 去常见前缀 mcp/tool_/tools_/file_/files_ 等
     for prefix in ("mcp", "mcp_", "tool", "tools", "file", "files", "fs"):
         if t.startswith(prefix) and t != prefix:
-            t = t[len(prefix):]
+            t = t[len(prefix) :]
             break
     return t.strip()
 
@@ -209,7 +327,7 @@ def _argv0_from_args(args_key: str) -> str:
     for part in str(args_key or "").split(","):
         part = part.strip()
         if part.startswith("argv0:"):
-            return part[len("argv0:"):].strip()
+            return part[len("argv0:") :].strip()
     return ""
 
 
@@ -261,8 +379,8 @@ def macro_of(cls: BehaviorClass) -> BehaviorMacro:
 class PatternLevel(str, Enum):
     """行为模式触发档位。"""
 
-    WARNING = "warning"   # ⚠️ 有重复倾向 / 长期探索无产出
-    CONTROL = "control"   # 🛑 已明显偏离，值得 Judge 检查
+    WARNING = "warning"  # ⚠️ 有重复倾向 / 长期探索无产出
+    CONTROL = "control"  # 🛑 已明显偏离，值得 Judge 检查
 
     def _severity(self) -> int:
         """数值化 severity，用于升级比较（不能按 str 比较，'warning' > 'control'）。"""
@@ -271,11 +389,11 @@ class PatternLevel(str, Enum):
 
 # 触发原因代码
 class PatternReason(str, Enum):
-    FINE_REPEAT_W6 = "fine_repeat_short_burst"      # W6 同类 >= 3（短时爆发）
-    FINE_REPEAT_W10_CONTROL = "fine_repeat_long"     # W10 同类 >= 4（长期重复）
-    FINE_REPEAT_W10_WARN = "fine_repeat_tendency"    # W10 同类 >= 3（重复倾向）
-    MACRO_EXPLORE_W6 = "macro_explore_only"          # W6 EXPLORATION>=5 且 ACTION==0
-    MACRO_EXPLORE_W10 = "macro_explore_no_action"    # W10 EXPLORATION>=7 且 ACTION<=1
+    FINE_REPEAT_W6 = "fine_repeat_short_burst"  # W6 同类 >= 3（短时爆发）
+    FINE_REPEAT_W10_CONTROL = "fine_repeat_long"  # W10 同类 >= 4（长期重复）
+    FINE_REPEAT_W10_WARN = "fine_repeat_tendency"  # W10 同类 >= 3（重复倾向）
+    MACRO_EXPLORE_W6 = "macro_explore_only"  # W6 EXPLORATION>=5 且 ACTION==0
+    MACRO_EXPLORE_W10 = "macro_explore_no_action"  # W10 EXPLORATION>=7 且 ACTION<=1
 
 
 # ---------------------------------------------------------------------------
@@ -283,13 +401,13 @@ class PatternReason(str, Enum):
 # ---------------------------------------------------------------------------
 
 # 默认参数（与用户建议的第一版规则一致）
-DEFAULT_W6_CONTROL = 3        # W6 同类 >= 3 → control
-DEFAULT_W10_WARN = 3          # W10 同类 >= 3 → warning
-DEFAULT_W10_CONTROL = 4       # W10 同类 >= 4 → control
+DEFAULT_W6_CONTROL = 3  # W6 同类 >= 3 → control
+DEFAULT_W10_WARN = 3  # W10 同类 >= 3 → warning
+DEFAULT_W10_CONTROL = 4  # W10 同类 >= 4 → control
 DEFAULT_MACRO_W6_EXPLORE = 5  # W6 EXPLORATION >= 5
-DEFAULT_MACRO_W6_ACTION = 0   # 且 ACTION == 0 → control
+DEFAULT_MACRO_W6_ACTION = 0  # 且 ACTION == 0 → control
 DEFAULT_MACRO_W10_EXPLORE = 7  # W10 EXPLORATION >= 7
-DEFAULT_MACRO_W10_ACTION = 1   # 且 ACTION <= 1 → warning
+DEFAULT_MACRO_W10_ACTION = 1  # 且 ACTION <= 1 → warning
 DEFAULT_MIN_STEPS_BETWEEN = 3  # 触发后至少新增 N 个 step 才允许再次触发
 DEFAULT_COOLDOWN_SECONDS = 60.0  # 触发后最少间隔（时间兜底，防高频抖动）
 
@@ -426,15 +544,18 @@ class BehaviorPatternDetector(QObject):
             step = f"seq:{self._clock()}"  # 无 step 字段时用时间兜底（每次事件独立决策）
         step = str(step)
 
-        state = self._states.setdefault(agent_key, {
-            "decisions": OrderedDict(),  # step -> _StepDecision（保持插入序）
-            "current": None,             # 当前累积的 step
-            "current_classes": set(),
-            "seq": 0,
-            "last_trigger_seq": None,
-            "last_trigger_at": 0.0,
-            "last_trigger_level": None,  # 上次触发的档位（warning / control）
-        })
+        state = self._states.setdefault(
+            agent_key,
+            {
+                "decisions": OrderedDict(),  # step -> _StepDecision（保持插入序）
+                "current": None,  # 当前累积的 step
+                "current_classes": set(),
+                "seq": 0,
+                "last_trigger_seq": None,
+                "last_trigger_at": 0.0,
+                "last_trigger_level": None,  # 上次触发的档位（warning / control）
+            },
+        )
 
         # step 去重：同一 step 并行事件合并成一次行为决策
         if state["current"] != step:
@@ -471,10 +592,7 @@ class BehaviorPatternDetector(QObject):
         """
         decisions = list(state["decisions"].values())
         if state["current"] is not None and state["current_classes"]:
-            decisions.append(
-                _StepDecision(state["current"], state["seq"] + 1,
-                              frozenset(state["current_classes"]))
-            )
+            decisions.append(_StepDecision(state["current"], state["seq"] + 1, frozenset(state["current_classes"])))
         return decisions
 
     def _recent_decisions(self, decisions: list[_StepDecision], n: int) -> list[_StepDecision]:
@@ -544,8 +662,7 @@ class BehaviorPatternDetector(QObject):
         if is_upgrade:
             decisions = self._all_decisions(state)
         else:
-            decisions = [d for d in self._all_decisions(state)
-                         if last_trigger_seq is None or d.seq > last_trigger_seq]
+            decisions = [d for d in self._all_decisions(state) if last_trigger_seq is None or d.seq > last_trigger_seq]
 
         # 标记触发（cooldown 门控）
         state["last_trigger_seq"] = current_seq
@@ -554,18 +671,12 @@ class BehaviorPatternDetector(QObject):
 
         # 构建 payload
         summary_lines = [
-            f"最近{len(w6)}步 行为类分布: " + ", ".join(
-                f"{k.value}={v}" for k, v in sorted(counts6.items(), key=lambda x: x[0].value)
-            ) or "无",
-            f"最近{len(w10)}步 行为类分布: " + ", ".join(
-                f"{k.value}={v}" for k, v in sorted(counts10.items(), key=lambda x: x[0].value)
-            ) or "无",
+            f"最近{len(w6)}步 行为类分布: " + ", ".join(f"{k.value}={v}" for k, v in sorted(counts6.items(), key=lambda x: x[0].value)) or "无",
+            f"最近{len(w10)}步 行为类分布: " + ", ".join(f"{k.value}={v}" for k, v in sorted(counts10.items(), key=lambda x: x[0].value)) or "无",
             f"大类: EXPLORATION={macro6.get(BehaviorMacro.EXPLORATION, 0)}(W6)/{macro10.get(BehaviorMacro.EXPLORATION, 0)}(W10), "
             f"ACTION={macro6.get(BehaviorMacro.ACTION, 0)}(W6)/{macro10.get(BehaviorMacro.ACTION, 0)}(W10)",
         ]
-        tool_seq = " > ".join(
-            cls.value for d in decisions[-12:] for cls in sorted(d.classes, key=lambda c: c.value)
-        ) or ""
+        tool_seq = " > ".join(cls.value for d in decisions[-12:] for cls in sorted(d.classes, key=lambda c: c.value)) or ""
 
         # Control 档位固定上报 REPLAN：本模块只负责「值得检查」，不替 Agent
         # 做决定，也不打断其执行（原先预留的 LLM Judge 从未接线，已删除）。
@@ -584,7 +695,13 @@ class BehaviorPatternDetector(QObject):
 
         log.info(
             "[BEHAVIOR] %s %s (%s, %s=%d, window=%s) 步骤=%d",
-            agent_key, level.value, reason.value, cls.value if cls else "-", count, window, len(w10),
+            agent_key,
+            level.value,
+            reason.value,
+            cls.value if cls else "-",
+            count,
+            window,
+            len(w10),
         )
         if level is PatternLevel.CONTROL:
             self.pattern_control.emit(agent_key, payload)
@@ -608,19 +725,15 @@ class BehaviorPatternDetector(QObject):
             return (PatternLevel.CONTROL, PatternReason.FINE_REPEAT_W10_CONTROL, best10[0], best10[1], "W10")
 
         # ---- 大类：W6 EXPLORATION >= N 且 ACTION == 0 → control ----
-        if (macro6.get(BehaviorMacro.EXPLORATION, 0) >= self._macro_w6_explore
-                and macro6.get(BehaviorMacro.ACTION, 0) <= self._macro_w6_action):
-            return (PatternLevel.CONTROL, PatternReason.MACRO_EXPLORE_W6,
-                    BehaviorClass.OTHER, macro6.get(BehaviorMacro.EXPLORATION, 0), "W6")
+        if macro6.get(BehaviorMacro.EXPLORATION, 0) >= self._macro_w6_explore and macro6.get(BehaviorMacro.ACTION, 0) <= self._macro_w6_action:
+            return (PatternLevel.CONTROL, PatternReason.MACRO_EXPLORE_W6, BehaviorClass.OTHER, macro6.get(BehaviorMacro.EXPLORATION, 0), "W6")
 
         # ---- 细分类：W10 同类 >= 3 → warning（重复倾向）----
         if best10 and best10[1] >= self._w10_warn and best10[0] in _TRACKED_CLASSES:
             return (PatternLevel.WARNING, PatternReason.FINE_REPEAT_W10_WARN, best10[0], best10[1], "W10")
 
         # ---- 大类：W10 EXPLORATION >= N 且 ACTION <= 1 → warning ----
-        if (macro10.get(BehaviorMacro.EXPLORATION, 0) >= self._macro_w10_explore
-                and macro10.get(BehaviorMacro.ACTION, 0) <= self._macro_w10_action):
-            return (PatternLevel.WARNING, PatternReason.MACRO_EXPLORE_W10,
-                    BehaviorClass.OTHER, macro10.get(BehaviorMacro.EXPLORATION, 0), "W10")
+        if macro10.get(BehaviorMacro.EXPLORATION, 0) >= self._macro_w10_explore and macro10.get(BehaviorMacro.ACTION, 0) <= self._macro_w10_action:
+            return (PatternLevel.WARNING, PatternReason.MACRO_EXPLORE_W10, BehaviorClass.OTHER, macro10.get(BehaviorMacro.EXPLORATION, 0), "W10")
 
         return (None, None, None, 0, "")

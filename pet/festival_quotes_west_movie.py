@@ -38,61 +38,61 @@ MIT 许可存在张力。维护者已知情，并明确要求把这些经典台�
 QUOTES_WEST_MOVIE: dict[str, tuple[str, ...]] = {
     # 情人节（2/14）：爱情、倾慕
     "valentine": (
-        "Here's looking at you, kid.",                                          # Casablanca (1942)
+        "Here's looking at you, kid.",  # Casablanca (1942)
         "Of all the gin joints in all the towns in all the world, she walks into mine.",  # Casablanca (1942)
-        "Rome. By all means, Rome.",                                            # Roman Holiday (1953)
-        "You have bewitched me, body and soul.",                                # Pride & Prejudice (2005)
-        "Here's to the ones who dream, foolish as they may seem.",              # La La Land (2016)
+        "Rome. By all means, Rome.",  # Roman Holiday (1953)
+        "You have bewitched me, body and soul.",  # Pride & Prejudice (2005)
+        "Here's to the ones who dream, foolish as they may seem.",  # La La Land (2016)
     ),
     # 愚人节（4/1）：玩笑、荒诞、人生如戏
     "april_fools": (
         "Life is like a box of chocolates. You never know what you're gonna get.",  # Forrest Gump (1994)
         "Good morning, and in case I don't see ya, good afternoon, good evening, and good night!",  # The Truman Show (1998)
-        "We accept the reality of the world with which we're presented.",       # The Truman Show (1998)
-        "Stupid is as stupid does.",                                            # Forrest Gump (1994)
-        "Pay no attention to that man behind the curtain.",                     # The Wizard of Oz (1939)
+        "We accept the reality of the world with which we're presented.",  # The Truman Show (1998)
+        "Stupid is as stupid does.",  # Forrest Gump (1994)
+        "Pay no attention to that man behind the curtain.",  # The Wizard of Oz (1939)
     ),
     # 复活节：希望、重生、救赎
     "easter": (
-        "Hope is a good thing, maybe the best of things.",                      # The Shawshank Redemption (1994)
-        "Get busy living, or get busy dying.",                                  # The Shawshank Redemption (1994)
-        "Just keep swimming.",                                                  # Finding Nemo (2003)
-        "Good morning, Princess!",                                              # Life Is Beautiful (1997)
-        "Life isn't like in the movies. Life is much harder.",                  # Cinema Paradiso (1988)
+        "Hope is a good thing, maybe the best of things.",  # The Shawshank Redemption (1994)
+        "Get busy living, or get busy dying.",  # The Shawshank Redemption (1994)
+        "Just keep swimming.",  # Finding Nemo (2003)
+        "Good morning, Princess!",  # Life Is Beautiful (1997)
+        "Life isn't like in the movies. Life is much harder.",  # Cinema Paradiso (1988)
     ),
     # 母亲节：母爱、养育、牵挂
     "mothers_day": (
         "My mama always said you've got to put the past behind you before you can move on.",  # Forrest Gump (1994)
         "I want you to be the very best version of yourself that you can be.",  # Lady Bird (2017)
-        "Remember me, though I have to say goodbye.",                           # Coco (2017)
+        "Remember me, though I have to say goodbye.",  # Coco (2017)
     ),
     # 父亲节：父爱、教导、责任
     "fathers_day": (
-        "Don't ever let somebody tell you that you can't do something.",        # The Pursuit of Happyness (2006)
+        "Don't ever let somebody tell you that you can't do something.",  # The Pursuit of Happyness (2006)
         "A man who doesn't spend time with his family can never be a real man.",  # The Godfather (1972)
-        "Remember who you are.",                                                # The Lion King (1994)
-        "If you build it, he will come.",                                       # Field of Dreams (1989)
+        "Remember who you are.",  # The Lion King (1994)
+        "If you build it, he will come.",  # Field of Dreams (1989)
         "Love is the one thing we're capable of perceiving that transcends time and space.",  # Interstellar (2014)
     ),
     # 万圣节（10/31）：幽暗、神秘、夜色（不涉血腥恐怖）
     "halloween": (
-        "I ain't afraid of no ghost.",                                          # Ghostbusters (1984)
-        "I'm the ghost with the most, babe.",                                   # Beetlejuice (1988)
-        "Life's no fun without a good scare.",                                  # The Nightmare Before Christmas (1993)
-        "I'm not afraid of you.",                                               # Edward Scissorhands (1990)
+        "I ain't afraid of no ghost.",  # Ghostbusters (1984)
+        "I'm the ghost with the most, babe.",  # Beetlejuice (1988)
+        "Life's no fun without a good scare.",  # The Nightmare Before Christmas (1993)
+        "I'm not afraid of you.",  # Edward Scissorhands (1990)
     ),
     # 平安夜（12/24）：平安、温暖、团聚
     "christmas_eve": (
-        "To me, you are perfect.",                                              # Love Actually (2003)
-        "If you look for it, you'll find that love actually is all around.",    # Love Actually (2003)
+        "To me, you are perfect.",  # Love Actually (2003)
+        "If you look for it, you'll find that love actually is all around.",  # Love Actually (2003)
         "The best way to spread Christmas cheer is singing loud for all to hear.",  # Elf (2003)
-        "This is my house. I have to defend it.",                               # Home Alone (1990)
+        "This is my house. I have to defend it.",  # Home Alone (1990)
     ),
     # 圣诞节（12/25）：圣诞、仁爱、善意
     "christmas": (
-        "Every time a bell rings, an angel gets his wings.",                    # It's a Wonderful Life (1946)
-        "Merry Christmas, you filthy animal.",                                  # Home Alone (1990)
-        "The bell still rings for all who truly believe.",                      # The Polar Express (2004)
-        "Faith is believing in things when common sense tells you not to.",     # Miracle on 34th Street (1947)
+        "Every time a bell rings, an angel gets his wings.",  # It's a Wonderful Life (1946)
+        "Merry Christmas, you filthy animal.",  # Home Alone (1990)
+        "The bell still rings for all who truly believe.",  # The Polar Express (2004)
+        "Faith is believing in things when common sense tells you not to.",  # Miracle on 34th Street (1947)
     ),
 }

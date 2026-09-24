@@ -14,23 +14,26 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, TypedDict, Union
 
-FRAME_MAX_LENGTH: int = 256 * 1024       # coordinator 下行；覆盖最多 128 个槽位的完整快照
-STATE_FRAME_MAX_LENGTH: int = 4 * 1024   # client 上行状态；阻止单成员耗尽聚合快照预算
-HEADER_SIZE: int = 4                    # 4字节无符号大端整数长度头
+FRAME_MAX_LENGTH: int = 256 * 1024  # coordinator 下行；覆盖最多 128 个槽位的完整快照
+STATE_FRAME_MAX_LENGTH: int = 4 * 1024  # client 上行状态；阻止单成员耗尽聚合快照预算
+HEADER_SIZE: int = 4  # 4字节无符号大端整数长度头
 
 
 # ----------------------------------------------------------------------
 # 协议消息线格式（TypedDict，total=False：线上字段可缺省）
 # ----------------------------------------------------------------------
 
+
 class ProbeMessage(TypedDict, total=False):
     """协调者决胜探测帧。"""
+
     type: Literal["probe"]
     runtime_id: str
 
 
 class CoordinatorMessage(TypedDict, total=False):
     """探测应答：对方是协调者。"""
+
     type: Literal["coordinator"]
     runtime_id: str
     epoch: str
@@ -38,6 +41,7 @@ class CoordinatorMessage(TypedDict, total=False):
 
 class HelloMessage(TypedDict, total=False):
     """客户端入会帧。"""
+
     type: Literal["hello"]
     runtime_id: str
     instance_id: str
@@ -47,6 +51,7 @@ class HelloMessage(TypedDict, total=False):
 
 class WelcomeMessage(TypedDict, total=False):
     """协调者入会应答：携带 epoch 与当前成员表。"""
+
     type: Literal["welcome"]
     epoch: str
     coordinator_id: str
@@ -57,12 +62,14 @@ class WelcomeMessage(TypedDict, total=False):
 
 class LeaveMessage(TypedDict, total=False):
     """离开帧。"""
+
     type: Literal["leave"]
     seq: int
 
 
 class StateMessage(TypedDict, total=False):
     """成员状态帧：_CollisionWorker.submit_state 的 state dict + type 标记。"""
+
     type: Literal["state"]
     runtime_id: str
     instance_id: str
@@ -87,6 +94,7 @@ class StateMessage(TypedDict, total=False):
 
 class SnapshotMessage(TypedDict, total=False):
     """快照帧：协调者 tick 时点全体成员表。"""
+
     type: Literal["snapshot"]
     epoch: str
     tick: int
@@ -95,6 +103,7 @@ class SnapshotMessage(TypedDict, total=False):
 
 class ImpulseMessage(TypedDict, total=False):
     """冲量帧：ImpulseResult.asdict() 平铺字段 + epoch/type 标记。"""
+
     type: Literal["impulse"]
     epoch: str
     tick: int
@@ -123,14 +132,21 @@ class ImpulseMessage(TypedDict, total=False):
 
 
 WireMessage = Union[
-    ProbeMessage, CoordinatorMessage, HelloMessage, WelcomeMessage,
-    LeaveMessage, StateMessage, SnapshotMessage, ImpulseMessage,
+    ProbeMessage,
+    CoordinatorMessage,
+    HelloMessage,
+    WelcomeMessage,
+    LeaveMessage,
+    StateMessage,
+    SnapshotMessage,
+    ImpulseMessage,
 ]
 
 
 @dataclass
 class DecodeError:
     """协议解码错误对象（避免抛异常）。"""
+
     reason: str
     raw_data: bytes = b""
 
@@ -175,12 +191,12 @@ class FrameStreamDecoder:
                 # and search the remaining stream for the next plausible header.
                 sync_at = None
                 for offset in range(len(self._buffer) - HEADER_SIZE + 1):
-                    candidate = int.from_bytes(self._buffer[offset:offset + HEADER_SIZE], "big")
+                    candidate = int.from_bytes(self._buffer[offset : offset + HEADER_SIZE], "big")
                     if 0 < candidate <= self.max_frame_len:
                         sync_at = offset
                         break
                 if sync_at is None:
-                    self._buffer[:] = self._buffer[-(HEADER_SIZE - 1):]
+                    self._buffer[:] = self._buffer[-(HEADER_SIZE - 1) :]
                     break
                 del self._buffer[:sync_at]
                 continue
@@ -198,8 +214,8 @@ class FrameStreamDecoder:
                 break
 
             # 提取完整载荷
-            payload_bytes = bytes(self._buffer[HEADER_SIZE:HEADER_SIZE + length])
-            del self._buffer[:HEADER_SIZE + length]
+            payload_bytes = bytes(self._buffer[HEADER_SIZE : HEADER_SIZE + length])
+            del self._buffer[: HEADER_SIZE + length]
 
             try:
                 text = payload_bytes.decode("utf-8")

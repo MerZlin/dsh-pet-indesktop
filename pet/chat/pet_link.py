@@ -8,18 +8,18 @@ class PetChatLink:
     def set_window(self, w):
         self.pet_window = w
 
-    def _notify(self, state, text=''):
-        if self.pet_window and hasattr(self.pet_window, 'set_chat_status'):
+    def _notify(self, state, text=""):
+        if self.pet_window and hasattr(self.pet_window, "set_chat_status"):
             self.pet_window.set_chat_status(state, text)
 
-    def thinking(self, text='正在想怎么回答…'):
-        self._notify('thinking', text)
+    def thinking(self, text="正在想怎么回答…"):
+        self._notify("thinking", text)
 
     def streaming(self, text):
-        self._notify('streaming', text[:60])
+        self._notify("streaming", text[:60])
 
     def success(self):
-        self._notify('success', '')
+        self._notify("success", "")
 
     def error(self, text):
-        self._notify('error', text[:80])
+        self._notify("error", text[:80])

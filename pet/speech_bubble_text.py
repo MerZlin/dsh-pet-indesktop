@@ -13,6 +13,7 @@
 依赖方向：speech_bubble -> speech_bubble_text，本模块不得反向 import pet.speech_bubble。
 Qt 依赖面最小化：只导入纯函数实际使用的 Qt 类型。
 """
+
 from __future__ import annotations
 
 import re
@@ -23,7 +24,14 @@ from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QFontMetrics
 
 SELF_TALK_IMAGE_SUFFIXES = {
-    ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".bmp",
+    ".gif",
+    ".tif",
+    ".tiff",
 }
 
 # 气泡文本列的基础像素宽（短文案列宽，也是气泡整体宽度的由来），以及 label
@@ -36,8 +44,8 @@ BUBBLE_TEXT_SLACK = 4
 # 360px 上限。加宽换来每行装更多字——长文案的总行数、翻页次数与「末页孤行」
 # 概率一起下降；上限兼顾气泡观感与桌宠贴边时剩余的可用空间。
 BUBBLE_TEXT_COLUMN_MAX = 360
-BUBBLE_TEXT_COLUMN_GROWTH_CHARS = 60   # 超过这个字数才开始放宽
-BUBBLE_TEXT_COLUMN_GROWTH_SPAN = 100   # 再长 100 字到达列宽上限
+BUBBLE_TEXT_COLUMN_GROWTH_CHARS = 60  # 超过这个字数才开始放宽
+BUBBLE_TEXT_COLUMN_GROWTH_SPAN = 100  # 再长 100 字到达列宽上限
 
 
 def bubble_wrap_width(column: int = BUBBLE_TEXT_COLUMN, slack: int = BUBBLE_TEXT_SLACK) -> int:
@@ -89,11 +97,7 @@ def bubble_column_for_text(text: str, scale: float = 1.0) -> int:
     length = len(normalize_bubble_text(text))
     if length <= BUBBLE_TEXT_COLUMN_GROWTH_CHARS:
         return int(round(base))
-    grown = base + ceil(
-        (length - BUBBLE_TEXT_COLUMN_GROWTH_CHARS)
-        * (ceiling - base)
-        / BUBBLE_TEXT_COLUMN_GROWTH_SPAN
-    )
+    grown = base + ceil((length - BUBBLE_TEXT_COLUMN_GROWTH_CHARS) * (ceiling - base) / BUBBLE_TEXT_COLUMN_GROWTH_SPAN)
     return int(min(ceiling, grown))
 
 
@@ -134,10 +138,7 @@ def list_self_talk_images(directory: str | Path) -> list[Path]:
     if not root.is_dir():
         return []
     try:
-        return sorted(
-            path for path in root.iterdir()
-            if path.is_file() and path.suffix.lower() in SELF_TALK_IMAGE_SUFFIXES
-        )
+        return sorted(path for path in root.iterdir() if path.is_file() and path.suffix.lower() in SELF_TALK_IMAGE_SUFFIXES)
     except OSError:
         return []
 
@@ -162,26 +163,17 @@ def normalize_bubble_text(text: str, *, keep_breaks: bool = False) -> str:
 
 def bubble_max_lines(text: str, *, keep_breaks: bool = False) -> int:
     """Return the max allowed lines for bubble text: 3 for short text, 6 for long."""
-    return (
-        3
-        if len(normalize_bubble_text(text, keep_breaks=keep_breaks)) <= 40
-        else 6
-    )
+    return 3 if len(normalize_bubble_text(text, keep_breaks=keep_breaks)) <= 40 else 6
 
 
 # 避头尾（kinsoku）行首禁则字符：闭标点不允许出现在行首。逐字换行时若
 # 新行的首字符落在本集合内，就把上一行的末字符拉下来陪它——否则长句
 # 末尾的 "！" 会独占一行，分页时变成一个标点符号撑起一整页（孤字页）。
 # 开引号（" ' “ ‘）不在此列：它们出现在行首是合法的。
-LINE_START_FORBIDDEN = frozenset(
-    "，。、；：？！…·～）】》」』”’"
-    ",.;:!?)]}"
-)
+LINE_START_FORBIDDEN = frozenset("，。、；：？！…·～）】》」』”’,.;:!?)]}")
 
 
-def _wrap_bubble_lines(
-    metrics: QFontMetrics, value: str, width: int, *, keep_breaks: bool = False
-) -> list[str]:
+def _wrap_bubble_lines(metrics: QFontMetrics, value: str, width: int, *, keep_breaks: bool = False) -> list[str]:
     """Wrap ``value`` char-by-char into lines within ``width`` px (kinsoku-aware).
 
     ``keep_breaks=True`` 时把 ``\\n`` 当作强制换行：调用方已经排好版
@@ -229,9 +221,7 @@ def elide_bubble_text(
     if len(lines) > max_lines:
         remainder = "".join(lines[max_lines:])
         lines = lines[:max_lines]
-        lines[-1] = metrics.elidedText(
-            lines[-1] + remainder, Qt.TextElideMode.ElideRight, width
-        )
+        lines[-1] = metrics.elidedText(lines[-1] + remainder, Qt.TextElideMode.ElideRight, width)
     return "\n".join(lines)
 
 
@@ -301,10 +291,7 @@ def paginate_bubble_text(
     lines = _wrap_bubble_lines(metrics, value, width, keep_breaks=keep_breaks)
     if len(lines) <= max_lines:
         return ["\n".join(lines)]
-    pages = [
-        lines[start : start + max_lines]
-        for start in range(0, len(lines), max_lines)
-    ]
+    pages = [lines[start : start + max_lines] for start in range(0, len(lines), max_lines)]
     if len(pages) >= 2 and len(pages[-1]) <= 2 and len(pages[-2]) > 2:
         # 孤行控制（收紧到 ≤2 行）：末页只剩 1~2 行时都重新平衡——从前一页
         # 匀一行过来（3+1 → 2+2、3+2 → 2+3），避免末页零星几行看起来像气泡

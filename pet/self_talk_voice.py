@@ -42,11 +42,11 @@ SYNTH_TIMEOUT = 300.0
 
 # 已知台词的固定声线（与外部脚本一致）。没列到的台词按口吻归类。
 VOICE_BY_TEXT = {
-    "好女孩……": "happy-06",          # 温柔夸赞
-    "好模型……": "neutral-01",        # 平淡陈述
-    "欧鲸鲸……": "happy-08",          # 俏皮
+    "好女孩……": "happy-06",  # 温柔夸赞
+    "好模型……": "neutral-01",  # 平淡陈述
+    "欧鲸鲸……": "happy-08",  # 俏皮
     "今天也要认真工作呀。": "happy-01",  # 轻快鼓励
-    "再陪你一会儿。": "sad-03",        # 温柔/陪伴
+    "再陪你一会儿。": "sad-03",  # 温柔/陪伴
 }
 
 # 服务里的参照音是 <情绪>-01..08：归类结果必须落在这个命名空间里。
@@ -147,11 +147,7 @@ def _has_audio(path: Path) -> bool:
 def missing_lines(config) -> list[tuple[str, str]]:
     """返回``[(文本, 声线), ...]``：只含还没有可用本地音频的那几句。"""
     config_dir = config.dir
-    return [
-        (text, pick_voice(text))
-        for text, _source in collect_lines(config)
-        if not _has_audio(cache_path(config_dir, text))
-    ]
+    return [(text, pick_voice(text)) for text, _source in collect_lines(config) if not _has_audio(cache_path(config_dir, text))]
 
 
 # --------------------------------------------------------------- 网络边界（测试打桩点）
@@ -164,8 +160,7 @@ def _get_json(url: str, timeout: float):
 
 def _post_json(url: str, payload: dict, timeout: float) -> bytes:
     body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=body,
-                                 headers={"content-type": "application/json"})
+    req = urllib.request.Request(url, data=body, headers={"content-type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
@@ -203,8 +198,7 @@ def run_precache(config, *, server: str | None = None) -> dict:
     for text, voice in pending:
         target = cache_path(config_dir, text)
         try:
-            blob = _post_json(f"{server}/tts", {"text": text, "voice": voice},
-                              SYNTH_TIMEOUT)
+            blob = _post_json(f"{server}/tts", {"text": text, "voice": voice}, SYNTH_TIMEOUT)
             if not blob:
                 raise ValueError("合成结果为空")
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -241,8 +235,10 @@ def start_precache(config, *, server: str | None = None) -> bool:
         if _active is not None and _active.is_alive():
             return False
         thread = threading.Thread(
-            target=_run_quietly, args=(config, server),
-            name="self-talk-voice-precache", daemon=True,
+            target=_run_quietly,
+            args=(config, server),
+            name="self-talk-voice-precache",
+            daemon=True,
         )
         _active = thread
         thread.start()

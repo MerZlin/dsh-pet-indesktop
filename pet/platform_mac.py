@@ -20,7 +20,7 @@ def _keep_macos_tool_window_visible(window) -> None:
     Cocoa automatically hides a Qt.Tool window when the accessory application
     resigns active, which looked like the WebM Chat pet had exited.
     """
-    if sys.platform == 'darwin':
+    if sys.platform == "darwin":
         window.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
 
 
@@ -33,11 +33,12 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
     只在真实 cocoa 平台执行：offscreen/minimal 等测试平台下 winId() 不是
     NSView 指针，objc_msgSend 会直接 SIGSEGV（无法被 try/except 捕获）。
     """
-    if sys.platform != 'darwin':
+    if sys.platform != "darwin":
         return False
     try:
         from PySide6.QtGui import QGuiApplication
-        if QGuiApplication.platformName() != 'cocoa':
+
+        if QGuiApplication.platformName() != "cocoa":
             return False
     except Exception:
         return False
@@ -45,7 +46,7 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
         import ctypes
         import ctypes.util
 
-        lib_path = ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib'
+        lib_path = ctypes.util.find_library("objc") or "/usr/lib/libobjc.A.dylib"
         objc = ctypes.cdll.LoadLibrary(lib_path)
 
         # 关键：sel_registerName 返回 SEL（64 位指针）。ctypes 默认按 c_int(32 位)
@@ -56,9 +57,9 @@ def _mac_set_window_level(view_id: int, level: int) -> bool:
         msg = objc.objc_msgSend
         msg.restype = ctypes.c_void_p
 
-        sel_window = objc.sel_registerName(b'window')
-        sel_set_level = objc.sel_registerName(b'setLevel:')
-        sel_order_front = objc.sel_registerName(b'orderFrontRegardless')
+        sel_window = objc.sel_registerName(b"window")
+        sel_set_level = objc.sel_registerName(b"setLevel:")
+        sel_order_front = objc.sel_registerName(b"orderFrontRegardless")
 
         # [view window] —— 无参，返回 NSWindow*
         msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]

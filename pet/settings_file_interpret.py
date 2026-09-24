@@ -5,6 +5,7 @@ modern_settings_dialog.py 行数预算已无余量，本域的控件与行全部
 构建，对话框只做三处接线：控件安装（_build_file_interpret_controls）、
 域导航挂页（_rebuild_domain_navigation）、保存委托（_write_config）。
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -43,9 +44,7 @@ def create_file_interpret_controls(dialog) -> None:
     dialog.file_interpret_interval_spin.setRange(*_PROGRESS_INTERVAL_RANGE)
     dialog.file_interpret_interval_spin.setDecimals(0)
     dialog.file_interpret_interval_spin.setSuffix(" 秒")
-    dialog.file_interpret_interval_spin.setValue(
-        _clamp_interval(cfg.get("progress_interval_seconds", defaults["progress_interval_seconds"]))
-    )
+    dialog.file_interpret_interval_spin.setValue(_clamp_interval(cfg.get("progress_interval_seconds", defaults["progress_interval_seconds"])))
 
 
 def build_file_interpret_rows(dialog) -> list[SettingRow]:

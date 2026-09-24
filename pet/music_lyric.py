@@ -46,10 +46,7 @@ HTTP_TIMEOUT = 8.0
 # 当成正常歌词存了下来，必须作废重取，否则会被当作有词曲目放起唱歌动画。
 _CACHE_VERSION = 2
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 # 形如 [mm:ss.xx] / [mm:ss:xx] / [mm:ss]，可能一行多个。
 _TIME_RE = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
@@ -133,7 +130,7 @@ def parse_lrc(text: str) -> list[LyricLine]:
         if _TAG_RE.match(stripped):
             continue
         # 时间戳之后的剩余内容即歌词文本。
-        body = stripped[stamps[-1].end():].strip()
+        body = stripped[stamps[-1].end() :].strip()
         for stamp in stamps:
             at = _parse_stamp(stamp.group(1), stamp.group(2), stamp.group(3)) + offset_sec
             lines.append(LyricLine(at=max(0.0, at), text=body))
@@ -158,9 +155,7 @@ def cache_dir() -> Path:
 
 
 def _cache_path(title: str, artist: str) -> Path:
-    digest = hashlib.sha1(
-        f"{artist.strip().lower()}|{title.strip().lower()}".encode("utf-8")
-    ).hexdigest()
+    digest = hashlib.sha1(f"{artist.strip().lower()}|{title.strip().lower()}".encode("utf-8")).hexdigest()
     return cache_dir() / f"{digest}.json"
 
 
@@ -172,10 +167,7 @@ def _read_cache(title: str, artist: str) -> Lyrics | None:
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("v") != _CACHE_VERSION:
             return None
-        lines = tuple(
-            LyricLine(at=float(item[0]), text=str(item[1]))
-            for item in data.get("lines", [])
-        )
+        lines = tuple(LyricLine(at=float(item[0]), text=str(item[1])) for item in data.get("lines", []))
         instrumental = bool(data.get("instrumental"))
         if not lines and not instrumental:
             return None
@@ -277,8 +269,7 @@ def _note_proxy_bypass_once() -> None:
         return
     _proxy_bypass_logged = True
     if proxies:
-        log.info("歌词请求直连：已绕过系统代理 %s",
-                 ", ".join(sorted({str(v) for v in proxies.values() if v})))
+        log.info("歌词请求直连：已绕过系统代理 %s", ", ".join(sorted({str(v) for v in proxies.values() if v})))
 
 
 def _open_direct(request: urllib.request.Request, *, timeout: float):
@@ -302,14 +293,12 @@ def _http_get_json(url: str, *, referer: str | None = None) -> dict | list | Non
             start = text.find("(")
             end = text.rfind(")")
             if start != -1 and end > start:
-                text = text[start + 1:end]
+                text = text[start + 1 : end]
         return json.loads(text)
     except Exception as exc:
         # 必须落在 INFO 可见的级别：取词失败时日志里只有「0 行」会被误当成
         # "功能坏了"，这里把主机、耗时与异常类型留下（含超时 / 连接被拒）。
-        log.warning("歌词请求失败 %s（%.2fs）: %s: %s",
-                    _host_of(url), time.monotonic() - started,
-                    type(exc).__name__, exc)
+        log.warning("歌词请求失败 %s（%.2fs）: %s: %s", _host_of(url), time.monotonic() - started, type(exc).__name__, exc)
         return None
 
 
@@ -363,17 +352,14 @@ def _looks_instrumental(lines: list[LyricLine]) -> bool:
     # 占位文案只有一两句；真歌词不会这么少还全部命中关键词。
     if len(texts) > 3:
         return False
-    return all(
-        any(pattern in text for pattern in _INSTRUMENTAL_PATTERNS) for text in texts
-    )
+    return all(any(pattern in text for pattern in _INSTRUMENTAL_PATTERNS) for text in texts)
 
 
 def _fetch_from_qq(title: str, artist: str) -> Lyrics | None:
     """QQ音乐：中文曲库匹配质量最好。"""
     query = urllib.parse.quote(f"{title} {artist}".strip())
     search = _http_get_json(
-        "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
-        f"?w={query}&format=json&n=10&p=1&cr=1&aggr=1",
+        f"https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w={query}&format=json&n=10&p=1&cr=1&aggr=1",
         referer="https://y.qq.com/",
     )
     if not isinstance(search, dict):
@@ -381,17 +367,14 @@ def _fetch_from_qq(title: str, artist: str) -> Lyrics | None:
     songs = ((search.get("data") or {}).get("song") or {}).get("list") or []
     songmid = None
     for song in songs:
-        singers = "/".join(
-            str(s.get("name") or "") for s in (song.get("singer") or [])
-        )
+        singers = "/".join(str(s.get("name") or "") for s in (song.get("singer") or []))
         if _name_matches(singers, artist):
             songmid = song.get("songmid")
             break
     if not songmid:
         return None
     payload = _http_get_json(
-        "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg"
-        f"?songmid={songmid}&format=json&nobase64=1&g_tk=5381",
+        f"https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid={songmid}&format=json&nobase64=1&g_tk=5381",
         referer="https://y.qq.com/",
     )
     if not isinstance(payload, dict):
@@ -418,8 +401,7 @@ def _fetch_from_netease(title: str, artist: str) -> Lyrics | None:
     """网易云：明文接口，作为最后兜底。"""
     query = urllib.parse.quote(f"{title} {artist}".strip())
     search = _http_get_json(
-        "https://music.163.com/api/cloudsearch/pc"
-        f"?s={query}&type=1&offset=0&limit=10",
+        f"https://music.163.com/api/cloudsearch/pc?s={query}&type=1&offset=0&limit=10",
         referer="https://music.163.com/",
     )
     if not isinstance(search, dict):
@@ -427,9 +409,7 @@ def _fetch_from_netease(title: str, artist: str) -> Lyrics | None:
     songs = ((search.get("result") or {}).get("songs")) or []
     song_id = None
     for song in songs:
-        singers = "/".join(
-            str(a.get("name") or "") for a in (song.get("artists") or [])
-        )
+        singers = "/".join(str(a.get("name") or "") for a in (song.get("artists") or []))
         if _name_matches(singers, artist):
             song_id = song.get("id")
             break
@@ -458,9 +438,7 @@ _SOURCES = (
 _PRIORITY_GRACE = 1.2
 
 
-def fetch_lyrics(
-    title: str, artist: str, *, use_cache: bool = True, cache_limit: int | None = None
-) -> Lyrics | None:
+def fetch_lyrics(title: str, artist: str, *, use_cache: bool = True, cache_limit: int | None = None) -> Lyrics | None:
     """取歌词：缓存 → 三源并发（QQ音乐 → lrclib → 网易云，按质量优先）。
 
     三个源同时发起请求，因此总耗时约等于**最慢的那个**而不是三者之和。
@@ -485,15 +463,10 @@ def fetch_lyrics(
         if cached:
             return cached
 
-    executor = ThreadPoolExecutor(
-        max_workers=len(_SOURCES), thread_name_prefix="lyric-fetch"
-    )
+    executor = ThreadPoolExecutor(max_workers=len(_SOURCES), thread_name_prefix="lyric-fetch")
     try:
         # 把 future 与源名配成对，避免用 id() 反查这种脆弱做法。
-        submitted = [
-            (name, executor.submit(fetcher, title, artist))
-            for name, fetcher in _SOURCES
-        ]
+        submitted = [(name, executor.submit(fetcher, title, artist)) for name, fetcher in _SOURCES]
         rank = {name: index for index, (name, _) in enumerate(_SOURCES)}
         found: dict[str, Lyrics] = {}
         deadline = time.monotonic() + HTTP_TIMEOUT + 1.0
@@ -538,9 +511,7 @@ def fetch_lyrics(
         executor.shutdown(wait=False)
 
 
-def _best_found(
-    found: dict[str, Lyrics], rank: dict[str, int]
-) -> Lyrics | None:
+def _best_found(found: dict[str, Lyrics], rank: dict[str, int]) -> Lyrics | None:
     """在已成功的源里挑优先级最高的那个（rank 越小越优先）。"""
     if not found:
         return None
