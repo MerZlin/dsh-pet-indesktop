@@ -224,6 +224,14 @@
 | Phase 6 | [`plugin-phase-06-ecosystem/`](plugin-phase-06-ecosystem/) | 开放第三方插件 SDK、签名和社区 catalog 前必读。 |
 | Phase 7 | [`plugin-phase-07-release/`](plugin-phase-07-release/) | 做跨平台正式发布和生态运维前必读。 |
 
+### Phase 2 详细设计与测试文档
+
+| 文档 | 一句话内容 | 何时必读 |
+|---|---|---|
+| [`plugin-phase-02-runtime/README.md`](plugin-phase-02-runtime/README.md) | Phase 2 范围、状态、实施顺序和阶段关系。 | 开始 Core 插件运行时施工或交接时。 |
+| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md) | Registry、Context、Event Bus、capability、配置隔离、AppShell 生命周期和节日提醒迁移合同。 | 修改插件边界、服务端口、生命周期或配置适配时。 |
+| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md) | Runtime、配置、节日插件、Qt 线程、性能和真实桌面验收矩阵。 | 编写 Phase 2 测试、准备验收或审查 PR 时。 |
+
 ## 在线更新与网络发布
 
 | 文档 | 一句话内容 | 何时必读 |
