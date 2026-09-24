@@ -33,7 +33,8 @@ from pathlib import Path
 import pytest
 
 pytestmark = pytest.mark.skipif(
-    sys.platform != 'win32', reason='Job Object 是 Windows 内核机制',
+    sys.platform != "win32",
+    reason="Job Object 是 Windows 内核机制",
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # 进程被强杀、管道读端关闭时会自行以 EPIPE 退出——那样对照组和修复组都会
 # 「自己死」，断言失去区分度。这里的 ffmpeg 只受内核 job 约束：`-re` 把无限
 # lavfi 源限速到 1fps，保证它长期存活且零管道依赖。
-_CHILD_TEMPLATE = r'''
+_CHILD_TEMPLATE = r"""
 import json, os, subprocess, sys, time
 sys.path.insert(0, os.environ["DSH_PET_SRC_ROOT"])
 from pet import webm_clip, win_job
@@ -59,12 +60,11 @@ sys.stdout.write(json.dumps({{"ffmpeg_pid": proc.pid,
                               "job_ready": win_job._ensure_job() is not None}}) + "\n")
 sys.stdout.flush()
 time.sleep(300)
-'''
+"""
 
-_CHILD_VIA_HOOK = _CHILD_TEMPLATE.format(
-    spawn='imageio_ffmpeg._io.subprocess.Popen')
+_CHILD_VIA_HOOK = _CHILD_TEMPLATE.format(spawn="imageio_ffmpeg._io.subprocess.Popen")
 # 对照组：裸 subprocess.Popen，绕过 job 挂载漏斗。
-_CHILD_BYPASS = _CHILD_TEMPLATE.format(spawn='subprocess.Popen')
+_CHILD_BYPASS = _CHILD_TEMPLATE.format(spawn="subprocess.Popen")
 
 
 # ------------------------------------------------------------ Win32 小工具
@@ -76,7 +76,7 @@ _STILL_ACTIVE = 259
 def _winapi():
     import ctypes
 
-    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.OpenProcess.restype = ctypes.c_void_p
     kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
     kernel32.GetExitCodeProcess.restype = ctypes.c_int
@@ -134,11 +134,14 @@ def _wait_pid_alive(pid: int, timeout: float) -> bool:
 
 def _spawn_child(src: str):
     env = os.environ.copy()
-    env['DSH_PET_SRC_ROOT'] = str(REPO_ROOT)
+    env["DSH_PET_SRC_ROOT"] = str(REPO_ROOT)
     proc = subprocess.Popen(
-        [sys.executable, '-c', src],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=env, cwd=str(REPO_ROOT),
+        [sys.executable, "-c", src],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=str(REPO_ROOT),
     )
     lines: queue.Queue = queue.Queue()
 
@@ -146,42 +149,39 @@ def _spawn_child(src: str):
         try:
             lines.put(proc.stdout.readline())
         except Exception as exc:  # pragma: no cover - 读取失败只在病态下发生
-            lines.put(f'__error__{exc}')
+            lines.put(f"__error__{exc}")
 
     threading.Thread(target=_reader, daemon=True).start()
     try:
         line = lines.get(timeout=90.0)
     except queue.Empty:  # pragma: no cover - CI 极慢时的兜底诊断
         proc.kill()
-        raise AssertionError('子进程 90s 内未上报 ffmpeg pid')
-    assert not line.startswith('__error__'), line
+        raise AssertionError("子进程 90s 内未上报 ffmpeg pid")
+    assert not line.startswith("__error__"), line
     assert line.strip(), _child_diagnostics(proc)
     return proc, json.loads(line)
 
 
 def _child_diagnostics(proc) -> str:
     try:
-        err = proc.stderr.read() if proc.stderr else ''
+        err = proc.stderr.read() if proc.stderr else ""
     except Exception:
-        err = '<stderr 不可读>'
-    return f'子进程无输出；stderr={err!r}'
+        err = "<stderr 不可读>"
+    return f"子进程无输出；stderr={err!r}"
 
 
 # ------------------------------------------------------------ 修复组
 def test_ffmpeg_spawned_through_hook_dies_with_killed_parent():
     """核心验收：经产品漏斗拉起的 ffmpeg 在父进程被强杀后退出。"""
     proc, payload = _spawn_child(_CHILD_VIA_HOOK)
-    ffmpeg_pid = int(payload['ffmpeg_pid'])
+    ffmpeg_pid = int(payload["ffmpeg_pid"])
     try:
-        assert payload['job_ready'] is True, '子进程未能建立 Job Object'
-        assert _pid_alive(ffmpeg_pid), 'ffmpeg 未成功拉起'
+        assert payload["job_ready"] is True, "子进程未能建立 Job Object"
+        assert _pid_alive(ffmpeg_pid), "ffmpeg 未成功拉起"
         # 强杀父进程（TerminateProcess，与 Stop-Process/任务管理器同路径）
         proc.kill()
         proc.wait(timeout=30)
-        assert _wait_pid_gone(ffmpeg_pid, timeout=20.0), (
-            f'父进程被强杀后 ffmpeg(pid={ffmpeg_pid}) 仍存活——'
-            'Job Object 未生效（孤儿进程回归）'
-        )
+        assert _wait_pid_gone(ffmpeg_pid, timeout=20.0), f"父进程被强杀后 ffmpeg(pid={ffmpeg_pid}) 仍存活——Job Object 未生效（孤儿进程回归）"
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -197,14 +197,13 @@ def test_control_ffmpeg_bypassing_hook_survives_parent_kill():
     断言因为别的原因（ffmpeg 自己退出等）恒绿，这条会同时变红。
     """
     proc, payload = _spawn_child(_CHILD_BYPASS)
-    ffmpeg_pid = int(payload['ffmpeg_pid'])
+    ffmpeg_pid = int(payload["ffmpeg_pid"])
     try:
-        assert _pid_alive(ffmpeg_pid), 'ffmpeg 未成功拉起'
+        assert _pid_alive(ffmpeg_pid), "ffmpeg 未成功拉起"
         proc.kill()
         proc.wait(timeout=30)
         assert _wait_pid_alive(ffmpeg_pid, timeout=3.0), (
-            f'对照组异常：未挂 job 的 ffmpeg(pid={ffmpeg_pid}) 竟随父进程退出——'
-            '第一条用例的差异不再来自 Job Object，需重新审视验收方式'
+            f"对照组异常：未挂 job 的 ffmpeg(pid={ffmpeg_pid}) 竟随父进程退出——第一条用例的差异不再来自 Job Object，需重新审视验收方式"
         )
     finally:
         if proc.poll() is None:
@@ -220,13 +219,15 @@ def test_wrapped_popen_adopts_child_into_job(monkeypatch):
 
     adopted = []
     monkeypatch.setattr(
-        win_job, 'adopt', lambda proc: adopted.append(proc) or True,
+        win_job,
+        "adopt",
+        lambda proc: adopted.append(proc) or True,
     )
     proc = webm_clip._PopenCapture._wrapped(
-        [sys.executable, '-c', 'import time; time.sleep(30)'],
+        [sys.executable, "-c", "import time; time.sleep(30)"],
     )
     try:
-        assert adopted == [proc], '漏斗未把子进程交给 win_job.adopt'
+        assert adopted == [proc], "漏斗未把子进程交给 win_job.adopt"
     finally:
         proc.kill()
         proc.wait(timeout=10)
@@ -237,12 +238,12 @@ def test_adopt_is_defensive_and_idempotent():
     from pet import win_job
 
     assert win_job.adopt(None) is False
-    dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait(timeout=30)
     assert win_job.adopt(dead) is False  # 已退出：只降级，不抛
 
     assert win_job._ensure_job() is not None
-    live = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+    live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         assert win_job.adopt(live) is True
         assert win_job.adopt(live) is True  # 幂等：重复挂载被内核吸收

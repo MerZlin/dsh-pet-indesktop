@@ -159,6 +159,7 @@ def test_shutdown_uninterruptible_worker_returns_false_and_retains_reference():
 
 def test_worker_cancel_closes_only_its_own_response_and_does_not_close_others():
     """加竞态测试：A 被取消、B 已建立 response、A 退出时 B 的 response 不被关闭。"""
+
     class MockResponse:
         def __init__(self, name):
             self.name = name
@@ -256,15 +257,16 @@ def test_provider_cancel_closes_blocking_response(monkeypatch):
             self.unblock.set()
 
     fake_resp = BlockingFakeResponse()
-    monkeypatch.setattr(
-        providers.urllib.request, "urlopen", lambda req, *a, **k: fake_resp
-    )
+    monkeypatch.setattr(providers.urllib.request, "urlopen", lambda req, *a, **k: fake_resp)
 
     app = _get_qapp()
     service = ChatService(provider=OpenAICompatibleProvider())
     cfg = ProviderConfig(
-        provider_id="test", name="test", base_url="http://invalid",
-        model="test", verify_ssl=False,
+        provider_id="test",
+        name="test",
+        base_url="http://invalid",
+        model="test",
+        verify_ssl=False,
     )
     stopped: list[str] = []
     service.stopped.connect(lambda rid: stopped.append(rid))

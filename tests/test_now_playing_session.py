@@ -12,6 +12,7 @@
 
 全部用例都不联网、不碰真实 WinRT：`_import_winrt` 被替换成假实现。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -49,7 +50,9 @@ class _Info:
     def __init__(self, status: int):
         self.playback_status = status
         self.controls = type(
-            "C", (), {"is_next_enabled": True, "is_previous_enabled": True},
+            "C",
+            (),
+            {"is_next_enabled": True, "is_previous_enabled": True},
         )()
 
 
@@ -62,8 +65,14 @@ class _Props:
 
 class _Session:
     def __init__(
-        self, app_id: str, *, status: int = PLAYING, title: str = "t",
-        artist: str = "a", position: float = 0.0, end: float = 0.0,
+        self,
+        app_id: str,
+        *,
+        status: int = PLAYING,
+        title: str = "t",
+        artist: str = "a",
+        position: float = 0.0,
+        end: float = 0.0,
         stamp=_EPOCH_ZERO,
     ):
         self.source_app_user_model_id = app_id

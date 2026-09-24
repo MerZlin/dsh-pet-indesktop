@@ -122,9 +122,7 @@ def test_verify_no_live_reference_flags_surviving_importer(slim):
         "_internal/PySide6/opengl32sw.dll": Path("opengl32sw.dll"),
     }
     deps = {"Qt6Core.dll": {"opengl32sw.dll"}, "opengl32sw.dll": set()}
-    conflicts = slim.verify_no_live_reference(
-        binaries, ["_internal/PySide6/opengl32sw.dll"], read_imports=lambda p: deps[p.name]
-    )
+    conflicts = slim.verify_no_live_reference(binaries, ["_internal/PySide6/opengl32sw.dll"], read_imports=lambda p: deps[p.name])
     assert conflicts == [("_internal/PySide6/Qt6Core.dll", ["opengl32sw.dll"])]
 
 

@@ -9,6 +9,7 @@
 4. 控制结果经信号回主线程弹气泡，失败原因（timeout / not-found / rejected）可区分；
 5. watchdog 总开关关闭时整条链零开销（无提醒、无线程、无请求）。
 """
+
 from __future__ import annotations
 
 import threading
@@ -44,13 +45,16 @@ def _wait_for(predicate, app, timeout=8.0):
 # 1. 控制档位生效
 # ----------------------------------------------------------------------
 
+
 class TestWatchdogControlLevel:
     def _wd(self, **config):
         wd = ExplorationWatchdog()
-        base = {"exploration_watchdog_enabled": True,
-                "exploration_watchdog_warning_threshold": 3,
-                "exploration_watchdog_control_threshold": 5,
-                "exploration_watchdog_cooldown_steps": 3}
+        base = {
+            "exploration_watchdog_enabled": True,
+            "exploration_watchdog_warning_threshold": 3,
+            "exploration_watchdog_control_threshold": 5,
+            "exploration_watchdog_cooldown_steps": 3,
+        }
         base.update(config)
         wd.configure(base)
         return wd
@@ -91,8 +95,7 @@ class TestWatchdogControlLevel:
 
     def test_control_uses_grace_adjusted_threshold(self, app):
         """宽限期内两个阈值都 +1：score=3 未达 control(4) → 仍是 warning。"""
-        wd = self._wd(exploration_watchdog_warning_threshold=2,
-                      exploration_watchdog_control_threshold=3)
+        wd = self._wd(exploration_watchdog_warning_threshold=2, exploration_watchdog_control_threshold=3)
         state = self._fresh_state(wd)
         state["grace_until"] = time.monotonic() + 300.0
         wd._score = lambda w6, w10: (3, ["重复探索"])
@@ -105,8 +108,7 @@ class TestWatchdogControlLevel:
         assert payload["level"] == "warning"
 
     def test_control_uses_normal_thresholds_outside_grace(self, app):
-        wd = self._wd(exploration_watchdog_warning_threshold=2,
-                      exploration_watchdog_control_threshold=3)
+        wd = self._wd(exploration_watchdog_warning_threshold=2, exploration_watchdog_control_threshold=3)
         state = self._fresh_state(wd)
         state["grace_until"] = 0.0
         wd._score = lambda w6, w10: (3, ["重复探索"])
@@ -164,6 +166,7 @@ class TestWatchdogControlLevel:
 # 2/3/4/5. AgentLinkManager 接线
 # ----------------------------------------------------------------------
 
+
 class FakeWin:
     def __init__(self):
         self.alerts = []
@@ -175,15 +178,20 @@ class FakeWin:
     def isVisible(self):
         return self._visible
 
-    def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None,
-                   sticky=True, alert_id="", priority=3, alert_type="watchdog",
-                   metadata=None):
-        self.alerts.append({
-            "text": str(text), "subtitle": str(subtitle), "buttons": buttons,
-            "sticky": bool(sticky), "duration_ms": int(duration_ms),
-            "alert_id": str(alert_id), "priority": int(priority),
-            "alert_type": str(alert_type), "metadata": dict(metadata or {}),
-        })
+    def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None, sticky=True, alert_id="", priority=3, alert_type="watchdog", metadata=None):
+        self.alerts.append(
+            {
+                "text": str(text),
+                "subtitle": str(subtitle),
+                "buttons": buttons,
+                "sticky": bool(sticky),
+                "duration_ms": int(duration_ms),
+                "alert_id": str(alert_id),
+                "priority": int(priority),
+                "alert_type": str(alert_type),
+                "metadata": dict(metadata or {}),
+            }
+        )
 
     def resolve_alert(self, alert_id):
         self.resolved.append(str(alert_id))
@@ -223,7 +231,7 @@ def mgr(app, tmp_path):
 
 
 def _button(alert, label):
-    for name, callback in (alert.get("buttons") or []):
+    for name, callback in alert.get("buttons") or []:
         if name == label:
             return callback
     raise AssertionError(f"未找到按钮 {label}：{alert.get('buttons')}")
@@ -276,14 +284,18 @@ class TestControlRequestThreading:
         captured = []
         calls = threading.Event()
 
-        def fake_request(operation, session_id, text="", ports=None, *, goal="",
-                         context="", provider="", model="", timeout=30.0, alert_id="",
-                         cancel=None):
-            captured.append({
-                "operation": operation, "session_id": session_id, "goal": goal,
-                "context": context, "alert_id": alert_id, "timeout": timeout,
-                "thread": threading.current_thread(),
-            })
+        def fake_request(operation, session_id, text="", ports=None, *, goal="", context="", provider="", model="", timeout=30.0, alert_id="", cancel=None):
+            captured.append(
+                {
+                    "operation": operation,
+                    "session_id": session_id,
+                    "goal": goal,
+                    "context": context,
+                    "alert_id": alert_id,
+                    "timeout": timeout,
+                    "thread": threading.current_thread(),
+                }
+            )
             calls.set()
             if behavior is not None:
                 return behavior(operation, session_id)
@@ -308,8 +320,7 @@ class TestControlRequestThreading:
         assert call["timeout"] == mgr._EXPLORATION_CONTROL_TIMEOUT_S
 
     def test_interrupt_button_uses_interrupt_operation(self, app, mgr, monkeypatch):
-        captured, calls = self._capture(
-            monkeypatch, behavior=lambda op, sid: (True, '{"ok": true, "phase": "cancelled"}'))
+        captured, calls = self._capture(monkeypatch, behavior=lambda op, sid: (True, '{"ok": true, "phase": "cancelled"}'))
         mgr._on_exploration_warning("sess-1", _payload())
         _button(mgr.win.alerts[-1], "终止")()
         assert calls.wait(5.0)
@@ -326,9 +337,7 @@ class TestControlRequestThreading:
         release = threading.Event()
         started = threading.Event()
 
-        def fake_request(operation, session_id, text="", ports=None, *, goal="",
-                         context="", provider="", model="", timeout=30.0, alert_id="",
-                         cancel=None):
+        def fake_request(operation, session_id, text="", ports=None, *, goal="", context="", provider="", model="", timeout=30.0, alert_id="", cancel=None):
             started.set()
             release.wait(5.0)
             return True, '{"ok": true, "phase": "replanned"}'
@@ -350,9 +359,7 @@ class TestControlRequestThreading:
         release = threading.Event()
         count = []
 
-        def fake_request(operation, session_id, text="", ports=None, *, goal="",
-                         context="", provider="", model="", timeout=30.0, alert_id="",
-                         cancel=None):
+        def fake_request(operation, session_id, text="", ports=None, *, goal="", context="", provider="", model="", timeout=30.0, alert_id="", cancel=None):
             count.append(operation)
             release.wait(5.0)
             return True, '{"ok": true, "phase": "cancelled"}'
@@ -378,28 +385,28 @@ class TestControlResultEcho:
         return alerts[-1]
 
     def test_success_replan_echo(self, mgr):
-        mgr._show_exploration_control_result("sess-1", "replan", True,
-                                             '{"ok": true, "phase": "replanned"}')
+        mgr._show_exploration_control_result("sess-1", "replan", True, '{"ok": true, "phase": "replanned"}')
         assert "已按新方向重新规划" in self._result_alert(mgr)["text"]
         assert self._result_alert(mgr)["sticky"] is False
 
     def test_success_interrupt_echo(self, mgr):
-        mgr._show_exploration_control_result("sess-1", "interrupt", True,
-                                             '{"ok": true, "phase": "cancelled"}')
+        mgr._show_exploration_control_result("sess-1", "interrupt", True, '{"ok": true, "phase": "cancelled"}')
         assert "已终止本次运行" in self._result_alert(mgr)["text"]
 
     def test_already_idle_interrupt_echo(self, mgr):
-        mgr._show_exploration_control_result("sess-1", "interrupt", True,
-                                             '{"ok": true, "phase": "already-idle"}')
+        mgr._show_exploration_control_result("sess-1", "interrupt", True, '{"ok": true, "phase": "already-idle"}')
         assert "已经是空闲状态" in self._result_alert(mgr)["text"]
 
-    @pytest.mark.parametrize("detail,expected", [
-        ("bridge-control-timeout", "超时"),
-        ("cancel-timeout", "超时"),
-        ("session-not-found", "会话不存在"),
-        ("bridge-control-rejected", "拒绝了"),
-        ("bridge-internal-error", "失败"),
-    ])
+    @pytest.mark.parametrize(
+        "detail,expected",
+        [
+            ("bridge-control-timeout", "超时"),
+            ("cancel-timeout", "超时"),
+            ("session-not-found", "会话不存在"),
+            ("bridge-control-rejected", "拒绝了"),
+            ("bridge-internal-error", "失败"),
+        ],
+    )
     def test_failure_reasons_are_distinguishable(self, mgr, detail, expected):
         mgr._show_exploration_control_result("sess-1", "interrupt", False, detail)
         assert expected in self._result_alert(mgr)["text"]
@@ -408,8 +415,7 @@ class TestControlResultEcho:
         mgr._show_exploration_control_result("sess-1", "replan", True, "{}")
         mgr._show_exploration_control_result("sess-2", "replan", True, "{}")
         ids = [a["alert_id"] for a in mgr.win.alerts if a["alert_type"] == "control-result"]
-        assert ids == ["exploration-control-result:sess-1",
-                       "exploration-control-result:sess-2"], "多会话结果不得互相顶替"
+        assert ids == ["exploration-control-result:sess-1", "exploration-control-result:sess-2"], "多会话结果不得互相顶替"
 
 
 class TestControlResultSubagentEcho:
@@ -424,19 +430,15 @@ class TestControlResultSubagentEcho:
     def test_interrupt_subagent_normalized_to_root(self, mgr):
         """目标是子代理且已归一到根：应报「已终止会话」，而非误导为只停子代理。"""
         mgr._show_exploration_control_result(
-            "sess-sub", "interrupt", True,
-            '{"ok": true, "phase": "cancelled", "wasSubagent": true, '
-            '"appliedToRoot": true, "rootSessionId": "sess-root"}')
+            "sess-sub", "interrupt", True, '{"ok": true, "phase": "cancelled", "wasSubagent": true, "appliedToRoot": true, "rootSessionId": "sess-root"}'
+        )
         text = self._result_alert(mgr)["text"]
         assert "已终止会话" in text
         assert "已终止子代理" not in text
 
     def test_interrupt_subagent_without_root(self, mgr):
         """目标是子代理但父级不可解析（降级只停子代理）：必须如实说明主代理仍在运行。"""
-        mgr._show_exploration_control_result(
-            "sess-sub", "interrupt", True,
-            '{"ok": true, "phase": "cancelled", "wasSubagent": true, '
-            '"appliedToRoot": false}')
+        mgr._show_exploration_control_result("sess-sub", "interrupt", True, '{"ok": true, "phase": "cancelled", "wasSubagent": true, "appliedToRoot": false}')
         text = self._result_alert(mgr)["text"]
         assert "已终止子代理" in text
         assert "主代理仍在运行" in text
@@ -444,27 +446,22 @@ class TestControlResultSubagentEcho:
     def test_replan_subagent_normalized_to_root(self, mgr):
         """replan 归一到根：提示作用于主会话。"""
         mgr._show_exploration_control_result(
-            "sess-sub", "replan", True,
-            '{"ok": true, "phase": "replanned", "wasSubagent": true, '
-            '"appliedToRoot": true, "rootSessionId": "sess-root"}')
+            "sess-sub", "replan", True, '{"ok": true, "phase": "replanned", "wasSubagent": true, "appliedToRoot": true, "rootSessionId": "sess-root"}'
+        )
         text = self._result_alert(mgr)["text"]
         assert "已按新方向重新规划" in text
         assert "主会话" in text
 
     def test_replan_subagent_without_root(self, mgr):
         """replan 无法归一（父级不可解析）：仍报已规划，但不宣称作用于主会话。"""
-        mgr._show_exploration_control_result(
-            "sess-sub", "replan", True,
-            '{"ok": true, "phase": "replanned", "wasSubagent": true, '
-            '"appliedToRoot": false}')
+        mgr._show_exploration_control_result("sess-sub", "replan", True, '{"ok": true, "phase": "replanned", "wasSubagent": true, "appliedToRoot": false}')
         text = self._result_alert(mgr)["text"]
         assert "已按新方向重新规划" in text
         assert "主会话" not in text
 
     def test_existing_root_interrupt_echo_unchanged(self, mgr):
         """非子代理的顶层会话回执保持原样（回归锁定）。"""
-        mgr._show_exploration_control_result("sess-1", "interrupt", True,
-                                             '{"ok": true, "phase": "cancelled"}')
+        mgr._show_exploration_control_result("sess-1", "interrupt", True, '{"ok": true, "phase": "cancelled"}')
         text = self._result_alert(mgr)["text"]
         assert "已终止本次运行" in text
 
@@ -474,12 +471,14 @@ class TestControlSuccessGrantsWatchdogGrace:
 
     def _watchdog(self, mgr):
         wd = mgr._exploration_watchdog
-        wd.configure({
-            "exploration_watchdog_enabled": True,
-            "exploration_watchdog_warning_threshold": 2,
-            "exploration_watchdog_control_threshold": 3,
-            "exploration_watchdog_cooldown_steps": 0,
-        })
+        wd.configure(
+            {
+                "exploration_watchdog_enabled": True,
+                "exploration_watchdog_warning_threshold": 2,
+                "exploration_watchdog_control_threshold": 3,
+                "exploration_watchdog_cooldown_steps": 0,
+            }
+        )
         wd.feed_record("sess-1", {"event": "user/message", "text": "目标"})
         wd.feed_record("sess-1", {"event": "command/run", "step": "s1", "command": "ls"})
         with wd._lock:
@@ -495,19 +494,15 @@ class TestControlSuccessGrantsWatchdogGrace:
         first = wd._evaluate_locked("sess-1", state)
         assert first is not None and first["level"] == "control"
         # 用户点「自动优化」，后台 worker 成功回执回主线程。
-        mgr._on_exploration_control_result(
-            "sess-1", "replan", True, '{"ok": true, "phase": "replanned"}')
+        mgr._on_exploration_control_result("sess-1", "replan", True, '{"ok": true, "phase": "replanned"}')
         with wd._lock:
-            assert wd._states["sess-1"]["grace_until"] > time.monotonic(), \
-                "控制成功必须给目标 session 宽限"
+            assert wd._states["sess-1"]["grace_until"] > time.monotonic(), "控制成功必须给目标 session 宽限"
         repeat = wd._evaluate_locked("sess-1", state)
-        assert repeat is None or repeat["level"] == "warning", \
-            f"宽限期内不得再弹 control 级告警：{repeat}"
+        assert repeat is None or repeat["level"] == "warning", f"宽限期内不得再弹 control 级告警：{repeat}"
 
     def test_control_failure_does_not_grant_grace(self, mgr):
         wd, state = self._watchdog(mgr)
-        mgr._on_exploration_control_result(
-            "sess-1", "replan", False, "bridge-control-timeout")
+        mgr._on_exploration_control_result("sess-1", "replan", False, "bridge-control-timeout")
         with wd._lock:
             assert wd._states["sess-1"]["grace_until"] == 0.0, "失败回执不该给宽限"
 
@@ -515,31 +510,32 @@ class TestControlSuccessGrantsWatchdogGrace:
 class TestWatchdogDisabledIsZeroOverhead:
     def test_disabled_watchdog_never_warns_or_starts_threads(self, app, mgr, monkeypatch):
         calls = []
-        monkeypatch.setattr(dsh_control, "request",
-                            lambda *a, **k: calls.append((a, k)) or (True, "{}"))
-        mgr._exploration_watchdog.configure({
-            "exploration_watchdog_enabled": False,
-            "exploration_watchdog_warning_threshold": 1,
-            "exploration_watchdog_control_threshold": 1,
-            "exploration_watchdog_cooldown_steps": 1,
-        })
+        monkeypatch.setattr(dsh_control, "request", lambda *a, **k: calls.append((a, k)) or (True, "{}"))
+        mgr._exploration_watchdog.configure(
+            {
+                "exploration_watchdog_enabled": False,
+                "exploration_watchdog_warning_threshold": 1,
+                "exploration_watchdog_control_threshold": 1,
+                "exploration_watchdog_cooldown_steps": 1,
+            }
+        )
         for _ in range(8):
-            mgr._exploration_watchdog.feed_record(
-                "dsh", {"event": "command/run", "step": "s1", "command": "ls"})
+            mgr._exploration_watchdog.feed_record("dsh", {"event": "command/run", "step": "s1", "command": "ls"})
         assert mgr.win.alerts == [], "总开关关闭时不得有任何提醒"
         assert mgr._respond_threads == set(), "总开关关闭时不得创建后台线程"
         assert calls == [], "总开关关闭时不得发起控制请求"
 
     def test_enabled_watchdog_still_warns(self, app, mgr):
-        mgr._exploration_watchdog.configure({
-            "exploration_watchdog_enabled": True,
-            "exploration_watchdog_warning_threshold": 1,
-            "exploration_watchdog_control_threshold": 99,
-            "exploration_watchdog_cooldown_steps": 1,
-        })
+        mgr._exploration_watchdog.configure(
+            {
+                "exploration_watchdog_enabled": True,
+                "exploration_watchdog_warning_threshold": 1,
+                "exploration_watchdog_control_threshold": 99,
+                "exploration_watchdog_cooldown_steps": 1,
+            }
+        )
         for _ in range(5):
-            mgr._exploration_watchdog.feed_record(
-                "dsh", {"event": "command/run", "step": "s1", "command": "ls"})
+            mgr._exploration_watchdog.feed_record("dsh", {"event": "command/run", "step": "s1", "command": "ls"})
         assert mgr.win.alerts, "开启时仍应正常告警"
 
 
@@ -554,8 +550,7 @@ class TestWatchdogPauseOnHide:
         try:
             assert manager._exploration_watchdog is not None
             manager.pause()
-            assert not manager._exploration_watchdog._think_timer.isActive(), \
-                "隐藏时看门狗轮询必须停走（否则告警在隐藏期发射后被丢弃，永久丢失）"
+            assert not manager._exploration_watchdog._think_timer.isActive(), "隐藏时看门狗轮询必须停走（否则告警在隐藏期发射后被丢弃，永久丢失）"
             manager.resume()
             assert manager._exploration_watchdog._think_timer.isActive(), "恢复显示后轮询必须重启"
         finally:

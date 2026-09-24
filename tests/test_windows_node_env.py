@@ -14,6 +14,7 @@
 
 平台无关：目录都用 tmp_path 构造，Windows 专有行为（PATHEXT 解析）单独 skip。
 """
+
 from __future__ import annotations
 
 import os
@@ -101,9 +102,7 @@ class TestWindowsAugmentedPath:
 
         monkeypatch.setattr(node_runtime, "_is_windows", lambda: True)
         monkeypatch.setattr(node_runtime, "_windows_registry_env", lambda *a, **k: {})
-        monkeypatch.setattr(
-            node_runtime, "_windows_registry_path_entries", lambda: [str(registry_only)]
-        )
+        monkeypatch.setattr(node_runtime, "_windows_registry_path_entries", lambda: [str(registry_only)])
         for key, value in layout.env.items():
             monkeypatch.setenv(key, value)
         monkeypatch.setenv("PATH", str(stale_system32))
@@ -136,21 +135,15 @@ class TestWindowsAugmentedPath:
         """POSIX 语义不变（Issue #67：Finder 极简 PATH 前置包管理器目录）。"""
         pnpm_home = _dir(tmp_path / "pnpm-home")
         monkeypatch.setattr(node_runtime, "_is_windows", lambda: False)
-        monkeypatch.setattr(
-            node_runtime, "_posix_extra_bin_dirs", lambda env, home: [pnpm_home]
-        )
+        monkeypatch.setattr(node_runtime, "_posix_extra_bin_dirs", lambda env, home: [pnpm_home])
         monkeypatch.setenv("PATH", str(tmp_path / "usr-bin"))
         entries = node_runtime.augmented_path().split(os.pathsep)
 
         assert entries[0] == str(pnpm_home)
 
     def test_percent_vars_are_expanded_case_insensitively(self, tmp_path):
-        value = ";".join(
-            [str(tmp_path / "windows"), "%nvm_symlink%", str(tmp_path / "pf" / "nodejs"), ""]
-        )
-        entries = node_runtime._split_path_entries(
-            value, {"NVM_SYMLINK": str(tmp_path / "nodejs")}, sep=";"
-        )
+        value = ";".join([str(tmp_path / "windows"), "%nvm_symlink%", str(tmp_path / "pf" / "nodejs"), ""])
+        entries = node_runtime._split_path_entries(value, {"NVM_SYMLINK": str(tmp_path / "nodejs")}, sep=";")
         assert entries == [
             str(tmp_path / "windows"),
             str(tmp_path / "nodejs"),
@@ -225,21 +218,15 @@ class _FakePosixHome:
         self.npm_global_lib = _dir(self.home / ".npm-global" / "lib" / "node_modules")
         self.library_pnpm = _dir(self.home / "Library" / "pnpm")
         self.nvm_bin = _dir(self.home / ".nvm" / "versions" / "node" / "v18.20.5" / "bin")
-        self.nvm_lib = _dir(
-            self.home / ".nvm" / "versions" / "node" / "v18.20.5" / "lib" / "node_modules"
-        )
+        self.nvm_lib = _dir(self.home / ".nvm" / "versions" / "node" / "v18.20.5" / "lib" / "node_modules")
         self.volta_bin = _dir(self.home / ".volta" / "bin")
-        self.volta_lib = _dir(
-            self.home / ".volta" / "tools" / "image" / "node" / "v20.11.1" / "lib" / "node_modules"
-        )
+        self.volta_lib = _dir(self.home / ".volta" / "tools" / "image" / "node" / "v20.11.1" / "lib" / "node_modules")
         self.bun_bin = _dir(self.home / ".bun" / "bin")
         self.bun_lib = _dir(self.home / ".bun" / "install" / "global" / "node_modules")
         self.yarn_bin = _dir(self.home / ".yarn" / "bin")
         self.yarn_lib = _dir(self.home / ".config" / "yarn" / "global" / "node_modules")
         self.asdf_shims = _dir(self.home / ".asdf" / "shims")
-        self.pnpm_store = _dir(
-            self.home / ".local" / "share" / "pnpm" / "global" / "5" / "node_modules"
-        )
+        self.pnpm_store = _dir(self.home / ".local" / "share" / "pnpm" / "global" / "5" / "node_modules")
 
     def use(self, monkeypatch) -> None:
         """把这个假家目录装进 node_runtime 的平台/家目录 seam，并隔离宿主环境。
@@ -256,8 +243,13 @@ class _FakePosixHome:
         monkeypatch.setattr(node_runtime, "_is_windows", lambda: False)
         monkeypatch.setattr(node_runtime, "_home", lambda: self.home)
         for name in (
-            "NVM_DIR", "NVM_HOME", "NVM_SYMLINK",
-            "FNM_DIR", "VOLTA_HOME", "BUN_INSTALL", "PNPM_HOME",
+            "NVM_DIR",
+            "NVM_HOME",
+            "NVM_SYMLINK",
+            "FNM_DIR",
+            "VOLTA_HOME",
+            "BUN_INSTALL",
+            "PNPM_HOME",
         ):
             monkeypatch.delenv(name, raising=False)
 
@@ -272,7 +264,7 @@ class TestPosixEnvironment:
             posix.local_bin,
             posix.local_share_pnpm,
             posix.npm_global_bin,
-            posix.library_pnpm,      # macOS 的 pnpm 独立安装
+            posix.library_pnpm,  # macOS 的 pnpm 独立安装
             posix.nvm_bin,
             posix.volta_bin,
             posix.bun_bin,
@@ -327,10 +319,7 @@ class TestPosixEnvironment:
     def test_roots_cover_nvm_volta_fnm_pnpm_yarn_bun(self, tmp_path, monkeypatch):
         """Linux/macOS 全局包根：版本管理器版本目录 + pnpm/yarn/bun 全局目录。"""
         posix = _FakePosixHome(tmp_path)
-        fnm_lib = _dir(
-            posix.home / ".local" / "share" / "fnm" / "node-versions" / "v20.11.1"
-            / "installation" / "lib" / "node_modules"
-        )
+        fnm_lib = _dir(posix.home / ".local" / "share" / "fnm" / "node-versions" / "v20.11.1" / "installation" / "lib" / "node_modules")
         monkeypatch.setattr(node_runtime, "_POSIX_ABS_NODE_MODULES", ())
         posix.use(monkeypatch)
 
@@ -355,12 +344,9 @@ class TestPosixEnvironment:
         """
         posix = _FakePosixHome(tmp_path)
         posix.use(monkeypatch)
-        monkeypatch.setenv("NVM_DIR", str(tmp_path / "stale-nvm"))   # 不存在
+        monkeypatch.setenv("NVM_DIR", str(tmp_path / "stale-nvm"))  # 不存在
         monkeypatch.setenv("FNM_DIR", str(tmp_path / "stale-fnm"))  # 不存在
-        fnm_lib = _dir(
-            posix.home / ".local" / "share" / "fnm" / "node-versions" / "v20.11.1"
-            / "installation" / "lib" / "node_modules"
-        )
+        fnm_lib = _dir(posix.home / ".local" / "share" / "fnm" / "node-versions" / "v20.11.1" / "installation" / "lib" / "node_modules")
 
         entries = node_runtime.augmented_path().split(os.pathsep)
         assert str(posix.nvm_bin) in entries, "NVM_DIR 失效时仍应找到默认 ~/.nvm 布局"
@@ -405,13 +391,10 @@ class TestPosixEnvironment:
         cli = _file(node_root / "lib" / "node_modules" / "pnpm" / "bin" / "pnpm.cjs")
         shim = _file(
             node_root / "bin" / "pnpm",
-            '#!/bin/sh\nbasedir=$(dirname "$0")\n'
-            'exec node "$basedir/../lib/node_modules/pnpm/bin/pnpm.cjs" "$@"\n',
+            '#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/../lib/node_modules/pnpm/bin/pnpm.cjs" "$@"\n',
         )
         os.chmod(shim, 0o755)
-        monkeypatch.setattr(
-            agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None
-        )
+        monkeypatch.setattr(agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None)
         monkeypatch.setattr(agent_link, "_package_roots", lambda: [])
 
         assert _same_path(agent_link._find_pnpm_cli(), cli)
@@ -420,7 +403,7 @@ class TestPosixEnvironment:
         """POSIX 包装脚本自带 shebang：直接执行，不再拼 [node, cli]。"""
         from pet import agent_link
 
-        shim = _file(tmp_path / "pnpm", "#!/bin/sh\nexec node \"$basedir/pnpm.cjs\"\n")
+        shim = _file(tmp_path / "pnpm", '#!/bin/sh\nexec node "$basedir/pnpm.cjs"\n')
         monkeypatch.setattr(agent_link, "_pnpm_cli", lambda: str(shim))
         monkeypatch.setattr(agent_link, "_which", lambda name: None)
 
@@ -463,8 +446,11 @@ class TestVersionManagerDiscovery:
         plain_bin = _dir(home / "nvm" / "versions" / "node" / "v22.12.0" / "bin")
 
         got = [
-            str(p) for p in node_runtime._version_manager_bin_dirs(
-                {"NVM_DIR": str(tmp_path / "custom-nvm")}, home, windows=False,
+            str(p)
+            for p in node_runtime._version_manager_bin_dirs(
+                {"NVM_DIR": str(tmp_path / "custom-nvm")},
+                home,
+                windows=False,
             )
         ]
 
@@ -478,8 +464,11 @@ class TestVersionManagerDiscovery:
         version_dir = _dir(appdata / "nvm" / "v20.11.1")
 
         got = [
-            str(p) for p in node_runtime._version_manager_bin_dirs(
-                {"APPDATA": str(appdata)}, tmp_path / "home", windows=True,
+            str(p)
+            for p in node_runtime._version_manager_bin_dirs(
+                {"APPDATA": str(appdata)},
+                tmp_path / "home",
+                windows=True,
             )
         ]
 
@@ -557,10 +546,7 @@ class TestConfiguredPnpmBin:
 
         self._isolate(monkeypatch)
         home = _dir(tmp_path / "home")
-        cli = _file(
-            home / ".nvm" / "versions" / "node" / "v18.20.5" / "lib" / "node_modules"
-            / "pnpm" / "bin" / "pnpm.cjs"
-        )
+        cli = _file(home / ".nvm" / "versions" / "node" / "v18.20.5" / "lib" / "node_modules" / "pnpm" / "bin" / "pnpm.cjs")
         monkeypatch.setattr(node_runtime, "_home", lambda: home)
         monkeypatch.setattr(agent_link, "_which", lambda name: None)
 
@@ -607,13 +593,10 @@ class TestPnpmCliDiscovery:
         node_root = tmp_path / "nvm" / "v18.20.5"
         shim = _file(
             node_root / "pnpm.cmd",
-            "@ECHO off\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "
-            '"%_prog%"  "%dp0%\\node_modules\\pnpm\\bin\\pnpm.mjs" %*\n',
+            '@ECHO off\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\pnpm\\bin\\pnpm.mjs" %*\n',
         )
         cli = _file(node_root / "node_modules" / "pnpm" / "bin" / "pnpm.mjs")
-        monkeypatch.setattr(
-            agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None
-        )
+        monkeypatch.setattr(agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None)
 
         assert _same_path(agent_link._find_pnpm_cli(), cli)
 
@@ -624,9 +607,7 @@ class TestPnpmCliDiscovery:
         node_root = tmp_path / "nvm" / "versions" / "node" / "v18.20.5"
         cli = _file(node_root / "lib" / "node_modules" / "pnpm" / "bin" / "pnpm.cjs")
         monkeypatch.setattr(agent_link, "_which", lambda name: None)
-        monkeypatch.setattr(
-            agent_link, "_package_roots", lambda: [node_root / "bin", node_root]
-        )
+        monkeypatch.setattr(agent_link, "_package_roots", lambda: [node_root / "bin", node_root])
 
         assert _same_path(agent_link._find_pnpm_cli(), cli)
 
@@ -637,9 +618,7 @@ class TestPnpmCliDiscovery:
         nodejs_dir = tmp_path / "nodejs"
         cli = _file(nodejs_dir / "node_modules" / "pnpm" / "bin" / "pnpm.cjs")
         shim = _file(nodejs_dir / "pnpm.cmd", "@echo off\n")  # 壳里没有可解析的路径
-        monkeypatch.setattr(
-            agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None
-        )
+        monkeypatch.setattr(agent_link, "_which", lambda name: str(shim) if name == "pnpm" else None)
         monkeypatch.setattr(agent_link, "_package_roots", lambda: [])
 
         assert _same_path(agent_link._find_pnpm_cli(), cli)
@@ -722,9 +701,7 @@ class TestPnpmCliDiscovery:
 
         node_root = tmp_path / "nvm" / "v18.20.5"
         cli = _file(node_root / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js")
-        monkeypatch.setattr(
-            agent_link, "_which", lambda name: str(node_root / "npm") if name == "npm" else None
-        )
+        monkeypatch.setattr(agent_link, "_which", lambda name: str(node_root / "npm") if name == "npm" else None)
         monkeypatch.setattr(agent_link, "_package_roots", lambda: [node_root])
 
         assert _same_path(agent_link._npm_cli(), cli)
@@ -744,9 +721,7 @@ class TestHarnessGlobalRoots:
         monkeypatch.setattr(node_runtime, "_is_windows", lambda: False)
         monkeypatch.setattr(node_runtime, "_home", lambda: home)
         monkeypatch.setattr(node_runtime, "_POSIX_ABS_NODE_MODULES", ())
-        monkeypatch.setattr(
-            hl, "_which", lambda name: "/usr/local/bin/node" if name == "node" else None
-        )
+        monkeypatch.setattr(hl, "_which", lambda name: "/usr/local/bin/node" if name == "node" else None)
         monkeypatch.setattr(hl, "_supports_no_open", lambda command: True)
 
         assert root in hl._npm_global_roots()
@@ -773,9 +748,7 @@ class TestHarnessGlobalRoots:
         # 全局 dsh，故此缺陷只在本地暴露）。与同文件 POSIX 用例一致地清空静态
         # 候选，保证断言只反映「版本管理器根也能被找到」这一条产品语义。
         monkeypatch.setattr(node_runtime, "_WINDOWS_NODE_MODULES", ())
-        monkeypatch.setattr(
-            hl, "_which", lambda name: "C:/nodejs/node.exe" if name == "node" else None
-        )
+        monkeypatch.setattr(hl, "_which", lambda name: "C:/nodejs/node.exe" if name == "node" else None)
         monkeypatch.setattr(hl, "_supports_no_open", lambda command: False)
 
         assert root in hl._npm_global_roots()

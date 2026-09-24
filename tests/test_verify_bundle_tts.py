@@ -35,9 +35,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(scope="module")
 def verify_tts():
-    spec = importlib.util.spec_from_file_location(
-        "verify_bundle_tts", REPO / "scripts" / "verify_bundle_tts.py"
-    )
+    spec = importlib.util.spec_from_file_location("verify_bundle_tts", REPO / "scripts" / "verify_bundle_tts.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["verify_bundle_tts"] = module
@@ -60,9 +58,7 @@ def test_startup_injected_module_is_not_part_of_closure(verify_tts, tmp_path):
     pytest.importorskip("edge_tts")
     source = tmp_path / "zz_startup_injected_probe.py"
     source.write_text("value = 1\n", encoding="utf-8")
-    sys.modules["zz_startup_injected_probe"] = _fake_module(
-        "zz_startup_injected_probe", source
-    )
+    sys.modules["zz_startup_injected_probe"] = _fake_module("zz_startup_injected_probe", source)
     try:
         closure = verify_tts.import_closure()
     finally:

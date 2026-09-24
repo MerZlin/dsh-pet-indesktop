@@ -19,6 +19,7 @@
   帧号锚定语义在节流路径同样保持（显示帧索引 = 源时间线帧号）。
   全部用假时钟/计数断言，不用 sleep 计时。
 """
+
 from __future__ import annotations
 
 import queue
@@ -231,6 +232,7 @@ class TestConfig:
         """字符串布尔（外部手改配置/旧版导出）按语义归一化（终审 P1-3）：
         bool("false") is True——配置层曾因此把 "false" 误归一为开。"""
         import json
+
         cfg = Config(base=tmp_path)
         cfg.path.parent.mkdir(parents=True, exist_ok=True)
         cfg.path.write_text(
@@ -399,9 +401,9 @@ class TestTimelineFrameSkip:
             win._rebuild_frame = lambda: (calls.append(1), orig())[1]
 
             anim = win.anim
-            win._on_frame(anim, 0)   # 源帧 0：偶数帧 → 发布
+            win._on_frame(anim, 0)  # 源帧 0：偶数帧 → 发布
             assert len(calls) == 1
-            win._on_frame(anim, 1)   # 源帧 1（奇数）：跳帧不发布
+            win._on_frame(anim, 1)  # 源帧 1（奇数）：跳帧不发布
             assert len(calls) == 1
             win._on_frame(anim, 2)
             assert len(calls) == 2
@@ -457,6 +459,7 @@ class TestTimelineFrameSkip:
             # 固定动画链随机分支走到动作池（roll=0.5 → <0.80），使断言确定性
             # （否则 30% idle 分支会重播同名待机，anim 不变、旧 clip 被 stop 两次）
             import random as _random
+
             monkeypatch.setattr(_random, "random", lambda: 0.5)
             movie = win.movie
             before_stop = movie.stop_count
@@ -480,6 +483,7 @@ class TestTimelineFrameSkip:
         try:
             clock.advance(60)
             import random as _random
+
             monkeypatch.setattr(_random, "random", lambda: 0.5)
             movie = win.movie
             before_stop = movie.stop_count
@@ -599,8 +603,7 @@ class TestKeyboardActivity:
             clock.advance(10)
             assert win._idle_reduction_active() is True
             win._interaction_state = "SLINGSHOT_AIMING"
-            ev = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape,
-                           Qt.KeyboardModifier.NoModifier)
+            ev = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
             win.keyPressEvent(ev)
             assert win._interaction_state == "IDLE"  # 弹弓已取消
             assert win._last_activity_ts == clock.now  # 键盘取消刷新活跃锚点
@@ -619,9 +622,7 @@ class TestKeyboardActivity:
             clock.advance(10)
             assert win._idle_reduction_active() is True
             win._interaction_state = "SLINGSHOT_AIMING"
-            win.focusOutEvent(
-                QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason)
-            )
+            win.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason))
             assert win._interaction_state == "IDLE"  # 失焦取消弹弓
             assert win._last_activity_ts == clock.now
             assert win._idle_reduction_active() is False
@@ -784,7 +785,10 @@ class TestDecodeThrottle:
 
         q = _FullThenRoom()
         WebMClip._stamp_source_indices(
-            iter([b"f0", b"f1"]), q, lambda: False, throttled=lambda: True,
+            iter([b"f0", b"f1"]),
+            q,
+            lambda: False,
+            throttled=lambda: True,
         )
         # f0 试 3 次入队成功（前两次阻塞重试），f1 一次成功；源帧号连续
         assert [item[0] for item in q.items] == [b"f0", b"f1"]
@@ -805,7 +809,10 @@ class TestDecodeThrottle:
             return checks["n"] >= 3  # 首次 False 进入入队，随后停止
 
         WebMClip._stamp_source_indices(
-            iter([b"f0"]), _AlwaysFull(), is_stopped, throttled=lambda: True,
+            iter([b"f0"]),
+            _AlwaysFull(),
+            is_stopped,
+            throttled=lambda: True,
         )
         assert checks["n"] >= 3  # 至少尝试过入队并检测到停止（无死等）
 

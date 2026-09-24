@@ -3,6 +3,7 @@
 
 验证目标：可选功能关闭时不构造/启动对应服务对象；启用时才懒装配。
 """
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication
@@ -187,8 +188,7 @@ def test_petwindow_proactive_enabled_at_startup_starts_watcher(tmp_path, monkeyp
     try:
         # 不能只断言「对象被创建」：真正生效靠 apply_config() 起表。
         assert win.proactive_watcher is not None, "开机配置已开时必须装配观察器"
-        assert win.proactive_watcher.is_running() is True, (
-            "重启后无需展开菜单/开关设置，配置里开着的主动识屏就应自启")
+        assert win.proactive_watcher.is_running() is True, "重启后无需展开菜单/开关设置，配置里开着的主动识屏就应自启"
     finally:
         watcher = win.proactive_watcher
         if watcher is not None:

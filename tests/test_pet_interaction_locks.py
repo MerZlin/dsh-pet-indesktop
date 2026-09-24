@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """桌宠交互锁定与不透明度（用户反馈批次）：锁定位置、SHIFT+左键拖动、
 窗口不透明度，以及托盘菜单复选状态与设置同步。"""
+
 from __future__ import annotations
 
 import pytest
@@ -25,8 +26,7 @@ NAMES = [
 def test_slingshot_geometry_stays_inside_window_for_all_pull_directions():
     base = QRect(0, 8, 100, 100)
     bounds = QRect(0, 0, 100, 108)
-    for pull in (QPoint(-160, 0), QPoint(160, 0), QPoint(0, -160), QPoint(0, 160),
-                 QPoint(-113, -113), QPoint(113, 113)):
+    for pull in (QPoint(-160, 0), QPoint(160, 0), QPoint(0, -160), QPoint(0, 160), QPoint(-113, -113), QPoint(113, 113)):
         x, y, width, height = PetWindow._slingshot_geometry(base, pull, 1.0, bounds)
         assert bounds.contains(QRect(x, y, width, height))
 
@@ -60,7 +60,9 @@ def test_slingshot_geometry_uses_smooth_directional_deformation():
 
 def test_slingshot_band_points_use_visible_edge_and_mouse_endpoint():
     start, end = PetWindow._slingshot_band_points(
-        QRect(10, 8, 100, 100), QPoint(4, 57), QPoint(20, 0),
+        QRect(10, 8, 100, 100),
+        QPoint(4, 57),
+        QPoint(20, 0),
     )
     assert start == QPointF(9.0, 57.0)
     assert end == QPointF(4.0, 57.0)
@@ -136,29 +138,42 @@ def app():
 
 def _press(pos: QPointF, global_pos: QPointF, modifiers=Qt.KeyboardModifier.NoModifier) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonPress, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, modifiers,
+        QEvent.Type.MouseButtonPress,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        modifiers,
     )
 
 
 def _move(pos: QPointF, global_pos: QPointF, buttons=Qt.MouseButton.LeftButton, modifiers=Qt.KeyboardModifier.NoModifier) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseMove, pos, global_pos,
-        Qt.MouseButton.NoButton, buttons, modifiers,
+        QEvent.Type.MouseMove,
+        pos,
+        global_pos,
+        Qt.MouseButton.NoButton,
+        buttons,
+        modifiers,
     )
 
 
 def _release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonRelease, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        QEvent.Type.MouseButtonRelease,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
 
 def _right_press(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonPress, pos, global_pos,
+        QEvent.Type.MouseButtonPress,
+        pos,
+        global_pos,
         Qt.MouseButton.RightButton,
         Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton,
         Qt.KeyboardModifier.NoModifier,
@@ -167,8 +182,11 @@ def _right_press(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
 
 def _right_release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonRelease, pos, global_pos,
-        Qt.MouseButton.RightButton, Qt.MouseButton.LeftButton,
+        QEvent.Type.MouseButtonRelease,
+        pos,
+        global_pos,
+        Qt.MouseButton.RightButton,
+        Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
@@ -232,22 +250,21 @@ def test_shift_drag_requires_shift(app, tmp_path):
     win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
     assert clicks == [1]
     # 按住 SHIFT：可拖动
-    win.mousePressEvent(_press(
-        QPointF(10, 10), QPointF(100, 100), Qt.KeyboardModifier.ShiftModifier
-    ))
-    win.mouseMoveEvent(_move(
-        QPointF(60, 60), QPointF(400, 300), modifiers=Qt.KeyboardModifier.ShiftModifier
-    ))
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100), Qt.KeyboardModifier.ShiftModifier))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300), modifiers=Qt.KeyboardModifier.ShiftModifier))
     assert win.pos() != start, "按住 SHIFT 应可拖动"
     win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
     # 先按下（未按 SHIFT），越过阈值前补按 SHIFT → 仍可拖动
     start = win.pos()
     win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
     win.mouseMoveEvent(_move(QPointF(11, 11), QPointF(102, 102)))  # 未超阈值
-    win.mouseMoveEvent(_move(
-        QPointF(60, 60), QPointF(400, 300),
-        modifiers=Qt.KeyboardModifier.ShiftModifier,
-    ))
+    win.mouseMoveEvent(
+        _move(
+            QPointF(60, 60),
+            QPointF(400, 300),
+            modifiers=Qt.KeyboardModifier.ShiftModifier,
+        )
+    )
     assert win.pos() != start, "越过阈值时按住 SHIFT 应开始拖动"
     win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
     win.close()
@@ -262,8 +279,7 @@ def test_slingshot_sequence_launches_with_reverse_pull(app, tmp_path):
     assert win._interaction_state == "DRAGGING"
     win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
     assert win._interaction_state == "SLINGSHOT_AIMING"
-    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(60, 100),
-                             buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(60, 100), buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
     assert win._slingshot_pull.x() > 0
     win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(60, 100)))
     assert win._interaction_state == "THROWN"
@@ -283,8 +299,7 @@ def test_slingshot_right_release_and_escape_cancel_to_anchor(app, tmp_path):
     win.mouseReleaseEvent(_right_release(QPointF(60, 60), QPointF(140, 100)))
     assert win._interaction_state == "DRAGGING"
     win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
-    win.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
-                                Qt.KeyboardModifier.NoModifier))
+    win.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
     assert win._interaction_state == "IDLE"
     assert win.pos() == anchor
     win.close()
@@ -316,8 +331,7 @@ def test_slingshot_focus_out_cancels_to_anchor(app, tmp_path):
     win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(140, 100)))
     win.mousePressEvent(_right_press(QPointF(60, 60), QPointF(140, 100)))
     anchor = win.pos()
-    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(40, 100),
-                             buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(40, 100), buttons=Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton))
     win.focusOutEvent(QFocusEvent(QEvent.Type.FocusOut))
     assert win._interaction_state == "IDLE"
     assert win.pos() == anchor
@@ -395,8 +409,10 @@ def test_tray_menu_syncs_mouse_through_from_config(tmp_path):
     tray.hide()
     app.processEvents()
 
+
 def test_drag_does_not_play_click_sound_but_click_does(app, tmp_path, monkeypatch):
     from pathlib import Path
+
     win = _make_win(app, tmp_path)
     press_calls = []
     release_calls = []
@@ -422,8 +438,10 @@ def test_drag_does_not_play_click_sound_but_click_does(app, tmp_path, monkeypatc
     win.close()
     app.processEvents()
 
+
 def test_click_sound_pair_is_cleared_when_resolution_fails(app, tmp_path, monkeypatch):
     from pathlib import Path
+
     win = _make_win(app, tmp_path)
     press_calls = []
     release_calls = []
@@ -478,12 +496,9 @@ def test_edge_probe_click_does_not_play_click_sound(app, tmp_path, monkeypatch):
     press_calls = []
     release_calls = []
     pair = (Path("press.wav"), Path("release.wav"))
-    monkeypatch.setattr("pet.window.resolve_click_sound_pair",
-                        lambda pack, data_dir=None: pair)
-    monkeypatch.setattr("pet.window.play_press_sound",
-                        lambda sound_pair, volume: press_calls.append(sound_pair))
-    monkeypatch.setattr("pet.window.play_release_sound",
-                        lambda sound_pair, volume: release_calls.append(sound_pair))
+    monkeypatch.setattr("pet.window.resolve_click_sound_pair", lambda pack, data_dir=None: pair)
+    monkeypatch.setattr("pet.window.play_press_sound", lambda sound_pair, volume: press_calls.append(sound_pair))
+    monkeypatch.setattr("pet.window.play_release_sound", lambda sound_pair, volume: release_calls.append(sound_pair))
 
     probe = _ProbeForSoundTest(active=True)
     win._edge_probe = probe

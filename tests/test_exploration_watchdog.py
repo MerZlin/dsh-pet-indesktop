@@ -4,6 +4,7 @@
 P1-1：`_evaluate_locked` / `_poll_long_think` 构造 payload 时读取未定义的
 `self.mode`，首次触发 warning 必抛 AttributeError，提醒永远发不出。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -45,12 +46,10 @@ def test_plugin_user_message_does_not_override_goal(app):
     """
     wd = ExplorationWatchdog()
     try:
-        wd.feed_record("agent", {"event": "user/message", "sourceKind": "user",
-                                 "text": "帮我修 user/message 事件"})
+        wd.feed_record("agent", {"event": "user/message", "sourceKind": "user", "text": "帮我修 user/message 事件"})
         with wd._lock:
             assert wd._states["agent"]["goal"] == "帮我修 user/message 事件"
-        wd.feed_record("agent", {"event": "user/message", "sourceKind": "plugin",
-                                 "text": "<system-reminder> 技能目录……"})
+        wd.feed_record("agent", {"event": "user/message", "sourceKind": "plugin", "text": "<system-reminder> 技能目录……"})
         with wd._lock:
             assert wd._states["agent"]["goal"] == "帮我修 user/message 事件"
     finally:
@@ -128,16 +127,14 @@ def test_pause_does_not_latch_long_think_and_resume_reanchors(app, monkeypatch):
         wd._poll_long_think()  # 暂停期间即使手动轮询也不得发射/置位
         assert not seen, "暂停期间不得发射长思考提醒"
         with wd._lock:
-            assert wd._states["agent"]["current"].long_think_reported is False, \
-                "暂停期间轮询不得置位已上报标志（否则恢复后提醒永久丢失）"
+            assert wd._states["agent"]["current"].long_think_reported is False, "暂停期间轮询不得置位已上报标志（否则恢复后提醒永久丢失）"
 
         clock.now += 600  # 隐藏 10 分钟
         wd.resume()
         with wd._lock:
             state = wd._states["agent"]
             assert state["started_at"] == started_before + 600, "隐藏时长不得计入累计"
-            assert abs((state["grace_until"] - state["started_at"]) - grace_delta_before) < 1e-6, \
-                "宽限期与起始时间的相对关系必须保持不变"
+            assert abs((state["grace_until"] - state["started_at"]) - grace_delta_before) < 1e-6, "宽限期与起始时间的相对关系必须保持不变"
             # 恢复即保守解除武装：暂停期丢弃了 step/end，无法判断思考是否已结束
             assert state["current"].think_active is False
             assert state["current"].think_started_at is None
@@ -268,8 +265,7 @@ def test_resume_shifts_anchor_memory(app, monkeypatch):
         for _ in range(5):
             wd.feed_record("agent", {"event": "command/run", "step": "s2", "command": "ls"})
         with wd._lock:
-            assert wd._states["agent"]["started_at"] == started_before + 600, \
-                "恢复后重置引用的锚点记忆必须已整体后移（隐藏时长不得计入）"
+            assert wd._states["agent"]["started_at"] == started_before + 600, "恢复后重置引用的锚点记忆必须已整体后移（隐藏时长不得计入）"
     finally:
         wd.close()
 

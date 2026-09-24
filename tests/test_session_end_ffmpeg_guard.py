@@ -22,6 +22,7 @@ CSRSS 被拆），CreateProcess 明明成功、子进程却在 user32/gdi32 的 
 6. **静默静态门**：webm_clip 每一处 ffmpeg spawn 调用点的作用域内都必须有
    ``session_ending()`` 门——未来新增 spawn 路径时该用例直接变红。
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -88,7 +89,9 @@ class _SpawnSpy:
     def install(self, monkeypatch) -> None:
         monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "read_frames", self.read_frames)
         monkeypatch.setattr(
-            webm_clip_mod.imageio_ffmpeg, "count_frames_and_secs", self.count_frames_and_secs,
+            webm_clip_mod.imageio_ffmpeg,
+            "count_frames_and_secs",
+            self.count_frames_and_secs,
         )
 
     @property
@@ -99,6 +102,7 @@ class _SpawnSpy:
 # ---------------------------------------------------------------------------
 # 1) 会话结束后的 ffmpeg spawn 硬门
 # ---------------------------------------------------------------------------
+
 
 def test_start_and_reader_refuse_to_spawn_when_session_ending(tmp_path, monkeypatch):
     """会话结束后 start() 走既有 False 契约，reader 线程也绝不拉起 ffmpeg。"""
@@ -200,6 +204,7 @@ def test_session_ending_latch_is_idempotent_and_resettable():
 # 2) MovieLibrary.stop_all_clips：会话结束时主动停掉现有 reader
 # ---------------------------------------------------------------------------
 
+
 class _RecordingClip:
     def __init__(self, fail: bool = False) -> None:
         self.stops = 0
@@ -266,6 +271,7 @@ def test_library_warm_predicted_refused_when_session_ending(monkeypatch):
 # 3) Windows 会话结束探测（原生消息层，真实 MSG 缓冲区）
 # ---------------------------------------------------------------------------
 
+
 class _FakeApp(QObject):
     """带 Qt 会话信号的假 app：只暴露探测器真正使用的接口。"""
 
@@ -296,14 +302,16 @@ def _msg_pointer(message: int):
     return ctypes.addressof(msg), msg
 
 
-@pytest.mark.parametrize("message", [
-    session_watcher_mod.WM_QUERYENDSESSION,
-    session_watcher_mod.WM_ENDSESSION,
-])
+@pytest.mark.parametrize(
+    "message",
+    [
+        session_watcher_mod.WM_QUERYENDSESSION,
+        session_watcher_mod.WM_ENDSESSION,
+    ],
+)
 def test_native_filter_arms_on_windows_session_end_messages(fake_app, message):
     ends: list = []
-    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: ends.append(1),
-                             install_native_filter=False)
+    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: ends.append(1), install_native_filter=False)
 
     addr, keepalive = _msg_pointer(message)
     result = watcher.nativeEventFilter(0, addr)
@@ -316,8 +324,7 @@ def test_native_filter_arms_on_windows_session_end_messages(fake_app, message):
 
 
 def test_native_filter_ignores_unrelated_messages(fake_app):
-    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None,
-                             install_native_filter=False)
+    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None, install_native_filter=False)
 
     addr, keepalive = _msg_pointer(0x000F)  # WM_PAINT：与关机无关
     assert watcher.nativeEventFilter(0, addr) == (False, 0)
@@ -333,8 +340,7 @@ def test_native_filter_rejects_bogus_pointer_without_raising(fake_app):
     无法用 except 捕获），因此这里的「野指针」用非指针入参（Qt 传参形态变化
     时的典型情况）+ 空指针覆盖；真正的野指针不构造。
     """
-    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None,
-                             install_native_filter=False)
+    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None, install_native_filter=False)
     assert watcher.nativeEventFilter(0, None) == (False, 0)
     assert watcher.nativeEventFilter(0, 0) == (False, 0)
     assert watcher.nativeEventFilter(0, "not-a-pointer") == (False, 0)
@@ -361,8 +367,7 @@ def test_arming_is_idempotent_and_logs_once(fake_app, caplog):
     import logging
 
     ends: list = []
-    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: ends.append(1),
-                             install_native_filter=False)
+    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: ends.append(1), install_native_filter=False)
 
     with caplog.at_level(logging.INFO, logger="pet.session_watcher"):
         watcher.arm("query_end_session")
@@ -371,18 +376,17 @@ def test_arming_is_idempotent_and_logs_once(fake_app, caplog):
         watcher.nativeEventFilter(0, addr)
 
     assert ends == [1], "安全网回调只许跑一次"
-    assert sum("会话结束" in r.getMessage() for r in caplog.records) == 1, \
-        "会话结束必须在日志留痕且不重复（issue #111 建议 4：关机阶段可观测）"
+    assert sum("会话结束" in r.getMessage() for r in caplog.records) == 1, "会话结束必须在日志留痕且不重复（issue #111 建议 4：关机阶段可观测）"
     assert keepalive is not None
 
 
 def test_safety_net_callback_failure_does_not_disarm_the_gate(fake_app):
     """数据先落、回调后跑：安全网回调抛异常不得让 ffmpeg 门失守。"""
+
     def _boom() -> None:
         raise RuntimeError("安全网回调失败")
 
-    watcher = SessionWatcher(app=fake_app, on_session_end=_boom,
-                             install_native_filter=False)
+    watcher = SessionWatcher(app=fake_app, on_session_end=_boom, install_native_filter=False)
     watcher.arm("test")
 
     assert watcher.armed is True
@@ -395,15 +399,13 @@ def test_qt_session_signals_arm_through_real_signal_connections(fake_app):
     每条信号用独立 watcher：已置位的 watcher 天然不再响应后续信号（latch 语义），
     复用同一实例的第二个断言只会测到 latch、测不到接线。
     """
-    commit_watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None,
-                                    install_native_filter=False)
+    commit_watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None, install_native_filter=False)
     commit_watcher.connect_app_signals()
     fake_app.commitDataRequest.emit()
     assert webm_clip_mod.session_ending() is True, "commitDataRequest 必须在 spawn 门前置位"
 
     webm_clip_mod.set_session_ending(False)
-    quit_watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None,
-                                  install_native_filter=False)
+    quit_watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None, install_native_filter=False)
     quit_watcher.connect_app_signals()
     fake_app.aboutToQuit.emit()
     assert webm_clip_mod.session_ending() is True, "正常退出也必须在 spawn 门前置位"
@@ -418,8 +420,7 @@ def test_arm_normalises_non_string_reason_for_logs(fake_app, caplog):
     """
     import logging
 
-    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None,
-                             install_native_filter=False)
+    watcher = SessionWatcher(app=fake_app, on_session_end=lambda: None, install_native_filter=False)
     with caplog.at_level(logging.INFO, logger="pet.session_watcher"):
         watcher.arm(object())  # 模拟 Qt 传进来的 QSessionManager 实例
 
@@ -438,6 +439,7 @@ def test_install_without_qapplication_is_a_noop():
 # ---------------------------------------------------------------------------
 # 4) AppShell 编排：逐窗 match_shutdown
 # ---------------------------------------------------------------------------
+
 
 class _FakeWindow:
     """窗口替身：只暴露会话结束收口的公开面（含素材库）。"""
@@ -555,7 +557,9 @@ def test_app_shell_start_installs_session_watcher(app, tmp_path, monkeypatch):
     def _fake_install(*, app=None, on_session_end=None):
         installed.append((app, on_session_end))
         return session_watcher_mod.SessionWatcher(
-            app=app, on_session_end=on_session_end, install_native_filter=False,
+            app=app,
+            on_session_end=on_session_end,
+            install_native_filter=False,
         )
 
     monkeypatch.setattr(app_mod, "install_session_watcher", _fake_install)
@@ -607,8 +611,8 @@ def _enclosing_scope(lines: list, index: int) -> str:
     for i in range(index, -1, -1):
         stripped = lines[i].strip()
         if stripped.startswith("def "):
-            return "\n".join(lines[i:index + 1])
-    return "\n".join(lines[:index + 1])
+            return "\n".join(lines[i : index + 1])
+    return "\n".join(lines[: index + 1])
 
 
 def test_every_ffmpeg_spawn_site_is_gated_by_session_ending():
@@ -626,14 +630,8 @@ def test_every_ffmpeg_spawn_site_is_gated_by_session_ending():
         if "session_ending()" not in _enclosing_scope(lines, i):
             offenders.append(f"webm_clip.py:{i + 1}: {line.strip()}")
 
-    assert sites == 3, (
-        f"ffmpeg spawn 调用点数从 3 变成 {sites}——清单已变，护栏需同步核对："
-        "新增/删除 spawn 路径后必须回看本用例与 session_ending 门"
-    )
-    assert not offenders, (
-        "以下 ffmpeg spawn 调用点缺少 session_ending() 门（关机时会派生进程、"
-        "触发 0xc0000142 阻塞关机）：\n" + "\n".join(offenders)
-    )
+    assert sites == 3, f"ffmpeg spawn 调用点数从 3 变成 {sites}——清单已变，护栏需同步核对：新增/删除 spawn 路径后必须回看本用例与 session_ending 门"
+    assert not offenders, "以下 ffmpeg spawn 调用点缺少 session_ending() 门（关机时会派生进程、触发 0xc0000142 阻塞关机）：\n" + "\n".join(offenders)
 
 
 def test_ffmpeg_exe_probe_is_gated():
@@ -645,7 +643,5 @@ def test_ffmpeg_exe_probe_is_gated():
         if (i + 1) not in code_lines or "get_ffmpeg_exe(" not in line:
             continue  # 注释/文档字符串里的说明不算 spawn 点
         call_sites += 1
-        assert "session_ending()" in _enclosing_scope(lines, i), (
-            f"webm_clip.py:{i + 1}: exe 探测缺少 session_ending() 门"
-        )
+        assert "session_ending()" in _enclosing_scope(lines, i), f"webm_clip.py:{i + 1}: exe 探测缺少 session_ending() 门"
     assert call_sites == 1, f"get_ffmpeg_exe 调用点数量异常：{call_sites}"

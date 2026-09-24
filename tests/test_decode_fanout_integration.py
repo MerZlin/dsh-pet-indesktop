@@ -9,6 +9,7 @@
 本文件聚焦其结构性核心（单源 + 单订阅者 + 帧流），用有界消费（≤30 帧）保证
 确定性。asyncio/psutil 子进程计数的机器级断言留在验收脚本（不引入 flaky 依赖）。
 """
+
 from __future__ import annotations
 
 import time
@@ -72,8 +73,7 @@ def test_two_clips_share_single_decode(app):
         assert len(pubs) >= 30, f"发布者出帧不足: {len(pubs)} errors={errors}"
         assert len(subs) >= 30, f"订阅者出帧不足: {len(subs)} errors={errors}"
         # 订阅者源帧号单调不减（帧序协议：drop-oldest 允许跳帧，绝不乱序）
-        assert all(subs[i] < subs[i + 1] for i in range(len(subs) - 1)), \
-            f"订阅者帧号乱序: {subs}"
+        assert all(subs[i] < subs[i + 1] for i in range(len(subs) - 1)), f"订阅者帧号乱序: {subs}"
         assert errors == []
         assert sub._reader_proc is None, "消费全程订阅者不得拉起 ffmpeg"
         # 反向证明共享真实发生：订阅者的帧来自发布者的源（发布者帧号已是高位，

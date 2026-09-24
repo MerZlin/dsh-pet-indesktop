@@ -20,23 +20,25 @@ def _bj(hour: int, day=31, month=8, year=2026, weekday_override=None):
 
 
 def test_format_balance_variants():
-    assert balance.format_balance({"total": "12.34", "granted": "2.34", "topped_up": "10.00"}) == \
-        "余额 ¥12.34（充值 ¥10.00 / 赠送 ¥2.34）"
-    assert balance.format_balance({"total": "5.00", "granted": "", "topped_up": "5.00"}) == \
-        "余额 ¥5.00"
+    assert balance.format_balance({"total": "12.34", "granted": "2.34", "topped_up": "10.00"}) == "余额 ¥12.34（充值 ¥10.00 / 赠送 ¥2.34）"
+    assert balance.format_balance({"total": "5.00", "granted": "", "topped_up": "5.00"}) == "余额 ¥5.00"
     assert balance.format_balance({"total": "", "granted": "", "topped_up": ""}) == "余额信息为空"
 
 
 def test_fetch_balance_parses_response(monkeypatch):
-    body = json.dumps({
-        "is_available": True,
-        "balance_infos": [{
-            "currency": "CNY",
-            "total_balance": "12.34",
-            "granted_balance": "2.34",
-            "topped_up_balance": "10.00",
-        }],
-    }).encode()
+    body = json.dumps(
+        {
+            "is_available": True,
+            "balance_infos": [
+                {
+                    "currency": "CNY",
+                    "total_balance": "12.34",
+                    "granted_balance": "2.34",
+                    "topped_up_balance": "10.00",
+                }
+            ],
+        }
+    ).encode()
 
     def fake_urlopen(req, *args, **kwargs):
         # 校验端点与认证头
@@ -86,15 +88,12 @@ def test_fetch_balance_errors(monkeypatch):
 
 def test_fetch_balance_multi_currency_picks_positive_cny(monkeypatch):
     """issue #106：balance_infos 多币种且顺序不保证时，不得盲取首条。"""
-    cny = {"currency": "CNY", "total_balance": "66.47",
-           "granted_balance": "0.00", "topped_up_balance": "66.47"}
-    usd = {"currency": "USD", "total_balance": "0.00",
-           "granted_balance": "0.00", "topped_up_balance": "0.00"}
+    cny = {"currency": "CNY", "total_balance": "66.47", "granted_balance": "0.00", "topped_up_balance": "66.47"}
+    usd = {"currency": "USD", "total_balance": "0.00", "granted_balance": "0.00", "topped_up_balance": "0.00"}
 
     def run_with(infos):
         body = json.dumps({"is_available": True, "balance_infos": infos}).encode()
-        monkeypatch.setattr(balance.urllib.request, "urlopen",
-                            lambda req, *a, **k: io.BytesIO(body))
+        monkeypatch.setattr(balance.urllib.request, "urlopen", lambda req, *a, **k: io.BytesIO(body))
         return balance.fetch_balance("https://api.deepseek.com", "sk-test")
 
     # USD 排前（复现原 bug：旧实现取 infos[0] 得到 0.00）
@@ -165,25 +164,19 @@ def test_resolve_tier_labels_and_custom_hint():
     assert balance.resolve_tier_labels("custom", "", "") == ("高峰", "空闲")
 
     # 自定义文案会反映到提示里
-    hint = balance.deepseek_pricing_hint(
-        _bj(10), peak_label="梁文峰", idle_label="梁文谷"
-    )
+    hint = balance.deepseek_pricing_hint(_bj(10), peak_label="梁文峰", idle_label="梁文谷")
     assert "当前梁文峰" in hint
     assert "下一梁文谷" in hint
 
 
 def test_deepseek_pricing_hint_html_colors():
     # 默认高峰红、低谷绿，且包含对应文本
-    html = balance.deepseek_pricing_hint_html(
-        _bj(10), peak_label="高峰", idle_label="空闲"
-    )
+    html = balance.deepseek_pricing_hint_html(_bj(10), peak_label="高峰", idle_label="空闲")
     assert "#e5484d" in html
     assert "高峰" in html
     assert "空闲" in html
     # 自定义标签会转义，避免破坏 HTML
-    html_custom = balance.deepseek_pricing_hint_html(
-        _bj(10), peak_label="<峰>", idle_label="谷"
-    )
+    html_custom = balance.deepseek_pricing_hint_html(_bj(10), peak_label="<峰>", idle_label="谷")
     assert "&lt;峰&gt;" in html_custom
 
 
@@ -192,9 +185,7 @@ def test_friday_evening_next_peak_skips_weekend():
     hint = balance.deepseek_pricing_hint(_bj(20, day=28, month=8, year=2026))
     assert "当前空闲" in hint
     assert "下一高峰 下周一 09:00" in hint
-    next_tier, next_time = balance._next_pricing_switch(
-        _bj(20, day=28, month=8, year=2026)
-    )
+    next_tier, next_time = balance._next_pricing_switch(_bj(20, day=28, month=8, year=2026))
     assert next_tier == "peak"
     assert next_time.weekday() == 0  # Monday
     assert next_time.hour == 9
@@ -216,24 +207,36 @@ def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
     from PySide6.QtWidgets import QApplication
     from pet.app import PetApp
     from pet.config import Config
+
     app = QApplication.instance() or QApplication([])
     owner = PetApp(app, Config(base=tmp_path))
-    owner.win = type("Win", (), {
-        "isVisible": lambda self: True,
-        # 线程启动失败路径会排队 singleShot(done.emit(错误文案))：
-        # 弹窗桩方法必须存在，且队列必须在本测试内清空（见结尾 processEvents），
-        # 否则事件泄漏到下一个测试的 processEvents 里引爆（Win 桩无 show_bubble）。
-        "show_bubble": lambda self, *a, **k: None,
-        "show_alert": lambda self, *a, **k: None,
-    })()
+    owner.win = type(
+        "Win",
+        (),
+        {
+            "isVisible": lambda self: True,
+            # 线程启动失败路径会排队 singleShot(done.emit(错误文案))：
+            # 弹窗桩方法必须存在，且队列必须在本测试内清空（见结尾 processEvents），
+            # 否则事件泄漏到下一个测试的 processEvents 里引爆（Win 桩无 show_bubble）。
+            "show_bubble": lambda self, *a, **k: None,
+            "show_alert": lambda self, *a, **k: None,
+        },
+    )()
     monkeypatch.setattr(owner, "_read_balance_file_cache", lambda *_: None)
+
     class Settings:
-        active_config = type("Provider", (), {"id":"x", "base_url":"https://x", "api_key":"k", "verify_ssl":True})()
+        active_config = type("Provider", (), {"id": "x", "base_url": "https://x", "api_key": "k", "verify_ssl": True})()
+
     monkeypatch.setattr(owner.config, "chat_settings", lambda: Settings())
     monkeypatch.setattr(owner.config, "resolve_api_key", lambda p: "k")
+
     class BrokenThread:
-        def __init__(self, *a, **k): pass
-        def start(self): raise RuntimeError("cannot start")
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("cannot start")
+
     monkeypatch.setattr("pet.app.threading.Thread", BrokenThread)
     owner.show_balance(owner.win)
     assert owner._balance_busy is False
@@ -244,6 +247,7 @@ def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
 def test_menu_balance_action_calls_bound_window_callback():
     from PySide6.QtWidgets import QApplication, QMenu
     from pet.context_menus.shared import add_balance
+
     app = QApplication.instance() or QApplication([])
     calls = []
     pet = type("Pet", (), {"on_show_balance": lambda self, parent=None: calls.append(parent)})()

@@ -5,6 +5,7 @@ _discover_click_names 必须走 catalog.resolve_character_video_dir（外部 DLC
 目录优先），并同时识别 webm/gif——不能只认内置目录（否则 DLC 角色在绑定
 对话框里看到的是别的角色的动画名，绑定写到不存在的键上静默失效）。
 """
+
 from __future__ import annotations
 
 from pet import catalog
@@ -34,8 +35,6 @@ def test_builtin_character_discovers_real_names():
     守住「catalog.CLICKS 字面量与磁盘真实文件名已漂移」的回归。"""
     names = _discover_click_names(catalog.DEFAULT_CHARACTER)
     click_dir = catalog.resolve_character_video_dir(catalog.DEFAULT_CHARACTER) / "click"
-    expected = sorted(
-        {p.stem for p in click_dir.glob("*.webm")} | {p.stem for p in click_dir.glob("*.gif")}
-    )
+    expected = sorted({p.stem for p in click_dir.glob("*.webm")} | {p.stem for p in click_dir.glob("*.gif")})
     assert names == expected
     assert names, "内置角色必须有点击动画"

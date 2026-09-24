@@ -11,6 +11,7 @@
 2. 放大后 label 不得比真实行窄（否则行尾那个字被 label 右边界切在边界上）；
 3. 放大后分页仍然正常（每页不超过 ``bubble_max_lines`` 行、有页码）。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -76,10 +77,10 @@ def test_font_px_scales_with_floor():
     assert scale_bubble_font_px(BUBBLE_BODY_FONT_PX, 1.0) == BUBBLE_BODY_FONT_PX
     assert scale_bubble_font_px(13, 2.0) == 26
     assert scale_bubble_font_px(13, 1.5) == 20  # 取整，不出现半个像素
-    assert scale_bubble_font_px(13, 0.5) == 6   # round(6.5) 走银行家舍入
+    assert scale_bubble_font_px(13, 0.5) == 6  # round(6.5) 走银行家舍入
     # 系数先被钳到下限 0.5，所以字号永远不会缩到 0（10px 副标题 → 5px）
     assert scale_bubble_font_px(10, 0.01) == 5
-    assert scale_bubble_font_px(1, 0.5) == 1    # 下限 1px
+    assert scale_bubble_font_px(1, 0.5) == 1  # 下限 1px
 
 
 def test_breath_bubble_reference_canvas_scales():
@@ -182,16 +183,13 @@ def test_scaled_label_never_narrower_than_the_widest_line():
         try:
             metrics = QFontMetrics(bubble.label.font())
             pages = paginate_bubble_text(
-                metrics, text, bubble.label.width(),
+                metrics,
+                text,
+                bubble.label.width(),
                 bubble_max_lines(text),
             )
-            widest = max(
-                metrics.horizontalAdvance(line)
-                for page in pages for line in page.split("\n")
-            )
-            assert bubble.label.width() >= widest, (
-                f"scale={scale} label 宽度 {bubble.label.width()} < 最长行 {widest}"
-            )
+            widest = max(metrics.horizontalAdvance(line) for page in pages for line in page.split("\n"))
+            assert bubble.label.width() >= widest, f"scale={scale} label 宽度 {bubble.label.width()} < 最长行 {widest}"
         finally:
             bubble.close()
 
@@ -206,9 +204,7 @@ def test_scaled_text_still_paginates():
         for page in bubble._pages:
             assert len(page.split("\n")) <= 6
         total = len(bubble._pages)
-        assert bubble._page_indicator.text() == " ".join(
-            "●" if index == 0 else "○" for index in range(total)
-        )
+        assert bubble._page_indicator.text() == " ".join("●" if index == 0 else "○" for index in range(total))
         bubble._on_page_timeout()
         assert bubble._page_index == 1
         for _ in range(total):
@@ -251,9 +247,7 @@ def test_scaled_wrap_budget_matches_the_label_in_the_live_show_text_path(monkeyp
     from pet.speech_bubble_text import bubble_max_lines, paginate_bubble_text
 
     narrow = QRect(0, 0, 420, 700)
-    monkeypatch.setattr(
-        PetSpeechBubble, "_available_geometry", lambda self, anchor: QRect(narrow)
-    )
+    monkeypatch.setattr(PetSpeechBubble, "_available_geometry", lambda self, anchor: QRect(narrow))
     anchor = QRect(80, 300, 200, 240)
     text = "放大的气泡文字每行都要能装下。" * 16
     bubble = PetSpeechBubble()
@@ -261,26 +255,16 @@ def test_scaled_wrap_budget_matches_the_label_in_the_live_show_text_path(monkeyp
     try:
         column = bubble._column_for_text(text, anchor)
         margins = bubble._layout.contentsMargins()
-        assert column <= narrow.width() - margins.left() - margins.right(), (
-            f"列宽 {column} 超出可用区 {narrow.width()} → 气泡会长出屏幕"
-        )
+        assert column <= narrow.width() - margins.left() - margins.right(), f"列宽 {column} 超出可用区 {narrow.width()} → 气泡会长出屏幕"
 
         bubble.show_text(text, anchor, 60000)
         bubble.label.ensurePolished()
         metrics = QFontMetrics(bubble.label.font())
-        pages = paginate_bubble_text(
-            metrics, text, bubble.label.width(), bubble_max_lines(text)
-        )
-        widest = max(
-            metrics.horizontalAdvance(line) for page in pages for line in page.split("\n")
-        )
-        assert bubble.label.width() >= widest, (
-            f"可用区 420px：label {bubble.label.width()} 比最长行 {widest} 还窄 → 行尾会被切"
-        )
+        pages = paginate_bubble_text(metrics, text, bubble.label.width(), bubble_max_lines(text))
+        widest = max(metrics.horizontalAdvance(line) for page in pages for line in page.split("\n"))
+        assert bubble.label.width() >= widest, f"可用区 420px：label {bubble.label.width()} 比最长行 {widest} 还窄 → 行尾会被切"
         assert bubble.label.width() >= 300, "300% 下 label 不该退化成窄条"
-        assert narrow.contains(bubble.geometry()), (
-            f"气泡 {bubble.geometry().getRect()} 越出可用区 {narrow.getRect()}"
-        )
+        assert narrow.contains(bubble.geometry()), f"气泡 {bubble.geometry().getRect()} 越出可用区 {narrow.getRect()}"
     finally:
         bubble.close()
 

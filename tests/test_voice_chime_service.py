@@ -8,6 +8,7 @@
 纪律：全部用例**不打网络**（edge_tts 探测标志与合成线程都局部打桩）、不做
 固定 sleep 猜时序、不依赖真实音频设备（conftest 已全局静音 play()）。
 """
+
 from __future__ import annotations
 
 import os
@@ -57,13 +58,17 @@ def _run_python(script: str) -> subprocess.CompletedProcess:
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", script],
-                stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                text=True, cwd=str(ROOT), env=env, timeout=120,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                cwd=str(ROOT),
+                env=env,
+                timeout=120,
             )
         except subprocess.TimeoutExpired:
             out.seek(0)
-            return subprocess.CompletedProcess(
-                [sys.executable, "-c", script], 124, out.read(), "")
+            return subprocess.CompletedProcess([sys.executable, "-c", script], 124, out.read(), "")
         out.seek(0)
         return subprocess.CompletedProcess(proc.args, proc.returncode, out.read(), "")
 
@@ -192,10 +197,19 @@ def test_service_cfg_matches_contract_shape_at_construction(tmp_path, monkeypatc
     # 契约键（服务内部读写的最小集）必须全部在场；气泡/台词开关与自定义台词
     # 库是本分支新增的扩展键，同样在构造期即成形。
     assert {
-        "enabled", "schedule", "custom_times", "voice", "rate", "pitch", "volume",
+        "enabled",
+        "schedule",
+        "custom_times",
+        "voice",
+        "rate",
+        "pitch",
+        "volume",
     } <= set(service._cfg)
     assert {
-        "show_bubble", "show_quote", "custom_quotes_zh", "custom_quotes_en",
+        "show_bubble",
+        "show_quote",
+        "custom_quotes_zh",
+        "custom_quotes_en",
     } <= set(service._cfg)
     assert service._cfg["voice"] == DEFAULT_VOICE
     assert service._cfg["enabled"] is False  # 默认关闭（2026-09-19 起），显式开启后才启动调度
@@ -219,11 +233,14 @@ def test_cached_audio_replays_without_resynthesis(tmp_path, monkeypatch):
     service, app, cfg = _service(tmp_path, monkeypatch)
     service.apply_config()
     sentence = "现在是上午九点整。测试台词"
-    key = cache_key(sentence, {
-        "voice": cfg.get("voice_chime_voice"),
-        "rate": cfg.get("voice_chime_rate"),
-        "pitch": cfg.get("voice_chime_pitch"),
-    })
+    key = cache_key(
+        sentence,
+        {
+            "voice": cfg.get("voice_chime_voice"),
+            "rate": cfg.get("voice_chime_rate"),
+            "pitch": cfg.get("voice_chime_pitch"),
+        },
+    )
     cache_dir = service._cache_dir
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / f"{key}.mp3"
@@ -489,13 +506,11 @@ def test_build_scripts_and_requirements_declare_edge_tts():
     故用机器门禁钉住三端一致。
     """
     repo = Path(__file__).resolve().parents[1]
-    for name in ("scripts/build_linux.sh", "scripts/build_macos.sh",
-                 "scripts/build_onedir.ps1"):
+    for name in ("scripts/build_linux.sh", "scripts/build_macos.sh", "scripts/build_onedir.ps1"):
         text = (repo / name).read_text(encoding="utf-8")
         assert "--collect-all edge_tts" in text, f"{name} 必须收集 edge_tts"
     requirements = (repo / "requirements.txt").read_text(encoding="utf-8")
-    assert re.search(r"^edge-tts>=", requirements, re.M), \
-        "requirements.txt 必须声明 edge-tts（CI 与打包都按它装依赖）"
+    assert re.search(r"^edge-tts>=", requirements, re.M), "requirements.txt 必须声明 edge-tts（CI 与打包都按它装依赖）"
 
 
 def test_about_to_quit_stops_voice_chime_service(tmp_path, monkeypatch):
@@ -764,8 +779,8 @@ def test_chime_yields_even_when_it_ticks_first(tmp_path, monkeypatch):
     monkeypatch.setattr(festival, "_speak", lambda text: festival_said.append(text))
 
     when = datetime(2026, 2, 17, 9, 0, 5)
-    chime._on_tick(when)      # 报时先到
-    festival._on_tick(when)   # 节日后到
+    chime._on_tick(when)  # 报时先到
+    festival._on_tick(when)  # 节日后到
 
     assert chime_said == [], "报时先 tick 时同样要让位"
     assert festival_said, "节日仍应播报"
@@ -824,11 +839,7 @@ def test_disabled_voice_chime_startup_does_not_import_edge_tts(tmp_path):
 
     assert shell.voice_chime_service is None
 
-    proc = _run_python(
-        "import sys\n"
-        "import pet.app\n"
-        "assert 'edge_tts' not in sys.modules, '启动路径把 edge_tts import 进来了'\n"
-    )
+    proc = _run_python("import sys\nimport pet.app\nassert 'edge_tts' not in sys.modules, '启动路径把 edge_tts import 进来了'\n")
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
@@ -866,8 +877,7 @@ def test_service_bubbles_install_hint_when_edge_tts_import_fails(tmp_path, monke
             self._on_done = on_done
 
         def start(self) -> None:
-            self._on_done(
-                str(self._out_path), "现在是上午九点整。", svc_mod.EDGE_TTS_MISSING)
+            self._on_done(str(self._out_path), "现在是上午九点整。", svc_mod.EDGE_TTS_MISSING)
 
     monkeypatch.setattr(svc_mod, "_TTSWorker", _MissingWorker)
     service._fire("现在是上午九点整。", datetime(2026, 9, 15, 9, 0))
@@ -898,8 +908,7 @@ def test_fire_blocked_by_busy_queues_and_plays_after_synthesis_completes(tmp_pat
 
     # 预合成完成：排队的报时必须补播（缓存未落盘则新起一路即时合成）
     service._on_synthesized(str(service._cache_dir / "p.mp3"), "现在时刻，上午十点整", "")
-    assert played or len(_WorkerSpy.instances) > workers_before, \
-        "合成完成后，被 busy 门拦下的报时必须补播"
+    assert played or len(_WorkerSpy.instances) > workers_before, "合成完成后，被 busy 门拦下的报时必须补播"
     if not played:
         _WorkerSpy.instances[-1].finish(path=str(service._cache_dir / "x.mp3"))
     assert played, "补播链路必须到达播放"
@@ -1033,8 +1042,7 @@ def test_speak_self_talk_prefers_precached_file(tmp_path, monkeypatch):
     cached = _precached_wav(cfg, text)
     played: list[str] = []
     spoken: list[str] = []
-    monkeypatch.setattr(shell, "ensure_audio_channel",
-                        lambda: _recording_channel(played, spoken))
+    monkeypatch.setattr(shell, "ensure_audio_channel", lambda: _recording_channel(played, spoken))
 
     assert shell.speak_self_talk(text) is True
     assert played == [str(cached)]
@@ -1053,8 +1061,7 @@ def test_speak_self_talk_ignores_empty_cache_file(tmp_path, monkeypatch):
     _precached_wav(cfg, text).write_bytes(b"")  # 写到一半被打断留下的残file
     played: list[str] = []
     spoken: list[str] = []
-    monkeypatch.setattr(shell, "ensure_audio_channel",
-                        lambda: _recording_channel(played, spoken))
+    monkeypatch.setattr(shell, "ensure_audio_channel", lambda: _recording_channel(played, spoken))
 
     assert shell.speak_self_talk(text) is True
     assert played == [], "空文件不该交给播放器"
@@ -1071,8 +1078,7 @@ def test_speak_self_talk_falls_back_to_synthesis_without_cache(tmp_path, monkeyp
 
     played: list[str] = []
     spoken: list[str] = []
-    monkeypatch.setattr(shell, "ensure_audio_channel",
-                        lambda: _recording_channel(played, spoken))
+    monkeypatch.setattr(shell, "ensure_audio_channel", lambda: _recording_channel(played, spoken))
 
     assert shell.speak_self_talk("一句还没预缓存的新台词。") is True
     assert played == []
@@ -1091,8 +1097,7 @@ def test_speak_self_talk_falls_back_when_local_playback_fails(tmp_path, monkeypa
     _precached_wav(cfg, text)
     played: list[str] = []
     spoken: list[str] = []
-    monkeypatch.setattr(shell, "ensure_audio_channel",
-                        lambda: _recording_channel(played, spoken, play_ok=False))
+    monkeypatch.setattr(shell, "ensure_audio_channel", lambda: _recording_channel(played, spoken, play_ok=False))
 
     assert shell.speak_self_talk(text) is True
     assert played, "先尝试本地文件"

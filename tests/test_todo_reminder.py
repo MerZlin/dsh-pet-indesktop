@@ -3,6 +3,7 @@
 
 纯函数全部显式注入 now，不依赖墙钟；TodoStore 走 tmp_path 真实文件 IO。
 """
+
 from __future__ import annotations
 
 import json
@@ -44,6 +45,7 @@ def _once(date_text: str = "2026-09-04", time: str = "10:00", **kw) -> dict:
 
 # ------------------------------------------------------------ new/clean
 
+
 def test_new_todo_item_shape():
     item = new_todo_item(" 买奶 ", "daily", "9:05")
     assert item["title"] == "买奶"
@@ -74,8 +76,8 @@ def test_clean_drops_garbage_and_clamps():
     assert len(items) == 2
     clamped = items[0]
     assert len(clamped["title"]) == 80
-    assert clamped["kind"] == "once"        # 非法 kind 归 once
-    assert clamped["time"] == "09:00"       # 非法时间回退默认
+    assert clamped["kind"] == "once"  # 非法 kind 归 once
+    assert clamped["time"] == "09:00"  # 非法时间回退默认
     assert clamped["date"] == date.today().isoformat()  # 非法日期回退今天
     assert items[1]["kind"] == "daily"
     assert items[1]["time"] == "09:30"
@@ -83,10 +85,7 @@ def test_clean_drops_garbage_and_clamps():
 
 
 def test_clean_dedupes_ids_and_caps_limit():
-    raw = [
-        {"title": f"t{i}", "kind": "daily", "time": "10:00", "id": "same"}
-        for i in range(TODO_ITEMS_LIMIT + 5)
-    ]
+    raw = [{"title": f"t{i}", "kind": "daily", "time": "10:00", "id": "same"} for i in range(TODO_ITEMS_LIMIT + 5)]
     items = clean_todo_items(raw)
     assert len(items) == TODO_ITEMS_LIMIT
     ids = [item["id"] for item in items]
@@ -94,10 +93,11 @@ def test_clean_dedupes_ids_and_caps_limit():
 
 
 def test_clean_preserves_slots_and_enabled():
-    items = clean_todo_items([
-        {"title": "A", "kind": "daily", "time": "10:00",
-         "enabled": False, "fired_due_slot": "2026-09-04T10:00#due"},
-    ])
+    items = clean_todo_items(
+        [
+            {"title": "A", "kind": "daily", "time": "10:00", "enabled": False, "fired_due_slot": "2026-09-04T10:00#due"},
+        ]
+    )
     assert items[0]["enabled"] is False
     assert items[0]["fired_due_slot"] == "2026-09-04T10:00#due"
     # 非布尔的 enabled 一律回到默认 True（不猜字符串语义）
@@ -107,18 +107,15 @@ def test_clean_preserves_slots_and_enabled():
 
 # ------------------------------------------------------------ advance
 
+
 def test_no_fire_before_lead():
-    fires, new_items = advance_todo_state(
-        [_daily()], _prefs(lead=5), datetime(2026, 9, 4, 9, 54)
-    )
+    fires, new_items = advance_todo_state([_daily()], _prefs(lead=5), datetime(2026, 9, 4, 9, 54))
     assert fires == []
     assert new_items[0]["fired_lead_slot"] is None
 
 
 def test_lead_fire_then_due_fire():
-    fires, stamped = advance_todo_state(
-        [_daily()], _prefs(lead=5), datetime(2026, 9, 4, 9, 55)
-    )
+    fires, stamped = advance_todo_state([_daily()], _prefs(lead=5), datetime(2026, 9, 4, 9, 55))
     assert [f["phase"] for f in fires] == ["lead"]
     assert stamped[0]["fired_lead_slot"] == "2026-09-04T10:00#lead"
     fires2, _ = advance_todo_state(stamped, _prefs(lead=5), datetime(2026, 9, 4, 10, 0))
@@ -163,15 +160,11 @@ def test_daily_rolls_over_next_day():
 
 
 def test_once_archives_after_due_plus_grace():
-    fires, stamped = advance_todo_state(
-        [_once()], _prefs(lead=0), datetime(2026, 9, 4, 10, DEFAULT_GRACE_MINUTES + 1)
-    )
+    fires, stamped = advance_todo_state([_once()], _prefs(lead=0), datetime(2026, 9, 4, 10, DEFAULT_GRACE_MINUTES + 1))
     assert fires == []
     assert stamped[0]["enabled"] is False
     # daily 同时刻不归档
-    _, daily_items = advance_todo_state(
-        [_daily()], _prefs(lead=0), datetime(2026, 9, 5, 10, DEFAULT_GRACE_MINUTES + 1)
-    )
+    _, daily_items = advance_todo_state([_daily()], _prefs(lead=0), datetime(2026, 9, 5, 10, DEFAULT_GRACE_MINUTES + 1))
     assert daily_items[0]["enabled"] is True
 
 
@@ -182,9 +175,7 @@ def test_once_fires_inside_window_without_archiving():
 
 
 def test_disabled_item_skipped():
-    fires, _ = advance_todo_state(
-        [_daily(enabled=False)], _prefs(), datetime(2026, 9, 4, 10, 0)
-    )
+    fires, _ = advance_todo_state([_daily(enabled=False)], _prefs(), datetime(2026, 9, 4, 10, 0))
     assert fires == []
 
 
@@ -196,6 +187,7 @@ def test_master_disabled_is_noop():
 
 
 # ------------------------------------------------------------ summarize
+
 
 def test_summarize_next_daily_today():
     text = summarize_next([_daily(time="23:00")], NOW)
@@ -217,6 +209,7 @@ def test_summarize_next_once_and_empty():
 
 
 # ------------------------------------------------------------ TodoStore
+
 
 def test_store_path_naming():
     base = Path("X:/whatever")
@@ -247,6 +240,7 @@ def test_store_payload_version(tmp_path):
 
 # ------------------------------------------------------------ Config 偏好键
 
+
 def test_todo_prefs_defaults(tmp_path):
     cfg = Config(base=tmp_path)
     assert cfg.get("todo_reminder_enabled") is True
@@ -267,8 +261,10 @@ def test_todo_prefs_roundtrip_and_clamp(tmp_path):
 
 # ------------------------------------------------------------ 服务分发（GUI 线程）
 
+
 def _qapp():
     from PySide6.QtWidgets import QApplication
+
     return QApplication.instance() or QApplication([])
 
 
@@ -402,6 +398,7 @@ def test_service_once_archive_persists(tmp_path):
 
 # ------------------------------------------------------------ PetApp 接线
 
+
 def test_petapp_creates_service_and_wires_callback(tmp_path):
     from pet.app import AppShell
 
@@ -444,6 +441,7 @@ def test_petapp_settings_finish_applies_todo_prefs(tmp_path, monkeypatch):
 
 
 # ------------------------------------------------------------ 管理面板
+
 
 def _make_panel(tmp_path):
     from pet.todo_panel import TodoPanelDialog
@@ -522,6 +520,7 @@ def test_panel_edit_updates_item_and_clears_slots(tmp_path):
 
 
 # ------------------------------------------------------------ 设置页偏好
+
 
 def test_settings_roundtrip_todo_prefs(tmp_path):
     """设置对话框读写 todo_reminder 两键，且两行归入「待办提醒」section。"""

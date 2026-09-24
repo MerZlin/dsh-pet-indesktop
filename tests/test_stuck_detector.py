@@ -44,8 +44,9 @@ class _FakeClock:
         self.now += seconds
 
 
-def _result(tool: str, ok: bool, *, error_text: str = "", error_code: str = "",
-            args_key: str = "", duration_ms: int | None = None, timeout: bool = False) -> dict:
+def _result(
+    tool: str, ok: bool, *, error_text: str = "", error_code: str = "", args_key: str = "", duration_ms: int | None = None, timeout: bool = False
+) -> dict:
     # tool/result 错误正文统一 errorMessage（与 llm/retry 等一致）
     return {
         "event": "tool/result",
@@ -155,23 +156,21 @@ class TestStuckDetectorScoring:
         det.intervention_recommended.connect(lambda k, p: events.append(p))
 
         # 1) pip 装包 → 超时
-        det.feed_record("dsh", _result("bash", False, error_code="ETIMEDOUT",
-                                       error_text="pip download timed out after 60s", timeout=True))
+        det.feed_record("dsh", _result("bash", False, error_code="ETIMEDOUT", error_text="pip download timed out after 60s", timeout=True))
         clock.advance(3)
         # 2) curl 验证代理 → 外网不通（同根因：网络不通）
-        det.feed_record("dsh", _result("bash", False, error_code="ETIMEDOUT",
-                                       error_text="curl: (7) Failed to connect to proxy: Connection timed out", timeout=True))
+        det.feed_record(
+            "dsh", _result("bash", False, error_code="ETIMEDOUT", error_text="curl: (7) Failed to connect to proxy: Connection timed out", timeout=True)
+        )
         clock.advance(3)
         # 3) 模型文本出现「换一种方式」
         det.feed_record("dsh", {"event": "assistant/message", "text": "代理有问题，换个方式验证一下网络"})
         clock.advance(3)
         # 4) 换 python3.10.9 + 国内镜像再试 → 仍失败（同根因：网络）
-        det.feed_record("dsh", _result("bash", False, error_code="ETIMEDOUT",
-                                       error_text="timed out connecting to mirror", timeout=True))
+        det.feed_record("dsh", _result("bash", False, error_code="ETIMEDOUT", error_text="timed out connecting to mirror", timeout=True))
         clock.advance(3)
         # 5) 又一次网络类失败
-        det.feed_record("dsh", _result("bash", False, error_code="ETIMEDOUT",
-                                       error_text="connection reset — still no network"))
+        det.feed_record("dsh", _result("bash", False, error_code="ETIMEDOUT", error_text="connection reset — still no network"))
 
         score = det.get_score("dsh")
         assert score >= 5, f"期望达到建议介入阈值，实际 {score}"
@@ -288,8 +287,7 @@ class TestStuckDetectorPrune:
         resolved: list[str] = []
         det.stuck_resolved.connect(lambda k: resolved.append(k))
         for _ in range(3):
-            det.feed_record("dsh", _result("pip", False, error_code="ETIMEDOUT",
-                                           error_text="timed out", timeout=True))
+            det.feed_record("dsh", _result("pip", False, error_code="ETIMEDOUT", error_text="timed out", timeout=True))
         assert det.get_score("dsh") >= DEFAULT_WORRIED_THRESHOLD
         clock.advance(60)  # 全部事件过期
         det._prune()
@@ -315,8 +313,7 @@ class TestStuckDetectorPrune:
         resolved: list[str] = []
         det.stuck_resolved.connect(lambda k: resolved.append(k))
         for _ in range(3):
-            det.feed_record("dsh", _result("pip", False, error_code="ETIMEDOUT",
-                                           error_text="timed out", timeout=True))
+            det.feed_record("dsh", _result("pip", False, error_code="ETIMEDOUT", error_text="timed out", timeout=True))
         assert det.get_score("dsh") >= DEFAULT_WORRIED_THRESHOLD
         clock.advance(20)
         det.feed_record("dsh", _call("bash", "argv0:ls"))  # 只占窗，不贡献分数
@@ -334,8 +331,7 @@ def test_prune_recompute_does_not_emit_intervention_without_new_events():
     events: list[dict] = []
     det.intervention_recommended.connect(lambda k, p: events.append(p))
     for _ in range(3):
-        det.feed_record("dsh", _result("pip", False, error_code="ETIMEDOUT",
-                                       error_text="timed out", timeout=True))
+        det.feed_record("dsh", _result("pip", False, error_code="ETIMEDOUT", error_text="timed out", timeout=True))
     recommends = [e for e in events if e.get("severity") == StuckSeverity.RECOMMEND]
     assert len(recommends) == 1, "喂事件时发射一次"
     clock.advance(301)  # 冷却已过、事件未过期、零新事件

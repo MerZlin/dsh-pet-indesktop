@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """一键退出子肥鱼：关闭 slot-N 进程并清理 runtime 标记；slot 数据保留，主 slot-0 不受影响。"""
+
 from __future__ import annotations
 
 import json
@@ -133,8 +134,7 @@ def test_clear_spawned_pets_removes_v2_markers_and_keeps_slot_data(tmp_path, mon
     assert (root / "sessions").is_dir()
 
 
-def test_clear_spawned_pets_handles_legacy_and_v2_together_idempotent(
-        tmp_path, monkeypatch):
+def test_clear_spawned_pets_handles_legacy_and_v2_together_idempotent(tmp_path, monkeypatch):
     """批 B：混合新旧命名标记在同一调用里都被找到并清理；重复调用幂等无残留。"""
     root = tmp_path / "dsh-pet-standalone"
     root.mkdir(parents=True)
@@ -148,15 +148,15 @@ def test_clear_spawned_pets_handles_legacy_and_v2_together_idempotent(
     terminated = []
     alive = {111, 222}
     _stub_pet_identity(monkeypatch)
-    monkeypatch.setattr(
-        child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
 
     def fake_terminate(pid):
         terminated.append(pid)
         alive.discard(pid)
 
     monkeypatch.setattr(
-        child_pet_cleanup, "_terminate_pet_process",
+        child_pet_cleanup,
+        "_terminate_pet_process",
         fake_terminate,
     )
 
@@ -173,8 +173,7 @@ def test_clear_spawned_pets_handles_legacy_and_v2_together_idempotent(
     assert terminated == [111, 222]
 
 
-def test_clear_spawned_pets_kill_failure_keeps_marker_and_reports(
-        tmp_path, monkeypatch):
+def test_clear_spawned_pets_kill_failure_keeps_marker_and_reports(tmp_path, monkeypatch):
     """批 G：杀进程失败（taskkill 异常/超时、权限不足等）不再静默吞掉——
     保留 runtime 标记（不毁灭痕迹，供下次重试），pid 记入 failed_pids。
     批 I：两段式杀法（先全杀再统一等确认），不再有逐只重试。
@@ -189,10 +188,10 @@ def test_clear_spawned_pets_kill_failure_keeps_marker_and_reports(
 
     terminated = []
     _stub_pet_identity(monkeypatch)
+    monkeypatch.setattr(child_pet_cleanup, "_pid_alive", lambda pid: pid == 777)
     monkeypatch.setattr(
-        child_pet_cleanup, "_pid_alive", lambda pid: pid == 777)
-    monkeypatch.setattr(
-        child_pet_cleanup, "_terminate_pet_process",
+        child_pet_cleanup,
+        "_terminate_pet_process",
         lambda pid: terminated.append(pid),  # 杀不动：进程始终存活
     )
 
@@ -204,8 +203,7 @@ def test_clear_spawned_pets_kill_failure_keeps_marker_and_reports(
     assert live_marker.exists(), "进程仍活时标记必须保留"
 
 
-def test_clear_spawned_pets_kill_success_removes_marker(
-        tmp_path, monkeypatch):
+def test_clear_spawned_pets_kill_success_removes_marker(tmp_path, monkeypatch):
     """批 I 两段式：杀成功 → 计入 killed_pids 并正常删标记。"""
     root = tmp_path / "dsh-pet-standalone"
     root.mkdir(parents=True)
@@ -216,15 +214,13 @@ def test_clear_spawned_pets_kill_success_removes_marker(
     terminated = []
     alive = {888}
     _stub_pet_identity(monkeypatch)
-    monkeypatch.setattr(
-        child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
 
     def fake_terminate(pid):
         terminated.append(pid)
         alive.discard(pid)
 
-    monkeypatch.setattr(
-        child_pet_cleanup, "_terminate_pet_process", fake_terminate)
+    monkeypatch.setattr(child_pet_cleanup, "_terminate_pet_process", fake_terminate)
 
     result = child_pet_cleanup.clear_spawned_pets(root)
 
@@ -247,15 +243,13 @@ def test_clear_spawned_pets_never_kills_slot0_v2_marker(tmp_path, monkeypatch):
     alive = {999, 888}
     terminated = []
     _stub_pet_identity(monkeypatch)
-    monkeypatch.setattr(
-        child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
 
     def fake_terminate(pid):
         terminated.append(pid)
         alive.discard(pid)
 
-    monkeypatch.setattr(
-        child_pet_cleanup, "_terminate_pet_process", fake_terminate)
+    monkeypatch.setattr(child_pet_cleanup, "_terminate_pet_process", fake_terminate)
 
     result = child_pet_cleanup.clear_spawned_pets(root)
     assert terminated == [888], "只杀子肥鱼，主肥鱼 slot-0 跳过"
@@ -275,9 +269,7 @@ def test_clear_spawned_pets_recycled_pid_treated_as_stale_marker(tmp_path, monke
     monkeypatch.setattr(child_pet_cleanup, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(child_pet_cleanup, "_is_pet_process", lambda pid: False)
     terminated = []
-    monkeypatch.setattr(
-        child_pet_cleanup, "_terminate_pet_process",
-        lambda pid: terminated.append(pid))
+    monkeypatch.setattr(child_pet_cleanup, "_terminate_pet_process", lambda pid: terminated.append(pid))
 
     result = child_pet_cleanup.clear_spawned_pets(root)
     assert terminated == [], "pid 被无关进程复用时不得 taskkill"
@@ -291,23 +283,19 @@ def test_clear_spawned_pets_slot_lock_as_second_source(tmp_path, monkeypatch):
     锁文件作为第二枚举源把这类漏网之鱼杀掉；slot-0（主肥鱼）跳过。"""
     root = tmp_path / "dsh-pet-standalone"
     (root / "slots").mkdir(parents=True)
-    (root / "slots" / "slot-0.lock").write_bytes(
-        slot_manager_mod._format_pid_record(999))
-    (root / "slots" / "slot-2.lock").write_bytes(
-        slot_manager_mod._format_pid_record(888))
+    (root / "slots" / "slot-0.lock").write_bytes(slot_manager_mod._format_pid_record(999))
+    (root / "slots" / "slot-2.lock").write_bytes(slot_manager_mod._format_pid_record(888))
 
     alive = {999, 888}
     terminated = []
-    monkeypatch.setattr(
-        child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(child_pet_cleanup, "_pid_alive", lambda pid: pid in alive)
     monkeypatch.setattr(child_pet_cleanup, "_is_pet_process", lambda pid: True)
 
     def fake_terminate(pid):
         terminated.append(pid)
         alive.discard(pid)
 
-    monkeypatch.setattr(
-        child_pet_cleanup, "_terminate_pet_process", fake_terminate)
+    monkeypatch.setattr(child_pet_cleanup, "_terminate_pet_process", fake_terminate)
 
     result = child_pet_cleanup.clear_spawned_pets(root)
     assert terminated == [888], "slot-2（子肥鱼）杀掉，slot-0（主肥鱼）跳过"
@@ -346,14 +334,12 @@ def test_pid_alive_false_after_child_killed_with_handle_held():
     import subprocess
     import sys
 
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"])
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         assert child_pet_cleanup._pid_alive(proc.pid)
         proc.kill()
         proc.wait()  # 已死，但 Popen 对象仍持有进程句柄（不 close/del）
-        assert not child_pet_cleanup._pid_alive(proc.pid), (
-            "句柄未释放不等于存活：必须读退出码判定")
+        assert not child_pet_cleanup._pid_alive(proc.pid), "句柄未释放不等于存活：必须读退出码判定"
     finally:
         try:
             proc.kill()

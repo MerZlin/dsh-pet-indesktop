@@ -12,6 +12,7 @@
 8. 手动启动与菜单 spawn 顺序与 offset index 独立测试。
 9. 位置避让与 spawn offset 独立生效测试。
 """
+
 from __future__ import annotations
 
 import json
@@ -35,9 +36,7 @@ def _run_slot_worker_code(config_dir: Path, code: str, timeout: float = 10.0) ->
     cmd = [
         sys.executable,
         "-c",
-        f"import sys, os\n"
-        f"sys.path.insert(0, {repr(str(Path(__file__).resolve().parents[1]))})\n"
-        f"{code}",
+        f"import sys, os\nsys.path.insert(0, {repr(str(Path(__file__).resolve().parents[1]))})\n{code}",
     ]
     return subprocess.Popen(
         cmd,
@@ -248,9 +247,7 @@ else:
     assert lock_file.stat().st_size == sm.PID_RECORD_LEN
 
 
-def test_lock_initialization_is_idempotent_when_size_observation_is_stale(
-    tmp_path, monkeypatch
-):
+def test_lock_initialization_is_idempotent_when_size_observation_is_stale(tmp_path, monkeypatch):
     """并发打开者都观察到旧 size=0 时，初始化也不能重复追加记录。"""
     lock_file = sm.get_slot_lock_path(tmp_path / APP_DIR_NAME, 0)
     lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -724,9 +721,7 @@ def test_list_runtime_marker_files_returns_legacy_and_v2(tmp_path):
 
     names = {p.name for p in sm.list_runtime_marker_files(config_dir)}
     # 新旧两种命名都被列出
-    assert {"runtime-111.json",
-            "pet-runtime-v2-222-slot-1.json",
-            "pet-runtime-v2-333-slot-2.json"} <= names
+    assert {"runtime-111.json", "pet-runtime-v2-222-slot-1.json", "pet-runtime-v2-333-slot-2.json"} <= names
     # 非 runtime 标记文件不得被误列
     assert "config-slot-1.json" not in names
     assert "sessions-slot-1" not in names

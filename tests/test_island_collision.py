@@ -4,6 +4,7 @@
 30Hz 检测/结算已整体移除（issue #146 实机教训）：岛改为屏幕边界式位置硬墙，
 在统一位置出口 move_window_towwards 里同步钳制，杜绝采样间隙导致的抽搐。
 """
+
 from __future__ import annotations
 
 import math
@@ -29,15 +30,27 @@ def _qapp() -> QApplication:
 
 def _pet(runtime_id="pet", x=100.0, y=100.0, vx=-600.0, flags=0) -> collision.MemberState:
     return collision.MemberState(
-        runtime_id=runtime_id, x=x, y=y, radius_x=50.0, radius_y=50.0,
-        vx=vx, vy=0.0, flags=collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED | flags,
+        runtime_id=runtime_id,
+        x=x,
+        y=y,
+        radius_x=50.0,
+        radius_y=50.0,
+        vx=vx,
+        vy=0.0,
+        flags=collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED | flags,
     )
 
 
 def _island_state(flags=collision.FLAG_STATIC) -> collision.MemberState:
     return collision.MemberState(
-        runtime_id="island", x=200.0, y=100.0, radius_x=100.0, radius_y=22.0,
-        vx=0.0, vy=0.0, is_infinite_mass=True,
+        runtime_id="island",
+        x=200.0,
+        y=100.0,
+        radius_x=100.0,
+        radius_y=22.0,
+        vx=0.0,
+        vy=0.0,
+        is_infinite_mass=True,
         flags=collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED | flags,
     )
 
@@ -48,9 +61,7 @@ def test_static_wall_boosts_restitution_pet_bounces_off_faster():
     pet = _pet(vx=600.0)  # 桌宠在岛左侧，向右（+x）撞岛
     island = _island_state()
     # nx=-1：法线从 A(岛) 指向 B(桌宠)，接近速度 vn = 600*(-1) < 0
-    jn, dvx_a, _dvy_a, dvx_b, _dvy_b = collision.solve_collision_impulse(
-        island, pet, -1.0, 0.0,
-        restitution=0.82, friction=0.08, impulse_cap=9000.0)
+    jn, dvx_a, _dvy_a, dvx_b, _dvy_b = collision.solve_collision_impulse(island, pet, -1.0, 0.0, restitution=0.82, friction=0.08, impulse_cap=9000.0)
     assert jn > 0
     assert dvx_a == 0.0  # 岛无限质量，不动
     # e=1.3 加速反弹：桌宠末速 = 600 * (-1.3) = -780（比入射更快地弹回）
@@ -61,9 +72,7 @@ def test_static_wall_low_speed_contact_stays_dead():
     """低速贴上岛不抖动：接近速度低于阈值仍 e=0（只挡不弹）。"""
     pet = _pet(vx=50.0)  # 低于 IMPULSE_MIN_APPROACH_SPEED(80)
     island = _island_state()
-    _jn, _dva, _dva2, dvx_b, _dvb = collision.solve_collision_impulse(
-        island, pet, -1.0, 0.0,
-        restitution=0.82, friction=0.08, impulse_cap=9000.0)
+    _jn, _dva, _dva2, dvx_b, _dvb = collision.solve_collision_impulse(island, pet, -1.0, 0.0, restitution=0.82, friction=0.08, impulse_cap=9000.0)
     # e=0：仅消除接近速度，不反转、不加速
     assert abs(pet.vx + dvx_b) < 1e-6
 
@@ -102,9 +111,20 @@ class WallWin:
     供"落窗即钳制 / 抛掷反射 / submit 推挤 / 撞岛业务链"端到端断言使用。
     """
 
-    def __init__(self, x: float, y: float, w: int, h: int, *,
-                 physics_mode: str = "", vx: float = 0.0, vy: float = 0.0,
-                 visible: bool = True, screen_w: int = 3840, screen_h: int = 2160):
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        w: int,
+        h: int,
+        *,
+        physics_mode: str = "",
+        vx: float = 0.0,
+        vy: float = 0.0,
+        visible: bool = True,
+        screen_w: int = 3840,
+        screen_h: int = 2160,
+    ):
         self._x, self._y = float(x), float(y)
         self._w, self._h = w, h
         self.scale = 1.0
@@ -152,8 +172,7 @@ class WallWin:
         return QRect(0, 0, self._w, self._h)
 
     def _virtual_pos(self):
-        return QPoint(int(self._x) + self._draw_delta.x(),
-                      int(self._y) + self._draw_delta.y())
+        return QPoint(int(self._x) + self._draw_delta.x(), int(self._y) + self._draw_delta.y())
 
     def _move_window_towards(self, x, y, body_bounds=None):
         window_placement.move_window_towards(self, x, y, body_bounds=body_bounds)
@@ -206,11 +225,8 @@ def _assert_body_out_of_stadium(win, body, msg=""):
     dist = math.hypot(dx, dy)
     assert dist > 1e-9, f"身体中心不应恰好落在岛轴上：{msg}"
     nx, ny = dx / dist, dy / dist
-    radial = min((win._w / 2) / max(abs(nx), 1e-9),
-                 (win._h / 2) / max(abs(ny), 1e-9))
-    assert dist >= radial + rr + 1.0 - 1e-6, (
-        f"身体框未被钳出岛区：中心距轴 {dist:.1f} < 径向 {radial:.1f} + 岛半径 {rr} + 1（{msg}）"
-    )
+    radial = min((win._w / 2) / max(abs(nx), 1e-9), (win._h / 2) / max(abs(ny), 1e-9))
+    assert dist >= radial + rr + 1.0 - 1e-6, f"身体框未被钳出岛区：中心距轴 {dist:.1f} < 径向 {radial:.1f} + 岛半径 {rr} + 1（{msg}）"
 
 
 def test_body_start_stop_lifecycle(tmp_path):
@@ -250,8 +266,7 @@ def test_synchronous_clamp_keeps_body_out_of_island(tmp_path):
         stadium = body._island_stadium()
         ax0, ax1, ay, rr, _h = stadium
         target_cx = (ax0 + ax1) / 2.0
-        window_placement.move_window_towards(
-            win, target_cx - win._w / 2.0, ay - win._h / 2.0)
+        window_placement.move_window_towards(win, target_cx - win._w / 2.0, ay - win._h / 2.0)
         _assert_body_out_of_stadium(win, body, "落点恰在岛轴")
     finally:
         island.hide()
@@ -269,8 +284,7 @@ def test_no_island_clamp_without_hook(tmp_path):
         stadium = body._island_stadium()
         ax0, ax1, ay, _rr, _h = stadium
         target_cx = (ax0 + ax1) / 2.0
-        window_placement.move_window_towards(
-            win, target_cx - win._w / 2.0, ay - win._h / 2.0)
+        window_placement.move_window_towards(win, target_cx - win._w / 2.0, ay - win._h / 2.0)
         center_x = win.x() + win._draw_delta.x() + win._w / 2.0
         center_y = win.y() + win._draw_delta.y() + win._h / 2.0
         # 统一出口对坐标取整（int(round)），容差放 1px
@@ -344,8 +358,7 @@ def test_tall_pet_side_wall_uses_half_width(tmp_path):
         ax0, _ax1, ay, rr, _h = stadium
         # 目标：身体中心与岛轴同高、位于左端帽左侧 90px（90 < 78+22 会越界），
         # 纯横向分离，按横向半宽推出
-        window_placement.move_window_towards(
-            win, ax0 - 90.0 - 156.0 / 2.0, ay - 194.0 / 2.0)
+        window_placement.move_window_towards(win, ax0 - 90.0 - 156.0 / 2.0, ay - 194.0 / 2.0)
         center_x = win.x() + win._w / 2.0
         assert abs(center_x - (ax0 - (78.0 + rr + 1.0))) < 2.0
     finally:
@@ -365,8 +378,7 @@ def test_wall_geometry_independent_of_screen_size(tmp_path):
             win._island_clamp_body = body._clamp_body
             stadium = body._island_stadium()
             ax0, ax1, ay, rr, _h = stadium
-            window_placement.move_window_towards(
-                win, (ax0 + ax1) / 2.0 - win._w / 2.0, ay - win._h / 2.0)
+            window_placement.move_window_towards(win, (ax0 + ax1) / 2.0 - win._w / 2.0, ay - win._h / 2.0)
             _assert_body_out_of_stadium(win, body, f"屏幕 {screen_w}x{screen_h}")
         finally:
             island.hide()
@@ -390,8 +402,7 @@ def test_throw_mode_pet_reflects_off_island_wall(tmp_path):
         # 向右 600px/s 高速接近 → 应反射成 -600*RESTITUTION 向左弹开
         stadium = body._island_stadium()
         ax0, _ax1, ay, rr, _h = stadium
-        win = WallWin(ax0 - 140.0, ay - 60.0, 120, 120,
-                      physics_mode="throw", vx=600.0, vy=0.0)
+        win = WallWin(ax0 - 140.0, ay - 60.0, 120, 120, physics_mode="throw", vx=600.0, vy=0.0)
         win._island_clamp_body = body._clamp_body
         win._move_window_towards(win._virtual_pos().x(), win._virtual_pos().y())
         assert win._phys_vel[0] < 0.0  # 弹回来路
@@ -488,8 +499,7 @@ def test_submit_flings_pet_when_island_swept_onto_it(tmp_path):
         # 让岛速采样基线暗示"正以 800px/s 向右拖"
         rect = island.geometry()
         body._last_size = (rect.width(), rect.height())
-        body._last_center = (float(rect.center().x()) - 40.0,
-                             float(rect.center().y()))
+        body._last_center = (float(rect.center().x()) - 40.0, float(rect.center().y()))
         body._last_motion_ts = time.monotonic() - 0.05
         # 静止桌宠中心在岛右端帽外侧 20px（身体已越界，会被推出并判真撞）
         stadium = body._island_stadium()
@@ -554,7 +564,6 @@ def test_submit_pushes_out_resting_pet_when_island_moved_onto_it(tmp_path):
         island.deleteLater()
 
 
-
 def test_wall_hook_covers_pet_window_created_after_start(tmp_path):
     """启动之后新生的桌宠（生小肥鱼）也必须受硬墙约束。
 
@@ -575,8 +584,7 @@ def test_wall_hook_covers_pet_window_created_after_start(tmp_path):
         pets.append(late)
         body.refresh_hooks()
 
-        assert callable(getattr(late, "_island_clamp_body", None)), (
-            "启动后新生的桌宠未挂上硬墙钩子——它会直接穿过灵动岛")
+        assert callable(getattr(late, "_island_clamp_body", None)), "启动后新生的桌宠未挂上硬墙钩子——它会直接穿过灵动岛"
         stadium = body._island_stadium()
         ax0, ax1, ay, _rr, _h = stadium
         late._move_window_towards((ax0 + ax1) / 2.0 - late._w / 2.0, ay - late._h / 2.0)

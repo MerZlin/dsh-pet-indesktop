@@ -13,6 +13,7 @@ build_macos.sh，透传到 fix_bridge_bundle.py --app-dir dist/<name>；
 修复：main() 入口把 --app-dir 归一为绝对路径（其下游 dst_bridge/smoke/
 node_modules 清理路径全部随之绝对化）。
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -26,9 +27,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location(
-        "fix_bridge_bundle", REPO / "scripts" / "fix_bridge_bundle.py"
-    )
+    spec = importlib.util.spec_from_file_location("fix_bridge_bundle", REPO / "scripts" / "fix_bridge_bundle.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -36,8 +35,7 @@ def _load_module():
 
 def _make_bundle(tmp_path: Path) -> Path:
     """构造最小合法 dist 产物结构（零依赖 bridge 副本）。"""
-    bridge = (tmp_path / "dist" / "app" / "_internal"
-              / "integrations" / "dsh-pet-bridge")
+    bridge = tmp_path / "dist" / "app" / "_internal" / "integrations" / "dsh-pet-bridge"
     bridge.mkdir(parents=True)
     (bridge / "package.json").write_text(json.dumps({"name": "x"}), encoding="utf-8")
     (bridge / "verify_import.mjs").write_text("// smoke\n", encoding="utf-8")

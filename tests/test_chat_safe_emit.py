@@ -4,6 +4,7 @@
 连接测试 worker（最长 10s）在飞时对话框可能已被关闭销毁（WA_DeleteOnClose），
 对已删 C++ 对象访问信号/emit 都是 RuntimeError（崩工作线程）。
 """
+
 from __future__ import annotations
 
 import pytest

@@ -4,6 +4,7 @@
 审查补票（P0-1/P0-2/P1-6）：碰撞体重开必须换新 session；pet.chat 被排除的
 打包变体不能崩；碰撞体随桌宠可见性挂起。
 """
+
 from __future__ import annotations
 
 import sys
@@ -24,10 +25,15 @@ def _qapp() -> QApplication:
 def _make_shell(tmp_path: Path, **island_cfg) -> AppShell:
     """最小 AppShell 桩：__new__ 绕过完整初始化，只接灵动岛链路。"""
     cfg = Config(base=tmp_path)
-    cfg.set("dynamic_island", {
-        "enabled": True, "x": 400, "y": 300,
-        **island_cfg,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "enabled": True,
+            "x": 400,
+            "y": 300,
+            **island_cfg,
+        },
+    )
     shell = AppShell.__new__(AppShell)
     shell.config = cfg
     shell.island = None
@@ -124,8 +130,7 @@ def test_quiet_balance_refresh_paths(tmp_path, monkeypatch):
         island = shell.island
 
         provider = SimpleNamespace(id="p", base_url="http://x", api_key="", verify_ssl=True)
-        monkeypatch.setattr(shell.config, "chat_settings",
-                            lambda: SimpleNamespace(active_config=provider))
+        monkeypatch.setattr(shell.config, "chat_settings", lambda: SimpleNamespace(active_config=provider))
         monkeypatch.setattr(shell.config, "resolve_api_key", lambda _p: "")
 
         # 1) 未配置 API Key → 明确提示，不再停留 "余额 --"
@@ -147,7 +152,7 @@ def test_quiet_balance_refresh_paths(tmp_path, monkeypatch):
         shell._balance_cache = None
         shell._quiet_balance_last = None
 
-        def fake_worker(bridge, base_url, api_key, verify_ssl, provider_key='', **_kw):
+        def fake_worker(bridge, base_url, api_key, verify_ssl, provider_key="", **_kw):
             bridge.done.emit(True, {"text": "余额 ¥8.8", "info": {}})
 
         monkeypatch.setattr(shell, "_balance_worker", fake_worker)

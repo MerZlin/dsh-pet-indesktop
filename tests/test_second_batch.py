@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """第二批功能：快速对话气泡基础测试。"""
+
 from __future__ import annotations
 
 from pathlib import Path

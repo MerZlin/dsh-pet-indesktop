@@ -82,9 +82,7 @@ def test_named_screen_lookup_and_config_persistence(tmp_path, monkeypatch):
 
     primary = _Screen("primary", QRect(0, 0, 1920, 1080))
     secondary = _Screen("secondary", QRect(1920, 0, 1920, 1080))
-    monkeypatch.setattr(
-        QGuiApplication, "screens", staticmethod(lambda: [primary, secondary])
-    )
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [primary, secondary]))
 
     class FakePet:
         def screen(self):
@@ -245,12 +243,13 @@ def test_retry_timeout_forces_restore_onto_primary_and_visible():
         _screen_retry_tick = PetWindow._screen_retry_tick
 
     import time as _time
+
     pet = FakePet()
     pet.position = None
     PetWindow._screen_retry_tick(pet)
     assert pet._awaiting_saved_screen is None  # 兜底后撤防
-    assert pet.position is not None            # 已落到主屏
-    assert pet.shown == 1                      # 隐藏态下被强制显示
+    assert pet.position is not None  # 已落到主屏
+    assert pet.shown == 1  # 隐藏态下被强制显示
 
 
 def test_retry_success_ensures_visibility_after_restore():

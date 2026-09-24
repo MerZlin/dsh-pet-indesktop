@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """朝向规则纯函数：边缘可达性闸门与中线滞回（pet/movement.py，无 Qt）。"""
+
 from __future__ import annotations
 
 import random

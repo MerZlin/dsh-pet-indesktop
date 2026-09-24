@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """灵动岛余额峰谷：按系统时间自动显示/刷新，不依赖余额查询。"""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -17,18 +18,21 @@ def _qapp() -> QApplication:
 
 def _island_cfg(tmp_path, info_mode: str = "balance_tier") -> Config:
     cfg = Config(base=tmp_path)
-    cfg.set("dynamic_island", {
-        "enabled": True,
-        "show_icon": True,
-        "show_name": False,
-        "show_info": True,
-        "info_mode": info_mode,
-        "custom_text": "",
-        "show_status": False,
-        "style": "dark",
-        "x": 100,
-        "y": 100,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "enabled": True,
+            "show_icon": True,
+            "show_name": False,
+            "show_info": True,
+            "info_mode": info_mode,
+            "custom_text": "",
+            "show_status": False,
+            "style": "dark",
+            "x": 100,
+            "y": 100,
+        },
+    )
     return cfg
 
 
@@ -76,7 +80,8 @@ def test_balance_tier_schedules_next_switch_tick(tmp_path, monkeypatch):
     now = datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(balance_mod, "beijing_now", lambda: now)
     monkeypatch.setattr(
-        balance_mod, "next_pricing_switch",
+        balance_mod,
+        "next_pricing_switch",
         lambda: ("idle", now + timedelta(seconds=60)),
     )
     island = DynamicIsland(cfg)
@@ -95,7 +100,8 @@ def test_non_balance_tier_mode_does_not_schedule_tick(tmp_path, monkeypatch):
     now = datetime(2026, 9, 4, 10, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(balance_mod, "beijing_now", lambda: now)
     monkeypatch.setattr(
-        balance_mod, "next_pricing_switch",
+        balance_mod,
+        "next_pricing_switch",
         lambda: ("idle", now + timedelta(seconds=60)),
     )
     island = DynamicIsland(cfg)

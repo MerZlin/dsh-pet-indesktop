@@ -4,6 +4,7 @@
 不依赖 Qt：用 duck-type 假 clip（_first_image 只需 width/height，
 _first_frame_lock 只需上下文管理器）直接驱动注册表函数。
 """
+
 from __future__ import annotations
 
 import threading

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """多开配置隔离：instance_id（--slot / 生小肥鱼）使用独立 config 文件，单开行为不变。"""
+
 from __future__ import annotations
 
 import json
@@ -81,6 +82,7 @@ def test_reload_preserves_memory_api_key_when_keyring_unavailable(tmp_path, monk
     而 _redacted_data() 写盘时剔除了明文 api_key/vision_api_key —— 磁盘文件里没有
     key，reload() 于是把内存中的 key 覆盖成空，用户没重启就丢了 key。
     """
+
     # 模拟 keyring 不可用：set 恒失败、get 恒空；否则加载时明文迁移会把内存 key
     # 搬进真实 keyring（见 Config._migrate_plaintext_keys_to_keyring），本测试
     # 要固定的正是「不可用兜底」这条路径。

@@ -7,6 +7,7 @@
 3. 退役 reader 池有硬上限：超限回收已确认退出者，存活者保留追踪；start() 绝不因池满拒绝（超限仅告警）；
 4. cleanup() 在 reader 仍存活时不丢失追踪（保持记录，等待后续回收）。
 """
+
 from __future__ import annotations
 
 import os
@@ -90,8 +91,7 @@ def test_rapid_start_stop_leaks_no_threads_or_processes(app):
     # 退役池不超过硬上限。回收由注册表 sweep 驱动（需事件循环轮次），
     # CI 高负载下一次 processEvents 可能不够——给有界泵循环（登记册 flake）
     reap_deadline = time.monotonic() + 5.0
-    while len(clip._retired) > webm_clip_mod._MAX_RETIRED_READERS \
-            and time.monotonic() < reap_deadline:
+    while len(clip._retired) > webm_clip_mod._MAX_RETIRED_READERS and time.monotonic() < reap_deadline:
         app.processEvents()
         time.sleep(0.02)
     assert len(clip._retired) <= webm_clip_mod._MAX_RETIRED_READERS
@@ -102,16 +102,14 @@ def test_rapid_start_stop_leaks_no_threads_or_processes(app):
             assert r.proc.poll() is not None
     # 所有被 stop 记录过的 ffmpeg 进程都已退出（无子进程泄漏）
     assert clip.seen_procs, "至少应捕获到阶段 B 的 ffmpeg 进程"
-    assert all(p.poll() is not None for p in clip.seen_procs), \
-        "stop() 后存在未退出的 ffmpeg 进程"
+    assert all(p.poll() is not None for p in clip.seen_procs), "stop() 后存在未退出的 ffmpeg 进程"
 
     # 无残留 reader 线程（含竞态路径下自终止的 reader）。
     # CI 高负载下线程退出可能显著变慢（登记册 flake）——时限放宽到 30s
     # （测试的是「最终不残留」，不是退出速度）
     deadline = time.monotonic() + 30.0
     while True:
-        new_alive = [t for t in threading.enumerate()
-                     if t.is_alive() and t not in baseline]
+        new_alive = [t for t in threading.enumerate() if t.is_alive() and t not in baseline]
         if not new_alive or time.monotonic() >= deadline:
             break
         app.processEvents()
@@ -147,8 +145,7 @@ def test_stop_terminates_ffmpeg_process(app):
     # 无残留线程
     deadline = time.monotonic() + 5.0
     while True:
-        new_alive = [t for t in threading.enumerate()
-                     if t.is_alive() and t not in baseline]
+        new_alive = [t for t in threading.enumerate() if t.is_alive() and t not in baseline]
         if not new_alive or time.monotonic() >= deadline:
             break
         app.processEvents()
@@ -170,6 +167,7 @@ def test_start_never_blocks_gui_when_retired_reader_stuck(app):
     assert len(clip._retired) == 1
 
     import time as _t
+
     t0 = _t.monotonic()
     assert clip.start() is True, "退役池有存活 reader 也必须正常启动（不阻塞）"
     assert _t.monotonic() - t0 < 0.2, "start() 绝不做有界 join（零等待）"
@@ -183,6 +181,7 @@ def test_start_never_blocks_gui_when_retired_reader_stuck(app):
     clip.stop()
     clip.cleanup()
     app.processEvents()
+
 
 def test_cleanup_keeps_tracking_alive_reader(app):
     """cleanup() 在 reader 仍存活时不得丢失追踪（保持记录，等待后续回收）。"""
@@ -365,8 +364,7 @@ def test_reader_finally_short_circuits_gen_close_when_proc_captured(app, monkeyp
 
     assert proc.poll() is not None, "reader finally 必须终止进程"
     assert gen.closed is True, "gen.close() 必须被调用"
-    assert gen.saw_alive_at_close is False, \
-        "先杀后 close：close 时必须看到进程已死（短路，无 1.5s 轮询）"
+    assert gen.saw_alive_at_close is False, "先杀后 close：close 时必须看到进程已死（短路，无 1.5s 轮询）"
     clip.cleanup()
     app.processEvents()
 
@@ -592,9 +590,7 @@ def test_reap_releases_registry_lock_during_clip_reap(app, monkeypatch):
 
     monkeypatch.setattr(clip, "_reap_retired", _blocking_reap_retired)
 
-    reaper = threading.Thread(
-        target=webm_clip_mod._ORPHAN_REGISTRY.reap, daemon=True
-    )
+    reaper = threading.Thread(target=webm_clip_mod._ORPHAN_REGISTRY.reap, daemon=True)
     reaper.start()
     assert entered.wait(5.0), "sweep 必须已进入 clip 的 _reap_retired（锁外窗口）"
 
@@ -690,8 +686,7 @@ def test_reader_register_race_never_leaves_untracked_live_proc(app, monkeypatch)
     assert register_entered.wait(5.0), "reader 必须进入 read_frames 并触发登记"
 
     # 竞态窗口已触发：进程不得处于「存活且无追踪」状态
-    assert proc.poll() is not None or clip._reader_proc is proc, \
-        "stop 竞态下进程必须被自终止或完成登记（绝不存活且无追踪）"
+    assert proc.poll() is not None or clip._reader_proc is proc, "stop 竞态下进程必须被自终止或完成登记（绝不存活且无追踪）"
 
     # 放行卡住的 gen：reader 走 finally 终止进程并退出
     gen.release.set()

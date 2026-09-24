@@ -69,15 +69,18 @@ def test_legacy_placeholder_fields_migrate_to_new_names(tmp_path):
     覆盖单层 flat 与双层 global/agents 两种形状、str/list 两种值。
     """
     cfg = Config(base=tmp_path)
-    cfg.set("dialogue_phrases", {
-        "global": {
-            "failure.retry": "本轮失败，来源是{source}",
-            "failure.tool": ["工具错误正文：{errorText}，码 {errorCode}"],
+    cfg.set(
+        "dialogue_phrases",
+        {
+            "global": {
+                "failure.retry": "本轮失败，来源是{source}",
+                "failure.tool": ["工具错误正文：{errorText}，码 {errorCode}"],
+            },
+            "agents": {
+                "dsh": {"failure.generic": "来源 {source} / {errorText}"},
+            },
         },
-        "agents": {
-            "dsh": {"failure.generic": "来源 {source} / {errorText}"},
-        },
-    })
+    )
     cfg._normalize_pet_settings()
     phrases = cfg.get("dialogue_phrases")
     assert phrases["global"]["failure.retry"] == "本轮失败，来源是{failureType}"
@@ -93,15 +96,18 @@ def test_legacy_event_keys_migrate_to_semantic_names(tmp_path):
     永远取不到的死键（用户看到的仍是旧文案，改新文案却不生效）。
     """
     cfg = Config(base=tmp_path)
-    cfg.set("dialogue_phrases", {
-        "global": {
-            "rate_limit.one": ["被限流了老文案"],
-            "rate_limit.many": "已连续限流 {count} 次",
+    cfg.set(
+        "dialogue_phrases",
+        {
+            "global": {
+                "rate_limit.one": ["被限流了老文案"],
+                "rate_limit.many": "已连续限流 {count} 次",
+            },
+            "agents": {
+                "dsh": {"rate_limit.one": "DSH 专属限流文案"},
+            },
         },
-        "agents": {
-            "dsh": {"rate_limit.one": "DSH 专属限流文案"},
-        },
-    })
+    )
     cfg._normalize_pet_settings()
     phrases = cfg.get("dialogue_phrases")
     assert "rate_limit.one" not in phrases["global"]
@@ -115,12 +121,15 @@ def test_legacy_event_keys_migrate_to_semantic_names(tmp_path):
 def test_event_key_migration_prefers_new_key_when_both_present(tmp_path):
     """新旧键并存时以新配置为准：旧键丢弃，不合并、不留别名。"""
     cfg = Config(base=tmp_path)
-    cfg.set("dialogue_phrases", {
-        "global": {
-            "model_access.one": ["新文案"],
-            "rate_limit.one": ["旧文案"],
+    cfg.set(
+        "dialogue_phrases",
+        {
+            "global": {
+                "model_access.one": ["新文案"],
+                "rate_limit.one": ["旧文案"],
+            },
         },
-    })
+    )
     cfg._normalize_pet_settings()
     phrases = cfg.get("dialogue_phrases")
     assert phrases["global"]["model_access.one"] == ["新文案"]
@@ -139,6 +148,7 @@ def test_placeholder_migration_idempotent_and_noop_on_fresh(tmp_path):
 
 
 # --- ticket 02：统一预设（global + agents delta）渲染路由 ---
+
 
 def test_phrase_lookup_prefers_agent_delta_over_global():
     """agents[agent_key][key] 优先于 global[key]；缺省回退 global；global 缺失返回 None。"""
@@ -185,6 +195,7 @@ def test_phrase_lookup_non_agent_only_reads_global():
 
 
 # --- ticket 05：PhrasePicker 的 agent 维度渲染（custom 分支） ---
+
 
 def test_picker_custom_for_agent_renders_delta_then_global():
     """custom_for_agent：agents[agent_key][key] → global[key] → fallback；

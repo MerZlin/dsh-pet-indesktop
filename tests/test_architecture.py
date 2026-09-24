@@ -11,6 +11,7 @@
    新功能请先按 docs/WINDOW_PY_SPLIT_GUIDE.md 拆对应控制器，
    而不是继续往上帝类里塞。确实该涨时，预算上调必须在 PR 里说明理由。
 """
+
 from __future__ import annotations
 
 import re
@@ -214,10 +215,16 @@ def test_pure_logic_modules_do_not_import_qt():
     # 把"纯逻辑层零 Qt"从约定升级为机器化守卫；festival_service/festival_settings
     # 不在本列——前者属服务层、后者属 UI 层，本就不受此约束）。
     for name in (
-        "collision.py", "physics.py", "collision_codec.py",
-        "festival_calendar.py", "festival_data.py", "festival.py",
-        "festival_quotes_cn.py", "festival_quotes_west.py",
-        "festival_quotes_west_movie.py", "festival_quotes_west_game.py",
+        "collision.py",
+        "physics.py",
+        "collision_codec.py",
+        "festival_calendar.py",
+        "festival_data.py",
+        "festival.py",
+        "festival_quotes_cn.py",
+        "festival_quotes_west.py",
+        "festival_quotes_west_movie.py",
+        "festival_quotes_west_game.py",
         "festival_quotes_west_song.py",
     ):
         src = _read(name)
@@ -226,8 +233,7 @@ def test_pure_logic_modules_do_not_import_qt():
 
 def test_decode_fanout_does_not_depend_on_window_or_player():
     src = _read("decode_fanout.py")
-    for banned in ("pet.window", "pet.webm_clip", "from .window", "from .webm_clip",
-                   "import window", "import webm_clip"):
+    for banned in ("pet.window", "pet.webm_clip", "from .window", "from .webm_clip", "import window", "import webm_clip"):
         assert banned not in src, f"decode_fanout 反向依赖 {banned}，破坏单向依赖"
 
 
@@ -255,6 +261,7 @@ def test_window_private_surface_frozen():
 #      并在 PR 里说明（超一点没关系，说清楚就行）。
 # 禁止的反向优化：靠压缩行宽/合并语句/删注释把行数硬塞回预算内——
 # 那比超预算本身更伤维护性。宁可校准预算，不要压行。
+
 
 def test_window_py_line_budget():
     lines = len(_read("window.py").splitlines())
@@ -289,10 +296,12 @@ def test_modern_settings_dialog_no_top_level_chat_import():
         if line[:1].isspace():
             continue  # 仅检查模块顶层（无缩进）import；函数内延迟 import 合法
         stripped = line.strip()
-        if (stripped.startswith("from .chat")
-                or stripped.startswith("from pet.chat")
-                or stripped.startswith("import pet.chat")
-                or stripped == "from . import chat"):
+        if (
+            stripped.startswith("from .chat")
+            or stripped.startswith("from pet.chat")
+            or stripped.startswith("import pet.chat")
+            or stripped == "from . import chat"
+        ):
             offenders.append(f"modern_settings_dialog.py:{lineno}: {stripped}")
     assert not offenders, (
         "modern_settings_dialog 顶层 import pet.chat 回潮：no-chat 打包变体"
@@ -317,6 +326,4 @@ def test_settings_widgets_orphan_cluster_guard():
         if not path.exists():
             continue  # 已删除：允许的终态
         needle = name[:-3] if name.endswith(".py") else name
-        assert any(needle in src for src in py_sources), (
-            f"{name} 存在但零引用——批6-7 孤儿簇回退态，须删除或恢复接线"
-        )
+        assert any(needle in src for src in py_sources), f"{name} 存在但零引用——批6-7 孤儿簇回退态，须删除或恢复接线"

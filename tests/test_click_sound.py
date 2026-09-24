@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """点击音效播放、缓存与包解析测试。"""
+
 from __future__ import annotations
 
 import random
@@ -152,14 +153,24 @@ def test_mp3_second_click_uses_decoded_cache(monkeypatch, tmp_path):
     class Decoder(FakeQtDecoder):
         def start(self):
             class Format:
-                def sampleFormat(self): return 2
-                def channelCount(self): return 1
-                def sampleRate(self): return 8000
+                def sampleFormat(self):
+                    return 2
+
+                def channelCount(self):
+                    return 1
+
+                def sampleRate(self):
+                    return 8000
+
             class Buffer:
-                def format(self): return Format()
-                def data(self): return b"pcm"
+                def format(self):
+                    return Format()
+
+                def data(self):
+                    return b"pcm"
+
             self.bufferAvailable = lambda: bool(getattr(self, "pending", True))
-            self.read = lambda: (setattr(self, "pending", False) or Buffer())
+            self.read = lambda: setattr(self, "pending", False) or Buffer()
             self.bufferReady.callback()
             self.finished.callback()
 
@@ -292,16 +303,17 @@ def test_resolve_click_sound_pair_duck_and_non_duck(monkeypatch, tmp_path):
     assert click_sound.resolve_click_sound_pair({"kind": "builtin", "id": "duck"}) == (press, release)
     press.with_suffix(".wav").write_bytes(b"")
     release.with_suffix(".wav").write_bytes(b"")
-    assert click_sound.resolve_click_sound_pair({"kind": "builtin", "id": "duck"}) == (
-        press.with_suffix(".wav"), release.with_suffix(".wav"))
+    assert click_sound.resolve_click_sound_pair({"kind": "builtin", "id": "duck"}) == (press.with_suffix(".wav"), release.with_suffix(".wav"))
     assert click_sound.resolve_click_sound_pair({"kind": "file", "id": "custom"}) is None
 
 
 def test_press_sound_stops_release_and_restarts_press(monkeypatch, tmp_path):
     pair = (_make_file(tmp_path, "press.wav"), _make_file(tmp_path, "release.wav"))
     release_effect = SimpleNamespace(
-        stopped=False, stop=lambda: setattr(release_effect, "stopped", True),
-        setLoopCount=lambda count: None, setVolume=lambda volume: None,
+        stopped=False,
+        stop=lambda: setattr(release_effect, "stopped", True),
+        setLoopCount=lambda count: None,
+        setVolume=lambda volume: None,
     )
     played = []
     monkeypatch.setattr(click_sound._pool, "effect_for", lambda path: release_effect)
@@ -341,8 +353,7 @@ def test_second_pool_instance_state_is_isolated_from_singleton(tmp_path):
     singleton = click_sound._pool
 
     # 1) 可变状态容器不是同一对象
-    for attr in ("_qt_effects", "_qt_decoders", "_qt_player_pool",
-                 "_wav_duration_cache", "_click_pair_state"):
+    for attr in ("_qt_effects", "_qt_decoders", "_qt_player_pool", "_wav_duration_cache", "_click_pair_state"):
         assert getattr(other, attr) is not getattr(singleton, attr), attr
 
     # 2) 直接写互不串
@@ -475,8 +486,7 @@ def _install_effect_factory(pool, *, fresh_error: bool = False):
     def factory():
         # 重建出来的新对象：默认可用（模拟真实设备恢复后的情形）；
         # fresh_error=True 表示音频设备整体不可用，新对象依旧停在 Error。
-        effect = _StickyErrorEffect(
-            None, None if fresh_error else _StubQSoundEffect.Status.Ready)
+        effect = _StickyErrorEffect(None, None if fresh_error else _StubQSoundEffect.Status.Ready)
         created.append(effect)
         return effect
 
@@ -570,8 +580,6 @@ def test_click_sound_immediate_toggle_in_dialog_affects_pet_window(tmp_path, mon
     app.processEvents()
 
 
-
-
 def test_cache_path_stable_across_mtime_change(tmp_path):
     """转码缓存键用内容哈希：mtime 变（重新部署素材）不应对缓存失配。
 
@@ -585,6 +593,7 @@ def test_cache_path_stable_across_mtime_change(tmp_path):
     first = click_sound._cache_path(src)
     # 同一内容、mtime 变了（模拟重新部署）
     import os
+
     st = src.stat()
     os.utime(src, ns=(st.st_atime_ns + 1_000_000_000, st.st_mtime_ns + 1_000_000_000))
     assert click_sound._cache_path(src) == first

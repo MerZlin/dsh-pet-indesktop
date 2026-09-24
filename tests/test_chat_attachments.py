@@ -94,11 +94,14 @@ class TestAttachmentLimits:
         assert accepted == []
         assert any("文本总长超过 20 万字符" in w for w in warnings)
 
-    @pytest.mark.parametrize("filename,ext_str", [
-        ("doc.pdf", ".pdf"),
-        ("sample.docx", ".docx"),
-        ("archive.zip", ".zip"),
-    ])
+    @pytest.mark.parametrize(
+        "filename,ext_str",
+        [
+            ("doc.pdf", ".pdf"),
+            ("sample.docx", ".docx"),
+            ("archive.zip", ".zip"),
+        ],
+    )
     def test_unsupported_formats_rejected_with_notice(self, tmp_path, filename, ext_str):
         unsupported = tmp_path / filename
         unsupported.write_bytes(b"dummy binary content")

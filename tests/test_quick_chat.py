@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """QuickChatBubble 气泡外形回归。"""
+
 from __future__ import annotations
 
 from pet.quick_chat import _surface_radius

@@ -208,7 +208,7 @@ class TestProactiveLimiter:
         cur_time[0] += 20.0
         assert limiter.record_failure() is False  # 2次失败
         cur_time[0] += 20.0
-        assert limiter.record_failure() is True   # 3次失败 -> 熔断触发
+        assert limiter.record_failure() is True  # 3次失败 -> 熔断触发
 
         # 当天已被熔断暂停
         cur_time[0] += 200.0
@@ -270,13 +270,13 @@ class TestEffectiveConfig:
     def test_clamp_ranges(self):
         raw = {
             "preset": "custom",
-            "dwell_seconds": 99999,      # 上限 600
-            "cooldown_minutes": -5,      # 下限 0.5（0.5 分钟粒度）
-            "daily_cap": 0,              # 下限 1
-            "min_request_interval_seconds": 1, # 下限 30
-            "change_threshold": 100,     # 上限 32
+            "dwell_seconds": 99999,  # 上限 600
+            "cooldown_minutes": -5,  # 下限 0.5（0.5 分钟粒度）
+            "daily_cap": 0,  # 下限 1
+            "min_request_interval_seconds": 1,  # 下限 30
+            "change_threshold": 100,  # 上限 32
             "require_idle": True,
-            "min_idle_seconds": 99999,   # 上限 3600
+            "min_idle_seconds": 99999,  # 上限 3600
         }
         cfg = effective_proactive_config(raw)
         assert cfg["dwell_seconds"] == 600
@@ -353,6 +353,7 @@ class TestHelperPredicates:
 class TestVisionAndWatcherPhase2:
     def test_foreground_app_info_backward_compatibility(self, monkeypatch):
         from pet import vision
+
         # mock foreground_window_info
         fake_info = {
             "hwnd": 12345,
@@ -373,6 +374,7 @@ class TestVisionAndWatcherPhase2:
     def test_get_system_idle_seconds_non_windows(self, monkeypatch):
         import sys
         from pet import vision
+
         monkeypatch.setattr(sys, "platform", "linux")
         assert vision.get_system_idle_seconds() == 0.0
 
@@ -385,10 +387,12 @@ class TestVisionAndWatcherPhase2:
         # 主动识屏 v1 仅 Windows（apply_config 有平台守卫）；Linux/macOS CI 上
         # 固定平台为 win32，保证该用例跨平台确定性。
         import sys
+
         monkeypatch.setattr(sys, "platform", "win32")
 
         class DummyWindow:
             on_open_chat = True  # 模拟有聊天/视觉能力（否则主动识屏 watcher 不启动）
+
             def __init__(self):
                 self._visible = True
                 self.mouse_through = False
@@ -429,10 +433,13 @@ class TestVisionAndWatcherPhase2:
         函数开头的 ctypes.windll 访问抛 UnboundLocalError 并被 except 吞掉，
         导致永远返回 None（mock 测试全覆盖时该 bug 完全隐形）。"""
         import sys
+
         if sys.platform != "win32":
             import pytest
+
             pytest.skip("仅 Windows 可真实调用")
         from pet import vision
+
         info = vision.foreground_window_info()
         assert info is not None
         assert set(info.keys()) == {"hwnd", "pid", "process", "title", "rect"}
@@ -443,6 +450,7 @@ class TestVisionAndWatcherPhase2:
         （_hidden_paused=True）时才调 _resume_activity。可见性应由 _on_tick 的
         G1 逐 tick 判定。"""
         import sys
+
         monkeypatch.setattr(sys, "platform", "win32")
         from PySide6.QtWidgets import QApplication
         from pet.proactive import ProactiveScreenWatcher
@@ -535,6 +543,7 @@ class TestVisionAndWatcherPhase2:
 
         class DummyWindow:
             on_open_chat = True  # 模拟有聊天/视觉能力（否则主动识屏 watcher 不启动）
+
             def __init__(self):
                 self.mouse_through = False
                 self._dragging = False
@@ -545,13 +554,16 @@ class TestVisionAndWatcherPhase2:
                 return True
 
         cfg = Config(base=tmp_path)
-        cfg.set("proactive_screen", {
-            "enabled": True,
-            "dry_run": True,  # 显式指定 dry_run 模式
-            "whitelist": ["code.exe"],
-            "daily_cap": 15,
-            "dwell_seconds": 0,
-        })
+        cfg.set(
+            "proactive_screen",
+            {
+                "enabled": True,
+                "dry_run": True,  # 显式指定 dry_run 模式
+                "whitelist": ["code.exe"],
+                "daily_cap": 15,
+                "dwell_seconds": 0,
+            },
+        )
         win = DummyWindow()
         watcher = ProactiveScreenWatcher(win, cfg)
         assert watcher.limiter.dry_run is True
@@ -581,6 +593,7 @@ class TestVisionAndWatcherPhase2:
 
         class DummyWindow:
             on_open_chat = True  # 模拟有聊天/视觉能力（否则主动识屏 watcher 不启动）
+
             def __init__(self):
                 self.mouse_through = False
                 self._dragging = False
@@ -591,10 +604,13 @@ class TestVisionAndWatcherPhase2:
                 return True
 
         cfg = Config(base=tmp_path)
-        cfg.set("proactive_screen", {
-            "enabled": True,
-            "whitelist": ["code.exe"],
-        })
+        cfg.set(
+            "proactive_screen",
+            {
+                "enabled": True,
+                "whitelist": ["code.exe"],
+            },
+        )
         win = DummyWindow()
         watcher = ProactiveScreenWatcher(win, cfg)
 
@@ -614,24 +630,22 @@ class TestPhase3VisionLinkAndDryRun:
         from pet import vision
         import json
 
-        fake_resp = {
-            "choices": [{
-                "message": {"content": "主人正在认真写代码呢～"},
-                "finish_reason": "stop"
-            }]
-        }
+        fake_resp = {"choices": [{"message": {"content": "主人正在认真写代码呢～"}, "finish_reason": "stop"}]}
 
         class FakeResponse:
             def __enter__(self):
                 return self
+
             def __exit__(self, *args):
                 pass
+
             def read(self, *args):
                 return json.dumps(fake_resp).encode("utf-8")
 
         monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: FakeResponse())
 
         from pet.chat.models import ProviderConfig
+
         p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-123"})
 
         # 生成一张真实临时图
@@ -711,8 +725,10 @@ class TestPhase3VisionLinkAndDryRun:
         app = QApplication.instance() or QApplication([])
 
         bubbles = []
+
         class DummyWindow:
             on_open_chat = True  # 模拟有聊天/视觉能力（否则主动识屏 watcher 不启动）
+
             def __init__(self):
                 self.mouse_through = False
                 self._dragging = False
@@ -736,11 +752,14 @@ class TestPhase3VisionLinkAndDryRun:
         monkeypatch.setattr(vision, "_post_vision_request", _fake_post)
 
         cfg = Config(base=tmp_path)
-        cfg.set("proactive_screen", {
-            "enabled": True,
-            "whitelist": ["code.exe"],
-            "pre_cue": True,
-        })
+        cfg.set(
+            "proactive_screen",
+            {
+                "enabled": True,
+                "whitelist": ["code.exe"],
+                "pre_cue": True,
+            },
+        )
         win = DummyWindow()
         watcher = ProactiveScreenWatcher(win, cfg)
         watcher.limiter.dry_run = False  # 真实模式
@@ -796,6 +815,7 @@ class TestPhase4UIAndMenuIntegration:
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Yes)
         # 禁止测试写入真实 ~/.claude/settings.json（旧版曾污染真实配置，见终审记录）
         from pet.agent_link import ClaudeCodeMonitor
+
         monkeypatch.setattr(ClaudeCodeMonitor, "install_hooks", lambda f: True)
 
         # 触发菜单事件中的开关逻辑
@@ -835,6 +855,7 @@ class TestPhase4UIAndMenuIntegration:
             if a.menu():
                 texts.extend(x.text() for x in a.menu().actions())
         import sys
+
         if sys.platform == "win32":
             assert any("主动识屏" in t for t in texts)
         assert any("Agent 联动" in t for t in texts)
@@ -882,6 +903,7 @@ class TestPhase4UIAndMenuIntegration:
         # DSH 开启需授权确认 + 安装桥接插件：mock 掉弹窗与真实 dsh CLI 调用
         from PySide6.QtWidgets import QMessageBox
         from pet.agent_link import DshMonitor
+
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Yes)
         monkeypatch.setattr(DshMonitor, "install_bridge", classmethod(lambda cls: (True, "ok")))
         monkeypatch.setattr(DshMonitor, "uninstall_bridge", classmethod(lambda cls: None))
@@ -889,6 +911,7 @@ class TestPhase4UIAndMenuIntegration:
         win._toggle_agent_link("dsh", True)
         # 安装走后台线程：等 install_finished 信号回来再断言
         import time
+
         for _ in range(60):
             app.processEvents()
             if cfg.data["agent_link"]["dsh"]:
@@ -902,6 +925,7 @@ class TestPhase4UIAndMenuIntegration:
         assert cfg.data["agent_link"]["dsh"] is False
         win.close()
         win.deleteLater()
+
     def test_apply_config_non_windows_no_timer(self, tmp_path, monkeypatch):
         """测试 4d：非 Windows 平台即使 enabled=True 且白名单非空也不起动定时器。"""
         from PySide6.QtWidgets import QApplication
@@ -911,6 +935,7 @@ class TestPhase4UIAndMenuIntegration:
 
         class DummyWindow:
             on_open_chat = True  # 模拟有聊天/视觉能力（否则主动识屏 watcher 不启动）
+
             def __init__(self):
                 self.mouse_through = False
                 self._dragging = False
@@ -929,6 +954,7 @@ class TestPhase4UIAndMenuIntegration:
         watcher = ProactiveScreenWatcher(DummyWindow(), cfg)
         watcher.apply_config()
         assert watcher.is_running() is False
+
 
 # ============================================================================
 # 9. Phase 5 短期记忆分类与注入测试
@@ -1014,11 +1040,14 @@ class TestPhase5ShortTermMemory:
         monkeypatch.setattr(vision, "_post_vision_request", _fake_post)
 
         cfg = Config(base=tmp_path)
-        cfg.set("proactive_screen", {
-            "enabled": True,
-            "whitelist": ["*"],
-            "pre_cue": False,
-        })
+        cfg.set(
+            "proactive_screen",
+            {
+                "enabled": True,
+                "whitelist": ["*"],
+                "pre_cue": False,
+            },
+        )
         win = None
         watcher = ProactiveScreenWatcher(win, cfg)
         watcher.limiter.dry_run = False
@@ -1080,15 +1109,11 @@ class TestPhase5ShortTermMemory:
         assert recorded_names == ["小鲸鱼"]
 
 
-
-
-
-
-
 class TestUXFixesRound3:
     def test_cooldown_allows_half_minute_granularity(self):
         """冷却间隔支持 0.5 分钟粒度（用户反馈整分钟太粗）。"""
         from pet.proactive import effective_proactive_config
+
         cfg = effective_proactive_config({"preset": "custom", "cooldown_minutes": 2.5})
         assert cfg["cooldown_minutes"] == 2.5
         # 下限 clamp 到 0.5
@@ -1097,6 +1122,7 @@ class TestUXFixesRound3:
 
     def test_min_request_interval_exposed_and_clamped(self):
         from pet.proactive import effective_proactive_config
+
         cfg = effective_proactive_config({"preset": "custom", "min_request_interval_seconds": 45})
         assert cfg["min_request_interval_seconds"] == 45
         cfg2 = effective_proactive_config({"preset": "custom", "min_request_interval_seconds": 1})
@@ -1139,6 +1165,7 @@ class TestUXFixesRound3:
     def test_daily_cap_upper_relaxed(self):
         """每日上限取消 100 硬顶：用户自定义可达 9999。"""
         from pet.proactive import effective_proactive_config
+
         cfg = effective_proactive_config({"preset": "custom", "daily_cap": 500})
         assert cfg["daily_cap"] == 500
         cfg2 = effective_proactive_config({"preset": "custom", "daily_cap": 99999})
@@ -1170,7 +1197,7 @@ class TestUXFixesRound3:
         monkeypatch.setattr(
             watcher.limiter,
             "try_acquire",
-            lambda: (called.append(1) or (True, "ok")),
+            lambda: called.append(1) or (True, "ok"),
         )
 
         img = Image.new("RGB", (50, 50))
@@ -1284,8 +1311,11 @@ class TestProactiveBudgetPerRequest:
         p = ProviderConfig.from_dict("test", {"model": "deepseek-v4-flash", "api_key": "sk-123"})
         with pytest.raises(vision.VisionError):
             vision._post_vision_request(
-                b"fake-jpeg", "code.exe | t", "sys", p,
-                consume_budget=lambda: (consumed.append(1) or True),
+                b"fake-jpeg",
+                "code.exe | t",
+                "sys",
+                p,
+                consume_budget=lambda: consumed.append(1) or True,
             )
         # 模型访问失败只重试 1 次：总共发起 2 次请求
         assert len(attempts) == 2

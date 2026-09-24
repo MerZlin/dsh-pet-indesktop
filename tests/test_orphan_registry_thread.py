@@ -14,6 +14,7 @@ _ArmInvoker（QObject）信号排队到 GUI 线程执行创建/启动。
 已被长期使用（PetWindow.fullscreen_changed 等 watcher 线程 → GUI 的
 queued 信号，同属 QObject receiver 路径）。
 """
+
 from __future__ import annotations
 
 import threading
@@ -52,8 +53,7 @@ def test_worker_thread_register_defers_timer_to_gui(app):
     assert not worker.is_alive()
 
     # worker 线程：绝不就地创建 QTimer，必须经编排信号请求 GUI 执行
-    assert reg._arm_invoker.arm_requested.emit_count == 1, \
-        "worker 线程 register 必须经编排信号请求 GUI 建 timer"
+    assert reg._arm_invoker.arm_requested.emit_count == 1, "worker 线程 register 必须经编排信号请求 GUI 建 timer"
     assert reg._timer is None, "worker 线程绝不就地创建 QTimer"
 
     # GUI 线程调用：就地创建并启动（生产主路径不变）

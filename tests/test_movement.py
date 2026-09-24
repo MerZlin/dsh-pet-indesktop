@@ -47,16 +47,16 @@ def test_inplace_move_clips_do_not_displace():
     from pet.catalog import build_categories
 
     folder_files = {
-        'move': ['原地小憩沉眠', '螃蟹走路'],
-        'idle': ['待机呼吸休闲'],
-        'click': [],
-        'turn': ['东张西望'],
-        'random': ['写代码'],
+        "move": ["原地小憩沉眠", "螃蟹走路"],
+        "idle": ["待机呼吸休闲"],
+        "click": [],
+        "turn": ["东张西望"],
+        "random": ["写代码"],
     }
     names = [n for ns in folder_files.values() for n in ns]
     cats = build_categories(names, folder_files=folder_files)
-    assert cats['moves'] == ['螃蟹走路']
-    assert '原地小憩沉眠' in cats['acts']
+    assert cats["moves"] == ["螃蟹走路"]
+    assert "原地小憩沉眠" in cats["acts"]
 
 
 def test_renamed_move_pair_stays_in_moves():
@@ -64,17 +64,17 @@ def test_renamed_move_pair_stays_in_moves():
     from pet.catalog import build_categories
 
     folder_files = {
-        'move': ['螃蟹走路', '漂浮踏步', '左转奔跑'],
-        'idle': ['待机呼吸休闲'],
-        'click': [],
-        'turn': ['东张西望'],
-        'random': ['写代码'],
+        "move": ["螃蟹走路", "漂浮踏步", "左转奔跑"],
+        "idle": ["待机呼吸休闲"],
+        "click": [],
+        "turn": ["东张西望"],
+        "random": ["写代码"],
     }
     names = [n for ns in folder_files.values() for n in ns]
     cats = build_categories(names, folder_files=folder_files)
-    assert {'螃蟹走路', '漂浮踏步', '左转奔跑'} == set(cats['moves'])
-    assert '漂浮踏步' not in cats['acts']
-    assert '左转奔跑' not in cats['acts']
+    assert {"螃蟹走路", "漂浮踏步", "左转奔跑"} == set(cats["moves"])
+    assert "漂浮踏步" not in cats["acts"]
+    assert "左转奔跑" not in cats["acts"]
 
 
 def test_balance_animations_also_enter_random_acts():
@@ -82,28 +82,28 @@ def test_balance_animations_also_enter_random_acts():
     from pet.catalog import build_categories
 
     folder_files = {
-        'idle': ['待机呼吸休闲'],
-        'turn': ['东张西望'],
-        'move': ['螃蟹走路'],
-        'click': [],
-        'random': ['写代码', '悠闲哼歌'],
-        'events/balance': ['余额-钱袋满溢', '余额-分文不剩'],
+        "idle": ["待机呼吸休闲"],
+        "turn": ["东张西望"],
+        "move": ["螃蟹走路"],
+        "click": [],
+        "random": ["写代码", "悠闲哼歌"],
+        "events/balance": ["余额-钱袋满溢", "余额-分文不剩"],
     }
     names = [n for ns in folder_files.values() for n in ns]
     cats = build_categories(names, folder_files=folder_files)
-    assert '余额-钱袋满溢' in cats['acts']
-    assert '余额-分文不剩' in cats['acts']
-    assert '写代码' in cats['acts']
-    assert '悠闲哼歌' in cats['acts']
+    assert "余额-钱袋满溢" in cats["acts"]
+    assert "余额-分文不剩" in cats["acts"]
+    assert "写代码" in cats["acts"]
+    assert "悠闲哼歌" in cats["acts"]
 
 
 def test_text_clips_no_mirror_loaded():
     """text_clips.json 的 no_mirror 清单被素材库加载。"""
     from pet.library import MovieLibrary
 
-    lib = MovieLibrary(character_id='shenshen')
-    assert '是啊，吃什么' in lib.no_mirror
-    assert '螃蟹走路' not in lib.no_mirror
+    lib = MovieLibrary(character_id="shenshen")
+    assert "是啊，吃什么" in lib.no_mirror
+    assert "螃蟹走路" not in lib.no_mirror
 
 
 # ============================================================================

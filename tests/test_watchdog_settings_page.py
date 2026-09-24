@@ -5,6 +5,7 @@ PR57 审计 F15：``pattern_detect`` 开关与一组双窗口阈值在 ``config.
 默认开启，但设置页只有「循环检测」和「卡住检测」两组，用户完全无法调整
 行为重复识别阈值。本文件钉住补组后的控件存在性与 config 读写。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -40,11 +41,9 @@ def _make_page(tmp_path):
 def test_pattern_group_rows_exist(app, tmp_path):
     page = _make_page(tmp_path)
     try:
-        assert page.findChild(SettingRow, "settingRow_pattern_detect") is not None, \
-            "行为重复检测缺少总开关行"
+        assert page.findChild(SettingRow, "settingRow_pattern_detect") is not None, "行为重复检测缺少总开关行"
         for key in _PATTERN_DEFAULTS:
-            assert page.findChild(SettingRow, f"settingRow_{key}") is not None, \
-                f"行为重复检测缺少阈值行 {key}"
+            assert page.findChild(SettingRow, f"settingRow_{key}") is not None, f"行为重复检测缺少阈值行 {key}"
     finally:
         page.deleteLater()
 
@@ -63,8 +62,7 @@ def test_reads_pattern_defaults_from_config(app, tmp_path):
 def test_reads_pattern_overrides_from_config(app, tmp_path):
     cfg = Config(base=tmp_path)
     agent_cfg = dict(cfg.get("agent_link", {}))
-    agent_cfg.update({"pattern_detect": False, "pattern_w6_control": 8,
-                      "pattern_macro_w6_action": 2, "pattern_cooldown_seconds": 90})
+    agent_cfg.update({"pattern_detect": False, "pattern_w6_control": 8, "pattern_macro_w6_action": 2, "pattern_cooldown_seconds": 90})
     page = WatchdogSettingsPage(cfg, agent_cfg)
     try:
         assert page.pattern_enabled_check.isChecked() is False
@@ -126,7 +124,8 @@ def test_pattern_rows_grouped_under_own_section(app, tmp_path):
         ids = {r.objectName() for r in section.rows}
         assert "settingRow_pattern_detect" in ids
         assert "settingRow_pattern_cooldown_seconds" in ids
-        assert not any(i.startswith(("settingRow_stuck_", "settingRow_exploration_watchdog_"))
-                       for i in ids), f"行为重复检测组不得混入其他检测器行：{sorted(ids)}"
+        assert not any(i.startswith(("settingRow_stuck_", "settingRow_exploration_watchdog_")) for i in ids), (
+            f"行为重复检测组不得混入其他检测器行：{sorted(ids)}"
+        )
     finally:
         dlg.deleteLater()

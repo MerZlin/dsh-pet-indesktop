@@ -14,6 +14,7 @@
   逐出后经磁盘缓存命中不重复 ffmpeg 探测；
 - 磁盘缓存条数上限（写路径合并后按先写入先逐出裁减）。
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ from pet.frame_cache import ByteBudgetLru
 
 def _qapp() -> QApplication:
     import os
+
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     return QApplication.instance() or QApplication([])
 
@@ -133,9 +135,7 @@ class TestMetaCacheBudgetIntegration:
         assert len(lru) <= 3
         assert lru.total_bytes() <= lru.max_bytes()  # 进程内缓存字节有界
 
-    def test_evicted_entry_served_from_file_cache_without_reprobe(
-        self, tmp_path, monkeypatch
-    ):
+    def test_evicted_entry_served_from_file_cache_without_reprobe(self, tmp_path, monkeypatch):
         """进程内被 LRU 逐出后，磁盘缓存仍在 → 不重复拉起 ffmpeg 探测。"""
         _qapp()
         fake = _install_meta_env(tmp_path, monkeypatch)

@@ -44,18 +44,18 @@ def test_modern_default_v1_has_compact_root_and_safety_actions():
 
 
 def test_legacy_section_boundaries_become_editable_separator_nodes():
-    upgraded = materialize_implicit_separators({
-        "schema_version": 1,
-        "layout_id": "user",
-        "nodes": [
-            {"type": "action", "id": "chat", "visible": True, "section": "one"},
-            {"type": "action", "id": "look_screen", "visible": True, "section": "two"},
-        ],
-    })
+    upgraded = materialize_implicit_separators(
+        {
+            "schema_version": 1,
+            "layout_id": "user",
+            "nodes": [
+                {"type": "action", "id": "chat", "visible": True, "section": "one"},
+                {"type": "action", "id": "look_screen", "visible": True, "section": "two"},
+            ],
+        }
+    )
 
-    assert [node["type"] for node in upgraded["nodes"]] == [
-        "action", "separator", "action"
-    ]
+    assert [node["type"] for node in upgraded["nodes"]] == ["action", "separator", "action"]
     assert upgraded["nodes"][1]["id"] == "user.separator-1"
 
 
@@ -104,9 +104,7 @@ def test_user_layout_filters_hidden_unavailable_and_empty_submenus():
                     "id": "empty_tools",
                     "label": "空工具",
                     "visible": True,
-                    "children": [
-                        {"type": "action", "id": "balance", "visible": False}
-                    ],
+                    "children": [{"type": "action", "id": "balance", "visible": False}],
                 },
                 {"type": "action", "id": "modern_settings", "visible": True},
                 {"type": "action", "id": "quit", "visible": True},
@@ -132,9 +130,7 @@ def test_user_layout_filters_hidden_unavailable_and_empty_submenus():
             "id": "pet_controls",
             "label": "桌宠控制",
             "visible": True,
-            "children": (
-                {"type": "action", "id": "no_move", "visible": True},
-            ),
+            "children": ({"type": "action", "id": "no_move", "visible": True},),
         },
         {"type": "action", "id": "modern_settings", "visible": True},
         {"type": "action", "id": "quit", "visible": True},
@@ -252,7 +248,9 @@ def test_menu_editor_customizes_alias_icon_separator_and_shows_runtime_state():
     )
 
     assert [editor.tree.headerItem().text(index) for index in range(3)] == [
-        "菜单项", "状态", "位置",
+        "菜单项",
+        "状态",
+        "位置",
     ]
     quick_launch = editor.item_for_action("quick_launch")
     assert quick_launch is not None
@@ -373,10 +371,7 @@ def test_missing_user_layout_resolves_versioned_default():
     ]
     # 报时/节日四项在默认模板里 visible: false（2026-09-19 起默认不上菜单，
     # 用户可在菜单编辑器自行加回），resolve 后被过滤，不出现在渲染结果里。
-    assert all(
-        item not in {node.get("id") for node in result.nodes}
-        for item in ("voice_chime_now", "voice_chime_toggle", "festival_now", "festival_toggle")
-    )
+    assert all(item not in {node.get("id") for node in result.nodes} for item in ("voice_chime_now", "voice_chime_toggle", "festival_now", "festival_toggle"))
 
 
 def test_config_persists_menu_layout_override_without_copying_default(tmp_path):
@@ -410,21 +405,27 @@ def test_saved_layout_drops_removed_mouse_through_action(tmp_path):
     from pet.config import Config
 
     config = Config(tmp_path)
-    config.set("context_menu_layout", {
-        "schema_version": 1,
-        "layout_id": "user",
-        "nodes": [
-            {"type": "action", "id": "modern_settings", "visible": True},
-            {
-                "type": "submenu", "id": "pet_controls", "label": "桌宠控制", "visible": True,
-                "children": [
-                    {"type": "action", "id": "no_move", "visible": True},
-                    {"type": "action", "id": "mouse_through", "visible": True},
-                ],
-            },
-            {"type": "action", "id": "quit", "visible": True},
-        ],
-    })
+    config.set(
+        "context_menu_layout",
+        {
+            "schema_version": 1,
+            "layout_id": "user",
+            "nodes": [
+                {"type": "action", "id": "modern_settings", "visible": True},
+                {
+                    "type": "submenu",
+                    "id": "pet_controls",
+                    "label": "桌宠控制",
+                    "visible": True,
+                    "children": [
+                        {"type": "action", "id": "no_move", "visible": True},
+                        {"type": "action", "id": "mouse_through", "visible": True},
+                    ],
+                },
+                {"type": "action", "id": "quit", "visible": True},
+            ],
+        },
+    )
     config.save()
 
     nodes = Config(tmp_path).get("context_menu_layout")["nodes"]
@@ -540,12 +541,25 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     assert root == expected_root
     rendered = ["|" if action.isSeparator() else action.text() for action in menu.actions()]
     expected_rendered = [
-        "厉害了我的鲸", "|",
-        "AI 对话", "看看屏幕", "|",
-        "播放动画", "切换角色", "播放速率", "大小", "音乐", "|",
-        "桌宠控制", "快捷启动", "|",
-        "工具与帮助", "Agent 联动", "|",
-        "桌宠设置", "退出",
+        "厉害了我的鲸",
+        "|",
+        "AI 对话",
+        "看看屏幕",
+        "|",
+        "播放动画",
+        "切换角色",
+        "播放速率",
+        "大小",
+        "音乐",
+        "|",
+        "桌宠控制",
+        "快捷启动",
+        "|",
+        "工具与帮助",
+        "Agent 联动",
+        "|",
+        "桌宠设置",
+        "退出",
     ]
     if sys.platform == "win32":
         expected_rendered.insert(-3, "主动识屏")
@@ -580,9 +594,7 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     assert [action.text() for action in tools.actions() if not action.isSeparator()] == expected_tools
     # Harness 现在是子菜单（挂在既有 harness id 上，用户老布局无需迁移）：
     # 启动 / 重启 / 停止三件套必须齐全——「停止」是用户关掉静默常驻服务的唯一入口。
-    harness_action = next(
-        action for action in tools.actions() if action.text() == "DeepSeek Harness"
-    )
+    harness_action = next(action for action in tools.actions() if action.text() == "DeepSeek Harness")
     harness_menu = harness_action.menu()
     assert harness_menu is not None
     assert [action.text() for action in harness_menu.actions()] == [
@@ -595,9 +607,7 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     music_action = next(action for action in menu.actions() if action.text() == "音乐")
     music_menu = music_action.menu()
     assert music_menu is not None
-    align_action = next(
-        action for action in music_menu.actions() if action.text() == "歌词对齐"
-    )
+    align_action = next(action for action in music_menu.actions() if action.text() == "歌词对齐")
     align_menu = align_action.menu()
     assert align_menu is not None
     assert [action.text() for action in align_menu.actions()] == [
@@ -725,13 +735,8 @@ def test_settings_menu_editor_creates_named_submenu(tmp_path, monkeypatch):
 
     dialog.menu_layout_editor.new_submenu_action.trigger()
 
-    user_submenus = [
-        node for node in dialog.menu_layout_editor.value()["nodes"]
-        if node["type"] == "submenu" and node["id"].startswith("user.")
-    ]
-    assert [(node["label"], node["children"]) for node in user_submenus] == [
-        ("常用操作", [])
-    ]
+    user_submenus = [node for node in dialog.menu_layout_editor.value()["nodes"] if node["type"] == "submenu" and node["id"].startswith("user.")]
+    assert [(node["label"], node["children"]) for node in user_submenus] == [("常用操作", [])]
     dialog.reject()
     app.processEvents()
 
@@ -746,23 +751,31 @@ def test_menu_editor_confirms_before_deleting_submenu_and_preserves_children(mon
     layout = load_default_menu_layout()
     chat = next(node for node in layout["nodes"] if node["id"] == "chat")
     layout["nodes"].remove(chat)
-    layout["nodes"].insert(1, {
-        "type": "submenu", "id": "user.work", "label": "工作",
-        "visible": True, "children": [chat],
-    })
+    layout["nodes"].insert(
+        1,
+        {
+            "type": "submenu",
+            "id": "user.work",
+            "label": "工作",
+            "visible": True,
+            "children": [chat],
+        },
+    )
     editor = MenuLayoutEditor(layout)
     submenu = editor.tree.topLevelItem(1)
     editor.tree.setCurrentItem(submenu)
 
     monkeypatch.setattr(
-        QMessageBox, "question",
+        QMessageBox,
+        "question",
         lambda *args, **kwargs: QMessageBox.StandardButton.Cancel,
     )
     editor.delete_submenu_action.trigger()
     assert any(node["id"] == "user.work" for node in editor.value()["nodes"])
 
     monkeypatch.setattr(
-        QMessageBox, "question",
+        QMessageBox,
+        "question",
         lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
     )
     editor.delete_submenu_action.trigger()
@@ -783,17 +796,20 @@ def test_menu_editor_removes_submenu_after_its_last_item_moves_out():
     layout = load_default_menu_layout()
     chat = next(node for node in layout["nodes"] if node["id"] == "chat")
     layout["nodes"].remove(chat)
-    layout["nodes"].insert(1, {
-        "type": "submenu", "id": "user.work", "label": "工作",
-        "visible": True, "children": [chat],
-    })
+    layout["nodes"].insert(
+        1,
+        {
+            "type": "submenu",
+            "id": "user.work",
+            "label": "工作",
+            "visible": True,
+            "children": [chat],
+        },
+    )
     editor = MenuLayoutEditor(layout)
     editor.tree.setCurrentItem(editor.item_for_action("chat"))
     editor.move_menu.aboutToShow.emit()
-    root_action = next(
-        action for action in editor.move_menu.actions()
-        if action.text() == "根菜单"
-    )
+    root_action = next(action for action in editor.move_menu.actions() if action.text() == "根菜单")
     root_action.trigger()
 
     nodes = editor.value()["nodes"]
@@ -813,10 +829,16 @@ def test_menu_editor_drag_model_cleanup_removes_the_emptied_source_submenu():
     layout = load_default_menu_layout()
     chat = next(node for node in layout["nodes"] if node["id"] == "chat")
     layout["nodes"].remove(chat)
-    layout["nodes"].insert(1, {
-        "type": "submenu", "id": "user.drag", "label": "拖拽来源",
-        "visible": True, "children": [chat],
-    })
+    layout["nodes"].insert(
+        1,
+        {
+            "type": "submenu",
+            "id": "user.drag",
+            "label": "拖拽来源",
+            "visible": True,
+            "children": [chat],
+        },
+    )
     editor = MenuLayoutEditor(layout)
     submenu = editor.tree.topLevelItem(1)
     moved = submenu.takeChild(0)
@@ -834,21 +856,23 @@ def test_user_layout_rejects_nested_submenus_beyond_one_level():
         {
             "schema_version": 1,
             "layout_id": "user",
-            "nodes": [{
-                "type": "submenu",
-                "id": "user.outer",
-                "label": "外层",
-                "visible": True,
-                "children": [{
+            "nodes": [
+                {
                     "type": "submenu",
-                    "id": "user.inner",
-                    "label": "内层",
+                    "id": "user.outer",
+                    "label": "外层",
                     "visible": True,
                     "children": [
-                        {"type": "action", "id": "chat", "visible": True}
+                        {
+                            "type": "submenu",
+                            "id": "user.inner",
+                            "label": "内层",
+                            "visible": True,
+                            "children": [{"type": "action", "id": "chat", "visible": True}],
+                        }
                     ],
-                }],
-            }],
+                }
+            ],
         },
         registered_actions={"chat", "modern_settings", "quit"},
         available_actions={"chat", "modern_settings", "quit"},
@@ -892,9 +916,7 @@ def test_settings_sidebar_uses_stable_domains_and_owns_representative_rows(tmp_p
     assert owner("file_interpret_enabled") == "文件识别"
     assert owner("music_player_netease") == "桌宠"
     assert owner("music_player_qqmusic") == "桌宠"
-    assert "待分类（开发期）" not in [
-        label.text() for label in dialog.findChildren(settings_mod.QLabel)
-    ]
+    assert "待分类（开发期）" not in [label.text() for label in dialog.findChildren(settings_mod.QLabel)]
     dialog.reject()
     app.processEvents()
 
@@ -921,24 +943,17 @@ def test_voice_chime_rows_live_only_in_their_own_sidebar_domain(tmp_path, monkey
         chime_page = dialog.pages.widget(labels.index("语音"))
         automation_page = dialog.pages.widget(labels.index("自动化与联动"))
 
-        rows = [
-            row for row in dialog.findChildren(SettingRow)
-            if row.objectName().startswith("settingRow_voice_chime_")
-        ]
+        rows = [row for row in dialog.findChildren(SettingRow) if row.objectName().startswith("settingRow_voice_chime_")]
         assert rows, "语音报时设置行必须存在"
         for row in rows:
             assert chime_page.isAncestorOf(row), f"{row.objectName()} 不在「语音」域"
-            assert not automation_page.isAncestorOf(row), (
-                f"{row.objectName()} 仍残留在「自动化与联动」域"
-            )
+            assert not automation_page.isAncestorOf(row), f"{row.objectName()} 仍残留在「自动化与联动」域"
 
         preview_row = dialog.findChild(SettingRow, "settingRow_voice_chime_preview")
         assert preview_row is not None, "「立即试听」必须在 SettingRow 内才不会被域收集漏掉"
         assert chime_page.isAncestorOf(preview_row)
         assert chime_page.isAncestorOf(dialog.voice_chime_page.preview_btn)
-        assert dialog.voice_chime_page.preview_btn.isVisibleTo(chime_page), (
-            "试听按钮在新域里必须可见（历史事故：打包版不可见）"
-        )
+        assert dialog.voice_chime_page.preview_btn.isVisibleTo(chime_page), "试听按钮在新域里必须可见（历史事故：打包版不可见）"
         previews: list[str] = []
         dialog.voice_chime_page.preview_requested.connect(previews.append)
         dialog.voice_chime_page.preview_btn.click()
@@ -1022,14 +1037,9 @@ def test_voice_domain_owns_only_tts_rows(tmp_path, monkeypatch):
         assert len(festival_rows) == 12, "节日提醒 12 行整体移入「语音」域"
         for item in chime_rows + festival_rows:
             assert voice_page.isAncestorOf(item), f"{item.objectName()} 必须在「语音」域"
-            assert not automation_page.isAncestorOf(item), (
-                f"{item.objectName()} 仍残留在「自动化与联动」域"
-            )
+            assert not automation_page.isAncestorOf(item), f"{item.objectName()} 仍残留在「自动化与联动」域"
 
-        section_titles = [
-            label.text()
-            for label in voice_page.findChildren(settings_mod.QLabel, "sectionTitle")
-        ]
+        section_titles = [label.text() for label in voice_page.findChildren(settings_mod.QLabel, "sectionTitle")]
         assert section_titles == ["语音报时", "节日提醒"]
 
         # 音效类三组都不在「语音」域（各自回原功能分组，行本身仍照常存在）。
@@ -1043,12 +1053,8 @@ def test_voice_domain_owns_only_tts_rows(tmp_path, monkeypatch):
         ):
             voice_row = dialog.findChild(SettingRow, f"settingRow_{setting_id}")
             assert voice_row is not None, f"{setting_id} 行必须存在"
-            assert not voice_page.isAncestorOf(voice_row), (
-                f"{setting_id} 是音效类，不该落在「语音」域"
-            )
-        assert "待分类（开发期）" not in [
-            label.text() for label in dialog.findChildren(settings_mod.QLabel)
-        ]
+            assert not voice_page.isAncestorOf(voice_row), f"{setting_id} 是音效类，不该落在「语音」域"
+        assert "待分类（开发期）" not in [label.text() for label in dialog.findChildren(settings_mod.QLabel)]
     finally:
         dialog.reject()
         app.processEvents()
@@ -1084,9 +1090,7 @@ def test_click_sound_rows_return_to_interaction_click_feedback(tmp_path, monkeyp
             "settingRow_click_sound_volume",
             "settingRow_click_sound_preview",
         ], "点击音效 4 行必须整组回到「点击反馈」且保持原顺序"
-        assert names.index("settingRow_click_self_talk") > 3, (
-            "点击音效 4 行原本排在 click_self_talk 之前"
-        )
+        assert names.index("settingRow_click_self_talk") > 3, "点击音效 4 行原本排在 click_self_talk 之前"
         # click_ 前缀里另有余额 / 点击台词绑定，同样留在「互动」。
         for setting_id in ("click_balance", "click_talk_bindings"):
             keep_row = dialog.findChild(settings_mod.SettingRow, f"settingRow_{setting_id}")
@@ -1127,9 +1131,7 @@ def test_collision_sound_rows_return_to_pet_collision_groups(tmp_path, monkeypat
         advanced = _section_of(dialog, settings_mod, "collision_sound_volume")
         assert _section_title(advanced) == "碰撞参数（高级）"
         assert advanced.toggle is not None, "碰撞参数是高级折叠组"
-        assert "settingRow_collision_sound_volume" in [
-            r.objectName() for r in advanced.rows
-        ]
+        assert "settingRow_collision_sound_volume" in [r.objectName() for r in advanced.rows]
 
         for setting_id in ("collision_sound_enabled", "collision_sound_volume"):
             item = dialog.findChild(settings_mod.SettingRow, f"settingRow_{setting_id}")
@@ -1157,10 +1159,7 @@ def test_agent_sound_rows_stay_in_agent_link_fold(tmp_path, monkeypatch):
         labels = [dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())]
         voice_page = dialog.pages.widget(labels.index("语音"))
         automation_page = dialog.pages.widget(labels.index("自动化与联动"))
-        group_titles = [
-            section.findChild(settings_mod.QLabel, "sectionTitle").text()
-            for section in dialog.agent_link_box.groups
-        ]
+        group_titles = [section.findChild(settings_mod.QLabel, "sectionTitle").text() for section in dialog.agent_link_box.groups]
         assert "提示音效" in group_titles
         for setting_id in (
             "agent_sound_enabled",
@@ -1172,15 +1171,9 @@ def test_agent_sound_rows_stay_in_agent_link_fold(tmp_path, monkeypatch):
         ):
             row = dialog.findChild(SettingRow, f"settingRow_{setting_id}")
             assert row is not None, f"{setting_id} 行必须存在"
-            assert dialog.agent_link_box.isAncestorOf(row), (
-                f"{setting_id} 必须留在 Agent 联动折叠框内"
-            )
-            assert automation_page.isAncestorOf(row), (
-                f"{setting_id} 必须留在「自动化与联动」域"
-            )
-            assert not voice_page.isAncestorOf(row), (
-                f"{setting_id} 不应被「语音」域收走"
-            )
+            assert dialog.agent_link_box.isAncestorOf(row), f"{setting_id} 必须留在 Agent 联动折叠框内"
+            assert automation_page.isAncestorOf(row), f"{setting_id} 必须留在「自动化与联动」域"
+            assert not voice_page.isAncestorOf(row), f"{setting_id} 不应被「语音」域收走"
     finally:
         dialog.reject()
         app.processEvents()
@@ -1216,16 +1209,12 @@ def test_sound_and_festival_search_jump_to_owning_domains(tmp_path, monkeypatch)
         for query, domain, should_be_visible in cases:
             dialog.search_edit.setText(query)
             app.processEvents()
-            assert dialog.sidebar.currentItem().text() == domain, (
-                f"搜索「{query}」必须跳到「{domain}」域"
-            )
+            assert dialog.sidebar.currentItem().text() == domain, f"搜索「{query}」必须跳到「{domain}」域"
             page = dialog.pages.widget(dialog.sidebar.currentRow())
             match = dialog._search_matches[dialog._search_index]
             assert page.isAncestorOf(match), f"搜索「{query}」命中的行不在「{domain}」域"
             if should_be_visible:
-                assert match.isVisibleTo(page), (
-                    f"搜索「{query}」命中的行在「{domain}」域里不可见"
-                )
+                assert match.isVisibleTo(page), f"搜索「{query}」命中的行在「{domain}」域里不可见"
     finally:
         dialog.reject()
         app.processEvents()
@@ -1303,10 +1292,7 @@ def test_advanced_setting_groups_use_single_collapsed_disclosure_layer(tmp_path,
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     dialog = ModernSettingsDialog(Config(tmp_path), include_ai=True)
 
-    color_toggle = next(
-        button for button in dialog.findChildren(SettingsDisclosureHeader)
-        if button.text() == "高级配色"
-    )
+    color_toggle = next(button for button in dialog.findChildren(SettingsDisclosureHeader) if button.text() == "高级配色")
     assert not dialog.findChildren(QToolButton, "advancedSectionToggle")
     color_section = color_toggle.parentWidget()
     assert isinstance(color_section, SettingsSection)
@@ -1537,10 +1523,7 @@ def test_responsive_action_row_inline_mode_does_not_reserve_compact_height():
     row.show()
     app.processEvents()
 
-    expected_height = max(
-        widget.minimumHeight() or widget.minimumSizeHint().height()
-        for widget in (primary, first, second)
-    )
+    expected_height = max(widget.minimumHeight() or widget.minimumSizeHint().height() for widget in (primary, first, second))
     assert row.property("responsiveMode") == "inline"
     assert row.minimumSizeHint().height() == expected_height
     row.close()
@@ -1560,10 +1543,7 @@ def test_compact_agent_sound_controls_reflow_inside_their_setting_row(tmp_path, 
     dialog = ModernSettingsDialog(Config(tmp_path), include_ai=False)
     dialog.agent_sound_check.setChecked(True)
     dialog.resize(720, 760)
-    automation_index = next(
-        index for index in range(dialog.sidebar.count())
-        if dialog.sidebar.item(index).text() == "自动化与联动"
-    )
+    automation_index = next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == "自动化与联动")
     dialog.sidebar.setCurrentRow(automation_index)
     for control in (
         dialog.agent_sound_start_picker,
@@ -1691,10 +1671,7 @@ def test_menu_preview_uses_resolver_and_omits_empty_submenu(tmp_path, monkeypatc
     for index in range(controls.childCount()):
         controls.child(index).setCheckState(0, Qt.CheckState.Unchecked)
 
-    preview_labels = [
-        editor.preview.topLevelItem(i).text(0)
-        for i in range(editor.preview.topLevelItemCount())
-    ]
+    preview_labels = [editor.preview.topLevelItem(i).text(0) for i in range(editor.preview.topLevelItemCount())]
     assert "桌宠控制" not in preview_labels
     dialog.reject()
     app.processEvents()
@@ -1711,10 +1688,7 @@ def test_menu_preview_refreshes_after_tree_shape_changes():
     controls = next(
         editor.tree.topLevelItem(index)
         for index in range(editor.tree.topLevelItemCount())
-        if (
-            editor.tree.topLevelItem(index).data(0, Qt.ItemDataRole.UserRole) or {}
-        ).get("id")
-        == "pet_controls"
+        if (editor.tree.topLevelItem(index).data(0, Qt.ItemDataRole.UserRole) or {}).get("id") == "pet_controls"
     )
     action = controls.child(0)
     action_label = action.text(0)
@@ -1723,16 +1697,10 @@ def test_menu_preview_refreshes_after_tree_shape_changes():
     editor.tree.addTopLevelItem(action)
     app.processEvents()
 
-    preview_roots = [
-        editor.preview.topLevelItem(index)
-        for index in range(editor.preview.topLevelItemCount())
-    ]
+    preview_roots = [editor.preview.topLevelItem(index) for index in range(editor.preview.topLevelItemCount())]
     preview_controls = next(item for item in preview_roots if item.text(0) == "桌宠控制")
     assert action_label in [item.text(0) for item in preview_roots]
-    assert action_label not in [
-        preview_controls.child(index).text(0)
-        for index in range(preview_controls.childCount())
-    ]
+    assert action_label not in [preview_controls.child(index).text(0) for index in range(preview_controls.childCount())]
     editor.close()
     app.processEvents()
 
@@ -1789,9 +1757,7 @@ def test_menu_preview_and_runtime_qmenu_share_the_same_layout_structure():
         return [
             (
                 action.text(),
-                runtime_shape(action.menu(), node["children"])
-                if node.get("type") == "submenu"
-                else [],
+                runtime_shape(action.menu(), node["children"]) if node.get("type") == "submenu" else [],
             )
             for action, node in zip(actions, nodes)
         ]
@@ -1806,9 +1772,7 @@ def test_menu_preview_and_runtime_qmenu_share_the_same_layout_structure():
         available_actions=MENU_ACTIONS.available_ids(FakePet()),
     )
 
-    assert preview_shape(editor.preview.invisibleRootItem()) == runtime_shape(
-        runtime_menu, resolved.nodes
-    )
+    assert preview_shape(editor.preview.invisibleRootItem()) == runtime_shape(runtime_menu, resolved.nodes)
     runtime_menu.close()
     editor.close()
     app.processEvents()
@@ -1850,18 +1814,13 @@ def test_menu_editor_uses_settings_cards_instead_of_native_table_chrome():
     assert editor.tree.objectName() == "menuLayoutTree"
     assert editor.tree.uniformRowHeights()
     assert editor.tree.indentation() == 18
-    assert all(
-        editor.tree.header().sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive
-        for column in range(3)
-    )
+    assert all(editor.tree.header().sectionResizeMode(column) == QHeaderView.ResizeMode.Interactive for column in range(3))
     assert not editor.tree.header().stretchLastSection()
     assert editor.tree.columnWidth(2) == 92
     assert editor.preview.header().isHidden()
     assert editor.preview.uniformRowHeights()
     assert editor.preview.indentation() == 18
-    assert editor.findChild(
-        type(editor.preview_label), "menuLayoutPreviewLabel"
-    ).text() == "实时菜单预览"
+    assert editor.findChild(type(editor.preview_label), "menuLayoutPreviewLabel").text() == "实时菜单预览"
 
     editor.close()
     app.processEvents()
@@ -1877,10 +1836,7 @@ def test_wide_menu_editor_expands_and_groups_commands_into_dropdowns(tmp_path, m
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     dialog = ModernSettingsDialog(Config(tmp_path), include_ai=True)
-    menu_index = next(
-        index for index in range(dialog.sidebar.count())
-        if dialog.sidebar.item(index).text() == "菜单"
-    )
+    menu_index = next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == "菜单")
     dialog.sidebar.setCurrentRow(menu_index)
     dialog.resize(1600, 1000)
     dialog.show()
@@ -1929,10 +1885,7 @@ def test_menu_editor_compact_action_bar_keeps_every_button_reachable():
         editor.more_button,
     )
     assert all(button.isVisible() for button in buttons)
-    assert all(
-        button.mapTo(editor, QPoint(0, 0)).x() + button.width() <= editor.width()
-        for button in buttons
-    )
+    assert all(button.mapTo(editor, QPoint(0, 0)).x() + button.width() <= editor.width() for button in buttons)
     assert len({button.mapTo(editor, QPoint(0, 0)).y() for button in buttons}) == 3
     editor.close()
     app.processEvents()
@@ -2017,10 +1970,7 @@ def test_menu_editor_retains_but_marks_platform_unavailable_action(tmp_path, mon
     assert item is not None
     assert item.text(1) == "此平台不可用"
     assert not item.flags() & Qt.ItemFlag.ItemIsEnabled
-    assert "主动识屏" not in [
-        dialog.menu_layout_editor.preview.topLevelItem(i).text(0)
-        for i in range(dialog.menu_layout_editor.preview.topLevelItemCount())
-    ]
+    assert "主动识屏" not in [dialog.menu_layout_editor.preview.topLevelItem(i).text(0) for i in range(dialog.menu_layout_editor.preview.topLevelItemCount())]
     dialog.reject()
     app.processEvents()
 
@@ -2072,9 +2022,7 @@ def test_menu_editor_refuses_to_nest_one_submenu_inside_another():
     editor = MenuLayoutEditor(None)
     root = editor.tree.invisibleRootItem()
     source = next(
-        root.child(index)
-        for index in range(root.childCount())
-        if (root.child(index).data(0, Qt.ItemDataRole.UserRole) or {}).get("id") == "pet_controls"
+        root.child(index) for index in range(root.childCount()) if (root.child(index).data(0, Qt.ItemDataRole.UserRole) or {}).get("id") == "pet_controls"
     )
     editor.tree.setCurrentItem(source)
     editor.move_menu.aboutToShow.emit()
@@ -2254,6 +2202,8 @@ def test_settings_rejects_invalid_nested_menu_draft_before_writing(tmp_path, mon
     assert warnings and "菜单布局" in warnings[0]
     dialog.reject()
     app.processEvents()
+
+
 # --- Settings menu customization regressions (2026-09-03) ---
 
 
@@ -2267,8 +2217,12 @@ def test_settings_action_popups_share_the_modern_select_visual_tokens():
     editor = MenuLayoutEditor(None, available_actions=MENU_ACTIONS.ids)
     launcher = QuickLaunchEditor([])
     menus = [
-        editor.order_menu, editor.move_menu, editor.submenu_menu,
-        editor.customize_menu, editor.more_menu, launcher.add_menu,
+        editor.order_menu,
+        editor.move_menu,
+        editor.submenu_menu,
+        editor.customize_menu,
+        editor.more_menu,
+        launcher.add_menu,
     ]
     assert all(menu.objectName() == "SettingsPopup" for menu in menus)
     assert all("border-radius: 10px" in menu.styleSheet() for menu in menus)
@@ -2321,10 +2275,7 @@ def test_menu_editor_header_columns_are_user_resizable():
     app.processEvents()
 
     header = editor.tree.header()
-    assert all(
-        header.sectionResizeMode(index) == QHeaderView.ResizeMode.Interactive
-        for index in range(3)
-    )
+    assert all(header.sectionResizeMode(index) == QHeaderView.ResizeMode.Interactive for index in range(3))
     assert not header.sectionsMovable()
     original = editor.tree.columnWidth(0)
     header.resizeSection(0, original + 48)
@@ -2389,9 +2340,7 @@ def test_action_menu_button_matches_selector_popup_geometry_and_anchor():
     assert popup.pos() == button.mapToGlobal(QPoint(0, button.height() + 4))
     assert popup.property("settingsPopup") == selector_popup.property("settingsPopup")
     assert not any(isinstance(action, QWidgetAction) for action in selector_popup.actions())
-    assert popup.actionGeometry(popup.actions()[0]).height() == selector_popup.actionGeometry(
-        selector_popup.actions()[0]
-    ).height()
+    assert popup.actionGeometry(popup.actions()[0]).height() == selector_popup.actionGeometry(selector_popup.actions()[0]).height()
     popup.close()
     selector_popup.close()
     editor.close()
@@ -2451,16 +2400,22 @@ def test_alias_keeps_original_name_in_editor_but_runtime_uses_alias_only():
     item = editor.item_for_action("chat")
     assert item.text(0) == "和鲸鱼聊聊（AI 对话）"
     assert editor.tree.header().sectionSize(0) > editor.tree.header().sectionSize(2)
-    preview = [
-        editor.preview.topLevelItem(index).text(0)
-        for index in range(editor.preview.topLevelItemCount())
-    ]
+    preview = [editor.preview.topLevelItem(index).text(0) for index in range(editor.preview.topLevelItemCount())]
     assert "和鲸鱼聊聊" in preview
     assert item.text(0) not in preview
     menu = QMenu()
-    MENU_ACTIONS.populate(menu, Pet(), ({
-        "type": "action", "id": "chat", "alias": "和鲸鱼聊聊",
-    },), enabled_actions={"chat"})
+    MENU_ACTIONS.populate(
+        menu,
+        Pet(),
+        (
+            {
+                "type": "action",
+                "id": "chat",
+                "alias": "和鲸鱼聊聊",
+            },
+        ),
+        enabled_actions={"chat"},
+    )
     assert [action.text() for action in menu.actions()] == ["和鲸鱼聊聊"]
     editor.close()
     menu.close()
@@ -2487,7 +2442,9 @@ def test_custom_file_icon_is_validated_persisted_and_supports_fit_modes(tmp_path
     assert editor.set_item_file_icon("chat", icon_path, "contain") is True
     chat = next(node for node in editor.value()["nodes"] if node.get("id") == "chat")
     assert chat["icon"] == {
-        "kind": "file", "path": str(icon_path.resolve()), "display": "contain",
+        "kind": "file",
+        "path": str(icon_path.resolve()),
+        "display": "contain",
     }
     assert not editor.item_for_action("chat").icon(0).isNull()
     resolved = resolve_menu_layout(
@@ -2498,8 +2455,7 @@ def test_custom_file_icon_is_validated_persisted_and_supports_fit_modes(tmp_path
     resolved_chat = next(node for node in resolved.nodes if node.get("id") == "chat")
     assert resolved_chat["icon"] == chat["icon"]
     menu = QMenu()
-    MENU_ACTIONS.populate(menu, type("Pet", (), {"on_open_chat": lambda self: None})(),
-                          (resolved_chat,), enabled_actions={"chat"})
+    MENU_ACTIONS.populate(menu, type("Pet", (), {"on_open_chat": lambda self: None})(), (resolved_chat,), enabled_actions={"chat"})
     assert not menu.actions()[0].icon().isNull()
     contain = custom_file_menu_icon(menu, chat["icon"], 18).pixmap(18, 18).toImage()
     assert contain.pixelColor(9, 0).alpha() == 0
@@ -2509,7 +2465,8 @@ def test_custom_file_icon_is_validated_persisted_and_supports_fit_modes(tmp_path
     cover = custom_file_menu_icon(menu, chat["icon"], 18).pixmap(18, 18).toImage()
     assert cover.pixelColor(9, 0).alpha() > 0
     assert {action.text() for action in editor.icon_display_menu.actions()} == {
-        "完整显示", "裁切填满",
+        "完整显示",
+        "裁切填满",
     }
     editor.close()
     menu.close()
@@ -2581,11 +2538,13 @@ def test_music_align_ready_and_callback_routing(monkeypatch):
 
     ctrl = MusicLyricController(Win())
     ctrl._tracker.load(
-        [LyricLine(0.0, "A"), LyricLine(5.0, "B")], now=0.0, position=None,
+        [LyricLine(0.0, "A"), LyricLine(5.0, "B")],
+        now=0.0,
+        position=None,
     )
     pet = Pet()
     pet._music_lyric = ctrl
-    assert registry_mod._music_align_ready(pet) is True     # 本地时钟 + 有词
+    assert registry_mod._music_align_ready(pet) is True  # 本地时钟 + 有词
 
     # 报进度的播放器：位置本就跟着快进走，不该提供手动对齐
     ctrl._tracker.position(0.0, reported=1.0)
@@ -2604,14 +2563,20 @@ def test_music_align_ready_and_callback_routing(monkeypatch):
     calls: list = []
     monkeypatch.setattr(ctrl, "resync_to_start", lambda: calls.append("start") or True)
     monkeypatch.setattr(
-        ctrl, "resync_to_line", lambda d: calls.append(("line", d)) or True,
+        ctrl,
+        "resync_to_line",
+        lambda d: calls.append(("line", d)) or True,
     )
     monkeypatch.setattr(ctrl, "nudge", lambda s: calls.append(("nudge", s)) or True)
 
     for kind in ("start", "prev", "next", "back5", "fwd5"):
         assert shared_mod._align_lyric(pet, kind) is True
     assert calls == [
-        "start", ("line", -1), ("line", 1), ("nudge", -5.0), ("nudge", 5.0),
+        "start",
+        ("line", -1),
+        ("line", 1),
+        ("nudge", -5.0),
+        ("nudge", 5.0),
     ]
     assert shared_mod._align_lyric(pet, "不存在的动作") is False
     ctrl.shutdown()

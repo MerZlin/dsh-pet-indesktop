@@ -12,6 +12,7 @@ GUI 线程永不同步解码首帧（实测定案：冷路径 100-337ms 冻结�
 
 全部用事件/锁同步，不用 sleep 猜时序。
 """
+
 from __future__ import annotations
 
 import subprocess

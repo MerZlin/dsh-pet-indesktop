@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """音效配置与迁移测试、真实 dt 与长帧物理积分测试。"""
+
 import json
 from pathlib import Path
 
@@ -56,11 +57,13 @@ def test_explicit_click_sound_pack_precedence(tmp_path: Path):
     cfg_dir = root / "dsh-pet-standalone"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "config.json").write_text(
-        json.dumps({
-            "version": 4,
-            "click_sound_path": "C:/old.mp3",
-            "click_sound_pack": {"kind": "builtin", "id": "duck", "path": ""},
-        }),
+        json.dumps(
+            {
+                "version": 4,
+                "click_sound_path": "C:/old.mp3",
+                "click_sound_pack": {"kind": "builtin", "id": "duck", "path": ""},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -79,12 +82,14 @@ def test_invalid_sound_and_physics_config_normalization(tmp_path: Path):
     cfg_dir = root / "dsh-pet-standalone"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "config.json").write_text(
-        json.dumps({
-            "version": 4,
-            "click_sound_volume": "invalid",
-            "click_sound_pack": "bad_type",
-            "throw_strength": "super_crazy",
-        }),
+        json.dumps(
+            {
+                "version": 4,
+                "click_sound_volume": "invalid",
+                "click_sound_pack": "bad_type",
+                "throw_strength": "super_crazy",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -106,10 +111,18 @@ def test_throw_physics_substep_long_frame():
     class FakeScreen:
         def availableGeometry(self):
             class Geometry:
-                def left(self): return 0
-                def top(self): return 0
-                def right(self): return 1920
-                def bottom(self): return 1080
+                def left(self):
+                    return 0
+
+                def top(self):
+                    return 0
+
+                def right(self):
+                    return 1920
+
+                def bottom(self):
+                    return 1080
+
             return Geometry()
 
     class FakePetWindow:

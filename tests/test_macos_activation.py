@@ -26,14 +26,13 @@ def test_macos_dock_visibility_policy_can_be_applied():
 
 def test_macos_activation_policy_readback_is_regular_by_default():
     from PySide6.QtGui import QGuiApplication
+
     if QGuiApplication.platformName() != "cocoa":
         pytest.skip("requires the real Cocoa Qt platform plugin")
     import ctypes
     import ctypes.util
 
-    objc = ctypes.cdll.LoadLibrary(
-        ctypes.util.find_library("objc") or "/usr/lib/libobjc.A.dylib"
-    )
+    objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc") or "/usr/lib/libobjc.A.dylib")
     objc.sel_registerName.restype = ctypes.c_void_p
     objc.objc_getClass.restype = ctypes.c_void_p
     msg = objc.objc_msgSend

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """DeepSeek Harness 一键启动器测试。"""
+
 from __future__ import annotations
 
 import os
@@ -103,8 +104,7 @@ def test_supports_no_open_disk_cache(monkeypatch, tmp_path):
         raise AssertionError("缓存命中时不应再跑慢探测")
 
     # 缓存命中：probe 爆炸也不应被调用
-    cache_file.write_text(_json.dumps(
-        {"cmd": ["dsh"], "version": "0.1.1-rc.2", "no_open": True}), encoding="utf-8")
+    cache_file.write_text(_json.dumps({"cmd": ["dsh"], "version": "0.1.1-rc.2", "no_open": True}), encoding="utf-8")
     monkeypatch.setattr(hl, "_probe_no_open", _explode)
     assert hl._supports_no_open(["dsh"]) is True
 
@@ -122,8 +122,7 @@ def test_supports_no_open_disk_cache(monkeypatch, tmp_path):
     assert _json.loads(cache_file.read_text(encoding="utf-8"))["version"] == "0.1.2"
 
     # 探测失败 + 版本不匹配的旧缓存 → 兜底沿用旧答案（开机超时不再误判）
-    cache_file.write_text(_json.dumps(
-        {"cmd": ["dsh"], "version": "9.9.9", "no_open": True}), encoding="utf-8")
+    cache_file.write_text(_json.dumps({"cmd": ["dsh"], "version": "9.9.9", "no_open": True}), encoding="utf-8")
     hl._NO_OPEN_CACHE.clear()
     assert hl._supports_no_open(["dsh"]) is True
 
@@ -183,7 +182,8 @@ def test_launch_harness_no_browser_when_autostart(monkeypatch):
     monkeypatch.setattr(hl, "is_running", lambda port=None: False)
     monkeypatch.setattr(hl, "_spawn", lambda command: None)
     monkeypatch.setattr(
-        hl, "_find_launch_command",
+        hl,
+        "_find_launch_command",
         lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"],
     )
     threads = []
@@ -206,7 +206,8 @@ def test_harness_autostart_hook_gates(monkeypatch):
 
     spawned = []
     monkeypatch.setattr(
-        app_mod.threading, "Thread",
+        app_mod.threading,
+        "Thread",
         lambda target=None, daemon=None, name=None: SimpleNamespace(start=lambda: spawned.append(target)),
     )
 
@@ -254,7 +255,8 @@ def test_launch_harness_browser_ownership(monkeypatch):
 
     # 不带 --no-open：dsh 自己开浏览器，桌宠不重复打开
     monkeypatch.setattr(
-        hl, "_find_launch_command",
+        hl,
+        "_find_launch_command",
         lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080"],
     )
     status, url = hl.launch_harness()
@@ -264,7 +266,8 @@ def test_launch_harness_browser_ownership(monkeypatch):
 
     # 带 --no-open：桌宠等待就绪后打开浏览器
     monkeypatch.setattr(
-        hl, "_find_launch_command",
+        hl,
+        "_find_launch_command",
         lambda port=None: ["dsh", "web", "--host", "127.0.0.1", "--port", "38080", "--no-open"],
     )
     status, url = hl.launch_harness()

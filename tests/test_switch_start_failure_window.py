@@ -16,6 +16,7 @@ B7 复审（R2）遗留修复：
 5. Agent 联动失败 retry 绑定请求来源与目标身份：Agent 回到 idle 取消联动
    重试；无关动画的成功切换不得吞掉待重试；新联动请求覆盖旧联动重试。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -218,8 +219,13 @@ def test_close_stops_all_activity_timers(app, tmp_path):
     win = _make_win(tmp_path, lib)
     # 直接置为活跃以覆盖 closeEvent 的计时器收口面（不依赖真实鼠标/物理事件时序）
     timers = (
-        "_move_timer", "_squash_timer", "_physics_timer", "_music_sing_timer",
-        "_self_talk_timer", "_animation_gap_timer", "_switch_retry_timer",
+        "_move_timer",
+        "_squash_timer",
+        "_physics_timer",
+        "_music_sing_timer",
+        "_self_talk_timer",
+        "_animation_gap_timer",
+        "_switch_retry_timer",
         "_drag_move_timer",
     )
     for name in timers:
@@ -256,6 +262,7 @@ def test_pause_activity_drops_pending_switch_retry(app, tmp_path):
 # ============================================================================
 # issue #111：会话结束（关机/注销）时窗口层必须停止一切动画派生
 # ============================================================================
+
 
 def test_match_shutdown_freezes_window_and_stops_animation_chain(app, tmp_path):
     """会话结束时窗口冻结：动画不再切换、定时器收口、拒绝复活 reader。
@@ -373,8 +380,7 @@ def test_library_pause_warm_cancels_inflight_first_frame_warm(app, tmp_path, mon
     assert all(c.cancel_calls == 0 for c in clips)
 
     lib.pause_warm()
-    assert all(c.cancel_calls == 1 for c in clips), \
-        "pause_warm 必须取消每个已创建 clip 的在飞首帧预热"
+    assert all(c.cancel_calls == 1 for c in clips), "pause_warm 必须取消每个已创建 clip 的在飞首帧预热"
     app.processEvents()
 
 

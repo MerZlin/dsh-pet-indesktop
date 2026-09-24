@@ -18,6 +18,7 @@
 调用入口后检查「回首帧 + start + 复位」。本文件只做行为断言（不 mock 私有
 方法），抽函数前/后可比对。
 """
+
 from __future__ import annotations
 
 import random
@@ -147,6 +148,7 @@ def _make_win(tmp_path, lib):
 # 路径 1：拖拽续播（_on_anim_ended 的 drag 分支）
 # ---------------------------------------------------------------------------
 
+
 def test_drag_restart_jumps_first_frame_and_resets_ended_flag(app, tmp_path):
     """拖拽动画自然播完：回首帧 restart，且窗口侧 _ended_fired 复位。"""
     lib = FakeLibrary()
@@ -163,9 +165,7 @@ def test_drag_restart_jumps_first_frame_and_resets_ended_flag(app, tmp_path):
         assert win.anim == catalog.DRAG, "拖拽中播完必须原地续播，不推进动画链"
         assert clip.jump_calls == jumps0 + 1, "续播必须回首帧（jumpToFrame(0)）"
         assert clip.start_calls == starts0 + 1, "续播必须重新起播（start()）"
-        assert win._ended_fired is False, (
-            "续播成功后窗口侧 _ended_fired 必须复位，否则下一圈末帧永远检测不到"
-        )
+        assert win._ended_fired is False, "续播成功后窗口侧 _ended_fired 必须复位，否则下一圈末帧永远检测不到"
         assert clip._running is True
     finally:
         win.close()
@@ -186,9 +186,7 @@ def test_drag_restart_rejected_keeps_chain_advanceable(app, tmp_path):
 
         assert win._pending_switch == catalog.DRAG, "被拒必须登记待重试（原降级语义）"
         assert win._switch_retry_timer.isActive(), "被拒必须安排稍后重试"
-        assert win._ended_fired is False, (
-            "重启被拒也必须回到「末帧可再检测」，不得留下永久挡箭牌"
-        )
+        assert win._ended_fired is False, "重启被拒也必须回到「末帧可再检测」，不得留下永久挡箭牌"
     finally:
         win.close()
         app.processEvents()
@@ -198,12 +196,13 @@ def test_drag_restart_rejected_keeps_chain_advanceable(app, tmp_path):
 # 路径 2：弹射飞行续播（_on_anim_ended 的 throw 分支）
 # ---------------------------------------------------------------------------
 
+
 def test_throw_flight_restart_jumps_first_frame_and_resets_ended_flag(app, tmp_path):
     """高速飞行中悬空动画播完：原地循环（回首帧 restart + 复位 _ended_fired）。"""
     lib = FakeLibrary()
     win = _make_win(tmp_path, lib)
     try:
-        win._enter_physics_mode('throw')
+        win._enter_physics_mode("throw")
         win._phys_vel[:] = [900.0, 0.0]  # 高速段
         win._switch(catalog.DRAG)
         clip = lib.movie(catalog.DRAG)
@@ -228,7 +227,7 @@ def test_throw_flight_restart_rejected_keeps_chain_advanceable(app, tmp_path):
     lib = FakeLibrary()
     win = _make_win(tmp_path, lib)
     try:
-        win._enter_physics_mode('throw')
+        win._enter_physics_mode("throw")
         win._phys_vel[:] = [900.0, 0.0]
         win._switch(catalog.DRAG)
         lib.set_failing(catalog.DRAG, True)
@@ -295,9 +294,7 @@ def test_move_middle_loop_restart_resets_ended_flag(app, tmp_path, monkeypatch):
         assert ended == [], "中间圈不得推动画链"
         assert clip.start_calls == starts0 + 1, "中间圈必须重新 start()"
         assert clip.jump_calls == jumps0 + 1, "续圈必须回首帧（jumpToFrame(0)）"
-        assert win._ended_fired is False, (
-            "续圈后必须复位 _ended_fired，否则后续圈末帧收口被挡住（冻结）"
-        )
+        assert win._ended_fired is False, "续圈后必须复位 _ended_fired，否则后续圈末帧收口被挡住（冻结）"
 
         # 第二圈末帧：续圈分支在 _ended_fired 已被置位后仍须成立
         win._on_frame(catalog.MOVES[0], 9)
@@ -339,6 +336,7 @@ def test_move_middle_loop_restart_rejected_cancels_move(app, tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 # 单一出口守卫：三条路径都必须经由 _restart_current_clip
 # ---------------------------------------------------------------------------
+
 
 def test_move_restart_branch_reachability_is_guarded_by_ended_flag(app, tmp_path, monkeypatch):
     """记录中间圈续圈分支的可达性边界（事实钉桩，不是缺陷断言）。
@@ -395,7 +393,7 @@ def test_three_restart_paths_share_single_exit(app, tmp_path, monkeypatch):
         win._on_anim_ended(catalog.DRAG)
         win._dragging = False
         # 路径 2：弹射飞行续播
-        win._enter_physics_mode('throw')
+        win._enter_physics_mode("throw")
         win._phys_vel[:] = [900.0, 0.0]
         win._on_anim_ended(catalog.DRAG)
         # 路径 3：多圈移动中间圈续圈
@@ -413,6 +411,7 @@ def test_three_restart_paths_share_single_exit(app, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # 单一出口契约本身（抽出后的单元级；抽函数前会 skip）
 # ---------------------------------------------------------------------------
+
 
 def _restart_helper_or_skip():
     helper = getattr(PetWindow, "_restart_current_clip", None)

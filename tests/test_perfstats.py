@@ -9,6 +9,7 @@
 - window 打点：_rebuild_frame 重建/快路径与缩放段、_sync_mask 掩码段、
   paintEvent 绘制段。
 """
+
 from __future__ import annotations
 
 import json
@@ -151,7 +152,10 @@ class TestWebmClipInstrumentation:
 
         q = _FullThenRoom()
         WebMClip._stamp_source_indices(
-            iter([b"f0", b"f1"]), q, lambda: False, throttled=lambda: True,
+            iter([b"f0", b"f1"]),
+            q,
+            lambda: False,
+            throttled=lambda: True,
         )
         snap = perfstats.snapshot()
         assert [item[0] for item in q.items] == [b"f0", b"f1"]

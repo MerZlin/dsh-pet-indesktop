@@ -8,6 +8,7 @@
 2. `cfg` 缺失时按关处理（历史 `getattr(pet, "cfg", None)` 兜底语义）；
 3. 点击落到 pet 上对应的 toggle 回调，且 close_on_trigger 语义不变。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -43,14 +44,14 @@ class _Pet:
         self.festival_calls += 1
 
 
-@pytest.mark.parametrize("action_id,key,caller,on_label,off_label", [
-    ("voice_chime_toggle", "voice_chime_enabled", "voice_calls",
-     "关闭语音报时", "启用语音报时"),
-    ("festival_toggle", "festival_reminder_enabled", "festival_calls",
-     "关闭节日提醒", "启用节日提醒"),
-])
-def test_flag_toggle_spec_flips_label_and_click_calls_back(
-        app, action_id, key, caller, on_label, off_label):
+@pytest.mark.parametrize(
+    "action_id,key,caller,on_label,off_label",
+    [
+        ("voice_chime_toggle", "voice_chime_enabled", "voice_calls", "关闭语音报时", "启用语音报时"),
+        ("festival_toggle", "festival_reminder_enabled", "festival_calls", "关闭节日提醒", "启用节日提醒"),
+    ],
+)
+def test_flag_toggle_spec_flips_label_and_click_calls_back(app, action_id, key, caller, on_label, off_label):
     spec = registry_mod.MENU_ACTIONS._specs[action_id]
 
     # 关闭态 → 显示「启用 X」，点击调用回调
@@ -88,8 +89,5 @@ def test_flag_toggle_spec_tolerates_missing_config(app):
 
 def test_two_toggles_share_one_factory():
     """两个开关必须由同一工厂产出（防回潮：各自再抄一份同构实现）。"""
-    for builder in (registry_mod._build_voice_chime_toggle,
-                    registry_mod._build_festival_toggle):
-        assert builder.__qualname__.startswith("_flag_toggle_spec.<locals>"), (
-            f"{builder.__qualname__} 必须来自 _flag_toggle_spec 工厂"
-        )
+    for builder in (registry_mod._build_voice_chime_toggle, registry_mod._build_festival_toggle):
+        assert builder.__qualname__.startswith("_flag_toggle_spec.<locals>"), f"{builder.__qualname__} 必须来自 _flag_toggle_spec 工厂"

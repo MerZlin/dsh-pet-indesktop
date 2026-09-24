@@ -3,6 +3,7 @@
 
 全部不联网：快照由测试注入。
 """
+
 from __future__ import annotations
 
 from pet.agent_cost import AgentCostTracker, Snapshot, format_cost
@@ -107,7 +108,7 @@ def test_begin_clears_previous_baseline():
     t.set_baseline("claude", 10.00)
     t.finish("claude", 9.90)
 
-    t.begin("claude")                 # 新一轮，快照还没回来
+    t.begin("claude")  # 新一轮，快照还没回来
     assert t.finish("claude", 9.80) is None, "不能用上一轮的基线"
 
 
@@ -123,9 +124,9 @@ def test_set_baseline_ignored_when_not_busy():
     """查询回来时 Agent 已经结束了：不该留下孤儿基线。"""
     t = _tracker()
     t.begin("claude")
-    t.finish("claude", 9.90)          # 先结束了
-    t.set_baseline("claude", 10.00)   # 迟到的基线
-    t.begin("claude")                 # 下一轮
+    t.finish("claude", 9.90)  # 先结束了
+    t.set_baseline("claude", 10.00)  # 迟到的基线
+    t.begin("claude")  # 下一轮
     assert t.finish("claude", 9.50) is None, "迟到基线不该被下一轮复用"
 
 
@@ -170,9 +171,12 @@ def test_sequential_agents_have_no_concurrent_marker():
 def test_concurrent_flag_resets_after_all_finish():
     """全部结束后并发标志复位，下一轮串行不受上一轮影响。"""
     t = _tracker()
-    t.begin("claude"); t.begin("dsh")
-    t.set_baseline("claude", 10.0); t.set_baseline("dsh", 10.0)
-    t.finish("claude", 9.9); t.finish("dsh", 9.9)
+    t.begin("claude")
+    t.begin("dsh")
+    t.set_baseline("claude", 10.0)
+    t.set_baseline("dsh", 10.0)
+    t.finish("claude", 9.9)
+    t.finish("dsh", 9.9)
 
     t.begin("claude")
     t.set_baseline("claude", 10.0)

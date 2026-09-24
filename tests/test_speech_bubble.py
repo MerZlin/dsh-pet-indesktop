@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Speech bubble unit tests."""
+
 from __future__ import annotations
 
 import time
@@ -127,10 +128,7 @@ def test_truncate_bubble_text_limits_and_marks():
     assert truncate_bubble_text("字" * 4, 5) == "字" * 4
     # 超长：截到上限再追加标记（标记不计入上限）
     assert truncate_bubble_text("字" * 6, 5) == "字" * 5 + "…"
-    assert (
-        truncate_bubble_text("字" * 200, 150, "…（全文见聊天窗）")
-        == "字" * 150 + "…（全文见聊天窗）"
-    )
+    assert truncate_bubble_text("字" * 200, 150, "…（全文见聊天窗）") == "字" * 150 + "…（全文见聊天窗）"
     # limit <= 0 视为不限长
     assert truncate_bubble_text("字" * 10, 0) == "字" * 10
 
@@ -302,9 +300,8 @@ def test_paged_bubble_flip_fades_and_updates_dots(monkeypatch):
         # 等淡出 → 换字 → 淡入走完：轮询目标状态 + 宽预算，不猜固定时长
         # （macOS CI 上 1ms 动画的 finished 派发可能晚于固定窗口 -> 曾确定性红）。
         assert _wait_until(lambda: bubble._page_fade is None), (
-            "翻页动画未在预算内收尾："
-            f"_page_fade={bubble._page_fade!r} "
-            f"opacity={bubble._label_opacity.opacity() if bubble._label_opacity else None}")
+            f"翻页动画未在预算内收尾：_page_fade={bubble._page_fade!r} opacity={bubble._label_opacity.opacity() if bubble._label_opacity else None}"
+        )
         assert bubble.label.text() == pages[1]
         assert bubble._page_indicator.text() == page_dots(1, len(pages))
         assert bubble._label_opacity is not None
@@ -430,11 +427,7 @@ def _overflow_lines(bubble, lines) -> list[tuple[str, int, int]]:
     """返回 (行文本, 行宽度, label 宽度) 中放不进 label 的行。"""
     metrics = _rendered_metrics(bubble)
     width = bubble.label.width()
-    return [
-        (line, metrics.horizontalAdvance(line), width)
-        for line in lines
-        if metrics.horizontalAdvance(line) > width
-    ]
+    return [(line, metrics.horizontalAdvance(line), width) for line in lines if metrics.horizontalAdvance(line) > width]
 
 
 def test_displayed_lines_fit_label_rect():
@@ -546,6 +539,7 @@ def test_bubble_label_size_measures_painted_lines():
     用假的 metrics 固定度量，避免依赖平台字体：宽度必须是行宽 + 余量（而不是
     二次排版的结果），高度按所有页里最多行数算，翻页时 label 不会变。
     """
+
     class _StubMetrics:
         def __init__(self, per_char: int, spacing: int):
             self.per_char = per_char
@@ -594,6 +588,7 @@ def test_bubble_rect_for_anchor_wide_bubble_stays_on_screen():
 # 交互气泡：选项按钮不撑宽气泡，文本区宽度自适应
 # ============================================================================
 
+
 def _fake_buttons(n: int):
     """构造 n 个按钮（label + no-op callback）。"""
     return [(f"选项 {i}", lambda: None) for i in range(n)]
@@ -616,13 +611,14 @@ def test_interactive_many_buttons_does_not_stretch_width():
 
     # 带 8 个按钮的交互气泡：宽度不应显著超过纯文本气泡
     bubble.show_text(
-        text, QRect(0, 0, 120, 120), 3200, sticky=True,
+        text,
+        QRect(0, 0, 120, 120),
+        3200,
+        sticky=True,
         buttons=_fake_buttons(8),
     )
     # 气泡宽度有上限（不应被 8 个按钮总宽横向撑开）；允许小幅放宽容纳按钮行
-    assert bubble.width() <= max(text_width, 320) + 4, (
-        f"交互气泡宽度 {bubble.width()} 不应远大于纯文本宽度 {text_width}"
-    )
+    assert bubble.width() <= max(text_width, 320) + 4, f"交互气泡宽度 {bubble.width()} 不应远大于纯文本宽度 {text_width}"
 
 
 def test_interactive_label_width_follows_bubble():
@@ -630,7 +626,10 @@ def test_interactive_label_width_follows_bubble():
     _get_app()
     bubble = PetSpeechBubble()
     bubble.show_text(
-        "短文本", QRect(0, 0, 120, 120), 3200, sticky=True,
+        "短文本",
+        QRect(0, 0, 120, 120),
+        3200,
+        sticky=True,
         buttons=_fake_buttons(2),
     )
     assert bubble.label.width() > 0
@@ -667,7 +666,6 @@ def test_interactive_long_option_stays_inside_bubble():
     assert button.geometry().right() <= row.width()
 
 
-
 def test_lyric_width_lock_reuses_first_line_column():
     """歌词锁宽：同首歌后续长句必须沿用第一句的列宽，不逐句改宽。
 
@@ -683,9 +681,7 @@ def test_lyric_width_lock_reuses_first_line_column():
     first_width = bubble.label.width()
     # 同首歌后续长句（锁宽）：必须沿用第一句的宽度
     bubble.show_text("这是一句明显更长的歌词" * 6, anchor, 5000, subtitle="歌名", title_first=True, width_locked=True)
-    assert bubble.label.width() == first_width, (
-        f"锁宽后长句不应改宽：首句 {first_width}px vs 长句 {bubble.label.width()}px"
-    )
+    assert bubble.label.width() == first_width, f"锁宽后长句不应改宽：首句 {first_width}px vs 长句 {bubble.label.width()}px"
     bubble.dismiss()
 
 
@@ -708,9 +704,7 @@ def test_lyric_height_lock_ratchet_keeps_top_edge_stable():
     assert multi_line_height > one_line_height
     # 再换回短句（锁宽）：高度必须保持涨到的值，不许缩回一行高
     bubble.show_text("短句歌词", anchor, 5000, subtitle="歌名", title_first=True, width_locked=True)
-    assert bubble.label.height() == multi_line_height, (
-        f"锁高后短句不应缩高：多行 {multi_line_height}px vs 短句 {bubble.label.height()}px"
-    )
+    assert bubble.label.height() == multi_line_height, f"锁高后短句不应缩高：多行 {multi_line_height}px vs 短句 {bubble.label.height()}px"
     bubble.dismiss()
 
 
@@ -776,11 +770,8 @@ def test_bubble_tail_computed_for_target_position_not_current():
     assert anim is not None
     anim.setCurrentTime(anim.duration())  # 直接到终点
     # 尾巴尖 x 应等于锚点中心在气泡局部坐标里的位置（夹在 20..w-20）
-    expected = min(max(anchor.translated(60, 0).center().x() - bubble.pos().x(), 20),
-                   bubble.width() - 20)
-    assert abs(bubble._tail_tip.x() - expected) < 1.0, (
-        f"尾巴应按目标落点算：期望 {expected}，实际 {bubble._tail_tip.x()}"
-    )
+    expected = min(max(anchor.translated(60, 0).center().x() - bubble.pos().x(), 20), bubble.width() - 20)
+    assert abs(bubble._tail_tip.x() - expected) < 1.0, f"尾巴应按目标落点算：期望 {expected}，实际 {bubble._tail_tip.x()}"
     bubble.dismiss()
 
 
@@ -795,6 +786,7 @@ def test_bubble_reshow_after_dismiss_not_dragged_back():
     bubble.show_text("第三句", QRect(100, 600, 120, 120), 5000)
     assert bubble._pos_anim.state() == QPropertyAnimation.State.Stopped
     from pet.speech_bubble_text import bubble_rect_for_anchor
+
     # 位置就是 C 的落点，不再回 B
     QTest.qWait(350)
     assert bubble._pos_anim.state() == QPropertyAnimation.State.Stopped

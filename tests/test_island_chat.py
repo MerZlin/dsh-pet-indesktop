@@ -5,6 +5,7 @@
 IslandChatBubble 锚定定位与预览态、AppShell 接线（可用性判定、
 点击开关切换、显示桌宠、回复到达自动弹出与在场守卫）。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,9 +28,16 @@ def _qapp() -> QApplication:
 def _island(tmp_path: Path, **overrides) -> DynamicIsland:
     cfg = Config(base=tmp_path)
     data = {
-        "enabled": True, "show_icon": True, "show_name": True,
-        "show_info": True, "info_mode": "time", "custom_text": "",
-        "show_status": True, "style": "dark", "x": 400, "y": 300,
+        "enabled": True,
+        "show_icon": True,
+        "show_name": True,
+        "show_info": True,
+        "info_mode": "time",
+        "custom_text": "",
+        "show_status": True,
+        "style": "dark",
+        "x": 400,
+        "y": 300,
     }
     data.update(overrides)
     cfg.set("dynamic_island", data)
@@ -42,12 +50,12 @@ def _click(widget) -> None:
 
     center = widget.geometry().center()
     local = widget.mapFromGlobal(center)
-    press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(local), QPointF(center),
-                        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
-                        Qt.KeyboardModifier.NoModifier)
-    release = QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(local), QPointF(center),
-                          Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
-                          Qt.KeyboardModifier.NoModifier)
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress, QPointF(local), QPointF(center), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    )
+    release = QMouseEvent(
+        QEvent.Type.MouseButtonRelease, QPointF(local), QPointF(center), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
+    )
     widget.mousePressEvent(press)
     widget.mouseReleaseEvent(release)
 
@@ -195,10 +203,15 @@ def test_island_chat_show_pet_button(tmp_path):
 # ------------------------------------------------------------ AppShell 接线
 def _make_shell(tmp_path: Path, **island_cfg) -> AppShell:
     cfg = Config(base=tmp_path)
-    cfg.set("dynamic_island", {
-        "enabled": True, "x": 400, "y": 300,
-        **island_cfg,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "enabled": True,
+            "x": 400,
+            "y": 300,
+            **island_cfg,
+        },
+    )
     shell = AppShell.__new__(AppShell)
     shell.config = cfg
     shell.island = None
@@ -277,8 +290,8 @@ def test_shell_click_when_no_chat_reshows_pets(tmp_path):
     shell = _make_shell(tmp_path)
     try:
         shell._sync_dynamic_island()
-        shell.island.set_pet_visible(False)   # 桌宠已隐藏（隐藏时由 on_hidden 同步）
-        shell.enable_chat = False             # 无 chat 的打包变体
+        shell.island.set_pet_visible(False)  # 桌宠已隐藏（隐藏时由 on_hidden 同步）
+        shell.enable_chat = False  # 无 chat 的打包变体
         assert shell._island_chat_available() is False
 
         shell._chat_from_island()
@@ -412,8 +425,7 @@ def test_island_feedback_bubble_redirect_gates(tmp_path):
         shell.island = island
         shell.enable_chat = True
 
-        assert shell._island_feedback_bubble(
-            "DSH 开始干活啦～", subtitle="DSH", duration_ms=4500) is True
+        assert shell._island_feedback_bubble("DSH 开始干活啦～", subtitle="DSH", duration_ms=4500) is True
         bubble = shell.island_chat
         assert bubble is not None and bubble.isVisible()
         assert "开始干活啦" in bubble.output.text()

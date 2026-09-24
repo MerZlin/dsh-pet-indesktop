@@ -6,6 +6,7 @@ clip.warm_first_frame() —— 碰撞风暴下每次撞飞进 throw 都同步拉
 ffmpeg（~100ms/只），多鱼互撞时 GUI 看门狗连续抓 200ms+ 卡顿。
 修复后预热在 daemon 线程执行；这些测试锁定该语义（改回同步即判红）。
 """
+
 from __future__ import annotations
 
 import threading
@@ -44,13 +45,13 @@ def test_warm_landing_idles_runs_off_calling_thread():
     PetWindow._warm_landing_idles(_stub_win(clips))
 
     import time
+
     deadline = time.monotonic() + 2.0
     while len(sink) < 2 and time.monotonic() < deadline:
         time.sleep(0.005)
 
     assert len(sink) == 2, "所有 idle 首帧都应被预热"
-    assert all(ident != main_ident for _name, ident in sink), \
-        "warm_first_frame 绝不允许在 GUI（调用）线程同步执行"
+    assert all(ident != main_ident for _name, ident in sink), "warm_first_frame 绝不允许在 GUI（调用）线程同步执行"
 
 
 def test_warm_landing_idles_returns_immediately_when_decode_blocks():
@@ -59,6 +60,7 @@ def test_warm_landing_idles_returns_immediately_when_decode_blocks():
     clips = {n: _FakeClip(n, sink, block_event=block) for n in ("idle_a",)}
 
     import time
+
     t0 = time.monotonic()
     PetWindow._warm_landing_idles(_stub_win(clips))
     elapsed = time.monotonic() - t0
@@ -77,6 +79,7 @@ def test_warm_landing_idles_tolerates_clip_errors():
     PetWindow._warm_landing_idles(_stub_win(clips))
 
     import time
+
     deadline = time.monotonic() + 2.0
     while not any(n == "good" for n, _ in sink) and time.monotonic() < deadline:
         time.sleep(0.005)
@@ -84,9 +87,7 @@ def test_warm_landing_idles_tolerates_clip_errors():
 
 
 def test_warm_landing_idles_no_idles_noop():
-    win = SimpleNamespace(lib=SimpleNamespace(
-        movie=lambda name: (_ for _ in ()).throw(AssertionError("不应解析 clip"))),
-        idles=[])
+    win = SimpleNamespace(lib=SimpleNamespace(movie=lambda name: (_ for _ in ()).throw(AssertionError("不应解析 clip"))), idles=[])
     PetWindow._warm_landing_idles(win)  # 不抛异常即通过
 
 
@@ -95,6 +96,7 @@ def test_warm_landing_idles_no_idles_noop():
 # 浪涌逐出（风暴期仍有 105~399ms 落地冷解码卡顿）。pin 只活起飞→落地窗口。
 # 两类 pin 必须分标志：library 常驻（clicks/turns/drag 的 _ffr_pinned）永不
 # 来摘，而 idle 池可与它在同一 clip 上重叠（catalog 允许同一文件多分类）。
+
 
 def _clip_with_pin(name, sink=None):
     clip = _FakeClip(name, sink if sink is not None else [])
@@ -108,14 +110,11 @@ def test_takeoff_pins_landing_idles_and_landing_unpins():
     win = _stub_win(clips)
 
     PetWindow._warm_landing_idles(win)
-    assert all(c._ffr_landing_pinned for c in clips.values()), \
-        "起飞必须把落地 idle 首帧打进飞行期 pin（防飞行途中被逐出）"
-    assert not any(c._ffr_pinned for c in clips.values()), \
-        "飞行期 pin 不得复用 library 常驻标志 _ffr_pinned"
+    assert all(c._ffr_landing_pinned for c in clips.values()), "起飞必须把落地 idle 首帧打进飞行期 pin（防飞行途中被逐出）"
+    assert not any(c._ffr_pinned for c in clips.values()), "飞行期 pin 不得复用 library 常驻标志 _ffr_pinned"
 
     PetWindow._unpin_landing_idles(win)
-    assert not any(c._ffr_landing_pinned for c in clips.values()), \
-        "落地/打断后必须摘掉飞行期 pin（常驻内存零增长）"
+    assert not any(c._ffr_landing_pinned for c in clips.values()), "落地/打断后必须摘掉飞行期 pin（常驻内存零增长）"
 
 
 def test_landing_unpin_keeps_library_resident_pin():
@@ -131,16 +130,13 @@ def test_landing_unpin_keeps_library_resident_pin():
     PetWindow._warm_landing_idles(win)
     PetWindow._unpin_landing_idles(win)
 
-    assert resident._ffr_pinned is True, \
-        "library 常驻保护绝不能被落地摘 pin 顺手摘掉（点击/拖拽首帧会重新冷解码）"
+    assert resident._ffr_pinned is True, "library 常驻保护绝不能被落地摘 pin 顺手摘掉（点击/拖拽首帧会重新冷解码）"
     assert resident._ffr_landing_pinned is False, "飞行期 pin 仍须摘除"
 
 
 def test_unpin_landing_idles_tolerates_broken_lib():
     # 库已销毁/解析失败：摘 pin 绝不抛出席卷调用方
-    win = SimpleNamespace(
-        lib=SimpleNamespace(movie=lambda name: (_ for _ in ()).throw(RuntimeError())),
-        idles=["x"])
+    win = SimpleNamespace(lib=SimpleNamespace(movie=lambda name: (_ for _ in ()).throw(RuntimeError())), idles=["x"])
     PetWindow._unpin_landing_idles(win)
     win2 = SimpleNamespace(lib=None, idles=["x"])
     PetWindow._unpin_landing_idles(win2)
@@ -167,8 +163,7 @@ def test_ffr_evict_respects_late_pin():
         pinned_victim = _Victim(**{flag: True})
         plain_victim = _Victim()
         webm_clip._ffr_evict([(pinned_victim, 7), (plain_victim, 7)])
-        assert pinned_victim._first_image is not None, \
-            f"被 {flag} 保护的首帧绝不可逐出"
+        assert pinned_victim._first_image is not None, f"被 {flag} 保护的首帧绝不可逐出"
         assert plain_victim._first_image is None, "未 pin 的照常逐出（防回归放水）"
 
 

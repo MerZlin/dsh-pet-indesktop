@@ -84,12 +84,8 @@ def test_cleanup_stale_entries_removes_only_missing_paths(monkeypatch, tmp_path)
     missing_exe = missing_dir / "dsh-pet.exe"
 
     fake.values = {
-        "dsh-pet-standalone-webm": (
-            f'cmd /c start "" /D "{existing_dir}" "{existing_exe}"'
-        ),
-        "dsh-pet-standalone-webm-chat": (
-            f'cmd /c start "" /D "{missing_dir}" "{missing_exe}"'
-        ),
+        "dsh-pet-standalone-webm": (f'cmd /c start "" /D "{existing_dir}" "{existing_exe}"'),
+        "dsh-pet-standalone-webm-chat": (f'cmd /c start "" /D "{missing_dir}" "{missing_exe}"'),
     }
 
     removed = autostart_mod.cleanup_stale_entries()

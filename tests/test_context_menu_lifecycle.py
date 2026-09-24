@@ -6,6 +6,7 @@
 context：窗口/菜单先销毁时，未绑定的回调会继续触发并访问已删 C++ 对象
 （GUI 线程 RuntimeError traceback）。
 """
+
 from __future__ import annotations
 
 import sys
@@ -61,9 +62,7 @@ class FakeClip(QObject):
 
 class FakeLibrary:
     def __init__(self):
-        self._clips = {n: FakeClip() for n in
-                       [catalog.IDLE, catalog.TURN, catalog.MOVES[0],
-                        catalog.CLICKS[0], catalog.DRAG]}
+        self._clips = {n: FakeClip() for n in [catalog.IDLE, catalog.TURN, catalog.MOVES[0], catalog.CLICKS[0], catalog.DRAG]}
         self.manifest = {}
         self.folder_map = {}
         self.folder_files = None
@@ -124,8 +123,8 @@ def _pump(app, seconds):
 def test_delete_when_idle_timer_drops_after_menu_destroyed(app, tmp_path, monkeypatch):
     lib = FakeLibrary()
     win = PetWindow(lib, Config(base=tmp_path))
-    monkeypatch.setattr(win, '_screen_available', lambda: _Screen())
-    monkeypatch.setattr(win, '_rebuild_frame', lambda: None)
+    monkeypatch.setattr(win, "_screen_available", lambda: _Screen())
+    monkeypatch.setattr(win, "_rebuild_frame", lambda: None)
 
     pool = _SlowPool()
     built: list[QMenu] = []
@@ -135,12 +134,11 @@ def test_delete_when_idle_timer_drops_after_menu_destroyed(app, tmp_path, monkey
         submenu._animation_icon_pool = pool
         built.append(menu)
 
-    monkeypatch.setattr(window_mod, '_populate_context_menu', fake_populate)
-    monkeypatch.setattr(PetWindow, '_exec_context_menu', lambda self, menu, pos: None)
+    monkeypatch.setattr(window_mod, "_populate_context_menu", fake_populate)
+    monkeypatch.setattr(PetWindow, "_exec_context_menu", lambda self, menu, pos: None)
 
     errors: list[BaseException] = []
-    monkeypatch.setattr(sys, 'excepthook',
-                        lambda et, ev, tb: errors.append(ev))
+    monkeypatch.setattr(sys, "excepthook", lambda et, ev, tb: errors.append(ev))
 
     win._show_context_menu(QPoint(100, 100))
     assert built, "菜单必须经 populate 构建"

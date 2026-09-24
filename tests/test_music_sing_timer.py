@@ -6,6 +6,7 @@
 要求：`_music_sing_enabled` 为 False 时定时器必须停止，True 才启动；
 设置切换即时生效；隐藏停止、恢复显示按当前开关状态恢复。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -25,6 +26,7 @@ def app():
 def _no_real_music_detection(monkeypatch):
     """测试环境不读真实音频峰值；默认按“没有在放音乐”处理。"""
     import pet.music_detect as music_detect
+
     monkeypatch.setattr(music_detect, "is_music_playing", lambda: False)
 
 
@@ -40,6 +42,7 @@ class SingingLibrary(FakeLibrary):
     def __init__(self):
         super().__init__()
         from tests.test_window_pause import FakeClip
+
         self._clips[SING_ANIM] = FakeClip()
 
     def names(self):

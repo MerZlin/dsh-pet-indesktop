@@ -4,6 +4,7 @@
 背景：桌宠隐藏（托盘隐藏 / 全屏自动隐藏）后仍会继续 24fps 解码与重建
 mask，多开时属于纯白烧。此测试锁定 hideEvent 暂停、showEvent 恢复的行为。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -203,7 +204,7 @@ def test_disable_auto_hide_restores_pet(app, tmp_path):
     assert win._auto_hidden is False
     assert win._hidden_paused is False
     assert win.isVisible()
-    assert win.cfg.get('auto_hide_fullscreen') is False
+    assert win.cfg.get("auto_hide_fullscreen") is False
 
     win.close()
     app.processEvents()

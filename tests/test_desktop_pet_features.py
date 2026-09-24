@@ -29,11 +29,17 @@ def test_self_talk_bubble_presets_have_distinct_visuals_and_safe_positions():
     )
 
     assert list(BUBBLE_STYLE_PRESETS) == [
-        "classic_top", "paper_left", "glass_right", "soft_blue_top", "breath_bubble",
+        "classic_top",
+        "paper_left",
+        "glass_right",
+        "soft_blue_top",
+        "breath_bubble",
     ]
     assert len({preset["background"] for preset in BUBBLE_STYLE_PRESETS.values()}) == 5
     assert {preset["placement"] for preset in BUBBLE_STYLE_PRESETS.values()} == {
-        "top", "top_left", "top_right",
+        "top",
+        "top_left",
+        "top_right",
     }
     available = QRect(0, 0, 1440, 900)
     pet = QRect(620, 420, 220, 260)
@@ -70,10 +76,7 @@ def test_breath_bubble_uses_organic_water_shape_and_detached_trailing_bubbles():
     def edge_distance(first, second):
         first_points = [first.pointAtPercent(index / 160) for index in range(161)]
         second_points = [second.pointAtPercent(index / 160) for index in range(161)]
-        return min(
-            math.hypot(left.x() - right.x(), left.y() - right.y())
-            for left in first_points for right in second_points
-        )
+        return min(math.hypot(left.x() - right.x(), left.y() - right.y()) for left in first_points for right in second_points)
 
     first_gap = edge_distance(bubble._main_bubble_path, bubble._breath_paths[0])
     second_gap = edge_distance(bubble._breath_paths[0], bubble._breath_paths[1])
@@ -172,7 +175,9 @@ def test_breath_bubble_keeps_its_shape_but_adapts_to_text_and_image_content(tmp_
 
     bubble.show_text(
         "今天也要认真工作，完成任务后一起去看看星星和蓝色的大海吧。",
-        pet, 5000, pet_scale=0.72,
+        pet,
+        5000,
+        pet_scale=0.72,
     )
     app.processEvents()
     assert bubble.width() > short_size.width()
@@ -200,9 +205,7 @@ def test_breath_bubble_image_is_clipped_and_painted_below_water_details(tmp_path
     image = tmp_path / "square-content.png"
     Image.new("RGB", (300, 300), "red").save(image)
     bubble = PetSpeechBubble(style_id="breath_bubble")
-    assert bubble.show_image(
-        image, QRect(420, 460, 220, 260), 5000, pet_scale=0.72
-    )
+    assert bubble.show_image(image, QRect(420, 460, 220, 260), 5000, pet_scale=0.72)
     app.processEvents()
 
     # A child QLabel paints after the parent and used to cover the water,
@@ -210,12 +213,8 @@ def test_breath_bubble_image_is_clipped_and_painted_below_water_details(tmp_path
     assert bubble.label.pixmap().isNull()
     assert not bubble._breath_image_rect.isEmpty()
     assert not bubble._breath_image_clip_path.isEmpty()
-    assert bubble._breath_image_clip_path.contains(
-        QPointF(bubble._breath_image_rect.center())
-    )
-    assert not bubble._breath_image_clip_path.contains(
-        QPointF(bubble._breath_image_rect.topLeft())
-    )
+    assert bubble._breath_image_clip_path.contains(QPointF(bubble._breath_image_rect.center()))
+    assert not bubble._breath_image_clip_path.contains(QPointF(bubble._breath_image_rect.topLeft()))
     bubble.close()
     app.processEvents()
 
@@ -235,9 +234,7 @@ def test_breath_image_position_uses_actual_window_size_not_hidden_label_hint(tmp
     assert bubble.show_image(image, anchor, 5000, pet_scale=0.72)
     app.processEvents()
     available = app.primaryScreen().availableGeometry()
-    expected = bubble_rect_for_anchor(
-        anchor, bubble.size(), available, bubble._preset["placement"]
-    )
+    expected = bubble_rect_for_anchor(anchor, bubble.size(), available, bubble._preset["placement"])
     assert bubble.sizeHint() != bubble.size()
     assert bubble.x() == expected.x()
     bubble.close()
@@ -407,8 +404,10 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
     app = QApplication.instance() or QApplication([])
     bubble = PetSpeechBubble(style_id="breath_bubble")
     assert bubble.show_image(
-        image_dir / "one.png", QRect(420, 460, 220, 260),
-        5000, pet_scale=0.72,
+        image_dir / "one.png",
+        QRect(420, 460, 220, 260),
+        5000,
+        pet_scale=0.72,
     )
     app.processEvents()
     assert not bubble._source_pixmap.isNull()
@@ -481,6 +480,7 @@ def test_self_talk_scheduling_and_random_talk_dispatch(tmp_path, monkeypatch):
     image_dir.mkdir()
     # _show_random_self_talk 会惰性剔除不存在的图片文件——必须有真实图片
     from PIL import Image
+
     Image.new("RGB", (20, 10), "blue").save(image_dir / "one.png")
 
     starts = []
@@ -507,9 +507,7 @@ def test_self_talk_scheduling_and_random_talk_dispatch(tmp_path, monkeypatch):
 
         def _show_self_talk_text(self, text):
             # 文本分支最终落到窗口的 _show_self_talk_text（真实实现见 window_alerts）
-            return self._speech_bubble.show_text(
-                text, QRect(10, 20, 180, 240), 7500, pet_scale=self.scale
-            )
+            return self._speech_bubble.show_text(text, QRect(10, 20, 180, 240), 7500, pet_scale=self.scale)
 
     monkeypatch.setattr("pet.window.random.uniform", lambda *_: 5.0)
     PetWindow._schedule_self_talk(FakePet(), after_display=True)
@@ -806,12 +804,7 @@ def test_pet_avatar_menu_icon_fills_native_slot_and_stays_centered(monkeypatch):
     assert pixmap.height() / dpr == native_size
     assert icon.availableSizes()[0].width() / dpr == native_size
     # Inspect actual non-transparent pixels, not merely the QImage canvas.
-    points = [
-        (x, y)
-        for y in range(pixmap.height())
-        for x in range(pixmap.width())
-        if pixmap.toImage().pixelColor(x, y).alpha() > 0
-    ]
+    points = [(x, y) for y in range(pixmap.height()) for x in range(pixmap.width()) if pixmap.toImage().pixelColor(x, y).alpha() > 0]
     left, right = min(x for x, _ in points), max(x for x, _ in points)
     top, bottom = min(y for _, y in points), max(y for _, y in points)
     assert (bottom - top + 1) / dpr >= native_size * 0.8
@@ -910,10 +903,12 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     expected_labels.append("待办提醒")  # 待办管理面板入口（所有平台）
     # 立即报时/语音报时开关/今日节日/节日提醒开关：2026-09-19 起默认模板
     # visible: false，不上默认菜单（用户可在菜单编辑器加回）
-    expected_labels.extend([
-        "桌宠设置",
-        "退出",
-    ])
+    expected_labels.extend(
+        [
+            "桌宠设置",
+            "退出",
+        ]
+    )
     assert labels == expected_labels
     animation_action = next(action for action in menu.actions() if action.text() == "播放动画")
     assert animation_action.menu() is not None
@@ -966,6 +961,7 @@ def test_pure_pet_context_menu_keeps_web_but_hides_harness():
     app = QApplication.instance() or QApplication([])
     menu = QMenu()
     populate_context_menu(menu, FakePet())
+
     def labels_in(menu):
         labels = []
         for action in menu.actions():
@@ -1421,11 +1417,21 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     assert "background: #f7f7f8" in dialog.styleSheet()
     section_titles = [label.text() for label in dialog.findChildren(settings_mod.QLabel, "sectionTitle")]
     assert {
-        "应用启动", "窗口与系统", "动画与移动", "点击反馈", "自言自语",
-        "显示", "菜单外观", "对话窗口", "已配置应用", "内容与布局",
-        "模型与连接", "视觉能力",
+        "应用启动",
+        "窗口与系统",
+        "动画与移动",
+        "点击反馈",
+        "自言自语",
+        "显示",
+        "菜单外观",
+        "对话窗口",
+        "已配置应用",
+        "内容与布局",
+        "模型与连接",
+        "视觉能力",
         # 「语音」总域只收 TTS 类设置（2026-09-17 定稿口径）：语音报时 + 节日提醒
-        "语音报时", "节日提醒",
+        "语音报时",
+        "节日提醒",
     }.issubset(set(section_titles))
     advanced_titles = [
         button.text()
@@ -1434,9 +1440,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
             "advancedSectionToggle",
         )
     ]
-    assert {"生成参数（高级）", "碰撞参数（高级）", "高级配色"}.issubset(
-        set(advanced_titles)
-    )
+    assert {"生成参数（高级）", "碰撞参数（高级）", "高级配色"}.issubset(set(advanced_titles))
     assert {"浅色主题", "深色主题", "彩蛋入口"}.issubset(set(section_titles))
     scale_row = dialog.findChild(settings_mod.QWidget, "settingRow_scale")
     assert scale_row is not None
@@ -1499,10 +1503,7 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     # 「文案风格与模板」组；互动域不再持有 dialogue 行（见 test_express_style_rows_move_to_agent_domain）。
     assert page_index(expression_row) == sidebar_index("自动化与联动")
     dialog.show()
-    dialogue_page_index = next(
-        index for index in range(dialog.sidebar.count())
-        if dialog.sidebar.item(index).text() == "互动"
-    )
+    dialogue_page_index = next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == "互动")
     dialog.pages.widget(dialogue_page_index).findChild(settings_mod.QScrollArea, "settingsScroll").ensureWidgetVisible(texts_row)
     app.processEvents()
     label = texts_row.findChild(settings_mod.QLabel, "settingLabel")
@@ -1555,8 +1556,12 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
     self_talk_rows = [
         dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
         for key in (
-            "self_talk_duration", "self_talk_min", "self_talk_max",
-            "self_talk_texts", "self_talk_images", "self_talk_image_scale",
+            "self_talk_duration",
+            "self_talk_min",
+            "self_talk_max",
+            "self_talk_texts",
+            "self_talk_images",
+            "self_talk_image_scale",
             "self_talk_image_chance",
         )
     ]
@@ -1643,13 +1648,21 @@ def test_modern_settings_toggle_dependencies_hide_complete_setting_groups(tmp_pa
         return result
 
     island_children = [
-        row(key) for key in (
-            "dynamic_island_icon", "dynamic_island_name", "dynamic_island_info",
-            "dynamic_island_status", "dynamic_island_info_mode",
-            "dynamic_island_style", "dynamic_island_opacity",
-            "dynamic_island_accent", "dynamic_island_icon_value",
-            "dynamic_island_custom_text", "dynamic_island_click_action",
-            "dynamic_island_event_effects", "dynamic_island_edge_dock",
+        row(key)
+        for key in (
+            "dynamic_island_icon",
+            "dynamic_island_name",
+            "dynamic_island_info",
+            "dynamic_island_status",
+            "dynamic_island_info_mode",
+            "dynamic_island_style",
+            "dynamic_island_opacity",
+            "dynamic_island_accent",
+            "dynamic_island_icon_value",
+            "dynamic_island_custom_text",
+            "dynamic_island_click_action",
+            "dynamic_island_event_effects",
+            "dynamic_island_edge_dock",
             "dynamic_island_collision",
         )
     ]
@@ -1674,9 +1687,14 @@ def test_modern_settings_toggle_dependencies_hide_complete_setting_groups(tmp_pa
     assert all(not child.isHidden() for child in egg_children)
 
     collision_children = [
-        row(key) for key in (
-            "collision_sound_enabled", "collision_restitution", "collision_friction",
-            "collision_mass_scale", "collision_impulse_cap", "collision_sound_volume",
+        row(key)
+        for key in (
+            "collision_sound_enabled",
+            "collision_restitution",
+            "collision_friction",
+            "collision_mass_scale",
+            "collision_impulse_cap",
+            "collision_sound_volume",
         )
     ]
     collision_advanced_section = row("collision_restitution").parentWidget().parentWidget()
@@ -1710,11 +1728,20 @@ def test_windows_proactive_master_and_idle_toggles_hide_dependent_rows(tmp_path,
         return result
 
     child_keys = (
-        "proactive_dry_run", "proactive_preset", "proactive_dwell",
-        "proactive_cooldown", "proactive_min_interval", "proactive_daily_cap",
-        "proactive_require_idle", "proactive_idle_seconds", "proactive_through",
-        "proactive_pre_cue", "proactive_free", "proactive_whitelist",
-        "proactive_whitelist_add", "proactive_memory_clear",
+        "proactive_dry_run",
+        "proactive_preset",
+        "proactive_dwell",
+        "proactive_cooldown",
+        "proactive_min_interval",
+        "proactive_daily_cap",
+        "proactive_require_idle",
+        "proactive_idle_seconds",
+        "proactive_through",
+        "proactive_pre_cue",
+        "proactive_free",
+        "proactive_whitelist",
+        "proactive_whitelist_add",
+        "proactive_memory_clear",
     )
     dialog.pro_enabled_check.setChecked(False)
     assert all(row(key).isHidden() for key in child_keys)
@@ -1741,17 +1768,15 @@ def test_chat_appearance_options_follow_selected_window_and_persist_independentl
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
 
     assert [dialog.ai_page.chat_ui_style.itemText(index) for index in range(2)] == [
-        "肥鱼版 DeepSeek", "肥鱼牌小手机",
+        "肥鱼版 DeepSeek",
+        "肥鱼牌小手机",
     ]
     assert dialog.ai_page.chat_ui_style.width() >= 180
     window_row = dialog.findChild(settings_mod.SettingRow, "settingRow_chat_ui_style")
     assert "宽屏现代体验" in window_row.hint_label.text()
     assert "紧凑经典体验" in window_row.hint_label.text()
     # 内置主题两种风格都可选（肥鱼版 DeepSeek 与肥鱼牌小手机一致）
-    modern_options = [
-        dialog.ai_page.background_select.itemText(index)
-        for index in range(dialog.ai_page.background_select.count())
-    ]
+    modern_options = [dialog.ai_page.background_select.itemText(index) for index in range(dialog.ai_page.background_select.count())]
     assert modern_options[0] == "纯色背景"
     assert modern_options[-1] == "自定义图片"
     assert len(modern_options) > 2
@@ -1761,10 +1786,7 @@ def test_chat_appearance_options_follow_selected_window_and_persist_independentl
     assert fill_row.isHidden()
 
     dialog.ai_page.chat_ui_style.setCurrentData("classic")
-    classic_options = [
-        dialog.ai_page.background_select.itemText(index)
-        for index in range(dialog.ai_page.background_select.count())
-    ]
+    classic_options = [dialog.ai_page.background_select.itemText(index) for index in range(dialog.ai_page.background_select.count())]
     assert classic_options[0] == "纯色背景"
     assert classic_options[-1] == "自定义图片"
     assert len(classic_options) > 2
@@ -1799,10 +1821,12 @@ def test_quick_launch_editor_drag_order_and_checked_removal_drive_saved_menu_ord
     import pet.modern_settings_dialog as settings_mod
 
     app = QApplication.instance() or QApplication([])
-    editor = settings_mod.QuickLaunchEditor([
-        {"name": "A", "path": "/Applications/A.app", "kind": "application"},
-        {"name": "B", "path": "/Applications/B.app", "kind": "application"},
-    ])
+    editor = settings_mod.QuickLaunchEditor(
+        [
+            {"name": "A", "path": "/Applications/A.app", "kind": "application"},
+            {"name": "B", "path": "/Applications/B.app", "kind": "application"},
+        ]
+    )
     moved = editor.list.takeItem(1)
     editor.list.insertItem(0, moved)
     assert [item["name"] for item in editor.apps()] == ["B", "A"]
@@ -1819,10 +1843,12 @@ def test_quick_launch_editor_uses_content_sized_rows_and_grouped_add_menu():
     import pet.modern_settings_dialog as settings_mod
 
     app = QApplication.instance() or QApplication([])
-    editor = settings_mod.QuickLaunchEditor([
-        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
-        {"name": "Finder", "path": "/System/Library/CoreServices/Finder.app", "kind": "application"},
-    ])
+    editor = settings_mod.QuickLaunchEditor(
+        [
+            {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+            {"name": "Finder", "path": "/System/Library/CoreServices/Finder.app", "kind": "application"},
+        ]
+    )
     editor.resize(760, 300)
     editor.show()
     app.processEvents()
@@ -1830,7 +1856,8 @@ def test_quick_launch_editor_uses_content_sized_rows_and_grouped_add_menu():
     assert editor.count_label.text() == "2 个快捷项"
     assert editor.add_button.text() == "添加"
     assert [action.text() for action in editor.add_button.popupMenu().actions()] == [
-        "选择应用…", "添加默认浏览器",
+        "选择应用…",
+        "添加默认浏览器",
     ]
     assert editor.list.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
     assert editor.list.height() <= 124
@@ -1853,9 +1880,11 @@ def test_quick_launch_editor_collapses_to_a_compact_empty_state_after_last_remov
     import pet.modern_settings_dialog as settings_mod
 
     app = QApplication.instance() or QApplication([])
-    editor = settings_mod.QuickLaunchEditor([
-        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
-    ])
+    editor = settings_mod.QuickLaunchEditor(
+        [
+            {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+        ]
+    )
     editor.show()
     app.processEvents()
 
@@ -1880,9 +1909,11 @@ def test_quick_launch_checkbox_can_be_selected_with_a_pointer_click():
     import pet.modern_settings_dialog as settings_mod
 
     app = QApplication.instance() or QApplication([])
-    editor = settings_mod.QuickLaunchEditor([
-        {"name": "默认浏览器", "path": "", "kind": "default_browser"},
-    ])
+    editor = settings_mod.QuickLaunchEditor(
+        [
+            {"name": "默认浏览器", "path": "", "kind": "default_browser"},
+        ]
+    )
     editor.resize(520, 140)
     editor.show()
     app.processEvents()
@@ -1926,20 +1957,20 @@ def test_config_defaults_and_normalizes_menu_appearance_and_quick_launch(tmp_pat
     config = Config(tmp_path)
     appearance = config.get("context_menu_appearance")
     assert {key: appearance[key] for key in ("theme", "density", "corner_radius")} == {
-        "theme": "system", "density": "standard", "corner_radius": 12,
+        "theme": "system",
+        "density": "standard",
+        "corner_radius": 12,
     }
-    assert config.get("quick_launch_apps") == [
-        {"name": "默认浏览器", "path": "", "kind": "default_browser"}
-    ]
+    assert config.get("quick_launch_apps") == [{"name": "默认浏览器", "path": "", "kind": "default_browser"}]
     config.set("context_menu_appearance", {"theme": "invalid", "density": "spacious", "corner_radius": 99})
     config.set("quick_launch_apps", [{"name": "  Finder  ", "path": "/System/Library/CoreServices/Finder.app"}, {}])
     appearance = config.get("context_menu_appearance")
     assert {key: appearance[key] for key in ("theme", "density", "corner_radius")} == {
-        "theme": "system", "density": "spacious", "corner_radius": 18,
+        "theme": "system",
+        "density": "spacious",
+        "corner_radius": 18,
     }
-    assert config.get("quick_launch_apps") == [
-        {"name": "Finder", "path": "/System/Library/CoreServices/Finder.app", "kind": "application"}
-    ]
+    assert config.get("quick_launch_apps") == [{"name": "Finder", "path": "/System/Library/CoreServices/Finder.app", "kind": "application"}]
 
 
 def test_modern_menu_adds_quick_launch_submenu_and_uses_saved_appearance(monkeypatch):
@@ -2148,7 +2179,7 @@ def test_windows_build_regenerates_the_icon_before_pyinstaller():
     assert "assets\\big_blue_fat_fish;assets\\big_blue_fat_fish" in build_script
     assert "pet\\menu_templates;pet\\menu_templates" in build_script
     mac_build_script = Path("scripts/build_macos.sh").read_text(encoding="utf-8")
-    assert 'assets/big_blue_fat_fish:assets/big_blue_fat_fish' in mac_build_script
+    assert "assets/big_blue_fat_fish:assets/big_blue_fat_fish" in mac_build_script
     assert "pet/menu_templates:pet/menu_templates" in mac_build_script
 
 
@@ -2201,10 +2232,7 @@ def test_modern_animation_leaf_icons_are_loaded_only_when_category_opens(monkeyp
     placeholder_key = idle.actions()[0].icon().cacheKey()
     assert not idle.actions()[0].icon().isNull()
     deadline = time.monotonic() + 1.0
-    while (
-        (pet.icon_requests < 1 or idle.actions()[0].icon().cacheKey() == placeholder_key)
-        and time.monotonic() < deadline
-    ):
+    while (pet.icon_requests < 1 or idle.actions()[0].icon().cacheKey() == placeholder_key) and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.01)
     assert pet.icon_requests == 1
@@ -2528,11 +2556,18 @@ def test_menu_easter_egg_and_modern_theme_fields_are_configurable(tmp_path):
     assert egg["avatar"] == "assets/big_blue_fat_fish/ojingjing.jpg"
     assert egg["image_dir"] == "assets/big_blue_fat_fish"
     config.set("menu_easter_egg", {"title": "秘密入口", "hint": "打开", "enabled": False})
-    config.set("context_menu_appearance", {
-        "theme": "dark", "ui_font": "PingFang SC", "ui_font_size": 16,
-        "translucent": False, "opacity": 0.7,
-        "light_background": "bad", "dark_background": "#111213",
-    })
+    config.set(
+        "context_menu_appearance",
+        {
+            "theme": "dark",
+            "ui_font": "PingFang SC",
+            "ui_font_size": 16,
+            "translucent": False,
+            "opacity": 0.7,
+            "light_background": "bad",
+            "dark_background": "#111213",
+        },
+    )
     assert config.get("menu_easter_egg")["title"] == "秘密入口"
     assert config.get("menu_easter_egg")["enabled"] is False
     assert config.get("context_menu_appearance")["ui_font_size"] == 16
@@ -2544,10 +2579,13 @@ def test_easter_egg_config_preserves_custom_paths(tmp_path):
     from pet.config import Config
 
     config = Config(tmp_path)
-    config.set("menu_easter_egg", {
-        "avatar": "/custom/avatar.png",
-        "image_dir": "/custom/images",
-    })
+    config.set(
+        "menu_easter_egg",
+        {
+            "avatar": "/custom/avatar.png",
+            "image_dir": "/custom/images",
+        },
+    )
     custom = config.get("menu_easter_egg")
     assert custom["avatar"] == "/custom/avatar.png"
     assert custom["image_dir"] == "/custom/images"
@@ -2631,11 +2669,7 @@ def test_easter_egg_text_remains_readable_in_the_dark_menu_theme():
 
     title_color = entry.title_label.palette().color(QPalette.ColorRole.WindowText)
     accessory_image = entry.click_accessory.grab().toImage()
-    accessory_lightness = max(
-        accessory_image.pixelColor(x, y).lightness()
-        for x in range(accessory_image.width())
-        for y in range(accessory_image.height())
-    )
+    accessory_lightness = max(accessory_image.pixelColor(x, y).lightness() for x in range(accessory_image.width()) for y in range(accessory_image.height()))
     assert title_color.lightness() >= 180
     assert accessory_lightness >= 160
 
@@ -2784,11 +2818,20 @@ def test_return_corner_cancels_all_position_writers_before_move():
         _press_global = None
         _grab_offset = None
 
-        def _cancel_move(self): calls.append("move")
-        def _stop_physics(self): calls.append("physics")
-        def _screen_available(self): return Screen()
-        def move(self, x, y): calls.append((x, y))
-        def _save_position(self): calls.append("save")
+        def _cancel_move(self):
+            calls.append("move")
+
+        def _stop_physics(self):
+            calls.append("physics")
+
+        def _screen_available(self):
+            return Screen()
+
+        def move(self, x, y):
+            calls.append((x, y))
+
+        def _save_position(self):
+            calls.append("save")
 
     PetWindow._go_default_corner(FakePet())
     assert calls[:2] == ["move", "physics"]
@@ -2823,8 +2866,12 @@ def test_context_menu_leaf_actions_stay_open_until_focus_is_lost():
     rect = menu.actionGeometry(action)
     pos = rect.center()
     event = QMouseEvent(
-        QMouseEvent.Type.MouseButtonRelease, pos, menu.mapToGlobal(pos),
-        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        QMouseEvent.Type.MouseButtonRelease,
+        pos,
+        menu.mapToGlobal(pos),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
     )
     QApplication.sendEvent(menu, event)
     app.processEvents()
@@ -2899,8 +2946,7 @@ def test_pet_app_binds_about_to_quit_once_to_current_window(tmp_path, monkeypatc
     # 本用例的被测对象是 AppShell 的**自有**接线：只统计它自己的槽——start()
     # 还会让会话结束探测器（issue #111）接一条 aboutToQuit 兜底，那是另一个
     # 组件的一次性接线（由 pet/session_watcher 自测覆盖），不参与本计数。
-    shell_connections = [c for c in owner.app.connections
-                         if c == owner._on_about_to_quit]
+    shell_connections = [c for c in owner.app.connections if c == owner._on_about_to_quit]
     assert len(shell_connections) == 1, "AppShell 重复 start 不得叠加 aboutToQuit 接线"
 
     current = FakeWin()
@@ -3024,6 +3070,8 @@ def test_external_character_dirs_dedupes_base_dir(tmp_path, monkeypatch):
     dirs = catalog_mod.external_character_dirs()
     base = root / "dsh-pet-standalone" / "characters"
     assert dirs.count(base) == 1
+
+
 def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path):
     """回归：用户显式配置的外部图片目录被删后，不再回退内置彩蛋池
     （用户删目录的意图就是不要再看图）。"""
@@ -3038,6 +3086,8 @@ def test_self_talk_deleted_external_dir_falls_back_to_text_not_bundled(tmp_path)
 
     # 相对路径（内置 assets）仍走既有回退解析
     assert _resolve_self_talk_image_dir("") == ""
+
+
 # --- Custom image-directory gallery regression (2026-09-03) ---
 
 

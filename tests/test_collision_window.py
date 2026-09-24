@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Phase 3 验收测试：PetWindow 碰撞接入、状态上报与冲量响应。"""
+
 from __future__ import annotations
 
 import math
@@ -160,8 +161,12 @@ def test_collision_squash_is_not_restarted_within_250ms(tmp_path, app):
     """碰撞 squash 活跃期间，250ms 内的第二次 impulse 不重置动画进度。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     msg = {
-        "a": "pet_a", "b": "pet_b", "dvx_a": 400.0, "dvy_a": 0.0,
-        "dx_a": 0.0, "dy_a": 0.0,
+        "a": "pet_a",
+        "b": "pet_b",
+        "dvx_a": 400.0,
+        "dvy_a": 0.0,
+        "dx_a": 0.0,
+        "dy_a": 0.0,
     }
     session.impulse_ready.emit(msg)
     app.processEvents()
@@ -181,8 +186,12 @@ def test_position_only_collision_does_not_throw_or_squash(tmp_path, app):
     """低速接触的 position-only 消息不触发 THROWN 或 squash。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     msg = {
-        "a": "pet_a", "b": "pet_b", "dvx_a": 0.0, "dvy_a": 0.0,
-        "dx_a": -2.0, "dy_a": 0.0,
+        "a": "pet_a",
+        "b": "pet_b",
+        "dvx_a": 0.0,
+        "dvy_a": 0.0,
+        "dx_a": -2.0,
+        "dy_a": 0.0,
     }
     session.impulse_ready.emit(msg)
     app.processEvents()
@@ -197,7 +206,7 @@ def test_idle_pet_enters_thrown_and_physics_timer_starts_on_dead_zone_speed(tmp_
     """2. 空闲桌宠收到 ≥DEAD_ZONE_SPEED 冲量后进入 THROWN 且 _physics_timer 启动。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     assert not win._physics_timer.isActive()
-    assert win._interaction_state == 'IDLE'
+    assert win._interaction_state == "IDLE"
 
     # DEAD_ZONE_SPEED 为 500.0 px/s，发送一个足以超过 500 px/s 的冲量
     msg = {
@@ -215,8 +224,8 @@ def test_idle_pet_enters_thrown_and_physics_timer_starts_on_dead_zone_speed(tmp_
     session.impulse_ready.emit(msg)
     app.processEvents()
 
-    assert win._interaction_state == 'THROWN'
-    assert win._physics_mode == 'throw'
+    assert win._interaction_state == "THROWN"
+    assert win._physics_mode == "throw"
     assert win._physics_timer.isActive()
 
     # 低于 DEAD_ZONE_SPEED 冲量：不进入 THROWN，不启动持续抛掷 timer
@@ -234,7 +243,7 @@ def test_idle_pet_enters_thrown_and_physics_timer_starts_on_dead_zone_speed(tmp_
     session2.impulse_ready.emit(msg_small)
     app.processEvents()
 
-    assert win2._interaction_state != 'THROWN'
+    assert win2._interaction_state != "THROWN"
     assert not win2._physics_timer.isActive()
 
     win.close()
@@ -245,8 +254,7 @@ def test_collision_throw_cancels_move_plan_and_timer(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_a")
     win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
     win._move_timer.start()
-    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "dvx_a": 1200.0, "dvy_a": 0.0,
-                                "dx_a": 0.0, "dy_a": 0.0})
+    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "dvx_a": 1200.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0})
     app.processEvents()
     assert win._interaction_state == "THROWN"
     assert win._move_plan is None
@@ -302,7 +310,7 @@ def test_impulse_discarded_during_paused_or_hidden_and_zero_vel_re_registered(tm
 
     # 冲量被丢弃，速度和状态未变
     assert win._phys_vel == [0.0, 0.0]
-    assert win._interaction_state != 'THROWN'
+    assert win._interaction_state != "THROWN"
 
     # 恢复显示：重新注册状态
     session.submitted_states.clear()
@@ -475,11 +483,12 @@ def test_refresh_pet_settings_restarts_active_animation_gap_timer(tmp_path, app)
     win._cancel_animation_gap()
     win.close()
 
+
 def test_dragging_reports_position_delta_velocity_not_phys_vel(tmp_path, app):
     """6. 拖拽中上报的 vx/vy 是位置差分而非 _phys_vel。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     win._phys_vel = [0.0, 0.0]
-    win._interaction_state = 'DRAGGING'
+    win._interaction_state = "DRAGGING"
     session.submitted_states.clear()
 
     # 模拟 trail 位置差分
@@ -556,15 +565,13 @@ def test_lock_position_window_is_knockable(tmp_path, app):
     app.processEvents()
 
     assert win._phys_vel[0] > 0.0
-    assert win._interaction_state == 'THROWN'
-    assert win._physics_mode == 'throw'
+    assert win._interaction_state == "THROWN"
+    assert win._physics_mode == "throw"
 
     win.close()
 
 
-def test_detach_collision_session_sends_leave_after_stopping_state_production(
-    tmp_path, app, monkeypatch
-):
+def test_detach_collision_session_sends_leave_after_stopping_state_production(tmp_path, app, monkeypatch):
     """detach_collision_session 时向会话发 leave：协调者即时移除成员（不等 stale 超时）。"""
     win, session = _make_pet_window(tmp_path, "pet_a")
     assert win._collision_session is session
@@ -627,9 +634,7 @@ def test_submit_collision_state_dedup_excludes_ts(tmp_path, app):
 
 def test_window_deduplicates_same_epoch_pair_tick(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_a")
-    msg = {"epoch": "epoch-a", "tick": 7, "a": "pet_a", "b": "pet_b",
-           "pair": "pet_a|pet_b", "dvx_a": 1200.0, "dvy_a": 0.0,
-           "dx_a": 0.0, "dy_a": 0.0}
+    msg = {"epoch": "epoch-a", "tick": 7, "a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b", "dvx_a": 1200.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0}
     session.impulse_ready.emit(msg)
     app.processEvents()
     first_velocity = list(win._phys_vel)
@@ -646,19 +651,24 @@ def test_predicted_bounce_reports_contact_geometry(tmp_path, app):
     win._physics_mode = "throw"
     # 贴边改造后碰撞体是"窗口内可见部分"（帧被窗口边缘裁掉的部分不进
     # mask），且随播放积累——显式钉为满帧矩形，使圆链形状/法线方向确定。
-    win._collision_local_bounds = QRect(
-        0, int(round(catalog.PAD * win.scale)),
-        win._w, int(round(catalog.CANVAS_H * win.scale)))
+    win._collision_local_bounds = QRect(0, int(round(catalog.PAD * win.scale)), win._w, int(round(catalog.CANVAS_H * win.scale)))
     rect = win.collision_content_rect()
     win._phys_pos[:] = [float(win._virtual_pos().x()), float(win._virtual_pos().y())]
     win._phys_vel[:] = [0.0, 0.0]
     peer_x = float(rect.center().x() + 45.0)
     peer_y = float(rect.center().y())
     win._collision_peer_snapshots = {
-        "pet_b": {"_received_at": time.monotonic(), "x": peer_x, "y": peer_y,
-                   "radius_x": 30.0, "radius_y": 30.0,
-                   "circles": [[peer_x, peer_y, 30.0]], "vx": 0.0, "vy": 0.0,
-                   "flags": collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED}
+        "pet_b": {
+            "_received_at": time.monotonic(),
+            "x": peer_x,
+            "y": peer_y,
+            "radius_x": 30.0,
+            "radius_y": 30.0,
+            "circles": [[peer_x, peer_y, 30.0]],
+            "vx": 0.0,
+            "vy": 0.0,
+            "flags": collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED,
+        }
     }
     win._phys_vel[:] = [800.0, 0.0]
     win._predict_collision_bounce(win._phys_pos[0] - 20.0, win._phys_pos[1])
@@ -699,11 +709,18 @@ def test_contact_deviation_threshold_expands_with_velocity(tmp_path, app):
     # 贴边改造后位置冲量作用在虚拟窗口坐标系：窗口可能已被钳在工作区
     # 边缘，位移由绘制偏移兑现，窗口本身可以不动。
     start_virtual_x = win._virtual_pos().x()
-    session.impulse_ready.emit({
-        "a": "pet_fast", "b": "pet_b", "dvx_a": 400.0, "dvy_a": 0.0,
-        "dx_a": 10.0, "dy_a": 0.0,
-        "ax": float(rect.center().x() + 30.0), "ay": float(rect.center().y()),
-    })
+    session.impulse_ready.emit(
+        {
+            "a": "pet_fast",
+            "b": "pet_b",
+            "dvx_a": 400.0,
+            "dvy_a": 0.0,
+            "dx_a": 10.0,
+            "dy_a": 0.0,
+            "ax": float(rect.center().x() + 30.0),
+            "ay": float(rect.center().y()),
+        }
+    )
     app.processEvents()
     assert win._phys_vel[0] > 1000.0
     assert win._virtual_pos().x() != start_virtual_x
@@ -715,10 +732,16 @@ def test_collision_impulse_syncs_physics_position(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_sync")
     win._interaction_state = "THROWN"
     win._physics_mode = "throw"
-    session.impulse_ready.emit({
-        "a": "pet_sync", "b": "pet_b", "dvx_a": 0.0, "dvy_a": 0.0,
-        "dx_a": 5.0, "dy_a": 3.0,
-    })
+    session.impulse_ready.emit(
+        {
+            "a": "pet_sync",
+            "b": "pet_b",
+            "dvx_a": 0.0,
+            "dvy_a": 0.0,
+            "dx_a": 5.0,
+            "dy_a": 3.0,
+        }
+    )
     app.processEvents()
     # 物理坐标与虚拟窗口坐标一致（贴边时实际窗口被钳，不代表角色位置）
     assert win._phys_pos == [float(win._virtual_pos().x()), float(win._virtual_pos().y())]
@@ -735,15 +758,13 @@ def test_collision_impulse_hit_threshold_and_position_clamp(tmp_path, app, monke
     win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 20, "duration": 1.0}
     win._move_timer.start()
 
-    session.impulse_ready.emit({"a": "pet_threshold", "b": "pet_b", "dvx_a": 100.0,
-                                "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0})
+    session.impulse_ready.emit({"a": "pet_threshold", "b": "pet_b", "dvx_a": 100.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0})
     app.processEvents()
     assert win._phys_vel == [0.0, 0.0]
     assert sounds == []
     assert win._move_plan is not None
 
-    session.impulse_ready.emit({"a": "pet_threshold", "b": "pet_b", "dvx_a": 400.0,
-                                "dvy_a": 0.0, "dx_a": 100000.0, "dy_a": 100000.0})
+    session.impulse_ready.emit({"a": "pet_threshold", "b": "pet_b", "dvx_a": 400.0, "dvy_a": 0.0, "dx_a": 100000.0, "dy_a": 100000.0})
     app.processEvents()
     left, top = win._collision_clamp_pos(0, 0)
     right, bottom = win._collision_clamp_pos(10**9, 10**9)
@@ -785,10 +806,15 @@ def _prediction_peer(win, runtime_id="pet_b", vx=0.0, flags=None):
     peer_circles = [[x + 30.0, y, r] for x, y, r in own_circles]
     return {
         "runtime_id": runtime_id,
-        "x": cx + 30.0, "y": cy, "radius_x": rect.width() / 2.0,
-        "radius_y": rect.height() / 2.0, "vx": vx, "vy": 0.0,
+        "x": cx + 30.0,
+        "y": cy,
+        "radius_x": rect.width() / 2.0,
+        "radius_y": rect.height() / 2.0,
+        "vx": vx,
+        "vy": 0.0,
         "flags": flags if flags is not None else collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED,
-        "circles": peer_circles, "scale": win.scale,
+        "circles": peer_circles,
+        "scale": win.scale,
     }
 
 
@@ -823,14 +849,11 @@ def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path,
     win._interaction_state = "THROWN"
     # 显式钉住碰撞体（满帧矩形）：圆链密度/最深穿透圆对的法线方向不随
     # mask 积累时序与窗口裁剪变化（贴边改造后碰撞体=窗口内可见部分）
-    win._collision_local_bounds = QRect(
-        0, int(round(catalog.PAD * win.scale)),
-        win._w, int(round(catalog.CANVAS_H * win.scale)))
+    win._collision_local_bounds = QRect(0, int(round(catalog.PAD * win.scale)), win._w, int(round(catalog.CANVAS_H * win.scale)))
     win._phys_pos[:] = [float(win._virtual_pos().x()), float(win._virtual_pos().y())]
     win._phys_vel[:] = [9000.0, 0.0]
     win.cfg.set("collision_impulse_cap", 20000.0)
-    peer = _prediction_peer(win, flags=collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED |
-                            collision.FLAG_LOCK_POSITION)
+    peer = _prediction_peer(win, flags=collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED | collision.FLAG_LOCK_POSITION)
     peer["_received_at"] = time.monotonic()
     win._collision_peer_snapshots["pet_b"] = peer
 
@@ -849,8 +872,7 @@ def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path,
     predicted_velocity = tuple(win._phys_vel)
     predicted_position = (win.x(), win.y())
     predicted_virtual = (win._virtual_pos().x(), win._virtual_pos().y())
-    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b",
-                                "dvx_a": 4000.0, "dvy_a": 0.0, "dx_a": 9.0, "dy_a": 0.0})
+    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b", "dvx_a": 4000.0, "dvy_a": 0.0, "dx_a": 9.0, "dy_a": 0.0})
     app.processEvents()
     assert tuple(win._phys_vel) == predicted_velocity
     assert (win.x(), win.y()) == predicted_position
@@ -861,8 +883,7 @@ def test_throw_predicts_bounce_and_authoritative_impulse_is_reconciled(tmp_path,
 def test_drag_collision_velocity_averages_recent_trail_and_suppresses_spike(tmp_path, app):
     win, _ = _make_pet_window(tmp_path, "pet_a")
     win._interaction_state = "DRAGGING"
-    win._trail = [(0.00, 0.0, 0.0), (0.04, 4.0, 0.0),
-                  (0.08, 8.0, 0.0), (0.10, 28.0, 0.0)]
+    win._trail = [(0.00, 0.0, 0.0), (0.04, 4.0, 0.0), (0.08, 8.0, 0.0), (0.10, 28.0, 0.0)]
     vx, vy = win._collision_velocity()
     assert vx == pytest.approx(280.0)
     assert vx < 1000.0
@@ -903,8 +924,7 @@ def test_prediction_prune_uses_half_second_window(tmp_path, app):
 def test_authoritative_impulse_applies_after_prediction_window(tmp_path, app):
     win, session = _make_pet_window(tmp_path, "pet_a")
     win._predicted_bounces["pet_a|pet_b"] = time.monotonic() - 0.51
-    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b",
-                                "dvx_a": 400.0, "dvy_a": 0.0})
+    session.impulse_ready.emit({"a": "pet_a", "b": "pet_b", "pair": "pet_a|pet_b", "dvx_a": 400.0, "dvy_a": 0.0})
     app.processEvents()
     assert win._phys_vel[0] > 0.0
     win.close()
@@ -938,11 +958,21 @@ def test_soft_clamp_preserves_sub_cap_velocity_and_clamps_super_cap_velocity(tmp
     win._phys_vel[:] = [initial_vx, initial_vy]
 
     zero_impulse = {
-        "a": "pet_clamp", "b": "other", "pair": "other|pet_clamp",
-        "dvx_a": 0.0, "dvy_a": 0.0, "dvx_b": 0.0, "dvy_b": 0.0,
-        "dx_a": 0.0, "dy_a": 0.0, "dx_b": 0.0, "dy_b": 0.0,
-        "ax": float(win.rect().center().x()), "ay": float(win.rect().center().y()),
-        "bx": 0.0, "by": 0.0,
+        "a": "pet_clamp",
+        "b": "other",
+        "pair": "other|pet_clamp",
+        "dvx_a": 0.0,
+        "dvy_a": 0.0,
+        "dvx_b": 0.0,
+        "dvy_b": 0.0,
+        "dx_a": 0.0,
+        "dy_a": 0.0,
+        "dx_b": 0.0,
+        "dy_b": 0.0,
+        "ax": float(win.rect().center().x()),
+        "ay": float(win.rect().center().y()),
+        "bx": 0.0,
+        "by": 0.0,
     }
 
     win._on_collision_impulse(zero_impulse)
@@ -975,16 +1005,25 @@ def test_thrown_pet_ignores_sub_floor_contact_impulse(tmp_path, app):
     永远顶在静止线以上，原地自供能抖动。"""
     win, _ = _make_pet_window(tmp_path, "pet_floor")
     win._interaction_state = THROWN
-    win._physics_mode = 'throw'
+    win._physics_mode = "throw"
     win._phys_vel[:] = [20.0, 0.0]
 
     impulse = {
-        "a": "pet_floor", "b": "other", "pair": "other|pet_floor",
-        "dvx_a": 12.0, "dvy_a": -1.0, "dvx_b": 0.0, "dvy_b": 0.0,
-        "dx_a": 0.0, "dy_a": 0.0, "dx_b": 0.0, "dy_b": 0.0,
+        "a": "pet_floor",
+        "b": "other",
+        "pair": "other|pet_floor",
+        "dvx_a": 12.0,
+        "dvy_a": -1.0,
+        "dvx_b": 0.0,
+        "dvy_b": 0.0,
+        "dx_a": 0.0,
+        "dy_a": 0.0,
+        "dx_b": 0.0,
+        "dy_b": 0.0,
         "ax": float(win.collision_content_rect().center().x()),
         "ay": float(win.collision_content_rect().center().y()),
-        "bx": 0.0, "by": 0.0,
+        "bx": 0.0,
+        "by": 0.0,
     }
     win._on_collision_impulse(impulse)
     # 12px/s 微冲量被丢弃，速度保持不变（不再被喂能量）
@@ -1005,13 +1044,14 @@ def test_self_talk_prunes_images_deleted_while_running(tmp_path, app):
     win, _ = _make_pet_window(tmp_path, "pet_prune")
     img = tmp_path / "a.png"
     from PySide6.QtGui import QPixmap
+
     QPixmap(4, 4).save(str(img))
     win._self_talk_texts = []
     win._self_talk_images = [img]
     win._self_talk_enabled = True
     img.unlink()  # 运行期间被删
     assert win._show_random_self_talk() is False  # 无文本无图 → 不弹
-    assert win._self_talk_images == []            # 惰性剔除生效
+    assert win._self_talk_images == []  # 惰性剔除生效
     win.close()
 
 
@@ -1028,8 +1068,7 @@ def test_real_collision_impulse_cancels_edge_probe_and_settle_arms_reentry(tmp_p
     probe.on_release(was_dragging=True)
     assert probe.active
 
-    msg = {"a": "pet_probe", "b": "other", "pair": "other|pet_probe",
-           "dvx_a": 400.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0}
+    msg = {"a": "pet_probe", "b": "other", "pair": "other|pet_probe", "dvx_a": 400.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0}
     win._on_collision_impulse(msg)
     # 真实撞击进入 throw 物理前已取消探头会话（不回拉位置）。
     assert probe.active is False
@@ -1065,13 +1104,12 @@ def test_probe_active_soft_hit_displacement_is_discarded(tmp_path, app):
 
     # 软撞：dv 低于真实撞击阈值，但带分离位移 dx/dy。
     soft_dv = win._collision_client._hit_min_dv / 2.0
-    msg = {"a": "pet_probe_soft", "b": "other", "pair": "other|pet_probe_soft",
-           "dvx_a": soft_dv, "dvy_a": 0.0, "dx_a": 5.0, "dy_a": 3.0}
+    msg = {"a": "pet_probe_soft", "b": "other", "pair": "other|pet_probe_soft", "dvx_a": soft_dv, "dvy_a": 0.0, "dx_a": 5.0, "dy_a": 3.0}
     win._on_collision_impulse(msg)
 
     assert win.x() == x_before and win.y() == y_before  # 位置未被顶偏
-    assert probe.active is True                          # 探头会话不受影响
-    assert win._physics_mode is None                     # 软撞不进入 throw
+    assert probe.active is True  # 探头会话不受影响
+    assert win._physics_mode is None  # 软撞不进入 throw
     win.close()
 
 
@@ -1126,8 +1164,7 @@ def test_probe_collision_throw_arms_egg_and_rotation_follows_velocity(tmp_path, 
     assert not egg.active
 
     # 真实撞击：进入 throw 物理前取消探头会话并 arm 彩蛋（飞行中整帧旋转开始）。
-    msg = {"a": "pet_probe_egg", "b": "other", "pair": "other|pet_probe_egg",
-           "dvx_a": 400.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0}
+    msg = {"a": "pet_probe_egg", "b": "other", "pair": "other|pet_probe_egg", "dvx_a": 400.0, "dvy_a": 0.0, "dx_a": 0.0, "dy_a": 0.0}
     win._on_collision_impulse(msg)
     assert probe.active is False
     assert probe.mode == "OFF"
@@ -1235,11 +1272,10 @@ def test_collision_body_uses_declared_body_box_not_frame_union(tmp_path, app):
     box = catalog.character_body_box(str(win.cfg.get("character") or ""))
     assert box is not None, "本用例依赖角色声明了 body_box"
     # 现场：某条动画播过，并集被撑到 346x278（源像素）——远大于身体框
-    win._collision_local_bounds = QRect(
-        0, 0, int(round(346 * win.scale)), int(round(278 * win.scale)))
+    win._collision_local_bounds = QRect(0, 0, int(round(346 * win.scale)), int(round(278 * win.scale)))
     rect = win.collision_content_rect()
     sbr = win._stable_body_local_rect()
-    assert (rect.width(), rect.height()) == (sbr.width(), sbr.height()),         "碰撞体不该沿用被撑大的并集"
+    assert (rect.width(), rect.height()) == (sbr.width(), sbr.height()), "碰撞体不该沿用被撑大的并集"
     assert rect.topLeft() == win.frameGeometry().topLeft() + sbr.topLeft()
     win.close()
 

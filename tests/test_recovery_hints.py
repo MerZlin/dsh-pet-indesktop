@@ -5,6 +5,7 @@
 - 开启「鼠标穿透」后桌宠不可点击 → 应在开启瞬间提示去托盘/设置里恢复；
 - macOS 关闭「显示 Dock 图标」后 Dock 入口消失 → 应提示去菜单栏托盘图标恢复。
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

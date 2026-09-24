@@ -8,6 +8,7 @@
 - 识别被二次转码的文本资源（无法按 UTF-8 严格解码 → FAIL）；
 - 识别缺失的中文素材文件名。
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -56,9 +57,7 @@ def _make_catalog_code(literals, garble: bool = False):
     字面量嵌在较长字符串常量里，模拟真实源码中「深色玻璃 · 右上方」这类
     片段不是独立常量、但必须按子串命中的场景。
     """
-    lines = "\n".join(
-        f"    L{i} = '前缀' + {lit!r} + '后缀'" for i, lit in enumerate(literals)
-    )
+    lines = "\n".join(f"    L{i} = '前缀' + {lit!r} + '后缀'" for i, lit in enumerate(literals))
     return_items = ", ".join(f"L{i}" for i in range(len(literals)))
     source = f"def catalog():\n{lines}\n    return [{return_items}]\n"
     if garble:

@@ -8,6 +8,7 @@
 2. 后台线程 _ensure_meta 正常探测并写缓存（预热链语义不变）；
 3. 主线程每 clip 只踢一次后台预热（不形成线程洪峰）。
 """
+
 from __future__ import annotations
 
 import threading
@@ -51,9 +52,9 @@ def test_ensure_meta_never_probes_on_gui_thread(app, monkeypatch):
         gate.wait(5.0)
         return clip._probe()
 
-    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, 'count_frames_and_secs', gated_probe)
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "count_frames_and_secs", gated_probe)
     webm_clip_mod._META_CACHE.clear()
-    monkeypatch.setattr(webm_clip_mod, '_get_meta_file_cache', lambda: {})  # 双级缓存 miss
+    monkeypatch.setattr(webm_clip_mod, "_get_meta_file_cache", lambda: {})  # 双级缓存 miss
     clip._ensure_meta()  # 主线程调用
     assert calls == [], "踢出瞬间不得有任何探测（后台也未放行）"
     assert clip._meta_bg_kicked, "主线程冷调用必须同步踢出后台预热"
@@ -71,10 +72,9 @@ def test_ensure_meta_never_probes_on_gui_thread(app, monkeypatch):
 def test_ensure_meta_kicks_background_warm_only_once(app, monkeypatch):
     """主线程重复冷调用只踢一次后台预热（防线程洪峰）。"""
     clip = _ProbeClip("dummy.webm")
-    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, 'count_frames_and_secs',
-                        lambda key: clip._probe())
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "count_frames_and_secs", lambda key: clip._probe())
     webm_clip_mod._META_CACHE.clear()
-    monkeypatch.setattr(webm_clip_mod, '_get_meta_file_cache', lambda: {})
+    monkeypatch.setattr(webm_clip_mod, "_get_meta_file_cache", lambda: {})
     clip._ensure_meta()
     clip._ensure_meta()
     assert clip._meta_bg_kicked, "主线程首次调用必须同步踢出后台预热"
@@ -90,10 +90,9 @@ def test_ensure_meta_kicks_background_warm_only_once(app, monkeypatch):
 def test_ensure_meta_probes_normally_on_worker_thread(app, monkeypatch):
     """后台线程：探测/写缓存正常（预热链语义不变）。"""
     clip = _ProbeClip("dummy.webm")
-    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, 'count_frames_and_secs',
-                        lambda key: clip._probe())
+    monkeypatch.setattr(webm_clip_mod.imageio_ffmpeg, "count_frames_and_secs", lambda key: clip._probe())
     webm_clip_mod._META_CACHE.clear()
-    monkeypatch.setattr(webm_clip_mod, '_get_meta_file_cache', lambda: {})
+    monkeypatch.setattr(webm_clip_mod, "_get_meta_file_cache", lambda: {})
     t = threading.Thread(target=clip._ensure_meta, daemon=True)
     t.start()
     t.join(5.0)

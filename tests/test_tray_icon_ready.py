@@ -10,6 +10,7 @@ clip 的 ``currentPixmap()`` 也是 None，``icon_pixmap()`` 返回空 QPixmap�
 修法：空图时先用占位图标（既有矢量图标语言）保证托盘可见，并订阅
 ``PetWindow.frame_ready``（首帧就绪的一次性信号）把图标换成角色头像。
 """
+
 from __future__ import annotations
 
 import pytest

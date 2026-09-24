@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Phase 2 IPC 会话测试：协议边界、线程生命周期和实际 QLocal 选举。"""
+
 from __future__ import annotations
 
 import os
@@ -57,9 +58,19 @@ def _pump(seconds: float) -> None:
 
 
 def _state(seq, x=0.0):
-    return {"seq": seq, "ts": time.monotonic(), "x": x, "y": 0.0,
-            "w": 100, "h": 100, "radius_x": 40.0, "radius_y": 40.0,
-            "vx": 0.0, "vy": 0.0, "flags": collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED}
+    return {
+        "seq": seq,
+        "ts": time.monotonic(),
+        "x": x,
+        "y": 0.0,
+        "w": 100,
+        "h": 100,
+        "radius_x": 40.0,
+        "radius_y": 40.0,
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED,
+    }
 
 
 def _server_name(label: str) -> str:
@@ -108,8 +119,7 @@ def test_welcome_for_all_supported_slots_round_trips_default_protocol():
             "runtime_id": f"slot-{index}-pid{1000 + index}-abcdefgh",
             "instance_id": f"slot-{index}",
             "character": "character-" + "x" * 244,
-            "circles": [[float(index * 32 + offset), 64.0, 28.0]
-                        for offset in (0, 28, 56, 84)],
+            "circles": [[float(index * 32 + offset), 64.0, 28.0] for offset in (0, 28, 56, 84)],
             "last_seen": time.monotonic(),
         }
         for index in range(128)
@@ -168,23 +178,25 @@ def test_state_ingestion_caps_members_and_preserves_snapshot_budget():
     for index in range(129):
         socket = FakeSocket()
         worker.peers[socket] = f"slot-{index}-pid{1000 + index}-abcdefgh"
-        worker._handle_message(socket, {
-            "type": "state",
-            **_state(1, float(index)),
-            "padding": "must-not-enter-snapshot",
-            "character": "character-" + "x" * 500,
-            "circles": [[float(index + offset), 64.0, 28.0]
-                        for offset in range(8)],
-        })
+        worker._handle_message(
+            socket,
+            {
+                "type": "state",
+                **_state(1, float(index)),
+                "padding": "must-not-enter-snapshot",
+                "character": "character-" + "x" * 500,
+                "circles": [[float(index + offset), 64.0, 28.0] for offset in range(8)],
+            },
+        )
 
     assert len(worker.members) == 128
     assert all("padding" not in member for member in worker.members.values())
-    assert all(len(member["character"].encode("utf-8")) <= 512
-               for member in worker.members.values())
+    assert all(len(member["character"].encode("utf-8")) <= 512 for member in worker.members.values())
     assert all(len(member["circles"]) <= 3 for member in worker.members.values())
-    assert (collision_ipc.MAX_COLLISION_MEMBERS
-            * (collision_ipc.PUBLIC_MEMBER_MAX_LENGTH + 1)
-            + collision_codec.STATE_FRAME_MAX_LENGTH < collision_codec.FRAME_MAX_LENGTH)
+    assert (
+        collision_ipc.MAX_COLLISION_MEMBERS * (collision_ipc.PUBLIC_MEMBER_MAX_LENGTH + 1) + collision_codec.STATE_FRAME_MAX_LENGTH
+        < collision_codec.FRAME_MAX_LENGTH
+    )
     frame = collision_codec.encode_frame(worker._welcome())
     assert len(frame) - collision_codec.HEADER_SIZE <= collision_codec.FRAME_MAX_LENGTH
     assert collision_codec.FrameStreamDecoder().feed(frame) == [worker._welcome()]
@@ -209,8 +221,7 @@ def test_schedule_election_reuses_one_timer():
         (QAbstractSocket.SocketError.HostNotFoundError, False, False),
     ],
 )
-def test_posix_listen_recovery_only_removes_address_in_use(
-        monkeypatch, listen_error, probe_is_live, should_recover):
+def test_posix_listen_recovery_only_removes_address_in_use(monkeypatch, listen_error, probe_is_live, should_recover):
     class FakeLocalServer:
         removed = []
 
@@ -324,9 +335,14 @@ def test_stop_removes_owned_endpoint_before_releasing_lock(monkeypatch):
 
 
 def test_coordinator_submit_leave_broadcasts_remaining_members():
-    worker = _CollisionWorker(_server_name("own-leave"), "coordinator", "", {
-        "collision_enabled": True,
-    })
+    worker = _CollisionWorker(
+        _server_name("own-leave"),
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     worker._participating = True
@@ -353,9 +369,14 @@ def test_coordinator_submit_leave_broadcasts_remaining_members():
 
 @pytest.mark.parametrize("collision_enabled", [True, False])
 def test_single_member_snapshot_heartbeat_does_not_require_solver(collision_enabled):
-    worker = _CollisionWorker(_server_name("one-member"), "coordinator", "", {
-        "collision_enabled": collision_enabled,
-    })
+    worker = _CollisionWorker(
+        _server_name("one-member"),
+        "coordinator",
+        "",
+        {
+            "collision_enabled": collision_enabled,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     peer_socket = FakeSocket()
@@ -371,10 +392,7 @@ def test_single_member_snapshot_heartbeat_does_not_require_solver(collision_enab
 
     assert len(peer_socket.sent) == 2
     assert worker.tick == 0
-    snapshots = [
-        collision_codec.FrameStreamDecoder().feed(frame)[0]
-        for frame in peer_socket.sent
-    ]
+    snapshots = [collision_codec.FrameStreamDecoder().feed(frame)[0] for frame in peer_socket.sent]
     if collision_enabled:
         assert all(len(snapshot["members"]) == 1 for snapshot in snapshots)
         assert len(worker._welcome()["members"]) == 1
@@ -384,9 +402,14 @@ def test_single_member_snapshot_heartbeat_does_not_require_solver(collision_enab
 
 
 def test_authoritative_membership_excludes_solver_stale_members():
-    worker = _CollisionWorker(_server_name("stale-member"), "coordinator", "", {
-        "collision_enabled": True,
-    })
+    worker = _CollisionWorker(
+        _server_name("stale-member"),
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     peer_socket = FakeSocket()
@@ -408,9 +431,14 @@ def test_authoritative_membership_excludes_solver_stale_members():
 
 
 def test_policy_toggle_forces_empty_then_full_membership_snapshot():
-    worker = _CollisionWorker(_server_name("policy-snapshot"), "coordinator", "", {
-        "collision_enabled": True,
-    })
+    worker = _CollisionWorker(
+        _server_name("policy-snapshot"),
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     peer_socket = FakeSocket()
@@ -446,13 +474,8 @@ def test_policy_toggle_forces_empty_then_full_membership_snapshot():
     assert_solver_history_cleared()
     worker._coordinator_tick()
 
-    snapshots = [
-        collision_codec.FrameStreamDecoder().feed(frame)[0]
-        for frame in peer_socket.sent
-    ]
-    assert [snapshot["members"] for snapshot in snapshots] == [[], [
-        worker._public_member(worker.members["peer"])
-    ]]
+    snapshots = [collision_codec.FrameStreamDecoder().feed(frame)[0] for frame in peer_socket.sent]
+    assert [snapshot["members"] for snapshot in snapshots] == [[], [worker._public_member(worker.members["peer"])]]
 
 
 def test_same_epoch_welcome_refreshes_policy_and_membership_snapshot():
@@ -541,11 +564,18 @@ def test_accept_connection_reads_bytes_that_arrived_before_signal_hooks():
 
 
 def test_fake_socket_join_duplicate_seq_and_disconnect():
-    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
-        "collision_enabled": True, "collision_restitution": .82,
-        "collision_friction": .08, "collision_mass_scale": 1.0,
-        "collision_impulse_cap": 9000.0,
-    })
+    worker = _CollisionWorker(
+        "unused-" + uuid.uuid4().hex,
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+            "collision_restitution": 0.82,
+            "collision_friction": 0.08,
+            "collision_mass_scale": 1.0,
+            "collision_impulse_cap": 9000.0,
+        },
+    )
     worker.epoch = "epoch-a"
     worker.server = object()
     socket = FakeSocket()
@@ -587,21 +617,24 @@ def test_resign_clears_all_epoch_scoped_collision_history(monkeypatch):
 
 
 def test_coordinator_sweeps_fast_circle_chain_and_emits_impulse():
-    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
-        "collision_enabled": True, "collision_restitution": .82,
-        "collision_friction": .08, "collision_mass_scale": 1.0,
-        "collision_impulse_cap": 9000.0,
-    })
+    worker = _CollisionWorker(
+        "unused-" + uuid.uuid4().hex,
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+            "collision_restitution": 0.82,
+            "collision_friction": 0.08,
+            "collision_mass_scale": 1.0,
+            "collision_impulse_cap": 9000.0,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     worker._now = staticmethod(lambda: 1.0)
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
-    state_a = {"seq": 1, "x": 450.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0,
-               "vx": 4800.0, "vy": 0.0, "flags": flags,
-               "circles": [[450.0, 0.0, 30.0]]}
-    state_b = {"seq": 1, "x": 225.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0,
-               "vx": 0.0, "vy": 0.0, "flags": flags,
-               "circles": [[225.0, 0.0, 30.0]]}
+    state_a = {"seq": 1, "x": 450.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0, "vx": 4800.0, "vy": 0.0, "flags": flags, "circles": [[450.0, 0.0, 30.0]]}
+    state_b = {"seq": 1, "x": 225.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0, "vx": 0.0, "vy": 0.0, "flags": flags, "circles": [[225.0, 0.0, 30.0]]}
     worker.members = {
         "a": dict(state_a, runtime_id="a", last_seen=1.0),
         "b": dict(state_b, runtime_id="b", last_seen=1.0),
@@ -620,21 +653,24 @@ def test_coordinator_sweeps_fast_circle_chain_and_emits_impulse():
 
 
 def _coordinator_with_members(*states):
-    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
-        "collision_enabled": True, "collision_restitution": .82,
-        "collision_friction": .08, "collision_mass_scale": 1.0,
-        "collision_impulse_cap": 9000.0,
-    })
+    worker = _CollisionWorker(
+        "unused-" + uuid.uuid4().hex,
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+            "collision_restitution": 0.82,
+            "collision_friction": 0.08,
+            "collision_mass_scale": 1.0,
+            "collision_impulse_cap": 9000.0,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     worker._now = staticmethod(lambda: 1.0)
-    worker.members = {
-        state["runtime_id"]: dict(state, last_seen=1.0) for state in states
-    }
+    worker.members = {state["runtime_id"]: dict(state, last_seen=1.0) for state in states}
     for state in states:
-        if (int(state.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE
-                and state.get("bounce_vx") is not None
-                and state.get("bounce_vy") is not None):
+        if int(state.get("flags", 0)) & collision.FLAG_PREDICTED_BOUNCE and state.get("bounce_vx") is not None and state.get("bounce_vy") is not None:
             worker._pending_predicted[state["runtime_id"]] = {**state, "_captured_at": 1.0}
     return worker
 
@@ -642,14 +678,28 @@ def _coordinator_with_members(*states):
 def test_snapshot_broadcast_encodes_once_for_all_peers(monkeypatch):
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     first = {
-        "runtime_id": "a", "seq": 1, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": 100.0, "vy": 0.0, "flags": flags,
+        "runtime_id": "a",
+        "seq": 1,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": 100.0,
+        "vy": 0.0,
+        "flags": flags,
     }
     second = {
-        "runtime_id": "b", "seq": 1, "x": 500.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[500.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0, "flags": flags,
+        "runtime_id": "b",
+        "seq": 1,
+        "x": 500.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[500.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": flags,
     }
     worker = _coordinator_with_members(first, second)
     sockets = [FakeSocket() for _ in range(3)]
@@ -672,19 +722,35 @@ def test_snapshot_broadcast_encodes_once_for_all_peers(monkeypatch):
     ("shooter_scale", "target_scale", "minimum_target_dv"),
     [(0.3, 2.0, 500.0), (2.0, 0.3, 1500.0)],
 )
-def test_predicted_bounce_event_sends_impulse_only_to_target(
-        shooter_scale, target_scale, minimum_target_dv):
+def test_predicted_bounce_event_sends_impulse_only_to_target(shooter_scale, target_scale, minimum_target_dv):
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     shooter = {
-        "runtime_id": "a", "seq": 2, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": -800.0, "vy": 0.0, "bounce_vx": 2000.0, "bounce_vy": 0.0,
-        "scale": shooter_scale, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+        "runtime_id": "a",
+        "seq": 2,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0,
+        "vy": 0.0,
+        "bounce_vx": 2000.0,
+        "bounce_vy": 0.0,
+        "scale": shooter_scale,
+        "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
     }
     target = {
-        "runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0, "scale": target_scale, "flags": flags,
+        "runtime_id": "b",
+        "seq": 1,
+        "x": 50.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "scale": target_scale,
+        "flags": flags,
     }
     worker = _coordinator_with_members(shooter, target)
     received = []
@@ -707,15 +773,30 @@ def test_predicted_bounce_event_sends_impulse_only_to_target(
 def test_predicted_bounce_and_sweep_emit_pair_only_once_in_same_tick():
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     shooter = {
-        "runtime_id": "a", "seq": 2, "x": 60.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[60.0, 0.0, 30.0]],
-        "vx": -500.0, "vy": 0.0, "bounce_vx": 2000.0, "bounce_vy": 0.0,
+        "runtime_id": "a",
+        "seq": 2,
+        "x": 60.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[60.0, 0.0, 30.0]],
+        "vx": -500.0,
+        "vy": 0.0,
+        "bounce_vx": 2000.0,
+        "bounce_vy": 0.0,
         "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
     }
     target = {
-        "runtime_id": "b", "seq": 1, "x": 120.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[120.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0, "flags": flags,
+        "runtime_id": "b",
+        "seq": 1,
+        "x": 120.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[120.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": flags,
     }
     worker = _coordinator_with_members(shooter, target)
     worker.previous_members = {
@@ -731,14 +812,28 @@ def test_predicted_bounce_and_sweep_emit_pair_only_once_in_same_tick():
 def test_state_without_predicted_bounce_fields_uses_normal_collision_path():
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     moving = {
-        "runtime_id": "a", "seq": 1, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": 500.0, "vy": 0.0, "flags": flags,
+        "runtime_id": "a",
+        "seq": 1,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": 500.0,
+        "vy": 0.0,
+        "flags": flags,
     }
     target = {
-        "runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0, "flags": flags,
+        "runtime_id": "b",
+        "seq": 1,
+        "x": 50.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": flags,
     }
     worker = _coordinator_with_members(moving, target)
     received = []
@@ -751,11 +846,18 @@ def test_state_without_predicted_bounce_fields_uses_normal_collision_path():
 
 def test_predicted_bounce_overwritten_by_unflagged_state_still_emits_predicted_impulse():
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
-    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
-        "collision_enabled": True, "collision_restitution": .82,
-        "collision_friction": .08, "collision_mass_scale": 1.0,
-        "collision_impulse_cap": 9000.0,
-    })
+    worker = _CollisionWorker(
+        "unused-" + uuid.uuid4().hex,
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+            "collision_restitution": 0.82,
+            "collision_friction": 0.08,
+            "collision_mass_scale": 1.0,
+            "collision_impulse_cap": 9000.0,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     worker._now = staticmethod(lambda: 1.0)
@@ -766,28 +868,61 @@ def test_predicted_bounce_overwritten_by_unflagged_state_still_emits_predicted_i
     worker.peers[socket_b] = "b"
 
     # target state
-    worker._handle_message(socket_b, {
-        "type": "state", "seq": 1, "x": 50.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0, "scale": 1.0, "flags": flags,
-    })
+    worker._handle_message(
+        socket_b,
+        {
+            "type": "state",
+            "seq": 1,
+            "x": 50.0,
+            "y": 0.0,
+            "radius_x": 30.0,
+            "radius_y": 30.0,
+            "circles": [[50.0, 0.0, 30.0]],
+            "vx": 0.0,
+            "vy": 0.0,
+            "scale": 1.0,
+            "flags": flags,
+        },
+    )
 
     # shooter state with predicted bounce
-    worker._handle_message(socket_a, {
-        "type": "state", "seq": 2, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": -800.0, "vy": 0.0, "bounce_vx": 1500.0, "bounce_vy": 0.0,
-        "scale": 1.0, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
-    })
+    worker._handle_message(
+        socket_a,
+        {
+            "type": "state",
+            "seq": 2,
+            "x": 0.0,
+            "y": 0.0,
+            "radius_x": 30.0,
+            "radius_y": 30.0,
+            "circles": [[0.0, 0.0, 30.0]],
+            "vx": -800.0,
+            "vy": 0.0,
+            "bounce_vx": 1500.0,
+            "bounce_vy": 0.0,
+            "scale": 1.0,
+            "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+        },
+    )
     assert "a" in worker._pending_predicted
 
     # overwrite shooter state in members table with unflagged state
-    worker._handle_message(socket_a, {
-        "type": "state", "seq": 3, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": -800.0, "vy": 0.0,
-        "scale": 1.0, "flags": flags,
-    })
+    worker._handle_message(
+        socket_a,
+        {
+            "type": "state",
+            "seq": 3,
+            "x": 0.0,
+            "y": 0.0,
+            "radius_x": 30.0,
+            "radius_y": 30.0,
+            "circles": [[0.0, 0.0, 30.0]],
+            "vx": -800.0,
+            "vy": 0.0,
+            "scale": 1.0,
+            "flags": flags,
+        },
+    )
     assert not (worker.members["a"]["flags"] & collision.FLAG_PREDICTED_BOUNCE)
     assert "bounce_vx" not in worker.members["a"]
     assert "a" in worker._pending_predicted
@@ -806,24 +941,50 @@ def test_predicted_bounce_overwritten_by_unflagged_state_still_emits_predicted_i
 def test_predicted_bounce_ttl_expiration_cleans_pending_and_no_impulse():
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     target = {
-        "runtime_id": "b", "seq": 1, "x": 100.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[100.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0, "scale": 1.0, "flags": flags,
+        "runtime_id": "b",
+        "seq": 1,
+        "x": 100.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[100.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "scale": 1.0,
+        "flags": flags,
     }
     worker = _coordinator_with_members(target)
     worker._now = staticmethod(lambda: 2.0)
     worker.members["a"] = {
-        "runtime_id": "a", "seq": 2, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": -800.0, "vy": 0.0, "scale": 1.0, "flags": flags, "last_seen": 2.0,
+        "runtime_id": "a",
+        "seq": 2,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0,
+        "vy": 0.0,
+        "scale": 1.0,
+        "flags": flags,
+        "last_seen": 2.0,
     }
     # _captured_at is 1.6, diff = 0.4s > 0.3s TTL
     # x=0.0 vs x=100.0 with r=30 does not collide normally, but if pending were processed with bounce_vx=1500 (or overlap), it won't hit here anyway unless overlap, but at x=0 & x=50 overlap was 10px so regular collision hit.
     worker._pending_predicted["a"] = {
-        "runtime_id": "a", "seq": 2, "x": 50.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
-        "vx": -800.0, "vy": 0.0, "bounce_vx": 1500.0, "bounce_vy": 0.0,
-        "scale": 1.0, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+        "runtime_id": "a",
+        "seq": 2,
+        "x": 50.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[50.0, 0.0, 30.0]],
+        "vx": -800.0,
+        "vy": 0.0,
+        "bounce_vx": 1500.0,
+        "bounce_vy": 0.0,
+        "scale": 1.0,
+        "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
         "_captured_at": 1.6,
     }
 
@@ -838,10 +999,19 @@ def test_predicted_bounce_ttl_expiration_cleans_pending_and_no_impulse():
 def test_remove_member_cleans_pending_predicted():
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     shooter = {
-        "runtime_id": "a", "seq": 2, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": -800.0, "vy": 0.0, "bounce_vx": 2000.0, "bounce_vy": 0.0,
-        "scale": 1.0, "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
+        "runtime_id": "a",
+        "seq": 2,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0,
+        "vy": 0.0,
+        "bounce_vx": 2000.0,
+        "bounce_vy": 0.0,
+        "scale": 1.0,
+        "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
     }
     worker = _coordinator_with_members(shooter)
     assert "a" in worker._pending_predicted
@@ -865,12 +1035,30 @@ def test_client_watermark_and_epoch_switch():
 
 def test_coordinator_suppresses_repeated_position_only_contact():
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
-    a = {"runtime_id": "a", "seq": 1, "x": 0.0, "y": 0.0,
-         "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-         "vx": 0.0, "vy": 0.0, "flags": flags}
-    b = {"runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
-         "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
-         "vx": 0.0, "vy": 0.0, "flags": flags}
+    a = {
+        "runtime_id": "a",
+        "seq": 1,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": flags,
+    }
+    b = {
+        "runtime_id": "b",
+        "seq": 1,
+        "x": 50.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": flags,
+    }
     worker = _coordinator_with_members(a, b)
     received = []
     worker.impulse_ready.connect(received.append)
@@ -886,12 +1074,30 @@ def test_coordinator_suppresses_repeated_position_only_contact():
 def test_static_member_gets_freshness_grace():
     """FLAG_STATIC 成员（灵动岛）新鲜度宽限 3s：GUI 卡顿不该让岛掉出碰撞世界。"""
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
-    island = {"runtime_id": "island", "seq": 1, "x": 0.0, "y": 0.0,
-              "radius_x": 100.0, "radius_y": 22.0, "circles": [[0.0, 0.0, 22.0]],
-              "vx": 0.0, "vy": 0.0, "flags": flags | collision.FLAG_STATIC}
-    pet = {"runtime_id": "a", "seq": 1, "x": 300.0, "y": 0.0,
-           "radius_x": 30.0, "radius_y": 30.0, "circles": [[300.0, 0.0, 30.0]],
-           "vx": 0.0, "vy": 0.0, "flags": flags}
+    island = {
+        "runtime_id": "island",
+        "seq": 1,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 100.0,
+        "radius_y": 22.0,
+        "circles": [[0.0, 0.0, 22.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": flags | collision.FLAG_STATIC,
+    }
+    pet = {
+        "runtime_id": "a",
+        "seq": 1,
+        "x": 300.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[300.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "flags": flags,
+    }
     worker = _coordinator_with_members(island, pet)
     # 双方状态都 2s 没更新（模拟 GUI 卡顿）：静态岛仍在，普通成员过期
     worker.members["island"]["last_seen"] = 1.0 - 2.0
@@ -908,11 +1114,18 @@ def test_static_member_gets_freshness_grace():
 def test_new_member_seeds_previous_frame_for_swept():
     """FLAG_STATIC 新成员（岛）首帧用当前帧垫底：swept 退化为静态检测；
     普通桌宠成员保持旧语义（首帧无 previous，不垫底）。"""
-    worker = _CollisionWorker("unused-" + uuid.uuid4().hex, "coordinator", "", {
-        "collision_enabled": True, "collision_restitution": .82,
-        "collision_friction": .08, "collision_mass_scale": 1.0,
-        "collision_impulse_cap": 9000.0,
-    })
+    worker = _CollisionWorker(
+        "unused-" + uuid.uuid4().hex,
+        "coordinator",
+        "",
+        {
+            "collision_enabled": True,
+            "collision_restitution": 0.82,
+            "collision_friction": 0.08,
+            "collision_mass_scale": 1.0,
+            "collision_impulse_cap": 9000.0,
+        },
+    )
     worker.server = object()
     worker.epoch = "epoch-a"
     worker._now = staticmethod(lambda: 1.0)
@@ -921,9 +1134,15 @@ def test_new_member_seeds_previous_frame_for_swept():
     worker._handle_message(socket, {"type": "hello", "runtime_id": "a"})
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     state = {
-        "type": "state", "seq": 5, "x": 0.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[0.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0,
+        "type": "state",
+        "seq": 5,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
     }
     # 普通桌宠成员：首帧不垫底（旧行为不变）
     worker._handle_message(socket, {**state, "flags": flags})
@@ -931,16 +1150,28 @@ def test_new_member_seeds_previous_frame_for_swept():
     assert "a" not in worker.previous_members
     # FLAG_STATIC 成员（岛）：首帧垫底，swept 退化为静态检测
     worker._handle_message(socket, {"type": "hello", "runtime_id": "island"})
-    worker._handle_message(socket, {
-        **state, "runtime_id": "island", "flags": flags | collision.FLAG_STATIC,
-    })
+    worker._handle_message(
+        socket,
+        {
+            **state,
+            "runtime_id": "island",
+            "flags": flags | collision.FLAG_STATIC,
+        },
+    )
     assert "island" in worker.members
     assert worker.previous_members["island"]["seq"] == 5
     # 第二帧起 previous 正常滚动
-    worker._handle_message(socket, {
-        **state, "runtime_id": "island", "seq": 6, "x": 10.0,
-        "circles": [[10.0, 0.0, 30.0]], "flags": flags | collision.FLAG_STATIC,
-    })
+    worker._handle_message(
+        socket,
+        {
+            **state,
+            "runtime_id": "island",
+            "seq": 6,
+            "x": 10.0,
+            "circles": [[10.0, 0.0, 30.0]],
+            "flags": flags | collision.FLAG_STATIC,
+        },
+    )
     assert worker.previous_members["island"]["seq"] == 5
     assert worker.members["island"]["seq"] == 6
 
@@ -1000,7 +1231,7 @@ def test_two_sessions_elect_one_coordinator_and_stop(tmp_path):
 
 def test_subprocess_sessions_send_frames_and_reelect_after_parent_exits(tmp_path):
     name = _server_name("sub")
-    script = r'''
+    script = r"""
 import json, sys, time
 from PySide6.QtCore import QEventLoop
 from PySide6.QtWidgets import QApplication
@@ -1047,13 +1278,15 @@ if sys.argv[4] == "hold":
         time.sleep(.005)
     print(json.dumps({"new_roles": roles[len(initial_roles):]}), flush=True)
 session.stop()
-'''
+"""
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONPATH=os.getcwd())
     command = [sys.executable, "-c", script, name, "slot-a", str(tmp_path), "hold"]
     first = subprocess.Popen(command, stdout=subprocess.PIPE, text=True, env=env)
     second = subprocess.Popen(
         [sys.executable, "-c", script, name, "slot-b", str(tmp_path), "hold"],
-        stdout=subprocess.PIPE, text=True, env=env,
+        stdout=subprocess.PIPE,
+        text=True,
+        env=env,
     )
     try:
         first_info = json.loads(first.stdout.readline())
@@ -1066,21 +1299,13 @@ session.stop()
 
         coordinator = first if any(role[0] for role in first_info["roles"]) else second
         survivor = second if coordinator is first else first
-        initial_epochs = {
-            epoch
-            for info in (first_info, second_info)
-            for _, epoch in info["roles"]
-            if epoch
-        }
+        initial_epochs = {epoch for info in (first_info, second_info) for _, epoch in info["roles"] if epoch}
         assert len(initial_epochs) == 1
 
         coordinator.terminate()
         assert coordinator.wait(timeout=5) is not None
         survivor_info = json.loads(survivor.stdout.readline())
-        new_coordinator_epochs = {
-            epoch for is_coordinator, epoch in survivor_info["new_roles"]
-            if is_coordinator and epoch
-        }
+        new_coordinator_epochs = {epoch for is_coordinator, epoch in survivor_info["new_roles"] if is_coordinator and epoch}
         assert len(new_coordinator_epochs) == 1
         assert new_coordinator_epochs.isdisjoint(initial_epochs)
         assert survivor.wait(timeout=5) == 0
@@ -1133,8 +1358,7 @@ def test_submit_leave_removes_member_immediately(tmp_path):
         # 即使成员表已空，snapshot 仍是连接 watchdog 的控制心跳；客户端
         # 必须收到空权威表，并在超过 1.5s 后继续连接到同一 epoch。
         deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline and not any(
-                not (item.get("members") or ()) for item in snapshots):
+        while time.monotonic() < deadline and not any(not (item.get("members") or ()) for item in snapshots):
             _pump(0.05)
         assert any(not (item.get("members") or ()) for item in snapshots)
         _pump(1.7)
@@ -1156,9 +1380,9 @@ def test_update_policy_live_applies_to_worker(tmp_path):
         while time.monotonic() < deadline and session._worker.server is None:
             _pump(0.05)
         assert session._worker.server is not None
-        session.update_policy({"collision_enabled": True, "collision_restitution": 0.5,
-                               "collision_friction": 0.15, "collision_mass_scale": 1.5,
-                               "collision_impulse_cap": 6000.0})
+        session.update_policy(
+            {"collision_enabled": True, "collision_restitution": 0.5, "collision_friction": 0.15, "collision_mass_scale": 1.5, "collision_impulse_cap": 6000.0}
+        )
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline and session._worker.policy.get("collision_restitution") != 0.5:
             _pump(0.05)
@@ -1168,21 +1392,39 @@ def test_update_policy_live_applies_to_worker(tmp_path):
         assert session._worker.policy["collision_impulse_cap"] == pytest.approx(6000.0)
     finally:
         session.stop()
+
+
 def test_coordinator_own_predicted_bounce_via_submit_state_reaches_target():
     """回归：协调者自身（主桌宠）经进程内 submit_state 上报预测反弹时，
     也必须进入 _pending_predicted 捕获队列——否则主桌宠撞别的桌宠时
     目标永远收不到权威冲量（只有 socket 路径有捕获）。"""
     flags = collision.FLAG_VISIBLE | collision.FLAG_COLLISION_ENABLED
     target = {
-        "runtime_id": "b", "seq": 1, "x": 50.0, "y": 0.0,
-        "radius_x": 30.0, "radius_y": 30.0, "circles": [[50.0, 0.0, 30.0]],
-        "vx": 0.0, "vy": 0.0, "scale": 1.0, "flags": flags,
+        "runtime_id": "b",
+        "seq": 1,
+        "x": 50.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[50.0, 0.0, 30.0]],
+        "vx": 0.0,
+        "vy": 0.0,
+        "scale": 1.0,
+        "flags": flags,
     }
     worker = _coordinator_with_members(target)  # worker.runtime_id == "coordinator"
     shooter_state = {
-        "seq": 2, "x": 0.0, "y": 0.0, "radius_x": 30.0, "radius_y": 30.0,
-        "circles": [[0.0, 0.0, 30.0]], "vx": -800.0, "vy": 0.0,
-        "bounce_vx": 2000.0, "bounce_vy": 0.0, "scale": 1.0,
+        "seq": 2,
+        "x": 0.0,
+        "y": 0.0,
+        "radius_x": 30.0,
+        "radius_y": 30.0,
+        "circles": [[0.0, 0.0, 30.0]],
+        "vx": -800.0,
+        "vy": 0.0,
+        "bounce_vx": 2000.0,
+        "bounce_vy": 0.0,
+        "scale": 1.0,
         "flags": flags | collision.FLAG_PREDICTED_BOUNCE,
     }
     received = []
@@ -1208,13 +1450,25 @@ def test_impulse_malformed_tick_dropped_without_raising():
     impulses = []
     worker.impulse_ready.connect(impulses.append)
     for bad_tick in ("bad", None, [1], {"x": 1}):
-        worker._handle_message(FakeSocket(), {
-            "type": "impulse", "epoch": "epoch-a", "pair": "a|b", "tick": bad_tick,
-        })
+        worker._handle_message(
+            FakeSocket(),
+            {
+                "type": "impulse",
+                "epoch": "epoch-a",
+                "pair": "a|b",
+                "tick": bad_tick,
+            },
+        )
     assert impulses == []
-    worker._handle_message(FakeSocket(), {
-        "type": "impulse", "epoch": "epoch-a", "pair": "a|b", "tick": 3,
-    })
+    worker._handle_message(
+        FakeSocket(),
+        {
+            "type": "impulse",
+            "epoch": "epoch-a",
+            "pair": "a|b",
+            "tick": 3,
+        },
+    )
     assert len(impulses) == 1
 
 
@@ -1223,8 +1477,7 @@ def test_set_policy_partial_dict_merges_with_defaults():
     默认值/旧值补齐，coordinator tick 不再可能 KeyError。"""
     worker = _CollisionWorker(_server_name("policy-merge"), "coordinator", "", {})
     worker.set_policy({"collision_enabled": False})
-    for key in ("collision_restitution", "collision_friction",
-                "collision_mass_scale", "collision_impulse_cap"):
+    for key in ("collision_restitution", "collision_friction", "collision_mass_scale", "collision_impulse_cap"):
         assert key in worker.policy
     assert worker.policy["collision_enabled"] is False
     # 再次部分更新不清掉既有键
@@ -1242,11 +1495,17 @@ def test_welcome_triggers_immediate_state_resend():
     worker.latest_state = _state(5)
     worker._participating = True
     worker.epoch = "epoch-1"  # 同 epoch 重连场景
-    worker._handle_message(client_socket, {
-        "type": "welcome", "epoch": "epoch-1", "tick": 0, "policy": {}, "members": [],
-    })
-    frames = [m for frame in client_socket.sent
-              for m in collision_codec.FrameStreamDecoder().feed(frame)]
+    worker._handle_message(
+        client_socket,
+        {
+            "type": "welcome",
+            "epoch": "epoch-1",
+            "tick": 0,
+            "policy": {},
+            "members": [],
+        },
+    )
+    frames = [m for frame in client_socket.sent for m in collision_codec.FrameStreamDecoder().feed(frame)]
     assert any(m.get("type") == "state" for m in frames)
 
 
@@ -1271,6 +1530,7 @@ def test_welcome_timed_out_cleans_up_timers(monkeypatch):
     """_welcome_timed_out 必须像 _client_lost 一样停掉并清空 _welcome_timer /
     _client_watchdog：否则旧 watchdog 以 500ms 周期读「当前」连接状态，
     新连接建立后 1.5s 内可误杀新连接（且旧定时器泄漏到 worker 生命周期）。"""
+
     class FakeTimer:
         def __init__(self):
             self.stopped = False

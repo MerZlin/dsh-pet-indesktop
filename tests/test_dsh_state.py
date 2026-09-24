@@ -4,6 +4,7 @@
 通过向临时桥目录写 dsh.jsonl + 模拟 harness_launcher.is_running，直接驱动
 DshStateTracker 的事件/在线轮询，验证 edge-trigger 去重、离线恢复与审批锁存。
 """
+
 from __future__ import annotations
 
 import json
@@ -43,8 +44,7 @@ def _records_for(*events):
     """把事件名序列转为 AgentStatus(working/idle) 或原始事件记录。"""
     out = []
     for ev in events:
-        if ev in ("idle", "working", "thinking", "waiting_approval", "waiting_question",
-                  "success", "error"):
+        if ev in ("idle", "working", "thinking", "waiting_approval", "waiting_question", "success", "error"):
             out.append({"event": "AgentStatus", "state": ev})
         else:
             out.append({"event": ev})
@@ -88,8 +88,8 @@ def test_edge_trigger_dedup(tmp_path, monkeypatch, caplog):
     emitted = []
     tracker.state_changed.connect(lambda f, t: emitted.append((f, t)))
 
-    _write(bridge_dir, *(_records_for("user/message")))   # thinking
-    _write(bridge_dir, *(_records_for("user/message")))   # thinking 重复
+    _write(bridge_dir, *(_records_for("user/message")))  # thinking
+    _write(bridge_dir, *(_records_for("user/message")))  # thinking 重复
     tracker._poll_events()
     assert tracker.current_state is DshState.THINKING
     # 只有一次 thinking 转换
@@ -104,12 +104,16 @@ def test_full_pipeline(tmp_path, monkeypatch):
     states = []
     tracker.state_changed.connect(lambda f, t: states.append(t))
 
-    _write(bridge_dir, *(_records_for("user/message", "tool/call", "approval/asked",
-                                       "approval/decided", "turn/end", "idle")))
+    _write(bridge_dir, *(_records_for("user/message", "tool/call", "approval/asked", "approval/decided", "turn/end", "idle")))
     tracker._poll_events()
 
     assert states == [
-        "thinking", "working", "waiting_approval", "working", "success", "idle",
+        "thinking",
+        "working",
+        "waiting_approval",
+        "working",
+        "success",
+        "idle",
     ]
     assert tracker.current_state is DshState.IDLE
 
@@ -149,9 +153,10 @@ def test_question_latch_ignores_working(tmp_path, monkeypatch):
     tracker._poll_online()  # idle
 
     # question/requested 后，即便又来 working（agent 仍在等回答），也不被顶掉
-    _write(bridge_dir, {"event": "question/requested", "questions": [
-        {"id": "q1", "question": "要执行哪个方案？",
-         "options": [{"label": "方案 A"}, {"label": "方案 B"}]}]})
+    _write(
+        bridge_dir,
+        {"event": "question/requested", "questions": [{"id": "q1", "question": "要执行哪个方案？", "options": [{"label": "方案 A"}, {"label": "方案 B"}]}]},
+    )
     _write(bridge_dir, *(_records_for("tool/call", "working")))
     tracker._poll_events()
     assert tracker.current_state is DshState.WAITING_QUESTION
@@ -170,14 +175,18 @@ def test_question_pipeline(tmp_path, monkeypatch):
     tracker.state_changed.connect(lambda f, t: states.append(t))
 
     _write(bridge_dir, *(_records_for("user/message", "tool/call")))
-    _write(bridge_dir, {"event": "question/requested", "questions": [
-        {"id": "q1", "question": "选 A 还是 B？", "options": [{"label": "A"}, {"label": "B"}]}]})
+    _write(bridge_dir, {"event": "question/requested", "questions": [{"id": "q1", "question": "选 A 还是 B？", "options": [{"label": "A"}, {"label": "B"}]}]})
     _write(bridge_dir, {"event": "question/resolved"})
     _write(bridge_dir, *(_records_for("turn/end", "idle")))
     tracker._poll_events()
 
     assert states == [
-        "thinking", "working", "waiting_question", "working", "success", "idle",
+        "thinking",
+        "working",
+        "waiting_question",
+        "working",
+        "success",
+        "idle",
     ]
     assert tracker.current_state is DshState.IDLE
 
@@ -227,8 +236,7 @@ def test_user_message_plugin_source_ignored(tmp_path, monkeypatch):
     messages = []
     tracker.user_message.connect(lambda sid, text: messages.append((sid, text)))
 
-    _write(bridge_dir, {"event": "user/message", "sourceKind": "plugin",
-                        "text": "<system-reminder> 技能目录……", "sessionId": "s1"})
+    _write(bridge_dir, {"event": "user/message", "sourceKind": "plugin", "text": "<system-reminder> 技能目录……", "sessionId": "s1"})
     tracker._poll_events()
 
     assert messages == []
@@ -242,8 +250,7 @@ def test_user_message_real_emits_signal(tmp_path, monkeypatch):
     messages = []
     tracker.user_message.connect(lambda sid, text: messages.append((sid, text)))
 
-    _write(bridge_dir, {"event": "user/message", "sourceKind": "user",
-                        "text": "看看还有没有这个事件", "sessionId": "s1"})
+    _write(bridge_dir, {"event": "user/message", "sourceKind": "user", "text": "看看还有没有这个事件", "sessionId": "s1"})
     tracker._poll_events()
 
     assert messages == [("s1", "看看还有没有这个事件")]
@@ -285,10 +292,15 @@ def test_llm_error_record_enters_error_state(tmp_path, monkeypatch):
     tracker.state_changed.connect(lambda f, t: states.append(t))
 
     _write(bridge_dir, {"event": "tool/call"})  # working
-    _write(bridge_dir, {
-        "event": "llm_error", "errorCode": "bad_response_status_code",
-        "errorMessage": "404", "errorKind": "api",
-    })
+    _write(
+        bridge_dir,
+        {
+            "event": "llm_error",
+            "errorCode": "bad_response_status_code",
+            "errorMessage": "404",
+            "errorKind": "api",
+        },
+    )
     tracker._poll_events()
 
     assert tracker.current_state is DshState.ERROR

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """边缘探头控制器/几何测试。"""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, QPoint, QRect
@@ -335,8 +336,8 @@ class DeltaWin(FakeWin):
         super().__init__()
         self._w = 640
         self._h = 390
-        self._body = QRect(212, 90, 216, 270)   # 画布留白：左 212 / 右 212
-        self._vis = QRect(264, 124, 212, 266)   # 可见像素（窗口内容坐标，不含偏移）
+        self._body = QRect(212, 90, 216, 270)  # 画布留白：左 212 / 右 212
+        self._vis = QRect(264, 124, 212, 266)  # 可见像素（窗口内容坐标，不含偏移）
         self._draw_delta = QPoint(0, 0)
 
     def _stable_body_local_rect(self):
@@ -418,9 +419,7 @@ def test_entry_pose_does_not_jump_back_from_the_edge():
     times[0] += 0.016  # 第一个过渡帧
     ctrl._on_timer()
     # 不得跳回屏幕内侧：修复前该值 ≈ +150（回弹到画布留白处）
-    assert body_left() <= 5, (
-        f"入场第一帧身体左缘={body_left()}，跳回屏幕内侧（修复前 ≈ +150）"
-    )
+    assert body_left() <= 5, f"入场第一帧身体左缘={body_left()}，跳回屏幕内侧（修复前 ≈ +150）"
     ctrl.cancel(restore=True)
 
 
@@ -439,13 +438,9 @@ def test_probe_body_bounds_allow_the_body_to_leave_the_screen_on_both_sides():
     sbr = win._stable_body_local_rect()
     bounds = probe_body_bounds(avail, sbr)
     # 身体左边界（= bounds.left() + sbr.x()）必须能到 avail.left() - sbr.width()
-    assert bounds.left() + sbr.x() <= avail.left() - sbr.width(), (
-        f"左向放宽不足：身体左边界最远只能到 {bounds.left() + sbr.x()}"
-    )
+    assert bounds.left() + sbr.x() <= avail.left() - sbr.width(), f"左向放宽不足：身体左边界最远只能到 {bounds.left() + sbr.x()}"
     right_edge = bounds.left() + bounds.width() - 1
-    assert right_edge + sbr.x() >= avail.right() + sbr.width(), (
-        f"右向放宽不足：身体右边界最远只能到 {right_edge + sbr.x()}"
-    )
+    assert right_edge + sbr.x() >= avail.right() + sbr.width(), f"右向放宽不足：身体右边界最远只能到 {right_edge + sbr.x()}"
 
 
 def test_peek_divides_by_the_rotated_visible_box_in_the_same_frame():
@@ -466,10 +461,7 @@ def test_peek_divides_by_the_rotated_visible_box_in_the_same_frame():
     ctrl._on_timer()
     assert ctrl.mode == PEEKING
     vx = win._virtual_pos().x()
-    assert vx <= -270, (
-        f"虚拟窗口 x={vx} 偏内（阈值 -270）：分母框仍被绘制偏移污染——"
-        f"旧口径下该值只有 -232，角色几乎整只留在屏幕内"
-    )
+    assert vx <= -270, f"虚拟窗口 x={vx} 偏内（阈值 -270）：分母框仍被绘制偏移污染——旧口径下该值只有 -232，角色几乎整只留在屏幕内"
     assert vx >= -420, f"虚拟窗口 x={vx} 偏外：角色会被整只推出屏幕"
     ctrl.cancel(restore=True)
 

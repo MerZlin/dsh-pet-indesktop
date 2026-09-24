@@ -7,6 +7,7 @@
 批 6-8b 修 3（5.6sol 全审 P2）：缓存写入必须单调累积——后写进程带着
 旧内存快照写入时，写前重读磁盘合并，绝不覆盖先写进程刚加入的条目。
 """
+
 from __future__ import annotations
 
 import json
@@ -99,10 +100,7 @@ def test_meta_file_cache_concurrent_writers_accumulate(tmp_path, monkeypatch):
         clip = webm_clip.WebMClip(video)
         clip.warm_meta()
 
-    ts = [
-        threading.Thread(target=_write, args=(n,), daemon=True)
-        for n in ("a", "b", "c", "d")
-    ]
+    ts = [threading.Thread(target=_write, args=(n,), daemon=True) for n in ("a", "b", "c", "d")]
     for t in ts:
         t.start()
     for t in ts:

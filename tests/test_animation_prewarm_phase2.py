@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Phase 2：动画预热门控测试（预热由省电模式联动，见 app._create_library）。"""
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication
@@ -23,7 +24,7 @@ def test_disabled_prewarm_does_not_schedule_low_or_high(tmp_path, monkeypatch):
     lib = MovieLibrary(character_id="shenshen", prewarm_enabled=False)
     try:
         lib.schedule_high_priority_warm()  # 不应创建线程
-        lib.schedule_low_priority_warm()   # 不应启动 2s 定时器
+        lib.schedule_low_priority_warm()  # 不应启动 2s 定时器
         assert lib._low_warm_timer.isActive() is False
         assert lib._prewarm_enabled is False
     finally:

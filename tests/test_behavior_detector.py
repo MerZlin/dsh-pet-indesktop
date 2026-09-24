@@ -156,9 +156,18 @@ class TestDualWindowFineClass:
         det, _ = _make_detector()
         col = _Collector(det)
         # 10 个 step 里散落 3 次 Search（穿插 ACTION 避免 macro W6 抢占）→ warning
-        steps = [("web_search", 1), ("Read", 2), ("Bash", 3), ("think", 4),
-                 ("web_search", 5), ("Edit", 6), ("pwd", 7), ("Grep", 8),
-                 ("web_search", 9), ("Bash", 10)]
+        steps = [
+            ("web_search", 1),
+            ("Read", 2),
+            ("Bash", 3),
+            ("think", 4),
+            ("web_search", 5),
+            ("Edit", 6),
+            ("pwd", 7),
+            ("Grep", 8),
+            ("web_search", 9),
+            ("Bash", 10),
+        ]
         for tool, s in steps:
             det.feed_record("dsh", _call(tool, s))
         assert col.warnings, "W10 同类=3 应触发 warning"
@@ -171,9 +180,19 @@ class TestDualWindowFineClass:
         col = _Collector(det)
         # 10 个 step 里有 4 次 Search（分布开避免 W6=3）→ control
         # 注意：第 7 步时 W10 Search=3 会先触发 warning，这里只断言最终 control
-        steps = [("web_search", 1), ("Read", 2), ("Bash", 3), ("web_search", 4),
-                 ("Edit", 5), ("think", 6), ("web_search", 7), ("Read", 8),
-                 ("Bash", 9), ("web_search", 10), ("Edit", 11)]
+        steps = [
+            ("web_search", 1),
+            ("Read", 2),
+            ("Bash", 3),
+            ("web_search", 4),
+            ("Edit", 5),
+            ("think", 6),
+            ("web_search", 7),
+            ("Read", 8),
+            ("Bash", 9),
+            ("web_search", 10),
+            ("Edit", 11),
+        ]
         for tool, s in steps:
             det.feed_record("dsh", _call(tool, s))
         assert col.controls, "W10 同类=4 应触发 control"
@@ -185,8 +204,7 @@ class TestDualWindowFineClass:
         det, _ = _make_detector()
         col = _Collector(det)
         # 6 个 step 全为 READ 族（含 1 个 ACTION 避免 macro W6 抢占）
-        steps = [("Read", 1), ("Grep", 2), ("Glob", 3), ("Bash", 4),
-                 ("cat", 5), ("head", 6), ("tail", 7)]
+        steps = [("Read", 1), ("Grep", 2), ("Glob", 3), ("Bash", 4), ("cat", 5), ("head", 6), ("tail", 7)]
         for tool, s in steps:
             det.feed_record("dsh", _call(tool, s))
         # W6（步2-7）= Grep/Glob/Bash/cat/head/tail → READ=5
@@ -199,8 +217,7 @@ class TestMacroRules:
         """Search/Read/Think/Grep/Search/Read：6/6 全探索、0 行动 → control。"""
         det, _ = _make_detector()
         col = _Collector(det)
-        for tool, s in [("web_search", 1), ("Read", 2), ("think", 3), ("Grep", 4),
-                        ("web_search", 5), ("Read", 6)]:
+        for tool, s in [("web_search", 1), ("Read", 2), ("think", 3), ("Grep", 4), ("web_search", 5), ("Read", 6)]:
             det.feed_record("dsh", _call(tool, s))
         assert col.controls, "W6 全探索无行动应触发 control"
         assert col.controls[0]["reason"] == PatternReason.MACRO_EXPLORE_W6.value
@@ -209,8 +226,7 @@ class TestMacroRules:
         det, _ = _make_detector()
         col = _Collector(det)
         # 5 个 EXPLORATION + 1 个 ACTION（Bash 放在中间，确保任意 W6 窗口都有 ACTION）
-        for tool, s in [("web_search", 1), ("Read", 2), ("Bash", 3), ("think", 4),
-                        ("Grep", 5), ("web_search", 6)]:
+        for tool, s in [("web_search", 1), ("Read", 2), ("Bash", 3), ("think", 4), ("Grep", 5), ("web_search", 6)]:
             det.feed_record("dsh", _call(tool, s))
         # EXPLORATION=5 但 ACTION>=1 → 不触发 macro W6（默认 ACTION==0 才 control）
         assert not col.controls
@@ -219,9 +235,7 @@ class TestMacroRules:
         det, _ = _make_detector()
         col = _Collector(det)
         # 10 个 step：9 探索 + 1 行动（Bash 放第 5 步，避免 W6 全探索抢占）
-        steps = [("web_search", 1), ("Read", 2), ("think", 3), ("Grep", 4),
-                 ("Bash", 5), ("web_search", 6), ("ls", 7), ("pwd", 8),
-                 ("Read", 9), ("dir", 10)]
+        steps = [("web_search", 1), ("Read", 2), ("think", 3), ("Grep", 4), ("Bash", 5), ("web_search", 6), ("ls", 7), ("pwd", 8), ("Read", 9), ("dir", 10)]
         for tool, s in steps:
             det.feed_record("dsh", _call(tool, s))
         # W10 EXPLORATION=9 >= 7 且 ACTION=1 <= 1 → warning（macro）
@@ -250,8 +264,7 @@ class TestCooldownGate:
         det, clock = _make_detector(min_steps_between=3, cooldown_seconds=0)
         col = _Collector(det)
         # 触发一次 control（W6/W10 Search=3）
-        for tool, s in [("web_search", 1), ("Read", 2), ("web_search", 3),
-                        ("pwd", 4), ("web_search", 5), ("Grep", 6)]:
+        for tool, s in [("web_search", 1), ("Read", 2), ("web_search", 3), ("pwd", 4), ("web_search", 5), ("Grep", 6)]:
             det.feed_record("dsh", _call(tool, s))
         assert len(col.controls) == 1
         # 紧接着再来（新增 1 step，不足 3）→ 不重复触发
@@ -272,8 +285,7 @@ class TestCooldownGate:
     def test_cooldown_time_gate(self):
         det, clock = _make_detector(cooldown_seconds=60)
         col = _Collector(det)
-        for tool, s in [("web_search", 1), ("Read", 2), ("web_search", 3),
-                        ("pwd", 4), ("web_search", 5), ("Grep", 6)]:
+        for tool, s in [("web_search", 1), ("Read", 2), ("web_search", 3), ("pwd", 4), ("web_search", 5), ("Grep", 6)]:
             det.feed_record("dsh", _call(tool, s))
         assert len(col.controls) == 1
         # 时间冷却内即使新增 step 也不触发（时间兜底优先于 step 门控）
@@ -293,8 +305,7 @@ class TestControlVerdict:
         """Judge 机制已移除：Control 档位固定上报 REPLAN（只提醒，不打断 Agent）。"""
         det, _ = _make_detector()
         col = _Collector(det)
-        for tool, s in [("web_search", 1), ("Read", 2), ("web_search", 3),
-                        ("pwd", 4), ("web_search", 5), ("Grep", 6)]:
+        for tool, s in [("web_search", 1), ("Read", 2), ("web_search", 3), ("pwd", 4), ("web_search", 5), ("Grep", 6)]:
             det.feed_record("dsh", _call(tool, s))
         assert col.controls
         assert col.controls[0]["verdict"] == "REPLAN"
@@ -312,8 +323,7 @@ class TestLifecycle:
         col2 = _Collector(det)
         # 重置后重新累计，不沿用旧窗口：
         # 3 个 READ 在 W6 中触发 W6 control
-        steps = [("Read", 10), ("Grep", 11), ("cat", 12), ("head", 13),
-                 ("tail", 14), ("Bash", 16)]
+        steps = [("Read", 10), ("Grep", 11), ("cat", 12), ("head", 13), ("tail", 14), ("Bash", 16)]
         for tool, s in steps:
             det.feed_record("dsh", _call(tool, s))
         # W6 中 READ=3 触发 W6 control（在 step 12 时）
@@ -342,6 +352,7 @@ class TestLifecycle:
             det.feed_record("dsh", _call(tool, s))
         det.feed_record("dsh", _call("Read", 7))  # flush step6 → W6 Search=3
         assert col.controls
+
 
 def _state_probe(det: BehaviorPatternDetector, agent_key: str):
     """便捷方法：暴露内部状态供断言（生产代码不依赖）。"""

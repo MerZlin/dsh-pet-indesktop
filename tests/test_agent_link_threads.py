@@ -4,6 +4,7 @@
 等待一律用 wait_until（事件驱动 + 硬超时），不用 sleep 猜时序。
 worker 节奏通过实例属性 _POLL_INTERVAL_S 调快（类属性，实例覆盖只影响本测试）。
 """
+
 from __future__ import annotations
 
 import gc
@@ -64,12 +65,14 @@ class TestWorkerLifecycle:
         waits = []
         first_poll_done = threading.Event()
         orig_poll = mon._poll
+
         def tracked_poll(gen=None):
             polls.append(1)
             try:
                 return orig_poll(gen=gen)
             finally:
                 first_poll_done.set()
+
         mon._poll = tracked_poll
         assert mon.start() is True
         try:
@@ -103,12 +106,24 @@ class TestWorkerLifecycle:
         class DummyWin:
             idles = ["待机"]
             cats = {"acts": ["写代码"]}
-            def __init__(self): self.switched = []
-            def isVisible(self): return True
-            def request_link_anim(self, name): self.switched.append(name)
-            def request_link_idle(self): pass
-            def _pick(self, lst): return lst[0]
-            def show_bubble(self, *a, **k): pass
+
+            def __init__(self):
+                self.switched = []
+
+            def isVisible(self):
+                return True
+
+            def request_link_anim(self, name):
+                self.switched.append(name)
+
+            def request_link_idle(self):
+                pass
+
+            def _pick(self, lst):
+                return lst[0]
+
+            def show_bubble(self, *a, **k):
+                pass
 
         win = DummyWin()
         mgr = AgentLinkManager(win, cfg, min_interval=0.0)
@@ -122,12 +137,14 @@ class TestWorkerLifecycle:
         polls = []
         first_poll_done = threading.Event()
         orig_poll = mon._poll
+
         def tracked_poll(gen=None):
             polls.append(1)
             try:
                 return orig_poll(gen=gen)
             finally:
                 first_poll_done.set()
+
         mon._poll = tracked_poll
         assert mon.start() is True
         assert wait_until(first_poll_done.is_set)
@@ -140,7 +157,7 @@ class TestWorkerLifecycle:
         n_after_stop = len(win.switched)
         mon.state_event.emit(AgentEvent(agent="dsh", kind="state", state="working", gen=gen1))  # 迟到旧信号（直发=同步派发）
         app.processEvents()
-        assert len(win.switched) == n_after_stop         # 被丢弃
+        assert len(win.switched) == n_after_stop  # 被丢弃
         # 重启后新代次正常
         assert mon.start() is True
         mon.stop()
@@ -152,12 +169,24 @@ class TestWorkerLifecycle:
         class DummyWin:
             idles = ["待机"]
             cats = {"acts": ["写代码"]}
-            def __init__(self): self.switched = []
-            def isVisible(self): return True
-            def request_link_anim(self, name): self.switched.append(name)
-            def request_link_idle(self): pass
-            def _pick(self, lst): return lst[0]
-            def show_bubble(self, *a, **k): pass
+
+            def __init__(self):
+                self.switched = []
+
+            def isVisible(self):
+                return True
+
+            def request_link_anim(self, name):
+                self.switched.append(name)
+
+            def request_link_idle(self):
+                pass
+
+            def _pick(self, lst):
+                return lst[0]
+
+            def show_bubble(self, *a, **k):
+                pass
 
         win = DummyWin()
         mgr = AgentLinkManager(win, cfg, min_interval=0.0)
@@ -222,8 +251,9 @@ class TestWorkerLifecycle:
         t0 = time.monotonic()  # 含 start 内部开销：时间窗下界覆盖启动全程
         mon.start()
         assert wait_until(lambda: polled), "首轮轮询最终必须发生（worker 活着）"
-        assert time.monotonic() - t0 >= mon._POLL_INTERVAL_S * 0.8,             "首轮轮询必须先等一个周期（启动瞬间不抢读）"
+        assert time.monotonic() - t0 >= mon._POLL_INTERVAL_S * 0.8, "首轮轮询必须先等一个周期（启动瞬间不抢读）"
         mon.stop()
+
 
 class TestDestroyedFallback:
     """全审 P1-2：未 shutdown 直接销毁 monitor/manager 时，worker 不得变僵尸。
@@ -268,8 +298,8 @@ class TestDestroyedFallback:
         mon = _make_monitor(tmp_path)
         assert mon._destroyed_conn is not None
         BaseAgentMonitor._destroyed_guard(mon)
-        assert mon._destroyed_conn is None          # 显式断环
-        BaseAgentMonitor._destroyed_guard(mon)      # 重复销毁：幂等无操作
+        assert mon._destroyed_conn is None  # 显式断环
+        BaseAgentMonitor._destroyed_guard(mon)  # 重复销毁：幂等无操作
         assert mon._destroyed_conn is None
         assert not mon._running
 
@@ -304,10 +334,10 @@ class TestDestroyedFallback:
         mon.start()
         assert entered.wait(timeout=5.0), "worker 未进入轮询"
         t0 = time.monotonic()
-        BaseAgentMonitor._destroyed_guard(mon)      # 模拟 GUI 线程上的销毁兜底
+        BaseAgentMonitor._destroyed_guard(mon)  # 模拟 GUI 线程上的销毁兜底
         elapsed = time.monotonic() - t0
         assert elapsed < 0.5, f"销毁兜底阻塞了调用线程 {elapsed:.2f}s（应在 reaper 里 join）"
-        block.set()                                 # 释放卡死的 I/O
+        block.set()  # 释放卡死的 I/O
         assert wait_until(lambda: not mon._worker.is_alive(), timeout=5.0)
 
     def test_destroyed_guard_repeated_calls_spawn_single_reaper(self, tmp_path, app):
@@ -330,8 +360,7 @@ class TestDestroyedFallback:
         reap_name = f"agent-monitor-reap-{mon.agent_key}"
 
         def alive_reapers():
-            return [t for t in threading.enumerate()
-                    if t.name == reap_name and t.is_alive()]
+            return [t for t in threading.enumerate() if t.name == reap_name and t.is_alive()]
 
         before = alive_reapers()
         # 重复触发 guard（worker 仍卡住）：旧实现每次都会新建一个 reaper
@@ -339,11 +368,10 @@ class TestDestroyedFallback:
         BaseAgentMonitor._destroyed_guard(mon)
         BaseAgentMonitor._destroyed_guard(mon)
         after = alive_reapers()
-        assert len(after) == len(before) + 1, \
-            f"重复 guard 产生 {len(after) - len(before)} 个 reaper（应只有 1 个）"
+        assert len(after) == len(before) + 1, f"重复 guard 产生 {len(after) - len(before)} 个 reaper（应只有 1 个）"
         reaper = next(t for t in after if t not in before)
-        assert reaper.daemon          # daemon：不阻止进程退出
-        block.set()                   # 释放卡死的 I/O
+        assert reaper.daemon  # daemon：不阻止进程退出
+        block.set()  # 释放卡死的 I/O
         assert wait_until(lambda: not mon._worker.is_alive(), timeout=5.0)
         assert wait_until(lambda: not reaper.is_alive(), timeout=5.0)  # 做完即退
 
@@ -357,7 +385,7 @@ class TestDestroyedFallback:
         worker = mon._worker
         assert worker is not None and worker.is_alive()
         ref = weakref.ref(mon)
-        del holder          # C++ 父链删除 → destroyed → 兜底（断环 + 停 worker）
+        del holder  # C++ 父链删除 → destroyed → 兜底（断环 + 停 worker）
         gc.collect()
         assert wait_until(lambda: not worker.is_alive(), timeout=5.0)
         del mon
@@ -390,6 +418,7 @@ class TestCloseEventStopsMonitors:
 
 def _make_opencode_db(path, rows):
     import sqlite3
+
     if path.exists():
         path.unlink()
     db = sqlite3.connect(path)
@@ -464,6 +493,7 @@ class TestOpenCodeDbRotation:
         # 新库的新事件正常送达（往【当前】库追加，而不是再替换一次——
         # 替换时点已存在的内容按历史处理，这是 backfill 防护的设计语义）
         import sqlite3
+
         db = sqlite3.connect(db1)
         db.execute(
             "INSERT INTO event (type, data) VALUES (?, ?)",
@@ -495,6 +525,7 @@ class TestManagerDeterministicTeardown:
         assert mgr.parent() is QApplication.instance(), "shutdown 后应过继给 QApplication"
         # 过继后 wrapper 被 GC 也只是空壳回收：C++ 侧由 app 持有，不受影响
         import shiboken6
+
         assert shiboken6.isValid(mgr)
 
     def test_shutdown_stops_manager_timers(self, tmp_path, app):

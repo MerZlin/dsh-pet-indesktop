@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """“吃垃圾文件”拖放模拟功能测试：只记录，绝不真删/移动文件。"""
+
 from __future__ import annotations
 
 import json

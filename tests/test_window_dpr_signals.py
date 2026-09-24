@@ -12,6 +12,7 @@
 - _last_frame_dpr 只在重建成功后更新：失败路径不提前记账，
   后续信号/移动仍会按新 DPR 重试（moveEvent 兜底）。
 """
+
 from __future__ import annotations
 
 import os
@@ -190,6 +191,7 @@ def _make_pet(dpr: float = 1.0):
 
 # ================================================================ Qt 信号驱动 DPR 变化
 
+
 def test_screen_changed_signal_forces_rebuild_with_new_dpr():
     """P1 复审：窗口静止时跨屏（screenChanged 信号）→ 强制按新 DPR 重建。
 
@@ -199,12 +201,12 @@ def test_screen_changed_signal_forces_rebuild_with_new_dpr():
     """
     _qapp()
     clip, pet = _make_pet()
-    window_mod.PetWindow._rebuild_frame(pet)   # 先按 DPR=1.0 建一帧
+    window_mod.PetWindow._rebuild_frame(pet)  # 先按 DPR=1.0 建一帧
     assert pet._last_frame_dpr == 1.0
     pm1 = pet._frame_pixmap
 
-    pet._screen_dpr = 2.0                      # 窗口所在屏 DPR 变化（窗口未移动）
-    pet.winId()                                # 创建原生窗口，得到 QWindow
+    pet._screen_dpr = 2.0  # 窗口所在屏 DPR 变化（窗口未移动）
+    pet.winId()  # 创建原生窗口，得到 QWindow
     win = pet.windowHandle()
     assert win is not None
     window_mod.PetWindow._arm_dpr_change_watch(pet)
@@ -213,8 +215,8 @@ def test_screen_changed_signal_forces_rebuild_with_new_dpr():
     # 额外的 screenChanged（CI 实测），断言用增量而非绝对次数
     base_calls = pet.update_calls
 
-    win.screenChanged.emit(win.screen())       # 模拟窗口跨屏信号
-    assert pet._frame_pixmap is not pm1                 # 强制重建，非旧成品
+    win.screenChanged.emit(win.screen())  # 模拟窗口跨屏信号
+    assert pet._frame_pixmap is not pm1  # 强制重建，非旧成品
     assert pet._frame_pixmap.width() == round(catalog.CANVAS_W * 0.5 * 2.0)
     assert pet._last_frame_dpr == 2.0
     assert pet.update_calls >= base_calls + 1  # 见上方 base_calls 注释
@@ -293,7 +295,7 @@ def test_show_event_arms_and_disarm_stops_signals():
     try:
         win = pet.windowHandle()
         assert win is not None
-        assert pet._dpr_watch_window is win          # showEvent 已接线
+        assert pet._dpr_watch_window is win  # showEvent 已接线
         assert pet._dpr_watch_screen is win.screen()
 
         pet._screen_dpr = 2.0
@@ -316,6 +318,7 @@ def test_show_event_arms_and_disarm_stops_signals():
 
 # ================================================================ _last_frame_dpr 记账
 
+
 def test_last_frame_dpr_only_updated_after_successful_rebuild():
     """P1 复审：重建失败（解码返回空图）时 _last_frame_dpr 不提前记账；
     后续 moveEvent 兜底/信号仍会按新 DPR 重试重建。"""
@@ -330,8 +333,8 @@ def test_last_frame_dpr_only_updated_after_successful_rebuild():
     pet.movie = bad
     pet._screen_dpr = 2.0
     window_mod.PetWindow._rebuild_frame(pet)
-    assert pet._last_frame_dpr == 1.0        # 失败路径不提前记账
-    assert pet._frame_pixmap is pm1          # 旧成品保留（失败不破坏显示）
+    assert pet._last_frame_dpr == 1.0  # 失败路径不提前记账
+    assert pet._frame_pixmap is pm1  # 旧成品保留（失败不破坏显示）
 
     # moveEvent 兜底路径：失败后仍按新 DPR 重试（不因提前记账被跳过）
     window_mod.PetWindow._refresh_frame_for_screen_dpr(pet)

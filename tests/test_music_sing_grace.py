@@ -5,6 +5,7 @@
 峰值瞬时跌破阈值。此前一检测到静音就退出唱歌，表现为「唱着唱着主动退出」。
 现要求：只有**持续静音**超过宽限期才真的退出。
 """
+
 from __future__ import annotations
 
 from pet import music_detect, window_alerts
@@ -93,7 +94,7 @@ def test_long_silence_does_stop_singing(monkeypatch):
     assert host._music_sing_active is True
 
     state["playing"] = False
-    window_alerts.check_music_sing(host)          # 起算静音
+    window_alerts.check_music_sing(host)  # 起算静音
     # 把起点往前拨，模拟已静音超过宽限期（不依赖真实等待）
     host._music_sing_silent_since -= 5.0
     window_alerts.check_music_sing(host)
@@ -101,15 +102,9 @@ def test_long_silence_does_stop_singing(monkeypatch):
 
 
 def test_grace_seconds_defaults_and_clamps():
-    assert (
-        window_alerts.music_sing_grace_seconds(_FakeHost())
-        == window_alerts.MUSIC_SING_GRACE_SECONDS
-    )
+    assert window_alerts.music_sing_grace_seconds(_FakeHost()) == window_alerts.MUSIC_SING_GRACE_SECONDS
     # 非法值回退默认
-    assert (
-        window_alerts.music_sing_grace_seconds(_FakeHost(grace="abc"))
-        == window_alerts.MUSIC_SING_GRACE_SECONDS
-    )
+    assert window_alerts.music_sing_grace_seconds(_FakeHost(grace="abc")) == window_alerts.MUSIC_SING_GRACE_SECONDS
     # 低于下限会被抬到 1 秒，避免退化成"瞬时静音即退出"
     assert window_alerts.music_sing_grace_seconds(_FakeHost(grace=0.1)) == 1.0
     # 正常值原样返回
@@ -126,4 +121,3 @@ def test_disabled_switch_stops_immediately(monkeypatch):
     host._music_sing_enabled = False
     window_alerts.check_music_sing(host)
     assert host._music_sing_active is False
-

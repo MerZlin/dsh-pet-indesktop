@@ -7,6 +7,7 @@ pet/persona_presets/{legacy,whale_maid}.json：模块导入（启动）时加载
 预设文件存在且为合法 JSON、事件键与导出 schema（persona_template）对齐、
 占位符不越过 PARAMETERS 渲染契约、拾取器按 mode 输出预设文案。
 """
+
 import json
 import re
 from pathlib import Path
@@ -124,11 +125,7 @@ def test_preset_placeholders_stay_within_the_rendering_contract():
     for mode in BUILTIN_MODES:
         data = _read_preset_file(mode)
         for key, lines in data.items():
-            used = {
-                match.group(1)
-                for line in (lines if isinstance(lines, list) else [lines])
-                for match in pattern.finditer(line)
-            }
+            used = {match.group(1) for line in (lines if isinstance(lines, list) else [lines]) for match in pattern.finditer(line)}
             allowed = set(PARAMETERS.get(key, ()))
             assert used <= allowed, (mode, key, sorted(used - allowed))
 

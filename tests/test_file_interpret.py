@@ -4,6 +4,7 @@
 时序纪律：心跳用例以事件循环轮询 + 宽预算等待（无固定 sleep 猜时序）；
 ChatService 以注入替身替换（同 tests/test_chat_service.py 的注入模式）。
 """
+
 from __future__ import annotations
 
 import time
@@ -136,7 +137,7 @@ def test_extract_text_reads_in_budget_and_marks_truncation(tmp_path):
 
     assert skipped == []
     assert "1" * 30 in content
-    assert "2" * 20 in content          # 剩余预算内截断
+    assert "2" * 20 in content  # 剩余预算内截断
     assert "2" * 21 not in content
     assert "已截断" in content
 
@@ -340,9 +341,12 @@ def _pump_until(qapp, predicate, budget_seconds=6.0):
 
 def test_heartbeat_reports_chars_and_elapsed(tmp_path):
     _qapp()
-    win = _FakeWin(tmp_path, data={
-        "file_interpret": {"enabled": True, "progress_interval_seconds": 0.2},
-    })
+    win = _FakeWin(
+        tmp_path,
+        data={
+            "file_interpret": {"enabled": True, "progress_interval_seconds": 0.2},
+        },
+    )
     service = FakeChatService()
     controller = FileInterpretController(win, service_factory=lambda: service)
     note = tmp_path / "note.md"
@@ -358,7 +362,7 @@ def test_heartbeat_reports_chars_and_elapsed(tmp_path):
 
     assert _pump_until(qapp, lambda: len(heartbeats()) >= 2)
     text = heartbeats()[-1]
-    assert "3 字" in text          # delta 聚合的真实字数
+    assert "3 字" in text  # delta 聚合的真实字数
     assert "秒" in text
 
     service.finished.emit("rid-1", "这是摘要")

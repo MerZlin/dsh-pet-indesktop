@@ -166,10 +166,12 @@ def test_slingshot_trajectory_handles_invalid_sampling():
     assert slingshot_trajectory(100.0, 0.0, duration=1.0, points=0) == []
     assert slingshot_trajectory(100.0, 0.0, duration=1.0, points=1) == [(0.0, 0.0)]
 
+
 def test_flight_anim_speed_scales_with_speed():
     from pet.physics import flight_anim_speed
-    assert flight_anim_speed(0.0) == 1.0          # 静止不变速
+
+    assert flight_anim_speed(0.0) == 1.0  # 静止不变速
     assert flight_anim_speed(300.0) == pytest.approx(1.0 + 300 / 1400 * 0.75)
-    assert flight_anim_speed(1400.0) == 1.75      # 顶格 1.75×
-    assert flight_anim_speed(9999.0) == 1.75      # 超量程封顶
+    assert flight_anim_speed(1400.0) == 1.75  # 顶格 1.75×
+    assert flight_anim_speed(9999.0) == 1.75  # 超量程封顶
     assert flight_anim_speed(700.0) > flight_anim_speed(300.0)  # 单调

@@ -13,6 +13,7 @@
 
 全部用假 clip/假库驱动，不起真实 ffmpeg。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -24,9 +25,11 @@ from pet import catalog
 from pet.config import Config
 from pet.window import PetWindow
 
+
 @pytest.fixture
 def app():
     return QApplication.instance() or QApplication([])
+
 
 class FakeClip(QObject):
     """与 WebMClip 接口兼容的假播放器：记录预热/启停/跳帧。"""
@@ -91,6 +94,7 @@ class FakeClip(QObject):
     def set_recycle_minutes(self, minutes):
         self.recycle_minutes_calls.append(minutes)
 
+
 class FakeLibrary:
     """只含核心动画名的假素材库。"""
 
@@ -137,59 +141,65 @@ class FakeLibrary:
         self.warmed.append(name)
         self._clips[name].warm_first_frame()
 
+
 def _make_window(tmp_path, **cfg_overrides):
     cfg = Config(base=tmp_path)
     for k, v in cfg_overrides.items():
         cfg.set(k, v)
     return PetWindow(FakeLibrary(), cfg)
 
+
 def test_throw_entry_warms_landing_idles(tmp_path, app):
     """进入 throw 物理模式：idle 池全部后台预热（落地回待机目标必热）。"""
     win = _make_window(tmp_path)
     idle_clip = win.lib.movie(catalog.IDLE)
     idle_clip.warm_calls = 0
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     assert idle_clip.warm_calls >= 1
     win._physics_mode = None
     win.close()
+
 
 def test_drag_entry_does_not_warm(tmp_path, app):
     """drag 模式不触发落地预热（拖拽不甩出就没有落地切换）。"""
     win = _make_window(tmp_path)
     idle_clip = win.lib.movie(catalog.IDLE)
     idle_clip.warm_calls = 0
-    win._enter_physics_mode('drag')
+    win._enter_physics_mode("drag")
     assert idle_clip.warm_calls == 0
     win._physics_mode = None
     win.close()
+
 
 def test_anim_end_during_throw_switches_to_flight_anim(tmp_path, app):
     """高速飞行途中动作播完：切到悬空动画（drag clip），不推进随机链。"""
     win = _make_window(tmp_path)
     win._switch("写代码")  # 击飞前正在播动作
     assert win.anim == "写代码"
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win._phys_vel[:] = [900.0, 0.0]  # 高速飞行段
     win._on_anim_ended("写代码")
     assert win.anim == catalog.DRAG  # 固定悬空动画，而非随机链目标
     win._stop_physics()
     win.close()
 
+
 def test_anim_end_during_throw_loops_flight_anim(tmp_path, app):
     """悬空动画自身播完且仍在高速飞行：原地循环（同 clip 重启），不掷骰。"""
     win = _make_window(tmp_path)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win._phys_vel[:] = [900.0, 0.0]
     win._switch(catalog.DRAG)
     drag_clip = win.lib.movie(catalog.DRAG)
     start_before = drag_clip.start_count
     jump_before = drag_clip.jump_calls
     win._on_anim_ended(catalog.DRAG)
-    assert win.anim == catalog.DRAG            # 没切走
+    assert win.anim == catalog.DRAG  # 没切走
     assert drag_clip.jump_calls > jump_before  # 回首帧
     assert drag_clip.start_count > start_before  # 重新起播
     win._stop_physics()
     win.close()
+
 
 def test_anim_end_during_throw_low_speed_allows_warm_pool(tmp_path, app):
     """低速段（滚动/滑动，< THROW_SLOW_ANIM_SPEED）：放行 idle/turn 池切换。
@@ -199,21 +209,22 @@ def test_anim_end_during_throw_low_speed_allows_warm_pool(tmp_path, app):
     """
     win = _make_window(tmp_path)
     win._switch("写代码")
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     # 前提建模：idle/turn 池首帧已热（idle 起飞预热 / turn pinned 常驻）
     for n in (*win.idles, *win.turns):
         win.lib.movie(n)._first_image = object()
     win._phys_vel[:] = [120.0, 0.0]  # 低速段
     win._on_anim_ended("写代码")
     assert win.anim in (*win.idles, *win.turns)  # 只许必热池
-    assert win.anim != catalog.DRAG              # 低速不再强制悬空
+    assert win.anim != catalog.DRAG  # 低速不再强制悬空
     win._stop_physics()
     win.close()
+
 
 def test_low_speed_pool_excludes_current(tmp_path, app):
     """低速段池切换排除当前动画（避免同名自切）。"""
     win = _make_window(tmp_path)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win.lib.movie(catalog.TURN)._first_image = object()  # 前提建模：turn pinned 常驻必热
     win._phys_vel[:] = [100.0, 0.0]
     win._switch(catalog.IDLE)
@@ -223,24 +234,27 @@ def test_low_speed_pool_excludes_current(tmp_path, app):
     win._stop_physics()
     win.close()
 
+
 def test_landing_switches_flight_anim_back_to_idle(tmp_path, app):
     """落地停稳（_stop_physics 退出 throw）：悬空动画切回待机。"""
     win = _make_window(tmp_path)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win._switch(catalog.DRAG)
     win._stop_physics()
     assert win._physics_mode is None
     assert win.anim == catalog.IDLE
     win.close()
 
+
 def test_stop_physics_from_drag_mode_keeps_anim(tmp_path, app):
     """非 throw 的 _stop_physics（如拖拽死区停下）：不做落地切换。"""
     win = _make_window(tmp_path)
-    win._enter_physics_mode('drag')
+    win._enter_physics_mode("drag")
     win._switch(catalog.DRAG)
     win._stop_physics()
     assert win.anim == catalog.DRAG  # 不切（松手死区路径自行处理回待机）
     win.close()
+
 
 def test_anim_end_normal_mode_chain_unaffected(tmp_path, app):
     """正常模式（无物理）：动画链照旧推进（回归守卫）。"""
@@ -250,14 +264,16 @@ def test_anim_end_normal_mode_chain_unaffected(tmp_path, app):
     assert win.anim != "写代码"  # 链推进了（具体目标由概率决定，不锁定）
     win.close()
 
+
 def test_low_speed_plays_warm_rolled_act(tmp_path, app, monkeypatch):
     """低速段掷骰掷中"首帧已热"的动作：直接播它（不退回 idle/turn 池）。"""
     import random as _random
-    monkeypatch.setattr(_random, "random", lambda: 0.5)   # 命中动作分支
+
+    monkeypatch.setattr(_random, "random", lambda: 0.5)  # 命中动作分支
     monkeypatch.setattr(_random, "choice", lambda lst: lst[0])  # 池首
     win = _make_window(tmp_path)
     win._switch(catalog.IDLE)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win._phys_vel[:] = [120.0, 0.0]
     # acts 池内顺序由 hash 随机化决定（进程级），不能假定具体名字：
     # 暖"掷骰会选中的那一个"（choice 固定池首），断言切到的就是它。
@@ -267,20 +283,23 @@ def test_low_speed_plays_warm_rolled_act(tmp_path, app, monkeypatch):
     win._stop_physics()
     win.close()
 
+
 def test_low_speed_cold_rolled_act_falls_back(tmp_path, app, monkeypatch):
     """低速段掷骰掷中冷目标：不追（零冷解码），退回必热的 idle/turn 池。"""
     import random as _random
+
     monkeypatch.setattr(_random, "random", lambda: 0.5)
     monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
     win = _make_window(tmp_path)
     win._switch(catalog.IDLE)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win.lib.movie(catalog.TURN)._first_image = object()  # 前提建模：turn pinned 常驻必热
     win._phys_vel[:] = [120.0, 0.0]
     win._on_anim_ended(catalog.IDLE)  # 写代码首帧冷 → 退回池排除 IDLE → turn
     assert win.anim == catalog.TURN
     win._stop_physics()
     win.close()
+
 
 def test_tick_low_speed_transition_switches_out_of_drag(tmp_path, app):
     """降速进入低速段的同一 tick 立即切出悬空动画（不等 clip 播完）。
@@ -289,7 +308,7 @@ def test_tick_low_speed_transition_switches_out_of_drag(tmp_path, app):
     等动画自然结束永远轮不到切换。高速段 tick 不应过渡。
     """
     win = _make_window(tmp_path)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     # 前提建模：idle/turn 池首帧已热（idle 起飞预热 / turn pinned 常驻）
     for n in (*win.idles, *win.turns):
         win.lib.movie(n)._first_image = object()
@@ -298,7 +317,7 @@ def test_tick_low_speed_transition_switches_out_of_drag(tmp_path, app):
     win._phys_vel[:] = [900.0, 0.0]  # 高速段
     win._tick_throw_physics(0.016)
     assert win.anim == catalog.DRAG
-    assert getattr(win, '_throw_slow_switched', False) is False
+    assert getattr(win, "_throw_slow_switched", False) is False
     win._phys_vel[:] = [100.0, 0.0]  # 降速入段
     win._tick_throw_physics(0.016)
     assert win._throw_slow_switched is True
@@ -307,33 +326,35 @@ def test_tick_low_speed_transition_switches_out_of_drag(tmp_path, app):
     win._stop_physics()
     win.close()
 
+
 def test_low_speed_all_cold_pool_restarts_current(tmp_path, app, monkeypatch):
     """低速段回退池整体失温（首帧被逐出/起飞预热未竟）：绝不碰冷目标的
     GUI 同步解码（~166ms 冻结），原地续播当前 clip（刚播完必热）。"""
     import random as _random
-    monkeypatch.setattr(_random, "random", lambda: 0.5)   # 命中动作分支
+
+    monkeypatch.setattr(_random, "random", lambda: 0.5)  # 命中动作分支
     monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
     win = _make_window(tmp_path)
     win._switch(catalog.IDLE)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win._phys_vel[:] = [120.0, 0.0]
     idle_clip = win.lib.movie(catalog.IDLE)
     starts = idle_clip.start_count
     switches = []
     orig_switch = win._switch
-    monkeypatch.setattr(win, '_switch',
-                        lambda n, *a, **k: switches.append(n) or orig_switch(n, *a, **k))
+    monkeypatch.setattr(win, "_switch", lambda n, *a, **k: switches.append(n) or orig_switch(n, *a, **k))
     win._on_anim_ended(catalog.IDLE)  # 池内 turn/acts 全冷 → 续播 IDLE
-    assert switches == []                       # 没有切向任何冷目标
+    assert switches == []  # 没有切向任何冷目标
     assert win.anim == catalog.IDLE
     assert idle_clip.start_count == starts + 1  # 原地续播
     win._stop_physics()
     win.close()
 
+
 def test_flight_anim_speed_follows_throw_and_restores(tmp_path, app):
     """飞行期动画随抛掷速度加速（24fps 素材高速频闪修法），落地复位 1×。"""
     win = _make_window(tmp_path)
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win._switch(catalog.DRAG)
     clip = win.lib.movie(catalog.DRAG)
     win._phys_pos[:] = [200.0, 200.0]
@@ -353,7 +374,7 @@ def test_flight_anim_speed_composes_with_user_playback_speed(tmp_path, app):
     落地复位回用户速率（非 1.0）。"""
     win = _make_window(tmp_path)
     win.playback_speed = 1.5
-    win._enter_physics_mode('throw')
+    win._enter_physics_mode("throw")
     win._switch(catalog.DRAG)
     clip = win.lib.movie(catalog.DRAG)
     win._phys_pos[:] = [200.0, 200.0]

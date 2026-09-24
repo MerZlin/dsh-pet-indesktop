@@ -5,6 +5,7 @@
 入队：一次只展示一个，当前有提醒时普通 show_bubble 让路不覆盖，hide_bubble/
 限时结束自动弹出下一条，clear_alerts 清空全部。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -101,16 +102,18 @@ class FakeBubble(QObject):
         self.shown: list[dict] = []
         self.dismiss_calls = 0
 
-    def show_text(self, text, anchor, duration_ms, *, pet_scale=None,
-                  subtitle="", sticky=False, buttons=None,
-                  title_first=False, width_locked=False):
-        self.shown.append({
-            "text": str(text), "sticky": bool(sticky),
-            "duration_ms": int(duration_ms), "buttons": buttons,
-            "subtitle": str(subtitle or ""),
-            "title_first": bool(title_first),
-            "width_locked": bool(width_locked),
-        })
+    def show_text(self, text, anchor, duration_ms, *, pet_scale=None, subtitle="", sticky=False, buttons=None, title_first=False, width_locked=False):
+        self.shown.append(
+            {
+                "text": str(text),
+                "sticky": bool(sticky),
+                "duration_ms": int(duration_ms),
+                "buttons": buttons,
+                "subtitle": str(subtitle or ""),
+                "title_first": bool(title_first),
+                "width_locked": bool(width_locked),
+            }
+        )
 
     def reposition(self, anchor_rect):
         pass
@@ -206,8 +209,10 @@ def test_interactive_bubble_body_does_not_open_quick_chat(win, labels):
     opened = []
     win.on_open_quick_chat = lambda: opened.append(True)
     win.show_alert(
-        "请选择", buttons=[(label, lambda: None) for label in labels],
-        sticky=True, alert_id="interactive",
+        "请选择",
+        buttons=[(label, lambda: None) for label in labels],
+        sticky=True,
+        alert_id="interactive",
     )
     win._on_speech_bubble_clicked()
     assert opened == []
@@ -216,8 +221,10 @@ def test_interactive_bubble_body_does_not_open_quick_chat(win, labels):
 def test_interactive_button_callback_still_runs_and_closes(win):
     actions = []
     win.show_alert(
-        "提醒", buttons=[("关闭提醒", lambda: (actions.append(True), win.resolve_alert("close")))],
-        sticky=True, alert_id="close",
+        "提醒",
+        buttons=[("关闭提醒", lambda: (actions.append(True), win.resolve_alert("close")))],
+        sticky=True,
+        alert_id="close",
     )
     callback = win._speech_bubble.shown[-1]["buttons"][0][1]
     callback()
@@ -289,7 +296,8 @@ def test_show_alert_same_id_upgrades_current(win):
     win.show_alert(
         "DSH 请求执行：echo hi，请选择：",
         buttons=[("同意", lambda: None), ("拒绝", lambda: None)],
-        sticky=True, alert_id="interaction:dsh:approval",
+        sticky=True,
+        alert_id="interaction:dsh:approval",
     )
     assert win._alert_current["buttons"] is not None, "当前气泡应升级为带按钮"
     assert len(win._alert_queue) == 0, "同 id 升级不应再排一条"
@@ -310,8 +318,7 @@ def test_show_alert_same_id_upgrades_queued(win):
     assert win._alert_queue[0]["id"] == "a2"
 
     # B 的交互版到达：替换队列中的旧 B 条目
-    win.show_alert("审批二", buttons=[("同意", lambda: None)],
-                   sticky=True, alert_id="a2")
+    win.show_alert("审批二", buttons=[("同意", lambda: None)], sticky=True, alert_id="a2")
     assert len(win._alert_queue) == 1, "队列仍只有一条 B"
     assert win._alert_queue[0]["id"] == "a2"
     assert win._alert_queue[0]["buttons"] is not None
@@ -331,8 +338,11 @@ def test_resume_activity_restores_sticky_alert_buttons(win, app):
     漏传 buttons 会让审批气泡变成没有「同意/拒绝」的死气泡。
     """
     win.show_alert(
-        "需要批准", buttons=[("同意", lambda: None), ("拒绝", lambda: None)],
-        sticky=True, alert_id="interaction:approval:r1", alert_type="approval",
+        "需要批准",
+        buttons=[("同意", lambda: None), ("拒绝", lambda: None)],
+        sticky=True,
+        alert_id="interaction:approval:r1",
+        alert_type="approval",
         priority=0,
     )
     assert win._sticky_buttons is not None
@@ -377,8 +387,7 @@ def test_hidden_host_redirects_noninteractive_alert():
         return True
 
     host = _HiddenRedirectHost(hook=hook)
-    show_alert(host, "可能卡住了，去看一眼吧", duration_ms=8000, sticky=False,
-               alert_type="watchdog")
+    show_alert(host, "可能卡住了，去看一眼吧", duration_ms=8000, sticky=False, alert_type="watchdog")
 
     assert redirected == [("可能卡住了，去看一眼吧", "", 8000)]
     assert host._alert_queue == deque() and host._alert_current is None
@@ -388,8 +397,7 @@ def test_hidden_host_interactive_alert_not_redirected():
     """带按钮的交互气泡（审批/问题）不改道：岛气泡暂不支持按钮，维持丢弃。"""
     redirected = []
     host = _HiddenRedirectHost(hook=lambda *a, **k: redirected.append(a) or True)
-    show_alert(host, "审批等待", sticky=True,
-               buttons=[("同意", lambda: None)], alert_type="approval")
+    show_alert(host, "审批等待", sticky=True, buttons=[("同意", lambda: None)], alert_type="approval")
 
     assert redirected == []
 
@@ -409,10 +417,9 @@ def test_unsuppress_reshows_surviving_nonsticky_current(win):
     win.show_alert("任务完成", duration_ms=6000, sticky=False, alert_type="task_complete")
     assert win._alert_current is not None
     shown_before = len(win._speech_bubble.shown)
-    win.set_bubble_suppressed(True)   # 抑制：气泡隐藏（hidden 链路被抑制守卫截断）
+    win.set_bubble_suppressed(True)  # 抑制：气泡隐藏（hidden 链路被抑制守卫截断）
     win.set_bubble_suppressed(False)  # 解除：存活提醒应按原时长重挂
-    assert len(win._speech_bubble.shown) > shown_before, \
-        "抑制解除后必须重挂存活的非 sticky 提醒（否则队列死锁）"
+    assert len(win._speech_bubble.shown) > shown_before, "抑制解除后必须重挂存活的非 sticky 提醒（否则队列死锁）"
     assert win._speech_bubble.shown[-1]["text"] == "任务完成"
     assert win._speech_bubble.shown[-1]["duration_ms"] == 6000
     assert win._alert_current is not None  # 由气泡超时 → hidden 链路正常清除

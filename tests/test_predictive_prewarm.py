@@ -14,6 +14,7 @@ config 键归一化、library.warm_predicted 三重闸门薄方法。
 
 全部用假时钟/假 clip/可控 random 驱动，不起真实 ffmpeg，无平台限定。
 """
+
 from __future__ import annotations
 
 import time
@@ -161,6 +162,7 @@ def _make_window(tmp_path, **cfg_overrides):
 def _set_random(monkeypatch, val: float):
     """固定随机分支（val ∈ [0,1)）；random.choice 固定取池首元素，保证确定性。"""
     import random as _random
+
     monkeypatch.setattr(_random, "random", lambda: val)
     monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
 
@@ -169,12 +171,12 @@ def _set_random(monkeypatch, val: float):
 # 纯函数 roll_next：分布语义与 exclude 处理
 # ============================================================================
 class TestRollNext:
-    POOLS = {"idles": [catalog.IDLE, "待机B"], "turns": [catalog.TURN],
-             "acts": ["写代码", "吃白饭"], "moves": [catalog.MOVES[0], "漂浮踏步"]}
+    POOLS = {"idles": [catalog.IDLE, "待机B"], "turns": [catalog.TURN], "acts": ["写代码", "吃白饭"], "moves": [catalog.MOVES[0], "漂浮踏步"]}
 
     def test_acts_branch(self, monkeypatch):
         # roll=0.5 → <0.80 动作池
         import random as _random
+
         monkeypatch.setattr(_random, "random", lambda: 0.5)
         monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
         assert roll_next(self.POOLS) == "写代码"
@@ -182,6 +184,7 @@ class TestRollNext:
     def test_idle_branch(self, monkeypatch):
         # roll=0.1 → <0.30 待机
         import random as _random
+
         monkeypatch.setattr(_random, "random", lambda: 0.1)
         monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
         assert roll_next(self.POOLS) == catalog.IDLE
@@ -189,6 +192,7 @@ class TestRollNext:
     def test_turn_branch(self, monkeypatch):
         # roll=0.35 → <0.40 转向
         import random as _random
+
         monkeypatch.setattr(_random, "random", lambda: 0.35)
         monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
         assert roll_next(self.POOLS) == catalog.TURN
@@ -196,12 +200,14 @@ class TestRollNext:
     def test_move_branch_no_exclude(self, monkeypatch):
         # roll=0.9 → >=0.80 移动；move 分支与 _try_move 一致不应用 exclude
         import random as _random
+
         monkeypatch.setattr(_random, "random", lambda: 0.9)
         monkeypatch.setattr(_random, "choice", lambda lst: lst[0])
         assert roll_next(self.POOLS, exclude=catalog.MOVES[0]) == catalog.MOVES[0]
 
     def test_exclude_applied_for_acts(self, monkeypatch):
         import random as _random
+
         monkeypatch.setattr(_random, "random", lambda: 0.5)
         used = []
 
@@ -268,8 +274,7 @@ class TestPredictivePrewarmController:
         """idle/turn 分支产物：预测照存（P1-1 方案 a：拒收重掷会漂分布），
         但**不预热**（pinned，预热纯浪费）。"""
         _warm_ok.names.clear()
-        pp = PredictivePrewarm(roll=lambda exclude: catalog.IDLE, warm=_warm_ok,
-                               should_predict=_pred)
+        pp = PredictivePrewarm(roll=lambda exclude: catalog.IDLE, warm=_warm_ok, should_predict=_pred)
         assert pp.on_frame("写代码", 8, 10, 10.0, 1, 0.35, exclude="写代码") is True
         assert pp.prediction is not None and pp.prediction["name"] == catalog.IDLE
         assert _warm_ok.names == [], "pinned 产物不得预热"
@@ -306,8 +311,7 @@ class TestPredictivePrewarmController:
         pp.on_frame("写代码", 8, 10, 10.0, 1, 0.35, exclude="写代码")
         # 交互打断：换到别的动画（context 不符）
         pp.begin_anim("待机呼吸休闲")  # 换代
-        assert pp.consume(context_anim="待机呼吸休闲", exclude="待机呼吸休闲",
-                          gap_active=False) is None
+        assert pp.consume(context_anim="待机呼吸休闲", exclude="待机呼吸休闲", gap_active=False) is None
         assert pp.counts["miss_invalid"] == 1
         assert pp.counts["hit"] == 0
 
@@ -432,7 +436,7 @@ class TestWindowPredictivePrewarm:
         assert pred is not None
         assert pred["name"] == "吃白饭"
         assert pred["context_anim"] == "写代码"
-        assert lib.warmed == ["吃白饭"]           # 预热已掷
+        assert lib.warmed == ["吃白饭"]  # 预热已掷
         assert win.lib.movie("吃白饭").warm_calls == 1  # 首帧预热被触发
         assert pp.counts["made"] == 1
         win.close()
@@ -443,9 +447,9 @@ class TestWindowPredictivePrewarm:
         _set_random(monkeypatch, 0.5)
         self._switch_act(win, "写代码")
         pp = win.predictive_prewarm
-        win._on_frame("写代码", 8)   # 预测 '吃白饭'
+        win._on_frame("写代码", 8)  # 预测 '吃白饭'
         assert pp.prediction is not None
-        win._on_frame("写代码", 9)   # 末帧 → _on_anim_ended → _pick_next 消费
+        win._on_frame("写代码", 9)  # 末帧 → _on_anim_ended → _pick_next 消费
         assert win.anim == "吃白饭"  # 消费到预测名
         assert pp.counts["hit"] == 1
         assert pp.counts["miss_invalid"] == 0
@@ -458,7 +462,7 @@ class TestWindowPredictivePrewarm:
         _set_random(monkeypatch, 0.5)
         self._switch_act(win, "写代码")
         pp = win.predictive_prewarm
-        win._on_frame("写代码", 8)   # 预测 '吃白饭'
+        win._on_frame("写代码", 8)  # 预测 '吃白饭'
         assert pp.prediction is not None
         # 交互打断：_switch 换掉 self.anim（预测自然作废，不手动清状态）
         win._switch("待机呼吸休闲")
@@ -486,7 +490,7 @@ class TestWindowPredictivePrewarm:
         _set_random(monkeypatch, 0.5)
         self._switch_act(win, "写代码")
         pp = win.predictive_prewarm
-        win._on_frame("写代码", 8)   # 预测 '吃白饭'
+        win._on_frame("写代码", 8)  # 预测 '吃白饭'
         assert pp.prediction is not None
         # 动作播完 + 配置了 gap → _start_animation_gap 播一个待机步，而不是 _pick_next
         win._on_frame("写代码", 9)
@@ -522,7 +526,7 @@ class TestWindowPredictivePrewarm:
         _set_random(monkeypatch, 0.5)
         self._switch_act(win, "写代码")
         pp = win.predictive_prewarm
-        win._on_frame("写代码", 8)   # 预测 '吃白饭'
+        win._on_frame("写代码", 8)  # 预测 '吃白饭'
         assert pp.prediction is not None
         win.hide()
         app.processEvents()
@@ -546,8 +550,7 @@ class TestDistributionParity:
     def test_prediction_chain_distribution_matches_baseline(self):
         import random as _r
 
-        pools = {"idles": ["i1", "i2", "i3"], "turns": ["t1"],
-                 "acts": [f"a{k}" for k in range(20)], "moves": ["m1", "m2", "m3"]}
+        pools = {"idles": ["i1", "i2", "i3"], "turns": ["t1"], "acts": [f"a{k}" for k in range(20)], "moves": ["m1", "m2", "m3"]}
         acts_set = set(pools["acts"])
         moves_set = set(pools["moves"])
         # 注意：产品掷骰走模块级 random——seed 后必须恢复现场，否则确定性
@@ -604,8 +607,7 @@ class TestDistributionParity:
         )
         assert pp2.on_frame("m1", 8, 10, 10.0, 1, 0.35, exclude="m1") is True
         # 传 moves：move 产物豁免，合法命中
-        assert pp2.consume(context_anim="m1", exclude="m1", gap_active=False,
-                           moves=moves) == "m1"
+        assert pp2.consume(context_anim="m1", exclude="m1", gap_active=False, moves=moves) == "m1"
 
 
 def test_recycle_minutes_pushed_on_switch_and_refresh(tmp_path, app):
@@ -615,17 +617,14 @@ def test_recycle_minutes_pushed_on_switch_and_refresh(tmp_path, app):
     覆盖两个推送点：构造首个 _switch（启动即播 idle）+ refresh_pet_settings
     （设置保存后运行期刷新，复审 P1-2）。
     """
-    win = _make_window(tmp_path, ffmpeg_recycle_minutes=5,
-                       collision_enabled=False)
+    win = _make_window(tmp_path, ffmpeg_recycle_minutes=5, collision_enabled=False)
     try:
         clip = win.lib.movie(win.idle)
-        assert 5 in clip.recycle_minutes_calls, \
-            f"构造首个 _switch 必须推送回收阈值，实际: {clip.recycle_minutes_calls}"
+        assert 5 in clip.recycle_minutes_calls, f"构造首个 _switch 必须推送回收阈值，实际: {clip.recycle_minutes_calls}"
         n_before = len(clip.recycle_minutes_calls)
         win.cfg.set("ffmpeg_recycle_minutes", 0)
         win.refresh_pet_settings()
-        assert len(clip.recycle_minutes_calls) > n_before, \
-            "refresh_pet_settings 必须把新阈值推送到当前 clip"
+        assert len(clip.recycle_minutes_calls) > n_before, "refresh_pet_settings 必须把新阈值推送到当前 clip"
         assert clip.recycle_minutes_calls[-1] == 0
     finally:
         win.close()
@@ -640,10 +639,8 @@ def test_switch_clears_previous_clip_display_frame(tmp_path, app):
         prev_clip = win.lib.movie(win.anim)
         win._switch("写代码")
         assert win.anim == "写代码"
-        assert prev_clip.clear_display_calls == 1, \
-            "切走后旧 clip 显示槽必须被清一次"
-        assert win.lib.movie("写代码").clear_display_calls == 0, \
-            "新 clip 不得被清"
+        assert prev_clip.clear_display_calls == 1, "切走后旧 clip 显示槽必须被清一次"
+        assert win.lib.movie("写代码").clear_display_calls == 0, "新 clip 不得被清"
         # 再切回 idle：写代码 的槽被清，idle（现为旧 clip）已被清过一次不重复累加错
         win._switch(catalog.IDLE)
         assert win.lib.movie("写代码").clear_display_calls == 1
@@ -663,8 +660,7 @@ def test_finished_signal_of_abandoned_clip_reclears_slots(tmp_path, app):
         assert abandoned.clear_display_calls == 1, "切走时清一次"
         # 模拟：弃播 clip 的 reader 跑到结束，finished 信号迟到到达
         abandoned.finished.emit()
-        assert abandoned.clear_display_calls == 2, \
-            "弃播 clip 的结束标记消费点必须补清显示槽（N1）"
+        assert abandoned.clear_display_calls == 2, "弃播 clip 的结束标记消费点必须补清显示槽（N1）"
         # 当前动画的 finished 不受误伤：emit 后 idle 的清理计数不增加
         # （idle 的 1 次来自它自己被切走的那一刻，属正常）
         assert win.lib.movie(catalog.IDLE).clear_display_calls == 1

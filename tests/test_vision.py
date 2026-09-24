@@ -6,95 +6,104 @@ from pet.vision import resolve_vision_model
 
 
 def _p(model, **kw):
-    raw = {'model': model}
+    raw = {"model": model}
     raw.update(kw)
-    return ProviderConfig.from_dict('test', raw)
+    return ProviderConfig.from_dict("test", raw)
 
 
 def test_deepseek_flash_maps_to_preview_vision():
-    assert resolve_vision_model(_p('deepseek-v4-flash')) == 'deepseek-v4-flash-vision-exp'
+    assert resolve_vision_model(_p("deepseek-v4-flash")) == "deepseek-v4-flash-vision-exp"
 
 
 def test_other_deepseek_models_use_default_vision():
-    assert resolve_vision_model(_p('deepseek-v4-pro')) == 'deepseek-v4-flash-vision-exp'
+    assert resolve_vision_model(_p("deepseek-v4-pro")) == "deepseek-v4-flash-vision-exp"
 
 
 def test_already_vision_model_passes_through():
-    assert resolve_vision_model(_p('deepseek-v4-flash-vision-exp')) == 'deepseek-v4-flash-vision-exp'
+    assert resolve_vision_model(_p("deepseek-v4-flash-vision-exp")) == "deepseek-v4-flash-vision-exp"
 
 
 def test_multimodal_chat_model_used_as_is():
-    assert resolve_vision_model(_p('kimi-k3')) == 'kimi-k3'
+    assert resolve_vision_model(_p("kimi-k3")) == "kimi-k3"
 
 
 def test_manual_override_wins():
-    p = _p('deepseek-v4-flash', vision_same_as_chat=False, vision_model='my-vl-model')
-    assert resolve_vision_model(p) == 'my-vl-model'
+    p = _p("deepseek-v4-flash", vision_same_as_chat=False, vision_model="my-vl-model")
+    assert resolve_vision_model(p) == "my-vl-model"
 
 
 def test_manual_empty_falls_back_to_derivation():
-    p = _p('deepseek-v4-flash', vision_same_as_chat=False, vision_model='  ')
-    assert resolve_vision_model(p) == 'deepseek-v4-flash-vision-exp'
+    p = _p("deepseek-v4-flash", vision_same_as_chat=False, vision_model="  ")
+    assert resolve_vision_model(p) == "deepseek-v4-flash-vision-exp"
 
 
 def test_capture_screen_bytes_in_memory(tmp_path):
     import os
-    if os.environ.get('QT_QPA_PLATFORM') == 'offscreen':
+
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
         import pytest
-        pytest.skip('无显示环境下不截屏')
+
+        pytest.skip("无显示环境下不截屏")
     from pet.vision import capture_screen_bytes
+
     data = capture_screen_bytes()
-    assert isinstance(data, bytes) and data[:2] == b'\xff\xd8'  # JPEG SOI
+    assert isinstance(data, bytes) and data[:2] == b"\xff\xd8"  # JPEG SOI
     from PIL import Image
     import io
+
     with Image.open(io.BytesIO(data)) as img:
         assert max(img.size) <= 768
     # 铁律：截图不落盘——调用后目标目录不得出现任何截图文件
-    assert not list(tmp_path.glob('screen-*.jpg'))
+    assert not list(tmp_path.glob("screen-*.jpg"))
 
 
 def test_endpoint_glm_v4_base():
     from pet.chat.providers import normalize_chat_endpoint
-    assert normalize_chat_endpoint('https://open.bigmodel.cn/api/paas/v4') == \
-        'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+
+    assert normalize_chat_endpoint("https://open.bigmodel.cn/api/paas/v4") == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 
 def test_endpoint_openai_v1_base():
     from pet.chat.providers import normalize_chat_endpoint
-    assert normalize_chat_endpoint('https://api.openai.com/v1') == \
-        'https://api.openai.com/v1/chat/completions'
+
+    assert normalize_chat_endpoint("https://api.openai.com/v1") == "https://api.openai.com/v1/chat/completions"
 
 
 def test_endpoint_full_url_passthrough():
     from pet.chat.providers import normalize_chat_endpoint
-    assert normalize_chat_endpoint('https://api.deepseek.com/v1/chat/completions') == \
-        'https://api.deepseek.com/v1/chat/completions'
+
+    assert normalize_chat_endpoint("https://api.deepseek.com/v1/chat/completions") == "https://api.deepseek.com/v1/chat/completions"
 
 
 def test_endpoint_bare_host_appends_default_path():
     from pet.chat.providers import normalize_chat_endpoint
-    assert normalize_chat_endpoint('https://api.deepseek.com') == \
-        'https://api.deepseek.com/v1/chat/completions'
+
+    assert normalize_chat_endpoint("https://api.deepseek.com") == "https://api.deepseek.com/v1/chat/completions"
 
 
 def test_vision_overrides_ignored_when_same_as_chat():
     """同聊天模型时，视觉独立端点/密钥一律不得生效（防残留 GLM 地址配 ds 模型名）。"""
     import inspect
     from pet import vision
+
     src = inspect.getsource(vision._post_vision_request)
-    assert 'if p.vision_same_as_chat' in src
+    assert "if p.vision_same_as_chat" in src
 
 
 class _FakeResponse:
     def __init__(self, payload):
         self._payload = payload
+
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         return False
+
     def read(self, *args):
         import json
-        return json.dumps(self._payload).encode('utf-8')
+
+        return json.dumps(self._payload).encode("utf-8")
 
 
 def test_independent_vision_empty_key_never_uses_chat_key(monkeypatch):
@@ -110,15 +119,18 @@ def test_independent_vision_empty_key_never_uses_chat_key(monkeypatch):
     calls = []
     monkeypatch.setattr("urllib.request.urlopen", lambda *a, **kw: calls.append(a) or _FakeResponse({}))
 
-    p = ProviderConfig.from_dict("test", {
-        "model": "deepseek-v4-flash",
-        "api_key": "sk-chat-secret",
-        "vision_same_as_chat": False,
-        "vision_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        # 视觉 Key 为空且无钥匙串引用
-        "vision_api_key": "",
-        "vision_api_key_ref": "",
-    })
+    p = ProviderConfig.from_dict(
+        "test",
+        {
+            "model": "deepseek-v4-flash",
+            "api_key": "sk-chat-secret",
+            "vision_same_as_chat": False,
+            "vision_base_url": "https://open.bigmodel.cn/api/paas/v4",
+            # 视觉 Key 为空且无钥匙串引用
+            "vision_api_key": "",
+            "vision_api_key_ref": "",
+        },
+    )
     with pytest.raises(vision.VisionError) as exc_info:
         vision._post_vision_request(b"fake-jpeg", "code.exe | t", "sys", p)
     assert "独立视觉服务未配置 API Key" in str(exc_info.value)
@@ -139,13 +151,16 @@ def test_independent_vision_prefers_own_key_over_chat_key(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
-    p = ProviderConfig.from_dict("test", {
-        "model": "deepseek-v4-flash",
-        "api_key": "sk-chat-secret",
-        "vision_same_as_chat": False,
-        "vision_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "vision_api_key": "sk-vision-secret",
-    })
+    p = ProviderConfig.from_dict(
+        "test",
+        {
+            "model": "deepseek-v4-flash",
+            "api_key": "sk-chat-secret",
+            "vision_same_as_chat": False,
+            "vision_base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "vision_api_key": "sk-vision-secret",
+        },
+    )
     reply = vision._post_vision_request(b"fake-jpeg", "code.exe | t", "sys", p)
     assert reply == "好呀"
     assert called_with["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
@@ -183,10 +198,13 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
     from pet.config import Config
     from types import SimpleNamespace
 
-    shared_provider = ProviderConfig.from_dict("test-p", {
-        "model": "deepseek-v4-flash",
-        "api_key": "unresolved_or_empty",
-    })
+    shared_provider = ProviderConfig.from_dict(
+        "test-p",
+        {
+            "model": "deepseek-v4-flash",
+            "api_key": "unresolved_or_empty",
+        },
+    )
     shared_settings = ChatSettings(providers={"test-p": shared_provider}, active_provider="test-p")
 
     win = PetWindow.__new__(PetWindow)
@@ -216,4 +234,3 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
     assert passed_pet_name == "小鲸鱼"
     # 共享对象未被污染改写
     assert shared_provider.api_key == "unresolved_or_empty"
-

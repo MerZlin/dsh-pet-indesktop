@@ -20,6 +20,7 @@
 - 窗口测试未走真实 AppShell/PetInstance.switch_character()；旧窗口迟到事件用直接调用
   _on_frame/_on_clip_finished 模拟（生产路径是 hide() 后 Qt 队列中的残留信号）。
 """
+
 from __future__ import annotations
 
 import threading
@@ -89,7 +90,8 @@ class _GateObjectsLib(library_mod.MovieLibrary):
         self.objects_entered.set()
         self.objects_release.wait(5.0)
         return super()._warm_objects(
-            clips, workers,
+            clips,
+            workers,
             yield_to_interaction=yield_to_interaction,
             generation=generation,
             include_frames=include_frames,
@@ -170,16 +172,16 @@ def test_begin_end_interaction_gate_reentrant(tmp_path, monkeypatch):
 def test_stale_end_after_pause_keeps_new_interaction(tmp_path, monkeypatch):
     """P1：pause_warm 换代清零后，旧代次 token 的迟到 end 不得误释放新交互。"""
     lib = _make_lib(tmp_path, monkeypatch)
-    t0 = lib.begin_interaction()   # 交互 A
-    lib.pause_warm()               # 隐藏/切角色：换代清零
+    t0 = lib.begin_interaction()  # 交互 A
+    lib.pause_warm()  # 隐藏/切角色：换代清零
     lib.resume_warm()
-    t1 = lib.begin_interaction()   # 交互 B
-    lib.end_interaction(t0)        # A 的迟到 release（旧 token）：必须 no-op
+    t1 = lib.begin_interaction()  # 交互 B
+    lib.end_interaction(t0)  # A 的迟到 release（旧 token）：必须 no-op
     assert lib._interaction_holders == 1
     assert lib._interaction_active.is_set() is True, "B 仍在交互，闸门必须保持"
     lib.end_interaction(t1)
     assert lib._interaction_active.is_set() is False
-    lib.end_interaction(t0)        # 旧 token 再次迟到：no-op，计数不为负
+    lib.end_interaction(t0)  # 旧 token 再次迟到：no-op，计数不为负
     assert lib._interaction_holders == 0
 
 
@@ -567,24 +569,33 @@ class RecordingLibrary(FakeLibrary):
 
 def _press(pos=QPointF(10, 10), global_pos=QPointF(100, 100)) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonPress, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+        QEvent.Type.MouseButtonPress,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
 
 def _move(pos=QPointF(60, 60), global_pos=QPointF(400, 300)) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseMove, pos, global_pos,
-        Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+        QEvent.Type.MouseMove,
+        pos,
+        global_pos,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
 
 def _release(pos=QPointF(60, 60), global_pos=QPointF(400, 300)) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonRelease, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        QEvent.Type.MouseButtonRelease,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
     )
 

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """窗口渲染 / 角色区域 / Windows 逐像素命中测试。"""
+
 from __future__ import annotations
 
 import os
@@ -99,13 +100,15 @@ def test_input_controller_survives_init():
     """回归：控制器必须由窗口持有，保证轮询持续运行。"""
     _qapp()
     import sys
+
     if sys.platform != "win32":
         pytest.skip("逐像素命中测试仅 Windows")
 
     import tempfile
     from pet.config import Config
     from pet.library import MovieLibrary
-    lib = MovieLibrary(character_id='shenshen')
+
+    lib = MovieLibrary(character_id="shenshen")
     win = window_mod.PetWindow(lib, Config(base=Path(tempfile.mkdtemp())))
     assert win._input_controller is not None
     win.close()
@@ -242,7 +245,7 @@ def _make_frame_image(width: int, height: int, opaque_rects) -> QImage:
     img = QImage(width, height, QImage.Format.Format_ARGB32)
     img.fill(Qt.GlobalColor.transparent)
     p = QPainter(img)
-    for (x0, y0, x1, y1) in opaque_rects:
+    for x0, y0, x1, y1 in opaque_rects:
         p.fillRect(x0, y0, x1 - x0, y1 - y0, QColor(255, 255, 255, 255))
     p.end()
     return img
@@ -340,9 +343,9 @@ def test_windows_mask_bounds_semi_transparent_edge_threshold(monkeypatch):
     img = QImage(320, 180, QImage.Format.Format_ARGB32)
     img.fill(Qt.GlobalColor.transparent)
     p = QPainter(img)
-    p.fillRect(0, 0, 60, 180, QColor(255, 255, 255, 255))   # x 0..59
-    p.fillRect(60, 0, 1, 180, QColor(255, 255, 255, 127))   # x 60：阈值下
-    p.fillRect(61, 0, 1, 180, QColor(255, 255, 255, 128))   # x 61：阈值上
+    p.fillRect(0, 0, 60, 180, QColor(255, 255, 255, 255))  # x 0..59
+    p.fillRect(60, 0, 1, 180, QColor(255, 255, 255, 127))  # x 60：阈值下
+    p.fillRect(61, 0, 1, 180, QColor(255, 255, 255, 128))  # x 61：阈值上
     p.end()
     pm = QPixmap.fromImage(img)
     fake._frame_pixmap = pm
@@ -416,11 +419,11 @@ def test_windows_mask_bounds_clips_overflow_on_all_sides(monkeypatch):
     _qapp()
     cases = [
         # (强制绘制矩形, 期望非空)
-        (QRect(-40, 15, 320, 180), True),   # 左越界
-        (QRect(40, 15, 320, 180), True),    # 右越界
-        (QRect(0, -25, 320, 180), True),    # 上越界
-        (QRect(0, 40, 320, 180), True),     # 下越界
-        (QRect(400, 0, 320, 180), False),   # 完全在窗口外
+        (QRect(-40, 15, 320, 180), True),  # 左越界
+        (QRect(40, 15, 320, 180), True),  # 右越界
+        (QRect(0, -25, 320, 180), True),  # 上越界
+        (QRect(0, 40, 320, 180), True),  # 下越界
+        (QRect(400, 0, 320, 180), False),  # 完全在窗口外
     ]
     for rect, expect_nonempty in cases:
         fake = _ClippingPet(rect, scale=0.5)
@@ -435,23 +438,21 @@ def test_windows_mask_bounds_clips_overflow_on_all_sides(monkeypatch):
             assert new.left() >= 0 and new.right() < fake._w
             assert new.top() >= 0 and new.bottom() < fake._h
             # 越界矩形本身必须真的越界，否则本测试没有覆盖裁剪
-            assert rect.left() < 0 or rect.right() >= fake._w \
-                or rect.top() < 0 or rect.bottom() >= fake._h
+            assert rect.left() < 0 or rect.right() >= fake._w or rect.top() < 0 or rect.bottom() >= fake._h
 
 
 @pytest.mark.parametrize(
     "rects, expect_nonempty",
     [
-        ([(0, 0, 1, 1)], True),                          # 左上单像素
-        ([(319, 179, 320, 180)], True),                  # 右下单像素
-        ([(160, 0, 161, 180)], True),                    # 单列
-        ([(0, 90, 320, 91)], True),                      # 单行
-        ([(0, 0, 1, 1), (319, 179, 320, 180)], True),    # 两个远距小块
-        ([(0, 0, 1, 1), (319, 0, 320, 1),
-          (0, 179, 1, 180), (319, 179, 320, 180)], True),  # 仅四角
+        ([(0, 0, 1, 1)], True),  # 左上单像素
+        ([(319, 179, 320, 180)], True),  # 右下单像素
+        ([(160, 0, 161, 180)], True),  # 单列
+        ([(0, 90, 320, 91)], True),  # 单行
+        ([(0, 0, 1, 1), (319, 179, 320, 180)], True),  # 两个远距小块
+        ([(0, 0, 1, 1), (319, 0, 320, 1), (0, 179, 1, 180), (319, 179, 320, 180)], True),  # 仅四角
         ([(0, 90, 120, 91), (200, 90, 320, 91)], True),  # 中间断裂的两段
-        ([(0, 0, 320, 180)], True),                      # 整幅不透明
-        ([], False),                                     # 全透明
+        ([(0, 0, 320, 180)], True),  # 整幅不透明
+        ([], False),  # 全透明
     ],
 )
 def test_windows_mask_bounds_sparse_broken_alpha(rects, expect_nonempty, monkeypatch):
@@ -612,9 +613,7 @@ class _RebuildPet:
         return SimpleNamespace(devicePixelRatio=lambda: self._screen_dpr)
 
     def _frame_draw_rect(self):
-        return QRect(0, int(round(catalog.PAD * self.scale)),
-                     int(round(catalog.CANVAS_W * self.scale)),
-                     int(round(catalog.CANVAS_H * self.scale)))
+        return QRect(0, int(round(catalog.PAD * self.scale)), int(round(catalog.CANVAS_W * self.scale)), int(round(catalog.CANVAS_H * self.scale)))
 
     def _sync_mask(self):
         self._sync_mask_calls += 1
@@ -633,8 +632,7 @@ def _solid_frame_pixmap():
 def test_rebuild_frame_text_animation_not_mirrored_when_facing_right():
     """文字动画（no_mirror）朝右时不得镜像：红块仍在画面左侧。"""
     _qapp()
-    lib = _RebuildLibrary({"talk": _RebuildClip(_solid_frame_pixmap())},
-                          no_mirror={"talk"})
+    lib = _RebuildLibrary({"talk": _RebuildClip(_solid_frame_pixmap())}, no_mirror={"talk"})
     pet = _RebuildPet(lib.movie("talk"), lib, facing="right", anim="talk", scale=0.5)
     window_mod.PetWindow._rebuild_frame(pet)
     out = pet._frame_pixmap.toImage()
@@ -733,8 +731,8 @@ def test_is_transparent_at_dpr_mapping_with_cached_image():
     img = QImage(640, 360, QImage.Format.Format_ARGB32)
     img.fill(Qt.GlobalColor.transparent)
     p = QPainter(img)
-    p.fillRect(0, 0, 320, 360, QColor(255, 255, 255, 200))   # 左半 alpha 200
-    p.fillRect(320, 0, 320, 360, QColor(255, 255, 255, 8))    # 右半 alpha 8（<16 视为透明）
+    p.fillRect(0, 0, 320, 360, QColor(255, 255, 255, 200))  # 左半 alpha 200
+    p.fillRect(320, 0, 320, 360, QColor(255, 255, 255, 8))  # 右半 alpha 8（<16 视为透明）
     p.end()
     pm = QPixmap.fromImage(img)
     pm.setDevicePixelRatio(2.0)
@@ -750,6 +748,7 @@ def test_is_transparent_at_dpr_mapping_with_cached_image():
 # ================================================================ P1：跨屏 DPR 变化
 # moveEvent 接入 _refresh_frame_for_screen_dpr：窗口跨屏（DPR 变化）→ 强制
 # 按新 DPR 重建帧；DPR 未变的普通移动 → 零开销。
+
 
 def test_move_event_refreshes_frame_on_dpr_change():
     """moveEvent 检测屏幕 DPR 变化：跨屏后重建帧并重绘；DPR 未变不重建。"""
@@ -784,7 +783,7 @@ def test_move_event_refreshes_frame_on_dpr_change():
 
     fake = _MovePet()
     window_mod.PetWindow.moveEvent(fake, QMoveEvent(QPoint(10, 10), QPoint(0, 0)))
-    assert calls["rebuild"] == 1   # DPR 1 → 2：跨屏强制重建
+    assert calls["rebuild"] == 1  # DPR 1 → 2：跨屏强制重建
     assert calls["update"] == 1
 
     # 同屏再移动（DPR 未变）：零开销
@@ -808,6 +807,7 @@ def test_move_event_refreshes_frame_on_dpr_change():
 # 无缓存重建路径下，素材文件变化必须使 _frame_signature 变化并触发真实重建
 # （移植自已删除的 test_frame_pixmap_cache.py，剥掉 FramePixmapCache 断言）。
 
+
 def test_rebuild_frame_invalidates_on_material_file_change(tmp_path):
     """素材文件 mtime 变化：同一路径同一帧号也必须真实重建，不得继续显示旧帧。"""
     _qapp()
@@ -816,8 +816,7 @@ def test_rebuild_frame_invalidates_on_material_file_change(tmp_path):
     os.utime(path, (1000, 1000))
 
     clip0 = _RebuildClip(_solid_frame_pixmap())
-    pet = _RebuildPet(clip0, _RebuildLibrary({"idle": clip0}, clip_paths={"idle": path}),
-                      anim="idle", scale=0.5)
+    pet = _RebuildPet(clip0, _RebuildLibrary({"idle": clip0}, clip_paths={"idle": path}), anim="idle", scale=0.5)
     window_mod.PetWindow._rebuild_frame(pet)
     pm_v0 = pet._frame_pixmap
     alpha_v0 = pet._hit_alpha_image
@@ -831,7 +830,7 @@ def test_rebuild_frame_invalidates_on_material_file_change(tmp_path):
     pet.lib = _RebuildLibrary({"idle": clip1}, clip_paths={"idle": path})
     window_mod.PetWindow._rebuild_frame(pet)
     assert pet._frame_signature(0, 1.0) != sig_v0  # mtime 不同 → 签名变化
-    assert clip1.pixmap_requests == 1              # 真实重建（走整条转换链）
+    assert clip1.pixmap_requests == 1  # 真实重建（走整条转换链）
     assert pet._frame_pixmap is not pm_v0
     assert pet._hit_alpha_image is not alpha_v0
 
@@ -857,8 +856,7 @@ def test_rebuild_frame_invalidates_on_in_place_material_replace(tmp_path):
     os.utime(path, (1000, 1000))
 
     clip = _RebuildClip(_solid_frame_pixmap())  # 同一 clip 实例贯穿全程
-    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}),
-                      anim="idle", scale=0.5)
+    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}), anim="idle", scale=0.5)
     window_mod.PetWindow._rebuild_frame(pet)
     pm_v0 = pet._frame_pixmap
 
@@ -871,7 +869,7 @@ def test_rebuild_frame_invalidates_on_in_place_material_replace(tmp_path):
     path.write_bytes(b"v1")
     os.utime(path, (2000, 2000))
     window_mod.PetWindow._rebuild_frame(pet)
-    assert clip.pixmap_requests == 2            # 快路径必须失效，重新走转换链
+    assert clip.pixmap_requests == 2  # 快路径必须失效，重新走转换链
     assert pet._frame_pixmap is not pm_v0
 
 
@@ -884,8 +882,7 @@ def test_rebuild_frame_invalidates_on_same_mtime_size_change(tmp_path):
     os.utime(path, (1000, 1000))
 
     clip = _RebuildClip(_solid_frame_pixmap())
-    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}),
-                      anim="idle", scale=0.5)
+    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}), anim="idle", scale=0.5)
     window_mod.PetWindow._rebuild_frame(pet)
     sig_v0 = pet._frame_signature(0, 1.0)
 
@@ -909,8 +906,7 @@ def test_rebuild_frame_invalidates_on_same_mtime_same_size_content_change(tmp_pa
     os.utime(path, (1000, 1000))
 
     clip = _RebuildClip(_solid_frame_pixmap())
-    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}),
-                      anim="idle", scale=0.5)
+    pet = _RebuildPet(clip, _RebuildLibrary({"idle": clip}, clip_paths={"idle": path}), anim="idle", scale=0.5)
     window_mod.PetWindow._rebuild_frame(pet)
     pm_v0 = pet._frame_pixmap
     sig_v0 = pet._frame_signature(0, 1.0)

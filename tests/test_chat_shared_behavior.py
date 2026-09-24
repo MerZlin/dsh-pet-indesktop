@@ -111,9 +111,7 @@ def test_clamp_point_stays_inside_available():
 def test_side_placement_prefers_right_when_pet_is_centered():
     pet = QRect(540, 320, 200, 160)
     size = QSize(360, 520)
-    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(
-        pet.right() + 14 + 1, pet.center().y() - size.height() // 2
-    )
+    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(pet.right() + 14 + 1, pet.center().y() - size.height() // 2)
 
 
 def test_side_placement_moves_to_left_of_pet_at_right_edge():
@@ -127,26 +125,20 @@ def test_side_placement_moves_to_left_of_pet_at_right_edge():
 def test_side_placement_moves_right_of_pet_at_left_edge():
     pet = QRect(0, 300, 120, 140)
     size = QSize(360, 520)
-    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(
-        pet.right() + 14 + 1, pet.center().y() - size.height() // 2
-    )
+    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(pet.right() + 14 + 1, pet.center().y() - size.height() // 2)
 
 
 def test_side_placement_moves_above_pet_at_bottom_edge():
     pet = QRect(500, 640, 200, 160)
     size = QSize(360, 520)
     # 右侧/左侧候选的 y 落点窗口底边超出工作区，下方候选也越界 → 上方候选胜出。
-    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(
-        pet.center().x() - size.width() // 2, pet.top() - size.height() - 14
-    )
+    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(pet.center().x() - size.width() // 2, pet.top() - size.height() - 14)
 
 
 def test_side_placement_moves_below_pet_at_top_edge():
     pet = QRect(500, 0, 200, 100)
     size = QSize(360, 520)
-    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(
-        pet.center().x() - size.width() // 2, pet.bottom() + 14 + 1
-    )
+    assert best_position_near_pet(pet, size, AVAILABLE) == QPoint(pet.center().x() - size.width() // 2, pet.bottom() + 14 + 1)
 
 
 def test_clamp_fallback_minimizes_overlap_when_window_too_tall():

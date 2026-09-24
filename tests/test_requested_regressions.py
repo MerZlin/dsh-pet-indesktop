@@ -18,9 +18,7 @@ def test_modern_message_card_opacity_is_configurable_and_persisted(tmp_path, mon
     assert config.get("modern_chat_card_opacity") == 84
 
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
-    row = dialog.findChild(
-        settings_mod.SettingRow, "settingRow_modern_chat_card_opacity"
-    )
+    row = dialog.findChild(settings_mod.SettingRow, "settingRow_modern_chat_card_opacity")
     assert row is not None and not row.isHidden()
     dialog.ai_page.chat_ui_style.setCurrentData("classic")
     assert row.isHidden()
@@ -30,9 +28,7 @@ def test_modern_message_card_opacity_is_configurable_and_persisted(tmp_path, mon
     dialog._save()
 
     assert config.get("modern_chat_card_opacity") == 65
-    assert "rgba(255, 255, 255, 166)" in build_modern_custom_overlay_qss(
-        "#3994ff", 65
-    )
+    assert "rgba(255, 255, 255, 166)" in build_modern_custom_overlay_qss("#3994ff", 65)
     dialog.close()
     app.processEvents()
 
@@ -78,9 +74,7 @@ def test_bubble_text_scale_row_persists(tmp_path, monkeypatch):
         assert dialog.bubble_text_scale_spin.value() == 100
         assert dialog.bubble_text_scale_spin.minimum() == 50
         assert dialog.bubble_text_scale_spin.maximum() == 300
-        assert dialog.findChild(
-            settings_mod.SettingRow, "settingRow_bubble_text_scale"
-        ) is not None, "设置页必须有可发现的「气泡文字大小」行"
+        assert dialog.findChild(settings_mod.SettingRow, "settingRow_bubble_text_scale") is not None, "设置页必须有可发现的「气泡文字大小」行"
         dialog.bubble_text_scale_spin.setValue(180)
         assert dialog._write_config() is True
     finally:
@@ -120,9 +114,7 @@ def test_click_sound_path_is_linked_to_enable_toggle_and_persisted(tmp_path, mon
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     config = Config(tmp_path)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
-    row = dialog.findChild(
-        settings_mod.SettingRow, "settingRow_click_sound_pack"
-    )
+    row = dialog.findChild(settings_mod.SettingRow, "settingRow_click_sound_pack")
     assert row is not None
     # 默认开启 → 音效包行可见
     assert dialog.click_sound_check.isChecked()
@@ -159,9 +151,7 @@ def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, mo
     config = Config(tmp_path)
     config.set("click_sound_enabled", False)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
-    row = dialog.findChild(
-        settings_mod.SettingRow, "settingRow_click_sound_pack"
-    )
+    row = dialog.findChild(settings_mod.SettingRow, "settingRow_click_sound_pack")
     assert row is not None
     assert not dialog.click_sound_check.isChecked()
     assert row.isHidden()
@@ -182,9 +172,9 @@ def test_click_sound_path_row_sits_directly_below_toggle(tmp_path, monkeypatch):
     config = Config(tmp_path)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     section = next(
-        s for s in dialog.findChildren(settings_mod.SettingsSection)
-        if s.findChild(QLabel, "sectionTitle") is not None
-        and s.findChild(QLabel, "sectionTitle").text() == "点击反馈"
+        s
+        for s in dialog.findChildren(settings_mod.SettingsSection)
+        if s.findChild(QLabel, "sectionTitle") is not None and s.findChild(QLabel, "sectionTitle").text() == "点击反馈"
     )
     card = section.findChild(settings_mod.SettingsCard)
     assert card is not None
@@ -399,23 +389,21 @@ def test_chat_window_left_edge_drag_resizes(tmp_path):
     def mouse(kind, x, y, button):
         # 旧 5 参构造不写 globalPosition（遗留默认值），必须显式传全局坐标
         return QMouseEvent(
-            kind, QPointF(x, y), QPointF(x, y), button, button,
+            kind,
+            QPointF(x, y),
+            QPointF(x, y),
+            button,
+            button,
             Qt.KeyboardModifier.NoModifier,
         )
 
     before_x = win.x()
-    win.mousePressEvent(mouse(
-        QEvent.Type.MouseButtonPress, 2, 350, Qt.MouseButton.LeftButton
-    ))
-    win.mouseMoveEvent(mouse(
-        QEvent.Type.MouseMove, 140, 350, Qt.MouseButton.LeftButton
-    ))
+    win.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, 2, 350, Qt.MouseButton.LeftButton))
+    win.mouseMoveEvent(mouse(QEvent.Type.MouseMove, 140, 350, Qt.MouseButton.LeftButton))
     # 左边缘跟随鼠标右移：窗口变窄（右边缘锚定），x 坐标右移
     assert win.x() > before_x, "按住左边缘右拖时左边缘应跟随鼠标右移"
     assert win.width() < before_w, "按住左边缘右拖应使窗口变窄（右边缘锚定）"
-    win.mouseReleaseEvent(mouse(
-        QEvent.Type.MouseButtonRelease, 140, 350, Qt.MouseButton.LeftButton
-    ))
+    win.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, 140, 350, Qt.MouseButton.LeftButton))
     win.close()
     app.processEvents()
 
@@ -439,42 +427,30 @@ def test_chat_window_edge_resize_clamps_position_with_size(tmp_path):
 
     def mouse(kind, x, y, button):
         return QMouseEvent(
-            kind, QPointF(x, y), QPointF(x, y), button, button,
+            kind,
+            QPointF(x, y),
+            QPointF(x, y),
+            button,
+            button,
             Qt.KeyboardModifier.NoModifier,
         )
 
     # 左边缘右拖 1000px（远超最小宽度）→ 右边缘锚定，x = 原右边缘 - 最小宽度
-    win.mousePressEvent(mouse(
-        QEvent.Type.MouseButtonPress, 2, 350, Qt.MouseButton.LeftButton
-    ))
-    win.mouseMoveEvent(mouse(
-        QEvent.Type.MouseMove, 1002, 350, Qt.MouseButton.LeftButton
-    ))
+    win.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, 2, 350, Qt.MouseButton.LeftButton))
+    win.mouseMoveEvent(mouse(QEvent.Type.MouseMove, 1002, 350, Qt.MouseButton.LeftButton))
     assert win.width() == min_w
     # offscreen 平台对窗口几何有 1px 微调，右边缘不得超出原位置（此前会偏出 600px）
-    assert abs((win.x() + win.width()) - start_right) <= 1, (
-        f"拖到最小宽度时右边缘应锚定在 {start_right}，实际 {win.x() + win.width()}"
-    )
-    win.mouseReleaseEvent(mouse(
-        QEvent.Type.MouseButtonRelease, 1002, 350, Qt.MouseButton.LeftButton
-    ))
+    assert abs((win.x() + win.width()) - start_right) <= 1, f"拖到最小宽度时右边缘应锚定在 {start_right}，实际 {win.x() + win.width()}"
+    win.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, 1002, 350, Qt.MouseButton.LeftButton))
 
     # 顶部上拖 2000px → 高度触达最大尺寸上限，底边缘锚定（此前窗口整体移出屏幕顶部）
     max_h = win.maximumHeight()
     win.resize(960, 700)
-    win.mousePressEvent(mouse(
-        QEvent.Type.MouseButtonPress, 480, 2, Qt.MouseButton.LeftButton
-    ))
-    win.mouseMoveEvent(mouse(
-        QEvent.Type.MouseMove, 480, -1998, Qt.MouseButton.LeftButton
-    ))
+    win.mousePressEvent(mouse(QEvent.Type.MouseButtonPress, 480, 2, Qt.MouseButton.LeftButton))
+    win.mouseMoveEvent(mouse(QEvent.Type.MouseMove, 480, -1998, Qt.MouseButton.LeftButton))
     assert win.height() == max_h
-    assert abs((win.y() + win.height()) - start_bottom) <= 1, (
-        f"拖到最大高度时底边缘应锚定在 {start_bottom}，实际 {win.y() + win.height()}"
-    )
-    win.mouseReleaseEvent(mouse(
-        QEvent.Type.MouseButtonRelease, 480, -1998, Qt.MouseButton.LeftButton
-    ))
+    assert abs((win.y() + win.height()) - start_bottom) <= 1, f"拖到最大高度时底边缘应锚定在 {start_bottom}，实际 {win.y() + win.height()}"
+    win.mouseReleaseEvent(mouse(QEvent.Type.MouseButtonRelease, 480, -1998, Qt.MouseButton.LeftButton))
     win.close()
     app.processEvents()
 
@@ -496,14 +472,10 @@ def test_chat_window_edge_hover_shows_resize_cursor(tmp_path):
 
     # 悬停在窗口右边缘时应显示水平缩放光标
     hover(win.width() - 2, 350)
-    assert win.cursor().shape() == Qt.CursorShape.SizeHorCursor, (
-        "悬停在窗口右边缘时应显示水平缩放光标"
-    )
+    assert win.cursor().shape() == Qt.CursorShape.SizeHorCursor, "悬停在窗口右边缘时应显示水平缩放光标"
     # 移入窗口内部应立即恢复箭头（回归：从窗口外进入后光标卡在缩放双箭头）
     hover(win.width() // 2, 350)
-    assert win.cursor().shape() == Qt.CursorShape.ArrowCursor, (
-        "离开边缘进入窗口内部应恢复箭头光标"
-    )
+    assert win.cursor().shape() == Qt.CursorShape.ArrowCursor, "离开边缘进入窗口内部应恢复箭头光标"
     # 离开窗口恢复箭头
     win.event(QHoverEvent(QEvent.Type.HoverLeave, QPointF(1, 1), QPointF(1, 1)))
     assert win.cursor().shape() == Qt.CursorShape.ArrowCursor
@@ -547,11 +519,16 @@ def test_ojingjing_entry_hover_survives_widget_children(monkeypatch):
         assert entry._hovered, "光标仍在项内时 leave 不应清除高亮"
         # 3. 跨窗口移动丢失 enter 时，mouseMove 兜底恢复高亮
         entry._hovered = False
-        entry.mouseMoveEvent(QMouseEvent(
-            QEvent.Type.MouseMove, QPointF(20, 20), QPointF(20, 20),
-            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
-            Qt.KeyboardModifier.NoModifier,
-        ))
+        entry.mouseMoveEvent(
+            QMouseEvent(
+                QEvent.Type.MouseMove,
+                QPointF(20, 20),
+                QPointF(20, 20),
+                Qt.MouseButton.NoButton,
+                Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
         assert entry._hovered, "鼠标移动应恢复高亮"
     finally:
         entry.close()
@@ -575,10 +552,7 @@ def test_windows_ojingjing_children_do_not_intercept_hover():
         entry.findChild(QWidget, "ojingjingClickAccessory"),
     ]
     assert all(child is not None for child in children)
-    assert all(
-        child.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        for child in children
-    ), "头像、标题和提示不应截获 Windows hover 事件"
+    assert all(child.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) for child in children), "头像、标题和提示不应截获 Windows hover 事件"
     entry.close()
     menu.close()
     app.processEvents()
@@ -629,16 +603,9 @@ def test_windows_settings_has_no_orphan_macos_dock_toggle(tmp_path, monkeypatch)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
 
     assert dialog.dock_icon_check is None
-    assert not any(
-        isinstance(child, settings_mod.ToggleSwitch)
-        for child in dialog.children()
-    ), "所有开关都必须被设置行接管，不能游离在窗口左上角"
-    assert dialog.findChild(
-        settings_mod.SettingRow, "settingRow_auto_hide_fullscreen"
-    ) is not None
-    assert dialog.findChild(
-        settings_mod.SettingRow, "settingRow_stream_capture"
-    ) is not None
+    assert not any(isinstance(child, settings_mod.ToggleSwitch) for child in dialog.children()), "所有开关都必须被设置行接管，不能游离在窗口左上角"
+    assert dialog.findChild(settings_mod.SettingRow, "settingRow_auto_hide_fullscreen") is not None
+    assert dialog.findChild(settings_mod.SettingRow, "settingRow_stream_capture") is not None
 
     dialog._save()
     assert config.get("show_dock_icon") is False
@@ -658,10 +625,7 @@ def test_linux_settings_has_no_orphan_windows_cursor_passthrough_toggle(tmp_path
     dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=False)
 
     assert dialog.cursor_hidden_passthrough_check is None
-    assert not any(
-        isinstance(child, settings_mod.ToggleSwitch)
-        for child in dialog.children()
-    ), "所有开关都必须被设置行接管，不能游离在窗口左上角"
+    assert not any(isinstance(child, settings_mod.ToggleSwitch) for child in dialog.children()), "所有开关都必须被设置行接管，不能游离在窗口左上角"
 
     dialog.close()
     app.processEvents()
@@ -686,23 +650,21 @@ def test_hide_pet_notifies_and_dock_click_restores(tmp_path, monkeypatch):
     notified = []
     win.on_hidden = lambda: notified.append(True)
 
-    with mock.patch.object(QWidget, "hide"), mock.patch.object(
-        window_mod.PetWindow, "show"
-    ) as mock_show, mock.patch.object(app, "applicationStateChanged") as m_sig:
+    with (
+        mock.patch.object(QWidget, "hide"),
+        mock.patch.object(window_mod.PetWindow, "show") as mock_show,
+        mock.patch.object(app, "applicationStateChanged") as m_sig,
+    ):
         window_mod.PetWindow.hide(win)
         assert notified, "用户主动隐藏应触发托盘提示回调"
         # 隐藏后 arm Dock 点击恢复监听
         m_sig.connect.assert_called_once()
         # 点击 Dock 图标 → 应用激活 → 自动恢复桌宠
-        window_mod.PetWindow._restore_on_dock_reactivate(
-            win, Qt.ApplicationState.ApplicationActive
-        )
+        window_mod.PetWindow._restore_on_dock_reactivate(win, Qt.ApplicationState.ApplicationActive)
         mock_show.assert_called_once()
         # 一次性监听：再次激活不再恢复
         mock_show.reset_mock()
-        window_mod.PetWindow._restore_on_dock_reactivate(
-            win, Qt.ApplicationState.ApplicationActive
-        )
+        window_mod.PetWindow._restore_on_dock_reactivate(win, Qt.ApplicationState.ApplicationActive)
         mock_show.assert_not_called()
 
 
@@ -724,14 +686,14 @@ def test_hide_pet_internal_replacement_skips_notify(tmp_path, monkeypatch):
     win.cfg = Config(tmp_path)
     win.on_hidden = lambda: pytest.fail("内部替换不应弹提示")
 
-    with mock.patch.object(QWidget, "hide"), mock.patch.object(
-        window_mod.PetWindow, "show"
-    ) as mock_show, mock.patch.object(app, "applicationStateChanged") as m_sig:
+    with (
+        mock.patch.object(QWidget, "hide"),
+        mock.patch.object(window_mod.PetWindow, "show") as mock_show,
+        mock.patch.object(app, "applicationStateChanged") as m_sig,
+    ):
         window_mod.PetWindow.hide(win, notify=False)
         m_sig.connect.assert_not_called()
-        window_mod.PetWindow._restore_on_dock_reactivate(
-            win, Qt.ApplicationState.ApplicationActive
-        )
+        window_mod.PetWindow._restore_on_dock_reactivate(win, Qt.ApplicationState.ApplicationActive)
         mock_show.assert_not_called()
 
 
@@ -756,9 +718,7 @@ def test_animation_icon_applier_updates_action_and_cleans_worker():
     worker = object()
 
     # 无图（解码失败/空帧）：不 setIcon，但必须移除 worker 并继续泵任务
-    applier = _AnimationIconApplier(
-        submenu, action, worker, lambda: pump_calls.append(1), parent=submenu
-    )
+    applier = _AnimationIconApplier(submenu, action, worker, lambda: pump_calls.append(1), parent=submenu)
     applier.on_ready(None)
     assert submenu._animation_icon_workers == []
     assert pump_calls == [1]
@@ -767,9 +727,7 @@ def test_animation_icon_applier_updates_action_and_cleans_worker():
     image = QImage(16, 16, QImage.Format.Format_ARGB32)
     image.fill(0xFF3366FF)
     submenu._animation_icon_workers.append(worker)
-    applier2 = _AnimationIconApplier(
-        submenu, action, worker, lambda: pump_calls.append(2), parent=submenu
-    )
+    applier2 = _AnimationIconApplier(submenu, action, worker, lambda: pump_calls.append(2), parent=submenu)
     applier2.on_ready(image)
     assert submenu._animation_icon_workers == []
     assert pump_calls == [1, 2]
@@ -802,6 +760,7 @@ def test_build_scripts_bundle_menu_templates_and_chat_styles():
         assert "modern_styles.qss" in text, f"{name} 必须打包 modern_styles.qss"
     # 兜底：模板 JSON 缺失时 load_menu_template 必须回退内置模板而非抛异常
     import pet.context_menu as context_menu_mod
+
     assert context_menu_mod.load_menu_template("modern")["id"] == "modern"
     assert context_menu_mod.load_menu_template("legacy")["id"] == "legacy"
 
@@ -961,6 +920,7 @@ def test_spawned_children_are_reaped_after_exit():
         # 退出后必须被回收
         proc.terminate()
         import time
+
         deadline = time.time() + 10
         while proc.poll() is None and time.time() < deadline:
             time.sleep(0.05)
@@ -1014,7 +974,8 @@ def test_settings_stylesheet_has_dark_overrides(monkeypatch):
 
 
 def test_settings_window_uses_the_explicit_dark_appearance_on_a_light_system(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from PySide6.QtWidgets import QApplication
 
@@ -1035,7 +996,8 @@ def test_settings_window_uses_the_explicit_dark_appearance_on_a_light_system(
 
 
 def test_settings_window_rethemes_immediately_with_the_appearance_selector(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     from PySide6.QtWidgets import QApplication
 
@@ -1188,9 +1150,7 @@ def test_modern_autostart_write_failure_warns(tmp_path, monkeypatch):
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     monkeypatch.setattr(settings_mod.autostart_mod, "set_enabled", lambda enabled: False)
     warnings = []
-    monkeypatch.setattr(
-        settings_mod.QMessageBox, "warning", lambda *a, **k: warnings.append(a)
-    )
+    monkeypatch.setattr(settings_mod.QMessageBox, "warning", lambda *a, **k: warnings.append(a))
     config = Config(tmp_path)
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     # 与初始状态不同（初始 = is_enabled() = False）→ 触发写入
@@ -1201,6 +1161,8 @@ def test_modern_autostart_write_failure_warns(tmp_path, monkeypatch):
     assert "失败" in str(warnings[0][2])
     dialog.close()
     app.processEvents()
+
+
 # --- macOS Dock recovery menu regression (2026-09-03) ---
 
 

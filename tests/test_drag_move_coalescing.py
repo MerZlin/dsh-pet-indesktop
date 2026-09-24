@@ -12,6 +12,7 @@ GUI 帧内多次 moveEvent 只处理最后一次（0ms 去抖）；拖拽开始�
 松手后的位置立即同步处理，不能等。碰撞提交保持原样（20Hz 节流由
 test_collision_window 锁定，本文件不改动它）。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -50,34 +51,44 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def _press(pos: QPointF, global_pos: QPointF,
-           modifiers=Qt.KeyboardModifier.NoModifier) -> QMouseEvent:
+def _press(pos: QPointF, global_pos: QPointF, modifiers=Qt.KeyboardModifier.NoModifier) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonPress, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, modifiers,
+        QEvent.Type.MouseButtonPress,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        modifiers,
     )
 
 
-def _move(pos: QPointF, global_pos: QPointF,
-          buttons=Qt.MouseButton.LeftButton,
-          modifiers=Qt.KeyboardModifier.NoModifier) -> QMouseEvent:
+def _move(pos: QPointF, global_pos: QPointF, buttons=Qt.MouseButton.LeftButton, modifiers=Qt.KeyboardModifier.NoModifier) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseMove, pos, global_pos,
-        Qt.MouseButton.NoButton, buttons, modifiers,
+        QEvent.Type.MouseMove,
+        pos,
+        global_pos,
+        Qt.MouseButton.NoButton,
+        buttons,
+        modifiers,
     )
 
 
 def _release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonRelease, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        QEvent.Type.MouseButtonRelease,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
 
 def _right_press(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonPress, pos, global_pos,
+        QEvent.Type.MouseButtonPress,
+        pos,
+        global_pos,
         Qt.MouseButton.RightButton,
         Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton,
         Qt.KeyboardModifier.NoModifier,
@@ -103,6 +114,7 @@ def _drag_to(win, *globals_):
 
 
 # ================================================================ B1 合帧
+
 
 def test_drag_coalesce_timer_is_about_120hz(app, tmp_path):
     win = _make_win(app, tmp_path)
@@ -219,6 +231,7 @@ def test_physics_drag_path_untouched(app, tmp_path):
 
 # ================================================================ B3 同帧合并
 
+
 def test_move_event_coalesces_bubble_and_listener_per_frame(app, tmp_path, monkeypatch):
     win = _make_win(app, tmp_path)
     win.show()
@@ -227,7 +240,8 @@ def test_move_event_coalesces_bubble_and_listener_per_frame(app, tmp_path, monke
     win.add_position_listener(lambda w: seen.append((w.x(), w.y())))
     repositioned = []
     monkeypatch.setattr(
-        win._speech_bubble, "reposition",
+        win._speech_bubble,
+        "reposition",
         lambda rect: repositioned.append((rect.x(), rect.y())),
     )
     base = win.pos()
@@ -255,7 +269,8 @@ def test_drag_start_frame_syncs_position_immediately(app, tmp_path, monkeypatch)
     win.add_position_listener(lambda w: seen.append((w.x(), w.y())))
     repositioned = []
     monkeypatch.setattr(
-        win._speech_bubble, "reposition",
+        win._speech_bubble,
+        "reposition",
         lambda rect: repositioned.append(rect),
     )
     win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
@@ -290,6 +305,7 @@ def test_release_frame_syncs_position_immediately(app, tmp_path, monkeypatch):
 
 
 # ================================================ 边界漏洞回归（锁定位/生命周期）
+
 
 def test_lock_position_during_drag_flushes_last_target_and_stops_timer(app, tmp_path):
     """问题1：拖拽中途 set_lock_position(True) 必须等同松手——最后一次跟手位置

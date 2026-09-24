@@ -227,6 +227,7 @@ def test_special_cased_keys_are_the_only_difference(tmp_path):
 # ValueError（float('abc') 打死整个设置页），字符串布尔被 bool() 误开
 # （bool('false') is True，歌词功能自己打开）。下面固定这两条修复。
 
+
 def _dirty_music_cost_config(tmp_path):
     """把 5 个键写成脏值落盘，再走真实加载路径（reload + _normalize_pet_settings）。"""
     cfg_dir = tmp_path / config_mod.APP_DIR_NAME
@@ -303,9 +304,7 @@ def test_dirty_music_and_cost_config_does_not_break_settings_page(tmp_path):
 def _write_config(tmp_path, payload: dict) -> None:
     cfg_dir = tmp_path / config_mod.APP_DIR_NAME
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / "config.json").write_text(
-        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-    )
+    (cfg_dir / "config.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def test_music_player_paths_is_cleaned_on_load(tmp_path):
@@ -317,8 +316,8 @@ def test_music_player_paths_is_cleaned_on_load(tmp_path):
             "music_player_paths": {
                 "netease": "  D:/Custom/cloudmusic.exe  ",  # 两端空白要 strip
                 "qqmusic": "D:/QQMusic/QQMusic.exe",
-                "unknown": "D:/evil.exe",                    # 未知播放器键丢弃
-                "netease_backup": 42,                        # 非字符串值丢弃
+                "unknown": "D:/evil.exe",  # 未知播放器键丢弃
+                "netease_backup": 42,  # 非字符串值丢弃
             },
         },
     )

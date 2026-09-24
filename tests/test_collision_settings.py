@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Phase 4 验收测试：碰撞设置项配置、UI 控件、round-trip、非法值归一化与运行时即时生效。"""
+
 from __future__ import annotations
 
 import json
@@ -24,7 +25,7 @@ def qapp():
 def test_collision_config_defaults_and_normalization(tmp_path: Path):
     """测试碰撞参数默认值与非法值边界归一化。"""
     cfg_dir = tmp_path
-    
+
     # 默认值
     cfg = Config(cfg_dir)
     assert cfg.get("collision_enabled") is True
@@ -38,9 +39,9 @@ def test_collision_config_defaults_and_normalization(tmp_path: Path):
     # 写入越界/非法值，验证 _load 自动归一化
     raw_data = {
         "collision_enabled": "not_bool",
-        "collision_restitution": 99.0,   # max 1.0
-        "collision_friction": -5.0,      # min 0.0
-        "collision_mass_scale": 10.0,    # max 2.0
+        "collision_restitution": 99.0,  # max 1.0
+        "collision_friction": -5.0,  # min 0.0
+        "collision_mass_scale": 10.0,  # max 2.0
         "collision_impulse_cap": 500.0,  # min 1000.0
     }
     cfg.path.parent.mkdir(parents=True, exist_ok=True)

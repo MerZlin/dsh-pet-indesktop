@@ -59,10 +59,7 @@ def test_rows_sit_in_the_pet_domain_music_group(dialog):
     """两行 + 检测按钮落在「桌宠 · 音乐关联」组里（掉进「待分类」就等于没做）。"""
     from PySide6.QtWidgets import QWidget
 
-    rows = [
-        dialog.findChild(QWidget, f"settingRow_{key}")
-        for key in ("music_player_netease", "music_player_qqmusic", "music_player_detect")
-    ]
+    rows = [dialog.findChild(QWidget, f"settingRow_{key}") for key in ("music_player_netease", "music_player_qqmusic", "music_player_detect")]
     assert all(row is not None for row in rows)
 
     page = None
@@ -112,9 +109,7 @@ def test_empty_paths_drop_the_key_and_restore_auto_search(dialog, monkeypatch):
 
 def test_unchanged_paths_do_not_touch_the_cache(dialog, monkeypatch):
     """路径没变就不要清缓存（避免每次保存都让菜单重新扫盘）。"""
-    monkeypatch.setattr(
-        settings_music.music_players, "warm_cache_async", lambda *a, **k: False
-    )
+    monkeypatch.setattr(settings_music.music_players, "warm_cache_async", lambda *a, **k: False)
     cleared: list[bool] = []
 
     netease, _qqmusic = _pickers(dialog)

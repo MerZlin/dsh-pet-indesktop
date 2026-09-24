@@ -6,6 +6,7 @@ shaping/回退字体解析；内容层只在刷新时变化，拖拽/弹簧期�
 是纯浪费。缓存后每帧一次 blit。本文件锁定：缓存命中/失效语义 +
 缓存路径下内容确实画出来（不是透明空图）。
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,9 +25,16 @@ def _qapp() -> QApplication:
 def _island(tmp_path: Path, **overrides) -> DynamicIsland:
     cfg = Config(base=tmp_path)
     data = {
-        "enabled": True, "show_icon": True, "show_name": True,
-        "show_info": True, "info_mode": "custom", "custom_text": "测试文本",
-        "show_status": True, "style": "dark", "x": 400, "y": 300,
+        "enabled": True,
+        "show_icon": True,
+        "show_name": True,
+        "show_info": True,
+        "info_mode": "custom",
+        "custom_text": "测试文本",
+        "show_status": True,
+        "style": "dark",
+        "x": 400,
+        "y": 300,
     }
     data.update(overrides)
     cfg.set("dynamic_island", data)
@@ -63,8 +71,7 @@ def test_content_cache_renders_nontransparent_content(tmp_path):
     _qapp()
     island = _island(tmp_path)
     island.show()
-    img = island._content_cache().toImage().convertToFormat(
-        QImage.Format.Format_ARGB32)
+    img = island._content_cache().toImage().convertToFormat(QImage.Format.Format_ARGB32)
     opaque = 0
     for y in range(0, img.height(), 2):
         for x in range(0, img.width(), 2):
@@ -133,16 +140,12 @@ def test_content_cache_key_covers_colors_and_style(tmp_path, monkeypatch):
     island2.config.set("balance_tier_label_peak", "峰")
     island2.config.set("balance_tier_label_idle", "峰")
     island2.show()
-    monkeypatch.setattr(balance_mod, "next_pricing_switch",
-                        lambda *a, **k: ("idle", None))
-    monkeypatch.setattr(balance_mod, "format_switch_time",
-                        lambda *a, **k: "12:00")
-    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier",
-                        lambda *a, **k: "peak")
+    monkeypatch.setattr(balance_mod, "next_pricing_switch", lambda *a, **k: ("idle", None))
+    monkeypatch.setattr(balance_mod, "format_switch_time", lambda *a, **k: "12:00")
+    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda *a, **k: "peak")
     peak = island2._content_cache()
     text_peak = island2._info_text()
-    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier",
-                        lambda *a, **k: "idle")
+    monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda *a, **k: "idle")
     assert island2._info_text() == text_peak, "前提：文案不随档位变化"
     assert island2._content_cache() is not peak, "峰谷信息色变化必须重建缓存"
     island2.deleteLater()

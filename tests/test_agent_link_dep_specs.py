@@ -11,6 +11,7 @@
 2. 桥接 link 自检：我们自己写进 profile 的 `link:` 目标不是当前内置插件目录时，
    启动后自动刷新（只刷新已装插件的 profile，绝不在启动时替用户安装）。
 """
+
 from __future__ import annotations
 
 import json
@@ -25,9 +26,7 @@ from pet.agent_link import DshMonitor
 def _profile(tmp_path: Path, name: str = "web", deps: dict | None = None) -> Path:
     profile = tmp_path / "profiles" / name
     profile.mkdir(parents=True)
-    (profile / "package.json").write_text(
-        json.dumps({"dependencies": deps or {}}, ensure_ascii=False), encoding="utf-8"
-    )
+    (profile / "package.json").write_text(json.dumps({"dependencies": deps or {}}, ensure_ascii=False), encoding="utf-8")
     return profile
 
 
@@ -38,6 +37,7 @@ def _manifest(profile: Path) -> dict:
 
 
 # ---------------------------------------------------------------- 规格解析
+
 
 class TestPathSpecTarget:
     def test_accepts_local_path_forms(self, tmp_path):
@@ -55,13 +55,18 @@ class TestPathSpecTarget:
 
     def test_ignores_registry_and_remote_specs(self, tmp_path):
         for spec in (
-            "^1.2.3", "0.1.14", "workspace:*", "npm:pkg@1.0.0",
-            "github:owner/repo#path:/sub", "https://example.com/pkg-1.0.0.tgz",
+            "^1.2.3",
+            "0.1.14",
+            "workspace:*",
+            "npm:pkg@1.0.0",
+            "github:owner/repo#path:/sub",
+            "https://example.com/pkg-1.0.0.tgz",
         ):
             assert agent_link._path_spec_target(spec, tmp_path) is None, spec
 
 
 # ---------------------------------------------------------------- 缺失诊断
+
 
 class TestMissingDependencySpecs:
     def test_ok_when_target_exists(self, tmp_path):
@@ -80,14 +85,10 @@ class TestMissingDependencySpecs:
 
     def test_suggests_renamed_build_directory(self, tmp_path):
         """打包构建目录改名（dist-onedir/<name>/...）→ 给出新目录下同一相对路径。"""
-        new_target = (
-            tmp_path / "dist-onedir" / "new-build" / "_internal" / "integrations" / "dsh-pet-bridge"
-        )
+        new_target = tmp_path / "dist-onedir" / "new-build" / "_internal" / "integrations" / "dsh-pet-bridge"
         new_target.mkdir(parents=True)
         (tmp_path / "dist-onedir" / "old-build" / "_internal" / "integrations").mkdir(parents=True)
-        missing = (
-            tmp_path / "dist-onedir" / "old-build" / "_internal" / "integrations" / "dsh-pet-bridge"
-        )
+        missing = tmp_path / "dist-onedir" / "old-build" / "_internal" / "integrations" / "dsh-pet-bridge"
         profile = _profile(tmp_path, deps={"@dsh-pet/bridge": f"link:{missing}"})
 
         finding = agent_link._missing_dependency_specs(profile, _manifest(profile))[0]
@@ -152,6 +153,7 @@ class TestMissingDependencySpecs:
 
 # ---------------------------------------------------------------- 失败文案
 
+
 class TestInstallFailureDiagnostics:
     def test_failure_message_names_the_broken_spec(self, tmp_path, monkeypatch):
         plugin = tmp_path / "dsh-pet-bridge"
@@ -166,9 +168,7 @@ class TestInstallFailureDiagnostics:
         monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
         monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
         monkeypatch.setattr(agent_link, "_pnpm_command", lambda: ["pnpm"])
-        monkeypatch.setattr(
-            agent_link, "_run_pnpm", lambda profile_dir, *args: (1, "ERR_PNPM_ ... 0.12.80")
-        )
+        monkeypatch.setattr(agent_link, "_run_pnpm", lambda profile_dir, *args: (1, "ERR_PNPM_ ... 0.12.80"))
 
         ok, message = DshMonitor.install_bridge()
 
@@ -179,6 +179,7 @@ class TestInstallFailureDiagnostics:
 
 
 # ---------------------------------------------------------------- link 自检
+
 
 class TestBridgeLinkStaleness:
     def _setup(self, tmp_path, monkeypatch, deps: dict):
@@ -200,16 +201,12 @@ class TestBridgeLinkStaleness:
     def test_link_to_other_build_is_stale(self, tmp_path, monkeypatch):
         other = tmp_path / "old-build"
         other.mkdir()
-        self._setup(
-            tmp_path, monkeypatch, {agent_link.DSH_PLUGIN_NAME: f"link:{other}"}
-        )
+        self._setup(tmp_path, monkeypatch, {agent_link.DSH_PLUGIN_NAME: f"link:{other}"})
         stale = DshMonitor.bridge_link_stale()
         assert [name for name, _spec in stale] == ["web"]
 
     def test_missing_link_target_is_stale(self, tmp_path, monkeypatch):
-        self._setup(
-            tmp_path, monkeypatch, {agent_link.DSH_PLUGIN_NAME: "link:W:/gone/bridge"}
-        )
+        self._setup(tmp_path, monkeypatch, {agent_link.DSH_PLUGIN_NAME: "link:W:/gone/bridge"})
         assert [name for name, _spec in DshMonitor.bridge_link_stale()] == ["web"]
 
     def test_profile_without_plugin_is_ignored(self, tmp_path, monkeypatch):
@@ -255,10 +252,14 @@ class TestRefreshStaleBridgeLinks:
         artifacts = tmp_path / "artifacts"
         artifacts.mkdir()
         (artifacts / "ext-0.13.6.tgz").write_text("x", encoding="utf-8")
-        profile = _profile(tmp_path, name="web", deps={
-            agent_link.DSH_PLUGIN_NAME: f"link:{other}",
-            "ext": f"file:{artifacts / 'ext-0.12.80.tgz'}",
-        })
+        profile = _profile(
+            tmp_path,
+            name="web",
+            deps={
+                agent_link.DSH_PLUGIN_NAME: f"link:{other}",
+                "ext": f"file:{artifacts / 'ext-0.12.80.tgz'}",
+            },
+        )
         monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
         monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
         monkeypatch.setattr(agent_link, "_pnpm_command", lambda: ["pnpm"])
@@ -271,9 +272,7 @@ class TestRefreshStaleBridgeLinks:
             # 修复已生效后的重试：模拟 pnpm add 成功并把 link 指到当前构建目录
             data = json.loads((profile_dir / "package.json").read_text(encoding="utf-8"))
             data.setdefault("dependencies", {})[agent_link.DSH_PLUGIN_NAME] = f"link:{plugin}"
-            (profile_dir / "package.json").write_text(
-                json.dumps(data, ensure_ascii=False), encoding="utf-8"
-            )
+            (profile_dir / "package.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return 0, ""
 
         monkeypatch.setattr(agent_link, "_run_pnpm", fake_run)
@@ -291,9 +290,7 @@ class TestRefreshStaleBridgeLinks:
         monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
         monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
         calls: list[str] = []
-        monkeypatch.setattr(
-            agent_link, "_run_pnpm", lambda profile_dir, *args: (calls.append(profile_dir.name), (0, ""))[1]
-        )
+        monkeypatch.setattr(agent_link, "_run_pnpm", lambda profile_dir, *args: (calls.append(profile_dir.name), (0, ""))[1])
 
         assert DshMonitor.refresh_stale_bridge_links() == []
         assert calls == []
@@ -374,6 +371,7 @@ class TestScheduling:
 
 # ---------------------------------------------------------------- 坏路径实修
 
+
 class TestSpecRepair:
     """web-rc8-test 现场：package.json 指着不存在的旧版路径（0.12.80，实际 0.13.6），
     必须**真修**——把能唯一确定的坏路径改写掉、备份原文件，然后让 pnpm 重生成 lockfile。"""
@@ -430,9 +428,7 @@ class TestSpecRepair:
         artifacts = tmp_path / "artifacts"
         artifacts.mkdir()
         (artifacts / "ext-0.13.6.tgz").write_text("x", encoding="utf-8")
-        profile = _profile(
-            tmp_path, deps={"ext": f"file:{artifacts / 'ext-0.12.80.tgz'}"}
-        )
+        profile = _profile(tmp_path, deps={"ext": f"file:{artifacts / 'ext-0.12.80.tgz'}"})
         monkeypatch.setattr(agent_link, "DSH_PROFILE_HOME", tmp_path)
         monkeypatch.setattr(DshMonitor, "bundled_plugin_dir", classmethod(lambda cls: plugin))
         monkeypatch.setattr(agent_link, "_pnpm_command", lambda: ["pnpm"])
@@ -444,9 +440,7 @@ class TestSpecRepair:
                 return 1, "ERR_PNPM_ ... ext-0.12.80.tgz does not exist"
             data = _json.loads((profile_dir / "package.json").read_text(encoding="utf-8"))
             data.setdefault("dependencies", {})[agent_link.DSH_PLUGIN_NAME] = f"link:{plugin}"
-            (profile_dir / "package.json").write_text(
-                _json.dumps(data, ensure_ascii=False), encoding="utf-8"
-            )
+            (profile_dir / "package.json").write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return 0, ""
 
         monkeypatch.setattr(agent_link, "_run_pnpm", fake_run)
@@ -504,9 +498,7 @@ class TestInstallBridgeScaffoldsMissingProfile:
             calls.append(profile_dir.name)
             data = json.loads((profile_dir / "package.json").read_text(encoding="utf-8"))
             data.setdefault("dependencies", {})[agent_link.DSH_PLUGIN_NAME] = f"link:{plugin}"
-            (profile_dir / "package.json").write_text(
-                json.dumps(data, ensure_ascii=False), encoding="utf-8"
-            )
+            (profile_dir / "package.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             return 0, ""
 
         monkeypatch.setattr(agent_link, "_run_pnpm", fake_run)
@@ -521,6 +513,7 @@ class TestInstallBridgeScaffoldsMissingProfile:
         manifest = json.loads((web / "package.json").read_text(encoding="utf-8"))
         bundles = manifest["dsh"]["profile"]["bundles"]
         assert bundles[:2] == [
-            "@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app",
+            "@deepseek-ai/dsh-base",
+            "@deepseek-ai/dsh-web-app",
         ], "web 预设 bundles 应与 dsh-app-boot 的模板一致"
         assert agent_link.DSH_PLUGIN_NAME in bundles, "安装后 bundles 层应登记桥接插件"

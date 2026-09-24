@@ -32,16 +32,16 @@ def test_sse_parser_handles_fragmented_events_and_done():
     parser = SSEParser()
     first = parser.feed(b'data: {"choices":[{"delta":{"content":"he')
     second = parser.feed(b'llo"}}]}\n\ndata: {"choices":[{"delta":{"content":"!"}}]}\n\n')
-    third = parser.feed(b'data: [DONE]\n\n')
+    third = parser.feed(b"data: [DONE]\n\n")
     assert first == []
-    assert second == ['hello', '!']
+    assert second == ["hello", "!"]
     assert third == []
     assert parser.done is True
 
 
 def test_sse_parser_ignores_keep_alive_and_empty_choices():
     parser = SSEParser()
-    assert parser.feed(b': keep-alive\n\n') == []
+    assert parser.feed(b": keep-alive\n\n") == []
     assert parser.feed(b'data: {"choices":[]}\n\n') == []
 
 
@@ -50,10 +50,10 @@ def test_sse_parser_empty_data_keepalive_and_buffer_cap():
     parser = SSEParser()
     # 空 data 行（部分 OpenAI 兼容服务的心跳）+ 正常内容混排：只取内容
     out = parser.feed(b'data:\n\ndata: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: \n\n')
-    assert out == ['ok']
+    assert out == ["ok"]
     # 缓冲无界增长防护：超过 1MB 未分隔数据 → ProviderError
     with pytest.raises(ProviderError):
-        parser.feed(b'x' * (1024 * 1024 + 1))
+        parser.feed(b"x" * (1024 * 1024 + 1))
 
 
 def test_prompt_priority_and_limits(tmp_path: Path):
@@ -110,6 +110,7 @@ def test_provider_error_is_safe():
     assert "401" in str(error)
     assert "api_key" not in str(error).lower()
 
+
 def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path, monkeypatch):
     from pet.config import Config
 
@@ -134,14 +135,19 @@ def test_config_v4_migrates_legacy_chat_fields(tmp_path: Path, monkeypatch):
     root = tmp_path / "appdata"
     cfg_dir = root / "dsh-pet-standalone"
     cfg_dir.mkdir(parents=True)
-    (cfg_dir / "config.json").write_text(json.dumps({
-        "version": 2,
-        "chat_enabled": True,
-        "chat_api_url": "https://deepseek.example/v1/",
-        "chat_api_key": "secret-value",
-        "chat_model": "deepseek-chat",
-        "chat_system_prompt": "legacy prompt",
-    }), encoding="utf-8")
+    (cfg_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "chat_enabled": True,
+                "chat_api_url": "https://deepseek.example/v1/",
+                "chat_api_key": "secret-value",
+                "chat_model": "deepseek-chat",
+                "chat_system_prompt": "legacy prompt",
+            }
+        ),
+        encoding="utf-8",
+    )
     cfg = Config(root)
     settings = cfg.chat_settings()
     assert settings.default_system_prompt == "legacy prompt"
@@ -159,6 +165,7 @@ def test_chat_window_offscreen_smoke(tmp_path: Path, monkeypatch):
     from PySide6.QtWidgets import QApplication
     from pet.config import Config
     from pet.chat.widgets import ChatWindow
+
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     app = QApplication.instance() or QApplication([])
     window = ChatWindow(Config(tmp_path), "shenshen")
@@ -167,6 +174,7 @@ def test_chat_window_offscreen_smoke(tmp_path: Path, monkeypatch):
     assert window.title.text().startswith("新会话")
     window.close()
     app.processEvents()
+
 
 def test_chat_window_has_playful_shell_and_session_controls(tmp_path: Path):
     from PySide6.QtWidgets import QApplication
@@ -600,8 +608,8 @@ def test_modern_chat_window_icons_are_dark_on_light_surfaces(tmp_path: Path):
     window = ChatWindow(Config(tmp_path), "shenshen")
     assert window.property("menuStyle") == "modern"
     for name, size, probe in (
-        ("minimize_button", 16, (8, 11)),    # 最小化横线
-        ("close_button", 16, (8, 8)),        # ✕ 交叉点附近
+        ("minimize_button", 16, (8, 11)),  # 最小化横线
+        ("close_button", 16, (8, 8)),  # ✕ 交叉点附近
         ("new_session_button", 16, (8, 8)),  # 圆形加号
         ("delete_session_button", 15, (8, 8)),
     ):
@@ -798,9 +806,7 @@ def test_modern_sidebar_groups_sessions_and_exposes_row_action_menu(tmp_path: Pa
     ]
     assert "今天" in headers
     session_items = [
-        window.session_list.item(index)
-        for index in range(window.session_list.count())
-        if window.session_list.item(index).data(Qt.ItemDataRole.UserRole)
+        window.session_list.item(index) for index in range(window.session_list.count()) if window.session_list.item(index).data(Qt.ItemDataRole.UserRole)
     ]
     row = window.session_list.itemWidget(session_items[0])
     assert row is not None
@@ -841,9 +847,7 @@ def test_modern_sidebar_multi_select_can_batch_pin_and_delete_sessions(tmp_path:
         for index in range(window.session_list.count()):
             item = window.session_list.item(index)
             if item.data(Qt.ItemDataRole.UserRole) == session_id:
-                return window.session_list.itemWidget(item).findChild(
-                    object, "session-select-button"
-                )
+                return window.session_list.itemWidget(item).findChild(object, "session-select-button")
         raise AssertionError(f"missing session row: {session_id}")
 
     window.multi_select_button.click()
@@ -853,16 +857,9 @@ def test_modern_sidebar_multi_select_can_batch_pin_and_delete_sessions(tmp_path:
     assert window.batch_action_bar.isHidden() is False
     assert window.session_caption.text() == "已选择 2 个对话"
     session_items = [
-        window.session_list.item(index)
-        for index in range(window.session_list.count())
-        if window.session_list.item(index).data(Qt.ItemDataRole.UserRole)
+        window.session_list.item(index) for index in range(window.session_list.count()) if window.session_list.item(index).data(Qt.ItemDataRole.UserRole)
     ]
-    assert all(
-        window.session_list.itemWidget(item)
-        .findChild(object, "session-select-button")
-        .isHidden() is False
-        for item in session_items
-    )
+    assert all(window.session_list.itemWidget(item).findChild(object, "session-select-button").isHidden() is False for item in session_items)
 
     window.batch_pin_button.click()
     assert window.store.load(first_id, "shenshen").pinned is True
@@ -952,10 +949,7 @@ def test_batch_delete_style_outranks_generic_batch_button_color(tmp_path: Path):
 
     app = QApplication.instance() or QApplication([])
     window = ChatWindow(Config(tmp_path), "shenshen")
-    assert (
-        "QFrame#session-batch-action-bar QPushButton#batch-delete-button"
-        in window.styleSheet()
-    )
+    assert "QFrame#session-batch-action-bar QPushButton#batch-delete-button" in window.styleSheet()
     window.close()
     app.processEvents()
 
@@ -1015,13 +1009,12 @@ def test_modern_sidebar_footer_only_keeps_status_and_follow(tmp_path: Path):
     footer = window.findChild(object, "sidebar-footer")
     assert footer is not None
     assert window.provider_label.isVisibleTo(footer) is False
-    visible_tools = [
-        button for button in footer.findChildren(QToolButton)
-        if not button.isHidden()
-    ]
+    visible_tools = [button for button in footer.findChildren(QToolButton) if not button.isHidden()]
     # 跟随桌宠 + 删除当前会话 + 清空当前会话（此前两个按钮是孤儿控件）
     assert visible_tools == [
-        window.follow_button, window.delete_session_button, window.clear_button,
+        window.follow_button,
+        window.delete_session_button,
+        window.clear_button,
     ]
     assert window.follow_button.icon().isNull() is False
     assert window.follow_button.minimumHeight() >= 28
@@ -1054,12 +1047,8 @@ def test_modern_message_surface_and_toolbar_are_separate_and_copy_only():
     assistant = MessageBubble("assistant", "hi", character_id="shenshen")
     assert user.findChild(object, "message-surface") is not None
     assert assistant.findChild(object, "message-surface") is not None
-    assert [button.objectName() for button in user.tools.findChildren(QToolButton)] == [
-        "message-copy-button"
-    ]
-    assert [button.objectName() for button in assistant.tools.findChildren(QToolButton)] == [
-        "message-copy-button"
-    ]
+    assert [button.objectName() for button in user.tools.findChildren(QToolButton)] == ["message-copy-button"]
+    assert [button.objectName() for button in assistant.tools.findChildren(QToolButton)] == ["message-copy-button"]
 
 
 def test_modern_composer_supports_file_picker_state_and_drop_payload(tmp_path: Path):
@@ -1189,8 +1178,11 @@ def test_file_drop_is_intercepted_by_input_instead_of_inserting_file_url(tmp_pat
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(path))])
     event = QDropEvent(
-        QPointF(5, 5), Qt.DropAction.CopyAction, mime,
-        Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        QPointF(5, 5),
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
     )
     composer.input.dropEvent(event)
     assert composer.attachment_paths == [path.resolve()]
@@ -1249,9 +1241,7 @@ def test_empty_provider_response_becomes_visible_error(tmp_path: Path):
     finished = []
     service.error.connect(lambda _rid, text: errors.append(text))
     service.finished.connect(lambda _rid, text: finished.append(text))
-    service.send([], ProviderConfig(
-        provider_id="test", name="test", base_url="http://invalid", model="test"
-    ))
+    service.send([], ProviderConfig(provider_id="test", name="test", base_url="http://invalid", model="test"))
     deadline = time.time() + 2
     while service.busy and time.time() < deadline:
         app.processEvents()
@@ -1357,9 +1347,7 @@ def test_enter_while_ime_composing_does_not_send():
         composer = composer_type()
         sent = []
         composer.send_requested.connect(lambda: sent.append(1))
-        enter = QKeyEvent(
-            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
-        )
+        enter = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
 
         # 未组合：回车直接发送
         assert composer.eventFilter(composer.input, enter) is True
@@ -1425,9 +1413,7 @@ def test_sent_message_stays_visible_without_manual_scroll(tmp_path: Path):
     _settle(app)
     bar = window.scroll.verticalScrollBar()
     assert bar.maximum() > 0, "超长用户消息应让内容溢出（否则本用例失去意义）"
-    assert bar.value() >= bar.maximum() - 24, (
-        f"发出的消息必须可见：value={bar.value()} max={bar.maximum()}"
-    )
+    assert bar.value() >= bar.maximum() - 24, f"发出的消息必须可见：value={bar.value()} max={bar.maximum()}"
 
     # 流式回复过程中持续贴底，回复完成也不需要再手动上滑
     window._active_request_id = "sent-msg-req"
@@ -1435,7 +1421,7 @@ def test_sent_message_stays_visible_without_manual_scroll(tmp_path: Path):
     window._text = ""
     reply = "AI 的长回复内容。" * 120
     for start in range(0, len(reply), 25):
-        window._delta("sent-msg-req", reply[start:start + 25])
+        window._delta("sent-msg-req", reply[start : start + 25])
         _drain_typewriter(window)
         app.processEvents()
     window._finished("sent-msg-req", reply)
@@ -1443,9 +1429,7 @@ def test_sent_message_stays_visible_without_manual_scroll(tmp_path: Path):
     _settle(app)
     bar = window.scroll.verticalScrollBar()
     assert window._bubble.state == "normal"
-    assert bar.value() >= bar.maximum() - 24, (
-        f"回复完成后必须停在底部：value={bar.value()} max={bar.maximum()}"
-    )
+    assert bar.value() >= bar.maximum() - 24, f"回复完成后必须停在底部：value={bar.value()} max={bar.maximum()}"
     window.close()
     app.processEvents()
 
@@ -1471,9 +1455,7 @@ def test_resize_keeps_following_reader_at_bottom(tmp_path: Path):
     window.resize(900, 620)
     _settle(app)
     bar = window.scroll.verticalScrollBar()
-    assert bar.value() >= bar.maximum() - 24, (
-        f"改尺寸后应仍贴底：value={bar.value()} max={bar.maximum()}"
-    )
+    assert bar.value() >= bar.maximum() - 24, f"改尺寸后应仍贴底：value={bar.value()} max={bar.maximum()}"
     window.close()
     app.processEvents()
 
@@ -1509,13 +1491,11 @@ def test_manual_scroll_up_is_not_yanked_back_by_streaming(tmp_path: Path):
     # 被动的流式输出（另一半在生成）到达：读者必须留在原地
     reply = "被动到达的流式内容。" * 200
     for start in range(0, len(reply), 30):
-        window._delta("scroll-up-req", reply[start:start + 30])
+        window._delta("scroll-up-req", reply[start : start + 30])
         _drain_typewriter(window)
         app.processEvents()
     _settle(app)
-    assert bar.value() == 0, (
-        f"上翻阅读期间不许被拽回底部：value={bar.value()} max={bar.maximum()}"
-    )
+    assert bar.value() == 0, f"上翻阅读期间不许被拽回底部：value={bar.value()} max={bar.maximum()}"
     window.close()
     app.processEvents()
 
@@ -1589,9 +1569,7 @@ def test_session_switch_lands_at_bottom(tmp_path: Path):
     while not (bar.value() >= bar.maximum() - 24) and time.time() < deadline:
         app.processEvents()
         time.sleep(0.01)
-    assert bar.value() >= bar.maximum() - 24, (
-        f"切回长会话应落在底部（max={bar.maximum()} value={bar.value()}）"
-    )
+    assert bar.value() >= bar.maximum() - 24, f"切回长会话应落在底部（max={bar.maximum()} value={bar.value()}）"
     window.close()
     app.processEvents()
 
@@ -1667,9 +1645,7 @@ def test_short_conversation_starts_at_timeline_top_while_composer_stays_bottom(t
     app.processEvents()
     app.processEvents()
     bubble_top = bubble.mapTo(window.scroll.viewport(), bubble.rect().topLeft()).y()
-    composer_bottom = window.composer_card.mapTo(
-        window.chat_main, window.composer_card.rect().bottomLeft()
-    ).y()
+    composer_bottom = window.composer_card.mapTo(window.chat_main, window.composer_card.rect().bottomLeft()).y()
     assert 0 <= bubble_top <= 60
     assert window.chat_main.height() - composer_bottom <= 32
     window.close()
@@ -1916,12 +1892,8 @@ def test_context_menu_drops_callbacks_when_owning_pet_is_already_destroyed(monke
 
     monkeypatch.setattr(window_mod, "QMenu", FakeMenu)
     monkeypatch.setattr(window_mod, "_populate_context_menu", lambda _menu, _pet: None)
-    monkeypatch.setattr(
-        window_mod, "shiboken6", SimpleNamespace(isValid=lambda _obj: False), raising=False
-    )
-    monkeypatch.setattr(
-        window_mod.QTimer, "singleShot", lambda *args: timers.append(args)
-    )
+    monkeypatch.setattr(window_mod, "shiboken6", SimpleNamespace(isValid=lambda _obj: False), raising=False)
+    monkeypatch.setattr(window_mod.QTimer, "singleShot", lambda *args: timers.append(args))
 
     pet = FakePet()
     PetWindow._show_context_menu(pet, QPoint(12, 18))
@@ -1962,9 +1934,7 @@ def test_conversation_mode_pins_composer_to_bottom_and_top_aligns_short_messages
     window.show()
     app.processEvents()
     app.processEvents()
-    composer_bottom = window.composer_card.mapTo(
-        window.chat_main, window.composer_card.rect().bottomLeft()
-    ).y()
+    composer_bottom = window.composer_card.mapTo(window.chat_main, window.composer_card.rect().bottomLeft()).y()
     first_bubble = window._bubbles[0]
     bubble_top = first_bubble.mapTo(window.scroll.viewport(), first_bubble.rect().topLeft()).y()
     assert window.chat_main.height() - composer_bottom <= 32
@@ -1986,9 +1956,7 @@ def test_empty_conversation_centers_prompt_and_composer_as_one_group(tmp_path: P
     app.processEvents()
     app.processEvents()
     group_top = window.scroll.mapTo(window.chat_main, window.scroll.rect().topLeft()).y()
-    group_bottom = window.composer_card.mapTo(
-        window.chat_main, window.composer_card.rect().bottomLeft()
-    ).y()
+    group_bottom = window.composer_card.mapTo(window.chat_main, window.composer_card.rect().bottomLeft()).y()
     group_center = (group_top + group_bottom) / 2
     assert abs(group_center - window.chat_main.height() / 2) <= 40
     assert window.scroll.verticalScrollBar().maximum() == 0
@@ -2011,14 +1979,9 @@ def test_long_conversation_scrolls_only_after_timeline_overflows(tmp_path: Path)
     app.processEvents()
     app.processEvents()
     assert window.scroll.verticalScrollBar().maximum() > 0
-    assert (
-        window.scroll.horizontalScrollBarPolicy()
-        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    )
+    assert window.scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert window.scroll.horizontalScrollBar().isVisible() is False
-    composer_bottom = window.composer_card.mapTo(
-        window.chat_main, window.composer_card.rect().bottomLeft()
-    ).y()
+    composer_bottom = window.composer_card.mapTo(window.chat_main, window.composer_card.rect().bottomLeft()).y()
     assert window.chat_main.height() - composer_bottom <= 32
     window.close()
     app.processEvents()
@@ -2127,6 +2090,7 @@ def test_reference_animation_materials_are_folder_classified():
     ):
         assert synced_name in categories["acts"], synced_name
 
+
 def test_pet_speech_bubble_prefers_centered_position_above_character():
     from PySide6.QtCore import QRect
     from PySide6.QtWidgets import QApplication
@@ -2158,6 +2122,7 @@ def test_webm_playback_speed_updates_timer_before_and_after_start():
     clip.set_playback_speed(0.5)
     assert clip._timer.interval() >= 80
 
+
 @pytest.mark.skipif(
     not Path("assets/characters_gif").is_dir(),
     reason="GIF 派生素材未生成（本地/CI 可选生成，不作为必需检查）",
@@ -2165,14 +2130,8 @@ def test_webm_playback_speed_updates_timer_before_and_after_start():
 def test_webm_and_gif_animation_sets_are_in_sync():
     webm_root = Path("assets/characters")
     gif_root = Path("assets/characters_gif")
-    webm_rel = {
-        path.relative_to(webm_root).with_suffix(".gif")
-        for path in webm_root.rglob("*.webm")
-    }
-    gif_rel = {
-        path.relative_to(gif_root)
-        for path in gif_root.rglob("*.gif")
-    }
+    webm_rel = {path.relative_to(webm_root).with_suffix(".gif") for path in webm_root.rglob("*.webm")}
+    gif_rel = {path.relative_to(gif_root) for path in gif_root.rglob("*.gif")}
     assert webm_rel
     assert webm_rel == gif_rel
 
@@ -2222,9 +2181,7 @@ def test_ssl_context_selection():
 
 
 def test_cert_error_detection():
-    assert _is_cert_verify_error(
-        ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
-    ) is True
+    assert _is_cert_verify_error(ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")) is True
     assert _is_cert_verify_error(TimeoutError("timed out")) is False
 
 
@@ -2272,9 +2229,7 @@ def test_stream_surfaces_certificate_hint(monkeypatch):
     from pet.chat.providers import OpenAICompatibleProvider
 
     def fake_urlopen(*args, **kwargs):
-        raise urllib.error.URLError(
-            ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
-        )
+        raise urllib.error.URLError(ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain"))
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     provider = OpenAICompatibleProvider()
@@ -2288,9 +2243,7 @@ def test_connection_test_reports_certificate_hint(monkeypatch):
     from pet.chat.providers import test_connection
 
     def fake_urlopen(*args, **kwargs):
-        raise urllib.error.URLError(
-            ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain")
-        )
+        raise urllib.error.URLError(ssl.SSLError("certificate verify failed: self-signed certificate in certificate chain"))
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     ok, msg = test_connection(ProviderConfig("t"))
@@ -2537,7 +2490,8 @@ def test_delete_current_session_during_streaming_resets_typewriter(tmp_path: Pat
     window._active_request_id = "req-1"
 
     monkeypatch.setattr(
-        chat_widgets.DeleteConversationDialog, "exec",
+        chat_widgets.DeleteConversationDialog,
+        "exec",
         lambda _d: QDialog.DialogCode.Accepted,
     )
     window._delete_sessions([old_id])
@@ -2617,7 +2571,10 @@ def test_append_message_concurrent_no_lost_messages(tmp_path: Path):
 
     t1 = threading.Thread(target=blast, args=(store_a, "A"))
     t2 = threading.Thread(target=blast, args=(store_b, "B"))
-    t1.start(); t2.start(); t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     store_a.flush()
 
     final = store_a.load(s.session_id, "shenshen")
@@ -2674,7 +2631,7 @@ def test_crop_entry_edits_buffer_and_persists_on_save(tmp_path, monkeypatch):
     import pet.chat.crop_dialog as crop_mod
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             assert pix is not None
             self.initial = initial
 
@@ -2692,6 +2649,7 @@ def test_crop_entry_edits_buffer_and_persists_on_save(tmp_path, monkeypatch):
     assert page._bg_crop_edits["builtin:whale"] == [0.1, 0.2, 0.5, 0.6]
     # 未保存前不落盘
     from pet.config import Config
+
     assert Config(tmp_path).get("chat_bg_crops", {}) == {}
     page.save()
     assert cfg.get("chat_bg_crops", {})["builtin:whale"] == [0.1, 0.2, 0.5, 0.6]
@@ -2702,13 +2660,14 @@ def test_crop_entry_edits_buffer_and_persists_on_save(tmp_path, monkeypatch):
 def test_crop_entry_reset_removes_custom_crop(tmp_path, monkeypatch):
     app, cfg, page = _make_ai_page(tmp_path, monkeypatch)
     from pet.config import Config
+
     other = Config(tmp_path)
     other.set("chat_bg_crops", {"builtin:whale": [0.1, 0.2, 0.5, 0.6], "builtin:furina": [0.9, 0.0, 0.1, 1.0]})
     other.save()  # 磁盘上的已有自定义裁切（编辑器打开时 reload 读磁盘最新）
     import pet.chat.crop_dialog as crop_mod
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             # 已有自定义裁切时编辑器初始框应带上它
             assert list(initial) == [0.1, 0.2, 0.5, 0.6]
 
@@ -2742,7 +2701,7 @@ def test_crop_entry_initial_box_falls_back_to_theme_focus(tmp_path, monkeypatch)
     seen = {}
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             seen["initial"] = initial
 
         def exec(self):
@@ -2762,6 +2721,7 @@ def test_crop_entry_needs_a_background(tmp_path, monkeypatch):
     """纯色（无背景）时不得打开编辑器。"""
     app, cfg, page = _make_ai_page(tmp_path, monkeypatch, modern_bg="")
     import pet.chat.crop_dialog as crop_mod
+
     opened = []
     monkeypatch.setattr(crop_mod, "CropDialog", lambda *a: opened.append(1))
     page._crop_background()
@@ -2872,7 +2832,7 @@ def test_crop_editor_receives_current_style_name(tmp_path, monkeypatch):
     seen = {}
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             seen["style"] = style_name
 
         def exec(self):
@@ -2927,9 +2887,7 @@ def test_clamp_box_uses_passed_aspect():
     assert h == pytest.approx(1.0)
     assert w / h == pytest.approx(CHAT_UI_VIEW_ASPECT["classic"])
     # 不传 aspect 时行为与显式传经典比例一致（兼容旧调用）
-    assert clamp_box(0.35, 0.2, 0.4, 1.0) == clamp_box(
-        0.35, 0.2, 0.4, 1.0, CHAT_UI_VIEW_ASPECT["classic"]
-    )
+    assert clamp_box(0.35, 0.2, 0.4, 1.0) == clamp_box(0.35, 0.2, 0.4, 1.0, CHAT_UI_VIEW_ASPECT["classic"])
 
 
 def test_clamp_box_falls_back_to_view_aspect_when_aspect_not_positive():
@@ -2955,9 +2913,7 @@ def test_crop_dialog_normalizes_existing_box_to_view_aspect():
     dlg = CropDialog(pix, stale, None, "肥鱼牌小手机", CHAT_UI_VIEW_ASPECT["classic"])
     try:
         x, y, w, h = dlg.canvas.box()
-        assert (w * pix.width()) / (h * pix.height()) == pytest.approx(
-            CHAT_UI_VIEW_ASPECT["classic"], rel=1e-9
-        )
+        assert (w * pix.width()) / (h * pix.height()) == pytest.approx(CHAT_UI_VIEW_ASPECT["classic"], rel=1e-9)
         assert (x, y, w, h) != stale
         assert x >= 0.0 and y >= 0.0 and x + w <= 1.0 and y + h <= 1.0
     finally:
@@ -3018,9 +2974,14 @@ def test_crop_dialog_box_keeps_style_view_aspect(style_id, style_name, landscape
         _x, _y, w, h = dlg.canvas.box()
         assert (w * pix.width()) / (h * pix.height()) == pytest.approx(expected, rel=1e-9)
         wheel = QWheelEvent(
-            QPointF(10, 10), QPointF(10, 10), QPoint(0, 0), QPoint(0, -120),
-            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
-            Qt.ScrollPhase.NoScrollPhase, False,
+            QPointF(10, 10),
+            QPointF(10, 10),
+            QPoint(0, 0),
+            QPoint(0, -120),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
         )
         dlg.canvas.wheelEvent(wheel)
         _x, _y, w, h = dlg.canvas.box()
@@ -3049,7 +3010,7 @@ def test_crop_editor_receives_style_view_aspect(tmp_path, monkeypatch):
     seen = []
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             seen.append(view_aspect)
 
         def exec(self):
@@ -3084,7 +3045,7 @@ def test_chat_settings_dialog_crop_uses_classic_aspect(tmp_path, monkeypatch):
     seen = []
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             seen.append((style_name, view_aspect))
 
         def exec(self):
@@ -3113,6 +3074,7 @@ def test_crop_entry_preserves_external_edits_when_untouched(tmp_path, monkeypatc
     """
     app, cfg, page = _make_ai_page(tmp_path, monkeypatch)
     from pet.config import Config
+
     other = Config(tmp_path)
     other.set("chat_bg_crops", {"builtin:whale": [0.9, 0.0, 0.1, 1.0]})
     other.save()  # 外部即存改动（磁盘；对本窗口内存不可见）
@@ -3132,7 +3094,7 @@ def test_crop_dialog_released_after_use(tmp_path, monkeypatch):
     released = []
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             pass
 
         def exec(self):
@@ -3154,7 +3116,7 @@ def test_crop_persists_through_disk_roundtrip(tmp_path, monkeypatch):
     import pet.chat.crop_dialog as crop_mod
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             pass
 
         def exec(self):
@@ -3171,6 +3133,7 @@ def test_crop_persists_through_disk_roundtrip(tmp_path, monkeypatch):
     page.save()
     cfg.save()
     from pet.config import Config
+
     assert Config(tmp_path).get("chat_bg_crops", {})["builtin:whale"] == [0.3, 0.3, 0.4, 0.4]
     page.close()
     app.processEvents()
@@ -3195,7 +3158,7 @@ def test_crop_save_merges_only_edited_keys(tmp_path, monkeypatch):
     import pet.chat.crop_dialog as crop_mod
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             pass
 
         def exec(self):
@@ -3211,6 +3174,7 @@ def test_crop_save_merges_only_edited_keys(tmp_path, monkeypatch):
     page._crop_background()  # 编辑了 builtin:whale
     # 外部（老聊天设置，即存）在主设置窗打开期间改了另一个背景的裁切
     from pet.config import Config
+
     other = Config(tmp_path)
     other.set("chat_bg_crops", {"builtin:furina": [0.9, 0.0, 0.1, 1.0]})
     other.save()
@@ -3228,6 +3192,7 @@ def test_crop_editor_reads_fresh_crops_at_open(tmp_path, monkeypatch):
     app, cfg, page = _make_ai_page(tmp_path, monkeypatch)
     import pet.chat.crop_dialog as crop_mod
     from pet.config import Config
+
     other = Config(tmp_path)
     other.set("chat_bg_crops", {"builtin:whale": [0.7, 0.0, 0.3, 1.0]})
     other.save()  # 构造后外部写入磁盘——只有 reload 才看得见
@@ -3235,7 +3200,7 @@ def test_crop_editor_reads_fresh_crops_at_open(tmp_path, monkeypatch):
     seen = {}
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             seen["initial"] = initial
 
         def exec(self):
@@ -3267,7 +3232,7 @@ def test_crop_merge_uses_disk_latest_via_host_reload(tmp_path, monkeypatch):
     page = dialog.ai_page
 
     class FakeDlg:
-        def __init__(self, pix, initial, parent, style_name='', view_aspect=None):
+        def __init__(self, pix, initial, parent, style_name="", view_aspect=None):
             pass
 
         def exec(self):
@@ -3354,6 +3319,7 @@ def test_system_notify_keeps_external_edit_when_untouched(tmp_path, monkeypatch)
     """
     app, cfg, page = _make_ai_page(tmp_path, monkeypatch)
     from pet.config import Config
+
     assert page.system_notify_check.isChecked() is True  # 构造期快照值
     other = Config(tmp_path)
     other.set("system_notifications_enabled", False)
@@ -3370,6 +3336,7 @@ def test_system_notify_toggle_persists_on_save(tmp_path, monkeypatch):
     """用户拨动系统通知开关（toggled 置脏）后，save() 新值必须落盘。"""
     app, cfg, page = _make_ai_page(tmp_path, monkeypatch)
     from pet.config import Config
+
     page.system_notify_check.setChecked(False)  # 用户拨动 → toggled → 置脏
     cfg.reload()  # 宿主 reload 发生在拨动之后：磁盘旧值不得压过用户新值
     page.save()

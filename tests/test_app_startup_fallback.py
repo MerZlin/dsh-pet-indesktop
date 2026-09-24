@@ -4,6 +4,7 @@
 配置记住的角色素材目录被删/搬走（如 DLC 卸载）时，启动不得直接弹错退出，
 应回退默认角色重试一次；默认角色也缺素材才报错。
 """
+
 from __future__ import annotations
 
 import pytest

@@ -6,6 +6,7 @@
 False，轮询纯属空转。要求：拖拽期间降频（100ms），松手立即恢复原频率并
 强制刷新一次穿透状态；非拖拽时行为不变；仅 Windows 路径受影响。
 """
+
 from __future__ import annotations
 
 import os
@@ -33,24 +34,33 @@ def app():
 
 def _press(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonPress, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+        QEvent.Type.MouseButtonPress,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
 
 def _move(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseMove, pos, global_pos,
-        Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+        QEvent.Type.MouseMove,
+        pos,
+        global_pos,
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
 
 def _release(pos: QPointF, global_pos: QPointF) -> QMouseEvent:
     return QMouseEvent(
-        QEvent.Type.MouseButtonRelease, pos, global_pos,
-        Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        QEvent.Type.MouseButtonRelease,
+        pos,
+        global_pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
     )
 
@@ -79,38 +89,26 @@ def test_controller_drag_slows_polling_and_restores_on_release():
     controller = object.__new__(window_mod.WindowsPerPixelInputController)
     controller._window = fake
     controller._timer = QTimer()
-    controller._timer.setInterval(
-        window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS
-    )
+    controller._timer.setInterval(window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS)
     refreshes = []
     controller.refresh = lambda: refreshes.append(1)
 
-    assert controller._timer.interval() == (
-        window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS
-    )
+    assert controller._timer.interval() == (window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS)
     controller.set_drag_active(True)
-    assert controller._timer.interval() == (
-        window_mod.WindowsPerPixelInputController.DRAG_POLL_INTERVAL_MS
-    )
+    assert controller._timer.interval() == (window_mod.WindowsPerPixelInputController.DRAG_POLL_INTERVAL_MS)
     assert refreshes == [], "降频本身不应触发额外刷新"
 
     controller.set_drag_active(False)
-    assert controller._timer.interval() == (
-        window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS
-    )
+    assert controller._timer.interval() == (window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS)
     assert refreshes == [1], "松手恢复频率时应强制刷新一次穿透状态"
 
     # 非拖拽状态重复恢复是 no-op：不重复刷新、不改变频率
     controller.set_drag_active(False)
-    assert controller._timer.interval() == (
-        window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS
-    )
+    assert controller._timer.interval() == (window_mod.WindowsPerPixelInputController.NORMAL_POLL_INTERVAL_MS)
     assert refreshes == [1]
 
     controller.set_drag_active(True)
-    assert controller._timer.interval() == (
-        window_mod.WindowsPerPixelInputController.DRAG_POLL_INTERVAL_MS
-    )
+    assert controller._timer.interval() == (window_mod.WindowsPerPixelInputController.DRAG_POLL_INTERVAL_MS)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="逐像素穿透控制器仅 Windows 创建")

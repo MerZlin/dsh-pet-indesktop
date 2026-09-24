@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """黄金回旋/边缘探头在右键菜单与设置页中的集成测试。"""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QRect

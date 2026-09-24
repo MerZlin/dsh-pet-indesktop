@@ -6,6 +6,7 @@
     python tests/helpers/foreground_holder.py <unused>
 按 stdout 打印自己的 HWND，保持前台直到 stdin 关闭或超时。
 """
+
 from __future__ import annotations
 
 import ctypes

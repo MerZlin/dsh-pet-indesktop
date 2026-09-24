@@ -15,6 +15,7 @@
 代码；真实跨屏由用户在双屏机器上验收，见
 ``docs/PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md``。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -196,8 +197,7 @@ def test_without_snapshot_drag_stays_on_current_screen(body_box, monkeypatch):
 def test_vertical_stack_crosses_in_y(body_box, monkeypatch):
     """上下堆叠的双屏：纵向拖拽同样越屏。"""
     pet = FakePet(avail=TILED_PRIMARY)
-    pet._interaction_area = _snapshot(
-        monkeypatch, _Screen(TILED_PRIMARY), _Screen(STACKED_LOWER))
+    pet._interaction_area = _snapshot(monkeypatch, _Screen(TILED_PRIMARY), _Screen(STACKED_LOWER))
 
     pet._move_window_towards(400, 1600)
 
@@ -210,8 +210,7 @@ def test_vertical_stack_crosses_in_y(body_box, monkeypatch):
 def test_throw_bounds_span_both_screens(body_box, monkeypatch):
     """抛掷边界换成并集：飞行不再在本屏右缘反弹（跨屏来回丢）。"""
     pet = FakePet(avail=TILED_PRIMARY)
-    pet._interaction_area = _snapshot(
-        monkeypatch, _Screen(TILED_PRIMARY), _Screen(TILED_SECONDARY))
+    pet._interaction_area = _snapshot(monkeypatch, _Screen(TILED_PRIMARY), _Screen(TILED_SECONDARY))
     pet._phys_pos = [400.0, 300.0]
 
     sbr = _sbr(pet)
@@ -251,8 +250,7 @@ def test_ragged_layout_keeps_body_on_a_screen(body_box, monkeypatch):
     """错位拼接：往主屏正下方的空洞里拖，会被收回主屏可用区内。"""
     primary = _Screen(RAGGED_PRIMARY, name="primary")
     pet = FakePet(avail=RAGGED_PRIMARY)
-    pet._interaction_area = _snapshot(
-        monkeypatch, primary, _Screen(RAGGED_SECONDARY, name="secondary"))
+    pet._interaction_area = _snapshot(monkeypatch, primary, _Screen(RAGGED_SECONDARY, name="secondary"))
 
     pet._move_window_towards(200, 1200)
 
@@ -265,8 +263,7 @@ def test_ragged_layout_lets_secondary_use_its_full_height(body_box, monkeypatch)
     """同一布局里副屏自己的高度仍然可用：越屏不是"一刀切回到矮屏"。"""
     primary = _Screen(RAGGED_PRIMARY, name="primary")
     pet = FakePet(avail=RAGGED_PRIMARY)
-    pet._interaction_area = _snapshot(
-        monkeypatch, primary, _Screen(RAGGED_SECONDARY, name="secondary"))
+    pet._interaction_area = _snapshot(monkeypatch, primary, _Screen(RAGGED_SECONDARY, name="secondary"))
 
     pet._move_window_towards(2400, 1000)
 
@@ -280,8 +277,7 @@ def test_ragged_throw_bounds_follow_current_screen_band(body_box, monkeypatch):
     """错位拼接的抛掷下界跟着"宠物在哪块屏"走：主屏上仍是主屏底部。"""
     primary = _Screen(RAGGED_PRIMARY, name="primary")
     pet = FakePet(avail=RAGGED_PRIMARY)
-    pet._interaction_area = _snapshot(
-        monkeypatch, primary, _Screen(RAGGED_SECONDARY, name="secondary"))
+    pet._interaction_area = _snapshot(monkeypatch, primary, _Screen(RAGGED_SECONDARY, name="secondary"))
     sbr = _sbr(pet)
 
     pet._phys_pos = [200.0, 400.0]  # 主屏上
@@ -289,10 +285,8 @@ def test_ragged_throw_bounds_follow_current_screen_band(body_box, monkeypatch):
     pet._phys_pos = [2000.0, 400.0]  # 副屏上
     bottom_secondary = pet._throw_bounds()[3]
 
-    assert bottom_primary == pytest.approx(
-        RAGGED_PRIMARY.bottom() + 1 - sbr.y() - sbr.height())
-    assert bottom_secondary == pytest.approx(
-        RAGGED_SECONDARY.bottom() + 1 - sbr.y() - sbr.height())
+    assert bottom_primary == pytest.approx(RAGGED_PRIMARY.bottom() + 1 - sbr.y() - sbr.height())
+    assert bottom_secondary == pytest.approx(RAGGED_SECONDARY.bottom() + 1 - sbr.y() - sbr.height())
 
 
 def test_body_always_tiles_a_screen_across_requests(body_box, monkeypatch):
@@ -316,8 +310,7 @@ def test_explicit_body_bounds_ignores_snapshot(body_box, monkeypatch):
     primary = _Screen(TILED_PRIMARY)
     pet = FakePet(avail=TILED_PRIMARY)
     pet._interaction_area = _snapshot(monkeypatch, primary, _Screen(TILED_SECONDARY))
-    probe_bounds = QRect(TILED_PRIMARY.left() - 400, TILED_PRIMARY.top(),
-                         TILED_PRIMARY.width() + 400, TILED_PRIMARY.height())
+    probe_bounds = QRect(TILED_PRIMARY.left() - 400, TILED_PRIMARY.top(), TILED_PRIMARY.width() + 400, TILED_PRIMARY.height())
 
     pet._move_window_towards(2500, 300, body_bounds=probe_bounds)
 
@@ -325,8 +318,7 @@ def test_explicit_body_bounds_ignores_snapshot(body_box, monkeypatch):
     assert pet.x() < TILED_SECONDARY.left()
 
 
-def test_default_corner_and_walk_keep_current_screen_after_snapshot_cleared(
-        body_box, monkeypatch):
+def test_default_corner_and_walk_keep_current_screen_after_snapshot_cleared(body_box, monkeypatch):
     """快照清掉后（松手/落地）本屏语义回归：并集区域不再影响后续落位。"""
     primary = _Screen(TILED_PRIMARY)
     pet = FakePet(avail=TILED_PRIMARY)
@@ -385,13 +377,13 @@ def test_snapshot_lifecycle_across_physics_modes(body_box, monkeypatch):
     _install_screens(monkeypatch, _Screen(TILED_PRIMARY), _Screen(TILED_SECONDARY))
     pet = _PhysicsStub()
 
-    pet._enter_physics_mode('throw')
+    pet._enter_physics_mode("throw")
     assert pet._interaction_area is not None
 
     pet._stop_physics()
     assert pet._interaction_area is None
 
-    pet._enter_physics_mode('drag')
+    pet._enter_physics_mode("drag")
     assert pet._interaction_area is not None
 
     pet._stop_physics()

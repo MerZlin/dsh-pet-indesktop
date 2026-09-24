@@ -20,6 +20,7 @@
 集成测试用假 read_frames（按放行额度逐帧产出）+ 假 Popen，不起真实
 ffmpeg 进程，无平台限定。
 """
+
 from __future__ import annotations
 
 import queue
@@ -133,11 +134,11 @@ def _install_fake_ffmpeg(monkeypatch, clip, spawns: list) -> None:
     是否无限循环由真实参数决定（-stream_loop 在参数里才无限）——参数被误删/
     误加时假件行为跟着变，测试能钉住参数回归（自欺清单 #7）。
     """
+
     def _fake_read_frames(*args, **kwargs):
         proc = _FakeProc()
-        params = list(kwargs.get('input_params') or [])
-        gen = _GatedLoopGen(proc, frame_count=clip._frame_count or 3,
-                            looping='-stream_loop' in params)
+        params = list(kwargs.get("input_params") or [])
+        gen = _GatedLoopGen(proc, frame_count=clip._frame_count or 3, looping="-stream_loop" in params)
         spawns.append((proc, gen, params))
         cap = webm_clip_mod._PopenCapture._local.capture
         cap._on_process(proc, ["ffmpeg", "-i", str(clip.path)])
@@ -187,6 +188,7 @@ def _close_all(spawns) -> None:
 # _stamp_source_indices：帧号回绕契约（纯函数级，无 Qt/ffmpeg）
 # ---------------------------------------------------------------------------
 
+
 def test_loop_wraps_source_indices_at_frame_count():
     """第二圈帧号从 0 重新开始；每圈末帧交付后触发一次圈边界回调。"""
     q = queue.Queue(maxsize=16)
@@ -198,8 +200,11 @@ def test_loop_wraps_source_indices_at_frame_count():
         return True
 
     WebMClip._stamp_source_indices(
-        iter([b"f%d" % i for i in range(7)]), q, lambda: False,
-        loop_frame_count=3, on_loop_boundary=on_boundary,
+        iter([b"f%d" % i for i in range(7)]),
+        q,
+        lambda: False,
+        loop_frame_count=3,
+        on_loop_boundary=on_boundary,
     )
     items = []
     while not q.empty():
@@ -221,8 +226,11 @@ def test_loop_boundary_false_exits_reader_loop():
         return False
 
     WebMClip._stamp_source_indices(
-        iter([b"f%d" % i for i in range(10)]), q, lambda: False,
-        loop_frame_count=3, on_loop_boundary=on_boundary,
+        iter([b"f%d" % i for i in range(10)]),
+        q,
+        lambda: False,
+        loop_frame_count=3,
+        on_loop_boundary=on_boundary,
     )
     items = []
     while not q.empty():
@@ -233,6 +241,7 @@ def test_loop_boundary_false_exits_reader_loop():
 
 def test_loop_wrap_preserves_drop_slot_semantics():
     """丢帧不占位但占时间线槽位：回绕后依然成立（源帧号照常推进）。"""
+
     class _FlakyQueue:
         def __init__(self):
             self.items = []
@@ -247,7 +256,9 @@ def test_loop_wrap_preserves_drop_slot_semantics():
     q = _FlakyQueue()
     boundaries = []
     WebMClip._stamp_source_indices(
-        iter([b"f%d" % i for i in range(8)]), q, lambda: False,
+        iter([b"f%d" % i for i in range(8)]),
+        q,
+        lambda: False,
         loop_frame_count=3,
         on_loop_boundary=lambda: boundaries.append(1) or True,
     )
@@ -258,6 +269,7 @@ def test_loop_wrap_preserves_drop_slot_semantics():
 
 def test_loop_wrap_throttled_never_drops_never_skips():
     """节流路径在循环下：绝不丢帧、绝不虚推进，回绕照常。"""
+
     class _FullThenRoom:
         def __init__(self):
             self.items = []
@@ -272,8 +284,11 @@ def test_loop_wrap_throttled_never_drops_never_skips():
     q = _FullThenRoom()
     boundaries = []
     WebMClip._stamp_source_indices(
-        iter([b"f%d" % i for i in range(7)]), q, lambda: False,
-        throttled=lambda: True, loop_frame_count=3,
+        iter([b"f%d" % i for i in range(7)]),
+        q,
+        lambda: False,
+        throttled=lambda: True,
+        loop_frame_count=3,
         on_loop_boundary=lambda: boundaries.append(1) or True,
     )
     assert [i[1] for i in q.items] == [0, 1, 2, 0, 1, 2, 0]
@@ -284,8 +299,11 @@ def test_loop_disabled_when_frame_count_unknown():
     """loop_frame_count=0（元数据缺失兜底）：不回绕、不触发圈边界。"""
     q = queue.Queue(maxsize=16)
     WebMClip._stamp_source_indices(
-        iter([b"f0", b"f1"]), q, lambda: False,
-        loop_frame_count=0, on_loop_boundary=lambda: pytest.fail("不得触发圈边界"),
+        iter([b"f0", b"f1"]),
+        q,
+        lambda: False,
+        loop_frame_count=0,
+        on_loop_boundary=lambda: pytest.fail("不得触发圈边界"),
     )
     assert [q.get_nowait()[1] for _ in range(2)] == [0, 1]
 
@@ -293,6 +311,7 @@ def test_loop_disabled_when_frame_count_unknown():
 # ---------------------------------------------------------------------------
 # _loop_boundary：结束标记与续圈/宽限语义（直接调用，无 reader 线程）
 # ---------------------------------------------------------------------------
+
 
 def test_loop_boundary_skips_marker_when_rearm_pending(app, tmp_path):
     """re-arm 先于结束标记：reader 到边界看到 _rearm_pending 就跳过标记续圈，
@@ -361,6 +380,7 @@ def test_loop_boundary_wakes_on_hard_stop(app, monkeypatch, tmp_path):
 # 集成：续圈不重启进程 / 软停与硬停分流 / 宽限期自清
 # ---------------------------------------------------------------------------
 
+
 def test_rearm_continues_loop_without_process_restart(app, monkeypatch, tmp_path):
     """续播同一 clip：圈末软停 → start() re-arm——同一 reader 线程、同一
     ffmpeg 进程，帧号第二圈从 0 回绕，结束标记不重复上报；连续三圈稳定。"""
@@ -396,8 +416,7 @@ def test_rearm_continues_loop_without_process_restart(app, monkeypatch, tmp_path
         # 第二圈：帧号回绕 0..2；结束标记只报一次（re-arm 已排空/跳过）
         for _ in range(3):
             gen.release()
-        assert _consume_until(clip, lambda: len(finished) == 1), \
-            f"srcs={srcs} finished={finished}"
+        assert _consume_until(clip, lambda: len(finished) == 1), f"srcs={srcs} finished={finished}"
         assert srcs == [0, 1, 2, 0, 1, 2], f"第二圈帧号未回绕: {srcs}"
         assert finished == [True]
 
@@ -550,6 +569,7 @@ def test_grace_expired_rearm_falls_back_to_fresh_start(app, monkeypatch, tmp_pat
 # 盲审回归：P1-1 / P1-2 / P2-3 / P2-4 / 参数拆分 / 镜像新 sink / drain
 # ---------------------------------------------------------------------------
 
+
 def test_hard_stop_then_replay_soft_parks_at_next_boundary(app, monkeypatch, tmp_path):
     """P1-1 回归（门槛 #1）：中途打断（硬停置位 gate）→ 重播 → 下一圈边界
     必须真实驻留、stop() 走软停、进程不重启——残留 gate 直通会退化成杀进程。"""
@@ -635,8 +655,8 @@ def test_frame_count_unknown_falls_back_to_single_pass(app, monkeypatch, tmp_pat
     try:
         assert clip.start() is True
         assert clip._reader_ready.wait(5.0)
-        assert '-stream_loop' not in spawns[0][2], "帧数未知不得带 -stream_loop"
-        assert '-readrate' not in spawns[0][2]
+        assert "-stream_loop" not in spawns[0][2], "帧数未知不得带 -stream_loop"
+        assert "-readrate" not in spawns[0][2]
         gen = spawns[0][1]
         assert gen._looping is False  # 假流按真实参数退化为一圈即 EOF
         for _ in range(3):
@@ -666,7 +686,7 @@ def test_loop_params_require_exact_frame_count(app, monkeypatch, tmp_path):
     try:
         assert clip.start() is True
         assert clip._reader_ready.wait(5.0)
-        assert '-stream_loop' not in spawns[0][2], "估算帧数不得带 -stream_loop"
+        assert "-stream_loop" not in spawns[0][2], "估算帧数不得带 -stream_loop"
     finally:
         _close_all(spawns)
         clip.cleanup()
@@ -684,8 +704,8 @@ def test_readrate_scales_with_playback_speed(app, monkeypatch, tmp_path):
         assert clip.start() is True
         assert clip._reader_ready.wait(5.0)
         params = spawns[0][2]
-        assert '-stream_loop' in params
-        assert params[params.index('-readrate') + 1] == '1.5'
+        assert "-stream_loop" in params
+        assert params[params.index("-readrate") + 1] == "1.5"
     finally:
         _close_all(spawns)
         clip.cleanup()
@@ -699,7 +719,7 @@ def test_first_frame_decode_never_loops(app, monkeypatch, tmp_path):
     captured = []
 
     def _fake_read_frames(*args, **kwargs):
-        captured.append(list(kwargs.get('input_params') or []))
+        captured.append(list(kwargs.get("input_params") or []))
         proc = _FakeProc()
         cap = webm_clip_mod._PopenCapture._local.capture
         cap._on_process(proc, ["ffmpeg", "-i", str(clip.path)])
@@ -711,8 +731,8 @@ def test_first_frame_decode_never_loops(app, monkeypatch, tmp_path):
         assert img is not None
         assert captured, "首帧解码必须拉起一次 read_frames"
         assert captured[0] == list(webm_clip_mod._FFMPEG_INPUT_PARAMS)
-        assert '-stream_loop' not in captured[0]
-        assert '-readrate' not in captured[0]
+        assert "-stream_loop" not in captured[0]
+        assert "-readrate" not in captured[0]
     finally:
         clip.cleanup()
         app.processEvents()
@@ -819,9 +839,10 @@ def test_drain_boundary_marker_preserves_frames(app, tmp_path):
 #          0 关闭永不回收 / 只在圈边界生效 / re-arm 竞态不回收）
 # ---------------------------------------------------------------------------
 
+
 def _recycle_count() -> int:
     snap = perfstats.snapshot()
-    return snap.get('ffmpeg.recycle', {}).get('count', 0)
+    return snap.get("ffmpeg.recycle", {}).get("count", 0)
 
 
 def test_recycle_at_boundary_retires_process_and_fresh_spawns(app, monkeypatch, tmp_path):
@@ -1029,6 +1050,7 @@ def test_recycle_skipped_when_rearm_pending(app, tmp_path):
 #          （正在显示的 clip 显示槽永不为 None / park 不清 / _switch 重启）
 # ---------------------------------------------------------------------------
 
+
 def test_hard_stop_clears_display_frame(app, monkeypatch, tmp_path):
     """A1：硬停（切走/隐藏/关闭的 stop 都走 _hard_stop）后，旧 clip 的显示槽
     必须清空——不再永久持有最后一帧的 QImage+QPixmap。"""
@@ -1117,7 +1139,7 @@ def test_switch_restart_same_clip_sets_first_frame(app, tmp_path):
     first = QImage(2, 2, QImage.Format.Format_RGBA8888)
     clip._first_image = first  # 模拟已缓存的 _first_image（warm/同步解码）
     try:
-        clip.stop()          # _switch 的 movie.stop()
+        clip.stop()  # _switch 的 movie.stop()
         clip.jumpToFrame(0)  # _switch 的 movie.jumpToFrame(0)
         assert clip._current_pixmap is not None, "重启后显示槽必须为首帧"
         assert clip._current_image is first, "重启后显示槽必须复用首帧缓存"
@@ -1154,8 +1176,7 @@ def test_parked_loop_reader_self_exit_keeps_display_frame(app, monkeypatch, tmp_
         while time.monotonic() < deadline and clip._thread is not None:
             time.sleep(0.02)
         assert clip._thread is None, "reader 自退后 _thread 必须清空（B1）"
-        assert clip.currentPixmap() is not None, \
-            "reader 自退不得清显示槽（P1-1/P1-2：清槽归窗口 _switch 权威侧）"
+        assert clip.currentPixmap() is not None, "reader 自退不得清显示槽（P1-1/P1-2：清槽归窗口 _switch 权威侧）"
     finally:
         _close_all(spawns)
         clip.cleanup()
@@ -1165,6 +1186,7 @@ def test_parked_loop_reader_self_exit_keeps_display_frame(app, monkeypatch, tmp_
 # ---------------------------------------------------------------------------
 # 批12-B1：reader 自行退出后清 _thread——绝不残留死 Thread 对象钉 OS 线程句柄
 # ---------------------------------------------------------------------------
+
 
 def test_thread_none_after_recycle_self_exit(app, monkeypatch, tmp_path):
     """B1：圈界回收后 reader 自行退出，_thread 必须被清 None——绝不残留死
@@ -1213,10 +1235,8 @@ def test_parked_subscriber_clip_start_goes_feed_not_rearm(app, monkeypatch, tmp_
     _install_fake_ffmpeg(monkeypatch, clip, spawns)
     rearm_calls: list = []
     feed_calls: list = []
-    monkeypatch.setattr(clip, "_rearm_loop_reader",
-                        lambda: rearm_calls.append(1) or True)
-    monkeypatch.setattr(clip, "_reader_feed",
-                        lambda *a, **k: feed_calls.append(1) or True)
+    monkeypatch.setattr(clip, "_rearm_loop_reader", lambda: rearm_calls.append(1) or True)
+    monkeypatch.setattr(clip, "_reader_feed", lambda *a, **k: feed_calls.append(1) or True)
     clip._soft_parked = True
     clip._feed_source = object()  # 已是订阅者身份
     try:

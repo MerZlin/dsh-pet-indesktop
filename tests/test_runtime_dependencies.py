@@ -16,6 +16,7 @@
   它们由目标平台的 CI 覆盖，不能在这里要求"能导入"）；
 * 显式列在白名单里的传递依赖跳过（写着它由谁带进来，换依赖时会来改这里）。
 """
+
 from __future__ import annotations
 
 import ast
@@ -74,11 +75,7 @@ def _pet_third_party_imports() -> dict[str, set[str]]:
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 found.setdefault(node.module.split(".")[0], set()).add(rel)
     stdlib = set(sys.stdlib_module_names)
-    return {
-        mod: users
-        for mod, users in found.items()
-        if mod not in stdlib and mod not in INTERNAL_MODULES
-    }
+    return {mod: users for mod, users in found.items() if mod not in stdlib and mod not in INTERNAL_MODULES}
 
 
 def _distributions_for(module: str) -> list[str]:
@@ -115,9 +112,7 @@ def test_pet_third_party_imports_are_declared():
         if not dists:
             continue  # 解析不出归属（例如仓库内相对路径注入的模块）
         if not any(_canonical(dist) in declared for dist in dists):
-            undeclared.append(
-                f"{module} (发行包: {', '.join(sorted(dists))}) <- {', '.join(sorted(users))}"
-            )
+            undeclared.append(f"{module} (发行包: {', '.join(sorted(dists))}) <- {', '.join(sorted(users))}")
     assert not undeclared, (
         "以下第三方模块被 pet/ import，但没有声明在 requirements.txt 里。\n"
         "打包版不会带上它们（用户也无法自行 pip 安装），而 CI 环境里往往碰巧存在，\n"

@@ -12,6 +12,7 @@
 
 全部用事件同步，不用 sleep 猜时序（唯一的轮询带上限兜底）。
 """
+
 from __future__ import annotations
 
 import threading

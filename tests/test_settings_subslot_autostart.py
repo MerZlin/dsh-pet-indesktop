@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """测试设置对话框中副槽位对自启动开关的禁用与提示。"""
+
 from __future__ import annotations
 
 import pytest

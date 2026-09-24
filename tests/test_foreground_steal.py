@@ -11,6 +11,7 @@
 1. 桌宠窗口必须带 WS_EX_NOACTIVATE（Windows）；点击它不改变前台窗口；
 2. 同时必须仍能收到鼠标点击（NOACTIVATE 只影响激活，不影响消息投递）。
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -31,13 +32,10 @@ from tests.test_window_pause import FakeLibrary
 # （GetWindowLongW 拿不到扩展样式），也没有真实前台窗口可判定。
 # headless CI / 本地 offscreen 套件自动跳过；Windows 桌面环境（含 CI runner）
 # 会真正执行。
-_WINDOWS_REAL_DISPLAY = (
-    sys.platform == 'win32'
-    and os.environ.get('QT_QPA_PLATFORM', '').lower() != 'offscreen'
-)
+_WINDOWS_REAL_DISPLAY = sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen"
 pytestmark = pytest.mark.skipif(
     not _WINDOWS_REAL_DISPLAY,
-    reason='需要真实窗口系统（原生扩展样式 + 真实前台窗口）',
+    reason="需要真实窗口系统（原生扩展样式 + 真实前台窗口）",
 )
 
 WS_EX_NOACTIVATE = 0x08000000
@@ -74,13 +72,16 @@ def _mouse_input_structs():
 
     class _MouseInput(ctypes.Structure):
         _fields_ = [
-            ('dx', wt.LONG), ('dy', wt.LONG), ('mouseData', wt.DWORD),
-            ('dwFlags', wt.DWORD), ('time', wt.DWORD),
-            ('dwExtraInfo', ctypes.POINTER(ctypes.c_ulong)),
+            ("dx", wt.LONG),
+            ("dy", wt.LONG),
+            ("mouseData", wt.DWORD),
+            ("dwFlags", wt.DWORD),
+            ("time", wt.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
         ]
 
     class _Input(ctypes.Structure):
-        _fields_ = [('type', wt.DWORD), ('mi', _MouseInput)]
+        _fields_ = [("type", wt.DWORD), ("mi", _MouseInput)]
 
     return _MouseInput, _Input
 
@@ -113,8 +114,7 @@ def _click_at(x: int, y: int) -> None:
     u32.SetCursorPos(int(x), int(y))
     time.sleep(0.15)
     for flag in (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP):
-        message = input_struct(type=INPUT_MOUSE,
-                               mi=mouse_input(0, 0, 0, flag, 0, None))
+        message = input_struct(type=INPUT_MOUSE, mi=mouse_input(0, 0, 0, flag, 0, None))
         u32.SendInput(1, ctypes.byref(message), ctypes.sizeof(input_struct))
         time.sleep(0.05)
 
@@ -131,11 +131,8 @@ def test_pet_window_has_noactivate_ex_style(tmp_path):
         win.show()
         _pump(app)
         ex = _ex_style(int(win.winId()))
-        assert ex & WS_EX_TOOLWINDOW, '桌宠应仍是工具窗口（不进任务栏/Alt+Tab）'
-        assert ex & WS_EX_NOACTIVATE, (
-            f'桌宠窗口缺少 WS_EX_NOACTIVATE（ex={ex:#010x}）：点击它会夺走前台窗口，'
-            '导致用户的 Ctrl+C/Ctrl+V 落到桌宠上（issue #98）'
-        )
+        assert ex & WS_EX_TOOLWINDOW, "桌宠应仍是工具窗口（不进任务栏/Alt+Tab）"
+        assert ex & WS_EX_NOACTIVATE, f"桌宠窗口缺少 WS_EX_NOACTIVATE（ex={ex:#010x}）：点击它会夺走前台窗口，导致用户的 Ctrl+C/Ctrl+V 落到桌宠上（issue #98）"
     finally:
         win.close()
         win.deleteLater()
@@ -148,21 +145,22 @@ def test_clicking_pet_does_not_steal_foreground(tmp_path):
     必须跨进程：同进程窗口共享前台队列，`GetForegroundWindow()` 分不清。
     """
     app = QApplication.instance() or QApplication([])
-    holder = Path(__file__).resolve().parent / 'helpers' / 'foreground_holder.py'
+    holder = Path(__file__).resolve().parent / "helpers" / "foreground_holder.py"
     proc = subprocess.Popen(
         [sys.executable, str(holder)],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
         cwd=str(holder.parents[2]),
     )
     win = None
     try:
-        parts = (proc.stdout.readline() or '').split()
+        parts = (proc.stdout.readline() or "").split()
         holder_hwnd = int(parts[0]) if parts else 0
         holder_is_foreground = bool(int(parts[1])) if len(parts) > 1 else False
-        assert holder_hwnd, '无法启动前台持有进程'
+        assert holder_hwnd, "无法启动前台持有进程"
         if not holder_is_foreground:
-            pytest.skip('前台锁拒绝把新窗口推上前台（本机环境），'
-                        '无法判定桌宠是否夺前台')
+            pytest.skip("前台锁拒绝把新窗口推上前台（本机环境），无法判定桌宠是否夺前台")
 
         win = _make_pet(tmp_path)
         # 先给窗口一帧真实角色内容：点击必须落在不透明区域，否则逐像素穿透会
@@ -188,20 +186,16 @@ def test_clicking_pet_does_not_steal_foreground(tmp_path):
         # 安全哨兵：只有光标下确实是桌宠窗口时才发真实点击，绝不误点别的应用
         under = _hwnd(u32.WindowFromPoint(wt.POINT(cx, cy)))
         if under != pet_hwnd:
-            pytest.skip(f'桌宠未处于光标所在位置（under={under:#x}），跳过真实点击')
+            pytest.skip(f"桌宠未处于光标所在位置（under={under:#x}），跳过真实点击")
 
         _click_at(cx, cy)
         _pump(app, 50)
 
         foreground = _hwnd(u32.GetForegroundWindow())
         assert foreground != pet_hwnd, (
-            '点击桌宠后它成了前台窗口：用户的键盘输入（含 Ctrl+C/Ctrl+V）会落到'
-            f'桌宠上而不是原应用（issue #98）。foreground={foreground:#x} pet={pet_hwnd:#x}'
+            f"点击桌宠后它成了前台窗口：用户的键盘输入（含 Ctrl+C/Ctrl+V）会落到桌宠上而不是原应用（issue #98）。foreground={foreground:#x} pet={pet_hwnd:#x}"
         )
-        assert foreground == holder_hwnd, (
-            f'点击桌宠后前台窗口既不是桌宠也不是原应用：'
-            f'foreground={foreground:#x} holder={holder_hwnd:#x}'
-        )
+        assert foreground == holder_hwnd, f"点击桌宠后前台窗口既不是桌宠也不是原应用：foreground={foreground:#x} holder={holder_hwnd:#x}"
     finally:
         if win is not None:
             win.close()

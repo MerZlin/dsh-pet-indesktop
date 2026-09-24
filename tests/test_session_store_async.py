@@ -4,6 +4,7 @@
 同步点一律用 flush()/close()（确定性），不用 sleep 猜时序。
 每个用例结束 close_all_writers() 清注册表，避免测试间共享 worker。
 """
+
 from __future__ import annotations
 
 import json
@@ -108,8 +109,8 @@ def test_flush_reports_write_failure_once(store):
     blocker.mkdir(parents=True)  # 目标路径是目录 → os.replace 必失败
     session = _make_session(st)
     assert st.save(session) is True
-    assert st.flush() is False   # 诚实：没写上就是 False
-    assert st.flush() is True    # 失败已上报过一次，队列已空
+    assert st.flush() is False  # 诚实：没写上就是 False
+    assert st.flush() is True  # 失败已上报过一次，队列已空
     blocker.rmdir()
 
 
@@ -131,8 +132,8 @@ def test_transient_replace_lock_is_retried(store, monkeypatch):
 
     monkeypatch.setattr(os, "replace", flaky_replace)
     assert st.save(session) is True
-    assert st.flush() is True              # 瞬时锁被骑过：不算写失败
-    assert injected["n"] == 1              # 确实注入过一次瞬时锁
+    assert st.flush() is True  # 瞬时锁被骑过：不算写失败
+    assert injected["n"] == 1  # 确实注入过一次瞬时锁
     assert target.is_file()
     assert ss.close_all_writers() is True
 
@@ -152,7 +153,7 @@ def test_close_sticky_and_rejects_late_save(store):
     assert st2.save(session2) is True
     w = ss._registry.get_writer(st2.root)
     assert w.close() is True
-    assert w.close() is True          # 幂等
+    assert w.close() is True  # 幂等
     assert st2.save(session2) is False  # 关闭后拒绝可观测
 
 
@@ -279,9 +280,9 @@ def test_close_all_rejects_new_writers_during_close_window(store):
         ss._registry._closing = True
         ss._registry._writers.clear()
     try:
-        assert st.save(session) is False                       # 拒绝可观测
-        assert ss._registry.get_writer(st.root) is None        # 没有偷偷重建
-        assert st.flush() is True                              # 无 writer 时 flush 无事可等
+        assert st.save(session) is False  # 拒绝可观测
+        assert ss._registry.get_writer(st.root) is None  # 没有偷偷重建
+        assert st.flush() is True  # 无 writer 时 flush 无事可等
     finally:
         with ss._registry._lock:
             ss._registry._closing = False

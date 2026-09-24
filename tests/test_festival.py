@@ -58,18 +58,54 @@ def test_festival_ids_are_frozen():
     """
     assert {f.id for f in D.FESTIVALS} == {
         # 中国节日
-        "yuandan", "chunjie", "yuanxiao", "longtaitou", "laodongjie", "duanwu",
-        "ertongjie", "qixi", "zhongyuan", "zhongqiu", "chongyang", "guoqingjie",
-        "labajie", "chuxi",
+        "yuandan",
+        "chunjie",
+        "yuanxiao",
+        "longtaitou",
+        "laodongjie",
+        "duanwu",
+        "ertongjie",
+        "qixi",
+        "zhongyuan",
+        "zhongqiu",
+        "chongyang",
+        "guoqingjie",
+        "labajie",
+        "chuxi",
         # 24 节气（term_06 由清明节占用）
-        "term_00", "term_01", "term_02", "term_03", "term_04", "term_05",
+        "term_00",
+        "term_01",
+        "term_02",
+        "term_03",
+        "term_04",
+        "term_05",
         "qingming",
-        "term_07", "term_08", "term_09", "term_10", "term_11", "term_12",
-        "term_13", "term_14", "term_15", "term_16", "term_17", "term_18",
-        "term_19", "term_20", "term_21", "term_22", "term_23",
+        "term_07",
+        "term_08",
+        "term_09",
+        "term_10",
+        "term_11",
+        "term_12",
+        "term_13",
+        "term_14",
+        "term_15",
+        "term_16",
+        "term_17",
+        "term_18",
+        "term_19",
+        "term_20",
+        "term_21",
+        "term_22",
+        "term_23",
         # 西方节日
-        "valentine", "april_fools", "easter", "mothers_day", "fathers_day",
-        "halloween", "christmas_eve", "christmas",
+        "valentine",
+        "april_fools",
+        "easter",
+        "mothers_day",
+        "fathers_day",
+        "halloween",
+        "christmas_eve",
+        "christmas",
     }
     assert len(D.FESTIVALS) == 46
 
@@ -77,9 +113,30 @@ def test_festival_ids_are_frozen():
 def test_solar_terms_cover_all_24():
     assert len(C.SOLAR_TERMS) == 24
     assert set(C.SOLAR_TERMS) == {
-        "小寒", "大寒", "立春", "雨水", "惊蛰", "春分", "清明", "谷雨",
-        "立夏", "小满", "芒种", "夏至", "小暑", "大暑", "立秋", "处暑",
-        "白露", "秋分", "寒露", "霜降", "立冬", "小雪", "大雪", "冬至",
+        "小寒",
+        "大寒",
+        "立春",
+        "雨水",
+        "惊蛰",
+        "春分",
+        "清明",
+        "谷雨",
+        "立夏",
+        "小满",
+        "芒种",
+        "夏至",
+        "小暑",
+        "大暑",
+        "立秋",
+        "处暑",
+        "白露",
+        "秋分",
+        "寒露",
+        "霜降",
+        "立冬",
+        "小雪",
+        "大雪",
+        "冬至",
     }
 
 
@@ -130,8 +187,8 @@ def test_easter_dates(year, expected):
 
 
 def test_nth_weekday_dates_2026():
-    assert C.nth_weekday(2026, 5, 6, 2).isoformat() == "2026-05-10"   # 母亲节
-    assert C.nth_weekday(2026, 6, 6, 3).isoformat() == "2026-06-21"   # 父亲节
+    assert C.nth_weekday(2026, 5, 6, 2).isoformat() == "2026-05-10"  # 母亲节
+    assert C.nth_weekday(2026, 6, 6, 3).isoformat() == "2026-06-21"  # 父亲节
     assert C.nth_weekday(2026, 11, 3, 4).isoformat() == "2026-11-26"  # 通用工具：11 月第 4 个周四
 
 
@@ -189,9 +246,7 @@ def test_normalize_defaults_when_master_switch_absent():
 
 
 def test_normalize_accepts_string_booleans():
-    normalized = F.normalize_festival_config(
-        {"festival_reminder_enabled": "开", "festival_reminder_west": "0"}
-    )
+    normalized = F.normalize_festival_config({"festival_reminder_enabled": "开", "festival_reminder_west": "0"})
     assert normalized["enabled"] is True
     assert normalized["west"] is False
 
@@ -221,9 +276,7 @@ def test_normalize_never_raises_on_dirty_config():
 
 
 def test_custom_times_parsing_normalizes_and_drops_garbage():
-    normalized = F.normalize_festival_config(
-        {"festival_reminder_times": "9:00, 25:00，12:30; 坏值 09:00"}
-    )
+    normalized = F.normalize_festival_config({"festival_reminder_times": "9:00, 25:00，12:30; 坏值 09:00"})
     assert normalized["times"] == frozenset({"09:00", "12:30"})
 
 
@@ -324,7 +377,7 @@ def test_pick_quote_is_deterministic_and_varies_by_index():
 def test_build_festival_text_names_the_day_and_appends_quote():
     text = F.build_festival_text(dt.date(2026, 2, 17), cfg(), 0)
     assert text.startswith("今天是春节。")
-    assert text[len("今天是春节。"):] in QUOTES_CN["chunjie"]
+    assert text[len("今天是春节。") :] in QUOTES_CN["chunjie"]
 
 
 def test_build_festival_text_without_quote_switch():
@@ -378,9 +431,7 @@ def test_startup_slot_only_after_first_reminder_time():
 def test_startup_slot_differs_from_scheduled_slot():
     """补提醒不能压掉当天晚些时候的正常提醒。"""
     day = dt.date(2026, 2, 17)
-    assert F.startup_slot(dt.datetime(2026, 2, 17, 12, 0), cfg(count=2)) != (
-        f"{day.isoformat()}T21:00"
-    )
+    assert F.startup_slot(dt.datetime(2026, 2, 17, 12, 0), cfg(count=2)) != (f"{day.isoformat()}T21:00")
 
 
 # ---------------------------------------------------------------- 文案库完整性
@@ -395,10 +446,7 @@ def test_every_festival_has_a_quote_pool():
 
 
 def test_quote_libraries_have_no_orphan_keys():
-    needed_cn = {
-        f.id for f in D.FESTIVALS
-        if set(f.categories) & {D.CATEGORY_CN, D.CATEGORY_SOLAR_TERM}
-    }
+    needed_cn = {f.id for f in D.FESTIVALS if set(f.categories) & {D.CATEGORY_CN, D.CATEGORY_SOLAR_TERM}}
     needed_west = {f.id for f in D.FESTIVALS if set(f.categories) == {D.CATEGORY_WEST}}
     assert set(QUOTES_CN) == needed_cn
     assert set(QUOTES_WEST) == needed_west
@@ -424,25 +472,19 @@ def _actual_sources(path, marker: str) -> dict[str, int]:
     import re as _re
 
     src = path.read_text(encoding="utf-8")
-    src = src[src.index(marker):]
-    names = (
-        _re.sub(r"\s*\(\d{4}\)$", "", m).strip()
-        for m in _re.findall(r"#\s*(.+?)\s*\(\d{4}\)", src)
-    )
+    src = src[src.index(marker) :]
+    names = (_re.sub(r"\s*\(\d{4}\)$", "", m).strip() for m in _re.findall(r"#\s*(.+?)\s*\(\d{4}\)", src))
     return dict(collections.Counter(names))
 
 
 def _declared_sources(notices: str, section: str) -> dict[str, int]:
     import re as _re
 
-    part = notices[notices.index(section):]
+    part = notices[notices.index(section) :]
     nxt = part.find("###", 10)
     if nxt != -1:
         part = part[:nxt]
-    return {
-        _re.sub(r"\s*\(\d{4}\)$", "", m.group(1)).strip(): int(m.group(2))
-        for m in _re.finditer(r"^\|\s*(.+?)\s*\|\s*(\d+)\s*\|$", part, _re.M)
-    }
+    return {_re.sub(r"\s*\(\d{4}\)$", "", m.group(1)).strip(): int(m.group(2)) for m in _re.finditer(r"^\|\s*(.+?)\s*\|\s*(\d+)\s*\|$", part, _re.M)}
 
 
 @pytest.mark.parametrize(
@@ -481,16 +523,11 @@ def test_third_party_notices_list_every_song():
     from pathlib import Path as _Path
     import re as _re
 
-    notices = (_Path(__file__).resolve().parents[1] / "THIRD_PARTY_NOTICES.md").read_text(
-        encoding="utf-8"
-    )
+    notices = (_Path(__file__).resolve().parents[1] / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     db = _Path(__file__).resolve().parents[1] / "pet" / "festival_quotes_west_song.py"
     # 只取「引号字符串后面紧跟的注释」——否则文件头 # -*- coding -*- 与
     # "# 平安夜（12/24）：…" 这类分组注释也会被当成歌曲名。
-    titles = {
-        _re.sub(r"\s*\(\d{4}\).*$", "", m).strip()
-        for m in _re.findall(r'^\s*"[^"]*",\s*#\s*(.+?)$', db.read_text(encoding="utf-8"), _re.M)
-    }
+    titles = {_re.sub(r"\s*\(\d{4}\).*$", "", m).strip() for m in _re.findall(r'^\s*"[^"]*",\s*#\s*(.+?)$', db.read_text(encoding="utf-8"), _re.M)}
     titles = {t for t in titles if t}
     assert titles, "歌曲库出处注释解析失败"
     missing = [t for t in sorted(titles) if t not in notices]
@@ -652,9 +689,7 @@ def test_roll_day_resets_fired_slots_across_days(tmp_path):
     assert len(app.win.bubbles) == 2
     assert app.win.bubbles[1].startswith("今天是春节。")
     # 跨天后"当天第几次提醒"从 0 重算（文案与当天的第一次提醒一致）
-    expected = F.build_festival_text(
-        dt.date(2026, 2, 17), F.normalize_festival_config(config), 0
-    )
+    expected = F.build_festival_text(dt.date(2026, 2, 17), F.normalize_festival_config(config), 0)
     assert app.win.bubbles[1] == expected
 
 
@@ -758,7 +793,7 @@ def test_preview_resolution_survives_an_extra_parent_layer(tmp_path):
     called: list[int] = []
     host = QWidget()
     host.on_festival_now = lambda: called.append(1)
-    middle = QWidget(host)      # 中间多一层
+    middle = QWidget(host)  # 中间多一层
     page.setParent(middle)
 
     page.preview_btn.click()
@@ -779,12 +814,12 @@ def test_appshell_trigger_festival_now_reaches_service(tmp_path):
 
     QApplication.instance() or QApplication([])
     cfg = Config(base=tmp_path)
-    cfg.set("festival_reminder_enabled", False)   # 总开关关闭
+    cfg.set("festival_reminder_enabled", False)  # 总开关关闭
     cfg.set("festival_reminder_speak", False)
     shell = AppShell(QApplication.instance(), cfg, enable_chat=False)
     assert shell.festival_service is None
 
-    shell.trigger_festival_now()                  # 不得抛
+    shell.trigger_festival_now()  # 不得抛
 
     assert shell.festival_service is not None, "试听应懒创建服务（无视总开关）"
     shell._on_about_to_quit()
@@ -809,9 +844,7 @@ def test_preview_rows_are_collected_into_domain_sections(tmp_path):
     try:
         sections = dialog.findChildren(SettingsSection)
         for target in ("settingRow_festival_preview", "settingRow_voice_chime_preview"):
-            holders = [
-                s for s in sections if any(r.objectName() == target for r in s.rows)
-            ]
+            holders = [s for s in sections if any(r.objectName() == target for r in s.rows)]
             assert holders, f"{target} 未被任何域卡片收集（历史事故：打包版不可见）"
     finally:
         dialog.close()

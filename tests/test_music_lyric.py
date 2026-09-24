@@ -3,6 +3,7 @@
 
 全部用例都不联网：网络部分用固定样本注入，只验证解析、匹配与进度跟踪逻辑。
 """
+
 from __future__ import annotations
 
 import json
@@ -117,10 +118,14 @@ def test_fetch_lyrics_prefers_higher_priority_source(monkeypatch):
     qq_lines = [LyricLine(1.0, "来自QQ")]
     lrclib_lines = [LyricLine(1.0, "来自lrclib")]
 
-    monkeypatch.setattr(music_lyric, "_SOURCES", (
-        ("qq", lambda t, a: qq_lines),
-        ("lrclib", lambda t, a: lrclib_lines),
-    ))
+    monkeypatch.setattr(
+        music_lyric,
+        "_SOURCES",
+        (
+            ("qq", lambda t, a: qq_lines),
+            ("lrclib", lambda t, a: lrclib_lines),
+        ),
+    )
     monkeypatch.setattr(music_lyric, "_write_cache", lambda *a, **k: None)
     monkeypatch.setattr(music_lyric, "_read_cache", lambda *a, **k: None)
 
@@ -131,10 +136,14 @@ def test_fetch_lyrics_falls_back_to_lower_priority(monkeypatch):
     """高优先级源无结果时，采用低优先级源的结果。"""
     lrclib_lines = [LyricLine(2.0, "来自lrclib")]
 
-    monkeypatch.setattr(music_lyric, "_SOURCES", (
-        ("qq", lambda t, a: None),
-        ("lrclib", lambda t, a: lrclib_lines),
-    ))
+    monkeypatch.setattr(
+        music_lyric,
+        "_SOURCES",
+        (
+            ("qq", lambda t, a: None),
+            ("lrclib", lambda t, a: lrclib_lines),
+        ),
+    )
     monkeypatch.setattr(music_lyric, "_write_cache", lambda *a, **k: None)
     monkeypatch.setattr(music_lyric, "_read_cache", lambda *a, **k: None)
 
@@ -143,13 +152,19 @@ def test_fetch_lyrics_falls_back_to_lower_priority(monkeypatch):
 
 def test_fetch_lyrics_survives_source_exception(monkeypatch):
     """某个源抛异常不能拖垮整体，应继续尝试后续源。"""
+
     def boom(title, artist):
         raise RuntimeError("接口炸了")
 
     expected = [LyricLine(1.0, "ok")]
-    monkeypatch.setattr(music_lyric, "_SOURCES", (
-        ("boom", boom), ("good", lambda t, a: expected),
-    ))
+    monkeypatch.setattr(
+        music_lyric,
+        "_SOURCES",
+        (
+            ("boom", boom),
+            ("good", lambda t, a: expected),
+        ),
+    )
     monkeypatch.setattr(music_lyric, "_write_cache", lambda *a, **k: None)
     monkeypatch.setattr(music_lyric, "_read_cache", lambda *a, **k: None)
 
@@ -247,7 +262,7 @@ def test_tracker_local_clock_mode():
     t = LyricTracker()
     t.load(LINES, now=100.0, position=None)
     assert t.text_at(t.advance(100.0)) == "A"
-    assert t.advance(102.0) == -1        # 同一句：不重复上报
+    assert t.advance(102.0) == -1  # 同一句：不重复上报
     assert t.text_at(t.advance(105.0)) == "B"
     assert t.text_at(t.advance(110.0)) == "C"
     assert t.text_at(t.advance(116.0)) == "D"
@@ -382,7 +397,7 @@ def test_title_shows_immediately_on_track_change():
     win = _FakeWin()
     ctrl = MusicLyricController(win)
     ctrl._current_key = None
-    ctrl._primed = True          # 已过首次边界，不是"开启时已在播"那首
+    ctrl._primed = True  # 已过首次边界，不是"开启时已在播"那首
     playback = type("P", (), {"position": None, "updated_at": 0.0})()
 
     ctrl._start_track(("夜曲", "周杰伦"), "夜曲", "周杰伦", playback, 100.0)
@@ -459,11 +474,13 @@ def test_looks_instrumental_ignores_real_lyrics():
     from pet.music_lyric import LyricLine, _looks_instrumental
 
     # 多行真歌词
-    assert not _looks_instrumental([
-        LyricLine(0.0, "一群嗜血的蚂蚁"),
-        LyricLine(5.0, "被腐肉所吸引"),
-        LyricLine(10.0, "我面无表情看孤独的风景"),
-    ])
+    assert not _looks_instrumental(
+        [
+            LyricLine(0.0, "一群嗜血的蚂蚁"),
+            LyricLine(5.0, "被腐肉所吸引"),
+            LyricLine(10.0, "我面无表情看孤独的风景"),
+        ]
+    )
     # 行数少但内容是正常歌词
     assert not _looks_instrumental([LyricLine(0.0, "这首纯音乐真好听")])
     # 空列表不算纯音乐
@@ -572,7 +589,7 @@ def test_yield_blocks_show_while_active():
     win = _WinWithBubble()
     ctrl = MusicLyricController(win)
     ctrl._title_line = "我在唱《夜曲》"
-    ctrl._lyric_yield_until = time.monotonic() + 5.0   # 正在让路
+    ctrl._lyric_yield_until = time.monotonic() + 5.0  # 正在让路
 
     ctrl._show("一句歌词", title="我在唱《夜曲》", force=True)
     assert win.shown == [], "让路期间不应往气泡写任何东西"
@@ -586,7 +603,7 @@ def test_yield_expires_and_lyrics_resume():
     ctrl = MusicLyricController(win)
     ctrl._title_line = "我在唱《夜曲》"
     win._speech_bubble._subtitle_label.set("我在唱《夜曲》")
-    ctrl._lyric_yield_until = time.monotonic() - 0.1   # 已过期
+    ctrl._lyric_yield_until = time.monotonic() - 0.1  # 已过期
 
     ctrl._show("一句歌词", title="我在唱《夜曲》", force=True)
     assert win.shown, "让路到期后应恢复显示"
@@ -728,10 +745,7 @@ def test_sample_thread_is_reused_across_disable_enable():
         ctrl.sync_enabled(False)
         ctrl.sync_enabled(True)
 
-        assert ctrl._sample_thread is first, (
-            "关闭再开启后应复用原采样线程；"
-            "新建线程意味着旧线程被丢引用（孤儿），且 _sample_stop 未复位"
-        )
+        assert ctrl._sample_thread is first, "关闭再开启后应复用原采样线程；新建线程意味着旧线程被丢引用（孤儿），且 _sample_stop 未复位"
     finally:
         ctrl.sync_enabled(False)
 
@@ -769,10 +783,7 @@ def test_sampling_resumes_after_disable_enable(monkeypatch):
         ctrl._sampling = False
         ctrl._on_tick()
 
-        assert _wait_until(lambda: calls["n"] > before), (
-            "关闭再开启后采样必须恢复；"
-            "卡住说明 _sample_stop 仍是 set 状态，采样线程一进循环就退出了"
-        )
+        assert _wait_until(lambda: calls["n"] > before), "关闭再开启后采样必须恢复；卡住说明 _sample_stop 仍是 set 状态，采样线程一进循环就退出了"
     finally:
         ctrl.sync_enabled(False)
 
@@ -792,10 +803,7 @@ def test_shutdown_leaves_stop_flag_set():
     assert not ctrl._sample_stop.is_set(), "运行中不该处于停止态"
 
     ctrl.shutdown()
-    assert ctrl._sample_stop.is_set(), (
-        "shutdown 后 _sample_stop 必须仍置位；"
-        "被 clear 说明复位逻辑把「关」也一起复掉了"
-    )
+    assert ctrl._sample_stop.is_set(), "shutdown 后 _sample_stop 必须仍置位；被 clear 说明复位逻辑把「关」也一起复掉了"
 
     # 关闭路径同理：关掉歌词也要留下停止信号。
     ctrl2 = MusicLyricController(_FakeWinVisible())
@@ -858,8 +866,7 @@ def _aligned_controller(monkeypatch, *, lines=None, position=None, now=100.0):
     ctrl._primed = True
     ctrl._title_line = "我在唱《t》"
     ctrl._tracker.lead = 0.0
-    ctrl._tracker.load(list(lines if lines is not None else LINES), now=now,
-                       position=position)
+    ctrl._tracker.load(list(lines if lines is not None else LINES), now=now, position=position)
     return win, ctrl, clock
 
 
@@ -930,13 +937,14 @@ def test_backward_seek_before_first_line_clears_stale_lyric(monkeypatch):
     from pet.music_lyric import LyricLine as _LL
 
     win, ctrl, clock = _aligned_controller(
-        monkeypatch, lines=[_LL(5.0, "A"), _LL(9.0, "B")],
+        monkeypatch,
+        lines=[_LL(5.0, "A"), _LL(9.0, "B")],
     )
-    clock.now = 111.0                      # 本地时钟推到 11s → 第二句
+    clock.now = 111.0  # 本地时钟推到 11s → 第二句
     ctrl._on_playback_ready(_playback(None))
     assert win.shown[-1] == ("我在唱《t》", "B"), win.shown[-1]
 
-    clock.now = 100.0                      # 拖回开头 → 位置 0s，早于第一句
+    clock.now = 100.0  # 拖回开头 → 位置 0s，早于第一句
     ctrl._on_playback_ready(_playback(None))
     assert win.shown[-1] == ("", "我在唱《t》"), win.shown[-1]
 
@@ -946,7 +954,7 @@ def test_resync_to_start_realigns_local_clock(monkeypatch):
     win, ctrl, clock = _aligned_controller(monkeypatch)
     clock.now = 111.0
     ctrl._on_playback_ready(_playback(None))
-    assert ctrl._tracker.text_at(ctrl._tracker.index) == "C"   # LINES: A0 B5 C10 D15
+    assert ctrl._tracker.text_at(ctrl._tracker.index) == "C"  # LINES: A0 B5 C10 D15
 
     assert ctrl.resync_to_start() is True
     assert win.shown[-1] == ("我在唱《t》", "A"), win.shown[-1]
@@ -985,7 +993,7 @@ def test_resync_to_line_lands_exactly_one_line_with_lead(monkeypatch):
 
     lines = [_LL(0.0, "A"), _LL(2.0, "B"), _LL(3.0, "C")]
     win, ctrl, clock = _aligned_controller(monkeypatch, lines=lines)
-    ctrl._tracker.lead = 1.0                     # 提前量 > 行距
+    ctrl._tracker.lead = 1.0  # 提前量 > 行距
     ctrl._tracker.load(list(lines), now=100.0, position=None)
     clock.now = 100.0
     ctrl._on_playback_ready(_playback(None))
@@ -1004,10 +1012,10 @@ def test_nudge_seconds_shifts_lyric(monkeypatch):
     clock.now = 111.0
     ctrl._on_playback_ready(_playback(None))
 
-    assert ctrl.nudge(-6.0) is True        # 11s → 5s → 落在 B(5.0)
+    assert ctrl.nudge(-6.0) is True  # 11s → 5s → 落在 B(5.0)
     assert win.shown[-1] == ("我在唱《t》", "B"), win.shown[-1]
 
-    assert ctrl.nudge(5.0) is True         # 5s → 10s → 落在 C(10.0)
+    assert ctrl.nudge(5.0) is True  # 5s → 10s → 落在 C(10.0)
     assert win.shown[-1] == ("我在唱《t》", "C"), win.shown[-1]
 
     # 不能推到负数
@@ -1053,9 +1061,7 @@ def test_align_available_after_net_ease_lyrics_arrive(monkeypatch):
     ctrl._on_lyrics_ready(("讨厌红楼梦", "陶喆"), Lyrics(lines=tuple(LINES)))
 
     assert ctrl._tracker.has_lyrics is True
-    assert ctrl.align_available() is True, (
-        "网易云不上报进度，位置是估算的，手动对齐正是唯一纠正手段，不该被关掉"
-    )
+    assert ctrl.align_available() is True, "网易云不上报进度，位置是估算的，手动对齐正是唯一纠正手段，不该被关掉"
     assert ctrl.resync_to_line(1) is True
     assert ctrl.nudge(5.0) is True
 
@@ -1079,17 +1085,17 @@ def test_reported_position_still_disables_align(monkeypatch):
 
 def test_align_available_gates(monkeypatch):
     """菜单闸门：无词 / 纯音乐 / 报进度 都不可手动对齐。"""
-    win, ctrl, clock = _aligned_controller(monkeypatch)     # 本地时钟 + 有词
+    win, ctrl, clock = _aligned_controller(monkeypatch)  # 本地时钟 + 有词
     assert ctrl.align_available() is True
 
-    ctrl._tracker.reset()                                   # 无词
+    ctrl._tracker.reset()  # 无词
     assert ctrl.align_available() is False
 
-    win2, ctrl2, _ = _aligned_controller(monkeypatch, position=1.0)   # 报进度
+    win2, ctrl2, _ = _aligned_controller(monkeypatch, position=1.0)  # 报进度
     ctrl2._on_playback_ready(_playback(1.0))
     assert ctrl2.align_available() is False
 
-    win3, ctrl3, _ = _aligned_controller(monkeypatch)       # 纯音乐
+    win3, ctrl3, _ = _aligned_controller(monkeypatch)  # 纯音乐
     ctrl3._tracker.reset()
     ctrl3._instrumental = True
     assert ctrl3.align_available() is False
@@ -1107,7 +1113,7 @@ def test_start_track_first_song_without_position_still_announces_title(monkeypat
     win = _FakeWin()
     ctrl = mod.MusicLyricController(win)
     monkeypatch.setattr(ctrl, "_fetch_worker", lambda *a, **k: None)
-    assert ctrl._primed is False            # 首次边界：正是"开启时已在播"
+    assert ctrl._primed is False  # 首次边界：正是"开启时已在播"
 
     ctrl._start_track(("夜曲", "周杰伦"), "夜曲", "周杰伦", _playback(None), 100.0)
 
@@ -1228,9 +1234,7 @@ class _RecordingOpener:
 
 def _stub_urllib(monkeypatch, opener):
     """把 urllib 的 opener 构造换成记录桩，并假装系统里配着代理。"""
-    monkeypatch.setattr(
-        urllib.request, "getproxies", lambda: {"https": "http://127.0.0.1:12450"}
-    )
+    monkeypatch.setattr(urllib.request, "getproxies", lambda: {"https": "http://127.0.0.1:12450"})
     built: list[tuple] = []
 
     def build(*handlers):
@@ -1253,9 +1257,7 @@ def test_lyric_request_bypasses_system_proxy(monkeypatch):
 
     assert music_lyric._http_get_json("https://c.y.qq.com/soso/x") == {"ok": 1}
 
-    assert built, (
-        "歌词请求没有自建 opener —— 仍在用 urllib.request.urlopen，会继承系统代理"
-    )
+    assert built, "歌词请求没有自建 opener —— 仍在用 urllib.request.urlopen，会继承系统代理"
     handlers = [h for h in built[0] if isinstance(h, urllib.request.ProxyHandler)]
     assert handlers, "直连 opener 必须显式传 ProxyHandler({})，否则仍继承系统代理"
     assert handlers[0].proxies == {}, handlers[0].proxies
@@ -1292,4 +1294,3 @@ def test_bypassing_system_proxy_is_logged_once(monkeypatch, caplog):
     hits = [r.getMessage() for r in caplog.records if "系统代理" in r.getMessage()]
     assert len(hits) == 1, hits
     assert "127.0.0.1:12450" in hits[0], hits[0]
-

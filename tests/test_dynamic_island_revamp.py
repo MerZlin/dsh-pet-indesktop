@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """灵动岛重生：四边停靠/滑出、展开卡片、事件动效、配置清洗。"""
+
 from __future__ import annotations
 
 import time
@@ -29,9 +30,16 @@ def _qapp() -> QApplication:
 def _island(tmp_path: Path, **overrides) -> DynamicIsland:
     cfg = Config(base=tmp_path)
     data = {
-        "enabled": True, "show_icon": True, "show_name": True,
-        "show_info": True, "info_mode": "time", "custom_text": "",
-        "show_status": True, "style": "dark", "x": 400, "y": 300,
+        "enabled": True,
+        "show_icon": True,
+        "show_name": True,
+        "show_info": True,
+        "info_mode": "time",
+        "custom_text": "",
+        "show_status": True,
+        "style": "dark",
+        "x": 400,
+        "y": 300,
     }
     data.update(overrides)
     cfg.set("dynamic_island", data)
@@ -43,33 +51,25 @@ def _avail() -> QRect:
     return screen.availableGeometry() if screen is not None else QRect(0, 0, 1920, 1040)
 
 
-def _mouse(kind: QEvent.Type, widget, global_pos: QPoint,
-           button=Qt.MouseButton.LeftButton,
-           buttons=Qt.MouseButton.LeftButton) -> QMouseEvent:
+def _mouse(kind: QEvent.Type, widget, global_pos: QPoint, button=Qt.MouseButton.LeftButton, buttons=Qt.MouseButton.LeftButton) -> QMouseEvent:
     local = widget.mapFromGlobal(global_pos)
-    return QMouseEvent(kind, QPointF(local), QPointF(global_pos),
-                       button, buttons, Qt.KeyboardModifier.NoModifier)
+    return QMouseEvent(kind, QPointF(local), QPointF(global_pos), button, buttons, Qt.KeyboardModifier.NoModifier)
 
 
 def _drag_to(widget, target_global: QPoint) -> None:
     """完整拖一次：按下 → 移动（超过拖拽阈值）→ 在 target 松手。"""
     start = widget.geometry().center()
     widget.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, widget, start))
-    mid = QPoint((start.x() + target_global.x()) // 2,
-                 (start.y() + target_global.y()) // 2)
+    mid = QPoint((start.x() + target_global.x()) // 2, (start.y() + target_global.y()) // 2)
     widget.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, widget, mid))
     widget.mouseMoveEvent(_mouse(QEvent.Type.MouseMove, widget, target_global))
-    widget.mouseReleaseEvent(
-        _mouse(QEvent.Type.MouseButtonRelease, widget, target_global,
-               buttons=Qt.MouseButton.NoButton))
+    widget.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, widget, target_global, buttons=Qt.MouseButton.NoButton))
 
 
 def _click(widget) -> None:
     center = widget.geometry().center()
     widget.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, widget, center))
-    widget.mouseReleaseEvent(
-        _mouse(QEvent.Type.MouseButtonRelease, widget, center,
-               buttons=Qt.MouseButton.NoButton))
+    widget.mouseReleaseEvent(_mouse(QEvent.Type.MouseButtonRelease, widget, center, buttons=Qt.MouseButton.NoButton))
 
 
 def _drive_anim(widget, max_ticks: int = 60) -> None:
@@ -119,8 +119,7 @@ def test_strip_rect_shapes():
     # 左右竖条按胶囊真实几何中心（top + height//2）居中：QRect::center()
     # 对偶数尺寸向下取整差 1px，会让滑出/收回每循环漂 1px
     capsule = QRect(900, 300, 200, 44)
-    assert strip_rect_for(capsule, "left", available).y() == \
-        300 + _CAPSULE_HEIGHT // 2 - 32
+    assert strip_rect_for(capsule, "left", available).y() == 300 + _CAPSULE_HEIGHT // 2 - 32
     right = strip_rect_for(capsule, "right", available)
     assert right.right() == available.right() and right.width() == _STRIP_THICKNESS
     assert strip_rect_for(capsule, "none", available) == capsule
@@ -195,8 +194,7 @@ def test_left_edge_hover_cycles_do_not_drift(tmp_path):
             _drive_anim(island)
             # 滑出的胶囊与细条同心（真实几何中心，不用 floor 的 center()）
             assert island.height() == _CAPSULE_HEIGHT
-            assert island.y() + island.height() // 2 == \
-                strip0.y() + strip0.height() // 2
+            assert island.y() + island.height() // 2 == strip0.y() + strip0.height() // 2
             island.leaveEvent(None)
             island._dock_back()
             _drive_anim(island)
@@ -378,38 +376,61 @@ def test_appearance_opacity_and_accent(tmp_path):
 # ------------------------------------------------------------ 配置清洗
 def test_config_cleans_new_island_keys(tmp_path):
     cfg = Config(base=tmp_path)
-    cfg.set("dynamic_island", {
-        "click_action": "bogus", "event_effects": 0, "edge_dock": 1,
-        "dock_edge": "celling", "enabled": True,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "click_action": "bogus",
+            "event_effects": 0,
+            "edge_dock": 1,
+            "dock_edge": "celling",
+            "enabled": True,
+        },
+    )
     cleaned = cfg.get("dynamic_island")
     assert cleaned["click_action"] == "expand"  # 非法值回默认
     assert cleaned["event_effects"] is False
     assert cleaned["edge_dock"] is True
     assert cleaned["dock_edge"] == "none"  # 非法边回 none
 
-    cfg.set("dynamic_island", {
-        "click_action": "toggle_pet", "dock_edge": "left", "enabled": True,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "click_action": "toggle_pet",
+            "dock_edge": "left",
+            "enabled": True,
+        },
+    )
     cleaned = cfg.get("dynamic_island")
     assert cleaned["click_action"] == "toggle_pet"
     assert cleaned["dock_edge"] == "left"
 
     # 外观新键：opacity 钳位、accent 白名单（acrylic 已下线，非法风格回默认）
-    cfg.set("dynamic_island", {
-        "style": "glass", "opacity": 0.55, "accent": "purple", "enabled": True,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "style": "glass",
+            "opacity": 0.55,
+            "accent": "purple",
+            "enabled": True,
+        },
+    )
     cleaned = cfg.get("dynamic_island")
     assert cleaned["style"] == "glass"
     assert cleaned["opacity"] == 0.55
     assert cleaned["accent"] == "purple"
-    cfg.set("dynamic_island", {
-        "style": "acrylic", "opacity": 9.9, "accent": "gold", "enabled": True,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "style": "acrylic",
+            "opacity": 9.9,
+            "accent": "gold",
+            "enabled": True,
+        },
+    )
     cleaned = cfg.get("dynamic_island")
-    assert cleaned["style"] == "dark"     # 已下线的风格回默认
-    assert cleaned["opacity"] == 1.0      # 超界钳到 1.0
-    assert cleaned["accent"] == "blue"    # 非法色回默认
+    assert cleaned["style"] == "dark"  # 已下线的风格回默认
+    assert cleaned["opacity"] == 1.0  # 超界钳到 1.0
+    assert cleaned["accent"] == "blue"  # 非法色回默认
 
 
 def test_expanded_mode_disables_window_transform(tmp_path):
@@ -501,14 +522,26 @@ def test_drag_start_clears_geometry_animation(tmp_path):
         assert island._geo_to is not None
         # 模拟按下并拖动超过阈值
         press = QPoint(island.x() + 10, island.y() + 10)
-        island.mousePressEvent(QMouseEvent(
-            QEvent.Type.MouseButtonPress, QPointF(10, 10),
-            QPointF(press), Qt.MouseButton.LeftButton,
-            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
-        island.mouseMoveEvent(QMouseEvent(
-            QEvent.Type.MouseMove, QPointF(60, 10),
-            QPointF(press + QPoint(50, 0)), Qt.MouseButton.LeftButton,
-            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        island.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                QPointF(10, 10),
+                QPointF(press),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        island.mouseMoveEvent(
+            QMouseEvent(
+                QEvent.Type.MouseMove,
+                QPointF(60, 10),
+                QPointF(press + QPoint(50, 0)),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
         assert island._dragging
         assert island._geo_to is None
         assert island._geo_from is None
@@ -571,8 +604,7 @@ def test_auto_icon_uses_provider_pixmap(tmp_path):
         cx = round((_CAPSULE_INSET + 13.0 + 13.0) * dpr)
         cy = round(_CAPSULE_HEIGHT / 2.0 * dpr)
         center = img.pixelColor(cx, cy)
-        assert center.alpha() > 200 and center.red() > 200, \
-            "auto 模式没把 provider 头像画进底圈"
+        assert center.alpha() > 200 and center.red() > 200, "auto 模式没把 provider 头像画进底圈"
     finally:
         island.hide()
         island.deleteLater()
@@ -646,9 +678,13 @@ def test_img_icon_mode_loads_file_once_and_caches_failure(tmp_path):
         assert first is not None and not first.isNull()
         assert island._icon_pixmap() is first, "img: 成功结果必须缓存"
 
-        island.config.set("dynamic_island", {
-            **dict(island._cfg), "icon": f"img:{tmp_path / 'missing.png'}",
-        })
+        island.config.set(
+            "dynamic_island",
+            {
+                **dict(island._cfg),
+                "icon": f"img:{tmp_path / 'missing.png'}",
+            },
+        )
         island.refresh_from_config()
         assert island._icon_pixmap() is None
         assert island._icon_img_failed is True, "失败结果必须记住"

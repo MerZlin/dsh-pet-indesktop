@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """第一批功能：灵动岛配置/点击台词绑定/聊天窗置顶的基础测试。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,10 +17,13 @@ def _config(tmp_path: Path) -> Config:
 
 def test_config_click_talk_bindings_roundtrip(tmp_path: Path):
     cfg = _config(tmp_path)
-    cfg.set_click_talk_bindings("shenshen", {
-        "点击回应 - 开心跃动": ["好耶！", "今天也要开心～"],
-        "点击回应 - 傲娇生气": ["哼！"],
-    })
+    cfg.set_click_talk_bindings(
+        "shenshen",
+        {
+            "点击回应 - 开心跃动": ["好耶！", "今天也要开心～"],
+            "点击回应 - 傲娇生气": ["哼！"],
+        },
+    )
 
     reloaded = Config(tmp_path)
     assert reloaded.click_talk_texts_for("shenshen", "点击回应 - 开心跃动") == ["好耶！", "今天也要开心～"]
@@ -29,17 +33,20 @@ def test_config_click_talk_bindings_roundtrip(tmp_path: Path):
 
 def test_config_dynamic_island_keeps_at_least_one_component(tmp_path: Path):
     cfg = _config(tmp_path)
-    cfg.set("dynamic_island", {
-        "enabled": True,
-        "show_icon": False,
-        "show_name": False,
-        "show_info": False,
-        "info_mode": "time",
-        "custom_text": "",
-        "show_status": False,
-        "x": None,
-        "y": None,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "enabled": True,
+            "show_icon": False,
+            "show_name": False,
+            "show_info": False,
+            "info_mode": "time",
+            "custom_text": "",
+            "show_status": False,
+            "x": None,
+            "y": None,
+        },
+    )
 
     island = cfg.get("dynamic_island")
     assert island["enabled"] is True
@@ -71,18 +78,21 @@ def test_dynamic_island_widget_import_and_signal(tmp_path: Path):
     from pet.dynamic_island import DynamicIsland
 
     cfg = _config(tmp_path)
-    cfg.set("dynamic_island", {
-        "enabled": True,
-        "show_icon": True,
-        "show_name": True,
-        "show_info": True,
-        "info_mode": "time",
-        "custom_text": "",
-        "show_status": True,
-        "style": "glass",
-        "x": 100,
-        "y": 100,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "enabled": True,
+            "show_icon": True,
+            "show_name": True,
+            "show_info": True,
+            "info_mode": "time",
+            "custom_text": "",
+            "show_status": True,
+            "style": "glass",
+            "x": 100,
+            "y": 100,
+        },
+    )
     island = DynamicIsland(cfg)
     clicks = []
     island.clicked.connect(lambda: clicks.append(1))
@@ -101,18 +111,21 @@ def test_dynamic_island_resizes_when_info_changes(tmp_path: Path):
     from pet.dynamic_island import DynamicIsland
 
     cfg = _config(tmp_path)
-    cfg.set("dynamic_island", {
-        "enabled": True,
-        "show_icon": True,
-        "show_name": True,
-        "show_info": True,
-        "info_mode": "balance",
-        "custom_text": "",
-        "show_status": True,
-        "style": "dark",
-        "x": 100,
-        "y": 100,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "enabled": True,
+            "show_icon": True,
+            "show_name": True,
+            "show_info": True,
+            "info_mode": "balance",
+            "custom_text": "",
+            "show_status": True,
+            "style": "dark",
+            "x": 100,
+            "y": 100,
+        },
+    )
     island = DynamicIsland(cfg)
     width_before = island.width()
     island.set_balance_info(
@@ -134,18 +147,21 @@ def test_dynamic_island_balance_tier_color_syncs_to_setting(tmp_path: Path, monk
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda: "peak")
     cfg = _config(tmp_path)
-    cfg.set("dynamic_island", {
-        "enabled": True,
-        "show_icon": True,
-        "show_name": True,
-        "show_info": True,
-        "info_mode": "balance_tier",
-        "custom_text": "",
-        "show_status": True,
-        "style": "dark",
-        "x": 100,
-        "y": 100,
-    })
+    cfg.set(
+        "dynamic_island",
+        {
+            "enabled": True,
+            "show_icon": True,
+            "show_name": True,
+            "show_info": True,
+            "info_mode": "balance_tier",
+            "custom_text": "",
+            "show_status": True,
+            "style": "dark",
+            "x": 100,
+            "y": 100,
+        },
+    )
     cfg.set("balance_tier_color_enabled", True)
     island = DynamicIsland(cfg)
     try:

@@ -12,6 +12,7 @@
 时序纪律：watcher 测试用「有界轮询 + processEvents」而不是固定 sleep 猜时序
 （CI runner 是本地数倍慢，见 AGENTS.md 的 CI cost discipline）。
 """
+
 from __future__ import annotations
 
 import json
@@ -48,6 +49,7 @@ def _bare_shell(config: Config) -> AppShell:
 
 
 # ---------------------------------------------------------------- 1. 入口分流
+
 
 def test_main_routes_settings_flag_to_settings_process(monkeypatch):
     """`python -m pet --settings` 走独立设置进程分支。"""
@@ -159,6 +161,7 @@ def test_packaging_entries_route_settings_before_importing_app():
 
 # ------------------------------------------------- 2. standalone 保存前 reload
 
+
 def test_standalone_save_merges_external_disk_change(tmp_path):
     """主进程中途改盘 → 设置页保存不覆盖该键（standalone 保存前 reload）。
 
@@ -184,6 +187,7 @@ def test_standalone_save_merges_external_disk_change(tmp_path):
 
 
 # ------------------------------------------------------------ 3. config watcher
+
 
 def test_config_watcher_reloads_and_applies_external_change(tmp_path):
     """外部写 config.json → watcher 去抖后 reload 并触发应用链。"""
@@ -262,6 +266,7 @@ def test_apply_external_config_change_fans_out_to_all_instances(tmp_path, monkey
 
 # ------------------------------------------------------- 4. 单实例 / 降级回退
 
+
 def test_open_settings_process_skips_when_lock_already_held(tmp_path):
     """主进程单实例：settings.lock 已被持有 → 不再拉起（日志路径）。"""
     config = Config(base=tmp_path)
@@ -307,7 +312,8 @@ def test_open_modern_settings_falls_back_when_launch_fails(tmp_path, monkeypatch
     owner.chat_settings_dialog = None
     created = []
     monkeypatch.setattr(
-        settings_mod, "ModernSettingsDialog",
+        settings_mod,
+        "ModernSettingsDialog",
         lambda *a, **k: created.append((a, k)) or mock.Mock(),
     )
     owner._present_dialog = lambda dialog, before_present=None: None
@@ -348,7 +354,8 @@ def test_launch_settings_process_uses_source_command(tmp_path, monkeypatch):
     from PySide6.QtCore import QProcess
 
     monkeypatch.setattr(
-        QProcess, "startDetached",
+        QProcess,
+        "startDetached",
         staticmethod(lambda program, arguments, workdir: calls.append((program, arguments, workdir)) or (True, 4242)),
     )
     assert shell._launch_settings_process() is True
@@ -366,13 +373,15 @@ def test_launch_settings_process_failure_is_reported(tmp_path, monkeypatch):
     shell = _bare_shell(Config(base=tmp_path))
     monkeypatch.setattr(app_mod.sys, "frozen", False, raising=False)
     monkeypatch.setattr(
-        QProcess, "startDetached",
+        QProcess,
+        "startDetached",
         staticmethod(lambda program, arguments, workdir: (False, 0)),
     )
     assert shell._launch_settings_process() is False
 
 
 # ------------------------------------------------------------- 5. 气泡抑制
+
 
 def test_bubble_suppressed_while_external_settings_process_runs(tmp_path):
     """独立设置进程存活期抑制气泡；锁释放后恢复。"""
@@ -440,6 +449,7 @@ def test_modern_settings_finished_delegates_to_shell_apply_chain(tmp_path):
 
 
 # ------------------------------------------- 6. standalone 试听 / runtime 避让
+
 
 def test_standalone_preview_uses_local_channel(tmp_path, monkeypatch):
     """standalone 试听改走本地通道；进程内实例不挂 on_festival_now。"""
@@ -537,6 +547,7 @@ def test_standalone_geometry_ignores_dead_process_markers(tmp_path):
 
 
 # ------------------------------------------------------------ 配置键契约
+
 
 def test_settings_process_isolation_default_true_and_normalized(tmp_path):
     """默认 True；脏值字符串 "false" 必须归一为 False（bool("false") 陷阱）。"""

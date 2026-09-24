@@ -13,6 +13,7 @@
 - _on_frame 帧驱动：逐帧位移、中间圈末续圈不推链、末圈末帧清计划走播完链；
 - 预测式预热：多圈移动非末圈跳过、末圈恢复、旧 schema 计划不受影响。
 """
+
 from __future__ import annotations
 
 import json
@@ -61,8 +62,7 @@ def test_quantize_single_loop_clamped_to_room():
 # move_position_at_frame（纯函数）
 # ============================================================================
 
-PLAN = {'start_x': 0, 'target_x': 300, 'start_y': 100, 'target_y': 160,
-        'total_frames': 30}
+PLAN = {"start_x": 0, "target_x": 300, "start_y": 100, "target_y": 160, "total_frames": 30}
 
 
 def test_position_linear_in_frames_no_freeze():
@@ -78,9 +78,16 @@ def test_position_clamped_to_plan():
 
 # 圈内逐帧位移曲线：curve[i] = 播到源帧 i 时圈内累计进度（0..1 单调不减）。
 # 静帧段曲线走平 → 窗口不动；动帧段线性 → 匀速。无 curve 键时回退线性插值。
-CURVE_PLAN = {'start_x': 0, 'target_x': 200, 'start_y': 100, 'target_y': 100,
-              'loops': 1, 'frames_per_loop': 10, 'total_frames': 10,
-              'curve': [0.0, 0.0, 0.25, 0.5, 0.5, 0.5, 0.75, 1.0, 1.0, 1.0]}
+CURVE_PLAN = {
+    "start_x": 0,
+    "target_x": 200,
+    "start_y": 100,
+    "target_y": 100,
+    "loops": 1,
+    "frames_per_loop": 10,
+    "total_frames": 10,
+    "curve": [0.0, 0.0, 0.25, 0.5, 0.5, 0.5, 0.75, 1.0, 1.0, 1.0],
+}
 
 
 def test_position_curve_pauses_on_still_frames():
@@ -122,10 +129,10 @@ def _lib_on_dir(tmp_path):
 
 
 def test_move_strides_loaded_numeric_only(tmp_path):
-    (tmp_path / 'move_strides.json').write_text(json.dumps(
-        {'_comment': '备注字段必须被忽略', '螃蟹走路': 90, 'bad': 'x', 'flag': True},
-        ensure_ascii=False), encoding='utf-8')
-    assert _lib_on_dir(tmp_path)._load_move_strides() == {'螃蟹走路': 90.0}
+    (tmp_path / "move_strides.json").write_text(
+        json.dumps({"_comment": "备注字段必须被忽略", "螃蟹走路": 90, "bad": "x", "flag": True}, ensure_ascii=False), encoding="utf-8"
+    )
+    assert _lib_on_dir(tmp_path)._load_move_strides() == {"螃蟹走路": 90.0}
 
 
 def test_move_strides_missing_file_returns_empty(tmp_path):
@@ -133,16 +140,16 @@ def test_move_strides_missing_file_returns_empty(tmp_path):
 
 
 def test_move_strides_unparseable_returns_empty(tmp_path):
-    (tmp_path / 'move_strides.json').write_text('{oops', encoding='utf-8')
+    (tmp_path / "move_strides.json").write_text("{oops", encoding="utf-8")
     assert _lib_on_dir(tmp_path)._load_move_strides() == {}
 
 
 def test_move_strides_object_value_stride(tmp_path):
     """对象值 {'stride': N, 'curve': [...]} 的步幅同样进 move_strides。"""
-    (tmp_path / 'move_strides.json').write_text(json.dumps(
-        {'螃蟹走路': {'stride': 220, 'curve': [0.0, 0.5, 1.0]}, '漂浮踏步': 90},
-        ensure_ascii=False), encoding='utf-8')
-    assert _lib_on_dir(tmp_path)._load_move_strides() == {'螃蟹走路': 220.0, '漂浮踏步': 90.0}
+    (tmp_path / "move_strides.json").write_text(
+        json.dumps({"螃蟹走路": {"stride": 220, "curve": [0.0, 0.5, 1.0]}, "漂浮踏步": 90}, ensure_ascii=False), encoding="utf-8"
+    )
+    assert _lib_on_dir(tmp_path)._load_move_strides() == {"螃蟹走路": 220.0, "漂浮踏步": 90.0}
 
 
 # ============================================================================
@@ -151,27 +158,34 @@ def test_move_strides_object_value_stride(tmp_path):
 
 
 def test_move_curves_loaded_from_object_values(tmp_path):
-    (tmp_path / 'move_strides.json').write_text(json.dumps(
-        {'螃蟹走路': {'stride': 220, 'curve': [0.0, 0.25, 0.5, 0.5, 1.0]},
-         '漂浮踏步': 90,  # 纯数值项：无曲线
-         '左转奔跑': {'stride': 240}},  # 无 curve 键：无曲线
-        ensure_ascii=False), encoding='utf-8')
+    (tmp_path / "move_strides.json").write_text(
+        json.dumps(
+            {
+                "螃蟹走路": {"stride": 220, "curve": [0.0, 0.25, 0.5, 0.5, 1.0]},
+                "漂浮踏步": 90,  # 纯数值项：无曲线
+                "左转奔跑": {"stride": 240},
+            },  # 无 curve 键：无曲线
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     lib = _lib_on_dir(tmp_path)
-    assert lib._load_move_curves() == {'螃蟹走路': [0.0, 0.25, 0.5, 0.5, 1.0]}
+    assert lib._load_move_curves() == {"螃蟹走路": [0.0, 0.25, 0.5, 0.5, 1.0]}
 
 
-@pytest.mark.parametrize('curve', [
-    [0.5, 1.0],            # 不从 0 开始
-    [0.0, 0.9],            # 不以 1 结束
-    [0.0, 0.8, 0.5, 1.0],  # 非单调（回退）
-    [1.0],                 # 太短
-    [0.0, 'x', 1.0],       # 非数值
-    'not-a-list',          # 不是列表
-])
+@pytest.mark.parametrize(
+    "curve",
+    [
+        [0.5, 1.0],  # 不从 0 开始
+        [0.0, 0.9],  # 不以 1 结束
+        [0.0, 0.8, 0.5, 1.0],  # 非单调（回退）
+        [1.0],  # 太短
+        [0.0, "x", 1.0],  # 非数值
+        "not-a-list",  # 不是列表
+    ],
+)
 def test_move_curves_rejects_invalid(tmp_path, curve):
-    (tmp_path / 'move_strides.json').write_text(json.dumps(
-        {'螃蟹走路': {'stride': 220, 'curve': curve}},
-        ensure_ascii=False), encoding='utf-8')
+    (tmp_path / "move_strides.json").write_text(json.dumps({"螃蟹走路": {"stride": 220, "curve": curve}}, ensure_ascii=False), encoding="utf-8")
     assert _lib_on_dir(tmp_path)._load_move_curves() == {}
 
 
@@ -183,31 +197,31 @@ def test_shenshen_move_curves_cover_move_clips():
     """shenshen 角色包：每个移动动画都必须带逐帧位移曲线（动帧才动）。"""
     from pet.library import MovieLibrary
 
-    lib = MovieLibrary(character_id='shenshen')
+    lib = MovieLibrary(character_id="shenshen")
     for name in catalog.MOVES:
         lib.movie(name).warm_meta()  # 显式预热（生产由后台预热链完成；
         # GUI 隐式探测已禁止——见 tests/test_meta_no_gui_probe.py）
     for name in catalog.MOVES:
         curve = lib.move_curves.get(name)
-        assert curve, f'{name} 缺位移曲线'
+        assert curve, f"{name} 缺位移曲线"
         assert curve[0] == 0.0 and curve[-1] == 1.0
-        assert len(curve) == lib.frames(name), '曲线必须逐帧对齐素材'
+        assert len(curve) == lib.frames(name), "曲线必须逐帧对齐素材"
 
 
 def test_shenshen_move_strides_sidecar_covers_move_clips():
     from pet.library import MovieLibrary
 
-    lib = MovieLibrary(character_id='shenshen')
+    lib = MovieLibrary(character_id="shenshen")
     for name in catalog.MOVES:
-        assert lib.move_strides.get(name, 0) > 0, f'{name} 缺步幅数据'
-    assert '_comment' not in lib.move_strides
+        assert lib.move_strides.get(name, 0) > 0, f"{name} 缺步幅数据"
+    assert "_comment" not in lib.move_strides
 
 
 # ============================================================================
 # 窗口层：_try_move 量化与帧驱动位移
 # ============================================================================
 
-NAMES = [catalog.IDLE, catalog.TURN, MOVE, catalog.CLICKS[0], catalog.DRAG, '写代码']
+NAMES = [catalog.IDLE, catalog.TURN, MOVE, catalog.CLICKS[0], catalog.DRAG, "写代码"]
 BODY = QRect(0, 0, 100, 100)
 
 
@@ -259,8 +273,7 @@ class FakeClip(QObject):
 
 class FakeLibrary:
     def __init__(self, move_frames: int = 1):
-        self._clips = {n: FakeClip(frames=(move_frames if n == MOVE else 1))
-                       for n in NAMES}
+        self._clips = {n: FakeClip(frames=(move_frames if n == MOVE else 1)) for n in NAMES}
         self.manifest = {}
         self.folder_map = {}
         self.folder_files = None
@@ -317,14 +330,14 @@ def app():
 def _make_win(tmp_path, monkeypatch, lib, vx=400, width=1920):
     """真窗口 + 可控几何（与 tests/test_movement.py 同款：只替换几何取数）。"""
     cfg = Config(base=tmp_path)
-    cfg.set('collision_enabled', False)
-    cfg.set('edge_probe_enabled', False)
+    cfg.set("collision_enabled", False)
+    cfg.set("edge_probe_enabled", False)
     win = PetWindow(lib, cfg)
-    monkeypatch.setattr(win, '_screen_available', lambda: _Screen(width))
-    monkeypatch.setattr(win, '_stable_body_local_rect', lambda: BODY)
-    monkeypatch.setattr(win, '_virtual_pos', lambda: QPoint(vx, 100))
-    monkeypatch.setattr(win, '_rebuild_frame', lambda: None)
-    monkeypatch.setattr(win, 'update', lambda: None)
+    monkeypatch.setattr(win, "_screen_available", lambda: _Screen(width))
+    monkeypatch.setattr(win, "_stable_body_local_rect", lambda: BODY)
+    monkeypatch.setattr(win, "_virtual_pos", lambda: QPoint(vx, 100))
+    monkeypatch.setattr(win, "_rebuild_frame", lambda: None)
+    monkeypatch.setattr(win, "update", lambda: None)
     return win
 
 
@@ -353,14 +366,14 @@ def test_try_move_quantizes_distance_and_writes_plan_keys(app, tmp_path, monkeyp
         plan = win._move_plan
         stride = 100.0 * win.scale
         loops = max(1, round(150 / stride))
-        assert plan['anim'] == MOVE
-        assert plan['loops'] == loops and plan['loops_done'] == 0
-        assert plan['frames_per_loop'] == 10
-        assert plan['total_frames'] == loops * 10
-        assert plan['duration'] == loops * 1.0
+        assert plan["anim"] == MOVE
+        assert plan["loops"] == loops and plan["loops_done"] == 0
+        assert plan["frames_per_loop"] == 10
+        assert plan["total_frames"] == loops * 10
+        assert plan["duration"] == loops * 1.0
         # 位移量化为整圈步幅（不再直接用 randint 原值）
-        assert plan['target_x'] - plan['start_x'] == pytest.approx(loops * stride, abs=1.5)
-        assert win.facing == 'right'
+        assert plan["target_x"] - plan["start_x"] == pytest.approx(loops * stride, abs=1.5)
+        assert win.facing == "right"
         assert win._move_timer.isActive()
     finally:
         _close(win, app)
@@ -373,7 +386,7 @@ def test_try_move_falls_back_to_default_stride(app, tmp_path, monkeypatch):
         _pin_rng(monkeypatch, distance=240)
         assert win._try_move(MOVE) is True
         stride = catalog.MOVE_STRIDE_DEFAULT_PX * win.scale
-        assert win._move_plan['loops'] == max(1, round(240 / stride))
+        assert win._move_plan["loops"] == max(1, round(240 / stride))
     finally:
         _close(win, app)
 
@@ -387,7 +400,7 @@ def test_try_move_attaches_move_curve(app, tmp_path, monkeypatch):
     try:
         _pin_rng(monkeypatch, distance=150)
         assert win._try_move(MOVE) is True
-        assert win._move_plan['curve'] == [0.0, 0.5, 1.0]
+        assert win._move_plan["curve"] == [0.0, 0.5, 1.0]
     finally:
         _close(win, app)
 
@@ -399,33 +412,32 @@ def test_frame_driven_position_and_loop_rollover(app, tmp_path, monkeypatch):
     win = _make_win(tmp_path, monkeypatch, lib)
     try:
         _pin_rng(monkeypatch, distance=144)  # stride=72 → 恰 2 圈
-        monkeypatch.setattr(win, '_predict_prewarm', lambda *a: None)
+        monkeypatch.setattr(win, "_predict_prewarm", lambda *a: None)
         moves = []
-        monkeypatch.setattr(win, '_move_window_towards',
-                            lambda x, y, **kw: moves.append((x, y)))
+        monkeypatch.setattr(win, "_move_window_towards", lambda x, y, **kw: moves.append((x, y)))
         ended = []
-        monkeypatch.setattr(win, '_on_anim_ended', lambda name: ended.append(name))
+        monkeypatch.setattr(win, "_on_anim_ended", lambda name: ended.append(name))
         assert win._try_move(MOVE) is True
         plan = win._move_plan
-        assert plan['loops'] == 2 and plan['total_frames'] == 20
+        assert plan["loops"] == 2 and plan["total_frames"] == 20
         clip = lib.movie(MOVE)
         starts0 = clip.starts
-        span = plan['target_x'] - plan['start_x']
+        span = plan["target_x"] - plan["start_x"]
         # 第 0 帧即起点（无 lead 冻结）
         win._on_frame(MOVE, 0)
-        assert moves[-1] == (plan['start_x'], plan['start_y'])
+        assert moves[-1] == (plan["start_x"], plan["start_y"])
         # 第一圈中间帧：progress = 5/20
         win._on_frame(MOVE, 5)
-        assert moves[-1][0] == pytest.approx(plan['start_x'] + span * 5 / 20)
+        assert moves[-1][0] == pytest.approx(plan["start_x"] + span * 5 / 20)
         # 中间圈末帧：续圈——loops_done+1、不推链、不清计划、clip 重新 start
         win._on_frame(MOVE, 9)
-        assert plan['loops_done'] == 1
+        assert plan["loops_done"] == 1
         assert win._move_plan is plan
         assert ended == []
         assert clip.starts == starts0 + 1
         # 第二圈中间帧：frames_elapsed = 1*10 + 5 → progress = 15/20
         win._on_frame(MOVE, 5)
-        assert moves[-1][0] == pytest.approx(plan['start_x'] + span * 15 / 20)
+        assert moves[-1][0] == pytest.approx(plan["start_x"] + span * 15 / 20)
         # 末圈末帧：清计划（停表）+ 走正常播完链
         win._on_frame(MOVE, 9)
         assert win._move_plan is None
@@ -441,17 +453,15 @@ def test_legacy_plan_uses_normal_end_path(app, tmp_path, monkeypatch):
     win = _make_win(tmp_path, monkeypatch, lib)
     try:
         win._switch(MOVE)
-        win._move_plan = {'start_x': 0, 'target_x': 20, 'start_y': 0,
-                          'target_y': 0, 'duration': 1.0}
-        monkeypatch.setattr(win, '_predict_prewarm', lambda *a: None)
+        win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
+        monkeypatch.setattr(win, "_predict_prewarm", lambda *a: None)
         moves = []
-        monkeypatch.setattr(win, '_move_window_towards',
-                            lambda x, y, **kw: moves.append((x, y)))
+        monkeypatch.setattr(win, "_move_window_towards", lambda x, y, **kw: moves.append((x, y)))
         ended = []
-        monkeypatch.setattr(win, '_on_anim_ended', lambda name: ended.append(name))
-        win._on_frame(MOVE, 5)   # 非末帧：旧计划不驱动位移
+        monkeypatch.setattr(win, "_on_anim_ended", lambda name: ended.append(name))
+        win._on_frame(MOVE, 5)  # 非末帧：旧计划不驱动位移
         assert moves == []
-        win._on_frame(MOVE, 9)   # 末帧：无 loops 键 → 原播完路径
+        win._on_frame(MOVE, 9)  # 末帧：无 loops 键 → 原播完路径
         assert ended == [MOVE]
     finally:
         _close(win, app)
@@ -467,18 +477,17 @@ def test_prewarm_skipped_on_intermediate_loops_only(app, tmp_path, monkeypatch):
         fake = FakePrewarm()
         win.predictive_prewarm = fake
         plan = win._move_plan
-        assert plan['loops'] == 2
+        assert plan["loops"] == 2
         # 非末圈：逐圈提前掷骰会重复重掷预测 → 跳过
         win._predict_prewarm(MOVE, 8)
         assert fake.calls == []
         # 末圈：与单圈行为一致，正常预热
-        plan['loops_done'] = plan['loops'] - 1
+        plan["loops_done"] = plan["loops"] - 1
         win._predict_prewarm(MOVE, 8)
         assert len(fake.calls) == 1
         # 旧 schema 计划（无 loops 键）：不受影响
         fake.calls.clear()
-        win._move_plan = {'start_x': 0, 'target_x': 20, 'start_y': 0,
-                          'target_y': 0, 'duration': 1.0}
+        win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
         win._predict_prewarm(MOVE, 8)
         assert len(fake.calls) == 1
     finally:
@@ -494,7 +503,7 @@ def test_prewarm_skipped_on_intermediate_loops_only(app, tmp_path, monkeypatch):
 def test_position_linear_reaches_target_on_last_frame():
     # 帧号 0-based：末拍 frames_elapsed == total_frames-1，到位必须提交终点
     # （无 curve 角色此前停在离目标 ~stride/frames 处）
-    assert move_position_at_frame(PLAN, PLAN['total_frames'] - 1) == (300.0, 160.0)
+    assert move_position_at_frame(PLAN, PLAN["total_frames"] - 1) == (300.0, 160.0)
 
 
 def test_try_move_rebuilds_first_frame_with_new_facing(app, tmp_path, monkeypatch):
@@ -503,13 +512,13 @@ def test_try_move_rebuilds_first_frame_with_new_facing(app, tmp_path, monkeypatc
     lib = FakeLibrary(move_frames=10)
     win = _make_win(tmp_path, monkeypatch, lib)
     try:
-        win.facing = 'left'
+        win.facing = "left"
         seen = []
-        monkeypatch.setattr(win, '_rebuild_frame', lambda: seen.append(win.facing))
+        monkeypatch.setattr(win, "_rebuild_frame", lambda: seen.append(win.facing))
         _pin_rng(monkeypatch, distance=150)
         assert win._try_move(MOVE) is True
-        assert seen, '_switch 必须至少预渲染一次首帧'
-        assert seen[-1] == 'right'
+        assert seen, "_switch 必须至少预渲染一次首帧"
+        assert seen[-1] == "right"
     finally:
         _close(win, app)
 
@@ -519,11 +528,11 @@ def test_try_move_switch_failure_keeps_facing(app, tmp_path, monkeypatch):
     lib = FakeLibrary(move_frames=10)
     win = _make_win(tmp_path, monkeypatch, lib)
     try:
-        win.facing = 'left'
-        monkeypatch.setattr(lib.movie(MOVE), 'start', lambda: False)
+        win.facing = "left"
+        monkeypatch.setattr(lib.movie(MOVE), "start", lambda: False)
         _pin_rng(monkeypatch, distance=150)
         assert win._try_move(MOVE) is False
-        assert win.facing == 'left'
+        assert win.facing == "left"
         assert win._move_plan is None
     finally:
         _close(win, app)
@@ -535,11 +544,11 @@ def test_animation_gap_turn_respects_facing_gate(app, tmp_path, monkeypatch):
     lib = FakeLibrary()
     win = _make_win(tmp_path, monkeypatch, lib, vx=960)  # 中线：inward_facing → None
     try:
-        win.facing = 'left'
+        win.facing = "left"
         _pin_rng(monkeypatch)  # random.choice → seq[-1]：pool=[IDLE, TURN] 掷中 TURN
         win._play_animation_gap_step()
         assert win.anim == catalog.IDLE
-        assert win.facing == 'left'
+        assert win.facing == "left"
     finally:
         _close(win, app)
 
@@ -553,12 +562,12 @@ def test_animation_gap_pool_excludes_dual_category_moves(app, tmp_path, monkeypa
     try:
         win.idles = [catalog.IDLE, MOVE]  # 双分类：MOVE 同时在 idle 池
         win.turns = []  # 钉死掷中 MOVE：pool=[IDLE, MOVE]，choice → seq[-1]
-        win.facing = 'left'
+        win.facing = "left"
         _pin_rng(monkeypatch)
         win._play_animation_gap_step()
         assert win.anim == catalog.IDLE
         assert win._move_plan is None
-        assert win.facing == 'left'
+        assert win.facing == "left"
     finally:
         _close(win, app)
 
@@ -587,19 +596,18 @@ def _setup_anim_tick_win(tmp_path, monkeypatch):
     lib.move_strides = {MOVE: 100.0}
     win = _make_win(tmp_path, monkeypatch, lib)
     clock = _FakeClock()
-    monkeypatch.setattr(window_mod.time, 'monotonic', clock)  # window.py 测试 seam：pet.window.time 命名空间
+    monkeypatch.setattr(window_mod.time, "monotonic", clock)  # window.py 测试 seam：pet.window.time 命名空间
     _pin_rng(monkeypatch, distance=144)  # stride=72 → 恰 2 圈
-    monkeypatch.setattr(win, '_predict_prewarm', lambda *a: None)
+    monkeypatch.setattr(win, "_predict_prewarm", lambda *a: None)
     moves = []
-    monkeypatch.setattr(win, '_move_window_towards',
-                        lambda x, y, **kw: moves.append((x, y)))
+    monkeypatch.setattr(win, "_move_window_towards", lambda x, y, **kw: moves.append((x, y)))
     assert win._try_move(MOVE) is True
     return win, win._move_plan, moves, clock
 
 
 def _plan_x_at(plan, frames_elapsed):
-    span = plan['target_x'] - plan['start_x']
-    return plan['start_x'] + span * frames_elapsed / plan['total_frames']
+    span = plan["target_x"] - plan["start_x"]
+    return plan["start_x"] + span * frames_elapsed / plan["total_frames"]
 
 
 def test_anim_tick_fills_between_frames(app, tmp_path, monkeypatch):
@@ -636,7 +644,7 @@ def test_anim_tick_reanchor_on_frame_no_backtrack(app, tmp_path, monkeypatch):
         clock.t += 0.05
         win._on_move_anim_tick()  # → 5.5
         clock.t += 0.05
-        win._on_frame(MOVE, 6)    # 权威帧 6
+        win._on_frame(MOVE, 6)  # 权威帧 6
         pos6 = moves[-1]
         win._on_move_anim_tick()  # fe=6 = 锚点 → no-op
         assert moves[-1] == pos6
@@ -665,14 +673,12 @@ def test_anim_tick_ignores_legacy_plan(app, tmp_path, monkeypatch):
     lib = FakeLibrary(move_frames=10)
     win = _make_win(tmp_path, monkeypatch, lib)
     clock = _FakeClock()
-    monkeypatch.setattr(window_mod.time, 'monotonic', clock)  # window.py 测试 seam：pet.window.time 命名空间
+    monkeypatch.setattr(window_mod.time, "monotonic", clock)  # window.py 测试 seam：pet.window.time 命名空间
     try:
         win._switch(MOVE)
-        win._move_plan = {'start_x': 0, 'target_x': 20, 'start_y': 0,
-                          'target_y': 0, 'duration': 1.0}
+        win._move_plan = {"start_x": 0, "target_x": 20, "start_y": 0, "target_y": 0, "duration": 1.0}
         moves = []
-        monkeypatch.setattr(win, '_move_window_towards',
-                            lambda x, y, **kw: moves.append((x, y)))
+        monkeypatch.setattr(win, "_move_window_towards", lambda x, y, **kw: moves.append((x, y)))
         clock.t += 0.05
         win._on_move_anim_tick()
         assert moves == []
@@ -701,28 +707,26 @@ def test_anim_tick_respects_move_curve(app, tmp_path, monkeypatch):
     lib.move_curves = {MOVE: [0.0, 0.0, 0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0]}
     win = _make_win(tmp_path, monkeypatch, lib)
     clock = _FakeClock()
-    monkeypatch.setattr(window_mod.time, 'monotonic', clock)  # window.py 测试 seam：pet.window.time 命名空间
+    monkeypatch.setattr(window_mod.time, "monotonic", clock)  # window.py 测试 seam：pet.window.time 命名空间
     try:
         _pin_rng(monkeypatch, distance=144)
-        monkeypatch.setattr(win, '_predict_prewarm', lambda *a: None)
+        monkeypatch.setattr(win, "_predict_prewarm", lambda *a: None)
         moves = []
-        monkeypatch.setattr(win, '_move_window_towards',
-                            lambda x, y, **kw: moves.append((x, y)))
+        monkeypatch.setattr(win, "_move_window_towards", lambda x, y, **kw: moves.append((x, y)))
         assert win._try_move(MOVE) is True
         plan = win._move_plan
-        span = plan['target_x'] - plan['start_x']
+        span = plan["target_x"] - plan["start_x"]
         # 静帧段：帧 2 与 2.5 位置相同（曲线走平）
         win._on_frame(MOVE, 2)
-        assert moves[-1][0] == pytest.approx(plan['start_x'])
+        assert moves[-1][0] == pytest.approx(plan["start_x"])
         clock.t += 0.05
         win._on_move_anim_tick()
-        assert moves[-1][0] == pytest.approx(plan['start_x'])
+        assert moves[-1][0] == pytest.approx(plan["start_x"])
         # 动帧段：帧 6 → 6.5，intra_progress = 0.4+0.5*(0.6-0.4) = 0.5
         win._on_frame(MOVE, 6)
         clock.t += 0.05
         win._on_move_anim_tick()
-        assert moves[-1][0] == pytest.approx(
-            plan['start_x'] + span * (0.5 / plan['loops']))
+        assert moves[-1][0] == pytest.approx(plan["start_x"] + span * (0.5 / plan["loops"]))
     finally:
         _close(win, app)
 
@@ -730,6 +734,7 @@ def test_anim_tick_respects_move_curve(app, tmp_path, monkeypatch):
 def test_try_move_skips_when_meta_cold(app, tmp_path, monkeypatch):
     """冷 meta 闸门（评审 A1）：duration()=0.0 / frames()=1 的冷素材不建
     移动计划（位移会按错的总帧数瞬移），本轮放弃，后台 meta 到位后恢复。"""
+
     class ColdMetaLibrary(FakeLibrary):
         def duration(self, name):
             return 0.0  # meta 后台化后冷素材的默认值
@@ -742,7 +747,7 @@ def test_try_move_skips_when_meta_cold(app, tmp_path, monkeypatch):
     try:
         _pin_rng(monkeypatch, distance=240)
         assert win._try_move(MOVE) is False
-        assert win._move_plan is None              # 不建坏计划
+        assert win._move_plan is None  # 不建坏计划
         assert win.anim != MOVE or not win._move_timer.isActive()
     finally:
         _close(win, app)

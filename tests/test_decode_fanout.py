@@ -10,6 +10,7 @@
 - 摘环/摘 sink 幂等；hub.stop_all 后 ``_sources`` 空（泄漏断言，对齐 G7 精神）；
 - 节流/pace 调和：有效 divisor = min(在挂消费者期望值)。
 """
+
 from __future__ import annotations
 
 import threading
@@ -214,9 +215,7 @@ class TestRingAndFeed:
             if kind != "frame":
                 break
             got.append(src)
-        assert max(got) >= 19, (
-            f"生产端已结束，排空后仍未见末帧（丢弃/漏读）: {got}"
-        )
+        assert max(got) >= 19, f"生产端已结束，排空后仍未见末帧（丢弃/漏读）: {got}"
 
     def test_drain_after_producer_done_yields_last_frame_deterministically(self):
         """确定性锁死「生产端已结束 → 排空必得末帧」（不赌调度）。
@@ -298,7 +297,7 @@ class TestWatchdog:
     def test_abort_flag_overrides_watchdog(self, hub):
         pub = _FakeMovie(PATH)
         sub, source, rec = _subscribe(hub, pub)
-        rec.abort('handover')  # handover 主动 abort：reason 透传
+        rec.abort("handover")  # handover 主动 abort：reason 透传
         assert rec.session.poll() == ("abort", None, None, "handover")
 
     def test_frames_reset_stall(self, hub):
@@ -390,8 +389,7 @@ def test_handover_resets_old_publisher_pace_external(hub):
     hub.shareable_end("idle", pub, natural=False)  # 中途打断 → handover 扶正 sub
 
     assert hub._sources[PATH].publisher is sub
-    assert pub.decode_pace_external is False, \
-        "旧发布者 pace 标志必须复位（P1-1）"
+    assert pub.decode_pace_external is False, "旧发布者 pace 标志必须复位（P1-1）"
     assert sub.decode_pace_external is True, "新发布者接管 pace"
 
 

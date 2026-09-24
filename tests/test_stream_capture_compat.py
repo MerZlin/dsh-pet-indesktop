@@ -5,6 +5,7 @@
 而是临时变成 PetWindow 的子控件：OBS/直播姬只需捕获主窗一个源即可看到气泡。
 本文件锁定父/子切换、窗口类型、标题与主窗内放置约束。
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace

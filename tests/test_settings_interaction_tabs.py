@@ -19,7 +19,16 @@ import pytest
 pytest.importorskip("PySide6")
 
 EXPECTED_SIDEBAR = [
-    "常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动", "语音", "文件识别", "更新",
+    "常规",
+    "桌宠",
+    "互动",
+    "菜单",
+    "桌面组件",
+    "AI 与对话",
+    "自动化与联动",
+    "语音",
+    "文件识别",
+    "更新",
 ]
 # 标签键/名：键给代码（稳定），名给用户（可读）。顺序 = 使用顺序。
 EXPECTED_TABS = (("click", "点击与音效"), ("self_talk", "自言自语"))
@@ -27,14 +36,28 @@ EXPECTED_TABS = (("click", "点击与音效"), ("self_talk", "自言自语"))
 # 每组行各自应该落在哪个标签
 ROWS_BY_TAB = {
     "click": (
-        "mouse_through", "click_sound", "click_sound_pack", "click_sound_volume",
-        "click_sound_preview", "click_balance", "click_self_talk", "click_self_talk_speak",
-        "click_self_talk_precache", "click_talk_bindings", "golden_spin_click",
+        "mouse_through",
+        "click_sound",
+        "click_sound_pack",
+        "click_sound_volume",
+        "click_sound_preview",
+        "click_balance",
+        "click_self_talk",
+        "click_self_talk_speak",
+        "click_self_talk_precache",
+        "click_talk_bindings",
+        "golden_spin_click",
         "golden_spin_direct",
     ),
     "self_talk": (
-        "self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min",
-        "self_talk_max", "self_talk_texts", "self_talk_images", "self_talk_image_scale",
+        "self_talk_bubble_style",
+        "self_talk",
+        "self_talk_duration",
+        "self_talk_min",
+        "self_talk_max",
+        "self_talk_texts",
+        "self_talk_images",
+        "self_talk_image_scale",
         "self_talk_image_chance",
     ),
 }
@@ -60,9 +83,7 @@ def dialog(tmp_path, monkeypatch):
 
 
 def _interaction_page(dialog):
-    index = next(
-        i for i in range(dialog.sidebar.count()) if dialog.sidebar.item(i).text() == "互动"
-    )
+    index = next(i for i in range(dialog.sidebar.count()) if dialog.sidebar.item(i).text() == "互动")
     return dialog.pages.widget(index)
 
 
@@ -109,9 +130,7 @@ def test_every_interaction_row_routes_to_its_tab_and_is_reachable(dialog):
         tabs.setCurrentKey(tab_key)
         for key in keys:
             row = _row(dialog, key)
-            assert tabs.key_for_descendant(row) == tab_key, (
-                f"{key} 期望落在 {tab_key} 标签，实际 {tabs.key_for_descendant(row)}"
-            )
+            assert tabs.key_for_descendant(row) == tab_key, f"{key} 期望落在 {tab_key} 标签，实际 {tabs.key_for_descendant(row)}"
             assert row.isVisibleTo(tabs) is True, f"{key} 在 {tab_key} 标签里不可见"
 
 
@@ -164,10 +183,7 @@ def test_sections_keep_their_titles_inside_the_tabs(dialog):
 
     def section_titles(tab_key: str) -> list[str]:
         tabs.setCurrentKey(tab_key)
-        return [
-            section.findChild(QLabel, "sectionTitle").text()
-            for section in tabs.stack.currentWidget().findChildren(SettingsSection)
-        ]
+        return [section.findChild(QLabel, "sectionTitle").text() for section in tabs.stack.currentWidget().findChildren(SettingsSection)]
 
     assert section_titles("click") == ["输入", "点击反馈"]
     assert section_titles("self_talk") == ["自言自语"]
@@ -180,11 +196,7 @@ def test_every_setting_row_still_lives_in_a_domain_page(dialog):
     from pet.modern_settings_dialog import SettingRow
 
     pages = [dialog.pages.widget(i) for i in range(dialog.pages.count())]
-    orphans = [
-        row.objectName()
-        for row in dialog.findChildren(SettingRow)
-        if not any(page.isAncestorOf(row) for page in pages)
-    ]
+    orphans = [row.objectName() for row in dialog.findChildren(SettingRow) if not any(page.isAncestorOf(row) for page in pages)]
     assert orphans == [], f"这些行没有落在任何域页里：{orphans}"
 
     labels = [label.text() for label in dialog.findChildren(QLabel)]

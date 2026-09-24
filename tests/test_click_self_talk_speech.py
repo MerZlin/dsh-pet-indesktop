@@ -145,11 +145,13 @@ def _click_once(*, click_self_talk: bool, periodic: bool, speak_enabled: bool = 
         _effects_route_click_golden_spin = None
 
         def __init__(self):
-            self.cfg = _ClickCfg({
-                "click_sound_pack": {"kind": "custom"},
-                "character": "shenshen",
-                "self_talk_speak_enabled": speak_enabled,
-            })
+            self.cfg = _ClickCfg(
+                {
+                    "click_sound_pack": {"kind": "custom"},
+                    "character": "shenshen",
+                    "self_talk_speak_enabled": speak_enabled,
+                }
+            )
             self.click_show_self_talk = click_self_talk
             self._self_talk_enabled = periodic
             self.shown: list[str] = []

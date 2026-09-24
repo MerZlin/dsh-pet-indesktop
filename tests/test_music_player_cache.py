@@ -14,6 +14,7 @@
 3. 后台预热幂等、扫描不发生在调用线程；
 4. 点击路径的路径解析进 worker 线程，找不到时回 GUI 线程弹气泡（不静默 return）。
 """
+
 from __future__ import annotations
 
 import inspect
@@ -156,7 +157,8 @@ def test_cold_cache_menu_build_never_scans_filesystem(monkeypatch):
     monkeypatch.setattr(music_players, "_shallow_scan", lambda *a, **kw: scans.append(a))
     monkeypatch.setattr(music_players, "_search", lambda key: searches.append(key))
     monkeypatch.setattr(
-        music_players, "warm_cache_async",
+        music_players,
+        "warm_cache_async",
         lambda key, manual="": (warms.append(key), True)[1],
     )
 
@@ -196,7 +198,8 @@ def test_warm_cache_menu_build_needs_no_scan_and_enables(monkeypatch):
     warms: list = []
     monkeypatch.setattr(music_players, "_search", lambda key: searches.append(key))
     monkeypatch.setattr(
-        music_players, "warm_cache_async",
+        music_players,
+        "warm_cache_async",
         lambda key, manual="": (warms.append(key), True)[1],
     )
     _qapp()
@@ -218,7 +221,8 @@ def test_negative_cache_disables_action_with_hint(monkeypatch):
     warms: list = []
     monkeypatch.setattr(music_players, "_search", lambda key: searches.append(key))
     monkeypatch.setattr(
-        music_players, "warm_cache_async",
+        music_players,
+        "warm_cache_async",
         lambda key, manual="": (warms.append(key), True)[1],
     )
     _qapp()
@@ -241,14 +245,12 @@ def test_cached_player_reports_found_not_found_and_cold():
     assert music_players.cached_player("netease") == (music_players.CACHED_COLD, None)
 
     music_players._cache["netease"] = "D:/CloudMusic/cloudmusic.exe"
-    assert music_players.cached_player("netease") == (
-        music_players.CACHED_FOUND, "D:/CloudMusic/cloudmusic.exe")
+    assert music_players.cached_player("netease") == (music_players.CACHED_FOUND, "D:/CloudMusic/cloudmusic.exe")
 
     music_players._cache["qqmusic"] = None
     assert music_players.cached_player("qqmusic") == (music_players.CACHED_MISSING, None)
 
-    assert music_players.cached_player("unknown-player") == (
-        music_players.CACHED_MISSING, None)
+    assert music_players.cached_player("unknown-player") == (music_players.CACHED_MISSING, None)
 
 
 def test_cached_player_resolves_manual_path_without_scanning(tmp_path, monkeypatch):
@@ -258,8 +260,7 @@ def test_cached_player_resolves_manual_path_without_scanning(tmp_path, monkeypat
     searches: list = []
     monkeypatch.setattr(music_players, "_search", lambda key: searches.append(key))
 
-    assert music_players.cached_player("netease", str(exe)) == (
-        music_players.CACHED_FOUND, str(exe))
+    assert music_players.cached_player("netease", str(exe)) == (music_players.CACHED_FOUND, str(exe))
     invalid = music_players.cached_player("netease", str(tmp_path / "missing.exe"))
     assert invalid == (music_players.CACHED_MISSING, None)
     # 手填失效时不静默退回自动搜索（与 find_player 同语义）
@@ -272,15 +273,15 @@ def test_cached_player_found_agrees_with_find_player(monkeypatch):
     monkeypatch.setattr(music_players, "_search", lambda key: "D:/QQMusic/QQMusic.exe")
     music_players.clear_cache()
     assert music_players.find_player("qqmusic") == "D:/QQMusic/QQMusic.exe"
-    assert music_players.cached_player("qqmusic") == (
-        music_players.CACHED_FOUND, "D:/QQMusic/QQMusic.exe")
+    assert music_players.cached_player("qqmusic") == (music_players.CACHED_FOUND, "D:/QQMusic/QQMusic.exe")
 
 
 def test_clear_cache_drops_negative_cache_and_allows_rescan(monkeypatch):
     """clear_cache 语义不变：连 None 负缓存一起清掉，下次查询重新扫描。"""
     calls: list = []
     monkeypatch.setattr(
-        music_players, "_search",
+        music_players,
+        "_search",
         lambda key: (calls.append(key), "D:/CloudMusic/cloudmusic.exe")[1],
     )
     music_players.clear_cache()
@@ -324,8 +325,7 @@ def test_warm_cache_async_scans_in_background_thread_and_is_idempotent(monkeypat
 def test_warm_cache_async_skips_manual_path_and_caches_negative_result(monkeypatch):
     """手填路径无需扫描；扫不到时也要留下 None 负缓存（否则每次都白扫）。"""
     calls: list = []
-    monkeypatch.setattr(
-        music_players, "_search", lambda key: (calls.append(key), None)[1])
+    monkeypatch.setattr(music_players, "_search", lambda key: (calls.append(key), None)[1])
     music_players.clear_cache()
 
     assert music_players.warm_cache_async("netease", "D:/some/cloudmusic.exe") is False
@@ -346,7 +346,8 @@ def test_ui_ready_prewarm_schedules_music_player_cache_warm(monkeypatch):
 
     scheduled: list = []
     monkeypatch.setattr(
-        app_mod.QTimer, "singleShot",
+        app_mod.QTimer,
+        "singleShot",
         lambda ms, fn=None: scheduled.append((ms, fn)),
     )
     app_mod._schedule_music_player_warm()
@@ -358,7 +359,8 @@ def test_ui_ready_prewarm_schedules_music_player_cache_warm(monkeypatch):
 
     warmed: list = []
     monkeypatch.setattr(
-        music_players, "warm_cache_async",
+        music_players,
+        "warm_cache_async",
         lambda key, manual="": (warmed.append(key), True)[1],
     )
     task()
@@ -431,7 +433,8 @@ def test_launch_player_reads_manual_path_from_config(monkeypatch):
     _qapp()
     seen: list = []
     monkeypatch.setattr(
-        music_players, "find_player",
+        music_players,
+        "find_player",
         lambda key, manual="": (seen.append((key, manual)), "D:/x/cloudmusic.exe")[1],
     )
     monkeypatch.setattr(now_playing, "play_session_for", lambda exe_name: True)
@@ -515,7 +518,8 @@ def test_launch_bridge_registry_collects_finished_workers(monkeypatch):
 
     app = _qapp()
     monkeypatch.setattr(
-        music_players, "find_player",
+        music_players,
+        "find_player",
         lambda key, manual="": "D:/CloudMusic/cloudmusic.exe",
     )
     monkeypatch.setattr(now_playing, "play_session_for", lambda exe_name: True)
@@ -527,19 +531,14 @@ def test_launch_bridge_registry_collects_finished_workers(monkeypatch):
         for _ in range(3):
             shared._launch_player_and_play("netease", pet)
         assert len(shared._LAUNCH_BRIDGES) == 3, "桥没有入队（强引用保活语义坏了）"
-        assert _wait_until(lambda: not shared._LAUNCH_BRIDGES, pump=app.processEvents), (
-            f"worker 收工后桥没有出队：{shared._LAUNCH_BRIDGES}"
-        )
+        assert _wait_until(lambda: not shared._LAUNCH_BRIDGES, pump=app.processEvents), f"worker 收工后桥没有出队：{shared._LAUNCH_BRIDGES}"
         # 再来一轮：登记表不随点击次数增长
         for _ in range(3):
             shared._launch_player_and_play("netease", pet)
-        assert _wait_until(lambda: not shared._LAUNCH_BRIDGES, pump=app.processEvents), (
-            f"第二轮点击后桥仍在登记表里：{shared._LAUNCH_BRIDGES}"
-        )
+        assert _wait_until(lambda: not shared._LAUNCH_BRIDGES, pump=app.processEvents), f"第二轮点击后桥仍在登记表里：{shared._LAUNCH_BRIDGES}"
     finally:
         shared._LAUNCH_BRIDGES.clear()
         shared._LAUNCH_BRIDGES.update(saved)
-
 
 
 # ---------------------------------------------------------------------------
@@ -570,10 +569,7 @@ def test_search_is_serialized_across_player_keys(monkeypatch):
         assert start.wait(5.0), "启动屏障超时"
         music_players.find_player(key)
 
-    threads = [
-        threading.Thread(target=run, args=(key,), name=f"scan-probe-{key}", daemon=True)
-        for key in ("netease", "qqmusic")
-    ]
+    threads = [threading.Thread(target=run, args=(key,), name=f"scan-probe-{key}", daemon=True) for key in ("netease", "qqmusic")]
     for t in threads:
         t.start()
     start.set()

@@ -31,9 +31,16 @@ class TestCollisionEllipseDetection:
         """测试 3 种半轴配置：圆形、扁宽椭圆、高瘦椭圆。"""
         # 1. 圆形 (rx=ry=50) 对撞
         c1, nx1, ny1, ov1, cx1, cy1 = collision.check_collision_ellipse(
-            x1=0.0, y1=0.0, rx1=50.0, ry1=50.0,
-            x2=80.0, y2=0.0, rx2=50.0, ry2=50.0,
-            id1="pet-1", id2="pet-2",
+            x1=0.0,
+            y1=0.0,
+            rx1=50.0,
+            ry1=50.0,
+            x2=80.0,
+            y2=0.0,
+            rx2=50.0,
+            ry2=50.0,
+            id1="pet-1",
+            id2="pet-2",
         )
         assert c1 is True
         assert nx1 == pytest.approx(1.0, abs=1e-5)
@@ -44,36 +51,64 @@ class TestCollisionEllipseDetection:
 
         # 2. 扁宽椭圆 (rx=100, ry=40)
         c2, nx2, ny2, ov2, _, _ = collision.check_collision_ellipse(
-            x1=0.0, y1=0.0, rx1=100.0, ry1=40.0,
-            x2=150.0, y2=0.0, rx2=100.0, ry2=40.0,
-            id1="pet-1", id2="pet-2",
+            x1=0.0,
+            y1=0.0,
+            rx1=100.0,
+            ry1=40.0,
+            x2=150.0,
+            y2=0.0,
+            rx2=100.0,
+            ry2=40.0,
+            id1="pet-1",
+            id2="pet-2",
         )
         assert c2 is True
         assert ov2 == pytest.approx(50.0, abs=1e-3)
 
         # 扁宽椭圆在 y 轴方向距离 70px (ry1+ry2=80, 应该碰撞)
         c2_y, _, _, ov2_y, _, _ = collision.check_collision_ellipse(
-            x1=0.0, y1=0.0, rx1=100.0, ry1=40.0,
-            x2=0.0, y2=70.0, rx2=100.0, ry2=40.0,
-            id1="pet-1", id2="pet-2",
+            x1=0.0,
+            y1=0.0,
+            rx1=100.0,
+            ry1=40.0,
+            x2=0.0,
+            y2=70.0,
+            rx2=100.0,
+            ry2=40.0,
+            id1="pet-1",
+            id2="pet-2",
         )
         assert c2_y is True
         assert ov2_y == pytest.approx(10.0, abs=1e-3)
 
         # 3. 高瘦椭圆 (rx=30, ry=120)
         c3, _, _, ov3, _, _ = collision.check_collision_ellipse(
-            x1=0.0, y1=0.0, rx1=30.0, ry1=120.0,
-            x2=0.0, y2=200.0, rx2=30.0, ry2=120.0,
-            id1="pet-1", id2="pet-2",
+            x1=0.0,
+            y1=0.0,
+            rx1=30.0,
+            ry1=120.0,
+            x2=0.0,
+            y2=200.0,
+            rx2=30.0,
+            ry2=120.0,
+            id1="pet-1",
+            id2="pet-2",
         )
         assert c3 is True
         assert ov3 == pytest.approx(40.0, abs=1e-3)
 
         # 高瘦椭圆在 x 轴方向距离 70px (rx1+rx2=60, 应该不碰撞，Broad-phase 排除)
         c3_x, _, _, _, _, _ = collision.check_collision_ellipse(
-            x1=0.0, y1=0.0, rx1=30.0, ry1=120.0,
-            x2=70.0, y2=0.0, rx2=30.0, ry2=120.0,
-            id1="pet-1", id2="pet-2",
+            x1=0.0,
+            y1=0.0,
+            rx1=30.0,
+            ry1=120.0,
+            x2=70.0,
+            y2=0.0,
+            rx2=30.0,
+            ry2=120.0,
+            id1="pet-1",
+            id2="pet-2",
         )
         assert c3_x is False
 
@@ -84,15 +119,29 @@ class TestCollisionEllipseDetection:
 
         # 顺向检测
         c1, nx1, ny1, ov1, _, _ = collision.check_collision_ellipse(
-            x1=100.0, y1=100.0, rx1=50.0, ry1=50.0,
-            x2=100.0, y2=100.0, rx2=50.0, ry2=50.0,
-            id1=id_a, id2=id_b,
+            x1=100.0,
+            y1=100.0,
+            rx1=50.0,
+            ry1=50.0,
+            x2=100.0,
+            y2=100.0,
+            rx2=50.0,
+            ry2=50.0,
+            id1=id_a,
+            id2=id_b,
         )
         # 反向检测
         c2, nx2, ny2, ov2, _, _ = collision.check_collision_ellipse(
-            x1=100.0, y1=100.0, rx1=50.0, ry1=50.0,
-            x2=100.0, y2=100.0, rx2=50.0, ry2=50.0,
-            id1=id_b, id2=id_a,
+            x1=100.0,
+            y1=100.0,
+            rx1=50.0,
+            ry1=50.0,
+            x2=100.0,
+            y2=100.0,
+            rx2=50.0,
+            ry2=50.0,
+            id1=id_b,
+            id2=id_a,
         )
 
         assert c1 is True and c2 is True
@@ -112,12 +161,9 @@ class TestCollisionEllipseDetection:
 
 class TestCollisionCircleChain:
     def test_circle_chain_horizontal_vertical_and_square(self):
-        assert collision.circles_from_rect(10, 20, 100, 40) == [
-            [30.0, 40.0, 20.0], [60.0, 40.0, 20.0], [90.0, 40.0, 20.0]]
-        assert collision.circles_from_rect(10, 20, 40, 100) == [
-            [30.0, 40.0, 20.0], [30.0, 70.0, 20.0], [30.0, 100.0, 20.0]]
-        assert collision.circles_from_rect(10, 20, 50, 50) == [
-            [35.0, 45.0, 25.0], [35.0, 45.0, 25.0], [35.0, 45.0, 25.0]]
+        assert collision.circles_from_rect(10, 20, 100, 40) == [[30.0, 40.0, 20.0], [60.0, 40.0, 20.0], [90.0, 40.0, 20.0]]
+        assert collision.circles_from_rect(10, 20, 40, 100) == [[30.0, 40.0, 20.0], [30.0, 70.0, 20.0], [30.0, 100.0, 20.0]]
+        assert collision.circles_from_rect(10, 20, 50, 50) == [[35.0, 45.0, 25.0], [35.0, 45.0, 25.0], [35.0, 45.0, 25.0]]
 
     def test_circle_pair_tangent_one_pixel_overlap_and_separation(self):
         a = [[0.0, 0.0, 10.0]]
@@ -142,8 +188,10 @@ class TestCollisionCircleChain:
 
     def test_swept_circle_chain_detects_fast_crossing(self):
         result = collision.swept_circle_chain_collision(
-            [[0.0, 0.0, 30.0]], [[450.0, 0.0, 30.0]],
-            [[225.0, 0.0, 30.0]], [[225.0, 0.0, 30.0]],
+            [[0.0, 0.0, 30.0]],
+            [[450.0, 0.0, 30.0]],
+            [[225.0, 0.0, 30.0]],
+            [[225.0, 0.0, 30.0]],
         )
         assert result[0] is True
         # TOI 语义：首次接触时 A 圆心在 225 − (30+30) = 165
@@ -152,15 +200,19 @@ class TestCollisionCircleChain:
 
     def test_swept_circle_chain_low_speed_non_crossing_does_not_trigger(self):
         result = collision.swept_circle_chain_collision(
-            [[0.0, 0.0, 10.0]], [[5.0, 0.0, 10.0]],
-            [[100.0, 0.0, 10.0]], [[100.0, 0.0, 10.0]],
+            [[0.0, 0.0, 10.0]],
+            [[5.0, 0.0, 10.0]],
+            [[100.0, 0.0, 10.0]],
+            [[100.0, 0.0, 10.0]],
         )
         assert result[0] is False
 
     def test_swept_circle_chain_tangent_path_triggers(self):
         result = collision.swept_circle_chain_collision(
-            [[0.0, 0.0, 10.0]], [[50.0, 0.0, 10.0]],
-            [[30.0, 20.0, 10.0]], [[30.0, 20.0, 10.0]],
+            [[0.0, 0.0, 10.0]],
+            [[50.0, 0.0, 10.0]],
+            [[30.0, 20.0, 10.0]],
+            [[30.0, 20.0, 10.0]],
         )
         assert result[0] is True
         # 相切也判定接触；扫掠接触的 overlap 固定为小正值 1.0
@@ -169,8 +221,10 @@ class TestCollisionCircleChain:
 
     def test_swept_circle_chain_receding_path_does_not_trigger(self):
         result = collision.swept_circle_chain_collision(
-            [[0.0, 0.0, 10.0]], [[-100.0, 0.0, 10.0]],
-            [[30.0, 0.0, 10.0]], [[30.0, 0.0, 10.0]],
+            [[0.0, 0.0, 10.0]],
+            [[-100.0, 0.0, 10.0]],
+            [[30.0, 0.0, 10.0]],
+            [[30.0, 0.0, 10.0]],
         )
         assert result[0] is False
 
@@ -255,7 +309,12 @@ class TestCollisionImpulseAndMomentum:
         p_y_before = m1.mass * m1.vy + m2.mass * m2.vy
 
         j, dvx_a, dvy_a, dvx_b, dvy_b = collision.solve_collision_impulse(
-            m1, m2, nx, ny, restitution=0.82, friction=0.08,
+            m1,
+            m2,
+            nx,
+            ny,
+            restitution=0.82,
+            friction=0.08,
         )
         assert j > 0
 
@@ -276,16 +335,34 @@ class TestCollisionImpulseAndMomentum:
         """测试零质量与无限质量（如拖拽、锁定状态）。"""
         # Case A: 一个无限质量 (如被锁定的桌宠)，一个普通质量
         m_fixed = collision.MemberState(
-            runtime_id="fixed", x=100.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=0.0, vy=0.0, mass=1.0, is_infinite_mass=True, flags=collision.FLAG_LOCK_POSITION,
+            runtime_id="fixed",
+            x=100.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=0.0,
+            vy=0.0,
+            mass=1.0,
+            is_infinite_mass=True,
+            flags=collision.FLAG_LOCK_POSITION,
         )
         m_dynamic = collision.MemberState(
-            runtime_id="dyn", x=20.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=400.0, vy=0.0, mass=1.5,
+            runtime_id="dyn",
+            x=20.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=400.0,
+            vy=0.0,
+            mass=1.5,
         )
 
         _, dvx_dyn, dvy_dyn, dvx_fix, dvy_fix = collision.solve_collision_impulse(
-            m_dynamic, m_fixed, 1.0, 0.0, restitution=0.82,
+            m_dynamic,
+            m_fixed,
+            1.0,
+            0.0,
+            restitution=0.82,
         )
         # 固定体速度不受任何影响
         assert dvx_fix == 0.0 and dvy_fix == 0.0
@@ -294,41 +371,82 @@ class TestCollisionImpulseAndMomentum:
 
         # Case B: 两个都无限质量 -> 无速度冲量
         m_fixed2 = collision.MemberState(
-            runtime_id="fixed2", x=60.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=100.0, vy=0.0, is_infinite_mass=True,
+            runtime_id="fixed2",
+            x=60.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=100.0,
+            vy=0.0,
+            is_infinite_mass=True,
         )
         j, dvx_a, dvy_a, dvx_b, dvy_b = collision.solve_collision_impulse(
-            m_fixed, m_fixed2, 1.0, 0.0,
+            m_fixed,
+            m_fixed2,
+            1.0,
+            0.0,
         )
         assert j == 0.0
         assert dvx_a == 0.0 and dvx_b == 0.0
 
     def test_infinite_mass_pushes_target_at_drag_speed_without_amplification(self):
         dragging = collision.MemberState(
-            runtime_id="drag", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=500.0, vy=0.0, is_infinite_mass=True,
+            runtime_id="drag",
+            x=0.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=500.0,
+            vy=0.0,
+            is_infinite_mass=True,
         )
         target = collision.MemberState(
-            runtime_id="target", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=0.0, vy=0.0, mass=1.0,
+            runtime_id="target",
+            x=80.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=0.0,
+            vy=0.0,
+            mass=1.0,
         )
         _, dvx_drag, _, dvx_target, _ = collision.solve_collision_impulse(
-            dragging, target, 1.0, 0.0, restitution=0.82,
+            dragging,
+            target,
+            1.0,
+            0.0,
+            restitution=0.82,
         )
         assert dvx_drag == 0.0
         assert dvx_target == pytest.approx(500.0)
 
     def test_finite_mass_collision_keeps_configured_restitution(self):
         moving = collision.MemberState(
-            runtime_id="moving", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=500.0, vy=0.0, mass=1.0,
+            runtime_id="moving",
+            x=0.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=500.0,
+            vy=0.0,
+            mass=1.0,
         )
         target = collision.MemberState(
-            runtime_id="target", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=0.0, vy=0.0, mass=1.0,
+            runtime_id="target",
+            x=80.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=0.0,
+            vy=0.0,
+            mass=1.0,
         )
         _, dvx_moving, _, dvx_target, _ = collision.solve_collision_impulse(
-            moving, target, 1.0, 0.0, restitution=0.82,
+            moving,
+            target,
+            1.0,
+            0.0,
+            restitution=0.82,
         )
         assert dvx_moving == pytest.approx(-455.0)
         assert dvx_target == pytest.approx(455.0)
@@ -336,15 +454,28 @@ class TestCollisionImpulseAndMomentum:
     def test_low_speed_contact_uses_inelastic_impulse(self):
         """低于 80px/s 的接近用 e=0 非弹性冲量：只挡不弹，低速接触有实体感。"""
         slow_a = collision.MemberState(
-            runtime_id="slow-a", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=0.0, vy=0.0,
+            runtime_id="slow-a",
+            x=0.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=0.0,
+            vy=0.0,
         )
         slow_b = collision.MemberState(
-            runtime_id="slow-b", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=-50.0, vy=0.0,
+            runtime_id="slow-b",
+            x=80.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=-50.0,
+            vy=0.0,
         )
         j, dvx_a, dvy_a, dvx_b, dvy_b = collision.solve_collision_impulse(
-            slow_a, slow_b, 1.0, 0.0,
+            slow_a,
+            slow_b,
+            1.0,
+            0.0,
         )
         # e=0：法向接近速度恰好抵消（等质量各半），无反弹放大
         assert j > 0.0
@@ -354,11 +485,19 @@ class TestCollisionImpulseAndMomentum:
         assert vn_after == pytest.approx(0.0)  # 完全非弹性，接近速度归零
 
         fast_b = collision.MemberState(
-            runtime_id="fast-b", x=80.0, y=0.0, radius_x=50.0, radius_y=50.0,
-            vx=-500.0, vy=0.0,
+            runtime_id="fast-b",
+            x=80.0,
+            y=0.0,
+            radius_x=50.0,
+            radius_y=50.0,
+            vx=-500.0,
+            vy=0.0,
         )
         j, dvx_a, dvy_a, dvx_b, dvy_b = collision.solve_collision_impulse(
-            slow_a, fast_b, 1.0, 0.0,
+            slow_a,
+            fast_b,
+            1.0,
+            0.0,
         )
         assert j > 0.0
         assert dvx_a < 0.0 and dvx_b > 0.0
@@ -394,12 +533,22 @@ class TestPositionSeparationAndMultiBody:
 
         # 连续 3 tick 强制分离单次最多 4 倍 max_sep
         sep_full, dxa_f, _, dxb_f, _ = collision.calculate_position_separation(
-            40.0, 1.0, 0.0, inv_ma, inv_mb, force_full=True,
+            40.0,
+            1.0,
+            0.0,
+            inv_ma,
+            inv_mb,
+            force_full=True,
         )
         assert sep_full == 40.0
         assert dxa_f == -20.0 and dxb_f == 20.0
         sep_capped, _, _, _, _ = collision.calculate_position_separation(
-            100.0, 1.0, 0.0, inv_ma, inv_mb, force_full=True,
+            100.0,
+            1.0,
+            0.0,
+            inv_ma,
+            inv_mb,
+            force_full=True,
         )
         assert sep_capped <= 48.0
 
@@ -416,7 +565,10 @@ class TestPositionSeparationAndMultiBody:
         history = {"A|B": 3, "B|C": 3}
 
         impulses, combined, new_history = collision.solve_multi_body_collision(
-            [mA, mB, mC], tick=1, overlap_history=history, max_separation_iterations=4,
+            [mA, mB, mC],
+            tick=1,
+            overlap_history=history,
+            max_separation_iterations=4,
         )
 
         assert len(impulses) == 2  # A|B 和 B|C 两个 pair
@@ -429,9 +581,16 @@ class TestPositionSeparationAndMultiBody:
 
         def overlap_of(id1, id2):
             _, _, _, ov, _, _ = collision.check_collision_ellipse(
-                pos[id1][0], pos[id1][1], members[id1].radius_x, members[id1].radius_y,
-                pos[id2][0], pos[id2][1], members[id2].radius_x, members[id2].radius_y,
-                id1=id1, id2=id2,
+                pos[id1][0],
+                pos[id1][1],
+                members[id1].radius_x,
+                members[id1].radius_y,
+                pos[id2][0],
+                pos[id2][1],
+                members[id2].radius_x,
+                members[id2].radius_y,
+                id1=id1,
+                id2=id2,
             )
             return ov
 
@@ -442,13 +601,14 @@ class TestPositionSeparationAndMultiBody:
         # 模拟后续 tick：速度清零只测分离收敛（静止堆叠场景）
         for tick in range(2, 9):
             cur = [
-                collision.MemberState(runtime_id=k, x=pos[k][0], y=pos[k][1],
-                                      radius_x=members[k].radius_x, radius_y=members[k].radius_y,
-                                      vx=0.0, vy=0.0)
+                collision.MemberState(runtime_id=k, x=pos[k][0], y=pos[k][1], radius_x=members[k].radius_x, radius_y=members[k].radius_y, vx=0.0, vy=0.0)
                 for k in ("A", "B", "C")
             ]
             _, combined, history = collision.solve_multi_body_collision(
-                cur, tick=tick, overlap_history=history, max_separation_iterations=4,
+                cur,
+                tick=tick,
+                overlap_history=history,
+                max_separation_iterations=4,
             )
             for k in ("A", "B", "C"):
                 pos[k][0] += combined[k][2]
@@ -465,13 +625,14 @@ class TestPositionSeparationAndMultiBody:
         plan4 §4.2：连续 3 个 tick 仍重叠时强制完整分离一次并把法向接近速度置零。
         只清相向分量、不动切向：分离后下一 tick 不再产生反弹冲量。
         """
-        m1 = collision.MemberState(runtime_id="A", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0,
-                                   vx=80.0, vy=30.0, mass=1.0)
-        m2 = collision.MemberState(runtime_id="B", x=60.0, y=0.0, radius_x=50.0, radius_y=50.0,
-                                   vx=-80.0, vy=-10.0, mass=1.0)
+        m1 = collision.MemberState(runtime_id="A", x=0.0, y=0.0, radius_x=50.0, radius_y=50.0, vx=80.0, vy=30.0, mass=1.0)
+        m2 = collision.MemberState(runtime_id="B", x=60.0, y=0.0, radius_x=50.0, radius_y=50.0, vx=-80.0, vy=-10.0, mass=1.0)
         history = {"A|B": 2}  # 前两 tick 已连续重叠，本次为第 3 tick
         impulses, combined, new_history = collision.solve_multi_body_collision(
-            [m1, m2], tick=3, overlap_history=history, restitution=0.82,
+            [m1, m2],
+            tick=3,
+            overlap_history=history,
+            restitution=0.82,
         )
 
         assert new_history["A|B"] == 0
@@ -481,8 +642,7 @@ class TestPositionSeparationAndMultiBody:
         assert res.sep == pytest.approx(40.0, abs=1e-6)
         # 法向接近速度置零：施加冲量后相对法向速度 == 0
         # （若走正常恢复系数 0.82 会反弹为 vn_after ≈ +131.2）
-        vn_after = ((m2.vx + res.dvx_b) - (m1.vx + res.dvx_a)) * res.nx + \
-                   ((m2.vy + res.dvy_b) - (m1.vy + res.dvy_a)) * res.ny
+        vn_after = ((m2.vx + res.dvx_b) - (m1.vx + res.dvx_a)) * res.nx + ((m2.vy + res.dvy_b) - (m1.vy + res.dvy_a)) * res.ny
         assert vn_after == pytest.approx(0.0, abs=1e-6)
         # 只清相向分量：切向速度分量不被改动（dvy 增量为 0）
         assert res.dvy_a == pytest.approx(0.0, abs=1e-9)
@@ -491,14 +651,12 @@ class TestPositionSeparationAndMultiBody:
         pos_a = m1.x + combined["A"][2]
         pos_b = m2.x + combined["B"][2]
         assert pos_b - pos_a == pytest.approx(100.0, abs=1e-6)
-        settled_a = collision.MemberState(runtime_id="A", x=pos_a, y=0.0,
-                                          radius_x=50.0, radius_y=50.0,
-                                          vx=0.0, vy=30.0, mass=1.0)
-        settled_b = collision.MemberState(runtime_id="B", x=pos_b, y=0.0,
-                                          radius_x=50.0, radius_y=50.0,
-                                          vx=0.0, vy=-10.0, mass=1.0)
+        settled_a = collision.MemberState(runtime_id="A", x=pos_a, y=0.0, radius_x=50.0, radius_y=50.0, vx=0.0, vy=30.0, mass=1.0)
+        settled_b = collision.MemberState(runtime_id="B", x=pos_b, y=0.0, radius_x=50.0, radius_y=50.0, vx=0.0, vy=-10.0, mass=1.0)
         impulses4, _, _ = collision.solve_multi_body_collision(
-            [settled_a, settled_b], tick=4, overlap_history=new_history,
+            [settled_a, settled_b],
+            tick=4,
+            overlap_history=new_history,
         )
         assert impulses4 == []
 
@@ -509,15 +667,27 @@ class TestPositionSeparationAndMultiBody:
         max_dv = 0.0
         for tick in range(10):
             a = collision.MemberState(
-                runtime_id="A", x=a_x, y=0.0, radius_x=50.0, radius_y=50.0,
-                vx=0.0, vy=0.0,
+                runtime_id="A",
+                x=a_x,
+                y=0.0,
+                radius_x=50.0,
+                radius_y=50.0,
+                vx=0.0,
+                vy=0.0,
             )
             b = collision.MemberState(
-                runtime_id="B", x=b_x, y=0.0, radius_x=50.0, radius_y=50.0,
-                vx=-1.0, vy=0.0,
+                runtime_id="B",
+                x=b_x,
+                y=0.0,
+                radius_x=50.0,
+                radius_y=50.0,
+                vx=-1.0,
+                vy=0.0,
             )
             impulses, combined, history = collision.solve_multi_body_collision(
-                [a, b], tick=tick, overlap_history=history,
+                [a, b],
+                tick=tick,
+                overlap_history=history,
             )
             # 非弹性接触：速度增量只抵消接近速度（-1px/s），绝不放大成反弹
             for item in impulses:
@@ -526,9 +696,21 @@ class TestPositionSeparationAndMultiBody:
             b_x += combined["B"][2]
 
         assert max_dv <= 1.0 + 1e-6  # 只挡不弹
-        assert collision.check_collision_ellipse(
-            a_x, 0.0, 50.0, 50.0, b_x, 0.0, 50.0, 50.0, "A", "B",
-        )[3] < 0.5
+        assert (
+            collision.check_collision_ellipse(
+                a_x,
+                0.0,
+                50.0,
+                50.0,
+                b_x,
+                0.0,
+                50.0,
+                50.0,
+                "A",
+                "B",
+            )[3]
+            < 0.5
+        )
 
 
 class TestPhysicsSoftClampSpeedIntegration:
@@ -643,8 +825,7 @@ class TestProtocolFrameEncodingAndDecoding:
                 "flags": 3,
                 "character": "shenshen",
                 "scale": 0.72,
-                "circles": [[float(index * 32 + offset), 64.0, 28.0]
-                            for offset in (0, 28, 56, 84)],
+                "circles": [[float(index * 32 + offset), 64.0, 28.0] for offset in (0, 28, 56, 84)],
             }
             for index in range(128)
         ]

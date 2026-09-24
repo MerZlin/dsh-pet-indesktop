@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """黄金回旋控制器测试：程序化 360° 插值旋转与“点击后接续/直连累计”语义。"""
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication
@@ -142,10 +143,10 @@ def test_direct_spin_repeated_clicks_keep_rushing_same_current_revolution():
     controller, times = _spin_direct_controller()
     times[0] = 0.10
     controller._update(times[0])
-    controller.spin_direct()   # queued=2，开始 rush 当前圈
+    controller.spin_direct()  # queued=2，开始 rush 当前圈
     times[0] += 0.05
     controller._update(times[0])
-    controller.spin_direct()   # 同一圈再次被 rush，只累计圈数
+    controller.spin_direct()  # 同一圈再次被 rush，只累计圈数
     assert controller.queued_turns == 3
 
     times[0] += GOLDEN_SPIN_CLICK_RUSH_MS / 1000.0

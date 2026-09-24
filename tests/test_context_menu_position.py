@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """右键菜单位置避让测试。"""
+
 from __future__ import annotations
 
 import json
@@ -25,9 +26,7 @@ def _menu_size(width: int = 120, height: int = 220):
 def test_places_menu_right_when_space_available():
     pet = QRect(500, 400, 180, 200)
     avail = QRect(0, 0, 1200, 800)
-    pos, direction = pick_context_menu_position(
-        pet, _menu_size(), submenu_width=90, avail=avail
-    )
+    pos, direction = pick_context_menu_position(pet, _menu_size(), submenu_width=90, avail=avail)
     assert direction == Qt.LayoutDirection.LeftToRight
     assert pos.x() >= pet.right() + 10
     assert pos.y() >= avail.top()
@@ -39,9 +38,7 @@ def test_places_menu_right_when_space_available():
 def test_places_menu_left_without_mirroring_when_right_edge_not_enough():
     pet = QRect(950, 400, 180, 200)
     avail = QRect(0, 0, 1000, 800)
-    pos, direction = pick_context_menu_position(
-        pet, _menu_size(), submenu_width=90, avail=avail
-    )
+    pos, direction = pick_context_menu_position(pet, _menu_size(), submenu_width=90, avail=avail)
     assert direction == Qt.LayoutDirection.LeftToRight
     assert pos.x() + 120 <= pet.left() - 10
     root = QRect(pos, QPoint(120, 220))
@@ -54,12 +51,8 @@ def test_root_menu_keeps_the_same_short_gap_on_either_side_of_pet():
     right_pet = QRect(1000, 400, 180, 200)
     avail = QRect(0, 0, 1200, 800)
     submenu_width = 90
-    right_pos, right_direction = pick_context_menu_position(
-        left_pet, _menu_size(), submenu_width=submenu_width, avail=avail
-    )
-    left_pos, left_direction = pick_context_menu_position(
-        right_pet, _menu_size(), submenu_width=submenu_width, avail=avail
-    )
+    right_pos, right_direction = pick_context_menu_position(left_pet, _menu_size(), submenu_width=submenu_width, avail=avail)
+    left_pos, left_direction = pick_context_menu_position(right_pet, _menu_size(), submenu_width=submenu_width, avail=avail)
 
     assert right_direction == Qt.LayoutDirection.LeftToRight
     assert left_direction == Qt.LayoutDirection.LeftToRight
@@ -70,9 +63,7 @@ def test_root_menu_keeps_the_same_short_gap_on_either_side_of_pet():
 def test_falls_back_to_minimal_overlap_corner_when_both_sides_blocked():
     pet = QRect(100, 100, 180, 200)
     avail = QRect(0, 0, 400, 400)
-    pos, direction = pick_context_menu_position(
-        pet, _menu_size(), submenu_width=90, avail=avail
-    )
+    pos, direction = pick_context_menu_position(pet, _menu_size(), submenu_width=90, avail=avail)
     # 左右都不够放；小屏幕兜底选择与角色重叠面积最小的远角（右上/右下）
     assert pos.x() + (120 + 90) // 2 > avail.center().x()
     assert direction == Qt.LayoutDirection.LeftToRight
@@ -82,7 +73,7 @@ def test_falls_back_to_minimal_overlap_corner_when_both_sides_blocked():
 
 
 def test_context_menu_transitions_smoothly_to_safe_target():
-    script = r'''
+    script = r"""
 import json
 import time
 from PySide6.QtCore import QPoint
@@ -111,7 +102,7 @@ print(json.dumps({"shown": [shown.x(), shown.y()],
                   "middle": [middle.x(), middle.y()],
                   "end": [end.x(), end.y()]}))
 menu.close()
-'''
+"""
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONPATH=os.getcwd())
     result = subprocess.run(
         [sys.executable, "-c", script],

@@ -56,19 +56,11 @@ def _report_date(path: Path) -> date | None:
 
 def _headings(text: str) -> list[str]:
     """取 Markdown 标题文本（去掉 # 与首尾空白），用于标题级匹配。"""
-    return [
-        line.lstrip("#").strip()
-        for line in text.splitlines()
-        if line.lstrip().startswith("#")
-    ]
+    return [line.lstrip("#").strip() for line in text.splitlines() if line.lstrip().startswith("#")]
 
 
 def _governed_reports() -> list[Path]:
-    return sorted(
-        path
-        for path in DOCS.glob("PR-REPORT-*.md")
-        if (d := _report_date(path)) is not None and d >= EVIDENCE_CUTOFF
-    )
+    return sorted(path for path in DOCS.glob("PR-REPORT-*.md") if (d := _report_date(path)) is not None and d >= EVIDENCE_CUTOFF)
 
 
 GOVERNED = _governed_reports()
@@ -80,16 +72,12 @@ def test_template_exists_and_declares_required_sections():
     assert TEMPLATE.is_file(), f"交付证据模板缺失：{TEMPLATE}"
     headings = _headings(TEMPLATE.read_text(encoding="utf-8"))
     for section in REQUIRED_SECTIONS:
-        assert any(section in heading for heading in headings), (
-            f"模板 {TEMPLATE.name} 的标题里缺少必备章节「{section}」"
-        )
+        assert any(section in heading for heading in headings), f"模板 {TEMPLATE.name} 的标题里缺少必备章节「{section}」"
 
 
 def test_template_itself_is_registered_in_index():
     """模板是 docs/ 下的文档，按新文档入场规则必须登记。"""
-    assert TEMPLATE.name in INDEX.read_text(encoding="utf-8"), (
-        f"{TEMPLATE.name} 未在 docs/INDEX.md 登记（新文档入场规则第 1 条）"
-    )
+    assert TEMPLATE.name in INDEX.read_text(encoding="utf-8"), f"{TEMPLATE.name} 未在 docs/INDEX.md 登记（新文档入场规则第 1 条）"
 
 
 @pytest.mark.parametrize("doc", [AGENTS, HANDOVER], ids=lambda p: p.name)
@@ -110,29 +98,18 @@ def test_governed_reports_exist_after_cutoff():
     若这条红了，通常意味着首份范例被删或被改名成无日期格式——请先确认
     `_report_date` 的命名约定仍被遵守，而不是直接删断言。
     """
-    assert GOVERNED, (
-        f"没有找到日期 >= {EVIDENCE_CUTOFF} 的 docs/PR-REPORT-*.md；"
-        "日期必须写在文件名末尾（-YYYY-MM-DD.md）才能进入纪律范围"
-    )
+    assert GOVERNED, f"没有找到日期 >= {EVIDENCE_CUTOFF} 的 docs/PR-REPORT-*.md；日期必须写在文件名末尾（-YYYY-MM-DD.md）才能进入纪律范围"
 
 
 @pytest.mark.parametrize("report", GOVERNED, ids=GOVERNED_IDS)
 def test_report_has_three_evidence_sections(report: Path):
     """生效日之后的报告必须逐字含三个必备章节（标题级）。"""
     headings = _headings(report.read_text(encoding="utf-8"))
-    missing = [
-        section for section in REQUIRED_SECTIONS
-        if not any(section in heading for heading in headings)
-    ]
-    assert not missing, (
-        f"{report.name} 缺少必备章节：{', '.join(missing)}；"
-        f"按 {TEMPLATE.name} 补齐（判定标准见 DEV-HANDOVER §8.3）"
-    )
+    missing = [section for section in REQUIRED_SECTIONS if not any(section in heading for heading in headings)]
+    assert not missing, f"{report.name} 缺少必备章节：{', '.join(missing)}；按 {TEMPLATE.name} 补齐（判定标准见 DEV-HANDOVER §8.3）"
 
 
 @pytest.mark.parametrize("report", GOVERNED, ids=GOVERNED_IDS)
 def test_report_is_registered_in_index(report: Path):
     """生效日之后的报告必须在 docs/INDEX.md「PR 报告存档」登记。"""
-    assert report.name in INDEX.read_text(encoding="utf-8"), (
-        f"{report.name} 未在 docs/INDEX.md 登记（新文档入场规则第 1 条）"
-    )
+    assert report.name in INDEX.read_text(encoding="utf-8"), f"{report.name} 未在 docs/INDEX.md 登记（新文档入场规则第 1 条）"

@@ -13,6 +13,7 @@ XMoveWindow 同样被钳），"让窗口悬出屏幕、身体贴边"在 Linux �
 - 无 body_box 声明的角色包回退到"窗口即身体"（delta 恒 0，行为=现状+主动钳位）；
 - delta 变化时 mask 与碰撞局部包围盒同步失效重算（画面/mask/碰撞逐像素一致）。
 """
+
 from __future__ import annotations
 
 import pytest
@@ -189,9 +190,7 @@ def test_virtual_pos_roundtrip(body_box):
     pet = FakePet()
     sbr = _sbr(pet)
     PetWindow._move_window_towards(pet, AVAIL.left() - sbr.x() - 500, 500)
-    assert PetWindow._virtual_pos(pet) == QPoint(
-        AVAIL.left() - sbr.x(), 500
-    ) or PetWindow._virtual_pos(pet) == pet.pos() + pet._draw_delta
+    assert PetWindow._virtual_pos(pet) == QPoint(AVAIL.left() - sbr.x(), 500) or PetWindow._virtual_pos(pet) == pet.pos() + pet._draw_delta
 
 
 def test_delta_change_invalidates_mask_and_collision_bounds(body_box):

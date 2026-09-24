@@ -12,6 +12,7 @@ WebMClip 的 _process_frame 已持有 _current_image（Format_RGBA8888），窗�
   convertToFormat(ARGB32_Premultiplied)+Smooth 缩放后逐字节一致；
 - GifClip 无 currentImage：回退路径行为不变（真实 QMovie 首帧）。
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -21,9 +22,7 @@ from PySide6.QtWidgets import QApplication
 from pet.library import GifClip, clip_current_image
 
 # 1x1 不透明黑 GIF89a（无 GCE 透明表）：QMovie 可确定性加载，不依赖外部素材。
-_MIN_GIF = (b'GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff'
-            b'\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00'
-            b'\x02\x02\x44\x01\x00\x3b')
+_MIN_GIF = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b"
 
 
 def _qapp() -> QApplication:
@@ -35,8 +34,7 @@ def _rgba_test_image(width: int = 9, height: int = 5) -> QImage:
     img = QImage(width, height, QImage.Format.Format_RGBA8888)
     for y in range(height):
         for x in range(width):
-            img.setPixelColor(x, y, QColor(10 * x + 1, 20 * y + 3, 200 - 7 * x,
-                                           [0, 128, 255][x % 3]))
+            img.setPixelColor(x, y, QColor(10 * x + 1, 20 * y + 3, 200 - 7 * x, [0, 128, 255][x % 3]))
     return img
 
 
@@ -121,13 +119,11 @@ def test_new_chain_pixels_identical_to_pixmap_roundtrip():
     # 旧链：QPixmap 往返后再预乘 + Smooth 缩放
     old = QPixmap.fromImage(src).toImage()
     old = old.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-    old = old.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio,
-                     Qt.TransformationMode.SmoothTransformation)
+    old = old.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
     # 新链：clip_current_image 直取的 QImage 直接预乘 + Smooth 缩放
     new = clip_current_image(_ClipWithCurrentImage(src))
     new = new.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-    new = new.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio,
-                     Qt.TransformationMode.SmoothTransformation)
+    new = new.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
     assert new.format() == QImage.Format.Format_ARGB32_Premultiplied
     assert new.size() == old.size()
     assert bytes(new.constBits()) == bytes(old.constBits())
@@ -143,12 +139,10 @@ def test_mirror_then_scale_matches_old_chain_bytes():
     w_c, h_c = 6, 2
     old = QPixmap.fromImage(src).toImage().mirrored(True, False)
     old = old.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-    old = old.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio,
-                     Qt.TransformationMode.SmoothTransformation)
+    old = old.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
     new = clip_current_image(_ClipWithCurrentImage(src)).mirrored(True, False)
     new = new.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
-    new = new.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio,
-                     Qt.TransformationMode.SmoothTransformation)
+    new = new.scaled(w_c, h_c, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
     assert bytes(new.constBits()) == bytes(old.constBits())
 
 
@@ -160,11 +154,11 @@ def test_mirror_then_scale_matches_old_chain_bytes():
 def test_gif_clip_falls_back_without_current_image(tmp_path):
     """真实 GifClip 不提供 currentImage：仍能取到 QMovie 当前帧。"""
     app = _qapp()
-    path = tmp_path / 'dot.gif'
+    path = tmp_path / "dot.gif"
     path.write_bytes(_MIN_GIF)
     clip = GifClip(path)
     try:
-        assert not hasattr(clip, 'currentImage')  # 零拷贝通道只加在 WebMClip 上
+        assert not hasattr(clip, "currentImage")  # 零拷贝通道只加在 WebMClip 上
         pm = clip.currentPixmap()
         assert pm is not None and not pm.isNull()
         got = clip_current_image(clip)

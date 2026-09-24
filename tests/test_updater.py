@@ -20,14 +20,16 @@ def test_latest_release_parses_github_api(monkeypatch):
     import io
 
     def fake_ok(*args, **kwargs):
-        body = json.dumps({
-            "tag_name": "v3.0.1",
-            "html_url": "https://github.com/x/releases",
-            "body": "release notes",
-            "assets": [
-                {"name": "a-setup.exe", "browser_download_url": "https://dl/a-setup.exe"},
-            ],
-        }).encode()
+        body = json.dumps(
+            {
+                "tag_name": "v3.0.1",
+                "html_url": "https://github.com/x/releases",
+                "body": "release notes",
+                "assets": [
+                    {"name": "a-setup.exe", "browser_download_url": "https://dl/a-setup.exe"},
+                ],
+            }
+        ).encode()
         return io.BytesIO(body)
 
     monkeypatch.setattr(updater.urllib.request, "urlopen", fake_ok)
@@ -50,12 +52,14 @@ def test_latest_release_falls_back_to_update_json(monkeypatch):
         if url == updater.RELEASE_API:
             raise urllib.error.URLError("blocked")
         # update.json 镜像
-        body = json.dumps({
-            "version": "3.0.1",
-            "html_url": "https://github.com/x/releases",
-            "notes": "cdn notes",
-            "assets": {"a-setup.exe": "https://cdn/a-setup.exe"},
-        }).encode()
+        body = json.dumps(
+            {
+                "version": "3.0.1",
+                "html_url": "https://github.com/x/releases",
+                "notes": "cdn notes",
+                "assets": {"a-setup.exe": "https://cdn/a-setup.exe"},
+            }
+        ).encode()
         return io.BytesIO(body)
 
     monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
@@ -108,27 +112,28 @@ def test_config_persists_click_behavior_keys(tmp_path):
     assert reloaded.get("click_show_self_talk", False) is True
 
 
-
 def test_structured_manifest_keeps_mirrors_and_integrity_fields(monkeypatch):
     import io
 
     def fake_ok(*args, **kwargs):
-        body = json.dumps({
-            "version": "4.3.0",
-            "assets": {
-                "dsh-pet-standalone-webm-chat-setup.exe": {
-                    "fileName": "dsh-pet-standalone-webm-chat-setup.exe",
-                    "urls": [
-                        "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.3.0/a.exe",
-                        "https://cdn.jsdelivr.net/gh/MerZlin/dsh-pet-indesktop@v4.3.0/a.exe",
-                    ],
-                    "size": 123,
-                    "sha256": "A" * 64,
-                    "platform": "windows",
-                    "kind": "installer",
+        body = json.dumps(
+            {
+                "version": "4.3.0",
+                "assets": {
+                    "dsh-pet-standalone-webm-chat-setup.exe": {
+                        "fileName": "dsh-pet-standalone-webm-chat-setup.exe",
+                        "urls": [
+                            "https://github.com/MerZlin/dsh-pet-indesktop/releases/download/v4.3.0/a.exe",
+                            "https://cdn.jsdelivr.net/gh/MerZlin/dsh-pet-indesktop@v4.3.0/a.exe",
+                        ],
+                        "size": 123,
+                        "sha256": "A" * 64,
+                        "platform": "windows",
+                        "kind": "installer",
+                    },
                 },
-            },
-        }).encode()
+            }
+        ).encode()
         return io.BytesIO(body)
 
     monkeypatch.setattr(updater.urllib.request, "urlopen", fake_ok)

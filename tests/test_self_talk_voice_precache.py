@@ -153,8 +153,7 @@ def test_run_precache_is_silent_when_service_is_down(tmp_path, monkeypatch):
     assert calls["health"] == 1
     assert calls["synth"] == []
     assert stats["made"] == 0 and stats["reason"] == "service-unavailable"
-    assert not (cfg.dir / "self_talk_voice").exists() or not list(
-        (cfg.dir / "self_talk_voice").glob("*.wav"))
+    assert not (cfg.dir / "self_talk_voice").exists() or not list((cfg.dir / "self_talk_voice").glob("*.wav"))
 
 
 def test_run_precache_keeps_going_after_one_failure(tmp_path, monkeypatch):
@@ -247,8 +246,7 @@ def test_appshell_precache_passes_config_to_entry(tmp_path, monkeypatch):
     cfg = Config(base=tmp_path)
     shell = AppShell(QApplication.instance(), cfg, enable_chat=False)
     seen: list = []
-    monkeypatch.setattr(stv, "start_precache",
-                        lambda config, **kwargs: seen.append(config) or True)
+    monkeypatch.setattr(stv, "start_precache", lambda config, **kwargs: seen.append(config) or True)
 
     assert shell.precache_self_talk_voice("测试") is True
     assert seen and seen[0] is cfg
@@ -270,8 +268,7 @@ def test_startup_hook_lives_on_appshell_itself(tmp_path, monkeypatch):
     cfg = Config(base=tmp_path)
     shell = AppShell(QApplication.instance(), cfg, enable_chat=False)
     seen: list = []
-    monkeypatch.setattr(stv, "start_precache",
-                        lambda config, **kwargs: seen.append(config) or True)
+    monkeypatch.setattr(stv, "start_precache", lambda config, **kwargs: seen.append(config) or True)
 
     shell._precache_self_talk_voice_on_start()  # 不许抛异常，且要真的走到入口
 

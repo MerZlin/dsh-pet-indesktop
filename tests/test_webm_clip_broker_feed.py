@@ -16,6 +16,7 @@
 FanoutFeed 同形：ready/result/expire/budget_ms 鸭子类型）驱动同一 ``_reader_feed``
 协议，逐位锁定 WebMClip 的消费契约（帧序、end、abort→本地回退、发布 sink）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -190,8 +191,7 @@ def test_feed_frame_order_and_natural_end_fires_finished(app):
             assert srcs == list(range(k + 1)), f"帧序错位: srcs={srcs}"
             session.release_next()
         session.stage_end()
-        assert _consume_until(clip, lambda: len(finished) == 1, timeout=8.0), \
-            "natural end 未触发 finished"
+        assert _consume_until(clip, lambda: len(finished) == 1, timeout=8.0), "natural end 未触发 finished"
         assert srcs == list(range(frame_count))  # 帧序正确、每帧恰一次
         assert finished == [True]
         assert errors == []
@@ -344,11 +344,9 @@ def test_feed_handover_abort_logs_info_not_warning(app, caplog):
         with caplog.at_level(logging.INFO, logger="pet.webm_clip"):
             done = clip._reader_feed(feed, stop_evt, gen)
         assert done is False  # 仍回退本地解码（_reader_feed 契约）
-        info = [r for r in caplog.records
-                if r.levelno == logging.INFO and "handover" in r.getMessage()]
+        info = [r for r in caplog.records if r.levelno == logging.INFO and "handover" in r.getMessage()]
         assert info, "handover abort 应打 INFO"
-        warn = [r for r in caplog.records
-                if r.levelno == logging.WARNING and "断流" in r.getMessage()]
+        warn = [r for r in caplog.records if r.levelno == logging.WARNING and "断流" in r.getMessage()]
         assert not warn, "handover abort 不得再打断流 WARNING"
     finally:
         clip.cleanup()
@@ -362,8 +360,7 @@ def test_feed_watchdog_abort_still_warns(app, caplog):
         with caplog.at_level(logging.WARNING, logger="pet.webm_clip"):
             done = clip._reader_feed(feed, stop_evt, gen)
         assert done is False
-        warn = [r for r in caplog.records
-                if r.levelno == logging.WARNING and "断流" in r.getMessage()]
+        warn = [r for r in caplog.records if r.levelno == logging.WARNING and "断流" in r.getMessage()]
         assert warn, "watchdog/stop_all abort 应保留 WARNING"
     finally:
         clip.cleanup()
@@ -385,8 +382,7 @@ def test_publish_sink_on_frame_called_exactly_once_per_frame(app):
     try:
         assert clip.start() is True
         # 全速解码到自然播完：手动消费直至 finished
-        assert _consume_until(clip, lambda: len(finished) == 1, timeout=60.0), \
-            f"本地解码未自然结束; sink={len(sink.srcs)} errors={errors}"
+        assert _consume_until(clip, lambda: len(finished) == 1, timeout=60.0), f"本地解码未自然结束; sink={len(sink.srcs)} errors={errors}"
         assert finished == [True]
         assert errors == []
         n = len(sink.srcs)

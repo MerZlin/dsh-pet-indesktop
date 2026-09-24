@@ -10,6 +10,7 @@
 4. winmm 不可用 / 打开设备失败 / 写入失败时逐级回退到既有 Qt 路径；
    预热在 winmm 可用时只预热 winmm 池，绝不创建 QSoundEffect/QMediaPlayer。
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -33,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 # 装置：ctypes 边界的整体替身
 # ---------------------------------------------------------------------------
+
 
 class FakeWinmmApi:
     """``sound_winmm.WinmmApi`` 的最小替身（一个方法不多、一个不少）。
@@ -184,6 +186,7 @@ def _forbid_qt(monkeypatch, pool: click_sound.ClickSoundPool) -> list[str]:
         def _boom(*_args, **_kwargs):
             touched.append(name)
             raise AssertionError(f"winmm 路径不应触碰 {name}")
+
         return _boom
 
     monkeypatch.setattr(pool, "qt_available", forbid("qt_available"))
@@ -197,7 +200,7 @@ def _forbid_qt(monkeypatch, pool: click_sound.ClickSoundPool) -> list[str]:
 # ---------------------------------------------------------------------------
 
 _QT_FREE_SCRIPT = textwrap.dedent(
-    '''
+    """
     import ctypes
     import sys
     from pathlib import Path
@@ -245,7 +248,7 @@ _QT_FREE_SCRIPT = textwrap.dedent(
     for module in ("avcodec-61.dll", "avutil-59.dll", "avformat-61.dll", "mfcore.dll"):
         assert not k32.GetModuleHandleW(module), f"QtMultimedia/ffmpeg 被拖入: {{module}}"
     print("QT-FREE-OK")
-    '''
+    """
 )
 
 
@@ -257,7 +260,11 @@ def test_winmm_wav_play_never_loads_qtmultimedia(tmp_path):
     env["QT_QPA_PLATFORM"] = "offscreen"
     proc = subprocess.run(
         [sys.executable, "-c", script],
-        capture_output=True, text=True, cwd=str(ROOT), env=env, timeout=120,
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT),
+        env=env,
+        timeout=120,
     )
     assert proc.returncode == 0, f"子进程取证失败:\n{proc.stdout}\n{proc.stderr}"
     assert "QT-FREE-OK" in proc.stdout
@@ -266,6 +273,7 @@ def test_winmm_wav_play_never_loads_qtmultimedia(tmp_path):
 # ---------------------------------------------------------------------------
 # 2. 池并发语义
 # ---------------------------------------------------------------------------
+
 
 def test_winmm_pool_grows_for_rapid_clicks_then_queues(tmp_path, monkeypatch):
     api = FakeWinmmApi()
@@ -359,9 +367,7 @@ def test_winmm_eviction_never_drops_the_freshly_opened_pool():
     opened = {h for h, _channels, _rate in api.opened}
     tracked = {h for fmt in pool._formats.values() for h in fmt.handles}
     assert not (tracked & set(api.closed)), "同一个句柄不能既在登记里又被关掉"
-    assert tracked | set(api.closed) == opened, (
-        f"存在既不在登记里也没被关闭的失联句柄：{opened - tracked - set(api.closed)}"
-    )
+    assert tracked | set(api.closed) == opened, f"存在既不在登记里也没被关闭的失联句柄：{opened - tracked - set(api.closed)}"
     pool.clear()
     assert sorted(api.closed) == sorted(opened), "clear 之后每个开出来的句柄都必须被关掉"
 
@@ -369,6 +375,7 @@ def test_winmm_eviction_never_drops_the_freshly_opened_pool():
 # ---------------------------------------------------------------------------
 # 3b. ctypes 边界本体（用假 DLL 验证调用顺序，不需要真声卡）
 # ---------------------------------------------------------------------------
+
 
 def _fake_winmm_dll():
     """waveOut* 的假 DLL：只记录调用顺序/参数，用于验证 Api 层契约。
@@ -437,7 +444,7 @@ def test_winmm_api_writes_pcm_and_reaps_done_headers():
     assert api.pending_count(handle) == 1
     assert api.reap(handle) == 0, "没播完的 buffer 不许回收"
 
-    dll.waveOutReset(handle)                # 模拟驱动置 WHDR_DONE
+    dll.waveOutReset(handle)  # 模拟驱动置 WHDR_DONE
     assert api.reap(handle) == 1
     assert "unprepare" in dll.calls
     assert api.pending_count(handle) == 0
@@ -460,6 +467,7 @@ def test_winmm_api_close_resets_before_unprepare_and_close():
 # ---------------------------------------------------------------------------
 # 3. 音量映射（0 / 0.5 / 1.0）与 set_audio_volume 对齐
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     ("volume", "packed"),
@@ -521,6 +529,7 @@ def test_scale_pcm16_halves_and_clips():
 # ---------------------------------------------------------------------------
 # 4. 回退：不可用 / 打开失败 / 写入失败
 # ---------------------------------------------------------------------------
+
 
 def _qt_fallback_fixture(monkeypatch, pool, tmp_path):
     """把池的 Qt 侧换成可观测替身（wav 走 QSoundEffect）。"""
@@ -585,6 +594,7 @@ def test_winmm_missing_file_is_not_played(tmp_path, monkeypatch):
 # 5. 压缩音频的转码缓存产物走 winmm
 # ---------------------------------------------------------------------------
 
+
 def test_decoded_cache_wav_plays_through_winmm_without_qt(tmp_path, monkeypatch):
     api = FakeWinmmApi()
     pool = click_sound.ClickSoundPool()
@@ -614,9 +624,7 @@ def test_uncached_compressed_audio_keeps_qt_path(tmp_path, monkeypatch):
     monkeypatch.setattr(click_sound, "_sound_cache_dir", lambda: cache_dir)
     from tests.test_click_sound import FakeQtDecoder
 
-    monkeypatch.setattr(
-        pool, "qt_multimedia_classes",
-        lambda: (FakeQtDecoder, FakeQtAudio, FakeQtAudio, FakeQtPlayer, FakeQtEffect))
+    monkeypatch.setattr(pool, "qt_multimedia_classes", lambda: (FakeQtDecoder, FakeQtAudio, FakeQtAudio, FakeQtPlayer, FakeQtEffect))
     monkeypatch.setattr(pool, "_qt_effects", {})
     monkeypatch.setattr(pool, "_qt_player_pool", [])
     monkeypatch.setattr(pool, "_qt_player_index", 0)
@@ -650,6 +658,7 @@ def test_press_sound_with_winmm_does_not_create_qsound_effect(tmp_path, monkeypa
 # ---------------------------------------------------------------------------
 # 6. 非 PCM16 wav：先转标准 wav 缓存再走 winmm
 # ---------------------------------------------------------------------------
+
 
 def test_non_pcm16_wav_converted_to_cache_then_played_by_winmm(tmp_path, monkeypatch):
     api = FakeWinmmApi()
@@ -702,6 +711,7 @@ def test_unreadable_wav_uses_existing_transcode_cache(tmp_path, monkeypatch):
 # 7. 预热：winmm 可用时只预热 winmm 池
 # ---------------------------------------------------------------------------
 
+
 def test_warm_click_sound_effects_prefers_winmm_pool(tmp_path, monkeypatch):
     api = FakeWinmmApi()
     pool = click_sound.ClickSoundPool()
@@ -742,7 +752,7 @@ def test_winmm_pool_gives_up_growing_after_open_failure(tmp_path, monkeypatch):
     assert pool.play(wav, 0.7) is True
     api.fail_open = True
     for _ in range(3):
-        assert pool.play(wav, 0.7) is True    # 全忙 → 试试增长 → 失败 → 排队
+        assert pool.play(wav, 0.7) is True  # 全忙 → 试试增长 → 失败 → 排队
     assert len(api.opened) == 1
     attempts = api.open_calls
     assert pool.play(wav, 0.7) is True
@@ -774,6 +784,7 @@ def test_winmm_reaper_timer_only_created_on_gui_thread(tmp_path):
 # 8. 实机冒烟（有声卡的真机，默认跳过）
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(
     sys.platform != "win32" or os.environ.get("DSH_WINMM_SMOKE") != "1",
     reason="实机发声冒烟：需 Windows 真声卡且显式设 DSH_WINMM_SMOKE=1",
@@ -797,7 +808,7 @@ def test_real_device_smoke_click_wav_and_decoded_duck_mp3(capsys, monkeypatch):
     t_warm = time.perf_counter() - t0
 
     timings = []
-    for _ in range(4):                      # 快速连点：4 路句柄各占一条流
+    for _ in range(4):  # 快速连点：4 路句柄各占一条流
         t0 = time.perf_counter()
         timings.append((pool.play(click, 0.7), (time.perf_counter() - t0) * 1000))
     assert all(ok for ok, _ms in timings), f"click.wav 未播成: {timings}"
@@ -815,12 +826,12 @@ def test_real_device_smoke_click_wav_and_decoded_duck_mp3(capsys, monkeypatch):
         qt_pool.clear()
     assert cache.is_file(), f"duck mp3 未转码出缓存: {cache}"
 
-    pool.warm([cache])                      # 转码产物（48k 立体声）另开一组句柄
+    pool.warm([cache])  # 转码产物（48k 立体声）另开一组句柄
     t0 = time.perf_counter()
     ok_duck = pool.play(cache, 0.7)
     t_duck = (time.perf_counter() - t0) * 1000
 
-    deadline = time.monotonic() + 5.0       # QTimer 兜底回收需要事件循环
+    deadline = time.monotonic() + 5.0  # QTimer 兜底回收需要事件循环
     while pool.pending() and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.02)

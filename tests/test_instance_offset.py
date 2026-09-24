@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """多开实例位置避让（runtime 标记）、spawn offset 与角色名别名测试。"""
+
 from __future__ import annotations
 
 import json
@@ -26,12 +27,15 @@ def test_second_instance_avoids_live_overlap(app, tmp_path):
     win_a = PetWindow(FakeLibrary(), cfg_a)
     rect_a = (win_a.x(), win_a.y(), win_a._w, win_a._h)
     # 模拟"另一个进程"的实例：用存活的父进程 pid 写标记，占位与 win_a 相同
-    marker = cfg_a.dir / f'runtime-{os.getppid()}.json'
-    marker.write_text(json.dumps(
-        {'pid': os.getppid(), 'x': rect_a[0], 'y': rect_a[1], 'w': rect_a[2], 'h': rect_a[3]},
-    ), encoding='utf-8')
+    marker = cfg_a.dir / f"runtime-{os.getppid()}.json"
+    marker.write_text(
+        json.dumps(
+            {"pid": os.getppid(), "x": rect_a[0], "y": rect_a[1], "w": rect_a[2], "h": rect_a[3]},
+        ),
+        encoding="utf-8",
+    )
 
-    cfg_b = Config(base=tmp_path, instance_id='slot-1')
+    cfg_b = Config(base=tmp_path, instance_id="slot-1")
     win_b = PetWindow(FakeLibrary(), cfg_b)
     try:
         # 触发了避让：向左错开（测试环境屏幕较小，一步就顶到左缘也算避让成功）
@@ -46,12 +50,11 @@ def test_runtime_marker_written_and_stale_cleaned(app, tmp_path):
     """实例启动后写入 runtime 标记；死进程的标记被顺手清理。"""
     cfg = Config(base=tmp_path)
     cfg.save()
-    stale = cfg.dir / 'runtime-99999999.json'  # 超出 Windows pid 上限，必死
-    stale.write_text(json.dumps({'pid': 99999999, 'x': 0, 'y': 0, 'w': 100, 'h': 100}),
-                     encoding='utf-8')
+    stale = cfg.dir / "runtime-99999999.json"  # 超出 Windows pid 上限，必死
+    stale.write_text(json.dumps({"pid": 99999999, "x": 0, "y": 0, "w": 100, "h": 100}), encoding="utf-8")
     win = PetWindow(FakeLibrary(), cfg)
     try:
-        own = cfg.dir / f'runtime-{os.getpid()}.json'
+        own = cfg.dir / f"runtime-{os.getpid()}.json"
         assert own.exists()
         assert not stale.exists()
     finally:

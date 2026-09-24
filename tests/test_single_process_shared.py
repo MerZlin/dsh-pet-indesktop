@@ -10,6 +10,7 @@
 flag 关的逐位一致由既有 tests/test_single_process_spawn.py 族保证（本批不弱化、
 只在 __init__ 注入 None → 每窗各自建）。
 """
+
 from __future__ import annotations
 
 import os
@@ -130,8 +131,7 @@ def _make_flag_on_shell(tmp_path):
     config.set("experimental_single_process_spawn", True)
     config.save()
     slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config.dir, preferred_slot=0)
-    shell = AppShell(QApplication.instance(), config, enable_chat=True,
-                     slot_handle=slot_handle, slot_id=slot_id)
+    shell = AppShell(QApplication.instance(), config, enable_chat=True, slot_handle=slot_handle, slot_id=slot_id)
     return shell, config, slot_handle
 
 
@@ -144,6 +144,7 @@ def _make_primary_record_win(shell, config):
 
 def _make_second_record_win(shell, tmp_path, monkeypatch):
     """经 spawn_in_process_window 生成第二实例（独立 slot/Config），窗口为 _RecordWin。"""
+
     def fake_build_window(self, character_id, lib=None, build_tray=True):
         win = _RecordWin()
         win.cfg = self.config
@@ -253,8 +254,7 @@ def test_flag_on_tray_per_window_submenu_exists_and_routes(tmp_path, app, monkey
 
         # 动作路由：点第二窗子菜单的「退出这只」→ _on_window_exit_requested(second)
         exited = []
-        monkeypatch.setattr(shell, "_on_window_exit_requested",
-                            lambda inst: exited.append(inst))
+        monkeypatch.setattr(shell, "_on_window_exit_requested", lambda inst: exited.append(inst))
         exit_act = next(a for a in target_sub.actions() if a.text() == "退出这只")
         exit_act.trigger()
         assert exited == [second], "「退出这只」应路由到本窗实例"
@@ -316,8 +316,7 @@ def test_flag_on_shared_proactive_broadcasts_bubble(tmp_path, app, monkeypatch):
 
         # 共享 proactive watcher：单一实例，限流器绑定主窗 config 目录（全局语义，R8）
         assert isinstance(shell._shared.proactive, SharedProactiveWatcher)
-        assert shell._shared.proactive.limiter.state_path == \
-            (config.dir / "proactive_screen_state.json")
+        assert shell._shared.proactive.limiter.state_path == (config.dir / "proactive_screen_state.json")
 
         # 「我看」先兆气泡只发首个可见窗
         shell._shared.proactive._bridge._forward_bubble("hello", 1000)
@@ -338,10 +337,14 @@ def test_flag_on_hidden_notify_text_non_primary(tmp_path, app, monkeypatch):
         second = _make_second_record_win(shell, tmp_path, monkeypatch)
 
         shown = []
-        tray = type("_FakeTray", (), {
-            "tray": None,
-            "showMessage": lambda self, *a, **k: shown.append((a, k)),
-        })()
+        tray = type(
+            "_FakeTray",
+            (),
+            {
+                "tray": None,
+                "showMessage": lambda self, *a, **k: shown.append((a, k)),
+            },
+        )()
         shell.tray = tray
 
         # 非主窗隐藏：文案指向托盘子菜单
@@ -377,8 +380,7 @@ def test_new_window_receives_link_provider_after_real_build(tmp_path, app, monke
     win = None
     try:
         win = shell.instance._build_window("shenshen", lib=FakeLibrary())
-        assert getattr(win, "_link_next_provider", None) is not None, (
-            "真实建窗路径下新窗必须拿到联动 provider（P1-1 时序回归）")
+        assert getattr(win, "_link_next_provider", None) is not None, "真实建窗路径下新窗必须拿到联动 provider（P1-1 时序回归）"
     finally:
         if win is not None:
             win.close()
@@ -398,8 +400,7 @@ def test_shared_fullscreen_broadcast_respects_per_window_config(tmp_path, app):
     win1 = win2 = None
     try:
         win1 = shell.instance._build_window("shenshen", lib=FakeLibrary())
-        sec = PetInstance(shell, Config(base=tmp_path, instance_id="slot-1"),
-                          enable_chat=True)
+        sec = PetInstance(shell, Config(base=tmp_path, instance_id="slot-1"), enable_chat=True)
         sec.config.set("click_sound_enabled", False)
         sec.config.set("collision_sound_enabled", False)
         shell._instances.append(sec)
@@ -463,14 +464,20 @@ class _AlertRecordWin:
     def show_bubble(self, text, duration_ms=4500, sticky=False, buttons=None):
         self.bubbles.append({"text": str(text), "sticky": bool(sticky), "buttons": buttons})
 
-    def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None, sticky=True,
-                   alert_id="", priority=3, alert_type="watchdog", metadata=None):
-        self.alerts.append({
-            "text": str(text), "subtitle": str(subtitle), "buttons": buttons,
-            "sticky": bool(sticky), "duration_ms": int(duration_ms),
-            "alert_id": str(alert_id), "priority": int(priority),
-            "alert_type": str(alert_type), "metadata": dict(metadata or {}),
-        })
+    def show_alert(self, text, *, subtitle="", duration_ms=0, buttons=None, sticky=True, alert_id="", priority=3, alert_type="watchdog", metadata=None):
+        self.alerts.append(
+            {
+                "text": str(text),
+                "subtitle": str(subtitle),
+                "buttons": buttons,
+                "sticky": bool(sticky),
+                "duration_ms": int(duration_ms),
+                "alert_id": str(alert_id),
+                "priority": int(priority),
+                "alert_type": str(alert_type),
+                "metadata": dict(metadata or {}),
+            }
+        )
 
     def resolve_alert(self, alert_id):
         self.resolved.append(str(alert_id))
@@ -576,9 +583,13 @@ def test_proxy_interaction_approval_buttons_fan_out(tmp_path, app):
     _, mgr = _make_proxy_manager(tmp_path, [w1, w2])
     try:
         mgr._pending_interactions["itest"] = {
-            "kind": "approval", "text": "DSH 请求执行：rm -rf，请选择：",
-            "interactive": True, "rpc_id": "rpc-1", "alert_id": "interaction:itest",
-            "session_id": "s1", "agent_key": "dsh",
+            "kind": "approval",
+            "text": "DSH 请求执行：rm -rf，请选择：",
+            "interactive": True,
+            "rpc_id": "rpc-1",
+            "alert_id": "interaction:itest",
+            "session_id": "s1",
+            "agent_key": "dsh",
         }
         mgr._show_interaction_bubble("itest")
         assert w1.alerts, "审批应经 show_alert 展示（同意/拒绝按钮不丢）"
@@ -690,14 +701,10 @@ def test_shared_watcher_tick_survives_idle_windows(tmp_path, app, monkeypatch):
         probed: list[int] = []
         # 返回 None：守卫之后的第一步（前台窗口信息），且不会触发截图/网络，
         # 该分支只清状态、不产生副作用。
-        monkeypatch.setattr(
-            vision, "foreground_window_info",
-            lambda: (probed.append(1), None)[1])
+        monkeypatch.setattr(vision, "foreground_window_info", lambda: (probed.append(1), None)[1])
 
         watcher._on_tick()
-        assert probed, (
-            "无人交互时 G1 守卫不得拦截——否则共享模式（experimental_"
-            "single_process_spawn=true）下主动识屏永不触发")
+        assert probed, "无人交互时 G1 守卫不得拦截——否则共享模式（experimental_single_process_spawn=true）下主动识屏永不触发"
     finally:
         watcher.stop_all()
 
@@ -716,16 +723,13 @@ def test_flag_on_production_watcher_reads_proxy_sentinel(tmp_path, app, monkeypa
         assert shell._shared is not None, "flag 开必须实例化共享子系统"
         proxy = shell._shared.proxy
         watcher = shell._shared.proactive
-        assert watcher.win is proxy, (
-            "共享 watcher 的 win 必须是代理——G1 守卫就是通过它读聚合态")
+        assert watcher.win is proxy, "共享 watcher 的 win 必须是代理——G1 守卫就是通过它读聚合态"
 
         # 生产形态：真实装配出的 proxy，所有替身窗都不在物理模式
         _make_primary_record_win(shell, config)
         _make_second_record_win(shell, tmp_path, monkeypatch)
         assert len(proxy._windows()) == 2
-        assert proxy._physics_mode is None, (
-            "真实装配下无人拖拽/抛掷时，G1 读到的必须是哨兵 None；"
-            "返回 False 会让 `is not None` 恒真、识屏永不触发")
+        assert proxy._physics_mode is None, "真实装配下无人拖拽/抛掷时，G1 读到的必须是哨兵 None；返回 False 会让 `is not None` 恒真、识屏永不触发"
 
         # 任一窗进入物理模式仍要拦住（聚合语义不能被修复改坏）
         shell.instance.win._physics_mode = "throw"
@@ -739,9 +743,7 @@ def test_flag_on_production_watcher_reads_proxy_sentinel(tmp_path, app, monkeypa
         # _on_tick 只读 effective config（与平台守卫无关），无需 apply_config 起表
         config.set("proactive_screen", {"enabled": True, "whitelist": ["*"]})
         probed: list[int] = []
-        monkeypatch.setattr(
-            vision, "foreground_window_info",
-            lambda: (probed.append(1), None)[1])
+        monkeypatch.setattr(vision, "foreground_window_info", lambda: (probed.append(1), None)[1])
         watcher._on_tick()
         assert probed, "生产装配下 tick 也必须越过 G1 守卫"
     finally:

@@ -7,6 +7,7 @@
 - 终止后必须**确认端口不再监听**才回报 ``stopped``；
 - ``restart`` 只有在停成功（或本来就没跑）时才启动，不制造第二个实例。
 """
+
 from __future__ import annotations
 
 import socket
@@ -87,10 +88,7 @@ def test_listener_pids_finds_real_listener_socket():
                 break
             time.sleep(0.02)
         if not pids:
-            pytest.skip(
-                f"{sys.platform} 上按端口反查监听进程不可用（已安全返回空，"
-                "停止功能会走 not-running/error 的安全分支）"
-            )
+            pytest.skip(f"{sys.platform} 上按端口反查监听进程不可用（已安全返回空，停止功能会走 not-running/error 的安全分支）")
         assert os.getpid() in pids
     finally:
         server.close()
@@ -155,11 +153,13 @@ def test_stop_harness_validates_every_owner_before_terminating_any(monkeypatch):
     monkeypatch.setattr(hl, "is_running", lambda port: True)
     monkeypatch.setattr(hl, "listener_pids", lambda port: [111, 222])
     monkeypatch.setattr(
-        hl, "process_command_line",
+        hl,
+        "process_command_line",
         lambda pid: "node .../dsh/lib/bin.js web" if pid == 111 else "python -m http.server",
     )
     monkeypatch.setattr(
-        hl, "_pid_image_path",
+        hl,
+        "_pid_image_path",
         lambda pid: "node.exe" if pid == 111 else "python.exe",
     )
     terminated: list[int] = []
@@ -206,9 +206,7 @@ def test_stop_harness_reports_error_when_port_survives(monkeypatch):
     """杀完端口还在监听 → 不许报成功（用户以为关了，其实还在跑）。"""
     monkeypatch.setattr(hl, "is_running", lambda port: True)
     monkeypatch.setattr(hl, "listener_pids", lambda port: [13320])
-    monkeypatch.setattr(
-        hl, "process_command_line", lambda pid: "node .../dsh/lib/bin.js web --port 3080"
-    )
+    monkeypatch.setattr(hl, "process_command_line", lambda pid: "node .../dsh/lib/bin.js web --port 3080")
     monkeypatch.setattr(hl, "_pid_image_path", lambda pid: "node.exe")
     monkeypatch.setattr(hl, "_terminate_process_tree", lambda pid: None)
     status, info = hl.stop_harness()
@@ -238,12 +236,11 @@ def test_restart_stops_before_starting(monkeypatch):
 
 def test_restart_does_not_start_when_stop_refused(monkeypatch):
     """端口被非 dsh 进程占用时：不启动第二个实例，把原因原样传给用户。"""
-    monkeypatch.setattr(
-        hl, "stop_harness", lambda port=hl.DEFAULT_PORT: ("not-ours", "端口 3080 不是 dsh")
-    )
+    monkeypatch.setattr(hl, "stop_harness", lambda port=hl.DEFAULT_PORT: ("not-ours", "端口 3080 不是 dsh"))
     launched: list[str] = []
     monkeypatch.setattr(
-        hl, "launch_harness",
+        hl,
+        "launch_harness",
         lambda port=hl.DEFAULT_PORT, *, open_browser=True: launched.append("x") or ("started", ""),
     )
     status, info = hl.restart_harness()
@@ -253,11 +250,10 @@ def test_restart_does_not_start_when_stop_refused(monkeypatch):
 
 
 def test_restart_starts_when_nothing_was_running(monkeypatch):
+    monkeypatch.setattr(hl, "stop_harness", lambda port=hl.DEFAULT_PORT: ("not-running", "本机没有在运行"))
     monkeypatch.setattr(
-        hl, "stop_harness", lambda port=hl.DEFAULT_PORT: ("not-running", "本机没有在运行")
-    )
-    monkeypatch.setattr(
-        hl, "launch_harness",
+        hl,
+        "launch_harness",
         lambda port=hl.DEFAULT_PORT, *, open_browser=True: ("started", "http://127.0.0.1:38080"),
     )
     status, _info = hl.restart_harness()
@@ -266,8 +262,8 @@ def test_restart_starts_when_nothing_was_running(monkeypatch):
 
 # ------------------------------------------------------------ 身份核验细则
 def test_looks_like_harness_requires_both_tokens():
-    assert hl._looks_like_harness(1, "node bin.js web") is False          # 只有 web
-    assert hl._looks_like_harness(1, "node dsh --version") is False       # 只有 dsh
+    assert hl._looks_like_harness(1, "node bin.js web") is False  # 只有 web
+    assert hl._looks_like_harness(1, "node dsh --version") is False  # 只有 dsh
     assert hl._looks_like_harness(1, None) is False
     assert hl._looks_like_harness(1, "") is False
 
@@ -348,7 +344,8 @@ def test_launch_harness_gui_actions_without_confirmation_for_start(monkeypatch):
 
     monkeypatch.setattr(QMessageBox, "exec", fail_exec)
     monkeypatch.setattr(
-        hl, "launch_harness",
+        hl,
+        "launch_harness",
         lambda port=hl.DEFAULT_PORT, *, open_browser=True: ("already", "http://127.0.0.1:3080"),
     )
 
@@ -371,8 +368,12 @@ def test_launch_harness_gui_actions_without_confirmation_for_start(monkeypatch):
 def test_stop_harness_path_is_reachable_from_module_public_names():
     """菜单/上层只依赖这些名字，改名要连测试一起改。"""
     for name in (
-        "stop_harness", "restart_harness", "find_harness_process",
-        "describe_harness_process", "listener_pids", "process_command_line",
+        "stop_harness",
+        "restart_harness",
+        "find_harness_process",
+        "describe_harness_process",
+        "listener_pids",
+        "process_command_line",
     ):
         assert callable(getattr(hl, name)), name
     assert Path(hl.__file__).name == "harness_launcher.py"
@@ -384,9 +385,7 @@ def _menu_labels(menu):
 
 
 def _harness_submenu(menu):
-    action = next(
-        action for action in menu.actions() if action.text() == "DeepSeek Harness"
-    )
+    action = next(action for action in menu.actions() if action.text() == "DeepSeek Harness")
     return action.menu()
 
 
@@ -497,8 +496,7 @@ def test_launch_harness_gui_probes_off_gui_thread(monkeypatch):
         return None
 
     monkeypatch.setattr(hl, "describe_harness_process", fake_probe)
-    monkeypatch.setattr(hl, "_confirm_harness_stop",
-                        lambda parent, target, *, restart: False)
+    monkeypatch.setattr(hl, "_confirm_harness_stop", lambda parent, target, *, restart: False)
 
     class _Pet:
         def show_bubble(self, text, duration=0):
@@ -523,10 +521,8 @@ def test_launch_harness_gui_stop_declined_never_calls_stop(monkeypatch):
     app = QApplication.instance() or QApplication([])
     calls: list[str] = []
     monkeypatch.setattr(hl, "describe_harness_process", lambda: None)
-    monkeypatch.setattr(hl, "_confirm_harness_stop",
-                        lambda parent, target, *, restart: False)
-    monkeypatch.setattr(hl, "stop_harness",
-                        lambda port=hl.DEFAULT_PORT: calls.append("stop") or ("stopped", "ok"))
+    monkeypatch.setattr(hl, "_confirm_harness_stop", lambda parent, target, *, restart: False)
+    monkeypatch.setattr(hl, "stop_harness", lambda port=hl.DEFAULT_PORT: calls.append("stop") or ("stopped", "ok"))
 
     class _Pet:
         def show_bubble(self, text, duration=0):
@@ -553,8 +549,7 @@ def test_launch_harness_gui_stop_confirmed_runs_in_worker(monkeypatch):
     stop_threads: list = []
     bubbles: list[str] = []
     monkeypatch.setattr(hl, "describe_harness_process", lambda: None)
-    monkeypatch.setattr(hl, "_confirm_harness_stop",
-                        lambda parent, target, *, restart: True)
+    monkeypatch.setattr(hl, "_confirm_harness_stop", lambda parent, target, *, restart: True)
 
     def fake_stop(port=hl.DEFAULT_PORT):
         stop_threads.append(threading.current_thread())
@@ -591,13 +586,9 @@ def test_launch_harness_gui_confirm_raises_does_not_hang_worker(monkeypatch):
 
     monkeypatch.setattr(hl, "_confirm_harness_stop", boom)
     criticals: list[str] = []
-    monkeypatch.setattr(
-        QMessageBox, "critical",
-        lambda *a, **k: criticals.append(str(a[-1]) if a else ""))
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: criticals.append(str(a[-1]) if a else ""))
     stops: list = []
-    monkeypatch.setattr(
-        hl, "stop_harness",
-        lambda port=hl.DEFAULT_PORT: stops.append(1) or ("stopped", "ok"))
+    monkeypatch.setattr(hl, "stop_harness", lambda port=hl.DEFAULT_PORT: stops.append(1) or ("stopped", "ok"))
 
     class _Pet:
         def show_bubble(self, text, duration=0):
@@ -612,11 +603,14 @@ def test_launch_harness_gui_confirm_raises_does_not_hang_worker(monkeypatch):
     assert "parent destroyed" in criticals[0]
     assert stops == [], "确认框异常时不得执行停止"
     del app
+
+
 # ------------------------------------------------------------ POSIX 进程树终止（复审 P1）
 
 # 本文件 autouse fixture 把 hl._terminate_process_tree 打桩成 no-op（破坏性边界），
 # 这里在导入期（fixture 应用前）存下真函数，本组用例显式换回去。
 _REAL_TERMINATE_PROCESS_TREE = hl._terminate_process_tree
+
 
 def _patch_posix(monkeypatch, calls, *, pgid=4321, own_pgrp=9999):
     """命名空间级假 os/signal：只换本函数用到的成员，不动全局 os.name
@@ -624,13 +618,17 @@ def _patch_posix(monkeypatch, calls, *, pgid=4321, own_pgrp=9999):
     SIGKILL，钉一个带齐常量的假 signal（sig 用 15/9 断言）。"""
     import types
 
-    monkeypatch.setattr(hl, "os", types.SimpleNamespace(
-        name="posix",
-        getpgid=lambda pid: pgid,
-        getpgrp=lambda: own_pgrp,
-        killpg=lambda pg, sig: calls.append(("pg", pg, sig)),
-        kill=lambda pid, sig: calls.append(("kill", pid, sig)),
-    ))
+    monkeypatch.setattr(
+        hl,
+        "os",
+        types.SimpleNamespace(
+            name="posix",
+            getpgid=lambda pid: pgid,
+            getpgrp=lambda: own_pgrp,
+            killpg=lambda pg, sig: calls.append(("pg", pg, sig)),
+            kill=lambda pid, sig: calls.append(("kill", pid, sig)),
+        ),
+    )
     monkeypatch.setattr(hl, "signal", types.SimpleNamespace(SIGTERM=15, SIGKILL=9))
 
 

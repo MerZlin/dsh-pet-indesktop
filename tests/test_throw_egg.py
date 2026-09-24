@@ -5,6 +5,7 @@
 低速碰桌宠恢复、高速不恢复、_stop_physics 兜底、end 幂等与重 arm；
 批 F：恢复阈值提到 780 且按用户要求移除飞行时间硬上限。
 """
+
 from __future__ import annotations
 
 import pytest

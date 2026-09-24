@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """window_effects 纯几何助手测试。"""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QRect
@@ -25,6 +26,6 @@ def test_rotated_region_bounds_45_degrees_square_grows():
     # 同心正方形绕中心转 45°，外接 bbox 宽高约 = 边长 × √2。
     pivot = QRect(0, 0, 200, 200)
     bounds = rotated_region_bounds(QRect(50, 50, 100, 100), pivot, 45.0)
-    expected = round(100 * 2 ** 0.5)
+    expected = round(100 * 2**0.5)
     assert abs(bounds.width() - expected) <= 2
     assert abs(bounds.height() - expected) <= 2
