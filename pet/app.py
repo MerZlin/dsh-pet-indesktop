@@ -55,12 +55,21 @@ from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .session_watcher import install_session_watcher
 from .collision_ipc import CollisionIpcSession
+from .content.registry import CharacterRegistry
 from .decode_fanout import DecodeFanoutHub
 from .festival_service import FestivalReminderService
 from .todo_reminder import TodoReminderService
 from .voice_chime_service import VoiceChimeService
 from .dsh_state import DshStateTracker
 from .persona_phrases import PhrasePicker
+from .plugins import (
+    ContentProviderRegistry,
+    FESTIVAL_MANIFEST,
+    FestivalReminderPlugin,
+    PluginRegistry,
+    PresentationPort,
+    SchedulerPort,
+)
 
 
 _persona_pickers = weakref.WeakKeyDictionary()
@@ -1086,6 +1095,11 @@ class AppShell:
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
         self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
+        # Phase 2：插件运行时在 UI 创建前完成 manifest/factory 发现，但不启动插件。
+        # 资源 provider 复用 Phase 1 CharacterRegistry；in-process 插件只能通过
+        # PresentationPort/SchedulerPort 等受限门面访问 Core。
+        self.plugin_registry = self._build_plugin_registry()
+        self.plugin_registry.discover()
         # 待办提醒：进程级单例（多窗共用一个调度器，避免每窗一个定时器重复通知），
         # Phase 1 门控：默认懒创建——配置关闭时不构造、不跑 30s 定时器；关闭且
         # 无面板打开时释放。win 引用在服务 tick 时经本类 win 属性动态读主窗，
@@ -1376,23 +1390,142 @@ class AppShell:
                 logging.exception("停止语音报时服务失败")
             self.voice_chime_service = None
 
+    # ------------------------------------------------------------ 插件运行时 / Core 服务端口
+    def _build_plugin_registry(self) -> PluginRegistry:
+        """创建本 AppShell 的 Phase 2 插件运行时。
+
+        这里仅注册官方内置 factory；未知来源的 Python entrypoint 不会在本阶段
+        被扫描或执行。资源 provider 与 Phase 1 共用，避免 Core 出现第二套角色扫描。
+        """
+        presentation = PresentationPort(
+            show_bubble=self._plugin_show_bubble,
+            notify=self._plugin_notify,
+            speak=self._plugin_speak,
+        )
+        registry = PluginRegistry(
+            config=self.config,
+            presentation=presentation,
+            scheduler=SchedulerPort(),
+            content=ContentProviderRegistry(CharacterRegistry()),
+        )
+        registry.register_builtin(FESTIVAL_MANIFEST, FestivalReminderPlugin, enabled=False)
+        return registry
+
+    def _plugin_show_bubble(
+        self,
+        text: str,
+        *,
+        duration_ms: int = 12_000,
+        subtitle: str = "",
+        pet_scale: float | None = None,
+    ) -> bool:
+        """给官方插件提供不暴露 PetWindow 的基础气泡原语。"""
+        del pet_scale  # 当前 PetWindow.show_bubble 自己读取窗口缩放；端口保留字段。
+        win = getattr(self, "win", None)
+        if win is None:
+            return False
+        try:
+            if not win.isVisible() or bool(getattr(win, "_bubble_suppressed", False)):
+                return False
+            win.show_bubble(str(text), int(duration_ms), subtitle=str(subtitle or ""))
+            return True
+        except Exception:
+            logging.exception("插件气泡展示失败")
+            return False
+
+    def _plugin_notify(
+        self,
+        title: str,
+        message: str,
+        *,
+        on_click=None,
+        duration_ms: int = 5000,
+    ) -> bool:
+        """给插件提供系统通知降级端口。"""
+        try:
+            self.system_notify(
+                str(title),
+                str(message),
+                on_click=on_click,
+                duration_ms=int(duration_ms),
+            )
+            return True
+        except Exception:
+            logging.exception("插件系统通知展示失败")
+            return False
+
+    def _plugin_speak(self, text: str, *, log_tag: str = "插件") -> bool:
+        """给插件提供统一音频时隙入口，不暴露 VoiceChimeService 实例。"""
+        try:
+            channel = self.ensure_audio_channel()
+            if channel is None:
+                return False
+            channel.speak(str(text), log_tag=str(log_tag))
+            return True
+        except Exception:
+            logging.exception("插件语音播报失败")
+            return False
+
     # ------------------------------------------------------------ 功能门控（节日提醒）
     def _festival_wanted(self) -> bool:
         # 总开关默认关闭：主动打扰型功能，升级后不应突然冒出来。
         return bool(self.config.get("festival_reminder_enabled", False))
 
     def _ensure_festival_service(self):
-        """懒创建节日提醒服务（仅在开启提醒/手动触发时创建）。"""
+        """懒创建节日提醒服务（仅在开启提醒/手动触发时创建）。
+
+        兼容 facade 仍暴露 ``festival_service``，但真实实例来自官方插件
+        factory；只有 runtime 尚未建立时才走旧的直接构造兜底。
+        """
         if getattr(self, "festival_service", None) is None:
-            self.festival_service = FestivalReminderService(self)
+            registry = getattr(self, "plugin_registry", None)
+            if registry is not None:
+                instance = registry.ensure_instance(FESTIVAL_MANIFEST.id)
+                service = getattr(instance, "service", None) if instance is not None else None
+                if service is not None:
+                    self.festival_service = service
+            if getattr(self, "festival_service", None) is None:
+                self.festival_service = FestivalReminderService(self)
         return self.festival_service
 
     def _sync_festival_service(self) -> None:
-        """按配置启停节日提醒服务；关闭时释放服务对象。"""
+        """按配置启停官方节日提醒插件；关闭时释放其服务与端口。"""
+        registry = getattr(self, "plugin_registry", None)
+        if registry is not None:
+            if self._festival_wanted():
+                self._ensure_festival_service()
+                registry.enable(FESTIVAL_MANIFEST.id)
+                registry.start(FESTIVAL_MANIFEST.id)
+                instance = registry.get_instance(FESTIVAL_MANIFEST.id)
+                service = getattr(instance, "service", None) if instance is not None else None
+                if service is not None:
+                    self.festival_service = service
+                elif getattr(self, "festival_service", None) is not None:
+                    # factory/runtime 失败时保留兼容服务，避免设置保存阻塞 Core。
+                    self.festival_service.start()
+            else:
+                # registry 负责停止真正的官方插件；若 factory 曾失败并留下兼容
+                # 直构服务，则它不在 Registry 中，必须单独 stop，不能因清空 facade
+                # 引用而遗留一个无主 QTimer。
+                current_service = getattr(self, "festival_service", None)
+                runtime_instance = registry.get_instance(FESTIVAL_MANIFEST.id)
+                runtime_service = getattr(runtime_instance, "service", None) if runtime_instance is not None else None
+                registry.disable(FESTIVAL_MANIFEST.id)
+                if current_service is not None and current_service is not runtime_service:
+                    try:
+                        current_service.stop()
+                    except Exception:
+                        logging.exception("停止兼容节日提醒服务失败")
+                self.festival_service = None
+            # 节日语音复用报时服务的音频通道：本开关变化会改变"通道是否需要存在"，
+            # 故必须连带同步通道生命周期（关掉节日语音后若报时也关，通道应释放）。
+            self._sync_chime_service()
+            return
+
+        # 旧测试桩/极简宿主没有插件 runtime 时继续保留原始路径。
         if self._festival_wanted():
             service = self._ensure_festival_service()
             if service.is_running():
-                # 已在运行：设置保存只刷新配置，不重置 tick。
                 service.apply_config()
             else:
                 service.start()
@@ -1402,8 +1535,6 @@ class AppShell:
             except Exception:
                 logging.exception("停止节日提醒服务失败")
             self.festival_service = None
-        # 节日语音复用报时服务的音频通道：本开关变化会改变"通道是否需要存在"，
-        # 故必须连带同步通道生命周期（关掉节日语音后若报时也关，通道应释放）。
         self._sync_chime_service()
 
     # ------------------------------------------------------------ 设置进程隔离
@@ -1424,6 +1555,13 @@ class AppShell:
         self._sync_todo_service()
         self._sync_chime_service()
         self._sync_festival_service()
+        registry = getattr(self, "plugin_registry", None)
+        if registry is not None:
+            registry.publish_event(
+                "core.config.changed",
+                source="core.config",
+                payload={"instance_id": getattr(self.config, "instance_id", "")},
+            )
         for inst in getattr(self, "_instances", []):
             prewarm = getattr(inst, "_sync_animation_prewarm", None)
             if callable(prewarm):
@@ -1696,6 +1834,10 @@ class AppShell:
         # "本分钟是否让位"。顺序反了会出现"报时先响、节日后响"从而两者都出声。
         self._sync_festival_service()
         self._sync_chime_service()
+        registry = getattr(self, "plugin_registry", None)
+        if registry is not None:
+            registry.start_all()
+            registry.publish_event("core.app.started", source="core.app", payload={})
         # 设置页进程隔离：启动即装 config 目录 watcher，独立设置进程落盘后由它
         # 合并进运行期（开关关闭时不装，完全走旧路径）。
         self._install_config_watcher()
@@ -1954,6 +2096,35 @@ class AppShell:
             except Exception:
                 logging.exception("退出时关闭灵动岛对话气泡失败")
             self.island_chat = None
+        # Phase 2：先通知并停止插件，取消其事件订阅、定时器和命令；
+        # 之后再释放 Core 级音频/待办等服务，避免插件回调触碰正在析构的窗口。
+        registry = getattr(self, "plugin_registry", None)
+        compatibility_festival_service = getattr(self, "festival_service", None)
+        runtime_instance = (
+            registry.get_instance(FESTIVAL_MANIFEST.id)
+            if registry is not None
+            else None
+        )
+        runtime_festival_service = (
+            getattr(runtime_instance, "service", None)
+            if runtime_instance is not None
+            else None
+        )
+        if registry is not None:
+            try:
+                registry.publish_event("core.app.shutdown_requested", source="core.app", payload={})
+                registry.stop_all()
+            except Exception:
+                logging.exception("退出时停止插件运行时失败")
+        if (
+            compatibility_festival_service is not None
+            and compatibility_festival_service is not runtime_festival_service
+        ):
+            try:
+                compatibility_festival_service.stop()
+            except Exception:
+                logging.exception("退出时停止兼容节日提醒服务失败")
+        self.festival_service = None
         # 会话异步写盘（B8）：全部会话已保存，再永久关闭写盘 worker
         #（关掉后迟到的 queued 回调提交会被明确拒绝）。
         if self.todo_service is not None:
@@ -2018,6 +2189,32 @@ class AppShell:
                     shell.todo_service = None
                 if getattr(shell, "_shared", None) is not None:
                     shell._shared.stop_all()
+                registry = getattr(shell, "plugin_registry", None)
+                compatibility_festival_service = getattr(shell, "festival_service", None)
+                runtime_instance = (
+                    registry.get_instance(FESTIVAL_MANIFEST.id)
+                    if registry is not None
+                    else None
+                )
+                runtime_festival_service = (
+                    getattr(runtime_instance, "service", None)
+                    if runtime_instance is not None
+                    else None
+                )
+                if registry is not None:
+                    try:
+                        registry.stop_all()
+                    except Exception:
+                        logging.debug("测试收口插件运行时失败", exc_info=True)
+                if (
+                    compatibility_festival_service is not None
+                    and compatibility_festival_service is not runtime_festival_service
+                ):
+                    try:
+                        compatibility_festival_service.stop()
+                    except Exception:
+                        logging.debug("测试收口兼容节日提醒服务失败", exc_info=True)
+                shell.festival_service = None
                 service = getattr(shell, "voice_chime_service", None)
                 if service is not None:
                     try:

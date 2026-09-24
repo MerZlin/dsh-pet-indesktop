@@ -837,6 +837,8 @@ class Config:
             # 进程退出，OS 连锅端走首开留下的字体/样式/模块高水位（无卸载 API）；
             # False = 完全回退进程内对话框旧路径（排障/回退保险，不新增控件）。
             "settings_process_isolation": True,
+            # Phase 2 插件配置隔离：插件只通过 PluginConfigStore 访问自己的命名空间。
+            "plugins": {},
             "chat": _default_chat_data(),
         }
         self.reload()
@@ -934,6 +936,13 @@ class Config:
         previous_providers = previous_chat.get("providers") if isinstance(previous_chat, dict) else None
         merged_chat = _merge_chat_data(merged)
         self.data["chat"] = merged_chat
+        # 插件配置不是旧版白名单字段；重载时必须原样保留，避免独立设置进程
+        # 或外部 watcher 合并配置后把 plugins.<plugin_id> 静默抹掉。
+        raw_plugins = raw.get("plugins")
+        if isinstance(raw_plugins, dict):
+            self.data["plugins"] = copy.deepcopy(raw_plugins)
+        elif not isinstance(self.data.get("plugins"), dict):
+            self.data["plugins"] = {}
         if isinstance(previous_providers, dict):
             raw_providers = merged.get("providers")
             raw_providers = raw_providers if isinstance(raw_providers, dict) else {}
@@ -1075,6 +1084,7 @@ class Config:
             "experimental_single_process_spawn",
             "experimental_shared_decode",
             "settings_process_isolation",
+            "plugins",
         ):
             if key in raw and raw[key] is not None:
                 self.data[key] = raw[key]

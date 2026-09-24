@@ -155,6 +155,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "voice_chime_custom_quotes_zh",
         "voice_chime_voice",
         "voice_chime_volume",
+        "plugins",
     }
 )
 
@@ -166,7 +167,7 @@ SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "ch
 # 2026-09-17 加入 music_player_paths（交付前审查 P1-3 登记）。
 # 2026-09-22 加入点击台词朗读 / 台词本地语音预缓存 / 自言自语配图概率 3 键
 # （self_talk_speak_enabled、self_talk_voice_precache_enabled、self_talk_image_chance）
-# 后实测：白名单字面量 123 + 特例 5 = 128。
+# 后实测：白名单字面量 124 + 特例 5 = 129。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 
