@@ -27,7 +27,7 @@ def _section_titles(dialog):
 
     titles = []
     for section in dialog.findChildren(SettingsSection):
-        labels = [l.text() for l in section.findChildren(QLabel) if l.text()]
+        labels = [label.text() for label in section.findChildren(QLabel) if label.text()]
         if labels:
             titles.append(labels[0])  # 每个分组的第一个 QLabel 即分组标题
     return titles

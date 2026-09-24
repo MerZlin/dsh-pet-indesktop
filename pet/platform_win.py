@@ -149,7 +149,7 @@ _FS_SKIP_CLASSES = {
 _FS_SKIP_PROCS = {"pixpin.exe", "snipaste.exe"}
 
 
-def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float, geom, has_caption: bool, topmost: bool = False) -> bool:
+def _fullscreen_geometry_hit(left: float, t: float, r: float, b: float, geom, has_caption: bool, topmost: bool = False) -> bool:
     """覆盖整屏几何，且（无标题栏 或 置顶）= 真全屏。
 
     判据组合的原因：
@@ -167,7 +167,7 @@ def _fullscreen_geometry_hit(l: float, t: float, r: float, b: float, geom, has_c
     gt = geom.top() if callable(getattr(geom, "top", None)) else geom.top
     gr = geom.right() if callable(getattr(geom, "right", None)) else geom.right
     gb = geom.bottom() if callable(getattr(geom, "bottom", None)) else geom.bottom
-    return l <= gl and t <= gt and r >= gr and b >= gb
+    return left <= gl and t <= gt and r >= gr and b >= gb
 
 
 def _fs_user_busy_state() -> tuple[bool, int]:

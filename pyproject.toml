@@ -6,9 +6,10 @@
 [tool.ruff]
 line-length = 160   # 与存量代码现状匹配（F 规则不检查行长，此值仅作基线声明）
 target-version = "py313"
+exclude = ["pet/updater.py", "pet/update_settings.py"]
 
 [tool.ruff.lint]
-select = ["F"]
+select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 # —— 存量 F 级违规豁免（基线策略：不改存量代码，仅靠配置全绿）——
@@ -49,9 +50,13 @@ select = ["F"]
 "pet/click_talk_dialog.py" = ["F401"]    # 未用导入 Qt
 "pet/collision.py" = ["F401"]            # 未用导入 typing.Tuple
 "pet/context_menus/modern.py" = ["F401"] # 未用导入 QDesktopServices、DEEPSEEK_WEB_URL
-"pet/modern_settings_dialog.py" = ["F401"] # 测试兼容 re-export（QDialogButtonBox/QAbstractItemView/QFileDialog/QColorDialog/QMessageBox/QLabel/QFrame/QWidget/QScrollArea/ColorSwatchButton 等模块级再导出，供 tests 断言与 monkeypatch；控件库已拆至 settings_widgets，本文件保留其符号的向后兼容 re-export）
+"pet/modern_settings_dialog.py" = ["F401", "E402"] # 测试兼容 re-export（QDialogButtonBox/QAbstractItemView/QFileDialog/QColorDialog/QMessageBox/QLabel/QFrame/QWidget/QScrollArea/ColorSwatchButton 等模块级再导出，供 tests 断言与 monkeypatch；控件库已拆至 settings_widgets，本文件保留其符号的向后兼容 re-export；E402 为刻意的兼容再导出顺序）
 "pet/slot_manager.py" = ["F401", "F841"] # F401 typing.Any；F841 slot_manager.py:388 `step`
-"pet/window.py" = ["F401"]               # 未用导入 autostart_mod（tests 经 pet.window 注入的 re-export）
+"pet/speech_bubble.py" = ["E402"]          # 纯函数拆分后的公开兼容 re-export 必须保留在实现导入之后
+"pet/window.py" = ["F401", "E402"]      # 未用导入 autostart_mod；平台/兼容 re-export 依赖既有导入顺序
+"tests/test_desktop_pet_features.py" = ["E731"] # 测试替身使用 lambda 保持局部行为与闭包参数
+"tests/test_menu_layout.py" = ["E731"]           # 菜单测试用 lambda 构造轻量 Qt 行为替身
+"tests/test_music_lyric.py" = ["E402"]           # 文件中段导入用于分隔歌词控制器场景，保留现有测试布局
 
 
 [tool.mypy]

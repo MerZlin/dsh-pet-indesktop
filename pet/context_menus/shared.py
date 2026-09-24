@@ -255,7 +255,7 @@ def build_animation_categories(
         if icons:
             submenu.setIcon(vector_menu_icon(menu, "play"))
         # 首次展开该分类子菜单时才填充动作：根菜单构建不再遍历 91 个动画
-        submenu.aboutToShow.connect(lambda s=submenu, e=entries, c=callback, l=leaf_role_icons, p=pet: _populate_animation_category(s, p, e, c, l))
+        submenu.aboutToShow.connect(lambda s=submenu, e=entries, c=callback, icons=leaf_role_icons, p=pet: _populate_animation_category(s, p, e, c, icons))
 
 
 def build_speed_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:

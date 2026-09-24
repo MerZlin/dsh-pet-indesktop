@@ -48,8 +48,8 @@ def main() -> int:
     wins = enum_windows(pid)
     print(f"PID {pid} 的顶层窗口数: {len(wins)}")
     for w in wins:
-        l, t, r, b = w["rect"]
-        print(f"  hwnd={w['hwnd']:#x} rect=({l},{t},{r},{b}) 尺寸={r - l}x{b - t} visible={w['visible']} exstyle={w['exstyle']:#x}")
+        left, t, r, b = w["rect"]
+        print(f"  hwnd={w['hwnd']:#x} rect=({left},{t},{r},{b}) 尺寸={r - left}x{b - t} visible={w['visible']} exstyle={w['exstyle']:#x}")
         # WS_EX_LAYERED=0x80000, WS_EX_TOOLWINDOW=0x80, WS_EX_TRANSPARENT=0x20
         if w["exstyle"] & 0x80000:
             print("    → 含 WS_EX_LAYERED（分层/透明窗口）")
