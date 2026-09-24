@@ -10,9 +10,8 @@ import pytest
 
 from pet import catalog
 from pet.content import CharacterRegistry, ContentError, ContentManager
-from pet.content.hashing import content_sha256, validate_zip_members
 from pet.content import paths as content_paths
-
+from pet.content.hashing import content_sha256, validate_zip_members
 
 ROOT = Path(__file__).resolve().parents[1]
 STARTER = ROOT / "content" / "characters" / "shenshen"

@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from pet.config import Config
 from pet.plugins import (
+    FESTIVAL_MANIFEST,
     CapabilityDenied,
     CommandRegistry,
     ContentProviderRegistry,
     CoreEvent,
     CoreEventBus,
-    FESTIVAL_MANIFEST,
     FestivalReminderPlugin,
     PluginConfigStore,
     PluginManifest,

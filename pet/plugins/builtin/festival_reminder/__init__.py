@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from ....festival_service import FestivalReminderService
 from ...config import FESTIVAL_LEGACY_CONFIG_MAP
 from ...events import CoreEvent
-from ....festival_service import FestivalReminderService
 from ...manifest import PluginManifest
 
 FESTIVAL_PLUGIN_ID = "official.festival-reminder"

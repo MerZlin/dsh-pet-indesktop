@@ -31,46 +31,42 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import shiboken6
-from PySide6.QtCore import QObject, QPoint, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon, QWidget
 
 from . import autostart as autostart_mod
 from . import balance as balance_mod
-from . import catalog
-from . import click_sound
-from . import self_talk_voice
+from . import catalog, click_sound, self_talk_voice, updater
 from . import slot_manager as slot_manager_mod
-from . import updater
 from . import webm_clip as webm_clip_mod
+from .collision_ipc import CollisionIpcSession
 from .config import APP_DIR_NAME, Config, _default_base
+from .content.registry import CharacterRegistry
 from .context_menus.icons import vector_menu_icon
 from .context_menus.shared import open_deepseek_web
+from .decode_fanout import DecodeFanoutHub
 from .desktop_notify import DesktopNotification, position_stack
+from .dsh_state import DshStateTracker
+from .festival_service import FestivalReminderService
+from .fun_image_popup import restore_ojingjing_windows
 from .harness_launcher import launch_harness_gui
 from .instance_launcher import launch_new_pet
 from .library import MovieLibrary
-from .window import PetWindow
-from .fun_image_popup import restore_ojingjing_windows
-from .runtime_cleanup import cleanup_stale_runtime_dirs
-from .session_watcher import install_session_watcher
-from .collision_ipc import CollisionIpcSession
-from .content.registry import CharacterRegistry
-from .decode_fanout import DecodeFanoutHub
-from .festival_service import FestivalReminderService
-from .todo_reminder import TodoReminderService
-from .voice_chime_service import VoiceChimeService
-from .dsh_state import DshStateTracker
 from .persona_phrases import PhrasePicker
 from .plugins import (
-    ContentProviderRegistry,
     FESTIVAL_MANIFEST,
+    ContentProviderRegistry,
     FestivalReminderPlugin,
     PluginRegistry,
     PresentationPort,
     SchedulerPort,
 )
-
+from .runtime_cleanup import cleanup_stale_runtime_dirs
+from .session_watcher import install_session_watcher
+from .todo_reminder import TodoReminderService
+from .voice_chime_service import VoiceChimeService
+from .window import PetWindow
 
 _persona_pickers = weakref.WeakKeyDictionary()
 

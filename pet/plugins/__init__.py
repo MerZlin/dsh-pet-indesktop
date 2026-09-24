@@ -1,5 +1,6 @@
 """Core 官方插件运行时公开 API。"""
 
+from .builtin.festival_reminder import FESTIVAL_MANIFEST, FESTIVAL_PLUGIN_ID, FestivalReminderPlugin
 from .capabilities import CapabilityDenied, CapabilitySet
 from .config import FESTIVAL_LEGACY_CONFIG_MAP, PluginConfigError, PluginConfigStore
 from .events import CoreEvent, CoreEventBus, ScopedEventBus, Subscription
@@ -22,7 +23,6 @@ from .runtime import (
     PluginRecord,
     PluginRegistry,
 )
-from .builtin.festival_reminder import FESTIVAL_MANIFEST, FESTIVAL_PLUGIN_ID, FestivalReminderPlugin
 
 __all__ = [
     "CapabilityDenied",

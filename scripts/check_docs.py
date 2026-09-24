@@ -75,7 +75,6 @@ def check_links(root: Path) -> list[BrokenLink]:
     root = root.resolve()
     for source in iter_markdown_files(root):
         text = source.read_text(encoding="utf-8")
-        lines = text.splitlines()
         for match in LINK_RE.finditer(text):
             target = match.group(1) or match.group(2) or ""
             target_path = _target_path(source, target)

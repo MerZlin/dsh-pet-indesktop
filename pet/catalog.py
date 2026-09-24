@@ -11,11 +11,9 @@ assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）。
 """
 
 import functools
+import json
 import os
 import sys
-
-import json
-
 from pathlib import Path
 
 # ---------------------------------------------------------------- 画布几何

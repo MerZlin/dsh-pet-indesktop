@@ -21,7 +21,6 @@ from .report_gates import (
     clean_report_gates,
 )
 
-
 DEFAULT_ANIMATION_GAP_SECONDS = 0.0
 DEFAULT_SELF_TALK_MIN_INTERVAL = 20.0
 DEFAULT_SELF_TALK_MAX_INTERVAL = 60.0
