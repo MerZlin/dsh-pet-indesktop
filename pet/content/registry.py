@@ -191,12 +191,16 @@ class CharacterRegistry:
     def list_available(self) -> list[CharacterPackage]:
         if self._cache is None:
             self.scan()
-        return [self._cache[key] for key in sorted(self._cache)]
+        cache = self._cache
+        if cache is None:
+            return []
+        return [cache[key] for key in sorted(cache)]
 
     def get(self, character_id: str) -> CharacterPackage | None:
         if self._cache is None:
             self.scan()
-        return self._cache.get(character_id)
+        cache = self._cache
+        return cache.get(character_id) if cache is not None else None
 
     def resolve(self, character_id: str) -> CharacterPackage | None:
         return self.get(character_id)

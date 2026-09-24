@@ -376,10 +376,10 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
     clicks: list[str] = []
     drag = None
 
+    by_folder: dict[str, list[str]] = {}
     if folder_files is not None:
-        by_folder: dict[str, list[str]] = {k: list(v) for k, v in folder_files.items()}
+        by_folder = {k: list(v) for k, v in folder_files.items()}
     elif folder_map:
-        by_folder: dict[str, list[str]] = {}
         for name in names:
             by_folder.setdefault(folder_map.get(name, ""), []).append(name)
     else:

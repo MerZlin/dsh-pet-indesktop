@@ -24,16 +24,16 @@ def main(argv: list[str] | None = None) -> int:
     manager = ContentManager()
 
     if args.command == "validate":
-        result = manager.validate(args.path, allow_unsigned=args.allow_unsigned)
-        print("valid" if result.valid else "invalid")
-        if result.manifest:
-            print(f"{result.manifest.plugin_id}@{result.manifest.version}")
-        for error in result.errors:
+        validation = manager.validate(args.path, allow_unsigned=args.allow_unsigned)
+        print("valid" if validation.valid else "invalid")
+        if validation.manifest:
+            print(f"{validation.manifest.plugin_id}@{validation.manifest.version}")
+        for error in validation.errors:
             print(f"error: {error}")
-        return 0 if result.valid else 1
+        return 0 if validation.valid else 1
     if args.command == "install":
-        result = manager.install(args.path, allow_unsigned=args.allow_unsigned)
-        print(f"installed {result.plugin_id}@{result.version} active={result.activated}")
+        installation = manager.install(args.path, allow_unsigned=args.allow_unsigned)
+        print(f"installed {installation.plugin_id}@{installation.version} active={installation.activated}")
         return 0
     if args.command == "list":
         for package in manager.discover():

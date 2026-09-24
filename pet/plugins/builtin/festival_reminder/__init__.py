@@ -8,6 +8,7 @@ from ....festival_service import FestivalReminderService
 from ...config import FESTIVAL_LEGACY_CONFIG_MAP
 from ...events import CoreEvent
 from ...manifest import PluginManifest
+from ...ports import CommandHandle
 
 FESTIVAL_PLUGIN_ID = "official.festival-reminder"
 FESTIVAL_MANIFEST = PluginManifest(
@@ -47,7 +48,7 @@ class FestivalReminderPlugin:
             config_source=context.config,
         )
         self._config_subscription = None
-        self._command_handles = []
+        self._command_handles: list[CommandHandle] = []
 
     def start(self) -> None:
         self.service.start()

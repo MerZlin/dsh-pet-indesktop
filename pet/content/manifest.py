@@ -42,7 +42,8 @@ def _semver(value: str) -> tuple[int, int, int]:
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)", value)
     if not match:
         raise ValueError(value)
-    return tuple(int(part) for part in match.groups())
+    groups = match.groups()
+    return int(groups[0]), int(groups[1]), int(groups[2])
 
 
 def _version_satisfies(version: str, requirement: str) -> bool:

@@ -11,7 +11,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import catalog
 from .report_gates import (
@@ -37,7 +37,7 @@ DEFAULT_SELF_TALK_BUBBLE_STYLE = "classic_top"
 # 抽一条。默认 30%——图片目录常有几十张图，若与文本等权随机会让图片彻底压过文本
 # （实测某配置 24 图 + 5 句 → 出图 82.8%，点击几乎总是弹图）。
 DEFAULT_SELF_TALK_IMAGE_CHANCE = 30
-DEFAULT_DIALOGUE_PHRASES = {}
+DEFAULT_DIALOGUE_PHRASES: dict[str, str | list[str]] = {}
 DEFAULT_COLLISION_SETTINGS = {
     "collision_enabled": True,
     "collision_restitution": 0.82,
@@ -182,8 +182,8 @@ def _normalize_fun_asset_path(candidate: str, default: str) -> str:
 def _clean_menu_easter_egg(value):
     value = value if isinstance(value, dict) else {}
     defaults = DEFAULT_MENU_EASTER_EGG
-    avatar = _normalize_fun_asset_path(str(value.get("avatar") or defaults["avatar"]).strip()[:500], defaults["avatar"])
-    image_dir = _normalize_fun_asset_path(str(value.get("image_dir") or defaults["image_dir"]).strip()[:500], defaults["image_dir"])
+    avatar = _normalize_fun_asset_path(str(value.get("avatar") or defaults["avatar"]).strip()[:500], str(defaults["avatar"]))
+    image_dir = _normalize_fun_asset_path(str(value.get("image_dir") or defaults["image_dir"]).strip()[:500], str(defaults["image_dir"]))
     return {
         "enabled": bool(value.get("enabled", defaults["enabled"])),
         "title": str(value.get("title") or defaults["title"]).strip()[:40],
@@ -906,13 +906,14 @@ class Config:
             old_version = 1  # 脏数据（手改/损坏）不得导致启动崩溃
         if old_version < 2:
             raw.pop("scale", None)
-        chat = raw.get("chat") if isinstance(raw.get("chat"), dict) else {}
-        legacy = {}
+        raw_chat = raw.get("chat")
+        chat: dict[str, Any] = cast(dict[str, Any], raw_chat) if isinstance(raw_chat, dict) else {}
+        legacy: dict[str, Any] = {}
         if "chat_enabled" in raw:
             legacy["enabled"] = raw["chat_enabled"]
         if "chat_system_prompt" in raw:
             legacy["default_system_prompt"] = raw["chat_system_prompt"]
-        legacy_provider = {}
+        legacy_provider: dict[str, Any] = {}
         if raw.get("chat_api_url"):
             legacy_provider["base_url"] = raw["chat_api_url"]
         if raw.get("chat_model"):
@@ -921,7 +922,7 @@ class Config:
             legacy_provider["api_key"] = raw["chat_api_key"]
         if legacy_provider:
             legacy["providers"] = {"openai-main": legacy_provider}
-        merged = dict(legacy)
+        merged: dict[str, Any] = dict(legacy)
         merged.update(chat)
         # secret 只进不出：磁盘重载不得冲掉内存中的 key。
         # _redacted_data() 写盘时会剔除 chat.providers 下的明文 api_key /
@@ -1171,7 +1172,7 @@ class Config:
         """清洗单层 dialogue 事件映射 {event: list[str] | str}（值上限 8 条/240 字符）。"""
         if not isinstance(events, dict):
             return {}
-        cleaned = {}
+        cleaned: dict[str, list[str] | str] = {}
         for key, value in events.items():
             if not str(key).strip():
                 continue
