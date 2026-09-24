@@ -39,10 +39,7 @@ from pet.music_lyric_controller import LyricTracker  # noqa: E402
 
 def make_lines(count: int, *, spacing: float = 4.0) -> list[music_lyric.LyricLine]:
     """合成 ``count`` 行歌词（默认 4 秒一句，接近实测流行歌的行距）。"""
-    return [
-        music_lyric.LyricLine(at=i * spacing, text=f"第 {i + 1} 句歌词")
-        for i in range(count)
-    ]
+    return [music_lyric.LyricLine(at=i * spacing, text=f"第 {i + 1} 句歌词") for i in range(count)]
 
 
 def _timeit(func, iters: int) -> float:
@@ -102,7 +99,9 @@ def bench_now_playing(*, samples: int) -> dict | None:
         "median_ms": round(mid, 3),
         "min_ms": round(durations[0], 3),
         "max_ms": round(durations[-1], 3),
-        "observed": None if last is None else {
+        "observed": None
+        if last is None
+        else {
             "title": last.track.title,
             "artist": last.track.artist,
             "playing": last.track.playing,
@@ -121,8 +120,7 @@ def bench_menu_layout(*, iters: int) -> dict:
     registered = MENU_ACTIONS.ids
 
     def resolve():
-        menu_layout.resolve_menu_layout(
-            raw, registered_actions=registered, available_actions=registered)
+        menu_layout.resolve_menu_layout(raw, registered_actions=registered, available_actions=registered)
 
     return {
         "layout_id": menu_layout.DEFAULT_LAYOUT_ID,
@@ -160,9 +158,11 @@ def main(argv=None) -> int:
     print(f"[bench] reanchor_to_line           : {tracker['reanchor_to_line_ns']:>10.1f} ns/op")
     now_playing = result.get("now_playing")
     if isinstance(now_playing, dict) and "median_ms" in now_playing:
-        print(f"[bench] get_now_playing            : {now_playing['median_ms']:>10.3f} ms/op"
-              f" (min {now_playing['min_ms']} / max {now_playing['max_ms']},"
-              f" n={now_playing['samples']})")
+        print(
+            f"[bench] get_now_playing            : {now_playing['median_ms']:>10.3f} ms/op"
+            f" (min {now_playing['min_ms']} / max {now_playing['max_ms']},"
+            f" n={now_playing['samples']})"
+        )
     layout = result.get("menu_layout") or {}
     if "resolve_ms" in layout:
         print(f"[bench] resolve_menu_layout        : {layout['resolve_ms']:>10.4f} ms/op")

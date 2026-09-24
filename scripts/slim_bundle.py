@@ -122,9 +122,7 @@ def _read_imports(path: Path) -> set[str]:
     names: set[str] = set()
     pe = pefile.PE(str(path), fast_load=True)
     try:
-        pe.parse_data_directories(
-            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]]
-        )
+        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
         for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []) or []:
             names.add(entry.dll.decode("latin1").lower())
     finally:
@@ -225,11 +223,7 @@ def main(argv=None) -> int:
                 os.chmod(path, 0o666)
                 path.unlink()
             except OSError as exc:
-                hint = (
-                    " (locked by a running process; close the app and retry)"
-                    if getattr(exc, "winerror", None) == 5
-                    else ""
-                )
+                hint = " (locked by a running process; close the app and retry)" if getattr(exc, "winerror", None) == 5 else ""
                 print(f"[slim] FAIL remove {rel}: {exc}{hint}", file=sys.stderr)
                 return 6
         removed.append(rel)
@@ -237,9 +231,7 @@ def main(argv=None) -> int:
     if not args.dry_run:
         prune_empty_dirs(app_dir)
 
-    after = [_rel(app_dir, p) for p in app_dir.rglob("*") if p.is_file()] if not args.dry_run else [
-        r for r in before if r not in set(removals)
-    ]
+    after = [_rel(app_dir, p) for p in app_dir.rglob("*") if p.is_file()] if not args.dry_run else [r for r in before if r not in set(removals)]
     missing_after = verify_required(after)
     if missing_after:
         print("[slim] FAIL required files missing after slimming: " + ", ".join(missing_after), file=sys.stderr)

@@ -20,6 +20,7 @@
 无 Qt 依赖；优先使用 PyInstaller 自带的 reader 解析 onedir exe/.app 内嵌的
 PYZ 字节码，未安装 PyInstaller 时退化为 zip/pyc/字节级扫描兜底。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -259,22 +260,14 @@ def check_bundle(
     constants = collect_code_constants(root, code_literals)
     # 字节码常量可能包含完整句子（如 "深色玻璃 · 右上方"），因此按子串匹配：
     # 只要某个常量里原样包含该中文片段，即认为该字面量未被编码污染。
-    found_literals = {
-        lit for lit in code_literals if any(lit in const for const in constants)
-    }
+    found_literals = {lit for lit in code_literals if any(lit in const for const in constants)}
     missing = [lit for lit in code_literals if lit not in found_literals]
     if missing:
-        errors.append(
-            "字节码中缺少中文常量（疑似源码被按非 UTF-8 编码二次解码编译）: "
-            + ", ".join(missing)
-        )
+        errors.append("字节码中缺少中文常量（疑似源码被按非 UTF-8 编码二次解码编译）: " + ", ".join(missing))
 
     bad_texts = verify_text_resources(root, text_suffixes)
     if bad_texts:
-        errors.append(
-            "以下文本资源无法按 UTF-8 解码（疑似被二次转码）: "
-            + ", ".join(bad_texts)
-        )
+        errors.append("以下文本资源无法按 UTF-8 解码（疑似被二次转码）: " + ", ".join(bad_texts))
 
     missing_files = verify_chinese_filenames(root, filename_needles)
     if missing_files:
@@ -284,9 +277,7 @@ def check_bundle(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="PyInstaller 产物中文编码自检（issue #26）"
-    )
+    parser = argparse.ArgumentParser(description="PyInstaller 产物中文编码自检（issue #26）")
     parser.add_argument(
         "--dir",
         required=True,

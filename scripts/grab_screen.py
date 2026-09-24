@@ -16,9 +16,9 @@ screen = app.primaryScreen()
 # 抓右下角区域（桌宠预期位置屏幕 x1050-1511, y534-815）
 x, y, w, h = 900, 470, 636, 394
 pix = screen.grabWindow(0, x, y, w, h)
-out = os.path.join(ROOT, 'grab_qt.png')
+out = os.path.join(ROOT, "grab_qt.png")
 pix.save(out)
-print('saved', out, pix.width(), 'x', pix.height())
+print("saved", out, pix.width(), "x", pix.height())
 
 # 分析非桌面背景/肤色像素
 img = pix.toImage()
@@ -34,4 +34,4 @@ for yy in range(0, img.height(), 2):
             skin += 1
         if max(r, g, b) - min(r, g, b) > 30:
             colorful += 1
-print('肤色采样:', skin, '彩色采样:', colorful)
+print("肤色采样:", skin, "彩色采样:", colorful)

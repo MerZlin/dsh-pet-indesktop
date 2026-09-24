@@ -43,8 +43,10 @@ def _cpu_seconds(proc) -> float | None:
     user = wintypes.FILETIME()
     ok = ctypes.windll.kernel32.GetProcessTimes(
         proc._handle,
-        ctypes.byref(creation), ctypes.byref(exit_t),
-        ctypes.byref(kernel), ctypes.byref(user),
+        ctypes.byref(creation),
+        ctypes.byref(exit_t),
+        ctypes.byref(kernel),
+        ctypes.byref(user),
     )
     if not ok:
         return None

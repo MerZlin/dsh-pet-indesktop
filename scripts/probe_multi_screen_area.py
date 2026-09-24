@@ -12,6 +12,7 @@
 输出：纯文本打印（可直接贴进 issue / PR 报告）。单屏机器会明确打印「不适用」，
       那正是「为什么本机不能真实复现跨屏」的证据。退出码恒为 0（诊断脚本）。
 """
+
 from __future__ import annotations
 
 import os
@@ -77,8 +78,7 @@ def _fmt(screen) -> str:
         dpr = screen.devicePixelRatio()
     except Exception:
         dpr = float("nan")
-    return (f"{screen.name()}: geometry={_rect_text(screen.geometry())} "
-            f"available={_rect_text(screen.availableGeometry())} dpr={dpr}")
+    return f"{screen.name()}: geometry={_rect_text(screen.geometry())} available={_rect_text(screen.availableGeometry())} dpr={dpr}"
 
 
 def main() -> int:
@@ -89,10 +89,8 @@ def main() -> int:
         print(f"  - {_fmt(screen)}")
 
     pointer = QGuiApplication.screenAt(QCursor.pos())
-    print(f"[pointer] 光标所在屏: {pointer.name() if pointer else 'None'} "
-          f"光标位置={QCursor.pos().x()},{QCursor.pos().y()}")
-    print(f"[primary] 主屏: {_fmt(QGuiApplication.primaryScreen())}"
-          if QGuiApplication.primaryScreen() else "[primary] 主屏: None")
+    print(f"[pointer] 光标所在屏: {pointer.name() if pointer else 'None'} 光标位置={QCursor.pos().x()},{QCursor.pos().y()}")
+    print(f"[primary] 主屏: {_fmt(QGuiApplication.primaryScreen())}" if QGuiApplication.primaryScreen() else "[primary] 主屏: None")
 
     area = window_placement.desktop_area()
     if area is None:
@@ -128,11 +126,13 @@ def main() -> int:
         body = with_area[2]
         lands = body.intersects(avail)
         band = window_placement.band_bounds(area, body)
-        print(f"[drag→{screen.name()}] 目标中心=({target_x},{target_y}) "
-              f"无快照=({without[0]},{without[1]}) "
-              f"有快照=({with_area[0]},{with_area[1]}) "
-              f"身体框={_rect_text(body)} 落在目标屏={lands} "
-              f"当时的活动带={_rect_text(band)}")
+        print(
+            f"[drag→{screen.name()}] 目标中心=({target_x},{target_y}) "
+            f"无快照=({without[0]},{without[1]}) "
+            f"有快照=({with_area[0]},{with_area[1]}) "
+            f"身体框={_rect_text(body)} 落在目标屏={lands} "
+            f"当时的活动带={_rect_text(band)}"
+        )
 
     print("[branch] 抛掷边界（有快照 / 无快照）:")
     host._interaction_area = area
@@ -141,8 +141,7 @@ def main() -> int:
     host._interaction_area = None
     print(f"  无快照: {tuple(round(v, 1) for v in window_placement.throw_bounds(host))}")
 
-    print("[verdict] 多屏活动区域已启用：请在上面的 [drag→…] 行确认每块屏的"
-          "「落在目标屏=True」；再在真实界面上把桌宠从主屏拖/丢到副屏看是否跟手。")
+    print("[verdict] 多屏活动区域已启用：请在上面的 [drag→…] 行确认每块屏的「落在目标屏=True」；再在真实界面上把桌宠从主屏拖/丢到副屏看是否跟手。")
     return 0
 
 

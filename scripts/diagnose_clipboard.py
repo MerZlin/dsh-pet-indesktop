@@ -28,6 +28,7 @@
 
 把 CSV 附到 issue #98 即可定案。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -39,8 +40,8 @@ from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
-if sys.platform != 'win32':
-    raise SystemExit('本工具仅支持 Windows（读取 Win32 剪贴板/前台窗口状态）。')
+if sys.platform != "win32":
+    raise SystemExit("本工具仅支持 Windows（读取 Win32 剪贴板/前台窗口状态）。")
 
 u32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -57,18 +58,22 @@ u32.GetWindowTextW.argtypes = [wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int]
 u32.GetClassNameW.argtypes = [wintypes.HWND, ctypes.c_wchar_p, ctypes.c_int]
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-PET_EXE_HINTS = ('dsh-pet', 'python', 'pythonw')
+PET_EXE_HINTS = ("dsh-pet", "python", "pythonw")
 
 _proc_cache: dict[int, str] = {}
 
 
 class GUITHREADINFO(ctypes.Structure):
     _fields_ = [
-        ('cbSize', wintypes.DWORD), ('flags', wintypes.DWORD),
-        ('hwndActive', wintypes.HWND), ('hwndFocus', wintypes.HWND),
-        ('hwndCapture', wintypes.HWND), ('hwndMenuOwner', wintypes.HWND),
-        ('hwndMoveSize', wintypes.HWND), ('hwndCaret', wintypes.HWND),
-        ('rcCaret', wintypes.RECT),
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", wintypes.RECT),
     ]
 
 
@@ -83,11 +88,11 @@ def _hwnd(value) -> int:
 
 def _proc_name(pid: int) -> str:
     if not pid:
-        return ''
+        return ""
     cached = _proc_cache.get(pid)
     if cached is not None:
         return cached
-    name = '?'
+    name = "?"
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if handle:
         try:
@@ -111,7 +116,7 @@ def _pid_of(hwnd: int) -> int:
 
 def _title(hwnd: int) -> str:
     if not hwnd:
-        return ''
+        return ""
     buf = ctypes.create_unicode_buffer(256)
     u32.GetWindowTextW(wintypes.HWND(hwnd), buf, 256)
     return buf.value
@@ -145,12 +150,14 @@ def _pet_pids() -> str:
 
     try:
         out = subprocess.run(
-            ['tasklist', '/fo', 'csv', '/nh'],
-            capture_output=True, text=True, timeout=10,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+            ["tasklist", "/fo", "csv", "/nh"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        return ''
+        return ""
     hits = []
     for line in out.splitlines():
         parts = [p.strip('"') for p in line.split('","')]
@@ -158,9 +165,9 @@ def _pet_pids() -> str:
             continue
         name, pid = parts[0].strip('"'), parts[1]
         low = name.lower()
-        if any(hint in low for hint in PET_EXE_HINTS) and 'dsh' in low:
-            hits.append(f'{name}:{pid}')
-    return ','.join(hits)
+        if any(hint in low for hint in PET_EXE_HINTS) and "dsh" in low:
+            hits.append(f"{name}:{pid}")
+    return ",".join(hits)
 
 
 def sample() -> dict:
@@ -169,35 +176,34 @@ def sample() -> dict:
     focus = _focus_of_foreground(fg)
     owner_pid, fg_pid, focus_pid = _pid_of(owner), _pid_of(fg), _pid_of(focus)
     return {
-        'time': datetime.now().strftime('%H:%M:%S.%f')[:-3],
-        'openable': int(ok),
-        'err': err,
-        'seq': int(u32.GetClipboardSequenceNumber()),
-        'owner': f'{owner:#010x}',
-        'owner_proc': f'{_proc_name(owner_pid)}({owner_pid})' if owner else '',
-        'fg': f'{fg:#010x}',
-        'fg_proc': f'{_proc_name(fg_pid)}({fg_pid})' if fg else '',
-        'fg_title': _title(fg)[:60],
-        'focus': f'{focus:#010x}',
-        'focus_proc': f'{_proc_name(focus_pid)}({focus_pid})' if focus else '',
-        'pets': _pet_pids(),
+        "time": datetime.now().strftime("%H:%M:%S.%f")[:-3],
+        "openable": int(ok),
+        "err": err,
+        "seq": int(u32.GetClipboardSequenceNumber()),
+        "owner": f"{owner:#010x}",
+        "owner_proc": f"{_proc_name(owner_pid)}({owner_pid})" if owner else "",
+        "fg": f"{fg:#010x}",
+        "fg_proc": f"{_proc_name(fg_pid)}({fg_pid})" if fg else "",
+        "fg_title": _title(fg)[:60],
+        "focus": f"{focus:#010x}",
+        "focus_proc": f"{_proc_name(focus_pid)}({focus_pid})" if focus else "",
+        "pets": _pet_pids(),
     }
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description='issue #98 剪贴板/焦点现场取证')
-    ap.add_argument('--seconds', type=float, default=0.0,
-                    help='运行时长（秒）；0 = 一直跑到 Ctrl+C')
-    ap.add_argument('--interval', type=float, default=0.25, help='采样间隔（秒）')
+    ap = argparse.ArgumentParser(description="issue #98 剪贴板/焦点现场取证")
+    ap.add_argument("--seconds", type=float, default=0.0, help="运行时长（秒）；0 = 一直跑到 Ctrl+C")
+    ap.add_argument("--interval", type=float, default=0.25, help="采样间隔（秒）")
     args = ap.parse_args()
 
-    out = Path(__file__).resolve().parent / f'clipboard-diag-{int(time.time())}.csv'
+    out = Path(__file__).resolve().parent / f"clipboard-diag-{int(time.time())}.csv"
     fields = list(sample().keys())
-    print(f'取证输出: {out}')
-    print('复现期间保持本脚本运行；复制粘贴一旦失效，请立刻看终端并记下时间点。\n')
+    print(f"取证输出: {out}")
+    print("复现期间保持本脚本运行；复制粘贴一旦失效，请立刻看终端并记下时间点。\n")
     deadline = time.monotonic() + args.seconds if args.seconds > 0 else None
     last_key = None
-    with out.open('w', newline='', encoding='utf-8-sig') as fh:
+    with out.open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.DictWriter(fh, fieldnames=fields)
         writer.writeheader()
         try:
@@ -205,24 +211,25 @@ def main() -> int:
                 row = sample()
                 writer.writerow(row)
                 fh.flush()
-                key = (row['openable'], row['owner_proc'], row['fg_proc'],
-                       row['focus_proc'], row['seq'], row['pets'])
+                key = (row["openable"], row["owner_proc"], row["fg_proc"], row["focus_proc"], row["seq"], row["pets"])
                 if key != last_key:
-                    flag = 'CLIPBOARD-BLOCKED!' if not row['openable'] else ''
-                    print(f"[{row['time']}] openable={row['openable']} err={row['err']} "
-                          f"seq={row['seq']} owner={row['owner_proc'] or '-'} | "
-                          f"fg={row['fg_proc'] or '-'} focus={row['focus_proc'] or '-'} "
-                          f"| pets={row['pets'] or '-'} {flag}")
+                    flag = "CLIPBOARD-BLOCKED!" if not row["openable"] else ""
+                    print(
+                        f"[{row['time']}] openable={row['openable']} err={row['err']} "
+                        f"seq={row['seq']} owner={row['owner_proc'] or '-'} | "
+                        f"fg={row['fg_proc'] or '-'} focus={row['focus_proc'] or '-'} "
+                        f"| pets={row['pets'] or '-'} {flag}"
+                    )
                     last_key = key
                 if deadline is not None and time.monotonic() >= deadline:
                     break
                 time.sleep(max(0.05, args.interval))
         except KeyboardInterrupt:
-            print('\n已停止。')
-    print(f'\n采样已写入: {out}')
-    print('判读规则见本脚本 docstring（openable/owner_proc/fg_proc/focus_proc）。')
+            print("\n已停止。")
+    print(f"\n采样已写入: {out}")
+    print("判读规则见本脚本 docstring（openable/owner_proc/fg_proc/focus_proc）。")
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     raise SystemExit(main())

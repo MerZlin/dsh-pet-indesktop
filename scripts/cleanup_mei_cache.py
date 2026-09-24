@@ -3,6 +3,7 @@
 
 默认是预览模式；只有明确传入 --delete 才会删除超过年龄阈值的目录。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,9 +32,7 @@ from pet.runtime_cleanup import (  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="检查或清理 PyInstaller onefile 遗留的 _MEI* 临时目录。"
-    )
+    parser = argparse.ArgumentParser(description="检查或清理 PyInstaller onefile 遗留的 _MEI* 临时目录。")
     parser.add_argument(
         "--temp-dir",
         type=Path,

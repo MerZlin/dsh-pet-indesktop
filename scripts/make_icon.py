@@ -10,6 +10,7 @@
     assets/icon-preview.png  256px 预览图（便于人工确认）
     assets/icon.icns         macOS 图标（--icns 时生成，CI 构建 macOS .app 使用）
 """
+
 from __future__ import annotations
 
 import argparse
@@ -50,6 +51,7 @@ _ICONSET_ENTRIES = (
     ("icon_512x512.png", 512),
     ("icon_512x512@2x.png", 1024),
 )
+
 
 def extract_frame(path: Path) -> tuple[bytes, int, int]:
     """读取 RGBA 首帧原始字节，返回 (frame, width, height)。"""

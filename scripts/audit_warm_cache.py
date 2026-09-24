@@ -14,6 +14,7 @@
 注意：脚本会真实拉起 ffmpeg 预热全部动画首帧（与生产预热同一路径），
 耗时数分钟级；审计用独立的临时 meta 缓存文件，不污染真实缓存。
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -69,9 +70,7 @@ def _rss_bytes() -> int:
             ]
             counters = _PROCESS_MEMORY_COUNTERS()
             counters.cb = ctypes.sizeof(_PROCESS_MEMORY_COUNTERS)
-            if psapi.GetProcessMemoryInfo(
-                kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
-            ):
+            if psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
                 return int(counters.WorkingSetSize)
             return 0
         with open("/proc/self/statm", encoding="ascii") as f:
@@ -143,10 +142,7 @@ def audit_character(char_id: str, tmp_dir: Path) -> dict:
     first_images = [c._first_image for c in clips if c._first_image is not None]
     total_first_bytes = sum(_img_bytes(i) for i in first_images)
     # 播放中的 clip 还持有 QPixmap 形态（当前帧），单独量一份
-    pm_bytes = sum(
-        _pm_bytes(getattr(c, "_current_pixmap", None))
-        for c in clips
-    )
+    pm_bytes = sum(_pm_bytes(getattr(c, "_current_pixmap", None)) for c in clips)
 
     # 真实播放姿态：把第一个 clip 应用到首帧（jumpToFrame(0) → 主线程转
     # QPixmap），量单 clip 在显示路径上额外持有的像素缓冲。
@@ -204,9 +200,7 @@ def audit_character(char_id: str, tmp_dir: Path) -> dict:
         "first_image_ready": len(first_images),
         "first_image_total_bytes": total_first_bytes,
         "first_image_total_mb": round(total_first_bytes / 1024 / 1024, 2),
-        "first_image_per_clip_mb": round(
-            total_first_bytes / max(1, len(first_images)) / 1024 / 1024, 3
-        ),
+        "first_image_per_clip_mb": round(total_first_bytes / max(1, len(first_images)) / 1024 / 1024, 3),
         "qpixmap_extra_bytes": pm_bytes,
         "active_display_pixmap_bytes": active_pm_bytes,
         "warm_seconds": round(t_warm, 1),
@@ -247,8 +241,7 @@ def main() -> int:
         print(json.dumps(results[-1], ensure_ascii=False, indent=2))
     try:
         OUT.write_text(
-            json.dumps({"probe_time": time.strftime("%Y-%m-%d %H:%M:%S"), "results": results},
-                       ensure_ascii=False, indent=2),
+            json.dumps({"probe_time": time.strftime("%Y-%m-%d %H:%M:%S"), "results": results}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         print(f"[audit] data written to {OUT}")

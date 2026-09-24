@@ -6,6 +6,7 @@
 
 用法：python scripts/make_click_sound.py [输出路径]
 """
+
 from __future__ import annotations
 
 import math
@@ -38,17 +39,17 @@ def _bounce_wave(duration: float = 0.16) -> list[float]:
 def write_wav(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     samples = _bounce_wave()
-    with wave.open(str(path), 'wb') as w:
+    with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(SAMPLE_RATE)
         frames = bytearray()
         for v in samples:
-            frames += struct.pack('<h', int(v * 32767 * 0.7))
+            frames += struct.pack("<h", int(v * 32767 * 0.7))
         w.writeframes(bytes(frames))
-    print(f'written: {path} ({len(samples) / SAMPLE_RATE:.2f}s, {path.stat().st_size} bytes)')
+    print(f"written: {path} ({len(samples) / SAMPLE_RATE:.2f}s, {path.stat().st_size} bytes)")
 
 
-if __name__ == '__main__':
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / 'assets' / 'sounds' / 'click.wav'
+if __name__ == "__main__":
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent / "assets" / "sounds" / "click.wav"
     write_wav(out)

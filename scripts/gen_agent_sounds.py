@@ -6,6 +6,7 @@
 - done: 悦耳上扬三音（约 0.4s）
 - error: 下行低音（约 0.3s）
 """
+
 from __future__ import annotations
 
 import math

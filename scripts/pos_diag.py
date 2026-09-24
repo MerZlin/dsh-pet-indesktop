@@ -20,21 +20,20 @@ from pet.window import PetWindow  # noqa: E402
 app = QApplication([])
 screens = QGuiApplication.screens()
 for i, s in enumerate(screens):
-    print(f'screen[{i}]: geometry={s.geometry()} available={s.availableGeometry()} '
-          f'name={s.name()}')
+    print(f"screen[{i}]: geometry={s.geometry()} available={s.availableGeometry()} name={s.name()}")
 
 lib = MovieLibrary()
-cfg = Config(base=os.path.join(ROOT, 'tests', '_tmp_pos_fresh'))
+cfg = Config(base=os.path.join(ROOT, "tests", "_tmp_pos_fresh"))
 win = PetWindow(lib, cfg)
 
-print('窗口 size:', win.width(), 'x', win.height())
-print('win.screen() availableGeometry:', win.screen().availableGeometry())
-print('move 前 pos:', win.x(), win.y())
+print("窗口 size:", win.width(), "x", win.height())
+print("win.screen() availableGeometry:", win.screen().availableGeometry())
+print("move 前 pos:", win.x(), win.y())
 
 avail = win.screen().availableGeometry()
 x = avail.right() - win.width() - catalog.CORNER_MARGIN
 y = avail.bottom() - win.height()
-print(f'期望右下角: x={x} y={y}')
+print(f"期望右下角: x={x} y={y}")
 win.show()
 app.processEvents()
-print('show 后 pos:', win.x(), win.y())
+print("show 后 pos:", win.x(), win.y())

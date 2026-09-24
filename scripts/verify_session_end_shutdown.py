@@ -22,6 +22,7 @@
 注意：本脚本只对**已修复**的构建有意义；在修复前的构建上，第 4 步前一条
 必然失败（进程对会话结束零感知，日志里不会出现那两行）。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -100,10 +101,12 @@ def _ffmpeg_pids() -> set:
     """当前所有 ffmpeg 子进程 pid（经 PowerShell CIM 查询，避免额外依赖）。"""
     try:
         out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-CimInstance Win32_Process -Filter \"Name like 'ffmpeg%'\").ProcessId"],
-            capture_output=True, text=True, timeout=30,
-            encoding="utf-8", errors="replace",  # 中文 Windows 的 CIM 输出是 GBK/cp936
+            ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Process -Filter \"Name like 'ffmpeg%'\").ProcessId"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            encoding="utf-8",
+            errors="replace",  # 中文 Windows 的 CIM 输出是 GBK/cp936
         ).stdout
     except Exception as exc:  # pragma: no cover - 环境相关
         print(f"  (无法枚举 ffmpeg 进程：{exc})")
@@ -119,12 +122,10 @@ def _pet_log_dir() -> Path:
 def main() -> int:
     _require_windows()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--hwnd", type=lambda v: int(v, 0), default=None,
-                        help="目标窗口句柄（默认自动定位桌宠窗口）")
+    parser.add_argument("--hwnd", type=lambda v: int(v, 0), default=None, help="目标窗口句柄（默认自动定位桌宠窗口）")
     parser.add_argument("--exe", default="", help="限定进程可执行名（子串匹配）")
     parser.add_argument("--message", choices=sorted(MESSAGES), default="query_end_session")
-    parser.add_argument("--settle", type=float, default=8.0,
-                        help="投递后等待并观测的秒数（默认 8s）")
+    parser.add_argument("--settle", type=float, default=8.0, help="投递后等待并观测的秒数（默认 8s）")
     args = parser.parse_args()
 
     hwnd = args.hwnd
@@ -138,8 +139,7 @@ def main() -> int:
         for h, title, pid, exe in candidates:
             print(f"  hwnd={h:#x} pid={pid} exe={exe!r} title={title!r}")
         # 只在「进程名明确是 dsh-pet」时才自动选用，避免把消息投给别的桌宠程序
-        confident = [c for c in candidates
-                     if any(h in c[3].lower() for h in PROCESS_NAME_HINTS)]
+        confident = [c for c in candidates if any(h in c[3].lower() for h in PROCESS_NAME_HINTS)]
         if not confident:
             print("\n候选里没有进程名匹配 dsh-pet* 的窗口：请用 --hwnd 明确指定目标，")
             print("避免误把会话结束消息投给其它同类程序（实测踩过）。")
@@ -162,7 +162,7 @@ def main() -> int:
     deadline = time.monotonic() + max(0.0, args.settle)
     seen_new_ffmpeg: set = set()
     while time.monotonic() < deadline:
-        seen_new_ffmpeg |= (_ffmpeg_pids() - ffmpeg_before)
+        seen_new_ffmpeg |= _ffmpeg_pids() - ffmpeg_before
         time.sleep(0.5)
 
     new_lines: list = []
@@ -187,8 +187,7 @@ def main() -> int:
             print(f"  {line}")
 
     passed = armed and not seen_new_ffmpeg
-    print(f"\n判定：{'PASS' if passed else 'FAIL'}"
-          f"{'（冻结日志行缺失，可能是日志目录/变体名不同）' if not froze else ''}")
+    print(f"\n判定：{'PASS' if passed else 'FAIL'}{'（冻结日志行缺失，可能是日志目录/变体名不同）' if not froze else ''}")
     return 0 if passed else 1
 
 

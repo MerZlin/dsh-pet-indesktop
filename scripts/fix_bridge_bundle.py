@@ -20,6 +20,7 @@ envelope 手写在 index.js 内，与 dsh createUserMessage 形状对齐）。�
 用法（在构建脚本的 PyInstaller 之后调用）：
     python scripts/fix_bridge_bundle.py --app-dir dist-onedir/dsh-pet-standalone-webm-chat
 """
+
 import argparse
 import json
 import os
@@ -49,16 +50,14 @@ def find_dist_bridge(app_dir: str) -> "str | None":
             return path
     # 兜底：按目录名搜索，兼容未来 PyInstaller 的布局变化
     for root, _dirs, _files in os.walk(app_dir):
-        if (os.path.basename(root) == "dsh-pet-bridge"
-                and os.path.basename(os.path.dirname(root)) == "integrations"):
+        if os.path.basename(root) == "dsh-pet-bridge" and os.path.basename(os.path.dirname(root)) == "integrations":
             return root
     return None
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--app-dir", required=True,
-                    help="onedir/.app 输出目录（内含 integrations/dsh-pet-bridge）")
+    ap.add_argument("--app-dir", required=True, help="onedir/.app 输出目录（内含 integrations/dsh-pet-bridge）")
     args = ap.parse_args()
 
     # 归一为绝对路径：CI 以 `--dist dist`（相对）调用构建脚本并透传到此，
@@ -85,15 +84,9 @@ def main() -> int:
     except Exception as exc:
         print(f"[bridge] dist manifest unreadable: {exc}", file=sys.stderr)
         return 1
-    declared = [
-        name
-        for field in ("dependencies", "peerDependencies", "optionalDependencies")
-        for name in (dist_manifest.get(field) or {})
-    ]
+    declared = [name for field in ("dependencies", "peerDependencies", "optionalDependencies") for name in (dist_manifest.get(field) or {})]
     if declared:
-        print("[bridge] dist manifest declares runtime dependencies "
-              f"(zero-dependency red line): {', '.join(sorted(declared))}",
-              file=sys.stderr)
+        print(f"[bridge] dist manifest declares runtime dependencies (zero-dependency red line): {', '.join(sorted(declared))}", file=sys.stderr)
         return 1
 
     # 防线 1：dist 副本不允许带 node_modules。零依赖插件不需要它；若本机源码树
@@ -122,8 +115,7 @@ def main() -> int:
         print("[bridge] running zero-dependency import smoke on bundle copy...")
         result = subprocess.run([node, smoke], cwd=dst_bridge)
         if result.returncode != 0:
-            print("[bridge] zero-dependency smoke FAILED - bundle bridge violates "
-                  "the red line", file=sys.stderr)
+            print("[bridge] zero-dependency smoke FAILED - bundle bridge violates the red line", file=sys.stderr)
             return 1
     else:
         # 构建机没有 node 时无法执行冒烟；PR 门禁（node --test）仍会拦截，

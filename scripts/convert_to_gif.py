@@ -8,6 +8,7 @@
 默认只转换缺失或过期的 GIF；使用 --force 可覆盖已有 GIF，使用 --clean
 可删除 GIF 目录中已经不存在对应 WebM 的旧文件。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,8 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "assets" / "characters"
@@ -32,12 +33,7 @@ except Exception as exc:  # pragma: no cover - 环境依赖错误
 
 
 def convert_one(src: Path, dst: Path, *, force: bool = False) -> bool:
-    if (
-        not force
-        and dst.exists()
-        and dst.stat().st_size > 0
-        and dst.stat().st_mtime >= src.stat().st_mtime
-    ):
+    if not force and dst.exists() and dst.stat().st_size > 0 and dst.stat().st_mtime >= src.stat().st_mtime:
         return True
 
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -53,9 +49,7 @@ def convert_one(src: Path, dst: Path, *, force: bool = False) -> bool:
         "-i",
         str(src),
         "-vf",
-        "fps=24,split[s0][s1];"
-        "[s0]palettegen=reserve_transparent=1:stats_mode=diff[p];"
-        "[s1][p]paletteuse=dither=sierra2_4a:alpha_threshold=128",
+        "fps=24,split[s0][s1];[s0]palettegen=reserve_transparent=1:stats_mode=diff[p];[s1][p]paletteuse=dither=sierra2_4a:alpha_threshold=128",
         "-loop",
         "0",
         str(dst),
@@ -63,8 +57,7 @@ def convert_one(src: Path, dst: Path, *, force: bool = False) -> bool:
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
         print(
-            f"失败: {src.name}: "
-            f"{result.stderr.decode('utf-8', 'replace')[:400]}",
+            f"失败: {src.name}: {result.stderr.decode('utf-8', 'replace')[:400]}",
             flush=True,
         )
         return False
@@ -93,15 +86,9 @@ def main() -> int:
         print("没有 WebM 文件")
         return 1
 
-    expected = {
-        src.relative_to(SRC).with_suffix(".gif").as_posix() for src in webm_files
-    }
+    expected = {src.relative_to(SRC).with_suffix(".gif").as_posix() for src in webm_files}
     if args.clean and DST.is_dir():
-        stale = [
-            path
-            for path in DST.rglob("*.gif")
-            if path.relative_to(DST).as_posix() not in expected
-        ]
+        stale = [path for path in DST.rglob("*.gif") if path.relative_to(DST).as_posix() not in expected]
         for path in stale:
             path.unlink()
         for directory in sorted(

@@ -204,8 +204,7 @@ def verify(app_dir: Path | None, exe: Path | None) -> tuple[int, dict]:
     if closure is None:
         return 5, {
             "error": "edge-tts-not-installed-in-build-env",
-            "hint": "pip install -r requirements.txt（缺依赖时 --collect-all edge_tts "
-                    "只警告不报错，产物会静默缺 TTS）",
+            "hint": "pip install -r requirements.txt（缺依赖时 --collect-all edge_tts 只警告不报错，产物会静默缺 TTS）",
             "exe": str(exe),
         }
     required = set(MINIMUM_MODULES) | {m for m in closure if m == "edge_tts" or m.startswith("edge_tts.")}
@@ -242,9 +241,7 @@ def main(argv=None) -> int:
         Path(args.exe).resolve() if args.exe else None,
     )
     if code == 0:
-        print(f"[tts] bundle TTS stack OK "
-              f"({summary['required_modules']} modules required, "
-              f"{summary['frozen_modules']} frozen)")
+        print(f"[tts] bundle TTS stack OK ({summary['required_modules']} modules required, {summary['frozen_modules']} frozen)")
     elif code in (4,):
         print(f"[tts] FAIL missing TTS modules: {', '.join(summary['missing'])}", file=sys.stderr)
     else:

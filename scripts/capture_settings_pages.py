@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Capture every settings capability domain for visual acceptance."""
+
 from __future__ import annotations
 
 import argparse
@@ -55,10 +56,7 @@ def _apply_font_scale(root: QWidget, scale: float) -> None:
 
 def _apply_extreme_copy(dialog: ModernSettingsDialog) -> None:
     suffix = "（跨平台同步与自动恢复策略的超长本地化标题示例）"
-    hint = (
-        "用于验证 macOS、Windows 与 Linux 在窄窗口和放大字体下均能完整换行，"
-        "且右侧控件、键盘焦点与滚动区域仍然可达。"
-    )
+    hint = "用于验证 macOS、Windows 与 Linux 在窄窗口和放大字体下均能完整换行，且右侧控件、键盘焦点与滚动区域仍然可达。"
     for page_index in range(dialog.pages.count()):
         page = dialog.pages.widget(page_index)
         rows = page.findChildren(SettingRow)
@@ -122,18 +120,10 @@ def capture(args: argparse.Namespace) -> None:
                 raise RuntimeError(f"failed to save screenshot: {target}")
 
         if args.expanded_ai:
-            ai_index = next(
-                index
-                for index in range(dialog.sidebar.count())
-                if dialog.sidebar.item(index).text() == "AI 与对话"
-            )
+            ai_index = next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == "AI 与对话")
             dialog.sidebar.setCurrentRow(ai_index)
             page = dialog.pages.currentWidget()
-            header = next(
-                item
-                for item in dialog.findChildren(SettingsDisclosureHeader)
-                if item.text() == "生成参数（高级）" and page.isAncestorOf(item)
-            )
+            header = next(item for item in dialog.findChildren(SettingsDisclosureHeader) if item.text() == "生成参数（高级）" and page.isAncestorOf(item))
             if not header.isChecked():
                 header.click()
             scroll = page.findChild(QScrollArea, "settingsScroll")
@@ -145,11 +135,7 @@ def capture(args: argparse.Namespace) -> None:
             if not dialog.grab().save(str(target)):
                 raise RuntimeError(f"failed to save screenshot: {target}")
         if args.menu_details:
-            menu_index = next(
-                index
-                for index in range(dialog.sidebar.count())
-                if dialog.sidebar.item(index).text() == "菜单"
-            )
+            menu_index = next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == "菜单")
             dialog.sidebar.setCurrentRow(menu_index)
             page = dialog.pages.currentWidget()
             tabs = page.findChild(SettingsTabContainer, "settingsTaskTabs")
@@ -177,7 +163,8 @@ def capture(args: argparse.Namespace) -> None:
             chat_item = dialog.menu_layout_editor.item_for_action("chat")
             dialog.menu_layout_editor.tree.setCurrentItem(chat_item)
             dialog.menu_layout_editor.set_item_file_icon(
-                "chat", Path(__file__).resolve().parents[1] / "assets" / "icon-preview.png",
+                "chat",
+                Path(__file__).resolve().parents[1] / "assets" / "icon-preview.png",
             )
             app.processEvents()
             target = destination / "04-菜单-别名保留原名.png"
@@ -196,9 +183,7 @@ def capture(args: argparse.Namespace) -> None:
                     raise RuntimeError(f"failed to save screenshot: {target}")
                 menu.close()
                 app.processEvents()
-            dialog.menu_layout_editor.icon_display_menu.popup(
-                dialog.mapToGlobal(QPoint(dialog.width() // 2, 180))
-            )
+            dialog.menu_layout_editor.icon_display_menu.popup(dialog.mapToGlobal(QPoint(dialog.width() // 2, 180)))
             app.processEvents()
             target = destination / "04-菜单-图片显示方式.png"
             if not dialog.menu_layout_editor.icon_display_menu.grab().save(str(target)):
@@ -216,11 +201,7 @@ def capture(args: argparse.Namespace) -> None:
             popup.close()
             app.processEvents()
         if args.interaction_details:
-            interaction_index = next(
-                index
-                for index in range(dialog.sidebar.count())
-                if dialog.sidebar.item(index).text() == "互动"
-            )
+            interaction_index = next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == "互动")
             dialog.sidebar.setCurrentRow(interaction_index)
             page = dialog.pages.currentWidget()
             tabs = page.findChild(SettingsTabContainer, "settingsTaskTabs")
@@ -241,11 +222,7 @@ def capture(args: argparse.Namespace) -> None:
                 if not dialog.grab().save(str(target)):
                     raise RuntimeError(f"failed to save screenshot: {target}")
         if args.image_previews:
-            interaction_index = next(
-                index
-                for index in range(dialog.sidebar.count())
-                if dialog.sidebar.item(index).text() == "互动"
-            )
+            interaction_index = next(index for index in range(dialog.sidebar.count()) if dialog.sidebar.item(index).text() == "互动")
             dialog.sidebar.setCurrentRow(interaction_index)
             dialog.self_talk_check.setChecked(True)
             # 「图片目录」行在「自言自语」标签里：必须先把该标签切到前台，
@@ -254,9 +231,7 @@ def capture(args: argparse.Namespace) -> None:
             tabs = page.findChild(SettingsTabContainer, "settingsTaskTabs")
             if tabs is not None:
                 tabs.setCurrentKey("self_talk")
-            dialog.self_talk_image_dir_picker.setText(
-                str(Path(__file__).resolve().parents[1] / "assets" / "chat")
-            )
+            dialog.self_talk_image_dir_picker.setText(str(Path(__file__).resolve().parents[1] / "assets" / "chat"))
             preview_button = dialog.self_talk_image_dir_picker.preview_button
             if preview_button is not None:
                 preview_button.click()

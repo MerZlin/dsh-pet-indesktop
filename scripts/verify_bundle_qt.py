@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Verify the Qt runtime DLL chain in a PyInstaller onedir bundle."""
+
 from __future__ import annotations
 
 import argparse
