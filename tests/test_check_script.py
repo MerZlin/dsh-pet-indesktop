@@ -30,11 +30,17 @@ def test_check_commands_use_coverage_and_isolated_families_for_full_gate() -> No
         " --ignore=tests/test_webm_clip_lifecycle.py"
         " --ignore=tests/test_webm_first_frame_lock.py"
         " --ignore=tests/test_low_priority_warm_interaction_yield.py"
-        " --cov=pet --cov-report=term-missing --cov-report=xml --cov-fail-under=83" in command
+        " --cov=pet --cov-report=" in command
         for command in rendered
     )
-    assert rendered[-2].endswith("pytest -q tests/test_webm_reader_lifecycle.py tests/test_webm_clip_lifecycle.py tests/test_webm_first_frame_lock.py")
-    assert rendered[-1].endswith("pytest -q tests/test_low_priority_warm_interaction_yield.py")
+    assert any(
+        "pytest -q tests/test_webm_reader_lifecycle.py tests/test_webm_clip_lifecycle.py"
+        " tests/test_webm_first_frame_lock.py --cov=pet --cov-append --cov-report=" in command
+        for command in rendered
+    )
+    assert any("pytest -q tests/test_low_priority_warm_interaction_yield.py --cov=pet --cov-append --cov-report=" in command for command in rendered)
+    assert rendered[-2].endswith("coverage report --fail-under=83")
+    assert rendered[-1].endswith("coverage xml")
 
 
 def test_check_commands_have_a_unit_quality_matrix_mode() -> None:

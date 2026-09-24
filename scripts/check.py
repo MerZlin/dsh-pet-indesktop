@@ -61,26 +61,43 @@ def build_commands(*, fast: bool, quality: bool = False) -> list[list[str]]:
         main_suite = [python, "-m", "pytest", "-q"]
         for test_path in (*WEBM_LIFECYCLE_TESTS, LOW_PRIORITY_WARM_TEST):
             main_suite.append(f"--ignore={test_path}")
-        main_suite.extend(
-            [
-                "--cov=pet",
-                "--cov-report=term-missing",
-                "--cov-report=xml",
-                f"--cov-fail-under={COVERAGE_FAIL_UNDER}",
-            ]
-        )
+        main_suite.extend(["--cov=pet", "--cov-report="])
         commands.append(main_suite)
         commands.extend(
             [
-                [python, "-m", "pytest", "-q", *WEBM_LIFECYCLE_TESTS],
-                [python, "-m", "pytest", "-q", LOW_PRIORITY_WARM_TEST],
+                [
+                    python,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    *WEBM_LIFECYCLE_TESTS,
+                    "--cov=pet",
+                    "--cov-append",
+                    "--cov-report=",
+                ],
+                [
+                    python,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    LOW_PRIORITY_WARM_TEST,
+                    "--cov=pet",
+                    "--cov-append",
+                    "--cov-report=",
+                ],
+                [python, "-m", "coverage", "report", f"--fail-under={COVERAGE_FAIL_UNDER}"],
+                [python, "-m", "coverage", "xml"],
             ]
         )
     return commands
 
 
 def _is_isolated_family(command: Sequence[str]) -> bool:
-    return any(tuple(command[-len(family) :]) == family for family in ISOLATED_TEST_FAMILIES)
+    for family in ISOLATED_TEST_FAMILIES:
+        width = len(family)
+        if any(tuple(command[index : index + width]) == family for index in range(len(command) - width + 1)):
+            return True
+    return False
 
 
 def run_command(command: Sequence[str], *, env: dict[str, str] | None = None) -> int:
