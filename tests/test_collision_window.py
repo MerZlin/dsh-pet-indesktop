@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import time
+
 import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, Signal
 from PySide6.QtGui import QMouseEvent, QPixmap
@@ -14,7 +15,7 @@ from pet import catalog, collision
 from pet import physics as physics_mod
 from pet.config import Config
 from pet.edge_probe import EDGE_REENTRY_SECONDS
-from pet.window import PetWindow, THROWN
+from pet.window import THROWN, PetWindow
 
 NAMES = [
     catalog.IDLE,

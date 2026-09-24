@@ -367,8 +367,9 @@ def test_launch_settings_process_uses_source_command(tmp_path, monkeypatch):
 
 def test_launch_settings_process_failure_is_reported(tmp_path, monkeypatch):
     """startDetached 返回失败 → _launch_settings_process 返回 False（触发回退）。"""
-    import pet.app as app_mod
     from PySide6.QtCore import QProcess
+
+    import pet.app as app_mod
 
     shell = _bare_shell(Config(base=tmp_path))
     monkeypatch.setattr(app_mod.sys, "frozen", False, raising=False)

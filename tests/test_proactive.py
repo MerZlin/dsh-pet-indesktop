@@ -373,6 +373,7 @@ class TestVisionAndWatcherPhase2:
 
     def test_get_system_idle_seconds_non_windows(self, monkeypatch):
         import sys
+
         from pet import vision
 
         monkeypatch.setattr(sys, "platform", "linux")
@@ -380,6 +381,7 @@ class TestVisionAndWatcherPhase2:
 
     def test_watcher_lifecycle_and_conditions(self, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QApplication
+
         from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
@@ -453,6 +455,7 @@ class TestVisionAndWatcherPhase2:
 
         monkeypatch.setattr(sys, "platform", "win32")
         from PySide6.QtWidgets import QApplication
+
         from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
@@ -478,6 +481,7 @@ class TestVisionAndWatcherPhase2:
         Signal(int) 会触发 libshiboken Overflow 导致值截断/投递失败，
         必须用 object 传参保证原值到达槽函数。"""
         from PySide6.QtWidgets import QApplication
+
         from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
@@ -507,8 +511,9 @@ class TestVisionAndWatcherPhase2:
         assert received[0][3] == big_hash
 
     def test_capture_window_rect_coordinates_and_clamping(self, monkeypatch):
-        from pet import vision
         from PIL import Image
+
+        from pet import vision
 
         # 创建一个 1000x1000 的虚拟屏幕
         fake_all_screen = Image.new("RGB", (1000, 1000), color=(50, 100, 150))
@@ -531,10 +536,11 @@ class TestVisionAndWatcherPhase2:
         assert vision.capture_window_rect(None) is None
 
     def test_log_mode_does_not_consume_daily_quota(self, tmp_path, monkeypatch):
-        from PySide6.QtWidgets import QApplication
-        from pet.proactive import ProactiveScreenWatcher
-        from pet import vision
         from PIL import Image
+        from PySide6.QtWidgets import QApplication
+
+        from pet import vision
+        from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
 
@@ -587,6 +593,7 @@ class TestVisionAndWatcherPhase2:
 
     def test_physics_mode_blocks_watcher_tick(self, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QApplication
+
         from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
@@ -627,8 +634,9 @@ class TestVisionAndWatcherPhase2:
 # ============================================================================
 class TestPhase3VisionLinkAndDryRun:
     def test_ask_about_screen_and_post_vision_request_equivalence(self, tmp_path, monkeypatch):
-        from pet import vision
         import json
+
+        from pet import vision
 
         fake_resp = {"choices": [{"message": {"content": "主人正在认真写代码呢～"}, "finish_reason": "stop"}]}
 
@@ -694,8 +702,8 @@ class TestPhase3VisionLinkAndDryRun:
         assert reason == "min_request_interval_cooldown"
 
     def test_provider_resolution_strategy(self, tmp_path):
-        from pet.proactive import ProactiveScreenWatcher
         from pet.chat.models import ChatSettings, ProviderConfig
+        from pet.proactive import ProactiveScreenWatcher
 
         cfg = Config(base=tmp_path)
         win = None
@@ -718,9 +726,10 @@ class TestPhase3VisionLinkAndDryRun:
         assert p2.vision_same_as_chat is False
 
     def test_watcher_real_mode_vision_pipeline(self, tmp_path, monkeypatch):
-        from PySide6.QtWidgets import QApplication
-        from pet.proactive import ProactiveScreenWatcher
         from PIL import Image
+        from PySide6.QtWidgets import QApplication
+
+        from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
 
@@ -802,8 +811,9 @@ class TestPhase3VisionLinkAndDryRun:
 class TestPhase4UIAndMenuIntegration:
     def test_window_menu_proactive_and_agent_toggles(self, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QApplication, QMessageBox
-        from pet.window import PetWindow
+
         from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
 
@@ -835,9 +845,10 @@ class TestPhase4UIAndMenuIntegration:
     def test_context_menu_proactive_build_no_name_error(self, tmp_path):
         """右键菜单（上游模板系统）构建不抛错，且包含主动识屏与 Agent 联动。"""
         from PySide6.QtWidgets import QApplication, QMenu
-        from pet.window import PetWindow
-        from pet.library import MovieLibrary
+
         from pet.context_menu import populate_context_menu
+        from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
 
@@ -865,8 +876,9 @@ class TestPhase4UIAndMenuIntegration:
     def test_enable_with_empty_whitelist_bubble_hint(self, tmp_path, monkeypatch):
         """测试 4a：白名单为空时开启主动识屏，应提示「白名单还是空的」气泡。"""
         from PySide6.QtWidgets import QApplication
-        from pet.window import PetWindow
+
         from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
 
@@ -888,8 +900,9 @@ class TestPhase4UIAndMenuIntegration:
     def test_agent_link_toggle_bubble_notice(self, tmp_path, monkeypatch):
         """测试 4c：开启 Agent 联动应气泡提示「后续版本实装」。"""
         from PySide6.QtWidgets import QApplication
-        from pet.window import PetWindow
+
         from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
 
@@ -902,6 +915,7 @@ class TestPhase4UIAndMenuIntegration:
 
         # DSH 开启需授权确认 + 安装桥接插件：mock 掉弹窗与真实 dsh CLI 调用
         from PySide6.QtWidgets import QMessageBox
+
         from pet.agent_link import DshMonitor
 
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Yes)
@@ -929,6 +943,7 @@ class TestPhase4UIAndMenuIntegration:
     def test_apply_config_non_windows_no_timer(self, tmp_path, monkeypatch):
         """测试 4d：非 Windows 平台即使 enabled=True 且白名单非空也不起动定时器。"""
         from PySide6.QtWidgets import QApplication
+
         from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
@@ -1024,9 +1039,10 @@ class TestPhase5ShortTermMemory:
         assert ctx == "上次看到你在写代码，这次看到你在看视频。"
 
     def test_watcher_real_mode_memory_injection(self, tmp_path, monkeypatch):
-        from PySide6.QtWidgets import QApplication
-        from pet.proactive import ProactiveScreenWatcher
         from PIL import Image
+        from PySide6.QtWidgets import QApplication
+
+        from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
 
@@ -1081,8 +1097,9 @@ class TestPhase5ShortTermMemory:
     def test_worker_vision_uses_character_alias_as_pet_name(self, tmp_path, monkeypatch):
         """主动识屏请求的身份提示用用户重命名后的别名，而不是默认角色名。"""
         from PySide6.QtWidgets import QApplication
-        from pet.proactive import ProactiveScreenWatcher
+
         from pet import vision
+        from pet.proactive import ProactiveScreenWatcher
 
         QApplication.instance() or QApplication([])
 
@@ -1130,10 +1147,12 @@ class TestUXFixesRound3:
 
     def test_self_talk_yields_to_important_bubble(self, tmp_path):
         """重要气泡占用期间，自言自语必须让路。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.window import PetWindow
-        from pet.library import MovieLibrary
         import time
+
+        from PySide6.QtWidgets import QApplication
+
+        from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
         cfg = Config(base=tmp_path)
@@ -1173,9 +1192,10 @@ class TestUXFixesRound3:
 
     def test_stale_generation_frame_dropped(self, tmp_path, monkeypatch):
         """代次翻转（pause/关闭）后到达的迟到帧必须丢弃，不得发请求。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.proactive import ProactiveScreenWatcher
         from PIL import Image
+        from PySide6.QtWidgets import QApplication
+
+        from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
 
@@ -1212,6 +1232,7 @@ class TestUXFixesRound3:
     def test_in_flight_request_blocks_new_dispatch(self, tmp_path, monkeypatch):
         """视觉请求在飞期间，心跳不得再派发新 pipeline。"""
         from PySide6.QtWidgets import QApplication
+
         from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
@@ -1240,10 +1261,11 @@ class TestUXFixesRound3:
     def test_worker_busy_released_on_emit_failure(self, tmp_path, monkeypatch):
         """截图成功但后续 emit/dHash 抛异常时，worker_busy 必须释放，
         否则主动识屏永久卡死（gpt-5.6-sol 终审 #10 回归）。"""
-        from PySide6.QtWidgets import QApplication
-        from pet.proactive import ProactiveScreenWatcher
-        from pet import vision
         from PIL import Image
+        from PySide6.QtWidgets import QApplication
+
+        from pet import vision
+        from pet.proactive import ProactiveScreenWatcher
 
         app = QApplication.instance() or QApplication([])
 
@@ -1294,6 +1316,7 @@ class TestProactiveBudgetPerRequest:
     def test_vision_consumes_budget_each_attempt_and_model_access_retries_once(self, monkeypatch):
         """497 回归：模型访问失败最多重试 1 次；每一次真实 HTTP 请求前都消耗预算。"""
         import urllib.error
+
         from pet import vision
         from pet.chat.models import ProviderConfig
 

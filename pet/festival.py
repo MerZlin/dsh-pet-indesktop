@@ -41,13 +41,13 @@ from .festival_data import (
     CATEGORY_SOLAR_TERM,
     CATEGORY_WEST,
     FESTIVALS,
-    Festival,
     KIND_EASTER,
     KIND_LUNAR,
     KIND_LUNAR_LAST,
     KIND_NTH_WEEKDAY,
     KIND_SOLAR,
     KIND_SOLAR_TERM,
+    Festival,
 )
 from .festival_quotes_cn import QUOTES_CN
 from .festival_quotes_west import QUOTES_WEST

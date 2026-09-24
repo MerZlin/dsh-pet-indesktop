@@ -12,8 +12,8 @@ from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QBitmap, QColor, QImage, QMoveEvent, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
-from pet import window as window_mod
 from pet import catalog
+from pet import window as window_mod
 
 
 def _qapp() -> QApplication:
@@ -105,6 +105,7 @@ def test_input_controller_survives_init():
         pytest.skip("逐像素命中测试仅 Windows")
 
     import tempfile
+
     from pet.config import Config
     from pet.library import MovieLibrary
 

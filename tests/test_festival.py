@@ -520,8 +520,8 @@ def test_third_party_notices_list_every_song():
     歌曲声明的表结构（歌名/词曲作者/年份/条数）比电影/游戏多两列，不适用上面
     的逐项条数比对，故单独校验"每首都登记了"——漏登记一首就是版权声明缺项。
     """
-    from pathlib import Path as _Path
     import re as _re
+    from pathlib import Path as _Path
 
     notices = (_Path(__file__).resolve().parents[1] / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     db = _Path(__file__).resolve().parents[1] / "pet" / "festival_quotes_west_song.py"

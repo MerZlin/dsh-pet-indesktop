@@ -11,13 +11,13 @@ config.json 的 ``dialogue_phrases`` 键（按 agent_key 分层的统一预设�
 
 from __future__ import annotations
 
-from collections import defaultdict
 import json
 import logging
+import re
+from collections import defaultdict
 from pathlib import Path
 from string import Formatter
 from typing import Any, Mapping
-import re
 
 
 class _TemplateObject(dict):

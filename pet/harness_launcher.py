@@ -33,8 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .node_runtime import augmented_path as _augmented_path
-from .node_runtime import global_node_modules_roots
-from .node_runtime import static_node_modules_roots
+from .node_runtime import global_node_modules_roots, static_node_modules_roots
 from .node_runtime import which as _which
 
 # 3080 会落入 Windows winnat/Hyper-V 动态保留段（EACCES），默认改用 38080；

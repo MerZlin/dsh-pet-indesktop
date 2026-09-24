@@ -29,8 +29,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QImage, QMovie
 
-from . import catalog
-from . import perfstats
+from . import catalog, perfstats
 from .webm_clip import WebMClip, session_ending
 
 _LIVE_MOVIE_LIBRARIES: weakref.WeakSet = weakref.WeakSet()

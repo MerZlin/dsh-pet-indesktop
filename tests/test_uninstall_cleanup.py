@@ -13,8 +13,8 @@ from __future__ import annotations
 import json
 import sys
 
-from pet.config import Config
 from pet import uninstall_cleanup
+from pet.config import Config
 
 
 def _config(tmp_path) -> Config:

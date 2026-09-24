@@ -15,16 +15,16 @@
 
 from __future__ import annotations
 
-from collections import deque
 import logging
-import os
 import math
+import os
 import random
 import sys
 import threading
 import time as _stdlib_time
-from types import SimpleNamespace
+from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 time = SimpleNamespace(monotonic=_stdlib_time.monotonic)
 
 import shiboken6
-
 from PySide6.QtCore import (
     QEasingCurve,
     QElapsedTimer,
@@ -45,7 +44,6 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-
 from PySide6.QtGui import (
     QBitmap,
     QColor,
@@ -56,7 +54,6 @@ from PySide6.QtGui import (
     QPixmap,
     QRegion,
 )
-
 from PySide6.QtWidgets import (
     QApplication,
     QInputDialog,
@@ -65,9 +62,18 @@ from PySide6.QtWidgets import (
 )
 
 from . import autostart as autostart_mod
-from . import catalog
-from . import gui_stall_sampler
-from . import perfstats
+from . import catalog, gui_stall_sampler, perfstats, platform_win, window_alerts, window_placement, window_screen
+from . import physics as physics_mod
+from .animation_thumbnail import decode_representative_frame
+from .click_sound import (
+    choose_sound,
+    play_press_sound,
+    play_release_sound,
+    play_sound,
+    resolve_click_sound_candidates,
+    resolve_click_sound_pair,
+)
+from .collision_client import CollisionClient
 from .config import (
     DEFAULT_SELF_TALK_BUBBLE_STYLE,
     DEFAULT_SELF_TALK_DURATION_SECONDS,
@@ -77,43 +83,42 @@ from .config import (
     Config,
     _float_or_default,
 )
+from .context_menu import normalize_template_id
+from .context_menu import populate_context_menu as _populate_context_menu
+from .context_menus.shared import take_deferred_menu_callbacks
+from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
 from .library import MovieLibrary
 from .movement import body_reach, choose_move_direction, inward_facing, move_anim_tick, move_position_at_frame, quantize_move, wander_target_y
-from .predictive_prewarm import PredictivePrewarm, pick_from_pool, roll_next
-from .report_gates import REPORT_GATE_DEFAULTS
-from . import window_placement
-from . import window_screen
-from . import window_alerts
-from .animation_thumbnail import decode_representative_frame
-from .speech_bubble import PetSpeechBubble, list_self_talk_images
-from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
-from .context_menu import normalize_template_id, populate_context_menu as _populate_context_menu
-from .context_menus.shared import take_deferred_menu_callbacks
-from . import physics as physics_mod
-from .collision_client import CollisionClient
-from .click_sound import (
-    choose_sound,
-    play_sound,
-    resolve_click_sound_candidates,
-    resolve_click_sound_pair,
-    play_press_sound,
-    play_release_sound,
-)
-from .proactive import effective_proactive_config
-from .window_optional_services import WindowFeatureGateMixin
-
-from . import platform_win
 from .platform_mac import _keep_macos_tool_window_visible, _mac_set_window_level
 from .platform_win import (
     GWL_EXSTYLE as GWL_EXSTYLE,
-    _set_windows_click_through as _set_windows_click_through,
-    _set_windows_no_activate as _set_windows_no_activate,
+)
+from .platform_win import (
     WindowsPerPixelInputController as WindowsPerPixelInputController,
-    _fullscreen_geometry_hit as _fullscreen_geometry_hit,
-    _fs_user_busy_state as _fs_user_busy_state,
+)
+from .platform_win import (
     _fg_fullscreen_probe as _fg_fullscreen_probe,
+)
+from .platform_win import (
     _fg_fullscreen_win32 as _fg_fullscreen_win32,
 )
+from .platform_win import (
+    _fs_user_busy_state as _fs_user_busy_state,
+)
+from .platform_win import (
+    _fullscreen_geometry_hit as _fullscreen_geometry_hit,
+)
+from .platform_win import (
+    _set_windows_click_through as _set_windows_click_through,
+)
+from .platform_win import (
+    _set_windows_no_activate as _set_windows_no_activate,
+)
+from .predictive_prewarm import PredictivePrewarm, pick_from_pool, roll_next
+from .proactive import effective_proactive_config
+from .report_gates import REPORT_GATE_DEFAULTS
+from .speech_bubble import PetSpeechBubble, list_self_talk_images
+from .window_optional_services import WindowFeatureGateMixin
 
 # 后台播放音乐时自动播放的唱歌/哼歌动画
 SING_ANIM = "悠闲哼歌"

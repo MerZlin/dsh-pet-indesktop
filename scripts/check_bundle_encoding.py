@@ -165,8 +165,7 @@ def scan_pyinstaller_executables(root: Path, literals: Iterable[str]) -> set[str
     文件，必须用 PyInstaller reader 解析。未安装 PyInstaller 时返回空集。
     """
     try:
-        from PyInstaller.archive.readers import CArchiveReader
-        from PyInstaller.archive.readers import PKG_ITEM_PYSOURCE, PKG_ITEM_PYZ
+        from PyInstaller.archive.readers import PKG_ITEM_PYSOURCE, PKG_ITEM_PYZ, CArchiveReader
     except Exception:
         return set()
 

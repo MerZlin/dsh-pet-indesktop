@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone

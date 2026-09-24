@@ -21,16 +21,16 @@ from PySide6.QtWidgets import (
 )
 
 from ..settings_widgets import (
-    ModernSelect,
-    _line_edit,
-    BrowserSpinBox,
     BrowserDoubleSpinBox,
-    ToggleSwitch,
+    BrowserSpinBox,
+    ModernSelect,
     ResourcePathPicker,
     ResponsiveActionRow,
-    SettingsSection,
     SettingRow,
     SettingsCard,
+    SettingsSection,
+    ToggleSwitch,
+    _line_edit,
 )
 from .themes import CHAT_UI_STYLE_LABELS, CHAT_UI_VIEW_ASPECT, theme_names
 from .utils import _safe_emit

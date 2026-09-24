@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import time
 import threading
+import time
+
 from PySide6.QtWidgets import QApplication
+
 from pet.chat.models import ProviderConfig
 from pet.chat.service import ChatService
 

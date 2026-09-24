@@ -1,10 +1,15 @@
 from __future__ import annotations
-import json, ssl, threading, urllib.error, urllib.request
+
+import json
+import re as _re
+import ssl
+import threading
+import urllib.error
+import urllib.request
 from collections.abc import Iterator
 from typing import Any
-from .models import ProviderConfig
 
-import re as _re
+from .models import ProviderConfig
 
 try:
     import certifi

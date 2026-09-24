@@ -6,9 +6,11 @@
 保证桌宠侧按 session 统计的连续计数兜底与桥端写出的 model_access 事件对齐。"""
 
 from __future__ import annotations
+
+import re
 from dataclasses import dataclass
 from typing import Any
-import re
+
 from .agent_event_protocol import AgentEvent
 
 _MODEL_ACCESS_CODES = {"429", "RATE_LIMIT", "TOO_MANY_REQUESTS", "RESOURCE_EXHAUSTED"}

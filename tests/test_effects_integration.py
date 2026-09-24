@@ -177,9 +177,8 @@ def test_real_window_paint_with_active_rotation_does_not_raise(tmp_path):
     之前 end_rotation 参数不匹配会在实际靠边/旋转时抛 TypeError，并留下未结束
     QPainter 导致 QPaintDevice 崩溃。这里直接让真实 PetWindow 带旋转角度 grab。
     """
-    from tests.test_collision_window import FakeLibrary
-
     from pet.window import PetWindow
+    from tests.test_collision_window import FakeLibrary
 
     app = _qapp()
     cfg = Config(tmp_path)
@@ -201,9 +200,8 @@ def test_real_window_paint_with_active_rotation_does_not_raise(tmp_path):
 
 def test_real_window_direct_golden_spin_on_click_accumulates(tmp_path):
     """点击直连模式：真实 PetWindow 点击不播动画，直接回旋并累计圈数。"""
-    from tests.test_collision_window import FakeLibrary
-
     from pet.window import PetWindow
+    from tests.test_collision_window import FakeLibrary
 
     app = _qapp()
     cfg = Config(tmp_path)
@@ -236,10 +234,9 @@ def test_real_window_move_blocked_during_edge_probe(tmp_path, monkeypatch):
     移动动画被 _effects_filter_switch 降级为待机且 _switch 返回 True，于是
     移动计划照常建立，窗口挂着探头姿态被平移出屏幕边缘。
     """
-    from tests.test_collision_window import FakeLibrary
-
     from pet.edge_probe import OFF, PEEKING
     from pet.window import PetWindow
+    from tests.test_collision_window import FakeLibrary
 
     class _Scr:
         def availableGeometry(self):

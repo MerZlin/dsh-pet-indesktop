@@ -9,6 +9,7 @@ import types
 import wave
 from pathlib import Path
 from types import SimpleNamespace
+
 from PySide6.QtCore import QTimer
 
 from pet import click_sound
@@ -540,11 +541,13 @@ def test_play_with_effect_returns_false_when_error_persists(tmp_path, monkeypatc
 
 def test_click_sound_immediate_toggle_in_dialog_affects_pet_window(tmp_path, monkeypatch):
     """回归测试：设置对话框中即时关闭点击音效，桌宠窗口点击立即不播放。"""
-    from pet.config import Config
-    from pet.window import PetWindow
-    from pet.modern_settings_dialog import ModernSettingsDialog
-    from PySide6.QtWidgets import QApplication
     from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QApplication
+
+    from pet.config import Config
+    from pet.modern_settings_dialog import ModernSettingsDialog
+    from pet.window import PetWindow
 
     app = QApplication.instance() or QApplication([])
     config = Config(tmp_path)

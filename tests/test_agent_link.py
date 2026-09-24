@@ -22,23 +22,21 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 import pet.agent_link as agent_link
 from pet.agent_link import (
-    AgentLinkManager,
     AgentEvent,
+    AgentLinkManager,
     BaseAgentMonitor,
     ByteOffsetTailer,
-    DirGlobTailer,
     ClaudeCodeMonitor,
     CursorMonitor,
     CustomAgentMonitor,
+    DirGlobTailer,
     DshMonitor,
     normalize_event_state,
     opencode_event_state,
 )
-from pet.config import Config
-from pet.config import _clean_agent_link_data, _clean_custom_agents
+from pet.config import Config, _clean_agent_link_data, _clean_custom_agents
 from pet.report_gates import REPORT_GATE_DEFAULTS
 from pet.speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
-
 
 # 测试门基线：本文件验证「机制」，不隐式依赖产品默认值。
 # 概率门全关（各类汇报需要用例显式开门才该弹），只保留「审批与提问」常开——它
@@ -689,8 +687,9 @@ class TestAgentMenuRebound:
     def test_decline_rolls_back_checkbox(self, tmp_path, monkeypatch):
         """用户拒绝授权后，菜单勾选态必须回滚，不允许 UI 骗人。"""
         from PySide6.QtWidgets import QApplication
-        from pet.window import PetWindow
+
         from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.No)
@@ -750,8 +749,9 @@ class TestRealFormatMappers:
         assert cursor_line_state({"random": True}) == ""
 
     def test_opencode_event_types(self):
-        from pet.agent_link import opencode_event_state
         import json as j
+
+        from pet.agent_link import opencode_event_state
 
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "user"}})) == "thinking"
         assert opencode_event_state("message.updated.1", j.dumps({"info": {"role": "assistant"}})) == ""
@@ -766,7 +766,9 @@ class TestOpenCodeSqliteTail:
     def test_sqlite_incremental_poll(self, tmp_path):
         """OpenCode 监视器：自建 sqlite event 表，验证 backfill 防护 + 增量轮询。"""
         import sqlite3
+
         from PySide6.QtWidgets import QApplication
+
         from pet.agent_link import OpenCodeMonitor
 
         app = QApplication.instance() or QApplication([])
@@ -802,6 +804,7 @@ class TestOpenCodeSqliteTail:
         """OpenCode 重建数据库后不沿用旧 rowid，也不重放新库历史行。"""
         import os
         import sqlite3
+
         from pet.agent_link import OpenCodeMonitor
 
         db_path = tmp_path / "opencode.db"
@@ -845,6 +848,7 @@ class TestCooldownUnits:
     def test_seconds_and_minutes_conversion(self, tmp_path):
         """冷却间隔秒/分钟双单位：45 秒应存为 0.75 分钟。"""
         from PySide6.QtWidgets import QApplication
+
         from pet.modern_settings_dialog import ModernSettingsDialog
 
         app = QApplication.instance() or QApplication([])
@@ -904,8 +908,9 @@ class TestModernSettingsProactivePage:
 
             pytest.skip("主动识屏页仅 Windows")
         from PySide6.QtWidgets import QApplication
-        from pet.modern_settings_dialog import ModernSettingsDialog
+
         import pet.modern_settings_dialog as settings_mod
+        from pet.modern_settings_dialog import ModernSettingsDialog
 
         app = QApplication.instance() or QApplication([])
         monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
@@ -1928,8 +1933,9 @@ class TestAgentLinkChainingAndActivity:
         再测：待机中（win.anim 在 win.idles 里）request_link_anim 立即切换。
         request_link_idle 在一次性动作播放中不切回待机（anim 不变、pending 清空）。"""
         from PySide6.QtWidgets import QApplication
-        from pet.window import PetWindow
+
         from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
         cfg = Config(base=tmp_path)
@@ -1976,8 +1982,9 @@ class TestAgentLinkChainingAndActivity:
         win._link_next_provider=lambda: '吃Token'，调 win._on_anim_ended('写代码') → anim=='吃Token'；
         provider 返回 None 时走正常动画链（不抛异常即可）。"""
         from PySide6.QtWidgets import QApplication
-        from pet.window import PetWindow
+
         from pet.library import MovieLibrary
+        from pet.window import PetWindow
 
         app = QApplication.instance() or QApplication([])
         cfg = Config(base=tmp_path)
@@ -2125,7 +2132,9 @@ class TestOpenCodeSubagentFilter:
     def test_subagent_events_filtered(self, tmp_path):
         """子代理（parent_id 非空）会话的 step-start/step-finish/工具事件全部忽略。"""
         import sqlite3
+
         from PySide6.QtWidgets import QApplication
+
         from pet.agent_link import OpenCodeMonitor
 
         app = QApplication.instance() or QApplication([])
@@ -2160,7 +2169,9 @@ class TestOpenCodeSubagentFilter:
     def test_missing_session_table_conservative(self, tmp_path):
         """老库没有 session 表：不过滤（保守不丢事件）。"""
         import sqlite3
+
         from PySide6.QtWidgets import QApplication
+
         from pet.agent_link import OpenCodeMonitor
 
         app = QApplication.instance() or QApplication([])
@@ -2405,6 +2416,7 @@ class TestCustomAgentMenu:
     def test_menu_lists_custom_agent_and_toggle_routes(self, tmp_path):
         """右键菜单动态渲染自定义 Agent（收进「自定义联动 Agent」三级子菜单），勾选走通用 _toggle_agent_link。"""
         from PySide6.QtWidgets import QMenu
+
         from pet.context_menus.shared import add_agent_link_menu
 
         app = QApplication.instance() or QApplication([])

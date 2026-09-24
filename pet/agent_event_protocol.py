@@ -2,9 +2,10 @@
 """Unified, bounded Agent event protocol."""
 
 from __future__ import annotations
-from dataclasses import dataclass, field
+
 import json
 import time
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 SCHEMA = "agent-event/v1"

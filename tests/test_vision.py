@@ -48,8 +48,9 @@ def test_capture_screen_bytes_in_memory(tmp_path):
 
     data = capture_screen_bytes()
     assert isinstance(data, bytes) and data[:2] == b"\xff\xd8"  # JPEG SOI
-    from PIL import Image
     import io
+
+    from PIL import Image
 
     with Image.open(io.BytesIO(data)) as img:
         assert max(img.size) <= 768
@@ -84,6 +85,7 @@ def test_endpoint_bare_host_appends_default_path():
 def test_vision_overrides_ignored_when_same_as_chat():
     """同聊天模型时，视觉独立端点/密钥一律不得生效（防残留 GLM 地址配 ds 模型名）。"""
     import inspect
+
     from pet import vision
 
     src = inspect.getsource(vision._post_vision_request)
@@ -113,6 +115,7 @@ def test_independent_vision_empty_key_never_uses_chat_key(monkeypatch):
     （聊天 Key 因此绝不会被发送到独立视觉端点）。
     """
     import pytest
+
     from pet import vision
     from pet.chat.models import ProviderConfig
 
@@ -173,6 +176,7 @@ def test_independent_vision_prefers_own_key_over_chat_key(monkeypatch):
 def test_vision_request_includes_self_recognition_hint(monkeypatch):
     """视觉请求 user 文本应携带自我识别提示（认出截图里的桌宠是自己）。"""
     import json
+
     from pet import vision
     from pet.chat.models import ProviderConfig
 
@@ -193,10 +197,11 @@ def test_vision_request_includes_self_recognition_hint(monkeypatch):
 
 def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeypatch):
     """回归测试：看看屏幕 worker 接收快照，不改写主线程 ProviderConfig 共享对象。"""
-    from pet.chat.models import ProviderConfig, ChatSettings
-    from pet.window import PetWindow
-    from pet.config import Config
     from types import SimpleNamespace
+
+    from pet.chat.models import ChatSettings, ProviderConfig
+    from pet.config import Config
+    from pet.window import PetWindow
 
     shared_provider = ProviderConfig.from_dict(
         "test-p",

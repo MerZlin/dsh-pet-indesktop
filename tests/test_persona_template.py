@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import re
+
 from pet.persona_phrases import phrase_keys
 from pet.persona_template import build_persona_template
 

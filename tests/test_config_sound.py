@@ -4,9 +4,9 @@
 import json
 from pathlib import Path
 
-from pet.config import Config
 from pet import physics as physics_mod
 from pet import window as window_mod
+from pet.config import Config
 
 
 def test_legacy_click_sound_path_migration(tmp_path: Path):

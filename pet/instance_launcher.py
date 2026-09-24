@@ -8,7 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 # 模块加载时捕获真实 Popen 类型（测试会整体替换 subprocess.Popen，
 # 登记判断须用真实类型；fake 返回的对象不入登记表）。
 _POPEN_TYPE = subprocess.Popen

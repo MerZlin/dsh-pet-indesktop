@@ -26,11 +26,9 @@ import math
 import time
 from typing import Any
 
-from PySide6.QtCore import QObject, QTimer, Qt, Slot
+from PySide6.QtCore import QObject, Qt, QTimer, Slot
 
-from . import collision
-from . import collision_codec
-from . import collision_debug
+from . import collision, collision_codec, collision_debug
 from . import physics as physics_mod
 
 

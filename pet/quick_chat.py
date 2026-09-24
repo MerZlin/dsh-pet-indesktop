@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QTimer, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,13 +23,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .speech_bubble import BUBBLE_STYLE_PRESETS
-from .speech_bubble_text import truncate_bubble_text
-
 from .chat.models import ChatMessage
 from .chat.prompt import PromptBuilder
 from .chat.service import ChatService
 from .chat.session_store import SessionStore
+from .speech_bubble import BUBBLE_STYLE_PRESETS
+from .speech_bubble_text import truncate_bubble_text
 
 _PAGE_SIZE = 500
 

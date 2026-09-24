@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import threading
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -18,6 +20,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
 from .models import ChatSettings, ProviderConfig, SecretStore
 from .providers import test_connection
 from .themes import CHAT_UI_STYLE_LABELS, CHAT_UI_VIEW_ASPECT, theme_names

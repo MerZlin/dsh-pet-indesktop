@@ -8,8 +8,7 @@ settings_widgets（本模块未引用）。
 
 from __future__ import annotations
 
-from .settings_widgets import _system_dark, BROWSER_CONTROL_STYLESHEET
-
+from .settings_widgets import BROWSER_CONTROL_STYLESHEET, _system_dark
 
 _DARK_OVERRIDE = """
 QDialog { background: #202024; color: #e4e4e9; }

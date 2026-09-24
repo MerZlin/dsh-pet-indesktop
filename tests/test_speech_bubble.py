@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import time
 from math import ceil
+
 from PySide6.QtCore import QPropertyAnimation, QRect, QSize
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtTest import QTest

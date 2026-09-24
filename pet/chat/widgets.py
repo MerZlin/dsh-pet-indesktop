@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImageReader, QMouseEvent, QPainter, QPainterPath, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,25 +26,24 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizeGrip,
-    QStyle,
     QSizePolicy,
     QSpacerItem,
     QStackedLayout,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from ..context_menus.icons import vector_widget_icon
+from . import themes as chat_themes
 from .geometry import best_position_near_pet
 from .models import ChatMessage
 from .pet_link import PetChatLink
 from .prompt import PromptBuilder, load_character_manifest
-from . import themes as chat_themes
 from .service import ChatService
 from .session_store import SessionStore
 from .utils import _short_title
-from ..context_menus.icons import vector_widget_icon
-
 
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_ACCENT = "#3994ff"

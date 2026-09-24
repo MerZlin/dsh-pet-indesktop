@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import subprocess
 import sys
 import time
@@ -15,9 +15,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication
 
-from pet import collision
-from pet import collision_codec
-from pet import collision_ipc
+from pet import collision, collision_codec, collision_ipc
 from pet.collision_ipc import (
     CollisionIpcSession,
     _CollisionWorker,

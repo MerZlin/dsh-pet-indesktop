@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import QMenu, QWidgetAction
 
 from ..config import DEFAULT_MENU_EASTER_EGG
@@ -19,6 +18,7 @@ from .shared import (
     QUARK_PAN_URL,
     REPO_URL,
     add_action,
+    add_agent_cost,
     add_agent_link_menu,
     add_autostart,
     add_balance,
@@ -30,7 +30,6 @@ from .shared import (
     add_harness,
     add_hide_pet,
     add_look_screen,
-    add_agent_cost,
     add_music_lyric_align,
     add_music_next,
     add_music_open_netease,
@@ -50,7 +49,6 @@ from .shared import (
     build_size_menu,
     build_speed_menu,
 )
-
 
 ACTION_LABELS = {
     "ojingjing": "厉害了我的鲸",

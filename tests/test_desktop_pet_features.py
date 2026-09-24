@@ -378,7 +378,7 @@ def test_change_scale_with_destroyed_bubble_is_noop():
 def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(tmp_path, monkeypatch):
     from PIL import Image
 
-    from pet.config import Config, DEFAULT_SELF_TALK_DURATION_SECONDS
+    from pet.config import DEFAULT_SELF_TALK_DURATION_SECONDS, Config
     from pet.speech_bubble import list_self_talk_images
     from pet.window import PetWindow
 
@@ -399,6 +399,7 @@ def test_self_talk_images_and_duration_are_normalized_and_scheduled_after_hide(t
 
     from PySide6.QtCore import QRect
     from PySide6.QtWidgets import QApplication
+
     from pet.speech_bubble import PetSpeechBubble
 
     app = QApplication.instance() or QApplication([])
@@ -440,6 +441,7 @@ def test_self_talk_image_scale_config_and_bubble_size(tmp_path):
 
     from PySide6.QtCore import QRect
     from PySide6.QtWidgets import QApplication
+
     from pet.speech_bubble import PetSpeechBubble
 
     app = QApplication.instance() or QApplication([])
@@ -817,9 +819,9 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QMenu
 
-    import pet.window as window_mod
     import pet.context_menus.registry as registry_mod
     import pet.context_menus.shared as shared_menu_mod
+    import pet.window as window_mod
 
     class FakeConfig:
         def __init__(self):
@@ -1061,6 +1063,7 @@ def test_context_menu_invalid_template_falls_back_to_modern_uniformly():
     非法值一律落到现行默认模板 modern。
     """
     from PySide6.QtWidgets import QApplication, QMenu
+
     from pet.context_menu import load_menu_template, normalize_template_id, populate_context_menu
 
     # normalize 是唯一的回退决策点
@@ -2270,8 +2273,8 @@ def test_reopened_animation_menu_reuses_cached_images_immediately():
     from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QApplication, QMenu
 
-    from pet.context_menus.shared import build_animation_categories
     from pet.context_menus.menu_styles.modern import apply_modern_menu_style
+    from pet.context_menus.shared import build_animation_categories
 
     class Pet:
         idles = ["idle-a"]
@@ -2384,8 +2387,8 @@ def test_visible_animation_submenu_does_not_relayout_when_thumbnail_finishes():
     from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QApplication, QMenu
 
-    from pet.context_menus.shared import build_animation_categories
     from pet.context_menus.menu_styles.modern import apply_modern_menu_style
+    from pet.context_menus.shared import build_animation_categories
 
     class Pet:
         idles = ["idle-a"]
@@ -2433,8 +2436,8 @@ def test_animation_hover_only_dispatches_bounded_background_work():
     from PySide6.QtGui import QImage
     from PySide6.QtWidgets import QApplication, QMenu
 
-    from pet.context_menus.shared import build_animation_categories
     from pet.context_menus.menu_styles.modern import apply_modern_menu_style
+    from pet.context_menus.shared import build_animation_categories
 
     class Pet:
         idles = turns = moves = clicks = []

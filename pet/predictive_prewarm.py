@@ -29,8 +29,7 @@ from __future__ import annotations
 
 import random
 
-from . import catalog
-from . import perfstats
+from . import catalog, perfstats
 
 
 def pick_from_pool(pool, exclude: str | None = None):

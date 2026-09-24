@@ -283,6 +283,7 @@ def foreground_app_info() -> str:
 def capture_screen_bytes() -> bytes:
     """截全屏（含多显示器）→ 缩到最长边 MAX_EDGE → 内存 JPEG bytes，全程不落盘。"""
     import io
+
     from PIL import Image, ImageGrab  # 懒导入：PIL 不随模块加载常驻（见模块头注释）
 
     img = ImageGrab.grab(all_screens=True)
@@ -323,7 +324,7 @@ def _post_vision_request(
     pet_name: 可选，桌宠角色显示名；用于在 user 文本里追加自我识别提示，
     让模型认出截图角落里的桌宠就是自己，而不是陌生程序。"""
     # 延迟导入：无 Chat 变体（pet.chat 被排除）下本函数不会被调用
-    from .chat.providers import _make_ssl_context, normalize_chat_endpoint, build_browser_headers
+    from .chat.providers import _make_ssl_context, build_browser_headers, normalize_chat_endpoint
 
     # 视觉独立端点仅在「不同聊天模型」时生效；同聊天模型时强制跟随聊天配置，
     # 否则残留的 GLM 地址会配上 ds 的模型名发出（modelCode 不存在）

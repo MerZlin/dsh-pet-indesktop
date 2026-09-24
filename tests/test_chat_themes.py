@@ -70,11 +70,13 @@ def test_all_builtin_themes_resolve():
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-    from pet.chat.legacy_widgets import ChatWindow
-    from pet.chat import session_store
-    from pet.config import Config
     import tempfile
+
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat import session_store
+    from pet.chat.legacy_widgets import ChatWindow
+    from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
     for key in THEMES:
@@ -97,6 +99,7 @@ def test_classic_background_supports_builtin_theme_while_modern_background_is_in
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtGui import QColor, QPixmap
     from PySide6.QtWidgets import QApplication
+
     from pet.chat.legacy_widgets import ChatWindow as LegacyChatWindow
     from pet.chat.widgets import ChatWindow as ModernChatWindow
     from pet.config import Config

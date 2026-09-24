@@ -21,8 +21,9 @@ def app():
 
 
 def _section_titles(dialog):
-    from pet.modern_settings_dialog import SettingsSection
     from PySide6.QtWidgets import QLabel
+
+    from pet.modern_settings_dialog import SettingsSection
 
     titles = []
     for section in dialog.findChildren(SettingsSection):

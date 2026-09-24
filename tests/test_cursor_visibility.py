@@ -130,6 +130,7 @@ def test_cursor_transition_is_deferred_until_release(monkeypatch):
 def test_fs_watch_loop_survives_transient_runtime_error(monkeypatch):
     """回归测试：全屏/光标监视线程遇到瞬时异常不应退出，应继续循环。"""
     import threading
+
     from pet import vision
 
     win = PetWindow.__new__(PetWindow)

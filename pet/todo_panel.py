@@ -17,6 +17,7 @@ from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDateEdit,
     QDialog,
     QFrame,
     QGridLayout,
@@ -26,7 +27,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTimeEdit,
-    QDateEdit,
     QVBoxLayout,
     QWidget,
 )

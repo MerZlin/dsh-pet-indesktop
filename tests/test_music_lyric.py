@@ -12,9 +12,8 @@ import time
 import urllib.request
 
 from pet import music_lyric
-from pet.music_lyric import Lyrics, LyricLine, parse_lrc
+from pet.music_lyric import LyricLine, Lyrics, parse_lrc
 from pet.music_lyric_controller import LyricTracker
-
 
 # ---------------------------------------------------------------- parse_lrc
 

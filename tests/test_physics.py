@@ -2,6 +2,7 @@
 """拖拽物理纯函数测试：初速估算（含加速度增益）、弹簧、抛掷、四档力度与软上限。"""
 
 import math
+
 import pytest
 
 from pet.physics import (

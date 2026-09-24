@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, Signal, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter, QPainterPath, QPalette
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,14 +18,16 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizeGrip,
-    QStyle,
     QSizePolicy,
     QStackedLayout,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from ..context_menus.icons import vector_widget_icon
+from . import themes as chat_themes
 from .geometry import best_position_near_pet
 from .models import ChatMessage
 from .pet_link import PetChatLink
@@ -33,9 +35,6 @@ from .prompt import PromptBuilder, load_character_manifest
 from .service import ChatService
 from .session_store import SessionStore
 from .utils import _short_title
-from ..context_menus.icons import vector_widget_icon
-from . import themes as chat_themes
-
 
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_ACCENT = "#3994ff"

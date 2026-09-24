@@ -1,8 +1,10 @@
 """Compatibility normalizer from AgentEvent facts to Pet semantic events."""
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
+
 from .agent_event_protocol import AgentEvent, parse_agent_event
 
 

@@ -8,10 +8,9 @@
 from __future__ import annotations
 
 import pytest
+import shiboken6
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
 from PySide6.QtWidgets import QApplication
-
-import shiboken6
 
 from pet.chat.utils import _safe_emit
 

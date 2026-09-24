@@ -16,13 +16,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QMessageBox,
-    QSplitter,
     QSizePolicy,
+    QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -41,10 +41,10 @@ from .menu_layout import (
     resolve_menu_layout,
 )
 from .settings_widgets import (
-    SettingsMenuButton,
-    configure_settings_action_popup,
-    SettingsPopupMenu,
     IMAGE_NAME_FILTER,
+    SettingsMenuButton,
+    SettingsPopupMenu,
+    configure_settings_action_popup,
 )
 
 

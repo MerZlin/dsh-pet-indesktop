@@ -34,7 +34,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _make_self_signed_cert(tmp: str):
-    import subprocess, sys
+    import subprocess
+    import sys
 
     cert, key = tmp + ".crt", tmp + ".key"
     subprocess.run(
@@ -57,7 +58,8 @@ def _make_self_signed_cert(tmp: str):
 
 
 def main():
-    import tempfile, os
+    import os
+    import tempfile
 
     tmpdir = tempfile.mkdtemp(prefix="pet-ssl-check-")
     cert_path = os.path.join(tmpdir, "server.crt")

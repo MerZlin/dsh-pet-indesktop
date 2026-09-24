@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-import threading
 import hashlib
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt

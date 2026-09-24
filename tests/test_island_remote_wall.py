@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QApplication
 
 from pet import collision
 from pet.collision_ipc import _CollisionWorker
-from pet.island_collision import IslandCollisionBody, _REMOTE_WALL_TTL_S
+from pet.island_collision import _REMOTE_WALL_TTL_S, IslandCollisionBody
 
 ISLAND = collision.ISLAND_MEMBER_ID
 FLAGS_ACTIVE = collision.FLAG_STATIC | collision.FLAG_COLLISION_ENABLED | collision.FLAG_VISIBLE

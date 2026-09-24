@@ -12,11 +12,11 @@ from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
 from pet.dynamic_island import (
-    DynamicIsland,
     _CAPSULE_HEIGHT,
     _CAPSULE_INSET,
     _STRIP_SIDE,
     _STRIP_THICKNESS,
+    DynamicIsland,
     dock_edge_for,
     spring_step,
     strip_rect_for,

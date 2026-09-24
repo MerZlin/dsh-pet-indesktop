@@ -19,11 +19,11 @@ import time
 import pytest
 
 from pet.decode_fanout import (
+    WATCHDOG_BUDGET_MS,
     DecodeFanoutHub,
     FanoutFeed,
     _RingBuffer,
     _SourceSink,
-    WATCHDOG_BUDGET_MS,
 )
 
 FRAME = bytes(640 * 360 * 4)  # 整帧 RGBA（内容不必唯一：帧身份由 src 标记）

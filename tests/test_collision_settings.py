@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
 import pytest
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
 from pet.modern_settings_dialog import ModernSettingsDialog
 from pet.window import PetWindow
-from tests.test_collision_window import FakeLibrary, FakeCollisionSession
+from tests.test_collision_window import FakeCollisionSession, FakeLibrary
 
 
 @pytest.fixture(scope="session")

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pet import catalog
 import pet.library as library_mod
+from pet import catalog
 
 
 class FakeClip:

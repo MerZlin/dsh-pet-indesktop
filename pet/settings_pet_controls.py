@@ -23,11 +23,6 @@ from PySide6.QtWidgets import (
 from . import autostart as autostart_mod
 from . import catalog
 from .agent_link import AgentLinkManager
-from .music_lyric_controller import (
-    LEAD_MAX_SECONDS,
-    LEAD_MIN_SECONDS,
-    LYRIC_LEAD_SECONDS,
-)
 from .config import (
     DEFAULT_CONTEXT_MENU_APPEARANCE,
     DEFAULT_MENU_EASTER_EGG,
@@ -41,6 +36,11 @@ from .config import (
 )
 from .context_menus.icons import vector_widget_icon
 from .fun_image_popup import oijingjing_image_path, resolve_fun_asset
+from .music_lyric_controller import (
+    LEAD_MAX_SECONDS,
+    LEAD_MIN_SECONDS,
+    LYRIC_LEAD_SECONDS,
+)
 from .persona_phrases import PUBLIC_DIALOGUE_EVENTS, phrase_keys
 from .persona_template import build_persona_template
 from .report_gates import REPORT_GATE_DEFAULTS, REPORT_GATE_KEYS

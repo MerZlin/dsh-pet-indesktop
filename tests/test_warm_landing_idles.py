@@ -149,6 +149,7 @@ def test_ffr_evict_respects_late_pin():
     常驻/飞行期 pin 可能落在两者之间——不复查的话"绝不逐出"语义形同虚设。
     """
     import threading
+
     from pet import webm_clip
 
     class _Victim:

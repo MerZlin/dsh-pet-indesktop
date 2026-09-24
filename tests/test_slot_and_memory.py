@@ -25,10 +25,10 @@ from pathlib import Path
 
 import pytest
 
-from pet.config import Config, APP_DIR_NAME
 from pet import slot_manager as sm
-from pet.chat.session_store import SessionStore
 from pet.chat.models import ChatMessage, ChatSession
+from pet.chat.session_store import SessionStore
+from pet.config import APP_DIR_NAME, Config
 
 
 def _run_slot_worker_code(config_dir: Path, code: str, timeout: float = 10.0) -> subprocess.Popen:

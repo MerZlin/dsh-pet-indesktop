@@ -1,8 +1,8 @@
 import os
 import types
+from datetime import datetime, timezone
 
 import pytest
-from datetime import datetime, timezone
 
 
 def test_modern_message_card_opacity_is_configurable_and_persisted(tmp_path, monkeypatch):
@@ -134,9 +134,9 @@ def test_click_sound_path_is_linked_to_enable_toggle_and_persisted(tmp_path, mon
 def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, monkeypatch):
     """点击音效未启用时，音效包行初始就应隐藏（此前初始同步在 UI 构建前，
     findChild 找不到行导致初始状态错误显示）。"""
-    import pet.modern_settings_dialog as settings_mod
     from PySide6.QtWidgets import QApplication
 
+    import pet.modern_settings_dialog as settings_mod
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
@@ -162,9 +162,9 @@ def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, mo
 def test_click_sound_path_row_sits_directly_below_toggle(tmp_path, monkeypatch):
     """音效包行必须紧贴点击音效行下方（此前 click_balance 插入 index 1 把
     音效包行挤到第三位）；2026-09-17 定稿口径下这两行仍在「互动 · 点击反馈」。"""
-    import pet.modern_settings_dialog as settings_mod
     from PySide6.QtWidgets import QApplication, QLabel
 
+    import pet.modern_settings_dialog as settings_mod
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
@@ -187,10 +187,10 @@ def test_click_sound_path_row_sits_directly_below_toggle(tmp_path, monkeypatch):
 
 def test_settings_dialog_position_avoids_pet_window(tmp_path, monkeypatch):
     """设置窗口激活时不应遮挡桌宠：打开时移动到不与桌宠相交的位置。"""
-    import pet.modern_settings_dialog as settings_mod
     from PySide6.QtCore import QRect
     from PySide6.QtWidgets import QApplication, QWidget
 
+    import pet.modern_settings_dialog as settings_mod
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
@@ -216,10 +216,10 @@ def test_settings_dialog_position_avoids_pet_window(tmp_path, monkeypatch):
 
 def test_menu_font_select_lists_system_fonts(tmp_path, monkeypatch):
     """UI 字体设置项应枚举系统可用字体，而不是硬编码少数几个。"""
-    import pet.modern_settings_dialog as settings_mod
     from PySide6.QtGui import QFontDatabase
     from PySide6.QtWidgets import QApplication
 
+    import pet.modern_settings_dialog as settings_mod
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
@@ -325,9 +325,9 @@ def test_dock_icon_row_platform_gated(tmp_path, monkeypatch):
     """「显示 Dock 图标」是 macOS 专属选项，其他平台不应显示。"""
     import sys
 
-    import pet.modern_settings_dialog as settings_mod
     from PySide6.QtWidgets import QApplication
 
+    import pet.modern_settings_dialog as settings_mod
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
@@ -566,7 +566,6 @@ def test_macos_hide_pet_respects_dock_icon_hidden_preference(tmp_path, monkeypat
     activation policy 临时改回 Regular，也不写回配置。
     """
     import sys
-
     from unittest import mock
 
     from PySide6.QtWidgets import QWidget
@@ -634,7 +633,6 @@ def test_linux_settings_has_no_orphan_windows_cursor_passthrough_toggle(tmp_path
 def test_hide_pet_notifies_and_dock_click_restores(tmp_path, monkeypatch):
     """用户主动隐藏：弹托盘提示 + macOS 点击 Dock 图标恢复桌宠。"""
     import sys
-
     from unittest import mock
 
     from PySide6.QtCore import Qt
@@ -671,7 +669,6 @@ def test_hide_pet_notifies_and_dock_click_restores(tmp_path, monkeypatch):
 def test_hide_pet_internal_replacement_skips_notify(tmp_path, monkeypatch):
     """角色切换等内部替换隐藏：不弹提示、不 arm Dock 恢复监听。"""
     import sys
-
     from unittest import mock
 
     from PySide6.QtCore import Qt
@@ -799,8 +796,8 @@ def test_popup_image_paths_survives_missing_directory(tmp_path):
 
 def test_config_normalizes_polluted_absolute_easter_egg_paths(tmp_path):
     """旧配置里已固化的内置资产绝对路径在加载时归一化回相对值。"""
-    from pet.fun_image_popup import bundled_assets_root
     from pet.config import Config
+    from pet.fun_image_popup import bundled_assets_root
 
     bundled = bundled_assets_root()
     (tmp_path / "config.json").write_text(

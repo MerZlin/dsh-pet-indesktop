@@ -9,9 +9,9 @@ Win32 平台层 —— 从 pet/window.py 剥离（结构优化批 6-3）。
 from __future__ import annotations
 
 import ctypes
-from ctypes import wintypes
 import logging
 import os
+from ctypes import wintypes
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QRect, QTimer

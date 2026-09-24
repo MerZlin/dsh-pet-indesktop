@@ -313,8 +313,9 @@ class TestScheduling:
 
     def test_apply_config_schedules_check_when_dsh_enabled(self, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QApplication
-        from pet.config import Config
+
         from pet.agent_link import AgentLinkManager
+        from pet.config import Config
 
         QApplication.instance() or QApplication([])
         scheduled: list[str] = []
@@ -343,8 +344,9 @@ class TestScheduling:
 
     def test_apply_config_skips_check_when_dsh_disabled(self, tmp_path, monkeypatch):
         from PySide6.QtWidgets import QApplication
-        from pet.config import Config
+
         from pet.agent_link import AgentLinkManager
+        from pet.config import Config
 
         QApplication.instance() or QApplication([])
         scheduled: list[str] = []

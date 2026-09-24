@@ -1,8 +1,12 @@
 from __future__ import annotations
-import threading, uuid
+
+import threading
+import uuid
 from typing import Any
+
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import QApplication
+
 from .models import ProviderConfig
 from .providers import OpenAICompatibleProvider
 

@@ -8,17 +8,17 @@
 
 from __future__ import annotations
 
+from collections import deque
+
 import pytest
 from PySide6.QtCore import QObject, QRect, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
-from collections import deque
-
 from pet import catalog
-from pet.window_alerts import show_alert
 from pet.config import Config
 from pet.window import PetWindow
+from pet.window_alerts import show_alert
 
 NAMES = [
     catalog.IDLE,

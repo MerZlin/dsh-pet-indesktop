@@ -27,9 +27,9 @@ def _get_meter():
     if _meter is not None:
         return _meter
     try:
-        import comtypes
         from ctypes import POINTER, cast
 
+        import comtypes
         from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
 
         device = AudioUtilities.GetSpeakers()._dev

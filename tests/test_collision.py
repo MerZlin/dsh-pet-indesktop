@@ -17,11 +17,10 @@
 from __future__ import annotations
 
 import math
+
 import pytest
 
-from pet import collision
-from pet import collision_codec
-from pet import physics
+from pet import collision, collision_codec, physics
 
 
 class TestCollisionEllipseDetection:

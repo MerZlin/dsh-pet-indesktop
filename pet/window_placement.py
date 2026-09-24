@@ -13,17 +13,15 @@ pass itself as the host, so existing callers and test patches continue to work.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-
-import logging
 
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtGui import QGuiApplication
 
 from . import catalog
-
 from . import slot_manager as slot_manager_mod
 
 

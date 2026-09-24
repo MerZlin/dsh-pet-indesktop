@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import QFileInfo, QRectF, QProcess, Qt, QUrl
+from PySide6.QtCore import QFileInfo, QProcess, QRectF, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QFileIconProvider, QMenu
 

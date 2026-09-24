@@ -39,16 +39,15 @@ from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from . import agent_cost as agent_cost_mod
-from .click_sound import play_sound, resolve_builtin_sound
-from .report_gates import should_report_event
-from .agent_event_protocol import parse_agent_event
 from .agent_event_normalizer import normalize_event
+from .agent_event_protocol import parse_agent_event
+from .click_sound import play_sound, resolve_builtin_sound
 from .model_access_tracker import ModelAccessTracker
 from .node_runtime import augmented_path as _augmented_path
 from .node_runtime import global_node_modules_roots
-
 from .persona_phrases import PhrasePicker
 from .persona_template import CONDITIONAL_PARAMETERS
+from .report_gates import should_report_event
 from .speech_bubble import SECTION_HEADER_LABEL, SECTION_HINT_LABEL
 from .speech_bubble_text import truncate_bubble_text
 

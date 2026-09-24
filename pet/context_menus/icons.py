@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 from math import cos, pi, sin
-
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QBitmap, QBrush, QColor, QIcon, QImageReader, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRegion
 from PySide6.QtWidgets import QMenu, QStyle
-
 
 CUSTOM_ICON_SUFFIXES = frozenset(
     {

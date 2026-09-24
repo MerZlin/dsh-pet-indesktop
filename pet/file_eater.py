@@ -13,8 +13,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QEvent, QObject, QUrl
 
 STATS_FILE_NAME = "file_eaten_stats.json"
 STATS_HISTORY_LIMIT = 50

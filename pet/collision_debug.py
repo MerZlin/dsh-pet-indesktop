@@ -7,7 +7,6 @@ import threading
 import time
 from pathlib import Path
 
-
 ENABLED = os.environ.get("DSH_PET_COLLISION_DEBUG") == "1"
 MAX_BYTES = 2 * 1024 * 1024
 _lock = threading.Lock()

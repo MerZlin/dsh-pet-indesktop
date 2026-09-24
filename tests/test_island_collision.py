@@ -15,9 +15,8 @@ from types import SimpleNamespace
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication
 
-from pet import collision
+from pet import collision, window_placement
 from pet import physics as physics_mod
-from pet import window_placement
 from pet.collision_ipc import _KNOWN_FLAGS_MASK
 from pet.config import Config
 from pet.dynamic_island import DynamicIsland

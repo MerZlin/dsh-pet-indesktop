@@ -435,7 +435,7 @@ def test_saved_layout_drops_removed_mouse_through_action(tmp_path):
 
 def test_menu_registry_no_longer_registers_mouse_through():
     """入口收敛：右键菜单注册表里不再有「鼠标穿透」，开关只留在设置页与托盘菜单。"""
-    from pet.context_menus.registry import MENU_ACTIONS, ACTION_ICONS, ACTION_LABELS
+    from pet.context_menus.registry import ACTION_ICONS, ACTION_LABELS, MENU_ACTIONS
 
     assert "mouse_through" not in MENU_ACTIONS.ids
     assert "mouse_through" not in ACTION_LABELS
@@ -460,6 +460,7 @@ def test_unknown_schema_uses_safe_fallback_with_migration_diagnostic():
 
 def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     import sys
+
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication, QMenu
 

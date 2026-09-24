@@ -1462,9 +1462,8 @@ def test_clear_spawned_entry_wired_only_on_primary(tmp_path, app, monkeypatch):
 def test_runtime_marker_written_on_first_show(tmp_path, app):
     """批 G：窗口首次显示即登记 runtime 标记——没被拖动过的新生小肥鱼也有
     标记，「退出子肥鱼」按标记枚举时不会漏掉它。"""
-    from tests.test_collision_window import FakeCollisionSession, FakeLibrary
-
     from pet.window import PetWindow
+    from tests.test_collision_window import FakeCollisionSession, FakeLibrary
 
     config = Config(tmp_path)
     config.set("collision_enabled", False)

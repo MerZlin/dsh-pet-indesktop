@@ -32,8 +32,8 @@ import pytest
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
-from pet import webm_clip as webm_clip_mod
 from pet import perfstats
+from pet import webm_clip as webm_clip_mod
 from pet.webm_clip import WebMClip
 
 

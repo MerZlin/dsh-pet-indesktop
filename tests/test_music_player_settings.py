@@ -90,8 +90,8 @@ def test_saving_paths_persists_and_clears_cache(dialog, monkeypatch):
 
 
 def test_empty_paths_drop_the_key_and_restore_auto_search(dialog, monkeypatch):
-    from pet.config import Config
     from pet import settings_music as module
+    from pet.config import Config
 
     dialog.config.set("music_player_paths", {"netease": "D:/old/cloudmusic.exe"})
     dialog.config.save()

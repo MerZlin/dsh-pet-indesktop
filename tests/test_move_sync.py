@@ -23,10 +23,10 @@ from PySide6.QtCore import QObject, QPoint, QRect, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
+import pet.window as window_mod
 from pet import catalog
 from pet.config import Config
 from pet.movement import move_position_at_frame, quantize_move
-import pet.window as window_mod
 from pet.window import PetWindow
 
 MOVE = catalog.MOVES[0]  # 螃蟹走路

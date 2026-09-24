@@ -50,7 +50,6 @@ from pet.voice_chime import (
 )
 from pet.voice_chime_quotes import CHINESE_QUOTES, ENGLISH_QUOTES
 
-
 # ---------------------------------------------------------------- 配置默认值与清洗
 
 

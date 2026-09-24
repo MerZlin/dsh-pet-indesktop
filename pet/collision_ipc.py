@@ -17,14 +17,11 @@ import sys
 from dataclasses import asdict
 from typing import Any, cast
 
-from PySide6.QtCore import QMetaObject, QObject, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QMetaObject, QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
 
-from . import collision
-from . import collision_codec
-from . import collision_debug
+from . import collision, collision_codec, collision_debug, slot_manager
 from .config import APP_DIR_NAME, DEFAULT_COLLISION_SETTINGS
-from . import slot_manager
 
 MAX_COLLISION_MEMBERS = 128
 PUBLIC_MEMBER_MAX_LENGTH = 1536

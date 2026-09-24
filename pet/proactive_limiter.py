@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-
 # 合法参数范围与默认值常量定义（依据实施手册 §2 与 §3）
 PRESET_DEFAULTS: dict[str, dict[str, int]] = {
     "quiet": {"dwell_seconds": 90, "cooldown_minutes": 10, "daily_cap": 8},

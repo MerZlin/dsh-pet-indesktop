@@ -70,27 +70,24 @@ WebM-backed clip library（webm 主路线）。
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
-import weakref
 import time
 import types
-import json
-import tempfile
+import weakref
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication
 
-from . import catalog
-from . import mem_debug
-from . import perfstats
-from . import win_job
+from . import catalog, mem_debug, perfstats, win_job
 from .frame_cache import ByteBudgetLru
 
 logger = logging.getLogger(__name__)

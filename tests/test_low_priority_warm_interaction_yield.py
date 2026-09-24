@@ -32,8 +32,8 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QMenu
 
-from pet import catalog
 import pet.library as library_mod
+from pet import catalog
 from pet.config import Config
 from pet.window import PetWindow
 from tests.test_window_pause import FakeLibrary

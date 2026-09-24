@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from importlib import resources
 from typing import Collection, Mapping
 
-
 DEFAULT_LAYOUT_ID = "modern-default-v1"
 
 

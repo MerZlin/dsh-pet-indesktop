@@ -16,13 +16,11 @@ import threading
 from pathlib import Path
 
 import shiboken6
-
-
 from PySide6.QtCore import QEvent, QFileInfo, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
-    QColor,
     QClipboard,
+    QColor,
     QFontDatabase,
     QIcon,
     QImageReader,
@@ -36,40 +34,39 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QBoxLayout,
-    QDialog,
     QColorDialog,
+    QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFileIconProvider,
     QFrame,
     QGridLayout,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QLayout,
-    QMessageBox,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStackedWidget,
-    QSizePolicy,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from . import __version__
+from . import __version__, catalog
 from . import autostart as autostart_mod
-from . import catalog
 from .click_sound import warm_click_sound_effects
 from .config import (
     DEFAULT_CONTEXT_MENU_APPEARANCE,
@@ -112,63 +109,59 @@ def _chat_feature_available() -> bool:
     return True
 
 
-from .settings_widgets import (
-    _system_font_families,
-    BROWSER_CONTROL_SPEC,
-    SETTINGS_DOMAIN_NAV,
-    BROWSER_CONTROL_STYLESHEET,
-    _widget_dark,
-    ToggleSwitch,
-    IMAGE_NAME_FILTER,
-    AUDIO_NAME_FILTER,
-    ClickSoundPackPicker,
-    MasonryLayout,
-    MasonryImageCard,
-    MasonryFlow,
-    ImagePreviewDrawer,
-    ResourcePathPicker,
-    ColorSwatchButton,
-    ColorPicker,
-    _draw_chevron,
-    SETTINGS_POPUP_OBJECT_NAME,
-    SETTINGS_POPUP_STYLESHEET,
-    _DARK_POPUP_OVERRIDE,
-    settings_popup_stylesheet,
-    configure_settings_action_popup,
-    SettingsPopupAction,
-    SettingsPopupMenu,
-    SettingsMenuButton,
-    ModernSelect,
-    BrowserSpinBox,
-    BrowserDoubleSpinBox,
-    CollapsibleGroup,
-    ProbabilitySlider,
-    SettingRow,
-    ResponsiveActionRow,
-    ResponsiveToggleActionRow,
-    SettingsCard,
-    SettingsDisclosureHeader,
-    SettingsSection,
-    _CurrentPageStack,
-    SettingsTabContainer,
-    _SettingsPageShell,
-    _line_edit,
-    QuickLaunchItemRow,
-    QuickLaunchEditor,
-    _system_dark,
-)
-from .settings_theme_qss import _settings_stylesheet
-from .settings_menu_layout_editor import MenuLayoutEditor
+from . import settings_file_interpret, settings_interaction, settings_music, settings_pet_controls
 from .persona_template import (
     CONDITIONAL_PARAMETERS,
     PARAMETERS,
 )
-from . import settings_file_interpret
-from . import settings_interaction
-from . import settings_music
-from . import settings_pet_controls
 from .report_gates import REPORT_GATE_KEYS, REPORT_GATE_LABELS, gate_for_event
-
+from .settings_menu_layout_editor import MenuLayoutEditor
+from .settings_theme_qss import _settings_stylesheet
+from .settings_widgets import (
+    _DARK_POPUP_OVERRIDE,
+    AUDIO_NAME_FILTER,
+    BROWSER_CONTROL_SPEC,
+    BROWSER_CONTROL_STYLESHEET,
+    IMAGE_NAME_FILTER,
+    SETTINGS_DOMAIN_NAV,
+    SETTINGS_POPUP_OBJECT_NAME,
+    SETTINGS_POPUP_STYLESHEET,
+    BrowserDoubleSpinBox,
+    BrowserSpinBox,
+    ClickSoundPackPicker,
+    CollapsibleGroup,
+    ColorPicker,
+    ColorSwatchButton,
+    ImagePreviewDrawer,
+    MasonryFlow,
+    MasonryImageCard,
+    MasonryLayout,
+    ModernSelect,
+    ProbabilitySlider,
+    QuickLaunchEditor,
+    QuickLaunchItemRow,
+    ResourcePathPicker,
+    ResponsiveActionRow,
+    ResponsiveToggleActionRow,
+    SettingRow,
+    SettingsCard,
+    SettingsDisclosureHeader,
+    SettingsMenuButton,
+    SettingsPopupAction,
+    SettingsPopupMenu,
+    SettingsSection,
+    SettingsTabContainer,
+    ToggleSwitch,
+    _CurrentPageStack,
+    _draw_chevron,
+    _line_edit,
+    _SettingsPageShell,
+    _system_dark,
+    _system_font_families,
+    _widget_dark,
+    configure_settings_action_popup,
+    settings_popup_stylesheet,
+)
 
 # 语言配置页只展示用户能理解的事件名称；内部 key 仍用于保存和渲染。
 DIALOGUE_LABELS = {

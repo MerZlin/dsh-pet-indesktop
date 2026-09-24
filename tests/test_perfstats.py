@@ -23,8 +23,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
-from pet import catalog
-from pet import perfstats
+from pet import catalog, perfstats
 from pet import window as window_mod
 from pet.webm_clip import WebMClip
 

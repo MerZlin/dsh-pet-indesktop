@@ -93,6 +93,7 @@ def test_supports_no_open_probe_failure_defaults_false(monkeypatch, tmp_path):
 def test_supports_no_open_disk_cache(monkeypatch, tmp_path):
     """落盘缓存：版本匹配时直接用缓存零探测；版本变了才重新慢探测。"""
     import json as _json
+
     from pet import harness_launcher as hl
 
     cache_file = tmp_path / "cache.json"

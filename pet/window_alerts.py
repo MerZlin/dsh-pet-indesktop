@@ -14,8 +14,7 @@ from collections import deque
 
 from PySide6.QtCore import QTimer
 
-from . import catalog
-from . import window_placement
+from . import catalog, window_placement
 
 # 确认"音乐真的停了"所需的持续静音时长（秒）。歌曲的前奏/间奏/轻声段会让
 # 音频峰值瞬时跌到阈值下，太小会导致唱歌状态反复退出。

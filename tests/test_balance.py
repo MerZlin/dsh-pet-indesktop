@@ -205,6 +205,7 @@ def test_chat_session_title_roundtrip():
 
 def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
     from PySide6.QtWidgets import QApplication
+
     from pet.app import PetApp
     from pet.config import Config
 
@@ -246,6 +247,7 @@ def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
 
 def test_menu_balance_action_calls_bound_window_callback():
     from PySide6.QtWidgets import QApplication, QMenu
+
     from pet.context_menus.shared import add_balance
 
     app = QApplication.instance() or QApplication([])
