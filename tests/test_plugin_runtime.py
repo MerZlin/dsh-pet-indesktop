@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Phase 2 Core 插件运行时和官方节日提醒插件契约测试。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -71,11 +72,7 @@ class _FakeScheduler:
                 handle.cancel()
 
     def timer_count(self, owner=None):
-        return sum(
-            1
-            for (handle_owner, _), handle in self.handles.items()
-            if handle.active and (owner is None or handle_owner == owner)
-        )
+        return sum(1 for (handle_owner, _), handle in self.handles.items() if handle.active and (owner is None or handle_owner == owner))
 
 
 def _manifest(plugin_id, *, dependencies=(), capabilities=(), default_enabled=True):
@@ -210,6 +207,7 @@ def test_dependency_failure_does_not_start_dependent():
             raise RuntimeError("base unavailable")
 
     registry.register_builtin(_manifest("test.base"), lambda context: Broken(), enabled=True)
+
     class Child:
         def start(self):
             started.append("child")

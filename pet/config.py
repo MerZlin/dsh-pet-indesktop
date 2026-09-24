@@ -94,8 +94,7 @@ def _drop_removed_menu_actions(nodes):
         if not isinstance(node, dict):
             kept.append(node)
             continue
-        if (node.get("type") == "action"
-                and str(node.get("id") or "") in _MENU_LAYOUT_DROPPED_ACTIONS):
+        if node.get("type") == "action" and str(node.get("id") or "") in _MENU_LAYOUT_DROPPED_ACTIONS:
             continue
         children = node.get("children")
         if isinstance(children, list):
@@ -1355,9 +1354,7 @@ class Config:
         self.data["music_sing_enabled"] = _bool_or_default(self.data.get("music_sing_enabled"), False)
         # 持续静音判定时长：下限 1s（低于它就退回"瞬时静音即退出"的老问题），
         # 上限必须有——否则手改 1e9 会让唱歌状态永不退出。
-        self.data["music_sing_grace_seconds"] = _float_or_default(
-            self.data.get("music_sing_grace_seconds"), 6.0, 1.0, 3600.0
-        )
+        self.data["music_sing_grace_seconds"] = _float_or_default(self.data.get("music_sing_grace_seconds"), 6.0, 1.0, 3600.0)
         # 歌词提前量的区间与设置页滑块**同源**（music_lyric_controller 的常量），
         # 不再抄一份边界。惰性导入：config.py 顶层不引 Qt。
         from .music_lyric_controller import (
@@ -1365,6 +1362,7 @@ class Config:
             LEAD_MIN_SECONDS,
             LYRIC_LEAD_SECONDS,
         )
+
         self.data["music_lyric_lead_seconds"] = _float_or_default(
             self.data.get("music_lyric_lead_seconds"),
             LYRIC_LEAD_SECONDS,
@@ -1374,9 +1372,7 @@ class Config:
         # 歌词缓存条数上限：非数值回落默认（music_lyric.CACHE_LIMIT），
         # 负数/0 无意义，夹到至少 1 条。消费方是 music_lyric_controller 的取词
         # 线程（fetch_lyrics(cache_limit=...) → _prune_cache），不是摆设。
-        self.data["music_lyric_cache_limit"] = int(
-            _float_or_default(self.data.get("music_lyric_cache_limit"), 2000.0, 1.0, 100000.0)
-        )
+        self.data["music_lyric_cache_limit"] = int(_float_or_default(self.data.get("music_lyric_cache_limit"), 2000.0, 1.0, 100000.0))
         # 手动播放器路径：此前只有消费方读、没有 schema 登记，手改 config.json 会
         # 被 reload() 静默丢弃（交付前审查 P1-3）。清洗成 {netease|qqmusic: 路径}。
         self.data["music_player_paths"] = _clean_music_player_paths(self.data.get("music_player_paths"))
@@ -1403,9 +1399,7 @@ class Config:
         fi = self.data.get("file_interpret")
         if isinstance(fi, dict):
             fi["enabled"] = _bool_or_default(fi.get("enabled", True), True)
-            fi["progress_interval_seconds"] = _float_or_default(
-                fi.get("progress_interval_seconds"), 15.0, 5.0, 120.0
-            )
+            fi["progress_interval_seconds"] = _float_or_default(fi.get("progress_interval_seconds"), 15.0, 5.0, 120.0)
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):

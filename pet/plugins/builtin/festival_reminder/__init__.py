@@ -1,4 +1,5 @@
 """官方节日提醒 in-process 插件。"""
+
 from __future__ import annotations
 
 from types import SimpleNamespace

@@ -1,4 +1,5 @@
 """插件配置命名空间与旧扁平字段兼容适配。"""
+
 from __future__ import annotations
 
 import copy

@@ -25,7 +25,7 @@ CANVAS_H = 360
 FEET_Y = 330 / 360 * CANVAS_H  # = 330
 
 # 落地偏移：帧下移多少让脚底恰好落在窗口底线
-PAD = CANVAS_H - FEET_Y        # = 30
+PAD = CANVAS_H - FEET_Y  # = 30
 
 # 视频帧时长（毫秒）—— 24fps → 1000/24 ≈ 42ms，用于时长/帧率换算
 FRAME_MS = 42
@@ -38,7 +38,7 @@ P_ACTS = 0.80  # 累计阈值：<0.8 动作，>=0.8 移动
 # 移动参数（与 client.js 一致）
 MOVE_MIN_PX = 60
 MOVE_MAX_PX = 240
-MOVE_MARGIN = 20    # 屏幕边缘安全边距
+MOVE_MARGIN = 20  # 屏幕边缘安全边距
 # 移动动画每圈地面位移缺省值（scale=1.0，px）；角色包可在 videos/move_strides.json
 # 逐动画覆盖（库加载进 MovieLibrary.move_strides），缺数据时回退本值
 MOVE_STRIDE_DEFAULT_PX = 120
@@ -59,80 +59,80 @@ SCALE_STEPS = (0.5, 0.72, 0.85, 1.0)
 
 # ---------------------------------------------------------------- 多形象
 # 当前内置形象与未来扩展形象 ID（目录名建议使用稳定 ASCII）
-DEFAULT_CHARACTER = 'shenshen'
-CHARACTERS = ('shenshen',)
-MANIFEST_FILENAME = 'manifest.json'
+DEFAULT_CHARACTER = "shenshen"
+CHARACTERS = ("shenshen",)
+MANIFEST_FILENAME = "manifest.json"
 # videos 下的分类子目录
-DIR_IDLE = 'idle'
-DIR_TURN = 'turn'
-DIR_IDLE_TURN = 'idle_turn'  # 兼容旧结构：待机+转向合并目录
-DIR_MOVE = 'move'
-DIR_CLICK = 'click'
-DIR_DRAG = 'drag'
-DIR_RANDOM = 'random'
+DIR_IDLE = "idle"
+DIR_TURN = "turn"
+DIR_IDLE_TURN = "idle_turn"  # 兼容旧结构：待机+转向合并目录
+DIR_MOVE = "move"
+DIR_CLICK = "click"
+DIR_DRAG = "drag"
+DIR_RANDOM = "random"
 
 # ---------------------------------------------------------------- 动画映射
 # 中文名 → webm 文件名（主路径，文件名与中文名一致）
 ANIM_FILES: dict[str, str] = {
-    '待机呼吸休闲': '待机呼吸休闲.webm',
-    '东张西望': '东张西望.webm',
-    '螃蟹走路': '螃蟹走路.webm',
-    '漂浮踏步': '漂浮踏步.webm',
-    '左转奔跑': '左转奔跑.webm',
-    '点击回应 - 开心跃动': '点击回应 - 开心跃动.webm',
-    '点击回应 - 害羞惊讶': '点击回应 - 害羞惊讶.webm',
-    '点击回应 - 傲娇生气（侧身展示）': '点击回应 - 傲娇生气（侧身展示）.webm',
-    '被鼠标拖拽悬空反馈': '被鼠标拖拽悬空反馈.webm',
-    '悠闲哼歌': '悠闲哼歌.webm',
-    '超大伸懒腰': '超大伸懒腰.webm',
-    '原地专心玩魔方': '原地专心玩魔方.webm',
-    '原地敲击桌面互动': '原地敲击桌面互动.webm',
-    '原地重力下蹲压缩': '原地重力下蹲压缩.webm',
-    '哈欠连天': '哈欠连天.webm',
-    '原地小憩沉眠': '原地小憩沉眠.webm',
-    '原地蹲下玩玩具汽车': '原地蹲下玩玩具汽车.webm',
-    '鲸鱼吐泡泡特效': '鲸鱼吐泡泡特效.webm',
-    '女仆屈膝礼仪': '女仆屈膝礼仪.webm',
-    '被吓一跳（炸毛）': '被吓一跳（炸毛）.webm',
-    '原地跳跃抓碎头顶物品': '原地跳跃抓碎头顶物品.webm',
-    '小幅度原地 360 度旋转展示': '小幅度原地 360 度旋转展示.webm',
-    '偷吃零食被抓住': '偷吃零食被抓住.webm',
-    '玩游戏气急败坏': '玩游戏气急败坏.webm',
-    '用鲸鱼尾巴拍打地面': '用鲸鱼尾巴拍打地面.webm',
-    '打瞌睡被惊醒': '打瞌睡被惊醒.webm',
-    '玩水枪': '玩水枪.webm',
-    '小提琴演奏': '小提琴演奏.webm',
-    '蓝鲸现世': '蓝鲸现世.webm',
-    '吃白饭': '吃白饭.webm',
-    '照镜子': '照镜子.webm',
-    '优雅女仆舞': '优雅女仆舞.webm',
-    '轻快摇摆舞': '轻快摇摆舞.webm',
-    '可爱宅舞': '可爱宅舞.webm',
-    '整体换装试色': '整体换装试色.webm',
-    '大口吃零食': '大口吃零食.webm',
-    '吹气球': '吹气球.webm',
-    '动物环绕': '动物环绕.webm',
-    '深度思考碎碎念': '深度思考碎碎念.webm',
-    '轻快记录': '轻快记录.webm',
-    '写代码': '写代码.webm',
-    '吃Token': '吃Token.webm',
-    '吃早餐': '吃早餐.webm',
-    '吃午餐': '吃午餐.webm',
-    '吃晚餐': '吃晚餐.webm',
-    '放风筝': '放风筝.webm',
-    '摇扇纳凉': '摇扇纳凉.webm',
-    '吃冰淇淋融化': '吃冰淇淋融化.webm',
-    '被落叶淹没': '被落叶淹没.webm',
-    '中秋赏月吃月饼': '中秋赏月吃月饼.webm',
-    '堆雪人': '堆雪人.webm',
+    "待机呼吸休闲": "待机呼吸休闲.webm",
+    "东张西望": "东张西望.webm",
+    "螃蟹走路": "螃蟹走路.webm",
+    "漂浮踏步": "漂浮踏步.webm",
+    "左转奔跑": "左转奔跑.webm",
+    "点击回应 - 开心跃动": "点击回应 - 开心跃动.webm",
+    "点击回应 - 害羞惊讶": "点击回应 - 害羞惊讶.webm",
+    "点击回应 - 傲娇生气（侧身展示）": "点击回应 - 傲娇生气（侧身展示）.webm",
+    "被鼠标拖拽悬空反馈": "被鼠标拖拽悬空反馈.webm",
+    "悠闲哼歌": "悠闲哼歌.webm",
+    "超大伸懒腰": "超大伸懒腰.webm",
+    "原地专心玩魔方": "原地专心玩魔方.webm",
+    "原地敲击桌面互动": "原地敲击桌面互动.webm",
+    "原地重力下蹲压缩": "原地重力下蹲压缩.webm",
+    "哈欠连天": "哈欠连天.webm",
+    "原地小憩沉眠": "原地小憩沉眠.webm",
+    "原地蹲下玩玩具汽车": "原地蹲下玩玩具汽车.webm",
+    "鲸鱼吐泡泡特效": "鲸鱼吐泡泡特效.webm",
+    "女仆屈膝礼仪": "女仆屈膝礼仪.webm",
+    "被吓一跳（炸毛）": "被吓一跳（炸毛）.webm",
+    "原地跳跃抓碎头顶物品": "原地跳跃抓碎头顶物品.webm",
+    "小幅度原地 360 度旋转展示": "小幅度原地 360 度旋转展示.webm",
+    "偷吃零食被抓住": "偷吃零食被抓住.webm",
+    "玩游戏气急败坏": "玩游戏气急败坏.webm",
+    "用鲸鱼尾巴拍打地面": "用鲸鱼尾巴拍打地面.webm",
+    "打瞌睡被惊醒": "打瞌睡被惊醒.webm",
+    "玩水枪": "玩水枪.webm",
+    "小提琴演奏": "小提琴演奏.webm",
+    "蓝鲸现世": "蓝鲸现世.webm",
+    "吃白饭": "吃白饭.webm",
+    "照镜子": "照镜子.webm",
+    "优雅女仆舞": "优雅女仆舞.webm",
+    "轻快摇摆舞": "轻快摇摆舞.webm",
+    "可爱宅舞": "可爱宅舞.webm",
+    "整体换装试色": "整体换装试色.webm",
+    "大口吃零食": "大口吃零食.webm",
+    "吹气球": "吹气球.webm",
+    "动物环绕": "动物环绕.webm",
+    "深度思考碎碎念": "深度思考碎碎念.webm",
+    "轻快记录": "轻快记录.webm",
+    "写代码": "写代码.webm",
+    "吃Token": "吃Token.webm",
+    "吃早餐": "吃早餐.webm",
+    "吃午餐": "吃午餐.webm",
+    "吃晚餐": "吃晚餐.webm",
+    "放风筝": "放风筝.webm",
+    "摇扇纳凉": "摇扇纳凉.webm",
+    "吃冰淇淋融化": "吃冰淇淋融化.webm",
+    "被落叶淹没": "被落叶淹没.webm",
+    "中秋赏月吃月饼": "中秋赏月吃月饼.webm",
+    "堆雪人": "堆雪人.webm",
 }
 
 # 动画分组（语义与 client.js 一致）
-IDLE = '待机呼吸休闲'
-TURN = '东张西望'
-MOVES = ['螃蟹走路', '漂浮踏步', '左转奔跑']
-CLICKS = ['点击回应 - 开心跃动', '点击回应 - 害羞惊讶', '点击回应 - 傲娇生气（侧身展示）']
-DRAG = '被鼠标拖拽悬空反馈'
+IDLE = "待机呼吸休闲"
+TURN = "东张西望"
+MOVES = ["螃蟹走路", "漂浮踏步", "左转奔跑"]
+CLICKS = ["点击回应 - 开心跃动", "点击回应 - 害羞惊讶", "点击回应 - 傲娇生气（侧身展示）"]
+DRAG = "被鼠标拖拽悬空反馈"
 ACTS = [n for n in ANIM_FILES if n not in (IDLE, TURN, DRAG, *MOVES, *CLICKS)]
 
 assert len(ANIM_FILES) == 51, f"动画总数应为 51，实际 {len(ANIM_FILES)}"
@@ -141,33 +141,33 @@ assert len(ACTS) == 42, f"动作池应为 42，实际 {len(ACTS)}"
 
 def characters_dir() -> Path:
     """内置多形象根目录（项目根/assets/characters）。"""
-    return Path(__file__).resolve().parent.parent / 'assets' / 'characters'
+    return Path(__file__).resolve().parent.parent / "assets" / "characters"
 
 
 def character_video_dir(character_id: str) -> Path:
     """内置某个形象的 webm 目录：assets/characters/<id>/videos。"""
-    return characters_dir() / character_id / 'videos'
+    return characters_dir() / character_id / "videos"
 
 
 def characters_gif_dir() -> Path:
     """内置 GIF 多形象根目录（项目根/assets/characters_gif）。"""
-    return Path(__file__).resolve().parent.parent / 'assets' / 'characters_gif'
+    return Path(__file__).resolve().parent.parent / "assets" / "characters_gif"
 
 
 def character_gif_video_dir(character_id: str) -> Path:
     """内置某个形象的 GIF 目录：assets/characters_gif/<id>/videos。"""
-    return characters_gif_dir() / character_id / 'videos'
+    return characters_gif_dir() / character_id / "videos"
 
 
 def _data_character_dirs(app_dir_name: str) -> list[Path]:
     """按平台返回某数据目录下 characters/ 的外部形象根目录。"""
-    if sys.platform == 'win32':
-        data_root = Path(os.environ.get('APPDATA', Path.home())) / app_dir_name
-    elif sys.platform == 'darwin':
-        data_root = Path.home() / 'Library' / 'Application Support' / app_dir_name
+    if sys.platform == "win32":
+        data_root = Path(os.environ.get("APPDATA", Path.home())) / app_dir_name
+    elif sys.platform == "darwin":
+        data_root = Path.home() / "Library" / "Application Support" / app_dir_name
     else:
-        data_root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / app_dir_name
-    return [data_root / 'characters']
+        data_root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / app_dir_name
+    return [data_root / "characters"]
 
 
 def external_character_dirs() -> list[Path]:
@@ -182,18 +182,19 @@ def external_character_dirs() -> list[Path]:
     ``from . import catalog`` 构成循环依赖）。
     """
     dirs: list[Path] = []
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         base = Path(sys.executable).resolve().parent
     else:
         base = Path.cwd()
-    dirs.append(base / 'characters')
+    dirs.append(base / "characters")
 
     from . import config as _config  # 延迟导入防环：config 顶层 import catalog
-    app_dir_name = getattr(_config, 'APP_DIR_NAME', 'dsh-pet-standalone')
+
+    app_dir_name = getattr(_config, "APP_DIR_NAME", "dsh-pet-standalone")
     dirs.extend(_data_character_dirs(app_dir_name))
     # 非变体旧目录兜底：老用户已放入的角色不能因为变体拆分而丢
-    if app_dir_name != 'dsh-pet-standalone':
-        dirs.extend(_data_character_dirs('dsh-pet-standalone'))
+    if app_dir_name != "dsh-pet-standalone":
+        dirs.extend(_data_character_dirs("dsh-pet-standalone"))
     return dirs
 
 
@@ -238,7 +239,7 @@ def load_character_manifest(character_id: str, asset_dir: Path | str | None = No
     for path in candidates:
         if path.is_file():
             try:
-                data = json.loads(path.read_text(encoding='utf-8'))
+                data = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     return data
             except Exception:
@@ -250,7 +251,7 @@ def character_display_name(character_id: str) -> str:
     """角色显示名：manifest.json 的 name 字段优先，缺省回退目录 id。"""
     manifest = load_character_manifest(character_id)
     if isinstance(manifest, dict):
-        name = str(manifest.get('name', '') or '').strip()
+        name = str(manifest.get("name", "") or "").strip()
         if name:
             return name
     return character_id
@@ -269,7 +270,7 @@ def character_body_box(character_id: str) -> tuple[int, int, int, int] | None:
     manifest = load_character_manifest(character_id)
     if not isinstance(manifest, dict):
         return None
-    box = manifest.get('body_box')
+    box = manifest.get("body_box")
     if not isinstance(box, (list, tuple)) or len(box) != 4:
         return None
     try:
@@ -294,7 +295,7 @@ def character_head_box(character_id: str) -> tuple[int, int, int, int] | None:
     """
     manifest = load_character_manifest(character_id)
     if isinstance(manifest, dict):
-        box = manifest.get('head_box')
+        box = manifest.get("head_box")
         if isinstance(box, (list, tuple)) and len(box) == 4:
             try:
                 x1, y1, x2, y2 = (int(round(float(v))) for v in box)
@@ -359,9 +360,14 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
     names = set(names)
     if not names:
         return {
-            'idle': None, 'turn': None,
-            'idles': [], 'turns': [],
-            'moves': [], 'clicks': [], 'drag': None, 'acts': [],
+            "idle": None,
+            "turn": None,
+            "idles": [],
+            "turns": [],
+            "moves": [],
+            "clicks": [],
+            "drag": None,
+            "acts": [],
         }
 
     idles: list[str] = []
@@ -375,7 +381,7 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
     elif folder_map:
         by_folder: dict[str, list[str]] = {}
         for name in names:
-            by_folder.setdefault(folder_map.get(name, ''), []).append(name)
+            by_folder.setdefault(folder_map.get(name, ""), []).append(name)
     else:
         by_folder = {}
 
@@ -385,17 +391,11 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         legacy_idle_turn = by_folder.get(DIR_IDLE_TURN, [])
 
         if not idles and legacy_idle_turn:
-            idle_candidates = [
-                n for n in legacy_idle_turn
-                if n == IDLE or _keyword_match(n, ['待机', 'idle', '呼吸'])
-            ]
+            idle_candidates = [n for n in legacy_idle_turn if n == IDLE or _keyword_match(n, ["待机", "idle", "呼吸"])]
             idles = idle_candidates or (legacy_idle_turn[:1] if legacy_idle_turn else [])
 
         if not turns and legacy_idle_turn:
-            turn_candidates = [
-                n for n in legacy_idle_turn
-                if n == TURN or _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])
-            ]
+            turn_candidates = [n for n in legacy_idle_turn if n == TURN or _keyword_match(n, ["转向", "转身", "东张西望", "turn", "回头", "转"])]
             turns = turn_candidates
             if not turns and idles and len(legacy_idle_turn) > 1:
                 turns = [n for n in legacy_idle_turn if n != idles[0]][:1]
@@ -409,45 +409,39 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
     # manifest 补充/覆盖
     if manifest:
         if not idles:
-            m = _manifest_name(manifest.get('idle'), names)
+            m = _manifest_name(manifest.get("idle"), names)
             if m:
                 idles = [m]
         if not turns:
-            m = _manifest_name(manifest.get('turn'), names)
+            m = _manifest_name(manifest.get("turn"), names)
             if m:
                 turns = [m]
         if not moves:
-            moves = _manifest_names(manifest.get('moves', []), names)
+            moves = _manifest_names(manifest.get("moves", []), names)
         if not clicks:
-            clicks = _manifest_names(manifest.get('clicks', []), names)
+            clicks = _manifest_names(manifest.get("clicks", []), names)
         if drag is None:
-            drag = _manifest_name(manifest.get('drag'), names)
+            drag = _manifest_name(manifest.get("drag"), names)
 
     # 关键词兜底
     if not idles:
-        m = IDLE if IDLE in names else next(
-            (n for n in names if _keyword_match(n, ['待机', 'idle', '呼吸'])), None
-        )
+        m = IDLE if IDLE in names else next((n for n in names if _keyword_match(n, ["待机", "idle", "呼吸"])), None)
         if m:
             idles = [m]
     if not turns:
-        m = TURN if TURN in names else next(
-            (n for n in names if _keyword_match(n, ['转向', '转身', '东张西望', 'turn', '回头', '转'])), None
-        )
+        m = TURN if TURN in names else next((n for n in names if _keyword_match(n, ["转向", "转身", "东张西望", "turn", "回头", "转"])), None)
         if m:
             turns = [m]
     if drag is None:
-        drag = DRAG if DRAG in names else next(
-            (n for n in names if _keyword_match(n, ['拖拽', '拖', '悬空', 'drag', '抓'])), None
-        )
+        drag = DRAG if DRAG in names else next((n for n in names if _keyword_match(n, ["拖拽", "拖", "悬空", "drag", "抓"])), None)
     if not moves:
         moves = [n for n in MOVES if n in names]
         if not moves:
-            moves = [n for n in names if _keyword_match(n, ['走', '跑', '移动', 'move', 'walk', 'run', '踏步', '奔跑'])]
+            moves = [n for n in names if _keyword_match(n, ["走", "跑", "移动", "move", "walk", "run", "踏步", "奔跑"])]
     if not clicks:
         clicks = [n for n in CLICKS if n in names]
         if not clicks:
-            clicks = [n for n in names if _keyword_match(n, ['点击', '回应', 'click', 'response'])]
+            clicks = [n for n in names if _keyword_match(n, ["点击", "回应", "click", "response"])]
 
     # 如果没有明确 idle，安全回退到第一个动画，避免启动崩溃
     if not idles:
@@ -457,8 +451,8 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
 
     # 位移只给真正的走路素材：文件名含「原地」的移动素材只播姿态、不位移
     # （用户反馈：原地动画带着窗口跑是 bug 观感）。原地素材降级进动作池。
-    inplace_moves = [m for m in moves if '原地' in m]
-    moves = [m for m in moves if '原地' not in m]
+    inplace_moves = [m for m in moves if "原地" in m]
+    moves = [m for m in moves if "原地" not in m]
 
     core = set(idles) | set(turns) | set(moves) | set(clicks)
     if drag:
@@ -485,12 +479,12 @@ def build_categories(names, manifest: dict | None = None, folder_map: dict | Non
         acts = [n for n in names if n not in core]
     acts.extend(n for n in inplace_moves if n not in acts)  # 原地素材降级为随机动作
     return {
-        'idle': idles[0] if idles else None,
-        'turn': turns[0] if turns else None,
-        'idles': idles,
-        'turns': turns,
-        'moves': moves,
-        'clicks': clicks,
-        'drag': drag,
-        'acts': acts,
+        "idle": idles[0] if idles else None,
+        "turn": turns[0] if turns else None,
+        "idles": idles,
+        "turns": turns,
+        "moves": moves,
+        "clicks": clicks,
+        "drag": drag,
+        "acts": acts,
     }

@@ -4,6 +4,7 @@ Phase 2 的事件总线刻意保持为纯 Python 同步实现：事件只在 GUI
 不暴露 Qt signal、QApplication 或 AppShell。跨线程/跨进程事件留给后续 worker
 阶段。
 """
+
 from __future__ import annotations
 
 import itertools

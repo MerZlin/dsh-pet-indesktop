@@ -1,4 +1,5 @@
 """本地资源 DLC 的发现、安装、激活、升级和回滚服务。"""
+
 from __future__ import annotations
 
 import json

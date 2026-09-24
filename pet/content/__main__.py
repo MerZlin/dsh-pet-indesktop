@@ -1,4 +1,5 @@
 """python -m pet.content 的本地资源包工具。"""
+
 from __future__ import annotations
 
 import argparse

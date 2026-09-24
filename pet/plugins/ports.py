@@ -3,6 +3,7 @@
 这些对象是插件可以看到的最小能力面。Qt 只在 SchedulerPort 实际创建定时器时
 惰性导入，便于无 GUI 的 runtime 单元测试。
 """
+
 from __future__ import annotations
 
 import itertools

@@ -1,4 +1,5 @@
 """插件 manifest 与运行时诊断模型。"""
+
 from __future__ import annotations
 
 import re

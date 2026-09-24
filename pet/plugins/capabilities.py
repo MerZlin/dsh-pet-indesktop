@@ -1,4 +1,5 @@
 """插件 capability 集合。"""
+
 from __future__ import annotations
 
 

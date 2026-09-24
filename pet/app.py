@@ -179,14 +179,17 @@ def _show_balance_payload(win, payload) -> None:
     color_enabled = bool(cfg.get("balance_tier_color_enabled", True)) if cfg is not None else True
     if color_enabled:
         subtitle = balance_mod.deepseek_pricing_hint_html(
-            peak_label=peak_label, idle_label=idle_label,
+            peak_label=peak_label,
+            idle_label=idle_label,
         )
     else:
         subtitle = balance_mod.deepseek_pricing_hint(
-            peak_label=peak_label, idle_label=idle_label,
+            peak_label=peak_label,
+            idle_label=idle_label,
         )
     win.show_bubble(
-        text, duration_ms=6000,
+        text,
+        duration_ms=6000,
         subtitle=subtitle,
     )
     # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
@@ -220,8 +223,7 @@ class _UpdateBridge(_BackgroundResult):
             return
         if alive:
             self.parent.show_bubble(
-                f"发现新版本 v{tag}（当前 {updater.APP_VERSION}）。"
-                "正在打开“更新”页，可直接下载并安装。",
+                f"发现新版本 v{tag}（当前 {updater.APP_VERSION}）。正在打开“更新”页，可直接下载并安装。",
                 duration_ms=9000,
             )
             owner = self.owner
@@ -250,15 +252,17 @@ class _SlotLogFilter(logging.Filter):
 def _setup_logging(config: Config) -> None:
     config.dir.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
-        str(config.dir / f'pet-{os.getpid()}.log'),  # 多开实例日志按 PID 隔离，避免互相覆盖
-        maxBytes=1_000_000, backupCount=2, encoding='utf-8',
+        str(config.dir / f"pet-{os.getpid()}.log"),  # 多开实例日志按 PID 隔离，避免互相覆盖
+        maxBytes=1_000_000,
+        backupCount=2,
+        encoding="utf-8",
     )  # 滚动日志：1MB×2，不再无限增长
     handler.addFilter(_SlotLogFilter())
     logging.basicConfig(
         handlers=[handler],
         level=logging.INFO,
-        format='%(asctime)s %(levelname)s %(message)s',
-        encoding='utf-8',
+        format="%(asctime)s %(levelname)s %(message)s",
+        encoding="utf-8",
     )
     _cleanup_old_pet_logs(config.dir)
 
@@ -272,7 +276,7 @@ def _cleanup_old_pet_logs(log_dir, *, max_age_days: float = 7.0) -> int:
     removed = 0
     try:
         cutoff = time.time() - max_age_days * 86400
-        for path in Path(log_dir).glob('pet-*.log*'):
+        for path in Path(log_dir).glob("pet-*.log*"):
             try:
                 if path.is_file() and path.stat().st_mtime < cutoff:
                     path.unlink()
@@ -317,7 +321,7 @@ def _read_spawn_offset_env() -> int:
     index 恒为 0，新孵化的桌宠直接与母桌宠完全重叠（flag 关行为回归）。
     """
     try:
-        return max(0, int(os.environ.get('DSH_PET_SPAWN_OFFSET_INDEX', '0') or '0'))
+        return max(0, int(os.environ.get("DSH_PET_SPAWN_OFFSET_INDEX", "0") or "0"))
     except (TypeError, ValueError):
         return 0
 
@@ -355,9 +359,9 @@ class PetInstance:
     ``self.win`` 单窗假设只有一个归属点，便于批5.2 扩成多窗集合。
     """
 
-    def __init__(self, shell: "AppShell", config: Config, enable_chat: bool = True,
-                 slot_handle=None, slot_id: int | None = None,
-                 spawn_offset: int = 0) -> None:
+    def __init__(
+        self, shell: "AppShell", config: Config, enable_chat: bool = True, slot_handle=None, slot_id: int | None = None, spawn_offset: int = 0
+    ) -> None:
         self.shell: AppShell = shell
         self.config = config
         self.slot_handle = slot_handle
@@ -381,7 +385,7 @@ class PetInstance:
         # 批5.3：进程级共享解码 hub（AppShell 持有，各窗共用同一份）。此前
         # broker 是每窗一个 shm facade；现换成进程级 DecodeFanoutHub（fan-out
         # 与碰撞角色解耦，不骑 QLocal），窗口调用点/参数名零改。
-        self.broker_facade = getattr(self.shell, '_decode_hub', None)
+        self.broker_facade = getattr(self.shell, "_decode_hub", None)
 
     @property
     def enable_chat(self) -> bool:
@@ -397,7 +401,7 @@ class PetInstance:
     @enable_chat.setter
     def enable_chat(self, value):
         # P2-4：setter 仅缓存构造值作无 shell 兜底，**从不改写进程级 shell**
-        #（只读转发——读取走 getter 的 shell.enable_chat 权威源）。
+        # （只读转发——读取走 getter 的 shell.enable_chat 权威源）。
         self._enable_chat = bool(value)
 
     # ------------------------------------------------------------ 窗口构建
@@ -409,9 +413,7 @@ class PetInstance:
         prewarm = str(self.config.get("media_prewarm", "balanced") or "balanced")
         # 首帧缓存全局预算（高级用户可在 config.json 调小，省电/低配机用）；
         # 进程级设置，幂等，切角色重复调用无害。
-        webm_clip_mod.set_first_frame_budget(
-            int(self.config.get("first_frame_cache_max_mb", 8)) * 1024 * 1024
-        )
+        webm_clip_mod.set_first_frame_budget(int(self.config.get("first_frame_cache_max_mb", 8)) * 1024 * 1024)
         lib = MovieLibrary(
             character_id=character_id,
             prewarm_policy=prewarm,
@@ -423,7 +425,7 @@ class PetInstance:
         lib.schedule_low_priority_warm()
         # 同批低优先级预热：播放器路径缓存（右键菜单只读缓存，冷缓存时后台先扫）。
         _schedule_music_player_warm()
-        logging.info('素材加载完成：%s %d 段动画', character_id, len(lib.names()))
+        logging.info("素材加载完成：%s %d 段动画", character_id, len(lib.names()))
         return lib
 
     def _slot_wrap(self, fn):
@@ -479,10 +481,8 @@ class PetInstance:
         win.on_spawn_pet = self._slot_wrap(self.shell.spawn_pet)
         # 「退出子肥鱼」只挂给主肥鱼（instance_id 为空）：子肥鱼进程里该入口的
         # pid==os.getpid() 自我保护会跳过子鱼自己、把主鱼当子鱼 taskkill 掉
-        #（实机事故：从子鱼触发清除 → 主鱼被杀、触发的那只子鱼存活）。
-        win.on_clear_spawned_pets = (
-            self._slot_wrap(self.shell.clear_spawned_pets)
-            if not self.config.instance_id else None)
+        # （实机事故：从子鱼触发清除 → 主鱼被杀、触发的那只子鱼存活）。
+        win.on_clear_spawned_pets = self._slot_wrap(self.shell.clear_spawned_pets) if not self.config.instance_id else None
         win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
         win.on_voice_chime_now = self._slot_wrap(self.shell.trigger_voice_chime_now)
         win.on_toggle_voice_chime = self._slot_wrap(self.shell.toggle_voice_chime)
@@ -499,8 +499,7 @@ class PetInstance:
         else:
             win.on_exit_window = None
 
-    def _build_window(self, character_id: str, lib: MovieLibrary | None = None,
-                      build_tray: bool = True) -> PetWindow:
+    def _build_window(self, character_id: str, lib: MovieLibrary | None = None, build_tray: bool = True) -> PetWindow:
         """创建新窗口并完成接线、音效预热与旧对象延迟销毁（创建与切换共用）。
 
         从 _create_ui 与 switch_character 两处历史逐行重复的公共序列（约 25 行）
@@ -517,16 +516,20 @@ class PetInstance:
         # proactive），flag 关时传 None → PetWindow 各自创建（现状逐位一致）。
         shared = getattr(self.shell, "_shared", None)
         # 批5.2a §③.5：窗自身构造期日志（恢复位置/runtime 标记等）加 [slot-N] 前缀
-        #（P2-2 残余尽力而为——运行时动画/物理等 GUI 线程日志不动 window.py，预算仅 4360）。
+        # （P2-2 残余尽力而为——运行时动画/物理等 GUI 线程日志不动 window.py，预算仅 4360）。
         _prev_slot = getattr(_pet_log_slot, "slot", None)
         if shared is not None and self.slot_id is not None:
             _pet_log_slot.slot = f"slot-{self.slot_id}"
         try:
-            win = PetWindow(lib, self.config, collision_session=self.collision_ipc,
-                            broker_facade=self.broker_facade,
-                            single_process_spawn=self.shell._single_process_spawn,
-                            agent_link_manager=shared.agent_link if shared else None,
-                            proactive_watcher=shared.proactive if shared else None)
+            win = PetWindow(
+                lib,
+                self.config,
+                collision_session=self.collision_ipc,
+                broker_facade=self.broker_facade,
+                single_process_spawn=self.shell._single_process_spawn,
+                agent_link_manager=shared.agent_link if shared else None,
+                proactive_watcher=shared.proactive if shared else None,
+            )
         finally:
             _pet_log_slot.slot = _prev_slot
         # P1-2：窗级 runtime 标记版本化 / 日志前缀读进程级 flag 快照（不读每窗 config）。
@@ -577,23 +580,23 @@ class PetInstance:
     def switch_character(self, character_id: str) -> None:
         if self.win is None:
             return
-        current = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
+        current = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
         if character_id == current:
             return
 
         # 先保存配置，即使后续加载失败也记住用户选择
-        self.config.set('character', character_id)
+        self.config.set("character", character_id)
         self.config.save()
 
         try:
             # 预创建新库，失败则保留当前角色（在动旧窗口之前完成）
             lib = self._create_library(character_id)
         except Exception as exc:
-            logging.exception('切换角色失败: %s', character_id)
-            _show_startup_error('切换角色失败', str(exc))
+            logging.exception("切换角色失败: %s", character_id)
+            _show_startup_error("切换角色失败", str(exc))
             return
 
-        logging.info('切换角色: %s -> %s', current, character_id)
+        logging.info("切换角色: %s -> %s", current, character_id)
 
         # 批5.2 P1-1：碰撞会话由**本窗**自持（每窗一个）——热切换
         # 只重建本窗的 session（detach 旧窗 client → 停/重建本窗会话 →
@@ -610,7 +613,7 @@ class PetInstance:
             logging.exception("切换角色：停止本窗碰撞会话失败")
         self.collision_ipc = CollisionIpcSession(self.config, self.shell)
         self.collision_ipc.start()
-        if getattr(old_win, 'agent_link_manager', None) is not None:
+        if getattr(old_win, "agent_link_manager", None) is not None:
             old_win.agent_link_manager.shutdown()
         # 主窗热切换才换托盘（进程级单托盘）；非主窗热切换不动共享托盘。
         self._build_window(character_id, lib=lib, build_tray=(self is self.shell.instance))
@@ -644,11 +647,11 @@ class PetInstance:
         vertical = -1 if self.win.geometry().center().y() > available.center().y() else 1
         # 虚拟窗口坐标：贴边状态下实际窗口位置不含绘制偏移，错开要按
         # 角色自然位置算；未支持统一出口的窗口回退实际位置（= 改造前）。
-        vp_fn = getattr(self.win, '_virtual_pos', None)
+        vp_fn = getattr(self.win, "_virtual_pos", None)
         base = vp_fn() if callable(vp_fn) else QPoint(self.win.x(), self.win.y())
         x = base.x() + horizontal * 48 * index
         y = base.y() + vertical * 32 * index
-        mover = getattr(self.win, '_move_window_towards', None)
+        mover = getattr(self.win, "_move_window_towards", None)
         if callable(mover):
             mover(x, y)  # 统一出口自带工作区钳位（含小屏兜底）
             return
@@ -675,8 +678,7 @@ class PetInstance:
         # 桌宠全部隐藏：气泡锚不到桌宠，改弹到灵动岛上（岛是对话代理）。
         # singleShot 与下方同口径：Cocoa 菜单跟踪期间延迟到菜单关闭再弹。
         shell = getattr(self, "shell", None)
-        if shell is not None and not shell._aggregate_pet_visible() \
-                and shell._island_chat_available():
+        if shell is not None and not shell._aggregate_pet_visible() and shell._island_chat_available():
             QTimer.singleShot(0, lambda: shell._show_island_chat(activate=True))
             return
         # Cocoa 原生 QMenu 跟踪期间 activePopupWidget() 可能为 None，且其
@@ -708,10 +710,11 @@ class PetInstance:
         if self._defer_while_popup_active("legacy-chat", self.open_chat):
             return
         from .chat.legacy_widgets import ChatWindow
+
         if self.legacy_chat_window is None:
             self.legacy_chat_window = ChatWindow(
                 self.config,
-                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
+                str(self.config.get("character", catalog.DEFAULT_CHARACTER)),
                 pet_window=self.win,
                 notifier=self.shell.system_notify,
                 auth_callback=self.open_chat_settings,
@@ -727,10 +730,11 @@ class PetInstance:
         if self._defer_while_popup_active("modern-chat", self.open_modern_chat):
             return
         from .chat.widgets import ChatWindow
+
         if self.modern_chat_window is None:
             self.modern_chat_window = ChatWindow(
                 self.config,
-                str(self.config.get('character', catalog.DEFAULT_CHARACTER)),
+                str(self.config.get("character", catalog.DEFAULT_CHARACTER)),
                 pet_window=self.win,
                 notifier=self.shell.system_notify,
                 auth_callback=self.open_chat_settings,
@@ -796,6 +800,7 @@ class PetInstance:
         if not self.enable_chat:
             return
         from .chat.settings_dialog import ChatSettingsDialog
+
         if self.chat_settings_dialog is None:
             dialog = ChatSettingsDialog(self.config, self.chat_window)
             dialog.setModal(False)
@@ -827,11 +832,7 @@ class PetInstance:
         # 独立设置进程在跑时主进程没有对话框对象，只能看 shell 上的存活标记：
         # 锁文件存在期由 AppShell 维护（watcher 立即 + 3s 轮询兜底清除）。
         external_settings = bool(getattr(shell, "_settings_child_active", False)) if shell is not None else False
-        any_open = (
-            getattr(self, "modern_settings_dialog", None) is not None
-            or getattr(self, "chat_settings_dialog", None) is not None
-            or external_settings
-        )
+        any_open = getattr(self, "modern_settings_dialog", None) is not None or getattr(self, "chat_settings_dialog", None) is not None or external_settings
         self.win.set_bubble_suppressed(any_open)
 
     def open_modern_settings(self, initial_page: str | None = None) -> None:
@@ -841,6 +842,7 @@ class PetInstance:
         if self._try_open_settings_process(initial_page):
             return
         from .modern_settings_dialog import ModernSettingsDialog
+
         if self.modern_settings_dialog is None:
             self._dock_icon_before_settings = bool(self.config.get("show_dock_icon", True))
             dialog = ModernSettingsDialog(
@@ -907,12 +909,8 @@ class PetInstance:
         # 台词可能刚被改动：把还没有本地音频的句子交给后台补齐（开关默认关闭，
         # 关着时这里是 no-op；点了「编辑点击动画绑定」后直接 Esc 关设置也能一起收）
         self.shell.precache_self_talk_voice("设置保存后")
-        if (
-            getattr(self, "_dock_icon_before_settings", None) is True
-            and not bool(self.config.get("show_dock_icon", True))
-        ):
+        if getattr(self, "_dock_icon_before_settings", None) is True and not bool(self.config.get("show_dock_icon", True)):
             self._hint_dock_hidden_recovery()
-
 
     def _dock_hidden_recovery_message(self) -> str:
         return (
@@ -1046,9 +1044,9 @@ class AppShell:
     见 §2.2-E2 / R5）。
     """
 
-    def __init__(self, app: QApplication, config: Config, enable_chat: bool = True,
-                 slot_handle=None, slot_id: int | None = None,
-                 spawn_offset: int = 0) -> None:
+    def __init__(
+        self, app: QApplication, config: Config, enable_chat: bool = True, slot_handle=None, slot_id: int | None = None, spawn_offset: int = 0
+    ) -> None:
         self.app = app
         self.config = config
         self._enable_chat = bool(enable_chat)
@@ -1090,7 +1088,7 @@ class AppShell:
         self._balance_timer = QTimer()
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
-        self._balance_cache_path = config.dir / 'balance_cache.json'  # 跨实例共享余额缓存（按 provider 绑定）
+        self._balance_cache_path = config.dir / "balance_cache.json"  # 跨实例共享余额缓存（按 provider 绑定）
         # Phase 2：插件运行时在 UI 创建前完成 manifest/factory 发现，但不启动插件。
         # 资源 provider 复用 Phase 1 CharacterRegistry；in-process 插件只能通过
         # PresentationPort/SchedulerPort 等受限门面访问 Core。
@@ -1121,27 +1119,25 @@ class AppShell:
         # 退出分派、spawn 分发）一律读本快照，不读每窗 config。第二窗的
         # config-slot-N.json 里该键不再有任何作用，运行期手改 config.json
         # 翻 flag 也因此失效（需重启）。
-        self._single_process_spawn = bool(config.get('experimental_single_process_spawn', False))
+        self._single_process_spawn = bool(config.get("experimental_single_process_spawn", False))
         # 批5.3：进程级共享解码 hub（同角色帧扇出）——`experimental_shared_decode`
         # 默认开，但 `experimental_single_process_spawn` 关时整条 fan-out 不激活
-        #（单窗无共享可言）。门关 = 每窗各自独立解码（批5.2 形态，hub 恒回 local）。
-        self._decode_hub = DecodeFanoutHub(
-            enabled=bool(config.get('experimental_shared_decode', True))
-            and self._single_process_spawn)
+        # （单窗无共享可言）。门关 = 每窗各自独立解码（批5.2 形态，hub 恒回 local）。
+        self._decode_hub = DecodeFanoutHub(enabled=bool(config.get("experimental_shared_decode", True)) and self._single_process_spawn)
         # 批5.2a §③.1/.2：flag 开时进程级共享子系统（agent_link / proactive /
         # 全屏 watcher），各窗经 PetWindow 构造参数引用同一份，崩溃/换角色不重建；
         # flag 关时保持 None = 每窗各自创建（现状逐位一致）。
-        #（位置在 _instances 就绪之后，共享 manager 构造期即遍历窗集合）。
+        # （位置在 _instances 就绪之后，共享 manager 构造期即遍历窗集合）。
         self._shared = None
         # 批5.2 P1-1：碰撞会话/broker 移回各 PetInstance 自持（不再由 AppShell 持有）；
         # 每窗一个，经 collision_ipc._local_election_names 同进程收敛。
         # 每窗容器：批5.1 单进程单窗仅一个；批5.2 spike 扩成多窗集合
-        #（self.instance 指主窗 = instances[0]，兼容既有调用面）。
+        # （self.instance 指主窗 = instances[0]，兼容既有调用面）。
         self._instances: list[PetInstance] = []
         # 批 E：清除子肥鱼链式关闭进行中标记（重复点击忽略，保持幂等）。
         self._clear_spawned_pending = False
         # 设置进程隔离：独立设置进程存活标记 + config 目录 watcher/定时器
-        #（懒安装，见 _install_config_watcher）。默认关的键下完全不用它们。
+        # （懒安装，见 _install_config_watcher）。默认关的键下完全不用它们。
         self._settings_child_active = False
         self._settings_launch_at = 0.0
         self._config_watcher = None
@@ -1149,8 +1145,12 @@ class AppShell:
         self._settings_watch_timer = None
         self._last_config_signature = None
         self.instance = PetInstance(
-            self, config, enable_chat=self.enable_chat, slot_handle=slot_handle,
-            slot_id=slot_id, spawn_offset=spawn_offset,
+            self,
+            config,
+            enable_chat=self.enable_chat,
+            slot_handle=slot_handle,
+            slot_id=slot_id,
+            spawn_offset=spawn_offset,
         )
         self._instances.append(self.instance)
         if self._single_process_spawn:
@@ -1171,8 +1171,8 @@ class AppShell:
     @property
     def slot_id(self) -> int | None:
         """主窗 slot（E2：主窗实例 slot_id 为权威，本属性只读转发）。"""
-        inst = getattr(self, 'instance', None)
-        if inst is not None and getattr(inst, 'slot_id', None) is not None:
+        inst = getattr(self, "instance", None)
+        if inst is not None and getattr(inst, "slot_id", None) is not None:
             return inst.slot_id
         return self._slot_id
 
@@ -1184,27 +1184,27 @@ class AppShell:
     @property
     def win(self) -> PetWindow | None:
         """主窗窗口（TodoReminderService 的气泡锚点；无窗时 None）。"""
-        inst = getattr(self, 'instance', None)
+        inst = getattr(self, "instance", None)
         return inst.win if inst is not None else None
 
     @win.setter
     def win(self, value) -> None:
         """Legacy compatibility setter routed to the primary instance."""
-        inst = getattr(self, 'instance', None)
+        inst = getattr(self, "instance", None)
         if inst is not None:
             inst.win = value
 
     @property
     def modern_settings_dialog(self):
         """转发主窗实例的设置对话框引用（TodoReminderService 气泡抑制判定用）。"""
-        inst = getattr(self, 'instance', None)
-        return getattr(inst, 'modern_settings_dialog', None) if inst is not None else None
+        inst = getattr(self, "instance", None)
+        return getattr(inst, "modern_settings_dialog", None) if inst is not None else None
 
     @property
     def chat_settings_dialog(self):
         """转发主窗实例的对话设置引用（TodoReminderService 气泡抑制判定用）。"""
-        inst = getattr(self, 'instance', None)
-        return getattr(inst, 'chat_settings_dialog', None) if inst is not None else None
+        inst = getattr(self, "instance", None)
+        return getattr(inst, "chat_settings_dialog", None) if inst is not None else None
 
     # ------------------------------------------------------------ 功能门控（待办提醒）
     def _todo_wanted(self) -> bool:
@@ -1238,10 +1238,7 @@ class AppShell:
     # ------------------------------------------------------------ 功能门控（语音报时）
     def _festival_speak_wanted(self) -> bool:
         """节日语音是否开启——它复用报时服务的音频通道，因此会连带影响通道生命周期。"""
-        return bool(
-            self.config.get("festival_reminder_enabled", False)
-            and self.config.get("festival_reminder_speak", False)
-        )
+        return bool(self.config.get("festival_reminder_enabled", False) and self.config.get("festival_reminder_speak", False))
 
     def _self_talk_speak_wanted(self) -> bool:
         """点击自言自语朗读是否开启——它同样复用报时服务的音频通道。
@@ -1250,19 +1247,12 @@ class AppShell:
         「气泡自言自语」总开关（周期气泡）耦合，否则只想点击听声的用户永远拿不到
         音频通道。避免给用不到的场景常驻一条音频通道。
         """
-        return bool(
-            self.config.get("self_talk_speak_enabled", True)
-            and self.config.get("click_show_self_talk", False)
-        )
+        return bool(self.config.get("self_talk_speak_enabled", True) and self.config.get("click_show_self_talk", False))
 
     def _chime_wanted(self) -> bool:
         # 报时自身开启，或节日语音 / 点击自言自语朗读需要这条音频通道（三者共用
         # 一套合成与播放，因此"通道是否存在"取决于其中之一是否需要）。
-        return (
-            bool(self.config.get("voice_chime_enabled", False))
-            or self._festival_speak_wanted()
-            or self._self_talk_speak_wanted()
-        )
+        return bool(self.config.get("voice_chime_enabled", False)) or self._festival_speak_wanted() or self._self_talk_speak_wanted()
 
     def _ensure_chime_service(self):
         """懒创建语音报时服务（报时 / 手动触发 / 节日语音播报共用）。"""
@@ -1335,8 +1325,7 @@ class AppShell:
                 if channel.play_file(str(cached), log_tag="点击自言自语"):
                     # 落一条日志：本地播报与"偷偷回落到在线合成"必须能分辨，
                     # 否则文件名对不上时只会表现为"声音怎么变了"却查不出原因。
-                    logging.getLogger("dsh-pet-standalone").info(
-                        "点击自言自语：播放预缓存台词 %s（本地，不走网络）", cached.name)
+                    logging.getLogger("dsh-pet-standalone").info("点击自言自语：播放预缓存台词 %s（本地，不走网络）", cached.name)
                     return True
             except Exception:
                 logging.exception("本地台词播放失败，回退在线合成：%s", cached.name)
@@ -1366,8 +1355,7 @@ class AppShell:
             logging.exception("启动台词语音预缓存失败（不影响点击朗读）")
             return False
         if started:
-            logging.getLogger("dsh-pet-standalone").info(
-                "已开始后台预缓存台词语音%s", f"（{reason}）" if reason else "")
+            logging.getLogger("dsh-pet-standalone").info("已开始后台预缓存台词语音%s", f"（{reason}）" if reason else "")
         return started
 
     def _sync_chime_service(self) -> None:
@@ -1769,8 +1757,7 @@ class AppShell:
         lock_path = self.config.dir / "settings.lock"
         if lock_path.exists():
             self._settings_launch_at = 0.0
-        elif (bool(getattr(self, "_settings_child_active", False))
-                and not self._settings_launch_pending()):
+        elif bool(getattr(self, "_settings_child_active", False)) and not self._settings_launch_pending():
             self._mark_settings_child(False)
 
     def _on_config_change_debounced(self) -> None:
@@ -1814,8 +1801,8 @@ class AppShell:
             self._on_about_to_quit_connected = True
         self.instance.collision_ipc.start()
         self._dsh_state_tracker.start()
-        character_id = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
-        logging.info('当前形象: %s', character_id)
+        character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
+        logging.info("当前形象: %s", character_id)
         self._create_ui_with_character_fallback(character_id)
         # 批5.2a：进程级共享全屏 watcher 在主窗就绪后启动（自省任一窗是否需要，
         # 无需窗——环则空转）；flag 关时 _shared 为 None，no-op。
@@ -1867,7 +1854,8 @@ class AppShell:
             return
         try:
             self._session_watcher = install_session_watcher(
-                app=self.app, on_session_end=self._on_session_end,
+                app=self.app,
+                on_session_end=self._on_session_end,
             )
         except Exception:
             logging.exception("安装会话结束探测器失败")
@@ -1909,7 +1897,8 @@ class AppShell:
                 except Exception:
                     logging.exception("会话结束时停止素材库 clip 失败")
         logging.info(
-            "会话结束：已停止全部 ffmpeg reader（%d 个素材库收口），进入静默退出", stopped,
+            "会话结束：已停止全部 ffmpeg reader（%d 个素材库收口），进入静默退出",
+            stopped,
         )
 
     def _mark_session_ending(self) -> None:
@@ -1923,7 +1912,6 @@ class AppShell:
         except Exception:
             logging.exception("置位会话结束闸门失败")
 
-
     def _create_ui_with_character_fallback(self, character_id: str) -> None:
         """启动路径创建主窗；配置记住的角色素材目录已被删/搬走（如 DLC 卸载）
         时回退默认角色重试一次，而不是直接弹错退出。默认角色也缺素材则照常
@@ -1933,9 +1921,9 @@ class AppShell:
         except FileNotFoundError:
             if character_id == catalog.DEFAULT_CHARACTER:
                 raise
-            logging.warning('角色 %s 素材缺失，回退默认角色 %s', character_id, catalog.DEFAULT_CHARACTER)
+            logging.warning("角色 %s 素材缺失，回退默认角色 %s", character_id, catalog.DEFAULT_CHARACTER)
             character_id = catalog.DEFAULT_CHARACTER
-            self.config.set('character', character_id)
+            self.config.set("character", character_id)
             self.instance._create_ui(character_id)
 
     def _maybe_autostart_harness(self) -> None:
@@ -1951,6 +1939,7 @@ class AppShell:
         def _run() -> None:
             try:
                 from . import harness_launcher as harness_mod
+
                 if any(harness_mod.is_running(p) for p in harness_mod._candidate_ports()):
                     return
                 harness_mod.launch_harness(open_browser=False)
@@ -2013,6 +2002,7 @@ class AppShell:
         （这也是「退出这只」与「全部退出」的核心差异）。
         """
         from .chat import session_store as _session_store
+
         # issue #111：先关 ffmpeg spawn 闸门，再走正常退出收口——正常退出路径
         # （托盘退出/最后窗口关闭）同样落在关机前后，绝不能在里面再派生 reader。
         self._mark_session_ending()
@@ -2025,19 +2015,19 @@ class AppShell:
                 except Exception:
                     logging.exception("退出时保存位置失败")
                 try:
-                    if getattr(win, 'lib', None) is not None:
+                    if getattr(win, "lib", None) is not None:
                         win.lib.pause_warm()
                 except Exception:
                     logging.exception("退出时暂停预热失败")
-                if getattr(win, 'agent_link_manager', None) is not None:
+                if getattr(win, "agent_link_manager", None) is not None:
                     try:
                         win.agent_link_manager.shutdown()
                     except Exception:
                         logging.exception("退出时关闭 Agent 失败")
                 # 各聊天窗当前会话提交保存（写盘 worker 将在下方永久关闭）
                 for _w in (inst.legacy_chat_window, inst.modern_chat_window, inst.quick_chat):
-                    _session = getattr(_w, 'session', None)
-                    _store = getattr(_w, 'store', None)
+                    _session = getattr(_w, "session", None)
+                    _store = getattr(_w, "store", None)
                     if _session is not None and _store is not None:
                         try:
                             _store.save(_session)
@@ -2096,33 +2086,22 @@ class AppShell:
         # 之后再释放 Core 级音频/待办等服务，避免插件回调触碰正在析构的窗口。
         registry = getattr(self, "plugin_registry", None)
         compatibility_festival_service = getattr(self, "festival_service", None)
-        runtime_instance = (
-            registry.get_instance(FESTIVAL_MANIFEST.id)
-            if registry is not None
-            else None
-        )
-        runtime_festival_service = (
-            getattr(runtime_instance, "service", None)
-            if runtime_instance is not None
-            else None
-        )
+        runtime_instance = registry.get_instance(FESTIVAL_MANIFEST.id) if registry is not None else None
+        runtime_festival_service = getattr(runtime_instance, "service", None) if runtime_instance is not None else None
         if registry is not None:
             try:
                 registry.publish_event("core.app.shutdown_requested", source="core.app", payload={})
                 registry.stop_all()
             except Exception:
                 logging.exception("退出时停止插件运行时失败")
-        if (
-            compatibility_festival_service is not None
-            and compatibility_festival_service is not runtime_festival_service
-        ):
+        if compatibility_festival_service is not None and compatibility_festival_service is not runtime_festival_service:
             try:
                 compatibility_festival_service.stop()
             except Exception:
                 logging.exception("退出时停止兼容节日提醒服务失败")
         self.festival_service = None
         # 会话异步写盘（B8）：全部会话已保存，再永久关闭写盘 worker
-        #（关掉后迟到的 queued 回调提交会被明确拒绝）。
+        # （关掉后迟到的 queued 回调提交会被明确拒绝）。
         if self.todo_service is not None:
             self.todo_service.stop()
         # 语音报时同为进程级懒服务，退出必须一并停：其无主 QTimer 的 timeout
@@ -2187,25 +2166,14 @@ class AppShell:
                     shell._shared.stop_all()
                 registry = getattr(shell, "plugin_registry", None)
                 compatibility_festival_service = getattr(shell, "festival_service", None)
-                runtime_instance = (
-                    registry.get_instance(FESTIVAL_MANIFEST.id)
-                    if registry is not None
-                    else None
-                )
-                runtime_festival_service = (
-                    getattr(runtime_instance, "service", None)
-                    if runtime_instance is not None
-                    else None
-                )
+                runtime_instance = registry.get_instance(FESTIVAL_MANIFEST.id) if registry is not None else None
+                runtime_festival_service = getattr(runtime_instance, "service", None) if runtime_instance is not None else None
                 if registry is not None:
                     try:
                         registry.stop_all()
                     except Exception:
                         logging.debug("测试收口插件运行时失败", exc_info=True)
-                if (
-                    compatibility_festival_service is not None
-                    and compatibility_festival_service is not runtime_festival_service
-                ):
+                if compatibility_festival_service is not None and compatibility_festival_service is not runtime_festival_service:
                     try:
                         compatibility_festival_service.stop()
                     except Exception:
@@ -2245,7 +2213,7 @@ class AppShell:
                     except Exception:
                         logging.debug("测试收口灵动岛碰撞体失败", exc_info=True)
                 # 设置页进程隔离：watcher/定时器同属"无主 Qt 对象"一族，收口
-                #（不停会让后续测试凭空多一条 3s 轮询，并阻碍对象图回收）。
+                # （不停会让后续测试凭空多一条 3s 轮询，并阻碍对象图回收）。
                 teardown_watcher = getattr(shell, "_teardown_config_watcher", None)
                 if callable(teardown_watcher):
                     try:
@@ -2255,6 +2223,7 @@ class AppShell:
                 shell._settings_child_active = False
                 try:
                     from .chat.service import ChatService as _ChatService
+
                     _ChatService.unregister_global_finished(shell._on_global_chat_finished)
                 except Exception:
                     pass
@@ -2376,8 +2345,7 @@ class AppShell:
         杜绝采样间隙导致的穿透抽搐；岛被拖到桌宠身上由 on_geometry_changed
         事件驱动推出。
         """
-        enabled = bool(island_cfg.get("collision_enabled", True)) \
-            if isinstance(island_cfg, dict) else True
+        enabled = bool(island_cfg.get("collision_enabled", True)) if isinstance(island_cfg, dict) else True
         body = getattr(self, "island_collision", None)
         if not enabled:
             if body is not None:
@@ -2386,11 +2354,7 @@ class AppShell:
         if body is None:
             from .island_collision import IslandCollisionBody
 
-            body = IslandCollisionBody(
-                self.island, self.config,
-                pets_provider=lambda: [
-                    inst.win for inst in self._instances if inst.win is not None
-                ])
+            body = IslandCollisionBody(self.island, self.config, pets_provider=lambda: [inst.win for inst in self._instances if inst.win is not None])
             self.island_collision = body
             if self.island is not None:
                 self.island.on_geometry_changed = body.submit
@@ -2449,8 +2413,7 @@ class AppShell:
             return False
         return self._island_hidden_chat_enabled()
 
-    def _show_island_chat(self, *, activate: bool = True,
-                          reply_text: str | None = None) -> None:
+    def _show_island_chat(self, *, activate: bool = True, reply_text: str | None = None) -> None:
         """弹出锚定灵动岛的对话气泡（activate=False 为不抢焦点的预览弹出）。"""
         if not self._island_chat_available():
             return
@@ -2494,8 +2457,7 @@ class AppShell:
         不可用（无聊天模块 / 岛未启用 / hidden_chat 关）时照旧暂停省电。"""
         return self._island_chat_available()
 
-    def _island_feedback_bubble(self, text: str, subtitle: str = "",
-                                duration_ms: int = 3200) -> bool:
+    def _island_feedback_bubble(self, text: str, subtitle: str = "", duration_ms: int = 3200) -> bool:
         """桌宠隐藏时的反馈气泡改道面（window_alerts.redirect_hidden_bubble 注入调用）。
 
         DSH 联动状态/提醒等非交互气泡在桌宠隐藏期间改弹到岛对话气泡
@@ -2558,10 +2520,7 @@ class AppShell:
 
     def _aggregate_pet_visible(self) -> bool:
         """是否有任一窗可见（聚合可见态——灵动岛按它同步 set_pet_visible）。"""
-        return any(
-            inst.win is not None and getattr(inst.win, "isVisible", lambda: True)()
-            for inst in self._instances
-        )
+        return any(inst.win is not None and getattr(inst.win, "isVisible", lambda: True)() for inst in self._instances)
 
     def _toggle_pet_from_island(self) -> None:
         # 批5.2a §③.4：灵动岛单击 toggle **全部**窗（任一可见 → 全部隐藏；否则全部显示），
@@ -2603,7 +2562,8 @@ class AppShell:
             str(self.config.get("balance_tier_label_idle", "") or ""),
         )
         return balance_mod.deepseek_pricing_hint(
-            peak_label=peak_label, idle_label=idle_label,
+            peak_label=peak_label,
+            idle_label=idle_label,
         )
 
     def _update_island_balance(self, payload, *, animate: bool = True) -> None:
@@ -2635,21 +2595,22 @@ class AppShell:
             return
         now = time.monotonic()
         import hashlib
+
         settings = self.config.chat_settings()
         provider = settings.active_config
         provider.api_key = self.config.resolve_api_key(provider)
         if not provider.api_key:
-            island.set_balance_info(
-                self._island_tier_hint(), "未配置 API Key（设置 → 聊天）")
+            island.set_balance_info(self._island_tier_hint(), "未配置 API Key（设置 → 聊天）")
             return
-        key_digest = hashlib.sha256(str(provider.api_key or '').encode()).hexdigest()[:12]
-        provider_key = '|'.join([
-            str(getattr(provider, 'id', '') or ''),
-            str(provider.base_url or ''),
-            key_digest,
-        ])
-        if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
-                and self._balance_cache[2] == provider_key:
+        key_digest = hashlib.sha256(str(provider.api_key or "").encode()).hexdigest()[:12]
+        provider_key = "|".join(
+            [
+                str(getattr(provider, "id", "") or ""),
+                str(provider.base_url or ""),
+                key_digest,
+            ]
+        )
+        if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 and self._balance_cache[2] == provider_key:
             self._update_island_balance(self._balance_cache[1], animate=False)
             return
         file_payload = self._read_balance_file_cache(provider_key)
@@ -2672,7 +2633,8 @@ class AppShell:
                 target=self._balance_worker,
                 args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
                 kwargs={"quiet": True},
-                daemon=True, name='pet-balance-quiet',
+                daemon=True,
+                name="pet-balance-quiet",
             ).start()
         except Exception as exc:  # noqa: BLE001 - 启动失败也必须释放忙状态
             self._quiet_balance_busy = False
@@ -2687,17 +2649,19 @@ class AppShell:
         # 余额缓存绑定 provider 身份（id + base_url + key 摘要）：同地址不同账号也不串号；
         # 摘要不可逆推原 key，不落敏感信息。
         import hashlib
+
         settings = self.config.chat_settings()
         provider = settings.active_config
         provider.api_key = self.config.resolve_api_key(provider)
-        key_digest = hashlib.sha256(str(provider.api_key or '').encode()).hexdigest()[:12]
-        provider_key = '|'.join([
-            str(getattr(provider, 'id', '') or ''),
-            str(provider.base_url or ''),
-            key_digest,
-        ])
-        if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 \
-                and self._balance_cache[2] == provider_key:
+        key_digest = hashlib.sha256(str(provider.api_key or "").encode()).hexdigest()[:12]
+        provider_key = "|".join(
+            [
+                str(getattr(provider, "id", "") or ""),
+                str(provider.base_url or ""),
+                key_digest,
+            ]
+        )
+        if self._balance_cache is not None and now - self._balance_cache[0] < 30.0 and self._balance_cache[2] == provider_key:
             self._update_island_balance(self._balance_cache[1])
             _show_balance_payload(win, self._balance_cache[1])
             return
@@ -2711,21 +2675,22 @@ class AppShell:
         # 延迟到事件循环空闲再冒泡：macOS 菜单跟踪会话内新建/显示窗口会被
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
         # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
-        QTimer.singleShot(0, lambda: win.show_bubble('让我看看余额…', duration_ms=6000))
+        QTimer.singleShot(0, lambda: win.show_bubble("让我看看余额…", duration_ms=6000))
         bridge = _BalanceBridge(win, owner=self)
         self._balance_bridge = bridge
         try:
             threading.Thread(
                 target=self._balance_worker,
                 args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
-                daemon=True, name='pet-balance',
+                daemon=True,
+                name="pet-balance",
             ).start()
         except Exception as exc:  # noqa: BLE001 - 启动失败也必须释放忙状态
             self._balance_busy = False
-            error_message = f'余额查询失败：{exc}'
+            error_message = f"余额查询失败：{exc}"
             QTimer.singleShot(0, lambda message=error_message: bridge.done.emit(False, message))
 
-    def _balance_worker(self, bridge, base_url: str, api_key: str, verify_ssl: bool, provider_key: str = '', *, quiet: bool = False) -> None:
+    def _balance_worker(self, bridge, base_url: str, api_key: str, verify_ssl: bool, provider_key: str = "", *, quiet: bool = False) -> None:
         try:
             info = balance_mod.fetch_balance(base_url, api_key, verify_ssl=verify_ssl)
             text = balance_mod.format_balance(info)
@@ -2734,54 +2699,57 @@ class AppShell:
             self._write_balance_file_cache(payload, provider_key)
             bridge.done.emit(True, payload)
         except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
-            bridge.done.emit(False, f'余额查询失败：{exc}')
+            bridge.done.emit(False, f"余额查询失败：{exc}")
         finally:
             if quiet:
                 self._quiet_balance_busy = False
             else:
                 self._balance_busy = False
 
-    def _read_balance_file_cache(self, provider_key: str = '') -> dict | None:
+    def _read_balance_file_cache(self, provider_key: str = "") -> dict | None:
         """读取跨实例共享的余额缓存（30s 内有效，且必须是同一 provider 的缓存）。
 
         返回 {"text": ..., "info": {...}}；兼容旧版只存 text 字符串的缓存。
         """
         try:
-            data = json.loads(self._balance_cache_path.read_text(encoding='utf-8'))
+            data = json.loads(self._balance_cache_path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 return None
-            if str(data.get('provider', '') or '') != provider_key:
+            if str(data.get("provider", "") or "") != provider_key:
                 return None
-            if time.time() - float(data.get('ts', 0) or 0) >= 30.0:
+            if time.time() - float(data.get("ts", 0) or 0) >= 30.0:
                 return None
-            text = str(data.get('text', '') or '')
+            text = str(data.get("text", "") or "")
             if not text:
                 return None
-            info = data.get('info')
+            info = data.get("info")
             return {
-                'text': text,
-                'info': info if isinstance(info, dict) else {},
+                "text": text,
+                "info": info if isinstance(info, dict) else {},
             }
         except (OSError, ValueError, TypeError):
             pass
         return None
 
-    def _write_balance_file_cache(self, payload: dict, provider_key: str = '') -> None:
+    def _write_balance_file_cache(self, payload: dict, provider_key: str = "") -> None:
         """写入跨实例共享的余额缓存（原子替换，绑定 provider）。
 
         同时保存 text 和 info，使缓存命中时也能显示峰谷副标题并播放余额动画。
         """
         try:
             self._balance_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._balance_cache_path.with_suffix(f'.{os.getpid()}.tmp')
+            tmp = self._balance_cache_path.with_suffix(f".{os.getpid()}.tmp")
             tmp.write_text(
-                json.dumps({
-                    'ts': time.time(),
-                    'text': str(payload.get('text') or ''),
-                    'info': payload.get('info') or {},
-                    'provider': provider_key,
-                }, ensure_ascii=False),
-                encoding='utf-8',
+                json.dumps(
+                    {
+                        "ts": time.time(),
+                        "text": str(payload.get("text") or ""),
+                        "info": payload.get("info") or {},
+                        "provider": provider_key,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
             )
             tmp.replace(self._balance_cache_path)
         except OSError:
@@ -2827,16 +2795,16 @@ class AppShell:
                 launch_new_pet(self._spawned_pet_count)
             except OSError as exc:
                 self._spawned_pet_count = max(0, self._spawned_pet_count - 1)
-                logging.exception('生小肥鱼失败')
-                _show_startup_error('生小肥鱼失败', str(exc))
+                logging.exception("生小肥鱼失败")
+                _show_startup_error("生小肥鱼失败", str(exc))
             return
         try:
             self._spawned_pet_count += 1
             self.spawn_in_process_window(self._spawned_pet_count)
         except Exception as exc:
             self._spawned_pet_count = max(0, self._spawned_pet_count - 1)
-            logging.exception('进程内生成小肥鱼失败')
-            _show_startup_error('生小肥鱼失败', str(exc))
+            logging.exception("进程内生成小肥鱼失败")
+            _show_startup_error("生小肥鱼失败", str(exc))
 
     def clear_spawned_pets(self) -> None:
         """右键菜单快捷入口：一键静默退出所有小肥鱼（设置与数据保留）。
@@ -2857,16 +2825,14 @@ class AppShell:
         # defer_heavy_teardown 路径），UI 线程只留关窗/摘标记等毫秒级必做步骤。
         # 全部关完再走文件级清理杀多进程子进程（同样在后台线程跑，taskkill
         # 不再冻 UI）。两条路径都幂等，清完不留 runtime 标记残留。
-        refs = [weakref.ref(inst) for inst in self._instances
-                if inst is not self.instance]
+        refs = [weakref.ref(inst) for inst in self._instances if inst is not self.instance]
         # 进行中标记两条路径统一前置：链式与纯文件级清理都覆盖（批 G 起文件级
         # 清理改后台线程，执行期间重复点击同样忽略）。
         self._clear_spawned_pending = True
         if not refs:
             self._finish_clear_spawned_pets(cleanup_slots)
             return
-        QTimer.singleShot(
-            0, lambda: self._clear_spawned_chain(refs, 0, cleanup_slots))
+        QTimer.singleShot(0, lambda: self._clear_spawned_chain(refs, 0, cleanup_slots))
 
     def _clear_spawned_chain(self, refs, index: int, cleanup_slots) -> None:
         """逐只异步关闭进程内子窗（每只之间让出事件循环，UI 不冻结）。
@@ -2885,11 +2851,8 @@ class AppShell:
                 # 移出 UI 线程），每窗 UI 线程单步阻塞压到毫秒级。
                 self._on_window_exit_requested(inst, defer_heavy_teardown=True)
             except Exception:
-                logging.exception(
-                    "清除子肥鱼：关闭进程内小肥鱼失败 (slot=%s)",
-                    getattr(inst, "slot_id", None))
-        QTimer.singleShot(
-            0, lambda: self._clear_spawned_chain(refs, index + 1, cleanup_slots))
+                logging.exception("清除子肥鱼：关闭进程内小肥鱼失败 (slot=%s)", getattr(inst, "slot_id", None))
+        QTimer.singleShot(0, lambda: self._clear_spawned_chain(refs, index + 1, cleanup_slots))
 
     def _finish_clear_spawned_pets(self, cleanup_slots) -> None:
         """链式关闭收口：文件级退出残余子进程，并复位进行中标记。
@@ -2906,15 +2869,11 @@ class AppShell:
             except Exception:
                 logging.exception("退出子肥鱼：文件级清理失败")
                 result = {"killed_pids": [], "failed_pids": []}
-            logging.info(
-                "退出子肥鱼：已退出 %d 只，未能退出 %d 只",
-                len(result.get("killed_pids", [])),
-                len(result.get("failed_pids", [])))
+            logging.info("退出子肥鱼：已退出 %d 只，未能退出 %d 只", len(result.get("killed_pids", [])), len(result.get("failed_pids", [])))
             # 带 context 的 singleShot：从后台线程安全投递回 UI 线程。
             QTimer.singleShot(0, self.app, self._clear_spawned_sweep_done)
 
-        threading.Thread(
-            target=sweep, daemon=True, name="pet-clear-spawned-sweep").start()
+        threading.Thread(target=sweep, daemon=True, name="pet-clear-spawned-sweep").start()
 
     def _clear_spawned_sweep_done(self) -> None:
         """文件级清理完成回调（UI 线程）：复位进行中标记。"""
@@ -2933,7 +2892,7 @@ class AppShell:
         """
         config_dir = self.config.dir
         # 单进程内 slot 语义 = 窗身份分配：不能再用跨进程文件锁做同进程竞争
-        #（同一进程可再次锁住已持有的 slot-N 锁，导致两窗撞同一 slot）。先
+        # （同一进程可再次锁住已持有的 slot-N 锁，导致两窗撞同一 slot）。先
         # 收集本进程已占用的 slot_id，再逐位申请未被占用且未被它进程持有的。
         used = {inst.slot_id for inst in self._instances}
         slot_id = None
@@ -2945,15 +2904,13 @@ class AppShell:
         while candidate < 128:
             if candidate not in used:
                 try:
-                    slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(
-                        config_dir, preferred_slot=candidate)
+                    slot_id, slot_handle = slot_manager_mod.acquire_pet_slot(config_dir, preferred_slot=candidate)
                     break
                 except slot_manager_mod.SlotLockError:
                     pass
             candidate += 1
         else:
-            raise slot_manager_mod.SlotManagerError(
-                "进程内生小肥鱼：前 128 个槽位均被占用或无法获取锁")
+            raise slot_manager_mod.SlotManagerError("进程内生小肥鱼：前 128 个槽位均被占用或无法获取锁")
         instance_id = slot_manager_mod.slot_to_instance_id(slot_id)
         # 新 slot 落种：走共享落种函数。无存档 slot 按主设置落种；存在但未在该
         # 子肥鱼设置界面自定义过的 slot 按主设置刷新；已自定义（user_customized）
@@ -2963,10 +2920,14 @@ class AppShell:
         # config-slot-N.json / sessions-slot-N 落在同一 APP_DIR_NAME 下，仅按
         # instance_id 区分；显式传 instance_id，不再依赖进程级 DSH_PET_INSTANCE。
         new_config = Config(base=self.config.dir.parent, instance_id=instance_id)
-        character_id = str(new_config.get('character', catalog.DEFAULT_CHARACTER))
+        character_id = str(new_config.get("character", catalog.DEFAULT_CHARACTER))
         inst = PetInstance(
-            self, new_config, enable_chat=self.enable_chat,
-            slot_handle=slot_handle, slot_id=slot_id, spawn_offset=offset_index,
+            self,
+            new_config,
+            enable_chat=self.enable_chat,
+            slot_handle=slot_handle,
+            slot_id=slot_id,
+            spawn_offset=offset_index,
         )
         # 批5.3：P1-6 移除——进程内多窗不再停用任何窗的共享解码；新窗与主窗
         # 共用同一进程级 DecodeFanoutHub（同素材首窗发布、同速窗进食）。
@@ -2988,8 +2949,7 @@ class AppShell:
         logging.info("进程内新窗已创建 (slot=%s, instance=%s)", slot_id, instance_id)
         return inst
 
-    def _on_window_exit_requested(self, instance: PetInstance,
-                                  *, defer_heavy_teardown: bool = False) -> None:
+    def _on_window_exit_requested(self, instance: PetInstance, *, defer_heavy_teardown: bool = False) -> None:
         """窗级「退出这只」（R5 切分）：只收口本窗，不碰其它窗的进程级资源。
 
         顺序：存本窗位置 → 停本窗预热/Agent → 保存本窗三聊天窗 live session
@@ -3018,11 +2978,11 @@ class AppShell:
             except Exception:
                 logging.exception("退出这只：保存位置失败")
             try:
-                if getattr(win, 'lib', None) is not None:
+                if getattr(win, "lib", None) is not None:
                     win.lib.pause_warm()
             except Exception:
                 logging.exception("退出这只：暂停预热失败")
-            agent_mgr = getattr(win, 'agent_link_manager', None)
+            agent_mgr = getattr(win, "agent_link_manager", None)
             if agent_mgr is not None:
                 if defer_heavy_teardown:
                     # 摘下引用再关窗：closeEvent 也会调 shutdown()，不在 UI
@@ -3035,10 +2995,10 @@ class AppShell:
                     except Exception:
                         logging.exception("退出这只：关闭 Agent 失败")
         # 批5.2 P0-2：先保存本窗三聊天窗的 live session，再关写盘 writer
-        #（对齐 aboutToQuit 安全网：退出该窗不丢内存态会话）。
+        # （对齐 aboutToQuit 安全网：退出该窗不丢内存态会话）。
         for _w in (instance.legacy_chat_window, instance.modern_chat_window, instance.quick_chat):
-            _session = getattr(_w, 'session', None)
-            _store = getattr(_w, 'store', None)
+            _session = getattr(_w, "session", None)
+            _store = getattr(_w, "store", None)
             if _session is not None and _store is not None:
                 try:
                     _store.save(_session)
@@ -3048,7 +3008,7 @@ class AppShell:
         # 在 writer 关闭后经 store 提交、复活写盘 worker（常驻到进程结束）。
         self._close_instance_subwindows(instance)
         if win is not None:
-            marker_remover = getattr(win, 'remove_runtime_marker', None)
+            marker_remover = getattr(win, "remove_runtime_marker", None)
             if callable(marker_remover):
                 try:
                     marker_remover()
@@ -3058,9 +3018,7 @@ class AppShell:
         # 批 G：defer 模式下这 2s 有界 join 也挪到 reaper 线程（会话保存已在
         # 上方同步完成，顺序由 reaper 串行保证）。
         if defer_heavy_teardown:
-            heavy_jobs.append(
-                ("关闭会话写盘 worker",
-                 lambda: self._close_instance_session_writer(instance)))
+            heavy_jobs.append(("关闭会话写盘 worker", lambda: self._close_instance_session_writer(instance)))
         else:
             self._close_instance_session_writer(instance)
         if instance.slot_handle is not None:
@@ -3122,8 +3080,7 @@ class AppShell:
                         except Exception:
                             logging.exception("退出子肥鱼：后台重回收失败 (%s)", label)
 
-            threading.Thread(
-                target=reap, daemon=True, name="pet-teardown-reaper").start()
+            threading.Thread(target=reap, daemon=True, name="pet-teardown-reaper").start()
             self._teardown_queue = q
         return q
 
@@ -3141,8 +3098,7 @@ class AppShell:
         调度 deleteLater + 清空实例引用，否则孤儿顶层窗在「退出这只」关掉本窗
         writer 之后仍可经 store 提交、复活写盘 worker（常驻到进程结束）。
         """
-        for attr in ('legacy_chat_window', 'modern_chat_window', 'quick_chat',
-                     'chat_settings_dialog', 'modern_settings_dialog'):
+        for attr in ("legacy_chat_window", "modern_chat_window", "quick_chat", "chat_settings_dialog", "modern_settings_dialog"):
             dialog = getattr(instance, attr, None)
             if dialog is None:
                 continue
@@ -3168,8 +3124,8 @@ class AppShell:
         """
         try:
             from .chat import session_store as _session_store
-            root = _session_store.SessionStore(
-                instance.config.dir, instance.config.instance_id).root
+
+            root = _session_store.SessionStore(instance.config.dir, instance.config.instance_id).root
             # P1-7：运行期关窗 writer 的 timeout 降到 2s（不许冻 GUI 10s）；
             # 退出路径的 close_all_writers 仍保持默认 10s 不变。
             if not _session_store.close_writer_for_root(root, timeout=2.0):
@@ -3311,10 +3267,7 @@ class AppShell:
         position_stack(self._toast_windows)
 
     def _prune_toasts(self) -> None:
-        self._toast_windows = [
-            w for w in self._toast_windows
-            if not (hasattr(w, "is_closed") and w.is_closed())
-        ]
+        self._toast_windows = [w for w in self._toast_windows if not (hasattr(w, "is_closed") and w.is_closed())]
         position_stack(self._toast_windows)
 
     def _tray_placeholder_icon(self) -> QIcon:
@@ -3337,11 +3290,7 @@ class AppShell:
                 # 先用占位图标顶上，首帧就绪后再换角色头像。
                 icon = self._tray_placeholder_icon()
             tray = QSystemTrayIcon(icon)
-            tray.activated.connect(
-                lambda reason: self._toggle_primary_pet_visible()
-                if reason == QSystemTrayIcon.ActivationReason.DoubleClick
-                else None
-            )
+            tray.activated.connect(lambda reason: self._toggle_primary_pet_visible() if reason == QSystemTrayIcon.ActivationReason.DoubleClick else None)
             if pending:
                 ready = getattr(win, "frame_ready", None)
                 if ready is not None:
@@ -3368,14 +3317,12 @@ class AppShell:
         # 气泡是置顶 Tool 窗口（层级高于原生菜单 popup），托盘菜单弹出前
         # 先隐藏气泡，避免气泡盖住菜单
         menu.aboutToShow.connect(lambda: win.hide_speech_bubble())
-        menu.addAction('显示 / 隐藏', toggle_visible)
-        menu.addAction('回到右下角', lambda: win.go_default_corner())
+        menu.addAction("显示 / 隐藏", toggle_visible)
+        menu.addAction("回到右下角", lambda: win.go_default_corner())
 
-        island_action = menu.addAction('灵动岛')
+        island_action = menu.addAction("灵动岛")
         island_action.setCheckable(True)
-        island_action.setChecked(bool(
-            self.config.get("dynamic_island", {}).get("enabled", True)
-        ))
+        island_action.setChecked(bool(self.config.get("dynamic_island", {}).get("enabled", True)))
 
         def toggle_island(enabled: bool) -> None:
             island_cfg = dict(self.config.get("dynamic_island", {}) or {})
@@ -3387,50 +3334,48 @@ class AppShell:
         island_action.toggled.connect(toggle_island)
 
         if self.enable_chat:
-            menu.addAction('AI 对话', self.instance.open_chat)
-            menu.addAction('快速对话（气泡）', self.instance.open_quick_chat)
-            menu.addAction('AI 设置', self.instance.open_chat_settings)
-        menu.addAction('桌宠设置', self.instance.open_modern_settings)
+            menu.addAction("AI 对话", self.instance.open_chat)
+            menu.addAction("快速对话（气泡）", self.instance.open_quick_chat)
+            menu.addAction("AI 设置", self.instance.open_chat_settings)
+        menu.addAction("桌宠设置", self.instance.open_modern_settings)
 
-        m_char = track_menu(menu.addMenu('切换角色'))
-        current = str(self.config.get('character', catalog.DEFAULT_CHARACTER))
+        m_char = track_menu(menu.addMenu("切换角色"))
+        current = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
         for cid in catalog.list_available_characters():
             act = m_char.addAction(cid)
             act.setCheckable(True)
             act.setChecked(cid == current)
             act.triggered.connect(lambda checked=False, cid=cid: self.instance.switch_character(cid))
 
-        mouse_through = menu.addAction('鼠标穿透')
+        mouse_through = menu.addAction("鼠标穿透")
         mouse_through.setCheckable(True)
-        mouse_through.setChecked(bool(self.config.get('mouse_through', False)))
+        mouse_through.setChecked(bool(self.config.get("mouse_through", False)))
         mouse_through.toggled.connect(win.set_mouse_through)
 
         menu.addSeparator()
 
-        auto = menu.addAction('开机自启')
+        auto = menu.addAction("开机自启")
         auto.setCheckable(True)
         auto.setChecked(autostart_mod.is_enabled())
         auto.toggled.connect(lambda enabled: self.instance._set_autostart(enabled, win))
 
         def sync_tray_checks() -> None:
             # 设置对话框/右键菜单里改过的开关，弹出托盘菜单前同步复选状态
-            #（托盘菜单在 _build_tray 时一次性构建，不复用则不刷新会过期）
-            mouse_through.setChecked(bool(self.config.get('mouse_through', False)))
+            # （托盘菜单在 _build_tray 时一次性构建，不复用则不刷新会过期）
+            mouse_through.setChecked(bool(self.config.get("mouse_through", False)))
             auto.setChecked(autostart_mod.is_enabled())
-            island_action.setChecked(bool(
-                self.config.get("dynamic_island", {}).get("enabled", True)
-            ))
+            island_action.setChecked(bool(self.config.get("dynamic_island", {}).get("enabled", True)))
 
         menu.aboutToShow.connect(sync_tray_checks)
 
         menu.addSeparator()
         if self.enable_chat:
-            menu.addAction('DeepSeek 余额', lambda: self.show_balance(win))
-            menu.addAction('启动 DeepSeek Harness', lambda: launch_harness_gui(win))
+            menu.addAction("DeepSeek 余额", lambda: self.show_balance(win))
+            menu.addAction("启动 DeepSeek Harness", lambda: launch_harness_gui(win))
         else:
             # 纯桌宠版本不提供本地 DSH 启动入口，只保留网页版入口
-            menu.addAction('打开网页版 DeepSeek', open_deepseek_web)
-        menu.addAction('检查更新', lambda: self.check_update(win))
+            menu.addAction("打开网页版 DeepSeek", open_deepseek_web)
+        menu.addAction("检查更新", lambda: self.check_update(win))
 
         # 批5.2a §③.3：多窗时单托盘 + 每窗一个子菜单（显示/隐藏、切换角色、退出这只），
         # 替代 spike 的平铺菜单项；图标仍单托盘，逐窗动作经子菜单路由。
@@ -3441,7 +3386,7 @@ class AppShell:
                 if win_i is None:
                     continue
                 slot_label = f"[slot-{inst.slot_id}]" if inst.slot_id is not None else ""
-                sub = track_menu(menu.addMenu(f'桌宠 {slot_label}' if slot_label else '桌宠'))
+                sub = track_menu(menu.addMenu(f"桌宠 {slot_label}" if slot_label else "桌宠"))
 
                 def _toggle(win=win_i) -> None:
                     if win.isVisible():
@@ -3449,30 +3394,29 @@ class AppShell:
                     else:
                         win.show()
 
-                sub.addAction('显示 / 隐藏', _toggle)
-                sub.addAction('回到右下角', lambda w=win_i: w.go_default_corner())
+                sub.addAction("显示 / 隐藏", _toggle)
+                sub.addAction("回到右下角", lambda w=win_i: w.go_default_corner())
                 # 每窗独立的切换角色（读各自 config 的 current character）
-                m_char = track_menu(sub.addMenu('切换角色'))
-                cur = str(inst.config.get('character', catalog.DEFAULT_CHARACTER))
+                m_char = track_menu(sub.addMenu("切换角色"))
+                cur = str(inst.config.get("character", catalog.DEFAULT_CHARACTER))
                 for cid in catalog.list_available_characters():
                     act = m_char.addAction(cid)
                     act.setCheckable(True)
                     act.setChecked(cid == cur)
-                    act.triggered.connect(
-                        lambda checked=False, cid=cid, inst=inst: inst.switch_character(cid))
+                    act.triggered.connect(lambda checked=False, cid=cid, inst=inst: inst.switch_character(cid))
 
                 def _exit(inst=inst) -> None:
                     self._on_window_exit_requested(inst)
 
-                sub.addAction('退出这只', _exit)
+                sub.addAction("退出这只", _exit)
 
-        menu.addAction('退出', self.app.quit)
+        menu.addAction("退出", self.app.quit)
 
         tray.setContextMenu(menu)
-        tray.setToolTip('dsh-pet 独立桌宠')
+        tray.setToolTip("dsh-pet 独立桌宠")
         tray.show()
         # F5：菜单已由新菜单接管后，显式记录所有权并释放被替换的旧菜单
-        #（owner 生命周期：强引用保活到替换，旧菜单延迟销毁防泄漏）。
+        # （owner 生命周期：强引用保活到替换，旧菜单延迟销毁防泄漏）。
         self._install_tray_menu(menu, tray_submenus)
         return tray
 
@@ -3513,25 +3457,25 @@ def _mac_set_dock_icon_visible(visible: bool) -> None:
     Regular (0) displays a Dock item; Accessory (1) keeps the application out
     of the Dock. Pet tool windows own their independent visibility/focus flags.
     """
-    if sys.platform != 'darwin':
+    if sys.platform != "darwin":
         return
     try:
         import ctypes
         import ctypes.util
 
-        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib')
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc") or "/usr/lib/libobjc.A.dylib")
         objc.sel_registerName.restype = ctypes.c_void_p
         objc.objc_getClass.restype = ctypes.c_void_p
         msg = objc.objc_msgSend
         msg.restype = ctypes.c_void_p
         msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         shared = msg(
-            objc.objc_getClass(b'NSApplication'),
-            objc.sel_registerName(b'sharedApplication'),
+            objc.objc_getClass(b"NSApplication"),
+            objc.sel_registerName(b"sharedApplication"),
         )
         # NSApplicationActivationPolicyRegular = 0; Accessory = 1
         msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
-        msg(shared, objc.sel_registerName(b'setActivationPolicy:'), 0 if visible else 1)
+        msg(shared, objc.sel_registerName(b"setActivationPolicy:"), 0 if visible else 1)
     except Exception:
         pass
 
@@ -3630,8 +3574,7 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
         if stale_removed:
             logging.info("已清理 %d 个指向不存在路径的开机自启项", stale_removed)
 
-        controller = AppShell(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id,
-                              spawn_offset=_read_spawn_offset_env())
+        controller = AppShell(app, config, enable_chat=enable_chat, slot_handle=slot_handle, slot_id=slot_id, spawn_offset=_read_spawn_offset_env())
         try:
             controller.start()
         except Exception as exc:
@@ -3650,5 +3593,5 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
             slot_handle = None
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

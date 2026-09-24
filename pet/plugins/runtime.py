@@ -1,4 +1,5 @@
 """Core 进程内插件运行时。"""
+
 from __future__ import annotations
 
 import logging
@@ -311,11 +312,7 @@ class PluginRegistry:
 
     def _dependency_order(self, *, include_disabled: bool = False) -> list[PluginRecord]:
         self.discover()
-        records = {
-            plugin_id: record
-            for plugin_id, record in self._records.items()
-            if (include_disabled or record.enabled) and record.state != "fault"
-        }
+        records = {plugin_id: record for plugin_id, record in self._records.items() if (include_disabled or record.enabled) and record.state != "fault"}
         visiting: set[str] = set()
         visited: set[str] = set()
         result: list[PluginRecord] = []

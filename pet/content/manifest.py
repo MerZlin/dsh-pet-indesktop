@@ -1,4 +1,5 @@
 """资源型 DLC manifest 的解析、兼容性和内容安全校验。"""
+
 from __future__ import annotations
 
 import json
@@ -15,8 +16,21 @@ _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _SUPPORTED_PLATFORMS = {"windows", "macos", "linux"}
 _EXECUTABLE_SUFFIXES = {
-    ".py", ".pyw", ".pyc", ".pyd", ".dll", ".so", ".dylib", ".exe",
-    ".bat", ".cmd", ".com", ".ps1", ".sh", ".js", ".vbs",
+    ".py",
+    ".pyw",
+    ".pyc",
+    ".pyd",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".ps1",
+    ".sh",
+    ".js",
+    ".vbs",
 }
 
 
@@ -196,10 +210,7 @@ def validate_package_root(
             continue
         character_root = root if direct_character_root.is_dir() else nested_character_root
         videos = character_root / "videos"
-        video_files = [
-            path for path in videos.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".webm", ".gif"}
-        ] if videos.is_dir() else []
+        video_files = [path for path in videos.rglob("*") if path.is_file() and path.suffix.lower() in {".webm", ".gif"}] if videos.is_dir() else []
         if not video_files:
             errors.append(f"character videos are missing: {character_id}")
         else:

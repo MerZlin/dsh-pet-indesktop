@@ -1,4 +1,5 @@
 """Phase 1 资源型 DLC 闭环测试。"""
+
 from __future__ import annotations
 
 import json
@@ -21,20 +22,25 @@ def _write_package(root: Path, *, version: str = "1.0.0", core_requires: str = "
     package = root / "package"
     (package / "videos").mkdir(parents=True)
     (package / "videos" / "idle.webm").write_bytes(b"test-video")
-    (package / "manifest.json").write_text(json.dumps({
-        "id": "test.character.demo",
-        "name": "Demo",
-        "version": version,
-        "kind": "content",
-        "api_version": "1",
-        "core_requires": core_requires,
-        "platforms": ["windows", "macos", "linux"],
-        "dependencies": [],
-        "capabilities": ["character", "animation"],
-        "entrypoint": None,
-        "content": {"characters": ["demo"]},
-        "integrity": {"sha256": None, "signature": None},
-    }), encoding="utf-8")
+    (package / "manifest.json").write_text(
+        json.dumps(
+            {
+                "id": "test.character.demo",
+                "name": "Demo",
+                "version": version,
+                "kind": "content",
+                "api_version": "1",
+                "core_requires": core_requires,
+                "platforms": ["windows", "macos", "linux"],
+                "dependencies": [],
+                "capabilities": ["character", "animation"],
+                "entrypoint": None,
+                "content": {"characters": ["demo"]},
+                "integrity": {"sha256": None, "signature": None},
+            }
+        ),
+        encoding="utf-8",
+    )
     return package
 
 
@@ -181,10 +187,15 @@ def test_invalid_installed_active_falls_back_to_starter(tmp_path):
     first_video = next((broken / "videos").rglob("*.webm"))
     first_video.write_bytes(b"")
     installed.mkdir(exist_ok=True)
-    (installed / "active.json").write_text(json.dumps({
-        "plugin_id": "official.character.shenshen",
-        "version": "1.0.0",
-    }), encoding="utf-8")
+    (installed / "active.json").write_text(
+        json.dumps(
+            {
+                "plugin_id": "official.character.shenshen",
+                "version": "1.0.0",
+            }
+        ),
+        encoding="utf-8",
+    )
     registry = CharacterRegistry(
         bundled_root=ROOT / "content" / "characters",
         installed_root=tmp_path / "installed" / "characters",

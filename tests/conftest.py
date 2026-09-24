@@ -102,7 +102,9 @@ def _no_real_dsh_profile_write(monkeypatch):
     except Exception:
         return
     monkeypatch.setattr(
-        DshMonitor, "_spawn_link_check", staticmethod(lambda target: None),
+        DshMonitor,
+        "_spawn_link_check",
+        staticmethod(lambda target: None),
     )
 
 
@@ -113,6 +115,7 @@ def _close_session_writers():
     yield
     try:
         from pet.chat import session_store
+
         session_store.reset_writers_for_tests()
     except Exception:
         pass
@@ -131,6 +134,7 @@ def _clear_click_sound_pool():
     yield
     try:
         from pet import click_sound
+
         click_sound._pool.clear()
         click_sound._reset_caches_for_tests()
     except Exception:
@@ -138,6 +142,7 @@ def _clear_click_sound_pool():
     # 用例可能自建 winmm 池（替身后端也持句柄/可选 timer）：一并收口。
     try:
         from pet import sound_winmm
+
         sound_winmm._clear_live_pools_for_tests()
     except Exception:
         pass
@@ -168,6 +173,7 @@ def _close_qt_top_level_widgets():
     # 不复位会让后续用例凭空多一条 60s 日志线（且 reader 登记表跨用例残留）。
     try:
         from pet import mem_debug as _mem_debug_mod
+
         _mem_debug_mod._reset_for_tests()
     except Exception:
         pass
@@ -175,6 +181,7 @@ def _close_qt_top_level_widgets():
     # 不复位会让后续用例静默拒绝一切 reader 启动（报错点离真因很远）。
     try:
         from pet import webm_clip as _webm_clip_mod
+
         _webm_clip_mod._reset_session_ending_for_tests()
     except Exception:
         pass
@@ -184,11 +191,13 @@ def _close_qt_top_level_widgets():
     # running，崩溃点漂移、Linux exit 139 根因）。
     try:
         from pet.collision_ipc import _stop_live_sessions_for_tests
+
         _stop_live_sessions_for_tests()
     except Exception:
         pass
     try:
         from pet.agent_link import AgentLinkManager, BaseAgentMonitor
+
         AgentLinkManager._shutdown_live_for_tests()
         BaseAgentMonitor._shutdown_live_for_tests()
     except Exception:
@@ -200,16 +209,19 @@ def _close_qt_top_level_widgets():
     # frame"）。按同族防线逐对象停表 + 过继 QApplication。
     try:
         from pet.multi_window_shared import SharedSubsystems
+
         SharedSubsystems._shutdown_live_for_tests()
     except Exception:
         pass
     try:
         from pet.app import AppShell
+
         AppShell._shutdown_live_for_tests()
     except Exception:
         pass
     try:
         from pet.library import MovieLibrary
+
         MovieLibrary._shutdown_live_for_tests()
     except Exception:
         pass
@@ -219,6 +231,7 @@ def _close_qt_top_level_widgets():
     # （macOS 全量套件 segfault：conftest._close_qt_top_level_widgets + socket 线程）。
     try:
         from pet import dsh_state
+
         dsh_state._shutdown_live_for_tests()
     except Exception:
         pass
@@ -238,6 +251,7 @@ def _close_qt_top_level_widgets():
         import shiboken6
         from PySide6.QtCore import QCoreApplication, QEvent
         from PySide6.QtWidgets import QApplication
+
         app = QApplication.instance()
         if app is not None:
             for widget in list(app.topLevelWidgets()):
@@ -302,14 +316,12 @@ def _close_webm_readers_at_session_end():
                 except Exception:
                     pass  # clip 已随 Qt C++ 侧销毁等：交由 GC/产品自身兜底
             registry.reap()
-        survivors = [
-            t.name for t in threading.enumerate()
-            if t.is_alive() and t.name.startswith("webm-reader-")
-        ]
+        survivors = [t.name for t in threading.enumerate() if t.is_alive() and t.name.startswith("webm-reader-")]
         if survivors:
             logger.warning(
                 "session 结束仍有 %d 个 webm reader 线程存活: %s",
-                len(survivors), survivors,
+                len(survivors),
+                survivors,
             )
     except Exception:
         pass  # 防线 fixture：任何异常都不应让套件本身变红
@@ -318,9 +330,11 @@ def _close_webm_readers_at_session_end():
     # 报错点离真因很远）。
     try:
         from pet import webm_clip as _webm_clip_mod
+
         _webm_clip_mod._reset_session_ending_for_tests()
     except Exception:
         pass
+
 
 # ---- Project test taxonomy -------------------------------------------------
 

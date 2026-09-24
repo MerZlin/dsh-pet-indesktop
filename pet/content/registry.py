@@ -1,4 +1,5 @@
 """角色资源 Registry：把 bundled、installed 和 legacy 来源收口为统一模型。"""
+
 from __future__ import annotations
 
 import logging
@@ -60,16 +61,22 @@ class CharacterRegistry:
         self.diagnostics.clear()
 
     def _record_failure(self, plugin_id: str, version: str, stage: str, reason: str, fallback: str) -> None:
-        self.diagnostics.append({
-            "plugin_id": plugin_id,
-            "version": version,
-            "failure_stage": stage,
-            "reason": reason,
-            "fallback_source": fallback,
-        })
+        self.diagnostics.append(
+            {
+                "plugin_id": plugin_id,
+                "version": version,
+                "failure_stage": stage,
+                "reason": reason,
+                "fallback_source": fallback,
+            }
+        )
         _LOG.warning(
             "content DLC rejected plugin_id=%s version=%s stage=%s fallback=%s: %s",
-            plugin_id, version, stage, fallback, reason,
+            plugin_id,
+            version,
+            stage,
+            fallback,
+            reason,
         )
 
     def _package_from_root(self, root: Path, source: str, fallback_rank: int) -> list[CharacterPackage]:
@@ -87,7 +94,9 @@ class CharacterRegistry:
             verify_hash=False,
         )
         if manifest is None or errors:
-            self._record_failure(manifest.plugin_id if manifest else root.name, manifest.version if manifest else "unknown", "validation", "; ".join(errors), source)
+            self._record_failure(
+                manifest.plugin_id if manifest else root.name, manifest.version if manifest else "unknown", "validation", "; ".join(errors), source
+            )
             return []
         package = ContentPackage(manifest=manifest, root=root, source=source, content_sha256=digest)
         return [
