@@ -11,7 +11,8 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEventLoop, QProcess, QTimer
+from PySide6.QtCore import QEventLoop, QProcess, QTimer
+from PySide6.QtWidgets import QApplication
 
 from pet.workers.agent_link_adapter import WorkerAgentEventSource
 from pet.workers.protocol import PROTOCOL, build_message
@@ -44,7 +45,10 @@ def _wait_until(predicate, *, timeout_ms: int = 8000) -> None:
 
 @pytest.fixture()
 def qt_app():
-    return QCoreApplication.instance() or QCoreApplication([])
+    # Worker lifecycle tests run in the same pytest process as GUI/Agent Link
+    # tests, so use QApplication consistently instead of creating a
+    # QCoreApplication that cannot safely coexist with PetWindow.
+    return QApplication.instance() or QApplication([])
 
 
 def _stop_supervisor(supervisor: WorkerSupervisor) -> None:
