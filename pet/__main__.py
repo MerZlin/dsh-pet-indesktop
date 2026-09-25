@@ -105,7 +105,28 @@ def _run_settings(config=None) -> int:
     return _exec_settings(app, config, include_ai=_chat_available(), initial_page=_settings_page(sys.argv))
 
 
+def _run_worker(worker_id: str | None = None) -> int:
+    """Run an allow-listed worker without importing the desktop UI."""
+    from .workers.worker_entry import main as worker_main
+
+    return worker_main(worker_id)
+
+
+def _worker_id(argv) -> str:
+    try:
+        index = argv.index("--worker")
+    except ValueError:
+        return ""
+    if index + 1 >= len(argv):
+        return ""
+    return str(argv[index + 1] or "").strip()
+
+
 def _main() -> int:
+    # Worker 分流必须早于 pet.app：事件采集进程不得初始化 QApplication、窗口
+    # 或 Chat UI，只加载 allowlist 内的 worker 实现。
+    if "--worker" in sys.argv:
+        return _run_worker(_worker_id(sys.argv))
     # 卸载清理走无 GUI 路径：不导入 pet.app（避免拉起 QApplication/事件循环）。
     if "--uninstall-cleanup" in sys.argv:
         from .uninstall_cleanup import run_uninstall_cleanup

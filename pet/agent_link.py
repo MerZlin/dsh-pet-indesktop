@@ -2412,6 +2412,16 @@ class AgentLinkManager(QObject):
             )
             self.agent_names[key] = str(item.get("name") or key)
 
+        # Phase 3A：只把日志 tail/事件规范化放入独立 Worker。旧 monitor 对象仍保留
+        # 作为兼容 facade（设置页、测试和 bridge 安装逻辑继续使用），但 worker 模式
+        # 下不启动它的旧线程，避免同一事件源被消费两次。
+        from .workers.agent_link_adapter import WorkerAgentEventSource
+
+        self._worker_source = WorkerAgentEventSource(self)
+        self._worker_managed_keys: set[str] = set()
+        self._worker_fallback_active = False
+        self._worker_source.worker_fault.connect(self._on_worker_fault)
+
         # 卡住检测（stuck_detector）：DSH 专属，消费桥接增强记录推断「人工介入更快」。
         from .stuck_detector import StuckDetector
 
@@ -2435,6 +2445,11 @@ class AgentLinkManager(QObject):
         self._exploration_watchdog = ExplorationWatchdog(self)
         self.monitors["dsh"].raw_record.connect(self._exploration_watchdog.feed_record)
         self.monitors["dsh"].raw_record.connect(self._on_exploration_lifecycle)
+        self._worker_source.raw_record.connect(self._stuck_detector.feed_record)
+        self._worker_source.raw_record.connect(self._behavior_detector.feed_record)
+        self._worker_source.raw_record.connect(self._exploration_watchdog.feed_record)
+        self._worker_source.raw_record.connect(self._on_exploration_lifecycle)
+        self._worker_source.raw_record.connect(self._on_interaction_lifecycle)
         # 阻塞交互兜底清理：会话/turn 结束或 agent 停止时，任何 pending 的
         # 审批/问题交互必然失效（DSH 漏发 resolved 的异常场景），据此清掉，
         # 防止真实异常也留下永久弹窗。
@@ -2462,6 +2477,25 @@ class AgentLinkManager(QObject):
         self.monitors["dsh"].llm_error.connect(self._on_llm_error)
         self.monitors["dsh"].user_action.connect(self._on_user_action)
         self.monitors["dsh"].unknown_bridge_event.connect(self._on_unknown_bridge_event)
+        for signal_name, handler in (
+            ("raw_record", self._remember_dialogue_record),
+            ("normalized_event", self._on_normalized_event),
+            ("state_event", self._on_agent_state_event),
+            ("activity_event", self._on_agent_activity_event),
+            ("approval_requested", self._on_approval_request),
+            ("approval_resolved", self._on_approval_resolved),
+            ("question_requested", self._on_question_request),
+            ("question_resolved", self._on_question_resolved),
+            ("cordis_requested", self._on_cordis_request),
+            ("cordis_resolved", self._on_cordis_resolved),
+            ("execution_failed", self._on_execution_failed),
+        ):
+            getattr(self._worker_source, signal_name).connect(handler)
+        self._worker_source.session_meta.connect(self._on_session_meta)
+        self._worker_source.model_access.connect(self._on_model_access)
+        self._worker_source.llm_error.connect(self._on_llm_error)
+        self._worker_source.user_action.connect(self._on_user_action)
+        self._worker_source.unknown_bridge_event.connect(self._on_unknown_bridge_event)
         # 检测器提醒跨模块节流（N2）：stuck / pattern / exploration watchdog 三个
         # 检测器各有独立 cooldown，但同一 busy 周期可能先后各自弹窗造成连环换弹。
         # 按 agent/session 记最近一次**任一**检测器弹窗时刻与档位，窗口内同档
@@ -2519,25 +2553,108 @@ class AgentLinkManager(QObject):
         else:
             log.debug("interaction/resolved unmatched source=%s session=%s", event.source, event.session_id)
 
-    def apply_config(self) -> None:
-        """根据配置启停各个 Agent 监视器。
+    def _worker_sources_for_config(self, agent_cfg: dict[str, Any]) -> tuple[set[str], list[dict[str, Any]]]:
+        """Build the read-only source list for the supported Phase 3A agents."""
+        keys: set[str] = set()
+        sources: list[dict[str, Any]] = []
+        for key, monitor in self.monitors.items():
+            if not bool(agent_cfg.get(key, False)):
+                continue
+            if key == "dsh" and isinstance(monitor, DshMonitor):
+                keys.add(key)
+                sources.append(
+                    {
+                        "agent_key": key,
+                        "agent_name": self.agent_names.get(key, key),
+                        "path": str(monitor.events_dir),
+                        "kind": "glob",
+                        "pattern": "dsh*.jsonl",
+                        "scan_interval": 5.0,
+                    }
+                )
+            elif key == "claude" and isinstance(monitor, ClaudeCodeMonitor):
+                keys.add(key)
+                sources.append(
+                    {"agent_key": key, "agent_name": self.agent_names.get(key, key), "path": str(monitor.events_file), "kind": "file", "scan_interval": 5.0}
+                )
+            elif isinstance(monitor, CustomAgentMonitor):
+                keys.add(key)
+                sources.append(
+                    {"agent_key": key, "agent_name": self.agent_names.get(key, key), "path": str(monitor.events_file), "kind": "file", "scan_interval": 5.0}
+                )
+        return keys, sources
 
-        注意用 _running（生命周期状态）而非 is_running()（会被 pause 置 False）——
-        否则"隐藏期间关配置"不会真正 stop，恢复显示时又会被 resume 拉起。"""
+    def _on_worker_fault(self, reason: str) -> None:
+        if self._shutdown:
+            return
+        log.warning("Agent Link Worker 进入 fault，切换 legacy in-process fallback: %s", reason)
+        self._worker_fallback_active = True
+        self._worker_source.stop()
+        self.apply_config()
+
+    def _sync_worker_facades(self, enabled_keys: set[str]) -> None:
+        generation = self._worker_source._emit_gen
+        for key, monitor in self.monitors.items():
+            if key in enabled_keys:
+                # 兼容旧调用面：保留 monitor 对象和 _running/_emit_gen 状态，但
+                # _worker 必须为空，保证旧线程不会与 Worker 并行读取同一文件。
+                monitor._running = True
+                monitor._paused = self._worker_source._paused
+                monitor._emit_gen = generation
+            elif key in self._worker_managed_keys:
+                monitor._running = False
+                monitor._paused = False
+                monitor._emit_gen = -1
+
+    def apply_config(self) -> None:
+        """根据配置启停 Agent，并优先使用 Phase 3A Worker 读取事件。"""
         agent_cfg = self.cfg.get("agent_link", {})
-        # 手动指定的 pnpm 入口（config.pnpm_bin）：空 = 回到内置自动发现。
-        # 在这里同步而非在探测时读配置，是为了让 agent_link 的探测保持
-        # "纯函数 + 模块状态"的可测形态（不必到处传 cfg）。
+        if not isinstance(agent_cfg, dict):
+            agent_cfg = {}
         set_configured_pnpm_bin(self.cfg.get("pnpm_bin", ""))
         if not agent_cfg.get("dsh", False):
             self._clear_model_access_alerts()
+
+        requested_mode = str(agent_cfg.get("worker_mode", "auto") or "auto").strip().lower()
+        if requested_mode not in {"auto", "worker", "in_process"}:
+            requested_mode = "auto"
+        if not any(bool(agent_cfg.get(key, False)) for key in self._worker_managed_keys):
+            self._worker_fallback_active = False
+        mode = "in_process" if self._worker_fallback_active and requested_mode == "auto" else requested_mode
+        worker_keys, sources = self._worker_sources_for_config(agent_cfg)
+        use_worker = bool(worker_keys) and mode in {"auto", "worker"}
+        if use_worker:
+            if self._worker_source.state in {
+                self._worker_source.supervisor.DISABLED,
+                self._worker_source.supervisor.STOPPED,
+                self._worker_source.supervisor.FAULT,
+            }:
+                self._worker_source.start(sources)
+            elif self._worker_source._sources != sources:
+                self._worker_source.configure(sources)
+            self._worker_managed_keys = set(worker_keys)
+            self._sync_worker_facades(worker_keys)
+        else:
+            if self._worker_source.active or self._worker_managed_keys:
+                self._worker_source.stop()
+            old_worker_keys = set(self._worker_managed_keys)
+            self._worker_managed_keys.clear()
+            self._sync_worker_facades(set())
+            for key in old_worker_keys:
+                monitor = self.monitors.get(key)
+                if monitor is not None:
+                    monitor._running = False
+                    monitor._paused = False
+
         for key, monitor in self.monitors.items():
             should_run = bool(agent_cfg.get(key, False))
+            if key in self._worker_managed_keys:
+                if isinstance(monitor, DshMonitor):
+                    monitor.schedule_link_refresh_check()
+                continue
             if should_run and not monitor._running:
                 monitor.start()
                 if isinstance(monitor, DshMonitor):
-                    # 启动自检（后台、每实例一次）：重新打包/换构建目录后，profile 里
-                    # 记的 link 可能已指向旧构建；只在陈旧时刷新，绝不新建安装。
                     monitor.schedule_link_refresh_check()
             elif not should_run and monitor._running:
                 monitor.stop()
@@ -2713,8 +2830,12 @@ class AgentLinkManager(QObject):
     def pause(self) -> None:
         """桌宠隐藏时暂停所有监视器，丢弃待播联动动作，并取消所有完成确认计时器
         （否则隐藏期间计时器到期会在隐藏窗口上切动画/弹气泡）。"""
-        for mon in self.monitors.values():
-            mon.pause()
+        if self._worker_managed_keys:
+            self._worker_source.pause()
+            self._sync_worker_facades(self._worker_managed_keys)
+        for key, mon in self.monitors.items():
+            if key not in self._worker_managed_keys:
+                mon.pause()
         self._stuck_detector.pause()
         self._behavior_detector.pause()
         # 探索看门狗随隐藏暂停：隐藏期继续跑只会让提醒在显示层被丢弃
@@ -2729,8 +2850,12 @@ class AgentLinkManager(QObject):
 
     def resume(self) -> None:
         """桌宠恢复显示时恢复活动的监视器。"""
-        for mon in self.monitors.values():
-            mon.resume()
+        if self._worker_managed_keys:
+            self._worker_source.resume()
+            self._sync_worker_facades(self._worker_managed_keys)
+        for key, mon in self.monitors.items():
+            if key not in self._worker_managed_keys:
+                mon.resume()
         self._stuck_detector.resume()
         self._behavior_detector.resume()
         self._exploration_watchdog.resume()
@@ -2741,8 +2866,10 @@ class AgentLinkManager(QObject):
         self._worker_cancel.set()
         self._install_pending.clear()
         self._install_token += 1
+        self._worker_source.stop()
         for mon in self.monitors.values():
-            mon.begin_stop()
+            if mon._worker is not None:
+                mon.begin_stop()
         active = [mon for mon in self.monitors.values() if mon._worker is not None and mon._worker.is_alive()]
         if active:
             deadline = time.monotonic() + BaseAgentMonitor._STOP_JOIN_TIMEOUT_S
@@ -2803,6 +2930,8 @@ class AgentLinkManager(QObject):
                 log.debug("测试收口 AgentLinkManager 失败", exc_info=True)
 
     def _gen_current(self, agent_key: str, gen: int) -> bool:
+        if agent_key in self._worker_managed_keys:
+            return self._worker_source._running and gen == self._worker_source._emit_gen
         mon = self.monitors.get(agent_key)
         return mon is not None and gen == mon._emit_gen
 
@@ -2822,6 +2951,11 @@ class AgentLinkManager(QObject):
 
         联动未开启（DSH 监视器未运行）或代次不匹配时 no-op，绝不惊动用户。
         """
+        if "dsh" in self._worker_managed_keys:
+            if not self._worker_source._running:
+                return
+            self._on_agent_state("dsh", state, self._worker_source._emit_gen)
+            return
         mon = self.monitors.get("dsh")
         if mon is None or not mon._running:
             return

@@ -202,6 +202,14 @@ def _close_qt_top_level_widgets():
         BaseAgentMonitor._shutdown_live_for_tests()
     except Exception:
         pass
+    # WorkerSupervisor 的生产 stop() 是异步的；这里在测试边界等待已启动
+    # 的 QProcess 退出，避免 Agent Link worker 跨用例存活并污染后续 Qt 测试。
+    try:
+        from pet.workers.supervisor import WorkerSupervisor
+
+        WorkerSupervisor._shutdown_live_for_tests()
+    except Exception:
+        pass
     # AppShell / 多窗共享子系统：待办服务的无主 QTimer 与共享 proactive 的
     # timer/bridge 从 Qt C++ 侧强引用住整个 shell 对象图（Python gc 回收不掉），
     # 解释器退出 GC 才最终化 → 原生访问违规（test_single_process_shared 的
@@ -264,6 +272,20 @@ def _close_qt_top_level_widgets():
                     QCoreApplication.sendPostedEvents(widget, QEvent.Type.DeferredDelete)
                 except RuntimeError:
                     pass
+    except Exception:
+        pass
+    # 某些设置进程测试会通过 QCoreApplication.quit() 安排进程级退出事件，
+    # 但测试本身并不启动主 QApplication 事件循环。若该 Quit 事件跨用例
+    # 残留，后续 WorkerSupervisor 的嵌套 QEventLoop 会一进入就退出，导致
+    # QProcess 没有机会派发 readyRead/finished/heartbeat。这里只移除定向到
+    # QApplication 的 Quit 事件，不冲刷其它排队事件，也不改变产品运行时行为。
+    try:
+        from PySide6.QtCore import QCoreApplication, QEvent
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            QCoreApplication.removePostedEvents(app, QEvent.Type.Quit)
     except Exception:
         pass
 
@@ -358,6 +380,7 @@ _TAXONOMY_MARKERS = {
         "test_persona_template_rendering.py",
         "test_plugin_runtime.py",
         "test_pr_report_discipline.py",
+        "test_workers_protocol.py",
         "test_report_gates.py",
     },
     "integration": {
@@ -368,6 +391,8 @@ _TAXONOMY_MARKERS = {
         "test_plugin_runtime.py",
         "test_settings_process_isolation.py",
         "test_voice_chime_service.py",
+        "test_agent_link_worker_integration.py",
+        "test_workers_lifecycle.py",
     },
     "e2e": {
         "test_child_pet_cleanup.py",
@@ -377,6 +402,7 @@ _TAXONOMY_MARKERS = {
         "test_harness_lifecycle.py",
         "test_single_process_shared.py",
         "test_single_process_spawn.py",
+        "test_workers_lifecycle.py",
     },
     "slow": {
         "test_decode_fanout.py",
@@ -411,6 +437,7 @@ _TAXONOMY_MARKERS = {
         "test_agent_link.py",
         "test_agent_link_dep_specs.py",
         "test_agent_link_threads.py",
+        "test_agent_link_worker_integration.py",
         "test_balance.py",
         "test_ffmpeg_job_object.py",
         "test_harness_launcher.py",

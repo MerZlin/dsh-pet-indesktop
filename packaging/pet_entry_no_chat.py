@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """PyInstaller entry for the desktop-pet build without the AI chat feature."""
+
 import sys
+
+if "--worker" in sys.argv:
+    from pet.__main__ import _run_worker, _worker_id
+
+    sys.exit(_run_worker(_worker_id(sys.argv)))
 
 if "--settings" in sys.argv:
     # 同 pet_entry.py：--settings 必须在 import pet.app 之前分流到独立设置进程。
