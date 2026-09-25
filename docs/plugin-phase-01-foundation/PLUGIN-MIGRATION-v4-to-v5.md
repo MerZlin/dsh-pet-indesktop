@@ -1,61 +1,86 @@
-# v4 → v5 插件化数据迁移说明
+# v4 → v5 配置与资源迁移合同
 
-> 状态：迁移设计基线，日期 2026-09-24。分层见 [`PLUGIN-DLC-ARCHITECTURE.md`](PLUGIN-DLC-ARCHITECTURE.md)，API/配置边界见 [`PLUGIN-API-CONTRACT.md`](PLUGIN-API-CONTRACT.md)。
+> **状态：迁移基线（2026-09-25）**
+>
+> 迁移是插件化路线的一等能力。任何 Phase 2/3/4 的实现都不得把“配置能读出来”当成迁移完成；必须可备份、可校验、可重复执行并可恢复。
 
-## 1. 原则
+## 1. 目标
 
-1. v4 原始数据只读解析，迁移不直接破坏原文件。
-2. 先写 staging，再原子替换生成 v5 数据。
-3. 迁移可重复执行，不重复破坏或复制会话。
-4. 未识别字段保留到 `legacy`，不能静默丢弃。
-5. 密钥不复制到普通 JSON，继续通过 keyring/安全存储读取。
-6. 首次启动生成迁移报告，区分成功、跳过、警告和人工处理。
+- 保留角色选择、位置、缩放、朝向、透明度、基础交互和多实例配置。
+- 将旧角色别名、角色档案和资源路径迁移到对应 Content DLC 命名空间。
+- 将 Core 配置与 `plugins.<plugin_id>` 配置分离。
+- Chat 会话继续保留；Provider 密钥、token、API Key 仍由 keyring/安全存储管理。
+- 无法迁移的旧字段保留原始值并标记 `legacy`，不静默丢弃。
 
-## 2. 目标数据
+## 2. v5 数据分层
 
 ```text
 data/
   core.json
-  instances/config-slot-N.json
-  plugins/<plugin-id>/{config.json,data,cache,logs}
+  instances/
+    config-slot-N.json
+  plugins/
+    <plugin-id>/
+      config.json
+      data/
+      cache/
+      logs/
   sessions/
   secrets/
 ```
 
-## 3. 迁移矩阵
+Core 只保存 Core 状态和实例边界；插件通过自己的 `PluginConfigStore` 访问自己的命名空间；Worker 只收到经过筛选的配置摘要，不收到普通配置中的密钥。
 
-| v4 数据 | v5 目标 | 策略 |
-|---|---|---|
-| 角色选择 | 实例配置 `character` | 保留稳定 ID；若进入 DLC，写入 provider ID 映射 |
-| 位置、缩放、朝向、透明度 | 实例配置 | 逐字段复制并范围校验，非法值回退默认 |
-| 基础交互、碰撞和鼠标行为 | Core/实例配置 | 不放入角色插件 |
-| 多实例 `config-slot-N.json` | `instances/` | 保持编号和隔离关系 |
-| 角色别名、档案 | 角色 DLC 命名空间 | 找不到 DLC 时保留 `legacy.character_profile` |
-| 台词、人格、点击绑定 | 角色/功能 DLC | 只迁移可识别字段，未知策略写 legacy |
-| Chat Provider 设置 | Chat DLC + keyring | 迁移非敏感设置，密钥只迁移引用 |
-| Chat 会话 | `sessions/` 或 Chat DLC | 保留会话，即使 Chat DLC 未安装 |
-| 网络、歌词、Agent 开关 | 对应插件 | 不兼容时保留待处理状态 |
-| 缓存和临时文件 | 插件 cache | 默认重建，不作为用户数据迁移 |
-| 未识别字段 | `legacy` | 保留原始片段和原因 |
+## 3. 迁移前保护
 
-## 4. 流程
+迁移开始前：
+
+1. 识别 v4 数据文件、实例 slot、角色别名和旧插件字段。
+2. 生成带版本和时间戳的只读备份，记录源文件哈希。
+3. 将迁移计划写入诊断报告，包含成功、跳过、legacy 和人工处理项。
+4. 先写 staging，验证通过后再原子切换正式文件。
+
+迁移不直接覆盖唯一原始文件。写入失败、进程中断或校验不一致时，旧版本仍可恢复。
+
+## 4. 重复执行和恢复
+
+迁移必须满足：
 
 ```text
-读取 v4 → 备份 → 识别实例/角色 → 迁移 Core 字段
-→ 迁移插件字段 → 迁移会话/keyring 引用 → 保留 legacy
-→ 写 staging → 校验 schema/路径 → 原子提交 → 生成报告
+迁移中断
+→ 恢复旧备份
+→ 重新执行
+→ 不重复破坏用户数据
 ```
 
-`migration-report.json` 至少包含迁移时间、源/目标版本、成功字段、跳过字段、警告、人工处理项、备份路径和可重试状态。
+要求：
 
-## 5. 角色与 Chat
+- 每个迁移步骤有输入版本、输出版本和幂等判定。
+- 已完成步骤再次运行不得重复复制会话、重复追加数组或覆盖用户后来修改。
+- 迁移后重新读取并校验角色、实例、插件配置和 session 索引。
+- 恢复操作保留失败报告，不删除原始备份。
+- 迁移失败时 Core 可以以旧配置或最小 fallback 启动。
 
-角色资源可能仍位于 `assets/characters/<id>/videos/` 或旧外部 `characters/`。迁移优先使用兼容 DLC，缺失时使用 fallback/内置资源；`body_box`、`head_box`、动作分类和步幅按 manifest 读取；资源损坏只记录警告，不阻塞 Core；角色别名必须保留映射。
+## 5. 兼容映射
 
-Chat UI 第一阶段仍是官方懒加载插件，但迁移器只能搬运非敏感 Provider 设置、模型、端点和显示项，通过 keyring 恢复 secret 引用。secret 无法恢复时要求重新登录或录入；禁止把明文 key 写入插件配置、日志或迁移报告。
+| v4 数据 | v5 目标 | 规则 |
+|---|---|---|
+| 全局角色选择/别名 | Core 实例 + Content provider | 解析别名；找不到时保留原值并使用 fallback。 |
+| 位置、缩放、朝向、透明度 | `instances/config-slot-N.json` | 每个 slot 独立迁移，不合并实例。 |
+| `festival_reminder_*` 等扁平字段 | `plugins.<plugin_id>.settings` | 首次读取迁移；旧字段放入 `legacy`。 |
+| Chat 会话 | `sessions/` | 保留会话数据，不复制密钥。 |
+| Provider/API Key/token | `secrets/` / keyring | 不进入普通 JSON，不推送给 Worker。 |
+| 未知旧字段 | 对应 `legacy` | 可诊断、可导出、不得静默删除。 |
 
-## 6. 回滚与验收
+## 6. 验收矩阵
 
-迁移前创建带时间戳的只读备份。任一步骤失败时保留 staging 和错误报告，原 v4 数据保持可用。部分成功不得覆盖未校验目标；修复缺失 DLC 或 secret 后可重试；迁移完成后保留 legacy，直到后续版本明确清理策略。
+- 基础配置、角色别名、多实例和 Chat session 可迁移。
+- 缺失 DLC、旧路径、坏 JSON、半写入文件和未知字段有明确诊断。
+- 迁移中断后可重复执行，不重复破坏数据。
+- 迁移失败恢复后，Core、角色 Registry 和插件配置仍可读取。
+- Worker 只收到允许的配置摘要；keyring 内容不出现在日志、快照和普通配置中。
+- 迁移报告记录成功、跳过、legacy 和需要人工处理的项目。
 
-验收包括：基础配置、多实例、角色别名和档案、Chat 会话与 keyring、未知字段报告、可重复迁移、缺失 DLC/坏 manifest/非法路径/无效 secret 的可操作诊断，以及迁移失败时旧版本仍可启动。
+## 7. 阶段关系
+
+Phase 1 先保证资源 Registry 和 fallback；Phase 2 用命名空间适配旧字段；Phase 3 在进程边界推送摘要；Phase 4 再考虑迁移后的 DLC 版本兼容。若任一后续阶段失败，保留备份、legacy 和 v4 读取适配，从最近一次验证通过的边界重启。

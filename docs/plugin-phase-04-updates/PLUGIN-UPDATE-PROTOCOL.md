@@ -1,80 +1,63 @@
-# Core 与 DLC 更新协议
+# Phase 4：DLC 更新协议
 
-> 状态：设计协议，基线日期 2026-09-24。本文补充 [`PLUGIN-DLC-ARCHITECTURE.md`](../plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md)；当前 Core 更新接口仍以 `pet/updater.py` 和 `pet/update_settings.py` 为准，不在本文中推翻。
+> **状态：计划中；本地安装能力已存在，远程能力条件启用（2026-09-25）**
 
-## 1. 两条独立更新链
+## 1. 两层目标
 
-### Core 更新
+### 必做：本地 DLC 事务
 
-继续沿用当前 Core 更新链：`pet/updater.py`、`pet/update_settings.py`、静态 `update.json`、GitHub API/CDN 多源、HTTPS/大小/SHA-256 校验和 Windows Inno Setup 安装器。后续可抽象为通用 `UpdateService`，但 DLC 更新不得复制逻辑后覆盖现有接口。
+Phase 1 的 `ContentManager` 已建立目录/ZIP 安装、校验、staging、active/previous、原子切换和回滚。Phase 4 的任务是验证其与 Core 生命周期、诊断和版本迁移的关系，不另写一套安装器。
 
-### DLC 更新
-
-DLC 使用独立 `plugins-index.json`。DLC 下载、staging、激活和回滚只能写入插件目录，不能写入 Core 安装目录。
-
-## 2. Catalog
-
-```json
-{
-  "schema_version": 1,
-  "catalog_version": "2026.09.24",
-  "plugins": [
-    {
-      "id": "official.character.shenshen",
-      "version": "1.0.0",
-      "core_requires": ">=5.0.0,<6.0.0",
-      "platforms": ["windows", "macos", "linux"],
-      "urls": ["https://example.invalid/shenshen-1.0.0.zip"],
-      "size": 123456,
-      "sha256": "...",
-      "signature": "...",
-      "dependencies": [],
-      "allow_overwrite": false,
-      "rollback": true,
-      "release_notes": "..."
-    }
-  ]
-}
+```text
+本地来源
+→ staging
+→ manifest / Core / platform / path / size / SHA-256
+→ 安装自检
+→ 原子切换 active
+→ 保留 previous
+→ 启动自检失败回滚
 ```
 
-条目必须声明插件 ID、版本、Core 范围、平台、至少一个地址、大小、SHA-256、签名、依赖、覆盖策略、回滚能力和发布说明。多镜像按顺序尝试，并记录每个失败原因。
+安装中断不能破坏当前 active；卸载 active 前必须切换到其他版本或 fallback。
 
-## 3. 安装流水线
+### 条件启用：远程 DLC 分发
+
+catalog 条目应包含：插件 ID、版本、Core 范围、平台、下载地址/镜像、大小、SHA-256、签名、依赖、覆盖策略、回滚支持和发布说明。
 
 ```text
 获取 catalog
-→ 校验来源与格式
-→ 过滤平台与 Core 兼容版本
-→ 检查依赖
-→ 下载到 staging
-→ 校验大小 / SHA-256 / 签名
-→ 安全解压并校验 manifest
-→ 原子切换 active 版本
-→ 启动插件自检
-→ 失败则回滚
+→ 过滤平台/Core 兼容
+→ 依赖检查
+→ 下载 staging
+→ 大小/哈希/签名/manifest 校验
+→ 原子激活
+→ 启动自检
+→ 失败回滚
 ```
 
-下载文件必须进入插件专用 staging，不能直接覆盖 active。中断下载保留可重试文件和诊断信息。推荐使用版本目录加 active 指针：
+只有真正对外发布 DLC 时，才启用多镜像、下载重试、自动检查、签名强制校验和管理 UI。
 
-```text
-plugins/<plugin-id>/
-  1.0.0/
-  1.1.0/
-  active.json
-  staging/
-  logs/
-```
+## 2. 安全边界
 
-active 指针使用同目录临时文件和原子替换。新版本启动自检失败、manifest 校验失败、worker 握手失败或 Core 兼容性变化时，恢复上一版本，并保留失败版本与日志。
+- ZIP 路径穿越、绝对路径、符号链接和越界解压拒绝。
+- 哈希、签名或 manifest 任一失败不得激活。
+- 下载包和诊断日志保留，支持重试；不覆盖 Core 文件。
+- 公钥轮换、撤销和兼容矩阵属于 Phase 7 发布门。
+- 正式远程包不得执行未声明的 Python 入口；content DLC 永远不执行代码。
 
-## 4. 安全要求
+## 3. Core 更新关系
 
-正式模式拒绝缺签名包；开发模式只能显式允许未签名插件，并在诊断中标红。大小、SHA-256、签名、manifest 任一失败都拒绝激活。解压拒绝绝对路径、`..`、越界符号链接和覆盖 Core 文件的目标。DLC 更新不得修改 Core 可执行文件、Python 包或安装器配置。失败日志不得包含 API Key 或 token。
+Core 更新链仍由 `pet/updater.py`、`pet/update_settings.py` 和现有 `update.json` 负责。本协议不重构它：
 
-签名算法和公钥轮换策略必须在正式发布渠道确定前单独冻结；本协议不把“存在 signature 字段”误认为已经完成密码学验证。
+- 更新 Core 不删除 DLC 目录、版本和用户配置。
+- 更新 DLC 不写入 Core 安装目录。
+- Core 降级后重新检查已安装 DLC 的 `core_requires`。
+- 自动更新失败保留可重试包和诊断，不把 DLC 错误归因给 Core 更新。
 
-## 5. 兼容与测试
+## 4. 验收门
 
-Core 更新不删除 DLC，DLC 更新不修改 Core；Core 降级后重新检查插件；不兼容插件进入 disabled 并显示原因；缺依赖只禁用受影响插件链；用户配置、旧版本和失败包默认保留。
-
-必须测试多镜像回退、大小/哈希/签名失败、下载中断重试、恶意路径、启动自检回滚、无网络/代理/VPN/CDN 失败，以及 Core/DLC 互不覆盖。
+- 本地目录/ZIP 事务与 Phase 1 回归一致。
+- staging、原子激活、previous、启动自检和回滚有故障注入测试。
+- 远程能力未启用时 Core 仍完全离线可运行。
+- 远程启用前具备 catalog、签名、镜像失败和代理/VPN 诊断测试。
+- Core 与 DLC 文件、缓存、日志、临时目录分离。

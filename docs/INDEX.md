@@ -218,24 +218,41 @@
 
 ## 插件化与 DLC 分阶段文档
 
-| 阶段 | 目录 | 用途 |
-|---|---|---|
-| 总路线 | [`plugin-roadmap/`](plugin-roadmap/) | 查看完整阶段路线、依赖和阶段出口。 |
-| Phase 1 | [`plugin-phase-01-foundation/`](plugin-phase-01-foundation/) | 修改架构、API、资源 DLC 或 v4→v5 迁移边界前必读。 |
-| Phase 2 | [`plugin-phase-02-runtime/`](plugin-phase-02-runtime/) | 实现 Core 插件运行时前必读。 |
-| Phase 3 | [`plugin-phase-03-worker/`](plugin-phase-03-worker/) | 迁移网络、Agent、视觉和外部程序前必读。 |
-| Phase 4 | [`plugin-phase-04-updates/`](plugin-phase-04-updates/) | 实现 DLC 安装、更新、校验和回滚前必读。 |
-| Phase 5 | [`plugin-phase-05-distribution/`](plugin-phase-05-distribution/) | 增加本地、GitHub、CDN 或 Workshop 来源前必读。 |
-| Phase 6 | [`plugin-phase-06-ecosystem/`](plugin-phase-06-ecosystem/) | 开放第三方插件 SDK、签名和社区 catalog 前必读。 |
-| Phase 7 | [`plugin-phase-07-release/`](plugin-phase-07-release/) | 做跨平台正式发布和生态运维前必读。 |
+> 路线状态以 [`plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md`](plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md) 为准：稳定 Core 优先，Worker 优先，Phase 5–7 按实际发布需求条件启用。Phase 1/2 是已完成基线，Phase 3A 正在封存前验证。
 
-### Phase 2 详细设计与测试文档
+| 阶段 | 状态 | 目录 | 用途 |
+|---|---|---|---|
+| 总路线 | 已完成基线 | [`plugin-roadmap/`](plugin-roadmap/) | 查看分层模型、阶段依赖、横向支线和重启点。 |
+| Phase 1 | 已完成基线 | [`plugin-phase-01-foundation/`](plugin-phase-01-foundation/) | 修改资源 DLC、manifest、ContentManager、fallback 或 v4→v5 迁移前必读。 |
+| Phase 2 | 已完成基线 / API 冻结 | [`plugin-phase-02-runtime/`](plugin-phase-02-runtime/) | 修改 PluginRegistry、PluginContext、EventBus、配置隔离或官方 in-process 插件前必读。 |
+| Phase 3 | 实施中 | [`plugin-phase-03-worker/`](plugin-phase-03-worker/) | 修改 Worker、QProcess、Agent Link 事件采集、主动识屏或高风险外部能力前必读。 |
+| Phase 4 | 计划中 / 条件启用 | [`plugin-phase-04-updates/`](plugin-phase-04-updates/) | 修改 DLC 本地事务、catalog、远程下载、签名、激活或回滚前必读。 |
+| Phase 5 | 条件启用 | [`plugin-phase-05-distribution/`](plugin-phase-05-distribution/) | 真正接入 GitHub、CDN、Workshop 或其他外部 DLC 来源前必读。 |
+| Phase 6 | 条件启用 | [`plugin-phase-06-ecosystem/`](plugin-phase-06-ecosystem/) | 开放 content/worker SDK、第三方签名发布或社区 catalog 前必读。 |
+| Phase 7 | 发布前验收 | [`plugin-phase-07-release/`](plugin-phase-07-release/) | 做三平台正式发布、包体/性能基线和签名运维前必读。 |
+
+### Phase 1–3 详细文档
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [`plugin-phase-02-runtime/README.md`](plugin-phase-02-runtime/README.md) | Phase 2 范围、状态、实施顺序和阶段关系。 | 开始 Core 插件运行时施工或交接时。 |
-| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md) | Registry、Context、Event Bus、capability、配置隔离、AppShell 生命周期和节日提醒迁移合同。 | 修改插件边界、服务端口、生命周期或配置适配时。 |
-| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md) | Runtime、配置、节日插件、Qt 线程、性能和真实桌面验收矩阵。 | 编写 Phase 2 测试、准备验收或审查 PR 时。 |
+| [`plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md`](plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md) | 资源 DLC、Core 原语、功能策略、fallback 和当前完成边界。 | 修改角色资源来源、安装回滚或 legacy 兼容前。 |
+| [`plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md`](plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md) | manifest、Content provider、PluginContext 预留边界和 Worker/业务事件协议分层。 | 新增接口、能力或跨进程消息前。 |
+| [`plugin-phase-01-foundation/PLUGIN-MIGRATION-v4-to-v5.md`](plugin-phase-01-foundation/PLUGIN-MIGRATION-v4-to-v5.md) | v4→v5 配置、资源、keyring、多实例和可恢复迁移合同。 | 修改配置 schema、实例数据或迁移逻辑前。 |
+| [`plugin-phase-02-runtime/README.md`](plugin-phase-02-runtime/README.md) | Phase 2 当前基线、API 冻结、失败重启点和未包含范围。 | 开始或交接 Core 插件运行时工作时。 |
+| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md) | Registry、Context、EventBus、capability、配置隔离和生命周期设计。 | 修改插件边界、服务端口或生命周期时。 |
+| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md) | 离线启动、配置恢复、停用清理、Content/Worker 边界和实机验收门。 | 增加 Phase 2 测试或审查验收证据时。 |
+| [`plugin-phase-03-worker/README.md`](plugin-phase-03-worker/README.md) | Phase 3A 当前实现状态、3B 进入条件和 3C 逐项评估原则。 | 迁移 Agent、视觉、网络或外部进程能力前。 |
+| [`plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md`](plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md) | `pet-worker/v1`、`agent-event/v1`、QProcess、fallback 和稳定性封存清单。 | 修改 Worker 协议、进程清理或 Agent Link source 时。 |
+
+### Phase 4–7 详细文档
+
+| 文档 | 一句话内容 | 何时必读 |
+|---|---|---|
+| [`plugin-phase-04-updates/README.md`](plugin-phase-04-updates/README.md) | 本地 DLC 事务优先，远程 catalog/签名/管理 UI 条件启用。 | 设计 DLC 更新中心时。 |
+| [`plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md`](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | staging、active/previous、原子激活、回滚以及 Core/DLC 更新边界。 | 修改安装、更新、签名或回滚流程时。 |
+| [`plugin-phase-05-distribution/README.md`](plugin-phase-05-distribution/README.md) | 本地来源常驻支持，GitHub/CDN/Workshop 作为独立适配器。 | 真正接入外部 DLC 分发源时。 |
+| [`plugin-phase-06-ecosystem/README.md`](plugin-phase-06-ecosystem/README.md) | content 优先、Worker 后置、签名和权限成熟后再开放第三方生态。 | 设计 SDK、社区 catalog 或第三方发布时。 |
+| [`plugin-phase-07-release/README.md`](plugin-phase-07-release/README.md) | 三平台、性能、包体、故障恢复和签名的发布前门。 | 准备正式发布或跨平台验收时。 |
 
 ## 在线更新与网络发布
 

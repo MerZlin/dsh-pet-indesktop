@@ -1,10 +1,28 @@
-# 插件 API 合同（v1）
+# Phase 1：插件 / DLC API 合同
 
-> 状态：设计合同，基线日期 2026-09-24。总体边界见 [`PLUGIN-DLC-ARCHITECTURE.md`](PLUGIN-DLC-ARCHITECTURE.md)，更新行为见 [`PLUGIN-UPDATE-PROTOCOL.md`](../plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md)。
+> **状态：内部官方接口基线（2026-09-25）**
+>
+> 本文冻结 Phase 1 资源 DLC 的内部边界，并为 Phase 2/3 提供术语。它不是第三方 SDK 承诺；任何对外兼容保证都必须经过官方插件和 Worker 的实际迁移验证。
 
-## 1. Manifest
+## 1. 接口分层
 
-每个插件目录必须有 `manifest.json`：
+### 当前稳定的内部官方接口
+
+- `CharacterRegistry`：扫描、列出、解析可用角色。
+- `ContentManager`：验证、安装、激活、卸载和回滚本地资源包。
+- `ContentProviderRegistry`：由 Core 向功能插件提供内容查询。
+- Phase 2 的 `PluginContext`、`CoreEventBus`、配置存储和受限 Host Port。
+- Phase 3 的 Worker Supervisor 和 `pet-worker/v1` 控制消息。
+
+### 未来可能公开但目前不承诺兼容的接口
+
+- 第三方 content SDK。
+- 第三方 worker SDK、权限申请和签名发布。
+- 远程 catalog、社区目录和 Workshop adapter。
+
+不要根据当前 Python 类名推断公开 API。公共接口必须通过版本合同、错误语义和迁移测试冻结。
+
+## 2. Content manifest
 
 ```json
 {
@@ -19,79 +37,71 @@
   "capabilities": ["character", "animation", "phrases"],
   "entrypoint": null,
   "content": {"characters": ["shenshen"]},
-  "integrity": {"sha256": "...", "signature": "..."}
+  "integrity": {"sha256": "...", "signature": null}
 }
 ```
 
-约束：`id` 稳定且使用小写 ASCII、`.`、`-`、`_`；`version` 为 `major.minor.patch`；`kind` 只能是 `content`、`in_process`、`worker`；`api_version` 主版本不兼容时拒绝；`core_requires` 和 `platforms` 必须匹配；`content` 的 `entrypoint` 必须为空；代码插件的 entrypoint 必须是包内相对路径；正式包必须有 SHA-256 和签名，开发模式只能通过显式开关放宽签名要求。
+规则：
 
-entrypoint、资源路径和依赖路径必须规范化，拒绝绝对路径、`..` 穿越和目录外符号链接目标。
+- `kind` 必须是 `content`；`entrypoint` 必须为空。
+- `id`、角色 ID、版本号和资源相对路径使用受限字符。
+- Core 版本和平台不兼容时不得激活。
+- 目录和 ZIP 使用同一套按 POSIX 相对路径排序的逻辑 SHA-256。
+- ZIP 拒绝绝对路径、`..`、符号链接和越界解压。
+- 本地正式校验要求 SHA-256；开发环境只有显式 `allow_unsigned=True` 才可接受未签名包。
+- `signature` 保留验证接口；签名强制校验属于远程可信发布阶段，不在 Phase 1 假装已完成。
 
-## 2. 生命周期
+## 3. Content provider
 
-```text
-discover → validate → resolve_dependencies → enable → start
-                                           ↘ disable / fault
-start → stop → disabled
+Core 负责资源来源和 fallback；功能插件只通过 provider 查询：
+
+```python
+class CharacterRegistry:
+    def scan(self) -> list[CharacterPackage]: ...
+    def get(self, character_id: str) -> CharacterPackage | None: ...
+    def list_available(self) -> list[CharacterPackage]: ...
+    def resolve(self, character_id: str) -> CharacterPackage: ...
 ```
 
-- `content` 只做数据校验和资源注册，不执行代码；
-- `in_process` 的 `start/stop` 必须可重复调用，停止后不得继续订阅事件；
-- `worker` 由 Core 管理子进程，不得自行接管 Core 退出流程；
-- 异常进入 `fault`，记录诊断并隔离；
-- 第一阶段不承诺 Python 模块热卸载。
+provider 不允许：
 
-## 3. PluginContext
+- 修改 Core 全局配置；
+- 直接创建或操作 `PetWindow`；
+- 绕过 Registry 拼接安装目录；
+- 在内容包中执行 Python 或启动子进程。
 
-Context 是插件获得 Core 服务的唯一入口，至少提供 plugin ID、Core/API 版本、只读 Core 信息、插件配置命名空间、Event Bus、气泡/动画/通知/音效原语、capability 检查、结构化日志和 worker IPC 代理。
+## 4. PluginContext 预留边界
 
-插件不得保存或修改 `PetApp`、`PetWindow` 私有引用，不得绕过 Context 直接访问全局配置或 Qt 对象。
+Phase 2 的进程内插件只能从 `PluginContext` 获取：
 
-## 4. 配置合同
+- `PresentationPort`：气泡、通知、语音；
+- `SchedulerPort`：一次性和重复调度；
+- `CommandRegistry`：注册可撤销的命令；
+- `ContentProviderRegistry`：角色和资源查询；
+- `CoreEventBus`：稳定事件；
+- `PluginConfigStore`：自己的命名空间；
+- capability 集合和结构化 logger。
 
-```text
-core.json
-instances/config-slot-N.json
-plugins/<plugin-id>/config.json
-plugins/<plugin-id>/data/
-```
+不得暴露 `PetApp`、`AppShell`、`PetWindow` 私有字段、全局 `Config.data`、Qt 私有信号或 keyring 内容。
 
-插件只能读写自己的 `plugins.<plugin_id>` 命名空间。插件配置迁移必须提供版本号和迁移函数；失败时保留原始数据并标记 `legacy`。密钥、token、API Key 不属于普通配置，继续使用 keyring/安全存储。
+## 5. Worker 控制协议与业务事件语义
 
-## 5. Event Bus
+两者必须分开：
 
-事件必须带 `type`、`source`、Core 生成的 `timestamp` 和 JSON 可序列化 `payload`。稳定事件名使用前缀，例如 `core.app.started`、`core.app.shutdown_requested`、`pet.character.changed`、`pet.window.clicked`、`pet.animation.requested`、`plugin.worker.ready` 和 `plugin.worker.error`。
+- **`pet-worker/v1`**：Worker 的 `hello`、`ready`、`config_push`、`heartbeat`、`error`、`shutdown` 和 `event` 控制/传输外壳。
+- **`agent-event/v1`**：Agent Link 业务事件的字段、规范化结果和语义版本。
 
-订阅者异常必须被 Event Bus 捕获并记录，不得沿事件调用栈回传到主窗口；高频事件必须声明频率和是否允许丢弃。
+`pet-worker/v1` 不规定 DSH bridge 的日志 tail、WebSocket、外部工具或安装细节；这些是具体 Worker 的实现来源。Worker 只接收经过筛选的配置摘要，不读取 `Config.data`、密钥或 token。
 
-## 6. Capability
+## 6. 能力和失败语义
 
-初始能力建议为：
+能力必须声明并由 Core 检查。Phase 2 节日提醒允许 `notification.present`、`speech.present`、`settings.read/write`、`scheduler.timer` 和 `menu.contribute`；不得默认获得 `network.request`、`screenshot.capture`、`process.spawn` 或 `secret.read`。
 
-```text
-character.read       animation.request     speech.present
-sound.play            notification.present settings.read
-settings.write        network.request       filesystem.user_data
-screenshot.capture   process.spawn
-```
+插件启动、回调或停止失败时进入诊断状态，不阻塞 Core。资源包失败时遵循上一版本、Starter DLC、legacy、Core fallback。停用插件只保证停止服务、取消订阅和任务，不承诺 Python 模块从解释器内存热卸载。
 
-`network.request`、`screenshot.capture`、`process.spawn` 和密钥访问等高风险能力默认不授予进程内第三方插件。正式安装时，manifest、用户授权和平台策略必须同时满足。
+## 7. 版本策略
 
-## 7. Worker JSONL
-
-每行一个 UTF-8 JSON 对象，禁止多条消息拼一行：
-
-```json
-{
-  "type": "hello",
-  "request_id": "optional-id",
-  "protocol_version": 1,
-  "payload": {}
-}
-```
-
-Core 启动 worker；worker 发送 `hello`；Core 校验后发送 `config_push`；worker 发送 `ready`；运行期使用 `event`、`heartbeat`、`error`；Core 发送 `shutdown` 并等待有限时间；超时后终止进程并记录原因。协议版本不兼容必须是可诊断错误，不能静默表现为“插件没反应”。
-
-## 8. 兼容策略
-
-API 主版本不兼容时拒绝加载；次版本新增可选字段时旧插件继续运行；未知字段忽略并记录调试日志；缺少依赖只禁用依赖链；插件异常隔离并可有限重启；Core 降级后重新校验全部插件。
+- `api_version` 只描述对应层的合同，不能跨层复用。
+- Core 兼容范围、平台、依赖和能力必须在激活前检查。
+- 破坏性修改先增加新版本合同和迁移适配，不静默改变旧字段。
+- 第三方公开前必须补齐签名、权限、兼容矩阵、弃用周期和可诊断错误。
