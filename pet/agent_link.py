@@ -1243,7 +1243,7 @@ class BaseAgentMonitor(QObject):
         self.events_file = self.events_dir / f"{agent_key}.jsonl"
         self._running = False
         self._paused = False
-        self._tailer = ByteOffsetTailer(self.events_file)
+        self._tailer: ByteOffsetTailer | DirGlobTailer = ByteOffsetTailer(self.events_file)
         self._worker: threading.Thread | None = None
         self._worker_stop = threading.Event()
         self._gen = 0
@@ -1880,13 +1880,13 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
     HOOK_MARKER = "claude_event_hook"  # 识别本桌宠注入条目的标记
     HOOK_FLAG = "x-dsh-pet"  # 结构化字段标识
 
-    def start(self) -> None:
+    def start(self) -> bool:
         """启动时刷新 hook 脚本（脚本整体归本桌宠所有，升级版本自动覆盖旧版）。"""
         try:
             self._ensure_hook_script(self.events_file)
         except Exception as exc:
             log.debug("刷新 Claude hook 脚本失败: %s", exc)
-        super().start()
+        return super().start()
 
     @staticmethod
     def get_settings_path() -> Path:
@@ -4754,7 +4754,7 @@ class AgentLinkManager(QObject):
             existing["_ts"] = now
             existing["_dismissed"] = False
             self._remember_model_access_record_fields(existing, record)
-            self._show_model_access_alert(session_key, existing["count"])
+            self._show_model_access_alert(session_key, int(existing["count"]))
             return
         entry = {
             "count": max(1, supplied_count),
@@ -4764,7 +4764,7 @@ class AgentLinkManager(QObject):
         }
         self._remember_model_access_record_fields(entry, record)
         cache[session_key] = entry
-        self._show_model_access_alert(session_key, entry["count"])
+        self._show_model_access_alert(session_key, int(entry["count"]))
 
     def _remember_model_access_record_fields(self, entry: dict, record: dict) -> None:
         """把限流记录的条件字段缓存进条目，供弹窗模板条件注入（缺失自动隐藏）。"""
@@ -5101,8 +5101,8 @@ class AgentLinkManager(QObject):
             for item in (reasons or [])
             if "diversity" not in str(item) and "有 Edit" not in str(item) and "target 重复" not in str(item)
         ]
-        targets = []
-        evidence = []
+        targets: list[str] = []
+        evidence: list[str] = []
         for step in steps or []:
             if not isinstance(step, dict):
                 continue
