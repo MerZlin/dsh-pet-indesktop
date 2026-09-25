@@ -143,6 +143,7 @@
 | [PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md](PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md) | Phase 1 资源型 DLC 实现报告：manifest 校验、Starter DLC、Registry、目录/ZIP 安装、回滚、兼容性与验证结果。 | 改资源 DLC、角色 Registry、内容安装事务、Starter DLC 打包或需要核对本轮测试限制时。 |
 | [`PR-REPORT-PLUGIN-PHASE2-2026-09-24.md`](PR-REPORT-PLUGIN-PHASE2-2026-09-24.md) | Phase 2 Core 插件运行时实施报告：Registry、Context、EventBus、配置命名空间、capability、官方节日提醒插件、性能探针和验收限制。 | 改 Core 插件生命周期、官方 in-process 插件、插件配置隔离或准备进入 Phase 3 worker 迁移前。 |
 | [`PR-REPORT-PLUGIN-PHASE3-2026-09-25.md`](PR-REPORT-PLUGIN-PHASE3-2026-09-25.md) | Phase 3A Worker 实施报告：JSONL 协议、QProcess 宿主、Agent Link 事件采集、崩溃恢复、fallback 和真实进程验证。 | 修改 Worker 生命周期、Agent Link 事件采集边界或进入主动识屏 Worker（Phase 3B）前必读。 |
+| [plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md](plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | Phase 3A 稳定性封存补充报告：Qt 组合测试隔离、真实 Core 优雅退出、冻结 Worker smoke、Windows 可见桌面和 S0–S8/R0 门状态。 | 进入 Phase 3B、复核 Worker 退出/打包证据或回滚 Phase 3A 时必读。 |
 | [`PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md`](PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md) | 工程规范化实施报告：测试分类与覆盖率基线、Ruff/mypy/pre-commit、统一检查入口、CI 质量/桌面矩阵和文档链接门禁。 | 修改测试分类、质量门、静态检查、CI 工作流、四大工程文档或一键验证入口时必读。 |
 | [`PR-REPORT-PR76-2026-09-10.md`](PR-REPORT-PR76-2026-09-10.md) | PR76 批次的完整报告：事件汇报概率门 + Persona 模板升级 + 全链路错误语义统一（46 文件，+3004/−917）。 | 追溯 PR76 批次改了什么、以及概率门/persona 模板/错误语义三条线的组合动机时。 |
 | [`PR-REPORT-GATES-2026-09-10.md`](PR-REPORT-GATES-2026-09-10.md) | 汇报概率门专项 PR 报告：8 个门表、判决语义（`roll < probability`）、可注入 rng 的测试考量、提交点自检。 | 调整汇报概率门、或需要"为什么未知事件不抽稀/边界取小于"这类判决语义依据时。 |
