@@ -1194,7 +1194,7 @@ E:\tools\InnoSetup6\ISCC.exe /DMyAppShortName=dsh-pet-standalone-webm /DMyAppExe
 构建记录和 SHA256 位于：
 
 ```text
-docs/BUILD_ARTIFACTS-2026-08-22.md
+docs/archive/BUILD_ARTIFACTS-2026-08-22.md
 ```
 
 ### 3) Linux 构建（GitHub Actions）
@@ -1644,9 +1644,9 @@ python scripts/cleanup_mei_cache.py --delete
 - [`docs/INDEX.md`](docs/INDEX.md)：**全文档入口索引**——53 份文档按领域分组，每条一句话 + 何时必读；想给项目做东西先从这里找相关模块的文档。
 - [`AGENTS.md`](AGENTS.md)：工程指南与 CI 成本纪律（PR #76 后硬性规矩）。
 - [`docs/WINDOW_PY_SPLIT_GUIDE.md`](docs/WINDOW_PY_SPLIT_GUIDE.md)：`window.py` 演进指南、功能驱动拆分流程与架构红线说明。
-- [`docs/HANDOVER_2026-09.md`](docs/HANDOVER_2026-09.md)：2026-09 性能/结构线交付手册（含后续批次更新说明）。
+- [`docs/archive/HANDOVER_2026-09.md`](docs/archive/HANDOVER_2026-09.md)：2026-09 性能/结构线交付手册（含后续批次更新说明）。
 - [`docs/ONEDIR_PACKAGING.md`](docs/ONEDIR_PACKAGING.md)：onedir 构建、绿色版 zip 与 Inno Setup 安装包流水线。
-- [`docs/BUILD_ARTIFACTS-2026-08-22.md`](docs/BUILD_ARTIFACTS-2026-08-22.md)：EXE 构建、大小、哈希和启动验证记录。
+- [`docs/archive/BUILD_ARTIFACTS-2026-08-22.md`](docs/archive/BUILD_ARTIFACTS-2026-08-22.md)：EXE 构建、大小、哈希和启动验证记录。
 
 
 </details>

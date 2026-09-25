@@ -62,5 +62,5 @@ def _physics_mode(self):
 
 > 基线：v4.2.0（2026-09-22 对照 tag 源码定位）。本文件是**贴 issue 用的草稿**，贴出后
 > 按 GitHub issue 跟踪，不再随代码演进更新；相关依据见
-> [`PROACTIVE_SCREEN_PLAN.md`](PROACTIVE_SCREEN_PLAN.md)（识屏机制的设计出处与口径），
+> [`PROACTIVE-SCREEN-DESIGN.md`](PROACTIVE-SCREEN-DESIGN.md)（识屏机制的设计出处与口径），
 > 索引见 [`INDEX.md`](INDEX.md) 的「主动识屏与感知」小节。

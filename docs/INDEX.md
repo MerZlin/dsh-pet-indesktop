@@ -15,7 +15,7 @@
 1. **任何新文档必须在本文登记一行**，否则视为未定义的孤儿文档（审查时应作为缺陷提出）。
 2. **新文档必须与相关文档互链**：正文中至少一处指向它所补充或取代的既有文档（用仓库相对路径），并同步更新本索引中那些文档行的「何时必读」。
 3. **取代旧文档时**，先在本索引的「疑似过时/重复文档」小节登记旧文档与新文档的关系，再考虑是否删除；在删除前不得让两个文档同时作为权威描述存在。
-4. **有明确生效范围的文档，标题或首段必须写清基线**（分支 / 版本 / 日期 / 实测用例数）；只描述"当时的快照"的文档必须自带「历史快照」警示（参见 `OPTIMIZATION_CHECKLIST.md`、`HANDOVER_2026-09.md` 的写法）。
+4. **有明确生效范围的文档，标题或首段必须写清基线**（分支 / 版本 / 日期 / 实测用例数）；只描述"当时的快照"的文档必须自带「历史快照」警示（参见 `archive/OPTIMIZATION_CHECKLIST.md`、`archive/HANDOVER_2026-09.md` 的写法）。
 5. **「何时必读」写触发条件，不写文档摘要**：写成"改 X 之前必读"，不要写成"介绍了 X"。
 
 ---
@@ -34,6 +34,11 @@
 
 ---
 
+## PR、Issue 与 Release 记录
+
+| 文档 | 一句话内容 | 何时必读 |
+|---|---|---|
+| [RECORDS-INDEX.md](RECORDS-INDEX.md) | PR 报告、Issue/Bug、Release 和工程过程记录的分类导航；不移动、不合并历史证据。 | 查找某次 PR、Issue、版本发布或工程复盘记录时；迁移记录目录前必读。 |
 ## 构建与发布
 
 | 文档 | 一句话内容 | 何时必读 |
@@ -44,7 +49,7 @@
 | [`ACCEPTANCE_TESTS.md`](ACCEPTANCE_TESTS.md) | 验收测试文件清单：设置窗口、DSH Bridge、Qt 生命周期/全量三条验收路径的精确命令与当前实测基线。 | 提 PR 前跑验收、或需要确认"这个改动该跑哪几个测试文件"时；改动测试边界后必须同步更新本文基线数字。 |
 | [`RELEASE-v4.2.0.md`](RELEASE-v4.2.0.md) | v4.1.0 → v4.2.0 的完整功能与修复汇总（含全部合入 PR 与各平台产物清单）。 | 写发布说明、回答"这个功能从哪个版本开始有"、或判断某行为是哪个 PR 引入时；**v4.2.0 之后的变更改看 [`RELEASE-v4.2.1.md`](RELEASE-v4.2.1.md)**。 |
 | [`RELEASE-v4.2.1.md`](RELEASE-v4.2.1.md) | **v4.2.0 → v4.2.1 的发布稿（2026-09-23 已发布）**：57 个已合并 PR / 192 个提交的完整汇总（含 #181 歌词代理修复、#182 流畅度与岛墙批次）。文件分两段：`## 📦 下载` 至 `## 🙏 致谢` 是**发布正文**，`RELEASE-BODY-END` 注释之后的**发布前测试清单**（勾选式）、**视频预演脚本**（逐段分镜）与维护者清单**只在仓库内使用、不随 Release 发布**。 | **准备发布、跑人工验收、或录制演示视频时必读**；改版本号、打 tag、换 Release 正文（用文件头那行命令生成 body.md，别整份贴）、或需要"这一版到底该验哪些行为"的清单时。 |
-| [`BUILD_ARTIFACTS-2026-08-22.md`](BUILD_ARTIFACTS-2026-08-22.md) | 单次构建产物记录：EXE 路径、大小、SHA-256 与启动验证结果。 | 需要核对历史 onefile 产物哈希时（README 仍引用此路径）；日常构建流程看 `ONEDIR_PACKAGING.md`。 |
+| [`archive/BUILD_ARTIFACTS-2026-08-22.md`](archive/BUILD_ARTIFACTS-2026-08-22.md) | 历史构建产物记录：EXE 路径、大小、SHA-256 与启动验证结果。 | 仅在追溯旧 onefile 产物时阅读；日常构建流程看 `ONEDIR_PACKAGING.md`。 |
 
 ---
 
@@ -95,7 +100,7 @@
 | [`DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md`](DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md) | DSH 人工请求事件调研：哪些 DSH 信号表示 Agent 暂停等待用户批准/回答，哪些只是工具或生命周期记录。 | 调整审批/提问的识别范围、或怀疑某类事件被误判成需要弹窗时；实现状态以 `integrations/dsh-pet-bridge/index.js` 与测试为准。 |
 | [`DSH-REQUEST-EVENT-CATALOG.md`](DSH-REQUEST-EVENT-CATALOG.md) | DSH human-request 事件的速查表（英文）：可回答的阻塞请求、身份字段、响应帧形状、不得弹窗的非阻塞事件。 | 写 Bridge 解析代码时需要精确的 wire frame / session event 字段与响应契约时；调研背景见上一行。 |
 | [`PET-STATE-MACHINE-AND-REPETITION-2026-09-02.md`](PET-STATE-MACHINE-AND-REPETITION-2026-09-02.md) | Pet 状态机与重复检查说明：三条独立处理链（DshStateTracker / AgentLinkManager / 分析检测器）与两个重复检测器的区别。 | 改状态、动画切换、提醒或风险判断时；尤其要避免把"重复检查"和"状态机"当成同一个东西。 |
-| [`AGENT_LINK_LIVE_TEST.md`](AGENT_LINK_LIVE_TEST.md) | Agent 联动实机测试说明：交给外部 agent 在本机跑真实端到端验证的步骤与预期。 | 需要在真机复跑一次 Agent 联动端到端链路时（一次性任务说明书，基线为 `perf/startup-and-hidden-cpu` 时期）。 |
+| [`archive/AGENT_LINK_LIVE_TEST.md`](archive/AGENT_LINK_LIVE_TEST.md) | 历史 Agent 联动实机测试说明：一次性外部验证任务及其当时基线。 | 仅在追溯 2026-08 的实机验证过程时阅读；当前验证入口以现行测试和交接文档为准。 |
 
 ---
 
@@ -112,8 +117,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [`PROACTIVE_SCREEN_PLAN.md`](PROACTIVE_SCREEN_PLAN.md) | 主动识屏与多 Agent 感知的已验证设计方案 v1：低功耗、多开友好、默认关闭，逐条技术依据与出处。 | 追溯识屏机制（白名单、dHash 变化检测、软流控、负坐标多屏裁剪）的**设计依据与出处**时。 |
-| [`PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md`](PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md) | 主动识屏实施手册（K3 终审版）：分阶段实施步骤与验收清单。 | 需要了解识屏的分阶段实施顺序与原始验收项时；注意其"代码未动工"状态已失效（见文末过时清单）。 |
+| [`PROACTIVE-SCREEN-DESIGN.md`](PROACTIVE-SCREEN-DESIGN.md) | 主动识屏统一设计与实施档案：合并原始方案、实施手册、验收口径和历史修订，并明确当前 Worker 化边界。 | 修改主动识屏、截图、dHash、视觉模型或其后续 Worker 迁移前阅读；需要追溯原文时查看 `archive/`。 |
 | [`issue-draft-主动识屏v420.md`](issue-draft-主动识屏v420.md) | v4.2.0「主动识屏永不触发」的 issue 草稿（基线 v4.2.0）：`MultiWindowProxy._physics_mode` 返回 `bool` 破坏哨兵语义，G1 守卫恒为真从而每次 tick 静默拦截；附最小修复建议与同版本启动装配缺口。 | 排查 `proactive_screen` 不触发、或改 `multi_window_shared.py` 的 `_physics_mode` 聚合语义与启动装配时。 |
 
 ---
@@ -138,6 +142,7 @@
 | [`PR-REPORT-TEMPLATE.md`](PR-REPORT-TEMPLATE.md) | PR 报告模板：三份交付证据（修改文件说明 / 性能分析 / 实机运行记录）的逐节骨架与判定标准。 | **开新 PR 写报告前必读并整份复制**；2026-09-22 起三份证据是硬要求（`AGENTS.md` Delivery evidence discipline），由 `tests/test_pr_report_discipline.py` 机器化校验。 |
 | [PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md](PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md) | Phase 1 资源型 DLC 实现报告：manifest 校验、Starter DLC、Registry、目录/ZIP 安装、回滚、兼容性与验证结果。 | 改资源 DLC、角色 Registry、内容安装事务、Starter DLC 打包或需要核对本轮测试限制时。 |
 | [`PR-REPORT-PLUGIN-PHASE2-2026-09-24.md`](PR-REPORT-PLUGIN-PHASE2-2026-09-24.md) | Phase 2 Core 插件运行时实施报告：Registry、Context、EventBus、配置命名空间、capability、官方节日提醒插件、性能探针和验收限制。 | 改 Core 插件生命周期、官方 in-process 插件、插件配置隔离或准备进入 Phase 3 worker 迁移前。 |
+| [`PR-REPORT-PLUGIN-PHASE3-2026-09-25.md`](PR-REPORT-PLUGIN-PHASE3-2026-09-25.md) | Phase 3A Worker 实施报告：JSONL 协议、QProcess 宿主、Agent Link 事件采集、崩溃恢复、fallback 和真实进程验证。 | 修改 Worker 生命周期、Agent Link 事件采集边界或进入主动识屏 Worker（Phase 3B）前必读。 |
 | [`PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md`](PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md) | 工程规范化实施报告：测试分类与覆盖率基线、Ruff/mypy/pre-commit、统一检查入口、CI 质量/桌面矩阵和文档链接门禁。 | 修改测试分类、质量门、静态检查、CI 工作流、四大工程文档或一键验证入口时必读。 |
 | [`PR-REPORT-PR76-2026-09-10.md`](PR-REPORT-PR76-2026-09-10.md) | PR76 批次的完整报告：事件汇报概率门 + Persona 模板升级 + 全链路错误语义统一（46 文件，+3004/−917）。 | 追溯 PR76 批次改了什么、以及概率门/persona 模板/错误语义三条线的组合动机时。 |
 | [`PR-REPORT-GATES-2026-09-10.md`](PR-REPORT-GATES-2026-09-10.md) | 汇报概率门专项 PR 报告：8 个门表、判决语义（`roll < probability`）、可注入 rng 的测试考量、提交点自检。 | 调整汇报概率门、或需要"为什么未知事件不抽稀/边界取小于"这类判决语义依据时。 |
@@ -163,11 +168,11 @@
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [`DEV-HANDOVER.md`](DEV-HANDOVER.md) | 开发交接文档：本地运行、改配置、加功能、跑测试、重新打包的全流程，面向接手「语音报时」定制分支的开发者。 | 新人上手或需要一份"从零到跑起来"的完整流程时；它是三份交接文档中基线最新的一份（2026-09-16）。 |
-| [`HANDOVER_2026-09.md`](HANDOVER_2026-09.md) | perf/stage-1 性能+结构线的交付手册（自带历史快照警示，含后续批次更正）。 | 追溯 perf/stage-1 那条线做了什么时；**正文数值已被后续批次更新**，实际以代码与 `_plan/current/` 档案为准。 |
-| [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) | 项目交接文档：主动识屏 + 多 Agent 联动时期的完整工作区状态、设计决策、遗留 TODO。 | 追溯识屏/联动落地时期的状态快照时；基线为 v3.1.1 / 194 passed，与现状差距较大。 |
+| [`archive/HANDOVER_2026-09.md`](archive/HANDOVER_2026-09.md) | 历史 perf/stage-1 性能+结构线交付手册。 | 仅用于追溯旧交付批次；正文数值已被后续实现取代。 |
+| [`archive/PROJECT_HANDOFF.md`](archive/PROJECT_HANDOFF.md) | 历史项目交接文档：主动识屏 + 多 Agent 联动时期的工作区状态。 | 仅用于追溯 v3.1.1 时期的决策和遗留事项。 |
 | [`CHANGELOG-DEV-SINCE-v4.1.0-2026-09-09.md`](CHANGELOG-DEV-SINCE-v4.1.0-2026-09-09.md) | 自 v4.1.0 以来开发版变更汇总：按合入顺序的主线演进表、性能线/结构线细节，含"实现后被回滚/取代"的口径说明。 | 需要逐 PR 粒度的开发期变更脉络、或核对"某功能是否真的上线"（第六节列了被取代项）时。 |
-| [`UPSTREAM-INTEGRATION-2026-08-26.md`](UPSTREAM-INTEGRATION-2026-08-26.md) | 上游合并与新版 UI 收敛记录：合并策略、维护边界（菜单/设置单一路径、两套聊天窗口互不覆盖）与 macOS 验收产物。 | 追溯"为什么只维护新版菜单/设置、经典聊天窗口为何保留"这类维护边界决策时。 |
-| [`OPTIMIZATION_CHECKLIST.md`](OPTIMIZATION_CHECKLIST.md) | 性能优化复核清单（自带「历史快照，请勿按现状逐条执行」警示；`--instance`/`PetApp` 已被 `--slot`/`AppShell` 取代）。 | 只作为"当时怎么做性能复核"的模板参考；**不要按现状逐条执行**。 |
+| [`archive/UPSTREAM-INTEGRATION-2026-08-26.md`](archive/UPSTREAM-INTEGRATION-2026-08-26.md) | 历史上游合并与新版 UI 收敛记录。 | 仅用于追溯 2026-08 的合并策略和维护边界。 |
+| [`archive/OPTIMIZATION_CHECKLIST.md`](archive/OPTIMIZATION_CHECKLIST.md) | 历史性能优化复核清单，使用早期 `--instance`/`PetApp` 口径。 | 只作为历史模板参考，禁止按现状逐条执行。 |
 
 ---
 
@@ -198,23 +203,23 @@
 ### 疑似过时
 
 1. **`STABLE_BUILDS.md`** — 冻结对象是 onefile 时代的 `dist/dsh-pet-standalone-webm.exe` / `gif.exe`，而当前工作树连 `dist/` 目录都不存在，发布形态早已是 onedir 目录 + `dist-onedir/*-portable.zip` + Inno Setup 安装包；基线提交 `420f20a` 也远早于当前 HEAD。冻结规则本身仍有价值，但其「当前基线」与文件名已与现状不符。
-2. **`BUILD_ARTIFACTS-2026-08-22.md`** — 记录的产物路径（`dist/*.exe`）与哈希对应已不再产生的 onefile 构建；同一文档内的测试基线为 29 passed / 137 passed，距当前 1895 passed 的规模差两个数量级。README 仍引用此路径，属悬空引用。
-3. **`PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md`** — 首段自标「方案已确认，代码未动工」，基线为 v3.1.1 / 130 passed；而识屏相关模块（`pet/proactive.py`、`proactive_limiter.py`、`proactive_memory.py`、`vision.py`、`window_screen.py`）均已存在并有对应 PR 报告，其"待动工"前提已完全失效。
-4. **`PROACTIVE_SCREEN_PLAN.md`** — 同上，v1 设计稿的有效性判断（"当前基线 130 passed / 4 skipped"）远落后于现状；作为**设计依据与出处**仍有价值，但作为"待实施计划"已过时。
-5. **`OPTIMIZATION_CHECKLIST.md`** — 文档已自行标注「历史快照，请勿按现状逐条执行」（`--instance`/`PetApp` 已被 `--slot`/`AppShell` 取代），确认过时。
-6. **`PROJECT_HANDOFF.md`** — 基线 `D:\dsh-pet-pr` / v3.1.1 / 194 passed，且其内容已被 `DEV-HANDOVER.md`（2026-09-16，基线 `feat/voice-chime`）在"交接文档"这一职能上取代。
-7. **`HANDOVER_2026-09.md`** — 自带两条历史快照警示（首帧缓存预算 32MB 已被改为 8MB；`decode_broker_enabled` 与 `decode_broker.py` 已移除，改为进程内 `DecodeFanoutHub`），正文描述已被取代。
-8. **`UPSTREAM-INTEGRATION-2026-08-26.md`** — 一次性合并记录，其"合并后有什么"的内容已被 `CHANGELOG-DEV-SINCE-v4.1.0-2026-09-09.md` 与 `RELEASE-v4.2.0.md` 完整覆盖；仅"维护边界"一节仍有独立价值。
-9. **`AGENT_LINK_LIVE_TEST.md`** — 面向一次性外部实机验证任务的说明书（工作区 `D:\dsh-pet-pr`、分支 `perf/startup-and-hidden-cpu`、基线 185 passed），任务场景已不存在。
+2. **`archive/BUILD_ARTIFACTS-2026-08-22.md`** — 记录的产物路径（`dist/*.exe`）与哈希对应已不再产生的 onefile 构建；同一文档内的测试基线为 29 passed / 137 passed，距当前 1895 passed 的规模差两个数量级。README 已改为引用归档路径，现行构建流程见 `ONEDIR_PACKAGING.md`。
+3. **`archive/PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md`** — 首段自标「方案已确认，代码未动工」，基线为 v3.1.1 / 130 passed；而识屏相关模块（`pet/proactive.py`、`proactive_limiter.py`、`proactive_memory.py`、`vision.py`、`window_screen.py`）均已存在并有对应 PR 报告，其"待动工"前提已完全失效。
+4. **`archive/PROACTIVE_SCREEN_PLAN.md`** — 同上，v1 设计稿的有效性判断（"当前基线 130 passed / 4 skipped"）远落后于现状；作为**设计依据与出处**仍有价值，但作为"待实施计划"已过时。
+5. **`archive/OPTIMIZATION_CHECKLIST.md`** — 文档已自行标注「历史快照，请勿按现状逐条执行」（`--instance`/`PetApp` 已被 `--slot`/`AppShell` 取代），确认过时。
+6. **`archive/PROJECT_HANDOFF.md`** — 基线 `D:\dsh-pet-pr` / v3.1.1 / 194 passed，且其内容已被 `DEV-HANDOVER.md`（2026-09-16，基线 `feat/voice-chime`）在"交接文档"这一职能上取代。
+7. **`archive/HANDOVER_2026-09.md`** — 自带两条历史快照警示（首帧缓存预算 32MB 已被改为 8MB；`decode_broker_enabled` 与 `decode_broker.py` 已移除，改为进程内 `DecodeFanoutHub`），正文描述已被取代。
+8. **`archive/UPSTREAM-INTEGRATION-2026-08-26.md`** — 一次性合并记录，其"合并后有什么"的内容已被 `CHANGELOG-DEV-SINCE-v4.1.0-2026-09-09.md` 与 `RELEASE-v4.2.0.md` 完整覆盖；仅"维护边界"一节仍有独立价值。
+9. **`archive/AGENT_LINK_LIVE_TEST.md`** — 面向一次性外部实机验证任务的说明书（工作区 `D:\dsh-pet-pr`、分支 `perf/startup-and-hidden-cpu`、基线 185 passed），任务场景已不存在。
 
 ### 疑似重复
 
 1. **`PR-REPORT-PR76-2026-09-10.md` 与 `PR-REPORT-GATES-2026-09-10.md`** — 同日、同一主题（事件汇报概率门 `report_gates`）的两份报告：前者把概率门作为 PR76 批次中的一项特性描述（并列出 4 个门的默认值），后者是专项报告（列出完整 8 门表与判决语义）。两者门数与默认值表述不完全一致，读者难以判断以谁为准。以专项报告 `PR-REPORT-GATES-2026-09-10.md` + `SETTINGS-REPORT-PROBABILITY-2026-09-10.md` 为现行口径。
 2. **`SETTINGS-INFORMATION-ARCHITECTURE-2026-08-27.md` 与 `SETTINGS-REDESIGN-Q4-CLASSIFICATION-RESEARCH.md`** — 两者都给出设置页的页面/侧栏归属方案：前者是 2026-08-27 已实现的归属表，后者是 2026-08-31 的分类调研结论（7 个稳定侧栏入口）。同一问题两个版本的答案并列存在。
 3. **`SETTINGS-REDESIGN-Q4-CLASSIFICATION-RESEARCH.md` 与 `SETTINGS-REDESIGN-Q6-Q7-DOMAIN-LAYOUT-DECISION.md`** — 重叠：Q6/Q7 文档第 1 节重复给出"能力域划分规则"（作用对象/用户意图/能力所有权/生命周期/平台差异五条），与 Q4 的结论范围重合；差异主要在布局系统与 skill 评估，可考虑收敛为一份。
-4. **三份 handover 并存**（`DEV-HANDOVER.md` / `HANDOVER_2026-09.md` / `PROJECT_HANDOFF.md`）— 职能相同（交接），基线各异（`feat/voice-chime` 2026-09-16 / `perf/stage-1` 2026-09-03 / v3.1.1 时期），且都未标注彼此取代关系，读者无法判断该读哪一份。
+4. **历史 handover 已归档**（`archive/HANDOVER_2026-09.md` / `archive/PROJECT_HANDOFF.md`）— 当前交接入口以 `DEV-HANDOVER.md` 为准，归档文件仅用于追溯旧基线。
 5. **`DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md` 与 `DSH-REQUEST-EVENT-CATALOG.md`** — 后者自述基于前者的调研结果，属"调研 + 速查表"的伴生关系，重叠度可控（一份叙述、一份字段表）。**不建议合并**，但建议在两份文档中互相显式标注"速查看 catalog、背景看 research"以消除歧义。
-6. **`PROACTIVE_SCREEN_PLAN.md` 与 `PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md`** — 同一功能的"设计方案"与"实施手册"，内容范围大量重合（技术依据、验收清单），且两份都停留在"未动工"状态。建议合并为一份设计档案。
+6. **主动识屏文档已合并** — 当前入口为 `PROACTIVE-SCREEN-DESIGN.md`；`archive/PROACTIVE_SCREEN_PLAN.md` 与 `archive/PROACTIVE_SCREEN_IMPLEMENTATION_MANUAL.md` 保留为原始档案，不再作为现行规范。
 
 ## 插件化与 DLC 分阶段文档
 
