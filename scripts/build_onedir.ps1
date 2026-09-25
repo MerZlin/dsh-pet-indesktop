@@ -183,18 +183,54 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "make_icon failed: $LASTEXITCODE" }
 
     # DLL 冲突隔离（issue: Qt6Core "procedure not found" / 找不到指定的程序）：
-    # conda 的 Library\bin 与 MiKTeX 的 bin\x64 各自携带一套 Qt6/ICU DLL（版本与
-    # PySide6 6.11 不匹配）。PyInstaller 的 bindepend 会按 PATH 解析 Qt6Core.dll 的
-    # icuuc.dll 依赖并把 conda 的 ICU 75 打进包内，运行时 QtCore 加载即报
-    # "DLL load failed ... 找不到指定的程序"。这里在构建期间把这两类目录从 PATH
-    # 剔除，让 bindepend 只看到 PySide6 自带 DLL 与系统 System32 的兼容 ICU。
-    # 注意：若 PySide6 是 conda 包（DLL 在 Library\bin），此剔除会导致 DLL 缺失，
-    # 此时应改用 pip 版 PySide6 构建（DLL 在 site-packages\PySide6）。
-    $env:PATH = ($env:PATH -split ';' | Where-Object {
-    $_ -and $_ -notmatch '(?i)(conda|miniconda)[\\/].*[\\/]Library[\\/]bin$' -and
-        $_ -notmatch '(?i)[\\/]envs[\\/].*[\\/]Library[\\/]bin$' -and
-            $_ -notmatch '(?i)MiKTeX[\\/]miktex[\\/]bin'
-    }) -join ';'
+    # conda、MiKTeX、Poppler 等环境可能各自携带一套 Qt6/ICU DLL（版本与
+    # PySide6 不匹配）。PyInstaller 的 bindepend 会按 PATH 解析 Qt6Core.dll 的
+    # icuuc.dll 依赖；错误的外部 ICU 被复制进 onedir 后，运行时 QtCore 会报
+    # "DLL load failed ... 找不到指定的程序"。构建期间过滤已知工具链目录，且
+    # 过滤所有非 System32/PySide6 的 ICU 提供目录，避免依赖个人机器路径。
+    # 注意：若 PySide6 是 conda 包，Qt/ICU 会在后续步骤显式复制到 bundle
+    # _internal\PySide6；这里过滤的是构建解析路径，不会阻止那一步复制。
+    $pysidePackageDir = (& python -c "import pathlib, PySide6; print(pathlib.Path(PySide6.__file__).parent)").Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $pysidePackageDir) {
+        throw "[Qt] unable to locate the active PySide6 package directory"
+    }
+    $system32Dir = [System.IO.Path]::GetFullPath((Join-Path $env:WINDIR 'System32')).TrimEnd('\')
+    $cleanPathEntries = @()
+    foreach ($pathEntry in ($env:PATH -split ';')) {
+        if (-not $pathEntry) { continue }
+        # PATH can contain an executable file as well as directories.  Preserve
+        # file entries and only inspect directories for bundled ICU providers.
+        if (-not (Test-Path -LiteralPath $pathEntry -PathType Container)) {
+            $cleanPathEntries += $pathEntry
+            continue
+        }
+        try {
+            $fullEntry = [System.IO.Path]::GetFullPath($pathEntry).TrimEnd('\')
+        } catch {
+            $fullEntry = $pathEntry.TrimEnd('\')
+        }
+        $legacyToolchain =
+            $fullEntry -match '(?i)(conda|miniconda)[\/].*[\/]Library[\/]bin$' -or
+            $fullEntry -match '(?i)[\/]envs[\/].*[\/]Library[\/]bin$' -or
+            $fullEntry -match '(?i)MiKTeX[\/]miktex[\/]bin'
+        if ($legacyToolchain) {
+            Write-Host "[Qt] excluding legacy toolchain PATH entry: $pathEntry" -ForegroundColor DarkGray
+            continue
+        }
+        if ($fullEntry -ieq $system32Dir -or $fullEntry -like "$($pysidePackageDir.TrimEnd('\'))*") {
+            $cleanPathEntries += $pathEntry
+            continue
+        }
+        $hasExternalIcu =
+            (Test-Path (Join-Path $fullEntry 'icuuc.dll')) -or
+            (@(Get-ChildItem -Path $fullEntry -Filter 'icu*.dll' -File -ErrorAction SilentlyContinue).Count -gt 0)
+        if ($hasExternalIcu) {
+            Write-Host "[Qt] excluding external ICU provider PATH entry: $pathEntry" -ForegroundColor DarkGray
+            continue
+        }
+        $cleanPathEntries += $pathEntry
+    }
+    $env:PATH = $cleanPathEntries -join ';'
 
     # 注：运行中的旧 exe 已在进入本块之前统一停掉（见上面的 $running 段），
     # 否则 PyInstaller 无法覆盖 exe，后续瘦身也会因 DLL 被活进程锁定而失败。
@@ -354,23 +390,14 @@ if (Test-Path (Join-Path $condaBin 'Qt6Core.dll')) {
 }
 Write-Host "[Qt] Runtime validation OK" -ForegroundColor Green
 
-# DLL 冲突自检（issue: Qt6Core "procedure not found"）：若构建环境 PATH 里混入
-# conda/MiKTeX 的 Qt6 或 ICU DLL，PyInstaller 会错误打包进 onedir 目录，运行时
-# QtCore 加载报 "找不到指定的程序"。此处扫描产物，发现即中止并给出明确指引。
-# 注：我们主动补进 _internal\PySide6 的 Qt6/ICU DLL（conda Qt 自身运行所需的
-# icu*.dll）属预期，自检白名单排除该 runtime 目录；其他位置出现的意外
-# ICU/Qt6 DLL 仍按原规则报告冲突。
-# pip PySide6 6.11.2 and the bundled Poppler runtime both use ICU 78.3.
-# PyInstaller resolves Poppler's ICU dependencies into _internal root, so
-# location alone is not enough to classify these files as a conflict. Keep
-# rejecting stale/foreign ICU versions, while allowing this known-compatible
-# pair only after checking the file version.
-$allowedIcu = @('icuuc.dll', 'icudt78.dll')
+# DLL 冲突自检（issue: Qt6Core "procedure not found"）：外部 ICU DLL 即使版本
+# 看起来相近，也可能只导出带版本后缀的符号，无法满足 Qt6Core 对未后缀 ICU
+# 符号的导入。因而不再按某个 ICU 版本做白名单，而是按运行时目录边界检查。
+# conda Qt 自身需要的 icu*.dll 可以位于 _internal\PySide6；其他位置出现的
+# ICU DLL 一律拒绝，避免 Poppler/Codex runtime 污染 Qt 加载链。
 $badIcu = Get-ChildItem -Recurse -Path $appDir -Filter 'icu*.dll' -ErrorAction SilentlyContinue |
     Where-Object {
-        if ($_.DirectoryName -like '*\_internal\PySide6') { return $false }
-        $version = $_.VersionInfo.FileVersion
-        -not ($allowedIcu -contains $_.Name -and $version -like '78, 3, 0, 0*')
+        $_.FullName -notlike "$bundlePySide\*"
     }
 $badQt = Get-ChildItem -Recurse -Path $appDir -Filter 'Qt6*.dll' -ErrorAction SilentlyContinue |
     Where-Object {
@@ -385,8 +412,8 @@ $badQt = Get-ChildItem -Recurse -Path $appDir -Filter 'Qt6*.dll' -ErrorAction Si
 if ($badIcu -or $badQt) {
     $names = @($badIcu.Name) + @($badQt.Name)
     throw "Bundle contains incompatible Qt/ICU DLLs ($($names -join ', ')). " +
-        "This causes 'DLL load failed ... 找不到指定的程序'. Build with a PATH " +
-        "that excludes conda Library\bin and MiKTeX miktex\bin."
+        "This causes 'DLL load failed ... 找不到指定的程序'. Remove external ICU providers from PATH; " +
+        "conda Qt runtimes must remain under _internal\PySide6."
 }
 
 # ---------- onedir 瘦身（scripts\slim_bundle.py，2026-09） ----------
