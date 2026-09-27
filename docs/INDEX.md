@@ -242,7 +242,7 @@
 |---|---|---|---|
 | Phase 1 | 已完成角色资源基线 | [foundation](plugin-phase-01-foundation/) | 角色 Registry、ContentManager 与 fallback；不等于可执行功能包或所有资源类型完成。 |
 | Phase 2 | 已完成运行时基线 / 后续贡献合同待实施 | [runtime](plugin-phase-02-runtime/) | 官方 Context/EventBus/配置/生命周期；功能 UI 可在主进程运行但归功能包交付。 |
-| Phase 3A/3B/3C | 3A 已封存；3B 已实现待交付；3C 按风险规划 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
+| Phase 3A/3B/3C | 3A 已封存；3B 收尾有待验收门；3C 已完成本地风险评估 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
 | Phase 4A/4B | 计划中，必做 | [updates](plugin-phase-04-updates/) | 先冻结屏幕理解可信加载/独立构建，再完成本地安装卸载、贡献注册、重装回滚与最小管理。 |
 | Phase 5A/5B | 计划中，官方选装必做 | [distribution](plugin-phase-05-distribution/) | Setup 旁置包、ZIP/便携；AI 对话与文件理解为下一主要目标，随后 Agent 与其余领域。 |
 | Phase 6 | 条件启用 | [ecosystem](plugin-phase-06-ecosystem/) | 第三方内容/Worker SDK、社区生态；不是官方包交付的前置。 |
@@ -262,6 +262,8 @@
 | [Worker 架构与阶段计划](plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md) | QProcess、`pet-worker/v1` 与 `agent-event/v1`、request/response、重启/fallback 和剩余边界。 | 修改 Worker 协议、进程清理、Source/Adapter 或评估其他能力时。 |
 | [Phase 3B 识屏设计](plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | 已有自动/手动数据流、单次凭据和 shared Worker；把 UI/策略/执行共同移交 Phase 4/5。 | 修改主动识屏、手动看屏幕、权限或构建拆包前。 |
 | [Phase 3A 稳定性收口](plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | 保留原稳定性验证证据，不按后续目标覆写原结论。 | 复查 3A 验收、异常退出或冻结 Worker 基线时。 |
+| [Phase 3B 最新收尾](plugin-phase-03-worker/PHASE3B-STABILITY-CLOSEOUT.md) | 组合 3/3、新构建与 frozen smoke；全量前台环境失败与人工细项仍待关闭，不声明全部封存。 | 判断 3B 是否可继续迁移、复验构建或补人工记录前。 |
+| [Phase 3C 隔离风险评估](plugin-phase-03-worker/PHASE3C-ISOLATION-ASSESSMENT.md) | AI、共享依赖、音乐、语音、账户、外部服务和低风险功能的源码/测试依据、所有者与取舍。 | 决定新增 Worker、审计屏幕理解拆包或 AI 交付前。 |
 
 ### Phase 4–7 实施与发布计划
 
