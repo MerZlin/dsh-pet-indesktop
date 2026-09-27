@@ -135,3 +135,35 @@ def test_encode_revalidates_directly_constructed_messages() -> None:
 
     with pytest.raises(WorkerProtocolError, match="timestamp"):
         encode_message(invalid)
+
+
+@pytest.mark.parametrize("message_type", ["request", "response"])
+def test_request_and_response_require_request_id(message_type: str) -> None:
+    message = build_message("proactive-screen", message_type, {}, request_id="req-1")
+    assert decode_message(encode_message(message)) == message
+
+    with pytest.raises(WorkerProtocolError, match="request_id"):
+        build_message("proactive-screen", message_type, {})
+
+    raw = message.as_dict()
+    raw.pop("request_id")
+    with pytest.raises(WorkerProtocolError, match="request_id"):
+        decode_message(json.dumps(raw))
+
+
+def test_request_response_message_types_remain_jsonl_compatible() -> None:
+    request = build_message(
+        "proactive-screen",
+        "request",
+        {"operation": "observe_foreground", "arguments": {"generation": 2}},
+        request_id="req-observe",
+    )
+    response = build_message(
+        "proactive-screen",
+        "response",
+        {"operation": "observe_foreground", "status": "ok", "result": {}},
+        request_id="req-observe",
+    )
+
+    assert decode_message(encode_message(request)).type == "request"
+    assert decode_message(encode_message(response)).type == "response"

@@ -3542,6 +3542,21 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # 自我识别提示用的角色显示名（截图里的桌宠就是它自己）；别名优先
         pet_name = self.cfg.character_display_name(str(self.cfg.get("character", catalog.DEFAULT_CHARACTER)))
 
+        ensure_watcher = getattr(self, "_ensure_proactive_watcher", None)
+        if callable(ensure_watcher):
+            try:
+                watcher = ensure_watcher()
+                request_manual = getattr(watcher, "request_manual_look", None)
+                if callable(request_manual) and request_manual(
+                    provider,
+                    system_prompt,
+                    pet_name,
+                    self._on_look_done,
+                ):
+                    return
+            except Exception:
+                logging.exception("通过主动识屏 Worker 发起手动识屏失败")
+
         threading.Thread(
             target=self._look_worker,
             args=(provider, system_prompt, pet_name),
@@ -3572,6 +3587,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             self.look_done.emit(str(exc), "", True)
 
     def _on_look_done(self, text: str, user_text: str, is_error: bool) -> None:
+        if getattr(self, "_closing", False) or not shiboken6.isValid(self):
+            return
         self._look_busy = False
         if is_error:
             self.show_bubble(f"看不清啊…{text[:60]}", 5000)
@@ -4571,6 +4588,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             return
         self._close_event_done = True
         self._closing = True  # 关闭后丢弃迟到的动画事件（生命周期守卫）
+        watcher = getattr(self, "proactive_watcher", None)
+        if watcher is not None:
+            watcher.cancel_manual_look(self._on_look_done)
+            watcher.pause()  # Shared watcher pause is intentionally a no-op.
         bubble = getattr(self, "_speech_bubble", None)
         if bubble is not None:
             # 气泡是独立 Tool 窗口，不能依赖 PetWindow 的 QObject 父链自动销毁。

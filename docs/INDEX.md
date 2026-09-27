@@ -142,6 +142,7 @@
 | [`PR-REPORT-TEMPLATE.md`](PR-REPORT-TEMPLATE.md) | PR 报告模板：三份交付证据（修改文件说明 / 性能分析 / 实机运行记录）的逐节骨架与判定标准。 | **开新 PR 写报告前必读并整份复制**；2026-09-22 起三份证据是硬要求（`AGENTS.md` Delivery evidence discipline），由 `tests/test_pr_report_discipline.py` 机器化校验。 |
 | [PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md](PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md) | Phase 1 资源型 DLC 实现报告：manifest 校验、Starter DLC、Registry、目录/ZIP 安装、回滚、兼容性与验证结果。 | 改资源 DLC、角色 Registry、内容安装事务、Starter DLC 打包或需要核对本轮测试限制时。 |
 | [`PR-REPORT-PLUGIN-PHASE2-2026-09-24.md`](PR-REPORT-PLUGIN-PHASE2-2026-09-24.md) | Phase 2 Core 插件运行时实施报告：Registry、Context、EventBus、配置命名空间、capability、官方节日提醒插件、性能探针和验收限制。 | 改 Core 插件生命周期、官方 in-process 插件、插件配置隔离或准备进入 Phase 3 worker 迁移前。 |
+| [`PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md`](PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md) | Phase 3B 自动/手动识屏 Worker：实现、原测试、构建、性能与剩余验收。 | 修改识屏 IPC、凭据、共享窗口或退出行为前必读；不代表全部稳定性门通过。 |
 | [`PR-REPORT-PLUGIN-PHASE3-2026-09-25.md`](PR-REPORT-PLUGIN-PHASE3-2026-09-25.md) | Phase 3A Worker 实施报告：JSONL 协议、QProcess 宿主、Agent Link 事件采集、崩溃恢复、fallback 和真实进程验证。 | 修改 Worker 生命周期、Agent Link 事件采集边界或进入主动识屏 Worker（Phase 3B）前必读。 |
 | [plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md](plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | Phase 3A 稳定性封存补充报告：Qt 组合测试隔离、真实 Core 优雅退出、冻结 Worker smoke、Windows 可见桌面和 S0–S8/R0 门状态。 | 进入 Phase 3B、复核 Worker 退出/打包证据或回滚 Phase 3A 时必读。 |
 | [`PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md`](PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md) | 工程规范化实施报告：测试分类与覆盖率基线、Ruff/mypy/pre-commit、统一检查入口、CI 质量/桌面矩阵和文档链接门禁。 | 修改测试分类、质量门、静态检查、CI 工作流、四大工程文档或一键验证入口时必读。 |
@@ -181,6 +182,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
+| [`plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md`](plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | 主动/手动识屏的 Core/Worker 边界、request/response、额度、密钥和复建计划。 | 修改 Phase 3B 或回滚后重建前必读。 |
 | [`plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md`](plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md) | Phase 3 调研/设计稿：把 AI 聊天、Agent 联动、主动识屏等可关功能从主进程拆到独立进程/插件容器的成本与收益。 | 讨论"关闭即不加载"的内存天花板、或考虑把某功能移出主进程之前。 |
 | [`OPEN-SOURCE-HARNESS-RISK-RESEARCH.md`](OPEN-SOURCE-HARNESS-RISK-RESEARCH.md) | 开源 Harness 风险与轨迹设计调研：DSH / LangGraph / SWE-agent 的事件模型、身份、Action/Observation 对比与 Pet 采用结论。 | 设计或调整 Pet 侧的事件轨迹/风险聚合模型时；查"为什么保留 raw facts 而不派生风险"的结论来源。 |
 

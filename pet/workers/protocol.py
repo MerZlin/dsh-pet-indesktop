@@ -14,7 +14,8 @@ from typing import Any, Mapping
 
 PROTOCOL = "pet-worker/v1"
 MAX_MESSAGE_BYTES = 64 * 1024
-MESSAGE_TYPES = frozenset({"hello", "ready", "config_push", "event", "error", "heartbeat", "shutdown"})
+MESSAGE_TYPES = frozenset({"hello", "ready", "config_push", "event", "error", "heartbeat", "shutdown", "request", "response"})
+_REQUEST_MESSAGE_TYPES = frozenset({"request", "response"})
 
 
 class WorkerProtocolError(ValueError):
@@ -75,6 +76,8 @@ def _validate_message_fields(message: WorkerMessage) -> None:
         raise WorkerProtocolError("timestamp must be a non-empty string")
     if message.request_id is not None and not isinstance(message.request_id, str):
         raise WorkerProtocolError("request_id must be a string when present")
+    if message.type in _REQUEST_MESSAGE_TYPES and (not isinstance(message.request_id, str) or not message.request_id.strip()):
+        raise WorkerProtocolError(f"{message.type} messages require a non-empty request_id")
     if not isinstance(message.payload, dict):
         raise WorkerProtocolError("payload must be an object")
 
@@ -93,6 +96,8 @@ def build_message(
         raise WorkerProtocolError(f"unknown message type: {message_type!r}")
     if request_id is not None and not isinstance(request_id, str):
         raise WorkerProtocolError("request_id must be a string when present")
+    if message_type in _REQUEST_MESSAGE_TYPES and (not isinstance(request_id, str) or not request_id.strip()):
+        raise WorkerProtocolError(f"{message_type} messages require a non-empty request_id")
     if timestamp is not None and (not isinstance(timestamp, str) or not timestamp.strip()):
         raise WorkerProtocolError("timestamp must be a non-empty string")
     body = dict(payload or {})
@@ -164,6 +169,8 @@ def decode_message(raw: bytes | str) -> WorkerMessage:
         raise WorkerProtocolError("timestamp must be a non-empty string")
     if request_id is not None and not isinstance(request_id, str):
         raise WorkerProtocolError("request_id must be a string when present")
+    if message_type in _REQUEST_MESSAGE_TYPES and (not isinstance(request_id, str) or not request_id.strip()):
+        raise WorkerProtocolError(f"{message_type} messages require a non-empty request_id")
     if not isinstance(payload, dict):
         raise WorkerProtocolError("payload must be an object")
     _ensure_json(payload)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import fnmatch
 import sys
 import time
+from collections.abc import Mapping
 from typing import Any
 
 # 拆分后组件 re-export（维持既有 import 兼容；外部调用点本批不改）
@@ -221,7 +222,7 @@ class ProactiveScreenWatcher:
     - Phase 2 为【日志模式】：仅 logging.info 输出，不调用大模型。
     """
 
-    def __init__(self, window: Any, config: Any) -> None:
+    def __init__(self, window: Any, config: Any, worker_mode: str = "in_process") -> None:
         from PySide6.QtCore import QObject, QTimer, Signal
 
         class _WatcherBridge(QObject):
@@ -250,6 +251,15 @@ class ProactiveScreenWatcher:
 
         self.win = window
         self.cfg = config
+        self.worker_mode = worker_mode if worker_mode in {"auto", "in_process", "disabled"} else "in_process"
+        self._worker_fallback = False
+        self._worker_adapter: Any = None
+        self._manual_callbacks: dict[str, Any] = {}
+        self._pending_manual_look: tuple[Any, str, str, Any] | None = None
+        self._manual_request_id: str | None = None
+        self._active_worker_frame_id: str | None = None
+        self._active_worker_request_id: str | None = None
+        self._active_worker_window: dict[str, Any] | None = None
         parent_obj = self.win if hasattr(self.win, "winId") else None
         self._bridge = _WatcherBridge(self, parent=parent_obj)
         self._bridge.frame_ready.connect(self._bridge._forward_frame)
@@ -274,6 +284,23 @@ class ProactiveScreenWatcher:
         memory_path = self.cfg.dir / "proactive_screen_memory.json"
         self.memory = ProactiveMemory(memory_path)
 
+        if self.worker_mode == "auto":
+            from .workers.proactive_screen_adapter import ProactiveScreenWorkerAdapter
+
+            self._worker_adapter = ProactiveScreenWorkerAdapter(
+                self._bridge,
+                mode="auto",
+                budget_checker=self._worker_budget_check,
+            )
+            self._worker_adapter.state_changed.connect(self._on_worker_state_changed)
+            self._worker_adapter.observation_ready.connect(self._on_worker_observation)
+            self._worker_adapter.capture_ready.connect(self._on_worker_capture)
+            self._worker_adapter.analysis_ready.connect(self._on_worker_analysis)
+            self._worker_adapter.manual_ready.connect(self._on_worker_manual)
+            self._worker_adapter.request_failed.connect(self._on_worker_request_failed)
+            self._worker_adapter.failed.connect(self._on_worker_failed)
+            self._worker_adapter.diagnostic.connect(self._on_worker_diagnostic)
+
         self.apply_config()
 
     def is_running(self) -> bool:
@@ -295,12 +322,20 @@ class ProactiveScreenWatcher:
         # 无 Chat 变体（排除 pet.chat）的菜单/设置入口已隐藏，用户无法开启；
         # 即使手改 config 开启，真实请求会在 provider 解析阶段失败并计入熔断，不会崩溃。
         should_run = sys.platform == "win32" and eff["enabled"] and bool(eff["whitelist"])
+        if self.worker_mode == "disabled":
+            self.pause()
+            return
         if should_run:
+            if self.worker_mode == "auto" and not self._worker_fallback:
+                self._start_worker(eff)
             if not self._timer.isActive():
                 self._timer.start()
         else:
             self._generation += 1  # 关闭 = 作废在飞任务
             self._timer.stop()
+            self._cancel_worker_requests(notify_manual=True)
+            if self._worker_adapter is not None and self._worker_adapter.active:
+                self._worker_adapter.stop()
 
     def pause(self) -> None:
         """窗口隐藏或活动暂停时停止定时器，并作废在飞/已排队的任务。"""
@@ -313,6 +348,9 @@ class ProactiveScreenWatcher:
         # 重复发起第二条请求。它的 finally 一定会把标志复位（有超时兜底），
         # 其迟到答复被代次检查丢弃，不会冒泡/计费/写记忆。
         self._worker_busy = False
+        self._cancel_worker_requests(notify_manual=True)
+        if self._worker_adapter is not None:
+            self._worker_adapter.stop()
 
     def resume(self) -> None:
         """窗口恢复显示时按最新配置重新评估启停。"""
@@ -320,6 +358,10 @@ class ProactiveScreenWatcher:
 
     def _on_tick(self) -> None:
         """8s 心跳主线程快速判定（G1~G4）。"""
+        if self.worker_mode == "disabled":
+            return
+        if self._worker_fallback and self._worker_adapter is not None and self._worker_adapter.state == "stopping":
+            return
         if self._worker_busy or self._request_in_flight:
             return
 
@@ -338,6 +380,29 @@ class ProactiveScreenWatcher:
         if not should_watch(visible, interacting, mouse_through, allow_mouse_through):
             return
 
+        # Worker 模式下，前台窗口信息也在独立进程中读取；Core 仍负责后续
+        # 白名单、停留、闲置和额度策略。in_process/fallback 保留旧路径。
+        if self.worker_mode == "auto" and not self._worker_fallback:
+            adapter = self._worker_adapter
+            if adapter is None:
+                self._switch_to_in_process("worker adapter unavailable")
+            elif not adapter.ready:
+                if not adapter.active:
+                    self._start_worker(eff)
+                return
+            else:
+                # The previous capture is not the authority for a new foreground observation.
+                self._active_worker_window = None
+                request_id = adapter.observe_foreground(self._generation)
+                if request_id is not None:
+                    self._worker_busy = True
+                    self._active_worker_request_id = request_id
+                return
+
+        self._on_tick_in_process(eff)
+
+    def _on_tick_in_process(self, eff: dict[str, Any]) -> None:
+        """执行原有进程内前台探测路径。"""
         # 获取前台窗口信息
         from . import vision
 
@@ -398,6 +463,423 @@ class ProactiveScreenWatcher:
             daemon=True,
             name="proactive-screen-worker",
         ).start()
+
+    # ---------------------------------------------------------- worker bridge
+    def _worker_config(self, eff: dict[str, Any]) -> dict[str, Any]:
+        """Return the small, non-sensitive configuration sent to the worker."""
+        return {
+            "max_edge": 768,
+            "jpeg_quality": 70,
+            "frame_ttl": 30,
+            "platform": sys.platform,
+        }
+
+    def _start_worker(self, eff: dict[str, Any]) -> bool:
+        adapter = self._worker_adapter
+        if self.worker_mode != "auto" or self._worker_fallback or adapter is None:
+            return False
+        if adapter.state in {"stopping", "crashed"}:
+            return True
+        try:
+            started = bool(adapter.start(self._worker_config(eff)))
+        except Exception:
+            import logging
+
+            logging.exception("主动识屏 Worker 启动失败")
+            self._switch_to_in_process("worker start exception")
+            return False
+        if adapter.state in {"stopping", "crashed"}:
+            return True  # Never start a legacy request while a process is still exiting/restarting.
+        if not started and not adapter.active:
+            self._switch_to_in_process("worker start rejected")
+            return False
+        return True
+
+    def _switch_to_in_process(self, reason: str) -> None:
+        """Disable the worker path while keeping the legacy path available."""
+        if self.worker_mode == "disabled" or self._worker_fallback:
+            return
+        import logging
+
+        self._worker_fallback = True
+        logging.warning("主动识屏 Worker 降级到进程内实现: %s", reason)
+        self._cancel_worker_requests(notify_manual=True)
+        adapter = self._worker_adapter
+        if adapter is not None and adapter.active:
+            try:
+                adapter.stop()
+            except Exception:
+                logging.exception("停止主动识屏 Worker 失败")
+
+    def _cancel_automatic_request(self) -> None:
+        request_id = self._active_worker_request_id
+        self._active_worker_request_id = None
+        self._active_worker_window = None
+        self._worker_busy = False
+        self._request_in_flight = False
+        if request_id and self._worker_adapter is not None:
+            self._worker_adapter.cancel(request_id, generation=self._generation)
+        self._release_worker_frame()
+
+    def _cancel_worker_requests(self, *, notify_manual: bool = False) -> None:
+        self._cancel_automatic_request()
+        request_id = self._manual_request_id
+        self._manual_request_id = None
+        if request_id and self._worker_adapter is not None:
+            self._worker_adapter.cancel(request_id, generation=self._generation)
+        if notify_manual:
+            self._fail_manual_requests("主动识屏 Worker 已停止")
+
+    def _release_worker_frame(self, frame_id: str | None = None) -> None:
+        frame_id = frame_id or self._active_worker_frame_id
+        if frame_id == self._active_worker_frame_id:
+            self._active_worker_frame_id = None
+        if not frame_id or self._worker_adapter is None:
+            return
+        try:
+            self._worker_adapter.release_frame(frame_id, generation=self._generation)
+        except Exception:
+            pass
+
+    def _reset_foreground_state(self) -> None:
+        self._current_hwnd = 0
+        self._entered_ts = 0.0
+        self._last_dhash = None
+
+    def _on_worker_state_changed(self, state: str) -> None:
+        import logging
+
+        logging.debug("主动识屏 Worker 状态: %s", state)
+        if state == "ready":
+            self._dispatch_pending_manual_look()
+        elif state == "fault":
+            self._switch_to_in_process("worker entered fault state")
+
+    def _matches_automatic_request(self, envelope: Mapping[str, Any]) -> bool:
+        return (
+            envelope.get("generation") == self._generation
+            and envelope.get("request_id") == self._active_worker_request_id
+            and self._active_worker_request_id is not None
+        )
+
+    def _automatic_allowed_now(self, window: Mapping[str, Any] | None = None) -> bool:
+        eff = effective_proactive_config(self.cfg.get("proactive_screen", {}))
+        if not (
+            eff["enabled"]
+            and eff["whitelist"]
+            and self.worker_mode != "disabled"
+            and getattr(self.win, "isVisible", lambda: True)()
+            and not getattr(self.win, "_dragging", False)
+            and getattr(self.win, "_physics_mode", None) is None
+            and not getattr(self.win, "_click_effect_phase", 0)
+            and (not getattr(self.win, "mouse_through", False) or eff.get("allow_when_mouse_through", True))
+        ):
+            return False
+        window = window if window is not None else self._active_worker_window
+        if window is not None:
+            process, title = str(window.get("process", "")), str(window.get("title", ""))
+            if not match_process_whitelist(eff["whitelist"], process, title):
+                return False
+            manager = getattr(self.win, "agent_link_manager", None)
+            if manager is not None and manager.busy_agent_owns_process(process, title):
+                return False
+        if eff["require_idle"]:
+            from .vision import get_system_idle_seconds
+
+            if not idle_satisfied(get_system_idle_seconds(), eff["min_idle_seconds"]):
+                return False
+        return True
+
+    def _on_worker_observation(self, envelope: Mapping[str, Any]) -> None:
+        if not self._matches_automatic_request(envelope):
+            return
+        if not self._automatic_allowed_now():
+            self._cancel_automatic_request()
+            return
+        self._active_worker_request_id = None
+        self._worker_busy = False
+        result = envelope.get("result")
+        result = result if isinstance(result, Mapping) else {}
+        window = result.get("window")
+        if not isinstance(window, Mapping):
+            self._reset_foreground_state()
+            return
+        try:
+            hwnd = int(window.get("hwnd", 0))
+        except (TypeError, ValueError):
+            self._reset_foreground_state()
+            return
+        process = str(window.get("process", ""))
+        title = str(window.get("title", ""))
+        eff = effective_proactive_config(self.cfg.get("proactive_screen", {}))
+        if not match_process_whitelist(eff["whitelist"], process, title):
+            self._reset_foreground_state()
+            return
+
+        mgr = getattr(self.win, "agent_link_manager", None)
+        if mgr is not None and mgr.busy_agent_owns_process(process, title):
+            return
+
+        now = time.time()
+        if hwnd != self._current_hwnd:
+            self._current_hwnd = hwnd
+            self._entered_ts = now
+            self._last_dhash = None
+            return
+        if not dwell_satisfied(self._entered_ts, now, eff["dwell_seconds"]):
+            return
+
+        from . import vision
+
+        if eff["require_idle"] and not idle_satisfied(vision.get_system_idle_seconds(), eff["min_idle_seconds"]):
+            return
+        allowed, _ = self.limiter.allow()
+        if not allowed or self._worker_adapter is None or not self._worker_adapter.ready:
+            return
+        request_id = self._worker_adapter.capture_foreground(dict(window), self._generation)
+        if request_id is not None:
+            self._worker_busy = True
+            self._active_worker_request_id = request_id
+
+    def _on_worker_capture(self, envelope: Mapping[str, Any]) -> None:
+        if not self._matches_automatic_request(envelope):
+            result = envelope.get("result")
+            if isinstance(result, Mapping) and result.get("frame_id"):
+                self._release_worker_frame(str(result["frame_id"]))
+            return
+        self._active_worker_request_id = None
+        result = envelope.get("result")
+        result = result if isinstance(result, Mapping) else {}
+        frame_id = str(result.get("frame_id", ""))
+        if not frame_id:
+            self._worker_busy = False
+            return
+        try:
+            hwnd = int(result.get("window", {}).get("hwnd"))
+            cur_hash = int(result.get("dhash", -1))
+        except (AttributeError, TypeError, ValueError):
+            self._release_worker_frame(frame_id)
+            self._worker_busy = False
+            return
+        window = result.get("window")
+        if not isinstance(window, Mapping):
+            self._release_worker_frame(frame_id)
+            self._worker_busy = False
+            return
+        if not self._automatic_allowed_now(window):
+            self._release_worker_frame(frame_id)
+            self._cancel_automatic_request()
+            return
+        self._active_worker_window = dict(window)
+        info = dict(window)
+        info["_gen"] = self._generation
+        app_str = str(result.get("app_info", ""))
+        self._on_frame_ready(None, app_str, hwnd, cur_hash, info, worker_frame_id=frame_id)
+
+    def _on_worker_analysis(self, envelope: Mapping[str, Any]) -> None:
+        if not self._matches_automatic_request(envelope):
+            return
+        if not self._automatic_allowed_now():
+            self._cancel_automatic_request()
+            return
+        self._active_worker_request_id = None
+        self._request_in_flight = False
+        result = envelope.get("result")
+        result = result if isinstance(result, Mapping) else {}
+        reply = str(result.get("reply", ""))
+        window = result.get("window")
+        window = window if isinstance(window, Mapping) else {}
+        proc_name = str(window.get("process", ""))
+        win_title = str(window.get("title", ""))
+        self._release_worker_frame()
+        self._worker_busy = False
+        if envelope.get("generation") not in (None, self._generation):
+            return
+        if reply.strip() and self._bridge_alive():
+            duration = max(6000, min(20000, 4000 + len(reply) * 150))
+            self._bridge.bubble_requested.emit(reply, duration)
+            self.limiter.record_success()
+            current_act = classify_activity(proc_name, win_title)
+            if proc_name or current_act:
+                self.memory.record(proc_name, "", current_act)
+            import logging
+
+            logging.info("主动识屏回复全文: 前台进程=%s 活动=%s | %s", proc_name, current_act, reply)
+            self._bridge.reply_synced.emit(build_sync_marker(proc_name, current_act), reply)
+        else:
+            self.limiter.record_failure()
+
+    def _on_worker_manual(self, envelope: Mapping[str, Any]) -> None:
+        request_id = str(envelope.get("request_id", ""))
+        callback = self._manual_callbacks.pop(request_id, None)
+        if request_id == self._manual_request_id:
+            self._manual_request_id = None
+        if envelope.get("generation") not in (None, self._generation):
+            return
+        result = envelope.get("result")
+        result = result if isinstance(result, Mapping) else {}
+        reply = str(result.get("reply", ""))
+        app_info = str(result.get("app_info", ""))
+        if callable(callback):
+            try:
+                if reply.strip():
+                    user_text = f"[看看屏幕] 前台窗口：{app_info}" if app_info else "[看看屏幕]"
+                    callback(reply, user_text, False)
+                else:
+                    callback("未能得到有效回复", "", True)
+            except Exception:
+                import logging
+
+                logging.exception("主动识屏手动结果回调失败")
+
+        self._stop_idle_worker()
+
+    def _stop_idle_worker(self) -> None:
+        """A manual-only request must not leave a permanent background process."""
+        eff = effective_proactive_config(self.cfg.get("proactive_screen", {}))
+        automatic = sys.platform == "win32" and eff["enabled"] and bool(eff["whitelist"])
+        if (
+            not automatic
+            and not self._manual_callbacks
+            and self._pending_manual_look is None
+            and self._active_worker_request_id is None
+            and self._worker_adapter is not None
+            and self._worker_adapter.active
+        ):
+            self._worker_adapter.stop()
+
+    def cancel_manual_look(self, callback: Any) -> None:
+        """Detach only the closing window's manual request from a shared watcher."""
+        if self._pending_manual_look is not None and self._pending_manual_look[3] == callback:
+            self._pending_manual_look = None
+        for request_id, owner in list(self._manual_callbacks.items()):
+            if owner == callback:
+                del self._manual_callbacks[request_id]
+                if self._manual_request_id == request_id:
+                    self._manual_request_id = None
+                if self._worker_adapter is not None:
+                    self._worker_adapter.cancel(request_id, generation=self._generation)
+        self._stop_idle_worker()
+
+    def _on_worker_request_failed(self, operation: str, envelope: Mapping[str, Any]) -> None:
+        if operation in {"observe_foreground", "capture_foreground", "analyze_frame"} and not self._matches_automatic_request(envelope):
+            return
+        message = str(envelope.get("message") or envelope.get("error_code") or "识屏操作失败")
+        if operation == "observe_foreground":
+            self._active_worker_request_id = None
+            self._worker_busy = False
+        elif operation == "capture_foreground":
+            self._active_worker_request_id = None
+            self._release_worker_frame()
+            self._worker_busy = False
+        elif operation == "analyze_frame":
+            self.limiter.record_failure()
+            self._active_worker_request_id = None
+            self._request_in_flight = False
+            self._release_worker_frame()
+            self._worker_busy = False
+        elif operation == "manual_look":
+            request_id = str(envelope.get("request_id", ""))
+            callback = self._manual_callbacks.pop(request_id, None)
+            if request_id == self._manual_request_id:
+                self._manual_request_id = None
+            if callable(callback):
+                try:
+                    callback(message, "", True)
+                except Exception:
+                    import logging
+
+                    logging.exception("主动识屏手动失败回调异常")
+
+        self._stop_idle_worker()
+
+    def _on_worker_failed(self, reason: str) -> None:
+        if self._worker_adapter is not None and self._worker_adapter.state == "fault":
+            self._switch_to_in_process(str(reason))
+
+    def _on_worker_diagnostic(self, stage: str, detail: object) -> None:
+        import logging
+
+        logging.debug("主动识屏 Worker 诊断 [%s]: %s", stage, detail)
+
+    def _worker_budget_check(self, kind: str, generation: int | None) -> bool:
+        if kind != "automatic" or generation != self._generation or not self._automatic_allowed_now():
+            return False
+        eff = effective_proactive_config(self.cfg.get("proactive_screen", {}))
+        if not eff["enabled"] or self.worker_mode == "disabled":
+            return False
+        return self.limiter.consume_budget()
+
+    def request_manual_look(self, provider: Any, system_prompt: str, pet_name: str, callback: Any) -> bool:
+        """Request manual screen analysis through the worker when available."""
+        if self.worker_mode == "disabled":
+            callback("识屏已停用", "", True)
+            return True
+        if self._worker_adapter is not None and self._worker_adapter.state == "stopping":
+            callback("识屏服务正在停止，请稍后重试", "", True)
+            return True
+        if self.worker_mode != "auto" or self._worker_fallback or self._worker_adapter is None:
+            return False
+        if self._manual_request_id is not None or self._pending_manual_look is not None:
+            callback("上一张还没看完呢…", "", True)
+            return True
+        if not self._worker_adapter.ready:
+            if not self._worker_adapter.active:
+                if not self._start_worker(effective_proactive_config(self.cfg.get("proactive_screen", {}))):
+                    return False
+            self._pending_manual_look = (provider, str(system_prompt), str(pet_name), callback)
+            return True
+        request_id = self._worker_adapter.manual_look(
+            provider,
+            system_prompt,
+            generation=self._generation,
+            pet_name=pet_name,
+        )
+        if request_id is None:
+            callback("识屏服务繁忙，请稍后重试", "", True)
+            return True  # Backpressure must never start a second in-process request.
+        self._manual_callbacks[request_id] = callback
+        self._manual_request_id = request_id
+        return True
+
+    def _dispatch_pending_manual_look(self) -> None:
+        pending = self._pending_manual_look
+        self._pending_manual_look = None
+        if pending is None or self._worker_adapter is None or not self._worker_adapter.ready:
+            return
+        provider, system_prompt, pet_name, callback = pending
+        request_id = self._worker_adapter.manual_look(
+            provider,
+            system_prompt,
+            generation=self._generation,
+            pet_name=pet_name,
+        )
+        if request_id is None:
+            try:
+                callback("主动识屏 Worker 暂不可用", "", True)
+            except Exception:
+                import logging
+
+                logging.exception("主动识屏手动派发失败回调异常")
+            return
+        self._manual_callbacks[request_id] = callback
+        self._manual_request_id = request_id
+
+    def _fail_manual_requests(self, message: str) -> None:
+        callbacks = list(self._manual_callbacks.values())
+        self._manual_callbacks.clear()
+        pending = self._pending_manual_look
+        self._pending_manual_look = None
+        if pending is not None and callable(pending[3]):
+            callbacks.append(pending[3])
+        self._manual_request_id = None
+        for callback in callbacks:
+            try:
+                callback(message, "", True)
+            except Exception:
+                import logging
+
+                logging.exception("主动识屏手动失败回调异常")
 
     def _bridge_alive(self) -> bool:
         """桥接 QObject 是否仍存活（窗口销毁后 daemon 线程的 emit 会崩）。"""
@@ -461,14 +943,26 @@ class ProactiveScreenWatcher:
             if not emitted:
                 self._worker_busy = False
 
-    def _on_frame_ready(self, img: Any, app_str: str, hwnd: int, cur_hash: int, info: dict | None = None) -> None:
-        """主线程槽：接收后台截图计算结果，执行 dHash 差异与频控，进入真实请求或日志模式。"""
+    def _on_frame_ready(
+        self,
+        img: Any,
+        app_str: str,
+        hwnd: int,
+        cur_hash: int,
+        info: dict | None = None,
+        worker_frame_id: str | None = None,
+    ) -> None:
+        """主线程槽：接收截图结果，执行 dHash/频控并进入视觉请求。"""
+        if worker_frame_id and info and info.get("_gen") != self._generation:
+            self._release_worker_frame(worker_frame_id)
+            return  # A stale frame must not clear a newer pipeline's busy state.
+        keep_worker_busy = False
         try:
             info = info or {}
             eff = effective_proactive_config(self.cfg.get("proactive_screen", {}))
 
             # 代次/开关复核：截图派发后用户可能已关闭功能或窗口被隐藏（pause 翻转代次），
-            # 这类"迟到帧"一律丢弃，绝不再发请求。
+            # 这类“迟到帧”一律丢弃，绝不再发请求。
             if info.get("_gen") is not None and info["_gen"] != self._generation:
                 return
             if not eff["enabled"]:
@@ -490,7 +984,7 @@ class ProactiveScreenWatcher:
                     return
 
             # G6 严格频控门禁二次确认（原子判定+盖章，多开不互相踩冷却）
-            ok, reason = self.limiter.try_acquire()
+            ok, _ = self.limiter.try_acquire()
             if not ok:
                 return
 
@@ -502,7 +996,7 @@ class ProactiveScreenWatcher:
 
                 logging.info(
                     "主动识屏 [dry-run 模式]: 条件满足已触发! 前台: %s, 窗口: %s, dHash: %s",
-                    str(info.get("process", "")) or app_str.split(" | ")[0],  # 只记进程名，标题不落日志
+                    str(info.get("process", "")) or app_str.split(" | ")[0],
                     hwnd,
                     hex(cur_hash),
                 )
@@ -517,17 +1011,6 @@ class ProactiveScreenWatcher:
             if eff.get("pre_cue", True) and hasattr(self.win, "show_bubble"):
                 self.win.show_bubble("让我看看……", duration_ms=2500)
 
-            # 纯内存 JPEG bytes（严禁写临时文件）；worker 线程已完成编码，
-            # 直接调用（测试）传入 PIL Image 时在此兼容编码
-            if isinstance(img, (bytes, bytearray)):
-                jpeg_bytes = bytes(img)
-            else:
-                import io
-
-                buf = io.BytesIO()
-                img.convert("RGB").save(buf, "JPEG", quality=70)
-                jpeg_bytes = buf.getvalue()
-
             # 解析 Provider（手册 §6：免费优先策略）
             provider, system_prompt = self._resolve_vision_provider(eff)
 
@@ -538,17 +1021,64 @@ class ProactiveScreenWatcher:
             last_entry = self.memory.latest()
             memory_ctx = build_memory_context(last_entry, current_act) or ""
 
+            if worker_frame_id is not None:
+                adapter = self._worker_adapter
+                if adapter is None or not adapter.ready:
+                    return
+                from . import catalog
+
+                pet_name = self.cfg.character_display_name(str(self.cfg.get("character", catalog.DEFAULT_CHARACTER)))
+                request_id = adapter.analyze_frame(
+                    worker_frame_id,
+                    provider,
+                    system_prompt,
+                    generation=self._generation,
+                    memory_context=memory_ctx,
+                    pet_name=pet_name,
+                )
+                if request_id is None:
+                    return
+                self._active_worker_frame_id = worker_frame_id
+                self._active_worker_request_id = request_id
+                self._request_in_flight = True
+                keep_worker_busy = True
+                return
+
+            # 进程内兼容路径：纯内存 JPEG bytes（严禁写临时文件）。
+            # worker 线程已完成编码；测试传入 PIL Image 时在此兼容编码。
+            if isinstance(img, (bytes, bytearray)):
+                jpeg_bytes = bytes(img)
+            else:
+                import io
+
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, "JPEG", quality=70)
+                jpeg_bytes = buf.getvalue()
+
             import threading
 
             self._request_in_flight = True  # 请求完成前不再派新 pipeline
             threading.Thread(
                 target=self._worker_request_vision,
-                args=(jpeg_bytes, app_str, system_prompt, provider, memory_ctx, proc_name, win_title, current_act, self._generation),
+                args=(
+                    jpeg_bytes,
+                    app_str,
+                    system_prompt,
+                    provider,
+                    memory_ctx,
+                    proc_name,
+                    win_title,
+                    current_act,
+                    self._generation,
+                ),
                 daemon=True,
                 name="proactive-vision-requester",
             ).start()
         finally:
-            self._worker_busy = False
+            if worker_frame_id is not None and not keep_worker_busy:
+                self._release_worker_frame(worker_frame_id)
+            if not keep_worker_busy:
+                self._worker_busy = False
 
     def _on_reply_synced(self, user_text: str, reply: str) -> None:
         """主线程槽：把主动识屏回复全文转发给 app 层同步进 AI 对话会话。

@@ -77,7 +77,7 @@ class WindowFeatureGateMixin:
         if self.proactive_watcher is None:
             from .proactive import ProactiveScreenWatcher
 
-            self.proactive_watcher = ProactiveScreenWatcher(self, self.cfg)
+            self.proactive_watcher = ProactiveScreenWatcher(self, self.cfg, worker_mode="auto")
         return self.proactive_watcher
 
     def _ensure_agent_link_manager(self):

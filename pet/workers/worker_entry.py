@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 
-_WORKERS = {"agent-link-events"}
+_WORKERS = {"agent-link-events", "proactive-screen"}
 
 
 def main(worker_id: str | None = None, argv: Sequence[str] | None = None) -> int:
@@ -19,6 +19,10 @@ def main(worker_id: str | None = None, argv: Sequence[str] | None = None) -> int
         from .agent_link_worker import run_agent_link_worker
 
         return run_agent_link_worker()
+    if selected == "proactive-screen":
+        from .proactive_screen_worker import run_proactive_screen_worker
+
+        return run_proactive_screen_worker()
     return 2
 
 

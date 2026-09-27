@@ -328,7 +328,7 @@ class SharedProactiveWatcher(ProactiveScreenWatcher):
     """
 
     def __init__(self, proxy: MultiWindowProxy, config) -> None:
-        super().__init__(proxy, config)
+        super().__init__(proxy, config, worker_mode="auto")
 
     def pause(self) -> None:
         pass
@@ -337,7 +337,10 @@ class SharedProactiveWatcher(ProactiveScreenWatcher):
         pass
 
     def stop_all(self) -> None:
-        """进程级收口：停掉共享定时器并作废在飞任务。"""
+        """进程级收口：停掉共享 Worker、定时器并作废在飞任务。"""
+        if self._worker_adapter is not None:
+            self._cancel_worker_requests(notify_manual=True)
+            self._worker_adapter.stop()
         self._timer.stop()
         self._generation += 1
 

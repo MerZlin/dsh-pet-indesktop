@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+import uuid
 import weakref
 from collections import deque
 from typing import Any, Mapping, Sequence
@@ -28,6 +29,8 @@ class WorkerSupervisor(QObject):
 
     state_changed = Signal(str)
     message_received = Signal(object)
+    request_received = Signal(object)
+    response_received = Signal(object)
     ready = Signal()
     failed = Signal(str)
     diagnostic = Signal(str, object)
@@ -48,6 +51,7 @@ class WorkerSupervisor(QObject):
         *,
         program: str | None = None,
         arguments: Sequence[str] | None = None,
+        required_capabilities: Sequence[str] = (),
         handshake_timeout_ms: int = 5000,
         heartbeat_interval_ms: int = 5000,
         heartbeat_timeout_ms: int = 15000,
@@ -58,6 +62,7 @@ class WorkerSupervisor(QObject):
     ) -> None:
         super().__init__(parent)
         self.worker_id = str(worker_id)
+        self.required_capabilities = frozenset(required_capabilities)
         self.program, self.arguments = self._resolve_command(self.worker_id, program, arguments)
         self.handshake_timeout_ms = max(100, int(handshake_timeout_ms))
         self.heartbeat_interval_ms = max(250, int(heartbeat_interval_ms))
@@ -175,12 +180,25 @@ class WorkerSupervisor(QObject):
         if self._state in {self.STARTING, self.HANDSHAKING}:
             self._fail_current("handshake timeout")
 
-    def _send(self, message_type: str, payload: Mapping[str, Any] | None = None) -> bool:
+    def _send(
+        self,
+        message_type: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+    ) -> bool:
         process = self._process
         if process is None or process.state() != QProcess.ProcessState.Running:
             return False
         try:
-            data = encode_message(build_message(self.worker_id, message_type, dict(payload or {})))
+            data = encode_message(
+                build_message(
+                    self.worker_id,
+                    message_type,
+                    dict(payload or {}),
+                    request_id=request_id,
+                )
+            )
             written = process.write(data)
             if written < 0:
                 self._emit_diagnostic("write", {"reason": "QProcess.write returned -1"})
@@ -194,6 +212,58 @@ class WorkerSupervisor(QObject):
         body = dict(self._config)
         body["generation"] = self._generation
         return self._send("config_push", body)
+
+    def send_request(
+        self,
+        operation: str,
+        arguments: Mapping[str, Any] | None = None,
+        *,
+        generation: int | None = None,
+        request_id: str | None = None,
+    ) -> str | None:
+        """Send a request to a ready worker and return its request id.
+
+        ``generation`` belongs to the caller's logical task, not the
+        supervisor process generation.  It is therefore carried in the
+        payload and is intentionally not compared by the generic supervisor.
+        """
+        operation = str(operation).strip()
+        if not operation:
+            self._emit_diagnostic("request", {"reason": "operation is empty"})
+            return None
+        rid = str(request_id or uuid.uuid4().hex)
+        body: dict[str, Any] = {
+            "operation": operation,
+            "arguments": dict(arguments or {}),
+        }
+        if generation is not None:
+            body["generation"] = int(generation)
+        if not self._send("request", body, request_id=rid):
+            return None
+        return rid
+
+    def send_response(
+        self,
+        request_id: str,
+        operation: str,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        generation: int | None = None,
+    ) -> bool:
+        """Reply to a worker-originated request such as ``budget_check``."""
+        rid = str(request_id).strip()
+        op = str(operation).strip()
+        if not rid or not op:
+            self._emit_diagnostic("response", {"reason": "request_id and operation are required"})
+            return False
+        body: dict[str, Any] = dict(payload or {})
+        # ``operation`` is part of the response routing contract.  Do not let
+        # a payload field accidentally override the operation supplied by the
+        # caller.
+        body["operation"] = op
+        if generation is not None:
+            body.setdefault("generation", int(generation))
+        return self._send("response", body, request_id=rid)
 
     def stop(self) -> None:
         self._requested_stop = True
@@ -304,11 +374,22 @@ class WorkerSupervisor(QObject):
             if self._state not in {self.STARTING, self.HANDSHAKING}:
                 self._emit_diagnostic("lifecycle", {"reason": "hello received outside handshake"})
                 return
+            capabilities = payload.get("capabilities", [])
+            if self.required_capabilities and (
+                not isinstance(capabilities, list)
+                or not all(isinstance(item, str) for item in capabilities)
+                or not self.required_capabilities.issubset(capabilities)
+            ):
+                self._fail_current("worker capability mismatch")
+                return
             self._set_state(self.HANDSHAKING)
             if not self._send_config():
                 self._fail_current("failed to send config")
             return
         if message.type == "ready":
+            if self._state not in {self.HANDSHAKING, self.READY}:
+                self._emit_diagnostic("lifecycle", {"reason": "ready received outside handshake/configuration"})
+                return
             self._handshake_timer.stop()
             self._last_heartbeat = time.monotonic()
             self._accept_events = True
@@ -320,6 +401,15 @@ class WorkerSupervisor(QObject):
             return
         if message.type == "error":
             self._emit_diagnostic("worker_error", payload)
+        if message.type in {"request", "response"} and self._state != self.READY:
+            self._emit_diagnostic("lifecycle", {"reason": "RPC received outside ready state"})
+            return
+        if message.type == "request":
+            self.request_received.emit(message)
+            return
+        if message.type == "response":
+            self.response_received.emit(message)
+            return
         if message.type in {"event", "error", "heartbeat"}:
             self.message_received.emit(message)
             return
@@ -422,6 +512,50 @@ class WorkerSupervisor(QObject):
         except RuntimeError:
             # Qt may already have deleted the QObject through its parent.
             pass
+
+    @classmethod
+    def finish_app_shutdown(cls, timeout_ms: int = 4000) -> bool:
+        """Drain asynchronous shutdown after the main Qt loop, before destruction.
+
+        aboutToQuit alone cannot keep processing QProcess writes/finished or the
+        terminate/kill timers. This exit-only event loop preserves those signals
+        without blocking on a native process wait or extending normal UI work.
+        All workers share one bounded deadline, not one timeout per worker.
+        """
+        import shiboken6
+
+        supervisors = [item for item in _LIVE_SUPERVISORS if shiboken6.isValid(item)]
+        loop = QEventLoop()
+        deadline = QTimer()
+        deadline.setSingleShot(True)
+
+        def drained() -> bool:
+            return all(item.process is None or item.process.state() == QProcess.ProcessState.NotRunning for item in supervisors)
+
+        def check(_state: str = "") -> None:
+            if drained():
+                loop.quit()
+
+        deadline.timeout.connect(loop.quit)
+        for item in supervisors:
+            item.state_changed.connect(check)
+            if not item._requested_stop:
+                item.stop()
+        try:
+            if not drained():
+                deadline.start(max(1, int(timeout_ms)))
+                loop.exec()
+            complete = drained()
+            if not complete:
+                for item in supervisors:
+                    if item.process is not None and item.process.state() != QProcess.ProcessState.NotRunning:
+                        item._emit_diagnostic("app_shutdown_timeout", {"reason": "exit drain deadline exceeded"})
+                        item.process.kill()
+            return complete
+        finally:
+            deadline.stop()
+            for item in supervisors:
+                item.state_changed.disconnect(check)
 
     def wait_for_stopped_for_tests(self, timeout_ms: int = 2000) -> None:
         """Wait for this QProcess during test teardown only.

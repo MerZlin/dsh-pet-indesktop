@@ -2024,6 +2024,13 @@ class AppShell:
                         win.agent_link_manager.shutdown()
                     except Exception:
                         logging.exception("退出时关闭 Agent 失败")
+                watcher = getattr(win, "proactive_watcher", None)
+                if watcher is not None:
+                    try:
+                        # Shared watchers ignore per-window pause and stop once below.
+                        watcher.pause()
+                    except Exception:
+                        logging.exception("退出时关闭主动识屏失败")
                 # 各聊天窗当前会话提交保存（写盘 worker 将在下方永久关闭）
                 for _w in (inst.legacy_chat_window, inst.modern_chat_window, inst.quick_chat):
                     _session = getattr(_w, "session", None)
@@ -3583,7 +3590,14 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
             return 1
 
         logging.info("进入事件循环")
-        return app.exec()
+        try:
+            return app.exec()
+        finally:
+            # Keep QObject owners alive until asynchronous Worker shutdown has
+            # drained, including a quit immediately after the ready handshake.
+            from .workers.supervisor import WorkerSupervisor
+
+            WorkerSupervisor.finish_app_shutdown()
     finally:
         if slot_handle is not None:
             try:

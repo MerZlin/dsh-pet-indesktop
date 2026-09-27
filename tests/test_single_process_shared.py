@@ -695,6 +695,8 @@ def test_shared_watcher_tick_survives_idle_windows(tmp_path, app, monkeypatch):
     config.set("proactive_screen", {"enabled": True, "whitelist": ["*"]})
     proxy = MultiWindowProxy(_ProxyShell(config, [w1, w2]))
     watcher = SharedProactiveWatcher(proxy, config)
+    # Keep the original G1 regression on the supported in-process rollback path.
+    watcher.worker_mode = "in_process"
     try:
         from pet import vision
 
@@ -723,6 +725,8 @@ def test_flag_on_production_watcher_reads_proxy_sentinel(tmp_path, app, monkeypa
         assert shell._shared is not None, "flag 开必须实例化共享子系统"
         proxy = shell._shared.proxy
         watcher = shell._shared.proactive
+        # Worker routing has separate process-boundary coverage.
+        watcher.worker_mode = "in_process"
         assert watcher.win is proxy, "共享 watcher 的 win 必须是代理——G1 守卫就是通过它读聚合态"
 
         # 生产形态：真实装配出的 proxy，所有替身窗都不在物理模式
