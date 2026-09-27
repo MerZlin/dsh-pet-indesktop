@@ -1,160 +1,108 @@
-# v5 插件化 / DLC 总路线图
+# v5 插件化 / DLC 重建路线图
 
-> **基线日期：2026-09-25**
+> **修订：2026-09-27。方向：稳定 Core + 官方资源 DLC + 必做的官方功能选装 + 按风险隔离的 Worker。**
 >
-> 本文是 v5 插件化重建的总入口。路线已经根据当前代码、Phase 1–3 的实际进度以及外部架构评估重新收敛。它不把“完整第三方插件生态”视为默认目标，而是优先保证稳定 Core、官方资源 DLC、官方低风险功能和高风险能力的进程隔离。
+> 功能归属以[功能交付总表](PLUGIN-FEATURE-DELIVERY-MATRIX.md)为唯一清单；用户决策见[中期 grill](../grill-2026-09-27-插件化中期对齐.md)，项目边界见 [SPEC](../../SPEC.md)，返回[文档索引](../INDEX.md)。本文规定先后顺序，不是安装体验已经完成的声明。
 
-## 1. 路线结论
+## 1. 目标、非目标与衡量方式
 
-目标不是把现有 Python 模块机械地一对一搬成插件，而是建立清晰的运行边界：
+两条线并行推进：
 
-1. **稳定 Core**：窗口、动画、基础交互、配置、生命周期、更新、故障诊断。
-2. **Core Host Ports**：Core 向功能提供受限的气泡、通知、语音、调度、命令和内容服务端口。
-3. **Content DLC**：角色、动画、台词、音效和主题等不包含可执行代码的内容包。
-4. **Official In-process Features**：低风险、无网络、受限的官方功能插件。
-5. **Worker Features**：网络、截图、AI、Agent、外部程序等高风险或持续阻塞能力。
-6. **Conditional Distribution / Ecosystem**：只有实际需要远程发布或社区生态时，才启用分发适配和第三方 SDK。
+1. **运行边界**：降低耦合，隔离网络/截图/外部工具故障；保留 Phase 1–3 的渐进实现和兼容入口。
+2. **可拔除交付**：最小 Core 不携带所拆功能的专属实现/资源/依赖，用户可选安装、停用、应用内卸载和重装。
 
-这六层分别回答不同问题：
+官方选装是硬目标，不再归入“有需要才做的生态”。先用屏幕理解验证完整闭环，再以 AI 对话与文件理解为下一项主要拆包目标。第三方 SDK、Workshop、社区目录及复杂远程分发才是条件项目。
 
-| 层 | 负责 | 不负责 |
+不以文件拆分数、Worker 数量、隐藏菜单或功能开关证明物理卸载；不重写全部架构，不改变现有公共入口和用户数据，除非具体实施方案先得到确认。当前文档修订不改代码、不移动历史证据，也不新增长期 soak test。
+
+## 2. 两个维度：运行位置与交付所有者
+
+| 层 | 职责 | 交付原则 |
 |---|---|---|
-| Core Kernel | “桌宠能否启动、显示、移动和退出” | AI、网络、角色内容策略 |
-| Host Ports | “插件如何请求 Core 提供的能力” | 暴露 `PetApp`、`PetWindow` 私有对象 |
-| Content DLC | “桌宠显示什么内容” | 执行 Python、启动进程、访问网络 |
-| In-process Feature | “Core 内如何运行低风险策略” | 未声明能力、密钥和外部程序 |
-| Worker Feature | “高风险任务在哪里执行” | 直接修改 Core 状态或 UI |
-| Distribution / Ecosystem | “内容如何发布、安装和维护” | 成为 Core 启动的硬依赖 |
+| Core Kernel | 生命周期、窗口、动画、基础交互/物理、多实例、配置/平台与最小 fallback | 无可选包也能离线启动 |
+| Core Host Ports | 通用气泡/通知/音频/调度、命令/设置宿主、内容 provider、权限/安装与 Worker 宿主 | 保留通用能力，不回收各业务策略 |
+| Content DLC | 完整角色、主题、台词/人格、预录音效、节日素材 | 数据包，不执行代码；现有完整闭环主要是角色 |
+| Official Features | 低风险策略、专属 UI、配置、会话和适配器 | 可以在 GUI 主进程运行，但随所属官方功能包交付 |
+| Worker Features | 截图、视觉/AI 请求、Agent 采集、外部执行等高风险任务 | 独立进程与 Core 通过受控协议连接；是否独立包另验收 |
+| Distribution / Ecosystem | Setup/ZIP 官方选装与未来外部来源/SDK | 官方本地交付必做，第三方及复杂平台条件启用 |
 
-## 2. 长期边界判断
+同一可执行文件 + QProcess 已带来进程隔离，但**不会自动缩小 PyInstaller 产物**。独立构建、导入图、共享依赖与包文件清单必须另作审计。Core 掌握授权和宿主状态；功能策略的运行权威留在主进程不等于该策略永远属于 Core 安装包。
 
-每个新功能进入路线前，至少通过四个问题：
+## 3. 四项长期判断与状态词汇
 
-- **拔掉测试**：拔掉该功能后，Core 是否仍能启动、移动、显示并完成退出？如果不能，它不是可选插件，而是 Core 依赖。
-- **溺水测试**：网络、外部进程或 Worker 崩溃时，桌宠是否仍能操作？如果不能，必须继续下沉到 Worker 或增加故障隔离。
-- **换皮测试**：替换角色和主题时，行为策略、配置和 Core 是否保持不变？如果不能，说明内容与运行时仍然耦合。
-- **离线测试**：断网时，基础桌宠、资源 DLC 和低风险官方功能是否仍然可用？网络功能必须降级而不是阻塞启动。
+- **拔掉测试**：没装/卸载功能后，Core 和其他独立功能仍可用；入口、文件和任务都消失。
+- **溺水测试**：功能崩溃、网络超时、事件洪峰不拖垮 Core，重启/降级有界。
+- **换皮测试**：更换角色/资源不要求改业务代码；资源损坏有上一版本、Starter、legacy、Core fallback。
+- **离线测试**：无网络仍能运行基础桌宠及离线功能，远程服务失败明确诊断。
 
-这些测试比“有几个插件文件”更能判断拆分是否正确。
+“已完成基线”指有实现及对应证据，不等于发布验收全过；“实施中/计划中”指仍有待交付门；“条件启用”只用于非硬目标；“发布前验收”是必须核对的交付门。已完成自动化、用户手测、打包实测和三平台验收分列，不互相替代。
 
-## 3. 依赖方向
+## 4. Phase 1–7 的职责与出口
 
-稳定方向是：
-
-```text
-Core Kernel
-  └─> Host Ports / Event Bus / Config Boundary
-        ├─> Content Provider ──> Content DLC
-        ├─> Official In-process Feature
-        └─> Worker Supervisor ──> Worker Process
-                                      └─> agent-event/v1 等业务语义
-```
-
-约束：
-
-- Content、Feature Plugin 和 Worker 不反向导入 `PetWindow`、`AppShell` 私有字段或全局 `Config.data`。
-- `pet-worker/v1` 是 Worker 生命周期控制协议；`agent-event/v1` 是 Agent 业务事件语义，二者不混为一套传输协议。
-- DSH bridge 的文件 tail、WebSocket、外部工具和安装细节不自动升级为通用 Worker 协议。
-- “同一可执行文件 + `QProcess`”解决进程故障隔离和部署复杂度问题，但**不会自动减小 PyInstaller 包体**；包体变化必须由独立的 import/dependency audit 证明。
-
-## 4. 阶段状态与路线
-
-状态词汇固定为：`已完成基线`、`实施中`、`计划中`、`条件启用`、`发布前验收`。
-
-| 阶段 | 当前状态 | 目标与出口 |
+| 阶段 | 当前定位 | 必交结果与进入/出口 |
 |---|---|---|
-| Phase 1 | **已完成基线** | Resource DLC 的 Registry、Starter DLC、本地目录/ZIP 安装、校验、激活、回滚和 legacy fallback；远程发布、强制签名和第三方 SDK仍未完成。 |
-| Phase 2 | **已完成基线** | Core 插件运行时、受限 `PluginContext`、Event Bus、配置命名空间和官方节日提醒插件；当前进入 API 冻结和边界验证，不承诺第三方 SDK或包体瘦身。 |
-| Phase 3A | **实施中** | Agent Link 事件采集 Worker 稳定、QProcess 生命周期、fallback、冻结程序 smoke、父子进程清理、背压和性能基线。 |
-| Phase 3B | **计划中** | Phase 3A 满足稳定性门后，再隔离主动识屏的截图、dHash、视觉请求和网络响应解析。 |
-| Phase 3C | **计划中** | 余额、歌词、文件解释、外部播放器等能力逐项评估，不承诺全部迁移。 |
-| Phase 4 | **计划中 / 条件启用** | 本地 DLC 事务作为必须保持的底座；远程 catalog、镜像、签名、自动检查和管理 UI 只有需要远程发布时启用。 |
-| Phase 5 | **条件启用** | 本地目录/ZIP 始终支持；GitHub Release、CDN、Workshop 只在有实际分发需求时接入。 |
-| Phase 6 | **条件启用** | 先开放 content 文档和示例；只有签名、权限、兼容矩阵和维护能力成熟后，才评估第三方 Worker SDK。 |
-| Phase 7 | **发布前验收** | 三平台启动、目录权限、Worker、Starter DLC、升级/回滚、包体/启动/RSS/CPU/下载体积和故障恢复的最终发布门。 |
+| [Phase 1](../plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md) | 已完成角色资源基线 | ContentManager、CharacterRegistry、Starter、目录/ZIP、校验/激活/回滚与 legacy fallback；其他资源类型、可执行包不冒充完成 |
+| [Phase 2](../plugin-phase-02-runtime/README.md) | 官方运行时基线；扩展合同待落地 | Registry/Context/事件/配置/capability/节日提醒；后续补包所有权和菜单/设置/快捷键贡献生命周期，不开放任意 Python |
+| [Phase 3A](../plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | Agent Link 采集 Worker 已封存 | 沿用稳定性报告，不改写历史证据；不等于完整 Agent 功能已外置 |
+| [Phase 3B](../plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | 自动/手动识屏已有实现与本地证据，用户报告手测正常 | 保留隔离/权限/取消/回退边界；当前是内置 Worker，不是安装/卸载或三平台验收完成 |
+| Phase 3C | 按风险评估 | 逐项审查其他网络/外部能力的隔离收益；不要求全部先变 Worker，不阻塞选装样板 |
+| [Phase 4A](../plugin-phase-04-updates/README.md) | 下一步计划 | 屏幕理解代码/依赖/UI/配置/fallback 所有权、可信受控加载与独立构建审计；明确包设计，拿出最小 Core 不含专属实现的证据 |
+| Phase 4B | 必做样板 | 本地安装、启用、菜单/设置注册、应用内卸载、重装、升级/回滚；扩展管理不等远程 catalog |
+| [Phase 5A](../plugin-phase-05-distribution/README.md) | 必做官方本地交付 | 小 Core Setup + 旁置本地包、ZIP 导入、显式便携，统一事务/权威状态，缺包不影响 Core 安装启动 |
+| Phase 5B | 必做官方功能推广 | 屏幕理解后优先 AI 对话与文件理解，随后 Agent 及其余领域；批次/合包经依赖审计，不再条件化是否交付 |
+| [Phase 6](../plugin-phase-06-ecosystem/README.md) | 条件启用 | content SDK、Worker SDK、社区生态与 Workshop 按需求；不作为官方功能包前置 |
+| [Phase 7](../plugin-phase-07-release/README.md) | 正式发布前必验 | 最小 Core、承诺的官方选装范围、三平台、数据迁移、升级/卸载/回滚、性能/故障；第三方未开放不阻塞 |
 
-## 5. Phase 1：资源型 DLC 基线
+Phase 4A/4B 可以与 Phase 3C 的边界评估并行，但不能跳过样板加载信任、数据和构建出口。Phase 5A 可提前设计分发流程，必须复用通过验收的功能包事务，不另造 Setup 专用安装真相。
 
-Phase 1 的结果是一个**可验证的资源闭环**，不是完整插件生态：
+## 5. AI 对话的明确位置
 
-- `CharacterRegistry` 统一已安装 DLC、Starter DLC、旧外部目录、legacy 资源和 Core fallback。
-- `ContentManager` 负责本地目录/ZIP 的 manifest、路径、Core/platform、SHA-256、staging、active/previous、回滚和自检。
-- `content` DLC 不含执行入口；`entrypoint` 必须为空。
-- `assets/characters` 兼容路径在迁移验证前不得删除。
+- 在屏幕理解样板期间，并行准备 AI 的 import/依赖、UI、会话/附件、keyring、角色/实例数据和构建审计；不同时进行两套大重写。
+- 样板闭环稳定后，AI 对话与文件理解进入主要拆包实施，再推广 Agent 和总表其余领域。
+- Chat QWidget 暂不强制成为独立 Qt 进程；专属 UI/设置/会话策略归 AI 包。当前 QThread 请求不算独立进程，Provider/网络执行需单独评估 Worker。
+- AI 不依赖灵动岛/识屏；屏幕理解可以单独配置视觉服务；安装 AI 不默认授权截图。共用模型协议不等于完整 AI 实现回到 Core。
+- 仅覆盖当前支持的文本/代码等文件理解与附件，不承诺通用 PDF/二进制解析；与不触碰真实文件的模拟投喂分开。
 
-重新开始时从 `ContentManager + CharacterRegistry + fallback` 边界恢复，不回退整个 Core。
+## 6. 横向审计与统一合同
 
-## 6. Phase 2：Core 插件运行时基线
+每阶段都维护以下证据，不能靠“先拆出去再说”跳过：
 
-Phase 2 的职责是把官方低风险能力接入稳定边界：
+1. **构建/依赖**：PyInstaller import 图、专属与真共享依赖、最小 Core 和各包清单/下载及安装体积。
+2. **依赖方向**：Content 无代码；功能通过 Host Ports；Worker 不导入 GUI/全局 Config；GUI 侧功能文件不因运行位置错误归入 Core。
+3. **迁移与恢复**：先备份、验证、保留 legacy，失败可恢复且可重复；角色/实例/会话隔离；卸载默认保留数据。
+4. **UI 贡献**：菜单/设置/搜索/命令/快捷键按包所有者注册撤销；停用不执行；打开设置不截图/联网；保留排序偏好。
+5. **权限与可信执行**：本地 ZIP 也须先建立发布者信任、完整性和兼容性；SHA-256 不等于身份认证。未知代码不可执行。
+6. **退出与卸载**：多实例停止任务、撤销贡献再移除文件；占用显示待重启。fallback 只用于仍安装、启用且授权的功能，不可在卸载后恢复隐藏实现。
+7. **凭据与 Worker**：`config_push` 无敏感快照；Core 安全存储可授权单次请求临时凭据，不写日志/磁盘，Worker 不直接读 keyring。
 
-- `PluginRegistry` 使用显式 allowlist/factory；不执行未知 Python `entrypoint`。
-- `PluginContext` 只提供 `PresentationPort`、`SchedulerPort`、`CommandRegistry`、`ContentProvider`、配置、事件和结构化日志。
-- 插件配置放在 `plugins.<plugin_id>` 命名空间，旧扁平字段通过兼容适配逐步迁移。
-- 插件故障不得阻塞 Core；停用时必须清理事件订阅、命令和定时器。
-- 官方节日提醒作为 API 验证插件；关闭它不应影响基础桌宠交互。
+合同归口：[API 与贡献](../plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md)、[迁移](../plugin-phase-01-foundation/PLUGIN-MIGRATION-v4-to-v5.md)、[事务](../plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md)、[分发](../plugin-phase-05-distribution/README.md)。不在每阶段复制不同规则。
 
-Phase 2 失败时：保留 Phase 1，禁用官方 in-process 插件，只恢复最小 `PluginContext / Config / EventBus` 接口后重新验证。
+## 7. 统一交付门与失败重启
 
-## 7. Phase 3：Worker 优先与横向支线
+每个官方功能均需证明：
 
-Phase 3 不是“把所有功能都拆出去”，而是先处理最容易阻塞或拖垮 Core 的能力。
+> **不安装也能启动 Core → 安装后入口出现且可用 → 停用后不执行 → 卸载后文件与入口消失 → 重装恢复保留配置。**
 
-### 3.1 Phase 3A：Agent Link 事件采集
+外加离线、权限、专属依赖、多实例占用、升级失败回滚、Core 更新不重新装回卸载包以及实际包体/性能测试。文件被占用时允许待重启完成，但不能提前宣称已物理卸载。
 
-迁移文件 tail、原始记录解析、协议校验和语义规范化；Core 保留展示、对话、成本、bridge 安装和用户决策。实施顺序：
+| 失败点 | 有界恢复点 |
+|---|---|
+| Phase 1 | 从 ContentManager + CharacterRegistry + 资源 fallback 重新验证，保留 legacy 路径 |
+| Phase 2 | 保留 Phase 1，禁用官方插件，缩减到最小 Context/Config/EventBus 再验证 |
+| Phase 3A/3B | 在功能仍安装且授权的前提下使用 in_process/auto 回退；停用或卸载不回退 |
+| Phase 4 | 暂停样板激活或回滚旧包，不把专属实现偷偷补回 Core；保留角色安装闭环 |
+| Phase 5 | 保留已验收的本地导入/恢复，修复 Setup/便携/批次问题；未完成官方范围如实列为发布缺口 |
+| Phase 6 | 第三方保持关闭，不影响官方交付 |
+| Phase 7 | 暂停正式发布，保留可复现构建和回滚；不降级硬验收词义 |
 
-1. 收口 `pet-worker/v1`、QProcess 宿主和握手/心跳/关闭。
-2. 稳定 Agent Link Worker 与 `agent-event/v1` 转发。
-3. 完成 frozen executable smoke 和父子进程清理。
-4. 增加队列上限、背压、洪峰诊断和 stale generation 丢弃。
-5. 记录长时间 RSS、CPU、事件延迟、重启和日志增长。
-6. Windows 实机验收后独立封存，可随时切回 `in_process`。
+## 8. 后续计划写法与普通用户最终体验
 
-### 3.2 Phase 3B：主动识屏
+阶段计划必须分别写当前事实、待实现内容、证据门、回滚点，并用直白说明收尾。历史 PR、Phase 3A 封存报告保留原文，新发现写新证据，不倒写旧结论。
 
-只有 3A 稳定后才开始：Core 掌握是否允许、白名单、dwell、limiter、用户确认和记忆策略；Worker 执行前台窗口查询、截图、dHash、视觉请求和网络响应解析。
+最终你会得到：
 
-### 3.3 Phase 3C：逐项评估
-
-余额、歌词、文件解释、外部播放器、Harness 等能力按照崩溃风险、网络阻塞、权限/密钥、主进程耦合、常驻成本和可测试性逐项决定。
-
-### 3.4 三条横向支线
-
-Phase 3 同时建立但不急于重写：
-
-- **PyInstaller/import dependency audit**：验证 Worker 与 Core 实际包体、import 图和冻结程序边界；不能凭“独立进程”推断包体变小。
-- **依赖边界检查**：Core、Content、Feature Plugin、Worker 的反向导入和私有字段依赖必须可检测。
-- **配置迁移、备份和恢复**：迁移前备份、结果校验、legacy 保留、失败恢复和可重复执行必须成为跨阶段能力。
-
-## 8. Phase 4：DLC 更新中心
-
-Phase 1 已有本地安装事务；Phase 4 不重复造轮子，而是把它与更新中心、诊断和未来远程源衔接：
-
-- 必须保持 staging、路径安全、SHA-256、active/previous、原子激活、自检和自动回滚。
-- 只有需要远程发布时，才启用 catalog、多镜像、下载重试、签名强制校验、自动检查和管理 UI。
-- `pet/updater.py` / `pet/update_settings.py` 继续负责 Core 更新；DLC 更新不得写 Core 文件，Core 更新不得删除 DLC。
-
-## 9. Phase 5–7：条件闸门
-
-- **Phase 5** 不预先接入 Steam 依赖。Workshop 必须是独立 adapter，不能进入 Core 基础加载逻辑。
-- **Phase 6** 先开放 content 示例，再决定是否建设 SDK。不得开放任意第三方 Python 代码进入 Core 进程，也不承诺热卸载。
-- **Phase 7** 是发布门而非当前开发前置。三平台、签名、公钥轮换、兼容矩阵和 API 弃用策略在实际对外发布时强制执行。
-
-## 10. 当前非目标
-
-当前路线不做：
-
-- 立即把 Chat UI 拆成独立 Qt 进程；
-- 任意 Python 插件热卸载或未知 `entrypoint` 执行；
-- 以 Worker 迁移为理由重写 Core 自动更新协议；
-- 因为预留 Workshop 而提前引入 Steam SDK；
-- 以文档拆分数量代替行为、故障和恢复边界验证。
-
-## 11. 关联文档
-
-- Phase 1：[`../plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md`](../plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md)
-- Phase 1 API：[`../plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md`](../plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md)
-- Phase 2：[`../plugin-phase-02-runtime/README.md`](../plugin-phase-02-runtime/README.md)
-- Phase 3：[`../plugin-phase-03-worker/README.md`](../plugin-phase-03-worker/README.md)
-- Phase 4：[`../plugin-phase-04-updates/README.md`](../plugin-phase-04-updates/README.md)
+- 本体可单独离线运行；没装识屏/聊天，就没有它们的专属菜单、设置、文件和后台任务。
+- 先做屏幕理解可拔除样板，再重点拆 AI 对话，不会漏掉聊天；其余官方领域也必须逐批交付。
+- Setup 可以选旁置包，ZIP 用户可导入本地包，桌宠扩展管理里可停用、卸载和重装。正式文件布局、包 ID 与便携标记先经 Phase 4A/5A 设计验证，不现在凭空冻结。
+- 一个功能包可能有 GUI 主进程组件与 Worker，后者仍通过受控 stdin/stdout JSONL 连接 Core；运行位置不影响其包所有权。
+- **当前不是这些体验已可用**：已有资源 DLC 和内置 Worker 是基础，真正官方功能选装是接下来必须交付的工作；第三方/Workshop 可以不做。

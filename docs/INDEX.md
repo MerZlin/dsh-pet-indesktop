@@ -142,7 +142,7 @@
 | [`PR-REPORT-TEMPLATE.md`](PR-REPORT-TEMPLATE.md) | PR 报告模板：三份交付证据（修改文件说明 / 性能分析 / 实机运行记录）的逐节骨架与判定标准。 | **开新 PR 写报告前必读并整份复制**；2026-09-22 起三份证据是硬要求（`AGENTS.md` Delivery evidence discipline），由 `tests/test_pr_report_discipline.py` 机器化校验。 |
 | [PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md](PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md) | Phase 1 资源型 DLC 实现报告：manifest 校验、Starter DLC、Registry、目录/ZIP 安装、回滚、兼容性与验证结果。 | 改资源 DLC、角色 Registry、内容安装事务、Starter DLC 打包或需要核对本轮测试限制时。 |
 | [`PR-REPORT-PLUGIN-PHASE2-2026-09-24.md`](PR-REPORT-PLUGIN-PHASE2-2026-09-24.md) | Phase 2 Core 插件运行时实施报告：Registry、Context、EventBus、配置命名空间、capability、官方节日提醒插件、性能探针和验收限制。 | 改 Core 插件生命周期、官方 in-process 插件、插件配置隔离或准备进入 Phase 3 worker 迁移前。 |
-| [`PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md`](PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md) | Phase 3B 自动/手动识屏 Worker：实现、原测试、构建、性能与剩余验收。 | 修改识屏 IPC、凭据、共享窗口或退出行为前必读；不代表全部稳定性门通过。 |
+| [`PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md`](PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md) | Phase 3B 自动/手动识屏 Worker：边界、回归、冻结程序、性能与剩余验收。 | 修改识屏 IPC、凭据、共享窗口或退出行为前必读。 |
 | [`PR-REPORT-PLUGIN-PHASE3-2026-09-25.md`](PR-REPORT-PLUGIN-PHASE3-2026-09-25.md) | Phase 3A Worker 实施报告：JSONL 协议、QProcess 宿主、Agent Link 事件采集、崩溃恢复、fallback 和真实进程验证。 | 修改 Worker 生命周期、Agent Link 事件采集边界或进入主动识屏 Worker（Phase 3B）前必读。 |
 | [plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md](plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | Phase 3A 稳定性封存补充报告：Qt 组合测试隔离、真实 Core 优雅退出、冻结 Worker smoke、Windows 可见桌面和 S0–S8/R0 门状态。 | 进入 Phase 3B、复核 Worker 退出/打包证据或回滚 Phase 3A 时必读。 |
 | [`PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md`](PR-REPORT-ENGINEERING-NORMALIZATION-2026-09-24.md) | 工程规范化实施报告：测试分类与覆盖率基线、Ruff/mypy/pre-commit、统一检查入口、CI 质量/桌面矩阵和文档链接门禁。 | 修改测试分类、质量门、静态检查、CI 工作流、四大工程文档或一键验证入口时必读。 |
@@ -182,7 +182,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [`plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md`](plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | 主动/手动识屏的 Core/Worker 边界、request/response、额度、密钥和复建计划。 | 修改 Phase 3B 或回滚后重建前必读。 |
+| [`plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md`](plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | Core/Worker 双通道、request/response、额度、密钥、重建顺序和用户最终效果。 | 继续 Phase 3B 实现或失败后重建时必读；规划识屏选装交付另读中期对齐。 |
 | [`plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md`](plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md) | Phase 3 调研/设计稿：把 AI 聊天、Agent 联动、主动识屏等可关功能从主进程拆到独立进程/插件容器的成本与收益。 | 讨论"关闭即不加载"的内存天花板、或考虑把某功能移出主进程之前。 |
 | [`OPEN-SOURCE-HARNESS-RISK-RESEARCH.md`](OPEN-SOURCE-HARNESS-RISK-RESEARCH.md) | 开源 Harness 风险与轨迹设计调研：DSH / LangGraph / SWE-agent 的事件模型、身份、Action/Observation 对比与 Pet 采用结论。 | 设计或调整 Pet 侧的事件轨迹/风险聚合模型时；查"为什么保留 raw facts 而不派生风险"的结论来源。 |
 
@@ -226,41 +226,54 @@
 
 ## 插件化与 DLC 分阶段文档
 
-> 路线状态以 [`plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md`](plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md) 为准：稳定 Core 优先，Worker 优先，Phase 5–7 按实际发布需求条件启用。Phase 1/2 是已完成基线，Phase 3A 正在封存前验证。
+> 2026-09-27 现行路线：**运行解耦与真正可拔除交付并行；官方选装必做，第三方生态条件化。** Phase 1/2 保留实现基线，Phase 3A 保留封存证据；Phase 3B 的代码、本地自动化与用户“识屏手测正常”分别记录，不代表安装卸载或三平台验收完成。Phase 4/5 正文已按新目标修订，不再靠顶部补充覆盖旧的条件阶段表述。
 
-| 阶段 | 状态 | 目录 | 用途 |
+### 总入口与单一职责
+
+| 文档 | 一句话内容 | 何时必读 |
+|---|---|---|
+| [功能归属与交付总表](plugin-roadmap/PLUGIN-FEATURE-DELIVERY-MATRIX.md) | 唯一功能主表：Core、资源类型和 11 个官方逻辑领域的实现、运行/交付、UI、数据、依赖与可拔除标准；不等于 11 个安装包。 | 确认某功能归属、依赖、包内外边界或防止遗漏 AI 对话与文件理解时。 |
+| [v5 总路线图](plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md) | 阶段顺序、状态、出口、证据和失败重启点：屏幕理解样板之后重点拆 AI 对话。 | 规划下一阶段、调整优先级或判断交付完成度时。 |
+| [中期 grill 对齐](grill-2026-09-27-插件化中期对齐.md) | 保留 Q1–Q5 原决定，追加本轮功能归属与 AI 排期，区分用户确认、规划默认与待定产物。 | 追溯官方选装、Setup/ZIP、便携、菜单设置注册等要求为何确定时。 |
+
+### 阶段导航
+
+| 阶段 | 状态 | 目录 | 用途与出口 |
 |---|---|---|---|
-| 总路线 | 已完成基线 | [`plugin-roadmap/`](plugin-roadmap/) | 查看分层模型、阶段依赖、横向支线和重启点。 |
-| Phase 1 | 已完成基线 | [`plugin-phase-01-foundation/`](plugin-phase-01-foundation/) | 修改资源 DLC、manifest、ContentManager、fallback 或 v4→v5 迁移前必读。 |
-| Phase 2 | 已完成基线 / API 冻结 | [`plugin-phase-02-runtime/`](plugin-phase-02-runtime/) | 修改 PluginRegistry、PluginContext、EventBus、配置隔离或官方 in-process 插件前必读。 |
-| Phase 3 | 实施中 | [`plugin-phase-03-worker/`](plugin-phase-03-worker/) | 修改 Worker、QProcess、Agent Link 事件采集、主动识屏或高风险外部能力前必读。 |
-| Phase 4 | 计划中 / 条件启用 | [`plugin-phase-04-updates/`](plugin-phase-04-updates/) | 修改 DLC 本地事务、catalog、远程下载、签名、激活或回滚前必读。 |
-| Phase 5 | 条件启用 | [`plugin-phase-05-distribution/`](plugin-phase-05-distribution/) | 真正接入 GitHub、CDN、Workshop 或其他外部 DLC 来源前必读。 |
-| Phase 6 | 条件启用 | [`plugin-phase-06-ecosystem/`](plugin-phase-06-ecosystem/) | 开放 content/worker SDK、第三方签名发布或社区 catalog 前必读。 |
-| Phase 7 | 发布前验收 | [`plugin-phase-07-release/`](plugin-phase-07-release/) | 做三平台正式发布、包体/性能基线和签名运维前必读。 |
+| Phase 1 | 已完成角色资源基线 | [foundation](plugin-phase-01-foundation/) | 角色 Registry、ContentManager 与 fallback；不等于可执行功能包或所有资源类型完成。 |
+| Phase 2 | 已完成运行时基线 / 后续贡献合同待实施 | [runtime](plugin-phase-02-runtime/) | 官方 Context/EventBus/配置/生命周期；功能 UI 可在主进程运行但归功能包交付。 |
+| Phase 3A/3B/3C | 3A 已封存；3B 已实现待交付；3C 按风险规划 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
+| Phase 4A/4B | 计划中，必做 | [updates](plugin-phase-04-updates/) | 先冻结屏幕理解可信加载/独立构建，再完成本地安装卸载、贡献注册、重装回滚与最小管理。 |
+| Phase 5A/5B | 计划中，官方选装必做 | [distribution](plugin-phase-05-distribution/) | Setup 旁置包、ZIP/便携；AI 对话与文件理解为下一主要目标，随后 Agent 与其余领域。 |
+| Phase 6 | 条件启用 | [ecosystem](plugin-phase-06-ecosystem/) | 第三方内容/Worker SDK、社区生态；不是官方包交付的前置。 |
+| Phase 7 | 正式发布前验收 | [release](plugin-phase-07-release/) | 最小 Core、承诺选装范围、三平台、迁移装卸、性能与恢复；第三方未开放不阻塞。 |
 
-### Phase 1–3 详细文档
-
-| 文档 | 一句话内容 | 何时必读 |
-|---|---|---|
-| [`plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md`](plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md) | 资源 DLC、Core 原语、功能策略、fallback 和当前完成边界。 | 修改角色资源来源、安装回滚或 legacy 兼容前。 |
-| [`plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md`](plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md) | manifest、Content provider、PluginContext 预留边界和 Worker/业务事件协议分层。 | 新增接口、能力或跨进程消息前。 |
-| [`plugin-phase-01-foundation/PLUGIN-MIGRATION-v4-to-v5.md`](plugin-phase-01-foundation/PLUGIN-MIGRATION-v4-to-v5.md) | v4→v5 配置、资源、keyring、多实例和可恢复迁移合同。 | 修改配置 schema、实例数据或迁移逻辑前。 |
-| [`plugin-phase-02-runtime/README.md`](plugin-phase-02-runtime/README.md) | Phase 2 当前基线、API 冻结、失败重启点和未包含范围。 | 开始或交接 Core 插件运行时工作时。 |
-| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md) | Registry、Context、EventBus、capability、配置隔离和生命周期设计。 | 修改插件边界、服务端口或生命周期时。 |
-| [`plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md`](plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md) | 离线启动、配置恢复、停用清理、Content/Worker 边界和实机验收门。 | 增加 Phase 2 测试或审查验收证据时。 |
-| [`plugin-phase-03-worker/README.md`](plugin-phase-03-worker/README.md) | Phase 3A 当前实现状态、3B 进入条件和 3C 逐项评估原则。 | 迁移 Agent、视觉、网络或外部进程能力前。 |
-| [`plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md`](plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md) | `pet-worker/v1`、`agent-event/v1`、QProcess、fallback 和稳定性封存清单。 | 修改 Worker 协议、进程清理或 Agent Link source 时。 |
-
-### Phase 4–7 详细文档
+### Phase 1–3 现行合同与证据入口
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [`plugin-phase-04-updates/README.md`](plugin-phase-04-updates/README.md) | 本地 DLC 事务优先，远程 catalog/签名/管理 UI 条件启用。 | 设计 DLC 更新中心时。 |
-| [`plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md`](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | staging、active/previous、原子激活、回滚以及 Core/DLC 更新边界。 | 修改安装、更新、签名或回滚流程时。 |
-| [`plugin-phase-05-distribution/README.md`](plugin-phase-05-distribution/README.md) | 本地来源常驻支持，GitHub/CDN/Workshop 作为独立适配器。 | 真正接入外部 DLC 分发源时。 |
-| [`plugin-phase-06-ecosystem/README.md`](plugin-phase-06-ecosystem/README.md) | content 优先、Worker 后置、签名和权限成熟后再开放第三方生态。 | 设计 SDK、社区 catalog 或第三方发布时。 |
-| [`plugin-phase-07-release/README.md`](plugin-phase-07-release/README.md) | 三平台、性能、包体、故障恢复和签名的发布前门。 | 准备正式发布或跨平台验收时。 |
+| [Phase 1 架构](plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md) | 资源 DLC 的已实现边界、Core 原语/策略/内容区分，以及 legacy/fallback 恢复点。 | 修改角色来源、资源安装或审计功能是否真正离开 Core 前。 |
+| [插件 API 合同](plugin-phase-01-foundation/PLUGIN-API-CONTRACT.md) | 官方内部 API、资源/可执行包区分、UI 贡献状态表、Worker 控制/业务协议与临时凭据边界。 | 新增端口、manifest、菜单设置注册或 IPC 时；菜单/设置状态以本合同为准。 |
+| [v4→v5 迁移合同](plugin-phase-01-foundation/PLUGIN-MIGRATION-v4-to-v5.md) | 数据所有者、备份、幂等恢复、实例、会话、密钥和卸载默认保留数据。 | 改 schema、拆功能配置、设计便携或清除用户数据前。 |
+| [Phase 2 入口](plugin-phase-02-runtime/README.md) | 已完成运行时与尚未实现的贡献注册、物理拆包分开记录。 | 开始或交接官方插件运行时工作时。 |
+| [运行时设计](plugin-phase-02-runtime/PLUGIN-RUNTIME-DESIGN.md) | Registry/Context/EventBus、生命周期、依赖方向，以及后续 owner 贡献合同。 | 修改插件端口、GUI 生命周期、故障隔离或功能宿主时。 |
+| [运行时测试计划](plugin-phase-02-runtime/PLUGIN-RUNTIME-TEST-PLAN.md) | 当前行为回归与新增离线、迁移恢复、贡献清理、物理可拔除门分组验收。 | 设计插件/包状态测试、准备 Phase 4 验收时。 |
+| [Phase 3 入口](plugin-phase-03-worker/README.md) | 3A、3B 实现与证据状态、3C 风险评估及到可拔除交付的移交。 | 迁移网络/截图/Agent 执行、判断隔离是否已变成交付时。 |
+| [Worker 架构与阶段计划](plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md) | QProcess、`pet-worker/v1` 与 `agent-event/v1`、request/response、重启/fallback 和剩余边界。 | 修改 Worker 协议、进程清理、Source/Adapter 或评估其他能力时。 |
+| [Phase 3B 识屏设计](plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | 已有自动/手动数据流、单次凭据和 shared Worker；把 UI/策略/执行共同移交 Phase 4/5。 | 修改主动识屏、手动看屏幕、权限或构建拆包前。 |
+| [Phase 3A 稳定性收口](plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | 保留原稳定性验证证据，不按后续目标覆写原结论。 | 复查 3A 验收、异常退出或冻结 Worker 基线时。 |
+
+### Phase 4–7 实施与发布计划
+
+| 文档 | 一句话内容 | 何时必读 |
+|---|---|---|
+| [Phase 4 入口](plugin-phase-04-updates/README.md) | 4A 屏幕理解归属/可信加载/最小产物审计，4B 真实可拔除本地样板与最小扩展管理。 | 开始功能包设计或本地安装卸载实施前。 |
+| [安装与更新协议](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | 共用事务和权威状态、信任校验、原子激活、回滚、卸载/重装与 Core/DLC 更新隔离。 | 改 Setup/ZIP/应用内安装器、代码加载、文件占用或远程来源前。 |
+| [Phase 5 官方分发](plugin-phase-05-distribution/README.md) | 5A 小 Core Setup/旁置包和显式便携，5B AI 优先推广全部官方领域；远程适配按需。 | 设计安装向导、ZIP、便携、AI 拆包批次或其他官方包前。 |
+| [Phase 6 条件生态](plugin-phase-06-ecosystem/README.md) | 内容文档与 SDK、未来 Worker SDK/社区的进入门，禁止任意代码进入 Core。 | 评估第三方作者、签名发布或 Workshop 时。 |
+| [Phase 7 发布门](plugin-phase-07-release/README.md) | 最小 Core 与官方选装范围、三平台、配置恢复、真实卸载、性能与可信发布。 | 准备正式发布、确定承诺范围或补发布证据时。 |
+
+实现菜单与设置仍须阅读 [菜单结构研究](CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md)和[设置变更门](SETTINGS-CHANGE-GATES.md)；本轮不重新布局现有 UI。历史 PR 报告继续在“PR 报告存档”登记，不以计划正文代替交付证据。
 
 ## 在线更新与网络发布
 

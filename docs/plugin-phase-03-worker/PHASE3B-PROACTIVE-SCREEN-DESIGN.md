@@ -1,8 +1,8 @@
 # Phase 3B：主动识屏 Worker 边界、实现与复建计划
 
-> 代码基线：`9834612`；报告日期：2026-09-26。实现分支与逐次验证记录见实施报告。
-> 状态：实现与本地自动化通过，真实截图/模型/人工交互待验收；不等于正式发布或完整封存。最终证据以
-> [Phase 3B 实施报告](../PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md) 为准。
+> 实施起点：`9834612`；原报告日期：2026-09-26；本设计修订：2026-09-27。实现分支与逐次验证见原报告。
+> 状态：实现与本地自动化已有通过记录；用户随后反馈“识屏无误，手动测试没问题”。
+> [原实施报告](../PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md) 与 [用户对齐记录](../grill-2026-09-27-插件化中期对齐.md) 分别保留证据，不将手测扩写为跨平台、安装/卸载或全部发布验收。
 > 进入依据：[Phase 3A 稳定性收口](PHASE3A-STABILITY-CLOSEOUT.md)；
 > 上级路线：[Phase 3](README.md)、[v5 总路线](../plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md)。
 
@@ -15,12 +15,14 @@
 不实现 Worker DLC、远程安装、第三方代码、Chat UI 拆分、长期 soak；不修改 Core 自动更新。
 同一 EXE 隔离故障不等于缩小包体；本轮不承诺内存下降或发布体积下降。
 
-| Core 权威 | Worker 执行 | 不跨越的边界 |
+| GUI 主进程权威（运行位置） | Worker 执行 | 不跨越的边界 |
 |---|---|---|
 | 用户开关、白名单、dwell、idle、Agent Link 忙碌守卫 | 查询前台进程/窗口 | Worker 不决定是否打扰用户 |
 | 8 秒观察调度、每日额度、逐次网络尝试许可 | 截图、dHash、JPEG、视觉 HTTP 重试 | 自动重试每次向 Core 请求许可 |
 | 配置、keyring、请求 generation、结果有效性 | 单次凭据、单帧短期内存、受限任务 | 无 Config.data、keyring、Qt GUI、PetApp/PetWindow 导入 |
 | 气泡、动作、语音、记忆和同步 | 返回结构化结果/通用错误 | 不把 GUI 对象或完整会话传给 Worker |
+
+**运行位置不是交付归属。**本表中的识屏专属策略、设置/UI、adapter、记忆和 fallback 以后随屏幕理解功能包交付；Core 保留通用配置/授权、展示和进程宿主。当前内置拆边界不是物理卸载完成。包归属以 [功能总表](../plugin-roadmap/PLUGIN-FEATURE-DELIVERY-MATRIX.md) 为准。
 
 `PluginContext`/Phase 2 不新增第三方权限。capabilities 握手是官方实现的能力合同，
 不是 OS 沙箱；同用户进程仍具有该用户权限。真正不可信插件不在本轮支持范围内。
@@ -115,11 +117,13 @@ Supervisor 复用 Phase 3A 有限重启/退避。ready/RPC 仅在合法状态接
 Watcher 构造默认仍 in_process，以兼容旧调用方；正式窗口宿主和 shared 宿主显式
 传 auto。不把内部模式伪装成已经发布的用户设置。
 
+后续选装必须在这些模式之前检查安装、启用和授权状态；auto fallback 只能服务于仍获授权的已安装功能。卸载或停用不能被旧进程内路径绕过。这是 Phase 4A/4B 新验收项，不是当前已具备物理卸载状态的声明。
+
 ## 7. 文件边界与复建顺序
 
 ```text
 pet/
-  proactive.py                       Core 策略/limiter/记忆/旧 fallback
+  proactive.py                       主进程功能策略/limiter/记忆/旧 fallback
   window.py                          手动 UI 与结果展示
   window_optional_services.py        懒创建官方 Worker watcher
   multi_window_shared.py             进程级共享与停止
@@ -129,7 +133,7 @@ pet/
     protocol.py                      request/response 增量协议
     supervisor.py                    QProcess/能力握手/状态与退出
     worker_entry.py                  官方 allowlist
-    proactive_screen_adapter.py      Core RPC、路由、凭据筛选、超时
+    proactive_screen_adapter.py      主进程功能 RPC、路由、凭据筛选、超时
     proactive_screen_worker.py       无 Qt 执行、帧、网络、反向额度
 scripts/verify_phase3b_frozen_worker.py
 ```
@@ -141,7 +145,7 @@ scripts/verify_phase3b_frozen_worker.py
 3. 实现 adapter 与反向预算；先测拒绝/超时/取消/stale 响应。
 4. 接 Core 自动策略，再接手动公共入口与 shared 路由。
 5. 测真实 Core 退出、冻结程序、实际桌面和有界性能。
-6. 全量测试、静态检查、报告后才可封存；失败保留 legacy，不进入 Phase 3C。
+6. 全量测试、静态检查、报告后才可封存；失败暂停受影响的执行迁移并保留授权范围内的 fallback。官方选装的依赖审计可并行，但不能以故障路径交付样板。
 
 ## 8. 验证门与当前证据入口
 
@@ -173,6 +177,7 @@ PowerShell 不一定为原生程序展开文件通配符：专项 pytest 实际�
 - 自动识屏关闭后不再自动观察/截图；手动“看看屏幕”仍可按需启动一次 Worker。
   要完全不识屏，就关闭自动识屏且不使用手动入口；内部 disabled 可以同时禁用两者。
 - 它目前随主安装包提供，不是可复制到 content 目录安装的 DLC，没有单独的安装/卸载 UI。
-- 角色 DLC 目录不接收可执行 Worker。未来外部 Worker 分发只有在 Phase 6/7 的权限、签名、
-  版本事务达到条件后才设计，不能直接删除本轮源码来“卸载”。
+- 角色 DLC 目录不接收可执行 Worker。官方屏幕理解选装在 Phase 4/5 必须完成，不等待 Phase 6 第三方生态；包格式、可信加载、依赖形态和安装目录先在 Phase 4A/5A 验证，不能直接删除本轮源码来“卸载”。
+- 未来屏幕理解包包含自动/手动入口、专属策略/UI/适配器和 Worker。菜单、设置和快捷键按包注册与撤销；停用不执行，应用内卸载默认保留偏好，重装可恢复。当前这些安装体验尚未实现。
+- 屏幕理解可不安装 AI 对话，自行配置视觉服务；同步聊天是可选联动。AI 对话与文件理解是样板之后的下一项主要拆包目标，聊天安装不自动授予截图权限。
 - Worker 崩溃时 Core 保持可用并有限重启/回退；这不等于对恶意插件的安全沙箱。

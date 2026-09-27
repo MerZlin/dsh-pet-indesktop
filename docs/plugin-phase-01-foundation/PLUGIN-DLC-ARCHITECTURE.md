@@ -1,131 +1,86 @@
 # Phase 1：资源型 DLC 架构基线
 
-> **状态：已完成基线（2026-09-25）**
+> **修订：2026-09-27；状态：已完成角色资源基础闭环，不等于完整插件生态。**
 >
-> 本文描述资源 DLC 的边界和恢复方式。Phase 1 已完成资源型 DLC 的基础闭环，但不代表完整插件化架构、远程分发或第三方生态已经完成。
+> 阶段顺序见[总路线图](../plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md)，功能归属见[唯一交付总表](../plugin-roadmap/PLUGIN-FEATURE-DELIVERY-MATRIX.md)。本轮只修订合同，不改变已实现资源代码。返回[文档索引](../INDEX.md)。
 
 ## 1. 目标和非目标
 
-### 目标
+保留已有目标：Core 无可选 DLC 仍可显示最小桌宠、基础交互和退出；角色由 Registry 发现、ContentManager 安装/激活/升级/卸载/回滚；坏包不覆盖有效 active 或用户配置。
 
-- Core 在没有可选 DLC 时仍能启动、显示桌宠、完成基础交互和退出。
-- 角色内容可以由 Registry 发现，由 ContentManager 安装、激活、升级、卸载和回滚。
-- DLC 不覆盖 Core 文件，不直接修改用户 Core 配置。
-- 错误资源沿“上一版本 → Starter DLC → legacy → Core fallback”降级。
-- 为 Phase 2 官方功能插件和 Phase 3 Worker 提供稳定的内容 provider 边界。
+Phase 1 不执行 Python `entrypoint`，不把资源包当 Worker/功能插件，不实现第三方 SDK、远程 catalog 或 Workshop。现有 SHA-256/路径检查不是发布者身份认证；资源签名扩展点不等于签名发布体系已完成。后续可执行官方包即使来自本地 ZIP，也必须先完成受控加载和来源信任，不能沿用资源开发模式来放行代码。
 
-### 非目标
+`assets/characters` 双路径兼容在后续打包、迁移与用户验证完成前保留，不用未经验证的删除换取缩包。
 
-- 不执行任意 Python `entrypoint`。
-- 不把资源包当作功能插件或 Worker。
-- 不在 Phase 1 接入远程 catalog、Steam Workshop 或第三方 SDK。
-- 不强制实现发布签名；本地安装保留 SHA-256 和接口字段，远程可信发布再启用强制签名。
-- 不删除 `assets/characters` 兼容路径，不用一次迁移换取未经验证的包体缩减。
+## 2. 四类边界与两种交付
 
-## 2. 分层和边界
+- **内容**：动画、图片、台词/人格文本、预录音效、主题、节日素材、manifest。
+- **状态**：角色/位置/缩放等 Core 状态与各功能独立配置、启用状态、用户数据。
+- **展示原语**：气泡、动画请求、通知、音效通道属于 Core；功能专属 UI 不因此属于 Core 安装包。
+- **功能策略/执行**：提醒、聊天、识屏等不是角色资源；可由主进程官方组件与 Worker 合作，并由所属功能包交付。
 
 ```text
-Core Kernel
-  ├─ 窗口、动画、移动、交互、配置、生命周期、fallback
-  ├─ Content Provider / CharacterRegistry
-  └─ Host Ports（展示、调度、命令、事件）
-        ├─ Content DLC（只读资源，不执行代码）
-        ├─ Official In-process Feature（Phase 2）
-        └─ Worker Feature（Phase 3）
+Core Kernel + Host Ports + ContentProvider
+  ├─ CharacterRegistry / ContentManager → 数据型角色 DLC
+  ├─ 官方功能宿主 → 功能专属策略、UI、适配器（后续可选交付）
+  └─ Worker 宿主 → 独立进程（不自动等于独立安装包）
 ```
 
-必须区分：
+纯资源包只能被读取，不获得全局配置、GUI 私有对象、网络、密钥或进程执行权限。完整 Starter 是资源包；Core 只需最小 fallback，不因为角色默认选中就永久把全部素材放回 Core。
 
-- **内容**：视频、图片、台词、音效、主题和 manifest。
-- **状态**：当前角色、位置、缩放、启用状态、版本和配置。
-- **展示**：气泡、动画触发、通知和语音等 Core 原语。
-- **策略**：节日提醒、聊天、主动识屏等功能逻辑，不能塞进角色资源目录。
+## 3. 已完成的 Phase 1 基线
 
-资源 DLC 只描述“有什么内容以及如何兼容”，不获得 Core 对象、密钥、网络或进程权限。
+以[Phase 1 交付报告](../PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md)及现有测试为依据：
 
-## 3. Phase 1 已完成基线
+- `CharacterRegistry` 来源顺序：已安装 DLC → 仓库 `content/` Starter → 外部 `characters/` → `assets/characters` legacy → Core fallback。
+- `content/characters/shenshen/` Starter；本地目录和 ZIP 由 `ContentManager` 安装。
+- manifest、`kind=content`、版本/Core/platform、路径安全及逻辑内容 SHA-256 校验。
+- staging、多版本、active/previous、原子激活、自检与回滚；失败不破坏旧有效版本。
+- `catalog.list_available_characters()`、`resolve_character_video_dir()`、`load_character_manifest()`、身体/头部框接口继续兼容；调用者不直接拼安装路径。
+- 资源缺失/损坏有诊断与 fallback，不阻塞 Core 启动。
 
-已完成并由测试覆盖的边界：
+**完整闭环主要针对角色包。** 主题、台词、音效、节日等属于资源分类，但不能由此宣称这些独立包类型和所有管理 UI 已实现；可执行功能安装更不是本阶段成果。
 
-- `CharacterRegistry` 按以下顺序解析角色：
-  ```text
-  已安装 DLC
-  → content/ Starter DLC
-  → 外部 characters/ 目录
-  → assets/characters legacy
-  → Core fallback
-  ```
-- `content/characters/shenshen/` 作为官方 Starter DLC。
-- `ContentManager` 支持本地解压目录和 ZIP 来源。
-- manifest、`kind=content`、版本、Core/platform 兼容、路径安全和 SHA-256 校验。
-- staging、多个版本、active/previous、原子激活、激活后自检和回滚。
-- 旧 `catalog` 公共函数继续委托 Registry，`MovieLibrary` 和角色切换保持兼容。
-- 安装失败、资源缺失、视频损坏或当前版本失效时不阻塞 Core 启动。
-
-## 4. 资源包合同
+## 4. 资源目录与安全
 
 ```text
-content/
-  characters/
-    <character-id>/
-      manifest.json
-      videos/
-      phrases.json
-      sounds/
+仓库只读来源：content/characters/<character-id>/manifest.json + videos/...
+兼容来源：    assets/characters/<character-id>/...
+用户安装层：  <platform-data>/dsh-pet-standalone/content/
+                characters/<character-id>/versions/<version>/...
+                characters/<character-id>/active.json / previous.json
+                staging/  cache/  logs/
 ```
 
-manifest 至少包含 `id`、`name`、`version`、`kind`、`api_version`、`core_requires`、`platforms`、`dependencies`、`capabilities`、`entrypoint`、`content` 和 `integrity`。具体字段、拒绝规则和未来公开边界见 [`PLUGIN-API-CONTRACT.md`](PLUGIN-API-CONTRACT.md)。
+保持包内相对路径及大小写；角色 `body_box`、`head_box`、动作与移动参数归资源。用户安装不写回仓库来源，不覆盖 Core 可执行文件或配置。逻辑 SHA-256 对目录/ZIP 使用同一语义；拒绝绝对路径、`..`、符号链接与越界解压，验证声明资源存在。
 
-路径限制：ZIP 不得有绝对路径、`..`、符号链接或越界解压；角色 ID、版本和相对资源路径使用受限字符；manifest 声明的资源必须存在。
+具体字段和开发校验限制见 [API 合同](PLUGIN-API-CONTRACT.md)。未来官方可执行包另有 loader/信任及权限检查，不给 ContentManager 增加任意执行入口。
 
-## 5. Fallback 与诊断
+## 5. Fallback 与故障隔离
 
-DLC 出现 manifest 损坏、版本不兼容、路径非法、SHA-256 不匹配、动画缺失、视频不可读或激活自检失败时，Registry 必须返回结构化诊断：
+诊断至少保留 `plugin_id`、`version`、`failure_stage`、`reason`、`fallback_source`。坏 manifest、不兼容、hash 错误、动画缺失、视频不可读或激活自检失败时：
 
 ```text
-plugin_id
-version
-failure_stage
-reason
-fallback_source
+当前角色上一版本 → Starter DLC → legacy assets/characters → Core fallback
 ```
 
-fallback 顺序：
+卸载激活角色前转到可用版本/资源 fallback。资源 fallback 保证基础桌宠仍显示；**它不授权卸载识屏、聊天等功能后恢复隐藏实现**。功能停用/卸载后的行为按其安装状态和授权决定，不能套用角色容错规则。
 
-```text
-当前角色上一版本
-→ Starter DLC
-→ assets/characters legacy
-→ Core fallback
-```
+## 6. 后续阶段与重建起点
 
-失败版本不能覆盖当前 active 版本；卸载当前版本前必须先切换到其他可用版本或 fallback。`assets/characters/<id>` 在 Phase 1 后续兼容验证、打包审计和用户迁移完成前不得删除。
+- Phase 2 通过 ContentProvider 接入，不重复扫描；菜单/设置包所有权是后续合同，不倒写为已完成。
+- Phase 3 保留 Worker 运行隔离；非敏感 `config_push` 与获授权的单次请求临时凭据分开，Worker 不读取 Core Config/keyring。
+- Phase 4A/4B 审计并实现首个可拔除官方功能及本地扩展管理；借鉴既有事务，不把资源安装器改成代码加载器。
+- Phase 5 官方 Setup/ZIP 选装与 AI 等功能推广必做；Phase 6 第三方生态条件化；Phase 7 是发布门。
 
-## 6. 与后续阶段的关系
+失败重启：保留 **ContentManager + CharacterRegistry + 资源 fallback**，先禁用失败功能再验证资源发现、角色切换、配置隔离和离线启动，不回退整个 Core 或删除用户资源。
 
-- Phase 2 为官方 in-process 功能提供 `ContentProviderRegistry`，不重复实现资源扫描。
-- Phase 3 Worker 不直接读取全局配置或 UI 私有字段；Core 只向 Worker 推送筛选后的配置摘要。
-- Phase 4 将本地事务与远程 catalog、更新诊断和可选管理 UI 衔接，但不重复实现本地安装事务。
-- Phase 5–7 是否实施取决于分发需求和发布证据，不是 Phase 1 的隐含承诺。
+## 7. 尚未完成及验收要求
 
-## 7. 失败重启点
+远程 catalog、签名发布/公钥轮换、资源管理 UI、通用其他资源包类型、第三方 SDK 及完整跨平台实机/包体验收分别列为后续项。官方功能的本地管理不能等到远程分发或第三方生态。
 
-如果后续阶段失败，重新开始时保留本阶段的三个边界：
+重建本阶段时先跑资源专项与角色/启动回归，再核对无资源启动、目录/ZIP 等价校验、安装中断、升级失败回滚、非法路径和旧资源兼容；涉及打包/配置/生命周期的实现需全量回归。文档修订不能替代这些实现证据。
 
-```text
-ContentManager
-  + CharacterRegistry
-  + 上一版本 / Starter DLC / legacy / Core fallback
-```
+## 8. 你最终能看到什么
 
-先禁用失败的功能插件或 Worker，再重新验证资源发现、角色切换、配置隔离和 Core 离线启动，不回退整个 Core 或删除用户资源。
-
-## 8. 当前未完成项
-
-- 远程 DLC catalog、镜像和自动更新。
-- 发布环境的强制签名和公钥轮换。
-- 设置页中的 DLC 管理 UI。
-- 面向第三方的 SDK、兼容矩阵和发布目录。
-- 完整的跨平台实机资源权限和包体验收。
-
-这些项目属于后续阶段，不能反向改变 Phase 1 的资源安全边界。
+角色资源可以换、坏了可以回退，最小桌宠不会因为没装完整角色而无法启动。当前已有角色本地安装服务，但还不是“所有功能都可装卸”。以后聊天/识屏有各自功能包，可能含主进程组件和通过 IPC 连接的 Worker；它们不放进角色目录，也不因角色 fallback 自动装回来。具体功能包路径与安装体验由 Phase 4/5 落地。

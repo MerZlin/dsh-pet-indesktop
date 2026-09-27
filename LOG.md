@@ -2,6 +2,27 @@
 
 本文件只记录已经发生并完成验证的工程、架构和文档变更。路线规划请看 [`SPEC.md`](SPEC.md) 与 [`docs/plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md`](docs/plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md)；详细交付证据请看 [`docs/INDEX.md`](docs/INDEX.md) 中的 PR 报告。
 
+## 2026-09-27
+
+### 官方功能可选交付路线统一
+
+- 状态：本轮路线文档修订与文档门验证完成；没有实现新的安装、卸载或菜单体验。
+- 新增[功能交付总表](docs/plugin-roadmap/PLUGIN-FEATURE-DELIVERY-MATRIX.md)，登记 Core、资源和 11 个官方功能领域的主要归属、运行位置、依赖、入口、配置/数据及可拔除验收；11 个领域不是 11 个安装包或 Worker。
+- 修订总路线与 Phase 1–7 现行正文：保留资源/运行时和 Worker 基线，Phase 4A/4B 先交付屏幕理解可拔除样板，Phase 5A 完成 Setup/ZIP/显式便携选装，5B 以 AI 对话与文件理解为下一主要目标，再推进 Agent 及其余领域。第三方生态条件化，不再条件化官方选装。
+- 对齐菜单/设置/搜索/命令/快捷键按包注册与撤销、可执行包来源信任、统一安装状态、默认保留用户数据、迁移恢复、单次临时凭据及卸载不触发隐藏 fallback；补齐各阶段面向使用者的效果说明。
+- 修改范围共 21 份文档（新增 1 份、修改 20 份既有文档）；同步 SPEC、INDEX、grill 和日志索引。grill 的 Q1–Q5 决策表保持原文，新一轮功能与 AI 安排列为追加说明；不改写历史 PR 报告或稳定性封存证据。
+- 验证：`python -X utf8 scripts/check_docs.py` 通过（102 份 Markdown）；`python -m pytest -q tests/test_pr_report_discipline.py` 为 35 passed；`python -m pytest -q tests/test_desktop_pet_features.py -k product_copy_has_no_external_brand_reference` 为 1 passed、94 deselected；`git diff --check` 通过。纯文档修订未运行全量运行时测试、构建或新的 soak，不据此声明运行时全绿。
+- 保护检查：范围外基线文件的存在性与 SHA-256 全部一致，只新增允许的功能总表；无文件移动或删除。既有 Phase 3B 代码/测试/未跟踪文件、README、自动更新、演示 HTML 和历史证据均保留；HEAD 与暂存区哈希未变，未暂存、提交或推送。
+- 尚待实施：可信包格式/最终 ID、受控加载、Worker 产物与依赖归属、普通/便携目录和标记由 Phase 4A/5A 验证后确定；当前文档统一的是目标与验收合同，不是已交付的功能包。
+
+### 插件化中期 grill 对齐
+
+- 完成两轮讨论的决策记录：[中期对齐](docs/grill-2026-09-27-插件化中期对齐.md)。Q1 保留运行边界与可拔除交付双线；Q2 将官方选装设为硬目标；Q3–Q5 采用“屏幕理解”样板、Core Setup + 旁置本地官方包、ZIP 显式便携模式。
+- 一并记录正文共识：Worker 不等于 DLC、宿主侧功能代码也需审计归属、菜单/设置按包状态注册与撤销、卸载不得隐式 fallback、默认保留配置，以及第三方生态/Workshop 条件化边界。未冻结的包格式、路径、UI 布局和多实例卸载规则明确列为待设计。
+- 同步 `SPEC.md`、总路线图、`docs/INDEX.md` 和本日志索引的简短补充；保留旧阶段正文和已有工作树改动，不把目标写成实现状态。用户反馈识屏手动测试无误，单独标注为用户报告，不替代新增交付门。
+- 验证：`python -X utf8 scripts/check_docs.py` 通过（101 个 Markdown 文件）；报告纪律与产品文案边界检查共 `36 passed in 0.68s`；`git diff --check` 通过。24 个范围外既有改动文件及自动更新/HTML 共 3 个显式保护文件的 SHA-256 与本轮基线一致，HEAD 未变、暂存区为空。未运行全量测试或构建，因为本轮仅改变文档，未改变运行时、测试或打包逻辑。
+- 范围：仅文档记录；未提交、未推送，未修改自动更新、演示 HTML 或 Phase 3B 代码。下一步先设计可拔除样板的包与注册合同，再按确认后的计划实现。
+
 ## 2026-09-24
 
 ### Phase 2 Core 插件运行时封存

@@ -1,106 +1,74 @@
-# Phase 3：进程插件研究与实施基线
+# Phase 3：进程边界、迁移决策与复建依据
 
-> **状态：Phase 3A 已有实现，稳定性封存前（2026-09-25）**
->
-> 本文不再把 Phase 3 描述为纯研究。当前实现集中在 Agent Link 的“事件采集层”，不是把完整 `AgentLinkManager`、气泡、动作、对话、成本展示或 DSH bridge 全部移出主进程。
+> 修订：2026-09-27。本文是现行设计依据，不再是“纯研究”。3A 已有封存记录，3B 已实现并有本地验证与用户手测反馈；独立进程尚不等于独立安装包。
 
-## 1. 为什么先迁移事件采集
+## 1. 为什么先拆事件采集
 
-`pet/agent_link.py` 同时包含日志 tail、协议解析、事件规范化、Qt 定时器、桥接管理、气泡、动作、对话和成本展示。一次性拆出整个类风险过高。当前拆分只把文件读取、原始记录解析和 `agent-event/v1` 语义转换放进 Worker；Core 继续掌握用户可见策略和兼容入口。
+Agent Link 同时承载日志 tail、协议解析、规范化、桥接、Qt 定时器及展示。3A 只将文件读取、轮转/截断、原始记录解析与语义转换放到 Worker，保留公共入口和用户可见行为，避免一次重写整个 `AgentLinkManager`。
 
-主动识屏包含截图、前台窗口、dHash、视觉模型请求和限流策略，也不作为首个 Worker，必须等待 3A 稳定后再拆。
+自动识屏与手动识屏随后共用第二类 Worker，策略留在 GUI 主进程、截图及视觉请求放到子进程。保留主进程策略是状态权威选择，不是将功能永久绑定 Core 安装包的理由。
 
-## 2. 两个协议层
+## 2. 协议与启动边界
 
-### `pet-worker/v1`：Worker 控制协议
+同一可执行文件以 `--worker agent-link-events` 或 `--worker proactive-screen` 在 `pet.app` 导入之前分流。使用程序路径和参数数组，不拼 shell；Worker 不初始化 Qt GUI。Core 通过异步 `QProcess` 收发 stdin/stdout JSONL，不在 GUI 主循环阻塞等待。
 
-每行是一条 UTF-8 JSON：
+`pet-worker/v1` 的消息包含 protocol、worker_id、type、timestamp、payload，RPC 还必须带非空 request_id：
 
-```json
-{
-  "protocol": "pet-worker/v1",
-  "worker_id": "agent-link-events",
-  "type": "hello",
-  "request_id": "optional-id",
-  "timestamp": "2026-09-25T00:00:00Z",
-  "payload": {}
-}
-```
+- 控制与推送：hello、ready、config_push、event、error、heartbeat、shutdown。
+- Phase 3B 请求与响应：request、response，包含 operation、业务 generation 及结构化结果/错误。
+- JSONL 单行上限 64 KiB；非法 JSON、版本/身份/类型错误和过时代数不得冒泡到 Core。
 
-支持 `hello`、`ready`、`config_push`、`event`、`error`、`heartbeat`、`shutdown`。Core 通过异步 `QProcess` 的 stdout/stderr 和生命周期信号处理，不在 GUI 线程阻塞 `wait()`。
+`agent-event/v1` 独立定义 Agent 事件字段与语义，不把 DSH bridge 的文件 tail、WebSocket、hook 安装等变成通用 Worker 协议。进程 generation 与功能请求 generation 各自校验，不能混用。
 
-默认约束：握手 5 秒、心跳 5 秒、15 秒失联判定、优雅关闭等待 2 秒；60 秒内最多自动重启 3 次，退避 0.5/1/2 秒。每次重启增加 generation，旧 Worker 的迟到事件必须丢弃。
+默认生命周期参数：握手 5 秒、心跳 5 秒、15 秒失联判定、优雅关闭 2 秒；60 秒内最多重启 3 次，退避 0.5/1/2 秒。退出遵循停止生产者 → shutdown → 限时 terminate/kill；EOF 和父进程异常路径均需回归。实际实现与证据以相应设计/报告为准。
 
-### `agent-event/v1`：Agent 业务事件语义
+## 3. Phase 3A 已收口，不重新制造待办
 
-该层定义规范化 Agent 事件的字段和语义。它不规定 DSH bridge 的文件 tail、WebSocket、外部工具、安装或配置修改方式。不要把 bridge 的全部传输细节提升为通用 Worker 协议。
+[稳定性收口报告](PHASE3A-STABILITY-CLOSEOUT.md) 保存组合 Qt 测试、冻结 Worker、父子退出、队列/背压、事件一致性、fallback、有界性能和 Windows 验证的状态。原 PR 报告与收口报告不在本次修订中改写。
 
-## 3. 当前实现范围
+继续保留回归：事件顺序、轮转/截断、重启不重复消费、旧 generation 丢弃、限次重启、故障后单一来源 fallback、正常入口与冻结入口。已有有界样本沿用，用户已决定不追加长期 soak；不得再把“新增长时间运行测试”当作下一阶段前置条件。
 
-已具备：
+主进程暂保留 Agent Link 展示、prompt、桥接安装/卸载及设置兼容；未来这些专属部分归 Agent 功能包，账户余额归账户与用量，Core 仅提供通用宿主与用户确认能力。
 
-- Worker 入口分流，正常 `python -m pet`、`--settings` 和 `--uninstall-cleanup` 不改变。
-- Core 异步进程宿主和状态诊断。
-- hello/ready、配置摘要、heartbeat、event、error、shutdown。
-- Agent Link source：目录扫描、文件偏移、轮转/截断、边界解析、事件规范化。
-- Core 适配器：校验 Worker ID、协议和 generation 后转给现有 Agent Link 处理入口。
-- 崩溃检测、有限重启、fallback 到旧 in-process source。
-- 协议和真实子进程测试。
-
-## 4. 明确保留在 Core
-
-- `AgentLinkManager` 公共入口和设置兼容。
-- 气泡、动画、对话、成本和用户通知。
-- Qt 定时器、展示策略、prompt 交互和 DSH bridge 安装/卸载。
-- 用户开关、降级判断和 Core 状态权威。
-
-Worker 只读取允许的事件来源，不访问 `Config.data`、`PetApp`、`PetWindow`、keyring 或 secret。
-
-## 5. Phase 3A 待完成清单
-
-- [ ] frozen PyInstaller executable 能启动 Worker 并完成 smoke。
-- [ ] Core 退出、异常退出、terminate/kill 路径有父子进程树证据。
-- [ ] 队列上限、事件洪峰和背压策略冻结。
-- [ ] stale generation、重启后重复消费和 fallback 不重复监听通过长时测试。
-- [ ] 记录 RSS、CPU、事件延迟、重启耗时、文件读取频率和日志增长。
-- [ ] Windows 实机验证后形成独立 Phase 3A 封存记录。
-
-## 6. Phase 3B：主动识屏
-
-进入条件：3A 连续运行稳定、无重复事件和 stale generation 问题、退出清理和 Windows 实机记录完整、协议不再频繁变更。
-
-拆分边界：
+## 4. Phase 3B 当前边界
 
 ```text
-Core：开关、白名单、dwell、limiter、用户确认、记忆、展示
-Worker：前台窗口、截图、dHash、视觉请求、网络响应解析
+GUI 主进程：是否允许、白名单、dwell/idle、limiter、用户确认、记忆与展示
+Worker：前台信息、截图、dHash、视觉请求与响应解析
+本机管道：pet-worker/v1 request/response + heartbeat + 生命周期
 ```
 
-CI 使用 fake worker 和 mock 网络边界，不依赖真实截图、模型服务或用户桌面。
+自动流程先观察，由主进程批准才截图/分析；每次自动 HTTP 尝试反向申请 budget_check。手动请求单独授权、不计自动额度；shared 模式共用 Worker，结果路由到发起窗口。截图只保留有 TTL 的内存帧，不经 IPC 回传、不落盘。
 
-## 7. Phase 3C：逐项而不是整批迁移
+`config_push` 无密钥；Core 从安全存储取出选定的单次请求凭据临时下发，不传完整 Provider/Config/聊天数据库。Worker 无 keyring 或 Core 私有对象访问；完成后释放可控引用，但不承诺 Python 内存密码学擦除。网络期间保持控制循环与心跳，取消为协作式。
 
-余额、歌词、文件解释、外部播放器和 Harness 的后续决定必须记录：
+[3B 设计](PHASE3B-PROACTIVE-SCREEN-DESIGN.md) 保留准确上限和复建顺序；[实施报告](../PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md) 是原本地证据。用户 2026-09-27 对齐时已报告识屏手测正常，不将该反馈扩展成跨平台或独立安装验收。
 
-- 主进程是否被网络或外部程序阻塞；
-- 是否含密钥、权限或用户确认；
-- Worker 常驻成本和启动频率；
-- Core/Worker 之间的数据契约是否稳定；
-- 真实故障是否能被隔离和诊断。
+## 5. Phase 3C：逐项决定进程形态
 
-## 8. 测试与验收
+后续 AI/文件解释、余额、歌词、播放器、Harness 等按风险决定是否独立 Worker：
 
-协议测试覆盖缺字段、坏 JSON、未知类型、版本不兼容、超大消息、不可序列化 payload、事件语义和旧 generation。进程测试覆盖启动、握手、配置、心跳、超时、关闭、崩溃、重启、fault、非法输出、EOF 和 Core 退出。
+- 真实阻塞/崩溃风险与权限、秘密边界；
+- 与主进程数据、UI 的耦合以及可测试性；
+- 启动频率、常驻 RSS/CPU 和通信成本；
+- 能否保留行为、回滚和明确故障诊断。
 
-Phase 3A 出口：
+不是每项都需要一个 Worker，也不能等全部进程化才交付选装。官方功能是否可拔除是硬目标，进程数量不是成绩指标。完整归属见 [功能总表](../plugin-roadmap/PLUGIN-FEATURE-DELIVERY-MATRIX.md)。
 
-1. Worker 可承担 Agent Link 事件采集。
-2. Core 不因 Worker 崩溃退出，并可限次重启或 fallback。
-3. 控制协议和业务事件语义分离。
-4. 正常入口、设置入口、清理入口和自动更新文件不受影响。
-5. frozen smoke、父子清理、背压和长时基线完成。
-6. 旧 Agent Link 行为无新增失败，变更可单独回滚。
+## 6. 与 Phase 4/5 的交接
 
-## 9. 回滚
+Phase 4A 审计屏幕理解的策略、UI、adapter、vision、fallback、依赖与构建产物，决定受控官方包加载方案，证明最小 Core 不带专属实现。Phase 4B 实现安装/启用/撤销贡献/卸载/重装/升级/回滚。Phase 5A 完成 Setup 和 ZIP/便携交付，Phase 5B 优先 AI 对话与文件理解，再推广其余领域。
 
-运行模式切回 `in_process`，停止 Worker，保留旧 source，清理 generation 和 Worker 诊断。协议、宿主、Agent Link source 和 Core 适配分开提交；不使用 reset 覆盖用户改动，不删除旧监视代码直到稳定周期结束。
+AI Chat QWidget 不强制独立进程，但必须归 AI 功能包；QThread 不算 Worker。屏幕理解可以独立配置视觉服务，不依赖聊天；共同模型能力通过窄接口或显式依赖解决，不能把全套 AI 塞回 Core。第三方 SDK/Workshop 仍条件化，不阻塞官方选装。
+
+## 7. 验证、故障回退与复建
+
+协议用确定性单元测试，生命周期用真实 QProcess，Qt 使用 QApplication 和事件同步；外部截图/模型在 CI mock 边界，人工体验单独记录。冻结程序、退出、队列、秘密脱敏和实际产物必须有证据，不用源码 mock 替代。
+
+3A 出问题先回退已安装 Agent 功能的 in_process 来源；3B 出问题保留 3A，回退或禁用识屏执行路径。未来卸载/停用后禁止 fallback 复活；清理任务与贡献、协调实例和占用文件后再移除包。保留配置，破坏性清数据另行确认。
+
+## 8. 给使用者的效果说明
+
+当前 Worker 是 Core 管理的独立进程，通过本机管道连接，不是恶意代码沙箱，也还不是可以拷走的 DLC。现有文件在 `pet/workers/` 与功能适配路径中。未来官方包会包含功能自己的 UI、策略和 Worker，Core 只留下通用接口；具体安装目录和包格式在 Phase 4A/5A 定案。安装后入口出现，停用不工作，卸载后入口与专属文件移除，数据默认留下。屏幕理解先做成样板，AI 对话紧随其后，不等第三方生态。
+
+导航：[阶段入口](README.md) · [总路线](../plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md) · [Phase 4](../plugin-phase-04-updates/README.md)
