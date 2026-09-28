@@ -149,6 +149,9 @@
 | [`PR-REPORT-PERF-ISLAND-CONSOLIDATED-2026-09-23.md`](PR-REPORT-PERF-ISLAND-CONSOLIDATED-2026-09-23.md) | 流畅度/解码减负 + 岛远端硬墙 + 音效缓存 + 设置收口的 PR 报告：走路帧间补点（位置交付 28.6Hz→~160Hz）、碰撞 >50ms 卡顿 133→3、子宠进程补挂远端硬墙、零拷贝消融的诚实记录（崩溃案机理=绘制重入，未结案）。 | 改 `movement.move_anim_tick`/走路位移、webm 冷路径/首帧缓存/meta 后台化、岛碰撞远端模式与静态成员发布、音效候选缓存、或「多开」设置项时；排查 Qt6Gui 绘制重入崩溃时也要读（含消融对比与取证指针）。 |
 | [`PR-REPORT-ONLINE-UPDATE-2026-09-24.md`](PR-REPORT-ONLINE-UPDATE-2026-09-24.md) | 在线更新 PR 报告：多源 manifest、镜像回退、大小/SHA-256 校验、Windows Inno Setup 自动安装、设置页与版本显示。 | 改 `pet/updater.py`、更新设置页、发布 manifest 或安装器重启行为时。 |
 | [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md) | 发布后补丁报告（三个独立提交）：① issue #186 多显示器跨屏拖拽/抛掷恢复——#137 把落位统一钳进本屏，改成「一次交互一个多屏活动区域快照」（`DesktopArea` + `band_bounds` 防错位空洞）；② 托盘图标消失——首帧不再同步解码后 `icon_pixmap()` 为空，占位图标 + `frame_ready` 换角色头像；③ 右键菜单「鼠标穿透」去重（设置页 + 托盘保留）。 | 改窗口落位/钳制/抛掷边界（`pet/window_placement.py`、`_interaction_area` 快照生命周期）时；改托盘图标/`_build_tray` 时；或再遇「托盘图标不见了」「桌宠拖不到副屏」这类反馈时（含单屏不可复现的探针口径）。 |
+| [`PR-REPORT-QIET-MODE-DAILY-SUMMARY-2026-09-29.md`](PR-REPORT-QIET-MODE-DAILY-SUMMARY-2026-09-29.md) | 免打扰 + 今日汇总：菜单四档时长、普通提醒进暂存（上限 20）与结束汇报、审批/提问/错误一律穿透、全屏复用既有 `fullscreen_changed`；含纯逻辑实测数字与"配置链需 PySide6 才能复跑"的探针记录。 | 改气泡抑制闸门（`set_bubble_suppressed` / `show_alert`）、提醒排队与结算口径，或要给"提醒类"加第四种触发源时；也需要"三个抑制源互不覆盖"这条设计依据时。 |
+| [`PR-REPORT-WEATHER-2026-09-29.md`](PR-REPORT-WEATHER-2026-09-29.md) | 天气：中国天气网直连优先 + open-meteo 兜底、地名容错（"鹿城区"→"鹿城"）、多城市列表（当前城市排第一、上限 12）、后台取数 + 队列 + tick 冒泡、走入提醒队列因此天然兼容免打扰；含纯逻辑微基准与"沙箱禁网、接口未本机复测"的如实记录。 | 改 `pet/weather_source.py` 的解析/编排、`pet/weather_service.py` 的线程与队列、天气的菜单与设置入口时；也给"新增一个联网信息类功能该怎么做（纯逻辑 + 注入 HTTP 出口）"作范例时。 |
+| [`PR-REPORT-TEST-INFRA-TRUE-DESKTOP-2026-09-29.md`](PR-REPORT-TEST-INFRA-TRUE-DESKTOP-2026-09-29.md) | 真实桌面上 9 个测试失败的归因与修复（产品 0 改动）：假屏 1920×1200 装不下 309×259 的身体框导致贴边钳位（6+1 条）、#186 多屏快照绕过假屏、长文件名触发 Windows MAX_PATH、reader 线程抢跑。 | 再遇 `test_drag_move_coalescing` / `test_pet_interaction_locks` / 图片抽屉 / 会话门对照组在"自己机器上红、CI 绿"时；也给"测试假屏尺寸是隐式契约""异步断言要有界等待"作范例时。 |
 
 ---
 
@@ -162,6 +165,9 @@
 | [`CHANGELOG-DEV-SINCE-v4.1.0-2026-09-09.md`](CHANGELOG-DEV-SINCE-v4.1.0-2026-09-09.md) | 自 v4.1.0 以来开发版变更汇总：按合入顺序的主线演进表、性能线/结构线细节，含"实现后被回滚/取代"的口径说明。 | 需要逐 PR 粒度的开发期变更脉络、或核对"某功能是否真的上线"（第六节列了被取代项）时。 |
 | [`UPSTREAM-INTEGRATION-2026-08-26.md`](UPSTREAM-INTEGRATION-2026-08-26.md) | 上游合并与新版 UI 收敛记录：合并策略、维护边界（菜单/设置单一路径、两套聊天窗口互不覆盖）与 macOS 验收产物。 | 追溯"为什么只维护新版菜单/设置、经典聊天窗口为何保留"这类维护边界决策时。 |
 | [`OPTIMIZATION_CHECKLIST.md`](OPTIMIZATION_CHECKLIST.md) | 性能优化复核清单（自带「历史快照，请勿按现状逐条执行」警示；`--instance`/`PetApp` 已被 `--slot`/`AppShell` 取代）。 | 只作为"当时怎么做性能复核"的模板参考；**不要按现状逐条执行**。 |
+| [`AI-LESSONS-2026-09-29.md`](AI-LESSONS-2026-09-29.md) | AI 协作复盘：一次完整改造（免打扰 + 今日汇总 + 天气 + 修测试）里踩的 20 个坑，按网络 / 检出 / 契约 / 报告 / 归因 / 协作六类整理，含开工与提交前的可执行自检清单。 | **让 agent 动这个仓库之前**先过一遍（`AGENTS.md` 的「协作经验」五条是它的摘要）；自己踩了新坑就补进去，别让下一个人重踩。 |
+| [`RETRO-CADENCE.md`](RETRO-CADENCE.md) | 定期复盘的节奏、清单与自动化提示词：机器项跑 `scripts/retro_check.py`（生成物落点 / 文案红线 / 菜单中文标签 / 文档登记 / 行数预算），人那半是把重复出现的根因提炼成 `AGENTS.md` 的硬规矩并尽量配护栏。 | 要安排"每月复盘"或"发版前体检"时；也给"怎样把一条经验变成能被机器拦住的规则"作范例时。 |
+| [`PR-REPORT-REMAINING-FEATURES-2026-09-29.md`](PR-REPORT-REMAINING-FEATURES-2026-09-29.md) | 补齐四项功能的批量报告：回收内存（EmptyWorkingSet，ctypes）、定时提醒（每天/每周/每隔，槽位去重）、用久了提醒（前台 + 键鼠空闲冻结）、全局快捷键（RegisterHotKey + 原生事件过滤器）。含架构口径、节拍成本分级、"未跑 pytest（测试权归用户）"的如实说明与建议验证命令。 | 改这四个功能的规则/节拍/键位时；也适用于需要"照同一形状加一个定时/触发类功能"时（纯逻辑 + 服务壳 + 菜单/设置接线）。 |
 
 ---
 
