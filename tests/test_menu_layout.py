@@ -29,6 +29,11 @@ def test_modern_default_v1_has_compact_root_and_safety_actions():
         "agent_link",
         "proactive_screen",
         "todo_panel",
+        "memory_trim",
+        "timed_reminder",
+        "app_usage_toggle",
+        "hotkeys_toggle",
+        "rules_editor",
         "voice_chime_now",
         "voice_chime_toggle",
         "festival_now",
@@ -337,6 +342,11 @@ def test_missing_user_layout_resolves_versioned_default():
         "agent_link",
         "proactive_screen",
         "todo_panel",
+        "memory_trim",
+        "timed_reminder",
+        "app_usage_toggle",
+        "hotkeys_toggle",
+        "rules_editor",
         "voice_chime_now",
         "voice_chime_toggle",
         "festival_now",
@@ -368,6 +378,11 @@ def test_missing_user_layout_resolves_versioned_default():
         "agent_link",
         "proactive_screen",
         "todo_panel",
+        "memory_trim",
+        "timed_reminder",
+        "app_usage_toggle",
+        "hotkeys_toggle",
+        "rules_editor",
         "modern_settings",
         "quit",
     ]
@@ -536,6 +551,15 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
         expected_root.insert(-2, "待办提醒")
     else:
         expected_root.insert(-2, "待办提醒")
+    # 回收内存（2026-09-29 新增）：同样在「待办提醒」之后、「桌宠设置」之前
+    expected_root.insert(-2, "回收内存")
+    # 定时提醒（2026-09-29 新增）
+    expected_root.insert(-2, "定时提醒")
+    # 用久了提醒 / 全局快捷键（2026-09-29 新增）
+    expected_root.insert(-2, "用久了提醒")
+    expected_root.insert(-2, "全局快捷键")
+    # 编辑规则…（2026-09-29 新增：规则图形编辑器入口）
+    expected_root.insert(-2, "编辑规则…")
     # 报时/节日四项默认不在菜单上（模板 visible: false，2026-09-19 起）
     assert root == expected_root
     rendered = ["|" if action.isSeparator() else action.text() for action in menu.actions()]
@@ -552,6 +576,11 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     # tools 段顺序：… Agent 联动 [主动识屏] 待办提醒 | 桌宠设置 退出
     # （报时/节日四项默认 visible: false，不渲染）
     expected_rendered.insert(-3, "待办提醒")
+    expected_rendered.insert(-3, "回收内存")
+    expected_rendered.insert(-3, "定时提醒")
+    expected_rendered.insert(-3, "用久了提醒")
+    expected_rendered.insert(-3, "全局快捷键")
+    expected_rendered.insert(-3, "编辑规则…")
     assert rendered == expected_rendered
     pet_controls = next(action.menu() for action in menu.actions() if action.text() == "桌宠控制")
     assert [action.text() for action in pet_controls.actions() if not action.isSeparator()] == [

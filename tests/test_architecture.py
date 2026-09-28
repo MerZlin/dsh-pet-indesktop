@@ -202,7 +202,10 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 打包变体不再展示该死路开关（运行时回退在 pet/dynamic_island.py 的
 # chat_available）。实测 2357；按文件约定只随实测校准，不为达标压行。
 # 2026-09-24：新增独立更新页后仅保留导航/深链/版本页脚接线，更新页主体已拆到 pet/update_settings.py。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2383
+# 2026-09-29 上调到 2387（+4）：提醒与快捷键设置组——控件与 4 行都在
+# pet/settings_reminders.py（新控件组优先拆出），本文件只多 import、域装配一行、
+# 保存链一行与注释。实测 2387。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2387
 
 
 def _read(name: str) -> str:
