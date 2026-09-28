@@ -144,7 +144,9 @@ def ensure_started(host) -> None:
     """确保节拍器在跑（幂等）：开始免打扰、或启动全屏跟踪时调用。"""
     timer = getattr(host, _TIMER_ATTR, None)
     if timer is None:
-        timer = QTimer(host)
+        # 无主 QTimer：宿主可能是测试替身（不是 QObject），带 parent 会 TypeError；
+        # 引用挂在 host 属性上，生命周期与窗口一致（与本仓库既有服务同口径）。
+        timer = QTimer()
         timer.setInterval(TICK_INTERVAL_MS)
         timer.timeout.connect(lambda: tick(host))
         setattr(host, _TIMER_ATTR, timer)
