@@ -5,9 +5,10 @@ pet/config.py 里 __init__ 的默认值 dict（约 498-566 行）与 reload() �
 元组（约 656-691 行）是两份独立维护的键列表。本测试把现状文档化并加护栏：
 
 实测两集合**不一致**（现状文档化，不修产品代码）：
-- 默认值 dict 共 80 键；reload 白名单共 75 键。
-- 差异 = 默认值多出 4 键：{version, proactive_screen, agent_link, chat}。
-  这 4 键在 reload() 里走专门路径（version 末尾强制回写 4；
+- 默认值 dict 共 131 键；reload 白名单共 126 键（2026-09-29：天气 3 键
+  weather_enabled / weather_city / weather_city_list，两侧同步登记）。
+- 差异 = 默认值多出 5 键：{version, proactive_screen, agent_link, chat, file_interpret}。
+  这 5 键在 reload() 里走专门路径（version 末尾强制回写 4；
   proactive_screen / agent_link / chat 分别经 _merge_*_data 合并），
   不属于普通白名单键，故不并入白名单元组。
 
@@ -155,6 +156,9 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "voice_chime_custom_quotes_zh",
         "voice_chime_voice",
         "voice_chime_volume",
+        "weather_city",
+        "weather_city_list",
+        "weather_enabled",
     }
 )
 

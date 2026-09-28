@@ -70,6 +70,7 @@ ACTION_LABELS = {
     "check_update": "检查更新", "github_project": "GitHub 项目页",
     "quark_download": "夸克网盘下载", "agent_link": "Agent 联动",
     "proactive_screen": "主动识屏", "todo_panel": "待办提醒",
+    "weather": "查看天气", "weather_cities": "天气城市",
     "modern_settings": "桌宠设置", "quit": "退出",
 }
 
@@ -94,6 +95,7 @@ ACTION_ICONS = {
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
     "proactive_screen": "screen", "todo_panel": "todo",
+    "weather": "weather", "weather_cities": "weather",
     "modern_settings": "settings", "quit": "quit",
     "voice_chime_now": "chat", "voice_chime_toggle": "chat",
     "festival_now": "todo", "festival_toggle": "todo",
@@ -164,6 +166,52 @@ def _build_settings(menu, pet):
 def _build_todo_panel(menu, pet):
     return add_action(menu, "待办提醒", "todo", pet.on_open_todo_panel, close_on_trigger=True)
 
+
+def _build_weather(menu, pet):
+    """查看天气（当前城市）；没配城市时先弹一句设置引导。"""
+    from .. import weather_service
+
+    return add_action(
+        menu, "查看天气", "weather",
+        lambda: weather_service.show_weather(pet),
+        close_on_trigger=True,
+    )
+
+
+def _build_weather_cities(menu, pet):
+    """天气城市：当前城市打勾、点一下即切换；另有搜索/手填/删除三条。"""
+    from .. import weather_service
+
+    def switch(city: str) -> None:
+        weather_service.set_city(pet, city)
+        weather_service.request(pet, city)
+
+    submenu = add_submenu(menu, "天气城市", "weather")
+    current = weather_service.current_city(pet)
+    for city in weather_service.cities(pet):
+        action = add_action(
+            submenu, city, "weather", lambda city=city: switch(city),
+            close_on_trigger=True,
+        )
+        action.setCheckable(True)
+        action.setChecked(city == current)
+    submenu.addSeparator()
+    add_action(
+        submenu, "添加城市（联网搜索）…", "search",
+        lambda: weather_service.prompt_search_city(pet),
+        close_on_trigger=True,
+    )
+    add_action(
+        submenu, "手动输入城市…", "add",
+        lambda: weather_service.prompt_manual_city(pet),
+        close_on_trigger=True,
+    )
+    add_action(
+        submenu, "删掉一个城市…", "remove",
+        lambda: weather_service.prompt_remove_city(pet),
+        close_on_trigger=True,
+    )
+    return submenu
 
 def _build_voice_chime_now(menu, pet):
     return add_action(menu, "立即报时", "chat", pet.on_voice_chime_now, close_on_trigger=True)
@@ -300,6 +348,9 @@ class MenuActionRegistry:
             "todo_panel": MenuActionSpec(
                 _build_todo_panel, _callback_available("on_open_todo_panel")
             ),
+            # 天气不需要 API Key：菜单里始终可用（城市没配时点一下会引导设置）。
+            "weather": MenuActionSpec(_build_weather),
+            "weather_cities": MenuActionSpec(_build_weather_cities),
             "voice_chime_now": MenuActionSpec(
                 _build_voice_chime_now, _callback_available("on_voice_chime_now")
             ),

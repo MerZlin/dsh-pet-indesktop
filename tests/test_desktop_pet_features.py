@@ -908,6 +908,9 @@ def test_modern_context_menu_has_compact_semantic_groups(monkeypatch):
     if sys.platform == "win32":
         expected_labels.append("主动识屏")  # 仅 Windows + 有聊天能力时显示
     expected_labels.append("待办提醒")  # 待办管理面板入口（所有平台）
+    # 天气两项（2026-09-29 新增）：查看天气 + 天气城市子菜单
+    expected_labels.append("查看天气")
+    expected_labels.append("天气城市")
     # 立即报时/语音报时开关/今日节日/节日提醒开关：2026-09-19 起默认模板
     # visible: false，不上默认菜单（用户可在菜单编辑器加回）
     expected_labels.extend([
