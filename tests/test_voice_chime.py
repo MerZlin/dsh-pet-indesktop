@@ -9,7 +9,7 @@ GUI 事件循环与固定 sleep（对齐 AGENTS.md「CI 优先纪律」）。
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -20,7 +20,6 @@ from pet.voice_chime import (
     DEFAULT_SHOW_QUOTE,
     DEFAULT_VOICE,
     DEFAULT_VOLUME,
-    QUOTE_ROTATION_HOURS,
     SCHEDULE_KEYS,
     VOICE_OPTIONS,
     build_bubble_sentence,
@@ -28,7 +27,7 @@ from pet.voice_chime import (
     build_chime_sentence,
     build_chime_text,
     cache_key,
-    chime_index_in_period,
+    chime_index_in_day,
     chime_slot,
     clean_custom_quotes,
     clean_custom_times,
@@ -45,8 +44,7 @@ from pet.voice_chime import (
     next_chime_in_seconds,
     normalize_chime_config,
     pick_quote,
-    quote_slot_serial,
-    split_quote_batches,
+    quote_day_order,
 )
 from pet.voice_chime_quotes import CHINESE_QUOTES, ENGLISH_QUOTES
 
@@ -396,26 +394,86 @@ def test_build_chime_text_multiple_of_five_minutes():
     assert build_chime_text(datetime(2026, 9, 15, 9, 55), {}) == "现在上午九点55分"
 
 
-# ---------------------------------------------------- 台词/歌词轮换（8 小时换批 + 周期内轮换）
+# -------------------------------------------- 台词/歌词轮换（每天一套新排列 + 日内顺序取用）
 
 
-def test_quote_rotation_slot_width_is_8_hours():
-    """槽宽为 8 小时（0-8 / 8-16 / 16-24 三个周期）。"""
-    assert QUOTE_ROTATION_HOURS == 8
-
-
-def test_split_quote_batches_divides_pool_in_order():
-    """分批：按序均分（各批长度差 ≤1），保序、不丢条、不重复，空批被过滤。"""
+def test_quote_day_order_is_deterministic_permutation():
+    """当天排列：同一天恒等、是库的一个置换（不丢条不重复），跨天换新。"""
     pool = tuple(f"q{i}" for i in range(10))
-    batches = split_quote_batches(pool)
-    assert len(batches) == 3
-    assert [len(b) for b in batches] == [4, 3, 3]
-    assert tuple(q for b in batches for q in b) == pool
-    assert tuple(q for b in split_quote_batches(CHINESE_QUOTES) for q in b) == tuple(CHINESE_QUOTES)
-    assert split_quote_batches(("only",)) == (("only",),)
-    assert split_quote_batches(("a", "b"), batches=5) == (("a",), ("b",))
-    assert split_quote_batches(()) == ()
-    assert split_quote_batches(pool, batches=0) == (pool,)  # 非法批数兜底为单批
+    order = quote_day_order(pool, 739000)
+    assert order == quote_day_order(pool, 739000)
+    assert sorted(order) == sorted(pool)
+    assert order != pool  # 洗过，不是原序
+    assert order != quote_day_order(pool, 739001)
+    assert quote_day_order((), 739000) == ()
+    assert quote_day_order(("only",), 739000) == ("only",)
+
+
+def test_quote_day_order_gives_a_fresh_order_every_day():
+    """用户诉求的机器化守卫：连续 7 天，首句与整套排列都不得重复。
+
+    旧实现里批次 =（日期序数 × 3 + 当日第几段）% 3 —— 乘 3 与取模 3 对消，
+    日期被自己抵消，7 天洗出同一个排列、同一天同一时刻永远同一句。本用例
+    就是盯着这个回归。
+    """
+    orders = [quote_day_order(CHINESE_QUOTES, 739000 + i) for i in range(7)]
+    assert len(set(orders)) == 7
+    assert len({order[0] for order in orders}) >= 6
+
+
+def test_chime_index_in_day_counts_elapsed_chime_points():
+    """日内次序 = 当天 [00:00, now] 命中（含当前）的报时点数量 - 1。"""
+    assert chime_index_in_day(datetime(2026, 9, 15, 0, 0), {"schedule": "hourly"}) == 0
+    assert chime_index_in_day(datetime(2026, 9, 15, 9, 0), {"schedule": "hourly"}) == 9
+    assert chime_index_in_day(datetime(2026, 9, 15, 23, 0), {"schedule": "hourly"}) == 23
+    assert chime_index_in_day(datetime(2026, 9, 15, 0, 30), {"schedule": "every_30"}) == 1
+    assert chime_index_in_day(datetime(2026, 9, 15, 1, 0), {"schedule": "every_30"}) == 2
+    assert chime_index_in_day(datetime(2026, 9, 15, 0, 45), {"schedule": "every_15"}) == 3
+    assert chime_index_in_day(datetime(2026, 9, 15, 23, 45), {"schedule": "every_15"}) == 95
+    assert chime_index_in_day(datetime(2026, 9, 15, 0, 20), {"schedule": "every_5"}) == 4
+    assert chime_index_in_day(datetime(2026, 9, 15, 1, 1), {"schedule": "every_minute"}) == 61
+    custom = {"schedule": "custom", "custom_times": frozenset({"00:10", "00:30"})}
+    assert chime_index_in_day(datetime(2026, 9, 15, 0, 10), custom) == 0
+    assert chime_index_in_day(datetime(2026, 9, 15, 0, 25), custom) == 0  # 未命中点沿用最近一次
+    assert chime_index_in_day(datetime(2026, 9, 15, 0, 30), custom) == 1
+
+
+def test_pick_quote_walks_today_order_and_is_idempotent():
+    """日内按当天排列顺序取用；同一分钟内 tick 多次结果一致。"""
+    cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "hourly"}
+    order = quote_day_order(CHINESE_QUOTES, datetime(2026, 9, 15).date().toordinal())
+    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) == order[0]
+    assert pick_quote(datetime(2026, 9, 15, 1, 0), cfg) == order[1]
+    assert pick_quote(datetime(2026, 9, 15, 2, 0), cfg) == order[2]
+    # 用户诉求：每次报时取到不同句子，而不是一句固定一整天
+    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) != pick_quote(datetime(2026, 9, 15, 1, 0), cfg)
+    # 幂等：同一分钟内 tick 多次结果一致
+    assert pick_quote(datetime(2026, 9, 15, 1, 0), cfg) == pick_quote(datetime(2026, 9, 15, 1, 40), cfg)
+
+
+def test_pick_quote_differs_at_same_clock_time_across_days():
+    """同一时刻跨天不再撞同一句（旧实现在这里每天完全相同）。"""
+    cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "every_15"}
+    quotes = [pick_quote(datetime(2026, 9, 15 + i, 9, 0), cfg) for i in range(7)]
+    assert len(set(quotes)) >= 6
+
+
+def test_pick_quote_covers_a_15min_day_without_repeats():
+    """库长盖得住最高频的现实配置：每 15 分钟一天 96 次，一天之内不重句。"""
+    cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "every_15"}
+    day = [pick_quote(datetime(2026, 9, 15, 0, 0) + timedelta(minutes=15 * i), cfg) for i in range(96)]
+    assert len(set(day)) == 96
+    assert len(CHINESE_QUOTES) >= 96
+    assert len(ENGLISH_QUOTES) >= 96
+
+
+def test_quote_libraries_are_unique_and_tts_sized():
+    """库里不留空条 / 首尾空白 / 重复项，单条长度适合语音播报。"""
+    for pool in (CHINESE_QUOTES, ENGLISH_QUOTES):
+        assert len(set(pool)) == len(pool)
+        assert all(item == item.strip() and item for item in pool)
+    assert max(len(item) for item in CHINESE_QUOTES) <= 40
+    assert max(len(item) for item in ENGLISH_QUOTES) <= 100
 
 
 def test_clean_custom_quotes_splits_trims_and_dedupes():
@@ -428,72 +486,23 @@ def test_clean_custom_quotes_splits_trims_and_dedupes():
     assert clean_custom_quotes("x" * 200) == ("x" * 120,)  # 单条超长截断
 
 
-def test_quote_slot_serial_increments_across_slots_and_days():
-    """周期序号：同一周期内不变，跨周期 +1，跨天（16-24 → 次日 0-8）同样 +1。"""
-    assert quote_slot_serial(datetime(2026, 9, 15, 0, 0)) == quote_slot_serial(datetime(2026, 9, 15, 7, 59))
-    assert quote_slot_serial(datetime(2026, 9, 15, 8, 0)) == quote_slot_serial(datetime(2026, 9, 15, 0, 0)) + 1
-    assert quote_slot_serial(datetime(2026, 9, 15, 16, 0)) == quote_slot_serial(datetime(2026, 9, 15, 8, 0)) + 1
-    assert quote_slot_serial(datetime(2026, 9, 16, 0, 0)) == quote_slot_serial(datetime(2026, 9, 15, 16, 0)) + 1
-
-
-def test_chime_index_in_period_counts_elapsed_chime_points():
-    """周期内次序 = 本周期已命中（含当前）的报时点数量；跨周期归零。"""
-    hourly = {"schedule": "hourly", "custom_times": frozenset()}
-    assert chime_index_in_period(datetime(2026, 9, 15, 0, 0), hourly) == 0
-    assert chime_index_in_period(datetime(2026, 9, 15, 0, 59), hourly) == 0
-    assert chime_index_in_period(datetime(2026, 9, 15, 7, 0), hourly) == 7
-    assert chime_index_in_period(datetime(2026, 9, 15, 8, 0), hourly) == 0  # 新周期重新计数
-    every_15 = {"schedule": "every_15"}
-    assert chime_index_in_period(datetime(2026, 9, 15, 0, 30), every_15) == 2  # 0:00 / 0:15 / 0:30
-    custom = {"schedule": "custom", "custom_times": frozenset({"00:10", "00:30"})}
-    assert chime_index_in_period(datetime(2026, 9, 15, 0, 10), custom) == 0
-    assert chime_index_in_period(datetime(2026, 9, 15, 0, 25), custom) == 0  # 未命中点沿用最近一次
-    assert chime_index_in_period(datetime(2026, 9, 15, 0, 30), custom) == 1
-
-
-def test_pick_quote_rotates_within_period_and_switches_batch_across_periods():
-    """同周期内按序轮换取不同条目；跨周期整体换到新的一批。"""
-    cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "hourly"}
-    batches = split_quote_batches(CHINESE_QUOTES)
-    night = batches[quote_slot_serial(datetime(2026, 9, 15, 0, 0)) % len(batches)]
-    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) == night[0]
-    assert pick_quote(datetime(2026, 9, 15, 1, 0), cfg) == night[1]
-    assert pick_quote(datetime(2026, 9, 15, 2, 0), cfg) == night[2]
-    # 用户诉求：同一周期内每次报时取到不同句子，而不是一句固定 8 小时
-    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) != pick_quote(datetime(2026, 9, 15, 1, 0), cfg)
-    # 幂等：同一分钟内 tick 多次结果一致
-    assert pick_quote(datetime(2026, 9, 15, 1, 0), cfg) == pick_quote(datetime(2026, 9, 15, 1, 40), cfg)
-    morning = batches[quote_slot_serial(datetime(2026, 9, 15, 8, 0)) % len(batches)]
-    assert set(night).isdisjoint(morning)  # 跨周期换了新的一批
-    assert pick_quote(datetime(2026, 9, 15, 8, 0), cfg) == morning[0]
-    assert pick_quote(datetime(2026, 9, 15, 9, 0), cfg) == morning[1]
-
-
-def test_pick_quote_cycles_within_period_when_batch_exhausted():
-    """周期内报时次数超过批次长度时回环，仍不跳出当前批次。"""
-    cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "every_minute"}
-    batches = split_quote_batches(CHINESE_QUOTES)
-    night = batches[quote_slot_serial(datetime(2026, 9, 15, 0, 0)) % len(batches)]
-    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) == night[0]
-    assert pick_quote(datetime(2026, 9, 15, 0, 1), cfg) == night[1]
-    assert pick_quote(datetime(2026, 9, 15, 0, len(night)), cfg) == night[0]  # 用尽回环
-
-
-def test_pick_quote_uses_next_batch_after_day_boundary():
-    """跨天（16-24 → 次日 0-8）同样切换到新的一批，且周期内照常轮换。"""
-    cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "hourly"}
-    batches = split_quote_batches(CHINESE_QUOTES)
-    late = datetime(2026, 9, 15, 16, 0)
-    early_next_day = datetime(2026, 9, 16, 0, 0)
-    late_batch = batches[quote_slot_serial(late) % len(batches)]
-    next_batch = batches[quote_slot_serial(early_next_day) % len(batches)]
-    assert pick_quote(late, cfg) == late_batch[0]
-    assert pick_quote(early_next_day, cfg) == next_batch[0]
-    assert set(late_batch).isdisjoint(next_batch)
+def test_pick_quote_cycles_within_day_when_pool_is_short():
+    """库短于当天报时次数时顺序用尽回环，且不跳出当天排列。"""
+    cfg = {
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "schedule": "hourly",
+        "custom_quotes_zh": ("第一条", "第二条", "第三条"),
+    }
+    pool = ("第一条", "第二条", "第三条")
+    order = quote_day_order(pool, datetime(2026, 9, 15).date().toordinal())
+    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) == order[0]
+    assert pick_quote(datetime(2026, 9, 15, 1, 0), cfg) == order[1]
+    assert pick_quote(datetime(2026, 9, 15, 2, 0), cfg) == order[2]
+    assert pick_quote(datetime(2026, 9, 15, 3, 0), cfg) == order[0]  # 用尽回环
 
 
 def test_pick_quote_zh_and_en_pools_rotate_independently():
-    """中英文库各自分批轮换：zh 音色只用中文库，非 zh 音色只用英文库。"""
+    """中英文库各自按当天排列轮换：zh 音色只用中文库，非 zh 音色只用英文库。"""
     zh_cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "hourly"}
     en_cfg = {"voice": "en-US-GuyNeural", "schedule": "hourly"}
     for hour in (0, 1, 8, 17):
@@ -508,20 +517,20 @@ def test_pick_quote_zh_and_en_pools_rotate_independently():
 
 
 def test_pick_quote_custom_overrides_builtin_and_rotates():
-    """自定义台词非空时替换内置库，并同样按「周期换批 + 周期内轮换」取值。"""
+    """自定义台词非空时整体替换内置库，并走同一套「每天排列 + 日内顺序」。"""
     cfg = {
         "voice": "zh-CN-XiaoxiaoNeural",
         "schedule": "hourly",
         "custom_quotes_zh": ("第一条", "第二条", "第三条", "第四条", "第五条", "第六条"),
     }
-    first = pick_quote(datetime(2026, 9, 15, 0, 0), cfg)
-    second = pick_quote(datetime(2026, 9, 15, 1, 0), cfg)
-    assert {first, second} == {"第一条", "第二条"}  # 6 条分 3 批 → 0-8 周期取第 1 批
-    assert first != second
-    assert first not in CHINESE_QUOTES
-    assert pick_quote(datetime(2026, 9, 15, 8, 0), cfg) == "第三条"  # 跨周期换批
-    assert pick_quote(datetime(2026, 9, 15, 8, 0), cfg) != first
-    assert pick_quote(datetime(2026, 9, 15, 16, 0), cfg) == "第五条"
+    order = quote_day_order(
+        tuple(cfg["custom_quotes_zh"]), datetime(2026, 9, 15).date().toordinal()
+    )
+    assert set(order) == set(cfg["custom_quotes_zh"])
+    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) == order[0]
+    assert pick_quote(datetime(2026, 9, 15, 1, 0), cfg) == order[1]
+    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) != pick_quote(datetime(2026, 9, 15, 1, 0), cfg)
+    assert pick_quote(datetime(2026, 9, 15, 0, 0), cfg) not in CHINESE_QUOTES
 
 
 def test_pick_quote_empty_custom_falls_back_to_builtin():
@@ -540,12 +549,12 @@ def test_pick_quote_custom_is_language_specific():
 
 
 def test_build_chime_sentence_joins_text_and_rotated_quote():
-    """报时语句 = 报时文本 + 当前周期内本轮台词；同一报时点重复组装结果一致。"""
+    """报时语句 = 报时文本 + 当次台词；同一报时点重复组装结果一致。"""
     now = datetime(2026, 9, 15, 9, 0)
     cfg = {"voice": "zh-CN-XiaoxiaoNeural", "schedule": "hourly"}
     assert build_chime_sentence(now, cfg) == f"现在是上午九点整。{pick_quote(now, cfg)}"
     assert build_chime_sentence(now.replace(minute=30), cfg) == f"现在上午九点30分。{pick_quote(now, cfg)}"
-    # 同周期内的下一次报时换到批次内下一条
+    # 当天排列里的下一次报时换到下一个位置
     assert build_chime_sentence(datetime(2026, 9, 15, 10, 0), cfg) != build_chime_sentence(now, cfg)
 
 

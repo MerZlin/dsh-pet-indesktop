@@ -10,7 +10,7 @@
   时间点）与“距下一报时点秒数”计算；
 - 报时文本组装：语音口播（中文数字，供 TTS 与缓存键）与气泡展示（阿拉伯数字）
   两套文本解耦生成；
-- 台词/歌词轮换：库按 8 小时周期整体换批，同一周期内按序轮换取不同条目；
+- 台词/歌词轮换：每天把库洗成一套新排列（按日期确定性洗牌），日内按序取用；
 - 自定义台词/歌词解析（留空回退内置库）；
 - edge-tts 参数格式化（rate / pitch）。
 """
@@ -47,14 +47,13 @@ DEFAULT_VOLUME = 80  # 播放音量（0-100）
 DEFAULT_SHOW_BUBBLE = True  # 报时气泡开关
 DEFAULT_SHOW_QUOTE = True  # 台词/歌词开关
 
-# 台词/歌词轮换：库按本地时间每 8 小时整体换一批（周期 0-8 / 8-16 / 16-24）。
-# 库按序均分为 _QUOTE_BATCHES_PER_DAY（=3）批，周期序号取模决定当前批次，跨周期
-# 即切到新批次；同一周期内每次报时在批次内按顺序轮换取下一条（用尽回环），因此
-# 同周期内多次报时听到的是不同句子，而非“一句固定 8 小时”。周期序号跨天连续
-# 递增，故跨天也保持可预期的换批顺序。
-QUOTE_ROTATION_HOURS = 8
-_QUOTE_SLOTS_PER_DAY = 24 // QUOTE_ROTATION_HOURS
-_QUOTE_BATCHES_PER_DAY = _QUOTE_SLOTS_PER_DAY  # 台词库均分批数（一天 3 个周期 = 3 批）
+# 台词/歌词轮换：**每天一整套新排列**。以「日期序数」为种子把库确定性洗牌
+# （Fisher–Yates），当天任意时刻调用得到同一个排列；日内按报时次序从排列头部
+# 往下取、用尽回环，于是同一天里每次报时都是不同句子，第二天整套顺序换新。
+#
+# 为什么不是「每 8 小时换一批」：旧实现里批次 =（日期序数 × 3 + 当日第几段）% 3，
+# 乘 3 与取模 3 恰好对消 —— 批次只由「当天第几段」决定，日期被自己抵消掉，于是
+# 每天同一时刻永远是同一句（用户反馈「几乎每天都是一样的台词」即由此而来）。
 _MAX_CUSTOM_QUOTE_LEN = 120  # 自定义单条台词长度上限（超长截断，防误粘长文）
 
 # edge-tts 中英文音色下拉列表（value=音色名，label=友好中文标签）。
@@ -357,80 +356,73 @@ def build_chime_text(now: datetime, cfg: dict) -> str:
     return f"现在{period}{hour_cn}点{now.minute:02d}分"
 
 
-def quote_slot_serial(now: datetime) -> int:
-    """台词/歌词轮换的全局 8 小时周期序号（本地时间，跨天连续递增）。
+# 洗牌用的 64 位线性同余发生器参数（Knuth/MMIX）。刻意自带而不 import random：
+# 同一个日期在任何 Python 版本、任何进程上都必须洗出同一个排列，否则「今天这句
+# 台词」会在升级解释器后漂移（还会连带让已缓存的音频键对不上）。高质量位取高 31
+# 位（``>> 33``）而非低位取模，避免 LCG 低位周期短导致的排列偏差。
+_SHUFFLE_MASK = (1 << 64) - 1
+_SHUFFLE_MUL = 6364136223846793005
+_SHUFFLE_ADD = 1442695040888963407
+_SHUFFLE_SALT = 0x9E3779B97F4A7C15  # 混入日期序数，避免相邻日期的种子太相近
 
-    每个自然日固定 ``_QUOTE_SLOTS_PER_DAY``（=3）个 8 小时周期，序号由
-    “日期序数 × 周期数 + 当日第几个周期”得到，因此相邻周期序号恰好差 1
-    （含跨天 16-24 → 次日 0-8），取模即可实现顺序换批、跨天不跳乱。
+
+def quote_day_order(pool, day_ordinal: int) -> tuple[str, ...]:
+    """把台词库按日期洗成当天的固定排列（确定性，与进程/解释器版本无关）。
+
+    以 ``day_ordinal``（``date.toordinal()``）为种子做 Fisher–Yates：同一天内
+    任意时刻、任意调用方（语音 / 气泡 / 缓存键）拿到的是同一个排列；换一天
+    整批顺序都不同，因此「每天同一时刻」不会再撞上同一句。
     """
-    return now.date().toordinal() * _QUOTE_SLOTS_PER_DAY + now.hour // QUOTE_ROTATION_HOURS
+    items = list(pool)
+    state = (int(day_ordinal) * _SHUFFLE_MUL + _SHUFFLE_SALT) & _SHUFFLE_MASK
+    for i in range(len(items) - 1, 0, -1):
+        state = (state * _SHUFFLE_MUL + _SHUFFLE_ADD) & _SHUFFLE_MASK
+        j = (state >> 33) % (i + 1)
+        items[i], items[j] = items[j], items[i]
+    return tuple(items)
 
 
-def chime_index_in_period(now: datetime, cfg: dict) -> int:
-    """当前 8 小时周期内的报时次序（0 起，含当前这一次报时）。
+def chime_index_in_day(now: datetime, cfg: dict) -> int:
+    """当天第几次报时（0 起，含当前这一次），日内顺序取台词的游标。
 
-    从周期起点（0 点 / 8 点 / 16 点）逐分钟回溯统计命中的报时点个数；
-    同一周期内每报一次该值 +1，批次内据此顺序轮换取不同条目。周期内尚无
-    更早报时（或自定义时间点集中在其它周期）时返回 0，取批次首条。
+    各调度模式下当天 [00:00, now] 的报时点数量 - 1 即为答案，故直接算术求解
+    （旧实现逐分钟回溯，每小时 480 次判定；本函数每次报时要被语音与气泡各调
+    一次）。自定义时间点未命中时沿用最近一次，避免出现负数。
     """
-    start = now.replace(
-        hour=now.hour // QUOTE_ROTATION_HOURS * QUOTE_ROTATION_HOURS,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-    index = -1
-    cursor = start
-    while cursor <= now:
-        if is_chime_minute(cursor, cfg):
-            index += 1
-        cursor += timedelta(minutes=1)
-    return max(index, 0)
-
-
-def split_quote_batches(pool, batches: int = _QUOTE_BATCHES_PER_DAY) -> tuple[tuple[str, ...], ...]:
-    """把台词库按序均分为若干批（前几批各多 1 条），空批自动过滤。
-
-    用于“每 8 小时整体换一批”：周期序号取模决定当前批次。条目数少于批数
-    时会出现空批，过滤后保证取批永远不会命中空批（自定义仅 1 条时只有 1 批）。
-    """
-    items = tuple(pool)
-    if not items:
-        return ()
-    count = max(1, int(batches))
-    size, extra = divmod(len(items), count)
-    result: list[tuple[str, ...]] = []
-    pos = 0
-    for i in range(count):
-        take = size + (1 if i < extra else 0)
-        if take:
-            result.append(items[pos : pos + take])
-        pos += take
-    return tuple(result)
+    minute = now.minute
+    schedule = cfg.get("schedule", "hourly")
+    if schedule == "every_30":
+        return now.hour * 2 + (1 if minute >= 30 else 0)
+    if schedule == "every_15":
+        return now.hour * 4 + minute // 15
+    if schedule == "every_5":
+        return now.hour * 12 + minute // 5
+    if schedule == "every_minute":
+        return now.hour * 60 + minute
+    if schedule == "custom":
+        hhmm = f"{now.hour:02d}:{minute:02d}"
+        passed = sum(1 for item in cfg.get("custom_times", frozenset()) if item <= hhmm)
+        return max(passed - 1, 0)
+    return now.hour  # hourly（含未知模式兜底，与 clean_schedule 的回落一致）
 
 
 def pick_quote(now: datetime, cfg: dict) -> str:
-    """按“每 8 小时整体换一批 + 周期内按序轮换”选取一句台词/歌词。
+    """按「每天一套新排列 + 日内顺序取用」选取一句台词/歌词。
 
     选取规则：
     1. 音色以 zh 开头用中文库，否则用英文库；对应语言自定义条目非空时整体
        替换内置库（留空回退内置库）；
-    2. 库按序均分为 ``_QUOTE_BATCHES_PER_DAY`` 批，周期序号
-       :func:`quote_slot_serial` 取模决定当前批次 —— 跨周期即换新批次；
-    3. 周期内第 :func:`chime_index_in_period` 次报时取批次内第 N 条（顺序
-       轮换、用尽回环），因此同一周期内多次报时能听到不同句子。
+    2. 当日排列由 :func:`quote_day_order` 按日期算出 —— 同一天固定、跨天换新；
+    3. 取当日第 :func:`chime_index_in_day` 次报时对应的条目（顺序取用、
+       用尽回环），库比当天报时次数长时一天之内不会重句。
     """
     chinese = str(cfg.get("voice", DEFAULT_VOICE)).lower().startswith("zh")
     custom = clean_custom_quotes(cfg.get("custom_quotes_zh" if chinese else "custom_quotes_en"))
     pool = custom or (CHINESE_QUOTES if chinese else ENGLISH_QUOTES)
     if not pool:
         return ""
-    batch_list = split_quote_batches(pool)
-    if not batch_list:
-        return ""
-    batch = batch_list[quote_slot_serial(now) % len(batch_list)]
-    return batch[chime_index_in_period(now, cfg) % len(batch)]
+    order = quote_day_order(pool, now.date().toordinal())
+    return order[chime_index_in_day(now, cfg) % len(order)]
 
 
 def build_chime_sentence(now: datetime, cfg: dict) -> str:

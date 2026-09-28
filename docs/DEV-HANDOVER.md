@@ -73,12 +73,12 @@ D:\dsh-pet\
 │   ├── config_domains.py         # 配置域 facade（chat/agent_link/proactive/collision/menu）
 │   ├── modern_settings_dialog.py # 现代设置主对话框（2347 行，预算 2347）
 │   ├── settings_widgets.py       # 设置控件库（ToggleSwitch / SettingRow / ModernSelect …）
-│   ├── speech_bubble.py          # 气泡绘制与交互（1160 行）
-│   ├── speech_bubble_text.py     # 气泡分页/定位纯函数（272 行）
-│   ├── voice_chime.py            # ★ 语音报时纯逻辑层（459 行，零 Qt / 零 edge_tts）
-│   ├── voice_chime_service.py    # ★ 语音报时服务层（479 行，tick + 合成 + 播放）
-│   ├── voice_chime_settings.py   # ★ 语音报时设置页（234 行）
-│   ├── voice_chime_quotes.py     # ★ 台词/歌词纯数据库（96 行，中英各 40 条）
+│   ├── speech_bubble.py          # 气泡绘制与交互（1491 行）
+│   ├── speech_bubble_text.py     # 气泡分页/定位纯函数（408 行）
+│   ├── voice_chime.py            # ★ 语音报时纯逻辑层（483 行，零 Qt / 零 edge_tts）
+│   ├── voice_chime_service.py    # ★ 语音报时服务层（835 行，tick + 合成 + 播放）
+│   ├── voice_chime_settings.py   # ★ 语音报时设置页（239 行）
+│   ├── voice_chime_quotes.py     # ★ 台词/歌词纯数据库（237 行，中文 120 / 英文 96 条）
 │   ├── context_menus\            # 右键菜单（registry.py 动作注册 + legacy/modern/fun_entry）
 │   ├── menu_templates\           # 菜单布局 JSON（modern-default-v1.json 为默认模板）
 │   ├── chat\                     # AI 对话子系统（Chat 版打包变体）
@@ -283,10 +283,10 @@ modern_settings_dialog.py
 
 | 文件 | 行数 | 层 | 职责 |
 |---|---|---|---|
-| `pet/voice_chime.py` | 459 | 纯逻辑 | 配置清洗、调度判定、槽位幂等、报时/气泡文本、台词批次轮换、edge 参数与缓存键。**零 Qt、零 edge_tts**，可脱离 GUI 直接单测 |
-| `pet/voice_chime_service.py` | 479 | 服务 | 20s tick、预合成、`edge-tts` 后台合成、`_AudioBridge` 信号桥、`QMediaPlayer` 播放、气泡落地、缓存裁剪、降级 |
-| `pet/voice_chime_settings.py` | 234 | UI | 设置页（全部控件包 `SettingRow`），`apply_to_config` |
-| `pet/voice_chime_quotes.py` | 96 | 数据 | 中英台词/歌词库各 40 条（`CHINESE_QUOTES` / `ENGLISH_QUOTES`），纯数据零依赖 |
+| `pet/voice_chime.py` | 483 | 纯逻辑 | 配置清洗、调度判定、槽位幂等、报时/气泡文本、台词每日排列轮换、edge 参数与缓存键。**零 Qt、零 edge_tts**，可脱离 GUI 直接单测 |
+| `pet/voice_chime_service.py` | 835 | 服务 | 20s tick、预合成、`edge-tts` 后台合成、`_AudioBridge` 信号桥、`QMediaPlayer` 播放、气泡落地、缓存裁剪、降级 |
+| `pet/voice_chime_settings.py` | 239 | UI | 设置页（全部控件包 `SettingRow`），`apply_to_config` |
+| `pet/voice_chime_quotes.py` | 237 | 数据 | 台词/歌词库：中文 120 条 / 英文 96 条（`CHINESE_QUOTES` / `ENGLISH_QUOTES`），纯数据零依赖 |
 
 ### 5.1 六种调度与「槽位幂等」
 
@@ -338,16 +338,16 @@ _on_tick(now)
 - 缓存键 `cache_key(text, cfg)` = `sha1("文本|音色|+r%|+pHz")[:16]`，**只按语音文本**计算，因此同一时刻的气泡文本变化不会污染语音缓存。
 - 两者在同一时刻调用同一条 `pick_quote`，所以**语音与气泡台词一致**，仅时间表示不同。
 
-### 5.5 台词/歌词：8 小时整批轮换 + 周期内顺序轮换
+### 5.5 台词/歌词：每天整套换新 + 日内顺序轮换
 
-- 常量：`QUOTE_ROTATION_HOURS = 8`；`_QUOTE_SLOTS_PER_DAY = 3`；`_QUOTE_BATCHES_PER_DAY = 3`。
-- `split_quote_batches(pool, 3)`：把当前生效的库**按序均分 3 批**（前几批各多 1 条，空批过滤）。内置 40 条即 14/13/13。
-- `quote_slot_serial(now)`：全局 8 小时周期序号 = `date.toordinal() * 3 + hour // 8`，相邻周期序号恰差 1（含跨天 16-24 → 次日 0-8 连续），取模即顺序换批、跨天不跳乱。
-- `chime_index_in_period(now, cfg)`：当前周期内的第几次报时（0 起，从周期起点逐分钟回溯统计命中数）。
-- `pick_quote(now, cfg)`：**批次 = 库的第 `serial % 批数` 批；条目 = 批次内第 `index % 批长` 条**。即「每 8 小时整体换一批，批内按报时次序轮换」。
+- `quote_day_order(pool, day_ordinal)`：按日期把库**确定性洗牌**（自带 64 位 LCG + Fisher–Yates，不用 `random` 模块，故换解释器版本也不会让「今天取哪句」漂移）。同一天内任意时刻、任意调用方都是同一个排列；换一天整套顺序都不同。
+- `chime_index_in_day(now, cfg)`：当天 [00:00, now] 命中（含当前）的报时点数量 - 1，即「当天第几次报时」（0 起），各调度直接算术求解，不再逐分钟回溯。
+- `pick_quote(now, cfg)`：**条目 = 当天排列的第 `chime_index_in_day % 库长` 条** —— 顺序取用、用尽回环。
 - 语言选择：`voice` 以 `zh` 开头用中文库，否则用英文库。
-- 自定义：`voice_chime_custom_quotes_zh/en` 非空时**整体替换**对应语言内置库（单条上限 120 字，去控制字符、去重保序）；只填 1 条时仅 1 批，等价于固定台词。
-- 新增台词只需往 `voice_chime_quotes.py` 的元组里加行，**无需登记任何配置**（批次数由库长自动均分）。
+- 自定义：`voice_chime_custom_quotes_zh/en` 非空时**整体替换**对应语言内置库（单条上限 120 字，去控制字符、去重保序）；库短于当天报时次数时按天顺序回环。
+- 新增台词只需往 `voice_chime_quotes.py` 的元组里加行，**无需登记任何配置**（洗牌只看库长）。
+
+> **v3 定稿点（2026-09-28，用户反馈「台词几乎每天都是一样」）**：v2 的「8 小时整批轮换」里批次 =`（日期序数 × 3 + 当日第几段）% 3` —— 乘 3 与取模 3 恰好对消，**日期被自己抵消**，批次只由「当天第几段」决定：每天同一时刻永远是同一句、同一批 14/13/13 条来回打转。v3 改为「每天一整套新排列 + 日内顺序取用」，并把库扩到中文 120 / 英文 96（盖得住每 15 分钟一天 96 次），实测 09:00 连续 7 天 6 天以上不同、单日 96 次全不重句。
 
 ### 5.6 缓存与清理策略
 
@@ -388,7 +388,7 @@ _on_tick(now)
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| `tests/test_voice_chime.py`（937 行） | 57 | 11 键默认值与清洗、六种调度数学、`chime_slot` 幂等、`build_chime_text`/`build_chime_bubble_text` 解耦、8 小时批次轮换（`split_quote_batches`/`quote_slot_serial`/`chime_index_in_period`/`pick_quote`）、自定义台词清洗、预合成状态机、缓存裁剪、edge 参数格式化与 `cache_key` |
+| `tests/test_voice_chime.py`（952 行） | 61 个 def / 参数化后 153 用例 | 11 键默认值与清洗、六种调度数学、`chime_slot` 幂等、`build_chime_text`/`build_chime_bubble_text` 解耦、台词每日排列轮换（`quote_day_order`/`chime_index_in_day`/`pick_quote`）、库长不重复护栏、自定义台词清洗、预合成状态机、缓存裁剪、edge 参数格式化与 `cache_key` |
 | `tests/test_config_schema.py` | 5 | 三处登记护栏：`DEFAULTS_SNAPSHOT`、`RELOAD_WHITELIST_SNAPSHOT`、`SPECIAL_CASED_KEYS`，代表用例 `test_every_defaults_key_is_whitelisted_or_special_cased` |
 | `tests/test_architecture.py`（213 行） | 7 | 纯逻辑零 Qt、依赖方向、窗口私有面冻结、`window.py` / `modern_settings_dialog.py` 行数预算、孤儿簇守卫 |
 | `tests/test_menu_layout.py`（2108 行） | 65 | 菜单模板节点顺序、动作 resolve、populate 标签（含语音报时两项） |
@@ -562,7 +562,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_onedir.ps1 -Variant webm-
 | 中 | 离线音色兜底（候选：Windows SAPI / pyttsx3） | 当前 edge-tts 不可用时仅气泡；可评估本地离线音色作为第二合成后端 |
 | 中 | 任务栏隐藏模式下的报时行为验证 | 隐藏/自动隐藏场景下气泡与播放位置的体验待专项验证 |
 | 中 | 报时缓存管理入口 | 设置页可加「清理语音缓存」按钮（当前仅自动裁剪 200 文件） |
-| 中 | 时区/系统时间变更下的槽位与批次行为 | 夏令时、手动回拨时钟时 `chime_slot` 与 8 小时批次的表现可补测试 |
+| 中 | 时区/系统时间变更下的槽位与台词排列行为 | 夏令时、手动回拨时钟时 `chime_slot` 与当天台词排列（按本地日期洗牌）的表现可补测试 |
 | 低 | 自定义台词批量导入 | 当前仅文本域手填（一行一条）；可考虑文件导入与数量上限提示 |
 | 低 | GIF 变体与语音报时共存验证 | GIF 变体走 `convert_to_gif.py`，需回归报时链路 |
 | 低 | flaky 用例收口 | `test_drag_move_coalescing` 等定时精度问题根治 |
