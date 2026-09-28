@@ -182,16 +182,27 @@ class _BigScreen:
         return "big"
 
     def availableGeometry(self):
-        return QRect(0, 0, 1920, 1200)
+            return QRect(0, 0, 4096, 3072)
 
     def geometry(self):
-        return QRect(0, 0, 1920, 1200)
+            return QRect(0, 0, 4096, 3072)
 
     def devicePixelRatio(self):
         return 1.0
 
 
 _BIG_SCREEN = _BigScreen()
+
+
+@pytest.fixture(autouse=True)
+def _single_screen_desktop(monkeypatch):
+    """关掉「多屏活动区域」快照（理由见 test_drag_move_coalescing 同名 fixture）：
+    本文件用假屏幕造无边界环境，而 #186 的多屏快照会绕过它、把窗口钳到真实桌面，
+    导致「按住 SHIFT 应可拖动」这类断言在带缩放/多显示器桌面上必红。
+    """
+    from pet import window_placement
+
+    monkeypatch.setattr(window_placement, "desktop_area", lambda: None)
 
 
 def _make_win(app, tmp_path, **overrides):

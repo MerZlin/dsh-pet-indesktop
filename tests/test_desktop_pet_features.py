@@ -3048,7 +3048,9 @@ def test_image_directory_picker_opens_right_drawer_with_three_column_masonry(tmp
     from pet.modern_settings_dialog import ImagePreviewDrawer, ResourcePathPicker
 
     short = tmp_path / "01-one.png"
-    long = tmp_path / ("02-" + "very-long-image-name-" * 8 + ".jpg")
+    # 名字要够长（验证卡片文本截断/tooltip 用全名），但不能长到触发 Windows
+    # MAX_PATH：tmp_path 本身已有 ~90 字符，*8 的重复在深目录下必然 FileNotFoundError。
+    long = tmp_path / ("02-" + "very-long-image-name-" * 3 + ".jpg")
     Image.new("RGB", (40, 80), "red").save(short)
     Image.new("RGB", (100, 40), "blue").save(long)
     Image.new("RGB", (80, 80), "green").save(tmp_path / "03-square.png")

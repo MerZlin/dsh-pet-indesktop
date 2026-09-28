@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.tmp/
+.tmp*/
+.venv/
+.venv*/
 .DS_Store
 
 # 运行时产物

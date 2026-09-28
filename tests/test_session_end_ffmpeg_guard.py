@@ -27,6 +27,7 @@ from __future__ import annotations
 import ctypes
 import re
 import threading
+import time
 from ctypes import wintypes
 from pathlib import Path
 
@@ -45,6 +46,20 @@ WEBM_CLIP_SRC = Path(webm_clip_mod.__file__).read_text(encoding="utf-8")
 @pytest.fixture
 def app():
     return QApplication.instance() or QApplication([])
+
+
+def _wait_until(pred, timeout: float = 5.0) -> bool:
+    """有界等待（同 tests/test_agent_link_threads.py 的 wait_until 惯例）。
+
+    reader 线程是 clip.start() 之后异步跑起来的，紧接着断言 ``spy.read_frames_calls``
+    会**抢跑**：机器慢/调度抖动时列表还是空的（实测在另一台机器上偶发红）。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 @pytest.fixture(autouse=True)
@@ -181,9 +196,13 @@ def test_control_group_spawns_normally_without_session_end(tmp_path, monkeypatch
     assert webm_clip_mod.session_ending() is False
 
     assert clip.start() is True
-    assert spy.read_frames_calls, "正常运行期必须照常拉起 reader（对照组）"
+    assert _wait_until(lambda: bool(spy.read_frames_calls)), (
+        "正常运行期必须照常拉起 reader（对照组）"
+    )
     clip._ensure_meta()
-    assert spy.count_calls, "正常运行期元数据探测照常（对照组）"
+    assert _wait_until(lambda: bool(spy.count_calls)), (
+        "正常运行期元数据探测照常（对照组）"
+    )
     clip.cleanup()
 
 

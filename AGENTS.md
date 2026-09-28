@@ -131,6 +131,41 @@ Run focused tests before `python -m pytest -q`. Set
 sandbox may deny Unix socket creation; rerun QLocalServer tests with local IPC
 permission rather than treating errno 1 as a product failure.
 
+## 协作经验（2026-09-29 复盘，硬规矩）
+
+一次通宵改造（免打扰 + 今日汇总 + 天气 + 修测试）踩了 20 个坑，完整复盘见
+[`docs/AI-LESSONS-2026-09-29.md`](docs/AI-LESSONS-2026-09-29.md)。最容易让用户
+白跑、白等的是这五条：
+
+1. **交付"可以让用户去跑"的东西之前，自己先跑通一次最小验证**；跑不通就先说还差什么
+   （本次踩坑：稀疏检出没补 `assets/` 与 `docs/`，用户连跑三次测试全是 `FileNotFoundError`）。
+2. **动有契约测试的框架，先照抄现成同类实现**。菜单里「免打扰」第一版写成**空 submenu**，
+   被 `resolve_menu_layout()` 过滤 → 菜单里根本不会出现；同类实现是「播放动画」
+   （模板放 action、子菜单由注册表动态生成）。
+3. **改一处、扫一片**：动菜单模板 / 配置键 / 设置行 / 公开文案时，同批更新对应断言
+   （`tests/test_menu_layout.py`、`tests/test_config_schema.py`、
+   `tests/test_settings_interaction_tabs.py`、文案红线用例）与 `docs/INDEX.md` 登记。
+4. **归因逐条看 traceback，不按"同类"打包推断**；报告里每个根因都要有原始输出支撑
+   （本次踩坑：把 `MAX_PATH` 的 `FileNotFoundError` 误报成"桌面几何问题"）。
+5. **长测试先问再跑**：全量一次约 4 分钟，反复跑是烧用户时间。默认只跑聚焦集 + 相邻文件；
+   全量交给用户，或先问一句。
+6. **测试执行权归用户（2026-09-29 起，硬约定）**：agent **不自己跑 pytest**（含聚焦集）——
+   只写代码、写用例、跑静态检查（`ruff`、`py_compile`），然后把"建议的验证命令"写进交接说明；
+   由用户在终端跑全量并把报告发回来，agent 按报告改。理由：用户的时间预算 + 用户机器才是
+   真实环境（沙箱禁网、禁写 `%APPDATA%`，本机跑不出真结论）。
+7. **生成的文件只许放一个地方（2026-09-29 起，硬约定）**：agent 产生的**非交付文件**
+   （探针脚本、临时目录、日志、下载缓存、对照用工作树…）一律放**会话的 `work/`**，
+   不许散落到用户仓库根目录、桌面或家目录；仓库里只允许出现"该进仓库的改动"
+   （源码、测试、文档报告，以及上游本就有、检出时缺了的 `assets/`、`docs/`）；
+   要交给用户看的产物放 `outputs/`。跑完测试或提交后**要清掉自己留下的临时目录**，
+   并在交接里列出"我放了什么、在哪、能不能删"。
+   （`.venv/` 是跑测试用的开发环境，属于例外：保留，但已在 `.gitignore` 里忽略。）
+8. **定期复盘，把坑变成规矩（2026-09-29 起；节奏=每天）**：清单与"可直接粘进 App「定时任务」"的提示词见
+   [`docs/RETRO-CADENCE.md`](docs/RETRO-CADENCE.md)；机械项跑
+   `python scripts/retro_check.py`（仓库根不许有临时产物 / 文案红线 / 菜单中文标签 /
+   文档登记 / 行数预算），红了按对应规则修。新踩的坑要先写成
+   `docs/AI-LESSONS-*.md` 条目，能机器拦住的再补一条护栏测试或检查项。
+
 ## Agent skills
 
 ### Issue tracker
