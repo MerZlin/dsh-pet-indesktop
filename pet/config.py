@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import catalog
+from . import weather_source
 from .report_gates import (
     LEGACY_PERCENT_GATES,
     LEGACY_SWITCH_GATES,
@@ -711,6 +712,10 @@ class Config:
             "self_talk_image_scale": 100,  # 气泡配图显示尺寸百分比（50~300，100 = 默认）
             "self_talk_image_chance": DEFAULT_SELF_TALK_IMAGE_CHANCE,  # 出图概率百分比（0~100）
             "bubble_text_scale": 100,  # 气泡文字显示尺寸百分比（50~300，100 = 默认；气泡与字号一起放大）
+            # 天气（pet/weather_service.py 读这三项）
+            "weather_enabled": True,
+            "weather_city": "",
+            "weather_city_list": [],
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "self_talk_image_dir": "assets/big_blue_fat_fish",
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
@@ -976,6 +981,9 @@ class Config:
             "self_talk_image_scale",
             "self_talk_image_chance",
             "bubble_text_scale",
+            "weather_enabled",
+            "weather_city",
+            "weather_city_list",
             "self_talk_bubble_style",
             "mouse_through",
             "cursor_hidden_passthrough",
@@ -1274,6 +1282,11 @@ class Config:
         self.data["self_talk_image_scale"] = int(_float_or_default(self.data.get("self_talk_image_scale"), 100.0, 50.0, 300.0))
         self.data["self_talk_image_chance"] = int(_float_or_default(self.data.get("self_talk_image_chance"), float(DEFAULT_SELF_TALK_IMAGE_CHANCE), 0.0, 100.0))
         self.data["bubble_text_scale"] = int(_float_or_default(self.data.get("bubble_text_scale"), 100.0, 50.0, 300.0))
+        self.data["weather_enabled"] = _bool_or_default(self.data.get("weather_enabled"), True)
+        self.data["weather_city"] = weather_source.clean_city(self.data.get("weather_city"))
+        self.data["weather_city_list"] = weather_source.clean_city_list(
+            self.data.get("weather_city_list"), self.data["weather_city"]
+        )
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
         self.data["self_talk_speak_enabled"] = _bool_or_default(self.data.get("self_talk_speak_enabled"), True)
         self.data["self_talk_voice_precache_enabled"] = _bool_or_default(self.data.get("self_talk_voice_precache_enabled"), False)

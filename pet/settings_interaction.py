@@ -27,8 +27,8 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from .settings_widgets import SettingRow, SettingsSection, SettingsTabContainer
 
-TAB_KEYS = ("click", "self_talk")
-TAB_LABELS = ("点击与音效", "自言自语")
+TAB_KEYS = ("click", "self_talk", "weather")
+TAB_LABELS = ("点击与音效", "自言自语", "天气")
 
 
 def _page(dialog, title: str, sections: list[tuple[str, list[SettingRow]]]) -> QWidget:
@@ -163,5 +163,14 @@ def build_interaction_domain(dialog) -> QWidget:
         TAB_KEYS[1],
         TAB_LABELS[1],
         _page(dialog, TAB_LABELS[1], [("自言自语", build_self_talk_rows(dialog))]),
+    )
+    # 「天气」：与「点击与音效 / 自言自语」同级的第三个任务（行与控件在 settings_weather，
+    # 同属"行数预算"外置的口径）。
+    from . import settings_weather
+
+    tabs.addTab(
+        TAB_KEYS[2],
+        TAB_LABELS[2],
+        _page(dialog, TAB_LABELS[2], [("天气", settings_weather.build_weather_rows(dialog))]),
     )
     return tabs

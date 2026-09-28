@@ -149,6 +149,7 @@
 | [`PR-REPORT-PERF-ISLAND-CONSOLIDATED-2026-09-23.md`](PR-REPORT-PERF-ISLAND-CONSOLIDATED-2026-09-23.md) | 流畅度/解码减负 + 岛远端硬墙 + 音效缓存 + 设置收口的 PR 报告：走路帧间补点（位置交付 28.6Hz→~160Hz）、碰撞 >50ms 卡顿 133→3、子宠进程补挂远端硬墙、零拷贝消融的诚实记录（崩溃案机理=绘制重入，未结案）。 | 改 `movement.move_anim_tick`/走路位移、webm 冷路径/首帧缓存/meta 后台化、岛碰撞远端模式与静态成员发布、音效候选缓存、或「多开」设置项时；排查 Qt6Gui 绘制重入崩溃时也要读（含消融对比与取证指针）。 |
 | [`PR-REPORT-ONLINE-UPDATE-2026-09-24.md`](PR-REPORT-ONLINE-UPDATE-2026-09-24.md) | 在线更新 PR 报告：多源 manifest、镜像回退、大小/SHA-256 校验、Windows Inno Setup 自动安装、设置页与版本显示。 | 改 `pet/updater.py`、更新设置页、发布 manifest 或安装器重启行为时。 |
 | [`PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md`](PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md) | 发布后补丁报告（三个独立提交）：① issue #186 多显示器跨屏拖拽/抛掷恢复——#137 把落位统一钳进本屏，改成「一次交互一个多屏活动区域快照」（`DesktopArea` + `band_bounds` 防错位空洞）；② 托盘图标消失——首帧不再同步解码后 `icon_pixmap()` 为空，占位图标 + `frame_ready` 换角色头像；③ 右键菜单「鼠标穿透」去重（设置页 + 托盘保留）。 | 改窗口落位/钳制/抛掷边界（`pet/window_placement.py`、`_interaction_area` 快照生命周期）时；改托盘图标/`_build_tray` 时；或再遇「托盘图标不见了」「桌宠拖不到副屏」这类反馈时（含单屏不可复现的探针口径）。 |
+| [`PR-REPORT-WEATHER-2026-09-29.md`](PR-REPORT-WEATHER-2026-09-29.md) | 天气：中国天气网直连优先 + open-meteo 兜底、地名容错（"鹿城区"→"鹿城"）、多城市列表（当前城市排第一、上限 12）、后台取数 + 队列 + tick 冒泡、走入提醒队列因此天然兼容免打扰；含纯逻辑微基准与"沙箱禁网、接口未本机复测"的如实记录。 | 改 `pet/weather_source.py` 的解析/编排、`pet/weather_service.py` 的线程与队列、天气的菜单与设置入口时；也给"新增一个联网信息类功能该怎么做（纯逻辑 + 注入 HTTP 出口）"作范例时。 |
 
 ---
 

@@ -202,7 +202,10 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 打包变体不再展示该死路开关（运行时回退在 pet/dynamic_island.py 的
 # chat_available）。实测 2357；按文件约定只随实测校准，不为达标压行。
 # 2026-09-24：新增独立更新页后仅保留导航/深链/版本页脚接线，更新页主体已拆到 pet/update_settings.py。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2383
+# 2026-09-29 上调到 2386（+3）：天气设置入口——控件与行在 pet/settings_weather.py，
+# 「互动」域新增第三个页内标签「天气」由 settings_interaction 承载；本文件只多
+# 模块 import（+1）与保存链 apply_to_config(self)（+2 含注释）。实测 2386。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2386
 
 
 def _read(name: str) -> str:

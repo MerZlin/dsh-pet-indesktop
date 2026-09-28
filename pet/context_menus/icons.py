@@ -152,6 +152,12 @@ def vector_menu_icon(menu: QMenu, name: str, size: int | None = None) -> QIcon:
         painter.drawLine(QPointF(5.0, 5.5), QPointF(11.0, 5.5))
         painter.drawLine(QPointF(8.0, 4.0), QPointF(8.0, 12.0))
         painter.drawArc(QRectF(5.2, 5.0, 5.6, 6.0), 70 * 16, 220 * 16)
+    elif name == "weather":
+        # 太阳 + 云：天气入口一眼能认出来（与余额/待办同级的信息类动作）
+        painter.drawEllipse(QPointF(5.6, 5.6), 2.6, 2.6)
+        painter.drawLine(QPointF(5.6, 1.2), QPointF(5.6, 2.6))
+        painter.drawLine(QPointF(1.2, 5.6), QPointF(2.6, 5.6))
+        painter.drawRoundedRect(QRectF(4.6, 8.6, 9.6, 4.4), 2.2, 2.2)
     elif name == "update":
         painter.drawArc(QRectF(2.0, 2.0, 12.0, 12.0), 35 * 16, 285 * 16)
         painter.drawPolygon(QPolygonF([QPointF(10.7, 1.8), QPointF(14.0, 2.5), QPointF(12.0, 5.3)]))
