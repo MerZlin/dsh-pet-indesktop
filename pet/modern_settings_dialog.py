@@ -166,6 +166,7 @@ from . import settings_file_interpret
 from . import settings_interaction
 from . import settings_music
 from . import settings_pet_controls
+from . import settings_quiet
 from .report_gates import REPORT_GATE_KEYS, REPORT_GATE_LABELS, gate_for_event
 
 
@@ -331,6 +332,8 @@ class ModernSettingsDialog(QDialog):
         self._build_pet_controls()
         # 「文件识别」域控件在本模块构建（行数预算原因），见 settings_file_interpret。
         self._build_file_interpret_controls()
+        # 免打扰 / 今日汇总的控件同样在本模块外构建（行数预算原因），见 settings_quiet。
+        settings_quiet.build_quiet_controls(self)
         # 「音乐播放器路径」控件同样在本模块构建（行数预算原因），见 settings_music。
         settings_music.create_music_player_controls(self)
         # 「随桌宠启动 dsh 服务」开关（origin/main #80 合入带回）：构建留在
@@ -1847,6 +1850,7 @@ class ModernSettingsDialog(QDialog):
         automation = page_content(
             [
                 ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
+                ("免打扰与汇总", settings_quiet.build_quiet_rows(self)),
                 ("主动感知", proactive_rows),
                 ("循环检测", loop_rows),
                 ("卡住检测", stuck_rows),
@@ -2246,6 +2250,8 @@ class ModernSettingsDialog(QDialog):
         self.config.set("agent_link", agent_cfg)
         self.config.set("todo_reminder_enabled", self.todo_reminder_check.isChecked())
         self.config.set("todo_reminder_lead_minutes", int(self.todo_reminder_lead_spin.value()))
+        # 免打扰 / 今日汇总 4 键（控件与行在 settings_quiet）
+        settings_quiet.apply_to_config(self)
         # 语音报时设置页写回（仅写 voice_chime_* 11 键）
         if self.voice_chime_page is not None:
             self.voice_chime_page.apply_to_config()

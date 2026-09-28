@@ -70,6 +70,7 @@ ACTION_LABELS = {
     "check_update": "检查更新", "github_project": "GitHub 项目页",
     "quark_download": "夸克网盘下载", "agent_link": "Agent 联动",
     "proactive_screen": "主动识屏", "todo_panel": "待办提醒",
+    "quiet_mode": "免打扰", "daily_summary": "今日汇总",
     "modern_settings": "桌宠设置", "quit": "退出",
 }
 
@@ -94,6 +95,7 @@ ACTION_ICONS = {
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
     "proactive_screen": "screen", "todo_panel": "todo",
+    "quiet_mode": "automation", "daily_summary": "balance",
     "modern_settings": "settings", "quit": "quit",
     "voice_chime_now": "chat", "voice_chime_toggle": "chat",
     "festival_now": "todo", "festival_toggle": "todo",
@@ -163,6 +165,40 @@ def _build_settings(menu, pet):
 
 def _build_todo_panel(menu, pet):
     return add_action(menu, "待办提醒", "todo", pet.on_open_todo_panel, close_on_trigger=True)
+
+
+def _build_quiet_mode(menu, pet):
+    """免打扰子菜单：四档时长 + 结束（开着时把剩余时间写进文案）。
+
+    只做"压气泡 + 攒提醒 + 结束汇报"三件事：审批/提问/错误这类状态类事件
+    一律穿透（判定在 pet/quiet_mode.py，展示闸门在 pet/window_alerts.py）。
+    """
+    from .. import quiet_mode
+    from .. import quiet_service
+
+    submenu = add_submenu(menu, "免打扰", "automation")
+    for minutes in quiet_mode.QUIET_OPTIONS:
+        add_action(
+            submenu, f"{minutes} 分钟", "automation",
+            lambda minutes=minutes: quiet_service.start(pet, minutes),
+            close_on_trigger=True,
+        )
+    add_action(
+        submenu, quiet_service.menu_stop_label(pet), "stop",
+        lambda: quiet_service.stop(pet),
+        close_on_trigger=True,
+    )
+    return submenu
+
+
+def _build_daily_summary(menu, pet):
+    from .. import quiet_service
+
+    return add_action(
+        menu, "今日汇总", "balance",
+        lambda: quiet_service.show_daily_summary(pet),
+        close_on_trigger=True,
+    )
 
 
 def _build_voice_chime_now(menu, pet):
@@ -300,6 +336,9 @@ class MenuActionRegistry:
             "todo_panel": MenuActionSpec(
                 _build_todo_panel, _callback_available("on_open_todo_panel")
             ),
+            # 免打扰与今日汇总不依赖任何可选服务：菜单里始终可用。
+            "quiet_mode": MenuActionSpec(_build_quiet_mode),
+            "daily_summary": MenuActionSpec(_build_daily_summary),
             "voice_chime_now": MenuActionSpec(
                 _build_voice_chime_now, _callback_available("on_voice_chime_now")
             ),
