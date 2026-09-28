@@ -894,6 +894,9 @@ class PetInstance:
             shell._apply_balance_timer()
             # Phase 1/2：设置保存后按配置同步可选服务（todo 懒启停）与动画预热
             shell._sync_todo_service()
+            shell._sync_timed_reminder()
+            shell._sync_app_usage()
+            shell._sync_hotkeys()
             shell._sync_chime_service()
             shell._sync_festival_service()
             self._sync_animation_prewarm()
@@ -1225,6 +1228,52 @@ class AppShell:
             if getattr(self, "todo_panel", None) is None:
                 self.todo_service = None
 
+    # ------------------------------------------------------------ 功能门控（定时提醒）
+    def _service_windows(self) -> list:
+        """需要挂 host-based 服务的窗口：多实例扇出 + 主窗兜底（去空）。"""
+        wins = [getattr(inst, "win", None) for inst in (getattr(self, "_instances", None) or [])]
+        fallback = getattr(self, "win", None)
+        if fallback is not None:
+            wins.append(fallback)
+        return [win for win in wins if win is not None]
+
+    def _sync_timed_reminder(self) -> None:
+        """按配置同步定时提醒节拍（规则在 config.json 的 timed_rules）。
+
+        节拍挂在窗口上（``timed_reminder_service`` 是 host-based），所以这里只负责
+        "窗口在不在 + 开关开没开"两件事；关掉开关就停表，不常驻空转。
+        """
+        from . import timed_reminder_service
+
+        for win in self._service_windows():
+            if self.config.get("timed_on", True):
+                timed_reminder_service.ensure_started(win)
+            else:
+                timed_reminder_service.stop_timer(win)
+
+    def _sync_app_usage(self) -> None:
+        """按配置同步「用久了提醒」节拍（规则在 config.json 的 app_usage_rules）。"""
+        from . import app_usage_service
+
+        for win in self._service_windows():
+            if self.config.get("app_usage_on", True):
+                app_usage_service.ensure_started(win)
+            else:
+                app_usage_service.stop_timer(win)
+
+    def _sync_hotkeys(self) -> None:
+        """按配置装/卸全局快捷键（Win32 注册 + 原生事件过滤器）。
+
+        非 Windows 平台上 ``ensure_installed`` 内部直接退化，这里不用分平台。
+        """
+        from . import hotkey_service
+
+        for win in self._service_windows():
+            if self.config.get("hotkeys_on", True):
+                hotkey_service.ensure_installed(win)
+            else:
+                hotkey_service.stop(win)
+
     # ------------------------------------------------------------ 功能门控（语音报时）
     def _festival_speak_wanted(self) -> bool:
         """节日语音是否开启——它复用报时服务的音频通道，因此会连带影响通道生命周期。"""
@@ -1422,6 +1471,9 @@ class AppShell:
         self._apply_balance_timer()
         # Phase 1/2：设置保存后按配置同步可选服务（todo 懒启停）与动画预热
         self._sync_todo_service()
+        self._sync_timed_reminder()
+        self._sync_app_usage()
+        self._sync_hotkeys()
         self._sync_chime_service()
         self._sync_festival_service()
         for inst in getattr(self, "_instances", []):
@@ -1692,6 +1744,9 @@ class AppShell:
         self.instance._apply_spawn_offset()
         self._apply_balance_timer()
         self._sync_todo_service()
+        self._sync_timed_reminder()
+        self._sync_app_usage()
+        self._sync_hotkeys()
         # 先同步节日服务：报时服务在 start() 里会立刻 tick 一次，那一刻就需要能问到
         # "本分钟是否让位"。顺序反了会出现"报时先响、节日后响"从而两者都出声。
         self._sync_festival_service()

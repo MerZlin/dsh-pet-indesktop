@@ -21,7 +21,15 @@
    monkeypatch（test_agent_link / test_proactive 已如此）。
 """
 
+import os
 import sys
+
+# 默认走 offscreen：与 CI（.github/workflows/pr-test.yml 的 QT_QPA_PLATFORM: offscreen）
+# 完全一致，且避免测试在真实桌面上创建透明置顶窗口——本机跑全量时会看到"切屏闪烁"，
+# 就是那些窗口在显示/移动/隐藏。想用真实平台跑（例如要肉眼观察窗口行为）：
+#   $env:QT_QPA_PLATFORM = "windows"
+# 这里用 setdefault，所以上面那条环境变量优先。
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 

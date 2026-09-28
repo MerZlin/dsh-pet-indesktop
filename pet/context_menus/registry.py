@@ -70,6 +70,17 @@ ACTION_LABELS = {
     "check_update": "检查更新", "github_project": "GitHub 项目页",
     "quark_download": "夸克网盘下载", "agent_link": "Agent 联动",
     "proactive_screen": "主动识屏", "todo_panel": "待办提醒",
+    "memory_trim": "回收内存",
+    "timed_reminder": "定时提醒",
+    "app_usage_toggle": "用久了提醒",
+    "hotkeys_toggle": "全局快捷键",
+    "rules_editor": "编辑规则…",
+    # 报时/节日四项的菜单文案是动态的（启用↔关闭），编排器里给中性名，
+    # 免得菜单编排列表回落到英文 id（2026-09-29 用户反馈）。
+    "voice_chime_now": "立即报时",
+    "voice_chime_toggle": "语音报时开关",
+    "festival_now": "今日节日",
+    "festival_toggle": "节日提醒开关",
     "modern_settings": "桌宠设置", "quit": "退出",
 }
 
@@ -94,6 +105,11 @@ ACTION_ICONS = {
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
     "proactive_screen": "screen", "todo_panel": "todo",
+    "memory_trim": "clear",
+    "timed_reminder": "todo",
+    "app_usage_toggle": "automation",
+    "hotkeys_toggle": "interaction",
+    "rules_editor": "settings",
     "modern_settings": "settings", "quit": "quit",
     "voice_chime_now": "chat", "voice_chime_toggle": "chat",
     "festival_now": "todo", "festival_toggle": "todo",
@@ -163,6 +179,61 @@ def _build_settings(menu, pet):
 
 def _build_todo_panel(menu, pet):
     return add_action(menu, "待办提醒", "todo", pet.on_open_todo_panel, close_on_trigger=True)
+
+
+def _build_memory_trim(menu, pet):
+    """回收内存：收拾**别的进程**已经用不着的工作集（不动自己与前台）。"""
+    from .. import memory_trim_service
+
+    return add_action(
+        menu, "回收内存", "clear",
+        lambda: memory_trim_service.run_now(pet),
+        close_on_trigger=True,
+    )
+
+
+def _build_timed_reminder(menu, pet):
+    """定时提醒开关（规则在 config.json 的 timed_rules，形如每天/每周/每隔 N 分钟）。"""
+    from .. import timed_reminder_service as service
+
+    action = add_action(menu, "定时提醒", "todo")
+    action.setCheckable(True)
+    action.setChecked(service.enabled(pet))
+    action.toggled.connect(lambda _checked, pet=pet: service.toggle(pet))
+    return action
+
+
+def _build_app_usage(menu, pet):
+    """用久了提醒开关（规则在 config.json 的 app_usage_rules）。"""
+    from .. import app_usage_service as service
+
+    action = add_action(menu, "用久了提醒", "automation")
+    action.setCheckable(True)
+    action.setChecked(service.enabled(pet))
+    action.toggled.connect(lambda _checked, pet=pet: service.toggle(pet))
+    return action
+
+
+def _build_hotkeys(menu, pet):
+    """全局快捷键开关（键与动作在 config.json 的 hotkeys）。"""
+    from .. import hotkey_service as service
+
+    action = add_action(menu, "全局快捷键", "interaction")
+    action.setCheckable(True)
+    action.setChecked(service.enabled(pet))
+    action.toggled.connect(lambda _checked, pet=pet: service.toggle(pet))
+    return action
+
+
+def _build_rules_editor(menu, pet):
+    """把定时提醒 / 用久了 / 快捷键三张规则表打开成图形编辑器。"""
+    from .. import rules_editor
+
+    return add_action(
+        menu, "编辑规则…", "settings",
+        lambda: rules_editor.open_rules_editor(pet.cfg, window=pet, parent=pet),
+        close_on_trigger=True,
+    )
 
 
 def _build_voice_chime_now(menu, pet):
@@ -300,6 +371,13 @@ class MenuActionRegistry:
             "todo_panel": MenuActionSpec(
                 _build_todo_panel, _callback_available("on_open_todo_panel")
             ),
+            # 回收内存不依赖任何可选服务：菜单里始终可用
+            "memory_trim": MenuActionSpec(_build_memory_trim),
+            # 定时提醒同理（规则在 config.json 的 timed_rules）
+            "timed_reminder": MenuActionSpec(_build_timed_reminder),
+            "app_usage_toggle": MenuActionSpec(_build_app_usage),
+            "hotkeys_toggle": MenuActionSpec(_build_hotkeys),
+            "rules_editor": MenuActionSpec(_build_rules_editor),
             "voice_chime_now": MenuActionSpec(
                 _build_voice_chime_now, _callback_available("on_voice_chime_now")
             ),
