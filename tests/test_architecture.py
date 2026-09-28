@@ -202,7 +202,13 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 打包变体不再展示该死路开关（运行时回退在 pet/dynamic_island.py 的
 # chat_available）。实测 2357；按文件约定只随实测校准，不为达标压行。
 # 2026-09-24：新增独立更新页后仅保留导航/深链/版本页脚接线，更新页主体已拆到 pet/update_settings.py。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2383
+# 2026-09-29 上调到 2389（+6）：免打扰 + 今日汇总的设置入口——控件创建、4 行
+# SettingRow、保存链写回**全部拆到 pet/settings_quiet.py**（新控件组优先拆出的口径），
+# 本文件只留三处接线：构造期 build_quiet_controls(self)（+2 含注释）、
+# 「自动化与联动」域加一行 ("免打扰与汇总", build_quiet_rows(self))（+1）、
+# 保存链 apply_to_config(self)（+2 含注释）、模块 import（+1）。实测 2389，
+# 按文件约定只随实测校准，不为达标压行。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2389
 
 
 def _read(name: str) -> str:

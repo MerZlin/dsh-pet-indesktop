@@ -35,8 +35,15 @@ def alert_survives_suppression(alert_type: str, *, sticky: bool, buttons, priori
 
 
 def set_bubble_suppressed(host, suppressed: bool) -> None:
-    """设置窗口打开期间暂停气泡显示；True 时立即隐藏当前气泡。"""
-    host._bubble_suppressed = bool(suppressed)
+    """设置窗口打开期间暂停气泡显示；True 时立即隐藏当前气泡。
+
+    这里只记"设置窗口"这一个抑制源：免打扰与前台全屏由 pet/quiet_service.py
+    另记，最终生效值按**或**关系算——否则关掉设置窗口会把免打扰一起关掉。
+    """
+    from . import quiet_service
+
+    host._bubble_suppressed_settings = bool(suppressed)
+    host._bubble_suppressed = bool(suppressed) or quiet_service.suppression_active(host)
     if host._bubble_suppressed:
         bubble = getattr(host, "_speech_bubble", None)
         if bubble is not None:
@@ -114,6 +121,15 @@ def show_alert(host, text: str, *, subtitle: str = "", duration_ms: int = 0,
         return
     if host._bubble_suppressed and not alert_survives_suppression(
             alert_type, sticky=sticky, buttons=buttons, priority=priority):
+        # 免打扰期间：普通提醒**暂存**起来，等结束后统一汇报；设置窗口抑制期
+        # 维持原丢弃行为（正在配置 ≠ 别打扰我）。审批/提问/错误等状态类事件
+        # 在上面那个 alert_survives_suppression 判定里已经放行，不受影响。
+        from . import quiet_mode
+        from . import quiet_service
+
+        if quiet_service.quiet_active(host) and not quiet_mode.alert_survives_quiet(
+                alert_type, sticky=sticky, buttons=buttons, priority=priority):
+            quiet_service.hold(host, text)
         return
     item = {
         "id": alert_id or "",

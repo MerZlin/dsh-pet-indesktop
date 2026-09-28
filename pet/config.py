@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from . import catalog
+from . import daily_summary as daily_summary_mod
+from . import quiet_mode
 from .report_gates import (
     LEGACY_PERCENT_GATES,
     LEGACY_SWITCH_GATES,
@@ -711,6 +713,14 @@ class Config:
             "self_talk_image_scale": 100,  # 气泡配图显示尺寸百分比（50~300，100 = 默认）
             "self_talk_image_chance": DEFAULT_SELF_TALK_IMAGE_CHANCE,  # 出图概率百分比（0~100）
             "bubble_text_scale": 100,  # 气泡文字显示尺寸百分比（50~300，100 = 默认；气泡与字号一起放大）
+            # 免打扰 / 今日汇总（pet/quiet_service.py 读这几项）：
+            #   quiet_minutes_default   菜单点「免打扰」时的默认时长
+            #   quiet_also_on_fullscreen 前台全屏（打游戏/看电影）也当免打扰
+            #   summary_min_seconds / summary_max_apps  今日汇总里应用时长点名的门槛与条数
+            "quiet_minutes_default": quiet_mode.DEFAULT_QUIET_MINUTES,
+            "quiet_also_on_fullscreen": True,
+            "summary_min_seconds": daily_summary_mod.DEFAULT_SUMMARY_MIN_SECONDS,
+            "summary_max_apps": daily_summary_mod.DEFAULT_SUMMARY_MAX_APPS,
             "self_talk_texts": list(DEFAULT_SELF_TALK_TEXTS),
             "self_talk_image_dir": "assets/big_blue_fat_fish",
             "self_talk_bubble_style": DEFAULT_SELF_TALK_BUBBLE_STYLE,
@@ -976,6 +986,10 @@ class Config:
             "self_talk_image_scale",
             "self_talk_image_chance",
             "bubble_text_scale",
+            "quiet_minutes_default",
+            "quiet_also_on_fullscreen",
+            "summary_min_seconds",
+            "summary_max_apps",
             "self_talk_bubble_style",
             "mouse_through",
             "cursor_hidden_passthrough",
@@ -1274,6 +1288,21 @@ class Config:
         self.data["self_talk_image_scale"] = int(_float_or_default(self.data.get("self_talk_image_scale"), 100.0, 50.0, 300.0))
         self.data["self_talk_image_chance"] = int(_float_or_default(self.data.get("self_talk_image_chance"), float(DEFAULT_SELF_TALK_IMAGE_CHANCE), 0.0, 100.0))
         self.data["bubble_text_scale"] = int(_float_or_default(self.data.get("bubble_text_scale"), 100.0, 50.0, 300.0))
+        self.data["quiet_minutes_default"] = quiet_mode.normalize_minutes(
+            self.data.get("quiet_minutes_default"),
+            quiet_mode.DEFAULT_QUIET_MINUTES,
+        )
+        self.data["quiet_also_on_fullscreen"] = _bool_or_default(
+            self.data.get("quiet_also_on_fullscreen"), True
+        )
+        self.data["summary_min_seconds"] = int(_float_or_default(
+            self.data.get("summary_min_seconds"),
+            float(daily_summary_mod.DEFAULT_SUMMARY_MIN_SECONDS), 0.0, 86400.0,
+        ))
+        self.data["summary_max_apps"] = int(_float_or_default(
+            self.data.get("summary_max_apps"),
+            float(daily_summary_mod.DEFAULT_SUMMARY_MAX_APPS), 1.0, 5.0,
+        ))
         self.data["self_talk_enabled"] = bool(self.data.get("self_talk_enabled", False))
         self.data["self_talk_speak_enabled"] = _bool_or_default(self.data.get("self_talk_speak_enabled"), True)
         self.data["self_talk_voice_precache_enabled"] = _bool_or_default(self.data.get("self_talk_voice_precache_enabled"), False)

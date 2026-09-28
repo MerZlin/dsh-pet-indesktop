@@ -156,6 +156,11 @@ def on_cursor_visibility_changed(host, visibility: str, *, monotonic=None) -> No
 def on_fullscreen_changed(host, hit: bool) -> None:
     """主线程：全屏出现 → 隐藏桌宠；全屏退出 → 恢复。"""
     logging.info("全屏状态变化 hit=%s auto_hidden=%s visible=%s", hit, host._auto_hidden, host.isVisible())
+    # 免打扰的"全屏也算"复用这条既有信号（见 pet/quiet_service.set_fullscreen_active）：
+    # 全屏时普通提醒攒着，退出全屏后一起汇报；不再另起一条探测线程。
+    from . import quiet_service
+
+    quiet_service.set_fullscreen_active(host, bool(hit))
     if hit:
         if not host._auto_hidden and host.isVisible():
             host._auto_hidden = True

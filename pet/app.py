@@ -39,6 +39,7 @@ from . import autostart as autostart_mod
 from . import balance as balance_mod
 from . import catalog
 from . import click_sound
+from . import quiet_service
 from . import self_talk_voice
 from . import slot_manager as slot_manager_mod
 from . import updater
@@ -184,6 +185,8 @@ def _show_balance_payload(win, payload) -> None:
         text, duration_ms=6000,
         subtitle=subtitle,
     )
+    # 今日汇总复用这句余额文案（免打扰结束汇报 / 菜单「今日汇总」都会读）
+    quiet_service.remember_balance(win, text)
     # 按余额档位播放上游余额动画（仅当素材存在时静默跳过）
     p = balance_mod.balance_percent(info.get("total"))
     if p is not None:

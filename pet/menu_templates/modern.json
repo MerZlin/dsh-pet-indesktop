@@ -7,7 +7,7 @@
     {"id": "interaction", "items": ["ojingjing", "chat"]},
     {"id": "playback", "items": ["animations_hub", "character"]},
     {"id": "functions", "items": ["playback_speed", "size", "drag_physics", "return_corner", "no_move", "on_top", "autostart", "spawn_pet"]},
-    {"id": "tools", "items": ["harness", "deepseek_web", "quick_launch"]},
+    {"id": "tools", "items": ["harness", "deepseek_web", "quick_launch", "quiet_mode", "daily_summary"]},
     {"id": "settings", "items": ["modern_settings"]},
     {"id": "template", "items": ["switch_template"]},
     {"id": "exit", "items": ["quit"]}
