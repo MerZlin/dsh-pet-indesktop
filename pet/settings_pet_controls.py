@@ -495,6 +495,10 @@ def build_pet_controls(host) -> None:
     host.todo_reminder_lead_spin.setRange(0, 60)
     host.todo_reminder_lead_spin.setSuffix(" 分钟")
     host.todo_reminder_lead_spin.setValue(int(host.config.get("todo_reminder_lead_minutes", 5) or 0))
+    host.todo_reminder_require_ack_check = ToggleSwitch(host)
+    host.todo_reminder_require_ack_check.setChecked(
+        bool(host.config.get("todo_reminder_require_ack", False))
+    )
 
     appearance = host.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
     host.menu_theme_select = ModernSelect(host, width=132)

@@ -772,6 +772,11 @@ class ModernSettingsDialog(QDialog):
                     SettingRow(
                         "todo_reminder_lead_minutes", "提前提醒", "到点前提前提醒的分钟数（0~60，0 = 不提前，仅准点提醒一次）。", self.todo_reminder_lead_spin
                     ),
+                    SettingRow(
+                        "todo_reminder_require_ack", "提醒需点击确定",
+                        "开启后，待办提醒会持续显示，直到点击「确定」或「推迟」；推迟会安排到下一本地空档。桌宠隐藏时仍使用桌面通知。",
+                        self.todo_reminder_require_ack_check,
+                    ),
                 ],
                 behavior_content,
             )
@@ -1846,7 +1851,10 @@ class ModernSettingsDialog(QDialog):
         gate_rows = claim_prefix("report_gate_")
         automation = page_content(
             [
-                ("待办提醒", claim("todo_reminder_enabled", "todo_reminder_lead_minutes")),
+                ("待办提醒", claim(
+                    "todo_reminder_enabled", "todo_reminder_lead_minutes",
+                    "todo_reminder_require_ack",
+                )),
                 ("主动感知", proactive_rows),
                 ("循环检测", loop_rows),
                 ("卡住检测", stuck_rows),
@@ -2246,6 +2254,9 @@ class ModernSettingsDialog(QDialog):
         self.config.set("agent_link", agent_cfg)
         self.config.set("todo_reminder_enabled", self.todo_reminder_check.isChecked())
         self.config.set("todo_reminder_lead_minutes", int(self.todo_reminder_lead_spin.value()))
+        self.config.set(
+            "todo_reminder_require_ack", self.todo_reminder_require_ack_check.isChecked()
+        )
         # 语音报时设置页写回（仅写 voice_chime_* 11 键）
         if self.voice_chime_page is not None:
             self.voice_chime_page.apply_to_config()

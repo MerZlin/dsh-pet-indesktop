@@ -6,7 +6,8 @@ TodoReminderService 在 __init__ 内惰性导入 Qt（同 pet/proactive.py 约�
 QTimer 全程运行在 GUI 线程，无跨线程对象。
 
 条目持久化在独立文件 todo_items[-<instance_id>].json（config.dir 下），
-偏好 todo_reminder_enabled / todo_reminder_lead_minutes 在 config.json。
+偏好 todo_reminder_enabled / todo_reminder_lead_minutes /
+todo_reminder_require_ack 在 config.json。
 
 提醒语义：每条启用条目有 lead / due 两个触发档；触发窗口
 [触发时刻, +grace] 内产生提醒并盖戳（持久化，防重启/唤醒重复），
@@ -65,6 +66,10 @@ def new_todo_item(title, kind, time_text, date_text: str = "") -> dict:
         "enabled": True,
         "fired_lead_slot": None,
         "fired_due_slot": None,
+        "snooze_date": None,
+        "snooze_time": None,
+        "snooze_fired_lead_slot": None,
+        "snooze_fired_due_slot": None,
     }
     if item["kind"] == "once":
         item["date"] = _normalize_iso_date(date_text) or date.today().isoformat()
@@ -91,6 +96,13 @@ def clean_todo_items(value) -> list[dict]:
         seen_ids.add(item["id"])
         item["enabled"] = raw["enabled"] if isinstance(raw.get("enabled"), bool) else True
         for key in ("fired_lead_slot", "fired_due_slot"):
+            slot = raw.get(key)
+            item[key] = slot if isinstance(slot, str) and slot else None
+        snooze_date = _normalize_iso_date(raw.get("snooze_date"))
+        snooze_time = _normalize_hhmm(raw.get("snooze_time"))
+        item["snooze_date"] = snooze_date if snooze_date and snooze_time else None
+        item["snooze_time"] = snooze_time if snooze_date and snooze_time else None
+        for key in ("snooze_fired_lead_slot", "snooze_fired_due_slot"):
             slot = raw.get(key)
             item[key] = slot if isinstance(slot, str) and slot else None
         items.append(item)
@@ -123,7 +135,8 @@ def advance_todo_state(items, prefs, now: datetime, *,
     - prefs = {"enabled": bool, "lead_minutes": int}；总开关关闭时原样返回；
     - 触发窗口 [触发时刻, +grace] 内产生 fire 并盖戳；出窗静默盖戳；
     - once 条目过 due+grace 自动归档（enabled=False）。
-    fires 元素：{"id", "title", "time", "phase"}，phase ∈ {"lead", "due"}。
+    fires 元素：{"id", "title", "time", "phase", "lead_minutes"}，phase ∈ {"lead", "due"}；
+    lead 档携带实际提前量，due 档的 lead_minutes 为 0。
     """
     if not bool(prefs.get("enabled", True)):
         return [], list(items)
@@ -141,33 +154,62 @@ def advance_todo_state(items, prefs, now: datetime, *,
             continue
         lead_dt, due_dt = _fire_datetimes(item, lead_minutes, now)
         time_text = _normalize_hhmm(item.get("time")) or str(item.get("time") or "")
-        for phase, fire_dt, slot_key in (
-            ("lead", lead_dt, "fired_lead_slot"),
-            ("due", due_dt, "fired_due_slot"),
-        ):
-            if fire_dt is None or now < fire_dt:
-                continue
-            slot = f"{fire_dt.date().isoformat()}T{time_text}#{phase}"
-            if item.get(slot_key) == slot:
-                continue
-            item[slot_key] = slot
-            if now <= fire_dt + grace:
-                fires.append({
-                    "id": item["id"],
-                    "title": item["title"],
-                    "time": item["time"],
-                    "phase": phase,
-                })
+        schedules = [(lead_dt, due_dt, time_text,
+                      "fired_lead_slot", "fired_due_slot", False)]
+        snooze_date = _normalize_iso_date(item.get("snooze_date"))
+        snooze_time = _normalize_hhmm(item.get("snooze_time"))
+        if item.get("kind") == "daily" and snooze_date and snooze_time:
+            snoozed_item = {
+                "kind": "once", "date": snooze_date, "time": snooze_time,
+            }
+            snooze_lead, snooze_due = _fire_datetimes(
+                snoozed_item, lead_minutes, now
+            )
+            schedules.append((
+                snooze_lead, snooze_due, snooze_time,
+                "snooze_fired_lead_slot", "snooze_fired_due_slot", True,
+            ))
+
+        for scheduled_lead, scheduled_due, scheduled_time, lead_key, due_key, deferred in schedules:
+            for phase, fire_dt, slot_key in (
+                ("lead", scheduled_lead, lead_key),
+                ("due", scheduled_due, due_key),
+            ):
+                if fire_dt is None or now < fire_dt:
+                    continue
+                slot = f"{fire_dt.date().isoformat()}T{scheduled_time}#{phase}"
+                if item.get(slot_key) == slot:
+                    continue
+                item[slot_key] = slot
+                if now <= fire_dt + grace:
+                    fires.append({
+                        "id": item["id"],
+                        "title": item["title"],
+                        "time": scheduled_time,
+                        "phase": phase,
+                        "lead_minutes": lead_minutes if phase == "lead" else 0,
+                        "scheduled_date": scheduled_due.date().isoformat(),
+                        "deferred": deferred,
+                    })
         if (item.get("kind") == "once" and due_dt is not None
                 and now > due_dt + grace):
             item["enabled"] = False
+        if (item.get("kind") == "daily" and snooze_date and snooze_time
+                and now > datetime.combine(
+                    date.fromisoformat(snooze_date),
+                    datetime.strptime(snooze_time, "%H:%M").time(),
+                ) + grace):
+            item["snooze_date"] = None
+            item["snooze_time"] = None
+            item["snooze_fired_lead_slot"] = None
+            item["snooze_fired_due_slot"] = None
         new_items.append(item)
     return fires, new_items
 
 
 def summarize_next(items, now: datetime) -> str:
     """下一条未触发待办的人类可读摘要（气泡/面板用）；无则空串。"""
-    best = None  # (due_dt, item)
+    best = None  # (due_dt, item, is_deferred, time_text)
     for raw in items:
         item = raw if isinstance(raw, dict) else {}
         if not item.get("enabled"):
@@ -182,27 +224,42 @@ def summarize_next(items, now: datetime) -> str:
             if item.get("fired_due_slot") == today_slot:
                 day += timedelta(days=1)
             due = datetime(day.year, day.month, day.day, hour, minute)
+            if due > now and (best is None or due < best[0]):
+                best = (due, item, False, time_text)
+            snooze_date = _normalize_iso_date(item.get("snooze_date"))
+            snooze_time = _normalize_hhmm(item.get("snooze_time"))
+            if snooze_date and snooze_time:
+                snooze_day = date.fromisoformat(snooze_date)
+                snooze_hour, snooze_minute = (
+                    int(part) for part in snooze_time.split(":")
+                )
+                snooze_due = datetime(
+                    snooze_day.year, snooze_day.month, snooze_day.day,
+                    snooze_hour, snooze_minute,
+                )
+                if snooze_due > now and (best is None or snooze_due < best[0]):
+                    best = (snooze_due, item, True, snooze_time)
         else:
             _, due = _fire_datetimes(item, 0, now)
-        if due is None or due <= now:
-            continue
-        if best is None or due < best[0]:
-            best = (due, item)
+            if due is None or due <= now:
+                continue
+            if best is None or due < best[0]:
+                best = (due, item, False, time_text)
     if best is None:
         return ""
-    due, item = best
+    due, item, deferred, time_text = best
     day = due.date()
     # daily 且下次就在今天：以“每天”开头；其余（含 daily 已触发顺延到明天）
     # 走通用的 今天/明天/M月D日 前缀。
-    if item.get("kind") == "daily" and day == now.date():
-        return f"每天 {item['time']} {item['title']}"
+    if item.get("kind") == "daily" and not deferred and day == now.date():
+        return f"每天 {time_text} {item['title']}"
     if day == now.date():
         day_text = "今天"
     elif day == now.date() + timedelta(days=1):
         day_text = "明天"
     else:
         day_text = f"{day.month}月{day.day}日"
-    return f"{day_text} {item['time']} {item['title']}"
+    return f"{day_text} {time_text} {item['title']}"
 
 
 # ------------------------------------------------------------ 条目存储
@@ -275,7 +332,9 @@ class TodoReminderService:
             getattr(config, "instance_id", "") or "",
         ))
         self._items: list[dict] = []
-        self._prefs: dict = {"enabled": True, "lead_minutes": 0}
+        self._prefs: dict = {
+            "enabled": True, "lead_minutes": 0, "require_ack": False,
+        }
         self._notify_enabled = True
         self._timer = QTimer()
         self._timer.setInterval(self.TICK_INTERVAL_MS)
@@ -300,6 +359,7 @@ class TodoReminderService:
         self._prefs = {
             "enabled": bool(config.get("todo_reminder_enabled", True)) if config else True,
             "lead_minutes": max(0, min(60, lead)),
+            "require_ack": bool(config.get("todo_reminder_require_ack", False)) if config else False,
         }
         # 桌面通知分支与既有调用方（chat 等）同规：受全局通知开关门控
         self._notify_enabled = (
@@ -331,17 +391,128 @@ class TodoReminderService:
 
     def _notify_fire(self, fire: dict) -> None:
         app = self._app
-        text = f"⏰ 待办提醒：{fire['title']}（{fire['time']}）"
+        lead = int(fire.get("lead_minutes") or 0)
+        suffix = f"，提前{lead}分钟提醒" if fire.get("phase") == "lead" and lead else ""
+        text = f"⏰ 待办提醒：{fire['title']}（{fire['time']}{suffix}）"
         win = getattr(app, "win", None)
         if win is not None and win.isVisible() and not self._bubble_suppressed():
-            win.show_bubble(text, duration_ms=self.BUBBLE_DURATION_MS)
+            if self._prefs.get("require_ack") and callable(getattr(win, "show_alert", None)):
+                alert_id = (
+                    f"todo-reminder:{fire['id']}:{fire.get('scheduled_date', '')}"
+                    f":{fire['time']}"
+                )
+                win.show_alert(
+                    text,
+                    sticky=True,
+                    buttons=[
+                        ("确定", lambda aid=alert_id: self._resolve_todo_alert(win, aid)),
+                        ("推迟", lambda aid=alert_id, payload=dict(fire):
+                         self._snooze_and_resolve(win, aid, payload)),
+                    ],
+                    alert_id=alert_id,
+                    priority=2,
+                    alert_type="todo_reminder",
+                )
+            else:
+                win.show_bubble(text, duration_ms=self.BUBBLE_DURATION_MS)
             return
         if not self._notify_enabled:
             return
         notify = getattr(app, "system_notify", None)
         if callable(notify):
-            notify("待办提醒", f"{fire['title']}（{fire['time']}）",
+            notify("待办提醒", f"{fire['title']}（{fire['time']}{suffix}）",
                    on_click=getattr(app, "open_todo_panel", None))
+
+    def snooze_fire(self, fire: dict, *, now: datetime | None = None) -> bool:
+        """把当前触发移动到下一本地空档；daily 只覆盖这一轮。"""
+        if not isinstance(fire, dict):
+            return False
+        item = next((value for value in self._items
+                     if isinstance(value, dict)
+                     and value.get("id") == fire.get("id")), None)
+        if item is None:
+            return False
+        scheduled_date = _normalize_iso_date(fire.get("scheduled_date"))
+        scheduled_time = _normalize_hhmm(fire.get("time"))
+        if not scheduled_date or not scheduled_time:
+            return False
+        is_deferred = bool(fire.get("deferred"))
+        if item.get("kind") == "daily":
+            expected_time = _normalize_hhmm(
+                item.get("snooze_time") if is_deferred else item.get("time")
+            )
+            expected_date = (
+                _normalize_iso_date(item.get("snooze_date")) if is_deferred else scheduled_date
+            )
+            if expected_time != scheduled_time or expected_date != scheduled_date:
+                return False
+        elif (item.get("kind") != "once"
+              or _normalize_iso_date(item.get("date")) != scheduled_date
+              or _normalize_hhmm(item.get("time")) != scheduled_time):
+            return False
+        due_day = date.fromisoformat(scheduled_date)
+        due_hour, due_minute = (int(part) for part in scheduled_time.split(":"))
+        scheduled_due = datetime(
+            due_day.year, due_day.month, due_day.day, due_hour, due_minute
+        )
+        current_time = (now or datetime.now()).replace(tzinfo=None)
+        selection_now = max(current_time, scheduled_due)
+
+        try:
+            # 延迟导入：todo_agent 在模块顶部依赖本模块的数据清洗函数。
+            from .todo_agent import find_available_todo_slot
+
+            others = [value for value in self._items if value.get("id") != item["id"]]
+            next_slot = find_available_todo_slot(others, selection_now)
+        except Exception:
+            logger.exception("待办推迟时查找空档失败")
+            return False
+        if next_slot is None:
+            logger.warning("待办推迟时未来 7 天没有可选时段")
+            return False
+
+        original_item = dict(item)
+        item["enabled"] = True
+        if item.get("kind") == "daily":
+            if not is_deferred:
+                base_time = _normalize_hhmm(item.get("time"))
+                if base_time:
+                    item["fired_lead_slot"] = (
+                        f"{scheduled_date}T{base_time}#lead"
+                    )
+                    item["fired_due_slot"] = (
+                        f"{scheduled_date}T{base_time}#due"
+                    )
+            item["snooze_date"], item["snooze_time"] = next_slot
+            item["snooze_fired_lead_slot"] = None
+            item["snooze_fired_due_slot"] = None
+        else:
+            item["date"], item["time"] = next_slot
+            item["fired_lead_slot"] = None
+            item["fired_due_slot"] = None
+
+        if not self._store.save(self._items):
+            item.clear()
+            item.update(original_item)
+            return False
+        panel = getattr(self._app, "todo_panel", None)
+        refresh = getattr(panel, "reload_items", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                logger.exception("待办推迟后刷新面板失败")
+        return True
+
+    def _snooze_and_resolve(self, win, alert_id: str, fire: dict) -> None:
+        if self.snooze_fire(fire):
+            self._resolve_todo_alert(win, alert_id)
+
+    @staticmethod
+    def _resolve_todo_alert(win, alert_id: str) -> None:
+        resolve = getattr(win, "resolve_alert", None)
+        if callable(resolve):
+            resolve(alert_id)
 
     def _bubble_suppressed(self) -> bool:
         """设置窗口打开期间暂停气泡（与 PetInstance._update_bubble_suppression_for_settings

@@ -2750,6 +2750,8 @@ def test_product_copy_has_no_external_brand_reference():
                 # Contributor/change reports are repository evidence, not
                 # user-facing product copy and may mention external brands.
                 or path.name.startswith("README-CHANGE-")
+                # PR reports also record branch names and verification tools.
+                or path.name.startswith("PR-REPORT-")
             ):
                 continue
             if forbidden in path.read_text(encoding="utf-8", errors="ignore").lower():

@@ -806,6 +806,22 @@ def test_build_scripts_bundle_menu_templates_and_chat_styles():
     assert context_menu_mod.load_menu_template("legacy")["id"] == "legacy"
 
 
+def test_onedir_build_preflights_lunar_python_and_waits_for_app_readiness():
+    """Onedir packaging must reject missing runtime deps and fatal import dialogs."""
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "build_onedir.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    assert "from lunar_python import Lunar, Solar" in text
+    assert "lunar-python missing" in text
+    assert "-ReadyText" in text
+    assert "$loopStarted = -join @([char]0x8FDB" in text
+    assert "-ReadyText $loopStarted" in text
+    assert "-ReadyDirectory" in text
+    assert "Get-Content -LiteralPath $readyLog.FullName -Raw -Encoding UTF8" in text
+
+
 def test_store_fun_asset_keeps_bundled_paths_relative(tmp_path):
     """内置 assets 内的路径必须持久化为相对值（portable），外部文件保留绝对路径。
 

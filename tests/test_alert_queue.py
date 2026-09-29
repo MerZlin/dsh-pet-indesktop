@@ -243,6 +243,20 @@ def test_sticky_alert_is_sticky(win):
     assert win._speech_bubble.shown[-1]["sticky"] is True
 
 
+def test_todo_reminder_with_actions_survives_settings_suppression(win):
+    win._bubble_suppressed = True
+
+    win.show_alert(
+        "待办提醒", sticky=True, buttons=[("确定", lambda: None), ("推迟", lambda: None)],
+        priority=2, alert_type="todo_reminder",
+    )
+
+    assert len(win._alert_queue) == 1
+    queued = win._alert_queue[0]
+    assert queued["alertType"] == "todo_reminder"
+    assert [name for name, _callback in queued["buttons"]] == ["确定", "推迟"]
+
+
 def test_resolve_alert_by_id_closes_current(win):
     """resolve_alert 按 id 关闭当前展示的提醒，并推进下一条。"""
     win.show_alert("审批一", sticky=True, alert_id="a1")

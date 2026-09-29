@@ -71,6 +71,14 @@ $entry = $variants[$Variant].Entry
 $isGif = $variants[$Variant].Gif
 $noChat = $variants[$Variant].NoChat
 
+# Fail before the expensive build if the interpreter selected for PyInstaller
+# does not have the app's statically imported lunar calendar dependency.
+Write-Host "[deps] checking lunar-python in the build interpreter..." -ForegroundColor Cyan
+python -c "from lunar_python import Lunar, Solar; print('lunar-python OK')"
+if ($LASTEXITCODE -ne 0) {
+    throw "[deps] lunar-python missing; run python -m pip install -r requirements.txt before packaging."
+}
+
 # Bridge is linked into dsh profiles via pnpm's link: protocol, which does NOT
 # install the linked package's own dependencies, and the link target is usually
 # the packaged copy (_internal) that ships without node_modules. Declaring any
@@ -421,6 +429,8 @@ function Wait-SmokeWindow {
     param(
         [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
         [Parameter(Mandatory = $true)][string]$Label,
+        [string]$ReadyDirectory,
+        [string]$ReadyText,
         [string]$EarlyExitHint = 'runtime dependency broken',
         [string]$NoWindowHint = "startup failed (likely 'Failed to execute script')",
         [int]$TimeoutSec = 90
@@ -433,9 +443,32 @@ function Wait-SmokeWindow {
             throw "[smoke] $Label exited early (code $($Process.ExitCode)) - $EarlyExitHint"
         }
         $Process.Refresh()
-        if ($Process.MainWindowHandle -ne 0) {
+        $startupReady = $true
+        if ($ReadyDirectory) {
+            $startupReady = $false
+            if (Test-Path -LiteralPath $ReadyDirectory -PathType Container) {
+                $readyLogs = Get-ChildItem -LiteralPath $ReadyDirectory -Filter 'pet-*.log' -File `
+                    -ErrorAction SilentlyContinue
+                foreach ($readyLog in $readyLogs) {
+                    try {
+                        # Get-Content opens with shared read/write access, unlike
+                        # File.ReadAllText, while Python's RotatingFileHandler owns the writer.
+                        $logText = Get-Content -LiteralPath $readyLog.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+                        if ($logText.Contains($ReadyText)) {
+                            $startupReady = $true
+                            break
+                        }
+                    } catch [System.IO.IOException] {
+                        # The app may still be writing its startup log; retry next poll.
+                    }
+                }
+            }
+        }
+        if ($Process.MainWindowHandle -ne 0 -and $startupReady) {
             $elapsed = ((Get-Date) - $t0).TotalSeconds
-            Write-Host ("[smoke] $Label window appeared after {0:N1}s" -f $elapsed) -ForegroundColor DarkGray
+            $readyDescription = if ($ReadyDirectory) { 'window and app-ready log' } else { 'window' }
+            Write-Host ("[smoke] $Label {1} appeared after {0:N1}s" -f $elapsed, $readyDescription) `
+                -ForegroundColor DarkGray
             return
         }
     }
@@ -457,11 +490,26 @@ if ($LASTEXITCODE -ne 0) { throw "[smoke] bundle DLL chain verification failed" 
 Write-Host "[smoke] bundle DLL chain OK" -ForegroundColor Green
 
 Write-Host "[smoke] Launching $exePath ..." -ForegroundColor Cyan
-$proc = Start-Process -FilePath $exePath -PassThru
+$smokeBase = Join-Path $env:TEMP ("dsh-app-smoke-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $smokeBase -Force | Out-Null
+$oldAppData = $env:APPDATA
+$env:APPDATA = $smokeBase
+$proc = $null
+# Windows PowerShell 5.1 may decode a BOM-less UTF-8 script as the active ANSI
+# codepage. Build the Chinese log marker from code points so the smoke check is
+# stable across PowerShell versions and locales.
+$loopStarted = -join @([char]0x8FDB, [char]0x5165, [char]0x4E8B, [char]0x4EF6, [char]0x5FAA, [char]0x73AF)
 try {
-    Wait-SmokeWindow -Process $proc -Label 'exe'
+    $proc = Start-Process -FilePath $exePath -PassThru
+    Wait-SmokeWindow -Process $proc -Label 'exe' `
+        -ReadyDirectory (Join-Path $smokeBase $name) `
+        -ReadyText $loopStarted
 } finally {
-    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+    if ($proc -and -not $proc.HasExited) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    $env:APPDATA = $oldAppData
+    Remove-Item $smokeBase -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Host "[smoke] exe started OK" -ForegroundColor Green
 

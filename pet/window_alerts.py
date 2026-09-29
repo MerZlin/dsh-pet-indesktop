@@ -29,6 +29,7 @@ def alert_survives_suppression(alert_type: str, *, sticky: bool, buttons, priori
         "interaction/resolved", "control", "control-result", "bridge/control-result",
         "watchdog/control-result", "lifecycle", "turn/end", "task_complete",
         "execution/failed", "agent/request-error", "session/end", "balance",
+        "todo_reminder",
     }:
         return True
     return bool(sticky or buttons) and int(priority) <= 1

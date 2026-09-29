@@ -10,9 +10,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import uuid
 
 from PySide6.QtCore import QDate, Qt, QTime
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QTimeEdit,
@@ -67,12 +69,23 @@ def _stylesheet(widget: QWidget) -> str:
         border: 1px solid {border};
         border-radius: 12px;
     }}
+    QLabel#todoAgentTitle {{
+        color: {text};
+        font-size: 20px;
+        font-weight: 600;
+        background: transparent;
+    }}
+    QLabel#todoAgentHint {{
+        color: {hint};
+        font-size: 12px;
+        background: transparent;
+    }}
     QFrame[divider="true"] {{
         background: {divider};
         border: none;
         max-height: 1px;
     }}
-    QLineEdit, QComboBox, QTimeEdit, QDateEdit {{
+    QLineEdit, QComboBox, QTimeEdit, QDateEdit, QPlainTextEdit {{
         background: {window};
         color: {text};
         border: 1px solid {border};
@@ -80,7 +93,8 @@ def _stylesheet(widget: QWidget) -> str:
         min-height: 30px;
         padding: 0 8px;
     }}
-    QLineEdit:focus, QComboBox:focus, QTimeEdit:focus, QDateEdit:focus {{
+    QPlainTextEdit {{ padding: 7px 8px; }}
+    QLineEdit:focus, QComboBox:focus, QTimeEdit:focus, QDateEdit:focus, QPlainTextEdit:focus {{
         border: 1px solid {accent};
     }}
     QPushButton {{
@@ -138,11 +152,12 @@ class TodoPanelDialog(QDialog):
         super().__init__(parent)
         self._app = app
         self._editing_id: str | None = None
+        self._agent_session_id: str | None = None
         self.setWindowTitle("待办提醒")
         self.setObjectName("todoPanelDialog")
         self.setModal(False)
-        self.resize(500, 520)
-        self.setMinimumSize(440, 380)
+        self.resize(540, 600)
+        self.setMinimumSize(440, 460)
         self.setStyleSheet(_stylesheet(self))
 
         root = QVBoxLayout(self)
@@ -160,12 +175,107 @@ class TodoPanelDialog(QDialog):
         header.addWidget(self._next_label)
         root.addLayout(header)
 
+        self._agent_dialog = self._build_agent_entry()
         root.addWidget(self._build_editor())
         root.addWidget(self._build_list(), stretch=1)
         root.addLayout(self._build_footer())
         self.reload_items()
 
     # ------------------------------------------------------------ 构建
+
+    def _build_agent_entry(self) -> QDialog:
+        dialog = QDialog(self)
+        dialog.setObjectName("todoAgentDialog")
+        dialog.setWindowTitle("LLM生成待办")
+        dialog.setAccessibleName("LLM生成待办")
+        dialog.setAccessibleDescription(
+            "根据消息识别待办；缺少时间时参考现有待办安排空档，并沿用全局提醒设置。"
+        )
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.resize(560, 480)
+        dialog.setMinimumSize(440, 440)
+
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.setContentsMargins(22, 20, 22, 18)
+        dialog_layout.setSpacing(10)
+
+        title = QLabel("LLM生成待办")
+        title.setObjectName("todoAgentTitle")
+        dialog_layout.addWidget(title)
+
+        hint = QLabel(
+            "粘贴包含事情和时间的消息，识别后直接加入待办；未标时间时会参考已有待办安排空档，"
+            "提醒提前量沿用桌宠设置。"
+        )
+        hint.setObjectName("todoAgentHint")
+        hint.setProperty("muted", True)
+        hint.setWordWrap(True)
+        dialog_layout.addWidget(hint)
+
+        self._agent_model_note = QLabel()
+        self._agent_model_note.setObjectName("todoAgentModelNote")
+        self._agent_model_note.setProperty("muted", True)
+        self._agent_model_note.setWordWrap(True)
+        self._agent_model_note.setAccessibleDescription(
+            "说明待办 Agent 使用的内置 AI 对话服务商、模型和额度来源。"
+        )
+        dialog_layout.addWidget(self._agent_model_note)
+        self._refresh_agent_model_note()
+
+        input_label = QLabel("消息内容")
+        input_label.setObjectName("todoAgentInputLabel")
+        dialog_layout.addWidget(input_label)
+
+        self._agent_text = QPlainTextEdit()
+        self._agent_text.setObjectName("todoAgentInput")
+        self._agent_text.setAccessibleName("待办文本")
+        self._agent_text.setAccessibleDescription(
+            "输入聊天消息或自然语言描述，提取未来事项和时间并生成待办。"
+        )
+        self._agent_text.setPlaceholderText(
+            "例如：明天下午三点跟客户开会；周五提交周报；每天下午六点拉伸。"
+        )
+        self._agent_text.setTabChangesFocus(True)
+        self._agent_text.setMinimumHeight(140)
+        input_label.setBuddy(self._agent_text)
+        self._agent_text.textChanged.connect(self._sync_agent_submit_enabled)
+        dialog_layout.addWidget(self._agent_text, stretch=1)
+
+        self._agent_status = QLabel("识别到的事项会直接加入当前列表。")
+        self._agent_status.setObjectName("todoAgentStatus")
+        self._agent_status.setProperty("muted", True)
+        self._agent_status.setWordWrap(True)
+        self._agent_status.setAccessibleName("待办识别状态")
+        dialog_layout.addWidget(self._agent_status)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch(1)
+
+        manual = QPushButton("手动填写")
+        manual.setObjectName("todoManualAddButton")
+        manual.setAccessibleName("手动填写待办")
+        manual.setAccessibleDescription("关闭 LLM 生成待办窗口并打开手动待办表单。")
+        manual.clicked.connect(self._switch_to_manual_editor)
+        actions.addWidget(manual)
+
+        self._agent_submit_btn = QPushButton("识别并添加")
+        self._agent_submit_btn.setObjectName("todoAgentSubmitButton")
+        self._agent_submit_btn.setProperty("accent", True)
+        self._agent_submit_btn.setAccessibleName("识别并添加待办")
+        self._agent_submit_btn.setAccessibleDescription(
+            "分析上方文本中的未来事项和时间，并将识别出的内容添加到待办列表。"
+        )
+        self._agent_submit_btn.setDefault(True)
+        self._agent_submit_btn.clicked.connect(self.submit_agent_text)
+        actions.addWidget(self._agent_submit_btn)
+        dialog_layout.addLayout(actions)
+
+        shortcut = QShortcut(QKeySequence("Ctrl+Return"), self._agent_text)
+        shortcut.activated.connect(self.submit_agent_text)
+        self._sync_agent_submit_enabled()
+        dialog.finished.connect(self._restore_agent_dialog_focus)
+        return dialog
 
     def _build_editor(self) -> QFrame:
         self._editor_card = QFrame()
@@ -244,7 +354,9 @@ class TodoPanelDialog(QDialog):
         self._scroll.setWidget(self._rows_host)
         card_layout.addWidget(self._scroll, stretch=1)
 
-        self._empty_label = QLabel("还没有待办，点下方「新建待办」添加一条。")
+        self._empty_label = QLabel(
+            "还没有待办，可点「新建待办」手动添加，或用「LLM生成待办」自动添加。"
+        )
         self._empty_label.setObjectName("todoEmptyLabel")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setWordWrap(True)
@@ -258,8 +370,21 @@ class TodoPanelDialog(QDialog):
         self._add_btn = QPushButton("新建待办")
         self._add_btn.setObjectName("todoAddButton")
         self._add_btn.setProperty("accent", True)
+        self._add_btn.setAccessibleName("新建待办")
+        self._add_btn.setAccessibleDescription("展开原有手动待办表单。")
         self._add_btn.clicked.connect(self.begin_add)
         footer.addWidget(self._add_btn)
+
+        self._agent_open_btn = QPushButton("LLM生成待办")
+        self._agent_open_btn.setObjectName("todoAgentOpenButton")
+        self._agent_open_btn.setProperty("accent", True)
+        self._agent_open_btn.setToolTip("粘贴包含事情和时间的消息，调用 LLM 识别并添加待办")
+        self._agent_open_btn.setAccessibleName("LLM生成待办")
+        self._agent_open_btn.setAccessibleDescription(
+            "打开独立窗口，使用当前内置 AI 对话模型识别并添加待办。"
+        )
+        self._agent_open_btn.clicked.connect(self.open_agent_dialog)
+        footer.addWidget(self._agent_open_btn)
         footer.addStretch(1)
         hint = QLabel("提醒开关与提前量在 桌宠设置 → 自动化与联动")
         hint.setObjectName("todoHintLabel")
@@ -325,6 +450,7 @@ class TodoPanelDialog(QDialog):
         text_col.addWidget(title_label)
         badge = QLabel(self._badge_text(item))
         badge.setObjectName("todoBadgeLabel")
+        badge.setWordWrap(True)
         if not item["enabled"]:
             badge.setProperty("muted", True)
         text_col.addWidget(badge)
@@ -343,15 +469,26 @@ class TodoPanelDialog(QDialog):
     def _badge_text(self, item: dict) -> str:
         time_text = str(item.get("time") or "")
         if item.get("kind") == "daily":
-            return f"每天 {time_text}"
-        expired = str(item.get("date") or "") < date.today().isoformat()
-        if expired:
-            return "已过期"
-        try:
-            day = date.fromisoformat(str(item.get("date")))
-        except ValueError:
-            return time_text
-        return f"{day.month}月{day.day}日 {time_text}"
+            snooze_date = str(item.get("snooze_date") or "")
+            snooze_time = str(item.get("snooze_time") or "")
+            try:
+                snooze_day = date.fromisoformat(snooze_date)
+            except ValueError:
+                badge = f"每天 {time_text}"
+            else:
+                badge = f"推迟至 {snooze_day.month}月{snooze_day.day}日 {snooze_time}"
+        else:
+            expired = str(item.get("date") or "") < date.today().isoformat()
+            if expired:
+                badge = "已过期"
+            else:
+                try:
+                    day = date.fromisoformat(str(item.get("date")))
+                except ValueError:
+                    badge = time_text
+                else:
+                    badge = f"{day.month}月{day.day}日 {time_text}"
+        return badge
 
     def _refresh_next_label(self, items: list[dict]) -> None:
         config = getattr(self._app, "config", None)
@@ -363,6 +500,90 @@ class TodoPanelDialog(QDialog):
         self._next_label.setText(f"下一条：{summary}" if summary else "")
 
     # ------------------------------------------------------------ 行为
+
+    def _sync_agent_submit_enabled(self) -> None:
+        self._agent_submit_btn.setEnabled(
+            bool(self._agent_text.toPlainText().strip())
+            and self._agent_session_id is None
+        )
+
+    def open_agent_dialog(self) -> None:
+        self._refresh_agent_model_note()
+        self._agent_dialog.open()
+        self._agent_text.setFocus()
+
+    def _restore_agent_dialog_focus(self, *_args) -> None:
+        if self.isVisible() and not self._editor_card.isVisible():
+            self._agent_open_btn.setFocus()
+
+    def _switch_to_manual_editor(self) -> None:
+        self._agent_dialog.close()
+        self.begin_add()
+
+    def _refresh_agent_model_note(self) -> None:
+        """显示待办 Agent 当前复用的内置聊天模型与额度来源。"""
+        config = getattr(self._app, "config", None)
+        try:
+            provider = config.chat_settings().active_config
+            provider_name = str(getattr(provider, "name", "") or "").strip()
+            model = str(getattr(provider, "model", "") or "").strip()
+        except Exception:
+            provider_name = ""
+            model = ""
+
+        identity = " / ".join(value for value in (provider_name, model) if value)
+        if identity:
+            note = (
+                f"调用内置 AI 对话当前配置的 {identity}（Chat Completions）接口，"
+                "共用同一 API Key 的聊天额度。"
+            )
+        else:
+            note = (
+                "调用内置 AI 对话当前选中的模型（Chat Completions）接口，"
+                "共用同一 API Key 的聊天额度。"
+            )
+        self._agent_model_note.setText(note)
+
+    def submit_agent_text(self) -> None:
+        text = self._agent_text.toPlainText().strip()
+        if not text or self._agent_session_id is not None:
+            return
+        self._refresh_agent_model_note()
+        agent = getattr(self._app, "todo_agent", None)
+        if agent is None:
+            self._agent_status.setText("待办 Agent 尚未准备好，请重试。")
+            return
+
+        session_id = f"todo-panel:{uuid.uuid4().hex}"
+        self._agent_session_id = session_id
+        self._agent_status.setText("正在识别并添加…")
+        self._agent_text.setEnabled(False)
+        self._sync_agent_submit_enabled()
+        if not agent.submit(session_id, text, existing_todos=self._items()):
+            self._agent_session_id = None
+            self._agent_text.setEnabled(True)
+            self._agent_status.setText("Agent 暂时不可用，请检查 AI 模型配置后重试。")
+            self._sync_agent_submit_enabled()
+
+    def finish_agent_request(
+        self, session_id: str, status: str, *, added_count: int = 0
+    ) -> None:
+        """显示与当前文本请求对应的完成状态；过期请求不覆盖新状态。"""
+        if session_id != self._agent_session_id:
+            return
+        self._agent_session_id = None
+        self._agent_text.setEnabled(True)
+        if status == "success":
+            if added_count > 0:
+                self._agent_text.clear()
+            self._agent_status.setText(f"已添加 {added_count} 条待办。")
+        elif status == "empty":
+            self._agent_status.setText("没有识别到明确的未来待办，可补充时间后重试。")
+        elif status == "duplicate":
+            self._agent_status.setText("没有新增：事项已存在或待办数量已达到上限。")
+        else:
+            self._agent_status.setText("识别失败，请检查 AI 模型连接后重试。")
+        self._sync_agent_submit_enabled()
 
     def _set_item_enabled(self, item_id: str, checked: bool) -> None:
         items = []
@@ -389,6 +610,7 @@ class TodoPanelDialog(QDialog):
         self._sync_date_visibility()
         self._editor_card.setVisible(True)
         self._add_btn.setEnabled(False)
+        self._agent_open_btn.setEnabled(False)
         self._title_edit.setFocus()
         self._sync_save_enabled()
 
@@ -409,6 +631,7 @@ class TodoPanelDialog(QDialog):
         self._sync_date_visibility()
         self._editor_card.setVisible(True)
         self._add_btn.setEnabled(False)
+        self._agent_open_btn.setEnabled(False)
         self._title_edit.setFocus()
         self._sync_save_enabled()
 
@@ -416,6 +639,7 @@ class TodoPanelDialog(QDialog):
         self._editing_id = None
         self._editor_card.setVisible(False)
         self._add_btn.setEnabled(True)
+        self._agent_open_btn.setEnabled(True)
 
     def save_editor(self) -> None:
         title = self._title_edit.text().strip()
@@ -442,6 +666,10 @@ class TodoPanelDialog(QDialog):
                     # 内容/时间变更后重新武装，避免沿用旧触发戳漏提醒
                     "fired_lead_slot": None,
                     "fired_due_slot": None,
+                    "snooze_date": None,
+                    "snooze_time": None,
+                    "snooze_fired_lead_slot": None,
+                    "snooze_fired_due_slot": None,
                 })
                 merged.append(item)
             self._save_items(merged)

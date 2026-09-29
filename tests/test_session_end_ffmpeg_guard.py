@@ -74,15 +74,19 @@ class _SpawnSpy:
         self.read_frames_calls: list = []
         self.count_calls: list = []
         self._lock = threading.Lock()
+        self.read_frames_called = threading.Event()
+        self.count_frames_called = threading.Event()
 
     def read_frames(self, *args, **kwargs):
         with self._lock:
             self.read_frames_calls.append((args, kwargs))
+        self.read_frames_called.set()
         return None  # 被调即失败：spawn 已发生，返回值无关紧要
 
     def count_frames_and_secs(self, *args, **kwargs):
         with self._lock:
             self.count_calls.append((args, kwargs))
+        self.count_frames_called.set()
         return (0, 0)
 
     def install(self, monkeypatch) -> None:
@@ -181,8 +185,10 @@ def test_control_group_spawns_normally_without_session_end(tmp_path, monkeypatch
     assert webm_clip_mod.session_ending() is False
 
     assert clip.start() is True
+    assert spy.read_frames_called.wait(10.0), "正常运行期必须照常拉起 reader（对照组）"
     assert spy.read_frames_calls, "正常运行期必须照常拉起 reader（对照组）"
     clip._ensure_meta()
+    assert spy.count_frames_called.wait(10.0), "后台元数据探测应在预算内完成（对照组）"
     assert spy.count_calls, "正常运行期元数据探测照常（对照组）"
     clip.cleanup()
 

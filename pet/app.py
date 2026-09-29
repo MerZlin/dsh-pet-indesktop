@@ -57,7 +57,8 @@ from .session_watcher import install_session_watcher
 from .collision_ipc import CollisionIpcSession
 from .decode_fanout import DecodeFanoutHub
 from .festival_service import FestivalReminderService
-from .todo_reminder import TodoReminderService
+from .todo_reminder import TODO_ITEMS_LIMIT, TodoReminderService, new_todo_item
+from .todo_agent import TodoAgent
 from .voice_chime_service import VoiceChimeService
 from .dsh_state import DshStateTracker
 from .persona_phrases import PhrasePicker
@@ -1082,6 +1083,9 @@ class AppShell:
         # 信号做与状态边沿竞态解耦的稳定触发。
         self._dsh_state_tracker.state_changed.connect(self._on_dsh_state_changed)
         self._dsh_state_tracker.user_message.connect(self._on_dsh_user_message)
+        # 待办 Agent 只接收 DSH 真人消息；模型抽取在线程中执行，生成结果经
+        # QueuedConnection 回 GUI 线程后写入待办存储。
+        self.todo_agent = TodoAgent(config, self._accept_agent_todos)
         self._balance_timer = QTimer()
         self._balance_timer.timeout.connect(self.show_balance)
         self._update_bridge = None
@@ -1859,6 +1863,87 @@ class AppShell:
         alm = self._dsh_link_manager()
         if alm is not None:
             alm.notify_dsh_state("thinking")
+        self.todo_agent.submit(
+            session_id, text, existing_todos=self._todo_items_for_agent()
+        )
+
+    def _todo_items_for_agent(self):
+        """在 GUI 线程查询待办服务，给 Agent 一份不可变调度快照。"""
+        service = getattr(self, "todo_service", None)
+        if service is None:
+            service = self._ensure_todo_service()
+            service.apply_config()
+        return service.items()
+
+    def _finish_todo_panel_agent_request(
+        self, session_id: str, status: str, *, added_count: int = 0
+    ) -> None:
+        panel = getattr(self, "todo_panel", None)
+        if panel is None:
+            return
+        try:
+            panel.finish_agent_request(session_id, status, added_count=added_count)
+        except RuntimeError:
+            pass  # 面板可能正处于 close/deleteLater 生命周期
+
+    def _accept_agent_todos(self, session_id: str, candidates) -> None:
+        """在 GUI 线程持久化 Agent 抽取结果，并刷新已打开的待办面板。"""
+        if candidates is None:
+            self._finish_todo_panel_agent_request(session_id, "error")
+            return
+        if not isinstance(candidates, list):
+            self._finish_todo_panel_agent_request(session_id, "error")
+            return
+        if not candidates:
+            self._finish_todo_panel_agent_request(session_id, "empty")
+            return
+        service = self._ensure_todo_service()
+        # 如果提醒被关闭且服务一直处于懒创建状态，初始化时仍需先从磁盘装载
+        # 原有待办，再追加 Agent 生成项，避免覆盖用户数据。
+        service.apply_config()
+        items = service.items()
+        keys = {
+            (str(item.get("title") or "").strip().casefold(), item.get("kind"),
+             item.get("date") or "", item.get("time") or "")
+            for item in items
+        }
+        added = []
+        for candidate in candidates:
+            if len(items) + len(added) >= TODO_ITEMS_LIMIT or not isinstance(candidate, dict):
+                break
+            title = str(candidate.get("title") or "").strip()
+            kind = candidate.get("kind")
+            time_text = str(candidate.get("time") or "")
+            date_text = str(candidate.get("date") or "")
+            key = (title.casefold(), kind, date_text if kind == "once" else "", time_text)
+            if not title or key in keys:
+                continue
+            item = new_todo_item(
+                title,
+                kind,
+                time_text,
+                date_text,
+            )
+            added.append(item)
+            keys.add(key)
+        if not added:
+            self._finish_todo_panel_agent_request(session_id, "duplicate")
+            return
+        service.set_items(items + added)
+        panel = getattr(self, "todo_panel", None)
+        if panel is not None:
+            try:
+                panel.reload_items()
+            except RuntimeError:
+                pass  # 面板可能正处于 close/deleteLater 生命周期
+        self._finish_todo_panel_agent_request(
+            session_id, "success", added_count=len(added)
+        )
+        win = self.win
+        if win is not None and win.isVisible():
+            titles = "、".join(item["title"] for item in added[:2])
+            suffix = "等" if len(added) > 2 else ""
+            win.show_bubble(f"已添加待办：{titles}{suffix}", duration_ms=5000)
 
     # ------------------------------------------------------------ 退出收口
     def _on_about_to_quit(self) -> None:
@@ -1958,6 +2043,12 @@ class AppShell:
         #（关掉后迟到的 queued 回调提交会被明确拒绝）。
         if self.todo_service is not None:
             self.todo_service.stop()
+        todo_agent = getattr(self, "todo_agent", None)
+        if todo_agent is not None:
+            try:
+                todo_agent.shutdown()
+            except Exception:
+                logging.exception("退出时停止待办 Agent 失败")
         # 语音报时同为进程级懒服务，退出必须一并停：其无主 QTimer 的 timeout
         # 连接从 Qt C++ 侧强引用住整个对象图（理由同 todo_service，见
         # _shutdown_live_for_tests 注释）；不停则退出期仍在跑 20s tick，且
@@ -2009,6 +2100,12 @@ class AppShell:
         """
         for shell in tuple(_LIVE_SHELLS):
             try:
+                todo_agent = getattr(shell, "todo_agent", None)
+                if todo_agent is not None:
+                    try:
+                        todo_agent.shutdown()
+                    except Exception:
+                        logging.debug("测试收口待办 Agent 失败", exc_info=True)
                 service = getattr(shell, "todo_service", None)
                 if service is not None:
                     try:
