@@ -4,7 +4,7 @@
 
 ## 精确停点
 
-W01–W05 完成；本轮规范和四份记录已落盘，鲜活推送门全部通过。**尚未提交或推送本轮规范**。下一步 W06：核对仅 15 份文档、保护摘要及链接，显式暂存，提交 `docs: 固化计划汇报与四份留档规范`。随后独立记录实际 SHA，不 amend。
+W01–W06 完成；本轮推送前验证门全部通过。规范已独立提交 `a2779cbeeea84a26d92f58391e59494555d3475f`（15 份 Markdown，+441/-26），提交后工作树干净，ahead 6。**尚未推送**。本次仅以独立记录提交回填实际 SHA，不 amend。下一步 W07：刷新 origin、核对祖先关系，再正常推送；随后 W08 核验远程及 HTML。
 
 不做 Phase 4B 实现、不改运行代码/测试/构建/自动更新、不截图、不读真实 Key、不请求真实模型，不开子智能体。本次授权包含提交和推送，不自动延续到后续开发。
 
@@ -41,6 +41,29 @@ HTML `plugin-roadmap-demo.html` 已跟踪；本地与起点远程 blob 同为 `0
 | `.scratch/phase4b-local-management/PLAN.md` | 增加状态互链与当次授权边界，不勾选实现任务 |
 | `.scratch/phase4b-local-management/HANDOFF.md` | 区分旧检查点与当前授权，保留原验证记录 |
 | `.scratch/phase4b-local-management/STATUS.md` | 补齐 4B 未实现状态、人工待办和下一步 |
+
+
+规范提交 `a2779cb` 的逐文件行数（不包含本次后续记录）：
+
+| 文件 | 新增 | 删除 |
+|---|---:|---:|
+| `.scratch/phase4b-local-management/HANDOFF.md` | 4 | 4 |
+| `.scratch/phase4b-local-management/PLAN.md` | 4 | 4 |
+| `.scratch/phase4b-local-management/STATUS.md` | 35 | 0 |
+| `.scratch/workflow-standardization/HANDOFF.md` | 85 | 0 |
+| `.scratch/workflow-standardization/PLAN.md` | 14 | 0 |
+| `.scratch/workflow-standardization/STATUS.md` | 17 | 0 |
+| `AGENTS.md` | 23 | 3 |
+| `LOG-INDEX.md` | 3 | 0 |
+| `LOG.md` | 10 | 0 |
+| `SPEC.md` | 3 | 1 |
+| `docs/INDEX.md` | 8 | 2 |
+| `docs/agents/WORKFLOW-STANDARDIZATION-2026-09-30.md` | 78 | 0 |
+| `docs/agents/handoff.md` | 24 | 11 |
+| `docs/agents/issue-tracker.md` | 5 | 1 |
+| `docs/agents/planning-and-reporting.md` | 128 | 0 |
+
+提交前最终文档复验：113 份链接、六份任务文本的 24 个目标通过，报告/文案 44 passed in 0.71s；暂存只含上列 15 份 Markdown。
 
 ## 本轮实际验证
 

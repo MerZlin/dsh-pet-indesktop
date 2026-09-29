@@ -4,7 +4,7 @@
 
 | 日期 | 主题 | 入口 | 关键提交/状态 |
 |---|---|---|---|
-| 2026-09-30 | 协作规范与成果同步 | [LOG.md](LOG.md#协作规范与成果同步) · [规范](docs/agents/planning-and-reporting.md) · [当前状态](.scratch/workflow-standardization/STATUS.md) | 本轮全量 3459 passed，高负载 3 × 65 passed；规范提交/推送待执行 |
+| 2026-09-30 | 协作规范与成果同步 | [LOG.md](LOG.md#协作规范与成果同步) · [规范](docs/agents/planning-and-reporting.md) · [当前状态](.scratch/workflow-standardization/STATUS.md) | `a2779cb` 规范；全量 3459 passed，高负载 3 × 65 passed；推送待执行 |
 | 2026-09-30 | Phase 4B 计划与本地备份检查点 | [LOG.md](LOG.md#phase-4b-计划落盘与本地备份检查点) · [设计](docs/plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md) · [交接](.scratch/phase4b-local-management/HANDOFF.md) | `5f04a99` 本地备份；4B 仅计划、未实施；全量 3459 passed，未推送 |
 | 2026-09-29 | Phase 4A host 与独立构建 | [LOG.md](LOG.md#phase-4a-host-与独立构建) · [实施报告](docs/PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md) | Windows 独立验证产物 10/10，全量 3457 passed；安装闭环/人工验收待办，已纳入 `5f04a99` 本地备份，未推送 |
 | 2026-09-28 | Phase 4A 菜单与设置贡献 | [LOG.md](LOG.md#phase-4a-菜单与设置贡献) | owner 生命周期/菜单与设置已接入，全量 3257 passed；本版未手测、已纳入 `5f04a99` 本地备份，未推送 |
