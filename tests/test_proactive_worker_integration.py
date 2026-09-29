@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from pet.chat.models import ProviderConfig
+from pet.screen_understanding.models import VisionRequestConfig
 from pet.workers.proactive_screen_adapter import ProactiveScreenWorkerAdapter
 from tests.test_proactive_worker_lifecycle import _wait_until
 
@@ -67,6 +67,12 @@ def _worker_command(tmp_path):
     script = """
 import atexit, io, json, sys
 from pathlib import Path
+from importlib.abc import MetaPathFinder
+class NoChat(MetaPathFinder):
+    def find_spec(self, fullname, *args):
+        if fullname == "pet.chat" or fullname.startswith("pet.chat."):
+            raise AssertionError("chat dependency in screen worker")
+sys.meta_path.insert(0, NoChat())
 from PIL import Image
 from pet import vision
 from pet.workers import proactive_screen_worker as worker
@@ -80,7 +86,7 @@ def screen():
 vision.capture_screen_bytes = screen
 @atexit.register
 def finish():
-    blocked = [n for n in sys.modules if n.startswith(("PySide6", "keyring")) or n in ("pet.app", "pet.window", "pet.chat.service")]
+    blocked = [n for n in sys.modules if n.startswith(("PySide6", "keyring", "pet.chat")) or n in ("pet.app", "pet.window", "pet.chat.service")]
     Path(sys.argv[1]).write_text(json.dumps(blocked), encoding="utf-8")
 from pet.workers.worker_entry import main
 raise SystemExit(main("proactive-screen"))
@@ -93,16 +99,7 @@ def _adapter(tmp_path, endpoint, budget):
     adapter = ProactiveScreenWorkerAdapter(program=sys.executable, arguments=arguments, budget_checker=budget)
     assert adapter.start({"max_edge": 768})
     _wait_until(lambda: adapter.ready)
-    provider = ProviderConfig(
-        "test",
-        base_url=endpoint,
-        model="vision-test",
-        api_key="unrelated-chat-secret",
-        vision_same_as_chat=False,
-        vision_base_url=endpoint,
-        vision_model="vision-test",
-        vision_api_key="vision-test-secret",
-    )
+    provider = VisionRequestConfig(endpoint, "vision-test", "vision-test-secret")
     return adapter, provider, probe
 
 
@@ -206,6 +203,9 @@ def test_shared_watcher_one_real_worker_routes_manual_result_only_to_owner(tmp_p
     )
     config = Config(base=tmp_path / "config")
     config.set("proactive_screen", {"enabled": False, "whitelist": ["code.exe"], "require_idle": False})
+    from tests.screen_fakes import configure_vision
+
+    configure_vision(config, monkeypatch)
     windows = [SimpleNamespace(isVisible=lambda: True, _physics_mode=None) for _ in range(2)]
     proxy = MultiWindowProxy(SimpleNamespace(config=config, instances=[SimpleNamespace(win=w) for w in windows]))
     watcher = SharedProactiveWatcher(proxy, config)
@@ -214,7 +214,7 @@ def test_shared_watcher_one_real_worker_routes_manual_result_only_to_owner(tmp_p
     adapter = watcher._worker_adapter
     replies = [[], []]
     url, requests, entered, release, _ = endpoint
-    provider = ProviderConfig("test", base_url=url, model="vision-test", api_key="vision-test-secret")
+    provider = VisionRequestConfig(base_url=url, model="vision-test", api_key="vision-test-secret")
     release.clear()
     try:
         assert windows[1].proactive_watcher.request_manual_look(provider, "prompt", "pet", lambda *r: replies[1].append(r))

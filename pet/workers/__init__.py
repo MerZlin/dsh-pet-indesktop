@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Built-in worker registry and Qt-free worker entry exports."""
 
-from .agent_link_worker import AgentLinkWorker, run_agent_link_worker
 from .protocol import (
     MAX_MESSAGE_BYTES,
     MESSAGE_TYPES,
@@ -25,3 +24,11 @@ __all__ = [
     "encode_message",
     "run_agent_link_worker",
 ]
+
+
+def __getattr__(name):
+    if name in {"AgentLinkWorker", "run_agent_link_worker"}:
+        from . import agent_link_worker
+
+        return getattr(agent_link_worker, name)
+    raise AttributeError(name)

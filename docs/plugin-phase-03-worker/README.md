@@ -1,6 +1,6 @@
 # Phase 3：Worker 运行隔离与官方选装衔接
 
-> 修订：2026-09-27。**3A 已有封存基线；3B 已实现且有本地自动化记录，用户反馈识屏手测正常。两者目前仍为官方内置能力，不是可卸载 DLC。3B 本次收尾尚有全量环境门和人工细项待关闭；3C 本地风险评估已形成。**
+> 修订：2026-09-27。**3A 已有封存基线；3B 已实现，本次修复测试边界后全量通过。用户仅确认手动“看看屏幕”正常；自动识屏未继续等待验收，不判故障；停用/托盘退出未测。两者仍为内置能力，不是可卸载 DLC，3B 人工门未全部关闭。3C 评估与 4A 只读拆包审计已形成。**
 
 ## 1. 已有成果与证据分层
 
@@ -9,9 +9,11 @@
 | Phase 3A | Agent Link 采集 Worker、异步 QProcess、握手/心跳/关闭、generation、有限重启、fallback、背压与真实进程测试 | [稳定性收口](PHASE3A-STABILITY-CLOSEOUT.md) 保留原结论；不新增长期 soak |
 | Phase 3B 代码 | 自动识屏和手动“看看屏幕”、request/response、adapter、临时凭据、shared 路由、退出收口 | [当前设计](PHASE3B-PROACTIVE-SCREEN-DESIGN.md)；代码实现不等于物理拆包 |
 | Phase 3B 自动化 | 2026-09-26 报告记录全量 3080 passed、Windows 构建、Qt DLL 链和冻结 Worker smoke | [原实施报告](../PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md) 是当时证据，历史结果不改写，最新复验另见下行 |
-| Phase 3B 用户手测 | 用户后续明确反馈“识屏无误，手动测试没问题” | [grill 对齐记录](../grill-2026-09-27-插件化中期对齐.md)；不外推成三平台、选装/卸载或全部发布验收完成 |
-| Phase 3B 最新收尾 | 2026-09-27 组合回归 3/3、新构建与冻结 smoke 通过；全量 1 failed / 3079 passed，前台窗口不可见；人工细项待确认 | [收尾记录](PHASE3B-STABILITY-CLOSEOUT.md)，不能宣称全部封存通过 |
+| Phase 3B 用户手测 | 最新澄清仅手动“看看屏幕”正常；自动未等待验收，停用/托盘退出未测 | [收尾 §10](PHASE3B-STABILITY-CLOSEOUT.md#10-前台窗口测试边界修复与验收澄清)；保留 [grill 原记录](../grill-2026-09-27-插件化中期对齐.md)，不外推全部人工验收 |
+| Phase 3B 最新收尾 | 前台函数确定性回归与显式桌面探针分开后，全量 3123 passed / 11 skipped / 13 warnings；旧 1 项环境失败记录保留 | [收尾记录 §10](PHASE3B-STABILITY-CLOSEOUT.md#10-前台窗口测试边界修复与验收澄清)；未重建，既有组合 3/3 和 frozen 证据不冒充本轮重跑；人工门仍待验收 |
 | Phase 3C 评估 | AI 流式执行优先评估；屏幕理解/聊天共享依赖移交 4A；其他能力逐项取舍 | [风险评估](PHASE3C-ISOLATION-ASSESSMENT.md)，本轮不增加 Worker，不代替未关闭的 3B 验收门 |
+
+下一步拆包依据见 [Phase 4A 只读审计](../plugin-phase-04-updates/PHASE4A-SCREEN-DELIVERY-AUDIT.md)：已核对代码、UI、聊天及构建依赖，不代表设计冻结或功能包交付完成。
 
 历史报告里的待验收项保留原貌；后续反馈与报告有不同日期和证据来源，不通过覆写历史让它们看起来同时发生。
 

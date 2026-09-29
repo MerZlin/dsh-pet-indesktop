@@ -138,6 +138,10 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
+| [Phase 4A host 与自包含 Worker 独立构建](PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md) | 单一功能源码、受限端口/聊天服务、Ed25519 加载；两个无识屏 Core 与 10 项冻结场景、Qt 生命周期根因及实测成本。 | 继续 Phase 4B 安装事务、调整独立构建/加载或检查当前验收限制前。 |
+| [Phase 4A 菜单与设置贡献](PR-REPORT-SCREEN-CONTRIBUTIONS-2026-09-28.md) | owner 注册/撤销、旧句柄隔离、菜单布局保留、设置草稿/清理和共享生命周期；未完成物理拆包及本版手测。 | 修改功能入口归属、命令授权、设置保存或扩展管理前。 |
+| [Phase 4A 独立视觉配置与确认迁移](PR-REPORT-VISION-CONFIG-2026-09-27.md) | 独立模型、作用域凭据、可恢复迁移/并发保护与设置；无聊天进程边界及 3224 项全量通过，真实 keyring 和用户操作待验收。 | 修改视觉配置/迁移/凭据或接续贡献注册前。 |
+| [Phase 4A 通用平台查询](PR-REPORT-DESKTOP-QUERY-2026-09-27.md) | stdlib 查询后端、旧 API 兼容、普通/共享 Qt 无识屏依赖验证及性能证据；不是完整拆包。 | 修改前台、光标、idle 查询或继续屏幕理解拆包前。 |
 | [`PR-REPORT-ISLAND-HIDDEN-CHAT-DEADLOCK-2026-09-23.md`](PR-REPORT-ISLAND-HIDDEN-CHAT-DEADLOCK-2026-09-23.md) | 纯桌宠版岛隐藏死锁修复：无聊天构建 hidden_chat 单击路由回退展开卡片（岛能力开关 + 设置页开关按构建变体隐藏）。 | 改灵动岛单击路由 / hidden_chat 设置 / 打包变体（无 pet.chat）行为时。 |
 | [`PR-REPORT-TEMPLATE.md`](PR-REPORT-TEMPLATE.md) | PR 报告模板：三份交付证据（修改文件说明 / 性能分析 / 实机运行记录）的逐节骨架与判定标准。 | **开新 PR 写报告前必读并整份复制**；2026-09-22 起三份证据是硬要求（`AGENTS.md` Delivery evidence discipline），由 `tests/test_pr_report_discipline.py` 机器化校验。 |
 | [PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md](PR-REPORT-PLUGIN-DLC-PHASE1-2026-09-24.md) | Phase 1 资源型 DLC 实现报告：manifest 校验、Starter DLC、Registry、目录/ZIP 安装、回滚、兼容性与验证结果。 | 改资源 DLC、角色 Registry、内容安装事务、Starter DLC 打包或需要核对本轮测试限制时。 |
@@ -226,7 +230,7 @@
 
 ## 插件化与 DLC 分阶段文档
 
-> 2026-09-27 现行路线：**运行解耦与真正可拔除交付并行；官方选装必做，第三方生态条件化。** Phase 1/2 保留实现基线，Phase 3A 保留封存证据；Phase 3B 的代码、本地自动化与用户“识屏手测正常”分别记录，不代表安装卸载或三平台验收完成。Phase 4/5 正文已按新目标修订，不再靠顶部补充覆盖旧的条件阶段表述。
+> 2026-09-27 现行路线：**运行解耦与真正可拔除交付并行；官方选装必做，第三方生态条件化。** Phase 1/2 保留实现基线，Phase 3A 保留封存证据；Phase 3B 测试边界修复后全量通过；用户仅确认手动“看看屏幕”，自动未继续等待验收（不判故障），停用/托盘退出未测，不代表全部人工、安装卸载或三平台验收完成。Phase 4/5 正文已按新目标修订，不再靠顶部补充覆盖旧的条件阶段表述。
 
 ### 总入口与单一职责
 
@@ -242,8 +246,8 @@
 |---|---|---|---|
 | Phase 1 | 已完成角色资源基线 | [foundation](plugin-phase-01-foundation/) | 角色 Registry、ContentManager 与 fallback；不等于可执行功能包或所有资源类型完成。 |
 | Phase 2 | 已完成运行时基线 / 后续贡献合同待实施 | [runtime](plugin-phase-02-runtime/) | 官方 Context/EventBus/配置/生命周期；功能 UI 可在主进程运行但归功能包交付。 |
-| Phase 3A/3B/3C | 3A 已封存；3B 收尾有待验收门；3C 已完成本地风险评估 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
-| Phase 4A/4B | 计划中，必做 | [updates](plugin-phase-04-updates/) | 先冻结屏幕理解可信加载/独立构建，再完成本地安装卸载、贡献注册、重装回滚与最小管理。 |
+| Phase 3A/3B/3C | 3A 已封存；3B 全量通过、人工门未完成；3C 已完成本地风险评估 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
+| Phase 4A/4B | 四个切片及 Windows 独立验证构建已通过；安装闭环必做 | [updates](plugin-phase-04-updates/) | 接续权威安装状态、跨进程占用、本地装卸与回滚；不替换默认构建或宣称人工验收完成。 |
 | Phase 5A/5B | 计划中，官方选装必做 | [distribution](plugin-phase-05-distribution/) | Setup 旁置包、ZIP/便携；AI 对话与文件理解为下一主要目标，随后 Agent 与其余领域。 |
 | Phase 6 | 条件启用 | [ecosystem](plugin-phase-06-ecosystem/) | 第三方内容/Worker SDK、社区生态；不是官方包交付的前置。 |
 | Phase 7 | 正式发布前验收 | [release](plugin-phase-07-release/) | 最小 Core、承诺选装范围、三平台、迁移装卸、性能与恢复；第三方未开放不阻塞。 |
@@ -262,20 +266,24 @@
 | [Worker 架构与阶段计划](plugin-phase-03-worker/PHASE3_PROCESS_PLUGIN_RESEARCH.md) | QProcess、`pet-worker/v1` 与 `agent-event/v1`、request/response、重启/fallback 和剩余边界。 | 修改 Worker 协议、进程清理、Source/Adapter 或评估其他能力时。 |
 | [Phase 3B 识屏设计](plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | 已有自动/手动数据流、单次凭据和 shared Worker；把 UI/策略/执行共同移交 Phase 4/5。 | 修改主动识屏、手动看屏幕、权限或构建拆包前。 |
 | [Phase 3A 稳定性收口](plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | 保留原稳定性验证证据，不按后续目标覆写原结论。 | 复查 3A 验收、异常退出或冻结 Worker 基线时。 |
-| [Phase 3B 最新收尾](plugin-phase-03-worker/PHASE3B-STABILITY-CLOSEOUT.md) | 组合 3/3、新构建与 frozen smoke；全量前台环境失败与人工细项仍待关闭，不声明全部封存。 | 判断 3B 是否可继续迁移、复验构建或补人工记录前。 |
+| [Phase 3B 最新收尾](plugin-phase-03-worker/PHASE3B-STABILITY-CLOSEOUT.md) | 保留旧失败和构建证据，§10 追加前台边界修复后全量 3123 passed、显式探针及手动正常/自动未验收的澄清，不声明全部封存。 | 判断 3B 是否可继续迁移、复验构建或补人工记录前。 |
 | [Phase 3C 隔离风险评估](plugin-phase-03-worker/PHASE3C-ISOLATION-ASSESSMENT.md) | AI、共享依赖、音乐、语音、账户、外部服务和低风险功能的源码/测试依据、所有者与取舍。 | 决定新增 Worker、审计屏幕理解拆包或 AI 交付前。 |
 
 ### Phase 4–7 实施与发布计划
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [Phase 4 入口](plugin-phase-04-updates/README.md) | 4A 屏幕理解归属/可信加载/最小产物审计，4B 真实可拔除本地样板与最小扩展管理。 | 开始功能包设计或本地安装卸载实施前。 |
+| [Phase 4 入口](plugin-phase-04-updates/README.md) | 查询、配置、贡献、host 和自包含 Worker 已有 Windows 自动化基线；4B 接续真实安装卸载及管理。 | 开始本地安装事务、正式交付或核对当前状态前。 |
+| [Phase 4A 屏幕理解拆包审计](plugin-phase-04-updates/PHASE4A-SCREEN-DELIVERY-AUDIT.md) | 只读核对平台查询、聊天/密钥、UI 注册、数据/卸载及构建来源，区分事实、建议、待验证；不是已完成拆包。 | 冻结屏幕理解包边界、依赖/加载方案或设计最小 Core 验证前。 |
+| [Phase 4A 屏幕理解最小设计](plugin-phase-04-updates/PHASE4A-SCREEN-PACKAGE-DESIGN.md) | 受限端口、可选聊天服务、签名目录加载和独立产物已实现；区分验证描述/进程内使用句柄与待实现安装状态。 | 调整功能 host、联动、构建、加载及 Phase 4B 安装边界前。 |
+| [Phase 4B 本地管理设计](plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md) | 已确认的单一安装状态、跨进程占用、可恢复事务及管理闭环；实现尚未开始。 | 开始本地安装、停用、卸载、重装或状态同步前。 |
+| [Phase 4B 任务清单](../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../.scratch/phase4b-local-management/HANDOFF.md) | 逐门进度、实际验证与下一条操作；两份文本随本地检查点备份，不收录构建临时目录。 | 恢复 Phase 4B 工作或核对未完成门前。 |
 | [安装与更新协议](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | 共用事务和权威状态、信任校验、原子激活、回滚、卸载/重装与 Core/DLC 更新隔离。 | 改 Setup/ZIP/应用内安装器、代码加载、文件占用或远程来源前。 |
 | [Phase 5 官方分发](plugin-phase-05-distribution/README.md) | 5A 小 Core Setup/旁置包和显式便携，5B AI 优先推广全部官方领域；远程适配按需。 | 设计安装向导、ZIP、便携、AI 拆包批次或其他官方包前。 |
 | [Phase 6 条件生态](plugin-phase-06-ecosystem/README.md) | 内容文档与 SDK、未来 Worker SDK/社区的进入门，禁止任意代码进入 Core。 | 评估第三方作者、签名发布或 Workshop 时。 |
 | [Phase 7 发布门](plugin-phase-07-release/README.md) | 最小 Core 与官方选装范围、三平台、配置恢复、真实卸载、性能与可信发布。 | 准备正式发布、确定承诺范围或补发布证据时。 |
 
-实现菜单与设置仍须阅读 [菜单结构研究](CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md)和[设置变更门](SETTINGS-CHANGE-GATES.md)；本轮不重新布局现有 UI。历史 PR 报告继续在“PR 报告存档”登记，不以计划正文代替交付证据。
+实现菜单与设置仍须阅读 [菜单结构研究](CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md)和[设置变更门](SETTINGS-CHANGE-GATES.md)；独立视觉配置已在自动化域新增组件，未重排顶层导航；屏幕理解贡献已接入，其他功能与真实安装状态仍待后续迁移。历史 PR 报告继续在“PR 报告存档”登记，不以计划正文代替交付证据。
 
 ## 在线更新与网络发布
 

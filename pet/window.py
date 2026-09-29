@@ -115,7 +115,6 @@ from .platform_win import (
     _set_windows_no_activate as _set_windows_no_activate,
 )
 from .predictive_prewarm import PredictivePrewarm, pick_from_pool, roll_next
-from .proactive import effective_proactive_config
 from .report_gates import REPORT_GATE_DEFAULTS
 from .speech_bubble import PetSpeechBubble, list_self_talk_images
 from .window_optional_services import WindowFeatureGateMixin
@@ -342,6 +341,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
     """桌宠窗口本体。"""
 
     look_done = Signal(str, str, bool)
+    _screen_completed = Signal(object)
     fullscreen_changed = Signal(bool)  # 全屏 watcher 线程 → 主线程（隐藏/恢复桌宠）
     cursor_visibility_changed = Signal(str)
     # 首帧就绪（一次性）：v4.2.1 起 GUI 线程不再同步解码首帧（da8f291），窗口刚
@@ -369,9 +369,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         single_process_spawn: bool = False,
         agent_link_manager=None,
         proactive_watcher=None,
+        feature_host=None,
     ) -> None:
         super().__init__()
         self.lib = lib
+        self.feature_host = feature_host
+        self._screen_execution_epoch = 0
         self.cfg = config
         # 批5.2 N-1（复审阻塞项）：进程级 flag 快照必须在 __init__ 早期就位——
         # 尾部 _restore_position() 会写/读 runtime 标记，若等构造返回后再注入，
@@ -462,9 +465,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._animation_gap_timer.timeout.connect(self._on_animation_gap_timeout)
         self._speech_bubble = PetSpeechBubble(style_id=str(config.get("self_talk_bubble_style", DEFAULT_SELF_TALK_BUBBLE_STYLE)))
         self._speech_bubble.clicked.connect(self._on_speech_bubble_clicked)
-        self._look_busy = False
-        self._last_look_ts = 0.0
         self.look_done.connect(self._on_look_done)
+        self._screen_completed.connect(self._deliver_screen_result)
         self._self_talk_enabled = bool(config.get("self_talk_enabled", False))
         self._self_talk_texts = self._read_self_talk_texts(config.get("self_talk_texts"))
         self._self_talk_duration_seconds = max(
@@ -768,6 +770,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         # 监视器真正启动靠 apply_config()，此前启动路径无人调用，导致重启后
         # 已开启的 Agent 联动必须手工展开一次菜单/开关设置对话框才生效（#99）。
         # sync_optional_services() 自身以 _install_effect_services() 收尾。
+        from .feature_bindings import bind_screen_window
+
+        bind_screen_window(self)
         self.sync_optional_services()
 
     @property
@@ -3520,82 +3525,48 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     # ================================================================ 看看屏幕
     def _on_look_screen(self) -> None:
-        """Capture and analyse the screen outside the GUI thread."""
-        if self._look_busy:
-            self.show_bubble("上一张还没看完呢…")
-            return
-        now = time.monotonic()
-        if now - self._last_look_ts < 4.0:
-            self.show_bubble("喘口气嘛，刚看过啦…")
-            return
-        self._last_look_ts = now
-        self._look_busy = True
-        self.show_bubble("让我看看…", 6000)
+        """Compatibility entry; execution belongs to screen understanding."""
+        from .feature_host_bindings import manual_for
 
-        # 在主线程解析好快照，避免后台 worker 线程改写共享配置对象
-        import copy
-
-        settings = self.cfg.chat_settings()
-        provider = copy.copy(settings.active_config)
-        provider.api_key = self.cfg.resolve_api_key(provider)
-        system_prompt = settings.default_system_prompt
-        # 自我识别提示用的角色显示名（截图里的桌宠就是它自己）；别名优先
-        pet_name = self.cfg.character_display_name(str(self.cfg.get("character", catalog.DEFAULT_CHARACTER)))
-
-        ensure_watcher = getattr(self, "_ensure_proactive_watcher", None)
-        if callable(ensure_watcher):
-            try:
-                watcher = ensure_watcher()
-                request_manual = getattr(watcher, "request_manual_look", None)
-                if callable(request_manual) and request_manual(
-                    provider,
-                    system_prompt,
-                    pet_name,
-                    self._on_look_done,
-                ):
-                    return
-            except Exception:
-                logging.exception("通过主动识屏 Worker 发起手动识屏失败")
-
-        threading.Thread(
-            target=self._look_worker,
-            args=(provider, system_prompt, pet_name),
-            daemon=True,
-            name="pet-look-screen",
-        ).start()
+        session = manual_for(self)
+        if session is not None:
+            session.start()
 
     def look_at_screen(self) -> None:
         """公开转发：触发一次"看看屏幕"识别（等价 _on_look_screen）。"""
         self._on_look_screen()
 
-    def _look_worker(self, provider: Any, system_prompt: str, pet_name: str = "") -> None:
-        # 延迟导入：无 Chat / 不使用「看看屏幕」的实例启动时不加载 PIL
-        from . import vision as vision_mod
+    @property
+    def _look_busy(self) -> bool:
+        session = getattr(self, "_screen_manual_host", None)
+        return bool(session is not None and session.busy)
 
-        try:
-            shot = vision_mod.capture_screen_bytes()
-            app_info = vision_mod.foreground_app_info()
-            reply = vision_mod.ask_about_screen(shot, app_info, system_prompt, provider, pet_name=pet_name)
-            if shiboken6.isValid(self) is False:
-                return  # 窗口已销毁（退出/切角色），不再触碰信号
-            user_text = f"[看看屏幕] 前台窗口：{app_info}" if app_info else "[看看屏幕]"
-            self.look_done.emit(reply, user_text, False)
-        except Exception as exc:
-            logging.exception("看看屏幕失败")
-            if shiboken6.isValid(self) is False:
-                return
-            self.look_done.emit(str(exc), "", True)
+    def _look_worker(self, provider: Any, system_prompt: str, pet_name: str = "", epoch: int | None = None) -> None:
+        """Legacy source fallback facade; no execution implementation in Core."""
+        from .feature_host_bindings import manual_for
+
+        if epoch is None or epoch == self._screen_execution_epoch:
+            session = manual_for(self)
+            if session is not None:
+                session.run_in_process(provider, system_prompt, pet_name)
+
+    def _screen_result_callback(self):
+        from .feature_host_bindings import manual_for
+
+        session = manual_for(self)
+        return session.result_callback() if session is not None else (lambda *args: None)
+
+    def _deliver_screen_result(self, result) -> None:
+        epoch, text, user_text, error = result
+        if epoch == self._screen_execution_epoch:
+            self._on_look_done(text, user_text, error)
 
     def _on_look_done(self, text: str, user_text: str, is_error: bool) -> None:
-        if getattr(self, "_closing", False) or not shiboken6.isValid(self):
-            return
-        self._look_busy = False
-        if is_error:
-            self.show_bubble(f"看不清啊…{text[:60]}", 5000)
-            return
-        self.show_bubble(text, max(4000, min(12000, len(text) * 150)))
-        if callable(self.on_look_synced):
-            self.on_look_synced(user_text, text)
+        from .feature_host_bindings import manual_for
+
+        session = manual_for(self)
+        if session is not None:
+            session.complete(text, user_text, is_error)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         if self._context_menu_suppressed:
@@ -4051,6 +4022,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     def _toggle_proactive_enabled(self, on: bool) -> None:
         """右键菜单切换主动识屏总开关。"""
+        from .feature_bindings import screen_allowed
+
+        if not screen_allowed(self):
+            return
         pro_data = dict(self.cfg.get("proactive_screen", {}))
         pro_data["enabled"] = bool(on)
         self.cfg.set("proactive_screen", pro_data)
@@ -4061,7 +4036,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         elif self.proactive_watcher is not None:
             self.proactive_watcher.apply_config()
         if on:
-            eff = effective_proactive_config(self.cfg.get("proactive_screen", {}))
+            from .feature_bindings import host_for
+            from .official_features import SCREEN_OWNER
+
+            eff = host_for(self).policy(SCREEN_OWNER, self.cfg.get("proactive_screen", {}))
             if eff["whitelist"]:
                 self.show_bubble("主动识屏已开启～我会偶尔看看你正在用的软件", duration_ms=4000)
             else:
@@ -4076,6 +4054,10 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     def _set_proactive_option(self, key: str, value: Any) -> None:
         """右键菜单修改主动识屏子项选项。"""
+        from .feature_bindings import screen_allowed
+
+        if not screen_allowed(self):
+            return
         pro_data = dict(self.cfg.get("proactive_screen", {}))
         pro_data[key] = value
         self.cfg.set("proactive_screen", pro_data)
@@ -4588,9 +4570,16 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             return
         self._close_event_done = True
         self._closing = True  # 关闭后丢弃迟到的动画事件（生命周期守卫）
+        from .feature_bindings import host_for
+        from .official_features import SCREEN_OWNER
+
+        self._screen_execution_epoch += 1
+        manual = getattr(self, "_screen_manual_host", None)
+        if manual is not None:
+            manual.dispose()
+        host_for(self).detach(SCREEN_OWNER, f"window:{id(self)}")
         watcher = getattr(self, "proactive_watcher", None)
         if watcher is not None:
-            watcher.cancel_manual_look(self._on_look_done)
             watcher.pause()  # Shared watcher pause is intentionally a no-op.
         bubble = getattr(self, "_speech_bubble", None)
         if bubble is not None:

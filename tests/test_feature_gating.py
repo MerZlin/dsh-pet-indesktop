@@ -176,14 +176,18 @@ def test_petwindow_proactive_enabled_at_startup_starts_watcher(tmp_path, monkeyp
     主动识屏 v1 仅 Windows（``apply_config`` 有平台守卫），故固定平台为
     win32，保证 Linux/macOS CI 上同样确定性。
     """
-    import sys
+    from types import SimpleNamespace
 
+    # Replace the canonical OS boundary, not the legacy re-export module.
+    from features.screen_understanding.host import runtime as proactive_mod
+    from tests.screen_fakes import configure_vision
     from tests.test_collision_window import FakeLibrary
 
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(proactive_mod, "sys", SimpleNamespace(platform="win32"))
     app = _qapp()
     cfg = _disabled_config(tmp_path)
     cfg.set("proactive_screen", {"enabled": True, "whitelist": ["code.exe"]})
+    configure_vision(cfg, monkeypatch, modes=("automatic",))
     win = PetWindow(FakeLibrary(), cfg)
     try:
         # 不能只断言「对象被创建」：真正生效靠 apply_config() 起表。

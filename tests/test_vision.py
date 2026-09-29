@@ -195,13 +195,16 @@ def test_vision_request_includes_self_recognition_hint(monkeypatch):
     assert captured["body"]["messages"][0]["content"] == "sys"
 
 
-def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeypatch):
+def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeypatch, tmp_path):
     """回归测试：看看屏幕 worker 接收快照，不改写主线程 ProviderConfig 共享对象。"""
     from types import SimpleNamespace
 
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    from features.screen_understanding.host.manual import ManualScreenHost
     from pet.chat.models import ChatSettings, ProviderConfig
     from pet.config import Config
-    from pet.window import PetWindow
+    from pet.screen_understanding.host_binding import bind_runtime
 
     shared_provider = ProviderConfig.from_dict(
         "test-p",
@@ -212,26 +215,27 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
     )
     shared_settings = ChatSettings(providers={"test-p": shared_provider}, active_provider="test-p")
 
-    win = PetWindow.__new__(PetWindow)
-    win.cfg = SimpleNamespace(
-        chat_settings=lambda: shared_settings,
-        resolve_api_key=lambda p: "sk-resolved-secret",
-        get=lambda k, d=None: d,
-        # Config.character_display_name：用户别名优先（回归：识屏链路曾直取默认名）
-        character_display_name=lambda cid: "小鲸鱼",
-    )
-    win._last_look_ts = 0.0
-    win._look_busy = False
+    app = QApplication.instance() or QApplication([])
+    win = QWidget()
+    from tests.screen_fakes import configure_vision
+
+    win.cfg = Config(tmp_path)
+    configure_vision(win.cfg, monkeypatch, key="sk-resolved-secret")
+    win.cfg.chat_settings = lambda: shared_settings
+    win.cfg.character_display_name = lambda cid: "小鲸鱼"
     bubbles = []
     win.show_bubble = lambda msg, *a, **k: bubbles.append(msg)
     threads = []
     monkeypatch.setattr("threading.Thread", lambda **kwargs: SimpleNamespace(start=lambda: threads.append(kwargs)))
 
-    win._on_look_screen()
+    host = ManualScreenHost(bind_runtime(win, win.cfg), lambda *a: False, lambda cb: None)
+    host.start()
 
     assert len(threads) == 1
     passed_args = threads[0]["args"]
-    passed_provider, passed_system_prompt, passed_pet_name = passed_args
+    passed_provider, passed_system_prompt, passed_pet_name, passed_epoch, canceled = passed_args
+    assert passed_epoch == host._generation
+    assert not canceled.is_set()
     # 传递给 worker 的 provider 是快照，含有已解析的 key
     assert passed_provider.api_key == "sk-resolved-secret"
     assert passed_provider is not shared_provider
@@ -239,3 +243,8 @@ def test_look_worker_receives_snapshot_and_does_not_mutate_shared_config(monkeyp
     assert passed_pet_name == "小鲸鱼"
     # 共享对象未被污染改写
     assert shared_provider.api_key == "unresolved_or_empty"
+    host._thread_finished()  # The captured test thread was never launched.
+    host.dispose()
+    win.close()
+    win.deleteLater()
+    app.processEvents()

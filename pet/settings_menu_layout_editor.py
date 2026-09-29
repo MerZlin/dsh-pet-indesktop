@@ -62,7 +62,7 @@ class MenuLayoutEditor(QWidget):
         enabled_actions=None,
     ):
         super().__init__(parent)
-        self.available_actions = frozenset(available_actions or MENU_ACTIONS.ids)
+        self.available_actions = frozenset(MENU_ACTIONS.ids if available_actions is None else available_actions)
         self.enabled_actions = frozenset(enabled_actions if enabled_actions is not None else self.available_actions)
         self.tree = QTreeWidget(self)
         self.tree.setObjectName("menuLayoutTree")

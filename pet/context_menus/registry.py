@@ -11,6 +11,7 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import QMenu, QWidgetAction
 
 from ..config import DEFAULT_MENU_EASTER_EGG
+from ..feature_bindings import screen_menu_available
 from .fun_entry import add_ojingjing_entry
 from .icons import custom_file_menu_icon, vector_menu_icon
 from .quick_launch import add_quick_launch_menu, configured_quick_apps
@@ -305,7 +306,7 @@ class MenuActionRegistry:
                 disabled_reason="彩蛋入口已在设置中停用",
             ),
             "chat": MenuActionSpec(_build_chat, _callback_available("on_open_chat")),
-            "look_screen": MenuActionSpec(add_look_screen, _callback_available("on_look_screen")),
+            "look_screen": MenuActionSpec(add_look_screen, lambda pet: screen_menu_available(pet, "look_screen")),
             "animations_hub": MenuActionSpec(_build_animations),
             "character": MenuActionSpec(lambda menu, pet: build_character_menu(menu, pet)),
             "playback_speed": MenuActionSpec(lambda menu, pet: build_speed_menu(menu, pet)),
@@ -354,7 +355,7 @@ class MenuActionRegistry:
             "agent_link": MenuActionSpec(add_agent_link_menu),
             "proactive_screen": MenuActionSpec(
                 add_proactive_menu,
-                lambda pet: sys.platform == "win32" and callable(getattr(pet, "on_open_chat", None)),
+                lambda pet: screen_menu_available(pet, "proactive_screen"),
             ),
             "modern_settings": MenuActionSpec(_build_settings, _callback_available("on_open_modern_settings")),
             "todo_panel": MenuActionSpec(_build_todo_panel, _callback_available("on_open_todo_panel")),

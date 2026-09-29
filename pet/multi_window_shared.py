@@ -26,10 +26,8 @@ import weakref
 
 from PySide6.QtCore import QObject, Signal
 
-from . import platform_win
-from . import vision as vision_mod
+from . import desktop_query, platform_win
 from .agent_link import AgentLinkManager
-from .proactive import ProactiveScreenWatcher
 
 log = logging.getLogger("dsh-pet-standalone")
 
@@ -55,6 +53,9 @@ class MultiWindowProxy:
     def __init__(self, shell) -> None:
         self._shell = shell
         self.cfg = shell.config
+        from .feature_bindings import host_for
+
+        self.feature_host = host_for(shell)
 
     def _windows(self) -> list:
         return [inst.win for inst in self._shell.instances if inst.win is not None]
@@ -213,6 +214,20 @@ class MultiWindowProxy:
                 except Exception:
                     log.exception("主动识屏回复同步进会话失败")
 
+    def on_external_text(self, result_id: str, kind: str, user_text: str, reply: str) -> None:
+        # Existing shared-auto semantics: each current window owns a distinct
+        # route and chat store. Never fan out to arbitrary feature subscribers.
+        for window in self._windows():
+            callback = getattr(window, "on_external_text", None)
+            legacy = getattr(window, "on_look_synced", None)
+            try:
+                if callable(callback):
+                    callback(result_id, kind, user_text, reply)
+                elif callable(legacy):
+                    legacy(user_text, reply)
+            except Exception:
+                log.exception("screen text receiver failed")
+
     @property
     def cats(self) -> dict:
         # 联动动作池按「首个含动作包的窗」归类（角色不同动作名不同，缺失名 no-op）
@@ -318,17 +333,32 @@ class SharedAgentLinkManager(AgentLinkManager):
             log.exception("关闭共享 Agent 管理器失败")
 
 
-class SharedProactiveWatcher(ProactiveScreenWatcher):
-    """进程级共享的 ``ProactiveScreenWatcher``：一份截屏/探测 → 广播到各窗。
+class SharedProactiveWatcher:
+    """Compatibility facade; the feature runtime receives aggregate value ports.
 
-    ``MultiWindowProxy`` 作为其 ``win``：G1 守卫按「任一可见/未交互」聚合，
-    呈现经 ``show_bubble`` 扇出到全部可见窗。``pause`` / ``resume`` 为 no-op——
-    单窗隐藏/显示不动共享定时器（G1 守卫逐 tick 判定可见性），与「限流器保持
-    全局语义」一致。
+    Per-window pause/resume must not stop the process-wide service. Only stop_all
+    or the feature's execution authority stops it. No business logic lives here.
     """
 
     def __init__(self, proxy: MultiWindowProxy, config) -> None:
-        super().__init__(proxy, config, worker_mode="auto")
+        from .feature_host_bindings import runtime_for
+
+        self.win = proxy
+        self.cfg = config
+        self._runtime = runtime_for(proxy, config)
+        if self._runtime is None:
+            raise RuntimeError("screen feature unavailable")
+
+    def __getattr__(self, name):
+        return getattr(self._runtime, name)
+
+    @property
+    def worker_mode(self):
+        return self._runtime.worker_mode
+
+    @worker_mode.setter
+    def worker_mode(self, value):
+        self._runtime.worker_mode = value
 
     def pause(self) -> None:
         pass
@@ -337,12 +367,7 @@ class SharedProactiveWatcher(ProactiveScreenWatcher):
         pass
 
     def stop_all(self) -> None:
-        """进程级收口：停掉共享 Worker、定时器并作废在飞任务。"""
-        if self._worker_adapter is not None:
-            self._cancel_worker_requests(notify_manual=True)
-            self._worker_adapter.stop()
-        self._timer.stop()
-        self._generation += 1
+        self._runtime.dispose()
 
 
 class SharedFullscreenWatcher(QObject):
@@ -406,7 +431,8 @@ class SharedFullscreenWatcher(QObject):
 
     def _poll_cursor(self) -> None:
         try:
-            visibility = vision_mod.get_cursor_visibility()
+            result = desktop_query.get_desktop_query().cursor_state()
+            visibility = result.value.upper() if result.status == "ok" and result.value is not None else "UNKNOWN"
             self.cursor_visibility_changed.emit(visibility)
         except (RuntimeError, AttributeError) as exc:
             log.debug("共享光标状态检测瞬时异常 (%s)", exc)
@@ -446,7 +472,9 @@ class SharedSubsystems:
     def __init__(self, shell) -> None:
         self.proxy = MultiWindowProxy(shell)
         self.agent_link = SharedAgentLinkManager(self.proxy, shell.config)
-        self.proactive = SharedProactiveWatcher(self.proxy, shell.config)
+        from .feature_bindings import screen_allowed
+
+        self.proactive = SharedProactiveWatcher(self.proxy, shell.config) if screen_allowed(self.proxy) else None
         self.fs = SharedFullscreenWatcher(shell)
         self.fs.fullscreen_changed.connect(shell._on_shared_fullscreen)
         self.fs.cursor_visibility_changed.connect(shell._on_shared_cursor)
@@ -465,7 +493,8 @@ class SharedSubsystems:
         不掉，解释器退出 GC 才最终化 → 原生访问违规（见 _LIVE_SHARED_SUBSYSTEMS
         注释）。
         """
-        self.proactive.stop_all()
+        if self.proactive is not None:
+            self.proactive.stop_all()
         self.agent_link.stop_all()
         self.fs.stop()
         _release_qt_lifetimes(self)
@@ -497,7 +526,10 @@ def _release_qt_lifetimes(subs: "SharedSubsystems") -> None:
         app = QCoreApplication.instance()
         if app is None:
             return
-        for obj in (subs.proactive._bridge, subs.proactive._timer, subs.fs):
+        objects = [subs.fs]
+        if subs.proactive is not None:
+            objects.extend((subs.proactive._bridge, subs.proactive._timer))
+        for obj in objects:
             try:
                 if obj.parent() is None and obj.thread() is app.thread():
                     obj.setParent(app)

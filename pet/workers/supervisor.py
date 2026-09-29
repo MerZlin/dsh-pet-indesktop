@@ -9,10 +9,11 @@ import time
 import uuid
 import weakref
 from collections import deque
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
-from PySide6.QtCore import QEventLoop, QObject, QProcess, QTimer, Signal
+from PySide6.QtCore import QEventLoop, QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
+from .launch import WorkerLaunch
 from .protocol import MAX_MESSAGE_BYTES, WorkerMessage, WorkerProtocolError, build_message, decode_message, encode_message
 
 log = logging.getLogger("dsh-pet-standalone.worker-supervisor")
@@ -51,6 +52,7 @@ class WorkerSupervisor(QObject):
         *,
         program: str | None = None,
         arguments: Sequence[str] | None = None,
+        launch_factory: Callable[[], WorkerLaunch] | None = None,
         required_capabilities: Sequence[str] = (),
         handshake_timeout_ms: int = 5000,
         heartbeat_interval_ms: int = 5000,
@@ -63,6 +65,8 @@ class WorkerSupervisor(QObject):
         super().__init__(parent)
         self.worker_id = str(worker_id)
         self.required_capabilities = frozenset(required_capabilities)
+        self._launch_factory = launch_factory
+        self._launches: dict[QProcess, WorkerLaunch] = {}
         self.program, self.arguments = self._resolve_command(self.worker_id, program, arguments)
         self.handshake_timeout_ms = max(100, int(handshake_timeout_ms))
         self.heartbeat_interval_ms = max(250, int(heartbeat_interval_ms))
@@ -145,16 +149,58 @@ class WorkerSupervisor(QObject):
         self._stderr_buffer.clear()
         self._generation += 1
         self._last_heartbeat = time.monotonic()
-        process = QProcess(self)
-        process.setProgram(self.program)
-        process.setArguments(self.arguments)
+        launch = None
+        try:
+            if self._launch_factory is not None:
+                # A fresh verified lease for every generation, including retries.
+                launch = self._launch_factory()
+                if not isinstance(launch, WorkerLaunch):
+                    raise TypeError("invalid external Worker launch")
+            process = QProcess(self)
+            process.setProgram(launch.program if launch else self.program)
+            process.setArguments(list(launch.arguments) if launch else self.arguments)
+            if launch is not None:
+                environment = QProcessEnvironment()
+                for key, value in launch.environment.items():
+                    environment.insert(key, value)
+                process.setProcessEnvironment(environment)
+                process.setWorkingDirectory(launch.working_directory)
+        except Exception:
+            if isinstance(launch, WorkerLaunch):
+                launch.close()
+            # Do not dump verifier inputs, environment or credential-bearing paths.
+            self._set_state(self.FAULT)
+            self._emit_diagnostic("launch_rejected", {"reason": "external launch validation failed"})
+            self.failed.emit("external launch validation failed")
+            return False
         process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
-        process.started.connect(self._on_started)
-        process.readyReadStandardOutput.connect(self._read_stdout)
-        process.readyReadStandardError.connect(self._read_stderr)
-        process.errorOccurred.connect(self._on_process_error)
-        process.finished.connect(self._on_process_finished)
+
+        def connect_current(signal, callback):
+            # A queued old-generation signal must not dispatch into a new process.
+            # Do not capture bound callbacks/self/child strongly: disposing a
+            # DeferredDelete child could then release its parent's last Python
+            # reference from inside the child's C++ destructor.
+            owner_ref = weakref.ref(self)
+            process_ref = weakref.ref(process)
+            callback_ref = weakref.WeakMethod(callback)
+
+            def dispatch(*args):
+                owner = owner_ref()
+                child = process_ref()
+                target = callback_ref()
+                if owner is not None and child is not None and owner._process is child and target is not None:
+                    target(*args)
+
+            signal.connect(dispatch)
+
+        connect_current(process.started, self._on_started)
+        connect_current(process.readyReadStandardOutput, self._read_stdout)
+        connect_current(process.readyReadStandardError, self._read_stderr)
+        connect_current(process.errorOccurred, self._on_process_error)
+        connect_current(process.finished, self._on_process_finished)
         self._process = process
+        if launch is not None:
+            self._launches[process] = launch
         self._set_state(self.STARTING)
         process.start()
         return True
@@ -427,6 +473,15 @@ class WorkerSupervisor(QObject):
         self._emit_diagnostic("process_error", {"error": str(error), "error_string": self._process.errorString() if self._process else ""})
         if self._state in {self.STARTING, self.HANDSHAKING, self.READY}:
             self.failed.emit(self._process.errorString() if self._process else "worker process error")
+        if error == QProcess.ProcessError.FailedToStart:
+            # Qt does not emit finished() when native process creation fails.
+            process = self._process
+            self._handshake_timer.stop()
+            self._heartbeat_timer.stop()
+            self._io_timer.stop()
+            if process is not None:
+                self._release_process(process)
+            self._schedule_restart("worker failed to start")
 
     def _fail_current(self, reason: str) -> None:
         self._accept_events = False
@@ -505,8 +560,13 @@ class WorkerSupervisor(QObject):
         stopped process from surviving into a later restart or test teardown
         while keeping the production lifecycle asynchronous.
         """
+        if process.state() != QProcess.ProcessState.NotRunning:
+            return
         if self._process is process:
             self._process = None
+        launch = self._launches.pop(process, None)
+        if launch is not None:
+            launch.close()
         try:
             process.deleteLater()
         except RuntimeError:

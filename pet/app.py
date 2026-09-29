@@ -469,8 +469,9 @@ class PetInstance:
         win.on_open_chat_settings = self._slot_wrap(self.open_chat_settings) if self.enable_chat else None
         win.on_show_balance = self._slot_wrap(self.shell.show_balance) if self.enable_chat else None
         win.on_check_update = self._slot_wrap(self.shell.check_update)
+        self._bind_optional_services(win)
         win.on_look_synced = self._slot_wrap(self.sync_look_to_chat) if self.enable_chat else None
-        win.on_look_screen = win.look_at_screen if self.enable_chat and hasattr(win, "look_at_screen") else None
+        win.on_look_screen = win.look_at_screen if hasattr(win, "look_at_screen") else None
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self._slot_wrap(self.open_modern_settings)
         # 桌宠隐藏时的气泡改道面（DSH 联动等非交互反馈气泡 → 灵动岛，见
@@ -529,6 +530,7 @@ class PetInstance:
                 single_process_spawn=self.shell._single_process_spawn,
                 agent_link_manager=shared.agent_link if shared else None,
                 proactive_watcher=shared.proactive if shared else None,
+                feature_host=getattr(self.shell, "feature_host", None),
             )
         finally:
             _pet_log_slot.slot = _prev_slot
@@ -850,6 +852,7 @@ class PetInstance:
                 self.win,
                 include_ai=self.enable_chat,
                 initial_page=initial_page,
+                feature_host=getattr(self.shell, "feature_host", None),
             )
             dialog.finished.connect(self._modern_settings_finished)
             self.modern_settings_dialog = dialog
@@ -953,42 +956,45 @@ class PetInstance:
         setter(not bool(self.config.get("idle_low_fps_enabled", False)), visible=visible)
 
     # ------------------------------------------------------------ 其它窗口级
+    def _bind_optional_services(self, win) -> None:
+        """Bind a fixed route; chat owns validation, storage and UI refresh."""
+        win.on_external_text = None
+        if not self.enable_chat:
+            return  # No-chat Core must not import the optional receiver.
+        from .chat.external_turns import CHAT_OWNER, SCREEN_OWNER, SERVICE_ID, ExternalTurnReceiver
+        from .plugins.services import ServiceRegistry, ServiceRoute
+
+        router = getattr(self.shell, "_feature_services", None)
+        if router is None:
+            router = ServiceRegistry()
+            self.shell._feature_services = router
+        route = ServiceRoute(f"window:{id(win)}", str(self.config.instance_id or "primary"), str(self.config.get("character", catalog.DEFAULT_CHARACTER)))
+        receiver = ExternalTurnReceiver(self.config, route, lambda: self.chat_window)
+        handle = router.register(CHAT_OWNER, SERVICE_ID, route, receiver.receive)
+
+        def authorized():
+            host = getattr(self.shell, "feature_host", None)
+            return self.enable_chat and self.win is win and not getattr(win, "_closing", False) and (host is None or host.enabled(SCREEN_OWNER))
+
+        client = router.bind(SCREEN_OWNER, route, allowed={SERVICE_ID}, authorized=authorized)
+
+        def sync(result_id, kind, user_text, reply):
+            return client.call(SERVICE_ID, {"result_id": result_id, "kind": kind, "user_text": user_text, "reply": reply})
+
+        def dispose(*_):
+            client.dispose()
+            handle.dispose()
+
+        win.on_external_text = sync
+        win.destroyed.connect(dispose)
+
     def sync_look_to_chat(self, user_text: str, reply: str) -> None:
-        """把「看看屏幕/主动识屏」的问答同步进 AI 对话记录（issue #24）。
+        """Legacy facade; session behavior belongs to chat.external-turn/v1."""
+        import uuid
 
-        聊天窗口已创建 → 走窗口内同步（含界面即时刷新）；
-        聊天窗口从未打开 → 直接写入当前角色最新会话（无则新建），之后再打开
-        聊天窗口即可在历史里回看全文——气泡里被省略/分页的内容不再无处可查。
-        """
-        if not self.enable_chat or not str(reply or "").strip():
-            return
-        if self.chat_window is not None and hasattr(self.chat_window, "append_look_sync"):
-            self.chat_window.append_look_sync(user_text, reply)
-            return
-        try:
-            from .chat.models import ChatMessage
-            from .chat.session_store import SessionStore
-
-            store = SessionStore(self.config.dir, getattr(self.config, "instance_id", ""))
-            character_id = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
-            sessions = store.list(character_id)
-            if sessions:
-                session = sessions[0]
-            else:
-                settings = self.config.chat_settings()
-                session = store.create(
-                    character_id,
-                    settings.active_provider,
-                    settings.default_system_prompt,
-                )
-            msgs = [ChatMessage("user", str(user_text)), ChatMessage("assistant", str(reply))]
-            synced, _absorbed = store.append_messages(session, msgs)
-            if synced is None:
-                # 会话已被并发删除等边界：本地兜底（保持旧行为）
-                session.messages.extend(msgs)
-                store.save(session)
-        except Exception:
-            logging.exception("同步识屏问答到会话记录失败")
+        callback = getattr(self.win, "on_external_text", None)
+        if callable(callback):
+            callback(uuid.uuid4().hex, "manual", str(user_text), str(reply))
 
     def _set_autostart(self, enabled: bool, win=None) -> bool:
         ok = autostart_mod.set_enabled(bool(enabled))
@@ -1045,7 +1051,15 @@ class AppShell:
     """
 
     def __init__(
-        self, app: QApplication, config: Config, enable_chat: bool = True, slot_handle=None, slot_id: int | None = None, spawn_offset: int = 0
+        self,
+        app: QApplication,
+        config: Config,
+        enable_chat: bool = True,
+        slot_handle=None,
+        slot_id: int | None = None,
+        spawn_offset: int = 0,
+        *,
+        feature_host=None,
     ) -> None:
         self.app = app
         self.config = config
@@ -1094,6 +1108,9 @@ class AppShell:
         # PresentationPort/SchedulerPort 等受限门面访问 Core。
         self.plugin_registry = self._build_plugin_registry()
         self.plugin_registry.discover()
+        from .official_features import default_feature_host
+
+        self.feature_host = feature_host if feature_host is not None else default_feature_host(self.plugin_registry.contributions)
         # 待办提醒：进程级单例（多窗共用一个调度器，避免每窗一个定时器重复通知），
         # Phase 1 门控：默认懒创建——配置关闭时不构造、不跑 30s 定时器；关闭且
         # 无面板打开时释放。win 引用在服务 tick 时经本类 win 属性动态读主窗，
@@ -2001,8 +2018,6 @@ class AppShell:
         各停一次——多窗下任一窗退出不许停进程级资源，只有「全部退出」才收口
         （这也是「退出这只」与「全部退出」的核心差异）。
         """
-        from .chat import session_store as _session_store
-
         # issue #111：先关 ffmpeg spawn 闸门，再走正常退出收口——正常退出路径
         # （托盘退出/最后窗口关闭）同样落在关机前后，绝不能在里面再派生 reader。
         self._mark_session_ending()
@@ -2125,8 +2140,17 @@ class AppShell:
         except Exception:
             logging.exception("退出时停止 DSH 状态跟踪器失败")
         try:
-            if not _session_store.close_all_writers(permanent=True):
-                logging.warning("退出时会话写盘 worker 未干净关闭")
+            # A no-chat Core must still finish *all* resource cleanup. Only the
+            # intentionally absent optional package is ignored; broken chat
+            # dependencies remain diagnostic failures at this cleanup boundary.
+            try:
+                from .chat import session_store as _session_store
+            except ModuleNotFoundError as exc:
+                if exc.name not in {"pet.chat", "pet.chat.session_store"}:
+                    raise
+            else:
+                if not _session_store.close_all_writers(permanent=True):
+                    logging.warning("退出时会话写盘 worker 未干净关闭")
         except Exception:
             logging.exception("退出时关闭会话写盘 worker 失败")
         # 批5.2a：进程级共享子系统收口（agent_link / proactive / 全屏 watcher）。

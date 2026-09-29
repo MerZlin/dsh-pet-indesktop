@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from pet.chat.models import ProviderConfig
 from pet.config import Config
 from pet.proactive import ProactiveScreenWatcher
+from pet.screen_understanding.models import VisionRequestConfig
 
 
 class DummyWindow:
@@ -65,7 +65,7 @@ class FakeAdapter:
     def analyze_frame(
         self,
         frame_id: str,
-        provider: ProviderConfig,
+        provider: VisionRequestConfig,
         system_prompt: str,
         *,
         generation: int,
@@ -91,7 +91,7 @@ class FakeAdapter:
 
     def manual_look(
         self,
-        provider: ProviderConfig,
+        provider: VisionRequestConfig,
         system_prompt: str,
         *,
         generation: int,
@@ -121,15 +121,16 @@ class FakeAdapter:
         return self._request_id("cancel")
 
 
-def _provider() -> ProviderConfig:
-    return ProviderConfig.from_dict(
-        "vision-test",
-        {
-            "name": "Test Vision",
-            "model": "vision-model",
-            "api_key": "one-shot-secret",
-        },
-    )
+@pytest.fixture(autouse=True)
+def secure_backend(monkeypatch):
+    from tests.screen_fakes import MemoryVault
+
+    backend = MemoryVault()
+    monkeypatch.setattr("pet.credentials.secure_backend", lambda: backend)
+
+
+def _provider() -> VisionRequestConfig:
+    return VisionRequestConfig("https://visual.invalid", "vision-model", "one-shot-secret")
 
 
 def _watcher(tmp_path) -> ProactiveScreenWatcher:
@@ -146,9 +147,11 @@ def _watcher(tmp_path) -> ProactiveScreenWatcher:
             "preset": "custom",
         },
     )
+    from tests.screen_fakes import configure_vision
+
+    configure_vision(cfg)
     watcher = ProactiveScreenWatcher(DummyWindow(), cfg, worker_mode="in_process")
     watcher._timer.stop()
-    watcher._resolve_vision_provider = lambda _eff: (_provider(), "look at the screen")
     watcher.limiter.allow = lambda: (True, "ok")
     watcher.limiter.try_acquire = lambda: (True, "ok")
     return watcher

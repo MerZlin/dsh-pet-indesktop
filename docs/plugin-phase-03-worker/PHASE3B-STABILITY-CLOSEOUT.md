@@ -4,6 +4,8 @@
 > 组合回归、重新构建、Qt DLL 链和 Worker smoke 通过；本轮全量有 1 项真实桌面环境相关失败，人工细项仍待确认。
 > 原始实现证据：[2026-09-26 PR 报告](../PR-REPORT-PLUGIN-PHASE3B-2026-09-26.md)；当前设计：[3B 设计](PHASE3B-PROACTIVE-SCREEN-DESIGN.md)。本文补充后续证据，不覆写原报告。
 
+> **2026-09-27 后续更新：**以下 §1–§9 保留上一轮收尾时的原始失败和待确认记录，最新结果以 [§10](#10-前台窗口测试边界修复与验收澄清) 为准。本次测试边界修复后全量为 **3123 passed、11 skipped、13 warnings**。用户只确认手动“看看屏幕”正常；自动识屏未等待验收，不判定为故障；停用/托盘退出未测试。**尚不能宣布 Phase 3B 人工验收全部完成。**
+
 ## 1. 范围与基线
 
 本轮只复验已有实现、核对构建来源、补充证据和进行 [Phase 3C 风险评估](PHASE3C-ISOLATION-ASSESSMENT.md)。未修改生产代码、测试、Worker 协议或构建逻辑，也未新增功能、长期 soak、用户屏幕截图或真实模型/账户请求。
@@ -171,3 +173,93 @@ python scripts/verify_phase3b_frozen_worker.py dist-onedir/dsh-pet-standalone-we
 当前 Worker 代码在主程序 `pet/workers/` 中，随主程序安装，**不是现在能单独导入或卸载的 DLC**。关闭自动识屏不等于关闭手动入口。真正包目录、菜单/设置按安装状态注册、应用内卸载与重装，由 Phase 4A/4B 落地，Setup/ZIP/便携由 Phase 5A 接续。
 
 你现在获得的是可回滚的本地实现检查点、最新验证事实和剩余清单，而不是未经证实的“全部封存完成”。
+
+
+## 10. 前台窗口测试边界修复与验收澄清
+
+### 10.1 事实、范围与根因
+
+2026-09-27 后续执行基线为 `b97112d2a65d1af1a8d3396875afac0cdb984337`，工作树起初干净；本轮未暂存、提交或推送。环境沿用 §1，默认 pytest 仍使用 `QT_QPA_PLATFORM=offscreen`。
+
+| 人工项目 | 用户最新说明 / 当前状态 |
+|---|---|
+| 手动“看看屏幕” | 用户确认正常，不要求为报告重复调用真实模型 |
+| 自动识屏 | 用户没有继续等待，尚未验收；没有证据判定是实现故障 |
+| 停用、托盘自然退出等 | 用户未测试，继续保留人工门；自动化不能代替 |
+
+§4 的旧失败来自测试要求真实桌面始终存在合格前台窗口，而函数合同允许在不可见等情况下返回 `None`。用户随后复跑旧测试曾得 `1 passed in 0.47s`，这说明测试受环境影响，不能当作边界已经修复。本轮不排查自动识屏、不降低策略阈值，也不改生产函数。
+
+### 10.2 确定性回归与显式探针
+
+- 从 [test_proactive.py](../../tests/test_proactive.py) 移除一项依赖真实可见前台的回归，把其逻辑保护迁入 [test_vision_foreground.py](../../tests/test_vision_foreground.py)。新测试直接执行 `foreground_window_info()`，只替换 WinAPI 和被测模块的平台分支，保留真实 ctypes 类型、结构和缓冲区，不伪造函数结果。
+- **21 项函数边界用例**：有效窗口完整元数据、无窗口/不可见/最小化/cloaked、DWM 不可用/失败的 User32 回退、无效矩形、系统异常、进程查询及句柄关闭、非 Windows 行为。成功路径必须得到精确字段，不能用 `None` 也通过的断言。
+- **23 项探针分类用例**：稳定成功、环境未就绪、真实函数错误、非法结构、窗口变化最多三次、前后条件变化、隐私输出及退出码。合计 44 项；没有新增 skip/xfail 或改变默认测试过滤。
+- [verify_foreground_window.py](../../scripts/verify_foreground_window.py) 仅显式执行，不进入默认 pytest/CI。调用前后独立检查窗口前提；退出码 **0=验证通过、2=环境未就绪（不计验收通过）、1=验证错误（不得降格跳过）**。不抢焦点、不模拟输入、不截图、不联网；仅输出原因码和次数，不输出标题、路径、HWND 或 PID。
+- 测试先行记录：新探针文件创建前分类测试因模块不存在报错；补实现后通过。另用内存 AST 变异恢复历史局部 `import ctypes.wintypes` 遮蔽，严格成功断言会失败；该探针未写回 `pet/vision.py`，证明不是把旧回归删掉后放宽断言。
+
+### 10.3 本轮命令与实际结果
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+$env:PYTHONUTF8 = "1"
+python -m pytest -q tests/test_vision_foreground.py tests/test_proactive.py tests/test_vision.py `
+  tests/test_proactive_worker_adapter.py tests/test_proactive_worker_app_shutdown.py `
+  tests/test_proactive_worker_integration.py tests/test_proactive_worker_lifecycle.py `
+  tests/test_proactive_worker_smoke.py tests/test_proactive_worker_source.py `
+  tests/test_proactive_watcher_worker.py tests/test_workers_protocol.py
+python -m pytest -q
+python -m ruff check pet tests scripts
+python -m ruff format --check pet tests scripts
+python -m py_compile scripts/verify_foreground_window.py tests/test_vision_foreground.py
+python scripts/check_docs.py
+python -m pytest -q tests/test_pr_report_discipline.py tests/test_desktop_pet_features.py
+& 'D:\DELL\Git\cmd\git.exe' diff --check
+# 真实桌面探针单独执行，不混入上述确定性通过数量
+python scripts/verify_foreground_window.py
+```
+
+| 检查 | 实际结果 | 证据含义 |
+|---|---|---|
+| 相关专项 | **174 passed、1 skipped，36.62s** | 真实函数 OS 边界及主动识屏/Worker 回归通过 |
+| 全量 | **3123 passed、11 skipped、13 warnings，756.38s** | 无失败，无 Qt 原生崩溃；不是长期 Worker soak |
+| Ruff / format | `All checks passed!`；`372 files already formatted` | 比原记录增加新脚本及新测试 2 个 Python 文件 |
+| 编译 | 两个新增 Python 文件通过 | 未修改生产代码 |
+| 文档链接 | **105 份 Markdown 检查通过** | 新审计已登记，新增链接可解析 |
+| PR 纪律 / 产品文案边界 | **130 passed，38.67s** | 对文档及扫描边界复验，不改写旧报告规避检查 |
+| Git / 保护检查 | `diff --check` 通过；核对 848 个原受控文件哈希，仅 7 个范围内文件变化，另新增 3 个文件 | 暂存区为空，HEAD 仍为 `b97112d`；生产、打包、更新及 HTML 均未改变，无提交/推送 |
+| 独立真实桌面探针（N=1） | `exit_code=0`、`reason=foreground_verified`、`attempts=1`，进程退出码 0，用时 **0.5724s** | 本次有稳定合格前台，真实函数和结构通过；没有截图或模型调用，不等于自动识屏或托盘验收 |
+
+测试总数由旧记录的 `1 failed + 3079 passed + 11 skipped = 3091` 增加至 `3123 passed + 11 skipped = 3134`：删除 1 个环境依赖测试、增加 44 个确定性用例，净增 43。skip 仍为 11；warnings 仍为 13，来自 `QImage.mirrored` 与 `QHoverEvent` 的既有弃用提示。本次不修这些无关路径，也不把测试耗时变化当作产品性能改善/退化。
+
+本次进程探针耗时是单样本工具运行成本，不是 Core/Worker 性能基线。生产稳态路径、调用频率、网络/磁盘/线程及常驻内存均未修改，因此没有新的产品性能结论；§6 的已有有界样本保持原结论。工具只有显式运行时读取 WinAPI 窗口元数据，不创建后台循环；不新增长期 RSS/CPU 测量。
+
+原始本地输出保存在 `.scratch/foreground-boundary-2026-09-27/`（`focused.log`、`related.log`、`full-suite.log`、`probe-red.log`、`mutation-check.txt`、`desktop-probe.json`）。该目录不提交，关键命令和结果已在本文持久记录，不要求读者仅靠忽略的临时文件判断结论。
+
+### 10.4 Phase 4A 只读审计与构建证据
+
+新增 [屏幕理解交付边界审计](../plugin-phase-04-updates/PHASE4A-SCREEN-DELIVERY-AUDIT.md)，区分已证实事实、建议边界、待验证事项。关键结果：
+
+1. Core 全屏/光标行为复用 `vision.py` 的系统查询，不能整文件搬走；截图/网络/专属策略应与通用平台查询分开。
+2. 手动入口、主动菜单、视觉设置、Provider 与凭据仍依赖聊天；已有独立视觉 Key 不等于可以不安装聊天独立交付。
+3. 专属 UI、配置、adapter、Worker 与旧 fallback 都须纳入包所有权；当前命令 owner 清理不是完整安装/菜单/设置撤销事务。
+4. 现有 `webm-chat` 构建记录的 **468/468 输入哈希匹配，0 项变化**，但 TOC 收集了识屏和聊天，只能当完整包基线，不能证明最小 Core。旧 `webm` TOC 无当前对应保证。
+
+**本轮没有重建、没有重新跑 frozen smoke**；§5 既有产物的时间、哈希和对应关系在审计中注明。未搬代码、删除依赖、实现加载器、冻结包格式/目录或声称 Phase 4A/可卸载样板完成。
+
+### 10.5 文件范围、回滚与剩余门
+
+| 文件 | 本轮改变 / 理由 |
+|---|---|
+| `tests/test_proactive.py` | 只移出真实前台依赖测试，避免默认回归由当前桌面状态决定 |
+| `tests/test_vision_foreground.py`（新增） | 直接执行真实函数、覆盖 OS 边界及探针分类，保留原遮蔽 bug 的严格保护 |
+| `scripts/verify_foreground_window.py`（新增） | 保留显式、隐私最小化的真实桌面检查入口 |
+| 本收尾报告 | 追加 §10 与最新提示，保留 §1–§9 的失败证据与历史结论 |
+| `docs/plugin-phase-04-updates/PHASE4A-SCREEN-DELIVERY-AUDIT.md`（新增） | 为未来真正拆包提供代码/测试/构建依据，不替代实施设计 |
+| Phase 3 / Phase 4 `README.md`、`docs/INDEX.md` | 同步最新状态、人工事实与审计导航，不重写阶段路线 |
+| `LOG.md`、`LOG-INDEX.md` | 追加本轮事实和入口，保留上一轮失败记录 |
+
+未改 `pet/`、Worker 协议、自动更新、打包配置或演示 HTML；不移动/删除文档，不提交推送。回滚时只撤回上述本轮测试/工具/文档增量，不 `reset` 覆盖其他改动；未来需要提交时显式暂存本轮文件形成独立回滚点。
+
+**当前结论：默认全量回归门已通过；自动识屏、停用、托盘退出人工门仍未完成，不能宣布 Phase 3B 全部封存。** 后续可按审计设计 Phase 4A 最小接缝，不启动大规模搬迁或用进程数量冒充物理可拔除。
+
+对使用者：桌宠触发条件、操作和安装目录完全不变。现在常规测试不依赖恰好在前台的窗口；需要桌面证据时另跑显式探针。当前识屏仍为内置 Worker，用本机管道与 Core 连接，没有新增安装/卸载 DLC 功能。

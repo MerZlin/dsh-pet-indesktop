@@ -59,6 +59,10 @@ class WindowFeatureGateMixin:
 
     # ------------------------------------------------------------ 判定
     def _proactive_wanted(self) -> bool:
+        from .feature_bindings import screen_allowed
+
+        if not screen_allowed(self):
+            return False
         raw = self.cfg.get("proactive_screen", {})
         return bool((raw or {}).get("enabled", False))
 
@@ -75,9 +79,9 @@ class WindowFeatureGateMixin:
     def _ensure_proactive_watcher(self):
         """首次启用主动识屏时懒创建观察器；已存在则原样返回。"""
         if self.proactive_watcher is None:
-            from .proactive import ProactiveScreenWatcher
+            from .feature_host_bindings import runtime_for
 
-            self.proactive_watcher = ProactiveScreenWatcher(self, self.cfg, worker_mode="auto")
+            self.proactive_watcher = runtime_for(self, self.cfg, worker_mode="auto")
         return self.proactive_watcher
 
     def _ensure_agent_link_manager(self):

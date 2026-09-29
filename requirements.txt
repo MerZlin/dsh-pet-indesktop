@@ -49,3 +49,6 @@ psutil>=5.9
 pytest>=8
 ruff>=0.5
 pytest-cov>=5
+
+# Official feature-package signature verification (Ed25519)
+cryptography>=43.0

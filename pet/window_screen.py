@@ -48,8 +48,8 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
     """
     clock = monotonic if monotonic is not None else _fs_monotonic
     stop = host._fs_stop
-    # Phase 1：避免纯桌宠启动即加载 PIL；该线程真正需要检测光标时才导入。
-    from . import vision as vision_mod
+    # 通用平台查询不加载识屏、Pillow 或模型请求实现。
+    from . import desktop_query
 
     polls = 0
     consecutive_errors = 0
@@ -63,7 +63,8 @@ def fs_watch_loop(host, *, monotonic=None) -> None:
             return
         if host._cursor_hidden_passthrough_enabled():
             try:
-                visibility = vision_mod.get_cursor_visibility()
+                result = desktop_query.get_desktop_query().cursor_state()
+                visibility = result.value.upper() if result.status == "ok" and result.value is not None else "UNKNOWN"
                 if shiboken6.isValid(host) is False:
                     return
                 host.cursor_visibility_changed.emit(visibility)

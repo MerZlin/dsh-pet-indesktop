@@ -1431,7 +1431,8 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
         "已配置应用",
         "内容与布局",
         "模型与连接",
-        "视觉能力",
+        "屏幕理解",
+        "屏幕理解 · 独立视觉配置",
         # 「语音」总域只收 TTS 类设置（2026-09-17 定稿口径）：语音报时 + 节日提醒
         "语音报时",
         "节日提醒",
@@ -1554,7 +1555,7 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=True)
 
-    vision_model = dialog.findChild(settings_mod.SettingRow, "settingRow_vision_model")
+    vision_model = dialog.findChild(settings_mod.SettingRow, "settingRow_screen_model")
     custom_background = dialog.findChild(settings_mod.SettingRow, "settingRow_chat_background_file")
     self_talk_rows = [
         dialog.findChild(settings_mod.SettingRow, f"settingRow_{key}")
@@ -1570,7 +1571,9 @@ def test_modern_settings_progressively_reveals_dependent_controls(tmp_path, monk
     ]
     opacity = dialog.findChild(settings_mod.SettingRow, "settingRow_menu_opacity")
 
-    assert vision_model.isHidden() is dialog.ai_page.vision_same.isChecked()
+    # Vision editing belongs to automation and is independent of the old chat toggle.
+    assert vision_model is not None and not vision_model.isHidden()
+    assert dialog.findChild(settings_mod.SettingRow, "settingRow_vision_model") is None
     dialog.ai_page.vision_same.setChecked(False)
     assert not vision_model.isHidden()
     assert custom_background.isHidden()
@@ -1741,13 +1744,14 @@ def test_windows_proactive_master_and_idle_toggles_hide_dependent_rows(tmp_path,
         "proactive_idle_seconds",
         "proactive_through",
         "proactive_pre_cue",
-        "proactive_free",
         "proactive_whitelist",
         "proactive_whitelist_add",
         "proactive_memory_clear",
     )
     dialog.pro_enabled_check.setChecked(False)
     assert all(row(key).isHidden() for key in child_keys)
+    assert dialog.findChild(settings_mod.SettingRow, "settingRow_proactive_free") is None
+    assert not row("screen_model").isHidden(), "manual vision remains configurable with automatic vision off"
     dialog.pro_idle_check.setChecked(False)
     dialog.pro_enabled_check.setChecked(True)
     assert row("proactive_idle_seconds").isHidden()
@@ -2753,13 +2757,17 @@ def test_color_picker_uses_stable_painted_swatch_instead_of_border_hack():
 
 
 def test_dock_icon_visibility_defaults_on_and_is_saved_by_modern_settings(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     from PySide6.QtWidgets import QApplication
 
     import pet.modern_settings_dialog as settings_mod
     from pet.config import Config
 
     app = QApplication.instance() or QApplication([])
-    monkeypatch.setattr(settings_mod.sys, "platform", "darwin")
+    # Simulate only the settings presentation platform, not the real file-lock backend.
+    monkeypatch.setattr(settings_mod, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr("pet.settings_pet_controls.sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     config = Config(tmp_path)
     assert config.get("show_dock_icon") is True

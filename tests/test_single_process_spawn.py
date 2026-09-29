@@ -58,7 +58,7 @@ class _FakeAgentLink:
         self.shutdown_calls += 1
 
 
-class _FakeWindow:
+class _FakeWindow(QObject):
     """窗级退出/切换所需的薄替身：记录调用，不触碰真实 Qt 窗口。
 
     T-2：不硬编码 versioned=True——remove_runtime_marker 读取进程级 flag 快照
@@ -66,6 +66,7 @@ class _FakeWindow:
     """
 
     def __init__(self):
+        super().__init__()  # Real QObject.destroyed for owner-service cleanup.
         self.calls = []
         self.lib = _FakeLib()
         self.agent_link_manager = _FakeAgentLink()

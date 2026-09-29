@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 from .capabilities import CapabilitySet
 from .config import PluginConfigStore
+from .contributions import ContributionRegistry
 from .events import CoreEvent, CoreEventBus, ScopedEventBus, Subscription
 from .manifest import PluginDiagnostic, PluginManifest, PluginManifestError, version_satisfies
 from .ports import (
@@ -49,6 +50,7 @@ class PluginContext:
         commands: CommandRegistry,
         content: ContentProviderRegistry,
         capabilities: CapabilitySet,
+        contributions: ContributionRegistry | None = None,
         logger: StructuredLogger | None = None,
     ) -> None:
         self.plugin_id = plugin_id
@@ -59,6 +61,8 @@ class PluginContext:
         self.logger = logger or StructuredLogger(plugin_id)
         self._events = events
         self._commands = commands
+        self._contributions = contributions or ContributionRegistry(commands)
+        self.contributions = self._contributions.bind(plugin_id, "app", capabilities)
         self.events: ScopedEventBus = ScopedEventBus(events, plugin_id)
         self.presentation = ScopedPresentationPort(presentation, capabilities)
         self.scheduler = ScopedSchedulerPort(scheduler, plugin_id, capabilities)
@@ -70,6 +74,7 @@ class PluginContext:
         if self._disposed:
             return
         self._disposed = True
+        self._contributions.revoke_owner(self.plugin_id)
         self.scheduler.cancel_all()
         self.events.clear()
         self._commands.unregister_owner(self.plugin_id)
@@ -113,6 +118,7 @@ class PluginRegistry:
         self.presentation = presentation or PresentationPort()
         self.scheduler = scheduler or SchedulerPort()
         self.commands = commands or CommandRegistry()
+        self.contributions = ContributionRegistry(self.commands)
         self.content = content or ContentProviderRegistry()
         self.logger = logger or StructuredLogger("core")
         self._definitions: list[tuple[Any, Callable[[PluginContext], Any], bool | None]] = []
@@ -289,6 +295,7 @@ class PluginRegistry:
                 presentation=self.presentation,
                 scheduler=self.scheduler,
                 commands=self.commands,
+                contributions=self.contributions,
                 content=self.content,
                 capabilities=capabilities,
                 logger=StructuredLogger(record.manifest.id),

@@ -1114,6 +1114,12 @@ class Config:
         providers = chat.get("providers") if isinstance(chat, dict) else None
         if not isinstance(providers, dict):
             return
+        # A normal reload must not import the optional chat implementation merely
+        # because its (empty or reference-only) legacy settings still exist.
+        if not any(
+            isinstance(provider, dict) and any(str(provider.get(key) or "").strip() for key in ("api_key", "vision_api_key")) for provider in providers.values()
+        ):
+            return
         try:
             from .chat.models import SecretStore  # 惰性导入，且只实例化一次
         except ModuleNotFoundError as exc:
@@ -1591,13 +1597,12 @@ class Config:
         try:
             self._normalize_pet_settings()
             self.dir.mkdir(parents=True, exist_ok=True)
-            temp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
-            temp.write_text(
-                json.dumps(self._redacted_data(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            os.replace(temp, self.path)
-        except OSError as exc:
+            from .config_transaction import SCREEN_NAMESPACE, save_core_document
+
+            independent = save_core_document(self.path, self._redacted_data())
+            if independent:
+                self.data.setdefault("plugins", {})[SCREEN_NAMESPACE] = independent
+        except (OSError, ValueError, TypeError) as exc:
             logging.warning("保存配置失败: %s (%s)", self.path, exc)
             return False
         return True

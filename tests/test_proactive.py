@@ -406,6 +406,9 @@ class TestVisionAndWatcherPhase2:
                 return self._visible
 
         cfg = Config(base=tmp_path)
+        from tests.screen_fakes import configure_vision
+
+        configure_vision(cfg, monkeypatch)
         win = DummyWindow()
 
         # 默认：enabled=False, whitelist=[] -> 不启动定时器
@@ -429,22 +432,6 @@ class TestVisionAndWatcherPhase2:
         # 恢复 -> 重新评估启动
         watcher.resume()
         assert watcher.is_running() is True
-
-    def test_foreground_window_info_real_call_no_shadow_bug(self):
-        """回归：函数体内局部 import ctypes.wintypes 曾让 ctypes 变成局部变量，
-        函数开头的 ctypes.windll 访问抛 UnboundLocalError 并被 except 吞掉，
-        导致永远返回 None（mock 测试全覆盖时该 bug 完全隐形）。"""
-        import sys
-
-        if sys.platform != "win32":
-            import pytest
-
-            pytest.skip("仅 Windows 可真实调用")
-        from pet import vision
-
-        info = vision.foreground_window_info()
-        assert info is not None
-        assert set(info.keys()) == {"hwnd", "pid", "process", "title", "rect"}
 
     def test_watcher_starts_before_first_show(self, tmp_path, monkeypatch):
         """回归：PetWindow 构造时窗口尚未显示（isVisible=False），若 apply_config 以
@@ -472,6 +459,9 @@ class TestVisionAndWatcherPhase2:
 
         cfg = Config(base=tmp_path)
         cfg.set("proactive_screen", {"enabled": True, "whitelist": ["code.exe"]})
+        from tests.screen_fakes import configure_vision
+
+        configure_vision(cfg, monkeypatch)
         watcher = ProactiveScreenWatcher(DummyWindow(), cfg)
         assert watcher.is_running() is True
         watcher.pause()
@@ -701,29 +691,22 @@ class TestPhase3VisionLinkAndDryRun:
         assert ok is False
         assert reason == "min_request_interval_cooldown"
 
-    def test_provider_resolution_strategy(self, tmp_path):
-        from pet.chat.models import ChatSettings, ProviderConfig
+    def test_provider_resolution_is_independent_of_legacy_chat_strategy(self, tmp_path, monkeypatch):
         from pet.proactive import ProactiveScreenWatcher
+        from tests.screen_fakes import configure_vision
 
         cfg = Config(base=tmp_path)
-        win = None
-        watcher = ProactiveScreenWatcher(win, cfg)
-
-        # 1. 默认情况：vision_same_as_chat=True -> 使用聊天 provider
-        eff = effective_proactive_config({"prefer_free_provider": True})
-        p, _ = watcher._resolve_vision_provider(eff)
-        assert p.model == "deepseek-v4-flash"
-
-        # 2. 勾选 prefer_free_provider 且配置独立 GLM 视觉
-        chat_data = cfg.data["chat"]
-        chat_data["providers"]["openai-main"]["vision_same_as_chat"] = False
-        chat_data["providers"]["openai-main"]["vision_model"] = "glm-4.6v-flash"
-        chat_data["providers"]["openai-main"]["vision_base_url"] = "https://open.bigmodel.cn/api/paas/v4"
-        cfg.data["chat"] = chat_data
-
-        p2, _ = watcher._resolve_vision_provider(eff)
-        assert p2.vision_model == "glm-4.6v-flash"
-        assert p2.vision_same_as_chat is False
+        configure_vision(cfg, monkeypatch, model="glm-4.6v-flash")
+        watcher = ProactiveScreenWatcher(None, cfg)
+        try:
+            for prefer in (True, False):
+                cfg.data["chat"] = {"enabled": False, "providers": {}}
+                assert cfg.save()
+                request, _ = watcher._resolve_vision_provider(effective_proactive_config({"prefer_free_provider": prefer}))
+                assert request.model == "glm-4.6v-flash"
+                assert request.api_key == "one-shot-secret"
+        finally:
+            watcher.pause()
 
     def test_watcher_real_mode_vision_pipeline(self, tmp_path, monkeypatch):
         from PIL import Image
@@ -769,6 +752,9 @@ class TestPhase3VisionLinkAndDryRun:
                 "pre_cue": True,
             },
         )
+        from tests.screen_fakes import configure_vision
+
+        configure_vision(cfg, monkeypatch)
         win = DummyWindow()
         watcher = ProactiveScreenWatcher(win, cfg)
         watcher.limiter.dry_run = False  # 真实模式
@@ -961,7 +947,7 @@ class TestPhase4UIAndMenuIntegration:
                 return True
 
         # 仅作用于本次调用：替换 proactive 模块内的 sys 引用（不改全局 sys.platform）
-        monkeypatch.setattr("pet.proactive.sys", SimpleNamespace(platform="darwin"))
+        monkeypatch.setattr("features.screen_understanding.host.runtime.sys", SimpleNamespace(platform="darwin"))
 
         cfg = Config(base=tmp_path)
         cfg.set("proactive_screen", {"enabled": True, "whitelist": ["code.exe"]})
@@ -1285,7 +1271,7 @@ class TestUXFixesRound3:
 
         monkeypatch.setattr(vision, "foreground_window_info", lambda: {"hwnd": 1, "process": "a.exe", "title": "t", "rect": (0, 0, 100, 100)})
         monkeypatch.setattr(vision, "capture_window_rect", lambda r: Image.new("RGB", (10, 10)))
-        monkeypatch.setattr("pet.proactive.image_dhash", lambda img: (_ for _ in ()).throw(RuntimeError("boom")))
+        monkeypatch.setattr("features.screen_understanding.host.runtime.image_dhash", lambda img: (_ for _ in ()).throw(RuntimeError("boom")))
 
         watcher._worker_capture((0, 0, 100, 100), {"hwnd": 1, "process": "a.exe", "title": "t"}, {}, 0)
         assert watcher._worker_busy is False

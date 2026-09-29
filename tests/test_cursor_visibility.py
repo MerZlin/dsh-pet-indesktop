@@ -131,7 +131,7 @@ def test_fs_watch_loop_survives_transient_runtime_error(monkeypatch):
     """回归测试：全屏/光标监视线程遇到瞬时异常不应退出，应继续循环。"""
     import threading
 
-    from pet import vision
+    from pet import desktop_query
 
     win = PetWindow.__new__(PetWindow)
     win._fs_stop = threading.Event()
@@ -149,14 +149,14 @@ def test_fs_watch_loop_survives_transient_runtime_error(monkeypatch):
         if calls == 1:
             raise RuntimeError("transient win32 error")
         # 第二次成功
-        return "HIDDEN"
+        return desktop_query.QueryResult("ok", "hidden")
 
     def fake_emit(val):
         emitted.append(val)
         win._fs_stop.set()
 
     win.cursor_visibility_changed = SimpleNamespace(emit=fake_emit)
-    monkeypatch.setattr("pet.vision.get_cursor_visibility", flaky_get_cursor_visibility)
+    monkeypatch.setattr(desktop_query, "get_desktop_query", lambda: SimpleNamespace(cursor_state=flaky_get_cursor_visibility))
     monkeypatch.setattr("shiboken6.isValid", lambda obj: True)
 
     # 运行 watcher loop

@@ -50,6 +50,7 @@ def test_provider_parser_drops_keyring_references() -> None:
     provider = ProactiveScreenWorker._provider_from_arguments(
         {
             "provider_type": "openai",
+            "base_url": "https://visual.invalid",
             "model": "vision-model",
             "api_key": "one-shot-key",
             "api_key_ref": "keyring-ref",
@@ -70,10 +71,10 @@ def _task(operation="capture_foreground"):
 
 
 def test_hash_is_calculated_before_lossy_resize(monkeypatch):
-    import pet.proactive as proactive
+    from features.screen_understanding.common import hashing
 
     sizes = []
-    monkeypatch.setattr(proactive, "image_dhash", lambda image: sizes.append(image.size) or 12)
+    monkeypatch.setattr(hashing, "image_dhash", lambda image: sizes.append(image.size) or 12)
     worker = ProactiveScreenWorker(stdin=BytesIO(), stdout=BytesIO())
     worker._config["max_edge"] = 320
     worker._encode_image(Image.new("RGB", (1000, 800)))

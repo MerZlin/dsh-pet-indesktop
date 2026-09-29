@@ -27,6 +27,7 @@ from pet.agent_link import AgentLinkManager
 from pet.app import AppShell, PetInstance
 from pet.config import Config
 from pet.multi_window_shared import MultiWindowProxy, SharedProactiveWatcher
+from tests.screen_fakes import configure_vision
 
 
 @pytest.fixture
@@ -316,7 +317,11 @@ def test_flag_on_shared_proactive_broadcasts_bubble(tmp_path, app, monkeypatch):
 
         # 共享 proactive watcher：单一实例，限流器绑定主窗 config 目录（全局语义，R8）
         assert isinstance(shell._shared.proactive, SharedProactiveWatcher)
-        assert shell._shared.proactive.limiter.state_path == (config.dir / "proactive_screen_state.json")
+        # The feature sees a bound document, never a host filesystem path.
+        assert shell._shared.proactive.limiter.consume_budget()
+        state = config.dir / "proactive_screen_state.json"
+        assert state.is_file()
+        assert shell._shared.proactive.limiter._load_state()["count"] == 1
 
         # 「我看」先兆气泡只发首个可见窗
         shell._shared.proactive._bridge._forward_bubble("hello", 1000)
@@ -693,6 +698,8 @@ def test_shared_watcher_tick_survives_idle_windows(tmp_path, app, monkeypatch):
     w1, w2 = _RecordWin(visible=True), _RecordWin(visible=True)
     config = Config(base=tmp_path)
     config.set("proactive_screen", {"enabled": True, "whitelist": ["*"]})
+    # G1 assumes a configured feature; exercise the independent confirmation boundary.
+    configure_vision(config, monkeypatch, modes=("automatic",))
     proxy = MultiWindowProxy(_ProxyShell(config, [w1, w2]))
     watcher = SharedProactiveWatcher(proxy, config)
     # Keep the original G1 regression on the supported in-process rollback path.
@@ -746,6 +753,7 @@ def test_flag_on_production_watcher_reads_proxy_sentinel(tmp_path, app, monkeypa
 
         # _on_tick 只读 effective config（与平台守卫无关），无需 apply_config 起表
         config.set("proactive_screen", {"enabled": True, "whitelist": ["*"]})
+        configure_vision(config, monkeypatch, modes=("automatic",))
         probed: list[int] = []
         monkeypatch.setattr(vision, "foreground_window_info", lambda: (probed.append(1), None)[1])
         watcher._on_tick()

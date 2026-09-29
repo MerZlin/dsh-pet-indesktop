@@ -542,7 +542,7 @@ def build_pet_controls(host) -> None:
     )
 
     # ------------------------------------------------------------ 主动识屏
-    if sys.platform == "win32" and host.include_ai:
+    if sys.platform == "win32":
         host._build_proactive_controls()
 
 

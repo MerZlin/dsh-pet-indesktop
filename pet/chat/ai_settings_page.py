@@ -38,6 +38,7 @@ from .utils import _safe_emit
 
 class _AiSettingsPage(QWidget):
     test_done = Signal(bool, str)
+    screen_settings_requested = Signal()
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
@@ -101,6 +102,10 @@ class _AiSettingsPage(QWidget):
         self.vision_model = _line_edit(provider.vision_model)
         self.vision_url = _line_edit(provider.vision_base_url)
         self.vision_key = _line_edit(password=True)
+        # Compatibility draft fields only; the independent settings page owns editing.
+        for control in (self.vision_same, self.vision_model, self.vision_url, self.vision_key):
+            control.setParent(self)
+            control.hide()
 
         self._background_themes = list(theme_names())
         self._background_values = {
@@ -211,16 +216,23 @@ class _AiSettingsPage(QWidget):
                 self,
             )
         )
-        vision_rows = [
-            SettingRow("vision_same", "视觉模型复用聊天模型", "开启后自动选择兼容的视觉模型，用于“看看屏幕”。", self.vision_same),
-            SettingRow("vision_model", "视觉模型", "关闭复用后使用的多模态模型标识；留空则自动推导。", self.vision_model),
-            SettingRow("vision_url", "视觉 API 地址", "留空复用聊天服务地址。", self.vision_url),
-            SettingRow("vision_key", "视觉 API Key", "留空复用聊天服务凭据。", self.vision_key),
-        ]
-        root.addWidget(SettingsSection("视觉能力", vision_rows, self))
-        self._vision_override_rows = vision_rows[1:]
-        self.vision_same.toggled.connect(self._update_vision_visibility)
-        self._update_vision_visibility(self.vision_same.isChecked())
+        self.screen_settings_button = QPushButton("打开屏幕理解设置", self)
+        self.screen_settings_button.clicked.connect(self.screen_settings_requested.emit)
+        root.addWidget(
+            SettingsSection(
+                "屏幕理解",
+                [
+                    SettingRow(
+                        "vision_migration",
+                        "视觉配置已独立",
+                        "自动与手动识屏在自动化与联动中配置；旧视觉配置仅作为确认迁移来源。",
+                        self.screen_settings_button,
+                    )
+                ],
+                self,
+            )
+        )
+        self._vision_override_rows = []
         # 用户拨动系统通知开关才置脏；连接晚于构造期 setChecked，程序化赋值不置脏。
         self.system_notify_check.toggled.connect(self._on_system_notify_edited)
         self._test_row = self.findChild(SettingRow, "settingRow_connection_test")
@@ -423,9 +435,6 @@ class _AiSettingsPage(QWidget):
             "timeout": float(self.timeout.value()),
             "temperature": float(self.temperature.value()),
             "max_tokens": int(self.tokens.value()),
-            "vision_model": self.vision_model.text().strip(),
-            "vision_same_as_chat": self.vision_same.isChecked(),
-            "vision_base_url": self.vision_url.text().strip(),
             "vision_key": vkey_text if vkey_text else existing.get("vision_key", ""),
             "verify_ssl": not self.skip_ssl.isChecked(),
         }
@@ -547,21 +556,12 @@ class _AiSettingsPage(QWidget):
         p.timeout = float(draft.get("timeout", p.timeout))
         p.temperature = float(draft.get("temperature", p.temperature))
         p.max_tokens = int(draft.get("max_tokens", p.max_tokens))
-        p.vision_model = draft.get("vision_model", p.vision_model)
-        p.vision_same_as_chat = bool(draft.get("vision_same_as_chat", p.vision_same_as_chat))
-        p.vision_base_url = draft.get("vision_base_url", p.vision_base_url)
         p.verify_ssl = bool(draft.get("verify_ssl", p.verify_ssl))
         key = str(draft.get("key") or "")
         if key:
             p.api_key_ref = p.api_key_ref or f"provider/{provider_id}"
             if not self._secret_store_type().set(p.api_key_ref, key):
                 p.api_key = key
-                QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
-        vkey = str(draft.get("vision_key") or "")
-        if vkey:
-            p.vision_api_key_ref = p.vision_api_key_ref or f"provider/{provider_id}/vision"
-            if not self._secret_store_type().set(p.vision_api_key_ref, vkey):
-                p.vision_api_key = vkey
                 QMessageBox.warning(self, "安全存储不可用", "无法使用系统安全存储，Key 仅本次运行保留，重启需重输。")
 
     def provisional_config(self):

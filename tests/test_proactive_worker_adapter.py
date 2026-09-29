@@ -28,8 +28,9 @@ def adapter(qt_app):
 def test_provider_payload_contains_only_selected_vision_credentials():
     data = ProactiveScreenWorkerAdapter._provider_payload(
         {
-            "base_url": "https://chat.invalid",
-            "api_key": "CHAT-SECRET",
+            "base_url": "https://vision.invalid",
+            "model": "vision-model",
+            "api_key": "VISION-SECRET",
             "api_key_ref": "chat-ref",
             "vision_same_as_chat": False,
             "vision_base_url": "https://vision.invalid",
@@ -42,7 +43,7 @@ def test_provider_payload_contains_only_selected_vision_credentials():
     )
     assert "CHAT-SECRET" not in str(data) and "private-session" not in str(data)
     assert "ref" not in str(data) and "unrelated-token" not in str(data)
-    assert data["vision_api_key"] == "VISION-SECRET"
+    assert data["api_key"] == "VISION-SECRET"
 
 
 def test_orphan_budget_check_does_not_charge_core_quota(adapter):
@@ -92,11 +93,25 @@ def test_request_deadline_is_bounded_and_cancelled(adapter, monkeypatch):
     assert errors[0][1]["error_code"] == "request_timeout"
 
 
-def test_independent_endpoint_preserves_derived_vision_model():
-    from types import SimpleNamespace
-
-    from pet.vision import resolve_vision_model
-
-    provider = {"base_url": "https://chat.invalid", "model": "deepseek-v4-flash", "vision_same_as_chat": False, "vision_model": "", "vision_api_key": "vision"}
+def test_request_model_is_already_resolved_not_inferred_from_chat():
+    provider = {"base_url": "https://vision.invalid", "model": "deepseek-v4-flash", "api_key": "vision"}
     payload = ProactiveScreenWorkerAdapter._provider_payload(provider)
-    assert payload["vision_model"] == resolve_vision_model(SimpleNamespace(**provider))
+    assert payload["model"] == "deepseek-v4-flash"
+    assert "vision_model" not in payload
+
+
+def test_external_launch_validation_failure_does_not_start_builtin_worker(qt_app):
+    def rejected_launch():
+        raise ValueError("untrusted version must not execute")
+
+    item = ProactiveScreenWorkerAdapter(launch_factory=rejected_launch)
+    failures = []
+    item.failed.connect(failures.append)
+    try:
+        assert not item.start()
+        assert item.state == "fault"
+        assert item.supervisor._process is None
+        assert failures
+        assert "untrusted version" not in str(item.diagnostics())
+    finally:
+        item.stop()

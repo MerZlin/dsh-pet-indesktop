@@ -856,6 +856,14 @@ class ChatWindow(QDialog):
         self._refresh_sessions()
         self._reset()
 
+    def apply_external_turn(self, session) -> None:
+        """Refresh a chat-owned turn already accepted by the session store."""
+        self.session = session
+        if self.isVisible():
+            self._load()
+            self._refresh_sessions()
+            self._bottom()
+
     def append_look_sync(self, user_text: str, reply: str) -> None:
         """「看看屏幕」的问答同步进当前会话，之后可在聊天历史里回看。
         正在生成回答时不插入，避免与在飞请求的流式输出交错。"""

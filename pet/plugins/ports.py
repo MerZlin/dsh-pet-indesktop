@@ -257,16 +257,21 @@ class CommandHandle:
     name: str
     owner: str
     registry: "CommandRegistry"
+    registration: int
+
+    def invoke(self, *args, **kwargs) -> Any:
+        return self.registry.invoke_registration(self, *args, **kwargs)
 
     def unregister(self) -> None:
-        self.registry.unregister(self.name, owner=self.owner)
+        self.registry.unregister(self.name, owner=self.owner, registration=self.registration)
 
 
 class CommandRegistry:
     """Core 命令表；命令属于 owner，停止插件时统一注销。"""
 
     def __init__(self) -> None:
-        self._commands: dict[str, tuple[str, Callable[..., Any]]] = {}
+        self._commands: dict[str, tuple[str, Callable[..., Any], int]] = {}
+        self._serial = 0
 
     def register(self, name: str, callback: Callable[..., Any], *, owner: str, replace: bool = False) -> CommandHandle:
         if not name or not isinstance(name, str):
@@ -275,19 +280,30 @@ class CommandRegistry:
             raise TypeError("command callback must be callable")
         if name in self._commands and not replace:
             raise CommandConflict(f"command already registered: {name}")
-        self._commands[name] = (owner, callback)
-        return CommandHandle(name, owner, self)
+        if name in self._commands and self._commands[name][0] != owner:
+            raise CommandConflict(f"command belongs to another owner: {name}")
+        self._serial += 1
+        self._commands[name] = (owner, callback, self._serial)
+        return CommandHandle(name, owner, self, self._serial)
 
-    def unregister(self, name: str, *, owner: str | None = None) -> None:
+    def unregister(self, name: str, *, owner: str | None = None, registration: int | None = None) -> None:
         current = self._commands.get(name)
         if current is None:
             return
         if owner is not None and current[0] != owner:
             return
+        if registration is not None and current[2] != registration:
+            return
         self._commands.pop(name, None)
 
+    def invoke_registration(self, handle: CommandHandle, *args, **kwargs) -> Any:
+        current = self._commands.get(handle.name)
+        if current is None or current[0] != handle.owner or current[2] != handle.registration:
+            raise CommandNotFound(handle.name)
+        return current[1](*args, **kwargs)
+
     def unregister_owner(self, owner: str) -> None:
-        for name, (current_owner, _) in tuple(self._commands.items()):
+        for name, (current_owner, _, _) in tuple(self._commands.items()):
             if current_owner == owner:
                 self._commands.pop(name, None)
 
@@ -300,7 +316,7 @@ class CommandRegistry:
     def list(self, *, owner: str | None = None) -> tuple[str, ...]:
         if owner is None:
             return tuple(sorted(self._commands))
-        return tuple(sorted(name for name, (current_owner, _) in self._commands.items() if current_owner == owner))
+        return tuple(sorted(name for name, (current_owner, _, _) in self._commands.items() if current_owner == owner))
 
 
 class ScopedCommandRegistry:

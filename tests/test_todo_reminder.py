@@ -406,7 +406,9 @@ def test_petapp_creates_service_and_wires_callback(tmp_path):
     shell = AppShell(qapp, Config(tmp_path))
     assert shell.todo_service is not None
 
-    class _Win:
+    from PySide6.QtCore import QObject
+
+    class _Win(QObject):
         pass
 
     win = _Win()

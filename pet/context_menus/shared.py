@@ -295,35 +295,10 @@ def build_character_menu(menu: QMenu, pet, *, icons: bool = True) -> QMenu:
     return submenu
 
 
-def add_proactive_menu(menu: QMenu, pet) -> None:
-    """主动识屏二级菜单（仅 Windows 且有聊天/视觉能力时显示）。"""
-    import sys as _sys
+def add_proactive_menu(menu: QMenu, pet):
+    from ..feature_bindings import build_screen_menu
 
-    if _sys.platform != "win32":
-        return
-    if getattr(pet, "on_open_chat", None) is None:
-        return
-    from ..proactive import effective_proactive_config
-
-    sub = add_submenu(menu, "主动识屏", None)
-    pro_cfg = effective_proactive_config(pet.cfg.get("proactive_screen", {}))
-
-    def _toggle(text, checked, handler):
-        act = sub.addAction(text)
-        act.setCheckable(True)
-        act.setChecked(bool(checked))
-        act.toggled.connect(handler)
-        return act
-
-    _toggle("开启主动识屏", pro_cfg.get("enabled", False), pet.toggle_proactive_enabled)
-    _toggle("鼠标穿透时仍允许主动识屏", pro_cfg.get("allow_when_mouse_through", True), lambda on: pet.set_proactive_option("allow_when_mouse_through", on))
-    _toggle("触发前先兆提示", pro_cfg.get("pre_cue", True), lambda on: pet.set_proactive_option("pre_cue", on))
-    _toggle("仅当我闲置时触发", pro_cfg.get("require_idle", False), lambda on: pet.set_proactive_option("require_idle", on))
-    _toggle("dry-run 验证模式", pro_cfg.get("dry_run", False), lambda on: pet.set_proactive_option("dry_run", on))
-    sub.addSeparator()
-    open_settings = getattr(pet, "on_open_modern_settings", None) or getattr(pet, "on_open_legacy_settings", None)
-    if open_settings is not None:
-        add_action(sub, "打开设置…", None, open_settings, close_on_trigger=True)
+    return build_screen_menu(menu, pet, "proactive_screen")
 
 
 def add_agent_link_menu(menu: QMenu, pet) -> None:
@@ -403,10 +378,9 @@ def add_hide_pet(menu: QMenu, pet, *, icons: bool = True):
 
 
 def add_look_screen(menu: QMenu, pet, *, icons: bool = True):
-    callback = getattr(pet, "on_look_screen", None)
-    if callback is None:
-        return None
-    return add_action(menu, "看看屏幕", "screen" if icons else None, callback, close_on_trigger=True)
+    from ..feature_bindings import build_screen_menu
+
+    return build_screen_menu(menu, pet, "look_screen", icons=icons)
 
 
 def add_balance(menu: QMenu, pet, *, icons: bool = True):

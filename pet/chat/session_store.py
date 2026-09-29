@@ -521,6 +521,29 @@ class SessionStore:
                 log.warning("会话追加未落盘（写盘已关闭）: %s", session.session_id)
             return fresh, absorbed
 
+    def append_external_turn(self, character_id, provider_id, system_prompt, messages, session=None):
+        """Append one external turn atomically, with persisted message receipts.
+
+        The caller supplies deterministic message IDs. De-duplication spans the
+        target character's sessions so a UI session switch cannot replay a turn.
+        No separate Core receipt cache or pending-delivery queue is involved.
+        """
+        with _io_lock_for(self.root):
+            sessions = self.list(character_id)
+            receipts = {message.message_id for message in messages}
+            if any(message.message_id in receipts for item in sessions for message in item.messages):
+                return None, "duplicate"
+            if session is not None:
+                fresh = self.load(session.session_id, character_id)
+                if fresh is None:
+                    return None, "stale"  # Never resurrect a deleted UI session.
+            else:
+                fresh = sessions[0] if sessions else self.create(character_id, provider_id, system_prompt)
+            fresh.messages.extend(messages)
+            if not self.save(fresh):
+                return None, "unavailable"
+            return fresh, "accepted"
+
     def flush(self, timeout: float = 10.0) -> bool:
         """等待本目录所有已提交写盘完成；有失败/超时返回 False。"""
         w = _registry.get_writer(self.root)
