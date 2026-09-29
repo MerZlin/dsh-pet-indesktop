@@ -1,8 +1,8 @@
 # Phase 4B 本地安装与管理：执行清单
 
-更新：2026-09-30（计划于 2026-09-29 落盘）。分支 `codex/phase3-worker`。本次只落盘计划并按用户要求本地备份；生产实现尚未开始。
+更新：2026-09-30（计划于 2026-09-29 落盘）。分支 `codex/phase3-worker`。此前已落盘计划并本地备份；本次仅补齐留档规范与远程同步记录，生产实现尚未开始。
 
-权威合同：[设计与验收](../../docs/plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md)。准确停点：[HANDOFF](HANDOFF.md)。历史起点：[Phase 4A 报告](../../docs/PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md)。
+权威合同：[设计与验收](../../docs/plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md)。准确停点：[HANDOFF](HANDOFF.md)；当前摘要：[STATUS](STATUS.md)。历史起点：[Phase 4A 报告](../../docs/PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md)。
 
 ## 固定边界
 
@@ -10,14 +10,14 @@
 - 占用时待自然退出，不强制结束 Core/设置进程；Worker 仅按既有宿主所有权关闭。
 - 保留 Phase 4A 四步，沿用独立验证变体，不替换默认完整构建。
 - 不开子智能体，不读真实 Key/截图/模型，不做长期 soak、远程分发、Setup/便携或用户数据迁移。
-- 用户本次明确授权本地备份提交；未授权推送，后续不得自动提交。
+- 先前检查点只获本地备份授权；2026-09-30 用户已另行授权[规范与成果同步任务](../workflow-standardization/PLAN.md)提交及推送当前成果。这不是未来 Phase 4B 实现的自动提交/推送授权。
 
 ## 0. 检查点与准备
 
 - [x] 记录原 HEAD b97112d、ahead 3、暂存为空及 146 份继承改动；保存 baseline 哈希及保护摘要（本地证据不入库）。
 - [x] 落盘 Phase 4B 设计、任务清单及交接记录，登记索引与日志。
 - [x] 本次备份前实际检查完成：全量 3459 passed / 12 skipped / 14 warnings，专项 108 passed，静态及文档门通过；详见 HANDOFF。
-- [x] 本地备份提交 `5f04a99`：149 个文件，保留 Phase 4A 成果与本阶段计划；未推送。
+- [x] 本地备份提交 `5f04a99`：149 个文件，保留 Phase 4A 成果与本阶段计划；该检查点创建时未推送，后续同步见 STATUS。
 
 ## 1. 4B-1 唯一安装状态（未开始）
 

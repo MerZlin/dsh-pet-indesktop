@@ -4,6 +4,16 @@
 
 ## 2026-09-30
 
+### 协作规范与成果同步
+
+- 已按本次授权写入[详细协作模板](docs/agents/planning-and-reporting.md)，同步 `AGENTS.md`、交接/事项记录规范与 `SPEC.md`；计划和汇报采用正式工程正文，末尾解释实际使用效果及限制。
+- 已落盘本任务[设计与验收](docs/agents/WORKFLOW-STANDARDIZATION-2026-09-30.md)、[PLAN](.scratch/workflow-standardization/PLAN.md)、[HANDOFF](.scratch/workflow-standardization/HANDOFF.md)、[STATUS](.scratch/workflow-standardization/STATUS.md)，并补齐 [Phase 4B STATUS](.scratch/phase4b-local-management/STATUS.md)。完成后保留最终记录；不纳入原始日志、缓存、构建产物或密钥。
+- 起点 `e0edc89`、远程跟踪 `9834612`，五个待推送提交累计 171 个路径；逐提交新增内容的有限敏感模式/生成物路径检查未发现候选，不将此称为完整安全审计。HTML 已跟踪且与远程同版本；自动更新及其他保护文件无本轮修改。
+- 本次只固化规范和同步成果，不实施 Phase 4B、不改运行时/测试/构建，也不新增手测结论。不开子智能体；本次提交及推送授权不自动延续到后续任务。
+- 本轮新验证：全量 **3459 passed / 12 skipped / 14 warnings，323.85 秒**；skip/warning 数量与继承基线一致，均为现有 Qt 弃用提示。Ruff 通过、格式 460 文件、mypy 59 文件、文档 113 份、报告/产品文案 44 passed；任务记录互链另检通过。
+- 九文件 Qt/Worker 组合在 20 个低优先级负载进程下 **3 × 65 passed**（20.31/20.84/20.81 秒），各轮平均 CPU 100%；负载进程已全部回收。不是长期 soak，不代替冻结构建或人工手测。
+- 以上为提交前的实际记录；本次规范提交与远程同步尚待执行，实际 SHA 与核验结果随后独立追加，不改写历史。
+
 ### Phase 4B 计划落盘与本地备份检查点
 
 - 已落盘[本地管理设计](docs/plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md)、[任务清单](.scratch/phase4b-local-management/PLAN.md)及[交接记录](.scratch/phase4b-local-management/HANDOFF.md)。仅完成规划记录；4B-1 状态层尚未写测试或实现，不能认为安装/卸载闭环已完成。

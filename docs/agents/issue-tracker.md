@@ -1,6 +1,10 @@
 # Issue tracker: Local Markdown
 
-Issues and specs live under `.scratch/`.
+Issues and ticket working notes live under `.scratch/`. For a formal phase plan,
+keep the authoritative design/acceptance document in its `docs/` phase directory
+and link it from the task's tracked PLAN/HANDOFF/STATUS records; see
+[planning and reporting](planning-and-reporting.md). An existing `spec.md` may
+remain a ticket note, but must not become a conflicting second phase design.
 
 - Feature: `.scratch/<feature-slug>/`
 - Spec: `.scratch/<feature-slug>/spec.md`

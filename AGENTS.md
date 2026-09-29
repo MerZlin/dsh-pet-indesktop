@@ -131,6 +131,25 @@ Run focused tests before `python -m pytest -q`. Set
 sandbox may deny Unix socket creation; rerun QLocalServer tests with local IPC
 permission rather than treating errno 1 as a product failure.
 
+## Planning, reporting and durable records
+
+- Follow [`docs/agents/planning-and-reporting.md`](docs/agents/planning-and-reporting.md)
+  for the single detailed plan/report template. Keep a formal engineering body;
+  end every plan and report with plain-language user-visible effects and limits.
+- Every formal plan keeps four tracked records: design/acceptance in `docs/`,
+  and `PLAN.md`, `HANDOFF.md`, `STATUS.md` in `.scratch/<feature-slug>/`.
+  Persist them before implementation; update the same set, not a set per turn.
+  Plan-mode drafts not yet writable must be labelled pending persistence.
+- Explicitly track only these Markdown records from ignored directories. Never
+  include generated output, secrets or raw logs as part of a broad add.
+- Separate planned, implemented, automated, real-machine, user-confirmed,
+  committed and remotely verified states. Historical passes need a version/date;
+  untested is not failed, and a Worker is not proof of removable delivery.
+- Preserve a final handoff when complete. Report existing/new/environment
+  failures, unverified gates and the exact next step without masking them.
+- Do not spawn subagents. Commit/push only within the current explicit user
+  authorization; one publication request is not permanent authorization.
+
 ## Agent skills
 
 ### Issue tracker
@@ -160,9 +179,10 @@ restyling settings, menus, dialogs, overlays, or desktop widgets.
 
 ### Work handoff
 
-For unfinished multi-ticket work, read and refresh the feature's
-`.scratch/<feature-slug>/HANDOFF.md` before ending or resuming work. Keep the
-exact breakpoint there; see `docs/agents/handoff.md`.
+For every formal plan, read and refresh its `PLAN.md`, `HANDOFF.md` and
+`STATUS.md` before ending or resuming work. Keep the exact breakpoint and
+verification state; retain the final records when complete. See
+`docs/agents/handoff.md` and `docs/agents/planning-and-reporting.md`.
 
 ## Context pointers
 

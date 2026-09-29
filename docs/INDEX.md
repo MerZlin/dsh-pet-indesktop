@@ -199,7 +199,12 @@
 | [`agents/domain.md`](agents/domain.md) | 单上下文仓库的领域文档约定：先读根 `CONTEXT.md`，再读相关 ADR，术语保持一致，与 ADR 冲突的方案要显式标注。 | 探索一个陌生领域、或提出可能与既有决策冲突的方案之前。 |
 | [`agents/issue-tracker.md`](agents/issue-tracker.md) | Local Markdown issue tracker 约定：feature/spec/ticket 的目录结构与状态行格式。 | 创建或读取 issue、spec、ticket 时（`.scratch/<feature-slug>/`）。 |
 | [`agents/triage-labels.md`](agents/triage-labels.md) | 五个标准 triage 状态的映射表与含义。 | 给 issue 打标签、或需要把外部角色名映射到本仓库状态名时。 |
-| [`agents/handoff.md`](agents/handoff.md) | 工作交接约定：`.scratch/<feature-slug>/HANDOFF.md` 的必备字段与续作时的校验步骤。 | 跨任务/跨上下文窗口续作未完成工作时；开工前先读 handoff 并核对 `git status`。 |
+| [`agents/handoff.md`](agents/handoff.md) | 工作交接约定：准确停点、实际验证、提交状态与最终交接的保留规则。 | 恢复、暂停或结束正式计划时；先读交接并核对工作树。 |
+| [`agents/planning-and-reporting.md`](agents/planning-and-reporting.md) | 计划、汇报及四份留档的唯一详细模板；正式说明后附实际使用效果。 | 编写正式计划、阶段汇报及交接记录前必读。 |
+| [`agents/WORKFLOW-STANDARDIZATION-2026-09-30.md`](agents/WORKFLOW-STANDARDIZATION-2026-09-30.md) | 本轮规范固化与成果同步的设计、验收门和保护范围。 | 复核本次文档改动及推送授权时。 |
+| [规范固化任务清单](../.scratch/workflow-standardization/PLAN.md) | W01–W08 的任务依赖、完成状态及证据入口。 | 核对本轮剩余工作时。 |
+| [规范固化交接记录](../.scratch/workflow-standardization/HANDOFF.md) | 本轮准确停点、验证、提交和后续命令。 | 续作或审查本轮交付时。 |
+| [规范固化当前状态](../.scratch/workflow-standardization/STATUS.md) | 本轮实现、自动化、人工待办与远程同步的独立状态摘要。 | 快速判断本轮是否完成时。 |
 
 ---
 
@@ -277,7 +282,8 @@
 | [Phase 4A 屏幕理解拆包审计](plugin-phase-04-updates/PHASE4A-SCREEN-DELIVERY-AUDIT.md) | 只读核对平台查询、聊天/密钥、UI 注册、数据/卸载及构建来源，区分事实、建议、待验证；不是已完成拆包。 | 冻结屏幕理解包边界、依赖/加载方案或设计最小 Core 验证前。 |
 | [Phase 4A 屏幕理解最小设计](plugin-phase-04-updates/PHASE4A-SCREEN-PACKAGE-DESIGN.md) | 受限端口、可选聊天服务、签名目录加载和独立产物已实现；区分验证描述/进程内使用句柄与待实现安装状态。 | 调整功能 host、联动、构建、加载及 Phase 4B 安装边界前。 |
 | [Phase 4B 本地管理设计](plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md) | 已确认的单一安装状态、跨进程占用、可恢复事务及管理闭环；实现尚未开始。 | 开始本地安装、停用、卸载、重装或状态同步前。 |
-| [Phase 4B 任务清单](../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../.scratch/phase4b-local-management/HANDOFF.md) | 逐门进度、实际验证与下一条操作；两份文本随本地检查点备份，不收录构建临时目录。 | 恢复 Phase 4B 工作或核对未完成门前。 |
+| [Phase 4B 任务清单](../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../.scratch/phase4b-local-management/HANDOFF.md) | 逐门进度、实际验证与下一条操作；文本明确纳入 Git，保留最终交接，不收录构建临时目录。 | 恢复 Phase 4B 工作或核对未完成门前。 |
+| [Phase 4B 当前状态](../.scratch/phase4b-local-management/STATUS.md) | 区分 Phase 4A 历史成果、4B 未实施、人工待办及远程同步。 | 开始 4B-1 或判断安装管理是否已可用前。 |
 | [安装与更新协议](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | 共用事务和权威状态、信任校验、原子激活、回滚、卸载/重装与 Core/DLC 更新隔离。 | 改 Setup/ZIP/应用内安装器、代码加载、文件占用或远程来源前。 |
 | [Phase 5 官方分发](plugin-phase-05-distribution/README.md) | 5A 小 Core Setup/旁置包和显式便携，5B AI 优先推广全部官方领域；远程适配按需。 | 设计安装向导、ZIP、便携、AI 拆包批次或其他官方包前。 |
 | [Phase 6 条件生态](plugin-phase-06-ecosystem/README.md) | 内容文档与 SDK、未来 Worker SDK/社区的进入门，禁止任意代码进入 Core。 | 评估第三方作者、签名发布或 Workshop 时。 |
