@@ -1,7 +1,7 @@
 # Phase 4B：本地安装与管理闭环
 
 > 日期：2026-09-29；继承范围：Phase 4A 四个切片。分支、提交及本地备份元数据集中在[交接记录](../../.scratch/phase4b-local-management/HANDOFF.md)，避免与产品设计正文混杂。
-> **本文件是已确认的实施合同，不是实现报告。**当前仅完成计划落盘与本地检查点准备；4B-1 至 4B-5 均未开始实现。Phase 4A 的自动化与冻结产物证据见[第四步报告](../PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md)，不能代替本阶段验证。
+> **本文件是已确认的实施合同，不是实现报告。**当前仅完成计划落盘与本地备份检查点；4B-1 至 4B-5 均未开始实现。Phase 4A 的自动化与冻结产物证据见[第四步报告](../PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md)，不能代替本阶段验证。
 
 导航：[Phase 4 入口](README.md) · [Phase 4A 设计](PHASE4A-SCREEN-PACKAGE-DESIGN.md) · [安装更新协议](PLUGIN-UPDATE-PROTOCOL.md) · [任务清单](../../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../../.scratch/phase4b-local-management/HANDOFF.md)。本文件维护合同，清单记录步骤状态，交接记录保存准确停点；不要维护第二套安装权威。
 
