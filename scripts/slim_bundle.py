@@ -54,6 +54,30 @@ REMOVAL_GLOBS = (
     "_internal/PIL/*avif*",
 )
 
+# 违禁清单：构建机环境污染（在打包机装了但产品零引用的包）一旦被连带收集，
+# 直接判构建失败——不许靠人工 review dist 才发现（2026-10-01 实测：部署包
+# _internal 里 django 30MB + numpy 5.9MB + numpy.libs 21MB，全仓含 .py/.spec/
+# .ps1/.json/.toml/.yaml 零 import，django 甚至不在构建 venv 里；numpy 唯一
+# 消费者是本地专用素材工具 tools/greenscreen_to_frameseq.py，不入产品）。
+# 防线是双层的：build_onedir.ps1 用 --exclude-module 让 PyInstaller 不收集，
+# 这里兜底——任何路径把它们带进产物（新依赖、新 hook、换机）都会红。
+FORBIDDEN_GLOBS = (
+    "_internal/django/**",
+    "_internal/numpy/**",
+    "_internal/numpy.libs/**",
+    "_internal/hypothesis/**",
+)
+
+
+def find_forbidden(rel_paths) -> list[str]:
+    """bundle 相对路径列表 → 命中违禁清单的路径（空 = 干净）。"""
+    hits: list[str] = []
+    for rel in rel_paths:
+        low = _norm(rel).lower()
+        if any(fnmatch.fnmatch(low, pat.lower()) for pat in FORBIDDEN_GLOBS):
+            hits.append(_norm(rel))
+    return hits
+
 # 必需清单：瘦身前/后都必须存在（glob，覆盖版本号变化）
 REQUIRED_GLOBS = (
     "*.exe",
@@ -185,6 +209,12 @@ def main(argv=None) -> int:
         return 2
 
     before = [_rel(app_dir, p) for p in app_dir.rglob("*") if p.is_file()]
+    forbidden = find_forbidden(before)
+    if forbidden:
+        print("[slim] FAIL bundle contains build-env pollution (product has zero imports; "
+              "fix the build env or the exclude list): " + ", ".join(forbidden[:10]),
+              file=sys.stderr)
+        return 6
     missing_before = verify_required(before)
     if missing_before:
         print("[slim] FAIL bundle incomplete before slimming: " + ", ".join(missing_before), file=sys.stderr)

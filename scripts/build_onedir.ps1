@@ -147,6 +147,14 @@ foreach ($m in @('matplotlib','matplotlib_inline','seaborn','IPython','ipykernel
                  'jupyter_client','jupyter_core','nbformat','zmq')) {
     $excludes += @('--exclude-module', $m)
 }
+# 构建机环境污染（2026-10-01 实测部署包 _internal：django 30MB + numpy 27MB）：
+# 产品全仓（.py/.spec/.ps1/.json/.toml/.yaml）零 import，requirements.txt 也未声明；
+# numpy 唯一消费者是本地专用素材工具 tools/greenscreen_to_frameseq.py（不入产品），
+# 被 Pillow 的可选 import numpy 静态连带收集。scripts\slim_bundle.py 的
+# FORBIDDEN_GLOBS 会对这批做构建期硬闸，这里先让 PyInstaller 根本不收集。
+foreach ($m in @('numpy','django','hypothesis')) {
+    $excludes += @('--exclude-module', $m)
+}
 # Chat 版必须显式收集 keyring（API Key 系统安全存储）；no-chat 不收集
 $keyringCollect = if ($noChat) { @() } else { @('--collect-all', 'keyring') }
 $chatData = if ($noChat) { @() } else {

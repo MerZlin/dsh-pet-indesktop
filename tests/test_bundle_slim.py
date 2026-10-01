@@ -200,3 +200,40 @@ def test_main_refuses_when_dependency_check_fails(slim, tmp_path, monkeypatch, c
 
     assert code == 4
     assert (app_dir / "_internal" / "PySide6" / "Qt6Quick.dll").is_file()
+
+
+POLLUTED = [
+    "_internal/django/__init__.py",
+    "_internal/django/conf/global_settings.py",
+    "_internal/numpy/__init__.py",
+    "_internal/numpy.libs/libopenblas.dll",
+    "_internal/hypothesis/core.py",
+]
+
+
+def test_find_forbidden_flags_build_env_pollution(slim):
+    """django/numpy/hypothesis 任一出现在 bundle 即命中（构建机环境污染硬闸）。"""
+    hits = slim.find_forbidden(FULL_BUNDLE + KEEP_ALWAYS + POLLUTED)
+    assert set(hits) == set(POLLUTED)
+
+
+def test_find_forbidden_clean_bundle_passes(slim):
+    """干净 bundle（含必需/保留/冗余项）不命中违禁清单。"""
+    assert slim.find_forbidden(FULL_BUNDLE + REDUNDANT + KEEP_ALWAYS) == []
+
+
+def test_main_refuses_polluted_bundle_before_any_removal(slim, tmp_path, monkeypatch):
+    """违禁模块存在即判构建失败（返回 6），且不进入任何删除阶段。"""
+    monkeypatch.setattr(slim, "_read_imports", lambda _path: set())
+    app_dir = _make_fake_bundle(tmp_path)
+    for rel in POLLUTED:
+        path = app_dir / Path(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+
+    code = slim.main(["--app-dir", str(app_dir)])
+
+    assert code == 6
+    # 未进入删除阶段：冗余项与污染项都原样保留
+    assert (app_dir / "_internal" / "PySide6" / "Qt6Quick.dll").is_file()
+    assert (app_dir / "_internal" / "django" / "__init__.py").is_file()
