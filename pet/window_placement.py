@@ -462,10 +462,14 @@ def restore_position(host) -> None:
     if rx is None or ry is None:
         x, y = _default_corner_pos(host, avail)
     else:
+        # 存的是"虚拟窗口中心"比例（贴边时含绘制偏移），恢复必须同样走虚拟
+        # 位置语义：反解出虚拟窗口坐标后不做窗口级钳位，交给统一出口按身体
+        # 框钳位并重建绘制偏移。在这里钳成窗口矩形会把贴边摆放的偏移整段
+        # 丢掉，重启后角色相对屏幕边缘整体内移（issue #218，B 站 v4.2.1
+        # 视频评论区实测：贴右下角摆放，重启后出现在偏左位置）。
+        headroom = getattr(host, "_capture_headroom", 0)
         x = int(round(avail.left() + rx * avail.width())) - host._w // 2
-        y = int(round(avail.top() + ry * avail.height())) - host._h // 2
-        x = min(max(x, avail.left()), avail.right() - host._w)
-        y = min(max(y, avail.top()), avail.bottom() - host._h)
+        y = int(round(avail.top() + ry * avail.height())) - (host._h + headroom) // 2
     # 多开避让：与其他存活实例重叠时逐级向左错开（含双击重复启动
     # 同一实例的场景——它和有名字的 --instance 一样会撞位置）
     _rects_fn = getattr(host, '_live_instance_rects', None)
@@ -482,7 +486,14 @@ def restore_position(host) -> None:
     logging.info('恢复位置 screen=%s avail=(%d,%d,%d,%d) dpr=%s -> (%d,%d)',
                  scr.name(), avail.left(), avail.top(), avail.right(),
                  avail.bottom(), scr.devicePixelRatio(), x, y)
-    _move_towards(host, x, y)
+    if callable(getattr(host, '_move_window_towards', None)):
+        # 统一出口自会按身体框/工作区钳位并重建绘制偏移（虚拟坐标请求合法）
+        _move_towards(host, x, y)
+    else:
+        # 轻量桩没有统一出口：回退旧的窗口级钳位，防把桩窗口移出屏幕
+        x = min(max(x, avail.left()), avail.right() - host._w)
+        y = min(max(y, avail.top()), avail.bottom() - host._h)
+        host.move(int(round(x)), int(round(y)))
     _marker_fn = getattr(host, '_write_runtime_marker', None)
     if callable(_marker_fn):
         _marker_fn()
