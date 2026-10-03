@@ -39,7 +39,7 @@ Phase 4B-2 的内部实现、自动化测试、Windows 实机 QProcess 交接、
 1. `docs/PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md`；
 2. 本目录 `STATUS.md`、`PLAN.md`、`SUMMARY.md`；
 3. `docs/PROJECT-ENTRY.md` 与 `docs/INDEX.md`；
-4. 4B-1.5 状态记录，确认人工/公开 pending 未被误标完成。
+4. 4B-1.5 状态记录，确认人工门已通过、公开稳定 API 仍未开放。
 
 ### 不得做的事
 不要使用 `reset --hard`、覆盖用户改动或强推；不要用 PID/TTL/heartbeat 清理版本；不要把 validation-only 路径或无 handoff 的 legacy Worker probe 解释为生产租约成功；不要在 4B-3 前新增破坏性删除。
@@ -50,4 +50,10 @@ Phase 4B-2 的内部实现、自动化测试、Windows 实机 QProcess 交接、
 - 推送目标：`origin/codex/phase3-worker`；远程 `ls-remote` 为 `5a1b6e0ae7cc9a16bab6bebed8e3b9c52c4b2865`。
 - 本地 `git rev-list --left-right --count HEAD...origin/codex/phase3-worker`：`0 0`。
 - 没有强推；忽略的测试副本、日志、缓存和构建产物未纳入提交。
-- 4B-1.5 的人工/公开门仍按独立验收状态处理，不能因本次提交/推送改写为公开完成。
+- 4B-1.5 的人工门已由用户确认通过；公开稳定 API/SDK 仍按独立开放门处理，不能因本次提交/推送改写为公开完成。
+
+## 2026-10-03 用户确认后的当前状态
+
+- Phase 4B-1.5 的人工验收门已由用户确认通过；公开稳定资源 API/SDK 仍未开放。
+- Phase 4B-2 的内部实现、自动化、实机证据、文档与提交推送均已完成；实现提交为 `5a1b6e0`，本轮文档状态同步将在当前任务形成新的文档提交。
+- 4B-3 安装/升级/卸载事务尚未开始；后续先单独规划事务边界、幂等、中断恢复和回滚，不在本轮提前实现。

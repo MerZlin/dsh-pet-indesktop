@@ -316,7 +316,7 @@
 | [DLC 基线评审响应](plugin-roadmap/DLC-BASELINE-REVIEW-REMEDIATION-2026-10-02.md) | 外部评审问题的已改进、部分改进、未解决和后续硬门。 | 调整 Phase 1 P0、4B 资源硬门或发布条件时阅读。 |
 | [Phase 4B-1.5 资源硬门设计](plugin-phase-04-updates/PHASE4B-1.5-RESOURCE-HARD-GATE-DESIGN.md) | 资源安装→Registry→播放、冲突保护、Starter/cache 隔离和资源恢复门。 | 进入 4B-2 前必读。 |
 | [Phase 4B 总任务清单](../.scratch/phase4b-local-management/PLAN.md) · [状态](../.scratch/phase4b-local-management/STATUS.md) · [交接](../.scratch/phase4b-local-management/HANDOFF.md) · [总结](../.scratch/phase4b-local-management/SUMMARY.md) | 4B-1、4B-1.5 当前证据、4B-2 已完成记录和 4B-3/4/5 未完成项。 | 恢复本地安装管理路线时阅读。 |
-| [Phase 4B-2 任务记录](../.scratch/phase4b-2-cross-process-version-lease/PLAN.md) · [状态](../.scratch/phase4b-2-cross-process-version-lease/STATUS.md) · [交接](../.scratch/phase4b-2-cross-process-version-lease/HANDOFF.md) · [总结](../.scratch/phase4b-2-cross-process-version-lease/SUMMARY.md) | 4B-2 的实现、测试、实机证据、限制和未提交停点；4B-1.5 人工/公开门仍单独保留。 | 恢复跨进程租约工作或核对 4B-3 前置条件时阅读。 |
+| [Phase 4B-2 任务记录](../.scratch/phase4b-2-cross-process-version-lease/PLAN.md) · [状态](../.scratch/phase4b-2-cross-process-version-lease/STATUS.md) · [交接](../.scratch/phase4b-2-cross-process-version-lease/HANDOFF.md) · [总结](../.scratch/phase4b-2-cross-process-version-lease/SUMMARY.md) | 4B-2 的实现、测试、实机证据和限制；4B-1.5 人工验收已通过，公开稳定 API 仍单独受开放门约束。 | 恢复跨进程租约工作或核对 4B-3 前置条件时阅读。 |
 | [当前文档连续性状态](../.scratch/documentation-continuity/STATUS.md) · [任务总结](../.scratch/documentation-continuity/SUMMARY.md) | 本轮规则、入口、README 和验证停点。 | 接续本轮文档任务时阅读。 |
 
 `.scratch` 链接是当前任务记录入口，不是普通设计文档；不要把构建缓存、原始日志、私钥或生成产物登记到索引。

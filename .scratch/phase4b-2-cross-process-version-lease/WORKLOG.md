@@ -37,3 +37,9 @@
 - 创建提交：`5a1b6e0`（`feat: 完成 Phase 4B 资源与跨进程版本租约`）。
 - 执行 `git push origin HEAD:codex/phase3-worker` 成功；远程 `ls-remote` 返回 `5a1b6e0ae7cc9a16bab6bebed8e3b9c52c4b2865`。
 - 执行 `git rev-list --left-right --count HEAD...origin/codex/phase3-worker`，结果 `0 0`。
+
+## 2026-10-03 文档状态纠偏
+
+- 用户确认 Phase 4B-1.5 人工验收门已通过；公开稳定 API/SDK 仍未开放。
+- 本阶段 4B-2 已完成并推送；本轮只修正文档当前状态，不改运行时代码。
+- 后续工作切换为规划 4B-3 安装/升级/卸载事务，不把租约实现误写成完整管理闭环。
