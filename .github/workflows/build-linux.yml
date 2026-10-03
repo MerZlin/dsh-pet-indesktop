@@ -46,7 +46,7 @@ jobs:
       - name: Pytest (main suite)
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py --deselect tests/test_frameseq_clip.py::test_retained_frame_is_not_reused_as_frame_zero
+        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py
 
       - name: Pytest (webm lifecycle family, isolated + one retry)
         env:

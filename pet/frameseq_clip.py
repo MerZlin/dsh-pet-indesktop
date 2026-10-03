@@ -164,6 +164,15 @@ class _FramePaths:
         return self.listed
 
 
+#: 进程级 worker 强钉表（见 ``_PrefetchWorker.__init__`` 注释）：clip 被丢弃而
+#: 未 close 的路径上，在途 queued 交付不得命中死包装。
+_LIVE_WORKERS: list = []
+
+#: 进程级 clip 强钉表（见 ``FrameSeqClip.__init__`` 注释）：在途 ``loaded``
+#: 交付命中析构中的 clip = UAF。生产里 clip 本就被库缓存常驻，钉表零增量。
+_LIVE_CLIPS: list = []
+
+
 class _PrefetchWorker(QObject):
     """后台预取：按路径加载帧（~2.5ms/帧）移出 GUI 线程。
 
@@ -176,6 +185,12 @@ class _PrefetchWorker(QObject):
     def __init__(self, frames: _FramePaths, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._frames = frames
+        # 强钉入进程级存活表：worker 的 prefetch 是 Python 槽，排队交付执行时
+        # 需要 Python 包装对象活着。clip 被丢弃而未 close 时包装随 GC 析构，
+        # 在途交付命中死包装 = 共享线程上 0x8 段错误（mac CI 原生栈实锤：
+        # QThread::exec → sendPostedEvents → qtPythonMetacall）。 worker 是
+        # 无父小对象，进程级钉住有界（每 clip 一个）。
+        _LIVE_WORKERS.append(self)
 
     @Slot(int)
     def prefetch(self, idx: int) -> None:
@@ -204,6 +219,11 @@ class FrameSeqClip(QObject):
 
     def __init__(self, frames_dir: Path | str, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        # 强钉入进程级存活表（与 ``_LIVE_WORKERS`` 同族防线）：worker 经 queued
+        # 信号交付 ``loaded`` 到本 clip 的 ``_on_loaded``（Python 槽）；clip 被
+        # 丢弃而未 close 时，GUI 线程析构撞上共享线程的在途交付 = UAF 段错误。
+        # 生产里 clip 本就由库缓存常驻，钉表只兜"丢弃未收口"路径，量有界。
+        _LIVE_CLIPS.append(self)
         self._dir = Path(frames_dir)
         self._fps = DEFAULT_FPS
         #: meta.json 里的整数帧数（>0 才有效；缺失/非法 = None，计数走列目录兜底）

@@ -67,6 +67,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
+import queue
 import threading
 import time
 import weakref
@@ -877,6 +878,60 @@ class ShellOverlayWindow(OverlayWindow):
 #: 同范式）：壳持 QTimer/监视器/加载线程/素材库，测试把它们留在共享
 #: QApplication 上漂到进程退出，就是全量套件/macOS CI 漂移段错误的累积源。
 _LIVE_OVERLAY_SHELLS: "weakref.WeakSet" = weakref.WeakSet()
+
+#: 图片解码串行锁（插件首用竞态防线）：Qt 的图片格式插件（dyld 装载 +
+#: QFactoryLoader 缓存）在多线程并发首用下会原生崩溃（mac CI 实锤）；后台
+#: 预热路径统一过它。GUI 线程的同步解码（首帧/跳帧）是既有路径不套它——
+#: 否则预热线程持锁时 GUI 同步解码会被反锁（吞吐倒挂）。
+_IMAGE_DECODE_LOCK = threading.Lock()
+
+#: 自言自语配图加载队列（单 worker 串行；见 ``_start_self_talk_image_load``）。
+#: 条目 = (cache, pending, edge, gen, gen_now)；gen_now 回读壳的换代戳。
+_SELF_TALK_LOAD_Q: "queue.Queue" = queue.Queue()
+
+#: 配图解码结果进程级共享（按绝对路径）：同一图片池只解码一次——overlay
+#: 多宠/多壳同池时不再每壳重解一遍（3 宠 = 3 倍解码的浪费就此消除），也
+#: 让测试期"每壳一批次"的队列积压从根上消失。目标长边变化（DPR/配图大小
+#: 热改）时整表清一次重建（与原来每壳各自重建的口径一致，只是范围变全局）。
+_SELF_TALK_IMAGE_CACHE_SHARED: dict = {}
+_SELF_TALK_IMAGE_CACHE_EDGE: "int | None" = None
+_self_talk_loader_started = False
+_self_talk_loader_lock = threading.Lock()
+
+
+def _self_talk_loader_loop() -> None:
+    """配图加载 worker：逐批次逐图串行解码（进程内唯一配图解码线程）。"""
+    while True:
+        item = _SELF_TALK_LOAD_Q.get()
+        if item is None:
+            return  # 收口哨兵（进程退出）
+        cache, pending, edge, gen, gen_now = item
+        for path in pending:
+            if gen != gen_now():
+                break  # 已换代：本批剩余作废
+            with _IMAGE_DECODE_LOCK:
+                if gen != gen_now():
+                    break  # 等锁期间被换代
+                img = QImage(path)
+                if img.isNull():
+                    continue
+                if img.width() > edge or img.height() > edge:
+                    img = img.scaled(
+                        edge, edge,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+                cache[path] = img
+
+
+def _start_self_talk_loader() -> None:
+    """懒起配图加载 worker（幂等；进程级唯一，随进程退出消亡）。"""
+    global _self_talk_loader_started
+    with _self_talk_loader_lock:
+        if _self_talk_loader_started:
+            return
+        _self_talk_loader_started = True
+    threading.Thread(target=_self_talk_loader_loop, daemon=True,
+                     name="self-talk-img-loader").start()
 
 
 class OverlayShell(QObject):
@@ -1881,6 +1936,10 @@ class OverlayShell(QObject):
         self._last_self_talk_text = value
         return self._show_self_talk_text(value)
 
+    def _self_talk_gen_now(self) -> int:
+        """当前配图预热换代戳（加载 worker 的作废判据回读口）。"""
+        return getattr(self, "_self_talk_image_warm_gen", 0)
+
     def _warm_self_talk_images(self, paths=None) -> None:
         """后台线程解码自言自语配图到 ``_self_talk_image_cache``（QImage，
         线程安全）；GUI 侧只取缓存。重复调用靠单个守护线程 + 代次去重。
@@ -1906,10 +1965,18 @@ class OverlayShell(QObject):
             cache, paths, getattr(self, "_self_talk_image_warm_gen", 0))
 
     def _ensure_self_talk_image_cache(self) -> dict:
+        """配图缓存入口：默认进程级共享表（同池只解一次）；调用方显式设置的
+        独立缓存（测试按需隔离）优先。"""
+        global _SELF_TALK_IMAGE_CACHE_EDGE
         cache = getattr(self, "_self_talk_image_cache", None)
-        if cache is None:
-            cache = self._self_talk_image_cache = {}
-        return cache
+        if cache is not None and cache is not _SELF_TALK_IMAGE_CACHE_SHARED:
+            return cache  # 显式独立缓存（测试隔离）：不动共享表
+        edge = self._self_talk_image_cache_edge()
+        if _SELF_TALK_IMAGE_CACHE_EDGE is not None and _SELF_TALK_IMAGE_CACHE_EDGE != edge:
+            _SELF_TALK_IMAGE_CACHE_SHARED.clear()  # 目标长边变了：整表重建
+        _SELF_TALK_IMAGE_CACHE_EDGE = edge
+        self._self_talk_image_cache = _SELF_TALK_IMAGE_CACHE_SHARED
+        return _SELF_TALK_IMAGE_CACHE_SHARED
 
     def _self_talk_screen_dpr(self) -> float:
         """当前屏 DPR（配图缓存按物理像素定尺寸；读不到按 1.0）。
@@ -1956,7 +2023,8 @@ class OverlayShell(QObject):
             return
         if sig == self._self_talk_image_cache_signature():
             return
-        self._self_talk_image_cache = {}
+        _SELF_TALK_IMAGE_CACHE_SHARED.clear()  # 共享表原位清（其他壳仍持同引用）
+        self._self_talk_image_cache = _SELF_TALK_IMAGE_CACHE_SHARED
         self._self_talk_image_cache_sig = self._self_talk_image_cache_signature()
         self._self_talk_images_checked_at = time.monotonic()
         self._warm_self_talk_images()
@@ -1977,26 +2045,12 @@ class OverlayShell(QObject):
         # 整批共用——中途换屏/改配图大小由调用方的签名重建接管。
         edge = self._self_talk_image_cache_edge()
 
-        def _load():
-            for path in pending:
-                if gen != getattr(self, "_self_talk_image_warm_gen", 0):
-                    return  # 已换代（清单热改）：旧批结果作废
-                img = QImage(path)
-                if not img.isNull():
-                    # 缓存按气泡**实际绘制**尺寸预缩放（显示盒 × 配图大小 ×
-                    # DPR × 余量，见 self_talk_image_cache_edge）：存原图是白占
-                    # 内存（24 张原图解码 = 114MB），固定 640 则在小尺寸/1× 屏上
-                    # 多存一倍以上（实测 36.8MB）。只缩不放：小图保留原分辨率。
-                    if img.width() > edge or img.height() > edge:
-                        img = img.scaled(
-                            edge, edge,
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation)
-                    cache[path] = img
-
-        import threading
-        threading.Thread(target=_load, daemon=True,
-                         name="self-talk-img-warm").start()
+        # 单 worker 加载队列（取代"每批一条守护线程"）：Qt 图片插件并发首用
+        # 会原生崩溃（mac CI 实锤：每个崩点 dump 都有复数加载线程在场），线程
+        # 攒多了又把全局锁挤爆、把活批次的预热饿死（CI 超时实锤）。单线程串行
+        # = 无并发 + 无雪崩；换代戳逐图复查，作废批次零成本跳过。
+        _start_self_talk_loader()
+        _SELF_TALK_LOAD_Q.put((cache, pending, edge, gen, self._self_talk_gen_now))
 
     def _show_click_self_talk(self, click_name: str = "", sprite=None) -> bool:
         """点击自言自语（``window_alerts.show_click_self_talk`` host 形转发）。
@@ -2720,6 +2774,13 @@ class OverlayShell(QObject):
             except Exception:
                 logging.getLogger(__name__).debug(
                     "测试收口 OverlayShell 失败", exc_info=True)
+            # stop() 对未 start 的壳早退——但它们的配图预热批次照样在加载队列里
+            # 排队，不戳换代戳就会整批解完（队列积压把活批次的预热饿死，CI 实测
+            # 超时）。收口时无条件作废在飞批次。
+            try:
+                shell._cancel_self_talk_image_loads()
+            except Exception:
+                pass
 
     def stop(self) -> None:
         """幂等：重复 stop 是 no-op。

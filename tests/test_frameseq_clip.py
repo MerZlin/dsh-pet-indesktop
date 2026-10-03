@@ -346,12 +346,22 @@ class _PixmapProbe:
 
 
 class _DecodeProbe:
-    """``frameseq_clip.QImage`` 的计数替身：记录"解一帧"（实测 ~1.2ms/帧）的次数。"""
+    """``frameseq_clip.QImage`` 的计数替身：记录"解一帧"（实测 ~1.2ms/帧）的次数。
+
+    计数只认 ``scope``（本用例 tmp_path）下的帧文件：钉表后历史用例遗留的
+    在播 clip 仍在后台推进解码，不收窄口径会把外来解码算进本用例（与
+    test_frame_path_waste 的 H2 教训同款）。
+    """
 
     def __init__(self):
         self.calls: list[str] = []
+        self.scope: str = ""
 
     def __call__(self, path):
+        import os as _os
+        p = _os.path.normcase(str(path))
+        if self.scope and not p.startswith(self.scope):
+            return QImage(path)      # 范围外不计数
         self.calls.append(str(path))
         return QImage(path)
 
@@ -365,9 +375,11 @@ def pixmap_probe(monkeypatch):
 
 
 @pytest.fixture
-def decode_probe(monkeypatch):
+def decode_probe(monkeypatch, tmp_path):
     from pet import frameseq_clip
+    import os as _os
     probe = _DecodeProbe()
+    probe.scope = _os.path.normcase(str(tmp_path))
     monkeypatch.setattr(frameseq_clip, "QImage", probe)
     return probe
 
@@ -570,12 +582,20 @@ def test_retained_frame_is_not_reused_as_frame_zero(tmp_path, decode_probe):
         assert clip._img_frame == 3
 
         decodes = len(decode_probe.calls)
+        hits.clear()                                # 重启后的交付序列从零记起
         assert clip.start() is True
         assert clip.currentImage() is last, "帧 3 留作兜底，直到真帧 0 到货"
         _pump_until(lambda: clip.currentImage() is not last)
-        assert clip.currentFrameNumber() == 0
-        assert len(decode_probe.calls) == decodes + 1, "帧 0 恰好解一次"
-        assert decode_probe.calls[-1].endswith("f_0001.webp")
+        # 时序口径：断言「重启后第一拍交付的是帧 0」而不是「此刻停在帧 0」——
+        # 慢 runner 上帧表可能在断言前又推进了一拍（macOS CI 实测 assert 1==0
+        # 抖动红），交付序列的首元素才是本用例要守的语义。
+        assert hits and hits[0] == 0, "重启后首拍交付必须是帧 0"
+        # 帧 0 解码计数同理只数「快照之后的帧 0」：第一圈链式预取的帧 1 可能
+        # 在慢 runner 上于快照之后才落账（解码在 worker 线程、计数以调用线程
+        # 为准），把总帧数差钉成 1 会把那次迟到误算进来（macOS CI 实测抖动）。
+        frame0_after = [c for c in decode_probe.calls[decodes:]
+                        if c.endswith("f_0001.webp")]
+        assert len(frame0_after) == 1, "重启后帧 0 恰好解一次"
     finally:
         clip.close()
 
@@ -941,3 +961,31 @@ def test_background_warm_on_half_destroyed_clip_degrades_quietly(tmp_path):
     worker.join(5.0)
     assert not worker.is_alive()
     assert errors == [], f"半销毁 clip 的预热不得抛异常：{errors}"
+
+
+def test_dropped_without_close_stays_pinned_for_inflight_delivery(tmp_path):
+    """丢弃未 close 的 clip：clip 与 worker 必须被进程级强钉（在途交付安全落地）。
+
+    崩溃家族根因（mac CI 原生栈实锤）：clip 被 GC 析构时，共享预取线程的在途
+    queued 交付（``_on_loaded`` / ``prefetch``）命中死对象 = UAF 段错误
+    （QThread::exec → sendPostedEvents → qtPythonMetacall，KERN_INVALID_ADDRESS
+    at 0x8）。钉表让"丢弃未收口"路径的对象存活到进程退出，交付安全落地。
+    """
+    import pet.frameseq_clip as fs
+
+    d = tmp_path / "clip"
+    _make_frames(d, count=4)
+    before_c, before_w = len(fs._LIVE_CLIPS), len(fs._LIVE_WORKERS)
+    clip = FrameSeqClip(d)
+    clip.start()
+    clip._request(1)                      # 制造在途交付
+    worker = clip._worker
+    del clip                              # 丢弃，不 close
+    gc.collect()
+    assert len(fs._LIVE_CLIPS) == before_c + 1, "clip 必须入钉表"
+    assert len(fs._LIVE_WORKERS) == before_w + 1, "worker 必须入钉表"
+    assert worker in fs._LIVE_WORKERS
+    # 泵事件让在途交付落地：钉住的对象接管 = 不崩（修复前这里是 UAF 窗口）
+    for _ in range(40):
+        QApplication.processEvents()
+        time.sleep(0.005)

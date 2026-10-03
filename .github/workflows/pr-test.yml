@@ -67,26 +67,7 @@ jobs:
           node integrations/dsh-pet-bridge/verify_import.mjs
 
       - name: Pytest (main suite)
-        if: matrix.os != 'macos-latest'
-        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py --deselect tests/test_frameseq_clip.py::test_retained_frame_is_not_reused_as_frame_zero
-
-      # macOS：test_overlay_spawn + test_overlay_lifecycle_gaps + test_sprite_visibility
-      # 三文件同进程时确定性段错误（3/3，崩在 test_rebind_while_paused_stays_paused
-      # 边界，原生线程无 Python 帧；前两文件的壳起的自言自语配图加载守护线程
-      # 跨测试存活）。崩溃是测试进程级 Qt 生命周期问题（全部断言在崩前均绿），
-      # 与 webm 生命周期族同先例处理：主套件摘除三文件，三文件各自独立进程
-      # 照跑（独立进程实测全绿），真断言失败照样红。根因排查归 frameseq/生命
-      # 周期专项（docs/PR-REPORT-FULL-REVIEW-FIXES-2026-10-03.md 边界章节）。
-      - name: Pytest (main suite, macOS)
-        if: matrix.os == 'macos-latest'
-        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py --ignore=tests/test_overlay_spawn.py --ignore=tests/test_overlay_lifecycle_gaps.py --ignore=tests/test_sprite_visibility.py --deselect tests/test_frameseq_clip.py::test_retained_frame_is_not_reused_as_frame_zero
-
-      - name: Pytest (macOS overlay/visibility trio, split processes)
-        if: matrix.os == 'macos-latest'
-        run: |
-          python -m pytest -q tests/test_overlay_spawn.py
-          python -m pytest -q tests/test_overlay_lifecycle_gaps.py
-          python -m pytest -q tests/test_sprite_visibility.py
+        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py
 
       # webm 生命周期族（reader/ffmpeg 进程 teardown 竞态）在 macOS CI 上
       # 偶发段错误（exit 139，栈在 reader 线程 + imageio LogCatcher）。
@@ -103,14 +84,11 @@ jobs:
       - name: Pytest (low-priority warm family, isolated + one retry)
         run: python -m pytest -q tests/test_low_priority_warm_interaction_yield.py || python -m pytest -q tests/test_low_priority_warm_interaction_yield.py
 
-      # frameseq 原生崩溃隔离位：全套件上下文 ~28% 处偶发 Windows access violation，
-      # verbose 复现钉死肇事者为
-      # tests/test_frameseq_clip.py::test_retained_frame_is_not_reused_as_frame_zero
-      # （主线程执行该用例时崩溃、Python 帧链被原生栈破坏；单测 deselect 后全量
-      # 4129 绿 exit=0）。此前归因 watchdog 族系按位置的误判——该族独立/全族均
-      # 全绿，已排除嫌疑，回归主套件。崩溃会杀掉整个 pytest 进程、拖垮主套件
-      # 结果报告，按 webm 族先例隔离；根因排查归 frameseq 批属主。
-      # 隔离不掩盖失败：照跑照判红，只额外给一次重跑机会。
+      # frameseq 崩溃家族已根治（2026-10-04，docs/PR-REPORT-QT-LIFECYCLE-CRASH-FAMILY）：
+      # 根因 = 丢弃未收口的 clip/worker 被 GC 析构时撞上共享预取线程的在途 queued
+      # 交付（mac 原生栈实锤 qtPythonMetacall 0x8 空解引用）；修复 = 进程级强钉 +
+      # 退役制收口。肇事单条回归主套件（不再 deselect）。本步骤保留为 frameseq 族
+      # 的独立重跑位（崩溃杀进程时主套件报告不受影响），照跑照判红。
       - name: Pytest (frameseq native-crash isolates, isolated + one retry)
-        run: python -m pytest -q tests/test_frameseq_prefetch_watchdog.py tests/test_frameseq_clip.py::test_retained_frame_is_not_reused_as_frame_zero || python -m pytest -q tests/test_frameseq_prefetch_watchdog.py tests/test_frameseq_clip.py::test_retained_frame_is_not_reused_as_frame_zero
+        run: python -m pytest -q tests/test_frameseq_prefetch_watchdog.py tests/test_frameseq_clip.py || python -m pytest -q tests/test_frameseq_prefetch_watchdog.py tests/test_frameseq_clip.py
 
