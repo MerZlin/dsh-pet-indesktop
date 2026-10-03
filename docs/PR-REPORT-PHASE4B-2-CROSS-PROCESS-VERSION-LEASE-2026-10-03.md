@@ -1,7 +1,7 @@
 # Phase 4B-2 跨进程版本租约实施报告（2026-10-03）
 
-> **状态**：内部实现、自动化和 Windows 实机证据完成；本轮已获得用户明确提交/推送授权，现进入提交前最终核验。Phase 4B-1.5 的资源人工安装/重启播放/桌面托盘/公开稳定 API 仍 pending，不以本报告宣称公开完成。
-> **基线**：`ce16484`（本阶段提交前父提交）　**分支**：`codex/phase3-worker`　**日期**：`2026-10-03`
+> **状态**：内部实现、自动化和 Windows 实机证据完成；实现提交 `5a1b6e0` 已推送至 `origin/codex/phase3-worker`。Phase 4B-1.5 的资源人工安装/重启播放/桌面托盘/公开稳定 API 仍 pending，不以本报告宣称公开完成。
+> **基线**：`ce16484`（本阶段提交前父提交）　**实现提交**：`5a1b6e0`　**分支**：`codex/phase3-worker`　**日期**：`2026-10-03`
 > **范围**：实现 14 个文件、测试 5 个文件、文档/记录 11 个文件（含本报告）。本报告只归因 Phase 4B-2 直接变更；既有 dirty worktree 的其他文件不在本阶段归因范围内。
 > **关联**：[Phase 4B-2 设计](plugin-phase-04-updates/PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-DESIGN.md)、[Phase 4B-1.5 报告](PR-REPORT-PHASE4B-1.5-RESOURCE-HARD-GATE-2026-10-02.md)、[阶段状态](../.scratch/phase4b-2-cross-process-version-lease/STATUS.md)
 
@@ -164,7 +164,7 @@ benchmark body 构造已提交的 `FeatureVersionSelection` 于 `TemporaryDirect
 - 当前官方实现仍以仓库现有单一 `FEATURE_ID` 作为 coordinator 的身份校验边界；扩展到多个官方 Feature 前，需要把 Feature registry/selection contract 一并参数化，不能仅复制租约目录。
 - 没有新增安装器 UI、远程目录、公开 SDK、任意第三方 Python 入口或 hot-unload；4B-3 本地安装/升级/卸载事务、4B-4 管理 UI、4B-5 真实冻结构建仍未开始。
 - Windows/POSIX 的锁行为已覆盖当前实现路径，但尚未完成跨平台真实机器矩阵、RSS 长时 soak 或断电级持久性证明。
-- 本报告当前记录提交前证据；提交 SHA、远程分支核验和是否已推送将在本轮收尾后回填。当前 tracked numstat 仍不是纯阶段 patch 统计。
+- 本报告对应实现提交 `5a1b6e0`，已推送至 `origin/codex/phase3-worker`；本地 `rev-list` 与 `ls-remote` 已核验一致。未做 CI 或远程工作树二次验证；当前 tracked numstat 仍不是纯阶段 patch 统计。
 
 ## 八、风险与回滚
 

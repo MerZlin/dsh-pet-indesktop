@@ -205,7 +205,7 @@ Host 在进入已验证 Python interpreter 后保留版本租约；Standalone Se
 
 自动化证据包括真实 multiprocessing、真实 `QProcess`、Qt event loop、Windows/POSIX 锁路径和旧选择拒绝测试；当前受影响聚焦套件为 **270 passed / 1 skipped（26.64s）**，同一族高负载连续三次均为 **270 passed / 1 skipped**（PowerShell 27.972s、27.921s、26.350s），按项目规定的 offscreen 全量为 **3581 passed / 12 skipped / 13 warnings（479.78s）**。`ruff check`、`ruff format --check`（439 files）和受影响实现模块定向 `mypy`（14 个文件）通过；`mypy pet tests` 仍有仓库既有基线 `1796 errors in 199 files`，未宣称全仓库通过。Windows 实测 Python 3.11.1 / Windows 10 build 26100：200 次 acquire/close 中位 31.007ms、p95 44.302ms，1000 次选择复核中位 3.387ms，200 次空闲占用检查中位 1.191ms；详细命令和原始输出见 [Phase 4B-2 PR 报告](docs/PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md)。
 
-本轮保留既有 dirty worktree、不覆盖用户修改；用户已在 2026-10-03 明确授权将截至目前应纳入范围的修改提交并推送到当前远程分支。4B-2 内部代码和自动化/实机证据完成，但 4B-3 仍不得开始，直到资源硬门的人工/公开条件另行验收；当前仓库也没有自动选择已安装 Feature 的 Settings 生产入口或完整 QAction/结果展示调用面，因此只提供内部授权复核 seam，不宣称公开完成。
+本轮保留既有 dirty worktree、不覆盖用户修改；用户已在 2026-10-03 明确授权将截至目前应纳入范围的修改提交并推送到当前远程分支，实现提交 `5a1b6e0` 已推送至 `origin/codex/phase3-worker`，本地 HEAD 与远程 `ls-remote` 已核验一致。4B-2 内部代码和自动化/实机证据完成，但 4B-3 仍不得开始，直到资源硬门的人工/公开条件另行验收；当前仓库也没有自动选择已安装 Feature 的 Settings 生产入口或完整 QAction/结果展示调用面，因此只提供内部授权复核 seam，不宣称公开完成。
 
 ### 完成后的实际使用效果
 

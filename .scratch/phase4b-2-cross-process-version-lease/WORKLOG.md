@@ -30,3 +30,10 @@
 - 直接真实桌面 QPA 的全量测试出现 6 个既有拖拽合帧/屏幕边界失败；offscreen 门通过，未把桌面分辨率差异误报为本阶段回归。
 - 受影响实现模块定向 `mypy` 14 个文件通过；`python -m mypy pet tests` 的仓库既有基线为 `1796 errors in 199 files`，不宣称全仓库通过。
 - Phase 4B-1.5 测试副本的终端验证和首次真实 GUI 视觉/正常退出已记录；重启实例的终端探针通过，但独立视觉确认仍未单独记录，人工/公开门继续 pending。
+
+## 2026-10-03 提交与远程核验
+
+- 显式审计后提交 70 个路径；未纳入 `.scratch` 下的手工测试包、WebM、日志、缓存、可执行文件或密钥。
+- 创建提交：`5a1b6e0`（`feat: 完成 Phase 4B 资源与跨进程版本租约`）。
+- 执行 `git push origin HEAD:codex/phase3-worker` 成功；远程 `ls-remote` 返回 `5a1b6e0ae7cc9a16bab6bebed8e3b9c52c4b2865`。
+- 执行 `git rev-list --left-right --count HEAD...origin/codex/phase3-worker`，结果 `0 0`。

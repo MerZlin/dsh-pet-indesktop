@@ -39,4 +39,4 @@
 - 使用仓库有效资源制作隔离测试副本 `package-shenshen-1.0.1`，独立 `APPDATA` 下完成 validate、安装、列表、Registry/catalog 和 `MovieLibrary` offscreen 探针；manifest digest 与实际包摘要一致，idle WebM 可读。
 - 首次真实 Windows GUI 启动后，用户确认视觉通过并正常退出。
 - 随后重启实例完成终端侧版本/Registry/idle 资源探针；该次重启的独立视觉确认未单独记录，因此“重启播放、桌面/托盘、公开稳定 API”仍保持 pending。
-- 本阶段资料已纳入本轮用户授权的提交/推送范围；不因此把资源硬门升级为公开完成。
+- 本阶段资料已纳入实现提交 `5a1b6e0` 并推送至 `origin/codex/phase3-worker`；不因此把资源硬门升级为公开完成。

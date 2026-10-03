@@ -18,4 +18,4 @@ Phase 4B-2 的内部实现与验收完成：跨进程 OS 租约是删除决策�
 
 证据：受影响聚焦套件 `270 passed, 1 skipped`；时序族三次各 `270 passed, 1 skipped`；offscreen 全量 `3581 passed, 12 skipped, 13 warnings`；Ruff、format、受影响实现模块定向 mypy、真实 multiprocessing/QProcess/Qt event loop 和 Windows 实机 benchmark 均通过。`mypy pet tests` 仍有仓库既有基线 `1796 errors in 199 files`，未宣称全仓库通过。详细文件增删、性能数字、现场探针与限制在 `docs/PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md`。
 
-边界：4B-1.5 的人工资源包安装、重启播放、桌面/托盘和公开稳定 API 仍 pending；当前没有自动 Settings Feature selector 或完整 QAction/结果展示调用面；不支持 hot-unload、安装器 UI、远程目录、公开 SDK 或任意第三方 Python 入口。4B-3 不得以本阶段自动化结果替代这些门。工作树保持 dirty，提交/推送由本轮用户明确授权后执行。
+边界：4B-1.5 的人工资源包安装、重启播放、桌面/托盘和公开稳定 API 仍 pending；当前没有自动 Settings Feature selector 或完整 QAction/结果展示调用面；不支持 hot-unload、安装器 UI、远程目录、公开 SDK 或任意第三方 Python 入口。4B-3 不得以本阶段自动化结果替代这些门。实现提交 `5a1b6e0` 已推送，工作树中的忽略临时测试包/日志/缓存没有进入提交。

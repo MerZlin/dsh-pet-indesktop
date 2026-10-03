@@ -25,7 +25,7 @@
 ## 2026-10-03 最终交接
 
 ### 精确停点
-Phase 4B-2 的内部实现、自动化测试、Windows 实机 QProcess 交接、三次高负载、静态检查、offscreen 全量测试和文档证据已完成。当前进入用户授权后的提交/推送收尾；下一阶段不能直接按“公开插件/资源完成”处理，需先完成 4B-1.5 人工/公开门的独立验收。
+Phase 4B-2 的内部实现、自动化测试、Windows 实机 QProcess 交接、三次高负载、静态检查、offscreen 全量测试和文档证据已完成。实现提交 `5a1b6e0` 已推送；下一阶段不能直接按“公开插件/资源完成”处理，需先完成 4B-1.5 人工/公开门的独立验收。
 
 ### 最终验证
 - affected focused：`270 passed, 1 skipped in 26.64s`；
@@ -43,3 +43,11 @@ Phase 4B-2 的内部实现、自动化测试、Windows 实机 QProcess 交接、
 
 ### 不得做的事
 不要使用 `reset --hard`、覆盖用户改动或强推；不要用 PID/TTL/heartbeat 清理版本；不要把 validation-only 路径或无 handoff 的 legacy Worker probe 解释为生产租约成功；不要在 4B-3 前新增破坏性删除。
+
+## 2026-10-03 提交与远程核验
+
+- 实现提交：`5a1b6e0`（`feat: 完成 Phase 4B 资源与跨进程版本租约`）。
+- 推送目标：`origin/codex/phase3-worker`；远程 `ls-remote` 为 `5a1b6e0ae7cc9a16bab6bebed8e3b9c52c4b2865`。
+- 本地 `git rev-list --left-right --count HEAD...origin/codex/phase3-worker`：`0 0`。
+- 没有强推；忽略的测试副本、日志、缓存和构建产物未纳入提交。
+- 4B-1.5 的人工/公开门仍按独立验收状态处理，不能因本次提交/推送改写为公开完成。
