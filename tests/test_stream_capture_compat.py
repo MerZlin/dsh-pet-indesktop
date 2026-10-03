@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from pet.config import Config
 from pet.speech_bubble import PetSpeechBubble
+from pet import window as window_mod
 from pet.window import STREAM_CAPTURE_TITLE, PetWindow
 from tests.test_window_pause import FakeLibrary
 
@@ -31,6 +32,14 @@ def _make_pet(tmp_path, *, capture_on: bool = False) -> PetWindow:
 
 def _window_type_mask(flags):
     return flags & Qt.WindowType.WindowType_Mask
+
+
+def test_macos_pet_window_has_no_system_shadow(monkeypatch):
+    monkeypatch.setattr(window_mod, "sys", SimpleNamespace(platform="darwin"))
+    config = SimpleNamespace(get=lambda key, default=None: default)
+    for capture_on in (False, True):
+        flags = window_mod.build_window_flags(config, stream_capture_mode=capture_on)
+        assert flags & Qt.WindowType.NoDropShadowWindowHint
 
 
 def test_speech_bubble_default_is_independent_tool_window():
