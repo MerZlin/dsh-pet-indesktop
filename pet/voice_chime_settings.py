@@ -152,7 +152,7 @@ class VoiceChimeSettingsPage(QWidget):
             SettingsSection(
                 "基础设置",
                 [
-                    SettingRow("voice_chime_enabled", "启用语音报时", "开启后按下方调度规则定时语音报时，并附台词/歌词（每 8 小时整体换一批，同周期内按序轮换）。", self.enabled_check),
+                    SettingRow("voice_chime_enabled", "启用语音报时", "开启后按下方调度规则定时语音报时，并附台词/歌词（每天整套换新，日内按序取不同条目）。", self.enabled_check),
                     SettingRow("voice_chime_schedule", "报时频率", "整点 / 每30分钟 / 每15分钟 / 每5分钟 / 每分钟 / 自定义时间点。", self.schedule_select),
                     SettingRow("voice_chime_custom_times", "自定义时间点", "仅「自定义时间点」模式生效；HH:MM 逗号分隔，如 08:30, 12:00。", self.custom_edit),
                 ],
@@ -175,7 +175,7 @@ class VoiceChimeSettingsPage(QWidget):
                     SettingRow("voice_chime_pitch", "音调", "音调偏移（Hz）：0 为正常，正数更尖锐，负数更低沉。", self.pitch_spin),
                     SettingRow("voice_chime_volume", "音量", "报时播放音量（0-100）。", self.volume_spin),
                     SettingRow("voice_chime_show_bubble", "报时气泡", "报时时在桌宠头顶显示气泡文字（含台词/歌词）。", self.bubble_check),
-                    SettingRow("voice_chime_show_quote", "台词/歌词", "报时时附带台词/歌词（每 8 小时整体换一批，同周期内每次报时按序取不同条目）；关闭后仅播报时间文本。", self.quote_check),
+                    SettingRow("voice_chime_show_quote", "台词/歌词", "报时时附带台词/歌词（每天整套换新，当天内每次报时按序取不同条目）；关闭后仅播报时间文本。", self.quote_check),
                     SettingRow("voice_chime_preview", "立即试听", "按当前配置立即播报一句“报时文本 + 台词/歌词”，无需等待报时点。", self.preview_btn),
                 ],
                 self,
@@ -189,8 +189,8 @@ class VoiceChimeSettingsPage(QWidget):
                     SettingRow(
                         "voice_chime_custom_quotes_zh",
                         "自定义台词/歌词（中文）",
-                        "每行一条，与内置中文库的关系：填了就整体替换内置库参与分批轮换"
-                        "（每 8 小时整体换一批，同一周期内每次报时按序取不同条目）；"
+                        "每行一条，与内置中文库的关系：填了就整体替换内置库参与轮换"
+                        "（每天整套换新，当天内每次报时按序取不同条目）；"
                         "留空则自动回退内置中文台词库。中文音色报时时使用这里的内容。",
                         self.custom_zh_edit,
                         stacked=True,
@@ -198,8 +198,8 @@ class VoiceChimeSettingsPage(QWidget):
                     SettingRow(
                         "voice_chime_custom_quotes_en",
                         "自定义台词/歌词（英文）",
-                        "每行一条，规则同上（每 8 小时整体换一批，同一周期内按序取不同条目）；"
-                        "留空则自动回退内置英文台词库，与中文库各自独立分批轮换。"
+                        "每行一条，规则同上（每天整套换新，当天内每次报时按序取不同条目）；"
+                        "留空则自动回退内置英文台词库，与中文库各自独立轮换。"
                         "非中文音色报时时使用这里的内容。",
                         self.custom_en_edit,
                         stacked=True,
