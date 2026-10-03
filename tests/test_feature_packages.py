@@ -8,6 +8,7 @@ import hashlib
 import importlib
 import json
 import os
+import shutil
 import sys
 import uuid
 from dataclasses import FrozenInstanceError, dataclass, replace
@@ -507,6 +508,50 @@ def test_non_callable_factory_and_failed_import_are_not_retried_or_hot_unloaded(
     assert getattr(builtins, package.counter).count("bad-import") == 1
     assert loader.lease_counts(descriptor).host == 0
     assert not loader.lease_counts(descriptor).can_remove
+
+
+def test_installed_host_import_failure_retains_cross_process_lease(package, tmp_path):
+    from pet.feature_install_state import FEATURE_ID, FeatureInstallStateStore, StateChange
+    from pet.feature_version_lease import (
+        FeatureVersionLeaseCoordinator,
+        FeatureVersionSelection,
+        release_process_leases,
+    )
+
+    package.add("host/factory.py", b"raise RuntimeError('factory failed')\n")
+    package.seal()
+    installed_root = tmp_path / "plugins" / FEATURE_ID / "versions" / package.manifest["version"]
+    digest = hashlib.sha256((package.root / "manifest.json").read_bytes()).hexdigest()
+    store = FeatureInstallStateStore(tmp_path)
+    store.commit(
+        StateChange({package.manifest["version"]: digest}, active=package.manifest["version"], enabled=True),
+        expected_revision=0,
+        operation_id="install",
+    )
+    installed_root.parent.mkdir(parents=True)
+    shutil.copytree(package.root, installed_root)
+
+    verifier = package.verifier()
+    descriptor = verifier.verify(installed_root)
+    selection = FeatureVersionSelection(
+        FEATURE_ID,
+        descriptor.version,
+        1,
+        digest,
+        descriptor,
+    )
+    coordinator = FeatureVersionLeaseCoordinator(store)
+    loader = api().FeaturePackageLoader(verifier)
+
+    try:
+        with pytest.raises(api().PackageVerificationError, match="host import failed"):
+            loader.load_installed_host(selection, coordinator)
+        occupancy = coordinator.inspect_occupancy(descriptor.version, 1)
+        assert occupancy.status == "occupied"
+        assert not occupancy.can_remove
+    finally:
+        release_process_leases()
+    assert coordinator.can_remove(descriptor.version, 1)
 
 
 def test_host_can_import_verified_common_without_loading_worker(package):

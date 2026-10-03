@@ -172,6 +172,23 @@ def standalone_pet_geometry(config):
     return None
 
 
+def hold_feature_settings_lease(dialog, lease) -> None:
+    """Keep an installed Feature settings lease through the Qt event loop.
+
+    The standalone entry point has no implicit package selection.  A production
+    caller that has independently acquired a verified settings lease attaches it
+    here; ``--settings`` then releases it only after the dialog/event loop ends.
+    Validation-only settings callers pass no lease and retain historical local
+    behavior.
+    """
+    if lease is None:
+        return
+    if getattr(dialog, "_feature_settings_lease", None) is not None:
+        raise RuntimeError("settings lease already attached")
+    dialog._feature_settings_lease = lease
+    dialog.finished.connect(lambda _result: lease.close())
+
+
 def install_standalone_hooks(dialog) -> None:
     """给独立进程的设置对话框接上本地宿主（幂等）。
 

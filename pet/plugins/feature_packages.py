@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Callable
 
+from ..feature_version_lease import CrossProcessLease, FeatureVersionLeaseCoordinator, FeatureVersionSelection, retain_process_lease
 from .package_trust import (
     CompatibilityEvidence,
     FeaturePackageVerifier,
@@ -193,10 +194,18 @@ _FINDER = _VerifiedPackageFinder()
 class VersionLease:
     """Explicit release; dropping a Python reference does NOT prove a process/UI stopped."""
 
-    def __init__(self, generation: _Generation, verifier: FeaturePackageVerifier, kind: str):
+    def __init__(
+        self,
+        generation: _Generation,
+        verifier: FeaturePackageVerifier,
+        kind: str,
+        *,
+        process_lease: CrossProcessLease | None = None,
+    ):
         self._generation = generation
         self._verifier = verifier
         self._kind = kind
+        self._process_lease = process_lease
         self._token = object()
         with _LOCK:
             generation.leases[kind].add(self._token)
@@ -220,6 +229,9 @@ class VersionLease:
         # Even copied/stale handles cannot decrement somebody else's generation.
         with _LOCK:
             self._generation.leases[self._kind].discard(self._token)
+        if self._process_lease is not None:
+            self._process_lease.close()
+            self._process_lease = None
 
     def __enter__(self):
         self._check()
@@ -257,42 +269,93 @@ class FeaturePackageLoader:
             raise PackageVerificationError("a Core package verifier is required")
         self.verifier = verifier
 
-    def load_host(self, descriptor: VerifiedFeatureDescriptor) -> HostHandle:
+    def load_host(
+        self,
+        descriptor: VerifiedFeatureDescriptor,
+        *,
+        process_lease: CrossProcessLease | None = None,
+    ) -> HostHandle:
         # Full inventory, digest and signature verification precedes *all* imports,
         # including package __init__.py, and also applies to cached generations.
-        sources = self.verifier._snapshot(descriptor)
-        generation = _generation(descriptor)
-        with generation.load_lock:
-            if generation.failed:
-                raise PackageVerificationError("failed host generation is quarantined until process exit")
-            if generation.factory is None:
-                modules = _module_table(generation.namespace, sources)
-                generation.modules = modules
-                generation.verifier = self.verifier
-                with _LOCK:
-                    generation.imported = True  # pin even partially executed failures
-                    _FINDER.generations[generation.namespace] = generation
-                    if _FINDER not in sys.meta_path:
-                        sys.meta_path.insert(0, _FINDER)
-                generation.loading_thread = threading.get_ident()
-                try:
-                    module = importlib.import_module(generation.namespace + ".host.factory")
-                    factory = getattr(module, "create_host", None)
-                    if not callable(factory):
-                        raise PackageVerificationError("official create_host is not callable")
-                    generation.factory = factory
-                except BaseException as exc:
-                    generation.failed = True
-                    if isinstance(exc, (KeyboardInterrupt, GeneratorExit)):
-                        raise
-                    raise PackageVerificationError(f"official host import failed: {exc}") from exc
-                finally:
-                    generation.loading_thread = None
-        return HostHandle(generation, self.verifier, "host")
+        # When an installed-process lease is supplied, it is pinned immediately
+        # before entering the verified interpreter and remains process-owned.
+        lease_retained = False
+        try:
+            sources = self.verifier._snapshot(descriptor)
+            generation = _generation(descriptor)
+            with generation.load_lock:
+                if generation.failed:
+                    raise PackageVerificationError("failed host generation is quarantined until process exit")
+                if generation.factory is None:
+                    modules = _module_table(generation.namespace, sources)
+                    generation.modules = modules
+                    generation.verifier = self.verifier
+                    with _LOCK:
+                        if process_lease is not None:
+                            retain_process_lease(process_lease)
+                            lease_retained = True
+                        generation.imported = True  # pin even partially executed failures
+                        _FINDER.generations[generation.namespace] = generation
+                        if _FINDER not in sys.meta_path:
+                            sys.meta_path.insert(0, _FINDER)
+                    generation.loading_thread = threading.get_ident()
+                    try:
+                        module = importlib.import_module(generation.namespace + ".host.factory")
+                        factory = getattr(module, "create_host", None)
+                        if not callable(factory):
+                            raise PackageVerificationError("official create_host is not callable")
+                        generation.factory = factory
+                    except BaseException as exc:
+                        generation.failed = True
+                        if isinstance(exc, (KeyboardInterrupt, GeneratorExit)):
+                            raise
+                        raise PackageVerificationError(f"official host import failed: {exc}") from exc
+                    finally:
+                        generation.loading_thread = None
+            if process_lease is not None and not lease_retained:
+                retain_process_lease(process_lease)
+                lease_retained = True
+            return HostHandle(generation, self.verifier, "host")
+        except BaseException:
+            if process_lease is not None and not lease_retained:
+                process_lease.close()
+            raise
+
+    def load_installed_host(
+        self,
+        selection: FeatureVersionSelection,
+        coordinator: FeatureVersionLeaseCoordinator,
+    ) -> HostHandle:
+        """Acquire the cross-process host lease before verified import.
+
+        This is the production installed-package path.  Validation-only callers
+        continue to use :meth:`load_host` directly and remain process-local.
+        """
+        descriptor = selection.descriptor
+        if not isinstance(descriptor, VerifiedFeatureDescriptor):
+            raise PackageVerificationError("an installed verified descriptor is required")
+        process_lease = coordinator.acquire_host(selection)
+        return self.load_host(descriptor, process_lease=process_lease)
 
     def acquire_settings(self, descriptor: VerifiedFeatureDescriptor) -> VersionLease:
         self.verifier.reverify(descriptor)
         return VersionLease(_generation(descriptor), self.verifier, "settings")
+
+    def acquire_installed_settings(
+        self,
+        selection: FeatureVersionSelection,
+        coordinator: FeatureVersionLeaseCoordinator,
+    ) -> VersionLease:
+        descriptor = selection.descriptor
+        if not isinstance(descriptor, VerifiedFeatureDescriptor):
+            raise PackageVerificationError("an installed verified descriptor is required")
+        process_lease = coordinator.acquire_settings(selection)
+        try:
+            self.verifier.reverify(descriptor)
+            return VersionLease(_generation(descriptor), self.verifier, "settings", process_lease=process_lease)
+        except BaseException:
+            process_lease.close()
+            raise
 
     def acquire_worker(self, descriptor: VerifiedFeatureDescriptor) -> WorkerHandle:
         self.verifier.reverify(descriptor)

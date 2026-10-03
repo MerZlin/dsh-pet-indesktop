@@ -657,7 +657,7 @@ class ProactiveScreenWorker:
 
     # ------------------------------------------------------------------- main
     def run(self) -> int:
-        self._write("hello", {"pid": os.getpid(), "capabilities": list(_CAPABILITIES)})
+        self._write("hello", {"pid": os.getpid(), "capabilities": list(_CAPABILITIES), "lease_claimed": os.environ.get("DSH_PET_FEATURE_LEASE_CLAIMED") == "1"})
         self._reader = threading.Thread(target=self._read_commands, name="proactive-screen-stdin", daemon=True)
         self._reader.start()
         next_heartbeat = time.monotonic() + HEARTBEAT_INTERVAL

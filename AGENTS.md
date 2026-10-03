@@ -223,3 +223,10 @@ verification state; retain the final records when complete. See
   mirror-symmetrized): the stable body rect used as the placement/edge-clamp
   anchor (`pet/catalog.py character_body_box`); measure it at alpha≥128 to
   match the mask/visual edge, and omit it to fall back to full-canvas behavior.
+
+## 协作授权补充（2026-10-02）
+
+- 本项目默认由当前主对话直接执行，**默认不开启子智能体**；只有用户在当前任务中明确要求时，才可以使用子智能体。
+- 在用户明确要求或阶段确实需要形成回滚点时，可以创建本地 Git 提交作为备份。提交前必须显式核对暂存范围、保护文件和敏感文件；不得使用 `git add -A`、`git add .`、`reset --hard`、强推或覆盖用户改动。
+- 本地“已提交”不等于“已发布”。`git push` 必须获得当前任务中的明确授权；一次推送授权不自动延续到后续任务。
+- 每个持续任务除设计、`PLAN.md`、`HANDOFF.md`、`STATUS.md` 外，按 `docs/agents/planning-and-reporting.md` 保留 `WORKLOG.md` 和跨对话 `SUMMARY.md`。暂停或结束时必须写准确停点；不得以未落盘的聊天计划声称记录已保存。

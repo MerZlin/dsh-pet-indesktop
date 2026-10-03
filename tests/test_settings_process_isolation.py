@@ -572,6 +572,42 @@ def test_settings_process_isolation_survives_reload(tmp_path):
     assert config.get("settings_process_isolation") is False
 
 
+def test_settings_feature_lease_lives_until_dialog_finished(tmp_path):
+    """Standalone settings keeps the installed lease until the dialog finishes."""
+    import hashlib
+    from types import SimpleNamespace
+
+    from pet.feature_install_state import FEATURE_ID, FeatureInstallStateStore, StateChange
+    from pet.feature_version_lease import FeatureVersionLeaseCoordinator, FeatureVersionSelection
+    from pet.settings_standalone import hold_feature_settings_lease
+
+    raw_manifest = b"settings-lease-manifest"
+    digest = hashlib.sha256(raw_manifest).hexdigest()
+    version = "1.0.0"
+    store = FeatureInstallStateStore(tmp_path)
+    store.commit(StateChange({version: digest}, active=version, enabled=True), expected_revision=0, operation_id="install")
+    descriptor = SimpleNamespace(
+        id=FEATURE_ID,
+        version=version,
+        trust_status="trusted_official",
+        raw_manifest=raw_manifest,
+        root=store.root / "versions" / version,
+    )
+    coordinator = FeatureVersionLeaseCoordinator(store)
+    lease = coordinator.acquire_settings(FeatureVersionSelection(FEATURE_ID, version, 1, digest, descriptor))
+    app = _qapp()
+    dialog = QDialog()
+    try:
+        hold_feature_settings_lease(dialog, lease)
+        assert coordinator.inspect_occupancy(version, 1).status == "occupied"
+        dialog.done(0)
+        app.processEvents()
+        assert coordinator.can_remove(version, 1)
+    finally:
+        lease.close()
+        dialog.deleteLater()
+
+
 def test_settings_standalone_module_does_not_import_heavy_modules():
     """pet.settings_standalone 顶层不得 import voice_chime_service / pet.app。
 

@@ -420,6 +420,15 @@ class WorkerSupervisor(QObject):
             if self._state not in {self.STARTING, self.HANDSHAKING}:
                 self._emit_diagnostic("lifecycle", {"reason": "hello received outside handshake"})
                 return
+            launch = self._launches.get(self._process) if self._process is not None else None
+            if launch is not None and launch.requires_handoff:
+                if payload.get("lease_claimed") is not True:
+                    self._fail_current("worker lease takeover not confirmed")
+                    return
+                process_pid = int(self._process.processId()) if self._process is not None and self._process.processId() else None
+                if not launch.confirm_handoff(process_pid):
+                    self._fail_current("worker lease takeover rejected")
+                    return
             capabilities = payload.get("capabilities", [])
             if self.required_capabilities and (
                 not isinstance(capabilities, list)

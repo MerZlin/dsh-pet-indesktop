@@ -22,17 +22,43 @@ class WorkerLaunch:
     working_directory: str
     environment: Mapping[str, str]
     on_release: Callable[[], None]
+    on_handoff_confirmed: Callable[[int | None], bool] | None = None
+    on_handoff_abort: Callable[[], None] | None = None
+    handoff_token: str | None = None
     _released: bool = field(default=False, init=False)
+    _handoff_confirmed: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if not Path(self.program).is_absolute() or not Path(self.working_directory).is_absolute():
             raise ValueError("external Worker paths must be absolute")
         self.arguments = tuple(self.arguments)
         self.environment = MappingProxyType(dict(self.environment))
+        if self.handoff_token is not None and not isinstance(self.handoff_token, str):
+            raise ValueError("worker handoff token must be text")
+
+    @property
+    def requires_handoff(self) -> bool:
+        return self.on_handoff_confirmed is not None
+
+    @property
+    def handoff_confirmed(self) -> bool:
+        return self._handoff_confirmed
+
+    def confirm_handoff(self, child_pid: int | None = None) -> bool:
+        if self.on_handoff_confirmed is None:
+            return True
+        if self._handoff_confirmed:
+            return True
+        confirmed = bool(self.on_handoff_confirmed(child_pid))
+        if confirmed:
+            self._handoff_confirmed = True
+        return confirmed
 
     def close(self) -> None:
         if not self._released:
             self._released = True
+            if not self._handoff_confirmed and self.on_handoff_abort is not None:
+                self.on_handoff_abort()
             self.on_release()
 
 

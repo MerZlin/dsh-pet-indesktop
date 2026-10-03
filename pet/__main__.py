@@ -18,7 +18,7 @@ def _chat_available() -> bool:
         return False
 
 
-def _exec_settings(app, config, *, include_ai: bool = True, initial_page: str = "") -> int:
+def _exec_settings(app, config, *, include_ai: bool = True, initial_page: str = "", feature_lease=None) -> int:
     """独立设置进程主体：锁 + 独立对话框 + 事件循环。
 
     单独拆一层是为了让测试能注入最小 QApplication/临时 Config，不必真的跑
@@ -49,6 +49,8 @@ def _exec_settings(app, config, *, include_ai: bool = True, initial_page: str = 
     try:
         return app.exec()
     finally:
+        if feature_lease is not None:
+            feature_lease.close()
         lock.unlock()
 
 
@@ -78,7 +80,7 @@ def _settings_page(argv) -> str:
     return str(argv[index + 1] or "").strip()
 
 
-def _run_settings(config=None) -> int:
+def _run_settings(config=None, *, feature_lease=None) -> int:
     """--settings：设置页独立进程（不导入 pet.app）。
 
     参照 --uninstall-cleanup 的免 GUI 分流范式，但设置页自身要 GUI：只拉起最小
@@ -102,11 +104,20 @@ def _run_settings(config=None) -> int:
         config.dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    return _exec_settings(app, config, include_ai=_chat_available(), initial_page=_settings_page(sys.argv))
+    return _exec_settings(app, config, include_ai=_chat_available(), initial_page=_settings_page(sys.argv), feature_lease=feature_lease)
 
 
 def _run_worker(worker_id: str | None = None) -> int:
     """Run an allow-listed worker without importing the desktop UI."""
+    from .workers.lease_bootstrap import claim_worker_lease_from_environment
+
+    try:
+        claim_worker_lease_from_environment()
+    except Exception:
+        # Do not import the Worker implementation when the parent/child
+        # handoff cannot be proven.  The parent will observe no lease-claimed
+        # hello and stop the process without guessing from a timeout.
+        return 78
     from .workers.worker_entry import main as worker_main
 
     return worker_main(worker_id)

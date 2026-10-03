@@ -41,13 +41,13 @@
 
 | 阶段 | 当前定位 | 必交结果与进入/出口 |
 |---|---|---|
-| [Phase 1](../plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md) | 已完成角色资源基线 | ContentManager、CharacterRegistry、Starter、目录/ZIP、校验/激活/回滚与 legacy fallback；其他资源类型、可执行包不冒充完成 |
+| [Phase 1](../plugin-phase-01-foundation/PLUGIN-DLC-ARCHITECTURE.md) | 角色资源实现基线，P0 加固未封存 | ContentManager、CharacterRegistry、Starter、目录/ZIP、校验/激活/回滚与 legacy fallback 已有实现；安装后 Registry 解析、冲突清理、Starter/Core 更新保护和资源播放 E2E 仍是硬门 |
 | [Phase 2](../plugin-phase-02-runtime/README.md) | 官方运行时基线；扩展合同待落地 | Registry/Context/事件/配置/capability/节日提醒；后续补包所有权和菜单/设置/快捷键贡献生命周期，不开放任意 Python |
 | [Phase 3A](../plugin-phase-03-worker/PHASE3A-STABILITY-CLOSEOUT.md) | Agent Link 采集 Worker 已封存 | 沿用稳定性报告，不改写历史证据；不等于完整 Agent 功能已外置 |
 | [Phase 3B](../plugin-phase-03-worker/PHASE3B-PROACTIVE-SCREEN-DESIGN.md) | 自动/手动识屏已有实现与本地证据，用户报告手测正常 | 保留隔离/权限/取消/回退边界；当前是内置 Worker，不是安装/卸载或三平台验收完成 |
 | Phase 3C | 按风险评估 | 逐项审查其他网络/外部能力的隔离收益；不要求全部先变 Worker，不阻塞选装样板 |
 | [Phase 4A](../plugin-phase-04-updates/README.md) | 下一步计划 | 屏幕理解代码/依赖/UI/配置/fallback 所有权、可信受控加载与独立构建审计；明确包设计，拿出最小 Core 不含专属实现的证据 |
-| Phase 4B | 必做样板 | 本地安装、启用、菜单/设置注册、应用内卸载、重装、升级/回滚；扩展管理不等远程 catalog |
+| Phase 4B | 必做样板（先过 4B-1.5 资源硬门） | 4B-1 状态账本已完成；4B-1.5 先封存资源真实链路；再做 4B-2 租约、4B-3 事务、4B-4 UI、4B-5 真实构建 |
 | [Phase 5A](../plugin-phase-05-distribution/README.md) | 必做官方本地交付 | 小 Core Setup + 旁置本地包、ZIP 导入、显式便携，统一事务/权威状态，缺包不影响 Core 安装启动 |
 | Phase 5B | 必做官方功能推广 | 屏幕理解后优先 AI 对话与文件理解，随后 Agent 及其余领域；批次/合包经依赖审计，不再条件化是否交付 |
 | [Phase 6](../plugin-phase-06-ecosystem/README.md) | 条件启用 | content SDK、Worker SDK、社区生态与 Workshop 按需求；不作为官方功能包前置 |
@@ -106,3 +106,25 @@ Phase 4A/4B 可以与 Phase 3C 的边界评估并行，但不能跳过样板加�
 - Setup 可以选旁置包，ZIP 用户可导入本地包，桌宠扩展管理里可停用、卸载和重装。正式文件布局、包 ID 与便携标记先经 Phase 4A/5A 设计验证，不现在凭空冻结。
 - 一个功能包可能有 GUI 主进程组件与 Worker，后者仍通过受控 stdin/stdout JSONL 连接 Core；运行位置不影响其包所有权。
 - **当前不是这些体验已可用**：已有资源 DLC 和内置 Worker 是基础，真正官方功能选装是接下来必须交付的工作；第三方/Workshop 可以不做。
+
+## 9. DLC 基线评审响应与新增加固门（2026-10-02）
+
+外部评审对应旧快照，详细分类见[DLC 基线评审响应](DLC-BASELINE-REVIEW-REMEDIATION-2026-10-02.md)。该评审没有推翻当前方向，但新增一条不可跳过的顺序：
+
+```text
+Phase 1 P0 资源解析/冲突清理/Starter 更新保护
+→ 安装→Registry→播放与中断恢复
+→ Phase 4B-1 状态账本
+→ Phase 4B-1.5 资源 DLC 硬门
+→ Phase 4B-2 租约与状态同步
+→ Phase 4B-3 本地激活/卸载事务与延迟 GC
+→ 官方功能选装
+→ Phase 5 远程分发
+→ Phase 6 条件生态
+```
+
+Phase 3A/3B 的 Worker 进程边界不等于资源 DLC 发布证据，也不等于功能包已经可卸载。Phase 4A 的 capability、事件总线和 `QProcess` 不提供 Python 权限沙箱；官方 host 与 Worker 的信任、能力、数据和包类型合同必须分别验收。纯资源包不执行代码，官方功能包必须经过固定 factory、签名/信任和版本使用句柄。
+
+当前应使用的状态词是：Phase 1“实现基线/P0 待封存”、Phase 4B-1“状态账本已实现”、Phase 4B-2/3“计划中”、Phase 5/6“按硬门或条件启用”。
+
+公开承诺与内部准备分层：在 Phase 4B-1.5 资源硬门通过并封存前，资源 manifest、作者示例和验证工具只能标记为内部验证，不构成稳定第三方兼容承诺；作者可以提前准备，但不得依赖尚未封存的路径或字段。外部 Worker 开发者预览必须等待真正可拔除的官方功能样板，Feature Host 仍为条件阶段。

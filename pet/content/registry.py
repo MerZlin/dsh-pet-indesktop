@@ -98,12 +98,52 @@ class CharacterRegistry:
                 manifest.plugin_id if manifest else root.name, manifest.version if manifest else "unknown", "validation", "; ".join(errors), source
             )
             return []
+        # Phase 1 resource packages have one canonical package root: the directory
+        # containing ``manifest.json`` and the character's ``videos`` directory.
+        # Older/bundled multi-character packages may use an explicit
+        # ``characters/<id>`` layout.  Do not infer a nested path from the name of
+        # the installed version directory: installed packages live under
+        # ``characters/<id>/versions/<version>`` and that directory name is a
+        # version, not another package root.
+        direct_roots: dict[str, Path] = {}
+        if len(manifest.characters) == 1 and (root / "videos").is_dir():
+            direct_roots[manifest.characters[0]] = root
+
+        nested_roots: dict[str, Path] = {}
+        for character_id in manifest.characters:
+            character_root = root / "characters" / character_id
+            if not (character_root / "videos").is_dir():
+                nested_roots = {}
+                break
+            nested_roots[character_id] = character_root
+
+        if direct_roots and nested_roots:
+            self._record_failure(
+                manifest.plugin_id,
+                manifest.version,
+                "layout",
+                "package contains both direct and nested character roots",
+                source,
+            )
+            return []
+
+        character_roots = direct_roots or nested_roots
+        if not character_roots:
+            self._record_failure(
+                manifest.plugin_id,
+                manifest.version,
+                "layout",
+                "declared character root cannot be resolved",
+                source,
+            )
+            return []
+
         package = ContentPackage(manifest=manifest, root=root, source=source, content_sha256=digest)
         return [
             CharacterPackage(
                 character_id=character_id,
                 package=package,
-                root=root if root.name == character_id else root / "characters" / character_id,
+                root=character_roots[character_id],
                 source=source,
                 fallback_rank=fallback_rank,
             )

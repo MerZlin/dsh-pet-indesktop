@@ -32,6 +32,21 @@ _EXECUTABLE_SUFFIXES = {
     ".js",
     ".vbs",
 }
+# 资源版本目录只保存可发布内容。运行时派生的帧序列、缩略图和索引
+# 必须写入版本目录之外的 cache 根，避免改变包身份或被激活事务覆盖。
+_DERIVED_CACHE_DIR_NAMES = frozenset(
+    {
+        ".cache",
+        "cache",
+        "derived",
+        "derived-cache",
+        "frameseq",
+        "index",
+        "indexes",
+        "thumbnail",
+        "thumbnails",
+    }
+)
 
 
 class ManifestValidationError(ValueError):
@@ -188,9 +203,15 @@ def validate_package_root(
     try:
         manifest, manifest_errors = load_manifest(root)
         errors.extend(manifest_errors)
+        derived_paths: set[str] = set()
         for _rel, path in iter_directory_files(root):
+            relative = path.relative_to(root)
+            if any(part.casefold() in _DERIVED_CACHE_DIR_NAMES for part in relative.parts[:-1]):
+                derived_paths.add(relative.as_posix())
             if path.suffix.lower() in _EXECUTABLE_SUFFIXES:
-                errors.append(f"executable file is not allowed: {path.relative_to(root).as_posix()}")
+                errors.append(f"executable file is not allowed: {relative.as_posix()}")
+        for relative_path in sorted(derived_paths):
+            errors.append(f"derived cache must be outside package root: {relative_path}")
     except (OSError, ValueError) as exc:
         errors.append(str(exc))
         return None, errors, None

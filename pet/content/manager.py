@@ -35,6 +35,8 @@ class ContentManager:
         self.data_root = Path(data_root) if data_root is not None else installed_characters_root().parent
         self.characters_root = self.data_root / "characters"
         self.staging_root = self.data_root / "staging"
+        self.transaction_root = self.staging_root / "transactions"
+        self.recovery_diagnostics: list[str] = []
         self.core_version = core_version
         self.platform_name = platform_name or current_platform()
         self.registry = registry or CharacterRegistry(
@@ -63,6 +65,157 @@ class ContentManager:
         temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
         temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp, path)
+
+    @staticmethod
+    def _snapshot_file(path: Path) -> bytes | None:
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    @staticmethod
+    def _restore_file_snapshot(path: Path, contents: bytes | None) -> None:
+        if contents is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.restore.tmp")
+        try:
+            temp.write_bytes(contents)
+            os.replace(temp, path)
+        finally:
+            temp.unlink(missing_ok=True)
+
+    def _transaction_path(self, operation_id: str) -> Path:
+        return self.transaction_root / f"{operation_id}.json"
+
+    def _write_transaction(self, record: dict[str, Any]) -> None:
+        self._write_json_atomic(self._transaction_path(str(record["operation_id"])), record)
+
+    def _remove_transaction(self, operation_id: str) -> None:
+        self._transaction_path(operation_id).unlink(missing_ok=True)
+
+    def _cleanup_empty_resource_dirs(self, character_id: str) -> None:
+        character_root = self.characters_root / character_id
+        versions_root = character_root / "versions"
+        for directory in (versions_root, character_root):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+
+    def _ensure_no_unresolved_operations(self) -> None:
+        self.recover_pending_operations()
+        if self.recovery_diagnostics:
+            raise ContentError("pending resource operation requires recovery: " + "; ".join(self.recovery_diagnostics))
+
+    def _apply_pointer_state(self, character_id: str, name: str, value: dict[str, Any] | None) -> None:
+        path = self._pointer_path(character_id, name)
+        if value is None:
+            path.unlink(missing_ok=True)
+        else:
+            self._write_json_atomic(path, value)
+
+    def recover_pending_operations(self) -> None:
+        """Recover only resource uninstall journals that are provably consistent.
+
+        This method never guesses from timestamps or directory names.  An
+        ambiguous journal is kept on disk and reported to the caller so a
+        future management layer can present an explicit recovery decision.
+        """
+
+        self.recovery_diagnostics = []
+        if not self.transaction_root.is_dir():
+            return
+
+        for journal_path in sorted(self.transaction_root.glob("*.json")):
+            record = self._read_json(journal_path)
+            if record is None:
+                self.recovery_diagnostics.append(f"invalid transaction record: {journal_path.name}")
+                continue
+            if record.get("kind") != "uninstall":
+                self.recovery_diagnostics.append(f"unsupported transaction kind: {journal_path.name}")
+                continue
+
+            operation_id = record.get("operation_id")
+            character_id = record.get("character_id")
+            version = record.get("version")
+            phase = record.get("phase")
+            plugin_id = record.get("plugin_id")
+            before_active = record.get("active_before")
+            before_previous = record.get("previous_before")
+            after_active = record.get("active_after")
+            after_previous = record.get("previous_after")
+            expected_digest = record.get("target_content_sha256")
+            if not all(isinstance(value, str) and value for value in (operation_id, character_id, version, phase, plugin_id)):
+                self.recovery_diagnostics.append(f"malformed transaction record: {journal_path.name}")
+                continue
+            assert isinstance(operation_id, str)
+            assert isinstance(character_id, str)
+            assert isinstance(version, str)
+            assert isinstance(phase, str)
+            assert isinstance(plugin_id, str)
+            if not all(value is None or isinstance(value, dict) for value in (before_active, before_previous, after_active, after_previous)):
+                self.recovery_diagnostics.append(f"malformed pointer snapshot: {journal_path.name}")
+                continue
+
+            target = self._package_root(character_id, version)
+            active_path = self._pointer_path(character_id)
+            previous_path = self._pointer_path(character_id, "previous")
+            current_active = self._read_json(active_path)
+            current_previous = self._read_json(previous_path)
+
+            if phase == "prepared":
+                if not target.exists():
+                    self.recovery_diagnostics.append(f"uninstall target missing before commit: {journal_path.name}")
+                    continue
+                validation = self.validate(target, allow_unsigned=True)
+                if not validation.valid or (expected_digest and validation.content_sha256 != expected_digest):
+                    self.recovery_diagnostics.append(f"uninstall target changed during preparation: {journal_path.name}")
+                    continue
+                if current_active != before_active or current_previous != before_previous:
+                    self.recovery_diagnostics.append(f"pointers changed during preparation: {journal_path.name}")
+                    continue
+                self._remove_transaction(operation_id)
+                continue
+
+            if phase == "version_removed":
+                if target.exists():
+                    self.recovery_diagnostics.append(f"removed transaction still has target: {journal_path.name}")
+                    continue
+                if current_active == before_active and current_previous == before_previous:
+                    self._apply_pointer_state(character_id, "active", after_active)
+                    self._apply_pointer_state(character_id, "previous", after_previous)
+                elif current_active == after_active and current_previous == after_previous:
+                    pass
+                else:
+                    self.recovery_diagnostics.append(f"pointers diverged during recovery: {journal_path.name}")
+                    continue
+                record["phase"] = "pointers_committed"
+                self._write_transaction(record)
+                phase = "pointers_committed"
+                # The pointer writes above may have changed either file to a
+                # non-empty snapshot.  Re-read unconditionally before checking
+                # the committed phase; stale values must never authorize cleanup.
+                current_active = self._read_json(active_path)
+                current_previous = self._read_json(previous_path)
+
+            if phase == "pointers_committed":
+                if target.exists():
+                    self.recovery_diagnostics.append(f"committed uninstall target still exists: {journal_path.name}")
+                    continue
+                if current_active != after_active or current_previous != after_previous:
+                    # A journal can be discovered after another process has
+                    # changed the pointers.  Do not overwrite that newer state.
+                    self.recovery_diagnostics.append(f"committed pointers do not match: {journal_path.name}")
+                    continue
+                self._remove_transaction(operation_id)
+                self._cleanup_empty_resource_dirs(character_id)
+                self._invalidate_registry()
+                continue
+
+            if phase not in {"prepared", "version_removed", "pointers_committed"}:
+                self.recovery_diagnostics.append(f"unsupported transaction phase: {journal_path.name}")
 
     @staticmethod
     def _safe_copytree(source: Path, destination: Path) -> None:
@@ -136,10 +289,18 @@ class ContentManager:
             pass
 
     def install(self, source: Path, *, allow_unsigned: bool = False) -> InstallResult:
+        self._ensure_no_unresolved_operations()
         source = Path(source)
         self.staging_root.mkdir(parents=True, exist_ok=True)
         work_dir = Path(tempfile.mkdtemp(prefix="install-", dir=self.staging_root))
         installed_root: Path | None = None
+        temp_version: Path | None = None
+        installed_root_created = False
+        activation_attempted = False
+        active_snapshot: bytes | None = None
+        previous_snapshot: bytes | None = None
+        active_path: Path | None = None
+        previous_path: Path | None = None
         try:
             package_root = work_dir / "package"
             package_root.mkdir()
@@ -161,6 +322,10 @@ class ContentManager:
                 raise ContentError("Phase 1 installation requires exactly one character per package")
             character_id = manifest.characters[0]
             installed_root = self._package_root(character_id, manifest.version)
+            active_path = self._pointer_path(character_id)
+            previous_path = self._pointer_path(character_id, "previous")
+            active_snapshot = self._snapshot_file(active_path)
+            previous_snapshot = self._snapshot_file(previous_path)
             installed_root.parent.mkdir(parents=True, exist_ok=True)
             if installed_root.exists():
                 _existing_manifest, existing_errors, existing_hash = validate_package_root(
@@ -170,18 +335,26 @@ class ContentManager:
                     allow_unsigned=True,
                 )
                 if not existing_errors and existing_hash == digest:
+                    activation_attempted = True
                     self.activate(manifest.plugin_id, manifest.version)
                     return InstallResult(manifest.plugin_id, manifest.version, True, installed_root)
                 raise ContentError(f"version already exists with different content: {manifest.version}")
             temp_version = installed_root.parent / f".{manifest.version}.{uuid4().hex}.tmp"
             self._safe_copytree(package_root, temp_version)
             os.replace(temp_version, installed_root)
+            installed_root_created = True
+            activation_attempted = True
             self._activate_character(character_id, manifest.plugin_id, manifest.version, validate=False)
             self._self_check_active(character_id, allow_unsigned=allow_unsigned)
             self._invalidate_registry()
             return InstallResult(manifest.plugin_id, manifest.version, True, installed_root)
         except Exception:
-            if installed_root is not None and installed_root.exists() and self.active_version(installed_root.parent.parent.name) != installed_root.name:
+            if activation_attempted and active_path is not None and previous_path is not None:
+                self._restore_file_snapshot(active_path, active_snapshot)
+                self._restore_file_snapshot(previous_path, previous_snapshot)
+            if temp_version is not None:
+                shutil.rmtree(temp_version, ignore_errors=True)
+            if installed_root_created and installed_root is not None:
                 shutil.rmtree(installed_root, ignore_errors=True)
             raise
         finally:
@@ -263,6 +436,7 @@ class ContentManager:
         raise ContentError(f"no rollback version for {plugin_id}")
 
     def uninstall(self, plugin_id: str, version: str | None = None) -> None:
+        self._ensure_no_unresolved_operations()
         for character_dir in self.characters_root.glob("*/"):
             active = self._active_for_character(character_dir.name)
             target_version = version
@@ -274,24 +448,86 @@ class ContentManager:
             manifest_result = self.validate(target, allow_unsigned=True) if target.exists() else None
             if not manifest_result or not manifest_result.manifest or manifest_result.manifest.plugin_id != plugin_id:
                 continue
-            was_active = bool(active and active.get("version") == target_version)
-            previous = self._read_json(self._pointer_path(character_dir.name, "previous")) if was_active else None
+
+            active_path = self._pointer_path(character_dir.name)
+            previous_path = self._pointer_path(character_dir.name, "previous")
+            active_before = self._read_json(active_path)
+            previous_before = self._read_json(previous_path)
+            was_active = bool(active_before and active_before.get("version") == target_version)
+            if was_active and previous_before:
+                active_after = previous_before
+            elif was_active:
+                active_after = None
+            else:
+                active_after = active_before
+            previous_after = None if was_active else previous_before
+
+            operation_id = uuid4().hex
+            self._write_transaction(
+                {
+                    "operation_id": operation_id,
+                    "kind": "uninstall",
+                    "phase": "prepared",
+                    "plugin_id": plugin_id,
+                    "character_id": character_dir.name,
+                    "version": target_version,
+                    "was_active": was_active,
+                    "target_content_sha256": manifest_result.content_sha256,
+                    "active_before": active_before,
+                    "previous_before": previous_before,
+                    "active_after": active_after,
+                    "previous_after": previous_after,
+                }
+            )
+
             # Remove the version first; only then publish the new active pointer.
-            # This prevents an active pointer from referencing a path that was
-            # already deleted if the filesystem removal itself fails.
+            # If removal fails, the prepared journal remains and the active state
+            # is untouched.
             shutil.rmtree(target)
-            if was_active:
-                if previous:
-                    self._write_json_atomic(self._pointer_path(character_dir.name), previous)
-                else:
-                    self._pointer_path(character_dir.name).unlink(missing_ok=True)
-                # The old previous pointer referred to the package just removed.
-                self._pointer_path(character_dir.name, "previous").unlink(missing_ok=True)
+            self._write_transaction(
+                {
+                    "operation_id": operation_id,
+                    "kind": "uninstall",
+                    "phase": "version_removed",
+                    "plugin_id": plugin_id,
+                    "character_id": character_dir.name,
+                    "version": target_version,
+                    "was_active": was_active,
+                    "target_content_sha256": manifest_result.content_sha256,
+                    "active_before": active_before,
+                    "previous_before": previous_before,
+                    "active_after": active_after,
+                    "previous_after": previous_after,
+                }
+            )
+            self._apply_pointer_state(character_dir.name, "active", active_after)
+            self._apply_pointer_state(character_dir.name, "previous", previous_after)
+            self._write_transaction(
+                {
+                    "operation_id": operation_id,
+                    "kind": "uninstall",
+                    "phase": "pointers_committed",
+                    "plugin_id": plugin_id,
+                    "character_id": character_dir.name,
+                    "version": target_version,
+                    "was_active": was_active,
+                    "target_content_sha256": manifest_result.content_sha256,
+                    "active_before": active_before,
+                    "previous_before": previous_before,
+                    "active_after": active_after,
+                    "previous_after": previous_after,
+                }
+            )
+            self._remove_transaction(operation_id)
+            self._cleanup_empty_resource_dirs(character_dir.name)
             self._invalidate_registry()
             return
         raise ContentError(f"package not found: {plugin_id}@{version or '*'}")
 
     def discover(self) -> list[ContentPackage]:
+        self.recover_pending_operations()
+        if self.recovery_diagnostics:
+            return []
         packages: list[ContentPackage] = []
         if not self.characters_root.is_dir():
             return packages

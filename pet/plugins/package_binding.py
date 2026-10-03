@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from ..feature_version_lease import FeatureVersionLeaseCoordinator, FeatureVersionSelection
 from .feature_host import FeatureDefinition, FeatureHost
 from .feature_packages import FeaturePackageLoader, HostHandle, PackageVerificationError, VerifiedFeatureDescriptor
 from .worker_launch import verified_worker_launch
@@ -41,6 +42,8 @@ def bind_verified_feature(
     runtime_directory: Path,
     core_roots: Sequence[Path] = (),
     environment: Mapping[str, str] | None = None,
+    selection: FeatureVersionSelection | None = None,
+    lease_coordinator: FeatureVersionLeaseCoordinator | None = None,
 ) -> FeaturePackageBinding:
     """Use one explicitly selected, verified version for host/settings/Worker.
 
@@ -48,9 +51,15 @@ def bind_verified_feature(
     leases follow QObject destruction, not a best-effort Python finalizer.
     """
     host.registry.check_thread()
+    if (selection is None) != (lease_coordinator is None):
+        raise PackageVerificationError("installed selection and lease coordinator must be supplied together")
+    if selection is not None and selection.descriptor is not descriptor:
+        raise PackageVerificationError("installed selection does not match descriptor")
     if host.state(descriptor.id) != "absent" or descriptor.id in host._definitions:
         raise PackageVerificationError("feature already provided; version replacement requires restart")
-    handle = loader.load_host(descriptor)
+    handle = (
+        loader.load_installed_host(selection, lease_coordinator) if selection is not None and lease_coordinator is not None else loader.load_host(descriptor)
+    )
     binding = FeaturePackageBinding(host, handle)
     try:
         definition = handle.factory()
@@ -60,7 +69,11 @@ def bind_verified_feature(
         def settings_factory(*args, **kwargs):
             if binding.closed or not host.configurable(descriptor.id):
                 raise PackageVerificationError("feature settings are unavailable")
-            lease = loader.acquire_settings(descriptor)
+            lease = (
+                loader.acquire_installed_settings(selection, lease_coordinator)
+                if selection is not None and lease_coordinator is not None
+                else loader.acquire_settings(descriptor)
+            )
             try:
                 widget = definition.settings_factory(*args, **kwargs)
                 from PySide6.QtCore import QObject
@@ -83,6 +96,8 @@ def bind_verified_feature(
                 runtime_directory=runtime_directory,
                 core_roots=core_roots,
                 environment=environment,
+                selection=selection,
+                lease_coordinator=lease_coordinator,
             )
 
         host.provide(replace(definition, settings_factory=settings_factory, worker_launch_factory=launch_factory, allow_in_process=False))

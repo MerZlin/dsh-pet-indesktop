@@ -8,6 +8,7 @@ policy, bridge installation, and user interaction.
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
@@ -136,7 +137,14 @@ class AgentLinkWorker:
         self._write_error(f"unsupported command from parent: {message.type}", stage="protocol")
 
     def run(self) -> int:
-        self._write("hello", {"pid": __import__("os").getpid(), "capabilities": ["agent_events.read", "settings.read", "logging.write"]})
+        self._write(
+            "hello",
+            {
+                "pid": os.getpid(),
+                "capabilities": ["agent_events.read", "settings.read", "logging.write"],
+                "lease_claimed": os.environ.get("DSH_PET_FEATURE_LEASE_CLAIMED") == "1",
+            },
+        )
         self._reader = threading.Thread(target=self._read_commands, name="agent-link-worker-stdin", daemon=False)
         self._reader.start()
         next_heartbeat = time.monotonic() + HEARTBEAT_INTERVAL

@@ -4,6 +4,11 @@
 
 | 日期 | 主题 | 入口 | 关键提交/状态 |
 |---|---|---|---|
+| 2026-10-03 | Phase 4B-2 跨进程版本租约 | [LOG.md](LOG.md#phase-4b-2-跨进程版本租约-2026-10-03) · [设计](docs/plugin-phase-04-updates/PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-DESIGN.md) · [实施报告](docs/PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md) · [任务状态](.scratch/phase4b-2-cross-process-version-lease/STATUS.md) | 内部实现、自动化和 Windows 实机证据完成；4B-1.5 人工/公开门 pending；已获明确提交/推送授权，当前待收尾 |
+| 2026-10-02 | 文档连续性、项目入口与开发者 README | [LOG.md](LOG.md#文档连续性项目入口与开发者-readme-2026-10-02) · [入口](docs/PROJECT-ENTRY.md) · [规范](docs/agents/WORKFLOW-CONTINUITY-AND-PROJECT-ENTRY.md) · [任务总结](.scratch/documentation-continuity/SUMMARY.md) | 文档、规则与任务记录已补齐；文档门已通过，未提交未推送 |
+| 2026-10-02 | Phase 4B-1.5 资源 DLC 硬门 | [LOG.md](LOG.md#phase-4b-15-资源-dlc-硬门) · [设计](docs/plugin-phase-04-updates/PHASE4B-1.5-RESOURCE-HARD-GATE-DESIGN.md) · [实施报告](docs/PR-REPORT-PHASE4B-1.5-RESOURCE-HARD-GATE-2026-10-02.md) · [任务状态](.scratch/phase4b-1-5-resource-hard-gate/STATUS.md) | 资源硬门代码、自动化、文档与保护门已通过；本地封存就绪，4B-2 未开始，未提交未推送 |
+| 2026-10-02 | DLC 基线评审对齐与路线加固 | [LOG.md](LOG.md#dlc-基线评审对齐与路线加固) · [评审响应](docs/plugin-roadmap/DLC-BASELINE-REVIEW-REMEDIATION-2026-10-02.md) · [任务状态](.scratch/dlc-baseline-review-remediation/STATUS.md) | 文档路线已修订；Phase 1 P0 与 4B-1.5 硬门新增；代码未修改、未提交、未推送，历史验证待执行 |
+| 2026-09-30 | Phase 4B-1 唯一安装状态与安全恢复 | [LOG.md](LOG.md#phase-4b-1-唯一安装状态与安全恢复) · [实施报告](docs/PR-REPORT-FEATURE-INSTALL-STATE-2026-09-30.md) · [当前状态](.scratch/phase4b-local-management/STATUS.md) | 状态层已实现；全量 3547 passed，进程族 3 × 10 passed；未提交、未推送，4B-2 未开始 |
 | 2026-09-30 | 协作规范与成果同步 | [LOG.md](LOG.md#协作规范与成果同步) · [规范](docs/agents/planning-and-reporting.md) · [当前状态](.scratch/workflow-standardization/STATUS.md) | `a2779cb` 规范、`beba389` 记录；全量 3459 passed，高负载 3 × 65 passed；远程已核验到 `beba389`，4B 未实施 |
 | 2026-09-30 | Phase 4B 计划与本地备份检查点 | [LOG.md](LOG.md#phase-4b-计划落盘与本地备份检查点) · [设计](docs/plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md) · [交接](.scratch/phase4b-local-management/HANDOFF.md) | `5f04a99` 本地备份；4B 仅计划、未实施；全量 3459 passed，未推送 |
 | 2026-09-29 | Phase 4A host 与独立构建 | [LOG.md](LOG.md#phase-4a-host-与独立构建) · [实施报告](docs/PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md) | Windows 独立验证产物 10/10，全量 3457 passed；安装闭环/人工验收待办，已纳入 `5f04a99` 本地备份，未推送 |

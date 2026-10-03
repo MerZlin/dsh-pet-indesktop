@@ -1,5 +1,11 @@
 # 项目变更日志
 
+## Phase 4B-1 唯一安装状态与安全恢复
+
+2026-09-30：基线 ce16484，完成测试优先的状态校验、revision/操作幂等、真实内核锁、状态写入中断恢复及签名描述解析。初始可收集的行为测试 24 failed，最终新增 86 项状态测试；相关 216 passed / 1 skipped，全量 **3547 passed / 12 skipped / 13 warnings（343.74s）**；进程族连续三次各 10 passed。静态门通过，命令及警告差异见 [本轮报告](docs/PR-REPORT-FEATURE-INSTALL-STATE-2026-09-30.md)。
+
+50 条收据读取中位 38.119ms，50 次提交中位 67.219ms；不允许后续 GUI 高频同步读取。状态摘要不代替签名，描述不是租约，不从旧备份复活卸载状态。四份记录持续更新；不接生产启动、不实现版本租约/安装器/UI，不改变当前菜单和识屏，不提交、不推送。人工识屏、安全存储与托盘退出仍未验收。
+
 本文件只记录已经发生并完成验证的工程、架构和文档变更。路线规划请看 [`SPEC.md`](SPEC.md) 与 [`docs/plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md`](docs/plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md)；详细交付证据请看 [`docs/INDEX.md`](docs/INDEX.md) 中的 PR 报告。
 
 ## 2026-09-30
@@ -152,3 +158,55 @@
 - 未改变公共 CLI、Qt 运行时或 Core 自动更新协议；`pet/updater.py`、`pet/update_settings.py` 无差异。`plugin-roadmap-demo.html` 仍为未跟踪文件，旧文档没有删除或移动。
 - 限制：本轮只完成 Windows offscreen 与本机工具链验证；可见桌面交互以及 macOS/Linux 实机记录仍需在对应环境完成。
 - 后续文档修正：将 README 开发者章节中的 Python 3.10 旧说明统一为当前支持范围 Python 3.11–3.13。
+
+## DLC 基线评审对齐与路线加固（2026-10-02）
+
+### 当前判断
+
+外部文件 `D:\DELL\Documents\QQ\DLC基线评审意见-完整版.md` 对旧快照 `3257e25f365d479dec14310e4c4f8b4298169614` 的静态评审已完成分类。Phase 3 Worker、官方选装方向、禁止任意 Python host 等问题已经被当前路线修正；资源安装后 Registry 解析、冲突清理、Starter/Core 更新保护、Windows 事务和正式信任根仍未封存。
+
+### 本轮变更
+
+只修订路线和记录文档，新增[DLC 基线评审响应](docs/plugin-roadmap/DLC-BASELINE-REVIEW-REMEDIATION-2026-10-02.md)，并将 4B 调整为 4B-1 状态账本 → 4B-1.5 资源硬门 → 4B-2 租约 → 4B-3 事务 → 4B-4 管理 UI。未修改 `pet/`、`tests/`、`packaging/`、自动更新实现或演示 HTML。
+
+### 验证状态
+
+本条写入时文档检查尚待执行；不得把评审静态结论写成运行时复现。后续按 `.scratch/dlc-baseline-review-remediation/PLAN.md` 的命令补录实际结果。
+
+## Phase 4B-1.5 资源 DLC 硬门（2026-10-02）
+
+本条记录当前工作树对资源 DLC P0 硬门的实施结果，承接外部基线评审和已完成的 Phase 4B-1 状态账本。资源代码补齐了规范 package root/Registry 解析、目录与 ZIP 安装后的实际资源路径回归、冲突安装 operation-owned 清理、Starter/Core fallback 保护、发布内容与派生 cache 隔离，以及资源侧卸载中断恢复。新增 `tests/test_content_dlc_hard_gates.py`，专项相关回归 43 passed，硬门族连续三次各 28 passed；最终文档编辑前全量为 3562 passed、12 skipped、13 warnings。Ruff、格式检查和 `mypy pet/content` 通过。
+
+当前结论是“代码、自动化、文档与保护门通过；本地封存就绪，尚未提交或推送”，不是资源接口已公开稳定。当前版本资源包人工安装/重启播放、可见桌面和托盘操作仍未验收；4B-2 跨进程租约、4B-3 通用事务、4B-4 管理 UI、4B-5 两种冻结 Core 流程均未开始。文档、报告和保护门复核完成后，等待单独提交授权；不提交、不推送，不修改自动更新或演示 HTML。
+
+详细设计见 [Phase 4B-1.5 资源硬门设计](docs/plugin-phase-04-updates/PHASE4B-1.5-RESOURCE-HARD-GATE-DESIGN.md)，实施证据见 [PR 报告](docs/PR-REPORT-PHASE4B-1.5-RESOURCE-HARD-GATE-2026-10-02.md)，任务停点见 `.scratch/phase4b-1-5-resource-hard-gate/STATUS.md`。
+
+### 完成后的实际使用效果
+
+用户界面暂时没有变化，也不能在桌宠中安装、停用或卸载资源。后续资源包安装会更可靠地走到实际资源索引和加载路径，冲突不会误删旧版本；但资源 DLC 尚未对外开放，管理闭环仍需 4B-2 至 4B-5。
+
+## 文档连续性、项目入口与开发者 README（2026-10-02）
+
+本轮补齐了持续任务的施工记录与跨对话总结规则，新增 [`docs/agents/WORKFLOW-CONTINUITY-AND-PROJECT-ENTRY.md`](docs/agents/WORKFLOW-CONTINUITY-AND-PROJECT-ENTRY.md)，新增 [`docs/PROJECT-ENTRY.md`](docs/PROJECT-ENTRY.md)，并将根 [`README.md`](README.md) 重写为面向开发者的上手文档。`AGENTS.md`、计划/汇报规范和交接规范同步明确：本地 Git 提交可作为阶段备份，远程推送必须获得当前任务的明确授权，默认不开子智能体。
+
+同时为 Phase 4B-1.5 和 Phase 4B 补齐 `WORKLOG.md`、`SUMMARY.md`，并更新索引与日志入口。4B-1 状态账本保持已完成；4B-1.5 具备代码、自动化、文档和保护门的本地封存基础；4B-2 尚未开始。上述事实不把资源接口宣传为公开稳定，也不把 Worker 或 host 说成已经可卸载。
+
+本轮只修改文档、规则和任务记录；没有修改运行时代码、测试实现、打包脚本、自动更新文件或演示 HTML。文档门已通过：Markdown 链接检查扫描 121 份文件，PR 报告纪律测试 47 passed，`git diff --check` 通过（仅有 CRLF 转换提示）；保护文件无差异。因本轮只涉及文档、规则和任务记录，未重新运行全量运行时测试；当前未创建提交、未推送。
+
+### 完成后的实际使用效果
+
+新对话可从 `docs/PROJECT-ENTRY.md` 逐层了解项目，再从当前任务的 `STATUS.md`、`PLAN.md`、`HANDOFF.md` 和 `SUMMARY.md` 继续；开发者可从 README 运行和验证项目。桌宠界面、安装、停用和卸载行为没有变化，Phase 4B-2 仍未开始。
+
+## Phase 4B-2 跨进程版本租约（2026-10-03）
+
+本条记录当前工作树对 Phase 4B-2 的内部实现和验收结果。Phase 4B-1.5 已作为内部门通过，但资源包人工安装、重启播放、可见桌面/托盘行为和公开稳定 API 仍保持 pending；这不等于资源 DLC 已公开。本阶段新增每个 Feature 版本的跨进程 OS 租约目录、独立 `leases.lock`/版本租约锁、诊断记录、状态 revision/digest 复核和保守 `occupied`/`pending_confirmation` 判定；不使用 PID、TTL、heartbeat 或时间戳单独证明释放，也不支持 Python hot-unload。
+
+Host 在进入已验证 Python interpreter 后保留版本租约；Standalone Settings 通过注入 seam 在对话框存活期间保留 settings lease；Worker 由父进程 reservation 交接到子进程 child lease，父进程只在 JSONL `lease_claimed` 确认后释放 reservation。子进程 bootstrap 仍不导入 UI、`pet.app` 或 `pet.plugins`。显式目录验证路径保持 validation-only 的进程内行为，没有新增安装器 UI、远程目录、公开 SDK 或任意第三方 Python 入口。
+
+自动化证据包括真实 multiprocessing、真实 `QProcess`、Qt event loop、Windows/POSIX 锁路径和旧选择拒绝测试；当前受影响聚焦套件为 **270 passed / 1 skipped（26.64s）**，同一族高负载连续三次均为 **270 passed / 1 skipped**（PowerShell 27.972s、27.921s、26.350s），按项目规定的 offscreen 全量为 **3581 passed / 12 skipped / 13 warnings（479.78s）**。`ruff check`、`ruff format --check`（439 files）和受影响实现模块定向 `mypy`（14 个文件）通过；`mypy pet tests` 仍有仓库既有基线 `1796 errors in 199 files`，未宣称全仓库通过。Windows 实测 Python 3.11.1 / Windows 10 build 26100：200 次 acquire/close 中位 31.007ms、p95 44.302ms，1000 次选择复核中位 3.387ms，200 次空闲占用检查中位 1.191ms；详细命令和原始输出见 [Phase 4B-2 PR 报告](docs/PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md)。
+
+本轮保留既有 dirty worktree、不覆盖用户修改；用户已在 2026-10-03 明确授权将截至目前应纳入范围的修改提交并推送到当前远程分支。4B-2 内部代码和自动化/实机证据完成，但 4B-3 仍不得开始，直到资源硬门的人工/公开条件另行验收；当前仓库也没有自动选择已安装 Feature 的 Settings 生产入口或完整 QAction/结果展示调用面，因此只提供内部授权复核 seam，不宣称公开完成。
+
+### 完成后的实际使用效果
+
+用户界面没有新增安装或管理按钮；当 Core、Settings 或 Worker 持有版本，或系统无法证明租约已释放时，后续清理路径应阻止删除。版本 revision、摘要、启用状态或 generation 变化后，旧请求和旧结果不会继续生效。Worker 父子启动交接不再出现父租约已释放而子租约尚未接管的可见窗口。

@@ -138,6 +138,9 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
+| [Phase 4B-1 唯一安装状态与安全恢复](PR-REPORT-FEATURE-INSTALL-STATE-2026-09-30.md) | 严格状态、revision 并发、内核锁、中断恢复及签名验证衔接；真实进程与有界成本证据，不含安装器和版本租约。 | 调整安装状态、恢复证明或进入 4B-2 跨进程占用前。 |
+| [Phase 4B-1.5 资源 DLC 硬门](PR-REPORT-PHASE4B-1.5-RESOURCE-HARD-GATE-2026-10-02.md) | 资源根路径、Registry/播放链、冲突清理、Starter/cache 边界和资源侧恢复；自动化完成，实机与公开接口仍待封存。 | 修改资源安装/播放/Registry、判断资源接口是否可公开或进入 4B-2 前。 |
+| [Phase 4B-2 跨进程版本租约](PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md) | Core/Settings/Worker 的跨进程 OS 租约、Worker 父子交接、状态 revision/digest 复核和保守占用判定；自动化与 Windows 实机证据已完成，公开资源门仍 pending。 | 修改版本占用、Worker 交接、旧请求授权或进入 4B-3 本地事务前。 |
 | [Phase 4A host 与自包含 Worker 独立构建](PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md) | 单一功能源码、受限端口/聊天服务、Ed25519 加载；两个无识屏 Core 与 10 项冻结场景、Qt 生命周期根因及实测成本。 | 继续 Phase 4B 安装事务、调整独立构建/加载或检查当前验收限制前。 |
 | [Phase 4A 菜单与设置贡献](PR-REPORT-SCREEN-CONTRIBUTIONS-2026-09-28.md) | owner 注册/撤销、旧句柄隔离、菜单布局保留、设置草稿/清理和共享生命周期；未完成物理拆包及本版手测。 | 修改功能入口归属、命令授权、设置保存或扩展管理前。 |
 | [Phase 4A 独立视觉配置与确认迁移](PR-REPORT-VISION-CONFIG-2026-09-27.md) | 独立模型、作用域凭据、可恢复迁移/并发保护与设置；无聊天进程边界及 3224 项全量通过，真实 keyring 和用户操作待验收。 | 修改视觉配置/迁移/凭据或接续贡献注册前。 |
@@ -235,7 +238,7 @@
 
 ## 插件化与 DLC 分阶段文档
 
-> 2026-09-27 现行路线：**运行解耦与真正可拔除交付并行；官方选装必做，第三方生态条件化。** Phase 1/2 保留实现基线，Phase 3A 保留封存证据；Phase 3B 测试边界修复后全量通过；用户仅确认手动“看看屏幕”，自动未继续等待验收（不判故障），停用/托盘退出未测，不代表全部人工、安装卸载或三平台验收完成。Phase 4/5 正文已按新目标修订，不再靠顶部补充覆盖旧的条件阶段表述。
+> 2026-10-02 现行路线：**运行解耦与真正可拔除交付并行；官方选装必做，第三方生态条件化。** Phase 1/2 保留实现基线，但 Phase 1 的安装后解析、冲突清理、Starter/Core 更新保护和真实播放仍有 P0 硬门；Phase 3A/3B 证据不等于资源/功能包可卸载。4B 先过资源硬门，再按状态账本→租约→本地事务→管理 UI 推进。用户仅确认手动“看看屏幕”，自动未继续等待验收（不判故障），停用/托盘退出未测，不代表全部人工、安装卸载或三平台验收完成。详见[DLC 基线评审响应](plugin-roadmap/DLC-BASELINE-REVIEW-REMEDIATION-2026-10-02.md)。
 
 ### 总入口与单一职责
 
@@ -244,15 +247,18 @@
 | [功能归属与交付总表](plugin-roadmap/PLUGIN-FEATURE-DELIVERY-MATRIX.md) | 唯一功能主表：Core、资源类型和 11 个官方逻辑领域的实现、运行/交付、UI、数据、依赖与可拔除标准；不等于 11 个安装包。 | 确认某功能归属、依赖、包内外边界或防止遗漏 AI 对话与文件理解时。 |
 | [v5 总路线图](plugin-roadmap/PLUGIN-DLC-ROADMAP-v5.md) | 阶段顺序、状态、出口、证据和失败重启点：屏幕理解样板之后重点拆 AI 对话。 | 规划下一阶段、调整优先级或判断交付完成度时。 |
 | [中期 grill 对齐](grill-2026-09-27-插件化中期对齐.md) | 保留 Q1–Q5 原决定，追加本轮功能归属与 AI 排期，区分用户确认、规划默认与待定产物。 | 追溯官方选装、Setup/ZIP、便携、菜单设置注册等要求为何确定时。 |
+| [DLC 开放顺序与第三方接口路线](plugin-roadmap/PLUGIN-DLC-OPENING-ORDER-AND-THIRD-PARTY-INTERFACES.md) | 记录 VPet 对比、资源 DLC/官方功能/用户自制 Worker 的开放顺序、接口层级、数据存储和 Python host 卸载判定。 | 设计用户自制 DLC、开放本地目录/ZIP、确定第三方 Worker 边界或讨论热卸载宣传时。 |
+| [DLC 基线评审响应](plugin-roadmap/DLC-BASELINE-REVIEW-REMEDIATION-2026-10-02.md) | 汇总旧快照评审的已改进、部分改进、P0 未解决和未复现问题，并定义资源硬门、信任根、Windows 事务及 Phase 1–7 调整。 | 修改 DLC 安装/Registry、包信任、租约/事务、Phase 5 分发或 Phase 6 生态前必读。 |
+| [DLC 开放顺序 grill](grill-2026-10-02-dlc开放顺序与第三方接口.md) | 本轮确认的边界记录：第一批用户自制功能采用资源 DLC + 外部 Worker，暂不开放任意 Python host 和 Steam/Workshop。 | 追溯本轮用户确认和推荐答案时。 |
 
 ### 阶段导航
 
 | 阶段 | 状态 | 目录 | 用途与出口 |
 |---|---|---|---|
-| Phase 1 | 已完成角色资源基线 | [foundation](plugin-phase-01-foundation/) | 角色 Registry、ContentManager 与 fallback；不等于可执行功能包或所有资源类型完成。 |
+| Phase 1 | 角色资源实现基线，P0 待封存 | [foundation](plugin-phase-01-foundation/) | 角色 Registry、ContentManager 与 fallback 已有实现；安装后解析、冲突清理、Starter/Core 更新保护和真实播放仍是硬门。 |
 | Phase 2 | 已完成运行时基线 / 后续贡献合同待实施 | [runtime](plugin-phase-02-runtime/) | 官方 Context/EventBus/配置/生命周期；功能 UI 可在主进程运行但归功能包交付。 |
 | Phase 3A/3B/3C | 3A 已封存；3B 全量通过、人工门未完成；3C 已完成本地风险评估 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
-| Phase 4A/4B | 四个切片及 Windows 独立验证构建已通过；安装闭环必做 | [updates](plugin-phase-04-updates/) | 接续权威安装状态、跨进程占用、本地装卸与回滚；不替换默认构建或宣称人工验收完成。 |
+| Phase 4A/4B | 4A 边界基线；4B 先过资源硬门再做本地管理 | [updates](plugin-phase-04-updates/) | 依次接续 4B-1 状态账本、4B-1.5 资源硬门、4B-2 租约、4B-3 事务和 4B-4 UI；不替换默认构建或宣称人工验收完成。 |
 | Phase 5A/5B | 计划中，官方选装必做 | [distribution](plugin-phase-05-distribution/) | Setup 旁置包、ZIP/便携；AI 对话与文件理解为下一主要目标，随后 Agent 与其余领域。 |
 | Phase 6 | 条件启用 | [ecosystem](plugin-phase-06-ecosystem/) | 第三方内容/Worker SDK、社区生态；不是官方包交付的前置。 |
 | Phase 7 | 正式发布前验收 | [release](plugin-phase-07-release/) | 最小 Core、承诺选装范围、三平台、迁移装卸、性能与恢复；第三方未开放不阻塞。 |
@@ -281,9 +287,11 @@
 | [Phase 4 入口](plugin-phase-04-updates/README.md) | 查询、配置、贡献、host 和自包含 Worker 已有 Windows 自动化基线；4B 接续真实安装卸载及管理。 | 开始本地安装事务、正式交付或核对当前状态前。 |
 | [Phase 4A 屏幕理解拆包审计](plugin-phase-04-updates/PHASE4A-SCREEN-DELIVERY-AUDIT.md) | 只读核对平台查询、聊天/密钥、UI 注册、数据/卸载及构建来源，区分事实、建议、待验证；不是已完成拆包。 | 冻结屏幕理解包边界、依赖/加载方案或设计最小 Core 验证前。 |
 | [Phase 4A 屏幕理解最小设计](plugin-phase-04-updates/PHASE4A-SCREEN-PACKAGE-DESIGN.md) | 受限端口、可选聊天服务、签名目录加载和独立产物已实现；区分验证描述/进程内使用句柄与待实现安装状态。 | 调整功能 host、联动、构建、加载及 Phase 4B 安装边界前。 |
-| [Phase 4B 本地管理设计](plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md) | 已确认的单一安装状态、跨进程占用、可恢复事务及管理闭环；实现尚未开始。 | 开始本地安装、停用、卸载、重装或状态同步前。 |
+| [Phase 4B 本地管理设计](plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md) | 4B-1 状态服务和 4B-2 跨进程版本租约已实现并通过本轮自动化/实机验收；4B-3 安装事务和管理界面尚未实施。 | 开始本地安装、停用、卸载、重装或状态同步前。 |
+| [Phase 4B-1.5 资源硬门设计](plugin-phase-04-updates/PHASE4B-1.5-RESOURCE-HARD-GATE-DESIGN.md) | 资源安装→Registry→播放、冲突保护、Starter/cache 隔离和资源恢复硬门；代码、自动化、文档与保护门已通过，本地封存就绪但尚未提交。 | 进入 4B-2 前必读。 |
+| [Phase 4B-2 跨进程版本租约设计](plugin-phase-04-updates/PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-DESIGN.md) | 每个安装版本的 OS 租约目录、Host/Settings/Worker 生命周期、父子交接、状态监视与 revision-bound 旧请求保护；不提供 hot-unload 或公开 SDK。 | 修改租约、版本切换、Worker reservation 或进入 4B-3 前必读。 |
 | [Phase 4B 任务清单](../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../.scratch/phase4b-local-management/HANDOFF.md) | 逐门进度、实际验证与下一条操作；文本明确纳入 Git，保留最终交接，不收录构建临时目录。 | 恢复 Phase 4B 工作或核对未完成门前。 |
-| [Phase 4B 当前状态](../.scratch/phase4b-local-management/STATUS.md) | 区分 Phase 4A 历史成果、4B 未实施、人工待办及远程同步。 | 开始 4B-1 或判断安装管理是否已可用前。 |
+| [Phase 4B 当前状态](../.scratch/phase4b-local-management/STATUS.md) | 区分 Phase 4A 历史成果、4B-1 状态进度、后续未实施项、人工待办及远程同步。 | 恢复 Phase 4B 或判断安装管理是否已可用前。 |
 | [安装与更新协议](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | 共用事务和权威状态、信任校验、原子激活、回滚、卸载/重装与 Core/DLC 更新隔离。 | 改 Setup/ZIP/应用内安装器、代码加载、文件占用或远程来源前。 |
 | [Phase 5 官方分发](plugin-phase-05-distribution/README.md) | 5A 小 Core Setup/旁置包和显式便携，5B AI 优先推广全部官方领域；远程适配按需。 | 设计安装向导、ZIP、便携、AI 拆包批次或其他官方包前。 |
 | [Phase 6 条件生态](plugin-phase-06-ecosystem/README.md) | 内容文档与 SDK、未来 Worker SDK/社区的进入门，禁止任意代码进入 Core。 | 评估第三方作者、签名发布或 Workshop 时。 |
@@ -296,3 +304,19 @@
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [ONLINE-UPDATE.md](ONLINE-UPDATE.md) | Core 安装包在线更新协议：多源 manifest、真实二进制镜像、大小/SHA-256 校验、Windows Inno Setup 自动安装和回滚边界。 | **改自动更新、更新设置页、发布 manifest、下载校验或安装器重启行为前必读**；网络出口问题另读 [NETWORK-PROXY-AND-VPN-2026-09-22.md](NETWORK-PROXY-AND-VPN-2026-09-22.md)。 |
+
+## 项目入口与协作连续性（2026-10-02）
+
+| 文档 | 一句话内容 | 何时必读 |
+|---|---|---|
+| [项目入口](PROJECT-ENTRY.md) | 渐进式披露项目总览、目录树、路线状态、按问题查文档和不确定性。 | 新对话、新贡献者或不清楚当前状态时首先阅读。 |
+| [开发者上手 README](../README.md) | 面向开发者的运行、测试、Worker/DLC 边界和贡献检查清单。 | 开始本地开发、验证或审阅架构前阅读。 |
+| [施工连续性规范](agents/WORKFLOW-CONTINUITY-AND-PROJECT-ENTRY.md) | 计划、施工记录、交接、状态、任务总结及 Git 授权规则。 | 创建或恢复持续任务时阅读。 |
+| [DLC 开放顺序与第三方接口](plugin-roadmap/PLUGIN-DLC-OPENING-ORDER-AND-THIRD-PARTY-INTERFACES.md) | 资源 DLC、官方功能包、外部 Worker 和条件 Feature Host 的开放顺序。 | 设计作者接口、包类型或生态开放门时阅读。 |
+| [DLC 基线评审响应](plugin-roadmap/DLC-BASELINE-REVIEW-REMEDIATION-2026-10-02.md) | 外部评审问题的已改进、部分改进、未解决和后续硬门。 | 调整 Phase 1 P0、4B 资源硬门或发布条件时阅读。 |
+| [Phase 4B-1.5 资源硬门设计](plugin-phase-04-updates/PHASE4B-1.5-RESOURCE-HARD-GATE-DESIGN.md) | 资源安装→Registry→播放、冲突保护、Starter/cache 隔离和资源恢复门。 | 进入 4B-2 前必读。 |
+| [Phase 4B 总任务清单](../.scratch/phase4b-local-management/PLAN.md) · [状态](../.scratch/phase4b-local-management/STATUS.md) · [交接](../.scratch/phase4b-local-management/HANDOFF.md) · [总结](../.scratch/phase4b-local-management/SUMMARY.md) | 4B-1、4B-1.5 当前证据、4B-2 已完成记录和 4B-3/4/5 未完成项。 | 恢复本地安装管理路线时阅读。 |
+| [Phase 4B-2 任务记录](../.scratch/phase4b-2-cross-process-version-lease/PLAN.md) · [状态](../.scratch/phase4b-2-cross-process-version-lease/STATUS.md) · [交接](../.scratch/phase4b-2-cross-process-version-lease/HANDOFF.md) · [总结](../.scratch/phase4b-2-cross-process-version-lease/SUMMARY.md) | 4B-2 的实现、测试、实机证据、限制和未提交停点；4B-1.5 人工/公开门仍单独保留。 | 恢复跨进程租约工作或核对 4B-3 前置条件时阅读。 |
+| [当前文档连续性状态](../.scratch/documentation-continuity/STATUS.md) · [任务总结](../.scratch/documentation-continuity/SUMMARY.md) | 本轮规则、入口、README 和验证停点。 | 接续本轮文档任务时阅读。 |
+
+`.scratch` 链接是当前任务记录入口，不是普通设计文档；不要把构建缓存、原始日志、私钥或生成产物登记到索引。

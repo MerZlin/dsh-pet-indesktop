@@ -1,4 +1,47 @@
-# Phase 4B 本地管理交接
+# 本次准确停点（2026-10-02，4B-1.5 本地封存就绪）
+
+工作区 `E:/AI/DSH/dsh-pet-indesktop`，分支 `codex/phase3-worker`，起点/HEAD `ce164847dc1f3553a2e62d0cb5dc13c2fb9bd339`。本轮增量未提交、未推送；未开子智能体。**4B-1 已实现并完成自动化回归；4B-1.5 代码、自动化、文档与保护门已通过，本地封存就绪；4B-2 尚未开始。**
+
+权威入口：[设计 §2.1](../../docs/plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md)、[PLAN](PLAN.md)、[STATUS](STATUS.md)、[完整实施证据](../../docs/PR-REPORT-FEATURE-INSTALL-STATE-2026-09-30.md)。
+
+## 本轮实际验证与准确停点
+
+- 新增两个状态模块与 86 项测试；可收集骨架初始 24 failed，随后逐层 red/green；恢复与 ctypes 类型复用缺陷均有先失败的断言。
+- `python -m pytest -q tests/test_feature_install_state.py tests/test_feature_packages.py tests/test_feature_config_ports.py tests/test_feature_settings_ports.py tests/test_screen_configuration.py`：216 passed、1 skipped / 14.73s。
+- `python -m pytest -q tests/test_feature_install_state.py -k "two_real_processes or kernel_lock_busy or real_process_interruption"`：三次各 10 passed、76 deselected / 3.67、3.76、3.82s。
+- `QT_QPA_PLATFORM=offscreen` 全量：3547 passed、12 skipped、13 warnings / 343.74s。
+- Ruff lint 通过；format 463 files already formatted；mypy 两个新增模块通过。文档链接 114 份通过；PR 报告纪律 + desktop features 140 passed / 12.62s；`git diff --check` 通过。updater、update_settings、HTML 的 SHA-256 与起点一致；暂存区为空，无提交/推送。
+- 当前较历史全量新增 88 个通过项：86 个状态测试、2 个新报告纪律参数项；skip 仍为 12。warning 少一次原有 `test_try_move_success_still_builds_plan_and_moves` 的 QImage.mirrored 弃用提示，其测试和产品代码未修改，也未过滤 warning。其余 13 项均为既有 Qt 弃用提示，不将提示数量变化认作产品修复。
+- 本机 E 盘 50 次提交的中位 67.219ms、50 条收据下 100 次读取中位 38.119ms；锁持有分别 65.924/37.399ms。完整命令、分位数、磁盘与 traced memory 见报告。
+
+## 本次文档与保护复核（2026-10-02）
+
+- `python scripts/check_docs.py`：`Markdown link check passed: 119 files scanned`。
+- `python -m pytest -q tests/test_pr_report_discipline.py`：`47 passed（pytest exit code 0；运行耗时随环境变化，不作为固定基线）`。
+- `D:\\DELL\\Git\\cmd\\git.exe diff --check`：退出码 0；仅有换行规范提示，无 whitespace error。
+- `D:\\DELL\\Git\\cmd\\git.exe diff -- pet/updater.py pet/update_settings.py`：无差异；`plugin-roadmap-demo.html` 未出现在状态中。
+- 以上复核针对本轮文档/记录编辑；全量运行时测试仍以文档编辑前的 `3562 passed, 12 skipped, 13 warnings in 356.90s` 为最后结果，本轮未因文档变更重跑全量。
+
+## 继续前必须保留的边界
+
+- `state.json` 唯一权威；op 收据和 frontier 仅作证据。未知后续操作/未来 schema/缺少证明时安全拒绝，不猜测恢复。
+- 当前返回的已验证描述不是租约；4B-1.5 资源硬门 → 4B-2 在同一协调边界下接续真实版本占用与授权。
+- 状态读取遍历历史；不在 GUI 高频循环同步调用。4,096 记录上限，无自动证据压缩。POSIX 分支和普适断电持久性未实机验证。
+- 不接生产启动，不动版本目录、配置、凭据、记忆和聊天历史；无用户操作变化。
+- 当前版本识屏、原生安全存储、自动识屏及托盘退出人工门仍未验收，不是故障。
+- 本轮不提交/推送、不重建产物、不扩大到安装器或 UI。原始日志/测量工具留本地忽略目录；权威结果在已登记报告。
+
+## 下一步（不是本轮自动开工）
+
+从设计 §3 与 PLAN 的 4B-1.5 资源硬门 → 4B-2 开始：先设计并测试 host/设置/Worker 的跨进程租约、协调锁及启动交接；处理同步读取成本，保持错误时保守占用。不得跳到管理界面，也不能用 PID/超时猜测可以删除版本。
+
+## 实际可体验效果
+
+本轮没有新增菜单或安装卸载操作。只建立可靠的安装状态基础，尚未交付完整可拔除流程。历史检查点如下，保留当时事实，不用其中“未实施”覆盖当前进度。
+
+---
+
+# 历史检查点交接（不是当前实施状态）
 
 更新：2026-09-30（续写 2026-09-29 的检查点任务）。工作区 `E:/AI/DSH/dsh-pet-indesktop`，分支 `codex/phase3-worker`。
 
@@ -73,3 +116,23 @@ python scripts/check_docs.py
 ## 回滚与限制
 
 本次备份恢复点将包含 Phase 4A 四步，不能用 reset 到 b97112d 丢弃它们。后续按主题独立提交并使用 git revert；当前没有 Phase 4B 可撤销的代码。实际卸载/升级恢复尚待实现，不要手工删用户目录验证。
+
+## 路线调整记录（2026-10-02）
+
+准确下一步已从“进入 4B-1.5 资源硬门 → 4B-2”调整为：先执行 `.scratch/phase4b-1-5-resource-hard-gate/PLAN.md`，完成资源 DLC 硬门；4B-1.5 资源硬门 → 4B-2 暂缓，不得用状态账本结果代替资源安装→解析→播放证据。
+
+## 4B-1.5 资源硬门状态（2026-10-02）
+
+当前准确停点为“4B-1.5 代码、自动化、文档与保护门通过；本地封存就绪，尚未提交或推送”。本轮资源专项证据为：相关资源链 43 passed；硬门测试连续三次 28 passed；最终文档编辑前全量为 3562 passed、12 skipped、13 warnings。Ruff、格式检查和 `mypy pet/content` 通过；文档链接、PR 纪律、`git diff --check` 和保护文件复核随后也已通过。上述全量结果对应文档编辑前代码状态，本轮文档编辑后未重跑全量。
+
+下一条准确动作：完成 `check_docs.py`、PR 报告纪律、`diff --check` 和保护文件复核；通过后等待用户授权独立封存提交。不得进入 4B-2 租约、4B-3 事务或管理 UI，也不得把资源接口称为公开稳定。人工资源包安装、重启播放、可见桌面及托盘验收仍未完成。
+
+## 连续性补档（2026-10-02）
+
+- **准确停点**：4B-1 已完成；4B-1.5 的代码、自动化、文档与保护门已通过并具备本地封存基础；4B-2 尚未开始。
+- **新增记录**：本目录已补充 `WORKLOG.md` 和 `SUMMARY.md`，与既有 `PLAN.md`、`HANDOFF.md`、`STATUS.md` 配套使用。
+- **当前任务关系**：文档连续性任务正在补齐 `AGENTS.md`、项目入口、开发者 README、索引和日志；这些文档变更不改变 4B 生产实现。
+- **最后一次阶段证据**：资源专项 43 passed；硬门测试连续三次各 28 passed；文档编辑前全量 3562 passed、12 skipped、13 warnings。该结果不是本轮文档修改后的全量结果。
+- **未完成人工门**：资源包人工安装/重启播放、真实安全存储、可见桌面、托盘退出和三平台发布门仍未完成。
+- **保护边界**：不得修改 `pet/updater.py`、`pet/update_settings.py`、`plugin-roadmap-demo.html`，不得覆盖用户已有工作树改动，不得跳过 4B-1.5 直接实施 4B-2。
+- **下一步**：完成文档连续性任务的 `check_docs.py`、PR 报告纪律、`diff --check` 和保护文件复核；通过后等待用户对本地备份或下一阶段实施的单独授权。
