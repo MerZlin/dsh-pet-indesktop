@@ -150,6 +150,8 @@ class VerifiedResolution:
     revision: int | None = None
     descriptor: VerifiedFeatureDescriptor | None = None
     reason: str | None = None
+    purpose: str = "execution"
+    permit: object | None = None
 
 
 class PackageVerifier(Protocol):
@@ -243,7 +245,8 @@ class FeatureInstallStateStore:
             return []
         records: list[_Record] = []
         for path in self.transactions.iterdir():
-            if path == self.frontier_path:
+            if path == self.frontier_path or re.fullmatch(r"tx-[a-f0-9]{32}\.json", path.name):
+                # Feature-package journals share this directory but are not state receipts.
                 continue
             # Interrupted exclusive temporary writes cannot be commit proof.
             if path.name.startswith(".") and path.name.endswith(".tmp"):
@@ -316,7 +319,7 @@ class FeatureInstallStateStore:
 
     def read(self) -> StateResult:
         try:
-            with io.state_lock(self.lock_path, create=False):
+            with io.state_lock(self.lock_path, create=False, exclusive=False):
                 return self._read()
         except StateError as exc:
             return StateResult(exc.code)
@@ -343,7 +346,7 @@ class FeatureInstallStateStore:
             raise StateError("invalid_request") from None
         request = _request(target, expected_revision)
         try:
-            with io.state_lock(self.lock_path):
+            with io.state_lock(self.lock_path, timeout=1.0):
                 records = self._records()
                 for record in records:
                     if record.operation_id == operation_id:
@@ -432,12 +435,20 @@ class FeatureInstallStateStore:
         except OSError:
             return StateResult("io_error")
 
-    def resolve_verified(self, verifier: PackageVerifier) -> VerifiedResolution:
+    def resolve_verified(self, verifier: PackageVerifier, *, purpose: str = "execution", permit=None) -> VerifiedResolution:
         initial = self.read()
         state = initial.state
-        if initial.status != "enabled" or state is None or state.active is None:
+        from .feature_startup_contract import StartupLoadPermit
+
+        if purpose not in ("execution", "configuration", "startup"):
+            return VerifiedResolution("rejected", reason="resolution_purpose_invalid")
+        allowed = ("enabled",) if purpose == "execution" else ("enabled", "disabled")
+        if initial.status not in allowed or state is None or state.active is None:
             return VerifiedResolution(initial.status, state.revision if state else None, reason=initial.reason)
-        if state.pending_transaction is not None:
+        if purpose == "startup":
+            if not isinstance(permit, StartupLoadPermit) or not permit.matches(self.root, state):
+                return VerifiedResolution("recovery_required", state.revision, reason="startup_permit_required")
+        elif state.pending_transaction is not None:
             return VerifiedResolution("recovery_required", state.revision, reason="pending_transaction")
         version_root = self.root / "versions" / state.active
         try:
@@ -455,10 +466,10 @@ class FeatureInstallStateStore:
             # Verifier exceptions may carry raw paths or package-supplied text.
             return VerifiedResolution("verification_failed", state.revision)
         try:
-            with io.state_lock(self.lock_path):
+            with io.state_lock(self.lock_path, exclusive=False):
                 final = self._read()
                 if final.state != state:
                     return VerifiedResolution("revision_conflict", state.revision)
-                return VerifiedResolution("resolved", state.revision, descriptor)
+                return VerifiedResolution("resolved", state.revision, descriptor, purpose=purpose, permit=permit)
         except StateError as exc:
             return VerifiedResolution(exc.code, state.revision)

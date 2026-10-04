@@ -625,3 +625,47 @@ def test_verified_launch_cannot_use_package_as_writable_runtime(package):
     with pytest.raises(ValueError, match="runtime directory"):
         verified_worker_launch(loader, descriptor, runtime_directory=package.root / "worker")
     assert loader.lease_counts(descriptor).worker == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended-path I/O contract")
+@pytest.mark.parametrize("boundary", ["stat", "scan", "open"])
+def test_deep_verified_snapshot_uses_extended_io_without_changing_authority(package, tmp_path, monkeypatch, boundary):
+    """LPAC need not read the user's LongPathsEnabled registry policy."""
+    root = tmp_path / ("owned-" + "a" * 70) / ("snapshot-" + "b" * 70) / "candidate"
+    shutil.copytree(package.root, root)
+    package.root = root
+    original_manifest = (root / "manifest.json").read_bytes()
+    observed = []
+
+    def guard(path):
+        name = os.fspath(path)
+        observed.append(name)
+        if len(name) >= 248 and not name.startswith("\\\\?\\"):
+            raise FileNotFoundError(2, "generated boundary refuses unprefixed long path", name)
+
+    if boundary == "stat":
+        original = Path.lstat
+
+        def checked(path, *args, **kwargs):
+            guard(path)
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", checked)
+    else:
+        original = getattr(os, "scandir" if boundary == "scan" else "open")
+
+        def checked(path, *args, **kwargs):
+            guard(path)
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "scandir" if boundary == "scan" else "open", checked)
+    verifier = package.verifier()
+    descriptor = verifier.verify(root)
+    assert descriptor.root == root
+    assert descriptor.raw_manifest == original_manifest
+    assert descriptor.worker_path == root / "worker/screen-worker.exe"
+    assert all(not path.startswith("\\\\?\\") for path, _, _ in descriptor.ancestors)
+    assert verifier.reverify(descriptor) is descriptor
+    verifier.check_snapshot_identity(descriptor)
+    assert any(path.startswith("\\\\?\\") for path in observed)
+    assert_not_executed(package)

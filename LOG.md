@@ -1,5 +1,31 @@
 # 项目变更日志
 
+<!-- PHASE4B_PUBLICATION_START -->
+## Phase 4B 分支发布（2026-10-04）
+
+用户明确授权提交推送到 `origin/codex/phase3-worker`；基线 `bd048d5`，85 文件白名单保留原WIP。生成物/私钥/个人数据不入库，不合并、不强推、不正式发行，当前准备最终精确暂存与提交。
+
+本次新门：Ruff全仓、format518、affected mypy38/default26通过；专项223 passed /1 skipped /1 warning（139.93s）；未过滤全量3841 passed /13 skipped /14 warnings（571.34s）；20个自有CPU fixture下风险族连续3×154 passed，各遍CPU median/p95均100.0%。命令、样本量和单次时间见[工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md)和[准确交接](.scratch/phase4b-local-management/HANDOFF.md)。
+
+本轮不改变产品源码，TDD不适用；压力fixture已正常回收，不终止普通Core/用户进程、不重建冻结产物。五个新建测试临时目录的删除被策略拒绝，126.432 MiB夹具保留且不入库，未绕过。正式信任锚/分发T0～T3继续暂缓，未执行人工门及UX-M3未证实原因保留；当前Core03及原profile/凭据不受提交推送影响。
+<!-- PHASE4B_PUBLICATION_END -->
+
+## Scratch 生成物清理（2026-10-04）
+
+用户确认原294目标范围后，移除132,245个旧冻结构建/依赖/生成夹具文件（31.184 GiB逻辑大小）。`.scratch`完整只读盘点34.987→3.809 GiB；E盘净空闲实测增加31.435 GiB，全部删除目标消失、0失败/跳过，原28个reparse点跳过未跟随。删除与安全复核670.909秒，最终全根盘点108.866秒；一次性存储治理不改变产品稳态路径。
+
+当前Core03两变体、原manual-session/profile/凭据域和安装1.0.0、人工包源、任务记录/证据/before-image保留；9项文件和3个ZIP摘要核验一致，公开账本仍revision17/enabledTrue/pending=null。没有强退、改系统ACL、读取私人数据、产品代码修改或Git提交/推送/发布。正式信任锚与分发按用户决定暂缓；当前构建不是正式发行产物，未解决UX-M3与未执行人工门不冒充通过。
+
+证据与准确停点见[同组最终交接](.scratch/phase4b-local-management/HANDOFF.md)及同目录cleanup result/after；文档链接/PR报告纪律/报告门101 passed（3.96秒），git diff --check通过、暂存为空。本轮不为清理重跑全量或生成新冻结构建，历史结果按原日期保留。使用效果：原启动方式/APPDATA继续可用，用户不需要终端操作。
+
+## Phase 4B 连续收尾（2026-10-04）
+
+基线 `bd048d5`，保留原WIP；Windows LPAC/可信冻结probe、生产事务与启动receipt、跨进程生命周期和“常规 / 扩展管理”完成。最新Core10无聊天/带聊天各7行27步通过：真实管理UI目录/ZIP安装、实际Worker/生成HTTP、启停、多进程自然释放卸载、重装保留profile/vault、升级/retained回滚、自检拒绝、导入候选后加载失败与重启previous真实receipt；无源码回退。PYZ/native重读及185/201个源输入与当前文件匹配。helper20权限门1 passed（57.07s），原生UI/相关合同69 passed（63.92s）。
+
+最终全量06：3821 passed, 13 skipped, 15 warnings in 514.51s；20个自有burner下时序/生命周期族连续3×166 passed /1warning，各遍CPU采样median/p95均100%。Ruff、Pythonformat515和受影响mypy46通过；87项app/settings类型债、7份历史Markdown格式债逐条与HEAD相同，无新增。全量05Qt客户端事件循环测试、深路径/GUI依赖、kernel-lock重试、反向额度协议等普通故障已保留根因/red/green，不删断言、放宽隔离或使用历史通过冒充本次。
+
+性能实测和逐文件/实机三份证据见[连续收尾报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md)。Windows工程闭环通过不等于本人真实识屏/凭据/托盘、其他平台、正式信任锚或Setup/发布验收；默认内置功能无假物理卸载。本轮无暂存、提交、推送、发布或子智能体。早期本轮中间结果保留于同组WORKLOG及报告，不覆盖旧日期历史。
+
 ## Phase 4B-1 唯一安装状态与安全恢复
 
 2026-09-30：基线 ce16484，完成测试优先的状态校验、revision/操作幂等、真实内核锁、状态写入中断恢复及签名描述解析。初始可收集的行为测试 24 failed，最终新增 86 项状态测试；相关 216 passed / 1 skipped，全量 **3547 passed / 12 skipped / 13 warnings（343.74s）**；进程族连续三次各 10 passed。静态门通过，命令及警告差异见 [本轮报告](docs/PR-REPORT-FEATURE-INSTALL-STATE-2026-09-30.md)。
@@ -220,3 +246,61 @@ Host 在进入已验证 Python interpreter 后保留版本租约；Standalone Se
 ### 完成后的实际使用效果
 
 项目当前可以把资源 DLC 的人工验收视为已通过，但用户仍不能在桌宠内完成官方功能包的安装、停用、卸载或重装管理；这部分要等后续 4B-3 至 4B-5 逐阶段交付。
+
+## 2026-10-04 — Phase4B人工体验与正式信任推进（实施草案）
+
+已获用户授权代执行终端，先准备真实Worker/正常入口的独立人工验收构建，待用户效果回执后补正式信任与分发。旧自动化工程证据保留；临时key不转正式、原APPDATA不变，未提交/推送/发布。准确进度见同组HANDOFF。
+
+### 2026-10-04 人工验收准备完成与首条状态回执
+
+两种新人工冻结Core、真实Worker、三个临时签名版本/ZIP已准备并审计；不使用生成图像、网络或vault模拟端口。目录安装经用户GUI接受，真实生产加载清除pending；用户明确回执“设置显示已启用”，仅登记状态显示，真实识屏/凭据重启/退出/其他操作仍待人工验收。新全量复跑3833 passed/13 skipped/15 warnings（546.99s），此前失败与修正保留于[人工验收报告](docs/PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md)。正式key/发行签名/分发未完成，未提交、推送或发布。
+
+用户随后确认真实手动识屏“结果符合”、通过托盘正常退出“已退出”。仅在内核版本租约free且原自有进程结束后代重启；用户不重填密钥再识屏“得到了正确结果”，因此登记手动效果与重启后凭据可用的行为门通过。自动识屏、其他管理操作和第二变体仍待逐项确认，正式信任/分发未开始；本轮不读取真实凭据、截图、模型回答或个人日志。
+
+
+### 2026-10-04 11:29 升级后的真实用户效果确认
+
+用户此前已确认包级停用入口撤销、重新启用入口及真实结果恢复，以及ZIP同摘要幂等提示。升级1.0.0→1.0.1遇到host占用时保持等待；用户自然退出后，执行助手只在本次进程结束/内核租约free后代重启，实际生产加载清除pending。用户现在明确反馈“版本显示和识屏结果正确”；公共账本revision9/active1.0.1/previous1.0.0/enabledTrue/pending=null，Core26260身份匹配。此为升级显示和真实手动效果的人工闭环，不扩大为回滚/卸载/重装、自动识屏或第二变体通过。下一步保留当前Core，用户从管理UI接受retained previous回滚；不强退、不热替换、不代点确认，不读取个人数据。
+
+
+### 2026-10-04 11:46～11:48 回滚人工通过与卸载预检
+
+用户针对回滚后1.0.0版本显示与真实手动识屏两项要求回复“确认通过”，公共账本revision12/active1.0.0/previous1.0.1/enabledTrue/pending=null与Core34672身份吻合；回滚人工子项通过。用户随后粘贴卸载预检摘要，与唯一公共journal和不可变摘要匹配，delete_versions为1.0.0/1.0.1、awaiting_confirmation、accepted=false，尚未接受卸载。确认页的“回滚目标1.0.0”和宽泛签名文案是通用模板语义问题UX-M2：实际卸载只预检删除边界、接受后不能取消恢复启用。已在用户接受前澄清，后续按操作类型修复并回归，正式分发前不能留此误导。继续由用户UI接受/反馈安全等待，不代理删除，不清理个人数据；人工全门、正式信任/分发尚未完成。
+
+### 2026-10-04 人工卸载锁竞争修复
+
+用户已确认点击最终按钮但得到 management_lock_busy；state revision12/enabledTrue/pending=null，不视为卸载通过。旧异常归类把管理/租约/状态锁混为一类；真实 queued 生命周期与自有内核锁复现入口撤销早于接受提交。五文件白名单先保存原 WIP，再 RED 7 项 -> GREEN 7 项；实际 queued 卸载/host pin 闭环1项通过。错误来源、旧摘要残留、同进程重开重试丢失和 UX-M2 卸载文案已修复；锁顺序/CAS/数据保留未改变。相关回滚 lazy 调用遗漏5项红已回溯修复，原五项绿。全量与双新冻结构建仍推进；不读取用户配置/凭据/日志，不手改账本、不强退、不提交/推送，详见持续人工验收报告。
+
+### 2026-10-04 锁竞争修复累计门与原生夹具回溯
+
+双manual-core-03已冻结并核对产品快照；03尚未启动，不把旧程序当修复版。新全量/负载原生AV已按组合二分定位新增页面重建夹具，单纯processEvents/全局DeferredDelete不解决；补齐只处理自有页面及manager的实际Cpp销毁，67项受影响时序族真实满负载连续三遍通过（每遍CPU median/p95 100%），详见持续人工报告及manual-lock-high-load-02证据。此前失败保留，全量03无过滤运行中；最新Ruff/format518/affected mypy通过，相关报告门99 passed，白名单/保护文件/空暂存审计通过。卸载人工尚未接受/完成，下一步关闭旧Settings后代启03管理专用设置重新确认；不读取私人内容、不删除用户数据、不提交/推送。
+
+### 2026-10-04 13:48 锁失败修复最终门与新人工窗口
+
+完整无过滤full04退出0：3841 passed/13 skipped/14 warnings，pytest498.82s，wrapper499.795s。新增Qt页面重建夹具的自有manager/控件实际销毁已修正，管理时序族67项满CPU三遍通过；旧meta正对照只补实际调用Event同步/finally cleanup，相关42项另满CPU三遍通过；不改动画/ffmpeg/GUI异步生产逻辑。静态、报告门及21文件白名单/19 before-image/2保护文件/空暂存审计通过，原WIP与历史失败保留。
+
+旧Settings已自然退出，13:47只读精确EXE核验仍只有原Core34672；13:47～13:48代开manual-core-03管理专用设置（PID7060/creation1791092844.339965），沿用原APPDATA，启动4.968s/RSS140451840字节/11线程/CPU1.296875s，正常可见窗口。公开账本仍revision12/enabledTrue/pending=null，新设置无所属版本租约；没有代理确认或删除安装文件，不读私人配置/凭据/日志、不强退、不重置账本。下一步由用户在新窗口卸载并最终确认，先观察真实占用，再自然退出桌宠和安全重试。卸载/ZIP重装与正式信任分发未通过；不提交/推送/发布。
+
+### 2026-10-04 13:55 卸载接受与真实安全等待
+
+用户在新管理窗口确认后回执version_in_use。只读公共账本revision13/enabledFalse/pending=tx-56514a949d454d6792cbc34de9234d83，journal accepted=true/pending_runtime_release，删除集合1.0.0与1.0.1、deleted_versions为空。直接探测现有内核锁且不清理租约记录：仅Core34672的1.0.0 host占用，1.0.1 free；新Settings7060无功能版本占用，两版本文件仍在。已请用户通过托盘自然退出桌宠、保留管理窗口，退出后先核验租约再由用户安全重试。只登记接受/等待环节，不宣称物理卸载或数据保留重装通过；不强退、不手改状态、不代删除、不读私人数据、不提交推送。产品及测试未修改，证据详见持续人工报告和manual-user-uninstall-await-release-01.json。
+
+### 2026-10-04 14:01 卸载物理文件与未安装提交核验
+
+用户安全重试后确认“操作已完成”，公开revision14/active=null/previous=null/enabledFalse/pending=null/versions={}，已接受卸载journal completed/deleted_versions=[1.0.0,1.0.1]；versions目录无条目，两版本目录均消失。原Core已退出，新管理Settings7060仍运行，物理卸载门通过。证据manual-user-uninstall-completed-01.json。仅读公共安装证据、精确自有进程和生成ZIP摘要，无手工删除/代理确认/私人配置或凭据读取。下一步在新管理UI选择v1.zip并确认，随后验收真实生产加载、原设置/凭据可用及真实识屏；此时不把个人数据保留行为提前标通过。产品和测试未改，不提交/推送/发布。
+
+### 2026-10-04 14:19 ZIP新安装经普通设置真实加载确认
+
+用户从卸载后空账本revision14经管理UI确认ZIP新安装，revision16等待启动。助手代启Core03窗口但pending未清除/无host租约，未判成功；用户关闭管理设置后仍未推进。随后代启同EXE普通--settings生产入口，公开revision17/active1.0.0/enabledTrue/pending=null，原install journal completed，Settings15792拥有真实host/settings内核租约。首Core31020仍无host绑定，原因未证实并登记UX-M3，不声称仅关设置修复；下一步用户自然退出该Core、助手再启动核验，用户不重填密钥验证原设置和识屏。冷启动n1：Core窗口3.923s、普通Settings3.363s，原始私人日志未读取、无强退/手工receipt/状态修改。产品测试源未变，纯记录门续验；正式信任/分发未完成、无暂存/提交/推送。
+
+## Phase 4B ZIP重装后Core自然重启（2026-10-04 14:30）
+
+用户自然退出后，终端核验原03 Core/Settings均已结束，再代执行正常Core入口，沿用同一人工APPDATA；Core30256/creation1791095122.0622613实际桌宠窗出现，冷启动n=1为4.218s。只读公共核验revision17/active1.0.0/enabledTrue/pending=null、ZIPinstall journal completed；精确Core持有匹配版本/revision/摘要的native occupied host租约，正常execution resolver resolved。没有强退、写state、代理receipt、清理租约或读取私人内容。
+
+下一步按用户偏好一次汇报验收：入口恢复、“已启用 · 1.0.0”、原设置保留、不重填密钥识屏正确。真实凭据/设置保留和结果尚未用户确认；首次Core未产生pending加载确认的UX-M3根因仍未证实，不宣称修复。产品/测试源未改，记录/报告门续验；正式信任、自动/第二变体仍待验收，无提交/推送/发布。证据见[人工报告](docs/PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md)。
+
+## Phase 4B 卸载重装的数据保留体验通过（2026-10-04 14:52）
+
+用户明确确认“入口恢复，原设置保留，未重填密钥，结果正确”，限定no-chat人工03/1.0.0在两版本物理卸载后ZIP新安装、真实生产确认与Core重启的实际使用。公共复核revision17/active1.0.0/enabledTrue/pending=null、ZIP事务completed、Core30256身份和native host租约匹配；私人配置/凭据/请求内容不读，不宣称全部数据字节一致。
+
+正式T0候选方案已补入同一总设计，用户归属/加密PKCS8仓库外保管/本机专用口令输入/独立离线备份/更新Core锚的轮换撤销待确认。现有正式锚/helper pin仍空且fail-closed，既有构建只接manual/validation，不把人工测试key或119 passed/1 skipped/22.40s前置合同复验当正式发行通过。本轮只更新公开文档、保存10份before-image及公共证据；没有产品/测试源修改、正式密钥生成、提交、推送或发布。UX-M3首次加载问题及自动/其他人工门继续单列。见[人工报告](docs/PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md)。

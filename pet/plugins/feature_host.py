@@ -41,12 +41,24 @@ class FeatureHost:
         self._prepare: dict[str, list[Callable[[], bool]]] = {}
         self._diagnostics: dict[str, str] = {}
         self._executions: dict[object, tuple[str, Callable, Callable]] = {}
+        self._authorities: dict[str, Callable[[], bool]] = {}
 
     def state(self, owner: str) -> str:
         return self._states.get(owner, "absent")
 
     def enabled(self, owner: str) -> bool:
-        return self.state(owner) == "enabled"
+        if self.state(owner) != "enabled":
+            return False
+        check = self._authorities.get(owner)
+        try:
+            return bool(check()) if check is not None else True
+        except Exception:
+            return False
+
+    def bind_authority(self, owner: str, check: Callable[[], bool]) -> None:
+        """Fail closed at every execution seam, before watcher delivery."""
+        self.registry.check_thread()
+        self._authorities[owner] = check
 
     def configurable(self, owner: str) -> bool:
         return self.state(owner) in ("enabled", "disabled")
@@ -57,12 +69,12 @@ class FeatureHost:
     def diagnostics(self) -> dict[str, str]:
         return dict(self._diagnostics)
 
-    def provide(self, definition: FeatureDefinition) -> None:
+    def provide(self, definition: FeatureDefinition, *, enabled: bool = True) -> None:
         self.registry.check_thread()
         if definition.owner in self._definitions:
             raise ValueError("feature already provided")
         self._definitions[definition.owner] = definition
-        self._states[definition.owner] = "enabled"
+        self._states[definition.owner] = "enabled" if enabled else "disabled"
 
     def bind_context(self, context):
         """Only a provided owner's immutable ports can reach its factories."""

@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_NAME = "proactive-screen-worker"
@@ -36,6 +36,12 @@ WORKER_SOURCES = (
     "pet/http_compat.py",
     "pet/workers/__init__.py",
     "pet/workers/protocol.py",
+    "pet/workers/screen_entry.py",
+    "pet/workers/lease_bootstrap.py",
+    "pet/feature_state_io.py",
+    "pet/feature_install_state.py",
+    "pet/feature_startup_contract.py",
+    "pet/feature_version_lease.py",
 )
 EXCLUDED_MODULES = (
     "PySide6",
@@ -44,6 +50,7 @@ EXCLUDED_MODULES = (
     "PyQt5",
     "shiboken6",
     "tkinter",
+    "multiprocessing",
     "keyring",
     "pet.chat",
     "pet.app",
@@ -55,6 +62,10 @@ EXCLUDED_MODULES = (
     "features.screen_understanding.host",
 )
 REQUIRED_MODULES = (
+    "pet.workers.screen_entry",
+    "pet.workers.lease_bootstrap",
+    "pet.feature_version_lease",
+    "pet.feature_startup_contract",
     "features.screen_understanding.worker.runtime",
     "features.screen_understanding.worker.vision",
     "features.screen_understanding.common.models",
@@ -66,10 +77,21 @@ REQUIRED_MODULES = (
     "PIL.ImageGrab",
     "certifi",
 )
-ENTRY_SOURCE = """from features.screen_understanding.worker.runtime import run_proactive_screen_worker
+ENTRY_SOURCE = """from pet.workers.screen_entry import run_screen_worker_entry
 
 if __name__ == "__main__":
-    raise SystemExit(run_proactive_screen_worker())
+    raise SystemExit(run_screen_worker_entry())
+"""
+SYNTHETIC_ENTRY_SOURCE = """from pet.workers.screen_entry import run_screen_worker_entry
+
+def run_synthetic():
+    from validation_screen_worker import install_synthetic_boundary
+    install_synthetic_boundary()
+    from features.screen_understanding.worker.runtime import run_proactive_screen_worker
+    return run_proactive_screen_worker()
+
+if __name__ == "__main__":
+    raise SystemExit(run_screen_worker_entry(run_runtime=run_synthetic))
 """
 
 
@@ -99,7 +121,9 @@ def prepare_build(root: Path, output: Path, *, synthetic: bool = False) -> dict:
         path = root / name
         if path.is_symlink() or not path.resolve(strict=True).is_relative_to(root):
             raise ValueError("synthetic validation entry leaves source root")
-        snapshots[name] = entry = path.read_bytes()
+        snapshots[name] = path.read_bytes()
+        snapshots["validation_screen_worker.py"] = snapshots[name]
+        entry = SYNTHETIC_ENTRY_SOURCE.encode("utf-8")
     output.mkdir(parents=True, exist_ok=False)
     (output / "evidence").mkdir()
     for relative, data in snapshots.items():
@@ -175,10 +199,33 @@ def inspect_archive(executable: Path) -> list[str]:
     return check_module_inventory(archive.open_embedded_archive(names[0]).toc)
 
 
-def build_worker(root: Path, output: Path, *, synthetic: bool = False) -> Path:
+def build_worker(
+    root: Path, output: Path, *, synthetic: bool = False, probe_bootloader: Path | None = None, probe_native_extension: Path | None = None
+) -> Path:
+    if (probe_bootloader is None) != (probe_native_extension is None):
+        raise ValueError("headless probe build requires both trusted native inputs")
+    if probe_bootloader is not None:
+        import pefile
+
+        pe = pefile.PE(str(probe_bootloader))
+        imports = {item.dll.decode().casefold() for item in pe.DIRECTORY_ENTRY_IMPORT}
+        if pe.OPTIONAL_HEADER.Subsystem != 2 or imports & {"user32.dll", "gdi32.dll", "ole32.dll"} or not pe.OPTIONAL_HEADER.DATA_DIRECTORY[5].Size:
+            raise ValueError("headless Worker bootloader contract")
+        pe.close()
     output = output.absolute()
     prepare_build(root, output, synthetic=synthetic)
     command = compiler_command(output)
+    if probe_native_extension is not None:
+        assert probe_bootloader is not None  # Paired inputs were validated above.
+        if probe_native_extension.name != "_dsh_probe_native.pyd" or probe_native_extension.is_symlink():
+            raise ValueError("headless Worker native leaf contract")
+        native = output / "source/_dsh_probe_native.pyd"
+        native.write_bytes(probe_native_extension.read_bytes())
+        command[-1:-1] = ["--hidden-import", "_dsh_probe_native"]
+        _write_json(
+            output / "evidence/headless-input.json",
+            {"bootloader_sha256": _digest(probe_bootloader.read_bytes()), "native_leaf_sha256": _digest(native.read_bytes())},
+        )
     _write_json(output / "evidence/build-command.json", {"arguments": command, "cwd": str(output / "source")})
     started = time.perf_counter()
     with (output / "evidence/pyinstaller.log").open("wb") as log:
@@ -187,6 +234,12 @@ def build_worker(root: Path, output: Path, *, synthetic: bool = False) -> Path:
         raise RuntimeError(f"PyInstaller failed ({result.returncode}); see {output / 'evidence/pyinstaller.log'}")
     bundle = output / "dist" / WORKER_NAME
     executable = bundle / (WORKER_NAME + (".exe" if os.name == "nt" else ""))
+    if probe_bootloader is not None:
+        if __package__:
+            from .build_feature_probe import finalize_owned_headless_runtime
+        else:
+            from build_feature_probe import finalize_owned_headless_runtime
+        finalize_owned_headless_runtime(bundle, executable, probe_bootloader)
     modules = inspect_archive(executable)
     files = {}
     for file in sorted(bundle.rglob("*")):
@@ -200,7 +253,7 @@ def build_worker(root: Path, output: Path, *, synthetic: bool = False) -> Path:
             "build_seconds": round(time.perf_counter() - started, 3),
             "executable": str(executable),
             "files": files,
-            "size_bytes": sum(item["size"] for item in files.values()),
+            "size_bytes": sum(cast(int, item["size"]) for item in files.values()),
             "pyz_modules": modules,
         },
     )
@@ -212,9 +265,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="new validation build directory; must not exist")
     parser.add_argument("--synthetic", action="store_true", help="VALIDATION ONLY: fixed image/foreground, loopback HTTP only")
+    parser.add_argument("--probe-bootloader", type=Path, help="Core-owned headless onedir bootloader")
+    parser.add_argument("--probe-native-extension", type=Path, help="Core-owned native isolation verification leaf")
     args = parser.parse_args(argv)
     try:
-        build_worker(ROOT, args.output, synthetic=args.synthetic)
+        build_worker(ROOT, args.output, synthetic=args.synthetic, probe_bootloader=args.probe_bootloader, probe_native_extension=args.probe_native_extension)
         return 0
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"SCREEN_WORKER_BUILD_FAILED: {exc}", file=sys.stderr)

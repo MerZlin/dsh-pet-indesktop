@@ -1,9 +1,17 @@
 # Phase 4B：本地安装与管理闭环
 
 > 日期：2026-09-29；继承范围：Phase 4A 四个切片。分支、提交及本地备份元数据集中在[交接记录](../../.scratch/phase4b-local-management/HANDOFF.md)，避免与产品设计正文混杂。
-> **本文件是已确认的实施合同，不是实现报告。**截至 2026-10-03，4B-1、4B-1.5 和 4B-2 已分别完成其对应验收门；4B-3 至 4B-5 尚未开始。实际结果见各阶段报告，不将实施合同本身当作通过证据。Phase 4A 的自动化与冻结产物证据见[第四步报告](../PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md)，不能代替本阶段验证。
+> **本文件是已确认的实施合同，不是实现报告。**截至 2026-10-03，4B-1、4B-1.5 和 4B-2 已分别完成其对应验收门；4B-3 至 4B-5 已进入连续实施，尚未通过工程完成门。实际结果见各阶段报告，不将实施合同本身当作通过证据。Phase 4A 的自动化与冻结产物证据见[第四步报告](../PR-REPORT-SCREEN-HOST-BUILD-2026-09-29.md)，不能代替本阶段验证。
 
 导航：[Phase 4 入口](README.md) · [Phase 4A 设计](PHASE4A-SCREEN-PACKAGE-DESIGN.md) · [安装更新协议](PLUGIN-UPDATE-PROTOCOL.md) · [任务清单](../../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../../.scratch/phase4b-local-management/HANDOFF.md)。本文件维护合同，清单记录步骤状态，交接记录保存准确停点；不要维护第二套安装权威。
+
+## 当前连续实施状态（2026-10-04）
+
+4B-1、4B-1.5（含用户人工门）与4B-2继承既有完成证据；4B-3 LPAC/生产闭环和4B-4管理界面已实现。最新Core10两种真实冻结Core的七行矩阵、阶段/空闲/GC性能及最终全量/高负载三遍/静态门通过，4B-3/4/5的Windows工程自动化闭环完成。以[当前连续收尾报告](../PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md)和同一组任务记录为当前状态，下文旧日期的计划/失败/未实现叙述是历史事实，不等于当前停点。不提交、推送、发布或使用子智能体；本人真实识屏/凭据/托盘、其他平台、正式信任锚与Setup/发布单列。
+
+## 人工门最新补充（2026-10-04 13:48）
+
+目录安装、真实手动识屏、自然退出重启及凭据可用、包级启停、ZIP同摘要幂等、升级与保留版本回滚显示/效果已有用户回执。人工卸载的最终确认遭锁竞争，入口先撤销并不等于接受或删除；修复后的无过滤全量3841 passed及两族满CPU各三遍已通过。新人工Core03管理专用窗口已代开，沿用原APPDATA且不持有功能host租约，原桌宠保持运行。等待用户重新预检/确认及自然退出后的实际卸载/保留数据重装验收；正式信任锚、分发及其余人工门仍未通过。详细失败复盘、实测和准确下一步以[持续人工报告](../PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md)和同组HANDOFF为准，不扩大发布完成口径。
 
 ## 1. 目标、非目标与范围
 
@@ -222,3 +230,180 @@ host 在 Core 的 GUI 进程运行，代码属于功能包；包内 Worker 是�
 4B-2 已完成真实租约、加载/删除协调锁和非阻塞状态同步；4B-3 接下来做 staging、active/previous、Windows 文件占用、延迟 GC、权限/磁盘/杀软失败分类和中断恢复；4B-4 只有前述门通过后接入管理界面；4B-5 才做两种真实构建产物的端到端使用流程。
 
 任何一项无法证明安全时，功能保持禁用/待恢复，不能扫描目录猜测安装，也不能把旧版本偷偷补回 Core。4B-1.5 通过前，4B-2 可以做文档和测试设计准备，但不得据此宣称资源 DLC 已稳定开放。
+
+
+## 2026-10-03 已授权连续收尾计划（当前权威，已落盘）
+
+### 目标与事实
+Windows LPAC + Core-owned probe -> 4B-3 生产事务 -> 4B-4 常规域扩展管理 -> 4B-5 双冻结 Core。
+保留现有 WIP / 4B-1 / 4B-1.5 / 4B-2；bd048d5 基线。此前 51 passed 是历史事务测试，不是沙箱或生产闭环证明。
+工程完成需要本机原生安全门、真实事务/Qt/UI、带聊天/不带聊天的无识屏 Core 矩阵全部通过。
+人工真实识屏/凭据/托盘、其他平台、正式信任锚、Setup/发布单列。不开子智能体，不自动提交或推送。
+
+### 安全架构与硬门
+- 可信父端 ctypes + Core-owned 独立无 GUI PyInstaller onedir helper；校验完整摘要清单，禁止源码/PYTHONPATH 回退。
+- LPAC ALL_APPLICATION_PACKAGES opt-out、零 capabilities、创建时 Win32k disable、显式继承 stdio。
+- suspended 创建 -> 专用 Job (active process 1 / no breakaway / kill on close / 512MiB) -> 可信父端检查 token、属性、Job -> resume。
+- 每 probe 默认 30s，单条 64KiB、累计有界；不信任子端 isolation 布尔值，不降级普通 subprocess。
+- operation-owned 只读 helper/candidate/policy、独立可写 scratch。只创建/删除自己的 AppContainer profile；不授予账本、leases、真实用户目录。
+- 正/负对照 canary：RO/RW、根外文件、ALL_APPLICATION_PACKAGES、独立用户目录、生成凭据/DPAPI/注册表、IPv4/6 loopback、生成桌面对象、子进程/进程句柄、超时/崩溃/超量输出/父退出。
+- canary 原生权限矩阵及实际 host FeatureDefinition / Worker HELLO-SHUTDOWN-优雅退出通过前，不推进生产安装入口。
+- 普通 HOME/audit hook 不是安全边界；需广泛文件/网络/桌面或管理员授权才可执行，属于方向错误，暂停汇报。
+
+### 事务合同
+保留 inspect/preflight_install/upgrade/uninstall/apply/recover_pending/collect_garbage 和八种明确状态。
+增加 retained-previous-only preflight_rollback、revision-bound set_enabled、仅未接受预检可取消。
+LifecyclePrepareRequest / StartupLoadPermit / StartupLoadReceipt 绑定 op、revision、version、manifest、owner 与真实租约。
+确认后重验 -> 沙箱自检 (失败不影响旧功能) -> 草稿/生命周期准备 -> 管理锁序列化 accepted journal + pending -> 释放 -> 不覆盖落盘/切换 -> 真实加载 receipt -> GC。
+management -> leases -> state；不在锁内等待 GUI/进程、哈希、复制。
+修复 accepted-before-pending 恢复：只认唯一且 before-image 匹配的意图，冲突不按时间/目录猜测。
+每新提交独立子 ID、崩溃重放同意图 ID；更高 revision 不被覆盖。
+resolver 分 execution / disabled configuration / pending load permit；permit 仅 host/settings，Worker pending 恒禁。
+加载注册准备不可执行；真实 receipt 后清 pending；失败 rollback 也必须真实加载确认。导入后 pin 等自然退出，不热替换。
+同版本启停刷新 generation/授权不重复导入；新安装启用、升级保持 enabled、同摘要幂等不启用、外部降级拒绝。
+主动回滚仅重新验证账本 previous；active/previous 保留；更旧先离开权威列表，再无租约 GC。
+
+### 进程与卸载
+GUI facade + 事务后台线程 + queued 生命周期；同用户短 QLocal 端点绑定 root/owner。
+有界消息仅草稿/准备释放/刷新授权/加载确认；IPC 回执不替代内核租约。
+owner 集合变化重新准备；草稿由所属 UI 保存/丢弃/取消，无 UI 返回阻塞。
+拒绝任务 -> generation 失效 -> 撤销菜单/设置/搜索/命令/订阅 -> 停所属 Worker -> 全版本租约释放。
+管理专用设置不启动桌宠/Worker，不无意义 pin host。
+冻结 Worker 租约接管必须在实现导入前；独立 probe 模式须已隔离，只 HELLO/SHUTDOWN。
+卸载接受后不能取消复活；边界重验 -> 全文件安全删除 -> 未安装提交。任一删除失败保持 pending/disabled/recovery。
+用户 profile/配置/凭据/记忆/额度/聊天保持；孤立目录不收编、不删除，不作为状态来源。
+
+### UI 合同
+现有常规域增加扩展管理，不改变当前十个导航域/顺序；复用 page/section/card/row 与语义图标。
+官方唯一包 + 稳定深链/搜索：扩展、插件、屏幕理解、安装、升级、卸载。
+UI 只调用服务；区分全实例包启停/单实例设置。所有八类结果明确显示，pending 不显示成功。
+未安装支持目录/ZIP；启停/升级/retained rollback/卸载；等待列 PID/用途/版本/重启原因与安全重试；recovery 不强制删除。
+内置属于 Core，只读物理管理，不虚假卸载。确认摘要绑定 immutable plan/source/trust/version/compat/bytes/impact/rollback/data retention。
+720/常规/1100px、明暗、中英文长文、字体/HighDPI、Tab/accessibility、深链、窗口关闭后异步安全。
+管理/预检不截图/请求模型/启动 Worker；截图仅自己应用控件。
+
+### 稳定任务编号、顺序与门
+- 4B-C0 留档 + 白名单 WIP 快照。
+- 4B3-S0 合同/Win32 wrapper 负向测试：无非隔离回退。
+- 4B3-S1 原生 LPAC/ACL/Job/句柄/canary 矩阵。
+- 4B3-S2 新冻结 helper + 真 host/Worker 自检，无源码依赖。
+- 4B3-3 补齐 accepted 恢复 / CAS / rollback / purpose resolver。
+- 4B3-4 Qt 生命周期/跨进程准备/真实 receipt/新冻结 Worker 入口。
+- 4B3-5 草稿/卸载/部分删除/重启/GC/数据保留。
+- 4B3-6 事务专项、相关、全量门。
+- 4B4-0~2 UI 合同、实现、布局/生命周期。
+- 4B5-0~2 新构建、双变体矩阵、最终性能/验收。
+- 4B-CLOSE 报告/索引/当前状态/最终交接。
+每切片公开 seam red -> green。两轮相同失败先回溯根因，不堆补丁。
+
+### 验收矩阵
+安全路径/ZIP/links/reparse/size/未登记/签名/兼容性失败无代码执行；目录/ZIP/source变更/幂等/启停/重装。
+并发锁、多进程多 revision 租约/旧 generation；自检失败/生产加载失败/导入后失败/previous失败/rollback失败。
+草稿、部分删除、重启卸载、孤立目录；journal/state/rename/active/receipt/rollback/delete/GC 前后故障注入与重复恢复。
+双冻结 Core 带/不带聊天，无识屏，实现 PYZ/原生依赖审计与无源码/PYTHONPATH独立运行；新可信 helper，不借 Core DLL。
+验证签名私钥只内存、测试锚仅标记验证构建；驱动生产 bootstrap 与实际 UI，不直写账本/手绑descriptor。
+每 Core 七行：空根无入口；UI目录与ZIP安装/真实load/独立设置；生成图+localHTTP真实Worker；停用拒绝自动/手动；卸载等多进程自然退出并文件消失；重装保留profile/绑定/凭据无明文；升级/主动rollback/自检失败/生产加载失败/重启rollback。
+截图/网络/安全存储替换须仅明确验证构建边界；factory/事务/租约/Qt/进程/state真实。
+最终 focused/related/full pytest、ruff/format/mypy、docs/PR discipline/diffcheck；Qt/进程时序真实CPU高负载3遍、事件同步宽预算。
+原生自己目录文件占用/ACL失败；disk/AV 用实际原因分类，不填满磁盘不关闭AV，注入不冒充原生发生。
+实测 preflight/probe/apply/load/wait/uninstall/GC median/p95、RSS/线程/IO/系统调用与idle；不长soak。
+
+### 失败、记录、回滚与实际效果
+普通失败定位后继续；非核心遗留登记证据/影响/后续；环境人工未测单列。
+required安全/core门绝不降为后续。方向错误仅 unsafe isolation/force legitimate exits/hot replace/guess deletion or authority/change data retention。
+沿用本设计、父设计和同一 PLAN/HANDOFF/STATUS/WORKLOG/SUMMARY，历史证据保留日期；不新增第二权威套。
+报告按完成日期 PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-<YYYY-MM-DD>.md + INDEX，逐文件numstat、性能、原生实机、验证、限制回滚。
+白名单基线快照保护原WIP；不提交/推送/reset-hard/forcepush、不宽泛暂存、不读真实secret。
+用户届时可以 UI 安全管理本地官方包，等待真实退出，不误删/半成功/复活，数据保留。人工/其他平台/信任锚/Setup发布未测仍单列。
+
+### 原生 probe 的可验证实现细节（2026-10-03，主机日志跨日）
+
+LPAC/空 capabilities/Win32k/Job 不放宽。专用 probe 使用去除 console/window 控制的 Windows 子系统 onedir bootloader；固定上游源码摘要、许可证、显式 CRT entry 与 PE relocation，禁止修改已安装 PyInstaller。GetTokenInformation 对 SDK class 46 在本机返回 error 87，因此实际 LPAC 语义用恢复线程前的 kernel AccessCheck 验证：own package SID 允许、ALL_APPLICATION_PACKAGES 拒绝；不是仅检查已提交 attribute，也不是采信子进程自报。原生权限 canary 矩阵及真实 host/Worker gate 尚未通过，不允许生产回退。
+
+
+### 原生启动与运行时适配证据补充（2026-10-03）
+
+Core-owned onedir helper 采用 Windows 子系统但保留协议 stdio，不含 USER32/GDI/COMCTL 静态导入；旧 MinGW 使用显式 WinMainCRTStartup 与实际 PE relocations。CPython 3.11.1 自有运行副本的完整 activation resource 会触发低权限 SxS 失败，删除 Common-Controls 依赖不足以解决：仅移除已校验上游模板的 DLL/.pyd activation resource，保存原 XML、前后摘要及许可证，不修改已安装 Python/Core/系统。空 capabilities 中 Winsock 初始化拒绝如实记为初始化拒绝；不增加网络权限。父端使用内核 AccessCheck/mitigation/Job query 验证隔离，Job/管道资源预算不可由子进程自报。阻塞 stdin 由有界 writer 线程拥有；operation-owned write-before-create 文件记录 profile/根/摘要/PID/creation time，恢复不终止任何 PID，仅在原探针释放后清理所记录 profile。上述实测矩阵不是生产 host/Worker 或双冻结 Core 验收。
+
+## 2026-10-03 沙箱前置实证与生产接入补充
+
+- S1 完整 native 权限 canary 通过（92.32s）；真实签名 host/冻结 Worker 单项及分离 LPAC 的组合 adapter 通过。详见同组 HANDOFF/WORKLOG；这不替代事务/UI/双 Core 工程门。
+- Core-owned helper 用固定 SHA256 的 upstream libsodium 1.0.22 DLL 调用成熟 Ed25519 验签，不实现自制密码算法，不引入 unsigned/developer fallback。许可证随运行材料；DLL/依赖/资源变换前后摘要属于 build inventory。
+- 标准 verifier 对完整 ancestor/subtree 做前后复验。LPAC 不拥有 snapshot 根外 ancestor 的查询权限；只有 trusted parent 创建的 READONLY snapshot，headless verifier 才接受父端提供的完整路径/device/inode receipt，并核对自身根 identity，继续执行相同 manifest/signature/payload/compatibility 全校验。父端在 launch 前及接受结果前按默认 verifier 重新检查完整 ancestry。正常 Core verifier 不放宽。
+- host 与 Worker 使用独立 profile/read-only snapshot/scratch；候选不能替换可信 helper。host 回执绑定版本及 raw manifest 摘要；Worker 仅 probe=true、capabilities=[] HELLO 后接受空 SHUTDOWN，不接配置/任务。隔离结果由可信父端实际 token/AccessCheck/mitigation/Job 核验产生。
+- 原生资源清理采用“独立资源都尝试释放，再报告首个安全原因码”，失败不能跳过 profile/SID/attribute 释放；ownership journal 保留 bounded recovery 证据。
+- 固定输入上限 64KiB、累计 256KiB、每 probe 30s/512MiB；每轮含复制/重复校验会有成本，当前组合单样本 46.723s 不是 median/p95，不据此虚报最终性能完成。
+
+### 当前实际可体验的效果与限制
+
+当前具备原生隔离自检实现与实机证据，尚未将默认应用事务/管理 UI 接成可交付闭环。安装/升级/卸载生产确认、跨进程草稿与贡献撤销、双新冻结 Core 自动化验收及本人实机门仍按事实单列。
+
+
+### 长路径与显示/性能验证补充合同（2026-10-03）
+
+自有 headless EXE 保留最小 longPathAware manifest，但它不是 LPAC 深路径访问通过的证明。verifier 只有在绝对本地路径、无 traversal 的原安全边界之后，为 Windows 长路径的 stat/scandir/open 使用 extended-path I/O；不改变账本 root、manifest、祖先身份或执行授权，不依赖读取/修改系统长路径策略。必须在真实深层 staging 中验证 host/Worker，不能靠缩短路径转绿。
+
+管理页的换行仅属于显示层：原不可变 OperationPlan、确认摘要/令牌、源指纹及可访问原文保持不变。布局验收同时检查 Qt 实际重排后的高度与文本 paint 宽度，并记录 native High DPI 的实际 viewport；受屏幕限制的请求宽度不冒充真实宽屏通过。
+
+验证构建可以被动观察真实生产方法的阶段耗时/自身进程 RSS、线程与 I/O counters；原方法只执行一次，返回值/异常不改。观察器不进入正常发布入口；报告必须给观察开销校准，不把进程 I/O counters 当成全部内核系统调用，也不把父进程 RSS 当成探针/Worker 的内存峰值。
+
+## 人工体验与正式信任后续合同（2026-10-04；用户已授权终端操作）
+
+### 目标、当前事实与边界
+
+前述4B-3/4/5的Windows工程门已完成，Core10有生成图像/本地HTTP自动化替身，**不能直接拿它证明真实识屏体验**。本次延续同组记录，先准备真实Worker/正常生产入口的明确人工验收构建，由用户确认效果，再进入正式信任与分发验收。构建、日志及终端操作由执行助手执行；人工通过只能来源于用户回执。无Git暂存、提交、推送或发布。
+
+### 方案、风险与保护合同
+
+- 独立新输出位于E盘本任务ignored目录；独立新APPDATA/LOCALAPPDATA及实例身份，不读取/迁移原个人配置，不枚举已有凭据、不截图真实桌面来代替用户确认。用户主动触发的识屏/模型请求属于真实体验，可能产生其模型服务费用，需在UI里自行填入凭据并触发；不在聊天/终端输入秘密。
+- 复用冻结构建器、正式factory/事务/租约和可信helper20；新增固定allowlist的人工entry，仅分流正常settings/worker/Core入口，不包含validation driver、生成图像/HTTP替身或测试vault。只接受synthetic_boundary=False且全部源码/产物摘要匹配的独立Worker。
+- 临时签名私钥仅构建进程内存，候选与Core绑定该次临时公钥并显式标记manual-acceptance-only/非发行版。正式仓库trust anchors仍为空且fail-closed，禁止测试key自动转正式。Core不嵌入私钥，包不能授予信任。
+- 默认完整内置构建、系统/Core ACL、系统代理、开机启动及原用户数据均不改。仅启动本次可见GUI；不终止其他桌宠/Core/设置进程。构建前白名单快照保留原WIP。
+- 替代路线：源码或旧自动化driver快速演示不能证明冻结分发/真实识屏，因此不采用。正式密钥若已有则沿用经确认的公钥；若没有，待用户确认后再建立独立加密离线签名密钥及备份，不把私钥/密码放Git、日志、命令行或聊天。功能包Ed25519签名与Windows EXE发行签名分开验收；没有发行证书不伪造受信任发布者。
+
+### 稳定实施编号与验收
+
+1. **4B-H0**：白名单留档 → 人工entry/真实Worker构建合同公开seam先红后绿 → 两种新冻结Core、目录/ZIP正常版本1.0.0/1.0.1/1.0.2 → 归档输入/产物审计 → 打开未安装扩展管理页。门：不含synthetic、旧配置不动、只读检测不启动Worker。
+2. **4B-H1**（用户）：目录安装、确认摘要/等待启动确认、正常关闭并启动Core后入口出现；ZIP导入幂等及配置访问。执行助手负责命令/启动/安全状态检查，不能写成功receipt。
+3. **4B-H2**（用户）：设置真实视觉profile、凭据只填本地UI、真实手动/自动识屏效果；正常退出重启后凭据可用。执行助手只检查非敏感状态/租约，不打印secret或读取实际截图内容。
+4. **4B-H3**（用户）：包级停用、草稿保护、多进程占用等待、自然退出后卸载；重装保持配置/凭据；升级与retained previous主动回滚。只操作本次自有安装根，不清个人数据。
+5. **4B-H4**（用户）：真实托盘自然退出、无遗留所属Worker；两变体结果分开登记，无用户确认不勾通过。
+6. **4B-T0**：正式key归属/保管/备份/轮换设计确认；当前不生成正式密钥。
+7. **4B-T1/T2**：构建时固定正式公钥与helper摘要、独立离线签包；负向验签/信任替换/篡改门，新无源码冻结Core安装签包。不得把候选/环境输入当authority。
+8. **4B-T3**：本地分发目录/ZIP及文件摘要/独立机器目录验收；Setup/Windows发行证书的范围另明确，未执行不等于发布完成。
+
+验证：专项先红后绿、Ruff/format、受影响mypy与打包关联tests；本次构建规则变化执行全量pytest，原4B CPU100%门保留其源快照，不将新增构建器测试冒充旧Core10测试。报告同时区分机械准备、用户人工确认、正式信任、分发/发布状态。普通构建失败保留日志修根因；如果需绕过沙箱/读取旧数据/自动信任测试key则停止。回滚仅处理上述白名单本次增量，恢复前用户确认，不覆盖原WIP。
+
+### 完成后的实际使用效果
+
+你不必运行终端命令，只需在新开的本应用窗口确认安装/识屏/凭据与退出效果。人工验收不会改变原安装和原数据；该构建仅用于体验验收，尚不能发给最终使用者。正式可分发构建需后续正式key与发行门，不能以本节计划冒充完成。
+
+### 4B-T0 正式密钥候选方案（2026-10-04；待用户确认，尚未实施）
+
+ZIP物理卸载后新安装、原设置/凭据可用性与真实手动识屏已由用户明确确认；该回执不将自动识屏、草稿/多实例、第二变体或首次Core未确认的UX-M3标为通过。正式密钥必须另确认归属、保管与恢复，不能将临时人工验收公钥转正式。
+
+1. **归属与可信入口**：项目维护者（用户）独占正式Ed25519私钥；使用现有密码库，不自造加密算法。现有正式信任为空且fail-closed；新增生产构建入口需与manual/validation清晰分离，只接受公开信任配置和固定可信helper摘要，不允许包、profile或环境变量自行授信。
+2. **保管**：建议加密PKCS8私钥文件放仓库外专用目录（具体目录待确认），本机文件权限仅授予必要维护者；私钥口令由用户在专用本机交互工具输入，不进入聊天、命令行参数、环境变量、构建日志或产物。不得覆盖已有密钥。加密文件不是硬件隔离，也不能防止本机解锁期间的恶意进程；如需要更强隔离，应改用离线签名机/硬件方案而非虚报保证。
+3. **备份与恢复门**：由用户保管独立离线加密备份；口令与备份不共放，执行恢复试验仅校验公钥身份及签名结果，不输出私钥。尚无备份地点/实际恢复证据，不得标记已备份。
+4. **签包与Core分离**：Core与分发产物仅带正式公钥、签名包和helper摘要；签包工具在本机解锁私钥，私钥不写入Core、包、仓库或CI。正式构建必须拒绝测试key/validation标记/synthetic Worker和源码回退；现有人工构建需保留原标记，不可改名冒充正式发行物。
+5. **轮换/泄露**：正常轮换需明确新旧锚过渡版本与截止策略；泄露时重新构建/更新Core并移除旧锚，重新签包。仅换包签名不能撤销旧离线Core内置的旧锚，也不能使驻留进程瞬间变可信；不增加远程授信或假在线撤销。
+6. **后续实施与验收**：T0确认后，先写密钥/签包/生产构建公开seam负向测试，再实现T1；T2验证未知签名、篡改、测试锚/环境替换、错误口令、helper篡改全部fail-closed；T3重新构建两变体并在无源码的新自有运行目录验证正式签包目录/ZIP安装和加载。未授权不发布或推送。Windows Authenticode/Setup是另外的发行门，本包签名不冒充操作系统发行证书。
+
+**当前状态**：仅提出候选并核对既有代码。正式私钥、正式公钥注入、备份/恢复、生产签包工具与新正式构建均未执行。用户可继续使用当前人工构建验收；它不是可对外发行的正式产物。
+
+### 正式T0～T3暂缓与磁盘清理（2026-10-04 15:20；用户最新决定）
+
+用户要求在不影响现用桌宠运行的前提下，先不实施正式信任锚/分发验收，优先清理`.scratch`。上文T0候选作为历史方案保留，未获执行确认、未生成正式key；现用人工构建继续保留，不能因此标记正式发布通过。
+
+只读盘点34.987 GiB；明确清单拟删除31.184 GiB旧构建/重复依赖/生成夹具，预计保留3.803 GiB。删除尚待具体范围确认，原始WIP、before-image、公开证据、任务记录、当前Core03、完整原session/profile与安装功能包、当前人工包源保留，不迁移凭据域、不强退进程。准确停点以同组HANDOFF/STATUS为准；此为存储清理，不改变产品实现或原人工验收事实。
+
+
+### 已确认范围的实际清理结果（2026-10-04 15:50；不改变产品合同）
+
+用户随后明确确认原294目标清单。本次只移除旧生成物31.184 GiB/132,245文件，全部目标已不存在、0失败/跳过；全根盘点34.987→3.809 GiB。E盘实测净空闲增加31.435 GiB，不能用逻辑字节估计代替此实测；原始盘点产生的少量后续证据/记录属于保留量，不靠预估倒写实际数字。
+
+原APPDATA状态仍revision17/active1.0.0/enabledTrue/pending=null；9项受保护文件与3个ZIP摘要一致，当前两变体Core03、profile/凭据域、已安装功能包、保留源包、记录和before-image未删除/迁移。未读取私人内容、强退进程或改ACL。清理前后实际采样没有scratch EXE，不宣称本轮新做过GUI运行或人工验收。
+
+准确证据与停点保留在同组result/after和HANDOFF。清理实现/Windows实测完成，文档链接/PR报告纪律/报告门101 passed（3.96秒），git diff --check通过、暂存为空；本轮不改产品运行时，不重复全量/冻结，不生成正式key或推进T0～T3。先前UX-M3及其他未执行门不因此自动关闭，无提交/推送/发布。
+
+实际使用效果：当前可用程序、原配置和识屏包保留，用户无须执行额外终端清理；这次回收存储，不改变已验收的桌宠行为，也不把人工构建变成正式分发产物。

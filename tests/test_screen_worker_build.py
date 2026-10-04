@@ -108,5 +108,36 @@ def test_synthetic_validation_worker_is_explicit_and_records_its_entry(tmp_path)
     assert ordinary["synthetic_boundary"] is False
     assert synthetic["synthetic_boundary"] is True
     assert synthetic["entry_sha256"] != ordinary["entry_sha256"]
-    assert (tmp_path / "synthetic/source/worker_entry.py").read_bytes() == fixture.read_bytes()
+    assert (tmp_path / "synthetic/source/worker_entry.py").read_text() == build.SYNTHETIC_ENTRY_SOURCE
+    assert (tmp_path / "synthetic/source/validation_screen_worker.py").read_bytes() == fixture.read_bytes()
     assert synthetic["sources"]["packaging/phase4a_synthetic_worker.py"] == build._digest(fixture.read_bytes())
+
+
+def test_frozen_entry_claims_lease_before_importing_execution():
+    assert "run_screen_worker_entry" in build.ENTRY_SOURCE
+    assert "pet/workers/screen_entry.py" in build.WORKER_SOURCES
+    assert "pet/workers/lease_bootstrap.py" in build.WORKER_SOURCES
+    assert "pet/feature_version_lease.py" in build.WORKER_SOURCES
+
+
+def test_probe_build_arguments_reach_builder_without_source_or_subprocess_fallback(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(build, "build_worker", lambda *a, **kw: calls.append(kw))
+    assert build.main(["--output", str(tmp_path / "out"), "--probe-bootloader", "loader.exe", "--probe-native-extension", "_dsh_probe_native.pyd"]) == 0
+    assert calls[0]["probe_bootloader"] == Path("loader.exe")
+    assert calls[0]["probe_native_extension"] == Path("_dsh_probe_native.pyd")
+
+
+def test_worker_excludes_unused_multiprocessing_startup_that_initializes_network(tmp_path):
+    command = build.compiler_command(tmp_path / "new")
+    index = command.index("multiprocessing")
+    assert command[index - 1] == "--exclude-module"
+    assert "pet.workers.screen_entry" in build.REQUIRED_MODULES
+    assert "pet.workers.lease_bootstrap" in build.REQUIRED_MODULES
+
+
+def test_normal_lease_entry_snapshot_contains_startup_purpose_contract(tmp_path):
+    assert "pet/feature_startup_contract.py" in build.WORKER_SOURCES
+    assert "pet.feature_startup_contract" in build.REQUIRED_MODULES
+    manifest = build.prepare_build(build.ROOT, tmp_path / "worker")
+    assert "pet/feature_startup_contract.py" in manifest["sources"]

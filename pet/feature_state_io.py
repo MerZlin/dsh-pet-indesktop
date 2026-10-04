@@ -6,6 +6,8 @@ import errno
 import os
 import stat
 import sys
+import threading
+import time
 import uuid
 from contextlib import contextmanager
 from functools import lru_cache
@@ -67,7 +69,7 @@ def atomic_write(path: Path, data: bytes) -> None:
 
 
 @lru_cache(maxsize=1)
-def _windows_lock() -> Callable[[int], None]:
+def _windows_lock() -> Callable[[int, bool], None]:
     # Configure once, lazily: ctypes caches POINTER types, so defining the
     # structure on every query would retain a new native type per lock call.
     import ctypes
@@ -88,9 +90,9 @@ def _windows_lock() -> Callable[[int], None]:
     acquire.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
     acquire.restype = wintypes.BOOL
 
-    def lock(fd: int) -> None:
-        # Synchronous handle, immediate exclusive lock. Locking beyond EOF is OK.
-        if not acquire(msvcrt.get_osfhandle(fd), 3, 0, 1, 0, ctypes.byref(Overlapped())):
+    def lock(fd: int, exclusive: bool) -> None:
+        # Synchronous handle, immediate shared or exclusive lock. Locking beyond EOF is OK.
+        if not acquire(msvcrt.get_osfhandle(fd), 1 | (2 if exclusive else 0), 0, 1, 0, ctypes.byref(Overlapped())):
             if ctypes.get_last_error() == 33:  # ERROR_LOCK_VIOLATION, not ACCESS_DENIED
                 raise StateError("lock_busy")
             raise StateError("io_error")
@@ -98,14 +100,14 @@ def _windows_lock() -> Callable[[int], None]:
     return lock
 
 
-def _lock(fd: int) -> None:
+def _lock(fd: int, *, exclusive: bool = True) -> None:
     if sys.platform == "win32":
-        _windows_lock()(fd)
+        _windows_lock()(fd, exclusive)
     else:
         import fcntl
 
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
         except OSError as exc:
             if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
                 raise StateError("lock_busy") from None
@@ -145,8 +147,8 @@ class KernelLock:
         self.close()
 
 
-def open_kernel_lock(path: Path, *, create: bool = True) -> KernelLock:
-    """Acquire an exclusive non-blocking lock and keep it until closed."""
+def open_kernel_lock(path: Path, *, create: bool = True, exclusive: bool = True) -> KernelLock:
+    """Acquire a non-blocking lock; management and lease callers remain exclusive."""
     fd = None
     try:
         safe_path(path)
@@ -161,7 +163,7 @@ def open_kernel_lock(path: Path, *, create: bool = True) -> KernelLock:
             raise StateError("missing") from None
         os.set_inheritable(fd, False)
         safe_path(path)
-        _lock(fd)
+        _lock(fd, exclusive=exclusive)
         return KernelLock(path, fd)
     except StateError:
         if fd is not None:
@@ -174,15 +176,27 @@ def open_kernel_lock(path: Path, *, create: bool = True) -> KernelLock:
 
 
 @contextmanager
-def state_lock(path: Path, *, create: bool = True) -> Iterator[None]:
-    """Nonblocking metadata coordinator; this is NOT a version lease."""
-    try:
-        lock = open_kernel_lock(path, create=create)
-    except StateError as exc:
-        if not create and exc.code == "missing":
-            yield
-            return
-        raise
+def state_lock(path: Path, *, create: bool = True, exclusive: bool = True, timeout: float = 0.0) -> Iterator[None]:
+    """Metadata coordinator, NOT a lease. Readers coexist; CAS writers exclude all.
+
+    Only background CAS commits opt into a one-second bounded acquisition wait.
+    Ordinary readers and all management/lease kernel locks remain nonblocking.
+    No journal or state I/O happens before successful acquisition.
+    """
+    deadline = time.monotonic() + max(0.0, min(float(timeout), 1.0))
+    wait = threading.Event()
+    while True:
+        try:
+            lock = open_kernel_lock(path, create=create, exclusive=exclusive)
+            break
+        except StateError as exc:
+            if not create and exc.code == "missing":
+                yield
+                return
+            remaining = deadline - time.monotonic()
+            if exc.code != "lock_busy" or remaining <= 0:
+                raise
+            wait.wait(min(0.01, remaining))
     try:
         yield
     finally:

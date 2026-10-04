@@ -4,10 +4,7 @@ from dataclasses import replace
 
 from pet.feature_ports import FeatureHostContext
 
-from .config import VisionConfigService
 from .contributions import OWNER, definition
-from .runtime_context import ScreenRuntimeContext
-from .settings_context import ScreenSettingsContext
 
 
 def _bound(context):
@@ -17,15 +14,21 @@ def _bound(context):
 
 
 def _vision(context):
+    from .config import VisionConfigService
+
     return VisionConfigService(context.configuration, vault=context.credentials, legacy_secret_reader=context.legacy_secret_reader)
 
 
 def settings_context(context):
+    from .settings_context import ScreenSettingsContext
+
     context = _bound(context)
     return ScreenSettingsContext(_vision(context), context.preferences, context.documents["memory"], context.desktop)
 
 
 def runtime_context(context):
+    from .runtime_context import ScreenRuntimeContext
+
     context = _bound(context)
     window = context.window
     if window is None:

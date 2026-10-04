@@ -97,3 +97,19 @@ def test_memory_clear_uses_only_bound_document(mounted, monkeypatch):
     widget.dispose()
     assert not timer.isActive()
     assert widget.vision.key_edit.text() == ""
+
+
+def test_explicit_discard_restores_editor_without_writing_or_secret_retention(mounted):
+    cfg, context, widget, backend = mounted
+    before = cfg.path.read_bytes()
+    original = widget.vision.url.text()
+    widget.vision.url.setText("https://test-generated.invalid/changed")
+    widget.vision.key_edit.setText("GENERATED-NOT-SAVED")
+    if widget.strategy:
+        widget.strategy.pro_enabled_check.setChecked(not widget.strategy.pro_enabled_check.isChecked())
+    assert widget.dirty()
+    assert widget.discard_changes()
+    assert not widget.dirty()
+    assert widget.vision.url.text() == original
+    assert not widget.vision.key_edit.text()
+    assert cfg.path.read_bytes() == before and not backend.items

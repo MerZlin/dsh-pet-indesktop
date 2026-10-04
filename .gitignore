@@ -57,7 +57,15 @@ packaging/build_variant.py
 # 全局忽略 macOS 元数据（置于所有白名单之后，防止被 !** 反向放行）
 **/.DS_Store
 .serena/
-.scratch/
+# Durable Phase 4B records only; logs/builds/fixtures remain ignored.
+.scratch/*
+!.scratch/phase4b-local-management/
+.scratch/phase4b-local-management/*
+!.scratch/phase4b-local-management/PLAN.md
+!.scratch/phase4b-local-management/HANDOFF.md
+!.scratch/phase4b-local-management/STATUS.md
+!.scratch/phase4b-local-management/WORKLOG.md
+!.scratch/phase4b-local-management/SUMMARY.md
 
 # Node 依赖树：桥接插件为零依赖红线，本地 pnpm install 残留不许入库——
 # 否则原地 import 门禁蹭到它假绿，且 PyInstaller --add-data 会把 junction 垃圾带进产物

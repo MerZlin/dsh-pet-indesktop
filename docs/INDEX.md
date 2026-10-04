@@ -136,8 +136,13 @@
 
 ## PR 报告存档
 
+- [Phase 4B 真实用户人工验收](PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md)：固定人工entry、真实Worker与独立E盘配置的准备/用户回执，临时信任与正式分发门分开；执行人工验收或补正式信任前必读。
+
+- [Phase 4B Windows 连续收尾报告](PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md)：LPAC、生产事务、扩展管理、双冻结 Core 与最终工程证据；核对当前实施/完成口径与人工门前必读。
+
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
+| [Phase 4B-3 功能包事务部分实现报告](PR-REPORT-FEATURE-PACKAGE-TRANSACTIONS-2026-10-03.md) | 2026-10-03历史中间快照：当时部分实现、无OS沙箱默认拒绝、故障注入与实机文件锁证据；当前状态见2026-10-04连续收尾报告，不代表完整验收 |
 | [Phase 4B-1 唯一安装状态与安全恢复](PR-REPORT-FEATURE-INSTALL-STATE-2026-09-30.md) | 严格状态、revision 并发、内核锁、中断恢复及签名验证衔接；真实进程与有界成本证据，不含安装器和版本租约。 | 调整安装状态、恢复证明或进入 4B-2 跨进程占用前。 |
 | [Phase 4B-1.5 资源 DLC 硬门](PR-REPORT-PHASE4B-1.5-RESOURCE-HARD-GATE-2026-10-02.md) | 资源根路径、Registry/播放链、冲突清理、Starter/cache 边界和资源侧恢复；自动化完成，实机与公开接口仍待封存。 | 修改资源安装/播放/Registry、判断资源接口是否可公开或进入 4B-2 前。 |
 | [Phase 4B-2 跨进程版本租约](PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md) | Core/Settings/Worker 的跨进程 OS 租约、Worker 父子交接、状态 revision/digest 复核和保守占用判定；自动化与 Windows 实机证据已完成，公开资源门仍 pending。 | 修改版本占用、Worker 交接、旧请求授权或进入 4B-3 本地事务前。 |
@@ -289,6 +294,7 @@
 | [Phase 4A 屏幕理解最小设计](plugin-phase-04-updates/PHASE4A-SCREEN-PACKAGE-DESIGN.md) | 受限端口、可选聊天服务、签名目录加载和独立产物已实现；区分验证描述/进程内使用句柄与待实现安装状态。 | 调整功能 host、联动、构建、加载及 Phase 4B 安装边界前。 |
 | [Phase 4B 本地管理设计](plugin-phase-04-updates/PHASE4B-LOCAL-MANAGEMENT-DESIGN.md) | 4B-1 状态服务和 4B-2 跨进程版本租约已实现并通过本轮自动化/实机验收；4B-3 安装事务和管理界面尚未实施。 | 开始本地安装、停用、卸载、重装或状态同步前。 |
 | [Phase 4B-1.5 资源硬门设计](plugin-phase-04-updates/PHASE4B-1.5-RESOURCE-HARD-GATE-DESIGN.md) | 资源安装→Registry→播放、冲突保护、Starter/cache 隔离和资源恢复硬门；代码、自动化、文档与保护门已通过，本地封存就绪但尚未提交。 | 进入 4B-2 前必读。 |
+| [Phase 4B-3 本地事务设计](plugin-phase-04-updates/PHASE4B-3-LOCAL-TRANSACTIONS-DESIGN.md) | 官方功能包目录/ZIP staging、完整预检、安装升级卸载事务、版本租约等待、启动确认、回滚、延迟 GC 和故障恢复边界。 | **实施或审查官方功能包安装、升级、卸载、恢复和删除前必读**。 |
 | [Phase 4B-2 跨进程版本租约设计](plugin-phase-04-updates/PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-DESIGN.md) | 每个安装版本的 OS 租约目录、Host/Settings/Worker 生命周期、父子交接、状态监视与 revision-bound 旧请求保护；不提供 hot-unload 或公开 SDK。 | 修改租约、版本切换、Worker reservation 或进入 4B-3 前必读。 |
 | [Phase 4B 任务清单](../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../.scratch/phase4b-local-management/HANDOFF.md) | 逐门进度、实际验证与下一条操作；文本明确纳入 Git，保留最终交接，不收录构建临时目录。 | 恢复 Phase 4B 工作或核对未完成门前。 |
 | [Phase 4B 当前状态](../.scratch/phase4b-local-management/STATUS.md) | 区分 Phase 4A 历史成果、4B-1 状态进度、后续未实施项、人工待办及远程同步。 | 恢复 Phase 4B 或判断安装管理是否已可用前。 |

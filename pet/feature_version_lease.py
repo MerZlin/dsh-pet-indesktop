@@ -17,6 +17,7 @@ import secrets
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -81,6 +82,8 @@ class FeatureVersionSelection:
     revision: int
     manifest_digest: str
     descriptor: Any
+    purpose: str = "execution"
+    permit: Any = None
 
     @classmethod
     def from_resolution(cls, resolution: Any) -> "FeatureVersionSelection":
@@ -96,6 +99,8 @@ class FeatureVersionSelection:
             int(resolution.revision),
             hashlib.sha256(raw_manifest).hexdigest(),
             descriptor,
+            getattr(resolution, "purpose", "execution"),
+            getattr(resolution, "permit", None),
         )
 
 
@@ -130,6 +135,11 @@ class LeaseOccupancy:
 _OWNER_IDENTITY = uuid.uuid4().hex
 _PROCESS_LEASES: list["CrossProcessLease"] = []
 _PROCESS_LEASES_LOCK = threading.RLock()
+
+
+def process_owner_identity() -> str:
+    """Endpoint binding only; kernel lease locks remain liveness authority."""
+    return _OWNER_IDENTITY
 
 
 def _json(data: object) -> bytes:
@@ -371,9 +381,17 @@ class FeatureVersionLeaseCoordinator:
     def _validate_current_state(self, selection: FeatureVersionSelection) -> None:
         result = self.store.read()
         state = result.state
-        if result.status != "enabled" or state is None:
+        from .feature_startup_contract import StartupLoadPermit
+
+        if selection.purpose not in ("execution", "configuration", "startup"):
+            raise LeaseError("selection_invalid")
+        statuses = ("enabled",) if selection.purpose == "execution" else ("enabled", "disabled")
+        if result.status not in statuses or state is None:
             raise LeaseError("feature_not_enabled")
-        if state.pending_transaction is not None:
+        if selection.purpose == "startup":
+            if not isinstance(selection.permit, StartupLoadPermit) or not selection.permit.matches(self.root, state):
+                raise LeaseError("startup_permit_required")
+        elif state.pending_transaction is not None:
             raise LeaseError("recovery_required")
         if state.revision != selection.revision or state.active != selection.version:
             raise LeaseError("revision_conflict")
@@ -404,6 +422,8 @@ class FeatureVersionLeaseCoordinator:
 
     def _acquire(self, selection: FeatureVersionSelection, kind: str) -> CrossProcessLease:
         self._validate_selection_shape(selection)
+        if kind == "worker_reservation" and selection.purpose != "execution":
+            raise LeaseError("execution_purpose_required")
         token = secrets.token_urlsafe(32) if kind == "worker_reservation" else None
         with io.state_lock(self.leases_lock_path):
             self._validate_current_state(selection)
@@ -441,6 +461,8 @@ class FeatureVersionLeaseCoordinator:
         QAction/request/result paths able to revalidate the same identity that
         lease acquisition uses.
         """
+        if selection.purpose != "execution":
+            raise LeaseError("execution_purpose_required")
         self._validate_selection_shape(selection)
         self._validate_current_state(selection)
         return True
@@ -530,60 +552,78 @@ class FeatureVersionLeaseCoordinator:
             return LeaseOccupancy("pending_confirmation", version, revision, reason="version_invalid")
         try:
             with io.state_lock(self.leases_lock_path):
-                io.safe_path(self.leases_dir)
-                if not self.leases_dir.exists():
-                    return LeaseOccupancy("free", version, revision)
-                records: list[dict[str, object]] = []
-                for path in sorted(self.leases_dir.glob("*.json")):
-                    try:
-                        record = self._read_record_file(path)
-                    except (LeaseError, StateError, OSError):
-                        return LeaseOccupancy("pending_confirmation", version, revision, reason="record_corrupt")
-                    if path.stem != record["lease_id"]:
-                        return LeaseOccupancy("pending_confirmation", version, revision, reason="record_identity_conflict")
-                    records.append(record)
-                json_ids = {str(record["lease_id"]) for record in records}
-                orphan_locks = [path for path in self.leases_dir.glob("*.lock") if path.stem not in json_ids]
-                if orphan_locks:
-                    return LeaseOccupancy("pending_confirmation", version, revision, reason="orphan_lock")
-                active: list[LeaseInfo] = []
-                cleaned = 0
-                uncertain = False
-                uncertainty_reason: str | None = None
-                for record in records:
-                    if record["feature_id"] != FEATURE_ID or record["version"] != version or (revision is not None and record["revision"] != revision):
-                        continue
-                    lease_id = str(record["lease_id"])
-                    try:
-                        probe = io.open_kernel_lock(self._lock_path(lease_id), create=False)
-                    except StateError as exc:
-                        if exc.code == "lock_busy":
-                            active.append(_record_info(record))
-                            continue
-                        return LeaseOccupancy("pending_confirmation", version, revision, tuple(active), reason=exc.code, cleaned_records=cleaned)
-                    except OSError:
-                        return LeaseOccupancy("pending_confirmation", version, revision, tuple(active), reason="io_error", cleaned_records=cleaned)
-                    probe.close()
-                    # A released, still-reserved parent may be between native
-                    # process creation and child bootstrap.  Its record is not
-                    # evidence of liveness, but removing it would race a child
-                    # that still holds the one-time token.  Only an explicit
-                    # owner-side abort may clear this phase.
-                    if record["kind"] == "worker_reservation" and record["phase"] == "reserved":
-                        uncertain = True
-                        uncertainty_reason = "unconfirmed_reservation"
-                        continue
-                    _unlink(self._record_path(lease_id))
-                    _unlink(self._lock_path(lease_id))
-                    cleaned += 1
-                if active:
-                    return LeaseOccupancy("occupied", version, revision, tuple(active), cleaned_records=cleaned)
-                if uncertain:
-                    return LeaseOccupancy("pending_confirmation", version, revision, reason=uncertainty_reason, cleaned_records=cleaned)
-                return LeaseOccupancy("free", version, revision, cleaned_records=cleaned)
+                return self._inspect_occupancy_locked(version, revision)
         except (StateError, OSError) as exc:
             reason = exc.code if isinstance(exc, StateError) else "io_error"
             return LeaseOccupancy("pending_confirmation", version, revision, reason=reason)
+
+    @contextmanager
+    def management_guard(self, versions):
+        """Freeze lease admission while a manager rechecks and commits/removes.
+
+        Lock ordering is management -> leases -> state, matching acquisition's
+        leases -> state ordering. The yielded occupancy includes every revision.
+        """
+        with io.state_lock(self.leases_lock_path):
+            occupancy = {}
+            for version in versions:
+                if not isinstance(version, str) or not _VERSION.fullmatch(version):
+                    raise StateError("version_invalid")
+                occupancy[version] = self._inspect_occupancy_locked(version, None)
+            yield occupancy
+
+    def _inspect_occupancy_locked(self, version: str, revision: int | None) -> LeaseOccupancy:
+        io.safe_path(self.leases_dir)
+        if not self.leases_dir.exists():
+            return LeaseOccupancy("free", version, revision)
+        records: list[dict[str, object]] = []
+        for path in sorted(self.leases_dir.glob("*.json")):
+            try:
+                record = self._read_record_file(path)
+            except (LeaseError, StateError, OSError):
+                return LeaseOccupancy("pending_confirmation", version, revision, reason="record_corrupt")
+            if path.stem != record["lease_id"]:
+                return LeaseOccupancy("pending_confirmation", version, revision, reason="record_identity_conflict")
+            records.append(record)
+        json_ids = {str(record["lease_id"]) for record in records}
+        orphan_locks = [path for path in self.leases_dir.glob("*.lock") if path.stem not in json_ids]
+        if orphan_locks:
+            return LeaseOccupancy("pending_confirmation", version, revision, reason="orphan_lock")
+        active: list[LeaseInfo] = []
+        cleaned = 0
+        uncertain = False
+        uncertainty_reason: str | None = None
+        for record in records:
+            if record["feature_id"] != FEATURE_ID or record["version"] != version or (revision is not None and record["revision"] != revision):
+                continue
+            lease_id = str(record["lease_id"])
+            try:
+                probe = io.open_kernel_lock(self._lock_path(lease_id), create=False)
+            except StateError as exc:
+                if exc.code == "lock_busy":
+                    active.append(_record_info(record))
+                    continue
+                return LeaseOccupancy("pending_confirmation", version, revision, tuple(active), reason=exc.code, cleaned_records=cleaned)
+            except OSError:
+                return LeaseOccupancy("pending_confirmation", version, revision, tuple(active), reason="io_error", cleaned_records=cleaned)
+            probe.close()
+            # A released, still-reserved parent may be between native
+            # process creation and child bootstrap.  Its record is not
+            # evidence of liveness, but removing it would race a child
+            # that still holds the one-time token.  Only an explicit
+            # owner-side abort may clear this phase.
+            if record["kind"] == "worker_reservation" and record["phase"] == "reserved":
+                uncertain = True
+                uncertainty_reason = "unconfirmed_reservation"
+                continue
+            _unlink(self._record_path(lease_id))
+            _unlink(self._lock_path(lease_id))
+            cleaned += 1
+        if active:
+            return LeaseOccupancy("occupied", version, revision, tuple(active), cleaned_records=cleaned)
+        if uncertain:
+            return LeaseOccupancy("pending_confirmation", version, revision, reason=uncertainty_reason, cleaned_records=cleaned)
+        return LeaseOccupancy("free", version, revision, cleaned_records=cleaned)
 
     def can_remove(self, version: str, revision: int | None = None) -> bool:
         return self.inspect_occupancy(version, revision).can_remove

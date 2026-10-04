@@ -25,9 +25,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
 OFFICIAL_FEATURE_ID = "official.screen-understanding"
 OFFICIAL_FACTORY_ID = "screen-understanding/v1"
 FACTORY_PATH = "host/factory.py"
@@ -130,8 +127,22 @@ def _stamp(value: os.stat_result) -> FileStamp:
     )
 
 
+def _filesystem_path(path: Path) -> Path:
+    """Use Windows extended syntax only at a validated local filesystem seam.
+
+    Logical roots, relative paths and descriptor/ancestry identities are never
+    rewritten. LPAC must not depend on access to global long-path policy. No
+    resolve(), UNC/device input, traversal normalization or ACL changes here.
+    """
+    if os.name != "nt" or len(str(path)) < 248:
+        return path
+    if not path.is_absolute() or len(path.drive) != 2 or path.drive[1] != ":" or ".." in path.parts:
+        raise PackageVerificationError("extended I/O requires a validated absolute local path")
+    return Path("\\\\?\\" + str(path))
+
+
 def _checked_stat(path: Path, *, directory: bool = False) -> FileStamp:
-    value = _stamp(path.lstat())
+    value = _stamp(_filesystem_path(path).lstat())
     if stat.S_ISLNK(value.mode) or value.attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
         raise PackageVerificationError(f"link/reparse point: {path}")
     if directory:
@@ -190,16 +201,17 @@ def _inventory(root: Path, expected: Mapping[str, bool], limits: VerificationLim
     while stack:
         directory, prefix = stack.pop()
         # Iterate incrementally: never materialize an attacker-sized directory.
-        with os.scandir(directory) as entries:
+        with os.scandir(_filesystem_path(directory)) as entries:
             for entry in entries:
                 relative = prefix + entry.name
                 _safe_relative(relative, limits)
                 if len(found) > limits.max_entries or relative not in expected:
                     raise PackageVerificationError(f"unlisted file/directory or entry limit: {relative}")
                 is_directory = expected[relative]
-                found[relative] = _checked_stat(Path(entry.path), directory=is_directory)
+                child = directory / entry.name
+                found[relative] = _checked_stat(child, directory=is_directory)
                 if is_directory:
-                    stack.append((Path(entry.path), relative + "/"))
+                    stack.append((child, relative + "/"))
     if set(found) != {"", *expected}:
         raise PackageVerificationError("missing declared payload/control file")
     return found
@@ -210,7 +222,7 @@ def _read_file(path: Path, bound: int, expected: FileStamp | None = None, *, cap
     if before.size > bound or (expected is not None and before != expected):
         raise PackageVerificationError(f"size limit or replaced file: {path}")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, flags)
+    fd = os.open(_filesystem_path(path), flags)
     with os.fdopen(fd, "rb") as stream:
         if _stamp(os.fstat(stream.fileno())) != before:
             raise PackageVerificationError(f"file changed before read: {path}")
@@ -325,6 +337,20 @@ class FeaturePackageVerifier:
         object.__setattr__(self, "allowed_capabilities", caps)
         object.__setattr__(self, "trust_anchors", MappingProxyType(anchors))
 
+    @staticmethod
+    def _valid_signature(key: bytes, signature: bytes, raw: bytes) -> bool:
+        # Default production backend is unchanged. A Core-owned headless helper
+        # subclass supplies libsodium because the Windows cryptography wheel
+        # imports USER32; the SAME signature/schema/payload policy is reused.
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        try:
+            Ed25519PublicKey.from_public_bytes(key).verify(signature, raw)
+            return True
+        except InvalidSignature:
+            return False
+
     def _authenticate(self, raw: bytes, signature: bytes | None) -> tuple[str, str | None]:
         if signature is None:
             if self.allow_developer_unsigned:
@@ -333,11 +359,8 @@ class FeaturePackageVerifier:
         if len(signature) != 64:
             raise PackageVerificationError("manifest.sig must contain a raw 64-byte Ed25519 signature")
         for name, key in self.trust_anchors.items():
-            try:
-                Ed25519PublicKey.from_public_bytes(key).verify(signature, raw)
+            if self._valid_signature(key, signature, raw) is True:
                 return "trusted_official", name
-            except InvalidSignature:
-                continue
         raise PackageVerificationError("signature has no explicitly trusted Core signer")
 
     def _schema(self, raw: bytes) -> dict:
@@ -388,8 +411,25 @@ class FeaturePackageVerifier:
             raise PackageVerificationError("factory/worker missing from payload inventory")
         return payload
 
+    def _ancestors(self, root: Path) -> tuple[tuple[str, int, int], ...]:
+        return _root_ancestors(root)
+
     def verify(self, root: Path | str) -> VerifiedFeatureDescriptor:
         return self._verify(root, capture_sources=False)[0]
+
+    def check_snapshot_identity(self, descriptor: VerifiedFeatureDescriptor) -> None:
+        """Bounded final filesystem identity check, NOT execution authorization.
+
+        Full hashing/signature validation happens before the management lock.
+        Every production import/Worker launch still uses full verification;
+        persisted candidates remain pending/non-executable until that receipt.
+        """
+        if not isinstance(descriptor, VerifiedFeatureDescriptor):
+            raise PackageVerificationError("a verified descriptor is required")
+        controls = ["manifest.json"] + (["manifest.sig"] if descriptor.signature is not None else [])
+        expected = _expected_tree([*descriptor.files, *controls], self.limits)
+        if self._ancestors(descriptor.root) != descriptor.ancestors or _inventory(descriptor.root, expected, self.limits) != dict(descriptor.tree):
+            raise PackageVerificationError("verified version identity changed before persistence")
 
     def reverify(self, descriptor: VerifiedFeatureDescriptor) -> VerifiedFeatureDescriptor:
         self._snapshot(descriptor, capture_sources=False)
@@ -412,7 +452,7 @@ class FeaturePackageVerifier:
             raise PackageVerificationError(f"invalid/inaccessible feature package: {exc}") from exc
 
     def _inspect(self, root: Path, *, capture_sources: bool):
-        ancestors = _root_ancestors(root)
+        ancestors = self._ancestors(root)
         raw, _, manifest_stamp = _read_file(root / "manifest.json", self.limits.max_manifest_bytes)
         try:
             signature, _, signature_stamp = _read_file(root / "manifest.sig", 64)
@@ -437,7 +477,7 @@ class FeaturePackageVerifier:
                 sources[path] = data
         # Catch replacements/additions during hashing; execution uses captured,
         # digest-checked Python bytes, never a fresh unchecked SourceFileLoader.
-        if _inventory(root, expected, self.limits) != tree or _root_ancestors(root) != ancestors:
+        if _inventory(root, expected, self.limits) != tree or self._ancestors(root) != ancestors:
             raise PackageVerificationError("version directory changed during verification")
         descriptor = VerifiedFeatureDescriptor(
             id=payload["id"],

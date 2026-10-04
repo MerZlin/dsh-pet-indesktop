@@ -815,3 +815,52 @@ def test_windows_lock_reuses_native_types_instead_of_growing_pointer_cache(monke
     finally:
         if cached is not None:
             cached.cache_clear()
+
+
+def test_shared_readers_do_not_block_state_resolution_but_still_exclude_writers(store):
+    from pet import feature_state_io as io
+
+    store.commit(installed_change(), expected_revision=0, operation_id="install")
+    with io.state_lock(store.lock_path, exclusive=False):
+        assert store.read().status == "enabled"
+        with io.state_lock(store.lock_path, exclusive=False):
+            assert store.read().state.revision == 1
+        with pytest.raises(StateError, match="lock_busy"):
+            io.open_kernel_lock(store.lock_path)
+
+
+def test_commit_waits_boundedly_for_short_read_only_monitor_and_keeps_cas(store, monkeypatch):
+    import threading
+
+    from pet import feature_state_io as io
+
+    store.commit(installed_change(), expected_revision=0, operation_id="install")
+    attempted, finished = threading.Event(), threading.Event()
+    errors, receipts = [], []
+    acquire = io.open_kernel_lock
+
+    def observed(*args, **kwargs):
+        if threading.current_thread().name == "state-cas-writer":
+            attempted.set()
+        return acquire(*args, **kwargs)
+
+    monkeypatch.setattr(io, "open_kernel_lock", observed)
+
+    def write():
+        try:
+            receipts.append(store.commit(StateChange({}), expected_revision=1, operation_id="uninstall"))
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            finished.set()
+
+    with io.state_lock(store.lock_path, exclusive=False):
+        worker = threading.Thread(target=write, name="state-cas-writer")
+        worker.start()
+        assert attempted.wait(10)
+    assert finished.wait(10)
+    worker.join(timeout=10)
+    assert not errors and receipts[0].revision == 2
+    assert store.read().status == "uninstalled"
+    with pytest.raises(StateError, match="revision_conflict"):
+        store.commit(installed_change(), expected_revision=1, operation_id="stale")

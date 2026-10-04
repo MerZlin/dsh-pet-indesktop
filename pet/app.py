@@ -1111,6 +1111,9 @@ class AppShell:
         from .official_features import default_feature_host
 
         self.feature_host = feature_host if feature_host is not None else default_feature_host(self.plugin_registry.contributions)
+        from .feature_management import attach_feature_management
+
+        self.feature_management = attach_feature_management(config, self.feature_host, role="core")
         # 待办提醒：进程级单例（多窗共用一个调度器，避免每窗一个定时器重复通知），
         # Phase 1 门控：默认懒创建——配置关闭时不构造、不跑 30s 定时器；关闭且
         # 无面板打开时释放。win 引用在服务 tick 时经本类 win 属性动态读主窗，
@@ -2021,6 +2024,7 @@ class AppShell:
         # issue #111：先关 ffmpeg spawn 闸门，再走正常退出收口——正常退出路径
         # （托盘退出/最后窗口关闭）同样落在关机前后，绝不能在里面再派生 reader。
         self._mark_session_ending()
+        self.feature_management.close()
         # 窗级收口：逐窗保存位置、停本窗预热与 Agent、提交本窗会话、释放本窗 slot 锁
         for inst in self._instances:
             win = inst.win
@@ -2186,6 +2190,9 @@ class AppShell:
         """
         for shell in tuple(_LIVE_SHELLS):
             try:
+                management = getattr(shell, "feature_management", None)
+                if management is not None:
+                    management.close()
                 service = getattr(shell, "todo_service", None)
                 if service is not None:
                     try:

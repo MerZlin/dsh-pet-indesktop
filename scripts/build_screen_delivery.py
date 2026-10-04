@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 SCREEN_MODULES = (
@@ -173,31 +173,74 @@ def _source_bytes(root: Path, path: Path) -> bytes:
     return path.read_bytes()
 
 
-def prepare_core(root: Path, output: Path, *, chat: bool, public_key: str) -> dict:
+def prepare_core(
+    root: Path,
+    output: Path,
+    *,
+    chat: bool,
+    public_key: str,
+    entrypoint: Path | None = None,
+    probe_bundle: Path | None = None,
+    probe_manifest_sha256: str | None = None,
+) -> dict:
     root, output = root.resolve(strict=True), output.absolute()
     if output.exists():
         raise FileExistsError(f"output already exists: {output}")
     if len(bytes.fromhex(public_key)) != 32:
         raise ValueError("test public key must be Ed25519")
+    management = entrypoint is not None
+    manual = False
+    if entrypoint is not None:
+        if probe_bundle is None or probe_manifest_sha256 is None:
+            raise ValueError("production management validation requires trusted probe")
+        selected_entry = entrypoint.resolve(strict=True)
+        allowed_entries = (root / "packaging/phase4b_validation_entry.py", root / "packaging/phase4b_manual_entry.py")
+        if selected_entry not in allowed_entries:
+            raise ValueError("unexpected management entry")
+        manual = selected_entry == allowed_entries[1]
+        from pet.feature_probe_windows import TrustedProbeBundle
+
+        TrustedProbeBundle(probe_bundle, probe_manifest_sha256).verify()
+    elif probe_bundle is not None or probe_manifest_sha256 is not None:
+        raise ValueError("probe requires production management entry")
     snapshots = {}
     for path in (root / "pet").rglob("*.py"):
         relative = path.relative_to(root)
         module = ".".join(relative.with_suffix("").parts)
         if "__pycache__" not in path.parts and not _banned(module, core_excludes(chat=chat)):
             snapshots[relative.as_posix()] = _source_bytes(root, path)
-    snapshots["validation_entry.py"] = _source_bytes(root, root / "packaging/phase4a_validation_entry.py")
+    snapshots["validation_entry.py"] = _source_bytes(root, entrypoint if entrypoint is not None else root / "packaging/phase4a_validation_entry.py")
+    if management:
+        policy = _source_bytes(root, root / "pet/feature_build_policy.py").decode("utf-8")
+        # This replaces only the closed validation source tree, never repository
+        # policy, installed Core, environment trust or a candidate's input.
+        anchor_name = "manual-acceptance-only" if manual else "validation-only"
+        policy += (
+            f"\nOFFICIAL_FEATURE_TRUST_ANCHORS = (({anchor_name!r}, {public_key!r}),)\n"
+            f"PROBE_BUNDLE_MANIFEST_SHA256 = {probe_manifest_sha256!r}\nVALIDATION_BUILD = True\n"
+        )
+        if manual:
+            policy += "MANUAL_ACCEPTANCE_BUILD = True\n"
+        snapshots["pet/feature_build_policy.py"] = policy.encode("utf-8")
+        if not manual:
+            snapshots["validation_boundaries.py"] = _source_bytes(root, root / "packaging/phase4b_validation_boundaries.py")
     snapshots["pet/feature_distribution.py"] = b'"""Independent validation variant; not installed state."""\nBUILTIN_SCREEN = False\n'
     snapshots["build_variant.py"] = (f"VARIANT = {('webm-chat' if chat else 'webm')!r}\n").encode()
-    snapshots["validation_config.py"] = (f"VALIDATION_ONLY = True\nENABLE_CHAT = {chat!r}\nTEST_PUBLIC_KEY = {public_key!r}\n").encode()
+    snapshots["validation_config.py"] = (
+        f"VALIDATION_ONLY = True\nMANUAL_ACCEPTANCE_ONLY = {manual!r}\nENABLE_CHAT = {chat!r}\nTEST_PUBLIC_KEY = {public_key!r}\n"
+    ).encode()
     hidden = host_dependencies(root)
     output.mkdir(parents=True, exist_ok=False)
     (output / "evidence").mkdir()
-    for relative, data in snapshots.items():
-        path = output / "source" / relative
+    for relative_name, data in snapshots.items():
+        path = output / "source" / relative_name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
     manifest = {
-        "scope": "no-screen-core-validation",
+        "scope": "no-screen-core-manual-acceptance" if manual else "no-screen-core-validation",
+        "manual_acceptance_only": manual,
+        "production_management": management,
+        "probe_manifest_sha256": probe_manifest_sha256,
         "chat": chat,
         "python": sys.version,
         "sources": {n: digest(d) for n, d in snapshots.items()},
@@ -216,20 +259,21 @@ def verify_worker_inputs(root: Path, build: Path, *, synthetic: bool = False) ->
     if bool(inputs.get("synthetic_boundary", False)) != synthetic:
         raise ValueError("Worker validation boundary does not match selected mode")
     if __package__:
-        from .build_screen_worker import ENTRY_SOURCE, WORKER_SOURCES
+        from .build_screen_worker import ENTRY_SOURCE, SYNTHETIC_ENTRY_SOURCE, WORKER_SOURCES
     else:
-        from build_screen_worker import ENTRY_SOURCE, WORKER_SOURCES
+        from build_screen_worker import ENTRY_SOURCE, SYNTHETIC_ENTRY_SOURCE, WORKER_SOURCES
 
     expected_sources = set(WORKER_SOURCES)
     if synthetic:
-        expected_sources.add("packaging/phase4a_synthetic_worker.py")
+        expected_sources.update(("packaging/phase4a_synthetic_worker.py", "validation_screen_worker.py"))
     if set(inputs["sources"]) != expected_sources:
         raise ValueError("Worker source inventory differs from closed build inputs")
-    expected_entry = (root / "packaging/phase4a_synthetic_worker.py").read_bytes() if synthetic else ENTRY_SOURCE.encode("utf-8")
+    expected_entry = (SYNTHETIC_ENTRY_SOURCE if synthetic else ENTRY_SOURCE).encode("utf-8")
     if inputs.get("entry_sha256") != digest(expected_entry):
         raise ValueError("Worker entry changed; rebuild first")
     for relative, checksum in inputs["sources"].items():
-        if digest(_source_bytes(root.resolve(), root / relative)) != checksum:
+        origin = "packaging/phase4a_synthetic_worker.py" if synthetic and relative == "validation_screen_worker.py" else relative
+        if digest(_source_bytes(root.resolve(), root / origin)) != checksum:
             raise ValueError(f"Worker input changed; rebuild first: {relative}")
     artifact = json.loads((build / "evidence/artifact.json").read_text(encoding="utf-8"))
     bundle = build / "dist/proactive-screen-worker"
@@ -283,10 +327,37 @@ def assemble_package(root: Path, target: Path, worker_bundle: Path, key, *, synt
     return target
 
 
-def build_core(root: Path, output: Path, *, chat: bool, public_key: str) -> Path:
-    manifest = prepare_core(root, output, chat=chat, public_key=public_key)
+def build_core(
+    root: Path,
+    output: Path,
+    *,
+    chat: bool,
+    public_key: str,
+    entrypoint: Path | None = None,
+    probe_bundle: Path | None = None,
+    probe_manifest_sha256: str | None = None,
+) -> Path:
+    manifest = prepare_core(
+        root, output, chat=chat, public_key=public_key, entrypoint=entrypoint, probe_bundle=probe_bundle, probe_manifest_sha256=probe_manifest_sha256
+    )
     source = output / "source"
     datas = []
+    if probe_bundle is not None:
+        assert probe_manifest_sha256 is not None  # prepare_core validated the pair.
+        from pet.feature_probe_windows import TrustedProbeBundle
+
+        TrustedProbeBundle(probe_bundle, probe_manifest_sha256).verify()
+        destination = source / "feature-probe"
+        destination.mkdir()
+        for file in sorted(probe_bundle.rglob("*")):
+            if file.is_file():
+                data = _source_bytes(probe_bundle.resolve(), file)
+                path = destination / file.relative_to(probe_bundle)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+                manifest.setdefault("resources", {})[path.relative_to(source).as_posix()] = {"size": len(data), "sha256": digest(data)}
+        TrustedProbeBundle(destination, probe_manifest_sha256).verify()
+        datas.append((str(destination), "feature-probe"))
     for name in DATA_ROOTS + (("assets/chat",) if chat else ()):
         origin = root / name
         if not origin.is_dir():
@@ -332,7 +403,11 @@ def build_core(root: Path, output: Path, *, chat: bool, public_key: str) -> Path
         result = subprocess.run(command, cwd=source, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
     if result.returncode:
         raise RuntimeError(f"Core build failed ({result.returncode}), see {output / 'evidence/pyinstaller.log'}")
-    return verify_core_bundle(output, chat=chat, build_seconds=time.perf_counter() - started)
+    executable = verify_core_bundle(output, chat=chat, build_seconds=time.perf_counter() - started)
+    if probe_bundle is not None:
+        assert probe_manifest_sha256 is not None
+        TrustedProbeBundle(executable.parent / "_internal/feature-probe", probe_manifest_sha256).verify()
+    return executable
 
 
 def verify_core_bundle(output: Path, *, chat: bool, build_seconds: float) -> Path:
@@ -359,7 +434,7 @@ def verify_core_bundle(output: Path, *, chat: bool, build_seconds: float) -> Pat
             "pyz_modules": modules,
             "native_modules": native,
             "files": files,
-            "size_bytes": sum(v["size"] for v in files.values()),
+            "size_bytes": sum(cast(int, v["size"]) for v in files.values()),
         },
     )
     print(f"CORE_VALIDATION_BUILD_OK {exe}", flush=True)

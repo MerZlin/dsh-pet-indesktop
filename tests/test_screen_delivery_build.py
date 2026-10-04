@@ -312,3 +312,20 @@ def test_synthetic_probe_requires_signed_marker_and_loopback_fixture():
         )
         assert json.load(response)["choices"][0]["message"]["content"] == "synthetic analysis"
         assert stats == {"requests": 1, "errors": []}
+
+
+def test_fresh_synthetic_worker_lease_first_entry_matches_closed_inputs(tmp_path):
+    import json
+
+    from scripts.build_screen_worker import prepare_build
+
+    output = tmp_path / "fresh-worker"
+    prepare_build(ROOT, output, synthetic=True)
+    bundle = output / "dist/proactive-screen-worker"
+    bundle.mkdir(parents=True)
+    data = b"generated-nonexecuted-artifact"
+    (bundle / "proactive-screen-worker.exe").write_bytes(data)
+    (output / "evidence/artifact.json").write_text(
+        json.dumps({"files": {"proactive-screen-worker.exe": {"size": len(data), "sha256": __import__("hashlib").sha256(data).hexdigest()}}}), encoding="utf-8"
+    )
+    assert verify_worker_inputs(ROOT, output, synthetic=True) == bundle

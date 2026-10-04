@@ -4,6 +4,10 @@
 
 | 日期 | 主题 | 入口 | 关键提交/状态 |
 |---|---|---|---|
+| 2026-10-04 | Phase 4B 分支发布 | [发布记录](LOG.md#phase-4b-分支发布2026-10-04) · [工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | 用户已授权；85文件白名单，静态/专项/全量与3×154满CPU门新通过，准备提交推送；正式信任/分发继续暂缓 |
+| 2026-10-04 | Scratch 生成物清理 | [清理记录](LOG.md#scratch-生成物清理2026-10-04) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | 294目录/132,245文件，34.987→3.809 GiB；E盘净增31.435 GiB，保护摘要/state不变；正式信任/分发暂缓，无提交/推送 |
+| 2026-10-04 | Phase 4B真实人工验收准备 | [人工记录](docs/PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md) · [准确停点](.scratch/phase4b-local-management/HANDOFF.md) | no-chat目录安装/真实识屏/启停/ZIP幂等/升级/回滚通过；两版本物理卸载、ZIP新安装revision17及Core真实加载核验，用户确认原设置/凭据与结果保留；正式信任锚/分发按用户决定暂缓，正式key未生成；首Core问题未证明修复，自动/第二变体等门单列；无提交/推送 |
+| 2026-10-04 | Phase 4B 连续收尾 | [LOG.md](LOG.md#phase-4b-连续收尾2026-10-04) · [工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md) · [准确停点](.scratch/phase4b-local-management/HANDOFF.md) | 4B-3/4/5 Windows工程闭环完成，最新Core10双七行/全量/满负载三遍通过；人工/发布单列，未提交/推送 |
 | 2026-10-03 | Phase 4B-1.5 人工验收确认与状态同步 | [LOG.md](LOG.md#phase-4b-15-人工验收确认与状态同步-2026-10-03) · [项目入口](docs/PROJECT-ENTRY.md) · [4B 状态](.scratch/phase4b-local-management/STATUS.md) | 用户确认 4B-1.5 人工门已通过；4B-2 已完成并推送；4B-3 进入后续规划，公开稳定 API 仍未开放 |
 | 2026-10-03 | Phase 4B-2 跨进程版本租约 | [LOG.md](LOG.md#phase-4b-2-跨进程版本租约-2026-10-03) · [设计](docs/plugin-phase-04-updates/PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-DESIGN.md) · [实施报告](docs/PR-REPORT-PHASE4B-2-CROSS-PROCESS-VERSION-LEASE-2026-10-03.md) · [任务状态](.scratch/phase4b-2-cross-process-version-lease/STATUS.md) | 内部实现、自动化和 Windows 实机证据完成；4B-1.5 人工门已由用户确认通过，公开稳定 API 仍未开放；`5a1b6e0` 已提交并推送至 `origin/codex/phase3-worker` |
 | 2026-10-02 | 文档连续性、项目入口与开发者 README | [LOG.md](LOG.md#文档连续性项目入口与开发者-readme-2026-10-02) · [入口](docs/PROJECT-ENTRY.md) · [规范](docs/agents/WORKFLOW-CONTINUITY-AND-PROJECT-ENTRY.md) · [任务总结](.scratch/documentation-continuity/SUMMARY.md) | 文档、规则与任务记录已补齐；文档门已通过，未提交未推送 |

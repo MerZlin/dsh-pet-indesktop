@@ -74,16 +74,20 @@ class _SpawnSpy:
     def __init__(self) -> None:
         self.read_frames_calls: list = []
         self.count_calls: list = []
+        self.read_called = threading.Event()
+        self.count_called = threading.Event()
         self._lock = threading.Lock()
 
     def read_frames(self, *args, **kwargs):
         with self._lock:
             self.read_frames_calls.append((args, kwargs))
+            self.read_called.set()
         return None  # 被调即失败：spawn 已发生，返回值无关紧要
 
     def count_frames_and_secs(self, *args, **kwargs):
         with self._lock:
             self.count_calls.append((args, kwargs))
+            self.count_called.set()
         return (0, 0)
 
     def install(self, monkeypatch) -> None:
@@ -184,11 +188,17 @@ def test_control_group_spawns_normally_without_session_end(tmp_path, monkeypatch
 
     assert webm_clip_mod.session_ending() is False
 
-    assert clip.start() is True
-    assert spy.read_frames_calls, "正常运行期必须照常拉起 reader（对照组）"
-    clip._ensure_meta()
-    assert spy.count_calls, "正常运行期元数据探测照常（对照组）"
-    clip.cleanup()
+    try:
+        assert clip.start() is True
+        assert spy.read_called.wait(15), "正常运行期必须照常拉起 reader（对照组）"
+        assert spy.read_frames_calls
+        clip._ensure_meta()
+        # The GUI seam schedules a background warm, never a synchronous probe.
+        # Wait for its actual call, not the scheduler's return or a fixed sleep.
+        assert spy.count_called.wait(15), "正常运行期元数据探测照常（对照组）"
+        assert spy.count_calls
+    finally:
+        clip.cleanup()
 
 
 def test_session_ending_latch_is_idempotent_and_resettable():

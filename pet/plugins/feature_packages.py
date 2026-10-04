@@ -37,9 +37,8 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from types import ModuleType
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from ..feature_version_lease import CrossProcessLease, FeatureVersionLeaseCoordinator, FeatureVersionSelection, retain_process_lease
 from .package_trust import (
     CompatibilityEvidence,
     FeaturePackageVerifier,
@@ -48,6 +47,9 @@ from .package_trust import (
     VerifiedFeatureDescriptor,
     VerifiedFile,
 )
+
+if TYPE_CHECKING:
+    from ..feature_version_lease import CrossProcessLease, FeatureVersionLeaseCoordinator, FeatureVersionSelection
 
 __all__ = [
     "CompatibilityEvidence",
@@ -242,6 +244,9 @@ class VersionLease:
 
 
 class HostHandle(VersionLease):
+    # Non-owning reference: closing a host handle NEVER releases imported code.
+    process_pin: CrossProcessLease | None = None
+
     @property
     def namespace(self) -> str:
         return self._generation.namespace
@@ -292,6 +297,8 @@ class FeaturePackageLoader:
                     generation.verifier = self.verifier
                     with _LOCK:
                         if process_lease is not None:
+                            from ..feature_version_lease import retain_process_lease
+
                             retain_process_lease(process_lease)
                             lease_retained = True
                         generation.imported = True  # pin even partially executed failures
@@ -313,9 +320,13 @@ class FeaturePackageLoader:
                     finally:
                         generation.loading_thread = None
             if process_lease is not None and not lease_retained:
+                from ..feature_version_lease import retain_process_lease
+
                 retain_process_lease(process_lease)
                 lease_retained = True
-            return HostHandle(generation, self.verifier, "host")
+            handle = HostHandle(generation, self.verifier, "host")
+            handle.process_pin = process_lease
+            return handle
         except BaseException:
             if process_lease is not None and not lease_retained:
                 process_lease.close()

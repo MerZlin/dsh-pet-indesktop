@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSignalBlocker, QTimer
 from PySide6.QtWidgets import QAbstractButton, QComboBox, QDoubleSpinBox, QLineEdit, QPlainTextEdit, QSpinBox, QWidget
 
 from pet.settings_widgets import SettingRow, ToggleSwitch
@@ -84,6 +84,35 @@ class ScreenContributionSettings(QWidget):
             return False
         self._strategy_baseline = self._values(self.strategy.rows) if self.strategy else {}
         return True
+
+    def discard_changes(self):
+        """Explicit owning-UI action only; restore baseline without persisting it."""
+        if self._disposed:
+            return False
+        for rows, baseline in ((self.vision_rows, self._vision_baseline), (self.strategy.rows if self.strategy else [], self._strategy_baseline)):
+            for row in rows:
+                values = iter(baseline.get(row.objectName(), ()))
+                for widget in row.findChildren(QWidget):
+                    if widget is self.vision.key_edit:
+                        continue
+                    if not isinstance(widget, (QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, ToggleSwitch)) and not (
+                        isinstance(widget, QAbstractButton) and widget.isCheckable()
+                    ):
+                        continue
+                    value = next(values)
+                    with QSignalBlocker(widget):
+                        if isinstance(widget, QLineEdit):
+                            widget.setText(value)
+                        elif isinstance(widget, QPlainTextEdit):
+                            widget.setPlainText(value)
+                        elif isinstance(widget, QComboBox):
+                            widget.setCurrentIndex(widget.findData(value))
+                        elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                            widget.setValue(value)
+                        else:
+                            widget.setChecked(value)
+        self.vision.key_edit.clear()
+        return not self.dirty()
 
     def dispose(self):
         if self._disposed:

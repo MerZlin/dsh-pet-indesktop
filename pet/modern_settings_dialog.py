@@ -252,12 +252,25 @@ class ModernSettingsDialog(QDialog):
     def __init__(self, config, parent=None, *, include_ai: bool = True, standalone: bool = False, initial_page: str | None = None, feature_host=None):
         super().__init__(parent)
         self.config = config
+        from .feature_management import attach_feature_management, is_management_page
         from .official_features import SCREEN_OWNER, default_feature_host
+        from .plugins.feature_host import FeatureHost
 
-        self.feature_host = feature_host if feature_host is not None else default_feature_host()
+        management_only = bool(standalone and is_management_page(initial_page))
+        self._owns_feature_management = feature_host is None
+        self.feature_host = feature_host if feature_host is not None else (FeatureHost() if management_only else default_feature_host())
+        self.feature_management = attach_feature_management(config, self.feature_host, role="settings", management_only=management_only)
         self._feature_scope = f"settings:{id(self)}"
         self._feature_drafts = {}
         self._screen_component = None
+        self._draft_unsubscribe = lambda: None
+        if self.feature_management.endpoint is not None:
+            self._draft_unsubscribe = self.feature_management.endpoint.register_draft(
+                self._feature_scope, lambda: bool(self._screen_component and self._screen_component.dirty())
+            )
+        self.destroyed.connect(self._draft_unsubscribe)
+        if self._owns_feature_management:
+            self.destroyed.connect(self.feature_management.close)
         handle = self.feature_host.settings(SCREEN_OWNER, self._feature_scope)
         if handle:
             try:
@@ -515,6 +528,24 @@ class ModernSettingsDialog(QDialog):
                     general_content,
                 )
             )
+        from .feature_management_ui import FeatureManagementWidget
+
+        self.feature_management_widget = FeatureManagementWidget(self.feature_management, self)
+        general_layout.addWidget(
+            SettingsSection(
+                "扩展管理",
+                [
+                    SettingRow(
+                        "feature_packages",
+                        "官方功能包",
+                        "扩展、插件、屏幕理解：本地安装、升级、启停、回滚与卸载。包级操作影响所有实例。",
+                        self.feature_management_widget,
+                        stacked=True,
+                    )
+                ],
+                general_content,
+            )
+        )
         general_layout.addStretch(1)
         self._add_page("常规", "settings", self._page_shell("常规", general_content))
 
@@ -1071,7 +1102,9 @@ class ModernSettingsDialog(QDialog):
         )
         if answer == QMessageBox.StandardButton.Cancel:
             return False
-        return answer == QMessageBox.StandardButton.Discard or component.confirm_save()
+        if answer == QMessageBox.StandardButton.Discard:
+            return component.discard_changes()
+        return component.confirm_save()
 
     def _on_feature_contribution_changed(self, owner: str, state: str) -> None:
         from .official_features import SCREEN_OWNER
@@ -1580,9 +1613,21 @@ class ModernSettingsDialog(QDialog):
     def select_page(self, label: str) -> bool:
         """按侧栏标题选中页面，供右键菜单/更新通知做深链接。"""
         target = str(label or "").strip()
+        from .feature_management import is_management_page
+
+        management_page = is_management_page(target)
+        if management_page:
+            target = "常规"
         for index in range(self.sidebar.count()):
             if self.sidebar.item(index).text() == target:
                 self.sidebar.setCurrentRow(index)
+                if management_page:
+                    row = self.findChild(SettingRow, "settingRow_feature_packages")
+                    if row is not None:
+                        scroll = self.pages.currentWidget().findChild(QScrollArea)
+                        if scroll is not None:
+                            scroll.ensureWidgetVisible(row)
+                        self.feature_management_widget.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
                 return True
         return False
 
@@ -1636,6 +1681,7 @@ class ModernSettingsDialog(QDialog):
             [
                 ("应用启动", claim("autostart", "harness_autostart")),
                 ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
+                ("扩展管理", claim("feature_packages")),
                 # 「多开」分组已随拓扑收口 Phase A 隐藏（见上方注释）
             ]
         )
@@ -2269,6 +2315,9 @@ class ModernSettingsDialog(QDialog):
             cb(text)
 
     def _release_contributions(self) -> None:
+        self._draft_unsubscribe()
+        if self._owns_feature_management:
+            self.feature_management.close()
         if self._screen_component:
             self._screen_component.dispose()
             self._screen_component = None
