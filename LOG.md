@@ -3,11 +3,11 @@
 <!-- PHASE4B_PUBLICATION_START -->
 ## Phase 4B 分支发布（2026-10-04）
 
-用户明确授权提交推送到 `origin/codex/phase3-worker`；基线 `bd048d5`，85 文件白名单保留原WIP。生成物/私钥/个人数据不入库，不合并、不强推、不正式发行，当前准备最终精确暂存与提交。
+用户明确授权提交推送到 `origin/codex/phase3-worker`；基线 `bd048d5`，85 文件白名单保留原WIP。生成物/私钥/个人数据不入库，不合并、不强推、不正式发行。主提交 `98bbfba78232bb0881628cbbfb36cfdaa519fcb8`（85文件/+14095/-156）已正常push，并由ls-remote/fetch独立核对远端SHA，ahead/behind0/0。
 
 本次新门：Ruff全仓、format518、affected mypy38/default26通过；专项223 passed /1 skipped /1 warning（139.93s）；未过滤全量3841 passed /13 skipped /14 warnings（571.34s）；20个自有CPU fixture下风险族连续3×154 passed，各遍CPU median/p95均100.0%。命令、样本量和单次时间见[工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md)和[准确交接](.scratch/phase4b-local-management/HANDOFF.md)。
 
-本轮不改变产品源码，TDD不适用；压力fixture已正常回收，不终止普通Core/用户进程、不重建冻结产物。五个新建测试临时目录的删除被策略拒绝，126.432 MiB夹具保留且不入库，未绕过。正式信任锚/分发T0～T3继续暂缓，未执行人工门及UX-M3未证实原因保留；当前Core03及原profile/凭据不受提交推送影响。
+127文件文档链接、101项报告纪律与cached diff门通过；新增WORKLOG末尾空白已修正后复验。最终纯文档封存与源码提交分开，不回填自身SHA。本轮不改变产品源码，TDD不适用；压力fixture已正常回收，不终止普通Core/用户进程、不重建冻结产物。五个新建测试临时目录的删除被策略拒绝，126.432 MiB夹具保留且不入库，未绕过。正式信任锚/分发T0～T3继续暂缓，未执行人工门及UX-M3未证实原因保留；当前Core03及原profile/凭据不受提交推送影响。
 <!-- PHASE4B_PUBLICATION_END -->
 
 ## Scratch 生成物清理（2026-10-04）

@@ -4,7 +4,7 @@
 
 | 日期 | 主题 | 入口 | 关键提交/状态 |
 |---|---|---|---|
-| 2026-10-04 | Phase 4B 分支发布 | [发布记录](LOG.md#phase-4b-分支发布2026-10-04) · [工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | 用户已授权；85文件白名单，静态/专项/全量与3×154满CPU门新通过，准备提交推送；正式信任/分发继续暂缓 |
+| 2026-10-04 | Phase 4B 分支发布 | [发布记录](LOG.md#phase-4b-分支发布2026-10-04) · [工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | `98bbfba` 85文件源修改已提交推送并远端SHA核验；全量3841及3×154满CPU新通过，文档封存另列；正式信任/分发继续暂缓 |
 | 2026-10-04 | Scratch 生成物清理 | [清理记录](LOG.md#scratch-生成物清理2026-10-04) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | 294目录/132,245文件，34.987→3.809 GiB；E盘净增31.435 GiB，保护摘要/state不变；正式信任/分发暂缓，无提交/推送 |
 | 2026-10-04 | Phase 4B真实人工验收准备 | [人工记录](docs/PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md) · [准确停点](.scratch/phase4b-local-management/HANDOFF.md) | no-chat目录安装/真实识屏/启停/ZIP幂等/升级/回滚通过；两版本物理卸载、ZIP新安装revision17及Core真实加载核验，用户确认原设置/凭据与结果保留；正式信任锚/分发按用户决定暂缓，正式key未生成；首Core问题未证明修复，自动/第二变体等门单列；无提交/推送 |
 | 2026-10-04 | Phase 4B 连续收尾 | [LOG.md](LOG.md#phase-4b-连续收尾2026-10-04) · [工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md) · [准确停点](.scratch/phase4b-local-management/HANDOFF.md) | 4B-3/4/5 Windows工程闭环完成，最新Core10双七行/全量/满负载三遍通过；人工/发布单列，未提交/推送 |

@@ -13,7 +13,7 @@
 ## 二、修改文件说明
 
 <!-- FILES_START -->
-本表对用户已授权的 85 文件白名单逐项使用 `git diff --numstat -- <path>`；未跟踪文本使用 `git diff --no-index --numstat -- NUL <path>`。基线为 `bd048d5`，包含原有 WIP，**不是声称全部行由本次推送任务新写**。生成物、原始日志、截图、安装包、私钥与用户数据不入库；无删除文件。当前数字按本次发布留档复算，后续仅记录发布结果的 Markdown 变更单列于 Git 提交。
+本表对用户已授权的 85 文件白名单逐项使用 `git diff --numstat -- <path>`；未跟踪文本使用 `git diff --no-index --numstat -- NUL <path>`。基线为 `bd048d5`，包含原有 WIP，**不是声称全部行由本次推送任务新写**。生成物、原始日志、截图、安装包、私钥与用户数据不入库；无删除文件。本表数字封存于主实现提交 `98bbfba`（85文件/+14095/-156）；后续仅记录实际发布结果的Markdown变更，单列于下方文档封存表及Git提交。
 
 | 文件（仓库相对路径） | 类型 | 增删行 | 改了什么 + 为什么 |
 |---|---|---|---|
@@ -241,7 +241,7 @@ mypy完整命令如上，原始46个参数也逐项归档到同组 `affected-myp
 
 ### 本次分支发布复验（2026-10-04）
 
-用户明确授权「将新修改推送到远程分支」。目标仅为 `origin/codex/phase3-worker`；原 `bd048d5` 本地与远程经 fetch 比对相同。85 文件白名单保留原 WIP，不合并、不强推、不正式发布、不重建大型冻结产物。当前门禁通过，尚未提交/推送；最终源提交与远端状态封存于同组交接。
+用户明确授权「将新修改推送到远程分支」。目标仅为 `origin/codex/phase3-worker`；原 `bd048d5` 本地与远程经 fetch 比对相同。85 文件白名单保留原 WIP，不合并、不强推、不正式发布、不重建大型冻结产物。源码主提交 `98bbfba78232bb0881628cbbfb36cfdaa519fcb8` 已正常push并经ls-remote/fetch独立核对远端SHA，ahead/behind0/0；最终同组交接保留，不用本地已commit代替远端成功。
 
 环境：Windows build26100、Python3.11.1、PySide6 6.11.1、psutil6.1.0，20逻辑CPU；主测试设置 `QT_QPA_PLATFORM=offscreen`，原生 UI 子进程自行还原 Windows 平台。
 
@@ -274,7 +274,28 @@ python -m mypy
 
 本轮五个临时测试目录删除被环境策略拒绝，未绕过、未删除。只读盘点 132,573,841 字节（126.432 MiB），跳过2个reparse条目；日志/白名单/before-image和临时夹具均保持ignored，不进入提交。该存储遗留不影响源码发布，先前31.184 GiB生成物清理与当前程序/数据保护保持原事实。
 
-正式T0～T3继续暂缓；UX-M3原因及未执行人工门不冒充修复/通过。最终文档门、精确暂存与远端SHA核验将在封存时记录。
+正式T0～T3继续暂缓；UX-M3原因及未执行人工门不冒充修复/通过。127文件文档链接、101项PR纪律/报告门通过（cached门修正EOF后再验101 passed/0.69s）；85文件精确暂存、有限敏感字面量审计与cached diff通过。首次发现新增WORKLOG末尾空白后已修正，不掩盖失败。全部源摘要保持新全量与压力门对应快照。
+
+### 发布结果与纯文档封存
+
+主实现 `98bbfba78232bb0881628cbbfb36cfdaa519fcb8` 已正常推送到 `origin/codex/phase3-worker`；远端同SHA验证时间 `2026-10-04T16:37:45.4644894+08:00`。源工作树已清洁，个人数据/生成物/私钥均未提交，不合并、不强推、不正式发布。
+
+以下10个文件仅封存已发生的提交/远端状态；相对源码主提交的增删行用 `git diff 98bbfba --numstat -- <path>` 复算，未更改产品/测试行为，按纯文档豁免无需重新全量/压力/运行性能测试。文档门另复验，产品性能数字保留原实测，不用形容词代替数字。记录提交不能写入其自身SHA，最新HEAD与远端比对另保存在同组ignored最终receipt并由终端核验。
+
+<!-- PUBLICATION_RECORDS_START -->
+| 纯文档文件 | 增删行 | 改了什么 + 为什么 |
+|---|---|---|
+| `.scratch/phase4b-local-management/PLAN.md` | +12 / -1 | 封存源发布与验收门，保留正式信任/人工余门和存储遗留。 |
+| `.scratch/phase4b-local-management/HANDOFF.md` | +12 / -1 | 写入已验证源SHA、远端及精确停点，避免把本地提交当推送成功。 |
+| `.scratch/phase4b-local-management/STATUS.md` | +12 / -1 | 区分新自动化、源提交/远程核验、暂缓与未测门。 |
+| `.scratch/phase4b-local-management/SUMMARY.md` | +12 / -1 | 保存新对话有效目标、保护边界、源远端状态和实际使用效果。 |
+| `.scratch/phase4b-local-management/WORKLOG.md` | +6 / -0 | 记录实际提交、远端核验与空白修正/环境策略拒绝，不隐藏普通失败。 |
+| `docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md` | +24 / -3 | 记录已发生源发布、10文件纯文档范围与相对主提交numstat。 |
+| `README.md` | +1 / -1 | 将当前源发布状态同步为已推送，正式信任/发行仍单列。 |
+| `LOG.md` | +2 / -2 | 登记已验证源提交与门禁，不覆盖前轮清理/人工历史。 |
+| `LOG-INDEX.md` | +1 / -1 | 给当前授权发布入口登记真实源提交和远端状态。 |
+| `docs/PROJECT-ENTRY.md` | +1 / -1 | 让后续施工从实际已推送状态开始，而非过期未提交停点。 |
+<!-- PUBLICATION_RECORDS_END -->
 
 ## 七、限制与人工门
 

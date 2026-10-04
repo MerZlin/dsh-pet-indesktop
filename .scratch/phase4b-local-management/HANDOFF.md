@@ -1,4 +1,15 @@
-## 当前准确停点（2026-10-04 16:33；发布门禁通过，准备显式提交与正常推送）
+## 当前准确停点（2026-10-04 16:40；源修改已提交并远程核验，保留最终交接）
+
+- 用户授权的源码发布已完成：主实现提交 `98bbfba78232bb0881628cbbfb36cfdaa519fcb8`（`feat: complete Phase 4B local feature package management`），85文件、+14095/-156；已正常推送到 `origin/codex/phase3-worker`。`ls-remote` 与 fetch 后 upstream SHA均为该提交，ahead/behind=0/0，不将本地commit误写成远程成功。
+- 本次新门：Ruff全仓、format-check518、affected mypy38修改源文件及默认26文件通过；专项223 passed /1 skipped /1 warning（139.93s）；未过滤全量3841 passed /13 skipped /14 warnings（571.34s）。Qt/IPC/native GUI/启动/锁/租约/Worker/session-end/reader满CPU连续3×154 passed，CPU median/p95均100.0%；runner与自有fixture已正常退出。
+- 记录门：127文件Markdown链接检查、101项文档/PR纪律/报告门通过，cached diff与85文件白名单/源摘要/有限敏感字面量审计通过。首次cached门发现新增WORKLOG EOF空白，已修正且重新101项通过，不隐藏失败。全仓mypy、显式native helper及其他平台门不冒充本轮通过。
+- 最终状态：已完成、无剩余产品执行步骤。本次源码提交已独立远程核验；本组最终发布记录单独形成纯文档封存提交，不反向写入其自身SHA。最新记录提交与远端比对保存在ignored `publication-20261004/final-publication-verification.json`，并以实际Git HEAD/远端为准，避免循环改写自身记录。
+- 范围：保留原WIP，只提交源码、测试、公开文档/许可证及本组五份Markdown；构建、原始日志、私钥、个人配置/凭据/聊天历史与所有临时夹具均未入库。未重建大型冻结产物，不改现用Core03及原APPDATA，不启动真实截图/收费模型请求、不代确认、不强退、不改真实ACL。
+- 存储遗留：本轮五个新建测试临时目录的删除被环境策略拒绝，未绕过；126.432 MiB/12,370文件暂留，盘点跳过2个reparse条目。此项不是已删除，不影响源发布；上轮31.184 GiB旧生成物清理仍已完成。临时夹具、白名单、before-image与日志继续ignored。
+- 未验收/暂缓：正式信任锚/分发T0～T3按用户决定暂缓，未生成正式私钥/未正式发布；UX-M3原因未证实、自动/草稿/多实例/chat等余下人工门、其他平台、Setup仍单列。源码已推送不等于正式发行或这些门已完成。
+- 下一步：本次无用户终端操作。若用户之后要求继续，再单独授权处理暂留临时夹具或正式T0设计/未验收人工项；不以本次push授权自动扩大范围。所有工程门/源码提交/源远端核验已完成；文档封存与最终HEAD比对由助手完成后直接汇报。
+
+## 历史检查点（2026-10-04 16:33；发布门禁通过，准备显式提交与正常推送）
 
 - 用户当前授权：将本次新修改提交并推送到 `origin/codex/phase3-worker`。基线 `bd048d57518902532ea82b6b4ba277e79b16871a`；85 文件白名单，保留原 WIP，无产品源码再次修改。仅源代码、测试、公开文档/许可证和本组五份 Markdown，不含生成物/日志/私钥/个人数据。
 - 新验证：Ruff 全仓、format-check 518、affected mypy 38 修改源文件及默认 26 源文件通过；专项 223 passed /1 skipped /1 warning（139.93s）；未过滤全量 3841 passed /13 skipped /14 warnings（571.34s）。app/settings 既有类型债、平台/原生 helper 条件跳过均如实保留，不声称全仓 mypy 或所有实机门新通过。
