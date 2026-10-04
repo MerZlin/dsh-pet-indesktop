@@ -191,7 +191,7 @@ def build_window_flags(config, mouse_through: bool = False, stream_capture_mode:
         flags |= Qt.WindowType.WindowStaysOnTopHint
     if mouse_through:
         flags |= Qt.WindowType.WindowTransparentForInput
-    return flags
+    return flags if sys.platform != "darwin" else flags | Qt.WindowType.NoDropShadowWindowHint
 
 
 def _squash_geometry(
