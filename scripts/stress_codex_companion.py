@@ -21,6 +21,7 @@ def burn(stop, ready):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--tests", nargs="+", help="Affected timing-family test paths; defaults to the original companion gate")
     args = parser.parse_args()
     import psutil
 
@@ -48,12 +49,8 @@ def main():
                 "-m",
                 "pytest",
                 "-q",
-                "tests/test_codex_companion.py",
-                "tests/test_codex_work_reader.py",
-                "tests/test_codex_bridge.py",
-                "tests/test_settings_process_isolation.py",
-                "tests/test_codex_autostart.py",
-                "tests/test_autostart.py",
+                *(args.tests or ["tests/test_codex_companion.py", "tests/test_codex_work_reader.py", "tests/test_codex_bridge.py",
+                                 "tests/test_settings_process_isolation.py", "tests/test_codex_autostart.py", "tests/test_autostart.py"]),
                 "--basetemp",
                 str(args.output / f"pytest-round-{index + 1}"),
             ]

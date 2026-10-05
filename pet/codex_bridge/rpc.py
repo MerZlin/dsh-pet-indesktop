@@ -17,8 +17,10 @@ ROOT = Path(__file__).resolve().parent
 
 class Rpc:
     def __init__(self, executable, startup_timeout=30):
+        from .startup import resolve_executable
+
         command = [
-            executable,
+            resolve_executable(executable),
             "-c",
             "features.shell_tool=false",
             "-c",
@@ -283,7 +285,13 @@ def generate(body, config, models):
             if method == "turn/completed":
                 end = params["turn"]
                 if end.get("status") == "failed":
-                    raise RuntimeError((end.get("error") or {}).get("message", "Codex model request failed"))
+                    from .startup import UsageLimitError
+
+                    error = end.get("error") or {}
+                    info = error.get("codexErrorInfo")
+                    if info == "UsageLimitExceeded" or isinstance(info, dict) and "UsageLimitExceeded" in info:
+                        raise UsageLimitError(error.get("message", "UsageLimitExceeded"))
+                    raise RuntimeError(error.get("message", "Codex model request failed"))
                 break
         else:
             raise TimeoutError("GPT 回覆逾時，請稍後再試。")

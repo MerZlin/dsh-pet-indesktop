@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .rpc import catalog, generate, parent_alive
 from .usage import UsageReader
+from .startup import chat_error, saved_models
 
 MAX_BODY = 24 * 1024 * 1024
 
@@ -99,6 +100,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 return self.json(503, {"ok": False, "error": {"message": "目前無法讀取 Codex 用量，請確認 Codex 已登入。"}})
         if self.path == "/v1/models":
+            try:
+                models = catalog(self.server.config["codexExecutable"])
+                if models:
+                    self.server.models = models
+            except Exception:
+                pass  # Listing an unavailable catalog must not stop the pet.
             return self.json(200, {"object": "list", "data": [{"id": m["model"], "object": "model", "owned_by": "openai"} for m in self.server.models]})
         self.json(404, {"error": {"message": "Unknown endpoint"}})
 
@@ -130,7 +137,8 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as error:
-            self.json(400 if isinstance(error, ValueError) else 502, {"error": {"message": str(error), "type": "codex_bridge_error"}})
+            code, payload = chat_error(error)
+            self.json(code, payload)
 
 
 def main():
@@ -139,7 +147,7 @@ def main():
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
-    models = catalog(config["codexExecutable"])
+    models = saved_models(config)
     server = ThreadingHTTPServer(("127.0.0.1", config["port"]), Handler)
     server.config, server.models, server.model_lock = config, models, threading.Lock()
     server.usage_reader = UsageReader(config)

@@ -38,6 +38,7 @@ class RoundMusicButton(QAbstractButton):
 
     def enterEvent(self, event):
         self.bar.island._music_close_timer.stop()
+        self.bar.island._dock_back_timer.stop()
         self.update()
         super().enterEvent(event)
 
@@ -224,6 +225,7 @@ class MusicBar(QWidget):
 
 def attach(island):
     island._music_requested = False
+    island._music_transition = False
     island._music_anchor = None
     island._music_bar = MusicBar(island)
     island._music_close_timer = QTimer(island)
@@ -266,18 +268,37 @@ def enter(island):
     if not hasattr(island, "_music_bar") or island._mode == "expanded":
         return
     island._music_close_timer.stop()
+    island._dock_back_timer.stop()
     if not island._music_requested and island._mode == "normal":
         if island._music_anchor is None:
             island._music_anchor = QRect(island.geometry())
     island._music_requested = True
+    island._music_transition = True
     island._hover_scale_target = 1.0
-    island._animate_to(island._target_rect())
+    target = island._target_rect()
+    # Qt can re-deliver Enter as a revealed child becomes the hover target.
+    # Keep the native interpolation progress for the same destination.
+    if target != island._geo_to and (island._geo_to is not None or target != island.geometry()):
+        island._animate_to(target)
     layout(island)
 
 
 def leave(island):
     if hasattr(island, "_music_close_timer"):
+        if island.rect().contains(island.mapFromGlobal(QCursor.pos())):
+            island._music_close_timer.stop()
+            island._dock_back_timer.stop()
+            return
         island._music_close_timer.start()
+
+
+def update_size(island, original):
+    """A content refresh must not jump ahead of an in-flight hover animation."""
+    if getattr(island, "_music_transition", False) and island._mode != "expanded" and island._geo_to is not None:
+        island._geo_to = island._target_rect()
+        return
+    island._music_transition = False
+    original(island)
 
 
 def close_if_outside(island):
@@ -290,6 +311,7 @@ def close(island):
     if not hasattr(island, "_music_bar"):
         return
     island._music_requested = False
+    island._music_transition = True
     island._music_bar.hide()
     island._music_bar.poll.stop()
     island._animate_to(island._target_rect())
@@ -300,6 +322,7 @@ def suspend(island):
         return
     island._music_close_timer.stop()
     island._music_requested = False
+    island._music_transition = False
     island._music_bar.hide()
     island._music_bar.poll.stop()
 

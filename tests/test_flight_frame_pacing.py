@@ -93,6 +93,21 @@ def test_flight_speed_writes_do_not_starve_frame_delivery(tmp_path):
     的 0.05 门每 ~4 tick（64ms）放行一次写入。修前：每次写入重开倒计时 → 交付
     被压到写入周期（≈19 帧/1.2s）；修后：交付回到 clip 自己的节奏（≈40 帧）。
     """
+    # A prior Qt/OS timing context can shift this small delivery budget by one
+    # frame. Run the original real-timer probe in its own process, retaining
+    # every assertion below; do not relax the starvation threshold for CI.
+    if os.environ.get("DSH_FLIGHT_PACING_WORKER") != "1":
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", "-m", "pytest", "-q", f"{Path(__file__)}::test_flight_speed_writes_do_not_starve_frame_delivery"],
+            env=dict(os.environ, DSH_FLIGHT_PACING_WORKER="1", QT_QPA_PLATFORM="offscreen", PYTHONUTF8="1"),
+            capture_output=True, text=True, encoding="utf-8", timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return
     d = tmp_path / "clip"
     _make_frames(d)
     clip = FrameSeqClip(d)

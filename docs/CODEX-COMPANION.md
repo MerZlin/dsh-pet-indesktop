@@ -19,6 +19,8 @@ python -m pet --codex-companion --model MODEL_ID --codex /path/to/codex --profil
 
 含 Chat 的打包版本可使用同一组 `--codex-companion` 参数。Windows 开机启动使用独立的 `-codex` 注册表值；macOS/Linux 生成独立的 `.codex` 启动项，并保留 `--profile`。桌宠退出后，其启动器关闭所创建的桥接进程。
 
+已有配置使用保存的模型元数据启动，不需要重新取得聊天额度或模型目录。首次读取模型目录失败时仍能开启桌宠；没有可选模型时聊天关闭，之后可用 `--list-models` / `--model` 配置。桥接健康检查仅表示本机监听可用，不证明登录或模型授权。Codex 桌面更新移除旧执行路径后，优先查找当前 PATH，并在 Windows 检查当前用户的 Codex bin 目录。聊天遇到 `UsageLimitExceeded` 返回 429 和额度不足提示，桌宠、工作状态与音乐继续运行；桥接进程无法启动也不阻止桌宠启动。
+
 ## 功能
 
 | 功能 | 操作与行为 |
@@ -74,6 +76,7 @@ python -m pet.codex_bridge.hooks --events EVENTS_DIR --install
 QT_QPA_PLATFORM=offscreen python scripts/probe_codex_companion.py --output /tmp/companion-ui --screenshots
 QT_QPA_PLATFORM=offscreen python scripts/probe_codex_work_status.py --output /tmp/companion-status
 QT_QPA_PLATFORM=offscreen python scripts/probe_codex_pet.py --output /tmp/companion-pet
+QT_QPA_PLATFORM=offscreen python scripts/probe_codex_music_hover.py --output /tmp/companion-hover
 python scripts/benchmark_codex_companion.py --output /tmp/companion-benchmark
 python scripts/stress_codex_companion.py --output /tmp/companion-stress
 ```

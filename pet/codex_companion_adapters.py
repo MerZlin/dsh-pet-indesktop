@@ -151,6 +151,17 @@ def _with_dynamic_island_DynamicIsland_target_rect(_original):
     return wrapped
 
 
+def _with_dynamic_island_DynamicIsland_update_size(_original):
+
+    @wraps(_original)
+    def wrapped(self):
+        from pet.island_music import update_size
+
+        return update_size(self, _original)
+
+    return wrapped
+
+
 def _with_dynamic_island_DynamicIsland_resizeEvent(_original):
 
     @wraps(_original)
@@ -789,6 +800,7 @@ ADAPTERS = (
     ("pet.dynamic_island", "DynamicIsland", "__init__", _with_dynamic_island_DynamicIsland_init),
     ("pet.dynamic_island", "DynamicIsland", "_rest_size", _with_dynamic_island_DynamicIsland_rest_size),
     ("pet.dynamic_island", "DynamicIsland", "_target_rect", _with_dynamic_island_DynamicIsland_target_rect),
+    ("pet.dynamic_island", "DynamicIsland", "_update_size", _with_dynamic_island_DynamicIsland_update_size),
     ("pet.dynamic_island", "DynamicIsland", "resizeEvent", _with_dynamic_island_DynamicIsland_resizeEvent),
     ("pet.dynamic_island", "DynamicIsland", "enterEvent", _with_dynamic_island_DynamicIsland_enterEvent),
     ("pet.dynamic_island", "DynamicIsland", "leaveEvent", _with_dynamic_island_DynamicIsland_leaveEvent),

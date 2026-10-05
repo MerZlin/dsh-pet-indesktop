@@ -71,6 +71,20 @@ def test_authenticated_read_endpoints_do_not_generate(local_bridge):
     assert request(local_bridge, "/v1/models", headers)[1]["data"][0]["id"] == "catalog-model"
 
 
+def test_usage_exhaustion_only_blocks_chat_and_health_stays_ready(local_bridge, monkeypatch):
+    from pet.codex_bridge import server as module
+    from pet.codex_bridge.startup import UsageLimitError
+
+    def exhausted(*args):
+        raise UsageLimitError("Turn refused")
+
+    monkeypatch.setattr(module, "generate", exhausted)
+    headers = {"Authorization": "Bearer fixture-only-token"}
+    code, value = request(local_bridge, "/v1/chat/completions", headers, "POST", json.dumps({"messages": [{"role": "user", "content": "hello"}]}))
+    assert code == 429 and value["error"]["type"] == "usage_limit_exceeded"
+    assert request(local_bridge, "/health", headers)[1]["ok"]
+
+
 def test_no_chat_entry_rejects_companion_before_constructing_app():
     from pathlib import Path
     import subprocess

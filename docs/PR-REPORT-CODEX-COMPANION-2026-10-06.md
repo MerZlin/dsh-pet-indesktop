@@ -20,7 +20,7 @@
 
 ## 二、修改文件说明
 
-下面表格取 `git diff --cached --numstat`，新增文件计入；没有删除已有上游文件。新增资源只包含文本目录，不包含运行配置、聊天或媒体二进制。
+下面表格是第一轮提交 `837c601` 的 `git diff --cached --numstat`，新增文件计入；没有删除已有上游文件。新增资源只包含文本目录，不包含运行配置、聊天或媒体二进制。后续轮次的差异与证据在文末追加，保留此历史对照。
 
 <!-- FILE-TABLE-BEGIN -->
 | 文件 | 增删 | 改动意图 |
@@ -178,3 +178,64 @@ Windows 前景能力探针：沙盒内 `foregroundWindowAvailable=false, visionR
 ## 八、风险与回滚
 
 关闭两个监控开关即停止相应轮询；退出独立入口并用普通 `python -m pet` 启动可回到原版。独立配置保留，不覆盖原版数据。回滚提交后可保留独立配置供再次启用，若要移除须由用户明确选择该配置目录和独立启动项。普通未知键加载遵循上游 Config，新增值有严格归一化，不触碰既有密钥和角色/slot 历史。
+
+## 九、第二轮修正：播放键抖动与无聊天能力时启动（2026-10-06）
+
+用户反馈悬停播放键抽搐，以及额度用完时无法开启桌宠。现场只读探针发现配置的 Codex 可执行文件已被桌面更新移除：`configuredCodexExists=false`，旧桥接在取得 catalog 之前就抛 `FileNotFoundError`；启动器等待健康端点，最终把这个错误误报成未登录。此现场证据并不证明额度用完导致进程消失；同时补上额度耗尽的独立失败边界。
+
+### 修改文件说明
+
+相对第一轮 `837c601` 的逐文件增删如下：
+
+<!-- ROUND2-FILES-BEGIN -->
+| 文件 | 增删 | 改动意图 |
+|---|---|---|
+| `docs/CODEX-COMPANION.md` | +3 / −0 | 解释离线启动、更新后路径发现和额度不足边界；登记悬停探针。 |
+| `docs/PR-REPORT-CODEX-COMPANION-2026-10-06.md` | +62 / −1 | 保留第一轮证据，追加现场根因、逐文件差异、实测与本机安装记录。 |
+| `pet/codex_bridge/__main__.py` | +24 / −13 | 已有模型元数据不查询 catalog；桥接创建失败仍启动桌宠，首次无模型关闭聊天。 |
+| `pet/codex_bridge/rpc.py` | +10 / −2 | 每次 RPC 解析现行执行路径，并保留服务的 UsageLimitExceeded 类型。 |
+| `pet/codex_bridge/server.py` | +10 / −2 | 先开放本机端口，再按需刷新目录；耗尽仅返回聊天 429。 |
+| `pet/codex_bridge/startup.py` | +45 / −0 | 统一执行文件发现、离线元数据与聊天错误映射，无生成请求。 |
+| `pet/codex_companion_adapters.py` | +12 / −0 | 具名适配 _update_size，保持原生源码与普通入口语义。 |
+| `pet/island_music.py` | +24 / −1 | 同目标不重启动画，刷新只更新目标；子按钮悬停取消停靠计时器。 |
+| `scripts/probe_codex_music_hover.py` | +122 / −0 | 真实 Qt 事件循环验证连续展开、状态刷新、子按钮与三主题。 |
+| `scripts/stress_codex_companion.py` | +3 / −6 | 允许明确指定本轮相关时序族，原默认门禁列表保持。 |
+| `tests/test_codex_bridge.py` | +14 / −0 | 服务明确耗尽时返回 429，而随后本机健康请求仍可用。 |
+| `tests/test_codex_music.py` | +16 / −0 | 在独立进程运行悬停回归，避免污染原生类表面。 |
+| `tests/test_codex_startup.py` | +88 / −0 | 过期路径发现、缺失 CLI 的真实健康端口、桥接进程失败的启动边界。 |
+| `tests/test_flight_frame_pacing.py` | +15 / −0 | 在独立真实 Qt 进程执行原端到端计时探针，保留全部原断言，消除组合时序污染。 |
+<!-- ROUND2-FILES-END -->
+
+悬停 Enter 在目标不变时保持插值进度；工作/时钟刷新更新动画目标，不立即跳到终点。进入子按钮取消原生停靠和音乐收回计时器。新增接点只在 opt-in 适配层，原生 `dynamic_island.py` 源码未修改。
+
+启动器使用已有模型元数据，健康端点在本机服务绑定后可用，不依赖 catalog 或生成成功。首次目录获取失败采用无聊天状态；模型列表可在用户请求时重新读取。RPC 每次解析当前可执行文件；桥接创建失败仍启动桌宠。带有服务 `UsageLimitExceeded` 标签的聊天失败返回 429，其他读取/音乐功能继续可用。没有发送测试聊天来消耗实际额度。
+
+### 性能分析
+
+Windows 实際打包 Python 3.11 / PySide6；命令为本机离屏探针与 1000 次真实 Qt Enter 事件测量。复现公共探针：
+
+```sh
+QT_QPA_PLATFORM=offscreen python scripts/probe_codex_music_hover.py --output /tmp/companion-hover
+```
+
+原生事件 n=1000：中位数 0.0596 ms、p95 0.0669 ms、CPU 0.0625 ms/次。实际展开/收回探针 0.515 s，记录 11 帧。稳态没有新增轮询计时器、线程、网络或模型回合；沿用原生 180 ms 几何动画及两个收回计时器。路径自动发现仅在 RPC/启动时发生，增加本机文件探测；窗口启动取消对模型目录和健康检查成功的硬依赖。保存的模型目录在独立桥接配置初始化时替换，未随运行追加；没有额外逐帧持久化，也未声称长期零内存增长。
+
+### 实机运行记录
+
+修改前真实 Qt 回归报 `Repeated Enter restarted the hover animation`，原桥接无执行文件时健康端点无法开放。修改后，源代码与实际打包 Qt 均确认：
+
+```json
+{"repeatedEnterDoesNotRestart":true,"statusRefreshDoesNotJump":true,"openingWidthsMonotonic":true,"childHoverCancelsDocking":true,"collapseRestoresPosition":true,"threeThemes":true,"modelTurns":0,"directDesktopInspection":false}
+```
+
+打包版深色/浅色/玻璃截图检查可见三个圆形控件，布局保持。隔离本机桥接在旧路径下自动找到现行执行文件，真实只读目录返回 7 个模型，读取两个额度窗口；0 个模型回合。系统进程创建失败的边界探针确认 `petStartsWhenBridgeCannotSpawn=true`。额度耗尽由服务错误边界 fixture 验证 429 与后续健康端点仍可用，不伪称现场额度当前已耗尽。用户当前配置、聊天与 Hooks 没有用于公共 fixture。
+
+本机已安装并重新启动。仅替换两个打包模块，1341 个其他模块及启动器字节保留；GPT-6 Luna 健康端点可用，`startupRequiresChatQuota=false`。设置字节、1 个聊天文件、964 条历史前缀、Hooks 与开机启动全部保留。程序与启动器修改已写入正式 D 槽位置，重新开机继续使用；PATH 缺失的真实文件发现探针亦通过，未声称实际重启电脑；0 个新增模型回合。
+
+### 本轮测试与验证
+
+聚焦 15 passed（2.36 s），ruff 通过。受影响六族（music/startup/bridge/dynamic-island/content-cache/topmost）CPU 100% 连续三轮各 58 passed，进程墙钟 4.66 / 4.48 / 4.29 s，负载进程全部结束。
+
+首轮全量 4329 passed / 14 skipped，有一个未修改的飞行幀时序边界失败：实际 41 帧，要求至少 41.297。隔离原 `test_flight_frame_pacing.py` 五项全部通过（2.34 s），没有修改飞行逻辑、放宽断言或 deselect；第二次全量同样 4329 passed / 14 skipped，重复这一项边界失败（299.48 s）。组合新测试与飞行族亦重现，而各单族组合通过；依仓库连续两轮失败即隔离的时序纪律，将原端到端探针放入独立真实 Qt 进程。原阈值和所有断言未变、全量仍执行该探针；同一失败顺序转为 19 passed（5.06 s）。隔离后七族满载三轮各 63 passed，CPU 100%，墙钟 8.17 / 7.29 / 7.37 s；原断言仍通过。最终全量 `python -X utf8 -m pytest -q` 为 4330 passed / 14 skipped / 14 warnings，307.20 s；没有排除测试。最终 ruff、报告门禁与 diff whitespace 检查均通过。
+
+回滚本轮提交可恢复第一轮源码；本机有修正前的可执行文件和桥接源码备份。Mac/Linux 实机与完整发行构建仍沿用第一轮限制，未在本轮补称完成。
