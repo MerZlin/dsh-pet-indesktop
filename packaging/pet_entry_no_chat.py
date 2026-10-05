@@ -2,6 +2,9 @@
 """PyInstaller entry for the desktop-pet build without the AI chat feature."""
 import sys
 
+if any(flag in sys.argv for flag in ("--codex-companion", "--codex-local-bridge")):
+    raise SystemExit("Codex companion requires the full Chat build; this no-chat build cannot launch it.")
+
 if "--settings" in sys.argv:
     # 同 pet_entry.py：--settings 必须在 import pet.app 之前分流到独立设置进程。
     # no-chat 变体里 pet.chat 被 excludes 剔除，_run_settings 会经 find_spec 探测

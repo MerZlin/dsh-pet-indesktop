@@ -181,3 +181,11 @@ SOFTWARE.
 
 `tests/test_festival.py` 中有断言守卫这三个库的存在（`test_pop_culture_libraries_are_present_and_non_empty`）；
 若你为合规主动删除它们，请一并移除或调整该断言。
+
+## 6. Codex companion language resources
+
+`pet/codex_languages/traditional_chars.json` and the generated Traditional Chinese
+catalog use Open Chinese Convert (OpenCC) dictionary data from
+[ByVoid/OpenCC](https://github.com/ByVoid/OpenCC), including STCharacters,
+STPhrases, TWPhrases and TWVariants. The data is licensed under Apache-2.0;
+the full license is retained in `pet/codex_languages/OpenCC-LICENSE.txt`.

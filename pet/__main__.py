@@ -108,6 +108,13 @@ def _run_settings(config=None) -> int:
 
 
 def _main() -> int:
+    if "--codex-local-bridge" in sys.argv:
+        sys.argv.remove("--codex-local-bridge")
+        from .codex_bridge.server import main
+        return main()
+    if "--codex-companion" in sys.argv:
+        from .codex_bridge.__main__ import main
+        return main([arg for arg in sys.argv[1:] if arg != "--codex-companion"])
     # 卸载清理走无 GUI 路径：不导入 pet.app（避免拉起 QApplication/事件循环）。
     if "--uninstall-cleanup" in sys.argv:
         from .uninstall_cleanup import run_uninstall_cleanup
@@ -117,7 +124,15 @@ def _main() -> int:
         return 1 if failed else 0
     # 设置页独立进程同样不导入 pet.app（模块集合是主进程的子集，见模块 docstring）。
     if "--settings" in sys.argv:
+        import os
+        if os.environ.get("DSH_CODEX_COMPANION") == "1":
+            from .codex_companion import install
+            install(settings_only=True)
         return _run_settings()
+    import os
+    if os.environ.get("DSH_CODEX_COMPANION") == "1":
+        from .codex_companion import install
+        install()
     from .app import main as app_main
     return app_main()
 

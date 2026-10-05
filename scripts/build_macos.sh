@@ -78,6 +78,7 @@ for variant in "${variant_list[@]}"; do
         --add-data "assets/chat:assets/chat"
         --add-data "assets/sounds:assets/sounds"
         --add-data "pet/menu_templates:pet/menu_templates"
+        --add-data "pet/codex_languages:pet/codex_languages"
         --add-data "pet/persona_presets:pet/persona_presets"
         --add-data "integrations:integrations"
     )

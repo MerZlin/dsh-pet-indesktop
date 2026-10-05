@@ -24,9 +24,23 @@ if "--settings" in sys.argv:
     # 会把整个桌宠（素材库/ffmpeg/托盘/灵动岛）再拉一份，独立进程省内存的前提就没了。
     # 用绝对导入：pet/__main__.py 的相对导入在 PyInstaller 顶层入口会解析失败
     #（见本文件模块 docstring），但作为包内模块 import 进来时相对导入正常。
+    import os
+    if os.environ.get("DSH_CODEX_COMPANION") == "1":
+        from pet.codex_companion import install
+        install(settings_only=True)
     from pet.__main__ import _run_settings
 
     sys.exit(_run_settings())
+
+if any(flag in sys.argv for flag in ("--codex-companion", "--codex-local-bridge")):
+    from pet.__main__ import _main
+
+    sys.exit(_main())
+
+import os
+if os.environ.get("DSH_CODEX_COMPANION") == "1":
+    from pet.codex_companion import install
+    install()
 
 from pet.app import main
 
