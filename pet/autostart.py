@@ -35,6 +35,9 @@ PLIST_LABEL = (
 # Windows 自启注册表值名按变体隔离（如 dsh-pet-standalone-webm-chat）。
 # 每个变体只管理自己的值，避免“关无 Chat 版把 Chat 版也关了”。
 VALUE_NAME = APP_DIR_NAME
+if os.environ.get("DSH_CODEX_COMPANION") == "1":
+    PLIST_LABEL += ".codex"
+    VALUE_NAME += "-codex"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 # 历史/各变体可能写入过的值名；仅用于启动时清理“指向已不存在路径”的失效项，
 # 不影响其他仍有效的变体自启。
@@ -73,7 +76,11 @@ def _desktop_path() -> Path:
 
 def _linux_desktop_content() -> str:
     """Linux 自启 .desktop 内容；源码运行经 sh 切工作目录，打包运行直接指向二进制。"""
-    if getattr(sys, "frozen", False):
+    edition = _companion_command()
+    if edition:
+        inner_cmd = f"cd {shlex.quote(str(_launch_root()))} && exec {shlex.join(edition)}"
+        command = f"/bin/sh -c {shlex.quote(inner_cmd)}"
+    elif getattr(sys, "frozen", False):
         command = f"{shlex.quote(str(Path(sys.executable).resolve()))} --slot 0"
     else:
         root_quoted = shlex.quote(str(_project_root()))
@@ -200,6 +207,10 @@ def is_enabled() -> bool:
 
 
 def _win_command() -> str:
+    command = _companion_command()
+    if command:
+        import subprocess
+        return f'cmd /c start "" /D "{_launch_root()}" {subprocess.list2cmdline(command)}'
     if getattr(sys, "frozen", False):
         # onefile 的 runtime_tmpdir="." 是相对“当前工作目录”解析的；
         # 开机自启（HKCU Run）默认工作目录可能是 System32 等不可写目录。
@@ -211,10 +222,26 @@ def _win_command() -> str:
 
 
 def _mac_program_args() -> list[str]:
+    edition = _companion_command()
+    if edition:
+        return edition
     if getattr(sys, "frozen", False):
         # .app 内二进制路径，直接作为 LaunchAgent 程序运行
         return [str(sys.executable), "--slot", "0"]
     return [sys.executable, "-m", "pet", "--slot", "0"]
+
+
+def _launch_root() -> Path:
+    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else _project_root()
+
+
+def _companion_command() -> list[str]:
+    if os.environ.get("DSH_CODEX_COMPANION") != "1":
+        return []
+    command = [str(sys.executable) if getattr(sys, "frozen", False) else _pythonw_path()]
+    if not getattr(sys, "frozen", False):
+        command += ["-m", "pet"]
+    return command + ["--codex-companion", "--profile", os.environ["DSH_CODEX_PROFILE"]]
 
 
 def enable() -> bool:

@@ -87,6 +87,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
+| [`CODEX-COMPANION.md`](CODEX-COMPANION.md) | 可选 Codex 桌宠入口、配置契约、额度/多工作状态、界面与媒体能力。 | 启动、修改或排查 Codex 版本时阅读；证据见对应 PR 报告。 |
 | [`AGENT_LINK_PROTOCOL.md`](AGENT_LINK_PROTOCOL.md) | 多 Agent 联动统一事件协议与扩展指南：本地文件事件总线、六态词汇、第三方 Agent 接入与新增内置 Agent 的步骤。 | 接入新 Agent、改事件归一（`normalize_event_state`）或六态词汇时；面向集成方的对外协议口径以本文为准。 |
 | [`DSH-BRIDGE-PET-EVENT-CONTRACT-2026-09-02.md`](DSH-BRIDGE-PET-EVENT-CONTRACT-2026-09-02.md) | Agent 适配器 → Pet 的事件契约：三层关系（原始事件 → 适配器标准 JSONL → Monitor/AgentLinkManager → 气泡与回写）与接入约束。 | 新增或修改适配器（`integrations/dsh-pet-bridge/`）、或需要在 Pet 侧复用既有状态处理/交互队列时。 |
 | [`DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md`](DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md) | DSH 人工请求事件调研：哪些 DSH 信号表示 Agent 暂停等待用户批准/回答，哪些只是工具或生命周期记录。 | 调整审批/提问的识别范围、或怀疑某类事件被误判成需要弹窗时；实现状态以 `integrations/dsh-pet-bridge/index.js` 与测试为准。 |
@@ -133,6 +134,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
+| [`PR-REPORT-CODEX-COMPANION-2026-10-06.md`](PR-REPORT-CODEX-COMPANION-2026-10-06.md) | Codex 独立版本的逐文件变更、实测开销、Qt/本机验证及限制。 | 审阅 Codex 桌宠贡献时阅读。 |
 | [`PR-REPORT-QT-LIFECYCLE-CRASH-FAMILY-2026-10-04.md`](PR-REPORT-QT-LIFECYCLE-CRASH-FAMILY-2026-10-04.md) | Qt 生命周期崩溃家族根治：根因 = 丢弃未收口的 clip/worker 被 GC 析构撞上共享预取线程的在途 queued 交付（mac .ips 原生栈实锤 qtPythonMetacall 0x8）；修复 = clip/worker 进程级强钉 + 配图加载单 worker 队列化 + 配图缓存进程级共享 + 收口无条件作废在飞批次；CI 两道隔离（mac 拆进程 + 肇事单条 deselect）全摘，v15/v17 两轮三平台同口径全绿。 | 改 `pet/frameseq_clip.py` 生命周期/`pet/overlay_shell.py` 配图加载链、排查「测试套件/进程退出时段错误」、或引用崩溃家族历史时必读。 |
 | [`PR-REPORT-FULL-REVIEW-FIXES-2026-10-03.md`](PR-REPORT-FULL-REVIEW-FIXES-2026-10-03.md) | 全量大审修复批次：两家独立审查（astra/ops5.5）27 条发现并集，主代理逐条裁决（修 20/缓 5/否 1/产品决策 1），ds 六批修复 60+ 新回归全部红→绿——冻结根因之外的 20 条：`_idle_trim_timer` 停摆、worker 回收死路、预热竞态倒写、WebM 暂停丢帧、计划时长速率错配、暂停所有权冲突、spawn 暂停继承、restart 对称收口、预热绕闸、碰撞累计写回（手感变化待实机）、隐藏宠退出碰撞、旋转像素命中、SessionWatcher 三层修复（锁屏通知真接入）、退出收口加固、主库 shutdown、配置显式 null、flipped 回退、start 定序、句柄追踪、孤儿终局、limiter fail-closed、slot 原子写、缓存有界、屏迁移两刀。 | 评审/合并本批前必读；改播放暂停/碰撞写回/会话接入/退出收口/屏迁移/持久化任一域，或再遇「冻结/隐形障碍/迁移后位置错」时必读；缓修 5 条（非 Windows 拓扑穿透=发布阻断级）与未验收边界在其中。 |
 | [`PR-REPORT-STALE-CLIP-PAUSE-FREEZE-2026-10-03.md`](PR-REPORT-STALE-CLIP-PAUSE-FREEZE-2026-10-03.md) | clip 暂停标记跨绑定滞留致画面永久冻结（拖拽后卡住 / 提起动画变静态图 / 挂机回来三只全冻但还在移动，三症同源）：隐藏期换绑只 stop 旧 clip 不清 `_paused`，恢复只续当前 clip，旧 clip 再绑时 `start()` 看到滞留标记不起定时器 = 冻在首帧；修法 = `bind_clip` 在 sprite 未暂停时补一次幂等 `resume()`（+9 行，0.299µs/次实测），契约持有方对齐下推状态，隐藏期零推进契约不变。 | 改 `pet/pet_sprite.py` 的 bind/restart/pause/resume、`pet/frameseq_clip.py` / `pet/webm_clip.py` 的 start/pause/resume 语义、隐藏/挂起/全屏避让路径，或再遇「动画冻在静态帧但宠物还在动」时必读。 |

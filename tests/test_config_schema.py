@@ -30,6 +30,17 @@ from pet.config import Config
 # "for key in (...)" 元组一致；任何增删必须同步更新本快照）。
 RELOAD_WHITELIST_SNAPSHOT = frozenset(
     {
+        "ui_language",
+        "codex_usage_enabled",
+        "codex_work_status_enabled",
+        "ytmusic_auto_connect",
+        "settings_ui_style",
+        "menu_ui_style",
+        "bubble_ui_style",
+        "quota_ui_style",
+        "quick_chat_ui_style",
+        "chat_window_ui_style",
+
         "agent_cost_enabled",
         "animation_gap_seconds",
         "auto_hide_fullscreen",

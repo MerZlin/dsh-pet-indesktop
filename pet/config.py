@@ -475,6 +475,8 @@ def _merge_chat_data(raw):
 
 
 def _default_base():
+    if os.environ.get("DSH_CODEX_COMPANION") == "1" and os.environ.get("DSH_CODEX_PROFILE"):
+        return Path(os.environ["DSH_CODEX_PROFILE"])
     if sys.platform == "win32":
         return Path(os.environ.get("APPDATA") or Path.home())
     if sys.platform == "darwin":
@@ -735,6 +737,17 @@ def atomic_replace_with_retry(temp, target, attempts: int = 5) -> None:
 _NULL_ACCEPTING_KEYS = frozenset({"context_menu_layout"})
 
 
+def _normalize_companion_settings(data):
+    """Recover optional edition preferences without interpreting string booleans."""
+    if data.get("ui_language") not in ("zh_CN", "zh_TW", "en"):
+        data["ui_language"] = "zh_CN"
+    for key in ("codex_usage_enabled", "codex_work_status_enabled", "ytmusic_auto_connect"):
+        data[key] = _bool_or_default(data.get(key), key == "ytmusic_auto_connect")
+    for key in ("settings_ui_style", "menu_ui_style", "bubble_ui_style", "quota_ui_style", "quick_chat_ui_style", "chat_window_ui_style"):
+        if data.get(key) not in ("dark", "light", "glass"):
+            data[key] = "dark"
+
+
 class Config:
     def __init__(self, base=None, instance_id: str | None = None):
         base = Path(base) if isinstance(base, str) else (base or _default_base())
@@ -750,6 +763,17 @@ class Config:
             self._seed_slot_config_from_main()
         self.data = {
             "version": 4,
+            "ui_language": "zh_CN",
+            "codex_usage_enabled": False,
+            "codex_work_status_enabled": False,
+            "ytmusic_auto_connect": True,
+            "settings_ui_style": "dark",
+            "menu_ui_style": "dark",
+            "bubble_ui_style": "dark",
+            "quota_ui_style": "dark",
+            "quick_chat_ui_style": "dark",
+            "chat_window_ui_style": "dark",
+
             "rx": None,
             "ry": None,
             "screen_name": None,
@@ -1010,6 +1034,17 @@ class Config:
                     if "vision_api_key" not in raw_provider and previous_provider.get("vision_api_key"):
                         merged_provider["vision_api_key"] = previous_provider["vision_api_key"]
         for key in (
+            "ui_language",
+            "codex_usage_enabled",
+            "codex_work_status_enabled",
+            "ytmusic_auto_connect",
+            "settings_ui_style",
+            "menu_ui_style",
+            "bubble_ui_style",
+            "quota_ui_style",
+            "quick_chat_ui_style",
+            "chat_window_ui_style",
+
             "rx",
             "ry",
             "screen_name",
@@ -1151,6 +1186,7 @@ class Config:
         self._migrate_decode_broker_config(raw)
         self.data["version"] = 4
         self._migrate_plaintext_keys_to_keyring()
+        _normalize_companion_settings(self.data)
 
     def _migrate_plaintext_keys_to_keyring(self) -> None:
         """加载时把磁盘遗留的明文 API Key 迁移进 keyring。
@@ -1297,6 +1333,7 @@ class Config:
                     stack.append(value)
 
     def _normalize_pet_settings(self):
+        _normalize_companion_settings(self.data)
         dialogue_mode = str(self.data.get("dialogue_mode") or "legacy").lower()
         self.data["dialogue_mode"] = dialogue_mode if dialogue_mode in {"legacy", "whale_maid", "custom"} else "legacy"
         raw_phrases = self.data.get("dialogue_phrases")
