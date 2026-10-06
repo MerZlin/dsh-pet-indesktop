@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from . import feature_state_io as io
-from .feature_install_state import FEATURE_ID, FeatureInstallStateStore
+from .feature_install_state import FeatureInstallStateStore
 from .feature_state_io import StateError
 
 if TYPE_CHECKING:
@@ -354,7 +354,7 @@ class FeatureVersionLeaseCoordinator:
         if not isinstance(selection, FeatureVersionSelection):
             raise LeaseError("selection_invalid")
         if (
-            selection.feature_id != FEATURE_ID
+            selection.feature_id != self.store.feature_id
             or not _VERSION.fullmatch(selection.version)
             or selection.revision < 0
             or not _DIGEST.fullmatch(selection.manifest_digest)
@@ -448,6 +448,10 @@ class FeatureVersionLeaseCoordinator:
         return self._acquire(selection, "settings")
 
     def reserve_worker(self, selection: FeatureVersionSelection) -> WorkerReservation:
+        from .official_features import official_feature
+
+        if official_feature(selection.feature_id).execution_kind != "host-worker":
+            raise LeaseError("host_only_has_no_worker")
         result = self._acquire(selection, "worker_reservation")
         assert isinstance(result, WorkerReservation)
         return result
@@ -594,7 +598,7 @@ class FeatureVersionLeaseCoordinator:
         uncertain = False
         uncertainty_reason: str | None = None
         for record in records:
-            if record["feature_id"] != FEATURE_ID or record["version"] != version or (revision is not None and record["revision"] != revision):
+            if record["feature_id"] != self.store.feature_id or record["version"] != version or (revision is not None and record["revision"] != revision):
                 continue
             lease_id = str(record["lease_id"])
             try:

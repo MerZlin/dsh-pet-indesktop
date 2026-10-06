@@ -125,3 +125,13 @@ def test_linux_disable_removes_desktop_file(monkeypatch, tmp_path: Path):
     assert autostart_mod.is_enabled() is False
     desktop = tmp_path / "autostart" / f"{autostart_mod.PLIST_LABEL}.desktop"
     assert not desktop.exists()
+
+
+def test_new_core_stale_cleanup_does_not_read_or_remove_legacy_variant_entries(monkeypatch, tmp_path):
+    fake = _force_win(monkeypatch)
+    monkeypatch.setattr(autostart_mod, "APP_DIR_NAME", "dsh-pet-core-webm")
+    legacy = f'cmd /c start "" /D "{tmp_path / "legacy"}" "{tmp_path / "legacy/old.exe"}"'
+    new = f'cmd /c start "" /D "{tmp_path / "new"}" "{tmp_path / "new/dsh-pet-core-webm.exe"}" --slot 0'
+    fake.values = {"dsh-pet-standalone-webm": legacy, "dsh-pet-core-webm": new}
+    assert autostart_mod.cleanup_stale_entries() == 1
+    assert fake.values == {"dsh-pet-standalone-webm": legacy}

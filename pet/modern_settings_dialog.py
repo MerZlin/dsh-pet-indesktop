@@ -66,7 +66,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import __version__, catalog
+from . import __version__, catalog, settings_feature_lifecycle
 from . import autostart as autostart_mod
 from .click_sound import warm_click_sound_effects
 from .config import (
@@ -101,6 +101,10 @@ from .update_settings import UpdatePage
 def _chat_feature_available() -> bool:
     """本构建是否带聊天模块（纯桌宠版打包时排除 pet.chat，与 app.py
     ChatService 导入守卫同一判定口径）。"""
+    from .feature_distribution import BUILTIN_AI
+
+    if not BUILTIN_AI:
+        return False
     try:
         from .chat.service import ChatService  # noqa: F401
     except ImportError as exc:
@@ -110,7 +114,12 @@ def _chat_feature_available() -> bool:
     return True
 
 
-from . import settings_file_interpret, settings_interaction, settings_music, settings_pet_controls
+from . import settings_interaction, settings_music, settings_pet_controls
+from .feature_distribution import BUILTIN_AI
+
+settings_file_interpret = None
+if BUILTIN_AI:
+    from . import settings_file_interpret
 from .persona_template import (
     CONDITIONAL_PARAMETERS,
     PARAMETERS,
@@ -252,25 +261,33 @@ class ModernSettingsDialog(QDialog):
     def __init__(self, config, parent=None, *, include_ai: bool = True, standalone: bool = False, initial_page: str | None = None, feature_host=None):
         super().__init__(parent)
         self.config = config
-        from .feature_management import attach_feature_management, is_management_page
-        from .official_features import SCREEN_OWNER, default_feature_host
+        from .feature_management import attach_official_management, close_official_management, is_management_page
+        from .official_features import AI_OWNER, SCREEN_OWNER, default_feature_host
         from .plugins.feature_host import FeatureHost
 
         management_only = bool(standalone and is_management_page(initial_page))
         self._owns_feature_management = feature_host is None
         self.feature_host = feature_host if feature_host is not None else (FeatureHost() if management_only else default_feature_host())
-        self.feature_management = attach_feature_management(config, self.feature_host, role="settings", management_only=management_only)
+        self.feature_managers = attach_official_management(config, self.feature_host, role="settings", management_only=management_only)
+        self.feature_management = self.feature_managers[SCREEN_OWNER]  # Existing public SCREEN seam.
         self._feature_scope = f"settings:{id(self)}"
         self._feature_drafts = {}
         self._screen_component = None
-        self._draft_unsubscribe = lambda: None
-        if self.feature_management.endpoint is not None:
-            self._draft_unsubscribe = self.feature_management.endpoint.register_draft(
-                self._feature_scope, lambda: bool(self._screen_component and self._screen_component.dirty())
-            )
-        self.destroyed.connect(self._draft_unsubscribe)
+        self._feature_components = {}
+        draft_unsubscribers = []
+        for owner, manager in self.feature_managers.items():
+            if manager.endpoint is not None:
+                draft_unsubscribers.append(manager.endpoint.register_draft(self._feature_scope, lambda owner=owner: self._feature_draft_dirty(owner)))
+
+        def unsubscribe_drafts():
+            while draft_unsubscribers:
+                draft_unsubscribers.pop()()
+
+        self._draft_unsubscribe = unsubscribe_drafts
+        self.destroyed.connect(unsubscribe_drafts)
         if self._owns_feature_management:
-            self.destroyed.connect(self.feature_management.close)
+            host = self.feature_host
+            self.destroyed.connect(lambda: close_official_management(host))
         handle = self.feature_host.settings(SCREEN_OWNER, self._feature_scope)
         if handle:
             try:
@@ -280,14 +297,27 @@ class ModernSettingsDialog(QDialog):
             except Exception:
                 logging.exception("screen settings contribution failed")
                 self.feature_host.fault(SCREEN_OWNER, "settings_factory_failed")
+        if self._screen_component is not None:
+            self._feature_components[SCREEN_OWNER] = self._screen_component
         self.screen_settings_page = self._screen_component.vision if self._screen_component else None
-        self.include_ai = bool(include_ai)
+        self._ai_component = None
+        ai_handle = self.feature_host.settings(AI_OWNER, self._feature_scope)
+        if ai_handle:
+            try:
+                from .feature_host_bindings import bind_ai_context
+
+                self._ai_component = ai_handle.create(bind_ai_context(config, host=self.feature_host), self)
+                self._feature_components[AI_OWNER] = self._ai_component
+            except Exception:
+                logging.exception("AI settings contribution failed")
+                self.feature_host.fault(AI_OWNER, "settings_factory_failed")
+        self.include_ai = bool(self._ai_component is not None or (include_ai and BUILTIN_AI))
         # standalone=True：本对话框跑在独立设置进程（python -m pet --settings）里，
         # 没有桌宠窗口/AppShell 可依附。只影响下面几处显式分支，默认 False 时
         # 全部行为与改动前逐位一致。
         self.standalone = bool(standalone)
         self.initial_page = str(initial_page or "").strip()
-        self.ai_page = None
+        self.ai_page = self._ai_component.page if self._ai_component else None
         self.setProperty("modernStyle", True)
         self.setProperty("menuStyle", "modern")
         self.setWindowTitle("桌宠设置")
@@ -452,7 +482,9 @@ class ModernSettingsDialog(QDialog):
         self.island_collision_check = ToggleSwitch(self)
         self.island_collision_check.setChecked(bool(island_cfg.get("collision_enabled", True)))
 
-        if include_ai:
+        if self._ai_component is not None:
+            self.ai_page.screen_settings_requested.connect(lambda: self._search_settings("screen_model"))
+        elif self.include_ai:
             # 延迟 import：no-chat 打包变体 excludes=['pet.chat']，顶层导入会在
             # 产物运行时抛 ModuleNotFoundError，导致设置界面整体打不开。
             from .chat.ai_settings_page import _AiSettingsPage
@@ -528,24 +560,38 @@ class ModernSettingsDialog(QDialog):
                     general_content,
                 )
             )
+        from .settings_balance import mount_balance_settings
+
+        mount_balance_settings(self, general_layout, general_content)
         from .feature_management_ui import FeatureManagementWidget
 
-        self.feature_management_widget = FeatureManagementWidget(self.feature_management, self)
+        self.feature_management_widgets = {owner: FeatureManagementWidget(manager, self) for owner, manager in self.feature_managers.items()}
+        self.feature_management_widget = self.feature_management_widgets[SCREEN_OWNER]
         general_layout.addWidget(
             SettingsSection(
                 "扩展管理",
                 [
                     SettingRow(
                         "feature_packages",
-                        "官方功能包",
+                        "官方屏幕理解功能包",
                         "扩展、插件、屏幕理解：本地安装、升级、启停、回滚与卸载。包级操作影响所有实例。",
-                        self.feature_management_widget,
+                        self.feature_management_widgets[SCREEN_OWNER],
                         stacked=True,
-                    )
+                    ),
+                    SettingRow(
+                        "ai_feature_package",
+                        "官方 AI 对话功能包",
+                        "扩展、插件、AI、聊天、文件理解：本地安装、升级、启停、回滚与卸载。两个包独立管理，个人数据保留。",
+                        self.feature_management_widgets[AI_OWNER],
+                        stacked=True,
+                    ),
                 ],
                 general_content,
             )
         )
+        from .runtime_data_import_entry import mount_data_import
+
+        mount_data_import(self, general_layout, general_content)
         general_layout.addStretch(1)
         self._add_page("常规", "settings", self._page_shell("常规", general_content))
 
@@ -1021,7 +1067,15 @@ class ModernSettingsDialog(QDialog):
         self._search_index = -1
         self.search_edit.textChanged.connect(self._search_settings)
         self._feature_unsubscribe = self.feature_host.subscribe(self._on_feature_contribution_changed)
-        self._feature_prepare_unsubscribe = self.feature_host.before_remove(SCREEN_OWNER, self._prepare_screen_revocation)
+        prepare_unsubscribers = [
+            self.feature_host.before_remove(owner, lambda owner=owner: self._prepare_feature_revocation(owner)) for owner in self.feature_managers
+        ]
+
+        def unsubscribe_preparations():
+            while prepare_unsubscribers:
+                prepare_unsubscribers.pop()()
+
+        self._feature_prepare_unsubscribe = unsubscribe_preparations
         self.destroyed.connect(self._feature_unsubscribe)
         self.destroyed.connect(self._feature_prepare_unsubscribe)
         host, scope = self.feature_host, self._feature_scope
@@ -1087,89 +1141,29 @@ class ModernSettingsDialog(QDialog):
 
     def _build_file_interpret_controls(self) -> None:
         """「文件识别」域控件（settings_file_interpret 构建，行数预算原因不在本文件展开）。"""
-        settings_file_interpret.create_file_interpret_controls(self)
+        if self._ai_component is None and settings_file_interpret is not None:
+            settings_file_interpret.create_file_interpret_controls(self)
 
-    def _prepare_screen_revocation(self) -> bool:
-        component = self._screen_component
-        if not component or not component.dirty():
-            return True
-        answer = QMessageBox.question(
-            self,
-            "撤销屏幕理解设置",
-            "屏幕理解有未保存编辑。保存、放弃，还是取消本次撤销？",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer == QMessageBox.StandardButton.Cancel:
-            return False
-        if answer == QMessageBox.StandardButton.Discard:
-            return component.discard_changes()
-        return component.confirm_save()
-
-    def _on_feature_contribution_changed(self, owner: str, state: str) -> None:
+    def _feature_component(self, owner):
         from .official_features import SCREEN_OWNER
 
-        if owner != SCREEN_OWNER:
-            return
-        available = set(self.menu_available_actions)
-        available.difference_update({"look_screen", "proactive_screen"})
-        if state == "enabled":
-            available.add("look_screen")
-            if sys.platform == "win32":
-                available.add("proactive_screen")
-        self.menu_available_actions = frozenset(available)
-        editor = self.menu_layout_editor
-        editor.available_actions = self.menu_available_actions
-        # Re-render from the retained raw tree; unavailable actions are NOT deleted.
-        editor.set_layout(editor.value())
-        if state in ("enabled", "disabled"):
-            return
-        component = self._screen_component
-        removed = set(component.rows) if component else set()
-        # Legacy chat deep-link is a screen-owned contribution as well.
-        jump = self.findChild(SettingRow, "settingRow_vision_migration")
-        if jump:
-            removed.add(jump)
-        if component:
-            if state == "fault":
-                self._feature_drafts[owner] = component.draft()
-                notice = QLabel("屏幕理解设置发生故障，已停止执行。非敏感草稿保留在本对话框，密码已清除。", self)
-                notice.setWordWrap(True)
-                self.layout().addWidget(notice)
-                # Host-owned, read-only recovery view; never call a faulted component
-                # to save, and never retain its password editor or secure references.
-                draft_view = QPlainTextEdit(self)
-                draft_view.setObjectName("screenContributionDraft")
-                draft_view.setReadOnly(True)
-                draft_view.setAccessibleName("屏幕理解非敏感草稿")
-                draft_view.setMaximumHeight(120)
-                draft_view.setPlainText(json.dumps(self._feature_drafts[owner], ensure_ascii=False, indent=2))
-                self.layout().addWidget(draft_view)
-        for row in removed:
-            section = row.parentWidget()
-            while section and not isinstance(section, SettingsSection):
-                section = section.parentWidget()
-            row.hide()
-            row.setParent(None)
-            row.deleteLater()
-            if section and not section.findChildren(SettingRow):
-                section.hide()
-        if component:
-            component.dispose()
-        self._search_rows = [row for row in self._search_rows if row not in removed]
-        self._search_matches = []
-        self._search_index = -1
-        self._screen_component = None
-        self.screen_settings_page = None
-        for name in tuple(vars(self)):
-            if name.startswith(("pro_", "_pro_")):
-                delattr(self, name)
-        if self.ai_page is not None:
-            try:
-                self.ai_page.screen_settings_requested.disconnect()
-            except RuntimeError:
-                pass
-        self._search_settings(self.search_edit.text())
+        return self._screen_component if owner == SCREEN_OWNER else self._feature_components.get(owner)
+
+    def _feature_draft_dirty(self, owner):
+        component = self._feature_component(owner)
+        return bool(component is not None and component.dirty())
+
+    def _prepare_feature_revocation(self, owner):
+        return settings_feature_lifecycle._prepare_feature_revocation(self, owner)
+
+    def _prepare_screen_revocation(self):
+        return settings_feature_lifecycle._prepare_screen_revocation(self)
+
+    def _on_feature_contribution_changed(self, owner, state):
+        return settings_feature_lifecycle._on_feature_contribution_changed(self, owner, state)
+
+    def _on_ai_contribution_changed(self, state):
+        return settings_feature_lifecycle._on_ai_contribution_changed(self, state)
 
     def _build_proactive_controls(self) -> None:
         if self._screen_component and self._screen_component.strategy:
@@ -1598,7 +1592,9 @@ class ModernSettingsDialog(QDialog):
         heading.setObjectName("pageTitle")
         heading_layout.addWidget(heading)
         page.heading_host = heading_host
-        layout.addWidget(heading_host, 0, Qt.AlignmentFlag.AlignHCenter)
+        heading_row = QHBoxLayout()
+        heading_row.addWidget(heading_host, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addLayout(heading_row)
         scroll = QScrollArea(page)
         scroll.setObjectName("settingsScroll")
         scroll.setWidgetResizable(True)
@@ -1608,6 +1604,7 @@ class ModernSettingsDialog(QDialog):
         content.setMaximumWidth(content_max_width)
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
+        page.bind_scroll(scroll, heading_row)
         return page
 
     def select_page(self, label: str) -> bool:
@@ -1616,18 +1613,24 @@ class ModernSettingsDialog(QDialog):
         from .feature_management import is_management_page
 
         management_page = is_management_page(target)
-        if management_page:
+        import_page = target == "data-import"
+        if import_page and not hasattr(self, "data_import_button"):
+            return False  # Old products/source builds have no new-product import route.
+        if management_page or import_page:
             target = "常规"
         for index in range(self.sidebar.count()):
             if self.sidebar.item(index).text() == target:
                 self.sidebar.setCurrentRow(index)
-                if management_page:
-                    row = self.findChild(SettingRow, "settingRow_feature_packages")
+                if management_page or import_page:
+                    row = self.findChild(SettingRow, "settingRow_legacy_data_import" if import_page else "settingRow_feature_packages")
                     if row is not None:
                         scroll = self.pages.currentWidget().findChild(QScrollArea)
                         if scroll is not None:
                             scroll.ensureWidgetVisible(row)
-                        self.feature_management_widget.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
+                        if import_page:
+                            self.data_import_button.setFocus(Qt.FocusReason.OtherFocusReason)
+                        else:
+                            self.feature_management_widget.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
                 return True
         return False
 
@@ -1681,7 +1684,8 @@ class ModernSettingsDialog(QDialog):
             [
                 ("应用启动", claim("autostart", "harness_autostart")),
                 ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
-                ("扩展管理", claim("feature_packages")),
+                ("扩展管理", claim("feature_packages", "ai_feature_package")),
+                ("数据交付", claim("legacy_data_import")),
                 # 「多开」分组已随拓扑收口 Phase A 隐藏（见上方注释）
             ]
         )
@@ -1920,7 +1924,16 @@ class ModernSettingsDialog(QDialog):
 
         # 「文件识别」域（2026-09-19 新增）：拖文件解读的设置集中在此独立页。
         # 行在本模块构建（settings_file_interpret，行数预算原因），不走 claim。
-        file_interpret = settings_file_interpret.build_file_interpret_page(self)
+        if self._ai_component is not None:
+            file_interpret = self._ai_component.file_page
+            claimed.update(self._ai_component.file_rows)
+        elif settings_file_interpret is not None:
+            file_interpret = settings_file_interpret.build_file_interpret_page(self)
+        else:
+            file_interpret = page_content([("拖文件解读", [])])
+            notice = QLabel("安装并启用官方 AI 对话功能包后，可以解读文本与代码文件。", file_interpret)
+            notice.setWordWrap(True)
+            file_interpret.layout().insertWidget(0, notice)
 
         # Preserve any newly added row until it receives an explicit domain decision.
         leftovers = [row for row in all_rows if row not in claimed and (self.ai_page is None or not self.ai_page.isAncestorOf(row))]
@@ -2274,9 +2287,13 @@ class ModernSettingsDialog(QDialog):
             },
         )
         self.config.set("quick_launch_apps", self.quick_launch_editor.apps())
-        if self.ai_page is not None:
+        if self._ai_component is not None:
+            if not self._ai_component.confirm_save():
+                return False
+        elif self.ai_page is not None:
             self.ai_page.save()
-        settings_file_interpret.save_file_interpret_settings(self)
+        if self._ai_component is None and settings_file_interpret is not None:
+            settings_file_interpret.save_file_interpret_settings(self)
         settings_music.save_music_player_settings(self)
         if self._screen_component:
             self._screen_component.save_strategy()
@@ -2317,15 +2334,19 @@ class ModernSettingsDialog(QDialog):
     def _release_contributions(self) -> None:
         self._draft_unsubscribe()
         if self._owns_feature_management:
-            self.feature_management.close()
-        if self._screen_component:
-            self._screen_component.dispose()
-            self._screen_component = None
+            from .feature_management import close_official_management
+
+            close_official_management(self.feature_host)
+        for component in tuple(self._feature_components.values()):
+            component.dispose()
+        self._feature_components.clear()
+        self._screen_component = None
+        self._ai_component = None
+        self.ai_page = None
         self._feature_unsubscribe()
         self._feature_prepare_unsubscribe()
-        from .official_features import SCREEN_OWNER
-
-        self.feature_host.detach(SCREEN_OWNER, self._feature_scope)
+        for owner in self.feature_managers:
+            self.feature_host.detach(owner, self._feature_scope)
 
     def done(self, result: int) -> None:
         # Accept/reject do not necessarily dispatch closeEvent (notably Esc).

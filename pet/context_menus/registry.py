@@ -206,6 +206,12 @@ def _music_align_ready(pet) -> bool:
 
 
 def _build_chat(menu, pet):
+    from ..feature_distribution import BUILTIN_AI
+
+    if not BUILTIN_AI:
+        from ..ai_bindings import build_ai_menu
+
+        return build_ai_menu(menu, pet, "chat")
     return add_action(menu, "AI 对话", "chat", pet.on_open_chat, close_on_trigger=True)
 
 

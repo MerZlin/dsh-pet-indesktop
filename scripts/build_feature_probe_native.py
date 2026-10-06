@@ -49,6 +49,115 @@ def extract_source(archive: Path, output: Path) -> Path:
     return output / "bootloader"
 
 
+def patch_long_path_loading(path_source: str, config_source: str) -> tuple[str, str]:
+    """Use Win32 extended local paths, without changing discovery or permissions.
+
+    MSVCRT _wfopen does not honor the executable's longPathAware manifest.
+    CPython 3.11.1's getpath joins also need the explicit extended spelling:
+    PathCchCombineEx can otherwise require four more characters than the buffer
+    it receives. Keep the same owned onedir home and explicit search paths.
+    """
+    fopen = "    return _wfopen(wfilename, wmode);"
+    home = "return _pyi_pyconfig_set_string(config, &config_impl->home, pyi_ctx->application_home_dir, dylib_python);"
+    if path_source.count(fopen) != 1 or config_source.count(home) != 1:
+        raise ValueError("bootloader long-path loading seam")
+    path_source = path_source.replace(
+        fopen,
+        r"""    /* MSVCRT needs an explicit extended spelling of a local absolute path. */
+    wchar_t extended_filename[PYI_PATH_MAX + 5];
+    if (((wfilename[0] >= L'A' && wfilename[0] <= L'Z') ||
+         (wfilename[0] >= L'a' && wfilename[0] <= L'z')) &&
+        wfilename[1] == L':' && wfilename[2] == L'\\') {
+        if (swprintf(extended_filename, PYI_PATH_MAX + 5, L"\\\\?\\%ls", wfilename) < 0) {
+            return NULL;
+        }
+        return _wfopen(extended_filename, wmode);
+    }
+    return _wfopen(wfilename, wmode);""",
+    )
+    # Only this function's home initializer is changed. No registry, environment,
+    # source-tree or installed-Python fallback is introduced.
+    marker = "    /* Macro to avoid manual code repetition. */"
+    function_start = config_source.find("pyi_pyconfig_pep587_set_python_home(")
+    if function_start < 0:
+        # Tiny source contracts contain only the target function body.
+        function_start = 0
+    position = config_source.find(marker, function_start)
+    if position < 0:
+        raise ValueError("bootloader long-path loading seam")
+    prepare = r"""    const char *home_path = pyi_ctx->application_home_dir;
+#ifdef _WIN32
+    char extended_home[PYI_PATH_MAX + 5];
+    if (((pyi_ctx->application_home_dir[0] >= 'A' && pyi_ctx->application_home_dir[0] <= 'Z') ||
+         (pyi_ctx->application_home_dir[0] >= 'a' && pyi_ctx->application_home_dir[0] <= 'z')) &&
+        pyi_ctx->application_home_dir[1] == ':' && pyi_ctx->application_home_dir[2] == '\\') {
+        int written = snprintf(extended_home, sizeof(extended_home), "\\\\?\\%s", pyi_ctx->application_home_dir);
+        if (written < 0 || (size_t)written >= sizeof(extended_home)) {
+            return -1;
+        }
+        home_path = extended_home;
+    }
+#endif
+
+"""
+    config_source = config_source[:position] + prepare + config_source[position:]
+    config_source = config_source.replace(home, "return _pyi_pyconfig_set_string(config, &config_impl->home, home_path, dylib_python);")
+    return path_source, config_source
+
+
+def patch_explicit_runtime_paths(main_source: str, config_source: str) -> tuple[str, str]:
+    """Keep every CPython/PYZ pathname inside the same sealed local onedir.
+
+    Python 3.11.1's getpath uses PathCch with an exactly sized join buffer.
+    LPAC cannot read the global long-path policy; the Win32 routine can add an
+    extended prefix and exceed that buffer, including a narrow 260-char edge.
+    Use Python's documented explicit-path API with the SAME three paths already
+    computed by the pinned loader. PEP-587 still configures isolation/argv.
+    No registry, environment, source or installed-Python discovery is added.
+    """
+    executable = "    return _pyi_resolve_executable_win32(pyi_ctx->executable_filename);"
+    paths = "    /* Set */\n    ret = _pyi_pyconfig_set_module_search_paths("
+    if main_source.count(executable) != 1 or config_source.count(paths) != 1:
+        raise ValueError("bootloader explicit runtime path seam")
+    main_source = main_source.replace(
+        executable,
+        r"""    int resolved = _pyi_resolve_executable_win32(pyi_ctx->executable_filename);
+    if (resolved < 0) return resolved;
+    /* Propagate the local extended spelling into Python's embedded PYZ path. */
+    if (((pyi_ctx->executable_filename[0] >= 'A' && pyi_ctx->executable_filename[0] <= 'Z') ||
+         (pyi_ctx->executable_filename[0] >= 'a' && pyi_ctx->executable_filename[0] <= 'z')) &&
+        pyi_ctx->executable_filename[1] == ':' && pyi_ctx->executable_filename[2] == '\\') {
+        char extended_executable[PYI_PATH_MAX];
+        int written = snprintf(extended_executable, sizeof(extended_executable), "\\\\?\\%s", pyi_ctx->executable_filename);
+        if (written < 0 || (size_t)written >= sizeof(extended_executable)) return -1;
+        memcpy(pyi_ctx->executable_filename, extended_executable, (size_t)written + 1);
+    }
+    return resolved;""",
+    )
+    prepare = r"""#ifdef _WIN32
+    /* Explicit path initialization is validated only for this pinned runtime. */
+    if (dylib_python->version != 311) { ret = -1; goto end; }
+    wchar_t owned_search[3 * PYI_PATH_MAX + 3];
+    size_t search_length = 0;
+    owned_search[0] = L'\0';
+    for (i = 0; i < 3; i++) {
+        size_t length = wcslen(module_search_paths_w[i]);
+        if (search_length + length + (i != 0) + 1 > sizeof(owned_search) / sizeof(wchar_t)) {
+            ret = -1; goto end;
+        }
+        if (i) owned_search[search_length++] = L';';
+        memcpy(owned_search + search_length, module_search_paths_w[i], (length + 1) * sizeof(wchar_t));
+        search_length += length;
+    }
+    void (__cdecl *owned_set_path)(const wchar_t *) = (void (__cdecl *)(const wchar_t *))GetProcAddress(dylib_python->handle, "Py_SetPath");
+    if (!owned_set_path) { ret = -1; goto end; }
+    owned_set_path(owned_search);
+#endif
+
+"""
+    return main_source, config_source.replace(paths, prepare + paths)
+
+
 def patch_bootloader(source: Path) -> None:
     path = source / "src/pyi_utils_win32.c"
     text = path.read_text(encoding="utf-8")
@@ -70,6 +179,14 @@ def patch_bootloader(source: Path) -> None:
         needle, 'if (dylib->handle == NULL) {\n        PYI_ERROR("probe Python DLL load error=%lu\\n", (unsigned long)GetLastError());\n        PYI_WINERROR_W'
     )
     path.write_text(text, encoding="utf-8")
+    path_source = source / "src/pyi_path.c"
+    config_source = source / "src/pyi_pyconfig_pep587.c"
+    path_text, config_text = patch_long_path_loading(path_source.read_text(encoding="utf-8"), config_source.read_text(encoding="utf-8"))
+    path_source.write_text(path_text, encoding="utf-8")
+    main_source = source / "src/pyi_main.c"
+    main_text, config_text = patch_explicit_runtime_paths(main_source.read_text(encoding="utf-8"), config_text)
+    main_source.write_text(main_text, encoding="utf-8")
+    config_source.write_text(config_text, encoding="utf-8")
 
 
 def bootloader_command(compiler: str, source: Path, output: Path, *, debug: bool = False) -> list[str]:

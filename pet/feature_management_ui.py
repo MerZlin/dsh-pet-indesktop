@@ -10,6 +10,7 @@ from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QFileDialog, QLabel, QPushButton, QSizePolicy, QStyle, QStyleOptionButton, QStylePainter, QVBoxLayout, QWidget
 
 from .feature_package_transactions import LOCK_BUSY_REASONS, Inspection, OperationResult
+from .official_features import AI_OWNER, SCREEN_OWNER, official_feature
 from .settings_widgets import ResponsiveActionRow
 
 _STATUS = {
@@ -100,17 +101,24 @@ class FeatureManagementWidget(QWidget):
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
+        self.feature_id = official_feature(manager.feature_id).id
+        self.feature_title = "官方 AI 对话功能包" if self.feature_id == AI_OWNER else "官方屏幕理解功能包"
+        self.settings_domain = "AI 与对话" if self.feature_id == AI_OWNER else "自动化与联动"
         self.plan = self.retry_plan = self.inspection = self.last_operation = None
-        self.setObjectName("featureManagement")
-        self.setAccessibleName("扩展管理：官方屏幕理解功能包")
+        self.setObjectName("featureManagementAI" if self.feature_id == AI_OWNER else "featureManagement")
+        self.setAccessibleName("扩展管理：" + self.feature_title)
         self.setAccessibleDescription("包级操作影响全部实例。卸载保留个人数据，不强制退出进程。")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         self.status_label = self._label("状态正在读取…", "扩展安装状态")
-        self.summary_label = self._label("包级启停影响所有实例；当前实例的识屏选项仍在自动化与联动。", "操作确认摘要")
+        self.summary_label = self._label("包级启停影响所有实例；当前实例选项仍在“" + self.settings_domain + "”。", "操作确认摘要")
         layout.addWidget(self.status_label)
         layout.addWidget(self.summary_label)
+        self.cleanup_label = self._label("", "安装自检临时材料清理警告")
+        self.cleanup_label.setAccessibleDescription("安全清理警告不改变安装账本或启停；可安全重试，不强制退出进程。")
+        self.cleanup_label.hide()
+        layout.addWidget(self.cleanup_label)
         self.install_button = self._button("选择目录", lambda: self._choose(False))
         self.zip_button = self._button("选择 ZIP", lambda: self._choose(True))
         self.enable_button = self._button("启用／停用", self._toggle)
@@ -143,6 +151,8 @@ class FeatureManagementWidget(QWidget):
         manager.result_ready.connect(self._result)
         manager.busy_changed.connect(self._busy)
         manager.state_changed.connect(self._changed)
+        manager.probe_cleanup_changed.connect(self._probe_cleanup)
+        self._probe_cleanup(manager.probe_cleanup)
         if manager.endpoint is not None:
             manager.endpoint.draft_blocked.connect(self._draft_blocked)
         if manager.builtin:
@@ -154,6 +164,17 @@ class FeatureManagementWidget(QWidget):
                 self._result(manager.last_operation)
             else:
                 QTimer.singleShot(0, self._inspect)
+
+    def _probe_cleanup(self, outcomes):
+        warnings = [row for row in outcomes if row.status not in ("completed", "idempotent")][:4]
+        self.cleanup_label.setVisible(bool(warnings))
+        if warnings:
+            self.cleanup_label.setText(
+                "安装自检临时材料尚待安全清理；不会改变功能启停或安装结果。可安全重试，不强制退出进程。\n"
+                + "\n".join(row.reason or row.status for row in warnings)
+            )
+        else:
+            self.cleanup_label.clear()
 
     def _label(self, text, name):
         label = _BreakableLabel(text, self)
@@ -171,7 +192,7 @@ class FeatureManagementWidget(QWidget):
     def _button(self, text, action):
         button = _WrappingActionButton(text, self)
         button.setAccessibleName(text)
-        button.setAccessibleDescription("官方屏幕理解功能包：" + text)
+        button.setAccessibleDescription(self.feature_title + "：" + text)
         button.clicked.connect(action)
         return button
 
@@ -192,7 +213,9 @@ class FeatureManagementWidget(QWidget):
             button.setEnabled(False)
         if self.manager.builtin or self.manager.busy:
             return
-        component = getattr(self.window(), "_screen_component", None)
+        window = self.window()
+        getter = getattr(window, "_feature_component", None)
+        component = getter(self.feature_id) if callable(getter) else (getattr(window, "_screen_component", None) if self.feature_id == SCREEN_OWNER else None)
         self.draft_button.setEnabled(bool(component is not None and component.dirty()))
         installed = self.inspection is not None and self.inspection.active is not None
         pending = self.inspection is not None and self.inspection.pending_transaction is not None
@@ -248,17 +271,22 @@ class FeatureManagementWidget(QWidget):
         self._update_actions()
 
     def _resolve_draft(self):
-        resolve = getattr(self.window(), "_prepare_screen_revocation", None)
-        if callable(resolve) and resolve():
+        resolve = getattr(self.window(), "_prepare_feature_revocation", None)
+        if callable(resolve):
+            accepted = resolve(self.feature_id)
+        else:
+            resolve = getattr(self.window(), "_prepare_screen_revocation", None) if self.feature_id == SCREEN_OWNER else None
+            accepted = bool(callable(resolve) and resolve())
+        if accepted:
             self.summary_label.setText("本窗口草稿已明确处理。请重新确认或安全重试；其他进程的草稿仍由其自己的窗口处理。")
         self._update_actions()
 
     def _settings(self):
         window = self.window()
         select = getattr(window, "select_page", None)
-        if callable(select) and self.manager.host.configurable("official.screen-understanding"):
-            select("自动化与联动")
-            return
+        if callable(select) and self.manager.host.configurable(self.feature_id):
+            if select(self.settings_domain):
+                return
         # Explicit configuration access is meaningful; the management-only
         # bootstrap itself still never imports feature code or starts a Worker.
         from .modern_settings_dialog import ModernSettingsDialog
@@ -268,7 +296,7 @@ class FeatureManagementWidget(QWidget):
 
         if dialog is None or not shiboken6.isValid(dialog):
             dialog = ModernSettingsDialog(
-                self.manager.config, window, include_ai=getattr(window, "include_ai", True), standalone=True, initial_page="自动化与联动"
+                self.manager.config, window, include_ai=getattr(window, "include_ai", True), standalone=True, initial_page=self.settings_domain
             )
             self._instance_settings = dialog
         dialog.show()
@@ -278,6 +306,8 @@ class FeatureManagementWidget(QWidget):
 
     @Slot(object)
     def _result(self, result):
+        if isinstance(result, (Inspection, OperationResult)) and result.feature_id != self.feature_id:
+            return
         if isinstance(result, Inspection):
             self.inspection = result
             if self.last_operation is None:
@@ -314,7 +344,11 @@ class FeatureManagementWidget(QWidget):
                         f"操作：{plan.kind} · 版本：{version}",
                         source,
                         f"预计新增：{plan.estimated_bytes:,} 字节；" + rollback,
-                        "影响：拒绝新任务、停止所属 Worker；驻留 host 等待自然退出，不热替换。",
+                        (
+                            "影响：拒绝新请求、取消流式响应并排空会话写入；驻留 AI host 等待自然退出，不热替换。"
+                            if self.feature_id == AI_OWNER
+                            else "影响：拒绝新任务、停止所属 Worker；驻留 host 等待自然退出，不热替换。"
+                        ),
                         "保留：个人设置、profile、凭据、记忆、额度和聊天历史。",
                         "确认摘要：" + digest,
                     )

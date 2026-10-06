@@ -91,7 +91,15 @@ def bind_screen_configuration(cfg, *, vault: CredentialVaultPort | None = None):
         except Exception:
             raise CredentialError("legacy_credential_unavailable") from None
 
-    return config, vault or CredentialVaultPort(SCREEN_NAMESPACE, str(path.resolve()) if path else "unbound"), read_legacy
+    layout = getattr(cfg, "runtime_layout", None)
+    scope = (
+        layout.credential_namespace(SCREEN_NAMESPACE, str(getattr(cfg, "instance_id", "") or "primary"))
+        if layout is not None
+        else str(path.resolve())
+        if path
+        else "unbound"
+    )
+    return config, vault or CredentialVaultPort(SCREEN_NAMESPACE, scope), read_legacy
 
 
 def _bind_window(window, cfg):
@@ -192,6 +200,58 @@ def bind_screen_context(cfg, *, window=None, host=None) -> FeatureHostContext:
         ),
         desktop=get_desktop_query(),
         window=_bind_window(window, cfg) if window is not None else None,
+    )
+    return host.bind_context(context) if host is not None else context
+
+
+def bind_ai_context(cfg, *, host=None):
+    """Core-owned AI grants: opaque preferences and scoped storage, no desktop.
+
+    This binding does not import AI models, UI, Providers, or start request threads.
+    Actual AI lifecycle/window/document ports are added by the signed host route.
+    """
+    from .feature_ports import FeatureUserDataPort
+    from .feature_state_io import safe_path
+    from .official_features import AI_OWNER
+
+    user_root = Path(cfg.dir) / "feature-data" / AI_OWNER
+    safe_path(user_root)
+
+    path = Path(cfg.path)
+    layout = getattr(cfg, "runtime_layout", None)
+    scope = layout.credential_namespace(AI_OWNER, str(getattr(cfg, "instance_id", "") or "primary")) if layout else str(path.resolve())
+
+    def deny_legacy(ref: str) -> str:
+        raise CredentialError("legacy_import_authorization_required")
+
+    context = FeatureHostContext(
+        owner=AI_OWNER,
+        configuration=bind_feature_configuration(cfg, AI_OWNER, journal_path=path.with_suffix(".json.ai-migration.json")),
+        credentials=CredentialVaultPort(AI_OWNER, scope),
+        legacy_secret_reader=deny_legacy,
+        preferences=bind_feature_preferences(
+            cfg,
+            key="chat",
+            fields=frozenset(
+                {
+                    "enabled",
+                    "active_provider",
+                    "default_system_prompt",
+                    "history_message_limit",
+                    "history_char_limit",
+                    "providers",
+                }
+            ),
+        ),
+        documents=MappingProxyType({}),
+        state_documents=MappingProxyType({}),
+        desktop=None,
+        user_data=FeatureUserDataPort(
+            user_root,
+            str(getattr(cfg, "instance_id", "") or ""),
+            lambda: MappingProxyType({"character": cfg.get("character"), "self_talk_bubble_style": cfg.get("self_talk_bubble_style", "classic_top")}),
+            lambda character: str(cfg.character_alias(character) or ""),
+        ),
     )
     return host.bind_context(context) if host is not None else context
 

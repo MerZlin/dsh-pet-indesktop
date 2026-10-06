@@ -2,6 +2,8 @@
 #define PY_SSIZE_T_CLEAN
 #define WIN32_LEAN_AND_MEAN
 #include <Python.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <wincrypt.h>
 #include <wincred.h>
@@ -52,6 +54,89 @@ static PyObject *inherited_file_access(PyObject *self, PyObject *args) {
     handle=(HANDLE)(ULONG_PTR)value;
     return PyBool_FromLong(GetFileType(handle)==FILE_TYPE_DISK && ReadFile(handle,&byte,1,&count,NULL) && count==1);
 }
+/* Generated loopback fixtures only. Dynamic SYSTEM32 loading avoids making
+   the production verifier depend on Winsock initialization at import time.
+   Report the actual API stage/error; a DLL/import failure is not a denial. */
+static PyObject *network_connect(PyObject *self, PyObject *args) {
+    int family, port, error = 0, rc, started = 0, allowed = 0, attempted = 0;
+    const char *host, *stage = "load";
+    HMODULE lib = NULL; SOCKET sock = INVALID_SOCKET; WSADATA data;
+    struct sockaddr_storage storage; int length;
+    u_long nonblocking = 1; struct timeval timeout = {2, 0};
+    fd_set writable, failed;
+    typedef int (WSAAPI *START)(WORD, LPWSADATA);
+    typedef int (WSAAPI *CLEAN)(void);
+    typedef int (WSAAPI *WSA_ERROR_FN)(void);
+    typedef SOCKET (WSAAPI *CREATE)(int,int,int);
+    typedef int (WSAAPI *CLOSE)(SOCKET);
+    typedef int (WSAAPI *IOCTL)(SOCKET,long,u_long*);
+    typedef int (WSAAPI *CONNECT)(SOCKET,const struct sockaddr*,int);
+    typedef int (WSAAPI *SELECT)(int,fd_set*,fd_set*,fd_set*,const struct timeval*);
+    typedef int (WSAAPI *OPTION)(SOCKET,int,int,char*,int*);
+    START start; CLEAN clean; WSA_ERROR_FN last; CREATE create; CLOSE close;
+    IOCTL ioctl; CONNECT connect_fn; SELECT select_fn; OPTION option;
+    if (!PyArg_ParseTuple(args,"isi",&family,&host,&port)) return NULL;
+    if (port < 1 || port > 65535 ||
+        !((family == AF_INET && strcmp(host,"127.0.0.1") == 0) ||
+          (family == AF_INET6 && strcmp(host,"::1") == 0))) {
+        return PyErr_Format(PyExc_ValueError,"generated loopback endpoint required");
+    }
+    lib = LoadLibraryExW(L"ws2_32.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!lib) { error = (int)GetLastError(); goto done; }
+    start=(START)GetProcAddress(lib,"WSAStartup");
+    clean=(CLEAN)GetProcAddress(lib,"WSACleanup");
+    last=(WSA_ERROR_FN)GetProcAddress(lib,"WSAGetLastError");
+    create=(CREATE)GetProcAddress(lib,"socket");
+    close=(CLOSE)GetProcAddress(lib,"closesocket");
+    ioctl=(IOCTL)GetProcAddress(lib,"ioctlsocket");
+    connect_fn=(CONNECT)GetProcAddress(lib,"connect");
+    select_fn=(SELECT)GetProcAddress(lib,"select");
+    option=(OPTION)GetProcAddress(lib,"getsockopt");
+    if (!start || !clean || !last || !create || !close || !ioctl ||
+        !connect_fn || !select_fn || !option) { error=ERROR_PROC_NOT_FOUND; goto done; }
+    stage="initialize"; error=start(MAKEWORD(2,2),&data);
+    if (error) goto done;
+    started=1; stage="create";
+    sock=create(family,SOCK_STREAM,IPPROTO_TCP);
+    if (sock==INVALID_SOCKET) { error=last(); goto release; }
+    if (ioctl(sock,FIONBIO,&nonblocking)) { error=last(); stage="configure"; goto release; }
+    ZeroMemory(&storage,sizeof(storage));
+    /* Port conversion is explicit: no additional loader dependency. */
+    if (family==AF_INET) {
+        struct sockaddr_in *address=(struct sockaddr_in*)&storage;
+        address->sin_family=AF_INET;
+        address->sin_port=(u_short)(((port&255)<<8)|((port>>8)&255));
+        ((BYTE*)&address->sin_addr)[0]=127; ((BYTE*)&address->sin_addr)[3]=1;
+        length=sizeof(*address);
+    } else {
+        struct sockaddr_in6 *address=(struct sockaddr_in6*)&storage;
+        address->sin6_family=AF_INET6;
+        address->sin6_port=(u_short)(((port&255)<<8)|((port>>8)&255));
+        ((BYTE*)&address->sin6_addr)[15]=1;
+        length=sizeof(*address);
+    }
+    stage="connect"; attempted=1;
+    rc=connect_fn(sock,(struct sockaddr*)&storage,length);
+    if (!rc) { allowed=1; error=0; goto release; }
+    error=last();
+    if (error==WSAEWOULDBLOCK || error==WSAEINPROGRESS || error==WSAEALREADY) {
+        FD_ZERO(&writable); FD_ZERO(&failed); FD_SET(sock,&writable); FD_SET(sock,&failed);
+        rc=select_fn(0,NULL,&writable,&failed,&timeout);
+        if (rc>0) {
+            length=sizeof(error);
+            if (option(sock,SOL_SOCKET,SO_ERROR,(char*)&error,&length)) error=last();
+            else if (!error) allowed=1;
+        } else error=rc==0 ? WSAETIMEDOUT : last();
+    }
+release:
+    if (sock!=INVALID_SOCKET) close(sock);
+    if (started) clean();
+done:
+    if (lib) FreeLibrary(lib);
+    return Py_BuildValue("{s:O,s:s,s:i,s:O}","allowed",allowed?Py_True:Py_False,
+                         "stage",stage,"error",error,"connect_attempted",attempted?Py_True:Py_False);
+}
+
 /* Documented token/AccessCheck/mitigation/Job queries only. No candidate or
    environment flag can turn an ordinary process into a sandbox probe. */
 static int access_for(HANDLE token, LPCWSTR sddl) {
@@ -116,6 +201,7 @@ static PyMethodDef methods[]={
  {"process_read",process_read,METH_VARARGS,NULL},
  {"desktop_access",desktop_access,METH_VARARGS,NULL},
  {"inherited_file_access",inherited_file_access,METH_VARARGS,NULL},
+ {"network_connect",network_connect,METH_VARARGS,NULL},
  {NULL,NULL,0,NULL}};
 static struct PyModuleDef module={PyModuleDef_HEAD_INIT,"_dsh_probe_native",NULL,-1,methods};
 PyMODINIT_FUNC PyInit__dsh_probe_native(void) { return PyModule_Create(&module); }

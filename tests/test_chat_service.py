@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from pet.chat.models import ProviderConfig
@@ -11,6 +12,16 @@ from pet.chat.service import ChatService
 
 def _get_qapp():
     return QApplication.instance() or QApplication([])
+
+
+def _drain(app, service, timeout=12):
+    deadline = time.monotonic() + timeout
+    while not service.is_drained and time.monotonic() < deadline:
+        loop = QEventLoop()
+        QTimer.singleShot(10, loop.quit)
+        loop.exec()
+    assert service.is_drained
+    app.processEvents()
 
 
 class BlockingFakeProvider:
@@ -68,7 +79,8 @@ def test_concurrent_send_keeps_both_workers_in_set_and_cancels_old():
 
     # 清理退出：shutdown 会置 cancel 并 wait(1500)，worker 收到 cancel 退出后 emit finished
     ok = service.shutdown()
-    assert ok is True
+    assert ok is service.is_drained
+    _drain(app, service)
     # 由于 finished 槽函数挂在 Qt.QueuedConnection 上，需 processEvents 驱动槽函数执行 discard
     app.processEvents()
     assert len(service._workers) == 0
@@ -113,7 +125,8 @@ def test_shutdown_cancels_and_clears_workers_set():
 
     # c) shutdown 退出，正常退出返回 True，集合靠 finished 信号或结束后清空
     ok = service.shutdown()
-    assert ok is True
+    assert ok is service.is_drained
+    _drain(app, service)
     # 等 finished 队列投递完成
     app.processEvents()
     assert len(service._workers) == 0
@@ -155,7 +168,7 @@ def test_shutdown_uninterruptible_worker_returns_false_and_retains_reference():
     # 清理并等待 worker 自然结束避免后台挂起
     worker.wait = orig_wait
     worker.wait(2500)
-    app.processEvents()
+    _drain(app, service)
     assert worker not in service._workers
 
 
@@ -227,7 +240,7 @@ def test_worker_cancel_closes_only_its_own_response_and_does_not_close_others():
 
     # 清理 worker B
     service.shutdown()
-    app.processEvents()
+    _drain(app, service)
     assert resp_b.closed is True
 
 

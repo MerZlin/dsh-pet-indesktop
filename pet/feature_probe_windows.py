@@ -674,11 +674,15 @@ class WindowsProbeLauncher:
                 api.terminate(proc, 1)
             if job:
                 api.close(job)
-            if proc:
-                api.wait(proc, 5000)
+            released = not proc or api.wait(proc, 5000) == 0
             for handle in reversed(handles):
                 api.close(handle)
-            _finish_probe_resources(api, ownership, attr, sid, profile, input_writer)
+            try:
+                phase = ownership.doc["phase"]
+                assert isinstance(phase, str)  # Parent-owned ProbeOwnership invariant.
+                ownership.update(phase, process_released=released)
+            finally:
+                _finish_probe_resources(api, ownership, attr, sid, profile, input_writer)
 
 
 def _finish_probe_resources(api, ownership, attr, sid, profile, input_writer):
@@ -725,22 +729,32 @@ def cleanup_owned_probe(run_root: Path, bundle_digest: str) -> str:
         TrustedProbeBundle(root / "helper", bundle_digest).verify()
     except (ValueError, TypeError, AttributeError) as exc:
         raise ProbeLaunchError("probe_ownership") from exc
-    if doc.get("phase") == "cleaned":
-        return "idempotent"
-    api = _Win32()
+    api = None
     pid, created = doc.get("pid"), doc.get("created")
+    if pid is None and (created is not None or doc.get("process_released") is not True and doc.get("phase") != "profile_intent"):
+        # profile_created can straddle CreateProcess before the PID receipt.
+        # Without an actual returned-parent release receipt, do not guess.
+        raise ProbeLaunchError("probe_release_unproven")
     if pid is not None:
         if type(pid) is not int or type(created) is not int or pid < 1 or created < 1:
             raise ProbeLaunchError("probe_ownership_identity")
+        api = _Win32()
         handle = api.open_process(0x100000 | 0x1000, False, pid)  # synchronize/query limited; never terminate
         if handle:
             try:
-                if api.process_created(handle) == created and api.wait(handle, 0) != 0:
-                    return "awaiting_release"
+                if api.process_created(handle) == created:
+                    wait = api.wait(handle, 0)
+                    if wait == 258:
+                        return "awaiting_release"
+                    if wait != 0:
+                        raise ProbeLaunchError("probe_recovery_process", C.get_last_error())
             finally:
                 api.close(handle)
         elif C.get_last_error() != 87:  # Original PID absent is distinct from access denied.
             raise ProbeLaunchError("probe_recovery_process", C.get_last_error())
+    if doc.get("phase") == "cleaned":
+        return "idempotent"
+    api = api or _Win32()
     result = api.delete_profile(doc["profile"])
     if result < 0 and result & 0xFFFFFFFF != 0x80070002:
         raise ProbeLaunchError("profile_cleanup", result & 0xFFFFFFFF)

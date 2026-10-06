@@ -125,7 +125,13 @@ def bind_verified_feature(
                 lease_coordinator=lease_coordinator,
             )
 
-        host.provide(replace(definition, settings_factory=settings_factory, worker_launch_factory=launch_factory, allow_in_process=False), enabled=enabled)
+        if descriptor.execution_kind == "host-only":
+            if definition.worker_launch_factory is not None or definition.allow_in_process is not True:
+                raise PackageVerificationError("host-only definition cannot request a Worker")
+            bound = replace(definition, settings_factory=settings_factory, worker_launch_factory=None, allow_in_process=True)
+        else:
+            bound = replace(definition, settings_factory=settings_factory, worker_launch_factory=launch_factory, allow_in_process=False)
+        host.provide(bound, enabled=enabled)
     except BaseException:
         handle.close()
         raise

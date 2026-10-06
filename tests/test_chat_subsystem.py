@@ -3408,3 +3408,30 @@ def test_system_notify_toggle_persists_on_save(tmp_path, monkeypatch):
     assert Config(tmp_path).get("system_notifications_enabled") is False, "拨动后的新值必须生效"
     page.close()
     app.processEvents()
+
+
+def test_chat_follows_delayed_scroll_range_and_respects_manual_reading(tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from pet.chat.widgets import ChatWindow
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    window = ChatWindow(Config(tmp_path), "shenshen")
+    try:
+        bar = window.scroll.verticalScrollBar()
+        bar.setRange(0, 100)
+        window._bottom(always=True)
+        # A later real Qt range update must not depend on a timer beating layout.
+        assert bar.value() == 100
+        bar.setRange(0, 500)
+        assert bar.value() == 500
+        bar.setValue(100)
+        assert not window._stream_follow_output
+        window._apply_bottom()  # already queued before the user scrolls
+        assert bar.value() == 100
+        bar.setRange(0, 700)
+        assert bar.value() == 100
+    finally:
+        window.close()
+        app.processEvents()

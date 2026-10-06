@@ -38,6 +38,9 @@ def _probe(source, output) -> int:
 
 
 def run_screen_worker_entry(argv=None, *, source=None, output=None, run_runtime=None) -> int:
+    from pet.frozen_runtime_paths import activate_frozen_dependency_path
+
+    activate_frozen_dependency_path()
     args = sys.argv[1:] if argv is None else argv
     if args:
         if args != ["--feature-package-probe"]:

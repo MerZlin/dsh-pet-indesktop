@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol
 
 if TYPE_CHECKING:
@@ -76,6 +77,20 @@ class FeatureWindowPorts:
 
 
 @dataclass(frozen=True, slots=True)
+class FeatureUserDataPort:
+    """One Core-selected owner directory and read-only presentation snapshots.
+
+    This does not grant the installation ledger, another owner's data or a
+    global configuration object. Secrets remain in the separate vault port.
+    """
+
+    root: Path
+    instance_id: str
+    read_display: Callable[[], Mapping]
+    alias_for: Callable[[str], str]
+
+
+@dataclass(frozen=True, slots=True)
 class FeatureHostContext:
     """Internal official host ABI, supplied after host-owned authorization.
 
@@ -90,7 +105,10 @@ class FeatureHostContext:
     preferences: FeaturePreferencesPort
     documents: Mapping[str, FeatureDocumentPort]
     state_documents: Mapping[str, FeatureStateDocumentPort]
-    desktop: DesktopQueryPort
+    desktop: DesktopQueryPort | None
     window: FeatureWindowPorts | None = None
     worker_launch_factory: Callable[[], WorkerLaunch] | None = None
     allow_in_process: bool = True
+    execution_authorized: Callable[[], bool] | None = None
+    bind_execution: Callable[[Callable, Callable], Callable[[], None]] | None = None
+    user_data: FeatureUserDataPort | None = None

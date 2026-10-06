@@ -265,6 +265,8 @@ class WorkerHandle(VersionLease):
     def command(self) -> tuple[str, tuple[str, ...]]:
         """Call immediately before launch without a shell. Close only after process exit."""
         self._check()
+        if self.descriptor.execution_kind != "host-worker" or self.descriptor.worker_path is None:
+            raise PackageVerificationError("host-only package has no Worker")
         return str(self.descriptor.worker_path), self.descriptor.worker_args
 
 
@@ -370,6 +372,8 @@ class FeaturePackageLoader:
 
     def acquire_worker(self, descriptor: VerifiedFeatureDescriptor) -> WorkerHandle:
         self.verifier.reverify(descriptor)
+        if descriptor.execution_kind != "host-worker" or descriptor.worker_path is None:
+            raise PackageVerificationError("host-only package has no Worker")
         return WorkerHandle(_generation(descriptor), self.verifier, "worker")
 
     def lease_counts(self, descriptor: VerifiedFeatureDescriptor) -> LeaseCounts:

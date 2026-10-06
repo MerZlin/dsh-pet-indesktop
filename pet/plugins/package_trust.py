@@ -25,11 +25,14 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-OFFICIAL_FEATURE_ID = "official.screen-understanding"
+from ..official_features import SCREEN_FEATURE_ID, official_feature
+
+OFFICIAL_FEATURE_ID = SCREEN_FEATURE_ID
 OFFICIAL_FACTORY_ID = "screen-understanding/v1"
 FACTORY_PATH = "host/factory.py"
 _CONTROLS = frozenset({"manifest.json", "manifest.sig"})
 _FIELDS = frozenset({"id", "version", "api_version", "core_requires", "platforms", "capabilities", "factory", "worker", "files"})
+_V2_FIELDS = _FIELDS | {"format_version", "key_id", "execution_kind"}
 _PLATFORMS = frozenset({"win32", "linux", "darwin"})
 _VERSION = r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})"
 _CAPABILITY = re.compile(r"[a-z][a-z0-9_.-]{0,63}\Z")
@@ -103,7 +106,7 @@ class VerifiedFeatureDescriptor:
     version: str
     api_version: str
     root: Path
-    worker_path: Path
+    worker_path: Path | None
     worker_args: tuple[str, ...]
     factory: str
     capabilities: tuple[str, ...]
@@ -116,6 +119,7 @@ class VerifiedFeatureDescriptor:
     evidence: CompatibilityEvidence
     tree: tuple[tuple[str, FileStamp], ...]
     ancestors: tuple[tuple[str, int, int], ...]
+    execution_kind: str = "host-worker"
 
 
 def _stamp(value: os.stat_result) -> FileStamp:
@@ -302,6 +306,32 @@ def _freeze(value):
 
 
 @dataclass(frozen=True)
+class SigningKeyPolicy:
+    """Scope/revocation supplied only by trusted Core policy, never the package."""
+
+    feature_ids: frozenset[str]
+    capabilities: frozenset[str]
+    revoked: bool = False
+    allow_legacy_v1: bool = False
+
+    def __post_init__(self):
+        if isinstance(self.feature_ids, (str, bytes)) or isinstance(self.capabilities, (str, bytes)):
+            raise PackageVerificationError("invalid signer scope")
+        owners, caps = frozenset(self.feature_ids), frozenset(self.capabilities)
+        if not owners or type(self.revoked) is not bool or type(self.allow_legacy_v1) is not bool:
+            raise PackageVerificationError("invalid signer policy")
+        try:
+            for owner in owners:
+                official_feature(owner)
+        except ValueError as exc:
+            raise PackageVerificationError("invalid signer owner") from exc
+        if any(not isinstance(cap, str) or not _CAPABILITY.fullmatch(cap) for cap in caps):
+            raise PackageVerificationError("invalid signer capability")
+        object.__setattr__(self, "feature_ids", owners)
+        object.__setattr__(self, "capabilities", caps)
+
+
+@dataclass(frozen=True)
 class FeaturePackageVerifier:
     """Core-owned policy. No default keys, inferred trust, or package key lookup.
 
@@ -316,8 +346,14 @@ class FeaturePackageVerifier:
     trust_anchors: Mapping[str, bytes] = field(default_factory=dict)
     allow_developer_unsigned: bool = False
     limits: VerificationLimits = field(default_factory=VerificationLimits)
+    feature_id: str = OFFICIAL_FEATURE_ID
+    anchor_policy: Mapping[str, SigningKeyPolicy] = field(default_factory=dict)
 
     def __post_init__(self):
+        try:
+            official_feature(self.feature_id)
+        except ValueError as exc:
+            raise PackageVerificationError("invalid Core feature policy") from exc
         _version(self.core_version)
         if not isinstance(self.api_version, str) or not re.fullmatch(r"[1-9][0-9]{0,8}", self.api_version):
             raise PackageVerificationError("invalid Core API version")
@@ -336,6 +372,24 @@ class FeaturePackageVerifier:
                 raise PackageVerificationError("anchors must be named 32-byte Ed25519 public keys")
         object.__setattr__(self, "allowed_capabilities", caps)
         object.__setattr__(self, "trust_anchors", MappingProxyType(anchors))
+        if not isinstance(self.anchor_policy, Mapping) or not set(self.anchor_policy) <= set(anchors):
+            raise PackageVerificationError("signer policy has no trusted key")
+        policies = {}
+        for name in anchors:
+            policy = self.anchor_policy.get(name)
+            if policy is None:
+                # Existing explicitly supplied v1 keys retain their screen-only
+                # compatibility. Formal builds supply scopes and forbid v1.
+                policy = SigningKeyPolicy(frozenset({self.feature_id}), caps, allow_legacy_v1=self.feature_id == OFFICIAL_FEATURE_ID)
+            elif isinstance(policy, Mapping):
+                try:
+                    policy = SigningKeyPolicy(**policy)
+                except (TypeError, ValueError) as exc:
+                    raise PackageVerificationError("invalid signer policy") from exc
+            if not isinstance(policy, SigningKeyPolicy):
+                raise PackageVerificationError("invalid signer policy")
+            policies[name] = policy
+        object.__setattr__(self, "anchor_policy", MappingProxyType(policies))
 
     @staticmethod
     def _valid_signature(key: bytes, signature: bytes, raw: bytes) -> bool:
@@ -352,22 +406,51 @@ class FeaturePackageVerifier:
             return False
 
     def _authenticate(self, raw: bytes, signature: bytes | None) -> tuple[str, str | None]:
+        # This parse is bounded by max_manifest_bytes, closed again by _schema.
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_object, parse_constant=_invalid_constant)
+        if not isinstance(payload, dict):
+            raise PackageVerificationError("invalid manifest fields")
+        v2 = "format_version" in payload
+        key_id = payload.get("key_id")
+        if v2 and (not isinstance(key_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", key_id)):
+            raise PackageVerificationError("invalid key_id")
         if signature is None:
-            if self.allow_developer_unsigned:
+            if self.allow_developer_unsigned and not v2:
                 return "developer_unsigned", None
             raise PackageVerificationError("missing official signature; developer loading is disabled")
         if len(signature) != 64:
             raise PackageVerificationError("manifest.sig must contain a raw 64-byte Ed25519 signature")
-        for name, key in self.trust_anchors.items():
-            if self._valid_signature(key, signature, raw) is True:
+        names: tuple[str, ...]
+        if v2:
+            assert isinstance(key_id, str)  # Validated before any signature lookup.
+            names = (key_id,)
+        else:
+            names = tuple(self.trust_anchors)
+        for name in names:
+            if name not in self.trust_anchors:
+                continue
+            policy = self.anchor_policy[name]
+            if policy.revoked or self.feature_id not in policy.feature_ids or (not v2 and not policy.allow_legacy_v1):
+                continue
+            capabilities = payload.get("capabilities")
+            if not isinstance(capabilities, list) or any(not isinstance(cap, str) or cap not in policy.capabilities for cap in capabilities):
+                continue
+            if self._valid_signature(self.trust_anchors[name], signature, raw) is True:
                 return "trusted_official", name
-        raise PackageVerificationError("signature has no explicitly trusted Core signer")
+        raise PackageVerificationError("signature has no explicitly trusted Core signer within scope")
 
     def _schema(self, raw: bytes) -> dict:
         payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_object, parse_constant=_invalid_constant)
-        _keys(payload, _FIELDS, "manifest")
-        if payload["id"] != OFFICIAL_FEATURE_ID or payload["factory"] != OFFICIAL_FACTORY_ID:
+        v2 = isinstance(payload, dict) and "format_version" in payload
+        _keys(payload, _V2_FIELDS if v2 else _FIELDS, "manifest")
+        feature = official_feature(self.feature_id)
+        if payload["id"] != feature.id or payload["factory"] != feature.factory:
             raise PackageVerificationError("unsupported official feature/factory")
+        if v2:
+            if type(payload["format_version"]) is not int or payload["format_version"] != 2 or payload["execution_kind"] != feature.execution_kind:
+                raise PackageVerificationError("unsupported manifest version/execution kind")
+        elif feature.execution_kind != "host-worker":
+            raise PackageVerificationError("host-only requires manifest v2")
         _version(payload["version"])
         if payload["api_version"] != self.api_version:
             raise PackageVerificationError("incompatible Core API")
@@ -376,18 +459,29 @@ class FeaturePackageVerifier:
         if self.platform not in platforms or not set(platforms) <= _PLATFORMS:
             raise PackageVerificationError("incompatible platform")
         capabilities = _string_list(payload["capabilities"], self.limits.max_capabilities, "capabilities")
-        if any(not _CAPABILITY.fullmatch(cap) for cap in capabilities) or not set(capabilities) <= self.allowed_capabilities:
+        if (
+            any(not _CAPABILITY.fullmatch(cap) for cap in capabilities)
+            or not set(capabilities) <= self.allowed_capabilities
+            or not set(capabilities) <= feature.capabilities
+        ):
             raise PackageVerificationError("unsupported capabilities")
+        worker_path = None
         worker = payload["worker"]
-        _keys(worker, {"path", "args"}, "worker")
-        worker_path = _safe_relative(worker["path"], self.limits)
-        if not worker_path.startswith("worker/"):
-            raise PackageVerificationError("worker executable must be below worker/")
-        args = worker["args"]
-        if not isinstance(args, list) or len(args) > self.limits.max_args:
-            raise PackageVerificationError("invalid worker args")
-        if any(not isinstance(arg, str) or len(arg) > self.limits.max_arg_chars or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in arg) for arg in args):
-            raise PackageVerificationError("invalid worker argument")
+        if feature.execution_kind == "host-only":
+            if worker is not None:
+                raise PackageVerificationError("host-only cannot declare a Worker")
+        else:
+            _keys(worker, {"path", "args"}, "worker")
+            worker_path = _safe_relative(worker["path"], self.limits)
+            if not worker_path.startswith("worker/"):
+                raise PackageVerificationError("worker executable must be below worker/")
+            args = worker["args"]
+            if not isinstance(args, list) or len(args) > self.limits.max_args:
+                raise PackageVerificationError("invalid worker args")
+            if any(
+                not isinstance(arg, str) or len(arg) > self.limits.max_arg_chars or any(ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF for c in arg) for arg in args
+            ):
+                raise PackageVerificationError("invalid worker argument")
         files = payload["files"]
         if not isinstance(files, dict) or not 1 <= len(files) <= self.limits.max_files:
             raise PackageVerificationError("payload file count limit")
@@ -407,7 +501,7 @@ class FeaturePackageVerifier:
                 host_total += size
             if total > self.limits.max_total_bytes or host_total > self.limits.max_host_bytes:
                 raise PackageVerificationError("total payload/host size limit")
-        if FACTORY_PATH not in files or worker_path not in files:
+        if FACTORY_PATH not in files or (worker_path is not None and worker_path not in files):
             raise PackageVerificationError("factory/worker missing from payload inventory")
         return payload
 
@@ -484,8 +578,8 @@ class FeaturePackageVerifier:
             version=payload["version"],
             api_version=payload["api_version"],
             root=root,
-            worker_path=root / payload["worker"]["path"],
-            worker_args=tuple(payload["worker"]["args"]),
+            worker_path=None if payload["worker"] is None else root / payload["worker"]["path"],
+            worker_args=() if payload["worker"] is None else tuple(payload["worker"]["args"]),
             factory=payload["factory"],
             capabilities=tuple(payload["capabilities"]),
             manifest=_freeze(payload),
@@ -497,5 +591,6 @@ class FeaturePackageVerifier:
             evidence=CompatibilityEvidence(self.core_version, self.api_version, self.platform, tuple(sorted(self.allowed_capabilities))),
             tree=tuple(sorted(tree.items())),
             ancestors=ancestors,
+            execution_kind=official_feature(payload["id"]).execution_kind,
         )
         return descriptor, sources

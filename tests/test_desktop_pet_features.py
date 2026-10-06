@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -2778,6 +2779,16 @@ def test_dock_icon_visibility_defaults_on_and_is_saved_by_modern_settings(tmp_pa
     app.processEvents()
 
 
+def _product_copy_text(path: Path, text: str) -> str:
+    # Markdown inline Git references are traceability, not a product endorsement.
+    # Only this complete code identifier is exempt; plain copy and Python/QSS
+    # strings still retain the original strict brand check.
+    if path.suffix.lower() == ".md":
+        pattern = r"`(?:origin/)?" + ("co" + "dex") + r"/[A-Za-z0-9._/-]+`"
+        return re.sub(pattern, "", text)
+    return text
+
+
 def test_product_copy_has_no_external_brand_reference():
     forbidden = ("co" + "dex").lower()
     roots = [Path("pet"), Path("tests"), Path("docs"), Path("README.md")]
@@ -2799,7 +2810,7 @@ def test_product_copy_has_no_external_brand_reference():
                 or relative.startswith("docs/PR-REPORT-")
             ):
                 continue
-            if forbidden in path.read_text(encoding="utf-8", errors="ignore").lower():
+            if forbidden in _product_copy_text(path, path.read_text(encoding="utf-8", errors="ignore")).lower():
                 hits.append(str(path))
     assert hits == []
 
@@ -3257,3 +3268,11 @@ def test_settings_image_directories_use_preview_but_audio_folders_do_not(tmp_pat
     assert dialog.click_sound_picker.folder_picker.preview_button is None
     dialog.reject()
     app.processEvents()
+
+
+def test_product_copy_scanner_exempts_only_markdown_inline_git_refs():
+    word = "co" + "dex"
+    source = f"版本记录：`origin/{word}/phase3-worker`；这里是 {word} 品牌文案。"
+    assert _product_copy_text(Path("docs/example.md"), source) == f"版本记录：；这里是 {word} 品牌文案。"
+    assert _product_copy_text(Path("pet/example.py"), source) == source
+    assert _product_copy_text(Path("docs/example.md"), f"{word}/phase3-worker") == f"{word}/phase3-worker"

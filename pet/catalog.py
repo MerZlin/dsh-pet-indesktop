@@ -189,6 +189,12 @@ def external_character_dirs() -> list[Path]:
     dirs.append(base / "characters")
 
     from . import config as _config  # 延迟导入防环：config 顶层 import catalog
+    from .runtime_layout import current_layout
+
+    layout = current_layout()
+    if layout is not None:
+        dirs.append(layout.data_root / "characters")
+        return dirs  # legacy data is available only via explicit import
 
     app_dir_name = getattr(_config, "APP_DIR_NAME", "dsh-pet-standalone")
     dirs.extend(_data_character_dirs(app_dir_name))

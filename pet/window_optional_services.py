@@ -109,10 +109,16 @@ class WindowFeatureGateMixin:
         设置页改动即时生效且无需同步钩子。
         """
         if self._file_interpret is None:
-            from .file_interpret import FileInterpretController
+            from .feature_distribution import BUILTIN_AI
 
-            self._file_interpret = FileInterpretController(self)
-        self.install_file_eater().interpret_offer = self._file_interpret.offer
+            if BUILTIN_AI:
+                from .file_interpret import FileInterpretController
+
+                self._file_interpret = FileInterpretController(self)
+            else:
+                factory = getattr(self, "_file_interpreter_factory", None)
+                self._file_interpret = factory() if callable(factory) else None
+        self.install_file_eater().interpret_offer = self._file_interpret.offer if self._file_interpret is not None else None
         return self._file_interpret
 
     # ------------------------------------------------------------ 黄金回旋/边缘探头

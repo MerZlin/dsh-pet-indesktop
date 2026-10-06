@@ -2582,3 +2582,30 @@ def test_music_align_ready_and_callback_routing(monkeypatch):
     assert shared_mod._align_lyric(pet, "不存在的动作") is False
     ctrl.shutdown()
     app.processEvents()
+
+
+def test_settings_header_tracks_native_scrollbar_visibility(tmp_path, monkeypatch):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
+    from pet import modern_settings_dialog as settings_mod
+    from pet.config import Config
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
+    dialog = settings_mod.ModernSettingsDialog(Config(tmp_path), include_ai=False)
+    try:
+        dialog.show()
+        page = dialog.pages.currentWidget()
+        title = page.findChild(settings_mod.QLabel, "pageTitle")
+        scroll = page.findChild(QScrollArea, "settingsScroll")
+        content = scroll.widget()
+        for width in (720, 1100, 1600):
+            for policy in (Qt.ScrollBarPolicy.ScrollBarAlwaysOn, Qt.ScrollBarPolicy.ScrollBarAlwaysOff):
+                dialog.resize(width, 800)
+                scroll.setVerticalScrollBarPolicy(policy)
+                app.processEvents()
+                assert title.mapTo(page, QPoint()).x() == content.mapTo(page, QPoint()).x()
+    finally:
+        dialog.reject()
+        app.processEvents()

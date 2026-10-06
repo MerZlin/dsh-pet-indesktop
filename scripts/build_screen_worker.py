@@ -37,6 +37,7 @@ WORKER_SOURCES = (
     "pet/workers/__init__.py",
     "pet/workers/protocol.py",
     "pet/workers/screen_entry.py",
+    "pet/frozen_runtime_paths.py",
     "pet/workers/lease_bootstrap.py",
     "pet/feature_state_io.py",
     "pet/feature_install_state.py",

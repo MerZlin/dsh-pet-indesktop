@@ -1,5 +1,9 @@
 # Phase 5：官方功能选装交付与推广
 
+> Phase 5A / 5B-1 当前状态：2026-10-06，用户授权保存已有源改动并推送远端检查点后继续验收。新全量4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29)、真实CPU高负载三遍、Ruff/format/mypy通过，183文本文件明确暂存；提交/远端核对尚在进行。仅AI正常Core确认/退出、可见包标题、长路径LPAC和权限canary、Core04构建审计已有证据；分号路径、正常Worker、新Core完整矩阵/性能、新版正式分发与真实安装/人工/干净环境仍待完成，不能用旧产物冒充。先读[准确交接](../../.scratch/phase5a-local-distribution/HANDOFF.md)和[同一实施报告](../PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)，再进入[设计](PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+
+> 历史状态快照：2026-10-05（下列结果只代表当时版本）。用户追加授权8GiB后，Core03生产构建/PYZ审计通过（455,780,427B /2,260模块），五产物已生成并完成正式总分发签名294与外部公钥独立核验296/305；305末次拥有根实测7.799789GiB，余205.016MiB，不扩大清理。稳定全量273为4274 passed /15 skipped /15 warnings，满CPU三遍各251 passed /1 skipped，Ruff/format/mypy通过。空Core/仅screen完整启动菜单与自然退出通过；仅AI真实加载已确认但菜单/自然退出驱动失败，最终onlyAI/both尚未通过。Setup仍只是编译，真实安装更新卸载、冻结业务/便携、人工及干净环境未完成；Phase4B历史证据保持原样。设计见 [Phase5A 正式合同](PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+
 > 修订：2026-09-27。**5A/5B 是必做目标，不再整体条件化。**只有复杂远程平台、Workshop 和第三方生态按需启用。当前功能包交付仍待实现。
 
 ## 1. Phase 5A：小 Core Setup、旁置包与 ZIP/便携

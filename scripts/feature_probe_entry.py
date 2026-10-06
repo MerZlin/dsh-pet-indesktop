@@ -6,6 +6,10 @@ import hashlib
 import json
 import sys
 
+from pet.frozen_runtime_paths import activate_frozen_dependency_path
+
+activate_frozen_dependency_path()
+
 
 def sandbox_enforced() -> bool:
     try:
@@ -30,7 +34,21 @@ def host_probe(source, output) -> int:
         if set(doc) != {"schema", "package_root", "manifest_digest", "policy", "snapshot_ancestors"} or doc["schema"] != 1:
             raise ValueError("policy schema")
         policy = doc["policy"]
-        required = {"core_version", "api_version", "platform", "allowed_capabilities", "trust_anchors", "allow_developer_unsigned", "limits"}
+        required = {
+            "core_version",
+            "api_version",
+            "platform",
+            "allowed_capabilities",
+            "trust_anchors",
+            "allow_developer_unsigned",
+            "limits",
+            "feature_id",
+            "anchor_policy",
+        }
+        if set(policy) == required - {"feature_id", "anchor_policy"}:
+            # Compatibility for explicitly trusted v1 screen probe callers.
+            # The candidate cannot supply this parent-owned, read-only policy.
+            policy = {**policy, "feature_id": "official.screen-understanding", "anchor_policy": {}}
         if set(policy) != required or policy["allow_developer_unsigned"] is not False:
             raise ValueError("official trust required")
         stage = "verifier_import"
@@ -41,6 +59,8 @@ def host_probe(source, output) -> int:
         from pet.plugins.package_trust import VerificationLimits
 
         verifier = HeadlessFeaturePackageVerifier(
+            feature_id=policy["feature_id"],
+            anchor_policy=policy["anchor_policy"],
             core_version=policy["core_version"],
             api_version=policy["api_version"],
             platform=policy["platform"],

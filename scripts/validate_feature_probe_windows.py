@@ -18,7 +18,6 @@ import subprocess
 import sys
 import time
 import uuid
-import winreg
 from ctypes import wintypes as W
 from pathlib import Path
 
@@ -57,6 +56,28 @@ def check_canary_results(positive, negative):
     assert negative == expected, {"expected": expected, "actual": negative}
 
 
+def check_network_results(positive, negative):
+    assert set(positive) == set(negative) == {"ipv4", "ipv6"}, "incomplete native network matrix"
+    for name in ("ipv4", "ipv6"):
+        good, denied = positive[name], negative[name]
+        assert good == {"api": "windows.winsock2", "stage": "connect", "error": 0, "connect_attempted": True}, "network positive control failed"
+        assert denied.get("api") == "windows.winsock2", "network boundary not reached"
+        # WSAStartup's actual native system-call denial is a distinct result:
+        # do NOT label it a connect() / firewall denial. Loader/import failures
+        # or an unavailable service cannot satisfy this gate.
+        if denied.get("stage") == "initialize":
+            assert denied.get("error") in {10013, 10107} and denied.get("connect_attempted") is False, "network boundary not reached"
+        else:
+            assert denied.get("stage") in {"create", "connect"} and denied.get("error") == 10013, "network boundary not reached"
+            assert denied.get("connect_attempted") is (denied["stage"] == "connect"), "network stage evidence conflict"
+
+
+def _network_details(stderr):
+    values = [json.loads(line)["canary_network"] for line in stderr.splitlines() if b'"canary_network"' in line]
+    assert len(values) == 1, "missing or conflicting native network evidence"
+    return values[0]
+
+
 class Blob(C.Structure):
     _fields_ = [("size", W.DWORD), ("data", C.c_void_p)]
 
@@ -87,6 +108,8 @@ def _owned(root: Path, bundle: Path, digest: str, name: str):
 
 
 def validate(bundle: Path, root: Path):
+    import winreg
+
     bundle = bundle.absolute()
     root = root.absolute()
     root.mkdir(parents=True, exist_ok=False)
@@ -210,6 +233,9 @@ def validate(bundle: Path, root: Path):
         assert result.returncode == 0 and result.reason is None, evidence["permissions"]
         negative = json.loads(result.stdout)
         check_canary_results(positive, negative)
+        check_network_results(_network_details(control.stderr), _network_details(result.stderr))
+        evidence["network_positive"] = _network_details(control.stderr)
+        evidence["network_negative"] = _network_details(result.stderr)
         evidence["positive_control"] = positive
         evidence["permissions"]["passed"] = True
         for mode in ("crash", "timeout", "overflow", "line-overflow", "input-block", "memory"):

@@ -1,8 +1,12 @@
 # 项目入口：dsh-pet-indesktop
 
+> Phase 5A / 5B-1 当前状态：2026-10-06，用户授权保存已有源改动并推送远端检查点后继续验收。新全量4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29)、真实CPU高负载三遍、Ruff/format/mypy通过，183文本文件明确暂存；提交/远端核对尚在进行。仅AI正常Core确认/退出、可见包标题、长路径LPAC和权限canary、Core04构建审计已有证据；分号路径、正常Worker、新Core完整矩阵/性能、新版正式分发与真实安装/人工/干净环境仍待完成，不能用旧产物冒充。先读[准确交接](../.scratch/phase5a-local-distribution/HANDOFF.md)和[同一实施报告](PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)，再进入[设计](plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+
+> 历史状态快照：2026-10-05（下列结果只代表当时版本）。用户追加授权8GiB后，Core03生产构建/PYZ审计通过（455,780,427B /2,260模块），五产物已生成并完成正式总分发签名294与外部公钥独立核验296/305；305末次拥有根实测7.799789GiB，余205.016MiB，不扩大清理。稳定全量273为4274 passed /15 skipped /15 warnings，满CPU三遍各251 passed /1 skipped，Ruff/format/mypy通过。空Core/仅screen完整启动菜单与自然退出通过；仅AI真实加载已确认但菜单/自然退出驱动失败，最终onlyAI/both尚未通过。Setup仍只是编译，真实安装更新卸载、冻结业务/便携、人工及干净环境未完成；Phase4B历史证据保持原样。设计见 [Phase5A 正式合同](plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+
 > 这是给新对话、新贡献者和继续施工的开发者看的渐进式入口。它不是普通用户安装教程，也不替代阶段设计、API 合同、测试计划和 PR 报告。
 
-> 当前分支发布任务（2026-10-04）：Phase 4B 源修改 `98bbfba` 已正常推送到 `origin/codex/phase3-worker` 并独立核对远端SHA；新全量3841项及满CPU3×154项通过；准确状态见同组交接与工程报告。正式信任锚/分发按用户决定暂缓，不生成官方私钥、不正式发布。
+> 历史 Phase4B 发布记录（2026-10-04；下述暂缓只指当时）：Phase 4B 源修改 `98bbfba` 已正常推送到 `origin/codex/phase3-worker` 并独立核对远端SHA；新全量3841项及满CPU3×154项通过；准确状态见同组交接与工程报告。正式信任锚/分发按用户决定暂缓，不生成官方私钥、不正式发布。
 
 ## 1. 第一层：项目定位与当前结论
 

@@ -168,7 +168,7 @@ def test_clamp_fallback_tiny_available_stays_at_corner():
 
 
 def _chat_src(module_name: str) -> str:
-    return (Path(__file__).resolve().parents[1] / "pet" / "chat" / f"{module_name}.py").read_text(encoding="utf-8")
+    return (Path(__file__).resolve().parents[1] / "features" / "ai_chat" / "host" / "chat" / f"{module_name}.py").read_text(encoding="utf-8")
 
 
 def test_legacy_call_sites_use_default_localize_time_true():

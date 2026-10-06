@@ -171,3 +171,123 @@ def test_owned_executable_declares_long_paths_without_gui_dependencies(tmp_path)
     assert hashlib.sha256(original.read_bytes()).hexdigest() == before
     with pytest.raises(ValueError, match="outside owned"):
         write_owned_executable_manifest(executable, owned_root=tmp_path / "other")
+
+
+def test_native_network_canary_does_not_depend_on_python_socket_initialization(monkeypatch):
+    import builtins
+    import sys
+    from types import SimpleNamespace
+
+    from scripts.feature_probe_canary import native_network_access
+
+    original = builtins.__import__
+    calls = []
+
+    def denied_socket(name, *args, **kwargs):
+        if name == "socket":
+            raise ImportError("generated Python socket initialization denial")
+        return original(name, *args, **kwargs)
+
+    def probe(family, host, port):
+        calls.append((family, host, port))
+        return {"allowed": True, "stage": "connect", "error": 0, "connect_attempted": True}
+
+    monkeypatch.setattr(builtins, "__import__", denied_socket)
+    monkeypatch.setitem(sys.modules, "_dsh_probe_native", SimpleNamespace(network_connect=probe))
+    allowed, detail = native_network_access(2, ["127.0.0.1", 43210])
+    assert allowed and calls == [(2, "127.0.0.1", 43210)]
+    assert detail == {"api": "windows.winsock2", "stage": "connect", "error": 0, "connect_attempted": True}
+
+
+def test_native_network_initialization_denial_is_not_misreported_as_connect_denial(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from scripts.feature_probe_canary import native_network_access
+
+    monkeypatch.setitem(
+        sys.modules,
+        "_dsh_probe_native",
+        SimpleNamespace(
+            network_connect=lambda *args: {
+                "allowed": False,
+                "stage": "initialize",
+                "error": 10107,
+                "connect_attempted": False,
+            }
+        ),
+    )
+    allowed, detail = native_network_access(23, ["::1", 43210])
+    assert not allowed and detail["api"] == "windows.winsock2"
+    assert detail["stage"] == "initialize" and detail["error"] == 10107
+    assert detail["connect_attempted"] is False
+
+
+def test_network_permission_gate_rejects_loader_failure_as_network_denial():
+    from scripts.validate_feature_probe_windows import check_network_results
+
+    positive = dict.fromkeys(("ipv4", "ipv6"), {"api": "windows.winsock2", "stage": "connect", "error": 0, "connect_attempted": True})
+    negative = dict.fromkeys(("ipv4", "ipv6"), {"api": "windows.winsock2", "stage": "load", "error": 126, "connect_attempted": False})
+    with pytest.raises(AssertionError, match="network boundary not reached"):
+        check_network_results(positive, negative)
+    initialize_denied = dict.fromkeys(("ipv4", "ipv6"), {"api": "windows.winsock2", "stage": "initialize", "error": 10107, "connect_attempted": False})
+    check_network_results(positive, initialize_denied)
+
+
+@pytest.mark.parametrize("module", ["feature_probe_canary", "validate_feature_probe_windows"])
+def test_public_canary_contract_import_does_not_require_windows_registry(module, monkeypatch):
+    import builtins
+    import importlib.util
+
+    original = builtins.__import__
+
+    def no_winreg(name, *args, **kwargs):
+        if name == "winreg":
+            raise ModuleNotFoundError("generated non-Windows registry boundary")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_winreg)
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("_generated_registry_free_contract", root / "scripts" / (module + ".py"))
+    loaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loaded)
+    assert callable(getattr(loaded, "network_access" if module == "feature_probe_canary" else "check_network_results"))
+
+
+def test_headless_bootloader_long_paths_are_explicit_and_fail_closed():
+    from scripts.build_feature_probe_native import patch_long_path_loading
+
+    path_source = "    return _wfopen(wfilename, wmode);"
+    home_source = """    /* Macro to avoid manual code repetition. */
+    #define _IMPL_CASE(PY_VERSION, PY_FLAGS, PYCONFIG_IMPL) \
+    case _MAKE_VERSION_ID(PY_VERSION, PY_FLAGS): { \
+        PYCONFIG_IMPL *config_impl = (PYCONFIG_IMPL *)config; \
+        return _pyi_pyconfig_set_string(config, &config_impl->home, pyi_ctx->application_home_dir, dylib_python); \
+    }"""
+    path_result, home_result = patch_long_path_loading(path_source, home_source)
+    assert "extended_filename" in path_result
+    assert "wfilename[1] == L':'" in path_result
+    assert "home_path" in home_result
+    assert "application_home_dir[1] == ':'" in home_result
+    assert "stdlib_dir" not in home_result  # no replacement Python/library discovery
+    with pytest.raises(ValueError, match="long-path loading seam"):
+        patch_long_path_loading(path_source + path_source, home_source)
+    with pytest.raises(ValueError, match="long-path loading seam"):
+        patch_long_path_loading(path_source, home_source.replace("&config_impl->home", "&config_impl->other"))
+
+
+def test_headless_runtime_paths_are_explicit_before_python_bootstrap():
+    from scripts.build_feature_probe_native import patch_explicit_runtime_paths
+
+    main = "    return _pyi_resolve_executable_win32(pyi_ctx->executable_filename);"
+    config = "    /* Set */\n    ret = _pyi_pyconfig_set_module_search_paths("
+    patched_main, patched_config = patch_explicit_runtime_paths(main, config)
+    assert "extended_executable" in patched_main
+    assert "executable_filename[1] == ':'" in patched_main
+    assert '"Py_SetPath"' in patched_config
+    assert "module_search_paths_w[i]" in patched_config
+    assert "dylib_python->version != 311" in patched_config
+    assert "PATHCCH_FORCE" not in patched_config
+    for broken_main, broken_config in ((main + main, config), (main, config + config)):
+        with pytest.raises(ValueError, match="explicit runtime path seam"):
+            patch_explicit_runtime_paths(broken_main, broken_config)

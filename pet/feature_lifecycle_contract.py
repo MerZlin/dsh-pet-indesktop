@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 
 from . import feature_state_io as io
 from .feature_state_io import StateError
+from .official_features import OFFICIAL_FEATURES, SCREEN_FEATURE_ID
 
 
 @dataclass(frozen=True)
@@ -19,16 +20,21 @@ class LifecyclePrepareRequest:
     versions: tuple[str, ...]
     live_owners: tuple[tuple[int, str], ...] = ()
     nonce: str = field(default_factory=lambda: uuid.uuid4().hex)
+    feature_id: str = SCREEN_FEATURE_ID
 
     def document(self):
         return asdict(self)
 
     @classmethod
     def parse(cls, document):
+        if isinstance(document, dict) and "feature_id" not in document:
+            document = {**document, "feature_id": SCREEN_FEATURE_ID}
         if not isinstance(document, dict) or set(document) != set(cls.__dataclass_fields__):
             raise StateError("lifecycle_request_invalid")
         if (
-            not isinstance(document["operation_id"], str)
+            not isinstance(document["feature_id"], str)
+            or document["feature_id"] not in OFFICIAL_FEATURES
+            or not isinstance(document["operation_id"], str)
             or not re.fullmatch(r"(?:tx|lc)-[a-f0-9]{32}", document["operation_id"])
             or type(document["revision"]) is not int
             or document["revision"] < 0
@@ -54,17 +60,28 @@ class LifecyclePrepareRequest:
             ):
                 raise StateError("lifecycle_owner_invalid")
             owners.append(tuple(owner))
-        return cls(document["operation_id"], document["revision"], document["operation"], tuple(document["versions"]), tuple(owners), document["nonce"])
+        return cls(
+            document["operation_id"],
+            document["revision"],
+            document["operation"],
+            tuple(document["versions"]),
+            tuple(owners),
+            document["nonce"],
+            document["feature_id"],
+        )
 
 
 def request_path(store, request):
     LifecyclePrepareRequest.parse(request.document())
+    if request.feature_id != store.feature_id:
+        raise StateError("feature_identity_conflict")
     path = store.root / "locks" / "lifecycle-requests" / (request.operation_id + ".json")
     io.safe_path(path)
     return path
 
 
 def authorize_request(store, request):
+    request_path(store, request)
     state = store.read().state
     if state is None or state.revision != request.revision or not set(request.versions) <= set(state.versions):
         raise StateError("revision_conflict")

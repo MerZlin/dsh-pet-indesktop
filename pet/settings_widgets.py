@@ -1427,18 +1427,39 @@ class SettingsTabContainer(QWidget):
 
 
 class _SettingsPageShell(QWidget):
-    """Keep the fixed page header aligned with the centered scroll content."""
+    """Align the fixed header to the real viewport, not a guessed scrollbar."""
 
     def __init__(self, content_max_width: int, parent=None):
         super().__init__(parent)
         self.content_max_width = int(content_max_width)
         self.heading_host: QWidget | None = None
+        self._scroll: QScrollArea | None = None
+        self._heading_row: QHBoxLayout | None = None
+
+    def bind_scroll(self, scroll: QScrollArea, heading_row: QHBoxLayout) -> None:
+        self._scroll = scroll
+        self._heading_row = heading_row
+        scroll.viewport().installEventFilter(self)
+        self._sync_heading()
+
+    def _sync_heading(self) -> None:
+        if self.heading_host is None or self._scroll is None or self._heading_row is None:
+            return
+        viewport = self._scroll.viewport()
+        geometry = viewport.geometry()
+        left = max(0, geometry.x())
+        right = max(0, self._scroll.width() - geometry.right() - 1)
+        self._heading_row.setContentsMargins(left, 0, right, 0)
+        self.heading_host.setFixedWidth(min(self.content_max_width, max(0, viewport.width())))
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if self._scroll is not None and watched is self._scroll.viewport() and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._sync_heading()
+        return super().eventFilter(watched, event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        if self.heading_host is not None:
-            available = max(0, self.width() - 30 - 28)
-            self.heading_host.setFixedWidth(min(self.content_max_width, available))
+        self._sync_heading()
 
 
 def _line_edit(text: str = "", *, password: bool = False, width: int = 240) -> QLineEdit:

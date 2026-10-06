@@ -575,3 +575,105 @@ def test_real_queued_uninstall_can_revoke_before_lock_failure_then_safely_resume
         widget.deleteLater()
         manager.close()
         app.processEvents()
+
+
+def test_two_official_cards_have_independent_owners_and_close_all_observers(tmp_path):
+    from pet.modern_settings_dialog import ModernSettingsDialog
+    from pet.official_features import AI_OWNER, SCREEN_OWNER
+    from pet.settings_widgets import SettingRow
+
+    app = QApplication.instance() or QApplication([])
+    dialog = ModernSettingsDialog(Config(base=tmp_path), include_ai=False, standalone=True, initial_page="extensions")
+    managers = None
+    try:
+        dialog.show()
+        app.processEvents()
+        managers = dialog.feature_managers
+        assert set(managers) == {AI_OWNER, SCREEN_OWNER}
+        assert set(dialog.feature_management_widgets) == set(managers)
+        assert not dialog.feature_host.owners(), "management-only must not import either factory"
+        assert dialog.findChild(SettingRow, "settingRow_ai_feature_package") is not None
+        assert "AI" in dialog.feature_management_widgets[AI_OWNER].accessibleName()
+        assert "屏幕理解" in dialog.feature_management_widgets[SCREEN_OWNER].accessibleName()
+        dialog._search_settings("文件理解")
+        assert dialog._search_matches
+        assert dialog.sidebar.currentItem().text() == "常规"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+    assert managers and all(manager._closed.is_set() for manager in managers.values())
+
+
+def test_owner_card_ignores_cross_package_result_and_screen_draft(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QWidget
+
+    from pet import feature_distribution
+    from pet.feature_management import attach_official_management, close_official_management
+    from pet.feature_management_ui import FeatureManagementWidget
+    from pet.feature_package_transactions import Inspection, OperationResult
+    from pet.official_features import AI_OWNER, SCREEN_OWNER
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(feature_distribution, "BUILTIN_SCREEN", False)
+    monkeypatch.setattr(feature_distribution, "BUILTIN_AI", False)
+    host = FeatureHost()
+    managers = attach_official_management(Config(base=tmp_path), host, role="settings", management_only=True)
+    parent = QWidget()
+    parent._screen_component = SimpleNamespace(dirty=lambda: True)
+    screen = FeatureManagementWidget(managers[SCREEN_OWNER], parent)
+    ai = FeatureManagementWidget(managers[AI_OWNER], parent)
+    try:
+        _pump(app, lambda: all(not manager.busy for manager in managers.values()))
+        previous = screen.inspection
+        ai_result = Inspection("ready", 1, "1.0.0", None, True, None, (), (), feature_id=AI_OWNER)
+        screen._result(ai_result)
+        screen._result(OperationResult("completed", feature_id=AI_OWNER))
+        assert screen.inspection is previous and screen.last_operation is None
+        ai._result(ai_result)
+        ai._update_actions()
+        screen._update_actions()
+        assert screen.draft_button.isEnabled()
+        assert not ai.draft_button.isEnabled(), "screen drafts cannot authorize an AI operation"
+        assert ai.settings_button.accessibleDescription().startswith("官方 AI")
+    finally:
+        close_official_management(host)
+        parent.close()
+        parent.deleteLater()
+        app.processEvents()
+
+
+def test_probe_cleanup_warning_is_separate_wrapped_and_not_install_failure(tmp_path, monkeypatch):
+    from pet import feature_distribution
+    from pet.feature_management import attach_feature_management
+    from pet.feature_management_ui import FeatureManagementWidget
+    from pet.feature_probe_materials import ProbeMaterialCleanup
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(feature_distribution, "BUILTIN_SCREEN", False)
+    manager = attach_feature_management(Config(base=tmp_path), FeatureHost(), management_only=True)
+    widget = FeatureManagementWidget(manager)
+    try:
+        widget.resize(720, 700)
+        widget.show()
+        _pump(app, lambda: widget.inspection is not None and not manager.busy)
+        before = widget.status_label.text()
+        manager.probe_cleanup = (ProbeMaterialCleanup("recovery_required", "probe-" + "a" * 32, "probe_materials_io_error"),)
+        manager.probe_cleanup_changed.emit(manager.probe_cleanup)
+        app.processEvents()
+        assert widget.status_label.text() == before
+        assert widget.cleanup_label.isVisible() and widget.cleanup_label.wordWrap()
+        assert "不会改变功能启停" in widget.cleanup_label.text()
+        assert "probe_materials_io_error" in widget.cleanup_label.toolTip()
+        assert widget.cleanup_label.accessibleDescription() == widget.cleanup_label.toolTip()
+        assert widget.cleanup_label.accessibleName()
+        manager.probe_cleanup_changed.emit((ProbeMaterialCleanup("completed", "probe-" + "a" * 32),))
+        app.processEvents()
+        assert not widget.cleanup_label.isVisible()
+    finally:
+        widget.close()
+        widget.deleteLater()
+        manager.close()
+        app.processEvents()

@@ -21,6 +21,11 @@ def _platform_base() -> Path:
 
 
 def app_data_root(app_dir_name: str | None = None) -> Path:
+    from ..runtime_layout import current_layout
+
+    layout = current_layout()
+    if layout is not None and app_dir_name in (None, layout.product_id):
+        return layout.data_root
     if app_dir_name is None:
         from .. import config
 

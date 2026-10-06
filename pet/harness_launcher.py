@@ -88,6 +88,11 @@ _HIDDEN_KWARGS: dict = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name
 
 def _probe_cache_path() -> Path:
     """--no-open 探测结果的落盘缓存路径（桌宠数据目录下）。"""
+    from .runtime_layout import current_layout
+
+    layout = current_layout()
+    if layout is not None:
+        return layout.data_root / "harness_probe_cache.json"
     try:
         from . import config as _config_mod
 

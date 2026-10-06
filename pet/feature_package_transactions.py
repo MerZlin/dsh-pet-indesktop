@@ -24,6 +24,7 @@ from .feature_lifecycle_contract import LifecyclePrepareRequest, authorize_reque
 from .feature_startup_contract import StartupLoadPermit
 from .feature_state_io import StateError
 from .feature_version_lease import FeatureVersionLeaseCoordinator
+from .official_features import SCREEN_FEATURE_ID, official_feature
 from .plugins.package_trust import FeaturePackageVerifier, PackageVerificationError, VerifiedFeatureDescriptor
 
 # Transient lock contention is retryable, never evidence of a corrupt package.
@@ -173,8 +174,10 @@ class OperationPlan:
     delete_versions: tuple[str, ...]
     confirmation_digest: str
     confirmation_token: str = field(repr=False)
+    feature_id: str = SCREEN_FEATURE_ID
 
     def __post_init__(self):
+        official_feature(self.feature_id)
         object.__setattr__(self, "versions", _freeze(self.versions))
         object.__setattr__(self, "occupancy", _freeze(self.occupancy))
         object.__setattr__(self, "action_summary", tuple(self.action_summary))
@@ -194,8 +197,10 @@ class OperationResult:
     reason: str | None = None
     blocked_versions: tuple[str, ...] = ()
     details: Mapping[str, object] = field(default_factory=dict)
+    feature_id: str = SCREEN_FEATURE_ID
 
     def __post_init__(self):
+        official_feature(self.feature_id)
         if self.status not in _STATUSES or self.phase is not None and self.phase not in _PHASES:
             raise ValueError("invalid transaction result")
 
@@ -211,13 +216,20 @@ class Inspection:
     transactions: tuple[str, ...]
     garbage: tuple[str, ...]
     reason: str | None = None
+    feature_id: str = SCREEN_FEATURE_ID
 
 
 class FeaturePackageTransactionService:
+    def _result(self, *args, **kwargs) -> OperationResult:
+        if "feature_id" in kwargs:
+            raise TypeError("result identity is owned by the service")
+        kwargs["feature_id"] = self.store.feature_id
+        return OperationResult(*args, **kwargs)
+
     def __init__(
         self, data_root: Path | str, verifier: FeaturePackageVerifier, *, self_checker: SelfChecker | None = None, runtime: RuntimeLifecycle | None = None
     ):
-        self.store = FeatureInstallStateStore(Path(data_root))
+        self.store = FeatureInstallStateStore(Path(data_root), feature_id=verifier.feature_id)
         self.verifier = verifier
         if self_checker is None:
             from .feature_package_probe import SubprocessFeatureSelfChecker
@@ -261,7 +273,7 @@ class FeaturePackageTransactionService:
         if any(item.status not in ("free", "occupied") for item in occupancy.values()):
             return RuntimePreparation("awaiting_release", "lease_evidence_uncertain")
         owners = self._live_owners(occupancy)
-        request = LifecyclePrepareRequest(operation_id, state.revision, operation, versions, owners)
+        request = LifecyclePrepareRequest(operation_id, state.revision, operation, versions, owners, feature_id=self.store.feature_id)
         authorize_request(self.store, request)
         try:
             prepared = self.runtime.prepare(request)
@@ -281,7 +293,11 @@ class FeaturePackageTransactionService:
         if journal.get("schema_version") != 1 or journal.get("phase") not in _PHASES or type(journal.get("accepted")) is not bool:
             raise StateError("journal_corrupt")
         plan = self._plan_from(journal["plan"])
+        if plan.feature_id != self.store.feature_id:
+            raise StateError("feature_identity_conflict")
         document = plan.document()
+        if "feature_id" not in journal["plan"]:
+            document.pop("feature_id")  # explicitly scoped legacy screen journal
         body = dict(document)
         body.pop("confirmation_digest")
         if _digest(_json(body)) != plan.confirmation_digest or journal.get("plan_digest") != _digest(_json(document)):
@@ -328,7 +344,9 @@ class FeaturePackageTransactionService:
                 transactions.append(path.stem)
                 garbage.update(journal.get("garbage_versions", []))
         except (StateError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
-            return Inspection("recovery_required", None, None, None, False, None, tuple(transactions), tuple(sorted(garbage)), _error(exc))
+            return Inspection(
+                "recovery_required", None, None, None, False, None, tuple(transactions), tuple(sorted(garbage)), _error(exc), self.store.feature_id
+            )
         return Inspection(
             result.status,
             state.revision if state else None,
@@ -339,6 +357,7 @@ class FeaturePackageTransactionService:
             tuple(transactions),
             tuple(sorted(garbage)),
             result.reason,
+            self.store.feature_id,
         )
 
     def _journals(self) -> list[Path]:
@@ -358,6 +377,7 @@ class FeaturePackageTransactionService:
     def _make_plan(self, operation_id: str, kind: str, state: InstallState, **source) -> tuple[OperationPlan, dict]:
         values: dict[str, Any] = dict(
             operation_id=operation_id,
+            feature_id=self.store.feature_id,
             kind=kind,
             revision=state.revision,
             source_type=None,
@@ -442,7 +462,7 @@ class FeaturePackageTransactionService:
                     raise StateError("same_version_different_digest")
                 if kind != "rollback":
                     self._cleanup_stage(operation_id)
-                    return OperationResult("idempotent", operation_id, "completed", revision=state.revision, reason="same_version_same_digest")
+                    return self._result("idempotent", operation_id, "completed", revision=state.revision, reason="same_version_same_digest")
             if kind == "install" and state.active is not None:
                 raise StateError("already_installed_use_upgrade")
             if kind == "rollback" and (descriptor.version != state.previous or old_digest != manifest_digest):
@@ -463,14 +483,14 @@ class FeaturePackageTransactionService:
                 estimated_bytes=size,
             )
             self._phase(journal, "awaiting_confirmation")
-            return OperationResult("awaiting_confirmation", operation_id, "awaiting_confirmation", plan, state.revision)
+            return self._result("awaiting_confirmation", operation_id, "awaiting_confirmation", plan, state.revision)
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, zipfile.BadZipFile) as exc:
             reason = _error(exc)
             try:
                 self._cleanup_stage(operation_id)
             except (StateError, OSError):
                 pass  # Never widen the cleanup boundary to make rejection succeed.
-            return OperationResult("rejected", operation_id, "rejected", reason=reason)
+            return self._result("rejected", operation_id, "rejected", reason=reason)
 
     def preflight_rollback(self) -> OperationResult:
         try:
@@ -481,7 +501,7 @@ class FeaturePackageTransactionService:
                 raise StateError("previous_unavailable")
             return self._preflight("rollback", self.versions_root / state.previous)
         except (StateError, OSError) as exc:
-            return OperationResult("rejected", reason=_error(exc))
+            return self._result("rejected", reason=_error(exc))
 
     def set_enabled(self, enabled: bool, *, expected_revision: int) -> OperationResult:
         try:
@@ -501,7 +521,7 @@ class FeaturePackageTransactionService:
             elif self.runtime is not None:
                 prepared = self._prepare_runtime("lc-" + uuid.uuid4().hex, "disable", tuple(state.versions), state)
                 if prepared.status != "ready":
-                    return OperationResult(
+                    return self._result(
                         "awaiting_confirmation" if prepared.status == "draft_blocked" else "awaiting_release", reason=prepared.reason, details=prepared.details
                     )
             with _named_lock(lambda: io.open_kernel_lock(self.management_lock_path), "management"):
@@ -512,19 +532,21 @@ class FeaturePackageTransactionService:
                     if any((journal := self._load(path.stem))["accepted"] and journal["phase"] != "completed" for path in self._journals()):
                         raise StateError("accepted_transaction_pending")
                     if current.enabled == enabled:
-                        return OperationResult("idempotent", revision=current.revision)
+                        return self._result("idempotent", revision=current.revision)
                     self._commit(
                         StateChange(dict(current.versions), current.active, current.previous, enabled),
                         expected_revision=current.revision,
                         operation_id="enable-" + uuid.uuid4().hex,
                     )
-                    return OperationResult("completed", revision=current.revision + 1)
+                    return self._result("completed", revision=current.revision + 1)
         except (StateError, PackageVerificationError, OSError) as exc:
-            return OperationResult("rejected", reason=_error(exc))
+            return self._result("rejected", reason=_error(exc))
 
     def cancel_preflight(self, plan: OperationPlan) -> OperationResult:
         if not isinstance(plan, OperationPlan):
-            return OperationResult("rejected", reason="invalid_plan")
+            return self._result("rejected", reason="invalid_plan")
+        if plan.feature_id != self.store.feature_id:
+            return self._result("rejected", reason="feature_identity_conflict")
         try:
             with _named_lock(lambda: io.open_kernel_lock(self.management_lock_path), "management"):
                 journal = self._load(plan.operation_id)
@@ -534,9 +556,9 @@ class FeaturePackageTransactionService:
                     raise StateError("accepted_transaction_cannot_cancel")
                 self._phase(journal, "rejected", reason="preflight_cancelled")
             self._cleanup_stage(plan.operation_id)
-            return OperationResult("completed", plan.operation_id, "completed", reason="preflight_cancelled")
+            return self._result("completed", plan.operation_id, "completed", reason="preflight_cancelled")
         except (StateError, OSError) as exc:
-            return OperationResult("rejected", plan.operation_id, reason=_error(exc))
+            return self._result("rejected", plan.operation_id, reason=_error(exc))
 
     def preflight_uninstall(self) -> OperationResult:
         operation_id = "tx-" + uuid.uuid4().hex
@@ -544,8 +566,6 @@ class FeaturePackageTransactionService:
             state = self._state(initialize=True)
             if state.pending_transaction:
                 raise StateError("pending_transaction")
-            if not state.versions:
-                return OperationResult("idempotent", operation_id, "completed", revision=state.revision)
             delete_versions = set(state.versions)
             for path in self._journals():
                 old = self._load(path.stem)
@@ -554,11 +574,13 @@ class FeaturePackageTransactionService:
             io.safe_path(self.versions_root)
             if self.versions_root.exists() and any(path.name not in delete_versions for path in self.versions_root.iterdir()):
                 raise StateError("orphan_version_requires_recovery")
+            if not delete_versions:
+                return self._result("idempotent", operation_id, "completed", revision=state.revision)
             plan, journal = self._make_plan(operation_id, "uninstall", state, delete_versions=tuple(sorted(delete_versions)))
             self._phase(journal, "awaiting_confirmation")
-            return OperationResult("awaiting_confirmation", operation_id, "awaiting_confirmation", plan, state.revision)
+            return self._result("awaiting_confirmation", operation_id, "awaiting_confirmation", plan, state.revision)
         except (StateError, OSError) as exc:
-            return OperationResult("recovery_required", operation_id, "recovery_required", reason=_error(exc))
+            return self._result("recovery_required", operation_id, "recovery_required", reason=_error(exc))
 
     @staticmethod
     def _package_digest(descriptor: VerifiedFeatureDescriptor) -> str:
@@ -601,11 +623,17 @@ class FeaturePackageTransactionService:
             if state.document() == intent["after"]:
                 # The after image is derived here, not trusted from journal input.
                 predecessor = InstallState(
-                    before["revision"], before["versions"], before["active"], before["previous"], before["enabled"], before["pending_transaction"]
+                    before["revision"],
+                    before["versions"],
+                    before["active"],
+                    before["previous"],
+                    before["enabled"],
+                    before["pending_transaction"],
+                    self.store.feature_id,
                 )
                 change = self._change(plan, predecessor, intent["step"])
                 after = InstallState(
-                    predecessor.revision + 1, change.versions, change.active, change.previous, change.enabled, change.pending_transaction
+                    predecessor.revision + 1, change.versions, change.active, change.previous, change.enabled, change.pending_transaction, self.store.feature_id
                 ).document()
                 if after != intent["after"]:
                     raise StateError("journal_intent_invalid")
@@ -637,7 +665,9 @@ class FeaturePackageTransactionService:
         change = self._change(plan, state, step)
         if (
             intent["after"]
-            != InstallState(state.revision + 1, change.versions, change.active, change.previous, change.enabled, change.pending_transaction).document()
+            != InstallState(
+                state.revision + 1, change.versions, change.active, change.previous, change.enabled, change.pending_transaction, self.store.feature_id
+            ).document()
         ):
             raise StateError("journal_intent_invalid")
 
@@ -645,7 +675,9 @@ class FeaturePackageTransactionService:
         if state.document() != journal["expected_state"] or self._state().document() != state.document():
             raise StateError("revision_conflict")
         change = self._change(plan, state, step)
-        after = InstallState(state.revision + 1, change.versions, change.active, change.previous, change.enabled, change.pending_transaction)
+        after = InstallState(
+            state.revision + 1, change.versions, change.active, change.previous, change.enabled, change.pending_transaction, self.store.feature_id
+        )
         intent = journal.get("intent")
         if intent is not None:
             self._validate_intent(plan, journal, state)
@@ -663,18 +695,20 @@ class FeaturePackageTransactionService:
 
     def apply(self, plan: OperationPlan, *, confirmation_token: str | None = None) -> OperationResult:
         if not isinstance(plan, OperationPlan):
-            return OperationResult("rejected", reason="invalid_plan")
+            return self._result("rejected", reason="invalid_plan")
+        if plan.feature_id != self.store.feature_id:
+            return self._result("rejected", reason="feature_identity_conflict")
         try:
             journal = self._load(plan.operation_id)
             if journal["plan_digest"] != _digest(_json(plan.document())):
                 raise StateError("confirmation_plan_changed")
             if confirmation_token is None:
-                return OperationResult("awaiting_confirmation", plan.operation_id, "awaiting_confirmation", plan, plan.revision)
+                return self._result("awaiting_confirmation", plan.operation_id, "awaiting_confirmation", plan, plan.revision)
             if not hmac.compare_digest(_digest(confirmation_token.encode()), journal["confirmation_token_hash"]):
                 raise StateError("confirmation_token_invalid")
             return self._continue(plan, journal)
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
-            return OperationResult("rejected", plan.operation_id, "rejected", plan, reason=_error(exc))
+            return self._result("rejected", plan.operation_id, "rejected", plan, reason=_error(exc))
 
     def _continue(self, plan: OperationPlan, journal: dict) -> OperationResult:
         try:
@@ -683,20 +717,20 @@ class FeaturePackageTransactionService:
                 journal = self._load(plan.operation_id)
                 state = self._reconcile(journal)
             if journal.get("rollback_load_failed"):
-                return OperationResult("recovery_required", plan.operation_id, "recovery_required", revision=state.revision, reason="rollback_load_failed")
+                return self._result("recovery_required", plan.operation_id, "recovery_required", revision=state.revision, reason="rollback_load_failed")
             if journal.get("rollback_pending"):
                 if state.active == plan.active and journal.get("intent") is None:
                     if journal["phase"] == "completed":
-                        return OperationResult("idempotent", plan.operation_id, "completed", revision=state.revision)
+                        return self._result("idempotent", plan.operation_id, "completed", revision=state.revision)
                     self._phase(journal, "awaiting_startup_confirmation")
-                    return OperationResult("awaiting_startup_confirmation", plan.operation_id, journal["phase"], revision=state.revision)
+                    return self._result("awaiting_startup_confirmation", plan.operation_id, journal["phase"], revision=state.revision)
                 return self._rollback(plan, journal, reason="rolled_back")
             if journal["phase"] == "rolling_back":
                 return self._rollback(plan, journal, reason=journal.get("reason", "startup_load_failed"))
             if journal.get("reason") == "preflight_cancelled":
                 raise StateError("preflight_cancelled")
             if journal["phase"] == "completed":
-                return OperationResult("idempotent", plan.operation_id, "completed", plan, state.revision)
+                return self._result("idempotent", plan.operation_id, "completed", plan, state.revision)
             if state.pending_transaction not in (None, plan.operation_id):
                 raise StateError("pending_transaction")
             if not journal["accepted"]:
@@ -714,7 +748,7 @@ class FeaturePackageTransactionService:
                     # A rejected candidate must not disable the existing feature.
                     checked = self.self_checker.check(descriptor)
                     if checked.status != "ready":
-                        return OperationResult("rejected", plan.operation_id, "rejected", plan, state.revision, checked.reason or "self_check_failed")
+                        return self._result("rejected", plan.operation_id, "rejected", plan, state.revision, checked.reason or "self_check_failed")
                     self.verifier.reverify(descriptor)
                     journal["self_check_passed"] = True
                 if self.runtime is not None:
@@ -722,7 +756,7 @@ class FeaturePackageTransactionService:
                     prepared_owners = prepared.details.get("prepared_owners")
                     if prepared.status != "ready":
                         status = "awaiting_confirmation" if prepared.status == "draft_blocked" else "awaiting_release"
-                        return OperationResult(
+                        return self._result(
                             status,
                             plan.operation_id,
                             "awaiting_confirmation" if status == "awaiting_confirmation" else "pending_runtime_release",
@@ -738,7 +772,7 @@ class FeaturePackageTransactionService:
                 with _named_lock(lambda: io.open_kernel_lock(self.management_lock_path), "management"):
                     with _named_lock(lambda: self.leases.management_guard(tuple(state.versions)), "leases") as final_occupancy:
                         if prepared_owners is not None and self._live_owners(final_occupancy) != prepared_owners:
-                            return OperationResult("awaiting_release", plan.operation_id, reason="lifecycle_owners_changed", plan=plan)
+                            return self._result("awaiting_release", plan.operation_id, reason="lifecycle_owners_changed", plan=plan)
                         current = self._load(plan.operation_id)
                         state = self._reconcile(current)
                         # The acceptance record and first pending CAS are in one
@@ -754,12 +788,12 @@ class FeaturePackageTransactionService:
                         self._phase(journal, "state_pending")
             if state.active == plan.target_version and plan.kind != "uninstall":
                 self._phase(journal, "awaiting_startup_confirmation")
-                return OperationResult("awaiting_startup_confirmation", plan.operation_id, "awaiting_startup_confirmation", plan, state.revision)
+                return self._result("awaiting_startup_confirmation", plan.operation_id, "awaiting_startup_confirmation", plan, state.revision)
             if self.runtime is not None:
                 prepared = self._prepare_runtime(plan.operation_id, plan.kind, tuple(plan.versions), state)
                 if prepared.status != "ready":
                     self._phase(journal, "pending_runtime_release")
-                    return OperationResult(
+                    return self._result(
                         "awaiting_release",
                         plan.operation_id,
                         "pending_runtime_release",
@@ -773,7 +807,7 @@ class FeaturePackageTransactionService:
             blocked = tuple(version for version, item in occupancy.items() if item["status"] != "free")
             if blocked:
                 self._phase(journal, "pending_runtime_release")
-                return OperationResult(
+                return self._result(
                     "awaiting_release", plan.operation_id, "pending_runtime_release", plan, state.revision, "version_in_use", blocked, {"occupancy": occupancy}
                 )
             if plan.kind == "uninstall":
@@ -796,7 +830,7 @@ class FeaturePackageTransactionService:
                     state = self._reconcile(journal)
                     if any(item.status != "free" for item in occupancy_guard.values()):
                         self._phase(journal, "pending_runtime_release")
-                        return OperationResult("awaiting_release", plan.operation_id, "pending_runtime_release", plan, state.revision, "version_in_use")
+                        return self._result("awaiting_release", plan.operation_id, "pending_runtime_release", plan, state.revision, "version_in_use")
                     self.verifier.check_snapshot_identity(descriptor)
                     self._validate_candidate(plan, descriptor)
                     io.safe_path(self.versions_root)
@@ -820,11 +854,11 @@ class FeaturePackageTransactionService:
                     self._phase(journal, "active_committed")
                     self._phase(journal, "awaiting_startup_confirmation")
             self._cleanup_stage(plan.operation_id)
-            return OperationResult("awaiting_startup_confirmation", plan.operation_id, "awaiting_startup_confirmation", plan, state.revision)
+            return self._result("awaiting_startup_confirmation", plan.operation_id, "awaiting_startup_confirmation", plan, state.revision)
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
             reason = _error(exc)
             if reason in LOCK_BUSY_REASONS:
-                return OperationResult(
+                return self._result(
                     "failed",
                     plan.operation_id,
                     reason=reason,
@@ -845,7 +879,7 @@ class FeaturePackageTransactionService:
                             self._phase(latest, "recovery_required", reason=reason)
                 except (StateError, OSError):
                     pass  # Persisted ledger/intent still drives recovery; no false success.
-            return OperationResult(status, plan.operation_id, "recovery_required" if status == "recovery_required" else "rejected", plan, reason=reason)
+            return self._result(status, plan.operation_id, "recovery_required" if status == "recovery_required" else "rejected", plan, reason=reason)
 
     def _validate_candidate(self, plan: OperationPlan, descriptor: VerifiedFeatureDescriptor) -> None:
         if (
@@ -867,7 +901,7 @@ class FeaturePackageTransactionService:
                 state = self._reconcile(journal)
                 blocked = tuple(v for v, item in occupancy.items() if item.status != "free")
                 if blocked:
-                    return OperationResult("awaiting_release", plan.operation_id, "pending_runtime_release", plan, state.revision, "version_in_use", blocked)
+                    return self._result("awaiting_release", plan.operation_id, "pending_runtime_release", plan, state.revision, "version_in_use", blocked)
                 if state.pending_transaction != plan.operation_id or state.enabled:
                     raise StateError("uninstall_evidence_conflict")
                 management.close()
@@ -882,18 +916,21 @@ class FeaturePackageTransactionService:
                 journal = self._load(plan.operation_id)
                 state = self._reconcile(journal)
                 if journal["phase"] == "completed":
-                    return OperationResult("idempotent", plan.operation_id, "completed", revision=state.revision)
+                    return self._result("idempotent", plan.operation_id, "completed", revision=state.revision)
                 if any(item.status != "free" for item in occupancy.values()):
                     raise StateError("lease_evidence_changed")
                 # Partial deletion/restart is safe without a progress ack: missing
                 # named versions remain an accepted pending deletion, never active.
                 if any((self.versions_root / v).exists() for v in plan.delete_versions):
                     raise StateError("incomplete_deletion")
+                io.safe_path(self.versions_root)
+                if self.versions_root.exists() and any(self.versions_root.iterdir()):
+                    raise StateError("orphan_version_requires_recovery")
                 journal["deleted_versions"] = sorted(set(journal["deleted_versions"]) | deleted)
                 self._save(journal)
                 state = self._move(plan, journal, state, "uninstalled")
                 self._phase(journal, "completed")
-        return OperationResult("completed", plan.operation_id, "completed", plan, state.revision)
+        return self._result("completed", plan.operation_id, "completed", plan, state.revision)
 
     def startup_permit(self, operation_id: str, *, role: str):
         from .feature_startup_contract import StartupLoadPermit
@@ -919,7 +956,7 @@ class FeaturePackageTransactionService:
         from .feature_package_startup import StartupLoadReceipt
 
         if not isinstance(receipt, StartupLoadReceipt) or loaded_manifest_digest is not None or success is not None:
-            return OperationResult("recovery_required", operation_id, "recovery_required", reason="startup_load_receipt_required")
+            return self._result("recovery_required", operation_id, "recovery_required", reason="startup_load_receipt_required")
         try:
             journal = self._load(operation_id)
             plan = self._plan_from(journal["plan"])
@@ -931,7 +968,7 @@ class FeaturePackageTransactionService:
                     journal = self._load(operation_id)
                     state = self._reconcile(journal)
                     if journal["phase"] == "completed" and receipt.permit.nonce in self._startup_permits:
-                        return OperationResult("idempotent", operation_id, "completed", revision=state.revision)
+                        return self._result("idempotent", operation_id, "completed", revision=state.revision)
                     if receipt.permit.operation_id != operation_id or not receipt.validate(self, state):
                         raise StateError("startup_load_receipt_invalid")
                     live = occupancy[receipt.permit.version].leases
@@ -947,11 +984,11 @@ class FeaturePackageTransactionService:
                     step = "rollback_confirmed" if journal.get("rollback_pending") else "confirmed"
                     state = self._move(plan, journal, state, step)
                     self._phase(journal, "completed")
-                    return OperationResult(
+                    return self._result(
                         "completed", operation_id, "completed", revision=state.revision, reason="rolled_back" if journal.get("rollback_pending") else None
                     )
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
-            return OperationResult("recovery_required", operation_id, "recovery_required", reason=_error(exc))
+            return self._result("recovery_required", operation_id, "recovery_required", reason=_error(exc))
 
     def _startup_failed(self, permit: StartupLoadPermit) -> OperationResult:
         try:
@@ -959,7 +996,8 @@ class FeaturePackageTransactionService:
             plan = self._plan_from(journal["plan"])
             with _named_lock(lambda: io.open_kernel_lock(self.management_lock_path), "management"):
                 state = self._reconcile(journal)
-                if self._startup_permits.get(permit.nonce) is not permit or not permit.matches(self.store.root, state):
+                issued = self._startup_permits.get(permit.nonce)
+                if issued is None or issued is not permit or not issued.matches(self.store.root, state):
                     raise StateError("startup_permit_required")
                 if journal.get("rollback_pending"):
                     journal["rollback_load_failed"] = True
@@ -968,7 +1006,7 @@ class FeaturePackageTransactionService:
                     self._move(plan, journal, state, "disabled")
             return self._rollback(plan, journal, reason="startup_load_failed")
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
-            return OperationResult("recovery_required", phase="recovery_required", reason=_error(exc))
+            return self._result("recovery_required", phase="recovery_required", reason=_error(exc))
 
     def _rollback(self, plan: OperationPlan, journal: dict, *, reason: str) -> OperationResult:
         previous = plan.active
@@ -991,17 +1029,17 @@ class FeaturePackageTransactionService:
                 journal = self._load(plan.operation_id)
                 state = self._reconcile(journal)
                 if journal.get("rollback_pending") and journal["phase"] == "awaiting_startup_confirmation":
-                    return OperationResult("awaiting_startup_confirmation", plan.operation_id, journal["phase"], revision=state.revision)
+                    return self._result("awaiting_startup_confirmation", plan.operation_id, journal["phase"], revision=state.revision)
                 self._phase(journal, "rolling_back", reason="rolled_back" if journal.get("rollback_pending") else reason)
                 if state.enabled:
                     state = self._move(plan, journal, state, "disabled")
                 if journal.get("rollback_load_failed") or descriptor is None or (previous is not None and occupancy[previous].status != "free"):
                     self._phase(journal, "recovery_required", reason="previous_unavailable_or_in_use")
-                    return OperationResult(
+                    return self._result(
                         "recovery_required", plan.operation_id, "recovery_required", revision=state.revision, reason="previous_unavailable_or_in_use"
                     )
                 if plan.target_version is not None and occupancy[plan.target_version].status != "free":
-                    return OperationResult(
+                    return self._result(
                         "awaiting_release",
                         plan.operation_id,
                         "rolling_back",
@@ -1016,7 +1054,7 @@ class FeaturePackageTransactionService:
                 self._save(journal)
                 state = self._move(plan, journal, state, "rollback")
                 self._phase(journal, "awaiting_startup_confirmation")
-        return OperationResult(
+        return self._result(
             "awaiting_startup_confirmation",
             plan.operation_id,
             "awaiting_startup_confirmation",
@@ -1047,13 +1085,13 @@ class FeaturePackageTransactionService:
                         if intent is not None and intent.get("after") == state.document():
                             self._reconcile(journal)
                             self._phase(journal, "completed")
-                            return OperationResult("completed", path.stem, "completed", revision=state.revision)
+                            return self._result("completed", path.stem, "completed", revision=state.revision)
                         if journal["accepted"] and journal["phase"] != "completed":
                             accepted.append(journal)
                     if plan is not None:
                         accepted = [journal]
                     elif not accepted:
-                        return OperationResult("idempotent", phase="completed", revision=state.revision)
+                        return self._result("idempotent", phase="completed", revision=state.revision)
                     if len(accepted) != 1:
                         # Only an exact current before-image permits a safety
                         # freeze; stale transactions never mutate higher revisions.
@@ -1076,7 +1114,7 @@ class FeaturePackageTransactionService:
             plan = self._plan_from(journal["plan"])
             return self._continue(plan, journal)
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
-            return OperationResult("recovery_required", phase="recovery_required", reason=_error(exc))
+            return self._result("recovery_required", phase="recovery_required", reason=_error(exc))
 
     def collect_garbage(self) -> OperationResult:
         removed = []
@@ -1092,7 +1130,7 @@ class FeaturePackageTransactionService:
                         with _named_lock(lambda: self.leases.management_guard((version,)), "leases") as occupancy:
                             state = self._state()
                             if state.pending_transaction:
-                                return OperationResult("awaiting_release", phase="gc_pending", reason="pending_transaction")
+                                return self._result("awaiting_release", phase="gc_pending", reason="pending_transaction")
                             if version in state.versions:
                                 # Old GC evidence cannot delete a reinstalled version.
                                 retired.add(version)
@@ -1113,11 +1151,11 @@ class FeaturePackageTransactionService:
                     latest = self._load(path.stem)
                     latest["garbage_versions"] = sorted(set(latest["garbage_versions"]) - retired)
                     self._save(latest)
-            return OperationResult(
+            return self._result(
                 "failed" if failures else "completed",
                 phase="gc_pending" if failures else "completed",
                 reason="gc_pending" if failures else None,
                 details={"removed": tuple(removed), "failures": tuple(failures)},
             )
         except (StateError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
-            return OperationResult("failed", phase="gc_pending", reason=_error(exc))
+            return self._result("failed", phase="gc_pending", reason=_error(exc))

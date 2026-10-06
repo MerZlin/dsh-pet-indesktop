@@ -57,7 +57,12 @@ class FeatureLifecycleEndpoint(QObject):
             if not isinstance(request, LifecyclePrepareRequest) or request.operation not in ("install", "upgrade", "rollback", "uninstall", "disable"):
                 raise StateError("lifecycle_request_invalid")
             state = self.store.read().state
-            if state is None or state.revision != request.revision or not set(request.versions) <= set(state.versions):
+            if (
+                state is None
+                or request.feature_id != self.store.feature_id
+                or state.revision != request.revision
+                or not set(request.versions) <= set(state.versions)
+            ):
                 raise StateError("revision_conflict")
             drafts = []
             for identity, dirty in tuple(self._draft_guards.values()):
@@ -67,7 +72,7 @@ class FeatureLifecycleEndpoint(QObject):
                 reply.result = RuntimePreparation("draft_blocked", "unsaved_settings", details={"drafts": tuple(drafts), "pid": os.getpid()})
                 self.draft_blocked.emit(reply.result.details)
             else:
-                owner = "official.screen-understanding"
+                owner = self.store.feature_id
                 if request.operation == "disable":
                     self.host.disable(owner)
                 elif not self.host.remove(owner):

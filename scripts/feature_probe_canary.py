@@ -10,7 +10,6 @@ import base64
 import json
 import subprocess
 import sys
-import winreg
 from pathlib import Path
 
 
@@ -28,7 +27,19 @@ def network_access(family, endpoint):
         return False, {"stage": "connect", "error": getattr(exc, "winerror", None) or exc.errno}
 
 
+def native_network_access(family, endpoint):
+    # The trusted native adapter reaches Winsock directly even when Python's
+    # _socket initializer fails. Missing adapter/APIs propagate as failures;
+    # this must never become a normal-subprocess or socket-module fallback.
+    import _dsh_probe_native as native
+
+    value = native.network_connect(family, endpoint[0], endpoint[1])
+    return value["allowed"], {"api": "windows.winsock2", **{name: value[name] for name in ("stage", "error", "connect_attempted")}}
+
+
 def evaluate(policy):
+    import winreg
+
     result = {}
     for label, value in policy["read_paths"].items():
         try:
@@ -57,7 +68,7 @@ def evaluate(policy):
         result["scratch_rw"] = False
     network_details = {}
     for label, family, endpoint in policy["network"]:
-        result[label], network_details[label] = network_access(family, endpoint)
+        result[label], network_details[label] = native_network_access(family, endpoint)
     print(json.dumps({"canary_network": network_details}, sort_keys=True), file=sys.stderr, flush=True)
     import _dsh_probe_native as native
 

@@ -4,37 +4,52 @@ from __future__ import annotations
 
 import sys
 import threading
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 
 from . import __version__, feature_build_policy, feature_distribution
-from .feature_package_transactions import FeaturePackageTransactionService, OperationResult
-from .plugins.package_trust import FeaturePackageVerifier
+from .feature_package_transactions import LOCK_BUSY_REASONS, FeaturePackageTransactionService, OperationResult
+from .official_features import SCREEN_FEATURE_ID, official_feature
+from .plugins.package_trust import FeaturePackageVerifier, SigningKeyPolicy
 
 
 class FeatureManagementRuntime(QObject):
     result_ready = Signal(object)
     busy_changed = Signal(bool)
     state_changed = Signal(object)
+    probe_cleanup_changed = Signal(object)
+    _probe_finished = Signal(object)
     _finished = Signal(object)
 
-    def __init__(self, config, host, *, role="core", management_only=False):
+    def __init__(self, config, host, *, feature_id=SCREEN_FEATURE_ID, role="core", management_only=False):
         super().__init__()
         self.host, self.config, self.role = host, config, role
-        self.builtin = feature_distribution.BUILTIN_SCREEN
+        self.feature_id = official_feature(feature_id).id
+        self.builtin = feature_distribution.BUILTIN_SCREEN if feature_id == SCREEN_FEATURE_ID else feature_distribution.BUILTIN_AI
         self.service = self.startup = self.endpoint = self.server = self.monitor = None
-        self.last_result = OperationResult("idempotent", reason="builtin_core" if self.builtin else "not_installed")
+        self.last_result = self._result("idempotent", reason="builtin_core" if self.builtin else "not_installed")
         # Inspection is not an operation outcome. Retain a confirmed retry plan
         # in this process only; never persist its confirmation token in a journal.
         self.last_operation = None
         self._closed = threading.Event()
         self.busy = False
+        self._probe_sandbox = None
+        self.probe_cleanup = ()
+        self._management_only = management_only
+        self._bootstrap_attempts = 0
+        self._bootstrap_timer = QTimer(self)
+        self._bootstrap_timer.setSingleShot(True)
+        self._bootstrap_timer.timeout.connect(self._retry_bootstrap)
         self._finished.connect(self._deliver, Qt.ConnectionType.QueuedConnection)
+        self._probe_finished.connect(self._deliver_probe_cleanup, Qt.ConnectionType.QueuedConnection)
         if self.builtin:
             return
         policy = feature_build_policy
         verifier = FeaturePackageVerifier(
+            feature_id=feature_id,
+            anchor_policy={key: SigningKeyPolicy(**scope) for key, scope in policy.OFFICIAL_FEATURE_KEY_POLICIES},
             core_version=__version__,
             api_version=policy.FEATURE_API_VERSION,
             allowed_capabilities=policy.FEATURE_CAPABILITIES,
@@ -52,12 +67,14 @@ class FeatureManagementRuntime(QObject):
             bundle = TrustedProbeBundle(root, policy.PROBE_BUNDLE_MANIFEST_SHA256)
             try:
                 bundle.verify()
-                sandbox = WindowsFeatureProbeSandbox(verifier, bundle, config.dir / "feature-probe-runs")
+                sandbox = WindowsFeatureProbeSandbox(verifier, bundle, config.dir / "feature-probe-runs" / feature_id)
                 self.service.self_checker = SubprocessFeatureSelfChecker(verifier, sandbox=sandbox, timeout=30)
+                self._probe_sandbox = sandbox
+                QTimer.singleShot(0, self._start_probe_recovery)
             except (OSError, ValueError, RuntimeError):
                 # A missing/tampered helper forbids candidate execution. It must
                 # not crash Core or change the currently installed state.
-                self.last_result = OperationResult("rejected", reason="trusted_probe_unavailable")
+                self.last_result = self._result("rejected", reason="trusted_probe_unavailable")
         from .feature_lifecycle import FeatureLifecycleEndpoint, QueuedFeatureLifecycle
         from .feature_lifecycle_ipc import CrossProcessFeatureLifecycle, FeatureLifecycleServer
 
@@ -65,7 +82,7 @@ class FeatureManagementRuntime(QObject):
         self.server = FeatureLifecycleServer(self.endpoint, self)
         self.service.runtime = CrossProcessFeatureLifecycle(self.service, QueuedFeatureLifecycle(self.endpoint))
         if not management_only:
-            from .feature_host_bindings import bind_screen_context
+            from .feature_host_bindings import bind_ai_context, bind_screen_context
             from .feature_package_startup import ProductionFeatureStartup
 
             # Recover before candidate import. Recovery is metadata-only here;
@@ -76,12 +93,17 @@ class FeatureManagementRuntime(QObject):
                 recovered = self.service.recover_pending()
             finally:
                 self.service.runtime = runtime
+            context_factory = bind_screen_context if feature_id == SCREEN_FEATURE_ID else bind_ai_context
+            runtime_directory = config.dir / "feature-runtime"
+            if feature_id != SCREEN_FEATURE_ID:
+                runtime_directory /= feature_id
             self.startup = ProductionFeatureStartup(
-                self.service, host, runtime_directory=config.dir / "feature-runtime", role=role, context_factory=lambda: bind_screen_context(config)
+                self.service, host, runtime_directory=runtime_directory, role=role, context_factory=lambda: context_factory(config)
             )
             self.last_result = self.startup.load_current() if recovered.status in ("completed", "idempotent", "awaiting_startup_confirmation") else recovered
         if self.last_result.status not in ("completed", "idempotent"):
             self.last_operation = self.last_result
+        self._schedule_bootstrap_retry()
         from .feature_state_monitor import FeatureStateMonitor
 
         self.monitor = FeatureStateMonitor(self.service.store, self)
@@ -91,10 +113,82 @@ class FeatureManagementRuntime(QObject):
         # the monitor starts on the next turn and honors an intervening close.
         QTimer.singleShot(0, self._start_monitor)
 
+    def _result(self, *args, **kwargs):
+        if "feature_id" in kwargs:
+            raise TypeError("result identity is owned by the service")
+        kwargs["feature_id"] = self.feature_id
+        return OperationResult(*args, **kwargs)
+
+    def _collect_probe_cleanup(self, sandbox):
+        from .feature_probe_materials import ProbeMaterialCleanup
+
+        try:
+            outcomes = sandbox.collect_garbage()
+        except Exception:
+            outcomes = (ProbeMaterialCleanup("recovery_required", reason="probe_materials_io_error"),)
+        if not self._closed.is_set():
+            try:
+                self._probe_finished.emit(outcomes)
+            except RuntimeError:
+                pass
+        return outcomes
+
+    @Slot()
+    def _start_probe_recovery(self):
+        if self._closed.is_set() or self._probe_sandbox is None:
+            return
+        # This is a separate bounded maintenance lease, not the management
+        # transaction lock. No GUI object or application state enters cleanup.
+        sandbox = self._probe_sandbox
+        threading.Thread(target=lambda: self._collect_probe_cleanup(sandbox), name="feature-probe-maintenance", daemon=False).start()
+
+    @Slot(object)
+    def _deliver_probe_cleanup(self, outcomes):
+        if not self._closed.is_set():
+            self.probe_cleanup = tuple(outcomes)
+            self.probe_cleanup_changed.emit(self.probe_cleanup)
+
     @Slot()
     def _start_monitor(self):
         if not self._closed.is_set() and self.monitor is not None:
             self.monitor.start()
+
+    def _schedule_bootstrap_retry(self):
+        # A bounded backoff is for kernel contention only. Invalid evidence,
+        # import failures and occupied versions are not silently retried.
+        delays = (100, 250, 500, 1000, 2000, 4000, 5000)
+        if (
+            self._closed.is_set()
+            or self._management_only
+            or self.startup is None
+            or self.last_result.reason not in LOCK_BUSY_REASONS
+            or self._bootstrap_timer.isActive()
+            or self._bootstrap_attempts >= len(delays)
+        ):
+            return
+        self._bootstrap_timer.start(delays[self._bootstrap_attempts])
+        self._bootstrap_attempts += 1
+
+    @Slot()
+    def _retry_bootstrap(self):
+        if self._closed.is_set() or self._management_only or self.startup is None or self.service is None:
+            return
+        if self.startup.binding is None:
+            runtime = self.service.runtime
+            self.service.runtime = None
+            try:
+                recovered = self.service.recover_pending()
+            finally:
+                self.service.runtime = runtime
+            result = self.startup.load_current() if recovered.status in ("completed", "idempotent", "awaiting_startup_confirmation") else recovered
+        else:
+            # Reuse a real sealed receipt; never import a replacement host.
+            result = self.startup.load_current()
+        self.last_result = result
+        if result.status not in ("completed", "idempotent"):
+            self.last_operation = result
+        self.result_ready.emit(result)
+        self._schedule_bootstrap_retry()
 
     @Slot(object)
     def _state_update(self, state_result):
@@ -109,7 +203,7 @@ class FeatureManagementRuntime(QObject):
         if self._closed.is_set() or self.busy:
             return False
         if self.service is None:
-            self.result_ready.emit(OperationResult("rejected", reason="builtin_core_not_physically_removable"))
+            self.result_ready.emit(self._result("rejected", reason="builtin_core_not_physically_removable"))
             return False
         service = self.service
         actions = {
@@ -126,7 +220,7 @@ class FeatureManagementRuntime(QObject):
         }
         action = actions.get(command)
         if action is None:
-            self.result_ready.emit(OperationResult("rejected", reason="management_command_invalid"))
+            self.result_ready.emit(self._result("rejected", reason="management_command_invalid"))
             return False
         self.busy = True
         self.busy_changed.emit(True)
@@ -134,8 +228,12 @@ class FeatureManagementRuntime(QObject):
         def run():
             try:
                 result = action()
+                if command in ("recover", "gc") and self._probe_sandbox is not None:
+                    outcomes = self._collect_probe_cleanup(self._probe_sandbox)
+                    if isinstance(result, OperationResult):
+                        result = replace(result, details={**dict(result.details), "probe_cleanup": tuple(asdict(row) for row in outcomes)})
             except Exception:
-                result = OperationResult("failed", reason="management_background_failed")
+                result = self._result("failed", reason="management_background_failed")
             if not self._closed.is_set():
                 try:
                     self._finished.emit(result)
@@ -162,6 +260,7 @@ class FeatureManagementRuntime(QObject):
         if self._closed.is_set():
             return
         self._closed.set()
+        self._bootstrap_timer.stop()
         if self.monitor is not None:
             self.monitor.stop()
         if self.server is not None:
@@ -171,12 +270,34 @@ class FeatureManagementRuntime(QObject):
         # Host process pins are deliberately NOT released at GUI close.
 
 
-def attach_feature_management(config, host, *, role="core", management_only=False):
-    manager = getattr(host, "management_runtime", None)
+def attach_feature_management(config, host, *, feature_id=SCREEN_FEATURE_ID, role="core", management_only=False):
+    official_feature(feature_id)
+    managers = getattr(host, "management_runtimes", None)
+    if managers is None:
+        managers = host.management_runtimes = {}
+    manager = managers.get(feature_id)
     if manager is None:
-        manager = FeatureManagementRuntime(config, host, role=role, management_only=management_only)
-        host.management_runtime = manager
+        manager = FeatureManagementRuntime(config, host, feature_id=feature_id, role=role, management_only=management_only)
+        managers[feature_id] = manager
+        if feature_id == SCREEN_FEATURE_ID:
+            host.management_runtime = manager
     return manager
+
+
+def attach_official_management(config, host, *, role="core", management_only=False):
+    """Core-owned closed list; state directories never discover executable owners."""
+    from .official_features import AI_FEATURE_ID
+
+    return {
+        owner: attach_feature_management(config, host, feature_id=owner, role=role, management_only=management_only)
+        for owner in (SCREEN_FEATURE_ID, AI_FEATURE_ID)
+    }
+
+
+def close_official_management(host):
+    """Stop every observer/control endpoint, retaining imported native pins."""
+    for manager in tuple(getattr(host, "management_runtimes", {}).values()):
+        manager.close()
 
 
 def is_management_page(page):

@@ -4,6 +4,8 @@
 
 | 日期 | 主题 | 入口 | 关键提交/状态 |
 |---|---|---|---|
+| 2026-10-06 | Phase5A夜间修复与暂停交接 | [LOG.md](LOG.md#phase5a夜间修复与暂停交接2026-10-06) · [实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) · [准确停点](.scratch/phase5a-local-distribution/HANDOFF.md) | 全量4298通过；仅AI自然退出、双包确认标题、长/短路径LPAC及权限canary通过；Core04构建审计；新版正式分发/生产业务/高负载/性能/人工门未完成，按用户要求暂停，无提交/推送 |
+| 2026-10-05 | Phase5A 8GiB授权、五产物与总分发正式签名 | [LOG.md](LOG.md#phase5a五产物与总分发签名通过2026-10-05) · [实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) · [准确停点](.scratch/phase5a-local-distribution/HANDOFF.md) | Core03/ZIP/Setup编译、双包/总签名/外部核验、4274全量与满CPU三遍通过；AI菜单/自然退出、真实安装/人工门未完成 |
 | 2026-10-04 | Phase 4B 分支发布 | [发布记录](LOG.md#phase-4b-分支发布2026-10-04) · [工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | `98bbfba` 85文件源修改已提交推送并远端SHA核验；全量3841及3×154满CPU新通过，文档封存另列；正式信任/分发继续暂缓 |
 | 2026-10-04 | Scratch 生成物清理 | [清理记录](LOG.md#scratch-生成物清理2026-10-04) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | 294目录/132,245文件，34.987→3.809 GiB；E盘净增31.435 GiB，保护摘要/state不变；正式信任/分发暂缓，无提交/推送 |
 | 2026-10-04 | Phase 4B真实人工验收准备 | [人工记录](docs/PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md) · [准确停点](.scratch/phase4b-local-management/HANDOFF.md) | no-chat目录安装/真实识屏/启停/ZIP幂等/升级/回滚通过；两版本物理卸载、ZIP新安装revision17及Core真实加载核验，用户确认原设置/凭据与结果保留；正式信任锚/分发按用户决定暂缓，正式key未生成；首Core问题未证明修复，自动/第二变体等门单列；无提交/推送 |
@@ -37,3 +39,9 @@
 - 新增日志先写入 `LOG.md`，再在本表添加一行；
 - 只记录已经执行的事实，计划项必须标注为计划，不写成已完成；
 - PR 级证据放 `docs/PR-REPORT-*.md`，这里仅做索引。
+
+- 2026-10-04 UTC：Phase5A/5B-1 累计源码门（4171通过）、未完成的正式签名/分发门与red91隔离事故记录，见[LOG.md](LOG.md)。
+
+- 2026-10-04 UTC：Phase5A 满载三遍178通过、源码导入数字基准、1.533GiB空间与正式密钥确认停点，见[实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)。
+
+- 2026-10-06：Phase5A授权源检查点及推送前新全量/高负载三遍，记录见 [LOG](LOG.md) 与 [阶段报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)。

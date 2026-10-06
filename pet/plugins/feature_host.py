@@ -84,7 +84,13 @@ class FeatureHost:
         if not isinstance(context, FeatureHostContext) or not self.configurable(context.owner):
             raise PermissionError("feature is not available")
         definition = self._definitions[context.owner]
-        return replace(context, worker_launch_factory=definition.worker_launch_factory, allow_in_process=definition.allow_in_process)
+        return replace(
+            context,
+            worker_launch_factory=definition.worker_launch_factory,
+            allow_in_process=definition.allow_in_process,
+            execution_authorized=lambda: self.enabled(context.owner),
+            bind_execution=lambda stop, resume: self.bind_execution(context.owner, stop, resume),
+        )
 
     def runtime(self, context, *, worker_mode="auto"):
         context = self.bind_context(context)

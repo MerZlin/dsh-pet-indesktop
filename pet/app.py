@@ -41,7 +41,7 @@ from . import catalog, click_sound, self_talk_voice, updater
 from . import slot_manager as slot_manager_mod
 from . import webm_clip as webm_clip_mod
 from .collision_ipc import CollisionIpcSession
-from .config import APP_DIR_NAME, Config, _default_base
+from .config import APP_DIR_NAME, Config, default_data_directory
 from .content.registry import CharacterRegistry
 from .context_menus.icons import vector_menu_icon
 from .context_menus.shared import open_deepseek_web
@@ -395,6 +395,13 @@ class PetInstance:
         """
         shell = getattr(self, "shell", None)
         if shell is not None:
+            from .feature_distribution import BUILTIN_AI
+
+            if not BUILTIN_AI:
+                from .official_features import AI_OWNER
+
+                host = getattr(shell, "feature_host", None)
+                return bool(host is not None and host.enabled(AI_OWNER))
             return shell.enable_chat
         return bool(getattr(self, "_enable_chat", True))
 
@@ -474,6 +481,12 @@ class PetInstance:
         win.on_look_screen = win.look_at_screen if hasattr(win, "look_at_screen") else None
         win.on_open_legacy_settings = None
         win.on_open_modern_settings = self._slot_wrap(self.open_modern_settings)
+        from .feature_distribution import BUILTIN_AI
+
+        if not BUILTIN_AI:
+            from .ai_bindings import bind_ai_window
+
+            bind_ai_window(self, win)
         # 桌宠隐藏时的气泡改道面（DSH 联动等非交互反馈气泡 → 灵动岛，见
         # window_alerts.redirect_hidden_bubble）；岛对话不可用时注入方返回 False。
         win.hidden_bubble_redirect = self.shell._island_feedback_bubble
@@ -668,10 +681,39 @@ class PetInstance:
     # ------------------------------------------------------------ 聊天窗
     def open_chat(self) -> None:
         """Open the configured chat UI; menus only need this stable dispatcher."""
-        if str(self.config.get("chat_ui_style", "modern")) == "classic":
+        if not self.enable_chat:
+            return
+        if str(self._chat_config().get("chat_ui_style", "modern")) == "classic":
             self.open_legacy_chat()
         else:
             self.open_modern_chat()
+
+    def _chat_config(self):
+        from .feature_distribution import BUILTIN_AI
+
+        if BUILTIN_AI:
+            return self.config
+        from .ai_bindings import runtime_for_instance
+
+        runtime = runtime_for_instance(self)
+        return runtime.config if runtime is not None else None
+
+    def _owned_chat_window(self, kind):
+        from .ai_bindings import runtime_for_instance, view_for_instance
+
+        runtime = runtime_for_instance(self)
+        if runtime is None or not runtime.accepting:
+            return None
+        return runtime.create_window(kind, view=view_for_instance(self), notifier=self.shell.system_notify, auth_callback=self.open_chat_settings)
+
+    def _chat_view(self):
+        from .feature_distribution import BUILTIN_AI
+
+        if BUILTIN_AI:
+            return self.win
+        from .ai_bindings import view_for_instance
+
+        return view_for_instance(self)
 
     def open_quick_chat(self) -> None:
         """打开快速对话气泡；与完整聊天窗共用会话历史。"""
@@ -693,58 +735,79 @@ class PetInstance:
             return
         if self._defer_while_popup_active("quick-chat", self._show_quick_chat):
             return
-        from .quick_chat import QuickChatBubble
+        from .feature_distribution import BUILTIN_AI
 
         if self.quick_chat is None:
-            self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
+            if BUILTIN_AI:
+                from .quick_chat import QuickChatBubble
+
+                self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
+            else:
+                self.quick_chat = self._owned_chat_window("quick")
+                if self.quick_chat is None:
+                    return
             self.quick_chat.open_chat_callback = self.open_chat
         else:
-            self.quick_chat.pet_window = self.win
-            self.quick_chat.settings = self.config.chat_settings()
+            self.quick_chat.pet_window = self._chat_view()
+            self.quick_chat.settings = self._chat_config().chat_settings()
             self.quick_chat.refresh_session()
         if hasattr(self.win, "set_quick_chat_capture_widget"):
             self.win.set_quick_chat_capture_widget(self.quick_chat)
-        self.quick_chat.show_for_pet(self.win)
+        self.quick_chat.show_for_pet(self._chat_view())
 
     def open_legacy_chat(self) -> None:
         if not self.enable_chat or self.win is None:
             return
         if self._defer_while_popup_active("legacy-chat", self.open_chat):
             return
-        from .chat.legacy_widgets import ChatWindow
+        from .feature_distribution import BUILTIN_AI
 
         if self.legacy_chat_window is None:
-            self.legacy_chat_window = ChatWindow(
-                self.config,
-                str(self.config.get("character", catalog.DEFAULT_CHARACTER)),
-                pet_window=self.win,
-                notifier=self.shell.system_notify,
-                auth_callback=self.open_chat_settings,
-            )
+            if not BUILTIN_AI:
+                self.legacy_chat_window = self._owned_chat_window("classic")
+                if self.legacy_chat_window is None:
+                    return
+            else:
+                from .chat.legacy_widgets import ChatWindow
+
+                self.legacy_chat_window = ChatWindow(
+                    self.config,
+                    str(self.config.get("character", catalog.DEFAULT_CHARACTER)),
+                    pet_window=self.win,
+                    notifier=self.shell.system_notify,
+                    auth_callback=self.open_chat_settings,
+                )
         else:
-            self.legacy_chat_window.set_pet_window(self.win)
+            self.legacy_chat_window.set_pet_window(self._chat_view())
         self.chat_window = self.legacy_chat_window
-        self._present_dialog(self.legacy_chat_window, lambda: self.legacy_chat_window.position_near_pet(self.win))
+        self._present_dialog(self.legacy_chat_window, lambda: self.legacy_chat_window.position_near_pet(self._chat_view()))
 
     def open_modern_chat(self) -> None:
         if not self.enable_chat or self.win is None:
             return
         if self._defer_while_popup_active("modern-chat", self.open_modern_chat):
             return
-        from .chat.widgets import ChatWindow
+        from .feature_distribution import BUILTIN_AI
 
         if self.modern_chat_window is None:
-            self.modern_chat_window = ChatWindow(
-                self.config,
-                str(self.config.get("character", catalog.DEFAULT_CHARACTER)),
-                pet_window=self.win,
-                notifier=self.shell.system_notify,
-                auth_callback=self.open_chat_settings,
-            )
+            if not BUILTIN_AI:
+                self.modern_chat_window = self._owned_chat_window("modern")
+                if self.modern_chat_window is None:
+                    return
+            else:
+                from .chat.widgets import ChatWindow
+
+                self.modern_chat_window = ChatWindow(
+                    self.config,
+                    str(self.config.get("character", catalog.DEFAULT_CHARACTER)),
+                    pet_window=self.win,
+                    notifier=self.shell.system_notify,
+                    auth_callback=self.open_chat_settings,
+                )
         else:
-            self.modern_chat_window.set_pet_window(self.win)
+            self.modern_chat_window.set_pet_window(self._chat_view())
         self.chat_window = self.modern_chat_window
-        self._present_dialog(self.modern_chat_window, lambda: self.modern_chat_window.position_near_pet(self.win))
+        self._present_dialog(self.modern_chat_window, lambda: self.modern_chat_window.position_near_pet(self._chat_view()))
 
     def _defer_while_popup_active(self, key: str, callback) -> bool:
         """Avoid constructing a heavy dialog inside QMenu.exec()."""
@@ -800,6 +863,11 @@ class PetInstance:
         after the dialog reports an accepted save.
         """
         if not self.enable_chat:
+            return
+        from .feature_distribution import BUILTIN_AI
+
+        if not BUILTIN_AI:
+            self.open_modern_settings("ai")
             return
         from .chat.settings_dialog import ChatSettingsDialog
 
@@ -958,18 +1026,36 @@ class PetInstance:
     # ------------------------------------------------------------ 其它窗口级
     def _bind_optional_services(self, win) -> None:
         """Bind a fixed route; chat owns validation, storage and UI refresh."""
+        cleanup = getattr(self, "_optional_service_cleanup", None)
+        if callable(cleanup):
+            cleanup()
+            self._optional_service_cleanup = None
         win.on_external_text = None
         if not self.enable_chat:
             return  # No-chat Core must not import the optional receiver.
-        from .chat.external_turns import CHAT_OWNER, SCREEN_OWNER, SERVICE_ID, ExternalTurnReceiver
+        from .feature_distribution import BUILTIN_AI
+        from .official_features import AI_OWNER as CHAT_OWNER
+        from .official_features import SCREEN_OWNER
         from .plugins.services import ServiceRegistry, ServiceRoute
+
+        SERVICE_ID = "chat.external-turn/v1"
 
         router = getattr(self.shell, "_feature_services", None)
         if router is None:
             router = ServiceRegistry()
             self.shell._feature_services = router
         route = ServiceRoute(f"window:{id(win)}", str(self.config.instance_id or "primary"), str(self.config.get("character", catalog.DEFAULT_CHARACTER)))
-        receiver = ExternalTurnReceiver(self.config, route, lambda: self.chat_window)
+        if BUILTIN_AI:
+            from .chat.external_turns import ExternalTurnReceiver
+
+            receiver = ExternalTurnReceiver(self.config, route, lambda: self.chat_window)
+        else:
+            from .ai_bindings import runtime_for_instance
+
+            runtime = runtime_for_instance(self)
+            if runtime is None or not runtime.accepting:
+                return
+            receiver = runtime.create_external_receiver(route, lambda: self.chat_window)
         handle = router.register(CHAT_OWNER, SERVICE_ID, route, receiver.receive)
 
         def authorized():
@@ -985,6 +1071,7 @@ class PetInstance:
             client.dispose()
             handle.dispose()
 
+        self._optional_service_cleanup = dispose
         win.on_external_text = sync
         win.destroyed.connect(dispose)
 
@@ -1111,9 +1198,11 @@ class AppShell:
         from .official_features import default_feature_host
 
         self.feature_host = feature_host if feature_host is not None else default_feature_host(self.plugin_registry.contributions)
-        from .feature_management import attach_feature_management
+        from .feature_management import attach_official_management
+        from .official_features import SCREEN_FEATURE_ID
 
-        self.feature_management = attach_feature_management(config, self.feature_host, role="core")
+        self.feature_managers = attach_official_management(config, self.feature_host, role="core")
+        self.feature_management = self.feature_managers[SCREEN_FEATURE_ID]
         # 待办提醒：进程级单例（多窗共用一个调度器，避免每窗一个定时器重复通知），
         # Phase 1 门控：默认懒创建——配置关闭时不构造、不跑 30s 定时器；关闭且
         # 无面板打开时释放。win 引用在服务 tick 时经本类 win 属性动态读主窗，
@@ -1182,6 +1271,13 @@ class AppShell:
     @property
     def enable_chat(self) -> bool:
         """进程级单源（E2/REVIEW_batch51）：窗口经 PetInstance.enable_chat 转发。"""
+        from .feature_distribution import BUILTIN_AI
+
+        if not BUILTIN_AI:
+            from .official_features import AI_OWNER
+
+            host = getattr(self, "feature_host", None)
+            return bool(host is not None and host.enabled(AI_OWNER))
         return self._enable_chat
 
     @enable_chat.setter
@@ -2024,7 +2120,9 @@ class AppShell:
         # issue #111：先关 ffmpeg spawn 闸门，再走正常退出收口——正常退出路径
         # （托盘退出/最后窗口关闭）同样落在关机前后，绝不能在里面再派生 reader。
         self._mark_session_ending()
-        self.feature_management.close()
+        from .feature_management import close_official_management
+
+        close_official_management(self.feature_host)
         # 窗级收口：逐窗保存位置、停本窗预热与 Agent、提交本窗会话、释放本窗 slot 锁
         for inst in self._instances:
             win = inst.win
@@ -2083,10 +2181,14 @@ class AppShell:
                 logging.exception("退出时停止灵动岛碰撞体失败")
         # 进程级全局订阅注销：类级 list 长期持有本 shell 强引用，不注销会
         # 阻碍 GC（no-chat 变体无 ChatService，导入守卫与注册处同口径）
-        try:
-            from .chat.service import ChatService as _ChatService
-        except ImportError:
-            _ChatService = None
+        from .feature_distribution import BUILTIN_AI
+
+        _ChatService = None
+        if BUILTIN_AI:
+            try:
+                from .chat.service import ChatService as _ChatService
+            except ImportError:
+                pass
         if _ChatService is not None:
             try:
                 _ChatService.unregister_global_finished(self._on_global_chat_finished)
@@ -2147,12 +2249,9 @@ class AppShell:
             # A no-chat Core must still finish *all* resource cleanup. Only the
             # intentionally absent optional package is ignored; broken chat
             # dependencies remain diagnostic failures at this cleanup boundary.
-            try:
+            if BUILTIN_AI:
                 from .chat import session_store as _session_store
-            except ModuleNotFoundError as exc:
-                if exc.name not in {"pet.chat", "pet.chat.session_store"}:
-                    raise
-            else:
+
                 if not _session_store.close_all_writers(permanent=True):
                     logging.warning("退出时会话写盘 worker 未干净关闭")
         except Exception:
@@ -2190,9 +2289,11 @@ class AppShell:
         """
         for shell in tuple(_LIVE_SHELLS):
             try:
-                management = getattr(shell, "feature_management", None)
-                if management is not None:
-                    management.close()
+                from .feature_management import close_official_management
+
+                host = getattr(shell, "feature_host", None)
+                if host is not None:
+                    close_official_management(host)
                 service = getattr(shell, "todo_service", None)
                 if service is not None:
                     try:
@@ -2260,9 +2361,12 @@ class AppShell:
                         logging.debug("测试收口 config watcher 失败", exc_info=True)
                 shell._settings_child_active = False
                 try:
-                    from .chat.service import ChatService as _ChatService
+                    from .feature_distribution import BUILTIN_AI
 
-                    _ChatService.unregister_global_finished(shell._on_global_chat_finished)
+                    if BUILTIN_AI:
+                        from .chat.service import ChatService as _ChatService
+
+                        _ChatService.unregister_global_finished(shell._on_global_chat_finished)
                 except Exception:
                     pass
                 shell._instances = []
@@ -2356,15 +2460,16 @@ class AppShell:
             # 进程级聊天完成订阅：AI 回复到达 → 岛播事件动效并记录最近消息。
             # 无聊天功能的打包变体会排除 pet.chat（参照 config.py 的同款守卫），
             # 那里跳过订阅即可，灵动岛本体照常可用。
-            try:
-                from .chat.service import ChatService
-            except ImportError as exc:
-                if str(getattr(exc, "name", "") or "").startswith("pet.chat"):
-                    ChatService = None  # 无聊天打包变体：跳过订阅，岛本体照常
+            from .feature_distribution import BUILTIN_AI
+
+            if BUILTIN_AI:
+                try:
+                    from .chat.service import ChatService
+                except ModuleNotFoundError as exc:
+                    if exc.name not in ("pet.chat", "pet.chat.service"):
+                        raise
                 else:
-                    raise
-            if ChatService is not None:
-                ChatService.register_global_finished(self._on_global_chat_finished)
+                    ChatService.register_global_finished(self._on_global_chat_finished)
         self.island.refresh_from_config()
         # 批5.2a：灵动岛按**聚合**可见态同步（任一窗可见 = 可见），替代只看主窗。
         self.island.set_pet_visible(self._aggregate_pet_visible())
@@ -2451,18 +2556,37 @@ class AppShell:
             return False
         return self._island_hidden_chat_enabled()
 
+    def _ensure_island_chat(self):
+        if not self._island_chat_available():
+            return None
+        bubble = getattr(self, "island_chat", None)
+        if bubble is None:
+            from .feature_distribution import BUILTIN_AI
+
+            if BUILTIN_AI:
+                from .island_chat import IslandChatBubble
+
+                bubble = IslandChatBubble(self.config)
+            else:
+                instance = getattr(self, "instance", None)
+                if instance is None:
+                    return None
+                bubble = instance._owned_chat_window("island")
+                if bubble is None:
+                    return None
+            self.island_chat = bubble
+            bubble.show_pet_requested.connect(self._show_pets_from_island_chat)
+        bubble.open_chat_callback = self._open_full_chat_from_island_chat
+        return bubble
+
     def _show_island_chat(self, *, activate: bool = True, reply_text: str | None = None) -> None:
         """弹出锚定灵动岛的对话气泡（activate=False 为不抢焦点的预览弹出）。"""
         if not self._island_chat_available():
             return
-        from .island_chat import IslandChatBubble
-
-        if getattr(self, "island_chat", None) is None:
-            self.island_chat = IslandChatBubble(self.config)
-            self.island_chat.show_pet_requested.connect(self._show_pets_from_island_chat)
-        bubble = self.island_chat
-        bubble.open_chat_callback = self._open_full_chat_from_island_chat
-        bubble.settings = self.config.chat_settings()
+        bubble = self._ensure_island_chat()
+        if bubble is None:
+            return
+        bubble.settings = bubble.config.chat_settings()
         bubble.refresh_session()
         bubble.show_for_island(self.island, activate=activate, reply_text=reply_text)
 
@@ -2507,13 +2631,9 @@ class AppShell:
         island = getattr(self, "island", None)
         if island is None or not shiboken6.isValid(island):
             return False
-        from .island_chat import IslandChatBubble
-
-        if getattr(self, "island_chat", None) is None:
-            self.island_chat = IslandChatBubble(self.config)
-            self.island_chat.show_pet_requested.connect(self._show_pets_from_island_chat)
-        bubble = self.island_chat
-        bubble.open_chat_callback = self._open_full_chat_from_island_chat
+        bubble = self._ensure_island_chat()
+        if bubble is None:
+            return False
         bubble.show_feedback(island, text, subtitle=subtitle, duration_ms=duration_ms)
         return True
 
@@ -2628,17 +2748,24 @@ class AppShell:
         island = getattr(self, "island", None)
         if island is None or getattr(self, "_quiet_balance_busy", False):
             return
-        if not getattr(self, "enable_chat", True):
+        from .feature_distribution import BUILTIN_AI
+
+        if BUILTIN_AI and not getattr(self, "enable_chat", True):
             island.set_balance_info(self._island_tier_hint(), "此版本无余额查询")
             return
         now = time.monotonic()
         import hashlib
 
-        settings = self.config.chat_settings()
-        provider = settings.active_config
-        provider.api_key = self.config.resolve_api_key(provider)
-        if not provider.api_key:
-            island.set_balance_info(self._island_tier_hint(), "未配置 API Key（设置 → 聊天）")
+        from .balance_config import resolve_balance_request
+        from .credentials import CredentialError
+
+        try:
+            provider = resolve_balance_request(self.config)
+        except (CredentialError, ValueError):
+            provider = None
+        if provider is None or not provider.api_key:
+            destination = "聊天" if BUILTIN_AI else "常规 → 余额凭据"
+            island.set_balance_info(self._island_tier_hint(), "未配置 API Key（设置 → " + destination + "）")
             return
         key_digest = hashlib.sha256(str(provider.api_key or "").encode()).hexdigest()[:12]
         provider_key = "|".join(
@@ -2688,9 +2815,16 @@ class AppShell:
         # 摘要不可逆推原 key，不落敏感信息。
         import hashlib
 
-        settings = self.config.chat_settings()
-        provider = settings.active_config
-        provider.api_key = self.config.resolve_api_key(provider)
+        from .balance_config import resolve_balance_request
+        from .credentials import CredentialError
+
+        try:
+            provider = resolve_balance_request(self.config)
+        except (CredentialError, ValueError):
+            provider = None
+        if provider is None or not provider.api_key:
+            _show_balance_payload(win, {"text": "未配置余额凭据，请打开设置配置", "info": {}})
+            return
         key_digest = hashlib.sha256(str(provider.api_key or "").encode()).hexdigest()[:12]
         provider_key = "|".join(
             [
@@ -3055,7 +3189,9 @@ class AppShell:
         # 批5.2 P1-7：运行期关窗不许冻 GUI 10s——只关本窗 writer，timeout 降到 2s。
         # 批 G：defer 模式下这 2s 有界 join 也挪到 reaper 线程（会话保存已在
         # 上方同步完成，顺序由 reaper 串行保证）。
-        if defer_heavy_teardown:
+        from .feature_distribution import BUILTIN_AI
+
+        if defer_heavy_teardown and BUILTIN_AI:
             heavy_jobs.append(("关闭会话写盘 worker", lambda: self._close_instance_session_writer(instance)))
         else:
             self._close_instance_session_writer(instance)
@@ -3160,6 +3296,23 @@ class AppShell:
         R5/E2：多窗下绝不能 close_all_writers(permanent=True)——那会永久关掉
         其它窗的写盘 worker。此处只 flush + 关闭本窗根目录对应的 writer。
         """
+        from .feature_distribution import BUILTIN_AI
+
+        if not BUILTIN_AI:
+            window = getattr(instance, "win", None)
+            cleanup = getattr(window, "_ai_binding_cleanup", None)
+            if callable(cleanup):
+                cleanup()
+            dispose = getattr(instance, "_ai_finished_cleanup", None)
+            if callable(dispose):
+                dispose()
+                instance._ai_finished_cleanup = None
+            runtime = getattr(instance, "_ai_runtime", None)
+            if runtime is not None:
+                # Caller stays on the GUI thread. The retained runtime/exit gate
+                # drains writers and joins requests without a GUI-thread wait.
+                runtime.close()
+            return
         try:
             from .chat import session_store as _session_store
 
@@ -3407,8 +3560,11 @@ class AppShell:
         menu.aboutToShow.connect(sync_tray_checks)
 
         menu.addSeparator()
-        if self.enable_chat:
+        from .feature_distribution import BUILTIN_AI
+
+        if self.enable_chat or not BUILTIN_AI:
             menu.addAction("DeepSeek 余额", lambda: self.show_balance(win))
+        if self.enable_chat:
             menu.addAction("启动 DeepSeek Harness", lambda: launch_harness_gui(win))
         else:
             # 纯桌宠版本不提供本地 DSH 启动入口，只保留网页版入口
@@ -3576,7 +3732,7 @@ def main(argv: list[str] | None = None, enable_chat: bool = True) -> int:
     app.setQuitOnLastWindowClosed(False)
 
     # 确定配置根目录
-    config_dir = _default_base() / APP_DIR_NAME
+    config_dir = default_data_directory()
 
     # 执行槽位竞争取得排他锁
     slot_handle = None

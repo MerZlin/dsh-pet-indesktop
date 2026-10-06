@@ -7,6 +7,8 @@ import json
 import uuid
 from typing import Protocol
 
+from .official_features import AI_FEATURE_ID, official_feature
+
 
 class SecureBackend(Protocol):
     def get_password(self, service: str, username: str) -> str | None: ...
@@ -34,12 +36,11 @@ def secure_backend() -> SecureBackend:
     raise CredentialError("backend_unavailable")
 
 
-class CredentialVaultPort:
-    OPERATIONS = frozenset({"manual_look", "analyze_frame"})
-
-    def __init__(self, feature: str, instance: str, *, backend: SecureBackend | None = None):
-        self.scope = hashlib.sha256((feature + "\0" + instance).encode()).hexdigest()
-        self.service = "dsh-pet/features/" + self.scope
+class _ScopedVault:
+    def __init__(self, identity: str, instance: str, operations: frozenset[str], *, backend=None, prefix="dsh-pet/features/"):
+        self.operations = operations
+        self.scope = hashlib.sha256((identity + "\0" + instance).encode()).hexdigest()
+        self.service = prefix + self.scope
         self._backend = backend
 
     def _store(self) -> SecureBackend:
@@ -78,7 +79,7 @@ class CredentialVaultPort:
         if not ref:
             raise CredentialError("credential_missing")
         self._check_ref(ref)
-        if operation not in self.OPERATIONS:
+        if operation not in self.operations:
             raise CredentialError("operation_denied")
         backend = self._store()
         try:
@@ -117,3 +118,21 @@ class CredentialVaultPort:
                 backend.delete_password(self.service, ref)
         except Exception:
             raise CredentialError("credential_delete_failed") from None
+
+
+class CredentialVaultPort(_ScopedVault):
+    OPERATIONS = frozenset({"manual_look", "analyze_frame"})
+
+    def __init__(self, feature: str, instance: str, *, backend: SecureBackend | None = None):
+        official_feature(feature)
+        operations = frozenset({"chat.send", "files.interpret"}) if feature == AI_FEATURE_ID else self.OPERATIONS
+        super().__init__(feature, instance, operations, backend=backend)
+
+
+class CoreBalanceVault(_ScopedVault):
+    """Separate Core authority; never accepts an AI reference or chat operation."""
+
+    def __init__(self, data_root_id: str, instance: str, *, backend: SecureBackend | None = None):
+        if not isinstance(data_root_id, str) or not data_root_id or len(data_root_id) > 128 or not isinstance(instance, str) or len(instance) > 128:
+            raise CredentialError("scope_invalid")
+        super().__init__("core.balance/" + data_root_id, instance, frozenset({"balance.query"}), backend=backend, prefix="dsh-pet/core/balance/")

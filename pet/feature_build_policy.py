@@ -6,8 +6,9 @@ engineering supplies the official values. No private key belongs in Core.
 """
 
 OFFICIAL_FEATURE_TRUST_ANCHORS: tuple[tuple[str, str], ...] = ()
+OFFICIAL_FEATURE_KEY_POLICIES: tuple[tuple[str, dict], ...] = ()
 FEATURE_API_VERSION = "1"
-FEATURE_CAPABILITIES = frozenset({"screen.capture", "network.http", "settings.contribute", "menu.contribute"})
+FEATURE_CAPABILITIES = frozenset({"screen.capture", "network.http", "settings.contribute", "menu.contribute", "chat.contribute", "files.user-selected.read"})
 PROBE_BUNDLE_DIRECTORY = "feature-probe"
 PROBE_BUNDLE_MANIFEST_SHA256: str | None = None
 VALIDATION_BUILD = False

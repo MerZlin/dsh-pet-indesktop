@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Mapping, Protocol
 
 from . import feature_state_io as io
 from .feature_state_io import StateError
+from .official_features import official_feature
 
 if TYPE_CHECKING:
     from .plugins.package_trust import VerifiedFeatureDescriptor
@@ -84,11 +85,12 @@ class InstallState:
     previous: str | None
     enabled: bool
     pending_transaction: str | None
+    feature_id: str = FEATURE_ID
 
     def document(self) -> dict:
         return dict(
             schema_version=1,
-            feature_id=FEATURE_ID,
+            feature_id=self.feature_id,
             revision=self.revision,
             versions=dict(self.versions),
             active=self.active,
@@ -98,11 +100,11 @@ class InstallState:
         )
 
 
-def _state(obj: dict) -> InstallState:
+def _state(obj: dict, feature_id: str = FEATURE_ID) -> InstallState:
     schema = obj.get("schema_version")
     if type(schema) is int and schema > 1:
         raise StateError("unsupported_schema")
-    if set(obj) != _STATE_FIELDS or type(schema) is not int or schema != 1 or obj["feature_id"] != FEATURE_ID:
+    if set(obj) != _STATE_FIELDS or type(schema) is not int or schema != 1 or obj["feature_id"] != feature_id:
         raise StateError("corrupt")
     revision, versions = obj["revision"], obj["versions"]
     if type(revision) is not int or not 0 <= revision < 2**63 or not isinstance(versions, dict) or len(versions) > 256:
@@ -117,11 +119,11 @@ def _state(obj: dict) -> InstallState:
         raise StateError("corrupt")
     if obj["pending_transaction"] is not None and not _operation(obj["pending_transaction"]):
         raise StateError("corrupt")
-    return InstallState(revision, MappingProxyType(dict(versions)), obj["active"], obj["previous"], obj["enabled"], obj["pending_transaction"])
+    return InstallState(revision, MappingProxyType(dict(versions)), obj["active"], obj["previous"], obj["enabled"], obj["pending_transaction"], feature_id)
 
 
-def _fresh() -> InstallState:
-    return InstallState(0, MappingProxyType({}), None, None, False, None)
+def _fresh(feature_id: str = FEATURE_ID) -> InstallState:
+    return InstallState(0, MappingProxyType({}), None, None, False, None, feature_id)
 
 
 @dataclass(frozen=True)
@@ -188,7 +190,7 @@ def _request(state: InstallState, expected_revision: int) -> str:
     return _digest(_json({"expected_revision": expected_revision, "change": doc}))
 
 
-def _record(obj: dict) -> _Record:
+def _record(obj: dict, feature_id: str = FEATURE_ID) -> _Record:
     if type(obj.get("schema_version")) is int and obj["schema_version"] > 1:
         raise StateError("unsupported_schema")
     if set(obj) != _RECORD_FIELDS or type(obj["schema_version"]) is not int or obj["schema_version"] != 1:
@@ -197,7 +199,7 @@ def _record(obj: dict) -> _Record:
         raise StateError("corrupt")
     if not isinstance(obj["before"], dict) or not isinstance(obj["after"], dict):
         raise StateError("corrupt")
-    before, after = _state(obj["before"]), _state(obj["after"])
+    before, after = _state(obj["before"], feature_id), _state(obj["after"], feature_id)
     if (
         after.revision != before.revision + 1
         or _digest(_json(before.document())) != obj["before_digest"]
@@ -229,12 +231,22 @@ class FeatureInstallStateStore:
     to import code later without rechecking with the future lifecycle coordinator.
     """
 
-    def __init__(self, data_root: Path):
-        self.root = Path(data_root).absolute() / "plugins" / FEATURE_ID
+    def __init__(self, data_root: Path, *, feature_id: str = FEATURE_ID):
+        self.feature_id = official_feature(feature_id).id
+        self.root = Path(data_root).absolute() / "plugins" / self.feature_id
         self.state_path = self.root / "state.json"
         self.lock_path = self.root / "locks/state.lock"
         self.transactions = self.root / "transactions"
         self.frontier_path = self.transactions / "commit-frontier.json"
+
+    def _parse_state(self, obj: dict) -> InstallState:
+        return _state(obj, self.feature_id)
+
+    def _parse_record(self, obj: dict) -> _Record:
+        return _record(obj, self.feature_id)
+
+    def _fresh(self) -> InstallState:
+        return _fresh(self.feature_id)
 
     def _record_path(self, operation: str) -> Path:
         return self.transactions / f"op-{operation}.json"
@@ -255,7 +267,7 @@ class FeatureInstallStateStore:
                 continue
             if len(records) >= MAX_RECORDS:
                 raise StateError("metadata_limit")
-            record = _record(_decode(io.read_bytes(path, MAX_DOCUMENT_BYTES)))
+            record = self._parse_record(_decode(io.read_bytes(path, MAX_DOCUMENT_BYTES)))
             if path != self._record_path(record.operation_id):
                 raise StateError("corrupt")
             records.append(record)
@@ -298,8 +310,8 @@ class FeatureInstallStateStore:
             # locks alone are not evidence of an installation (failed first CAS).
             if self.root.exists() and any(p.name != "locks" for p in self.root.iterdir()):
                 return StateResult("recovery_required", reason="missing_state_with_traces")
-            return _result(_fresh())
-        return _result(_state(_decode(raw)))
+            return _result(self._fresh())
+        return _result(self._parse_state(_decode(raw)))
 
     def _read(self) -> StateResult:
         current = self._current()
@@ -330,10 +342,10 @@ class FeatureInstallStateStore:
         if type(expected_revision) is not int or not 0 <= expected_revision < 2**63 - 1 or not _operation(operation_id):
             raise StateError("invalid_request")
         try:
-            target = _state(
+            target = self._parse_state(
                 dict(
                     schema_version=1,
-                    feature_id=FEATURE_ID,
+                    feature_id=self.feature_id,
                     revision=expected_revision + 1,
                     versions=dict(change.versions),
                     active=change.active,
@@ -399,7 +411,7 @@ class FeatureInstallStateStore:
                         if frontier != record:
                             return StateResult("recovery_required", reason="missing_commit_frontier")
                         phase = "committed"
-                    elif current.state == record.before or (not self.state_path.exists() and record.before == _fresh()):
+                    elif current.state == record.before or (not self.state_path.exists() and record.before == self._fresh()):
                         phase = "aborted"
                     else:
                         return StateResult("recovery_required", reason="ambiguous_commit")
@@ -416,9 +428,9 @@ class FeatureInstallStateStore:
                     # A failed first commit must not leave the service permanently
                     # stuck. This only materializes the proven empty predecessor,
                     # never the uncommitted candidate. Repeatable after another crash.
-                    if records and not self.state_path.exists() and all(r.phase == "aborted" and r.before == _fresh() for r in records):
-                        io.atomic_write(self.state_path, _json(_fresh().document()))
-                        return _result(_fresh())
+                    if records and not self.state_path.exists() and all(r.phase == "aborted" and r.before == self._fresh() for r in records):
+                        io.atomic_write(self.state_path, _json(self._fresh().document()))
+                        return _result(self._fresh())
                     return current
                 latest = max(committed, key=lambda r: r.after.revision).after
                 if known is not None and known.revision > latest.revision:
@@ -455,7 +467,7 @@ class FeatureInstallStateStore:
             io.safe_path(version_root)
             descriptor = verifier.verify(version_root)
             if (
-                descriptor.id != FEATURE_ID
+                descriptor.id != self.feature_id
                 or descriptor.version != state.active
                 or descriptor.root != version_root
                 or descriptor.trust_status != "trusted_official"

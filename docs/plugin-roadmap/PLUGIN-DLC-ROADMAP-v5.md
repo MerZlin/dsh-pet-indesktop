@@ -1,5 +1,7 @@
 # v5 插件化 / DLC 重建路线图
 
+> Phase 5A / 5B-1 当前实施增量：2026-10-05（实施中，未提交）。用户追加授权8GiB后Core03生产构建/PYZ审计通过，五产物及正式总分发签名294/外部公钥独立验证296/305通过；本轮拥有根305末次快照7.799789GiB，余205.016MiB，不扩大清理。最新全量273为4274 passed /15 skipped /15 warnings /657.90s，满CPU276三遍各251 passed /1 skipped。空Core/仅screen完整启动、菜单和自然退出通过；仅AI实际Core加载确认通过，但菜单/自然退出驱动失败，onlyAI/both完整行未通过。Setup只有编译证据，真实安装更新卸载、冻结业务/便携、用户和干净环境门未完成，不宣布Phase5A/5B-1交付完成；Phase4B历史不变。设计见 [Phase5A正式合同](../plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+
 > **修订：2026-09-27。方向：稳定 Core + 官方资源 DLC + 必做的官方功能选装 + 按风险隔离的 Worker。**
 >
 > 功能归属以[功能交付总表](PLUGIN-FEATURE-DELIVERY-MATRIX.md)为唯一清单；用户决策见[中期 grill](../grill-2026-09-27-插件化中期对齐.md)，项目边界见 [SPEC](../../SPEC.md)，返回[文档索引](../INDEX.md)。本文规定先后顺序，不是安装体验已经完成的声明。

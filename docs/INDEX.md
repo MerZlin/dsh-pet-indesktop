@@ -136,6 +136,8 @@
 
 ## PR 报告存档
 
+- [Phase5A/5B-1 本地分发实施证据（未完成）](PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)：保留10月4/5日历史及10月6日修复/暂停记录，本轮获授权保存源检查点后继续；新全量/真实CPU高负载三遍/受影响mypy等门通过，待实际提交/远端核对。新正式分发、特殊路径/正常Worker、冻结矩阵/性能、真实安装及人工/干净环境仍未完成。继续实施前必读。
+
 - [Phase 4B 真实用户人工验收](PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md)：固定人工entry、真实Worker与独立E盘配置的准备/用户回执，临时信任与正式分发门分开；执行人工验收或补正式信任前必读。
 
 - [Phase 4B Windows 连续收尾报告](PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md)：LPAC、生产事务、扩展管理、双冻结 Core 与最终工程证据；核对当前实施/完成口径与人工门前必读。
@@ -264,7 +266,7 @@
 | Phase 2 | 已完成运行时基线 / 后续贡献合同待实施 | [runtime](plugin-phase-02-runtime/) | 官方 Context/EventBus/配置/生命周期；功能 UI 可在主进程运行但归功能包交付。 |
 | Phase 3A/3B/3C | 3A 已封存；3B 全量通过、人工门未完成；3C 已完成本地风险评估 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
 | Phase 4A/4B | 4A 边界基线；4B 先过资源硬门再做本地管理 | [updates](plugin-phase-04-updates/) | 依次接续 4B-1 状态账本、4B-1.5 资源硬门、4B-2 租约、4B-3 事务和 4B-4 UI；不替换默认构建或宣称人工验收完成。 |
-| Phase 5A/5B | 计划中，官方选装必做 | [distribution](plugin-phase-05-distribution/) | Setup 旁置包、ZIP/便携；AI 对话与文件理解为下一主要目标，随后 Agent 与其余领域。 |
+| Phase 5A/5B-1 | 源码实施中，正式交付/人工门未完成 | [distribution](plugin-phase-05-distribution/) | 统一 WebM 小 Core、两包独立事务、NTFS 便携、AI 拆包与显式导入；包级正式签名已通过；最终冻结/真实分发/干净环境未完成；其余5B仍独立推进。 |
 | Phase 6 | 条件启用 | [ecosystem](plugin-phase-06-ecosystem/) | 第三方内容/Worker SDK、社区生态；不是官方包交付的前置。 |
 | Phase 7 | 正式发布前验收 | [release](plugin-phase-07-release/) | 最小 Core、承诺选装范围、三平台、迁移装卸、性能与恢复；第三方未开放不阻塞。 |
 
@@ -300,6 +302,7 @@
 | [Phase 4B 当前状态](../.scratch/phase4b-local-management/STATUS.md) | 区分 Phase 4A 历史成果、4B-1 状态进度、后续未实施项、人工待办及远程同步。 | 恢复 Phase 4B 或判断安装管理是否已可用前。 |
 | [安装与更新协议](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | 共用事务和权威状态、信任校验、原子激活、回滚、卸载/重装与 Core/DLC 更新隔离。 | 改 Setup/ZIP/应用内安装器、代码加载、文件占用或远程来源前。 |
 | [Phase 5 官方分发](plugin-phase-05-distribution/README.md) | 5A 小 Core Setup/旁置包和显式便携，5B AI 优先推广全部官方领域；远程适配按需。 | 设计安装向导、ZIP、便携、AI 拆包批次或其他官方包前。 |
+| [Phase 5A 本地分发设计](plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md) | 已批准的统一小 Core、AI/识屏双包、正式信任、本地 Setup/ZIP 与 NTFS 便携合同；实现/验收状态见任务记录。 | 实施双包事务、AI 拆包、正式签名、数据根或安装器前必读。 |
 | [Phase 6 条件生态](plugin-phase-06-ecosystem/README.md) | 内容文档与 SDK、未来 Worker SDK/社区的进入门，禁止任意代码进入 Core。 | 评估第三方作者、签名发布或 Workshop 时。 |
 | [Phase 7 发布门](plugin-phase-07-release/README.md) | 最小 Core 与官方选装范围、三平台、配置恢复、真实卸载、性能与可信发布。 | 准备正式发布、确定承诺范围或补发布证据时。 |
 

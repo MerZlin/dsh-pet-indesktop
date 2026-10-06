@@ -11,7 +11,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from . import catalog
 from .report_gates import (
@@ -401,73 +401,47 @@ def _merge_agent_link_data(raw: Any) -> dict:
     return _clean_agent_link_data(raw)
 
 
+def _builtin_ai() -> bool:
+    from .feature_distribution import BUILTIN_AI
+
+    return BUILTIN_AI
+
+
+def _require_builtin_ai() -> None:
+    if not _builtin_ai():
+        raise PermissionError("ai_requires_owner_context")
+
+
 def _default_file_interpret_data() -> dict:
-    """拖文件解读（file_interpret）默认值；消费方 pet/file_interpret.py。"""
-    return {
-        # 拖文件后提供「解读」确认气泡；关闭则拖放只有吃动画，不询问
-        "enabled": True,
-        # 进度汇报间隔（秒），产品区间 [5,120]；PR3 增加 progress_mode（heartbeat/chunked）
-        "progress_interval_seconds": 15.0,
-    }
+    if not _builtin_ai():
+        return {}
+    from features.ai_chat.host.defaults import _default_file_interpret_data as defaults
+
+    return defaults()
 
 
 def _merge_file_interpret_data(raw: Any) -> dict:
-    result = _default_file_interpret_data()
-    if isinstance(raw, dict):
-        result.update(raw)
-    return result
+    if not _builtin_ai():
+        return copy.deepcopy(raw) if isinstance(raw, dict) else {}
+    from features.ai_chat.host.defaults import _merge_file_interpret_data as merge
+
+    return merge(raw)
 
 
 def _default_chat_data():
-    return {
-        "enabled": True,
-        "active_provider": "openai-main",
-        "default_system_prompt": "\u4f60\u662f\u4e00\u53ea\u53ef\u7231\u7684\u684c\u9762\u5ba0\u7269\uff0c\u8bf7\u7528\u81ea\u7136\u3001\u53cb\u5584\u7684\u4e2d\u6587\u548c\u7528\u6237\u4ea4\u6d41\u3002",
-        "history_message_limit": 40,
-        "history_char_limit": 24000,
-        "providers": {
-            "openai-main": {
-                "name": "DeepSeek",
-                "base_url": "https://api.deepseek.com",
-                "chat_path": "/v1/chat/completions",
-                "model": "deepseek-v4-flash",
-                "api_key_ref": "provider/openai-main",
-                "api_key": "",
-                "timeout": 60.0,
-                "temperature": 0.7,
-                "max_tokens": 2048,
-            }
-        },
-    }
+    if not _builtin_ai():
+        return {}
+    from features.ai_chat.host.defaults import _default_chat_data as defaults
+
+    return defaults()
 
 
 def _merge_chat_data(raw):
-    result = _default_chat_data()
-    raw = raw if isinstance(raw, dict) else {}
-    result.update({k: v for k, v in raw.items() if k != "providers"})
-    incoming = raw.get("providers")
-    if isinstance(incoming, dict) and incoming:
-        providers = {}
-        for provider_id, provider in incoming.items():
-            if isinstance(provider, dict):
-                base = dict(_default_chat_data()["providers"].get("openai-main", {}))
-                base.update(provider)
-                # 非 openai-main provider 未显式写 api_key_ref 时按自身归位，
-                # 避免沿用 openai-main 的钥匙串条目（密钥串用/查错 key）。
-                # 必须看用户原始输入：base 已被 openai-main 默认值预填，判 base 永远非空。
-                if not str(provider.get("api_key_ref") or "").strip():
-                    base["api_key_ref"] = f"provider/{provider_id}"
-                # 历史 bug 迁移：旧版本曾把 openai-main 的钥匙串引用继承给自定义 provider，
-                # UI 从不暴露该字段，非主 provider 挂着主引用一定是继承错的。
-                if provider_id != "openai-main" and base.get("api_key_ref") == "provider/openai-main":
-                    base["api_key_ref"] = f"provider/{provider_id}"
-                providers[str(provider_id)] = base
-    else:
-        providers = dict(result["providers"])
-    result["providers"] = providers or _default_chat_data()["providers"]
-    active = str(result.get("active_provider") or "")
-    result["active_provider"] = active if active in result["providers"] else next(iter(result["providers"]))
-    return result
+    if not _builtin_ai():
+        return copy.deepcopy(raw) if isinstance(raw, dict) else {}
+    from features.ai_chat.host.defaults import _merge_chat_data as merge
+
+    return merge(raw)
 
 
 def _default_base():
@@ -489,6 +463,8 @@ def _app_dir_name() -> str:
         from build_variant import VARIANT  # 仅打包产物中存在
 
         name = str(VARIANT).strip()
+        if name == "core-webm":
+            return "dsh-pet-core-webm"
         if name:
             return f"dsh-pet-standalone-{name}"
     except Exception:
@@ -497,6 +473,13 @@ def _app_dir_name() -> str:
 
 
 APP_DIR_NAME = _app_dir_name()
+
+
+def default_data_directory() -> Path:
+    from .runtime_layout import current_layout
+
+    layout = current_layout()
+    return layout.data_root if layout is not None else _default_base() / APP_DIR_NAME
 
 
 def _float_or_default(value, default, minimum, maximum):
@@ -673,14 +656,18 @@ def _clean_collision_data(value: dict) -> dict:
 
 
 class Config:
-    def __init__(self, base=None, instance_id: str | None = None):
+    def __init__(self, base=None, instance_id: str | None = None, *, layout=None):
+        from .runtime_layout import current_layout
+
+        self.runtime_layout = layout if layout is not None else (current_layout() if base is None else None)
         base = Path(base) if isinstance(base, str) else (base or _default_base())
-        self.dir = base / APP_DIR_NAME
+        self.dir = self.runtime_layout.data_root if self.runtime_layout is not None else base / APP_DIR_NAME
         # 多开隔离：--instance <id> 或 DSH_PET_INSTANCE 时使用独立配置文件，
         # 位置/大小/朝向等不再互相覆盖；不传时完全保持原行为。
         self.instance_id = (instance_id or os.environ.get("DSH_PET_INSTANCE", "") or "").strip()
         self.path = self.dir / f"config-{self.instance_id}.json" if self.instance_id else self.dir / "config.json"
-        self._migrate_legacy_config(base)
+        if self.runtime_layout is None:
+            self._migrate_legacy_config(base)
         # 副槽落种仅在该槽位还没有个体配置时进行；已有存档的 slot（用户改过
         # 的）一律不动——「生小肥鱼」复用旧槽位时同样保留原槽设置。
         if self.instance_id and not self.path.exists():
@@ -848,7 +835,9 @@ class Config:
         避免用户设置与聊天会话“消失”。仅在新目录尚不存在时执行。"""
         if self.instance_id:
             return  # 多开实例不参与旧版迁移，避免把单开配置复制给每个实例
-        if APP_DIR_NAME == "dsh-pet-standalone" or self.path.exists():
+        # The new product only accepts an explicitly confirmed one-source import.
+        # This guard also protects direct Config(base=...) callers without a layout.
+        if APP_DIR_NAME in {"dsh-pet-standalone", "dsh-pet-core-webm"} or self.path.exists():
             return
         legacy = base / "dsh-pet-standalone"
         if not (legacy / "config.json").is_file():
@@ -906,35 +895,17 @@ class Config:
             old_version = 1  # 脏数据（手改/损坏）不得导致启动崩溃
         if old_version < 2:
             raw.pop("scale", None)
-        raw_chat = raw.get("chat")
-        chat: dict[str, Any] = cast(dict[str, Any], raw_chat) if isinstance(raw_chat, dict) else {}
-        legacy: dict[str, Any] = {}
-        if "chat_enabled" in raw:
-            legacy["enabled"] = raw["chat_enabled"]
-        if "chat_system_prompt" in raw:
-            legacy["default_system_prompt"] = raw["chat_system_prompt"]
-        legacy_provider: dict[str, Any] = {}
-        if raw.get("chat_api_url"):
-            legacy_provider["base_url"] = raw["chat_api_url"]
-        if raw.get("chat_model"):
-            legacy_provider["model"] = raw["chat_model"]
-        if raw.get("chat_api_key"):
-            legacy_provider["api_key"] = raw["chat_api_key"]
-        if legacy_provider:
-            legacy["providers"] = {"openai-main": legacy_provider}
-        merged: dict[str, Any] = dict(legacy)
-        merged.update(chat)
-        # secret 只进不出：磁盘重载不得冲掉内存中的 key。
-        # _redacted_data() 写盘时会剔除 chat.providers 下的明文 api_key /
-        # vision_api_key（keyring 不可用时 key 只存内存 self.data），因此磁盘文件
-        # 里没有这两项。这里若某 provider 在磁盘数据里缺 api_key/vision_api_key
-        # 但合入前的内存里有，则保留内存值，避免设置对话框重开（自 config.reload()
-        # 从磁盘重载）把用户未重启就丢掉的 key 覆盖成空。新旧两套设置对话框都走
-        # 这条 reload() 路径，一处修复全覆盖。
-        previous_chat = self.data.get("chat")
-        previous_providers = previous_chat.get("providers") if isinstance(previous_chat, dict) else None
-        merged_chat = _merge_chat_data(merged)
-        self.data["chat"] = merged_chat
+        if _builtin_ai():
+            from features.ai_chat.host.defaults import reload_legacy_chat
+
+            reload_legacy_chat(self, raw)
+        else:
+            # Retain opaque settings for reinstall; no provider interpretation,
+            # automatic secret migration or AI policy defaults in small Core.
+            self.data["chat"] = copy.deepcopy(raw.get("chat", {}))
+            for key in ["chat_enabled", "chat_system_prompt", "chat_api_url", "chat_model"]:
+                if key in raw:
+                    self.data[key] = copy.deepcopy(raw[key])
         # 插件配置不是旧版白名单字段；重载时必须原样保留，避免独立设置进程
         # 或外部 watcher 合并配置后把 plugins.<plugin_id> 静默抹掉。
         raw_plugins = raw.get("plugins")
@@ -942,23 +913,6 @@ class Config:
             self.data["plugins"] = copy.deepcopy(raw_plugins)
         elif not isinstance(self.data.get("plugins"), dict):
             self.data["plugins"] = {}
-        if isinstance(previous_providers, dict):
-            raw_providers = merged.get("providers")
-            raw_providers = raw_providers if isinstance(raw_providers, dict) else {}
-            merged_providers = merged_chat.get("providers")
-            if isinstance(merged_providers, dict):
-                for provider_id, merged_provider in merged_providers.items():
-                    if not isinstance(merged_provider, dict):
-                        continue
-                    previous_provider = previous_providers.get(provider_id)
-                    if not isinstance(previous_provider, dict):
-                        continue
-                    raw_provider = raw_providers.get(provider_id)
-                    raw_provider = raw_provider if isinstance(raw_provider, dict) else {}
-                    if "api_key" not in raw_provider and previous_provider.get("api_key"):
-                        merged_provider["api_key"] = previous_provider["api_key"]
-                    if "vision_api_key" not in raw_provider and previous_provider.get("vision_api_key"):
-                        merged_provider["vision_api_key"] = previous_provider["vision_api_key"]
         for key in (
             "rx",
             "ry",
@@ -1110,6 +1064,8 @@ class Config:
         幂等：迁移成功后内存/磁盘均无明文，重复 reload 无副作用；不主动 save()，
         写盘剔除交给下次正常保存。
         """
+        if not _builtin_ai():
+            return
         chat = self.data.get("chat")
         providers = chat.get("providers") if isinstance(chat, dict) else None
         if not isinstance(providers, dict):
@@ -1401,12 +1357,10 @@ class Config:
         self.data["experimental_shared_decode"] = _bool_or_default(self.data.get("experimental_shared_decode"), True)
         # 设置页进程隔离：同规防字符串布尔误开；默认开（关掉 = 回退进程内设置页）。
         self.data["settings_process_isolation"] = _bool_or_default(self.data.get("settings_process_isolation"), True)
-        # 拖文件解读（file_interpret）：嵌套键归一化（布尔/秒数钳制），
-        # 未认识的键随 _merge_file_interpret_data 保留（对齐 agent_link 宽容策略）
-        fi = self.data.get("file_interpret")
-        if isinstance(fi, dict):
-            fi["enabled"] = _bool_or_default(fi.get("enabled", True), True)
-            fi["progress_interval_seconds"] = _float_or_default(fi.get("progress_interval_seconds"), 15.0, 5.0, 120.0)
+        if _builtin_ai():
+            from features.ai_chat.host.defaults import normalize_file_preferences
+
+            normalize_file_preferences(self.data.get("file_interpret"))
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
@@ -1529,17 +1483,20 @@ class Config:
             self._normalize_pet_settings()
 
     def chat_settings(self):
+        _require_builtin_ai()
         from .chat.models import ChatSettings
 
         return ChatSettings.from_dict(self.data.get("chat", {}))
 
     def set_chat_settings(self, settings):
+        _require_builtin_ai()
         self.data["chat"] = settings.to_dict(include_secrets=True)
 
     # ---- 域 facade 便捷入口（批5：只建不用，调用点未迁移）----
     # 返回对应域的轻量视图（pet/config_domains.py）。normalize 复用本模块现有
     # _merge_*/_clean_* 函数；facade 只读，不写盘、不碰 secret 保留/version 迁移。
     def chat_config(self):
+        _require_builtin_ai()
         from .config_domains import ChatConfig
 
         return ChatConfig.from_dict(self.data.get("chat", {}))
@@ -1565,6 +1522,7 @@ class Config:
         return MenuConfig.from_dict(self.data)
 
     def resolve_api_key(self, provider):
+        _require_builtin_ai()
         from .chat.models import SecretStore
 
         return SecretStore().get(provider.api_key_ref) or provider.api_key

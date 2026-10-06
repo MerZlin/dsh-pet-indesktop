@@ -11,10 +11,12 @@ from pet.feature_probe_windows import LaunchEvidence, NativeProbeResult, Trusted
 from tests.test_feature_package_transactions import _package
 
 
-def _fixture(tmp_path, monkeypatch):
+def _fixture(tmp_path, monkeypatch, *, limits=None):
     from pet.feature_probe_adapter import WindowsFeatureProbeSandbox, probe_policy
 
     source, verifier, _ = _package(tmp_path / "source")
+    if limits is not None:
+        verifier = replace(verifier, limits=limits)
     helper = tmp_path / "core-helper"
     helper.mkdir()
     (helper / "probe.exe").write_bytes(b"trusted test fixture")

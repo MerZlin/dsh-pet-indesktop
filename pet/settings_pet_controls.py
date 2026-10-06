@@ -229,7 +229,9 @@ def build_pet_controls(host) -> None:
     host.balance_tier_peak_edit = None
     host.balance_tier_idle_edit = None
     host.balance_tier_color_check = None
-    if host.include_ai:
+    from .feature_distribution import BUILTIN_AI
+
+    if host.include_ai or not BUILTIN_AI:
         host.balance_refresh_spin = BrowserSpinBox(host)
         host.balance_refresh_spin.setRange(0, 1440)
         host.balance_refresh_spin.setSuffix(" 分钟")

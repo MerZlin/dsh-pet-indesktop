@@ -1115,3 +1115,40 @@ def test_lock_busy_after_runtime_preparation_names_real_resource_and_retries(tmp
     assert retried.status == "completed"
     assert service.store.read().status == "uninstalled"
     assert not service.versions_root.joinpath("1.2.3").exists()
+
+
+def test_empty_ledger_does_not_hide_orphan_code_during_uninstall(tmp_path):
+    source, verifier, _ = _package(tmp_path / "source")
+    service = _service(tmp_path, source, verifier)
+    service.store.commit(StateChange({}), expected_revision=0, operation_id="generated-empty")
+    orphan = service.versions_root / "9.9.9"
+    orphan.mkdir(parents=True)
+    (orphan / "unowned.py").write_text("generated never executed")
+    result = service.preflight_uninstall()
+    assert result.status == "recovery_required"
+    assert result.reason == "orphan_version_requires_recovery"
+    assert (orphan / "unowned.py").exists()
+
+
+def test_orphan_created_during_uninstall_cannot_be_reported_as_complete(tmp_path, monkeypatch):
+    from pet import feature_package_files
+
+    source, verifier, _ = _package(tmp_path / "source")
+    service = _service(tmp_path, source, verifier)
+    installed = _confirm(service, service.preflight_install(source))
+    _startup(service, installed.operation_id)
+    original = feature_package_files.remove_owned_tree
+    orphan = service.versions_root / "9.9.9"
+
+    def injected_delete(path, root, limits):
+        original(path, root, limits)
+        if path == service.versions_root / "1.2.3":
+            orphan.mkdir()
+            (orphan / "unowned.py").write_text("generated fault injection")
+
+    monkeypatch.setattr(feature_package_files, "remove_owned_tree", injected_delete)
+    result = _confirm(service, service.preflight_uninstall())
+    assert result.status == "recovery_required"
+    state = service.store.read().state
+    assert state.pending_transaction == result.operation_id and not state.enabled
+    assert (orphan / "unowned.py").exists()

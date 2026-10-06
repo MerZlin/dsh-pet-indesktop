@@ -2,6 +2,7 @@
 """python -m pet 入口。"""
 
 import sys
+from typing import Any
 
 
 def _chat_available() -> bool:
@@ -40,7 +41,7 @@ def _exec_settings(app, config, *, include_ai: bool = True, initial_page: str = 
 
     # parent=None + standalone=True：没有桌宠窗口可依附，试听/避让由
     # pet.settings_standalone 提供进程内最小宿主。
-    dialog_kwargs = {"include_ai": include_ai, "standalone": True}
+    dialog_kwargs: dict[str, Any] = {"include_ai": include_ai, "standalone": True}
     if initial_page:
         dialog_kwargs["initial_page"] = initial_page
     dialog = ModernSettingsDialog(config, parent=None, **dialog_kwargs)
@@ -133,7 +134,70 @@ def _worker_id(argv) -> str:
     return str(argv[index + 1] or "").strip()
 
 
+def _is_unified_frozen_core() -> bool:
+    from pathlib import Path
+
+    if not getattr(sys, "frozen", False):
+        return False
+    try:
+        from build_variant import VARIANT
+    except ImportError:
+        return False
+    return VARIANT == "core-webm" and Path(sys.executable).name.casefold() == "dsh-pet-core-webm.exe"
+
+
+def _core_maintenance_entry() -> int:
+    # Only this closed removal route can run under the installer's exclusive
+    # barrier. It never starts a normal host/settings/Worker or deletes Core.
+    if sys.argv[1:] != ["--core-maintenance", "uninstall"] or not _is_unified_frozen_core():
+        return 64
+    from .core_maintenance import run_uninstall
+
+    return run_uninstall()
+
+
 def _main() -> int:
+    if "--core-maintenance" in sys.argv:
+        return _core_maintenance_entry()
+    from .core_code_gate import CoreCodeGateError, hold_current_core_code
+
+    try:
+        hold_current_core_code()
+    except CoreCodeGateError as exc:
+        print("CoreCodeGate: " + str(exc), file=sys.stderr)
+        return 3
+    if "--import-local-data" in sys.argv:
+        if sys.argv[1:] != ["--import-local-data"] or not _is_unified_frozen_core():
+            return 64
+        from .runtime_data_import_entry import run_data_import
+
+        # An ordinary RuntimeLayout session would pin the very files being
+        # imported. This closed UI instead retains only the removal/code gates.
+        return run_data_import()
+    local_intent = None
+    if "--install-local-packages" in sys.argv:
+        if sys.argv[1] != "--install-local-packages" or not _is_unified_frozen_core():
+            return 64
+        from .local_package_intents import parse_intents
+
+        try:
+            local_intent = parse_intents(sys.argv[2:])
+        except ValueError:
+            return 64
+    from .runtime_layout import RuntimeLayoutError, initialize_for_current_build
+
+    try:
+        layout = initialize_for_current_build()
+        if _is_unified_frozen_core() and layout is None:
+            print("RuntimeLayout: required_layout_missing", file=sys.stderr)
+            return 2
+    except RuntimeLayoutError as exc:
+        print("RuntimeLayout: " + str(exc), file=sys.stderr)
+        return 2
+    if local_intent is not None:
+        from .local_package_intents import run_local_packages
+
+        return run_local_packages(*local_intent)
     # Worker 分流必须早于 pet.app：事件采集进程不得初始化 QApplication、窗口
     # 或 Chat UI，只加载 allowlist 内的 worker 实现。
     if "--worker" in sys.argv:

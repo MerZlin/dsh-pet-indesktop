@@ -1,8 +1,10 @@
 # dsh-pet 项目规范（SPEC）
 
+> Phase 5A / 5B-1 当前状态：2026-10-05（实施中，未提交）。用户追加授权8GiB后，Core03生产构建/PYZ审计通过（455,780,427B /2,260模块），五产物已生成并完成正式总分发签名294与外部公钥独立核验296/305；305末次拥有根实测7.799789GiB，余205.016MiB，不扩大清理。稳定全量273为4274 passed /15 skipped /15 warnings，满CPU三遍各251 passed /1 skipped，Ruff/format/mypy通过。空Core/仅screen完整启动菜单与自然退出通过；仅AI真实加载已确认但菜单/自然退出驱动失败，最终onlyAI/both尚未通过。Setup仍只是编译，真实安装更新卸载、冻结业务/便携、人工及干净环境未完成；Phase4B历史证据保持原样。设计见 [Phase5A 正式合同](docs/plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+
 > 产品版本基线：v4.2.1；插件化方向：v5（不代表已经发布 v5）。
 > 当前实施分支：`codex/phase3-worker`；长期路线分支：`codex/plugin-dlc-v5`。
-> 文档更新：2026-10-04。当前实现、用户手测和未来交付目标分别记录，不互相替代。
+> 文档更新：2026-10-05。当前实现、用户手测和未来交付目标分别记录，不互相替代。
 
 ## 1. 项目目标
 

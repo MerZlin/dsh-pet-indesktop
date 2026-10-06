@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .agent_event_protocol import AgentEvent
+
+if TYPE_CHECKING:
+    from .agent_event_normalizer import SemanticEvent
 
 _MODEL_ACCESS_CODES = {"429", "RATE_LIMIT", "TOO_MANY_REQUESTS", "RESOURCE_EXHAUSTED"}
 
@@ -57,16 +60,17 @@ class ModelAccessTracker:
         self._streaks: dict[tuple[str, str], RetryStreak] = {}
 
     @staticmethod
-    def _key(event: AgentEvent) -> tuple[str, str] | None:
+    def _key(event: AgentEvent | SemanticEvent) -> tuple[str, str] | None:
         # Missing IDs are deliberately not merged across events.
         if not event.session_id:
             return None
         return (event.source, event.session_id)
 
     @staticmethod
-    def is_model_access(event: AgentEvent) -> bool:
+    def is_model_access(event: AgentEvent | SemanticEvent) -> bool:
         data = event.data
-        failure = data.get("failure") if isinstance(data.get("failure"), dict) else data
+        failure_data = data.get("failure")
+        failure = failure_data if isinstance(failure_data, dict) else data
         code = str(failure.get("code") or data.get("errorCode") or "").strip().upper()
         message = str(failure.get("message") or data.get("errorMessage") or "")
         if code in _MODEL_ACCESS_CODES:
@@ -77,7 +81,7 @@ class ModelAccessTracker:
             return True
         return False
 
-    def consume(self, event: AgentEvent) -> dict[str, Any] | None:
+    def consume(self, event: AgentEvent | SemanticEvent) -> dict[str, Any] | None:
         key = self._key(event)
         if event.event.lower() == "llm/retry" and key and self.is_model_access(event):
             data = event.data
@@ -91,7 +95,7 @@ class ModelAccessTracker:
         return None
 
     @staticmethod
-    def _resets(event: AgentEvent) -> bool:
+    def _resets(event: AgentEvent | SemanticEvent) -> bool:
         name = event.event.lower()
         if name in {"turn/start", "turn/end", "tool/call", "assistant/message", "assistant/chunk", "agent/status"}:
             return True

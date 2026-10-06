@@ -47,7 +47,14 @@ def build_legacy_menu(menu: QMenu, pet, template: dict) -> None:
     chat_settings = getattr(pet, "on_open_chat_settings", None)
     legacy_settings = getattr(pet, "on_open_legacy_settings", None)
     if chat is not None:
-        add_action(menu, "AI 对话", None, chat, close_on_trigger=True)
+        from ..feature_distribution import BUILTIN_AI
+
+        if BUILTIN_AI:
+            add_action(menu, "AI 对话", None, chat, close_on_trigger=True)
+        else:
+            from ..ai_bindings import build_ai_menu
+
+            build_ai_menu(menu, pet, "chat", icons=False)
     if chat_settings is not None:
         add_action(menu, "AI 设置", None, chat_settings, close_on_trigger=True)
     if legacy_settings is not None:

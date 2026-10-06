@@ -9,7 +9,7 @@ provided; it never quietly downgrades an isolation requirement.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Protocol
 
@@ -36,6 +36,7 @@ class ProbeOutcome:
     worker_graceful_exit: bool
     isolation_enforced: bool
     reason: str | None = None
+    worker_status: str = "verified"
 
 
 class ProbeSandbox(Protocol):
@@ -63,22 +64,21 @@ class SubprocessFeatureSelfChecker:
             return RuntimePreparation("failed", "self_check_verification_failed")
         if self.sandbox is None:
             return RuntimePreparation("failed", "self_check_sandbox_unavailable")
-        policy = dict(
-            core_version=self.verifier.core_version,
-            api_version=self.verifier.api_version,
-            platform=self.verifier.platform,
-            allowed_capabilities=sorted(self.verifier.allowed_capabilities),
-            trust_anchors={name: key.hex() for name, key in self.verifier.trust_anchors.items()},
-            allow_developer_unsigned=False,
-            limits=asdict(self.verifier.limits),
-        )
+        from .feature_probe_adapter import probe_policy
+
+        policy = probe_policy(self.verifier)
         try:
             result = self.sandbox.run(ProbeRequest(descriptor.root, policy, self.timeout))
         except (OSError, TimeoutError):
             return RuntimePreparation("failed", "self_check_sandbox_failed")
         if not result.isolation_enforced:
             return RuntimePreparation("failed", "self_check_isolation_not_enforced")
-        if not (result.host_valid and result.worker_hello and result.worker_graceful_exit):
+        worker_valid = (
+            result.worker_status == "not_applicable" and not result.worker_hello and not result.worker_graceful_exit
+            if descriptor.execution_kind == "host-only"
+            else result.worker_status == "verified" and result.worker_hello and result.worker_graceful_exit
+        )
+        if not (result.host_valid and worker_valid):
             return RuntimePreparation("failed", result.reason or "self_check_failed")
         return RuntimePreparation()
 
@@ -96,6 +96,8 @@ def verified_host_probe(package_root: Path, verifier: FeaturePackageVerifier) ->
         definition = handle.factory()
         if not isinstance(definition, FeatureDefinition) or definition.owner != descriptor.id or not callable(definition.settings_factory):
             raise PackageVerificationError("invalid official FeatureDefinition")
+        if descriptor.execution_kind == "host-only" and (definition.worker_launch_factory is not None or definition.allow_in_process is not True):
+            raise PackageVerificationError("host-only definition cannot request a Worker")
         # No runtime/settings factory, context, permissions or Core registration.
     finally:
         handle.close()

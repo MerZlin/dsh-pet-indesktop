@@ -105,7 +105,8 @@ def _iter_known_win_values() -> list[tuple[str, str]]:
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
             found = []
-            for name in KNOWN_VALUE_NAMES:
+            names = ("dsh-pet-core-webm",) if APP_DIR_NAME == "dsh-pet-core-webm" else KNOWN_VALUE_NAMES
+            for name in names:
                 try:
                     command, _ = winreg.QueryValueEx(key, name)
                 except FileNotFoundError:

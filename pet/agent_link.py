@@ -30,12 +30,13 @@ import threading
 import time
 import weakref
 from collections import Counter
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import unquote
 
-from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QMetaObject, QObject, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from . import agent_cost as agent_cost_mod
@@ -495,6 +496,100 @@ def _read_manifest(profile_dir: Path) -> dict | None:
         return json.loads((profile_dir / "package.json").read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _core_agent_owner() -> str | None:
+    """Only the new product is scoped; legacy distributions keep their contract."""
+    from .runtime_layout import current_layout
+
+    layout = current_layout()
+    return layout.data_root_id if layout is not None else None
+
+
+def _core_hook_settings_lock(settings: Path):
+    if _core_agent_owner() is None:
+        return nullcontext()
+    from . import feature_state_io as io
+
+    return io.open_kernel_lock(settings.with_name(".dsh-pet-core-hooks.lock"))
+
+
+def _read_hook_settings(settings: Path):
+    if _core_agent_owner() is None:
+        return json.loads(settings.read_text(encoding="utf-8"))
+    from . import feature_state_io as io
+
+    return json.loads(io.read_bytes(settings, 2 * 1024 * 1024).decode("utf-8"))
+
+
+def _bridge_owned_by(pkg: dict, profile: Path, root: Path) -> bool:
+    spec = (pkg.get("dependencies") or {}).get(DSH_PLUGIN_NAME)
+    if not isinstance(spec, str):
+        return False
+    target = _path_spec_target(spec, profile)
+    return target is not None and os.path.normcase(os.path.abspath(target)) == os.path.normcase(os.path.abspath(root))
+
+
+def _remove_core_bridge_reference(profile: Path, root: Path) -> bool:
+    """Unregister only a proven reference; never recurse into a package manager link.
+
+    A leftover owned link is checked even after a partially completed manifest
+    edit. Other installations are retained. Cooperating Core writers serialize;
+    an external editor does not participate in this lock (not an OS-wide CAS).
+    """
+    from . import feature_state_io as io
+
+    try:
+        io.safe_path(root)
+        io.safe_path(profile)
+        with io.open_kernel_lock(profile / ".dsh-pet-core-bridge.lock"):
+            manifest = profile / "package.json"
+            before = io.read_bytes(manifest, 2 * 1024 * 1024)
+            pkg = json.loads(before)
+            if not isinstance(pkg, dict) or not isinstance(pkg.get("dependencies", {}), dict):
+                return False
+            owned = _bridge_owned_by(pkg, profile, root)
+            link = profile / "node_modules" / "@dsh-pet" / "bridge"
+            io.safe_path(link.parent)
+            try:
+                info = link.lstat()
+            except FileNotFoundError:
+                info = None
+            linked = info is not None and (link.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400)
+            owned_link = linked and os.path.normcase(str(link.resolve())) == os.path.normcase(str(root.absolute()))
+            if owned_link and _manifest_has_plugin(pkg) and not owned:
+                return False  # manifest/link evidence conflict: do not guess
+            if owned:
+                if info is not None and not owned_link:
+                    return False  # unknown directory/copy/foreign link is not ours to delete
+                pkg["dependencies"].pop(DSH_PLUGIN_NAME)
+                bundles = ((pkg.get("dsh") or {}).get("profile") or {}).get("bundles")
+                if bundles is not None and not isinstance(bundles, list):
+                    return False
+                if isinstance(bundles, list):
+                    bundles[:] = [item for item in bundles if item != DSH_PLUGIN_NAME]
+                if io.read_bytes(manifest, 2 * 1024 * 1024) != before:
+                    return False
+                io.atomic_write(manifest, (json.dumps(pkg, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+            if owned_link:
+                # Check again immediately before removing the link itself.
+                if os.path.normcase(str(link.resolve())) != os.path.normcase(str(root.absolute())):
+                    return False
+                if link.is_symlink():
+                    link.unlink()
+                else:
+                    link.rmdir()  # Windows junction: target is never traversed
+                try:
+                    link.lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    return False
+            final = json.loads(io.read_bytes(manifest, 2 * 1024 * 1024))
+            return isinstance(final, dict) and not _bridge_owned_by(final, profile, root)
+    except (io.StateError, OSError, ValueError, TypeError, AttributeError):
+        log.warning("当前 Core 桥接注册清理未完成，保留恢复能力: %s", profile.name)
+        return False
 
 
 def _manifest_has_plugin(pkg: dict) -> bool:
@@ -1254,7 +1349,7 @@ class BaseAgentMonitor(QObject):
         self._OUTBOX_CAP = 500
         # QObject 的 destroyed 槽在 PySide6 下不可靠地调用 bound method；
         # 连接无 receiver 的 callable，避免窗口销毁后遗留 daemon worker。
-        self._destroyed_conn = self.destroyed.connect(lambda *_: BaseAgentMonitor._destroyed_guard(self))
+        self._destroyed_conn: QMetaObject.Connection | None = self.destroyed.connect(lambda *_: BaseAgentMonitor._destroyed_guard(self))
         self._destroy_guard_ran = False
         self._destroy_guard_lock = threading.Lock()
 
@@ -1544,10 +1639,10 @@ class BaseAgentMonitor(QObject):
                     and meta_type not in ("session/meta", "debug/session-shape")
                 ):
                     self._emit(self.unknown_bridge_event, (self.agent_key, data))
-                normalized = normalize_event_state(ev, st)
-                if not normalized:
+                state = normalize_event_state(ev, st)
+                if not state:
                     continue  # 不认识的事件类型：忽略，不误报为 working
-                self._emit_state(normalized, emit_gen)
+                self._emit_state(state, emit_gen)
             except Exception:
                 log.debug("桥接记录处理失败，跳过该行", exc_info=True)
 
@@ -1615,6 +1710,8 @@ class DshMonitor(BaseAgentMonitor):
         except OSError:
             current = plugin
         stale: list[tuple[str, str]] = []
+        if _core_agent_owner() is not None:
+            return stale  # explicit ownership is required; never adopt a legacy link
         for profile in _real_profiles():
             pkg = _read_manifest(profile)
             if pkg is None or not _manifest_has_plugin(pkg):
@@ -1776,6 +1873,9 @@ class DshMonitor(BaseAgentMonitor):
                 failed.append(f"{profile.name}: package.json 读取失败")
                 continue
             if _manifest_has_plugin(pkg):
+                if _core_agent_owner() is not None and not _bridge_owned_by(pkg, profile, plugin):
+                    failed.append(f"{profile.name}: 桥接注册属于其他安装，保持原配置；请先在原安装中解除联动")
+                    continue
                 # 已安装也要刷新本地 link。否则源码/打包版升级后，profile
                 # 仍可能指向旧的 dist-onedir bridge，重启 dsh 只会继续加载旧代码。
                 # pnpm add 会更新已有的 link spec；失败时保留原安装并报告。
@@ -1822,7 +1922,7 @@ class DshMonitor(BaseAgentMonitor):
         return True, f"桥接插件已安装到 {len(succeeded)} 个 dsh 实例（{', '.join(succeeded)}）{note}"
 
     @classmethod
-    def uninstall_bridge(cls) -> bool:
+    def uninstall_bridge(cls, *, scope_root: Path | None = None) -> bool:
         """关闭联动时卸载桥接插件。返回是否全部成功（失败记日志）。
 
         幂等：未安装的 profile 直接视为成功；不再依赖 dsh CLI（同 install_bridge）。
@@ -1830,6 +1930,17 @@ class DshMonitor(BaseAgentMonitor):
         程序目录（2026-09 dsh 事故同型），改为纯 JSON 手改卸载——备份 package.json、
         删依赖条目与 dsh.profile.bundles 登记、尽力删 profile 内的插件链接。
         """
+        if scope_root is not None or _core_agent_owner() is not None:
+            root = scope_root if scope_root is not None else cls.bundled_plugin_dir()
+            if root is None:
+                return False
+            # No package manager, downloaded code, broad legacy hook cleanup,
+            # backup pruning, or unknown-directory deletion on the new route.
+            ok = True
+            for profile in _real_profiles():
+                if not _remove_core_bridge_reference(profile, root):
+                    ok = False
+            return ok
         has_pnpm = _pnpm_command() is not None
         ok = True
         for profile in _real_profiles():
@@ -1879,6 +1990,7 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
     HOOK_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionStart", "UserPromptSubmit")
     HOOK_MARKER = "claude_event_hook"  # 识别本桌宠注入条目的标记
     HOOK_FLAG = "x-dsh-pet"  # 结构化字段标识
+    CORE_HOOK_FLAG = "x-dsh-pet-core-webm-owner"
 
     def start(self) -> bool:
         """启动时刷新 hook 脚本（脚本整体归本桌宠所有，升级版本自动覆盖旧版）。"""
@@ -1895,6 +2007,14 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
     @staticmethod
     def _write_settings_atomic(settings_path: Path, data: dict) -> None:
         """原子写入 settings.json（tmp + os.replace，防中途崩溃留下损坏 JSON）。"""
+        if _core_agent_owner() is not None:
+            from . import feature_state_io as io
+
+            encoded = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+            if len(encoded) > 2 * 1024 * 1024:
+                raise io.StateError("metadata_limit")
+            io.atomic_write(settings_path, encoded)
+            return
         tmp = settings_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, settings_path)
@@ -1903,8 +2023,9 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
     def _ensure_hook_script(cls, events_file: Path) -> tuple[Path, str]:
         """把事件写入脚本落地到 events_file 同目录，返回 (脚本路径, 命令模板)。
         命令模板中 {script} 为脚本路径占位符、{event} 为事件名占位符。"""
+        stem = "core_claude_hook" if _core_agent_owner() is not None else "claude_event_hook"
         if sys.platform == "win32":
-            script = events_file.parent / "claude_event_hook.ps1"
+            script = events_file.parent / (stem + ".ps1")
             # PowerShell 脚本：不依赖任何 Python 环境，打包版同样可用。
             # 注意：以下为普通字符串（非 f-string），{0}/{1}/{2} 是 PowerShell -f 的占位符。
             # stdin 读取 Claude Code 传入的 JSON（含 tool_name）；未重定向时跳过绝不阻塞。
@@ -1927,7 +2048,7 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
             )
             cmd_tmpl = 'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}" {event}'
         else:
-            script = events_file.parent / "claude_event_hook.py"
+            script = events_file.parent / (stem + ".py")
             events_file.parent.mkdir(parents=True, exist_ok=True)
             script.write_text(
                 "import json, sys, time\n"
@@ -1964,6 +2085,11 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
         # command 里的脚本文件名——老用户升级后旧条目才能被正确清理/替换。
         if not isinstance(entry, dict):
             return False
+        owner = _core_agent_owner()
+        if owner is not None:
+            return entry.get(cls.CORE_HOOK_FLAG) == owner
+        if cls.CORE_HOOK_FLAG in entry:
+            return False
         if entry.get(cls.HOOK_FLAG) is True:
             return True
         for h in entry.get("hooks") or []:
@@ -1977,47 +2103,48 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
 
     @classmethod
     def install_hooks(cls, events_file: Path) -> bool:
-        """注入 Claude Code 官方 hooks（数组对象格式），事件追加到 jsonl。
-        只移除/新增带本桌宠结构化标记的条目，用户已有 hooks 不受影响。"""
+        """Install only this product/root's hook groups; retain other registrations."""
         settings_path = cls.get_settings_path()
         try:
-            script, cmd_tmpl = cls._ensure_hook_script(events_file)
-
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            data = {}
-            if settings_path.is_file():
-                try:
-                    data = json.loads(settings_path.read_text(encoding="utf-8"))
-                    if not isinstance(data, dict):
-                        raise ValueError("settings.json 根节点不是对象")
-                except Exception as exc:
-                    # 文件存在但解析失败：绝不能拿空配置覆盖用户已有配置，中止安装
-                    log.warning("Claude settings.json 解析失败，中止注入（未改动原文件）: %s", exc)
-                    return False
-            hooks = data.setdefault("hooks", {})
-            if not isinstance(hooks, dict):
-                hooks = {}
-                data["hooks"] = hooks
-
-            for hook_name in cls.HOOK_EVENTS:
-                # 先清掉我们以前注入的条目（幂等），保留用户自己的 hooks
-                existing = hooks.get(hook_name)
-                if isinstance(existing, list):
-                    hooks[hook_name] = [g for g in existing if not cls._is_our_hook_entry(g)]
-                else:
-                    hooks[hook_name] = []
-                cmd = cls._build_command(cmd_tmpl, script, hook_name)
-                hooks[hook_name].append(
-                    {
-                        "matcher": "",
-                        "hooks": [{"type": "command", "command": cmd}],
-                        cls.HOOK_FLAG: True,
-                    }
-                )
-            cls._write_settings_atomic(settings_path, data)
-            return True
+            with _core_hook_settings_lock(settings_path):
+                script, cmd_tmpl = cls._ensure_hook_script(events_file)
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+                data = {}
+                if settings_path.is_file():
+                    try:
+                        data = _read_hook_settings(settings_path)
+                        if not isinstance(data, dict):
+                            raise ValueError("settings.json 根节点不是对象")
+                    except Exception as exc:
+                        log.warning("Claude settings.json 解析失败，中止注入（未改动原文件）: %s", type(exc).__name__)
+                        return False
+                hooks = data.setdefault("hooks", {})
+                if not isinstance(hooks, dict):
+                    if _core_agent_owner() is not None:
+                        return False
+                    hooks = {}
+                    data["hooks"] = hooks
+                owner = _core_agent_owner()
+                for hook_name in cls.HOOK_EVENTS:
+                    existing = hooks.get(hook_name)
+                    if isinstance(existing, list):
+                        hooks[hook_name] = [g for g in existing if not cls._is_our_hook_entry(g)]
+                    else:
+                        if existing is not None and owner is not None:
+                            return False
+                        hooks[hook_name] = []
+                    cmd = cls._build_command(cmd_tmpl, script, hook_name)
+                    hooks[hook_name].append(
+                        {
+                            "matcher": "",
+                            "hooks": [{"type": "command", "command": cmd}],
+                            **({cls.CORE_HOOK_FLAG: owner} if owner is not None else {cls.HOOK_FLAG: True}),
+                        }
+                    )
+                cls._write_settings_atomic(settings_path, data)
+                return True
         except Exception as exc:
-            log.warning("注入 Claude Code hooks 失败: %s", exc)
+            log.warning("注入 Claude Code hooks 失败: %s", type(exc).__name__)
             return False
 
     @classmethod
@@ -2027,22 +2154,23 @@ class ClaudeCodeMonitor(BaseAgentMonitor):
         if not settings_path.is_file():
             return True
         try:
-            data = json.loads(settings_path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
+            with _core_hook_settings_lock(settings_path):
+                data = _read_hook_settings(settings_path)
+                if not isinstance(data, dict):
+                    return _core_agent_owner() is None
+                hooks = data.get("hooks")
+                if not isinstance(hooks, dict):
+                    return hooks is None or _core_agent_owner() is None
+                for hook_name in list(hooks.keys()):
+                    entries = hooks.get(hook_name)
+                    if isinstance(entries, list):
+                        kept = [g for g in entries if not cls._is_our_hook_entry(g)]
+                        if kept:
+                            hooks[hook_name] = kept
+                        else:
+                            del hooks[hook_name]
+                cls._write_settings_atomic(settings_path, data)
                 return True
-            hooks = data.get("hooks")
-            if not isinstance(hooks, dict):
-                return True
-            for hook_name in list(hooks.keys()):
-                entries = hooks.get(hook_name)
-                if isinstance(entries, list):
-                    kept = [g for g in entries if not cls._is_our_hook_entry(g)]
-                    if kept:
-                        hooks[hook_name] = kept
-                    else:
-                        del hooks[hook_name]
-            cls._write_settings_atomic(settings_path, data)
-            return True
         except Exception as exc:
             log.warning("移除 Claude Code hooks 失败: %s", exc)
             return False
@@ -4076,12 +4204,18 @@ class AgentLinkManager(QObject):
     def _deepseek_provider(self):
         """取当前激活且支持余额查询的 provider（仅 DeepSeek）。"""
         try:
-            settings = self.cfg.chat_settings()
-            provider = settings.active_config
+            from .balance_config import resolve_balance_request
+
+            provider = resolve_balance_request(self.cfg)
         except Exception:
             return None
-        base = str(getattr(provider, "base_url", "") or "")
-        if "deepseek.com" not in base:
+        from urllib.parse import urlsplit
+
+        try:
+            host = urlsplit(str(getattr(provider, "base_url", "") or "")).hostname or ""
+        except ValueError:
+            return None
+        if host != "deepseek.com" and not host.endswith(".deepseek.com"):
             return None
         return provider
 
@@ -4095,7 +4229,7 @@ class AgentLinkManager(QObject):
         if provider is None:
             return
         try:
-            api_key = self.cfg.resolve_api_key(provider)
+            api_key = provider.api_key
         except Exception:
             api_key = ""
         if not api_key:

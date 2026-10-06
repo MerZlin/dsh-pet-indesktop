@@ -2,8 +2,8 @@
 
 Each attempt owns two immutable copies; the candidate cannot replace the helper,
 choose trust anchors or receive Core/user handles. No Qt and no source fallback.
-Run directories remain journaled for bounded recovery; this code never sweeps
-unknown directories or deletes user data.
+Run directories are reclaimed through parent-owned bounded recovery; this code
+never sweeps unknown directories or deletes user data.
 """
 
 from __future__ import annotations
@@ -11,12 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import uuid
 from dataclasses import asdict
 from pathlib import Path
 
 from . import feature_package_files as files
 from .feature_package_probe import ProbeOutcome, ProbeRequest, validate_worker_transcript
+from .feature_probe_materials import ProbeMaterialStore
 from .feature_probe_windows import ProbeLaunchError, ProbeLimits, TrustedProbeBundle, VerifiedProbeWorker, WindowsProbeLauncher
 from .feature_state_io import StateError, safe_path
 from .plugins.package_trust import FeaturePackageVerifier, PackageVerificationError
@@ -25,6 +25,13 @@ from .workers.protocol import build_message, decode_message, encode_message
 
 def probe_policy(verifier: FeaturePackageVerifier) -> dict[str, object]:
     return dict(
+        feature_id=verifier.feature_id,
+        anchor_policy={
+            name: dict(
+                feature_ids=sorted(policy.feature_ids), capabilities=sorted(policy.capabilities), revoked=policy.revoked, allow_legacy_v1=policy.allow_legacy_v1
+            )
+            for name, policy in verifier.anchor_policy.items()
+        },
         core_version=verifier.core_version,
         api_version=verifier.api_version,
         platform=verifier.platform,
@@ -45,6 +52,10 @@ class WindowsFeatureProbeSandbox:
     def __init__(self, verifier: FeaturePackageVerifier, bundle: TrustedProbeBundle, run_parent: Path):
         self.verifier, self.bundle = verifier, bundle
         self.run_parent = run_parent.absolute()
+        self.materials = ProbeMaterialStore(self.run_parent, limits=verifier.limits)
+
+    def collect_garbage(self):
+        return self.materials.collect_garbage()
 
     def _materials(self, source, attempt: Path, kind: str):
         root = attempt / kind
@@ -64,6 +75,31 @@ class WindowsFeatureProbeSandbox:
         return root, helper, candidate
 
     def run(self, request: ProbeRequest) -> ProbeOutcome:
+        try:
+            if not all((request.deny_network, request.deny_desktop, request.deny_user_data)) or dict(request.policy) != probe_policy(self.verifier):
+                return ProbeOutcome(False, False, False, False, "probe_policy_mismatch")
+            self.bundle.verify()
+            original = self.verifier.verify(request.package_root)
+            if original.trust_status != "trusted_official":
+                raise PackageVerificationError("official signature required")
+            with self.materials.lock():
+                self.materials.recover_locked()
+                attempt = self.materials.begin(original, self.bundle.manifest_digest)
+                try:
+                    return self._run_attempt(request, attempt)
+                finally:
+                    # Cleanup failures are retained warnings, not false probe
+                    # success or a reason to disable a valid installed version.
+                    self.materials.recover_locked()
+        except ProbeLaunchError as exc:
+            return ProbeOutcome(False, False, False, False, exc.reason)
+        except StateError as exc:
+            reason = "probe_materials_in_use" if exc.code == "lock_busy" else exc.code
+            return ProbeOutcome(False, False, False, False, reason)
+        except (OSError, PackageVerificationError):
+            return ProbeOutcome(False, False, False, False, "probe_verification_failed")
+
+    def _run_attempt(self, request: ProbeRequest, owned) -> ProbeOutcome:
         host_valid = worker_hello = worker_exit = isolation = False
         try:
             if not all((request.deny_network, request.deny_desktop, request.deny_user_data)) or dict(request.policy) != probe_policy(self.verifier):
@@ -75,8 +111,9 @@ class WindowsFeatureProbeSandbox:
                 raise PackageVerificationError("official signature required")
             safe_path(self.run_parent)
             self.run_parent.mkdir(parents=True, exist_ok=True)
-            attempt = self.run_parent / ("probe-" + uuid.uuid4().hex)
+            attempt = owned.root
             attempt.mkdir(exist_ok=False)
+            self.materials.mark(owned, "host", "copying")
             root, helper, candidate = self._materials(original, attempt, "host")
             document = dict(
                 schema=1,
@@ -85,9 +122,11 @@ class WindowsFeatureProbeSandbox:
                 policy=probe_policy(self.verifier),
                 snapshot_ancestors=candidate.ancestors,
             )
+            self.materials.mark(owned, "host", "launching")
             result = WindowsProbeLauncher(helper, limits=limits).run(
                 root, arguments=("--host-probe",), input_data=(json.dumps(document, separators=(",", ":")) + "\n").encode()
             )
+            self.materials.mark(owned, "host", "returned")
             isolation = result.evidence.isolation_enforced
             self.verifier.reverify(candidate)  # includes full ancestry, outside the sandbox
             self.verifier.reverify(original)
@@ -101,6 +140,10 @@ class WindowsFeatureProbeSandbox:
             if receipt != expected:
                 return ProbeOutcome(False, False, False, isolation, "host_probe_receipt")
             host_valid = True
+            if original.execution_kind == "host-only":
+                # A signed host-only contract has no Worker. Do not fake HELLO.
+                return ProbeOutcome(True, False, False, isolation, worker_status="not_applicable")
+            self.materials.mark(owned, "worker", "copying")
             root, helper, candidate = self._materials(original, attempt, "worker")
             seen = False
 
@@ -116,9 +159,11 @@ class WindowsFeatureProbeSandbox:
                 # No task/configuration paths, screenshots or model permissions.
                 return encode_message(build_message("proactive-screen", "shutdown"))
 
+            self.materials.mark(owned, "worker", "launching")
             result = WindowsProbeLauncher(helper, limits=limits).run(
                 root, arguments=("--feature-package-probe",), candidate_worker=VerifiedProbeWorker(candidate, self.verifier), on_stdout_line=hello_shutdown
             )
+            self.materials.mark(owned, "worker", "returned")
             isolation = isolation and result.evidence.isolation_enforced
             self.verifier.reverify(candidate)
             self.verifier.reverify(original)
