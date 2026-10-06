@@ -251,6 +251,7 @@ class PreviewRuntime(QObject):
         super().__init__(app)
         self.config = config
         self.key = None
+        self.visual_key = None
         self.timer = QTimer(self)
         self.timer.setInterval(180)
         self.timer.timeout.connect(self.tick)
@@ -275,6 +276,13 @@ class PreviewRuntime(QObject):
                     configs[id(cfg)] = cfg
             for cfg in configs.values():
                 cfg.reload()
+            # Older packaged Config.reload implementations can write normalized
+            # defaults. Consume that timestamp rather than repeatedly redrawing.
+            self.key = (path.stat().st_mtime_ns, key[1])
+            visual_key = (bool(values), json.dumps({name: self.config.get(name) for name in VISUAL}, sort_keys=True))
+            if visual_key == self.visual_key:
+                return
+            self.visual_key = visual_key
             from .language_ui import _manager
 
             if _manager is not None and not any(hasattr(w, "_dsh_preview_writer") and w.isVisible() for w in widgets):
@@ -355,7 +363,9 @@ class PreviewRuntime(QObject):
         if bubble._interactive_active or anchor.isEmpty():
             return
         if was_visible and kind == "text" and raw:
-            bubble.show_text(raw, anchor, max(500, bubble._hide_timer.remainingTime()), subtitle=subtitle, title_first=title_first, width_locked=False)
+            from .ytmusic import redraw_bubble
+
+            redraw_bubble(bubble, raw, anchor, max(500, bubble._hide_timer.remainingTime()), subtitle=subtitle, title_first=title_first, width_locked=False)
         elif values and pet is not None and pet.isVisible():
             bubble._dsh_demo_preview = True
             bubble.show_text("氣泡預覽：大肥魚陪你工作", anchor, 3000)

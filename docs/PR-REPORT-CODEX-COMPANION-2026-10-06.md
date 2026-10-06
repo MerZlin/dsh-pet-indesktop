@@ -239,3 +239,94 @@ QT_QPA_PLATFORM=offscreen python scripts/probe_codex_music_hover.py --output /tm
 首轮全量 4329 passed / 14 skipped，有一个未修改的飞行幀时序边界失败：实际 41 帧，要求至少 41.297。隔离原 `test_flight_frame_pacing.py` 五项全部通过（2.34 s），没有修改飞行逻辑、放宽断言或 deselect；第二次全量同样 4329 passed / 14 skipped，重复这一项边界失败（299.48 s）。组合新测试与飞行族亦重现，而各单族组合通过；依仓库连续两轮失败即隔离的时序纪律，将原端到端探针放入独立真实 Qt 进程。原阈值和所有断言未变、全量仍执行该探针；同一失败顺序转为 19 passed（5.06 s）。隔离后七族满载三轮各 63 passed，CPU 100%，墙钟 8.17 / 7.29 / 7.37 s；原断言仍通过。最终全量 `python -X utf8 -m pytest -q` 为 4330 passed / 14 skipped / 14 warnings，307.20 s；没有排除测试。最终 ruff、报告门禁与 diff whitespace 检查均通过。
 
 回滚本轮提交可恢复第一轮源码；本机有修正前的可执行文件和桥接源码备份。Mac/Linux 实机与完整发行构建仍沿用第一轮限制，未在本轮补称完成。
+
+## 十、第三轮：网页歌词与音乐控件保留/收回
+
+### 修改文件说明
+
+以下为相对第二轮提交 `98e4255` 的 `git diff HEAD --numstat`，新增一个源码探针，没有删除文件。前两轮证据保留。
+
+<!-- ROUND3-FILES-BEGIN -->
+| 文件 | 增删 | 改动意图 |
+|---|---|---|
+| `docs/CODEX-COMPANION.md` | +5 / −2 | 说明展开后的音乐控件、离开子按钮收回、歌词预览归属和来源边界。 |
+| `docs/PR-REPORT-CODEX-COMPANION-2026-10-06.md` | +91 / −0 | 追加本轮逐文件、性能、现场媒体和测试证据，不覆盖历史记录。 |
+| `pet/codex_companion_adapters.py` | +25 / −3 | 具名歌手匹配与音乐展开/收回接点；独立保留原有内嵌聊天收回接点。 |
+| `pet/island_music.py` | +36 / −4 | 展开卡片保留三按钮，按标题栏右侧排布；最后子按钮 Leave 也安排延迟检查，真实主题刷新保留展开状态。 |
+| `pet/music_lyric.py` | +1 / −1 | 网易 cloudsearch 同时接受旧 `artists` 与实际新 `ar` 字段，避免忽略所有歌手。 |
+| `pet/ui_preview.py` | +11 / −1 | 消费 reload 后时间戳，并只在视觉字段变化时重绘；歌词重绘走保留归属的明确接点。 |
+| `pet/ytmusic.py` | +51 / −0 | 对歌词重绘保留归属、完整文本和原到期时间；真实通知仍取得优先权；匹配繁简与合唱分隔符。 |
+| `scripts/probe_codex_music_hover.py` | +43 / −1 | 真实 Qt 验证普通保存不收回、展开及三主题保留控件、最后子按钮离开后恢复原几何。 |
+| `scripts/probe_codex_web_lyrics.py` | +167 / −0（新增） | 网络/媒体边界 fixture 加真实 Qt/线程/事件循环，验证来源字段、歌词换句、字号主题预览与交互提示优先。 |
+| `tests/test_codex_music.py` | +16 / −0 | 在独立进程运行公开歌词回归探针，保持测试和原生 Qt 生命周期隔离。 |
+| `tests/test_music_lyric.py` | +19 / −0 | 网络边界 fixture 覆盖两种歌手字段及确切的两次请求，不添加真实联网单测。 |
+<!-- ROUND3-FILES-END -->
+
+### 原因与行为
+
+原视觉轮询把位置保存也当成视觉改变，再调用 `refresh_from_config` 收回控件；歌词重绘通过普通 `show_text` 清掉歌词归属，被控制器当成别的通知而反复让出气泡。新版仅在视觉键改变时重绘，通过专用接点保留自身歌词和原定到期时间；新的通知保持原优先级，不延长暂停后的显示时间。
+
+打开工作卡片原先主动 suspend 音乐条，现改为保留并在标题栏右侧布局。原 Leave 仅在父窗口接收事件，离开最后一个子按钮且 OS 光标信息短暂滞后时可能没有关闭路径；每个子按钮都安排已有 220 ms 延迟检查，进入相邻按钮取消该检查。展开卡片的离开仍由原生卡片收回计时器负责。
+
+实际网易搜索 JSON 含 `ar`，旧代码只读 `artists`，因此搜索有结果却没有歌词请求。两种字段均支持；可选版本追加繁简字符映射及合唱分隔符匹配，仍沿用原歌手子串规则，不猜测名字错字或替用户选择其他录音版本。
+
+### 性能分析
+
+Windows 本机实际打包 Python 3.11 / PySide6，真正 Qt 控件及 Segoe UI/微软雅黑；本机打包诊断命令 `python -X utf8 -B benchmark_web_music_complete.py`（私有构建探针，不是公共发行构建）。先暖机 20 次，再调用表中三个真实方法，用 `perf_counter` / `process_time` 和 Windows `GetProcessMemoryInfo` 测量；仅使用临时配置与合成文本，没有网络或模型回合。
+
+| 路径 | 样本数 | 中位数 / p95 | CPU/次 | 采样前后 RSS |
+|---|---:|---|---|---|
+| 未改变的 PreviewRuntime.tick | 1000 | 0.0702 / 0.1266 ms | 0.0781 ms | +225,280 B |
+| 已有歌词真实预览重绘 | 200 | 0.8869 / 1.0869 ms | 0.9375 ms | +163,840 B |
+| 繁简合唱歌手匹配 | 1000 | 0.0126 / 0.0128 ms | 0.0156 ms | +77,824 B |
+
+以上是短期采样，RSS 增量含解释器/Qt 缓存，不能外推为长期零泄漏。重绘新增固定数量临时属性；视觉 key 保存一份固定设置摘要，歌词控制器/字典缓存沿用现有生命周期，无新增无限列表或历史文件。
+
+实际打包悬停/卡片/离开 probe 1.059 s，展开记录 10 帧。复现公开入口：
+
+```sh
+QT_QPA_PLATFORM=offscreen python scripts/probe_codex_music_hover.py --output /tmp/companion-hover
+QT_QPA_PLATFORM=offscreen python scripts/probe_codex_web_lyrics.py --output /tmp/companion-web-lyrics
+```
+
+稳态沿用 180 ms 外观检查和 1 秒媒体采样，没有新增周期、常驻线程或进程。未变检查仍读取本机文件时间戳及预览状态；位置保存仍 reload，但不再触发全窗口重绘和预览状态文件写入。真正外观变化才重绘并写该固定状态文件。子按钮 Leave 复用现有单次延迟计时器。歌手匹配复用已有离线字典，首次读取后缓存；来源字段修正沿用原搜索/歌词端点与超时预算，命中后执行原歌词请求，未增加歌词源或额外轮询。模型生成请求为 0。
+
+### 实机运行记录
+
+歌词回归在产品修改前确切失败：`Preview redraw discarded the lyric owner`；位置保存回归失败 `Unrelated config save collapsed hovered music controls`；展开卡片失败 `Opening the work card hid the music controls`。新字段 fixture 旧 `artists` 通过，新 `ar` 返回 None；繁简合唱 seam 则失败 `Web collaborative and traditional artist names did not match the provider`。修正后源码及实际打包代码运行同一公开探针：
+
+```json
+{"unrelatedSaveKeepsMusicControls":true,"expandedCardKeepsMusicControls":true,"lastChildLeaveCollapsesControls":true,"collapseRestoresPosition":true,"threeThemes":true,"modelTurns":0}
+```
+
+```json
+{"webPlaybackRecognized":true,"collaborativeAndTraditionalArtistsMatch":true,"previewRetainsLyricOwnership":true,"fullTextSurvivesPreview":true,"previewPreservesExpiry":true,"consecutiveLyricsContinue":true,"interactiveNotificationKeepsPriority":true,"lyricsResumeAfterDismiss":true,"modelGenerationRequests":0}
+```
+
+实际打包深色、浅色、玻璃截图人工检查：三圆按钮在标题栏内，卡片正文/底部操作未遮挡。此处使用合成媒体 fixture，按钮按无实际控制目标置灰，不把截图称为直接检查使用者桌面。
+
+现场 Windows 媒体会话来自 MSEdge。第一轮控制器归属探针记录旧预览导致 owner 丢失及 yield 生效。修复后曾取得 18 行并连续显示两句；后续用户歌曲的来源无匹配，又记录 QQ HTTP 500、lrclib HTTP 400/404 与网易 `ar` 字段实际响应。补齐字段后不把任意歌曲无歌词伪称为解决所有来源覆盖问题。用户改播原唱验证歌曲后，以当前打包控制器、实际 WinRT 和真实网络运行：
+
+```json
+{"livePlaybackSamples":12,"timedLyricLines":31,"distinctActualLyricLinesShown":2,"actualLyricMessages":12,"nativeBubbleVisibleDuringPlayback":true,"ownerRetained":true,"yieldActive":false,"realPlayerAppId":"MSEdge","playerPositionAdvanced":true,"modelGenerationRequests":0}
+```
+
+已重新启动的正式桌宠日志还记录多次不同长度的 `YTM lyric-only bubble displayed`，没有复制歌词正文或用户歌曲历史到公开文件。实际播放器进度在走、显示确实换句；仍不能保证所有录音版本均有公开同步歌词。
+
+本机正式位置已安装并重启；最终阶段替换四个模块，另外 1339 个模块与 bootloader 字节保留。已安装旧 Config 的浏览器自动连结兼容函数保留，初期检测出的字段规范化问题已恢复原开关并验证。GPT-6 Luna 健康端点可用，`startupRequiresChatQuota=false`；逻辑设置、1 个聊天文件、1298 条历史前缀、Hooks 和开机启动均保留（位置仅允许原程序正常更新）。正式可执行文件与启动路径保存，下次开机继续使用；没有实际重启电脑，也没有发出模型测试聊天。私有备份及安装报告留在用户指定目录，不提交修改过的二进制或个人配置。
+
+### 本轮测试与验证
+
+最终聚焦音乐/歌词 84 passed（2.56 s），静态检查通过。首次聚焦一个未修改的生命周期用例遇到原采样线程刚好已退出的时序边界；没有改线程、断言或排除该用例，随后的全量及满载门禁继续包含它。
+
+全量 `python -X utf8 -m pytest -q`：4333 passed / 14 skipped / 14 warnings，314.05 s；未排除测试。首次满载启动指令误写三个测试文件名，pytest 返回 usage error 4、0 个测试；更正为仓库真实九族后重新执行三轮。没有把启动错误计作通过或为此改产品代码。
+
+<!-- ROUND3-STRESS-BEGIN -->
+16 个负载进程，测得 CPU 100% / 100% / 100%；九族三轮各 205 passed，进程墙钟 63.64 / 61.86 / 63.25 s。全部负载进程已结束，没有放宽断言或 deselect。
+
+```sh
+python scripts/stress_codex_companion.py --output /tmp/companion-stress --tests tests/test_codex_music.py tests/test_codex_companion.py tests/test_music_lyric.py tests/test_speech_bubble.py tests/test_bubble_text_scale.py tests/test_dynamic_island_revamp.py tests/test_island_content_cache.py tests/test_island_topmost.py tests/test_flight_frame_pacing.py
+```
+<!-- ROUND3-STRESS-END -->
+
+发布前重新执行 ruff、报告门禁与 diff whitespace 检查。回滚本轮提交恢复第二轮源码；本机可恢复修正前备份。macOS/Linux 实机、完整发行构建及 24 小时浸泡仍未执行，沿用既有边界。

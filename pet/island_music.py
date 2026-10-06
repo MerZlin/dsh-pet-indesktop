@@ -13,7 +13,7 @@ EXTRA_WIDTH = 120
 
 
 def music_open(island):
-    return getattr(island, "_music_requested", False) and island._mode != "expanded" and not (island._mode == "docked" and not island._hover_peek)
+    return getattr(island, "_music_requested", False) and not (island._mode == "docked" and not island._hover_peek)
 
 
 def labels(island, playing=False):
@@ -43,6 +43,7 @@ class RoundMusicButton(QAbstractButton):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        leave(self.bar.island)
         self.update()
         super().leaveEvent(event)
 
@@ -237,6 +238,8 @@ def attach(island):
 
 def rest_size(island, original_size):
     if music_open(island):
+        if island._mode == "expanded":
+            return QSize(max(original_size.width(), island._capsule_width() + EXTRA_WIDTH), original_size.height())
         return QSize(original_size.width() + EXTRA_WIDTH, original_size.height())
     return original_size
 
@@ -252,7 +255,7 @@ def layout(island):
     bar = getattr(island, "_music_bar", None)
     if bar is None:
         return
-    bar.move(island._capsule_width() - 8, 4)
+    bar.move(island.width() - bar.width() - 12 if island._mode == "expanded" else island._capsule_width() - 8, 4)
     active = music_open(island)
     bar.setVisible(active)
     if active:
@@ -286,9 +289,9 @@ def enter(island):
 def leave(island):
     if hasattr(island, "_music_close_timer"):
         if island.rect().contains(island.mapFromGlobal(QCursor.pos())):
-            island._music_close_timer.stop()
             island._dock_back_timer.stop()
-            return
+        # Qt may deliver Leave only to the last child button. Always schedule
+        # the delayed cursor check; entering the next child cancels it again.
         island._music_close_timer.start()
 
 
@@ -302,9 +305,33 @@ def update_size(island, original):
 
 
 def close_if_outside(island):
+    if island._mode == "expanded":
+        return  # The native card-collapse timer owns the expanded surface.
     if island.rect().contains(island.mapFromGlobal(QCursor.pos())):
         return
     close(island)
+
+
+def expand_card(island, original):
+    island._music_close_timer.stop()
+    island._music_requested = True
+    island._music_transition = True
+    result = original(island)
+    layout(island)
+    return result
+
+
+def collapse_card(island, original, *, animate=True):
+    result = original(island, animate=animate)
+    if island._mode != "expanded" and not island.rect().contains(island.mapFromGlobal(QCursor.pos())):
+        if animate:
+            close(island)
+        else:
+            suspend(island)
+            island._set_free_geometry(island._target_rect())
+            island._apply_fixed_size()
+    layout(island)
+    return result
 
 
 def close(island):
@@ -328,6 +355,11 @@ def suspend(island):
 
 
 def reset(island):
+    if island._mode == "expanded":
+        island._music_close_timer.stop()
+        island._music_requested = True
+        island._music_transition = True
+        return
     suspend(island)
     island._music_anchor = None
 

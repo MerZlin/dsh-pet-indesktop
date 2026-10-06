@@ -35,12 +35,14 @@ python -m pet --codex-companion --model MODEL_ID --codex /path/to/codex --profil
 | 实时预览 | 调整设置立即预览，保存并退出才持久化；X/Esc 取消并恢复。预览有过期保护，避免崩溃后残留。 |
 | 隐藏与聊天 | 隐藏桌宠保留灵动岛工作卡片；显示按钮高亮。隐藏时快速聊天嵌入灵动岛。聊天、歌词气泡与额度窗口避让。 |
 | 图片/GIF | 设置窗口使用已有鱼图标；灵动岛头像可导入本地图片或 GIF，导入文件复制进该配置目录，取消清理尚未保存的副本。 |
-| YouTube Music | Windows 原生媒体会话自动搜索浏览器/桌面播放器；暂停后继续控制原会话，关闭或丢失目标时不启动游戏回放。悬停灵动岛显示三个圆形播放控件。 |
-| 歌词 | 使用项目已有歌词来源；首句出现前显示歌名，开始后只显示完整换行歌词。播放器没有同步歌词时显示歌名，暂停后不继续推进。 |
+| YouTube Music | Windows 原生媒体会话自动搜索浏览器/桌面播放器；暂停后继续控制原会话，关闭或丢失目标时不启动游戏回放。悬停灵动岛显示三个圆形播放控件，展开工作卡片后保留；离开最后一个按钮也会触发延迟收回。 |
+| 歌词 | 使用项目已有歌词来源，兼容网易搜索的两种歌手字段及浏览器歌手名的繁简/合唱分隔符；首句出现前显示歌名，开始后只显示完整换行歌词。主题/字号预览保留歌词归属和原到期时间；操作通知仍优先，关闭后继续换句。播放器没有同步歌词时显示歌名，暂停后不继续推进。 |
 
 额度每分钟读一次桥接（桥接缓存 30 秒），开启监控的桌宠运行期间生效，关闭监控即停止轮询。历史最多九天/20,000 个采样，文件有界；目前每次保存重写 JSON。普通两窗口、九天满采样实测约 3.16 MB，一次保存约 35 ms。相应磁盘写入上界约 4.56 GB/天，应在需要持续监控时开启。查看图片/GIF、歌名和用户聊天内容不会经过界面文字翻译。
 
 工作状态每 1.5 秒读取本机 Codex 的 `state_5.sqlite`、`thread_history_1.sqlite` 及增量 rollout 工具事件。仅读取状态/工具名和标题，不保存提示词、工具参数或结果；系统子代理不列成独立项目。多个 Codex 工作可以同时显示。已结束通知限制最近十二小时，运行中的长任务不受该期限限制。Codex 本地数据库格式变化时显示暂时不可用。
+
+实时外观轮询仅在视觉字段改变时重绘。保存桌宠位置等其他设置会正常 reload，不再收回悬停控件或重置歌词气泡。没有新增轮询频率、歌词来源或模型请求；歌词仍受公共来源的网络状态、歌曲版本和覆盖范围限制。
 
 ## 设置契约
 
@@ -77,6 +79,7 @@ QT_QPA_PLATFORM=offscreen python scripts/probe_codex_companion.py --output /tmp/
 QT_QPA_PLATFORM=offscreen python scripts/probe_codex_work_status.py --output /tmp/companion-status
 QT_QPA_PLATFORM=offscreen python scripts/probe_codex_pet.py --output /tmp/companion-pet
 QT_QPA_PLATFORM=offscreen python scripts/probe_codex_music_hover.py --output /tmp/companion-hover
+QT_QPA_PLATFORM=offscreen python scripts/probe_codex_web_lyrics.py --output /tmp/companion-web-lyrics
 python scripts/benchmark_codex_companion.py --output /tmp/companion-benchmark
 python scripts/stress_codex_companion.py --output /tmp/companion-stress
 ```

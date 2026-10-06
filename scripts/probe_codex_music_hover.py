@@ -18,6 +18,7 @@ def run_probe(app, config, output):
     from PySide6.QtGui import QEnterEvent
     from pet import island_music
     from pet.dynamic_island import DynamicIsland
+    from pet.ui_preview import install_runtime
 
     config.set("codex_work_status_enabled", False)
     config.set("dynamic_island", dict(config.get("dynamic_island"), x=50, y=60, edge_dock=False))
@@ -61,6 +62,9 @@ def run_probe(app, config, output):
         with patch.object(island_music.MusicBar, "refresh", lambda self: None), patch.object(island_music, "QCursor", cursor):
             island.show()
             app.processEvents()
+            runtime = install_runtime(config)
+            config.save()
+            runtime.tick()
             base = QRect(island.geometry())
             island._anim_timer.timeout.connect(observe_tick)
             enter()
@@ -70,6 +74,30 @@ def run_probe(app, config, output):
             assert all(a <= b for a, b in zip(samples, samples[1:])), "Opening width reversed"
             assert island.width() == base.width() + island_music.EXTRA_WIDTH
             bar = island._music_bar
+            # A persisted pet position is not a visual-setting change. The
+            # preview poll must not reset the island underneath the pointer.
+            config.set("rx", 0.25)
+            config.save()
+            runtime.tick()
+            assert bar.isVisible() and island._music_requested, "Unrelated config save collapsed hovered music controls"
+            assert island.width() == base.width() + island_music.EXTRA_WIDTH
+            for _ in range(3):
+                runtime.tick()
+                assert bar.isVisible() and island._music_requested
+            island.expand_card()
+            wait_settled()
+            assert bar.isVisible() and bar.poll.isActive(), "Opening the work card hid the music controls"
+            assert island.rect().contains(bar.geometry()), "Expanded music controls were clipped"
+            assert bar.geometry().bottom() < 44, "Music controls overlapped the work-card content"
+            for theme in ("dark", "light", "glass"):
+                config.set("dynamic_island", dict(config.get("dynamic_island"), style=theme))
+                island.refresh_from_config()
+                app.processEvents()
+                assert bar.isVisible(), "Theme refresh hid expanded music controls"
+                island.grab().save(str(output / ("expanded-music-" + theme + ".png")))
+            island.collapse_card()
+            wait_settled()
+            assert bar.isVisible(), "Collapsing the card lost hovered music controls"
             for theme in ("dark", "light", "glass"):
                 island._cfg["style"] = theme
                 island.update()
@@ -84,12 +112,26 @@ def run_probe(app, config, output):
             assert not island._dock_back_timer.isActive(), "Native docking timer remained armed over a music button"
             island._mode, island._hover_peek = "normal", False
             cursor.pos = lambda: QPoint(-500, -500)
-            island_music.close_if_outside(island)
+            app.sendEvent(button, QEvent(QEvent.Type.Leave))
+            assert island._music_close_timer.isActive(), "Leaving the last child did not schedule collapse"
+            loop, check, deadline = QEventLoop(), QTimer(), QTimer()
+            check.setInterval(10)
+            check.timeout.connect(lambda: loop.quit() if not island._music_requested else None)
+            deadline.setSingleShot(True)
+            deadline.timeout.connect(loop.quit)
+            check.start()
+            deadline.start(30000)
+            loop.exec()
+            check.stop()
+            assert not island._music_requested, "Controls stayed open after the mouse left"
             wait_settled()
             assert island.geometry() == base and not bar.isVisible() and not bar.poll.isActive()
             result = {"repeatedEnterDoesNotRestart": True, "statusRefreshDoesNotJump": True,
                       "openingWidthsMonotonic": True, "childHoverCancelsDocking": True,
                       "collapseRestoresPosition": True, "threeThemes": True,
+                      "unrelatedSaveKeepsMusicControls": True,
+                      "expandedCardKeepsMusicControls": True,
+                      "lastChildLeaveCollapsesControls": True,
                       "animationFrames": len(samples), "seconds": round(time.perf_counter() - started, 3),
                       "modelTurns": 0, "directDesktopInspection": False}
             (output / "music-hover.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

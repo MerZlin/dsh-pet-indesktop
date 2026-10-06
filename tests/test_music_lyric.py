@@ -10,9 +10,28 @@ import logging
 import time
 import urllib.request
 
+import pytest
+
 from pet import music_lyric
 from pet.music_lyric import Lyrics, LyricLine, parse_lrc
 from pet.music_lyric_controller import LyricTracker
+
+
+@pytest.mark.parametrize("artist_field", ["artists", "ar"])
+def test_netease_fetch_accepts_legacy_and_cloudsearch_artist_fields(monkeypatch, artist_field):
+    requests = []
+
+    def response(url, **_kwargs):
+        requests.append(url)
+        if "/cloudsearch/" in url:
+            return {"result": {"songs": [{"id": 123, artist_field: [{"name": "Test artist"}]}]}}
+        return {"lrc": {"lyric": "[00:01.00]first sample\n[00:02.00]second sample"}}
+
+    monkeypatch.setattr(music_lyric, "_http_get_json", response)
+    lyrics = music_lyric._fetch_from_netease("Test song", "Test artist")
+    assert lyrics is not None
+    assert [line.text for line in lyrics.lines] == ["first sample", "second sample"]
+    assert len(requests) == 2 and "id=123&" in requests[1]
 
 
 # ---------------------------------------------------------------- parse_lrc

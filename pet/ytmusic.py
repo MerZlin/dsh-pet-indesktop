@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import re
+import time
 from types import SimpleNamespace
 
 from .language_ui import install
@@ -58,6 +59,21 @@ def normalize_playback(playback):
     if (title, artist) == (playback.track.title, playback.track.artist):
         return playback
     return replace(playback, track=replace(playback.track, title=title, artist=artist))
+
+
+def artist_matches(candidate, wanted, original):
+    """Match browser collaboration separators and CJK script variants."""
+    if original(candidate, wanted):
+        return True
+    from .language_ui import _load_catalogs
+
+    table = _load_catalogs()["traditional_chars"]
+    canonical = lambda value: "".join(table.get(char, char) for char in str(value or ""))
+    candidate, wanted = canonical(candidate), canonical(wanted)
+    if original(candidate, wanted):
+        return True
+    parts = [part.strip() for part in re.split(r"\s+(?:and|feat\.?|ft\.?)\s+|[/&,、和與与]", wanted, flags=re.I) if part.strip()]
+    return len(parts) > 1 and all(original(candidate, part) for part in parts)
 
 
 def extrapolate_position(position, timeline, *, is_playing, end, original):
@@ -325,6 +341,41 @@ def prepare_bubble(bubble):
     if previous is not None:
         bubble.label.setTextFormat(previous)
         del bubble._ytmusic_original_text_format
+
+
+def redraw_bubble(bubble, text, anchor_rect, duration_ms, **kwargs):
+    """Repaint existing content without turning lyrics into a new notification.
+
+    Only the preview renderer uses this seam. Ordinary show_text calls still
+    clear ownership, so alerts and interactions keep their native priority.
+    """
+    fields = ("_ytmusic_pending_owner", "_ytmusic_pending_message", "_ytmusic_lyric_text")
+    previous = {name: getattr(bubble, name, None) for name in fields}
+    owner = getattr(bubble, "_ytmusic_owner", None)
+    owned = owner is not None and text == getattr(bubble, "_ytmusic_owned_message", None)
+    if owned:
+        bubble._ytmusic_pending_owner = owner
+        bubble._ytmusic_pending_message = text
+        last_render = getattr(bubble, "_ytmusic_last_render", None)
+        if last_render is not None and last_render[0] == text:
+            bubble._ytmusic_lyric_text = text
+    remaining = bubble._hide_timer.remainingTime()
+    started = time.monotonic()
+    try:
+        result = bubble.show_text(text, anchor_rect, duration_ms, **kwargs)
+        # Repainting must not extend either a paused lyric or a notification.
+        if remaining >= 0:
+            left = remaining - int((time.monotonic() - started) * 1000)
+            if left > 0:
+                bubble._hide_timer.start(left)
+            else:
+                bubble.hide()
+        else:
+            bubble._hide_timer.stop()
+        return result
+    finally:
+        for name, value in previous.items():
+            setattr(bubble, name, value)
 
 
 def write_settings(dialog, original):

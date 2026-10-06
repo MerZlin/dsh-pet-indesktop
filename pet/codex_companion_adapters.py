@@ -4,6 +4,16 @@ from functools import wraps
 from PySide6.QtCore import Qt
 
 
+def _with_music_lyric_name_matches(_original):
+    @wraps(_original)
+    def wrapped(candidate, wanted):
+        from pet.ytmusic import artist_matches
+
+        return artist_matches(candidate, wanted, _original)
+
+    return wrapped
+
+
 def _with_now_playing_read_async(_original):
 
     @wraps(_original)
@@ -214,10 +224,20 @@ def _with_dynamic_island_DynamicIsland_expand_card(_original):
 
     @wraps(_original)
     def wrapped(self):
-        from pet.island_music import suspend
+        from pet.island_music import expand_card
 
-        suspend(self)
-        _original(self)
+        return expand_card(self, _original)
+
+    return wrapped
+
+
+def _with_dynamic_island_DynamicIsland_collapse_card_music(_original):
+
+    @wraps(_original)
+    def wrapped(self, *, animate=True):
+        from pet.island_music import collapse_card
+
+        return collapse_card(self, _original, animate=animate)
 
     return wrapped
 
@@ -788,6 +808,7 @@ def _with_modern_settings_dialog_ModernSettingsDialog_write_config(_original):
 
 
 ADAPTERS = (
+    ("pet.music_lyric", None, "_name_matches", _with_music_lyric_name_matches),
     ("pet.now_playing", None, "_read_async", _with_now_playing_read_async),
     ("pet.now_playing", None, "_extrapolate", _with_now_playing_extrapolate),
     ("pet.music_lyric_controller", "MusicLyricController", "_bubble_blocked", _with_music_lyric_controller_MusicLyricController_bubble_blocked),
@@ -806,6 +827,7 @@ ADAPTERS = (
     ("pet.dynamic_island", "DynamicIsland", "leaveEvent", _with_dynamic_island_DynamicIsland_leaveEvent),
     ("pet.dynamic_island", "DynamicIsland", "hideEvent", _with_dynamic_island_DynamicIsland_hideEvent),
     ("pet.dynamic_island", "DynamicIsland", "expand_card", _with_dynamic_island_DynamicIsland_expand_card),
+    ("pet.dynamic_island", "DynamicIsland", "collapse_card", _with_dynamic_island_DynamicIsland_collapse_card_music),
     ("pet.dynamic_island", "DynamicIsland", "refresh_from_config", _with_dynamic_island_DynamicIsland_refresh_from_config),
     ("pet.dynamic_island", "DynamicIsland", "mouseMoveEvent", _with_dynamic_island_DynamicIsland_mouseMoveEvent),
     ("pet.modern_settings_dialog", "ModernSettingsDialog", "_apply_selected_theme", _with_modern_settings_dialog_ModernSettingsDialog_apply_selected_theme),

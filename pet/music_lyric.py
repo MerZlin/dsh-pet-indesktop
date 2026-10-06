@@ -428,7 +428,7 @@ def _fetch_from_netease(title: str, artist: str) -> Lyrics | None:
     song_id = None
     for song in songs:
         singers = "/".join(
-            str(a.get("name") or "") for a in (song.get("artists") or [])
+            str(a.get("name") or "") for a in (song.get("artists") or song.get("ar") or [])
         )
         if _name_matches(singers, artist):
             song_id = song.get("id")
