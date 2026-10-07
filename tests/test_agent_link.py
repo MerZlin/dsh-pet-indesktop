@@ -1538,6 +1538,412 @@ class TestAgentLinkBubbles:
         assert bubbles == ["普通消息"]
 
 
+class TestDshTurnEndDoneNotify:
+    """#234：DSH 回合成功结束（``turn/end`` → ``success``）必须触发完成提醒。
+
+    回归背景：``pet/dsh_state.py`` 把 ``turn/end`` 收敛成 ``success`` 这个一等
+    状态，但 ``AgentLinkManager._on_agent_state`` 的完成确认此前只有两个边沿
+    ——``busy→attention/error`` 与 ``busy→idle``。DSH 的收尾路径是
+    ``working → success``，两条都不经过，于是 ``_fire_done`` 几乎永不被调用：
+    完成气泡与 ``done`` 音效只在 DSH 偶发补发 ``AgentStatus idle`` 时才响一次，
+    用户侧表现为"概率触发"。本类把「``success`` 与 ``idle`` 同级视为完成边沿」
+    这条契约钉死，并守住不重复提醒的边界。
+    """
+
+    def _make_mgr(self, tmp_path, monkeypatch):
+        app = QApplication.instance() or QApplication([])  # noqa: F841
+
+        bubbles = []
+        switched = []
+        requested = []
+
+        class DummyWin:
+            cats = {"acts": ["写代码", "吃Token", "轻快记录", "漂浮踏步"]}
+            idles = ["待机呼吸"]
+            _bubble_busy_until = 0.0
+
+            def isVisible(self):
+                return True
+
+            def _switch(self, name):
+                switched.append(name)
+
+            def request_link_idle(self):
+                # 与真实 window 行为对齐：清待播并回待机
+                if self.idles:
+                    switched.append(self.idles[0])
+
+            def show_bubble(self, text, duration_ms=3000):
+                bubbles.append(text)
+
+            def _pick(self, lst):
+                return lst[0]
+
+        cfg = Config(base=tmp_path)
+        cfg.data["agent_link"].update({
+            "sound_enabled": True,
+            "sound_cooldown_seconds": 0.0,
+        })
+        cfg.save()
+
+        # 音效边界：只记录被请求的内置音，不真播（其余全程走真实入口）
+        sound = tmp_path / "sound.wav"
+        sound.write_bytes(b"RIFF")
+
+        def _fake_resolve(value):
+            requested.append(str(value))
+            return sound
+
+        monkeypatch.setattr(agent_link, "resolve_builtin_sound", _fake_resolve)
+        monkeypatch.setattr(
+            agent_link, "play_sound",
+            lambda path, volume=1.0: requested.append(f"played:{Path(path).name}") or True,
+        )
+
+        clock = [1000.0]
+        mgr = AgentLinkManager(DummyWin(), cfg, min_interval=2.0, clock=lambda: clock[0])
+        return mgr, bubbles, requested, clock
+
+    def test_working_to_success_fires_done_bubble_and_sound(self, tmp_path, monkeypatch):
+        """1. ``working → success`` 进入完成确认窗口；确认到期后弹完成气泡并播
+        ``builtin:agent-done``（与 ``working → idle`` 同级）。"""
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+
+        mgr._on_agent_state("dsh", "working")
+        assert "dsh" not in mgr._done_pending
+
+        clock[0] += 3.0
+        mgr._on_agent_state("dsh", "success")
+        assert "dsh" in mgr._done_pending, (
+            "DSH turn/end → success 必须进入完成确认窗口，否则完成提醒永不触发"
+        )
+
+        # 走真实定时器信号（等价 800ms 到期），而不是直接调 _fire_done
+        mgr._done_pending["dsh"].timeout.emit()
+
+        assert any("已完成本轮任务" in b for b in bubbles), f"未弹完成气泡：{bubbles}"
+        assert "builtin:agent-done" in requested, f"未请求 done 音效：{requested}"
+
+    def test_success_then_busy_within_confirm_window_cancels(self, tmp_path, monkeypatch):
+        """2. ``working → success → working``（确认窗口内回忙）必须取消完成提醒，
+        不弹完成气泡——沿用既有 800ms 稳定确认的抖动过滤语义。"""
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+
+        mgr._on_agent_state("dsh", "working")
+        clock[0] += 3.0
+        mgr._on_agent_state("dsh", "success")
+        assert "dsh" in mgr._done_pending
+
+        clock[0] += 0.3  # < 800ms 确认窗口
+        mgr._on_agent_state("dsh", "working")
+        assert "dsh" not in mgr._done_pending, "确认窗口内回忙必须停掉完成确认定时器"
+
+        count = len(bubbles)
+        mgr._fire_done("dsh")
+        assert len(bubbles) == count, "busy 中 _fire_done 不得追加完成气泡"
+        assert "builtin:agent-done" not in requested
+
+    def test_success_then_idle_does_not_double_notify(self, tmp_path, monkeypatch):
+        """3. DSH 偶发补发的 ``success → idle`` 不得再排一次完成确认
+        （``idle`` 边沿要求 prev_raw 是忙碌态），否则同一回合会收到两条完成提醒。"""
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+
+        mgr._on_agent_state("dsh", "working")
+        clock[0] += 3.0
+        mgr._on_agent_state("dsh", "success")
+        assert "dsh" in mgr._done_pending
+
+        clock[0] += 0.3
+        mgr._on_agent_state("dsh", "idle")
+        assert "dsh" in mgr._done_pending, "success 后的 idle 不该取消已排的完成确认"
+
+        mgr._done_pending["dsh"].timeout.emit()
+        clock[0] += 3.0
+        # 再补一条 idle：不得再排一次（去抖 + prev_raw 非忙碌态双保险）
+        mgr._on_agent_state("dsh", "idle")
+        assert "dsh" not in mgr._done_pending
+        assert sum(1 for b in bubbles if "已完成本轮任务" in b) == 1, (
+            f"同一回合不得重复完成提醒：{bubbles}"
+        )
+
+    def test_converged_error_reaches_pipeline_and_no_false_success(self, tmp_path, monkeypatch):
+        """4. ``error`` 必须与 ``success`` 一样经收敛器出口进管线——它同样不在
+        legacy 词汇表里。缺这一程时 DSH 的出错回合在呈现管线里**完全不可见**：
+        ``error`` 音效不播、``_saw_error`` 永不置位（done 音效的「本轮出过错就
+        不播」闸门失效），而且紧跟的 ``turn/end → success`` 会被误报成「成功完成」。
+
+        本用例走**真实链路**（真实 ``DshStateConverger`` 产出 ``working → error``
+        再经真实出口喂进管线），而不是直接调 ``_on_agent_state("dsh","error")``
+        ——后者守的是一条生产不可达的路径（第二轮自检发现的断言无效问题）。
+        """
+        from pet.dsh_state import DshStateConverger
+
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True
+        conv = DshStateConverger()
+        try:
+            # 前提：这两个事件在 legacy 分派里都不可识别（桥也不写 state:"error"
+            # 的 AgentStatus——聚合基线只写 working/idle），所以收敛器出口是
+            # DSH 的 error 进入呈现管线的唯一通路
+            assert agent_link.normalize_event_state("llm/retry", "") == ""
+            assert agent_link.normalize_event_state("llm_error", "") == ""
+
+            for record in (
+                {"event": "turn/start", "step": "turn:1"},
+                {"event": "tool/call", "step": "turn:1"},
+                {"event": "llm/retry", "errorCode": "bad_response_status_code", "step": "turn:1"},
+            ):
+                for item in conv.handle_record(record):
+                    if item[0] == "state":
+                        mgr._on_dsh_converged_state(item[1], item[2], item[3])
+
+            assert mgr._last_raw.get("dsh") == "error", (
+                f"收敛器的 error 必须到达呈现管线（legacy 词汇表不认它）：{mgr._last_raw}"
+            )
+            assert "dsh" in mgr._saw_error, "error 周期必须记入 _saw_error（done 音效闸门）"
+            assert "builtin:agent-error" in requested, f"error 周期应播 error 音效：{requested}"
+
+            # 同一回合的收尾：error → success 不得被当成干净完成
+            clock[0] += 3.0
+            mgr._on_dsh_converged_state("error", "success", "turn/end")
+            mgr._fire_done("dsh")
+        finally:
+            mgr.shutdown()
+
+        assert "builtin:agent-done" not in requested, "error 周期不得播 done 音效"
+        assert not any("已完成本轮任务" in b for b in bubbles), (
+            f"error 周期不得报「已完成」：{bubbles}"
+        )
+        assert any("确认" in b or "看一眼" in b for b in bubbles), (
+            f"error 周期应给出「自行确认」提示：{bubbles}"
+        )
+
+    def test_converged_success_reaches_the_pipeline(self, tmp_path, monkeypatch):
+        """5. 收敛器出口必须把 ``success`` 送进呈现管线——只在 ``_on_agent_state``
+        里加 success 边沿**不够**：``success`` 不在 legacy 词汇表 ``VALID_STATES``
+        里，legacy 分派对 ``turn/end`` / ``AgentStatus{state:"success"}`` 一律返回
+        空串直接丢弃，``_on_dsh_converged_state`` 是它唯一的通路。缺这一环时
+        下游那条边沿永远不会被走到（完成提醒仍然静默）。"""
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True  # white-box：等效 agent_link.dsh 已启用
+        try:
+            mgr.notify_dsh_state("working")
+            assert "dsh" not in mgr._done_pending
+
+            # 收敛器真实出口：dsh_state.py 把 turn/end 收敛为 success 后 emit
+            mgr._on_dsh_converged_state("working", "success", "turn/end")
+
+            assert mgr._last_raw.get("dsh") == "success", (
+                "success 必须经收敛器出口进入呈现管线（legacy 词汇表不认它）"
+            )
+            assert "dsh" in mgr._done_pending, (
+                "收敛器的 success 必须进入完成确认窗口，否则完成提醒永不触发"
+            )
+            mgr._done_pending["dsh"].timeout.emit()
+        finally:
+            mgr.shutdown()
+
+        assert any("已完成本轮任务" in b for b in bubbles), f"未弹完成气泡：{bubbles}"
+        assert "builtin:agent-done" in requested, f"未请求 done 音效：{requested}"
+
+    def test_real_bridge_record_sequence_ends_with_done(self, tmp_path, monkeypatch):
+        """6. 端到端：issue #234 的真实记录形状 → 真实 ``DshStateConverger``
+        → 真实收敛器出口 → 完成提醒。
+
+        前提（桥接侧的设计事实，``integrations/dsh-pet-bridge/index.js``
+        432-437：「Records carry only an event field and no state field, so the
+        legacy AgentStatus working/idle baseline is untouched」）：``turn/start`` /
+        ``turn/end`` 这类简单事件**不带 state 字段**，legacy 分派一律丢空串——
+        所以完成提醒只能、也只应该从收敛器出口进来。
+
+        忙碌前置由 ``turn/start`` → thinking 提供（该状态本来就走收敛器出口），
+        因此 ``turn/end`` 到达时 ``prev_raw`` 必为忙碌态。
+        """
+        from pet.dsh_state import DshStateConverger
+
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True  # white-box：等效 agent_link.dsh 已启用
+
+        # 前提：这些简单事件在 legacy 词汇表里全部不可识别
+        assert "success" not in agent_link.VALID_STATES
+        assert agent_link.normalize_event_state("turn/start", "") == ""
+        assert agent_link.normalize_event_state("turn/end", "") == ""
+
+        conv = DshStateConverger()
+        try:
+            for record in (
+                {"ts": 1.0, "agent": "dsh", "event": "turn/start", "step": "turn:1"},
+                {"ts": 2.0, "agent": "dsh", "event": "tool/call", "step": "turn:1"},
+                {"ts": 3.0, "agent": "dsh", "event": "turn/end", "step": "turn:1",
+                 "sessionId": "session-bd73", "agentName": "DSH"},
+            ):
+                for item in conv.handle_record(record):
+                    if item[0] == "state":
+                        mgr._on_dsh_converged_state(item[1], item[2], item[3])
+
+            assert mgr._last_raw.get("dsh") == "success", (
+                f"桥接记录序列未推进到 success：{mgr._last_raw}"
+            )
+            assert "dsh" in mgr._done_pending, "真实记录序列必须触发完成确认"
+            mgr._done_pending["dsh"].timeout.emit()
+        finally:
+            mgr.shutdown()
+
+        assert any("已完成本轮任务" in b for b in bubbles), f"未弹完成气泡：{bubbles}"
+        assert "builtin:agent-done" in requested, f"未请求 done 音效：{requested}"
+
+    def test_hard_failure_does_not_report_success(self, tmp_path, monkeypatch):
+        """7. 硬失败（``execution/failed``：tool_failed / 模型重试耗尽）不得被当成
+        「成功完成」——不播 done 音效，也不弹「已完成」。
+
+        回归背景：``execution/failed`` 既不是收敛器状态、也不在 legacy 词表里，
+        而桥对 ``turn/end{kind:"error"}`` 会先写它、再写 ``turn/end``（同一个
+        handler，``index.js`` 1008-1025），``turn/end`` 记录又不带 ``reason``
+        （同文件 477-483），收敛器只能一律收敛成 ``success``。
+        修法：``_on_execution_failed`` 在**所有早退之前**把本轮记入既有
+        ``_saw_alert`` / ``_saw_error``——完成边沿照常走 800ms 确认，但落在
+        「本轮出过错」的既有语义上：不播成功音效、文案换成「自己看一眼」。
+        """
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True  # white-box：等效 agent_link.dsh 已启用
+        try:
+            mgr._on_agent_state("dsh", "working")
+            mgr._on_execution_failed("dsh", {"failureType": "tool_failed", "sessionId": "s1"})
+            assert any("失败" in b for b in bubbles), f"硬失败应先给失败提醒：{bubbles}"
+            assert "dsh" in mgr._saw_error and "dsh" in mgr._saw_alert, (
+                "硬失败必须记入既有告警簿记，否则完成边沿会报成功"
+            )
+
+            mgr._on_dsh_converged_state("working", "success", "turn/end")
+            mgr._fire_done("dsh")
+        finally:
+            mgr.shutdown()
+
+        assert "builtin:agent-done" not in requested, "硬失败后不得播 done 音效"
+        assert not any("已完成本轮任务" in b for b in bubbles), (
+            f"硬失败后不得报「已完成」：{bubbles}"
+        )
+
+    def test_late_failure_does_not_cancel_another_sessions_completion(self, tmp_path, monkeypatch):
+        """8. 迟到的 ``execution/failed`` **不得**取消已排的完成确认。
+
+        ``_done_pending`` 是按 agent 键的（整条完成链路都是），而 DSH 支持多会话
+        并发（``index.js`` 30-33 明确「按 agent 分别跟踪再聚合」）。若在失败处理里
+        调 ``_cancel_done_check(agent_key)``，会话 A 的失败会连会话 B 已排的合法
+        完成一起掐掉（气泡 / 音效 / 消费结算三样全丢）。所以失败只用既有
+        ``_saw_*`` 簿记改变**文案与音效**，不撤别人的确认；同一回合内的先后由桥
+        保证：它在同一个 handler 内先写 ``execution/failed``、再写 ``turn/end``。
+        """
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True
+        try:
+            # 会话 B 正常收尾：完成确认已排上
+            mgr._on_agent_state("dsh", "working")
+            mgr._on_dsh_converged_state("working", "success", "turn/end")
+            assert "dsh" in mgr._done_pending
+
+            # 会话 A 报硬失败：不得掐掉 B 的在飞确认
+            mgr._on_execution_failed("dsh", {"failureType": "tool_failed", "sessionId": "A"})
+            assert "dsh" in mgr._done_pending, (
+                "别的会话的失败不得掐掉本会话已排的完成确认"
+            )
+            mgr._done_pending["dsh"].timeout.emit()
+        finally:
+            mgr.shutdown()
+
+        # 确认仍须送达，只是按「本轮出过错」的既有语义收口：不播成功音效
+        assert "builtin:agent-done" not in requested
+        assert any("确认" in b or "看一眼" in b for b in bubbles), (
+            f"完成确认仍须送达（文案换成自行确认）：{bubbles}"
+        )
+
+    def test_failure_bookkeeping_clears_on_next_busy_cycle(self, tmp_path, monkeypatch):
+        """9. 失败簿记只约束「本轮」：失败之后重新开始干活，下一轮正常收尾必须
+        恢复成功文案与 done 音效（不能一次失败就把该 Agent 永久降级）。"""
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True
+        try:
+            # 第一轮：硬失败 → 完成按「自行确认」收口
+            mgr._on_agent_state("dsh", "working")
+            mgr._on_execution_failed("dsh", {"failureType": "tool_failed", "sessionId": "s1"})
+            mgr._on_dsh_converged_state("working", "success", "turn/end")
+            assert "dsh" in mgr._done_pending
+            mgr._done_pending["dsh"].timeout.emit()
+            assert not any("已完成本轮任务" in b for b in bubbles), bubbles
+
+            # 第二轮：重新开始干活 → 簿记清空 → 恢复成功文案 + done 音效
+            clock[0] += 10.0
+            mgr._on_agent_state("dsh", "working")
+            clock[0] += 3.0
+            mgr._on_dsh_converged_state("working", "success", "turn/end")
+            assert "dsh" in mgr._done_pending
+            mgr._done_pending["dsh"].timeout.emit()
+        finally:
+            mgr.shutdown()
+
+        assert any("已完成本轮任务" in b for b in bubbles), f"下一轮未恢复完成提醒：{bubbles}"
+        assert "builtin:agent-done" in requested
+
+    def test_failure_bookkeeping_lands_even_when_reminder_is_suppressed(self, tmp_path, monkeypatch):
+        """10. 失败簿记必须落在**所有早退之前**：失败提醒本身被吞时（窗口隐藏、
+        或被模型访问失败提醒抑制），本轮**仍然**不得被当成成功完成。
+
+        这两条早退都在 ``_on_execution_failed`` 的可见性/抑制判断之后，所以簿记
+        必须写在它们之前——否则「提醒没发出」会被误读成「没失败」。
+        """
+        # 情况 A：窗口隐藏 → _on_execution_failed 直接 return（既有语义：不提醒）
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True
+        mgr.win.isVisible = lambda: False
+        try:
+            mgr._on_agent_state("dsh", "working")
+            mgr._on_execution_failed("dsh", {"failureType": "tool_failed", "sessionId": "s1"})
+            assert not any("失败" in b for b in bubbles), f"隐藏中不应弹失败提醒：{bubbles}"
+            assert "dsh" in mgr._saw_error and "dsh" in mgr._saw_alert, (
+                "隐藏期的硬失败同样必须记账"
+            )
+        finally:
+            mgr.shutdown()
+
+        # 情况 B：限流失败被「模型访问失败」提醒抑制 → 提醒被吞，簿记仍须落下
+        mgr2, bubbles2, requested2, clock2 = self._make_mgr(tmp_path / "b", monkeypatch)
+        mgr2.monitors["dsh"]._running = True
+        mgr2._model_access_cache["s1"] = {"_dismissed": False}
+        try:
+            mgr2._on_agent_state("dsh", "working")
+            mgr2._on_execution_failed("dsh", {"failureType": "model_retry_exhausted",
+                                              "errorCode": "429", "sessionId": "s1"})
+            assert not any("失败" in b for b in bubbles2), (
+                f"限流失败应被模型访问提醒抑制（既有语义）：{bubbles2}"
+            )
+            assert "dsh" in mgr2._saw_error and "dsh" in mgr2._saw_alert, (
+                "被抑制的失败同样必须记账"
+            )
+        finally:
+            mgr2.shutdown()
+
+    def test_mid_attach_success_still_notifies(self, tmp_path, monkeypatch):
+        """11. 中途挂载的 success 不得成为死路。
+
+        场景：桌宠 / 联动在回合进行中才启动，或新的 ``dsh-{pid}.jsonl`` 首次被发现
+        （回填防护会跳过 ``turn/start``）——此时该 Agent 从未有过任何状态，
+        ``prev_raw`` 为 ``None``。只认忙碌态会让这一回合的 ``turn/end`` 完全静默，
+        所以前置放宽为「忙碌态 **或** 从未见过状态」。
+        """
+        mgr, bubbles, requested, clock = self._make_mgr(tmp_path, monkeypatch)
+        mgr.monitors["dsh"]._running = True
+        try:
+            assert mgr._last_raw.get("dsh") is None
+            mgr._on_dsh_converged_state("", "success", "turn/end")
+            assert "dsh" in mgr._done_pending, "中途挂载的 success 必须触发完成确认"
+            mgr._done_pending["dsh"].timeout.emit()
+        finally:
+            mgr.shutdown()
+
+        assert any("已完成本轮任务" in b for b in bubbles), f"未弹完成气泡：{bubbles}"
+        assert "builtin:agent-done" in requested
+
+
 class TestAgentLinkSounds:
     def _make(self, tmp_path, monkeypatch, **sound_cfg):
         class Win:
