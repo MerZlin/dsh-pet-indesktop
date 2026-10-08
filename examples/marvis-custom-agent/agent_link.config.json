@@ -1,0 +1,12 @@
+{
+  "agent_link": {
+    "marvis": true,
+    "custom_agents": [
+      {
+        "key": "marvis",
+        "name": "Marvis",
+        "path": "%APPDATA%\\dsh-pet-standalone-webm-chat\\agent-events\\marvis.jsonl"
+      }
+    ]
+  }
+}
