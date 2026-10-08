@@ -303,6 +303,9 @@ def build_pet_controls(host) -> None:
     host.self_talk_voice_precache_check.setChecked(
         bool(host.config.get("self_talk_voice_precache_enabled", False))
     )
+    # 双击对话：双击桌宠打开快速对话气泡（事件过滤器，见 pet/double_click_chat.py）
+    host.double_click_chat_check = ToggleSwitch(host)
+    host.double_click_chat_check.setChecked(bool(host.config.get("double_click_chat", True)))
     host.music_sing_check = ToggleSwitch(host)
     host.music_sing_check.setChecked(bool(host.config.get("music_sing_enabled", False)))
     host.music_lyric_check = ToggleSwitch(host)

@@ -63,7 +63,8 @@ D:\dsh-pet\
 ├── CONTEXT.md                    # 领域术语表（Shared UX Contract / Settings System / Menu Action Model）
 ├── README.md                     # 用户向说明 + 开发结构 + 测试与验证 + 打包发布
 ├── requirements.txt / pyproject.toml / pytest.ini
-├── run.bat                       # 本地源码启动脚本
+├── run.bat                       # 本地源码启动脚本（自动选/建 .venv、补依赖、pythonw 启动）
+├── stop.bat                      # 本地源码停止脚本（taskkill /T 收口，见 scripts\stop_pet.ps1）
 ├── dsh-pet-standalone-webm-chat.spec   # PyInstaller 规格（onedir）
 ├── pet\                          # 应用源码（112 个 .py，含子包）
 │   ├── __main__.py               # 入口：python -m pet

@@ -768,6 +768,7 @@ class Config:
             "click_show_self_talk": False,  # 点击随机显示自定义自言自语
             "self_talk_speak_enabled": False,  # 点击自言自语同句朗读（复用语音报时音频通道，默认关）
             "self_talk_voice_precache_enabled": False,  # 台词/点击绑定本地语音预缓存（需本机 TTS 服务，默认关）
+            "double_click_chat": True,  # 双击桌宠打开快速对话气泡（轻度对话栏）
             "balance_refresh_minutes": 0,  # DeepSeek 余额自动刷新间隔（分钟，0=关闭）
             "balance_tier_labels_mode": "default",  # 峰谷提示文案：default / liangwen / custom
             "balance_tier_label_peak": "",  # 自定义“高峰”文本（custom 模式）
@@ -1036,6 +1037,7 @@ class Config:
             "click_show_self_talk",
             "self_talk_speak_enabled",
             "self_talk_voice_precache_enabled",
+            "double_click_chat",
             "balance_refresh_minutes",
             "autostart_wanted",
             "harness_autostart",
@@ -1375,6 +1377,8 @@ class Config:
         self.data["golden_spin_on_click"] = _bool_or_default(self.data.get("golden_spin_on_click"), False)
         self.data["golden_spin_direct"] = _bool_or_default(self.data.get("golden_spin_direct"), False)
         self.data["edge_probe_enabled"] = _bool_or_default(self.data.get("edge_probe_enabled"), False)
+        # 双击开栏（本 fork 新增）：与其它布尔键同规，防手改字符串布尔被 bool() 误开。
+        self.data["double_click_chat"] = _bool_or_default(self.data.get("double_click_chat"), True)
         self.data["agent_link"] = _clean_agent_link_data(self.data.get("agent_link"))
         # 音乐关联 / 消费统计（#129 新增的 5 键）：此前只在默认值与 reload 白名单
         # 里登记、没进归一化——手改成脏值后数值键会让设置页构造直接抛

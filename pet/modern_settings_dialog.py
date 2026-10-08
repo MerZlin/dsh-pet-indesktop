@@ -2168,6 +2168,7 @@ class ModernSettingsDialog(QDialog):
         self.config.set("self_talk_speak_enabled", self.click_self_talk_speak_check.isChecked())
         self.config.set("self_talk_voice_precache_enabled",
                         self.self_talk_voice_precache_check.isChecked())
+        self.config.set("double_click_chat", self.double_click_chat_check.isChecked())
         self.config.set("music_sing_enabled", self.music_sing_check.isChecked())
         if getattr(self, "music_lyric_check", None) is not None:
             self.config.set("music_lyric_enabled", self.music_lyric_check.isChecked())

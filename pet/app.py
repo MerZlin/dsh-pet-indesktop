@@ -56,6 +56,7 @@ from .session_watcher import install_session_watcher
 from .decode_fanout import DecodeFanoutHub
 from .todo_reminder import TodoReminderService
 from .voice_chime_service import VoiceChimeService
+from .double_click_chat import install_double_click_chat
 from .persona_phrases import PhrasePicker
 
 
@@ -526,6 +527,10 @@ class PetInstance:
         win.hidden_bubble_redirect = self.shell._island_feedback_bubble
         # 反馈面可用性探针：隐藏期联动监视器是否跳过低功耗暂停（mixin 消费）。
         win.island_feedback_available = self.shell._island_feedback_available
+        # 双击桌宠 → 快速对话气泡（事件过滤器，见 pet/double_click_chat.py）。
+        # 必须排在 on_open_quick_chat 注入之后；no-chat 变体下该回调为 None，
+        # 过滤器自身会完整回落到原有双击行为。
+        install_double_click_chat(win)
         win.on_spawn_pet = self._slot_wrap(self.shell.spawn_pet)
         # 「退出子肥鱼」只挂给主肥鱼（instance_id 为空）：子肥鱼进程里该入口的
         # pid==os.getpid() 自我保护会跳过子鱼自己、把主鱼当子鱼 taskkill 掉
@@ -745,7 +750,12 @@ class PetInstance:
         from .quick_chat import QuickChatBubble
 
         if self.quick_chat is None:
-            self.quick_chat = QuickChatBubble(self.config, pet_window=self.win)
+            self.quick_chat = QuickChatBubble(
+                self.config, pet_window=self.win,
+                # 双击/快速对话气泡接 DSH 后端；无 AppShell 的测试替身与
+                # no-chat 场景都取不到 tracker，此时气泡完整回落本地 LLM。
+                dsh_tracker=getattr(getattr(self, "shell", None), "_dsh_state_tracker", None),
+            )
             self.quick_chat.open_chat_callback = self.open_chat
         else:
             self.quick_chat.pet_window = self.win

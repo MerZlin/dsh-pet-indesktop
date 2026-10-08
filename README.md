@@ -462,11 +462,30 @@ python -m pip install -r requirements.txt
 python -m pet
 ```
 
-Windows 也可以直接双击 `run.bat`。它实际执行的是：
+Windows 也可以直接双击 `run.bat`（一键启动脚本），它会自动完成下列事情，**不需要**上面的手工步骤：
+
+1. **找解释器**：优先用仓库内 `.venv\Scripts\pythonw.exe`；`.venv` 不存在时，按「官方安装目录 → PATH」的顺序找一个 Python 3.10+ 并自动 `python -m venv .venv`（跳过 msys/mingw/cygwin 解释器优先权——它们通常没有 PySide6 预编译包；扫描失败时提示安装官方 CPython）。
+2. **补依赖**：`.venv` 里导入不了 `PySide6` 就自动跑一次 `pip install -r requirements.txt`，失败时打印可手工执行的完整命令。
+3. **无窗口启动**：用 `pythonw -m pet` 拉起桌宠，不残留控制台窗口；启动后轮询确认进程真的起来了（冷启动要加载素材库/ffmpeg，判据是本仓库路径 + `-m pet`），没起来就提示改用 `--console` 排查。
 
 ```text
-pythonw -m pet
+run.bat              双击启动（一键）
+run.bat --console    前台控制台模式，直接看到启动报错/退出码
+run.bat --check      只检查环境并打印将要执行的启动命令，不启动
 ```
+
+Windows 上停止桌宠：双击 `stop.bat`（想先确认会停哪些就加 `--list`）。它按「本仓库路径 + `-m pet`」识别进程——包括 `.venv` 重定向器和它拉起的基础解释器子进程、设置页进程；收口用 `taskkill /PID x /T /F`，`/T` 会连 ffmpeg 解码子进程一起带走。杀之前逐个复核 PID 未被复用、命令行未变化，避免误杀。**只停进程，不动配置/会话/待办数据。**
+
+```text
+stop.bat              双击停止本仓库启动的桌宠
+stop.bat --list       只列出将要停止的进程（不做停止）
+stop.bat --all        停止全机器所有桌宠（含其它 checkout 与打包版 exe）
+stop.bat --timeout 20 等待进程退出秒数（默认 10，超时则强制收口）
+```
+
+> 需要指定基础解释器时（例如 PATH 上的 python 版本不对），设置环境变量 `PET_PYTHON` 指向某个 `python.exe` 再运行即可。
+>
+> 注意：脚本用的是**仓库内 `.venv`**，不是 PATH 上的 `python`——PATH 上若是 msys64/系统精简版 Python（缺 PySide6）会启动失败。
 
 源码入口默认包含 Chat 能力；如果只想验证桌宠核心功能，可使用无 Chat 的打包入口或在本地配置中关闭聊天。
 

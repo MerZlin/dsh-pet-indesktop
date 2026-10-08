@@ -68,6 +68,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "dialogue_last_scope",
         "dialogue_mode",
         "dialogue_phrases",
+        "double_click_chat",
         "drag_physics",
         "dynamic_island",
         "edge_probe_enabled",

@@ -522,6 +522,7 @@ class ResourcePathPicker(QWidget):
     ):
         super().__init__(parent)
         self.directory = bool(directory)
+        self.dialog_title = str(dialog_title or "")
         self.name_filter = name_filter
         # 选择对话框标题：默认沿用图片语义（既有调用方不变），非图片用途可覆盖
         # （例如「音乐播放器程序」选 .exe 时不该写「选择图片」）。

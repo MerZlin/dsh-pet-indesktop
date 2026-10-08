@@ -29,8 +29,8 @@ ROWS_BY_TAB = {
     "click": (
         "mouse_through", "click_sound", "click_sound_pack", "click_sound_volume",
         "click_sound_preview", "click_balance", "click_self_talk", "click_self_talk_speak",
-        "click_self_talk_precache", "click_talk_bindings", "golden_spin_click",
-        "golden_spin_direct",
+        "click_self_talk_precache", "click_talk_bindings", "double_click_chat",
+        "golden_spin_click", "golden_spin_direct",
     ),
     "self_talk": (
         "self_talk_bubble_style", "self_talk", "self_talk_duration", "self_talk_min",

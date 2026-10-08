@@ -208,6 +208,16 @@ class DshStateConverger:
         """
         out: list[tuple] = []
         event = str(record.get("event") or "")
+        # 助手回复回流（双击对话栏的 DSH 后端消费）：必须在 map_event_to_state 的
+        # None 早退之前处理，避免将来事件表调整导致回复被静默丢掉。
+        if event == "assistant/message":
+            text = str(record.get("text") or "")
+            if text:
+                self.assistant_message.emit(
+                    str(record.get("sessionId") or record.get("session_id") or ""), text)
+        elif event == "turn/end":
+            self.turn_finished.emit(
+                str(record.get("sessionId") or record.get("session_id") or ""))
         state = map_event_to_state(record)
         if state is None:
             return out

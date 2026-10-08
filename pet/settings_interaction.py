@@ -80,6 +80,12 @@ def build_click_rows(dialog) -> list[SettingRow]:
             ),
             SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", dialog.click_talk_bindings_btn),
             SettingRow(
+                "double_click_chat",
+                "双击打开对话栏",
+                "双击桌宠弹出头顶小对话气泡，回车即可与模型对话；开启 DSH 联动时优先接入 DSH 会话。",
+                dialog.double_click_chat_check,
+            ),
+            SettingRow(
                 "golden_spin_click",
                 "点击触发黄金回旋",
                 "开启后点击桌宠触发原地逆时针 360° 旋转；下方子开关可选择跳过点击动画直接回旋。",

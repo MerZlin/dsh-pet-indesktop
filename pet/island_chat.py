@@ -78,6 +78,19 @@ class IslandChatBubble(QuickChatBubble):
         self._set_reply_text(str(text or ""))
         self._render_reply()
 
+    def present_reply(self) -> None:  # noqa: D102
+        """回复在气泡收起期间完成 → 预览式弹回岛上（不抢焦点，超时自动收回）。
+
+        桌宠隐藏时「贴在桌宠头顶」没有意义，必须改用岛作锚点；预览式弹出
+        也不该抢走用户正在别处的焦点。
+        """
+        if self.isVisible():
+            self.position_near_pet()
+            return
+        if self._anchor is None:
+            return
+        self.show_for_island(self._anchor, activate=False)
+
     def show_feedback(self, island: QWidget, text: str, *, subtitle: str = "",
                       duration_ms: int | None = None) -> None:
         """联动/系统反馈气泡：预览式弹出（不抢焦点），超时自动收回。
