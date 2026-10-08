@@ -2964,6 +2964,14 @@ class AgentLinkManager(QObject):
         - thinking：legacy AgentStatus 基线只有 working/idle，thinking 由收敛器
           补进联动管线（思考气泡/动画——对话开始的稳定触发点之一，与真人消息
           双保险，呈现管线自带同态去重）；
+        - success / error：收敛器**独占**的终态，两者**必须同时**补进联动管线。
+          ``success`` 来自 ``turn/end``、``error`` 来自 ``llm/retry`` / ``llm_error``；
+          它们都不在 legacy 词汇表 ``VALID_STATES`` 里，legacy 分派一律返回空串
+          直接丢弃，收敛器出口是唯一通路。
+          - 漏掉 ``success`` → 完成气泡与 done 音效几乎永不触发（#234 主诉）；
+          - 漏掉 ``error`` → DSH 的出错回合在呈现管线里完全不可见（``_saw_error``
+            / ``_saw_alert`` 永不置位，done 音效的「本轮出过错就不播」闸门失效），
+            并被 ``busy→success`` 边沿误报成「成功完成」（第二轮自检发现的误报）；
         - waiting_approval：审批把 Agent 卡在等用户输入——计入「需要看一眼」
           （完成后不误报成功），并弹通用 attention 纯提示气泡（busy 中也必须
           提示，不走 ``_on_agent_state`` 的「busy 后不弹 attention」分支）。
@@ -2979,6 +2987,19 @@ class AgentLinkManager(QObject):
             return
         if to_state == "thinking":
             self.notify_dsh_state("thinking")
+            return
+        if to_state in ("success", "error"):
+            # 收敛器**独占**的终态：success 与 error 都不在 legacy 词汇表
+            # VALID_STATES 里，legacy 分派对 turn/end、llm/retry、llm_error、
+            # AgentStatus{state:"success"/"error"} 一律返回空串直接丢弃，
+            # 收敛器出口是它们唯一的通路。
+            #
+            # 两者必须同时补：只补 success 会漏掉 error——DSH 的出错回合在呈现
+            # 管线里将完全不可见（_saw_error/_saw_alert 永不置位 → done 音效的
+            # 「本轮出过错就不播」闸门失效），而且会被下游 busy→success 边沿
+            # 误报成「成功完成」。这是第二轮自检发现的真实误报（详见
+            # docs/PR-REPORT-DSH-SUCCESS-DONE-NOTIFY-2026-10-07.md §十）。
+            self.notify_dsh_state(to_state)
             return
         if to_state == "waiting_approval":
             self._saw_alert.add("dsh")
@@ -3052,6 +3073,21 @@ class AgentLinkManager(QObject):
             # Claude 的回合结束信号是 Stop→attention 而非 idle：busy 后的
             # attention/error 同样进入完成确认（800ms 内回忙则取消——例如
             # SubagentStop 后主 Agent 继续干活、工具报错后重试）。
+            self._schedule_done_check(agent_key)
+        elif state == "success" and (prev_raw in self._BUSY_STATES or prev_raw is None):
+            # DSH 回合成功结束（turn/end → success）：与 busy→idle 同级视为完成。
+            # DSH 收尾后正常**不会**再到 idle（桥只在极少数情况补发
+            # AgentStatus{state:"idle"}），缺这条边沿时完成提醒表现为「概率触发」：
+            # 只有恰好撞上那次补发才响（#234）。复用既有 800ms 稳定确认与
+            # _DONE_COOLDOWN_S，不引入新的抖动面。
+            #
+            # 前置放宽到「忙碌态 **或 从未见过任何状态**」：后者是中途挂载
+            # （桌宠/联动在回合进行中才启动、或新的 dsh-{pid}.jsonl 首次被发现，
+            # 回填防护会跳过 turn/start），此时 prev_raw 为 None——只认忙碌态会让
+            # 该回合的 success 成为死路（第二轮自检发现的静默回合）。
+            # 失败/中止的回合不受影响：那些情况下 prev_raw 是 error/attention 等
+            # 已见过的终态，仍然按既有语义不在这里补完成（error 周期由
+            # busy→error 边沿自己排的完成确认负责，文案走「自己看一眼」）。
             self._schedule_done_check(agent_key)
         elif state in ("idle", "sleeping") and prev_raw in self._BUSY_STATES:
             # working/thinking → idle：疑似任务完成，800ms 稳定确认
@@ -4379,6 +4415,17 @@ class AgentLinkManager(QObject):
         模型访问失败抑制只认真正的模型访问失败（errorCode 属限流类码或消息含限流关键字），
         重试耗尽失败不并入模型访问失败抑制——那是另一条语义（failure.retry），不重复提醒。
         """
+        # 本轮已硬失败（execution/failed，如 tool_failed / 模型重试耗尽）：
+        # 复用既有「看过告警/出过错」簿记，让完成边沿不说「成功完成」、也不播
+        # done 音效（_saw_error 抑制音效，_saw_alert 把文案换成「自己看一眼」）。
+        # 放在可见性/抑制判断**之前** —— 无论这次失败提醒本身是否被吞掉
+        # （窗口隐藏、或被模型访问失败提醒抑制），本轮都不是「成功完成」。
+        # **不**调 _cancel_done_check：_done_pending 是按 agent 键的，取消会连
+        # 别的并发会话已排的合法完成一起掐掉；而桥对 kind==="error" 的 turn/end
+        # 是在**同一个 handler 内先写 execution/failed、再写 turn/end**
+        # （index.js:1008-1025），正常情况下本标记一定先于 success 边沿落下。
+        self._saw_alert.add(agent_key)
+        self._saw_error.add(agent_key)
         if not hasattr(self.win, "isVisible") or not self.win.isVisible():
             return
         payload = payload if isinstance(payload, dict) else {}
