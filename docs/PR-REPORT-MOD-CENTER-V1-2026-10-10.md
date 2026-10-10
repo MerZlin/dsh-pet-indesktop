@@ -182,6 +182,23 @@
 
 ## 八、提交、回滚与当前限制
 
-本轮仅创建本地检查点提交，不推送；提交前会显式审核暂存文件、敏感内容和生成物排除。回滚使用该提交的父提交或反向补丁，不使用 `reset --hard` 覆盖工作区。
+检查点先在本地提交，随后按用户当轮授权正常推送到 `origin/codex/phase3-worker`（`0a29961..d48cbd3`，远端 SHA 已独立核对）。提交前显式审核暂存文件、敏感内容与生成物排除。回滚使用提交的父提交或反向补丁，不使用 `reset --hard` 覆盖工作区。
 
 当前可运行效果：用户可在本地列表管理扩展，导入后启用并即时看到功能；作者可按 v1 教程制作 host-only/Worker/角色样例。当前限制：不是联网市场、不是安全沙箱；新候选尚未由用户完成真实 Setup/Provider/卸载验收，满 CPU 压力族留档，Phase5A 不自动关闭。
+
+## 九、补充记录：2026-10-10 后续两轮（纯文档，未推送）
+
+检查点推送后又有两轮改动，都只动文档与持续记录、不改产品行为，且**均未推送**（无当轮授权）。差异相对已推送的 `d48cbd3`：
+
+| 文件 | + | - | 改动目的 |
+|---|---:|---:|---|
+| `docs/modding/AUTHORING-HANDBOOK.md` | 284 | 0 | **新增**独立《MOD 制作手册与注意事项》：四类 MOD（资源包 / 台词模板 / host-only / host-worker）怎么做、包内与安装后位置、接口速查表、12 条注意事项。字段与接口取自 `pet/mod_api/v1.py`、`pet/plugins/feature_host.py::FeatureDefinition`、`examples/mods/*` 源码与打包脚本实际生成的 manifest。 |
+| `README.md` | 18 | 0 | 新增「MOD 制作注意事项」十一条，并指向制作手册与指南。 |
+| `docs/modding/README.md` | 11 | 8 | §四 已知缺陷按实机症状更正；做 MOD 一节与工程入口指向制作手册。 |
+| `docs/modding/USER-GUIDE.md` | 1 | 1 | 常见问题按实机症状更正（ZIP 导入功能包报 `worker_probe_failed`，改用目录导入）。 |
+| `docs/modding/MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md` | 13 | 17 | 「已知未解决缺陷」整段更正：失败在探针阶段、host-only 正常不产生该 reason、探针沙箱只在冻结版创建。 |
+| `docs/PR-REPORT-MOD-CENTER-V1-2026-10-10.md` | 1 | 1 | 未过门第 5 条按实机症状更正，并去掉失效的内部锚点。 |
+| `docs/INDEX.md` | 1 | 0 | 登记制作手册一行（新文档入场规则第 1 条）。 |
+| `.scratch/mod-authoring-v1/{STATUS,HANDOFF,WORKLOG,SUMMARY}.md` | 44 | 14 | 四份持续记录同步本轮停点与未推送状态。 |
+
+缺陷复现探针（`repro_zip_enable.py`、`repro_zip_wrapper.py` 与两个 JSON 结果）留在 `.scratch/mod-authoring-v1/`，按项目规则不随仓库分发。本轮**未跑全量测试**：改动仅文档与记录，按 AGENTS.md 走聚焦门（RUFF、`git diff --check`、`tests/test_pr_report_discipline.py`）。

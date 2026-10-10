@@ -27,6 +27,8 @@
 
 可运行样例源码在 [`examples/mods/`](../../examples/mods/README.md)：`hello-local`（host-only）、`echo-worker`（host-worker）、`persona-phrases.json`（台词模板）。
 
+四类 MOD 的**字段表、放置位置和接口速查**见 [MOD 制作手册与注意事项](AUTHORING-HANDBOOK.md)——本页只做分流，手册才是完整参考。
+
 打包与自检命令（在仓库根目录执行，推荐独立虚拟环境）：
 
 ```bash
@@ -57,7 +59,7 @@ ZIP 导入的功能扩展无法完成（实机报告，**未解决**）：
 
 ## 工程入口
 
-[总索引](../INDEX.md) · [实施计划](MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md) · [交付报告](../PR-REPORT-MOD-CENTER-V1-2026-10-10.md) · [持续状态](../../.scratch/mod-authoring-v1/STATUS.md)。所有命令在仓库根目录执行；推荐独立 Python 虚拟环境，不读取真实用户配置或 Key。
+[总索引](../INDEX.md) · [制作手册](AUTHORING-HANDBOOK.md) · [实施计划](MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md) · [交付报告](../PR-REPORT-MOD-CENTER-V1-2026-10-10.md) · [持续状态](../../.scratch/mod-authoring-v1/STATUS.md)。所有命令在仓库根目录执行；推荐独立 Python 虚拟环境，不读取真实用户配置或 Key。
 
 ## 实际效果与限制
 

@@ -106,3 +106,10 @@ Echo真实Worker返回成功；角色副本启用不自动换装，使用后日�
 - 文档：`docs/modding/README.md` 扩写为使用/制作分流入口；`USER-GUIDE.md` 加 FAQ；实施计划加「已知未解决缺陷」；PR 报告加第 5 条未过门；`docs/INDEX.md` 补登记 modding 教程 5 行。
 - 本轮不改产品代码、不改 `tests/`、不改 `examples/mods/` 源码；探针脚本与 JSON 留在 `.scratch`，不进产品与测试产物。
 - 提交并推送到 `origin/codex/phase3-worker`（用户表述的 phase3A-worker 即该 Phase 3A worker 分支）。
+
+## 2026-10-10 23:30 新增独立《MOD 制作手册与注意事项》
+
+- 按用户要求新增 `docs/modding/AUTHORING-HANDBOOK.md`：把四类 MOD 的做法、包内 / 安装后位置、各形态接口（manifest 字段、v1 门面、设置协议、context 端口、WorkerClient、worker_v1）和 12 条注意事项集中成一份手册。
+- 依据来源：`docs/modding/` 现有五份类型文档、`pet/mod_api/v1.py`、`pet/plugins/feature_host.py` 的 `FeatureDefinition` 字段、`examples/mods/*` 样例源码、`scripts/build_mod_example.py` / `build_character_mod_example.py` 生成的 manifest 结构；未引入未经验证的字段。
+- 登记与互链：`docs/INDEX.md` 新增一行，根 `README.md` 与 `modding/README.md` 均指向手册。
+- 纯文档改动；本轮未推送。

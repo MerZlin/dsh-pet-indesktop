@@ -58,3 +58,9 @@ M00 已提交/正常推送并核对 `0a299612714e5fad55a24a5506dfce938b9eeb1c`�
 - `docs/modding/*` 教程此前未登记 `docs/INDEX.md`，本轮按入场规则补登记；入口扩写为「加 MOD / 做 MOD」分流 + 按类型教程 + v1 接口 + 两个官方 DLC 案例。
 - 纯文档 / 记录改动（无产品行为变化），按 AGENTS.md 走聚焦门；然后按用户当轮授权推送到 `origin/codex/phase3-worker` 并核对远端 SHA。
 - **未解决**：ZIP 根因定位与修复；待用户补充 ZIP 来源与打包工具、包类型、界面报错文案。
+
+## 2026-10-10 23:30 新增独立《MOD 制作手册与注意事项》
+
+- 新增 `docs/modding/AUTHORING-HANDBOOK.md`（作者向完整手册）：四类 MOD（角色资源包 / 台词模板 / host-only / host-worker）怎么做、包内布局与安装后位置、各形态接口速查表、12 条注意事项清单。
+- 已按 `docs/INDEX.md` 入场规则登记，并与 `modding/README.md`、`API-V1.md`、`OFFICIAL-DLC.md` 互链；根 `README.md` 的「MOD 制作注意事项」也指向该手册。
+- 纯文档改动，无产品行为变化；本轮改动**未推送**（无当轮授权）。

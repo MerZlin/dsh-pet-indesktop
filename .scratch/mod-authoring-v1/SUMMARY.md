@@ -51,3 +51,9 @@ M00 已提交/正常推送并核对 `0a299612714e5fad55a24a5506dfce938b9eeb1c`�
 - 缺陷已写进 `docs/modding/USER-GUIDE.md`、`docs/modding/README.md`、实施计划、PR 报告第 5 条未过门；教程文档补登记 `docs/INDEX.md`；根 README 状态块更新为已推送并新增「MOD 制作注意事项」。
 - 未解决项：ZIP 缺陷根因定位与修复（不在本轮授权范围）；建议后续用冻结候选 `_m05b/final4` + `_m05b/runtime3` 复现。
 - 本轮为纯文档 / 记录改动 + 临时探针；上一轮已推送，本轮改动未推送。
+
+## 2026-10-10 23:30 新增独立《MOD 制作手册与注意事项》
+
+- 用户要求另出一份独立的 MOD 制作手册 + 注意事项：新增 `docs/modding/AUTHORING-HANDBOOK.md`，记录四类 MOD 怎么做、放哪里、各类接口与注意事项清单。
+- 已登记 `docs/INDEX.md`，并从根 `README.md`、`docs/modding/README.md` 互链。
+- 纯文档改动；未推送。

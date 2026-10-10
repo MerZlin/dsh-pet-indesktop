@@ -109,7 +109,7 @@ python scripts/verify_phase3a_frozen_worker.py <frozen-worker-or-app-path>
 
 ## MOD 制作注意事项
 
-想加 MOD 或做 MOD 的完整教程、按类型样例和接口契约见 [MOD 使用与制作指南](docs/modding/README.md)（接口细节 [API-V1.md](docs/modding/API-V1.md)，官方案例 [OFFICIAL-DLC.md](docs/modding/OFFICIAL-DLC.md)）。动手前最容易踩的几条：
+想加 MOD 或做 MOD 的完整教程、按类型样例和接口契约见 [MOD 使用与制作指南](docs/modding/README.md)；作者向的完整手册（四类 MOD 怎么做、放哪里、接口速查、注意事项清单）见 [MOD 制作手册与注意事项](docs/modding/AUTHORING-HANDBOOK.md)（接口细节 [API-V1.md](docs/modding/API-V1.md)，官方案例 [OFFICIAL-DLC.md](docs/modding/OFFICIAL-DLC.md)）。动手前最容易踩的几条：
 
 - **包布局**：包根必须有 `manifest.json`；做成压缩包时 `manifest.json` 要在**压缩包根**——多套一层文件夹会被判 `manifest missing`。
 - **factory 必须无副作用**：`create_host()` 只声明元数据，要能在没有 GUI 的环境下导入。模块顶层不要 import Qt / `QWidget`，也不要在这里 import WorkerClient 和业务依赖——生产探针里没有 Qt，顶层 import QWidget 会让包直接校验失败。Qt 相关放到 `create_settings` / Runtime 构造里。

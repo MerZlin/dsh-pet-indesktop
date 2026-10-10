@@ -46,6 +46,7 @@
 | [MOD 管理中心实施计划](modding/MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md) | 经批准的本地列表、v1、教程与验证合同。 | 修改扩展管理、角色启停或公开作者接口前。 |
 | [PLAN](../.scratch/mod-authoring-v1/PLAN.md) · [HANDOFF](../.scratch/mod-authoring-v1/HANDOFF.md) · [STATUS](../.scratch/mod-authoring-v1/STATUS.md) · [WORKLOG](../.scratch/mod-authoring-v1/WORKLOG.md) · [SUMMARY](../.scratch/mod-authoring-v1/SUMMARY.md) | M00–M05 的持续状态、证据与停点。 | 恢复本轮开发或核对是否真的交付前。 |
 | [MOD 使用与制作指南](modding/README.md) | 教程总入口：怎么加 MOD、怎么做 MOD（按类型）、接口与两个官方 DLC 案例、已知 ZIP 缺陷。 | 想加 / 想做 MOD，或需要一份「从哪开始」时。 |
+| [MOD 制作手册与注意事项](modding/AUTHORING-HANDBOOK.md) | 作者向完整手册：四类 MOD 怎么做、包内布局与安装后位置、接口速查表、12 条注意事项。 | 动手写 MOD、查 manifest 字段或接口方法、排查「装不上 / 启不了」时必读。 |
 | [MOD 使用指南](modding/USER-GUIDE.md) | 导入、启用、更新、停用、回滚、批量删除与常见问题排障。 | 操作扩展管理页，或用户报「装不上 / 启不了」时。 |
 | [pet.mod_api.v1 接口基线](modding/API-V1.md) | 公开薄接口：定义与挂载、菜单与设置协议、自有配置与数据、简易 API、WorkerClient 生命周期。 | 编写或修改第三方功能包、或要动公开作者接口前。 |
 | [两个官方 DLC 案例](modding/OFFICIAL-DLC.md) | AI 1.0.4 与识屏 1.0.4 的接口调用链，区分公共合同与内部接线。 | 参考官方做法、或判断哪些私有 import 不可复制时。 |

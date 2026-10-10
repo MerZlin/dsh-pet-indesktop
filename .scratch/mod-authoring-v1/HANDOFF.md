@@ -59,3 +59,9 @@ M05：修复高负载首次发现与事务并发恢复；最近命令 `pytest -q
 - 缺陷已落档：`docs/modding/USER-GUIDE.md`、`docs/modding/README.md` §四、实施计划「已知未解决缺陷」、PR 报告「已知未通过/未完成门」第 5 条。
 - 下一步（未完成）：用**冻结候选**（`_m05b/final4` 带 `feature-probe` bundle、`_m05b/runtime3` 数据根，遗留 harness：`launch_settings8.py` + `owned_native.py` 的 `uia`/`file_dialog`）分别导入 ZIP 与目录版本，抓 `worker_probe_failed` 的原始输出与探针中间产物，再定位根因；`hello-local` 的 reason 要单独确认。**本轮不修**，不得表述为已修复。
 - 教程文档本轮已补登记 `docs/INDEX.md`；入口扩写完成。上一轮已按当轮授权推送到 `origin/codex/phase3-worker` 并核对远端 SHA；本轮改动**未推送**（无当轮授权）。
+
+## 2026-10-10 23:30 新增独立《MOD 制作手册与注意事项》
+
+- 新增 `docs/modding/AUTHORING-HANDBOOK.md`：作者向完整手册，含四类 MOD 的做法、包内布局与安装后位置、全部接口速查（manifest / FeatureDefinition / Contribution / Runtime / SettingsComponent / FeatureHostContext / ApiRequest / WorkerClient / worker_v1.serve / persona-phrases）、12 条注意事项。
+- 已完成互链与登记：`docs/INDEX.md`、`docs/modding/README.md`、根 `README.md`。
+- 未推送。
