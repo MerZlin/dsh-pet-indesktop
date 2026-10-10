@@ -51,9 +51,11 @@ M05：修复高负载首次发现与事务并发恢复；最近命令 `pytest -q
 
 ## 2026-10-10 22:35 ZIP 缺陷留档 + 教程入口收口 + 推送
 
-- 用户报告：ZIP 接入的外接 MOD 无法启用，同一内容走路径（导入目录）正常。本轮**只记录、不修复**。
-- 本地探针（offscreen Qt + 真实 `ModCenterController` / 真实包校验与事务；本机无 OS 沙箱，功能包按现有测试只替换 `self_checker`）：根目录 ZIP 的功能包与角色包导入 + 启用都成功，与目录接入一致；**只有 ZIP 内多套一层文件夹时**判 `导入失败：…manifest missing`（解压后选内层目录正常）。「导入成功但点启用失败」**未复现**。
+- 用户报告（已更正）：用 ZIP 导入 `examples/mods` 的两个示例功能包（`hello-local`、`echo-worker`）时操作未完成、报 `worker_probe_failed`；同一内容用「导入目录」正常；角色资源包走 ZIP 正常。本轮**只记录、不修复**。
+- 失败阶段是**探针**（`feature_package_transactions._continue` 的 `self_checker.check`），不是打包 / 校验 / 落盘。`worker_probe_failed` 只可能来自 host-worker 探针分支（`feature_probe_adapter._run_attempt`）；host-only 走 `worker_status="not_applicable"` 提前返回、正常不产生该 reason，故 `hello-local` 的准确 reason 待单独复现确认。
+- 为什么本地非冻结环境复现不出：探针沙箱只在冻结版创建（`feature_management.py` 要求 `sys.frozen` + `feature-probe` bundle），无沙箱时目录与 ZIP 都只得 `self_check_sandbox_unavailable`，差异被掩盖。
+- 本地 offscreen 探针（替换 `self_checker` 桩，仅边界证据）：根目录 ZIP 功能包 / 角色包与目录接入均成功；只有 ZIP 内多套一层文件夹判 `导入失败：…manifest missing`（另一独立问题）。
 - 证据：`.scratch/mod-authoring-v1/repro-zip-enable.json`、`repro-zip-wrapper.json`；脚本 `repro_zip_enable.py`、`repro_zip_wrapper.py`。
 - 缺陷已落档：`docs/modding/USER-GUIDE.md`、`docs/modding/README.md` §四、实施计划「已知未解决缺陷」、PR 报告「已知未通过/未完成门」第 5 条。
-- 下一步（未完成）：① 等用户补充 ZIP 来源与打包工具、包类型、界面报错文案后复现并定位根因；② 若确认是「压缩包根必须放 `manifest.json`」这一差异，再决定是让 ZIP 路径容忍外层文件夹还是只改提示文案——**本轮不修**，不得表述为已修复。
-- 教程文档本轮已补登记 `docs/INDEX.md`；入口扩写完成。按用户当轮授权推送到 `origin/codex/phase3-worker` 并核对远端 SHA。
+- 下一步（未完成）：用**冻结候选**（`_m05b/final4` 带 `feature-probe` bundle、`_m05b/runtime3` 数据根，遗留 harness：`launch_settings8.py` + `owned_native.py` 的 `uia`/`file_dialog`）分别导入 ZIP 与目录版本，抓 `worker_probe_failed` 的原始输出与探针中间产物，再定位根因；`hello-local` 的 reason 要单独确认。**本轮不修**，不得表述为已修复。
+- 教程文档本轮已补登记 `docs/INDEX.md`；入口扩写完成。上一轮已按当轮授权推送到 `origin/codex/phase3-worker` 并核对远端 SHA；本轮改动**未推送**（无当轮授权）。

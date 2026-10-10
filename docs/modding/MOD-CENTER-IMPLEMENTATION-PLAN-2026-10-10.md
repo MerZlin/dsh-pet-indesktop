@@ -80,23 +80,19 @@ M00 的一次推送授权已使用；本轮新增 MOD 代码、文档与样例�
 
 用户明确要求先提交可运行版本，允许把非阻塞小问题留档后尽快收尾。因此本次检查点不把满 CPU 三轮整族压力门改写为通过：识屏短时握手、子宠清理时序、跨进程停用的高负载失败继续记录在交付报告中。它们不阻止当前正常负载的专项、全量文件隔离测试、final4 构建、真实生产 Worker 闭环或 Settings 烟测；若后续要宣称 M05 全部压力门完成，必须针对这些记录单独复验。
 
-## 已知未解决缺陷：ZIP 导入的 MOD 无法启用（2026-10-10）
+## 已知未解决缺陷：ZIP 导入的功能扩展无法完成（2026-10-10）
 
-用户实机报告：**通过 ZIP 接入的外接 MOD 无法启用；同一份内容改成路径（目录）接入则没有问题。** 本轮按要求只记录、不修复。
+用户实机报告：**通过 ZIP 导入 `examples/mods` 里的两个示例功能包（`hello-local`、`echo-worker`）时操作未完成，报 `worker_probe_failed`；同一份内容改用「导入目录」可以正常运行。角色资源包（角色 / 动画）走 ZIP 导入正常。** 本轮只记录、不修复。
 
-本地探针结论（offscreen Qt + 真实 `ModCenterController`、真实包校验/事务；本机无 OS 沙箱，功能包用现有测试的做法只替换 `self_checker`）：
-
-| 场景 | 结果 |
-|---|---|
-| 根目录 ZIP（`scripts/build_mod_example.py` 产物）功能包 | 导入成功、启用成功，与目录接入一致 |
-| 根目录 ZIP 角色包（`scripts/build_character_mod_example.py` 产物） | 导入成功、启用成功，与目录接入一致 |
-| 目录接入（功能包 / 角色包） | 导入成功、启用成功（基线） |
-| **ZIP 内多套一层文件夹**（功能包 / 角色包） | **导入失败**：`请选择完整的 MOD ZIP 或包目录。manifest missing` |
-
-- 已证实的 ZIP 特有失败：压缩包带外层文件夹时，`pet/local_package_intents.py::_read_zip_manifest` 只认压缩包根的 `manifest.json`，直接判定失败；同一内容的解压目录选内层即可正常导入启用。`pet/content/manager.py::_extract_zip` 虽然容忍外层文件夹，但 `import_source` 在读 manifest 阶段已经拒绝，两条路径都走不到。
-- **未能复现**用户描述的「导入成功但点启用失败」形态；该形态的触发条件待用户补充（ZIP 来源与打包工具、包类型、界面报错文案）。
-- 证据文件（不随产品发布）：`.scratch/mod-authoring-v1/repro-zip-enable.json`、`.scratch/mod-authoring-v1/repro-zip-wrapper.json`；复现脚本 `repro_zip_enable.py`、`repro_zip_wrapper.py`。
-- 规避：现阶段用「导入目录」；根因定位与修复**未完成**，不得当成已修复。
+- 失败发生在**探针阶段**（`pet/feature_package_transactions.py::_continue` 里的 `self_checker.check`），不是打包、校验或落盘阶段：从报错文案看，包已经通过校验并进入候选执行检查。
+- `worker_probe_failed` 只可能来自 host-worker 探针分支（`pet/feature_probe_adapter.py::_run_attempt` 末尾）。host-only 包在探针里走 `worker_status="not_applicable"` 提前返回，**正常不会产生这个 reason**，所以 `hello-local` 的准确原因仍需单独复现确认，不能直接套用 `echo-worker` 的结论。
+- 为什么本地非冻结环境复现不出这个差异：探针沙箱**只在冻结版构建里创建**——`pet/feature_management.py` 要求 `sys.platform == "win32" and sys.frozen and PROBE_BUNDLE_MANIFEST_SHA256`，且 `_internal/feature-probe` bundle 必须存在。开发 / offscreen 下目录与 ZIP 两条路径都只会得到 `self_check_sandbox_unavailable`，差异被掩盖（本轮 offscreen 探针的结果即如此）。
+- 本轮 offscreen 探针的其余结论（作为边界证据保留，**不能用来证明缺陷不存在**）：
+  - 根目录 ZIP 功能包 / 角色包、目录接入：在替换 `self_checker` 桩后导入 + 启用均成功且无差异；
+  - ZIP 内多套一层文件夹：`导入失败：…manifest missing`（`pet/local_package_intents.py::_read_zip_manifest` 只认压缩包根的 `manifest.json`），解压后选内层目录正常——这是另一个独立问题，与本次报告不同。
+- 证据：`.scratch/mod-authoring-v1/repro-zip-enable.json`、`.scratch/mod-authoring-v1/repro-zip-wrapper.json`；脚本 `repro_zip_enable.py`、`repro_zip_wrapper.py`（临时探针，不随产品发布）。
+- 待补信息：`hello-local` 的准确报错 reason、ZIP 与目录同包对比时探针的原始输出、失败是否与「先导入 ZIP 再导入目录」的顺序有关。
+- 规避：功能扩展现阶段用「导入目录」。根因定位与修复**未完成**，不得当成已修复。
 
 ## 完成后的实际使用效果
 

@@ -49,12 +49,10 @@ M00 已提交/正常推送并核对 `0a299612714e5fad55a24a5506dfce938b9eeb1c`�
 
 ## 2026-10-10 22:35 ZIP 缺陷留档 + 教程入口收口 + 推送
 
-- 用户报告：ZIP 接入的外接 MOD 无法启用，同一内容走路径（导入目录）正常。本轮**只记录、不修复**。
-- 本地探针（offscreen Qt + 真实 `ModCenterController` / 真实包校验与事务；本机无 OS 沙箱，功能包按现有测试只替换 `self_checker`）：
-  - 根目录 ZIP（功能包 / 角色包）：导入成功、启用成功，与目录接入一致；
-  - 目录接入：同样成功（基线）；
-  - **ZIP 内多套一层文件夹**：`导入失败：请选择完整的 MOD ZIP 或包目录。manifest missing`（功能包与角色包都失败），解压后选内层目录正常。原因是 `_read_zip_manifest` 只认压缩包根的 `manifest.json`；
-  - 「导入成功但点启用失败」**未复现**，触发条件待用户补充。
+- 用户报告（症状已于 2026-10-10 23:xx 按实机信息更正）：用 ZIP 导入 `examples/mods` 的两个示例功能包（`hello-local`、`echo-worker`）时**操作未完成，报 `worker_probe_failed`**；同一内容用「导入目录」正常运行；**角色资源包走 ZIP 正常**。本轮**只记录、不修复**。
+- 失败阶段：探针（`feature_package_transactions._continue` 的 `self_checker.check`），不是打包 / 校验 / 落盘。`worker_probe_failed` 只可能来自 host-worker 探针分支（`feature_probe_adapter._run_attempt`），host-only 走 `worker_status="not_applicable"` 提前返回、正常不产生该 reason，故 `hello-local` 的准确 reason 待单独复现确认。
+- 未复现原因已定位：探针沙箱只在冻结版创建（`feature_management.py` 要求 `sys.frozen` 且存在 `feature-probe` bundle）；开发 / offscreen 下目录与 ZIP 都只得 `self_check_sandbox_unavailable`，差异被掩盖。
+- 本地 offscreen 探针（替换 `self_checker` 桩，仅作边界证据，不能证明缺陷不存在）：根目录 ZIP 功能包 / 角色包与目录接入均导入 + 启用成功；**ZIP 内多套一层文件夹**判 `导入失败：…manifest missing`（`_read_zip_manifest` 只认压缩包根的 `manifest.json`），属另一个独立问题。
 - 证据：`repro-zip-enable.json`、`repro-zip-wrapper.json`；脚本 `repro_zip_enable.py`、`repro_zip_wrapper.py`（临时探针，不随产品发布）。
 - 缺陷已落档四处文档：`docs/modding/USER-GUIDE.md` 常见问题、`docs/modding/README.md` §四、实施计划「已知未解决缺陷」、PR 报告「已知未通过/未完成门」第 5 条。
 - `docs/modding/*` 教程此前未登记 `docs/INDEX.md`，本轮按入场规则补登记；入口扩写为「加 MOD / 做 MOD」分流 + 按类型教程 + v1 接口 + 两个官方 DLC 案例。

@@ -12,7 +12,7 @@
 
 完整步骤、更新 / 停用 / 回滚 / 批量删除、项目目录布局与常见问题：[MOD 使用指南](USER-GUIDE.md)。
 
-> **已知缺陷（2026-10-10，未解决）**：ZIP 导入的外接 MOD 可能无法启用，同一份内容改用「导入目录」正常。定位前请**优先用「导入目录」**。详情见下面 [§四 已知缺陷](#四已知缺陷2026-10-10)。
+> **已知缺陷（2026-10-10，未解决）**：用 ZIP 导入两个**示例功能包**时会报 `worker_probe_failed`、操作未完成，同一份内容改用「导入目录」正常；角色资源包走 ZIP 正常。做功能扩展现阶段请**优先用「导入目录」**。详情见下面 [§四 已知缺陷](#四已知缺陷2026-10-10)。
 
 ## 二、我想做 MOD（作者）
 
@@ -45,14 +45,15 @@ python -X utf8 -m scripts.build_character_mod_example <输出目录>
 
 ## 四、已知缺陷（2026-10-10）
 
-ZIP 接入的 MOD 无法启用（用户实机报告，**未解决**）：
+ZIP 导入的功能扩展无法完成（实机报告，**未解决**）：
 
-- 症状：ZIP 导入的外接 MOD 无法启用；同一份内容走路径（导入目录）接入正常。
-- 本轮已证实：ZIP 内多套一层文件夹时会被判成 `导入失败：请选择完整的 MOD ZIP 或包目录。manifest missing`，功能包与角色包都一样；把同一份内容解压后选内层目录即可正常导入、启用。
-- 本轮**未能复现**「导入成功但点启用失败」这一形态，触发条件待用户补充（ZIP 来源与打包工具、包类型、界面报错文案）。
-- 规避：现阶段优先用「导入目录」。根因定位与修复**未完成**，不要当成已修复。
+- 症状：用 ZIP 导入 `examples/mods` 的两个**示例功能包**（`hello-local` host-only、`echo-worker` host-worker）时操作未完成，报 `worker_probe_failed`；同一份内容用「导入目录」可以正常运行。
+- **角色资源包（角色 / 动画）走 ZIP 导入正常**，所以这是功能包侧的问题，不是「ZIP 一律不行」。
+- 代码位置：`worker_probe_failed` 只可能来自 host-worker 的探针分支（`pet/feature_probe_adapter.py::_run_attempt`）；host-only 包在探针里以 `worker_status="not_applicable"` 提前返回，正常不会产生这个 reason，因此 `hello-local` 的准确原因还需复现确认，不能直接套用同一个结论。
+- 为什么本地难复现：探针沙箱**只在冻结版构建里创建**（`pet/feature_management.py` 要求 `sys.frozen` 且存在 `feature-probe` bundle）。开发/offscreen 环境下目录与 ZIP 两条路径都只会得到 `self_check_sandbox_unavailable`，差异被掩盖。
+- 规避：现阶段功能扩展优先用「导入目录」。根因定位与修复**未完成**，不要当成已修复。
 
-完整结论、探针数据与复现命令见 [实施计划 · 已知未解决缺陷：ZIP 导入的 MOD 无法启用](MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md)。
+完整结论与探针数据见 [实施计划 · 已知未解决缺陷](MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md)。
 
 ## 工程入口
 

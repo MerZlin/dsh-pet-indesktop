@@ -45,8 +45,9 @@ M00 已提交/正常推送并核对 `0a299612714e5fad55a24a5506dfce938b9eeb1c`�
 
 ## 2026-10-10 22:35 ZIP 缺陷留档 + 教程入口收口 + 推送
 
-- 新需求：记录「ZIP 接入的外接 MOD 无法启用、路径接入正常」这一未解决缺陷；确认 MOD 使用/制作教程与接口文档齐备并在 README 指向；把当前分支推送到 Phase 3A worker 远端分支。
-- 探针结论：根目录 ZIP（功能包 / 角色包）与目录接入行为一致，均导入 + 启用成功；**只有带外层文件夹的 ZIP** 会被判 `manifest missing` 导入失败。用户描述的「导入成功但启用失败」未复现，触发条件待补。
-- 缺陷已写进 `docs/modding/USER-GUIDE.md`、`docs/modding/README.md`、实施计划、PR 报告第 5 条未过门；教程文档补登记 `docs/INDEX.md`；根 README 状态块更新为已推送。
-- 未解决项：ZIP 根因定位与修复（不属本轮授权范围）。
-- 本轮为纯文档 / 记录改动 + 临时探针，按聚焦门验证后提交推送。
+- 新需求（含更正）：记录缺陷——用 ZIP 导入 `examples/mods` 的两个示例功能包（`hello-local`、`echo-worker`）时操作未完成、报 `worker_probe_failed`，同一内容用「导入目录」正常，角色资源包走 ZIP 正常；确认 MOD 制作教程与接口文档齐备并在 README 指向；把当前分支推送到 Phase 3A worker 远端分支。
+- 定位：失败在**探针**阶段（`self_checker.check`）。`worker_probe_failed` 只可能来自 host-worker 探针分支，host-only 正常不产生该 reason（`hello-local` 待单独确认）。本地复现不出是因为探针沙箱只在冻结版创建（`sys.frozen` + `feature-probe` bundle）。
+- 边界证据：offscreen 下替换 `self_checker` 桩后，根目录 ZIP 与目录接入行为一致；带外层文件夹的 ZIP 判 `manifest missing`（另一独立问题）。
+- 缺陷已写进 `docs/modding/USER-GUIDE.md`、`docs/modding/README.md`、实施计划、PR 报告第 5 条未过门；教程文档补登记 `docs/INDEX.md`；根 README 状态块更新为已推送并新增「MOD 制作注意事项」。
+- 未解决项：ZIP 缺陷根因定位与修复（不在本轮授权范围）；建议后续用冻结候选 `_m05b/final4` + `_m05b/runtime3` 复现。
+- 本轮为纯文档 / 记录改动 + 临时探针；上一轮已推送，本轮改动未推送。

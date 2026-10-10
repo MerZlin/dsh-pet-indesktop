@@ -107,6 +107,24 @@ python scripts/verify_phase3a_frozen_worker.py <frozen-worker-or-app-path>
 - Phase 4B 的实际顺序是：唯一状态 → 资源硬门 → 跨进程租约 → 本地事务 → 管理界面 → 真实构建端到端；
 - 资源接口正式公开依赖 4B-1.5 的稳定性结论及后续开放门。
 
+## MOD 制作注意事项
+
+想加 MOD 或做 MOD 的完整教程、按类型样例和接口契约见 [MOD 使用与制作指南](docs/modding/README.md)（接口细节 [API-V1.md](docs/modding/API-V1.md)，官方案例 [OFFICIAL-DLC.md](docs/modding/OFFICIAL-DLC.md)）。动手前最容易踩的几条：
+
+- **包布局**：包根必须有 `manifest.json`；做成压缩包时 `manifest.json` 要在**压缩包根**——多套一层文件夹会被判 `manifest missing`。
+- **factory 必须无副作用**：`create_host()` 只声明元数据，要能在没有 GUI 的环境下导入。模块顶层不要 import Qt / `QWidget`，也不要在这里 import WorkerClient 和业务依赖——生产探针里没有 Qt，顶层 import QWidget 会让包直接校验失败。Qt 相关放到 `create_settings` / Runtime 构造里。
+- **只依赖 v1 薄接口**：只 import `pet.mod_api.v1`。不要 import `pet.app`、`PetWindow`、全局 `Config` 或其他 DLC 的私有模块（如 `pet.context_menus.shared`）——这些不在兼容承诺内，Core 内部一搬家你的 MOD 就会坏。官方 AI / 识屏案例里的内部接线仅供参考，不是可复制模板。
+- **生命周期**：`start()` / `stop()` 要可重复调用；`close()` 必须释放定时器、窗口、信号连接和未完成任务；不要阻塞 GUI 线程。停用后旧菜单句柄不能再执行，菜单回调先检查 `handle.active` 再 `invoke()`。
+- **设置组件**：实现 `dirty()` / `draft()` / `confirm_save()` / `discard_changes()` / `dispose()`。保存要原子、失败要保留用户编辑；不要用后台刷新覆盖用户正在输入的草稿，也不要覆盖其他页面的草稿。
+- **自己的数据别自己拼路径**：用 `context.configuration`（带版本冲突检测）、`context.documents`（单拥有者文档），跨进程读改写用带锁的 `context.state_documents`。**不要把 Key 写进配置命名空间或日志**，也不要把 Key 拼进错误消息。
+- **host-only 还是 host-worker**：只有需要跑耗时或容易崩的任务才拆独立进程。Worker 是**进程隔离，不是安全沙箱**；取消是合作式的，handler 必须自己设超时或检查 cancel Event；host-only 定义不允许申请 Worker。运行时目录用项目内 `data/feature-runtime`。
+- **资源包不执行代码**：角色 / 动画包只靠 manifest 声明，不会运行你的 Python；`videos/` 加 manifest 要作为一个角色包整体交付，保留相对路径与大小写。
+- **版本与兼容**：改了内容必须升 `version`（同版本同内容会被判「已存在，不重复导入」）；用 `core_requires` 声明最低 Core；v1 的破坏性变更走 v2 并提供适配和迁移说明。
+- **打包与自检**：`python -X utf8 -m scripts.build_mod_example --check examples/mods/hello-local`；host-worker 还要提供已经冻结的 `--worker-bundle`。可运行样例源码在 [`examples/mods/`](examples/mods/README.md)。
+- **信任模型**：本地 MOD 是「受信任的 Python」，**不是安全沙箱**；只安装你信任来源的包，本地安装即代表你信任其代码。
+
+**已知缺陷（2026-10-10，未解决）**：用 ZIP 导入**示例功能包**（`hello-local`、`echo-worker`）会报 `worker_probe_failed`、操作未完成，改用「导入目录」正常；角色资源包走 ZIP 正常。做功能扩展现阶段请优先用目录导入，详见指南的「已知缺陷」一节。
+
 ## 重要目录
 
 ```text

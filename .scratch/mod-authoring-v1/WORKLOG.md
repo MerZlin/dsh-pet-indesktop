@@ -99,10 +99,10 @@ Echo真实Worker返回成功；角色副本启用不自动换装，使用后日�
 
 ## 2026-10-10 22:35 ZIP 缺陷留档 + 教程入口收口 + 推送
 
-- 用户报告 ZIP 接入的外接 MOD 无法启用、路径接入正常。按「只记录不修复」处理。
+- 用户报告（已更正）：用 ZIP 导入 `examples/mods` 的两个示例功能包（`hello-local`、`echo-worker`）时操作未完成、报 `worker_probe_failed`；同一内容用「导入目录」正常；角色资源包走 ZIP 正常。按「只记录不修复」处理。
 - 探针命令：`QT_QPA_PLATFORM=offscreen python -X utf8 .scratch/mod-authoring-v1/repro_zip_enable.py`（4 场景）与 `... repro_zip_wrapper.py`（2 场景）。结果见同目录 `repro-zip-enable.json` / `repro-zip-wrapper.json`。
-- 实测：根目录 ZIP 功能包（`scripts.build_mod_example` 产物）与角色包（`scripts.build_character_mod_example` 产物）导入 + 启用均成功，与目录接入无差异；带外层文件夹的 ZIP 两类型都判 `manifest missing` 导入失败。未复现「导入成功但启用失败」。
-- 无沙箱环境下功能包若不打 `self_checker` 桩，目录与 ZIP 都同样报 `self_check_sandbox_unavailable` 族失败——这是本机限制，不是 ZIP 差异。
+- 实测（仅边界证据）：根目录 ZIP 功能包与角色包导入 + 启用均成功，与目录接入无差异；带外层文件夹的 ZIP 两类型都判 `manifest missing` 导入失败。
+- 本地复现不出的原因已定位：探针沙箱只在冻结版创建（`feature_management.py` 要求 `sys.frozen` + `feature-probe` bundle），无沙箱时目录与 ZIP 都同样报 `self_check_sandbox_unavailable` 族失败；失败阶段在探针（`self_checker.check`），开发环境到不了。
 - 文档：`docs/modding/README.md` 扩写为使用/制作分流入口；`USER-GUIDE.md` 加 FAQ；实施计划加「已知未解决缺陷」；PR 报告加第 5 条未过门；`docs/INDEX.md` 补登记 modding 教程 5 行。
 - 本轮不改产品代码、不改 `tests/`、不改 `examples/mods/` 源码；探针脚本与 JSON 留在 `.scratch`，不进产品与测试产物。
 - 提交并推送到 `origin/codex/phase3-worker`（用户表述的 phase3A-worker 即该 Phase 3A worker 分支）。
