@@ -49,6 +49,7 @@ class ChatSettingsDialog(QDialog):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.config = config
+        self._api = getattr(getattr(config, "context", None), "api", None)
         self.settings = config.chat_settings()
         p = self.settings.active_config
         self._test_thread = None
@@ -85,7 +86,7 @@ class ChatSettingsDialog(QDialog):
         self.key = QLineEdit()
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.key.setPlaceholderText("留空表示不修改已保存的 Key")
-        self.key_hint = QLabel(self._key_status(p))
+        self.key_hint = QLabel("API 由 Core 管理；这里不会读取或保存 Key。" if self._api else self._key_status(p))
         self.key_hint.setObjectName("key-hint")
         self.key_hint.setWordWrap(True)
         self.prompt = QPlainTextEdit(self.settings.default_system_prompt)
@@ -193,6 +194,23 @@ class ChatSettingsDialog(QDialog):
         self.add_provider_btn.clicked.connect(self._add_provider)
         self.delete_provider_btn.clicked.connect(self._delete_provider)
         self._update_provider_buttons()
+        if self._api:
+            for field in (
+                provider_row,
+                self.name,
+                self.url,
+                self.model,
+                self.key,
+                self.key_hint,
+                self.timeout,
+                self.skip_ssl,
+                self.vsame,
+                self.vmodel,
+                self.vurl,
+                self.vkey,
+            ):
+                form.setRowVisible(field, False)
+            self.test.setText("打开 API 设置")
 
     # ---------------------------------------------------------------- provider 列表
     @staticmethod
@@ -236,7 +254,7 @@ class ChatSettingsDialog(QDialog):
         self.url.setText(draft.get("base_url") if draft.get("base_url") is not None else p.base_url)
         self.model.setText(draft.get("model") if draft.get("model") is not None else p.model)
         self.key.clear()
-        self.key_hint.setText(self._key_status(p))
+        self.key_hint.setText("API 由 Core 管理；这里不会读取或保存 Key。" if self._api else self._key_status(p))
         self.timeout.setValue(int(draft.get("timeout", p.timeout)))
         self.temp.setValue(float(draft.get("temperature", p.temperature)))
         self.tokens.setValue(int(draft.get("max_tokens", p.max_tokens)))
@@ -394,6 +412,9 @@ class ChatSettingsDialog(QDialog):
         )
 
     def _run_test(self):
+        if self._api:
+            self._api.open_settings()
+            return
         if self._test_thread is not None and self._test_thread.is_alive():
             return
         self.test.setEnabled(False)
@@ -426,6 +447,10 @@ class ChatSettingsDialog(QDialog):
         draft = self._provider_drafts.get(provider_id)
         if p is None or not draft:
             return
+        if self._api:
+            p.temperature = float(draft.get("temperature", p.temperature))
+            p.max_tokens = int(draft.get("max_tokens", p.max_tokens))
+            return  # No second address/key editor on central-API DLC builds.
         if draft.get("name"):
             p.name = draft["name"]
         p.base_url = draft.get("base_url") or p.base_url

@@ -1,7 +1,7 @@
 """Validation-only frozen Core. Never used by the default product entry point.
 
-Only explicit package selection is supported. The isolated test public key is
-injected by the validation builder, not accepted from a candidate package.
+Only explicit package selection is supported. Phase5A validates a user-trusted
+local package structure/inventory; no public/private key is injected or required.
 No screenshots, credentials or remote services are used by this smoke.
 """
 
@@ -40,8 +40,8 @@ def probe_supervisor(on_heartbeat, **kwargs):
 
 def require_synthetic_package(descriptor):
     # Marker must be in the authenticated inventory, not merely on disk.
-    if descriptor.trust_status != "trusted_official" or "resources/VALIDATION-SYNTHETIC.txt" not in descriptor.files:
-        raise ValueError("synthetic request requires a signed synthetic validation package")
+    if descriptor.trust_status not in {"trusted_official", "local_user"} or "resources/VALIDATION-SYNTHETIC.txt" not in descriptor.files:
+        raise ValueError("synthetic request requires a marked synthetic validation package")
 
 
 @contextmanager
@@ -102,7 +102,7 @@ def synthetic_http_service():
 
 
 def main(argv=None):
-    from validation_config import ENABLE_CHAT, TEST_PUBLIC_KEY, VALIDATION_ONLY
+    from validation_config import ENABLE_CHAT, VALIDATION_ONLY
 
     if VALIDATION_ONLY is not True:
         raise RuntimeError("not a validation build")
@@ -111,7 +111,7 @@ def main(argv=None):
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--shared", action="store_true")
-    parser.add_argument("--synthetic-request", action="store_true", help="signed synthetic validation package only; loopback HTTP")
+    parser.add_argument("--synthetic-request", action="store_true", help="marked synthetic validation package only; loopback HTTP")
     args = parser.parse_args(argv)
     if args.synthetic_request and not args.feature_dir:
         parser.error("synthetic request requires --feature-dir")
@@ -286,7 +286,7 @@ def main(argv=None):
                 api_version="1",
                 platform=sys.platform,
                 allowed_capabilities={"screen.capture"},
-                trust_anchors={"validation-only": bytes.fromhex(TEST_PUBLIC_KEY)},
+                allow_local_packages=True,
             )
             loader = FeaturePackageLoader(verifier)
             verified_at = time.perf_counter()

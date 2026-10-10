@@ -165,12 +165,21 @@ class WorkerSupervisor(QObject):
                     environment.insert(key, value)
                 process.setProcessEnvironment(environment)
                 process.setWorkingDirectory(launch.working_directory)
-        except Exception:
+        except Exception as exc:
+            from ..feature_state_io import StateError
+            from ..plugins.package_trust import PackageVerificationError
+
             if isinstance(launch, WorkerLaunch):
                 launch.close()
-            # Do not dump verifier inputs, environment or credential-bearing paths.
+            # Fixed codes only: never expose verifier inputs, paths or secrets.
+            code = "worker_launch_failed"
+            if isinstance(exc, StateError):
+                code = exc.code if exc.code in {"worker_runtime_boundary", "worker_runtime_unavailable"} else "worker_authorization_unavailable"
+            elif isinstance(exc, PackageVerificationError):
+                code = "worker_package_invalid"
+            self._emit_diagnostic("launch_rejected", {"reason": "external launch validation failed", "code": code})
+            # Direct Qt subscribers must see the diagnostic before FAULT.
             self._set_state(self.FAULT)
-            self._emit_diagnostic("launch_rejected", {"reason": "external launch validation failed"})
             self.failed.emit("external launch validation failed")
             return False
         process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
@@ -216,7 +225,8 @@ class WorkerSupervisor(QObject):
             return
         self._set_state(self.HANDSHAKING)
         self._handshake_timer.start(self.handshake_timeout_ms)
-        self._heartbeat_timer.start()
+        # Heartbeats begin at READY, not before potentially slow verification
+        # or handshake. The separate handshake timer still bounds startup.
         # QProcess normally emits readyReadStandardOutput, but a polling
         # fallback makes the protocol robust when a long-running Qt test
         # leaves a native notification queued or missed.
@@ -447,6 +457,7 @@ class WorkerSupervisor(QObject):
                 return
             self._handshake_timer.stop()
             self._last_heartbeat = time.monotonic()
+            self._heartbeat_timer.start()
             self._accept_events = True
             self._set_state(self.READY)
             self.ready.emit()
@@ -473,7 +484,7 @@ class WorkerSupervisor(QObject):
         self._emit_diagnostic("protocol", {"reason": f"unexpected worker message: {message.type}"})
 
     def _check_heartbeat(self) -> None:
-        if self._state not in {self.HANDSHAKING, self.READY}:
+        if self._state != self.READY:
             return
         if time.monotonic() - self._last_heartbeat > self.heartbeat_timeout_ms / 1000.0:
             self._fail_current("heartbeat timeout")

@@ -11,6 +11,13 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
+# This module is also loaded by direct script execution from `scripts/` during
+# the headless Worker build. Keep the repository package importable regardless
+# of the caller's current working directory or `sys.path[0]`.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 SODIUM_ARCHIVE_SHA256 = "3e03a726fac4bc09cb61d8f29d658ef7a5eca0811de59082130414f7ca2e4279"
 SODIUM_DLL_SHA256 = "f656aeb789bfc3a2ac587fae1d7cfe278bbe8ce73f28da73b4d08282ea8f9fe3"
 
@@ -248,6 +255,29 @@ def finalize_owned_headless_runtime(bundle: Path, exe: Path, bootloader: Path) -
     (bundle / "PYTHON-LICENSE.txt").write_bytes(python_license.read_bytes())
 
 
+HEADLESS_EXCLUDED_MODULES = (
+    "features",  # DLC business is loaded only from the verified installed copy.
+    "PySide6",
+    "PyQt5",
+    "PyQt6",
+    "numpy",
+    "PIL",
+    "pet.app",
+    "keyring",
+    "ctypes",
+    "_ctypes",
+    # PyInstaller's multiprocessing runtime hook imports socket and calls
+    # WSAStartup before the headless probe entrypoint. LPAC intentionally
+    # denies network initialization, so this unused module would prevent
+    # the verifier from starting even for host-only packages.
+    "multiprocessing",
+    "cryptography",
+    "pet.feature_install_state",
+    "pet.feature_version_lease",
+    "pet.feature_package_transactions",
+)
+
+
 def headless_crypto_arguments() -> list[str]:
     return ["--exclude-module", "nacl", "--exclude-module", "cffi", "--exclude-module", "_cffi_backend"]
 
@@ -283,21 +313,7 @@ def build(output: Path, *, bootloader: Path, native_extension: Path, crypto_libr
         "--specpath",
         str(output / "spec"),
     ]
-    for module in (
-        "PySide6",
-        "PyQt5",
-        "PyQt6",
-        "numpy",
-        "PIL",
-        "pet.app",
-        "keyring",
-        "ctypes",
-        "_ctypes",
-        "cryptography",
-        "pet.feature_install_state",
-        "pet.feature_version_lease",
-        "pet.feature_package_transactions",
-    ):
+    for module in HEADLESS_EXCLUDED_MODULES:
         command.extend(("--exclude-module", module))
     command.extend(("--paths", str(native_extension.absolute().parent), "--paths", str(Path(__file__).resolve().parents[1]), "--paths", str(crypto_path)))
     command.extend(headless_crypto_arguments())

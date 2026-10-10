@@ -1,5 +1,6 @@
 """OS registry boundary is a generated fake; no real startup registration is touched."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -91,7 +92,7 @@ def test_registry_permission_failure_is_not_a_completed_uninstall(tmp_path):
     assert result.status == "recovery_required" and result.reason == "autostart_registry_unavailable"
 
 
-def test_core_maintenance_finalization_requires_package_evidence_before_registry_access(tmp_path):
+def test_core_maintenance_finalization_requires_core_permit_before_registry_access(tmp_path):
     from pet.core_maintenance import finish_core_removal
 
     registry = Registry("must never be inspected")
@@ -99,14 +100,70 @@ def test_core_maintenance_finalization_requires_package_evidence_before_registry
     assert not registry.queried and not registry.deleted
 
 
-def test_core_maintenance_finalization_propagates_cleanup_failure(tmp_path):
-    from pet.core_maintenance import finish_core_removal
-    from pet.core_uninstall import CoreRemovalEvidence
-    from pet.official_features import OFFICIAL_FEATURES
+def test_core_maintenance_ignores_scoped_cleanup_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
 
-    evidence = CoreRemovalEvidence("generated-identity", tuple((owner, 1) for owner in sorted(OFFICIAL_FEATURES)))
+    from pet.agent_link import DshMonitor
+    from pet.core_maintenance import CoreRemovalPermit, finish_core_removal
+
     exe = executable(tmp_path)
-    assert finish_core_removal(evidence, executable=exe, registry=Registry(denied=True)) == 2
-    registry = Registry(command(exe))
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    layout = SimpleNamespace(executable=exe, data_root=data_root)
+    monkeypatch.setattr("pet.runtime_layout.current_layout", lambda: layout)
+    monkeypatch.setattr(DshMonitor, "uninstall_bridge", classmethod(lambda cls, *, scope_root: False))
+    assert finish_core_removal(CoreRemovalPermit(layout), executable=exe, registry=Registry()) == 0
+    record = json.loads((data_root / "core-maintenance.log").read_text(encoding="utf-8").splitlines()[-1])
+    assert record["event"] == "uninstall"
+    assert record["code"] == 0
+    assert record["status"] == "completed"
+    assert record["reason"] == "core_removal_completed"
+
+
+def test_core_maintenance_ignores_registration_cleanup_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from pet.agent_link import DshMonitor
+    from pet.core_maintenance import CoreRemovalPermit, finish_core_removal
+
+    exe = executable(tmp_path)
+    layout = SimpleNamespace(executable=exe)
+    monkeypatch.setattr("pet.runtime_layout.current_layout", lambda: layout)
+    monkeypatch.setattr(DshMonitor, "uninstall_bridge", classmethod(lambda cls, *, scope_root: True))
+    evidence = CoreRemovalPermit(layout)
+    registry = Registry(denied=True)
     assert finish_core_removal(evidence, executable=exe, registry=registry) == 0
-    assert registry.deleted == ["dsh-pet-core-webm"]
+    assert not registry.deleted
+
+
+@pytest.mark.parametrize("broken", ["bridge", "autostart", "both"])
+def test_optional_cleanup_exceptions_do_not_block_core_removal(tmp_path, monkeypatch, broken):
+    from types import SimpleNamespace
+
+    from pet import core_maintenance as api
+
+    exe = executable(tmp_path)
+    data = tmp_path / "data"
+    data.mkdir()
+    layout = SimpleNamespace(executable=exe, data_root=data)
+    monkeypatch.setattr("pet.runtime_layout.current_layout", lambda: layout)
+    calls = []
+
+    def bridge(_):
+        calls.append("bridge")
+        if broken in {"bridge", "both"}:
+            raise OSError("generated optional bridge failure")
+        return True
+
+    def autostart(*args, **kwargs):
+        calls.append("autostart")
+        if broken in {"autostart", "both"}:
+            raise OSError("generated optional registration failure")
+        return SimpleNamespace(status="completed")
+
+    monkeypatch.setattr(api, "_uninstall_owned_bridge_with_retry", bridge)
+    monkeypatch.setattr("pet.core_registration_cleanup.remove_owned_autostart", autostart)
+    assert api.finish_core_removal(api.CoreRemovalPermit(layout), executable=exe) == 0
+    assert calls == ["bridge", "autostart"]
+    record = json.loads((data / "core-maintenance.log").read_text(encoding="utf-8").splitlines()[-1])
+    assert record["code"] == 0 and record["status"] == "completed"

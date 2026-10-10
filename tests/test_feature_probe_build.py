@@ -5,6 +5,27 @@ from pathlib import Path
 import pytest
 
 
+def test_feature_probe_direct_import_bootstraps_repository_package(tmp_path):
+    import subprocess
+    import sys
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "build_feature_probe.py"
+    probe = (
+        "import importlib.util; "
+        "spec = importlib.util.spec_from_file_location('direct_probe', r'" + str(script) + "'); "
+        "module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+        "from pet.feature_state_io import safe_path; assert callable(safe_path)"
+    )
+    result = subprocess.run([sys.executable, "-c", probe], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_headless_probe_excludes_multiprocessing_socket_runtime_hook():
+    from scripts.build_feature_probe import HEADLESS_EXCLUDED_MODULES
+
+    assert "multiprocessing" in HEADLESS_EXCLUDED_MODULES
+
+
 def test_probe_bootloader_has_explicit_crt_entry_and_no_gui_linkage(tmp_path):
     from scripts.build_feature_probe_native import bootloader_command
 
@@ -288,6 +309,15 @@ def test_headless_runtime_paths_are_explicit_before_python_bootstrap():
     assert "module_search_paths_w[i]" in patched_config
     assert "dylib_python->version != 311" in patched_config
     assert "PATHCCH_FORCE" not in patched_config
+    assert "wcschr(module_search_paths_w[i], L';')" in patched_config
     for broken_main, broken_config in ((main + main, config), (main, config + config)):
         with pytest.raises(ValueError, match="explicit runtime path seam"):
             patch_explicit_runtime_paths(broken_main, broken_config)
+
+
+def test_headless_probe_does_not_embed_dlc_business_modules():
+    from scripts.build_feature_probe import HEADLESS_EXCLUDED_MODULES
+    from scripts.build_feature_release import PROBE_EXCLUDES
+
+    assert "features" in HEADLESS_EXCLUDED_MODULES
+    assert "features" in PROBE_EXCLUDES

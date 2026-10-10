@@ -89,8 +89,8 @@ def verified_host_probe(package_root: Path, verifier: FeaturePackageVerifier) ->
     from .plugins.feature_packages import FeaturePackageLoader
 
     descriptor = verifier.verify(package_root)
-    if descriptor.trust_status != "trusted_official":
-        raise PackageVerificationError("official signature required")
+    if not verifier.accepts_descriptor(descriptor):
+        raise PackageVerificationError("package activation policy rejected")
     handle = FeaturePackageLoader(verifier).load_host(descriptor)
     try:
         definition = handle.factory()

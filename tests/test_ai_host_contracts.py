@@ -38,7 +38,7 @@ def binding(tmp_path, *, enabled=True):
     host = FeatureHost()
     host.provide(create_host(), enabled=enabled)
     vault = CredentialVaultPort("official.ai-chat", "generated-data-root", backend=MemorySecrets())
-    ctx = host.bind_context(replace(bind_ai_context(cfg), credentials=vault))
+    ctx = host.bind_context(replace(bind_ai_context(cfg), credentials=vault, api=None))
     return cfg, host, ctx
 
 

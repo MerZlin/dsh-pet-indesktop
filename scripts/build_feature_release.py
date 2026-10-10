@@ -104,6 +104,7 @@ def _policy(anchors, scopes, digest):
         f"OFFICIAL_FEATURE_TRUST_ANCHORS = {anchors!r}\n"
         f"OFFICIAL_FEATURE_KEY_POLICIES = {scopes!r}\n"
         'FEATURE_API_VERSION = "1"\n'
+        "ALLOW_LOCAL_PACKAGE_ACTIVATION = True\n"
         f"FEATURE_CAPABILITIES = frozenset({sorted(capabilities)!r})\n"
         'PROBE_BUNDLE_DIRECTORY = "feature-probe"\n'
         f"PROBE_BUNDLE_MANIFEST_SHA256 = {digest!r}\n"
@@ -175,7 +176,7 @@ def prepare_core(
     """Exclusive Core snapshot with independently approved public identities only."""
     try:
         root, output, owned = _target(repository_root, output, owned_root, budget_bytes)
-        if not isinstance(version, str) or not re.fullmatch(r"5\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})", version):
+        if not isinstance(version, str) or not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})", version):
             raise BuildError("invalid_core_version")
         records, anchors, scopes = _trust(Path(public_policy), approved_fingerprints)
         try:
@@ -197,6 +198,7 @@ def prepare_core(
                     raise BuildError("overlapping_source_material")
                 table[name] = item
         generated = {
+            "assets/icon.ico": io.read_bytes(root / "assets/icon.ico", 1024 * 1024),
             "core_entry.py": CORE_ENTRY.encode(),
             "build_variant.py": b'VARIANT = "core-webm"\n',
             "pet/feature_distribution.py": b'"""Build-owned availability, not installed state."""\nBUILTIN_AI = False\nBUILTIN_SCREEN = False\n',
@@ -221,6 +223,7 @@ def prepare_core(
         # Registering host factories is dynamic; only generic ports enter Core.
         hidden = sorted(set(hidden) | {"keyring.backends.Windows", "PySide6.QtWidgets", "pet.__main__"})
         datas = [(str(source / prefix), prefix) for _, prefix, _ in tables if prefix != "pet"]
+        datas.append((str(source / "assets/icon.ico"), "assets"))
         datas.extend((str(source / name), name) for name in DATA_ROOTS if name.startswith("pet/") and (source / name).is_dir())
         spec = (
             "from PyInstaller.utils.hooks import collect_all\n"
@@ -228,7 +231,7 @@ def prepare_core(
             f"for module in {COLLECT!r}:\n    d,b,h=collect_all(module)\n    datas+=d; binaries+=b; hiddenimports+=h\n"
             f"a=Analysis([{str(source / 'core_entry.py')!r}],pathex=[{str(source)!r}],datas=datas,binaries=binaries,hiddenimports=hiddenimports,excludes={CORE_EXCLUDES!r})\n"
             "pyz=PYZ(a.pure)\n"
-            f"exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name={PRODUCT!r},console=False,upx=False)\n"
+            f"exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name={PRODUCT!r},console=False,upx=False,icon={str(source / 'assets/icon.ico')!r})\n"
             f"coll=COLLECT(exe,a.binaries,a.datas,name={PRODUCT!r},upx=False)\n"
         )
         _write(output / "core.spec", spec.encode())
@@ -258,7 +261,7 @@ def prepare_worker(repository_root: Path, output: Path, *, owned_root: Path, bud
     try:
         root, output, owned = _target(repository_root, output, owned_root, budget_bytes)
         table = {}
-        for name in (*WORKER_SOURCES, "pet/official_features.py"):
+        for name in WORKER_SOURCES:
             path = root / name
             digest, size = materials._digest(path, VerificationLimits().max_file_bytes)
             table[name] = (path, digest, size, materials._identity(path.stat()))
@@ -396,6 +399,9 @@ def build_worker(
     modules = inspect_archive(executable)
     if "pet.official_features" not in modules:
         raise BuildError("worker_owner_registry_missing")
+    from scripts.validate_screen_worker_startup import validate_worker_startup
+
+    validate_worker_startup(executable, output / "evidence/normal-startup")
     _artifact(bundle, output, modules, seconds)
     _budget(Path(owned_root).absolute(), 0, budget_bytes)
     return executable
@@ -408,6 +414,7 @@ PROBE_SOURCES = (
     "pet/official_features.py",
     "pet/feature_package_probe.py",
     "pet/feature_ports.py",
+    "pet/api_ports.py",
     "pet/feature_probe_crypto.py",
     "pet/plugins/__init__.py",
     "pet/plugins/package_trust.py",
@@ -584,6 +591,7 @@ def build_probe(
         "pet.feature_probe_crypto",
         "pet.feature_package_probe",
         "pet.feature_ports",
+        "pet.api_ports",
         "_dsh_probe_native",
     }
     if not required <= modules:

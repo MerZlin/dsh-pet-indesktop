@@ -7,6 +7,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from . import credentials
+from .api_config import CoreApiConfiguration
 from .config_transaction import SCREEN_NAMESPACE
 from .credentials import CredentialError, CredentialVaultPort
 from .desktop_query import get_desktop_query
@@ -56,8 +57,31 @@ _PROVIDER_FIELDS = frozenset(
 
 
 def _migration_source(document: dict) -> dict:
-    chat = document.get("chat", {})
-    chat = chat if isinstance(chat, dict) else {}
+    """Return the explicit, redacted migration source for screen configuration.
+
+    The AI package owns the current chat namespace after the Phase 5 split.  The
+    old top-level ``chat`` namespace remains a compatibility source for legacy
+    installs, but must not win over an installed AI namespace that has a usable
+    provider.  Only the small provider field allow-list is exposed to the screen
+    feature; credential values are never copied into this document.
+    """
+    plugins = document.get("plugins", {})
+    plugins = plugins if isinstance(plugins, dict) else {}
+    ai_namespace = plugins.get("official.ai-chat", {})
+    ai_namespace = ai_namespace if isinstance(ai_namespace, dict) else {}
+    ai_chat = ai_namespace.get("chat", {})
+    ai_chat = ai_chat if isinstance(ai_chat, dict) else {}
+
+    legacy_chat = document.get("chat", {})
+    legacy_chat = legacy_chat if isinstance(legacy_chat, dict) else {}
+
+    def has_providers(value: dict) -> bool:
+        providers = value.get("providers")
+        return isinstance(providers, dict) and any(isinstance(item, dict) for item in providers.values())
+
+    # A split AI install is the authoritative compatibility source.  If it is
+    # absent or empty, retain the pre-split top-level behavior.
+    chat = ai_chat if has_providers(ai_chat) else legacy_chat
     raw = chat.get("providers", {})
     providers = {str(k): v for k, v in raw.items() if isinstance(v, dict)} if isinstance(raw, dict) else {}
     active = str(chat.get("active_provider", ""))
@@ -80,26 +104,50 @@ def bind_screen_configuration(cfg, *, vault: CredentialVaultPort | None = None):
         migration_source=_migration_source,
     )
 
+    layout = getattr(cfg, "runtime_layout", None)
+    instance = str(getattr(cfg, "instance_id", "") or "primary")
+    scope = layout.credential_namespace(SCREEN_NAMESPACE, instance) if layout is not None else str(path.resolve()) if path else "unbound"
+    bound_vault = vault or CredentialVaultPort(SCREEN_NAMESPACE, scope)
+
+    # The AI vault is used only by the explicit migration reader below.  It is
+    # never exposed to screen execution, and an existing screen credential is
+    # never replaced by this bridge.  Reuse a test backend when supplied; in
+    # production the vault resolves the OS-backed secure store itself.
+    ai_vault = None
+    if layout is not None:
+        from .official_features import AI_OWNER
+
+        try:
+            ai_scope = layout.credential_namespace(AI_OWNER, instance)
+            ai_vault = CredentialVaultPort(AI_OWNER, ai_scope, backend=getattr(bound_vault, "_backend", None))
+        except (AttributeError, TypeError, ValueError):
+            ai_vault = None
+
     def read_legacy(ref: str) -> str:
-        chat = config.migration_source()["chat"]
+        source = config.migration_source()
+        chat = source["chat"]
         provider = chat["providers"].get(chat["active_provider"], {})
-        allowed = {provider.get("api_key_ref", "provider/" + chat["active_provider"]), provider.get("vision_api_key_ref", "")}
+        api_ref = provider.get("api_key_ref", "provider/" + chat["active_provider"])
+        vision_ref = provider.get("vision_api_key_ref", "")
+        allowed = {value for value in (api_ref, vision_ref) if value}
         if ref not in allowed:
             raise CredentialError("scope_denied")
+
+        # New split installs store the chat key in the AI-owned scoped vault.
+        # A scope-shaped reference can only be read through that exact owner;
+        # it must not fall back to the legacy service with the same string.
+        if ai_vault is not None and ref.startswith(ai_vault.scope + "/"):
+            endpoint = provider.get("base_url", "")
+            if ref == vision_ref and provider.get("vision_base_url"):
+                endpoint = provider.get("vision_base_url")
+            return ai_vault.acquire(ref, chat["active_provider"], endpoint, "chat.send")
+
         try:
             return credentials.secure_backend().get_password("dsh-pet-standalone", ref) or ""
         except Exception:
             raise CredentialError("legacy_credential_unavailable") from None
 
-    layout = getattr(cfg, "runtime_layout", None)
-    scope = (
-        layout.credential_namespace(SCREEN_NAMESPACE, str(getattr(cfg, "instance_id", "") or "primary"))
-        if layout is not None
-        else str(path.resolve())
-        if path
-        else "unbound"
-    )
-    return config, vault or CredentialVaultPort(SCREEN_NAMESPACE, scope), read_legacy
+    return config, bound_vault, read_legacy
 
 
 def _bind_window(window, cfg):
@@ -182,11 +230,13 @@ def _bind_window(window, cfg):
 
 
 def bind_screen_context(cfg, *, window=None, host=None) -> FeatureHostContext:
+    from .feature_distribution import BUILTIN_SCREEN
     from .official_features import SCREEN_OWNER
 
     config, vault, legacy_reader = bind_screen_configuration(cfg)
     context = FeatureHostContext(
         owner=SCREEN_OWNER,
+        api=None if BUILTIN_SCREEN else CoreApiConfiguration(cfg).bind(SCREEN_OWNER, authorized=lambda: True, open_settings=lambda: _open_api_settings(cfg)),
         configuration=config,
         credentials=vault,
         legacy_secret_reader=legacy_reader,
@@ -210,6 +260,7 @@ def bind_ai_context(cfg, *, host=None):
     This binding does not import AI models, UI, Providers, or start request threads.
     Actual AI lifecycle/window/document ports are added by the signed host route.
     """
+    from .feature_distribution import BUILTIN_AI
     from .feature_ports import FeatureUserDataPort
     from .feature_state_io import safe_path
     from .official_features import AI_OWNER
@@ -226,6 +277,7 @@ def bind_ai_context(cfg, *, host=None):
 
     context = FeatureHostContext(
         owner=AI_OWNER,
+        api=None if BUILTIN_AI else CoreApiConfiguration(cfg).bind(AI_OWNER, authorized=lambda: True, open_settings=lambda: _open_api_settings(cfg)),
         configuration=bind_feature_configuration(cfg, AI_OWNER, journal_path=path.with_suffix(".json.ai-migration.json")),
         credentials=CredentialVaultPort(AI_OWNER, scope),
         legacy_secret_reader=deny_legacy,
@@ -252,6 +304,48 @@ def bind_ai_context(cfg, *, host=None):
             lambda: MappingProxyType({"character": cfg.get("character"), "self_talk_bubble_style": cfg.get("self_talk_bubble_style", "classic_top")}),
             lambda character: str(cfg.character_alias(character) or ""),
         ),
+    )
+    return host.bind_context(context) if host is not None else context
+
+
+def bind_local_context(cfg, owner: str, *, host=None) -> FeatureHostContext:
+    """Bind a user-selected local package to only generic, owner-scoped ports.
+
+    Local packages are trusted executable Python, not sandboxed code.  This
+    binding deliberately exposes no desktop/window ports and grants no
+    preference fields by default; package-specific capabilities remain a
+    manifest/verifier concern rather than an implicit Core object leak.
+    """
+    from .feature_state_io import safe_path
+    from .official_features import is_valid_feature_id
+
+    if not is_valid_feature_id(owner):
+        raise ValueError("invalid_feature_owner")
+    root = Path(cfg.dir) / "feature-data" / owner
+    safe_path(root)
+    path = Path(cfg.path)
+    journal = path.parent / f"{path.name}.{owner}.migration.json"
+    scope = (
+        cfg.runtime_layout.credential_namespace(owner, str(getattr(cfg, "instance_id", "") or "primary"))
+        if getattr(cfg, "runtime_layout", None) is not None
+        else str(path.resolve())
+    )
+
+    def deny_legacy(ref: str) -> str:
+        raise CredentialError("legacy_import_authorization_required")
+
+    context = FeatureHostContext(
+        owner=owner,
+        api=CoreApiConfiguration(cfg).bind(owner, authorized=lambda: True, open_settings=lambda: _open_api_settings(cfg)),
+        configuration=bind_feature_configuration(cfg, owner, journal_path=journal),
+        credentials=CredentialVaultPort(owner, scope),
+        legacy_secret_reader=deny_legacy,
+        preferences=bind_feature_preferences(cfg, key=f"feature_preferences.{owner}", fields=frozenset()),
+        documents=MappingProxyType({"memory": bind_feature_document(root / "memory.json")}),
+        state_documents=MappingProxyType({"state": bind_feature_state_document(root / "state.json")}),
+        desktop=None,
+        window=None,
+        user_data=None,
     )
     return host.bind_context(context) if host is not None else context
 
@@ -290,3 +384,9 @@ def manual_for(window):
     session = host.manual(bind_screen_context(window.cfg, window=window), request, cancel)
     window._screen_manual_host = session
     return session
+
+
+def _open_api_settings(cfg):
+    from .settings_api import open_api_settings
+
+    open_api_settings(cfg)

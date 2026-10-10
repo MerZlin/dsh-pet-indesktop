@@ -2,6 +2,7 @@
 """python -m pet 入口。"""
 
 import sys
+from pathlib import Path
 from typing import Any
 
 
@@ -147,16 +148,23 @@ def _is_unified_frozen_core() -> bool:
 
 
 def _core_maintenance_entry() -> int:
-    # Only this closed removal route can run under the installer's exclusive
-    # barrier. It never starts a normal host/settings/Worker or deletes Core.
-    if sys.argv[1:] != ["--core-maintenance", "uninstall"] or not _is_unified_frozen_core():
+    # Installer package activation and Core removal are both closed maintenance
+    # routes. Neither starts the normal host/settings/Worker path.
+    args = sys.argv[1:]
+    if not _is_unified_frozen_core():
         return 64
-    from .core_maintenance import run_uninstall
+    if args == ["--core-maintenance", "uninstall"]:
+        from .core_maintenance import run_uninstall
 
-    return run_uninstall()
+        return run_uninstall()
+    if len(args) >= 4 and args[:2] == ["--core-maintenance", "install-packages"]:
+        from .core_maintenance import run_install_packages
+
+        return run_install_packages(Path(args[2]), tuple(args[3:]))
+    return 64
 
 
-def _main() -> int:
+def _main(*, enable_chat: bool = True) -> int:
     if "--core-maintenance" in sys.argv:
         return _core_maintenance_entry()
     from .core_code_gate import CoreCodeGateError, hold_current_core_code
@@ -215,7 +223,7 @@ def _main() -> int:
         return _run_settings()
     from .app import main as app_main
 
-    return app_main()
+    return app_main(enable_chat=enable_chat)
 
 
 if __name__ == "__main__":

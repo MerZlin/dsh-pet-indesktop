@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -18,6 +19,7 @@ class BalanceRequest:
     api_key: str = field(default="", repr=False)
     verify_ssl: bool = True
     id: str = "core.balance"
+    authorization_check: Callable[[], bool] = field(default=lambda: True, repr=False, compare=False)
 
 
 def _endpoint(value):
@@ -93,6 +95,16 @@ class BalanceConfiguration:
         return BalanceRequest(endpoint, secret)
 
 
+def balance_configuration_hint(reason):
+    return {
+        "balance_protocol_unsupported": "当前服务不支持余额查询（需要 DeepSeek 余额协议）。",
+        "api_use_not_authorized": "请打开 AI 与对话 → 模型与连接，填写主 Key 并保存。",
+        "credential_missing": "尚未保存主 Key，请打开 AI 与对话 → 模型与连接。",
+        "credential_read_failed": "系统安全存储读取失败，请恢复安全存储后重试。",
+        "configuration_changed": "API 配置正在变更，请重新查询余额。",
+    }.get(reason, "余额配置不可用，请检查 AI 与对话 → 模型与连接及系统安全存储。")
+
+
 def resolve_balance_request(config, *, backend=None):
     from .feature_distribution import BUILTIN_AI
 
@@ -101,4 +113,15 @@ def resolve_balance_request(config, *, backend=None):
         provider = config.chat_settings().active_config
         provider.api_key = config.resolve_api_key(provider)
         return provider
-    return BalanceConfiguration(config, backend=backend).request()
+    from .api_config import CoreApiConfiguration
+
+    port = CoreApiConfiguration(config, backend=backend).bind(OWNER, authorized=lambda: True)
+    # Check protocol before key access; unsupported is not a missing-key error.
+    meta = port.metadata("balance.query")
+    if meta.balance_protocol != "deepseek":
+        raise ValueError("balance_protocol_unsupported")
+    request = port.resolve("balance.query")
+    meta = request.metadata  # Never pair a newly resolved Key with stale metadata.
+    if meta.balance_protocol != "deepseek":
+        raise ValueError("balance_protocol_unsupported")
+    return BalanceRequest(meta.base_url, request.api_key, meta.verify_ssl, meta.service_id, lambda: port.effective_version("balance.query") == meta.version)

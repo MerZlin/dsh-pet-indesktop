@@ -11,7 +11,22 @@ from shiboken6 import isValid
 from pet.async_exit import application_exit_gate
 
 from .models import ProviderConfig
-from .providers import OpenAICompatibleProvider
+from .providers import OpenAICompatibleProvider, ProviderError
+
+
+def _public_failure(error):
+    """Only static failure hints cross Qt signals; never remote bodies/URLs/keys."""
+    if isinstance(error, ProviderError):
+        if error.status in {401, 403}:
+            return "API 认证失败，请在 API 设置中检查主 Key。"
+        if error.status == 429:
+            return "API 请求受限，请检查额度或稍后重试。"
+        if error.kind == "network":
+            return "网络连接失败，请检查服务地址、系统代理和 TLS 配置。"
+        return "API 接口、模型或回复无效，请检查 API 设置。"
+    if isinstance(error, OSError):
+        return "网络请求失败，请检查服务地址、系统代理和网络连接。"
+    return "AI 请求失败，请检查 API 服务配置或稍后重试。"
 
 
 class _Worker(QThread):
@@ -20,12 +35,13 @@ class _Worker(QThread):
     failed = Signal(str)
     stopped_by_user = Signal()
 
-    def __init__(self, provider, messages, config, cancel):
+    def __init__(self, provider, messages, config, cancel, request_authorized=None):
         super().__init__()
         self.provider = provider
         self.messages = messages
         self.config = config
         self.cancel = cancel
+        self.request_authorized = request_authorized
         self.parts = []
         self._responses = []
         self._close_started = False
@@ -71,6 +87,9 @@ class _Worker(QThread):
 
     def run(self):
         try:
+            if self.cancel.is_set() or (self.request_authorized is not None and not self.request_authorized()):
+                self.stopped_by_user.emit()
+                return
             stream_kwargs = {}
             import inspect
 
@@ -92,7 +111,7 @@ class _Worker(QThread):
                 else:
                     self.failed.emit("模型未返回任何内容，请稍后重试或检查模型配置。")
         except Exception as exc:
-            self.stopped_by_user.emit() if self.cancel.is_set() else self.failed.emit(str(exc))
+            self.stopped_by_user.emit() if self.cancel.is_set() else self.failed.emit(_public_failure(exc))
 
 
 class ChatService(QObject):
@@ -116,10 +135,12 @@ class ChatService(QObject):
         if callback in cls._global_finished_listeners:
             cls._global_finished_listeners.remove(callback)
 
-    def __init__(self, provider=None, parent=None, *, authorized=None):
+    def __init__(self, provider=None, parent=None, *, authorized=None, request_guard_factory=None):
         super().__init__(parent)
         self.provider = provider or OpenAICompatibleProvider()
         self._authorized = authorized
+        self._request_guard_factory = request_guard_factory
+        self._request_guard = lambda: True
         self._request_id = None
         self._cancel = None
         self._worker = None
@@ -176,12 +197,16 @@ class ChatService(QObject):
             raise RuntimeError("ai_requests_not_accepting")
         if len(self._workers) >= 8:
             raise RuntimeError("ai_request_drain_capacity")
+        guard = self._request_guard_factory(config) if self._request_guard_factory else lambda: True
+        if not guard():
+            raise PermissionError("api_configuration_changed")
         self.stop()
+        self._request_guard = guard
         self._ensure_exit_guard()
         rid = request_id or uuid.uuid4().hex
         generation = self._generation
         cancel = threading.Event()
-        worker = _Worker(self.provider, messages, config, cancel)
+        worker = _Worker(self.provider, messages, config, cancel, self._request_guard)
         self._request_id = rid
         self._cancel = cancel
         self._worker = worker
@@ -208,8 +233,12 @@ class ChatService(QObject):
         elif self._cancel is not None:
             self._cancel.set()
 
+    @property
+    def request_authorized(self):
+        return self._request_guard()
+
     def _current(self, rid, generation):
-        return isValid(self) and self._accepting and generation == self._generation and rid == self._request_id
+        return isValid(self) and self.accepting and self.request_authorized and generation == self._generation and rid == self._request_id
 
     def _delta(self, rid, text, generation):
         if self._current(rid, generation):

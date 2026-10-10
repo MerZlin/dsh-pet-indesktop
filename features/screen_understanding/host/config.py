@@ -10,7 +10,7 @@ from typing import Callable
 from pet.credentials import CredentialError, CredentialVaultPort
 from pet.feature_ports import FeatureConfigurationPort
 
-from ..common.models import MODES, VisionProfile, VisionRequestConfig, VisionSettings
+from ..common.models import MODES, VisionProfile, VisionRequestConfig, VisionSettings, infer_vision_model
 
 
 def digest(data: object) -> str:
@@ -26,10 +26,11 @@ class Resolution:
 
 
 class VisionConfigService:
-    def __init__(self, config: FeatureConfigurationPort, *, vault: CredentialVaultPort, legacy_secret_reader: Callable[[str], str] | None = None):
+    def __init__(self, config: FeatureConfigurationPort, *, vault: CredentialVaultPort, legacy_secret_reader: Callable[[str], str] | None = None, api=None):
         self.config = config
         self.vault = vault
         self._legacy_secret_reader = legacy_secret_reader
+        self.api = api
 
     def read_legacy_secret(self, ref: str) -> str:
         if not ref:
@@ -38,12 +39,39 @@ class VisionConfigService:
             raise CredentialError("legacy_credential_unavailable")
         return self._legacy_secret_reader(ref)
 
-    def revision(self) -> str:
+    def revision(self, mode="automatic") -> str:
         try:
+            if self.api is not None:
+                purpose = "manual_look" if mode == "manual" else "analyze_frame"
+                business = self.business(mode)
+                return digest({"api": self.api.effective_version(purpose), "business": business})
             return self.config.revision()
         except (OSError, ValueError, TypeError):
             # A stable invalid revision cancels previous work without crashing GUI timers.
             return "configuration_invalid"
+
+    def business(self, mode):
+        document = self.config.read_namespace()
+        if mode in document.get("business", {}):
+            return document["business"][mode]
+        settings = self.settings()
+        p = settings.profiles.get(settings.bindings.get(mode, ""))
+        return (
+            {"prompt": p.system_prompt, "temperature": p.temperature, "max_tokens": p.max_tokens}
+            if p
+            else {"prompt": "请描述屏幕中可见的内容。", "temperature": 0.7, "max_tokens": 2048}
+        )
+
+    def save_business(self, mode, prompt, temperature, max_tokens, *, expected_revision):
+        if self.api is None or mode not in MODES:
+            raise ValueError("invalid_mode")
+        # Reuse the request model's existing sampling/budget validation, without
+        # persisting a second endpoint, model or credential reference.
+        VisionProfile("business", "https://api.invalid", "business", system_prompt=prompt, temperature=temperature, max_tokens=max_tokens)
+        with self.config.operation():
+            document = self.config.read_namespace()
+            document.setdefault("business", {})[mode] = {"prompt": prompt, "temperature": temperature, "max_tokens": max_tokens}
+            self.config.commit_namespace(document, expected_revision=expected_revision)
 
     def settings(self) -> VisionSettings:
         return VisionSettings.from_dict(self.config.read_namespace().get("settings", {}))
@@ -52,6 +80,31 @@ class VisionConfigService:
         if mode not in MODES:
             return Resolution(False, "invalid_mode")
         try:
+            if self.api is not None:
+                purpose = "manual_look" if mode == "manual" else "analyze_frame"
+                before = self.revision(mode)
+                request = self.api.resolve(purpose)
+                meta = request.metadata
+                business = self.business(mode)
+                profile = VisionProfile(
+                    "core-api",
+                    meta.base_url,
+                    meta.model or infer_vision_model(getattr(meta, "fallback_model", "")),
+                    chat_path=meta.chat_path,
+                    verify_ssl=meta.verify_ssl,
+                    timeout=meta.timeout,
+                    system_prompt=business["prompt"],
+                    temperature=business["temperature"],
+                    max_tokens=business["max_tokens"],
+                )
+                if self.revision(mode) != before:
+                    return Resolution(False, "configuration_changed")
+                return Resolution(
+                    True,
+                    "ready",
+                    replace(VisionRequestConfig.from_profile(profile, request.api_key), credential_source=getattr(meta, "credential_source", "")),
+                    before,
+                )
             document = self.config.read_namespace()
             revision = digest(document)
             settings = VisionSettings.from_dict(document.get("settings", {}))
@@ -62,7 +115,7 @@ class VisionConfigService:
             if self.revision() != revision:
                 return Resolution(False, "configuration_changed")
             return Resolution(True, "ready", VisionRequestConfig.from_profile(profile, secret), revision)
-        except CredentialError as exc:
+        except (CredentialError, PermissionError) as exc:
             return Resolution(False, str(exc))
         except (ValueError, TypeError, OSError, AttributeError):
             return Resolution(False, "configuration_invalid")

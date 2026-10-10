@@ -138,5 +138,45 @@ class VisionMigration:
             secrets = {"automatic": auto_key, "manual": manual_key}
         self.service.apply(VisionSettings(profiles, bindings, "confirmed"), secrets, expected_revision=preview.target_revision, source_guard=guard)
 
+    def repair_missing_credentials(self) -> bool:
+        """Fill only empty refs in an existing screen configuration.
+
+        This is an explicit, user-confirmed compatibility action.  It reads the
+        same redacted migration source as ``confirm`` and writes fresh refs into
+        the screen-owned vault; existing refs, profiles, bindings and user
+        edits are preserved.
+        """
+        settings = self.service.settings()
+        if not settings.profiles:
+            raise ValueError("not_configured")
+        data = self.service.config.migration_source()
+        expected_source = source_revision(data)
+
+        def guard(current: dict) -> None:
+            if source_revision(current) != expected_source:
+                raise ValueError("source_changed")
+
+        modes_by_profile: dict[str, list[str]] = {}
+        for mode in ("automatic", "manual"):
+            profile_id = settings.bindings.get(mode, "")
+            if profile_id:
+                modes_by_profile.setdefault(profile_id, []).append(mode)
+
+        secrets: dict[str, str] = {}
+        for profile_id, modes in modes_by_profile.items():
+            profile = settings.profiles.get(profile_id)
+            if profile is None or profile.credential_ref:
+                continue
+            for mode in modes:
+                secret = _legacy_secret(data, mode, self.reader)
+                if secret:
+                    secrets[profile_id] = secret
+                    break
+
+        if not secrets:
+            return False
+        self.service.apply(settings, secrets, expected_revision=self.service.revision(), source_guard=guard)
+        return True
+
     def recover(self) -> None:
         self.service.recover()

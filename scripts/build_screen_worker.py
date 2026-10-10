@@ -41,6 +41,7 @@ WORKER_SOURCES = (
     "pet/workers/lease_bootstrap.py",
     "pet/feature_state_io.py",
     "pet/feature_install_state.py",
+    "pet/official_features.py",
     "pet/feature_startup_contract.py",
     "pet/feature_version_lease.py",
 )
@@ -67,6 +68,8 @@ REQUIRED_MODULES = (
     "pet.workers.lease_bootstrap",
     "pet.feature_version_lease",
     "pet.feature_startup_contract",
+    "pet.feature_install_state",
+    "pet.official_features",
     "features.screen_understanding.worker.runtime",
     "features.screen_understanding.worker.vision",
     "features.screen_understanding.common.models",
@@ -258,6 +261,9 @@ def build_worker(
             "pyz_modules": modules,
         },
     )
+    from scripts.validate_screen_worker_startup import validate_worker_startup
+
+    validate_worker_startup(executable, output / "evidence/normal-startup")
     print(f"SCREEN_WORKER_BUILD_OK {executable}")
     return executable
 

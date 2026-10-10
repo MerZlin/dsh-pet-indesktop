@@ -141,6 +141,9 @@ def patch_explicit_runtime_paths(main_source: str, config_source: str) -> tuple[
     size_t search_length = 0;
     owned_search[0] = L'\0';
     for (i = 0; i < 3; i++) {
+        /* Py_SetPath uses semicolon as its delimiter; reject an owned path
+         * containing one instead of allowing it to split into an unowned path. */
+        if (wcschr(module_search_paths_w[i], L';') != NULL) { ret = -1; goto end; }
         size_t length = wcslen(module_search_paths_w[i]);
         if (search_length + length + (i != 0) + 1 > sizeof(owned_search) / sizeof(wchar_t)) {
             ret = -1; goto end;

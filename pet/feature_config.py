@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +34,9 @@ def bind_feature_configuration(
     cfg, owner: str, *, journal_path: Path | None, migration_source: Callable[[dict], dict] | None = None
 ) -> FeatureConfigurationPort:
     """Host-only factory. Feature code receives the returned, already-bound port."""
-    if not re.fullmatch(r"[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+", owner):
+    from .official_features import is_valid_feature_id
+
+    if not is_valid_feature_id(owner):
         raise ValueError("invalid_feature_owner")
     path = Path(cfg.path) if hasattr(cfg, "path") else None
     if journal_path is not None and (path is None or journal_path.parent.resolve() != path.parent.resolve() or journal_path.resolve() == path.resolve()):
@@ -46,6 +47,8 @@ def bind_feature_configuration(
 
     def select(doc: dict) -> dict:
         plugins = doc.get("plugins", {})
+        if plugins == {}:
+            return {}
         if not isinstance(plugins, dict) or not isinstance(plugins.get(owner, {}), dict):
             raise ValueError("configuration_invalid")
         return copy.deepcopy(plugins.get(owner, {}))

@@ -228,7 +228,7 @@ def test_management_layout_language_theme_font_matrix(tmp_path, width, theme, la
         assert label.height() >= bound.height()
         assert bound.width() <= label.width(), "unbroken authenticated identifiers must not be painted outside the card"
         dialog.select_page("extensions")
-        assert widget.status_label.hasFocus()
+        assert dialog.local_package_zip_button.hasFocus()
     finally:
         dialog.close()
         dialog.deleteLater()
@@ -637,7 +637,7 @@ def test_owner_card_ignores_cross_package_result_and_screen_draft(tmp_path, monk
         screen._update_actions()
         assert screen.draft_button.isEnabled()
         assert not ai.draft_button.isEnabled(), "screen drafts cannot authorize an AI operation"
-        assert ai.settings_button.accessibleDescription().startswith("官方 AI")
+        assert ai.settings_button.accessibleDescription().startswith("AI 对话")
     finally:
         close_official_management(host)
         parent.close()

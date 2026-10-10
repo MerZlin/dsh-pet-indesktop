@@ -7,7 +7,7 @@ import json
 import uuid
 from typing import Protocol
 
-from .official_features import AI_FEATURE_ID, official_feature
+from .official_features import AI_FEATURE_ID, is_valid_feature_id
 
 
 class SecureBackend(Protocol):
@@ -124,7 +124,8 @@ class CredentialVaultPort(_ScopedVault):
     OPERATIONS = frozenset({"manual_look", "analyze_frame"})
 
     def __init__(self, feature: str, instance: str, *, backend: SecureBackend | None = None):
-        official_feature(feature)
+        if not is_valid_feature_id(feature):
+            raise CredentialError("scope_invalid")
         operations = frozenset({"chat.send", "files.interpret"}) if feature == AI_FEATURE_ID else self.OPERATIONS
         super().__init__(feature, instance, operations, backend=backend)
 

@@ -68,8 +68,9 @@ def test_connection(config, timeout: float = 10.0):
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, *, kind="provider"):
         self.status = status
+        self.kind = kind
         super().__init__(f"HTTP {status}: {message}" if status else message)
 
 
@@ -148,9 +149,9 @@ class OpenAICompatibleProvider:
         except urllib.error.URLError as exc:
             reason = exc.reason
             hint = _CERT_HINT if _is_cert_verify_error(reason) else ""
-            raise ProviderError(f"网络连接失败：{reason}{hint}") from exc
+            raise ProviderError(f"网络连接失败：{reason}{hint}", kind="network") from exc
         except OSError as exc:
-            raise ProviderError(f"网络请求失败：{exc}") from exc
+            raise ProviderError(f"网络请求失败：{exc}", kind="network") from exc
         if response_holder is not None:
             response_holder.append(response)
         parser = SSEParser()

@@ -331,6 +331,15 @@ class QuickChatBubble(QFrame):
         text = self.input.text().strip()
         if not text:
             return
+        from pet.credentials import CredentialError
+
+        from .chat.request_config import configuration_hint, prepare_request
+
+        try:
+            self.settings, config = prepare_request(self.config)
+        except (CredentialError, PermissionError, ValueError, OSError) as error:
+            self.hint_label.setText(configuration_hint(error))
+            return
         self.input.clear()
         # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」
         synced, _absorbed = self.store.append_message(self.session, ChatMessage("user", text))
@@ -345,8 +354,6 @@ class QuickChatBubble(QFrame):
         self._pages = []
         self.page_widget.setVisible(False)
         self.hint_label.setText("思考中…")
-        config = self.settings.active_config
-        config.api_key = self.config.resolve_api_key(config)
         messages = self.prompt_builder.build_messages(self.settings, self.character_id, self.session.messages[:-1], text)
         self._active_request_id = self.service.send(messages, config)
 

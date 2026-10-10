@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 
 from . import feature_state_io as io
 from .feature_state_io import StateError
-from .official_features import OFFICIAL_FEATURES, SCREEN_FEATURE_ID
+from .official_features import SCREEN_FEATURE_ID, is_valid_feature_id
 
 
 @dataclass(frozen=True)
@@ -32,8 +32,7 @@ class LifecyclePrepareRequest:
         if not isinstance(document, dict) or set(document) != set(cls.__dataclass_fields__):
             raise StateError("lifecycle_request_invalid")
         if (
-            not isinstance(document["feature_id"], str)
-            or document["feature_id"] not in OFFICIAL_FEATURES
+            not is_valid_feature_id(document["feature_id"])
             or not isinstance(document["operation_id"], str)
             or not re.fullmatch(r"(?:tx|lc)-[a-f0-9]{32}", document["operation_id"])
             or type(document["revision"]) is not int

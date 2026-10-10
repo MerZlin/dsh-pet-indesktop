@@ -38,6 +38,7 @@ def probe_policy(verifier: FeaturePackageVerifier) -> dict[str, object]:
         allowed_capabilities=sorted(verifier.allowed_capabilities),
         trust_anchors={name: key.hex() for name, key in verifier.trust_anchors.items()},
         allow_developer_unsigned=False,
+        allow_local_packages=verifier.allow_local_packages,
         limits=asdict(verifier.limits),
     )
 
@@ -70,7 +71,7 @@ class WindowsFeatureProbeSandbox:
         files.stage(source.root, "directory", root / "candidate", self.verifier.limits)
         candidate = self.verifier.verify(root / "candidate")
         self.verifier.reverify(source)
-        if candidate.trust_status != "trusted_official" or candidate.raw_manifest != source.raw_manifest:
+        if not self.verifier.accepts_descriptor(candidate) or candidate.raw_manifest != source.raw_manifest:
             raise PackageVerificationError("snapshot changed")
         return root, helper, candidate
 
@@ -80,8 +81,8 @@ class WindowsFeatureProbeSandbox:
                 return ProbeOutcome(False, False, False, False, "probe_policy_mismatch")
             self.bundle.verify()
             original = self.verifier.verify(request.package_root)
-            if original.trust_status != "trusted_official":
-                raise PackageVerificationError("official signature required")
+            if not self.verifier.accepts_descriptor(original):
+                raise PackageVerificationError("package activation policy rejected")
             with self.materials.lock():
                 self.materials.recover_locked()
                 attempt = self.materials.begin(original, self.bundle.manifest_digest)
@@ -107,8 +108,8 @@ class WindowsFeatureProbeSandbox:
             limits = ProbeLimits(timeout=request.timeout)
             self.bundle.verify()
             original = self.verifier.verify(request.package_root)
-            if original.trust_status != "trusted_official":
-                raise PackageVerificationError("official signature required")
+            if not self.verifier.accepts_descriptor(original):
+                raise PackageVerificationError("package activation policy rejected")
             safe_path(self.run_parent)
             self.run_parent.mkdir(parents=True, exist_ok=True)
             attempt = owned.root

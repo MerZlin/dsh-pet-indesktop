@@ -622,7 +622,9 @@ def test_verified_launch_cannot_use_package_as_writable_runtime(package):
     verifier = package.verifier()
     descriptor = verifier.verify(package.root)
     loader = api().FeaturePackageLoader(verifier)
-    with pytest.raises(ValueError, match="runtime directory"):
+    from pet.feature_state_io import StateError
+
+    with pytest.raises(StateError, match="worker_runtime_boundary"):
         verified_worker_launch(loader, descriptor, runtime_directory=package.root / "worker")
     assert loader.lease_counts(descriptor).worker == 0
 

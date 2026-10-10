@@ -55,7 +55,10 @@ def main():
             # virtualized screen. Record the actual viewport; never pretend
             # that a 1100 logical-pixel High-DPI screen existed on this machine.
             assert 720 <= dialog.width() <= available_width + 4
-        assert widget.status_label.hasFocus()
+        assert dialog.local_package_zip_button.hasFocus()
+        QTest.keyClick(dialog.local_package_zip_button, Qt.Key.Key_Tab)
+        assert dialog.local_package_directory_button.hasFocus(), "unified ZIP/directory actions remain keyboard reachable"
+        widget.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
         visited = []
         for _ in range(30):
             focus = app.focusWidget()
@@ -66,7 +69,7 @@ def main():
             QTest.keyClick(focus or widget.status_label, Qt.Key.Key_Tab)
         assert visited == [widget.install_button, widget.zip_button], "enabled management actions must remain keyboard reachable in directory/ZIP order"
         dialog.select_page("extensions")
-        assert widget.status_label.hasFocus(), "deep-link focus must be restored"
+        assert dialog.local_package_zip_button.hasFocus(), "neutral import deep-link focus must be restored"
         for area in dialog.findChildren(QScrollArea):
             if area.isVisible():
                 assert area.horizontalScrollBar().maximum() == 0
@@ -109,6 +112,7 @@ def main():
                     "theme": value["theme"],
                     "language": value["language"],
                     "tab_order": [widget.install_button.accessibleName(), widget.zip_button.accessibleName()],
+                    "local_tab_order": [dialog.local_package_zip_button.accessibleName(), dialog.local_package_directory_button.accessibleName()],
                     "management_only": True,
                 }
             ),

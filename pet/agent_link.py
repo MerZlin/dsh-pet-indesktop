@@ -530,6 +530,44 @@ def _bridge_owned_by(pkg: dict, profile: Path, root: Path) -> bool:
     return target is not None and os.path.normcase(os.path.abspath(target)) == os.path.normcase(os.path.abspath(root))
 
 
+def _scoped_bridge_reference_needs_cleanup(profile: Path, root: Path) -> bool:
+    """Return whether a profile has evidence of this Core's bridge.
+
+    Core removal may run while an unrelated DSH instance is updating its own
+    profile.  A valid foreign manifest/link is not ours to touch, so do not
+    acquire that profile's cleanup lock in the first place.  Invalid or
+    ambiguous evidence remains conservative and goes through the full
+    locked cleanup path, which preserves the existing recovery behavior.
+    """
+    from . import feature_state_io as io
+
+    try:
+        io.safe_path(root)
+        io.safe_path(profile)
+        manifest = profile / "package.json"
+        pkg = json.loads(io.read_bytes(manifest, 2 * 1024 * 1024))
+        if not isinstance(pkg, dict) or not isinstance(pkg.get("dependencies", {}), dict):
+            return True
+        if _bridge_owned_by(pkg, profile, root):
+            return True
+        link = profile / "node_modules" / "@dsh-pet" / "bridge"
+        io.safe_path(link.parent)
+        try:
+            info = link.lstat()
+        except FileNotFoundError:
+            return False
+        linked = info is not None and (link.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400)
+        if not linked:
+            return False
+        try:
+            target = link.resolve()
+        except OSError:
+            return True
+        return os.path.normcase(str(target)) == os.path.normcase(str(root.absolute()))
+    except (io.StateError, OSError, ValueError, TypeError, AttributeError):
+        return True
+
+
 def _remove_core_bridge_reference(profile: Path, root: Path) -> bool:
     """Unregister only a proven reference; never recurse into a package manager link.
 
@@ -1938,6 +1976,8 @@ class DshMonitor(BaseAgentMonitor):
             # backup pruning, or unknown-directory deletion on the new route.
             ok = True
             for profile in _real_profiles():
+                if not _scoped_bridge_reference_needs_cleanup(profile, root):
+                    continue
                 if not _remove_core_bridge_reference(profile, root):
                     ok = False
             return ok

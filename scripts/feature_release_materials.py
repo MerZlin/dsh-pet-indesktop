@@ -30,6 +30,10 @@ CORE_REQUIRED = frozenset(
         "pet.feature_package_startup",
         "pet.plugins.feature_packages",
         "pet.feature_ports",
+        "pet.api_ports",
+        "pet.api_config",
+        "pet.api_migration",
+        "pet.settings_api",
         "pet.credentials",
         "pet.async_exit",
         "pet.ai_bindings",
@@ -189,7 +193,7 @@ def prepare_unsigned_feature(
             "key_id": key_id,
             "version": version,
             "api_version": "1",
-            "core_requires": ">=5.0.0,<6.0.0",
+            "core_requires": ">=4.2.4,<6.0.0" if feature_id == SCREEN_OWNER else ">=4.2.3,<6.0.0",
             "platforms": ["win32"],
             "capabilities": sorted(feature.capabilities),
             "factory": feature.factory,
@@ -198,7 +202,7 @@ def prepare_unsigned_feature(
             "files": {name: {"sha256": item[1], "size": item[2]} for name, item in sorted(inventory.items())},
         }
         raw = json.dumps(manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        verifier = FeaturePackageVerifier(core_version="5.0.0", api_version="1", feature_id=feature.id, allowed_capabilities=feature.capabilities)
+        verifier = FeaturePackageVerifier(core_version="4.2.4", api_version="1", feature_id=feature.id, allowed_capabilities=feature.capabilities)
         verifier._schema(raw)  # One Core schema, not a weaker assembler-only format.
         if len(raw) > limits.max_manifest_bytes:
             raise MaterialError("manifest_size_limit")

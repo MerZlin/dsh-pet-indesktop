@@ -30,6 +30,7 @@ def inputs(tmp_path):
         path = repo / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{}")
+    (repo / "assets/icon.ico").write_bytes((ROOT / "assets/icon.ico").read_bytes())
     public = bytes(range(32))
     record = ReleaseKeyRecord("release-2026", public.hex(), hashlib.sha256(public).hexdigest())
     policy = tmp_path / "approved-public.json"
@@ -87,6 +88,7 @@ def test_core_has_fixed_normal_bootstrap_and_physical_owner_exclusion(tmp_path):
     compiled = {}
     exec((source / "pet/feature_build_policy.py").read_text(), compiled)
     assert compiled["VALIDATION_BUILD"] is False
+    assert compiled["ALLOW_LOCAL_PACKAGE_ACTIVATION"] is True
     assert compiled["OFFICIAL_FEATURE_TRUST_ANCHORS"] == ((record.key_id, record.public_key_hex),)
     scopes = dict(compiled["OFFICIAL_FEATURE_KEY_POLICIES"])
     assert scopes[record.key_id]["allow_legacy_v1"] is False
@@ -312,3 +314,18 @@ def test_core_still_rejects_a_hardlinked_published_bridge_file(tmp_path):
             probe_manifest_sha256=digest,
         )
     assert not (owned / "core").exists()
+
+
+def test_core_repair_candidate_accepts_compatible_4_2_2_version(tmp_path):
+    metadata, repo, owned, record = prepare(tmp_path, version="4.2.2")
+    assert metadata["version"] == "4.2.2"
+    assert '__version__ = "4.2.2"' in (owned / "core/source/pet/__init__.py").read_text()
+    assert '__version__ = "4.2.1"' in (repo / "pet/__init__.py").read_text()
+
+
+def test_production_core_embeds_existing_whale_icon(tmp_path):
+    metadata, repo, owned, _ = prepare(tmp_path)
+    icon = owned / "core/source/assets/icon.ico"
+    assert icon.read_bytes() == (repo / "assets/icon.ico").read_bytes()
+    assert "source/assets/icon.ico" in metadata["source_files"]
+    assert f"icon={str(icon)!r}" in (owned / "core/core.spec").read_text()

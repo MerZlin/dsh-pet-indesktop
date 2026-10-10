@@ -101,3 +101,21 @@ Windows session fails DLL initialization (0xc0000142) and blocks shutdown.
 The freeze is one-way: a process that survives a cancelled shutdown stays
 frozen rather than resuming animation.
 _Avoid_: Shutdown option, ffmpeg kill switch
+
+**Core API Service / Purpose Grant**:
+The Settings System owns endpoint, TLS, model defaults and opaque OS-store references
+in the existing AI/dialogue capability domain, independently of DLC presence.
+An optional generic FeatureHostContext API port supplies only an authorized
+purpose's immutable request snapshot, metadata and version; feature business
+settings may redirect to Core but never maintain duplicate credentials.
+Committed saves affect the next request; ordinary edits preserve in-flight
+snapshots, while revoke/delete/disable invalidates them. Local trusted Python
+is not sandboxed by this interface.
+_Avoid_: DLC-owned API key, global Config access, official-factory privilege
+
+**Core-only System Removal**:
+System uninstall removes Core-owned program files and path-scoped integrations,
+not DLC copies or personal/configuration/source-package data. Core locks and the
+data-root deletion gate remain authoritative; DLC ledger/staging/transactions
+are not prerequisites for removal. Single-package removal is a separate command.
+_Avoid_: Uninstall all DLC first, delete original ZIP

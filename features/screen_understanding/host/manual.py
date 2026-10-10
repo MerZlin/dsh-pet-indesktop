@@ -66,6 +66,12 @@ class ManualScreenHost:
         self._thread: threading.Thread | None = None
         self._bridge = _ResultBridge(self)
         self._release = context.bind_lifecycle(self.cancel, lambda: None, self.dispose)
+        self._api_unsubscribe = context.vision.api.subscribe(self._api_changed) if context.vision.api else None
+
+    def _api_changed(self, purpose, revoked):
+        if purpose == "manual_look" and self.busy:
+            self.cancel()
+            self.context.show_bubble("API 配置已停用，请打开 API 设置检查。" if revoked else "手动识屏配置已变化，请重新看看屏幕。", 5000)
 
     def _authorized(self) -> bool:
         return not self._disposed and self.context.execution_enabled()
@@ -82,7 +88,17 @@ class ManualScreenHost:
             return
         resolution = self.context.vision.resolve("manual")
         if not resolution.ready or resolution.request is None:
-            self.context.show_bubble("请先在设置 → 自动化与联动 → 屏幕理解中配置或确认迁移", 6000)
+            message = {
+                "credential_missing": "请在 API 设置填写并保存主 Key 或视觉 Key"
+                if self.context.vision.api
+                else "请先在设置 → 自动化与联动 → 屏幕理解中填写并保存视觉 API Key；屏幕理解使用独立配置，不会读取 AI 对话 Key",
+                "api_use_not_authorized": "请在 AI 与对话 → 模型与连接填写主 Key 并保存",
+                "execution_not_authorized": "识屏功能包未启用或执行授权已撤销，请检查 DLC 管理",
+                "api_configuration_changed": "API 配置正在变化，请重新看看屏幕",
+                "credential_unavailable": "屏幕理解凭据暂时不可用，请检查系统安全存储后重试",
+                "configuration_invalid": "屏幕理解独立配置无效，请打开设置检查并保存",
+            }.get(resolution.reason, "请先在设置 → 自动化与联动 → 屏幕理解中填写并保存视觉 API Key；屏幕理解使用独立配置")
+            self.context.show_bubble(message, 6000)
             return
         self._generation += 1
         self._canceled = threading.Event()
@@ -193,6 +209,9 @@ class ManualScreenHost:
         if self._disposed:
             return
         self._disposed = True
+        if self._api_unsubscribe:
+            self._api_unsubscribe()
+            self._api_unsubscribe = None
         self.cancel()
         self._release()
         if self._thread is None and shiboken6.isValid(self._bridge):

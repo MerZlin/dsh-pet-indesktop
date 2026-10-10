@@ -4,6 +4,9 @@
 
 | 日期 | 主题 | 入口 | 关键提交/状态 |
 |---|---|---|---|
+| 2026-10-10 | Phase5A 用户确认与源检查点 | [LOG](LOG.md#phase5a-用户确认与源检查点2026-10-10) · [交接](.scratch/phase5a-local-distribution/HANDOFF.md) | 用户确认 4.2.4；159 文件审核、排除 13 生成目录；4509 全量/3×292 满负载通过，尚未推送 |
+| 2026-10-10 | Phase5A S修复与连接反馈 | [LOG](LOG.md#phase5a-s修复与连接反馈2026-10-10) · [报告](docs/PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md) · [交接](.scratch/phase5a-local-distribution/HANDOFF.md) | Core4.2.4/Screen1.0.3/AI1.0.3；portable Worker、READY后心跳、按钮旁HTTP码、真实冻结链路与鲸鱼娘图标；真实用户门待验，未提交推送 |
+| 2026-10-08 | Phase5A R修复工程交付与人工待验 | [LOG](LOG.md#phase5a-r修复工程交付与人工待验2026-10-08) · [报告§8](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md) · [交接](.scratch/phase5a-local-distribution/HANDOFF.md) | Core4.2.2/AI1.0.2/Screen1.0.1；最新默认4417p/15s、3×152满CPU、新Setup/输入hash/冻结工程证据；真实用户待验、Phase5A未关闭，无提交/推送 |
 | 2026-10-06 | Phase5A夜间修复与暂停交接 | [LOG.md](LOG.md#phase5a夜间修复与暂停交接2026-10-06) · [实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) · [准确停点](.scratch/phase5a-local-distribution/HANDOFF.md) | 全量4298通过；仅AI自然退出、双包确认标题、长/短路径LPAC及权限canary通过；Core04构建审计；新版正式分发/生产业务/高负载/性能/人工门未完成，按用户要求暂停，无提交/推送 |
 | 2026-10-05 | Phase5A 8GiB授权、五产物与总分发正式签名 | [LOG.md](LOG.md#phase5a五产物与总分发签名通过2026-10-05) · [实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) · [准确停点](.scratch/phase5a-local-distribution/HANDOFF.md) | Core03/ZIP/Setup编译、双包/总签名/外部核验、4274全量与满CPU三遍通过；AI菜单/自然退出、真实安装/人工门未完成 |
 | 2026-10-04 | Phase 4B 分支发布 | [发布记录](LOG.md#phase-4b-分支发布2026-10-04) · [工程报告](docs/PR-REPORT-PHASE4B-MANAGEMENT-CLOSEOUT-2026-10-04.md) · [最终交接](.scratch/phase4b-local-management/HANDOFF.md) | `98bbfba` 85文件源修改已提交推送并远端SHA核验；全量3841及3×154满CPU新通过，文档封存另列；正式信任/分发继续暂缓 |

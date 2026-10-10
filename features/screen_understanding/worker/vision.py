@@ -2,7 +2,7 @@
 """看看屏幕：截屏 → 内存 JPEG → 发给视觉模型 → 返回人设口吻的回应。
 
 隐私约定：截图只在内存中处理，全程不落盘，
-只发送到用户独立配置并授权的视觉服务。
+只发送到用户保存的 API 服务，不落盘或扫描额外模型。
 """
 
 from __future__ import annotations
@@ -49,8 +49,23 @@ JPEG_QUALITY = 70
 DEFAULT_VISION_MODEL = "deepseek-v4-flash-vision-exp"
 
 
+_FAILURES = {
+    "vision_authentication_failed": ("视觉服务拒绝鉴权，请检查 API Key。", False),
+    "vision_protocol_unsupported": ("视觉服务不支持当前模型或请求路径，请检查视觉模型和接口。", False),
+    "vision_rate_limited": ("视觉服务限流，请稍后重试或检查服务额度。", True),
+    "vision_network_failed": ("视觉网络连接失败，请检查网络、代理与 TLS 配置后重试。", True),
+    "vision_response_invalid": ("视觉服务未返回有效回复，请检查模型支持与输出长度。", True),
+    "vision_budget_exhausted": ("自动识屏请求预算已用完，请检查预算设置。", False),
+}
+
+
 class VisionError(RuntimeError):
-    pass
+    """Public text and wire category never contain a Provider body or URL."""
+
+    def __init__(self, message, *, code="vision_response_invalid"):
+        super().__init__(message)
+        self.code = code if code in _FAILURES else "vision_response_invalid"
+        self.public_hint, self.retryable = _FAILURES[self.code]
 
 
 def resolve_vision_model(p) -> str:
@@ -62,15 +77,9 @@ def resolve_vision_model(p) -> str:
         return p.model
     if not p.vision_same_as_chat and p.vision_model.strip():
         return p.vision_model.strip()
-    m = (p.model or "").strip()
-    low = m.lower()
-    if "vision" in low:
-        return m
-    if low.endswith("deepseek-v4-flash"):
-        return m + "-vision-exp"
-    if low.startswith("deepseek"):
-        return DEFAULT_VISION_MODEL
-    return m  # kimi 等本身多模态的模型直接用聊天模型
+    from ..common.models import infer_vision_model
+
+    return infer_vision_model(p.model)
 
 
 def foreground_window_info() -> dict | None:
@@ -250,7 +259,7 @@ def _post_vision_request(
         vkey = p.vision_api_key
         api_key = vkey
         if not api_key:
-            raise VisionError("独立视觉服务未配置 API Key")
+            raise VisionError("独立视觉服务未配置 API Key", code="vision_authentication_failed")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(
@@ -266,35 +275,35 @@ def _post_vision_request(
         # 一次触发多次重试各自占用额度；预算耗尽则立即停止，不再发起请求。
         if consume_budget is not None:
             if not consume_budget():
-                raise VisionError("每日请求上限已到，今天先陪你到这儿了")
+                raise VisionError("每日请求上限已到，今天先陪你到这儿了", code="vision_budget_exhausted")
         try:
             with urllib.request.urlopen(req, timeout=max(float(p.timeout), 60.0), context=_make_ssl_context(p.verify_ssl)) as resp:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
             break
         except urllib.error.HTTPError as exc:
-            # CPython 3.11 官方 urllib/response.py 的 addbase 继承
-            # tempfile._TemporaryFileWrapper（3.12 起重构为继承 object）；
-            # HTTPError(fp=None) 时 addinfourl.__init__ 未执行、实例缺 file 键，
-            # exc.read() 会触发 KeyError('file')。防御：读不到响应体就当空处理，
-            # 不影响状态码判断。
-            try:
-                detail = exc.read(2048).decode("utf-8", "replace")
-            except Exception:
-                detail = ""
-            if exc.code == 429 and attempt < 1:  # 429 最多重试 1 次
+            # Do not read/reflect the response body: it may echo credentials.
+            if exc.code == 429 and attempt < 1:
                 last_error = exc
-                time.sleep(2.0)  # 免费视觉模型高峰过载：稍等重试
+                time.sleep(2.0)
                 continue
-            raise VisionError(_safe_detail(detail)) from exc
+            code = (
+                "vision_authentication_failed"
+                if exc.code in {401, 403}
+                else "vision_rate_limited"
+                if exc.code == 429
+                else "vision_protocol_unsupported"
+                if exc.code in {400, 404, 405, 415, 422}
+                else "vision_network_failed"
+            )
+            raise VisionError(_FAILURES[code][0], code=code) from exc
         except (urllib.error.URLError, OSError) as exc:
             last_error = exc
         if attempt < 2:
             time.sleep(1.0)
     if data is None:
         if isinstance(last_error, urllib.error.HTTPError):
-            raise VisionError("模型当前访问量大（免费档高峰限流），稍后再点一次试试") from last_error
-        reason = getattr(last_error, "reason", last_error)
-        raise VisionError(f"网络连接失败：{reason}")
+            raise VisionError(_FAILURES["vision_rate_limited"][0], code="vision_rate_limited") from last_error
+        raise VisionError(_FAILURES["vision_network_failed"][0], code="vision_network_failed") from last_error
 
     choices = data.get("choices") if isinstance(data, dict) else None
     if not choices:

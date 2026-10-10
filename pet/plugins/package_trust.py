@@ -6,9 +6,12 @@ factory/worker/files. Versions are numeric X.Y.Z; Core ranges are comma-separate
 platforms are win32/linux/darwin. Paths use portable ASCII, forward slashes and
 no Windows aliases. worker is {path, args}; files is {path: {sha256, size}}.
 
-manifest.sig is a raw 64-byte Ed25519 signature of the *original* UTF-8 manifest
-bytes. Only explicitly supplied Core public keys are authorities. No installed
-state, key discovery, network, installer or cryptographic implementation here.
+Phase5A local activation deliberately does not authenticate a publisher. A
+Core may opt into ``allow_local_packages`` and then accepts a user-selected
+folder/ZIP after the same bounded schema, compatibility, path, size and
+SHA-256 inventory checks. ``manifest.sig`` remains supported only for the
+explicit signed compatibility mode used by future/formal release tooling; it
+is not required by the Setup or local activation paths.
 """
 
 from __future__ import annotations
@@ -25,7 +28,14 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from ..official_features import SCREEN_FEATURE_ID, official_feature
+from ..official_features import (
+    OFFICIAL_FEATURES,
+    SCREEN_FEATURE_ID,
+    FeatureRegistration,
+    is_valid_factory_id,
+    is_valid_feature_id,
+    official_feature,
+)
 
 OFFICIAL_FEATURE_ID = SCREEN_FEATURE_ID
 OFFICIAL_FACTORY_ID = "screen-understanding/v1"
@@ -268,6 +278,56 @@ def _keys(value, expected, label):
         raise PackageVerificationError(f"invalid {label} fields")
 
 
+def _manifest_payload(raw: bytes) -> tuple[dict, bool]:
+    try:
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_object, parse_constant=_invalid_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise PackageVerificationError("invalid manifest JSON") from exc
+    if not isinstance(payload, dict):
+        raise PackageVerificationError("invalid manifest fields")
+    v2 = "format_version" in payload
+    _keys(payload, _V2_FIELDS if v2 else _FIELDS, "manifest")
+    return payload, v2
+
+
+def _registration_from_payload(payload: dict, *, v2: bool) -> FeatureRegistration:
+    feature_id = payload.get("id")
+    factory = payload.get("factory")
+    if not is_valid_feature_id(feature_id):
+        raise PackageVerificationError("invalid feature id")
+    if not is_valid_factory_id(factory):
+        raise PackageVerificationError("invalid feature factory")
+    if v2:
+        if type(payload.get("format_version")) is not int or payload["format_version"] != 2:
+            raise PackageVerificationError("unsupported manifest version/execution kind")
+        execution_kind = payload.get("execution_kind")
+        key_id = payload.get("key_id")
+        if execution_kind not in {"host-only", "host-worker"} or not isinstance(key_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}\Z", key_id):
+            raise PackageVerificationError("unsupported manifest version/execution kind")
+    else:
+        execution_kind = "host-worker"
+    capabilities = payload.get("capabilities")
+    if not isinstance(capabilities, list) or any(not isinstance(capability, str) or not _CAPABILITY.fullmatch(capability) for capability in capabilities):
+        raise PackageVerificationError("invalid capabilities")
+    try:
+        return FeatureRegistration(feature_id, factory, execution_kind, frozenset(capabilities))
+    except ValueError as exc:
+        raise PackageVerificationError("invalid feature registration") from exc
+
+
+def read_manifest_registration(raw: bytes, *, max_bytes: int = 2 * 1024 * 1024) -> tuple[FeatureRegistration, dict]:
+    """Read only the bounded registration fields used to choose a local route.
+
+    This helper never imports package code and never treats the registration as
+    final trust evidence; :class:`FeaturePackageVerifier` must still perform the
+    complete inventory/digest/compatibility check before execution.
+    """
+    if not isinstance(raw, bytes) or len(raw) > max_bytes:
+        raise PackageVerificationError("manifest size limit")
+    payload, v2 = _manifest_payload(raw)
+    return _registration_from_payload(payload, v2=v2), payload
+
+
 def _version(value):
     if not isinstance(value, str) or not re.fullmatch(_VERSION, value):
         raise PackageVerificationError("version must be numeric X.Y.Z")
@@ -345,20 +405,25 @@ class FeaturePackageVerifier:
     allowed_capabilities: frozenset[str] = frozenset()
     trust_anchors: Mapping[str, bytes] = field(default_factory=dict)
     allow_developer_unsigned: bool = False
+    allow_local_packages: bool = False
     limits: VerificationLimits = field(default_factory=VerificationLimits)
     feature_id: str = OFFICIAL_FEATURE_ID
     anchor_policy: Mapping[str, SigningKeyPolicy] = field(default_factory=dict)
 
     def __post_init__(self):
         try:
-            official_feature(self.feature_id)
+            if self.allow_local_packages:
+                if not is_valid_feature_id(self.feature_id):
+                    raise ValueError("invalid local feature id")
+            else:
+                official_feature(self.feature_id)
         except ValueError as exc:
             raise PackageVerificationError("invalid Core feature policy") from exc
         _version(self.core_version)
         if not isinstance(self.api_version, str) or not re.fullmatch(r"[1-9][0-9]{0,8}", self.api_version):
             raise PackageVerificationError("invalid Core API version")
-        if self.platform not in _PLATFORMS or type(self.allow_developer_unsigned) is not bool:
-            raise PackageVerificationError("invalid Core platform/developer policy")
+        if self.platform not in _PLATFORMS or type(self.allow_developer_unsigned) is not bool or type(self.allow_local_packages) is not bool:
+            raise PackageVerificationError("invalid Core platform/package activation policy")
         if not isinstance(self.limits, VerificationLimits):
             raise PackageVerificationError("invalid Core resource policy")
         caps = frozenset(self.allowed_capabilities)
@@ -414,6 +479,11 @@ class FeaturePackageVerifier:
         key_id = payload.get("key_id")
         if v2 and (not isinstance(key_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", key_id)):
             raise PackageVerificationError("invalid key_id")
+        if self.allow_local_packages:
+            # Local activation is an explicit user-trust boundary, not publisher
+            # authentication. Keep an optional legacy signature inert so old
+            # packages remain inspectable, but never require or verify a key.
+            return "local_user", None
         if signature is None:
             if self.allow_developer_unsigned and not v2:
                 return "developer_unsigned", None
@@ -439,17 +509,31 @@ class FeaturePackageVerifier:
                 return "trusted_official", name
         raise PackageVerificationError("signature has no explicitly trusted Core signer within scope")
 
+    def accepts_descriptor(self, descriptor: VerifiedFeatureDescriptor) -> bool:
+        """Return whether this Core may continue with a verified descriptor.
+
+        All callers use this seam so local user-trusted packages and legacy
+        signed packages cannot diverge at one of the execution boundaries.
+        """
+        if not isinstance(descriptor, VerifiedFeatureDescriptor) or descriptor.id != self.feature_id:
+            return False
+        return descriptor.trust_status == "trusted_official" or (self.allow_local_packages and descriptor.trust_status == "local_user")
+
     def _schema(self, raw: bytes) -> dict:
-        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_object, parse_constant=_invalid_constant)
-        v2 = isinstance(payload, dict) and "format_version" in payload
-        _keys(payload, _V2_FIELDS if v2 else _FIELDS, "manifest")
-        feature = official_feature(self.feature_id)
-        if payload["id"] != feature.id or payload["factory"] != feature.factory:
-            raise PackageVerificationError("unsupported official feature/factory")
-        if v2:
-            if type(payload["format_version"]) is not int or payload["format_version"] != 2 or payload["execution_kind"] != feature.execution_kind:
+        payload, v2 = _manifest_payload(raw)
+        registration = _registration_from_payload(payload, v2=v2)
+        if payload["id"] != self.feature_id:
+            raise PackageVerificationError("package owner does not match selected route")
+        # Official IDs retain their factory, execution and capability contracts;
+        # arbitrary local IDs are governed by their validated registration.
+        feature = OFFICIAL_FEATURES.get(self.feature_id) if self.allow_local_packages else official_feature(self.feature_id)
+        if feature is not None:
+            if payload["factory"] != feature.factory:
+                raise PackageVerificationError("unsupported official feature/factory")
+            if registration.execution_kind != feature.execution_kind:
                 raise PackageVerificationError("unsupported manifest version/execution kind")
-        elif feature.execution_kind != "host-worker":
+        capability_ceiling = feature.capabilities if feature is not None else registration.capabilities
+        if not v2 and registration.execution_kind != "host-worker":
             raise PackageVerificationError("host-only requires manifest v2")
         _version(payload["version"])
         if payload["api_version"] != self.api_version:
@@ -462,12 +546,12 @@ class FeaturePackageVerifier:
         if (
             any(not _CAPABILITY.fullmatch(cap) for cap in capabilities)
             or not set(capabilities) <= self.allowed_capabilities
-            or not set(capabilities) <= feature.capabilities
+            or not set(capabilities) <= capability_ceiling
         ):
             raise PackageVerificationError("unsupported capabilities")
         worker_path = None
         worker = payload["worker"]
-        if feature.execution_kind == "host-only":
+        if registration.execution_kind == "host-only":
             if worker is not None:
                 raise PackageVerificationError("host-only cannot declare a Worker")
         else:
@@ -591,6 +675,6 @@ class FeaturePackageVerifier:
             evidence=CompatibilityEvidence(self.core_version, self.api_version, self.platform, tuple(sorted(self.allowed_capabilities))),
             tree=tuple(sorted(tree.items())),
             ancestors=ancestors,
-            execution_kind=official_feature(payload["id"]).execution_kind,
+            execution_kind=(payload["execution_kind"] if "format_version" in payload else "host-worker"),
         )
         return descriptor, sources

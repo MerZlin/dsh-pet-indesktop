@@ -64,6 +64,7 @@ def _selection(data_root: Path) -> FeatureVersionSelection:
         trust_status="trusted_official",
         raw_manifest=_RAW_MANIFEST,
         root=root,
+        execution_kind="host-worker",
     )
     return FeatureVersionSelection(FEATURE_ID, _VERSION, 1, _DIGEST, descriptor)
 

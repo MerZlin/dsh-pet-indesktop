@@ -1,23 +1,29 @@
 # Phase 5：官方功能选装交付与推广
 
-> Phase 5A / 5B-1 当前状态：2026-10-06，用户授权保存已有源改动并推送远端检查点后继续验收。新全量4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29)、真实CPU高负载三遍、Ruff/format/mypy通过，183文本文件明确暂存；提交/远端核对尚在进行。仅AI正常Core确认/退出、可见包标题、长路径LPAC和权限canary、Core04构建审计已有证据；分号路径、正常Worker、新Core完整矩阵/性能、新版正式分发与真实安装/人工/干净环境仍待完成，不能用旧产物冒充。先读[准确交接](../../.scratch/phase5a-local-distribution/HANDOFF.md)和[同一实施报告](../PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)，再进入[设计](PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+> **Phase5A当前权威口径（2026-10-08）**：2026-10-08：Core 4.2.2 / AI 1.0.2 / Screen 1.0.1 的 R01–R05 修复已实现；最新默认单进程全量 4417 passed /15 skipped /14 warnings、自然 exit0，3×152 项满CPU复跑通过，已重建受影响 Core/新 Setup并复核其余交付输入。工程范围验证完成，待用户人工验收，Phase5A 未正式关闭。 Core统一API/用途授权、手动识屏独立自动策略、系统卸载只删Core。使用新setup-lifecycle更新旧卸载器；真实Provider/画面/系统两来源卸载重装待用户。见[报告§8](../PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md)、[计划](../PHASE5A-CLOSEOUT-IMPLEMENTATION-PLAN-2026-10-07.md)、[交付](../PHASE5A-CODE-IMPLEMENTATION-HANDOFF-2026-10-07.md)。
+>
+> **Setup 路径**：安装向导只提供 `official.ai-chat` 与 `official.screen-understanding`。两个官方 ZIP 在编译时嵌入 Setup；勾选后安装阶段自动执行无界面 preflight/apply，首次正常启动由 Core 确认 startup receipt。Setup 不读取旁边的 `packages`，也不要求公钥、私钥、`manifest.sig`。
+>
+> **Setup 外路径**：用户明确选择普通 ZIP 或目录后，只读取受限大小的 `manifest.json` 来识别 `id` / `factory` / `execution_kind`，再进入统一事务。只要符合本地包格式、兼容性和固定 host/worker 入口合同，即使不在 `OFFICIAL_FEATURES` 中也作为第三方 DLC；用户主动选择即代表信任，包内 Python 可能以当前用户权限执行，不是沙箱。
+>
+> 路径/重解析点、文件数与大小、清单 SHA-256、Core/API/平台兼容、事务/租约/启动确认仍是工程正确性保护。在线目录、社区审核、签名撤销、公钥轮换和公开 SDK 留给 Phase6/Phase7。
 
-> 历史状态快照：2026-10-05（下列结果只代表当时版本）。用户追加授权8GiB后，Core03生产构建/PYZ审计通过（455,780,427B /2,260模块），五产物已生成并完成正式总分发签名294与外部公钥独立核验296/305；305末次拥有根实测7.799789GiB，余205.016MiB，不扩大清理。稳定全量273为4274 passed /15 skipped /15 warnings，满CPU三遍各251 passed /1 skipped，Ruff/format/mypy通过。空Core/仅screen完整启动菜单与自然退出通过；仅AI真实加载已确认但菜单/自然退出驱动失败，最终onlyAI/both尚未通过。Setup仍只是编译，真实安装更新卸载、冻结业务/便携、人工及干净环境未完成；Phase4B历史证据保持原样。设计见 [Phase5A 正式合同](PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+> 历史状态、旧签名/分发门和旧构建数字保留在 [实施报告](../PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)，只作审计记录，不作为本次重构已通过的证据。
 
-> 修订：2026-09-27。**5A/5B 是必做目标，不再整体条件化。**只有复杂远程平台、Workshop 和第三方生态按需启用。当前功能包交付仍待实现。
+> 修订：2026-10-08。5A/5B 是官方功能交付路线；本地第三方 DLC 的显式导入是 Phase5A 的受信任本地能力，不等于 Phase6 的公开社区生态。
 
-## 1. Phase 5A：小 Core Setup、旁置包与 ZIP/便携
+## 1. Phase 5A：小 Core Setup 内嵌选装与 ZIP/便携
 
 依赖 Phase 4 的真实屏幕理解样板和统一事务，交付：
 
-- 小 Core Setup 提供官方组件选择，可从旁置本地包安装选中功能；没选或缺包不阻止 Core 安装/启动，也不偷偷联网补装。
-- ZIP 版可通过应用导入官方本地包，不能靠复制未知 Python 文件获得执行权；本地目录作为开发/恢复来源也必须校验。
+- 小 Core Setup 提供官方组件选择，官方 ZIP 直接嵌入安装器；没选不安装，选中后自动导入/启用，失败只影响对应包，不读取 Setup 旁置 `packages`，也不偷偷联网补装。
+- ZIP/目录可通过应用显式导入本地功能包；先受限读取 manifest 自动路由，未知 owner 只要符合注册、兼容、完整性和固定 host/worker 合同即可作为第三方 DLC。复制文件不会自动执行，用户选择导入才建立信任边界。
 - 显式便携模式使普通数据和 DLC 随便携根迁移；默认模式仍使用平台数据目录。便携标记、目录布局、只读路径处理和实例锁范围是实施前设计产出，不在此凭空冻结。
-- 密钥不明文复制进 ZIP 或便携目录；换机器可能重新授权。Provider 偏好、会话等普通数据与秘密区分。
+- 功能包导入不携带发布私钥，也不要求用户提供公钥；Provider 偏好、会话等普通数据与秘密区分，凭据仍由操作系统安全存储管理。
 - Setup、ZIP、应用内扩展管理共用 [Phase 4 安装事务](../plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md)、版本/依赖解析和权威安装状态。Core 更新尊重卸载记录，不重新装回选装功能。
-- 主桌宠始终提供扩展管理；本地导入、启停、配置、卸载、故障/回滚不等待远程 catalog。
+- 主桌宠始终提供扩展管理；本地导入、启停、配置、卸载、故障/回滚不等待远程 catalog。第三方包按 owner 隔离配置和数据，已加载 Python host 的替换以重启生效。
 
-**出口**：干净安装最小 Core；离线选装/未选/缺包三种 Setup 路径；ZIP 导入；显式便携迁移；卸载/重装；多个实例占用；升级与 Core 更新不复装。记录 Core、旁置包、下载/解压后体积及启动成本。
+**出口**：干净安装最小 Core；离线选装/未选/缺包三种 Setup 路径；ZIP 导入；显式便携迁移；卸载/重装；多个实例占用；升级与 Core 更新不复装。记录 Core、内嵌 DLC 包、下载/解压后体积及启动成本；真实系统安装矩阵需单独授权。
 
 ## 2. Phase 5B：AI 对话优先，推广全部官方领域
 

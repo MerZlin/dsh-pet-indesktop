@@ -104,10 +104,22 @@ def test_external_runtime_fault_never_enters_core_fallback(runtime, monkeypatch)
         assert external._execution_fault
         assert not external.is_running()
         external._on_tick()
+        # Explicit manual retry is allowed after a stopped fault; an OS launch
+        # refusal must still give an actionable failure and never execute Core.
+        attempts = []
+
+        def refuse_launch(effective):
+            attempts.append(external._execution_fault)
+            return False
+
+        monkeypatch.setattr(external, "_start_worker", refuse_launch)
         replies = []
-        assert external.request_manual_look(None, "", "pet", lambda *args: replies.append(args))
+        assert external.request_manual_look(
+            {"api_key": "test-only", "base_url": "http://127.0.0.1", "model": "test"}, "", "pet", lambda *args: replies.append(args)
+        )
+        assert attempts == [False]
         assert replies and replies[0][2] is True
-        assert not external._worker_adapter.active
+        assert not external._worker_fallback and not external._worker_adapter.active
     finally:
         external.dispose()
 
@@ -119,3 +131,81 @@ def test_legacy_worker_adapter_aliases_feature_implementation():
     legacy = importlib.import_module("pet.workers.proactive_screen_adapter")
     assert legacy is canonical
     assert legacy.ProactiveScreenWorkerAdapter.__module__ == canonical.__name__
+
+
+def test_sync_launch_error_reaches_manual_callback_and_retry_recovers(runtime, tmp_path, caplog):
+    import json
+    import os
+    import sys
+
+    from features.screen_understanding.host.runtime import ProactiveScreenWatcher
+    from features.screen_understanding.host.worker_adapter import ProactiveScreenWorkerAdapter
+    from pet.feature_state_io import StateError
+    from pet.workers.launch import WorkerLaunch
+    from tests.test_external_worker_launch import wait_until
+
+    _, _, _, context, _, *_ = runtime
+    caplog.set_level("INFO")
+    child = tmp_path / "child.py"
+    child.write_text(
+        """import json,sys
+
+def send(kind, payload, request_id=None):
+    data=dict(protocol='pet-worker/v1',worker_id='proactive-screen',type=kind,timestamp='2026-10-10T00:00:00Z',payload=payload)
+    if request_id is not None: data['request_id']=request_id
+    sys.stdout.buffer.write(json.dumps(data).encode('utf-8')+bytes([10]))
+    sys.stdout.buffer.flush()
+send('hello', {'capabilities':['foreground.read','screenshot.capture','vision.request','logging.write']})
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg['type']=='config_push': send('ready', {'generation':msg['payload']['generation']})
+    elif msg['type']=='request':
+        send('response', {'generation':msg['payload']['generation'], 'status':'ok','result':{'reply':'synthetic reply'}}, msg['request_id'])
+    elif msg['type']=='shutdown': break
+""",
+        encoding="utf-8",
+    )
+    attempts = []
+    adapters = []
+    lifecycle = []
+
+    def acquire():
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise StateError("worker_runtime_boundary")
+        return WorkerLaunch(sys.executable, ("-I", str(child)), str(tmp_path), dict(os.environ), lambda: None)
+
+    def factory(parent, budget):
+        item = ProactiveScreenWorkerAdapter(parent, budget_checker=budget, launch_factory=acquire)
+        adapters.append(item)
+        item.supervisor.state_changed.connect(lambda state: lifecycle.append(state))
+        item.supervisor.diagnostic.connect(lambda stage, detail: lifecycle.append((stage, detail)))
+        return item
+
+    external = ProactiveScreenWatcher(replace(context, allow_in_process=False, worker_factory=factory), worker_mode="auto")
+    replies = []
+    try:
+        assert external.request_manual_look(
+            {"api_key": "test-only", "base_url": "http://127.0.0.1", "model": "test"}, "", "pet", lambda *args: replies.append(args)
+        )
+        assert replies and "运行目录" in replies[0][0], replies
+        assert replies[0][2] is True
+        assert external._worker_issue.get("code") == "worker_runtime_boundary"
+        assert adapters[0].supervisor.process is None
+        assert external.request_manual_look(
+            {"api_key": "test-only", "base_url": "http://127.0.0.1", "model": "test"}, "", "pet", lambda *args: replies.append(args)
+        )
+        try:
+            wait_until(lambda: len(replies) == 2, timeout_ms=15000)
+        except AssertionError:
+            raise AssertionError(lifecycle) from None
+        assert len(attempts) == 2 and "ready" in lifecycle
+        assert replies[1][0] == "synthetic reply" and replies[1][2] is False
+        assert not external._execution_fault and not external._worker_fallback
+        assert "worker_runtime_boundary" not in json.dumps(external._worker_issue)
+        assert "worker_runtime_boundary" in caplog.text
+        assert "Worker 状态: ready" in caplog.text
+        assert "test-only" not in caplog.text
+    finally:
+        external.dispose()
+        wait_until(lambda: not adapters[0].active and adapters[0].supervisor.process is None or adapters[0].state == "stopped", timeout_ms=15000)

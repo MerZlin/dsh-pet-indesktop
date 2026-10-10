@@ -19,8 +19,8 @@ begin
   Result := False;
   ReleaseRemovalBarrier();
   Reason := 'data_boundary_invalid';
-  if (Root = '') or (ExpandFileName(Root) <> Root) or (Length(Root) < 3) then Exit;
-  if (Copy(Root, 2, 2) <> ':\') or (not CodePathSafe(Root)) then Exit;
+  if (Root = '') or (ExpandFileName(Root) <> Root) or (Length(Root) <= 3) then Exit;
+  if (Copy(Root, 2, 2) <> ':\') or (not CodePathSafe(Root)) or (not CodeDirectoryBoundarySafe(Root)) then Exit;
   if not DirExists(Root) then begin
     if not ForceDirectories(Root) then begin
       Reason := 'data_root_unavailable'; Exit;

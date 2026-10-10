@@ -21,6 +21,7 @@ class AiRuntime(QObject):
         self.context = context
         self.config = AiConfiguration(context)
         self._services = []
+        self._service_purposes = {}
         self._windows = []
         self._controllers = []
         self._finished_listeners = {}
@@ -31,6 +32,7 @@ class AiRuntime(QObject):
         self._resume_timer.setInterval(50)
         self._resume_timer.timeout.connect(self.resume)
         self._unsubscribe = context.bind_execution(self.pause, self.resume)
+        self._api_unsubscribe = context.api.subscribe(self._api_changed) if context.api else None
         self._gate = application_exit_gate(QApplication.instance())
         self._exit_token = self._gate.register(context.owner, self.close, lambda: self.drain_status == "completed")
         if context.user_data is not None:
@@ -45,17 +47,62 @@ class AiRuntime(QObject):
     def accepting(self):
         return not self._paused and not self._closing and self.context.execution_authorized()
 
-    def create_service(self, *, provider=None):
+    def create_service(self, *, provider=None, purpose="chat.send"):
         if not self.accepting:
             raise RuntimeError("ai_requests_not_accepting")
         from .chat.service import ChatService
 
-        service = ChatService(provider=provider, parent=self, authorized=lambda: self.accepting)
+        service = ChatService(
+            provider=provider,
+            parent=self,
+            authorized=lambda: self._request_authorized(service),
+            request_guard_factory=lambda config: self._request_guard(service, config),
+        )
+        self._service_purposes[service] = purpose
         # The runtime and Core exit gate retain services through actual QThread
         # join; a window disappearing cannot delete an in-flight QThread.
         service.finished.connect(self._notify_finished)
         self._services.append(service)
         return service
+
+    def _request_authorized(self, service):
+        if not self.accepting:
+            return False
+        if self.context.api is None:
+            return True
+        try:
+            self.context.api.metadata(self._service_purposes.get(service, "chat.send"))
+            return True
+        except (PermissionError, ValueError, OSError):
+            return False
+
+    def _request_guard(self, service, config):
+        if self.context.api is None:
+            return lambda: True
+        purpose = self._service_purposes.get(service, "chat.send")
+        try:
+            expected = config.authorization_version or self.context.api.metadata(purpose).authorization_version
+        except (PermissionError, ValueError, OSError):
+            return lambda: False
+
+        def current():
+            try:
+                return self.context.api.metadata(purpose).authorization_version == expected
+            except (PermissionError, ValueError, OSError):
+                return False
+
+        return current
+
+    def _api_changed(self, purpose, revoked):
+        if self._closing:
+            return
+        for service in self._services:
+            if self._service_purposes.get(service) == purpose and (revoked or not service.request_authorized):
+                service.stop()
+        # Display only. In-flight ordinary saves retain their immutable snapshot.
+        for window in self._windows:
+            if isValid(window) and hasattr(window, "refresh_settings"):
+                window.refresh_settings()
 
     def subscribe_finished(self, callback):
         """Narrow presentation notification; never exposes request threads."""
@@ -121,7 +168,7 @@ class AiRuntime(QObject):
         controller = FileInterpretController(
             AiFileView(surface, self.config),
             parent=self,
-            service_factory=lambda: self.create_service(provider=provider),
+            service_factory=lambda: self.create_service(provider=provider, purpose="files.interpret"),
             owns_service=False,
             authorized=lambda: self.accepting,
         )
@@ -138,6 +185,7 @@ class AiRuntime(QObject):
     def send(self, service, messages, provider, *, operation="chat.send", request_id=None):
         if not self.accepting or service not in self._services:
             raise RuntimeError("ai_requests_not_accepting")
+        self._service_purposes[service] = operation
         return service.send(messages, self.config.request_config(provider, operation=operation), request_id=request_id)
 
     def pause(self):
@@ -200,6 +248,9 @@ class AiRuntime(QObject):
 
     def close(self):
         self._closing = True
+        if self._api_unsubscribe is not None:
+            self._api_unsubscribe()
+            self._api_unsubscribe = None
         self._finished_listeners.clear()
         self.pause()
         for service in self._services:

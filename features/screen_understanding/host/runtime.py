@@ -207,9 +207,11 @@ class ProactiveScreenWatcher:
         self.context = context
         self._disposed = False
         self._execution_fault = False
+        self._worker_issue = {}
         self._vision_config = context.vision
         self._display_name = context.window_state().display_name
         self._vision_revision = self._vision_config.revision()
+        self._manual_vision_revision = self._vision_config.revision("manual")
         self.worker_mode = worker_mode if worker_mode in {"auto", "in_process", "disabled"} else "in_process"
         self._worker_fallback = False
         self._worker_adapter: Any = None
@@ -259,6 +261,7 @@ class ProactiveScreenWatcher:
             self.apply_config,
             self.dispose,
         )
+        self._api_unsubscribe = context.vision.api.subscribe(lambda *_: self.apply_config()) if context.vision.api else None
         self.apply_config()
 
     def _authorized(self) -> bool:
@@ -269,6 +272,9 @@ class ProactiveScreenWatcher:
         if self._disposed:
             return
         self._disposed = True
+        if self._api_unsubscribe:
+            self._api_unsubscribe()
+            self._api_unsubscribe = None
         ProactiveScreenWatcher.pause(self)
         self._release_feature_execution()
         self._delete_bridge_when_stopped()
@@ -291,8 +297,11 @@ class ProactiveScreenWatcher:
         revision = self._vision_config.revision()
         if revision != self._vision_revision:
             self._vision_revision = revision
-            self._generation += 1
-            self._cancel_worker_requests(notify_manual=True)
+            self._cancel_automatic_request()
+        manual_revision = self._vision_config.revision("manual")
+        if manual_revision != self._manual_vision_revision:
+            self._manual_vision_revision = manual_revision
+            self._cancel_manual_requests(notify_manual=True)
         raw_cfg = self.context.preferences.read()
         eff = effective_proactive_config(raw_cfg)
         self.limiter.update_config(eff, dry_run=eff.get("dry_run", False))
@@ -313,11 +322,12 @@ class ProactiveScreenWatcher:
             if self._authorized() and not self._timer.isActive():
                 self._timer.start()
         else:
-            self._generation += 1  # 关闭 = 作废在飞任务
+            # Automatic policy does not own a manually requested RPC's lifetime.
+            # IDs fence late automatic results; keep the shared generation alive.
             self._timer.stop()
-            self._cancel_worker_requests(notify_manual=True)
-            if self._worker_adapter is not None and self._worker_adapter.active:
-                self._worker_adapter.stop()
+            self._cancel_automatic_request()
+            self._reset_foreground_state()
+            self._stop_idle_worker()
 
     def pause(self) -> None:
         """窗口隐藏或活动暂停时停止定时器，并作废在飞/已排队的任务。"""
@@ -490,6 +500,9 @@ class ProactiveScreenWatcher:
 
         if not self.context.allow_in_process:
             self._execution_fault = True
+            from .worker_diagnostics import failure_hint
+
+            self._fail_manual_requests(failure_hint(self._worker_issue))
             logging.warning("外置识屏 Worker 已暂停: %s", reason)
             ProactiveScreenWatcher.pause(self)
             return
@@ -515,6 +528,9 @@ class ProactiveScreenWatcher:
 
     def _cancel_worker_requests(self, *, notify_manual: bool = False) -> None:
         self._cancel_automatic_request()
+        self._cancel_manual_requests(notify_manual=notify_manual)
+
+    def _cancel_manual_requests(self, *, notify_manual: bool = False) -> None:
         request_id = self._manual_request_id
         self._manual_request_id = None
         if request_id and self._worker_adapter is not None:
@@ -541,7 +557,9 @@ class ProactiveScreenWatcher:
     def _on_worker_state_changed(self, state: str) -> None:
         import logging
 
-        logging.debug("主动识屏 Worker 状态: %s", state)
+        # Lifecycle-only INFO records make frozen launch failures diagnosable;
+        # no request contents, paths or credentials are included.
+        logging.info("主动识屏 Worker 状态: %s", state)
         if self._disposed:
             self._delete_bridge_when_stopped()
             return
@@ -797,7 +815,14 @@ class ProactiveScreenWatcher:
     def _on_worker_diagnostic(self, stage: str, detail: object) -> None:
         import logging
 
-        logging.debug("主动识屏 Worker 诊断 [%s]: %s", stage, detail)
+        from .worker_diagnostics import safe_diagnostic
+
+        safe = safe_diagnostic(detail)
+        self._worker_issue.update(safe)
+        if stage in {"launch_rejected", "failure", "crashed", "process_error", "kill_timeout", "restart_scheduled"} or safe.get("missing_module"):
+            logging.warning("主动识屏 Worker 诊断 [%s]: %s", stage, safe)
+        else:
+            logging.debug("主动识屏 Worker 诊断 [%s]: %s", stage, safe)
 
     def _worker_budget_check(self, kind: str, generation: int | None) -> bool:
         if kind != "automatic" or generation != self._generation or not self._automatic_allowed_now():
@@ -812,8 +837,13 @@ class ProactiveScreenWatcher:
         if self._disposed or not self.context.execution_enabled():
             return False
         if self._execution_fault:
-            callback("识屏服务已暂停，请重试或回滚功能包", "", True)
-            return True
+            if self._worker_adapter is None or self._worker_adapter.state not in {"fault", "stopped", "disabled"}:
+                callback("识屏 Worker 正在退出，请稍后重试。", "", True)
+                return True
+            # An explicit retry obtains a fresh verified lease. Supervisor.start
+            # also refuses to spawn while the previous process is still alive.
+            self._execution_fault = False
+            self._worker_issue = {}
         if self.worker_mode == "disabled":
             callback("识屏已停用", "", True)
             return True
@@ -832,7 +862,9 @@ class ProactiveScreenWatcher:
             if not self._worker_adapter.active:
                 if not self._start_worker(effective_proactive_config(self.context.preferences.read())):
                     if not self.context.allow_in_process:
-                        callback("识屏服务已暂停，请重试或回滚功能包", "", True)
+                        from .worker_diagnostics import failure_hint
+
+                        callback(failure_hint(self._worker_issue), "", True)
                         return True
                     return False
             self._pending_manual_look = (provider, str(system_prompt), str(pet_name), callback)

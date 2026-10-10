@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Mapping, Protocol
 
 from . import feature_state_io as io
 from .feature_state_io import StateError
-from .official_features import official_feature
+from .official_features import is_valid_feature_id
 
 if TYPE_CHECKING:
     from .plugins.package_trust import VerifiedFeatureDescriptor
@@ -232,7 +232,9 @@ class FeatureInstallStateStore:
     """
 
     def __init__(self, data_root: Path, *, feature_id: str = FEATURE_ID):
-        self.feature_id = official_feature(feature_id).id
+        if not is_valid_feature_id(feature_id):
+            raise ValueError("invalid feature id")
+        self.feature_id = feature_id
         self.root = Path(data_root).absolute() / "plugins" / self.feature_id
         self.state_path = self.root / "state.json"
         self.lock_path = self.root / "locks/state.lock"
@@ -470,7 +472,11 @@ class FeatureInstallStateStore:
                 descriptor.id != self.feature_id
                 or descriptor.version != state.active
                 or descriptor.root != version_root
-                or descriptor.trust_status != "trusted_official"
+                or not (
+                    verifier.accepts_descriptor(descriptor)
+                    if callable(getattr(verifier, "accepts_descriptor", None))
+                    else descriptor.trust_status == "trusted_official"
+                )
                 or _digest(descriptor.raw_manifest) != state.versions[state.active]
             ):
                 return VerifiedResolution("verification_failed", state.revision)

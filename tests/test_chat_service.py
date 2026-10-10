@@ -98,12 +98,9 @@ def test_worker_finished_removes_from_workers_set():
     worker = service._worker
     assert worker in service._workers
 
-    # 等待完成
-    deadline = time.time() + 2.0
-    while len(finished_events) == 0 and time.time() < deadline:
-        app.processEvents()
-        time.sleep(0.01)
-    app.processEvents()
+    # A result is queued before QThread.finished; wait for actual draining,
+    # not just one result signal or one guessed processEvents tick.
+    _drain(app, service)
 
     # b) worker 结束后自动从集合移除
     assert len(finished_events) == 1

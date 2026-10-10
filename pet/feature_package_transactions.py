@@ -24,7 +24,7 @@ from .feature_lifecycle_contract import LifecyclePrepareRequest, authorize_reque
 from .feature_startup_contract import StartupLoadPermit
 from .feature_state_io import StateError
 from .feature_version_lease import FeatureVersionLeaseCoordinator
-from .official_features import SCREEN_FEATURE_ID, official_feature
+from .official_features import SCREEN_FEATURE_ID, is_valid_feature_id
 from .plugins.package_trust import FeaturePackageVerifier, PackageVerificationError, VerifiedFeatureDescriptor
 
 # Transient lock contention is retryable, never evidence of a corrupt package.
@@ -177,7 +177,8 @@ class OperationPlan:
     feature_id: str = SCREEN_FEATURE_ID
 
     def __post_init__(self):
-        official_feature(self.feature_id)
+        if not is_valid_feature_id(self.feature_id):
+            raise ValueError("invalid feature id")
         object.__setattr__(self, "versions", _freeze(self.versions))
         object.__setattr__(self, "occupancy", _freeze(self.occupancy))
         object.__setattr__(self, "action_summary", tuple(self.action_summary))
@@ -200,7 +201,8 @@ class OperationResult:
     feature_id: str = SCREEN_FEATURE_ID
 
     def __post_init__(self):
-        official_feature(self.feature_id)
+        if not is_valid_feature_id(self.feature_id):
+            raise ValueError("invalid feature id")
         if self.status not in _STATUSES or self.phase is not None and self.phase not in _PHASES:
             raise ValueError("invalid transaction result")
 
@@ -453,8 +455,8 @@ class FeaturePackageTransactionService:
             if package_files.source_fingerprint(source, self.verifier.limits) != (source_type, fingerprint):
                 raise StateError("source_changed")
             descriptor = self.verifier.verify(staged_root)
-            if descriptor.trust_status != "trusted_official":
-                raise StateError("official_signature_required")
+            if not self.verifier.accepts_descriptor(descriptor):
+                raise StateError("package_activation_policy_rejected")
             manifest_digest = _digest(descriptor.raw_manifest)
             old_digest = state.versions.get(descriptor.version)
             if old_digest is not None:
@@ -516,7 +518,7 @@ class FeaturePackageTransactionService:
                 raise StateError("not_installed")
             if enabled:
                 descriptor = self.verifier.verify(self.versions_root / state.active)
-                if descriptor.trust_status != "trusted_official" or _digest(descriptor.raw_manifest) != state.versions[state.active]:
+                if not self.verifier.accepts_descriptor(descriptor) or _digest(descriptor.raw_manifest) != state.versions[state.active]:
                     raise StateError("active_verification_failed")
             elif self.runtime is not None:
                 prepared = self._prepare_runtime("lc-" + uuid.uuid4().hex, "disable", tuple(state.versions), state)
@@ -883,7 +885,7 @@ class FeaturePackageTransactionService:
 
     def _validate_candidate(self, plan: OperationPlan, descriptor: VerifiedFeatureDescriptor) -> None:
         if (
-            descriptor.trust_status != "trusted_official"
+            not self.verifier.accepts_descriptor(descriptor)
             or descriptor.version != plan.target_version
             or _digest(descriptor.raw_manifest) != plan.manifest_digest
             or self._package_digest(descriptor) != plan.staged_digest
@@ -1017,7 +1019,7 @@ class FeaturePackageTransactionService:
                 if (
                     descriptor.version != previous
                     or _digest(descriptor.raw_manifest) != plan.versions[previous]
-                    or descriptor.trust_status != "trusted_official"
+                    or not self.verifier.accepts_descriptor(descriptor)
                 ):
                     descriptor = None
             except (PackageVerificationError, StateError, OSError):

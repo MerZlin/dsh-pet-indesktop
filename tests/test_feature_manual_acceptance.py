@@ -22,6 +22,8 @@ def _restore_process_arguments(monkeypatch):
 
 def _manual_root(tmp_path):
     root = tmp_path / "inputs"
+    (root / "assets").mkdir(parents=True)
+    (root / "assets/icon.ico").write_bytes((ROOT / "assets/icon.ico").read_bytes())
     (root / "pet").mkdir(parents=True)
     (root / "pet/feature_build_policy.py").write_text("OFFICIAL_FEATURE_TRUST_ANCHORS = ()\nVALIDATION_BUILD = False\n", encoding="utf-8")
     (root / "pet/__init__.py").write_text("", encoding="utf-8")
@@ -55,6 +57,7 @@ def test_fixed_manual_snapshot_uses_real_boundaries_without_executing_entry(tmp_
     assert "MANUAL_ACCEPTANCE_BUILD = True" in policy
     assert "VALIDATION_BUILD = True" in policy
     assert "MANUAL_ACCEPTANCE_ONLY = True" in (output / "source/validation_config.py").read_text(encoding="utf-8")
+    assert (output / "source/build_variant.py").read_text(encoding="utf-8") == "VARIANT = 'core-webm'\n"
     assert (root / "pet/feature_build_policy.py").read_bytes() == original
 
 
@@ -98,6 +101,27 @@ def test_manual_entry_cannot_run_from_source(monkeypatch):
         _entry().main(["owned", "--settings"])
 
 
+def test_manual_entry_routes_local_package_intent_to_closed_dispatcher(monkeypatch):
+    entry = _entry()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    config = types.ModuleType("validation_config")
+    config.MANUAL_ACCEPTANCE_ONLY = True
+    config.ENABLE_CHAT = False
+    monkeypatch.setitem(sys.modules, "validation_config", config)
+    from pet import feature_build_policy as policy
+
+    monkeypatch.setattr(policy, "MANUAL_ACCEPTANCE_BUILD", True, raising=False)
+    monkeypatch.setattr(policy, "VALIDATION_BUILD", True)
+    monkeypatch.setattr(policy, "PROBE_BUNDLE_MANIFEST_SHA256", "aa" * 32)
+    import pet.__main__ as normal
+
+    seen = []
+    monkeypatch.setattr(normal, "_main", lambda: seen.append("closed-dispatch") or 23)
+    monkeypatch.setattr(entry, "protect_autostart", lambda: seen.append("autostart-guard"))
+    assert entry.main(["owned", "--install-local-packages", "packages", "official.screen-understanding"]) == 23
+    assert seen == ["autostart-guard", "closed-dispatch"]
+
+
 def test_settings_entry_is_production_settings_not_automated_driver(monkeypatch):
     entry = _entry()
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -113,10 +137,14 @@ def test_settings_entry_is_production_settings_not_automated_driver(monkeypatch)
     import pet.__main__ as normal
 
     seen = []
+    from pet import core_code_gate, runtime_layout
+
+    monkeypatch.setattr(core_code_gate, "hold_current_core_code", lambda: seen.append("code-barrier"))
+    monkeypatch.setattr(runtime_layout, "initialize_for_current_build", lambda: seen.append("project-layout") or object())
     monkeypatch.setattr(normal, "_run_settings", lambda: seen.append("settings") or 17)
     monkeypatch.setattr(entry, "protect_autostart", lambda: seen.append("autostart_guard"))
     assert entry.main(["owned", "--settings", "--settings-page", "extensions"]) == 17
-    assert seen == ["autostart_guard", "settings"]
+    assert seen == ["autostart_guard", "code-barrier", "project-layout", "settings"]
     assert "validation_boundaries" not in sys.modules
 
 
@@ -185,3 +213,36 @@ def test_worker_entry_retains_production_handoff_before_gui_or_autostart(monkeyp
     monkeypatch.setattr(entry, "protect_autostart", lambda: pytest.fail("Worker must not touch GUI/system startup"))
     assert entry.main(["owned", "--worker", "screen"]) == 78
     assert seen == ["screen"]
+
+
+def test_manual_builder_publishes_fixed_screen_package_archive_name(tmp_path):
+    from scripts import build_feature_management_manual as manual
+
+    source = tmp_path / "v1.zip"
+    target = tmp_path / "packages"
+    source.write_bytes(b"signed-screen-package")
+    receipt = manual.publish_canonical_archive(source, target)
+    assert receipt["feature_id"] == "official.screen-understanding"
+    assert receipt["source"] == "v1"
+    assert Path(receipt["path"]).name == "official.screen-understanding.zip"
+    assert Path(receipt["path"]).read_bytes() == source.read_bytes()
+
+
+@pytest.mark.parametrize("chat", [False, True])
+def test_manual_desktop_keeps_production_bootstrap_before_app(monkeypatch, chat):
+    entry = _entry()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setitem(sys.modules, "validation_config", types.SimpleNamespace(MANUAL_ACCEPTANCE_ONLY=True, ENABLE_CHAT=chat))
+    from pet import core_code_gate, runtime_layout
+    from pet import feature_build_policy as policy
+
+    monkeypatch.setattr(policy, "MANUAL_ACCEPTANCE_BUILD", True, raising=False)
+    monkeypatch.setattr(policy, "VALIDATION_BUILD", True)
+    monkeypatch.setattr(policy, "PROBE_BUNDLE_MANIFEST_SHA256", "aa" * 32)
+    seen = []
+    monkeypatch.setattr(entry, "protect_autostart", lambda: seen.append("guard"))
+    monkeypatch.setattr(core_code_gate, "hold_current_core_code", lambda: seen.append("code-barrier"))
+    monkeypatch.setattr(runtime_layout, "initialize_for_current_build", lambda: seen.append("project-layout") or object())
+    monkeypatch.setitem(sys.modules, "pet.app", types.SimpleNamespace(main=lambda **kw: seen.append(("app", kw["enable_chat"])) or 19))
+    assert entry.main(["owned"]) == 19
+    assert seen == ["guard", "code-barrier", "project-layout", ("app", chat)]

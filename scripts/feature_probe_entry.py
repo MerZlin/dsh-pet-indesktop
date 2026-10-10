@@ -41,16 +41,28 @@ def host_probe(source, output) -> int:
             "allowed_capabilities",
             "trust_anchors",
             "allow_developer_unsigned",
+            "allow_local_packages",
             "limits",
             "feature_id",
             "anchor_policy",
         }
-        if set(policy) == required - {"feature_id", "anchor_policy"}:
+        legacy_required = required - {"allow_local_packages", "feature_id", "anchor_policy"}
+        if set(policy) == legacy_required:
+            # Compatibility for explicitly trusted v1 screen probe callers.
+            # The candidate cannot supply this parent-owned, read-only policy.
+            # Missing local activation means the historical signed-only path.
+            policy = {
+                **policy,
+                "allow_local_packages": False,
+                "feature_id": "official.screen-understanding",
+                "anchor_policy": {},
+            }
+        elif set(policy) == required - {"feature_id", "anchor_policy"}:
             # Compatibility for explicitly trusted v1 screen probe callers.
             # The candidate cannot supply this parent-owned, read-only policy.
             policy = {**policy, "feature_id": "official.screen-understanding", "anchor_policy": {}}
-        if set(policy) != required or policy["allow_developer_unsigned"] is not False:
-            raise ValueError("official trust required")
+        if set(policy) != required or policy["allow_developer_unsigned"] is not False or type(policy["allow_local_packages"]) is not bool:
+            raise ValueError("package activation policy invalid")
         stage = "verifier_import"
         from pathlib import Path
 
@@ -68,6 +80,7 @@ def host_probe(source, output) -> int:
             trust_anchors={name: bytes.fromhex(key) for name, key in policy["trust_anchors"].items()},
             limits=VerificationLimits(**policy["limits"]),
             allow_developer_unsigned=False,
+            allow_local_packages=policy["allow_local_packages"],
             snapshot_ancestors=doc["snapshot_ancestors"],
         )
         package = Path(doc["package_root"])

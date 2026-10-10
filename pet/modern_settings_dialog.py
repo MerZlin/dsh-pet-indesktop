@@ -261,7 +261,13 @@ class ModernSettingsDialog(QDialog):
     def __init__(self, config, parent=None, *, include_ai: bool = True, standalone: bool = False, initial_page: str | None = None, feature_host=None):
         super().__init__(parent)
         self.config = config
-        from .feature_management import attach_official_management, close_official_management, is_management_page
+        from .feature_management import (
+            attach_feature_management,
+            attach_official_management,
+            close_official_management,
+            discover_local_feature_ids,
+            is_management_page,
+        )
         from .official_features import AI_OWNER, SCREEN_OWNER, default_feature_host
         from .plugins.feature_host import FeatureHost
 
@@ -269,12 +275,20 @@ class ModernSettingsDialog(QDialog):
         self._owns_feature_management = feature_host is None
         self.feature_host = feature_host if feature_host is not None else (FeatureHost() if management_only else default_feature_host())
         self.feature_managers = attach_official_management(config, self.feature_host, role="settings", management_only=management_only)
+        for feature_id in discover_local_feature_ids(config):
+            try:
+                self.feature_managers[feature_id] = attach_feature_management(
+                    config, self.feature_host, feature_id=feature_id, role="settings", management_only=management_only
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                logging.exception("local settings manager bootstrap failed: %s", feature_id)
         self.feature_management = self.feature_managers[SCREEN_OWNER]  # Existing public SCREEN seam.
         self._feature_scope = f"settings:{id(self)}"
         self._feature_drafts = {}
         self._screen_component = None
         self._feature_components = {}
         draft_unsubscribers = []
+        self._feature_draft_unsubscribers = draft_unsubscribers
         for owner, manager in self.feature_managers.items():
             if manager.endpoint is not None:
                 draft_unsubscribers.append(manager.endpoint.register_draft(self._feature_scope, lambda owner=owner: self._feature_draft_dirty(owner)))
@@ -563,32 +577,9 @@ class ModernSettingsDialog(QDialog):
         from .settings_balance import mount_balance_settings
 
         mount_balance_settings(self, general_layout, general_content)
-        from .feature_management_ui import FeatureManagementWidget
+        from .feature_management_ui import create_feature_management_section
 
-        self.feature_management_widgets = {owner: FeatureManagementWidget(manager, self) for owner, manager in self.feature_managers.items()}
-        self.feature_management_widget = self.feature_management_widgets[SCREEN_OWNER]
-        general_layout.addWidget(
-            SettingsSection(
-                "扩展管理",
-                [
-                    SettingRow(
-                        "feature_packages",
-                        "官方屏幕理解功能包",
-                        "扩展、插件、屏幕理解：本地安装、升级、启停、回滚与卸载。包级操作影响所有实例。",
-                        self.feature_management_widgets[SCREEN_OWNER],
-                        stacked=True,
-                    ),
-                    SettingRow(
-                        "ai_feature_package",
-                        "官方 AI 对话功能包",
-                        "扩展、插件、AI、聊天、文件理解：本地安装、升级、启停、回滚与卸载。两个包独立管理，个人数据保留。",
-                        self.feature_management_widgets[AI_OWNER],
-                        stacked=True,
-                    ),
-                ],
-                general_content,
-            )
-        )
+        general_layout.addWidget(create_feature_management_section(self, general_content))
         from .runtime_data_import_entry import mount_data_import
 
         mount_data_import(self, general_layout, general_content)
@@ -1153,6 +1144,11 @@ class ModernSettingsDialog(QDialog):
         component = self._feature_component(owner)
         return bool(component is not None and component.dirty())
 
+    def _mount_local_feature_manager(self, route, manager):
+        from .feature_management_ui import mount_local_feature_manager
+
+        return mount_local_feature_manager(self, route, manager)
+
     def _prepare_feature_revocation(self, owner):
         return settings_feature_lifecycle._prepare_feature_revocation(self, owner)
 
@@ -1622,7 +1618,7 @@ class ModernSettingsDialog(QDialog):
             if self.sidebar.item(index).text() == target:
                 self.sidebar.setCurrentRow(index)
                 if management_page or import_page:
-                    row = self.findChild(SettingRow, "settingRow_legacy_data_import" if import_page else "settingRow_feature_packages")
+                    row = self.findChild(SettingRow, "settingRow_legacy_data_import" if import_page else "settingRow_local_package_import")
                     if row is not None:
                         scroll = self.pages.currentWidget().findChild(QScrollArea)
                         if scroll is not None:
@@ -1630,7 +1626,7 @@ class ModernSettingsDialog(QDialog):
                         if import_page:
                             self.data_import_button.setFocus(Qt.FocusReason.OtherFocusReason)
                         else:
-                            self.feature_management_widget.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
+                            self.local_package_zip_button.setFocus(Qt.FocusReason.OtherFocusReason)
                 return True
         return False
 
@@ -1684,7 +1680,7 @@ class ModernSettingsDialog(QDialog):
             [
                 ("应用启动", claim("autostart", "harness_autostart")),
                 ("窗口与系统", claim("dock_icon", "on_top", "auto_hide_fullscreen", "cursor_hidden_passthrough", "stream_capture")),
-                ("扩展管理", claim("feature_packages", "ai_feature_package")),
+                ("扩展管理", claim("local_package_import", "feature_packages", "ai_feature_package", "local_feature_packages")),
                 ("数据交付", claim("legacy_data_import")),
                 # 「多开」分组已随拓扑收口 Phase A 隐藏（见上方注释）
             ]
@@ -1931,7 +1927,7 @@ class ModernSettingsDialog(QDialog):
             file_interpret = settings_file_interpret.build_file_interpret_page(self)
         else:
             file_interpret = page_content([("拖文件解读", [])])
-            notice = QLabel("安装并启用官方 AI 对话功能包后，可以解读文本与代码文件。", file_interpret)
+            notice = QLabel("安装并启用 AI 对话功能包后，可以解读文本与代码文件。", file_interpret)
             notice.setWordWrap(True)
             file_interpret.layout().insertWidget(0, notice)
 
@@ -1944,6 +1940,9 @@ class ModernSettingsDialog(QDialog):
         while self.pages.count():
             self.pages.removeWidget(self.pages.widget(0))
         self.sidebar.clear()
+        from .settings_api import mount_api_settings
+
+        ai_sections = mount_api_settings(self, ai_sections)
         domain_content = {
             "常规": general,
             "桌宠": pet,
@@ -2055,6 +2054,10 @@ class ModernSettingsDialog(QDialog):
 
     def _save(self) -> None:
         """「保存并退出」：写入配置并关闭对话框。"""
+        api = getattr(self, "api_settings_widget", None)
+        if api is not None and (api.dirty or api.busy):
+            api.save_then(self._save)
+            return
         if not self._write_config():
             return
         self._saved_via_button = True
@@ -2355,6 +2358,10 @@ class ModernSettingsDialog(QDialog):
 
     def reject(self) -> None:  # noqa: N802 - Qt API
         """Esc 路径与关闭按钮一致：保存设置并应用开机自启。"""
+        api = getattr(self, "api_settings_widget", None)
+        if api is not None and (api.dirty or api.busy):
+            api.save_then(self.reject)
+            return
         if not getattr(self, "_saved_via_button", False):
             try:
                 self._write_config()
@@ -2369,6 +2376,11 @@ class ModernSettingsDialog(QDialog):
         设置项都是即时型偏好，与右键菜单/托盘修改的写入时机保持一致；
         已走「保存并退出」则跳过（防重复写入）。
         """
+        api = getattr(self, "api_settings_widget", None)
+        if api is not None and (api.dirty or api.busy):
+            event.ignore()
+            api.save_then(self.close)
+            return
         if not getattr(self, "_saved_via_button", False):
             try:
                 if not self._write_config():

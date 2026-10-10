@@ -135,10 +135,13 @@ def test_credentials_are_partitioned_by_root_owner_and_instance(tmp_path):
         one.credential_namespace("official.ai-chat", "slot-2"),
         one.credential_namespace("official.screen-understanding", ""),
         two.credential_namespace("official.ai-chat", ""),
+        one.credential_namespace("third.party", ""),
+        one.credential_namespace("third.party", "slot-2"),
+        two.credential_namespace("third.party", ""),
     }
-    assert len(values) == 4
+    assert len(values) == 7
     with pytest.raises(ValueError):
-        one.credential_namespace("third.party", "")
+        one.credential_namespace("../third.party", "")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows volume API")
@@ -292,8 +295,11 @@ def test_closed_maintenance_exemption_keeps_import_pending_guard(tmp_path, monke
     exe = tmp_path / "core" / "dsh-pet-core-webm.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"generated core placeholder")
-    normal = api.RuntimeLayout.discover(exe, appdata=tmp_path / "appdata")
-    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    marker(exe)
+    data = exe.parent / "data"
+    data.mkdir()
+    monkeypatch.setattr(api, "filesystem_name", lambda path: "NTFS")
+    normal = api.RuntimeLayout.discover(exe, appdata=tmp_path / "ignored-appdata")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(exe))
     monkeypatch.setattr(sys, "argv", [str(exe), "--core-maintenance", "uninstall"])
@@ -301,15 +307,14 @@ def test_closed_maintenance_exemption_keeps_import_pending_guard(tmp_path, monke
     monkeypatch.setattr(api, "_current_layout", None)
     monkeypatch.setattr(api, "_runtime_session", None)
     monkeypatch.setattr(api, "_runtime_removal_mode", False)
-    monkeypatch.setattr(api, "shell_appdata", lambda: tmp_path / "appdata")
-    with io.open_kernel_lock(normal.data_root / "core-removal.lock"):
+    with io.open_kernel_lock(data / "core-removal.lock"):
         result = api.initialize_for_current_build(for_core_removal=True)
         assert result == normal
         assert api._runtime_session is not None
         api._runtime_session.close()
         monkeypatch.setattr(api, "_current_layout", None)
         monkeypatch.setattr(api, "_runtime_session", None)
-        pending = normal.data_root / "data-import" / "pending.json"
+        pending = data / "data-import" / "pending.json"
         pending.parent.mkdir()
         pending.write_text('{"generated":"accepted import"}')
         with pytest.raises(api.RuntimeLayoutError, match="data_import_recovery_required"):
@@ -334,7 +339,7 @@ def test_maintenance_gate_exemption_rejects_mixed_entry_before_data(tmp_path, mo
     assert not (tmp_path / "must-not-create").exists()
 
 
-def test_maintenance_rejects_appdata_override_before_root_creation(tmp_path, monkeypatch):
+def test_maintenance_rejects_invalid_portable_marker_before_external_root_creation(tmp_path, monkeypatch):
     import sys
     import types
 
@@ -343,6 +348,7 @@ def test_maintenance_rejects_appdata_override_before_root_creation(tmp_path, mon
     exe = tmp_path / "core" / "dsh-pet-core-webm.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"generated placeholder")
+    (exe.parent / "portable.json").write_text("generated malformed marker", encoding="utf-8")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(exe))
     monkeypatch.setattr(sys, "argv", [str(exe), "--core-maintenance", "uninstall"])
@@ -352,7 +358,7 @@ def test_maintenance_rejects_appdata_override_before_root_creation(tmp_path, mon
     monkeypatch.setattr(api, "_runtime_removal_mode", False)
     monkeypatch.setenv("APPDATA", str(tmp_path / "overridden-appdata"))
     monkeypatch.setattr(api, "shell_appdata", lambda: tmp_path / "shell-appdata", raising=False)
-    with pytest.raises(api.RuntimeLayoutError, match="core_removal_root_mismatch"):
+    with pytest.raises(api.RuntimeLayoutError, match="portable_marker_invalid"):
         api.initialize_for_current_build(for_core_removal=True)
     assert not (tmp_path / "overridden-appdata").exists()
     assert not (tmp_path / "shell-appdata").exists()
@@ -367,6 +373,9 @@ def test_maintenance_requires_parent_root_barrier(tmp_path, monkeypatch):
     exe = tmp_path / "core" / "dsh-pet-core-webm.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"generated placeholder")
+    marker(exe)
+    (exe.parent / "data").mkdir()
+    monkeypatch.setattr(api, "filesystem_name", lambda path: "NTFS")
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(exe))
     monkeypatch.setattr(sys, "argv", [str(exe), "--core-maintenance", "uninstall"])
@@ -375,7 +384,6 @@ def test_maintenance_requires_parent_root_barrier(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "_runtime_session", None)
     monkeypatch.setattr(api, "_runtime_removal_mode", False)
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
-    monkeypatch.setattr(api, "shell_appdata", lambda: tmp_path / "appdata", raising=False)
     with pytest.raises(api.RuntimeLayoutError, match="core_removal_parent_missing"):
         api.initialize_for_current_build(for_core_removal=True)
     assert not (tmp_path / "appdata").exists()

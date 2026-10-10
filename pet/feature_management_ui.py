@@ -1,17 +1,17 @@
-"""Minimal official-package manager; all operations go through backend service."""
+"""Minimal local feature-package manager; all operations go through backend service."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, Slot
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QFileDialog, QLabel, QPushButton, QSizePolicy, QStyle, QStyleOptionButton, QStylePainter, QVBoxLayout, QWidget
 
 from .feature_package_transactions import LOCK_BUSY_REASONS, Inspection, OperationResult
-from .official_features import AI_OWNER, SCREEN_OWNER, official_feature
-from .settings_widgets import ResponsiveActionRow
+from .official_features import AI_OWNER, SCREEN_OWNER, is_valid_feature_id
+from .settings_widgets import ResponsiveActionRow, SettingRow, SettingsSection
 
 _STATUS = {
     "completed": "操作已完成",
@@ -98,16 +98,27 @@ class _WrappingActionButton(QPushButton):
 
 
 class FeatureManagementWidget(QWidget):
+    local_package_routed = Signal(object, object)
+
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
-        self.feature_id = official_feature(manager.feature_id).id
-        self.feature_title = "官方 AI 对话功能包" if self.feature_id == AI_OWNER else "官方屏幕理解功能包"
-        self.settings_domain = "AI 与对话" if self.feature_id == AI_OWNER else "自动化与联动"
+        if not is_valid_feature_id(manager.feature_id):
+            raise ValueError("invalid feature id")
+        self.feature_id = manager.feature_id
+        if self.feature_id == AI_OWNER:
+            self.feature_title = "AI 对话功能包"
+            self.settings_domain = "AI 与对话"
+        elif self.feature_id == SCREEN_OWNER:
+            self.feature_title = "屏幕理解功能包"
+            self.settings_domain = "自动化与联动"
+        else:
+            self.feature_title = "本地扩展：" + self.feature_id
+            self.settings_domain = "本地扩展"
         self.plan = self.retry_plan = self.inspection = self.last_operation = None
         self.setObjectName("featureManagementAI" if self.feature_id == AI_OWNER else "featureManagement")
         self.setAccessibleName("扩展管理：" + self.feature_title)
-        self.setAccessibleDescription("包级操作影响全部实例。卸载保留个人数据，不强制退出进程。")
+        self.setAccessibleDescription("包级操作影响全部实例。卸载只删除已安装副本，保留原始 ZIP／源目录及个人数据，不强制退出进程。")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -152,6 +163,8 @@ class FeatureManagementWidget(QWidget):
         manager.busy_changed.connect(self._busy)
         manager.state_changed.connect(self._changed)
         manager.probe_cleanup_changed.connect(self._probe_cleanup)
+        if hasattr(manager, "package_routed"):
+            manager.package_routed.connect(self._package_routed)
         self._probe_cleanup(manager.probe_cleanup)
         if manager.endpoint is not None:
             manager.endpoint.draft_blocked.connect(self._draft_blocked)
@@ -236,16 +249,28 @@ class FeatureManagementWidget(QWidget):
         self.settings_button.setEnabled(installed)
 
     def _choose(self, archive):
+        self.choose_local_package(archive)
+
+    def choose_local_package(self, archive: bool):
+        """Open the shared picker independently of this card's official owner."""
         if archive:
-            value, _ = QFileDialog.getOpenFileName(self, "选择官方功能包 ZIP", "", "ZIP 功能包 (*.zip)")
+            value, _ = QFileDialog.getOpenFileName(self, "选择功能包 ZIP", "", "ZIP 功能包 (*.zip)")
         else:
-            value = QFileDialog.getExistingDirectory(self, "选择官方功能包目录")
+            value = QFileDialog.getExistingDirectory(self, "选择功能包目录")
         if value:
-            self.begin_source(Path(value))
+            self.begin_selected_source(Path(value))
 
     def begin_source(self, source: Path):
+        """Compatibility seam for tests and explicit review/confirm flows."""
         command = "upgrade" if self.inspection is not None and self.inspection.active else "install"
         return self.manager.submit(command, source)
+
+    def begin_selected_source(self, source: Path):
+        """Route a picker result and accept the exact plan automatically."""
+        submit_local_source = getattr(self.manager, "submit_local_source", None)
+        if callable(submit_local_source):
+            return submit_local_source(source, auto_apply=True)
+        return self.begin_source(source)
 
     def _confirm(self):
         if self.plan is not None:
@@ -264,6 +289,16 @@ class FeatureManagementWidget(QWidget):
     def _toggle(self):
         if self.inspection is not None and self.inspection.revision is not None:
             self.manager.submit("enable", not self.inspection.enabled, expected_revision=self.inspection.revision)
+
+    @Slot(object)
+    def _package_routed(self, route):
+        feature_id = getattr(route, "feature_id", "未知扩展")
+        self.status_label.setText("已识别本地扩展，已转交对应管理器：" + str(feature_id))
+        self.summary_label.setText("来源由用户选择；目标管理器将独立完成预检、文件完整性检查、提交和下次启动确认。")
+        target = getattr(self.manager.host, "management_runtimes", {}).get(feature_id)
+        if target is not None and target is not self.manager:
+            self.local_package_routed.emit(route, target)
+        self._update_actions()
 
     @Slot(object)
     def _draft_blocked(self, details):
@@ -317,7 +352,7 @@ class FeatureManagementWidget(QWidget):
                     self.status_label.setText("安装账本需要恢复；不从目录猜测状态。")
                 else:
                     self.status_label.setText(
-                        "已" + ("启用" if result.enabled else "停用") + " · " + result.active if result.active else "未安装：选择本地官方目录或 ZIP。"
+                        "已" + ("启用" if result.enabled else "停用") + " · " + result.active if result.active else "未安装：选择本地功能包目录或 ZIP。"
                     )
             self._update_actions()
             return
@@ -335,7 +370,7 @@ class FeatureManagementWidget(QWidget):
             source = (
                 "来源：现有安装账本；仅检查删除合同，不重新执行包代码或声称验签。"
                 if uninstall
-                else f"来源：{plan.source_type or '现有账本'}；官方签名与兼容性已验证。"
+                else f"来源：{plan.source_type or '现有账本'}；本地包结构、兼容性与文件完整性已验证，来源由用户选择。"
             )
             rollback = "已接受卸载不能取消并重新启用；重装是独立操作。" if uninstall else f"回滚目标：{plan.active or '无'}。"
             self.summary_label.setText(
@@ -349,7 +384,7 @@ class FeatureManagementWidget(QWidget):
                             if self.feature_id == AI_OWNER
                             else "影响：拒绝新任务、停止所属 Worker；驻留 host 等待自然退出，不热替换。"
                         ),
-                        "保留：个人设置、profile、凭据、记忆、额度和聊天历史。",
+                        "卸载仅删除已安装副本；保留原始 ZIP／源目录、个人设置、profile、凭据、记忆、额度和聊天历史。",
                         "确认摘要：" + digest,
                     )
                 )
@@ -370,3 +405,98 @@ class FeatureManagementWidget(QWidget):
             self.summary_label.setText("操作未确认完成。请根据原因处理后安全重试或重新预检；不会沿用旧确认摘要冒充成功。")
         self._update_actions()
         QTimer.singleShot(0, self._inspect)
+
+
+def mount_local_feature_manager(dialog, _route, manager):
+    """Mount a generic manager after a manifest-directed handoff."""
+    owner = str(getattr(manager, "feature_id", "") or "")
+    if not owner:
+        return None
+    existing = dialog.feature_management_widgets.get(owner)
+    if existing is not None:
+        return existing
+    dialog.feature_managers[owner] = manager
+    if manager.endpoint is not None:
+        dialog._feature_draft_unsubscribers.append(manager.endpoint.register_draft(dialog._feature_scope, lambda: dialog._feature_draft_dirty(owner)))
+    widget = FeatureManagementWidget(manager, dialog)
+    widget.local_package_routed.connect(dialog._mount_local_feature_manager)
+    dialog.feature_management_widgets[owner] = widget
+    dialog._local_feature_management_widgets[owner] = widget
+    dialog._local_feature_management_layout.addWidget(widget)
+    dialog._local_feature_management_empty.hide()
+    return widget
+
+
+def create_local_package_rows(dialog):
+    """Compose local import/management using the shared settings primitives."""
+    dialog.local_package_zip_button = QPushButton("选择本地 ZIP", dialog)
+    dialog.local_package_directory_button = QPushButton("选择本地目录", dialog)
+    for button, archive in ((dialog.local_package_zip_button, True), (dialog.local_package_directory_button, False)):
+        button.setAccessibleName(button.text())
+        button.setAccessibleDescription("自动识别扩展身份，检查完整性后导入并启用。只选择你信任的包；包内 Python 可以执行，不是沙箱。")
+        button.clicked.connect(lambda _checked=False, archive=archive: dialog.feature_management_widget.choose_local_package(archive))
+    local_package_actions = ResponsiveActionRow(dialog.local_package_zip_button, [dialog.local_package_directory_button], dialog)
+    dialog._local_feature_management_widgets = {}
+    dialog._local_feature_management_container = QWidget(dialog)
+    dialog._local_feature_management_container.setAccessibleName("本地第三方扩展管理")
+    dialog._local_feature_management_container.setAccessibleDescription("用户选择的本地扩展按 manifest owner 分开管理；本地信任不代表 Core 沙箱。")
+    dialog._local_feature_management_layout = QVBoxLayout(dialog._local_feature_management_container)
+    dialog._local_feature_management_layout.setContentsMargins(0, 0, 0, 0)
+    dialog._local_feature_management_layout.setSpacing(14)
+    dialog._local_feature_management_empty = QLabel(
+        "尚未发现已安装的本地第三方扩展。选择 ZIP 或目录后，会自动出现在这里。", dialog._local_feature_management_container
+    )
+    dialog._local_feature_management_empty.setWordWrap(True)
+    dialog._local_feature_management_empty.setObjectName("settingHint")
+    dialog._local_feature_management_layout.addWidget(dialog._local_feature_management_empty)
+    for owner, manager in dialog.feature_managers.items():
+        if owner not in (SCREEN_OWNER, AI_OWNER):
+            dialog._mount_local_feature_manager(None, manager)
+    for owner in (SCREEN_OWNER, AI_OWNER):
+        dialog.feature_management_widgets[owner].local_package_routed.connect(dialog._mount_local_feature_manager)
+    return (
+        SettingRow(
+            "local_package_import",
+            "导入本地功能包",
+            "选择 ZIP 或目录后按 manifest 自动识别、检查并启用。只导入你信任的包：包内 Python 可以执行，不是沙箱。升级已加载代码需要重启。",
+            local_package_actions,
+            stacked=True,
+        ),
+        SettingRow(
+            "local_feature_packages",
+            "本地第三方扩展",
+            "未知 owner 的用户选择包按自身 manifest 分流到独立管理器；不会再用官方 owner/factory 列表替代本地身份。",
+            dialog._local_feature_management_container,
+            stacked=True,
+        ),
+    )
+
+
+def create_feature_management_section(dialog, parent):
+    """Keep extension UI assembly out of the settings window lifecycle."""
+
+    dialog.feature_management_widgets = {owner: FeatureManagementWidget(dialog.feature_managers[owner], dialog) for owner in (SCREEN_OWNER, AI_OWNER)}
+    dialog.feature_management_widget = dialog.feature_management_widgets[SCREEN_OWNER]
+    local_import_row, local_management_row = create_local_package_rows(dialog)
+    return SettingsSection(
+        "扩展管理",
+        [
+            local_import_row,
+            SettingRow(
+                "feature_packages",
+                "屏幕理解功能包",
+                "扩展、插件、屏幕理解：本地安装、升级、启停、回滚与卸载。包级操作影响所有实例。",
+                dialog.feature_management_widgets[SCREEN_OWNER],
+                stacked=True,
+            ),
+            SettingRow(
+                "ai_feature_package",
+                "AI 对话功能包",
+                "扩展、插件、AI、聊天、文件理解：本地安装、升级、启停、回滚与卸载。两个包独立管理，个人数据保留。",
+                dialog.feature_management_widgets[AI_OWNER],
+                stacked=True,
+            ),
+            local_management_row,
+        ],
+        parent,
+    )

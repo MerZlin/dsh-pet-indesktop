@@ -7,7 +7,7 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .official_features import SCREEN_FEATURE_ID, official_feature
+from .official_features import SCREEN_FEATURE_ID, is_valid_feature_id
 
 _SEAL = object()
 
@@ -33,7 +33,8 @@ class StartupLoadPermit:
     def _issue(cls, operation_id, state, root, role):
         if role not in ("core", "settings") or state.active is None:
             raise ValueError("startup_permit_invalid")
-        official_feature(state.feature_id)
+        if not is_valid_feature_id(state.feature_id):
+            raise ValueError("startup_permit_invalid")
         return cls(
             operation_id,
             state.revision,

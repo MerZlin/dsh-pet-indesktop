@@ -338,7 +338,9 @@ class ProactiveScreenWorkerAdapter(QObject):
             self._deadline_timer.stop()
 
     def _on_diagnostic(self, stage: str, detail: object) -> None:
-        data = dict(detail) if isinstance(detail, Mapping) else {"detail": str(detail)}
+        from .worker_diagnostics import safe_diagnostic
+
+        data = safe_diagnostic(detail)
         self._last_diagnostic = (str(stage), data)
         self.diagnostic.emit(str(stage), data)
 

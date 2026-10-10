@@ -257,6 +257,23 @@ class _AiSettingsPage(QWidget):
         self.add_provider_btn.clicked.connect(self._add_provider)
         self.delete_provider_btn.clicked.connect(self._delete_provider)
         self._update_provider_buttons()
+        self._core_api = getattr(getattr(config, "context", None), "api", None)
+        if self._core_api is not None:
+            # Connection state has one editor. Keep only business controls here.
+            hidden = {"provider_list", "provider_name", "api_url", "model", "api_key", "timeout", "skip_ssl"}
+            for section in self.findChildren(SettingsSection):
+                for row in section.rows:
+                    if row.objectName() in {"settingRow_" + key for key in hidden}:
+                        row._visibility_dependencies = {"central_api": False}
+                        row.hide()
+                section.refresh_dependency_visibility()
+            self.test_button.clicked.disconnect()
+            self.test_button.setText("打开 API 设置")
+            self.test_button.clicked.connect(self._core_api.open_settings)
+            self.test_result.setText("主 Key 在模型与连接中配置；保存后新请求立即生效。")
+            screen_row = self.findChild(SettingRow, "settingRow_vision_migration")
+            screen_row.label.setText("识屏策略")
+            screen_row.hint_label.setText("API 在模型与连接中配置；白名单、冷却和预算在屏幕理解设置中调整。")
         root.addStretch(1)
 
     def appearance_rows(self) -> list[SettingRow]:

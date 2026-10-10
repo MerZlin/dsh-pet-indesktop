@@ -47,6 +47,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QBitmap,
     QColor,
+    QContextMenuEvent,
     QCursor,
     QImage,
     QPainter,
@@ -3568,6 +3569,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if session is not None:
             session.complete(text, user_text, is_error)
 
+    def _context_menu_keyboard_position(self) -> QPoint:
+        return QPoint(self._stable_body_local_rect().center()) + self._draw_delta
+
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         if self._context_menu_suppressed:
             self._context_menu_suppressed = False
@@ -3575,6 +3579,13 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             return
         if self._interaction_state in ("DRAGGING", "SLINGSHOT_AIMING") and self._press_global is not None:
             event.accept()
+            return
+        if event.reason() == QContextMenuEvent.Reason.Keyboard:
+            local_pos = self._context_menu_keyboard_position()
+            if not self._is_in_interactive_area(local_pos):
+                return
+            event.accept()
+            self._show_context_menu(self.mapToGlobal(local_pos))
             return
         if not self._is_in_interactive_area(event.pos()):
             return

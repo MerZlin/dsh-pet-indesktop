@@ -16,7 +16,7 @@ def _bound(context):
 def _vision(context):
     from .config import VisionConfigService
 
-    return VisionConfigService(context.configuration, vault=context.credentials, legacy_secret_reader=context.legacy_secret_reader)
+    return VisionConfigService(context.configuration, vault=context.credentials, legacy_secret_reader=context.legacy_secret_reader, api=context.api)
 
 
 def settings_context(context):

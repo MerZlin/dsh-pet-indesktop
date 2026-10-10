@@ -161,3 +161,16 @@ def test_revocation_during_dispatch_does_not_enter_fallback(manual, monkeypatch)
         assert not source.busy
     finally:
         source.dispose()
+
+
+def test_credential_missing_message_explains_existing_config_needs_key(manual, monkeypatch):
+    from types import SimpleNamespace
+
+    _, _, _, context, host, _, bubbles, _, _, _ = manual
+    monkeypatch.setattr(
+        context.vision,
+        "resolve",
+        lambda mode: SimpleNamespace(ready=False, request=None, reason="credential_missing"),
+    )
+    host.start()
+    assert bubbles[-1] == "请先在设置 → 自动化与联动 → 屏幕理解中填写并保存视觉 API Key；屏幕理解使用独立配置，不会读取 AI 对话 Key"

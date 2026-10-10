@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import feature_state_io as io
-from .official_features import official_feature
 
 PRODUCT_ID = "dsh-pet-core-webm"
 _runtime_session: RuntimeSession | None = None
@@ -106,32 +105,44 @@ def shell_appdata() -> Path:
         free(ctypes.cast(result, ctypes.c_void_p))
 
 
-def _validate_installed_removal_parent() -> Path:
-    # The native parent fences Shell's fixed root through Core deletion. Before
-    # allowing its maintenance exemption, prove that the child uses that SAME
-    # root and that the parent's exclusive kernel gate is actually held. A
-    # different APPDATA or portable marker must fail before ordinary data I/O.
-    expected = shell_appdata() / PRODUCT_ID
-    declared = os.environ.get("APPDATA")
-    if not declared or os.path.normcase(str((Path(declared) / PRODUCT_ID).resolve())) != os.path.normcase(str(expected.resolve())):
-        raise RuntimeLayoutError("core_removal_root_mismatch")
-    marker = Path(sys.executable).parent / "portable.json"
+def _validate_portable_removal_parent() -> Path:
+    """Prove that the closed Core child is inside its portable project.
+
+    The Inno uninstaller owns the exclusive ``data\\core-removal.lock``
+    lease while it invokes this process.  A lock-busy result is therefore the
+    expected proof of the parent barrier; an unlocked or missing gate is not a
+    valid maintenance entry and must fail before any data identity/config I/O.
+    """
+    executable = Path(sys.executable).absolute()
+    project = executable.parent
+    marker = project / "portable.json"
+    data_root = project / "data"
+    gate = data_root / "core-removal.lock"
+    expected = {"format_version": 1, "product_id": PRODUCT_ID, "data": "data"}
     try:
+        io.safe_path(executable)
+        io.safe_path(project)
         io.safe_path(marker)
-        if marker.exists():
-            raise RuntimeLayoutError("core_removal_layout_unsupported")
-        io.safe_path(expected)
-        gate = expected / "core-removal.lock"
+        io.safe_path(data_root)
         io.safe_path(gate)
-        if not expected.is_dir() or not gate.is_file():
-            raise RuntimeLayoutError("core_removal_parent_missing")
-        with io.open_kernel_lock(gate, exclusive=False):
+    except (io.StateError, OSError):
+        raise RuntimeLayoutError("core_removal_boundary_invalid") from None
+    if not marker.is_file():
+        raise RuntimeLayoutError("core_removal_layout_unsupported")
+    if _json_document(marker, 4096, "portable_marker_invalid") != expected:
+        raise RuntimeLayoutError("portable_marker_invalid")
+    if filesystem_name(project) != "NTFS":
+        raise RuntimeLayoutError("portable_requires_ntfs")
+    if not data_root.is_dir() or not gate.is_file():
+        raise RuntimeLayoutError("core_removal_parent_missing")
+    try:
+        with io.open_kernel_lock(gate, create=False, exclusive=False):
             pass
     except io.StateError as exc:
         if exc.code == "lock_busy":
-            return expected
-        raise RuntimeLayoutError("core_removal_boundary_invalid") from None
-    except OSError:
+            return data_root
+        if exc.code == "missing":
+            raise RuntimeLayoutError("core_removal_parent_missing") from None
         raise RuntimeLayoutError("core_removal_boundary_invalid") from None
     raise RuntimeLayoutError("core_removal_parent_missing")
 
@@ -296,7 +307,10 @@ class RuntimeLayout:
         return hashlib.sha256(canonical.encode()).hexdigest()
 
     def credential_namespace(self, owner: str, instance: str) -> str:
-        official_feature(owner)
+        from .official_features import is_valid_feature_id
+
+        if not is_valid_feature_id(owner):
+            raise ValueError("invalid feature id")
         return "dsh-pet/root-v2/" + self.data_root_id + "/" + hashlib.sha256((owner + "\0" + instance).encode()).hexdigest()
 
 
@@ -319,9 +333,9 @@ def initialize_for_current_build(*, for_core_removal: bool = False) -> RuntimeLa
         return None  # legacy/source builds have their own established layout
     if VARIANT != "core-webm":
         return None
-    expected = _validate_installed_removal_parent() if for_core_removal else None
+    expected = _validate_portable_removal_parent() if for_core_removal else None
     layout = RuntimeLayout.discover(Path(sys.executable), for_core_removal=for_core_removal)
-    if expected is not None and (layout.mode != "installed" or layout.data_root != expected):
+    if expected is not None and (layout.mode != "portable" or layout.data_root != expected):
         raise RuntimeLayoutError("core_removal_root_mismatch")
     _runtime_session = layout.acquire_session(for_core_removal=for_core_removal)
     _runtime_removal_mode = for_core_removal

@@ -211,6 +211,21 @@ def _frozen_maintenance_manager(tmp_path, monkeypatch, collect):
     return attach_feature_management(Config(base=tmp_path / "generated-profile"), FeatureHost(), management_only=True)
 
 
+def test_frozen_probe_root_compacts_deep_data_root_for_legacy_worker_paths(tmp_path, monkeypatch):
+    import pet.feature_management as feature_management
+
+    monkeypatch.setattr(feature_management.sys, "platform", "win32")
+    config = type("ConfigStub", (), {})()
+    config.dir = tmp_path / ("portable-layout-" + "x" * 180)
+    root = feature_management._feature_probe_run_root(config, "official.screen-understanding")
+
+    assert root != config.dir / "feature-probe-runs" / "official.screen-understanding"
+    assert len(str(root)) <= feature_management._NATIVE_PROBE_RUN_ROOT_LIMIT + 64
+    assert root.parts[-1] == "official.screen-understanding"
+    assert len(root.parent.name) == 16
+    assert not root.exists(), "choosing the root must not perform filesystem I/O"
+
+
 def test_startup_probe_recovery_is_queued_off_gui_and_does_not_change_installation(tmp_path, monkeypatch):
     import threading
     import time

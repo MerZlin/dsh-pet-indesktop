@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -92,25 +93,50 @@ class _AutoCloseDialog(QDialog):
             QTimer.singleShot(0, app.quit)
 
 
-def test_exec_settings_builds_standalone_dialog(tmp_path, monkeypatch):
-    """--settings 主体：parent=None + standalone=True，退出时释放 settings.lock。"""
+def _settings_entry_child(base, include_ai):
+    """The settings CLI owns a fresh QApplication, not pytest's shared GUI loop."""
     import pet.__main__ as entry
     import pet.modern_settings_dialog as settings_mod
 
-    app = _qapp()
-    monkeypatch.setattr(settings_mod, "ModernSettingsDialog", _AutoCloseDialog)
-    _AutoCloseDialog.captured = {}
-    config = Config(base=tmp_path)
-    previous = app.quitOnLastWindowClosed()
-    try:
-        assert entry._run_settings(config) == 0
-    finally:
-        app.setQuitOnLastWindowClosed(previous)
-    assert _AutoCloseDialog.captured["standalone"] is True
-    assert _AutoCloseDialog.captured["parent"] is None
-    assert _AutoCloseDialog.captured["include_ai"] is True
-    # 锁文件用完即释放（QLockFile 解锁会删文件），主进程据此判定设置页已关闭
+    assert QApplication.instance() is None
+    app = QApplication([])
+    settings_mod.ModernSettingsDialog = _AutoCloseDialog
+    entry._chat_available = lambda: include_ai
+    config = Config(base=Path(base))
+    result = entry._run_settings(config)
+    captured = _AutoCloseDialog.captured
+    assert result == 0
+    assert captured["standalone"] is True
+    assert captured["parent"] is None
+    assert captured["include_ai"] is include_ai
     assert not (config.dir / "settings.lock").exists()
+    assert app.quitOnLastWindowClosed()
+    print("SETTINGS_EVIDENCE", json.dumps({"standalone": True, "include_ai": include_ai, "lock_released": True}))
+
+
+def _run_settings_child(tmp_path, include_ai):
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; from tests.test_settings_process_isolation import _settings_entry_child; _settings_entry_child(sys.argv[1], sys.argv[2] == '1')",
+        str(tmp_path),
+        "1" if include_ai else "0",
+    ]
+    result = subprocess.run(command, cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = next(line for line in result.stdout.splitlines() if line.startswith("SETTINGS_EVIDENCE "))
+    return json.loads(line.removeprefix("SETTINGS_EVIDENCE "))
+
+
+def test_exec_settings_builds_standalone_dialog(tmp_path):
+    """Actual process boundary: fresh GUI loop, standalone flags and lock release.
+
+    Running app.exec()/app.quit() in the suite's shared QApplication dispatches
+    unrelated queued callbacks and exit hooks; full-suite native crashes were
+    observed at two different loop seams. A real settings process never shares
+    that application. Do not simulate or skip the child GUI loop.
+    """
+    assert _run_settings_child(tmp_path, True) == {"standalone": True, "include_ai": True, "lock_released": True}
 
 
 def test_exec_settings_exits_when_another_settings_process_holds_lock(tmp_path, monkeypatch):
@@ -131,21 +157,9 @@ def test_exec_settings_exits_when_another_settings_process_holds_lock(tmp_path, 
     assert created == []
 
 
-def test_run_settings_disables_ai_page_without_chat_module(tmp_path, monkeypatch):
-    """no-chat 打包变体（pet.chat 被 excludes）里 include_ai 必须回落 False。"""
-    import pet.__main__ as entry
-    import pet.modern_settings_dialog as settings_mod
-
-    app = _qapp()
-    monkeypatch.setattr(settings_mod, "ModernSettingsDialog", _AutoCloseDialog)
-    monkeypatch.setattr(entry, "_chat_available", lambda: False)
-    _AutoCloseDialog.captured = {}
-    previous = app.quitOnLastWindowClosed()
-    try:
-        assert entry._run_settings(Config(base=tmp_path)) == 0
-    finally:
-        app.setQuitOnLastWindowClosed(previous)
-    assert _AutoCloseDialog.captured["include_ai"] is False
+def test_run_settings_disables_ai_page_without_chat_module(tmp_path):
+    """no-chat settings process must pass include_ai=False to the dialog."""
+    assert _run_settings_child(tmp_path, False)["include_ai"] is False
 
 
 def test_packaging_entries_route_settings_before_importing_app():
@@ -592,6 +606,7 @@ def test_settings_feature_lease_lives_until_dialog_finished(tmp_path):
         trust_status="trusted_official",
         raw_manifest=raw_manifest,
         root=store.root / "versions" / version,
+        execution_kind="host-worker",
     )
     coordinator = FeatureVersionLeaseCoordinator(store)
     lease = coordinator.acquire_settings(FeatureVersionSelection(FEATURE_ID, version, 1, digest, descriptor))

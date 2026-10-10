@@ -18,7 +18,6 @@ from pathlib import Path
 from . import feature_package_files as files
 from . import feature_state_io as io
 from .feature_probe_windows import ProbeLaunchError, cleanup_owned_probe
-from .official_features import official_feature
 from .plugins.package_trust import VerificationLimits, VerifiedFeatureDescriptor
 
 
@@ -113,7 +112,10 @@ class ProbeMaterialStore:
                     or not all(isinstance(row[key], str) and re.fullmatch(r"[0-9a-f]{64}", row[key]) for key in ("manifest_digest", "bundle_digest"))
                 ):
                     raise ValueError()
-                official_feature(row["feature_id"])
+                from .official_features import is_valid_feature_id
+
+                if not is_valid_feature_id(row["feature_id"]):
+                    raise ValueError("invalid feature id")
             return doc
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             raise io.StateError("probe_materials_evidence") from exc

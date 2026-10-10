@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from .feature_lifecycle_contract import LifecyclePrepareRequest
 from .feature_package_transactions import RuntimePreparation
@@ -21,12 +21,15 @@ class _Reply:
 
 
 class FeatureLifecycleEndpoint(QObject):
+    """Created and retained on the GUI/host owner thread; never moved."""
+
     requested = Signal(object)
     draft_blocked = Signal(object)
 
     def __init__(self, store, host, parent=None):
         super().__init__(parent)
         self.store, self.host = store, host
+        self._owner_thread_id = threading.get_ident()
         self._closed = False
         self._draft_guards = {}
         self.requested.connect(self._prepare, Qt.ConnectionType.QueuedConnection)
@@ -97,7 +100,10 @@ class QueuedFeatureLifecycle:
         self.endpoint, self.timeout = endpoint, timeout
 
     def prepare(self, request: LifecyclePrepareRequest) -> RuntimePreparation:
-        if QThread.currentThread() is self.endpoint.thread():
+        # QObject.thread() reparents its borrowed QThread wrapper in PySide.
+        # A cyclic endpoint can then let GC destroy Qt's adopted main thread.
+        # Match the creating-thread contract without borrowing that wrapper.
+        if threading.get_ident() == self.endpoint._owner_thread_id:
             return RuntimePreparation("awaiting_release", "queued_lifecycle_requires_background")
         reply = _Reply(request)
         try:

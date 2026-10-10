@@ -221,3 +221,42 @@ def test_stopped_process_callbacks_do_not_retain_supervisor(qt_app):
                 QCoreApplication.sendPostedEvents(process, QEvent.Type.DeferredDelete)
             retained.deleteLater()
             QCoreApplication.sendPostedEvents(retained, QEvent.Type.DeferredDelete)
+
+
+@pytest.mark.parametrize(
+    "kind, code",
+    [
+        ("directory", "worker_runtime_boundary"),
+        ("unavailable", "worker_runtime_unavailable"),
+        ("package", "worker_package_invalid"),
+        ("permission", "worker_authorization_unavailable"),
+        ("other", "worker_launch_failed"),
+    ],
+)
+def test_launch_diagnostic_is_safe_and_published_before_fault(qt_app, kind, code):
+    from pet.feature_state_io import StateError
+    from pet.plugins.package_trust import PackageVerificationError
+
+    errors = {
+        "directory": StateError("worker_runtime_boundary"),
+        "unavailable": StateError("worker_runtime_unavailable"),
+        "package": PackageVerificationError("private path and GENERATED-SECRET"),
+        "permission": StateError("private metadata GENERATED-SECRET"),
+        "other": OSError("private path and GENERATED-SECRET"),
+    }
+    events = []
+
+    def deny():
+        raise errors[kind]
+
+    supervisor = WorkerSupervisor("test-external", launch_factory=deny)
+    supervisor.diagnostic.connect(lambda stage, detail: events.append((stage, detail)))
+    supervisor.state_changed.connect(lambda state: events.append((state, None)))
+    try:
+        assert not supervisor.start()
+        assert events[0][0] == "launch_rejected", events
+        assert events[0][1].get("code") == code
+        assert "GENERATED-SECRET" not in repr(events)
+        assert events[1][0] == supervisor.FAULT
+    finally:
+        supervisor.stop()

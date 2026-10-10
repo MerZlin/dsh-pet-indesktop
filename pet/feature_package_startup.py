@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Callable
 from .feature_ports import FeatureHostContext
 from .feature_startup_contract import StartupLoadPermit
 from .feature_version_lease import FeatureVersionSelection
-from .official_features import official_feature
 from .plugins.feature_packages import FeaturePackageLoader
 from .plugins.package_binding import FeaturePackageBinding, bind_verified_feature
 from .plugins.package_trust import PackageVerificationError
@@ -48,7 +47,7 @@ class StartupLoadReceipt:
             and self.binding.context is not None
             and self.binding.context is self.context
             and self.context.owner == self.permit.version_owner
-            and _valid_execution_ports(self.context)
+            and _valid_execution_ports(self.context, self.binding.handle.descriptor.execution_kind)
             and pin is not None
             and not pin.closed
             and pin.kind == "host"
@@ -59,8 +58,8 @@ class StartupLoadReceipt:
         )
 
 
-def _valid_execution_ports(context: FeatureHostContext) -> bool:
-    kind = official_feature(context.owner).execution_kind
+def _valid_execution_ports(context: FeatureHostContext, execution_kind: str) -> bool:
+    kind = execution_kind
     if kind == "host-only":
         return context.allow_in_process is True and context.worker_launch_factory is None and context.desktop is None
     return context.allow_in_process is False and callable(context.worker_launch_factory)
@@ -150,7 +149,7 @@ class ProductionFeatureStartup:
                 raise PackageVerificationError("startup ports are invalid")
             self.context = self.host.bind_context(raw)
             self.binding.context = self.context
-            if not _valid_execution_ports(self.context):
+            if not _valid_execution_ports(self.context, selection.descriptor.execution_kind):
                 raise PackageVerificationError("startup execution ports are invalid")
             self._attach_authority()
             return self.refresh_authorization()
@@ -217,7 +216,7 @@ class ProductionFeatureStartup:
                 raise PackageVerificationError("startup ports are invalid")
             self.context = self.host.bind_context(raw_context)
             self.binding.context = self.context
-            if not _valid_execution_ports(self.context):
+            if not _valid_execution_ports(self.context, selection.descriptor.execution_kind):
                 raise PackageVerificationError("startup execution ports are invalid")
             self._attach_authority()
             pin = self.binding.handle.process_pin

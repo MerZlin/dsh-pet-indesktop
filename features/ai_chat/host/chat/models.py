@@ -52,6 +52,8 @@ class ProviderConfig:
     vision_api_key_ref: str = ""
     vision_api_key: str = ""
     verify_ssl: bool = True
+    # Request-only grant identity; never serialized into business preferences.
+    authorization_version: str = field(default="", repr=False, compare=False)
 
     @classmethod
     def from_dict(cls, pid, raw):
@@ -78,6 +80,7 @@ class ProviderConfig:
     def to_dict(self, include_secret=True):
         d = asdict(self)
         d.pop("provider_id", None)
+        d.pop("authorization_version", None)
         if not include_secret:
             d.pop("api_key", None)
             d.pop("vision_api_key", None)

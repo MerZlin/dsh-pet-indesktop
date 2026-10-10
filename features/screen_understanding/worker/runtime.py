@@ -21,6 +21,8 @@ from typing import Any, BinaryIO, TextIO
 
 from pet.workers.protocol import MAX_MESSAGE_BYTES, WorkerMessage, WorkerProtocolError, build_message, decode_message, encode_message
 
+from .vision import VisionError
+
 WORKER_ID = "proactive-screen"
 HEARTBEAT_INTERVAL = 5.0
 DEFAULT_FRAME_TTL = 20.0
@@ -404,6 +406,13 @@ class ProactiveScreenWorker:
             response = {"status": "error", "error_code": "cancelled", "message": "请求已取消"}
         except _WorkerOperationError as exc:
             response = {"status": "error", "error_code": exc.code, "message": exc.message, "retryable": exc.retryable}
+        except VisionError as exc:
+            from ..common.models import vision_failure_hint
+
+            provider = arguments.get("provider", {})
+            source = provider.get("credential_source", "") if isinstance(provider, dict) else ""
+            hint = vision_failure_hint(exc.code, source, exc.public_hint)
+            response = {"status": "error", "error_code": exc.code, "message": hint, "retryable": exc.retryable}
         except Exception:
             # Provider exceptions can include secrets and full request bodies.
             response = {"status": "error", "error_code": "worker_operation_failed", "message": "识屏操作失败", "retryable": True}

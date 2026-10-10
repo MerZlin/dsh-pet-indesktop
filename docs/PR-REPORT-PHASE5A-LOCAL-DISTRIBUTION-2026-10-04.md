@@ -1,6 +1,6 @@
 # Phase 5A / 5B-1 本地分发实施证据（尚未完成正式交付）
 
-> 报告起始日期：2026-10-04 UTC；最新更新：2026-10-05（本机Asia/Shanghai）。历史观测保留，不把旧结果写成最新。基线：`e2687be0866db2915af13447fb49bb278ffdf202`；分支：`codex/phase3-worker`。
+> 报告起始日期：2026-10-04 UTC；最新更新：2026-10-06（本机Asia/Shanghai）。历史观测保留，不把旧结果写成最新。基线：`e2687be0866db2915af13447fb49bb278ffdf202`；分支：`codex/phase3-worker`。
 > 全部仍为 WIP，未提交、推送或发布，没有使用子智能体。此报告是当前实施证据，不是最终交付/正式发布报告。
 > 关联：[批准设计](plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)、[任务](../.scratch/phase5a-local-distribution/PLAN.md)、[准确停点](../.scratch/phase5a-local-distribution/HANDOFF.md)、[状态](../.scratch/phase5a-local-distribution/STATUS.md)。
 
@@ -716,3 +716,343 @@ red91入口回归没有阻止正常Core路径，且APPDATA未隔离，曾意外�
 ### 续接顺序、实际效果与限制
 
 先完成上述推送门并保存远端检查点，然后补 `Py_SetPath` 的分号路径失败关闭与正常冻结Worker租约/握手。随后推进最新版冻结Core矩阵、性能及分发材料。新版正式重签、真实安装/导入、模型体验与干净环境门仍留用户最后确认；旧正式产物未包含夜间修复，不能当新最终包。12GiB上限、旧拒绝清理目标、用户数据与既有验收目录保护不变。
+
+## 2026-10-06 续接实施：推送检查点后的自动验收
+
+### 修改文件说明
+
+本次推送前检查点已经以 `70ff464f84793f6ea3a342079dcbfb2d991fcf4e` 推送到 `codex/phase3-worker`。推送后只在本地继续修改：
+
+| 文件 | 改动 | 原因 | 当前状态 |
+|---|---|---|---|
+| `scripts/build_feature_probe_native.py` | +3 行 | 在显式 `Py_SetPath` 路径拼接前拒绝包含分号的拥有路径，避免 CPython 分隔符把输入拆成未授权路径。 | 本地未推送 |
+| `tests/test_feature_probe_build.py` | +1 行 | 固定失败关闭合同，防止未来移除分号拒绝。 | 本地未推送 |
+| `.scratch/phase5a-local-distribution/` 同组记录与本轮证据 | 追加当前结果 | 保留远端检查点、Worker真实入口、全量回归和未完成门的准确停点。 | 忽略目录，不入 Git |
+
+推送检查点的 183 文件逐文件说明仍以本报告上一节及提交 `70ff464` 为准；本次新增源码 diff 当前为 `3/0` 与 `1/0`（新增/删除行）。
+
+### 性能与验证数字
+
+- `python -m pytest -q` 受影响专项：`267 passed, 2 skipped in 37.29s`。
+- 显式 `PYTHONWARNINGS=default` 的全量 `python -X utf8 -m pytest -q`：`4298 passed, 15 skipped, 146 warnings in 712.39s`，exit `0`。146 条警告包含既有资源回收警告，不能与普通默认警告统计直接比较。
+- 分号合同聚焦测试：修复前 `20 passed, 1 failed`；修复后 `20 passed in 0.72s`。
+- 冻结 Worker04 真实子进程：`HELLO lease_claimed=true`、正常 `SHUTDOWN` exit `0`、无 token exit `77` 且 stdout 为空；父 reservation 关闭后 occupancy `free`、剩余 lease `0`。这是一次端到端验收，不是统计样本，不能代替 n>=10 性能门。
+- 本地代码门：Ruff、两份修改文件 format、`scripts/build_feature_probe_native.py` mypy、24 项聚焦测试均通过。
+
+### 实机运行记录
+
+- 真实 Windows 冻结程序：`...\acceptance-night-20261006\builds\worker-04\dist\proactive-screen-worker\proactive-screen-worker.exe`。
+- 真实运行环境：Windows x64，Worker 通过环境交接 token 与本地自有测试账本建立 lease；未读取真实凭据、截图、模型或用户 profile。
+- 证据：`.scratch/phase5a-local-distribution/acceptance-night-20261006/normal-worker-acceptance-v3-result.json` 与 `postpush-20261006-results.json`。
+- 推送证据：本地 HEAD、远端 `ls-remote` 和 fetched remote ref 均为 `70ff464f84793f6ea3a342079dcbfb2d991fcf4e`，左右差异 `0 0`。
+
+### 未通过、未执行与风险
+
+- 新分号修复尚未重新编译到 Worker04/Core04，因此既有 Worker04 证据不能证明新 native 产物已含该修复。
+- Core04 双包 `both` UI 矩阵历史运行因 `management_confirmation_timeout` 失败；没有绕过管理确认，也没有把 pending 状态改成成功。
+- 正式私钥解锁、正式 DLC 重签、Setup/普通 ZIP/便携 ZIP重新生成、真实安装/更新/卸载、显式数据导入、干净环境、真实模型/截图及新账户体验仍待人工门。
+- 当前生成量约 `9.728 GiB`，按 `2.5 GiB` 构建预留会超过当前 `12 GiB` 峰值合同；没有擅自清理旧验收构建或扩大范围。
+
+### 准确下一步
+
+先在本地记录修改后复跑文档链接、报告纪律和 `git diff --check`。若继续构建，应先明确新版产物预算并只使用本轮拥有根；随后重新构建、重做双包矩阵，再由用户执行私钥、安装、便携、迁移、模型和干净环境人工门。
+
+## 2026-10-06 键盘语义菜单修复与最新全量质量门
+
+### 修改文件说明
+
+本节只记录上次推送检查点之后的本地 WIP 增量；不代表已提交或已推送：
+
+| 文件 | `git diff --numstat`（新增/删除） | 改动与原因 |
+|---|---:|---|
+| `pet/window.py` | `11/0` | 处理 `QContextMenuEvent.Reason.Keyboard`，使用稳定身体锚点，解决 `WS_EX_NOACTIVATE` 冻结窗口收到 `WM_CONTEXTMENU(-1)` 后菜单不出现。 |
+| `scripts/validate_phase5a_delivery.py` | `36/13` | 自有 UI 驱动改为身份核验后发送键盘语义上下文菜单，不激活窗口、不抢用户焦点；保留自有 UIA 和自然退出边界。 |
+| `tests/test_phase5a_delivery_acceptance.py` | `64/14` | 固定无激活消息路由和产品稳定锚点回归，删除不再适用的屏幕坐标/激活假设。 |
+| `pet/feature_management.py`、`packaging/phase4b_manual_entry.py`、构建脚本及其测试 | 其余见本报告前一节及当前 `git diff --numstat` | 保留此前 Phase 5A WIP，不在本节重复冒充为新推送内容；格式化只作用于本轮已修改文件。 |
+| `.scratch/phase5a-local-distribution/*` | 记录追加 | 记录失败复盘、实机证据、当前停点和未执行门；不作为源码发布物。 |
+
+### 性能与验证数字
+
+- `core-11b` no-chat 冻结 Core 构建产物：`1,639,548,973` 字节；本次不是正式发布压缩包。
+- screen v13 真实启动：`3763.6489 ms`、RSS `191,500,288` 字节、`34` 线程、读取 `847,910,997` 字节、写入 `22,018` 字节；自然退出 `0`，production Core 实际清除 pending。
+- empty v14 真实启动：`2830.1063 ms`、RSS `203,771,904` 字节、`33` 线程、读取 `356,252,676` 字节、写入 `21,447` 字节；自然退出 `0`。
+- 受影响专项 `66 passed / 10.64s`；Ruff、12 文件 format-check、`git diff --check` 均通过。
+- 最新全量：`4300 passed, 15 skipped, 14 warnings in 671.83s (0:11:11)`，`QT_QPA_PLATFORM=offscreen`，测试源码不变，exit `0`。警告为既有 Qt/zip 夹具/弃用告警，没有把 warning 改写成 failure。
+
+### 实机运行记录
+
+- Windows x64 build `26100`，自有 acceptance roots：`frozen-screen-compact-20261006-v13` 与 `frozen-empty-compact-20261006-v14`。
+- 两个验收均通过真实冻结 `dsh-pet-core-webm.exe`；screen 菜单实际包含 `看看屏幕`、`主动识屏`、`退出`，empty 菜单无识屏入口。
+- v13/v14 后扫描无本轮拥有 `dsh-pet-core-webm.exe` 进程；此前 core-10 的两个遗留验收进程在路径核验后自然停止。未关闭合法 Core/设置进程，未读取真实凭据、截图或用户文件。
+
+### 未通过、未执行与风险
+
+- v11 的 `owned_menu_or_load_timeout` 与 v12 的 `owned_foreground_activation_refused` 保留为失败事实；它们用于证明旧验收假设不成立，不计为当前通过。
+- 非 offscreen 的相关拖拽探索曾有 `190 passed / 6 failed / 4 warnings`，为显示边界夹紧断言问题；offscreen 最新全量已通过，本次没有修改该无关行为。
+- 仍未完成正式私钥解锁、正式总分发签名、Setup/普通 ZIP/便携真实安装与更新卸载、旧数据导入、干净环境、真实模型/截图和人工体验；不能宣布 Phase 5A 正式分发完成。
+- 当前全部新增修改保持本地未提交、未推送；`.scratch` 中的证据不是发布物。
+
+### 准确下一步
+
+自动门已收齐后，下一步应先由用户明确是否进入正式分发/人工门；若继续，先重新核对空间预算与待构建产物，正式私钥只能由用户在本地可信 masked UI 输入，不通过聊天、日志、命令行或环境变量传递。
+
+### 质量门补充与未通过项
+
+- `ruff check pet tests scripts` 通过；`ruff format --check pet tests scripts` 报告 `544 files already formatted`；`scripts/check_docs.py` 扫描 129 个 Markdown 文件通过；`tests/test_pr_report_discipline.py` 为 `57 passed`；`git diff --check` 通过。
+- `python -m mypy pet` 仍失败：`439 errors in 46 files`。定向本轮模块检查只在 `pet/window.py` 既有位置报告 19 个错误，`feature_management.py` 与验收驱动无诊断，新增上下文菜单行无诊断。该既有类型债务未被本轮修改修复，也不应被省略。
+
+
+## 2026-10-06 夜间自动实施补充：生产 screen probe 根因修复与最终冻结 Core 验收
+
+### 修改文件说明
+
+本次实际代码修复集中在 `pet/feature_management.py` 与 `tests/test_feature_management.py`：前者在 Windows 深路径验收场景通过 `SHGetKnownFolderPath(FOLDERID_LocalAppData)` 选择短的、按 data-root identity 隔离的 probe 运行根，后者增加 legacy PyInstaller worker 路径回归。此前同一 WIP 中的 `pet/window.py`、`scripts/validate_phase5a_delivery.py` 及其测试仍保留上下文菜单键盘语义修复，未被本次诊断 trace 污染；临时 trace 已完全恢复。具体行数以当前 `git diff --numstat` 为准，未创建提交。
+
+### 根因、影响与修复验证
+
+诊断冻结 Core `core-diag-screen-20261006-b` 的 screen v23 真实失败为 PyInstaller 无法加载 embedded PKG，stderr 指向深层验收根下的 `host/helper/dsh-feature-probe.exe`。临时 trace 显示管理动作、信号派发和交付均完成，但返回 `host_probe_failed`；因此没有误改 Qt 线程或管理事务，也确认 factory/Worker 没有在失败验证前运行。修复后使用系统 LocalAppData 短根，深路径屏障恢复。
+
+### 性能与本机真实记录
+
+- Core `core-05-final-20261006` 构建：`127.475s`；dist `455,783,648B`；EXE SHA256 `64C5686717906E1112D1AAE9BC1AEAD5CEBC509F5F8EB6CCD4D9842336201382`。
+- AI 冻结 Core：启动 `3750.3321ms`，RSS `198,176,768B`，37 threads，exit 0；IO read/write `5690/300`，read/write bytes `350,049,858/23,744`，菜单含 `AI 对话`，状态 pending `null`。
+- screen 冻结 Core：启动 `4368.526ms`，RSS `183,676,928B`，32 threads，exit 0；IO read/write `9716/325`，read/write bytes `892,156,616/36,362`，菜单含 `主动识屏`，状态 pending `null`。
+- 两个验收均在 Windows build `26100`、Python `3.11.1` 的真实冻结程序上完成，真实 LPAC helper 完成 host（screen 另含 Worker）最小握手，生产加载 receipt 清除 pending，随后自然退出；结束后无活动 dsh Core/probe 进程。
+- 全量 `python -m pytest -q`：`4301 passed, 15 skipped, 14 warnings in 745.31s (0:12:25)`，exit 0；`ruff check .` 通过；12 个受影响 Python 文件 format-check 通过；目标模块 mypy 通过；文档链接 `129 files scanned` 通过；`git diff --check` 通过。
+- 仓库全量 `ruff format --check .` 仍报告 7 个历史 Markdown 文件未格式化；这些文件不在本次修改范围，未为满足门禁而改动历史文档。项目级 `mypy pet` 的既有 `439 errors / 46 files` 仍单列为历史债务。
+
+### 交付与限制
+
+这轮完成的是本机真实冻结 Core 的自动化/工程验证，不是正式发布。仍未执行真实 Setup 安装更新卸载、NTFS 便携移动、显式旧数据导入、干净 Windows/新用户/另一台机器、真实模型/截图/文件理解人工验收、Windows Authenticode/SmartScreen 或正式发布清单。未读取 `E:\\AI\\DSH\\release-signing\\feature-release-ed25519.pem`，未提交或推送本轮新增修改；`.scratch/phase5a-local-distribution` 中的验收产物按本轮拥有证据保留，未做广泛清理。
+
+## 2026-10-06 用户人工验收：安装后真实 Core 启动确认
+
+时间：2026-10-06 22:29:19 +08:00（Windows 本机，用户人工确认）
+
+- 受控人工根：$root\manual-user-acceptance-20261006-v2。
+- 用户关闭本地官方包确认窗口后，续接器仅等待安装进程自然退出，再启动正常生产 Core；没有强制结束进程、没有提交伪造 receipt，也没有放宽隔离策略。
+- 用户可见结果：设置中的 official.ai-chat 与 official.screen-understanding 均正常；两个入口恢复；原设置保留；未出现错误或恢复提示。
+- 账本复核：AI ctive=1.0.1、nabled=true、
+evision=4、pending_transaction=null；屏幕理解 ctive=1.0.0、nabled=true、
+evision=4、pending_transaction=null。
+- 事务复核：两笔安装事务均为 phase=completed、ccepted=true、self_check_passed=true；生产 Core 当前由同一受控数据根运行（PID 31308，复核时仍在运行）。
+- 本条只证明本机用户人工完成了“本地 ZIP 安装 → 确认 → 沙箱自检 → 状态切换 → 正常 Core 启动加载确认 → 入口/设置恢复”门；不替代真实模型请求、真实截图识别、Setup/便携/更新/卸载、干净环境或正式发布者认证门。
+
+## 2026-10-06 用户人工验收补充：冻结 Core 凭据边界
+
+时间：2026-10-06 22:56:43 +08:00（Windows 本机）
+
+- 用户反馈：关闭刚才运行的冻结 Core 后，源码入口可以执行 AI 操作；这不能直接证明冻结 Core 失败，必须以冻结 Core 自己的日志和账本为准。
+- 冻结 Core 的受控人工根为 manual-user-acceptance-20261006-v2，启动日志记录的实际异常为 pet.credentials.CredentialError: credential_missing。日志没有暴露任何凭据内容。
+- 同一根目录的安装/加载证据仍完整：AI ctive=1.0.1、屏幕理解 ctive=1.0.0，均 nabled=true、pending_transaction=null；两笔事务均 phase=completed、self_check_passed=true。
+- 结论修正：冻结 Core 的“安装、自检、状态切换、正常启动加载确认”通过；“使用真实 Provider 凭据完成 AI 请求”尚未通过。源码使用真实数据根时成功，不能替代冻结 Core 的独立验收。
+- 不把真实用户凭据复制到验收根，不修改冻结 Core 的 credential resolver，不把 credential_missing 降级为成功。后续如继续人工门，只能由用户在冻结 Core 的隔离设置中通过本地可信界面自行录入测试凭据，或使用明确的本地模拟 Provider；凭据不得通过聊天、命令行或日志传递。
+
+
+## 2026-10-06 追加：屏幕独立配置提示修正
+
+### 修改文件说明
+
+本次新增运行代码改动为 `features/screen_understanding/host/manual.py` 与 `features/screen_understanding/host/settings.py`；新增回归覆盖为 `tests/test_screen_manual_host.py` 与 `tests/test_screen_settings.py`。同时更新 Phase 5A 同组设计、计划、状态、工作日志、交接和摘要；v4 人工验收脚本与脱敏 fixture 位于 `.scratch/phase5a-local-distribution/manual-user-acceptance-20261006-v4-screen-ux/`。具体原因是区分“迁移/配置存在”和“屏幕凭据缺失”，避免把用户引导回已经完成的迁移。
+
+本次源码/测试增量的逐文件行数以 `git diff --numstat --` 为准；现有 Phase 5A WIP 仍在工作树中，未用本次增量覆盖或清理。生成的 Core/Worker、ZIP 和日志不纳入提交。
+
+### 性能分析
+
+- Screen 相关专项测试：53 项，16.48s，Windows 本机，Python 3.11.1。
+- no-chat human-acceptance Core：106.968918s 构建，459,275,741 bytes。
+- chat human-acceptance Core：80.814419s 构建，461,518,673 bytes。
+- Worker human-acceptance 构建：19.271s，66,619,041 bytes。
+- 本次代码只改变状态文案和错误原因映射，不新增网络、凭据读取、线程、Worker 或 GUI 外部进程；真实屏幕请求仍由用户人工触发，尚未测量其网络/模型成本。
+
+### 实机运行记录或报告
+
+新包校验确认 ZIP 内含修正后的“补填视觉 API Key”“无需重复迁移”文案；PowerShell 安装脚本和 JSON fixture 解析通过。旧 v2 人工根中已确认迁移状态和独立配置事实，但本次重建后的 v4 Core 还没有替用户输入真实 screen Key 或发起真实 screen request。
+
+全量回归最新结果为 `4298 passed, 14 skipped, 14 warnings, 6 failed`；6 个失败在 `tests/test_drag_move_coalescing.py` 单独复现，原因是窗口实际边界夹紧与测试目标坐标不一致。该无关测试族未被本次修复修改，日志保留在 `.scratch/phase5a-local-distribution/pytest-full-screen-ux-20261006.log` 与 `.scratch/phase5a-local-distribution/pytest-drag-recheck-20261006.log`。因此本追加不宣称全量质量门通过。
+
+### 当前限制与下一步
+
+用户必须在 v4 隔离 Core 的设置界面中通过掩码输入框录入 screen API Key，再完成一次真实识屏；凭据不经聊天、命令行或日志传递。该人工门通过后，仍与正式信任锚、Setup/便携/干净环境等 Phase 5A 门分开记录。
+
+
+## 2026-10-06 最终复核：屏幕 UX 验收包证据
+
+- 使用 Python `zipfile` 直接读取 4 个 screen 包 ZIP，均确认包含修正后的 `host/manual.py` 与 `host/settings.py`，并确认包内含“补填视觉 API Key”“无需重复迁移”文案；未依赖未安装的 `7z` 命令。
+- `screen-config-fixture.json` 的原始字节无 UTF-8 BOM，JSON 合同断言通过；不会因 PowerShell 编码导致产品配置读取失败。
+- v4 安装脚本 PowerShell AST 解析通过，fixture 只在配置不存在时复制；不会覆盖用户后来在隔离 UI 中保存的凭据引用。
+- 受影响源码/测试范围的 `git diff --check` 通过。整个 WIP 工作树仍有历史任务记录中的尾随空白告警，未进行大范围格式化，避免改写既有证据。
+- 尚未代替用户输入真实 screen Key 或发起真实 screen 请求；这仍是唯一需要人工执行的本次修复验收门。
+
+
+## 2026-10-06 最终收尾：按用户需求重写 Phase5A 本地激活
+
+### 结论
+
+本次确认原实现把“Setup 选装”和“用户手动放置本地包”错误地合并成了发布者签名分发模型，属于过度设计。现已按用户口径重写为两条清晰路径：
+
+1. **Setup 路径**：安装向导提供 `ai` / `screen` 可选任务；任务只传递安装意图，旁置包由本地文件提供，不负责下载、发布者认证或伪造成功回执。
+2. **非 Setup 路径**：用户自行下载普通 ZIP，或准备功能包目录，在扩展管理页显式选择后导入/激活。当前不要求发布者公钥、私钥、`manifest.sig` 或签名验证。v2 manifest 的 `key_id`（若存在）只是兼容 schema 的非密码学标识，不参与信任判断。
+
+取消发布者认证不等于取消安全边界。Core 继续强制固定 feature/factory 白名单、版本/API/能力兼容性、安全路径、文件数量/大小限制、manifest 文件清单 SHA-256、事务账本、版本租约及 Windows LPAC/Worker probe。
+
+### 修改文件说明与 `git diff --numstat`
+
+下面是本轮收尾时工作树的逐文件快照；`tracked` 的数字来自 `git diff --numstat`，`untracked` 是新增测试文件的实际行数。`docs/PR-REPORT...` 自身的最终 `git diff --numstat` 已在本节写入后回填为 `307/1`；本报告随后追加了 2026-10-07 Setup 编译证据，表格数字已同步。
+
+| 文件 | 状态 | 新增 | 删除 | 改动与原因 |
+|---|---|---:|---:|---|
+| `.scratch/phase5a-local-distribution/HANDOFF.md` | tracked | 219 | 0 | 最终停点、保留证据、清理结果和用户剩余人工门。 |
+| `.scratch/phase5a-local-distribution/PLAN.md` | tracked | 142 | 0 | 将产品口径重置后的计划项闭合，记录实现、验证和未完成门。 |
+| `.scratch/phase5a-local-distribution/STATUS.md` | tracked | 192 | 0 | 更新各验收维度的 planned/implemented/automated/real-machine/user 状态。 |
+| `.scratch/phase5a-local-distribution/SUMMARY.md` | tracked | 180 | 0 | 保存跨对话最终摘要、最终产物和下一步边界。 |
+| `.scratch/phase5a-local-distribution/WORKLOG.md` | tracked | 224 | 0 | 记录 probe 根因、真实验收、质量门和安全清理过程。 |
+| `docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md` | tracked | 307 | 1 | 追加架构纠偏、逐文件 numstat、性能、实机证据、清理、限制和 2026-10-07 Setup 编译证据。 |
+| `docs/PROJECT-ENTRY.md` | tracked | 5 | 1 | 把项目入口的当前合同和状态改为 Setup 选装/本地显式导入。 |
+| `docs/plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md` | tracked | 100 | 9 | 修订设计合同，区分非密码学 schema 字段与发布者签名。 |
+| `docs/plugin-phase-05-distribution/README.md` | tracked | 5 | 3 | 同步 Phase5A README 的当前有效口径和状态。 |
+| `features/screen_understanding/common/models.py` | tracked | 30 | 0 | 为无有效配置的 screen 首装提供无凭据默认模型。 |
+| `features/screen_understanding/host/manual.py` | tracked | 6 | 1 | 把缺凭据提示改为用户自行配置，不再暗示自动迁移。 |
+| `features/screen_understanding/host/migration.py` | tracked | 40 | 0 | 保留显式兼容迁移 API，并覆盖安全边界。 |
+| `features/screen_understanding/host/settings.py` | tracked | 21 | 59 | 移除首装自动迁移/补齐 UI，使用独立默认配置。 |
+| `packaging/core_webm.iss` | tracked | 2 | 2 | 把 Setup 任务说明改为旁置普通本地包的可选安装意图。 |
+| `packaging/phase4a_validation_entry.py` | tracked | 7 | 7 | 让 validation-only 本地路径不依赖发布者公钥。 |
+| `packaging/phase4b_manual_entry.py` | tracked | 7 | 0 | 同步手工入口的本地激活说明和兼容参数。 |
+| `pet/feature_build_policy.py` | tracked | 6 | 3 | 将当前构建策略设为显式本地激活、无默认签名锚。 |
+| `pet/feature_host_bindings.py` | tracked | 60 | 13 | 贯通本地包的 host 绑定和加载信任状态。 |
+| `pet/feature_install_state.py` | tracked | 5 | 1 | 使用统一 descriptor acceptance seam，避免硬编码 official trust。 |
+| `pet/feature_management.py` | tracked | 81 | 3 | 启用本地 verifier，并修复深路径 probe 运行根。 |
+| `pet/feature_management_ui.py` | tracked | 6 | 6 | 更新 ZIP/目录选择、预检和本地功能名称。 |
+| `pet/feature_package_probe.py` | tracked | 2 | 2 | 把本地 descriptor 传入 probe 前置检查。 |
+| `pet/feature_package_transactions.py` | tracked | 5 | 5 | 让事务预检/提交使用统一本地信任判断。 |
+| `pet/feature_probe_adapter.py` | tracked | 6 | 5 | 把 allow_local_packages 传给 headless probe policy。 |
+| `pet/feature_probe_crypto.py` | tracked | 6 | 4 | 同步 probe crypto 文档和本地激活语义。 |
+| `pet/feature_probe_windows.py` | tracked | 1 | 1 | 在 Windows probe 边界使用统一 descriptor acceptance。 |
+| `pet/feature_version_lease.py` | tracked | 1 | 1 | 允许已验证 local_user descriptor 进入版本租约。 |
+| `pet/local_package_intents.py` | tracked | 10 | 6 | 把确认对话改为结构/完整性预检而非签名认证。 |
+| `pet/modern_settings_dialog.py` | tracked | 3 | 3 | 同步管理设置中的本地包用户文案。 |
+| `pet/plugins/feature_packages.py` | tracked | 7 | 4 | 更新本地包 verifier 示例和兼容说明。 |
+| `pet/plugins/package_trust.py` | tracked | 24 | 5 | 增加显式本地用户信任模式，保留 signed-only 兼容路径。 |
+| `pet/window.py` | tracked | 11 | 0 | 保留真实 UI 验收所需的无激活键盘上下文菜单路由。 |
+| `scripts/build_feature_management_delivery.py` | tracked | 32 | 19 | 构建普通 unsigned AI/screen 本地包，不生成签名。 |
+| `scripts/build_feature_management_manual.py` | tracked | 63 | 15 | 生成 manual20 的普通 ZIP/目录和本地激活元数据。 |
+| `scripts/build_feature_probe.py` | tracked | 30 | 15 | 排除会在 LPAC 中触发 WSAStartup 的 multiprocessing runtime hook。 |
+| `scripts/build_feature_probe_native.py` | tracked | 3 | 0 | 同步 native probe 构建说明/本地 bundle 入口。 |
+| `scripts/build_screen_delivery.py` | tracked | 160 | 42 | 移除主路径密钥/签名依赖，增加 unsigned AI 包和兼容 legacy 参数。 |
+| `scripts/feature_probe_entry.py` | tracked | 16 | 3 | 校验并传递 local activation policy，保留历史 signed policy 兼容。 |
+| `scripts/validate_phase5a_delivery.py` | tracked | 39 | 15 | 更新验收标题、包提示和无签名本地激活断言。 |
+| `tests/test_feature_management.py` | tracked | 15 | 0 | 覆盖短 probe 根和本地策略回归。 |
+| `tests/test_feature_management_build.py` | tracked | 36 | 1 | 验证 unsigned AI 构建、local_user descriptor 和清单。 |
+| `tests/test_feature_management_ui.py` | tracked | 1 | 1 | 验证管理页本地 ZIP/目录文案。 |
+| `tests/test_feature_manual_acceptance.py` | tracked | 35 | 0 | 更新 manual acceptance 的本地包合同。 |
+| `tests/test_feature_probe_build.py` | tracked | 22 | 0 | 增加 direct import bootstrap 和 multiprocessing 排除回归。 |
+| `tests/test_phase5a_delivery_acceptance.py` | tracked | 71 | 14 | 更新四路真实验收驱动的本地包和菜单预期。 |
+| `tests/test_screen_delivery_build.py` | tracked | 66 | 1 | 验证 screen builder 无签名主路径和 legacy 兼容参数。 |
+| `tests/test_screen_manual_host.py` | tracked | 13 | 0 | 覆盖 screen 独立缺凭据提示。 |
+| `tests/test_screen_settings.py` | tracked | 32 | 23 | 覆盖无迁移首装默认配置和独立设置。 |
+| `tests/test_phase5a_local_activation.py` | untracked | 58 | 0 | 新增无签名通过、篡改拒绝、signed-only 拒绝的回归。 |
+| `tests/test_screen_ai_migration.py` | untracked | 101 | 0 | 新增显式迁移兼容 API 与不自动迁移的回归。 |
+
+生成的 `.scratch/phase5a-local-distribution/cleanup-manifest-20261006.json` 被 `.gitignore` 忽略，不作为源码发布物；它保存了清理目标、边界和结果。
+
+### 架构修正的关键实现
+
+- `FeaturePackageVerifier(allow_local_packages=True)` 对用户显式选择的普通 ZIP/目录返回 `local_user`；事务、probe、版本租约、启动加载和卸载边界全部改用 `accepts_descriptor()`，避免某一个执行边界仍要求 `trusted_official`。
+- Phase5A 主构建器不再生成私钥/公钥锚或 `manifest.sig`；历史 Ed25519 工具和显式 legacy 参数仅保留未来正式发布/兼容路线。
+- Setup/管理 UI 文案明确区分“安装时选装”和“运行中本地导入”，不再把本地激活描述成官方签名认证。
+- 发现并修复 headless probe 的真实启动阻断：PyInstaller `pyi_rth_multiprocessing.py` 在 LPAC 业务入口前导入 `socket` 并调用 `WSAStartup`，LPAC 预期返回 Winsock 10107，导致假性的 `host_probe_failed`。排除未使用的 `multiprocessing` runtime hook 后，probe10 的 AI host-only 验证通过。
+
+### 构建、性能与实机证据
+
+- manual20 构建耗时 `295.814 s`；AI 普通 ZIP `118,378 B`，SHA-256 `6912b007483af418a27e43218a3ed4f71d933d80014420453a24f3bb3bfa8d7a`；screen 普通 ZIP `24,455,393 B`，SHA-256 `e0695c68968244353458885f271be41c7c68f4dd21ee02361cf3c42d9ff8e6a7`；probe bundle manifest SHA-256 `915f87620c3a84219bf7310e0ff805ff3c25d0b05e2f0ba2d4b95c5eba9a3232`；`signature_required=false`。
+- Windows 本机真实冻结 Core 的 v13 四路选择矩阵均通过：
+  - `empty`：3,137.282 ms，RSS 185,180,160 B，33 threads，exit 0，无功能菜单；
+  - `ai`：3,444.613 ms，RSS 205,598,720 B，33 threads，exit 0，`AI 对话` 出现，AI state active `1.0.1`；
+  - `screen`：4,069.834 ms，RSS 211,054,592 B，33 threads，exit 0，`主动识屏`/`看看屏幕` 出现，screen state active `1.0.0`；
+  - `both`：4,686.232 ms，RSS 193,515,520 B，31 threads，两个功能菜单和两个 active state 均出现。
+- 四路均 `pending_transaction=null`、`production_core=true`、自然退出成功；验收根为 `.scratch/phase5a-local-distribution/manual-user-acceptance-20261006-v13-runtime-fix/`。v12 的 AI-only 复验也通过。
+- 稳态路径没有新增网络请求；新本地激活路径新增的是本地 ZIP/目录扫描、SHA-256 清单、事务写入和一次 LPAC/Worker probe。实际样本中的启动、RSS、线程、读写次数和字节数已由 `frozen-results.json` 固化；真实 Provider/视觉请求未代替用户执行，因此不虚报模型/网络成本。
+
+### 自动门与清理
+
+- focused：`QT_QPA_PLATFORM=offscreen python -m pytest -q ...`，`144 passed in 47.28s`。
+- 全量：`QT_QPA_PLATFORM=offscreen python -m pytest -q`，`4313 passed, 15 skipped, 14 warnings in 717.00s`，exit 0。
+- `python -m ruff check pet scripts packaging features tests`：通过；`python -m ruff format --check pet scripts packaging features tests`：`606 files already formatted`；`git diff --check`：通过（仅 Git 的 LF→CRLF 提示，无 trailing whitespace/error）。
+- 清理前先生成并复核边界清单；随后只在 `.scratch/phase5a-local-distribution` 内删除 247 个目标，共 221,340 个文件 / 19,215,410,032 B（约 17.90 GiB）。清理后阶段目录为 9,623,836,176 B（约 8.96 GiB）/ 53,299 文件；最终 manual20、probe10、worker08、native05、v8-v13 验收根和五份正式记录均存在，manifest 目标 247/247 均不存在。
+
+### 尚需用户参与的验收
+
+- 本机 `ISCC.exe` 不在 PATH，`C:\Program Files` 和 `C:\Program Files (x86)` 递归查找也未找到；因此只完成了 `packaging/core_webm.iss` 的静态/单测验证，**没有把真实 Inno Setup 向导视觉和安装行为宣称为已通过**。用户需要在安装了 Inno Setup 的 Windows 上确认 `ai` / `screen` 可选任务、旁置包导入、缺包行为和实际安装结果。
+- 用户需要在自己的本地可信设置界面输入真实 AI/视觉 Provider 凭据并发起请求；Codex 不代填、不读取、不记录凭据。
+- 正式发布签名、Authenticode/SmartScreen、另一台机器、干净用户、更新/卸载和真实模型/截图体验属于独立人工/发布门，不应重新变成当前 Phase5A 本地激活的密钥前置条件。
+
+当前工作树未提交、未推送；本报告及五份 `.scratch` 记录均已更新为上述最终停点。
+
+## 2026-10-07 追加：Setup 实际编译证据
+
+### 结论
+
+本机已找到可用的便携版 Inno Setup：`E:\tools\InnoSetup6\ISCC.exe`，编译器版本为 `6.7.3`，因此本轮不需要另行安装 Inno Setup。当前 Phase5A Setup 脚本仍是 `packaging/core_webm.iss`；它把 `ai` / `screen` 作为安装向导中的可选任务，选中后通过 Setup 旁置的 `packages` 目录调用普通本地包导入，不把公钥、私钥或 `manifest.sig` 设为本地激活前置条件。
+
+### 实际编译命令
+
+本轮使用 manual20 的最新 Core 内容。由于原始 Core 路径最长达到 `343` 字符，包含 `649` 条超过 Windows `260` 字符限制的路径，Inno Setup 直接读取时在压缩阶段失败；没有修改原始 Core，而是复制到较短的忽略目录后重试：
+
+```powershell
+E:\tools\InnoSetup6\ISCC.exe /V3 `
+  /DCoreDir=E:\AI\DSH\dsh-pet-indesktop\.scratch\p5a-core-20261007 `
+  /DCoreVersion=5.0.0 `
+  /DCoreOutputDir=E:\AI\DSH\dsh-pet-indesktop\.scratch\phase5a-local-distribution\setup-acceptance-20261007-shortpath `
+  E:\AI\DSH\dsh-pet-indesktop\packaging\core_webm.iss
+```
+
+### 实际结果
+
+- 编译结果：成功，`ISCC_EXIT=0`，耗时 `116.031 s`。
+- Setup：`.scratch/phase5a-local-distribution/setup-acceptance-20261007-shortpath/dsh-pet-core-webm-setup.exe`。
+- Setup 大小：`227,324,912 B`。
+- Setup SHA-256：`3780ec4355e4ab0b0bce6285c8fe4aa07289877af43e5bab333f3965a5c9395b`。
+- 完整编译日志：`.scratch/phase5a-local-distribution/setup-acceptance-20261007-shortpath/iscc-compile-v3.log`。
+- Setup 同目录已放置旁置包：AI `118,378 B`，SHA-256 `6912b007483af418a27e43218a3ed4f71d933d80014420453a24f3bb3bfa8d7a`；screen `24,455,393 B`，SHA-256 `e0695c68968244353458885f271be41c7c68f4dd21ee02361cf3c42d9ff8e6a7`。
+- 编译产物清单：`.scratch/phase5a-local-distribution/setup-acceptance-20261007-shortpath/setup-acceptance-manifest.json`。
+- 旁置包意图：未勾选任务时不导入；勾选 `ai` / `screen` 时从 Setup 同级 `packages` 目录执行普通本地结构导入，`signature_required=false`。
+
+### 仍未宣称通过的部分
+
+本轮只完成了本机 Setup 编译和静态产物核对，`install_not_run=true`：没有在无人确认的情况下执行会写入 `%LOCALAPPDATA%`、创建快捷方式或注册卸载项的安装向导。`Get-AuthenticodeSignature` 返回 `NotSigned`，这与当前 Phase5A“不把正式发布签名作为本地激活前置条件”的合同一致；它不代表正式发布签名、SmartScreen 或 Authenticode 门已通过。仍需用户最后人工打开这个 Setup，确认向导中 `ai` / `screen` 可选任务、旁置包存在/缺失时的行为、安装后菜单与卸载体验。
+
+本次 Setup 编译没有修改产品源码；新增的是 `.scratch` 下被忽略的短路径 staging、Setup、旁置包、编译日志和清单，以及本报告和五份交接记录的事实补记。此前“本机找不到 `ISCC.exe`”是 2026-10-06 停点时的历史观察，已被本节的 2026-10-07 编译证据取代；不再把“编译器缺失”列为当前阻塞项。
+
+
+## 2026-10-07 追加：Phase5A 产品边界重写、实施计划与 `.scratch` 清理
+
+### 本次结论
+
+用户最终需求已收敛为两条路径：Setup 内只选装并自动启用官方 AI/Screen；Setup 外用户明确选择普通 ZIP/目录后，按 manifest 注册信息自动路由，未知 owner 只要满足本地包合同即可作为第三方 DLC。Phase5A 本地路径不要求公钥、私钥或 `manifest.sig`；用户主动选择意味着信任包内 Python，但这不是沙箱。结构、兼容性、路径、大小/数量、manifest SHA-256、事务、租约和启动确认仍保留。
+
+### 本次文档产出
+
+- `docs/PHASE5A-CLOSEOUT-IMPLEMENTATION-PLAN-2026-10-07.md`：详细根因、数据模型、验证器、事务/启动、UI router、Setup、Core 构建、测试和人工矩阵。
+- `docs/PHASE5A-CODE-IMPLEMENTATION-HANDOFF-2026-10-07.md`：给下一对话的施工顺序、文件影响面、保护边界、保留产物和回执格式。
+- 已同步 `docs/PROJECT-ENTRY.md`、`docs/plugin-phase-05-distribution/README.md`、`docs/plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md`、`docs/plugin-phase-06-ecosystem/README.md`、`docs/INDEX.md`。
+- 已更新 `.scratch/phase5a-local-distribution/PLAN.md`、`STATUS.md`、`HANDOFF.md`、`WORKLOG.md`、`SUMMARY.md`。
+
+### `.scratch` 清理实测
+
+清理范围只在 `E:\AI\DSH\dsh-pet-indesktop\.scratch\phase5a-local-distribution`，先根据文档/阶段记录排除被引用路径，再删除 38 个未引用的旧构建/诊断目录。实删释放 `4,905,969,506 B`、`9,404` 个文件；清理后该根保留 `43,894` 个文件、`4,970,108,783 B`（约 `4.629 GiB`）。
+
+保留：阶段五份记录、`acceptance-night-20261006` 最终验收根、文档引用的历史候选/发布证据、`setup-acceptance-20261007-shortpath` 和相关旁置包。未触碰 `.scratch/phase4b-local-management`、其他阶段根、源码、真实用户数据和当前 Setup 产物。路径校验确认所有删除目标均位于 Phase5A 根内且不是重解析点，删除后保护路径仍存在。
+
+### 当前未宣称通过
+
+本次没有修改代码、没有重跑测试、没有重建 Core/Setup、没有执行真实 Setup 安装。下一对话必须按新计划先建立失败回归，再实现 registration/router/Setup 内嵌/Core GUI subsystem，最后用同一源码工作树重新验证；旧 manual20/v13/Setup 编译证据只能作为历史基线。真实 Provider 请求、屏幕截图识别和用户主观 Setup 体验仍由用户最后确认。
+
+## 2026-10-07 追加：文档与清理收尾验证（本轮）
+
+本节只记录本轮文档/清理工作，不把它误写成产品代码已通过：
+
+- `git diff --check -- docs .scratch`：通过；仅有 Git 的 LF→CRLF 工作树提示，无 whitespace/error。
+- `python -m pytest -q tests/test_pr_report_discipline.py`：**57 passed in 3.15s**。
+- 13 份相关 Markdown 的 UTF-8、尾随空白和相对链接检查：文件全部存在、尾随空白 `0`、URL 解码后的断链 `0`。
+- 清理动作的即时测量仍为：38 个旧目录、9,404 个文件、`4,905,969,506 B` 释放；当时根统计为 43,894 个文件、`4,970,108,783 B`。在随后补写五份阶段记录/保留目录发生变化后，末次只读重算为 43,901 个文件、`4,970,128,950 B`；没有据此追加删除，也没有触碰保护路径。
+- 本轮未运行产品测试、Ruff、Core/Setup 重建、Setup 安装或真实 Provider 请求；这些门交给下一对话和用户人工验收。

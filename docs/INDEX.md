@@ -136,7 +136,17 @@
 
 ## PR 报告存档
 
-- [Phase5A/5B-1 本地分发实施证据（未完成）](PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)：保留10月4/5日历史及10月6日修复/暂停记录，本轮获授权保存源检查点后继续；新全量/真实CPU高负载三遍/受影响mypy等门通过，待实际提交/远端核对。新正式分发、特殊路径/正常Worker、冻结矩阵/性能、真实安装及人工/干净环境仍未完成。继续实施前必读。
+- [项目内识屏 Worker 与 API 连接反馈（2026-10-10）](PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md)：Core4.2.4/Screen1.0.3 的可信 portable runtime、READY后心跳、故障重试、按钮旁HTTP结果码、鲸鱼娘图标与最终冻结链路证据；继续本轮验收、检查构建hash和人工限制前必读。
+
+- [PR-REPORT-SIMPLE-API-2026-10-09](PR-REPORT-SIMPLE-API-2026-10-09.md)：恢复旧版主/可选视觉 Key 简易设置、即时消费与鲸鱼图标；本次增量、全量、冻结实机和新候选/人工步骤证据。
+
+- [PR-REPORT-SETUP-PROJECT-DIRECTORY-2026-10-09](PR-REPORT-SETUP-PROJECT-DIRECTORY-2026-10-09.md)：Setup 项目目录安装、保留/删除 data 卸载、关联清理 best-effort 的 U01–U06 实现与验证；验收新 Setup 时必读。
+
+- [Phase5A 通用本地 DLC 收尾实施报告（2026-10-07）](PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md)：保留T历史；R中央API/即时配置/手动识屏/Core-only修复、真实原生seam红绿、最新默认4417p/15s、3×152满CPU、新Setup/6产物hash、逐文件/性能/本机冻结与人工步骤；工程范围验证完成，待用户人工验收，用户确认前不关闭Phase5A。
+
+- [Phase5A 收尾实现计划（2026-10-07）](PHASE5A-CLOSEOUT-IMPLEMENTATION-PLAN-2026-10-07.md)：Setup 官方包内嵌自动启用、Setup 外 ZIP/目录第三方 DLC、Core GUI subsystem 的逐步实现计划、测试矩阵和人工验收门；T01–T07 历史保留，R01–R07 缺陷修复继续跟踪；真实 Provider、屏幕与新 Setup 安装卸载人工门另记。
+- [Phase5A 代码实现交付（2026-10-07）](PHASE5A-CODE-IMPLEMENTATION-HANDOFF-2026-10-07.md)：实现后续接入口、文件责任、保护边界、当前产物和准确验收状态。
+- [Phase5A/5B-1 本地分发实施报告](PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md)：保留历史构建/测试/Setup 证据；2026-10-07 追加本轮文档重写和 `.scratch` 清理结果。旧绿色结果不代表新 registration/router/Setup 内嵌方案已实现。
 
 - [Phase 4B 真实用户人工验收](PR-REPORT-PHASE4B-MANUAL-ACCEPTANCE-2026-10-04.md)：固定人工entry、真实Worker与独立E盘配置的准备/用户回执，临时信任与正式分发门分开；执行人工验收或补正式信任前必读。
 
@@ -266,7 +276,7 @@
 | Phase 2 | 已完成运行时基线 / 后续贡献合同待实施 | [runtime](plugin-phase-02-runtime/) | 官方 Context/EventBus/配置/生命周期；功能 UI 可在主进程运行但归功能包交付。 |
 | Phase 3A/3B/3C | 3A 已封存；3B 全量通过、人工门未完成；3C 已完成本地风险评估 | [worker](plugin-phase-03-worker/) | 维护 Agent/识屏隔离，其他能力逐项评估，不阻塞选装样板。 |
 | Phase 4A/4B | 4A 边界基线；4B 先过资源硬门再做本地管理 | [updates](plugin-phase-04-updates/) | 依次接续 4B-1 状态账本、4B-1.5 资源硬门、4B-2 租约、4B-3 事务和 4B-4 UI；不替换默认构建或宣称人工验收完成。 |
-| Phase 5A/5B-1 | 源码实施中，正式交付/人工门未完成 | [distribution](plugin-phase-05-distribution/) | 统一 WebM 小 Core、两包独立事务、NTFS 便携、AI 拆包与显式导入；包级正式签名已通过；最终冻结/真实分发/干净环境未完成；其余5B仍独立推进。 |
+| Phase 5A/5B-1 | T01–T07 本轮授权范围收尾完成 / 人工发布门未执行 | [distribution](plugin-phase-05-distribution/) | Setup 官方包内嵌自动启用；Setup 外 ZIP/目录按 manifest 自动路由为本地第三方 DLC；Core GUI subsystem；当前源码构建、授权实机、最终全量 4334/15 和满负载三轮各 97 项通过；真实 Setup/Provider/用户人工门未执行、另获授权；其余5B独立推进。 |
 | Phase 6 | 条件启用 | [ecosystem](plugin-phase-06-ecosystem/) | 第三方内容/Worker SDK、社区生态；不是官方包交付的前置。 |
 | Phase 7 | 正式发布前验收 | [release](plugin-phase-07-release/) | 最小 Core、承诺选装范围、三平台、迁移装卸、性能与恢复；第三方未开放不阻塞。 |
 
@@ -301,9 +311,9 @@
 | [Phase 4B 任务清单](../.scratch/phase4b-local-management/PLAN.md) · [交接记录](../.scratch/phase4b-local-management/HANDOFF.md) | 逐门进度、实际验证与下一条操作；文本明确纳入 Git，保留最终交接，不收录构建临时目录。 | 恢复 Phase 4B 工作或核对未完成门前。 |
 | [Phase 4B 当前状态](../.scratch/phase4b-local-management/STATUS.md) | 区分 Phase 4A 历史成果、4B-1 状态进度、后续未实施项、人工待办及远程同步。 | 恢复 Phase 4B 或判断安装管理是否已可用前。 |
 | [安装与更新协议](plugin-phase-04-updates/PLUGIN-UPDATE-PROTOCOL.md) | 共用事务和权威状态、信任校验、原子激活、回滚、卸载/重装与 Core/DLC 更新隔离。 | 改 Setup/ZIP/应用内安装器、代码加载、文件占用或远程来源前。 |
-| [Phase 5 官方分发](plugin-phase-05-distribution/README.md) | 5A 小 Core Setup/旁置包和显式便携，5B AI 优先推广全部官方领域；远程适配按需。 | 设计安装向导、ZIP、便携、AI 拆包批次或其他官方包前。 |
-| [Phase 5A 本地分发设计](plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md) | 已批准的统一小 Core、AI/识屏双包、正式信任、本地 Setup/ZIP 与 NTFS 便携合同；实现/验收状态见任务记录。 | 实施双包事务、AI 拆包、正式签名、数据根或安装器前必读。 |
-| [Phase 6 条件生态](plugin-phase-06-ecosystem/README.md) | 内容文档与 SDK、未来 Worker SDK/社区的进入门，禁止任意代码进入 Core。 | 评估第三方作者、签名发布或 Workshop 时。 |
+| [Phase 5 官方分发](plugin-phase-05-distribution/README.md) | 5A 小 Core Setup 官方内嵌选装、Setup 外本地 ZIP/目录导入和 5B AI 推广；远程适配按需。 | 设计安装向导、ZIP/目录路由、便携、AI 拆包批次或其他官方包前。 |
+| [Phase 5A 本地分发设计](plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md) | 当前合同：Setup 只内嵌官方 AI/Screen；Setup 外显式 ZIP/目录按 manifest 接受本地第三方 DLC；签名不是本地前置；历史章节保留审计记录。 | 实施 registration、验证器、事务/启动、UI router、Setup 或 Core 构建前必读。 |
+| [Phase 6 条件生态](plugin-phase-06-ecosystem/README.md) | 未来公开作者/目录/SDK/审核/签名生态；与 Phase5A 用户主动导入的本地可信 Python DLC 分开，不把本地路径包装成公开沙箱。 | 评估第三方作者、公开签名发布、目录、撤销或 Workshop 时。 |
 | [Phase 7 发布门](plugin-phase-07-release/README.md) | 最小 Core 与官方选装范围、三平台、配置恢复、真实卸载、性能与可信发布。 | 准备正式发布、确定承诺范围或补发布证据时。 |
 
 实现菜单与设置仍须阅读 [菜单结构研究](CONTEXT-MENU-RESEARCH-AND-REFACTOR-2026-08-25.md)和[设置变更门](SETTINGS-CHANGE-GATES.md)；独立视觉配置已在自动化域新增组件，未重排顶层导航；屏幕理解贡献已接入，其他功能与真实安装状态仍待后续迁移。历史 PR 报告继续在“PR 报告存档”登记，不以计划正文代替交付证据。

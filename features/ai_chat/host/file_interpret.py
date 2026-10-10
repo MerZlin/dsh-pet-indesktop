@@ -10,7 +10,6 @@ ChatService 的信号链本身是 QueuedConnection（worker→service 已跨线�
 
 from __future__ import annotations
 
-import copy
 import logging
 import time
 from pathlib import Path
@@ -241,8 +240,9 @@ class FileInterpretController(QObject):
         if not self._accepting():
             self.suspend_execution()
             return
-        self._win.resolve_alert(CONFIRM_ALERT_ID)
         self._start(list(self._pending))
+        if self._state != "awaiting":
+            self._win.resolve_alert(CONFIRM_ALERT_ID)
 
     def _on_decline(self) -> None:
         self._win.resolve_alert(CONFIRM_ALERT_ID)
@@ -265,13 +265,16 @@ class FileInterpretController(QObject):
             self._bubble("这个版本没有 AI 对话模块，解读不可用")
             return
 
-        settings = self._win.cfg.chat_settings()
-        provider = copy.copy(settings.active_config)
-        request_config = getattr(self._win.cfg, "request_config", None)
-        if callable(request_config):
-            provider = request_config(provider, operation="files.interpret")
-        else:
-            provider.api_key = self._win.cfg.resolve_api_key(provider)
+        from pet.credentials import CredentialError
+
+        from .chat.request_config import configuration_hint, prepare_request
+
+        try:
+            settings, provider = prepare_request(self._win.cfg, "files.interpret")
+        except (CredentialError, PermissionError, ValueError, OSError) as exc:
+            self._state = "awaiting"
+            self._bubble(configuration_hint(exc))
+            return
         if not str(provider.api_key or "").strip():
             self._state = "idle"
             self._bubble("还没配置 AI 模型的 API Key，先到设置里配好吧")

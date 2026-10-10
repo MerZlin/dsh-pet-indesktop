@@ -1,7 +1,8 @@
-"""Build TWO new, explicitly marked Phase4B production-path validation Cores.
+"""Build TWO explicitly marked Phase4B validation Cores.
 
-Private signing key exists only in this process. It is never serialized. These
-are not release artifacts. Trust policy is written only to owned source snapshots.
+These fixtures exercise the same local-activation path as Phase5A. They are not
+release artifacts; no public/private key or manifest signature is generated.
+Formal release signing remains a separate, out-of-scope workflow.
 """
 
 from __future__ import annotations
@@ -11,17 +12,14 @@ import json
 import zipfile
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
 if __package__:
-    from .build_screen_delivery import ROOT, assemble_package, build_core, digest, verify_worker_inputs, write_json
+    from .build_screen_delivery import ROOT, assemble_ai_package, assemble_package, build_core, digest, verify_worker_inputs, write_json
 else:
-    from build_screen_delivery import ROOT, assemble_package, build_core, digest, verify_worker_inputs, write_json
+    from build_screen_delivery import ROOT, assemble_ai_package, assemble_package, build_core, digest, verify_worker_inputs, write_json
 
 
-def sign_version(package: Path, key, version: str, *, fault: str | None = None):
-    """Own generated fixture only; preserve a closed authenticated inventory."""
+def sign_version(package: Path, key=None, version: str = "1.0.0", *, fault: str | None = None):
+    """Legacy helper name; rewrite a local package version without signing."""
     if fault is not None:
         factory = package / "host/factory.py"
         source = factory.read_text(encoding="utf-8")
@@ -44,7 +42,6 @@ def sign_version(package: Path, key, version: str, *, fault: str | None = None):
     }
     raw = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     (package / "manifest.json").write_bytes(raw)
-    (package / "manifest.sig").write_bytes(key.sign(raw))
 
 
 def main(argv=None):
@@ -57,11 +54,9 @@ def main(argv=None):
     from pet.feature_probe_windows import TrustedProbeBundle
 
     TrustedProbeBundle(args.probe_bundle, args.probe_manifest_sha256).verify()
-    worker = verify_worker_inputs(ROOT, args.worker_build, synthetic=True)
+    worker = verify_worker_inputs(ROOT, args.worker_build, synthetic=False)
     output = args.output.absolute()
     output.mkdir(parents=True, exist_ok=False)
-    key = Ed25519PrivateKey.generate()
-    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
     packages = {}
     for name, version, fault in (
         ("v1", "1.0.0", None),
@@ -70,10 +65,16 @@ def main(argv=None):
         ("bad-probe", "1.0.3", "self-check"),
         ("bad-startup", "1.0.4", "startup"),
     ):
-        package = assemble_package(ROOT, output / "packages" / name, worker, key, synthetic=True)
-        sign_version(package, key, version, fault=fault)
+        package = assemble_package(ROOT, output / "packages" / name, worker, synthetic=False)
+        sign_version(package, version=version, fault=fault)
         packages[name] = str(package)
-    del key
+    ai_package = assemble_ai_package(ROOT, output / "packages" / "ai-chat-v1", version="1.0.1")
+    packages["official.ai-chat"] = str(ai_package)
+    ai_archive = output / "packages/official.ai-chat.zip"
+    with zipfile.ZipFile(ai_archive, "x", compression=zipfile.ZIP_DEFLATED) as target:
+        for file in sorted(ai_package.rglob("*")):
+            if file.is_file():
+                target.write(file, file.relative_to(ai_package).as_posix())
     archive = output / "packages/v1.zip"
     with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as target:
         for file in sorted(Path(packages["v1"]).rglob("*")):
@@ -86,7 +87,6 @@ def main(argv=None):
             ROOT,
             output / name,
             chat=chat,
-            public_key=public,
             entrypoint=ROOT / "packaging/phase4b_validation_entry.py",
             probe_bundle=args.probe_bundle,
             probe_manifest_sha256=args.probe_manifest_sha256,
@@ -96,10 +96,23 @@ def main(argv=None):
             output / "validation-artifacts.json",
             {
                 "validation_only": True,
-                "public_key": public,
+                "package_activation": "local-structure",
+                "signature_required": False,
                 "probe_manifest_sha256": args.probe_manifest_sha256,
                 "packages": packages,
                 "zip": str(archive),
+                "archives": {
+                    "official.ai-chat": {
+                        "path": str(ai_archive),
+                        "sha256": digest(ai_archive.read_bytes()),
+                        "bytes": ai_archive.stat().st_size,
+                    },
+                    "official.screen-understanding": {
+                        "path": str(archive),
+                        "sha256": digest(archive.read_bytes()),
+                        "bytes": archive.stat().st_size,
+                    },
+                },
                 "cores": cores,
             },
         )

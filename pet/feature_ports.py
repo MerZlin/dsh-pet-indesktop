@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol
 
+from .api_ports import FeatureApiPort
+
 if TYPE_CHECKING:
     from .credentials import CredentialVaultPort
     from .desktop_query import DesktopQueryPort
@@ -112,3 +114,4 @@ class FeatureHostContext:
     execution_authorized: Callable[[], bool] | None = None
     bind_execution: Callable[[Callable, Callable], Callable[[], None]] | None = None
     user_data: FeatureUserDataPort | None = None
+    api: FeatureApiPort | None = None

@@ -58,6 +58,8 @@ begin
   ReleasePath := ExpandConstant('{{param:RELEASE|}}');
   Mode := ExpandConstant('{{param:MODE|code}}');
   if Mode = 'removal' then Acquired := AcquireRemovalBarrier(Root, Reason)
+  else if Mode = 'setup' then Acquired := AcquireSetupBarrier(Root, Reason)
+  else if Mode = 'portable' then Acquired := AcquirePortableCodeBarrier(Root, Reason)
   else Acquired := AcquireCodeBarrier(Root, Reason);
   if Acquired then begin
     SaveStringToFile(ResultPath, 'acquired', False);
@@ -141,7 +143,44 @@ def test_native_gate_rejects_hardlinked_core_executable(native_gate, tmp_path):
     assert fixture.read_bytes() == b"generated executable contents"
 
 
-def test_native_gate_rejects_portable_target_without_touching_data(native_gate, tmp_path):
+def test_native_setup_rejects_drive_root(native_gate, tmp_path):
+    root = Path(tmp_path.anchor)
+    result, release = tmp_path / "root-result.txt", tmp_path / "root-release.txt"
+    child = spawn(native_gate, root, result, release, mode="setup")
+    assert wait_result(result) == "install_target_root"
+    child.communicate(timeout=30)
+
+
+def test_native_setup_rejects_reparse_target(native_gate, tmp_path):
+    target = tmp_path / "real-project"
+    target.mkdir()
+    link = tmp_path / "reparse-project"
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        # Junctions exercise the same real reparse boundary without requiring
+        # the Windows symbolic-link privilege or developer mode.
+        created = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:DSH_TEST_JUNCTION -Target $env:DSH_TEST_TARGET | Out-Null",
+            ],
+            env=dict(os.environ, DSH_TEST_JUNCTION=str(link), DSH_TEST_TARGET=str(target)),
+            capture_output=True,
+            timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        assert created.returncode == 0, f"symlink unavailable ({exc}); junction creation failed: {created.stderr!r}"
+    result, release = tmp_path / "reparse-result.txt", tmp_path / "reparse-release.txt"
+    child = spawn(native_gate, link, result, release, mode="setup")
+    assert wait_result(result) == "install_target_reparse"
+    child.communicate(timeout=30)
+
+
+def test_native_gate_rejects_malformed_portable_target_without_touching_data(native_gate, tmp_path):
     root = tmp_path / "generated portable 含空格"
     root.mkdir()
     (root / "portable.json").write_text("generated marker")
@@ -150,7 +189,7 @@ def test_native_gate_rejects_portable_target_without_touching_data(native_gate, 
     result, release = tmp_path / "result.txt", tmp_path / "release.txt"
     child = spawn(native_gate, root, result, release)
     try:
-        assert wait_result(result) == "portable_setup_forbidden"
+        assert wait_result(result) == "portable_marker_invalid"
     finally:
         release.write_text("release generated fixture")
         child.communicate(timeout=30)

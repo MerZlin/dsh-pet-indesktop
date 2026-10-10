@@ -1,9 +1,11 @@
-"""Core-owned headless signature backend; NOT an alternate trust policy.
+"""Core-owned headless package verifier; NOT an alternate activation policy.
 
 Bundled upstream libsodium is pinned by the helper build and its sealed inventory.
-The helper uses the exact same FeaturePackageVerifier, public trust anchors,
-raw manifest bytes, signature length, compatibility and payload checks. The native adapter only calls libsodium. There
-is no crypto implementation here and no optional unsigned/developer fallback.
+The helper uses the exact same FeaturePackageVerifier schema, compatibility,
+path, file-inventory and payload checks. Phase5A local activation intentionally
+accepts an explicitly selected folder/ZIP without publisher keys; signed package
+verification remains a compatibility mode for a future formal release workflow.
+The native adapter only calls libsodium when that compatibility mode is active.
 """
 
 from pathlib import Path

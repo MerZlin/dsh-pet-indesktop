@@ -917,6 +917,15 @@ class ChatWindow(QDialog):
         text = self.input.toPlainText().strip()
         if not text:
             return
+        from pet.credentials import CredentialError
+
+        from .request_config import configuration_hint, prepare_request
+
+        try:
+            prepared = prepare_request(self.config)
+        except (CredentialError, PermissionError, ValueError, OSError) as error:
+            self.provider_label.setText(configuration_hint(error))
+            return
         self.input.clear()
         # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」
         synced, absorbed = self.store.append_message(self.session, ChatMessage("user", text))
@@ -929,7 +938,7 @@ class ChatWindow(QDialog):
                 self._refresh_sessions()
         self._add("user", text)
         self._last_user_text = text
-        self._begin_generation(text)
+        self._begin_generation(text, prepared=prepared)
 
     def retry_last(self) -> None:
         if not self.service.accepting:
@@ -942,7 +951,16 @@ class ChatWindow(QDialog):
         self._remove_bubble(self._bubble)
         self._begin_generation(text)
 
-    def _begin_generation(self, text: str) -> None:
+    def _begin_generation(self, text: str, *, prepared=None) -> None:
+        from pet.credentials import CredentialError
+
+        from .request_config import configuration_hint, prepare_request
+
+        try:
+            self.settings, config = prepared or prepare_request(self.config)
+        except (CredentialError, PermissionError, ValueError, OSError) as error:
+            self.provider_label.setText(configuration_hint(error))
+            return
         self._bubble = self._add("assistant", "")
         self._bubble.set_state("streaming")
         self._bubble.retry_requested.connect(self.retry_last)
@@ -950,8 +968,6 @@ class ChatWindow(QDialog):
         # 整会话冗余 save：与 widgets.py 同款——append_message 已原子落盘，
         # 此处仅作「会话被并发删除后本地兜底」的复活机制（R3 复审：保留）。
         self.store.save(self.session)
-        config = self.settings.active_config
-        config.api_key = self.config.resolve_api_key(config)
         messages = self.prompt_builder.build_messages(self.settings, self.character_id, self.session.messages[:-1], text)
         self._active_request_id = self.service.send(messages, config)
         self._bottom()

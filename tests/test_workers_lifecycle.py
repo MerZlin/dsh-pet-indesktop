@@ -323,7 +323,10 @@ def test_worker_without_heartbeat_is_faulted(qt_app) -> None:
         },
         separators=(",", ":"),
     )
-    script = f"import sys,time; hello={hello!r}; print(hello, flush=True); sys.stdin.readline(); ready={ready!r}; print(ready, flush=True); time.sleep(30)"
+    # The production JSONL transport writes LF bytes. Text-mode print on
+    # Windows emits CRLF; the old test never reached READY and accidentally
+    # tested the obsolete heartbeat-during-handshake behavior instead.
+    script = f"import sys; hello={hello!r}; sys.stdout.buffer.write((hello+'\\n').encode()); sys.stdout.buffer.flush(); sys.stdin.readline(); ready={ready!r}; sys.stdout.buffer.write((ready+'\\n').encode()); sys.stdout.buffer.flush(); sys.stdin.read()"
     supervisor = WorkerSupervisor(
         "fake-heartbeat",
         program=sys.executable,
@@ -335,12 +338,14 @@ def test_worker_without_heartbeat_is_faulted(qt_app) -> None:
     diagnostics = []
     supervisor.diagnostic.connect(lambda stage, payload: diagnostics.append((stage, payload)))
 
-    assert supervisor.start()
-    _wait_until(lambda: supervisor.state == supervisor.FAULT, timeout_ms=5000)
-
-    assert any(stage == "failure" and payload.get("reason") == "heartbeat timeout" for stage, payload in diagnostics)
-    assert any(stage == "fault" for stage, _payload in diagnostics)
-    supervisor.stop()
+    try:
+        assert supervisor.start()
+        _wait_until(lambda: supervisor.state == supervisor.READY, timeout_ms=15000)
+        _wait_until(lambda: supervisor.state == supervisor.FAULT, timeout_ms=15000)
+        assert any(stage == "failure" and payload.get("reason") == "heartbeat timeout" for stage, payload in diagnostics)
+        assert any(stage == "fault" for stage, _payload in diagnostics)
+    finally:
+        _stop_supervisor(supervisor)
 
 
 def test_adapter_drops_stale_generation_events(qt_app) -> None:
@@ -360,3 +365,33 @@ def test_adapter_drops_stale_generation_events(qt_app) -> None:
 
     assert diagnostics == [("stale_event", {"generation": 1, "current": 2})]
     source.stop()
+
+
+def test_slow_verified_launch_does_not_spend_heartbeat_before_ready(tmp_path, qt_app, monkeypatch):
+    from types import SimpleNamespace
+
+    from pet.workers.launch import WorkerLaunch
+
+    # Shift only this supervisor's clock at the verification seam. Real Qt,
+    # native child and handshake still run; no uptime arithmetic or sleeps.
+    clock = [100.0]
+    monkeypatch.setattr("pet.workers.supervisor.time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def acquire():
+        clock[0] += 60.0
+        return WorkerLaunch(sys.executable, ("-m", "pet", "--worker", "agent-link-events"), str(Path.cwd()), dict(os.environ), lambda: None)
+
+    supervisor = WorkerSupervisor("agent-link-events", launch_factory=acquire, max_restarts=0, handshake_timeout_ms=15000)
+    failures = []
+    supervisor.failed.connect(failures.append)
+    # Deterministically deliver the queued timeout check before the child's
+    # HELLO, exactly as slow frozen Core initialization can order Qt events.
+    supervisor.state_changed.connect(lambda state: supervisor._check_heartbeat() if state == supervisor.HANDSHAKING else None)
+    try:
+        assert supervisor.start({"sources": []})
+        _wait_until(lambda: supervisor.state == supervisor.READY or bool(failures), timeout_ms=15000)
+        assert not failures, failures
+        assert supervisor.state == supervisor.READY
+        assert supervisor._heartbeat_timer.isActive()
+    finally:
+        _stop_supervisor(supervisor)

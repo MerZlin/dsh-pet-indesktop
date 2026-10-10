@@ -12,6 +12,10 @@ from pet.http_compat import normalize_chat_endpoint
 
 PLUGIN_ID = "official.screen-understanding"
 MODES = frozenset({"automatic", "manual"})
+DEFAULT_BASE_URL = "https://api.deepseek.com"
+DEFAULT_MODEL = "deepseek-v4-flash-vision-exp"
+DEFAULT_CHAT_PATH = "/v1/chat/completions"
+DEFAULT_SYSTEM_PROMPT = "你是一只可爱的桌面宠物，请用自然、友善的中文和用户交流。"
 
 
 def validate_endpoint(base: str, path: str) -> str:
@@ -20,6 +24,29 @@ def validate_endpoint(base: str, path: str) -> str:
     if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment or parsed.query:
         raise ValueError("invalid_endpoint")
     return endpoint
+
+
+def infer_vision_model(model: str) -> str:
+    """Legacy local model inference; never probe a Provider."""
+    model = (model or "").strip()
+    low = model.lower()
+    if "vision" in low:
+        return model
+    if low.endswith("deepseek-v4-flash"):
+        return model + "-vision-exp"
+    if low.startswith("deepseek"):
+        return DEFAULT_MODEL
+    return model
+
+
+def vision_failure_hint(code: str, credential_source: str, fallback: str) -> str:
+    if code not in {"vision_authentication_failed", "vision_protocol_unsupported"}:
+        return fallback
+    if credential_source == "main":
+        return "主 API 暂不能完成视觉请求。请在 API 设置配置视觉 API Key，必要时展开高级设置填写视觉地址和模型。"
+    if credential_source == "vision":
+        return "视觉请求被拒绝，请检查视觉 API Key，以及高级设置中的视觉地址和模型。"
+    return fallback
 
 
 @dataclass(frozen=True)
@@ -72,6 +99,32 @@ class VisionSettings:
     migration_state: str = "pending"
     schema_version: int = 1
 
+    @classmethod
+    def default(cls) -> VisionSettings:
+        """Return a fresh screen-only profile without importing any old config.
+
+        The default is intentionally credential-free.  An existing, valid screen
+        namespace is still loaded as-is; this helper is only for a new/empty
+        screen configuration and does not inspect the AI namespace.
+        """
+        profile = VisionProfile(
+            "shared",
+            DEFAULT_BASE_URL,
+            DEFAULT_MODEL,
+            DEFAULT_CHAT_PATH,
+            DEFAULT_SYSTEM_PROMPT,
+            60.0,
+            0.7,
+            2048,
+            True,
+            "",
+        )
+        return cls(
+            profiles={"shared": profile},
+            bindings={"automatic": "shared", "manual": "shared"},
+            migration_state="default",
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -105,6 +158,8 @@ class VisionRequestConfig:
     max_tokens: int = 2048
     verify_ssl: bool = True
 
+    credential_source: str = ""
+
     # Compatibility with the existing pure vision executor; no provider inference.
     vision_same_as_chat = True
     vision_model = ""
@@ -121,7 +176,9 @@ class VisionRequestConfig:
             raise ValueError("invalid_request")
         data = {key: value for key, value in raw.items() if key in cls.__dataclass_fields__}
         # Validate via the persisted model; ephemeral secrets are kept out of it.
-        VisionProfile.from_dict({"profile_id": "request", **{k: v for k, v in data.items() if k != "api_key"}})
+        VisionProfile.from_dict({"profile_id": "request", **{k: v for k, v in data.items() if k not in {"api_key", "credential_source"}}})
+        if data.get("credential_source", "") not in {"", "main", "vision"}:
+            raise ValueError("invalid_request")
         return cls(**data)
 
     @classmethod

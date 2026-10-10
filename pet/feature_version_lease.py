@@ -365,7 +365,7 @@ class FeatureVersionLeaseCoordinator:
         if (
             getattr(descriptor, "id", None) != selection.feature_id
             or getattr(descriptor, "version", None) != selection.version
-            or getattr(descriptor, "trust_status", None) != "trusted_official"
+            or getattr(descriptor, "trust_status", None) not in {"trusted_official", "local_user"}
             or not isinstance(raw_manifest, bytes)
             or hashlib.sha256(raw_manifest).hexdigest() != selection.manifest_digest
         ):
@@ -448,9 +448,7 @@ class FeatureVersionLeaseCoordinator:
         return self._acquire(selection, "settings")
 
     def reserve_worker(self, selection: FeatureVersionSelection) -> WorkerReservation:
-        from .official_features import official_feature
-
-        if official_feature(selection.feature_id).execution_kind != "host-worker":
+        if getattr(selection.descriptor, "execution_kind", None) != "host-worker":
             raise LeaseError("host_only_has_no_worker")
         result = self._acquire(selection, "worker_reservation")
         assert isinstance(result, WorkerReservation)

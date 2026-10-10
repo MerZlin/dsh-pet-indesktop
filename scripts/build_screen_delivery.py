@@ -1,8 +1,10 @@
 """Explicit, isolated Phase 4A validation builds; never changes default releases.
 
-Test trust is generated in memory, embedded only in these labelled validation
-executables, and discarded. No private key, installer or installed-state file.
-Outputs must be new directories; failures preserve evidence for inspection.
+Build a Core plus a user-trusted local package fixture. Phase5A local
+activation deliberately has no publisher key or signature dependency; the
+package still carries a bounded manifest/file inventory for compatibility and
+corruption detection. Outputs must be new directories; failures preserve
+ evidence for inspection.
 """
 
 from __future__ import annotations
@@ -86,6 +88,39 @@ COLLECT = ("imageio_ffmpeg", "certifi", "PySide6.QtMultimedia", "edge_tts", "aio
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+IMAGE_SUBSYSTEM_WINDOWS_GUI = 2
+
+
+def read_pe_subsystem(executable: Path) -> int:
+    """Read the PE OptionalHeader subsystem without executing the artifact."""
+    path = Path(executable).resolve(strict=True)
+    raw = path.read_bytes()
+    if len(raw) < 0x40 or raw[:2] != b"MZ":
+        raise ValueError(f"invalid PE DOS header: {path}")
+    pe_offset = int.from_bytes(raw[0x3C:0x40], "little")
+    signature_end = pe_offset + 4
+    if pe_offset < 0x40 or signature_end > len(raw) or raw[pe_offset:signature_end] != b"PE\x00\x00":
+        raise ValueError(f"invalid PE signature: {path}")
+    coff_start = signature_end
+    if coff_start + 20 > len(raw):
+        raise ValueError(f"truncated PE COFF header: {path}")
+    optional_size = int.from_bytes(raw[coff_start + 16 : coff_start + 18], "little")
+    optional_start = coff_start + 20
+    subsystem_offset = optional_start + 68
+    if optional_size < 70 or subsystem_offset + 2 > len(raw):
+        raise ValueError(f"truncated PE optional header: {path}")
+    magic = int.from_bytes(raw[optional_start : optional_start + 2], "little")
+    if magic not in {0x10B, 0x20B}:
+        raise ValueError(f"unsupported PE optional header: {path}")
+    return int.from_bytes(raw[subsystem_offset : subsystem_offset + 2], "little")
+
+
+def require_gui_pe_subsystem(executable: Path) -> None:
+    subsystem = read_pe_subsystem(executable)
+    if subsystem != IMAGE_SUBSYSTEM_WINDOWS_GUI:
+        raise ValueError(f"Core PE subsystem must be GUI (2), got {subsystem}")
 
 
 def write_json(path: Path, value: object) -> None:
@@ -178,7 +213,7 @@ def prepare_core(
     output: Path,
     *,
     chat: bool,
-    public_key: str,
+    public_key: str | None = None,
     entrypoint: Path | None = None,
     probe_bundle: Path | None = None,
     probe_manifest_sha256: str | None = None,
@@ -186,8 +221,6 @@ def prepare_core(
     root, output = root.resolve(strict=True), output.absolute()
     if output.exists():
         raise FileExistsError(f"output already exists: {output}")
-    if len(bytes.fromhex(public_key)) != 32:
-        raise ValueError("test public key must be Ed25519")
     management = entrypoint is not None
     manual = False
     if entrypoint is not None:
@@ -203,7 +236,7 @@ def prepare_core(
         TrustedProbeBundle(probe_bundle, probe_manifest_sha256).verify()
     elif probe_bundle is not None or probe_manifest_sha256 is not None:
         raise ValueError("probe requires production management entry")
-    snapshots = {}
+    snapshots = {"assets/icon.ico": _source_bytes(root, root / "assets/icon.ico")}
     for path in (root / "pet").rglob("*.py"):
         relative = path.relative_to(root)
         module = ".".join(relative.with_suffix("").parts)
@@ -214,20 +247,25 @@ def prepare_core(
         policy = _source_bytes(root, root / "pet/feature_build_policy.py").decode("utf-8")
         # This replaces only the closed validation source tree, never repository
         # policy, installed Core, environment trust or a candidate's input.
-        anchor_name = "manual-acceptance-only" if manual else "validation-only"
-        policy += (
-            f"\nOFFICIAL_FEATURE_TRUST_ANCHORS = (({anchor_name!r}, {public_key!r}),)\n"
-            f"PROBE_BUNDLE_MANIFEST_SHA256 = {probe_manifest_sha256!r}\nVALIDATION_BUILD = True\n"
-        )
+        if public_key is not None:
+            # Compatibility only for historical signed-fixture tests. No
+            # Phase5A builder supplies this argument anymore.
+            anchor_name = "manual-acceptance-only" if manual else "validation-only"
+            policy += f"\nOFFICIAL_FEATURE_TRUST_ANCHORS = (({anchor_name!r}, {public_key!r}),)\nALLOW_LOCAL_PACKAGE_ACTIVATION = False\n"
+        else:
+            policy += "\nOFFICIAL_FEATURE_TRUST_ANCHORS = ()\nOFFICIAL_FEATURE_KEY_POLICIES = ()\nALLOW_LOCAL_PACKAGE_ACTIVATION = True\n"
+        policy += f"PROBE_BUNDLE_MANIFEST_SHA256 = {probe_manifest_sha256!r}\nVALIDATION_BUILD = True\n"
         if manual:
             policy += "MANUAL_ACCEPTANCE_BUILD = True\n"
         snapshots["pet/feature_build_policy.py"] = policy.encode("utf-8")
         if not manual:
             snapshots["validation_boundaries.py"] = _source_bytes(root, root / "packaging/phase4b_validation_boundaries.py")
-    snapshots["pet/feature_distribution.py"] = b'"""Independent validation variant; not installed state."""\nBUILTIN_SCREEN = False\n'
-    snapshots["build_variant.py"] = (f"VARIANT = {('webm-chat' if chat else 'webm')!r}\n").encode()
+    snapshots["pet/feature_distribution.py"] = b'"""Independent validation variant; not installed state."""\nBUILTIN_AI = False\nBUILTIN_SCREEN = False\n'
+    variant = "core-webm" if manual else ("webm-chat" if chat else "webm")
+    snapshots["build_variant.py"] = (f"VARIANT = {variant!r}\n").encode()
     snapshots["validation_config.py"] = (
-        f"VALIDATION_ONLY = True\nMANUAL_ACCEPTANCE_ONLY = {manual!r}\nENABLE_CHAT = {chat!r}\nTEST_PUBLIC_KEY = {public_key!r}\n"
+        f"VALIDATION_ONLY = True\nMANUAL_ACCEPTANCE_ONLY = {manual!r}\nENABLE_CHAT = {chat!r}\nLOCAL_PACKAGE_ACTIVATION = {public_key is None!r}\n"
+        + (f"TEST_PUBLIC_KEY = {public_key!r}\n" if public_key is not None else "")
     ).encode()
     hidden = host_dependencies(root)
     output.mkdir(parents=True, exist_ok=False)
@@ -252,8 +290,78 @@ def prepare_core(
     return manifest
 
 
+def _verify_production_worker_inputs(root: Path, build: Path) -> Path:
+    """Verify the closed production-worker preparation emitted by build_feature_release."""
+    inputs = json.loads((build / "evidence/build-input.json").read_text(encoding="utf-8"))
+    if inputs.get("scope") != "production-worker-source":
+        raise ValueError("not a production Worker source build")
+    if bool(inputs.get("synthetic_boundary", False)):
+        raise ValueError("production Worker cannot use a synthetic boundary")
+    if __package__:
+        from .build_feature_release import WORKER_ENTRY
+        from .build_screen_worker import WORKER_SOURCES
+    else:
+        from build_feature_release import WORKER_ENTRY
+        from build_screen_worker import WORKER_SOURCES
+    expected_sources = set(WORKER_SOURCES) | {"pet/official_features.py", "worker_entry.py"}
+    source_files = inputs.get("source_files")
+    if not isinstance(source_files, dict) or set(source_files) != expected_sources:
+        raise ValueError("production Worker source inventory differs from closed build inputs")
+    source_root = build / "source"
+    for relative, entry in source_files.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("sha256"), str) or not isinstance(entry.get("size"), int):
+            raise ValueError("production Worker source evidence is invalid")
+        path = source_root / relative
+        if relative == "worker_entry.py":
+            data = WORKER_ENTRY.encode("utf-8")
+        else:
+            data = _source_bytes(root.resolve(), root / relative)
+        if path.read_bytes() != data or len(data) != entry["size"] or digest(data) != entry["sha256"]:
+            raise ValueError(f"production Worker input changed; rebuild first: {relative}")
+    return _verify_worker_artifact(build, require_native=True)
+
+
+def _verify_worker_artifact(build: Path, *, require_native: bool) -> Path:
+    artifact = json.loads((build / "evidence/artifact.json").read_text(encoding="utf-8"))
+    bundle = build / "dist/proactive-screen-worker"
+    if not bundle.is_dir():
+        raise ValueError("Worker frozen bundle is missing")
+    if require_native:
+        # A real Windows probe must carry the Core-owned native isolation leaf.
+        # The Worker must fail closed when this leaf is absent; accepting an
+        # ordinary PyInstaller build here only defers that failure to install.
+        evidence_path = build / "evidence/headless-input.json"
+        if not evidence_path.is_file():
+            raise ValueError("non-synthetic Worker missing headless probe evidence")
+        headless = json.loads(evidence_path.read_text(encoding="utf-8"))
+        native_name = "_internal/_dsh_probe_native.pyd"
+        native_path = bundle / native_name
+        if not native_path.is_file():
+            raise ValueError("non-synthetic Worker missing native isolation leaf")
+        native_digest = headless.get("native_leaf_sha256")
+        if not isinstance(native_digest, str) or len(native_digest) != 64:
+            raise ValueError("non-synthetic Worker native leaf evidence is invalid")
+        if digest(native_path.read_bytes()) != native_digest:
+            raise ValueError("non-synthetic Worker native isolation leaf changed")
+        artifact_native = artifact.get("files", {}).get(native_name)
+        if not isinstance(artifact_native, dict) or artifact_native.get("sha256") != native_digest:
+            raise ValueError("non-synthetic Worker artifact omits native isolation leaf evidence")
+    actual = {p.relative_to(bundle).as_posix() for p in bundle.rglob("*") if p.is_file()}
+    if actual != set(artifact["files"]):
+        raise ValueError("Worker artifact inventory changed")
+    for relative, entry in artifact["files"].items():
+        data = _source_bytes(bundle.resolve(), bundle / relative)
+        if len(data) != entry["size"] or digest(data) != entry["sha256"]:
+            raise ValueError(f"Worker artifact changed: {relative}")
+    return bundle
+
+
 def verify_worker_inputs(root: Path, build: Path, *, synthetic: bool = False) -> Path:
     inputs = json.loads((build / "evidence/build-input.json").read_text(encoding="utf-8"))
+    if inputs.get("scope") == "production-worker-source":
+        if synthetic:
+            raise ValueError("Worker validation boundary does not match selected mode")
+        return _verify_production_worker_inputs(root, build)
     if inputs.get("scope") != "standalone-screen-worker-validation":
         raise ValueError("not an independent Worker build")
     if bool(inputs.get("synthetic_boundary", False)) != synthetic:
@@ -275,20 +383,16 @@ def verify_worker_inputs(root: Path, build: Path, *, synthetic: bool = False) ->
         origin = "packaging/phase4a_synthetic_worker.py" if synthetic and relative == "validation_screen_worker.py" else relative
         if digest(_source_bytes(root.resolve(), root / origin)) != checksum:
             raise ValueError(f"Worker input changed; rebuild first: {relative}")
-    artifact = json.loads((build / "evidence/artifact.json").read_text(encoding="utf-8"))
-    bundle = build / "dist/proactive-screen-worker"
-    actual = {p.relative_to(bundle).as_posix() for p in bundle.rglob("*") if p.is_file()}
-    if actual != set(artifact["files"]):
-        raise ValueError("Worker artifact inventory changed")
-    for relative, entry in artifact["files"].items():
-        data = _source_bytes(bundle.resolve(), bundle / relative)
-        if len(data) != entry["size"] or digest(data) != entry["sha256"]:
-            raise ValueError(f"Worker artifact changed: {relative}")
-    return bundle
+    return _verify_worker_artifact(build, require_native=not synthetic)
 
 
-def assemble_package(root: Path, target: Path, worker_bundle: Path, key, *, synthetic: bool = False) -> Path:
-    """Single version, signed inventory. The private key is never serialized."""
+def assemble_package(root: Path, target: Path, worker_bundle: Path, legacy_key=None, *, synthetic: bool = False) -> Path:
+    """Create a local package; ``legacy_key`` is test-only compatibility.
+
+    New Phase5A callers leave it unset. An explicitly supplied ephemeral key is
+    retained solely for historical signed-fixture tests and is never generated
+    by a delivery/manual build.
+    """
     if target.exists():
         raise FileExistsError(f"package output exists: {target}")
     target.mkdir(parents=True)
@@ -312,9 +416,9 @@ def assemble_package(root: Path, target: Path, worker_bundle: Path, key, *, synt
     files = {p.relative_to(target).as_posix(): {"sha256": digest(p.read_bytes()), "size": p.stat().st_size} for p in sorted(target.rglob("*")) if p.is_file()}
     manifest = dict(
         id="official.screen-understanding",
-        version="1.0.0",
+        version="1.0.3",
         api_version="1",
-        core_requires=">=4.2.1,<6.0.0",
+        core_requires=">=4.2.4,<6.0.0",
         platforms=[sys.platform],
         capabilities=["screen.capture"],
         factory="screen-understanding/v1",
@@ -323,7 +427,54 @@ def assemble_package(root: Path, target: Path, worker_bundle: Path, key, *, synt
     )
     raw = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     (target / "manifest.json").write_bytes(raw)
-    (target / "manifest.sig").write_bytes(key.sign(raw))
+    if legacy_key is not None:
+        (target / "manifest.sig").write_bytes(legacy_key.sign(raw))
+    return target
+
+
+def assemble_ai_package(root: Path, target: Path, *, version: str = "1.0.3") -> Path:
+    """Create the ordinary, unsigned local AI package used by Setup/manual acceptance.
+
+    ``key_id`` is a non-cryptographic manifest discriminator required by the
+    existing v2 host-only schema.  It does not identify a public key and is
+    ignored by local activation; no ``manifest.sig`` is emitted.
+    """
+    if target.exists():
+        raise FileExistsError(f"package output exists: {target}")
+    origin = (root / "features/ai_chat/host").resolve(strict=True)
+    target.mkdir(parents=True)
+    for path in origin.rglob("*"):
+        if not path.is_file() or "__pycache__" in path.parts:
+            continue
+        destination = target / "host" / path.relative_to(origin)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(_source_bytes(root.resolve(strict=True), path))
+    files = {
+        path.relative_to(target).as_posix(): {"sha256": digest(path.read_bytes()), "size": path.stat().st_size}
+        for path in sorted(target.rglob("*"))
+        if path.is_file()
+    }
+    manifest = {
+        "format_version": 2,
+        "execution_kind": "host-only",
+        "key_id": "local-user",
+        "id": "official.ai-chat",
+        "version": version,
+        "api_version": "1",
+        "core_requires": ">=4.2.3,<6.0.0",
+        "platforms": [sys.platform],
+        "capabilities": [
+            "network.http",
+            "settings.contribute",
+            "menu.contribute",
+            "chat.contribute",
+            "files.user-selected.read",
+        ],
+        "factory": "ai-chat/v1",
+        "worker": None,
+        "files": files,
+    }
+    (target / "manifest.json").write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
     return target
 
 
@@ -332,7 +483,7 @@ def build_core(
     output: Path,
     *,
     chat: bool,
-    public_key: str,
+    public_key: str | None = None,
     entrypoint: Path | None = None,
     probe_bundle: Path | None = None,
     probe_manifest_sha256: str | None = None,
@@ -341,7 +492,7 @@ def build_core(
         root, output, chat=chat, public_key=public_key, entrypoint=entrypoint, probe_bundle=probe_bundle, probe_manifest_sha256=probe_manifest_sha256
     )
     source = output / "source"
-    datas = []
+    datas = [(str(source / "assets/icon.ico"), "assets")]
     if probe_bundle is not None:
         assert probe_manifest_sha256 is not None  # prepare_core validated the pair.
         from pet.feature_probe_windows import TrustedProbeBundle
@@ -380,7 +531,7 @@ def build_core(
             datas.append((str(destination), "pet/chat"))
             manifest.setdefault("resources", {})["pet/chat/" + file.name] = {"size": file.stat().st_size, "sha256": digest(file.read_bytes())}
     write_json(output / "evidence/build-input.json", manifest)
-    name = "core-webm-chat-no-screen" if chat else "core-webm-no-chat-no-screen"
+    name = "dsh-pet-core-webm" if manifest["manual_acceptance_only"] else ("core-webm-chat-no-screen" if chat else "core-webm-no-chat-no-screen")
     spec = output / "validation.spec"
     spec.write_text(
         "from PyInstaller.utils.hooks import collect_all\n"
@@ -388,7 +539,7 @@ def build_core(
         + f"for module in {COLLECT!r}:\n    d,b,h=collect_all(module)\n    datas+=d; binaries+=b; hiddenimports+=h\n"
         + f"a=Analysis([{str(source / 'validation_entry.py')!r}],pathex=[{str(source)!r}],datas=datas,binaries=binaries,hiddenimports=hiddenimports,excludes={manifest['excluded_modules']!r})\n"
         + "pyz=PYZ(a.pure)\n"
-        + f"exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name={name!r},console=True,upx=False)\n"
+        + f"exe=EXE(pyz,a.scripts,[],exclude_binaries=True,name={name!r},console=False,upx=False,icon={str(source / 'assets/icon.ico')!r})\n"
         + f"coll=COLLECT(exe,a.binaries,a.datas,name={name!r},upx=False)\n",
         encoding="utf-8",
     )
@@ -403,18 +554,20 @@ def build_core(
         result = subprocess.run(command, cwd=source, env=env, stdout=log, stderr=subprocess.STDOUT, check=False)
     if result.returncode:
         raise RuntimeError(f"Core build failed ({result.returncode}), see {output / 'evidence/pyinstaller.log'}")
-    executable = verify_core_bundle(output, chat=chat, build_seconds=time.perf_counter() - started)
+    executable = verify_core_bundle(output, chat=chat, manual=manifest["manual_acceptance_only"], build_seconds=time.perf_counter() - started)
     if probe_bundle is not None:
         assert probe_manifest_sha256 is not None
         TrustedProbeBundle(executable.parent / "_internal/feature-probe", probe_manifest_sha256).verify()
     return executable
 
 
-def verify_core_bundle(output: Path, *, chat: bool, build_seconds: float) -> Path:
+def verify_core_bundle(output: Path, *, chat: bool, manual: bool = False, build_seconds: float) -> Path:
     """Audit an actual artifact; rerunnable without changing build inputs."""
-    name = "core-webm-chat-no-screen" if chat else "core-webm-no-chat-no-screen"
+    name = "dsh-pet-core-webm" if manual else ("core-webm-chat-no-screen" if chat else "core-webm-no-chat-no-screen")
     bundle = output / "dist" / name
     exe = bundle / (name + (".exe" if os.name == "nt" else ""))
+    if os.name == "nt":
+        require_gui_pe_subsystem(exe)
     from PyInstaller.archive.readers import CArchiveReader
 
     archive = CArchiveReader(str(exe))
@@ -451,23 +604,23 @@ def main(argv=None) -> int:
     if output.exists():
         parser.error("output directory must not exist")
     worker = verify_worker_inputs(ROOT, args.worker_build.resolve())
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
-    key = Ed25519PrivateKey.generate()
-    public = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
-    package = assemble_package(ROOT, output / "official.screen-understanding/1.0.0", worker, key)
+    package = assemble_package(ROOT, output / "official.screen-understanding/1.0.3", worker)
     synthetic_package = None
     if args.synthetic_worker_build:
         fixture = verify_worker_inputs(ROOT, args.synthetic_worker_build.resolve(), synthetic=True)
-        synthetic_package = assemble_package(ROOT, output / "synthetic-test-only/official.screen-understanding/1.0.0", fixture, key, synthetic=True)
-    del key
+        synthetic_package = assemble_package(ROOT, output / "synthetic-test-only/official.screen-understanding/1.0.3", fixture, synthetic=True)
     write_json(
         output / "validation-trust.json",
-        {"validation_only": True, "public_key": public, "package": str(package), "synthetic_package": str(synthetic_package) if synthetic_package else None},
+        {
+            "validation_only": True,
+            "package_activation": "local-structure",
+            "signature_required": False,
+            "package": str(package),
+            "synthetic_package": str(synthetic_package) if synthetic_package else None,
+        },
     )
     for chat in (False, True):
-        build_core(ROOT, output / ("core-chat" if chat else "core-no-chat"), chat=chat, public_key=public)
+        build_core(ROOT, output / ("core-chat" if chat else "core-no-chat"), chat=chat)
     return 0
 
 

@@ -42,13 +42,18 @@ def main(argv: list[str] | None = None) -> int:
 
         return _run_worker(_worker_id(args))
     protect_autostart()
-    if "--settings" in args:
-        from pet.__main__ import _run_settings
+    if any(flag in args for flag in ("--install-local-packages", "--import-local-data", "--core-maintenance", "--uninstall-cleanup")):
+        # Maintenance and local-package flows must use the same closed dispatcher
+        # as the production unified Core; otherwise the GUI path would silently
+        # ignore the command-line intent and start an ordinary pet window.
+        from pet.__main__ import _main
 
-        return _run_settings()
-    from pet.app import main as production_main
+        return _main()
+    # Normal UI and settings need the same code/data leases and portable
+    # discovery as the installed Core, before Config or any UI imports.
+    from pet.__main__ import _main
 
-    return production_main(argv=args, enable_chat=validation_config.ENABLE_CHAT)
+    return _main(enable_chat=validation_config.ENABLE_CHAT)
 
 
 if __name__ == "__main__":

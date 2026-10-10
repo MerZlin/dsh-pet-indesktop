@@ -85,15 +85,16 @@ class _BackgroundResult(QObject):
 
 
 class _BalanceBridge(_BackgroundResult):
-    def __init__(self, win, owner=None):
+    def __init__(self, win, owner=None, *, authorized=lambda: True):
         super().__init__()
+        self.authorized = authorized
         self.win = win
         self.owner = owner
         self.done.connect(self._show)
 
     def _show(self, ok: bool, payload) -> None:
         # 异步回调可能晚于窗口销毁（切角色/退出），先探活再触碰 Qt 对象
-        if self.win is None or not shiboken6.isValid(self.win):
+        if not self.authorized() or self.win is None or not shiboken6.isValid(self.win):
             return
         if not ok:
             self.win.show_bubble(str(payload), duration_ms=6000)
@@ -106,15 +107,16 @@ class _BalanceBridge(_BackgroundResult):
 class _QuietBalanceBridge(_BackgroundResult):
     """灵动岛卡片展开时的静默余额查询：只更新岛卡片，不冒泡、不播余额动画。"""
 
-    def __init__(self, owner):
+    def __init__(self, owner, *, authorized=lambda: True):
         super().__init__()
+        self.authorized = authorized
         self.owner = owner
         self.done.connect(self._apply)
 
     def _apply(self, ok: bool, payload) -> None:
         owner = self.owner
         island = getattr(owner, "island", None) if owner is not None else None
-        if island is None or not shiboken6.isValid(island):
+        if not self.authorized() or island is None or not shiboken6.isValid(island):
             return
         if ok:
             owner._update_island_balance(payload, animate=False)
@@ -1198,10 +1200,15 @@ class AppShell:
         from .official_features import default_feature_host
 
         self.feature_host = feature_host if feature_host is not None else default_feature_host(self.plugin_registry.contributions)
-        from .feature_management import attach_official_management
+        from .feature_management import attach_feature_management, attach_official_management, discover_local_feature_ids
         from .official_features import SCREEN_FEATURE_ID
 
         self.feature_managers = attach_official_management(config, self.feature_host, role="core")
+        for feature_id in discover_local_feature_ids(config):
+            try:
+                self.feature_managers[feature_id] = attach_feature_management(config, self.feature_host, feature_id=feature_id, role="core")
+            except (OSError, RuntimeError, TypeError, ValueError):
+                logging.exception("local feature manager bootstrap failed: %s", feature_id)
         self.feature_management = self.feature_managers[SCREEN_FEATURE_ID]
         # 待办提醒：进程级单例（多窗共用一个调度器，避免每窗一个定时器重复通知），
         # Phase 1 门控：默认懒创建——配置关闭时不构造、不跑 30s 定时器；关闭且
@@ -2761,10 +2768,13 @@ class AppShell:
 
         try:
             provider = resolve_balance_request(self.config)
-        except (CredentialError, ValueError):
-            provider = None
+        except (CredentialError, ValueError, PermissionError) as exc:
+            from .balance_config import balance_configuration_hint
+
+            island.set_balance_info(self._island_tier_hint(), balance_configuration_hint(str(exc)))
+            return
         if provider is None or not provider.api_key:
-            destination = "聊天" if BUILTIN_AI else "常规 → 余额凭据"
+            destination = "聊天" if BUILTIN_AI else "AI 与对话 → API 服务"
             island.set_balance_info(self._island_tier_hint(), "未配置 API Key（设置 → " + destination + "）")
             return
         key_digest = hashlib.sha256(str(provider.api_key or "").encode()).hexdigest()[:12]
@@ -2790,14 +2800,14 @@ class AppShell:
             return
         self._quiet_balance_last = now
         island.set_balance_info(self._island_tier_hint(), "查询中…")
-        bridge = _QuietBalanceBridge(owner=self)
+        bridge = _QuietBalanceBridge(owner=self, authorized=getattr(provider, "authorization_check", lambda: True))
         self._quiet_balance_bridge = bridge
         self._quiet_balance_busy = True  # 独立忙标志：不占显式查询的闸门
         try:
             threading.Thread(
                 target=self._balance_worker,
                 args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
-                kwargs={"quiet": True},
+                kwargs={"quiet": True, "authorized": getattr(provider, "authorization_check", lambda: True)},
                 daemon=True,
                 name="pet-balance-quiet",
             ).start()
@@ -2820,10 +2830,13 @@ class AppShell:
 
         try:
             provider = resolve_balance_request(self.config)
-        except (CredentialError, ValueError):
-            provider = None
+        except (CredentialError, ValueError, PermissionError) as exc:
+            from .balance_config import balance_configuration_hint
+
+            _show_balance_payload(win, {"text": balance_configuration_hint(str(exc)), "info": {}})
+            return
         if provider is None or not provider.api_key:
-            _show_balance_payload(win, {"text": "未配置余额凭据，请打开设置配置", "info": {}})
+            _show_balance_payload(win, {"text": "未配置 API Key，请打开 AI 与对话 → API 服务", "info": {}})
             return
         key_digest = hashlib.sha256(str(provider.api_key or "").encode()).hexdigest()[:12]
         provider_key = "|".join(
@@ -2848,12 +2861,13 @@ class AppShell:
         # AppKit 抑制（与设置对话框首次点击无反应同源），singleShot 在 macOS
         # 上要等菜单关闭后才派发，Windows 上立即派发也无害。
         QTimer.singleShot(0, lambda: win.show_bubble("让我看看余额…", duration_ms=6000))
-        bridge = _BalanceBridge(win, owner=self)
+        bridge = _BalanceBridge(win, owner=self, authorized=getattr(provider, "authorization_check", lambda: True))
         self._balance_bridge = bridge
         try:
             threading.Thread(
                 target=self._balance_worker,
                 args=(bridge, provider.base_url, provider.api_key, provider.verify_ssl, provider_key),
+                kwargs={"authorized": getattr(provider, "authorization_check", lambda: True)},
                 daemon=True,
                 name="pet-balance",
             ).start()
@@ -2862,16 +2876,23 @@ class AppShell:
             error_message = f"余额查询失败：{exc}"
             QTimer.singleShot(0, lambda message=error_message: bridge.done.emit(False, message))
 
-    def _balance_worker(self, bridge, base_url: str, api_key: str, verify_ssl: bool, provider_key: str = "", *, quiet: bool = False) -> None:
+    def _balance_worker(
+        self, bridge, base_url: str, api_key: str, verify_ssl: bool, provider_key: str = "", *, quiet: bool = False, authorized=lambda: True
+    ) -> None:
         try:
+            if not authorized():
+                return
             info = balance_mod.fetch_balance(base_url, api_key, verify_ssl=verify_ssl)
+            if not authorized():
+                return
             text = balance_mod.format_balance(info)
             payload = {"text": text, "info": info}
             self._balance_cache = (time.monotonic(), payload, provider_key)
             self._write_balance_file_cache(payload, provider_key)
             bridge.done.emit(True, payload)
         except Exception as exc:  # noqa: BLE001 - 任何失败走气泡提示
-            bridge.done.emit(False, f"余额查询失败：{exc}")
+            if authorized():
+                bridge.done.emit(False, balance_mod.failure_hint(exc))
         finally:
             if quiet:
                 self._quiet_balance_busy = False

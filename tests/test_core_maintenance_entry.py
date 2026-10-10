@@ -69,3 +69,19 @@ def test_normal_core_barrier_failure_precedes_layout_and_settings(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["core", "--settings"])
     assert entry._main() == 3
     assert calls == ["barrier"]
+
+
+def test_setup_install_route_dispatches_without_normal_qt_or_code_gate(monkeypatch, tmp_path):
+    entry = configure(monkeypatch)
+    calls = []
+    root = tmp_path / "embedded"
+    root.mkdir()
+
+    def install_packages(path, owners):
+        calls.append((path, owners))
+        return 3
+
+    monkeypatch.setitem(sys.modules, "pet.core_maintenance", types.SimpleNamespace(run_install_packages=install_packages))
+    monkeypatch.setattr(sys, "argv", ["core", "--core-maintenance", "install-packages", str(root), "official.ai-chat"])
+    assert entry._main() == 3
+    assert calls == [(root, ("official.ai-chat",))]

@@ -1,6 +1,12 @@
 # dsh-pet-indesktop
 
-> Phase 5A / 5B-1 当前状态：2026-10-06，用户授权保存已有源改动并推送远端检查点后继续验收。新全量4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29)、真实CPU高负载三遍、Ruff/format/mypy通过，183文本文件明确暂存；提交/远端核对尚在进行。仅AI正常Core确认/退出、可见包标题、长路径LPAC和权限canary、Core04构建审计已有证据；分号路径、正常Worker、新Core完整矩阵/性能、新版正式分发与真实安装/人工/干净环境仍待完成，不能用旧产物冒充。最新质量结果及准确续接见 [同一实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) 与 [交接](.scratch/phase5a-local-distribution/HANDOFF.md)；历史日期与Phase4B证据不变。
+<!-- CURRENT_20261010_START -->
+> **当前状态（2026-10-10）**：Core **4.2.4** / AI **1.0.3** / Screen **1.0.3** 已完成工程验证，用户明确确认“实际体验确认没问题”。当前进行源代码远程检查点前的复验；尚未提交/推送本轮修改，未作为正式签名稳定版发布。
+
+当前合同：简易主 API Key + 可选视觉 Key，不要求服务 ID 或用途勾选；请求前读取已保存配置。Setup 每次显示路径页，Core、DLC 与配置采用项目内 `data` 布局；卸载删除程序及 `data/plugins`，其余个人 `data` 默认保留、可选删除。当前已验收候选为 `_s01b/setup-release/dsh-pet-core-webm-setup.exe`，不是旧 R/U/A 中间产物。完整证据见 [S 工程报告](docs/PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md) 与 [项目入口](docs/PROJECT-ENTRY.md)。计划中的 MOD 管理中心与公共 v1 教程尚未交付。
+<!-- CURRENT_20261010_END -->
+
+> 历史状态（2026-10-06；非当前）：用户授权保存已有源改动并推送远端检查点后继续验收。新全量4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29)、真实CPU高负载三遍、Ruff/format/mypy通过，183文本文件明确暂存；提交/远端核对尚在进行。仅AI正常Core确认/退出、可见包标题、长路径LPAC和权限canary、Core04构建审计已有证据；分号路径、正常Worker、新Core完整矩阵/性能、新版正式分发与真实安装/人工/干净环境仍待完成，不能用旧产物冒充。最新质量结果及准确续接见 [同一实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) 与 [交接](.scratch/phase5a-local-distribution/HANDOFF.md)；历史日期与Phase4B证据不变。
 
 面向开发者的项目入口与工程导航。产品目标是供其他用户使用；本 README 仅服务于开发、交接和工程验证，不等于产品只面向开发者。这里不提供普通用户安装教程；新贡献者和继续施工的对话请先阅读 [`docs/PROJECT-ENTRY.md`](docs/PROJECT-ENTRY.md)，再按任务状态进入对应阶段文档。
 

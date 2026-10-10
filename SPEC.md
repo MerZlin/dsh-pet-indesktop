@@ -1,10 +1,31 @@
 # dsh-pet 项目规范（SPEC）
 
-> Phase 5A / 5B-1 当前状态：2026-10-05（实施中，未提交）。用户追加授权8GiB后，Core03生产构建/PYZ审计通过（455,780,427B /2,260模块），五产物已生成并完成正式总分发签名294与外部公钥独立核验296/305；305末次拥有根实测7.799789GiB，余205.016MiB，不扩大清理。稳定全量273为4274 passed /15 skipped /15 warnings，满CPU三遍各251 passed /1 skipped，Ruff/format/mypy通过。空Core/仅screen完整启动菜单与自然退出通过；仅AI真实加载已确认但菜单/自然退出驱动失败，最终onlyAI/both尚未通过。Setup仍只是编译，真实安装更新卸载、冻结业务/便携、人工及干净环境未完成；Phase4B历史证据保持原样。设计见 [Phase5A 正式合同](docs/plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+## 现行验收基线（2026-10-10）
 
-> 产品版本基线：v4.2.1；插件化方向：v5（不代表已经发布 v5）。
+Core **4.2.4** / AI **1.0.3** / Screen **1.0.3** 当前候选已通过工程验证，用户确认“实际体验确认没问题”；源检查点 M00 复验进行中，尚未提交/推送或正式发行。
+
+- API 使用简易主 Key 与可选视觉 Key，沿用 Core 安全存储/每请求读取接口；无服务 ID 或用途授权勾选。未填视觉 Key 时在实际识屏请求尝试主服务，绝不把主 Key 自动发送到另一家视觉服务。
+- Setup 每次展示路径页，安装到合法空目录或已识别的本产品目录；采用 `portable.json` + `<项目目录>/data`，DLC 位于其中的 `plugins`。
+- 卸载清理程序目录与 `data/plugins`，其他个人 `data` 默认保留、可选删除；项目外源 ZIP/目录不动。不执行 DLC 卸载事务，不因 staging/ledger 阻塞；Core 占用仍须自然退出。可选系统关联清理 best-effort，不弹关联失败阻塞。
+- 可信项目内 `data/feature-runtime` 可启动独立视觉 Worker；保留租约/完整性验证，不回退 Core 内执行。测试按钮旁显示真实 HTTP/错误码，测试不保存。
+- 未来 MOD 管理中心和 `pet.mod_api.v1` 是下一任务，不作为本检查点已实现内容。历史 R 复杂 API / Core-only 保留 DLC 语义已由 U/A/S 替代，以下旧日期快照只作历史证据。
+
+
+<!-- R_MEMORY_20261008_START -->
+> **用户已确认的R合同与当前状态（2026-10-08）**：2026-10-08：Core 4.2.2 / AI 1.0.2 / Screen 1.0.1 的 R01–R05 修复已实现；最新默认单进程全量 4417 passed /15 skipped /14 warnings、自然 exit0，3×152 项满CPU复跑通过，已重建受影响 Core/新 Setup并复核其余交付输入。工程范围验证完成，待用户人工验收，Phase5A 未正式关闭。 历史合同/数字保留，但不替代本轮验收。
+
+- Core拥有多服务API/系统安全存储引用/用途授权和显式版本CAS迁移；通用可选FeatureHostContext.api，不提供全局Config/密钥枚举、不加官方factory特判，不承诺Python沙箱。
+- 新请求读最新提交，普通保存保留在飞快照；撤权/删除/停用取消与拒绝迟到，草稿不被刷新覆盖。测试连接可能付费且不等于保存。
+- 文字/文件仍AI DLC，视觉仍独立Worker；手动不受自动关/空白名单/无关刷新误取消，冻结生产正常启动是硬门，不回退Core。
+- 系统卸载仅Core及其拥有的集成，保留DLC安装副本/源ZIP或目录/配置/Key/个人数据；不运行DLC事务，不以staging/ledger/pending拦阻，Core占用仍需自然退出。单包卸载只删安装副本，两者独立。
+- 新候选、最新默认全量/三轮满CPU、当前冻结与产物输入/hash见[设计R章节](docs/plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)/[报告§8](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md)。真实Provider/画面/新系统两来源卸载重装由用户确认后才关闭Phase5A；未开放Phase6 SDK/市场，未正式发布。
+<!-- R_MEMORY_20261008_END -->
+
+> 历史状态（2026-10-05；非当前）：用户追加授权8GiB后，Core03生产构建/PYZ审计通过（455,780,427B /2,260模块），五产物已生成并完成正式总分发签名294与外部公钥独立核验296/305；305末次拥有根实测7.799789GiB，余205.016MiB，不扩大清理。稳定全量273为4274 passed /15 skipped /15 warnings，满CPU三遍各251 passed /1 skipped，Ruff/format/mypy通过。空Core/仅screen完整启动菜单与自然退出通过；仅AI真实加载已确认但菜单/自然退出驱动失败，最终onlyAI/both尚未通过。Setup仍只是编译，真实安装更新卸载、冻结业务/便携、人工及干净环境未完成；Phase4B历史证据保持原样。设计见 [Phase5A 正式合同](docs/plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md)。
+
+> 历史 R 修复候选（已被上方取代）：Core v4.2.2 / AI DLC 1.0.2 / Screen DLC 1.0.1（未正式发布）；历史产品基线v4.2.1；插件化方向：v5（不代表已经发布 v5）。
 > 当前实施分支：`codex/phase3-worker`；长期路线分支：`codex/plugin-dlc-v5`。
-> 文档更新：2026-10-05。当前实现、用户手测和未来交付目标分别记录，不互相替代。
+> 历史记录更新：2026-10-08。当前实现、用户手测和未来交付目标分别记录，不互相替代。
 
 ## 1. 项目目标
 

@@ -124,17 +124,45 @@ def test_scoped_bridge_removal_rejects_partial_cleanup(scope, bridge, monkeypatc
     assert agent_link.DSH_PLUGIN_NAME in json.loads(manifest.read_text(encoding="utf-8"))["dependencies"]
 
 
-def test_core_removal_runs_scoped_bridge_cleanup_before_registration_success(scope, monkeypatch):
+def test_core_removal_does_not_block_on_scoped_bridge_cleanup(scope, monkeypatch):
     from pet import core_maintenance, core_registration_cleanup
-    from pet.core_uninstall import CoreRemovalEvidence
-    from pet.official_features import OFFICIAL_FEATURES
+    from pet.core_maintenance import CoreRemovalPermit
 
-    evidence = CoreRemovalEvidence("generated-identity", tuple((owner, 1) for owner in sorted(OFFICIAL_FEATURES)))
+    evidence = CoreRemovalPermit(scope)
     calls = []
     monkeypatch.setattr(DshMonitor, "uninstall_bridge", classmethod(lambda cls, *, scope_root: calls.append(scope_root) or False))
-    monkeypatch.setattr(core_registration_cleanup, "remove_owned_autostart", lambda *args, **kwargs: pytest.fail("must not declare cleanup complete"))
-    assert core_maintenance.finish_core_removal(evidence, executable=scope.executable) == 2
-    assert calls == [scope.executable.parent / "_internal/integrations/dsh-pet-bridge"]
+    monkeypatch.setattr(
+        core_registration_cleanup,
+        "remove_owned_autostart",
+        lambda *args, **kwargs: type("Result", (), {"status": "completed", "reason": ""})(),
+    )
+    assert core_maintenance.finish_core_removal(evidence, executable=scope.executable) == 0
+    assert calls == [scope.executable.parent / "_internal/integrations/dsh-pet-bridge"] * 3
+
+
+def test_core_removal_retries_transient_bridge_cleanup(scope, monkeypatch):
+    from pet import core_maintenance, core_registration_cleanup
+    from pet.core_maintenance import CoreRemovalPermit
+
+    evidence = CoreRemovalPermit(scope)
+    calls = []
+    outcomes = iter([False, True])
+    monkeypatch.setattr(
+        DshMonitor,
+        "uninstall_bridge",
+        classmethod(lambda cls, *, scope_root: calls.append(scope_root) or next(outcomes)),
+    )
+    monkeypatch.setattr(
+        core_registration_cleanup,
+        "remove_owned_autostart",
+        lambda *args, **kwargs: type("Result", (), {"status": "completed", "reason": ""})(),
+    )
+
+    assert core_maintenance.finish_core_removal(evidence, executable=scope.executable) == 0
+    assert calls == [
+        scope.executable.parent / "_internal/integrations/dsh-pet-bridge",
+        scope.executable.parent / "_internal/integrations/dsh-pet-bridge",
+    ]
 
 
 def test_current_registration_owner_uses_stable_root_identity_not_absolute_location(scope, tmp_path, monkeypatch):
@@ -175,6 +203,24 @@ def test_scoped_bridge_cleanup_preserves_a_foreign_link(scope, bridge, tmp_path)
     before = manifest.read_bytes()
     assert DshMonitor.uninstall_bridge(scope_root=plugin)
     assert (link.is_symlink() or getattr(link.lstat(), "st_file_attributes", 0) & 0x400) and foreign.is_dir() and manifest.read_bytes() == before
+
+
+def test_scoped_bridge_cleanup_does_not_block_on_a_locked_foreign_profile(scope, bridge, tmp_path):
+    plugin, profile, manifest, calls = bridge
+    foreign = tmp_path / "foreign-bridge"
+    foreign.mkdir()
+    write_bridge(manifest, "link:" + str(foreign))
+    link = profile / "node_modules/@dsh-pet/bridge"
+    link.parent.mkdir(parents=True)
+    make_link(link, foreign)
+    before = manifest.read_bytes()
+    from pet import feature_state_io as io
+
+    with io.open_kernel_lock(profile / ".dsh-pet-core-bridge.lock"):
+        assert DshMonitor.uninstall_bridge(scope_root=plugin)
+    assert manifest.read_bytes() == before
+    assert link.is_symlink() or getattr(link.lstat(), "st_file_attributes", 0) & 0x400
+    assert not calls
 
 
 def test_scoped_bridge_cleanup_does_not_turn_bad_manifest_into_empty_state(scope, bridge):

@@ -153,17 +153,10 @@ def mount_balance_settings(dialog, layout, parent):
     dialog.balance_settings_widget = None
     if BUILTIN_AI:
         return
-    if getattr(dialog.config, "runtime_layout", None) is None:
-        notice = QLabel("余额凭据不可用：未确定数据根身份；不会回退到 AI 密钥。", parent)
-        notice.setWordWrap(True)
-        layout.addWidget(notice)
-        return
-    try:
-        widget = BalanceSettingsWidget(dialog.config, parent)
-        dialog.balance_settings_widget = widget
-        row = SettingRow("balance_credentials", "余额凭据", "Core 独立查询授权；不依赖 AI 选装包。改变地址时须重新授权。", widget, stacked=True)
-        layout.addWidget(SettingsSection("余额授权", [row], parent))
-    except (ValueError, CredentialError):
-        notice = QLabel("余额配置异常，请检查数据根或配置；不会读取其他功能的凭据。", parent)
-        notice.setWordWrap(True)
-        layout.addWidget(notice)
+    from .settings_api import open_api_settings
+
+    widget = QPushButton("打开 API 设置", parent)
+    dialog.balance_settings_widget = widget
+    widget.clicked.connect(lambda: open_api_settings(dialog.config))
+    row = SettingRow("balance_credentials", "主 API", "余额直接使用主 API Key；服务需支持 DeepSeek 余额协议，不依赖 AI 包。", widget, stacked=True)
+    layout.addWidget(SettingsSection("余额查询", [row], parent))

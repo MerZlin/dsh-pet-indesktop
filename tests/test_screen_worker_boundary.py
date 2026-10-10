@@ -342,3 +342,54 @@ finally:
         output = json.dumps(worker.received)
         assert "fixture-secret" not in output
         assert "data:image" not in output
+
+
+@pytest.mark.parametrize(
+    ("failure", "code", "hint"),
+    [
+        ("401", "vision_authentication_failed", "API Key"),
+        ("404", "vision_protocol_unsupported", "模型或请求路径"),
+        ("429", "vision_rate_limited", "限流"),
+        ("network", "vision_network_failed", "代理"),
+        ("empty", "vision_response_invalid", "有效回复"),
+    ],
+)
+def test_worker_failure_categories_are_actionable_and_never_echo_provider(failure, code, hint):
+    script = (
+        IMPORT_GUARD
+        + inspect.getsource(_fixture_image)
+        + inspect.getsource(_install_boundary_fakes)
+        + f"""
+import runpy, urllib.error, urllib.request
+from io import BytesIO
+from types import SimpleNamespace
+_install_boundary_fakes(False)
+from features.screen_understanding.worker import vision
+vision.time = SimpleNamespace(sleep=lambda seconds: None)
+def fail(request, **kwargs):
+    failure = {failure!r}
+    if failure == "network":
+        raise urllib.error.URLError("fixture-secret private-url")
+    if failure == "empty":
+        return BytesIO(b'{{"choices": []}}')
+    raise urllib.error.HTTPError(request.full_url, int(failure), "fixture-secret", {{}}, BytesIO(b"fixture-secret private-body"))
+urllib.request.urlopen = fail
+try:
+    runpy.run_module({OFFICIAL_ENTRY!r}, run_name="__main__")
+finally:
+    assert_isolated()
+"""
+    )
+    provider = {"base_url": "https://vision.invalid", "model": "vision-model", "api_key": "fixture-secret"}
+    with _wire(["-c", script]) as worker:
+        worker.configure()
+        worker.request("manual_look", {"provider": provider})
+        response = worker.response("manual_look")
+        assert response["error_code"] == code
+        assert hint in response["message"]
+        assert "fixture-secret" not in json.dumps(worker.received)
+        assert "private-body" not in json.dumps(worker.received)
+        assert "private-url" not in json.dumps(worker.received)
+        worker.send("shutdown")
+        assert worker.process.wait(timeout=15) == 0
+        assert worker.process.stderr.read() == b""

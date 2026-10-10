@@ -24,7 +24,9 @@ class AiContributionSettings(QWidget):
         settings_file_interpret.create_file_interpret_controls(self.file_controls)
         self.file_page = settings_file_interpret.build_file_interpret_page(self.file_controls)
         self.file_rows = list(self.file_page.findChildren(SettingRow))
-        self.rows = list(self.page.findChildren(SettingRow)) + self.file_rows
+        # The screen deep-link is removed by the screen contribution lifecycle;
+        # it owns no AI draft fields and must not enter our retained row set.
+        self.rows = [row for row in self.page.findChildren(SettingRow) if row.objectName() != "settingRow_vision_migration"] + self.file_rows
         self._disposed = False
         self._baseline = self._values()
         self.hide()

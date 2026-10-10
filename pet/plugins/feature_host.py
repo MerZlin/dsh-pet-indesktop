@@ -84,8 +84,29 @@ class FeatureHost:
         if not isinstance(context, FeatureHostContext) or not self.configurable(context.owner):
             raise PermissionError("feature is not available")
         definition = self._definitions[context.owner]
+        api = context.api
+        if api is not None:
+            from ..api_ports import FeatureApiPort
+
+            def guarded(callback):
+                def call(purpose):
+                    if not self.enabled(context.owner):
+                        raise PermissionError("execution_not_authorized")
+                    return callback(purpose)
+
+                return call
+
+            api_original = api
+            api = FeatureApiPort(
+                guarded(api.metadata),
+                lambda purpose: api_original.effective_version(purpose) if self.enabled(context.owner) else "unavailable",
+                guarded(api.resolve),
+                api.subscribe,
+                api.open_settings,
+            )
         return replace(
             context,
+            api=api,
             worker_launch_factory=definition.worker_launch_factory,
             allow_in_process=definition.allow_in_process,
             execution_authorized=lambda: self.enabled(context.owner),

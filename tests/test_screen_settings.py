@@ -1,5 +1,5 @@
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
 from pet.screen_understanding.config import VisionConfigService
@@ -48,11 +48,15 @@ def test_save_manual_profile_independently(screen_ui):
     assert not cfg.data["chat"]["enabled"]
 
 
-def test_cancel_migration_does_not_write(screen_ui, monkeypatch):
+def test_fresh_editor_uses_default_screen_profile_without_migration(screen_ui):
     page, cfg, backend, _ = screen_ui
     before = cfg.path.read_bytes()
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
-    page.migrate_button.click()
+    assert not hasattr(page, "migrate_button")
+    assert not hasattr(page, "recover_button")
+    assert page.profile_id.text() == "shared"
+    assert page.url.text() == "https://api.deepseek.com"
+    assert page.model.text() == "deepseek-v4-flash-vision-exp"
+    assert "默认独立视觉配置" in page.status.text()
     assert cfg.path.read_bytes() == before
     assert not backend.items
 
@@ -90,35 +94,25 @@ def test_modern_settings_owns_vision_in_automation(screen_ui, include_ai):
         app.processEvents()
 
 
-def test_preview_explains_both_effective_profiles_without_credentials(screen_ui, monkeypatch):
+def test_fresh_editor_does_not_read_or_copy_ai_configuration(screen_ui):
     page, cfg, backend, _ = screen_ui
     cfg.data["chat"]["providers"] = {
         "p": {
             "base_url": "https://vision.example",
             "model": "vision-model",
-            "timeout": 45,
-            "temperature": 0.4,
-            "max_tokens": 999,
-            "verify_ssl": False,
             "api_key_ref": "provider/p",
         }
     }
     cfg.data["chat"]["active_provider"] = "p"
     cfg.save()
     backend.items[("dsh-pet-standalone", "provider/p")] = "TEST-SECRET"
-    captured = []
-
-    def question(parent, title, text, *args):
-        captured.append(text)
-        return QMessageBox.StandardButton.No
-
-    monkeypatch.setattr(QMessageBox, "question", question)
-    page.migrate_button.click()
-    assert len(captured) == 1
-    for value in ("自动", "手动", "/v1/chat/completions", "45", "0.4", "999", "TLS", "可复制"):
-        assert value in captured[0]
-    assert "TEST-SECRET" not in captured[0]
+    page.reload()
+    assert page.profile_id.text() == "shared"
+    assert page.url.text() == "https://api.deepseek.com"
+    assert page.model.text() == "deepseek-v4-flash-vision-exp"
+    assert "AI" not in page.status.text()
     assert not page.service.settings().profiles
+    assert backend.items[("dsh-pet-standalone", "provider/p")] == "TEST-SECRET"
 
 
 def test_corrupt_namespace_disables_editor_and_preserves_core_save(screen_ui):
@@ -131,7 +125,7 @@ def test_corrupt_namespace_disables_editor_and_preserves_core_save(screen_ui):
     before = cfg.path.read_bytes()
     page.reload()
     assert not page.save_button.isEnabled()
-    assert not page.migrate_button.isEnabled()
+    assert not hasattr(page, "migrate_button")
     assert not cfg.save()
     assert cfg.path.read_bytes() == before
 
@@ -159,7 +153,7 @@ def test_independent_editor_layout_keyboard_and_no_side_effects(screen_ui, width
         editor = dlg.screen_settings_page
         assert scroll is not None
         assert scroll.horizontalScrollBar().maximum() == 0
-        for control in (editor.model, editor.key_edit, editor.save_button, editor.migrate_button):
+        for control in (editor.model, editor.key_edit, editor.save_button):
             scroll.ensureWidgetVisible(control)
             app.processEvents()
             x = control.mapTo(scroll.viewport(), QPoint(0, 0)).x()
@@ -169,6 +163,7 @@ def test_independent_editor_layout_keyboard_and_no_side_effects(screen_ui, width
             assert control.accessibleName()
         scroll.ensureWidgetVisible(editor.model)
         editor.model.setFocus()
+        editor.model.clear()
         QTest.keyClicks(editor.model, "test-vision")
         assert editor.model.text() == "test-vision"
         QTest.keyClick(editor.model, Qt.Key.Key_Tab)
@@ -179,3 +174,17 @@ def test_independent_editor_layout_keyboard_and_no_side_effects(screen_ui, width
         dlg.hide()
         dlg.deleteLater()
         app.processEvents()
+
+
+def test_existing_profile_without_credential_explains_key_required(screen_ui):
+    from features.screen_understanding.common.models import VisionProfile
+
+    page, _, _, _ = screen_ui
+    page.service.save_profile(
+        VisionProfile("manual", "https://vision.example", "vision-model"),
+        modes=["manual"],
+        expected_revision=page.service.revision(),
+    )
+    page.reload()
+    assert "尚未填写视觉 API Key" in page.status.text()
+    assert "AI" not in page.status.text()

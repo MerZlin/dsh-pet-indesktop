@@ -62,12 +62,13 @@ def namespace(data: dict) -> dict:
 
 
 def save_core_document(path: Path, data: dict) -> dict:
-    """Core owns other fields, but never overwrites the settings service's namespace."""
+    """Preserve all CAS-owned plugin namespaces against stale ordinary Core saves."""
     with file_transaction(path.with_suffix(path.suffix + ".write.lock")):
         latest = read_document(path)
         plugins = latest.get("plugins", {})
-        if isinstance(plugins, dict) and SCREEN_NAMESPACE in plugins:
-            data.setdefault("plugins", {})[SCREEN_NAMESPACE] = namespace(latest)
+        if isinstance(plugins, dict):
+            # CAS owner namespaces beat a stale ordinary Core save snapshot.
+            data.setdefault("plugins", {}).update(copy.deepcopy(plugins))
         independent = namespace(data)
         atomic_document(path, data)
         return independent

@@ -1,5 +1,28 @@
 # 项目变更日志
 
+## Phase5A 用户确认与源检查点（2026-10-10）
+
+用户已明确确认 4.2.4 候选实际体验无问题；这覆盖本轮真实使用验收，不代表其他平台或未来 MOD 界面通过。按本次明确授权，对 159 个源码/测试/脚本/文档复验并准备提交到 `origin/codex/phase3-worker`；13 个生成目录与真实用户数据排除。Ruff 与初步差异检查通过；暂存差异发现两行新报告尾随空格，已修正文档。全量 4509 passed /15 skipped /14 warnings（1910.76s），26 族满 CPU 三遍各 292 passed，643 输入摘要一致；负载自然退出、零残留。门禁已通过，尚未提交/推送，不提前写成功。下方 S/R 快照保留反馈前状态。
+
+
+<!-- S04_CURRENT_START -->
+## Phase5A S修复与连接反馈（2026-10-10）
+
+S01–S04 工程交付完成；真实 Provider/屏幕效果与用户安装体验仍待确认，Phase5A 不关闭。S修复可信portable运行目录、诊断顺序和手动重试；真实冻结验收另发现验证耗时误入心跳预算，test-first改为READY后心跳。用户追加按钮旁成功/失败与实际HTTP码，网络/TLS/超时单列，备注保留且测试不保存。Setup行为不改；鲸鱼娘图标由最终PE10帧及Windows私有快捷方式实显核验。
+
+全量：4507 passed, 15 skipped, 14 warnings in 802.39s (0:13:22)；exit 0，643 个输入前后摘要一致。高负载：第1轮 169 passed in 47.59s、exit 0、CPU 中位 100.0%（含调度49.875s）；第2轮 169 passed in 47.06s、exit 0、CPU 中位 99.75%（含调度48.656s）；第3轮 169 passed in 47.69s、exit 0、CPU 中位 100.0%（含调度49.813s）；三轮全部通过且自有负载进程自然退出。最终Core/Screen/Setup重建及真实冻结Core→安装包→生产Worker→租约HELLO/READY→自然退出0/0通过。逐文件、性能实测、失败史与人工顺序见 [S报告](docs/PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md) 和 [HANDOFF](.scratch/phase5a-local-distribution/HANDOFF.md)。保留旧候选与原dirty，不读取真实Key/屏幕，不改真实安装，无提交/推送/正式发布；真实用户门不代签。
+<!-- S04_CURRENT_END -->
+
+<!-- R_MEMORY_20261008_START -->
+## Phase5A R修复工程交付与人工待验（2026-10-08）
+
+2026-10-08：Core 4.2.2 / AI 1.0.2 / Screen 1.0.1 的 R01–R05 修复已实现；最新默认单进程全量 4417 passed /15 skipped /14 warnings、自然 exit0，3×152 项满CPU复跑通过，已重建受影响 Core/新 Setup并复核其余交付输入。工程范围验证完成，待用户人工验收，Phase5A 未正式关闭。 原T历史/旧产物/失败记录保留。Core中央API与用途授权、四聊天/文件/余额即时提交、Worker闭合依赖与手动自动生命周期、Core-only系统卸载已按R01–R05红绿实现；R06最新单进程4432项4417passed/15skipped/14warnings/1391.19s、621输入前后不变，15族满CPU三轮各152passed、20自有worker全自然0。HEAD既有循环GC/QThread借用根因公开seam red→green23p/8.48s；v4租约ready迟达44.040s仅测试90s Event预算，最新全量/负载重新验证。
+
+已重建受影响Core/新setup-lifecycle；本轮Worker/helper/ZIP输入仍相符，root207/stage212/resources1000/bundle2103/PYZ2188/GUI PE=2审计，6项SHA、最新Core四保留profile与no-DLC设置自然退出0，payload/ledger不变。API与guard实测性能、140累计文件说明、真实机记录与人工步骤见[同一报告§8](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md)。末次 Ruff check、119 个改动 Python format --check、diff check 均 exit0；报告纪律 59 passed in 0.66s；19 份 Markdown 的 424 个相对链接无断链/尾随空白。
+
+两根合计预算11.25GiB、旧生成物不删除；进入R前78dirty路径保留，无暂存/提交/推送/子智能体/正式发布。当前停点[HANDOFF](.scratch/phase5a-local-distribution/HANDOFF.md)：用户先备份/自然退出、覆盖新Setup更新旧unins000.exe，再验真实API/屏幕、两来源Core-only保留/重装及单包范围；工程自动化不能代替用户确认，Phase5A未正式关闭。
+<!-- R_MEMORY_20261008_END -->
+
 ## Phase5A夜间修复与暂停交接（2026-10-06）
 
 用户要求先总结交接，未开始任务暂停。仅AI Core03正常启动/真实receipt/菜单/自然退出0通过；新增身份绑定验收驱动9测试。双包确认可见owner标题公开seam红绿，相关23通过。冻结长路径三层根因修复后相关59通过，新helper08/Worker04在LPAC长短路径均完整握手退出且父端五项隔离true；完整原生权限canary通过，无放宽安全或读取真实秘密。
@@ -412,3 +435,8 @@ Host 在进入已验证 Python interpreter 后保留版本租约；Standalone Se
 ## 2026-10-06：授权Phase5A源检查点，先验证后推送
 
 183文本文件逐项白名单暂存，不含生成物/日志/秘密/个人数据。新全量 4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29) /931.253s，源SHA不变；21族真实满CPU三遍（第1遍 361 passed, 1 skipped, 1 warning in 332.06s (0:05:32)，wall 336.500s /CPU median 100.0% /p95 100.0%；第2遍 361 passed, 1 skipped, 1 warning in 260.70s (0:04:20)，wall 264.844s /CPU median 100.0% /p95 100.0%；第3遍 361 passed, 1 skipped, 1 warning in 259.37s (0:04:19)，wall 263.437s /CPU median 100.0% /p95 100.0%）通过。Ruff/162 format、mypy26/60/26及167报告/构建专项通过。纠正一条不存在测试路径的历史命令，不虚构原始argv。最终文档门及远端SHA检查后才写推送完成；Phase5A/5B-1仍有特殊路径、正常冻结Worker、新矩阵/正式分发及人工/干净环境门，不冒称完成。
+
+
+## 2026-10-10 S01 施工草案：portable 识屏启动
+
+按已批准 S01–S04 修复项目内运行目录误拦与同步诊断；先 red 后实现。旧 dirty/候选、真实安装/Key、Setup 行为不变；未提交推送。计划与准确停点见 `.scratch/phase5a-local-distribution/PLAN.md`、`HANDOFF.md`。

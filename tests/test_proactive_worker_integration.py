@@ -150,7 +150,7 @@ def test_real_worker_denied_budget_never_contacts_model(tmp_path, endpoint, qt_a
     try:
         adapter.analyze_frame(_capture(adapter), provider, "prompt", generation=4)
         _wait_until(lambda: bool(failures))
-        assert failures[0][1]["error_code"] == "worker_operation_failed"
+        assert failures[0][1]["error_code"] == "vision_budget_exhausted"
         assert requests == []
     finally:
         _stop(adapter)

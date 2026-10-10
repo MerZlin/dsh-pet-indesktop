@@ -136,11 +136,15 @@ def test_revoked_signer_and_scope_are_enforced(tmp_path):
             verifier(key, anchor_policy={"release-2026": policy}).verify(tmp_path / "source")
 
 
-def test_official_registry_refuses_arbitrary_feature_ids(tmp_path):
+def test_install_ledger_accepts_valid_local_ids_but_official_registry_stays_closed(tmp_path):
+    from pet.official_features import official_feature
+
     with pytest.raises(ValueError):
         FeatureInstallStateStore(tmp_path, feature_id="../escaped")
+    local = FeatureInstallStateStore(tmp_path, feature_id="third-party.example")
+    assert local.root.name == "third-party.example"
     with pytest.raises(ValueError):
-        FeatureInstallStateStore(tmp_path, feature_id="third-party.example")
+        official_feature("third-party.example")
 
 
 def test_two_ledgers_have_independent_identity_and_cas(tmp_path):

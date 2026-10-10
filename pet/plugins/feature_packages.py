@@ -3,7 +3,7 @@
 Public seam::
 
     verifier = FeaturePackageVerifier(core_version="5.0.0", api_version="1",
-        trust_anchors=core_public_keys, allowed_capabilities={"screen.capture"})
+        allow_local_packages=True, allowed_capabilities={"screen.capture"})
     descriptor = verifier.verify(absolute_version_directory)
     loader = FeaturePackageLoader(verifier)
     host = loader.load_host(descriptor)       # imports; does NOT call create_host
@@ -18,8 +18,11 @@ Phase 4B must coordinate other processes and installation state. Imported code
 and its namespace intentionally survive zero leases. There is no hot unload,
 version deletion, subprocess, GUI import, sys.path change or source fallback.
 
-This is publisher authentication, NOT a Python sandbox. Captured, verified
-source bytes close the check-to-import reopen window. A path-returning worker
+Phase5A local activation is explicit user trust, NOT publisher authentication
+or a Python sandbox. Formal signed release tooling may opt into the legacy
+``trust_anchors`` mode, but Setup/local activation uses ``allow_local_packages``.
+Captured, verified source bytes close the check-to-import reopen window. A
+path-returning worker
 contract cannot atomically bind QProcess/CreateProcess to a verified inode;
 the parent must launch immediately and protect installed directories against
 concurrent writers. Reverification is not a filesystem permission boundary.
@@ -282,7 +285,7 @@ class FeaturePackageLoader:
         *,
         process_lease: CrossProcessLease | None = None,
     ) -> HostHandle:
-        # Full inventory, digest and signature verification precedes *all* imports,
+        # Full inventory, digest and activation-policy verification precedes *all* imports,
         # including package __init__.py, and also applies to cached generations.
         # When an installed-process lease is supplied, it is pinned immediately
         # before entering the verified interpreter and remains process-owned.

@@ -43,6 +43,17 @@ def test_balance_has_independent_secret_scope_and_never_adopts_chat_key(tmp_path
     balance = BalanceConfiguration(cfg, backend=backend)
     assert balance.request().api_key == ""
     balance.save("https://api.deepseek.com", "generated-balance-only", expected_revision=balance.revision)
+    # Old storage remains readable only by its owner; requests require the
+    # user-confirmed Core API migration, not an implicit credential fallback.
+    with pytest.raises(PermissionError, match="api_use_not_authorized"):
+        resolve_balance_request(cfg, backend=backend)
+    from pet.api_config import CoreApiConfiguration
+    from pet.api_migration import ApiMigration
+
+    migration = ApiMigration(cfg, backend=backend)
+    preview = next(p for p in migration.preview() if p.source_id == "balance")
+    api = CoreApiConfiguration(cfg, backend=backend)
+    migration.confirm(preview, "balance-imported", grants=preview.purposes, expected_revision=api.revision())
     request = resolve_balance_request(cfg, backend=backend)
     assert request.api_key == "generated-balance-only" and request.verify_ssl is True
     assert "generated-balance-only" not in cfg.path.read_text(encoding="utf-8")

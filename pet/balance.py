@@ -91,7 +91,7 @@ def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0, verify_ssl
         with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context(verify_ssl)) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise BalanceError(f"HTTP {exc.code}") from exc
+        raise BalanceError("该服务不支持余额查询" if exc.code in {404, 405, 501} else f"HTTP {exc.code}") from exc
     except (socket.timeout, TimeoutError) as exc:
         raise BalanceError("请求超时") from exc
     except urllib.error.URLError as exc:
@@ -105,7 +105,7 @@ def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0, verify_ssl
         raise BalanceError(f"返回数据无效：{exc}") from exc
     infos = data.get("balance_infos") if isinstance(data, dict) else None
     if not infos:
-        raise BalanceError("响应中没有余额信息")
+        raise BalanceError("该服务不支持余额查询（未返回余额信息）")
     info = _pick_balance_info(infos)
     return {
         "is_available": bool(data.get("is_available", True)),
@@ -304,3 +304,15 @@ def deepseek_pricing_hint_html(
     next_label = span(idle_text, idle_color) if next_tier == "idle" else span(peak_text, peak_color)
     time_text = _format_switch_time(bj, next_time)
     return f"DeepSeek 当前{label} · 下一{next_label} {time_text}"
+
+
+def failure_hint(error):
+    """Static actionable diagnostics, never a Provider body/URL/credential."""
+    cause = error.__cause__
+    if isinstance(cause, urllib.error.HTTPError):
+        if cause.code in {401, 403}:
+            return "余额查询授权失败，请检查 Core API 服务 Key 和余额用途权限。"
+        return "服务拒绝余额查询，请检查所选余额协议是否受支持。"
+    if isinstance(cause, (urllib.error.URLError, socket.timeout, TimeoutError)):
+        return "余额查询网络失败，请检查网络或代理后重试。"
+    return "余额查询失败，请检查 API 服务与余额协议后重试。"

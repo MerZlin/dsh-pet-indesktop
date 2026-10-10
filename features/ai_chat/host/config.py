@@ -71,6 +71,9 @@ class AiConfiguration:
     def chat_settings(self):
         from .chat.models import ChatSettings
 
+        # Refresh committed readers, never an editor's unsaved CAS draft.
+        if self._staged == self._namespace and self.context.configuration.revision() != self._revision:
+            self.reload()
         value = self._staged.get("chat")
         if value is None:
             value = self.context.preferences.read()
@@ -81,12 +84,47 @@ class AiConfiguration:
                 if isinstance(provider, dict):
                     provider.pop("api_key", None)
                     provider.pop("vision_api_key", None)
-        return ChatSettings.from_dict(value)
+        settings = ChatSettings.from_dict(value)
+        if self.context.api is not None:
+            from .chat.models import ProviderConfig
+
+            try:
+                meta = self.context.api.metadata("chat.send")
+                prior = settings.active_config
+                provider = replace(
+                    prior,
+                    provider_id=meta.service_id,
+                    name=meta.name,
+                    base_url=meta.base_url,
+                    chat_path=meta.chat_path,
+                    model=meta.model,
+                    timeout=meta.timeout,
+                    verify_ssl=meta.verify_ssl,
+                    api_key_ref="core-api",
+                    api_key="",
+                )
+            except (PermissionError, ValueError, OSError):
+                provider = ProviderConfig(provider_id="core-api", name="尚未配置 API", api_key_ref="")
+            business = self._staged.get("api_business", {})
+            provider = replace(
+                provider, temperature=business.get("temperature", provider.temperature), max_tokens=business.get("max_tokens", provider.max_tokens)
+            )
+            settings = replace(settings, active_provider=provider.provider_id, providers={provider.provider_id: provider})
+        return settings
 
     def set_chat_settings(self, settings):
         if any(provider.api_key or provider.vision_api_key for provider in settings.providers.values()):
             raise CredentialError("plaintext_secret_not_allowed")
-        self._staged["chat"] = settings.to_dict(include_secrets=False)
+        if self.context.api is not None:
+            active = settings.active_config
+            self._staged["api_business"] = {"temperature": active.temperature, "max_tokens": active.max_tokens}
+            raw = copy.deepcopy(self._staged.get("chat") or self.context.preferences.read())
+            for key, value in settings.to_dict(include_secrets=False).items():
+                if key not in {"providers", "active_provider"}:
+                    raw[key] = value
+            self._staged["chat"] = raw
+        else:
+            self._staged["chat"] = settings.to_dict(include_secrets=False)
 
     def save(self):
         self.context.configuration.commit_namespace(self._staged, expected_revision=self._revision)
@@ -94,6 +132,8 @@ class AiConfiguration:
         return True
 
     def save_provider_secret(self, provider, secret):
+        if self.context.api is not None:
+            raise CredentialError("core_api_settings_required")
         # Explicitly entered secrets get a fresh scoped reference. A legacy ref
         # is not evidence authorizing migration, enumeration or deletion.
         return self.context.credentials.save(provider.provider_id, provider.base_url, secret)
@@ -108,7 +148,29 @@ class AiConfiguration:
         return self.context.credentials.acquire(provider.api_key_ref, provider.provider_id, provider.base_url, operation)
 
     def request_config(self, provider, *, operation="chat.send"):
-        return replace(provider, api_key=self.resolve_provider_secret(provider, operation=operation))
+        self.require_execution()
+        if self.context.api is not None:
+            request = self.context.api.resolve(operation)
+            meta = request.metadata
+            reader = AiConfiguration(replace(self.context, api=None))
+            business = reader.chat_settings().active_config
+            params = reader._namespace.get("api_business", {})
+            business = replace(business, temperature=params.get("temperature", business.temperature), max_tokens=params.get("max_tokens", business.max_tokens))
+            return replace(
+                business,
+                provider_id=meta.service_id,
+                name=meta.name,
+                base_url=meta.base_url,
+                chat_path=meta.chat_path,
+                model=meta.model,
+                timeout=meta.timeout,
+                verify_ssl=meta.verify_ssl,
+                api_key_ref="core-api",
+                api_key=request.api_key,
+                authorization_version=meta.authorization_version,
+            )
+        latest = AiConfiguration(self.context).chat_settings().active_config
+        return replace(latest, api_key=self.resolve_provider_secret(latest, operation=operation))
 
     def resolve_api_key(self, provider):
         return self.resolve_provider_secret(provider)

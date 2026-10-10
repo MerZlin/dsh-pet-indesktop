@@ -393,7 +393,7 @@ class VerifiedProbeWorker:
         from .plugins.package_trust import PackageVerificationError, VerifiedFeatureDescriptor
 
         descriptor = self.descriptor
-        if not isinstance(descriptor, VerifiedFeatureDescriptor) or descriptor.trust_status != "trusted_official":
+        if not isinstance(descriptor, VerifiedFeatureDescriptor) or not self.verifier.accepts_descriptor(descriptor):
             raise ProbeLaunchError("worker_verification")
         if not descriptor.root.is_relative_to(owned_root.absolute()) or descriptor.worker_path.suffix.casefold() != ".exe":
             raise ProbeLaunchError("worker_boundary")

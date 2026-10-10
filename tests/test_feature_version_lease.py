@@ -18,6 +18,10 @@ _RAW_MANIFEST = b"phase4b-2-manifest"
 _DIGEST = hashlib.sha256(_RAW_MANIFEST).hexdigest()
 _VERSION = "1.0.0"
 
+# Windows spawn and durable lease I/O compete with all-core load. Signals
+# still complete immediately; this bounded budget is not a fixed delay.
+_PROCESS_TIMEOUT = 90.0
+
 
 def _selection(data_root: Path, revision: int = 1) -> FeatureVersionSelection:
     root = Path(data_root) / "plugins" / FEATURE_ID / "versions" / _VERSION
@@ -27,6 +31,7 @@ def _selection(data_root: Path, revision: int = 1) -> FeatureVersionSelection:
         trust_status="trusted_official",
         raw_manifest=_RAW_MANIFEST,
         root=root,
+        execution_kind="host-worker",
     )
     return FeatureVersionSelection(FEATURE_ID, _VERSION, revision, _DIGEST, descriptor)
 
@@ -38,7 +43,7 @@ def _install(data_root: Path) -> FeatureInstallStateStore:
     return store
 
 
-def _wait(event, timeout: float = 20.0) -> None:
+def _wait(event, timeout: float = _PROCESS_TIMEOUT) -> None:
     assert event.wait(timeout), "bounded process coordination timed out"
 
 
@@ -46,7 +51,7 @@ def _hold_host(data_root: str, ready, release) -> None:
     coordinator = FeatureVersionLeaseCoordinator(FeatureInstallStateStore(Path(data_root)))
     lease = coordinator.acquire_host(_selection(Path(data_root)))
     ready.set()
-    _wait(release)
+    _wait(release, timeout=2 * _PROCESS_TIMEOUT)
     lease.close()
 
 
@@ -70,7 +75,7 @@ def _claim_worker(data_root: str, token: str, ready, release) -> None:
     coordinator = FeatureVersionLeaseCoordinator(FeatureInstallStateStore(Path(data_root)))
     lease = coordinator.claim_worker(token)
     ready.set()
-    _wait(release)
+    _wait(release, timeout=2 * _PROCESS_TIMEOUT)
     lease.close()
 
 
@@ -149,8 +154,8 @@ def test_two_real_processes_share_one_version_occupancy(tmp_path):
     finally:
         release_a.set()
         release_b.set()
-        first.join(20)
-        second.join(20)
+        first.join(_PROCESS_TIMEOUT)
+        second.join(_PROCESS_TIMEOUT)
         assert first.exitcode == 0
         assert second.exitcode == 0
     _wait_until(lambda: FeatureVersionLeaseCoordinator(FeatureInstallStateStore(tmp_path)).can_remove(_VERSION, 1))
@@ -162,8 +167,10 @@ def test_process_exit_releases_kernel_lease_and_allows_record_cleanup(tmp_path):
     ready = context.Event()
     child = context.Process(target=_crash_after_host, args=(str(tmp_path), ready))
     child.start()
-    _wait(ready)
-    child.join(20)
+    try:
+        _wait(ready)
+    finally:
+        child.join(_PROCESS_TIMEOUT)
     assert child.exitcode == 0
     coordinator = FeatureVersionLeaseCoordinator(FeatureInstallStateStore(tmp_path))
     _wait_until(lambda: coordinator.inspect_occupancy(_VERSION, 1).status == "free")
@@ -176,8 +183,10 @@ def test_unconfirmed_reservation_after_parent_exit_is_pending(tmp_path):
     ready = context.Event()
     child = context.Process(target=_crash_after_reservation, args=(str(tmp_path), ready))
     child.start()
-    _wait(ready)
-    child.join(20)
+    try:
+        _wait(ready)
+    finally:
+        child.join(_PROCESS_TIMEOUT)
     assert child.exitcode == 0
     coordinator = FeatureVersionLeaseCoordinator(FeatureInstallStateStore(tmp_path))
     occupancy = coordinator.inspect_occupancy(_VERSION, 1)
@@ -205,7 +214,7 @@ def test_core_settings_and_worker_leases_can_overlap(tmp_path):
         assert {item.kind for item in occupancy.leases} == {"host", "settings", "worker"}
     finally:
         release.set()
-        child.join(20)
+        child.join(_PROCESS_TIMEOUT)
         host.close()
         settings.close()
         assert child.exitcode == 0
@@ -230,6 +239,6 @@ def test_worker_reservation_requires_child_takeover_before_parent_release(tmp_pa
         assert coordinator.inspect_occupancy(_VERSION, 1).status == "occupied"
     finally:
         release.set()
-        child.join(20)
+        child.join(_PROCESS_TIMEOUT)
         assert child.exitcode == 0
     _wait_until(lambda: coordinator.inspect_occupancy(_VERSION, 1).status == "free")

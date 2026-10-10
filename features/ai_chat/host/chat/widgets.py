@@ -1797,6 +1797,15 @@ class ChatWindow(QDialog):
         request_text = text or "请分析这些附件。"
         if attachment_context:
             request_text += "\n\n" + attachment_context
+        from pet.credentials import CredentialError
+
+        from .request_config import configuration_hint, prepare_request
+
+        try:
+            prepared = prepare_request(self.config)
+        except (CredentialError, PermissionError, ValueError, OSError) as error:
+            self.provider_label.setText(configuration_hint(error))
+            return
         self.input.clear()
         self.composer.clear_attachments()
         # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」，
@@ -1812,7 +1821,7 @@ class ChatWindow(QDialog):
                 self._refresh_sessions()
         self._add("user", display_text)
         self._last_user_text = request_text
-        self._begin_generation(request_text, image_payloads=image_payloads)
+        self._begin_generation(request_text, image_payloads=image_payloads, prepared=prepared)
 
     def retry_last(self) -> None:
         if not self.service.accepting:
@@ -1828,7 +1837,16 @@ class ChatWindow(QDialog):
             image_payloads = [item for item in self._last_user_payload if isinstance(item, dict) and item.get("type") == "image_url"]
         self._begin_generation(text, image_payloads=image_payloads)
 
-    def _begin_generation(self, text: str, *, image_payloads: list[dict] | None = None) -> None:
+    def _begin_generation(self, text: str, *, image_payloads: list[dict] | None = None, prepared=None) -> None:
+        from pet.credentials import CredentialError
+
+        from .request_config import configuration_hint, prepare_request
+
+        try:
+            self.settings, config = prepared or prepare_request(self.config)
+        except (CredentialError, PermissionError, ValueError, OSError) as error:
+            self.provider_label.setText(configuration_hint(error))
+            return
         self._typewriter_timer.stop()
         self._pending_output = ""
         self._pending_finish_text = None
@@ -1842,8 +1860,6 @@ class ChatWindow(QDialog):
         # （append_message 返回 None 时消息只在内存）。与并发 append 的
         # 覆盖窗口是同调用栈内的微秒级，可接受（R3 复审结论：保留）。
         self.store.save(self.session)
-        config = self.settings.active_config
-        config.api_key = self.config.resolve_api_key(config)
         messages = self.prompt_builder.build_messages(self.settings, self.character_id, self.session.messages[:-1], text)
         if image_payloads:
             messages[-1]["content"] = [{"type": "text", "text": text}, *image_payloads]

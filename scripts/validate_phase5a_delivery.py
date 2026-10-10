@@ -21,8 +21,9 @@ from pathlib import Path
 import psutil
 
 PRODUCT = "dsh-pet-core-webm"
-OWNERS = {"official.ai-chat": ("1.0.1", "官方 AI 对话功能包"), "official.screen-understanding": ("1.0.0", "官方屏幕理解功能包")}
+OWNERS = {"official.ai-chat": ("1.0.3", "AI 对话功能包"), "official.screen-understanding": ("1.0.3", "屏幕理解功能包")}
 CASES = {"empty": (), "ai": ("official.ai-chat",), "screen": ("official.screen-understanding",), "both": tuple(OWNERS)}
+MANAGEMENT_DIALOG_TITLES = frozenset({"安装本地扩展：分别预检和确认", "本地功能包确认", "安装本地官方扩展：分别预检和确认", "本地官方功能包确认"})
 
 
 def clean_environment(environment: dict[str, str], root: Path) -> dict[str, str]:
@@ -30,12 +31,6 @@ def clean_environment(environment: dict[str, str], root: Path) -> dict[str, str]
     result.update({name: str(root / name) for name in ("APPDATA", "LOCALAPPDATA", "TEMP", "HOME")})
     result.update(TMP=result["TEMP"], USERPROFILE=result["HOME"], QT_QPA_PLATFORM="windows")
     return result
-
-
-def screen_lparam(x: int, y: int) -> int:
-    if not all(-32768 <= value <= 32767 for value in (x, y)):
-        raise ValueError("screen_coordinate_out_of_range")
-    return (y & 65535) << 16 | (x & 65535)
 
 
 def case_root(root: Path, name: str) -> Path:
@@ -203,6 +198,12 @@ class OwnedUI:
         if not self.user.PostMessageW(handle, message, wparam, lparam):
             raise ctypes.WinError(ctypes.get_last_error())
 
+    def close_owned_windows(self) -> None:
+        """Gracefully close only windows belonging to this verified process."""
+        for row in self.windows():
+            if row["visible"]:
+                self.post(row["hwnd"], 0x0010, 0, 0)  # WM_CLOSE
+
     def activate(self, handle: int) -> None:
         self.identity.verify()
         if handle not in {row["hwnd"] for row in self.windows()}:
@@ -211,11 +212,12 @@ class OwnedUI:
             raise RuntimeError("owned_foreground_activation_refused")
 
     def request_context_menu(self, handle: int) -> None:
-        # Qt's native Windows plugin ignores mouse WM_CONTEXTMENU (it creates
-        # mouse context events itself). The keyboard semantic route is accepted
-        # without moving the real cursor or synthesizing global input. Verified
-        # against an independent native QWidget canary, not a guessed click.
-        self.activate(handle)
+        # Qt accepts the keyboard-semantic context-menu message. Do not require
+        # foreground activation: the frozen pet window deliberately uses
+        # WS_EX_NOACTIVATE, and the driver must not steal the user's focus.
+        self.identity.verify()
+        if handle not in {row["hwnd"] for row in self.windows()}:
+            raise RuntimeError("owned_window_identity_mismatch")
         self.post(handle, 0x007B, handle, -1)
 
 
@@ -226,6 +228,11 @@ def read_states(case: Path, owners: tuple[str, ...]) -> dict:
         if path.exists():
             states[owner] = json.loads(path.read_text(encoding="utf-8"))
     return states
+
+
+def ready_for_next_confirmation(confirmed: tuple[str, ...] | set[str], states: dict) -> bool:
+    """Avoid competing accepted applies across the shared management lock."""
+    return all(states.get(owner, {}).get("pending_transaction") for owner in confirmed)
 
 
 def launch(core: Path, args: list[str], case: Path, script: Path, label: str):
@@ -243,20 +250,25 @@ def launch(core: Path, args: list[str], case: Path, script: Path, label: str):
 
 def install(core: Path, packages: Path, case: Path, owners: tuple[str, ...], script: Path) -> dict:
     process, ui, log = launch(core, ["--install-local-packages", str(packages), *owners], case, script, "install")
-    wait, confirmed, states = threading.Event(), set(), {}
+    wait, confirmed, states = threading.Event(), set[str](), {}
     deadline = time.monotonic() + 420
     result: dict[str, object] = {"status": "failed"}
     try:
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 raise RuntimeError("management_early_exit:" + str(process.returncode))
-            matches = [row for row in ui.windows() if row["title"] == "安装本地官方扩展：分别预检和确认" and row["visible"]]
+            matches = [row for row in ui.windows() if row["title"] in MANAGEMENT_DIALOG_TITLES and row["visible"]]
             if len(matches) == 1:
                 handle = matches[0]["hwnd"]
                 view = ui.action(handle)
+                states = read_states(case, owners)
                 for owner in owners:
                     label = OWNERS[owner][1]
-                    if owner not in confirmed and any(row["name"] == "确认本次操作" and row["owner"] == label and row["enabled"] for row in view["controls"]):
+                    if (
+                        owner not in confirmed
+                        and ready_for_next_confirmation(confirmed, states)
+                        and any(row["name"] == "确认本次操作" and row["owner"] == label and row["enabled"] for row in view["controls"])
+                    ):
                         ui.action(handle, "确认本次操作", label)
                         confirmed.add(owner)
                         print("CONFIRMED", owner, flush=True)
@@ -277,6 +289,12 @@ def install(core: Path, packages: Path, case: Path, owners: tuple[str, ...], scr
         result.update(reason=str(error), live=process.poll() is None, states=states)
         raise
     finally:
+        if process.poll() is None:
+            try:
+                ui.close_owned_windows()
+                process.wait(timeout=15)
+            except (RuntimeError, subprocess.TimeoutExpired):
+                pass
         write_json(case / "install-receipt.json", result)
         write_json(case / "install-uia.json", ui.history)
         log.close()
@@ -327,6 +345,12 @@ def normal(core: Path, case: Path, owners: tuple[str, ...], script: Path) -> dic
         result.update(reason=str(error), live=process.poll() is None, states=states)
         raise
     finally:
+        if process.poll() is None:
+            try:
+                ui.close_owned_windows()
+                process.wait(timeout=15)
+            except (RuntimeError, subprocess.TimeoutExpired):
+                pass
         write_json(case / "normal-receipt.json", result)
         write_json(case / "normal-uia.json", ui.history)
         log.close()

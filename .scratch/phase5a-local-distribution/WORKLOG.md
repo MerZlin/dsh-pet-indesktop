@@ -1,3 +1,360 @@
+# Phase5A 连续记录：WORKLOG
+
+## 2026-10-10 用户验收与 M00 检查点（当前）
+
+**M00 新门禁已通过（2026-10-10）**：Ruff、工作树/暂存 `git diff --check`；聚焦 **123 passed in 189.57s**；全量 **4509 passed, 15 skipped, 14 warnings in 1910.76s**，exit 0，643 个源码输入摘要前后一致。26 个相关时序族在 20 个自有逐核负载进程下复跑：三轮各 **292 passed**，pytest **198.76 / 143.17 / 137.04s**（调度总时长 **201.656 / 146.203 / 138.828s**），CPU 中位均 **100.0%**，全部负载进程自然退出、残留为空。159 文件敏感模式扫描零命中；540 个相对链接无缺失，报告均入索引。暂存检查发现并修正文档的两行尾随空格；没有更改产品代码来通过门禁。
+
+Windows 11 build26100、Python3.11.1。命令：`python -m ruff check pet features scripts tests packaging`、`python -X utf8 -m pytest -q`（隔离 APPDATA/LOCALAPPDATA、offscreen 和独立 basetemp）、Git 工作树/暂存差异检查。负载族列表与每轮 CPU 样本/退出码由 `m00-checkpoint-20261010/run_highload.py` 和 `delivery-highload-release.json` 留在本机证据目录；不把日志/缓存/脚本化临时数据纳入提交。历史冻结与性能实测仍见 S/U/A 报告，不宣称本轮重新构建或重新使用真实 Provider。
+
+**准确停点**：以上结果已收齐，尚未提交/推送；下一步是最后核对暂存范围和远端未分叉，提交当前源检查点，再正常推送并核对 SHA。新 MOD 功能尚未开始。
+
+
+- 用户已明确反馈 **“实际体验确认没问题”**；对应当前交付 Core **4.2.4** / AI **1.0.3** / Screen **1.0.3** 与 `_s01b/setup-release/dsh-pet-core-webm-setup.exe`。S 修复的用户体验验收通过，不再列作等待同一轮反馈。
+- 自动化/冻结程序证据沿用下方注明日期的历史结果；本轮提交前另行重跑 Ruff、全量 pytest 和受影响时序族满 CPU 三遍，结果已收齐，见上方新门禁。用户反馈不扩张为未测平台、正式签名发布或新 MOD 功能已验收。
+- 用户授权当前修改提交并正常推送至 **origin/codex/phase3-worker**；基线 `70ff464f84793f6ea3a342079dcbfb2d991fcf4e`。当前尚未提交/推送，先完成 M00，成功核对远端 SHA 后才开始 MOD 管理中心重做。
+- 159 个明确文件（126 已跟踪修改 + 33 新源码/文档）纳入审核；13 个构建/试装生成目录不提交、不删除。原始日志/缓存/测试配置/真实密钥不入库；不触碰真实安装目录。
+- 新功能计划尚未实施；其后产生的改动不在本次推送授权内。准确下一步：使用已收齐的 M00 门禁结果，最终审阅暂存、提交、推送并核对。
+
+**实际效果与限制**：4.2.4 的简易 API、项目内 Worker 和已有 Setup 体验已由用户确认；本轮先保存远程回滚点，不提前宣称市场式 MOD 列表或公开 v1 接口可用。
+
+
+<!-- S04_CURRENT_START -->
+## S01–S04 工程交付快照（2026-10-10；用户反馈见上方）
+
+> **S01–S04 工程交付完成；真实 Provider/屏幕效果与用户安装体验仍待确认，Phase5A 不关闭。** 下方 T/R/U/A 和早期 S04 快照保留历史；其旧产物、旧测试数量不是本轮最终结果。
+
+- 唯一待验候选：`_s01b/setup-release/dsh-pet-core-webm-setup.exe`；Core **4.2.4** / AI **1.0.3** / Screen **1.0.3**（Screen 要求 Core ≥4.2.4）。SHA-256 `7282fc05ac0b14138f00d4dbb71edf73af82aee261500f59f2217e8a1756a40d`。`_s01b/setup`、`setup-final` 是中间产物，不交付用户。
+- 已修复 portable 项目内 `data/feature-runtime` 误拒绝；仍拒绝 Core/DLC 程序树和 reparse。故障原因先记录再发布状态，手动重试可恢复。真实冻结链路额外暴露“包验证耗时计入运行心跳”缺陷，已改为 READY 后计时；握手超时仍保留。
+- 追加用户要求已落实：测试按钮旁显示“连接成功/失败 · HTTP nnn”，超时/网络/TLS 用独立结果码，后方备注解释且明确测试不保存。明暗 × 720/1100、失败保留草稿验证；无 API 架构/Setup 行为改动。
+- 冻结最终 Core→项目内已安装 Screen→生产 Worker→租约 HELLO/READY→Core/Worker 自然退出 **0/0**，退出后占用 free；未抓真实屏幕、未读真实 Key、未请求真实服务。Core/Setup/隔离安装副本 PE 10 帧匹配鲸鱼娘 ICO，Windows Shell 私有快捷方式实显一致。
+- 最终全量：**4507 passed, 15 skipped, 14 warnings in 802.39s (0:13:22)；exit 0，643 个输入前后摘要一致**。
+- 受影响 17 族高负载：**第1轮 169 passed in 47.59s、exit 0、CPU 中位 100.0%（含调度49.875s）；第2轮 169 passed in 47.06s、exit 0、CPU 中位 99.75%（含调度48.656s）；第3轮 169 passed in 47.69s、exit 0、CPU 中位 100.0%（含调度49.813s）；三轮全部通过且自有负载进程自然退出**。
+- Ruff、21 个改动 Python format、git diff --check 通过；报告纪律 65 passed，13 份文档 471 个相对链接/尾随空白检查通过；见 closeout-quality.json。相关当前 96 passed（26.59s）；最初目录 red 5 failed、启动诊断 red、心跳/连接反馈 red 15 failed、主题 red 2 failed、已有布局可访问名称 red 4 failed 均保留。
+- [工程报告](../../docs/PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md) 提供逐文件增删、启动/内存/界面实测、冻结/图标原始证据和人工步骤。证据根 `s01-portable-worker-20261010/`；旧候选保留，不提交/推送，不改 `E:/dsh-pet-core-webm`，未清图标缓存或修改用户桌面快捷方式。
+
+### 本轮执行记录（本地 2026-10-10）
+
+1. 保存任务开始 dirty 基线 769 文件，先补 portable/目录/同步故障/重试回归，保留 red 与阶段 green。
+2. 放行唯一可信 runtime，修复诊断顺序和失败后的租约释放；213 passed/1 skipped 为加入最终 UI/心跳前的阶段结果。
+3. 第一轮冻结接入达到 READY 后仍因心跳失效退出；回溯签名验证耗时，补真实 QProcess 红灯后将心跳基准移至 READY；未用直接 Worker 的绿替代 Core 链路。
+4. 用户追加连接反馈：先 red，再实现真实 HTTP 状态结构/按钮旁结果，实际 Qt 截图揭示浅色主题不显眼，补主题回归后修复。既有四布局门再发现按钮可访问名称缺失，保留失败并修复。
+5. 前两次全量分别因四个过期版本断言、四个可访问名称断言失败；第二次途中产品修正，摘要不一致，不作为最终通过。第三次锁定最终输入复跑，不掩盖失败。
+6. 最终 Core/Setup 重建完成；Screen 1.0.3 ZIP、AI 1.0.3 ZIP、Worker/Probe 闭合输入审计；真实冻结最终副本自然退出 0/0。私有 Windows 快捷方式和两个 EXE 实显鲸鱼娘。
+7. 全量/三轮负载/最终文档门的最新准确状态见上方；原始日志、测试数据和旧候选全部保留，不读取真实秘密，不删除未知 staging。
+
+## 本次实际可体验的效果与限制
+
+更新新候选后保留原配置；识屏能从项目内数据目录启动，连接按钮旁直接看成功/失败与结果码。Setup 行为不改；真实 Provider、真实屏幕和用户桌面图标仍需最后确认，Phase5A 不关闭。
+<!-- S04_CURRENT_END -->
+
+## 2026-10-10T00:05:34+08:00 A04–A05 最终验证与交付
+
+- 最终固定源码全量 4472 passed/15 skipped/15 warnings，三轮满载各185 passed；Ruff/38文件格式/diff和63报告纪律通过。
+- 图标 red3→green；冻结发现 Qt 控件释放 red3→60相关green；修复后两 DLC 冻结日志正常；保留中间失败而不覆盖。
+- 首次负载清单写错 test_files.py、静态工具隔离 APPDATA 隐藏 Ruff 都是 runner 环境/清单错误；修正后重新执行通过，不记为产品失败。所有自有负载进程自然退出。
+- 新 Setup/Core/两个 DLC/Worker/辅助程序已重建、哈希/输入/原图标10帧核对；_a01b 3,447,898,528B。已验收旧 Setup 未覆盖；安装卸载仅加图标、不改逻辑。
+- 报告 [PR-REPORT-SIMPLE-API-2026-10-09](../../docs/PR-REPORT-SIMPLE-API-2026-10-09.md) 与索引已更新，同一组 PLAN/HANDOFF/STATUS/SUMMARY 刷新。日期跨到10月10日，未另开阶段。
+- 工程执行完成；用户验收仅在最后报告集中列出。未用真实 Key/Provider/屏幕，未再次系统安装，未提交推送。Phase5A 不提前关闭。
+
+## 2026-10-09 22:27 简易 API A01–A03
+
+- 初始 10 failed red、连接路径 2 failed、父窗口 Esc/关闭 red、配置恢复可编辑 red 均已归档。
+- 简易表单/自动用途适配/视觉主 Key 尝试与错误分类已实现；相关 299 passed / 1 skipped。
+- Setup 保持不动。新构建递增候选版本，不覆盖既有产物；A04 待全量/负载/实机/重建。
+
+# 简易 API 修复：WORKLOG（2026-10-09）
+
+当前：A01 开始，已确认计划落盘。Setup 已获用户确认，保持不动。实现/自动化/实机/重建均未完成；未读取真实 Key、未提交推送。
+
+任务与合同见 [PLAN](PLAN.md)。准确停点：补失败回归后实现。历史结果在下方，不冒充本轮通过。
+
+---
+
+# U01–U06 WORKLOG（2026-10-09）
+
+> 更新：2026-10-09T21:18:00+08:00。U01–U06 工程实现、自动化、重建和隔离实机验收完成；待用户确认真实功能体验。
+
+设计：[Phase5A 设计](../../docs/plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md) · [PLAN](PLAN.md) · [STATUS](STATUS.md) · [HANDOFF](HANDOFF.md) · [WORKLOG](WORKLOG.md) · [SUMMARY](SUMMARY.md) · [报告](../../docs/PR-REPORT-SETUP-PROJECT-DIRECTORY-2026-10-09.md)
+
+## 本轮操作、证据与分类
+
+1. 读取当前设计/阶段记录，落盘 U01–U06；保留既有 T/R 历史和用户修改。初始失败回归 `U01-setup-project-red.log`：4 failed /5 passed /8 errors。
+2. 实现 Setup-owned portable marker、路径页与 native 安装门、项目内 data/DLC、合法 portable maintenance、两种数据卸载边界。
+3. 按最新用户指令移除可选 bridge/自启动 false/exception 的阻塞效果；失败/拒绝/异常回归通过，不删除占用/路径保护。
+4. U06 followup red 4 failed：相对路径、残留锁重试、保留 data 重装收据、误导文案；green 22 passed /1 skipped。后改用真实 junction 兜底，Windows reparse 专项 1 passed，原权限 skip 已消除。
+5. 中间产物真实设置窗口暴露入口绕过 `pet.__main__._main`，卸载误到删除失败。先补 bootstrap/UI red 4 failed，再统一启动；green 62 passed。最终实机设置创建项目 `data/config.json`，占用阻止删除，设置自然退出0。
+6. Inno 首次 label 修复使用不存在全局 API，编译失败（新引入且已修）；改为 `SelectDirLabel.AdjustHeight()` 并真实编译，最终窗口完整两行41px、不重叠。
+7. 删除预检 red 1 failed；增加选中数据树预检、真实删除失败 Abort；green 17 passed。最终 junction 实机保持 Core 哈希/外部哨兵不变。
+8. 构建 Core（149.844s）、生产 Worker、AI/Screen 包、新 Setup；helper 是已固定哈希的既有构建复用，不声称本轮重编。审计223根源码/228stage/1032资源/2137bundle，GUI PE=2，Worker 正常 HELLO/READY/租约/自然退出。
+9. 最终 Setup 实机 fresh54.922s / update37.234s / keep4.953s / reinstall55.031s / delete5.984s。三处取消逐文件字节不变；不选DLC更新保持配置；合成 staging/ledger 不阻止删除；外部源哨兵不变。仅渲染自有窗口，不依赖被其他窗口遮挡的桌面裁图。
+10. 第一轮全量4437通过是中间快照。第二轮在修复期间运行，2 failed /4439 passed /15 skipped，source_unchanged=false；保留其失败证据，不改名为最终通过。最终门：4442 passed, 15 skipped, 14 warnings in 1594.26s (0:26:34)；高负载：第1轮 242 passed, 1 skipped, 1 warning in 156.61s (0:02:36)，CPU中位99.9%；第2轮 242 passed, 1 skipped, 1 warning in 157.20s (0:02:37)，CPU中位99.95%；第3轮 242 passed, 1 skipped, 1 warning in 155.64s (0:02:35)，CPU中位98.9%。
+11. 性能：native门0/5000 data文件各7×100次，中位均1.72ms；冻结设置40×0.5s，CPU中位1.5%、16线程不变、RSS +128KiB（非长期泄漏结论）。详细命令、样本与局限见报告。
+
+## 准确停点
+
+授权范围内无剩余产品实现/构建步骤；接下来用户按本轮报告第八节验收。收到失败反馈后先复现并补 red，不能先关闭 Phase5A。
+
+## 当前合同与保护边界
+
+- Setup 每次显示路径页，旧路径只预填；新安装选择非根、无重解析点的 NTFS 空目录。合法本产品目录可更新；本次卸载留下的 data 由 Setup 自有 `.setup-project.json` 收据识别后可原目录重装，不能接纳任意陌生非空目录。
+- Core、`portable.json` 与 `data\plugins` 同项目；RuntimeLayout 唯一 portable 身份仍为根 marker。未发布的旧 APPDATA 组合布局不迁移。
+- 更新不勾选 DLC 不会删除已有 DLC 或覆盖配置；安装时只有勾选的官方包从内嵌 ZIP 导入。
+- 卸载删除程序、根目录其他内容与全部 `data\plugins`；默认保留个人 data，选择删除需不可恢复确认。确认期间取消不加锁、不运行 maintenance、不改文件。
+- **按用户最新要求：关联／桥接／自启动清理 best-effort，返回 false 或异常不再阻止卸载。** 可能留下该可选集成的旧引用；占用、路径边界、重解析和真实删除失败仍提示并中止。不强杀进程。
+- 不加载 DLC 工厂、不读取 ledger、不恢复事务、不清理未知外部 staging；不触碰项目外源 ZIP/目录。不恢复官方 owner/factory 特判。
+- 无暂存、提交、推送、正式签名或稳定产物覆盖。实机安装／卸载只操作自有生成的 `_u06-*` 目录；不读取真实 Key、不发收费 Provider 请求、不采集真实屏幕内容、不改代理/VPN。
+
+## 当前交付与验证
+
+- 新 Setup：`.scratch/phase5a-local-distribution/u06-delivery-20261009/setup-verified/dsh-pet-core-webm-setup.exe`；SHA-256 `7cecfde7854fa70cbfa98641457b2ade8c8a547887254ff609204ad1815f6e22`。Core 4.2.2 / AI 1.0.2 / Screen 1.0.1，Core 候选为 manual-acceptance-only。旧 r422、r3、u06-final 的 Setup 及 setup（无 verified）目录不作当前交付。
+- 最新全量：4442 passed, 15 skipped, 14 warnings in 1594.26s (0:26:34)；最终634个输入核对 `source_unchanged=true`。
+- 高负载：第1轮 242 passed, 1 skipped, 1 warning in 156.61s (0:02:36)，CPU中位99.9%；第2轮 242 passed, 1 skipped, 1 warning in 157.20s (0:02:37)，CPU中位99.95%；第3轮 242 passed, 1 skipped, 1 warning in 155.64s (0:02:35)，CPU中位98.9%。
+- 真实 Windows：新装两 DLC、路径页预填/完整文案、根/陌生非空拒绝、空目录接受、冻结设置使用项目 data、占用保护、junction 外部目标保护、三处取消不改字节、未勾 DLC 更新、保留 data 卸载及原目录重装、全 data 卸载均通过。
+- 收尾只读核对：Ruff／122个改动Python格式／diff通过，报告纪律61通过，11份Markdown的316个相对链接无错误；最终输入、产物哈希和未暂存状态见生成收据 `U06-final-closeout.json`。
+- 工程证据详见 [本轮报告](../../docs/PR-REPORT-SETUP-PROJECT-DIRECTORY-2026-10-09.md)；原始日志/JSON 位于同阶段目录，仅作为生成证据，不纳入提交。
+
+## 使用效果与人工剩余项
+
+安装与卸载围绕一个项目目录，不再因为 DLC 状态或关联功能清理失败卡住。用户仍需使用本次新 Setup 在实际选择的空目录确认 UI 体验，并用真实 Provider/余额与真实屏幕完成验收；不能把生产 Worker 握手成功写成真实识屏通过。**Phase5A 尚未获得本轮用户确认，不正式关闭。**
+
+---
+
+<!-- CURRENT_R_START -->
+# R01–R07 历史快照（2026-10-08；安装器合同已由 U 替代）
+
+> 本段仅记录 2026-10-08 历史，当前状态与安装器合同以上方 U 记录为准。工程自动化/本机冻结运行与真实服务/系统操作/用户确认是不同的门；**Phase5A 未正式收尾**。更新时间：2026-10-08T17:07:52+08:00。
+
+## 目标与已确认合同
+
+- Core **4.2.2** 管理多服务 API、OS 安全存储引用、owner/purpose 授权与显式迁移；AI **1.0.2** / Screen **1.0.1** 要求 Core >=4.2.2。AI/文件请求仍由 AI DLC 执行，视觉仍由独立 Worker 执行。
+- 通用可选 FeatureHostContext.api 返回授权元数据/版本/单次快照/订阅；不开放全局 Config、服务/密钥枚举，不恢复官方 owner/factory 执行特判。受信任 Python DLC 不是沙箱。
+- 四类聊天与文件新请求解析最新已提交配置；普通保存不污染在飞快照，撤权/删服务/停用取消并拒绝迟到结果；失效输入和未保存草稿保留。测试连接不等于保存。
+- 手动识屏与自动策略分离：自动关闭、空白名单或无关刷新不取消手动；生产 Worker 真实租约/HELLO/READY/自然退出是交付硬门，不回退 Core。
+- 系统卸载只删 Core 及其拥有的集成，保留 DLC 已安装副本、原始 ZIP/源目录、配置、Key/个人数据；不运行 DLC 工厂/逐包事务，不被 staging/ledger/pending 阻塞。Core 占用仍要求自然退出；单包卸载独立、只删安装副本。
+
+## 当前验证与版本对应
+
+- 最新未插桩默认单进程全量：**4417 passed /15 skipped /14 warnings /1391.19 s**（wall 1392.541 s），exit0；pet/features/scripts/tests 共 **621** Python 源码前后/最终快照相同，无新 skip、过滤、全局 Qt 刷事件或保活补丁。之前分组与 AV 记录仅作历史。
+- 生命周期既有根因真实公开 seam red 1 failed /6.63 s、子进程 0xC0000005；创建时 owner-thread 身份替代借用 QObject.thread()，green-v3 **23 passed /8.48 s**。新增回归实际 GC 三次 cyclic endpoint，再进新 QEventLoop，不是全局 keeper。
+- 最新 **15 时序族 ×3轮，每轮152 passed**、20 logical CPUs/20 自有逐核负载 worker，CPU 中位全100%；Event 停止、自然 join、全部exit0、残留[]。v4第三轮20s ready失败与44.040s迟达证据保留；只将测试 Event/自然 join 有界预算改为90s，产品/租约断言不变；最新全量和v5均含该测试变化。
+- 当前 c09 Core SHA-256：`1413d5ef5aeb43de9aa693c3d7060a5849fa9b1c7ae8902c24a6c511a11c7264`；**新 Setup 仅用 r422/setup-lifecycle**，SHA-256：`53fe18eff3e2b45acf0a23c1732675316241b9b84fe7d7ee8214b2429e854f38`。旧 setup-final/旧 c07/c08 不作当前交付。Worker、两 ZIP、helper 由本轮 R 重建且输入复核仍相符。
+- 审计 root207/stage212（5生成策略源）/resources1000/bundle2103，PYZ2188、GUI PE=2；新 Core 的 empty/AI/Screen/both 保留 profile 均正常菜单/自然退出0、DLC payload与ledger不变；no-DLC API 服务设置可见/自然退出0。不是系统卸载重装证明。
+- API 性能 n1000/n50/n200 与约3×5s短窗口；生命周期 guard 7×10000次/每路径预热1000；实测数字、样本边界与线程/RSS归因限制见 [同一报告 §8](../../docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md)。末次 Ruff check、119 个改动 Python format --check、diff check 均 exit0；报告纪律 59 passed in 0.66s；19 份 Markdown 的 424 个相对链接无断链/尾随空白。
+
+## 保护与人工边界
+
+- 工作区 E:/AI/DSH/dsh-pet-indesktop，分支 codex/phase3-worker，HEAD 70ff464f84793f6ea3a342079dcbfb2d991fcf4e；进入 R 前78个dirty路径保留。累计差异含历史 T/用户改动，不全算本轮新增；无暂存/提交/推送/远端验证/子智能体。
+- 两个生成根合计封顶 **11.25 GiB（12,079,595,520 B）**：原6 GiB + 用户约5g授权的有界5.25 GiB；保留旧包/Setup/失败证据，没有删除旧生成物或清理未知 staging。
+- 不读取真实 Key、不自动截图/收费请求、不改代理/VPN、不自动开识屏、不运行系统 Setup/卸载器、不强杀进程、不正式签名发布。
+- 下一步是用户按 [报告 §8.7](../../docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md) 人工验收：先备份、自然退出，用**新 Setup 覆盖安装更新旧 unins000.exe**；再测一次Key/用途、四旧聊天与文件/余额、自动关时手动识屏、两来源Core-only卸载保留/重装和单包范围。真实协议、费用、屏幕与系统行为不能由自动结果代替。
+
+## 最新施工记录与准确停点
+
+1. 已查明HEAD既有生命周期防自等待 guard 的借用 QThread wrapper/循环GC析构问题；独立公开seam重现0xC0000005后改用创建线程身份，queued signal/取消/后台wait不变。原 red、两次脚本失误和 green-v3 原记录保留。
+2. v1默认全量4417p/15s/15w/739.87s；v4负载前两轮152通过，第三轮151p+1fail。失败lease文件迟达44.040s、8次就绪探针0.485–2.656s未复现根因；未知底层调度/IO原因不归咎产品或环境。测试90s Event/自然join预算专项32p/19.25s。
+3. 最新默认v2全量4417p/15s/14w/1391.19s自然0；最新v5三轮每轮152p、CPU中位100%、20worker全自然0，621源码相同。
+4. PyInstaller EXE成功生成但首次验证器错用dist路径；失败未改候选、原日志保留。校验同输入预构建EXE、独占Core删除门后复用已验证bundle仅换EXE/base_library.zip；新Setup在全量/负载结束后独立编译，旧整包/Setup不删除。
+5. 当前冻结四保留profile、新无DLC设置、生产Worker正常启动、源码/资源/6项hash审计与两路径性能实测完成。末次 Ruff check、119 个改动 Python format --check、diff check 均 exit0；报告纪律 59 passed in 0.66s；19 份 Markdown 的 424 个相对链接无断链/尾随空白。
+6. 当前停止于用户验收交接，不运行真实Provider/屏幕或系统Setup/卸载。用户明确确认后再更新Phase5A正式收尾，未确认不预写完成。
+
+<details>
+<summary>历史R工程过程（截至最后恢复Core、非当前状态；保留失败与当时停点）</summary>
+
+# R01–R07 当前权威状态（2026-10-08）：生命周期根因已修复，最新完整快照与交付验证进行中
+
+> 本轮优先于下方 T01–T07 历史；Phase5A **未正式收尾**。默认原生门v1已通过，但租约测试协调预算更新后v2和三轮v5尚在执行；下方带时间的过程记录须按最新条目解读，不沿用旧分组/旧产物。
+
+- 已实现 R01–R05：Core **4.2.2** 统一多服务 API、OS secure refs、显式预览/确认迁移、generic owner/purpose 端口；AI **1.0.2** / Screen **1.0.1** 要求 Core≥4.2.2。四聊天/文件/余额每新请求读取提交快照；自动策略与手动识屏生命周期分离；系统卸载只删 Core。没有官方 owner/factory 运行时特判、Core 内视觉回退或 Python 沙箱宣称。
+- red→green 保留；最终修复专项 **106 passed / 10.53 s**，Qt/API/设置进程/真实 Worker 族 **71 passed / 12.27 s**。
+- 全部 **4431 项 / 262 文件**按连续文件分成 5 个新 QApplication 进程，**4416 passed / 15 skipped / 14 warnings**，各 exit 0；nodeid 哈希并集完全等于完整收集，未使用 -k/deselect/新增 skip；621 份源码前后相同。pytest 合计 751.47 s，墙钟 755.708 s。证据 `repair-20261007/full-group-results.json`。
+- 20 logical CPUs 的满负载三轮，均 **129 passed**，108.82 / 110.98 / 74.18 s，全机 CPU 中位均 **100.0%**。20 自有 worker Event 协作停止、自然 join 全 exit 0、残留 `[]`；v2 后两轮不足满负载未冒充通过。证据 `highload-v3-results.json`。
+- **工程未决：默认单进程全量失败**。full2/full3/full4 均 Windows **0xC0000005**（631.93 / 640.48 / 651.15 s），Qt 嵌套循环/`app.exec`/WorkerSupervisor 清理循环；full4 约 79% 无断言失败。65 项最小组合及新增 17 文件 **226 passed /80.35 s** 的 owner 家族组合均未复现；根因待分类，不能归咎环境或截图，不继续盲目整套重试。
+- 当前新 Core c09、Setup r422/setup-final、两 ZIP、非 synthetic Worker、probe-clean 与原生 helper 均重建；root207/stage212/resources1000/bundle2103/source 校验匹配，PE=2。哈希/输入见 `final-build-audit.json`；unsigned/manual-acceptance-only，不等于正式签名或系统安装通过。
+- 生产 Worker 硬门：租约/HELLO/READY/自然退出 0/占用 free，**2739.376 ms**，零截图/联网。冻结 empty/AI/Screen/both 4 个自有 profile 维护/菜单/startup receipt/自然退出通过；无 DLC 冻结 Core 的 **AI 与对话→API 服务**真实 UIA 可见，**3169.543 ms**、退出 0。12 张仅自有 QWidget render 图已审查，不是用户屏幕截图。
+- 性能已实测：metadata/version/request resolve 各 n1000；resolve 中位 **0.7001 ms / p95 1.3117 ms**（**不含 OS vault/Provider**）；显式保存 n50 中位 **48.193 ms**；3 订阅稳态约 **16 配置读/s**。3×5 s RSS 增量 **49,152 B**，原生线程 **5→7** 未归因，Python 线程始终 1；不声称长期零泄漏/零线程成本。证据 `api-performance.json` / 报告 §8.4。
+- 无暂存/提交/推送/子智能体；分支 `codex/phase3-worker`、HEAD `70ff464f84793f6ea3a342079dcbfb2d991fcf4e`。保留入轮 69 修改+9 新增和当前累计 109 修改+25 新增（134项）；源码测试均冻结，报告逐文件累计差异不能全算 R 新增。
+- 两自有生成根上限 **11 GiB（11,811,160,064 B）**，保留旧产物，不删除。未读真实 Key/profile、未请求收费 Provider、未截图真实屏幕、未运行系统 Setup/卸载器、未改代理/VPN/系统电源策略、未清未知 staging、未强杀进程。
+
+证据：[本轮报告 §8](../../docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md#8-r01r07-人工缺陷修复与本次交付2026-10-07-开始2026-10-08-更新)；[设计](../../docs/PHASE5A-CLOSEOUT-IMPLEMENTATION-PLAN-2026-10-07.md)；[PLAN](PLAN.md) / [HANDOFF](HANDOFF.md) / [STATUS](STATUS.md) / [WORKLOG](WORKLOG.md) / [SUMMARY](SUMMARY.md)。
+
+**人工门（完整步骤见报告 §8.7）**：先新 Setup 覆盖安装更新旧 `unins000.exe`；Core 配置一次 Key 并明确文字/文件/手动视觉/自动视觉/余额用途；验证 4 类旧窗口保存后无需重启、迁移/草稿/在飞授权、余额协议区别、自动关/白名单空时手动识屏；两来源 Core-only 卸载保留已导入副本/源 ZIP/配置/个人数据并重装识别；单包卸载只删安装副本。真实 Provider/屏幕/系统安装卸载待用户；**原生全量崩溃是工程责任，不交给用户验收来掩盖**。
+
+<!-- R_CURRENT_FINAL_DOCS_START -->
+末次全证据V2（2026-10-08 09:56）exit0：Ruff、117 Python format、diff --check、报告纪律59 passed /0.70 s；15份Markdown/306相对链接无断链/尾随空白，621源码冻结、6产物size/SHA匹配、2自有设置PID身份无残留。两生成根10,992,987,005 B（约10.2380 GiB）<11GiB；无暂存/删除，初始78dirty保护路径完整。证据 `repair-20261007/final-document-verification-current-v2.json`；状态为 `evidence_verified_with_default_native_gate_open`，**不是默认单进程全量通过或Phase5A关闭**。仅状态回填后以 `final-document-verification-closure.json` 留最终只读复核回执，产品/测试源码不变。
+<!-- R_CURRENT_FINAL_DOCS_END -->
+
+**实际效果与限制**：API 由 Core 管一次再授权所需 DLC；新请求不靠重启，手动识屏不被自动开关误停，系统卸载不先拆 DLC。模型/余额协议必须由服务支持；默认原生全量门与人工门均未关闭，不能宣称 Phase5A 完成。
+
+## 最新动作与证据（2026-10-08）
+
+- 完成5组全收集覆盖，按nodeid哈希校对4431并集，621源码未改。
+- frozen empty/AI/Screen/both与无DLC API设置均真实运行并自然退出；早期自有UIA脚本把sidebar内部key当标题导致超时，修正为“AI 与对话”后成功，失败日志保留，没有产品补丁。
+- 满负载v2只有首轮100%，后两轮42.x%，未算完成；只对20自有worker设单CPU affinity的v3三轮实际100%/129通过，Event自然退出无残留。
+- API real JSON/CAS/Qt性能脚本结束：请求解析n1000、显式保存n50、poll n200和3×5s稳态，假MemoryVault边界显式排除OSvault/Provider；RSS/原生线程增量不美化。
+- 报告§8更新负载、性能、真实profile、候选哈希、人工步骤与原生工程门；同组五记录更新，不创建平行计划。
+- 产品/测试源冻结，有界Qt owner家族已226 passed /80.35 s；最终文档V1/V2 exit0，末次59报告纪律/0.70 s通过，306链接/冻结源码/哈希/预算均核验；源码没有变化。
+
+<!-- R_NATIVE_PREFIX_DIAGNOSTIC_START -->
+### 2026-10-08 默认单进程原生门：连续前缀与纯 Python 取证
+
+- 最后只读 closure 已通过：59 报告测试、117 Python 格式、Ruff/diff、306 链接、621 冻结源码及 6 交付哈希（10:00:38，预算当时 10,993,038,307 B < 11 GiB）。
+- 连续 120 文件 / 1717 项：**1710 passed / 7 skipped / 6 warnings / 516.78 s**，墙钟 517.810 s、exit 0、621 源码相同；不是默认全量原因确认。证据 `native-continuous-prefix-v1-results.json`。
+- 扩大到完整收集前 **3600 项 / 220 文件**时，v2 在 `test_fs_watch_loop_survives_transient_runtime_error` 的 **诊断 record() 第20行**原生 AV（exit 3221225477，190.749 s），收集顺序哈希匹配、621 源码不变。该测试临时 monkeypatch `shiboken6.isValid=lambda obj:True`，诊断据此错误进入 C++ 指针读取；这是取证脚本无效证据，**不归因产品，不作为原始 full4 AV 的复现**。旧日志/trace/回执完整保留。
+- 自有 QObject 有效性探针（不进入用户 profile）：删除前原始 guard true，删除后原始 guard false，临时替换后 guard true；不对已删除对象调用 getCppPointer，不处理全局 Qt 事件。证据 `diagnostic_validity_guard_probe.py`。
+- **v3 完整单进程已通过**：4431项/262文件，**4416 passed / 15 skipped / 15 warnings / 898.65 s**（wall899.838 s，10:32:13–10:47:38 +08:00），收集顺序SHA与原inventory完全一致，621源码未改。hook只读Python字段/identity；不调用Qt/Shiboken原生方法、不推进事件、不改生命周期/收集/skip。证据 `native-full-python-v3-results.json`。两生成根当时 **11,617,865,458 B** <11GiB。
+- 无诊断插件的完整 `pytest -q -o tmp_path_retention_policy=failed` **再次失败**：10:52:29–11:10:22 +08:00，wall1046.989 s、exit3221225477（0xC0000005），621源码不变。日志已报告3599项（3586点/13skip），最后报告位置按inventory哈希校准为 `test_shared_watcher_tick_survives_idle_windows`，崩溃在teardown `WorkerSupervisor.wait_for_stopped_for_tests:645`；当前位置不是遗留资源owner的证明。证据 `plain-full-retention-failed-v1-results.json`。pytest仅清理本次成功临时目录，保留新根50,859 B及所有旧产物；两根当时11,617,936,845 B <11GiB。
+- 自有pytest故障的Windows Application/1000记录指向 Qt6Core6.11.1 RVA `0xb2ff8`；本机PE导出/反汇编定位为 **QEventLoop::exec+0x28 的进入段读取**，而非已确认派发旧Qt事件。此前缺少寄存器/owner证据，不能据栈直接归因；下面入口取证现已捕获NULL线程字段，owner仍待定位。`tests/test_single_process_shared.py` 单独无插件-q **17 passed in3.57s**。
+- 只读入口取证 `qt-entry-prefix-v1` **复现同一原生异常**：11:19:51–11:35:31 +08:00，907.564 s、exit3221225477，前3600项/220文件、621源码不变。在目标用例 teardown 的原始 exec 调用前，fresh loop 原始有效性=True，主线程 QThreadData 的 thread 字段已为 **NULL（ReadProcessMemory成功）**；此前同一数据地址的 thread 字段非NULL。这与Qt6Core RVA0xb2ff8入口读取吻合，排除了“已确认由排队事件派发导致”的旧猜测，但尚未证明谁销毁/清空主QThread。两根11,618,225,425 B <11GiB。证据 `qt-entry-prefix-v1-results.json` / `native-qt-entry-prefix-v1.trace.jsonl`。
+- `qt-phase-prefix-v1` 已完成（11:40:17–11:52:10 +08:00）：684.519 s、exit3221225477、621源码不变。只读标量首次非NULL→NULL出现在完整收集第 **3139 项** `test_requested_regressions::test_modern_settings_save_warns_on_failure` 的 **call 前后**；同一主线程QThreadData一直保持该NULL，后续第3599项共享Worker清理入口才崩溃。该边界是定位线索，不证明当前用例就是错误owner。两根11,618,397,923 B。
+- 仅 requested regressions + shared触发用例两次诊断均通过：43 passed /1 skipped（27.41 s；加非持有 destroyed观察后29.84 s），不能替代默认全量，也未复现前序污染。
+- `qt-owner-prefix-v1` 被用户中断：无完成回执，日志停于46%并有两个F标记，未取得失败详情；不分类为产品新失败/通过/原生复现，保留原日志与新测试临时根。工具会话已不可重新加入；GDB进程名限定查询无残留。
+- `qt-destroyed-prefix-v2` 已完成：13:44:06–13:53:47 +08:00，前3145项 **3133 passed /12 skipped /1286 deselected /10 warnings /514.28 s**，wall519.093 s、exit0、621源码不变。主线程字段未变NULL，弱 destroyed/GC观察可能改变绑定或时序，因此不作为根因修复或默认全量门。进程正常退出时 app.destroyed 回调尝试写已关闭句柄，产生诊断 ValueError，明确是观察器收尾缺陷，非产品失败；原记录保留。两根11,618,689,763 B。
+- 此前在新自有pytest子进程执行、现已结束的 `qt-native-watch-prefix-v1`（前3600项），使用不连接Qt信号的只读phase入口记录与一个原生硬件观察点，捕获谁将主线程字段写NULL。GDB仅配置自有子进程调试寄存器，不写Qt对象/改变删除/刷事件，不附加用户进程。GDB退出码不等于pytest通过；必须读取原生写入位置、完整测试结果。独立自然退出smoke已证实观察点可捕获 QThread 析构的非NULL→NULL写入，退出0；两次工具路径/嵌入Python环境失败保留。
+- 2026-10-08 原生硬件观察已完成：`qt-native-watch-prefix-v1-results.json` 记录 1097.382s、621 源码指纹未变、占用 11,618,873,756B。自有 pytest inferior 在 `test_modern_settings_save_warns_on_failure` call 内由 Python GC → `SbkDeallocWrapper` → QtCore.pyd 虚析构派发 → `QThread::~QThread` 清零主线程数据字段（写入 RVA `0x1a49b3`）；随后自然退出 `0xC0000005`。GDB exit 0 不是 pytest PASS。精确调用栈与已证明/未证明边界写入 `qt-native-write-evidence-v1.json`；尚需查明错误销毁权的来源，不以保活引用掩盖。
+- `qt-gc-owner-prefix-v1` 已完成：14:26:07–14:38:06 +08:00，前3139项 **3127 passed /12 skipped /1292 deselected /10 warnings /599.86 s**，wall601.880 s，621源码相同。观察到已存在主线程 wrapper 在 GC start 仍为 `ownedByPython=False`，referrers 含 QApplication；没有 NULL 写入。GC 枚举临时引用可能影响时序/回收，**不能作为根因排除或全量通过**，不据此加保活补丁。两根11,621,407,906 B。
+- 当前执行新自有进程 `run_qt_owner_scalar_watch_prefix_v1.py`：本机已核实 `BindingManager::retrieveWrapper` C++ header/export，以 `ctypes.PyDLL` 在 GIL 内读取借用 raw pointer，只保留整数；不枚举 GC、不生成/持有 Qt wrapper、不连接信号、不刷事件。首次找到已有主线程 wrapper 后，在自有 GDB inferior 上同时硬件监视所有权低位与主线程 NULL 写入，读取原生调用栈与真实 wrapper 类型。前3139项为诊断，不是全量门；session55264。
+<!-- R_NATIVE_PREFIX_DIAGNOSTIC_END -->
+
+- 2026-10-08 15:10 原生门根因已缩小：公开 QObject/thread 创建顺序最小复现 3×3 次 0xC0000005，正常 parent/child 对照 3 次 exit0；真实 FeatureLifecycleEndpoint.register_draft + QueuedFeatureLifecycle.prepare 的循环回调 seam 连续 3 次崩溃（`qt-feature-lifecycle-draft-public-minimal-v1-results.json`）。主线程 wrapper 的 QObject.thread() Python parent heuristic 与 GC clear/dealloc 交互是已证明机制；当前计划先补独立进程 red，再将该 GUI 防自等待判断改为 endpoint 创建时的 Python owner-thread 身份（与 FeatureHost.registry 同一约束），保留 queued signal/后台 wait/撤权顺序，不用全局 keeper、private bit 写入、全局刷事件或新 skip。Shiboken 6.11.2 单库混合诊断仍 3 次崩溃，不作为受支持升级或交付；全局 Python 环境未改。scalar-watch-v1 已自然结束，3127p/12s/1292d/10w/1226.29s 后 inferior 0xC0000005，GDB exit0 不是 PASS。准备的 v2 大前缀不再作为下一步。
+
+- 2026-10-08 15:12 生命周期 public-seam 回归完成 red→green：独立子进程的循环 draft 收集测试原版 exit0xC0000005（red 1 failed /6.63s），改为 endpoint 创建时 `threading.get_ident()` 后，真实 GUI/background/IPC/shared Worker 族 **23 passed /8.48s、自然 exit0**；回归 3 个创建/GC/新 QEventLoop 轮次都实际收集 Endpoint，未加主线程 keeper。初次 green-v1 文件名选择错误、green-v2 CRLF 拼接未命中造成 NameError，日志保留，均未冒充通过；正确实现为 green-v3。无 Qt 包升级。下一步执行完整未加诊断插件的 4432 项单进程 -q，全量完成前不修改产品/测试输入；随后 Core/Setup 精确受影响重建与3轮满 CPU 族。
+
+
+### 2026-10-08 15:29 默认单进程硬门已修复；三轮高负载与当前产物收尾进行中
+
+- 新增真实公开生命周期 seam 的失败回归先 red（0xC0000005），修复 `QObject.thread()` 对借用主线程包装器的误归属风险；以创建线程 identity 守卫，不引入 Qt 全局 keepalive、事件冲刷、依赖升级或额外 skip。专项 23 passed /8.48 s、自然 exit0。
+- 当前无诊断插件、无选文件的默认单进程完整 `pytest -q`：**4417 passed /15 skipped /15 warnings /739.87 s**（wall741.365 s；15:13:12–15:26:00 +08:00），自然 exit0，621源码前后不变。证据 `plain-full-lifecycle-fixed-v1-results.json`；新增1回归后共4432项。旧 AV 和中间脚本错误均保留，历史分组通过不再作为当前默认门替代。
+- 正在执行 `highload_repair_v4.py`：20 logical CPU，原129项加23项生命周期/IPC/共享清理，3轮各152项；第一轮已 exit0，CPU中位100%。其余未完成前不预写通过。
+- 用户已授权约5g生成空间扩展；最终只重建受影响Core/Setup，复核并复用未变Worker/ZIP/helper。硬上限调整为两生成根合计 **11.25 GiB（12,079,595,520 B）**；预计新增约0.3GiB，仅更新自有c09候选，完整旧Core和setup-final保持不变。持有CoreCodeGate独占删除/替换门，不强杀；新Setup写setup-lifecycle，不运行系统安装器。
+- 当前工程下一步：三轮自然退出→增量重建/当前6产物审计→4个已有自有profile保留包识别和新的无DLC设置→真实守卫性能/最终全证据复核。人工门仍为真实Provider、屏幕、新Setup安装卸载；Phase5A未关闭。
+
+
+### 2026-10-08 15:48 高负载失败已分析，测试协调预算修正后重新完整验证
+
+- v4前两轮152通过/100%CPU；第三轮151通过、1项既有租约测试20s ready预算超时，**三轮门未通过**。失败根保留的lease显示状态提交→子进程实际取得lease44.039805s，该PID已自然退出；不能将一次延迟归因Provider或租约逻辑坏。独立8次同一真实target满CPU启动0.485–2.656s、全exit0，没有复现迟达；底层调度/IO延迟仍未归因。
+- 测试层保持Event/所有占用与退出断言，协调预算90s、hold release180s；给两处无finally的ready路径补自然join。**未修改产品租约时限，不加入skip、不强杀**。相关32 passed /19.25s；Ruff/format通过。证据 `lease-ready-failure-timeline.json` / `lease-ready-latency-v1-results.json` / `R06-lease-budget-focused-v1.log`，v4失败保留。
+- 因测试源码有变化，重新默认全量v2，随后满CPU三轮v5；旧v1默认全量绿色不冒充最新快照。Core增量构建可与默认测试并行，但Setup编译严格留到全量/负载自然完成后，避免生成峰值越过11.25GiB；旧完整Core/Setup保留。
+
+
+
+### 2026-10-08 16:05 受影响 Core 增量重建验证完成，Setup 等待全量与负载退出
+
+- PyInstaller 已完成分析/PYZ/EXE，但自有验证驱动把 exclude_binaries=True 的 EXE 输出误认为 dist；实际在 build/validation。失败退出与日志保留（lifecycle-core-build-failed-v1.json），该次未修改候选。修正取证路径，重新生成仅源码的闭合输入、核对212 staged/207 root和旧资源/完整2103文件，再复用已成功生成的EXE，不重复构建或删除旧包。
+- 受限恢复持有CoreCodeGate独占门，实际仅替换自有c09的EXE和base_library.zip；旧完整core-final bundle逐字节保留。最新Core SHA256为1413d5ef5aeb43de9aa693c3d7060a5849fa9b1c7ae8902c24a6c511a11c7264，17292328B；PYZ2188、GUI PE=2，已包含_owner_thread_id修复、不含旧QThread借用守卫。恢复exit0，107.075s；初次PyInstaller日志205.246s为工具自身耗时。
+- 当前默认全量v2仍自然运行，随后highload-v5三轮152项；新Setup不与测试生成峰值重叠。两生成根此时11,692,079,894B<11.25GiB。当前receipt状态core_rebuilt_setup_pending，不预写Setup或最终门通过。
+
+</details>
+<!-- CURRENT_R_END -->
+
+---
+
+# 原 T01–T07 历史状态（2026-10-07，不代表当前 R 修复通过）
+
+> 以下是本轮代码实施的最新实测；分隔线后的早期停点/文档清理记录按当时状态保留。
+
+## 当前判断与范围
+
+T01–T07 本轮授权范围内实现、最终全量、满负载三轮、当前构建、授权实机、性能与报告/索引/五份终态留档已完成。不开子智能体，不进行真实系统安装、Provider、用户数据或 Git 发布。
+
+## 实际命令、预期与结果
+
+- T01 产品修改前：`4 failed in 5.24s`；中性注册/路由、Setup 内嵌、GUI spec 均先红后绿。
+- 最终全量：`4334 passed, 15 skipped, 15 warnings in 759.16s`，exit 0；原始日志 `implementation-20261007/pytest-final-current.log`。首次完整的 17 个旧合同预期失败已分开记录并修正，不跳过测试；最终全量后没有产品/测试源码改动。
+- 20 CPU worker 满负载三轮相关族：各 `97 passed`，pytest 200.99s / 182.02s / 177.87s；全机 CPU 中位均为 100.0%。20 worker 协作停止、自然 join，全 exit 0、残留 []。
+- 最终 Ruff、63 个改动 Python format --check、git diff --check、当前 Core/source/resource 审计均 exit 0；保留 2395 行预算，现代设置实际 2377 行。
+- 当前 Core root201/stage206/resources1021/bundle2126 均匹配，PE subsystem=2；helper 与非 synthetic Worker 输入核验。
+
+- 冻结 empty/AI/Screen/both 四种自有 profile：无界面维护（empty 不执行）→正常 GUI Core→startup receipt 清除→对应菜单出现/缺席→自然退出 0；不冒充 Inno Setup 四种人工勾选。
+- third-party.example：真冻结 LPAC helper 的目录/ZIP 安装、真实双进程启动/重启、停用/卸载全过。额外当前冻结 Core ZIP 首次启动/重启均通过，revision=4、pending=null；自然退出后停用/卸载 completed、revision=7、versions={}，没有模拟热卸载。
+- 默认创建参数（creationflags=0）下自有进程树 62 次观测无可见终端，ffmpeg ConsoleWindowClass visible=false；自然菜单退出 0。不等同 Explorer 人工双击。
+- 原生 UI 的 720/1100、浅/深色四张截图已审查；ZIP/目录入口可见可用、横向滚动 0；宽布局滚动遮罩略裁节标题是已记限制。
+- 路由/完整验证 50 样本及 empty/third 两组 30s settle 后 3×5s Core PID 数据已落报告；third 15.043481s 的 RSS 净 +892928 B，只是短样本，不能据此宣称长期零泄漏/可归因性能改善。
+
+- `python .../final_code_verification.py` → Ruff 0.127785s、format 0.1552643s、git diff --check 0.1639295s、构建审计 3.8821307s，四项 exit 0。
+- 高负载驱动全链 212.2985937s / 184.4014972s / 189.5171436s；CPU 均值 99.9972067 / 99.9993506 / 99.9993590%，性能采样在负载之前完成。
+- 失败分类保留：17 个旧合同预期、行数门、pending 重入、长路径、旧 Worker 输入、stdout 编码、自有 Config/窗口探针假设；报告逐项说明，不假称未执行门失败。
+
+## 最终持久化与交接
+
+已更新本轮 PR 报告、INDEX 与原五份记录；最终文件表含 69 修改 + 9 新增、无删除、无暂存，明确区分前轮已有脏改动，不全算本轮新写。
+<!-- FINAL_DOCS_VERIFICATION -->
+最后新报告专项 `59 passed`，exit 0；13 份相关 Markdown 的 267 个相对链接无断链、无尾随空白。累计 69 修改 + 9 新增的 78 项文件说明/行数已核对，无删除、无暂存；20 负载 worker 全 exit 0、残留 []，5 个已记录自有进程身份复核无残留，未枚举/操控其他用户进程。结果 `implementation-20261007/final-document-verification.json`。 新报告首轮专项 `59 passed in 0.58s`（最末次留档复查见结果 JSON），无失败。
+<!-- FINAL_DOCS_VERIFICATION_END -->
+
+无新增确认项；本轮授权范围无剩余执行，真实系统安装/Provider/用户确认/正式发布另获授权。
+
+## 实际使用效果与限制
+
+ZIP/目录按包自身注册走统一生命周期，Setup 已内嵌两个官方包，Core 为 GUI PE；Python 不是沙箱，已加载版本等待进程自然退出，构建和测试不能冒充真实系统安装或人工发布门。
+
+---
+
+## 以下为历史过程记录，保留追溯，不代表当前停点
+
+## 2026-10-07 自主收口：当前构建与实机证据
+
+- 109 项相关集合绿；完整套件 17 failed/4317 passed/15 skipped 暴露旧焦点和官方-only scope 测试合同，按新合同补断言后 65 passed in48.37s，最终全量复跑中。
+- 当前 Core 构建 142.5049351s；PE=2，helper 固定 digest；旧 Worker 校验因源码变化拒绝后重建当前 Worker，官方 AI/Screen ZIP 重新组装。
+- 首次 ISCC 压缩 311 字符路径失败；只将本轮新 Core bundle 移到 c07，源/目标边界确认且 2126 文件哈希/大小/路径清单全相同，最长 255；Setup 编译退出0，未运行系统安装器。
+- 独立自有资料中 frozen empty/AI/Screen/both 全通过，维护无可见窗，首次 Core receipt pending 清除，菜单按 owner 分别出现/缺席，全部自然退出0。
+- 未知第三方目录/ZIP 使用真实冻结 LPAC helper，真实双进程启动/重启及停用/卸载通过；首次错误把 binding.close 当成租约释放，实际 awaiting_release 证明守卫有效，改由自然进程退出再完成，不改产品 lease 语义。
+- 原生 UI 重抓四张，逐一审查；输出 cp1252 编码失败归为诊断 stdout 环境问题，PYTHONIOENCODING=utf-8 重跑退出0。
+- 50 样本路由/验证性能已记录；只读构建审计 root201/stage206/resources1021/bundle2126 全匹配。合并自有 profile 后生成物 6,264,876,280 B，仍在6 GiB内。
+- 下一步：等最终全量、冻结第三方/稳态补测、高负载相关3遍、正式报告及最终五记录。
+
+## 2026-10-07 续接实现与自主收口
+
+- 续接独立导入红 1 failed,1 passed in4.38s；补入口后96 passed in101.36s。
+- 全量 -x 揭示架构行数2455>2395（1 failed,373 passed,1 skipped）；抽 UI 组装到 feature_management_ui，2377行，不修改预算。
+- 维护重复安装红1 failed in1.84s；修 awaiting_startup_confirmation 的合法重入及 StateResult.state 读取，专项75 passed in78.61s。
+- 扩展页所属域红1 failed in1.22s，增加 capability claim；深链接红1 failed in0.99s，聚焦统一 ZIP 导入。相关109项中旧焦点断言24失败，已同步新合同待重跑。
+- 拉取已固定 SHA-256 的 libsodium1.0.22官方归档到自有 inputs，当前 helper 构建成功，Core 正在构建；尚未新 Setup、实机安装或 Git 发布。
+- 当前停点和目标按同目录 PLAN/STATUS/HANDOFF/SUMMARY 当前段；用户已授权自主运行至T07。
+
+# 2026-10-07 当前施工记录：Phase5A 文档与 `.scratch` 清理
+
+
+## 2026-10-07 T01 红测试（本轮实现起点）
+
+1. **保护与阅读**：按用户指定顺序阅读项目入口、Phase5A 状态/计划/交接/摘要、closeout implementation plan 和 code implementation handoff；核对 dirty worktree，未重置、未覆盖、未提交、未推送。
+2. **失败回归**：新增 `tests/test_phase5a_t01_regressions.py`，固定四个新合同：unknown owner local v2 verify/bind；AI ZIP/目录从同一入口按 manifest registration 路由；Setup 嵌入官方 ZIP 且不读取 `{src}\packages`；Core 生成 spec 使用 `console=False`。
+3. **红灯证据**：`$env:QT_QPA_PLATFORM='offscreen'; python -m pytest -q tests/test_phase5a_t01_regressions.py` → **4 failed in 5.24s**。失败分别为 official owner 硬校验、router 缺失、Setup 外部 packages 路径、生成 spec `console=True`。
+4. **下一步**：进入 T02/T03，先修改中性 registration 与 local/official verifier 分支，再贯通 descriptor 驱动的 transaction/state/lease/startup/loader；不把红测试改回旧 hardcoded contract。
+
+
+> 这是本轮可复用的过程记录；旧施工记录保留在下方。没有把失败调试原文、密钥、用户数据或生成物复制进文档。
+
+## 本轮目标与范围
+
+- 目标：把用户确认的“Setup 官方选装 + Setup 外本地第三方 DLC”计划落盘，重写相互矛盾的 Phase5A/Phase6 说明，并清理占空间的过时 `.scratch` 构建物。
+- 范围：文档与 `.scratch/phase5a-local-distribution` 清理。
+- 明确不做：产品源码、测试源码、构建脚本、Core/Setup 重建、真实安装/导入、真实 Provider 请求、提交/推送。
+
+## 实际步骤与结果（2026-10-07）
+
+1. **读取入口与规则**：确认工程模式、项目入口、文档索引、计划/交接模板和 Phase5A 当前记录；确认工作树已有大量用户/前轮脏改动，采取保留策略。
+2. **盘点清理范围**：以 `.scratch/phase5a-local-distribution` 为唯一清理根，统计清理前 `53,298` 个文件、`9,876,078,289 B`；只选择已确认未被当前文档/阶段记录引用、且明显属于旧构建/诊断轮次的目录。
+3. **先验证再删除**：一次批量 `Remove-Item` 被安全策略阻止，未发生删除；随后改用显式目标清单，逐项确认解析路径位于 Phase5A 根内、不是符号链接/重解析点后执行清理。
+4. **清理结果**：删除 38 个目录，实删 `9,404` 个文件，释放 `4,905,969,506 B`；清理后复核为 `43,894` 个文件、`4,970,108,783 B`（约 `4.629 GiB`）。
+5. **保护复核**：确认三组最终验收 build、三个交付/发布证据根、Setup 短路径产物、五份阶段记录仍存在；未触碰 `.scratch/phase4b-local-management`、其他阶段、源码和真实用户数据。
+6. **计划/交付文档**：创建 `docs/PHASE5A-CLOSEOUT-IMPLEMENTATION-PLAN-2026-10-07.md` 与 `docs/PHASE5A-CODE-IMPLEMENTATION-HANDOFF-2026-10-07.md`；同步项目入口、Phase5A/Phase6、索引和 PR 报告。
+7. **阶段记录**：在 `PLAN.md`、`STATUS.md`、`HANDOFF.md`、`WORKLOG.md`、`SUMMARY.md` 顶部写入当前权威停点，保留旧记录以便追溯。
+
+## 验证状态
+
+- 文档差异：`git diff --check -- docs .scratch` 无 whitespace/error；Git 仅提示工作树 LF 在未来被 Git 接触时可能转为 CRLF。
+- 报告纪律：`python -m pytest -q tests/test_pr_report_discipline.py` → **57 passed in 3.15s**。
+- 文档结构：13 份本轮相关 Markdown 均存在、无尾随空白；相对链接检查（含 URL 解码）→ **0 个断链**。
+- 清理后即时基线：`43,894` 个文件、`4,970,108,783 B`（约 `4.629 GiB`）；末次只读重算因保留目录/记录后续变化为 `43,901` 个文件、`4,970,128,950 B`（约 `4.629 GiB`），本轮未追加删除。
+- 代码测试：本轮未运行，不能宣称新实现通过。
+- 构建/实机：本轮未执行；旧构建只作历史材料。
+
+## 下一步与准确停点
+
+新对话先读 `docs/PHASE5A-CODE-IMPLEMENTATION-HANDOFF-2026-10-07.md` 和本目录 `HANDOFF.md`，核对 `git status --short`，再按 T01–T07 实施。当前记录到此停止，不在本轮修改代码。
+
+---
+
 ## 当前行动：无人值守剩余验收（2026-10-06 本机时间）
 
 用户已授权休息期间独立测试、修复和自验，所有人工／敏感确认统一留到最终汇报。生成物临时合计上限 **12 GiB**；保留 Core 2 GiB、probe 512 MiB 预留，跨盘合并计量；旧清理拒绝不绕过。无提交、推送、发布、子智能体。
@@ -492,3 +849,330 @@ red91 的入口回归缺少正常 Core 防落入 stub，APPDATA 未隔离，意�
 ## 2026-10-06 授权检查点验证门收齐
 
 4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29) /wall 931.253s；第1遍 361 passed, 1 skipped, 1 warning in 332.06s (0:05:32)，wall 336.500s /CPU median 100.0% /p95 100.0%；第2遍 361 passed, 1 skipped, 1 warning in 260.70s (0:04:20)，wall 264.844s /CPU median 100.0% /p95 100.0%；第3遍 361 passed, 1 skipped, 1 warning in 259.37s (0:04:19)，wall 263.437s /CPU median 100.0% /p95 100.0%。两轮驱动均冻结全部产品/测试Python SHA，源码未变。Ruff/162文件format及26/60/26文件mypy通过；167报告/构建相关通过。183逐项暂存，唯一敏感模式命中为加密PKCS#8格式常量检查，非密钥。纠正报告历史命令中不存在的测试路径，不猜测原始argv。当前仍未创建提交/推送，待最终文档门通过。
+
+## 2026-10-06 续接实施：推送检查点后自动验收
+
+### 已完成
+
+- 已按本轮明确授权，将推送前已有白名单内容提交并推送到 `origin/codex/phase3-worker`：提交 `70ff464f84793f6ea3a342079dcbfb2d991fcf4e`，远端 `ls-remote`、fetch 后远端跟踪引用与本地 HEAD 一致，`HEAD...origin/codex/phase3-worker` 为 `0 0`。该提交不是正式发布，也不包含生成物、原始日志、私钥或个人数据。
+- 对 `scripts/build_feature_probe_native.py` 先补失败断言，再增加 `Py_SetPath` 分号失败关闭：候选路径含 `;` 时 native bootstrap 返回失败，不允许被解释为多个路径。聚焦测试先为 `20 passed, 1 failed`，修复后为 `20 passed in 0.72s`。
+- 使用既有 `Worker04` 冻结产物完成真实非 probe 入口验收：子进程先通过交接 token 接管 Worker lease，发送 `HELLO`，返回 `lease_claimed=true`，再发送 `SHUTDOWN`，退出码 `0`；父端关闭自身 reservation 后版本占用为 `free`、剩余 lease 为 `0`。去掉交接 token 时退出码为 `77` 且没有协议输出。该证据证明冻结入口的租约顺序和失败关闭，不代表 Worker04 已包含本次尚未重建的分号补丁。
+- 受影响专项回归：`267 passed, 2 skipped in 37.29s`。随后全量回归：`4298 passed, 15 skipped, 146 warnings in 712.39s`，exit `0`；该次显式设置 `PYTHONWARNINGS=default`，警告数包含已有 `ResourceWarning`，不把警告伪报为零。
+- 本地质量复核：Ruff 通过、两份修改文件已格式化、`scripts/build_feature_probe_native.py` 受影响 mypy 通过、24 项聚焦测试通过。新文档记录写入后仍需再次执行文档链接、报告纪律、`git diff --check`。
+
+### 当前边界
+
+- 本次推送授权只覆盖提交 `70ff464` 之前已经存在的检查点；新增的分号失败关闭源码/测试及本节记录目前是**本地未推送修改**，不得把远端分支描述为已包含它们。
+- 生成总量当前约 `9.728 GiB`；若按既定 `2.5 GiB` 构建预留直接重建 Core/Worker，理论峰值会超过当前 `12 GiB` 上限。因此本轮没有擅自启动新的大体积生产构建，也没有触碰旧人工验收产物。`worker-04`、`core-04` 仍按其各自构建时间和摘要记录。
+- 双包 Core04 完整四组合矩阵此前仍有 `both` 组合因 `management_confirmation_timeout` 未完成；该失败已保留原始诊断，不宣称通过。新版正式 DLC 重签、Setup/普通 ZIP/便携 ZIP重建、真实安装更新卸载、迁移/干净环境和人工模型体验仍未完成。
+- 未读取仓库外私钥，未执行正式签名解锁、真实数据导入或个人数据操作；没有强制关闭 Core、设置或外部进程。
+
+### 准确续接步骤
+
+1. 先执行本节记录后的文档链接、报告纪律和 `git diff --check`；确认工作树只包含本轮两份源码/测试及同组记录变更。
+2. 在不超过空间合同、且用户明确允许新的构建材料后，重新构建带分号修复的 native/helper/Worker/Core，再跑正式 trust/probe 和四组合矩阵；旧 Worker04 只能作为历史验收证据。
+3. 最后集中等待用户执行私钥可信解锁、真实 Setup/便携/导入/模型/干净环境人工门；未执行门逐项保持未验收。
+
+### 用户可见效果与限制
+
+当前源码的路径封闭性更严格，正常冻结 Worker 不能在没有父端租约交接时运行；既有已推送检查点远端可复核。正式新版分发物和真实安装/迁移体验尚未产生，不能把当前结果当成 Phase 5A 完整发布验收。
+
+## 2026-10-06 夜间续接：冻结 Core 原生菜单验收收尾
+
+### 操作与根因
+
+1. 收取 `pytest-full-02`：`4299` 项通过后唯一失败为 `tests/test_architecture.py::test_window_py_line_budget`，实际 `window.py=4672`、预算 `4671`。这不是运行回归，而是本轮为键盘上下文菜单增加说明 docstring 后多 1 行。
+2. 核对失败前两次验收：v11 的菜单等待超时与 v12 的前台激活拒绝。确认冻结窗口使用 `WS_EX_NOACTIVATE`，因此“先激活再发菜单”方向错误；没有继续追加抢焦点或屏幕坐标猜测。
+3. 修复产品 seam：`PetWindow.contextMenuEvent()` 识别 `QContextMenuEvent.Reason.Keyboard`，以稳定身体锚点调用现有菜单逻辑；修复驱动只发送键盘语义 `WM_CONTEXTMENU(-1)`，不调用 `SetForegroundWindow`。
+4. 重新构建 `core-11b`，携带修复后的 `pet/window.py`；不读取私钥、不修改正式包和正式信任策略。
+
+### 自动与实机证据
+
+- screen v13：真实 Windows 冻结 no-chat Core，通过生产加载确认清除 pending，并由自有 UIA 读取实际菜单、调用自有 `退出`；结果 `CASE_PASSED`，启动 `3763.6489 ms`、RSS `191500288`、线程 `34`、自然退出 `0`。
+- empty v14：同一 core-11b 空安装根真实启动，结果 `CASE_PASSED`，启动 `2830.1063 ms`、RSS `203771904`、线程 `33`、自然退出 `0`；菜单没有识屏入口。
+- 生成根进程核对后，core-10 两个遗留验收进程已自然停止；再次扫描为 `NO_OWNED_ACCEPTANCE_PROCESSES`。
+- 受影响专项、架构门与格式门：`66 passed in 10.64s`；Ruff `All checks passed`；12 个修改文件 `ruff format --check` 通过；`git diff --check` 通过。
+- 最新全量命令：`QT_QPA_PLATFORM=offscreen`，`TEMP/TMP` 指向 `.scratch/phase5a-local-distribution/acceptance-night-20261006`，`python -m pytest -q --basetemp=.../pytest-full-03`；结果 `4300 passed, 15 skipped, 14 warnings in 671.83s (0:11:11)`，exit `0`。
+
+### 失败复盘与边界
+
+- v11/v12 没有被改写为通过：它们分别证明“仅改驱动仍不足”和“不能要求冻结 no-activate 窗口激活”。本次采用产品键盘语义处理与无激活驱动后，v13/v14 才重新构建并通过。
+- 非 offscreen 相关拖拽族此前为 `190 passed / 6 failed / 4 warnings`，失败是显示几何夹紧期望，不属于本次菜单改动；没有用无关修改掩盖。
+- 生成物 `.scratch/.../core-11` 空占有目录仍保留，只有自有构建证据，未扩大清理范围。
+
+### 当前停点
+
+代码和记录保持本地 WIP；没有提交/推送。现阶段可自动验证的生产菜单、空安装与全量质量门已收齐。剩余正式签名解锁、Setup/ZIP/便携真实安装、旧数据导入、干净 Windows、真实模型/截图与用户人工体验留给后续明确授权和人工确认。
+
+## 2026-10-06 质量门补充
+
+- `ruff check pet tests scripts` 通过；`ruff format --check pet tests scripts` 报告 `544 files already formatted`。
+- `scripts/check_docs.py` 通过：`Markdown link check passed: 129 files scanned`。
+- `python -m mypy pet` 失败，准确输出为 `Found 439 errors in 46 files`，涉及项目原有宽范围类型债务；没有修改这些无关文件。
+- 对本轮 `pet/feature_management.py`、`pet/window.py`、`scripts/validate_phase5a_delivery.py` 的定向 mypy 仍显示 `pet/window.py` 既有 19 个位置错误，新增键盘上下文菜单行没有诊断；因此只记录为限制，不宣称 mypy 通过。
+
+
+## 2026-10-06 自动实施：补齐生产冻结验收
+
+### 1. 真实失败复现
+
+- 诊断 Core `core-diag-screen-20261006-b` + screen v23 在生产冻结 probe 阶段失败。
+- 真实 stderr：`Could not load PyInstaller's embedded PKG archive from the executable`；路径显示 helper 位于深层验收 `HOME/AppData/Local/...`。
+- 临时 trace 证明 `self_check_done`、`management_action_done`、`management_emit`、`management_deliver` 均返回 `host_probe_failed`，因此没有将问题误判为 Qt 信号/事务锁死。
+- 临时 trace 已恢复删除，源文件不保留诊断开关。
+
+### 2. 根因修复
+
+- 在 `pet/feature_management.py` 增加 Windows known-folder 解析，使用 `FOLDERID_LocalAppData`；深路径采用短的、按 data-root identity 隔离的 probe 根。
+- 在 `tests/test_feature_management.py` 增加 legacy worker 深路径回归，断言短根、identity 目录、功能 ID 和无副作用。
+- 受影响测试 `20 passed in 2.51s`；受影响代码 Ruff/format/mypy 通过。
+
+### 3. 最终本机冻结验收
+
+- Core `core-05-final-20261006` 构建耗时 `127.475s`，dist `455,783,648B`，EXE SHA256 `64C5686717906E1112D1AAE9BC1AEAD5CEBC509F5F8EB6CCD4D9842336201382`。
+- AI final：`CASE_PASSED`，启动 `3750.3321ms`，RSS `198,176,768B`，37 threads，exit 0，菜单/状态/生产加载 receipt 正确。
+- screen final：`CASE_PASSED`，启动 `4368.526ms`，RSS `183,676,928B`，32 threads，exit 0，菜单/状态/生产加载 receipt 正确。
+- 两个冻结验收根均完成回收检查；无活动 dsh Core/probe 进程。
+
+### 4. 质量门
+
+- `python -m pytest -q`：`4301 passed, 15 skipped, 14 warnings in 745.31s`。
+- `python -m ruff check .`：通过。
+- 受影响 12 个 Python 文件 format-check：通过。
+- `python -m mypy --follow-imports=skip pet/feature_management.py scripts/validate_phase5a_delivery.py`：通过。
+- `python scripts/check_docs.py`：129 Markdown 文件通过。
+- `git diff --check`：通过。
+- 仓库全量 `ruff format --check .` 仍报告 7 个历史 Markdown 未格式化；未改动这些文件。
+
+### 5. 未完成门
+
+本停点不包含真实 Setup/便携/旧数据导入/干净环境/另一台机器/真实模型和截图/Authenticode/SmartScreen/正式发布，也不包含本轮新 Git 提交或推送。
+
+## 2026-10-06 用户人工验收：安装后真实 Core 启动确认
+
+时间：2026-10-06 22:29:19 +08:00（Windows 本机，用户人工确认）
+
+- 受控人工根：$root\manual-user-acceptance-20261006-v2。
+- 用户关闭本地官方包确认窗口后，续接器仅等待安装进程自然退出，再启动正常生产 Core；没有强制结束进程、没有提交伪造 receipt，也没有放宽隔离策略。
+- 用户可见结果：设置中的 official.ai-chat 与 official.screen-understanding 均正常；两个入口恢复；原设置保留；未出现错误或恢复提示。
+- 账本复核：AI ctive=1.0.1、nabled=true、
+evision=4、pending_transaction=null；屏幕理解 ctive=1.0.0、nabled=true、
+evision=4、pending_transaction=null。
+- 事务复核：两笔安装事务均为 phase=completed、ccepted=true、self_check_passed=true；生产 Core 当前由同一受控数据根运行（PID 31308，复核时仍在运行）。
+- 本条只证明本机用户人工完成了“本地 ZIP 安装 → 确认 → 沙箱自检 → 状态切换 → 正常 Core 启动加载确认 → 入口/设置恢复”门；不替代真实模型请求、真实截图识别、Setup/便携/更新/卸载、干净环境或正式发布者认证门。
+
+## 2026-10-06 用户人工验收补充：冻结 Core 凭据边界
+
+时间：2026-10-06 22:56:43 +08:00（Windows 本机）
+
+- 用户反馈：关闭刚才运行的冻结 Core 后，源码入口可以执行 AI 操作；这不能直接证明冻结 Core 失败，必须以冻结 Core 自己的日志和账本为准。
+- 冻结 Core 的受控人工根为 manual-user-acceptance-20261006-v2，启动日志记录的实际异常为 pet.credentials.CredentialError: credential_missing。日志没有暴露任何凭据内容。
+- 同一根目录的安装/加载证据仍完整：AI ctive=1.0.1、屏幕理解 ctive=1.0.0，均 nabled=true、pending_transaction=null；两笔事务均 phase=completed、self_check_passed=true。
+- 结论修正：冻结 Core 的“安装、自检、状态切换、正常启动加载确认”通过；“使用真实 Provider 凭据完成 AI 请求”尚未通过。源码使用真实数据根时成功，不能替代冻结 Core 的独立验收。
+- 不把真实用户凭据复制到验收根，不修改冻结 Core 的 credential resolver，不把 credential_missing 降级为成功。后续如继续人工门，只能由用户在冻结 Core 的隔离设置中通过本地可信界面自行录入测试凭据，或使用明确的本地模拟 Provider；凭据不得通过聊天、命令行或日志传递。
+
+
+## 2026-10-06 屏幕理解提示误导修复
+
+1. 读取受控 v2 配置，确认 `official.screen-understanding.settings.migration_state=confirmed`，绑定 profile `shared` 存在，但 `credential_ref` 为空；结合 `VisionConfigService.resolve()` 的 `credential_missing` 分支确认这是凭据缺失而非迁移未完成。
+2. 先增加两条失败回归：manual host 对 `credential_missing` 给出补 Key 且无需重复迁移；settings page 对空 `credential_ref` 给出相同语义。
+3. 实现原因化文案和 profile/绑定/凭据分层状态；保留未知原因的旧兜底，不扩大执行权限，不改变凭据存储。
+4. 运行 screen 相关 4 个测试文件，结果 `53 passed in 16.48s`；Ruff check、format-check 和 `git diff --check`（受影响源码/测试范围）通过。
+5. 重新构建 `worker-03-screen-ux-20261006` 与 `core-06-screen-ux-20261006`；构建清单明确为 human acceptance only，未作为 release。
+6. 创建 v4 隔离人工根和脱敏 fixture；PowerShell script parse、fixture JSON parse 和合同断言通过。
+7. 全量回归最新结果为 `4298 passed, 14 skipped, 14 warnings, 6 failed`，失败可单独复现于 `test_drag_move_coalescing.py`，已记录而未修改无关代码。
+
+准确停点：没有替用户录入真实 screen Key，没有发起真实 screen request，没有提交/推送。
+
+
+## 2026-10-06 最终复核：屏幕 UX 验收包证据
+
+- 使用 Python `zipfile` 直接读取 4 个 screen 包 ZIP，均确认包含修正后的 `host/manual.py` 与 `host/settings.py`，并确认包内含“补填视觉 API Key”“无需重复迁移”文案；未依赖未安装的 `7z` 命令。
+- `screen-config-fixture.json` 的原始字节无 UTF-8 BOM，JSON 合同断言通过；不会因 PowerShell 编码导致产品配置读取失败。
+- v4 安装脚本 PowerShell AST 解析通过，fixture 只在配置不存在时复制；不会覆盖用户后来在隔离 UI 中保存的凭据引用。
+- 受影响源码/测试范围的 `git diff --check` 通过。整个 WIP 工作树仍有历史任务记录中的尾随空白告警，未进行大范围格式化，避免改写既有证据。
+- 尚未代替用户输入真实 screen Key 或发起真实 screen 请求；这仍是唯一需要人工执行的本次修复验收门。
+
+## 2026-10-06 — AI 对话凭据显式补齐修复与人工验收包重建
+
+- 用户反馈：屏幕理解继续提示配置/迁移，尽管 AI 对话中已有 DeepSeek API Key；同时人工启动再次遇到 self_check_isolation_not_enforced。
+- 根因：迁移源只读取旧的顶层 chat，没有读取 plugins.official.ai-chat.chat；已有屏幕配置但 credential_ref 为空时没有“显式补齐”入口。
+- 修复：支持从 AI 对话配置读取脱敏的 provider 元数据并在用户明确确认后写入屏幕理解自己的安全存储；保留用途隔离、不可覆盖已有绑定和安全门；新增
+epair_missing_credentials()；更新设置文案与缺失凭据按钮。
+- 自动验证：	ests/test_screen_ai_migration.py 等相关测试共 55 passed in 14.48s；Ruff 通过。
+- 重新构建：core-12-screen-ai-credential-20261006，使用独立 Worker worker-03-screen-ux-20261006 与固定 probe manifest 摘要；构建耗时 448.852s，生成 chat/no-chat Core、屏幕理解包和 manual-artifacts.json。
+- 已启动：manual-user-acceptance-20261006-v5-ai-screen-credential/launch-install-screen-chat.ps1，可见窗口标题为“安装本地官方扩展：分别预检和确认”。
+- 注意：未记录或输出任何真实 API Key；本次人工验收根目录使用隔离的 APPDATA、LOCALAPPDATA、HOME 和 TEMP。
+
+
+## 2026-10-06 — `worker_probe_failed` 根因修复与 v6 启动确认
+
+- 用户人工验收反馈上一版安装预检结果为 `worker_probe_failed`。状态账本保持未安装，证明没有误提交候选版本。
+- 根因确认：`worker-03-screen-ux-20261006` 的旧证据范围标记为非 synthetic，但产物没有 `_internal/_dsh_probe_native.pyd`；Worker 在 `screen_entry` 的隔离检查处返回 77，未发送 `HELLO`，因此适配器返回 `worker_probe_failed`。这不是密钥、迁移或状态损坏。
+- 修复：`scripts/build_screen_delivery.py::verify_worker_inputs` 对真实 Worker 强制检查 `headless-input.json`、原生隔离叶及其摘要与 artifact 清单一致；新增回归测试，防止普通 PyInstaller Worker 再次进入人工验收包。
+- 自动验证：`tests/test_screen_delivery_build.py tests/test_screen_worker_build.py tests/test_feature_probe_build.py tests/test_feature_probe_adapter.py tests/test_feature_probe_windows.py` 为 `80 passed, 1 skipped`；Python Ruff 模块检查通过。
+- 使用 `worker-06`（`synthetic_boundary=false`，含 `headless-input.json` 和 `_internal/_dsh_probe_native.pyd`）重建 `core-13-screen-ai-credential-native-20261006`；chat/no-chat Core 均构建成功。
+- 新屏幕包 SHA-256：`98032a5e20b0b5649adc0945e6ccc3059a444dfae1ce1dddca3ceeb4a3ccac49`；包内确认存在 `_dsh_probe_native.pyd`。
+- 新建隔离人工根：`.scratch/phase5a-local-distribution/manual-user-acceptance-20261006-v6-ai-screen-credential-native`。
+- Codex 先正常关闭安装管理窗口，再启动 v6 chat Core；启动后 `state.json` 从 `pending_transaction=tx-...` 变为 `pending_transaction=null`、`revision=4`，证明真实 Core 启动加载确认成功。
+- 未读取或记录真实 API Key；未强制终止进程；未提交/推送。
+
+
+## 2026-10-06 — v6 Core 用户可见启动反馈
+
+- 用户反馈：启动初期先看到灵动岛和控制台，角色稍后出现；随后角色正常出现，用户判断“有点慢”。
+- 解释与边界：当前人工验收构建为 `--console`，控制台用于观察探针/启动日志，不代表正式发布 UI；角色延迟涉及 Core 初始化、资源加载、pending 事务真实确认、租约接管和 WebM 窗口初始化。
+- 状态：本次可见启动未判定为失败；“首次启动角色出现延迟”登记为待量化性能项，未宣称正式分发性能达标。
+
+
+## 2026-10-06 产品行为修正：取消 screen 首装主动迁移
+
+用户确认屏幕理解应直接显示默认初始配置，后续手动编辑；若已有有效 screen 自有配置则正常继承。此前为了修复“AI Key 已存在但 screen 仍提示配置”而加入的迁移/补齐 UI，反而造成迁移失败和人工验收阻塞，因此已移除 UI 入口和相关提示。显式 `VisionMigration` 模块只保留为内部兼容接口，不由正常启动/首装调用。
+
+源码改动：`models.py` 增加 credential-free `VisionSettings.default()`；`host/settings.py` 使用默认配置并移除迁移 UI；`host/manual.py` 改为独立配置提示；对应设置、人工 host 和显式兼容测试已通过 `51 passed`。
+
+当前停点：下一步重建新的人工验收产物，不读取用户真实凭据，不提交/推送。用户最终只需确认设置页默认地址/模型/路径显示正确，再按自己的需要填写 API Key 并测试识屏。
+## 2026-10-06 产品口径修正与实施记录
+
+用户补充确认：Phase5A 的选装应只发生在 Setup 安装向导；离开 Setup 后，用户自行下载 ZIP 或准备目录并放入相关文件即可通过本地选择激活，不应要求当前公钥/私钥打包和验证。根据该决策重新评估现有实现，结论是原“签名分发”主路径过度设计，保留结构/完整性/LPAC 约束但移除 Phase5A 的发布者认证前置条件。
+
+已实施：
+
+- `pet/plugins/package_trust.py` 增加 `allow_local_packages` 与统一 `accepts_descriptor()` seam；本地用户显式选择得到 `local_user`，不要求或验证签名。
+- 事务、probe、版本租约、安装状态和构建策略统一改用该 seam，避免某个边界仍硬编码 `trusted_official`。
+- `scripts/build_screen_delivery.py`、`scripts/build_feature_management_manual.py`、`scripts/build_feature_management_delivery.py` 的主路径停止生成密钥和 `manifest.sig`；历史签名参数只留给兼容测试。
+- Setup、扩展管理 UI、Phase5A 设计/README/项目入口/验收脚本同步改文案，明确 Setup 选装与普通 ZIP/目录导入的差异。
+- 新增 `tests/test_phase5a_local_activation.py`，已验证无签名本地包可通过、清单/文件篡改仍拒绝、signed-only verifier 仍拒绝。
+
+当前验证：新专项 `3 passed`；先前受影响 focused `53 passed`。下一步为新 GUI 构建与真实 Windows 验收，不读取用户真实密钥，不提交/推送。
+
+
+## 2026-10-06 收尾工作日志：probe 根因、真实验收与清理
+
+### 1. 本地激活重写
+
+将 Phase5A 从“默认签名分发”收口为“Setup 选装 + 非 Setup 用户显式选择普通 ZIP/目录”。`FeaturePackageVerifier` 在显式 `allow_local_packages` 下返回 `local_user`，所有安装/探针/租约/启动边界统一调用 `accepts_descriptor()`；固定 feature/factory、compatibility、路径/大小/文件数量、manifest SHA-256、事务和 LPAC/Worker 仍然是硬门。主构建路径不再生成私钥、公钥锚或 `manifest.sig`。
+
+### 2. headless probe 启动根因
+
+用 fresh AI 包和 probe09 复现得到 `host_probe_failed`。继续下钻发现 PyInstaller 的 `pyi_rth_multiprocessing.py` 在 headless 入口前导入 `socket` 并调用 `WSAStartup`；LPAC 预期拒绝网络初始化，返回 WinSock error 10107，导致未进入业务 probe。`scripts/build_feature_probe.py` 现在排除未使用的 `multiprocessing` runtime hook；probe10 的 `pyi_rth_multiprocessing.py` 不再出现，source sandbox 的 AI host-only outcome 为 `host_valid=true`、`isolation_enforced=true`、`trust_status=local_user`。
+
+### 3. 最终构建与真实 UI 验收
+
+manual20 使用 probe10、worker08 和 native05 构建完成，构建耗时 295.814 s；AI ZIP 118,378 B，screen ZIP 24,455,393 B，均无 `manifest.sig`；probe manifest SHA-256 为 `915f87620c3a84219bf7310e0ff805ff3c25d0b05e2f0ba2d4b95c5eba9a3232`。
+v13 使用真实冻结 Core 运行 `empty` / `ai` / `screen` / `both` 四个选择矩阵：均 `CASE_PASSED`、exit code 0、pending transaction 为 null；启动耗时分别约 3137.282 / 3444.613 / 4069.834 / 4686.232 ms，RSS 分别 185,180,160 / 205,598,720 / 211,054,592 / 193,515,520 B；菜单只出现已选功能。AI-only v12 也通过，修复了旧管理确认超时。
+
+### 4. 质量门
+
+已完成 focused 144 passed in 47.82 s；全量 `python -m pytest -q` 结果 `4313 passed, 15 skipped, 14 warnings in 717.00s`；Ruff check、Ruff format-check、`git diff --check` 均通过。14 warnings 为 Qt/既有测试告警，没有失败。
+
+### 5. `.scratch` 清理
+
+在清理前生成 `cleanup-manifest-20261006.json`，逐目标解析并验证绝对路径位于 `.scratch/phase5a-local-distribution` 内；第一次递归删除遇到历史 pytest junction，随后改用不跟随 reparse point 的逐文件/目录删除器完成清理。247 个目标全部删除（其中 12 个在重试前已消失），共计划/删除 221,340 文件、19,215,410,032 B；清理后阶段目录为 9,623,836,176 B / 53,299 文件。保留 manual20/probe10/worker08/native05、v8-v13 和正式 Markdown 记录。未触碰项目外路径。
+
+### 6. 收尾停点
+
+本机找不到 `ISCC.exe`，因此未宣称真实 Setup 向导通过；用户只需在有 Inno Setup 的环境确认 `ai`/`screen` 任务、旁置包导入和实际安装体验。真实 Provider/视觉请求也不能由 Codex 替用户输入凭据。当前未提交、未推送；未来正式签名另开发布任务，不再阻塞本地激活收尾。
+
+## 2026-10-07 操作记录：编译 Phase5A Setup
+
+1. 查阅 `docs/ONEDIR_PACKAGING.md`、`packaging/core_webm.iss` 和 `.scratch/phase5a-local-distribution/setup-compile-279.py`，确认当前 Core Setup 编译入口和历史成功参数。
+2. 确认本机已有 `E:\tools\InnoSetup6\ISCC.exe`，版本 `6.7.3`，未执行安装操作。
+3. 直接使用 manual20 Core 长路径编译失败；测得最长路径 `343` 字符、超过 `260` 的路径 `649` 条，判断为 Inno legacy path handling，而非 `.iss` 语法错误。
+4. 将 Core 原样复制到短路径 `.scratch/p5a-core-20261007`（最长路径 `242` 字符），重新编译成功：`116.031 s`、退出码 `0`。
+5. 生成 Setup 大小 `227,324,912 B`，SHA-256 `3780ec4355e4ab0b0bce6285c8fe4aa07289877af43e5bab333f3965a5c9395b`；旁置 AI/screen ZIP，并保存 `setup-acceptance-manifest.json` 与 `iscc-compile-v3.log`。
+6. 未运行实际安装向导；`Get-AuthenticodeSignature` 为 `NotSigned`，不把它误写成正式发布门通过。前一日“找不到 ISCC.exe”的记录保留为历史事实，但当前状态已被本条更新。
+
+
+## 当前修复轮 R01–R07（2026-10-07）
+
+用户已明确授权实施 Core 统一 API、识屏恢复及 Core-only 卸载修复。**R01 进行中，R02–R07 待实施；此前“无待修代码”仅限原 T 轮，不再是当前状态。** 人工验收已暴露缺陷，Phase5A 不可正式关闭。原 T 结果/产物哈希保留作历史，不能用于修复后的验证。
+
+已确认 red 诊断：AI 外部设置保存后运行时旧快照；自动识屏关闭时 unchanged apply_config 取消手动请求；当前生产 Worker ZIP 正常启动缺 pet.official_features（握手前 exit 1）；Core 卸载要求先清两包且被 staging 阻止。相关基线 81 passed 但未覆盖缺陷。
+
+本轮边界：不读真实 Key、不截真实屏幕、不收费调用/系统安装卸载、不更改代理、不清未知 staging、不提交推送、不开子智能体。保留 69 修改+9新增的既有脏树。精确停点：计划已落盘，下一步写失败回归并运行 red，尚无产品修复。
+
+详细合同见原收尾计划末尾 R 章节。目标候选 Core4.2.2/AI1.0.2/Screen1.0.1。真实 Provider/屏幕/新 Setup 用户门仍未执行。
+
+
+## R 修复轮实施检查点（2026-10-07）
+
+- R01：四项根因回归已先 red（R01-red3.log：4 failed），产品修复后新中央接口/四类窗口合并专项 17 passed / 7.68 s。迁移/设置/余额另先 red：5 failed / 3.64 s。原 T 轮记录不作当前通过证据。
+- R02：已实现 Core api_ports/api_config、独立 OS 凭据引用、通用 owner/purpose 授权、CAS+journal、显式 ApiMigration；新增 Core 设置/异步退出门及最小文字 probe。尚需边界/故障测试及全量验证。
+- R03：已接入四类窗口请求前解析与校验失败保留输入、中央余额用途解析、Core 常驻入口；DLC 原入口只读/跳转仍在收口。
+- R04：Worker 闭合源码已补 neutral official_features；自动配置变更已按请求取消，不旋转共享 generation；生产冻结 HELLO/READY 尚未重建验证。
+- R05：系统维护入口已去除逐包事务并保留 CoreRemovalPermit 身份及 scoped 集成清理；尚需新增失败矩阵与安装器实机用户门。
+- 最近相关集成 48 passed / 1 failed / 32.77 s：剩余是旧完整 Core 的设置构造接了新 API 导致兼容 probe 失败，正在按 build-owned legacy 能力修复；不能称当前全绿。
+- R06/R07：未执行本轮全量/重建/实机/性能/用户验收。候选版本还未 bump，旧交付物不得用于本轮验收。
+- 未提交、未推送、未使用子智能体、未读真实凭据/截图/收费调用/实际系统卸载，未清理生成物。
+
+精确下一步：完成 DLC API 编辑跳转及 Screen 用途订阅、文件解读授权；补中央设置/迁移/Worker/卸载矩阵回归，专项通过后执行全量、负载三遍和产物硬门。
+
+
+## R 修复轮检查点：专项扩展与构建空间待确认（2026-10-07）
+
+- 已通过相关集成：R02-R05-related-5.log，74 passed / 47.50 s。此前 legacy 完整 Core 的 API 兼容错误已修复；不是沿用官方 factory 特判，新冻结 Core 走通用授权端口。
+- 新边界先 red：R02-R04-boundary-red2.log，8 failed / 19 passed / 13.14 s（参数类型、迁移编辑后来源不一致、缺少生产正常启动验收入口）。对应 green2：64 passed / 27.52 s。源码 Worker 使用真实 QProcess 与 OS 租约完成 HELLO/READY/自然退出，未发屏幕或网络请求；不能替代冻结 Worker 验收。
+- 余额撤权在飞/排队迟到结果先 red：R03-balance-red.log，2 failed / 5.61 s；正在实施 GUI 与后台双重授权检查。经典设置读取旧 Key 先 red：1 failed / 5.94 s；已改只读中央绑定及跳转，待合并验证。
+- R06 全量第 1 次仍在运行，已有失败，且运行期间源码仍在收口：只作诊断，不作最终全量 green。Ruff、最终全量、负载三遍、性能/实机报告尚未完成。
+- 构建预算检查：阶段生成物 6,191,575,960 B / 50,483 文件，6 GiB 上限仅余约 239 MiB。已向用户请求删除 acceptance-night-20261006（2,090,299,981 B）与 delivery-candidate-200（767,659,787 B）两处旧生成物；尚未得到答复，未执行任何删除。源码/阶段记录/implementation-20261007 旧 Setup/delivery-set-293 保留。不得绕过预算重建。
+- R04 冻结正常启动、R06 全重建和 R07 新 Setup 用户验收均未完成；旧 T 轮产物/通过记录仅为历史。Phase5A 未关闭，未提交推送，无子智能体、真实 Key/截图/付费调用/系统卸载/代理修改。
+
+精确下一步：合并新增消费/撤权/异常测试并修复全量实际失败，完成格式/静态门与性能报告；重建需用户明确确认上述两个精确目录的删除。
+
+## R06 复跑排查与最终源码再冻结
+
+- full-final-2：631.93 s，0xC0000005，Worker 验证共享事件循环；另五项旧合同的失败已独立复现并更新，57 passed。
+- full-final-3：640.48 s，0xC0000005，设置 app.exec；源码 621 个文件不变、约 80% 前无断言红灯。原始日志与 source receipt 全保留。
+- Qt 最小诊断族 65 passed / 9.06 s，没有复现原生崩溃；原生回调根因仍不确定，不能写成已证实产品故障或已修根因。独立设置测试改为实际设置进程形状，Worker gate 同样使用独立验证进程，不模拟事件循环。
+- API 表面 token：R03-api-theme-test-red.log 4 failed / 1.03 s；设置 scroll= settingsScroll、status=settingHint 后 Qt/API/独立设置/Worker 71 passed / 12.27 s。
+- R06-ruff-freeze4.log：Ruff all passed、117 files already formatted、diff check 无输出。full4 与 core-final/c09/setup-final 重建开始；新结果待退出，历史 Core/Setup v1 不删除。
+
+## R06 默认全量第三次原生崩溃与最终产物审计
+
+- Windows 主机原始时间：full4 2026-10-08T01:46:21.797805+08:00 至 01:57:12.956379+08:00；651.15 s，exit 3221225477。主线程位于 WorkerSupervisor.wait_for_stopped_for_tests 的 QEventLoop 清理循环，无断言失败到约 79%；621 份 Python 源码没有变化。原生日志/源快照保留，不声明根因已定位。
+- Core/Setup 最终重建成功；只读审计首次因自有脚本保留旧 core-current 路径失败，日志保留。修正审计脚本路径后 exit 0，root207/stage212/resources1000/bundle2103 全部匹配；没有修改产品源码。
+- 新 Core 四 profile 实机冻结验证 exit 0；DLC 新版 startup receipt 均清除，菜单对应能力正确，全部自然退出 0。
+- 启动全量分组验证：完整收集 4431 测试/262 文件，5 组，逐项 nodeid 哈希并集核对，无删选；默认单进程未通过门保留为工程限制。
+<!-- R08_OVERWRITE_SETUP_20261008 -->
+## 2026-10-08 R08 工作记录：Setup 覆盖安装残留
+
+1. 读取用户本机 Core maintenance 日志末尾，确认 `code=2/reason=bundle_inventory`；只记录脱敏状态，不读取任何 Key。
+2. 比较当前干净候选与现有安装的 frozen probe 文件数：`64` 对 `85`；确认覆盖复制未删除旧文件是直接根因。
+3. 在 `tests/test_core_setup_template.py` 先写回归并运行：`1 failed`，保存 `R08-overwrite-red.log`。
+4. 在 `packaging/core_webm.iss` 增加 `[InstallDelete] Type: filesandordirs; Name: "{app}\_internal\feature-probe"`。
+5. 回归转绿：Setup 模板 `5 passed`；Ruff、format check、diff check 通过。
+6. 用 Inno Setup 6.7.3 在 `.scratch` 隔离目录编译/运行最小安装器，结果 `compile_exit=0, run_exit=0, stale_exists=False, fresh_exists=True`。
+7. 重新编译产品 Setup：`246,922,162 B`，SHA-256 `8f53f5916285299dfddb7e41b5747aec5e049502722d422110b9ada8fc6fcc9b`；官方 ZIP 预检通过。
+8. 设置 `QT_QPA_PLATFORM=offscreen` 后全量 pytest：`4418 passed, 15 skipped, 14 warnings`；未运行用户实际 Setup/卸载。
+
+本记录对应的证据均在 `E:\AI\DSH\dsh-pet-indesktop\.scratch\phase5a-local-distribution\repair-20261008-setup-overwrite`；无提交、无推送、无真实数据清理。
+
+<!-- R09_POLICY_UNINSTALL_20261009 -->
+## 2026-10-09 R09 工作日志
+
+1. 根据用户“已经退出桌宠”的反馈复核卸载失败边界；在隔离环境确认 Core/Worker/卸载器占用不是已证实根因，发现外部 profile bridge 引用可能被旧清理路径误锁定，先保留 red 证据。
+2. 修正 `pet/agent_link.py` 的 Core-owned 引用判定与 `pet/core_maintenance.py` 的脱敏诊断日志；R09 卸载相关专项 `79 passed`。
+3. 用真实冻结 Core 做 UIAutomation 验收时发现新的交付回归：本地 DLC 确认按钮禁用；从 PYZ 检查确认 `pet.feature_build_policy` 未生成 `ALLOW_LOCAL_PACKAGE_ACTIVATION`。
+4. 在 `tests/test_build_feature_release.py` 增加失败断言，先得到 `KeyError` red；在 `scripts/build_feature_release.py` 生成策略中补入 `ALLOW_LOCAL_PACKAGE_ACTIVATION = True`，green `2 passed`。
+5. 重建 Core/Setup：Core `17,304,043 B`，SHA-256 `34F1FE81E92E2F177D568F52E6919B75CCBD2E496F4FED7A1CB525E9D5207C3F`；Setup `246,781,460 B`，SHA-256 `7FB5C31657B962F9861745E046323E29DAF22077E314CF1E256352F269C5F98F`。
+6. 隔离 computer-use/UIAutomation：`empty/ai/screen/both` 均通过，startup 约 `8916/3139/4414/4723ms`，四案自然退出 0；没有真实 API、屏幕或用户安装卸载。
+7. 受影响专项 `107 passed in 63.54s`；全量 `4420 passed, 15 skipped, 15 warnings in 831.71s`；Ruff、format、diff check 通过。
+8. 写入本次 HANDOFF/STATUS/PLAN/SUMMARY/WORKLOG/PR 报告；当前停在用户人工验收，未提交/未推送。
+
+
+<!-- U_PORTABLE_SETUP_20261009_WORKLOG -->
+## 2026-10-09 U01–U06 范围切换：Setup 项目目录安装与全目录卸载
+
+用户明确要求把 Setup 改为项目目录自包含模式：每次显示路径页，新安装只进安全空目录，合法本产品目录可更新；卸载不再纠缠 DLC owner/factory、ledger 或 staging，而是清理项目目录程序与 `data\plugins`，个人 `data` 默认保留并可二次确认删除。已在 PLAN/STATUS/HANDOFF/SUMMARY 顶部登记新权威合同；R/T 记录保留为历史，不删除。
+
+操作边界：不提交、不推送、不覆盖稳定版、不读取真实 Key/屏幕；只在工作区独立临时目录做构建和破坏性验证。下一步先补 U01 red 回归，再修改 Inno native gate、RuntimeLayout、构建 wrapper 和卸载流程。
+
+## S04 补充（2026-10-10，实施前登记）
+
+- 真实冻结 Core 已从项目内 data/feature-runtime 启动生产 Worker 并完成租约/READY；但退出码 62097，不算通过。日志显示启动前包校验耗时被心跳计时计入，尚未 READY 的新进程被误报 heartbeat timeout。补真实进程 red，心跳只在 READY 后启用，握手仍由独立限时监管；继续验证自然退出。
+- 首次全量 4 failed / 4486 passed / 15 skipped / 15 warnings（800.37s）；4 项是旧 4.2.3/Screen1.0.2 版本断言，更新到本次合同后重跑，高负载未启动，不记通过。
+- 用户追加：新候选核对 Setup 内 EXE 与快捷方式的鲸鱼娘图标；不清全局图标缓存，不修改真实安装目录。已抽取新 Core/Setup 内10帧与 assets/icon.ico 全相同，仍需最终交付核验。
+- 用户追加：API 测试按钮旁显示测试中、成功/失败和实际 HTTP 状态码；网络/TLS/超时没有 HTTP 状态时用明确错误类型，原说明放旁边备注。只改反馈 UI/探针结果携带，不改保存、密钥、API 路由或 Setup 语义；先补 red，明暗720/1100实机检查后重建 Core/Setup。
+
+实际效果：识屏启动不误耗心跳预算；测试连接可一眼看到结果码，不把测试当保存。真实服务最终仍待用户验收。

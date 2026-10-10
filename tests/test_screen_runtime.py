@@ -53,7 +53,7 @@ def test_automatic_resolution_is_independent_of_chat(runtime):
         QCoreApplication.sendPostedEvents(watcher._bridge, QEvent.Type.DeferredDelete)
 
 
-def test_revision_changes_invalidate_inflight_generation(runtime):
+def test_auto_profile_change_preserves_shared_worker_generation(runtime):
     cfg, service, app = runtime
     service.save_profile(VisionProfile("auto", "https://visual.example", "v1"), modes=["automatic"], secret="TEST-KEY", expected_revision=service.revision())
     watcher = ProactiveScreenWatcher(None, cfg)
@@ -61,7 +61,7 @@ def test_revision_changes_invalidate_inflight_generation(runtime):
         old = watcher._generation
         service.save_profile(VisionProfile("auto", "https://visual.example", "v2"), modes=["automatic"], expected_revision=service.revision())
         watcher.apply_config()
-        assert watcher._generation > old
+        assert watcher._generation == old
     finally:
         watcher.dispose()
         QCoreApplication.sendPostedEvents(watcher._bridge, QEvent.Type.DeferredDelete)

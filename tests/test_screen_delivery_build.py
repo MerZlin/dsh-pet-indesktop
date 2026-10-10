@@ -10,11 +10,39 @@ from scripts.build_screen_delivery import (
     core_module_inventory,
     host_dependencies,
     prepare_core,
+    read_pe_subsystem,
+    require_gui_pe_subsystem,
     sanitized_build_environment,
     verify_worker_inputs,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _minimal_pe(subsystem: int) -> bytes:
+    data = bytearray(0x200)
+    data[:2] = b"MZ"
+    data[0x3C:0x40] = (0x80).to_bytes(4, "little")
+    data[0x80:0x84] = b"PE\x00\x00"
+    coff_start = 0x84
+    data[coff_start + 16 : coff_start + 18] = (0xE0).to_bytes(2, "little")
+    optional_start = coff_start + 20
+    data[optional_start : optional_start + 2] = (0x20B).to_bytes(2, "little")
+    data[optional_start + 68 : optional_start + 70] = subsystem.to_bytes(2, "little")
+    return bytes(data)
+
+
+def test_core_pe_subsystem_gate_accepts_gui_and_rejects_console(tmp_path):
+    gui = tmp_path / "gui.exe"
+    console = tmp_path / "console.exe"
+    gui.write_bytes(_minimal_pe(2))
+    console.write_bytes(_minimal_pe(3))
+
+    assert read_pe_subsystem(gui) == 2
+    require_gui_pe_subsystem(gui)
+    assert read_pe_subsystem(console) == 3
+    with pytest.raises(ValueError, match="subsystem must be GUI"):
+        require_gui_pe_subsystem(console)
 
 
 def test_core_snapshot_has_no_screen_and_preserves_repository(tmp_path):
@@ -28,7 +56,9 @@ def test_core_snapshot_has_no_screen_and_preserves_repository(tmp_path):
     assert not (output / "source/pet/screen_understanding").exists()
     assert not (output / "source/pet/workers/proactive_screen_worker.py").exists()
     assert (output / "source/pet/credentials.py").exists()
-    assert "BUILTIN_SCREEN = False" in (output / "source/pet/feature_distribution.py").read_text()
+    distribution = (output / "source/pet/feature_distribution.py").read_text()
+    assert "BUILTIN_AI = False" in distribution
+    assert "BUILTIN_SCREEN = False" in distribution
     assert (ROOT / "pet/feature_distribution.py").read_bytes() == before
     assert "VALIDATION_ONLY = True" in (output / "source/validation_config.py").read_text()
     with pytest.raises(FileExistsError):
@@ -101,12 +131,79 @@ def test_package_signs_exact_inventory_with_no_private_key_or_python_worker(tmp_
     )
     descriptor = verifier.verify(package)
     assert descriptor.id == "official.screen-understanding"
+    assert descriptor.version == "1.0.3"
+    import json
+
+    assert json.loads((package / "manifest.json").read_bytes())["core_requires"] == ">=4.2.4,<6.0.0"
     assert not any("private" in p.name for p in package.rglob("*"))
 
 
 def test_worker_evidence_required_before_reusing_artifact(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
         verify_worker_inputs(ROOT, tmp_path)
+
+
+def test_real_worker_reuse_requires_native_probe_evidence(tmp_path):
+    import hashlib
+    import json
+
+    from scripts.build_screen_worker import prepare_build
+
+    output = tmp_path / "real-worker"
+    prepare_build(ROOT, output, synthetic=False)
+    bundle = output / "dist/proactive-screen-worker"
+    bundle.mkdir(parents=True)
+    executable = b"frozen-worker"
+    native = b"native-isolation-leaf"
+    (bundle / "proactive-screen-worker.exe").write_bytes(executable)
+    (bundle / "_internal").mkdir()
+    (bundle / "_internal/_dsh_probe_native.pyd").write_bytes(native)
+    files = {
+        "proactive-screen-worker.exe": {"size": len(executable), "sha256": hashlib.sha256(executable).hexdigest()},
+        "_internal/_dsh_probe_native.pyd": {"size": len(native), "sha256": hashlib.sha256(native).hexdigest()},
+    }
+    (output / "evidence/artifact.json").write_text(json.dumps({"files": files}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="headless probe evidence"):
+        verify_worker_inputs(ROOT, output, synthetic=False)
+
+    (output / "evidence/headless-input.json").write_text(
+        json.dumps(
+            {
+                "bootloader_sha256": "a" * 64,
+                "native_leaf_sha256": hashlib.sha256(native).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert verify_worker_inputs(ROOT, output, synthetic=False) == bundle
+
+
+def test_production_worker_evidence_can_be_reused_after_source_verification(tmp_path):
+    import hashlib
+    import json
+
+    from scripts.build_feature_release import prepare_worker
+
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    output = owned / "worker"
+    prepare_worker(ROOT, output, owned_root=owned)
+    bundle = output / "dist/proactive-screen-worker"
+    bundle.mkdir(parents=True)
+    executable = b"production-worker-fixture"
+    native = b"production-native-isolation-leaf"
+    (bundle / "proactive-screen-worker.exe").write_bytes(executable)
+    (bundle / "_internal").mkdir()
+    (bundle / "_internal/_dsh_probe_native.pyd").write_bytes(native)
+    files = {
+        "proactive-screen-worker.exe": {"size": len(executable), "sha256": hashlib.sha256(executable).hexdigest()},
+        "_internal/_dsh_probe_native.pyd": {"size": len(native), "sha256": hashlib.sha256(native).hexdigest()},
+    }
+    (output / "evidence/artifact.json").write_text(json.dumps({"files": files}), encoding="utf-8")
+    (output / "evidence/headless-input.json").write_text(json.dumps({"native_leaf_sha256": hashlib.sha256(native).hexdigest()}), encoding="utf-8")
+
+    assert verify_worker_inputs(ROOT, output, synthetic=False) == bundle
 
 
 def test_core_inventory_checks_native_extensions_outside_pyz(tmp_path):
@@ -329,3 +426,18 @@ def test_fresh_synthetic_worker_lease_first_entry_matches_closed_inputs(tmp_path
         json.dumps({"files": {"proactive-screen-worker.exe": {"size": len(data), "sha256": __import__("hashlib").sha256(data).hexdigest()}}}), encoding="utf-8"
     )
     assert verify_worker_inputs(ROOT, output, synthetic=True) == bundle
+
+
+def test_manual_core_build_embeds_existing_whale_icon(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import build_screen_delivery as build
+
+    out = tmp_path / "build"
+    monkeypatch.setattr(build, "DATA_ROOTS", ())
+    monkeypatch.setattr(build.subprocess, "run", lambda *args, **kw: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(build, "verify_core_bundle", lambda *args, **kw: out / "generated.exe")
+    build.build_core(ROOT, out, chat=False)
+    icon = out / "source/assets/icon.ico"
+    assert icon.read_bytes() == (ROOT / "assets/icon.ico").read_bytes()
+    assert f"icon={str(icon)!r}" in (out / "validation.spec").read_text()
