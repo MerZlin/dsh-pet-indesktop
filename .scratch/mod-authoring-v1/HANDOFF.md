@@ -48,3 +48,12 @@ M05：修复高负载首次发现与事务并发恢复；最近命令 `pytest -q
 - 可运行检查点已在当前分支创建本地提交；未推送远程。提交 SHA 以 `git log -1` 为准。
 - 97 个显式交付文件已纳入；构建目录、日志、缓存、旧候选和真实安装目录仍未纳入。
 - 用户验收边界不变：真实 Setup 安装/升级/卸载、真实 Provider/余额/屏幕，以及高负载限制的后续复验仍单独区分。
+
+## 2026-10-10 22:35 ZIP 缺陷留档 + 教程入口收口 + 推送
+
+- 用户报告：ZIP 接入的外接 MOD 无法启用，同一内容走路径（导入目录）正常。本轮**只记录、不修复**。
+- 本地探针（offscreen Qt + 真实 `ModCenterController` / 真实包校验与事务；本机无 OS 沙箱，功能包按现有测试只替换 `self_checker`）：根目录 ZIP 的功能包与角色包导入 + 启用都成功，与目录接入一致；**只有 ZIP 内多套一层文件夹时**判 `导入失败：…manifest missing`（解压后选内层目录正常）。「导入成功但点启用失败」**未复现**。
+- 证据：`.scratch/mod-authoring-v1/repro-zip-enable.json`、`repro-zip-wrapper.json`；脚本 `repro_zip_enable.py`、`repro_zip_wrapper.py`。
+- 缺陷已落档：`docs/modding/USER-GUIDE.md`、`docs/modding/README.md` §四、实施计划「已知未解决缺陷」、PR 报告「已知未通过/未完成门」第 5 条。
+- 下一步（未完成）：① 等用户补充 ZIP 来源与打包工具、包类型、界面报错文案后复现并定位根因；② 若确认是「压缩包根必须放 `manifest.json`」这一差异，再决定是让 ZIP 路径容忍外层文件夹还是只改提示文案——**本轮不修**，不得表述为已修复。
+- 教程文档本轮已补登记 `docs/INDEX.md`；入口扩写完成。按用户当轮授权推送到 `origin/codex/phase3-worker` 并核对远端 SHA。

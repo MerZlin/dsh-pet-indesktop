@@ -46,3 +46,17 @@ M00 已提交/正常推送并核对 `0a299612714e5fad55a24a5506dfce938b9eeb1c`�
 - 可运行检查点已在当前分支创建本地提交；未推送远程。提交 SHA 以 `git log -1` 为准。
 - 97 个显式交付文件已纳入；构建目录、日志、缓存、旧候选和真实安装目录仍未纳入。
 - 用户验收边界不变：真实 Setup 安装/升级/卸载、真实 Provider/余额/屏幕，以及高负载限制的后续复验仍单独区分。
+
+## 2026-10-10 22:35 ZIP 缺陷留档 + 教程入口收口 + 推送
+
+- 用户报告：ZIP 接入的外接 MOD 无法启用，同一内容走路径（导入目录）正常。本轮**只记录、不修复**。
+- 本地探针（offscreen Qt + 真实 `ModCenterController` / 真实包校验与事务；本机无 OS 沙箱，功能包按现有测试只替换 `self_checker`）：
+  - 根目录 ZIP（功能包 / 角色包）：导入成功、启用成功，与目录接入一致；
+  - 目录接入：同样成功（基线）；
+  - **ZIP 内多套一层文件夹**：`导入失败：请选择完整的 MOD ZIP 或包目录。manifest missing`（功能包与角色包都失败），解压后选内层目录正常。原因是 `_read_zip_manifest` 只认压缩包根的 `manifest.json`；
+  - 「导入成功但点启用失败」**未复现**，触发条件待用户补充。
+- 证据：`repro-zip-enable.json`、`repro-zip-wrapper.json`；脚本 `repro_zip_enable.py`、`repro_zip_wrapper.py`（临时探针，不随产品发布）。
+- 缺陷已落档四处文档：`docs/modding/USER-GUIDE.md` 常见问题、`docs/modding/README.md` §四、实施计划「已知未解决缺陷」、PR 报告「已知未通过/未完成门」第 5 条。
+- `docs/modding/*` 教程此前未登记 `docs/INDEX.md`，本轮按入场规则补登记；入口扩写为「加 MOD / 做 MOD」分流 + 按类型教程 + v1 接口 + 两个官方 DLC 案例。
+- 纯文档 / 记录改动（无产品行为变化），按 AGENTS.md 走聚焦门；然后按用户当轮授权推送到 `origin/codex/phase3-worker` 并核对远端 SHA。
+- **未解决**：ZIP 根因定位与修复；待用户补充 ZIP 来源与打包工具、包类型、界面报错文案。

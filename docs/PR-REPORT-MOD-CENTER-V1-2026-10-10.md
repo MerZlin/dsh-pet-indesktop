@@ -1,7 +1,7 @@
 # MOD 管理中心与作者接口 v1 交付报告
 
 > 日期：2026-10-10；分支：`codex/phase3-worker`；M00 远程检查点：`0a299612714e5fad55a24a5506dfce938b9eeb1c`。
-> 本报告对应 M01–M05 的可运行本地检查点。用户已授权“先提交能运行的版本，小问题留档”，本报告不把未通过的满负载压力族改写为通过；本轮只本地提交、不推送。
+> 本报告对应 M01–M05 的可运行本地检查点。用户已授权“先提交能运行的版本，小问题留档”，本报告不把未通过的满负载压力族改写为通过；检查点先在本地提交，随后按用户当轮授权正常推送到 `origin/codex/phase3-worker`（提交号以 `git log -1` 为准）。
 > [实施计划](modding/MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md) · [教程入口](modding/README.md) · [连续状态](../.scratch/mod-authoring-v1/STATUS.md)。
 
 ## 一、当前结论与范围
@@ -168,6 +168,7 @@
 2. 满 CPU 下 `tests/test_single_process_spawn.py` 有 3 项清理时序未在测试预算内完成；不是本轮正常负载验收失败。
 3. 满 CPU 下 `tests/test_mod_live_core.py` 的跨进程停用未达到测试预期；导入/启用成功，但停用结果未由原测试断言成功，不能推断为产品已完全通过。
 4. highload12 只执行了第一轮，第二/三轮未执行；不得用 3×4 的诊断族替代 41 文件整族三轮。
+5. **ZIP 接入的 MOD 无法启用（用户实机报告，未解决）**：用户报告 ZIP 导入的外接 MOD 启用失败、同一内容走目录接入正常。本地探针（真实控制器/校验/事务，本机无沙箱故功能包仅替换 `self_checker`）**未能复现**该形态；根目录 ZIP 的导入与启用与目录一致，已证实的是「ZIP 内多套一层文件夹」会判 `manifest missing` 导入失败、而解压后选内层目录正常。触发条件待用户补充，规避办法是用「导入目录」；详见[实施计划的已知缺陷](modding/MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md#已知未解决缺陷zip-导入的-mod-无法启用2026-10-10)，证据为 `.scratch/mod-authoring-v1/repro-zip-enable.json` 与 `repro-zip-wrapper.json`。**不得表述为已修复。**
 
 ## 七、人工验收保留项
 

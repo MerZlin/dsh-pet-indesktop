@@ -1,9 +1,9 @@
 # dsh-pet-indesktop
 
 <!-- CURRENT_20261010_START -->
-> **当前状态（2026-10-10）**：用户已验收 Core **4.2.4** / AI、Screen **1.0.3**。该批修改已在 `origin/codex/phase3-worker` 建立并核对检查点 `0a299612714e5fad55a24a5506dfce938b9eeb1c`。后续 MOD 管理中心与公共 v1 已实现，Core **4.2.5** / 两个 DLC **1.0.4** 已形成可运行候选并完成冻结链路烟测；本地检查点待提交，未推送，不是正式签名稳定版。满 CPU 压力族限制和人工验收项见报告。
+> **当前状态（2026-10-10）**：用户已验收 Core **4.2.4** / AI、Screen **1.0.3**。该批修改已在 `origin/codex/phase3-worker` 建立并核对检查点 `0a299612714e5fad55a24a5506dfce938b9eeb1c`。后续 MOD 管理中心与公共 v1 已实现，Core **4.2.5** / 两个 DLC **1.0.4** 已形成可运行候选并完成冻结链路烟测；本地检查点已提交并按当轮授权推送到 `origin/codex/phase3-worker`（提交号以 `git log -1` 为准），不是正式签名稳定版。满 CPU 压力族限制、ZIP 导入缺陷和人工验收项见报告。
 
-[MOD 使用与开发教程](docs/modding/README.md)覆盖角色、台词模板、host-only、Echo Worker、官方 AI/识屏案例和后续拆包兼容承诺；[交付报告](docs/PR-REPORT-MOD-CENTER-V1-2026-10-10.md)记录实际验证与限制。简易 API、项目内 `data` 布局和 Setup 安装卸载合同不变；4.2.4 Setup `_s01b/setup-release/dsh-pet-core-webm-setup.exe` 保留。最终新候选以[状态](.scratch/mod-authoring-v1/STATUS.md)为准，不使用旧中间产物。
+[MOD 使用与制作指南](docs/modding/README.md)分成「怎么加 MOD」与「怎么做 MOD」两条线：角色素材、台词模板、host-only、Echo Worker 四类教程，`pet.mod_api.v1` 接口基线与兼容承诺，以及官方 AI / 识屏两个 DLC 的接口用法案例；[交付报告](docs/PR-REPORT-MOD-CENTER-V1-2026-10-10.md)记录实际验证与限制。**已知未解决缺陷**：ZIP 接入的外接 MOD 可能无法启用，规避办法是优先用「导入目录」，详见该指南。简易 API、项目内 `data` 布局和 Setup 安装卸载合同不变；4.2.4 Setup `_s01b/setup-release/dsh-pet-core-webm-setup.exe` 保留。最终新候选以[状态](.scratch/mod-authoring-v1/STATUS.md)为准，不使用旧中间产物。
 <!-- CURRENT_20261010_END -->
 
 > 历史状态（2026-10-06；非当前）：用户授权保存已有源改动并推送远端检查点后继续验收。新全量4298 passed, 15 skipped, 15 warnings in 929.75s (0:15:29)、真实CPU高负载三遍、Ruff/format/mypy通过，183文本文件明确暂存；提交/远端核对尚在进行。仅AI正常Core确认/退出、可见包标题、长路径LPAC和权限canary、Core04构建审计已有证据；分号路径、正常Worker、新Core完整矩阵/性能、新版正式分发与真实安装/人工/干净环境仍待完成，不能用旧产物冒充。最新质量结果及准确续接见 [同一实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) 与 [交接](.scratch/phase5a-local-distribution/HANDOFF.md)；历史日期与Phase4B证据不变。
