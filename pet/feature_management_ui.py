@@ -160,6 +160,7 @@ class FeatureManagementWidget(QWidget):
         for left, right in zip(self.buttons, self.buttons[1:]):
             self.setTabOrder(left, right)
         manager.result_ready.connect(self._result)
+        manager.load_changed.connect(self._result)
         manager.busy_changed.connect(self._busy)
         manager.state_changed.connect(self._changed)
         manager.probe_cleanup_changed.connect(self._probe_cleanup)
@@ -412,6 +413,14 @@ def mount_local_feature_manager(dialog, _route, manager):
     owner = str(getattr(manager, "feature_id", "") or "")
     if not owner:
         return None
+    if hasattr(dialog, "mod_controller"):
+        dialog.feature_managers[owner] = manager
+        support = getattr(dialog, "_mod_settings", None)
+        if support is not None:
+            support.register(owner, manager)
+        dialog.mod_controller.connect_managers()
+        dialog.mod_center.refresh()
+        return dialog.mod_center
     existing = dialog.feature_management_widgets.get(owner)
     if existing is not None:
         return existing
@@ -473,30 +482,16 @@ def create_local_package_rows(dialog):
 
 
 def create_feature_management_section(dialog, parent):
-    """Keep extension UI assembly out of the settings window lifecycle."""
+    """The normal settings surface is one local list, not transaction cards."""
+    from .mod_center_controller import ModCenterController
+    from .mod_center_ui import ModCenterWidget
 
-    dialog.feature_management_widgets = {owner: FeatureManagementWidget(dialog.feature_managers[owner], dialog) for owner in (SCREEN_OWNER, AI_OWNER)}
-    dialog.feature_management_widget = dialog.feature_management_widgets[SCREEN_OWNER]
-    local_import_row, local_management_row = create_local_package_rows(dialog)
-    return SettingsSection(
-        "扩展管理",
-        [
-            local_import_row,
-            SettingRow(
-                "feature_packages",
-                "屏幕理解功能包",
-                "扩展、插件、屏幕理解：本地安装、升级、启停、回滚与卸载。包级操作影响所有实例。",
-                dialog.feature_management_widgets[SCREEN_OWNER],
-                stacked=True,
-            ),
-            SettingRow(
-                "ai_feature_package",
-                "AI 对话功能包",
-                "扩展、插件、AI、聊天、文件理解：本地安装、升级、启停、回滚与卸载。两个包独立管理，个人数据保留。",
-                dialog.feature_management_widgets[AI_OWNER],
-                stacked=True,
-            ),
-            local_management_row,
-        ],
-        parent,
-    )
+    dialog.mod_controller = ModCenterController(dialog)
+    dialog.mod_center = ModCenterWidget(dialog.mod_controller, dialog)
+    dialog.mod_center.settings_requested.connect(lambda owner: dialog._mod_settings.show(owner))
+    dialog.local_package_zip_button = dialog.mod_center.import_zip
+    dialog.local_package_directory_button = dialog.mod_center.import_directory
+    dialog.feature_management_widgets = {}
+    dialog._local_feature_management_widgets = {}
+    return SettingsSection("扩展管理", [SettingRow("local_package_import", "MOD 管理中心",
+                           "导入、启用与管理本地角色和功能扩展，操作即时生效。", dialog.mod_center, stacked=True)], parent)

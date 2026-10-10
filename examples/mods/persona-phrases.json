@@ -1,0 +1,20 @@
+{
+  "template": "persona-phrases/v1",
+  "mode": "custom",
+  "name": "离线 MOD 示例台词",
+  "phrases": {
+    "balance.loading": [
+      "我来看看余额，请稍等。"
+    ],
+    "balance.result": [
+      "查询结果：{text}"
+    ],
+    "llm_error.api": [
+      "服务暂时没回应，请检查连接设置。"
+    ],
+    "thinking": [
+      "{name} 正在认真思考。"
+    ]
+  },
+  "agents": {}
+}

@@ -13,6 +13,7 @@ import uuid
 import zipfile
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, fields
+from functools import wraps
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping, Protocol
@@ -175,6 +176,7 @@ class OperationPlan:
     confirmation_digest: str
     confirmation_token: str = field(repr=False)
     feature_id: str = SCREEN_FEATURE_ID
+    install_enabled: bool = True
 
     def __post_init__(self):
         if not is_valid_feature_id(self.feature_id):
@@ -221,6 +223,28 @@ class Inspection:
     feature_id: str = SCREEN_FEATURE_ID
 
 
+def _single_operation_owner(operation):
+    """Do not recover a journal while a live process is still advancing it.
+
+    Unlike short metadata locks, this nonblocking kernel owner spans probe and
+    lifecycle waits. Readers and lifecycle callbacks keep using their existing
+    locks; process exit releases ownership without a persistent busy flag.
+    """
+    @wraps(operation)
+    def run(self, *args, **kwargs):
+        try:
+            owner = io.open_kernel_lock(self.operation_lock_path)
+        except StateError as exc:
+            plan = args[0] if args and isinstance(args[0], OperationPlan) else None
+            operation_id = plan.operation_id if plan else args[0] if args and isinstance(args[0], str) else None
+            busy = exc.code == "lock_busy"
+            return self._result("awaiting_release" if busy else "recovery_required", operation_id,
+                                plan=plan, reason="management_lock_busy" if busy else exc.code)
+        with owner:
+            return operation(self, *args, **kwargs)
+    return run
+
+
 class FeaturePackageTransactionService:
     def _result(self, *args, **kwargs) -> OperationResult:
         if "feature_id" in kwargs:
@@ -243,6 +267,7 @@ class FeaturePackageTransactionService:
         self.staging_root = self.store.root / "staging"
         self.journal_root = self.store.transactions
         self.management_lock_path = self.store.root / "locks" / "management.lock"
+        self.operation_lock_path = self.store.root / "locks" / "operation.lock"
         self.leases = FeatureVersionLeaseCoordinator(self.store)
         self._startup_permits: dict[str, StartupLoadPermit] = {}
 
@@ -300,6 +325,8 @@ class FeaturePackageTransactionService:
         document = plan.document()
         if "feature_id" not in journal["plan"]:
             document.pop("feature_id")  # explicitly scoped legacy screen journal
+        if "install_enabled" not in journal["plan"]:
+            document.pop("install_enabled")  # legacy plans installed enabled
         body = dict(document)
         body.pop("confirmation_digest")
         if _digest(_json(body)) != plan.confirmation_digest or journal.get("plan_digest") != _digest(_json(document)):
@@ -312,7 +339,7 @@ class FeaturePackageTransactionService:
             raise StateError("journal_path_conflict")
         if any(not isinstance(v, str) or not _VERSION.fullmatch(v) for v in (*journal.get("garbage_versions", []), *plan.delete_versions, *plan.versions)):
             raise StateError("journal_corrupt")
-        if len(plan.versions) > 256 or len(plan.delete_versions) > 256 or type(plan.revision) is not int or plan.revision < 0 or type(plan.enabled) is not bool:
+        if len(plan.versions) > 256 or len(plan.delete_versions) > 256 or type(plan.revision) is not int or plan.revision < 0 or type(plan.enabled) is not bool or type(plan.install_enabled) is not bool:
             raise StateError("journal_corrupt")
         eligible_gc = {plan.target_version} if journal.get("rollback_pending") else set(plan.versions) - {plan.active, plan.target_version}
         if not set(journal.get("garbage_versions", [])) <= eligible_gc:
@@ -392,6 +419,7 @@ class FeaturePackageTransactionService:
             active=state.active,
             previous=state.previous,
             enabled=state.enabled,
+            install_enabled=True,
             versions=dict(state.versions),
             estimated_bytes=0,
             occupancy=self._occupancy(state.versions),
@@ -425,13 +453,15 @@ class FeaturePackageTransactionService:
         self._save(journal)
         return plan, journal
 
-    def preflight_install(self, source: Path | str) -> OperationResult:
-        return self._preflight("install", Path(source))
+    def preflight_install(self, source: Path | str, *, enabled: bool = True) -> OperationResult:
+        if type(enabled) is not bool:
+            return self._result("rejected", reason="invalid_enabled_state")
+        return self._preflight("install", Path(source), install_enabled=enabled)
 
     def preflight_upgrade(self, source: Path | str) -> OperationResult:
         return self._preflight("upgrade", Path(source))
 
-    def _preflight(self, kind: str, source: Path) -> OperationResult:
+    def _preflight(self, kind: str, source: Path, *, install_enabled: bool = True) -> OperationResult:
         operation_id = "tx-" + uuid.uuid4().hex
         try:
             state = self._state(initialize=True)
@@ -482,6 +512,7 @@ class FeaturePackageTransactionService:
                 staged_digest=self._package_digest(descriptor),
                 target_version=descriptor.version,
                 manifest_digest=manifest_digest,
+                install_enabled=install_enabled,
                 estimated_bytes=size,
             )
             self._phase(journal, "awaiting_confirmation")
@@ -601,7 +632,7 @@ class FeaturePackageTransactionService:
             retained = {plan.target_version: plan.manifest_digest}
             if plan.active is not None:
                 retained[plan.active] = plan.versions[plan.active]
-            return StateChange(retained, plan.target_version, plan.active, True if plan.kind == "install" else plan.enabled, plan.operation_id)
+            return StateChange(retained, plan.target_version, plan.active, plan.install_enabled if plan.kind == "install" else plan.enabled, plan.operation_id)
         if step == "confirmed":
             return StateChange(versions, state.active, state.previous, state.enabled, None)
         if step == "uninstalled":
@@ -695,6 +726,7 @@ class FeaturePackageTransactionService:
         self._save(journal)
         return after
 
+    @_single_operation_owner
     def apply(self, plan: OperationPlan, *, confirmation_token: str | None = None) -> OperationResult:
         if not isinstance(plan, OperationPlan):
             return self._result("rejected", reason="invalid_plan")
@@ -953,6 +985,7 @@ class FeaturePackageTransactionService:
             self._startup_permits[permit.nonce] = permit
             return permit
 
+    @_single_operation_owner
     def confirm_startup(self, operation_id: str, *, receipt=None, loaded_manifest_digest=None, success=None) -> OperationResult:
         # Legacy digest/boolean arguments are deliberately rejected, not trusted.
         from .feature_package_startup import StartupLoadReceipt
@@ -992,6 +1025,7 @@ class FeaturePackageTransactionService:
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
             return self._result("recovery_required", operation_id, "recovery_required", reason=_error(exc))
 
+    @_single_operation_owner
     def _startup_failed(self, permit: StartupLoadPermit) -> OperationResult:
         try:
             journal = self._load(permit.operation_id)
@@ -1064,6 +1098,7 @@ class FeaturePackageTransactionService:
             reason="rollback_load_confirmation_required",
         )
 
+    @_single_operation_owner
     def recover_pending(self) -> OperationResult:
         try:
             recovered = self.store.recover()
@@ -1118,6 +1153,7 @@ class FeaturePackageTransactionService:
         except (StateError, PackageVerificationError, OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
             return self._result("recovery_required", phase="recovery_required", reason=_error(exc))
 
+    @_single_operation_owner
     def collect_garbage(self) -> OperationResult:
         removed = []
         failures = []

@@ -56,6 +56,7 @@ def test_portable_owned_runtime_launches_and_retains_isolation(installed, child)
     try:
         assert item.working_directory == str(runtime.resolve())
         assert item.requires_handoff and item.handoff_token
+        assert item.environment["DSH_PET_FEATURE_LEASE_OWNER"] == selection.feature_id
         assert "PYTHONPATH" not in item.environment and item.environment["PATH"] == ""
         assert item.environment["HTTPS_PROXY"] == "https://proxy.invalid"
         assert coordinator.inspect_occupancy(selection.version).status == "occupied"

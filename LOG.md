@@ -1,8 +1,12 @@
 # 项目变更日志
 
+## MOD 管理中心与公共 v1（2026-10-10）
+
+M00 后实施统一本地列表、默认停用导入、即时启停/设置、按实例角色使用及回退、批量操作和公开 v1；离线 hello-local/Echo、角色副本与台词模板教程完成。最终 Core4.2.5/两个DLC1.0.4 已构建，保留4.2.4与鲸鱼图标。全收集4568节点按273文件隔离进程执行，4553 passed/15 skipped，无遗漏；先前单进程Qt原生崩溃不计通过。最终冻结 Core 的 Echo 返回、删除待退出/下次启动物理清理及官方生产识屏Worker握手/自然退出通过。M05三轮高负载及报告收尾进行中；不触碰真实安装/Key/屏幕。新功能未提交推送。[报告](docs/PR-REPORT-MOD-CENTER-V1-2026-10-10.md) / [最终交接](.scratch/mod-authoring-v1/HANDOFF.md)。
+
 ## Phase5A 用户确认与源检查点（2026-10-10）
 
-用户已明确确认 4.2.4 候选实际体验无问题；这覆盖本轮真实使用验收，不代表其他平台或未来 MOD 界面通过。按本次明确授权，对 159 个源码/测试/脚本/文档复验并准备提交到 `origin/codex/phase3-worker`；13 个生成目录与真实用户数据排除。Ruff 与初步差异检查通过；暂存差异发现两行新报告尾随空格，已修正文档。全量 4509 passed /15 skipped /14 warnings（1910.76s），26 族满 CPU 三遍各 292 passed，643 输入摘要一致；负载自然退出、零残留。门禁已通过，尚未提交/推送，不提前写成功。下方 S/R 快照保留反馈前状态。
+用户已明确确认 4.2.4 候选实际体验无问题；这覆盖本轮真实使用验收，不代表其他平台或未来 MOD 界面通过。按本次明确授权，对 159 个源码/测试/脚本/文档复验并准备提交到 `origin/codex/phase3-worker`；13 个生成目录与真实用户数据排除。Ruff 与初步差异检查通过；暂存差异发现两行新报告尾随空格，已修正文档。全量 4509 passed /15 skipped /14 warnings（1910.76s），26 族满 CPU 三遍各 292 passed，643 输入摘要一致；负载自然退出、零残留。门禁已通过，随后实际提交并正常推送 `0a299612714e5fad55a24a5506dfce938b9eeb1c`，远端 SHA 已核对。该授权不延伸到后续 MOD 新功能。下方 S/R 快照保留反馈前状态。
 
 
 <!-- S04_CURRENT_START -->
@@ -440,3 +444,8 @@ Host 在进入已验证 Python interpreter 后保留版本租约；Standalone Se
 ## 2026-10-10 S01 施工草案：portable 识屏启动
 
 按已批准 S01–S04 修复项目内运行目录误拦与同步诊断；先 red 后实现。旧 dirty/候选、真实安装/Key、Setup 行为不变；未提交推送。计划与准确停点见 `.scratch/phase5a-local-distribution/PLAN.md`、`HANDOFF.md`。
+
+
+## MOD 管理中心与公共 v1：可运行检查点（2026-10-10 16:40）
+
+final4 Core/Setup 已构建，审计通过两个 1.0.4 包、Core/Setup 鲸鱼图标和旧 4.2.4 保留。全新隔离数据根完成真实 Core→生产 Screen Worker→HELLO/READY→自然退出闭环，Core/Worker 均 exit 0，租约退出后 free；独立 Settings 扩展管理页也完成原生烟测。全量文件隔离测试 4563 passed/15 skipped，MOD 专项47 passed，Ruff/diff check通过。满 CPU 识屏短预算、子宠清理和跨进程停用失败保留为非阻塞压力限制；用户授权先提交可运行版本。本地提交待完成，不推送；真实 Setup 安装/升级/卸载和 Provider/余额/屏幕仍人工验收。

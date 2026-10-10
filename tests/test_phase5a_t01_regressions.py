@@ -272,7 +272,7 @@ def test_setup_maintenance_installs_embedded_official_zip_without_qt(tmp_path):
     assert log_records[-1]["status"] == "completed"
     assert log_records[-1]["owners"] == [AI_FEATURE_ID]
     state = FeatureInstallStateStore(config.dir, feature_id=AI_FEATURE_ID).read().state
-    assert state is not None and state.active == "1.0.3" and state.enabled
+    assert state is not None and state.active == json.loads((package / "manifest.json").read_text(encoding="utf-8"))["version"] and state.enabled
     # Setup retries must preserve the same accepted startup frontier, not fail
     # because the first normal Core launch has not happened yet.
     assert run_install_packages(archive.parent, (AI_FEATURE_ID,), config=config, service_factory=service_factory) == 0
@@ -322,9 +322,9 @@ def test_settings_dialog_keeps_routed_local_manager_in_its_lifecycle_map(tmp_pat
     try:
         widget = dialog._mount_local_feature_manager(None, manager)
         assert dialog.feature_managers[owner] is manager
-        assert dialog.feature_management_widgets[owner] is widget
+        assert widget is dialog.mod_center
         assert dialog._mount_local_feature_manager(None, manager) is widget
-        assert dialog._local_feature_management_layout.count() == 2
+        assert owner in dialog.mod_controller._connected
     finally:
         close_official_management(dialog.feature_host)
         dialog.close()
@@ -347,11 +347,11 @@ def test_unified_import_buttons_remain_available_with_builtin_official_features(
         assert import_row is not None
         assert dialog.pages.widget(0).isAncestorOf(import_row)
         local_row = dialog.findChild(SettingRow, "settingRow_local_feature_packages")
-        assert local_row is not None and dialog.pages.widget(0).isAncestorOf(local_row)
+        assert local_row is None  # unified list replaces the second card group
         assert dialog.local_package_zip_button.isEnabled()
         assert dialog.local_package_directory_button.isEnabled()
-        source_widget = dialog.feature_management_widgets["official.screen-understanding"]
-        monkeypatch.setattr(source_widget, "choose_local_package", lambda archive: chosen.append(archive))
+        source_widget = dialog.mod_center
+        monkeypatch.setattr(source_widget, "choose_source", lambda archive: chosen.append(archive))
         dialog.local_package_zip_button.click()
         dialog.local_package_directory_button.click()
         assert chosen == [True, False]

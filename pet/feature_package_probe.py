@@ -103,7 +103,7 @@ def verified_host_probe(package_root: Path, verifier: FeaturePackageVerifier) ->
         handle.close()
 
 
-def validate_worker_transcript(transcript: bytes, *, graceful_returncode: int) -> bool:
+def validate_worker_transcript(transcript: bytes, *, graceful_returncode: int, worker_id: str = "proactive-screen") -> bool:
     """Bounded minimum hello/shutdown protocol proof, with no task/config push.
 
     The sandbox launcher sends only shutdown after seeing hello, closes stdin,
@@ -120,7 +120,7 @@ def validate_worker_transcript(transcript: bytes, *, graceful_returncode: int) -
             if len(line) > MAX_MESSAGE_BYTES:
                 return False
             message = decode_message(line)
-            if message.worker_id != "proactive-screen" or message.type not in ("hello", "heartbeat"):
+            if message.worker_id != worker_id or message.type not in ("hello", "heartbeat"):
                 return False
             if message.type == "hello":
                 if hello:

@@ -27,6 +27,7 @@ class FeatureDefinition:
     policy_factory: Callable[..., dict] | None = None
     worker_launch_factory: Callable | None = None
     allow_in_process: bool = True
+    mount_contract: str = ""
 
 
 class FeatureHost:
@@ -62,6 +63,10 @@ class FeatureHost:
 
     def configurable(self, owner: str) -> bool:
         return self.state(owner) in ("enabled", "disabled")
+
+    def definition(self, owner: str) -> FeatureDefinition | None:
+        """Read-only declaration, not runtime or configuration internals."""
+        return self._definitions.get(owner)
 
     def owners(self) -> tuple[str, ...]:
         return tuple(o for o in self._definitions if self.configurable(o))

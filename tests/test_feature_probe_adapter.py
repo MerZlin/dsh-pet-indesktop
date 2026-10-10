@@ -58,7 +58,7 @@ def _fixture(tmp_path, monkeypatch, *, limits=None):
             assert decode_message(reply).payload == {}
             if behavior.get("tamper"):
                 target.descriptor.worker_path.write_bytes(b"changed after execution")
-            return NativeProbeResult(0, hello, b"", evidence)
+            return NativeProbeResult(0, behavior.get("hello", hello), b"", evidence)
 
     monkeypatch.setattr("pet.feature_probe_adapter.WindowsProbeLauncher", Launcher)
     sandbox = WindowsFeatureProbeSandbox(verifier, bundle, tmp_path / "probe-runs")
@@ -129,3 +129,12 @@ def test_non_probe_worker_hello_is_rejected(tmp_path, monkeypatch):
     options["hello"] = encode_message(build_message("proactive-screen", "hello", {"capabilities": ["screen.capture"]}))
     result = sandbox.run(request)
     assert not result.worker_hello and result.reason == "worker_probe_protocol"
+
+
+def test_adapter_accepts_manifest_worker_identity_not_only_legacy_id(tmp_path, monkeypatch):
+    from pet.workers.protocol import build_message, encode_message
+    sandbox, request, calls, options, bundle = _fixture(tmp_path, monkeypatch)
+    owner = sandbox.verifier.verify(request.package_root).id
+    options['hello'] = encode_message(build_message(owner, 'hello', {'probe': True, 'capabilities': []}))
+    outcome = sandbox.run(request)
+    assert outcome.host_valid and outcome.worker_hello and outcome.worker_graceful_exit

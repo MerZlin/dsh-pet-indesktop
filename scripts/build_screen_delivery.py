@@ -71,6 +71,8 @@ HEAVY_MODULES = (
     "zmq",
 )
 CORE_REQUIRED = {
+    "pet.mod_api.v1",
+    "pet.mod_api.worker_client",
     "pet.app",
     "pet.window",
     "pet.desktop_query",
@@ -416,9 +418,11 @@ def assemble_package(root: Path, target: Path, worker_bundle: Path, legacy_key=N
     files = {p.relative_to(target).as_posix(): {"sha256": digest(p.read_bytes()), "size": p.stat().st_size} for p in sorted(target.rglob("*")) if p.is_file()}
     manifest = dict(
         id="official.screen-understanding",
-        version="1.0.3",
+        name="识屏",
+        description="手动看看屏幕与按白名单自动识屏；独立 Worker 处理截图和视觉请求。",
+        version="1.0.4",
         api_version="1",
-        core_requires=">=4.2.4,<6.0.0",
+        core_requires=">=4.2.5,<6.0.0",
         platforms=[sys.platform],
         capabilities=["screen.capture"],
         factory="screen-understanding/v1",
@@ -432,7 +436,7 @@ def assemble_package(root: Path, target: Path, worker_bundle: Path, legacy_key=N
     return target
 
 
-def assemble_ai_package(root: Path, target: Path, *, version: str = "1.0.3") -> Path:
+def assemble_ai_package(root: Path, target: Path, *, version: str = "1.0.4") -> Path:
     """Create the ordinary, unsigned local AI package used by Setup/manual acceptance.
 
     ``key_id`` is a non-cryptographic manifest discriminator required by the
@@ -459,9 +463,11 @@ def assemble_ai_package(root: Path, target: Path, *, version: str = "1.0.3") -> 
         "execution_kind": "host-only",
         "key_id": "local-user",
         "id": "official.ai-chat",
+        "name": "AI 对话",
+        "description": "AI 对话、文件解读及多种聊天窗口；复用 Core 中保存的简易 API 配置。",
         "version": version,
         "api_version": "1",
-        "core_requires": ">=4.2.3,<6.0.0",
+        "core_requires": ">=4.2.5,<6.0.0",
         "platforms": [sys.platform],
         "capabilities": [
             "network.http",
@@ -604,11 +610,11 @@ def main(argv=None) -> int:
     if output.exists():
         parser.error("output directory must not exist")
     worker = verify_worker_inputs(ROOT, args.worker_build.resolve())
-    package = assemble_package(ROOT, output / "official.screen-understanding/1.0.3", worker)
+    package = assemble_package(ROOT, output / "official.screen-understanding/1.0.4", worker)
     synthetic_package = None
     if args.synthetic_worker_build:
         fixture = verify_worker_inputs(ROOT, args.synthetic_worker_build.resolve(), synthetic=True)
-        synthetic_package = assemble_package(ROOT, output / "synthetic-test-only/official.screen-understanding/1.0.3", fixture, synthetic=True)
+        synthetic_package = assemble_package(ROOT, output / "synthetic-test-only/official.screen-understanding/1.0.4", fixture, synthetic=True)
     write_json(
         output / "validation-trust.json",
         {

@@ -4,7 +4,8 @@
 
 | 日期 | 主题 | 入口 | 关键提交/状态 |
 |---|---|---|---|
-| 2026-10-10 | Phase5A 用户确认与源检查点 | [LOG](LOG.md#phase5a-用户确认与源检查点2026-10-10) · [交接](.scratch/phase5a-local-distribution/HANDOFF.md) | 用户确认 4.2.4；159 文件审核、排除 13 生成目录；4509 全量/3×292 满负载通过，尚未推送 |
+| 2026-10-10 | MOD 管理中心与公共 v1 | [LOG](LOG.md#mod-管理中心与公共-v12026-10-10) · [报告](docs/PR-REPORT-MOD-CENTER-V1-2026-10-10.md) · [交接](.scratch/mod-authoring-v1/HANDOFF.md) | 4.2.5/两个1.0.4候选；列表/接口/教程/冻结闭环已实现，final4冻结链路与Settings烟测通过；压力族限制留档；本地检查点待提交，未推送 |
+| 2026-10-10 | Phase5A 用户确认与源检查点 | [LOG](LOG.md#phase5a-用户确认与源检查点2026-10-10) · [交接](.scratch/phase5a-local-distribution/HANDOFF.md) | 用户确认 4.2.4；159 文件审核、排除 13 生成目录；4509 全量/3×292 满负载通过；已推送并核对 `0a29961` |
 | 2026-10-10 | Phase5A S修复与连接反馈 | [LOG](LOG.md#phase5a-s修复与连接反馈2026-10-10) · [报告](docs/PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md) · [交接](.scratch/phase5a-local-distribution/HANDOFF.md) | Core4.2.4/Screen1.0.3/AI1.0.3；portable Worker、READY后心跳、按钮旁HTTP码、真实冻结链路与鲸鱼娘图标；真实用户门待验，未提交推送 |
 | 2026-10-08 | Phase5A R修复工程交付与人工待验 | [LOG](LOG.md#phase5a-r修复工程交付与人工待验2026-10-08) · [报告§8](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-07.md) · [交接](.scratch/phase5a-local-distribution/HANDOFF.md) | Core4.2.2/AI1.0.2/Screen1.0.1；最新默认4417p/15s、3×152满CPU、新Setup/输入hash/冻结工程证据；真实用户待验、Phase5A未关闭，无提交/推送 |
 | 2026-10-06 | Phase5A夜间修复与暂停交接 | [LOG.md](LOG.md#phase5a夜间修复与暂停交接2026-10-06) · [实施报告](docs/PR-REPORT-PHASE5A-LOCAL-DISTRIBUTION-2026-10-04.md) · [准确停点](.scratch/phase5a-local-distribution/HANDOFF.md) | 全量4298通过；仅AI自然退出、双包确认标题、长/短路径LPAC及权限canary通过；Core04构建审计；新版正式分发/生产业务/高负载/性能/人工门未完成，按用户要求暂停，无提交/推送 |

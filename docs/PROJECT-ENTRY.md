@@ -1,13 +1,13 @@
 # 项目入口：dsh-pet-indesktop
 
 <!-- S04_CURRENT_START -->
-**2026-10-10 当前状态：S01–S04 工程交付完成，用户已明确确认“实际体验确认没问题”；正进行源代码检查点提交前复验。新 MOD 管理中心尚未实施，未正式发布稳定版。** 最新 [S 工程报告](PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md)；准确停点 [STATUS](../.scratch/phase5a-local-distribution/STATUS.md) / [HANDOFF](../.scratch/phase5a-local-distribution/HANDOFF.md)。
+**2026-10-10 当前状态：4.2.4 已由用户确认实际体验；已在 `origin/codex/phase3-worker` 推送并核对检查点 `0a299612714e5fad55a24a5506dfce938b9eeb1c`。后续 MOD 管理中心、公共 v1 和教程已实现；final4 冻结 Core/Setup 与真实生产 Worker/Settings 烟测通过，M05 以可运行检查点准备本地提交。**
 
-**现行产品合同**：API 已恢复简易主 Key + 可选视觉 Key，无服务 ID/用途勾选；Core 存配置，DLC/Worker 执行请求。测试按钮旁显示联通状态/真实结果码，测试不保存。Setup 每次显示路径页，portable `<项目目录>/data`；卸载清理程序及 data/plugins，个人 data 默认保留，可选删除；可选系统关联清理 best-effort。旧 R 的复杂API和 Core-only保留DLC不再是现行合同。
+**现行合同**：简易主 Key + 可选视觉 Key，不填服务 ID/用途授权；测试按钮旁显示结果码，测试不保存。Setup 每次显示路径页，采用 portable `<项目目录>/data`；卸载程序与 data/plugins，个人 data 默认保留、可选删除。MOD 管理采用本地统一列表，导入后点启用即时挂载；角色启用不换装，使用只切当前实例。Setup 行为不变。
 
-**当前候选**：`_s01b/setup-release/dsh-pet-core-webm-setup.exe`（Core4.2.4/Screen1.0.3/AI1.0.3）。本轮目录/心跳修复的真实冻结生产Worker握手与自然退出通过；不使用旧 U/A Setup 当作本轮结果。受信任PythonDLC不是沙箱，不新增官方factory特判，不改变Setup逻辑；未触碰用户真实安装/Key/屏幕，无提交/推送/正式发布。
+**候选分开记录**：已验收4.2.4仍为 `_s01b/setup-release/dsh-pet-core-webm-setup.exe`；M05新候选4.2.5与两个1.0.4的工程证据见 [MOD 报告](PR-REPORT-MOD-CENTER-V1-2026-10-10.md) / [状态](../.scratch/mod-authoring-v1/STATUS.md)。满 CPU 压力族非阻塞限制仍单独留档。旧候选用户确认不扩张为新界面、真实Provider或其他平台已验收。真实安装/Key/屏幕未修改，新候选不是正式签名稳定版。
 
-[设计](plugin-phase-05-distribution/PHASE5A-LOCAL-DISTRIBUTION-DESIGN.md) · [计划](PHASE5A-CLOSEOUT-IMPLEMENTATION-PLAN-2026-10-07.md) · [交付](PHASE5A-CODE-IMPLEMENTATION-HANDOFF-2026-10-07.md) · [PLAN](../.scratch/phase5a-local-distribution/PLAN.md)。用户确认对应上述 4.2.4 候选，不扩张为未测平台或后续 MOD 改动通过。
+**入口**：[MOD 使用/制作教程](modding/README.md) · [公共 v1](modding/API-V1.md) · [兼容矩阵](modding/COMPATIBILITY.md) · [实施计划](modding/MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md) · [Phase5A历史交付](PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md)。受信任 Python MOD 不是沙箱，私有模块不属于公共兼容承诺。
 <!-- S04_CURRENT_END -->
 
 > 这是给新对话、新贡献者和继续施工的开发者看的渐进式入口。它不是普通用户安装教程，也不替代阶段设计、API 合同、测试计划和 PR 报告。

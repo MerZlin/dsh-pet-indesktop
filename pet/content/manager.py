@@ -288,7 +288,9 @@ class ContentManager:
         except (AttributeError, ImportError):
             pass
 
-    def install(self, source: Path, *, allow_unsigned: bool = False) -> InstallResult:
+    def install(self, source: Path, *, allow_unsigned: bool = False, enabled: bool | None = True) -> InstallResult:
+        if enabled is not None and type(enabled) is not bool:
+            raise ContentError("enabled must be a boolean")
         self._ensure_no_unresolved_operations()
         source = Path(source)
         self.staging_root.mkdir(parents=True, exist_ok=True)
@@ -335,19 +337,20 @@ class ContentManager:
                     allow_unsigned=True,
                 )
                 if not existing_errors and existing_hash == digest:
-                    activation_attempted = True
-                    self.activate(manifest.plugin_id, manifest.version)
-                    return InstallResult(manifest.plugin_id, manifest.version, True, installed_root)
+                    # Importing identical content never changes the chosen state/version.
+                    return InstallResult(manifest.plugin_id, manifest.version, self.is_enabled(manifest.plugin_id), installed_root)
                 raise ContentError(f"version already exists with different content: {manifest.version}")
             temp_version = installed_root.parent / f".{manifest.version}.{uuid4().hex}.tmp"
             self._safe_copytree(package_root, temp_version)
             os.replace(temp_version, installed_root)
             installed_root_created = True
             activation_attempted = True
-            self._activate_character(character_id, manifest.plugin_id, manifest.version, validate=False)
+            prior = self._read_json(active_path)
+            desired = bool(prior.get("enabled", True)) if prior and enabled is None else (True if enabled is None else enabled)
+            self._activate_character(character_id, manifest.plugin_id, manifest.version, validate=False, enabled=desired)
             self._self_check_active(character_id, allow_unsigned=allow_unsigned)
             self._invalidate_registry()
-            return InstallResult(manifest.plugin_id, manifest.version, True, installed_root)
+            return InstallResult(manifest.plugin_id, manifest.version, desired, installed_root)
         except Exception:
             if activation_attempted and active_path is not None and previous_path is not None:
                 self._restore_file_snapshot(active_path, active_snapshot)
@@ -363,6 +366,27 @@ class ContentManager:
     def _active_for_character(self, character_id: str) -> dict[str, Any] | None:
         return self._read_json(self._pointer_path(character_id))
 
+    def is_enabled(self, plugin_id: str) -> bool:
+        for character_dir in self.characters_root.glob("*/"):
+            active = self._active_for_character(character_dir.name)
+            if active and active.get("plugin_id") == plugin_id:
+                return active.get("enabled", True) is True
+        return False
+
+    def set_enabled(self, plugin_id: str, enabled: bool) -> None:
+        if type(enabled) is not bool:
+            raise ContentError("enabled must be a boolean")
+        self._ensure_no_unresolved_operations()
+        for character_dir in self.characters_root.glob("*/"):
+            active = self._active_for_character(character_dir.name)
+            if active and active.get("plugin_id") == plugin_id:
+                if enabled:
+                    self._self_check_active(character_dir.name, allow_unsigned=True)
+                self._write_json_atomic(self._pointer_path(character_dir.name), {**active, "enabled": enabled})
+                self._invalidate_registry()
+                return
+        raise ContentError(f"package not installed: {plugin_id}")
+
     def active_version(self, plugin_id: str) -> str | None:
         for character_dir in self.characters_root.glob("*/"):
             active = self._active_for_character(character_dir.name)
@@ -370,7 +394,7 @@ class ContentManager:
                 return str(active.get("version"))
         return None
 
-    def _activate_character(self, character_id: str, plugin_id: str, version: str, *, validate: bool = True) -> None:
+    def _activate_character(self, character_id: str, plugin_id: str, version: str, *, validate: bool = True, enabled: bool | None = None) -> None:
         root = self._package_root(character_id, version)
         if not root.is_dir():
             raise ContentError(f"package version not found: {plugin_id}@{version}")
@@ -387,7 +411,8 @@ class ContentManager:
         previous = self._read_json(active_path)
         if previous:
             self._write_json_atomic(self._pointer_path(character_id, "previous"), previous)
-        self._write_json_atomic(active_path, {"plugin_id": plugin_id, "version": version})
+        desired = bool(previous.get("enabled", True)) if previous and enabled is None else (True if enabled is None else enabled)
+        self._write_json_atomic(active_path, {"plugin_id": plugin_id, "version": version, "enabled": desired})
 
     def activate(self, plugin_id: str, version: str) -> None:
         for character_dir in self.characters_root.glob("*/"):

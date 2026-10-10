@@ -20,8 +20,8 @@ def _prepare_feature_revocation(self, owner) -> bool:
         return True
     answer = QMessageBox.question(
         self,
-        "撤销 AI 对话设置",
-        "AI 对话有未保存编辑。保存、放弃，还是取消本次撤销？",
+        "扩展有未保存编辑",
+        "此扩展有未保存编辑。保存、放弃，还是取消本次操作？",
         QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
         QMessageBox.StandardButton.Cancel,
     )
@@ -147,3 +147,25 @@ def _on_ai_contribution_changed(self, state):
     self._search_matches = []
     self._search_index = -1
     self._search_settings(self.search_edit.text())
+
+
+def release_contributions(self) -> None:
+    self._mod_settings.close()
+    self.mod_controller.close()
+    while self._mod_preparations:
+        self._mod_preparations.pop()()
+    self._draft_unsubscribe()
+    if self._owns_feature_management:
+        from .feature_management import close_official_management
+
+        close_official_management(self.feature_host)
+    for component in tuple(self._feature_components.values()):
+        component.dispose()
+    self._feature_components.clear()
+    self._screen_component = None
+    self._ai_component = None
+    self.ai_page = None
+    self._feature_unsubscribe()
+    self._feature_prepare_unsubscribe()
+    for owner in self.feature_managers:
+        self.feature_host.detach(owner, self._feature_scope)

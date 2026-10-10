@@ -76,6 +76,7 @@ def verified_worker_launch(
         assert lease_coordinator is not None
         token = reservation.handoff_token
         child_environment["DSH_PET_FEATURE_LEASE_ROOT"] = str(lease_coordinator.data_root)
+        child_environment["DSH_PET_FEATURE_LEASE_OWNER"] = descriptor.id
         child_environment["DSH_PET_FEATURE_LEASE_HANDOFF_TOKEN"] = token
 
         def confirm(child_pid: int | None) -> bool:

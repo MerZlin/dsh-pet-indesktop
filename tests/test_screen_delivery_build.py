@@ -131,10 +131,10 @@ def test_package_signs_exact_inventory_with_no_private_key_or_python_worker(tmp_
     )
     descriptor = verifier.verify(package)
     assert descriptor.id == "official.screen-understanding"
-    assert descriptor.version == "1.0.3"
+    assert descriptor.version == "1.0.4"
     import json
 
-    assert json.loads((package / "manifest.json").read_bytes())["core_requires"] == ">=4.2.4,<6.0.0"
+    assert json.loads((package / "manifest.json").read_bytes())["core_requires"] == ">=4.2.5,<6.0.0"
     assert not any("private" in p.name for p in package.rglob("*"))
 
 

@@ -62,8 +62,24 @@ def atomic_write(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        safe_path(path)
-        os.replace(temporary, path)
+        deadline = None
+        while True:
+            safe_path(path)
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as exc:
+                # Windows readers/scanners can briefly deny atomic replacement.
+                # Retry the same flushed file, never unlink the authoritative
+                # destination. Persistent denial remains a recoverable error.
+                if sys.platform != "win32" or exc.winerror not in (5, 32):
+                    raise
+                now = time.monotonic()
+                if deadline is None:
+                    deadline = now + 0.25
+                if now >= deadline:
+                    raise
+                threading.Event().wait(min(0.01, deadline - now))
     finally:
         temporary.unlink(missing_ok=True)
 

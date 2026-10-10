@@ -87,11 +87,17 @@ def populate_context_menu(menu: QMenu, pet) -> None:
     template = load_menu_template(template_id)
     if template_id == "legacy":
         build_legacy_menu(menu, pet, template)
+        from .mod_runtime import append_mod_menu
+
+        append_mod_menu(menu, getattr(pet, "feature_host", None))
         install_responsive_menu_style(menu)
         install_stay_open_interaction(menu)
         return
     apply_modern_menu_style(menu, cfg.get("context_menu_appearance", {}) if cfg is not None else {})
     build_modern_menu(menu, pet, template)
+    from .mod_runtime import append_mod_menu
+
+    append_mod_menu(menu, getattr(pet, "feature_host", None))
     install_modern_check_indicators(menu)
     install_responsive_menu_style(menu)
     install_stay_open_interaction(menu)

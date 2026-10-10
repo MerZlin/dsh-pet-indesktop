@@ -119,20 +119,33 @@ class ProductionFeatureStartup:
 
         self.host.bind_authority(binding.handle.descriptor.id, allowed)
 
+    def _resolve_current_selection(self, purpose: str) -> FeatureVersionSelection:
+        from .feature_state_io import StateError
+
+        resolution = self.service.store.resolve_verified(self.service.verifier, purpose=purpose)
+        # An unresolved selection normally means invalid/stale authorization;
+        # kernel contention is different and must survive the conversion.
+        if resolution.status == "lock_busy":
+            raise StateError("state_lock_busy")
+        return FeatureVersionSelection.from_resolution(resolution)
+
     def load_current(self) -> OperationResult:
         if self._pending_receipt is not None:
             return self._confirm_receipt()
         if self.binding is not None:
             return self.refresh_authorization()
         try:
-            state = self.service.store.read().state
+            state_result = self.service.store.read()
+            state = state_result.state
             if state is None:
+                if state_result.status == "lock_busy":
+                    return self.service._result("awaiting_release", reason="state_lock_busy")
                 return self.service._result("recovery_required", reason="install_state_unavailable")
             if state.pending_transaction:
                 return self.load_pending(state.pending_transaction)
             if state.active is None:
                 return self.service._result("idempotent", revision=state.revision, reason="not_installed")
-            selection = FeatureVersionSelection.from_resolution(self.service.store.resolve_verified(self.service.verifier, purpose="configuration"))
+            selection = self._resolve_current_selection("configuration")
             self._prepare_runtime()
             self.binding = bind_verified_feature(
                 self.host,
@@ -180,7 +193,7 @@ class ProductionFeatureStartup:
             return self.service._result("awaiting_release", reason="version_change_requires_restart")
         try:
             purpose = "execution" if state.enabled else "configuration"
-            selected = FeatureVersionSelection.from_resolution(self.service.store.resolve_verified(self.service.verifier, purpose=purpose))
+            selected = self._resolve_current_selection(purpose)
             self.binding.refresh_selection(selected)
             if state.enabled:
                 self.host.enable(owner)

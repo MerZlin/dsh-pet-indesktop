@@ -78,7 +78,8 @@ host = FeatureHost()
 dialog = ModernSettingsDialog(Config(base=Path(sys.argv[1])), include_ai=False, feature_host=host)
 assert dialog.ai_page is None
 assert not any(name.startswith('features.ai_chat') for name in sys.modules)
-assert set(dialog.feature_management_widgets) == {'official.ai-chat', 'official.screen-understanding'}
+assert not dialog.feature_management_widgets
+assert set(dialog.mod_controller.managers) == {'official.ai-chat', 'official.screen-understanding'}
 dialog.close()
 close_official_management(host)
 app.processEvents()

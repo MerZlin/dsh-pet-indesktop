@@ -1451,6 +1451,9 @@ class _SettingsPageShell(QWidget):
         right = max(0, self._scroll.width() - geometry.right() - 1)
         self._heading_row.setContentsMargins(left, 0, right, 0)
         self.heading_host.setFixedWidth(min(self.content_max_width, max(0, viewport.width())))
+        # The scroll viewport may change after the outer layout has activated.
+        # Reapply this row now instead of leaving the header one event behind.
+        self.layout().activate()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if self._scroll is not None and watched is self._scroll.viewport() and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):

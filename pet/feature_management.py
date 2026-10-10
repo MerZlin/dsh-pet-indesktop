@@ -95,6 +95,7 @@ def _feature_probe_run_root(config, feature_id: str) -> Path:
 
 class FeatureManagementRuntime(QObject):
     result_ready = Signal(object)
+    load_changed = Signal(object)
     busy_changed = Signal(bool)
     state_changed = Signal(object)
     probe_cleanup_changed = Signal(object)
@@ -248,6 +249,16 @@ class FeatureManagementRuntime(QObject):
         if not self._closed.is_set() and self.monitor is not None:
             self.monitor.start()
 
+    def _record_load_result(self, result):
+        self.last_result = result
+        if result.status in ("completed", "idempotent"):
+            self._bootstrap_attempts = 0
+            self._bootstrap_timer.stop()
+        else:
+            self.last_operation = result
+        self._schedule_bootstrap_retry()
+        return result
+
     def _schedule_bootstrap_retry(self):
         # A bounded backoff is for kernel contention only. Invalid evidence,
         # import failures and occupied versions are not silently retried.
@@ -255,7 +266,7 @@ class FeatureManagementRuntime(QObject):
         if (
             self._closed.is_set()
             or self._management_only
-            or self.startup is None
+            or self.service is None
             or self.last_result.reason not in LOCK_BUSY_REASONS
             or self._bootstrap_timer.isActive()
             or self._bootstrap_attempts >= len(delays)
@@ -266,32 +277,69 @@ class FeatureManagementRuntime(QObject):
 
     @Slot()
     def _retry_bootstrap(self):
-        if self._closed.is_set() or self._management_only or self.startup is None or self.service is None:
+        if self._closed.is_set() or self._management_only or self.service is None:
             return
-        if self.startup.binding is None:
-            runtime = self.service.runtime
-            self.service.runtime = None
-            try:
-                recovered = self.service.recover_pending()
-            finally:
-                self.service.runtime = runtime
-            result = self.startup.load_current() if recovered.status in ("completed", "idempotent", "awaiting_startup_confirmation") else recovered
-        else:
-            # Reuse a real sealed receipt; never import a replacement host.
-            result = self.startup.load_current()
-        self.last_result = result
-        if result.status not in ("completed", "idempotent"):
-            self.last_operation = result
-        self.result_ready.emit(result)
-        self._schedule_bootstrap_retry()
+        if self.busy:
+            self._schedule_bootstrap_retry()
+            return
+        # Discovery may meet a kernel lock before a startup object exists.
+        # Re-enter the same verified path rather than waiting for another file
+        # change; loaded bindings still reuse their sealed receipt.
+        result = self._record_load_result(self._load_discovered())
+        # Discovery progress is not completion of a user command. In particular
+        # a retry must never finish an import/enable that is still in flight.
+        self.load_changed.emit(result)
 
     @Slot(object)
     def _state_update(self, state_result):
         if self._closed.is_set():
             return
         if self.startup is not None and self.startup.binding is not None:
-            self.startup.refresh_authorization()
+            self._record_load_result(self.startup.refresh_authorization())
         self.state_changed.emit(state_result)
+
+    def ensure_loaded(self):
+        """Discover committed packages, retaining bounded kernel-lock retries."""
+        if self._closed.is_set() or self.service is None or self.busy:
+            return self.last_result
+        # Explicit catalog discovery promotes a management-only runtime; it is
+        # now responsible for restoring authorization after transient OS locks.
+        self._management_only = False
+        return self._record_load_result(self._load_discovered())
+
+    def _load_discovered(self):
+        if self.startup is not None and self.startup.binding is not None:
+            self.last_result = self.startup.load_current()
+            return self.last_result
+        runtime = self.service.runtime
+        self.service.runtime = None
+        try:
+            recovered = self.service.recover_pending()
+        finally:
+            self.service.runtime = runtime
+        if recovered.status not in ("completed", "idempotent", "awaiting_startup_confirmation"):
+            return recovered
+        state_result = self.service.store.read()
+        if state_result.status == "lock_busy":
+            return self._result("awaiting_release", reason="state_lock_busy")
+        state = state_result.state
+        if state is None or state.active is None:
+            return recovered
+        if self.startup is None:
+            from .feature_host_bindings import bind_ai_context, bind_local_context, bind_screen_context
+            from .feature_package_startup import ProductionFeatureStartup
+
+            context_factory = {SCREEN_FEATURE_ID: bind_screen_context, AI_FEATURE_ID: bind_ai_context}.get(self.feature_id)
+            if context_factory is None:
+                def context_factory(config):
+                    return bind_local_context(config, self.feature_id)
+            directory = self.config.dir / "feature-runtime"
+            if self.feature_id != SCREEN_FEATURE_ID:
+                directory /= self.feature_id
+            self.startup = ProductionFeatureStartup(self.service, self.host, runtime_directory=directory,
+                                                    role=self.role, context_factory=lambda: context_factory(self.config))
+        self.last_result = self.startup.load_current()
+        return self.last_result
 
     def submit(self, command: str, value=None, *, confirmation_token=None, expected_revision=None):
         self.host.registry.check_thread()
@@ -308,6 +356,7 @@ class FeatureManagementRuntime(QObject):
             "rollback": service.preflight_rollback,
             "uninstall": service.preflight_uninstall,
             "install": lambda: service.preflight_install(value),
+            "import_disabled": lambda: service.preflight_install(value, enabled=False),
             "upgrade": lambda: service.preflight_upgrade(value),
             "apply": lambda: service.apply(value, confirmation_token=confirmation_token),
             "cancel": lambda: service.cancel_preflight(value),
@@ -319,10 +368,23 @@ class FeatureManagementRuntime(QObject):
             return False
         self.busy = True
         self.busy_changed.emit(True)
+        retry_metadata = command in {"install", "import_disabled", "upgrade", "uninstall", "rollback"} or (command == "enable" and value is True)
 
         def run():
             try:
                 result = action()
+                # Metadata readers and a newly discovered Core may briefly hold
+                # kernel locks. Keep this one explicit user operation busy while
+                # retrying the same inputs off the GUI thread. A revision conflict,
+                # invalid package or live-code occupancy is never retried here.
+                # Accepted transactions/lifecycle callbacks retain their explicit
+                # plan-based retry path; only metadata preparation is retried.
+                for delay in (0.1, 0.25, 0.5, 1.0, 2.0):
+                    if not retry_metadata or not isinstance(result, OperationResult) or result.reason not in LOCK_BUSY_REASONS:
+                        break
+                    if self._closed.wait(delay):
+                        return
+                    result = action()
                 if command in ("recover", "gc") and self._probe_sandbox is not None:
                     outcomes = self._collect_probe_cleanup(self._probe_sandbox)
                     if isinstance(result, OperationResult):
@@ -340,7 +402,7 @@ class FeatureManagementRuntime(QObject):
         threading.Thread(target=run, name="feature-management", daemon=False).start()
         return True
 
-    def submit_local_source(self, source, *, auto_apply=False):
+    def submit_local_source(self, source, *, auto_apply=False, enabled=True):
         """Route a selected local package by its bounded manifest identity."""
         self.host.registry.check_thread()
         if self._closed.is_set() or self.busy:
@@ -374,7 +436,7 @@ class FeatureManagementRuntime(QObject):
         except Exception:
             target.result_ready.emit(target._result("rejected", reason="management_state_unavailable"))
             return False
-        command = "upgrade" if inspection.active is not None else "install"
+        command = "upgrade" if inspection.active is not None else ("install" if enabled else "import_disabled")
         target._auto_apply_requested = bool(auto_apply)
         if not target.submit(command, route.source):
             target._auto_apply_requested = False
@@ -390,6 +452,14 @@ class FeatureManagementRuntime(QObject):
         if isinstance(result, OperationResult):
             self.last_operation = result
         self.busy_changed.emit(False)
+        if isinstance(result, OperationResult) and result.status in ("completed", "idempotent", "awaiting_startup_confirmation", "awaiting_release"):
+            from .feature_state_io import StateError
+            from .mod_catalog import publish_catalog_change
+
+            try:
+                publish_catalog_change(self.config.dir)
+            except (OSError, ValueError, StateError):
+                pass  # the state watcher still observes the authoritative ledger
         self.result_ready.emit(result)
         if isinstance(result, OperationResult):
             if result.phase == "awaiting_confirmation" and self._auto_apply_requested and result.plan is not None:
@@ -440,7 +510,14 @@ def discover_local_feature_ids(config) -> tuple[str, ...]:
             state = FeatureInstallStateStore(config.dir, feature_id=entry.name).read()
         except (OSError, RuntimeError, TypeError, ValueError):
             continue
-        if state.state is not None and state.state.versions:
+        # A first install can stop after acceptance but before versions exist.
+        # Discover its pending transaction so normal startup can replay it.
+        if state.state is not None and (state.state.versions or state.state.pending_transaction):
+            discovered.append(entry.name)
+        elif state.status == "lock_busy":
+            # A notification is not replayed after an unchanged read stamp.
+            # Retain the valid owner for normal bounded startup retry; this does
+            # not authorize/import anything until the ledger can be verified.
             discovered.append(entry.name)
     return tuple(sorted(discovered))
 

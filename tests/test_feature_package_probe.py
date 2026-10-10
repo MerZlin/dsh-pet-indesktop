@@ -38,7 +38,7 @@ def test_real_signed_host_factory_is_headless_and_does_not_open_user_services(tm
 from pathlib import Path
 from pet.feature_package_probe import verified_host_probe
 from pet.plugins.package_trust import FeaturePackageVerifier
-verifier = FeaturePackageVerifier(core_version="4.2.4", api_version="1", allowed_capabilities={{"screen.capture"}}, trust_anchors={{"validation":bytes.fromhex({public_key!r})}})
+verifier = FeaturePackageVerifier(core_version="4.2.5", api_version="1", allowed_capabilities={{"screen.capture"}}, trust_anchors={{"validation":bytes.fromhex({public_key!r})}})
 verified_host_probe(Path({str(package)!r}), verifier)
 import json
 print(json.dumps([name for name in sys.modules if name in ('ctypes', 'pet.feature_install_state', 'pet.feature_version_lease', 'pet.desktop_query', 'socket', 'keyring') or name.startswith('PySide6')]))
@@ -92,7 +92,7 @@ def test_host_entry_reverifies_signed_real_factory_and_binds_receipt(tmp_path, m
     package = assemble_package(root, tmp_path / "signed", worker, key)
     digest = hashlib.sha256((package / "manifest.json").read_bytes()).hexdigest()
     policy = dict(
-        core_version="4.2.4",
+        core_version="4.2.5",
         api_version="1",
         platform=sys.platform,
         allowed_capabilities=["screen.capture"],
@@ -111,7 +111,7 @@ def test_host_entry_reverifies_signed_real_factory_and_binds_receipt(tmp_path, m
     monkeypatch.setattr(HeadlessFeaturePackageVerifier, "_valid_signature", staticmethod(FeaturePackageVerifier._valid_signature))
     output = io.StringIO()
     assert host_probe(io.StringIO(json.dumps(doc) + "\n"), output) == 0, output.getvalue()
-    assert json.loads(output.getvalue()) == {"schema": 1, "kind": "host_valid", "manifest_digest": digest, "version": "1.0.3"}
+    assert json.loads(output.getvalue()) == {"schema": 1, "kind": "host_valid", "manifest_digest": digest, "version": "1.0.4"}
     doc["manifest_digest"] = "0" * 64
     assert host_probe(io.StringIO(json.dumps(doc) + "\n"), io.StringIO()) == 78
 

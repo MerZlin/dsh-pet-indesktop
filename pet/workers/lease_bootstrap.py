@@ -14,6 +14,7 @@ from ..feature_version_lease import FeatureVersionLeaseCoordinator, LeaseError, 
 
 TOKEN_ENV = "DSH_PET_FEATURE_LEASE_HANDOFF_TOKEN"
 ROOT_ENV = "DSH_PET_FEATURE_LEASE_ROOT"
+OWNER_ENV = "DSH_PET_FEATURE_LEASE_OWNER"
 CLAIMED_ENV = "DSH_PET_FEATURE_LEASE_CLAIMED"
 
 
@@ -24,7 +25,13 @@ def claim_worker_lease_from_environment() -> bool:
     root = os.environ.pop(ROOT_ENV, None)
     if not isinstance(root, str) or not root:
         raise LeaseError("handoff_unavailable")
-    lease = FeatureVersionLeaseCoordinator(Path(root)).claim_worker(token)
+    from ..feature_install_state import FEATURE_ID, FeatureInstallStateStore
+
+    # The parent supplies the verified owner, not a child-selected package path.
+    # Absent owner retains the old screen Worker handoff contract.
+    owner = os.environ.pop(OWNER_ENV, FEATURE_ID)
+    store = FeatureInstallStateStore(Path(root), feature_id=owner)
+    lease = FeatureVersionLeaseCoordinator(store).claim_worker(token)
     retain_process_lease(lease)
     os.environ[CLAIMED_ENV] = "1"
     return True

@@ -414,7 +414,7 @@ class PetInstance:
         self._enable_chat = bool(value)
 
     # ------------------------------------------------------------ 窗口构建
-    def _create_library(self, character_id: str) -> MovieLibrary:
+    def _create_library(self, character_id: str, *, asset_dir=None) -> MovieLibrary:
         # 预热策略：默认 balanced（瞬时交互核 pinned 预热首帧，随机动作池
         # 按需解码）。预热开关已并入省电模式：省电开启 = 闲置降帧 + 关闭
         # 后台预热（此处经 prewarm_enabled 传入，设置保存后由
@@ -425,6 +425,7 @@ class PetInstance:
         webm_clip_mod.set_first_frame_budget(int(self.config.get("first_frame_cache_max_mb", 8)) * 1024 * 1024)
         lib = MovieLibrary(
             character_id=character_id,
+            asset_dir=asset_dir,
             prewarm_policy=prewarm,
             prewarm_enabled=not bool(self.config.get("idle_low_fps_enabled", False)),
         )
@@ -594,24 +595,23 @@ class PetInstance:
         self._build_window(character_id)
 
     # ------------------------------------------------------------ 角色切换
-    def switch_character(self, character_id: str) -> None:
+    def switch_character(self, character_id: str, *, asset_dir=None, force=False) -> bool:
         if self.win is None:
-            return
+            return False
         current = str(self.config.get("character", catalog.DEFAULT_CHARACTER))
-        if character_id == current:
-            return
-
-        # 先保存配置，即使后续加载失败也记住用户选择
-        self.config.set("character", character_id)
-        self.config.save()
+        if character_id == current and not force:
+            return True
 
         try:
             # 预创建新库，失败则保留当前角色（在动旧窗口之前完成）
-            lib = self._create_library(character_id)
+            lib = self._create_library(character_id) if asset_dir is None else self._create_library(character_id, asset_dir=asset_dir)
         except Exception as exc:
             logging.exception("切换角色失败: %s", character_id)
             _show_startup_error("切换角色失败", str(exc))
-            return
+            return False
+
+        self.config.set("character", character_id)
+        self.config.save()
 
         logging.info("切换角色: %s -> %s", current, character_id)
 
@@ -634,6 +634,9 @@ class PetInstance:
             old_win.agent_link_manager.shutdown()
         # 主窗热切换才换托盘（进程级单托盘）；非主窗热切换不动共享托盘。
         self._build_window(character_id, lib=lib, build_tray=(self is self.shell.instance))
+        old_library = getattr(old_win, "lib", None)
+        if old_library is not None:
+            old_library.shutdown()
         if self.enable_chat:
             for chat_window in (self.legacy_chat_window, self.modern_chat_window):
                 if chat_window is not None:
@@ -643,6 +646,7 @@ class PetInstance:
             self.shell.island.refresh_from_config()
         # P1-4：任一窗切换后刷新托盘菜单（per-window 区闭包指向新窗，防陈旧窗）
         self.shell._refresh_tray_menu()
+        return True
 
     def _apply_spawn_offset(self) -> None:
         """让新孵化的桌宠与母桌宠错开，避免两个窗口完全重叠。
@@ -1274,6 +1278,9 @@ class AppShell:
 
             self._shared = SharedSubsystems(self)
         _LIVE_SHELLS.add(self)
+        from .mod_core import CoreModSupport
+
+        self.mod_support = CoreModSupport(self)
 
     @property
     def enable_chat(self) -> bool:
@@ -2129,6 +2136,9 @@ class AppShell:
         self._mark_session_ending()
         from .feature_management import close_official_management
 
+        support = getattr(self, "mod_support", None)
+        if support is not None:
+            support.close()
         close_official_management(self.feature_host)
         # 窗级收口：逐窗保存位置、停本窗预热与 Agent、提交本窗会话、释放本窗 slot 锁
         for inst in self._instances:
@@ -2300,6 +2310,9 @@ class AppShell:
 
                 host = getattr(shell, "feature_host", None)
                 if host is not None:
+                    support = getattr(shell, "mod_support", None)
+                    if support is not None:
+                        support.close()
                     close_official_management(host)
                 service = getattr(shell, "todo_service", None)
                 if service is not None:

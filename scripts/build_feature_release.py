@@ -409,6 +409,8 @@ def build_worker(
 
 PROBE_BUILD_RESERVE = 384 * 1024**2
 PROBE_SOURCES = (
+    "pet/mod_api/__init__.py",
+    "pet/mod_api/v1.py",
     "pet/__init__.py",
     "pet/frozen_runtime_paths.py",
     "pet/official_features.py",
@@ -565,6 +567,7 @@ def build_probe(
     ]
     for name in PROBE_EXCLUDES:
         command.extend(("--exclude-module", name))
+    command.extend(("--hidden-import", "pet.mod_api.v1"))
     command.extend(headless_crypto_arguments())
     command.extend(("--add-binary", str(crypto / "libsodium.dll") + ";.", str(source / "scripts/feature_probe_entry.py")))
     seconds = _run(output, command, Path(owned_root).absolute(), PROBE_BUILD_RESERVE, budget_bytes)
@@ -592,6 +595,7 @@ def build_probe(
         "pet.feature_package_probe",
         "pet.feature_ports",
         "pet.api_ports",
+        "pet.mod_api.v1",
         "_dsh_probe_native",
     }
     if not required <= modules:

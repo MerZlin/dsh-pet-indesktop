@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QScrollArea
 
 from pet import feature_distribution
 from pet.config import Config
-from pet.feature_management_ui import FeatureManagementWidget
+from pet.mod_center_ui import ModCenterWidget
 from pet.modern_settings_dialog import ModernSettingsDialog
 
 
@@ -25,24 +25,24 @@ def main():
     manager = dialog.feature_management
     try:
         dialog.menu_theme_select.setCurrentIndex(dialog.menu_theme_select.findData(value["theme"]))
-        dialog.setStyleSheet(dialog.styleSheet() + "\n#featureManagement QLabel, #featureManagement QPushButton {font-size:18px;}")
+        dialog.setStyleSheet(dialog.styleSheet() + "\n#modCenter QLabel, #modCenter QPushButton {font-size:18px;}")
         dialog.resize(value["width"], 760)
         dialog.show()
-        widget = dialog.findChild(FeatureManagementWidget)
+        widget = dialog.findChild(ModCenterWidget)
+        assert widget is dialog.mod_center and widget.rows
         deadline = time.monotonic() + 30
-        while (manager.busy or widget.inspection is None) and time.monotonic() < deadline:
+        while manager.busy and time.monotonic() < deadline:
             app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
-        assert widget.inspection is not None and not manager.busy
+        assert not manager.busy
         if value["language"] == "en":
-            widget.status_label.setText(
-                "Waiting for all versions and previous generations to be naturally released; no user application or external process is forcibly closed."
-            )
-            widget.summary_label.setText(
-                "Uninstall preserves profiles, encrypted credentials, bindings, memory, quota and chat history. Immutable confirmation is bound to this source fingerprint: "
+            widget.summary.setText(
+                "Waiting for the running package to exit naturally. Original ZIP archives, source directories, profiles and chat history are preserved. "
                 + "a" * 64
             )
-            widget.install_button.setText("Choose an official package directory")
-            widget.zip_button.setText("Choose an official package ZIP archive")
+            widget.import_directory.setText("Choose a local MOD package directory")
+            widget.import_zip.setText("Choose a local MOD package ZIP archive")
+        else:
+            widget.summary.setText("等待运行中的扩展自然退出后完成更新；不强制关闭程序，保留原始 ZIP、源目录与个人数据。")
         dialog.select_page("extensions")
         QTest.qWaitForWindowExposed(dialog, 10000)
         app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
@@ -58,26 +58,18 @@ def main():
         assert dialog.local_package_zip_button.hasFocus()
         QTest.keyClick(dialog.local_package_zip_button, Qt.Key.Key_Tab)
         assert dialog.local_package_directory_button.hasFocus(), "unified ZIP/directory actions remain keyboard reachable"
-        widget.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
-        visited = []
-        for _ in range(30):
-            focus = app.focusWidget()
-            if focus in (widget.install_button, widget.zip_button):
-                visited.append(focus)
-            if focus is widget.zip_button:
-                break
-            QTest.keyClick(focus or widget.status_label, Qt.Key.Key_Tab)
-        assert visited == [widget.install_button, widget.zip_button], "enabled management actions must remain keyboard reachable in directory/ZIP order"
+        QTest.keyClick(dialog.local_package_directory_button, Qt.Key.Key_Tab)
+        assert widget.search.hasFocus(), "search follows the two import actions"
         dialog.select_page("extensions")
         assert dialog.local_package_zip_button.hasFocus(), "neutral import deep-link focus must be restored"
         for area in dialog.findChildren(QScrollArea):
             if area.isVisible():
                 assert area.horizontalScrollBar().maximum() == 0
-        for button in widget.buttons:
+        for button in (widget.import_zip, widget.import_directory):
             assert button.accessibleName() and button.accessibleDescription()
             assert button.height() >= button.heightForWidth(button.width())
             assert button.mapTo(widget, button.rect().topRight()).x() < widget.width()
-        label = widget.summary_label
+        label = widget.summary
         layout_deadline = time.monotonic() + 30
         while True:
             app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
@@ -111,7 +103,7 @@ def main():
                     "font_height": label.fontMetrics().height(),
                     "theme": value["theme"],
                     "language": value["language"],
-                    "tab_order": [widget.install_button.accessibleName(), widget.zip_button.accessibleName()],
+                    "tab_order": [widget.import_zip.accessibleName(), widget.import_directory.accessibleName()],
                     "local_tab_order": [dialog.local_package_zip_button.accessibleName(), dialog.local_package_directory_button.accessibleName()],
                     "management_only": True,
                 }

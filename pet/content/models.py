@@ -23,6 +23,7 @@ class ContentManifest:
     integrity_sha256: str | None
     signature: str | None
     raw: dict[str, Any] = field(repr=False, compare=False)
+    description: str = ""
 
 
 @dataclass(frozen=True)

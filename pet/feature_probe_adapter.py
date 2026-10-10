@@ -147,18 +147,20 @@ class WindowsFeatureProbeSandbox:
             self.materials.mark(owned, "worker", "copying")
             root, helper, candidate = self._materials(original, attempt, "worker")
             seen = False
+            worker_id = None
 
             def hello_shutdown(line: bytes) -> bytes:
-                nonlocal seen
+                nonlocal seen, worker_id
                 try:
                     message = decode_message(line)
                 except ValueError as exc:
                     raise ProbeLaunchError("worker_probe_protocol") from exc
-                if seen or message.worker_id != "proactive-screen" or message.type != "hello" or message.payload != {"probe": True, "capabilities": []}:
+                if seen or message.worker_id not in (candidate.id, "proactive-screen") or message.type != "hello" or message.payload != {"probe": True, "capabilities": []}:
                     raise ProbeLaunchError("worker_probe_protocol")
                 seen = True
+                worker_id = message.worker_id
                 # No task/configuration paths, screenshots or model permissions.
-                return encode_message(build_message("proactive-screen", "shutdown"))
+                return encode_message(build_message(worker_id, "shutdown"))
 
             self.materials.mark(owned, "worker", "launching")
             result = WindowsProbeLauncher(helper, limits=limits).run(
@@ -169,7 +171,7 @@ class WindowsFeatureProbeSandbox:
             self.verifier.reverify(candidate)
             self.verifier.reverify(original)
             helper.verify()
-            worker_hello = seen and validate_worker_transcript(result.stdout, graceful_returncode=0)
+            worker_hello = seen and validate_worker_transcript(result.stdout, graceful_returncode=0, worker_id=worker_id)
             worker_exit = worker_hello and result.returncode == 0 and not result.reason
             return ProbeOutcome(
                 host_valid, worker_hello, worker_exit, isolation, result.reason or (None if worker_exit and isolation else "worker_probe_failed")

@@ -39,6 +39,13 @@
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [RECORDS-INDEX.md](RECORDS-INDEX.md) | PR 报告、Issue/Bug、Release 和工程过程记录的分类导航；不移动、不合并历史证据。 | 查找某次 PR、Issue、版本发布或工程复盘记录时；迁移记录目录前必读。 |
+## MOD 管理中心与作者接口（实施中）
+
+| 文档 | 一句话内容 | 何时必读 |
+|---|---|---|
+| [MOD 管理中心实施计划](modding/MOD-CENTER-IMPLEMENTATION-PLAN-2026-10-10.md) | 经批准的本地列表、v1、教程与验证合同。 | 修改扩展管理、角色启停或公开作者接口前。 |
+| [PLAN](../.scratch/mod-authoring-v1/PLAN.md) · [HANDOFF](../.scratch/mod-authoring-v1/HANDOFF.md) · [STATUS](../.scratch/mod-authoring-v1/STATUS.md) · [WORKLOG](../.scratch/mod-authoring-v1/WORKLOG.md) · [SUMMARY](../.scratch/mod-authoring-v1/SUMMARY.md) | M00–M05 的持续状态、证据与停点。 | 恢复本轮开发或核对是否真的交付前。 |
+
 ## 构建与发布
 
 | 文档 | 一句话内容 | 何时必读 |
@@ -135,6 +142,8 @@
 ---
 
 ## PR 报告存档
+
+- [MOD 管理中心与作者接口 v1](PR-REPORT-MOD-CENTER-V1-2026-10-10.md)：列表、公开接口与冻结交付验证；审查 M00–M05 时必读。
 
 - [项目内识屏 Worker 与 API 连接反馈（2026-10-10）](PR-REPORT-PORTABLE-SCREEN-WORKER-2026-10-10.md)：Core4.2.4/Screen1.0.3 的可信 portable runtime、READY后心跳、故障重试、按钮旁HTTP结果码、鲸鱼娘图标与最终冻结链路证据；继续本轮验收、检查构建hash和人工限制前必读。
 

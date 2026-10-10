@@ -1,0 +1,8 @@
+{
+  "id": "demo.echo-worker",
+  "name": "离线 Echo Worker",
+  "description": "独立进程返回消息，演示握手、取消和自然退出。不联网。",
+  "version": "1.0.0",
+  "factory": "echo-worker/v1",
+  "execution_kind": "host-worker"
+}

@@ -43,6 +43,12 @@ def app():
 
 
 class _FakeLib:
+    def __init__(self):
+        self.shutdown_calls = 0
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
     def pause_warm(self):
         pass
 
@@ -359,6 +365,8 @@ def test_switch_character_rebuilds_own_session_and_broker(tmp_path, app, monkeyp
 
     # 本窗旧碰撞会话被停并被重建（对象 id 变化）；进程级共享 hub 不被重建
     # （各窗共用，批5.3）。
+    assert win0.lib.shutdown_calls == 1
+    assert sec_win.lib.shutdown_calls == 0
     assert ipc_stop == [1], "switch_character 应停本窗旧碰撞会话"
     assert broker_shutdown == [], "switch_character 不应关进程级共享解码 hub（批5.3 各窗共用）"
     assert shell.instance.collision_ipc is not old_ipc, "本窗 collision_ipc 应重建"
@@ -945,6 +953,7 @@ def test_switch_character_new_window_gets_new_session(tmp_path, app, monkeypatch
     target = next((c for c in char_ids if c != current), "not-default-character")
     shell.instance.switch_character(target)
 
+    assert win0.lib.shutdown_calls == 1
     assert seen_sessions, "switch_character 应重建窗口"
     assert seen_sessions[-1] is not old_ipc, "建窗时必须已是新会话"
     assert seen_sessions[-1] is shell.instance.collision_ipc
@@ -983,6 +992,8 @@ def test_non_primary_switch_builds_no_tray(tmp_path, app, monkeypatch):
     target = next((c for c in char_ids if c != current), "not-default-character")
     sec.switch_character(target)
 
+    assert sec_win.lib.shutdown_calls == 1
+    assert primary_win.lib.shutdown_calls == 0
     assert build_tray_calls == [False], f"非主窗热切换不得触碰托盘，实际 build_tray 序列: {build_tray_calls}"
 
     _stop_sessions(shell.instance, sec)

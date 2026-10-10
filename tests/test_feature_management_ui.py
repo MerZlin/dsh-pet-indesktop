@@ -85,7 +85,7 @@ def test_manager_deep_link_lives_in_existing_general_domain_and_search(tmp_path)
         app.processEvents()
         assert dialog.select_page("extensions")
         assert dialog.sidebar.currentItem().text() == "常规"
-        assert dialog.findChild(SettingRow, "settingRow_feature_packages") is not None
+        assert dialog.findChild(SettingRow, "settingRow_local_package_import") is not None
         assert tuple(dialog.sidebar.item(i).text() for i in range(dialog.sidebar.count())) == tuple(
             item[0] for item in SETTINGS_DOMAIN_NAV if item[0] != "AI 与对话"
         )
@@ -173,60 +173,34 @@ def test_clean_settings_component_does_not_block_lifecycle_as_method_object(tmp_
 @pytest.mark.parametrize("language", ["zh", "long-en"])
 @pytest.mark.parametrize("font_pixels", [13, 18])
 def test_management_layout_language_theme_font_matrix(tmp_path, width, theme, language, font_pixels):
-    from PySide6.QtCore import QRect, Qt
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QScrollArea
 
-    from pet.feature_management_ui import FeatureManagementWidget
     from pet.modern_settings_dialog import ModernSettingsDialog
-
     app = QApplication.instance() or QApplication([])
     dialog = ModernSettingsDialog(Config(base=tmp_path), include_ai=False, standalone=True, initial_page="extensions")
     try:
         dialog.menu_theme_select.setCurrentIndex(dialog.menu_theme_select.findData(theme))
-        dialog.setStyleSheet(dialog.styleSheet() + f"\n#featureManagement QLabel, #featureManagement QPushButton {{font-size:{font_pixels}px;}}")
+        dialog.setStyleSheet(dialog.styleSheet() + f"\n#modCenter QLabel, #modCenter QPushButton {{font-size:{font_pixels}px;}}")
         dialog.resize(width, 760)
         dialog.show()
-        widget = dialog.findChild(FeatureManagementWidget)
+        widget = dialog.mod_center
         if language == "long-en":
-            widget.status_label.setText(
-                "Waiting for the previously loaded generation to be naturally released; no other application or user process will be forcibly closed."
-            )
-            widget.summary_label.setText(
-                "The signed official package is installed in an immutable version directory. Uninstall preserves personal settings, encrypted credentials, profile bindings, memory, quota and chat history. Confirmation is bound to the source digest. "
-                + "a" * 64
-            )
-            for button, text in zip(
-                widget.buttons,
-                [
-                    "Choose directory",
-                    "Choose ZIP",
-                    "Disable for every instance",
-                    "Instance settings",
-                    "Rollback previous",
-                    "Uninstall",
-                    "Safe retry",
-                    "Confirm operation",
-                    "Cancel preflight",
-                    "Resolve local unsaved draft",
-                ],
-            ):
-                button.setText(text)
+            widget.summary.setText("Waiting for the previously loaded generation to be naturally released. No application will be forcibly closed. " + "a" * 64)
+            widget.import_directory.setText("Import package directory")
+            widget.import_zip.setText("Import package ZIP")
         _pump(app, lambda: widget.width() > 0)
         for _ in range(4):
             app.processEvents()
-        assert widget.status_label.fontMetrics().height() >= font_pixels
-        assert widget.status_label.focusPolicy() == Qt.FocusPolicy.StrongFocus
-        assert all(b.accessibleName() and b.accessibleDescription() for b in widget.buttons)
+        assert widget.summary.fontMetrics().height() >= font_pixels
+        assert widget.summary.textFormat() == Qt.TextFormat.PlainText
         for area in dialog.findChildren(QScrollArea):
             if area.isVisible():
                 assert area.horizontalScrollBar().maximum() == 0
-        for button in widget.buttons:
-            assert button.height() >= button.heightForWidth(button.width())
+        buttons = [widget.import_zip, widget.import_directory, *widget.filters.values()]
+        for button in buttons:
+            assert button.accessibleName()
             assert button.mapTo(widget, button.rect().topRight()).x() < widget.width()
-        label = widget.summary_label
-        bound = label.fontMetrics().boundingRect(QRect(0, 0, label.width(), 10000), int(Qt.TextFlag.TextWordWrap), label.text())
-        assert label.height() >= bound.height()
-        assert bound.width() <= label.width(), "unbroken authenticated identifiers must not be painted outside the card"
         dialog.select_page("extensions")
         assert dialog.local_package_zip_button.hasFocus()
     finally:
@@ -257,7 +231,7 @@ def test_deleted_dialog_ignores_late_background_result(tmp_path, monkeypatch):
             finished.set()
 
     monkeypatch.setattr(manager.service, "inspect", blocked)
-    dialog.show()
+    assert manager.submit("inspect")
     _pump(app, started.is_set)
     dialog.close()
     dialog.deleteLater()
@@ -577,7 +551,7 @@ def test_real_queued_uninstall_can_revoke_before_lock_failure_then_safely_resume
         app.processEvents()
 
 
-def test_two_official_cards_have_independent_owners_and_close_all_observers(tmp_path):
+def test_single_list_keeps_independent_managers_and_closes_all_observers(tmp_path):
     from pet.modern_settings_dialog import ModernSettingsDialog
     from pet.official_features import AI_OWNER, SCREEN_OWNER
     from pet.settings_widgets import SettingRow
@@ -590,12 +564,11 @@ def test_two_official_cards_have_independent_owners_and_close_all_observers(tmp_
         app.processEvents()
         managers = dialog.feature_managers
         assert set(managers) == {AI_OWNER, SCREEN_OWNER}
-        assert set(dialog.feature_management_widgets) == set(managers)
+        assert not dialog.feature_management_widgets  # no obsolete transaction cards
         assert not dialog.feature_host.owners(), "management-only must not import either factory"
-        assert dialog.findChild(SettingRow, "settingRow_ai_feature_package") is not None
-        assert "AI" in dialog.feature_management_widgets[AI_OWNER].accessibleName()
-        assert "屏幕理解" in dialog.feature_management_widgets[SCREEN_OWNER].accessibleName()
-        dialog._search_settings("文件理解")
+        assert dialog.findChild(SettingRow, "settingRow_local_package_import") is not None
+        assert dialog.mod_controller.managers is managers
+        dialog._search_settings("扩展")
         assert dialog._search_matches
         assert dialog.sidebar.currentItem().text() == "常规"
     finally:

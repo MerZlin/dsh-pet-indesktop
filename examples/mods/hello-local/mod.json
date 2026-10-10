@@ -1,0 +1,8 @@
+{
+  "id": "demo.hello-local",
+  "name": "离线打招呼",
+  "description": "演示菜单、自己的配置与数据、设置草稿和启停。不联网。",
+  "version": "1.0.0",
+  "factory": "hello-local/v1",
+  "execution_kind": "host-only"
+}

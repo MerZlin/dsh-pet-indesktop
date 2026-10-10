@@ -108,6 +108,9 @@ def load_manifest(root: Path) -> tuple[ContentManifest | None, list[str]]:
 
     plugin_id = _require(raw, "id", str, errors)
     name = _require(raw, "name", str, errors)
+    description = raw.get("description", "")
+    if not isinstance(description, str) or len(description) > 4096 or "\x00" in description:
+        errors.append("description must be plain text of at most 4096 characters")
     version = _require(raw, "version", str, errors)
     kind = _require(raw, "kind", str, errors)
     api_version = _require(raw, "api_version", str, errors)
@@ -179,6 +182,7 @@ def load_manifest(root: Path) -> tuple[ContentManifest | None, list[str]]:
         integrity_sha256=sha256,
         signature=signature,
         raw=raw,
+        description=description,
     ), []
 
 

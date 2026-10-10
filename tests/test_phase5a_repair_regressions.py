@@ -213,7 +213,7 @@ def test_both_local_package_paths_use_new_versions_and_minimum_core(tmp_path):
     (worker / "proactive-screen-worker.exe").write_bytes(b"MZ generated fixture")
     ai = assemble_ai_package(repo, tmp_path / "ai")
     screen = assemble_package(repo, tmp_path / "screen", worker)
-    for package, version, core in ((ai, "1.0.3", "4.2.3"), (screen, "1.0.3", "4.2.4")):
+    for package, version, core in ((ai, "1.0.4", "4.2.5"), (screen, "1.0.4", "4.2.5")):
         manifest = json.loads((package / "manifest.json").read_text())
         assert manifest["version"] == version
         assert manifest["core_requires"] == f">={core},<6.0.0"

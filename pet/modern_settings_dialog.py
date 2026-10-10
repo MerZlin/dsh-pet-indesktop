@@ -1057,6 +1057,10 @@ class ModernSettingsDialog(QDialog):
         self._search_matches: list[SettingRow] = []
         self._search_index = -1
         self.search_edit.textChanged.connect(self._search_settings)
+        from .mod_settings import SettingsModSupport
+
+        self._mod_preparations = []
+        self._mod_settings = SettingsModSupport(self)
         self._feature_unsubscribe = self.feature_host.subscribe(self._on_feature_contribution_changed)
         prepare_unsubscribers = [
             self.feature_host.before_remove(owner, lambda owner=owner: self._prepare_feature_revocation(owner)) for owner in self.feature_managers
@@ -1156,7 +1160,9 @@ class ModernSettingsDialog(QDialog):
         return settings_feature_lifecycle._prepare_screen_revocation(self)
 
     def _on_feature_contribution_changed(self, owner, state):
-        return settings_feature_lifecycle._on_feature_contribution_changed(self, owner, state)
+        settings_feature_lifecycle._on_feature_contribution_changed(self, owner, state)
+        if hasattr(self, "_mod_settings"):
+            self._mod_settings.queue_sync()
 
     def _on_ai_contribution_changed(self, state):
         return settings_feature_lifecycle._on_ai_contribution_changed(self, state)
@@ -2290,6 +2296,10 @@ class ModernSettingsDialog(QDialog):
             },
         )
         self.config.set("quick_launch_apps", self.quick_launch_editor.apps())
+        from .official_features import AI_OWNER, SCREEN_OWNER
+        for owner, component in self._feature_components.items():
+            if owner not in (AI_OWNER, SCREEN_OWNER) and component.dirty() and not component.confirm_save():
+                return False
         if self._ai_component is not None:
             if not self._ai_component.confirm_save():
                 return False
@@ -2335,21 +2345,7 @@ class ModernSettingsDialog(QDialog):
             cb(text)
 
     def _release_contributions(self) -> None:
-        self._draft_unsubscribe()
-        if self._owns_feature_management:
-            from .feature_management import close_official_management
-
-            close_official_management(self.feature_host)
-        for component in tuple(self._feature_components.values()):
-            component.dispose()
-        self._feature_components.clear()
-        self._screen_component = None
-        self._ai_component = None
-        self.ai_page = None
-        self._feature_unsubscribe()
-        self._feature_prepare_unsubscribe()
-        for owner in self.feature_managers:
-            self.feature_host.detach(owner, self._feature_scope)
+        settings_feature_lifecycle.release_contributions(self)
 
     def done(self, result: int) -> None:
         # Accept/reject do not necessarily dispatch closeEvent (notably Esc).

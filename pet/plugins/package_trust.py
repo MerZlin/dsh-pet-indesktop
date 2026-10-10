@@ -286,7 +286,14 @@ def _manifest_payload(raw: bytes) -> tuple[dict, bool]:
     if not isinstance(payload, dict):
         raise PackageVerificationError("invalid manifest fields")
     v2 = "format_version" in payload
-    _keys(payload, _V2_FIELDS if v2 else _FIELDS, "manifest")
+    required = _V2_FIELDS if v2 else _FIELDS
+    optional = {"name", "description"}
+    if not set(required) <= set(payload) or set(payload) - set(required) - optional:
+        raise PackageVerificationError("invalid manifest fields")
+    for metadata_field, limit in (("name", 128), ("description", 4096)):
+        value = payload.get(metadata_field, "")
+        if not isinstance(value, str) or len(value) > limit or "\x00" in value:
+            raise PackageVerificationError("invalid display metadata")
     return payload, v2
 
 

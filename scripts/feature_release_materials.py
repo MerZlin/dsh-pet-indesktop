@@ -24,6 +24,8 @@ MAX_GENERATED_BYTES = 6 * 1024**3
 CORE_REQUIRED = frozenset(
     {
         "pet.app",
+        "pet.mod_api.v1",
+        "pet.mod_api.worker_client",
         "pet.runtime_layout",
         "pet.official_features",
         "pet.feature_package_transactions",

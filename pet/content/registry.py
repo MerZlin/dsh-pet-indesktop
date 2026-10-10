@@ -90,7 +90,7 @@ class CharacterRegistry:
             root,
             core_version=self.core_version,
             platform_name=self.platform_name,
-            allow_unsigned=self.allow_unsigned,
+            allow_unsigned=self.allow_unsigned or source == "installed",
             verify_hash=False,
         )
         if manifest is None or errors:
@@ -164,6 +164,8 @@ class CharacterRegistry:
                 import json
 
                 active = json.loads(active_file.read_text(encoding="utf-8"))
+                if active.get("enabled", True) is not True:
+                    continue
                 version = str(active["version"])
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 self._record_failure(character_dir.name, "unknown", "active-pointer", str(exc), "installed")
