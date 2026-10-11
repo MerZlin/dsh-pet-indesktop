@@ -2246,6 +2246,43 @@ def test_reopened_animation_menu_reuses_cached_images_immediately():
     app.processEvents()
 
 
+def test_animation_category_leaf_actions_close_menu_on_trigger():
+    """点一个具体动作（随机动作/待机/转向/…）后，整棵右键菜单树应自动收起。
+
+    issue #221：动画分类叶子动作用 ``submenu.addAction`` 直接建，从未打上
+    ``closeOnTrigger`` 属性，``connect_action.invoke`` 因此永远走
+    ``callback()`` 直调分支，菜单停留原地——用户点完"随机动作"想看效果，
+    视线却被没收起的菜单挡住，需要再手动关一次。
+    其它叶子菜单（切换角色/快捷启动等）都靠这个属性走
+    ``defer_menu_callback`` 收起菜单再派发，这里应同口径。
+    """
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from pet.context_menus.shared import build_animation_categories
+
+    class Pet:
+        idles = []
+        turns = []
+        moves = []
+        clicks = []
+        acts = ["act-wave"]
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_kwargs: None
+
+    app = QApplication.instance() or QApplication([])
+    root = QMenu()
+    build_animation_categories(root, Pet(), icons=False, leaf_role_icons=False)
+    random_actions = root._owned_submenus[-1]
+    assert random_actions.title() == "随机动作"
+    random_actions.aboutToShow.emit()
+    action = random_actions.actions()[0]
+    assert action.property("closeOnTrigger") is True, (
+        "随机动作叶子动作必须设置 closeOnTrigger，否则点击后整棵菜单树不会收起"
+    )
+    app.processEvents()
+
+
 def test_representative_animation_image_is_cached_on_pet(monkeypatch):
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QImage

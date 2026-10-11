@@ -195,6 +195,11 @@ def _populate_animation_category(
     lazy_actions = []
     for name in entries:
         action = submenu.addAction(QIcon(), name) if leaf_role_icons else submenu.addAction(name)
+        # issue #221: without this, the leaf action never gets closeOnTrigger,
+        # so connect_action's invoke() always calls the callback directly and
+        # the whole menu tree stays open. User click "random action" wants to
+        # see pet play it, but menu still blocks the view until closed by hand.
+        action.setProperty("closeOnTrigger", True)
         connect_action(action, lambda name=name, callback=callback: callback(name))
         if leaf_role_icons:
             icon_actions.append((action, name))
