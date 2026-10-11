@@ -439,6 +439,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self._cursor_hidden_passthrough = bool(config.get('cursor_hidden_passthrough', True))
         self.mouse_through: bool = self._user_mouse_through
         self.drag_physics: bool = bool(config.get('drag_physics', False))
+        # issue #219：拖拽物理下低速松手是否改走零初速 throw 自然下落。
+        # 默认关闭，维持"松手即原地放下"的既有行为。
+        self.drop_gravity: bool = bool(config.get('drop_gravity', False))
         self.lock_position: bool = bool(config.get('lock_position', False))
         self.shift_drag: bool = bool(config.get('shift_drag', False))
         self.pet_opacity: int = int(_float_or_default(config.get('pet_opacity', 100), 100, 10, 100))
@@ -3257,11 +3260,20 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
                     self._trail, time.monotonic(), cap=self._throw_speed_cap
                 )
                 if math.hypot(rvx, rvy) < physics_mod.DEAD_ZONE_SPEED:
-                    if self._grab_offset is not None:
-                        self._move_window_towards(g.x() - self._grab_offset.x(),
-                                                  g.y() - self._grab_offset.y())
-                    self._stop_physics()
-                    self._save_position()
+                    if self.drop_gravity:
+                        # issue #219：零初速进入 throw，复用现成的重力 + 落地
+                        # 弹跳 + 静止判定链路（physics.throw_step）自然下落，
+                        # 不再停在半空。方向/力度都交给重力，不需要估一个假初速。
+                        self._phys_vel[:] = [0.0, 0.0]
+                        self._enter_physics_mode('throw')
+                        self._last_physics_tick_time = None
+                        self._physics_timer.start()
+                    else:
+                        if self._grab_offset is not None:
+                            self._move_window_towards(g.x() - self._grab_offset.x(),
+                                                      g.y() - self._grab_offset.y())
+                        self._stop_physics()
+                        self._save_position()
                 else:
                     self._phys_vel[:] = [rvx, rvy]
                     self._enter_physics_mode('throw')
@@ -3797,6 +3809,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         desired_drag_physics = bool(self.cfg.get('drag_physics', False))
         if desired_drag_physics != self.drag_physics:
             self.set_drag_physics(desired_drag_physics)
+        desired_drop_gravity = bool(self.cfg.get('drop_gravity', False))
+        if desired_drop_gravity != self.drop_gravity:
+            self.set_drop_gravity(desired_drop_gravity)
         desired_lock = bool(self.cfg.get('lock_position', False))
         if desired_lock != self.lock_position:
             self.set_lock_position(desired_lock)
@@ -4056,6 +4071,12 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.cfg.save()
         if not self.drag_physics:
             self._stop_physics()
+
+    def set_drop_gravity(self, on: bool) -> None:
+        """issue #219：拖拽物理下低速松手是否改走零初速 throw 自然下落。"""
+        self.drop_gravity = bool(on)
+        self.cfg.set('drop_gravity', self.drop_gravity)
+        self.cfg.save()
 
     def set_lock_position(self, on: bool) -> None:
         """锁定位置：开启后桌宠不可拖动（点击互动仍有效）。"""

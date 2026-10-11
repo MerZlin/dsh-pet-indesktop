@@ -217,6 +217,36 @@ def test_physics_drag_path_untouched(app, tmp_path):
     app.processEvents()
 
 
+def test_release_low_speed_stays_in_place_by_default(app, tmp_path):
+    """issue #219：drop_gravity 默认关闭时，低速松手仍是原地放下（维持既有行为）。"""
+    win = _make_win(app, tmp_path, drag_physics=True)
+    assert win.drop_gravity is False
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
+    # 合成事件之间几乎没有真实时间流逝，估出的松手速度天然落在 DEAD_ZONE 内。
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
+    assert win._physics_mode is None, "默认行为：低速松手直接落下，不进入抛掷"
+    assert win._phys_vel == [0.0, 0.0]
+    win.close()
+    app.processEvents()
+
+
+def test_release_low_speed_drop_gravity_enters_throw_with_zero_velocity(app, tmp_path):
+    """issue #219：开启 drop_gravity 后，低速松手改走零初速的 throw，由现成的
+    重力 + 落地弹跳 + 静止判定链路（physics.throw_step）接管自然下落，
+    不再停在半空。"""
+    win = _make_win(app, tmp_path, drag_physics=True, drop_gravity=True)
+    assert win.drop_gravity is True
+    win.mousePressEvent(_press(QPointF(10, 10), QPointF(100, 100)))
+    win.mouseMoveEvent(_move(QPointF(60, 60), QPointF(400, 300)))
+    win.mouseReleaseEvent(_release(QPointF(60, 60), QPointF(400, 300)))
+    assert win._physics_mode == "throw", "开启后低速松手应进入 throw，由重力接管下落"
+    assert win._phys_vel == [0.0, 0.0], "零初速起飞：方向与力度完全交给重力"
+    assert win._physics_timer.isActive()
+    win.close()
+    app.processEvents()
+
+
 # ================================================================ B3 同帧合并
 
 def test_move_event_coalesces_bubble_and_listener_per_frame(app, tmp_path, monkeypatch):

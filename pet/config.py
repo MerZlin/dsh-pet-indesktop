@@ -748,6 +748,7 @@ class Config:
             "mouse_through": False,
             "cursor_hidden_passthrough": True,
             "drag_physics": False,
+            "drop_gravity": False,  # 拖拽物理下，低速松手是否改走零初速 throw 自然下落（issue #219，默认关闭=维持原地放下）
             "lock_position": False,  # 锁定位置：桌宠不可拖动（点击仍有效）
             "shift_drag": False,  # 按住 SHIFT+左键才能拖动
             "pet_opacity": 100,  # 桌宠窗口不透明度 10-100
@@ -1013,6 +1014,7 @@ class Config:
             "mouse_through",
             "cursor_hidden_passthrough",
             "drag_physics",
+            "drop_gravity",
             "context_menu_template",
             "dialogue_mode",
             "dialogue_phrases",
