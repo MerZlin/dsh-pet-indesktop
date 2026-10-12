@@ -172,7 +172,9 @@ def test_os_request_happens_on_probe_thread_not_the_caller(monkeypatch):
     assert _wait_until(lambda: records), "探针应在一个宽预算内完成首次采样"
 
     assert caller not in records, f"调用线程自己查了 SMTC：{records}"
-    assert records == ["smtc-session-probe"], records
+    # CI can deschedule the caller across several valid 20ms samples.
+    # This contract concerns thread ownership, not the number of samples.
+    assert set(records) == {"smtc-session-probe"}, records
 
 
 def test_fresh_cache_read_never_touches_the_os(monkeypatch):

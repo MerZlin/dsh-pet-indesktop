@@ -1188,10 +1188,8 @@ class OverlayShell(QObject):
     @staticmethod
     def _local_bounds(screen) -> QRect:
         """屏幕可用工作区换算成 overlay 局部坐标（overlay 铺满屏幕几何）。"""
-        geo = screen.geometry()
-        avail = screen.availableGeometry()
-        return QRect(avail.x() - geo.x(), avail.y() - geo.y(),
-                     avail.width(), avail.height())
+        from .linux_overlay import desktop_bounds
+        return desktop_bounds(screen)
 
     @staticmethod
     def _default_corner_pos(bounds: QRect, rect: QRect) -> QPointF:
@@ -1757,7 +1755,8 @@ class OverlayShell(QObject):
     def show_bubble(self, text: str, duration_ms: int = 3200,
                     subtitle: str | None = None, *, sticky: bool = False,
                     buttons: list | None = None, title_first: bool = False,
-                    width_locked: bool = False, **_ignored) -> None:
+                    width_locked: bool = False, agent_title: str = "",
+                    agent_status: str = "", agent_final: bool = False, **_ignored) -> None:
         """向主 sprite 头顶冒泡（window.py:3850-3886 的 sprite 等价语义）。"""
         if not self.isVisible() or self._bubble_blocked():
             return
@@ -1776,10 +1775,14 @@ class OverlayShell(QObject):
             return
         self._apply_bubble_interactive()
         self.hold_bubble(duration_ms / 1000.0 + 2.0)
+        agent_options = (
+            dict(agent_title=agent_title, agent_status=agent_status, agent_final=agent_final)
+            if agent_title else {}
+        )
         self._show_bubble_text(str(text), duration_ms,
                                subtitle=str(subtitle or ""),
                                title_first=title_first,
-                               width_locked=width_locked)
+                               width_locked=width_locked, **agent_options)
 
     def _show_bubble_text(self, text: str, duration_ms: int, **kwargs) -> bool:
         follower = getattr(self, "_bubble_follower", None)
@@ -3412,8 +3415,10 @@ class OverlayShell(QObject):
 
     def _apply_effective_mouse_through(self) -> None:
         """有效穿透 = 用户手动穿透 OR 光标自动穿透（window.py:4204 同式）。"""
-        self.overlay.mouse_through = bool(
-            self._user_mouse_through or self._auto_cursor_hidden)
+        effective = bool(self._user_mouse_through or self._auto_cursor_hidden)
+        if self.overlay.mouse_through != effective:
+            self.overlay.mouse_through = effective
+            self.overlay.update()
 
     def _on_user_through_changed(self, on: bool) -> None:
         """菜单「鼠标穿透」直写收编：记用户意愿 + 持久化 + 复合重算。"""
@@ -4503,6 +4508,8 @@ class OverlayShell(QObject):
         try:
             screen.geometryChanged.connect(self.handle_geometry_changed)
             screen.availableGeometryChanged.connect(self.handle_geometry_changed)
+            if hasattr(screen, "virtualGeometryChanged"):
+                screen.virtualGeometryChanged.connect(self.handle_geometry_changed)
         except (AttributeError, TypeError):
             pass  # 测试假屏无 Qt 信号：几何同步由测试直调 handler
 
@@ -4510,6 +4517,8 @@ class OverlayShell(QObject):
         try:
             screen.geometryChanged.disconnect(self.handle_geometry_changed)
             screen.availableGeometryChanged.disconnect(self.handle_geometry_changed)
+            if hasattr(screen, "virtualGeometryChanged"):
+                screen.virtualGeometryChanged.disconnect(self.handle_geometry_changed)
         except (AttributeError, TypeError, RuntimeError):
             pass
 
@@ -4550,7 +4559,8 @@ class OverlayShell(QObject):
         """
         old_bounds = QRect(self._bounds)
         old_origin = self.overlay.geometry().topLeft()
-        self.overlay.setGeometry(self._screen.geometry())
+        from .linux_overlay import desktop_geometry
+        self.overlay.setGeometry(desktop_geometry(self._screen))
         new_bounds = self._local_bounds(self._screen)
         for sprite in [self.sprite, *self._spawned]:
             self._migrate_sprite_position(old_bounds, new_bounds, sprite)

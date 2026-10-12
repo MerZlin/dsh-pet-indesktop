@@ -35,7 +35,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [`ONEDIR_PACKAGING.md`](ONEDIR_PACKAGING.md) | onedir 打包流水线：绿色版 zip + Inno Setup 安装包，目标是运行期零解压、不产生 `_MEI` 缓存。 | **改 PyInstaller spec、打包资源、或平台构建脚本（`scripts/build_onedir.ps1` / `build_macos.sh` / `build_linux.sh`）时必读**（AGENTS.md 口径）。 |
+| [`ONEDIR_PACKAGING.md`](ONEDIR_PACKAGING.md) | onedir 打包流水线：绿色版 zip + Inno Setup 安装包，目标是运行期零解压、不产生 `_MEI` 缓存。 | Qt6.12构建同时查[运行库修复报告](PR-REPORT-QT612-ABI-2026-10-10.md)；**改 PyInstaller spec、打包资源、或平台构建脚本（`scripts/build_onedir.ps1` / `build_macos.sh` / `build_linux.sh`）时必读**（AGENTS.md 口径）。 |
 | [`STABLE_BUILDS.md`](STABLE_BUILDS.md) | 稳定版构建冻结记录：受保护文件名、构建隔离规则、防止误覆盖稳定版产物。 | **改发布/构建工作流时必读**（AGENTS.md 口径）。注意其冻结对象是 onefile 时代的 `dist/*.exe`，现行发布形态已是 onedir（见文末过时清单）。 |
 | [`BUILD-CI-FAILURE-NOTES-2026-08.md`](BUILD-CI-FAILURE-NOTES-2026-08.md) | 三平台打包/CI 反复踩坑与最终解法汇总（持续更新）：脚本统一入口、资源漏收集、依赖只在叶子模块导入导致整族用例红等。 | CI 连续两轮红、或遇到"本机红 CI 绿"的依赖类假红时；动手重试之前先查这里是否已有同类记录。 |
 | [`ACCEPTANCE_TESTS.md`](ACCEPTANCE_TESTS.md) | 验收测试文件清单：设置窗口、DSH Bridge、Qt 生命周期/全量三条验收路径的精确命令与当前实测基线。 | 提 PR 前跑验收、或需要确认"这个改动该跑哪几个测试文件"时；改动测试边界后必须同步更新本文基线数字。 |
@@ -87,7 +87,7 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
-| [`AGENT_LINK_PROTOCOL.md`](AGENT_LINK_PROTOCOL.md) | 多 Agent 联动统一事件协议与扩展指南：本地文件事件总线、六态词汇、第三方 Agent 接入与新增内置 Agent 的步骤。 | 接入新 Agent、改事件归一（`normalize_event_state`）或六态词汇时；面向集成方的对外协议口径以本文为准。 |
+| [`AGENT_LINK_PROTOCOL.md`](AGENT_LINK_PROTOCOL.md) | 多 Agent 联动统一事件协议与扩展指南：本地文件事件总线、六态词汇、第三方 Agent 接入与新增内置 Agent 的步骤。 | Codex 实现同时查 [联动报告](PR-REPORT-CODEX-X11-2026-10-10.md)；接入新 Agent、改事件归一（`normalize_event_state`）或六态词汇时；面向集成方的对外协议口径以本文为准。 |
 | [`DSH-BRIDGE-PET-EVENT-CONTRACT-2026-09-02.md`](DSH-BRIDGE-PET-EVENT-CONTRACT-2026-09-02.md) | Agent 适配器 → Pet 的事件契约：三层关系（原始事件 → 适配器标准 JSONL → Monitor/AgentLinkManager → 气泡与回写）与接入约束。 | 新增或修改适配器（`integrations/dsh-pet-bridge/`）、或需要在 Pet 侧复用既有状态处理/交互队列时。 |
 | [`DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md`](DSH-HUMAN-REQUEST-RESEARCH-2026-09-02.md) | DSH 人工请求事件调研：哪些 DSH 信号表示 Agent 暂停等待用户批准/回答，哪些只是工具或生命周期记录。 | 调整审批/提问的识别范围、或怀疑某类事件被误判成需要弹窗时；实现状态以 `integrations/dsh-pet-bridge/index.js` 与测试为准。 |
 | [`DSH-REQUEST-EVENT-CATALOG.md`](DSH-REQUEST-EVENT-CATALOG.md) | DSH human-request 事件的速查表（英文）：可回答的阻塞请求、身份字段、响应帧形状、不得弹窗的非阻塞事件。 | 写 Bridge 解析代码时需要精确的 wire frame / session event 字段与响应契约时；调研背景见上一行。 |
@@ -133,6 +133,8 @@
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
+| [`PR-REPORT-QT612-ABI-2026-10-10.md`](PR-REPORT-QT612-ABI-2026-10-10.md) | Qt6.12/Python3.11原生返回值所有权修复与源码重建证据。 | 修改Qt依赖、Linux打包或排查none_dealloc原生崩溃时。 |
+| [`PR-REPORT-CODEX-X11-2026-10-10.md`](PR-REPORT-CODEX-X11-2026-10-10.md) | Codex 联动与 X11 跨屏、输入穿透的实现与验证记录。 | 修改 Codex 安装、会话监听、气泡或 Linux Overlay 输入区域，或核对 fork 预发布结果时。 |
 | [`PR-REPORT-HARNESS-DUAL-TARGET-2026-10-06.md`](PR-REPORT-HARNESS-DUAL-TARGET-2026-10-06.md) | Harness 双目标启动（dsh web / 桌面端）+ 尾项收口：右键子菜单四入口 + 托盘两平铺启动项、新键 `harness_launch_target`（auto/web/desktop，只作用自启这一路）、桌面端**只登记不杀**（退出/联动关闭绝不终止用户主力 GUI 应用）、非 Windows 上 auto 结构上不可能拐到 desktop（显式 desktop 报 unsupported，不 Popen `.app`）、设置页桌面端项**置灰 + 回落 + 保存边界拒写**（存量 `desktop` 不成为无声死选项）、开关说明去掉字面 `**` 并改成「关闭只挡以后自动拉起，已拉起的 web 由退出/联动关闭收口」；含探测实测（`desktop_install_path` 中位 76.5µs、进程枚举 18.1ms——仅端口全 miss 的 3s 探测轮）、四刀消融全红，以及「未做 GUI 截图 / 未验 mac 真机 / 未跑全量」的诚实登记。 | 改 Harness 启动入口、自启目标、桌面端探测与归属收口、设置页「应用启动」段，或要判断「某平台上桌面端能不能选/选了什么」时必读；扩平台前必读（非 Windows 本轮只做到如实汇报不支持）。 |
 | [`PR-REPORT-SMTC-MEDIA-TYPE-2026-10-06.md`](PR-REPORT-SMTC-MEDIA-TYPE-2026-10-06.md) | SMTC 工单「视频被当歌曲」：实测 Chromium 族对网页视频**恒报 `MUSIC(1)`**（Edge/Chromium 两个构建，播放中/暂停/纯音频页共 10+ 次采样全为 1；artist/album/subtitle 全空，SMTC 无法区分网页视频与网页音乐）。修法两条腿：A 类型否决（`VIDEO(2)` 不进唱歌链路；唱歌/歌词独享 `_pick_singing_session`——被否决会话在**选择阶段**出局、只在可接受候选里分层，`_pick_playing_session` 保持原样故传输控制不受影响）+ B 新增设置「浏览器媒体会话参与歌词」（`music_browser_media_enabled`，默认关；否决表见 `_BROWSER_APP_IDS`，表外应用退回旧行为）。动画门改否决制、由**非主线程**常驻探针供数（主线程只读缓存 0.5µs/拍，探针 5.04ms/2s，功能关掉后 7.5s 自行退出）。含 `winrt-Windows.Media` 新依赖与「打包不需要 collect」的实测纠偏、原生播放器 VIDEO 未实测的诚实登记。 | 改 `pet/now_playing.py` 的会话选取/媒体类型、`pet/music_detect.py` 的唱歌门、`pet/window_alerts.check_music_sing`、歌词采样线程，或再遇「视频/浏览器内容被当歌曲显示」时必读。 |
 | [`PR-REPORT-QT-LIFECYCLE-CRASH-FAMILY-2026-10-04.md`](PR-REPORT-QT-LIFECYCLE-CRASH-FAMILY-2026-10-04.md) | Qt 生命周期崩溃家族根治：根因 = 丢弃未收口的 clip/worker 被 GC 析构撞上共享预取线程的在途 queued 交付（mac .ips 原生栈实锤 qtPythonMetacall 0x8）；修复 = clip/worker 进程级强钉 + 配图加载单 worker 队列化 + 配图缓存进程级共享 + 收口无条件作废在飞批次；CI 两道隔离（mac 拆进程 + 肇事单条 deselect）全摘，v15/v17 两轮三平台同口径全绿。 | 改 `pet/frameseq_clip.py` 生命周期/`pet/overlay_shell.py` 配图加载链、排查「测试套件/进程退出时段错误」、或引用崩溃家族历史时必读。 |

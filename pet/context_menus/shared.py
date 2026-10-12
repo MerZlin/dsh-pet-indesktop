@@ -382,12 +382,19 @@ def add_agent_link_menu(menu: QMenu, pet) -> None:
     for agent_key, agent_label in (
         ('dsh', 'DeepSeek Harness (DSH)'),
         ('claude', 'Claude Code'),
+        ('codex', 'Codex'),
         ('cursor', 'Cursor'),
         ('opencode', 'OpenCode'),
     ):
         act = sub.addAction(agent_label)
         act.setCheckable(True)
         act.setChecked(bool(agent_cfg.get(agent_key, False)))
+        if agent_key == 'codex':
+            act.setToolTip('首次开启自动安装插件；安装后请在 Codex 中信任 hooks。关闭时卸载桌宠安装的插件。')
+            manager = getattr(pet, 'agent_link_manager', None)
+            if manager is not None and 'codex' in getattr(manager, '_install_pending', {}):
+                act.setText('Codex（正在处理…）')
+                act.setEnabled(False)
         act.toggled.connect(lambda on, k=agent_key, a=act: pet.toggle_agent_link(k, on, a))
     # 自定义联动 Agent（config.json 的 agent_link.custom_agents，只读监听）：
     # 收进三级子菜单，避免用户配了多个自定义通道后把联动菜单撑长。

@@ -63,7 +63,8 @@ release = os.environ["PM_RELEASE"]
 from pet.proactive_memory import ProactiveMemory, lock_path_for
 
 if mode == "write":
-    m = ProactiveMemory(target, max_entries=500)
+    # This case measures serialization, not the production 1s drop-on-timeout policy.
+    m = ProactiveMemory(target, max_entries=500, lock_timeout_ms=60_000)
     for i in range(25):
         m.record("p%d-%d.exe" % (os.getpid(), i), "t", "x")
     sys.exit(0)
@@ -134,7 +135,7 @@ def test_two_processes_unique_records_all_kept(tmp_path):
     assert codes == [0, 0], f"子进程异常退出 {codes} {[o[1][:300] for o in outs]}"
 
     names = sorted(e["process"] for e in _entries(target))
-    assert len(names) == 50, f"跨进程丢写：实得 {len(names)}/50"
+    assert len(names) == 50, f"跨进程丢写：实得 {len(names)}/50；子进程日志：{[o[1] for o in outs]}"
     assert len(set(names)) == 50, "记录被覆盖（非唯一）"
 
 
@@ -475,16 +476,18 @@ def test_reads_stay_complete_under_concurrent_local_writes(tmp_path):
 
     stop = threading.Event()
     problems = {"empty": 0, "shrink": 0}
-    seen = {"max": 0}
-
     def reader():
+        # Compare consecutive observations by this reader. Another reader can
+        # observe a later write while this one is descheduled after load().
+        # Sharing a maximum incorrectly labels that older valid snapshot a rollback.
+        previous = 0
         while not stop.is_set():
             count = len(mem.load())
-            if count == 0 and seen["max"]:
+            if count == 0 and previous:
                 problems["empty"] += 1
-            if count < seen["max"]:
+            if count < previous:
                 problems["shrink"] += 1
-            seen["max"] = max(seen["max"], count)
+            previous = max(previous, count)
 
     def writer(tag):
         for i in range(60):

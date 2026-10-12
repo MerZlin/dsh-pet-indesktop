@@ -25,7 +25,7 @@ from PySide6.QtGui import (
     QRegion,
     QTransform,
 )
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from pet.overlay_window import ALPHA_HIT_THRESHOLD, OverlayWindow
 from pet.pet_sprite import INTERACTION_DRAG, INTERACTION_NORMAL, PetSprite
@@ -215,6 +215,29 @@ def test_dirty_region_only_when_visual_changes():
     overlay._on_tick(dt=0.016)
     assert sprite.rect() != old
     assert overlay.update_regions[-1] == (QRegion(old) | QRegion(sprite.rect()))
+
+
+def test_paint_event_clears_dirty_region_before_redraw():
+    """桌宠移走后的脏区必须写回透明，不能残留 backing store 像素。"""
+    overlay = OverlayWindow()
+    overlay.resize(240, 120)
+    overlay.mouse_through = True  # 本用例只验证可视 backing store，不进入 X11 输入形状协议
+    sprite = FakeSprite((20, 20), (40, 40))
+    overlay.add_sprite(sprite)
+
+    old = sprite.rect()
+    sprite.pos = QPointF(120, 20)
+    target = QImage(overlay.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    target.fill(QColor(0, 80, 255, 255))
+
+    overlay.render(
+        target,
+        QPoint(),
+        QRegion(old),
+        QWidget.RenderFlag.DrawWindowBackground,
+    )
+
+    assert target.pixelColor(old.center()).alpha() == 0
 
 
 def test_mouse_routing_hit_grab_and_miss():

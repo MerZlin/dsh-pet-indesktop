@@ -43,12 +43,19 @@ jobs:
       - name: Pytest (main suite)
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py
+        run: python -m pytest -q --ignore=tests/test_webm_reader_lifecycle.py --ignore=tests/test_webm_clip_lifecycle.py --ignore=tests/test_webm_first_frame_lock.py --ignore=tests/test_low_priority_warm_interaction_yield.py --ignore=tests/test_recovery_hints.py
         # 三文件同进程在 macOS 确定性段错误（见 pr-test.yml 同款注释）：拆独立进程照跑
       - name: Pytest (webm lifecycle family, isolated + one retry)
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q tests/test_webm_reader_lifecycle.py tests/test_webm_clip_lifecycle.py tests/test_webm_first_frame_lock.py || python -m pytest -q tests/test_webm_reader_lifecycle.py tests/test_webm_clip_lifecycle.py tests/test_webm_first_frame_lock.py
+
+      # Recovery-hint teardown has exhibited a native Windows crash in the
+      # shared suite. Keep every assertion, but run this widget family separately.
+      - name: Pytest (recovery hints, isolated)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q tests/test_recovery_hints.py
 
       - name: Pytest (low-priority warm family, isolated + one retry)
         env:

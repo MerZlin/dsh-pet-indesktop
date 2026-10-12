@@ -462,6 +462,8 @@ python -m pip install -r requirements.txt
 python -m pet
 ```
 
+Linux 使用 Python 3.11 + PySide6 6.12.0 时，安装依赖后执行 `python -m pip install aqtinstall==3.3.0` 和 `python scripts/repair_pyside6.py`。该命令先检查绑定返回值的引用计数；仅对受影响的 Linux wheel 从官方源码重建 Shiboken 与 PySide 运行库。构建需要 `cmake ninja-build g++ qt6-base-dev libxkbcommon-dev`；脚本按需下载匹配的 Qt 6.12.0 SDK，无需切换 Python 或降级 PySide6。CI 会执行同一修复步骤。
+
 Windows 也可以直接双击 `run.bat`。它实际执行的是：
 
 ```text

@@ -28,6 +28,9 @@ done
 
 cd "$ROOT"
 
+# Use the same binding repair as CI before collecting any native libraries.
+"$PYTHON_BIN" "$ROOT/scripts/repair_pyside6.py"
+
 # 仅当要构建 gif 变体时才生成 GIF 素材（convert_to_gif 默认幂等：只转换
 # 缺失/过期的，CI 只构建 webm 变体时不会触发；与 build_macos.sh 一致）。
 if [[ ",$VARIANTS," == *",gif-chat,"* || ",$VARIANTS," == *",gif,"* ]]; then
@@ -51,6 +54,8 @@ for variant in "${variant_list[@]}"; do
         gif)        entry="packaging/pet_entry_no_chat.py";    assets="assets/characters_gif";   excludes="pet.chat,keyring" ;;
         *) echo "未知变体: $variant" >&2; exit 1 ;;
     esac
+    # Corresponding source and notices travel with the locally repaired LGPL runtime.
+    SHIBOKEN_SOURCE_DIR="$("$PYTHON_BIN" -c 'import importlib.metadata; print(importlib.metadata.distribution("shiboken6").locate_file("shiboken6") if importlib.metadata.version("shiboken6") == "6.12.0" else "")')"
     name="dsh-pet-standalone-$variant"
     printf "VARIANT = '%s'\n" "$variant" > packaging/build_variant.py
 
@@ -77,6 +82,10 @@ for variant in "${variant_list[@]}"; do
         --add-data "integrations:integrations"
     )
     # 设置页样式表：已在 modern_settings_dialog.py 内联（_settings_stylesheet）
+    if [[ -f "$SHIBOKEN_SOURCE_DIR/PET-REPAIR.txt" ]]; then
+        args+=(--add-data "$SHIBOKEN_SOURCE_DIR/PET-REPAIR.txt:third_party/shiboken6")
+        args+=(--add-data "$SHIBOKEN_SOURCE_DIR/qt-for-python-6.12.0-pet-source.tar.gz:third_party/shiboken6")
+    fi
     if [[ "$name" == *-chat ]]; then
         args+=(--collect-all keyring)
         args+=(--add-data "pet/chat/legacy_styles.qss:pet/chat")

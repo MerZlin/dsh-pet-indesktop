@@ -1,0 +1,17 @@
+{
+  "name": "dsh-pet-codex",
+  "version": "0.1.0",
+  "description": "Local lifecycle status bridge for the desktop pet. No prompts or tool output are stored.",
+  "author": {
+    "name": "dsh-pet contributors"
+  },
+  "interface": {
+    "displayName": "Desktop Pet Bridge",
+    "shortDescription": "Show local Codex activity in the desktop pet.",
+    "longDescription": "Send lifecycle metadata to a local desktop pet without recording conversation content.",
+    "developerName": "dsh-pet contributors",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Explain how to connect the desktop pet bridge."
+  }
+}

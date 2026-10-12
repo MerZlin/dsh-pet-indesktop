@@ -107,7 +107,14 @@ def _run_settings(config=None) -> int:
     )
 
 
+def _run_agent_hook() -> int:
+    from .hook_runtime import main
+    return main()
+
+
 def _main() -> int:
+    if "--agent-hook" in sys.argv:
+        return _run_agent_hook()
     # 卸载清理走无 GUI 路径：不导入 pet.app（避免拉起 QApplication/事件循环）。
     if "--uninstall-cleanup" in sys.argv:
         from .uninstall_cleanup import run_uninstall_cleanup

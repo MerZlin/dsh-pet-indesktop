@@ -45,9 +45,16 @@ app = QApplication.instance() or QApplication([])
 # ---------------------------------------------------------------- 脚手架
 def _write_slot(cfg, slot: int, **values) -> None:
     """按"这只子肥鱼自己的设置页保存"的写法改它的 slot 配置（原子写单键）。"""
+    target = ovs.slot_config_path(cfg.dir, slot)
+    previous_mtime = target.stat().st_mtime_ns
     for key, value in values.items():
         assert ovs.write_slot_setting(cfg.dir, slot, key, value,
                                       user_customized=True), key
+    # Production deliberately detects changes by (mtime, size). Toggling two
+    # booleans can keep the same byte length; fast writes can share an mtime on
+    # coarse filesystems. Make this fixture's intended change observable.
+    stat = target.stat()
+    os.utime(target, ns=(stat.st_atime_ns, max(stat.st_mtime_ns, previous_mtime + 1_000_000_000)))
 
 
 def _character_action(menu, label: str):

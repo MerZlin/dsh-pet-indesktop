@@ -19,6 +19,10 @@ exe 时资源管理器默认工作目录就是 exe 所在目录，行为一致�
 
 import sys
 
+if "--agent-hook" in sys.argv:
+    from pet.__main__ import _run_agent_hook
+    sys.exit(_run_agent_hook())
+
 if "--settings" in sys.argv:
     # exe 自启动参数分流：设置页独立进程必须在 import pet.app 之前分流，否则子进程
     # 会把整个桌宠（素材库/ffmpeg/托盘/灵动岛）再拉一份，独立进程省内存的前提就没了。

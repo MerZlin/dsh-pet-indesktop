@@ -1,0 +1,50 @@
+diff --git a/sources/pyside6/CMakeLists.txt b/sources/pyside6/CMakeLists.txt
+index bf5a060..dcd49d4 100644
+--- a/sources/pyside6/CMakeLists.txt
++++ b/sources/pyside6/CMakeLists.txt
+@@ -22,6 +22,9 @@ else()
+ endif()
+ 
+ add_subdirectory(libpyside)
++if(PET_RUNTIME_ONLY)
++    return() # Keep the official extension modules and package metadata.
++endif()
+ 
+ if(Qt${QT_MAJOR_VERSION}Qml_FOUND)
+     add_subdirectory(libpysideqml)
+diff --git a/sources/shiboken6/CMakeLists.txt b/sources/shiboken6/CMakeLists.txt
+index 4c99206..34dc276 100644
+--- a/sources/shiboken6/CMakeLists.txt
++++ b/sources/shiboken6/CMakeLists.txt
+@@ -18,6 +18,9 @@ get_rpath_base_token(base)
+ set(CMAKE_INSTALL_RPATH ${base}/)
+ 
+ add_subdirectory(libshiboken) # Uses Python
++if(PET_RUNTIME_ONLY)
++    return() # Keep the official extension modules and package metadata.
++endif()
+ add_subdirectory(shibokenmodule) # Uses libshiboken
+ add_subdirectory(data)
+ 
+diff --git a/sources/shiboken6/libshiboken/sbkpython.h b/sources/shiboken6/libshiboken/sbkpython.h
+index d6b8b73..775d777 100644
+--- a/sources/shiboken6/libshiboken/sbkpython.h
++++ b/sources/shiboken6/libshiboken/sbkpython.h
+@@ -31,6 +31,17 @@ extern "C" {
+ #  include <structmember.h>
+ #endif
+ 
++// abi3 modules targeting Python < 3.12 must return owned references even
++// when built with headers which assume immortal None/boolean singletons.
++#if defined(Py_LIMITED_API) && Py_LIMITED_API < 0x030C0000
++#  undef Py_RETURN_NONE
++#  define Py_RETURN_NONE return (Py_IncRef(Py_None), Py_None)
++#  undef Py_RETURN_TRUE
++#  define Py_RETURN_TRUE return PyBool_FromLong(1)
++#  undef Py_RETURN_FALSE
++#  define Py_RETURN_FALSE return PyBool_FromLong(0)
++#endif
++
+ // In Python 3, Py_TPFLAGS_DEFAULT contains Py_TPFLAGS_HAVE_VERSION_TAG,
+ // which will trigger the attribute cache, which is not intended in Qt for Python.
+ // Use a customized Py_TPFLAGS_DEFAULT by defining Py_TPFLAGS_HAVE_VERSION_TAG = 0.

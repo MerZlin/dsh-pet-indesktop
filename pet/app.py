@@ -47,6 +47,7 @@ from .config import APP_DIR_NAME, Config, _default_base
 from .context_menus.icons import vector_menu_icon
 from .context_menus.shared import open_deepseek_web
 from .desktop_notify import DesktopNotification, position_stack
+from .platform_linux import keep_on_all_desktops
 from .harness_launcher import launch_harness_gui
 from .library import MovieLibrary
 from .window import PetWindow
@@ -590,6 +591,7 @@ class PetInstance:
                 self.config.get("click_sound_pack"),
                 data_dir=self.config.dir,
             )
+        keep_on_all_desktops(win)
         win.show()
 
         tray = self.shell._build_tray(win) if build_tray else None
@@ -2500,6 +2502,7 @@ class AppShell:
             from .dynamic_island import DynamicIsland
 
             self.island = DynamicIsland(self.config)
+            keep_on_all_desktops(self.island)
             # 纯桌宠版（无聊天模块）：hidden_chat 的岛单击路由回退为展开卡片，
             # 防"桌宠隐藏 → 岛点了没反应 → 无法恢复"的死锁。getattr 兼容
             # __new__ 测试桩（property 内 AttributeError 时取默认 True）

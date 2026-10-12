@@ -2718,7 +2718,19 @@ def test_product_copy_has_no_external_brand_reference():
             # Competitive research records source names by design; they are
             # evidence, not user-facing product copy.
             if (
-                path.name in {"agent_link.py", "test_agent_link.py"}
+                # Actual supported integrations may use their own product names.
+                path.name in {"agent_link.py", "test_agent_link.py", "config.py",
+                              "window_optional_services.py", "hook_runtime.py", "agent_snapshot.py",
+                              f"{forbidden}_install.py", f"{forbidden}_transcript.py"}
+                or path == Path("pet/context_menus/shared.py")
+                # Integration regression fixtures and their delivery report use
+                # the actual supported product name, not unrelated UI branding.
+                or (path.parent == Path("tests") and (
+                    path.name.startswith(f"test_{forbidden}_")
+                    or path.name in {f"{forbidden}_helpers.py", "test_linux_overlay.py"}
+                ))
+                or path in {Path("docs/INDEX.md"),
+                            Path(f"docs/PR-REPORT-{forbidden.upper()}-X11-2026-10-10.md")}
                 or path.name.endswith("-RESEARCH.md")
                 # Contributor/change reports are repository evidence, not
                 # user-facing product copy and may mention external brands.

@@ -10,6 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 from pet.app import PetInstance
@@ -75,7 +76,9 @@ def test_enabling_mouse_through_shows_recovery_hint(tmp_path, monkeypatch):
     finally:
         win.close()
         win.deleteLater()
-        app.processEvents()
+        # Only drain our own deletion; unrelated queued Qt callbacks belong to
+        # other fixtures and may target objects already being destroyed.
+        QCoreApplication.sendPostedEvents(win, QEvent.Type.DeferredDelete)
 
 
 def test_enabling_mouse_through_hint_suppressed_when_hidden_or_suppressed(tmp_path, monkeypatch):
@@ -98,7 +101,9 @@ def test_enabling_mouse_through_hint_suppressed_when_hidden_or_suppressed(tmp_pa
     finally:
         win.close()
         win.deleteLater()
-        app.processEvents()
+        # Only drain our own deletion; unrelated queued Qt callbacks belong to
+        # other fixtures and may target objects already being destroyed.
+        QCoreApplication.sendPostedEvents(win, QEvent.Type.DeferredDelete)
 
 
 def test_dock_hidden_recovery_hint_uses_bubble_when_visible(tmp_path, monkeypatch):

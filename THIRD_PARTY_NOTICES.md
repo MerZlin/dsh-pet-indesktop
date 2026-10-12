@@ -181,3 +181,11 @@ SOFTWARE.
 
 `tests/test_festival.py` 中有断言守卫这三个库的存在（`test_pop_culture_libraries_are_present_and_non_empty`）；
 若你为合规主动删除它们，请一并移除或调整该断言。
+
+## Qt-for-Python 6.12.0 runtime ownership repair (Linux)
+
+- Source: https://github.com/pyside/pyside-setup/tree/f50facb83fc3dc5f3240c854668c7a6dd93871b2 (Qt v6.12.0).
+- License: LGPL-3.0-only; the original source also offers Qt commercial and GPL licensing alternatives.
+- Modification: `packaging/patches/qt-for-python-6.12-singleton-refs.patch` makes stable-ABI singleton-return macros use the runtime reference ownership APIs and selects the Shiboken/PySide runtime-only CMake targets.
+- Build/relink instructions: `scripts/repair_pyside6.py`; the build uses the active Python environment and retains the shared-library interface. No application runtime monkey patch is used.
+- Repaired Linux bundles include the corresponding patched source, license texts, and rebuild instructions under `_internal/third_party/shiboken6/`. The rebuilt libraries can replace `_internal/shiboken6/libshiboken6.abi3.so.6.12` and `_internal/PySide6/libpyside6.abi3.so.6.12`.

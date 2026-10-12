@@ -645,3 +645,50 @@ def music_sing_grace_seconds(host) -> float:
         seconds = MUSIC_SING_GRACE_SECONDS
     # 下限 1 秒：低于这个值就退化回"瞬时静音即退出"的老问题。
     return max(1.0, seconds)
+
+
+def show_bubble(host, text: str, duration_ms: int = 3200, subtitle: str | None = None,
+                *, sticky: bool = False, buttons: list[tuple[str, object]] | None = None,
+                title_first: bool = False, width_locked: bool = False,
+                agent_title: str = "", agent_status: str = "", agent_final: bool = False) -> None:
+    """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。
+
+    ``sticky=True`` 显示「一直挂到主动关闭」的气泡（审批等）：不启动自动
+    隐藏，且激活期间自言自语/普通气泡让路；被其他气泡临时盖掉后会自动恢复，
+    直到调用 :meth:`hide_bubble` 收尾。
+
+    ``buttons=[(label, callback), ...]`` 进入「交互气泡」模式（审批同意/拒绝、
+    问题 A/B/C）：按钮内嵌在气泡里，点击即回调（上层据此回写 DSH），
+    且自动 sticky（点选前一直挂着）。
+
+    提醒消息队列激活期间（有审批/问题/硬失败/卡住提醒在展示），普通气泡
+    直接让路丢弃，不覆盖提醒弹窗。"""
+    if not host.isVisible() or host._bubble_suppressed:
+        return
+    if not sticky and not buttons and getattr(host, "_alert_current", None) is not None:
+        # 有提醒在展示：普通气泡让路，绝不覆盖审批弹窗
+        return
+    if sticky or buttons:
+        host._sticky_bubble_active = True
+        host._sticky_text = str(text)
+        host._sticky_subtitle = str(subtitle or "")
+        host._sticky_buttons = list(buttons) if buttons else None
+        # sticky 不 hold 气泡位（否则会永久挡自言自语）；靠 _sticky_bubble_active 挡
+        host._speech_bubble.show_text(
+            host._sticky_text, window_placement.bubble_anchor_rect(host), 0,
+            pet_scale=host.scale, subtitle=host._sticky_subtitle, sticky=True,
+            buttons=host._sticky_buttons,
+        )
+        return
+    from .window import _set_speech_bubble_interactive
+
+    _set_speech_bubble_interactive(host)
+    host.hold_bubble(duration_ms / 1000.0 + 2.0)
+    agent_options = (
+        dict(agent_title=agent_title, agent_status=agent_status, agent_final=agent_final)
+        if agent_title else {}
+    )
+    host._speech_bubble.show_text(
+        str(text), window_placement.bubble_anchor_rect(host), duration_ms, pet_scale=host.scale,
+        subtitle=str(subtitle or ""), title_first=title_first, width_locked=width_locked,
+        **agent_options)
