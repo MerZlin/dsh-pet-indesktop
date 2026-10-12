@@ -19,7 +19,6 @@ import json
 import os
 import threading
 import time
-import weakref
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -795,11 +794,9 @@ def test_library_shutdown_closes_frameseq_clip_and_retires_worker(tmp_path):
     改前 library.shutdown 的收口循环只试 cleanup（仅 WebMClip 有）否则 stop()，
     FrameSeqClip 永远走 stop 分支、close() 零调用 → worker 失去受控退役路径，
     只能靠 Python GC 在某个随机线程析构一个亲和于共享预取线程的 QObject
-    （该文件 :84-92 的同类 AV 前科）。2026-10-03 起退休口径是「断信号 + 留引用」
-    而非 deleteLater（挂在死线程队列里的 DeferredDelete 在共享线程被杀/重建时是
-    实测的 access violation 源，邻域连跑 3/17 vs 0/6）；F1 在此之上补齐回收：
-    退役槽排进 worker **自己的线程**（队列屏障 + deleteLater），销毁确认落地后
-    钉表注销——引用不必再留到进程退出。
+    （该文件 :84-92 的同类 AV 前科）。2026-10-03 起 close() 的退役口径是
+    「断信号 + 留引用」而非 deleteLater：挂在死线程队列里的 DeferredDelete
+    在共享线程被杀/重建时是实测的 access violation 源（邻域连跑 3/17 vs 0/6）。
     """
     import shiboken6
 
@@ -815,185 +812,29 @@ def test_library_shutdown_closes_frameseq_clip_and_retires_worker(tmp_path):
         lib.shutdown()
 
         assert clip._closed is True, "库收口必须调 close()"
-        assert clip._worker is worker and clip._retired_workers[-1] is worker, \
-            "退役先留引用：销毁由 worker 自己的线程接手（不跨线程销毁）"
+        assert clip._worker is worker and clip._retired_workers[-1] is worker,             "worker 必须退役留引用（不跨线程销毁）"
+        assert shiboken6.isValid(worker), "退役 ≠ 销毁：不许 deleteLater 上共享线程"
         assert clip._timer.isActive() is False
-        # 屏障确认后：worker 在共享预取线程上销毁（不是 GUI 线程/GC 代劳）
-        _pump_until(lambda: not shiboken6.isValid(worker), timeout_s=10.0)
     finally:
         lib.shutdown()
 
 
 def test_frameseq_close_is_idempotent(tmp_path):
     """close() 幂等：重复调用不重复退役（_retired_workers 只入列一次）。"""
+    import shiboken6
+
     d = tmp_path / "clip"
     _make_frames(d, count=3)
     clip = FrameSeqClip(d)
     worker = clip._worker
     clip.close()
     assert clip._closed is True
-    # 身份比较而非 ==：worker 的销毁是异步的，失效包装对象的 == 语义不可依赖
-    assert len(clip._retired_workers) == 1
-    assert clip._retired_workers[0] is worker
+    assert clip._retired_workers == [worker]
+    assert shiboken6.isValid(worker), "退役保留引用，worker 不得被销毁"
 
     clip.close()  # 二次调用：幂等 no-op
     clip.close()
-    assert len(clip._retired_workers) == 1
-    assert clip._retired_workers[0] is worker
-
-
-# ---------------------------------------- F1：收口回收（钉表注销协议）
-def _pinned(table, obj) -> bool:
-    """钉表是否强引用着 obj（身份比较：失效包装对象的 == 语义不可依赖）。"""
-    return any(entry is obj for entry in table)
-
-
-def test_close_releases_display_cache_and_unpins_after_drain(tmp_path):
-    """F1：close() 当场交还显示缓存；排空确认落地后从进程级钉表注销。
-
-    改前 ``_LIVE_CLIPS``/``_LIVE_WORKERS`` append-only、``close()`` 只把 worker
-    塞进 ``_retired_workers``：每个收口的 clip 连同显示 QImage（~0.88MB）与 worker
-    永久钉住；切角色时旧库每次新建的那批全部命中这条路径。
-    """
-    import pet.frameseq_clip as fs
-
-    d = tmp_path / "clip"
-    _make_frames(d, count=4)
-    before_clips = len(fs._LIVE_CLIPS)
-    before_workers = len(fs._LIVE_WORKERS)
-    clip = FrameSeqClip(d)
-    hits = []
-    clip.frameChanged.connect(hits.append)
-    assert clip.start() is True
-    _pump_until(lambda: hits == [0])
-    assert clip.currentImage() is not None and clip.currentPixmap() is not None
-    worker = clip._worker
-    assert _pinned(fs._LIVE_CLIPS, clip) and _pinned(fs._LIVE_WORKERS, worker)
-
-    # worker 销毁线程的取证：销毁发生在它自己所属的线程上才算收口正确
-    destroy_threads: list[int] = []
-    worker.destroyed.connect(
-        lambda *_a: destroy_threads.append(threading.get_ident()))
-
-    clip.close()
-
-    # ① 停止接收：显示缓存当场交还内存（此后没有播放路径再读它）
-    assert clip.currentImage() is None, "close 后显示槽必须交还"
-    assert clip.currentPixmap() is None, "close 后惰性 pixmap 必须交还"
-    assert clip._pending == {}
-
-    # ②③④ 屏障确认（retired 排在在途交付之后）→ clip 注销；worker 在自己线程上
-    # 销毁后才摘表（销毁未完成就摘 = 让 GC 在随机线程析构一个 QObject）
-    _pump_until(lambda: not _pinned(fs._LIVE_CLIPS, clip), timeout_s=10.0)
-    assert clip._drained is True
-    _pump_until(lambda: not fs._pin_alive(worker), timeout_s=10.0)
-    assert destroy_threads, "worker 的销毁必须能被观察到（destroyed 信号）"
-    assert destroy_threads[0] != threading.get_ident(), \
-        "worker 必须在自己的线程上销毁，不得由 GUI 线程/GC 代劳"
-    fs.reap_retired_objects()
-    assert not _pinned(fs._LIVE_WORKERS, worker)
-    assert len(fs._LIVE_CLIPS) <= before_clips
-    assert len(fs._LIVE_WORKERS) <= before_workers
-
-
-def _create_and_close_clips(d, count: int = 5):
-    """建 count 个 clip、制造在途交付、全部 close，并等排空确认落地。
-
-    返回值只带弱引用与 worker 包装对象：clip 的强引用随本函数退出释放（"包装对象
-    可回收"就是靠这一点）。断言写在调用方。
-    """
-    import pet.frameseq_clip as fs
-
-    clips = [FrameSeqClip(d) for _ in range(count)]
-    refs = [weakref.ref(c) for c in clips]
-    workers = [c._worker for c in clips]
-    for clip in clips:
-        assert clip.start() is True          # 制造在途预取与在途交付
-    for clip in clips:
-        clip.close()
-    # clip 侧由排空确认自动注销（retired FIFO 排在更早投递的交付之后）
-    _pump_until(lambda: not any(_pinned(fs._LIVE_CLIPS, c) for c in clips),
-                timeout_s=10.0)
-    # worker 侧：retire 槽在自己线程上跑完、C++ 侧销毁落地
-    _pump_until(lambda: all(not fs._pin_alive(w) for w in workers),
-                timeout_s=10.0)
-    return refs, workers
-
-
-def test_closed_clips_keep_pin_tables_bounded_and_wrappers_collectable(tmp_path):
-    """F1：创建并关闭 N 个 clip → 钉表有界、包装对象可回收（无需外部回收调用）。
-
-    clip 侧由排空确认自动注销（``retired`` FIFO 排在更早投递的交付之后）；worker
-    侧等 C++ 侧真销毁后由 ``reap_retired_objects`` 摘除（每次 close / 每次排空确认
-    落地后顺手清一次）。
-    """
-    import pet.frameseq_clip as fs
-
-    d = tmp_path / "clip"
-    _make_frames(d, count=4)
-    before_clips = len(fs._LIVE_CLIPS)
-    before_workers = len(fs._LIVE_WORKERS)
-    refs, workers = _create_and_close_clips(d, count=5)
-
-    fs.reap_retired_objects()
-    assert not any(_pinned(fs._LIVE_WORKERS, w) for w in workers)
-    assert len(fs._LIVE_CLIPS) <= before_clips
-    assert len(fs._LIVE_WORKERS) <= before_workers
-    gc.collect()
-    assert all(ref() is None for ref in refs), \
-        "已收口且交付排空的 clip 包装对象必须可回收"
-
-
-def _drop_library_without_shutdown(videos):
-    """建库 → 取帧序列 clip → 丢弃整库（未 shutdown）→ 等钉表摘除。
-
-    返回 clip 的弱引用；函数退出时释放对 clip 的强引用，调用方据此断言可回收。
-    """
-    import pet.frameseq_clip as fs
-
-    before_clips = len(fs._LIVE_CLIPS)
-    before_workers = len(fs._LIVE_WORKERS)
-    lib = MovieLibrary(character_id="shenshen", asset_dir=videos,
-                       prewarm_enabled=False)
-    clip = lib.movie("x")
-    assert isinstance(clip, FrameSeqClip)
-    held = clip                   # 保持强引用：断言"已从钉表摘除"用身份比较
-    worker = clip._worker
-    ref = weakref.ref(clip)
-    assert _pinned(fs._LIVE_CLIPS, held) and _pinned(fs._LIVE_WORKERS, worker)
-
-    del clip, lib                 # 未 shutdown：库被丢弃（切角色路径的形状）
-    gc.collect()
-
-    _pump_until(lambda: not _pinned(fs._LIVE_CLIPS, held), timeout_s=10.0)
-    _pump_until(lambda: not fs._pin_alive(worker), timeout_s=10.0)
-    fs.reap_retired_objects()
-    assert not _pinned(fs._LIVE_WORKERS, worker)
-    assert len(fs._LIVE_CLIPS) <= before_clips
-    assert len(fs._LIVE_WORKERS) <= before_workers
-    return ref
-
-
-def test_library_dropped_without_shutdown_releases_dead_pins(tmp_path):
-    """F1/切角色路径：库被直接丢弃（未 shutdown）→ 子 clip 与 worker 一并回收。
-
-    ``app.py`` 切角色是新建库 + 丢旧库（旧窗 deleteLater，不走 closeEvent →
-    ``lib.shutdown()`` 零调用）：clip 的 C++ 侧随父库销毁，包装对象却留在
-    ``_LIVE_CLIPS`` 里带着显示 QImage 常驻；worker 不是库的子对象、也不会被
-    任何路径退役。库销毁后由一次机会式 reap 摘掉（含给仍活着的 worker 补排退役）。
-    连丢三次库 = 连切三次角色的形状：钉表不得随切换次数线性增长。
-    """
-    import pet.frameseq_clip as fs
-
-    videos = _make_pack(tmp_path)
-    baseline_clips = len(fs._LIVE_CLIPS)
-    baseline_workers = len(fs._LIVE_WORKERS)
-    for _ in range(3):
-        ref = _drop_library_without_shutdown(videos)
-        gc.collect()
-        assert ref() is None, "库销毁后已收口的 clip 包装对象必须可回收"
-        assert len(fs._LIVE_CLIPS) <= baseline_clips
-        assert len(fs._LIVE_WORKERS) <= baseline_workers
+    assert clip._retired_workers == [worker]
 
 
 # ------------------------------ 后台预热提交（O3：显示槽只由 GUI 线程写）
@@ -1055,45 +896,6 @@ def test_background_warm_never_overwrites_newer_displayed_frame(
         assert clip.currentImage() is newer, "显示槽必须是前台提交的那一帧"
         assert 0 not in clip._pending, "被拦下的预热帧不得寄存回 _pending"
     finally:
-        clip.close()
-
-
-# ------------------------------ F1：屏障语义（复用上面的解码闸门做在途构造）
-def test_close_barrier_waits_for_inflight_prefetch(tmp_path, monkeypatch):
-    """F1：退役屏障排在在途 prefetch 之后——闸门不放行，排空确认就不能落地。
-
-    构造（worker 侧解码卡在闸门上 = 在途请求还没处理完）：close() 只能把 retire
-    排进 worker 线程的事件队列。确认（``_drained``）必须等那道在途请求处理完才
-    可能出现，因此"确认已到"就等于"此后不再有更早投递的交付在飞"——钉表注销
-    就是靠这条不变量才安全。
-    """
-    from pet import frameseq_clip as fs
-
-    d = tmp_path / "clip"
-    _make_frames(d, count=4)
-    probe = _GatedDecodeProbe()
-    monkeypatch.setattr(fs, "QImage", probe)
-    clip = FrameSeqClip(d)
-    hits = []
-    clip.frameChanged.connect(hits.append)
-    try:
-        clip._timer.stop()                  # 只留显式预取，帧表不自推进
-        assert clip.start() is True         # 请求帧 0 → worker 卡在解码闸门上
-        assert probe.entered.wait(5.0), "worker 未进入解码闸门"
-
-        clip.close()
-        for _ in range(20):                 # 给确认足够的事件循环机会（不被它等）
-            QApplication.processEvents()
-        assert clip._drained is False, "在途 prefetch 未处理完，排空确认不得落地"
-        assert _pinned(fs._LIVE_CLIPS, clip), "确认落地前必须继续钉住（UAF 窗口）"
-
-        probe.release.set()
-        _pump_until(lambda: clip._drained, timeout_s=10.0)
-        _pump_until(lambda: not _pinned(fs._LIVE_CLIPS, clip), timeout_s=10.0)
-        assert hits == [], "收口后不得再上屏（在途交付不得越过确认）"
-        assert clip.currentImage() is None
-    finally:
-        probe.release.set()
         clip.close()
 
 

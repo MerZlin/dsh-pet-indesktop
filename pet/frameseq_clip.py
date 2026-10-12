@@ -52,7 +52,6 @@ import threading
 import time
 from pathlib import Path
 
-import shiboken6
 from PySide6.QtCore import (
     QCoreApplication,
     QMetaObject,
@@ -166,120 +165,12 @@ class _FramePaths:
 
 
 #: 进程级 worker 强钉表（见 ``_PrefetchWorker.__init__`` 注释）：clip 被丢弃而
-#: 未 close 的路径上，在途 queued 交付不得命中死包装。收口路径会摘条目——
-#: 见 ``reap_retired_objects``（钉住已销毁的包装对象没有保护价值，只剩内存占用）。
+#: 未 close 的路径上，在途 queued 交付不得命中死包装。
 _LIVE_WORKERS: list = []
 
 #: 进程级 clip 强钉表（见 ``FrameSeqClip.__init__`` 注释）：在途 ``loaded``
-#: 交付命中析构中的 clip = UAF。生产里 clip 本就被库缓存常驻，钉表零增量；
-#: 收口（``close()`` 排空确认）与"C++ 侧已随库销毁"两条路径都会摘条目。
+#: 交付命中析构中的 clip = UAF。生产里 clip 本就被库缓存常驻，钉表零增量。
 _LIVE_CLIPS: list = []
-
-
-def _pin_alive(obj) -> bool:
-    """包装对象是否还指向活的 C++ 对象（钉表摘除判据的唯一口径）。
-
-    ``shiboken6.isValid`` 只在 C++ 侧真销毁后为 False；查询异常（测试替身、
-    非 PySide 对象）一律按"活着"处理——本判据只用来**放行摘除**，不确定就留。
-    """
-    try:
-        return bool(shiboken6.isValid(obj))
-    except Exception:
-        return True
-
-
-def _post_retire_request(worker: _PrefetchWorker) -> bool:
-    """把退役槽排进 worker 所属线程（幂等）；返回是否排上。
-
-    queued 投递不阻塞、不等待：GUI 线程在收口（切角色、批量 shutdown）里绝不为
-    每个 clip 付一次等待预算；线程已死时队列永远不会被处理 → 确认不到 → 钉表
-    条目保留（安全方向，见 ``close()``）。
-    """
-    if getattr(worker, "_retire_posted", False):
-        return False
-    try:
-        worker._retire_posted = True
-        if worker.thread() is QThread.currentThread():
-            worker.retire()        # 同线程（异常路径）：当场跑，销毁仍由本线程事件循环落地
-        else:
-            QMetaObject.invokeMethod(worker, "retire",
-                                     Qt.ConnectionType.QueuedConnection)
-    except RuntimeError:
-        return False               # C++ 侧已销毁/线程对象已失效：交 reaper 收拾
-    return True
-
-
-def _schedule_reap() -> None:
-    """把一次钉表回收排到下一轮事件循环。
-
-    两个理由：① 绝不在"投给某对象的交付"里丢掉它的最后一个引用（那等于让自己在
-    派发中途析构）；② worker 的销毁是异步的（``deleteLater`` 由它自己的线程处理），
-    排一轮正好等它落地。
-    """
-    try:
-        QTimer.singleShot(0, reap_retired_objects)
-    except Exception:
-        pass                       # 无 QCoreApplication/解释器已在收尾：交给进程退出
-
-
-def reap_retired_objects() -> int:
-    """摘掉钉表里"钉住已无保护价值"的条目（返回摘掉数）。幂等、廉价。
-
-    两条摘除判据——两条都要求"此后不可能再有投给它的在途交付"：
-
-    - **C++ 侧已销毁**（``_pin_alive`` False）：Qt 在 ``~QObject`` 里丢弃投给该
-      接收者的排队事件，此时钉住包装对象不再保护任何东西，却让每 clip 一份
-      显示 QImage/帧表（``_img``/``_pm``）随包装对象常驻。切角色就是这条路：
-      旧库随旧窗被丢弃（不走 ``lib.shutdown()``）→ 子 clip 在 C++ 侧随库销毁，
-      包装对象却留在钉表里。
-    - **已收口且交付排空**（``_drained``，见 ``FrameSeqClip._on_worker_retired``）：
-      ``close()`` 的屏障协议证明此后不再有投给它的交付。
-
-    C++ 侧已销毁的 clip 若还留下仍活着的 worker（worker 不是库的子对象，不随库
-    销毁），摘除前补排一次退役——否则它永远等不到 ``close()`` 排的那一次，钉表
-    条目也就永远摘不掉；补排之后再排一轮回收，让它在自己线程上销毁后可被摘除。
-
-    **调用点必须在该对象所属线程**：摘掉最后一个引用可能当场销毁包装对象（C++ 侧
-    随之析构），必须发生在它自己的线程上。现有调用点：``FrameSeqClip.close()``、
-    排空确认落地后、库销毁后（均为主线程/该 clip 所属线程）。
-    """
-    reaped = 0
-    salvaged = False
-    for obj in list(_LIVE_CLIPS):
-        if _pin_alive(obj) and not getattr(obj, "_drained", False):
-            continue
-        salvaged = _salvage_orphan_workers(obj) or salvaged
-        try:
-            _LIVE_CLIPS.remove(obj)
-        except ValueError:
-            continue
-        reaped += 1
-    for obj in list(_LIVE_WORKERS):
-        if _pin_alive(obj):
-            continue
-        try:
-            _LIVE_WORKERS.remove(obj)
-        except ValueError:
-            continue
-        reaped += 1
-    if salvaged:
-        _schedule_reap()           # 补排的退役到位后再扫一次，把 worker 条目摘掉
-    return reaped
-
-
-def _salvage_orphan_workers(clip) -> bool:
-    """给"C++ 侧已销毁、从未 close"的 clip 留下的 worker 补排退役；返回是否排上。
-
-    读的是 Python 属性（失效包装对象的属性读写仍然可用，只有 C++ 调用会
-    ``RuntimeError``）：拿不到就什么都不做——钉表条目交给进程退出收口。
-    """
-    posted = False
-    for worker in (getattr(clip, "_worker", None),
-                   *getattr(clip, "_retired_workers", ())):
-        if worker is None or not _pin_alive(worker):
-            continue
-        posted = _post_retire_request(worker) or posted
-    return posted
 
 
 class _PrefetchWorker(QObject):
@@ -290,45 +181,21 @@ class _PrefetchWorker(QObject):
     """
 
     loaded = Signal(int, QImage)
-    #: 退役确认（内部）：``retire`` 槽在**本 worker 所属线程**跑完后发出。clip 侧
-    #: 经 queued 连接收到它，就等于"此前投递的 ``loaded`` 都已进入本 clip 的事件
-    #: 队列"（同一目标线程 FIFO），因此它的落地顺序必定晚于最后一帧交付——钉表
-    #: 注销协议（``FrameSeqClip._on_worker_retired``）就靠这一点。
-    retired = Signal()
 
     def __init__(self, frames: _FramePaths, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._frames = frames
-        #: 退役只排一次（``close()`` 与"C++ 侧已销毁的 clip 补排"可能各来一次）
-        self._retire_posted = False
         # 强钉入进程级存活表：worker 的 prefetch 是 Python 槽，排队交付执行时
         # 需要 Python 包装对象活着。clip 被丢弃而未 close 时包装随 GC 析构，
         # 在途交付命中死包装 = 共享线程上 0x8 段错误（mac CI 原生栈实锤：
         # QThread::exec → sendPostedEvents → qtPythonMetacall）。 worker 是
-        # 无父小对象，进程级钉住有界（每 clip 一个），且收口路径会摘（见
-        # reap_retired_objects）。
+        # 无父小对象，进程级钉住有界（每 clip 一个）。
         _LIVE_WORKERS.append(self)
 
     @Slot(int)
     def prefetch(self, idx: int) -> None:
         if 0 <= idx < len(self._frames):
             self.loaded.emit(idx, QImage(str(self._frames[idx])))
-
-    @Slot()
-    def retire(self) -> None:
-        """队列屏障 + 所属线程销毁：**只能在 worker 自己的线程执行**（queued 投递）。
-
-        本槽排在全部在途 ``prefetch`` 之后（同一目标线程的事件队列 FIFO），执行到
-        它就意味着那些请求都处理完了、它们的 ``loaded`` 也早已投递出去（投递发生在
-        ``emit`` 内，与 ``prefetch`` 同线程顺序执行）。随后 ``deleteLater()`` 把销毁
-        交给**本线程**的事件循环：绝不跨线程销毁（:84-92 的 AV 前科、2026-10-03
-        "deleteLater 落在死线程队列"3/17 崩的实测），也绝不把销毁丢给随机线程的 GC。
-        帧表引用一并交还内存。本槽只由活着的线程执行——线程已死时它永远不跑，
-        钉表条目照旧保留（安全方向）。
-        """
-        self._frames = None
-        self.retired.emit()
-        self.deleteLater()
 
 
 class FrameSeqClip(QObject):
@@ -355,8 +222,7 @@ class FrameSeqClip(QObject):
         # 强钉入进程级存活表（与 ``_LIVE_WORKERS`` 同族防线）：worker 经 queued
         # 信号交付 ``loaded`` 到本 clip 的 ``_on_loaded``（Python 槽）；clip 被
         # 丢弃而未 close 时，GUI 线程析构撞上共享线程的在途交付 = UAF 段错误。
-        # 生产里 clip 本就由库缓存常驻，钉表只兜"丢弃未收口"路径；收口路径
-        # （close 的排空确认 / C++ 侧随库销毁）会摘掉条目，见 reap_retired_objects。
+        # 生产里 clip 本就由库缓存常驻，钉表只兜"丢弃未收口"路径，量有界。
         _LIVE_CLIPS.append(self)
         self._dir = Path(frames_dir)
         self._fps = DEFAULT_FPS
@@ -398,27 +264,19 @@ class FrameSeqClip(QObject):
         self._pending_interval: int | None = None
         # 异步预取（GUI 零解码）：pending = 已到货未上屏，wanted = 在途请求，
         # awaiting = 播放位置在等的帧号（到货即上屏）；线程进程级共享，
-        # clip 只挂 worker（退役 = close() 排队列屏障 + worker 在自己线程上销毁，
-        # 见 close() 的回收协议）
+        # clip 只挂 worker（退役经 close()→断开信号+留引用，不跨线程销毁）
         self._pending: dict[int, QImage] = {}
         self._wanted = -1
         self._awaiting = -1
         # 预取看门狗状态：awaiting 起点（monotonic；None = 不在等）+ 连续超时次数
         self._awaiting_since: float | None = None
         self._stall_count = 0
-        # 已退役 worker（收口退役见 ``close()``：销毁由 worker 自己的线程接手；共享
-        # 线程死亡后换新 worker 时，旧对象的线程亲和性留在**死**线程上——那种既
-        # 不能 deleteLater（没人处理那个队列），也不能交给随机线程的 GC）
+        # 已退役 worker（共享线程死亡后换新 worker，旧对象的线程亲和性留在死
+        # 线程上——不能 deleteLater（没人处理），只能保留引用不跨线程销毁）
         self._retired_workers: list[_PrefetchWorker] = []
         self._worker = _PrefetchWorker(self._frames)
         #: close() 幂等标志（worker 退役只许一次：重复断信号/重复入列无意义）
         self._closed = False
-        #: 收口锁：护"已关闭"与"后台预热线程正在投递"之间的竞态（见
-        #: ``warm_first_frame``）——close() 拿走锁之后预热线程就不再投递，排空
-        #: 确认因此覆盖得到全部投递。
-        self._retire_lock = threading.Lock()
-        #: 交付是否已排空（``_on_worker_retired`` 落地后为 True）：钉表摘除判据
-        self._drained = False
         # 预热帧的提交走 clip 自身线程（QueuedConnection 队列投递）：后台预热
         # 线程只解码，不在 GUI 侧状态（_img/_img_frame/_pending）上并发写。
         self._warm_frame_ready.connect(
@@ -427,8 +285,6 @@ class FrameSeqClip(QObject):
         self._worker.moveToThread(self._prefetch_thread)
         self._worker.loaded.connect(self._on_loaded,
                                     Qt.ConnectionType.QueuedConnection)
-        self._worker.retired.connect(self._on_worker_retired,
-                                     Qt.ConnectionType.QueuedConnection)
 
     # ---------------------------------------------------------------- 元信息
     def frameCount(self) -> int:
@@ -553,68 +409,26 @@ class FrameSeqClip(QObject):
             self._timer.start()
 
     def close(self) -> None:
-        """停止播放、退役预取 worker，并在交付排空后注销进程级强引用。幂等。
+        """停止播放并退役预取 worker（MovieLibrary.shutdown/收尾调用）。幂等。
 
-        回收协议（缺一步就是 UAF 窗口，见 ``_LIVE_WORKERS``/``_LIVE_CLIPS`` 的注释）：
-
-        ① **停止接收**：置 ``_closed``（``_request`` / 预热投递 / 交付提交全部
-           早退）+ 断 ``loaded`` 连接——此后不再有新的 queued 交付被投递；
-        ② **队列屏障**：把 ``retire`` 排进 worker **所属线程**的事件队列（见
-           ``_PrefetchWorker.retire``）——它排在全部在途 ``prefetch`` 之后；
-        ③ **所属线程销毁**：同一个槽里 ``deleteLater()``，销毁交给 worker 自己
-           线程的事件循环（跨线程销毁才是 :84-92 那条 AV 路的真风险）；
-        ④ **注销强引用**：``retired`` 确认按 FIFO 排在更早投递的全部交付之后，
-           落地时 ``_on_worker_retired`` 摘掉 ``_LIVE_CLIPS`` 里的本对象；worker
-           等 C++ 侧真销毁后由 ``reap_retired_objects`` 从 ``_LIVE_WORKERS``
-           摘除（销毁未完成就摘 = 让 GC 在随机线程析构它）。
-
-        线程已死 / 事件循环不再轮转时确认永远不会到：钉表条目照旧保留（回落到
-        改前行为——宁可多留引用，绝不制造 UAF）。显示槽与惰性 pixmap 随收口当场
-        交还内存：close 之后没有播放路径再读它们，而它们正是钉表遗留里最重的那
-        部分（每 clip 一份解码帧 + 一份 pixmap）。
+        worker 退役 = 断开交付信号 + 留引用（``_retired_workers``），**绝不
+        deleteLater**：共享线程被看门狗重建/退出收口杀掉后，挂在死线程队列里
+        的 DeferredDelete 没有事件循环处理，QThread 销毁/重建时的处置竞态在
+        全套件上下文实测就是 access violation（2026-10-03 邻域连跑：deleteLater
+        版 3/17 崩、退役版 0/6；同文件 :84-92 的 AV 前科与 ``_revive_prefetch_worker``
+        的退役先例同因——跨线程销毁才是真风险）。进程退出时 worker 随共享线程
+        一起由 Qt 收口，退役累积量 = 每 clip 一个小 QObject，有界。
         """
         if self._closed:
             return
-        with self._retire_lock:
-            self._closed = True
-            self.stop()
-            self._img = None
-            self._pm = None
-            self._img_frame = -1
-            self._pending.clear()
-            old = self._worker
-            try:
-                old.loaded.disconnect(self._on_loaded)
-            except (RuntimeError, TypeError):
-                pass  # 未连接过/对象已毁：忽略（与 _revive_prefetch_worker 同口径）
-            # 已销毁的退役对象不再留引用（有界：只留还指着 C++ 对象的那些）
-            self._retired_workers = [
-                w for w in self._retired_workers if _pin_alive(w)] + [old]
-        _post_retire_request(old)
-        reap_retired_objects()
-
-    @Slot()
-    def _on_worker_retired(self) -> None:
-        """排空确认落地（本 clip 所属线程）：注销钉表里的本对象（协议第④步）。
-
-        ``retired`` 是 queued 到本 clip 的，与 ``loaded`` 交付同一事件队列，且
-        worker 在发它之前已处理完全部 ``prefetch`` → 它到这里时，更早投递的交付
-        （``loaded``、后台预热提交）都已落地，此后不可能再有新的（close 已停止
-        接收）。此时注销强引用不再有 UAF 窗口。
-
-        摘除本身排到下一轮事件循环（``singleShot``）：绝不在"投给本对象的交付"里
-        丢掉最后一个引用、让自己在派发中途析构。
-        """
-        sender = self.sender()
-        if sender is not None and self._worker is not None \
-                and sender is not self._worker:
-            return                       # 非当前 worker 的确认：不动钉表
-        self._drained = True
+        self._closed = True
+        self.stop()
+        old = self._worker
         try:
-            self._worker.retired.disconnect(self._on_worker_retired)
+            old.loaded.disconnect(self._on_loaded)
         except (RuntimeError, TypeError):
-            pass
-        _schedule_reap()
+            pass  # 未连接过/对象已毁：忽略（与 _revive_prefetch_worker 同口径）
+        self._retired_workers.append(old)
 
     def jumpToFrame(self, frame_index: int) -> bool:
         if not self._frames:
@@ -692,13 +506,8 @@ class FrameSeqClip(QObject):
         并发写它，后台直写会把新提交的帧倒写成帧 0（图与帧号不一致），或把
         ``release_idle_frames`` 刚清空的槽重新填回。同线程调用（GUI 侧预热）
         保持原有的同步语义。
-
-        收口竞态：投递前在 ``_retire_lock`` 下复查 ``_closed``——close() 拿走锁
-        之后本方法就不再投递，因此"排空确认"（``_on_worker_retired``）覆盖得到
-        全部投递（否则收口后可能还有一次预热提交排在确认之后，那正是钉表要防的
-        UAF）。解码与复查之间隔着 ~1.2ms IO，这个窗口必须由锁兜住。
         """
-        if self._closed or self._img is not None or not self._frames:
+        if self._img is not None or not self._frames:
             return
         img = QImage(str(self._frames[0]))
         if img.isNull():
@@ -707,10 +516,7 @@ class FrameSeqClip(QObject):
             if self.thread() is QThread.currentThread():
                 self._commit_warm_first_frame(img)
                 return
-            with self._retire_lock:
-                if self._closed:
-                    return  # 收口赢了竞态：这一帧不再投递
-                self._warm_frame_ready.emit(img)
+            self._warm_frame_ready.emit(img)
         except RuntimeError:
             pass  # clip 半销毁（C++ 侧已删）：安静降级，等下一次起播同步解码
 
@@ -719,10 +525,9 @@ class FrameSeqClip(QObject):
 
         复核与解码之间隔着一次跨线程排队，所以这里必须重新判空：期间前台
         已经提交过新帧（起播/跳帧）就不动它——预热帧只值一次 ~1.2ms 解码，
-        绝不能倒写显示槽。收口后同样不动（``_closed``）：显示槽已交还内存，
-        迟到的提交会把帧填回去（钉表遗留里最重的那部分）。
+        绝不能倒写显示槽。
         """
-        if self._closed or self._img is not None or self._running:
+        if self._img is not None or self._running:
             return
         self._apply(img, 0)
         self._pending[0] = img
@@ -775,11 +580,8 @@ class FrameSeqClip(QObject):
     def _request(self, idx: int) -> None:
         """请求 worker 预取一帧（幂等去重：已到货/在途不重发）。
 
-        帧表按编号现推（``_FramePaths``），worker 侧同样零 glob。收口后一律不投
-        （协议第①步）：``retire`` 之后的请求只会撞上正在销毁的 worker。
+        帧表按编号现推（``_FramePaths``），worker 侧同样零 glob。
         """
-        if self._closed:
-            return
         if idx >= len(self._frames) or idx in self._pending or idx == self._wanted:
             return
         self._wanted = idx
@@ -789,8 +591,6 @@ class FrameSeqClip(QObject):
 
     @Slot(int, QImage)
     def _on_loaded(self, idx: int, img: QImage) -> None:
-        if self._closed:
-            return  # 收口后的迟到交付：不上屏、也不再续链（否则会投给已退役的 worker）
         self._wanted = -1
         if img.isNull():
             return  # 坏帧：保持现状，不崩播放链
@@ -804,8 +604,6 @@ class FrameSeqClip(QObject):
             self._pending[idx] = img
 
     def _advance(self) -> None:
-        if self._closed:
-            return  # 收口后时钟可能还有一拍在途（timer 事件已排队）：不得再推进/复活 worker
         self._flush_pending_interval()  # 排队的变速在本次 timeout 落地（零代价）
         nxt = self._cur + 1
         if nxt >= len(self._frames):
@@ -919,18 +717,14 @@ class FrameSeqClip(QObject):
             old.loaded.disconnect(self._on_loaded)
         except (RuntimeError, TypeError):
             pass
-        # 只留还指着 C++ 对象的退役对象（已销毁的不再留引用）：退化的线程上
-        # 销毁不可能发生（事件循环已停），那些条目只能留到进程退出——有界。
-        self._retired_workers = [
-            w for w in self._retired_workers if _pin_alive(w)] + [old]
-        # 不跨线程销毁（2026-10-03）：亲和于**已死线程**的对象既不能 deleteLater
-        # （没人处理那个队列），也不能交给随机线程的 GC——只能留引用。
+        self._retired_workers.append(old)
+        # 不设上限裁剪（2026-10-03）：裁掉引用 = 让 Python GC 在某个随机线程
+        # 析构一个亲和于共享线程的 QObject——跨线程销毁正是这条路要防的 AV。
+        # worker 是无父小 QObject，退役累积量有界（每 clip 一个 + 复活几次）。
         self._worker = _PrefetchWorker(self._frames)
         self._prefetch_thread = _shared_prefetch_thread()
         self._worker.moveToThread(self._prefetch_thread)
         self._worker.loaded.connect(self._on_loaded,
                                     Qt.ConnectionType.QueuedConnection)
-        self._worker.retired.connect(self._on_worker_retired,
-                                     Qt.ConnectionType.QueuedConnection)
         logger.warning("frameseq 共享预取线程失能：已重建并换挂新 worker（clip=%s）",
                        self._dir.name)

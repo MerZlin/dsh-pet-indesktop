@@ -81,33 +81,6 @@ def reap_orphan_provision_workers() -> int:
     return len(done)
 
 
-def _schedule_frameseq_pin_reap() -> None:
-    """库销毁后择机回收帧序列钉表（``MovieLibrary.destroyed`` 槽）。
-
-    ``destroyed`` 在子对象被删**之前**发出，所以这里只排一轮事件循环：等库的
-    clip 子对象真的没了，"钉表里 C++ 侧已销毁"这条判据才成立（见
-    ``frameseq_clip.reap_retired_objects``）。不捕获库自身——正在析构的对象绝不
-    留在连接里。切角色（新建库 + 旧库随旧窗被丢弃，不走 ``shutdown``）是这条路
-    的常客。
-    """
-    try:
-        QTimer.singleShot(0, _reap_frameseq_pins)
-    except Exception:
-        logging.getLogger(__name__).debug('帧序列钉表回收排期失败', exc_info=True)
-
-
-def _reap_frameseq_pins() -> None:
-    """机会式回收帧序列钉表（导入放这里，避免库模块顶部就拉起帧序列层）。"""
-    try:
-        from .frameseq_clip import reap_retired_objects
-    except Exception:
-        return
-    try:
-        reap_retired_objects()
-    except Exception:
-        logging.getLogger(__name__).debug('帧序列钉表回收失败', exc_info=True)
-
-
 # QMovie 播放速度补偿（%）：GIF 路线使用，校准 QMovie 偏慢问题
 PLAYBACK_SPEED = 120
 
@@ -308,10 +281,6 @@ class MovieLibrary(QObject):
         super().__init__(parent)
         _LIVE_MOVIE_LIBRARIES.add(self)
         self.character_id = character_id or catalog.DEFAULT_CHARACTER
-        # 库被丢弃（切角色：新建库 + 旧库随旧窗一起被丢弃，不走 shutdown）时，
-        # 子 clip 的 C++ 侧随库销毁，而帧序列钉表对它们的强引用还在（每 clip
-        # 一份显示 QImage 常驻）。销毁后择机摘掉——见 _schedule_frameseq_pin_reap。
-        self.destroyed.connect(lambda *_a: _schedule_frameseq_pin_reap())
         policy = str(prewarm_policy or "balanced").strip().lower()
         self._prewarm_policy = policy if policy in {"full", "balanced", "minimal"} else "balanced"
         if asset_dir is not None:
@@ -921,11 +890,10 @@ class MovieLibrary(QObject):
         self.cancel_frameseq_provision()
         for clip in tuple(self._movies.values()):
             try:
-                # close() 优先（FrameSeqClip：stop + 退役 worker：队列屏障 → 自己的
-                # 线程上销毁 → 排空确认后注销钉表引用）——它的预取 worker 亲和于共享
-                # 预取线程，绝不能在 GUI 线程被 GC 析构（跨线程销毁的 AV 前科见
-                # frameseq_clip :84-92）；漏掉这一步旧 clip 的 worker 就失去受控退役
-                # 路径，也永远等不到回收（钉表只增不减）。
+                # close() 优先（FrameSeqClip：stop + worker 退役留引用）——它的
+                # 预取 worker 亲和于共享预取线程，绝不能在 GUI 线程被 GC 析构
+                # （跨线程销毁的 AV 前科见 frameseq_clip :84-92）；漏掉这一步
+                # 旧 clip 的 worker 就失去受控退役路径。
                 close = getattr(clip, 'close', None)
                 if callable(close):
                     close()
