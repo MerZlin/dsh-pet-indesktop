@@ -79,7 +79,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11.15'  # 诊断：绕开 hostedtoolcache 的 3.11.9（AV 嫌疑环境）
+          python-version: ${{ runner.os == 'Windows' && '3.11.15' || '3.11' }}  # 诊断：Windows 绕开 toolcache 3.11.9（AV 嫌疑环境）
 
       # bridge 门禁依赖 `node --test`（Node 20 无 glob，清单硬编码在下面）。
       # 显式固定 Node 版本：runner 预装版本会随时间漂移，门禁口径不能跟着飘。
