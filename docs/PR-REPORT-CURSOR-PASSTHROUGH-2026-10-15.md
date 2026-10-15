@@ -81,6 +81,17 @@ grab 在途时收敛不立即动手（记待办，grab 收尾后补做）；
 左键按下（拖拽支改动前同此口子）。补齐需要挂钟超时或 `GetAsyncKeyState`，
 会引入"误杀合法长按"的新语义，本 PR 不动，留实机验证决定。
 
+另有三处同族残留（均已登记 BACKLOG，本 PR 不动）：
+
+- `OverlayShell._end_drag`（屏迁移链）直接清 `_mouse_grab`/`_press_global`
+  不走壳通知——自愈路径是迁移随后的 `show()` 收敛（注意：迁移因
+  `new_screen is None` 提前返回时没有这个 show 保证，仅正常迁移链成立）；
+  它也不清 `_press_click_only`/`_drag_committed`、不调 `set_drag_active(False)`。
+- `hideEvent`/`closeEvent` 不结束在途 grab（既有行为，click-only 侧已由
+  看门狗覆盖）。
+- click-only 按下能进弹弓瞄准（进入判据宽松）：本 PR 只保证看门狗收会话，
+  进入条件本身的收紧归输入链路片。
+
 ## 四、性能分析
 
 受影响路径两条：穿透轮询里的看门狗调用（每拍一次）与输入/显示时的收敛钩子。
