@@ -371,17 +371,56 @@ def test_auto_cursor_hidden_converges_on_input_reaching_the_window(tmp_path):
 
 
 def test_auto_cursor_hidden_holds_while_grab_in_flight(tmp_path):
-    """拖拽在途时输入侧收敛不得动手，只能记待办（``_converge_pending``，由
-    grab 收尾补做）——这正是"拖拽中不误开/误关穿透"的判据。"""
+    """grab 在途时输入侧收敛不得动手，只能记待办；该待办在 grab 收尾后必须
+    被补做（只断言中间态是终审指出的盲区）——这是"拖拽中不误开/误关穿透 +
+    收尾不漏账"的两半判据。"""
     shell = _make_shell(tmp_path, {"mouse_through": False})
     try:
         overlay = shell.overlay
         shell._on_cursor_visibility_changed("HIDDEN")
         overlay._mouse_grab = object()          # 拖拽/点击在途
-        QApplication.sendEvent(overlay, _mouse_press((100, 100)))
+        overlay._note_user_input()              # 输入侧收敛入口（press 事件首行）
+
+        # 前半：此刻不许改穿透态，但请求不许被丢弃
         assert shell._auto_cursor_hidden is True
         assert overlay.mouse_through is True
-        assert shell._converge_pending is True   # 请求不许被丢弃
+        assert shell._converge_pending is True
+
+        # 后半：grab 经"未命中"分支清掉 → 待办被补做（无 grab 即清）
+        QApplication.sendEvent(overlay, _mouse_press((100, 100)))
+        assert overlay._mouse_grab is None
+        assert shell._converge_pending is False
+        assert shell._auto_cursor_hidden is False
+        assert overlay.mouse_through is False
+    finally:
+        shell._delete_runtime_marker()
+
+
+def test_missed_left_press_notifies_grab_finished_and_flushes_pending(tmp_path):
+    """P2 回归：未命中分支清 grab 也要走收尾通知，否则待办无人补做。
+
+    可达链：``_on_cursor_visibility_changed("HIDDEN")`` 置自动穿透 → 遗留
+    click-only grab（丢过 release）→ 样式脱同步时左键到达窗口但**未命中**
+    sprite → 输入侧收敛先记下待办、同一事件里 grab 被清 → 旧实现直接赋值
+    ``None``、壳层收尾钩子收不到事件，待办与穿透一起永久滞留。
+    """
+    shell = _make_shell(tmp_path, {"mouse_through": False})
+    try:
+        overlay = shell.overlay
+        shell._on_cursor_visibility_changed("HIDDEN")   # 生产路径置位自动穿透
+        assert shell._auto_cursor_hidden is True
+        assert overlay.mouse_through is True
+        overlay._mouse_grab = shell.sprite              # 遗留 click-only grab
+        overlay._press_click_only = True
+
+        # 未命中 sprite 的左键 press（CapSprite 全透明 → sprite_at 恒 None）
+        QApplication.sendEvent(overlay, _mouse_press((100, 100)))
+
+        assert overlay._mouse_grab is None
+        assert overlay._press_click_only is False
+        assert shell._converge_pending is False
+        assert shell._auto_cursor_hidden is False
+        assert overlay.mouse_through is False
     finally:
         shell._delete_runtime_marker()
 

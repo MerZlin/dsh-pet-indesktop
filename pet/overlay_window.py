@@ -746,8 +746,19 @@ class OverlayWindow(QWidget):
             self._cancel_slingshot(resume_drag=False)
         target = self.sprite_at(event.position())
         if target is None:
+            # 遗留 grab（上一次按下丢过 release / click-only 卡住）在这里被清。
+            # 清之前先看有没有 grab，有就走壳层收尾通知：壳层的收尾钩子同时
+            # 补做被 grab 闸住的穿透收敛（``_converge_pending``），漏通知会让
+            # 那笔待办永久滞留（窗口整窗穿透退不出去）。
+            # 本分支的既有语义逐位保留：**不**转发 on_release、不做位置同步、
+            # 不动 ``_press_global``/``_drag_committed``，故只取通知这一份，
+            # 不复用 ``_finish_grab`` 本体（它对遗留真拖拽 grab 会转发
+            # on_release → 按陈旧轨迹算抛掷初速 + 补一次位置同步）。
+            had_grab = self._mouse_grab is not None
             self._mouse_grab = None
             self._press_click_only = False
+            if had_grab:
+                self._notify_grab_finished()
             event.ignore()  # 未命中：忽略（Windows 穿透轮询会把点击让给下层）
             return
         self._mouse_grab = target
@@ -905,9 +916,19 @@ class OverlayWindow(QWidget):
         if grab is not None and committed:
             # 松手终位立即同步（旧 window.py:3401），不等 tick/30Hz 补发
             self._sync_follow_now(grab)
+        self._notify_grab_finished()
+
+    def _notify_grab_finished(self) -> None:
+        """grab 收尾的壳层通知（所有把 ``_mouse_grab`` 清空的出口共用）。
+
+        4.1b：壳层 ``_on_grab_finished`` 在此冲刷光标恢复滞留，并补做被 grab
+        闸住的穿透收敛（``_converge_pending``）。**任何**清 grab 的出口都必须
+        走到这里，否则壳层收不到收尾事件、那笔待办永远没人认账
+        （``_auto_cursor_hidden`` 与待办一起滞留 = 窗口永久整窗穿透）。
+        """
         cb = getattr(self, "_grab_finished_cb", None)
         if callable(cb):
-            cb()  # 4.1b：shell 冲刷光标恢复滞留等拖拽后状态
+            cb()
 
     def _check_stale_press(self) -> None:
         """V-7 拖拽看门狗：release 事件丢失（alt-tab/弹窗抢 grab/屏拔除）
