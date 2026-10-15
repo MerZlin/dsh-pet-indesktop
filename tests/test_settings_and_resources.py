@@ -442,6 +442,9 @@ def test_dialogue_agent_scope_restore_and_public_rows_hidden(qapp, tmp_path):
         "agents": {"dsh": {"start": ["DSH start"], "thinking": ["DSH thinking"]}},
     })
     cfg.set("dialogue_last_scope", "dsh")
+    # #271：空身份会话按 slot0 分流，全局键读路由视图另建的主配置（初值只取盘）
+    # ——预置必须落盘。
+    assert cfg.save() is True
     dialog = ModernSettingsDialog(cfg, include_ai=False)
     try:
         # 恢复上次编辑层：下拉停在 dsh，编辑框载入该层专属文案

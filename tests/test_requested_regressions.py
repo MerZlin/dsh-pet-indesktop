@@ -41,6 +41,7 @@ def test_modern_message_card_opacity_is_configurable_and_persisted(tmp_path, mon
     dialog.ai_page.message_card_opacity.setValue(65)
     dialog._save()
 
+    config.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert config.get("modern_chat_card_opacity") == 65
     assert "rgba(255, 255, 255, 166)" in build_modern_custom_overlay_qss(
         "#3994ff", 65
@@ -396,7 +397,12 @@ def test_click_sound_path_is_linked_to_enable_toggle_and_persisted(tmp_path, mon
     dialog.click_sound_picker.set_pack({"kind": "file", "id": "custom", "path": "/tmp/my-click.wav"})
     dialog._save()
 
-    assert config.get("click_sound_pack") == {"kind": "file", "id": "custom", "path": "/tmp/my-click.wav"}
+    # #271：空身份会话按 slot0 分流，音效包是每宠键——真值在 config-slot-0.json，
+    # 传入的空身份对象读的是主配置，从档案读回。
+    from pet import pet_profiles
+
+    assert pet_profiles.read_slot_profile(config.dir, 0).value("click_sound_pack") == {
+        "kind": "file", "id": "custom", "path": "/tmp/my-click.wav"}
     dialog.close()
     app.processEvents()
 
@@ -419,7 +425,13 @@ def test_click_sound_path_row_hidden_initially_when_toggle_disabled(tmp_path, mo
         lambda *args, **kwargs: None,
     )
     config = Config(tmp_path)
-    config.set("click_sound_enabled", False)
+    # #271：空身份会话按 slot0 分流，每宠键的真值在 config-slot-0.json——
+    # 内存预置对话框读不到，必须落盘（先建主配置/落种档案，再写该槽偏好）。
+    config.save()
+    from pet import pet_profiles
+
+    assert pet_profiles.write_profile_settings(
+        config.dir, 0, {"click_sound_enabled": False}).ok
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     row = dialog.findChild(
         settings_mod.SettingRow, "settingRow_click_sound_pack"
@@ -558,11 +570,15 @@ def test_settings_save_preserves_custom_font_before_selector_is_opened(tmp_path,
     appearance = dict(config.get("context_menu_appearance"))
     appearance["ui_font"] = "Regression Custom Font"
     config.set("context_menu_appearance", appearance)
+    # #271：空身份会话按 slot0 分流，全局键读路由视图另建的主配置（初值只取盘）
+    # ——预置必须落盘。
+    assert config.save() is True
 
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
     assert dialog._menu_fonts_populated is False
     assert dialog.menu_font_select.currentData() == "Regression Custom Font"
     dialog._save()
+    config.reload()  # 写盘走另一份主配置对象，传入对象需重读才可见
     assert config.get("context_menu_appearance")["ui_font"] == "Regression Custom Font"
     app.processEvents()
 
@@ -1180,6 +1196,7 @@ def test_modern_settings_save_writes_autostart_wanted(tmp_path, monkeypatch):
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     dialog.autostart_check.setChecked(True)
     dialog._save()
+    config.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert config.get("autostart_wanted") is True
     dialog.close()
     app.processEvents()
@@ -1378,7 +1395,11 @@ def test_modern_settings_escape_closes_when_save_succeeds(tmp_path, monkeypatch)
     app.processEvents()
 
     assert finished == [int(QDialog.DialogCode.Rejected)], "保存成功时 Esc 必须关窗"
-    assert config.get("self_talk_bubble_style") == "breath_bubble", "关窗前必须落盘"
+    # #271：气泡样式是每宠键——真值在 config-slot-0.json，从档案读回。
+    from pet import pet_profiles
+
+    assert pet_profiles.read_slot_profile(config.dir, 0).value(
+        "self_talk_bubble_style") == "breath_bubble", "关窗前必须落盘"
 
 
 def test_settings_stylesheet_has_dark_overrides(monkeypatch):
@@ -1409,6 +1430,9 @@ def test_settings_window_uses_the_explicit_dark_appearance_on_a_light_system(
     monkeypatch.setattr(settings_mod.autostart_mod, "is_enabled", lambda: False)
     config = Config(tmp_path)
     config.set("context_menu_appearance", {"theme": "dark"})
+    # #271：空身份会话按 slot0 分流，全局键读路由视图另建的主配置（初值只取盘）
+    # ——预置必须落盘。
+    assert config.save() is True
 
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
     assert "QDialog { background: #202024" in dialog.styleSheet()
@@ -1560,6 +1584,7 @@ def test_modern_settings_close_applies_autostart(tmp_path, monkeypatch):
     dialog.close()  # X 关闭，不点「保存并退出」
     app.processEvents()
     assert applied == [True]
+    config.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert config.get("autostart_wanted") is True
     dialog.close()
     app.processEvents()

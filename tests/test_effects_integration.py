@@ -113,6 +113,7 @@ def test_settings_dialog_has_effect_toggles_and_writes_config(tmp_path, monkeypa
     dialog.golden_spin_direct_check.setChecked(True)
     dialog.edge_probe_check.setChecked(True)
     assert dialog._write_config() is True
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("golden_spin_on_click") is True
     assert cfg.get("golden_spin_direct") is True
     assert cfg.get("edge_probe_enabled") is True

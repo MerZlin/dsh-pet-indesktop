@@ -159,7 +159,10 @@ def test_settings_row_reads_and_writes_the_key(tmp_path):
 
         dialog.drop_gravity_check.setChecked(True)
         assert dialog._save() is not False
-        assert cfg.get("drop_gravity") is True
+        # #271：空身份会话按 slot0 分流——每宠键落 config-slot-0.json，
+        # 传入的空身份对象读的是主配置（不含每宠键），真值从档案读回。
+        from pet import pet_profiles as profiles
+        assert profiles.read_slot_profile(cfg.dir, 0).value("drop_gravity") is True
 
         # 归属：与「拖动物理」同域页（组内相邻，可发现性由既有分组承担）
         physics_row = dialog.findChild(SettingRow, "settingRow_drag_physics")
@@ -177,8 +180,11 @@ def test_settings_row_shows_configured_value(tmp_path):
     """真值回读：config 已开 → 勾选框显示开（避免「配置说开、界面显示关」）。"""
     from pet.modern_settings_dialog import ModernSettingsDialog
 
+    from pet import pet_profiles as profiles
+
     cfg = Config(base=tmp_path)
-    cfg.set("drop_gravity", True)
+    cfg.save()  # 落种 slot0 档案（#271 起空身份会话的每宠键读它）
+    assert profiles.write_profile_settings(cfg.dir, 0, {"drop_gravity": True}).ok
     dialog = ModernSettingsDialog(cfg, include_ai=False)
     try:
         assert dialog.drop_gravity_check.isChecked() is True

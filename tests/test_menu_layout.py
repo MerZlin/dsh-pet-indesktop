@@ -1323,6 +1323,9 @@ def test_network_info_entry_status_follows_its_setting(tmp_path, monkeypatch):
 
     off_cfg = Config(tmp_path / "off")
     off_cfg.set("network_info_menu_enabled", False)
+    # #271：空身份会话按 slot0 分流，全局键读的是路由视图另建的主配置（初值只取盘），
+    # 内存预置不再可见——预置必须落盘。
+    assert off_cfg.save() is True
     dialog = ModernSettingsDialog(off_cfg, include_ai=True)
     try:
         item = dialog.menu_layout_editor.item_for_action("network_info")

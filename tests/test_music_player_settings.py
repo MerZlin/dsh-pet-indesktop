@@ -405,7 +405,9 @@ def test_foobar_controls_are_editable_on_the_child_page(monkeypatch, tmp_path):
         child.foobar_lyrics_check.setChecked(True)
         child.foobar_title_format_edit.setText("%artist% - %title%")
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份（主宠页）会话的配置面指向 config-slot-0.json，本用例改的键
+        # 都是全局键、落主配置——读盘要用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert on_disk["foobar_lyrics_enabled"] is True, "子宠页改的键必须真正生效"
         assert on_disk["foobar_title_format"] == "%artist% - %title%"
     finally:
@@ -436,7 +438,9 @@ def test_browser_media_control_is_editable_on_the_child_page(monkeypatch, tmp_pa
 
         child.music_browser_media_check.setChecked(True)
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份（主宠页）会话的配置面指向 config-slot-0.json，本用例改的键
+        # 都是全局键、落主配置——读盘要用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert on_disk["music_browser_media_enabled"] is True
     finally:
         for dialog in (master, child):
@@ -465,7 +469,9 @@ def test_music_player_pickers_are_editable_on_the_child_page(tmp_path):
 
         _pickers(child)[0].setText(r"D:\CloudMusic\cloudmusic.exe")
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份（主宠页）会话的配置面指向 config-slot-0.json，本用例改的键
+        # 都是全局键、落主配置——读盘要用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert on_disk["music_player_paths"] == {
             "netease": r"D:\CloudMusic\cloudmusic.exe"
         }

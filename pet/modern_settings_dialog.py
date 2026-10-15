@@ -265,8 +265,8 @@ class ModernSettingsDialog(QDialog):
     def __init__(self, config, parent=None, *, include_ai: bool = True,
                  standalone: bool = False, initial_page: str | None = None):
         super().__init__(parent)
-        # 子宠设置页：非 per-slot 键直读**主**配置（而不是 slot 文件里的无效快照），
-        # 保存时按同一分流写回。不适用（主身份 / legacy 拓扑）时原样返回，
+        # slot 设置页（含 #271 起的主宠页 = slot0 页）：非 per-slot 键直读**主**配置
+        #（而不是 slot 文件里的无效快照），保存时按同一分流写回。
         # 见 pet/settings_slot_config.py 的模块 docstring。
         config = route_settings_config(config)
         # 每张表单一份**独立编辑视图**（草稿 + 编辑代次基线各自一份，运行期那份保持只读）：

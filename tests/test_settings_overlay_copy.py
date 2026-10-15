@@ -17,8 +17,10 @@
   单窗路径并收拢多宠，故撤销置灰、文案回到 T4 口径（重启后生效 + 多宠收拢）；
   显式 ``PET_RENDER_TOPOLOGY=legacy`` 仍是运行期即时切换，逐字保留原提示。
 - T3 窗口级键（置顶/鼠标穿透/不透明度/锁定位置/SHIFT 拖拽/光标隐藏穿透/全屏
-  自动隐藏）在 overlay 一窗多宠下物理上只能整窗生效 → 子宠设置页补一句
-  「对所有桌宠生效」；主宠页与 legacy 拓扑不加。
+  自动隐藏）在 overlay 一窗多宠下物理上只能整窗生效 → 每个 slot 设置页补一句
+  「对所有桌宠生效」。**#271 起主宠页也在此列**：无 ``--instance`` 的空身份设置
+  会话按 slot0 分流，主宠页就是 slot0 页（= 生产 ``--instance slot-0`` 路径），
+  与子宠页同口径标注；只有 legacy 拓扑不加（每宠独立窗口，键确实只作用于自己）。
 
 纪律：offscreen；同步直调，不 sleep；不 mock 产品对象。
 """
@@ -175,14 +177,23 @@ def test_child_page_marks_window_scope_keys_as_global(tmp_path, monkeypatch, set
 
 
 @pytest.mark.parametrize("setting_id", WINDOW_SCOPE_IDS)
-def test_master_page_has_no_scope_note(tmp_path, monkeypatch, setting_id):
-    """overlay + 主宠页：不加（主宠页本来就是全局视角，避免噪声）。"""
+def test_main_page_shows_scope_note(tmp_path, monkeypatch, setting_id):
+    """overlay + 主宠页：与子宠页同口径补「（对所有桌宠生效）」。
+
+    #271 契约变更：无 ``--instance`` 的空身份设置会话按 slot0 分流——**主宠页就是
+    slot0 页**，与生产 ``--instance slot-0`` 路径（D13）逐位同构。窗口级键在单合成
+    窗里同样只能整窗生效，故主宠页不该再"静默地少一句说明"。旧契约（"空身份 = 全局
+    视角页，不加注记"）已作废，这里与 ``test_child_page_marks_window_scope_keys_as_global``
+    断言同一条注记；注记本体的措辞由产品常量 ``ALL_PETS_SCOPE_NOTE`` 提供。
+    """
+    from pet.settings_pet_controls import ALL_PETS_SCOPE_NOTE
+
     dialog = _dialog(tmp_path, monkeypatch)
     try:
         hint = _hint(dialog, setting_id)
     finally:
         _close(dialog)
-    assert SCOPE_NOTE not in hint
+    assert ALL_PETS_SCOPE_NOTE in hint
 
 
 @pytest.mark.parametrize("setting_id", WINDOW_SCOPE_IDS)

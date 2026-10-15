@@ -176,6 +176,9 @@ def test_standalone_save_merges_external_disk_change(tmp_path):
         external.set("pnpm_bin", "C:/tools/pnpm.cmd")
         assert external.save()
         assert dialog._write_config()
+        # #271：空身份会话按 slot0 分流，写盘走路由视图**另建的**主配置对象，
+        # 传入的那份对象内存不更新——读回必须先重读磁盘。
+        config.reload()
         assert config.get("pnpm_bin") == "C:/tools/pnpm.cmd"
         on_disk = json.loads(Path(config.path).read_text(encoding="utf-8"))
         assert on_disk["pnpm_bin"] == "C:/tools/pnpm.cmd"

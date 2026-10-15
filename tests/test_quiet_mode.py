@@ -1069,7 +1069,9 @@ def test_quiet_controls_are_editable_on_the_child_page(qapp, tmp_path):
             child.quiet_minutes_select.findData(120))
         child.quiet_also_on_fullscreen_check.setChecked(True)
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份会话的配置面指向 config-slot-0.json（SlotRoutedConfig 的 path），
+        # 免打扰两键是全局键、落主配置——读盘要用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert on_disk["quiet_minutes_default"] == 120, "子宠页改的键必须真正生效"
         assert on_disk["quiet_also_on_fullscreen"] is True
     finally:

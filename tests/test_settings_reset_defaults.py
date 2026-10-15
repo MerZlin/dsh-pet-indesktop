@@ -12,10 +12,14 @@
 5. 重置后关窗不得把旧控件值整表写回（设置窗关闭时会保存全部控件，控件持有的是
    重置前的旧值，不闸住就把刚写的默认值覆盖回去）；
 6. 重置级运行态对齐分**两个作用域**（G1b）：
-   - **主宠页（全局口径）**：位置（rx/ry=None）要立即回默认落位，否则本次退出
-     ``save_position()`` 会把重置前的旧位置写回磁盘、重置被静默抵消；
-   - **子宠页（slot 口径）**：本宠 reset **保留位置**（"回到默认落位"是独立操作，
-     见 ``docs/PRODUCT-NEXT-STEPS-SPEC-2026-10-09.md`` §五），所以它写的是
+   - **全局作用域**：位置（rx/ry=None）要立即回默认落位，否则本次退出
+     ``save_position()`` 会把重置前的旧位置写回磁盘、重置被静默抵消。触发它的
+     宿主配置是**整份**配置（进程内全局页 / legacy 的 ``--slot N`` 进程，都不是
+     SlotRoutedConfig）；#271 起空身份**设置窗**按 slot0 分流，那种窗口里全局
+     口径挂在侧栏副按钮的显式 ``RESET_SCOPE_GLOBAL`` 上；
+   - **slot 口径（含 #271 后的主宠页 = slot0 页）**：本宠 reset **保留位置**
+     （"回到默认落位"是独立操作，见
+     ``docs/PRODUCT-NEXT-STEPS-SPEC-2026-10-09.md`` §五），所以它写的是
      ``CMD_PROFILE_RESET``（偏好/尺寸/角色的运行态同步），**绝不**写会重定位的
      ``CMD_APPLY_SETTINGS_RESET``；系统登录项单独按新值收敛。
 """
@@ -285,7 +289,13 @@ def test_reset_write_failure_rolls_back_memory(tmp_path: Path, monkeypatch):
 
 def test_reset_button_confirm_applies_defaults_and_skips_stale_writeback(
         qapp, tmp_path: Path, monkeypatch):
-    """确认后：默认值落盘 + 关窗；关闭路径不得把旧控件值整表写回。"""
+    """确认后：默认值落盘 + 关窗；关闭路径不得把旧控件值整表写回。
+
+    #271：空身份设置会话 = slot0 页，侧栏主按钮是**本宠**重置，全局语义由同页副按钮
+    承载 —— 本用例测的是全局默认值落盘/陈旧写回闸门，故走显式的
+    ``reset_global_defaults_btn``（本宠按钮的"只动这份档案"由本文件底部的
+    ``_slot_page_dialog`` 两条守着）。关窗闸门 ``_saved_via_button`` 与作用域无关。
+    """
     cfg = _dirty_config(tmp_path / "appdata")
     fresh = _fresh_config(tmp_path / "fresh")
     monkeypatch.setattr(settings_reset_defaults, "confirm_reset", lambda _parent, _scope=None: True)
@@ -293,7 +303,7 @@ def test_reset_button_confirm_applies_defaults_and_skips_stale_writeback(
     dialog = ModernSettingsDialog(cfg, include_ai=False)
     assert getattr(dialog, "_saved_via_button", False) is False
 
-    dialog.reset_defaults_btn.click()
+    dialog.reset_global_defaults_btn.click()
 
     assert dialog.result() == QDialog.DialogCode.Accepted, "重置后应关窗（用户看到操作生效）"
 
@@ -333,12 +343,17 @@ def test_reset_button_cancel_has_zero_side_effect(qapp, tmp_path: Path, monkeypa
 
 def test_reset_button_reports_write_failure_instead_of_closing(
         qapp, tmp_path: Path, monkeypatch):
-    """落盘失败：如实告警、不关窗、内存与磁盘都不变（不许假装重置成功）。"""
+    """落盘失败：如实告警、不关窗、内存与磁盘都不变（不许假装重置成功）。
+
+    #271：空身份设置会话 = slot0 页，全局语义由副按钮承载，故点击
+    ``reset_global_defaults_btn``。"内存与磁盘都不变"要断言在**真正被重置的那份
+    配置面**上（``reset_config_for(..., RESET_SCOPE_GLOBAL)`` = 路由视图背后的全局
+    配置）：#271 起传入的设置窗对象不再是落点，只断言它会把这条契约测成空转。
+    失败注入点（``config_mod.atomic_replace_with_retry``）与失败语义逐条不变。
+    """
     from PySide6.QtWidgets import QMessageBox
 
     cfg = _dirty_config(tmp_path / "appdata")
-    before_memory = copy.deepcopy(cfg.data)
-    before_disk = cfg.path.read_text(encoding="utf-8")
     monkeypatch.setattr(settings_reset_defaults, "confirm_reset", lambda _parent, _scope=None: True)
 
     def fail(*_args, **_kwargs):
@@ -349,14 +364,18 @@ def test_reset_button_reports_write_failure_instead_of_closing(
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warnings.append(a))
 
     dialog = ModernSettingsDialog(cfg, include_ai=False)
+    target = settings_reset_defaults.reset_config_for(
+        dialog, settings_reset_defaults.RESET_SCOPE_GLOBAL)
+    before_memory = copy.deepcopy(target.data)
+    before_disk = Path(target.path).read_text(encoding="utf-8")
     try:
-        dialog.reset_defaults_btn.click()
+        dialog.reset_global_defaults_btn.click()
 
         assert len(warnings) == 1, "落盘失败必须告警"
         assert dialog.result() != QDialog.DialogCode.Accepted, "未生效不得关窗"
         assert getattr(dialog, "_saved_via_button", False) is False
-        assert cfg.data == before_memory
-        assert cfg.path.read_text(encoding="utf-8") == before_disk
+        assert target.data == before_memory
+        assert Path(target.path).read_text(encoding="utf-8") == before_disk
     finally:
         dialog.deleteLater()
         qapp.processEvents()
@@ -386,10 +405,21 @@ def test_reset_confirm_box_copy_states_kept_items_and_irreversibility(qapp, tmp_
 
 # ---------------------------------------------------------------- 作用域文案（R08）
 def test_main_page_reset_confirm_copy_is_unchanged(qapp, tmp_path: Path):
-    """主宠页（真设置窗）确认文案逐字等于原口径：这条钉住"主宠页文案一字不动"。"""
+    """主宠页上的**全局**动作确认文案逐字等于原口径：这条钉住"全局文案一字不动"。
+
+    #271 契约变更：空身份设置会话按 slot0 分流 → 主宠页 = slot0 页，侧栏主按钮是
+    「本宠」重置（slot0 档案），全局那套文案的落点转到同页的副按钮
+    （``reset_global_defaults_btn`` → 显式 ``RESET_SCOPE_GLOBAL``，见
+    ``pet/settings_reset_defaults.create_reset_button`` 的 A04 说明）。文案本身
+    仍是产品的有效承诺，故这里按显式全局作用域取同一份确认框核对，不放松任何一条。
+    """
     dialog = ModernSettingsDialog(_fresh_config(tmp_path / "appdata"), include_ai=False)
     try:
-        box, _confirm = settings_reset_defaults.build_reset_confirm_box(dialog)
+        assert dialog.reset_global_defaults_btn.objectName() == "resetGlobalDefaults", (
+            "前提：主宠页（slot0 页）必须给出显式的全局动作入口"
+        )
+        box, _confirm = settings_reset_defaults.build_reset_confirm_box(
+            dialog, settings_reset_defaults.RESET_SCOPE_GLOBAL)
         text = box.text() + "\n" + box.informativeText()
         assert box.text() == settings_reset_defaults.RESET_HEADLINE
         assert settings_reset_defaults.RESET_KEPT in text
@@ -443,15 +473,21 @@ def test_slot_page_reset_confirm_copy_states_its_scope(qapp, tmp_path: Path):
 
 
 def test_slot_page_reset_button_tooltip_matches_scope(qapp, tmp_path: Path):
-    """侧栏按钮的提示文案同域：子宠页不是"把全部设置恢复为出厂默认值"。"""
+    """侧栏按钮的提示文案同域：slot 页（含主宠页）的主按钮不是"把全部设置恢复为出厂默认值"。
+
+    #271 契约变更：空身份主宠页 = slot0 页，主按钮 = 本宠重置 → 本宠 tooltip；
+    全局 tooltip 的落点是同页副按钮 ``reset_global_defaults_btn``。
+    """
     main_dialog = ModernSettingsDialog(_fresh_config(tmp_path / "main"), include_ai=False)
     slot_cfg = Config(base=tmp_path / "appdata", instance_id="slot-1")
     slot_dialog = ModernSettingsDialog(slot_cfg, include_ai=False)
     try:
-        assert main_dialog.reset_defaults_btn.toolTip() == settings_reset_defaults.RESET_TOOLTIP
-        assert slot_dialog.reset_defaults_btn.toolTip() == (
-            settings_reset_defaults.RESET_SLOT_TOOLTIP)
-        assert "独立设置" in slot_dialog.reset_defaults_btn.toolTip()
+        for page in (main_dialog, slot_dialog):
+            assert page.reset_defaults_btn.toolTip() == (
+                settings_reset_defaults.RESET_SLOT_TOOLTIP)
+            assert "独立设置" in page.reset_defaults_btn.toolTip()
+            assert page.reset_global_defaults_btn.toolTip() == (
+                settings_reset_defaults.RESET_TOOLTIP), "全局动作的提示必须说清全局范围"
     finally:
         main_dialog.deleteLater()
         slot_dialog.deleteLater()

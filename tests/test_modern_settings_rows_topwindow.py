@@ -68,6 +68,9 @@ def _dialog(tmp_path, monkeypatch, tune=None):
     config = Config(base=tmp_path)
     if tune is not None:
         tune(config)
+        # #271：空身份会话按 slot0 分流，全局键的读源是路由视图另建的主配置（初值只取盘）
+        # ——调好的配置形态必须落盘才进得了对话框。
+        assert config.save() is True
     with _record_rows_shown_as_windows() as watcher:
         dialog = settings_mod.ModernSettingsDialog(config, include_ai=True)
     return dialog, watcher

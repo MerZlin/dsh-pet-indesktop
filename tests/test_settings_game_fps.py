@@ -50,6 +50,10 @@ def _dialog(tmp_path, monkeypatch, **overrides):
     cfg = Config(base=tmp_path)
     for key, value in overrides.items():
         cfg.set(key, value)
+    # #271：空身份会话按 slot0 分流，全局键的读源是路由视图另建的主配置（初值只取盘）
+    # ——预置必须落盘才进得了对话框（缺省形态不必写盘）。
+    if overrides:
+        assert cfg.save() is True
     return settings_mod.ModernSettingsDialog(cfg, include_ai=True), cfg
 
 
@@ -407,6 +411,7 @@ def test_save_writes_all_three_settings_in_one_pass(tmp_path, monkeypatch):
     finally:
         dialog.close()
 
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("island_metrics") == [_METRIC_ID]
     assert cfg.get("game_fps_target_mode") == "process"
     assert cfg.get("game_fps_process") == "game.exe", "保存路径也要过同一份归一化"
@@ -429,6 +434,7 @@ def test_save_appends_fps_after_the_existing_metrics(tmp_path, monkeypatch):
         kept._write_config()
     finally:
         kept.close()
+    _cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert _cfg.get("island_metrics") == [MEM, CPU, NETWORK], "没碰过这几行的保存不得改顺序"
 
     added, cfg_added = _dialog(tmp_path / "added", monkeypatch,
@@ -438,6 +444,7 @@ def test_save_appends_fps_after_the_existing_metrics(tmp_path, monkeypatch):
         added._write_config()
     finally:
         added.close()
+    cfg_added.reload()
     assert cfg_added.get("island_metrics") == [MEM, NETWORK, _METRIC_ID]
 
     full, cfg_full = _dialog(tmp_path / "full", monkeypatch)
@@ -449,6 +456,7 @@ def test_save_appends_fps_after_the_existing_metrics(tmp_path, monkeypatch):
         full._write_config()
     finally:
         full.close()
+    cfg_full.reload()
     assert cfg_full.get("island_metrics") == [NETWORK, CPU, MEM, GPU, _METRIC_ID]
 
 
@@ -460,6 +468,7 @@ def test_dropping_fps_removes_only_that_member(tmp_path, monkeypatch):
         dialog._write_config()
     finally:
         dialog.close()
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("island_metrics") == [CPU, MEM]
 
 
@@ -545,7 +554,9 @@ def test_rows_are_editable_on_the_child_page_and_write_the_main_config(tmp_path,
         child.game_fps_target_mode_select.setCurrentData("process")
         child.game_fps_process_edit.setText("game.exe")
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份（主宠页）会话的配置面指向 config-slot-0.json，
+        # 本用例改的键是全局键、落主配置——读盘要用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert on_disk["island_metrics"] == [_METRIC_ID]
         assert on_disk["game_fps_target_mode"] == "process"
         assert on_disk["game_fps_process"] == "game.exe"
@@ -587,6 +598,7 @@ def test_fps_row_still_exists_on_a_non_windows_platform(tmp_path, monkeypatch):
         dialog.game_fps_target_mode_select.setCurrentData("process")
         dialog.game_fps_process_edit.setText("game.exe")
         assert dialog._write_config() is True
+        cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
         assert cfg.get("island_metrics") == [_METRIC_ID]
         assert cfg.get("game_fps_target_mode") == "process"
         assert cfg.get("game_fps_process") == "game.exe"

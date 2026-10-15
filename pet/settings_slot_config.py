@@ -16,7 +16,8 @@
 - 其余键 → 主 ``config.json``，保留 Config 的编辑基线，交给
   ``Config.save`` 锁内重读并递归合并真实变更。
 
-所有拓扑的slot身份（含slot0）同样分流；无slot的显式global设置入口只编辑全局。
+所有拓扑的slot身份（含slot0）同样分流；空身份（主宠的设置会话）也按 slot0
+分流（#271：不分流时整表保存把每宠键当退役键清掉，写入静默蒸发）。
 运行legacy窗口复用本视图，不维护第二份每宠真值。
 
 全局身份恒显式传空字符串，不受DSH_PET_INSTANCE或--slot选择影响。
@@ -710,18 +711,34 @@ def route_settings_config(config):
     """给设置页的配置面套上读写路由；不适用时**原样返回同一个对象**。
 
     配置身份是slot-N且有配置目录即分流，含slot0，拓扑不改变归属。
-    global与非slot诊断身份原样返回。
+    空身份（主宠的设置会话）同样按 slot0 分流：运行期每宠键只从
+    ``config-slot-0.json`` 读，空身份直写在整表保存时被当退役键 pop 掉
+    （写入蒸发但 save 报成功，#271）。非slot诊断身份原样返回。
 
     幂等：已套过路由的配置原样返回。
     """
     if config is None or isinstance(config, SlotRoutedConfig):
         return config
-    slot_id = overlay_settings_command.slot_from_instance_id(
-        getattr(config, "instance_id", ""))
-    if slot_id is None:
-        return config
+    identity = str(getattr(config, "instance_id", "") or "").strip()
+    slot_id = overlay_settings_command.slot_from_instance_id(identity)
     base = getattr(config, "dir", None)
     if base is None:
         return config
+    if slot_id is None:
+        if identity:
+            return config
+        # 空身份 = 主宠设置会话（#271）：传入的那份指向全局 config.json，
+        # 不能当每宠面用——另建 slot0 档案脸，全局面照旧新建主配置。
+        # 注意：这条分支不使用传入对象（其内存草稿/未落盘改动不会带入表单）；
+        # 生产调用方（独立设置进程）传进来的本来就是刚从盘上读的。
+        # 先迁移后路由（审查 P1）：未迁移目录直接进设置会话时，若让默认档案
+        # 抢先落盘，Config.save() 的迁移分支会被跳过，旧每宠值被当退役键
+        # 清掉且没有备份；迁移不可信时退化为不分流，不在坏地基上盖楼。
+        migration = pet_profiles.migrate_slot0_profile(base)
+        if not migration.ok:
+            logging.warning("slot0 迁移不可信，空身份设置会话不分流：%s", migration)
+            return config
+        slot_id = 0
+        config = Config(base=base.parent, instance_id="slot-0")
     main_config = Config(base=base.parent, instance_id="")
     return SlotRoutedConfig(config, main_config, slot_id)

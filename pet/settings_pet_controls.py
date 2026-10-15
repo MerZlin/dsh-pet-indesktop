@@ -187,11 +187,11 @@ def harness_target_hint(desktop_available: bool) -> str:
 
 
 def _apply_window_scope_rows(host) -> None:
-    """overlay 一窗多宠：子宠设置页给窗口级键补「对所有桌宠生效」。
+    """overlay 一窗多宠：slot 页给窗口级键补「对所有桌宠生效」。
 
-    子宠页写的是自己的 ``config-slot-N.json``，但这些键在单合成窗里作用于整窗
-    ——不提示的话用户会以为改的只是那一只。主宠页不加（它本来就是全局视角），
-    legacy 不加（每宠独立窗口，键确实只作用于自己）。
+    slot 页写的是自己的 ``config-slot-N.json``，但这些键在单合成窗里作用于整窗
+    ——不提示的话用户会以为改的只是那一只。每个 slot 页都加（#271 起主宠页也是
+    slot0 页，同口径标注），legacy 不加（每宠独立窗口，键确实只作用于自己）。
 
     行分散在多个模块构建（互动域的「鼠标穿透」在 ``settings_interaction``），
     故在所有行就位后按 objectName 统一补，与 ``_apply_dialogue_scope_rows`` 同

@@ -1171,6 +1171,7 @@ def test_settings_page_lists_component_rows_at_the_builtin_level(tmp_path, monke
 
         toggle.setChecked(True)
         assert dialog._write_config() is True
+        cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
         assert cfg.get("island_metrics") == [EXT]
         assert Config(base=tmp_path).get("island_metrics") == [EXT], "重启后偏好还在"
 

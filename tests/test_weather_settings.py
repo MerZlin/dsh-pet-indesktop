@@ -84,6 +84,9 @@ def test_controls_round_trip_from_config(tmp_path, monkeypatch):
     config = Config(tmp_path)
     config.set("weather_city", "鹿城")
     config.set("weather_city_list", ["北京", "鹿城"])
+    # #271：空身份会话按 slot0 分流，全局键的读源是路由视图另建的主配置（初值只取盘）
+    # ——预置必须落盘，内存预置对话框读不到。
+    assert config.save() is True
     dlg = settings_mod.ModernSettingsDialog(config, include_ai=True)
     try:
         assert dlg.weather_city_edit.text() == "鹿城"
@@ -127,6 +130,9 @@ def test_save_drops_area_codes_of_cities_that_are_no_longer_listed(tmp_path, mon
     config.set("weather_city_list", ["北京", "上海"])
     config.set("weather_city", "北京")
     config.set("weather_city_codes", {"北京": "101010100", "上海": "101020100"})
+    # #271：空身份会话按 slot0 分流，全局键的读源是路由视图另建的主配置（初值只取盘）
+    # ——预置必须落盘，内存预置对话框读不到。
+    assert config.save() is True
     dlg = settings_mod.ModernSettingsDialog(config, include_ai=True)
     try:
         dlg.weather_city_list_edit.setPlainText("北京")
@@ -215,7 +221,9 @@ def test_weather_controls_are_editable_on_the_child_page(tmp_path, monkeypatch):
         child.weather_city_edit.setText("鹿城")
         child.weather_city_list_edit.setPlainText("北京\n鹿城")
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份（主宠页）会话的配置面指向 config-slot-0.json，
+        # 天气三键是全局键、落主配置——读盘用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert on_disk["weather_enabled"] is False, "子宠页改的键必须真正生效"
         assert on_disk["weather_city"] == "鹿城"
         assert on_disk["weather_city_list"] == ["北京", "鹿城"]

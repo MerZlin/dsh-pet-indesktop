@@ -540,8 +540,15 @@ def test_click_sound_immediate_toggle_in_dialog_affects_pet_window(tmp_path, mon
     from types import SimpleNamespace
 
     app = QApplication.instance() or QApplication([])
-    config = Config(tmp_path)
+    # #271：主宠（空身份）的设置会话按 slot0 分流，点击音效是每宠键、真值在
+    # config-slot-0.json。运行期那份配置面因此也是路由视图（PetWindow 读的就是它），
+    # 否则设置窗写档案、窗口读主配置，即时生效变成空话。初值同样要落盘再开窗：
+    # 路由视图的读源只取盘。
+    from pet.settings_slot_config import route_settings_config
+
+    config = route_settings_config(Config(base=tmp_path, instance_id="slot-0"))
     config.set("click_sound_enabled", True)
+    assert config.save() is True
 
     win = PetWindow.__new__(PetWindow)
     win.cfg = config

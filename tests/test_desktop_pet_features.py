@@ -1465,16 +1465,20 @@ def test_modern_settings_panel_uses_sidebar_and_includes_ai_settings(tmp_path, m
     dialog.ai_page.url.setText("https://example.test/v1")
     dialog.ai_page.model.setText("deepseek-test")
     dialog._save()
-    assert config.get("scale") == 0.85
-    assert config.get("on_top") is False
-    assert config.get("no_move") is True
-    assert config.get("drag_physics") is True
-    assert config.get("playback_speed") == 1.5
-    assert config.get("self_talk_bubble_style") == "paper_left"
-    assert config.get("self_talk_duration_seconds") == 8.5
-    assert config.get("self_talk_image_dir") == str(tmp_path.resolve())
-    assert config.chat_settings().active_config.base_url == "https://example.test/v1"
-    assert config.chat_settings().active_config.model == "deepseek-test"
+    # #271：空身份设置会话按 slot0 分流——每宠键落 config-slot-0.json、全局键落
+    # config.json；写盘经路由视图自己的对象，与本文件既有惯例同口径：读回用新视图。
+    loaded = _slot0_config(tmp_path)
+    global_config = Config(tmp_path)
+    assert loaded.get("scale") == 0.85
+    assert global_config.get("on_top") is False
+    assert global_config.get("no_move") is True
+    assert loaded.get("drag_physics") is True
+    assert loaded.get("playback_speed") == 1.5
+    assert loaded.get("self_talk_bubble_style") == "paper_left"
+    assert loaded.get("self_talk_duration_seconds") == 8.5
+    assert loaded.get("self_talk_image_dir") == str(tmp_path.resolve())
+    assert global_config.chat_settings().active_config.base_url == "https://example.test/v1"
+    assert global_config.chat_settings().active_config.model == "deepseek-test"
     assert autostart_values == [True]
     app.processEvents()
 
@@ -1721,6 +1725,7 @@ def test_chat_appearance_options_follow_selected_window_and_persist_independentl
     dialog.ai_page.background_fill.setCurrentData("stretch")
     dialog._save()
 
+    config.reload()  # #271：写盘经路由视图自己的主配置对象，原对象需 reload 才可见
     assert config.get("chat_background") == "builtin:whale"
     assert config.get("modern_chat_background") == modern_background
     assert config.get("chat_background_opacity") == 68
@@ -2622,6 +2627,7 @@ def test_dock_icon_visibility_defaults_on_and_is_saved_by_modern_settings(tmp_pa
     dialog = settings_mod.ModernSettingsDialog(config, include_ai=False)
     dialog.dock_icon_check.setChecked(False)
     dialog._save()
+    config.reload()  # #271：写盘经路由视图自己的主配置对象，原对象需 reload 才可见
     assert config.get("show_dock_icon") is False
     app.processEvents()
 

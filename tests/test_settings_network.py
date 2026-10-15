@@ -34,6 +34,10 @@ def _dialog(tmp_path, monkeypatch, **network):
     cfg = Config(base=tmp_path)
     for key, value in network.items():
         cfg.set(key, value)
+    # #271：空身份会话按 slot0 分流，全局键的读源是路由视图另建的主配置（初值只取盘）
+    # ——预置必须落盘才进得了对话框（缺省形态不必写盘）。
+    if network:
+        assert cfg.save() is True
     dialog = settings_mod.ModernSettingsDialog(cfg, include_ai=True)
     return dialog, cfg
 
@@ -221,6 +225,7 @@ def test_save_writes_metrics_and_reloads(tmp_path, monkeypatch):
     finally:
         dialog.close()
 
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("island_metrics") == [NETWORK]
     assert cfg.get("network_probe_interval_seconds") == 3.5
     assert cfg.get("network_info_menu_enabled") is False
@@ -245,6 +250,7 @@ def test_save_writes_the_canonical_metric_order(tmp_path, monkeypatch):
         dialog._write_config()
     finally:
         dialog.close()
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("island_metrics") == [NETWORK, MEM], "勾选先后不影响写回顺序"
 
     dialog2, cfg2 = _dialog(tmp_path / "all", monkeypatch)
@@ -255,6 +261,7 @@ def test_save_writes_the_canonical_metric_order(tmp_path, monkeypatch):
         dialog2._write_config()
     finally:
         dialog2.close()
+    cfg2.reload()
     assert cfg2.get("island_metrics") == [NETWORK, CPU, MEM]
 
 
@@ -270,6 +277,7 @@ def test_save_keeps_the_order_already_in_the_config(tmp_path, monkeypatch):
         dialog._write_config()
     finally:
         dialog.close()
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("island_metrics") == [MEM, CPU, NETWORK], "没碰过这几行的保存不得改顺序"
 
     dropped, cfg_dropped = _dialog(tmp_path / "dropped", monkeypatch,
@@ -279,6 +287,7 @@ def test_save_keeps_the_order_already_in_the_config(tmp_path, monkeypatch):
         dropped._write_config()
     finally:
         dropped.close()
+    cfg_dropped.reload()
     assert cfg_dropped.get("island_metrics") == [MEM, NETWORK], "取消勾选的在原位淘汰"
 
     added, cfg_added = _dialog(tmp_path / "added", monkeypatch,
@@ -288,6 +297,7 @@ def test_save_keeps_the_order_already_in_the_config(tmp_path, monkeypatch):
         added._write_config()
     finally:
         added.close()
+    cfg_added.reload()
     assert cfg_added.get("island_metrics") == [MEM, NETWORK, GPU], "新勾选的追到末尾"
 
 
@@ -300,6 +310,7 @@ def test_save_with_every_toggle_off_writes_an_empty_list(tmp_path, monkeypatch):
         dialog._write_config()
     finally:
         dialog.close()
+    cfg.reload()
     assert cfg.get("island_metrics") == []
 
 
@@ -365,7 +376,9 @@ def test_network_controls_are_editable_on_the_child_page(tmp_path, monkeypatch):
         child.island_cpu_check.setChecked(True)
         child.network_info_menu_check.setChecked(False)
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份（主宠页）会话的配置面指向 config-slot-0.json，本用例改的是
+        # 全局键、落主配置——读盘要用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert "cpu" in on_disk["island_metrics"], "子宠页改的键必须真正生效"
         assert on_disk["network_info_menu_enabled"] is False
     finally:
@@ -428,6 +441,7 @@ def test_gpu_round_trips_through_save_and_reopen(tmp_path, monkeypatch):
         dialog._write_config()
     finally:
         dialog.close()
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("island_metrics") == [GPU], "典范序里 gpu 排在三个内置 id 之后"
     assert Config(base=tmp_path).get("island_metrics") == [GPU]
 
@@ -453,6 +467,7 @@ def test_save_writes_gpu_after_the_other_metrics(tmp_path, monkeypatch):
         dialog._write_config()
     finally:
         dialog.close()
+    cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
     assert cfg.get("island_metrics") == [NETWORK, CPU, MEM, GPU]
 
 
@@ -470,7 +485,9 @@ def test_gpu_row_is_editable_on_the_child_page(tmp_path, monkeypatch):
 
         child.island_gpu_check.setChecked(True)
         assert child._write_config() is True
-        on_disk = json.loads(master.config.path.read_text(encoding="utf-8"))
+        # #271：空身份（主宠页）会话的配置面指向 config-slot-0.json，本用例改的是
+        # 全局键、落主配置——读盘要用主配置路径。
+        on_disk = json.loads(master.config._main.path.read_text(encoding="utf-8"))
         assert GPU in on_disk["island_metrics"], "子宠页改的键必须真正生效"
     finally:
         for dlg in (master, child):

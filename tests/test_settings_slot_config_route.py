@@ -453,11 +453,33 @@ def test_harness_controls_are_editable_on_the_child_page(tmp_path, app):
     assert on_disk["harness_launch_target"] == "service"
 
 
-# ------------------------------------------------------------ 8. 分流范围（只对 overlay 的 slot 身份）
-def test_main_pet_config_is_not_routed(tmp_path):
-    """主宠设置进程（无 --instance）：原样返回，行为逐位不变。"""
-    main = Config(base=tmp_path)
-    assert settings_slot_config.route_settings_config(main) is main
+# ------------------------------------------------------------ 8. 分流范围（空身份与 slot 身份都分流）
+def test_main_pet_config_is_routed_to_slot0(tmp_path):
+    """主宠设置会话（无 --instance 的空身份）也按 slot0 分流（#271 契约变更）。
+
+    旧契约是"空身份原样返回、行为逐位不变"，实机口径已推翻：运行期每宠键只从
+    ``config-slot-0.json`` 取源（``_SpriteConfig.get`` 的第一条分支），空身份直写的
+    每宠键在 ``Config.save()`` 出闸时被当退役键 pop 掉——写入凭空蒸发、``save()``
+    还报成功，用户重开设置看到的是出厂默认（#271：主宠改尺寸/气泡不生效）。
+    故空身份与显式 ``slot-0`` 同规：每宠键落 slot0 档案、全局键落主 ``config.json``。
+    """
+    from pet import pet_profiles
+
+    main = Config(base=tmp_path, instance_id="")
+    assert main.save() is True
+
+    routed = settings_slot_config.route_settings_config(main)
+    assert isinstance(routed, settings_slot_config.SlotRoutedConfig)
+    assert routed.path == spawn_state.slot_config_path(main.dir, 0), \
+        "空身份会话的配置面指向 slot0 档案（身份与报错路径都以它为准）"
+
+    routed.set("scale", 0.77)        # 每宠键
+    routed.set("pet_opacity", 55)    # 全局键
+    assert routed.save() is True
+
+    assert pet_profiles.read_slot_profile(main.dir, 0).value("scale") == pytest.approx(0.77)
+    assert "scale" not in _read_json(main.path), "每宠键不许落进主 config.json"
+    assert _read_json(main.path)["pet_opacity"] == 55, "全局键照旧落主 config.json"
 
 
 def test_legacy_topology_slot_config_is_not_routed(tmp_path, monkeypatch):
