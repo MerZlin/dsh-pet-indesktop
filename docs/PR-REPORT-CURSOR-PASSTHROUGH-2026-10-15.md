@@ -29,10 +29,11 @@
 | # | 修复 | 说明 |
 |---|---|---|
 | 1 | 看门狗补 click-only/孤儿 grab 收尾 | `_press_global` 空但 `_mouse_grab` 非空、且左键已不在按下态 → `_finish_grab`；真拖拽路径逐位不变；合法长按（左键仍按下）不收 |
-| 2 | 自动穿透态双时机收敛 | 新增 `OverlayShell._converge_auto_cursor_hidden`（幂等）：每次显示/恢复（`_shown_cb`）+ 任何真到达窗口的鼠标输入（`_user_input_cb`）时，无拖拽在途即清 `_auto_cursor_hidden`；用户手动穿透不受影响 |
+| 2 | 自动穿透态收敛（无闸即清） | 新增 `OverlayShell._converge_auto_cursor_hidden`（幂等）：显示/恢复与真到达窗口的输入两个时机触发；无滞留不动、grab 在途记 `_converge_pending` 待收尾后补做、否则即清。真实 HIDDEN 由 20Hz watcher 一拍内重建（屏迁移后 ≤50ms 误拦截窗口是刻意接受的自愈代价）。用户手动穿透不受影响 |
+| 3 | 看门狗同口径收瞄准会话 | click-only 按住也能进弹弓瞄准（既有宽松判据，已登记 BACKLOG）；看门狗 click-only 分支与拖拽支同口径：先 `_cancel_slingshot` 收会话再收尾，sprite 不停 DRAG、右键菜单不被拦 |
 
 **红线 / 不变量**：真拖拽语义逐位不变（`_press_global` 非空分支不改）；
-拖拽在途时收敛绝不动手（归 `_cursor_restore_pending` 那一路）；
+grab 在途时收敛不立即动手（记待办，grab 收尾后补做）；
 `mouse_through` 用户手动开关不受收敛影响；非 Windows 平台零行为变化。
 
 ## 二、修改文件说明
@@ -41,8 +42,8 @@
 
 | 文件 | 增删 | 改动意图 |
 |---|---|---|
-| `pet/overlay_window.py` | +34 / −3 | ① `_check_stale_press` 补 click-only/孤儿 grab 收尾分支（同判据：左键不在按下态；docstring 写明为什么只看 grab 不看 click-only 旗标）；② `_note_user_input` 尾部挂 `_user_input_cb`（getattr 守卫，无壳 no-op）；③ `showEvent` 在可见性上报**之前**调 `_shown_cb`（先收敛再补拍，光标真隐藏时同一拍 watcher 会重新报 HIDDEN 置回，不会被抹掉）；④ V-7 行内注释同步新范围 |
-| `pet/overlay_shell.py` | +32 / −0 | 新增 `_converge_auto_cursor_hidden`（幂等；`_auto_cursor_hidden` 为假或拖拽在途即返回，否则清滞留 + `_apply_effective_mouse_through`）；`__init__` 与屏迁移重建两处装配点各挂 `_shown_cb`/`_user_input_cb` |
+| `pet/overlay_window.py` | +44 / −3 | ① `_check_stale_press` 补 click-only/孤儿 grab 收尾分支（同判据：左键不在按下态；docstring 写明为什么只看 grab 不看 click-only 旗标），分支内先 `_cancel_slingshot` 收瞄准会话再收尾（与拖拽支同口径）；② `_note_user_input` 尾部挂 `_user_input_cb`（getattr 守卫，无壳 no-op）；③ `showEvent` 在可见性上报**之前**调 `_shown_cb`（先收敛再补拍）；④ V-7 行内注释同步新范围 |
+| `pet/overlay_shell.py` | +74 / −59 | 新增 `_converge_auto_cursor_hidden`（幂等两道闸：无滞留不动 / grab 在途记 `_converge_pending` 由 `_on_grab_finished` 补做，否则即清 + `_apply_effective_mouse_through`）；`__init__` 与屏迁移重建两处装配 `_shown_cb`/`_user_input_cb`（同入口同语义）；`_cursor_transition_blocked` docstring 改准（任意 grab 在途，含 click-only）；docstring 如实写明撤 HIDDEN 闸的裁决与代价 |
 | `pet/tick_driver.py` | +1 / −1 | 行内注释同步（"卡死的拖拽"→"卡死的 grab"） |
 
 ### 测试
@@ -50,7 +51,8 @@
 | 文件 | 增删 | 覆盖 |
 |---|---|---|
 | `tests/test_overlay_hardening.py` | +64 / −1 | V-7 族新增看门狗 click-only 收尾回归 + 守卫（合法长按不收尾、孤儿 grab 收尾） |
-| `tests/test_overlay_window_capabilities.py` | +107 / −1 | 光标可见性族新增：卡死复现链（丢 release → grab 滞留 → 穿透锁死 → 修复后解开）、输入到达收敛、显示/恢复收敛；守卫：在途 grab 时收敛不动手 |
+| `tests/test_overlay_window_capabilities.py` | +132 / −28 | 光标可见性族新增：卡死复现链（丢 release → grab 滞留 → 穿透锁死 → 修复后解开）、输入到达收敛、显示/恢复收敛（真 show→hide→show 循环）、P2-1 组合（生产路径 HIDDEN 置位 + 卡死 grab + UNKNOWN 探针 → 记待办 → 看门狗收尾后补做解开）、P2-2 改判（show 先清 → watcher 重报 HIDDEN 再建穿透）；守卫：在途 grab 记待办不动手、合法长按不收尾 |
+| `tests/test_sprite_slingshot.py` | +33 / −0 | 看门狗 click-only 分支收瞄准会话的红→绿回归（grab 清掉且 sprite 不停 DRAG） |
 
 红→绿证据（修前红点关键行）：
 `assert overlay._mouse_grab is None`（FakeGrab 仍在）；`assert True is False`
@@ -65,6 +67,14 @@
 窗口其实收得到点击，旧逻辑里这种状态只能等 watcher 下一拍。显示/恢复与
 真实输入是仅有的两个"确定能重新判断"的时机，补上后即使未来出现新的
 滞留路径，用户点一下也能自愈，不会永久卡死。
+
+**双审返修（收敛语义的迭代）**：初版收敛是"无 grab 即清"；一审补了 grab 在途记
+待办 + 最后已知 HIDDEN 守闸；二审证明 HIDDEN 闸本身制造新的永久卡死（生产上
+`_auto_cursor_hidden` 必由 HIDDEN 回调置位，探针转 UNKNOWN 后再无回调，待办补做
+永远被闸住）——终审撤掉 HIDDEN 闸：**无 grab 阻挡即清，真实 HIDDEN 由 watcher
+一拍内重建**。屏迁移后 ≤50ms 的误拦截窗口（计数 1→2→1 不翻转、不补探测）是
+刻意接受的自愈代价。输入时机的定位保持"脱同步兜底"（真穿透开着时点击到不了
+窗口；能进来即证明原生样式与标记脱同步，收敛回一致）。
 
 **已知边界（如实登记）**：看门狗两支都依赖 `QApplication.mouseButtons()`——
 若 release 落到别的应用且本进程此后不再收到任何鼠标事件，Qt 可能一直报
@@ -98,9 +108,13 @@
 
 ## 六、验证
 
-- 聚焦集（输入/穿透/overlay 族 21 文件）：**371 passed**（重复 3 次一致）；
-  扩大批（overlay + 共享/托盘/交互探针 35 文件）：**659 passed, 0 failed**。
-- 换目录复跑（绝对路径）：32 passed（防路径硬编码）。
+- 聚焦集（输入/穿透/overlay 族 21 文件）：**374 passed**（重复 3 次一致）；
+  扩大批（overlay + 共享/托盘/交互探针 35 文件）：**661 passed, 0 failed**。
+- 换目录复跑（绝对路径）：59 passed（防路径硬编码）。
 - `ruff check` 全部改动文件干净。
 - 全量套件结果见 PR 描述（推前闸门）。
-- 双盲审结论见 PR 描述（ops5.5 / astra）。
+- 双盲审：第一轮 astra 需返修（P2×2：收敛请求丢弃 / 迁移误清——均已修并补
+  组合回归）、ops5.5 可推（minor×2：瞄准会话收尾、注释诚实化——均已修；
+  nit×2 已处理）；第二轮 astra 复核再提两条（HIDDEN 闸制造新永久卡死、
+  待办丢请求语义）→ 终审撤闸简化（无 grab 即清 + watcher 一拍重建），
+  终版复核结论见 PR 描述。

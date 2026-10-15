@@ -215,11 +215,12 @@ class OverlayWindow(QWidget):
         self._feed_dpr()               # V-11：DPR 由 overlay 统一喂
         self._arm_dpr_change_watch()   # D2/P1：屏 DPR 变化 → 重喂 + 重建
         self._note_kinetic()           # M-1：可见即回 T0（从 T3 唤醒）
-        # 穿透态收敛（壳层挂的 ``_shown_cb``）：显示/恢复不能带着上一个会话的
-        # 自动穿透（光标隐藏）状态回来——那条状态下整窗点不到，隐藏期探测表
-        # 又是停的，只能等 watcher 下一拍报 HIDDEN/SHOWING 才可能解开。排在
-        # 可见性上报**之前**：探测表随即补拍，光标真隐藏时同一拍内就会重新
-        # 报 HIDDEN 把状态置回，不会被这一步抹掉。
+        # 穿透态收敛（壳层挂的 ``_shown_cb``）：显示/恢复侧无条件解除上一个
+        # 会话的自动穿透（光标隐藏）——那条状态下整窗点不到。光标真还藏着时
+        # 探测表随即补拍，同一拍（或最迟下一拍 50ms）重报 HIDDEN 把穿透重建；
+        # 曾经用来挡这一拍的 HIDDEN 闸因"制造永久卡死"已被撤销，见
+        # overlay_shell._converge_auto_cursor_hidden 的裁决段。
+        # 排在可见性上报**之前**：先收敛再补拍，探测表那一拍给出的才是最新真值。
         shown_cb = getattr(self, "_shown_cb", None)
         if callable(shown_cb):
             shown_cb()

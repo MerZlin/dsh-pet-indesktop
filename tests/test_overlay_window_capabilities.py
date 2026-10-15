@@ -423,22 +423,22 @@ def test_auto_cursor_hidden_converges_on_show(tmp_path):
 
 
 def test_blocked_convergence_request_is_replayed_after_grab_finishes(tmp_path):
-    """P2-1 回归：被 grab 闸住的收敛请求不许被无条件丢弃。
+    """P2-1 回归：被 grab 闸住的收敛请求不许被无条件丢弃（真路径复现）。
 
-    序列：自动穿透已置位 + 卡死的 click-only grab（release 丢失）→ 隐藏后重新
-    显示、探针静音 UNKNOWN（不产生回调）→ show 的收敛被 grab 闸挡住（此刻不
-    改穿透态，但**必须记下待办**）→ 看门狗清掉 grab → 收尾时补做收敛。
-    修前：show 的请求被直接丢弃，grab 收尾只认 ``_cursor_restore_pending``，
-    穿透永久卡在"看得见点不到"。
+    序列：``_on_cursor_visibility_changed("HIDDEN")``（生产上唯一能把
+    ``_auto_cursor_hidden`` 置真的路径）→ 卡死的 click-only grab（丢 release
+    形态）→ 隐藏后重新显示、探针静音 UNKNOWN（不产生回调）→ show 的收敛被
+    grab 闸挡住（此刻不改穿透态，但**必须记下待办**）→ 看门狗清掉 grab →
+    收尾时补做收敛，穿透解除。
+    修前（带 HIDDEN 闸那版）：待办补做被闸门永远拦住（最后见过 HIDDEN，探针
+    转 UNKNOWN 后再无回调），穿透永久卡在"看得见点不到"。
     """
     shell = _make_shell(tmp_path, {"mouse_through": False})
     try:
         overlay = shell.overlay
         shell._watcher._cursor_probe = lambda: "UNKNOWN"
-        # 自动穿透已置位；``_last_cursor_visibility`` 保持初值 SHOWING = 没有
-        # "光标真的还藏着"的证据，收敛放行（第三道闸，见 _converge_auto_cursor_hidden）
-        shell._auto_cursor_hidden = True
-        shell._apply_effective_mouse_through()
+        shell._on_cursor_visibility_changed("HIDDEN")   # 生产路径置位自动穿透
+        assert shell._auto_cursor_hidden is True
         assert overlay.mouse_through is True
         overlay.hide()
         overlay._mouse_grab = shell.sprite        # 丢 release 的 click-only grab
@@ -461,32 +461,30 @@ def test_blocked_convergence_request_is_replayed_after_grab_finishes(tmp_path):
         shell._delete_runtime_marker()
 
 
-def test_convergence_keeps_passthrough_while_last_probe_says_hidden(tmp_path):
-    """P2-2 回归：最后一次探测确认光标还藏着时，show 侧收敛不得抹掉自动穿透。
+def test_convergence_on_show_clears_and_watcher_rebuilds_passthrough(tmp_path):
+    """P2-2 改判（撤销 HIDDEN 闸）：show/迁移侧收敛**先清**，真实 HIDDEN 由
+    watcher 一拍内重建。
 
-    屏迁移先显示新 overlay 再关旧的（可见性计数 1→2→1，闸门不翻转 → 不补
-    探测）；拿 show 当 SHOWING 会误清，窗口在下一拍 50ms 轮询前错误拦截点击
-    （= 该穿透而没穿透）。解除只认 watcher 报回的 SHOWING。
-
-    输入侧按裁决**绕过**这道闸（输入能进来本身就证明样式与标记脱了同步，
-    见 ``test_auto_cursor_hidden_converges_on_input_reaching_the_window``）——
-    本用例只管显示/迁移侧。
+    屏迁移先显示新 overlay 再关旧的（可见性计数 1→2→1，闸门不翻转 → 不补探测），
+    这一刻会清掉穿透、窗口在下一拍 50ms 轮询前错误拦截点击——这是**刻意接受的
+    代价**：探针一旦恢复报 HIDDEN，穿透随即重建（≤1 拍自愈）。留着 HIDDEN 闸来
+    挡这一拍的代价是永久卡死（``_auto_cursor_hidden`` 必由 HIDDEN 置位，探针转
+    UNKNOWN 后再无回调，待办补做永远被拦）。
     """
     shell = _make_shell(tmp_path, {"mouse_through": False})
     try:
         overlay = shell.overlay
         shell._watcher._cursor_probe = lambda: "UNKNOWN"
-        shell._on_cursor_visibility_changed("HIDDEN")   # 真隐藏：穿透是真实状态
+        shell._on_cursor_visibility_changed("HIDDEN")   # 自动穿透已置位
         assert shell._auto_cursor_hidden is True
         overlay.hide()
-        overlay.show()                                  # 迁移/恢复侧收敛
-        assert shell._auto_cursor_hidden is True
-        assert overlay.mouse_through is True
-
-        shell._on_cursor_visibility_changed("SHOWING")   # 探针恢复 → 解除
-
+        overlay.show()                                  # 迁移/恢复侧收敛：先清
         assert shell._auto_cursor_hidden is False
         assert overlay.mouse_through is False
+
+        shell._on_cursor_visibility_changed("HIDDEN")   # watcher 重报 HIDDEN → 重建
+        assert shell._auto_cursor_hidden is True
+        assert overlay.mouse_through is True
     finally:
         shell._delete_runtime_marker()
 
