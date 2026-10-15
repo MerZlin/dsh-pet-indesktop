@@ -1213,6 +1213,10 @@ class OverlayShell(QObject):
             self._on_cursor_visibility_changed)
         self.overlay._through_changed = self._on_user_through_changed
         self.overlay._grab_finished_cb = self._on_grab_finished
+        # 穿透态收敛的两个时机（见 _converge_auto_cursor_hidden）：显示/恢复，
+        # 以及任何真到达窗口的鼠标输入
+        self.overlay._shown_cb = self._converge_auto_cursor_hidden
+        self.overlay._user_input_cb = self._converge_auto_cursor_hidden
         if self.sprite is not None:
             self.overlay.add_position_listener(self.sprite, self._on_main_sprite_moved)
         self._last_marker_write = 0.0
@@ -4159,6 +4163,31 @@ class OverlayShell(QObject):
         """拖拽进行中（window._cursor_transition_blocked 等价）。"""
         return self.overlay._mouse_grab is not None
 
+    def _converge_auto_cursor_hidden(self) -> None:
+        """自动穿透态收敛（幂等）：没有拖拽在途就解除光标隐藏态。
+
+        触发面（壳层在 ``OverlayShell.__init__`` 挂到 overlay 上）：
+
+        - ``_shown_cb``：每次 overlay 显示/恢复；
+        - ``_user_input_cb``：任何**真到达窗口**的鼠标输入
+          （``OverlayWindow._note_user_input``）。
+
+        为什么不能只靠 SHOWING：解除这件事原本挂在"收到 SHOWING 且无拖拽"
+        上，而滞留状态只有 ``_on_grab_finished`` 会冲刷——grab 一旦卡死
+        （丢 release）就再没有收尾事件，窗口会永久停在"看得见点不到"。显示/
+        恢复与真到达窗口的输入是另两个确定的收敛时机：前者覆盖探测表停表后
+        探针报不出状态的情形，后者覆盖"穿透标记还在、原生样式已被重建"这类
+        点击其实打得进来的情形（点击自愈）。
+
+        判定沿用 SHOWING 分支：拖拽在途则不动（那条路归
+        ``_cursor_restore_pending``）。
+        """
+        if not self._auto_cursor_hidden or self._cursor_transition_blocked():
+            return
+        self._cursor_restore_pending = False
+        self._auto_cursor_hidden = False
+        self._apply_effective_mouse_through()
+
     def _on_cursor_visibility_changed(self, visibility: str) -> None:
         """光标隐藏（watcher 已做 0.2s 去抖）→ 自动穿透；恢复 → 解除。"""
         if visibility == "HIDDEN":
@@ -5616,6 +5645,9 @@ class OverlayShell(QObject):
             lambda target: build_sprite_full_menu(self, target))
         self.overlay._through_changed = self._on_user_through_changed
         self.overlay._grab_finished_cb = self._on_grab_finished
+        # 迁移重建的新 overlay 同样要挂收敛钩子（与 __init__ 同口径）
+        self.overlay._shown_cb = self._converge_auto_cursor_hidden
+        self.overlay._user_input_cb = self._converge_auto_cursor_hidden
         if self.sprite is not None:
             self.overlay.add_position_listener(self.sprite, self._on_main_sprite_moved)
         # 4.2b：子肥鱼随主 sprite 一起迁到新 overlay（否则拔屏/主屏切换后

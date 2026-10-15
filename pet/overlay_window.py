@@ -176,10 +176,18 @@ class OverlayWindow(QWidget):
 
     # ---------------------------------------------------------------- M-1 闲置降档（挂点）
     def _note_user_input(self) -> None:
-        """真实按键输入：交给 driver 做挂起自愈（丢了解锁消息也能点醒）。"""
+        """真实按键输入：交给 driver 做挂起自愈（丢了解锁消息也能点醒）。
+
+        壳层另挂 ``_user_input_cb``：输入**真到达窗口**是穿透态的自愈时机
+        （原生穿透样式被重建后窗口照样收得到点击，而这条状态下再点一次本
+        该能自愈，见 overlay_shell._converge_auto_cursor_hidden）。
+        """
         note = getattr(self._driver, "note_user_input", None)
         if callable(note):
             note()
+        cb = getattr(self, "_user_input_cb", None)
+        if callable(cb):
+            cb()
 
     def _note_kinetic(self) -> None:
         """运动/输入信号（M-1：升档同步立即，不等下一个 tick）。
@@ -205,6 +213,14 @@ class OverlayWindow(QWidget):
         self._feed_dpr()               # V-11：DPR 由 overlay 统一喂
         self._arm_dpr_change_watch()   # D2/P1：屏 DPR 变化 → 重喂 + 重建
         self._note_kinetic()           # M-1：可见即回 T0（从 T3 唤醒）
+        # 穿透态收敛（壳层挂的 ``_shown_cb``）：显示/恢复不能带着上一个会话的
+        # 自动穿透（光标隐藏）状态回来——那条状态下整窗点不到，隐藏期探测表
+        # 又是停的，只能等 watcher 下一拍报 HIDDEN/SHOWING 才可能解开。排在
+        # 可见性上报**之前**：探测表随即补拍，光标真隐藏时同一拍内就会重新
+        # 报 HIDDEN 把状态置回，不会被这一步抹掉。
+        shown_cb = getattr(self, "_shown_cb", None)
+        if callable(shown_cb):
+            shown_cb()
         # O2：可见性上报（隐藏期停掉的光标探测在这里恢复，且立即补一次探测）
         overlay_peripherals.note_overlay_visibility(self, True)
         if sys.platform == "win32":
@@ -673,7 +689,7 @@ class OverlayWindow(QWidget):
     def _is_transparent_at(self, local: QPoint | QPointF) -> bool:
         """逐像素联合穿透判据（WindowsPerPixelInputController 协议方法）：
         光标处没有任何 sprite 的不透明像素 = 该点穿透到下层应用。"""
-        self._check_stale_press()  # V-7：穿透轮询是恒开的，顺带兜底卡死的拖拽
+        self._check_stale_press()  # V-7：穿透轮询是恒开的，顺带兜底卡死的 grab
         return self.sprite_at(local) is None
 
     def contextMenuEvent(self, event) -> None:
@@ -893,8 +909,23 @@ class OverlayWindow(QWidget):
     def _check_stale_press(self) -> None:
         """V-7 拖拽看门狗：release 事件丢失（alt-tab/弹窗抢 grab/屏拔除）
         时 _press_global 卡死 → should_click_through 永假 → 全屏吞点击。
-        穿透轮询与 tick 路径兜底：左键已不在按下态则强制收尾。"""
+        穿透轮询与 tick 路径兜底：左键已不在按下态则强制收尾。
+
+        click-only 按下（锁定位 / 未按 SHIFT）不记 ``_press_global``（见
+        mousePressEvent），但同样持有 ``_mouse_grab``：丢一次 release 就永久
+        卡住 grab，壳层据它判定的 ``_cursor_transition_blocked()`` 恒真 →
+        光标隐藏态触发的整窗穿透再也退不出去（窗口可见却点不到，点击又被
+        穿透吃掉）。故这一支与拖拽分支同判据（左键已不在按下态即收尾），
+        只是没有可取消的瞄准会话。
+        """
         if self._press_global is None:
+            # ``_press_global`` 为空还持有 grab = click-only 按下，或已失锚的
+            # 孤儿 grab——两者都该收尾，故只看 grab 不看是否 click-only。
+            if self._mouse_grab is None:
+                return
+            if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+                return
+            self._finish_grab(QPointF(self.mapFromGlobal(QCursor.pos())))
             return
         if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
             return

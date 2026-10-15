@@ -3,7 +3,7 @@
 
 覆盖（REVIEW_VERDICT.md 小修批）：
 - V-6  tick 间隔公式（90Hz 边界）与刷新率重读入口；
-- V-7  _press_global 丢失 release 的看门狗（全屏吞点击兜底）；
+- V-7  _press_global / click-only grab 丢失 release 的看门狗（全屏吞点击兜底）；
 - V-8  remove_sprite 释放 clip（release_clip=False 保留）+ 移除通知；
 - V-9  _cats_cache 弱键（库销毁自动回收）；
 - V-10 scale property（置脏/重钳/上报）；
@@ -28,6 +28,7 @@ from PySide6.QtCore import QObject, QPoint, QPointF, QRect, Qt, Signal
 from PySide6.QtGui import QCloseEvent, QImage, QMouseEvent, QRegion
 from PySide6.QtWidgets import QApplication
 
+import pet.overlay_window as overlay_window
 from pet.overlay_window import OverlayWindow
 from pet.pet_sprite import INTERACTION_DRAG, INTERACTION_NORMAL, PetSprite
 from pet.sprite_behavior import BehaviorController
@@ -127,6 +128,67 @@ def test_stale_press_watchdog_noop_when_idle():
     overlay = OverlayWindow()
     overlay._check_stale_press()  # 无 press：不得抛异常
     assert overlay._press_global is None
+
+
+def test_stale_press_watchdog_clears_click_only_grab():
+    """click-only 按下（锁定位 / 未按 SHIFT）不记 ``_press_global``，丢 release
+    时同样必须被看门狗收尾。
+
+    卡住的 click-only grab 在生产里等价于「拖拽在途」：壳层
+    ``_cursor_transition_blocked()`` 恒真 → 光标恢复的 SHOWING 只被滞留
+    （``_cursor_restore_pending``）→ 光标隐藏态触发的整窗穿透再也退不出去，
+    窗口可见却点不到，而点击本身又被穿透吃掉（无法自愈）。
+    """
+    overlay = OverlayWindow()
+    grab = FakeGrab()
+    overlay._mouse_grab = grab
+    overlay._press_click_only = True      # 点击候选：不留 _press_global
+    assert overlay._press_global is None
+    # 测试环境无真实按键：mouseButtons() 必为 NoButton → 看门狗应收尾
+    assert not (QApplication.mouseButtons() & Qt.MouseButton.LeftButton)
+    overlay._check_stale_press()
+    assert overlay._mouse_grab is None
+    assert overlay._press_click_only is False
+    assert grab.released is True
+
+
+class _HeldLeftButton:
+    """替身：只提供 ``mouseButtons()``（测试环境造不出真实的按住状态）。"""
+
+    @staticmethod
+    def mouseButtons():
+        return Qt.MouseButton.LeftButton
+
+
+def test_stale_press_watchdog_keeps_held_click_only_grab(monkeypatch):
+    """左键仍按下时不得收尾：click-only 的按住是合法的长按（锁定位置下
+    用户可能一直按着没松）。判据与拖拽分支同源（``mouseButtons()``）。"""
+    overlay = OverlayWindow()
+    grab = FakeGrab()
+    overlay._mouse_grab = grab
+    overlay._press_click_only = True
+    monkeypatch.setattr(overlay_window, "QApplication", _HeldLeftButton)
+    overlay._check_stale_press()
+    assert overlay._mouse_grab is grab
+    assert overlay._press_click_only is True
+    assert grab.released is False
+
+
+def test_stale_press_watchdog_clears_orphan_grab_without_press():
+    """孤儿 grab（``_press_global`` 与 click-only 旗标都空）同样收尾。
+
+    grab 是"必须有按压源、必须松得开"的状态——判据只看 grab 本身，不要求
+    它长得像 click-only：任何把 ``_mouse_grab`` 留在窗口上的路径都不该让
+    整窗交互被钉死。
+    """
+    overlay = OverlayWindow()
+    grab = FakeGrab()
+    overlay._mouse_grab = grab
+    assert overlay._press_global is None
+    assert overlay._press_click_only is False
+    overlay._check_stale_press()
+    assert overlay._mouse_grab is None
+    assert grab.released is True
 
 
 # ---------------------------------------------------------------- V-8

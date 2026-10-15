@@ -564,7 +564,7 @@ class TickDriver(QObject):
             self._elapsed.restart()
         self._tick_count += 1
         for overlay in list(self._overlays):
-            overlay._check_stale_press()  # V-7：tick 路径同样兜底卡死的拖拽
+            overlay._check_stale_press()  # V-7：tick 路径同样兜底卡死的 grab
         work_start = time.perf_counter() if metrics is not None else 0.0
         self.tick_sim(dt)
         self.advance_overlays(dt)
