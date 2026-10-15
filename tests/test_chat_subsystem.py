@@ -3323,6 +3323,9 @@ def test_crop_merge_uses_disk_latest_via_host_reload(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     cfg = Config(tmp_path)
     cfg.set("modern_chat_background", "builtin:whale")
+    # #271：空身份会话按 slot0 分流，全局键的读源是路由视图另建的主配置（初值只取盘）
+    # ——"当前背景是 whale"必须落盘，否则设置页看到的是盘上的空背景、裁切无处可落。
+    assert cfg.save() is True
     dialog = settings_mod.ModernSettingsDialog(cfg, include_ai=True)
     page = dialog.ai_page
 

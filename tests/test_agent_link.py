@@ -1181,6 +1181,7 @@ class TestCooldownUnits:
 
             # 保存后配置为分钟值
             dlg._save()
+            cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
             assert abs(cfg.data["proactive_screen"]["cooldown_minutes"] - 0.75) < 1e-9
         finally:
             dlg.close()
@@ -1236,6 +1237,7 @@ class TestModernSettingsProactivePage:
             dlg.pro_whitelist_edit.setPlainText("code.exe\ntitle:*会议*")
             dlg.pro_cap_spin.setValue(42)
             dlg._save()
+            cfg.reload()  # #271：写盘走路由视图另建的主配置，传入对象需重读才可见
 
             pro = cfg.data["proactive_screen"]
             assert pro["enabled"] is True
