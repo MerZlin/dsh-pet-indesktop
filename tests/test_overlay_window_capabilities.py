@@ -345,17 +345,20 @@ def test_click_only_grab_with_lost_release_does_not_lock_passthrough(tmp_path):
 
 
 def test_auto_cursor_hidden_converges_on_input_reaching_the_window(tmp_path):
-    """自动穿透态在**真到达窗口**的输入上收敛（点击自愈）。
+    """自动穿透态在**真到达窗口**的输入上收敛（输入侧绕过 HIDDEN 闸）。
 
-    生产触发面：穿透态只剩窗口上的标记而原生样式已被重建（on_top 切换 /
-    屏迁移），或逐像素控制器还没把样式写回——此时点击确实打得到窗口，必须
-    顺手解除自动穿透；否则窗口停在"看得见点不到"，而唯一的自愈手段（再点
-    一次）又会被穿透吃掉。
+    输入能进来本身就是证据：原生穿透样式与窗口上的标记已经脱同步（正常开着
+    穿透时点击根本到不了窗口），此刻恢复拦截是把状态收敛回一致。光标若真的
+    还藏着，20Hz watcher 一拍内会重报 HIDDEN 重新置回——代价一拍，可接受。
+
+    定位（别当通用自愈读）：这条时机只是上面那个"脱同步"场景的兜底，真正
+    解开卡死的是看门狗（``_check_stale_press``）与显示/恢复（``_shown_cb``）
+    两道；正常穿透期间点击到不了窗口。
     """
     shell = _make_shell(tmp_path, {"mouse_through": False})
     try:
         overlay = shell.overlay
-        shell._on_cursor_visibility_changed("HIDDEN")
+        shell._on_cursor_visibility_changed("HIDDEN")   # 已确认隐藏：show 侧会被挡
         assert shell._auto_cursor_hidden is True
         assert overlay.mouse_through is True
 
@@ -368,8 +371,8 @@ def test_auto_cursor_hidden_converges_on_input_reaching_the_window(tmp_path):
 
 
 def test_auto_cursor_hidden_holds_while_grab_in_flight(tmp_path):
-    """拖拽在途时输入侧收敛不得动手（滞留状态归 ``_cursor_restore_pending``，
-    由 ``_on_grab_finished`` 冲刷）——这正是"拖拽中不误开/误关穿透"的判据。"""
+    """拖拽在途时输入侧收敛不得动手，只能记待办（``_converge_pending``，由
+    grab 收尾补做）——这正是"拖拽中不误开/误关穿透"的判据。"""
     shell = _make_shell(tmp_path, {"mouse_through": False})
     try:
         overlay = shell.overlay
@@ -378,29 +381,109 @@ def test_auto_cursor_hidden_holds_while_grab_in_flight(tmp_path):
         QApplication.sendEvent(overlay, _mouse_press((100, 100)))
         assert shell._auto_cursor_hidden is True
         assert overlay.mouse_through is True
+        assert shell._converge_pending is True   # 请求不许被丢弃
     finally:
         shell._delete_runtime_marker()
 
 
 def test_auto_cursor_hidden_converges_on_show(tmp_path):
-    """显示/恢复侧收敛：不能带着上一个会话的自动穿透态回来。
+    """显示/恢复侧收敛：不能带着上一个会话的自动穿透态回来（真恢复路径）。
 
     隐藏期探测表是停的（O2），恢复后若 watcher 一时报不出 SHOWING（探针失败
     报 UNKNOWN），滞留下来的穿透态会让整窗点不到。收敛排在可见性上报**之前**：
     探测表随即补拍，光标真隐藏时同一拍就会重新报 HIDDEN 并把状态置回——所以
     本用例把探针按失败态静音（UNKNOWN 不翻转任何状态），只验显示侧这一道。
+
+    走完整 show → hide → show：首次显示没有待解除的状态；隐藏期"滞留没人
+    冲刷"（grab 被 ``_end_drag`` 这类路径直接清掉，没走 grab 收尾钩子）的收口
+    落在第二次显示上。
     """
     shell = _make_shell(tmp_path, {"mouse_through": False})
     try:
         overlay = shell.overlay
         shell._watcher._cursor_probe = lambda: "UNKNOWN"
-        shell._on_cursor_visibility_changed("HIDDEN")
+        overlay.show()                                     # 首次显示
+        shell._on_cursor_visibility_changed("HIDDEN")      # 光标隐藏 → 自动穿透
         assert overlay.mouse_through is True
+        overlay._mouse_grab = object()                     # 拖拽在途
+        shell._on_cursor_visibility_changed("SHOWING")     # 恢复被滞留
+        assert shell._cursor_restore_pending is True
+        overlay._mouse_grab = None                         # grab 被直接清掉
         overlay.hide()
-        assert shell._auto_cursor_hidden is True   # 隐藏期保持（探测表已停）
+        assert shell._auto_cursor_hidden is True           # 隐藏期保持（探测表已停）
         assert overlay.mouse_through is True
 
-        overlay.show()
+        overlay.show()                                     # 真恢复：收敛
+
+        assert shell._auto_cursor_hidden is False
+        assert shell._cursor_restore_pending is False
+        assert overlay.mouse_through is False
+    finally:
+        shell._delete_runtime_marker()
+
+
+def test_blocked_convergence_request_is_replayed_after_grab_finishes(tmp_path):
+    """P2-1 回归：被 grab 闸住的收敛请求不许被无条件丢弃。
+
+    序列：自动穿透已置位 + 卡死的 click-only grab（release 丢失）→ 隐藏后重新
+    显示、探针静音 UNKNOWN（不产生回调）→ show 的收敛被 grab 闸挡住（此刻不
+    改穿透态，但**必须记下待办**）→ 看门狗清掉 grab → 收尾时补做收敛。
+    修前：show 的请求被直接丢弃，grab 收尾只认 ``_cursor_restore_pending``，
+    穿透永久卡在"看得见点不到"。
+    """
+    shell = _make_shell(tmp_path, {"mouse_through": False})
+    try:
+        overlay = shell.overlay
+        shell._watcher._cursor_probe = lambda: "UNKNOWN"
+        # 自动穿透已置位；``_last_cursor_visibility`` 保持初值 SHOWING = 没有
+        # "光标真的还藏着"的证据，收敛放行（第三道闸，见 _converge_auto_cursor_hidden）
+        shell._auto_cursor_hidden = True
+        shell._apply_effective_mouse_through()
+        assert overlay.mouse_through is True
+        overlay.hide()
+        overlay._mouse_grab = shell.sprite        # 丢 release 的 click-only grab
+        overlay._press_click_only = True
+
+        overlay.show()                            # 收敛撞上 grab
+
+        assert shell._auto_cursor_hidden is True  # 此刻不得改穿透态
+        assert overlay.mouse_through is True
+        # 待办快照：断言放在行为断言之后（字段本身也是被测行为——修前没有它）
+        pending_at_show = getattr(shell, "_converge_pending", False)
+
+        overlay._check_stale_press()              # 看门狗收尾（tick_driver 每拍调用）
+
+        assert overlay._mouse_grab is None
+        assert shell._auto_cursor_hidden is False
+        assert overlay.mouse_through is False
+        assert pending_at_show is True            # 请求记过待办，收尾时补做
+    finally:
+        shell._delete_runtime_marker()
+
+
+def test_convergence_keeps_passthrough_while_last_probe_says_hidden(tmp_path):
+    """P2-2 回归：最后一次探测确认光标还藏着时，show 侧收敛不得抹掉自动穿透。
+
+    屏迁移先显示新 overlay 再关旧的（可见性计数 1→2→1，闸门不翻转 → 不补
+    探测）；拿 show 当 SHOWING 会误清，窗口在下一拍 50ms 轮询前错误拦截点击
+    （= 该穿透而没穿透）。解除只认 watcher 报回的 SHOWING。
+
+    输入侧按裁决**绕过**这道闸（输入能进来本身就证明样式与标记脱了同步，
+    见 ``test_auto_cursor_hidden_converges_on_input_reaching_the_window``）——
+    本用例只管显示/迁移侧。
+    """
+    shell = _make_shell(tmp_path, {"mouse_through": False})
+    try:
+        overlay = shell.overlay
+        shell._watcher._cursor_probe = lambda: "UNKNOWN"
+        shell._on_cursor_visibility_changed("HIDDEN")   # 真隐藏：穿透是真实状态
+        assert shell._auto_cursor_hidden is True
+        overlay.hide()
+        overlay.show()                                  # 迁移/恢复侧收敛
+        assert shell._auto_cursor_hidden is True
+        assert overlay.mouse_through is True
+
+        shell._on_cursor_visibility_changed("SHOWING")   # 探针恢复 → 解除
 
         assert shell._auto_cursor_hidden is False
         assert overlay.mouse_through is False

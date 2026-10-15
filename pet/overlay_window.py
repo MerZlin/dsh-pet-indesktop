@@ -178,9 +178,11 @@ class OverlayWindow(QWidget):
     def _note_user_input(self) -> None:
         """真实按键输入：交给 driver 做挂起自愈（丢了解锁消息也能点醒）。
 
-        壳层另挂 ``_user_input_cb``：输入**真到达窗口**是穿透态的自愈时机
-        （原生穿透样式被重建后窗口照样收得到点击，而这条状态下再点一次本
-        该能自愈，见 overlay_shell._converge_auto_cursor_hidden）。
+        壳层另挂 ``_user_input_cb``：输入真到达窗口时收敛穿透态。这是**兜底**
+        而非通用自愈——穿透真开着时点击根本到不了窗口，本条只在原生穿透样式
+        与窗口标记脱同步（窗口重建 / 样式被复位）时接得上；解开"grab 卡死"
+        的另有看门狗与显示/恢复两道（见
+        overlay_shell._converge_auto_cursor_hidden）。
         """
         note = getattr(self._driver, "note_user_input", None)
         if callable(note):
@@ -915,8 +917,12 @@ class OverlayWindow(QWidget):
         mousePressEvent），但同样持有 ``_mouse_grab``：丢一次 release 就永久
         卡住 grab，壳层据它判定的 ``_cursor_transition_blocked()`` 恒真 →
         光标隐藏态触发的整窗穿透再也退不出去（窗口可见却点不到，点击又被
-        穿透吃掉）。故这一支与拖拽分支同判据（左键已不在按下态即收尾），
-        只是没有可取消的瞄准会话。
+        穿透吃掉）。故这一支与拖拽分支同判据（左键已不在按下态即收尾）。
+
+        瞄准会话照收：click-only 的按住**也能进瞄准**（右键分支只看
+        ``_mouse_grab``，见 mousePressEvent 的非左键支），漏收会让 sprite 停在
+        DRAG、右键菜单被 ``_context_menu_blocked()`` 一直拦（既有问题已登记
+        BACKLOG，本支与拖拽支同口径先收会话）。
         """
         if self._press_global is None:
             # ``_press_global`` 为空还持有 grab = click-only 按下，或已失锚的
@@ -924,6 +930,10 @@ class OverlayWindow(QWidget):
             if self._mouse_grab is None:
                 return
             if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+                return
+            if self.slingshot.aiming and self._cancel_slingshot(resume_drag=False):
+                # 瞄准会话的按压源（左键）已消失且 release 没到：收会话回锚点
+                # （不发射），grab 收尾已在 _cancel_slingshot 内完成。
                 return
             self._finish_grab(QPointF(self.mapFromGlobal(QCursor.pos())))
             return

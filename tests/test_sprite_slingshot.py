@@ -401,6 +401,39 @@ def test_stale_press_watchdog_cancels_aim_to_anchor():
     assert overlay._press_global is None
 
 
+def test_stale_press_watchdog_clears_click_only_grab_and_cancels_aim():
+    """V-7 看门狗 + click-only：锁定位/未按 SHIFT 的按住**也能进瞄准**（右键
+    分支只看 ``_mouse_grab``），丢 release 后看门狗必须把瞄准会话一起收掉
+    ——否则 sprite 停在 DRAG、右键菜单被拦（ops5.5 minor 1）。"""
+    overlay = OverlayWindow()
+    overlay.lock_position = True          # 命中按下只算点击：不记 _press_global
+    sprite = _make_sprite()
+    overlay.add_sprite(sprite)
+
+    press = _hit_point(sprite)
+    overlay.mousePressEvent(_mouse(QEvent.Type.MouseButtonPress, press))
+    assert overlay._mouse_grab is sprite
+    assert overlay._press_click_only is True
+    assert overlay._press_global is None       # click-only：没有拖拽锚点
+
+    overlay.mousePressEvent(_right_press(press))   # 右键进瞄准（既有行为）
+    assert overlay.slingshot.aiming is True
+    anchored = QPointF(sprite.pos)
+    assert sprite.interaction_state == INTERACTION_DRAG
+    # 测试环境无真按键：mouseButtons() 必为 NoButton → 看门狗应判 release 已丢
+    assert not (QApplication.mouseButtons() & Qt.MouseButton.LeftButton)
+
+    overlay._check_stale_press()
+
+    assert overlay.slingshot.aiming is False           # 瞄准会话已收
+    assert sprite.interaction_state == INTERACTION_NORMAL
+    assert sprite.pos == anchored
+    assert sprite.velocity == QPointF(0, 0)
+    assert overlay._mouse_grab is None
+    overlay._context_menu_blocked()                    # 吞掉进瞄准时置的一次性抑制旗标
+    assert overlay._context_menu_blocked() is False    # 菜单恢复（瞄准已收）
+
+
 def test_unconsumed_right_press_clears_stale_menu_suppression():
     """右键菜单抑制是一次性的：未被弹弓消费的右键必须清旗标，否则误吞一次菜单。"""
     overlay = OverlayWindow()
