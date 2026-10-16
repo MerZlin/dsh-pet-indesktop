@@ -86,6 +86,7 @@ from . import click_sound
 from . import overlay_settings_command
 from . import overlay_spawn_state
 from . import slot_manager
+from . import text_avoid_sprite
 from . import window_alerts
 from .context_menus.shared import (
     add_tray_action,
@@ -1128,6 +1129,12 @@ class OverlayShell(QObject):
         # _bubble_blocked）。挂在这里与其它 behavior 接线同点；屏迁移只重建
         # overlay，控制器不重建，故这一处就够。
         self.behavior.on_flight_changed = self._on_sprite_flight_changed
+        # 避字移动（可选，默认关）：给行为层接上"落点可被替换"的那道缝。
+        # sprite 行为层**不认识** OCR——它只调一个回调；决策、文字图与后台线程都在
+        # pet/text_avoid*.py 与 text_avoid_sprite.py 里。启用与否由
+        # _sync_sprite_settings 按配置推（启动、spawn、配置重载各一次）。
+        self.text_avoid = text_avoid_sprite.SpriteTextAvoid(self)
+        self.behavior.text_avoid_plan = self.text_avoid.plan
         self.collision = SpriteCollisionWorld()
         self.physics = ThrowPhysicsController(self._bounds)
         # 4.1c 音效：点击 + 碰撞（click_sound 默认包，静默降级）。门/音量/音源都按
@@ -3958,9 +3965,25 @@ class OverlayShell(QObject):
             except (TypeError, ValueError):
                 gap = 0.0
             behavior.animation_gap_seconds = gap
+        self._sync_text_avoid()
         # 刚刚按 slot 配置重算过资格位 → 同步刷新 stat 签名缓存，下一次目录事件
         # 才能准确判断"slot 配置到底有没有变"（只 stat，不读内容）。
         self._slot_signature_cache = self._slot_config_signatures()
+
+    def _sync_text_avoid(self) -> None:
+        """避字移动：按配置启停（sprite 拓扑；未启用且从未启用过则一个 API 都不调）。
+
+        与 legacy 的 ``WindowFeatureGateMixin._sync_text_avoid`` 同一语义：这里是
+        新拓扑的等价入口，由 ``_sync_sprite_settings``（启动 / spawn / 配置重载）
+        调用，因此**改开关立即生效**，不需要重启。
+        """
+        glue = getattr(self, "text_avoid", None)
+        if glue is None:
+            return
+        try:
+            glue.sync()
+        except Exception:
+            logging.debug("避字移动：按配置同步失败", exc_info=True)
 
     def _apply_sprite_settings_to(self, sprite, cfg=None) -> None:
         """把**一只 sprite 自己那份**设置下发到它的运行态。

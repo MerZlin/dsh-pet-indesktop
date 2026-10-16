@@ -57,6 +57,12 @@ _ROW_DEFAULT_PATHS: dict[str, str | tuple[str, float]] = {
     "agent_sound_enabled": "agent_link.sound_enabled",
     "agent_sound_volume": ("agent_link.sound_volume", 100),
     "agent_cost": "agent_cost_enabled",
+    # 避字移动（嵌套 dict）
+    "text_avoid": "text_avoid.enabled",
+    "text_avoid_cjk": "text_avoid.cjk_only",
+    "text_avoid_refresh": "text_avoid.refresh_seconds",
+    "text_avoid_react": "text_avoid.react_now",
+    "text_avoid_run_speed": "text_avoid.run_speed",
     # 余额
     "balance_refresh": "balance_refresh_minutes",
     "balance_tier_mode": "balance_tier_labels_mode",

@@ -119,6 +119,13 @@ PET_DIR = Path(__file__).resolve().parents[1] / "pet"
 #    里发一次；发射点用 getattr 兜底，兼容只挂载 _rebuild_frame 的假窗口）。
 # 两处都必须贴着自己的控制流（拖拽/物理入口、帧构建尾部），拆控制器等于把同一条
 # 时序切断；按预算规则校准到实测值，不为达标压行。实测 4671。
+# 2026-10-15 **未上调**：避字移动（`pet/text_avoid*.py`）在 _try_move 建计划点的接线。
+# 接线拆不出去：钩子必须在"随机落点已掷出、量化与朝向都还没提交"的这一刻介入，才谈得上
+# 换落点而不破坏"目标先于朝向"的不变量；实现主体（OCR 采集、文字图缓存、后台线程、
+# 决策评分、步态吸附、跑动速度倍率）全在 pet/text_avoid.py、text_avoid_controller.py
+# 与 window_optional_services.py，本文件只留一次钩子调用、两处 _take_run_boost() 取值
+# 与一圈时长的折算。本分支最初基于重构前的 window.py（那时实测 4694、需上调），合到本版
+# 后整文件只有 4547 行，**现有预算装得下，故不改预算**（不为自己方便去放宽红线）。
 WINDOW_PY_LINE_BUDGET = 4671
 
 # modern_settings_dialog.py 行数预算：按结构线拆分后实测 1857 行（拆分前 4811 行）。
@@ -260,7 +267,15 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 阅读宽度换成 CONTENT_READING_MAX_WIDTH（import +1）、开机自启的范围声明改由
 # settings_pet_controls 的作用域 pass 拆成行内标注（-2），其余靠收掉几处重复注释对齐。
 # 按文件约定预算只随实测校准，不为达标压缩行宽/合并语句；拆分仍是待办。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2515
+# 2026-10-16 rebase 到上游 v4.3.1 后按**实测**校准（本文件一贯只随实测校准）：
+# 上游设置页打磨把预算抬到 2515；本分支的**避字移动**接线净 +8（import、legacy
+# 「桌宠行为」页里的行工厂装配、标签页 claim 归位与 _write_config 保存委托各一处）。
+# 控件/行/保存都在 pet/settings_text_avoid.py（照 settings_file_interpret 的成例），
+# 本文件只留那几处「必须知道本模块内部结构」的接缝；再拆就得让
+# settings_text_avoid 反向依赖对话框。**没有新增侧栏域**：侧栏 10 个域是外部可见
+# 契约（test_menu_layout / test_settings_interaction_tabs 锁着），避字移动按邻居
+# 「边缘探头」的成例归到「桌宠」域。本次实测 2522。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2522
 
 
 def _read(name: str) -> str:

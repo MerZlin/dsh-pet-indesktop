@@ -54,11 +54,74 @@ class WindowFeatureGateMixin:
     _edge_probe: Any = None
     _throw_egg: Any = None
     _music_lyric: Any = None
+    # 避字移动控制器（懒创建；实现全在 pet/text_avoid_controller.py）。
+    _text_avoid: Any = None
 
     # ------------------------------------------------------------ 判定
     def _proactive_wanted(self) -> bool:
         raw = self.cfg.get("proactive_screen", {})
         return bool((raw or {}).get("enabled", False))
+
+    def _text_avoid_wanted(self) -> bool:
+        raw = self.cfg.get("text_avoid", {})
+        return bool((raw or {}).get("enabled", False))
+
+    def _ensure_text_avoid(self):
+        """首次启用避字移动时懒创建控制器；已存在则原样返回。"""
+        if self._text_avoid is None:
+            from .text_avoid_controller import TextAvoidController
+            self._text_avoid = TextAvoidController(self)
+            self._text_avoid.escape_requested.connect(self._text_avoid_escape)
+        return self._text_avoid
+
+    def _text_avoid_escape(self) -> None:
+        """避字移动·立即反应：打断当前动画，走开。
+
+        只在"该动静止桌宠"的条件下才动（关闭中 / 隐藏暂停 / 用户设了不移动 /
+        正在走 / 拖拽与物理接管 —— 后两者 ``_try_move`` 自己也会拦）。落点仍由
+        ``_text_avoid_move`` 钩子决定，所以这里不需要（也不该）自己算目标。
+        """
+        if self._closing or self._hidden_paused or getattr(self, "no_move", False):
+            return
+        if getattr(self, "_move_plan", None) is not None:
+            return
+        logging.getLogger(__name__).info("避字移动：立刻走开（打断当前动画）")
+        self._try_move()
+
+    def _text_avoid_move(self, sp, dir_sign: int, distance: float, room: float,
+                         stride: float = 0.0):
+        """移动计划钩子：返回 ``(dir_sign, distance, room, target_cy, run_boost)``。
+
+        功能关闭 / 控制器没装配 / 拿不到文字图时，原样返回入参 + ``None`` + ``1.0``，
+        窗口侧继续用它原来的随机纵向漫游与用户播放速率——**没有数据时绝不改变既有
+        行为**。``stride`` 是本次移动动画的步幅（逻辑像素），落点要按它吸附。
+        """
+        raw = self.cfg.get("text_avoid", {})
+        if not (raw or {}).get("enabled", False):
+            return (dir_sign, distance, room, None, 1.0)
+        try:
+            result = self._ensure_text_avoid().adjust_move(
+                sp, dir_sign, distance, room, stride)
+        except Exception:
+            logging.getLogger(__name__).debug("避字移动决策失败，按原落点走", exc_info=True)
+            return (dir_sign, distance, room, None, 1.0)
+        boost = result[4] if len(result) > 4 else 1.0
+        if boost and boost != 1.0:
+            # 跑动速度：动画与位移一起加快。位置由解码帧号驱动，所以**动画多快就走多快、
+            # 不打滑**（与"飞行期动画加速"同一套路）。
+            #
+            # **必须在动画起播之前定下来**：WebM 后端的帧产出速率是 reader 启动时用
+            # -readrate 写进 ffmpeg 命令行的，起播后再调 set_playback_speed 只会改呈现
+            # 节拍、不会有更多帧（实测 3x 仍然按 1x 走完）。所以这里只放一个一次性标记，
+            # 由 _switch/_switch_fallback 在 movie.start() 之前取走并叠加到用户速率上。
+            self._pending_run_boost = float(boost)
+        return result
+
+    def _take_run_boost(self) -> float:
+        """取走并清除本次动画的跑动倍率（_switch 在 start() 前调用；默认 1.0）。"""
+        boost = float(getattr(self, "_pending_run_boost", 1.0) or 1.0)
+        self._pending_run_boost = 1.0
+        return boost
 
     def _agent_link_wanted(self) -> bool:
         raw = self.cfg.get("agent_link", {})
@@ -362,4 +425,25 @@ class WindowFeatureGateMixin:
             self.agent_link_manager.apply_config()
         self._install_effect_services()
         self._edge_probe.set_enabled(bool(self.cfg.get("edge_probe_enabled", False)))
+        self._sync_text_avoid()
         self.sync_music_lyric()
+
+    def _sync_text_avoid(self) -> None:
+        """避字移动：按配置启停控制器（禁用且从未启用过则一个 API 都不调）。
+
+        启用 → 立即启动后台刷文字图。**不给窗口设任何显示属性**：早先用
+        WDA_EXCLUDEFROMCAPTURE 把桌宠从抓屏里排除，实机结果是它在屏幕上也
+        不再渲染（用户看到"桌宠消失了"）——现在改成用 PrintWindow 抓"桌宠底下
+        那个窗口自己"来补回被挡住的那块，详见 platform_win 的历史注释。
+
+        启用时打一条 INFO：这是唯一一条能让用户从日志里确认"功能真的起来了"的
+        记录（决策日志只在真的改道时才写）。
+        """
+        if self._text_avoid_wanted():
+            logging.getLogger(__name__).info(
+                "避字移动已启用（%s）：后台刷新屏幕文字图；桌宠自己挡住的那块"
+                "用 PrintWindow 抓底下窗口补回（不改变窗口显示属性，截图/录屏照常能拍到它）",
+                getattr(self, "instance_id", "") or "主桌宠")
+            self._ensure_text_avoid().start()
+        elif self._text_avoid is not None:
+            self._text_avoid.stop()

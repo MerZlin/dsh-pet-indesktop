@@ -105,6 +105,11 @@ WORKER_MODULE = f"{__package__}.ocr_worker"
 #: 冻结态的 worker 子命令开关（登记在 ``pet/__main__.py`` 与 ``packaging/pet_entry*.py``）。
 OCR_WORKER_FLAG = "--ocr-worker"
 
+#: 让工作端**只做检测、不做文字识别**的内部开关（见 :func:`worker_command`）。
+#: 只要"哪里有文字"、不需要文字内容的调用方用它换时间：同一张 1626×640 的图实测
+#: 2672ms → 1297ms（识别模型不跑），代价是结果里 ``TextBlock.text`` 一律为空。
+OCR_NO_REC_FLAG = "--ocr-no-rec"
+
 #: 冻结包里必须存在的模块。两者都是 **PyInstaller 静态分析摸不到的目标**：
 #: ``ocr`` 走 ``actions`` 的 importlib 动态 seam（模块名是字符串），``ocr_worker``
 #: 只以 ``sys.executable -m ...`` 的形式出现在子进程命令行里。少任何一个，冻结包
@@ -253,7 +258,7 @@ def frame_bytes(png: bytes) -> bytes:
 # ------------------------------------------------------------- 子进程的一生
 
 
-def worker_command() -> list[str]:
+def worker_command(use_rec: bool = True) -> list[str]:
     """启动识别工作端的命令行。
 
     - **源码态**：``<python> -m pet.screen_capture.ocr_worker``；
@@ -264,10 +269,19 @@ def worker_command() -> list[str]:
 
     两态都必须走**同一个解释器/同一个 exe**：换一个 python 就可能换一套
     onnxruntime / cv2 的 DLL，而"引擎在别的解释器里加载失败"是最难查的一类。
+
+    ``use_rec=False`` 时附上 :data:`OCR_NO_REC_FLAG`：工作端只做检测、不跑识别模型。
+    调用方要的如果只是"屏幕上哪里有文字"而不需要文字内容，这一档实测省掉约一半时间
+    （同图 2672ms → 1297ms）；代价是 ``TextBlock.text`` 为空字符串，所以**需要文字
+    内容（例如按"只避汉字"过滤）的调用方不能用它**。
     """
     if getattr(sys, "frozen", False):
-        return [sys.executable, OCR_WORKER_FLAG]
-    return [sys.executable, "-m", WORKER_MODULE]
+        argv = [sys.executable, OCR_WORKER_FLAG]
+    else:
+        argv = [sys.executable, "-m", WORKER_MODULE]
+    if not use_rec:
+        argv.append(OCR_NO_REC_FLAG)
+    return argv
 
 
 def spawn_worker(argv: list[str]):
@@ -408,14 +422,21 @@ def parse_result(stdout) -> list[dict]:
     return blocks
 
 
-def blocks_from_payload(raw: Iterable) -> list[TextBlock]:
-    """原始块字典 → 阅读顺序的 :class:`TextBlock` 列表（形状不对就报故障）。"""
+def blocks_from_payload(raw: Iterable,
+                        keep_empty_text: bool = False) -> list[TextBlock]:
+    """原始块字典 → 阅读顺序的 :class:`TextBlock` 列表（形状不对就报故障）。
+
+    ``keep_empty_text=True`` 时**保留没有文字的块**。这是给"只做检测"那一档用的
+    （见 :data:`OCR_NO_REC_FLAG`）：那时结果里只有框、文字一律为空，而"这里有一块
+    文字"本身就是调用方要的信息——典型用途是"避开文字"，不是把文字展示出来。
+    默认仍按老规矩丢掉空块：对展示类调用方，它们只是噪声。
+    """
     blocks: list[TextBlock] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise OcrRecognitionError(f"本地 OCR 结果第 {index} 块不是对象：{_clip(item)}")
         text = str(item.get("text") or "")
-        if not text:
+        if not text and not keep_empty_text:
             continue
         try:
             score = float(item.get("score") or 0.0)
@@ -520,8 +541,12 @@ class OcrEngine:
         factory = self._command if self._command is not None else worker_command
         return list(factory())
 
-    def recognize(self, image: QImage) -> list[TextBlock]:
+    def recognize(self, image: QImage,
+                  keep_empty_text: bool = False) -> list[TextBlock]:
         """认一张图，返回按阅读顺序排好的文本块；没有文字返回空列表。
+
+        ``keep_empty_text=True`` 保留"有框没文字"的块，供"只检测"档使用
+        （见 :func:`blocks_from_payload` 与 :data:`OCR_NO_REC_FLAG`）；默认不变。
 
         空图在**起进程之前**就被拒掉：起一次进程要付几百毫秒到几秒，而空图是
         调用方的 bug，不该罚用户等。
@@ -558,7 +583,7 @@ class OcrEngine:
                 "这次本地识别已被中止（会话已收口或宿主正在释放），没有结果"
             )
         _, blocks = interpret(process.returncode, stdout, stderr)
-        return blocks_from_payload(blocks)
+        return blocks_from_payload(blocks, keep_empty_text=keep_empty_text)
 
     def _exchange(self, process, frame: bytes) -> tuple[bytes, bytes]:
         """把**已经按协议拼好的一帧**喂进去、把两条输出读回来（超时即杀进程并报人话）。

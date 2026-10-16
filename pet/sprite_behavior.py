@@ -331,6 +331,13 @@ class BehaviorController:
         # 空中被抓住、落地、飞行中被移除都算边沿）。行为层只报边沿，气泡语义
         # 归消费方（overlay 壳据此禁飞的那只的气泡）；未接线 = 现状。
         self.on_flight_changed = None
+        # 避字移动（可选接线；None = 完全现状）：``callable(sprite, dir_sign,
+        # distance, room, stride) -> (dir_sign, distance, room, target_y, boost)``。
+        # 由 overlay 壳注入（pet/text_avoid_sprite.py）。接在这里而不是让行为层
+        # 认 OCR：本模块**不认识** text_avoid，只留一个"落点可被替换"的缝——
+        # 与旧窗口路径 window.py::_try_move 的钩子同一位置、同一语义。
+        # target_y 为 None = 不改纵向（沿用 wander_target_y 的结果）。
+        self.text_avoid_plan = None
         self._states: dict = {}
         # V-9：按库对象弱引用缓存——旧实现以 id(lib) 为键，库销毁后地址
         # 被新库复用会命中陈旧分类池（换角色/多宠生灭时拿到错素材名），
@@ -500,6 +507,22 @@ class BehaviorController:
             self._enter_acts(sprite, st, cats)
             return False
         return True
+
+    def request_move_now(self, sprite) -> bool:
+        """让这只 sprite **立刻**自选一次移动（避字「被压住就走开」的出口）。
+
+        与菜单「移动」的区别是不指定素材（走正常掷骰池），与 tick 里的自然移动
+        共用 ``_plan_move``——因此同样受探头会话闸门、``no_move``、接管态与非
+        NORMAL 交互态约束，也不会绕过「目标先于朝向」那条不变量。
+        返回 False = 这一拍没能建立计划（调用方按需重试/退避）。
+        """
+        if self.no_move:
+            return False
+        if getattr(sprite, "interaction_state", INTERACTION_NORMAL) != INTERACTION_NORMAL:
+            return False
+        cats = self._categories(getattr(sprite, "library", None))
+        st = self._states.setdefault(sprite, _SpriteState())
+        return bool(self._plan_move(sprite, st, cats))
 
     def state_of(self, sprite) -> str | None:
         """当前行为状态（idle/move/turn/click/acts/drag）；未接管过返回 None。"""
@@ -1568,14 +1591,31 @@ class BehaviorController:
         loop_duration = self._plan_duration(sprite, name)
         if loop_duration <= 0:
             return False
+        # 纵向目标先算：``wander_target_y`` 消耗一次随机数，即使下面避字命中也要
+        # 照常算——否则后续掷骰的随机序列整体错位（注入确定性 RNG 的测试会静默
+        # 失效）。旧路径 window.py 的钩子同样刻意保留这次无条件求值。
+        target_y = movement.wander_target_y(
+            sprite.pos.y() + off_y, self.bounds.top(), self.bounds.bottom(),
+            bh, self.margin, self.rng) - off_y
+        run_boost = 1.0
+        if self.text_avoid_plan is not None:
+            # 避字移动：把落点换成"不压住屏幕文字"的那一个（关闭/没文字图时原样返回）
+            dir_sign, distance, room, avoid_y, run_boost = self.text_avoid_plan(
+                sprite, dir_sign, distance, room, stride)
+            if avoid_y is not None:
+                target_y = avoid_y
+            try:
+                run_boost = float(run_boost)
+            except (TypeError, ValueError):
+                run_boost = 1.0
+            if run_boost and run_boost > 0.0:
+                # 跑动速度：动画与位移一起加快（时长同除倍率），脚不打滑
+                loop_duration = loop_duration / run_boost
         # 步幅整圈量化：位移锁到步态整圈，velocity=位移/时长 ⇒ 平均速度
         # 恒等于动画步态速度（防脚滑）；越界时 quantize 内部递减圈数/夹到 room。
         loops, distance, duration = movement.quantize_move(distance, stride, room, loop_duration)
         target_cx = cx + dir_sign * distance
         target_x = target_cx - bw / 2 - off_x
-        target_y = movement.wander_target_y(
-            sprite.pos.y() + off_y, self.bounds.top(), self.bounds.bottom(),
-            bh, self.margin, self.rng) - off_y
         curve = (getattr(lib, "move_curves", None) or {}).get(name)
         plan = {
             "anim": name,
@@ -1587,6 +1627,9 @@ class BehaviorController:
             "frames_per_loop": self._frames_per_loop(lib, name, curve),
             "loops": loops,
             "loop_duration": loop_duration,
+            # 跑动速度倍率（避字改道时 >1；未接线/普通移动恒为 1.0）。
+            # _start_move 在开播确认后把它落到 clip 上（换绑即复位）。
+            "run_boost": run_boost,
         }
         if plan["facing"] != sprite.facing and cats["turns"]:
             # 需要反向：先播 turn clip，翻朝向后由 turn 完成分支执行本计划
@@ -1624,6 +1667,14 @@ class BehaviorController:
         # 2739-2744 的 _switch 失败语义）
         if not self._bind_with_gen(sprite, st, plan["anim"]):
             return False
+        # 跑动速度：开播确认后才落到 clip 上（换绑下一个 clip 时 bind_clip 会按
+        # 用户速率重设，所以不需要自己复位）。计划时长已在 _plan_move 同除倍率，
+        # 位移与动画因此同步加快、不打滑。
+        boost = float(plan.get("run_boost", 1.0) or 1.0)
+        if boost != 1.0:
+            apply_speed = getattr(sprite, "set_move_anim_speed", None)
+            if callable(apply_speed):
+                apply_speed(boost)
         # 开播确认后才提交朝向（朝向只跟随真实发生的移动）。镜像在 paint
         # 重建首帧时才取用 facing，此刻写入不产生首帧镜像错误。
         sprite.facing = plan["facing"]

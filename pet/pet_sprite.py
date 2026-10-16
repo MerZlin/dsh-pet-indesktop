@@ -854,9 +854,19 @@ class PetSprite(QObject):
         if abs(float(getattr(clip, "playback_speed", target)) - target) > 0.05:
             setter(target)
 
+    def set_move_anim_speed(self, factor: float) -> None:
+        """给**当前这次移动**的 clip 一个临时倍率（避字移动的「跑动速度」）。
+
+        与飞行加速是同一个机制（:meth:`set_flight_anim_speed` 只写 clip 的
+        playback_speed，不动 ``self.playback_speed``）：换绑下一个 clip 时
+        :meth:`bind_clip` 会按用户速率重设，所以"临时"是自然成立的，不需要
+        额外的复位记账。位移与动画必须一起快，故调用方同时把计划时长除以
+        本倍率（``_plan_move`` 的 ``run_boost``），否则会脚滑。
+        """
+        self.set_flight_anim_speed(factor)
+
     def reset_playback_speed(self) -> None:
         """把当前 clip 播放速率复位回用户速率（落地 / 飞行被打断的唯一出口）。
-
         必须复位：``duration()`` 会除以 clip.playback_speed
         （webm_clip.py:1387-1390），留着飞行期的加速倍率会让下一次
         ``_plan_move`` 按加速后的时长量化位移（步态与墙钟失配）。

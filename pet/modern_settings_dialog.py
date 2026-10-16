@@ -180,6 +180,7 @@ from . import settings_pet_controls
 from . import settings_quiet
 from . import settings_reset_defaults
 from . import settings_search
+from . import settings_text_avoid
 
 
 # 语言配置页只展示用户能理解的事件名称；内部 key 仍用于保存和渲染。
@@ -704,6 +705,11 @@ class ModernSettingsDialog(QDialog):
                 ],
                 behavior_content,
             )
+        )
+        # 避字移动：控件与行在 settings_text_avoid 构建（行数预算原因）；这里只做
+        # 「行工厂」装配，真正的归位在下方「桌宠」域的 claim("text_avoid"...)。
+        behavior_layout.addWidget(
+            settings_text_avoid.build_text_avoid_section(self, behavior_content)
         )
         behavior_layout.addWidget(
             SettingsSection(
@@ -1828,6 +1834,7 @@ class ModernSettingsDialog(QDialog):
             page_content(
                 [
                     ("动画与移动", claim("playback_speed", "animation_gap", "idle_low_fps", "no_move")),
+                    ("避字移动", claim(*settings_text_avoid.ROW_IDS)),
                     ("拖拽与弹射", claim("drag_physics", "drop_gravity", "throw_strength", "slingshot_enabled", "lock_position", "shift_drag")),
                     ("边缘探头", claim("edge_probe")),
                     ("生小肥鱼", claim("spawn_inherit_size", "spawn_scale", "clear_spawned_pets")),
@@ -2412,6 +2419,7 @@ class ModernSettingsDialog(QDialog):
             self.ai_page.save()
         settings_file_interpret.save_file_interpret_settings(self)
         settings_network.save_network_settings(self)
+        settings_text_avoid.save_text_avoid_settings(self)
         settings_music.save_music_player_settings(self)
         settings_quiet.save_quiet_settings(self)
         settings_weather.save_weather_settings(self)

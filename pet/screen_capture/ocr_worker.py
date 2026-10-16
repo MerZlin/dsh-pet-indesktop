@@ -305,7 +305,13 @@ def _attach_sessions(engine, sessions: dict) -> None:
         engine.cfg[section] = node
 
 
-def load_engine(cpu_threads: int = _DEFAULT_CPU_THREADS):
+#: 与 ``ocr.OCR_NO_REC_FLAG`` 是**同一个字面量**。这里刻意不 import 那个模块：
+#: ``ocr.py`` 会拉进 Qt，而这个进程只为识别而生，不该为解析一个开关多付 Qt 的导入。
+#: 两处字面量由 tests/test_ocr_use_rec.py 的用例比对，防止悄悄写歪。
+NO_REC_FLAG = "--ocr-no-rec"
+
+
+def load_engine(cpu_threads: int = _DEFAULT_CPU_THREADS, use_rec: bool = True):
     """按模型目录建好引擎；失败一律抛 :class:`WorkerError`（人话即 ``str(exc)``）。"""
     directory = resolve_model_dir()
     problem = model_problem(directory)
@@ -335,8 +341,14 @@ def load_engine(cpu_threads: int = _DEFAULT_CPU_THREADS):
                 f"本地 OCR 模型加载失败（{file_name}）：{_describe(exc)}", EXIT_LOAD_FAILED
             ) from exc
 
+    params = dict(_RAPIDOCR_PARAMS)
+    if not use_rec:
+        # 只检测：不跑识别模型。注意**仍然注入全部 session**（含识别模型）——
+        # 注入是"断网可用"的承重结构：模型路径为空时 rapidocr 会转去联网下载。
+        # 这里省的是识别那一半的**推理时间**（实测约占一半），不是加载时间。
+        params["Global.use_rec"] = False
     try:
-        engine = rapidocr.RapidOCR(params=dict(_RAPIDOCR_PARAMS))
+        engine = rapidocr.RapidOCR(params=params)
     except Exception as exc:
         raise WorkerError(f"本地 OCR 引擎初始化失败：{_describe(exc)}", EXIT_LOAD_FAILED) from exc
     try:
@@ -347,7 +359,8 @@ def load_engine(cpu_threads: int = _DEFAULT_CPU_THREADS):
         raise WorkerError(
             f"本地 OCR 引擎的 session 注入失败：{_describe(exc)}", EXIT_LOAD_FAILED
         ) from exc
-    emit({"stage": "loaded", "model_dir": str(directory), "cpu_threads": threads})
+    emit({"stage": "loaded", "model_dir": str(directory), "cpu_threads": threads,
+          "use_rec": use_rec})
     return engine
 
 
@@ -377,14 +390,27 @@ def decode_png(png: bytes):
     return image
 
 
-def to_blocks(result) -> list[dict]:
+def to_blocks(result, use_rec: bool = True) -> list[dict]:
     """引擎原始输出 → 原始顺序的块字典列表（没文字就是空列表，**不是**错误）。
 
     只做"取出 + 校验形状"，**不排阅读顺序**：顺序是展示层的契约（``ocr.TextBlock``
     与 ``reading_order`` 都在宿主侧），工作端越薄，能出的错越少。
+
+    ``use_rec=False``（只检测）时结果里没有文字、只有框：这时**不再要求文字**，把框
+    原样发出去、``text`` 留空字符串——调用方要的如果只是"哪里有文字"，这就够了。
     """
     if result is None:
         raise WorkerError("本地 OCR 引擎没有返回结果", EXIT_RECOGNIZE_FAILED)
+    if not use_rec:
+        boxes = getattr(result, "boxes", None)
+        # **不能写 `if not boxes`**：rapidocr 的 boxes 是 ndarray，多元素数组的真值
+        # 判断会直接抛 "truth value of an array ... is ambiguous"（下面那几行特意用
+        # `is None` / `len(...)` 就是这个原因）。实机验证时正是这里炸的。
+        if boxes is None or len(boxes) == 0:
+            return []
+        return [{"text": "", "score": 0.0,
+                 "box": [[float(point[0]), float(point[1])] for point in box]}
+                for box in boxes]
     texts = getattr(result, "txts", None)
     if not texts:
         return []
@@ -409,7 +435,7 @@ def to_blocks(result) -> list[dict]:
 # ---------------------------------------------------------------------- 入口
 
 
-def run(stdin) -> tuple[int, list[dict]]:
+def run(stdin, use_rec: bool = True) -> tuple[int, list[dict]]:
     """跑完一次识别；返回 ``(退出码, blocks)``。
 
     退出码只有"成功"两种之一或某个故障码——人话原因由 :func:`main` 从
@@ -419,12 +445,12 @@ def run(stdin) -> tuple[int, list[dict]]:
     payload = read_frame(stdin)
     emit({"stage": "frame-read", "png_bytes": len(payload)})
 
-    engine = load_engine()
+    engine = load_engine(use_rec=use_rec)
     pixels = decode_png(payload)
     emit({"stage": "decoded", "shape": list(pixels.shape)})
 
     try:
-        blocks = to_blocks(engine(pixels))
+        blocks = to_blocks(engine(pixels), use_rec=use_rec)
     except WorkerError:
         raise
     except Exception as exc:
@@ -447,10 +473,17 @@ def stdin_stream():
 
 
 def main(argv=None) -> int:
-    """工作端入口：读一帧、认一次、写出结果、退出。返回进程退出码。"""
+    """工作端入口：读一帧、认一次、写出结果、退出。返回进程退出码。
+
+    命令行只认一个开关：``--ocr-no-rec``（只检测、不跑识别模型，见
+    ``ocr.worker_command``）。其余参数一律忽略——冻结态下宿主传给本进程的
+    第一个参数是 ``--ocr-worker``（内部子命令），本进程不需要再解析它。
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    use_rec = NO_REC_FLAG not in args
     result_fd = reserve_stdout()
     try:
-        code, blocks = run(stdin_stream())
+        code, blocks = run(stdin_stream(), use_rec=use_rec)
     except WorkerError as exc:
         emit({"error": str(exc), "code": exc.code})
         return exc.code

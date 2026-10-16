@@ -33,8 +33,9 @@ EXPECTED_TABS = (("display_music", "显示与音乐"), ("motion_collision", "动
 #: 标签 1 的主视线组序；高级组标题按平台上有没有「标题格式」行动态取
 #: （``settings_music.advanced_group_title``），用例里拼。
 TAB1_PRIMARY = ("显示", "音乐关联")
-#: 标签 2 的组序：主视线 5 组 + 垫底的「碰撞参数（高级）」。
-TAB2_SECTIONS = ("动画与移动", "拖拽与弹射", "边缘探头", "生小肥鱼", "多开碰撞", "碰撞参数（高级）")
+#: 标签 2 的组序：主视线 6 组 + 垫底的「碰撞参数（高级）」。
+TAB2_SECTIONS = ("动画与移动", "避字移动", "拖拽与弹射", "边缘探头", "生小肥鱼",
+                 "多开碰撞", "碰撞参数（高级）")
 
 TAB1_ROWS = (
     "scale", "bubble_text_scale", "pet_opacity",
@@ -46,6 +47,8 @@ TAB1_ADVANCED_ROWS = (
 )
 TAB2_ROWS = (
     "playback_speed", "animation_gap", "idle_low_fps", "no_move",
+    "text_avoid", "text_avoid_cjk", "text_avoid_refresh", "text_avoid_react",
+    "text_avoid_run_speed",
     "drag_physics", "drop_gravity", "throw_strength", "slingshot_enabled",
     "lock_position", "shift_drag", "edge_probe",
     "spawn_inherit_size", "spawn_scale", "clear_spawned_pets",

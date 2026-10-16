@@ -1579,7 +1579,11 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         movie._soft_parked = False
         movie.jumpToFrame(0)
         if hasattr(movie, 'set_playback_speed'):
-            movie.set_playback_speed(self.playback_speed)
+            # 避字移动的"跑动速度"在这里生效：WebM 后端的帧产出速率是 reader 启动时
+            # 用 -readrate 写进 ffmpeg 命令行的，**起播后再改只会改呈现节拍、不会有
+            # 更多帧**（实测 3x 仍按 1x 走完）。所以倍率必须在 start() 之前定下来，
+            # 由 _take_run_boost() 一次性取走（普通动画取到 1.0，行为不变）。
+            movie.set_playback_speed(self.playback_speed * self._take_run_boost())
         # 批11-B1：把回收阈值推到本 clip（start 前生效；幂等，clip 被库缓存复用）。
         self._push_recycle(movie)
         self._ended_fired = False
@@ -1683,7 +1687,7 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         movie._soft_parked = False
         movie.jumpToFrame(0)
         if hasattr(movie, 'set_playback_speed'):
-            movie.set_playback_speed(self.playback_speed)
+            movie.set_playback_speed(self.playback_speed * self._take_run_boost())
         self._push_recycle(movie)  # 批11-B1：同 _switch 推送回收阈值到回退 idle clip
         self._rebuild_frame()
         # 共享解码：回退到可共享 idle 起播前注册（hub 按源存活分流）。
@@ -2751,8 +2755,22 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         distance = random.randint(catalog.MOVE_MIN_PX, min(catalog.MOVE_MAX_PX, int(room)))
         move_name = name or self._pick(self.moves)
         stride = (getattr(self.lib, 'move_strides', None) or {}).get(move_name, catalog.MOVE_STRIDE_DEFAULT_PX) * self.scale
-        # 步幅量化：位移锁到步态整圈（位置帧驱动后速度恒等于动画步态，不打滑）
-        loops, distance, duration = quantize_move(distance, stride, room, self.lib.duration(move_name))
+        # 避字移动：换成"不压住屏幕上汉字"的落点，并给出这次移动的跑动速度倍率
+        # （功能关闭/没文字图时原样返回 + None + 1.0，行为与从前逐字节一致）。
+        # 必须放在 stride 之后：落点要吸附到"实际走得到的整圈步态"上才不会走偏。
+        dir_sign, distance, room, avoid_cy, run_boost = self._text_avoid_move(
+            sp, dir_sign, distance, room, stride)
+        # 步幅量化：位移锁到步态整圈（位置帧驱动后速度恒等于动画步态，不打滑）。
+        # 一圈时长仍以 lib.duration() 为准（冷 meta 时它是 0.0，下面的闸门照旧生效）；
+        # 但它带的是 clip **当前**速率，若 clip 上残留了上一轮的跑动倍率就会偏短
+        # （计划时长与实际动画不一致 → 滑步）。所以：还原成基础时长，再按本轮倍率折算。
+        _loop = self.lib.duration(move_name)
+        _clip = self.lib.movie(move_name) if (_loop > 0.0 and hasattr(self.lib, 'movie')) else None
+        if _clip is not None:
+            _loop = (_loop * float(getattr(_clip, 'playback_speed', 1.0))
+                     / (float(getattr(self, 'playback_speed', 1.0)) or 1.0)
+                     / max(1.0, run_boost))
+        loops, distance, duration = quantize_move(distance, stride, room, _loop)
         # 冷 meta 闸门（PR 评审 A1）：meta 后台化后，冷素材的 duration()
         # 返回退化值 0.0（frames() 同步退化为 1），按它们建计划会让位移在
         # 头几帧内按错的总帧数瞬间跑完（瞬移）。本轮放弃移动等后台 meta
@@ -2776,15 +2794,20 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         if new_facing != self.facing:
             self.facing = new_facing
             self._rebuild_frame()
+        # 纵向落点：避字钩子给出核对过的高度时以它为准，否则沿用原来的随机漫游。
+        # wander_target_y 必须**无条件**调用——它消耗一次随机数，若因为避字命中
+        # 就跳过，后续动画抽取的随机序列会整体错位（"同一颗种子跑出不同动画"，
+        # 测试注入的确定性 RNG 会静默失效）。
+        wander_cy = wander_target_y(
+            sp.vp.y() + sp.sbr.y(), sp.avail.top(), sp.avail.bottom(),
+            sp.sbr.height(), catalog.MOVE_MARGIN
+        ) - sp.sbr.y()
         self._move_plan = {
             'anim': move_name,
             'start_x': sp.vp.x(),
             'target_x': int(round(target_cx - sp.sbr.width() / 2)) - sp.sbr.x(),
             'start_y': sp.vp.y(),
-            'target_y': wander_target_y(
-                sp.vp.y() + sp.sbr.y(), sp.avail.top(), sp.avail.bottom(),
-                sp.sbr.height(), catalog.MOVE_MARGIN
-            ) - sp.sbr.y(),
+            'target_y': avoid_cy if avoid_cy is not None else wander_cy,
             'duration': duration,
             'loops': loops,
             'loops_done': 0,

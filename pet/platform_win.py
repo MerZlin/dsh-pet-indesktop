@@ -405,3 +405,197 @@ def _fg_fullscreen_win32() -> bool:
         return _fg_fullscreen_probe()[0]
     except Exception:
         return False
+
+
+# ---- Win32：抓屏排除与物理窗口矩形（避字移动用）----
+# 历史教训（2026-10-15 实机）：这里曾经有过 set_capture_exclusion
+# （WDA_EXCLUDEFROMCAPTURE），目的是"抓屏时把桌宠排除掉，从而看见它背后的内容"。
+# **实测不可用**：置位后窗口在物理屏幕上也**不再渲染**——用户看到的是"桌宠消失了"
+# （进程活着、窗口在屏内、DWM cloaked=0、动画照常，但人眼看不见；同一台机器上
+# 并排摆两个方块做 A/B，只有未置位的那个可见）。文档说的"只显示在显示器上"在这台
+# 机器的显示栈（装了远程/串流/覆盖层工具）上并不成立。
+# 现方案改为 PrintWindow 直接抓"桌宠底下那个窗口自己的内容"，不碰任何窗口属性，
+# 因此**不要再把 WDA 加回来**。tests/test_text_avoid_controller.py 有一条断言守着这点。
+
+PW_RENDERFULLCONTENT = 0x00000002
+_DWMWA_CLOAKED = 14
+_U32_PRIVATE = None
+_DWM_PRIVATE = None
+
+
+def _u32_private():
+    """本模块专用的一份 user32 绑定（自带 argtypes，与别处的设置互不干扰）。
+
+    **为什么必须有它**：ctypes 的 ``ctypes.windll.user32`` 是**进程级共享**的函数对象，
+    谁设了 argtypes 就定死了之后所有调用者的签名。本项目 ``vision.py`` 把它设成
+    ``POINTER(RECT)``，而本模块要用 ``_WinRect``（布局等价但是另一个类型）——两处互斥，
+    后设的那一方会让另一方的调用点直接 ``ArgumentError``。更糟的是它**静默**：
+    ``window_physical_rect`` 有 except 兜底（返回 None → 几何取不到 → 避字移动静默
+    不生效），``EnumWindows`` 回调里的异常则被 ctypes 自己吞掉（同样表现为"拿不到
+    窗口"）。所以本模块要用的这几个调用一律走自己这份独立绑定
+    （``ctypes.WinDLL`` 每次实例化都是新对象，不参与 ``windll`` 的共享缓存）。
+    """
+    global _U32_PRIVATE
+    if _U32_PRIVATE is None:
+        lib = ctypes.WinDLL('user32', use_last_error=True)
+        lib.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(_WinRect)]
+        lib.GetWindowRect.restype = wintypes.BOOL
+        lib.IsWindowVisible.argtypes = [wintypes.HWND]
+        lib.IsWindowVisible.restype = wintypes.BOOL
+        lib.IsIconic.argtypes = [wintypes.HWND]
+        lib.IsIconic.restype = wintypes.BOOL
+        lib.GetWindowThreadProcessId.argtypes = [wintypes.HWND,
+                                                 ctypes.POINTER(wintypes.DWORD)]
+        lib.GetWindowThreadProcessId.restype = wintypes.DWORD
+        _U32_PRIVATE = lib
+    return _U32_PRIVATE
+
+
+def window_physical_rect(hwnd: int, user32=None) -> tuple[int, int, int, int] | None:
+    """窗口的 Win32 物理矩形 (x, y, w, h)；拿不到返回 None。
+
+    本进程是 DPI aware（Qt 默认 per-monitor v2），所以这里拿到的就是**物理像素**，
+    与抓屏位图同一套坐标口径；它与 Qt 逻辑坐标的换算见 text_avoid.CoordMap。
+
+    ``user32`` 只给测试注入替身；真实路径走私有绑定（见 ``_u32_private`` 的说明），
+    **不再去改共享函数的 argtypes**——那正是本模块与 ``vision.py`` 互相踩的地方。
+    """
+    if os.name != 'nt':
+        return None
+    u32 = user32 if user32 is not None else _u32_private()
+    rect = _WinRect()
+    try:
+        if not u32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+            return None
+    except Exception:
+        return None
+    return (int(rect.left), int(rect.top),
+            int(rect.right - rect.left), int(rect.bottom - rect.top))
+
+
+def _is_cloaked(hwnd: int) -> bool:
+    """DWM 是否把该窗口 cloaked（隐藏、不渲染）。取不到属性时按"没被隐藏"处理。
+
+    HWND 在 64 位下是指针：这里显式声明签名（默认按 int32 传会截断句柄，查错窗口或
+    直接失败），并且同样走**私有绑定**——本函数跑在 EnumWindows 回调里，异常会被
+    ctypes 吞掉，表现成"这个窗口永远不算被隐藏"。
+    """
+    global _DWM_PRIVATE
+    try:
+        if _DWM_PRIVATE is None:
+            lib = ctypes.WinDLL('dwmapi', use_last_error=True)
+            lib.DwmGetWindowAttribute.argtypes = [wintypes.HWND, ctypes.c_uint,
+                                                  ctypes.c_void_p, ctypes.c_uint]
+            lib.DwmGetWindowAttribute.restype = ctypes.c_long
+            _DWM_PRIVATE = lib
+        value = ctypes.c_int(0)
+        hr = _DWM_PRIVATE.DwmGetWindowAttribute(
+            wintypes.HWND(hwnd), ctypes.c_uint(_DWMWA_CLOAKED),
+            ctypes.byref(value), ctypes.sizeof(value))
+        return hr == 0 and value.value != 0
+    except Exception:
+        return False
+
+
+def topmost_window_under(rect: tuple[int, int, int, int],
+                         exclude_pid: int = 0) -> int | None:
+    """返回与 rect 相交、且**盖在那块区域最上面**的那个窗口（不含 exclude_pid 的）。
+
+    EnumWindows 按 z 序从上到下枚举，所以第一个命中就是"桌宠底下那一个"。
+    跳过不可见/最小化/被 DWM 隐藏/零尺寸的窗口，避免抓到辅助窗口或空内容。
+    取不到返回 None。
+    """
+    if os.name != 'nt':
+        return None
+    u32 = _u32_private()          # 私有绑定：回调里的异常会被 ctypes 吞掉，绝不能踩共享 argtypes
+    left, top, width, height = rect
+    right, bottom = left + width, top + height
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _cb(hwnd, _lparam):  # noqa: ANN001
+        if not u32.IsWindowVisible(hwnd) or u32.IsIconic(hwnd):
+            return True
+        pid = wintypes.DWORD()
+        u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if exclude_pid and pid.value == exclude_pid:
+            return True
+        r = _WinRect()
+        u32.GetWindowRect(hwnd, ctypes.byref(r))
+        if r.right - r.left <= 0 or r.bottom - r.top <= 0:
+            return True
+        if r.right <= left or r.left >= right or r.bottom <= top or r.top >= bottom:
+            return True
+        if _is_cloaked(hwnd):
+            return True
+        found.append(int(hwnd))
+        return False
+
+    try:
+        u32.EnumWindows(_cb, 0)
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
+def print_window_pixels(hwnd: int) -> tuple[bytes, int, int] | None:
+    """用 PrintWindow(PW_RENDERFULLCONTENT) 取窗口**自身**内容，返回 (BGRA 字节, 宽, 高)。
+
+    这是"看穿桌宠"的现方案：拿窗口自己的渲染结果，与屏幕上谁盖着谁无关，因此
+    不需要给桌宠设任何窗口显示属性。实机验证：Chrome/Electron（GPU 加速）窗口能拿到
+    真实内容（对 DeepSeek Harness 窗口抓取后直接 OCR 得到 366 个词框/279 个汉字）。
+
+    局限：视频/UWP/部分全屏独占窗口可能只回黑图或纯色，调用方应把"内容方差极低"
+    当作**没有数据**处理（本轮不做判断），绝不当成"这里没字"。
+    """
+    if os.name != 'nt':
+        return None
+    r = window_physical_rect(hwnd)
+    if r is None or r[2] <= 0 or r[3] <= 0:
+        return None
+    width, height = r[2], r[3]
+    u32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    hdc = mem = bmp = None
+    try:
+        hdc = u32.GetWindowDC(wintypes.HWND(hwnd))
+        mem = gdi32.CreateCompatibleDC(hdc)
+        bmp = gdi32.CreateCompatibleBitmap(hdc, width, height)
+        gdi32.SelectObject(mem, bmp)
+        if not u32.PrintWindow(wintypes.HWND(hwnd), mem, PW_RENDERFULLCONTENT):
+            return None
+        info = _BitmapInfo()
+        info.bmiHeader.biSize = ctypes.sizeof(_BitmapInfoHeader)
+        info.bmiHeader.biWidth = width
+        info.bmiHeader.biHeight = -height      # 负数 = 自上而下
+        info.bmiHeader.biPlanes = 1
+        info.bmiHeader.biBitCount = 32
+        buf = ctypes.create_string_buffer(width * height * 4)
+        if not gdi32.GetDIBits(mem, bmp, 0, height, buf, ctypes.byref(info), 0):
+            return None
+        return buf.raw, width, height
+    except Exception:
+        return None
+    finally:
+        try:
+            if bmp:
+                gdi32.DeleteObject(bmp)
+            if mem:
+                gdi32.DeleteDC(mem)
+            if hdc:
+                u32.ReleaseDC(wintypes.HWND(hwnd), hdc)
+        except Exception:
+            pass
+
+
+class _BitmapInfoHeader(ctypes.Structure):
+    _fields_ = [('biSize', wintypes.DWORD), ('biWidth', ctypes.c_long),
+                ('biHeight', ctypes.c_long), ('biPlanes', wintypes.WORD),
+                ('biBitCount', wintypes.WORD), ('biCompression', wintypes.DWORD),
+                ('biSizeImage', wintypes.DWORD), ('biXPelsPerMeter', ctypes.c_long),
+                ('biYPelsPerMeter', ctypes.c_long), ('biClrUsed', wintypes.DWORD),
+                ('biClrImportant', wintypes.DWORD)]
+
+
+class _BitmapInfo(ctypes.Structure):
+    _fields_ = [('bmiHeader', _BitmapInfoHeader), ('bmiColors', wintypes.DWORD * 3)]

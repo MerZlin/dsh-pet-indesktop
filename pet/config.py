@@ -411,6 +411,44 @@ def _merge_file_interpret_data(raw: Any) -> dict:
     return result
 
 
+def _default_text_avoid_data() -> dict:
+    """避字移动（text_avoid）默认值；消费方 pet/text_avoid_controller.py。
+
+    默认关闭：它要读屏幕内容（虽然只在本机、不落盘、不外发），属于应当由用户
+    自己打开的能力。识别引擎复用项目自带的本地 OCR（RapidOCR，跨平台、断网可用）。
+    """
+    return {
+        # 主开关：桌宠自行选择移动目标时避开会压住汉字的落点
+        "enabled": False,
+        # 只把汉字当"要避开的字"：英文/数字默认不算（用户要的是别压住汉字）
+        "cjk_only": True,
+        # **最短**刷新间隔（秒）：识别是**按需**发起的（要决定落点 / 要判断此刻压不压字
+        # 时才刷），本值只压住请求频率，不是轮询周期。实测单次识别 = 起进程+载模型 1.7s
+        # + 推理 ~3s（上游 RapidOCR 只用 2 线程、关自旋），所以按需之后默认 10 秒足够：
+        # 桌宠一次移动 20~60 秒，最多也就刷一次。
+        "refresh_seconds": 10.0,
+        # 单次为避字最多额外走多远（逻辑像素）：防止为了一个字跑到屏幕另一头
+        "max_travel": 700.0,
+        # 纵向搜索余量（逻辑像素）：落点允许在当前位置上下这个范围内微调
+        "y_margin": 140.0,
+        # 落点扫描步长（逻辑像素）：越小越精细、候选越多
+        "step": 12.0,
+        # 立即反应：发现自己**此刻**正压着字时，不等下一次自选移动，直接打断
+        # 当前动画走开（默认关——打断动画是显眼的行为，交由用户选择）
+        "react_now": False,
+        # 避字跑动速度倍率：为避字改道时把动画与位移一起加快（位置由帧驱动，
+        # 所以是真的跑快了、不打滑）。只作用于那一次避字移动，普通漫游不受影响。
+        "run_speed": 1.5,
+    }
+
+
+def _merge_text_avoid_data(raw: Any) -> dict:
+    result = _default_text_avoid_data()
+    if isinstance(raw, dict):
+        result.update(raw)
+    return result
+
+
 def _default_chat_data():
     return {
         "enabled": True,
@@ -1245,6 +1283,7 @@ class Config:
             # 右键菜单「网络信息」入口显隐（弹窗只在打开时取一次数据，不轮询）。
             "network_info_menu_enabled": True,
             "proactive_screen": _default_proactive_screen_data(),
+            "text_avoid": _default_text_avoid_data(),
             "agent_link": _default_agent_link_data(),
             "file_interpret": _default_file_interpret_data(),
             "chat_ui_style": "modern",  # modern / classic（仅聊天窗口保留双实现）
@@ -1572,6 +1611,8 @@ class Config:
             self.data["agent_link"] = _merge_agent_link_data(raw["agent_link"])
         if "file_interpret" in raw:
             self.data["file_interpret"] = _merge_file_interpret_data(raw["file_interpret"])
+        if "text_avoid" in raw:
+            self.data["text_avoid"] = _merge_text_avoid_data(raw["text_avoid"])
         self._migrate_click_sound_config(raw)
         self._migrate_decode_broker_config(raw)
         self._migrate_menu_template_config(raw)
@@ -2043,6 +2084,22 @@ class Config:
             fi["progress_interval_seconds"] = _float_or_default(
                 fi.get("progress_interval_seconds"), 15.0, 5.0, 120.0
             )
+        # 避字移动（text_avoid）：嵌套键归一化（布尔防字符串误开、数值钳到可用
+        # 区间）；未认识的键随 _merge_text_avoid_data 保留（对齐 file_interpret）。
+        # step/max_travel/y_margin 必须夹住下限——手改成 0 会让候选网格退化，
+        # 决策退化成"永远不动"（不是崩溃，但用户会以为功能坏了）。
+        ta = self.data.get("text_avoid")
+        if isinstance(ta, dict):
+            ta["enabled"] = _bool_or_default(ta.get("enabled", False), False)
+            ta["cjk_only"] = _bool_or_default(ta.get("cjk_only", True), True)
+            ta["react_now"] = _bool_or_default(ta.get("react_now", False), False)
+            # 跑动速度倍率：下限 1.0（不许靠它把桌宠调慢，那只会让"赶路"变折磨），
+            # 上限 3.0（再快动画会糊成一团，失去"跑"的可读性）。
+            ta["run_speed"] = _float_or_default(ta.get("run_speed"), 1.5, 1.0, 3.0)
+            ta["refresh_seconds"] = _float_or_default(ta.get("refresh_seconds"), 10.0, 5.0, 300.0)
+            ta["max_travel"] = _float_or_default(ta.get("max_travel"), 700.0, 0.0, 4000.0)
+            ta["y_margin"] = _float_or_default(ta.get("y_margin"), 140.0, 0.0, 600.0)
+            ta["step"] = _float_or_default(ta.get("step"), 12.0, 2.0, 100.0)
         self.data.update(_clean_collision_data(self.data))
 
     def get(self, key, default=None):
