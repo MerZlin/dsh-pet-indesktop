@@ -3759,7 +3759,8 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
 
     def show_bubble(self, text: str, duration_ms: int = 3200, subtitle: str | None = None,
                     *, sticky: bool = False, buttons: list[tuple[str, object]] | None = None,
-                    title_first: bool = False, width_locked: bool = False) -> None:
+                    title_first: bool = False, width_locked: bool = False,
+                    reserve: bool = True) -> None:
         """向桌宠头顶冒泡提示（app 层反馈用，非侵入）。重要气泡会占用气泡位。
 
         ``sticky=True`` 显示「一直挂到主动关闭」的气泡（审批等）：不启动自动
@@ -3790,7 +3791,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
             )
             return
         _set_speech_bubble_interactive(self)
-        self.hold_bubble(duration_ms / 1000.0 + 2.0)
+        # Match the overlay host: lyrics do not reserve the notification slot.
+        if reserve:
+            self.hold_bubble(duration_ms / 1000.0 + 2.0)
         self._speech_bubble.show_text(
             str(text), window_placement.bubble_anchor_rect(self), duration_ms, pet_scale=self.scale,
             subtitle=str(subtitle or ""), title_first=title_first, width_locked=width_locked)

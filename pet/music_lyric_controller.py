@@ -610,7 +610,8 @@ class MusicLyricController(QObject):
         注意：不要改成"记住绝对坐标钉回去"——鱼会游走，钉绝对坐标会把
         气泡丢在原地单飞（2026-09-17 实机踩坑）。
 
-        - ``hold_bubble`` 占位，避免刚显示就被自言自语顶掉。
+        - 歌词是最低优先级的被动内容，不占用重要通知的气泡位。
+          联动/聊天接管后，由 ``_yield_active`` 让路，到期自然恢复。
         - 每拍都要重送一次以续期，否则气泡会先于句子超时消失、闪一下再来。
         """
         # 点击台词 / 被动弹窗正在显示：让路，别把它瞬间盖掉。
@@ -628,12 +629,9 @@ class MusicLyricController(QObject):
         self._last_lyric = lyric
 
         try:
-            hold = getattr(self.win, "hold_bubble", None)
-            if callable(hold):
-                hold(POLL_MS / 1000.0 * 3)
             # 时长给足一拍有余：真正的续期由每拍重新调用完成。
             shower(text, duration_ms=POLL_MS * 2, subtitle=subtitle or None,
-                   title_first=True, width_locked=self._width_locked)
+                   title_first=True, width_locked=self._width_locked, reserve=False)
             self._last_shown = (text, subtitle)
             # 首句显示完就把宽度定下来，后续同首歌不再改宽。
             self._width_locked = True
