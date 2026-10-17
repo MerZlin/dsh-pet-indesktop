@@ -12,7 +12,8 @@
   继续被驱动；overlay.start() 在 stop() 后能重新挂回；
 - 时间基：首 tick 取档位间隔、显式 dt 直通、T3 心跳不跑仿真；
 - M-1：升档同步立即（note_kinetic）、note_frame 喂"动画在播"、
-  刷新率取多成员最高值、refresh 不覆盖非 T0 档位间隔；
+  刷新率取**屏枚举**里最高的一档（单合成窗铺满整个虚拟桌面，成员增减不再是
+  取数口径）、refresh 不覆盖非 T0 档位间隔；
 - V-7：tick 路径逐 overlay 兜底卡死拖拽。
 
 纪律（AGENTS.md 时序测试）：同步直调 ``on_tick(dt=...)``，不启动真实 QTimer、
@@ -336,16 +337,27 @@ def test_note_frame_feeds_animating_input_and_any_motion_covers_all_overlays(mon
     assert seen["any_motion"] is True         # M-1 不变量：任一成员在动 ⇒ 必 T0
 
 
-def test_refresh_uses_fastest_attached_screen_and_survives_detach():
+def test_refresh_uses_the_fastest_enumerated_screen(monkeypatch):
+    """刷新率 = 屏枚举里最高一档（与已挂载成员无关）。
+
+    单合成窗覆盖整个虚拟桌面：窗口自己那块屏（Qt 按窗口左上角归属）不等于宠所在
+    屏，所以取数改读 ``QGuiApplication.screens()``——一块 60Hz 副屏不该把整组
+    tick 拖到低档。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    slow = FakeScreen(60.0)
+    fast = FakeScreen(170.0)
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [slow]))
     driver = TickDriver()
-    slow = FakeOverlay(screen=FakeScreen(60.0))
-    fast = FakeOverlay(screen=FakeScreen(170.0))
-    driver.attach(slow)
+    driver.attach(FakeOverlay(screen=slow))
     assert driver.timer.interval() == TickDriver.tick_interval_ms(60.0)
-    driver.attach(fast)
+
+    monkeypatch.setattr(QGuiApplication, "screens",
+                        staticmethod(lambda: [slow, fast]))
+    driver.refresh_tick_interval()
+
     assert driver.timer.interval() == TickDriver.tick_interval_ms(170.0)  # 6ms
-    driver.detach(fast)
-    assert driver.timer.interval() == TickDriver.tick_interval_ms(60.0)
 
 
 def test_refresh_does_not_clobber_downgraded_interval():

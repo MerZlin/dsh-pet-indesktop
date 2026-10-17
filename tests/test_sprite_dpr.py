@@ -27,7 +27,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QObject, QPoint, QPointF, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QShowEvent
+from PySide6.QtGui import (
+    QColor, QGuiApplication, QImage, QPainter, QPixmap, QShowEvent)
 from PySide6.QtWidgets import QApplication
 
 from pet import catalog
@@ -424,10 +425,15 @@ def test_watch_rewires_dpi_signals_to_new_screen():
     assert sprite.dpr == 2.0
 
 
-def test_screen_changed_adopts_new_screen_and_refeeds():
-    """对照 test_screen_changed_signal_forces_rebuild_with_new_dpr：跨屏换源+重建。"""
+def test_screen_changed_adopts_new_screen_and_refeeds(monkeypatch):
+    """对照 test_screen_changed_signal_forces_rebuild_with_new_dpr：跨屏换源+重建。
+
+    tick 刷新率取**屏枚举**里最高的那一档（单合成窗铺满整个虚拟桌面，窗口自己
+    那块屏不等于宠所在屏），故这台"机器"上只有 scr_b 这块屏。
+    """
     scr_a = FakeScreen(dpr=1.0)
     scr_b = FakeScreen((0, 0, 2560, 1440), dpr=2.0, refresh=144.0)
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [scr_b]))
     overlay = OverlayWindow(screen=scr_a)
     sprite = _make_sprite(dpr=1.0)
     overlay.add_sprite(sprite)

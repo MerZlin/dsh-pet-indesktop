@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""「允许桌宠跨屏」开关：默认关、重启生效，关着时只有启动那块屏一张窗。
+"""「允许桌宠跨屏」开关：默认关、重启生效，关着时活动区只留启动那块屏。
 
-用户口径（2026-10-16）：每块有桌宠的屏各一张合成窗这个能力由**一个全局开关**
-控制，默认关（默认关 = 单显示器用户与旧行为逐位相同）；关着时全部桌宠只留在
-启动时那块屏、拖不过去，也不会多开窗口；开关是**重启级**（进程内快照）。
+用户口径（2026-10-17）：一张合成窗铺满整个虚拟桌面，**活动区**（宠能站的地方）
+由**一个全局开关**控制，默认关（默认关 = 单显示器用户与旧行为逐位相同）；
+关着时活动区只剩启动时那块屏，宠拖不过去；开关是**重启级**（进程内快照）。
 
 位置持久化的数据语义（本文件盯住的那一条）：档案里的 ``screen_name`` 是
 **屏归属**，只有有意把某只拖到另一块屏时才写（``_remember_sprite_screen``）；
@@ -15,7 +15,7 @@
 
 纪律：offscreen；假屏只补**类级** ``QGuiApplication``（补实例属性会在 PySide6
 对象上留影子，撤不干净）；全部断言走公开接缝（``hosts()`` / ``host_for_sprite``
-/ ``move_sprite_to_screen`` / ``route_drag_to_screen`` / 真鼠标事件 / 真档案文件）。
+/ ``move_sprite_to_screen`` / 真鼠标事件 / 真档案文件）。
 """
 from __future__ import annotations
 
@@ -53,6 +53,14 @@ def two_screens():
             FakeScreen(SECONDARY_GEO, SECONDARY_AVAIL, name="DISPLAY2"))
 
 
+def _screen_of(sprite):
+    """这只宠当前所在屏（由用例的壳提供，见 ``_shell`` 注入的 resolver）。"""
+    return _CURRENT[0]._screen_of_sprite(sprite)
+
+
+_CURRENT = [None]
+
+
 def _install(monkeypatch, screens):
     monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: list(screens)))
     monkeypatch.setattr(QGuiApplication, "primaryScreen",
@@ -69,9 +77,11 @@ def _config(tmp_path, *, allow_cross_screen=False, **values) -> Config:
 
 
 def _shell(cfg, screen) -> OverlayShell:
-    return OverlayShell(
+    shell = OverlayShell(
         app, indep._Instance(cfg), screen=screen,
         sprite_factory=lambda lib, pos, scale: PetSprite(lib, pos=pos, scale=scale))
+    _CURRENT[0] = shell
+    return shell
 
 
 def _seed_two_pets(config_dir, *, slot0_screen=None, slot1_screen=None):
@@ -129,7 +139,8 @@ def test_switch_takes_effect_only_after_restart(tmp_path, monkeypatch):
         assert shell2._cross_screen_allowed is True
         assert len(_pets(shell2)) == 2, "前提：活跃宠清单让子宠复活"
         assert shell2.move_sprite_to_screen(_child(shell2), secondary) is True
-        assert len(shell2.hosts()) == 2
+        assert len(shell2.hosts()) == 1, "单窗：允许跨屏也不多开窗口"
+        assert shell2._screen_of_sprite(_child(shell2)) is secondary
     finally:
         _teardown(shell2)
 
@@ -172,7 +183,8 @@ def test_off_refuses_to_move_a_pet_to_another_screen(tmp_path, monkeypatch):
         assert shell.host_for_sprite(child).screen is primary
         assert child.pos == pos, "拒绝搬移就是一动都不动"
         assert len(shell.hosts()) == 1
-        assert shell.host_for_screen(secondary) is None
+        assert [screen for screen, _r in shell._main_host.activity] == [primary], (
+            "拒绝搬移 = 目标屏不在活动区里（窗仍铺满全桌面）")
         shell.save_spawned_positions()
         assert _profile(cfg.dir, f"slot-{slot}").get("screen_name") is None, (
             "被拒绝的搬移不得留下屏归属")
@@ -180,8 +192,8 @@ def test_off_refuses_to_move_a_pet_to_another_screen(tmp_path, monkeypatch):
         _teardown(shell)
 
 
-def test_off_keeps_a_cross_screen_drag_inside_the_single_window(tmp_path, monkeypatch):
-    """真鼠标拖到缝的另一侧：不换宿主、不多开窗，宠被本窗边界钳住。"""
+def test_off_keeps_a_cross_screen_drag_inside_the_started_screen(tmp_path, monkeypatch):
+    """真鼠标拖到缝的另一侧：宠被活动区（只剩启动那块屏）钳住，拖不过去。"""
     primary, secondary = two_screens()
     _install(monkeypatch, [primary, secondary])
     cfg = _config(tmp_path, allow_cross_screen=False)
@@ -197,12 +209,13 @@ def test_off_keeps_a_cross_screen_drag_inside_the_single_window(tmp_path, monkey
         for _ in range(16):
             cursor = QPointF(cursor.x() + 40.0, cursor.y())
             overlay.mouseMoveEvent(_move(cursor - origin, cursor))
-            assert shell.host_for_sprite(main).screen is primary
+            assert _screen_of(main) is primary
 
-        assert shell.route_drag_to_screen(main, cursor) is False
         assert secondary.geometry().contains(cursor.toPoint()), (
             "前提：光标确实拖到了另一块屏上——否则本用例测的就不是开关")
-        assert len(shell.hosts()) == 1, "关闭跨屏拖拽不得催生第二张窗"
+        assert len(shell.hosts()) == 1, "单窗：拖拽不会催生第二个窗口"
+        assert [screen for screen, _r in shell._main_host.activity] == [primary], (
+            "关闭跨屏 = 活动区只剩启动那块屏")
         assert main in overlay.sprites
         # 宠被本屏可用区钳住：身体框仍完整落在启动那块屏的可用区里
         body_center = QPointF(main.body_rect().center())
@@ -248,7 +261,7 @@ def test_off_still_persists_ordinary_drag_ratios(tmp_path, monkeypatch):
         shell.save_position()
         profile = _profile(cfg.dir, "slot-0")
         body = main.body_rect()
-        bounds = shell.host_for_sprite(main).bounds
+        bounds = indep._activity_of(shell, primary)
         expected_rx = (body.x() + body.width() / 2.0 - bounds.left()) / bounds.width()
         assert profile["rx"] == pytest.approx(expected_rx, abs=0.01), (
             "拖到哪儿就记哪儿的比例——这是单屏普通拖动持久化")
@@ -309,7 +322,7 @@ def test_off_and_on_round_trip_returns_pets_to_their_own_screens(tmp_path, monke
     off_shell = _shell(cfg, primary)
     try:
         off_child = _child(off_shell)
-        assert off_shell.host_for_sprite(off_child).screen is primary
+        assert off_shell._screen_of_sprite(off_child) is primary
         assert len(off_shell.hosts()) == 1
         _drag_on_current_screen(off_shell, off_child)
         off_shell.save_position()
@@ -327,12 +340,12 @@ def test_off_and_on_round_trip_returns_pets_to_their_own_screens(tmp_path, monke
     on_shell = _shell(cfg, primary)
     try:
         back = _child(on_shell)
-        host = on_shell.host_for_sprite(back)
-        assert host.screen is secondary
-        assert len(on_shell.hosts()) == 2
+        assert on_shell._screen_of_sprite(back) is secondary
+        assert len(on_shell.hosts()) == 1, "单窗：回到副屏也不多开窗口"
         body = back.body_rect()
-        got = ((body.x() + body.width() / 2.0 - host.bounds.left()) / host.bounds.width(),
-               (body.y() + body.height() / 2.0 - host.bounds.top()) / host.bounds.height())
+        rect = indep._activity_of(on_shell, secondary)
+        got = ((body.x() + body.width() / 2.0 - rect.left()) / rect.width(),
+               (body.y() + body.height() / 2.0 - rect.top()) / rect.height())
         assert got == pytest.approx(ratio, abs=0.01), (
             "按原比例回到原来那块屏上的原位置")
         on_profile = _profile(cfg.dir, f"slot-{slot}")
@@ -355,7 +368,7 @@ def test_child_without_memory_does_not_follow_the_main_pet(tmp_path, monkeypatch
         shell.spawn_pet()
         child = _child(shell)
         slot = shell._spawned_slots[child]
-        assert shell.host_for_sprite(child).screen is primary
+        assert _screen_of(child) is primary
         assert shell.move_sprite_to_screen(shell.sprite, secondary) is True
         shell.save_position()
         shell.save_spawned_positions()
@@ -368,9 +381,9 @@ def test_child_without_memory_does_not_follow_the_main_pet(tmp_path, monkeypatch
 
     revived = _shell(cfg, primary)
     try:
-        assert revived.host_for_sprite(revived.sprite).screen is secondary, (
+        assert revived._screen_of_sprite(revived.sprite) is secondary, (
             "主宠按自己的记忆回副屏")
-        assert revived.host_for_sprite(_child(revived)).screen is primary, (
+        assert revived._screen_of_sprite(_child(revived)) is primary, (
             "没换过屏的子宠不许跟着主宠跑到副屏")
     finally:
         _teardown(revived)
@@ -400,7 +413,7 @@ def test_a_temporarily_missing_screen_keeps_the_remembered_assignment(
 
         shell.handle_screen_removed(secondary)
 
-        assert shell.host_for_sprite(child).screen is primary, "拔屏后先落在活着的屏上"
+        assert shell._screen_of_sprite(child) is primary, "拔屏后先落在活着的屏上"
         # 贴边拖（钳制把这只按在可用区边缘）+ 收尾落盘：都不许写档案
         _drag_on_current_screen(shell, child, dx=60.0, dy=0.0, steps=10)
         shell.save_spawned_positions()
@@ -415,11 +428,11 @@ def test_a_temporarily_missing_screen_keeps_the_remembered_assignment(
     revived = _shell(cfg, primary)
     try:
         back = _child(revived)
-        host = revived.host_for_sprite(back)
-        assert host.screen is secondary, "屏插回来，这只仍回到它自己那块屏"
+        assert revived._screen_of_sprite(back) is secondary, "屏插回来，这只仍回到它自己那块屏"
         body = back.body_rect()
-        got = ((body.x() + body.width() / 2.0 - host.bounds.left()) / host.bounds.width(),
-               (body.y() + body.height() / 2.0 - host.bounds.top()) / host.bounds.height())
+        rect = indep._activity_of(revived, secondary)
+        got = ((body.x() + body.width() / 2.0 - rect.left()) / rect.width(),
+               (body.y() + body.height() / 2.0 - rect.top()) / rect.height())
         assert got == pytest.approx(ratio, abs=0.01), "回到原来那块屏上的原位置"
     finally:
         _teardown(revived)

@@ -19,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRect, Qt, Signal
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from pet.overlay_peripherals import FullscreenCursorWatcher
@@ -93,6 +93,9 @@ class CapSprite:
 
     def set_bounds(self, bounds):
         pass
+
+    def set_clamp_rects(self, rects):
+        self.clamp_rects = None if rects is None else tuple(rects)
 
     def set_pos(self, pos):
         self.pos = QPointF(pos)
@@ -667,13 +670,15 @@ def test_refresh_settings_reapplies(tmp_path):
     shell._delete_runtime_marker()
 
 
-def test_refresh_rate_change_rewires_tick_interval(tmp_path):
+def test_refresh_rate_change_rewires_tick_interval(tmp_path, monkeypatch):
     """同分辨率切刷新率（60→180Hz）时 refreshRateChanged 应让 tick 间隔立即重读。
 
     回归：此前只接 geometryChanged，同分辨率模式切换不重读刷新率，
-    运行中的桌宠卡在 16ms(60Hz) 档直到重启（任务A 实锤缺口）。
+    运行中的桌宠卡在 16ms(60Hz) 档直到重启（任务A 实锤缺口）。刷新率取**屏枚举**
+    里最高一档（单窗覆盖整个虚拟桌面），故这台"机器"上只有这块假屏。
     """
     screen = FakeScreen((0, 0, 1920, 1080), (0, 0, 1920, 1040), refresh=60.0)
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [screen]))
     shell = _make_shell(tmp_path, {"on_top": False}, screen=screen)
     shell.start()
     driver = shell.overlay.tick_driver

@@ -4,7 +4,7 @@
 覆盖（真实 OverlayWindow + 真实 PetSprite，假屏只包装显式方法）：
 - 主 + 2 子肥鱼在 ``geometryChanged`` / ``availableGeometryChanged`` 后**每只**都按
   同一份 old_bounds → new_bounds 比例迁移（三组几何：常规缩放、原点右移、负坐标迁回）；
-  迁移发生在 ``_apply_bounds`` 之前——先钳到新边界会把旧位置比例抹掉；
+  迁移的比例取自换域**之前**——先钳到新边界会把旧位置比例抹掉；
 - 新可用区比身体还小时钳制退化与既有语义一致（``PetSprite._clamp_axis`` 上界<下界 → 贴左下）；
 - 气泡跟随器存在时 overlay 全局原点变化（屏位置变）后锚点 = ``body_rect`` + **新**原点，
   且不重建跟随器/气泡；仅 available 变化（任务栏）原点不变、同样不重建；
@@ -22,7 +22,7 @@ import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QObject, QPoint, QPointF, QRect, QTimer, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, QRect, QRectF, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 import tests.test_overlay_window_capabilities as cap
@@ -125,8 +125,13 @@ def _place_center(sprite, cx, cy):
 
 
 def _ratio_of(rect: QRect, bounds: QRect) -> tuple[float, float]:
+    """身体框中心相对可用区的比例（与产品 ``_sprite_geometry`` 同口径）。"""
     return ((rect.x() + rect.width() / 2.0 - bounds.x()) / bounds.width(),
             (rect.y() + rect.height() / 2.0 - bounds.y()) / bounds.height())
+
+
+def _body_of(sprite) -> QRect:
+    return sprite.body_rect()
 
 
 def _expected_center(rx, ry, new_bounds: QRect) -> tuple[float, float]:
@@ -179,25 +184,26 @@ def test_all_pets_migrate_on_same_bounds_ratio(tmp_path, old_geo, old_avail,
         places = [(0.5, 0.5), (0.25, 0.35), (0.8, 0.75)]
         ratios = []
         for sprite, (fx, fy) in zip(pets, places):
-            rect = _place_center(sprite,
-                                 old_bounds.x() + fx * old_bounds.width(),
-                                 old_bounds.y() + fy * old_bounds.height())
-            ratios.append(_ratio_of(rect, old_bounds))
+            _place_center(sprite,
+                          old_bounds.x() + fx * old_bounds.width(),
+                          old_bounds.y() + fy * old_bounds.height())
+            ratios.append(_ratio_of(_body_of(sprite), old_bounds))
         before = [sprite.pos for sprite in pets]
 
         screen.set_rects(new_geo, new_avail)
         screen.geometryChanged.emit(screen.geometry())  # 真信号接线
 
         new_bounds = QRect(shell._bounds)
-        assert new_bounds == QRect(shell._local_bounds(screen))
+        # 合成窗 = 各屏可用工作区并集，局部坐标从 (0,0) 起
+        assert new_bounds == QRect(0, 0, new_avail[2], new_avail[3])
         for sprite, (rx, ry), pos_before in zip(pets, ratios, before):
-            rect = sprite.rect()
+            rect = _body_of(sprite)
             cx, cy = _expected_center_clamped(rx, ry, new_bounds, rect)
             # ±2px 预算：比例取自整数 rect（中心 0.5px 量化）→ 换成新尺寸 → 落位再取整
             assert rect.center().x() == pytest.approx(cx, abs=2.0), "每宠按同一 new_bounds 迁移"
             assert rect.center().y() == pytest.approx(cy, abs=2.0)
             assert sprite.pos != pos_before or old_bounds == new_bounds
-            assert sprite.bounds == QRect(new_bounds)  # 边界照旧应用到全部
+            assert sprite.bounds == QRectF(new_bounds)  # 边界照旧应用到全部
     finally:
         shell._delete_runtime_marker()
 
@@ -205,8 +211,8 @@ def test_all_pets_migrate_on_same_bounds_ratio(tmp_path, old_geo, old_avail,
 def test_migration_precedes_bounds_apply_so_ratio_is_not_lost(tmp_path):
     """子肥鱼贴在旧可用区右侧：先应用新边界再迁移会把比例钳掉。
 
-    先 ``_apply_bounds`` 时 ``PetSprite.set_bounds`` 会就地钳一次（把 0.85 的
-    比例钳成 ~0.71），随后迁移按被改过的位置算——本用例锁死"迁移在边界之前"。
+    先换域时 ``PetSprite.set_bounds`` 会就地钳一次（把 0.85 的比例钳成 ~0.71），
+    随后迁移按被改过的位置算——本用例锁死"比例在换域之前取"。
     数值刻意选成"比例迁移结果合法落在新可用区内"（不触发 clamp），故观测值
     只能是比例值本身，钳过与没钳过可直接区分。
     """
@@ -215,10 +221,10 @@ def test_migration_precedes_bounds_apply_so_ratio_is_not_lost(tmp_path):
     try:
         old_bounds = QRect(shell._bounds)
         child = shell._spawned[0]
-        near_right = _place_center(child,
-                                   old_bounds.x() + 0.85 * old_bounds.width(),
-                                   old_bounds.y() + 0.5 * old_bounds.height())
-        rx, ry = _ratio_of(near_right, old_bounds)
+        _place_center(child,
+                      old_bounds.x() + 0.85 * old_bounds.width(),
+                      old_bounds.y() + 0.5 * old_bounds.height())
+        rx, ry = _ratio_of(_body_of(child), old_bounds)
         assert 0.8 < rx < 0.9, "夹具前提：贴右但未贴边"
 
         screen.set_rects((0, 0, 1600, 900), (0, 0, 1600, 860))
@@ -226,11 +232,11 @@ def test_migration_precedes_bounds_apply_so_ratio_is_not_lost(tmp_path):
 
         new_bounds = QRect(shell._bounds)
         cx, cy = _expected_center(rx, ry, new_bounds)
-        rect = child.rect()
-        assert rect.center().x() == pytest.approx(cx, abs=1.0)
-        assert rect.center().y() == pytest.approx(cy, abs=1.0)
+        rect = _body_of(child)
+        assert rect.x() + rect.width() / 2.0 == pytest.approx(cx, abs=1.0)
+        assert rect.y() + rect.height() / 2.0 == pytest.approx(cy, abs=1.0)
         # 反例：先套新边界会把旧绝对位置钳成 ~0.71 的比例，观测值会塌到新宽 3/4 附近
-        assert rect.center().x() > 0.8 * new_bounds.width(), "不得先 clamp 丢旧位置比例"
+        assert rect.x() + rect.width() / 2.0 > 0.8 * new_bounds.width(), "不得先 clamp 丢旧位置比例"
     finally:
         shell._delete_runtime_marker()
 
@@ -261,15 +267,15 @@ def test_bubble_origin_follows_moved_screen_geometry(tmp_path):
         follower = shell._bubble_follower
         bubble = follower.bubble
         follower.bubble = FakeBubble()
-        assert follower._origin == QPoint(1920, 0)
+        assert follower._origin == QPoint(1920, 40)
 
         # 屏整体移到 (1700, 120)，可用区尺寸不变 → bounds 不变、原点变
         screen.set_rects((1700, 120, 1920, 1080), (1700, 160, 1920, 1040))
         screen.geometryChanged.emit(screen.geometry())
 
-        new_origin = QPoint(1700, 120)
-        assert shell.overlay.geometry() == QRect(1700, 120, 1920, 1080)
-        assert shell._bounds == QRect(0, 40, 1920, 1040)  # 同尺寸：边界不变
+        new_origin = QPoint(1700, 160)
+        assert shell.overlay.geometry() == QRect(1700, 160, 1920, 1040)
+        assert shell._bounds == QRect(0, 0, 1920, 1040)  # 同尺寸：边界不变
         body = shell.sprite.body_rect()
         assert follower.anchor() == QRect(new_origin + body.topLeft(), body.size())
         assert follower.anchor().topLeft() != QPoint(1920, 0) + body.topLeft()
@@ -297,11 +303,11 @@ def test_available_only_change_keeps_origin_and_reuses_bubble(tmp_path):
         screen.set_rects((1920, 0, 1920, 1080), (1920, 40, 1920, 1000))
         screen.availableGeometryChanged.emit(screen.availableGeometry())
 
-        assert shell._bounds == QRect(0, 40, 1920, 1000)
-        assert follower._origin == QPoint(1920, 0)
+        assert shell._bounds == QRect(0, 0, 1920, 1000)
+        assert follower._origin == QPoint(1920, 40)
         assert shell._bubble_follower is follower
         body = shell.sprite.body_rect()
-        assert follower.anchor() == QRect(QPoint(1920, 0) + body.topLeft(), body.size())
+        assert follower.anchor() == QRect(QPoint(1920, 40) + body.topLeft(), body.size())
         assert anchor_before.topLeft() != QPoint(0, 0)  # 夹具本身非空断言
     finally:
         shell._delete_runtime_marker()

@@ -2,11 +2,12 @@
 """B7a 生命周期收口：屏迁移后的监听重挂/气泡不丢 + ``stop()`` 释放子宠库与在飞供给。
 
 - **F2（确定缺口）**：三条 ``sprite-removed`` 监听（``behavior.forget`` /
-  ``probe.forget`` / ``throw_egg.forget``）只在 ``_build`` 注册，``_migrate_to_screen``
-  重建 ``ShellOverlayWindow`` 后不重挂——屏热插拔/主屏切换之后再退出任意一只宠，
-  ``remove_sprite`` 不再注销行为/探头/彩蛋状态（强引用 + 探头 armed 状态残留）；
+  ``probe.forget`` / ``throw_egg.forget``）只在 ``_build`` 注册，**重建 overlay**
+  的路径（今天的单窗拓扑已不存在重建，但任何未来"重建窗口"的实现）必须重挂——
+  否则屏事件之后再退出任意一只宠，``remove_sprite`` 不再注销行为/探头/彩蛋状态；
 - **屏迁移丢气泡（已登记 §2.3.1）**：``_bind_bubble`` 重建跟随器会 close 旧气泡窗，
-  新窗口不 show、``_sticky_*`` 也不重挂——旧版气泡是独立 Tool 窗，跨屏只跟随不销毁；
+  新窗口不 show、``_sticky_*`` 也不重挂。单窗下换家不重建窗口/跟随器，这两条
+  因此退化成"换家之后气泡与监听都还在"的回归护栏；
 - **F3（确定缺口）**：``stop()`` 不遍历子宠库 ``shutdown()``、也不
   ``_cancel_frameseq_provisions()``（口径见 ``_on_about_to_quit`` / ``_on_session_end``）。
 
@@ -35,17 +36,20 @@ def _make_shell(tmp_path, values=None):
 
 
 def _migrate(shell):
-    """按真实入口迁移到主屏（fake screen → primaryScreen）。"""
+    """按真实入口把"家"迁到主屏（fake screen → primaryScreen）。
+
+    单窗铺满整个虚拟桌面：换家**不重建窗口**，故这里的前提断言是"还是同一张窗"。
+    """
     primary = QGuiApplication.primaryScreen()
     old = shell.overlay
     shell._migrate_to_screen(primary)
-    assert shell.overlay is not old, "前提：迁移确实重建了 overlay"
+    assert shell.overlay is old, "前提：换家不重建合成窗"
     return old
 
 
 # ---------------------------------------------------------------- F2：监听重挂
-def test_migrate_to_screen_rewires_sprite_removed_listeners(tmp_path):
-    """迁移重建 overlay 后三条 sprite-removed 监听必须仍在（否则退出子宠残留）。"""
+def test_migrate_to_screen_keeps_sprite_removed_listeners(tmp_path):
+    """换家之后三条 sprite-removed 监听必须仍在（否则退出子宠残留）。"""
     shell, _lib = _make_shell(tmp_path)
     try:
         shell.spawn_pet()
@@ -127,12 +131,11 @@ def test_migrate_to_screen_restores_transient_bubble(tmp_path):
         shell._delete_runtime_marker()
 
 
-def test_migrate_to_screen_does_not_orphan_old_bubble(tmp_path):
-    """重建跟随器时旧气泡不得被"隐藏回调"重新挂回（孤儿顶层气泡）。
+def test_migrate_to_screen_does_not_orphan_the_bubble(tmp_path):
+    """换家后气泡仍是同一只在显示：既没有孤儿顶层气泡，也没有第二条副本。
 
-    新气泡已在迁移中被替换：旧窗必须真的收掉，否则桌面上会留下一个不再跟随
-    sprite、也不受壳管理的孤儿顶层气泡（迁移期 overlay 尚未 show，隐藏回调
-    因此早退——这条用例锁住该顺序不被改坏）。
+    单窗下换家不动窗口/跟随器，所以"旧气泡被替换掉却没收掉"的孤儿路径整体消失；
+    这条用例锁住"换家之后桌上恰好只有这一只气泡"。
     """
     shell, _lib = _make_shell(tmp_path)
     try:
@@ -144,8 +147,8 @@ def test_migrate_to_screen_does_not_orphan_old_bubble(tmp_path):
 
         _migrate(shell)
 
-        assert shell._speech_bubble is not old_bubble
-        assert old_bubble.isVisible() is False, "被替换掉的旧气泡窗必须收掉"
+        assert shell._speech_bubble is old_bubble, "换家不重建气泡"
+        assert old_bubble.isVisible() is True, "气泡照旧显示（不因换家消失）"
     finally:
         shell.stop()
         shell.overlay.close()

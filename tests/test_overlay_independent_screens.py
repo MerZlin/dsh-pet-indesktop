@@ -1,26 +1,25 @@
 # -*- coding: utf-8 -*-
-"""每只宠物独立放任意屏：一屏一张 overlay、逐只迁移、逐只屏记忆。
+"""每只宠物独立放任意屏：**一张**合成窗覆盖整个虚拟桌面、逐只屏归属。
 
-用户口径：**每只宠物可以独立放在任意一块屏上**，同一个进程里**每块有宠的屏只开
-一张合成窗**（进程、tick 时钟与共享服务仍只有一份）。本次立的是"逐只屏归属"这个
-合同，两条公开接缝：
+用户口径：**每只宠物可以独立放在任意一块屏上**，而全进程只有**一张**合成窗
+（窗口 = 各屏可用工作区的并集包围矩形；进程、tick 时钟与共享服务仍只有一份）。
+本次立的是"逐只屏归属"这个合同，两条公开接缝：
 
-- ``shell.host_for_sprite(sprite)`` → 这只宠的宿主（``.screen`` / ``.overlay`` /
-  ``.bounds``；``bounds`` 是这块屏可用区在合成窗**局部**坐标下的矩形）；
-- ``shell.move_sprite_to_screen(sprite, screen, global_pos=None)`` → 只搬**这一只**
-  （返回是否真的换了宿主）；``global_pos`` = 这只在目标屏上的**全局左上角**
-  （普通拖动跨屏喂的就是"光标 - 抓取偏移"，鼠标事件接线属拖拽核心），不给则只换
-  坐标系、保持当前全局位置。
+- ``shell.host_for_sprite(sprite)`` → 这只宠的宿主（单窗下恒为唯一宿主：
+  ``.overlay`` 是整桌面那张窗，``.activity`` 是各屏可用区的矩形集合）；
+- ``shell.move_sprite_to_screen(sprite, screen, global_pos=None)`` → 把**这一只**
+  放到那块屏（``global_pos`` = 目标全局左上角；不给则按"它在当前屏可用区里的比例"
+  落到目标屏的同一相对位置）。跨屏不再是换窗口，只是同一张窗内的移动。
 
 本文件只测最关键的那几条合同与反例：
 
-1. 搬走一只，另一只的屏/位置/边界/窗口一个字节不动；
-2. 有宠的屏一张窗、两只共用一张；空掉的那块屏不留窗（都从驱动器成员看）；
-3. 同 local 坐标在不同屏 = 零碰撞（同一块屏上仍要撞，作为有牙对照）；
+1. 搬走一只，另一只的位置/边界一个字节不动；
+2. 一张窗、活动区 = 各屏可用区矩形集合（关跨屏时只剩家那块屏）；
+3. 同一屏内局部坐标相同 = 接触；各自屏内局部坐标相同（错开一整块屏）= 零碰撞；
 4. 主屏切换不搬任何宠；
 5. 拔屏只迁这块屏上的宠，别的屏一个像素不动；
-6. 一次 tick 每只各推进一次、两屏共用同一个 timer（不许双重推进）；
-7. 逐只迁移不是"退出这只宠"：不广播移除（不注销行为/探头/彩蛋状态）、不释放 clip；
+6. 一次 tick 每只各推进一次（一张窗、一个 timer）；
+7. 换屏不是"退出这只宠"：不广播移除（不注销行为/探头/彩蛋状态）、不释放 clip；
 8. ``screen_name`` 与 ``rx/ry`` 逐只独立落盘（比例是相对**它自己那块屏**算的）、
    逐只独立恢复；
 9. 带落点的迁移把这只放到指定的全局左上角。
@@ -128,11 +127,22 @@ def _child(shell):
     return others[0]
 
 
-def _local_bounds(screen):
-    """屏可用区在 overlay 局部坐标下的矩形（与 ``OverlayShell._local_bounds`` 同口径）。"""
-    geo, avail = screen.geometry(), screen.availableGeometry()
-    return QRect(avail.x() - geo.x(), avail.y() - geo.y(),
-                 avail.width(), avail.height())
+def _activity_of(shell, screen) -> QRect:
+    """该屏在活动区里的矩形（窗口局部坐标）。"""
+    for candidate, rect in shell._main_host.activity:
+        if candidate is screen:
+            return QRect(rect)
+    raise AssertionError(f"{screen.name()} 不在活动区里")
+
+
+def _screen_of(shell, sprite):
+    """这只宠当前所在的屏（产品按身体中心判定，与落盘的分母同源）。"""
+    return shell._screen_of_sprite(sprite)
+
+
+def _ratio_of_pet(shell, sprite) -> tuple[float, float]:
+    """这只宠身体中心相对**它那块屏**可用区的比例（= 落盘口径）。"""
+    return _ratio_of(sprite.body_rect(), _activity_of(shell, _screen_of(shell, sprite)))
 
 
 def _profile(config_dir, instance_id):
@@ -204,7 +214,7 @@ def _count_advances(sprites):
 
 
 def _teardown(shell, clip=None):
-    """逐壳收口：停壳 → 关掉**全部**屏的窗（每只有宠的屏一张，不止 ``shell.overlay``）。"""
+    """逐壳收口：停壳 → 关掉合成窗 → 删 runtime 标记。"""
     shell.stop()
     for overlay in list(shell.driver.overlays):
         overlay.close()
@@ -215,7 +225,7 @@ def _teardown(shell, clip=None):
 
 # ---------------------------------------------------------------- 1. 一次只动一只
 def test_moving_one_pet_leaves_the_other_pet_untouched(tmp_path, two_screens):
-    """两屏各一只：把子宠搬到右屏，主宠的屏/位置/边界/窗口一个字节不动。"""
+    """两屏各一只：把子宠搬到右屏，主宠的位置/边界一个字节不动。"""
     primary, secondary = two_screens
     shell, _cfg = _make_shell(tmp_path, primary, collision_enabled=True)
     try:
@@ -223,26 +233,19 @@ def test_moving_one_pet_leaves_the_other_pet_untouched(tmp_path, two_screens):
         shell.spawn_pet()
         child = _child(shell)
 
-        main_host = shell.host_for_sprite(main)
-        main_overlay = main_host.overlay
+        overlay = shell.overlay
         main_pos = QPointF(main.pos)
         main_rect = QRect(main.rect())
-        main_bounds = QRect(main_host.bounds)
-        assert main_host.screen is primary
 
         shell.move_sprite_to_screen(child, secondary)
 
-        child_host = shell.host_for_sprite(child)
-        assert child_host.screen is secondary
-        assert child_host.bounds == _local_bounds(secondary)
-        assert child_host.overlay is not main_overlay, "另一块屏必须是另一个合成窗"
-        assert child in child_host.overlay.sprites
-        assert child not in main_overlay.sprites, "搬走的那只不得留在旧屏的窗里"
+        assert _screen_of(shell, child) is secondary
+        assert _activity_of(shell, secondary).contains(child.body_rect().center())
+        assert shell.host_for_sprite(child).overlay is overlay, "单窗：两屏共用同一张窗"
+        assert child in overlay.sprites
         assert child.home_screen is secondary, "屏归属要写进这只宠自己的字段（落盘取它）"
 
-        assert main_host.screen is primary
-        assert main_host.overlay is main_overlay
-        assert main_host.bounds == main_bounds
+        assert _screen_of(shell, main) is primary
         assert QPointF(main.pos) == main_pos, "另一只的位置一个像素都不许动"
         assert QRect(main.rect()) == main_rect, "另一只的矩形（含钳制域）都不许动"
     finally:
@@ -250,38 +253,36 @@ def test_moving_one_pet_leaves_the_other_pet_untouched(tmp_path, two_screens):
 
 
 # ---------------------------------------------------------------- 2. 每个有宠屏一张窗
-def test_a_screen_without_pets_does_not_keep_a_window(tmp_path, two_screens):
-    """一屏一张窗：搬到右屏的那只有自己的窗且真上屏；带回来之后右屏那张窗不留。
+def test_one_window_with_activity_rects_per_screen(tmp_path, two_screens):
+    """单窗：窗口 = 各屏可用区并集，活动区 = 每屏一块；关跨屏后只剩家那块。
 
-    "真上屏"这一条只问结果：经 ``move_sprite_to_screen`` 之后那块屏上的宠必须真的
-    显示出来。新窗由谁 ``show()``（迁移本体、还是拖拽核心在搬家后补一次）是实现
-    自由，但**只建窗不显示**不是可接受的结果——那正是"拖过去宠不见了"。
+    #302 的修法就在这里：窗口矩形取**可用工作区**的并集（不含任务栏），否则按
+    窗口矩形自判全屏的第三方软件会把桌宠当全屏应用。
     """
     primary, secondary = two_screens
     shell, _cfg = _make_shell(tmp_path, primary, collision_enabled=True)
     try:
-        main = shell.sprite
         shell.spawn_pet()
         child = _child(shell)
         shell.start()
         assert shell.driver.applied_tier == TIER_ACTIVE, "前提：可见态才跑仿真段"
-        primary_overlay = shell.host_for_sprite(main).overlay
-        assert primary_overlay.isVisible() is True
+        overlay = shell.overlay
+        assert overlay.isVisible() is True
+
+        assert shell.hosts() == [shell._main_host], "全进程只有一张合成窗"
+        assert len(shell.driver.overlays) == 1
+        assert overlay.geometry() == QRect(0, 0, 3520, 1040), "两屏可用区并集"
+        assert [screen for screen, _r in shell._main_host.activity] == [
+            primary, secondary]
+        assert _activity_of(shell, secondary) == QRect(1920, 0, 1600, 860)
 
         shell.move_sprite_to_screen(child, secondary)
+        assert overlay.isVisible() is True, "搬到另一块屏的宠就在这张窗里，不会被藏起来"
 
-        far_host = shell.host_for_sprite(child)
-        assert far_host.screen is secondary
-        assert far_host.overlay is not primary_overlay
-        assert far_host.overlay.isVisible() is True, (
-            "搬到另一块屏的宠必须真的显示在这块屏上（新窗不能建了不显示）")
-
-        shell.move_sprite_to_screen(child, primary)
-
-        assert shell.host_for_sprite(child).screen is primary
-        assert shell.host_for_sprite(child).overlay is primary_overlay, (
-            "同一块屏只有一张窗：回到已有宠的屏就复用那张")
-        assert far_host.overlay not in shell.driver.overlays, "空掉的那块屏不得再留窗"
+        # 关跨屏 = 活动区只留家那块屏（窗仍铺满全桌面，宠出不去）
+        shell._cross_screen_allowed = False
+        shell.handle_geometry_changed()
+        assert [screen for screen, _r in shell._main_host.activity] == [primary]
     finally:
         _teardown(shell)
 
@@ -299,12 +300,10 @@ def test_one_tick_advances_each_pet_once_on_a_single_timer(tmp_path, two_screens
         shell.start()
         assert shell.driver.applied_tier == TIER_ACTIVE, "前提：可见态才跑仿真段"
 
-        hosts = [shell.host_for_sprite(main), shell.host_for_sprite(child)]
-        assert len({id(host.overlay) for host in hosts}) == 2, "两屏各一张窗"
-        for host in hosts:
-            assert host.overlay.tick_driver is shell.driver, "两屏的窗必须共用一个驱动器"
-            assert host.overlay._timer is shell.driver.timer, "不许第二张表"
-            assert host.overlay in shell.driver.overlays
+        assert shell.host_for_sprite(main) is shell.host_for_sprite(child)
+        assert shell.overlay.tick_driver is shell.driver, "合成窗挂唯一驱动器"
+        assert shell.overlay._timer is shell.driver.timer, "不许第二张表"
+        assert shell.overlay in shell.driver.overlays
 
         counts = _count_advances([main, child])
         shell.driver.on_tick(0.016)
@@ -334,8 +333,13 @@ def test_same_local_position_on_one_screen_still_collides(tmp_path, two_screens)
         _teardown(shell)
 
 
-def test_same_local_position_on_two_screens_does_not_collide(tmp_path, two_screens):
-    """同 local 坐标落在不同屏：零碰撞（局部坐标不跨屏比较）。"""
+def test_same_position_within_each_screen_does_not_collide(tmp_path, two_screens):
+    """两只各自站在**自己那块屏**的同一屏内坐标上：零碰撞（真机上相距一整块屏）。
+
+    单窗把全部宠放进同一个世界，局部坐标就是窗口全局坐标，所以这条合同变成了
+    "相隔一整块屏的两只不许被判成接触"——与 #303 的反面同源：真正要紧的是它们
+    在同一套坐标里算距离，而不是按屏各算一份。
+    """
     primary, secondary = two_screens
     shell, _cfg = _make_shell(tmp_path, primary, collision_enabled=True)
     try:
@@ -346,10 +350,26 @@ def test_same_local_position_on_two_screens_does_not_collide(tmp_path, two_scree
         assert shell.driver.applied_tier == TIER_ACTIVE, "前提：可见态才跑仿真段"
 
         shell.move_sprite_to_screen(child, secondary)
-        assert shell.host_for_sprite(child).screen is secondary, "前提：子宠已在另一块屏"
+        assert _screen_of(shell, child) is secondary, "前提：子宠已在另一块屏"
 
-        assert _impact_ticks(shell, [main, child], main, child) == [], (
-            "不同屏上的宠不许进同一个碰撞世界（局部坐标不是全局坐标）")
+        events = []
+        for world in _host_worlds(shell, [main, child]):
+            world.add_collision_listener(events.append)
+        for _ in range(2):
+            # 各自屏内的同一相对位置 + 迎面速度（行为链会在状态表新建那一拍把
+            # 速度写回 0，故每拍重摆，口径同 ``_impact_ticks``）
+            main.set_pos(QPointF(_activity_of(shell, primary).topLeft())
+                         + QPointF(300.0, 300.0))
+            main.set_velocity(QPointF(200.0, 0.0))
+            child.set_pos(QPointF(_activity_of(shell, secondary).topLeft())
+                          + QPointF(300.0, 300.0))
+            child.set_velocity(QPointF(-200.0, 0.0))
+            assert abs(main.pos.x() - child.pos.x()) > 1000.0, "前提：两只相隔一整块屏"
+            for world in _host_worlds(shell, [main, child]):
+                world._prev_circles = {}
+            shell.driver.on_tick(0.016)
+
+        assert events == [], "相隔一整块屏的两只不许被判成接触（世界是窗口全局坐标）"
     finally:
         _teardown(shell)
 
@@ -364,20 +384,18 @@ def test_primary_screen_change_does_not_move_any_pet(tmp_path, two_screens, monk
         shell.spawn_pet()
         child = _child(shell)
         shell.move_sprite_to_screen(child, secondary)
-        main_host = shell.host_for_sprite(main)
-        child_host = shell.host_for_sprite(child)
         main_pos, child_pos = QPointF(main.pos), QPointF(child.pos)
+        home = shell._screen
+        bounds = QRect(shell._bounds)
         monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: secondary))
         monkeypatch.setattr(app, "primaryScreen", lambda: secondary)
 
         shell.handle_primary_screen_changed(secondary)
 
-        assert shell.host_for_sprite(main).screen is primary, "主屏换人不搬家"
-        assert shell.host_for_sprite(child).screen is secondary
-        assert shell.host_for_sprite(main).overlay is main_host.overlay
-        assert shell.host_for_sprite(child).overlay is child_host.overlay
-        assert main_host.bounds == shell.host_for_sprite(main).bounds
-        assert child_host.bounds == shell.host_for_sprite(child).bounds
+        assert _screen_of(shell, main) is primary, "主屏换人不搬家"
+        assert _screen_of(shell, child) is secondary
+        assert shell._screen is home, "家那块屏也不因主屏换人而改写"
+        assert QRect(shell._bounds) == bounds
         assert QPointF(main.pos) == main_pos
         assert QPointF(child.pos) == child_pos
     finally:
@@ -386,7 +404,7 @@ def test_primary_screen_change_does_not_move_any_pet(tmp_path, two_screens, monk
 
 # ---------------------------------------------------------------- 6. 拔屏只迁该屏
 def test_unplugging_a_screen_moves_only_the_pets_on_it(tmp_path, two_screens):
-    """拔掉右屏：只有右屏上那只迁走，左屏上的宠与它的窗一个像素不动。"""
+    """拔掉右屏：只有右屏上那只迁走，左屏上的宠一个像素不动。"""
     primary, secondary = two_screens
     shell, _cfg = _make_shell(tmp_path, primary, collision_enabled=True)
     try:
@@ -395,24 +413,18 @@ def test_unplugging_a_screen_moves_only_the_pets_on_it(tmp_path, two_screens):
         child = _child(shell)
         shell.move_sprite_to_screen(child, secondary)
 
-        main_host = shell.host_for_sprite(main)
-        main_overlay = main_host.overlay
         main_pos, main_rect = QPointF(main.pos), QRect(main.rect())
-        secondary_overlay = shell.host_for_sprite(child).overlay
 
         shell.handle_screen_removed(secondary)
 
-        assert shell.host_for_sprite(main).screen is primary, "别的屏上的宠不许跟着迁"
-        assert shell.host_for_sprite(main).overlay is main_overlay
-        assert main_host.bounds == shell.host_for_sprite(main).bounds
+        assert shell.host_for_screen(secondary) is None, "拔掉的屏不再被窗覆盖"
+        assert _screen_of(shell, main) is primary, "别的屏上的宠不许跟着迁"
         assert QPointF(main.pos) == main_pos and QRect(main.rect()) == main_rect
 
-        moved_host = shell.host_for_sprite(child)
-        assert moved_host.screen is not secondary, "被拔屏上的宠必须迁走"
-        assert secondary_overlay not in shell.driver.overlays, "屏都没了，那张窗不得留着"
-        assert child in moved_host.overlay.sprites
-        assert moved_host.bounds.contains(child.body_rect().center()), (
+        assert _screen_of(shell, child) is primary, "被拔屏上的宠必须迁走"
+        assert _activity_of(shell, primary).contains(child.body_rect().center()), (
             "迁到活着的那块屏后必须完整落在可用区内")
+        assert shell.hosts() == [shell._main_host], "单窗：拔屏不多出/不少宿主"
     finally:
         _teardown(shell)
 
@@ -434,19 +446,19 @@ def test_transfer_keeps_clip_playing_and_never_broadcasts_removal(tmp_path, two_
         assert main._clip is clip and clip._timer.isActive() is True, "前提：真节拍在跑"
 
         removed = []
-        shell.host_for_sprite(main).overlay.add_sprite_removed_listener(removed.append)
+        shell.overlay.add_sprite_removed_listener(removed.append)
 
         shell.move_sprite_to_screen(main, secondary)
 
         assert removed == [], (
-            "搬家不得广播 sprite 移除（那正是行为/探头/彩蛋状态的注销链）")
-        assert shell.host_for_sprite(main).screen is secondary
-        assert main._clip is clip, "搬家不得释放这只的 clip（换屏不等于换动画）"
-        assert clip._timer.isActive() is True, "搬家后播放节拍必须还在跑"
+            "换屏不得广播 sprite 移除（那正是行为/探头/彩蛋状态的注销链）")
+        assert _screen_of(shell, main) is secondary
+        assert main._clip is clip, "换屏不得释放这只的 clip（换屏不等于换动画）"
+        assert clip._timer.isActive() is True, "换屏后播放节拍必须还在跑"
 
         shell.driver.tick_sim(0.016)
         assert main in shell.host_for_sprite(main).behavior._states, (
-            "搬完这只仍要由**新宿主**的行为链驱动")
+            "换屏后这只仍要由行为链驱动")
     finally:
         _teardown(shell, clip)
 
@@ -467,8 +479,7 @@ def test_each_pet_persists_its_own_screen_and_ratio(tmp_path, two_screens):
         shell.spawn_pet()
         child = _child(shell)
         shell.move_sprite_to_screen(child, secondary)
-        child_host = shell.host_for_sprite(child)
-        expected_ratio = _ratio_of(child.rect(), child_host.bounds)
+        expected_ratio = _ratio_of_pet(shell, child)
 
         shell.save_position()            # 主宠（slot-0）
         shell.save_spawned_positions()   # 子宠各写自己那份
@@ -507,10 +518,10 @@ def test_restored_pets_land_on_their_own_saved_screen(tmp_path, two_screens):
     try:
         main = revived.sprite
         child = _child(revived)
-        assert revived.host_for_sprite(main).screen is primary, "主宠按自己那份回主屏"
-        assert revived.host_for_sprite(child).screen is secondary, (
+        assert _screen_of(revived, main) is primary, "主宠按自己那份回主屏"
+        assert _screen_of(revived, child) is secondary, (
             "子宠按自己那份回右屏——屏归属是逐只的，不是全局一份")
-        assert revived.host_for_sprite(main).overlay is not revived.host_for_sprite(child).overlay
+        assert revived.hosts() == [revived._main_host], "单窗：复活也不多出宿主"
     finally:
         _teardown(revived)
 
@@ -527,18 +538,17 @@ def test_move_with_drop_point_lands_the_pet_on_the_pointer(tmp_path, two_screens
         keep_global_local = QPointF(child.pos) - QPointF(
             QPoint(secondary.geometry().x(), secondary.geometry().y()))
         drop = QPoint(2720, 450)
-        drop_local = QPointF(drop.x() - secondary.geometry().x(),
-                             drop.y() - secondary.geometry().y())
+        origin = shell.overlay.geometry().topLeft()
+        drop_local = QPointF(drop.x() - origin.x(), drop.y() - origin.y())
         assert abs(drop_local.x() - keep_global_local.x()) > child.rect().width(), (
             "前提：落点与「只换坐标系」的落点相距超过一个宠身，本断言才有牙")
 
         shell.move_sprite_to_screen(child, secondary, global_pos=drop)
 
-        host = shell.host_for_sprite(child)
-        assert host.screen is secondary
+        assert _screen_of(shell, child) is secondary
         assert (child.pos.x(), child.pos.y()) == pytest.approx(
             (drop_local.x(), drop_local.y()), abs=1.0), (
             "给了落点就把这只放到该全局左上角（拖到哪儿落哪儿，不按旧屏坐标平移）")
-        assert host.bounds.contains(child.body_rect().center())
+        assert _activity_of(shell, secondary).contains(child.body_rect().center())
     finally:
         _teardown(shell)

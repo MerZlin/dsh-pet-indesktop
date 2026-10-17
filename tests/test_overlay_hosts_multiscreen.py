@@ -81,8 +81,29 @@ def _three_screens():
 
 
 def _global_of(host, sprite):
-    """sprite 的全局左上角（宿主窗口原点 + 局部坐标）。"""
+    """sprite 的全局左上角（窗口原点 + 局部坐标）。"""
     return QPointF(host.overlay.geometry().topLeft()) + QPointF(sprite.pos)
+
+
+def _screen_of(shell, sprite):
+    """这只宠当前所在的屏（产品按身体中心判定）。"""
+    return shell._screen_of_sprite(sprite)
+
+
+def _activity_rect(shell, screen) -> QRect:
+    """该屏在活动区里的矩形（窗口局部坐标）。"""
+    for candidate, rect in shell._main_host.activity:
+        if candidate is screen:
+            return QRect(rect)
+    raise AssertionError("该屏不在活动区里")
+
+
+def _ratio_in(shell, sprite, screen) -> tuple:
+    """这只宠身体中心相对该屏可用区的比例（= 落盘口径）。"""
+    body = sprite.body_rect()
+    rect = _activity_rect(shell, screen)
+    return ((body.x() + body.width() / 2.0 - rect.left()) / rect.width(),
+            (body.y() + body.height() / 2.0 - rect.top()) / rect.height())
 
 
 def _install_screens(monkeypatch, *screens):
@@ -101,8 +122,8 @@ def _install_screens(monkeypatch, *screens):
 
 def _make_shell(tmp_path, screen, values=None):
     # 本文件测的就是"允许跨屏"下的多屏合同：开关是全局键、重启级（进程内快照），
-    # 不在这台"机器"上显式开启的话，壳体只会在启动那块屏建窗，全部多屏断言都
-    # 无从成立（默认关 = 单显示器口径）。显式值优先，便于单条用例反向覆盖。
+    # 不在这台"机器"上显式开启的话，活动区只剩家那块屏，全部多屏断言都无从成立
+    # （默认关 = 单显示器口径）。显式值优先，便于单条用例反向覆盖。
     values = {"allow_cross_screen": True, **(values or {})}
     config = cap.CapConfig(tmp_path, values)
     from pet import pet_profiles
@@ -212,14 +233,15 @@ def test_host_for_sprite_exposes_screen_overlay_and_bounds(tmp_path, monkeypatch
         host = shell.host_for_sprite(shell.sprite)
         assert host.screen is a
         assert host.overlay is shell.overlay
-        assert host.bounds == shell._bounds == QRect(0, 0, 1920, 1040)
-        # 单屏用户：整组只有这一块屏的宿主
+        # 单窗：窗口 = 各屏**可用工作区**并集，局部坐标从 (0,0) 起
+        assert host.bounds == shell._bounds == QRect(0, 0, 3840, 1040)
+        assert [screen for screen, _rect in host.activity] == [a, b]
         assert shell.hosts() == [host]
     finally:
         _cleanup(shell)
 
 
-def test_move_sprite_to_screen_migrates_only_that_pet(tmp_path, monkeypatch):
+def test_move_sprite_to_screen_moves_only_that_pet(tmp_path, monkeypatch):
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
@@ -230,36 +252,35 @@ def test_move_sprite_to_screen_migrates_only_that_pet(tmp_path, monkeypatch):
         _hittable(main)
         _hittable(child)
         main_pos = QPointF(main.pos)
-        child_global = _global_of(shell.host_for_sprite(child), child)
 
         assert shell.move_sprite_to_screen(
             child, b, global_pos=QPointF(2100, 300)) is True
 
-        host_b = shell.host_for_sprite(child)
-        assert host_b.screen is b
-        assert host_b.overlay is not shell.overlay
-        assert child in host_b.overlay.sprites
-        assert child not in shell.overlay.sprites
+        assert _screen_of(shell, child) is b
+        assert child in shell.overlay.sprites
         assert child.home_screen is b
-        # 另一只一分不动、仍在自己那块屏上
+        # 另一只一分不动、仍在它自己那块屏上
         assert main.pos == main_pos
-        assert shell.host_for_sprite(main).screen is a
-        # 给了 global_pos：落在该全局位置（局部坐标差了整整一屏）
-        assert _global_of(host_b, child) == QPointF(2100, 300)
-        assert child.pos.x() == pytest.approx(180, abs=1.0)
-        # 没给 global_pos = 只换坐标系：保持全局位置，越出那块屏就按新屏边界钳入
-        #（与拖拽落位同一口径：B 上的 2100 落到 A 只能贴 A 的右缘）
+        assert _screen_of(shell, main) is a
+        # 给了 global_pos：落在该全局位置（局部坐标 = 全局 - 窗口原点）
+        assert _global_of(shell.host_for_sprite(child), child) == QPointF(2100, 300)
+        assert child.pos.x() == pytest.approx(2100.0, abs=1.0)
+        # 不给 global_pos：按"当前屏内的相对位置"落到目标屏同一相对位置
+        ratio_in_b = _ratio_in(shell, child, b)
         assert shell.move_sprite_to_screen(child, a) is True
-        host_a = shell.host_for_sprite(child)
-        assert host_a.screen is a
-        assert _global_of(host_a, child).x() == pytest.approx(
-            a.availableGeometry().right() + 1 - child.rect().width(), abs=2.0)
+        assert _screen_of(shell, child) is a
+        assert _ratio_in(shell, child, a) == pytest.approx(ratio_in_b, abs=0.01)
         assert shell._screen is a
     finally:
         _cleanup(shell)
 
 
-def test_equal_local_coordinates_on_two_screens_do_not_collide(tmp_path, monkeypatch):
+def test_two_pets_a_screen_apart_never_collide(tmp_path, monkeypatch):
+    """相隔一整块屏的两只不撞；摆到同一处仍要撞（有牙对照）。
+
+    单窗把全部宠放进同一个世界，局部坐标就是窗口全局坐标——要紧的是它们在同一套
+    坐标里算距离，而不是像旧多窗拓扑那样按屏各算一份。
+    """
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
@@ -268,31 +289,35 @@ def test_equal_local_coordinates_on_two_screens_do_not_collide(tmp_path, monkeyp
         child = shell._spawned[0]
         shell.move_sprite_to_screen(child, b)
         main = shell.sprite
-        host_a = shell.host_for_sprite(main)
-        host_b = shell.host_for_sprite(child)
-        assert host_a.collision is not host_b.collision, "碰撞世界逐屏一份"
 
-        # 两只摆在各自屏的**同一个局部坐标**上（真机上相距 1920px）
-        same = QPointF(400, 300)
-        main.set_pos(QPointF(same))
-        child.set_pos(QPointF(same))
+        # 两只各自站在自己那块屏的同一屏内坐标上（真机相距 1920px）
+        main.set_pos(QPointF(400, 300))
+        child.set_pos(QPointF(400 + 1920, 300))
+        assert shell.hosts() == [shell._main_host], "单窗：一个世界"
 
         events = []
-        host_a.collision.add_collision_listener(events.append)
-        host_b.collision.add_collision_listener(events.append)
+        shell.collision.add_collision_listener(events.append)
+        shell.collision._prev_circles = {}
         shell.driver.tick_sim(1 / 60.0)
+        assert events == [], "相隔一整块屏不是接触"
 
-        assert events == [], "两块屏上的同局部坐标不是接触"
-        assert main.pos == same and child.pos == same
-        # 反例（改造前是同一个世界）：喂进**一个**世界就会判成接触并互相推开
-        host_b.collision.tick([main, child], 1 / 60.0)
-        assert main.pos != same or child.pos != same
+        # 对照（有牙）：摆到同一处就必须结算（先清扫掠快照，别把瞬移当掠过）
+        child.set_pos(QPointF(main.pos))
+        events.clear()
+        shell.collision._prev_circles = {}
+        shell.collision.tick([main, child], 1 / 60.0)
+        assert main.pos != QPointF(400, 300) or child.pos != QPointF(400, 300)
     finally:
         _cleanup(shell)
 
 
 # ---------------------------------------------------------------- 跨屏拖拽
-def test_drag_across_screens_transfers_only_the_dragged_pet(tmp_path, monkeypatch):
+def test_drag_across_screens_moves_only_the_dragged_pet(tmp_path, monkeypatch):
+    """拖过缝：被拖的那只走到副屏，别的宠与窗口几何一分不动（#303 主症）。
+
+    跨屏不再换窗口/换宿主：同一张合成窗里自由移动，没有"移交"这一拍，也就没有
+    跨屏大跳与"身体被钳在 x=0"。
+    """
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
@@ -302,55 +327,28 @@ def test_drag_across_screens_transfers_only_the_dragged_pet(tmp_path, monkeypatc
         main = shell.sprite
         _hittable(child)
         child.set_pos(QPointF(200, 700))
-        # 子宠先放到 B：这样 A 只剩主宠，一次跨屏拖拽正好把 A 拖空。
-        # 落点选在 B 的**右侧远处**（局部 (1480, 200)），刻意避开主宠被拖进来时
-        # 走的那条通道（缝附近、局部 y≈859）：拖鱼撞鱼**本来就会把旁边的宠撞开**
-        # （见 tests/test_drag_collision_velocity.py），那是另一条独立且正确的行为，
-        # 不是"被移交带动"。实测（60 次 × 16 拍）：坐在通道上会被撞开 14–90px，
-        # 坐在远处则一步不动（0.00px）；本用例要判的是后者。
         assert shell.move_sprite_to_screen(
             child, b, global_pos=QPointF(3400, 200)) is True
-        host_child = shell.host_for_sprite(child)
-        child_global = _global_of(host_child, child)
-        overlay_a = shell.overlay
-        geometry_a = overlay_a.geometry()
+        child_pos = QPointF(child.pos)
+        overlay = shell.overlay
+        geometry = overlay.geometry()
 
         cursor, _ = _drag_across(shell, main)
 
-        host_b = shell.host_for_sprite(main)
-        assert host_b.screen is b, "身体中心过缝即换宿主"
-        assert host_b is host_child
-        assert main in host_b.overlay.sprites
-        assert main not in overlay_a.sprites
+        assert _screen_of(shell, main) is b, "身体中心过缝即算在副屏上"
         assert main.home_screen is b
-        # 拖拽期间源窗不拆：这次输入会话还握在它手里（拆了会话就再也收不了尾）
-        assert overlay_a in shell.driver.overlays
-        assert overlay_a._mouse_grab is main
-        # 只迁这一只：子宠的屏归属与成员表一分不变；位置只允许它自己的正常走动
-        # （逐拍 tick 里行为链的位移，约 1px/拍），不得被这次移交带动，也不得被
-        # 带到别的屏的域里去
-        child_moved = _global_of(host_child, child) - child_global
-        assert (child_moved.x(), child_moved.y()) == pytest.approx((0.0, 0.0), abs=24.0), (
-            f"子宠被这次移交带动了 {child_moved}")
-        body_child = QRectF(child.body_rect()).translated(
-            host_child.overlay.geometry().topLeft())
-        assert QRect(1920, 0, 1920, 1040).contains(
-            QRect(int(body_child.x()), int(body_child.y()),
-                  child.body_rect().width(), child.body_rect().height())), (
-            "子宠必须仍完整落在它自己那块屏的可用区里")
-        # 挂接点没变：两张窗口各自钉在自己那块屏上（拖拽移动的是绘制，不是窗口）
-        assert overlay_a.geometry() == geometry_a
-        assert host_b.overlay.geometry() == b.geometry()
+        assert child.pos == child_pos, "别的宠不被拖拽带动"
+        assert _screen_of(shell, child) is b
+        assert overlay.geometry() == geometry, "拖动的是绘制，不是窗口"
+        assert overlay._mouse_grab is main, "会话握在同一张窗里"
 
-        overlay_a.mouseReleaseEvent(_release(cursor, cursor))
+        overlay.mouseReleaseEvent(_release(cursor, cursor))
 
-        # 松手落在光标处（B 局部坐标），且抓取偏移不变（宠没从光标下错位）
-        expected_local = cursor - QPointF(host_b.overlay.geometry().topLeft())
+        # 松手落在光标处（窗口局部坐标），且抓取偏移不变（宠没从光标下错位）
+        expected_local = cursor - QPointF(overlay.geometry().topLeft())
         assert main.rect().center().x() == pytest.approx(
             expected_local.x(), abs=4.0)
-        # 源屏空了 → 那张窗口收掉，家顺位搬到仍在用的那张（self.overlay 跟随）
-        assert shell.hosts() == [host_b]
-        assert shell.overlay is host_b.overlay
+        assert shell.hosts() == [shell._main_host]
     finally:
         _cleanup(shell)
 
@@ -362,30 +360,26 @@ def test_cross_screen_drag_keeps_release_velocity_sane(tmp_path, monkeypatch):
     shell = _make_shell(tmp_path, a, {"drag_physics": True})
     try:
         main = shell.sprite
-        overlay_a = shell.overlay
-        origin_a = QPointF(overlay_a.geometry().topLeft())
+        overlay = shell.overlay
+        origin = QPointF(overlay.geometry().topLeft())
         _hittable(main)
         hit = QPointF(main.rect().center())
-        overlay_a.mousePressEvent(_press(hit, origin_a + hit))
-        trail_samples = []
+        overlay.mousePressEvent(_press(hit, origin + hit))
         for step in range(1, 26):
             cursor = QPointF(1700 + 40 * step, 400)
-            overlay_a.mouseMoveEvent(_move(cursor - origin_a, cursor))
+            overlay.mouseMoveEvent(_move(cursor - origin, cursor))
             shell.driver.tick_sim(1 / 60.0)
             shell.driver.advance_overlays(1 / 60.0)
-            trail_samples.append(step)
-        host_b = shell.host_for_sprite(main)
-        assert host_b.screen is b, "身体整块进入邻屏后应当移交"
-        # 轨迹样本整体换帧：相邻样本差仍是每步 40px（没有被拼成跨屏的一跳）
+        assert _screen_of(shell, main) is b, "身体整块进入邻屏后就算在副屏上"
+        # 轨迹样本同一套坐标：相邻样本差仍是每步 40px（没有被拼成跨屏的一跳）
         trail = main.drag_trail
         assert len(trail) >= 2
         deltas = [abs(trail[i + 1][1] - trail[i][1]) for i in range(len(trail) - 1)]
         # 首个差值含"按下点 → 第一帧光标"的固有位移，只看其后：每步都是 40px
-        assert deltas[1:] == pytest.approx([40.0] * (len(deltas) - 1)),             f"轨迹样本帧内一致，实测 {deltas}"
+        assert deltas[1:] == pytest.approx([40.0] * (len(deltas) - 1)), (
+            f"轨迹样本帧内一致，实测 {deltas}")
         cursor = QPointF(1700 + 40 * 25, 400)
-        overlay_a.mouseReleaseEvent(_release(cursor - origin_a, cursor))
-        # 反例锚点：换帧不得把轨迹拼成一跳（否则 estimate_release_velocity 会
-        # 把这一跳当成甩动；trail 已在断言段逐差核对）
+        overlay.mouseReleaseEvent(_release(cursor - origin, cursor))
         # 拖动物理开着：手没在收尾瞬间暴冲 → 松手不是"甩出去"的暴速
         speed = (main.velocity.x() ** 2 + main.velocity.y() ** 2) ** 0.5
         assert speed < 3000.0
@@ -393,8 +387,8 @@ def test_cross_screen_drag_keeps_release_velocity_sane(tmp_path, monkeypatch):
         _cleanup(shell)
 
 
-def test_transfer_keeps_clip_and_driver_running(tmp_path, monkeypatch):
-    """移交不是退出：clip 不释放、成员不注销、共享驱动器继续驱动两张窗。"""
+def test_switching_screen_keeps_clip_and_driver_running(tmp_path, monkeypatch):
+    """换屏不是退出：clip 不释放、成员不注销、共享驱动器照旧驱动这张窗。"""
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
@@ -408,7 +402,7 @@ def test_transfer_keeps_clip_and_driver_running(tmp_path, monkeypatch):
         closed: list = []
         child.close = lambda *a, **k: closed.append(1)
         removed: list = []
-        shell.host_for_sprite(child).overlay.add_sprite_removed_listener(
+        shell.overlay.add_sprite_removed_listener(
             lambda sprite: removed.append(sprite))
 
         shell.move_sprite_to_screen(child, a)
@@ -416,12 +410,13 @@ def test_transfer_keeps_clip_and_driver_running(tmp_path, monkeypatch):
         assert closed == [] and removed == []
         assert child._clip is clip
         assert shell.overlay in shell.driver._overlays
-        assert shell.host_for_sprite(child).overlay in shell.driver._overlays
+        assert _screen_of(shell, child) is a
     finally:
         _cleanup(shell)
 
 
 def test_dpr_follows_the_target_screen(tmp_path, monkeypatch):
+    """一张窗只有一个 DPR，但逐只按**它自己那块屏**重建 pixmap/命中图。"""
     a, b = _two_screens()
     b.set_rects((1920, 0, 1920, 1080), (1920, 0, 1920, 1040), dpr=2.0)
     _install_screens(monkeypatch, a, b)
@@ -432,26 +427,25 @@ def test_dpr_follows_the_target_screen(tmp_path, monkeypatch):
         assert child.dpr == 1.0
         shell.move_sprite_to_screen(child, b)
         assert child.dpr == 2.0
+        assert shell.sprite.dpr == 1.0, "另一只在主屏上，仍是 1.0"
     finally:
         _cleanup(shell)
 
 
-def test_stop_of_one_window_does_not_stop_the_shared_driver(tmp_path, monkeypatch):
+def test_single_window_driver_membership_and_stop(tmp_path, monkeypatch):
+    """单窗：驱动器成员恒为一个；停表/起表只经壳的显隐与收口入口。"""
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
     try:
         shell.spawn_pet()
-        child = shell._spawned[0]
-        shell.move_sprite_to_screen(child, b)
         shell.start()  # 起表（进程级一个 QTimer）
-        host_b = shell.host_for_sprite(child)
         assert shell.driver.timer.isActive() is True
+        assert list(shell.driver.overlays) == [shell.overlay]
 
-        host_b.overlay.close()
+        shell.stop()
 
-        assert shell.driver.timer.isActive() is True, "关一张窗不停整组时钟"
-        assert shell.overlay in shell.driver._overlays
+        assert shell.driver.timer.isActive() is False, "整壳停表即停表"
     finally:
         _cleanup(shell)
 
@@ -466,12 +460,13 @@ def test_primary_screen_change_does_not_move_pets(tmp_path, monkeypatch):
         child = shell._spawned[0]
         shell.move_sprite_to_screen(child, b)
         main_pos, child_pos = QPointF(shell.sprite.pos), QPointF(child.pos)
-        overlay_a, overlay_b = shell.overlay, shell.host_for_sprite(child).overlay
+        home = shell._screen
 
         shell.handle_primary_screen_changed(b)
 
-        assert shell.overlay is overlay_a
-        assert shell.host_for_sprite(child).overlay is overlay_b
+        assert shell._screen is home, "主屏换人不换家"
+        assert _screen_of(shell, shell.sprite) is a
+        assert _screen_of(shell, child) is b
         assert shell.sprite.pos == main_pos
         assert child.pos == child_pos
     finally:
@@ -491,10 +486,11 @@ def test_unplugging_one_screen_moves_only_its_pets(tmp_path, monkeypatch):
         main_pos = QPointF(main.pos)
         first_pos = QPointF(first.pos)
 
+        _install_screens(monkeypatch, a)
         shell.handle_screen_removed(b)
 
-        assert shell.host_for_screen(b) is None, "拔掉的屏不留宿主/窗口"
-        assert shell.host_for_sprite(second).screen is a
+        assert shell.host_for_screen(b) is None, "拔掉的屏不再被窗覆盖"
+        assert _screen_of(shell, second) is a
         assert second in shell.overlay.sprites
         # 别的屏上的宠一分不动
         assert main.pos == main_pos and first.pos == first_pos
@@ -502,7 +498,8 @@ def test_unplugging_one_screen_moves_only_its_pets(tmp_path, monkeypatch):
         _cleanup(shell)
 
 
-def test_unplugging_the_main_screen_rebuilds_it_on_a_survivor(tmp_path, monkeypatch):
+def test_unplugging_the_home_screen_moves_home_to_a_survivor(tmp_path, monkeypatch):
+    """拔掉家那块屏：家搬到存活屏，窗口仍是同一张（不重建），宠跟着走。"""
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
@@ -510,14 +507,17 @@ def test_unplugging_the_main_screen_rebuilds_it_on_a_survivor(tmp_path, monkeypa
         shell.spawn_pet()
         child = shell._spawned[0]
         shell.move_sprite_to_screen(child, b)
-        overlay_a = shell.overlay
+        overlay = shell.overlay
 
+        _install_screens(monkeypatch, b)
         shell.handle_screen_removed(a)
 
-        assert shell.overlay is not overlay_a
+        assert shell.overlay is overlay, "单窗：拔屏不重建窗口"
         assert shell._screen is b
         assert shell.sprite in shell.overlay.sprites
+        assert _screen_of(shell, shell.sprite) is b
         assert shell.sprite.home_screen is b
+        assert shell.hosts() == [shell._main_host]
     finally:
         _cleanup(shell)
 
@@ -532,18 +532,16 @@ def test_profile_records_the_pets_own_screen(tmp_path, monkeypatch):
         child = shell._spawned[0]
         slot = shell._spawned_slots[child]
         shell.move_sprite_to_screen(child, b)
-        child.set_pos(QPointF(600, 500))
+        child.set_pos(QPointF(2500, 500))     # 落在 B 里（归属与承载一致才写盘）
 
         shell.save_spawned_positions()
 
         from pet import pet_profiles
         geometry = dict(pet_profiles.read_slot_snapshot(tmp_path, slot).profile.data)
         assert geometry["screen_name"] == "B"
-        host_b = shell.host_for_sprite(child)
-        body = child.body_rect()
-        cx = body.x() + body.width() / 2.0
-        assert geometry["rx"] == pytest.approx(
-            (cx - host_b.bounds.left()) / host_b.bounds.width(), abs=0.01)
+        rx, ry = _ratio_in(shell, child, b)
+        assert geometry["rx"] == pytest.approx(rx, abs=0.01)
+        assert geometry["ry"] == pytest.approx(ry, abs=0.01)
     finally:
         _cleanup(shell)
 
@@ -554,7 +552,7 @@ def test_restore_puts_each_pet_back_on_its_own_screen(tmp_path, monkeypatch):
     _install_screens(monkeypatch, a, b)
     from pet import pet_profiles
 
-    # 复活路径同样只在"允许跨屏"下按各宠记忆的屏分窗
+    # 复活路径同样只在"允许跨屏"下按各宠记忆的屏落位
     config = cap.CapConfig(tmp_path, {"allow_cross_screen": True})
     pet_profiles.write_profile_settings(tmp_path, 0, {"scale": 0.5})
     pet_profiles.write_profile_settings(tmp_path, 1, {"scale": 0.5})
@@ -568,28 +566,24 @@ def test_restore_puts_each_pet_back_on_its_own_screen(tmp_path, monkeypatch):
         shell._create_main_library = fac.RichLibrary
         assert shell.sprite is not None
         child = shell._spawned[0]
-        host_b = shell.host_for_sprite(child)
-        assert host_b.screen is b
-        assert host_b.overlay is not shell.overlay
+        assert _screen_of(shell, child) is b
+        rect = _activity_rect(shell, b)
         body = child.body_rect()
         cx = body.x() + body.width() / 2.0
         cy = body.y() + body.height() / 2.0
-        assert cx == pytest.approx(
-            host_b.bounds.left() + 0.25 * host_b.bounds.width(), abs=2.0)
-        assert cy == pytest.approx(
-            host_b.bounds.top() + 0.75 * host_b.bounds.height(), abs=2.0)
+        assert cx == pytest.approx(rect.left() + 0.25 * rect.width(), abs=2.0)
+        assert cy == pytest.approx(rect.top() + 0.75 * rect.height(), abs=2.0)
     finally:
         _cleanup(shell)
 
 
-def test_main_pet_restored_to_its_saved_screen_re_sites_the_home_window(
+def test_main_pet_restored_to_its_saved_screen_re_sites_the_home_screen(
         tmp_path, monkeypatch):
-    """主宠记着副屏：主宿主（``self.overlay``）搬到那块屏，而不是把宠丢过去。"""
+    """主宠记着副屏：家（关闭跨屏时唯一活动区、拔屏兜底）就落在副屏。"""
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     from pet import pet_profiles
 
-    # 复活路径同样只在"允许跨屏"下按各宠记忆的屏分窗
     config = cap.CapConfig(tmp_path, {"allow_cross_screen": True})
     pet_profiles.write_profile_settings(tmp_path, 0, {"scale": 0.5})
     pet_profiles.write_profile_geometry(
@@ -599,18 +593,24 @@ def test_main_pet_restored_to_its_saved_screen_re_sites_the_home_window(
         sprite_factory=lambda lib, pos, scale: PetSprite(lib, pos=pos, scale=scale))
     try:
         shell._create_main_library = fac.RichLibrary
-        assert len(shell.hosts()) == 1, "主宠那块屏就是家的位置，不额外多一张窗"
+        assert len(shell.hosts()) == 1, "单窗：主宠那块屏只是家，不多建窗口"
         host = shell.host_for_sprite(shell.sprite)
         assert host.screen is b
         assert shell.overlay is host.overlay
         assert shell._screen is b
-        assert shell._bounds == QRect(0, 0, 1920, 1040)
+        rect = _activity_rect(shell, b)
+        body = shell.sprite.body_rect()
+        assert body.x() + body.width() / 2.0 == pytest.approx(
+            rect.left() + 0.5 * rect.width(), abs=2.0)
+        assert body.y() + body.height() / 2.0 == pytest.approx(
+            rect.top() + 0.5 * rect.height(), abs=2.0)
     finally:
         _cleanup(shell)
 
 
 # ---------------------------------------------------------------- 逐屏外围
-def test_bubble_anchor_uses_the_pets_own_screen_origin(tmp_path, monkeypatch):
+def test_bubble_anchor_uses_the_window_origin(tmp_path, monkeypatch):
+    """气泡锚点 = 身体框 + **窗口**原点（单窗一套坐标，副屏那只同样对）。"""
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
@@ -623,15 +623,16 @@ def test_bubble_anchor_uses_the_pets_own_screen_origin(tmp_path, monkeypatch):
         follower = shell._bubble_for(child)
         assert follower is not None
         body = child.body_rect()
-        expected = QRect(QPointF(1920, 0).toPoint() + body.topLeft(), body.size())
+        origin = shell.overlay.geometry().topLeft()
+        expected = QRect(origin + body.topLeft(), body.size())
         assert follower.anchor() == expected
         assert shell.bubble_anchor_rect_for(getattr(follower, "bubble", None)) == expected
     finally:
         _cleanup(shell)
 
 
-def test_island_wall_binds_to_the_islands_own_screen_host(tmp_path, monkeypatch):
-    """岛只有一座：它的墙只挂到岛所在那块屏的世界（不复制到别的屏）。"""
+def test_island_wall_binds_to_the_single_world(tmp_path, monkeypatch):
+    """岛只有一座：墙挂在唯一合成窗的世界里（岛的局部坐标与全部宠同源）。"""
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
@@ -639,7 +640,6 @@ def test_island_wall_binds_to_the_islands_own_screen_host(tmp_path, monkeypatch)
         shell.spawn_pet()
         child = shell._spawned[0]
         shell.move_sprite_to_screen(child, b)
-        host_b = shell.host_for_sprite(child)
 
         class _Island:
             def __init__(self, screen):
@@ -651,27 +651,29 @@ def test_island_wall_binds_to_the_islands_own_screen_host(tmp_path, monkeypatch)
         shell.attach_island(_Island(b))
 
         assert shell.island_bridge is not None
-        assert shell._island_host is host_b
-        assert shell.island_bridge.core._world is host_b.collision  # noqa: SLF001
+        assert shell._island_host is shell._main_host
+        assert shell.island_bridge.core._world is shell.collision  # noqa: SLF001
+        # 岛换到另一块屏：仍是同一个世界（不复制墙、不换宿主）
+        bridge = shell.island_bridge
         shell.attach_island(_Island(a))
-        assert shell._island_host is shell.host_for_sprite(shell.sprite)
+        assert shell._island_host is shell._main_host
+        assert shell.island_bridge is not bridge
+        assert shell.island_bridge.core._world is shell.collision  # noqa: SLF001
     finally:
         shell.attach_island(None)
         _cleanup(shell)
 
 
-def test_island_wall_waits_for_a_host_on_its_screen(tmp_path, monkeypatch):
-    """岛在一块还没有宠的屏上：先不挂墙；那块屏有宠了再把墙挂过去。
+def test_island_wall_has_a_landing_on_every_screen(tmp_path, monkeypatch):
+    """岛在没有宠的屏上也有落点：单窗铺满整个虚拟桌面，墙立刻挂上。
 
-    绝不允许"没有宿主就挂到主宿主"——局部坐标不同源，那等于在另一块屏上凭空
-    多出一堵墙。
+    旧拓扑要"等那块屏有宠（建出宿主）再挂墙"，因为局部坐标不同源、挂错等于在
+    另一块屏上凭空多一堵墙；单窗下只有一套坐标，这条等待条件消失。
     """
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
     shell = _make_shell(tmp_path, a)
     try:
-        host_a = shell.host_for_sprite(shell.sprite)
-
         class _Island:
             def __init__(self, screen):
                 self._screen = screen
@@ -679,22 +681,11 @@ def test_island_wall_waits_for_a_host_on_its_screen(tmp_path, monkeypatch):
             def _current_screen(self):
                 return self._screen
 
-        island = _Island(b)
-        shell.attach_island(island)
+        shell.attach_island(_Island(b))
 
-        assert getattr(shell, "island_bridge", None) is None
-        assert shell._island_host is None
-        assert not any(host.collision._static_members for host in shell.hosts())
-
-        # 这块屏第一次有宠 → 宿主建出来 → 墙补挂到它自己的世界上
-        main = shell.sprite
-        assert shell.move_sprite_to_screen(main, b) is True
-        host_b = shell.host_for_sprite(main)
-        assert host_b.screen is b
-        assert host_b is not host_a
         assert shell.island_bridge is not None
-        assert shell._island_host is host_b
-        assert shell.island_bridge.core._world is host_b.collision  # noqa: SLF001
+        assert shell.island_bridge.attached is True
+        assert shell._island_host is shell._main_host
     finally:
         shell.attach_island(None)
         _cleanup(shell)
@@ -705,10 +696,9 @@ def test_slingshot_gesture_after_crossing_uses_one_coordinate_system(
         tmp_path, monkeypatch):
     """跨屏拖到副屏后、**同一次 grab** 里点右键进弹弓：输入与预览同一坐标系。
 
-    grab 留在按下窗（A），而 sprite 已经在 B：喂原始 ``event.position()`` 会把 A 的
-    局部坐标与 B 上这只的坐标混起来（差整整一个屏原点）——拉拽预览按 B 的锚点画在
-    A 的坐标系里，取消后恢复的抓取偏移也错一个屏原点（下一次移动这只被甩一整块屏）。
-    这里钉三件事：瞄准会话可用、UI 归**持这只的那张窗**画、恢复拖拽后位移量不变。
+    单窗下"跨屏"只是同一张窗内的位移，锚点、拉拽矢量、瞄准 UI 全部在同一套局部
+    坐标里——这条用例钉住的就是"没有两套坐标可混"：拖过一整块屏之后手势仍然跟着
+    光标走，不会因为跨屏甩出去。
     """
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
@@ -716,51 +706,44 @@ def test_slingshot_gesture_after_crossing_uses_one_coordinate_system(
     try:
         main = shell.sprite
         main.set_pos(QPointF(200.0, 700.0))
-        overlay_a = shell.overlay
-        origin_a = QPointF(overlay_a.geometry().topLeft())
-        cursor, local_a = _drag_across(shell, main, steps=30, step_px=60)
-        host_b = shell.host_for_sprite(main)
-        assert host_b.screen is b, "前提：这只已经跨到副屏，而 grab 还在 A 窗"
+        overlay = shell.overlay
+        origin = QPointF(overlay.geometry().topLeft())
+        cursor, local = _drag_across(shell, main, steps=30, step_px=60)
+        assert _screen_of(shell, main) is b, "前提：这只已经拖到副屏上"
         assert b.geometry().contains(cursor.toPoint()), "前提：光标确实落在副屏上"
-        assert overlay_a._mouse_grab is main
+        assert overlay._mouse_grab is main
 
-        # 同一次 grab 里点右键 = 进瞄准（会话活在共用控制器上）
-        overlay_a.mousePressEvent(_right_press(local_a, cursor))
+        # 同一次 grab 里点右键 = 进瞄准（会话活在唯一控制器上）
+        overlay.mousePressEvent(_right_press(local, cursor))
         slingshot = shell._slingshot
         assert slingshot.aiming is True
         assert slingshot.sprite is main
-        assert slingshot.anchor == QPointF(main.pos), "锚点就是这只在它自己坐标系里的位置"
-        # 进去时的光标也必须是 B 的坐标系：与锚点同源，才不会有整屏偏移
+        assert slingshot.anchor == QPointF(main.pos), "锚点就是这只在窗口坐标里的位置"
         assert (slingshot.anchor_cursor - slingshot.anchor).manhattanLength() < (
-            main.rect().width() + main.rect().height()), (
-            "锚点光标与锚点同系（差一块屏的原点就会大得离谱）")
+            main.rect().width() + main.rect().height()), "锚点光标与锚点同系"
 
-        # 光标在 A 窗里向左挪 60px：拉拽矢量 = 60px（方向与坐标系无关；
-        # 60 在弹弓拉拽上限之内，不会被钳掉而掩盖算错坐标系的可能）
+        # 光标向左挪 60px：拉拽矢量 = 60px（60 在弹弓拉拽上限之内）
         pull_cursor = cursor - QPointF(60.0, 0.0)
-        overlay_a.mouseMoveEvent(_move(pull_cursor - origin_a, pull_cursor))
+        overlay.mouseMoveEvent(_move(pull_cursor - origin, pull_cursor))
         assert slingshot.pull.x() == pytest.approx(60.0, abs=1.0)
         assert slingshot.pull.y() == pytest.approx(0.0, abs=1.0)
 
-        # 瞄准 UI 归持这只的那张窗画：A 窗不画（否则带/预览落在错的屏上）
+        # 瞄准 UI 由这张窗画，脏区也归它
         canvas = QPixmap(16, 16)   # 画布要活到 painter 结束（临时对象会崩）
-        assert _painted(host_b.overlay, canvas) is True
-        assert _painted(overlay_a, canvas) is False
-        assert shell.host_for_sprite(main).overlay._slingshot_dirty.isEmpty() is False
-        assert overlay_a._slingshot_dirty.isEmpty() is True
+        assert _painted(overlay, canvas) is True
+        assert overlay._slingshot_dirty.isEmpty() is False
 
-        # 再点右键 = 取消并就地恢复拖拽：抓取偏移按当前光标重建（不差一个屏原点）
-        overlay_a.mousePressEvent(_right_press(pull_cursor - origin_a, pull_cursor))
+        # 再点右键 = 取消并就地恢复拖拽：抓取偏移按当前光标重建
+        overlay.mousePressEvent(_right_press(pull_cursor - origin, pull_cursor))
         assert slingshot.aiming is False
 
-        before = _global_of(shell.host_for_sprite(main), main)
+        before = QPointF(main.pos)
         next_cursor = pull_cursor + QPointF(40.0, 0.0)
-        overlay_a.mouseMoveEvent(_move(next_cursor - origin_a, next_cursor))
-        after = _global_of(shell.host_for_sprite(main), main)
-        assert (after - before).x() == pytest.approx(40.0, abs=2.0), (
-            "恢复拖拽后跟着光标走：错一个屏原点会整块屏地甩出去")
+        overlay.mouseMoveEvent(_move(next_cursor - origin, next_cursor))
+        assert (QPointF(main.pos) - before).x() == pytest.approx(40.0, abs=2.0), (
+            "恢复拖拽后跟着光标走")
 
-        overlay_a.mouseReleaseEvent(_release(next_cursor - origin_a, next_cursor))
+        overlay.mouseReleaseEvent(_release(next_cursor - origin, next_cursor))
     finally:
         _cleanup(shell)
 
@@ -769,10 +752,8 @@ def test_slingshot_gesture_after_crossing_uses_one_coordinate_system(
 def test_crossing_with_drag_physics_keeps_the_spring_lag(tmp_path, monkeypatch):
     """拖动物理开着时跨屏：逐拍连续、滞后保留，**不**瞬移到光标处。
 
-    移交发生在"全部 overlay advance 之后"（弹簧的实际位移也在 advance 里），所以这
-    里每一拍都走一个真 tick：跨屏那一拍只允许出现弹簧自己的位移（**不超过到目标的
-    剩余滞后**），换宿主后滞后仍然存在（不是被抹平后从光标处重新开始）。
-    跨屏域/原子换帧/轨迹一致这些更细的判据在 ``tests/test_overlay_seam_passage.py``。
+    跨屏不产生任何"移交拍"（同一张窗），所以这条用例钉的是更基本的一件事：跨过
+    屏边界的那些 tick 里，位移只能是弹簧自己的那一份，不能出现整块屏的跳变。
     """
     a, b = _two_screens()
     _install_screens(monkeypatch, a, b)
@@ -780,41 +761,38 @@ def test_crossing_with_drag_physics_keeps_the_spring_lag(tmp_path, monkeypatch):
     try:
         main = shell.sprite
         main.set_pos(QPointF(600.0, 600.0))
-        overlay_a = shell.overlay
-        origin_a = QPointF(overlay_a.geometry().topLeft())
+        overlay = shell.overlay
+        origin = QPointF(overlay.geometry().topLeft())
         _hittable(main)
         hit = QPointF(main.rect().center())
-        overlay_a.mousePressEvent(_press(hit, origin_a + hit))
-        cursor = origin_a + hit
+        overlay.mousePressEvent(_press(hit, origin + hit))
+        cursor = origin + hit
         for _ in range(5):
             cursor = QPointF(cursor.x() + 40.0, cursor.y())
-            overlay_a.mouseMoveEvent(_move(cursor - origin_a, cursor))
-        assert shell.host_for_sprite(main).screen is a
+            overlay.mouseMoveEvent(_move(cursor - origin, cursor))
+        assert _screen_of(shell, main) is a
         assert (QPointF(main._drag_spring_target) - QPointF(main.pos)).x() > 100.0, (
             "前提：弹簧滞后已经攒出来（拖动确实落后于目标）")
 
-        # 一大步跨过缝，然后逐拍推进：每一拍的位移都不许超过当时的剩余滞后
+        # 一大步跨过屏边界，然后逐拍推进：每一拍的位移都不许超过当时的剩余滞后
         cursor = QPointF(cursor.x() + 1400.0, cursor.y())
-        overlay_a.mouseMoveEvent(_move(cursor - origin_a, cursor))
-        lag_at_cross = None
+        overlay.mouseMoveEvent(_move(cursor - origin, cursor))
+        crossed = False
         for tick in range(1, 120):
-            prev = _global_of(shell.host_for_sprite(main), main)
+            prev = QPointF(main.pos)
             lag = abs(QPointF(main._drag_spring_target).x() - main.pos.x())
             _tick(shell)
-            step = abs(_global_of(shell.host_for_sprite(main), main).x() - prev.x())
+            step = abs(QPointF(main.pos).x() - prev.x())
             assert step <= lag + 4.0, (
                 f"第 {tick} 拍位移 {step} 明显超过剩余滞后 {lag}（那是瞬移不是弹簧）")
-            if shell.host_for_sprite(main).screen is b:
-                lag_at_cross = lag
+            if _screen_of(shell, main) is b:
+                crossed = True
                 break
-        assert shell.host_for_sprite(main).screen is b, "身体整块进副屏后应当移交"
-        assert lag_at_cross is not None and lag_at_cross > 0.0, (
-            "过缝那一刻滞后仍在（没有被抹平）")
+        assert crossed, "身体整块进副屏后就算在副屏上（同一张窗，无移交拍）"
 
-        before_release = _global_of(shell.host_for_sprite(main), main)
-        overlay_a.mouseReleaseEvent(_release(cursor - origin_a, cursor))
-        after_release = _global_of(shell.host_for_sprite(main), main)
-        assert (after_release - before_release).manhattanLength() < 2.0, (
+        before_release = QPointF(main.pos)
+        overlay.mouseReleaseEvent(_release(cursor - origin, cursor))
+        assert (QPointF(main.pos) - before_release).manhattanLength() < 2.0, (
             "松手不得把这只从当前位置挪到光标处")
         assert main.interaction_state in ("normal", "thrown")
     finally:
@@ -822,11 +800,11 @@ def test_crossing_with_drag_physics_keeps_the_spring_lag(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------- runtime 标记监听
-def test_main_pet_position_listener_follows_its_own_window(tmp_path, monkeypatch):
-    """主宠移到副屏后：位置监听挂在**那些这只的窗**上，标记照旧随位置更新。
+def test_main_pet_position_listener_tracks_it_across_screens(tmp_path, monkeypatch):
+    """主宠移到副屏后：runtime 标记（设置进程避让用）照旧随位置更新。
 
-    老写法挂 ``self.overlay``（主宿主那张窗）：主宠跨屏后那张窗不再驱动它，标记
-    永不更新；主宿主被回收时连注册一起丢掉。
+    监听挂在唯一合成窗上，而这正是不再需要"逐屏重挂注册"的原因：宠在哪块屏上，
+    窗口都是同一张。
     """
     from pet import slot_manager
 
@@ -835,15 +813,11 @@ def test_main_pet_position_listener_follows_its_own_window(tmp_path, monkeypatch
     shell = _make_shell(tmp_path, a)
     try:
         main = shell.sprite
-        overlay_a = shell.overlay
-        assert shell._on_main_sprite_moved in overlay_a._position_listeners.get(main, [])
+        overlay = shell.overlay
+        assert shell._on_main_sprite_moved in overlay._position_listeners.get(main, [])
 
         assert shell.move_sprite_to_screen(main, b) is True
-        host_b = shell.host_for_sprite(main)
-        assert shell._on_main_sprite_moved in host_b.overlay._position_listeners.get(
-            main, []), "监听要挂在持有这只的那张窗上"
-        assert shell._on_main_sprite_moved not in overlay_a._position_listeners.get(
-            main, []), "旧窗上的影子注册要摘掉"
+        assert shell._on_main_sprite_moved in overlay._position_listeners.get(main, [])
 
         def marker_x():
             path = slot_manager.runtime_marker_path(
@@ -851,14 +825,10 @@ def test_main_pet_position_listener_follows_its_own_window(tmp_path, monkeypatch
             payload = json.loads(path.read_text(encoding="utf-8"))
             return payload["x"]
 
-        main.set_pos(QPointF(600.0, 500.0))
+        main.set_pos(QPointF(2100.0, 500.0))
 
         def drift_and_fanout(dx):
-            """让这只真动起来并跑一次推进段：位置通知就在这一段扇出。
-
-            先把位置写好再跑推进段是**不会**触发通知的（推进段比的是这一次
-            advance 前后的矩形），所以这里给一段真速度让它在该次 advance 里位移。
-            """
+            """让这只真动起来并跑一次推进段：位置通知就在这一段扇出。"""
             shell._last_marker_write = 0.0
             main.set_velocity(QPointF(dx * 60.0, 0.0))
             shell.driver.advance_overlays(1 / 60.0)
@@ -869,15 +839,8 @@ def test_main_pet_position_listener_follows_its_own_window(tmp_path, monkeypatch
         drift_and_fanout(400.0)
         second = marker_x()
         assert second - first == pytest.approx(400.0, abs=8.0), (
-            "标记跟着这只在副屏上的位置走（挂错窗就永远不动）")
-
-        # 主宿主那张窗被回收（A 上没宠）之后，标记照旧更新——监听不在它身上
-        shell._reap_empty_hosts()
-        assert shell.host_for_screen(a) is None, "前提：A 那块窗已经收掉"
-        drift_and_fanout(200.0)
-        third = marker_x()
-        assert third - second == pytest.approx(200.0, abs=8.0), (
-            "回收 A 窗不得带走这只的标记监听")
+            "标记跟着这只在副屏上的位置走")
+        assert _screen_of(shell, main) is b
     finally:
         _cleanup(shell)
 
@@ -887,10 +850,10 @@ def test_screen_removed_without_any_fallback_screen_finishes_the_grab(
         tmp_path, monkeypatch):
     """拔屏且**没有**兜底屏可迁：在途会话仍要走完 grab 收尾协议。
 
-    ``_fallback_screen`` 返回 None（这是唯一的活动屏）时 ``_migrate_to_screen``
-    首行就返回——这条路径**没有**随后的 show() 收敛兜底（穿透修复报告 §三 记的
-    正是它），grab 收尾的壳层通知因此是冲刷穿透待办的唯一时机：漏掉就
-    ``_converge_pending`` 与 ``_auto_cursor_hidden`` 一起永久滞留（看得见点不到）。
+    ``_fallback_screen`` 返回 None（这是唯一的活动屏）时换家是空操作——这条路径
+    **没有**随后的 show() 收敛兜底（穿透修复报告 §三 记的正是它），grab 收尾的壳层
+    通知因此是冲刷穿透待办的唯一时机：漏掉就 ``_converge_pending`` 与
+    ``_auto_cursor_hidden`` 一起永久滞留（看得见点不到）。
     """
     a = FakeScreen((0, 0, 1920, 1080), (0, 0, 1920, 1040), name="only")
     _install_screens(monkeypatch, a)            # 只有这一块屏：拔了就没兜底
@@ -908,7 +871,7 @@ def test_screen_removed_without_any_fallback_screen_finishes_the_grab(
 
         shell.handle_screen_removed(a)
 
-        assert shell.overlay is overlay                   # 前提：没兜底屏 → 没迁移
+        assert shell.overlay is overlay                   # 没兜底屏 → 窗口不动
         assert released == [QPointF(shell.sprite.pos)]    # 会话只松一次手
         assert overlay._mouse_grab is None
         assert overlay._press_click_only is False
@@ -919,14 +882,8 @@ def test_screen_removed_without_any_fallback_screen_finishes_the_grab(
         _cleanup(shell)
 
 
-def test_screen_removed_finishes_only_that_windows_session(tmp_path, monkeypatch):
-    """拔屏只收那块屏窗口的会话，别的窗口的在途 grab 一个字段都不动。
-
-    构造的是跨屏拖拽进行中的真实形态：输入会话留在 A 窗（按下窗）而被抓的宠身体
-    已经在 B 上——A 窗的 sprite 表已空、``_mouse_grab`` 还握着它。此刻拔掉 A 屏：
-    A 的会话按协议收尾（收尾通知里就顺手回收了这块空宿主一次），拔屏处置不得再
-    回收第二次；C 窗上另一只在途会话全程不许被打断。
-    """
+def test_screen_removed_finishes_the_inflight_session_once(tmp_path, monkeypatch):
+    """拔屏只收一次会话：在途 grab 按协议收尾（恰好一次），别的宠一分不动。"""
     a, b, c = _three_screens()
     _install_screens(monkeypatch, a, b, c)
     shell = _make_shell(tmp_path, a)
@@ -939,39 +896,27 @@ def test_screen_removed_finishes_only_that_windows_session(tmp_path, monkeypatch
         shell.move_sprite_to_screen(first, b)
         shell.move_sprite_to_screen(second, c)
         main = shell.sprite
-        host_a = shell.host_for_sprite(main)
-        overlay_a = shell.overlay
-        _drag_across(shell, main)                 # A 窗按住 → 身体过缝 → 归 B
-        host_b = shell.host_for_sprite(main)
-        assert host_b.screen is b
-        assert overlay_a.sprites == [], "前提：A 窗的 sprite 表已空（会话还握着）"
-        assert overlay_a._mouse_grab is main
+        _drag_across(shell, main)                 # 按住 → 身体过缝（同一张窗）
+        assert _screen_of(shell, main) is b
+        overlay = shell.overlay
+        assert overlay._mouse_grab is main
         released: list = []
         main.on_release = released.append
-
-        # C 窗上另一只在途会话（合成形态：同一时刻生产上只能有一只按着）
-        host_c = shell.host_for_sprite(second)
-        overlay_c = host_c.overlay
-        overlay_c._mouse_grab = second
-        overlay_c._press_global = QPointF(7, 9).toPoint()
-        other_releases: list = []
-        second.on_release = other_releases.append
+        pos_at_release = QPointF(main.pos)
 
         shell.handle_screen_removed(a)
 
-        assert released == [QPointF(main.pos)]    # A 的会话收尾一次（不重复 release）
-        assert overlay_a._mouse_grab is None
-        assert overlay_a._press_click_only is False
-        assert overlay_a._drag_committed is False
-        assert overlay_a._press_global is None
-        assert host_a not in shell.hosts(), "A 的空宿主只回收一次（不重复回收）"
+        # 会话收尾一次（不重复 release）；收尾用的是松开那一刻的当前位置
+        assert released == [pos_at_release]
+        assert overlay._mouse_grab is None
+        assert overlay._press_click_only is False
+        assert overlay._drag_committed is False
+        assert overlay._press_global is None
+        assert shell.hosts() == [shell._main_host], "单窗：拔屏不换宿主"
         assert shell.host_for_screen(a) is None
-        assert shell.hosts() == [host_b, host_c]
-        # 别的窗口的会话不被打断
-        assert overlay_c._mouse_grab is second
-        assert overlay_c._press_global == QPointF(7, 9).toPoint()
-        assert other_releases == []
-        assert shell.host_for_sprite(first).screen is b
-        assert shell.host_for_sprite(second).screen is c
+        assert _screen_of(shell, first) is b
+        assert _screen_of(shell, second) is c
     finally:
         _cleanup(shell)
+
+

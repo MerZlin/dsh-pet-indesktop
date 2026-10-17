@@ -572,8 +572,11 @@ def test_promotion_adopts_child_bubble_and_keeps_its_settings(tmp_path):
         toggle._teardown(shell)
 
 
-def test_migrate_rebuilds_every_bubble(tmp_path):
-    """屏迁移：主 + 每只子宠的气泡跟随器全部重建（跟随器记着旧 overlay）。"""
+def test_migrate_keeps_every_bubble(tmp_path):
+    """换家：主 + 每只子宠的气泡跟随器都留在原地（单窗不重建跟随器）。
+
+    跟随器记的是窗口对象；单窗拓扑下换家不动窗口，所以既不重建也不丢气泡。
+    """
     shell, cfg = toggle._make_slot_shell(tmp_path)
     try:
         shell.spawn_pet()
@@ -583,10 +586,9 @@ def test_migrate_rebuilds_every_bubble(tmp_path):
 
         shell._migrate_to_screen(QGuiApplication.primaryScreen())
 
-        assert shell._bubble_follower is not old_main
-        assert child in shell._bubble_followers
-        assert shell._bubble_followers[child] is not old_child
-        assert old_child.bubble is None or old_child.bubble.isVisible() is False
+        assert shell._bubble_follower is old_main
+        assert shell._bubble_followers[child] is old_child
+        assert shell.overlay is old_main._overlay
     finally:
         shell.overlay.close()
         toggle._teardown(shell)

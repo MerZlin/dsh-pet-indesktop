@@ -202,7 +202,7 @@ def test_visible_overlay_gate_counts_real_widget_visibility():
 
 
 def test_tray_hide_and_screen_migration_stay_paired(tmp_path):
-    """托盘隐藏 + 屏迁移重建：闸门计数与轮询表在每一步都成对。"""
+    """托盘隐藏 + 换家：闸门计数与轮询表在每一步都成对（单窗不重建窗口）。"""
     base = overlay_peripherals.visible_overlay_count()
     shell = _make_shell(tmp_path)
     shell.start()
@@ -216,19 +216,16 @@ def test_tray_hide_and_screen_migration_stay_paired(tmp_path):
         assert shell._watcher._cursor_timer.isActive()
 
         old = shell.overlay
-        old_ctl = old._input_controller          # 迁移前捕获：旧 overlay 自己的控制器
+        old_ctl = old._input_controller          # 换家前捕获：这张窗自己的控制器
         shell._migrate_to_screen(QGuiApplication.primaryScreen())
-        assert shell.overlay is not old, "前提：迁移确实重建了 overlay"
+        assert shell.overlay is old, "前提：单窗拓扑下换家不重建窗口"
         assert overlay_peripherals.visible_overlay_count() == base + 1, (
-            "旧 overlay 必须从闸门里摘掉（hide/close 成对）")
+            "窗口没变，闸门计数不变")
         assert shell._watcher._cursor_timer.isActive()
         # 逐像素穿透轮询由 showEvent 按平台创建（见文件头注释），两个平台都要钉：
-        # 新 overlay 必须重新有控制器并在轮询，旧 overlay 的控制器必须已停表——
-        # 迁移是「旧窗 close + 新窗 show」的配对路径，漏任一半都会留下空转的轮询表。
+        # 换家不重建窗口 ⇒ 控制器还是同一个、仍在轮询（不产生新的空转/重复表）。
         ctl = shell.overlay._input_controller
-        assert ctl is not None and ctl._timer.isActive(), "新 overlay 必须重新轮询"
-        assert old_ctl is not None and not old_ctl._timer.isActive(), (
-            "旧 overlay 的控制器必须已停表")
+        assert ctl is old_ctl and ctl is not None and ctl._timer.isActive()
         # 平台判据用 ``sys.platform``——与产品分派（overlay_window.showEvent 的
         # win32 门）同一个键，避免测试用了另一个键而给出错误期望。
         if sys.platform == "win32":

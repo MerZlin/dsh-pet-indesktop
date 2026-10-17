@@ -88,9 +88,15 @@ class OverlayWindow(QWidget):
         # legacy ``PetWindow`` 一直带着这条修复（pet/window.py，同一 helper），overlay
         # 单合成窗新架构落成时漏了它。只设 native 属性、不动 flags，不会重建原生窗口。
         _keep_macos_tool_window_visible(self)
-        # 一块屏一张窗：默认主屏，调用方（壳的宿主）注入该窗所属的 QScreen。
+        # 合成窗：默认主屏，调用方（壳的宿主）注入该窗所属的 QScreen。窗口矩形默认
+        # 取该屏几何；壳注入 ``_desktop_bounds``（各屏可用工作区的并集）后由它接管
+        # ——并集要排除每屏任务栏，按窗口矩形自判全屏的第三方软件（壁纸引擎、
+        # 任务栏监控）才不会把桌宠当成全屏应用。
         self._screen = screen or QApplication.primaryScreen()
-        self.setGeometry(self._screen.geometry())
+        self._desktop_bounds = None
+        # 逐只 DPR 取数（sprite → 它所在那块屏）；壳注入，未注入 = 本窗屏
+        self._screen_of_sprite = None
+        self.setGeometry(self._desktop_rect())
 
         self.sprites: list = []
         self._mouse_grab = None
@@ -114,11 +120,6 @@ class OverlayWindow(QWidget):
         # 变化的 sprite 触发其 listeners（cb(sprite)）；外围小窗（气泡等）的
         # 跟随源——sprite 不是窗口，没有 moveEvent 可挂。
         self._position_listeners: dict = {}
-        # 跨屏过渡的**只读投影**：sprite -> 偏移（归属窗原点 − 本窗原点）。
-        # 身体跨在缝上时，缝两侧各画自己那一半：归属窗画本体，邻窗按这条映射把
-        # 同一只 sprite 平移后重画一次（本窗裁剪天然只留落在自己屏里的部分）。
-        # 只读协议：不复制 sprite/媒体、不进 tick 与 collision、不换 DPR、不抢 grab。
-        self._projections: dict = {}
         # 逐像素穿透协议字段（platform_win 的 Windows 控制器与
         # platform_passthrough 的 Qt 控制器共用同一套判定，见 showEvent 平台分派）：
         # mouse_through = 用户手动"鼠标穿透"开关（恒穿透）；_press_global 非 None
@@ -162,8 +163,19 @@ class OverlayWindow(QWidget):
 
     @property
     def screen(self) -> QScreen | None:
-        """所在屏（只读）：M-2 后驱动器按它取刷新率（多 overlay 取最高者）。"""
+        """所在屏（只读）：合成窗覆盖整个虚拟桌面，它是 Qt 按窗口位置归属的那块
+        （DPR 取数的缺省源；壳会注入逐只取数以按宠所在屏渲染）。"""
         return self._screen
+
+    def _desktop_rect(self) -> QRect:
+        """窗口矩形：壳注入的 ``_desktop_bounds``（各屏可用工作区并集）优先，
+        未注入（裸 overlay / demo 装配）= 本窗那块屏的几何。"""
+        provider = self._desktop_bounds
+        if callable(provider):
+            rect = provider()
+            if rect is not None and not rect.isEmpty():
+                return QRect(rect)
+        return QRect(self._screen.geometry())
 
     @property
     def tick_driver(self) -> TickDriver:
@@ -360,35 +372,46 @@ class OverlayWindow(QWidget):
 
         sprite._dirty_cb = _on_sprite_dirty
         sprite._kinetic_cb = self._note_kinetic  # set_velocity 直报（M-1）
-        # V-11：DPR 由 overlay 统一按所在屏喂（此前靠调用方记得，demo 从没
-        # 喂过）；取 QScreen 而非 widget 的 devicePixelRatioF——窗口未
+        # V-11：DPR 由 overlay 统一按**这只所在屏**喂（此前靠调用方记得，demo
+        # 从没喂过）；取 QScreen 而非 widget 的 devicePixelRatioF——窗口未
         # realize 前后者不可信（offscreen/壳层构建期恒 1.0）
-        set_dpr = getattr(sprite, "set_dpr", None)
-        if callable(set_dpr):
-            set_dpr(float(self._screen.devicePixelRatio()))
+        self._feed_sprite_dpr(sprite)
         if self.isVisible():
             self.update(QRegion(sprite.rect()))
         # M12c：sprite 数从 0 恢复 → 驱动器重新起表
         self._driver.note_sprite_count_changed()
 
     # ---------------------------------------------------------------- DPR 归一化（D2）
+    def _sprite_screen(self, sprite):
+        """该 sprite 所在的屏（壳注入逐只取数；未注入 = 本窗屏）。"""
+        resolve = self._screen_of_sprite
+        if callable(resolve):
+            screen = resolve(sprite)
+            if screen is not None:
+                return screen
+        return self._screen
+
+    def _feed_sprite_dpr(self, sprite) -> bool:
+        """按这只所在屏喂 DPR；返回 DPR 是否真的变了。"""
+        set_dpr = getattr(sprite, "set_dpr", None)
+        if not callable(set_dpr):
+            return False
+        before = getattr(sprite, "dpr", None)
+        set_dpr(float(self._sprite_screen(sprite).devicePixelRatio()))
+        return getattr(sprite, "dpr", None) != before
+
     def _feed_dpr(self) -> None:
-        """把所在屏 DPR 喂给全部 sprite（add_sprite/showEvent/屏事件）。
+        """把各只所在屏的 DPR 喂给全部 sprite（add_sprite/showEvent/屏事件）。
 
         覆盖所有 sprite（不只主宠）：4.2b 生成的子 sprite 同样必须按屏 DPR
-        渲染，否则 125%/150% 下只有主宠清晰。只在 DPR 真正变化时补一次
-        全窗重绘（同值零开销——屏幕信号会重复上报）；变化时 sprite 内部已
-        按新 DPR 重建 pixmap 与命中图（PetSprite.set_dpr → _invalidate_frames）。
+        渲染，否则 125%/150% 下只有主宠清晰。**逐只按自己那块屏**取数——一张窗
+        只有一个 DPR（Qt 物理限制），混合缩放时画的还是那一份，但每只的
+        pixmap/命中图按它自己那块屏重建，跨屏拖动后不会停在旧缩放的成品上。
+        只在 DPR 真正变化时补一次全窗重绘（同值零开销——屏幕信号会重复上报）。
         """
-        dpr = float(self._screen.devicePixelRatio())
         changed = False
         for sprite in self.sprites:
-            set_dpr = getattr(sprite, "set_dpr", None)
-            if not callable(set_dpr):
-                continue
-            before = getattr(sprite, "dpr", None)
-            set_dpr(dpr)
-            if getattr(sprite, "dpr", None) != before:
+            if self._feed_sprite_dpr(sprite):
                 changed = True
         if changed:
             self.update()
@@ -498,18 +521,18 @@ class OverlayWindow(QWidget):
         self.update()
 
     def _on_screen_geometry_changed(self, *_args) -> None:
-        """所在屏几何/可用区变化：overlay 跟随屏几何 + 重读刷新率 + 重喂 DPR。
+        """所在屏几何/可用区变化：合成窗跟随窗口矩形 + 重读刷新率 + 重喂 DPR。
 
-        分辨率/模式切换常连带 DPR 与刷新率变化；几何同步对未接壳层的裸
-        overlay 必需（壳层路径另有 _sync_geometry，重复设置同值是 no-op）。
+        分辨率/模式切换常连带 DPR 与刷新率变化。窗口矩形由 ``_desktop_rect``
+        取（壳注入的各屏可用区并集；裸 overlay = 本屏几何）——**绝不**在这里
+        回退成单屏几何：合成窗铺的是整个虚拟桌面，缩回一块屏会把别的屏上的宠
+        留在窗外。
         """
         if not self._alive():
             return  # 屏信号可能晚于窗口销毁（见 _alive）
-        screen = self._screen
-        if screen is not None:
-            geo = screen.geometry()
-            if self.geometry() != geo:
-                self.setGeometry(geo)
+        geo = self._desktop_rect()
+        if self.geometry() != geo:
+            self.setGeometry(geo)
         self._refresh_tick_interval()
         self._feed_dpr()
         self.update()
@@ -543,56 +566,10 @@ class OverlayWindow(QWidget):
         # M12c：聚合 sprite 数归零 → 驱动器停表（空窗期不再空转）
         self._driver.note_sprite_count_changed()
 
-    def detach_sprite_for_transfer(self, sprite) -> None:
-        """跨屏移交：把 sprite 摘出本窗，但**不**广播移除、**不**释放 clip。
-
-        与 ``remove_sprite`` 的分工就是"搬家"与"退场"：搬家不是注销——行为/
-        探头/彩蛋状态、clip 所有权、驱动器时钟都要原样过继给目标宿主。故这里
-        只做本窗自己的簿记（z 序、位置监听、脏/活力回调、残留像素），
-        不通知 ``_sprite_removed_listeners``、不 ``note_sprite_count_changed``
-        （后者会在一摘一加之间把整组 tick 停掉再重启）。
-
-        瞄准会话是按下窗的会话（aiming 期间 sprite 定锚不动、不参与换屏），
-        故这里不需要处理 slingshot。
-        """
-        if sprite not in self.sprites:
-            return
-        self.sprites.remove(sprite)
-        self._position_listeners.pop(sprite, None)
-        sprite._dirty_cb = None
-        sprite._kinetic_cb = None
-        self.update(QRegion(sprite.rect()))
-
     def add_sprite_removed_listener(self, cb) -> None:
         """注册 sprite 移除通知（V-9 外部簿记注销挂点）；重复注册 no-op。"""
         if cb not in self._sprite_removed_listeners:
             self._sprite_removed_listeners.append(cb)
-
-    # ---------------------------------------------------------------- 跨屏只读投影
-    def set_projection(self, sprite, offset) -> None:
-        """登记/更新一只**属于别的窗**的 sprite 在本窗的只读投影。
-
-        ``offset`` = 归属窗原点 − 本窗原点（把这只的局部坐标搬进本窗坐标系的平移
-        量）。只读：本窗只借 painter 平移重画它的当前帧，不持有它的驱动权。
-        """
-        self._projections[sprite] = QPointF(offset)
-
-    def clear_projection(self, sprite) -> bool:
-        """摘掉一只投影（返回是否原本有）。"""
-        return self._projections.pop(sprite, None) is not None
-
-    def projection_offset(self, sprite):
-        """该投影的映射偏移（没投影返回 None）。"""
-        return self._projections.get(sprite)
-
-    def projection_rect(self, sprite) -> QRect:
-        """该投影在本窗坐标系里的绘制外接矩形（脏区映射用它）。"""
-        offset = self._projections.get(sprite)
-        if offset is None:
-            return QRect()
-        rect = (sprite.paint_bounds() if hasattr(sprite, "paint_bounds")
-                else sprite.rect())
-        return rect.translated(int(offset.x()), int(offset.y()))
 
     # ---------------------------------------------------------------- 位置监听（Phase 3b）
     def add_position_listener(self, sprite, cb) -> None:
@@ -624,11 +601,9 @@ class OverlayWindow(QWidget):
         未实现的监听方（壳层簿记、聊天跟随窗等）原样跳过。锚点由跟随方自算，
         本类既不认识跟随器的存在形式，也不依赖壳层。
 
-        跟随方注册在**持有该 sprite 的 overlay** 上（跨屏移交后 ≠ 本窗），故经
-        ``_follow_overlay`` 取归属窗，而不是直接用本窗的监听表。
+        跟随方注册在本窗的位置监听表上（一张窗承载全部 sprite）。
         """
-        owner = self._follow_overlay(sprite)
-        for cb in list(owner._position_listeners.get(sprite, [])):
+        for cb in list(self._position_listeners.get(sprite, [])):
             flush = getattr(cb, "follow_now", None)
             if not callable(flush):
                 continue
@@ -638,19 +613,6 @@ class OverlayWindow(QWidget):
                 # 外围跟随方失败绝不打断拖拽主链路（气泡同款静默降级）：
                 # 其余监听方与后续拖拽收尾照旧。
                 pass
-
-    def _follow_overlay(self, sprite):
-        """持有该 sprite 位置监听的 overlay（默认本窗；跨屏移交由子类解析）。"""
-        return self
-
-    def _sprite_event_pos(self, sprite, global_pos, local_pos) -> QPointF:
-        """鼠标事件坐标 → sprite 所在坐标系（overlay 局部）坐标。
-
-        单屏装配下 sprite 的坐标系就是本窗局部坐标，返回 ``local_pos`` 逐位
-        等值。跨屏拖动时 sprite 的**归属**已是别的宿主（见 shell 的移交），而
-        输入会话仍留在按下窗，故由子类覆写本钩子按全局坐标换算。
-        """
-        return local_pos
 
     # ---------------------------------------------------------------- 统一 tick
     def before_sprites_advance(self, dt: float) -> None:
@@ -716,22 +678,6 @@ class OverlayWindow(QWidget):
                 continue  # M14：隐藏 sprite 跳过绘制（脏区域照旧被覆盖擦除）
             if region.intersects(sprite.rect()):
                 sprite.paint(painter)
-        # 跨屏投影：不属于本窗、但身体有一部分落在本屏的那只，按映射平移重画。
-        # 画在本窗自己的 sprite 之上（正在被拖的那只是活动对象，压在别人上面）。
-        # 本窗裁剪天然只留落在自己屏里的那一部分——这就是"两边各画一半"的拼接。
-        for sprite, offset in list(self._projections.items()):
-            if not getattr(sprite, "visible", True):
-                continue
-            rect = (sprite.paint_bounds() if hasattr(sprite, "paint_bounds")
-                    else sprite.rect()).translated(int(offset.x()), int(offset.y()))
-            if not region.intersects(rect):
-                continue
-            painter.save()
-            try:
-                painter.translate(offset)
-                sprite.paint(painter)
-            finally:
-                painter.restore()
         self._paint_slingshot(painter)  # 瞄准 UI 层（橡皮带 + 轨迹预览，最上）
         painter.end()
 
@@ -958,8 +904,7 @@ class OverlayWindow(QWidget):
         self._commit_drag_if_threshold_crossed(global_pos)
         # grab 期间事件直达被按住的 sprite（光标移出/落到别的 sprite 上不换手）；
         # 坐标按 sprite 所在坐标系换算（跨屏移交后已不是本窗局部坐标）
-        self._mouse_grab.on_move(
-            self._sprite_event_pos(self._mouse_grab, global_pos, event.position()))
+        self._mouse_grab.on_move(event.position())
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
@@ -974,8 +919,7 @@ class OverlayWindow(QWidget):
             event.accept()
             return
         grab = self._mouse_grab
-        self._finish_grab(self._sprite_event_pos(
-            grab, event.globalPosition().toPoint(), event.position()))
+        self._finish_grab(event.position())
         if grab is None:
             event.ignore()
             return
@@ -1087,23 +1031,12 @@ class OverlayWindow(QWidget):
         self._finish_grab(self._cursor_grab_pos())
 
     def _cursor_grab_pos(self) -> QPointF:
-        """看门狗收尾用的当前位置：按当前 grab 的坐标系换算（跨屏移交后已
-        不是本窗局部坐标，见 ``_sprite_event_pos``）。"""
-        global_pos = QCursor.pos()
-        return self._sprite_event_pos(
-            self._mouse_grab, global_pos, QPointF(self.mapFromGlobal(global_pos)))
+        """看门狗收尾用的当前位置（合成窗局部坐标）。"""
+        return QPointF(self.mapFromGlobal(QCursor.pos()))
 
     def _grab_cursor_pos(self, event) -> QPointF:
-        """事件光标位置 → **被抓住那只 sprite 所在坐标系**的坐标。
-
-        弹弓的锚点/拉拽矢量、拖拽收尾都活在这只 sprite 的坐标系里；跨屏移交后
-        输入会话仍留在按下窗，直接喂 ``event.position()`` 会把本窗局部坐标与另一
-        块屏上的 sprite 坐标混起来（差整整一个屏原点：抓取偏移错位、橡皮带与
-        轨迹预览画在错的窗/错的位置）。本方法不 warp 鼠标，只做坐标换算。
-        """
-        grip = self._mouse_grab if self._mouse_grab is not None else self.slingshot.sprite
-        return self._sprite_event_pos(
-            grip, event.globalPosition().toPoint(), event.position())
+        """事件光标位置（= 合成窗局部坐标，sprite 与事件同一坐标系）。"""
+        return event.position()
 
     # ---------------------------------------------------------------- 弹弓会话（事件侧调和）
     def _consume_right_press_for_slingshot(self, event) -> bool:
@@ -1155,13 +1088,8 @@ class OverlayWindow(QWidget):
     def _paint_slingshot(self, painter: QPainter) -> bool:
         """瞄准 UI 绘制挂点（橡皮带 + 轨迹预览）。只在瞄准期间有内容。
 
-        跨屏：会话可能开在按下窗、而被瞄准的 sprite 已在另一块屏上（拖拽跨屏
-        之后才点右键），瞄准 UI 的坐标属于**持 sprite 的那张窗**——只有它画，
-        按下窗不画（否则带/预览按另一套局部坐标落在错的窗上）。
+        会话与 sprite 同在一张合成窗、同一套局部坐标，直接画。
         """
-        sprite = self.slingshot.sprite
-        if sprite is not None and self._follow_overlay(sprite) is not self:
-            return False
         return self.slingshot.paint(painter)
 
     def _refresh_slingshot_visual(self) -> None:
@@ -1173,14 +1101,7 @@ class OverlayWindow(QWidget):
         的像素）。取消/发射后当前区域为空，旧区域这一笔负责把残留的带/点
         擦干净。
 
-        跨屏同 ``_paint_slingshot``：脏区归持有被瞄准 sprite 的那张窗（可能不是
-        本窗），这里把请求转过去，保持"绘制与擦除在同一个坐标系、同一条通道"。
         """
-        sprite = self.slingshot.sprite
-        owner = self._follow_overlay(sprite) if sprite is not None else self
-        if owner is not self:
-            owner._refresh_slingshot_visual()
-            return
         current = self.slingshot.visual_region(self.rect())
         dirty = current | self._slingshot_dirty
         self._slingshot_dirty = current

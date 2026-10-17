@@ -305,6 +305,8 @@ def test_tray_default_corner_targets_clicked_pet(tmp_path):
     try:
         first, _second = _spawn_two(shell)
         before = QPointF(shell.sprite.pos)
+        # 先把这只挪开：新宠自主宠错开时可能已经落在默认角落上（那样断言就没牙了）
+        first.set_pos(QPointF(200.0, 200.0))
         expected = shell._default_corner_pos(shell._bounds, first.rect())
         _action(_submenus(_tray_menu(shell))[_child_label(shell, first)],
                 "回到右下角").trigger()

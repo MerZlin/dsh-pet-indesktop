@@ -87,11 +87,17 @@ class FakeSprite:
     def rect(self):
         return QRect(int(self.pos.x()), int(self.pos.y()), *self.SIZE)
 
+    def body_rect(self):
+        return self.rect()
+
     def set_dpr(self, dpr):
         self.dpr_calls.append(float(dpr))
 
     def set_bounds(self, bounds):
         self.bounds_calls.append(QRect(bounds))
+
+    def set_clamp_rects(self, rects):
+        self.clamp_rects = None if rects is None else tuple(rects)
 
     def set_pos(self, pos):
         self.pos = QPointF(pos)
@@ -413,7 +419,8 @@ def test_geometry_change_migrates_sprite_proportionally():
     screen.set_rects((0, 0, 1280, 720), (0, 0, 1280, 680), dpr=2.0)
     screen.geometryChanged.emit(screen.geometry())   # 走真信号接线，不直调 handler
 
-    assert shell.overlay.geometry() == QRect(0, 0, 1280, 720)
+    # 合成窗 = 可用工作区的并集（不是屏几何）：任务栏那条不算窗内（#302）
+    assert shell.overlay.geometry() == QRect(0, 0, 1280, 680)
     assert shell.behavior.bounds == QRect(0, 0, 1280, 680)
     assert shell.physics.bounds == QRectF(0, 0, 1280, 680)
     assert sprite.bounds_calls[-1] == QRect(0, 0, 1280, 680)
@@ -423,57 +430,61 @@ def test_geometry_change_migrates_sprite_proportionally():
 
 
 def test_geometry_change_with_offset_origin():
-    # 屏原点非 (0,0)（副屏场景）：可用区换算 overlay 局部坐标
+    # 屏原点非 (0,0)（副屏场景）：窗口原点 = 可用区左上，故局部坐标从 (0,0) 起
     screen = FakeScreen((1920, 0, 1920, 1080), (1920, 40, 1920, 1040))
     shell, _, _ = _make_shell(screen=screen)
     sprite = shell.sprite
-    assert sprite.bounds_calls[0] == QRect(0, 40, 1920, 1040)
+    assert shell.overlay.geometry() == QRect(1920, 40, 1920, 1040)
+    assert sprite.bounds_calls[0] == QRect(0, 0, 1920, 1040)
 
-    sprite.set_pos(QPointF(960 - 60, 40 + 520 - 40))  # 中心 (960, 560)：rx=0.5, ry=0.5
+    sprite.set_pos(QPointF(960 - 60, 520 - 40))       # 中心 (960, 520)：rx=ry=0.5
     screen.set_rects((1920, 0, 1280, 720), (1920, 40, 1280, 680))
     shell.handle_geometry_changed()                   # 直调 handler 路径
 
-    assert sprite.bounds_calls[-1] == QRect(0, 40, 1280, 680)
-    assert sprite.pos == QPointF(640 - 60, 40 + 340 - 40)
+    assert sprite.bounds_calls[-1] == QRect(0, 0, 1280, 680)
+    assert sprite.pos == QPointF(640 - 60, 340 - 40)
 
 
 # ---------------------------------------------------------------- 屏事件：拔除 → 重建
-def test_screen_removed_rebuilds_overlay_on_primary():
+def test_screen_removed_moves_home_and_keeps_the_single_window(monkeypatch):
+    """拔掉家那块屏：家换到兜底屏、宠按比例跟过去，窗口仍是同一张（不重建）。
+
+    单窗覆盖整个虚拟桌面，"拔屏"不再是换窗：HWND 不变（在途会话/气泡/岛墙都
+    留在原地），变的是窗口矩形、活动区与家的记录。
+    """
     fake = FakeScreen((0, 0, 1920, 1080), (0, 0, 1920, 1040))
+    other = FakeScreen((1920, 0, 1920, 1080), (1920, 0, 1920, 1040), name="other")
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [fake, other]))
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: other))
     shell, _, _ = _make_shell(screen=fake)
     sprite = shell.sprite
-    old_overlay = shell.overlay
-    # 与产品同一取数源（壳按 QGuiApplication 类级 API 枚举屏；实例属性可被
-    # 别的用例的 monkeypatch 留下影子）
-    primary = QGuiApplication.primaryScreen()
-
+    overlay = shell.overlay
     # 拖拽中拔屏：先收尾拖拽再迁移（v1.1 §10）
     sprite.dragging = True
-    old_overlay._mouse_grab = sprite
-    old_overlay._press_global = QPointF(10, 10).toPoint()
+    overlay._mouse_grab = sprite
+    overlay._press_global = QPointF(10, 10).toPoint()
 
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [other]))
     shell.handle_screen_removed(fake)
 
-    assert shell._screen is primary
-    assert shell.overlay is not old_overlay            # overlay 重建
-    assert sprite not in old_overlay.sprites
+    assert shell._screen is other                  # 家换到兜底屏
+    assert shell.overlay is overlay                # 窗口不重建
+    assert shell.overlay.geometry() == QRect(1920, 0, 1920, 1040)
     assert sprite in shell.overlay.sprites
-    assert sprite.home_screen is primary
-    assert len(sprite.releases) == 1                   # 拖拽被收尾
-    assert old_overlay._mouse_grab is None
-    assert not old_overlay._timer.isActive()
-    assert sprite.dpr_calls[-1] == float(primary.devicePixelRatio())
-    primary_bounds = OverlayShell._local_bounds(primary)
-    assert shell.behavior.bounds == primary_bounds
+    assert sprite.home_screen is other
+    assert len(sprite.releases) == 1               # 拖拽被收尾
+    assert overlay._mouse_grab is None
+    assert shell.hosts() == [shell._main_host], "单窗：不因拔屏多出宿主"
+    assert shell.behavior.bounds == QRect(0, 0, 1920, 1040)
 
 
-def test_screen_removed_other_screen_keeps_overlay():
+def test_screen_removed_other_screen_keeps_overlay(monkeypatch):
     fake = FakeScreen((0, 0, 1920, 1080), (0, 0, 1920, 1040))
     shell, _, _ = _make_shell(screen=fake)
     other = FakeScreen((1920, 0, 1920, 1080), (1920, 0, 1920, 1040), name="other")
     old_overlay = shell.overlay
     shell.handle_screen_removed(other)
-    assert shell.overlay is old_overlay                # 非当前屏：不重建
+    assert shell.overlay is old_overlay            # 非当前屏：窗口与家都不动
     assert shell._screen is fake
 
 
@@ -654,11 +665,11 @@ def test_shell_wires_edge_probe_world():
     # 碰撞监听已挂（真撞击链里有 probe 处理器；经宿主世界分派）
     assert any(cb.__name__ == "_on_collision_probe"
                for cb in host.collision._listeners)
-    # 几何变化 → probe bounds 同步
+    # 几何变化 → probe bounds 同步（窗口 = 可用区并集）
     from PySide6.QtCore import QRect
-    new_bounds = QRect(0, 0, 1280, 720)
-    shell._apply_bounds(new_bounds)
-    assert probe.bounds == new_bounds
+    screen.set_rects((0, 0, 1280, 720), (0, 0, 1280, 680))
+    shell.handle_geometry_changed()
+    assert probe.bounds == QRect(0, 0, 1280, 680)
     # sprite 移除监听已挂 probe.forget
     assert shell._probe.forget in shell.overlay._sprite_removed_listeners
 
@@ -675,9 +686,9 @@ def test_shell_wires_throw_egg_world():
     assert host.extras.index(shell._probe) < host.extras.index(egg)
     assert egg.forget in shell.overlay._sprite_removed_listeners
     from PySide6.QtCore import QRect
-    new_bounds = QRect(0, 0, 1280, 720)
-    shell._apply_bounds(new_bounds)
-    assert egg.bounds == new_bounds
+    screen.set_rects((0, 0, 1280, 720), (0, 0, 1280, 680))
+    shell.handle_geometry_changed()
+    assert egg.bounds == QRect(0, 0, 1280, 680)
 
 
 def test_shell_wires_slingshot_config():

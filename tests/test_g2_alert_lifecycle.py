@@ -453,8 +453,8 @@ def test_full_queue_preemption_stays_bounded_and_keeps_screen_busy(tmp_path, pro
         _cleanup(shell)
 
 
-def test_screen_migration_rehangs_alert_and_resolve_by_id_works(tmp_path, probes):
-    """屏迁移（跟随器重建）后提醒重挂，且按 ID 能分别收 current 与排队条目。"""
+def test_screen_migration_keeps_alert_and_resolve_by_id_works(tmp_path, probes):
+    """换家后提醒仍挂在承载宠那道气泡上，且按 ID 能分别收 current 与排队条目。"""
     shown, _sounds = probes
     shell, _cfg = _make_slot_shell(tmp_path)
     try:
@@ -475,9 +475,8 @@ def test_screen_migration_rehangs_alert_and_resolve_by_id_works(tmp_path, probes
         shell._migrate_to_screen(QGuiApplication.primaryScreen())
         app.processEvents()
 
-        assert shell._bubble_followers.get(child) is not follower_before, \
-            "只有子宠（slot0 已关闭）时迁移也必须重建气泡跟随器：否则子宠气泡留在" \
-            "已关闭的旧 overlay 上（不再跟随、提醒副本停在旧位置）"
+        assert shell._bubble_followers.get(child) is follower_before, \
+            "单窗：换家不重建跟随器（它记的窗口对象还是同一个）"
         assert _copies(shell, ALERT_TEXT) == [_bubble_of(shell, child)], \
             "屏迁移后提醒副本必须重挂到承载宠的新气泡上"
         assert shell._alert_current["id"] == "c1"
@@ -490,7 +489,8 @@ def test_screen_migration_rehangs_alert_and_resolve_by_id_works(tmp_path, probes
         assert not shell._alert_queue
         assert len(_copies(shell, QUEUED_TEXT)) == 1
 
-        assert _shown_count(shown, ALERT_TEXT) >= 2, "前提：迁移确实重挂过一次"
+        assert _shown_count(shown, ALERT_TEXT) == 1, (
+            "单窗换家不重挂提醒：同一条只显示一次（不会出现第二份副本）")
         shell.resolve_alert("q1")
         app.processEvents()
         assert shell._alert_current is None

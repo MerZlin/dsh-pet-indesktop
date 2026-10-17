@@ -141,10 +141,14 @@ def test_driver_warns_on_slow_tick(caplog):
     assert "tier=T0" in caplog.text
 
 
-def test_driver_emits_interval_report_every_60s(caplog):
+def test_driver_emits_interval_report_every_60s(monkeypatch, caplog):
+    from PySide6.QtGui import QGuiApplication
+
+    fast = FakeScreen(170.0)
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [fast]))
     clock = FakeClock()
     driver = TickDriver(clock=clock)
-    driver.attach(FakeOverlay(screen=FakeScreen(170.0)))
+    driver.attach(FakeOverlay(screen=fast))
 
     with caplog.at_level(logging.INFO, logger="pet.tick_driver"):
         driver.on_tick(dt=0.006)              # 首个样本 = 基线（无间隔）

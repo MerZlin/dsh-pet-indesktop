@@ -51,11 +51,19 @@ class FakeClock:
         self.now += float(seconds)
 
 
-def _driver(rr: float = 170.0):
-    """170Hz 屏 + 一个静止可见 sprite 的驱动器（T1 判定输入齐备）。"""
+def _driver(monkeypatch, rr: float = 170.0):
+    """170Hz 屏 + 一个静止可见 sprite 的驱动器（T1 判定输入齐备）。
+
+    tick 刷新率取**屏枚举**最高一档（单窗覆盖整个虚拟桌面），故这台"机器"上把
+    枚举换成被测的那块屏。
+    """
+    from PySide6.QtGui import QGuiApplication
+
+    screen = FakeScreen(rr)
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [screen]))
     clock = FakeClock()
     driver = TickDriver(clock=clock)
-    driver.attach(FakeOverlay([FakeSprite()], screen=FakeScreen(rr)))
+    driver.attach(FakeOverlay([FakeSprite()], screen=screen))
     return driver, clock
 
 
@@ -112,9 +120,9 @@ def test_ac_state_cached_for_5s():
 
 
 # ---------------------------------------------------------------- 档位语义
-def test_ac_t1_runs_at_t0_interval():
+def test_ac_t1_runs_at_t0_interval(monkeypatch):
     """AC：T1 间隔 = T0 间隔（V-6 公式 170Hz→6ms），PreciseTimer 满速。"""
-    driver, _clock = _driver(170.0)
+    driver, _clock = _driver(monkeypatch, 170.0)
     driver._governor._power_probe = lambda: True
 
     driver._apply_tier(TIER_IDLE_ANIM)
@@ -124,9 +132,9 @@ def test_ac_t1_runs_at_t0_interval():
     assert driver.timer.timerType() == Qt.TimerType.PreciseTimer
 
 
-def test_battery_t1_keeps_m1_24fps_semantics():
+def test_battery_t1_keeps_m1_24fps_semantics(monkeypatch):
     """电池：T1 保持 42ms≈24fps + CoarseTimer（M-1 原语义不变）。"""
-    driver, _clock = _driver(170.0)
+    driver, _clock = _driver(monkeypatch, 170.0)
     driver._governor._power_probe = lambda: False
 
     driver._apply_tier(TIER_IDLE_ANIM)
@@ -135,9 +143,9 @@ def test_battery_t1_keeps_m1_24fps_semantics():
     assert driver.timer.timerType() == Qt.TimerType.CoarseTimer
 
 
-def test_ac_does_not_touch_t0_t2_t3():
+def test_ac_does_not_touch_t0_t2_t3(monkeypatch):
     """T0/T2/T3 间隔与旧语义逐条一致（H 电源只管 T1）。"""
-    driver, _clock = _driver(170.0)
+    driver, _clock = _driver(monkeypatch, 170.0)
     driver._governor._power_probe = lambda: True
 
     driver._apply_tier(TIER_ACTIVE)
@@ -161,11 +169,11 @@ def test_v6_interval_formula_unchanged():
     assert TickDriver.tick_interval_ms(None) == 16
 
 
-def test_power_flip_reapplies_t1_interval_on_next_tick():
+def test_power_flip_reapplies_t1_interval_on_next_tick(monkeypatch):
     """档位不变、电源翻面：下一次 tick 复评把 T1 间隔切到满速（≤5s 感知）。"""
     from pet.tick_governor import DOWNGRADE_HOLD_MS
 
-    driver, clock = _driver(170.0)
+    driver, clock = _driver(monkeypatch, 170.0)
     state = {"ac": False}
     driver._governor._power_probe = lambda: state["ac"]
 
@@ -201,7 +209,7 @@ def test_battery_t1_low_budget_when_downgraded_by_quiet(monkeypatch):
     """降档滞回语义不变：电池下静默到期照旧降到 T2（250ms 心跳）。"""
     from pet.tick_governor import ACTIVE_HOLD_MS, DOWNGRADE_HOLD_MS
 
-    driver, clock = _driver(170.0)
+    driver, clock = _driver(monkeypatch, 170.0)
     driver._governor._power_probe = lambda: False
     driver._last_frame_notify = None
     driver._governor.notify_kinetic()

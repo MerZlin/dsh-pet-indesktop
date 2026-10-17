@@ -17,17 +17,16 @@
    ``overlay.tick_advance(dt)``（advance → 脏矩形 → 位置监听 fanout → update，
    V-3/V-4 帧直驱脏矩形语义不变）。
 
-**按宿主仿真（多屏）**：每块被占用的显示器一个 ``screen_host.ScreenHost``
-（overlay + 屏局部可用区 + 该屏自己的行为/碰撞/物理控制器）。仿真段因此按宿主
-分组：**同一 tick、同一 QTimer**，但每屏只跑自己的世界——两块屏上局部坐标相同的
-两只宠在桌面几何上相距上千像素，混进同一个世界会被判成接触，钳制域也会互相污染。
-没有宿主的 overlay（裸 ``OverlayWindow`` / demo 装配）逐位沿用单世界语义。
+**按宿主仿真**：合成窗的仿真宿主是 ``screen_host.ScreenHost``（overlay + 窗口
+边界 + 活动区矩形集合 + 行为/碰撞/物理控制器）。仿真段按宿主分组：**同一 tick、
+同一 QTimer**，每个宿主只跑自己的世界。没有宿主的 overlay（裸
+``OverlayWindow`` / demo 装配）逐位沿用单世界语义。
 
 驱动器独立持有三控制器、QTimer/QElapsedTimer、dt 钳制与 M-1 TickGovernor
 （四档降档/同步升档语义原样随迁，见 tick_governor.py）；overlay 退化为
-"sprite 容器 + advance/paint"。多 overlay 预留：``attach``/``detach`` 增删成员，
-tick 刷新率取全部成员所在屏里最高者（单 overlay 等价于原
-``overlay._screen.refreshRate()``）。
+"sprite 容器 + advance/paint"。``attach``/``detach`` 增删成员；tick 刷新率取
+**全部已连接显示器**里最高者（单合成窗覆盖整个虚拟桌面，窗口自己那块屏不等于
+宠所在屏）。
 
 兼容期（deprecation）：未挂任何控制器的驱动器（裸 ``OverlayWindow`` / demo
 装配）仍在仿真段调用 ``overlay.before_sprites_advance(dt)`` 钩子，旧装配不迁移
@@ -314,17 +313,16 @@ class TickDriver(QObject):
         return max(1, min(16, round(1000.0 / refresh_rate)))
 
     def _refresh_rate(self) -> float | None:
-        """刷新率取数：全部已挂载 overlay 所在屏里**最高**的一个。
+        """刷新率取数：**全部已连接显示器**里最高的一档。
 
-        单 overlay（当前唯一产品形态）等价于原先的
-        ``overlay._screen.refreshRate()``；多 overlay 取最高，避免慢屏把整组
-        tick 拖到低档（M-2 为多 overlay 预留，真多屏调优属后续刀）。
+        单合成窗覆盖整个虚拟桌面，窗口自己那块屏（Qt 按窗口左上角归属）与 pet
+        实际所在屏可能不同：按成员屏取数会让一块 60Hz 副屏把整组 tick 拖到低档
+        （本机实测主屏 170Hz）。故直接枚举 ``QGuiApplication.screens()``。
         """
+        from PySide6.QtGui import QGuiApplication
+
         best: float | None = None
-        for overlay in self._overlays:
-            screen = getattr(overlay, "screen", None)
-            if screen is None:
-                continue
+        for screen in QGuiApplication.screens():
             try:
                 rate = float(screen.refreshRate() or 0.0)
             except Exception:

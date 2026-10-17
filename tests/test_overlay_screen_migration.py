@@ -9,11 +9,11 @@
 契约：迁移前不可见 → 不 show、不动 clip 暂停（等真正的显示路径放行）；
 迁移前可见 → show + 续播节拍。
 
-**缺陷 25**：``_migrate_sprite_position`` 先从旧位置取比例（必须——先换边界时
-``PetSprite.set_bounds`` 会就地钳一次），但落点仍走 ``sprite.set_pos``，受
-**旧**边界钳制，``_apply_bounds`` 之后才换新边界：从小屏/低分迁到大屏/高分时
-靠右/靠下的宠物先被旧边界截掉，扩边界后不恢复（实测宽 1000→1600：期望中心
-x≈1358，实得旧边界钳出的 744+128）。契约：比例取自旧边界，落点钳在新边界下。
+**缺陷 25**：几何变化的迁移必须先在旧边界上取比例（先换边界时
+``PetSprite.set_bounds`` 会就地钳一次），再在新边界下落点（``set_pos`` 受当前
+域钳制）：从小屏/低分迁到大屏/高分时，靠右/靠下的宠物若先被旧边界截断，扩边界
+后不会恢复（实测宽 1000→1600：期望中心 x≈1358，实得旧边界钳出的 744+128）。
+契约：比例取自旧矩形，落点写在新矩形下（``_geometry_plan`` → ``_place_body_ratio``）。
 
 纪律：offscreen；真壳 + 真 PetSprite + 真 FrameSeqClip（节拍断言看真实 QTimer
 是否激活）；同步直调 handler / 真信号推进，不 sleep。
@@ -109,11 +109,16 @@ def _make_clip_shell(tmp_path, screen=None):
 
 
 def _migrate(shell):
-    """按真实入口迁移到主屏（fake screen → primaryScreen）。"""
+    """按真实入口把"家"迁到主屏（fake screen → primaryScreen）。
+
+    单合成窗覆盖整个虚拟桌面：换家**不重建窗口**（HWND、气泡、岛墙、在途会话
+    都留在原地），故这里的前提断言是"窗口还是同一张"。
+    """
     primary = QGuiApplication.primaryScreen()
     old = shell.overlay
     shell._migrate_to_screen(primary)
-    assert shell.overlay is not old, "前提：迁移确实重建了 overlay"
+    assert shell.overlay is old, "前提：换家不重建合成窗"
+    assert shell._screen is primary
     return old
 
 
@@ -142,11 +147,9 @@ def test_migrate_while_hidden_keeps_window_hidden_and_clips_paused(tmp_path):
         assert shell.overlay.isVisible() is False, "隐藏中迁移不得把窗口显示出来"
         assert shell.sprite.clip_paused is True, "隐藏中迁移不得解除 clip 暂停"
         assert clip._timer.isActive() is False, "隐藏期零帧推进：迁移后也不得起表"
-        # 隐藏分支不调 ``overlay.start()`` 的安全性：驱动器是进程级且新 overlay
-        # 在构造时已 attach，旧 overlay 关闭时成员数不会归零——时钟必须照跑、
-        # 新窗必须仍在成员里（隐藏期的档位/锁屏探测都挂在它上面）。
-        assert shell.overlay in shell.driver._overlays, "新 overlay 必须仍被驱动器驱动"
-        assert shell.driver.timer.isActive() is True, "迁移重建不得让 tick 时钟停摆"
+        # 窗口不重建，但驱动器仍必须驱动它（隐藏期的档位/锁屏探测都挂在它上面）。
+        assert shell.overlay in shell.driver._overlays, "窗口必须仍被驱动器驱动"
+        assert shell.driver.timer.isActive() is True, "迁移不得让 tick 时钟停摆"
     finally:
         _teardown(shell, clip)
 
@@ -211,8 +214,8 @@ def test_migrate_while_visible_keeps_window_shown_and_clips_running(tmp_path):
 def test_growing_bounds_keep_right_bottom_ratio(tmp_path):
     """可用区变大（同屏几何变化）：靠右/靠下的宠物比例位置不得被旧边界截断。
 
-    旧序（比例 → ``set_pos`` 受旧边界钳 → ``_apply_bounds``）下，本夹具的落点
-    是旧边界钳出的左上 (744, 456)；正确落点 (1230, 646) 只在**新**边界下合法。
+    旧序（比例 → ``set_pos`` 受旧边界钳 → 再换边界）下，本夹具的落点是旧边界
+    钳出的左上 (744, 456)；正确落点 (1230, 646) 只在**新**边界下合法。
     """
     screen = FakeScreen((0, 0, 1000, 600), (0, 0, 1000, 600))
     shell = _make_shell(tmp_path, screen, {"scale": 0.4})
@@ -242,28 +245,28 @@ def test_growing_bounds_keep_right_bottom_ratio(tmp_path):
         shell._delete_runtime_marker()
 
 
-def test_migrate_to_bigger_screen_keeps_ratio(tmp_path):
-    """跨屏迁移（``_migrate_to_screen``）走同一 helper：扩屏同样不得被旧边界截断。"""
+def test_migrate_home_to_another_screen_keeps_every_pet_in_place(tmp_path, monkeypatch):
+    """换家（``_migrate_to_screen``）不搬宠：窗口是两屏可用区并集、宠的局部位置不动。
+
+    单窗覆盖整个虚拟桌面，"换家"只换关闭跨屏时的那块活动区与屏拔出时的兜底判据；
+    窗口矩形与宠的位置都不该因此跳一下（旧实现的"重建窗口 + 按比例重摆"在新拓扑
+    下没有对应物）。
+    """
     small = FakeScreen((0, 0, 1000, 600), (0, 0, 1000, 600), name="small")
-    big = FakeScreen((0, 0, 1600, 900), (0, 0, 1600, 900), name="big")
-    shell = _make_shell(tmp_path, small, {"scale": 0.4})
+    big = FakeScreen((1000, 0, 1600, 900), (1000, 0, 1600, 900), name="big")
+    monkeypatch.setattr(QGuiApplication, "screens",
+                        staticmethod(lambda: [small, big]))
+    shell = _make_shell(tmp_path, small, {"scale": 0.4, "allow_cross_screen": True})
     try:
-        old_bounds = QRect(shell._bounds)
         sprite = shell.sprite
-        placed = _place_center(sprite,
-                               old_bounds.x() + 0.85 * old_bounds.width(),
-                               old_bounds.y() + 0.8 * old_bounds.height())
-        rx, ry = _ratio_of(placed, old_bounds)
+        pos_before = QPointF(sprite.pos)
 
         shell._migrate_to_screen(big)
 
-        new_bounds = QRect(shell._bounds)
-        assert new_bounds == QRect(0, 0, 1600, 900)
-        rect = sprite.rect()
-        assert rect.center().x() == pytest.approx(
-            new_bounds.x() + rx * new_bounds.width(), abs=2.0)
-        assert rect.center().y() == pytest.approx(
-            new_bounds.y() + ry * new_bounds.height(), abs=2.0)
+        assert shell._screen is big
+        assert shell._bounds == QRect(0, 0, 2600, 900), "窗口 = 两屏可用区并集"
+        assert sprite.pos == pos_before, "换家不搬宠"
+        assert [screen for screen, _rect in shell._main_host.activity] == [small, big]
     finally:
         shell.overlay.close()
         shell._delete_runtime_marker()
@@ -300,14 +303,18 @@ def test_shrinking_bounds_still_clamp_into_new_bounds(tmp_path):
 
 
 # ---------------------------------------------------------------- 迁移前的在途会话
-def test_migrate_finishes_inflight_grab_through_the_grab_protocol(tmp_path):
-    """换屏重建前的会话收尾走既有 grab 协议：旗标与穿透轮询档位一起复位。
+def test_screen_removed_finishes_inflight_grab_through_the_grab_protocol(tmp_path, monkeypatch):
+    """拔屏前的会话收尾走既有 grab 协议：旗标与穿透轮询档位一起复位。
 
-    ``_migrate_to_screen`` 在换窗**之前**收掉旧窗的输入会话；旧实现只清
+    ``handle_screen_removed`` 在重算几何**之前**收掉窗口的输入会话；旧实现只清
     ``_mouse_grab``/``_press_global`` 两个字段就返回——click-only 与拖拽提交
-    旗标留在旧窗上，穿透轮询的拖拽降频（``set_drag_active``）也没复位。
+    旗标留在窗上，穿透轮询的拖拽降频（``set_drag_active``）也没复位。
     """
-    shell = _make_shell(tmp_path, FakeScreen((0, 0, 1000, 600), (0, 0, 1000, 600)))
+    fake = FakeScreen((0, 0, 1000, 600), (0, 0, 1000, 600), name="gone")
+    other = FakeScreen((1000, 0, 1000, 600), (1000, 0, 1000, 600), name="alive")
+    monkeypatch.setattr(QGuiApplication, "screens", staticmethod(lambda: [fake, other]))
+    monkeypatch.setattr(QGuiApplication, "primaryScreen", staticmethod(lambda: other))
+    shell = _make_shell(tmp_path, fake)
     try:
         overlay = shell.overlay
         overlay._mouse_grab = shell.sprite
@@ -315,12 +322,12 @@ def test_migrate_finishes_inflight_grab_through_the_grab_protocol(tmp_path):
         overlay._drag_committed = True
         overlay._press_global = QPointF(10, 10).toPoint()
 
-        _migrate(shell)
+        shell.handle_screen_removed(fake)
 
         assert overlay._mouse_grab is None
         assert overlay._press_click_only is False
         assert overlay._drag_committed is False
         assert overlay._press_global is None
-        assert shell.overlay._mouse_grab is None       # 新窗不带着旧会话
+        assert shell._screen is other
     finally:
         _teardown(shell)
