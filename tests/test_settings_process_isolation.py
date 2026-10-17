@@ -540,6 +540,9 @@ def test_modern_settings_finished_delegates_to_shell_apply_chain(tmp_path):
     owner = PetInstance.__new__(PetInstance)
     owner.shell = AppShell.__new__(AppShell)
     owner.shell._instances = []
+    # 真实壳恒有 config（_modern_settings_finished 末尾无条件走一次台词预缓存，
+    # 那条入口自己按开关收敛，壳上没有 config 只可能是测试桩少给了）
+    owner.shell.config = Config(base=tmp_path)
     calls = []
     owner.shell._apply_external_config_change = lambda: calls.append(1)
     owner.modern_settings_dialog = object()

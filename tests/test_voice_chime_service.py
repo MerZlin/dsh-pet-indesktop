@@ -2242,14 +2242,25 @@ def test_divination_speak_uses_the_user_backend_on_a_lazily_created_channel(tmp_
 
 
 def _precached_wav(cfg, text: str) -> Path:
-    """按与产品一致的命名约定放一个假音频文件，返回其路径。"""
+    """按与产品一致的命名约定放一个假音频文件，返回其路径。
+
+    内容必须是**结构自洽**的 wav：查找侧（``self_talk_voice._has_audio``）会核对
+    RIFF 头声明的长度，伪头/半截文件按"没有缓存"处理（那是被截断的残file）。
+    """
     import hashlib
 
     name = hashlib.md5(text.encode("utf-8")).hexdigest()[:16] + ".wav"
     voice_dir = Path(cfg.dir) / "self_talk_voice"
     voice_dir.mkdir(parents=True, exist_ok=True)
     path = voice_dir / name
-    path.write_bytes(b"RIFF0000WAVE")
+    payload = b"\x00\x00" * 16
+    fmt = (
+        b"fmt " + (16).to_bytes(4, "little") + b"\x01\x00\x01\x00"
+        + (16000).to_bytes(4, "little") + (32000).to_bytes(4, "little")
+        + b"\x02\x00\x10\x00"
+    )
+    body = b"WAVE" + fmt + b"data" + len(payload).to_bytes(4, "little") + payload
+    path.write_bytes(b"RIFF" + (len(body) - 4).to_bytes(4, "little") + body)
     return path
 
 

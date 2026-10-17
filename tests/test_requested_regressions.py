@@ -1497,6 +1497,8 @@ def test_modern_settings_finished_refreshes_even_on_rejected(tmp_path, monkeypat
 
     owner.win = FakeWin()
     owner.config = Config(tmp_path)
+    # 真实壳恒有 config（应用链末尾无条件走一次台词预缓存，入口自己按开关收敛）
+    owner.shell.config = owner.config
     owner.shell._apply_balance_timer = lambda: None
     owner.shell._sync_dynamic_island = lambda: None
     # Phase 1 门控后 todo 服务走 _sync_todo_service（懒启停）；测试只测桌宠刷新

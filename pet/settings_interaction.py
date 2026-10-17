@@ -75,8 +75,8 @@ def build_click_rows(dialog) -> list[SettingRow]:
                 "click_self_talk_precache",
                 "台词自动预缓存",
                 "保存设置后，在后台把点击台词与点击动画绑定台词合成为本机语音文件，"
-                "点击时秒出、断网也能说（需要本机 CosyVoice 语音服务在运行；"
-                "没装本地语音服务时保持关闭即可，新台词仍走在线合成）。",
+                "点击时秒出、断网也能说（用与语音报时相同的语音后端和音色，可先在"
+                "语音报时里点一次试听确认能出声；不想占磁盘就保持关闭，新台词仍走在线合成）。",
                 dialog.self_talk_voice_precache_check,
             ),
             SettingRow("click_talk_bindings", "点击动画台词绑定", "为每个点击动画设置专属自言自语台词。", dialog.click_talk_bindings_btn),
