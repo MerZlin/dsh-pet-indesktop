@@ -121,7 +121,11 @@ class DshLinkModule : HostBoundModule() {
         }
         reacted++
         val text = signal.text ?: host.context.getString(fallback)
-        host.showPhrase(pet, text, host.options.speechDurationMs())
+        // 停留按字数给（正文可能 100 字，3.2 秒读不完），并在同一窗口内占住气泡：
+        // SpeechModule 看到 bubbleHeld() 就不发言，避免预设台词把这条顶掉。
+        val readMs = DshLinkText.readingMs(text)
+        host.showPhrase(pet, text, readMs)
+        host.holdBubble(readMs)
         if (signal.state == DshLinkState.SUCCESS || signal.state == DshLinkState.ERROR) {
             pet.engine.click()
         }

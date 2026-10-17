@@ -81,4 +81,17 @@ class DshLinkTextTest {
         assertEquals("ab…", DshLinkText.brief("abcdef", max = 3))
         assertEquals("abc", DshLinkText.brief("abc", max = 3))
     }
+
+    @Test
+    fun shortTextsStayAtTheMinimumAndLongOnesCapOut() {
+        // 空文本给最短 4 秒；4 字预设句约 4.24 秒；100 字正文约 10 秒；再长封顶 12 秒。
+        assertEquals(DshLinkText.MIN_READ_MS, DshLinkText.readingMs(""))
+        assertTrue(DshLinkText.readingMs("干完活啦") >= DshLinkText.MIN_READ_MS)
+        assertTrue(DshLinkText.readingMs("字".repeat(100)) > DshLinkText.readingMs("干完活啦"))
+        assertEquals(DshLinkText.MAX_READ_MS, DshLinkText.readingMs("字".repeat(500)))
+        // 单调：字越多停越久（在夹取区间内）。
+        assertTrue(
+            DshLinkText.readingMs("字".repeat(40)) < DshLinkText.readingMs("字".repeat(80)),
+        )
+    }
 }

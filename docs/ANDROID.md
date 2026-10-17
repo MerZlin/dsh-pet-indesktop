@@ -111,6 +111,16 @@ manifest 里的 `android:usesCleartextTraffic="true"` 是给局域网明文端�
 一轮轮询里的多条事件**逐条都播**（按优先级从低到高，气泡最终留下优先级最高的那条：
 等审批/等回答 > 出错 > 完成 > 正文），不会因为"一轮只挑一条"把别的会话的事件静默丢掉。
 
+**停留时长与"让位"**：气泡只有一个槽位（`PetOverlayService.showPhrase` 改的是同一个 view），
+而桌宠原本统一用 3.2 秒的台词停留——100 字正文根本读不完，还会被下一句自说自话顶掉。
+因此联动消息：
+
+- 停留按字数给：`DshLinkText.readingMs()` = `5000 + 80ms/字`，夹在 **5–15 秒**；
+- 同一窗口内调用 `holdBubble()` 占住气泡，`SpeechModule` 看到 `bubbleHeld()` 就**不发言**，
+  窗口过后自动恢复自说自话。
+
+（`showPhrase` 自建气泡、不依赖 `speech` 模块，所以关掉「台词气泡」也照常弹联动消息。）
+
 手机侧的状态映射与桌面逐条同源：`DshLinkState`/`DshLinkEvents` 照抄
 `pet/dsh_state.py` 的事件表（含 `turn/end` 的 `reasonKind` 分流、裸
 `approval/asked` 不锁存审批、`cordis/request-run` 只在 `requiresApproval` 严格为真

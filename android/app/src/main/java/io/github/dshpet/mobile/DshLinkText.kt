@@ -19,6 +19,23 @@ object DshLinkText {
 
     private val BREAKS = charArrayOf('。', '！', '？', '；', '，', '、', '!', '?', ';', ',', ' ')
 
+    /** 气泡最短/最长停留：太短读不完，太长挡着桌宠。 */
+    const val MIN_READ_MS = 5_000L
+    const val MAX_READ_MS = 15_000L
+
+    /** 每个字给多少阅读时间（正文是给人读的中文，80ms/字 ≈ 12.5 字/秒）。 */
+    const val PER_CHAR_MS = 80L
+
+    /**
+     * 这条文案该在屏幕上停多久（毫秒）。
+     *
+     * 桌宠原本统一用「台词停留 3.2 秒」，那是给 5–10 字预设台词定的；联动消息可能是
+     * 100 字正文，3.2 秒读不完，还会被下一句自说自话顶掉。这里按字数给时间并夹在
+     * [MIN_READ_MS]..[MAX_READ_MS]。
+     */
+    fun readingMs(text: String): Long =
+        (MIN_READ_MS + text.length.toLong() * PER_CHAR_MS).coerceIn(MIN_READ_MS, MAX_READ_MS)
+
     /**
      * 把 [raw] 压成一句 ≤[max] 字的文案；空白/null 返回 null（= 没有文案可用）。
      */

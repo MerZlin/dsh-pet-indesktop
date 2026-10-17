@@ -700,3 +700,37 @@ A收尾 + B提问（同一轮）     reacted=4，气泡最终是「B 会话在�
 
 单测新增 2 条（`sessionsArePartOfTheIdentity`、`aPendingQuestionOutranksAnotherSessionsCompletion`），
 总数 **124 条全过**。
+
+### 第八轮修正：气泡被预设台词顶掉
+
+**现象（真机/模拟器都出现过）**：联动消息刚出现就没了，用户以为"没流转"。
+
+**根因**：气泡只有一个槽位——`PetOverlayService.showPhrase` 改的是同一个 view 的文案；
+而桌宠统一用**台词停留 3.2 秒**（那是给 5–10 字预设台词定的）。于是：
+
+1. 100 字正文 3.2 秒读不完；
+2. 预设台词（`SpeechModule`，间隔 5–60 秒）一到就把这条**直接覆盖**。
+
+**修法**（`ModuleHost` 新增两个方法，实现在 `PetOverlayService`）：
+
+- `holdBubble(durationMs)` / `bubbleHeld()`：显示方声明"气泡归我"，`SpeechModule.onFrame`
+  在窗口内直接返回、不发言，窗口过后自动恢复；
+- `DshLinkText.readingMs(text)`：停留按字数给（`5000 + 80ms/字`，夹在 5–15 秒），
+  不再共用 `speechDurationMs()`。
+
+**实测（雷电 Android 14，把自说自话间隔压到 5 秒制造最坏情况）**：
+
+```text
+t+2s / t+4s / t+6s  [45字] 这条正文用来验证气泡不会被预设台词顶掉：…   ← 联动正文保持
+t+8s                [5字] 好模型……                                  ← 占用窗口(~8.6s)到期，恢复自说自话
+t+14s               [7字] 再陪你一会儿。
+```
+
+窗口内 5 秒一次的自说自话被成功压住，到期后恢复。单测新增 2 条
+（`selfTalkYieldsWhileAnotherModuleHoldsTheBubble`、`shortTextsStayAtTheMinimumAndLongOnesCapOut`），
+总数 **126 条全过**。
+
+**顺带查清的另一半**：用户"改默认模式后又不流转"，是因为当前实例换成了**仓库版脱敏桥接**
+（`dsh-44316.jsonl` 的 930 行里 `text` 出现 **0 次**），没有正文可投，只能退回短句；
+带正文的旧实例 `dsh-24756.jsonl` 已停在 22:10 不再写入。这不是手机端的 bug——
+`textOf()` 本来就是"有正文念正文、没有就退回短句"。
