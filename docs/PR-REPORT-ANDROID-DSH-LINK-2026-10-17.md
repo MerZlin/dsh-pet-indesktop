@@ -2,7 +2,8 @@
 
 > **基线**：`60ce9d5`（`main`，v4.3.1 发布文案口径修正）
 > **分支**：`feat/android-dsh-link`　**日期**：2026-10-17
-> **范围**：21 个文件 `+1574 / −10`（实现与清单 13、测试 3、文档 4、构建门 1）
+> **范围**：24 个文件 `+2435 / −10`（实现与清单 15、测试 5、文档 4）
+> —— 逐文件数字以 `git diff --numstat main...HEAD` 为准
 > **关联**：[桥接事件契约](DSH-BRIDGE-PET-EVENT-CONTRACT-2026-09-02.md)、
 > [Android 说明](ANDROID.md)、[Android 首版报告](PR-REPORT-ANDROID-PET-2026-10-15.md)
 
@@ -32,26 +33,30 @@
 |---|---|---|
 | `integrations/dsh-pet-bridge/lan-stream.js` | +393 / −0（新增） | 只读端点。`GET /v1/events[?since=游标]`，`Authorization: Bearer`；游标是 base64url 的 `{文件名:字节偏移}`，挂载（无游标）只返回 EOF 游标；`readCompleteLines()` 只读到最后一个 `\n`，半个行留到下一轮；未知/变小的文件从 0 读（新实例、轮转）；单轮预算 256KB，`truncated` 只表示"现在还有得读"。默认 `127.0.0.1:8768`，令牌落 `<桥目录>/lan-token.txt`（0600），比较用 sha256+`timingSafeEqual`（定长，不按长度泄漏）。**不 import `index.js`**：`verify_import.mjs` 禁止动态 import、且 hermetic 冒烟只拷三个文件，静态 import 会让它红——插件启动路径因此完全不变。桥目录规则刻意重复了 `index.js:71-80` 那 9 行（文件头注释写明原因，测试钉住）。 |
 | `android/.../DshLinkState.kt` | +91 / −0（新增） | `DshLinkState` 枚举与 `DshLinkEvents.stateOf()`：**纯映射，无 Android/网络/JSON**，因此能用 JVM 单测钉住。事件表照抄 `pet/dsh_state.py` 的 `_EVENT_TO_STATE` / `_AGENT_STATUS_STATE` / `_TURN_END_*_REASONS`，含 `turn/end` 按 `reasonKind` 分流（aborted→idle、error→error，都不报成功）、裸 `approval/asked` 不锁存、`cordis/request-run` 只在 `requiresApproval` 为真时算审批。 |
-| `android/.../DshLinkClient.kt` | +70 / −0（新增） | `HttpURLConnection` + `org.json` 读端点，2 秒连接/读超时；`normalizeBaseUrl()` 把 `192.168.1.5:8768` 补成 `http://…` 并去尾斜杠（用户手输，纯函数可单测）。 |
-| `android/.../modules/DshLinkModule.kt` | +162 / −0（新增） | 模块本体：一条工作线程 3 秒轮询（连不上退到 15 秒），只把结论写进 `@Volatile` 字段，**气泡/窗口操作全部回主线程在 `onTick` 里做**（模块拿到的是服务对象，worker 线程动窗口会炸）；edge-trigger（同状态连发只反应一次）；只对 `waiting_approval` / `waiting_question` / `success` / `error` 反应，忙闲来回切换不弹气泡。`onDisable` 停线程。 |
-| `android/.../ui/DshLinkSection.kt` | +71 / −0（新增） | 设置页三行：开关 + 地址 + 令牌，离开输入框或按「保存配对」提交（与台词池同一套提交口径），地址键盘类型 `Uri`、令牌 `Password`。 |
+| `android/.../DshLinkClient.kt` | +266 / −0（新增） | `HttpURLConnection` + `org.json` 读端点，2 秒连接/读超时；`normalizeBaseUrl()` 把 `192.168.1.5:8768` 补成 `http://…` 并去尾斜杠（用户手输，纯函数可单测）；`validate()` 是私网/回环/CGNAT 白名单（纯函数，不做 DNS 解析）。 |
+| `android/.../DshLinkText.kt` | +44 / −0（新增） | 气泡文案收敛：上限 **100 字**，≤100 原样、超长按标点截断（找不到标点再硬截），避免电脑端长句把手机气泡撑爆。纯函数，可单测。 |
+| `android/.../modules/DshLinkModule.kt` | +193 / −0（新增） | 模块本体：一条工作线程 3 秒轮询（连不上退到 15 秒），只把结论写进 `@Volatile` 字段，**气泡/窗口操作全部回主线程在 `onTick` 里做**（模块拿到的是服务对象，worker 线程动窗口会炸）；edge-trigger（同状态连发只反应一次）；只对 `waiting_approval` / `waiting_question` / `success` / `error` 反应，忙闲来回切换不弹气泡。`onDisable` 停线程。 |
+| `android/.../ui/DshLinkSection.kt` | +98 / −0（新增） | 设置页三行：开关 + 地址 + 令牌，离开输入框或按「保存配对」提交（与台词池同一套提交口径），地址键盘类型 `Uri`、令牌 `Password`；地址不合法时在输入框下方用错误色显示原因（中英文案齐全）。 |
 | `android/app/src/main/AndroidManifest.xml` | +5 / −1 | 加 `INTERNET` 权限；`android:usesCleartextTraffic="true"`——端点是局域网明文 HTTP，Android 9+ 默认禁明文，不放行就连不上。应用没有别的网络用途。 |
 | `android/.../PetPreferences.kt` | +20 / −1 | `PetOptions` 加 `dshLink`/`dshLinkUrl`/`dshLinkToken`（默认关/空/空），`normalized()` trim 两个字符串；三把键进 `WATCHED_KEYS`，运行中改地址/令牌即时生效；`enables()` 加 `DSH_LINK` 分支。 |
 | `android/.../ModuleIds.kt` | +2 / −1 | 新模块 id `dshLink` 加入 `ALL`（`PetOptionsTest` 按 `ALL` 逐条校验，加进来就被覆盖）。 |
 | `android/.../PetOverlayService.kt` | +3 / −0 | 注册 `ModuleFactory(ModuleIds.DSH_LINK) { DshLinkModule() }`——关闭时工厂不会被调用。 |
 | `android/.../MainActivity.kt` | +2 / −0 | import 与 `<DshLinkSection>` 挂载点。 |
-| `android/app/src/main/res/values{,-en}/strings.xml` | +11 / −0 各 | 7 条界面文案 + 4 条气泡文案（中英各一份）。 |
+| `android/app/src/main/res/values{,-en}/strings.xml` | +16 / −0 各 | 11 条界面文案（含 6 条地址校验错误原因）+ 4 条气泡文案，中英各一份。 |
 | `integrations/dsh-pet-bridge/package.json` | +2 / −1 | `files` 加 `lan-stream.js`（它要被一起分发才能在用户机器上跑），description 补一句说明它不参与插件加载；**依赖字段仍为空**。 |
 | `.github/workflows/pr-test.yml` | +2 / −2 | 把 `tests/test_bridge_lan_stream.js` 加进 bridge 门禁的显式清单（Node 20 无 glob，文件头注释明确要求同步），计数 8→9。 |
-| `docs/ANDROID.md` | +37 / −2 | 原来那句「没有网络请求…电脑 Agent 联动不在这个测试版内」已不成立，改成如实的口径 + 新增「电脑端 DSH 联动」小节（怎么起、怎么配对、安全边界、映射同源说明）+ 设置准入表三行。 |
+| `docs/ANDROID.md` | +63 / −2 | 原来那句「没有网络请求…电脑 Agent 联动不在这个测试版内」已不成立，改成如实的口径 + 新增「电脑端 DSH 联动」小节（怎么起、怎么配对、安全边界、映射同源说明）+ 设置准入表三行。 |
 | `docs/DSH-BRIDGE-PET-EVENT-CONTRACT-2026-09-02.md` | +22 / −0 | 新增「远程消费端（手机）与只读传输端点」小节：契约只规定记录语义、传输不属契约（文档原文即如此），并写明三条不变量（不新增协议、传输端不参与插件加载、挂载/tail 口径一致）。 |
+| `docs/INDEX.md` | +1 / −0 | PR 报告存档登记一行（`PR-REPORT-TEMPLATE.md` 第 4 条硬要求）。 |
 
 ### 测试
 
 | 文件 | 增删 | 覆盖 |
 |---|---|---|
 | `tests/test_bridge_lan_stream.js` | +293 / −0（新增） | 14 条契约用例：令牌缺失/错误 401 与 `?token=` 兼容；只接受 GET/HEAD（POST→405）；**转发记录与 `encodeRecord` 产物逐字段相等**（含 `inst` 归属）；挂载不回放历史且游标推进不重复交；半行不交出；挂载后新文件从 0 读；文件变小（轮转）从 0 重读；坏游标按挂载处理；坏行跳过不卡游标；单轮预算多轮排空不重不丢；只读（事件文件 size/mtime 不变、目录不多文件）；默认令牌落盘并用于鉴权；桥目录缺失时照常服务空流。 |
-| `android/.../DshLinkStateTest.kt` | +97 / −0（新增） | 8 条 JVM 单测：默认关；`AgentStatus` 基线六个状态 + 两侧空白；15 条原始事件逐条对照桌面表；裸 `approval/asked` 不锁存；`turn/end` 四种 `reasonKind` 分流；`cordis/request-run` 的 `requiresApproval` 门；未知事件不猜；`normalizeBaseUrl` 四种输入。 |
+| `android/.../DshLinkStateTest.kt` | +101 / −0（新增） | 8 条 JVM 单测：默认关；`AgentStatus` 基线六个状态 + 两侧空白；15 条原始事件逐条对照桌面表；裸 `approval/asked` 不锁存；`turn/end` 四种 `reasonKind` 分流；`cordis/request-run` 的 `requiresApproval` 门；未知事件不猜。 |
+| `android/.../DshLinkAddressTest.kt` | +150 / −0（新增） | 地址白名单单测：回环 `127.0.0.0/8`、`::1`；私有 `10/8`、`172.16/12`、`192.168/16`；CGNAT `100.64.0.0/10`（tailnet 走这条）；越界邻居（`100.128.0.1`、`172.32.0.1`）必须拒；公网地址、主机名、带路径/查询串、非法端口一律拒；省略端口补 8768。**不解析 DNS**——传进来的必须已经是字面量。 |
+| `android/.../DshLinkTextTest.kt` | +84 / −0（新增） | 气泡文案截断：≤100 字原样（含边界 100）；101 字按标点截；无标点硬截；中英标点都认；空串/纯空白。 |
 | `android/.../PetOptionsTest.kt` | +2 / −2 | **唯一改动的既有测试**：`eachModuleReadsItsSingleEnableBit` 的「全开」对象要补 `dshLink = true`——否则新模块在全开对象里仍是关的、原断言必红。断言本身一条没放宽，仍是「每个 id 都能被它的位打开/关上」。 |
 
 ### 未改动（故意没动）
