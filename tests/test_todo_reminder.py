@@ -18,6 +18,7 @@ from pet.todo_reminder import (
     TodoStore,
     advance_todo_state,
     clean_todo_items,
+    fire_text,
     new_todo_item,
     summarize_next,
     todo_items_path,
@@ -352,6 +353,10 @@ class _FakeApp:
         self.modern_settings_dialog = None
         self.chat_settings_dialog = None
         self.panel_opens = 0
+        self.channel = _Channel()
+
+    def ensure_audio_channel(self):
+        return self.channel
 
     def system_notify(self, title, message, *, on_click=None, duration_ms=5000):
         self.notifies.append((title, message, on_click))
@@ -722,3 +727,102 @@ def test_settings_roundtrip_todo_prefs(tmp_path):
     reloaded = Config(cfg_root)
     assert reloaded.get("todo_reminder_enabled") is False
     assert reloaded.get("todo_reminder_lead_minutes") == 60
+
+
+# ------------------------------------------------------------ 到点语音播报
+
+
+class _Channel:
+    """假音频通道（即语音报时服务）：只记录被要求播报的文本。"""
+
+    def __init__(self) -> None:
+        self.spoken: list[str] = []
+
+    def speak(self, text: str, log_tag: str = "") -> bool:
+        self.spoken.append(text)
+        return True
+
+
+def _speaking_service(tmp_path, *, speak: bool, visible: bool = True):
+    app = _FakeApp(tmp_path, visible=visible)
+    app.config.set("todo_reminder_speak", speak)
+    _due_item_in_store(app.config.dir)
+    service = TodoReminderService(app)
+    service.apply_config()
+    return app, service
+
+
+def test_fire_text_is_the_single_source_for_bubble_and_speech():
+    """气泡与语音共用同一个 builder：两处文案不可能漂移。"""
+    fire = {"id": "x", "title": "站会", "time": "10:00", "phase": "due"}
+    assert fire_text(fire) == "⏰ 待办提醒：站会（10:00）"
+
+
+def test_tick_stays_silent_when_speak_is_off(tmp_path):
+    """默认关（主动打扰型能力）：气泡照旧，一声都不出。"""
+    _qapp()
+    app, service = _speaking_service(tmp_path, speak=False)
+    service._on_tick(now=datetime(2026, 9, 4, 10, 6))
+    assert len(app.win.bubbles) == 1
+    assert app.channel.spoken == []
+
+
+def test_tick_speaks_exactly_the_bubble_text(tmp_path):
+    _qapp()
+    app, service = _speaking_service(tmp_path, speak=True)
+    service._on_tick(now=datetime(2026, 9, 4, 10, 6))
+    assert app.win.bubbles == ["⏰ 待办提醒：站会（10:00）"]
+    assert app.channel.spoken == app.win.bubbles, "语音与气泡必须逐字同源"
+
+
+def test_quiet_mode_neither_speaks_nor_catches_up(tmp_path):
+    """免打扰拦下的提醒不出声、也不在结束后补播（过期提醒不该突然出声）。"""
+    from pet import quiet_mode
+
+    _qapp()
+    app, service = _speaking_service(tmp_path, speak=True)
+    state = quiet_mode.shared_quiet_state()
+    state.start(15)
+    service._on_tick(now=datetime(2026, 9, 4, 10, 6))
+    assert app.win.bubbles == []
+    assert app.channel.spoken == []
+    assert state.pending_count() == 1
+
+    state.end_now()
+    service._on_tick(now=datetime(2026, 9, 4, 10, 6, 30))
+    assert app.channel.spoken == [], "免打扰期间那条不补播"
+
+
+def test_todo_speak_pref_default_off_and_string_false_stays_off(tmp_path):
+    cfg = Config(base=tmp_path)
+    assert cfg.get("todo_reminder_speak") is False
+    cfg.set("todo_reminder_speak", "false")  # 字符串布尔防误开
+    assert cfg.get("todo_reminder_speak") is False
+    cfg.set("todo_reminder_speak", True)
+    cfg.save()
+    assert Config(base=tmp_path).get("todo_reminder_speak") is True
+
+
+def test_settings_save_keeps_the_audio_channel_wanted(tmp_path):
+    """设置页保存写回 → 壳仍需要音频通道；漏接 ``_chime_wanted`` 就是死开关。"""
+    from pet.app import AppShell
+    from pet.modern_settings_dialog import ModernSettingsDialog, SettingRow
+
+    qapp = _qapp()
+    cfg_root = tmp_path / "appdata"
+    dialog = ModernSettingsDialog(Config(cfg_root), include_ai=False)
+    try:
+        row = dialog.findChild(SettingRow, "settingRow_todo_reminder_speak")
+        assert row is not None, "「待办提醒」分区必须有语音播报一行"
+        assert row.control.isChecked() is False, "出厂默认必须是关"
+        assert "免打扰" in row.control.accessibleDescription(), "说明必须写明免打扰期间不出声"
+        row.control.setChecked(True)
+        assert dialog._write_config() is True
+    finally:
+        dialog.deleteLater()
+
+    shell = AppShell(qapp, Config(cfg_root), enable_chat=False)
+    assert shell.config.get("todo_reminder_speak") is True
+    assert shell._chime_wanted() is True, "开了待办语音就必须留住音频通道"
+    shell.config.set("todo_reminder_speak", False)
+    assert shell._chime_wanted() is False, "关掉后不再无谓常驻一条通道"

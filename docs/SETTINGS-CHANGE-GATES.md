@@ -83,6 +83,51 @@ recovery
 
 ## 变更记录
 
+### 2026-10-18 — 新增全局键 `todo_reminder_speak`（「待办提醒 → 语音播报」行）
+
+本刀**新增 1 个持久设置键与 1 行设置项**（待办到点是否念出来），不改任何既有键的
+默认值、归属与保存语义。证据见
+[`PR-REPORT-TODO-VOICE-BROADCAST-2026-10-18.md`](PR-REPORT-TODO-VOICE-BROADCAST-2026-10-18.md)。
+
+| 项 | 本刀口径 |
+|---|---|
+| setting_id / 行键 | `todo_reminder_speak`（行键与配置键同名，`pet/config.py::Config._initial_data`） |
+| 归属 | 「自动化与联动」域 →「待办提醒」组第三行（排在总开关、提前量之后）。面板 `pet/todo_panel.py` **不复制控件**，底部深链文案补上「语音播报」 |
+| 标题 / 说明 | 「语音播报」/「到点时把提醒念出来；音色 / 语速 / 音量与「语音报时」共用同一套（设置 → 语音），本项只控制开与关。免打扰期间不出声，也不在结束后补播。」 |
+| default | `False`（**关**）。主动打扰型能力默认关，与 `voice_chime_enabled` / `festival_reminder_speak` 同口径；关着时用户可见行为与改动前逐字相同 |
+| 保存时机 / commit_policy | `immediate`（随设置窗关闭的既有 `_write_config` 写回，不新增写盘路径）；保存后 `AppShell._sync_chime_service()` 使音频通道路由即刻生效，无需重启 |
+| capability / 平台可用性 | 三端都创建，无平台分支。**实际出声**取决于合成后端是否可用（同语音报时：edge 需网络、SAPI 需本机语音包）；后端不可用时只降级成"有气泡没声音"，不影响提醒本身 |
+| 依赖 | 依赖待办提醒总开关 `todo_reminder_enabled`（关掉时待办服务不跑，本键自然无效——`AppShell._todo_speak_wanted()` 是两个键的合取）；音频通道路由复用「语音报时」的音色 / 语速 / 音调 / 音量，**因此不新增任何语音参数键** |
+| 迁移 | **新键**：老配置没有它 → 取默认关（升级用户呈现不变）；`Config.reload` 白名单与 `_bool_or_default` 归一同步登记（`tests/test_config_schema.py` 的两份快照钉住，字符串 `"false"` 不会被误开） |
+| 恢复 | 无需恢复路径：失败面只有写盘失败（走既有设置窗关闭闸门）与"通道拿不到"，后者只丢声音不丢提醒 |
+| 披露层级 | `primary`（就在「待办提醒」这一组里，不进任何折叠） |
+| 默认值标记 | 行键与顶层配置键同名 ⇒ 按 `settings_default_marks` 的既有回落规则自动可比默认值，勾选后出现「已修改」标记与单项重置入口，无需登记新映射 |
+| 通道生命周期 | `AppShell._chime_wanted()` 增加第五个消费者 `_todo_speak_wanted()`。**不接这一处就是死开关**：每次设置保存 `_sync_chime_service()` 都会把通道 `stop()` 并置 `None`，用户勾了开关却一声不响（同 2026-10-17 抽签语音那条产品阻断） |
+| 文案单一来源 | 气泡与语音共用纯函数 `todo_reminder.fire_text()`，两处不会漂移；**不做**语音专用文案（也就没有文案模板键） |
+| 免打扰语义 | 免打扰（含全屏等效）拦下的那一档**不出声、也不在结束后补播**：过期提醒突然出声比不提醒更糟，与通道 `speak(respect_quiet=True)` 的"入队即丢弃"一致 |
+| 不做 | 不新增语速 / 音色 / 音量 / 音量倍增键（归属唯一：那三项是音频通道级真值）；不做语音专用文案模板；不做"只在桌宠不可见时才念"这类第二套触发规则；面板不加开关 |
+
+准出对应：
+
+1. **契约**：键、默认值、归属、依赖、平台可见性、披露层级、保存时机逐条见上表；旧键/
+   旧入口/旧别名无迁移问题（新键）；失败路径（通道缺失、合成后端不可用）只降级为
+   "有气泡没声音"。
+2. **TDD**：`tests/test_todo_reminder.py` 先红后绿 6 例（开关关静音、开关开与气泡逐字
+   一致、免打扰不补播、配置 round trip + 字符串布尔、builder 单源、设置页保存后
+   `_chime_wanted()` 为真）；红证据为 `3 failed / 3 passed`（那 3 条绿的是"默认关"一侧
+   的护栏），转绿后 `6 passed`。配置侧由 `tests/test_config_schema.py` 的两份快照 +
+   归一化路径覆盖；`_chime_wanted()` 的既有五消费者用例族（
+   `tests/test_voice_chime_service.py`）原样全绿。
+3. **布局与可访问性**：无新增控件类型、无新增 QSS（复用 `ToggleSwitch` 与 `SettingRow`）；
+   组内追加一行，行序断言（`tests/test_settings_page_guide.py` 的「待办提醒」组）不改；
+   说明里写明"免打扰期间不出声、不补播"，搜索与 `accessibleDescription` 都带全文。
+   `modern_settings_dialog.py` 行数预算按实测 2535 → **2539**（带日期注释，未静默放宽）。
+4. **跨平台**：产品代码无新增平台分支；真实 GUI 验收仅本机 Windows，macOS / Linux 未跑
+   （不推断）。
+5. **视觉与文档**：本记录即变更记录；PR 报告
+   [`PR-REPORT-TODO-VOICE-BROADCAST-2026-10-18.md`](PR-REPORT-TODO-VOICE-BROADCAST-2026-10-18.md)
+   与 `docs/INDEX.md` 登记同步。
+
 ### 2026-10-17 — slot0 迁移「源清理」口径回正：清源与 `Config.save` 同一条规则，不丢数据改由备份承担
 
 本刀**不新增/不删除任何配置键、不改默认值、不改设置页**；改的是**迁移与保存语义**

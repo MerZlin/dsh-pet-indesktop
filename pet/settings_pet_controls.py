@@ -718,13 +718,15 @@ def build_pet_controls(host) -> None:
     host.agent_sound_done_check.toggled.connect(lambda: host._update_agent_sound_subcontrols())
     host.agent_sound_error_check.toggled.connect(lambda: host._update_agent_sound_subcontrols())
 
-    # 待办提醒：偏好两键（条目在右键菜单「待办提醒」面板中管理）
+    # 待办提醒：偏好三键（条目在右键菜单「待办提醒」面板中管理）
     host.todo_reminder_check = ToggleSwitch(host)
     host.todo_reminder_check.setChecked(bool(host.config.get("todo_reminder_enabled", True)))
     host.todo_reminder_lead_spin = BrowserSpinBox(host)
     host.todo_reminder_lead_spin.setRange(0, 60)
     host.todo_reminder_lead_spin.setSuffix(" 分钟")
     host.todo_reminder_lead_spin.setValue(int(host.config.get("todo_reminder_lead_minutes", 5) or 0))
+    host.todo_reminder_speak_check = ToggleSwitch(host)
+    host.todo_reminder_speak_check.setChecked(bool(host.config.get("todo_reminder_speak", False)))
 
     appearance = host.config.get("context_menu_appearance", DEFAULT_CONTEXT_MENU_APPEARANCE)
     host.menu_theme_select = ModernSelect(host, width=132)

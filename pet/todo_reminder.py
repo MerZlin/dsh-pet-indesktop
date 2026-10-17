@@ -6,12 +6,17 @@ TodoReminderService 在 __init__ 内惰性导入 Qt（同 pet/proactive.py 约�
 QTimer 全程运行在 GUI 线程，无跨线程对象。
 
 条目持久化在独立文件 todo_items[-<instance_id>].json（config.dir 下），
-偏好 todo_reminder_enabled / todo_reminder_lead_minutes 在 config.json。
+偏好 todo_reminder_enabled / todo_reminder_lead_minutes / todo_reminder_speak
+在 config.json。
 
 提醒语义：每条启用条目有 lead / due 两个触发档；触发窗口
 [触发时刻, +grace] 内产生提醒并盖戳（持久化，防重启/唤醒重复），
 出窗静默盖戳跳过（防休眠唤醒轰炸）；once 条目过 due+grace 自动归档
 （enabled=False，面板置灰可见）。
+
+语音播报（todo_reminder_speak，默认关）经 AppShell.ensure_audio_channel 走
+语音报时服务那条唯一音频通道，文案与气泡共用 fire_text；免打扰拦下的那一档
+不出声也不补播（与通道的"排队即丢弃"一致）。
 """
 from __future__ import annotations
 
@@ -183,6 +188,11 @@ def advance_todo_state(items, prefs, now: datetime, *,
     return fires, new_items
 
 
+def fire_text(fire: dict) -> str:
+    """一次到点提醒的展示文案（气泡与语音共用这一个 builder，两处不会漂移）。"""
+    return f"⏰ 待办提醒：{fire['title']}（{fire['time']}）"
+
+
 def summarize_next(items, now: datetime) -> str:
     """下一条未触发待办的人类可读摘要（气泡/面板用）；无则空串。"""
     best = None  # (due_dt, item)
@@ -281,7 +291,8 @@ class TodoReminderService:
     生命周期。tick → 纯函数 advance_todo_state → 桌宠可见且设置未抑制时
     冒气泡，否则走 app.system_notify 桌面通知（受
     system_notifications_enabled 全局门控，关闭时该分支静默）；盖戳/归档
-    仅在条目变化时落盘。
+    仅在条目变化时落盘。todo_reminder_speak 打开时，气泡/通知之后还会把同一句
+    话交给音频通道念一遍（见 _speak_fire）；免打扰那条早退分支不出声也不补播。
     """
 
     TICK_INTERVAL_MS = 30_000
@@ -322,6 +333,7 @@ class TodoReminderService:
         self._prefs = {
             "enabled": bool(config.get("todo_reminder_enabled", True)) if config else True,
             "lead_minutes": max(0, min(60, lead)),
+            "speak": bool(config.get("todo_reminder_speak", False)) if config else False,
         }
         # 桌面通知分支与既有调用方（chat 等）同规：受全局通知开关门控
         self._notify_enabled = (
@@ -365,7 +377,7 @@ class TodoReminderService:
 
     def _notify_fire(self, fire: dict) -> None:
         app = self._app
-        text = f"⏰ 待办提醒：{fire['title']}（{fire['time']}）"
+        text = fire_text(fire)
         win = getattr(app, "win", None)
         if win is not None:
             from . import window_alerts
@@ -378,13 +390,37 @@ class TodoReminderService:
                 return
         if win is not None and win.isVisible() and not self._bubble_suppressed():
             win.show_bubble(text, duration_ms=self.BUBBLE_DURATION_MS)
+        elif self._notify_enabled:
+            notify = getattr(app, "system_notify", None)
+            if callable(notify):
+                notify("待办提醒", f"{fire['title']}（{fire['time']}）",
+                       on_click=getattr(app, "open_todo_panel", None))
+        self._speak_fire(fire)
+
+    def _speak_fire(self, fire: dict) -> None:
+        """经语音报时服务的音频通道把这次提醒念出来（同 festival_service._speak）。
+
+        刻意**不自建播放器**：报时服务是进程内唯一的音频通道，共用它才能在结构上
+        保证不叠音。通道不存在或播报失败都只降级为"有气泡没声音"，不影响提醒本身。
+        """
+        if not self._prefs.get("speak"):
             return
-        if not self._notify_enabled:
+        getter = getattr(self._app, "ensure_audio_channel", None)
+        if not callable(getter):
+            logger.warning("音频通道不可用，待办提醒仅出气泡")
             return
-        notify = getattr(app, "system_notify", None)
-        if callable(notify):
-            notify("待办提醒", f"{fire['title']}（{fire['time']}）",
-                   on_click=getattr(app, "open_todo_panel", None))
+        try:
+            channel = getter()
+        except Exception:
+            logger.exception("获取音频通道失败，待办提醒仅出气泡")
+            return
+        if channel is None:
+            logger.warning("音频通道为空，待办提醒仅出气泡")
+            return
+        try:
+            channel.speak(fire_text(fire), log_tag="待办提醒")
+        except Exception:
+            logger.exception("待办提醒语音播报失败")
 
     def _bubble_suppressed(self) -> bool:
         """设置窗口打开期间暂停气泡（与 PetInstance._update_bubble_suppression_for_settings

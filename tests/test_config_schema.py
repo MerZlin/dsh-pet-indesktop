@@ -152,6 +152,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "throw_strength",
         "todo_reminder_enabled",
         "todo_reminder_lead_minutes",
+        "todo_reminder_speak",
         "user_customized",
         "voice_chime_custom_quotes_en",
         "voice_chime_custom_quotes_zh",
@@ -219,6 +220,8 @@ SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "ch
 # 它们随「节日动画 + 我的生日」一起进来时**漏登在 config.py 的默认 dict 与白名单里**
 # （设置页有行、config 没键），于是本轮把它们渲染出来后被
 # `test_settings_default_marks` 的「冻结集」抓到——补齐后白名单 153。
+# 2026-10-18 加待办语音播报 1 键（todo_reminder_speak，默认 False：复用语音报时的
+# 音频通道，不新增语速/音色/音量键），白名单 154。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 

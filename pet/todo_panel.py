@@ -4,7 +4,7 @@
 视觉上沿用 Shared UX Contract 令牌（references/visual-system.md）：卡片
 12px 圆角 1px 边框、字段/按钮 7px 圆角、13px 正文 / 12px 提示、强调色
 #0a84ff，明暗跟随系统调色板亮度。面板只管理待办条目（CRUD 即时落盘，
-经 TodoReminderService.set_items）；提醒开关与提前量单一归属在设置页
+经 TodoReminderService.set_items）；提醒开关、提前量与语音播报单一归属在设置页
 「自动化与联动」，面板仅以提示文案深链，不复制偏好控件。
 """
 from __future__ import annotations
@@ -262,7 +262,7 @@ class TodoPanelDialog(QDialog):
         self._add_btn.clicked.connect(self.begin_add)
         footer.addWidget(self._add_btn)
         footer.addStretch(1)
-        hint = QLabel("提醒开关与提前量在 桌宠设置 → 自动化与联动")
+        hint = QLabel("提醒开关、提前量与语音播报在 桌宠设置 → 自动化与联动")
         hint.setObjectName("todoHintLabel")
         hint.setWordWrap(True)
         footer.addWidget(hint, stretch=1)

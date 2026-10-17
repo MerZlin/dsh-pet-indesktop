@@ -274,7 +274,11 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 本支的每日一签接线再 +2，合并树实测正是 2535。抽签的页装配不在本文件——它作为「互动」
 # 域第四个页内标签由 settings_interaction 挂载（与天气同口径），避免这个"上帝对话框"再涨。
 # 仍按文件约定只随实测校准。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2535
+# 2026-10-18 上调到 2539（待办语音播报，本文件净 +4）：待办提醒分区多一行
+# `SettingRow("todo_reminder_speak", ...)`（行装配 3 行 + 保存回写 1 行；claim 表那行
+# 只是多一个 id，不增行）。控件本体在 settings_pet_controls，文案只有行内这一份来源。
+# 仍按文件约定只随实测校准，不为达标压缩行宽/合并语句；拆分仍是待办。
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2539
 
 
 def _read(name: str) -> str:
