@@ -62,7 +62,7 @@
     <string name="dsh_link_err_malformed">Bad address. Use "IP:port", for example 192.168.1.5:8768, with no path.</string>
     <string name="dsh_link_err_scheme">Only http:// is supported (the LAN endpoint is plain HTTP).</string>
     <string name="dsh_link_err_hostname">IP addresses only: host names are never resolved. Use a private IP such as 192.168.1.5, not localhost or a PC name.</string>
-    <string name="dsh_link_err_public">Private addresses only: 10.x, 172.16-31.x, 192.168.x, 169.254.x, 127.x, or IPv6 ::1 / fc00::/7 / fe80::/10. Public addresses are refused.</string>
+    <string name="dsh_link_err_public">Private or virtual-network addresses only: 10.x, 172.16-31.x, 192.168.x, 169.254.x, 127.x, 100.64-127.x (CGNAT tailnets such as Tailscale), or IPv6 ::1 / fc00::/7 / fe80::/10. Public addresses are refused.</string>
     <string name="dsh_link_err_port">The port must be 1-65535.</string>
     <string name="dsh_link_waiting_approval">The PC is waiting for your approval</string>
     <string name="dsh_link_waiting_question">The PC has a question for you</string>

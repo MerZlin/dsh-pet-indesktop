@@ -367,7 +367,8 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 > `android:usesCleartextTraffic="true"` 保留——局域网端点是明文 HTTP，而 Android 的
 > `networkSecurityConfig` 只能按域名白名单，表达不了"任意私网 IP"。**"只连私网"改由运行时
 > 白名单守住**：`DshLinkClient.validate()` 只接受私网/回环 IP 字面量（10/8、172.16/12、
-> 192.168/16、169.254/16、127/8、IPv6 `::1`/`fe80::/10`/`fc00::/7`、IPv4-mapped 的上述段），
+> 192.168/16、169.254/16、127/8，以及 **100.64/10 —— Tailscale 这类 tailnet 用的 CGNAT 段**，
+> 否则"手机不在同一 WiFi"就没法用；IPv6 `::1`/`fe80::/10`/`fc00::/7`、IPv4-mapped 的上述段），
 > **拒绝一切主机名且不做 DNS 解析**、拒绝公网地址，拒绝时不发任何请求、令牌不出内存；
 > 设置页就地显示原因。规则与用例见 `DshLinkAddressTest`（12 条）。
 >
@@ -389,7 +390,7 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 
 | 判定 | 允许 | 拒绝理由（`DshLinkReject`） |
 |---|---|---|
-| IPv4 私网 | `10/8`、`172.16/12`、`192.168/16`、`169.254/16`、`127/8` | `NOT_PRIVATE` |
+| IPv4 私网 | `10/8`、`172.16/12`、`192.168/16`、`169.254/16`、`127/8`、`100.64/10`（CGNAT/tailnet） | `NOT_PRIVATE` |
 | IPv4 公网/邻段 | — | `NOT_PRIVATE`（`8.8.8.8`、`172.15.x`、`172.32.x`、`192.169.x`） |
 | IPv6 | `::1`、`fe80::/10`、`fc00::/7` | `NOT_PRIVATE`（`2001:4860::8888`、`::2`、`::`） |
 | IPv4-mapped IPv6 | `::ffff:192.168.1.5` 等按 IPv4 规则 | `NOT_PRIVATE`（`::ffff:8.8.8.8`） |
@@ -476,6 +477,12 @@ $ node integrations/dsh-pet-bridge/verify_import.mjs → OK
 
 ### 取舍与残留风险
 
+- **放行 `100.64.0.0/10`（CGNAT）是为了 tailnet**。这不是严格意义的私有地址（RFC 6598
+  共享地址空间，个别 ISP 会路由它），但在"手机不在同一局域网、又想连自己电脑"的场景里，
+  Tailscale 等虚拟网给的就是这个段；不放行等于"必须同 WiFi 才能用"。放行的代价可控：
+  tailnet 内流量本来就由 WireGuard 加密，端点仍要求 Bearer 令牌，且这是用户手动填的地址。
+  边界按 `/10` 处理（`100.64.x` ~ `100.127.x` 放行，`100.63/16`、`100.128/16` 拒绝），
+  单测覆盖了上下边界。若维护者不接受这条，删掉 `isPrivateIpv4` 里那一行即可回退，不影响其它规则。
 - **拒绝主机名会让 `.local` / `电脑名` 用不了**（含 `localhost`）。这是有意的取舍：域名可能
   解析到公网，而 Bearer 令牌是明文；用户改填 `192.168.x.x` 即可（同一台机器的 IP 在电脑上
   `ipconfig` 一眼可见）。`adb reverse` 场景填 `127.0.0.1:8768` 也仍然可用。若维护者认为
@@ -514,6 +521,7 @@ $ adb reverse tcp:8768 tcp:8768        # 模拟器 NAT 不通 10.0.2.2，用 rev
 | `question/requested` | `state=waiting_question reacted=2`，气泡 **「电脑那边在问你」**（截图 `shot-q1.png`，气泡在桌宠上方） |
 | 地址改成公网 `8.8.8.8:8768` 并保存 | 设置页地址框下方立刻出现红字「只能是私网地址：10.x、172.16–31.x、192.168.x、169.254.x、127.x，或 IPv6 的 ::1 / fc00::/7 / fe80::/10。公网地址会被拒绝。」（截图 `shot-error.png`）；**模块 `rejected=not_private`，`polls` 在 9 秒内冻结在 55 不动** ⇒ 一个请求都没发、令牌没出内存 |
 | 改回 `127.0.0.1:8768` 并保存 | `rejected=none`，`polls` 55 → 58 恢复轮询 |
+| 地址换成 **Tailscale 地址 `100.117.129.92:8768`**（真机走 tailnet 的用法） | `rejected=none`、`polls` 2 → 6、`failures=0`，还当场抓到实时事件（`state=working`）：**CGNAT 段放行后，模拟器经宿主的 tailnet 地址拿到了真实桥接事件** |
 | 端点进程被杀 | `failures=1`（只是重试退避，不进错误态、不崩溃） |
 | 全程 | `logcat` 无 `FATAL EXCEPTION` / `AndroidRuntime` 记录 |
 

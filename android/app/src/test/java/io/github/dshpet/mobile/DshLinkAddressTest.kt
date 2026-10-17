@@ -46,6 +46,18 @@ class DshLinkAddressTest {
     }
 
     @Test
+    fun carrierGradeNatIsAllowedForTailnets() {
+        // Tailscale 用 100.64.0.0/10（RFC 6598 CGNAT）。手机走 tailnet 连自己电脑就是
+        // 这个段；不放行的话「安全的虚拟网接手机」直接不可用。
+        assertEquals("http://100.117.129.92:8768", ok("100.117.129.92:8768").baseUrl)
+        assertEquals("http://100.64.0.1:8768", ok("100.64.0.1").baseUrl)        // 下边界
+        assertEquals("http://100.127.255.254:8768", ok("100.127.255.254").baseUrl) // 上边界
+        // 边界外一位都不行：100.63/16 与 100.128/16 不是 CGNAT。
+        rejected("100.63.255.255", DshLinkReject.NOT_PRIVATE)
+        rejected("100.128.0.1", DshLinkReject.NOT_PRIVATE)
+    }
+
+    @Test
     fun ipv6LoopbackUniqueLocalAndLinkLocalAreAllowed() {
         assertEquals("http://[::1]:8768", ok("[::1]:8768").baseUrl)
         assertEquals("http://[fc00::1]:8768", ok("[fc00::1]").baseUrl)

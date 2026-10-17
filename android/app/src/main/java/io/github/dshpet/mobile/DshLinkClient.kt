@@ -67,6 +67,12 @@ class DshLinkClient(private val baseUrl: String, private val token: String) {
          * 端点留的（Android 的 `networkSecurityConfig` 只能按域名白名单，表达不了
          * "任意私网 IP"），所以"只连私网"这条必须由**运行时**守住。否则用户把地址
          * 填成公网（或一个会解析到公网的域名），Bearer 令牌就会明文出网。
+         *
+         * 放行范围（见 [isPrivateIpv4] / [isPrivateIpv6]）：IPv4 的 10/8、172.16/12、
+         * 192.168/16、169.254/16、127/8，以及 **100.64.0.0/10（CGNAT，Tailscale 用）**；
+         * IPv6 的 `::1`、`fe80::/10`、`fc00::/7`。CGNAT 严格说不是私有段（个别 ISP 会
+         * 路由它），放行它是为了让"手机通过 tailnet 连自己电脑"这条路可用——tailnet
+         * 内流量由 WireGuard 加密，端点又要求 Bearer 令牌，风险可接受。
          */
         fun validate(raw: String): DshLinkTarget {
             val trimmed = raw.trim()
@@ -190,7 +196,8 @@ class DshLinkClient(private val baseUrl: String, private val token: String) {
                 (first == 172 && second in 16..31) ||                 // 172.16.0.0/12
                 (first == 192 && second == 168) ||                    // 192.168.0.0/16
                 (first == 169 && second == 254) ||                    // 169.254.0.0/16 链路本地
-                first == 127                                          // 127.0.0.0/8 回环
+                first == 127 ||                                       // 127.0.0.0/8 回环
+                (first == 100 && second in 64..127)                   // 100.64.0.0/10 CGNAT（Tailscale）
         }
 
         private fun isPrivateIpv6(bytes: ByteArray): Boolean {
@@ -235,7 +242,7 @@ enum class DshLinkReject {
     /** 只认 IP 字面量：主机名（含 localhost）一律拒绝，避免任何 DNS 解析。 */
     HOSTNAME,
 
-    /** 不是私网/回环地址：会把令牌明文发往公网。 */
+    /** 不是私网/回环地址（也不在放行的 CGNAT 段里）：会把令牌明文发往公网。 */
     NOT_PRIVATE,
 
     /** 端口不是 1..65535。 */
