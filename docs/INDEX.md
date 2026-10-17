@@ -141,6 +141,7 @@
 ## PR 报告存档
 
 - [歌词让位于 Agent 状态提示（2026-10-17）](PR-REPORT-LYRIC-AGENT-PRIORITY-2026-10-17.md)：修复歌词持续占用通知槽、吞掉开始/结束提示；涉及歌词和 Agent 气泡优先级时必读。
+- [Hermes Agent Link 桥接（2026-10-17）](PR-REPORT-HERMES-PET-BRIDGE-2026-10-17.md)：把 Hermes 生命周期/审批 hook 接入桌宠既有 Agent Link，并记录 Chat 走 Hermes API Server 的接入方式；维护 Hermes 联动或排查状态气泡时必读。
 
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
