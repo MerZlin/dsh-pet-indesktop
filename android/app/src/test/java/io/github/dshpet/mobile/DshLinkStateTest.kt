@@ -134,6 +134,25 @@ class DshLinkStateTest {
     }
 
     @Test
+    fun eachAssistantMessageIsDeliveredOnceButOnlyOnce() {
+        // 用户的诉求：投"正文"，不是复读预设台词。assistant/message 归在 WORKING、
+        // 没有回合身份，所以用正文本身当指纹。
+        val first = DshLinkEvents.dedupeKey(DshLinkState.WORKING, fingerprint = "第一句正文")
+        val second = DshLinkEvents.dedupeKey(DshLinkState.WORKING, fingerprint = "第二句正文")
+        assertNotEquals("两句不同的话必须各弹一次", first, second)
+        assertEquals(
+            "同一句话被重放时只弹一次",
+            first,
+            DshLinkEvents.dedupeKey(DshLinkState.WORKING, fingerprint = "第一句正文"),
+        )
+        // 没有正文时仍然退回"按状态去重"，不会因为指纹为空而误判成新消息。
+        assertEquals(
+            DshLinkEvents.dedupeKey(DshLinkState.WORKING),
+            DshLinkEvents.dedupeKey(DshLinkState.WORKING, fingerprint = ""),
+        )
+    }
+
+    @Test
     fun endpointInputIsNormalisedBeforeUse() {
         // 补 scheme / 去尾斜杠与空白 / 空白输入没有结果：与 normalizeBaseUrl 时代的
         // 三条断言等价，只是换到带白名单校验的新入口（validate）上，覆盖不变。

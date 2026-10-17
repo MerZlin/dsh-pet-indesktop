@@ -112,6 +112,7 @@ object DshLinkEvents {
         callId: String = "",
         approvalId: String = "",
         requestId: String = "",
+        fingerprint: String = "",
     ): String {
         val identity = when (state) {
             DshLinkState.SUCCESS, DshLinkState.ERROR ->
@@ -121,6 +122,9 @@ object DshLinkEvents {
                 rpcId.ifBlank { approvalId }.ifBlank { requestId }.ifBlank { callId }
             else -> ""
         }.trim()
-        return if (identity.isEmpty()) state.name else "${state.name}:$identity"
+        val base = if (identity.isEmpty()) state.name else "${state.name}:$identity"
+        // 带正文的记录（assistant/message）没有回合身份可用：用正文本身当指纹，
+        // 这样"同一句话重放"只弹一次，而"每句不同的回复"各自弹一次。
+        return if (fingerprint.isBlank()) base else "$base#$fingerprint"
     }
 }

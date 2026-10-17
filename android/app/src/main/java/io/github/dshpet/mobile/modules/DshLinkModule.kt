@@ -101,14 +101,19 @@ class DshLinkModule : HostBoundModule() {
     private fun react(signal: Signal) {
         // 只有一条母宠说话：小鲸鱼不说台词（与 SpeechModule 同口径）。
         val pet = host.pets.firstOrNull { !it.isCompanion } ?: return
-        // 问题带原文就用原文（已按 DshLinkText 压成 ≤100 字一句），否则退回固定短句。
-        val fallback = when (signal.state) {
-            DshLinkState.WAITING_APPROVAL -> R.string.dsh_link_waiting_approval
-            DshLinkState.WAITING_QUESTION -> R.string.dsh_link_waiting_question
-            DshLinkState.SUCCESS -> R.string.dsh_link_success
-            DshLinkState.ERROR -> R.string.dsh_link_error
-            // 忙/闲的来回切换不弹气泡：那是动画的活，弹了就是噪音。
-            else -> return
+        // 带正文就直接念正文（已压成 ≤100 字一句）；没有正文才退回固定短句。
+        // 带正文时不看状态：assistant/message 归在 working，同样值得念出来。
+        val fallback = if (signal.text == null) {
+            when (signal.state) {
+                DshLinkState.WAITING_APPROVAL -> R.string.dsh_link_waiting_approval
+                DshLinkState.WAITING_QUESTION -> R.string.dsh_link_waiting_question
+                DshLinkState.SUCCESS -> R.string.dsh_link_success
+                DshLinkState.ERROR -> R.string.dsh_link_error
+                // 忙/闲的来回切换不弹气泡：那是动画的活，弹了就是噪音。
+                else -> return
+            }
+        } else {
+            0
         }
         reacted++
         val text = signal.text ?: host.context.getString(fallback)
@@ -156,31 +161,46 @@ class DshLinkModule : HostBoundModule() {
         var latest: Signal? = null
         for (record in page.records) {
             val state = stateOf(record) ?: continue
-            latest = Signal(state, detailOf(record, state), keyOf(record, state))
+            val text = textOf(record, state)
+            latest = Signal(state, text, keyOf(record, state, text))
         }
         return latest
     }
 
     /** 记录里的稳定身份 → 去重键；规则本身在纯函数 `DshLinkEvents.dedupeKey`。 */
-    private fun keyOf(record: JSONObject, state: DshLinkState): String = DshLinkEvents.dedupeKey(
-        state = state,
-        sourceTurn = record.optString("sourceTurn"),
-        step = record.optString("step"),
-        rpcId = record.optString("rpcId"),
-        callId = record.optString("callId"),
-        approvalId = record.optString("approvalId"),
-        requestId = record.optString("requestId"),
-    )
+    private fun keyOf(record: JSONObject, state: DshLinkState, text: String?): String =
+        DshLinkEvents.dedupeKey(
+            state = state,
+            sourceTurn = record.optString("sourceTurn"),
+            step = record.optString("step"),
+            rpcId = record.optString("rpcId"),
+            callId = record.optString("callId"),
+            approvalId = record.optString("approvalId"),
+            requestId = record.optString("requestId"),
+            fingerprint = text.orEmpty(),
+        )
 
     /**
-     * 气泡能带的**短文本**：只有"问用户"这类事件本身就有可展示的原文，其余一律用固定短句。
-     * 长度已由 [DshLinkText.brief] 收口（≤100 字，超长截成一句）。
+     * 气泡要显示的**正文**（已压成 ≤100 字一句），没有可展示正文时返回 null。
+     *
+     * 优先级：`assistant/message` 的 `text`（模型这段回复的正文）→ `question/requested`
+     * 的 `questions[0].question`（缺省回退 `header`）。其余事件没有正文，由调用方
+     * 退回固定短句。
+     *
+     * 注意：仓库 main 的桥接按 #226 脱敏**不写助手正文**，所以只有桥接记录里带 `text`
+     * 时这里才有值——没有就自然退回短句，不会编造。
      */
-    private fun detailOf(record: JSONObject, state: DshLinkState): String? {
-        if (state != DshLinkState.WAITING_QUESTION) return null
-        val first = record.optJSONArray("questions")?.optJSONObject(0) ?: return null
-        val question = first.optString("question").ifBlank { first.optString("header") }
-        return DshLinkText.brief(question)
+    private fun textOf(record: JSONObject, state: DshLinkState): String? {
+        val candidate = when (state) {
+            DshLinkState.WAITING_QUESTION -> {
+                val first = record.optJSONArray("questions")?.optJSONObject(0)
+                first?.optString("question").orEmpty().ifBlank { first?.optString("header").orEmpty() }
+            }
+            // assistant/message 归到 WORKING；只有带正文时才值得弹。
+            DshLinkState.WORKING -> record.optString("text").ifBlank { record.optString("message") }
+            else -> ""
+        }
+        return DshLinkText.brief(candidate)
     }
 
     /** JSON 提取留在这一层：映射规则本身在纯函数 `DshLinkEvents` 里，可单测。 */
