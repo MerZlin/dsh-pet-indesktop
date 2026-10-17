@@ -225,7 +225,8 @@ List of devices attached
 ```
 
 **仍无法验证的能力**：
-- **真机联动**（手机上没有装这个包；`adb devices` 为空，按约定不擅自安装）。
+- **真机联动**：当时手机上没有装这个包、`adb devices` 为空，按约定不擅自安装。
+  （后续已用**雷电模拟器 Android 14** 跑通完整链路，见 §九「模拟器实测」；真机仍未测。）
 - **`:app:lintDebug` / `connectedDebugAndroidTest`** 未跑（lint 需要 AGP 的 lint worker，本机沙箱
   同样受限；设备测试需要真机/模拟器）。
 - **`node --test` 在本机沙箱下跑不了**：`node --test <file>` 为每个文件 spawn 子进程（默认
@@ -350,9 +351,12 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 > `verify_import.mjs` OK；`ruff check pet/ tests/` 干净；交付纪律四条断言手工复算全过。
 > 性能探针见报告 §四（无增量轮询 208 µs/次、1000 次轮询 heap +60 KiB、无新增线程）。
 >
-> **未验证（重要）**：① 手机与电脑之间的真实联动没跑过——本机已用 JDK21 + SDK36 真编译
-> （`:app:compileDebugKotlin` 18m19s、`:app:assembleDebug` 2m15s，APK 53,516,653 B）并跑通
-> JVM 单测 **96 条**，但 `adb devices` 为空、未向任何手机安装、`lintDebug`/设备测试未跑。
+> **验证**：① 已用 JDK21 + SDK36 真编译（`:app:compileDebugKotlin` / `:app:assembleDebug`，
+> APK 53,975,188 B）并跑通 JVM 单测 **108 条**；② 已用**雷电模拟器 Android 14** 跑通完整链路
+> —— 端点 → `adb reverse` → 手机模块 → 气泡「电脑那边在问你 / 电脑上干完活啦」，
+> 并把地址改成公网 `8.8.8.8` 验证了「`rejected=not_private` 且 `polls` 冻结、一个请求都不发」
+> 与设置页红字提示（报告 §九有输出与截图）；③ `adb devices` 用的是模拟器，**未向任何真机安装**；
+> `lintDebug`/`connectedDebugAndroidTest` 仍未跑。
 > ② 本机装不上 PySide6、且文件沙箱不允许 pytest 的临时目录（`WinError 5`），因此 **Python 全量
 > `python -m pytest -q` 未跑成**，需由 CI 判。报告 §五/§六 有全部命令与原始输出。
 >
@@ -479,5 +483,44 @@ $ node integrations/dsh-pet-bridge/verify_import.mjs → OK
   `InetAddress.getAllByName`，会引入 DNS 查询与 DNS 重绑定（rebinding）窗口，代价明显更大。
 - **`::` 与 `0.0.0.0` 未特判**：`[::]` 被 `NOT_PRIVATE` 拒绝、`0.0.0.0` 不是合法目标地址
   （会被判 `NOT_PRIVATE`），两者都不是可用的连接目标。
-- 未上真机：地址校验是纯逻辑，已由 12 条 JVM 用例覆盖；**设置页的错误文案与红框没有在
-  设备上肉眼确认过**（无 adb 设备）。
+
+### 模拟器实测（雷电 LDPlayer 14 / Android 14）
+
+本机无真机，改用 **雷电模拟器 14.0.8.2（`F:\leidian\LDPlayer14`，Android 14 / SDK 34 /
+x86_64）** 跑了一遍完整链路，结论：模块、气泡、拒绝路径在真实 Android 运行时上都成立。
+
+环境与命令（模拟器侧的 adb 用 LDPlayer 自带 `adb.exe`；主机侧端点用
+`node integrations/dsh-pet-bridge/lan-stream.js --host 127.0.0.1 --port 8768`，桥目录是
+`.scratch/` 下的夹具，含真实 `encodeRecord` 写出的记录）：
+
+```text
+$ adb install -r dist-android/dsh-pet-android-0.2.1-debug.apk      → Success
+$ adb shell appops set io.github.dshpet.mobile SYSTEM_ALERT_WINDOW allow
+$ adb shell pm grant io.github.dshpet.mobile android.permission.POST_NOTIFICATIONS
+$ adb reverse tcp:8768 tcp:8768        # 模拟器 NAT 不通 10.0.2.2，用 reverse 走 127.0.0.1
+# 界面点「启动」后：
+    modules=[wander, speech, clickSound, companion, collision, dshLink]
+    moduleInfo=… polls=62 failures=0 state=success reacted=1 rejected=none
+```
+
+**逐项观察**（证据是 `dumpsys activity service .PetOverlayService` 的 `moduleInfo` +
+截图）：
+
+| 场景 | 观察 |
+|---|---|
+| 挂载 | `polls` 每 3 秒 +1、`failures=0`、`rejected=none`：地址过白名单、请求真的发出去了 |
+| `turn/end`（completed） | `state=success reacted=1`，气泡 **「电脑上干完活啦」**（截图 `shot-bubble*.png`） |
+| 同状态再来一条 → 故意不重复 | 第二次 `turn/end` 后 `reacted` 仍是 1：edge-trigger 生效，不重复弹 |
+| `question/requested` | `state=waiting_question reacted=2`，气泡 **「电脑那边在问你」**（截图 `shot-q1.png`，气泡在桌宠上方） |
+| 地址改成公网 `8.8.8.8:8768` 并保存 | 设置页地址框下方立刻出现红字「只能是私网地址：10.x、172.16–31.x、192.168.x、169.254.x、127.x，或 IPv6 的 ::1 / fc00::/7 / fe80::/10。公网地址会被拒绝。」（截图 `shot-error.png`）；**模块 `rejected=not_private`，`polls` 在 9 秒内冻结在 55 不动** ⇒ 一个请求都没发、令牌没出内存 |
+| 改回 `127.0.0.1:8768` 并保存 | `rejected=none`，`polls` 55 → 58 恢复轮询 |
+| 端点进程被杀 | `failures=1`（只是重试退避，不进错误态、不崩溃） |
+| 全程 | `logcat` 无 `FATAL EXCEPTION` / `AndroidRuntime` 记录 |
+
+截图落在 `.scratch/android-toolchain/`（未入库）：`shot-bubble2.png`、`shot-q1.png`、
+`shot-error.png`。
+
+**仍未覆盖**：真机（华为 Mate 40 Pro 上的实机表现与省电策略）没测；模拟器不反映手机功耗。
+另外这台机器的 DSH 文件沙箱是 workspace-write，模拟器实例写不了
+`F:\leidian` / `%APPDATA%` 会以 `0xE06D7363` 崩掉——本次是靠一次性放开沙箱并用计划任务把
+模拟器拉出命令进程树才跑起来的，**这不是产品行为，只是本机测试环境的限制**。
