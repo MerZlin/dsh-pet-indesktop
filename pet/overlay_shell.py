@@ -1075,6 +1075,7 @@ class OverlayShell(QObject):
         self._spawned_slots: dict = {}
         # B7b per-slot 取源：逐 sprite 的配置视图（配置同步边界重建）与子 sprite
         # 的各自主气泡跟随器/自言自语宿主/ pet 形宿主。
+        self._drag_relaxed_sprite = None  # 拖拽期间被放宽域的那只（收尾时恢复）
         self._sprite_cfg_cache: dict = {}
         self._bubble_followers: dict = {}
         self._sprite_hosts: dict = {}
@@ -1442,6 +1443,9 @@ class OverlayShell(QObject):
             lambda target: build_sprite_full_menu(self, target))
         overlay._through_changed = self._on_user_through_changed
         overlay._grab_finished_cb = self._on_grab_finished
+        # 真拖拽升级（过 DRAG_THRESHOLD）：窗口先取消探头会话，再把这只的钳制域
+        # 放宽到整张窗——两件事都在壳层做，因为放宽/恢复要碰宿主的活动区。
+        overlay._drag_committed_cb = self._on_drag_committed
         # 穿透态收敛的两个时机（见 _converge_auto_cursor_hidden）：显示/恢复
         # 与真到达窗口的鼠标输入，同一入口、同一语义
         overlay._shown_cb = self._converge_auto_cursor_hidden
@@ -4707,14 +4711,68 @@ class OverlayShell(QObject):
                 self._auto_cursor_hidden = False
                 self._apply_effective_mouse_through()
 
+    def _on_drag_committed(self, sprite) -> None:
+        """真拖拽升级（``overlay._drag_committed_cb``）：取消探头 + 放宽钳制域。
+
+        窗口自带的 ``_on_real_drag_started`` 只做探头取消；放宽域要碰宿主的活动区，
+        所以整条升级钩子接到壳层来（``_wire_host_overlay`` 里覆盖）。
+        """
+        probe = self._probe_of_sprite(sprite)
+        if probe is not None:
+            probe.on_sprite_drag_started(sprite)
+        self._relax_drag_domain(sprite)
+
+    def _probe_of_sprite(self, sprite):
+        host = self._host_of(sprite) or self._main_host
+        return None if host is None else host.probe
+
+    def _relax_drag_domain(self, sprite) -> None:
+        """跨屏拖拽期间把这只的钳制域放宽到**整张窗**。
+
+        多矩形域是"可站立域"：身体框跨在缝上、或经过错位屏间的空洞时会被逐点
+        判定钳回最近那块屏——实测表现是先像撞墙、再突然瞬移过去，而不是顺着
+        光标穿过去。拖动中放宽到整窗（含空洞），松手由 ``_on_grab_finished``
+        恢复多矩形域并补一次钳制，落脚点仍在真正有显示器的屏上。
+        """
+        host = self._host_of(sprite) or self._main_host
+        if host is None:
+            return
+        # 关闭跨屏时**不放宽**：活动区本来就只剩家那块屏，整窗宽松域会把宠放出
+        # 它本该待着的这块屏（关闭语义是"拖不过去"）。
+        if not self._cross_screen_allowed:
+            return
+        bounds = host.bounds
+        if bounds.width() <= 0 or bounds.height() <= 0:
+            return
+        sprite.set_clamp_rects((QRectF(bounds),))
+        self._drag_relaxed_sprite = sprite
+
+    def _restore_drag_domain(self) -> None:
+        """拖拽收尾：恢复多矩形活动区，并把落脚点钳回真正有显示器的屏。"""
+        sprite = self._drag_relaxed_sprite
+        self._drag_relaxed_sprite = None
+        if sprite is None:
+            return
+        host = self._host_of(sprite) or self._main_host
+        if host is None:
+            return
+        host.apply_activity(sprite)
+        # set_clamp_rects 按契约不补钳制，而松手点可能正落在屏间空洞里——
+        # 不补这一次，宠会停在没有显示器的地方（看起来凭空消失）。
+        sprite.set_pos(QPointF(sprite.pos))
+
     def _on_grab_finished(self) -> None:
-        """拖拽收尾（overlay._finish_grab 钩子）：冲刷光标恢复滞留 + 拆空宿主。
+        """拖拽收尾（overlay._finish_grab 钩子）：收放宽域 + 冲刷光标恢复滞留。
+
+        第一段把跨屏拖拽期间放宽到整窗的钳制域收回多矩形活动区，并把落脚点钳
+        回真正有显示器的屏（松手点可能正落在屏间空洞）。
 
         尾段补做被 grab 闸住的收敛请求（``_converge_pending``）：此刻 grab 已
         清，补做直接生效（收敛函数只看这两道闸）。
         跨屏拖拽把一块屏上的最后一只宠带走时，那块屏的窗口在**这次 grab 结束
         之后**才拆（拖拽期间拆掉正在接受输入的窗口，会话就再也收不了尾）。
         """
+        self._restore_drag_domain()
         if self._cursor_restore_pending:
             self._cursor_restore_pending = False
             self._auto_cursor_hidden = False

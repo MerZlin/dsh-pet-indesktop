@@ -126,3 +126,14 @@ def test_row_is_reachable_by_search(tmp_path, monkeypatch):
             assert f"settingRow_{ROW_KEY}" in matched, f"搜「{query}」应当命中这一行"
     finally:
         dialog.close()
+
+
+def test_hint_describes_one_window_over_the_desktop():
+    """说明文案必须写新架构（一张合成窗铺满桌面），不能再写"每块屏各开一张窗口"。
+
+    旧文案描述的是已删除的"每屏一窗"拓扑；用户照着它理解，会以为跨屏就是多开窗口。
+    """
+    from pet.settings_pet_controls import CROSS_SCREEN_HINT
+
+    assert "一张合成窗" in CROSS_SCREEN_HINT
+    assert "各开一张窗口" not in CROSS_SCREEN_HINT

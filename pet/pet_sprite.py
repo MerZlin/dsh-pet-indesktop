@@ -477,7 +477,16 @@ class PetSprite(QObject):
         self._clamp_rects = tuple(QRectF(rect) for rect in rects)
 
     def _clamp_targets(self) -> tuple[QRectF, ...]:
-        """``set_pos`` 可用的钳制矩形集合（多矩形域优先，否则单域一块）。"""
+        """``set_pos`` 可用的钳制矩形集合。
+
+        **探头姿态优先用放宽域**：探头要「藏半身在屏外」，放宽域是**一个**矩形；
+        若让多矩形域优先，探头期间身体会被逐点并集判定钳回屏内——姿态照画、位置
+        却在屏里，实测表现是身子露在屏幕外/姿态错位。多矩形域只在常规移动（含
+        跨屏拖拽）时生效。
+        """
+        relaxed = self.probe_clamp_bounds()
+        if relaxed is not None:
+            return (relaxed,)
         rects = self._clamp_rects
         if rects:
             return rects

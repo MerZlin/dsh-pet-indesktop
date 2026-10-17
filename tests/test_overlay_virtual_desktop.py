@@ -200,3 +200,95 @@ def test_tick_interval_follows_the_fastest_screen(tmp_path, monkeypatch):
         assert shell.driver.tick_interval_ms(rate) == 6
     finally:
         hosts_mod._cleanup(shell)
+
+
+# ---------------------------------------------------------------- 拖拽域 / 探头域
+def _stacked_screens():
+    """主屏 2560×1440(avail 1392) + 左侧副屏 1920×1080(avail 1032)。
+
+    副屏比主屏矮：``x∈[-1920,0], y∈[1032,1392)`` 是**没有显示器**的空洞。
+    """
+    main = hosts_mod.FakeScreen((0, 0, 2560, 1440), (0, 0, 2560, 1392), name="MAIN")
+    left = hosts_mod.FakeScreen((-1920, 0, 1920, 1080), (-1920, 0, 1920, 1032), name="LEFT")
+    return main, left
+
+
+def test_drag_relaxes_the_clamp_domain_to_the_whole_window(tmp_path, monkeypatch):
+    """跨缝拖拽期间放宽成整窗，松手恢复多矩形活动区。
+
+    严域（多矩形）下身体框跨到错位屏的空洞时会被逐点判定钳回最近那块屏——实测
+    表现是先像撞墙、再突然瞬移过去，而不是顺着光标穿过去。
+    """
+    main, left = _stacked_screens()
+    _install_screens(monkeypatch, main, left)
+    shell = _make_shell(tmp_path, main)
+    try:
+        sprite = shell.sprite
+        _hittable(sprite)
+        overlay = shell.overlay
+        assert sprite._clamp_rects is not None and len(sprite._clamp_rects) == 2
+
+        origin = QPointF(overlay.geometry().topLeft())
+        cursor = QPointF(sprite.rect().center())
+        overlay.mousePressEvent(_press(cursor, origin + cursor))
+        cursor = QPointF(cursor.x() - 40.0, cursor.y())
+        overlay.mouseMoveEvent(_move(cursor, origin + cursor))
+        _tick(shell)
+
+        assert len(sprite._clamp_rects) == 1, "拖动中应放宽成单个整窗矩形"
+
+        overlay.mouseReleaseEvent(_release(cursor, origin + cursor))
+        assert len(sprite._clamp_rects) == 2, "松手后恢复多矩形活动区"
+    finally:
+        hosts_mod._cleanup(shell)
+
+
+def test_release_inside_the_dead_zone_lands_back_on_a_real_screen(tmp_path, monkeypatch):
+    """松手点落在屏间空洞里时，收尾必须把身体钳回真正有显示器的屏。"""
+    main, left = _stacked_screens()
+    _install_screens(monkeypatch, main, left)
+    shell = _make_shell(tmp_path, main)
+    try:
+        host = shell._main_host
+        sprite = shell.sprite
+        # 拖拽中的宽松域 + 落点：局部分量都在副屏带内，y 却超过副屏可用高度
+        sprite.set_clamp_rects((QRectF(host.bounds),))
+        sprite.set_pos(QPointF(600.0, 1200.0))
+        assert sprite.pos.y() > left.availableGeometry().height(), "前提：此刻确实在空洞里"
+
+        shell._drag_relaxed_sprite = sprite
+        shell._restore_drag_domain()
+
+        body = QRectF(sprite.body_rect())
+        assert any(QRectF(rect).contains(body) for _screen, rect in host.activity), (
+            "松手后身体必须完整落在某块真实屏上")
+    finally:
+        hosts_mod._cleanup(shell)
+
+
+def test_probe_pose_keeps_its_relaxed_domain_under_multi_rects(tmp_path, monkeypatch):
+    """探头姿态优先用放宽域：多矩形活动区不许把探头身体钳回屏内。
+
+    实机表现：姿态照画、位置却在屏里，看起来像身子露在屏幕外/姿态错位。
+    """
+    main, left = _stacked_screens()
+    _install_screens(monkeypatch, main, left)
+    shell = _make_shell(tmp_path, main)
+    try:
+        sprite = shell.sprite
+        assert sprite._clamp_rects is not None and len(sprite._clamp_rects) == 2
+
+        sprite.set_probe_pose(0.0, 0.4)
+        relaxed = sprite.probe_clamp_bounds()
+        assert relaxed is not None, "前提：曝光 0.4 应进入放宽域"
+
+        targets = sprite._clamp_targets()
+        assert len(targets) == 1, "探头期间只该有一个（放宽后的）钳制矩形"
+        assert targets[0] == relaxed
+
+        # 放宽域真的允许身体站到窗口右缘之外（原 bounds 之内做不到）
+        edge = QPointF(shell.overlay.geometry().width() - sprite.rect().width() / 2.0, 400.0)
+        sprite.set_pos(edge)
+        assert sprite.pos.x() > shell.overlay.geometry().width() - sprite.rect().width()
+    finally:
+        hosts_mod._cleanup(shell)

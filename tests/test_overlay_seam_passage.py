@@ -239,10 +239,11 @@ def _drag_to(shell, sprite, target_global):
 
 
 def test_staggered_screens_keep_the_pet_out_of_the_gap(tmp_path, monkeypatch):
-    """错位拼接的屏间**空洞不是可站立区**：拖进空洞的宠被挡在最近那块屏里。
+    """错位拼接的屏间**空洞不是可站立区**：松手后必须落在真实屏上。
 
-    活动区是"每屏可用区一块矩形"的集合，不是它们的并集包围矩形——副屏更高/更宽
-    时，包围矩形里那些没有显示器的地方必须挡住这只（issue：宠走进看不见的地方）。
+    活动区是"每屏可用区一块矩形"的集合，不是它们的并集包围矩形——没有显示器的
+    地方不能站。拖动**过程中**允许经过空洞（严域会在身体框跨缝时把它钳回最近那块
+    屏，实测表现是撞墙 + 瞬移），钳制在松手收尾时补一次。
     """
     a = FakeScreen((0, 0, 1920, 1080), (0, 0, 1920, 1040), name="A")
     # 左下错位一块副屏：两块屏之间在 x∈(1920, 2000), y∈(0,1000) 一带是空洞
@@ -258,11 +259,14 @@ def test_staggered_screens_keep_the_pet_out_of_the_gap(tmp_path, monkeypatch):
         # 前提：拖拽目标确实落在空洞里（没有任何屏覆盖它）
         assert not any(screen.availableGeometry().contains(2600, 600)
                        for screen in (a, diagonal)), "夹具前提：目标点是屏间空洞"
+        target = QPointF(2600.0, 600.0)
+        overlay.mouseReleaseEvent(_release(target - origin, target))
+        _tick(shell)
         body = QRectF(main.body_rect()).translated(
             shell.overlay.geometry().topLeft())
         assert any(QRectF(screen.availableGeometry()).contains(body)
                    for screen in (a, diagonal)), (
-            "身体必须完整落在某块屏的可用区里——空洞不是可站立区")
+            "松手后身体必须完整落在某块屏的可用区里——空洞不是可站立区")
         assert len(shell.hosts()) == 1
     finally:
         hosts_mod._cleanup(shell)
@@ -331,8 +335,14 @@ def test_switch_off_drag_stays_inside_the_started_screen(tmp_path, monkeypatch):
         hosts_mod._cleanup(shell)
 
 
-def test_clamp_domain_is_the_activity_set_for_the_whole_drag(tmp_path, monkeypatch):
-    """拖拽全程钳制域就是活动区集合：没有"临时开域/松手收域"这一拍。"""
+def test_drag_relaxes_the_clamp_domain_then_release_restores_the_activity_set(
+        tmp_path, monkeypatch):
+    """拖拽全程放宽成**整窗**，松手恢复活动区集合。
+
+    严域（多矩形）在身体框跨缝时会被逐点判定钳回最近那块屏——实机表现是先撞墙、
+    再突然瞬移过去，而不是顺着光标穿过去。放宽只对开关打开时生效（关闭时活动区本
+    来就只剩家那块屏，整窗宽松域会把宠放出去）。
+    """
     a, b = _two_screens()
     _install(monkeypatch, [a, b])
     shell = _shell(tmp_path, a)
@@ -348,11 +358,12 @@ def test_clamp_domain_is_the_activity_set_for_the_whole_drag(tmp_path, monkeypat
         overlay.mouseMoveEvent(_move(cursor - origin, cursor))
         _tick(shell)
         assert shell._screen_of_sprite(main) is b, "身体整块进副屏"
-        assert tuple(QRectF(r) for r in main._clamp_rects) == expected, (
-            "拖到哪儿活动区都一样（同一张窗、同一套矩形集合）")
+        assert tuple(QRectF(r) for r in main._clamp_rects) == (
+            QRectF(shell._main_host.bounds),), "拖动中放宽成整窗"
         overlay.mouseReleaseEvent(_release(cursor - origin, cursor))
         _tick(shell)
-        assert tuple(QRectF(r) for r in main._clamp_rects) == expected, "松手也不换域"
+        assert tuple(QRectF(r) for r in main._clamp_rects) == expected, (
+            "松手恢复多矩形活动区")
         assert shell._screen_of_sprite(main) is b
     finally:
         hosts_mod._cleanup(shell)
