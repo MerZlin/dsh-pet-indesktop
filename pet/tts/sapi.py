@@ -58,9 +58,14 @@ def _ensure_com() -> None:
 
 
 def _voice_objects():
-    """返回 SAPI 的 ``GetVoices()`` 集合（拿不到就返回 None）。"""
-    _ensure_com()
+    """返回 SAPI 的 ``GetVoices()`` 集合（拿不到就返回 None）。
+
+    ``_ensure_com()`` 必须在 try 内：本函数在模块导入期就会被
+    ``installed_voices()`` 调到，而 comtypes 只在 Windows 存在——放外面会让
+    非 Windows 的导入直接抛 ModuleNotFoundError。
+    """
     try:
+        _ensure_com()
         voice = _client().CreateObject("SAPI.SpVoice", dynamic=True)
         return voice, voice.GetVoices()
     except Exception:
@@ -167,9 +172,9 @@ class SapiTtsProvider(TtsProvider):
 
     def synth(self, text: str, plan: dict, out_path) -> None:
         """把文本合成到 ``out_path``（标准 wav）。失败一律转 TtsUnavailable。"""
-        _ensure_com()
         client = _client()
         try:
+            _ensure_com()
             voice = client.CreateObject("SAPI.SpVoice", dynamic=True)
             target = find_voice(str(plan.get("voice") or "")) or pick_default_voice(voice)
             if target is None:
