@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -1696,24 +1695,17 @@ class AppShell:
     def self_talk_voice_file(self, text: str) -> Path | None:
         """预缓存台词音频的查找路径；没有就返回 None。
 
-        命名约定与产出脚本（F:\\dsh\\tts\\build_self_talk_voice.py）一致：
-        ``<配置目录>/self_talk_voice/<md5(文本)[:16]>.wav``。刻意放配置目录而不是
-        仓库 assets —— 它属于用户数据（换资源包/更新不该丢），与报时缓存
-        voice_chime_cache 同级。
+        键与产出侧是**同一个实现**（``self_talk_voice.cached_audio`` →
+        ``cache_path``）：``<配置目录>/self_talk_voice/<md5(文本)[:16]>.<扩展名>``，
+        扩展名由产出它的合成后端决定。刻意放配置目录而不是仓库 assets —— 它属于
+        用户数据（换资源包/更新不该丢），与报时缓存 voice_chime_cache 同级。
+
+        分成两份实现曾经是隐患：算法漂移没有交叉测试兜着，表现只有"声音怎么变了"。
         """
         directory = getattr(getattr(self, "config", None), "dir", None)
         if directory is None:
             return None
-        name = hashlib.md5(str(text).strip().encode("utf-8")).hexdigest()[:16] + ".wav"
-        path = Path(directory) / "self_talk_voice" / name
-        try:
-            # 0 字节的残file不算命中（合成写入被打断会留下它）：播静音比回落
-            # 在线合成更糟——主人只会觉得"点了没声/坏了"，日志里什么都看不到。
-            if path.is_file() and path.stat().st_size > 0:
-                return path
-        except OSError:
-            pass
-        return None
+        return self_talk_voice.cached_audio(directory, text)
 
     def speak_self_talk(self, text: str = "") -> bool:
         """点击自言自语朗读：把同一句话送进报时服务的音频通道。
@@ -1763,15 +1755,21 @@ class AppShell:
     def precache_self_talk_voice(self, reason: str = "") -> bool:
         """把还没有本地音频的点击台词（含点击动画绑定台词）交给后台补齐。
 
-        为什么必须后台：本机合成一句要 20 秒上下（还要 ASR 回读校验、不满意就
-        重抽），保存设置或点击那一刻同步做必然卡顿。开关
-        ``self_talk_voice_precache_enabled`` 默认关闭——本机没装本地 TTS 服务是
-        常态，不开就不该发探测请求；服务不在线时后台线程安静收工。
+        合成走「设置 → 语音报时」同一条链路（``pet/tts`` 注册表 + 同一音色），所以
+        试听能出声就等于这里能生成；本机可选的自建 TTS 服务只由 ``DSH_PET_TTS_URL``
+        覆盖，不在线会自动落回注册表。为什么必须后台：一句在线合成要几秒（自建服务
+        更慢），保存设置或点击那一刻同步做必然卡顿。开关
+        ``self_talk_voice_precache_enabled`` 默认关闭——开一次要在本机写几十个音频
+        文件，不开的用户不该付这笔合成开销。
 
-        返回是否真的起了新一轮（上一轮没跑完时返回 False，不排队）。
+        返回是否真的起了新一轮（开关关着、或上一轮没跑完时返回 False，不排队）。
         """
+        if not self_talk_voice.enabled(self.config):
+            # 关着时连每宠名单都不读：slot 档案的读取不该为关掉的功能付费。
+            return False
         try:
-            started = self_talk_voice.start_precache(self.config)
+            started = self_talk_voice.start_precache(
+                self.config, configs=self._self_talk_voice_configs())
         except Exception:
             logging.exception("启动台词语音预缓存失败（不影响点击朗读）")
             return False
@@ -1779,6 +1777,24 @@ class AppShell:
             logging.getLogger("dsh-pet-standalone").info(
                 "已开始后台预缓存台词语音%s", f"（{reason}）" if reason else "")
         return started
+
+    def _self_talk_voice_configs(self) -> list:
+        """每只活跃宠的配置视图（台词名单 ``self_talk_texts`` 是每宠键，按 slot 读）。
+
+        两条拓扑各自的"该宠此刻真正在用的那份视图"，不另造读取口径：
+
+        - legacy：逐窗 ``PetInstance.config``（``SlotRoutedConfig``，每宠键路由到
+          该 slot 档案）；
+        - overlay：子宠是 sprite、没有 PetInstance，视图只有壳的 ``_sprite_config``
+          给得出（主 sprite 也是这条，slot0 档案）。
+
+        拿主配置统一读会让 slot≠0 的宠在别人的名单上生成，点击时命中不到缓存、
+        悄悄回退在线合成（音色变成另一个人）。
+        """
+        overlay = getattr(self, "_overlay_shell", None)
+        if overlay is not None:
+            return [overlay._sprite_config(sprite) for sprite in overlay._all_sprites()]
+        return [inst.config for inst in self._instances]
 
     def _sync_chime_service(self) -> None:
         """按配置启停语音报时服务；关闭时释放服务对象。"""
@@ -1878,6 +1894,11 @@ class AppShell:
         self._sync_festival_service()
         # 抽签的预合成也随配置收敛：音色/语速一变，缓存键就变了，必须重合。
         self._sync_divination_service()
+        # 台词语音预缓存同样在这里收敛：设置页默认跑在独立进程
+        # （settings_process_isolation），进程内对话框那条保存链根本不会执行——
+        # 少了这一行，用户打开开关并保存后本次运行一个文件都不生成（issue #305）。
+        # 开关判定在入口内部，关着时是 no-op；重复触发是单飞的，已补齐时立刻返回。
+        self.precache_self_talk_voice("外部保存设置后")
         # 外部配置变更也可能改了 agent_link.dsh（右键菜单开关落盘后同样收敛到
         # 这里）→ 各窗 refresh_pet_settings 链里的 manager.apply_config 会按
         # 同一功能门启停 DshMonitor（桥目录唯一读方）；overlay 拓扑由上面的
