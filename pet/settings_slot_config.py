@@ -387,8 +387,19 @@ class SlotRoutedConfig:
         return True
 
     def save_geometry(self, geometry, generation) -> bool:
-        return pet_profiles.write_profile_geometry(
+        """几何自存：**直写档案**的旁路（不经 pending，也不动编辑基线）。
+
+        写成功后必须作废只读快照：``_invalidate_slot_snapshot`` 在有未写草稿时按
+        「表单显示口径」故意保留快照，而这条旁路写完自己的文件、下一次 ``reload()``
+        也解不开那份旧快照——于是 ``get('scale')`` 读回**写入之前**的尺寸，窗口照着它
+        弹回去（#304 的「闪一下」）。只刷新只读视图（``refresh_profile_view`` 同一
+        接缝），用户草稿与 ``_pinned_edit_generation`` 一个都不碰。
+        """
+        ok = pet_profiles.write_profile_geometry(
             self.dir, self._slot_id, geometry, generation=generation).ok
+        if ok:
+            self.refresh_profile_view()
+        return ok
 
     def refresh_profile_view(self) -> None:
         """作废这只宠档案的**只读运行视图**缓存（不清草稿、不动编辑基线）。

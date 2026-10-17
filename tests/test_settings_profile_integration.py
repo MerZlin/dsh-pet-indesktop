@@ -569,3 +569,36 @@ def test_routed_key_set_matches_the_profile_key_set():
     """路由键集必须与档案层的每宠键集**逐字相同**（漂移就是 refused-key / 死开关）。"""
     assert settings_slot_config.SLOT_ROUTED_KEYS == pet_profiles.PER_PET_KEYS
     assert settings_slot_config.SLOT_LOCAL_KEYS <= pet_profiles.SLOT_LOCAL_KEYS
+
+
+# ------------------------------------------------------------------ 7. 几何自存：自己写的必须自己看得见
+def test_geometry_write_does_not_freeze_the_slot_snapshot(tmp_path):
+    """#304：运行期视图**自己**写下的几何，``reload()`` 之后不许被旧快照冻住。
+
+    现场：``@app.py _apply_legacy_profile`` 每次档案变动都会 ``reload()``。待写草稿
+    （这里是 ``window.change_scale`` 造出的 ``user_customized``）按「表单显示口径」让
+    ``_invalidate_slot_snapshot`` 故意保留快照，而 ``save_geometry`` 是**直写档案**的
+    旁路，写完不清草稿也不作废快照——于是 reload 也解不开那份旧快照，``get('scale')``
+    读到的是改大小**之前**的尺寸，窗口照着它弹回去（用户看到"闪一下"）。
+    """
+    routed, _main, _cfg = _routed(tmp_path, slot=1)
+    generation = routed.profile_generation()
+    routed.set("user_customized", True)
+
+    assert routed.save_geometry({"scale": 0.92}, generation) is True
+
+    routed.reload()
+    assert routed.get("scale") == pytest.approx(0.92)
+
+
+def test_geometry_write_keeps_the_drafts_of_the_open_form(tmp_path):
+    """上一条的边界：刷新读视图**不许**动用户草稿，也不许洗掉编辑代次基线。"""
+    routed, _main, _cfg = _routed(tmp_path, slot=1)
+    generation = routed.profile_generation()
+    routed.set("scale", 1.3)
+    pinned = routed._pinned_edit_generation
+
+    assert routed.save_geometry({"rx": 0.4}, generation) is True
+
+    assert routed.get("scale") == pytest.approx(1.3), "未保存的草稿优先于盘上的几何"
+    assert routed._pinned_edit_generation == pinned, "编辑代次基线是表单的，不许被刷新洗掉"
