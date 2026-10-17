@@ -92,11 +92,18 @@ manifest 里的 `android:usesCleartextTraffic="true"` 是给局域网明文端�
 原文（取 `questions[0].question`，缺失回退 `header`），其余状态（完成/出错/审批）用固定
 短句；设备上不做"语义总结"（没有本地模型，现编摘要等于编造）。
 
+**每个回合各报一次**（`DshLinkEvents.dedupeKey`）：去重按**事件身份**而不是状态——
+`turn/end` 每回合都收敛成 `success`，只比状态会把第二回合起全部吞掉（真机现象就是
+"只有第一回合弹过干完活啦"）。身份取记录里的稳定字段（回合用 `sourceTurn`→`step`→
+`callId`，问题/审批用 `rpcId`/`approvalId`/`requestId`/`callId`），取不到才退回状态名；
+已反应的键记最近 32 条（`DshLinkModule.RECENT_KEYS`），所以同一回合的迟到重放
+（桥接多写者分文件）不会再弹一次。`working`/`idle` 这类基线没有身份可依，仍"重复即忽略"。
+
 手机侧的状态映射与桌面逐条同源：`DshLinkState`/`DshLinkEvents` 照抄
 `pet/dsh_state.py` 的事件表（含 `turn/end` 的 `reasonKind` 分流、裸
 `approval/asked` 不锁存审批、`cordis/request-run` 只在 `requiresApproval` 严格为真
-时算审批）。轮询 3 秒一次、超时 2 秒、edge-trigger（同一状态连发只反应一次）；
-网络在独立工作线程，气泡与窗口操作回主线程，关闭模块即停线程。
+时算审批）。轮询 3 秒一次、超时 2 秒；网络在独立工作线程，气泡与窗口操作回主线程，
+关闭模块即停线程。
 
 端点契约：`GET /v1/events[?since=<游标>]`，`Authorization: Bearer <令牌>`，
 响应 `{schema, cursor, records[], truncated}`；不带 `since` 是**挂载**（只给游标、

@@ -88,4 +88,39 @@ object DshLinkEvents {
         }
         return EVENT[event]
     }
+
+    /**
+     * 一次「该不该再弹」的身份键。
+     *
+     * 只按状态去重会漏报：`turn/end` 每次都是 `SUCCESS`，第二个回合起会被当成重复
+     * 吞掉（用户看到的现象就是"只有第一回合弹了干完活啦"）。桌面端用回合身份
+     * （`pet/dsh_state.py` 的 `TurnCompletionTracker`，按 `(会话, 回合号)` 发 token）
+     * 保证每回合各报一次；手机端这里用同样的思路，取记录里的稳定身份：
+     *
+     * - 回合结束/出错：`sourceTurn` → `step` → `callId`
+     * - 问用户：`rpcId` → `callId`
+     * - 审批：`rpcId` → `approvalId` → `requestId` → `callId`
+     * - 其余（working/idle 这类基线切换）：只用状态名，重复即忽略
+     *
+     * 取不到身份时退回状态名——宁可少弹，也不要把同一条记录弹两次。
+     */
+    fun dedupeKey(
+        state: DshLinkState,
+        sourceTurn: String = "",
+        step: String = "",
+        rpcId: String = "",
+        callId: String = "",
+        approvalId: String = "",
+        requestId: String = "",
+    ): String {
+        val identity = when (state) {
+            DshLinkState.SUCCESS, DshLinkState.ERROR ->
+                sourceTurn.ifBlank { step }.ifBlank { callId }
+            DshLinkState.WAITING_QUESTION -> rpcId.ifBlank { callId }
+            DshLinkState.WAITING_APPROVAL ->
+                rpcId.ifBlank { approvalId }.ifBlank { requestId }.ifBlank { callId }
+            else -> ""
+        }.trim()
+        return if (identity.isEmpty()) state.name else "${state.name}:$identity"
+    }
 }

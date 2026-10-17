@@ -55,7 +55,7 @@
 |---|---|---|
 | `tests/test_bridge_lan_stream.js` | +293 / −0（新增） | 14 条契约用例：令牌缺失/错误 401 与 `?token=` 兼容；只接受 GET/HEAD（POST→405）；**转发记录与 `encodeRecord` 产物逐字段相等**（含 `inst` 归属）；挂载不回放历史且游标推进不重复交；半行不交出；挂载后新文件从 0 读；文件变小（轮转）从 0 重读；坏游标按挂载处理；坏行跳过不卡游标；单轮预算多轮排空不重不丢；只读（事件文件 size/mtime 不变、目录不多文件）；默认令牌落盘并用于鉴权；桥目录缺失时照常服务空流。 |
 | `android/.../DshLinkStateTest.kt` | +101 / −0（新增） | 8 条 JVM 单测：默认关；`AgentStatus` 基线六个状态 + 两侧空白；15 条原始事件逐条对照桌面表；裸 `approval/asked` 不锁存；`turn/end` 四种 `reasonKind` 分流；`cordis/request-run` 的 `requiresApproval` 门；未知事件不猜。 |
-| `android/.../DshLinkAddressTest.kt` | +150 / −0（新增） | 地址白名单单测：回环 `127.0.0.0/8`、`::1`；私有 `10/8`、`172.16/12`、`192.168/16`；CGNAT `100.64.0.0/10`（tailnet 走这条）；越界邻居（`100.128.0.1`、`172.32.0.1`）必须拒；公网地址、主机名、带路径/查询串、非法端口一律拒；省略端口补 8768。**不解析 DNS**——传进来的必须已经是字面量。 |
+| `android/.../DshLinkAddressTest.kt` | +150 / −0（新增） | **13 条**用例（另有 1 条在 `DshLinkStateTest` 里由旧 `normalizeBaseUrl` 迁移而来）：三段私网、127/8、169.254、IPv6 回环/ULA/link-local、IPv4-mapped、公网 IPv4/IPv6、主机名、带/不带端口、端口非法、空白输入、scheme 与形状、混淆写法、未加括号 IPv6。 |
 | `android/.../DshLinkTextTest.kt` | +84 / −0（新增） | 气泡文案截断：≤100 字原样（含边界 100）；101 字按标点截；无标点硬截；中英标点都认；空串/纯空白。 |
 | `android/.../PetOptionsTest.kt` | +2 / −2 | **唯一改动的既有测试**：`eachModuleReadsItsSingleEnableBit` 的「全开」对象要补 `dshLink = true`——否则新模块在全开对象里仍是关的、原断言必红。断言本身一条没放宽，仍是「每个 id 都能被它的位打开/关上」。 |
 
@@ -147,12 +147,19 @@ $ node --input-type=module -e "await import('./tests/test_bridge_lan_stream.js')
 ```
 
 **2) 既有 8 个 bridge 契约文件 + 新增 1 个＝58 条，全绿**（同一进程内 `await import()` 逐个加载，
-与 CI 的 `node --test <清单>` 是同一批用例文件）：
+与 CI 的 `node --test <清单>` 是同一批用例文件；**CI 原命令本机也直接跑通了**：
 
 ```text
+$ node --test tests/test_bridge_{hardfailure,instance_scope,interaction_dedup,lan_stream,manifest,question_callid,retry,root_control,user_action_guard}.js
+ℹ tests 58  ℹ pass 58  ℹ fail 0        # exit 0
+
 $ node --input-type=module -e "for (const f of [...9 个文件...]) await import('./tests/test_bridge_'+f+'.js');"
 ℹ tests 58  ℹ pass 58  ℹ fail 0
 ```
+
+> 注：报告早期版本记的是「本机沙箱下 `node --test` 报 `spawn EPERM`、只能单进程 import 替代」。
+> 那是当时 `workspace-write` 策略下命名管道被拒的结果；本次复核时策略已是 `danger-full-access`，
+> **CI 的原命令可原样执行并已通过**，上面两条输出都是本轮实测。CI 判据不变。
 
 **3) hermetic 零依赖冒烟仍绿**（`index.js` 未改，`package.json` 只加了 `files` 一项）：
 
@@ -251,7 +258,7 @@ List of devices attached
 | Android 编译 | `:app:compileDebugKotlin`（JDK21 + SDK36） | **BUILD SUCCESSFUL in 18m19s**（含 7m12s 素材导出） |
 | Android 纯 Kotlin 重编 | `:app:compileDebugKotlin --rerun-tasks -x exportPetAssets` | **BUILD SUCCESSFUL in 48s，0 条 `w:` 警告** |
 | Android 打包 | `:app:assembleDebug` | **BUILD SUCCESSFUL in 2m15s**；APK 53,516,653 B ✅（第二轮重打 53,975,188 B，见 §九） |
-| Android 单测 | `:app:testDebugUnitTest` → 沙箱挡住 worker，改用 `java -cp … JUnitCore` | **OK (96 tests)**（含本 PR 的 8 条） |
+| Android 单测 | `:app:testDebugUnitTest` → 沙箱挡住 worker，改用 `java -cp … JUnitCore` | **OK (118 tests)**（含本 PR 新增的 30 条） |
 | Android lint / 设备测试 | `:app:lintDebug` / `connectedDebugAndroidTest` | **未跑**（lint worker 同受沙箱限制；无设备） |
 
 **Python 门为什么本机跑不了（两条独立证据，都不是本改动的缺陷）**：
@@ -346,27 +353,36 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 >   手机才能连。这样零依赖红线、`verify_import.mjs` 的 hermetic 冒烟、DSH 插件树启动路径
 >   全都不受影响。
 > - 手机侧新增 `dshLink` 模块（默认关）：状态映射照抄 `pet/dsh_state.py`，传输只用 JDK 的
->   `HttpURLConnection` + 平台自带 `org.json`，**不新增依赖**。
+>   `HttpURLConnection` + 平台自带 `org.json`，**不新增依赖**。气泡只投一句、**上限 100 字**
+>   （`DshLinkText`：超长按标点截断，不做语义摘要——设备上凭空"总结"等于编造）。
 >
 > **不变量**：不产生第二套事件协议（转发即 `encodeRecord` 的原始行，含 `inst` 归属）；
-> 挂载不回放历史、只交出完整行（与 `DirGlobTailer` 同口径）。
+> 挂载不回放历史、只交出完整行（与 `DirGlobTailer` 同口径）；手机侧默认不联网
+> （`dshLink=false` → 模块根本不被创建）。
 >
-> **验证**：新增 `tests/test_bridge_lan_stream.js` 14 条契约用例（含"转发记录与
-> `encodeRecord` 逐字段相等"），连同既有 8 个 bridge 文件共 **58 passed / 0 failed**；
-> `verify_import.mjs` OK；`ruff check pet/ tests/` 干净；交付纪律四条断言手工复算全过。
+> **验证（Node / 桌面侧）**：新增 `tests/test_bridge_lan_stream.js` **14 条**契约用例（含"转发
+> 记录与 `encodeRecord` 逐字段相等"），连同既有 8 个 bridge 文件共 **58 passed / 0 failed**
+> （`node --test <9 个文件>` 与单进程 `await import()` 两条跑法结果一致）；
+> `node integrations/dsh-pet-bridge/verify_import.mjs` OK（插件加载路径零变化）；
+> `ruff check pet/ tests/` 干净；`tests/test_pr_report_discipline.py` **183 passed**。
 > 性能探针见报告 §四（无增量轮询 208 µs/次、1000 次轮询 heap +60 KiB、无新增线程）。
 >
-> **验证**：① 已用 JDK21 + SDK36 真编译（`:app:compileDebugKotlin` / `:app:assembleDebug`，
-> APK 53,975,188 B）并跑通 JVM 单测 **108 条**；② 已用**雷电模拟器 Android 14** 跑通完整链路
-> —— 端点 → `adb reverse` → 手机模块 → 气泡「电脑那边在问你 / 电脑上干完活啦」，
-> 并把地址改成公网 `8.8.8.8` 验证了「`rejected=not_private` 且 `polls` 冻结、一个请求都不发」
-> 与设置页红字提示（报告 §九有输出与截图）；③ `adb devices` 用的是模拟器，**未向任何真机安装**；
-> `lintDebug`/`connectedDebugAndroidTest` 仍未跑。
-> ② 本机装不上 PySide6、且文件沙箱不允许 pytest 的临时目录（`WinError 5`），因此 **Python 全量
-> `python -m pytest -q` 未跑成**，需由 CI 判。报告 §五/§六 有全部命令与原始输出。
+> **验证（Android 侧）**：JDK21 + SDK36 真编译、真打包（`:app:compileDebugKotlin` /
+> `:app:assembleDebug`，APK 53,975,188 B），JVM 单测 **118 条全过**（17 个测试类；本 PR
+> 新增 **30 条**＝`DshLinkStateTest` 8 + `DshLinkAddressTest` 13 + `DshLinkTextTest` 9）。
+> 已用**雷电模拟器 Android 14** 跑通完整链路——端点 → `adb reverse` → 手机模块 → 气泡
+> 「电脑那边在问你 / 电脑上干完活啦」；并把地址改成公网 `8.8.8.8` 验证了
+> 「`rejected=not_private` 且 `polls` 冻结、一个请求都不发」与设置页红字提示（报告 §九有
+> 输出与截图）。**未向任何真机安装**；`lintDebug` / `connectedDebugAndroidTest` 仍未跑。
+>
+> **本机跑不了的门（据实说明，需 CI 判）**：① 本机 PySide6 装不上、且文件沙箱不允许 pytest
+> 的临时目录（`WinError 5`），因此 **`python -m pytest -q` 未跑成**；② Gradle 的
+> `testDebugUnitTest` worker 走命名管道在本机起不来，单测是用 init 脚本取出 classpath 后
+> `java -cp … org.junit.runner.JUnitCore` 直跑的（不经 worker、不改仓库文件）。
+> 报告 §五/§六 有全部命令与原始输出。
 >
 > **风险 / 回滚**：两端都默认关闭，`git revert` 即恢复；唯一残留是电脑上一个明文令牌文件
-> 与手机偏好里的三个键。
+> （`<桥目录>/lan-token.txt`）与手机偏好里的三个键，都不影响旧版本读取。
 >
 > **安全边界（`usesCleartextTraffic` 那一问的答案）**：manifest 里的
 > `android:usesCleartextTraffic="true"` 保留——局域网端点是明文 HTTP，而 Android 的
@@ -375,7 +391,7 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 > 192.168/16、169.254/16、127/8，以及 **100.64/10 —— Tailscale 这类 tailnet 用的 CGNAT 段**，
 > 否则"手机不在同一 WiFi"就没法用；IPv6 `::1`/`fe80::/10`/`fc00::/7`、IPv4-mapped 的上述段），
 > **拒绝一切主机名且不做 DNS 解析**、拒绝公网地址，拒绝时不发任何请求、令牌不出内存；
-> 设置页就地显示原因。规则与用例见 `DshLinkAddressTest`（12 条）。
+> 设置页就地显示原因。规则与用例见 `DshLinkAddressTest`（**13 条**）。
 >
 > 详细报告：`docs/PR-REPORT-ANDROID-DSH-LINK-2026-10-17.md`。
 
@@ -426,8 +442,8 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 
 | 指标 | 实测 | 归属 |
 |---|---|---|
-| 12 条用例（含 ~45 次 `validate` 调用）总耗时 | **127 ms**（JUnit 报的整类耗时，含 JVM/JUnit 固定开销） | 新增 |
-| 全部 16 个测试类 108 条 | **564 ms** | 累计 |
+| 13 条用例（含 ~45 次 `validate` 调用）总耗时 | **127 ms**（JUnit 报的整类耗时，含 JVM/JUnit 固定开销） | 新增 |
+| 全部 17 个测试类 118 条 | **0.79 s** | 累计 |
 | 新增网络/磁盘/线程 | **0**（校验不解析 DNS、不建 socket；轮询线程与周期不变） | — |
 
 对"拒绝时不发请求"的行为没有用计时衡量——它是控制流（`if (!target.ok)` 直接 `continue`），
@@ -455,12 +471,21 @@ worker 在本机沙箱下起不来，原因是 worker 启动类经命名管道�
 ```text
 $ java -cp <runtime classpath> org.junit.runner.JUnitCore io.github.dshpet.mobile.DshLinkAddressTest
 JUnit version 4.13.2
-............
-OK (12 tests)
+.............
+OK (13 tests)
 
-$ java -cp <runtime classpath> org.junit.runner.JUnitCore <全部 16 个测试类>
-OK (108 tests)          # 上一版是 96 条，本轮 +12
+$ java -cp <runtime classpath> org.junit.runner.JUnitCore <全部 17 个测试类>
+JUnit version 4.13.2
+......................................................................................................................
+Time: 0.79
+
+OK (118 tests)          # 上一版 108 条时漏记了第三轮的 DshLinkTextTest（+9）与地址测试的第 13 条
 ```
+
+> **条数订正（本轮复核）**：早期版本这里写「16 个测试类 / 108 条」「地址测试 12 条」。
+> 按源码 `@Test` 计数与实跑结果，权威数字是 **17 个类 / 118 条**，其中本次 PR 新增
+> **30 条**（`DshLinkStateTest` 8 + `DshLinkAddressTest` 13 + `DshLinkTextTest` 9）。
+> 命令见 §六；`DshLinkAddressTest` 单独跑为 `OK (13 tests)`。
 
 产物核对（新代码确实进了 APK）：
 
@@ -569,3 +594,38 @@ polls=6 failures=0 state=waiting_question reacted=1   （JVM 单测 118 条全�
 - 顺带记录一个构建坑：本机 `:app:assembleDebug` 有一次把 dex 判成 up-to-date，装出来的 APK
   缺新类（`apkanalyzer dex packages` 查不到 `DshLinkText`）。**改完 Kotlin 后用
   `assembleDebug --rerun-tasks` 打包**，并用 `apkanalyzer` 复核产物里有没有新类。
+
+### 第五轮修正：为什么"干完活啦"只弹过一次（真机反馈）
+
+**现象**：作者跑一整段对话，桌宠几乎不弹，怀疑"消息没有流转过来"。
+
+**两件事要分开**：
+
+1. **它不是消息中继**。这个联动只播报**状态切换**：回合结束（success）、等审批、等回答、
+   出错。桌宠不会把每一步思考/每条回复念一遍——那既吵也超长（上一轮的 100 字上限就是
+   为这类长文本准备的）。一段长对话里，正确预期是"**每个完成的回合弹一次**"，不是每句话。
+2. **确实有 bug，而且正是"只弹一次"**：去重只比 `(state, text)`，而 `turn/end` 每回合都收敛成
+   同一个 `SUCCESS`、文案都是 null ⇒ **第二个回合起全部被判成重复吞掉**。
+
+**真机证据（雷电 LDPlayer 14 / Android 14）**：连投两个不同回合的 `turn/end`，
+修复前 `reacted` 1 → 1（第二回合无反应）；修复后 1 → 2。
+
+**修法**（对齐桌面 `pet/dsh_state.py` 的 `TurnCompletionTracker`——桌面按 `(会话, 回合号)`
+发 token 保证每回合各报一次）：新增
+`DshLinkEvents.dedupeKey(state, sourceTurn, step, rpcId, callId, approvalId, requestId)`，
+按**事件身份**去重；已反应的键记最近 32 条（`DshLinkModule.RECENT_KEYS`），所以迟到重放
+（桥接多写者、分文件）也不会再弹。`working`/`idle` 这类基线没有身份可依，仍"重复即忽略"。
+
+**实测（修复后）**：
+
+```text
+回合301 → reacted=4      回合302 → reacted=5
+重放301 → reacted=5      重放302 → reacted=5     ← 迟到重放被抑制
+回合303 → reacted=6
+```
+
+单测新增 3 条（`everyFinishedTurnGetsItsOwnBubbleKey` / `eachQuestionAndApprovalHasItsOwnKey`
+/ `baselineStatesStillDedupeByStateAlone`），总数 **121 条全过**。
+
+**另一个真实原因（不是产品问题）**：该机器上雷电模拟器进程会被 DSH 的文件沙箱回收
+（`adb devices` 变空），期间手机端 App 根本没在运行，自然一条都收不到。真机判断以手机为准。

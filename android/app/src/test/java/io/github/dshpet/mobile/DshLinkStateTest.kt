@@ -1,6 +1,7 @@
 package io.github.dshpet.mobile
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -84,6 +85,52 @@ class DshLinkStateTest {
         assertNull(DshLinkEvents.stateOf("edit/requested"))
         assertNull(DshLinkEvents.stateOf(""))
         assertNull(DshLinkEvents.stateOf("bridge/control-result"))
+    }
+
+    @Test
+    fun everyFinishedTurnGetsItsOwnBubbleKey() {
+        // 真机缺陷回归：只按状态去重时第二个回合起都不弹（每回合都是 SUCCESS）。
+        val first = DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, step = "1")
+        val second = DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, step = "2")
+        assertNotEquals("不同回合必须算两次不同的收尾", first, second)
+        // 同一回合重复投递（镜像写者/重放）必须仍是同一个键，不能再弹一次。
+        assertEquals(
+            "带回合号时以回合号为准：同回合内 step 变了也不算新回合",
+            DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, sourceTurn = "turn-7", step = "7"),
+            DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, sourceTurn = "turn-7", step = "9"),
+        )
+        // 回合号缺失时退回 step。
+        assertEquals(
+            DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, step = "12"),
+            DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, step = "12"),
+        )
+    }
+
+    @Test
+    fun eachQuestionAndApprovalHasItsOwnKey() {
+        assertNotEquals(
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_QUESTION, rpcId = "r1"),
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_QUESTION, rpcId = "r2"),
+        )
+        assertNotEquals(
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_APPROVAL, approvalId = "a1"),
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_APPROVAL, approvalId = "a2"),
+        )
+        // 完全相同的交互重复投递：同一个键，只弹一次。
+        assertEquals(
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_APPROVAL, approvalId = "a1"),
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_APPROVAL, approvalId = "a1"),
+        )
+    }
+
+    @Test
+    fun baselineStatesStillDedupeByStateAlone() {
+        // working/idle 这类基线每回合都会刷一条；没有身份可依，重复即忽略。
+        assertEquals(
+            DshLinkEvents.dedupeKey(DshLinkState.WORKING, step = "1"),
+            DshLinkEvents.dedupeKey(DshLinkState.WORKING, step = "99"),
+        )
+        assertEquals(DshLinkState.WORKING.name, DshLinkEvents.dedupeKey(DshLinkState.WORKING))
     }
 
     @Test

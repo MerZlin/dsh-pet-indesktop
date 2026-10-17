@@ -47,14 +47,21 @@ class DshLinkModule : HostBoundModule() {
         private set
 
     private var applied = DshLinkState.OFFLINE
-    private var appliedText: String? = null
+    /** 最近几次已反应的键（有界），用于跨轮询去重；见 [DshLinkEvents.dedupeKey]。 */
+    private val recentKeys = ArrayDeque<String>()
+
+    private fun remembered(key: String) {
+        recentKeys.addLast(key)
+        while (recentKeys.size > RECENT_KEYS) recentKeys.removeFirst()
+    }
+
     private var reacted = 0L
 
     override fun onEnable() {
         cursor = null
         pending = null
         applied = DshLinkState.OFFLINE
-        appliedText = null
+        recentKeys.clear()
         rejected = null
         polls = 0
         failures = 0
@@ -77,11 +84,13 @@ class DshLinkModule : HostBoundModule() {
     override fun onTick(dt: Double) {
         val next = pending ?: return
         pending = null
-        // 状态与文案都相同才算重复：同状态但**换了问题**（上一问 resolved、新一问 requested
-        // 落在同一轮里）必须再弹一次，否则用户收不到新问题的原文。
-        if (next.state == applied && next.text == appliedText) return
+        // 按「身份键」去重，不是按状态：turn/end 每回合都收敛成 SUCCESS，只比状态会
+        // 把第二回合起全部吞掉（真机现象＝只有第一回合弹过「干完活啦」）。
+        // 记最近一串键而不是只记最后一个：桥接是多写者分文件的，同一回合迟到的重放
+        // （以及被后面的回合顶掉之后才到的旧记录）不该再弹一次。
+        if (next.key in recentKeys) return
         applied = next.state
-        appliedText = next.text
+        remembered(next.key)
         react(next)
     }
 
@@ -147,10 +156,21 @@ class DshLinkModule : HostBoundModule() {
         var latest: Signal? = null
         for (record in page.records) {
             val state = stateOf(record) ?: continue
-            latest = Signal(state, detailOf(record, state))
+            latest = Signal(state, detailOf(record, state), keyOf(record, state))
         }
         return latest
     }
+
+    /** 记录里的稳定身份 → 去重键；规则本身在纯函数 `DshLinkEvents.dedupeKey`。 */
+    private fun keyOf(record: JSONObject, state: DshLinkState): String = DshLinkEvents.dedupeKey(
+        state = state,
+        sourceTurn = record.optString("sourceTurn"),
+        step = record.optString("step"),
+        rpcId = record.optString("rpcId"),
+        callId = record.optString("callId"),
+        approvalId = record.optString("approvalId"),
+        requestId = record.optString("requestId"),
+    )
 
     /**
      * 气泡能带的**短文本**：只有"问用户"这类事件本身就有可展示的原文，其余一律用固定短句。
@@ -180,8 +200,10 @@ class DshLinkModule : HostBoundModule() {
     }
 
     companion object {
+        /** 去重记忆长度：够覆盖"迟到的重放/被顶掉的旧回合"，又不会无限增长。 */
+        const val RECENT_KEYS = 32
         /** worker → 主线程的最小载荷：状态 + 已压短的可选文案。 */
-        private data class Signal(val state: DshLinkState, val text: String?)        /** 正常轮询间隔。状态变化的可见延迟上限就是它。 */
+        private data class Signal(val state: DshLinkState, val text: String?, val key: String)        /** 正常轮询间隔。状态变化的可见延迟上限就是它。 */
         const val POLL_MS = 3_000L
 
         /** 服务端说 truncated 时的立即重拉上限（避免空转）。 */
