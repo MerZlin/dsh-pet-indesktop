@@ -292,3 +292,39 @@ def test_probe_pose_keeps_its_relaxed_domain_under_multi_rects(tmp_path, monkeyp
         assert sprite.pos.x() > shell.overlay.geometry().width() - sprite.rect().width()
     finally:
         hosts_mod._cleanup(shell)
+
+
+
+def test_probe_pose_target_keeps_part_of_the_body_on_screen(tmp_path, monkeypatch):
+    """探头目标位置：露出约一半，不许整只身体出屏。
+
+    露出量由 ``(1 - exposure) * 投影宽度`` 算，而投影（±45° 姿态）比身体宽——
+    两处口径任一错位都会把整只推到没有显示器的地方（实机反馈：整只露在屏幕外）。
+    """
+    from pet.sprite_edge_probe import probe_target_x
+
+    main, left = _stacked_screens()
+    _install_screens(monkeypatch, main, left)
+    shell = _make_shell(tmp_path, main, {"edge_probe_enabled": True})
+    try:
+        sprite = shell.sprite
+        main_rect = hosts_mod._activity_rect(shell, main)
+        # 贴主屏右缘（body_rect() 已是局部绝对矩形，按差量对齐一次）
+        sprite.set_pos(QPointF(4200.0, 400.0))
+        body = QRectF(sprite.body_rect())
+        sprite.set_pos(QPointF(sprite.pos.x() + (main_rect.right() - body.right()), 400.0))
+
+        sprite.set_probe_pose(45.0, 0.55)
+        # probe_target_x 吃的是**相对 sprite 原点**的投影矩形（body_rect() 已含 pos）
+        projected = QRectF(sprite.body_rect()).translated(-sprite.pos)
+        target = probe_target_x("right", 0.55, projected, sprite.bounds)
+        sprite.set_pos(QPointF(target, sprite.pos.y()))
+
+        window = QRectF(shell.overlay.rect())
+        out = QRectF(sprite.body_rect())
+        assert out.intersects(window), "探头把整只身体推出了窗口（整只出屏）"
+        assert out.right() > window.right(), "探头应当露出一部分身体"
+        assert out.left() < window.right() - sprite.rect().width() / 4.0, (
+            "露出量过大：留在屏内的部分不足一刻")
+    finally:
+        hosts_mod._cleanup(shell)
