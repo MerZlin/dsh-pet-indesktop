@@ -52,4 +52,15 @@
     <string name="click_sound_selected">已选择的手机音频</string>
     <string name="click_sound_failed">音频无法播放，请重新选择文件或恢复内置音。</string>
     <string name="click_sound_hint">音效使用手机的媒体音量。</string>
+    <string name="dsh_link">电脑端联动</string>
+    <string name="dsh_link_url">端点地址</string>
+    <string name="dsh_link_url_hint">192.168.1.5:8768</string>
+    <string name="dsh_link_token">配对令牌</string>
+    <string name="dsh_link_token_hint">电脑上 dsh-pet-bridge/lan-token.txt</string>
+    <string name="dsh_link_save">保存配对</string>
+    <string name="dsh_link_hint">在电脑上运行 node integrations/dsh-pet-bridge/lan-stream.js --host 0.0.0.0，把它打印的地址和令牌填在这里。手机与电脑需在同一局域网；令牌就是电脑上那个文件里的一行。</string>
+    <string name="dsh_link_waiting_approval">电脑那边等你批一下</string>
+    <string name="dsh_link_waiting_question">电脑那边在问你</string>
+    <string name="dsh_link_success">电脑上干完活啦</string>
+    <string name="dsh_link_error">电脑上出错啦</string>
 </resources>

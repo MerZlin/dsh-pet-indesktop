@@ -7,10 +7,11 @@
   "exports": {
     ".": "./index.js"
   },
-  "description": "dsh-pet 桌宠桥接：把 DSH agent 状态事件写入本地 jsonl，并提供可选的 watchdog 控制（仅本地文件，无任何网络请求）",
+  "description": "dsh-pet 桌宠桥接：把 DSH agent 状态事件写入本地 jsonl，并提供可选的 watchdog 控制（仅本地文件，无任何网络请求）；lan-stream.js 是可选的只读局域网事件流（用户显式启动，不参与插件加载）",
   "license": "MIT",
   "files": [
     "index.js",
+    "lan-stream.js",
     "cordis.patch.yml"
   ],
   "dsh": {

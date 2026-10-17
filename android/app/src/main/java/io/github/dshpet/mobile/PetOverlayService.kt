@@ -44,6 +44,7 @@ import androidx.core.content.ContextCompat
 import io.github.dshpet.mobile.modules.ClickSoundModule
 import io.github.dshpet.mobile.modules.CollisionModule
 import io.github.dshpet.mobile.modules.CompanionModule
+import io.github.dshpet.mobile.modules.DshLinkModule
 import io.github.dshpet.mobile.modules.ModuleFactory
 import io.github.dshpet.mobile.modules.ModuleHost
 import io.github.dshpet.mobile.modules.ModuleRegistry
@@ -104,6 +105,8 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
             ModuleFactory(ModuleIds.CLICK_SOUND) { ClickSoundModule() },
             ModuleFactory(ModuleIds.COMPANION) { CompanionModule() },
             ModuleFactory(ModuleIds.COLLISION) { CollisionModule() },
+            // 电脑端 DSH 联动：默认关，关闭时这个工厂不会被调用（无线程/无 socket）。
+            ModuleFactory(ModuleIds.DSH_LINK) { DshLinkModule() },
         )
     }
 

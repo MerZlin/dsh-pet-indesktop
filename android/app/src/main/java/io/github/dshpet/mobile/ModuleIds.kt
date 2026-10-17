@@ -11,6 +11,7 @@ object ModuleIds {
     const val CLICK_SOUND = "clickSound"
     const val COMPANION = "companion"
     const val COLLISION = "collision"
+    const val DSH_LINK = "dshLink"
 
-    val ALL = listOf(WANDER, SPEECH, CLICK_SOUND, COMPANION, COLLISION)
+    val ALL = listOf(WANDER, SPEECH, CLICK_SOUND, COMPANION, COLLISION, DSH_LINK)
 }

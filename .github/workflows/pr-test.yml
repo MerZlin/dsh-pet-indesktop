@@ -123,14 +123,14 @@ jobs:
       # 用户 profile，link 不装依赖、链接目标常是打包版 _internal 副本（无
       # node_modules）——任何外部 bare import 都会让用户开联动后整个 dsh
       # 插件树加载失败。此前这类回归无任何 CI 覆盖。
-      # 两层校验：node --test 跑全部 8 个 bridge 契约测试（原地 import 捕获
+      # 两层校验：node --test 跑全部 9 个 bridge 契约测试（原地 import 捕获
       # 静态外部依赖回归）；verify_import.mjs 做 hermetic 校验（拷进无
       # node_modules 的临时目录 import + 清单零依赖 + envelope 形状 + 动态
       # import/require 静态禁令 + 临时目录祖先链污染探测）。
       # 注意：新增 bridge 测试文件时必须同步下面的显式清单（Node 20 无 glob）。
       - name: Bridge plugin zero-dependency gate
         run: |
-          node --test tests/test_bridge_hardfailure.js tests/test_bridge_instance_scope.js tests/test_bridge_interaction_dedup.js tests/test_bridge_manifest.js tests/test_bridge_question_callid.js tests/test_bridge_retry.js tests/test_bridge_root_control.js tests/test_bridge_user_action_guard.js
+          node --test tests/test_bridge_hardfailure.js tests/test_bridge_instance_scope.js tests/test_bridge_interaction_dedup.js tests/test_bridge_lan_stream.js tests/test_bridge_manifest.js tests/test_bridge_question_callid.js tests/test_bridge_retry.js tests/test_bridge_root_control.js tests/test_bridge_user_action_guard.js
           node integrations/dsh-pet-bridge/verify_import.mjs
 
       # 捕获方式按 OS 分流（2026-10-12）：Linux 主套件加 --capture=tee-sys，

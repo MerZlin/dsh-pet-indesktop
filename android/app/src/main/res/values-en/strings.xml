@@ -52,4 +52,15 @@
     <string name="click_sound_selected">Selected phone audio</string>
     <string name="click_sound_failed">Cannot play this audio. Choose another file or restore the built-in sound.</string>
     <string name="click_sound_hint">Tap sounds use the phone media volume.</string>
+    <string name="dsh_link">PC link</string>
+    <string name="dsh_link_url">Endpoint</string>
+    <string name="dsh_link_url_hint">192.168.1.5:8768</string>
+    <string name="dsh_link_token">Pairing token</string>
+    <string name="dsh_link_token_hint">dsh-pet-bridge/lan-token.txt on the PC</string>
+    <string name="dsh_link_save">Save pairing</string>
+    <string name="dsh_link_hint">On the PC run node integrations/dsh-pet-bridge/lan-stream.js --host 0.0.0.0, then paste the address and token it prints here. Phone and PC must be on the same LAN; the token is the single line in that file on the PC.</string>
+    <string name="dsh_link_waiting_approval">The PC is waiting for your approval</string>
+    <string name="dsh_link_waiting_question">The PC has a question for you</string>
+    <string name="dsh_link_success">Done on the PC</string>
+    <string name="dsh_link_error">Something failed on the PC</string>
 </resources>
