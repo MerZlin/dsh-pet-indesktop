@@ -1256,6 +1256,9 @@ class Config:
             "system_notifications_enabled": True,  # 对话完成/失败/需要授权时弹桌面系统通知
             "todo_reminder_enabled": True,  # 待办提醒总开关
             "todo_reminder_lead_minutes": 5,  # 待办提前提醒分钟数（0~60，0=不提前）
+            # 待办语音播报：复用语音报时服务的音频通道（音色/语速/音调/音量同报时），
+            # 故不新增独立的语音参数键。默认关闭（主动打扰型能力）。
+            "todo_reminder_speak": False,  # 待办提醒是否语音播报
             # 语音报时（edge-tts 在线 TTS + 台词/歌词每天整套换新、日内顺序轮换）
             "voice_chime_enabled": False,  # 语音报时总开关（默认关闭：主动打扰型功能，用户显式开启）
             "voice_chime_schedule": "hourly",  # hourly / every_30 / every_15 / every_5 / every_minute / custom
@@ -1543,6 +1546,7 @@ class Config:
             "system_notifications_enabled",
             "todo_reminder_enabled",
             "todo_reminder_lead_minutes",
+            "todo_reminder_speak",
             "voice_chime_enabled",
             "voice_chime_schedule",
             "voice_chime_custom_times",
@@ -1984,6 +1988,7 @@ class Config:
         # 待办提醒：开关同规防字符串布尔误开；提前量钳到 [0, 60] 分钟（0=不提前）。
         self.data["todo_reminder_enabled"] = _bool_or_default(self.data.get("todo_reminder_enabled"), True)
         self.data["todo_reminder_lead_minutes"] = int(_float_or_default(self.data.get("todo_reminder_lead_minutes"), 5.0, 0.0, 60.0))
+        self.data["todo_reminder_speak"] = _bool_or_default(self.data.get("todo_reminder_speak"), False)
         # 免打扰（issue #208）：默认时长归一到一个合法档位（手改成 7 分钟不该让
         # 菜单里一个勾选项都对不上）；布尔键同族同规，防手改字符串布尔误开。
         self.data["quiet_minutes_default"] = normalize_quiet_minutes(
@@ -2205,6 +2210,7 @@ class Config:
             "spawn_inherit_dynamic_island",
             "todo_reminder_enabled",
             "todo_reminder_lead_minutes",
+            "todo_reminder_speak",
             "quiet_minutes_default",
             "quiet_also_on_fullscreen",
             "music_sing_enabled",

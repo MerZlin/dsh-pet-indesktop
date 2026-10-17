@@ -1649,14 +1649,27 @@ class AppShell:
         cfg = normalize_divination_config(self.config)
         return bool(cfg["enabled"] and cfg["speak"])
 
+    def _todo_speak_wanted(self) -> bool:
+        """待办语音播报是否开启——它同样复用报时服务的音频通道。
+
+        与节日语音同族：通道随报时开关一起被释放时，待办提醒就变成"有气泡没声音"
+        （开关能存、点了没声的死开关）。总开关关掉时待办服务自己也不跑，故两者都要。
+        """
+        return bool(
+            self.config.get("todo_reminder_enabled", True)
+            and self.config.get("todo_reminder_speak", False)
+        )
+
     def _chime_wanted(self) -> bool:
-        # 报时自身开启，或节日语音 / 点击自言自语朗读 / 抽签语音需要这条音频通道
-        #（四者共用一套合成与播放，因此"通道是否存在"取决于其中之一是否需要）。
+        # 报时自身开启，或节日语音 / 点击自言自语朗读 / 抽签语音 / 待办语音播报需要
+        # 这条音频通道（五者共用一套合成与播放，因此"通道是否存在"取决于其中之一
+        # 是否需要）。
         return (
             bool(self.config.get("voice_chime_enabled", False))
             or self._festival_speak_wanted()
             or self._self_talk_speak_wanted()
             or self._divination_speak_wanted()
+            or self._todo_speak_wanted()
         )
 
     def _ensure_chime_service(self):
