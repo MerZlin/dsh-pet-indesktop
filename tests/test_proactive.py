@@ -649,6 +649,9 @@ class TestVisionAndWatcherPhase2:
         assert received[0][3] == big_hash
 
     def test_capture_window_rect_coordinates_and_clamping(self, monkeypatch):
+        import ctypes
+        import types
+
         from pet import vision
         from PIL import Image
 
@@ -657,6 +660,15 @@ class TestVisionAndWatcherPhase2:
         # vision 的 PIL 已下沉为函数内懒导入，直接 patch PIL.ImageGrab 本体
         # （与原先 patch vision.ImageGrab 语义一致：同一模块对象）
         monkeypatch.setattr("PIL.ImageGrab.grab", lambda all_screens=True: fake_all_screen)
+        # 虚拟屏原点固定成 (0,0)：这条用例测的是「全局坐标 → 画布坐标」的裁剪，
+        # 不是这台机器的显示器布局。真有左侧/上方副屏时 (76)/(77) 是负数，
+        # 用例里的 (100,100) 会被平移出 1000x1000 画布、裁剪成 0 宽而假红。
+        monkeypatch.setattr(
+            ctypes,
+            "windll",
+            types.SimpleNamespace(user32=types.SimpleNamespace(GetSystemMetrics=lambda _i: 0)),
+            raising=False,
+        )
 
         # 模拟抓取有效区域 (100, 100, 200, 200)
         img = vision.capture_window_rect((100, 100, 200, 200))
