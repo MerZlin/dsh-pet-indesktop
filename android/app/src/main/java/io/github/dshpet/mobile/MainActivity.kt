@@ -65,6 +65,7 @@ import io.github.dshpet.mobile.ui.AppearanceSection
 import io.github.dshpet.mobile.ui.ClickSoundSection
 import io.github.dshpet.mobile.ui.CollisionSection
 import io.github.dshpet.mobile.ui.CompanionSection
+import io.github.dshpet.mobile.ui.DshLinkSection
 import io.github.dshpet.mobile.ui.SectionTitle
 import io.github.dshpet.mobile.ui.SpeechSection
 import io.github.dshpet.mobile.ui.WanderSection
@@ -215,6 +216,7 @@ class MainActivity : ComponentActivity() {
                         failed = previewState == ClickAudio.State.ERROR || audioError)
                     CompanionSection(options, runtime.companions) { save(it) }
                     CollisionSection(options) { save(it) }
+                    DshLinkSection(options) { save(it) }
                     HorizontalDivider()
                     TextButton(onClick = { resetConfirmation = true }) {
                         Icon(Icons.Default.Refresh, null)

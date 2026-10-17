@@ -20,6 +20,12 @@ data class PetOptions(
     val companions: Boolean = true,
     val collision: Boolean = true,
     val collisionRestitution: Float = DEFAULT_RESTITUTION,
+    /** 电脑端 DSH 联动：默认关，关闭时模块不会被创建（0.2.1 的「无网络请求」口径）。 */
+    val dshLink: Boolean = false,
+    /** 电脑端只读事件流地址，如 `192.168.1.5:8768`；空 = 未配对。 */
+    val dshLinkUrl: String = "",
+    /** 与地址配对的令牌（电脑上 `<桥目录>/lan-token.txt`）。 */
+    val dshLinkToken: String = "",
 ) {
     companion object {
         const val DEFAULT_MIN_SECONDS = 20f
@@ -47,6 +53,8 @@ data class PetOptions(
                 .coerceIn(MIN_SPEECH_SECONDS, MAX_SPEECH_SECONDS),
             collisionRestitution = finite(collisionRestitution, DEFAULT_RESTITUTION)
                 .coerceIn(0f, 1f),
+            dshLinkUrl = dshLinkUrl.trim(),
+            dshLinkToken = dshLinkToken.trim(),
         )
     }
 
@@ -67,6 +75,7 @@ data class PetOptions(
         ModuleIds.CLICK_SOUND -> clickSound
         ModuleIds.COMPANION -> companions
         ModuleIds.COLLISION -> collision
+        ModuleIds.DSH_LINK -> dshLink
         else -> false
     }
 
@@ -90,12 +99,16 @@ class PetPreferences(context: Context) {
         private const val KEY_COMPANION_LAYOUT = "companionLayout"
         private const val KEY_COLLISION = "collision"
         private const val KEY_COLLISION_RESTITUTION = "collisionRestitution"
+        private const val KEY_DSH_LINK = "dshLink"
+        private const val KEY_DSH_LINK_URL = "dshLinkUrl"
+        private const val KEY_DSH_LINK_TOKEN = "dshLinkToken"
         private const val KEY_POSITION_X = "x"
         private const val KEY_POSITION_Y = "y"
 
         val WATCHED_KEYS = setOf(KEY_SIZE, KEY_WANDER, KEY_SPEECH, KEY_PHRASES, KEY_SPEECH_MIN,
             KEY_SPEECH_MAX, KEY_SPEECH_SECONDS, KEY_CLICK_SOUND, KEY_CLICK_VOLUME, KEY_CLICK_URI,
-            KEY_COMPANIONS, KEY_COLLISION, KEY_COLLISION_RESTITUTION)
+            KEY_COMPANIONS, KEY_COLLISION, KEY_COLLISION_RESTITUTION, KEY_DSH_LINK,
+            KEY_DSH_LINK_URL, KEY_DSH_LINK_TOKEN)
     }
 
     private val prefs = context.getSharedPreferences("pet", Context.MODE_PRIVATE)
@@ -115,6 +128,9 @@ class PetPreferences(context: Context) {
         collision = prefs.getBoolean(KEY_COLLISION, true),
         collisionRestitution = prefs.getFloat(KEY_COLLISION_RESTITUTION,
             PetOptions.DEFAULT_RESTITUTION),
+        dshLink = prefs.getBoolean(KEY_DSH_LINK, false),
+        dshLinkUrl = prefs.getString(KEY_DSH_LINK_URL, "").orEmpty(),
+        dshLinkToken = prefs.getString(KEY_DSH_LINK_TOKEN, "").orEmpty(),
     ).normalized()
 
     fun save(options: PetOptions) {
@@ -133,6 +149,9 @@ class PetPreferences(context: Context) {
             .putBoolean(KEY_COMPANIONS, normalized.companions)
             .putBoolean(KEY_COLLISION, normalized.collision)
             .putFloat(KEY_COLLISION_RESTITUTION, normalized.collisionRestitution)
+            .putBoolean(KEY_DSH_LINK, normalized.dshLink)
+            .putString(KEY_DSH_LINK_URL, normalized.dshLinkUrl)
+            .putString(KEY_DSH_LINK_TOKEN, normalized.dshLinkToken)
             .apply()
     }
 

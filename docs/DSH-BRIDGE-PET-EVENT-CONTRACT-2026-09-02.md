@@ -376,9 +376,31 @@ Agent 原始事件 → agent-event/v1
 5. 官方契约之外的 `edit/requested` 等事件必须保留原始 payload 和生产者信息，不能用
    正则直接归类为审批。
 
+## 远程消费端（手机）与只读传输端点
+
+契约本身只规定记录语义，传输方式不属契约（见「适配器接入原则」第 5 条）。目前
+有一个远程消费端的实现：`integrations/dsh-pet-bridge/lan-stream.js` —— 它把桥目录
+里**逐行的原始记录**用只读 HTTP 端点转发给同一局域网内的手机桌宠。
+
+必须保持不变的三条：
+
+1. **不新增事件协议**：`records[]` 里的对象就是桥接插件 `encodeRecord` 写进
+   `dsh-{pid}.jsonl` 的那一行，字段、`inst` 写者归属、脱敏口径全部原样；端点不做
+   改名、不补默认值、不按自己的理解重排。
+2. **传输端不参与插件加载**：该文件不被 `index.js` import（零依赖红线与
+   `verify_import.mjs` 的动态 import 禁令），DSH 插件树启动路径完全不变；它由用户
+   显式启动，默认只监听回环地址。
+3. **挂载语义与桌宠一致**：不带游标时只返回 EOF 游标、不回放历史；只交出完整行
+   （半个行留到下一次轮询），与 `DirGlobTailer` 的 tail 口径相同。消费端的统一
+   状态映射必须照抄 `pet/dsh_state.py`（手机侧是
+   `android/.../DshLinkState.kt`），不得各自发明「什么算在忙」。
+
+契约测试：`tests/test_bridge_lan_stream.js`（`node --test`，随 PR 门禁一起跑）。
+
 ## 代码依据
 
 - [Bridge](integrations/dsh-pet-bridge/index.js)
+- [只读远程传输端](integrations/dsh-pet-bridge/lan-stream.js)、[其契约测试](tests/test_bridge_lan_stream.js)
 - [AgentLinkManager 与监视器](pet/agent_link.py)
 - [统一事件协议](pet/agent_event_protocol.py)
 - [事件规范化](pet/agent_event_normalizer.py)

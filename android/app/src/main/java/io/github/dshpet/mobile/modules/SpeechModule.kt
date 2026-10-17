@@ -18,6 +18,9 @@ class SpeechModule(private val random: Random = Random.Default) : HostBoundModul
 
     override fun onFrame(pet: PetHandle, dt: Double) {
         if (pet.isCompanion || pet.engine.paused) return
+        // 气泡只有一个槽位：联动消息（DSH 事件）刚显示时让位，否则用户读不完就被
+        // 下一句自说自话顶掉了。占用窗口由显示方调用 holdBubble() 声明。
+        if (host.bubbleHeld()) return
         val pool = host.effectivePhrases()
         if (pool.isEmpty()) return
         val now = host.now()

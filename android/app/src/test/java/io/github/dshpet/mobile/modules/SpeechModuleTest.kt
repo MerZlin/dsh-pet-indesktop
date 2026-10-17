@@ -55,6 +55,23 @@ class SpeechModuleTest {
     }
 
     @Test
+    fun selfTalkYieldsWhileAnotherModuleHoldsTheBubble() {
+        // 联动消息（DSH 正文）显示期间，自说自话必须让位——否则气泡被顶掉、
+        // 用户读不完。占用窗口由显示方 holdBubble() 声明。
+        val (host, module) = fixture(PetOptions(speechMinSeconds = 5f, speechMaxSeconds = 5f))
+        host.holdBubble(8_000) // 占用到 clock+8000 = 9000
+        host.clock += 5_100 // 6100：已过自说自话间隔，但仍在占用窗口内
+        module.onFrame(host.pets[0], .016)
+        assertEquals("占用期间不许发言", 0, host.phrases.size)
+
+        host.clock += 3_000 // 9100：占用窗口已过期
+        module.onFrame(host.pets[0], .016) // 这一拍只是排定下一次
+        host.clock += 5_100
+        module.onFrame(host.pets[0], .016)
+        assertEquals("窗口过期后恢复自说自话", 1, host.phrases.size)
+    }
+
+    @Test
     fun companionsStayQuiet() {
         val (host, module) = fixture()
         module.onEvent(PetEvent.Clicked(host.pets[1]))

@@ -37,6 +37,17 @@ interface ModuleHost {
 
     fun clearPhrase(pet: PetHandle)
 
+    /**
+     * 占用气泡到 `now() + durationMs`：期间别的模块（自说自话）不要抢。
+     *
+     * 气泡只有一个槽位（`PetOverlayService.showPhrase` 改的是同一个 view），联动消息
+     * 刚显示就被下一句预设台词顶掉的话，用户根本读不完。
+     */
+    fun holdBubble(durationMs: Long)
+
+    /** 气泡是否还被别人占着（`SpeechModule` 让位用）。 */
+    fun bubbleHeld(): Boolean
+
     /** The desktop's Q 弹 feedback, used by collision hits. */
     fun squash(pet: PetHandle)
 

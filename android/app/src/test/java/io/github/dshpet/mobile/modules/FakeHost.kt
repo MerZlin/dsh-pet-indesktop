@@ -40,6 +40,15 @@ internal class FakeHost(override var options: PetOptions) : ModuleHost {
         cleared += pet.id
     }
 
+    /** 气泡占用窗口（测试里用假时钟推进）。 */
+    var bubbleHoldUntil = 0L
+
+    override fun holdBubble(durationMs: Long) {
+        bubbleHoldUntil = clock + durationMs
+    }
+
+    override fun bubbleHeld(): Boolean = clock < bubbleHoldUntil
+
     override fun squash(pet: PetHandle) {
         squashed += pet.id
     }

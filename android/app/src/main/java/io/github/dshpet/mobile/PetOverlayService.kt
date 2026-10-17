@@ -44,6 +44,7 @@ import androidx.core.content.ContextCompat
 import io.github.dshpet.mobile.modules.ClickSoundModule
 import io.github.dshpet.mobile.modules.CollisionModule
 import io.github.dshpet.mobile.modules.CompanionModule
+import io.github.dshpet.mobile.modules.DshLinkModule
 import io.github.dshpet.mobile.modules.ModuleFactory
 import io.github.dshpet.mobile.modules.ModuleHost
 import io.github.dshpet.mobile.modules.ModuleRegistry
@@ -104,6 +105,8 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
             ModuleFactory(ModuleIds.CLICK_SOUND) { ClickSoundModule() },
             ModuleFactory(ModuleIds.COMPANION) { CompanionModule() },
             ModuleFactory(ModuleIds.COLLISION) { CollisionModule() },
+            // 电脑端 DSH 联动：默认关，关闭时这个工厂不会被调用（无线程/无 socket）。
+            ModuleFactory(ModuleIds.DSH_LINK) { DshLinkModule() },
         )
     }
 
@@ -131,6 +134,8 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
     private var started = false
     private var registered = false
     private var userPaused = false
+    /** 气泡被别的模块占用到什么时候（`now()` 基准）；见 [holdBubble]。 */
+    @Volatile private var bubbleHoldUntil = 0L
     private var frameScheduled = false
     private var lastFrameNanos = 0L
     private var actions: View? = null
@@ -441,6 +446,12 @@ class PetOverlayService : Service(), Choreographer.FrameCallback, ModuleHost, Pe
 
     override fun effectivePhrases(): List<String> =
         PhraseBook.resolve(settings.phrases, catalog.phrases)
+
+    override fun holdBubble(durationMs: Long) {
+        bubbleHoldUntil = now() + durationMs.coerceAtLeast(0L)
+    }
+
+    override fun bubbleHeld(): Boolean = now() < bubbleHoldUntil
 
     override fun showPhrase(pet: PetHandle, text: String, durationMs: Long) {
         if (!started || userPaused) return

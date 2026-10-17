@@ -10,11 +10,11 @@ class PetOptionsTest {
     @Test
     fun eachModuleReadsItsSingleEnableBit() {
         val off = PetOptions(wander = false, speech = false, clickSound = false, companions = false,
-            collision = false)
+            collision = false, dshLink = false)
         ModuleIds.ALL.forEach { assertFalse(it, off.enables(it)) }
         assertFalse(off.enables("no-such-module"))
         val on = PetOptions(wander = true, speech = true, clickSound = true, companions = true,
-            collision = true)
+            collision = true, dshLink = true)
         ModuleIds.ALL.forEach { assertTrue(it, on.enables(it)) }
     }
 
