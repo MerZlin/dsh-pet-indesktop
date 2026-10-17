@@ -106,6 +106,11 @@ manifest 里的 `android:usesCleartextTraffic="true"` 是给局域网明文端�
 已反应的键记最近 32 条（`DshLinkModule.RECENT_KEYS`），所以同一回合的迟到重放
 （桥接多写者分文件）不会再弹一次。`working`/`idle` 这类基线没有身份可依，仍"重复即忽略"。
 
+**多会话（并发）也对**：端点转发的是桥目录里**全部** `dsh*.jsonl`，手机端**不按 `sessionId` 过滤**。
+身份键里含 `sessionId`，所以 A、B 两个会话各自的"第 1 步收尾"/`rpc-1` 不会互相撞键被吞；
+一轮轮询里的多条事件**逐条都播**（按优先级从低到高，气泡最终留下优先级最高的那条：
+等审批/等回答 > 出错 > 完成 > 正文），不会因为"一轮只挑一条"把别的会话的事件静默丢掉。
+
 手机侧的状态映射与桌面逐条同源：`DshLinkState`/`DshLinkEvents` 照抄
 `pet/dsh_state.py` 的事件表（含 `turn/end` 的 `reasonKind` 分流、裸
 `approval/asked` 不锁存审批、`cordis/request-run` 只在 `requiresApproval` 严格为真

@@ -106,6 +106,7 @@ object DshLinkEvents {
      */
     fun dedupeKey(
         state: DshLinkState,
+        sessionId: String = "",
         sourceTurn: String = "",
         step: String = "",
         rpcId: String = "",
@@ -122,9 +123,28 @@ object DshLinkEvents {
                 rpcId.ifBlank { approvalId }.ifBlank { requestId }.ifBlank { callId }
             else -> ""
         }.trim()
-        val base = if (identity.isEmpty()) state.name else "${state.name}:$identity"
+        // 会话是身份的一部分：DSH 可以并发多个会话（子代理/多窗口），两个会话各自的
+        // "第 1 步收尾"或"rpc-1"在语义上不是同一件事——不带 sessionId 会把后到的
+        // 那条当成重复吞掉（漏报）。
+        val scoped = if (sessionId.isBlank()) identity else "$sessionId@$identity"
+        val base = if (scoped.isEmpty()) state.name else "${state.name}:$scoped"
         // 带正文的记录（assistant/message）没有回合身份可用：用正文本身当指纹，
         // 这样"同一句话重放"只弹一次，而"每句不同的回复"各自弹一次。
         return if (fingerprint.isBlank()) base else "$base#$fingerprint"
+    }
+
+    /**
+     * 一次轮询里有多条可播报事件时的取舍优先级（越大越优先）。
+     *
+     * 手机气泡只有一个槽位，一轮里多个会话同时有事件时总得挑一条。**等用户处理的交互
+     * 优先于别的会话的"收尾播报"**——否则 B 会话问你个问题的同时 A 会话正好干完活，
+     * 问题就被顶掉了。同优先级再比"谁后到"（调用方取后到的）。
+     */
+    fun priorityOf(state: DshLinkState): Int = when (state) {
+        DshLinkState.WAITING_APPROVAL, DshLinkState.WAITING_QUESTION -> 4
+        DshLinkState.ERROR -> 3
+        DshLinkState.SUCCESS -> 2
+        DshLinkState.WORKING -> 1
+        else -> 0
     }
 }

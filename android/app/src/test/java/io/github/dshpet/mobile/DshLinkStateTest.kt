@@ -134,6 +134,49 @@ class DshLinkStateTest {
     }
 
     @Test
+    fun sessionsArePartOfTheIdentity() {
+        // DSH 可以并发多个会话：两个会话各自的"第 1 步收尾"不是同一件事，
+        // 不带 sessionId 会把后到的当重复吞掉（真机上表现为少弹）。
+        val a = DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, sessionId = "sess-A", step = "1")
+        val b = DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, sessionId = "sess-B", step = "1")
+        assertNotEquals("不同会话的同号回合不能撞键", a, b)
+        assertEquals(
+            "同一会话同一回合重放仍是同一个键",
+            a,
+            DshLinkEvents.dedupeKey(DshLinkState.SUCCESS, sessionId = "sess-A", step = "1"),
+        )
+        assertNotEquals(
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_QUESTION, sessionId = "s1", rpcId = "r1"),
+            DshLinkEvents.dedupeKey(DshLinkState.WAITING_QUESTION, sessionId = "s2", rpcId = "r1"),
+        )
+    }
+
+    @Test
+    fun aPendingQuestionOutranksAnotherSessionsCompletion() {
+        // 气泡只有一个槽位：B 会话在问你，不能被 A 会话的"干完活啦"顶掉。
+        assertTrue(
+            DshLinkEvents.priorityOf(DshLinkState.WAITING_QUESTION) >
+                DshLinkEvents.priorityOf(DshLinkState.SUCCESS),
+        )
+        assertTrue(
+            DshLinkEvents.priorityOf(DshLinkState.WAITING_APPROVAL) >
+                DshLinkEvents.priorityOf(DshLinkState.SUCCESS),
+        )
+        assertTrue(
+            DshLinkEvents.priorityOf(DshLinkState.ERROR) >
+                DshLinkEvents.priorityOf(DshLinkState.SUCCESS),
+        )
+        assertTrue(
+            DshLinkEvents.priorityOf(DshLinkState.SUCCESS) >
+                DshLinkEvents.priorityOf(DshLinkState.WORKING),
+        )
+        assertTrue(
+            DshLinkEvents.priorityOf(DshLinkState.WORKING) >
+                DshLinkEvents.priorityOf(DshLinkState.IDLE),
+        )
+    }
+
+    @Test
     fun eachAssistantMessageIsDeliveredOnceButOnlyOnce() {
         // 用户的诉求：投"正文"，不是复读预设台词。assistant/message 归在 WORKING、
         // 没有回合身份，所以用正文本身当指纹。

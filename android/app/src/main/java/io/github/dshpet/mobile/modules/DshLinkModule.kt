@@ -34,7 +34,7 @@ class DshLinkModule : HostBoundModule() {
     @Volatile private var cursor: String? = null
 
     /** worker 线程 → 主线程的唯一通道。 */
-    @Volatile private var pending: Signal? = null
+    @Volatile private var pending: List<Signal> = emptyList()
 
     @Volatile var polls = 0L
         private set
@@ -59,7 +59,7 @@ class DshLinkModule : HostBoundModule() {
 
     override fun onEnable() {
         cursor = null
-        pending = null
+        pending = emptyList()
         applied = DshLinkState.OFFLINE
         recentKeys.clear()
         rejected = null
@@ -77,21 +77,25 @@ class DshLinkModule : HostBoundModule() {
         running = false
         worker?.interrupt()
         worker = null
-        pending = null
+        pending = emptyList()
     }
 
     /** 主线程：本帧开始时把 worker 攒下的最新结论消费掉。 */
     override fun onTick(dt: Double) {
-        val next = pending ?: return
-        pending = null
-        // 按「身份键」去重，不是按状态：turn/end 每回合都收敛成 SUCCESS，只比状态会
-        // 把第二回合起全部吞掉（真机现象＝只有第一回合弹过「干完活啦」）。
-        // 记最近一串键而不是只记最后一个：桥接是多写者分文件的，同一回合迟到的重放
-        // （以及被后面的回合顶掉之后才到的旧记录）不该再弹一次。
-        if (next.key in recentKeys) return
-        applied = next.state
-        remembered(next.key)
-        react(next)
+        val batch = pending
+        pending = emptyList()
+        if (batch.isEmpty()) return
+        // 一轮里可能有多会话、多条事件：**逐条都播**（按优先级从低到高，最后留下的
+        // 气泡是优先级最高的那条），并逐条记键——否则"一轮只挑一条"会把同轮里其它
+        // 会话的事件直接丢掉（真机表现为少弹）。
+        val fresh = batch
+            .filter { it.key !in recentKeys }
+            .sortedBy { DshLinkEvents.priorityOf(it.state) }
+        for (signal in fresh) {
+            applied = signal.state
+            remembered(signal.key)
+            react(signal)
+        }
     }
 
     override fun diagnostics(): String =
@@ -137,7 +141,7 @@ class DshLinkModule : HostBoundModule() {
                     val page = DshLinkClient(target.baseUrl!!, token).fetch(cursor)
                     polls++
                     page.cursor?.let { cursor = it }
-                    stateOf(page)?.let { pending = it }
+                    stateOf(page)?.takeIf { it.isNotEmpty() }?.let { pending = it }
                     // 服务端说还有增量就立刻接着拉，别等下一个整周期。
                     sleep = if (page.truncated) 0L else POLL_MS
                 }
@@ -156,21 +160,29 @@ class DshLinkModule : HostBoundModule() {
         }
     }
 
-    /** 一页里取**最后一条**能识别的状态：中间的事件已被后面的覆盖，不必逐条反应。 */
-    private fun stateOf(page: DshLinkClient.Page): Signal? {
-        var latest: Signal? = null
+    /**
+     * 一轮轮询里能识别出来的**全部**信号（按 key 去重，同 key 只留最后一条）。
+     *
+     * 早先这里只返回一条（"最后一条/最优先一条"），多会话同时有事件时其余会话的事件
+     * 会被静默丢掉（真机现象：A、B 两个会话同号回合收尾，只弹了一次）。现在整批交给
+     * `onTick` 逐条播、逐条记 key。
+     */
+    private fun stateOf(page: DshLinkClient.Page): List<Signal> {
+        val byKey = LinkedHashMap<String, Signal>()
         for (record in page.records) {
             val state = stateOf(record) ?: continue
             val text = textOf(record, state)
-            latest = Signal(state, text, keyOf(record, state, text))
+            val signal = Signal(state, text, keyOf(record, state, text))
+            byKey[signal.key] = signal // 同 key 后到覆盖先到
         }
-        return latest
+        return byKey.values.toList()
     }
 
     /** 记录里的稳定身份 → 去重键；规则本身在纯函数 `DshLinkEvents.dedupeKey`。 */
     private fun keyOf(record: JSONObject, state: DshLinkState, text: String?): String =
         DshLinkEvents.dedupeKey(
             state = state,
+            sessionId = record.optString("sessionId"),
             sourceTurn = record.optString("sourceTurn"),
             step = record.optString("step"),
             rpcId = record.optString("rpcId"),
@@ -233,3 +245,4 @@ class DshLinkModule : HostBoundModule() {
         const val IDLE_MS = 5_000L
     }
 }
+
