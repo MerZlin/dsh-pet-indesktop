@@ -300,11 +300,17 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 
 ## 七、已知限制与后续
 
-1. **Android 侧已编译、已打包、单测已过，但没上真机**（第二轮已从"未编译"推进到这里）。
-   `:app:compileDebugKotlin` / `:app:assembleDebug` 成功，JVM 单测 96 条全过（含本 PR 的 8 条），
+0. **真机已验证接收链路**（2026-10-17，作者本人的华为 Mate 40 Pro / Android 12 底座，
+   手动装了本 PR 的 debug 包）：设置页填 **tailnet 地址 `100.117.129.92:8768`** + 令牌后，
+   `question/requested`（气泡「电脑那边在问你」）与 `turn/end(completed)`（「电脑上干完活啦」）
+   两条都收到——**接收链路与 `100.64/10` CGNAT 白名单在真机上成立**。
+   注意：真机上装的是早期构建，「正文投递 / 每回合各弹一次 / 多会话」这三个后续修复
+   是在模拟器上验的，尚未在真机复测。
+
+1. **Android 侧已编译、已打包、单测已过**（第二轮已从"未编译"推进到这里）。
+   `:app:compileDebugKotlin` / `:app:assembleDebug` 成功，JVM 单测 124 条全过，
    APK 里 `INTERNET` 权限与 `usesCleartextTraffic="true"` 均已确认。仍缺：`:app:lintDebug`
-   （本机 lint worker 受沙箱限制）与 `connectedDebugAndroidTest`（无设备）；**手机与电脑之间
-   的真实联动一次都没跑过**。
+   （本机 lint worker 受沙箱限制）与 `connectedDebugAndroidTest`（无 adb 真机）。
    本机构建的两个前提若在别处复现需注意：① AGP 拒绝非 ASCII 工程路径，本次是临时在
    `android/gradle.properties` 加 `android.overridePathCheck=true` 才过（**该行已还原，未入库**）；
    ② 工具链装在 `android-toolchain/`（工作区内，已被 `.git/info/exclude` 排除），没装进
