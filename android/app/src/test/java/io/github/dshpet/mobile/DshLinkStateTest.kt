@@ -88,10 +88,14 @@ class DshLinkStateTest {
 
     @Test
     fun endpointInputIsNormalisedBeforeUse() {
-        assertEquals("http://192.168.1.5:8768", DshLinkClient.normalizeBaseUrl("192.168.1.5:8768"))
-        assertEquals("http://192.168.1.5:8768", DshLinkClient.normalizeBaseUrl(" 192.168.1.5:8768/ "))
-        assertEquals("http://pc.local:8768", DshLinkClient.normalizeBaseUrl("http://pc.local:8768"))
-        assertNull(DshLinkClient.normalizeBaseUrl("   "))
-        assertNull(DshLinkClient.normalizeBaseUrl(""))
+        // 补 scheme / 去尾斜杠与空白 / 空白输入没有结果：与 normalizeBaseUrl 时代的
+        // 三条断言等价，只是换到带白名单校验的新入口（validate）上，覆盖不变。
+        assertEquals("http://192.168.1.5:8768", DshLinkClient.validate("192.168.1.5:8768").baseUrl)
+        assertEquals("http://192.168.1.5:8768", DshLinkClient.validate(" 192.168.1.5:8768/ ").baseUrl)
+        assertNull(DshLinkClient.validate("   ").baseUrl)
+        assertNull(DshLinkClient.validate("").baseUrl)
+        // 行为变更（有意为之）：主机名不再被原样放行，而是拒绝——域名可能解析到公网，
+        // Bearer 令牌就会明文出网。理由见 DshLinkAddressTest.hostNamesAreNeverResolved。
+        assertEquals(DshLinkReject.HOSTNAME, DshLinkClient.validate("http://pc.local:8768").reason)
     }
 }

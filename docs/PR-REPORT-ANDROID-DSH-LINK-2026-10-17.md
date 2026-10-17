@@ -190,6 +190,7 @@ $ android\gradlew.bat :app:assembleDebug --console=plain -PpetPython=...
 BUILD SUCCESSFUL in 2m 15s
 38 actionable tasks: 22 executed, 16 up-to-date
 # APK: android/app/build/outputs/apk/debug/app-debug.apk  53,516,653 bytes (51.0 MB)
+#      （第二轮加地址白名单后重打：53,975,188 B / sha256 a6ef0ac9…，见 §九）
 
 $ android\gradlew.bat :app:compileDebugKotlin --rerun-tasks -x exportPetAssets
 BUILD SUCCESSFUL in 48s        # 纯 Kotlin 编译，0 条 `w:` 警告
@@ -243,7 +244,7 @@ List of devices attached
 | Python 聚焦 / 全量 | `python -m pytest -q` | **本机跑不了**（两个独立原因，见下） |
 | Android 编译 | `:app:compileDebugKotlin`（JDK21 + SDK36） | **BUILD SUCCESSFUL in 18m19s**（含 7m12s 素材导出） |
 | Android 纯 Kotlin 重编 | `:app:compileDebugKotlin --rerun-tasks -x exportPetAssets` | **BUILD SUCCESSFUL in 48s，0 条 `w:` 警告** |
-| Android 打包 | `:app:assembleDebug` | **BUILD SUCCESSFUL in 2m15s**；APK 53,516,653 B ✅ |
+| Android 打包 | `:app:assembleDebug` | **BUILD SUCCESSFUL in 2m15s**；APK 53,516,653 B ✅（第二轮重打 53,975,188 B，见 §九） |
 | Android 单测 | `:app:testDebugUnitTest` → 沙箱挡住 worker，改用 `java -cp … JUnitCore` | **OK (96 tests)**（含本 PR 的 8 条） |
 | Android lint / 设备测试 | `:app:lintDebug` / `connectedDebugAndroidTest` | **未跑**（lint worker 同受沙箱限制；无设备） |
 
@@ -356,7 +357,127 @@ android\gradlew.bat :app:assembleDebug       --console=plain -PpetPython=".venv-
 > `python -m pytest -q` 未跑成**，需由 CI 判。报告 §五/§六 有全部命令与原始输出。
 >
 > **风险 / 回滚**：两端都默认关闭，`git revert` 即恢复；唯一残留是电脑上一个明文令牌文件
-> 与手机偏好里的三个键。`usesCleartextTraffic="true"` 属全局放开，若更倾向
-> `network_security_config` 白名单，这块可以按维护者口径改。
+> 与手机偏好里的三个键。
+>
+> **安全边界（`usesCleartextTraffic` 那一问的答案）**：manifest 里的
+> `android:usesCleartextTraffic="true"` 保留——局域网端点是明文 HTTP，而 Android 的
+> `networkSecurityConfig` 只能按域名白名单，表达不了"任意私网 IP"。**"只连私网"改由运行时
+> 白名单守住**：`DshLinkClient.validate()` 只接受私网/回环 IP 字面量（10/8、172.16/12、
+> 192.168/16、169.254/16、127/8、IPv6 `::1`/`fe80::/10`/`fc00::/7`、IPv4-mapped 的上述段），
+> **拒绝一切主机名且不做 DNS 解析**、拒绝公网地址，拒绝时不发任何请求、令牌不出内存；
+> 设置页就地显示原因。规则与用例见 `DshLinkAddressTest`（12 条）。
 >
 > 详细报告：`docs/PR-REPORT-ANDROID-DSH-LINK-2026-10-17.md`。
+
+---
+
+## 九、第二轮补强（Lead 复核项）：地址白名单
+
+**触发**：维护者大概率会问「为什么 `usesCleartextTraffic="true"`」。上一版只有
+`normalizeBaseUrl`（补 scheme、去尾斜杠），**没有任何地址合法性校验**；而 Android 的
+`networkSecurityConfig` 只能按域名白名单，无法表达"任意私网 IP"。因此正确做法是
+**运行时白名单**，manifest 保持 `usesCleartextTraffic="true"`。
+
+### 规则
+
+`DshLinkClient.validate(raw: String): DshLinkTarget` —— 纯逻辑、**不做任何 DNS 解析**
+（不用 `InetAddress.getByName`，全部按字面量解析），因此可在 JVM 单测里逐条钉住。
+
+| 判定 | 允许 | 拒绝理由（`DshLinkReject`） |
+|---|---|---|
+| IPv4 私网 | `10/8`、`172.16/12`、`192.168/16`、`169.254/16`、`127/8` | `NOT_PRIVATE` |
+| IPv4 公网/邻段 | — | `NOT_PRIVATE`（`8.8.8.8`、`172.15.x`、`172.32.x`、`192.169.x`） |
+| IPv6 | `::1`、`fe80::/10`、`fc00::/7` | `NOT_PRIVATE`（`2001:4860::8888`、`::2`、`::`） |
+| IPv4-mapped IPv6 | `::ffff:192.168.1.5` 等按 IPv4 规则 | `NOT_PRIVATE`（`::ffff:8.8.8.8`） |
+| 主机名 | — | `HOSTNAME`（`localhost`、`my-pc.local`、`x.nip.io` 全拒） |
+| 协议 | `http://`（可省略） | `NOT_HTTP`（`https://`） |
+| 端口 | 1–65535；省略 → 默认 `8768`（`lan-stream.js` 同值） | `PORT`（`0`/`70000`/`abc`/空） |
+| 形状 | `IP[:端口]` | `MALFORMED`（带路径/查询、方括号不闭合、未加括号的 IPv6） |
+| 输入 | — | `EMPTY`（空白 = 未配置，不算错误） |
+| 混淆写法 | — | `HOSTNAME`（`0177.0.0.1`、`192.168.001.5`、`192.168.1`、`192.168.1.256`） |
+
+前导零一律不认：`0177.0.0.1` 在别的解析器里是八进制写法，是绕过朴素私网判定的经典手法。
+
+### 修改文件说明
+
+| 文件 | 增删 | 改动意图 |
+|---|---|---|
+| `android/.../DshLinkClient.kt` | +约 190 / −12 | `normalizeBaseUrl` → `validate()`：补 scheme/默认端口、IP 字面量解析（含 `::` 压缩、IPv4-mapped）、私网判定；新增 `DshLinkReject` 枚举与 `DshLinkTarget`（`ok`/`baseUrl`/`reason`）。 |
+| `android/.../modules/DshLinkModule.kt` | +12 / −4 | 轮询循环改为先 `validate()`：`!target.ok` 时**一个请求都不发**（令牌不出内存），把理由存进 `@Volatile rejected` 并进 `dump()` 诊断串。 |
+| `android/.../ui/DshLinkSection.kt` | +25 / −3 | 地址输入框下方按 `MaterialTheme.colorScheme.error` 显示拒绝原因（`isError` 同步标红）；`DshLinkReject.messageRes()` 做理由→文案映射。 |
+| `android/app/src/main/res/values{,-en}/strings.xml` | +5 各 | 五种拒绝理由的中英文案。 |
+| `android/.../DshLinkAddressTest.kt` | +133（新增） | 12 条用例：三段私网、127/8、169.254、IPv6 回环/ULA/link-local、IPv4-mapped、公网 IPv4/IPv6、主机名、带/不带端口、端口非法、空白输入、scheme 与形状、混淆写法、未加括号 IPv6。 |
+| `android/.../DshLinkStateTest.kt` | +8 / −6 | 旧的 `normalizeBaseUrl` 用例**等价迁移**到 `validate()`（补 scheme、去尾斜杠与空白、空白无结果三条覆盖不变），并新增一条：主机名现在被拒绝（有意的行为变更）。 |
+
+### 性能分析
+
+校验是每轮询**一次**的纯字符串运算（3 秒一次），且设置页每帧对草稿调用一次（纯函数、
+无 I/O、无 DNS）。实测（JVM，`DshLinkAddressTest` 12 条用例全部含断言）：
+
+| 指标 | 实测 | 归属 |
+|---|---|---|
+| 12 条用例（含 ~45 次 `validate` 调用）总耗时 | **127 ms**（JUnit 报的整类耗时，含 JVM/JUnit 固定开销） | 新增 |
+| 全部 16 个测试类 108 条 | **564 ms** | 累计 |
+| 新增网络/磁盘/线程 | **0**（校验不解析 DNS、不建 socket；轮询线程与周期不变） | — |
+
+对"拒绝时不发请求"的行为没有用计时衡量——它是控制流（`if (!target.ok)` 直接 `continue`），
+由 `DshLinkModule` 的结构保证。
+
+### 实机运行记录
+
+```text
+$ android\gradlew.bat :app:compileDebugKotlin --rerun-tasks -x exportPetAssets --console=plain
+> Task :app:compileDebugKotlin
+BUILD SUCCESSFUL in 1m 5s
+15 actionable tasks: 15 executed          # 0 条 `w:` 警告
+
+$ android\gradlew.bat :app:assembleDebug --console=plain
+BUILD SUCCESSFUL in 42s
+38 actionable tasks: 3 executed, 35 up-to-date
+# APK: android/app/build/outputs/apk/debug/app-debug.apk  53,975,188 B
+#      sha256 a6ef0ac909b27c7c48fc0c27afb75cea8fef2f0db9c5b944a2258db7486c332d
+```
+
+单测（同样走 `java -cp … org.junit.runner.JUnitCore` 的同 JVM 直跑法——Gradle 的 test
+worker 在本机沙箱下起不来，原因是 worker 启动类经命名管道传递，
+`ClassNotFoundException: worker.org.gradle.internal.worker.GradleWorkerMain`）：
+
+```text
+$ java -cp <runtime classpath> org.junit.runner.JUnitCore io.github.dshpet.mobile.DshLinkAddressTest
+JUnit version 4.13.2
+............
+OK (12 tests)
+
+$ java -cp <runtime classpath> org.junit.runner.JUnitCore <全部 16 个测试类>
+OK (108 tests)          # 上一版是 96 条，本轮 +12
+```
+
+产物核对（新代码确实进了 APK）：
+
+```text
+$ apkanalyzer dex packages --defined-only app-debug.apk | grep DshLink
+C io.github.dshpet.mobile.DshLinkTarget                       ← 新增
+... io.github.dshpet.mobile.DshLinkReject                     ← 新增
+M io.github.dshpet.mobile.ui.DshLinkSectionKt … messageRes(DshLinkReject)
+M io.github.dshpet.mobile.modules.DshLinkModule  DshLinkReject getRejected()
+```
+
+Node 侧（本轮未改 JS，确认工具链与改动没影响原验证）：
+
+```text
+$ node tests/test_bridge_lan_stream.js          → pass 14 / fail 0
+$ node --input-type=module -e "<9 个 bridge 文件>" → tests 58 / pass 58 / fail 0
+$ node integrations/dsh-pet-bridge/verify_import.mjs → OK
+```
+
+### 取舍与残留风险
+
+- **拒绝主机名会让 `.local` / `电脑名` 用不了**（含 `localhost`）。这是有意的取舍：域名可能
+  解析到公网，而 Bearer 令牌是明文；用户改填 `192.168.x.x` 即可（同一台机器的 IP 在电脑上
+  `ipconfig` 一眼可见）。`adb reverse` 场景填 `127.0.0.1:8768` 也仍然可用。若维护者认为
+  `.local` 必须支持，替代方案是做"解析后校验全部 A/AAAA 记录都是私网"——但那需要
+  `InetAddress.getAllByName`，会引入 DNS 查询与 DNS 重绑定（rebinding）窗口，代价明显更大。
+- **`::` 与 `0.0.0.0` 未特判**：`[::]` 被 `NOT_PRIVATE` 拒绝、`0.0.0.0` 不是合法目标地址
+  （会被判 `NOT_PRIVATE`），两者都不是可用的连接目标。
+- 未上真机：地址校验是纯逻辑，已由 12 条 JVM 用例覆盖；**设置页的错误文案与红框没有在
+  设备上肉眼确认过**（无 adb 设备）。

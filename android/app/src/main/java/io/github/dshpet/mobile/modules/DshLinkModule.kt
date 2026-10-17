@@ -2,6 +2,7 @@ package io.github.dshpet.mobile.modules
 
 import io.github.dshpet.mobile.DshLinkClient
 import io.github.dshpet.mobile.DshLinkEvents
+import io.github.dshpet.mobile.DshLinkReject
 import io.github.dshpet.mobile.DshLinkState
 import io.github.dshpet.mobile.ModuleIds
 import io.github.dshpet.mobile.R
@@ -40,6 +41,10 @@ class DshLinkModule : HostBoundModule() {
     @Volatile var failures = 0L
         private set
 
+    /** 地址校验的拒绝理由（null = 通过或还没配置）；只用于诊断与设置页文案。 */
+    @Volatile var rejected: DshLinkReject? = null
+        private set
+
     private var applied = DshLinkState.OFFLINE
     private var reacted = 0L
 
@@ -47,6 +52,7 @@ class DshLinkModule : HostBoundModule() {
         cursor = null
         pending = null
         applied = DshLinkState.OFFLINE
+        rejected = null
         polls = 0
         failures = 0
         reacted = 0
@@ -74,7 +80,8 @@ class DshLinkModule : HostBoundModule() {
     }
 
     override fun diagnostics(): String =
-        "polls=$polls failures=$failures state=${applied.name.lowercase(Locale.ROOT)} reacted=$reacted"
+        "polls=$polls failures=$failures state=${applied.name.lowercase(Locale.ROOT)} " +
+            "reacted=$reacted rejected=${rejected?.name?.lowercase(Locale.ROOT) ?: "none"}"
 
     private fun react(state: DshLinkState) {
         // 只有一条母宠说话：小鲸鱼不说台词（与 SpeechModule 同口径）。
@@ -96,12 +103,14 @@ class DshLinkModule : HostBoundModule() {
         while (running) {
             var sleep = POLL_MS
             try {
-                val base = DshLinkClient.normalizeBaseUrl(host.options.dshLinkUrl)
+                val target = DshLinkClient.validate(host.options.dshLinkUrl)
+                rejected = target.reason
                 val token = host.options.dshLinkToken
-                if (base == null || token.isEmpty()) {
-                    sleep = IDLE_MS // 没配对：什么都不做，别空转网络
+                if (!target.ok || token.isEmpty()) {
+                    // 没配对、或地址没通过私网校验：**一个请求都不发**，令牌不出内存。
+                    sleep = IDLE_MS
                 } else {
-                    val page = DshLinkClient(base, token).fetch(cursor)
+                    val page = DshLinkClient(target.baseUrl!!, token).fetch(cursor)
                     polls++
                     page.cursor?.let { cursor = it }
                     stateOf(page)?.let { pending = it }

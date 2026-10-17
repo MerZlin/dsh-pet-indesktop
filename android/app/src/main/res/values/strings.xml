@@ -59,6 +59,11 @@
     <string name="dsh_link_token_hint">电脑上 dsh-pet-bridge/lan-token.txt</string>
     <string name="dsh_link_save">保存配对</string>
     <string name="dsh_link_hint">在电脑上运行 node integrations/dsh-pet-bridge/lan-stream.js --host 0.0.0.0，把它打印的地址和令牌填在这里。手机与电脑需在同一局域网；令牌就是电脑上那个文件里的一行。</string>
+    <string name="dsh_link_err_malformed">地址格式不对。填「IP:端口」，例如 192.168.1.5:8768；不要带路径。</string>
+    <string name="dsh_link_err_scheme">只支持 http://（局域网明文端点）。</string>
+    <string name="dsh_link_err_hostname">只接受 IP 地址：不解析主机名。请填 192.168.1.5 这类私网 IP，而不是 localhost 或电脑名。</string>
+    <string name="dsh_link_err_public">只能是私网地址：10.x、172.16–31.x、192.168.x、169.254.x、127.x，或 IPv6 的 ::1 / fc00::/7 / fe80::/10。公网地址会被拒绝。</string>
+    <string name="dsh_link_err_port">端口必须是 1–65535。</string>
     <string name="dsh_link_waiting_approval">电脑那边等你批一下</string>
     <string name="dsh_link_waiting_question">电脑那边在问你</string>
     <string name="dsh_link_success">电脑上干完活啦</string>
