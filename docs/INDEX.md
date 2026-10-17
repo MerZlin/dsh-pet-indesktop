@@ -139,6 +139,8 @@
 
 ## PR 报告存档
 
+- [Hermes Agent Link 桥接（2026-10-17）](PR-REPORT-HERMES-PET-BRIDGE-2026-10-17.md)：把 Hermes 生命周期/审批 hook 接入桌宠既有 Agent Link，并记录 Chat 走 Hermes API Server 的接入方式；维护 Hermes 联动或排查状态气泡时必读。
+
 | 文档 | 一句话内容 | 何时必读 |
 |---|---|---|
 | [`PR-REPORT-PACKAGING-KEYRING-NOTICES-2026-10-17.md`](PR-REPORT-PACKAGING-KEYRING-NOTICES-2026-10-17.md) | 发布阻断级的两处打包缺陷收口（分支 `fix/packaging-tts-keyring-notices`，基线 `origin/main` `e08c7fb`）：① **no-chat 变体把 `keyring` 连 `pet.chat` 一起排除**，而语音报时设置页与它的收费后端（MiMo / 豆包 API Key）在四个变体里都在——凭据只能落进**写它的那个进程**的内存，设置页（独立进程）报「已保存」、主程序读到空串、收费后端永远自报「没配 Key」；现 `--collect-all keyring` 在四变体 × 三端无条件生效，`keyring` 不再进任何排除清单，界面把写失败如实说成「没能保存上（只在本进程内存，重启就没了）」并弹一次提示，**删除**了「已保存 / 仅本次运行」这类承诺（`tts_secrets.available()` 那种"模块在就算可用"的判据换成真实回读 `persisted()`）。② **`LICENSE` / `THIRD_PARTY_NOTICES.md` 不随包**：内置点击音（MeteorNOX，MIT）的许可正文只在仓根那份文档里，三端 `--add-data` 与 APK 资产都没带——现三端各加两行 `--add-data`（落 `_internal/`），APK 侧 `copy_notices()` 把声明本体拷进资产根并把 `android/NOTICE.txt` 的指向改到 APK 内文件。实机证据＝最小 onedir 探针（非产品变体）：冻结包里 `_internal/{LICENSE,THIRD_PARTY_NOTICES.md}` 都在、MIT 正文逐字命中、`keyring.get_keyring()` 解析出 `WinVaultKeyring`；消融对照（修复前参数）同一探针 `ModuleNotFoundError: No module named 'keyring'`，而**构建阶段不报任何错**。未构建产品变体、未改任何真实凭据；**已并入 `main`：PR #294（`11cbf62`）**。 | 改 `keyring` / `pet/tts_secrets` 的存凭据链路、语音报时设置页的凭据行文案、三个构建脚本的 `--exclude-module` / `--collect-all` / `--add-data` 清单、`scripts/export_android_assets.py` 的资产拷贝，或再遇「打包版填了 API Key 却没声音 / 设置页说已保存但后端说没配 Key / 产物里找不到 LICENSE 或第三方声明 / 想只靠源码仓库的声明文件满足 MIT」时必读。**先例**：① 「模块能不能 import」不等于「凭据存住了」——持久化判据只能是回读钥匙串；② 设置页默认跑在独立进程，**任何跨进程的兜底都要按"主程序读不到"来写文案**；③ `--add-data` / `--collect-all` 漏了不会让构建红，两件都必须有接线守卫。 |

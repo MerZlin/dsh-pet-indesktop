@@ -1,0 +1,11 @@
+name: dsh-pet-bridge
+version: 1.2.1
+description: "Publish privacy-preserving Hermes activity and approval events to dsh-pet-indesktop's local Agent Link JSONL channel."
+author: "dsh-pet-indesktop"
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - post_tool_call
+  - on_session_end
+  - on_human_input_request
+  - on_human_input_resolved
