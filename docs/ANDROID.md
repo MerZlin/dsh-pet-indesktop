@@ -87,6 +87,11 @@ manifest 里的 `android:usesCleartextTraffic="true"` 是给局域网明文端�
 拒绝时不发任何请求（`DshLinkModule` 的轮询循环直接跳过），设置页在地址输入框下方用
 错误色显示原因（中英文案齐全），`dump()` 的 `dshLink` 诊断串里带 `rejected=<理由>`。
 
+**气泡只说一句**（`DshLinkText`）：文案上限 **100 字**——≤100 字原样显示，超过就按标点
+（句号/逗号/空格）截到一句内再加 `…`，换行先压成空格。只有 `question/requested` 会带
+原文（取 `questions[0].question`，缺失回退 `header`），其余状态（完成/出错/审批）用固定
+短句；设备上不做"语义总结"（没有本地模型，现编摘要等于编造）。
+
 手机侧的状态映射与桌面逐条同源：`DshLinkState`/`DshLinkEvents` 照抄
 `pet/dsh_state.py` 的事件表（含 `turn/end` 的 `reasonKind` 分流、裸
 `approval/asked` 不锁存审批、`cordis/request-run` 只在 `requiresApproval` 严格为真

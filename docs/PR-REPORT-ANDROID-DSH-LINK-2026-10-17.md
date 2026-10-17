@@ -532,3 +532,35 @@ $ adb reverse tcp:8768 tcp:8768        # 模拟器 NAT 不通 10.0.2.2，用 rev
 另外这台机器的 DSH 文件沙箱是 workspace-write，模拟器实例写不了
 `F:\leidian` / `%APPDATA%` 会以 `0xE06D7363` 崩掉——本次是靠一次性放开沙箱并用计划任务把
 模拟器拉出命令进程树才跑起来的，**这不是产品行为，只是本机测试环境的限制**。
+
+### 第三轮补强：气泡「短字符投递」
+
+**触发**：真机试用时反馈"不要每一步思考的输出都流转过来，就一句话；100 字以内完整显示，
+超长就简短说一句"。桥接记录里确实有长文本——`question/requested` 的 `questions[].question`
+常常是整段话（`index.js` 的 `writeQuestionRequest` 原样保留 `questions`，见 `index.js:563-575`）。
+
+**改动**（新增 `DshLinkText.kt` + 接线）：
+
+| 文件 | 增删 | 改动意图 |
+|---|---|---|
+| `android/.../DshLinkText.kt` | +47（新增） | 纯函数 `brief(raw, max=100)`：压平空白/换行；≤100 字原样；超长在**最后 30% 窗口内**找标点（`。！？；，、!?;,` 与空格）截断并加 `…`，窗口外有标点也不提前截（否则 100 字会被砍成 20 字）。 |
+| `android/.../modules/DshLinkModule.kt` | +34 / −12 | 引入 `Signal(state, text)`：只有 `question/requested` 取原文（`questions[0].question` → 回退 `header`）并过 `brief()`；其余状态仍用固定短句。**并修掉一个真机缺陷**：原先只按状态做 edge-trigger，导致"上一问 resolved + 新一问 requested 落在同一轮轮询"被当成同状态吞掉——现在状态与**文案**都相同才算重复。 |
+| `android/.../DshLinkTextTest.kt` | +86（新增） | 9 条用例：空白→null、短文本原样、正好 100 字完整、101 字截断、长段落停在句号、无标点按上限截、换行压成一行、边界太早不提前截、上限可配。 |
+
+**实机（模拟器）实测**：
+
+```text
+注入 question 长度 = 181  → 气泡长度 = 92，结尾「。…」   （截在句号处）
+注入 question 长度 =  34  → 气泡长度 = 34，原文完整显示
+polls=6 failures=0 state=waiting_question reacted=1   （JVM 单测 118 条全过）
+```
+
+**副作用与取舍**：
+
+- 100 字在手机上约 6–7 行气泡（34 字已是 3 行）。若嫌大，把 `DshLinkText.MAX_CHARS` 调小即可，
+  单测按常量取值、不用改。
+- **不在设备上做语义摘要**：没有本地模型，凭空"总结"等于编造；这里只做按标点的截断，
+  PR 里据实说明。
+- 顺带记录一个构建坑：本机 `:app:assembleDebug` 有一次把 dex 判成 up-to-date，装出来的 APK
+  缺新类（`apkanalyzer dex packages` 查不到 `DshLinkText`）。**改完 Kotlin 后用
+  `assembleDebug --rerun-tasks` 打包**，并用 `apkanalyzer` 复核产物里有没有新类。

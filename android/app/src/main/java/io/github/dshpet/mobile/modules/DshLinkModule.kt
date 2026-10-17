@@ -4,6 +4,7 @@ import io.github.dshpet.mobile.DshLinkClient
 import io.github.dshpet.mobile.DshLinkEvents
 import io.github.dshpet.mobile.DshLinkReject
 import io.github.dshpet.mobile.DshLinkState
+import io.github.dshpet.mobile.DshLinkText
 import io.github.dshpet.mobile.ModuleIds
 import io.github.dshpet.mobile.R
 import org.json.JSONObject
@@ -33,7 +34,7 @@ class DshLinkModule : HostBoundModule() {
     @Volatile private var cursor: String? = null
 
     /** worker 线程 → 主线程的唯一通道。 */
-    @Volatile private var pending: DshLinkState? = null
+    @Volatile private var pending: Signal? = null
 
     @Volatile var polls = 0L
         private set
@@ -46,12 +47,14 @@ class DshLinkModule : HostBoundModule() {
         private set
 
     private var applied = DshLinkState.OFFLINE
+    private var appliedText: String? = null
     private var reacted = 0L
 
     override fun onEnable() {
         cursor = null
         pending = null
         applied = DshLinkState.OFFLINE
+        appliedText = null
         rejected = null
         polls = 0
         failures = 0
@@ -74,8 +77,11 @@ class DshLinkModule : HostBoundModule() {
     override fun onTick(dt: Double) {
         val next = pending ?: return
         pending = null
-        if (next == applied) return
-        applied = next
+        // 状态与文案都相同才算重复：同状态但**换了问题**（上一问 resolved、新一问 requested
+        // 落在同一轮里）必须再弹一次，否则用户收不到新问题的原文。
+        if (next.state == applied && next.text == appliedText) return
+        applied = next.state
+        appliedText = next.text
         react(next)
     }
 
@@ -83,10 +89,11 @@ class DshLinkModule : HostBoundModule() {
         "polls=$polls failures=$failures state=${applied.name.lowercase(Locale.ROOT)} " +
             "reacted=$reacted rejected=${rejected?.name?.lowercase(Locale.ROOT) ?: "none"}"
 
-    private fun react(state: DshLinkState) {
+    private fun react(signal: Signal) {
         // 只有一条母宠说话：小鲸鱼不说台词（与 SpeechModule 同口径）。
         val pet = host.pets.firstOrNull { !it.isCompanion } ?: return
-        val text = when (state) {
+        // 问题带原文就用原文（已按 DshLinkText 压成 ≤100 字一句），否则退回固定短句。
+        val fallback = when (signal.state) {
             DshLinkState.WAITING_APPROVAL -> R.string.dsh_link_waiting_approval
             DshLinkState.WAITING_QUESTION -> R.string.dsh_link_waiting_question
             DshLinkState.SUCCESS -> R.string.dsh_link_success
@@ -95,8 +102,11 @@ class DshLinkModule : HostBoundModule() {
             else -> return
         }
         reacted++
-        host.showPhrase(pet, host.context.getString(text), host.options.speechDurationMs())
-        if (state == DshLinkState.SUCCESS || state == DshLinkState.ERROR) pet.engine.click()
+        val text = signal.text ?: host.context.getString(fallback)
+        host.showPhrase(pet, text, host.options.speechDurationMs())
+        if (signal.state == DshLinkState.SUCCESS || signal.state == DshLinkState.ERROR) {
+            pet.engine.click()
+        }
     }
 
     private fun loop() {
@@ -133,13 +143,24 @@ class DshLinkModule : HostBoundModule() {
     }
 
     /** 一页里取**最后一条**能识别的状态：中间的事件已被后面的覆盖，不必逐条反应。 */
-    private fun stateOf(page: DshLinkClient.Page): DshLinkState? {
-        var latest: DshLinkState? = null
+    private fun stateOf(page: DshLinkClient.Page): Signal? {
+        var latest: Signal? = null
         for (record in page.records) {
             val state = stateOf(record) ?: continue
-            latest = state
+            latest = Signal(state, detailOf(record, state))
         }
         return latest
+    }
+
+    /**
+     * 气泡能带的**短文本**：只有"问用户"这类事件本身就有可展示的原文，其余一律用固定短句。
+     * 长度已由 [DshLinkText.brief] 收口（≤100 字，超长截成一句）。
+     */
+    private fun detailOf(record: JSONObject, state: DshLinkState): String? {
+        if (state != DshLinkState.WAITING_QUESTION) return null
+        val first = record.optJSONArray("questions")?.optJSONObject(0) ?: return null
+        val question = first.optString("question").ifBlank { first.optString("header") }
+        return DshLinkText.brief(question)
     }
 
     /** JSON 提取留在这一层：映射规则本身在纯函数 `DshLinkEvents` 里，可单测。 */
@@ -159,7 +180,8 @@ class DshLinkModule : HostBoundModule() {
     }
 
     companion object {
-        /** 正常轮询间隔。状态变化的可见延迟上限就是它。 */
+        /** worker → 主线程的最小载荷：状态 + 已压短的可选文案。 */
+        private data class Signal(val state: DshLinkState, val text: String?)        /** 正常轮询间隔。状态变化的可见延迟上限就是它。 */
         const val POLL_MS = 3_000L
 
         /** 服务端说 truncated 时的立即重拉上限（避免空转）。 */
