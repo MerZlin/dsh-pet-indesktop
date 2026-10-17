@@ -3,6 +3,7 @@ import os
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+import pytest
 from PySide6.QtWidgets import QApplication
 from pet.config import APP_DIR_NAME
 from pet import pet_profiles as profiles
@@ -284,6 +285,44 @@ def test_legacy_profile_reset_keeps_body_anchor_and_reloads_role(tmp_path, monke
     assert window_placement.virtual_pos(new) + new._stable_body_local_rect().center() == center
     assert new._profile_generation == profiles.slot_generation(cfg.dir, 0)
     new.close()
+
+
+def test_legacy_window_scale_survives_the_reload_its_own_save_triggers(tmp_path, monkeypatch):
+    """#304：直播捕获兼容（legacy 单窗）下右键改大小，不许被自存触发的那次 reload 回滚。
+
+    真实链路：``change_scale`` 改 ``self.scale``（用户看到的"闪一下"）→ 置
+    ``user_customized`` → ``_save_position`` 直写档案 → QFileSystemWatcher 回调
+    ``_apply_legacy_profile(0)`` → ``config.reload()`` → ``refresh_pet_settings``
+    再读 ``scale``。旧实现里那条草稿把档案快照冻住，reload 读回**改之前**的尺寸，
+    于是窗口弹回去、盘上也被写回旧值。这里按这条链逐段真跑（不 mock 配置层）。
+    """
+    from pet.app import AppShell
+    from pet.config import Config
+    from pet.window import PetWindow
+    from tests.test_window_pause import FakeLibrary
+    monkeypatch.setenv('PET_RENDER_TOPOLOGY', 'legacy')
+    cfg = Config(base=tmp_path, instance_id='')
+    profiles.write_profile_settings(cfg.dir, 0, {'character': 'nova', 'scale': 0.5})
+    shell = AppShell(app, cfg, enable_chat=False)
+    win = PetWindow(FakeLibrary(), shell.instance.config)
+    # 与 _build_window 同一接缝：几何自存要带代次 token 才落盘
+    win.set_profile_identity('nova', shell.instance.config.profile_generation())
+    win.move(250, 200)
+    shell.instance.win = win
+    try:
+        win.change_scale(0.85)
+        assert win.scale == pytest.approx(0.85), '前提：窗口当场接受了新尺寸'
+
+        assert shell._apply_legacy_profile(0)
+
+        assert shell.instance.win.scale == pytest.approx(0.85), (
+            '自存触发的那次 reload 不许把尺寸弹回改之前的值')
+        raw = json.loads(profiles.slot_profile_path(cfg.dir, 0).read_text(encoding='utf-8'))
+        assert raw['scale'] == pytest.approx(0.85), '盘上必须停在用户选的尺寸'
+        assert raw['user_customized'] is True, (
+            '右键改大小 = 用户在这只鱼自己的界面里主动设置过，旗标必须当场落盘')
+    finally:
+        win.close()
 
 
 # ---------------------------------------------------------------- ops D1/D2（2026-10-10 终审）

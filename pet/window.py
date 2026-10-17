@@ -1020,8 +1020,11 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.update()
         # 右键菜单改大小属于用户主动设置：子肥鱼置位 user_customized（占位），
         # 下次生成不被主设置刷新；位置自存等后台写盘不置位（_save_position 不动旗）。
+        # 当场落盘：旗标压在草稿区会冻住档案快照，紧接着的自存触发的那次 reload
+        # 读回旧尺寸又把窗口弹回去（#304 的「闪一下」）。
         if getattr(getattr(self, "cfg", None), "instance_id", None):
             self.cfg.set("user_customized", True)
+            self.cfg.save()
         self._save_position()
 
     # ================================================================ 位置
