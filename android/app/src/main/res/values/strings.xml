@@ -68,4 +68,6 @@
     <string name="dsh_link_waiting_question">电脑那边在问你</string>
     <string name="dsh_link_success">电脑上干完活啦</string>
     <string name="dsh_link_error">电脑上出错啦</string>
+    <string name="dsh_link_lost">连不上电脑了</string>
+    <string name="dsh_link_back">连上了</string>
 </resources>

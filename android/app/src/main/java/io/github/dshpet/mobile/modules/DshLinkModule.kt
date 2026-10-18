@@ -2,6 +2,7 @@ package io.github.dshpet.mobile.modules
 
 import io.github.dshpet.mobile.DshLinkClient
 import io.github.dshpet.mobile.DshLinkEvents
+import io.github.dshpet.mobile.DshLinkHealth
 import io.github.dshpet.mobile.DshLinkReject
 import io.github.dshpet.mobile.DshLinkState
 import io.github.dshpet.mobile.DshLinkText
@@ -35,6 +36,9 @@ class DshLinkModule : HostBoundModule() {
 
     /** worker 线程 → 主线程的唯一通道。 */
     @Volatile private var pending: List<Signal> = emptyList()
+
+    /** 这一轮断线是否已经播报过（成功一次即复位）。 */
+    @Volatile private var lostAnnounced = false
 
     @Volatile var polls = 0L
         private set
@@ -89,11 +93,13 @@ class DshLinkModule : HostBoundModule() {
         // 气泡是优先级最高的那条），并逐条记键——否则"一轮只挑一条"会把同轮里其它
         // 会话的事件直接丢掉（真机表现为少弹）。
         val fresh = batch
-            .filter { it.key !in recentKeys }
-            .sortedBy { DshLinkEvents.priorityOf(it.state) }
+            // 连接播报不走去重表（它们本来就有"只播一次"的状态机在管），
+            // 事件仍按"身份键"去重。
+            .filter { it.notice != null || it.key !in recentKeys }
+            .sortedBy { if (it.notice != null) NOTICE_ORDER else DshLinkEvents.priorityOf(it.state) }
         for (signal in fresh) {
             applied = signal.state
-            remembered(signal.key)
+            if (signal.notice == null) remembered(signal.key)
             react(signal)
         }
     }
@@ -105,6 +111,16 @@ class DshLinkModule : HostBoundModule() {
     private fun react(signal: Signal) {
         // 只有一条母宠说话：小鲸鱼不说台词（与 SpeechModule 同口径）。
         val pet = host.pets.firstOrNull { !it.isCompanion } ?: return
+        // 连接播报（断线/恢复）：不点 Q 弹、不加状态音，就是把话说明白。
+        signal.notice?.let { notice ->
+            val text = host.context.getString(
+                if (notice == Notice.LOST) R.string.dsh_link_lost else R.string.dsh_link_back,
+            )
+            val readMs = DshLinkText.readingMs(text)
+            host.showPhrase(pet, text, readMs)
+            host.holdBubble(readMs)
+            return
+        }
         // 带正文就直接念正文（已压成 ≤100 字一句）；没有正文才退回固定短句。
         // 带正文时不看状态：assistant/message 归在 working，同样值得念出来。
         val fallback = if (signal.text == null) {
@@ -145,7 +161,12 @@ class DshLinkModule : HostBoundModule() {
                     val page = DshLinkClient(target.baseUrl!!, token).fetch(cursor)
                     polls++
                     page.cursor?.let { cursor = it }
-                    stateOf(page)?.takeIf { it.isNotEmpty() }?.let { pending = it }
+                    // 断线恢复：先说一句"连上了"，再处理这一页里的事件。
+                    if (lostAnnounced) {
+                        lostAnnounced = false
+                        pending = pending + Signal(DshLinkState.OFFLINE, null, "notice:${Notice.BACK}", Notice.BACK)
+                    }
+                    stateOf(page)?.takeIf { it.isNotEmpty() }?.let { pending = pending + it }
                     // 服务端说还有增量就立刻接着拉，别等下一个整周期。
                     sleep = if (page.truncated) 0L else POLL_MS
                 }
@@ -153,8 +174,15 @@ class DshLinkModule : HostBoundModule() {
                 return
             } catch (failed: Exception) {
                 // 连不上是常态（PC 睡了/换网/端点在重启）：不是错误态，只是慢下来重试。
+                // 但**不能一直静默**——否则"没有新消息"和"连接断了"无法区分。
                 failures++
-                sleep = OFFLINE_MS
+                if (DshLinkHealth.shouldAnnounceLost(failures, lostAnnounced)) {
+                    lostAnnounced = true
+                    pending = pending + Signal(DshLinkState.OFFLINE, null, "notice:${Notice.LOST}", Notice.LOST)
+                }
+                // 判定"真断线"之前按正常节奏重试（3 秒），这样 3 次失败 ≈ 9 秒就能提醒；
+                // 判定之后才退避到 15 秒，避免长时间断线时空转。
+                sleep = if (failures < DshLinkHealth.LOST_AFTER_FAILURES) POLL_MS else OFFLINE_MS
             }
             try {
                 if (sleep > 0L) Thread.sleep(sleep) else Thread.yield()
@@ -239,8 +267,21 @@ class DshLinkModule : HostBoundModule() {
         /** 去重记忆长度：够覆盖"迟到的重放/被顶掉的旧回合"，又不会无限增长。 */
         const val RECENT_KEYS = 32
         /** worker → 主线程的最小载荷：状态 + 已压短的可选文案。 */
-        private data class Signal(val state: DshLinkState, val text: String?, val key: String)        /** 正常轮询间隔。状态变化的可见延迟上限就是它。 */
+        private data class Signal(
+            val state: DshLinkState,
+            val text: String?,
+            val key: String,
+            /** 非空表示这是"连接状态"播报（断线/恢复），不参与事件去重。 */
+            val notice: Notice? = null,
+        )
+
+        /** 连接层的播报：断线一次、恢复一次，不刷屏。 */
+        private enum class Notice { LOST, BACK }
+        /** 正常轮询间隔。状态变化的可见延迟上限就是它。 */
         const val POLL_MS = 3_000L
+
+        /** 连接播报在排序里排最后（气泡最终留下优先级最高的一条）。 */
+        private const val NOTICE_ORDER = 9
 
         /** 服务端说 truncated 时的立即重拉上限（避免空转）。 */
         const val OFFLINE_MS = 15_000L

@@ -121,6 +121,14 @@ manifest 里的 `android:usesCleartextTraffic="true"` 是给局域网明文端�
 
 （`showPhrase` 自建气泡、不依赖 `speech` 模块，所以关掉「台词气泡」也照常弹联动消息。）
 
+**连不上时要说出来**（`DshLinkHealth`）：电脑关机/睡眠/换网/端点重启时手机**收不到任何数据**。
+如果这时保持安静，用户看到的是"没有新消息"，与真的没有消息**无法区分**——2026-10-17 到 18
+一整天什么也没收到就是因为这个静默。所以：
+
+- 连续 **3 次**失败（按 3 秒节奏重试，约 9 秒）弹一次「连不上电脑了」；
+- 恢复时弹一次「连上了」；
+- 一次断线只提醒一次（不刷屏）；判定断线后才把重试间隔退避到 15 秒，避免长时间空转。
+
 手机侧的状态映射与桌面逐条同源：`DshLinkState`/`DshLinkEvents` 照抄
 `pet/dsh_state.py` 的事件表（含 `turn/end` 的 `reasonKind` 分流、裸
 `approval/asked` 不锁存审批、`cordis/request-run` 只在 `requiresApproval` 严格为真

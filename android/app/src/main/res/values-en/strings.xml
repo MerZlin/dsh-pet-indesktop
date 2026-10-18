@@ -68,4 +68,6 @@
     <string name="dsh_link_waiting_question">The PC has a question for you</string>
     <string name="dsh_link_success">Done on the PC</string>
     <string name="dsh_link_error">Something failed on the PC</string>
+    <string name="dsh_link_lost">Cannot reach the PC</string>
+    <string name="dsh_link_back">Back online</string>
 </resources>
