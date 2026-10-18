@@ -6,6 +6,13 @@
 // 脱敏口径（#226，2026-10 减法）：不落任何明文内容——用户消息正文、模型回复
 // 正文、工具命令/参数指纹、工具结果摘要一律不写盘；只写事件名、状态、工具名、
 // 错误码、会话/调用身份等元数据。
+//
+// 正文开关（assistantText，**默认关**）：这是本机临时口径，不是上游口径。
+// 关 = 上段 #226 行为逐字节不变；开 = 在 assistant/message 状态事件上补写
+// text 字段（助手回复正文，截断到 TEXT_MAX）。依据见
+// docs/DSH-BRIDGE-PET-EVENT-CONTRACT-2026-09-02.md 的事件表：assistant/message
+// 本就约定携带 text，桌宠侧 pet/dsh_state.py 也按 record["text"] 读取。用户消息
+// 正文、工具命令/参数、结果摘要仍然一律不落盘——开关只放行助手回复正文。
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +91,46 @@ function bridgeDir() {
 // 统一按 callId 去重写入（见下方 session/event 处理），不再单独 writeTool。
 
 const TEXT_MAX = 300;
+
+// 正文开关运行时状态：只在 apply() 里按 profile 的插件 config 赋值一次。
+// 模块级默认 false —— 未配置（旧 profile、打包副本未改配置）时保持 #226 脱敏。
+let assistantTextEnabled = false;
+
+// 开关解析：profile 插件 config 优先，环境变量仅作兜底。只认显式真值，
+// 任何取不到/认不出的值都退回 false（脱敏是安全侧默认）。
+function readAssistantTextSwitch(config) {
+  const raw = config && config.assistantText !== undefined
+    ? config.assistantText
+    : process.env.DSH_PET_BRIDGE_ASSISTANT_TEXT;
+  if (raw === true) return true;
+  if (raw === false || raw === undefined || raw === null) return false;
+  const s = String(raw).trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+// 从 assistant/message 事件取模型回复正文。真实形状（对 DSH 0.2.0-rc.2 会话
+// 存档实测）：data.message.content 是块数组，回复正文在 type === "text" 的块里，
+// 同数组还混着 reasoning / tool-call 块——只取 text 块，别把思考与工具参数当正文。
+// 兼容 data.text / event.text 旧形状作为兜底。
+function assistantTextOf(event) {
+  const data = (event && event.data) || {};
+  const message = data.message;
+  const blocks = (message && message.content) || data.content;
+  const parts = [];
+  if (Array.isArray(blocks)) {
+    for (const block of blocks) {
+      if (!block || block.type !== "text") continue;
+      if (typeof block.text === "string" && block.text) parts.push(block.text);
+    }
+  }
+  if (!parts.length) {
+    const flat = (typeof data.text === "string" && data.text)
+      || (typeof (event && event.text) === "string" && event.text)
+      || "";
+    if (flat) parts.push(flat);
+  }
+  return parts.join("\n");
+}
 
 // ===== 硬失败判定（execution/failed）=====
 // 规则：只有 DSH 以「本轮出错的 turn 结尾」为真才可能提醒，正常完成绝不误报。
@@ -495,7 +542,7 @@ function sessionIdOf(session, event) {
   return "session:unknown";
 }
 
-function writeStateEvent(type, step, sessionId, agentName = "", reasonKind = "", sourceTurn = "") {
+function writeStateEvent(type, step, sessionId, agentName = "", reasonKind = "", sourceTurn = "", text = "") {
   const extra = { event: type };
   if (step !== undefined && step !== null) extra.step = step;
   // turn/end 携带终止原因（只落 kind，不落错误正文）：桌宠据此让用户中止的回合
@@ -506,6 +553,10 @@ function writeStateEvent(type, step, sessionId, agentName = "", reasonKind = "",
   if (sourceTurn) extra.sourceTurn = sourceTurn;
   if (sessionId) extra.sessionId = sessionId;
   if (agentName) extra.agentName = agentName;
+  // 助手回复正文（仅 assistantText 开关打开时由调用方传入；关闭时恒为空串，
+  // 记录与 #226 逐字节一致）。字段名 text 是 docs/DSH-BRIDGE-PET-EVENT-CONTRACT
+  // 事件表里 assistant/message 既有约定的名字，桌宠侧 pet/dsh_state.py 按它读取。
+  if (text) extra.text = text;
   writeRecord(extra);
 }
 
@@ -722,7 +773,11 @@ function writeRecordDedup(extra) {
 // 写 record 去重前的代理：需要按 callId 去重的交互记录（问题请求在 assistant/message
 // 与独立 tool/call 两处都会出现）走 writeRecordDedup，其余事件直接走 writeRecord。
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
+  // 正文开关（默认关）：profile 的插件 config 里写 assistantText: true 才放行
+  // 助手回复正文落盘。不传 config（旧 profile）时保持 #226 脱敏口径不变。
+  assistantTextEnabled = readAssistantTextSwitch(config);
+
   // Make the resolved runtime destination observable for packaged builds.
   // This is intentionally emitted once per Bridge process and contains only
   // path metadata, never secrets or the full environment.
@@ -891,9 +946,13 @@ export function apply(ctx) {
             }
           }
         }
-        // 模型回复正文不落盘（脱敏）：assistant/message 只作状态事件
+        // 模型回复正文：默认仍不落盘（脱敏）。仅当助手正文开关打开时补写 text
+        // 字段；开关关闭时下面这行与 #226 完全一致，记录里不会出现 text。
+        const bodyText = assistantTextEnabled
+          ? truncate(assistantTextOf(event), TEXT_MAX)
+          : "";
         writeStateEvent("assistant/message", stepOf(event), sessionId, "", "",
-          sourceTurnOf(event));
+          sourceTurnOf(event), bodyText);
         // 模型成功产出 = 重试已恢复 → 连续重试计数归零（见上方硬失败判定规则）
         noteTurnRecovery(sessionKeyOf(_session, event));
       }
@@ -1122,4 +1181,14 @@ export const __instanceTest = {
   sourceTurnOf,
   queued: () => writeQueue.slice(),
   resetQueue: () => { writeQueue.length = 0; },
+};
+
+// 助手正文开关（assistantText）契约测试入口：开关解析 + 正文抽取 + 开关状态，
+// 纯函数/纯状态，不落盘、不起 DSH 宿主。
+export const __assistantTextTest = {
+  readSwitch: readAssistantTextSwitch,
+  textOf: assistantTextOf,
+  textMax: TEXT_MAX,
+  isEnabled: () => assistantTextEnabled,
+  setEnabled: (v) => { assistantTextEnabled = !!v; },
 };
