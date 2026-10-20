@@ -37,6 +37,9 @@ class DshLinkModule : HostBoundModule() {
     /** worker 线程 → 主线程的唯一通道。 */
     @Volatile private var pending: List<Signal> = emptyList()
 
+    /** 上次成功轮询的墙钟（毫秒）；用于判断重连时要不要跳过积压。 */
+    private var lastOkAt = 0L
+
     /** 这一轮断线是否已经播报过（成功一次即复位）。 */
     @Volatile private var lostAnnounced = false
 
@@ -158,15 +161,28 @@ class DshLinkModule : HostBoundModule() {
                     // 没配对、或地址没通过私网校验：**一个请求都不发**，令牌不出内存。
                     sleep = IDLE_MS
                 } else {
+                    val nowMs = System.currentTimeMillis()
+                    val gapMs = if (lastOkAt > 0L) nowMs - lastOkAt else 0L
                     val page = DshLinkClient(target.baseUrl!!, token).fetch(cursor)
                     polls++
                     page.cursor?.let { cursor = it }
+                    lastOkAt = nowMs
                     // 断线恢复：先说一句"连上了"，再处理这一页里的事件。
                     if (lostAnnounced) {
                         lostAnnounced = false
                         pending = pending + Signal(DshLinkState.OFFLINE, null, "notice:${Notice.BACK}", Notice.BACK)
                     }
-                    stateOf(page)?.takeIf { it.isNotEmpty() }?.let { pending = pending + it }
+                    // **不补播历史**：断开久了（电脑关机一整夜、手机没开数据）再连上时，游标还停在
+                    // 旧位置，端点会把这段时间的记录一次性吐出来。若照单全播，用户会被几十条旧气泡
+                    // 连珠炮糊脸（真机反馈："积压的一堆气泡全部冒出来，MOSS 模型部署信息等"）。
+                    // 断得久 → 只播最新一条（告诉用户"刚刚发生了什么"），其余当已读。
+                    val signals = stateOf(page, nowMs)
+                    val picked = if (DshLinkHealth.shouldResync(gapMs)) {
+                        signals.takeLast(1)
+                    } else {
+                        signals.takeLast(DshLinkHealth.MAX_SIGNALS_PER_TICK)
+                    }
+                    if (picked.isNotEmpty()) pending = pending + picked
                     // 服务端说还有增量就立刻接着拉，别等下一个整周期。
                     sleep = if (page.truncated) 0L else POLL_MS
                 }
@@ -199,10 +215,13 @@ class DshLinkModule : HostBoundModule() {
      * 会被静默丢掉（真机现象：A、B 两个会话同号回合收尾，只弹了一次）。现在整批交给
      * `onTick` 逐条播、逐条记 key。
      */
-    private fun stateOf(page: DshLinkClient.Page): List<Signal> {
+    private fun stateOf(page: DshLinkClient.Page, nowMs: Long): List<Signal> {
         val byKey = LinkedHashMap<String, Signal>()
         for (record in page.records) {
             val state = stateOf(record) ?: continue
+            // 兜底：比 STALE_SECONDS 还旧的记录不弹。断开久了再连上时，端点的游标会把这些
+            // 陈年记录一起吐出来；即使走了"只播最新一条"，也保证这一条本身不是隔夜货。
+            if (DshLinkHealth.isStale(record.optDouble("ts", 0.0), nowMs)) continue
             val text = textOf(record, state)
             val signal = Signal(state, text, keyOf(record, state, text))
             byKey[signal.key] = signal // 同 key 后到覆盖先到

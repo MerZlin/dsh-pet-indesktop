@@ -24,4 +24,26 @@ object DshLinkHealth {
      */
     fun shouldAnnounceLost(consecutiveFailures: Long, alreadyLost: Boolean): Boolean =
         !alreadyLost && consecutiveFailures >= LOST_AFTER_FAILURES
+
+    /**
+     * 断开多久之后，重连时**不再补播积压**（只播最新一条）。
+     *
+     * 电脑关机一夜、手机没开数据半天，游标还停在旧位置；照单全播会把几个小时的旧气泡
+     * 一次性糊到用户脸上（真机反馈："积压的一堆气泡全部冒出来，MOSS 模型部署信息等"）。
+     * 5 分钟以内算"眨眼"，照常播；超过就只播最新一条。
+     */
+    const val RESYNC_GAP_MS = 5 * 60_000L
+
+    /** 记录超过这个年龄就不再弹（正常轮询里的兜底，防止陈旧事件迟到补播）。 */
+    const val STALE_SECONDS = 120.0
+
+    /** 一次轮询最多播几条（防突刺；超出只保留最新几条）。 */
+    const val MAX_SIGNALS_PER_TICK = 3
+
+    /** 这次重连算不算"断开太久"（要跳过积压）。 */
+    fun shouldResync(gapMs: Long): Boolean = gapMs >= RESYNC_GAP_MS
+
+    /** 这条记录是不是太旧了（[tsSeconds] 是记录里的 epoch 秒）。 */
+    fun isStale(tsSeconds: Double, nowMs: Long): Boolean =
+        tsSeconds > 0.0 && (nowMs / 1000.0 - tsSeconds) > STALE_SECONDS
 }

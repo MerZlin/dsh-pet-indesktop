@@ -129,6 +129,11 @@ manifest 里的 `android:usesCleartextTraffic="true"` 是给局域网明文端�
 - 恢复时弹一次「连上了」；
 - 一次断线只提醒一次（不刷屏）；判定断线后才把重试间隔退避到 15 秒，避免长时间空转。
 
+**不补播积压**（`DshLinkHealth.shouldResync`）：断开久了（> 5 分钟）再连上时，游标还停在
+旧位置，端点会把这段时间的记录一次性吐出来——照单全播就是几十条旧气泡连珠炮（真机反馈：
+积压的一堆气泡全部冒出来，连 MOSS 模型部署信息都弹了）。所以：断得久**只播最新一条**、
+其余当已读；超过 2 分钟的记录一律丢弃；每轮最多播 3 条。
+
 手机侧的状态映射与桌面逐条同源：`DshLinkState`/`DshLinkEvents` 照抄
 `pet/dsh_state.py` 的事件表（含 `turn/end` 的 `reasonKind` 分流、裸
 `approval/asked` 不锁存审批、`cordis/request-run` 只在 `requiresApproval` 严格为真
