@@ -30,6 +30,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 
 from . import foobar_playing
 
@@ -179,12 +180,54 @@ def normalized_app_id(app_id: str | None) -> str:
     return value
 
 
+@lru_cache(maxsize=1)
+def _firefox_app_ids() -> frozenset[str]:
+    """Read Firefox's registered install identities once per process (Windows).
+
+    Firefox uses an install-path hash as its SMTC AppUserModelID, not its exe
+    name. TaskBarIDs records that mapping for both per-user and system installs.
+    Inspect both registry views so 32-bit installs work in a 64-bit pet too.
+    Never infer browser identity merely from a hex-shaped ID: unknown players
+    must remain accepted. A new install is discovered after restarting the pet.
+    """
+    if sys.platform != "win32":
+        return frozenset()
+    try:
+        import winreg
+    except ImportError:
+        return frozenset()
+    identities: set[str] = set()
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(
+                    hive, r"Software\Mozilla\Firefox\TaskBarIDs", 0,
+                    winreg.KEY_READ | view,
+                ) as key:
+                    index = 0
+                    while True:
+                        try:
+                            _path, value, kind = winreg.EnumValue(key, index)
+                        except OSError:
+                            break
+                        index += 1
+                        if kind == winreg.REG_SZ and isinstance(value, str):
+                            identity = normalized_app_id(value)
+                            if identity:
+                                identities.add(identity)
+            except OSError:
+                # Missing/inaccessible keys must not disable media detection.
+                continue
+    return frozenset(identities)
+
+
 def is_browser_session(app_id: str | None) -> bool:
     """该会话是否来自已知浏览器（见 :data:`_BROWSER_APP_IDS` 的表外放行说明）。
 
     表外应用一律返回 False——只否决明确认识的浏览器，不做白名单式拦截。
     """
-    return normalized_app_id(app_id) in _BROWSER_APP_IDS
+    identity = normalized_app_id(app_id)
+    return identity in _BROWSER_APP_IDS or bool(identity and identity in _firefox_app_ids())
 
 
 def is_foobar_source(app_id: str | None) -> bool:

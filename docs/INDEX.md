@@ -142,6 +142,8 @@
 
 ## PR 报告存档
 
+- [Firefox 媒体标识识别修复（2026-10-20）](PR-REPORT-FIREFOX-MEDIA-SESSION-2026-10-20.md)：修改浏览器媒体来源识别、排查 Firefox 开关失效前必读；补充 [SMTC 媒体类型过滤](PR-REPORT-SMTC-MEDIA-TYPE-2026-10-06.md) 中仅按进程名识别的遗漏，记录注册表身份解析、回归与本机冻结验证。
+
 - [歌词让位于 Agent 状态提示（2026-10-17）](PR-REPORT-LYRIC-AGENT-PRIORITY-2026-10-17.md)：修复歌词持续占用通知槽、吞掉开始/结束提示；涉及歌词和 Agent 气泡优先级时必读。
 - [Hermes Agent Link 桥接（2026-10-17）](PR-REPORT-HERMES-PET-BRIDGE-2026-10-17.md)：把 Hermes 生命周期/审批 hook 接入桌宠既有 Agent Link，并记录 Chat 走 Hermes API Server 的接入方式；维护 Hermes 联动或排查状态气泡时必读。
 
