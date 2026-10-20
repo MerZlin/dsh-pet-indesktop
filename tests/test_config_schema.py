@@ -53,6 +53,7 @@ RELOAD_WHITELIST_SNAPSHOT = frozenset(
         "chat_background_opacity",
         "chat_bg_crops",
         "chat_follow_pet",
+        "chat_reply_voice_enabled",
         "chat_ui_style",
         "click_show_balance",
         "click_show_self_talk",
@@ -226,6 +227,8 @@ SPECIAL_CASED_KEYS = frozenset({"version", "proactive_screen", "agent_link", "ch
 # `test_settings_default_marks` 的「冻结集」抓到——补齐后白名单 153。
 # 2026-10-18 加待办语音播报 1 键（todo_reminder_speak，默认 False：复用语音报时的
 # 音频通道，不新增语速/音色/音量键），白名单 154。
+# 2026-10-20 加助手回复朗读 1 键（chat_reply_voice_enabled，默认 False：同样复用
+# 语音报时的音频通道，只念对话不念歌词），白名单 155。
 DEFAULTS_SNAPSHOT = RELOAD_WHITELIST_SNAPSHOT | SPECIAL_CASED_KEYS
 
 
