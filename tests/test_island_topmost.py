@@ -195,6 +195,26 @@ def test_hidden_island_stays_silent(tmp_path, monkeypatch):
     assert calls == [] and fallbacks == []
 
 
+def test_macos_reassert_does_not_raise_or_activate(tmp_path, monkeypatch):
+    """macOS 置顶保活不能通过 QWidget.raise_() 激活桌宠应用。"""
+    app = _qapp()
+    island = _island(tmp_path)
+    island.show()
+    _settle(app)
+    try:
+        from pet import dynamic_island as island_mod
+
+        fallbacks: list = []
+        monkeypatch.setattr(island_mod.sys, "platform", "darwin")
+        monkeypatch.setattr(
+            DynamicIsland, "raise_", lambda self: fallbacks.append(self))
+        assert island.reassert_topmost() is True
+        assert fallbacks == []
+    finally:
+        island.hide()
+        island.deleteLater()
+
+
 def test_island_keeps_topmost_and_non_activating_flags(tmp_path):
     """旗标口径不动：修 z 序不回退成"可激活窗口"（激活会抢用户键盘焦点）。"""
     island = _island(tmp_path)

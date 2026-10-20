@@ -78,9 +78,16 @@ class OverlayWindow(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint
                             | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint
+                            # The overlay is a visual/input surface, never the
+                            # keyboard owner.  Without these two hints, a
+                            # show()/native-window rebuild can activate the
+                            # accessory app on macOS while another app is in
+                            # the middle of IME composition.
+                            | Qt.WindowType.WindowDoesNotAcceptFocus
                             | _mac_no_window_shadow_flag())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         # macOS：本窗带 Qt.Tool，Cocoa 在应用失活时会自动把它 order out。真机表现是
         # 「切到别的应用后整只桌宠从桌面消失，点 Dock 图标把应用激活回来才重现」——
         # 窗口只是被移出屏幕，进程并没有退出，所以 Dock 图标还在（真机实测：切到

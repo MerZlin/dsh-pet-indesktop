@@ -175,6 +175,20 @@ def test_tick_interval_from_refresh_rate():
     assert OverlayWindow._tick_interval_ms(60.0) == 16
 
 
+def test_overlay_does_not_activate_or_accept_keyboard_focus():
+    """The always-on-top overlay must not steal another app's IME focus."""
+    overlay = OverlayWindow()
+    try:
+        flags = overlay.windowFlags()
+        assert flags & Qt.WindowType.WindowDoesNotAcceptFocus
+        assert overlay.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # Keep the widget focus policy for the slingshot/Esc path; the shell's
+        # application event filter remains the production fallback.
+        assert overlay.focusPolicy() != Qt.FocusPolicy.NoFocus
+    finally:
+        overlay.close()
+
+
 def test_sprite_at_z_order_and_alpha_threshold():
     overlay = OverlayWindow()
     bottom = FakeSprite((0, 0), (64, 64))                    # 全不透明，垫底
