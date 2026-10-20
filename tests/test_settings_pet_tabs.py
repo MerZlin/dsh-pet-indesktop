@@ -28,7 +28,8 @@ EXPECTED_SIDEBAR = [
     "常规", "桌宠", "互动", "菜单", "桌面组件", "AI 与对话", "自动化与联动", "语音", "文件识别", "更新",
 ]
 #: 标签键给代码（稳定），标签名给用户（可读）；顺序 = 使用顺序。
-EXPECTED_TABS = (("display_music", "显示与音乐"), ("motion_collision", "动作与碰撞"))
+EXPECTED_TABS = (("display_music", "显示与音乐"), ("motion_collision", "动作与碰撞"),
+                 ("character_packs", "角色与素材"))
 
 #: 标签 1 的主视线组序；高级组标题按平台上有没有「标题格式」行动态取
 #: （``settings_music.advanced_group_title``），用例里拼。

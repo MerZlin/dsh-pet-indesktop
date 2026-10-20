@@ -62,7 +62,7 @@ class _Library:
         self._clip = clip
         self.no_mirror: frozenset[str] = frozenset()
 
-    def movie(self, _name):
+    def movie(self, _name, **_kw):
         return self._clip
 
 

@@ -75,7 +75,7 @@ class RichLibrary:
         self.folder_files = {}
         self.shutdown_calls = 0
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def duration(self, name):

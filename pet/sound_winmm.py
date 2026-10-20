@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import array
 import ctypes
+from ctypes import wintypes
 import logging
 import os
 import sys
@@ -50,6 +51,91 @@ log = logging.getLogger("pet.sound_winmm")
 
 # —— winmm 常量 ——
 WAVE_MAPPER = 0xFFFFFFFF
+
+
+# ---------------------------------------------------------------------------
+# 默认渲染端点探测（issue #315：句柄池跟随默认设备切换）
+# ---------------------------------------------------------------------------
+# winmm 的 WAVE_MAPPER 只在 waveOutOpen 那一刻解析「当前默认设备」——用户切了
+# 默认输出（拔耳机/换音箱），已打开的句柄仍往旧设备播。这里用 MMDevice API
+# （纯 ctypes COM，不引第三方）读当前默认端点 ID；读不到一律返回 None
+# （调用方按「不知道」处理，绝不影响播放）。
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+
+def _make_guid(d1: int, d2: int, d3: int, d4: tuple) -> _GUID:
+    return _GUID(d1, d2, d3, (ctypes.c_ubyte * 8)(*d4))
+
+
+_CLSID_MMDEVENUM = _make_guid(0xBCDE0395, 0xE52F, 0x467C,
+                              (0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E))
+_IID_IMMDEVENUM = _make_guid(0xA95664D2, 0x9614, 0x4F35,
+                             (0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6))
+
+
+def _com_call(ppv: int, index: int, restype, argtypes, *args):
+    """按 vtbl 序号调 COM 方法（手写最小的 QueryInterface/AddRef/Release 族）。"""
+    vtbl = ctypes.cast(ctypes.cast(ppv, ctypes.POINTER(ctypes.c_void_p))[0],
+                       ctypes.POINTER(ctypes.c_void_p))
+    proto = ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)
+    return proto(vtbl[index])(ppv, *args)
+
+
+def _default_render_device_id() -> "str | None":
+    """当前默认渲染端点 ID；非 Windows/查询失败返回 None（替换点供测试使用）。"""
+    if sys.platform != "win32":
+        return None
+    try:
+        ole32 = ctypes.windll.ole32
+    except AttributeError:
+        return None
+    init_hr = -1  # CoInitializeEx 未跑完（异常）时按"未初始化"处理，不配平
+    try:
+        init_hr = ole32.CoInitializeEx(None, 0)  # COINIT_MULTITHREADED；重复调用安全
+        enum = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(ctypes.byref(_CLSID_MMDEVENUM), None, 0x17,
+                                    ctypes.byref(_IID_IMMDEVENUM), ctypes.byref(enum))
+        if hr != 0 or not enum:
+            return None
+        try:
+            dev = ctypes.c_void_p()
+            hr = _com_call(enum, 4, ctypes.c_long,
+                           [wintypes.DWORD, wintypes.DWORD,
+                            ctypes.POINTER(ctypes.c_void_p)], 0, 0, ctypes.byref(dev))
+            if hr != 0 or not dev:
+                return None
+            try:
+                wid = ctypes.c_void_p()
+                hr = _com_call(dev, 5, ctypes.c_long,
+                               [ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(wid))
+                if hr != 0 or not wid:
+                    return None
+                try:
+                    return ctypes.wstring_at(wid.value)
+                finally:
+                    ole32.CoTaskMemFree(wid)
+            finally:
+                _com_call(dev, 2, ctypes.c_ulong, [])
+        finally:
+            _com_call(enum, 2, ctypes.c_ulong, [])
+    except Exception:            # noqa: BLE001 - 探测失败按"不知道"处理
+        return None
+    finally:
+        # 仅本函数真正初始化成功（S_OK/S_FALSE，会给线程 COM 计数 +1）时才配平；
+        # RPC_E_CHANGED_MODE（GUI 线程已是 STA）与其它失败值不增加计数，
+        # 此时 CoUninitialize 会错扣别人的计数（播放热路径每 2s 一次）。
+        if init_hr in (0, 1):  # S_OK / S_FALSE
+            try:
+                ole32.CoUninitialize()
+            except Exception:        # noqa: BLE001
+                pass
+
+
+#: 默认设备对账的最小间隔（play 热路径不每次做 COM 往返）
+_DEVICE_CHECK_INTERVAL_S = 2.0
 WAVE_FORMAT_PCM = 0x0001
 MMSYSERR_NOERROR = 0
 WHDR_DONE = 0x00000001
@@ -446,7 +532,29 @@ class WinmmSoundPool:
         self._volume = 1.0
         self._timer: Any = None
         self._scaled_cache: dict[Any, bytes] = {}
+        #: 默认设备跟随（issue #315）：已开句柄绑死在「打开那一刻的默认设备」上，
+        #: 用户切了默认输出后旧句柄继续往旧设备播。每次播放前限频对一次默认
+        #: 端点 ID，变了就整池关掉、句柄按需在**新**默认设备上重建。
+        self._device_id: "str | None" = None
+        self._device_checked_at: float = 0.0
         _LIVE_POOLS.add(self)
+
+    def _follow_default_device(self) -> None:
+        """默认设备变了就整池重建（限频；查询失败绝不动——宁可留旧设备也不误清）。"""
+        now = time.monotonic()
+        if now - self._device_checked_at < _DEVICE_CHECK_INTERVAL_S:
+            return
+        self._device_checked_at = now
+        current = _default_render_device_id()
+        if current is None:
+            return
+        if self._device_id is None:
+            self._device_id = current      # 首次记录
+            return
+        if current != self._device_id:
+            log.info("默认音频设备已切换，winmm 句柄池按新设备重建")
+            self._device_id = current
+            self.clear()
 
     # ---------------- 可用性 ----------------
 
@@ -468,6 +576,7 @@ class WinmmSoundPool:
 
     def play(self, path: str | Path, volume: float = 1.0) -> bool:
         """提交一次播放。True = 已交给声卡（异步），False = 本次没播成。"""
+        self._follow_default_device()
         clip = read_pcm16(path)
         if clip is None:
             return False

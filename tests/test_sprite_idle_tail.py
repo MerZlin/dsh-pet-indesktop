@@ -199,7 +199,7 @@ class ClipLibrary:
         self.move_strides = dict(strides or {})
         self.move_curves = {}
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def clip(self, name):
@@ -673,7 +673,7 @@ class RealClipLibrary:
         self.move_strides: dict = {}
         self.move_curves: dict = {}
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         assert name == self._idle, name
         return self._clip
 

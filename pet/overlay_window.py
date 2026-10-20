@@ -81,6 +81,10 @@ class OverlayWindow(QWidget):
                             | _mac_no_window_shadow_flag())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        # macOS：显示本窗不许抢走前台焦点（issue #314：窗口操作伴随 App 激活，
+        # 用户正在输入的窗口被踢失活）。Windows 已有 WS_EX_NOACTIVATE 等价物，
+        # 这条属性三平台语义一致（不抢激活），一并声明。
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         # macOS：本窗带 Qt.Tool，Cocoa 在应用失活时会自动把它 order out。真机表现是
         # 「切到别的应用后整只桌宠从桌面消失，点 Dock 图标把应用激活回来才重现」——
         # 窗口只是被移出屏幕，进程并没有退出，所以 Dock 图标还在（真机实测：切到

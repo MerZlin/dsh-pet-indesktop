@@ -44,7 +44,7 @@ class _Lib:
     no_mirror: tuple = ()
     character_id = None
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return None
 
 

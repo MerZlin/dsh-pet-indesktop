@@ -80,7 +80,7 @@ class FakeLibrary:
         self._clip = clip
         self.no_mirror: set[str] = set()
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clip
 
 
@@ -600,7 +600,7 @@ def test_sprite_bounds_inset_by_body_box(monkeypatch):
     """
     from pet import catalog
 
-    monkeypatch.setattr(catalog, "character_body_box", lambda _cid: (100, 60, 400, 330))
+    monkeypatch.setattr(catalog, "character_body_box", lambda _cid, *a, **k: (100, 60, 400, 330))
     sprite = _make_sprite()
     c = ThrowPhysicsController(BOUNDS)
     assert c._sprite_bounds(sprite) == (-50.0, -30.0, 600.0, 435.0)

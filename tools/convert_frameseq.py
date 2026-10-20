@@ -13,9 +13,8 @@
                                      [--include random,events]
 幂等：当前源已有**同档位**的可用世代目录（名字戳与 meta 戳自洽、帧数与磁盘相符、
 encoder 串与本目录档位一致）即跳过；--force 全量重转。
-档位由 webm 相对 videos 的第一级目录决定：热集（idle/move/turn/click/drag）走
-无损 ``-lossless 1``，``--include`` 进来的 random/events 走有损
-``-lossless 0 -quality 80``（meta 写 ``ENCODER_DESC_LOSSY``）。默认范围仍是热集
+**全部目录一档**（v6 起统一无损，见 ``frameseq_provision.ENCODER_DESC``）：不再有
+"热集无损 / 冷集有损"的分档，``--include`` 只决定**转哪些目录**。默认范围仍是热集
 （random/events 体积大，构建期是否转换由打包方决定；运行时自动供给的范围是
 热集 + random + events，见 ``frameseq_provision.SUPPLY_FOLDERS``）。
 本工具是**构建期入口，不设启动预算**（一轮转完范围内全部 webm）；运行时的首跑
@@ -50,7 +49,7 @@ def main() -> int:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--include", default="",
                         help="逗号分隔的额外目录（默认只转热集 idle/move/turn/click/drag；"
-                             "random/events 按有损档 Q80 转）")
+                             "random/events 体积大，需要时显式列进来）")
     args = parser.parse_args()
 
     videos = REPO_ROOT / "assets" / "characters" / args.character / "videos"

@@ -8,7 +8,7 @@ WebP 帧序列 → 断言帧数/fps/meta/幂等跳过。真实 ffmpeg（本机 w
 改两段式（W1/W2）后这段跑的是**完整管线**：阶段一真 ffmpeg 抓无损帧 → 阶段二
 Pillow 逐帧白底反解 + Q70 重编码。所以这里同时盯两件事：真实素材上 alpha 位流
 照旧逐像素存活（libwebp 的 alpha 通道走无损位流），以及产物**逐帧都是 Q70 有损**
-（RIFF 容器里不剩 ``VP8L``）。
+（RIFF 容器里全是 ``VP8L`` = 无损）。
 """
 from __future__ import annotations
 
@@ -73,8 +73,8 @@ def test_convert_clip_produces_stamped_q70_frames(tmp_path):
     # 源身份戳：目录名 = sha256 前 12 位，meta 带全量 sha256
     assert meta["source_sha256"] == source_sha256(webm)
     assert out_dir.name.endswith("." + "g" + meta["source_sha256"][:12])
-    # 每一帧都是有损容器（阶段二跑过；VP8L 是无损的标志）
-    assert not any(frame.read_bytes()[12:16] == b"VP8L" for frame in frames)
+    # 每一帧都是无损容器（v6 起阶段二输出无损；VP8L = 无损的标志）
+    assert all(frame.read_bytes()[12:16] == b"VP8L" for frame in frames)
 
     # alpha 存活：真素材有透明区（bgra 直通，不 chroma 下采样）
     img = QImage(str(frames[0]))
@@ -116,8 +116,8 @@ def test_convert_clip_lossy_tier_real_ffmpeg(tmp_path):
     assert meta["unblend"] == UNBLEND_MARK
     assert meta["frames"] == len(frames)
 
-    # 阶段二真的把每一帧重编成有损（RIFF chunk：VP8L = 无损，VP8X/VP8 = 有损）
-    assert not any(frame.read_bytes()[12:16] == b"VP8L" for frame in frames)
+    # 阶段二真的把每一帧重编成**无损**（RIFF chunk：VP8L = 无损）
+    assert all(frame.read_bytes()[12:16] == b"VP8L" for frame in frames)
 
     img = QImage(str(frames[0]))
     assert not img.isNull()

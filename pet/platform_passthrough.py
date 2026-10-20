@@ -54,6 +54,7 @@ Qt 是否处理该标志未验证。见交付报告「未实测项」。
 from __future__ import annotations
 
 import logging
+import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QRect, QTimer, Qt
@@ -64,6 +65,9 @@ if TYPE_CHECKING:
 
 _TRANSPARENT_ATTR = Qt.WidgetAttribute.WA_TransparentForMouseEvents
 _TRANSPARENT_FLAG = Qt.WindowType.WindowTransparentForInput
+
+#: macOS 专用落窗短路开关（issue #314；模块级常量便于测试替换）。
+_IS_MACOS = sys.platform == "darwin"
 
 
 def passthrough_decision(*, mouse_through: bool, press_active: bool,
@@ -113,6 +117,8 @@ class QtPerPixelInputController:
     # ``_handle_win_id``）：None = 还没写过，句柄变化 = 平台重建过原生窗口，
     # 两种情况都必须真重放（不能信「属性/标志读起来已一致」）。
     _applied_win_id: int | None = None
+    #: 上一次真写的**目标态**（macOS 专用短路，见 ``_apply_through``）。
+    _applied_state: bool | None = None
 
     def __init__(self, window: "OverlayWindow") -> None:
         self._window = window
@@ -209,6 +215,20 @@ class QtPerPixelInputController:
         win_id = self._handle_win_id(win, handle)
         recreated = self._applied_win_id is not None and self._applied_win_id != win_id
         if not force:
+            # macOS 专用短路（issue #314）：QCocoaWindow 读不回
+            # ``WindowTransparentForInput``（下面的 ``flag_ok`` 在 macOS 恒为
+            # False），于是每个轮询 tick 都重设窗口 flags——而
+            # ``QCocoaWindow::setWindowFlags`` 伴随原生窗口重建并把本 App
+            # **激活**，用户的前台窗口被踢成失活。macOS 上以本控制器自记的
+            # 落窗状态为准：已是目标态且句柄未变就什么也不做。
+            # 但属性侧（``WA_TransparentForMouseEvents``）在 macOS 同样可读
+            # （纯 Qt 内存读），外部改写属性仍然走读回收敛——自记状态只替
+            # 读不回的标志侧背书，不替读得回的属性侧背书。
+            if _IS_MACOS and not recreated:
+                if (self._applied_state is not None
+                        and bool(self._applied_state) == enabled
+                        and bool(win.testAttribute(_TRANSPARENT_ATTR)) == enabled):
+                    return False
             attribute_ok = bool(win.testAttribute(_TRANSPARENT_ATTR)) == enabled
             flag_ok = (handle is None
                        or bool(handle.flags() & _TRANSPARENT_FLAG) == enabled)
@@ -225,6 +245,7 @@ class QtPerPixelInputController:
                 handle.setFlag(_TRANSPARENT_FLAG, False)
             handle.setFlag(_TRANSPARENT_FLAG, enabled)
         self._applied_win_id = win_id
+        self._applied_state = enabled
         return True
 
     def resume(self) -> None:
@@ -235,6 +256,7 @@ class QtPerPixelInputController:
         「平台显示阶段又重建了原生窗口」（Major：X11 置顶标志的重建晚于 showEvent）。
         """
         self._applied_win_id = None
+        self._applied_state = None
         self.refresh()
         self._timer.start()
         QTimer.singleShot(self.RECONCILE_DELAY_MS, self._window,
@@ -282,6 +304,7 @@ class QtPerPixelInputController:
         """
         self._timer.stop()
         self._applied_win_id = None
+        self._applied_state = None
         if not bool(getattr(self._window, "mouse_through", False)):
             try:
                 self._apply_through(False)

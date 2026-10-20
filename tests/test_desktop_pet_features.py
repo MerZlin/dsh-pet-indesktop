@@ -2330,7 +2330,7 @@ def test_representative_animation_image_is_cached_on_pet(monkeypatch):
         path = "/tmp/cached-animation.webm"
 
     class Library:
-        def movie(self, _name):
+        def movie(self, _name, **_kw):
             return Clip()
 
         def clip_path(self, _name):

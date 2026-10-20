@@ -89,7 +89,7 @@ class FakeLibrary:
         self.no_mirror: set[str] = set()
         self.character_id = character_id
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clip
 
 
@@ -223,7 +223,7 @@ def test_fully_opaque_frame_maps_whole_logical_rect(dpr):
 
 def test_logical_coordinates_unchanged_by_dpr(monkeypatch):
     """v1.2 裁决：每屏逻辑坐标——DPR 1 与 2 的 pos/rect/body_rect/钳制/位移逐位一致。"""
-    monkeypatch.setattr(catalog, "character_body_box", lambda _cid: (100, 60, 400, 330))
+    monkeypatch.setattr(catalog, "character_body_box", lambda _cid, *a, **k: (100, 60, 400, 330))
 
     def _sprites():
         bounds = QRect(0, 0, 800, 600)

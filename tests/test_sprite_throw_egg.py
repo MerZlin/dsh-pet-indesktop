@@ -136,7 +136,7 @@ class FakeLibrary:
         self.character_id = "fake_char"
         self._clip = FakeClip()
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clip
 
 

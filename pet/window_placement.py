@@ -39,6 +39,27 @@ def clamp_span(value: int, lo: int, hi: int, span: int) -> int:
     return min(max(value, lo), upper)
 
 
+def _host_geometry_root(host):
+    """宿主当前在播的素材根（P1b：几何跟播不跟指针）。
+
+    优先旧窗口模式的 ``host.lib``（``pet/window.py`` 的 PetWindow 在播库），
+    其次 overlay 宿主的任一 sprite 的库；都没有时返回 None，调用方退回发现链。
+    """
+    lib = getattr(host, "lib", None)
+    root = getattr(lib, "geometry_root", None)
+    if root is not None:
+        return root
+    try:
+        for sprite in getattr(host, "sprites", ()):
+            lib = getattr(sprite, "library", None)
+            root = getattr(lib, "geometry_root", None)
+            if root is not None:
+                return root
+    except Exception:      # noqa: BLE001 - 宿主形态多变，判不出就回退
+        pass
+    return None
+
+
 def stable_body_local_rect(host) -> QRect:
     """稳定身体框（窗口局部坐标，绘制偏移为零时）。
 
@@ -47,7 +68,8 @@ def stable_body_local_rect(host) -> QRect:
     化）；未声明的角色包回退为整个窗口——语义等同"窗口即身体"，贴边补偿
     自动退化为纯窗口钳位（与改造前行为一致）。
     """
-    box = catalog.character_body_box(str(host.cfg.get('character', '') or ''))
+    box = catalog.character_body_box(
+        str(host.cfg.get('character', '') or ''), _host_geometry_root(host))
     if box is None:
         return QRect(0, 0, host._w, host._h)
     x1, y1, x2, y2 = box

@@ -49,7 +49,7 @@ def test_latest_release_parses_github_api(monkeypatch):
         }).encode()
         return io.BytesIO(body)
 
-    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_ok)
+    monkeypatch.setattr(updater, "trusted_urlopen", fake_ok)
     release = updater.latest_release()
     assert release["version"] == "3.0.1"  # v 前缀被剥离
     assert release["notes"] == "release notes"
@@ -77,7 +77,7 @@ def test_latest_release_falls_back_to_update_json(monkeypatch):
         }).encode()
         return io.BytesIO(body)
 
-    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(updater, "trusted_urlopen", fake_urlopen)
     release = updater.latest_release()
     assert release is not None
     assert release["version"] == "3.0.1"
@@ -93,7 +93,7 @@ def test_latest_release_all_sources_fail(monkeypatch):
     def fake_fail(*args, **kwargs):
         raise urllib.error.URLError("boom")
 
-    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_fail)
+    monkeypatch.setattr(updater, "trusted_urlopen", fake_fail)
     assert updater.latest_release() is None
 
 
@@ -157,7 +157,7 @@ def test_structured_manifest_keeps_mirrors_and_integrity_fields(monkeypatch):
         }).encode()
         return io.BytesIO(body)
 
-    monkeypatch.setattr(updater.urllib.request, "urlopen", fake_ok)
+    monkeypatch.setattr(updater, "trusted_urlopen", fake_ok)
     release = updater.latest_release()
     detail = release["asset_details"]["dsh-pet-standalone-webm-chat-setup.exe"]
     assert detail["urls"][1].startswith("https://cdn.jsdelivr.net")
@@ -186,8 +186,8 @@ def test_download_asset_verifies_size_and_sha256(tmp_path, monkeypatch):
             return chunk
 
     monkeypatch.setattr(
-        updater.urllib.request,
-        "urlopen",
+        updater,
+        "trusted_urlopen",
         lambda *args, **kwargs: Response(),
     )
     path = updater.download_asset(

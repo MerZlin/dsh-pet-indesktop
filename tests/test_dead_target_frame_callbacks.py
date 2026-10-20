@@ -37,7 +37,7 @@ class _Library:
 
     no_mirror: frozenset[str] = frozenset()
 
-    def movie(self, _name):
+    def movie(self, _name, **_kw):
         return None
 
 

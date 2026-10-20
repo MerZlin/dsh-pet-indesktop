@@ -383,6 +383,17 @@ def test_cross_screen_drag_keeps_release_velocity_sane(tmp_path, monkeypatch):
     try:
         main = shell.sprite
         overlay = shell.overlay
+        # 松手初速估算的 Δt 来自 time.monotonic（pet_sprite._clock 的注释就写明
+        # 「测试替换为假钟即可确定性构造轨迹」）：负载机器上事件间隔被拉长，
+        # 同一个 40px/步手势会被估成暴速（本机与 CI 都实测抖出 >3000）。
+        # 假钟每读一次走 1/60s → 速度 = 40px/(1/60s) = 2400px/s，确定且符合意图。
+        _t = [1000.0]
+
+        def _fake_clock() -> float:
+            _t[0] += 1 / 60.0
+            return _t[0]
+
+        monkeypatch.setattr(main, "_clock", _fake_clock)
         origin = QPointF(overlay.geometry().topLeft())
         _hittable(main)
         hit = QPointF(main.rect().center())

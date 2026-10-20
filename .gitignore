@@ -84,3 +84,6 @@ android/**/build/
 *.keystore
 *.jks
 dist-android/
+
+# 素材包构建产物（发布门输出，发布到 Release 后即可删）
+dist-packs/

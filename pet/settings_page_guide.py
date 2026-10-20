@@ -191,6 +191,9 @@ def current_page_height(scroll: QScrollArea, tabs: SettingsTabContainer | None =
 #: ``tests/test_settings_copy_lint.py``）。新增组必须在这里补一行，
 #: ``tests/test_settings_page_guide.py`` 的覆盖率守卫会盯住。
 SECTION_GUIDE: dict[str, str] = {
+    # 角色包不是「设置项」而是素材清单 + 下载动作，文案按用户视角写（不含实现术语）。
+    "已安装的角色包": "当前已经装好的角色素材，以及它们占用的空间。",
+    "可下载": "可以下载到本机的动画分件；装好后对应的动画就能播放。",
     "作者账号": "BiliBili、抖音与 GitHub。",
     # 常规
     "应用启动": "开机后要不要自动把桌宠叫起来。",

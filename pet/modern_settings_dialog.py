@@ -1886,6 +1886,11 @@ class ModernSettingsDialog(QDialog):
                 ]
             ),
         )
+        # 「角色与素材」：角色包清单与分件下载（内容本体在 pet/character_packs_page.py，
+        # 本文件有硬行数预算，只许接线）。放最后一张标签页：进「桌宠」域默认仍是
+        # 「显示与音乐」，不把素材清单顶到最前面。
+        from .character_packs_page import build_content as _build_packs_content
+        pet.addTab("character_packs", "角色与素材", _build_packs_content(self))
         # 「互动」域（2026-09-22 分页）：整页在本模块构建（settings_interaction，
         # 行数预算原因），页内用任务标签分成「点击与音效 / 自言自语」两个同级任务；
         # 行不进 all_rows 快照，因此不需要 claim，也不会掉进「待分类（开发期）」。

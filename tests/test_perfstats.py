@@ -242,7 +242,7 @@ class _CacheLibrary:
         self._clips = dict(clips)
         self.no_mirror = set()
 
-    def movie(self, name):
+    def movie(self, name, **_kw):
         return self._clips[name]
 
     def clip_path(self, name):

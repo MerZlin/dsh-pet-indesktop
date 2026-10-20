@@ -11,6 +11,7 @@ assets/thumb/*.webm（640×360 透明 webm，VP9 alpha）。
 """
 
 import functools
+import logging
 import os
 import sys
 
@@ -185,6 +186,18 @@ def _data_character_dirs(app_dir_name: str) -> list[Path]:
     return [data_root / 'characters']
 
 
+def user_characters_dir() -> Path:
+    """用户数据目录下的角色根——**安装/下载的唯一写入位置**。
+
+    发现链（``external_character_dirs``）同时认 exe 旁/cwd 的 ``characters/``
+    与用户数据目录；但写入只许落这里：exe 同目录可能受保护（装不上）、
+    cwd 随启动方式漂移（装上但换个启动方式就找不到——终审点名）。
+    """
+    from . import config as _config  # 延迟导入防环：config 顶层 import catalog
+    app_dir_name = getattr(_config, 'APP_DIR_NAME', 'dsh-pet-standalone')
+    return _data_character_dirs(app_dir_name)[0]
+
+
 def external_character_dirs() -> list[Path]:
     """外部可扩展形象根目录（不存在时返回空列表，不报错）。
 
@@ -212,8 +225,151 @@ def external_character_dirs() -> list[Path]:
     return dirs
 
 
+def _pack_version_key(folder: Path) -> tuple:
+    """角色包版本目录的排序键：``<version>-<variant>-<WxH>`` 里的 version。
+
+    键必须**类型统一**：``1.0`` 与 ``1.0.0`` 长度不同，若混入 str 做兜底会在
+    比较时抛 ``TypeError``（终审点名）。所以统一补零到 4 段纯整数，最后再用
+    目录名做同版本内的稳定排序。
+    """
+    head = folder.name.split('-', 1)[0]
+    nums: list[int] = []
+    for piece in head.split('.'):
+        try:
+            nums.append(int(piece))
+        except ValueError:
+            nums.append(0)
+    while len(nums) < 4:
+        nums.append(0)
+    return (tuple(nums[:4]), folder.name)
+
+
+def character_pack_dirs(character_id: str) -> list[Path]:
+    """外部根目录下的角色包版本目录（``<id>/<version>-<variant>-<WxH>/character.json``）。
+
+    按版本从高到低返回。这是「分包下载」的落地布局；老布局 ``<id>/videos`` 另算。
+    """
+    found: list[Path] = []
+    for root in external_character_dirs():
+        base = root / character_id
+        if not base.is_dir():
+            continue
+        try:
+            entries = [d for d in base.iterdir() if d.is_dir()]
+        except OSError:
+            continue
+        for d in entries:
+            if (d / 'character.json').is_file():
+                found.append(d)
+    found.sort(key=_pack_version_key, reverse=True)
+    # 只留 **core 闭环** 的版本（终审 B11）：只装了 extra 的版本目录也有索引，
+    # 它会因为"版本更高"顶掉原本完整的包，用户丢掉 core 的交互闭包且看不出原因。
+    from . import character_pack as _cp
+    usable: list[Path] = []
+    for d in found:
+        try:
+            index = _cp.load_index(d)
+        except _cp.IndexError_:
+            index = None
+        if index is None:
+            continue
+        gaps = _cp.core_gaps(d, index)
+        if gaps:
+            logging.getLogger(__name__).warning(
+                '角色包 %s 的 core 不完整（缺 %d 段），不参与发现链：%s',
+                d.name, len(gaps), ', '.join(gaps[:3]))
+            continue
+        usable.append(d)
+    return usable
+
+
+def character_pack_pending_dirs(character_id: str) -> list[Path]:
+    """**有安装事务日志**的版本目录（不管有没有 ``character.json``）。
+
+    两类都要在发现链之前收口（终审第六轮）：
+
+    1. 首次装包崩在"帧已落地、索引未合并"——目录里没有索引，常规发现链看不见它；
+    2. **已有索引**的包在更新中崩掉——core 目录被改名 ``.__old__`` 后 core 暂时
+       缺失，发现链按"core 不闭环"把它排除，而缺索引才收口的旧判据又漏掉它，
+       那次事务就永远没人修（启动恢复触发不到）。
+    """
+    from .pack_download import JOURNAL_NAME      # 延迟导入：本模块被 pack_download 反过来依赖
+
+    found: list[Path] = []
+    for root in external_character_dirs():
+        base = root / character_id
+        if not base.is_dir():
+            continue
+        try:
+            entries = [d for d in base.iterdir() if d.is_dir()]
+        except OSError:
+            continue
+        # 版本目录既可能是 ``<id>/<version>/`` 的子目录，也可能就是 ``<id>/`` 本身
+        # （旧布局/测试布局），两种都要认
+        for d in [base] + entries:
+            if (d / JOURNAL_NAME).is_file():
+                found.append(d)
+    found.sort(key=_pack_version_key, reverse=True)
+    return found
+
+
+#: 活动包指针（每角色一份）：`{"use": "<版本目录名>", "release_id": "..."}`。
+#: **激活不由版本号决定**：装了什么不等于用哪个（见 docs/PACK-MARKET 设计）。
+ACTIVE_NAME = "active.json"
+
+
+def character_pack_active(character_id: str) -> Path | None:
+    """读活动包指针，返回**通过复核**的版本目录；没有/不可用 → None。
+
+    为什么要它：原来 `resolve_character_video_dir` 直接取"最高版本目录"，等于
+    安装即激活 —— 装个 720p 或冬装就会顶掉当前在用的那套（评审与作者协议都指出
+    这是错的）。现在只有指针明确指向、且该目录仍通过 core 闭包复核的版本才算活动；
+    指针坏了/目标没了就返回 None，由调用方回退，绝不"按版本号猜一个"。
+    """
+    for root in external_character_dirs():
+        base = root / character_id
+        pointer = base / ACTIVE_NAME
+        if not pointer.is_file():
+            continue
+        try:
+            import json as _json
+            doc = _json.loads(pointer.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logging.getLogger(__name__).warning('活动包指针不可读: %s', pointer)
+            continue
+        use = doc.get('use') if isinstance(doc, dict) else None
+        if (not isinstance(use, str) or not use or use in ('.', '..')
+                or any(ch in use for ch in ('/', chr(92)))):
+            logging.getLogger(__name__).warning('活动包指针内容非法: %r', use)
+            continue
+        target = base / use
+        if not (target / 'character.json').is_file():
+            logging.getLogger(__name__).warning('活动包指向的目录不存在或没有索引: %s', target)
+            continue
+        try:
+            from . import character_pack as _cp
+            index = _cp.load_index(target)
+        except Exception:      # noqa: BLE001 - 解析不了就当不可用
+            index = None
+        if index is None or _cp.core_gaps(target, index):
+            logging.getLogger(__name__).warning('活动包不通过 core 闭包复核: %s', target)
+            continue
+        return target
+    return None
+
+
 def resolve_character_video_dir(character_id: str) -> Path:
-    """按 外部 > 内置(webm) > 内置(gif) 返回形象视频目录；都不存在时回退 webm 路径，不报错。"""
+    """按 活动包指针 > 外部 videos > 内置(webm) > 内置(gif) 返回素材目录。
+
+    角色包目录（含 ``character.json``）直接作为 ``asset_dir`` 交给
+    ``MovieLibrary``：它内部走"无源视频"分支，不再要求 ``<id>/videos`` 布局。
+    都不存在时回退内置 webm 路径，不报错。
+
+    **不再按版本号自动选包**：装了什么不等于是哪个在用（见 `character_pack_active`）。
+    """
+    active = character_pack_active(character_id)
+    if active is not None:
+        return active
     for root in external_character_dirs():
         candidate = root / character_id / 'videos'
         if candidate.is_dir():
@@ -243,9 +399,14 @@ def list_available_characters() -> list[str]:
             continue
         for child in entries:
             video_dir = child / 'videos'
-            if child.is_dir() and video_dir.is_dir() and (
+            legacy_ok = child.is_dir() and video_dir.is_dir() and (
                 any(video_dir.rglob('*.webm')) or any(video_dir.rglob('*.gif'))
-            ):
+            )
+            # 角色包布局：``<id>/<version>-<variant>-<WxH>/character.json``
+            # 不认它的话，装好的新角色不会出现在角色选择列表里（终审点名）。
+            pack_ok = child.is_dir() and any(
+                (d / 'character.json').is_file() for d in child.iterdir() if d.is_dir())
+            if legacy_ok or pack_ok:
                 cid = child.name
                 if cid not in seen:
                     seen.add(cid)
@@ -291,58 +452,139 @@ def character_display_name(character_id: str) -> str:
     return character_id
 
 
-@functools.lru_cache(maxsize=None)
-def character_body_box(character_id: str) -> tuple[int, int, int, int] | None:
-    """角色稳定身体框 (x1, y1, x2, y2)：源像素、640×360 画布坐标、已镜像对称化。
+#: _pack_canvas 的根级缓存（发行目录不可变 = 路径即内容身份；热路径不许
+#: 每次 load_index 解析全部 clips——P2）。
+_PACK_CANVAS_CACHE: dict[str, tuple[int, int]] = {}
 
-    桌宠定位基准（贴边/碰撞边界/漫游空间都用它），必须取稳定量而非当前帧：
-    待机帧可见框几乎不抖，而特效动画逐帧可摆上百像素。来源是角色
-    manifest.json 的 body_box 字段；未声明（或非法）的角色包返回 None，
-    调用方回退为"窗口即身体"（保持改造前行为）。结果带缓存：该函数在
-    ~120Hz 的拖拽/物理热路径上被调用，不能每次都读文件。
+
+def _pack_canvas(root: Path) -> tuple[int, int]:
+    """包画布：有 ``character.json`` 取索引的 canvas；无索引（传统素材树）= 逻辑画布。"""
+    key = str(root)
+    cached = _PACK_CANVAS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from . import character_pack as _cp
+        index = _cp.load_index(root)
+    except Exception:      # noqa: BLE001 - 索引读不了按传统树处理
+        index = None
+    canvas = ((int(index.canvas[0]), int(index.canvas[1])) if index is not None
+              else (CANVAS_W, CANVAS_H))
+    _PACK_CANVAS_CACHE[key] = canvas
+    return canvas
+
+
+@functools.lru_cache(maxsize=None)
+def _body_box_scaled(root_str: str, canvas: tuple[int, int]):
+    """读 ``<root>/manifest.json`` 的 body_box（**包像素**），换算成逻辑 640×360 坐标。
+
+    720p 包的 body_box 是 1280×720 坐标：校验按**包画布**做（按 640 校验会把
+    合法高清框判非法——终审点名的 720p 雷），再按画布比换算到逻辑坐标
+    （宠物显示尺寸不随素材分辨率变，见 PR-REPORT §4）。
+    缓存键 = (素材根, 包画布)：发行目录不可变（DESIGN-v2），路径即内容身份。
     """
-    manifest = load_character_manifest(character_id)
+    manifest = load_character_manifest("", root_str)
     if not isinstance(manifest, dict):
         return None
     box = manifest.get('body_box')
     if not isinstance(box, (list, tuple)) or len(box) != 4:
         return None
+    cw, ch = canvas
     try:
-        x1, y1, x2, y2 = (int(round(float(v))) for v in box)
+        if (cw, ch) == (CANVAS_W, CANVAS_H):
+            # 传统 640：与基线逐位一致——取整在 try 内（NaN 在 round 抛错也要
+            # 被捕获回退 None，基线行为），先取整再校验
+            x1, y1, x2, y2 = (int(round(float(v))) for v in box)
+            if 0 <= x1 < x2 <= CANVAS_W and 0 <= y1 < y2 <= CANVAS_H:
+                return (x1, y1, x2, y2)
+            return None
+        x1, y1, x2, y2 = (float(v) for v in box)
     except (TypeError, ValueError):
         return None
-    if 0 <= x1 < x2 <= CANVAS_W and 0 <= y1 < y2 <= CANVAS_H:
-        return (x1, y1, x2, y2)
-    return None
+    if not (0 <= x1 < x2 <= cw and 0 <= y1 < y2 <= ch):
+        return None
+    sx, sy = CANVAS_W / cw, CANVAS_H / ch
+    out = (int(round(x1 * sx)), int(round(y1 * sy)),
+           int(round(x2 * sx)), int(round(y2 * sy)))
+    # 换算后也必须是非零面积框（高清框缩到逻辑坐标退化 = 数据有问题，回退）
+    return out if out[2] > out[0] and out[3] > out[1] else None
 
 
 @functools.lru_cache(maxsize=None)
-def character_head_box(character_id: str) -> tuple[int, int, int, int] | None:
-    """角色头部框 (x1, y1, x2, y2)：源像素、640×360 画布坐标。
-
-    边缘探头的锚点：45° 探头其实是把角色沿一条对角线推出屏幕，露出来的
-    是哪个部位完全由这条线切在哪里决定——所以要"只露头"，锚点必须是头，
-    而不是整只角色的可见轮廓（后者会让切面落到胸口，整条身子跟着探出来）。
-
-    来源：manifest.json 的 head_box 字段；未声明时按身体框上缘取 45% 高度
-    兜底（对直立角色足够接近"脖子以上"），身体框也没有则返回 None。
-    """
-    manifest = load_character_manifest(character_id)
+def _head_box_scaled(root_str: str, canvas: tuple[int, int]):
+    """head_box（包像素 → 逻辑 640×360）；未声明/非法时按身体框上缘 45% 兜底。"""
+    manifest = load_character_manifest("", root_str)
     if isinstance(manifest, dict):
         box = manifest.get('head_box')
         if isinstance(box, (list, tuple)) and len(box) == 4:
-            try:
-                x1, y1, x2, y2 = (int(round(float(v))) for v in box)
-            except (TypeError, ValueError):
-                x1 = y1 = x2 = y2 = -1
-            if 0 <= x1 < x2 <= CANVAS_W and 0 <= y1 < y2 <= CANVAS_H:
-                return (x1, y1, x2, y2)
-    body = character_body_box(character_id)
+            cw, ch = canvas
+            if (cw, ch) == (CANVAS_W, CANVAS_H):
+                # 传统 640：与基线逐位一致（取整在 try 内、先取整再校验、
+                # 非法**不落 None 而是落 body 兜底**）
+                try:
+                    x1, y1, x2, y2 = (int(round(float(v))) for v in box)
+                except (TypeError, ValueError):
+                    x1 = y1 = x2 = y2 = -1
+                if 0 <= x1 < x2 <= CANVAS_W and 0 <= y1 < y2 <= CANVAS_H:
+                    return (x1, y1, x2, y2)
+            else:
+                try:
+                    fx1, fy1, fx2, fy2 = (float(v) for v in box)
+                except (TypeError, ValueError):
+                    fx1 = fy1 = fx2 = fy2 = -1.0
+                if 0 <= fx1 < fx2 <= cw and 0 <= fy1 < fy2 <= ch:
+                    sx, sy = CANVAS_W / cw, CANVAS_H / ch
+                    out = (int(round(fx1 * sx)), int(round(fy1 * sy)),
+                           int(round(fx2 * sx)), int(round(fy2 * sy)))
+                    if out[2] > out[0] and out[3] > out[1]:
+                        return out
+    body = _body_box_scaled(root_str, canvas)
     if body is None:
         return None
     x1, y1, x2, y2 = body
     head_bottom = y1 + max(1, int(round((y2 - y1) * HEAD_FALLBACK_RATIO)))
     return (x1, y1, x2, head_bottom)
+
+
+def clear_geometry_caches() -> None:
+    """清几何缓存（开发场景原地改了 manifest/索引后想立刻生效时用）。
+
+    生产路径不需要它：几何绑定素材根（root_str, canvas）为键，发行目录
+    不可变；「使用这套」只改下次启动的指针，在播库的根不变、几何也不变。
+    """
+    _body_box_scaled.cache_clear()
+    _head_box_scaled.cache_clear()
+    _PACK_CANVAS_CACHE.clear()
+
+
+def character_body_box(character_id: str, asset_dir: Path | str | None = None) -> tuple[int, int, int, int] | None:
+    """角色稳定身体框 (x1, y1, x2, y2)：**逻辑 640×360 坐标**、已镜像对称化。
+
+    桌宠定位基准（贴边/碰撞边界/漫游空间都用它），必须取稳定量而非当前帧。
+    来源是角色 manifest.json 的 body_box 字段（**包像素**；高清包按画布比换算
+    到逻辑坐标——1280×720 素材的框不再被 640 校验判非法，终审点名的 720p 雷）。
+    未声明（或非法）的角色包返回 None，调用方回退为"窗口即身体"。
+
+    **热路径调用方必须传 ``asset_dir``**（取正在播放的库的 ``geometry_root``）：
+    几何跟着在播素材根走，而不是磁盘上的下一次启动选择（终审 P1）。
+    不传时按发现链现解析（慢，只许窗口构建/落位这类冷路径用）。
+    """
+    root = Path(asset_dir) if asset_dir is not None else resolve_character_video_dir(character_id)
+    return _body_box_scaled(str(root), _pack_canvas(root))
+
+
+def character_head_box(character_id: str, asset_dir: Path | str | None = None) -> tuple[int, int, int, int] | None:
+    """角色头部框 (x1, y1, x2, y2)：**逻辑 640×360 坐标**。
+
+    边缘探头的锚点：45° 探头其实是把角色沿一条对角线推出屏幕，露出来的
+    是哪个部位完全由这条线切在哪里决定——所以要"只露头"，锚点必须是头，
+    而不是整只角色的可见轮廓（后者会让切面落到胸口，整条身子跟着探出来）。
+
+    来源：manifest.json 的 head_box 字段（**包像素**，换算口径同身体框）；
+    未声明时按身体框上缘取 45% 高度兜底，身体框也没有则返回 None。
+    """
+    root = Path(asset_dir) if asset_dir is not None else resolve_character_video_dir(character_id)
+    return _head_box_scaled(str(root), _pack_canvas(root))
 
 
 def _manifest_name(value, names: set[str]) -> str | None:

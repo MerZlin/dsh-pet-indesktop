@@ -46,9 +46,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # frameseq_provision.py:273 —— 统一编码档（全部 clip：Q70 + 白底反解 v5）。
 # encoder 串是运行时采纳条件的一部分，不符 ⇒ 那份产物不被采纳（回退 WebM）。
-ENCODER_DESC = "libwebp lossy q70 (bgra straight, unblend-white-v5)"
+ENCODER_DESC = "libwebp lossless (bgra straight, unblend-white-v6)"
 # frameseq_provision.py:276 —— meta 里的反解标记（与 ENCODER_DESC 同写同弃）。
-UNBLEND_MARK = "white-v5"
+UNBLEND_MARK = "white-v6"
 # frameseq_provision.py:240 / :241 —— 世代目录名 = <stem><GEN_INFIX><sha 前 N 位>。
 GEN_INFIX = ".g"
 GEN_STAMP_HEX = 12

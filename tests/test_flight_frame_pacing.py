@@ -97,7 +97,7 @@ class _StubLibrary:
         self.no_mirror: set = set()
         self.character_id = ""
 
-    def movie(self, _name):
+    def movie(self, _name, **_kw):
         return self._clip
 
 
