@@ -108,7 +108,7 @@ def test_search_index_excludes_unmounted_rows(tmp_path, monkeypatch):
     app, dlg = _build_dialog(tmp_path, monkeypatch)
     try:
         names = {row.objectName() for row in dlg._search_rows}
-        assert "settingRow_island_enabled" not in names
+        assert "settingRow_dynamic_island_enabled" not in names  # k3 终审 F1：曾误写 settingRow_island_enabled（恒真断言）
         assert "settingRow_scale" in names  # 核心行照常在索引里
     finally:
         dlg.close()

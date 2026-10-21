@@ -1811,7 +1811,12 @@ class ModernSettingsDialog(QDialog):
         # 持有全部行防 GC：claimed 但未挂载的行一旦丢掉最后的 Python 引用，
         # wrapper 被回收会连坐销毁 C++ 控件（纯核心/停用模块场景实测
         # pro_dwell_spin 在 exec 后死亡）——保存链（settings_default_marks）、
-        # 搜索索引、模块行写回都会撞上死控件（astra P1-1 的真正根因）。
+        # 搜索索引、模块行写回都会撞上死控件（astra P1-1 根因之一）。
+        # BACKLOG（k3 终审 F2）：Python 引用挡不住**旧页 deleteLater 的 C++ 侧
+        # 连坐**——claimed-unmounted 行若已挂进旧页，旧页销毁时它照样死。
+        # 当前 `_rebuild_domain_navigation` 只有 __init__ 一个调用方，无生产
+        # 触发路径；未来若给「外部改配置」接运行时 rebuild，必须先把
+        # claimed-unmounted 行 reparent 到隐藏保留容器，否则再激活→保存即崩。
         self._retained_rows = all_rows
 
         def claim(*setting_ids: str) -> list[SettingRow]:

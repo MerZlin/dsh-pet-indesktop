@@ -178,7 +178,10 @@ def schedule_extraction(
             if count % n != 0:
                 return False
             if now - _last_run.get(key, -1e18) < EXTRACT_INTERVAL_SECONDS:
-                return False  # 限频未过：缓冲留住，下次到点一起提
+                # 限频未过：本轮留在缓冲里等下一闸窗——但 del buf[:-n] 的裁剪
+                # 仍在执行，闸窗内聊得比 N 轮多时更早轮次会被挤掉（成本取舍，
+                # 不是「全部留住一起提」；k3 终审 F3）
+                return False
             _last_run[key] = now
             turns = list(buf)
             buf.clear()
@@ -205,7 +208,7 @@ def _run_safely(path: Path, turns: list[tuple[str, str]], provider, provider_con
 
 def _dialogue_transcript(turns: list[tuple[str, str]]) -> str:
     """把最近 N 轮拼成一份近期对话：每轮用户/助手各自截断，整体再按总预算
-    左截（留最新）。空轮跳过。"""
+    左截（留最新）。空轮在入缓冲前已被调度侧过滤，这里不重复检查。"""
     parts = []
     for index, (user, reply) in enumerate(turns, 1):
         user, reply = user[-_DIALOGUE_PART_CHARS:], reply[-_DIALOGUE_PART_CHARS:]
