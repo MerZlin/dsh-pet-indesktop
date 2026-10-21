@@ -191,3 +191,35 @@ def test_balance_bubble_lines_fit_at_text_scales(style, scale):
     finally:
         host.bubble.dismiss()
         host.close()
+
+
+def test_elide_joined_tail_never_drops_tail_silently():
+    """截断必须带省略号信号：整段放得下但加省略号超宽的分支，不许无声丢掉
+    后续正文（PR #329 审查 F1——修复前该分支 return token，赠送金额整条消失）。"""
+    from PySide6.QtGui import QFont, QFontMetrics
+
+    from pet.balance import format_balance_display
+    from pet.speech_bubble_text import _elide_joined_tail
+
+    metrics = QFontMetrics(QFont("Microsoft YaHei UI", 13))
+    text = format_balance_display("余额 ¥12.34（充值 ¥10.00 / 赠送 ¥2.34）")
+    # 逐档收窄宽度扫一遍：任何截断结果都必须带 …（或根本放不下的极小宽度除外）
+    full_advance = metrics.horizontalAdvance("余")
+    for ratio in (0.95, 0.8, 0.6, 0.45, 0.3):
+        width = int(metrics.horizontalAdvance(text) * ratio)
+        if width < full_advance * 2:
+            continue
+        out = _elide_joined_tail(metrics, text, width)
+        assert out == text or out.endswith("…"), f"ratio={ratio}: {out!r}"
+
+
+def test_canvas_width_budget_ignores_word_joiners():
+    """吐气水泡画布宽度档按可见字符数（去标记）——U+2060 连接符不可见，
+    数进长度气泡会无端变宽（PR #329 审查 F2）。"""
+    from pet.balance import format_balance_display
+    from pet.speech_bubble_text import _budget_length, normalize_bubble_text
+
+    plain = "余额 ¥12.34（充值 ¥10.00 / 赠送 ¥2.34）"
+    marked = format_balance_display(plain)
+    assert "⁠" in marked  # 确实有连接符
+    assert _budget_length(normalize_bubble_text(marked)) == len(normalize_bubble_text(plain))

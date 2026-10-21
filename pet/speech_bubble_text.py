@@ -385,8 +385,10 @@ def _elide_joined_tail(metrics: QFontMetrics, text: str, width: int) -> str:
                 current += token
                 continue
             if not current and _measured_advance(metrics, token) <= width:
-                # 整段自己放得下，加上省略号才超宽：留下整段，不从中间切开。
-                return token
+                # 整段自己放得下、加上省略号才超宽：宁可段内截断也要保住
+                # 「这里还有内容」的信号——直接返回 token 会把后续正文无声
+                # 丢掉且没有省略号（PR #329 审查 F1）
+                return metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
             break
         if _measured_advance(metrics, current + token) > budget:
             if not current:
