@@ -329,6 +329,47 @@ def test_balance_worker_start_failure_never_leaves_busy(monkeypatch, tmp_path):
     app.processEvents()
 
 
+def test_format_balance_display_joins_amounts_without_changing_visible_text():
+    """显示态把「余额/充值/赠送 + 金额」焊成一段；明文、空格和再次调用都不变。"""
+    raw = balance.format_balance(
+        {"total": "12.34", "granted": "2.34", "topped_up": "10.00"},
+    )
+    assert "\u2060" not in raw
+    shown = balance.format_balance_display(raw)
+    assert shown.replace("\u2060", "") == raw
+    assert "\u00a0" not in shown
+    assert balance.format_balance_display(shown) == shown
+    for phrase in ("余额 ¥12.34", "充值 ¥10.00", "赠送 ¥2.34"):
+        assert "\u2060".join(phrase) in shown
+    # 人设前缀里的「余额」不是金额短语，不能跟着被焊上。
+    wrapped = balance.format_balance_display(f"当前余额：{raw}")
+    assert wrapped.replace("\u2060", "") == f"当前余额：{raw}"
+    assert "\u2060" not in wrapped.split("：", 1)[0]
+
+
+def test_format_balance_display_amounts_and_unmatched_text():
+    cases = (
+        "余额 ¥0",
+        "余额 ¥0.00",
+        "余额 ¥-0",
+        "余额 ¥-0.00",
+        "赠送 ¥-2.50",
+        "充值 -¥3",
+        "余额 ¥1234567890123.99",
+        "余额¥5.99",
+        "余额：¥5.99",
+        "充值: ¥10.5",
+        "余额  ¥8",
+    )
+    for raw in cases:
+        shown = balance.format_balance_display(raw)
+        assert shown.replace("\u2060", "") == raw, raw
+        assert shown != raw
+        assert balance.format_balance_display(shown) == shown
+    for raw in ("", "余额信息为空", "赠送一份礼物", "余额情况很好", "今天天气不错", "让我看看余额…"):
+        assert balance.format_balance_display(raw) == raw
+
+
 def test_menu_balance_action_calls_bound_window_callback():
     from PySide6.QtWidgets import QApplication, QMenu
     from pet.context_menus.shared import add_balance
