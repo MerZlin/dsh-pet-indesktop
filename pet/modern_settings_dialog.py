@@ -2105,6 +2105,10 @@ class ModernSettingsDialog(QDialog):
         # 默认折叠：6 行提示音效不该首屏铺开；消费统计是独立一级分组，留在框外。
         agent_box.set_expanded(False)
         self.agent_link_box = agent_box
+        if not _fa.is_active("agent_link"):
+            # 不进布局的顶层子控件会浮在对话框 (0,0)（用户实测「左上角莫名
+            # Agent 按钮」）——未挂载时必须显式隐藏
+            agent_box.setVisible(False)
         # 这些行已被上面的折叠框认领，必须登记，否则会再落进「待分类」。
         claimed.update(agent_cost_rows)
         claimed.update(claim_prefix("agent_sound_"))
@@ -2207,6 +2211,13 @@ class ModernSettingsDialog(QDialog):
             row for row in self.findChildren(SettingRow) + self.findChildren(AuthorRow)
             if any(page.isAncestorOf(row) for page in live_pages)
         ]
+        # 未挂载的散落控件全部隐藏：模块停用时没进任何域页布局的控件会以
+        # (0,0) 浮窗形式出现在对话框左上角（用户实测「左上角莫名 Agent 按钮」
+        # 与若干悬浮开关）。行对象保留（_retained_rows），只是不可见。
+        for w in self.findChildren(QWidget):
+            if w.parentWidget() is self and not any(
+                    page.isAncestorOf(w) for page in live_pages):
+                w.setVisible(False)
         # 域页全部装好之后再装「按区直找」：页头跳转条 + 每个分区的组描述。
         settings_page_guide.install(self)
 
