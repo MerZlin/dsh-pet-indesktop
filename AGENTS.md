@@ -106,7 +106,7 @@ instance launcher, child-pet taskkill cleanup, runtime-marker live consumers) wa
 deleted in Phase 4.4b; `tests/test_architecture.py` guards that the retired modules
 stay gone and are never imported again. Collision math is pure (`pet/collision.py`
 + `pet/sprite_collision.py`); the island's stadium clamp lives in
-`sprite_collision.capsule_circles` via `pet/island_bridge.py`.
+`sprite_collision.capsule_circles` via `pet/island/bridge.py`.
 
 `pet/multi_window_shared.py` is always on, but its members are now conditional:
 the agent_link manager and proactive watcher exist only while their feature
@@ -115,7 +115,7 @@ every window or sprite (under the overlay topology it is not started — the
 overlay shell owns its own `FullscreenCursorWatcher`). The DSH bridge directory
 has exactly one reader: `DshMonitor` (one `DirGlobTailer` + one polling thread;
 parsed records feed both the signal dispatch and the pure 8-state converger in
-`pet/dsh_state.py`, with the DSH port probe folded into the same thread),
+`pet/agent_link/dsh_state.py`, with the DSH port probe folded into the same thread),
 started by `AgentLinkManager.apply_config` only while `agent_link.dsh` is
 enabled.
 
@@ -256,7 +256,7 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   all agree — a mismatch means the material is re-generated, never the constant.
 - Read `docs/ONEDIR_PACKAGING.md` §「随包分发的第三方二进制」and
   `docs/PR-REPORT-GAME-FPS-2026-10-11.md` when touching the game-FPS chain
-  (`pet/game_fps.py`, `pet/fps_monitor.py`, `pet/island_fps.py`), the bundled
+  (`pet/island/game_fps.py`, `pet/island/fps_monitor.py`, `pet/island/fps.py`), the bundled
   PresentMon backend under `resources/presentmon/` (Windows-only, x64-only,
   digests gated by `scripts/verify_presentmon.py` at build time; never installed
   as an MSI/service), or the `fps` member of `island_metrics` and the two
@@ -290,7 +290,7 @@ exact breakpoint there; see `docs/agents/handoff.md`.
   (all three sources timed out) on 2026-09-22, while jsdelivr update checks only
   work *through* the proxy. Lyric requests try direct first and fall back to the
   system proxy exactly once — only on a transport failure or HTTP 500/502/504,
-  sharing `fetch_lyrics`' single deadline budget (`pet/music_lyric.py`:
+  sharing `fetch_lyrics`' single deadline budget (`pet/music/lyric.py`:
   `_build_opener` / `_may_switch_to_proxy` / `_fallback_proxy` /
   `_attempt_timeout`; 404/429/503 and other definitive answers never switch
   routes, and neither does any response carrying `Retry-After`). The fallback
