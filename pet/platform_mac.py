@@ -2,12 +2,13 @@
 """
 macOS 原生窗口辅助 —— 从 pet/window.py 剥离（结构优化批 6-3）。
 
-纯搬移：逐行搬移不改逻辑；objc runtime 调用的 ctypes 声明（restype/argtypes）
-与搬移前逐字符一致，任何改动都可能造成 ObjC runtime 段错误。
+objc runtime 调用必须按原生签名声明 ctypes 的 restype/argtypes，
+指针截断或整数宽度错误会造成进程崩溃。
 """
 
 from __future__ import annotations
 
+import logging
 import sys
 
 from PySide6.QtCore import Qt
@@ -158,6 +159,44 @@ def _mac_set_hides_on_deactivate(view_id: int) -> bool:
         msg(ctypes.c_void_p(window), sel_set_hides, False)
         return True
     except Exception:
+        return False
+
+
+def _mac_set_window_all_spaces(view_id: int) -> bool:
+    """让合成窗加入所有 Spaces；每次显示时重放，以覆盖原生窗口重建。"""
+    if sys.platform != 'darwin':
+        return False
+    from PySide6.QtGui import QGuiApplication
+    if QGuiApplication.platformName() != 'cocoa':
+        return False  # offscreen 的 winId 不是 NSView 指针
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(
+            ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib')
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        msg = objc.objc_msgSend
+        msg.restype = ctypes.c_void_p
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        window = msg(ctypes.c_void_p(view_id), objc.sel_registerName(b'window'))
+        if not window:
+            logging.warning('macOS: 合成窗尚无 NSWindow，无法设置 Spaces 策略')
+            return False
+
+        msg.restype = ctypes.c_ulong  # NSWindowCollectionBehavior 是 NSUInteger
+        behavior = msg(ctypes.c_void_p(window),
+                       objc.sel_registerName(b'collectionBehavior'))
+        # Qt.Tool 默认 MoveToActiveSpace；它与 CanJoinAllSpaces 互斥。
+        behavior = (behavior & ~2) | 1
+        msg.restype = None
+        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+        msg(ctypes.c_void_p(window),
+            objc.sel_registerName(b'setCollectionBehavior:'), behavior)
+        return True
+    except Exception:
+        logging.warning('macOS: 设置合成窗 Spaces 策略失败', exc_info=True)
         return False
 
 

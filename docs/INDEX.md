@@ -144,7 +144,8 @@
 
 ## PR 报告存档
 
-- [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅。
+- [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅；多个 Spaces 的后续修复见下一项。
+- [macOS 多屏 Spaces 可见性（2026-10-21）](PR-REPORT-MACOS-SPACES-2026-10-21.md)：合成窗加入所有 Spaces，并在窗口重建后重放；包含原生策略读回、构建安装与用户跨屏/切换桌面验收；修改 Mac 合成窗 Spaces 策略或排查切换桌面后宠物消失时查阅。
 
 - [Firefox 媒体标识识别修复（2026-10-20）](PR-REPORT-FIREFOX-MEDIA-SESSION-2026-10-20.md)：修改浏览器媒体来源识别、排查 Firefox 开关失效前必读；补充 [SMTC 媒体类型过滤](PR-REPORT-SMTC-MEDIA-TYPE-2026-10-06.md) 中仅按进程名识别的遗漏，记录注册表身份解析、回归与本机冻结验证。
 

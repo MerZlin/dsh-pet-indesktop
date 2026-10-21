@@ -50,6 +50,7 @@ from .platform_mac import (
     _keep_macos_tool_window_visible,
     _mac_no_window_shadow_flag,
     _mac_set_hides_on_deactivate,
+    _mac_set_window_all_spaces,
 )
 from .platform_passthrough import QtPerPixelInputController
 from .sprite_menu import build_sprite_menu
@@ -253,6 +254,7 @@ class OverlayWindow(QWidget):
         # 反馈为不再生效，故两条路并存。必须在这里调用：showEvent 时 winId()
         # 才指向就绪的 NSView，构造期拿不到。非 cocoa 平台本函数是安全 no-op。
         _mac_set_hides_on_deactivate(int(self.winId()))
+        _mac_set_window_all_spaces(int(self.winId()))
         self._refresh_tick_interval()  # V-6：显示时重读刷新率（电池 DRR）
         self._feed_dpr()               # V-11：DPR 由 overlay 统一喂
         self._arm_dpr_change_watch()   # D2/P1：屏 DPR 变化 → 重喂 + 重建

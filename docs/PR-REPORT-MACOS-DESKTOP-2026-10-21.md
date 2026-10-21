@@ -4,6 +4,8 @@
 构建和安装均获用户明确授权。文档入口：[INDEX.md](INDEX.md)；打包合同：
 [ONEDIR_PACKAGING.md](ONEDIR_PACKAGING.md)。
 
+多个桌面切换的后续修复与验收见 [Spaces 可见性报告](PR-REPORT-MACOS-SPACES-2026-10-21.md)。
+
 ## 核心行为
 
 macOS 开启允许跨屏且连接多屏时，复用已有每屏一窗路径，避免跨显示器的大窗口
