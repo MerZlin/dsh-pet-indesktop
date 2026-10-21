@@ -168,7 +168,7 @@ def test_start_stop_are_idempotent():
 
 
 def test_channel_idle_is_public_and_truthful():
-    from pet.voice_chime_service import VoiceChimeService
+    from pet.voice.chime_service import VoiceChimeService
 
     assert isinstance(VoiceChimeService.channel_idle, property), (
         "朗读要靠公开的 channel_idle 判据，而不是去摸私有 _channel_idle"

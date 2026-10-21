@@ -721,7 +721,7 @@ def test_settings_process_isolation_survives_reload(tmp_path):
 
 
 def test_settings_standalone_module_does_not_import_heavy_modules():
-    """pet.settings_standalone 顶层不得 import voice_chime_service / pet.app。
+    """pet.settings_standalone 顶层不得 import voice chime service / pet.app。
 
     试听/节日服务必须留给点击时惰性 import，否则独立设置进程启动就白付
     edge-tts/QtMultimedia 的导入成本（违反"standalone 启动只许懒加载"）。
@@ -733,7 +733,7 @@ def test_settings_standalone_module_does_not_import_heavy_modules():
             continue  # 函数内惰性 import 合法（这正是本用例要守的形态）
         if not (stripped.startswith("import ") or stripped.startswith("from ")):
             continue
-        assert "voice_chime_service" not in stripped, f"settings_standalone.py:{lineno} 顶层 import 回潮"
+        assert "chime_service" not in stripped, f"settings_standalone.py:{lineno} 顶层 import 回潮"
         assert "pet.app" not in stripped, f"settings_standalone.py:{lineno} 顶层 import 回潮"
 
 

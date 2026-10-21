@@ -93,9 +93,9 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import tts, tts_secrets
-from .tts_diagnostics import missing_dependency_hint
-from .voice_chime import (
+from .. import tts, tts_secrets
+from ..tts_diagnostics import missing_dependency_hint
+from ..voice_chime import (
     build_bubble_sentence,
     build_chime_sentence,
     cache_key,
@@ -386,7 +386,7 @@ class _TTSWorker(threading.Thread):
         惰性 import：保持本模块的导入图不变（这里已在后台线程、且刚跑完网络合成，
         一次 import 的成本可以忽略）。
         """
-        from .config import atomic_replace_with_retry
+        from ..config import atomic_replace_with_retry
 
         try:
             atomic_replace_with_retry(temp_path, out_path)
@@ -1490,13 +1490,13 @@ class VoiceChimeService:
         AppShell 关闭这条通道时正是 ``stop()`` + 丢引用（见 ``_sync_chime_service``），
         两个动作合起来才是完整的生命周期收口。
         """
-        from . import quiet_mode
+        from .. import quiet_mode
 
         quiet_mode.shared_quiet_state().add_listener(self._on_quiet_state_changed)
 
     def _detach_quiet_listener(self) -> None:
         """摘掉免打扰订阅（幂等；随服务 stop 走）。"""
-        from . import quiet_mode
+        from .. import quiet_mode
 
         quiet_mode.shared_quiet_state().remove_listener(self._on_quiet_state_changed)
 
@@ -1564,7 +1564,7 @@ class VoiceChimeService:
         宿主没有窗口（无 GUI 的测试替身 / 纯逻辑调用）时返回 False：没有窗口就
         没有全屏避让，免打扰也无从谈起。
         """
-        from . import window_alerts
+        from .. import window_alerts
 
         win = getattr(self._app, "win", None)
         return win is not None and window_alerts.quiet_blocked(win)
@@ -1588,7 +1588,7 @@ class VoiceChimeService:
         """
         if not self._cfg.get("show_bubble", True):
             return
-        from . import window_alerts
+        from .. import window_alerts
         app = self._app
         win = getattr(app, "win", None)
         # 免打扰（含全屏等效）判定在**可见性判断之前**（同 festival_service）：

@@ -33,7 +33,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pet import self_talk_voice as stv
+from pet.voice import self_talk as stv
 from pet import tts
 from pet.config import Config
 from pet.voice_chime import cache_key

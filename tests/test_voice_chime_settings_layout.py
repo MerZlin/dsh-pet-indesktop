@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pet import tts  # noqa: E402
 from pet.settings_widgets import SettingRow, SettingsCard  # noqa: E402
 from pet.voice_chime import DEFAULT_BACKEND, clean_backend, default_chime_config  # noqa: E402
-from pet.voice_chime_settings import VoiceChimeSettingsPage  # noqa: E402
+from pet.voice.chime_settings import VoiceChimeSettingsPage  # noqa: E402
 from pet.voice_chime_tts_panel import (  # noqa: E402
     COLLAPSE_TEXT,
     CREDENTIAL_HINT,

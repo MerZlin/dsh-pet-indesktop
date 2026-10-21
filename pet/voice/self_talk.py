@@ -109,7 +109,7 @@ def cache_path_for(config_dir, text: str, attempt) -> Path:
     ``attempt`` 必须是解析过的那一份（provider + preflight 校正后的 values）：产物
     与文件身份同源，音色被自动回退时不至于把回退的声音挂在原音色名下。
     """
-    from .voice_chime import cache_key
+    from ..voice_chime import cache_key
 
     key = cache_key(str(text).strip(), provider_id=attempt.provider, values=attempt.values)
     return Path(config_dir) / CACHE_DIR_NAME / f"{key}.{attempt.ext}"
@@ -322,7 +322,7 @@ def _publish(target: Path, write) -> Path:
     overlay_spawn_state 同一份实现）：Windows 上目标 wav 正被播放器打开时裸
     ``os.replace`` 会直接 WinError 5——同一句的重新合成与点击播放会踩到。
     """
-    from .config import atomic_replace_with_retry
+    from ..config import atomic_replace_with_retry
 
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = _temp_path(target)
@@ -348,8 +348,8 @@ def _flavor_attempts(config) -> tuple:
     可用性**：后端此刻不可用（依赖被卸、Key 被清）时，已经合出来的音频照样能播，
     这是"断网可用"这条产品承诺的一部分；顺带省掉每次点击的钥匙串读取。
     """
-    from . import tts
-    from .voice_chime import normalize_chime_config, synth_attempts
+    from .. import tts
+    from ..voice_chime import normalize_chime_config, synth_attempts
 
     out = []
     for attempt in synth_attempts(normalize_chime_config(config)):
@@ -369,8 +369,8 @@ def _attempts(config) -> tuple:
     的音色"换成默认值——与 ``VoiceChimeService._usable_attempts`` 同一套口径，只是
     这里在后台线程，提示只能进日志（不冒泡）。
     """
-    from . import tts, tts_secrets
-    from .voice_chime import normalize_chime_config, synth_attempts
+    from .. import tts, tts_secrets
+    from ..voice_chime import normalize_chime_config, synth_attempts
 
     cfg = normalize_chime_config(config)
     secrets = {
@@ -397,7 +397,7 @@ def _attempts(config) -> tuple:
 
 def _synth_with_backends(config_dir, text: str, attempts) -> Path:
     """按尝试链逐后端合成，第一个成功的原子落盘并返回其路径。"""
-    from . import tts
+    from .. import tts
 
     errors: list[str] = []
     for attempt in attempts:

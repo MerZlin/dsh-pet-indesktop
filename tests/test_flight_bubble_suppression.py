@@ -38,7 +38,7 @@ import tests.test_sprite_menu_facade as fac
 from pet.festival.service import FestivalReminderService
 from pet.pet_sprite import INTERACTION_NORMAL, INTERACTION_THROWN
 from pet.sprite_behavior import STATE_IDLE, STATE_THROWN, BehaviorController
-from pet.voice_chime_service import VoiceChimeService
+from pet.voice.chime_service import VoiceChimeService
 
 app = QApplication.instance() or QApplication([])
 

@@ -235,7 +235,7 @@ def drop_stale_chime_quiet_listeners() -> None:
     """
     try:
         from pet import quiet_mode
-        from pet.voice_chime_service import VoiceChimeService
+        from pet.voice.chime_service import VoiceChimeService
     except Exception:
         return
     try:

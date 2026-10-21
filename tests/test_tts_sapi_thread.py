@@ -82,7 +82,7 @@ def test_sapi_synth_writes_a_wav_from_a_background_thread(tmp_path):
 def test_worker_thread_releases_com_on_exit(monkeypatch):
     """合成 worker 收尾时配对释放本线程的 COM（只在**我们自己的短命线程**里）。"""
     from pet import tts
-    from pet import voice_chime_service as vcs
+    from pet.voice import chime_service as vcs
 
     calls: list[str] = []
 

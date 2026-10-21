@@ -231,7 +231,7 @@ def _mimo_ok_payload(audio: bytes) -> bytes:
 
 def test_mimo_worker_posts_request_and_writes_audio(tmp_path, monkeypatch):
     """mimo 合成：带 Key 打 POST，把 base64 音频写进缓存文件（扩展名 wav）。"""
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     seen: list[dict] = []
 
@@ -268,7 +268,7 @@ def test_mimo_worker_posts_request_and_writes_audio(tmp_path, monkeypatch):
 
 def test_mimo_worker_without_key_reports_key_missing_without_network(tmp_path, monkeypatch):
     """没配 Key：不发请求，回调带回 MIMO_KEY_MISSING（GUI 侧据此给可操作提示）。"""
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     called: list = []
     monkeypatch.setattr("pet.http_util.urlopen", lambda *a, **k: called.append(a))
@@ -288,7 +288,7 @@ def test_mimo_worker_without_key_reports_key_missing_without_network(tmp_path, m
 
 def test_worker_falls_through_to_edge_when_mimo_fails(tmp_path, monkeypatch):
     """主后端失败：后备后端接棒，写它自己的缓存文件（mp3）并回调成功。"""
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     attempts = (_attempt("mimo"), _attempt("edge"))
     paths = (tmp_path / "a.wav", tmp_path / "b.mp3")
@@ -315,7 +315,7 @@ def test_worker_falls_through_to_edge_when_mimo_fails(tmp_path, monkeypatch):
 
 def test_worker_reports_primary_error_when_every_backend_fails(tmp_path, monkeypatch):
     """全失败：回调带走主后端错误（用户选的那个最该知道），后备错误用 | 拼接。"""
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     attempts = (_attempt("mimo"), _attempt("edge"))
     paths = (tmp_path / "a.wav", tmp_path / "b.mp3")
@@ -342,7 +342,7 @@ def test_worker_reports_primary_error_when_every_backend_fails(tmp_path, monkeyp
 
 def test_usable_attempts_drops_backends_that_cannot_run(monkeypatch):
     """可用性预判：缺库 / 缺 Key 的后端直接摘掉，链空时上层走「只有气泡」降级。"""
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     service = svc_mod.VoiceChimeService.__new__(svc_mod.VoiceChimeService)
     service._cfg = normalize_chime_config({"voice_chime_tts_backend": BACKEND_MIMO})
@@ -370,7 +370,7 @@ def test_prune_cache_counts_mimo_wav_files(tmp_path):
     """MiMo 的 wav 缓存也必须参与裁剪：只 glob mp3 会让它无上限地涨。"""
     import os
 
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     service = svc_mod.VoiceChimeService.__new__(svc_mod.VoiceChimeService)
     service._cache_dir = tmp_path
@@ -394,7 +394,7 @@ def test_prune_cache_counts_mimo_wav_files(tmp_path):
 
 def test_settings_page_round_trips_backend_keys(tmp_path):
     """5 个新键走设置页写回 → 落盘 → 重新加载：值必须活下来（白名单门禁）。"""
-    from pet.voice_chime_settings import VoiceChimeSettingsPage
+    from pet.voice.chime_settings import VoiceChimeSettingsPage
 
     _qapp()
     cfg = Config(base=tmp_path)
@@ -417,7 +417,7 @@ def test_settings_page_round_trips_backend_keys(tmp_path):
 
 def test_settings_page_keeps_api_key_out_of_config(tmp_path, monkeypatch):
     """API Key 只进钥匙串：config 里不得出现明文，输入框随即清空。"""
-    from pet.voice_chime_settings import VoiceChimeSettingsPage
+    from pet.voice.chime_settings import VoiceChimeSettingsPage
 
     _qapp()
     stored: dict[str, str] = {}
@@ -441,7 +441,7 @@ def test_settings_page_keeps_api_key_out_of_config(tmp_path, monkeypatch):
 
 def test_settings_page_empty_key_field_keeps_saved_key(tmp_path, monkeypatch):
     """留空 = 不改动已保存的 Key（每次保存设置不该把 Key 抹掉）。"""
-    from pet.voice_chime_settings import VoiceChimeSettingsPage
+    from pet.voice.chime_settings import VoiceChimeSettingsPage
 
     _qapp()
     calls: list[tuple] = []
@@ -456,7 +456,7 @@ def test_settings_page_empty_key_field_keeps_saved_key(tmp_path, monkeypatch):
 
 def test_settings_page_clear_button_removes_saved_key(tmp_path, monkeypatch):
     """「清除」按钮：立刻从钥匙串删掉，随后保存也不会把它写回来。"""
-    from pet.voice_chime_settings import VoiceChimeSettingsPage
+    from pet.voice.chime_settings import VoiceChimeSettingsPage
 
     _qapp()
     state = {"ref": tts_secrets.MIMO_API_KEY_REF}
@@ -477,7 +477,7 @@ def test_settings_page_clear_button_removes_saved_key(tmp_path, monkeypatch):
 
 def test_settings_page_swaps_edge_and_mimo_rows(tmp_path):
     """切后端时参数行跟着换：MiMo 下 edge 的音色/语速/音调隐藏，反之亦然。"""
-    from pet.voice_chime_settings import VoiceChimeSettingsPage
+    from pet.voice.chime_settings import VoiceChimeSettingsPage
 
     _qapp()
     page = VoiceChimeSettingsPage(Config(base=tmp_path))
@@ -595,7 +595,7 @@ def test_third_party_provider_plugs_into_registry_and_chain(fake_provider):
 
 def test_third_party_provider_renders_settings_rows_without_ui_edits(fake_provider, tmp_path, monkeypatch):
     """设置页不为它写一行代码：控件按 fields 生成、显隐按依赖走、读写自动接线。"""
-    from pet.voice_chime_settings import VoiceChimeSettingsPage
+    from pet.voice.chime_settings import VoiceChimeSettingsPage
 
     _qapp()
     stored: dict[str, str] = {}
@@ -630,7 +630,7 @@ def test_third_party_provider_renders_settings_rows_without_ui_edits(fake_provid
 
 def test_mimo_style_row_is_a_multiline_box(tmp_path):
     """MiMo 的「风格指令」要写整句描述：必须是多行框，且长文本能原样存回配置。"""
-    from pet.voice_chime_settings import VoiceChimeSettingsPage
+    from pet.voice.chime_settings import VoiceChimeSettingsPage
 
     _qapp()
     cfg = Config(base=tmp_path)

@@ -41,15 +41,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import tts, tts_secrets
-from .modern_settings_dialog import (
+from .. import tts, tts_secrets
+from ..modern_settings_dialog import (
     BrowserSpinBox,
     SettingRow,
     SettingsSection,
     ToggleSwitch,
 )
-from .settings_widgets import ModernSelect
-from .voice_chime import (
+from ..settings_widgets import ModernSelect
+from ..voice_chime import (
     DEFAULT_BACKEND,
     DEFAULT_SHOW_BUBBLE,
     DEFAULT_SHOW_QUOTE,
@@ -62,7 +62,7 @@ from .voice_chime import (
     clean_schedule,
     clean_volume,
 )
-from .voice_chime_tts_panel import (
+from ..voice_chime_tts_panel import (
     CREDENTIAL_HINT,
     CREDENTIAL_TITLE,
     TtsBackendPanel,

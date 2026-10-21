@@ -36,7 +36,7 @@ from pet.festival.service import FestivalReminderService
 from pet.overlay_shell import OverlayShell, _SettingsIdentity
 from pet.pet_sprite import PetSprite
 from pet.todo.reminder import TodoReminderService
-from pet.voice_chime_service import VoiceChimeService
+from pet.voice.chime_service import VoiceChimeService
 
 app = QApplication.instance() or QApplication([])
 

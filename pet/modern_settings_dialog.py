@@ -1009,7 +1009,7 @@ class ModernSettingsDialog(QDialog):
         # 语音模块未激活：整页不构造（「语音」域随之只剩节日组/整个隐藏）
         self.voice_chime_page = None
         if _fa.is_active("voice"):
-            from .voice_chime_settings import VoiceChimeSettingsPage
+            from .voice.chime_settings import VoiceChimeSettingsPage
 
             self.voice_chime_page = VoiceChimeSettingsPage(self.config, self)
             self.voice_chime_page.preview_requested.connect(self._on_voice_chime_preview)

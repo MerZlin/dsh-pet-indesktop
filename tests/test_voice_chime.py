@@ -652,7 +652,7 @@ def test_voice_options_cover_20plus_bilingual():
 
 def _make_svc(cfg: dict | None = None):
     """object.__new__ 构造服务实例，只注入预合成/气泡逻辑所需字段（零 Qt）。"""
-    from pet.voice_chime_service import VoiceChimeService
+    from pet.voice.chime_service import VoiceChimeService
 
     svc = object.__new__(VoiceChimeService)
     # 凭据读空：测试不该依赖开发者机器上真实存在的钥匙串条目（否则「没配 Key
@@ -761,7 +761,7 @@ def test_consume_precache_miss_or_missing_file_falls_back(tmp_path):
 
 
 def test_maybe_precache_respects_window_busy_and_slot(monkeypatch, tmp_path):
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     started = []
 
@@ -805,7 +805,7 @@ def test_maybe_precache_respects_window_busy_and_slot(monkeypatch, tmp_path):
 
 
 def test_maybe_precache_outside_window_does_nothing(monkeypatch, tmp_path):
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     monkeypatch.setattr("pet.tts.edge._EDGE_TTS_AVAILABLE", True)
     monkeypatch.setattr(svc_mod, "next_chime_in_seconds", lambda _now, _cfg: 120)
@@ -841,7 +841,7 @@ def test_bubble_respects_show_bubble_switch():
 
 def test_fire_cache_hit_uses_bubble_sentence(monkeypatch, tmp_path):
     """缓存命中路径：语音文本进缓存键与合成，气泡用阿拉伯数字文本。"""
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     monkeypatch.setattr("pet.tts.edge._EDGE_TTS_AVAILABLE", True)
     monkeypatch.setattr(svc_mod, "cache_key", lambda _text, *_a, **_kw: "hit")
@@ -896,7 +896,7 @@ def test_play_and_bubble_prefers_bubble_text(monkeypatch):
 
 def test_on_tick_uses_precached_bubble_text(monkeypatch, tmp_path):
     """命中预合成时，气泡复用预合成阶段算好的阿拉伯数字文本。"""
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     monkeypatch.setattr("pet.tts.edge._EDGE_TTS_AVAILABLE", True)
     monkeypatch.setattr(svc_mod, "chime_slot", lambda dt, _cfg: "2026-09-15T15:00#hourly")

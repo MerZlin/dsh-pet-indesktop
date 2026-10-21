@@ -828,7 +828,7 @@ def test_festival_reminder_on_hidden_host_is_queued_not_notified(qapp, tmp_path)
 def test_voice_chime_bubble_on_hidden_host_is_queued_not_notified(qapp, tmp_path):
     """M3：报时气泡同规（隐藏宿主 + 免打扰 → 暂存、不发通知；语音通道不受影响）。"""
     from pet.config import Config
-    from pet.voice_chime_service import VoiceChimeService
+    from pet.voice.chime_service import VoiceChimeService
 
     notified: list[tuple] = []
     win = _HiddenHost(Config(base=tmp_path), visible=False)

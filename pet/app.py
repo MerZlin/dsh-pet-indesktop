@@ -41,7 +41,7 @@ from . import catalog
 from . import click_sound
 from . import feature_activation as feature_activation_mod
 from . import overlay_instance_gate as overlay_gate_mod
-from . import self_talk_voice
+from .voice import self_talk as self_talk_voice
 from . import slot_manager as slot_manager_mod
 from . import updater
 from . import webm_clip as webm_clip_mod
@@ -57,7 +57,7 @@ from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .session_watcher import install_session_watcher
 from .decode_fanout import DecodeFanoutHub
 from .todo.reminder import TodoReminderService
-from .voice_chime_service import VoiceChimeService
+from .voice.chime_service import VoiceChimeService
 from .persona_phrases import PhrasePicker
 
 

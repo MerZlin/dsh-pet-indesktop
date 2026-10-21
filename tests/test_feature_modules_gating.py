@@ -665,11 +665,11 @@ def test_self_talk_speak_wanted_off_when_voice_inactive(tmp_path, monkeypatch):
 def test_precache_not_started_when_voice_inactive(tmp_path, monkeypatch):
     import pet.app as app_mod
     from pet.config import Config
-    from pet import self_talk_voice
+    from pet.voice import self_talk
 
-    monkeypatch.setattr(self_talk_voice, "enabled", lambda _cfg: True)
+    monkeypatch.setattr(self_talk, "enabled", lambda _cfg: True)
     started = []
-    monkeypatch.setattr(self_talk_voice, "start_precache",
+    monkeypatch.setattr(self_talk, "start_precache",
                         lambda *a, **k: started.append(1) or True)
     shell = _voice_shell(Config(tmp_path))
     _freeze_all_but("voice")

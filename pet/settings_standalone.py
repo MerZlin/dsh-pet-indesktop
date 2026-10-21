@@ -59,7 +59,7 @@ def _standalone_chime_class():
     global _STANDALONE_CHIME_CLASS
     if _STANDALONE_CHIME_CLASS is not None:
         return _STANDALONE_CHIME_CLASS
-    from .voice_chime_service import VoiceChimeService
+    from .voice.chime_service import VoiceChimeService
 
     class _StandaloneChimeService(VoiceChimeService):
         """独立设置进程音频通道：文本反馈改走进程内瞬时提示。

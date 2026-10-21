@@ -282,10 +282,10 @@ def test_synth_refreshes_live_voice_list_in_background(monkeypatch, tmp_path):
 def test_service_announces_voice_substitution_once(monkeypatch):
     """服务层把 preflight 的说明转达给用户，且同一进程内只弹一次。"""
     from pet.voice_chime import normalize_chime_config
-    from pet.voice_chime_service import VoiceChimeService
+    from pet.voice.chime_service import VoiceChimeService
 
     _install_fake_edge_tts(monkeypatch, live_voices=["zh-CN-XiaoxiaoNeural"])
-    import pet.voice_chime_service as svc_mod
+    import pet.voice.chime_service as svc_mod
 
     monkeypatch.setattr(svc_mod, "_ANNOUNCED_NOTES", set())
 
