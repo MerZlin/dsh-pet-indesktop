@@ -86,8 +86,8 @@ class ThrowPhysicsController:
         band 收窄语义（4.2.1 legacy）修好了 #319 但在**异高屏**上制造新墙：
         主屏正对副屏下方空洞的那条带永远过不去（用户实机，2026-10-22）。
         定稿语义改为「通行域 = 并集外接矩形（含空洞），静止域 = 各屏本身」：
-        穿缝任意过，落地时身体中心在空洞里则由落点吸附收进最近的屏
-        （``_snap_into_screen_if_needed``；.scratch/cross-screen-corridor/SPEC.md）。
+        穿缝任意过，落地时身体不被并集覆盖则由落点吸附收进最近的屏
+        （``_snap_into_screen_if_needed`` 鸭子类型调用 pet_sprite 同名方法）。
         单矩形域（单屏/未开跨屏）并集恒等于该矩形，行为逐位不变。
         """
         clamp_rects = getattr(sprite, "_clamp_rects", None)

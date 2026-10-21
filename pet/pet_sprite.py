@@ -1304,12 +1304,12 @@ class PetSprite(QObject):
         self._drag_trail = [s for s in self._drag_trail if s[0] >= cutoff]
 
     def _snap_into_screen_if_needed(self) -> None:
-        """落点吸附：身体中心不在任何屏内 → 收进最近的屏（位移最小的完整
-        收入点）；已在屏内或无跨屏域时 no-op。
+        """落点吸附：身体不被各屏并集完整覆盖 → 收进最近的屏（位移最小的
+        完整收入点，覆盖判定见 ``window_placement.snap_to_nearest_screen``）；
+        无跨屏域时 no-op。
 
-        用途：过缝通行语义的静止域收口（松手原地放下）。抛掷落地的同款
-        逻辑在 ``sprite_physics._snap_into_screen_if_needed``（两边各自是
-        自己路径的收口，共用 ``window_placement.snap_to_nearest_screen``）。
+        用途：过缝通行语义的静止域收口（松手原地放下）。抛掷落地/落岛落定/
+        弹弓取消的收口都经鸭子类型调用本方法（实现唯一来源，k3 盲审 A1）。
         """
         if not self._clamp_rects:
             return

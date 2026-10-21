@@ -5,9 +5,11 @@ Qt window implementation.  PetWindow retains thin compatibility methods that
 pass itself as the host, so existing callers and test patches continue to work.
 
 多显示器活动区域也在这里：``desktop_area()`` 取一次拖拽/抛掷的桌面快照
-（``DesktopArea``），``band_bounds()`` 按宠物当前所在的屏幕带收窄它，
-``move_window_towards`` / ``throw_bounds`` 在有快照时用它、没有快照时逐位退回
-本屏语义（单屏用户与漫游/落位/边缘探头不受影响）。见
+（``DesktopArea``），``band_bounds()`` 按宠物当前所在的屏幕带收窄它——
+**仅 legacy/capture 路径**（``move_window_towards`` / ``throw_bounds``）仍在用；
+overlay 路径 2026-10-22 起改用过缝通行语义（``snap_to_nearest_screen`` +
+各收口吸附，见 ``docs/PR-REPORT-CROSS-SCREEN-CORRIDOR-2026-10-22.md``）。
+没有快照时逐位退回本屏语义（单屏用户与漫游/落位/边缘探头不受影响）。见
 ``docs/PR-REPORT-ISSUE-186-TRAY-MENU-2026-09-23.md``。
 """
 
