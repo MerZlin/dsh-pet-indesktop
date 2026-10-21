@@ -34,7 +34,7 @@ print(json.dumps({"mb": (cur - baseline) / 1048576.0, "modules": new_mods}))
 
 def main() -> int:
     targets = sys.argv[1:] or [
-        'pet.window', 'pet.island.balance', 'pet.festival.service', 'pet.voice_chime',
+        'pet.window', 'pet.island.balance', 'pet.festival.service', 'pet.voice.chime_service',
         'pet.context_menus.shared', 'pet.autostart', 'pet.webm_clip', 'pet.agent_link',
         'pet.island.dynamic_island', 'pet.chat',
     ]
