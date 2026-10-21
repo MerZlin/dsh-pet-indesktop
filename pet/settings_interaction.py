@@ -191,7 +191,7 @@ def build_interaction_domain(dialog) -> QWidget:
     from . import feature_activation as _fa
 
     if _fa.is_active("weather"):
-        from .settings_weather import build_weather_tab
+        from .weather.settings import build_weather_tab
 
         tabs.addTab(TAB_KEYS[2], TAB_LABELS[2], build_weather_tab(dialog))
     # 第四个同级任务：每日一签（"用户主动拉一次、桌宠给一个结果"，同天气一族）。

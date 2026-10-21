@@ -32,7 +32,7 @@ from PySide6.QtCore import QObject, Signal
 
 import shiboken6
 
-from .weather import (
+from pet.weather import (
     NO_CITY_TEXT,
     TOTAL_BUDGET_SECONDS,
     WeatherClient,

@@ -21,12 +21,12 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QLineEdit, QPlainTextEdit, QVBoxLayout, QWidget
 
-from .settings_widgets import (
+from ..settings_widgets import (
     SettingRow,
     SettingsSection,
     ToggleSwitch,
 )
-from .weather import (
+from pet.weather import (
     MAX_CITIES,
     normalize_city_codes,
     normalize_city_list,

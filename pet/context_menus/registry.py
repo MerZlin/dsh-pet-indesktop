@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QMenu, QWidgetAction
 
 from ..config import DEFAULT_MENU_EASTER_EGG
 from .. import features as features_mod
-from ..weather_menu import (
+from ..weather.menu import (
     WEATHER_DISABLED_REASON,
     add_show_weather,
     add_weather_cities,

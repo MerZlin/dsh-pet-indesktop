@@ -224,7 +224,7 @@ def test_show_weather_active_lazy_creates_service(monkeypatch):
         def show_weather(self, _parent):
             pass
 
-    import pet.weather_service as ws
+    import pet.weather.service as ws
 
     monkeypatch.setattr(ws, "WeatherService", _Svc)
     shell = object.__new__(app_mod.AppShell)

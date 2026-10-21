@@ -181,7 +181,7 @@ from . import settings_network
 from . import settings_page_guide
 from . import settings_divination
 from . import settings_hotkeys
-from . import settings_weather
+from .weather import settings as settings_weather
 from . import settings_pet_controls
 from . import settings_quiet
 from . import settings_reset_defaults

@@ -23,7 +23,7 @@ from PySide6.QtCore import QObject, Signal  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMenu  # noqa: E402
 
 from pet import weather as W  # noqa: E402
-from pet import weather_menu as M  # noqa: E402
+from pet.weather import menu as M  # noqa: E402
 from pet.context_menus.registry import MENU_ACTIONS  # noqa: E402
 
 app = QApplication.instance() or QApplication([])

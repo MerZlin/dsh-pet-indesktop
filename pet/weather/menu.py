@@ -58,7 +58,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .weather import (
+from pet.weather import (
     WeatherClient,
     add_city,
     city_label,
@@ -465,7 +465,7 @@ def _mark_disabled(action) -> None:
 # （与 ``balance`` 的惰性 import 同一手法）。
 def add_show_weather(menu: QMenu, pet, *, icons: bool = True):
     """「查看天气」：点一次就用气泡报当前城市的天气。"""
-    from .context_menus.shared import add_action
+    from ..context_menus.shared import add_action
 
     callback = getattr(pet, "on_show_weather", None)
     if callback is None:
@@ -479,7 +479,7 @@ def add_show_weather(menu: QMenu, pet, *, icons: bool = True):
 
 def add_weather_cities(menu: QMenu, pet, *, icons: bool = True):
     """「天气城市」子菜单：城市清单 + 切换 + 添加 + 删除。"""
-    from .context_menus.shared import add_action, add_submenu, connect_action
+    from ..context_menus.shared import add_action, add_submenu, connect_action
 
     cfg = _config_of(pet)
     if cfg is None:

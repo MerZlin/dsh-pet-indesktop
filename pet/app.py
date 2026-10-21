@@ -4101,7 +4101,7 @@ class AppShell:
             # （旧布局残留/外部触发），不建服务、不起网络线程。
             logging.info("天气模块未激活，忽略「查看天气」请求")
             return
-        from .weather_service import WeatherService
+        from .weather.service import WeatherService
 
         if self._weather_service is None:
             self._weather_service = WeatherService(self)
