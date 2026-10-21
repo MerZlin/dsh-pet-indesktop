@@ -37,7 +37,8 @@
    既有导入点写法不变、语义不变。**不做任何转发 shim**（没有 `pet/weather_menu.py`
    保留成 `from .weather.menu import *` 这种残骸）。
 3. **不动功能激活层**：`pet/features.py` 的模块清单/硬依赖边、`feature_activation`
-   迁移、三层门控一个字节都没改（该文件在本片只改了 2 行注释文字，见 §二）。
+   迁移、三层门控一个字节都没改——`pet/features.py` 本身甚至不在本片的 190 个文件里
+   （`git diff origin/main...HEAD --name-only | grep -c 'pet/features.py'` = `0`）。
 4. **不做兼容垫片**：45 个旧 dotted 名一律不保留别名模块——仓库内所有引用点同批改完，
    由全量套件（8818 passed）与 AST 静态扫描（0 条无法解析的 import）把关。
 
@@ -207,13 +208,14 @@ R100  pet/weather.py                  pet/weather/__init__.py
    挑文件；搬迁后 `path.name` 变成 `__init__.py`（会和其它包的 `__init__.py` 撞），
    于是改为 `path.name in {"test_agent_link.py"} or path.as_posix().endswith("pet/agent_link/__init__.py")`
    ——等价映射，且不会误伤其它包。
-2. `tests/test_settings_standalone.py`：`assert "voice_chime_service" not in stripped`
+2. `tests/test_settings_process_isolation.py:708`：`assert "voice_chime_service" not in stripped`
    → `assert "chime_service" not in stripped`。子串变短 ⇒ **判定变严**（多抓一类回潮），
    不是放宽。
 
-**未改动**：`pet/features.py` 的模块清单与 `entry_names`、`pet/feature_activation.py`、
-`pet/context_menus/menu_templates/*.json`、`pet/config.py` 的键集一律没动（`pet/config.py`
-只改了 4 条 import）。`requirements.txt`、`THIRD_PARTY_NOTICES.md` 未动（无依赖变化）。
+**未改动**：`pet/features.py`（模块清单与 `entry_names`，**整文件不在本片 diff 里**）、
+`pet/feature_activation.py`、`pet/context_menus/menu_templates/*.json`、
+`pet/config.py` 的键集一律没动（`pet/config.py` 只改了 4 条 import）。
+`requirements.txt`、`THIRD_PARTY_NOTICES.md` 未动（无依赖变化）。
 
 ## 三、实现要点
 
@@ -302,9 +304,11 @@ pet/island_extension_host.py parents[1] -> D:\dsh-pet-mod-dirs\pet |  pet/island
 pet/game_fps.py          parents[1] -> D:\dsh-pet-mod-dirs\pet    |  pet/island/game_fps.py            parents[2] -> D:\dsh-pet-mod-dirs\pet   equal=True
 ```
 
-**文件字节数**：51 个搬迁文件里 16 个逐字节相同（全部 `R100`）；其余 35 个的字节差
-全部来自 import 行长度变化，最大是 `island/dynamic_island.py` **+77 B**（256 260 → 256 337）。
-没有任何文件的字节数减少超过 80 B。
+**文件字节数**：51 个搬迁文件里 **16 个字节数不变**——其中 14 个是 `R100`（逐字节相同），
+另 2 个（`pet/festival/quotes_west.py`、`pet/island/game_fps.py`）字节数相同但内容有差，
+差的都是**等长替换**（`festival_data`→`festival.data`、`island_segments`→`island.segments`）。
+其余 35 个的字节差全部来自 import 行长度变化，最大是 `island/dynamic_island.py`
+**+77 B**（256 260 → 256 337）。没有任何文件的字节数减少超过 80 B。
 
 ### 4.2 口径二：启动期导入的东西是不是同一批
 
@@ -477,8 +481,21 @@ pet.voice    冷导入 中位=669.4us p95=896.2us  文件字节=76B
    `pet.voice_chime_service`、`pet.dynamic_island`），docstring 第 4 行的示例命令
    （`tools/import_cost.py pet.window pet.balance`）同样过时。**不是产品路径**，无测试
    覆盖，建议与第 1 条一并修。
-3. **未构建三端产物**，见 §5.5。
-4. **没有做「按模块目录做边界检查」的架构红线**（例如「`pet/music/**` 不许 import
+3. **三处「代码行上的旧路径」逐个核过**（这三是上面 70 行里唯一落在**非纯注释行**上的，
+   因此会被「注释行扫描」漏掉）：
+
+   | 位置 | 现在的内容 | 性质 | 本片是否改动 |
+   |---|---|---|---|
+   | `tests/test_runtime_dependencies.py:39` | `"comtypes": "pycaw 的依赖（pet/music_detect.py 走 pycaw 时用到）"` | dict 值 = 未声明依赖测试的**失败消息**文本，真路径已是 `pet/music/detect.py` | **未改**（该行不在这 113 个测试文件的 diff 里） |
+   | `tests/test_runtime_dependencies.py:132` | `"psutil 必须留在 requirements.txt：pet/now_playing.py 用它判断播放器进程在不在，"` | `assert` 的**失败消息**文本，真路径已是 `pet/music/now_playing.py`（同一函数的下一行 `from pet.music import now_playing` **已改对**） | **未改** |
+   | `pet/features.py:309` | `needs_network=True,  # 取词三源并发（pet/music_lyric.py:772-775）` | 代码行尾随注释，真路径已是 `pet/music/lyric.py`；`pet/features.py` **整文件不在本片 diff 里** | **未改** |
+
+   结论：三处**至今仍是旧路径**，且都不是本片引入的——它们是搬迁前就存在的文本，
+   搬迁没扫到（前两处是字符串字面量，第三处在未改动的文件里）。影响面限于
+   「测试失败时的提示文字指向一个已不存在的文件」与「注释误导」，**不影响任何断言
+   逻辑或运行行为**；`tests/test_runtime_dependencies.py` 改后仍是绿（全量 8818 passed 的一部分）。
+4. **未构建三端产物**，见 §5.5。
+5. **没有做「按模块目录做边界检查」的架构红线**（例如「`pet/music/**` 不许 import
    `pet/chat/**`」）。目录化让这类检查**变得可能**，但本片不新增它——新增红线会立刻红
    一堆既存越界，属后续独立议题。
 
