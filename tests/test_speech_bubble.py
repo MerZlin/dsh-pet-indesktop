@@ -1021,7 +1021,7 @@ def test_balance_chunks_stay_together_when_they_fit():
 
     宽度取真实 advance。金额短语自己放得下时，整段必须留在同一行。
     """
-    from pet.balance import format_balance_display
+    from pet.island.balance import format_balance_display
 
     metrics = _body_metrics()
     plain = "测" * 12 + "余额 ¥5.99（充值 ¥10.00 / 赠送 ¥2.34）"
@@ -1113,7 +1113,7 @@ def test_joined_runs_keep_pagination_elision_and_explicit_breaks():
 
 
 def test_overlong_joined_token_wraps_at_start_and_after_explicit_break():
-    from pet.balance import format_balance_display
+    from pet.island.balance import format_balance_display
 
     metrics = _body_metrics()
     amount = "余额 ¥123456789012345678901234567890.99（充值 ¥10.00）"
