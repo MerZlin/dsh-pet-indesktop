@@ -11,7 +11,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from pet.config import Config
-from pet.todo_reminder import (
+from pet.todo.reminder import (
     DEFAULT_GRACE_MINUTES,
     TODO_ITEMS_LIMIT,
     TODO_ITEMS_VERSION,
@@ -555,7 +555,7 @@ def test_service_warns_when_bubble_blocked_and_notify_off(tmp_path, caplog):
     service = TodoReminderService(app)
     service.apply_config()
 
-    with caplog.at_level(logging.WARNING, logger="pet.todo_reminder"):
+    with caplog.at_level(logging.WARNING, logger="pet.todo.reminder"):
         service._on_tick(now=datetime(2026, 9, 4, 10, 6))
 
     assert app.win.bubbles == [] and app.notifies == []
@@ -644,7 +644,7 @@ def test_petapp_settings_finish_applies_todo_prefs(tmp_path, monkeypatch):
 # ------------------------------------------------------------ 管理面板
 
 def _make_panel(tmp_path):
-    from pet.todo_panel import TodoPanelDialog
+    from pet.todo.panel import TodoPanelDialog
 
     _qapp()
     app = _FakeApp(tmp_path)

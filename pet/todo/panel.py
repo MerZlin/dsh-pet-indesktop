@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .todo_reminder import new_todo_item, summarize_next
+from .reminder import new_todo_item, summarize_next
 
 
 def _stylesheet(widget: QWidget) -> str:

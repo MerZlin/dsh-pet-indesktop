@@ -56,7 +56,7 @@ from .fun_image_popup import restore_ojingjing_windows
 from .runtime_cleanup import cleanup_stale_runtime_dirs
 from .session_watcher import install_session_watcher
 from .decode_fanout import DecodeFanoutHub
-from .todo_reminder import TodoReminderService
+from .todo.reminder import TodoReminderService
 from .voice_chime_service import VoiceChimeService
 from .persona_phrases import PhrasePicker
 
@@ -4725,7 +4725,7 @@ class AppShell:
             # 服务并把 30s tick 跑起来，所以闸必须在懒创建之前。
             logging.info("待办模块未激活，忽略「待办提醒」请求")
             return
-        from .todo_panel import TodoPanelDialog
+        from .todo.panel import TodoPanelDialog
 
         # Phase 1：即使总开关关闭，用户主动打开面板也需要服务对象（懒创建）。
         self._ensure_todo_service()

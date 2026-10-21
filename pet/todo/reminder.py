@@ -400,7 +400,7 @@ class TodoReminderService:
         text = fire_text(fire)
         win = getattr(app, "win", None)
         if win is not None:
-            from . import window_alerts
+            from .. import window_alerts
 
             if window_alerts.quiet_blocked(win):
                 # 免打扰（含全屏等效）：桌宠气泡**与系统通知**一并压住——只压气泡
