@@ -2774,7 +2774,8 @@ def test_product_copy_has_no_external_brand_reference():
             # Competitive research records source names by design; they are
             # evidence, not user-facing product copy.
             if (
-                path.name in {"agent_link.py", "test_agent_link.py"}
+                path.name in {"test_agent_link.py"}
+                or path.as_posix().endswith("pet/agent_link/__init__.py")
                 or path.name.endswith("-RESEARCH.md")
                 # Contributor/change reports are repository evidence, not
                 # user-facing product copy and may mention external brands.

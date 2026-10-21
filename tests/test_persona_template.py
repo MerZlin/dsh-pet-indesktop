@@ -27,7 +27,7 @@ def test_all_advertised_fields_reach_presentation_layer():
     """模板宣称的每个字段都必须真正到达表现层（气泡/弹窗文案渲染）。
 
     两层机械验证，杜绝「模板提供了字段、运行时却从未注入」的糖衣：
-    1. AST 解析 pet/agent_link.py 与 pet/app.py 里全部 _dialogue/_persona_text
+    1. AST 解析 pet/agent_link/__init__.py 与 pet/app.py 里全部 _dialogue/_persona_text
        调用点，断言 PARAMETERS[key] == 该 key 调用点显式注入的 kwargs 并集
        （双向：多宣称=占位符永远原样露出的谎言；少宣称=已注入却不告知）。
        动态 key 调用点（activity/pattern/model_access）按 kwargs 签名归组校验。
@@ -47,7 +47,7 @@ def test_all_advertised_fields_reach_presentation_layer():
     delivered = {}
     expansion_keys = set()
     dynamic = []
-    for fname in ("agent_link.py", "app.py"):
+    for fname in ("agent_link/__init__.py", "app.py"):
         tree = ast.parse((root / "pet" / fname).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -170,7 +170,7 @@ def test_all_advertised_fields_reach_presentation_layer():
 
     # ── 上下文字段层：桥接插件确实写出这些字段（或 Pet 侧注入）──
     bridge_src = (root / "integrations" / "dsh-pet-bridge" / "index.js").read_text(encoding="utf-8")
-    agent_link_src = (root / "pet" / "agent_link.py").read_text(encoding="utf-8")
+    agent_link_src = (root / "pet" / "agent_link" / "__init__.py").read_text(encoding="utf-8")
     pet_side_fields = {"agent_key"}
     for group, fields in UPSTREAM_FIELDS.items():
         for field in fields:
