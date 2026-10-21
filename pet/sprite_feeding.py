@@ -22,7 +22,7 @@ import random
 from pathlib import Path
 from types import SimpleNamespace
 
-from .file_eater import (
+from .file_interpret.eater import (
     STATS_FILE_NAME,
     STATS_HISTORY_LIMIT,
     _default_stats,

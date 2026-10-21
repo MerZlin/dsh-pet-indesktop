@@ -6627,7 +6627,7 @@ class OverlayShell(QObject):
         壳上子宠气泡既有分发靠 ``_bubble_for(sprite)``（每只一只跟随器，见
         ``_ensure_sprite_bubble``），这里不再新造通道：落点是子宠就发子宠那只。
         """
-        from .file_eater import FEEDING_BUBBLE_SUBTITLE, feeding_bubble_text
+        from .file_interpret.eater import FEEDING_BUBBLE_SUBTITLE, feeding_bubble_text
         follower = self._bubble_for(sprite)
         if follower is None:
             return

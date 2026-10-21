@@ -23,7 +23,7 @@ from pet.file_interpret import (
     extract_text,
     is_interpretable_file,
 )
-from pet.settings_file_interpret import (
+from pet.file_interpret.settings import (
     create_file_interpret_controls,
     save_file_interpret_settings,
 )
@@ -132,7 +132,7 @@ def test_collect_interpretable_stops_at_file_budget(tmp_path, monkeypatch):
     拖进来的一批散装文本原先在这里全部同步 ``is_file()``：投喂侧的测量停下来
     了，这条链照样把 GUI 线程卡住。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     monkeypatch.setattr(file_eater, "SCAN_FILE_LIMIT", 2)
     paths = []
@@ -157,7 +157,7 @@ def test_collect_interpretable_stops_at_time_budget(tmp_path, monkeypatch):
     """
     import pathlib
 
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     paths = []
     for i in range(12):
@@ -266,7 +266,7 @@ def test_offer_without_interpretable_files_only_hints(tmp_path):
 
 def test_offer_marks_truncated_scan_in_alert(tmp_path, monkeypatch):
     """R05：触预算时询问气泡如实标记「只收了前 N 个」——界面拿得到截断标记。"""
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     _qapp()
     win = _FakeWin(tmp_path)
@@ -293,7 +293,7 @@ def test_offer_all_items_over_budget_hints_instead_of_unreadable(tmp_path, monke
     真钟下第一个候选必然还在预算内（预算刚从当下算起），所以这里注入"建预算后
     时间已越界"的假钟，锁住这条文案口径。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     _qapp()
     win = _FakeWin(tmp_path)

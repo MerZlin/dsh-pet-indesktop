@@ -263,7 +263,7 @@ def test_drop_truncated_dir_reports_budget_in_result_and_bubble(tmp_path, monkey
     旧行为：drop 事件里同步无上限递归 + 逐文件 ``stat()``，大目录/网络盘把整个
     桌宠 UI 冻在 GUI 线程上。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     monkeypatch.setattr(file_eater, "SCAN_FILE_LIMIT", 3)
     shell, _lib, _ctrl = _make(tmp_path)

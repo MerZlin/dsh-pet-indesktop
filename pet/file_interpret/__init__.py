@@ -17,9 +17,9 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QTimer
 
-from .catalog import DEFAULT_CHARACTER
-from .config import _bool_or_default, _float_or_default
-from .file_eater import _ScanBudget
+from ..catalog import DEFAULT_CHARACTER
+from ..config import _bool_or_default, _float_or_default
+from .eater import _ScanBudget
 
 logger = logging.getLogger(__name__)
 
@@ -233,10 +233,10 @@ class FileInterpretController(QObject):
     # ---------------------------------------------------------- 主链路
     def _start(self, paths: list[Path]) -> None:
         try:
-            from .chat.models import ChatMessage
-            from .chat.prompt import PromptBuilder
-            from .chat.service import ChatService
-            from .chat.session_store import SessionStore
+            from ..chat.models import ChatMessage
+            from ..chat.prompt import PromptBuilder
+            from ..chat.service import ChatService
+            from ..chat.session_store import SessionStore
         except ModuleNotFoundError:
             logger.warning("file_interpret：pet.chat 缺失（no-chat 变体），解读不可用")
             self._state = "idle"
@@ -318,7 +318,7 @@ class FileInterpretController(QObject):
         self._request_id = None
         self._heartbeat.stop()
         reply = str(text)
-        from .chat.models import ChatMessage
+        from ..chat.models import ChatMessage
 
         synced, _absorbed = self._store.append_message(self._session, ChatMessage("assistant", reply))
         if synced is None:

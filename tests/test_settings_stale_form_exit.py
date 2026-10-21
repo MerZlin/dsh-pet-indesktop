@@ -499,7 +499,7 @@ def test_unexpected_exception_asks_instead_of_dropping_the_draft(tmp_path, app, 
     """
     import shiboken6
 
-    from pet import settings_file_interpret
+    from pet.file_interpret import settings as settings_file_interpret
 
     _main_config(tmp_path)
     _profile_exists(tmp_path, {"scale": 0.8})
@@ -536,7 +536,7 @@ def test_unexpected_exception_can_still_be_discarded(tmp_path, app, monkeypatch)
     """异常路径的出口同样可达：选放弃即可关窗（异常不是"必须留下"的理由）。"""
     from PySide6.QtWidgets import QDialog
 
-    from pet import settings_file_interpret
+    from pet.file_interpret import settings as settings_file_interpret
 
     _main_config(tmp_path)
     _profile_exists(tmp_path, {"scale": 0.8})

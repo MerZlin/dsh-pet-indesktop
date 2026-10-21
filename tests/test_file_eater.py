@@ -9,7 +9,7 @@ from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import QApplication, QWidget
 
-from pet.file_eater import FileEaterDropHandler, format_bytes
+from pet.file_interpret.eater import FileEaterDropHandler, format_bytes
 from pet.window_optional_services import WindowFeatureGateMixin
 
 
@@ -249,7 +249,7 @@ def test_eat_paths_offer_chain_enforces_scan_budget(tmp_path, monkeypatch):
     截断点；两条投喂链都汇进同一个 ``FileInterpretController.offer``，overlay 链
     因此同样受这份预算保护。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
     from pet.file_interpret import FileInterpretController
 
     monkeypatch.setattr(file_eater, "SCAN_FILE_LIMIT", 3)
@@ -304,7 +304,7 @@ def test_small_drop_reports_no_truncation(tmp_path):
 
 def test_eat_paths_stops_at_file_budget(tmp_path, monkeypatch):
     """B03：文件数预算——触上限即停扫，统计/气泡用真实口径（不是全量数）。"""
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     monkeypatch.setattr(file_eater, "SCAN_FILE_LIMIT", 3)
     pet = _make_pet(tmp_path)
@@ -327,7 +327,7 @@ def test_eat_paths_checks_clock_for_every_item(tmp_path, monkeypatch):
     单层目录只进一次目录，若查钟还带"每 N 项"的粒度，单层少量慢文件就整段不受控；
     这里用假钟记调用次数：30 个文件必须查到 ≥ 32 次（建预算 1 + 进目录 1 + 每文件 1）。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     folder = _big_dir(tmp_path, "item-clock-dir", 30)
     calls = {"n": 0}
@@ -353,7 +353,7 @@ def test_eat_paths_stops_at_time_budget_in_one_slow_directory(tmp_path, monkeypa
     既不到 256 项、也不会再进新目录 → 全程一次钟都不查 → 9 秒不截断，GUI 线程就
     这么冻着。逐项查钟之后，第 7 次 stat 之后（2.1s）进第 8 个文件即越 2s 预算。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     folder = _big_dir(tmp_path, "slow-single-layer", 30)
     ticks = {"t": 0.0}
@@ -381,7 +381,7 @@ def test_eat_paths_stops_at_time_budget_in_one_slow_directory(tmp_path, monkeypa
 
 def test_eat_paths_stops_at_time_budget_for_slow_loose_files(tmp_path, monkeypatch):
     """astra F2：批量散文件同缺口——没有目录层、每项都慢的批同样按墙钟截断。"""
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     pet = _make_pet(tmp_path)
     paths = []
@@ -413,7 +413,7 @@ def test_eat_paths_stops_in_empty_directory_tree(tmp_path, monkeypatch):
     文件预算、也永远走不到耗时检查——几万层空目录照样把 GUI 线程冻住，结果里连
     "截断"都不标（用户看到"吃了空气"）。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     root = tmp_path / "empty-tree"
     cursor = root
@@ -445,7 +445,7 @@ def test_eat_paths_stops_when_each_stat_is_slow(tmp_path, monkeypatch):
     ``stat()`` 都要几百毫秒"的目录在两次检查之间完全不受控。进目录就查一次钟以后，
     任何形态的树都有墙钟封顶。
     """
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     root = tmp_path / "slow-stat-tree"
     for name in ("a", "b", "c"):
@@ -478,7 +478,7 @@ def test_eat_paths_stops_when_each_stat_is_slow(tmp_path, monkeypatch):
 
 def test_eat_paths_budget_covers_dropped_file_list(tmp_path, monkeypatch):
     """预算按整批记账：拖进来的一串散文件同样在预算内截断。"""
-    import pet.file_eater as file_eater
+    import pet.file_interpret.eater as file_eater
 
     monkeypatch.setattr(file_eater, "SCAN_FILE_LIMIT", 2)
     pet = _make_pet(tmp_path)

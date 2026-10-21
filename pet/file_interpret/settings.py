@@ -11,9 +11,9 @@ from typing import Any
 
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from . import feature_activation as _fa
-from .config import _default_file_interpret_data
-from .settings_widgets import BrowserDoubleSpinBox, SettingRow, SettingsSection, ToggleSwitch
+from .. import feature_activation as _fa
+from ..config import _default_file_interpret_data
+from ..settings_widgets import BrowserDoubleSpinBox, SettingRow, SettingsSection, ToggleSwitch
 
 # 与 Config 归一化区间同源（config.py file_interpret 段）
 _PROGRESS_INTERVAL_RANGE = (5.0, 120.0)

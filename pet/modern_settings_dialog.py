@@ -173,7 +173,7 @@ from .persona_template import (
     PARAMETERS,
 )
 from . import settings_default_marks
-from . import settings_file_interpret
+from .file_interpret import settings as settings_file_interpret
 from . import settings_interaction
 from .music import settings as settings_music
 from . import feature_activation as _fa

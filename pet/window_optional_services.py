@@ -109,7 +109,7 @@ class WindowFeatureGateMixin:
     def install_file_eater(self):
         """挂载“吃垃圾文件”拖放处理器（幂等，只对 PetWindow 实例调用）。"""
         if self._file_eater is None:
-            from .file_eater import FileEaterDropHandler
+            from .file_interpret.eater import FileEaterDropHandler
             self._file_eater = FileEaterDropHandler(self)
         return self._file_eater
 
