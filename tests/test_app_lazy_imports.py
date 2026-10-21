@@ -31,8 +31,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _CHILD = r'''
 import json, sys
 import pet.app  # noqa: F401 - 被测：只导入入口模块，不起 QApplication
-deferred = ["pet.balance", "pet.festival_service", "pet.festival_data",
-            "pet.festival_quotes_cn", "pet.festival_quotes_west_movie"]
+deferred = ["pet.balance", "pet.festival.service", "pet.festival.data",
+            "pet.festival.quotes_cn", "pet.festival.quotes_west_movie"]
 print(json.dumps({name: name in sys.modules for name in deferred}))
 '''
 
@@ -59,8 +59,8 @@ def test_importing_app_defers_balance_module():
 def test_importing_app_defers_festival_modules():
     loaded = _run_child()
     offenders = [name for name in (
-        'pet.festival_service', 'pet.festival_data',
-        'pet.festival_quotes_cn', 'pet.festival_quotes_west_movie',
+        'pet.festival.service', 'pet.festival.data',
+        'pet.festival.quotes_cn', 'pet.festival.quotes_west_movie',
     ) if loaded[name]]
     assert not offenders, (
         f'节日提醒总开关默认关闭，这些模块不该在 import pet.app 时载入: {offenders}'

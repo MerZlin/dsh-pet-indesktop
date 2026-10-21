@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .festival_calendar import SOLAR_TERMS
+from .calendar import SOLAR_TERMS
 
 # —— 类别 ——（同时是配置开关名与显示分组名）
 CATEGORY_CN = "cn"

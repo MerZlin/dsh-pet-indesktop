@@ -32,7 +32,7 @@ import tests.test_overlay_window_capabilities as cap
 import tests.test_sprite_menu_facade as fac
 from pet.app import AppShell, PetInstance
 from pet.config import Config
-from pet.festival_service import FestivalReminderService
+from pet.festival.service import FestivalReminderService
 from pet.overlay_shell import OverlayShell, _SettingsIdentity
 from pet.pet_sprite import PetSprite
 from pet.todo.reminder import TodoReminderService

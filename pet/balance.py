@@ -201,13 +201,13 @@ def _beijing_now(now: datetime | None = None) -> datetime:
 def _statutory_holiday(day: date) -> str | None:
     """查询该日是否为中国法定放假日（放假日名 / None）。
 
-    函数内 import `pet.festival_calendar`：它是唯一的 lunar-python 边界，
+    函数内 import `pet.festival.calendar`：它是唯一的 lunar-python 边界，
     而 `tests/test_app_lazy_imports.py` 要求 `import pet.app` 常驻时不得连带
     载入节日模块（实测 ~7.7MB），故不能在模块顶层引入。历法后端缺失时按
     「无节假日数据」降级（返回 None），不阻断余额提示。
     """
     try:
-        from .festival_calendar import statutory_holiday_name
+        from .festival.calendar import statutory_holiday_name
     except ImportError:
         return None
     return statutory_holiday_name(day)

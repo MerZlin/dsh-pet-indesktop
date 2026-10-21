@@ -208,7 +208,7 @@ def test_friday_evening_next_peak_skips_weekend():
 
 def test_statutory_holiday_name_reports_free_days_only():
     """festival_calendar 的节假日边界：只认放假日，补班日与表外日期返回 None。"""
-    from pet.festival_calendar import statutory_holiday_name
+    from pet.festival.calendar import statutory_holiday_name
 
     assert statutory_holiday_name(date(2026, 10, 1)) == "国庆节"
     assert statutory_holiday_name(date(2026, 2, 16)) == "春节"

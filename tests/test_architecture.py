@@ -324,10 +324,10 @@ def test_pure_logic_modules_do_not_import_qt():
     # network_info.py 是弹窗的数据层（属地解析/连通性/文案），同样零 Qt。
     for name in (
         "collision.py", "physics.py",
-        "festival_calendar.py", "festival_data.py", "festival.py",
-        "festival_quotes_cn.py", "festival_quotes_west.py",
-        "festival_quotes_west_movie.py", "festival_quotes_west_game.py",
-        "festival_quotes_west_song.py", "overlay_settings_command.py",
+        "festival/calendar.py", "festival/data.py", "festival/__init__.py",
+        "festival/quotes_cn.py", "festival/quotes_west.py",
+        "festival/quotes_west_movie.py", "festival/quotes_west_game.py",
+        "festival/quotes_west_song.py", "overlay_settings_command.py",
         # 「回收内存」(#210)：过滤真值表与 ctypes 薄封装必须零 Qt——后台线程里
         # 跑的就是这一层，单测也在无 Qt 的替身上验（ctypes 全 mock）。
         "memory_trim.py",

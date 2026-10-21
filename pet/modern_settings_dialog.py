@@ -1018,7 +1018,7 @@ class ModernSettingsDialog(QDialog):
         # 模块未激活：整页不构造（不挂载、不写回；「语音」域只剩语音报时组）
         self.festival_page = None
         if _fa.is_active("festival"):
-            from .festival_settings import FestivalSettingsPage
+            from .festival.settings import FestivalSettingsPage
 
             self.festival_page = FestivalSettingsPage(self.config, self)
 

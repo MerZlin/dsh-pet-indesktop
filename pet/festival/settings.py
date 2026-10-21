@@ -63,7 +63,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .festival import (
+from pet.festival import (
     DEFAULT_COUNT,
     DEFAULT_MODE,
     DEFAULT_SHOW_QUOTE,
@@ -75,7 +75,7 @@ from .festival import (
     clean_count,
     clean_mode,
 )
-from .festival_settings_panel import (
+from .settings_panel import (
     EXPAND_TEXT,
     FOLD_HINT,
     FOLD_KEY,
@@ -83,13 +83,13 @@ from .festival_settings_panel import (
     FestivalFoldPanel,
     notice_row,
 )
-from .modern_settings_dialog import (
+from ..modern_settings_dialog import (
     BrowserSpinBox,
     SettingRow,
     ToggleSwitch,
 )
-from .settings_widgets import ModernSelect
-from .voice_chime import clean_flag
+from ..settings_widgets import ModernSelect
+from ..voice_chime import clean_flag
 
 
 class FestivalSettingsPage(QWidget):

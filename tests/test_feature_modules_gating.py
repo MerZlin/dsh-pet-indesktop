@@ -422,7 +422,7 @@ def test_todo_sync_active_lazy_creates_and_starts_service(monkeypatch):
 
 def _install_festival_fake(monkeypatch, events, *, running=False):
     """把 ``FestivalReminderService`` 换成记录器（模块内惰性 import，故打模块属性）。"""
-    import pet.festival_service as fs_mod
+    import pet.festival.service as fs_mod
 
     class _Svc:
         def __init__(self, _app):

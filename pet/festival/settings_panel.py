@@ -30,7 +30,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
-from .settings_widgets import SettingRow, SettingsCard, SettingsSection
+from ..settings_widgets import SettingRow, SettingsCard, SettingsSection
 
 #: 折叠头（少用项）的行 key 与文案
 FOLD_KEY = "festival_fold_rare"

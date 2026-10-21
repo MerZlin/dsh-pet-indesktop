@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 
-from .festival import (
+from pet.festival import (
     NO_FESTIVAL_TEXT,
     build_festival_text,
     normalize_festival_config,
@@ -203,7 +203,7 @@ class FestivalReminderService:
         """
         if not text:
             return
-        from . import window_alerts
+        from .. import window_alerts
         app = self._app
         win = getattr(app, "win", None)
         # 免打扰（含全屏等效）判定必须在**可见性判断之前**：宿主隐藏时（全屏避让

@@ -15,13 +15,13 @@ import datetime as dt
 import pytest
 
 from pet import festival as F
-from pet import festival_calendar as C
-from pet import festival_data as D
-from pet.festival_quotes_cn import QUOTES_CN
-from pet.festival_quotes_west import QUOTES_WEST
-from pet.festival_quotes_west_game import QUOTES_WEST_GAME
-from pet.festival_quotes_west_movie import QUOTES_WEST_MOVIE
-from pet.festival_quotes_west_song import QUOTES_WEST_SONG
+from pet.festival import calendar as C
+from pet.festival import data as D
+from pet.festival.quotes_cn import QUOTES_CN
+from pet.festival.quotes_west import QUOTES_WEST
+from pet.festival.quotes_west_game import QUOTES_WEST_GAME
+from pet.festival.quotes_west_movie import QUOTES_WEST_MOVIE
+from pet.festival.quotes_west_song import QUOTES_WEST_SONG
 
 # 西方节日的四段内置库（公有领域 -> 电影 -> 游戏 -> 歌曲），顺序即拼装顺序。
 WEST_LIBRARIES = (QUOTES_WEST, QUOTES_WEST_MOVIE, QUOTES_WEST_GAME, QUOTES_WEST_SONG)
@@ -448,8 +448,8 @@ def _declared_sources(notices: str, section: str) -> dict[str, int]:
 @pytest.mark.parametrize(
     ("path", "marker", "section"),
     [
-        ("festival_quotes_west_movie.py", "QUOTES_WEST_MOVIE", "### 5.1"),
-        ("festival_quotes_west_game.py", "QUOTES_WEST_GAME", "### 5.2"),
+        ("festival/quotes_west_movie.py", "QUOTES_WEST_MOVIE", "### 5.1"),
+        ("festival/quotes_west_game.py", "QUOTES_WEST_GAME", "### 5.2"),
     ],
 )
 def test_third_party_notices_match_quote_libraries(path, marker, section):
@@ -484,7 +484,7 @@ def test_third_party_notices_list_every_song():
     notices = (_Path(__file__).resolve().parents[1] / "THIRD_PARTY_NOTICES.md").read_text(
         encoding="utf-8"
     )
-    db = _Path(__file__).resolve().parents[1] / "pet" / "festival_quotes_west_song.py"
+    db = _Path(__file__).resolve().parents[1] / "pet" / "festival" / "quotes_west_song.py"
     # 只取「引号字符串后面紧跟的注释」——否则文件头 # -*- coding -*- 与
     # "# 平安夜（12/24）：…" 这类分组注释也会被当成歌曲名。
     titles = {
@@ -547,7 +547,7 @@ class _App:
 def _service(config, channel=None):
     from PySide6.QtWidgets import QApplication
 
-    from pet.festival_service import FestivalReminderService
+    from pet.festival.service import FestivalReminderService
 
     QApplication.instance() or QApplication([])
     app = _App(config, channel if channel is not None else _Channel())
@@ -629,7 +629,7 @@ def test_bubble_taken_by_alert_still_reaches_the_user(tmp_path, caplog):
     app.win._speech_bubble = _AlertBubble()
     app.win.visible_content_rect = lambda: object()
 
-    with caplog.at_level("WARNING", logger="pet.festival_service"):
+    with caplog.at_level("WARNING", logger="pet.festival.service"):
         service._bubble("今天是春节。")
 
     assert app.win.bubbles == [], "宿主让路（前置）"
@@ -756,7 +756,7 @@ def _page(tmp_path):
     from PySide6.QtWidgets import QApplication
 
     from pet.config import Config
-    from pet.festival_settings import FestivalSettingsPage
+    from pet.festival.settings import FestivalSettingsPage
 
     QApplication.instance() or QApplication([])
     return FestivalSettingsPage(Config(base=tmp_path))

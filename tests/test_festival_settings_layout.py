@@ -26,8 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pet.festival_settings import FestivalSettingsPage  # noqa: E402
-from pet.festival_settings_panel import (  # noqa: E402
+from pet.festival.settings import FestivalSettingsPage  # noqa: E402
+from pet.festival.settings_panel import (  # noqa: E402
     COLLAPSE_TEXT,
     EXPAND_TEXT,
     FOLD_KEY,
@@ -322,7 +322,7 @@ def test_page_never_teaches_technical_details(tmp_path):
 
 def test_settings_module_keeps_the_technical_details():
     """从界面删掉的技术细节必须还在模块 docstring 里（换地方存档，不是丢掉）。"""
-    from pet import festival_settings
+    from pet.festival import settings as festival_settings
 
     doc = festival_settings.__doc__ or ""
     assert "festival_reminder_speak" in doc, "配置键清单要留在模块文档里"

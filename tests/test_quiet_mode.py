@@ -805,7 +805,7 @@ def test_proxy_reports_no_delivery_when_no_visible_window(qapp, tmp_path):
 def test_festival_reminder_on_hidden_host_is_queued_not_notified(qapp, tmp_path):
     """M3：隐藏宿主 + 免打扰 → 节日提醒进暂存队列，不再落到系统通知。"""
     from pet.config import Config
-    from pet.festival_service import FestivalReminderService
+    from pet.festival.service import FestivalReminderService
 
     notified: list[tuple] = []
     win = _HiddenHost(Config(base=tmp_path), visible=False)

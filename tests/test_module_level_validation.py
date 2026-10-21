@@ -6,7 +6,7 @@
 
 - ``pet/catalog.py``：动画总数 / 动作池条数是硬编码素材契约（ANIM_FILES 是字面
   量字典）。数字漂移意味着切换动作会取到不存在的素材，表现为"点她没反应"；
-- ``pet/festival_data.py``：节日 id 重复会让后一个节日在 ``FESTIVALS_BY_ID``
+- ``pet/festival/data.py``：节日 id 重复会让后一个节日在 ``FESTIVALS_BY_ID``
   里被静默覆盖，文案库/槽位按 id 反查永远查不到它——节日悄悄消失。
 
 本文件用**真 ``-O`` 子进程**验证"优化模式下同样抛异常"（而不是只验证源码里
@@ -45,7 +45,7 @@ else:
 """
 
 _FESTIVAL_PROBE = """
-import pet.festival_data as fd
+import pet.festival.data as fd
 try:
     fd._index_festivals(fd.FESTIVALS + (fd.FESTIVALS[0],))
 except ValueError as exc:
@@ -86,7 +86,7 @@ def test_festival_id_guard_survives_optimize():
 
 def test_festival_index_keeps_every_entry_when_ids_are_unique():
     """正例：全量节日表建索引后条数不变（校验不得把正常数据判成重复）。"""
-    import pet.festival_data as fd
+    import pet.festival.data as fd
 
     index = fd._index_festivals(fd.FESTIVALS)
     assert len(index) == len(fd.FESTIVALS)
@@ -95,7 +95,7 @@ def test_festival_index_keeps_every_entry_when_ids_are_unique():
 
 
 # ------------------------------------------------------------------ 静态门
-@pytest.mark.parametrize("rel_path", ["pet/catalog.py", "pet/festival_data.py"])
+@pytest.mark.parametrize("rel_path", ["pet/catalog.py", "pet/festival/data.py"])
 def test_no_module_level_assert_remains(rel_path):
     """这两个模块不得再出现模块级 assert——`-O` 会把它整句删除。"""
     tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"))

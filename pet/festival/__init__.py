@@ -28,14 +28,14 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from .festival_calendar import (
+from .calendar import (
     easter,
     new_year_eve,
     nth_weekday,
     solar_term_on,
     solar_to_lunar,
 )
-from .festival_data import (
+from .data import (
     CATEGORY_CN,
     CATEGORY_ORDER,
     CATEGORY_SOLAR_TERM,
@@ -49,8 +49,8 @@ from .festival_data import (
     KIND_SOLAR,
     KIND_SOLAR_TERM,
 )
-from .festival_quotes_cn import QUOTES_CN
-from .festival_quotes_west import QUOTES_WEST
+from .quotes_cn import QUOTES_CN
+from .quotes_west import QUOTES_WEST
 
 # 受版权保护的流行文化台词库（电影/游戏）。刻意与公有领域库
 # （festival_quotes_west.py）**分文件物理隔离**：需要"纯公有领域"发行版时，
@@ -61,24 +61,24 @@ from .festival_quotes_west import QUOTES_WEST
 # 不会被收集进包，打包后必然 ImportError。try/except 形式两者兼得——静态可收集，
 # 且文件被删除时降级为空表而不是启动崩溃。
 try:  # pragma: no cover - 剥离合规版本时该模块不存在
-    from .festival_quotes_west_movie import QUOTES_WEST_MOVIE
+    from .quotes_west_movie import QUOTES_WEST_MOVIE
 except ImportError:  # pragma: no cover
     QUOTES_WEST_MOVIE = {}
 
 try:  # pragma: no cover - 剥离合规版本时该模块不存在
-    from .festival_quotes_west_game import QUOTES_WEST_GAME
+    from .quotes_west_game import QUOTES_WEST_GAME
 except ImportError:  # pragma: no cover
     QUOTES_WEST_GAME = {}
 
 try:  # pragma: no cover - 剥离合规版本时该模块不存在
-    from .festival_quotes_west_song import QUOTES_WEST_SONG
+    from .quotes_west_song import QUOTES_WEST_SONG
 except ImportError:  # pragma: no cover
     QUOTES_WEST_SONG = {}
 
 # 复用语音报时的清洗实现，避免在同一包内写第二份同语义清洗逻辑：
 # clean_flag（布尔真值解析）、clean_custom_times（HH:MM 集合）、
 # clean_custom_quotes（多行文本去控制字符/去重保序/单条截断）。
-from .voice_chime import clean_custom_quotes, clean_custom_times, clean_flag
+from ..voice_chime import clean_custom_quotes, clean_custom_times, clean_flag
 
 # —— 提醒方式（二选一）——
 MODE_TIMES = "times"

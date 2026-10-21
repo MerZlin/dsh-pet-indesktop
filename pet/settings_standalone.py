@@ -107,7 +107,7 @@ class _StandaloneHost:
 
     def festival_service(self):
         if self._festival is None:
-            from .festival_service import FestivalReminderService
+            from .festival.service import FestivalReminderService
 
             self._festival = FestivalReminderService(self)
         return self._festival

@@ -2015,7 +2015,7 @@ class AppShell:
         构造点，开启/试听时按需付一次。
         """
         if getattr(self, "festival_service", None) is None:
-            from .festival_service import FestivalReminderService
+            from .festival.service import FestivalReminderService
 
             self.festival_service = FestivalReminderService(self)
         return self.festival_service
