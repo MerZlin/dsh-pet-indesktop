@@ -23,7 +23,7 @@ from PySide6.QtWidgets import QApplication
 from pet import agent_link, harness_launcher
 from pet.agent_link import AgentLinkManager, DshMonitor
 from pet.config import Config
-from pet.dsh_state import DshState
+from pet.agent_link.dsh_state import DshState
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -114,7 +114,7 @@ def test_dsh_state_module_is_pure_logic():
     """
     import ast as _ast
 
-    tree = _ast.parse((REPO_ROOT / "pet" / "dsh_state.py").read_text(encoding="utf-8"))
+    tree = _ast.parse((REPO_ROOT / "pet" / "agent_link" / "dsh_state.py").read_text(encoding="utf-8"))
     imported = set()
     for node in _ast.walk(tree):
         if isinstance(node, _ast.Import):
@@ -128,7 +128,7 @@ def test_dsh_state_module_is_pure_logic():
             bases = {_ast.unparse(b) for b in node.bases}
             assert not any("QObject" in b for b in bases), "dsh_state.py 不得再有 QObject 子类"
     # 桌面端端口候选钉住（offline 判定的唯一来源）
-    assert "19387" in (REPO_ROOT / "pet" / "dsh_state.py").read_text(encoding="utf-8"), \
+    assert "19387" in (REPO_ROOT / "pet" / "agent_link" / "dsh_state.py").read_text(encoding="utf-8"), \
         "desktop 桌面端 host 端口 19387 必须在探测候选里"
 
 

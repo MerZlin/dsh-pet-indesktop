@@ -822,7 +822,7 @@ def test_dsh_converger_to_dot_end_to_end(tmp_path):
     带 requestId 的 ``cordis/request-run`` 才算。
     """
     _qapp()
-    from pet.dsh_state import DshStateConverger
+    from pet.agent_link.dsh_state import DshStateConverger
 
     converger = DshStateConverger()
     island = _island(tmp_path)

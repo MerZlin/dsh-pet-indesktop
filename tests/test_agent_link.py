@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 import pet.agent_link as agent_link
 from pet import click_sound, harness_launcher
-from pet.dsh_state import DshState, SCOPE_REJECT_LOG_EVERY
+from pet.agent_link.dsh_state import DshState, SCOPE_REJECT_LOG_EVERY
 from pet.agent_link import (
     AgentLinkManager,
     AgentEvent,

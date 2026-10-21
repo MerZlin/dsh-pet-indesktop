@@ -201,7 +201,7 @@ def test_api_server_descendants_are_suppressed_but_cli_children_are_not(tmp_path
 
 def test_independent_writers_have_distinct_owners_including_approvals(tmp_path, monkeypatch):
     from pet.agent_link import record_owner
-    from pet.dsh_state import fold_writer_states
+    from pet.agent_link.dsh_state import fold_writer_states
 
     path = tmp_path / "events.jsonl"
     monkeypatch.setenv("DSH_PET_HERMES_EVENTS", str(path))

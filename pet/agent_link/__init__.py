@@ -40,11 +40,11 @@ from urllib.parse import unquote
 from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
-from . import agent_cost as agent_cost_mod
-from . import harness_launcher
-from .click_sound import play_sound, resolve_builtin_sound
-from .agent_event_protocol import parse_agent_event
-from .agent_event_normalizer import normalize_event
+from . import cost as agent_cost_mod
+from .. import harness_launcher
+from ..click_sound import play_sound, resolve_builtin_sound
+from ..agent_event_protocol import parse_agent_event
+from ..agent_event_normalizer import normalize_event
 from .dsh_state import (
     SCOPE_REGISTRY_MAX,
     DshState,
@@ -54,13 +54,13 @@ from .dsh_state import (
     fold_writer_states,
     map_event_to_state,
 )
-from .model_access_tracker import ModelAccessTracker
-from .node_runtime import augmented_path as _augmented_path
-from .node_runtime import global_node_modules_roots
+from ..model_access_tracker import ModelAccessTracker
+from ..node_runtime import augmented_path as _augmented_path
+from ..node_runtime import global_node_modules_roots
 
-from .persona_phrases import PhrasePicker
-from .persona_template import CONDITIONAL_PARAMETERS, LEGACY_HIDDEN_PARAMETERS
-from .speech_bubble_text import truncate_bubble_text
+from ..persona_phrases import PhrasePicker
+from ..persona_template import CONDITIONAL_PARAMETERS, LEGACY_HIDDEN_PARAMETERS
+from ..speech_bubble_text import truncate_bubble_text
 
 log = logging.getLogger("dsh-pet-standalone")
 
@@ -3159,7 +3159,7 @@ def other_instances_use_agent(config, agent_key: str) -> bool:
     # 档案名判据的单一来源在 pet_profiles；这里延迟导入——本函数只在卸载清理 /
     # 关掉联动时各调一次，为一条常量正则把它拉进 agent_link 的模块导入图不划算
     # （agent_link 在启动路径上）。
-    from .pet_profiles import _SLOT_PROFILE_RE
+    from ..pet_profiles import _SLOT_PROFILE_RE
 
     for path in candidates:
         if path in seen:
@@ -3424,7 +3424,7 @@ class AgentLinkManager(QObject):
 
     def _on_normalized_event(self, event) -> None:
         """Consume semantic events for streak tracking and interaction cleanup."""
-        from .agent_event_normalizer import InteractionResolvedEvent, RetryEvent
+        from ..agent_event_normalizer import InteractionResolvedEvent, RetryEvent
         if isinstance(event, RetryEvent):
             streak = self._model_access_tracker.consume(event)
             if streak:
@@ -5495,7 +5495,7 @@ class AgentLinkManager(QObject):
             # 隐藏中：不切待机动画；气泡改道灵动岛反馈面（_show_link_bubble
             # 内置改道；岛反馈面不可用时丢弃）。消费统计按 abort 收口（原隐藏
             # 路径语义：防 _busy 永久滞留，下次开始干活被误判成"并发"）。
-            from . import window_alerts as _window_alerts
+            from .. import window_alerts as _window_alerts
 
             _window_alerts.redirect_hidden_bubble(self.win, text, duration_ms=4500)
             self._cost.abort(agent_key)
@@ -5563,7 +5563,7 @@ class AgentLinkManager(QObject):
         def worker() -> None:
             total = None
             try:
-                from .balance import fetch_balance
+                from ..balance import fetch_balance
 
                 data = fetch_balance(
                     provider.base_url, api_key,
@@ -5662,7 +5662,7 @@ class AgentLinkManager(QObject):
         # 审批/问题等常驻提示气泡不经本函数（走 show_alert 队列），仍需桌宠可见。
         is_visible = getattr(self.win, "isVisible", None)
         if callable(is_visible) and not is_visible():
-            from . import window_alerts as _window_alerts
+            from .. import window_alerts as _window_alerts
 
             if _window_alerts.redirect_hidden_bubble(self.win, text, duration_ms=duration_ms):
                 return

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from pet import dsh_state
-from pet.dsh_state import (
+from pet.agent_link import dsh_state
+from pet.agent_link.dsh_state import (
     APPROVAL_LATCH_TIMEOUT_S,
     DshState,
     DshStateConverger,
@@ -311,7 +311,7 @@ def test_dead_event_keys_removed_from_state_map():
     index.js 明确不转发流式 assistant/chunk，plan/mode 也只在 DSH 内部词汇里
     出现——留着这两条只会让状态表看起来覆盖了并不存在的事件。
     """
-    from pet.dsh_state import _EVENT_TO_STATE
+    from pet.agent_link.dsh_state import _EVENT_TO_STATE
 
     assert "llm_error" in _EVENT_TO_STATE
     assert "llm/error" not in _EVENT_TO_STATE, "桥接实际写 llm_error，旧键名匹配不到"
@@ -536,7 +536,7 @@ def test_turn_completion_reset_clears_table_but_never_reuses_tokens():
 # ---- 用户中止的回合静默收尾（桥接 turn/end 携带 reasonKind）----
 
 def test_aborted_turn_end_maps_to_idle_not_success():
-    from pet.dsh_state import map_event_to_state
+    from pet.agent_link.dsh_state import map_event_to_state
     assert map_event_to_state({"event": "turn/end", "reasonKind": "aborted"}) is DshState.IDLE
     assert map_event_to_state({"event": "turn/end", "reasonKind": "completed"}) is DshState.SUCCESS
     # 旧桥接：无 reasonKind → 保持原 SUCCESS 行为
@@ -544,7 +544,7 @@ def test_aborted_turn_end_maps_to_idle_not_success():
 
 
 def test_aborted_turn_end_yields_no_completion_identity():
-    from pet.dsh_state import TurnCompletionTracker
+    from pet.agent_link.dsh_state import TurnCompletionTracker
     tr = TurnCompletionTracker()
     tr.observe({"event": "turn/start", "sessionId": "s1"})
     assert tr.observe({"event": "turn/end", "sessionId": "s1", "step": "1",
@@ -1105,7 +1105,7 @@ def test_injected_user_message_kinds_are_not_human_input():
     skill-invocation …）每轮 4-5 条，若按真人消息处理，「对话开始」触发会被注入
     文案污染（同 tick 批量应用 + 边沿去重 → 时触时不触）。
     """
-    from pet.dsh_state import is_human_user_message
+    from pet.agent_link.dsh_state import is_human_user_message
 
     for kind in ("plugin", "agent-instructions", "skill-catalog", "skill-invocation"):
         assert is_human_user_message({"event": "user/message", "sourceKind": kind}) is False

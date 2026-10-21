@@ -34,10 +34,11 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 import pet.agent_link as agent_link
-from pet import click_sound, dsh_state, harness_launcher
+from pet import click_sound, harness_launcher
+from pet.agent_link import dsh_state
 from pet.agent_link import AgentLinkManager
 from pet.config import Config
-from pet.dsh_state import DshState
+from pet.agent_link.dsh_state import DshState
 
 _SUCCEED_WORDS = ("已完成本轮任务", "执行完成", "已顺利完成")
 

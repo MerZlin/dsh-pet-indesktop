@@ -40,7 +40,7 @@ from . import (
     island_segments, net_monitor, quiet_mode, sys_monitor,
 )
 from .config import _clean_island_coordinate
-from .dsh_state import DshState
+from .agent_link.dsh_state import DshState
 from .island_layout import (
     _BASELINE_DY, _CHIP_ALERT_DOT_PX, _CHIP_H_PX, _CHIP_RADIUS_PX, _CONTENT_PAD_PX,
     _DEVICE_LABELS, _DIVIDER_H_PX, _DIVIDER_W_PX, _GPU_LABEL, _ICON_GAP_PX, _ICON_PX,
