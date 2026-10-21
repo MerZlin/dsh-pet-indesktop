@@ -18,6 +18,12 @@ on:
         type: string
         default: ''
 
+# 同一 PR/分支的旧 run 自动取消：每次推送只为最新代码付三端 CI 的钱，
+# 被取代的 run 的红绿本来就没有意义（2026-10-21：同 PR 两轮全量并行白跑过一次）。
+concurrency:
+  group: pr-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
