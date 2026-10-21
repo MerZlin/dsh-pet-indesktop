@@ -146,6 +146,7 @@
 
 - [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅；多个 Spaces 的后续修复见下一项。
 - [macOS 多屏 Spaces 可见性（2026-10-21）](PR-REPORT-MACOS-SPACES-2026-10-21.md)：合成窗加入所有 Spaces，并在窗口重建后重放；包含原生策略读回、构建安装与用户跨屏/切换桌面验收；修改 Mac 合成窗 Spaces 策略或排查切换桌面后宠物消失时查阅。
+- [功能模块目录化（2026-10-21）](PR-REPORT-MODULE-DIRS-2026-10-21.md)：10 个功能模块从平铺单文件改成目录包（`island`/`music`/`festival`/`voice`/`weather`/`divination`/`todo`/`proactive`/`agent_link`/`file_interpret`），51 个文件 `git mv`、45 个模块 dotted 名变化、零 shim、零运行时行为变化；三条红线的证据是 AST 去 import/docstring 后 47/51 逐节点相同 + 其余 4 处 `parents[N]` 深度实算同路径，启动期模块集合 70 同名全在 + 9 映射全中 + 只有 4 个新空包（≈2.5 ms/进程）。全量 8818 passed / 0 failed（1790 s）、ruff 干净、收集 8833、AST 扫描 0 条坏 import。**如实登记**：70 处注释/文档字符串仍写旧路径（代码位置 0 处，但 `tools/import_cost.py` 的默认目标列表有 4 个已死名，实测 `ModuleNotFoundError`）、未构建三端产物、全量本轮未重跑。搬迁/新增任何 `pet/` 模块、写 `from . import X` 形式 import、按磁盘路径读源码写测试（`ast.parse(open(...))` 不经过 import 系统）、或再遇「模块名还在但 import 找不到」「打包期脚本 import 失败」时必读。**先例**：① 搬迁要一个模块一个提交才能逐条回滚；② 改 import 不等于改完——按磁盘路径读源码的用例和 rebase 后新加的引用都要单独扫；③ 跨工作树计时对比必须配负对照，否则会把「新签出的树慢」误读成性能差异。
 
 - [Firefox 媒体标识识别修复（2026-10-20）](PR-REPORT-FIREFOX-MEDIA-SESSION-2026-10-20.md)：修改浏览器媒体来源识别、排查 Firefox 开关失效前必读；补充 [SMTC 媒体类型过滤](PR-REPORT-SMTC-MEDIA-TYPE-2026-10-06.md) 中仅按进程名识别的遗漏，记录注册表身份解析、回归与本机冻结验证。
 
