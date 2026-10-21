@@ -37,6 +37,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon,
 from . import autostart as autostart_mod
 from . import catalog
 from . import click_sound
+from . import no_console  # noqa: F401 —— 导入即生效：本进程拉起的子进程一律不弹控制台窗口
 from . import overlay_instance_gate as overlay_gate_mod
 from . import self_talk_voice
 from . import slot_manager as slot_manager_mod
