@@ -871,7 +871,8 @@ def test_music_sing_polling_not_started_when_inactive():
 
 def test_check_music_sing_skips_audio_probe_when_inactive(monkeypatch):
     """停用后不再每秒调 pycaw COM（也不拉 SMTC 探针线程）。"""
-    from pet import music_detect, window_alerts
+    from pet import window_alerts
+    from pet.music import detect as music_detect
 
     _qapp()
     calls = []
@@ -937,7 +938,7 @@ def test_lyric_controller_not_installed_when_inactive(monkeypatch):
     """两条链（legacy mixin / overlay 壳）都不构造歌词控制器。"""
     from PySide6.QtWidgets import QWidget
 
-    from pet import music_lyric_controller as mlc_mod
+    from pet.music import lyric_controller as mlc_mod
     from pet.overlay_shell import OverlayShell
     from pet.window_optional_services import WindowFeatureGateMixin
 
@@ -1035,7 +1036,7 @@ def test_music_menu_callbacks_early_return_when_inactive(monkeypatch):
     """绕过菜单直达回调：不装控制器、不起线程、不读路径缓存。"""
     from PySide6.QtWidgets import QMenu
 
-    from pet import music_players
+    from pet.music import players as music_players
     from pet.context_menus import shared as shared_mod
 
     _qapp()
@@ -1109,7 +1110,7 @@ def test_music_menu_callbacks_early_return_when_inactive(monkeypatch):
 
 def test_music_player_detect_no_scan_when_inactive():
     """设置页「自动检测」：停用后不清缓存、不起扫描、不起轮询表。"""
-    from pet import settings_music
+    from pet.music import settings as settings_music
 
     calls = []
 

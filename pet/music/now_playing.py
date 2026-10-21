@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 
-from . import foobar_playing
+from . import foobar as foobar_playing
 
 # 判定"不上报进度"的阈值：末位时长小于该值视为无效时间轴。
 _MIN_VALID_DURATION = 0.01

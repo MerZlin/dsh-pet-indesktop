@@ -459,7 +459,7 @@ def _warm_music_player_paths() -> None:
     首屏。这条口径由 ``tests/test_music_player_cache.py`` 的
     ``test_ui_ready_prewarm_schedules_music_player_cache_warm`` 钉住。
     """
-    from . import music_players
+    from .music import players as music_players
 
     for player_key in ("netease", "qqmusic"):
         music_players.warm_cache_async(player_key)

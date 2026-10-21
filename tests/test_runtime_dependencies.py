@@ -133,6 +133,6 @@ def test_psutil_is_declared_for_player_probe():
         "进程不在时直接启动播放器而**不碰 WinRT**；缺失时该判断放行，"
         "SMTC 卡住的老路会照旧走。"
     )
-    from pet import now_playing
+    from pet.music import now_playing
 
     assert callable(now_playing.player_process_running)

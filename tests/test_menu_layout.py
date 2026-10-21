@@ -2729,8 +2729,8 @@ def test_music_align_ready_and_callback_routing(monkeypatch):
 
     from pet.context_menus import registry as registry_mod
     from pet.context_menus import shared as shared_mod
-    from pet.music_lyric import LyricLine
-    from pet.music_lyric_controller import MusicLyricController
+    from pet.music.lyric import LyricLine
+    from pet.music.lyric_controller import MusicLyricController
 
     app = QApplication.instance() or QApplication([])
 
@@ -2871,7 +2871,7 @@ _PLAYER_KEYS = ("netease", "qqmusic", "kugou", "soda")
 
 def _player_entry_labels() -> dict[str, str]:
     """播放器键 → 菜单项文案（文案取自 ``music_players`` 注册表的显示名）。"""
-    from pet import music_players
+    from pet.music import players as music_players
 
     return {
         key: f"打开{music_players.player_label(key)}给主人放歌"
@@ -2956,7 +2956,7 @@ def _wait_until(predicate, *, timeout: float = 15.0) -> bool:
 
 
 def _save_player_cache():
-    from pet import music_players
+    from pet.music import players as music_players
 
     saved = dict(music_players._cache)
     with music_players._warm_lock:
@@ -2966,7 +2966,7 @@ def _save_player_cache():
 
 
 def _restore_player_cache(saved) -> None:
-    from pet import music_players
+    from pet.music import players as music_players
 
     cache, inflight = saved
     music_players.clear_cache()
@@ -2984,7 +2984,7 @@ def test_music_submenu_registers_and_places_every_known_player():
     能不能渲染——只补注册表就是"老用户永远看不到"，只补模板则节点被当
     unknown-action 丢掉（旧版扁平菜单绕开注册表的历史形态）。
     """
-    from pet import music_players
+    from pet.music import players as music_players
     from pet.context_menus.registry import ACTION_ICONS, ACTION_LABELS, MENU_ACTIONS
 
     # 注册表里登记过的播放器都必须有菜单入口：后端再加播放器时不会漏掉菜单一侧。
@@ -3024,7 +3024,7 @@ def test_new_player_entries_click_routes_its_own_key_through_the_shared_worker(m
     """
     from PySide6.QtWidgets import QApplication
 
-    from pet import music_players, now_playing
+    from pet.music import players as music_players, now_playing
     from pet.context_menus import shared
 
     monkeypatch.setattr(music_players, "warm_cache_async", lambda key, manual="": True)
@@ -3070,7 +3070,7 @@ def test_new_player_entry_labels_follow_the_player_registry(monkeypatch):
     注入受控注册表（而不是依赖本机装了哪个播放器）：四个入口的文案一一对应各自的
     key，抄错 key 或写死显示名都会红。
     """
-    from pet import music_players
+    from pet.music import players as music_players
 
     controlled = dict(music_players.PLAYERS)
     controlled["kugou"] = ("酷狗音乐", "KuGou.exe", ("KuGou",))
@@ -3090,7 +3090,7 @@ def test_new_player_entry_labels_follow_the_player_registry(monkeypatch):
 
 def test_cold_cache_keeps_all_four_entries_optimistic_and_warms_each_once(monkeypatch):
     """冷缓存：四个入口乐观启用（不置灰），并各自幂等触发一次后台预热。"""
-    from pet import music_players
+    from pet.music import players as music_players
 
     saved = _save_player_cache()
     warms: list[str] = []
@@ -3113,7 +3113,7 @@ def test_cold_cache_keeps_all_four_entries_optimistic_and_warms_each_once(monkey
 
 def test_inflight_warm_keeps_entry_enabled_and_stays_idempotent(monkeypatch):
     """预热在途：入口保持乐观启用，且再次开菜单不会重复起一条扫描。"""
-    from pet import music_players
+    from pet.music import players as music_players
 
     saved = _save_player_cache()
     real_warm = music_players.warm_cache_async
@@ -3138,7 +3138,7 @@ def test_inflight_warm_keeps_entry_enabled_and_stays_idempotent(monkeypatch):
 
 def test_negative_cache_greys_the_new_entry_with_settings_hint(monkeypatch):
     """负缓存命中（扫过、本机没有）：置灰 + 保留说明，且不再重扫。"""
-    from pet import music_players
+    from pet.music import players as music_players
 
     saved = _save_player_cache()
     music_players._cache["kugou"] = None
@@ -3162,7 +3162,7 @@ def test_negative_cache_greys_the_new_entry_with_settings_hint(monkeypatch):
 
 def test_manual_player_path_is_authoritative_for_the_new_entry(tmp_path, monkeypatch):
     """手填路径就是权威：命中启用；文件不存在时置灰并指向设置页（不静默回退）。"""
-    from pet import music_players
+    from pet.music import players as music_players
 
     exe = tmp_path / "KuGou.exe"
     exe.write_bytes(b"")

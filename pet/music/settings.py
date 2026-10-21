@@ -45,8 +45,8 @@ import time
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox, QPushButton
 
-from . import music_players
-from .settings_widgets import ResourcePathPicker, SettingRow
+from . import players as music_players
+from ..settings_widgets import ResourcePathPicker, SettingRow
 
 log = logging.getLogger("dsh-pet-standalone")
 
@@ -297,7 +297,7 @@ def start_detect(dialog, *, warm=None, lookup=None, clear=None) -> None:
 
     ``warm`` / ``lookup`` / ``clear`` 是测试注入缝；默认都用后端真身。
     """
-    from . import feature_activation
+    from .. import feature_activation
 
     if not feature_activation.is_active("music"):
         # 音乐模块未激活：路径探测链整条不做（不清缓存、不起扫描线程、不起轮询表）。

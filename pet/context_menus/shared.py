@@ -1131,7 +1131,7 @@ def _music_controller(pet):
     必须校验类型而不是只判断 None：宿主可能用 ``__getattr__`` 兜底返回任意
     对象（测试替身就这么干），那样会把一个无关对象当成控制器。
     """
-    from ..music_lyric_controller import MusicLyricController
+    from ..music.lyric_controller import MusicLyricController
 
     controller = getattr(pet, "_music_lyric", None)
     return controller if isinstance(controller, MusicLyricController) else None
@@ -1229,7 +1229,7 @@ def _launch_player_and_play(player_key: str, pet) -> None:
     6s+），以前这段跑在 GUI 线程，点一下菜单就卡住。找不到时不静默 return，
     而是经 queued 信号回 GUI 线程弹气泡说明可以在配置文件里手动指定路径。
     """
-    from .. import music_players, now_playing
+    from ..music import players as music_players, now_playing
 
     if _music_gated():
         # 模块未激活：连桥与 worker 线程都不建（启动播放器/轮询 SMTC 全不做）
@@ -1297,7 +1297,7 @@ def _run_music_off_main(callable_) -> None:
 
 def add_music_pause(menu: QMenu, pet, *, icons: bool = True):
     """音乐子菜单：暂停 / 播放。"""
-    from .. import now_playing
+    from ..music import now_playing
 
     return add_action(
         menu, "让人家歇一会儿嘛（暂停 / 播放）", "pause" if icons else None,
@@ -1420,7 +1420,7 @@ def _music_player_builder(player_key: str):
     """
 
     def build(menu: QMenu, pet, *, icons: bool = True):
-        from .. import music_players
+        from ..music import players as music_players
 
         if _music_gated():
             # 模块未激活：不建条目、不读路径缓存、不起后台浅扫（菜单层已投影过滤，

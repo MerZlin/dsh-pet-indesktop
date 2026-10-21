@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from pet import music_players, settings_music
+from pet.music import players as music_players, settings as settings_music
 from pet.settings_widgets import ToggleSwitch, _line_edit
 
 pytest.importorskip("PySide6")
@@ -389,7 +389,7 @@ def test_path_rows_are_not_platform_gated(tmp_path, monkeypatch):
 
 def test_empty_paths_drop_the_key_and_restore_auto_search(dialog, monkeypatch):
     from pet.config import Config
-    from pet import settings_music as module
+    from pet.music import settings as module
 
     dialog.config.set("music_player_paths", {"netease": "D:/old/cloudmusic.exe"})
     dialog.config.save()
@@ -744,7 +744,7 @@ def test_foobar_controls_are_editable_on_the_child_page(monkeypatch, tmp_path):
     """
     import json
 
-    from pet import settings_music
+    from pet.music import settings as settings_music
     from pet.config import Config
     from pet.modern_settings_dialog import ModernSettingsDialog
 
@@ -780,7 +780,7 @@ def test_browser_media_control_is_editable_on_the_child_page(monkeypatch, tmp_pa
     """子宠页：「浏览器媒体会话参与歌词」与 foobar 同组同规——可编辑 + 落主配置。"""
     import json
 
-    from pet import settings_music
+    from pet.music import settings as settings_music
     from pet.config import Config
     from pet.modern_settings_dialog import ModernSettingsDialog
 

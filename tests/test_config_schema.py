@@ -323,7 +323,7 @@ def _dirty_music_cost_config(tmp_path):
 
 def test_dirty_music_and_cost_keys_are_normalized(tmp_path):
     """脏 config.json 加载后：布尔判真、数值有类型且落在可用区间内。"""
-    from pet.music_lyric_controller import LEAD_MAX_SECONDS, LEAD_MIN_SECONDS
+    from pet.music.lyric_controller import LEAD_MAX_SECONDS, LEAD_MIN_SECONDS
 
     cfg = _dirty_music_cost_config(tmp_path)
 
@@ -670,7 +670,7 @@ def test_dirty_music_and_cost_config_does_not_break_settings_page(tmp_path):
     from PySide6.QtWidgets import QApplication
 
     from pet.modern_settings_dialog import ModernSettingsDialog
-    from pet.music_lyric_controller import LEAD_MAX_SECONDS, LEAD_MIN_SECONDS
+    from pet.music.lyric_controller import LEAD_MAX_SECONDS, LEAD_MIN_SECONDS
 
     QApplication.instance() or QApplication([])
     cfg = _dirty_music_cost_config(tmp_path)
@@ -780,7 +780,7 @@ def test_music_player_paths_accepts_all_registered_players(tmp_path):
 
 def test_music_player_paths_keys_track_registry(tmp_path):
     """清洗键集 = 注册表键集（不许在 config 里另抄一份固定键表）。"""
-    from pet import music_players
+    from pet.music import players as music_players
 
     assert set(music_players.player_keys()) == {"netease", "qqmusic", "kugou", "soda"}
     payload = {key: f"D:/{key}/player.exe" for key in music_players.player_keys()}

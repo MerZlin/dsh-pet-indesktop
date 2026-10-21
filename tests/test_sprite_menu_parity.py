@@ -401,8 +401,8 @@ def test_music_menu_lyric_align_availability_matches_the_registry(tmp_path):
 
     from pet.context_menus.registry import MENU_ACTIONS
     from pet.context_menus.shared import MUSIC_ALIGN_DISABLED_REASON, add_music_lyric_align
-    from pet.music_lyric import LyricLine
-    from pet.music_lyric_controller import MusicLyricController
+    from pet.music.lyric import LyricLine
+    from pet.music.lyric_controller import MusicLyricController
 
     config = Config(base=tmp_path)
     config.set("music_lyric_enabled", True)
@@ -466,7 +466,7 @@ def test_music_submenu_offers_every_player_a_launch_entry(tmp_path):
     注册表漂移，也让四个键的映射抄错时立刻红）；窗口侧同一棵树由
     ``test_menu_tree_matches_reference_petwindow`` 的逐项包含 + 兄弟顺序保证同源。
     """
-    from pet import music_players
+    from pet.music import players as music_players
 
     shell, _instance, _config = _make_overlay(
         tmp_path, values={"music_lyric_enabled": True})

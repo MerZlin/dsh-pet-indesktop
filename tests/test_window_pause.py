@@ -281,7 +281,7 @@ def test_fullscreen_geometry_hit_requires_borderless(app, tmp_path):
 
 def _lyric_window(app, tmp_path, monkeypatch):
     """起一个真窗口并把歌词控制器按配置跑起来（timer 活跃）。"""
-    from pet import now_playing
+    from pet.music import now_playing
 
     # 操作系统边界：不真的去调 Windows SMTC（Linux/macOS 本就返回 None）。
     monkeypatch.setattr(now_playing, "get_now_playing", lambda: None)

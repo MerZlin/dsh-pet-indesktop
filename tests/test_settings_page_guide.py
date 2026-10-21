@@ -28,7 +28,8 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QV
 import pytest
 
 import pet.modern_settings_dialog as settings_mod
-from pet import settings_music, settings_page_guide
+from pet import settings_page_guide
+from pet.music import settings as settings_music
 from pet.config import Config
 from pet.modern_settings_dialog import ModernSettingsDialog, SettingRow, SettingsSection
 from pet.settings_widgets import CollapsibleGroup, SettingsTabContainer

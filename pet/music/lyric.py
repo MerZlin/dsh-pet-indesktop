@@ -155,7 +155,7 @@ def parse_lrc(text: str) -> list[LyricLine]:
 
 def cache_dir() -> Path:
     """歌词缓存目录（不存在时创建）。"""
-    from .config import APP_DIR_NAME, _default_base
+    from ..config import APP_DIR_NAME, _default_base
 
     path = Path(_default_base()) / APP_DIR_NAME / "lyrics_cache"
     try:

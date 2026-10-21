@@ -7,7 +7,8 @@
 """
 from __future__ import annotations
 
-from pet import music_detect, window_alerts
+from pet import window_alerts
+from pet.music import detect as music_detect
 
 
 class _FakeCfg:

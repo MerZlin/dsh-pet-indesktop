@@ -18,7 +18,7 @@ from __future__ import annotations
 import random
 import time
 
-from pet import music_title
+from pet.music import title as music_title
 
 
 # ------------------------------------------------- 任务一：网页/浏览器标题清洗
@@ -346,7 +346,7 @@ def test_titleformat_multiword_title_not_truncated():
     修复前最左字面量匹配把 "Hotel California 06:30" 切成 title="Hotel"、
     length="California 06:30"——截错的名字直接进搜索与缓存。
     """
-    from pet.music_title import parse_foobar_title
+    from pet.music.title import parse_foobar_title
 
     assert parse_foobar_title(
         "Eagles - Hotel California 06:30", "%artist% - %title% [%length%]"

@@ -30,7 +30,7 @@ import shiboken6
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication, QMenu
 
-from pet import music_players
+from pet.music import players as music_players
 
 # 模块导入时捕获真实现：conftest 的禁扫桩会在用例运行期替换 _search，
 # 串行化用例需要显式恢复它（只替身扫描体 _search_filesystem）。
@@ -728,7 +728,7 @@ def test_ui_ready_prewarm_schedules_music_player_cache_warm(monkeypatch):
 
 def test_launch_player_resolves_in_worker_thread_not_calling_thread(monkeypatch):
     """路径解析必须发生在 worker 线程（冷缓存时 6s+ 的扫描不能压回 GUI 线程）。"""
-    from pet import now_playing
+    from pet.music import now_playing
     from pet.context_menus import shared
 
     _qapp()
@@ -780,7 +780,7 @@ def test_launch_player_bubbles_hint_when_player_missing(monkeypatch):
 
 def test_launch_player_reads_manual_path_from_config(monkeypatch):
     """点击路径仍把设置里的手填路径交给解析（配置读取留在调用线程，无扫描）。"""
-    from pet import now_playing
+    from pet.music import now_playing
     from pet.context_menus import shared
 
     _qapp()
@@ -865,7 +865,7 @@ def test_launch_bridge_registry_collects_finished_workers(monkeypatch):
     ``_LAUNCH_BRIDGES`` 强引用保活；成功路径（找到播放器且会话在跑）不发
     notice，于是每点一次菜单就永久多留一个桥对象。
     """
-    from pet import now_playing
+    from pet.music import now_playing
     from pet.context_menus import shared
 
     app = _qapp()

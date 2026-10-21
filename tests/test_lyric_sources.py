@@ -19,7 +19,7 @@ import sys
 import pytest
 from PySide6.QtCore import QObject
 
-from pet import foobar_playing, music_title, now_playing
+from pet.music import foobar as foobar_playing, now_playing, title as music_title
 
 MUSIC = 1
 PLAYING = 4
@@ -260,7 +260,7 @@ class _SongWindow(QObject):
 
 
 def _controller(monkeypatch, cfg=None):
-    from pet.music_lyric_controller import MusicLyricController
+    from pet.music.lyric_controller import MusicLyricController
 
     win = _SongWindow(cfg)
     ctrl = MusicLyricController(win)
@@ -270,7 +270,7 @@ def _controller(monkeypatch, cfg=None):
 
 
 def _playback(app_id: str, *, title="t", artist="a"):
-    from pet.now_playing import Playback, Track
+    from pet.music.now_playing import Playback, Track
 
     return Playback(
         track=Track(title=title, artist=artist, playing=True),

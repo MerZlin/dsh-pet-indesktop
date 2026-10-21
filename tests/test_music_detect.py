@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """后台音乐检测模块测试。"""
 
-from pet import music_detect
+from pet.music import detect as music_detect
 
 
 def test_non_windows_returns_false(monkeypatch):

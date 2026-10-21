@@ -175,7 +175,7 @@ from .persona_template import (
 from . import settings_default_marks
 from . import settings_file_interpret
 from . import settings_interaction
-from . import settings_music
+from .music import settings as settings_music
 from . import feature_activation as _fa
 from . import settings_network
 from . import settings_page_guide

@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 
-from . import music_title
+from . import title as music_title
 
 log = logging.getLogger(__name__)
 

@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import catalog, island_segments, music_players
+from . import catalog, island_segments
+from .music import players as music_players
 
 
 DEFAULT_ANIMATION_GAP_SECONDS = 0.0
@@ -2076,7 +2077,7 @@ class Config:
         self.data["foobar_lyrics_enabled"] = _bool_or_default(
             self.data.get("foobar_lyrics_enabled"), False
         )
-        from .music_title import FOOBAR_FORMAT_MAX_CHARS
+        from .music.title import FOOBAR_FORMAT_MAX_CHARS
 
         raw_format = self.data.get("foobar_title_format")
         self.data["foobar_title_format"] = (
@@ -2091,7 +2092,7 @@ class Config:
         )
         # 歌词提前量的区间与设置页滑块**同源**（music_lyric_controller 的常量），
         # 不再抄一份边界。惰性导入：config.py 顶层不引 Qt。
-        from .music_lyric_controller import (
+        from .music.lyric_controller import (
             LEAD_MAX_SECONDS,
             LEAD_MIN_SECONDS,
             LYRIC_LEAD_SECONDS,

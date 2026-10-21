@@ -864,7 +864,7 @@ def check_music_sing(host) -> None:
         host._music_sing_active = False
         host._music_sing_silent_since = None
         return
-    from . import music_detect
+    from .music import detect as music_detect
     _push_browser_media_setting(host, music_detect)
     playing = music_detect.is_music_playing()
     if host._music_sing_active:

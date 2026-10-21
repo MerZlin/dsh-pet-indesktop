@@ -22,7 +22,7 @@ import time
 
 import pytest
 
-from pet import music_detect, now_playing
+from pet.music import detect as music_detect, now_playing
 
 MUSIC = 1
 PLAYING = 4

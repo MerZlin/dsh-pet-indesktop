@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pet import music_detect, now_playing
+from pet.music import detect as music_detect, now_playing
 from tests.test_now_playing_media_type import MUSIC, UNKNOWN, _Session, _install_winrt
 
 FIREFOX_ID = "308046B0AF4A39CB"

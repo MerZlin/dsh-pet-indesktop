@@ -33,7 +33,7 @@ class _MusicSingHarness:
         self.playing = playing
 
     def check(self):
-        from pet import music_detect
+        from pet.music import detect as music_detect
         original = music_detect.is_music_playing
         try:
             music_detect.is_music_playing = lambda: self.playing

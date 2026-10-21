@@ -24,7 +24,7 @@ def app():
 @pytest.fixture(autouse=True)
 def _no_real_music_detection(monkeypatch):
     """测试环境不读真实音频峰值；默认按“没有在放音乐”处理。"""
-    import pet.music_detect as music_detect
+    import pet.music.detect as music_detect
     monkeypatch.setattr(music_detect, "is_music_playing", lambda: False)
 
 
@@ -49,7 +49,7 @@ class SingingLibrary(FakeLibrary):
 
 def test_music_sing_starts_immediately_when_visible(app, tmp_path, monkeypatch):
     """回归 issue #69-1：窗口可见且检测到音乐时应尽快进入唱歌，而不是等 4s 轮询。"""
-    import pet.music_detect as music_detect
+    import pet.music.detect as music_detect
 
     cfg = Config(base=tmp_path)
     cfg.set("music_sing_enabled", True)

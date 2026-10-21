@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from pet.agent_link import AgentLinkManager
 from pet.config import Config
 from pet.multi_window_shared import MultiWindowProxy
-from pet.music_lyric_controller import MusicLyricController
+from pet.music.lyric_controller import MusicLyricController
 from tests.test_sprite_menu_facade import _make_shell
 
 app = QApplication.instance() or QApplication([])

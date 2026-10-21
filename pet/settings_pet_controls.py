@@ -23,12 +23,12 @@ from PySide6.QtWidgets import (
 from . import autostart as autostart_mod
 from . import catalog
 from .agent_link import AgentLinkManager
-from .music_lyric_controller import (
+from .music.lyric_controller import (
     LEAD_MAX_SECONDS,
     LEAD_MIN_SECONDS,
     LYRIC_LEAD_SECONDS,
 )
-from .music_title import FOOBAR_FORMAT_MAX_CHARS
+from .music.title import FOOBAR_FORMAT_MAX_CHARS
 from .config import (
     DEFAULT_CONTEXT_MENU_APPEARANCE,
     DEFAULT_MENU_EASTER_EGG,

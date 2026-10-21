@@ -160,7 +160,7 @@ def test_pet_domain_uses_in_page_tabs_without_changing_sidebar(dialog):
 
 def test_group_order_inside_each_tab_puts_the_advanced_group_last(dialog):
     """标签内组序：主视线组在前、高级组垫底；每行的 SettingsSection 归属唯一。"""
-    from pet import settings_music
+    from pet.music import settings as settings_music
 
     tabs = _pet_tabs(dialog)
     expected = {
@@ -256,7 +256,7 @@ def test_search_jumps_to_the_tab_that_owns_the_hit(dialog):
 
 def test_search_on_tab_one_hits_stay_on_tab_one(dialog):
     """标签 1 的行（含默认标签）命中后仍停在标签 1、行可见——回归，不是只测切过去。"""
-    from pet import settings_music
+    from pet.music import settings as settings_music
 
     tabs = _pet_tabs(dialog)
     queries = [

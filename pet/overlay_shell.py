@@ -3368,7 +3368,7 @@ class OverlayShell(QObject):
         if not feature_activation.is_active("music"):
             return None
         if self._music_lyric is None:
-            from .music_lyric_controller import MusicLyricController
+            from .music.lyric_controller import MusicLyricController
 
             self._music_lyric = MusicLyricController(self)
         return self._music_lyric

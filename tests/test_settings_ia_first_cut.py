@@ -22,7 +22,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
 
 import pet.modern_settings_dialog as settings_mod
-from pet import settings_music, settings_reset_defaults
+from pet import settings_reset_defaults
+from pet.music import settings as settings_music
 from pet.config import Config
 from pet.modern_settings_dialog import SettingRow, SettingsSection
 from pet.settings_widgets import CollapsibleGroup, SettingsTabContainer
@@ -33,7 +34,7 @@ _REPO = Path(__file__).resolve().parents[1]
 #: 第一刀允许改动的生产文件（V1 的 grep 口径）。
 _PRODUCTION_FILES = (
     "pet/modern_settings_dialog.py",
-    "pet/settings_music.py",
+    "pet/music/settings.py",
     "pet/settings_network.py",
     "pet/settings_reset_defaults.py",
 )
@@ -158,7 +159,7 @@ def test_v1_forbidden_jargon_is_gone_from_the_production_files():
 def test_v1_required_wording_is_present_where_it_belongs():
     """定稿要求的语义句必须真的落在对的文件里（换个说法就等于没改）。"""
     required = {
-        "pet/settings_music.py": ("媒体控制插件", "通常留空即可"),
+        "pet/music/settings.py": ("媒体控制插件", "通常留空即可"),
         "pet/settings_network.py": ("检测目标是固定的境内服务（阿里云）", "延迟检测间隔"),
         "pet/settings_reset_defaults.py": ("各服务商的 API Key", "每个自定义服务商只保留"),
     }

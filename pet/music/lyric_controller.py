@@ -36,7 +36,8 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from . import music_lyric, music_title, now_playing, window_alerts
+from . import lyric as music_lyric, now_playing, title as music_title
+from .. import window_alerts
 
 log = logging.getLogger(__name__)
 

@@ -34,7 +34,7 @@ import time
 
 import pytest
 
-from pet import music_players, settings_music
+from pet.music import players as music_players, settings as settings_music
 
 pytest.importorskip("PySide6")
 

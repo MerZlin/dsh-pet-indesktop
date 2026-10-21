@@ -33,8 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pet import music_lyric  # noqa: E402
-from pet.music_lyric_controller import LyricTracker  # noqa: E402
+from pet.music import lyric as music_lyric  # noqa: E402
+from pet.music.lyric_controller import LyricTracker  # noqa: E402
 
 
 def make_lines(count: int, *, spacing: float = 4.0) -> list[music_lyric.LyricLine]:
@@ -82,7 +82,7 @@ def bench_tracker(*, lines: int, iters: int, now: float = 1000.0) -> dict:
 
 def bench_now_playing(*, samples: int) -> dict | None:
     try:
-        from pet.now_playing import get_now_playing
+        from pet.music.now_playing import get_now_playing
     except Exception as exc:  # noqa: BLE001 - 无 winrt 时如实记录，不伪装成 0
         return {"error": f"{type(exc).__name__}: {exc}"}
 
