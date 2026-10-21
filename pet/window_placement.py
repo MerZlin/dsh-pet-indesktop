@@ -20,7 +20,7 @@ from typing import Any
 import logging
 
 from PySide6.QtCore import QPoint, QRect
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QRegion
 
 from . import catalog
 
@@ -127,9 +127,13 @@ def desktop_area() -> DesktopArea | None:
 
 
 def snap_to_nearest_screen(body: QRect, screens) -> QPoint | None:
-    """落点吸附：身体中心不在任何屏内时，返回身体框的**新左上角**，把它收进
-    最近的屏的最近边缘（完整收入该屏可用区，取位移最小的落点）；已在某屏
-    内（或没有可用屏）返回 None（不吸附）。
+    """落点吸附：身体**不被各屏并集完整覆盖**时，返回身体框的**新左上角**，
+    把它收进最近的屏的最近边缘（完整收入该屏可用区，取位移最小的落点）；
+    已被并集覆盖（在某屏内、或合法跨缝）或没有可用屏时返回 None（不吸附）。
+
+    覆盖判定用并集（QRegion）而不是「身体中心在屏内」——中心在屏内但半身
+    悬在空洞上的情形同样要吸附，否则半个宠隐形到下一次 NORMAL 位移才被
+    推回（k3 盲审 A2；与 pet_sprite.set_pos 的 ``_rect_covered`` 同口径）。
 
     用途：跨屏「过缝通行 + 落点吸附」语义——拖拽松手/抛掷落地时的静止域
     收口（.scratch/cross-screen-corridor/SPEC.md）。纯函数，不含 Qt 对象依赖。
@@ -137,10 +141,12 @@ def snap_to_nearest_screen(body: QRect, screens) -> QPoint | None:
     rects = [r for r in (screens or ()) if r is not None and r.isValid()]
     if not rects:
         return None
-    cx, cy = body.center().x(), body.center().y()
+    union = QRegion()
     for rect in rects:
-        if rect.contains(cx, cy):
-            return None
+        union = union.united(QRegion(rect))
+    if QRegion(body).subtracted(union).isEmpty():
+        return None
+    cx, cy = body.center().x(), body.center().y()
     best = None
     for rect in rects:
         dx = max(rect.left() - cx, 0, cx - rect.right())

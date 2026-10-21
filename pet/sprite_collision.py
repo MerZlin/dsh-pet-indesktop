@@ -708,6 +708,12 @@ class SpriteCollisionWorld:
                 reset = getattr(sprite, "reset_playback_speed", None)
                 if callable(reset):
                     reset()
+                # 过缝通行：落岛落定与抛掷落地同语义——身体在空洞里先吸附
+                # （本模块刻意不 import pet_sprite，鸭子类型调用；k3 盲审 S1：
+                # 岛停靠在异高屏空洞上方时这里曾是第三个无吸附出口）
+                snap = getattr(sprite, "_snap_into_screen_if_needed", None)
+                if callable(snap):
+                    snap()
                 sprite.interaction_state = INTERACTION_NORMAL
             else:
                 self._support_streak[member.runtime_id] = streak

@@ -22,7 +22,6 @@ from PySide6.QtCore import QPointF, QRect, QRectF
 
 from . import physics as physics_mod
 from .pet_sprite import INTERACTION_NORMAL, INTERACTION_THROWN
-from .window_placement import snap_to_nearest_screen
 
 
 def _united(rects) -> QRect:
@@ -97,26 +96,14 @@ class ThrowPhysicsController:
         return QRectF(self._bounds)
 
     def _snap_into_screen_if_needed(self, sprite) -> None:
-        """落点吸附：静止时身体中心不在任何屏内 → 收进最近的屏（SPEC §语义）。
+        """落点吸附：静止时身体不被各屏并集覆盖 → 收进最近的屏（SPEC §语义）。
 
-        身体框完整收入最近屏可用区、取位移最小的落点；已在屏内或无跨屏域
-        时是 no-op。只在交还行为控制器（``is_at_rest``）处调用——飞行途中
-        进空洞是合法过渡态，不吸附。
+        实现唯一来源是 pet_sprite 的同名方法（鸭子类型调用，防两份拷贝漂移
+        ——k3 盲审 A1）；fake sprite 没有该方法时静默 no-op。
         """
-        clamp_rects = getattr(sprite, "_clamp_rects", None)
-        if not clamp_rects:
-            return
-        body_local = sprite._body_local_rect()
-        body = QRect(
-            int(sprite.pos.x() + body_local.x()),
-            int(sprite.pos.y() + body_local.y()),
-            body_local.width(), body_local.height(),
-        )
-        screens = [QRect(int(r.x()), int(r.y()), int(r.width()), int(r.height()))
-                   for r in clamp_rects]
-        snapped = snap_to_nearest_screen(body, screens)
-        if snapped is not None:
-            sprite.set_pos(QPointF(snapped.x() - body_local.x(), snapped.y() - body_local.y()))
+        snap = getattr(sprite, "_snap_into_screen_if_needed", None)
+        if callable(snap):
+            snap()
 
     def _sprite_bounds(self, sprite) -> tuple[float, float, float, float]:
         """sprite 左上角的可活动范围：身体框贴 bounds 四边（V-2）。

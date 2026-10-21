@@ -157,3 +157,88 @@ def test_single_screen_bounds_and_no_snap():
     body = QRect(100, 100, 320, 180)
     assert snap_to_nearest_screen(body, [QRect(0, 0, 800, 600)]) is None
 EOF_MARKER_NOT_USED = True
+
+
+# ---------------------------------------------------------------- k3 盲审修复回归
+def test_snap_triggers_on_half_body_hanging_out():
+    """覆盖判定（k3 A2）：身体中心在屏内但半身悬在空洞上 → 也要吸附
+    （修复前按中心判定不吸附，半个宠隐形到下一次 NORMAL 位移）。"""
+    main = QRect(0, 0, 2560, 1392)
+    second = QRect(-1920, 0, 1920, 1032)
+    # 身体 x∈[-100,220]：中心 60 在主屏内，但左半身 100px 悬在 y>1032 的空洞上
+    snapped = snap_to_nearest_screen(QRect(-100, 1200, 320, 180), [main, second])
+    assert snapped is not None
+    body = QRect(snapped.x(), snapped.y(), 320, 180)
+    assert main.contains(body) or second.contains(body)
+
+
+def test_island_supported_settle_also_snaps():
+    """落岛落定（k3 S1）：_settle_supported 把 thrown 宠钉在静态成员上时，
+    身体在空洞里同样吸附——鸭子类型调用，不 import pet_sprite。"""
+    from pet.sprite_collision import SpriteCollisionWorld
+    from tests.test_sprite_collision import FakeSprite
+
+    calls = []
+    sprite = FakeSprite(-960, -90, vx=0.0, vy=0.0, collision_id="p")
+    sprite.interaction_state = INTERACTION_THROWN
+    sprite._snap_into_screen_if_needed = lambda: calls.append(1)
+    world = SpriteCollisionWorld(support_settle_ticks=2)
+    # 岛在副屏上方（x<0, y<0 的空洞上方边缘），宠低速贴上去
+    world.add_static_member("island", -1000, -50, 200, 44)
+    world.tick([sprite], 0.016)
+    world.tick([sprite], 0.016)  # 连续支撑达到 ticks=2 才收尾
+    assert calls, "落岛落定没有调用吸附"
+    assert sprite.interaction_state == INTERACTION_NORMAL
+
+
+def test_slingshot_cancel_snaps_before_forcing_normal():
+    """弹弓 Esc 取消（k3 S2）：锚点在空洞里时，强制 NORMAL 前先吸附——
+    否则 drop_gravity 的 THROWN 兜底被覆盖，宠钉死在空洞。"""
+    from pet.sprite_slingshot import SlingshotController
+
+    events = []
+    class FakeSlingshotSprite:
+        def __init__(self):
+            self.interaction_state = INTERACTION_THROWN  # on_release 走 drop_gravity 分支后
+        def on_release(self, _pos):
+            self.interaction_state = INTERACTION_THROWN
+        def set_pos(self, _pos):
+            pass
+        def set_velocity(self, _v):
+            pass
+        def squash(self):
+            pass
+        def _snap_into_screen_if_needed(self):
+            events.append(("snap", self.interaction_state))
+    sprite = FakeSlingshotSprite()
+    sling = SlingshotController()
+    sling._sprite = sprite
+    sling._anchor = QPointF(-900.0, 1250.0)  # 锚点在空洞
+    sling._cursor = QPointF(-950.0, 1250.0)
+    assert sling.cancel(resume_drag=False) is True
+    assert events == [("snap", INTERACTION_THROWN)]  # 吸附在强制 NORMAL 之前、且当时仍是 THROWN
+    assert sprite.interaction_state == INTERACTION_NORMAL
+
+
+def test_spring_drag_release_in_dead_zone_snaps():
+    """弹簧档拖拽（k3 A4）：on_move 只写目标点，松手时滞后位置在空洞 → 吸附。"""
+    clock = FakeClock()
+    sprite = _corridor_sprite((100.0, 1150.0))
+    sprite._clock = clock
+    sprite.drag_physics = True
+    sprite.on_press(QPointF(200.0, 1200.0))
+    sprite.begin_drag()
+    clock.advance(0.05)
+    sprite.on_move(QPointF(-900.0, 1250.0))
+    # 弹簧追踪几步（位置逼近目标点所在的空洞）
+    for _ in range(60):
+        clock.advance(0.016)
+        sprite.advance(0.016)
+    for _ in range(4):
+        clock.advance(0.4)
+        sprite.advance(0.05)
+    sprite.on_release(QPointF(-900.0, 1250.0))
+    center_x = sprite.pos.x() + 160
+    center_y = sprite.pos.y() + 90
+    assert SECOND.contains(center_x, center_y) or MAIN.contains(center_x, center_y), \
+        f"弹簧档松手后身体中心仍在空洞里: ({center_x}, {center_y})"

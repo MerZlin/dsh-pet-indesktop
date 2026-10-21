@@ -324,6 +324,12 @@ class SlingshotController:
         else:
             self._write(sprite, "set_velocity", QPointF(0, 0))
             self._write(sprite, "set_pos", anchor)
+            # 过缝通行：取消收口强制 NORMAL 前先吸附——锚点可在空洞里
+            # （瞄准起始位置），on_release 的 drop_gravity→THROWN 兜底被这里
+            # 的强制 NORMAL 覆盖，不吸附就会把宠钉死在空洞（k3 盲审 S2）
+            snap = getattr(sprite, "_snap_into_screen_if_needed", None)
+            if callable(snap):
+                snap()
             sprite.interaction_state = INTERACTION_NORMAL
         if progress > 0.0:
             self._write(sprite, "squash")            # 旧 _start_slingshot_rebound 回弹反馈
