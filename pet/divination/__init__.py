@@ -33,7 +33,7 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Iterable, NamedTuple, Sequence
 
-from .divination_quotes import RAW_QUOTES
+from .quotes import RAW_QUOTES
 
 __all__ = [
     "DivinationQuote",

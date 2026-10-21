@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime as dt
 
 from pet import divination
-from pet.divination_service import (
+from pet.divination.service import (
     HINT_TEXT,
     PRECACHE_MAX_TRIES,
     READING_GAP_MS,
@@ -314,7 +314,7 @@ def test_precache_gives_up_after_the_cap() -> None:
 
 def test_bubble_duration_scales_with_text() -> None:
     """⑤ 气泡时长按字数算：六行签文不能被固定 12 秒截短。"""
-    from pet.divination_service import BUBBLE_MAX_MS, _bubble_ms
+    from pet.divination.service import BUBBLE_MAX_MS, _bubble_ms
 
     short = _bubble_ms("一行")
     long = _bubble_ms("字" * 400)

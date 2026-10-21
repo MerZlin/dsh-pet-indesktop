@@ -179,7 +179,7 @@ from . import settings_music
 from . import feature_activation as _fa
 from . import settings_network
 from . import settings_page_guide
-from . import settings_divination
+from .divination import settings as settings_divination
 from . import settings_hotkeys
 from .weather import settings as settings_weather
 from . import settings_pet_controls

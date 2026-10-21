@@ -200,7 +200,7 @@ def build_interaction_domain(dialog) -> QWidget:
     # 「趣味」一级域按 docs/SETTINGS-CHANGE-GATES.md 的准入不合格（新域须 ≥2 稳组，
     # 且为塞第 11 个域压缩侧栏间距会损害所有域的点击目标）。两者的区别只在容器层级：
     # 一级域要过准入，页内标签不用——她的归类意图由标签名承载。
-    from .settings_divination import build_divination_tab
+    from .divination.settings import build_divination_tab
 
     if _fa.is_active("divination"):
         tabs.addTab(TAB_KEYS[3], TAB_LABELS[3], build_divination_tab(dialog))

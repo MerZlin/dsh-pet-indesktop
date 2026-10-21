@@ -23,7 +23,7 @@ import logging
 import time
 from typing import Any
 
-from . import divination
+from .. import divination
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +245,7 @@ class DivinationService:
         """桌宠气泡。门禁与降级口径照抄节日提醒（免打扰判定必须在可见性之前）。"""
         if not text:
             return
-        from . import window_alerts
+        from .. import window_alerts
         app = self._app
         win = getattr(app, "win", None)
         if win is not None and window_alerts.quiet_blocked(win):

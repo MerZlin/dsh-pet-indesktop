@@ -4836,7 +4836,7 @@ class AppShell:
     def _ensure_divination_service(self):
         """懒创建抽签服务（纯逻辑 + 无定时器，创建很轻，但仍按开关懒建）。"""
         if getattr(self, "divination_service", None) is None:
-            from .divination_service import DivinationService
+            from .divination.service import DivinationService
 
             self.divination_service = DivinationService(self)
             # 建好就刷一次配置：`apply_config()` 会顺手把今天的语音预合成提交掉，

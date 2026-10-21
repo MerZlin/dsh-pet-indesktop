@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
-from .settings_widgets import SettingRow, SettingsSection, ToggleSwitch
+from ..settings_widgets import SettingRow, SettingsSection, ToggleSwitch
 
 
 def create_divination_controls(dialog) -> None:
@@ -58,8 +58,8 @@ def _preview_today(dialog) -> None:
     if getattr(dialog, "standalone", False):
         import datetime as _d
 
-        from . import divination
-        from .settings_standalone import preview_voice_chime
+        from .. import divination
+        from ..settings_standalone import preview_voice_chime
 
         preview_voice_chime(dialog, divination.speech_text(
             divination.draw_for_day(_d.date.today())))

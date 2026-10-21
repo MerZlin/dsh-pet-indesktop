@@ -16,7 +16,7 @@ import sys
 import pytest
 
 from pet import divination
-from pet.divination_quotes import RAW_QUOTES
+from pet.divination.quotes import RAW_QUOTES
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 

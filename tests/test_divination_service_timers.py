@@ -19,7 +19,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from pet import divination
-from pet.divination_service import DivinationService
+from pet.divination.service import DivinationService
 from tests.test_divination_service import _App, _Channel, _day
 
 #: 把揭签间隔与预热重试间隔缩到几十毫秒：被测语义是投递口的停用 / 代次 guard，
@@ -64,7 +64,7 @@ def _advance_past(ms: int) -> bool:
 @pytest.fixture
 def short_delays(monkeypatch):
     """缩短两个延时（数值不是被测语义）。"""
-    import pet.divination_service as dsvc
+    import pet.divination.service as dsvc
 
     monkeypatch.setattr(dsvc, "READING_GAP_MS", _SHORT_MS)
     monkeypatch.setattr(dsvc, "PRECACHE_RETRY_MS", _SHORT_MS)

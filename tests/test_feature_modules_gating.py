@@ -256,7 +256,7 @@ def _shell(**attrs):
 
 def test_divination_sync_inactive_creates_no_service(monkeypatch):
     """未激活：即使 ``divination_enabled`` 开着也不建服务（不装跨天定时器、不预合成）。"""
-    import pet.divination_service as ds_mod
+    import pet.divination.service as ds_mod
 
     created = []
 
@@ -293,7 +293,7 @@ def test_divination_sync_inactive_stops_service_with_generation_guard():
 
 def test_divination_draw_inactive_returns_before_lazy_create(monkeypatch):
     """菜单落点兜底：本方法会懒创建服务 + apply_config，闸必须在其之前。"""
-    import pet.divination_service as ds_mod
+    import pet.divination.service as ds_mod
 
     created = []
     bubbles = []
@@ -318,7 +318,7 @@ def test_divination_draw_inactive_returns_before_lazy_create(monkeypatch):
 
 
 def test_divination_draw_active_lazy_creates_service(monkeypatch):
-    import pet.divination_service as ds_mod
+    import pet.divination.service as ds_mod
 
     calls = []
 
