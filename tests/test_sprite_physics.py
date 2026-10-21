@@ -741,10 +741,11 @@ def test_thrown_crosses_screens_in_multi_rect_domain():
     assert sprite.velocity.x() > 0.0    # 没有在主屏右墙反弹回头
 
 
-def test_thrown_still_blocked_by_staggered_hole():
-    """错位拼接：身体带不与副屏相交时右墙仍在主屏右缘（band 语义挡空洞，
-    与 legacy 十年口径一致）。"""
-    # 副屏整体下移 520px：y=100 的身体带只与主屏相交 → 横向带 = [主屏]
+def test_thrown_crosses_staggered_hole_and_settles_on_screen():
+    """错位拼接：正对空洞的那条带不再是墙——band 语义已退役为过缝通行
+    （cross-screen-corridor SPEC，2026-10-22）：抛掷穿缝，落地时身体在空洞
+    里则吸附到最近的屏。"""
+    # 副屏整体下移 520px：y=100 处 x>1920 是空洞——旧语义在这里挡墙
     screens = [QRectF(0, 0, 1920, 1040), QRectF(1920, 520, 1920, 1040)]
     controller = ThrowPhysicsController(QRectF(0, 0, 3840, 1560))
     sprite = _make_sprite((1500.0, 100.0))
@@ -754,5 +755,14 @@ def test_thrown_still_blocked_by_staggered_hole():
 
     for _ in range(10):
         controller.tick([sprite], 0.016)
+    assert sprite.pos.x() > 1920.0  # 穿缝而过，没有在主屏右缘被挡回
 
-    assert sprite.velocity.x() < 0.0  # 在主屏右墙反弹（缝在这个高度是空洞）
+    ticks = 0
+    while sprite.interaction_state == INTERACTION_THROWN and ticks < 4000:
+        sprite.advance(0.016)
+        controller.tick([sprite], 0.016)
+        ticks += 1
+    body_center_x = sprite.pos.x() + 160
+    body_center_y = sprite.pos.y() + 90
+    assert any(r.contains(body_center_x, body_center_y) for r in screens), \
+        f"落地后身体中心仍在空洞里: ({body_center_x}, {body_center_y})"

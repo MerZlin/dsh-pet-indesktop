@@ -126,6 +126,41 @@ def desktop_area() -> DesktopArea | None:
     return DesktopArea(bounds=bounds, screens=tuple(rects))
 
 
+def snap_to_nearest_screen(body: QRect, screens) -> QPoint | None:
+    """落点吸附：身体中心不在任何屏内时，返回身体框的**新左上角**，把它收进
+    最近的屏的最近边缘（完整收入该屏可用区，取位移最小的落点）；已在某屏
+    内（或没有可用屏）返回 None（不吸附）。
+
+    用途：跨屏「过缝通行 + 落点吸附」语义——拖拽松手/抛掷落地时的静止域
+    收口（.scratch/cross-screen-corridor/SPEC.md）。纯函数，不含 Qt 对象依赖。
+    """
+    rects = [r for r in (screens or ()) if r is not None and r.isValid()]
+    if not rects:
+        return None
+    cx, cy = body.center().x(), body.center().y()
+    for rect in rects:
+        if rect.contains(cx, cy):
+            return None
+    best = None
+    for rect in rects:
+        dx = max(rect.left() - cx, 0, cx - rect.right())
+        dy = max(rect.top() - cy, 0, cy - rect.bottom())
+        dist = dx * dx + dy * dy
+        if best is None or dist < best[0]:
+            best = (dist, rect)
+    target = best[1]
+    # 身体框钳进目标屏（身体比屏大时 clamp_span 的小屏兜底：贴上/左缘）
+    new_x = min(max(cx - body.width() / 2, float(target.left())),
+                float(target.right()) + 1 - body.width())
+    new_y = min(max(cy - body.height() / 2, float(target.top())),
+                float(target.bottom()) + 1 - body.height())
+    if target.width() < body.width():
+        new_x = float(target.left())
+    if target.height() < body.height():
+        new_y = float(target.top())
+    return QPoint(int(new_x), int(new_y))
+
+
 def band_bounds(area: DesktopArea, body: QRect) -> QRect:
     """把桌面包围矩形收窄到"宠物当前所在的屏幕带"。
 

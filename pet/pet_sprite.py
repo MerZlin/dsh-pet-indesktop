@@ -29,6 +29,7 @@ from PySide6.QtGui import QImage, QPainter, QPixmap
 from . import catalog
 from . import physics as physics_mod
 from .library import MovieLibrary, clip_current_image
+from .window_placement import snap_to_nearest_screen
 from .window_effects import (begin_rotation, end_rotation, rotated_region_bounds,
                              unrotate_point)
 
@@ -560,9 +561,23 @@ class PetSprite(QObject):
         多矩形域（跨屏过渡，``_clamp_rects``）：身体**逐点落在并集内**就一步不动
         （跨在缝上是合法的：缝两边都有显示器）；只有落进屏间空洞时才把它推到最近的
         那一块屏——域内永远没有"没有显示器"的合法位置。
+
+        **过缝通行（2026-10-22，cross-screen-corridor SPEC）**：拖拽期间
+        （``_dragging``）与抛掷期间（``INTERACTION_THROWN``）多矩形域放宽为
+        **并集外接矩形**（含空洞）——异高屏（主 1440 + 副 1080）正对空洞的
+        那条带不再是一堵墙，看不见是过渡态；松手/落地由落点吸附收进最近
+        的屏。探头放宽域优先级不变（探头不是拖拽）。
         """
         x, y = float(pos.x()), float(pos.y())
         targets = self._clamp_targets()
+        if (getattr(self, '_dragging', False)
+                or getattr(self, 'interaction_state', None) == INTERACTION_THROWN) \
+                and self._clamp_rects and len(self._clamp_rects) > 1 \
+                and self.probe_clamp_bounds() is None:
+            outer = QRectF(self._clamp_rects[0])
+            for rect in self._clamp_rects[1:]:
+                outer = outer.united(rect)
+            targets = (outer,)
         if targets:
             body = self._body_local_rect()
             if len(targets) > 1 and self._rect_covered(
@@ -1288,6 +1303,28 @@ class PetSprite(QObject):
         cutoff = now - physics_mod.TRAIL_KEEP_SEC
         self._drag_trail = [s for s in self._drag_trail if s[0] >= cutoff]
 
+    def _snap_into_screen_if_needed(self) -> None:
+        """落点吸附：身体中心不在任何屏内 → 收进最近的屏（位移最小的完整
+        收入点）；已在屏内或无跨屏域时 no-op。
+
+        用途：过缝通行语义的静止域收口（松手原地放下）。抛掷落地的同款
+        逻辑在 ``sprite_physics._snap_into_screen_if_needed``（两边各自是
+        自己路径的收口，共用 ``window_placement.snap_to_nearest_screen``）。
+        """
+        if not self._clamp_rects:
+            return
+        body_local = self._body_local_rect()
+        body = QRect(
+            int(self.pos.x() + body_local.x()),
+            int(self.pos.y() + body_local.y()),
+            body_local.width(), body_local.height(),
+        )
+        screens = [QRect(int(r.x()), int(r.y()), int(r.width()), int(r.height()))
+                   for r in self._clamp_rects]
+        snapped = snap_to_nearest_screen(body, screens)
+        if snapped is not None:
+            self.set_pos(QPointF(snapped.x() - body_local.x(), snapped.y() - body_local.y()))
+
     def on_release(self, pos: QPointF) -> None:
         """松手：落在光标处，按拖拽末段轨迹决定去向（语义对齐 window.py:3352-3366）。
 
@@ -1329,6 +1366,9 @@ class PetSprite(QObject):
                 # 贴地松手不进抛掷接管：零初速 + 贴地时物理会在首个 8ms 子步
                 # 就判回静止（vy 只到 g·dt≈11px/s，远低于落地截止），白付一次
                 # 悬空 clip 绑定 + 整池落地预热提交（实测 3 tick 0.48→2.00ms）。
+                # 过缝通行：原地放下落在空洞里时先吸附到最近的屏（SPEC §语义；
+                # drop_gravity 走 THROWN 的由抛掷落地吸附收口）
+                self._snap_into_screen_if_needed()
                 self.interaction_state = INTERACTION_NORMAL
         else:
             self.velocity = QPointF(rvx, rvy)
