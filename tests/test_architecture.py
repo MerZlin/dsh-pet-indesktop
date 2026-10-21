@@ -305,7 +305,7 @@ WINDOW_PY_LINE_BUDGET = 4671
 # 2664。**前一笔已达 2653（期 3a voice 提交未同步校准，预算从 2637 起就红了）**，
 # 本次一并校准；差值来自「按激活挂出/跳键」的分支行（每组 3~5 行，无新增页面）。
 # 按文件约定只随实测校准，不为达标压行（拆分仍是待办）。
-MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2676  # 2026-10-21/22：直播捕获/跨屏 +7 与 AI 域「记忆」组 +3 合并校准
+MODERN_SETTINGS_DIALOG_PY_LINE_BUDGET = 2721  # 2026-10-21：k3 终审 F2 BACKLOG 注释（deleteLater C++ 连坐）+5
 
 
 def _read(name: str) -> str:

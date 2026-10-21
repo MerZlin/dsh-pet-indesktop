@@ -5,8 +5,8 @@
 
 1. **一次性迁移判定**：``feature_activation`` 为 ``None``（未判定）时，区分
    新装/升级写回初始启用集合——升级继承 ``MIGRATION_BASELINE``（全模块），
-   新装在期 5 之前同样继承全集（``PURE_CORE_FOR_NEW_INSTALL`` 届时才翻
-   True，且必须等全部模块过完「不出现、不启动、不写回」验收）。
+   新装默认纯核心（``PURE_CORE_FOR_NEW_INSTALL = True``，全部模块已过
+   「不出现、不启动、不写回」验收后于 2026-10-21 生效）。
 2. **本次运行快照**：主进程在创建任何可选服务之前 ``decide_and_freeze`` 一次，
    之后 ``is_active`` 只读快照——功能页写盘（下次启动生效）绝不影响本次运行。
 3. **写下次启动值**：``write_enabled`` 给功能管理页用，校验后整值提交。
@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from .features import FEATURES, MIGRATION_BASELINE, normalize_enabled
 
@@ -31,6 +32,11 @@ CURRENT_VERSION = 1
 #: 不写回」门控验收（tests/test_feature_modules_gating.py 84 例），期 5 落地。
 #: 升级安装不受本开关影响——永远继承 MIGRATION_BASELINE。
 PURE_CORE_FOR_NEW_INSTALL = True
+
+#: 主进程拉起独立设置进程时透传本次冻结快照的环境变量（空串 = 纯核心，
+#: 与「未设置」可区分）。盘上未判定时设置进程以它为准——新装用户在主进程
+#: 首次自然保存前打开设置，不会拿到全激活基线（盲审存疑 B）。
+ENV_FEATURE_SNAPSHOT = "DSH_PET_FEATURE_SNAPSHOT"
 
 #: 本次运行冻结的启用集合；None = 未冻结（is_active 一律 True）。
 _snapshot: frozenset[str] | None = None
@@ -51,6 +57,10 @@ def _is_upgrade_install(config) -> bool:
     except OSError:
         # 目录不可读时按升级处理（保守：宁可多激活，不可藏掉用户在用的功能）
         return True
+    # 已知限制（盲审存疑 A，2026-10-21 决议）：从未留下任何痕迹的老用户
+    # （没保存过配置、没聊过天）会被判成新装拿到纯核心。不能用日志当痕迹——
+    # 新装第二次启动也会有自己的历史日志，会误判成升级（实测推演）；此类
+    # 用户可在「功能」页一键全部开启，发版说明需写明。
     return False
 
 
@@ -119,8 +129,20 @@ def snapshot() -> frozenset[str] | None:
     return _snapshot
 
 
+def snapshot_env_value() -> str | None:
+    """主进程拉起设置进程时透传的快照串（``ENV_FEATURE_SNAPSHOT`` 的值）；
+    未冻结返回 None（不注入，设置进程走自己的判定链）。"""
+    if _snapshot is None:
+        return None
+    return ",".join(sorted(_snapshot))
+
+
 def pending_enabled(config) -> list[str]:
-    """功能页展示的「下次启动」启用集：盘上已判定的值；未判定给迁移基线预览。"""
+    """功能页展示的「下次启动」启用集：盘上已判定的值；未判定时预览跟随
+    **有效判定**——本进程已冻结的快照（主进程=启动判定结果；设置进程=
+    透传快照/自己的判定），未冻结才给迁移基线预览。
+    否则新装用户的功能页会显示全模块勾选，任何一次保存都把全激活写进盘，
+    纯核心名存实亡（2026-10-21 复审补漏：is_active 投影与 pending 预览必须同源）。"""
     raw = config.data.get("feature_activation")
     if isinstance(raw, dict) and isinstance(raw.get("enabled"), list):
         try:
@@ -128,6 +150,9 @@ def pending_enabled(config) -> list[str]:
         except ValueError:
             return list(MIGRATION_BASELINE)
         return enabled
+    snap = snapshot()
+    if snap is not None:
+        return sorted(snap)
     return list(MIGRATION_BASELINE)
 
 
@@ -159,8 +184,11 @@ def freeze_for_settings_process(config) -> None:
     两边本来就不必相同）。本进程不运行功能服务，is_active 只影响设置层
     投影（哪些标签/组/页出现）与预览入口。
     传入的可能是 slot 实例配置（feature_activation 是全局键，真值只在
-    主 config.json），所以一律直读主文件；不做迁移判定、不写盘——那是
-    主进程启动时的职责。读不到/判不出就冻结迁移基线（全激活=旧行为）。
+    主 config.json），所以一律直读主文件；**不写盘**——落盘是主进程启动时
+    的职责。盘上未判定时在内存里做同一套新装/升级判定（与主进程同一份
+    磁盘痕迹必然同结论）：否则新装用户在主进程首次自然保存前打开设置，
+    会拿到全激活基线，一次保存就把「全部启用」写进盘（盲审存疑 B）。
+    读不到/值损坏就冻结迁移基线（全激活=旧行为，保守方向）。
     """
     import json
 
@@ -174,12 +202,26 @@ def freeze_for_settings_process(config) -> None:
                 raw = data.get("feature_activation")
     except (OSError, ValueError):
         raw = None
-    enabled = list(MIGRATION_BASELINE)
-    if isinstance(raw, dict) and isinstance(raw.get("enabled"), list):
+    if raw is None:
+        env = os.environ.get(ENV_FEATURE_SNAPSHOT)
+        if env is not None:
+            # 主进程透传的本次冻结快照（空串 = 纯核心）：与主进程判定同源，
+            # 新装不会在「首次自然保存前开设置」拿到全激活基线（盲审存疑 B）
+            try:
+                enabled, _ = normalize_enabled([s for s in env.split(",") if s.strip()])
+            except ValueError:
+                enabled = list(MIGRATION_BASELINE)
+        else:
+            # 无主进程透传（直接跑 --settings）：与主进程同一套新装/升级判定
+            upgrade = _is_upgrade_install(config)
+            enabled = [] if (not upgrade and PURE_CORE_FOR_NEW_INSTALL) else list(MIGRATION_BASELINE)
+    elif isinstance(raw, dict) and isinstance(raw.get("enabled"), list):
         try:
             enabled, _ = normalize_enabled(raw["enabled"])
         except ValueError:
             enabled = list(MIGRATION_BASELINE)
+    else:
+        enabled = list(MIGRATION_BASELINE)
     _snapshot = frozenset(enabled)
 
 

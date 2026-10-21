@@ -211,6 +211,8 @@ def _show_balance_payload(win, payload) -> None:
         subtitle = balance_mod.deepseek_pricing_hint(
             peak_label=peak_label, idle_label=idle_label,
         )
+    # 只保护这一次上屏的字符串。缓存、format_balance 和接口原文仍是明文。
+    text = balance_mod.format_balance_display(text)
     win.show_bubble(
         text, duration_ms=6000,
         subtitle=subtitle,
@@ -1057,6 +1059,7 @@ class PetInstance:
                 self.win,
                 include_ai=self.enable_chat,
                 initial_page=initial_page,
+                chat_build_capable=self.chat_build_capable,
             )
             dialog.finished.connect(self._modern_settings_finished)
             self.modern_settings_dialog = dialog
@@ -1279,6 +1282,10 @@ class AppShell:
     资源的分段释放（窗级字段与进程级 broker/碰撞/permanent writer 分开，
     见 §2.2-E2 / R5）。
     """
+
+    #: 类级默认值：测试用 ``__new__`` 绕开 __init__ 拼壳时按「构建带聊天」处理
+    #: （同 platform_passthrough 的 _applied_state 惯例）。
+    _chat_build_capable: bool = True
 
     def __init__(self, app: QApplication, config: Config, enable_chat: bool = True,
                  slot_id: int | None = None,
@@ -1769,7 +1776,12 @@ class AppShell:
     # ------------------------------------------------- 功能门控（助手回复朗读）
     def _chat_reply_voice_wanted(self) -> bool:
         # 默认关（主动打扰型功能）：关着时不建通道、不订阅、不建定时器，
-        # 行为与 v4.3.0 完全一致。
+        # 行为与 v4.3.0 完全一致。voice/chat 任一模块未激活都不建对象、
+        # 不订阅（与门控「模块关了不建对象」的口径一致；朗读落点在 voice
+        # 层的 ensure_audio_channel 另有一闸）。
+        if not (feature_activation_mod.is_active("voice")
+                and feature_activation_mod.is_active("chat")):
+            return False
         return bool(self.config.get("chat_reply_voice_enabled", False))
 
     def _ensure_chat_reply_reader(self):
@@ -2275,6 +2287,12 @@ class AppShell:
         environment.insert("DSH_PET_INSTANCE", "")
         environment.insert(settings_command_mod.ENV_PARENT_TOPOLOGY,
                            settings_command_mod.runtime_topology_env_value())
+        # 本次冻结的功能快照透传给设置进程：盘上未判定时以它为准——新装用户
+        # 在首次自然保存前打开设置不会拿到全激活基线（盲审存疑 B）。
+        feature_snapshot = feature_activation_mod.snapshot_env_value()
+        if feature_snapshot is not None:
+            environment.insert(feature_activation_mod.ENV_FEATURE_SNAPSHOT,
+                               feature_snapshot)
         try:
             started = self._spawn_settings_process(program, arguments, workdir,
                                                   environment)

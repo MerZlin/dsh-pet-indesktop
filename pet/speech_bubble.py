@@ -58,6 +58,7 @@ from .speech_bubble_text import (
     PAGE_FADE_OUT_MS,
     PAGE_RETURN_PAUSE_MS,
     SELF_TALK_IMAGE_SUFFIXES,
+    _budget_length,
     breath_bubble_size_for_anchor,
     breath_bubble_size_for_scale,
     bubble_column_for_text,
@@ -785,7 +786,9 @@ class PetSpeechBubble(QFrame):
                 ceil(target.height() / (0.66 * 195 / 240)),
             )
         elif self._content_kind == "text":
-            length = len(normalize_bubble_text(self._raw_text))
+            # 宽度档按可见字符数走（去标记口径）：U+2060 连接符不可见，
+            # 数进长度会让气泡无端变宽 ~23%（PR #329 审查 F2）
+            length = _budget_length(normalize_bubble_text(self._raw_text))
             if length > 24:
                 width += min(104, ceil((length - 24) / 8) * 14)
         content_scale = (

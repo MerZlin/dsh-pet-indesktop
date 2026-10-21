@@ -162,3 +162,59 @@ def test_reload_picks_up_disk_value_and_null_means_undecided(tmp_path):
 
 def test_initial_data_has_undecided_default(tmp_path):
     assert _config(tmp_path).data["feature_activation"] is None
+
+
+def test_settings_process_prefers_main_process_snapshot_env(tmp_path, monkeypatch):
+    """独立设置进程：盘上未判定时吃主进程透传的快照环境变量（盲审存疑 B）——
+    空串 = 纯核心（与未设置可区分）；有值按其冻结；未设置才走自己的判定。"""
+    cfg = _config(tmp_path)
+    cfg.dir.mkdir(parents=True, exist_ok=True)
+    # ① 主进程判了纯核心（空串）：设置进程同样纯核心
+    monkeypatch.setenv(fa.ENV_FEATURE_SNAPSHOT, "")
+    fa.freeze_for_settings_process(cfg)
+    assert fa.snapshot() == frozenset()
+    # ② 主进程快照子集：按子集冻结
+    fa.reset_snapshot_for_tests()
+    monkeypatch.setenv(fa.ENV_FEATURE_SNAPSHOT, "weather,todo")
+    fa.freeze_for_settings_process(cfg)
+    assert fa.snapshot() == frozenset({"weather", "todo"})
+    # ③ 无透传 + 全新空目录：自己的判定 = 新装纯核心
+    fa.reset_snapshot_for_tests()
+    monkeypatch.delenv(fa.ENV_FEATURE_SNAPSHOT, raising=False)
+    fa.freeze_for_settings_process(cfg)
+    assert fa.snapshot() == frozenset()
+    # ④ 无透传 + 老用户痕迹（slot 档案）：自己的判定 = 迁移基线
+    fa.reset_snapshot_for_tests()
+    (cfg.dir / "config-slot-1.json").write_text("{}", encoding="utf-8")
+    fa.freeze_for_settings_process(cfg)
+    assert fa.snapshot() == frozenset(MIGRATION_BASELINE)
+
+
+def test_snapshot_env_value_roundtrip():
+    """主进程侧透传串：未冻结 None；冻结后序列化可被设置进程解析。"""
+    assert fa.snapshot_env_value() is None
+    fa.freeze_snapshot_for_tests([])
+    assert fa.snapshot_env_value() == ""
+    fa.freeze_snapshot_for_tests(["weather", "todo"])
+    assert fa.snapshot_env_value() == "todo,weather"
+
+
+def test_pending_preview_follows_effective_decision_not_baseline(tmp_path):
+    """功能页预览与有效判定同源：新装（冻结纯核心）预览必须是空——否则
+    功能页显示全模块勾选，一次保存就把全激活写进盘（复审补漏）。"""
+    cfg = _config(tmp_path)
+    cfg.dir.mkdir(parents=True, exist_ok=True)
+    # 新装：主进程判定并冻结纯核心 → 预览纯核心（修复前：预览=迁移基线全开）
+    fa.decide_and_freeze(cfg)
+    assert fa.pending_enabled(cfg) == []
+    # 升级：冻结迁移基线 → 预览全模块
+    fa.reset_snapshot_for_tests()
+    cfg2 = _config(tmp_path / "upg")
+    cfg2.dir.mkdir(parents=True, exist_ok=True)
+    cfg2.path.write_text("{}", encoding="utf-8")
+    cfg2.reload()
+    fa.decide_and_freeze(cfg2)
+    assert fa.pending_enabled(cfg2) == list(MIGRATION_BASELINE)
+    # 未冻结（工具/测试上下文）：沿用迁移基线预览（旧行为不变）
+    fa.reset_snapshot_for_tests()
+    assert fa.pending_enabled(_config(tmp_path / "raw")) == list(MIGRATION_BASELINE)

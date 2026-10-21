@@ -975,3 +975,167 @@ def test_pet_window_on_top_propagates_to_bubble(tmp_path):
     win2 = make_pet_window(tmp_path, runtime_id="off-top-pid2-deadbeef", config=cfg)
     assert not (win2._speech_bubble.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
     win2.close()
+
+
+_WORD_JOINER = "\u2060"
+
+
+def _body_metrics():
+    _get_app()
+    font = QFont()
+    font.setPixelSize(13)
+    return QFontMetrics(font)
+
+
+def _visible(text: str) -> str:
+    return str(text or "").replace(_WORD_JOINER, "")
+
+
+def _newline_at(wrapped: str, chunk: str) -> int | None:
+    """换行落在 ``chunk`` 内部时返回偏移；整段都在一行则返回 -1；找不到返回 None。"""
+    visible = _visible(wrapped)
+    flat = visible.replace("\n", "")
+    start = flat.find(chunk)
+    if start < 0:
+        return None
+    count = 0
+    for char in visible:
+        if char == "\n":
+            if start < count < start + len(chunk):
+                return count - start
+            continue
+        count += 1
+    return -1
+
+
+def _metric_widths(metrics: QFontMetrics, text: str) -> list[int]:
+    """候选宽度全部来自真实字形 advance，不写死像素。"""
+    widths = {metrics.horizontalAdvance(text[:index]) for index in range(1, len(text) + 1)}
+    for count in range(1, 36):
+        widths.add(metrics.horizontalAdvance("测" * count))
+    return sorted(width for width in widths if width > 0)
+
+
+def test_balance_chunks_stay_together_when_they_fit():
+    """当前逐字换行会在「赠送」内部、以及「余额」和「¥5.99」之间断开。
+
+    宽度取真实 advance。金额短语自己放得下时，整段必须留在同一行。
+    """
+    from pet.balance import format_balance_display
+
+    metrics = _body_metrics()
+    plain = "测" * 12 + "余额 ¥5.99（充值 ¥10.00 / 赠送 ¥2.34）"
+    chunks = ("余额 ¥5.99", "充值 ¥10.00", "赠送 ¥2.34")
+    gift_splits: list[int] = []
+    balance_splits: list[int] = []
+    for width in _metric_widths(metrics, plain):
+        wrapped = "\n".join(paginate_bubble_text(metrics, plain, width, max_lines=8))
+        if metrics.horizontalAdvance("赠送 ¥2.34") <= width and _newline_at(wrapped, "赠送") == 1:
+            gift_splits.append(width)
+        if metrics.horizontalAdvance("余额 ¥5.99") <= width and _newline_at(wrapped, "余额 ¥") in (2, 3):
+            balance_splits.append(width)
+    assert gift_splits, "应能从字体度量推出「赠送」被拆开的宽度"
+    assert balance_splits, "应能从字体度量推出「余额」和金额被拆开的宽度"
+
+    shown = format_balance_display(plain)
+    assert _visible(shown) == plain
+    for width in _metric_widths(metrics, plain):
+        pages = paginate_bubble_text(metrics, shown, width, max_lines=8)
+        wrapped = "\n".join(pages)
+        assert _visible(wrapped).replace("\n", "") == plain
+        for chunk in chunks:
+            if metrics.horizontalAdvance(chunk) <= width:
+                assert _newline_at(wrapped, chunk) == -1, (chunk, width, pages)
+        glyph = max(metrics.horizontalAdvance(char) for char in plain)
+        if width >= glyph:
+            for line in _visible(wrapped).split("\n"):
+                if line:
+                    assert metrics.horizontalAdvance(line) <= width, (line, width)
+
+
+def test_joined_runs_keep_pagination_elision_and_explicit_breaks():
+    """连接段参与分页、省略、标点和强制换行；放得下的段不拆，字符顺序保留。"""
+    from pet.speech_bubble_text import LINE_START_FORBIDDEN
+
+    metrics = _body_metrics()
+    gift = "赠送 ¥2.34"
+    balance = "余额 ¥5.99"
+    run = _WORD_JOINER.join(gift)
+    balance_run = _WORD_JOINER.join(balance)
+    width = metrics.horizontalAdvance(gift + "测")
+    assert metrics.horizontalAdvance(gift) <= width
+
+    text = "测" * 40 + run + "！" + balance_run
+    pages = paginate_bubble_text(metrics, text, width, max_lines=3)
+    wrapped = "\n".join(pages)
+    visible = _visible(wrapped)
+    assert visible.replace("\n", "") == "测" * 40 + gift + "！" + balance
+    assert _newline_at(wrapped, gift) == -1
+    assert _newline_at(wrapped, balance) == -1
+    for page in pages:
+        lines = [line for line in _visible(page).split("\n") if line]
+        assert lines, page
+        assert not (len(lines) == 1 and lines[0] in LINE_START_FORBIDDEN), page
+
+    # 省略只留前几行。两个金额段都放在会被留下的位置，后面堆长尾巴迫使出现省略号。
+    crowded = "测" * 4 + run + "！" + balance_run + "测" * 48
+    kept = elide_bubble_text(metrics, crowded, width, max_lines=3)
+    assert len(kept.split("\n")) <= 3
+    assert _newline_at(kept, gift) == -1
+    assert _newline_at(kept, balance) == -1
+    assert ("…" in kept) or ("..." in kept)
+    # 省略号贴着连接段：整段留下，或整段被省略，不能只剩「赠」。
+    boundary = "测" * 10 + run + "！" + "测" * 24
+    cut = elide_bubble_text(metrics, boundary, width, max_lines=2)
+    assert len(cut.split("\n")) <= 2
+    flat_cut = _visible(cut).replace("\n", "")
+    assert ("赠" in flat_cut) == (gift in flat_cut)
+    assert ("送" in flat_cut) == (gift in flat_cut)
+    if gift in flat_cut:
+        assert _newline_at(cut, gift) == -1
+
+    broken = _WORD_JOINER.join("余额 ¥1.00") + "\n" + _WORD_JOINER.join("赠送 ¥2.00")
+    wide = metrics.horizontalAdvance("余额 ¥1.00赠送 ¥2.00")
+    paged = paginate_bubble_text(metrics, broken, wide, max_lines=3, keep_breaks=True)
+    assert [line for line in _visible(paged[0]).split("\n")] == ["余额 ¥1.00", "赠送 ¥2.00"]
+
+    overlong = "前" + _WORD_JOINER.join("余额 ¥1234567890123.99") + "后"
+    narrow = max(metrics.horizontalAdvance(char) for char in _visible(overlong))
+    fitted = paginate_bubble_text(metrics, overlong, narrow, max_lines=4)
+    assert _visible("\n".join(fitted)).replace("\n", "") == _visible(overlong)
+    for line in _visible("\n".join(fitted)).split("\n"):
+        assert line
+        assert metrics.horizontalAdvance(line) <= narrow
+    tighter = max(1, metrics.horizontalAdvance("余") - 1)
+    squeezed = paginate_bubble_text(metrics, overlong, tighter, max_lines=6)
+    assert _visible("\n".join(squeezed)).replace("\n", "") == _visible(overlong)
+    assert all(_visible(page).strip() for page in squeezed)
+
+
+def test_overlong_joined_token_wraps_at_start_and_after_explicit_break():
+    from pet.balance import format_balance_display
+
+    metrics = _body_metrics()
+    amount = "余额 ¥123456789012345678901234567890.99（充值 ¥10.00）"
+    width = metrics.horizontalAdvance("余额 ¥1234")
+    for prefix in ("", "前文\n"):
+        text = prefix + format_balance_display(amount)
+        pages = paginate_bubble_text(metrics, text, width, keep_breaks=True)
+        lines = _visible("\n".join(pages)).split("\n")
+        assert "".join(lines) == (prefix + amount).replace("\n", "")
+        assert all(lines)
+        assert all(metrics.horizontalAdvance(line) <= width for line in lines)
+
+
+def test_word_joiner_does_not_change_budget_or_normalization():
+    plain = "字" * 40
+    marked = _WORD_JOINER.join(plain)
+    assert _WORD_JOINER in normalize_bubble_text(marked)
+    assert normalize_bubble_text(marked).replace(_WORD_JOINER, "") == plain
+    assert normalize_bubble_text("余\u2060额\u2060 \u2060¥1.00") == "余\u2060额\u2060 \u2060¥1.00"
+    assert bubble_max_lines(marked) == bubble_max_lines(plain) == 3
+    column_text = "字" * 60
+    assert bubble_column_for_text(_WORD_JOINER.join(column_text)) == bubble_column_for_text(column_text)
+    dwell = "字" * 50
+    assert page_dwell_ms(_WORD_JOINER.join(dwell)) == page_dwell_ms(dwell)
+    assert page_dwell_ms("字\n字") == page_dwell_ms("字字")

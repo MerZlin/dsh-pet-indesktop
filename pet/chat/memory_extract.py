@@ -2,8 +2,9 @@
 """档 B：回复后自动提炼记忆（静默，默认开）。
 
 每轮助手回复完成（``ChatService._finished``，三个对话前端共用的地方）后，
-后台线程做一次「记忆提炼」：本轮用户+助手文本（≤2000 字符）+ 现有记忆
-（≤1200 字符）→ 同一 provider 的轻量非流式小请求 → 严格 JSON 操作列表
+后台线程做一次「记忆提炼」：最近 N 轮用户+助手文本（合计 ≤2000 字符，
+N = ``chat_memory_extract_interval``，默认 5）+ 现有记忆（≤1200 字符）
+→ 同一 provider 的轻量非流式小请求 → 严格 JSON 操作列表
 （``[{"op":"ADD|UPDATE|FORGET","text":"..."}]``）→ ``ChatMemory.apply_ops``
 本地合并（新条目 source="auto"，与档 A 的 manual 区分）。
 
@@ -43,8 +44,9 @@ log = logging.getLogger(__name__)
 USER_TEXT_MIN_EFFECTIVE_CHARS = 4
 #: 护栏②：同一记忆文件两次提炼的最小间隔（成本控制，进程内口径）。
 EXTRACT_INTERVAL_SECONDS = 30.0
-#: 本轮用户 / 助手文本各自截断上限（合计 ≤2000 字符）。
+#: 本轮用户 / 助手文本各自截断上限；拼接后的近期对话整体再截到总预算。
 _DIALOGUE_PART_CHARS = 1000
+_DIALOGUE_TOTAL_CHARS = 2000
 #: 现有记忆注入提炼 prompt 的上限（render_injection 自带硬上限 1200）。
 #: 提炼响应阅读上限：超出按无操作处理（解析预算）。
 _RESPONSE_CHAR_LIMIT = 4000
@@ -58,6 +60,9 @@ _EFFECTIVE_RE = re.compile(r"\w", re.UNICODE)
 #: 限频状态：记忆文件路径 → 上次提炼的 monotonic 时间（进程内，不入盘）。
 _last_run: dict[str, float] = {}
 _turn_count: dict[str, int] = {}
+#: 最近 N 轮待提炼对话缓冲：轮次闸放行前的轮次不丢（审查实测「每 5 轮只提
+#: 第 5 轮、前 4 轮被丢」的修复），到点合并成一份近期对话一起提炼。
+_pending_turns: dict[str, list[tuple[str, str]]] = {}
 _last_run_lock = threading.Lock()
 
 #: 「每 N 轮回复提炼一次」的默认 N（共创者定稿 5：成本≈1/5，记忆延迟无感）
@@ -73,7 +78,7 @@ def _extract_every_turns(config) -> int:
     return max(1, min(20, n))
 
 _EXTRACT_SYSTEM = (
-    "你是记忆整理助手。从「用户和桌宠的一轮对话」中挑出值得长期记住的关于用户的事实"
+    "你是记忆整理助手。从「用户和桌宠的最近几轮对话」中挑出值得长期记住的关于用户的事实"
     "（偏好、习惯、明确说过的个人信息、约定），输出严格的 JSON 操作列表。\n"
     "规则：\n"
     "1. 只输出 JSON 数组本身，不要输出任何其它文字、解释或 Markdown 代码围栏。\n"
@@ -86,7 +91,7 @@ _EXTRACT_SYSTEM = (
 )
 
 _EXTRACT_USER = (
-    "【本轮对话】\n用户：{user}\n桌宠：{reply}\n\n"
+    "【近期对话】\n{dialogue}\n\n"
     "【已有记忆】\n{existing}\n\n"
     "请输出记忆操作 JSON 数组。"
 )
@@ -161,18 +166,28 @@ def schedule_extraction(
         key = str(path)
         now = time.monotonic()
         with _last_run_lock:
-            # 轮次闸：每 N 轮回复才提炼一次（默认 5）——成本约为每轮提炼的 1/N，
-            # 几轮内的内容会合在一起提，记忆形成延迟无感
+            # 轮次闸：每 N 轮回复才提炼一次（默认 5）——成本约为每轮提炼的 1/N。
+            # 闸内的轮次进缓冲不丢，到点把最近 N 轮合在一起提（修复前只提
+            # 当轮、前 N-1 轮被静默丢弃）。
             count = _turn_count.get(key, 0) + 1
             _turn_count[key] = count
-            if count % _extract_every_turns(config) != 0:
+            n = _extract_every_turns(config)
+            buf = _pending_turns.setdefault(key, [])
+            buf.append((user_text, reply_text))
+            del buf[:-n]
+            if count % n != 0:
                 return False
             if now - _last_run.get(key, -1e18) < EXTRACT_INTERVAL_SECONDS:
+                # 限频未过：本轮留在缓冲里等下一闸窗——但 del buf[:-n] 的裁剪
+                # 仍在执行，闸窗内聊得比 N 轮多时更早轮次会被挤掉（成本取舍，
+                # 不是「全部留住一起提」；k3 终审 F3）
                 return False
             _last_run[key] = now
+            turns = list(buf)
+            buf.clear()
         thread = threading.Thread(
             target=_run_safely,
-            args=(path, user_text, reply_text, provider, provider_config),
+            args=(path, turns, provider, provider_config),
             daemon=True,
             name="chat-memory-extract",
         )
@@ -183,20 +198,29 @@ def schedule_extraction(
         return False
 
 
-def _run_safely(path: Path, user_text: str, reply_text: str, provider, provider_config) -> None:
+def _run_safely(path: Path, turns: list[tuple[str, str]], provider, provider_config) -> None:
     """后台线程入口：提炼失败只写日志，异常绝不穿出线程。"""
     try:
-        _run(path, user_text, reply_text, provider, provider_config)
+        _run(path, turns, provider, provider_config)
     except Exception:
         log.exception("记忆提炼失败（已静默）: %s", path)
 
 
-def _run(path: Path, user_text: str, reply_text: str, provider, provider_config) -> None:
+def _dialogue_transcript(turns: list[tuple[str, str]]) -> str:
+    """把最近 N 轮拼成一份近期对话：每轮用户/助手各自截断，整体再按总预算
+    左截（留最新）。空轮在入缓冲前已被调度侧过滤，这里不重复检查。"""
+    parts = []
+    for index, (user, reply) in enumerate(turns, 1):
+        user, reply = user[-_DIALOGUE_PART_CHARS:], reply[-_DIALOGUE_PART_CHARS:]
+        parts.append(f"第{index}轮\n用户：{user}\n桌宠：{reply}")
+    return "\n\n".join(parts)[-_DIALOGUE_TOTAL_CHARS:]
+
+
+def _run(path: Path, turns: list[tuple[str, str]], provider, provider_config) -> None:
     memory = ChatMemory(path)
     existing = render_injection(memory.load())  # 自带 ≤1200 字符硬上限
     prompt = _EXTRACT_USER.format(
-        user=user_text[-_DIALOGUE_PART_CHARS:],
-        reply=reply_text[-_DIALOGUE_PART_CHARS:],
+        dialogue=_dialogue_transcript(turns),
         existing=existing or "（空）",
     )
     messages = [

@@ -86,7 +86,7 @@ def bubble_column_for_text(text: str, scale: float = 1.0) -> int:
     factor = clamp_bubble_text_scale(scale)
     base = BUBBLE_TEXT_COLUMN * factor
     ceiling = BUBBLE_TEXT_COLUMN_MAX * factor
-    length = len(normalize_bubble_text(text))
+    length = _budget_length(normalize_bubble_text(text))
     if length <= BUBBLE_TEXT_COLUMN_GROWTH_CHARS:
         return int(round(base))
     grown = base + ceil(
@@ -160,16 +160,33 @@ def normalize_bubble_text(text: str, *, keep_breaks: bool = False) -> str:
     value = re.sub(r"[*_`]+", "", value)
     if keep_breaks:
         # 逐行压空白，但保留 \n —— 少了这一步，标题和内容会被折行拼到一起。
+        # U+2060 WORD JOINER 不是空白，折行时必须留下，否则金额短语的防拆标记会丢。
         lines = [re.sub(r"[^\S\n]+", " ", line).strip() for line in value.split("\n")]
         return "\n".join(line for line in lines if line)
     return re.sub(r"\s+", " ", value).strip()
+
+
+# 余额气泡用来把「余额/充值/赠送 + 金额」粘成一段的零宽标记。
+# 列宽、行数上限和阅读停留只数看得见的字，标记本身不占位。
+_WORD_JOINER = "\u2060"
+
+
+def _budget_length(text: str) -> int:
+    return len(str(text or "").replace(_WORD_JOINER, ""))
+
+
+def _measured_advance(metrics: QFontMetrics, text: str) -> int:
+    """字形宽度。WORD JOINER 按零宽计，不参与换行预算。"""
+    if _WORD_JOINER in text:
+        text = text.replace(_WORD_JOINER, "")
+    return metrics.horizontalAdvance(text)
 
 
 def bubble_max_lines(text: str, *, keep_breaks: bool = False) -> int:
     """Return the max allowed lines for bubble text: 3 for short text, 6 for long."""
     return (
         3
-        if len(normalize_bubble_text(text, keep_breaks=keep_breaks)) <= 40
+        if _budget_length(normalize_bubble_text(text, keep_breaks=keep_breaks)) <= 40
         else 6
     )
 
@@ -187,11 +204,21 @@ LINE_START_FORBIDDEN = frozenset(
 def _wrap_bubble_lines(
     metrics: QFontMetrics, value: str, width: int, *, keep_breaks: bool = False
 ) -> list[str]:
-    """Wrap ``value`` char-by-char into lines within ``width`` px (kinsoku-aware).
+    """Wrap ``value`` into lines within ``width`` px (kinsoku-aware).
 
-    ``keep_breaks=True`` 时把 ``\\n`` 当作强制换行：调用方已经排好版
-    （如"标题一行 + 内容一行"），不应再被折行逻辑重新拼接。
+    没有 WORD JOINER 时仍是逐字换行。有连接符时，被粘住的一段在自己放得下的
+    时候整段挪到下一行；比行宽还长才按字形拆开。``keep_breaks=True`` 时
+    ``\\n`` 仍是强制换行。
     """
+    if _WORD_JOINER not in value:
+        return _wrap_plain_bubble_lines(metrics, value, width, keep_breaks=keep_breaks)
+    return _wrap_joined_bubble_lines(metrics, value, width, keep_breaks=keep_breaks)
+
+
+def _wrap_plain_bubble_lines(
+    metrics: QFontMetrics, value: str, width: int, *, keep_breaks: bool = False
+) -> list[str]:
+    """逐字换行。行为与引入金额短语保护之前一致。"""
     lines: list[str] = []
     current = ""
     for char in value:
@@ -218,6 +245,164 @@ def _wrap_bubble_lines(
     return lines
 
 
+def _iter_wrap_tokens(value: str, *, keep_breaks: bool):
+    """把正文切成换行原子：强制换行，或由 WORD JOINER 粘住的一段，或单字。"""
+    index = 0
+    length = len(value)
+    while index < length:
+        if keep_breaks and value[index] == "\n":
+            yield "\n"
+            index += 1
+            continue
+        start = index
+        index += 1
+        while index < length and value[index] == _WORD_JOINER:
+            cursor = index + 1
+            while cursor < length and value[cursor] == _WORD_JOINER:
+                cursor += 1
+            if cursor < length and not (keep_breaks and value[cursor] == "\n"):
+                index = cursor + 1
+                continue
+            index = cursor
+            break
+        yield value[start:index]
+
+
+def _visible_pieces(token: str) -> list[str]:
+    """把一个连接段拆成「一个可见字 + 贴在它前面的连接符」。"""
+    pieces: list[str] = []
+    pending = ""
+    for char in token:
+        if char == _WORD_JOINER:
+            pending += char
+            continue
+        pieces.append(pending + char)
+        pending = ""
+    if pending:
+        if pieces:
+            pieces[-1] += pending
+        else:
+            pieces.append(pending)
+    return pieces or [token]
+
+
+def _trailing_joined_run(current: str) -> str:
+    if _WORD_JOINER not in current:
+        return ""
+    tail = ""
+    for token in _iter_wrap_tokens(current, keep_breaks=False):
+        tail = token
+    return tail if _WORD_JOINER in tail else ""
+
+
+def _is_line_start_forbidden(token: str) -> bool:
+    visible = token.replace(_WORD_JOINER, "")
+    return len(visible) == 1 and visible in LINE_START_FORBIDDEN
+
+
+def _place_token(lines: list[str], token: str, width: int, metrics: QFontMetrics) -> str:
+    """把 ``token`` 放到空行上。超长连接段按字形回退，至少落下一个字。"""
+    pieces = _visible_pieces(token)
+    if len(pieces) <= 1 or _measured_advance(metrics, token) <= width:
+        return token
+    current = ""
+    for piece in pieces:
+        if current and _measured_advance(metrics, current + piece) > width:
+            lines.append(current)
+            current = piece
+        else:
+            current += piece
+    return current
+
+
+def _break_before(
+    lines: list[str], current: str, token: str, width: int, metrics: QFontMetrics
+) -> str:
+    """``current`` 再加 ``token`` 就会超宽。返回下一行已经放进去的内容。"""
+    if _is_line_start_forbidden(token):
+        run = _trailing_joined_run(current)
+        if run and _measured_advance(metrics, run) <= width:
+            prefix = current[:-len(run)]
+            together = run + token
+            # 整段自己放得下时，禁则只能把整段拉下来，不能从段中间撕一个字。
+            if prefix and _measured_advance(metrics, together) <= width:
+                lines.append(prefix)
+                return together
+            lines.append(current)
+            return token
+        pieces = _visible_pieces(current)
+        if len(pieces) > 1 and _WORD_JOINER not in pieces[-1]:
+            tail = pieces[-1]
+            if _measured_advance(metrics, tail + token) <= width:
+                lines.append("".join(pieces[:-1]))
+                return tail + token
+    if current:
+        lines.append(current)
+    return _place_token(lines, token, width, metrics)
+
+
+def _wrap_joined_bubble_lines(
+    metrics: QFontMetrics, value: str, width: int, *, keep_breaks: bool = False
+) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for token in _iter_wrap_tokens(value, keep_breaks=keep_breaks):
+        if token == "\n":
+            lines.append(current)
+            current = ""
+            continue
+        if not current:
+            current = _place_token(lines, token, width, metrics)
+            continue
+        if _measured_advance(metrics, current + token) <= width:
+            current += token
+            continue
+        current = _break_before(lines, current, token, width, metrics)
+    if current:
+        lines.append(current)
+    if keep_breaks:
+        lines = [line for line in lines if line.strip()]
+    return lines
+
+
+def _elide_joined_tail(metrics: QFontMetrics, text: str, width: int) -> str:
+    """省略号落在连接段中间时，整段留下或整段去掉。
+
+    自己就比行宽还长的段仍交给 ``QFontMetrics.elidedText`` 按字形截断，
+    避免空行或把已经排出来的字丢掉。没有连接符的正文不走这里。
+    """
+    if _measured_advance(metrics, text) <= width:
+        return text
+    ellipsis = "…"
+    budget = width - metrics.horizontalAdvance(ellipsis)
+    if budget <= 0:
+        return metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
+    current = ""
+    for token in _iter_wrap_tokens(text, keep_breaks=False):
+        joined = _WORD_JOINER in token and _measured_advance(metrics, token) <= width
+        if joined:
+            if _measured_advance(metrics, current + token) <= budget:
+                current += token
+                continue
+            if not current and _measured_advance(metrics, token) <= width:
+                # 整段自己放得下、加上省略号才超宽：宁可段内截断也要保住
+                # 「这里还有内容」的信号——直接返回 token 会把后续正文无声
+                # 丢掉且没有省略号（PR #329 审查 F1）
+                return metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
+            break
+        if _measured_advance(metrics, current + token) > budget:
+            if not current:
+                return metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
+            break
+        current += token
+    if not current:
+        return metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
+    candidate = current + ellipsis
+    if _measured_advance(metrics, candidate) <= width:
+        return candidate
+    return metrics.elidedText(text, Qt.TextElideMode.ElideRight, width)
+
+
 def elide_bubble_text(
     metrics: QFontMetrics,
     text: str,
@@ -234,9 +419,13 @@ def elide_bubble_text(
     if len(lines) > max_lines:
         remainder = "".join(lines[max_lines:])
         lines = lines[:max_lines]
-        lines[-1] = metrics.elidedText(
-            lines[-1] + remainder, Qt.TextElideMode.ElideRight, width
-        )
+        tail = lines[-1] + remainder
+        if _WORD_JOINER in tail:
+            lines[-1] = _elide_joined_tail(metrics, tail, width)
+        else:
+            lines[-1] = metrics.elidedText(
+                tail, Qt.TextElideMode.ElideRight, width
+            )
     return "\n".join(lines)
 
 
@@ -340,7 +529,7 @@ PAGE_FADE_IN_MS = 150
 
 def page_dwell_ms(page_text: str) -> int:
     """一页气泡文本的建议停留时长（按字数自适应）。"""
-    chars = len(str(page_text or "").replace("\n", ""))
+    chars = _budget_length(str(page_text or "").replace("\n", ""))
     dwell = PAGE_DWELL_BASE_MS + chars * PAGE_DWELL_PER_CHAR_MS
     return max(PAGE_DWELL_MIN_MS, min(PAGE_DWELL_MAX_MS, dwell))
 

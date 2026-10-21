@@ -141,7 +141,16 @@ def _config_default_data() -> dict:
 
 
 def _control_value(control: QWidget):
-    """四类受支持控件的当前值；其余控件返回 :data:`NOT_A_SETTING_CONTROL`。"""
+    """四类受支持控件的当前值；其余控件返回 :data:`NOT_A_SETTING_CONTROL`。
+
+    死控件守卫：模块停用/域重建后，注册表里的控件可能已随旧页销毁（C++
+    已删、Python 壳还在）——摸它就是 RuntimeError（astra P1-1 崩溃现场）。
+    按「不是设置控件」跳过：标记系统不该为死引用陪葬整个保存链。
+    """
+    import shiboken6
+
+    if not shiboken6.isValid(control):
+        return NOT_A_SETTING_CONTROL
     if isinstance(control, ToggleSwitch):
         return bool(control.isChecked())
     if isinstance(control, ModernSelect):
@@ -249,13 +258,18 @@ def refresh(dialog) -> None:
     此时还没有接线的行，无事可做。
     """
     for row, control, default in getattr(dialog, "_default_mark_rows", ()):
+        # 行壳同样可能已死（旧页 deleteLater）：行与控件任一失效都跳过
+        import shiboken6
+
+        if not shiboken6.isValid(row):
+            continue
         current = _control_value(control)
         modified = (
             current is not NOT_A_SETTING_CONTROL and not _values_equal(current, default)
         )
         row.set_default_state(
             _default_value_text(control, default) if modified else None,
-            can_reset=control.isEnabled(),
+            can_reset=shiboken6.isValid(control) and control.isEnabled(),
         )
 
 
