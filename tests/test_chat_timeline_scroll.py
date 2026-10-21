@@ -83,14 +83,17 @@ def test_reopening_window_returns_to_latest_reply(tmp_path):
     _pump(app, 0.5)
     win.scroll.verticalScrollBar().setValue(0)  # 用户上翻阅读后关闭
     _pump(app, 0.2)
-    win.close()  # 关闭=隐藏复用
+    win.close()  # 4.4.0 起关闭即销毁
     _pump(app, 0.2)
-    win.show()
-    bar = win.scroll.verticalScrollBar()
+    # 重开＝重新构造窗口（不再是「同一个窗口再 show 一次」）
+    reopened = _window_with_long_history(tmp_path)
+    reopened.resize(900, 700)
+    reopened.show()
+    bar = reopened.scroll.verticalScrollBar()
     deadline = time.time() + 5
     while time.time() < deadline and bar.value() < bar.maximum():
         _pump(app, 0.05)
     assert bar.value() == bar.maximum() > 0
-    _top, bottom, height = _last_bubble_geometry(win)
+    _top, bottom, height = _last_bubble_geometry(reopened)
     assert 0 <= height - bottom <= _MAX_BOTTOM_GAP
-    win.close()
+    reopened.close()

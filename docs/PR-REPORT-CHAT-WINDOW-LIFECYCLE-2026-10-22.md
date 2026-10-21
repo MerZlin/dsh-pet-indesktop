@@ -55,6 +55,7 @@ Python 堆分配）真的被还给系统；下次点「AI 对话」会重新构�
 | 文件 | 增删 | 覆盖 |
 |---|---|---|
 | `tests/test_chat_window_lifecycle.py` | **+306 / −0（新增）** | 14 例（modern/legacy 参数化）：① 关窗后 `shiboken6.isValid` False、三个槽位清空；② 关窗解除桌宠位置监听；③ 重开是新对象且「发一条消息」链路通到 provider 并落库；④ 开-关三轮后存活控件回到基线、`ChatService._global_finished_listeners` 不翻倍、窗口与 service 都不被引用链挂着；⑤ 重开仍走分页（120 条历史 → 首屏 50 + 未渲染 70）；⑥ 窗口未关时再点一次「AI 对话」复用同一只、不叠第二个；⑦ 在飞请求关窗：先 stop，等 worker 退出后才销毁（8 s 宽预算）。 |
+| `tests/test_chat_timeline_scroll.py` | **+6 / −4** | `test_reopening_window_returns_to_latest_reply` 按新契约改写：原用例先 `close()` 再对**同一个**窗口 `show()`（旧「关闭=隐藏复用」语义，全量门抓到这条红），改成关窗后重新构造窗口；断言不变——重开仍贴在最新一条回复底部。 |
 | `tests/test_chat_subsystem.py` | **+27 / −9** | 两条既有用例按新契约改写：`test_close_while_streaming_still_cancels_the_request` 补「关窗后窗口确实销毁」断言、收尾用 `_close_if_alive`（关闭即销毁后不能再 `close()` 死对象）；`test_close_during_typewriter_drain_saves_reply_and_resets` 的「重开仍是就绪态」从「同一个复用窗口」改成「新构造的窗口」，并把控件级断言换到新窗口上（旧窗口已销毁）。 |
 
 ### 未改动（明确说明）
