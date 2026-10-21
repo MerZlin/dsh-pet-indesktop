@@ -29,9 +29,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
-from pet import fps_monitor as fm
-from pet import game_fps as gf
-from pet import island_fps, island_segments as isl
+from pet.island import fps_monitor as fm
+from pet.island import game_fps as gf
+from pet.island import fps as island_fps, segments as isl
 
 
 # ---------------------------------------------------------------- 替身
@@ -394,8 +394,8 @@ def test_hub_close_actually_waits_for_the_session_teardown(tmp_path):
     """
     import time
 
-    from pet import fps_monitor as fm
-    from pet import game_fps as gf
+    from pet.island import fps_monitor as fm
+    from pet.island import game_fps as gf
 
     class _SlowStopSession:
         def __init__(self):

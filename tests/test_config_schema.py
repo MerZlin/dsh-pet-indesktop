@@ -27,7 +27,7 @@ import pytest
 
 from pet import config as config_mod
 from pet.config import Config
-from pet.island_segments import CPU, NETWORK
+from pet.island.segments import CPU, NETWORK
 
 # reload() 白名单键集合现状快照（与 pet/config.py reload() 的
 # "for key in (...)" 元组一致；任何增删必须同步更新本快照）。

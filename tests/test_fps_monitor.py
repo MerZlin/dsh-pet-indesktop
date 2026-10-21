@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from pet import fps_monitor as fm
-from pet import game_fps as gf
-from pet import island_segments as seg
+from pet.island import fps_monitor as fm
+from pet.island import game_fps as gf
+from pet.island import segments as seg
 
 
 # ---------------------------------------------------------------- 替身
@@ -984,7 +984,7 @@ def test_module_import_pulls_no_heavy_visual_dependency():
     repo = Path(__file__).resolve().parents[1]
     code = (
         "import sys, importlib\n"
-        "importlib.import_module('pet.fps_monitor')\n"
+        "importlib.import_module('pet.island.fps_monitor')\n"
         "print('numpy' in sys.modules, 'pet.vision' in sys.modules, 'PySide6' in sys.modules)\n"
     )
     proc = sp.run([sys.executable, "-c", code], cwd=str(repo),

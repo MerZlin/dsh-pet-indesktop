@@ -68,7 +68,7 @@ def test_modern_chat_window_pin_toggle_persists(tmp_path: Path):
 
 def test_dynamic_island_widget_import_and_signal(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
-    from pet.dynamic_island import DynamicIsland
+    from pet.island.dynamic_island import DynamicIsland
 
     cfg = _config(tmp_path)
     cfg.set("dynamic_island", {
@@ -98,7 +98,7 @@ def test_dynamic_island_widget_import_and_signal(tmp_path: Path):
 
 def test_dynamic_island_resizes_when_info_changes(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
-    from pet.dynamic_island import DynamicIsland
+    from pet.island.dynamic_island import DynamicIsland
 
     cfg = _config(tmp_path)
     cfg.set("dynamic_island", {
@@ -128,8 +128,8 @@ def test_dynamic_island_resizes_when_info_changes(tmp_path: Path):
 
 def test_dynamic_island_balance_tier_color_syncs_to_setting(tmp_path: Path, monkeypatch):
     """灵动岛余额峰谷信息槽跟随设置的颜色开关显示高峰/低谷颜色。"""
-    import pet.balance as balance_mod
-    from pet.dynamic_island import DynamicIsland
+    import pet.island.balance as balance_mod
+    from pet.island.dynamic_island import DynamicIsland
 
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(balance_mod, "deepseek_pricing_tier", lambda: "peak")

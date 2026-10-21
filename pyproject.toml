@@ -40,7 +40,7 @@ select = ["F"]
 
 # —— pet/ 产品代码 F401/F841 存量债务，逐文件精确豁免 ——
 "pet/app.py" = ["F841"]                  # app.py:311 `info`、:739 `dialog` 未用局部变量
-"pet/balance.py" = ["F401"]              # 未用导入 datetime.timezone
+"pet/island/balance.py" = ["F401"]       # 未用导入 datetime.timezone（原 pet/balance.py，随 island 模块目录化迁入）
 "pet/chat/legacy_widgets.py" = ["F401"]  # 未用导入 json、QSize
 "pet/chat/models.py" = ["F401"]          # 未用导入 typing.Any
 "pet/chat/prompt.py" = ["F401"]          # 未用导入 .models.ChatSettings

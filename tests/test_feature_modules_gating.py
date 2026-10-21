@@ -1879,7 +1879,7 @@ def test_island_module_off_never_creates_the_island(tmp_path, monkeypatch):
     attach 只发生在 ``DynamicIsland`` 内部），所以停用必须落在构造之前。
     """
     import pet.app as app_mod
-    import pet.dynamic_island as island_mod
+    import pet.island.dynamic_island as island_mod
     from pet.chat.service import ChatService
     from pet.config import Config
 

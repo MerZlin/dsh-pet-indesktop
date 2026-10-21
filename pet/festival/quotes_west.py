@@ -3,7 +3,7 @@
 
 用途
 ----
-``pet.festival_data`` 命中西方节日（``category == "west"``）时，可按节日 id
+``pet.festival.data`` 命中西方节日（``category == "west"``）时，可按节日 id
 从本表取一组英文引文，作为气泡提醒的点缀文案。本模块不导入 Qt、不导入本包
 其它模块，纯数据、零依赖，可被纯逻辑层与测试直接使用。
 

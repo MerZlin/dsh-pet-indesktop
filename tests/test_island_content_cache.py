@@ -14,7 +14,7 @@ from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 
 
 def _qapp() -> QApplication:
@@ -125,7 +125,7 @@ def test_content_cache_key_covers_colors_and_style(tmp_path, monkeypatch):
 
     # 信息色项：自定义峰谷标签同名 + 固定切换时间 → 文案两侧相同，
     # 只有 _info_color 在动（隔离出 info_color.name() 这一项）
-    from pet import balance as balance_mod
+    from pet.island import balance as balance_mod
 
     island2 = _island(tmp_path, info_mode="balance_tier")
     # 峰谷标签/颜色开关读的是顶层 config（不是 dynamic_island 子字典）

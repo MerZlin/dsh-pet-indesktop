@@ -1116,7 +1116,7 @@ def test_presenter_drives_the_real_dynamic_island(tmp_path):
     所以这里读它（不是断言私有调用顺序，而是断言用户看得见的那段文案）。
     """
     from pet.config import Config
-    from pet.dynamic_island import DynamicIsland
+    from pet.island.dynamic_island import DynamicIsland
 
     cfg = Config(tmp_path)
     data = dict(cfg.get("dynamic_island", {}) or {})
@@ -1304,7 +1304,7 @@ def test_a_stale_round_arriving_after_the_newer_one_finished_changes_nothing(tmp
     渲染的那份 ``_last_message``，不是替身记的调用序列。
     """
     from pet.config import Config
-    from pet.dynamic_island import DynamicIsland
+    from pet.island.dynamic_island import DynamicIsland
 
     cfg = Config(tmp_path)
     data = dict(cfg.get("dynamic_island", {}) or {})

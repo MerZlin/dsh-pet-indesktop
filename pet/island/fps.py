@@ -40,8 +40,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from pet import fps_monitor, game_fps, island_segments
-from pet.island_layout import KIND_METRIC, _InfoSeg
+from pet.island import fps_monitor, game_fps, segments as island_segments
+from pet.island.layout import KIND_METRIC, _InfoSeg
 
 logger = logging.getLogger(__name__)
 

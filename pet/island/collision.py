@@ -25,8 +25,8 @@ import time
 
 from PySide6.QtCore import QObject, QTimer
 
-from . import collision
-from . import physics as physics_mod
+from .. import collision
+from .. import physics as physics_mod
 
 log = logging.getLogger(__name__)
 

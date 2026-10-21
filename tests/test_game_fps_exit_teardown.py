@@ -24,8 +24,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from pet import game_fps as gf
-from pet import island_fps
+from pet.island import game_fps as gf
+from pet.island import fps as island_fps
 from pet.config import Config
 
 

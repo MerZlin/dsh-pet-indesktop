@@ -28,9 +28,9 @@ from PySide6.QtCore import QCoreApplication, QEvent, QPointF, QRectF, QTimer
 from PySide6.QtGui import QColor, QImage, QPainterPath, QPainter
 from PySide6.QtWidgets import QApplication
 
-import pet.dynamic_island as island_mod
+import pet.island.dynamic_island as island_mod
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 
 # dark 主题下的期望色：中性 = 主题次色、工作/待确认 = 主题色（默认 blue）
 _NEUTRAL = "#a0aabe"

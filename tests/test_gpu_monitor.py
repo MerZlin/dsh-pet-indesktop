@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 from pet import gpu_monitor as gm
-from pet import island_segments as isl
+from pet.island import segments as isl
 
 #: 本机探针实测过的三块适配器（名字来自 DXGI）+ 一块只有 PDH 认识的适配器。
 LUID_AMD = "0x00000000_0x00017F06"

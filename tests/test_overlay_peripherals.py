@@ -31,8 +31,8 @@ from PySide6.QtWidgets import QApplication, QWidget
 from pet import collision as collision_mod
 from pet import overlay_peripherals
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
-from pet.island_bridge import IslandWindowBridge
+from pet.island.dynamic_island import DynamicIsland
+from pet.island.bridge import IslandWindowBridge
 from pet.overlay_peripherals import FullscreenCursorWatcher, OverlayVisibilityGate
 from pet.overlay_window import OverlayWindow
 from pet.sprite_bubble import SpriteBubbleFollower, sprite_anchor_rect_global

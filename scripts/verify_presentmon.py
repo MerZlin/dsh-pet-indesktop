@@ -2,7 +2,7 @@
 """随包分发的帧率采集后端（PresentMon）完整性硬门（构建管线，2026-10-11）。
 
 **为什么需要这道门**：游戏帧率段的读数是桌面宠物**起一个子进程**跑官方独立
-控制台程序拿到的（``pet/fps_monitor.py`` 的 ``FpsSession``），程序本体是随 Windows
+控制台程序拿到的（``pet/island/fps_monitor.py`` 的 ``FpsSession``），程序本体是随 Windows
 包分发的二进制（``resources/presentmon/`` 下的 ``game_fps.BACKEND_EXE_NAME``）。
 它缺失或换版时
 产品**不会崩**：段按 ``unsupported`` 不占位、卡片写「缺少内置采集程序」——也就是
@@ -10,13 +10,13 @@
 在 PyInstaller 起跑**之前**挡住，且打完之后还要在产物里再验一次（拷贝截断同样致命）。
 
 **判据**（与运行时同源，不是这里的第二份字面量）：
-文件名 = ``pet/game_fps.py::BACKEND_EXE_NAME``；SHA256 = ``REQUIRED_SHA256``；
+文件名 = ``pet/island/game_fps.py::BACKEND_EXE_NAME``；SHA256 = ``REQUIRED_SHA256``；
 另外校验 PE 头里的机器类型必须是 x86-64 —— 上游 release 资产里 x64 与 ARM64 是
 两个文件，名字不同但**产品只支持 x64**，架构校验让「混进 ARM 二进制」在构建期
 就红，而不是等用户在 ARM 机器上看到一段永远采不到数的读数。
 运行期**不**做摘要校验（每次启动读 980KB 只为一个 CI 该做的事，见 ``game_fps`` 注释）。
 
-**约束**：只读文件系统（一个字节都不写）；只 import ``pet.game_fps``（零 Qt、零子
+**约束**：只读文件系统（一个字节都不写）；只 import ``pet.island.game_fps``（零 Qt、零子
 进程、零系统调用，连带链是 ``pet/__init__.py`` + ``pet/island_segments``，都是标准库），
 因此不拉 PySide6、可在最小构建机环境跑。
 
@@ -67,7 +67,7 @@ def load_expectations():
     root = repo_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from pet import game_fps  # noqa: PLC0415 —— 路径先就位才能 import
+    from pet.island import game_fps  # noqa: PLC0415 —— 路径先就位才能 import
 
     expected = root.joinpath(*game_fps.BACKEND_RELATIVE_DIR, game_fps.BACKEND_EXE_NAME)
     return expected, game_fps.BACKEND_EXE_NAME, game_fps.REQUIRED_SHA256

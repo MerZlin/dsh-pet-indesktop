@@ -45,7 +45,7 @@ _BEIJING_TZ = ZoneInfo('Asia/Shanghai')
 
 def _ssl_context(verify: bool):
     """延迟导入：无 Chat 变体排除 pet.chat 模块，顶层 import 会直接 ImportError。"""
-    from .chat.providers import _make_ssl_context
+    from ..chat.providers import _make_ssl_context
     return _make_ssl_context(verify)
 
 
@@ -85,7 +85,7 @@ def fetch_balance(base_url: str, api_key: str, timeout: float = 10.0,
     endpoint = str(base_url or '').strip().rstrip('/') + BALANCE_PATH
     if not api_key:
         raise BalanceError('未配置 API Key')
-    from .chat.providers import build_browser_headers  # 延迟导入：无 Chat 变体排除 pet.chat
+    from ..chat.providers import build_browser_headers  # 延迟导入：无 Chat 变体排除 pet.chat
     headers = build_browser_headers({'Authorization': f'Bearer {api_key}', 'Accept': 'application/json'})
     req = urllib.request.Request(endpoint, headers=headers)
     try:
@@ -207,7 +207,7 @@ def _statutory_holiday(day: date) -> str | None:
     「无节假日数据」降级（返回 None），不阻断余额提示。
     """
     try:
-        from .festival.calendar import statutory_holiday_name
+        from ..festival.calendar import statutory_holiday_name
     except ImportError:
         return None
     return statutory_holiday_name(day)

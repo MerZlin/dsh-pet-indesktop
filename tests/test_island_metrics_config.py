@@ -19,7 +19,7 @@ import pytest
 
 from pet import config as config_mod
 from pet.config import Config
-from pet.island_segments import CPU, GPU, MEM, NETWORK
+from pet.island.segments import CPU, GPU, MEM, NETWORK
 
 
 def _dirty_config(tmp_path, raw: dict) -> Config:

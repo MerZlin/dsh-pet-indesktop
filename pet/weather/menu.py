@@ -459,7 +459,7 @@ def _mark_disabled(action) -> None:
         action.setToolTip(WEATHER_DISABLED_REASON)
 
 
-# 为什么这两个建造器在函数内导入 shared：``pet.weather_menu`` 被
+# 为什么这两个建造器在函数内导入 shared：``pet.weather.menu`` 被
 # ``context_menus`` 反向引用，而 shared 经包 ``__init__`` 会一起跑——模块级
 # 导入就成了循环。建造器只在真正建菜单时才需要那两个原语，故按调用点导入
 # （与 ``balance`` 的惰性 import 同一手法）。

@@ -19,8 +19,8 @@ from PySide6.QtWidgets import QApplication
 from pet.app import AppShell
 from pet.chat.service import ChatService
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
-from pet.island_chat import IslandChatBubble
+from pet.island.dynamic_island import DynamicIsland
+from pet.island.chat import IslandChatBubble
 
 
 def _qapp() -> QApplication:

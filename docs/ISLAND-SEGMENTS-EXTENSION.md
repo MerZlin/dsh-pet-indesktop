@@ -1,15 +1,15 @@
 # 灵动岛第三方段扩展契约（P3 Slice F1 契约 + F2 宿主链）
 
 > 基线：分支 `feature/island-segment-redesign`，2026-10-07（P3 Slice F1）。契约的权威实现是
-> `pet/island_segments.py`（零 Qt）；**组件安装面与采样宿主**的权威实现是
-> `pet/island_extension_host.py`。本文是**对第三方的公开说明**，字段与规则变了要同步改这里。
+> `pet/island/segments.py`（零 Qt）；**组件安装面与采样宿主**的权威实现是
+> `pet/island/extension_host.py`。本文是**对第三方的公开说明**，字段与规则变了要同步改这里。
 > 相关：P1 段化重设计（`PR-REPORT-ISLAND-P1-SEGMENT-REDESIGN-2026-10-07.md`，段契约与宽度白名单先例）、
 > 卡片四分区与「不支持段不占位」机制（`PR-REPORT-ISLAND-*`，见 `docs/INDEX.md`「PR 报告存档」）。
 
 ## 一句话
 
 第三方只交**数据与声明**，岛上怎么画、画多宽、折谁、卡片怎么写，全部是宿主的事——
-**你拿不到 QPainter**。契约层 `pet/island_segments.py` 不 import 任何 Qt。
+**你拿不到 QPainter**。契约层 `pet/island/segments.py` 不 import 任何 Qt。
 
 安装路线（F2 起，推荐）：把组件目录放进**可信本地目录**，声明写在清单 JSON 里。
 组件代码只在**运行期**被导入与采样（见 §八）。
@@ -23,7 +23,7 @@
 进程内路线（仍在，适合集成在宿主进程里的第三方库）：直接调
 
 ```text
-from pet import island_segments as segments
+from pet.island import segments
 segments.register_segment(id=..., label=..., format_value=..., max_text=..., ...)
 ```
 
@@ -136,7 +136,7 @@ thresholds=(70.0, 85.0)   # 升到 70 上 warn、85 上 crit；降过"线 − 3"
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication
 
-from pet import island_segments as segments
+from pet.island import segments
 
 app = QApplication.instance() or QApplication([])
 
@@ -202,10 +202,10 @@ assert segments.alert_thresholds("cpu_temp") is None
 
 | 能力 | 状态 |
 |---|---|
-| 声明/校验/注销、四态、宽度自测量（含单位盒）、120px 判决、恶意段护栏 | ✅ 已实现（`pet/island_segments.py`） |
+| 声明/校验/注销、四态、宽度自测量（含单位盒）、120px 判决、恶意段护栏 | ✅ 已实现（`pet/island/segments.py`） |
 | `gpu` 段**真实读数**（`pet/gpu_monitor.py` 的 PDH 读数器 → `sys_monitor.subscribe_gpu` → 胶囊值/卡片行/告警同一条路） | ✅ 已接线（2026-10-10）：`ok` 用真读数、其余态同宽 `--`；**不可用是非 0 语义**；**无订阅即停采集**（CPU-only 路径一次 GPU 调用都不发生） |
 | 第三方段进**胶囊**的渲染接线（`_compose_info_segments` 收第三方段） | ✅ 已接线：第三方段是普通 `KIND_METRIC` 段，走与 CPU/内存同一条排版、字段盒与单位盒路径 |
-| 组件**安装面**（可信本地目录 + 标准库 JSON 清单 + 仅运行期导入 provider） | ✅ 已实现（`pet/island_extension_host.py`，见本节末） |
+| 组件**安装面**（可信本地目录 + 标准库 JSON 清单 + 仅运行期导入 provider） | ✅ 已实现（`pet/island/extension_host.py`，见本节末） |
 | `oversize_segment_ids()` 在**收缩流水线**里的消费（先折候选） | ✅ 已接线：宿主按同一判决（`island_segments.judge_oversize`）把超宽段喂给 `plan_info_row(fold_first_ids=...)`；**中间段被折也按 id 生效**，`+N` 计数与 chip 告警按实际折掉的段算（`apply_shrink`） |
 | **配置准入**：`island_metrics` 的合法成员 | ✅ 已接线：内置段（`island_segments.BUILTIN_SEGMENT_IDS`）∪ **声明清单里的组件**（主进程与设置进程读同一份静态 metadata，见本节末） |
 | **采样生命周期**：谁调 `read`、在哪个线程、如何按折叠/隐藏/停靠退订、来源变了怎么失效 | ✅ 已实现：**一条**有界节拍的后台线程（不是每组件一条），宿主只读快照；折叠/停靠细条/隐藏/关闭/停用都退订；清单不变时 provider 的增删改在**下一次采样**即生效（见下"采样与生命周期纪律"） |

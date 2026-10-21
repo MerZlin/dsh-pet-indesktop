@@ -269,7 +269,7 @@ class FileInterpretController(QObject):
             )
         if self._prompt_builder is None:
             self._prompt_builder = PromptBuilder(
-                Path(__file__).resolve().parent.parent / "assets" / "characters"
+                Path(__file__).resolve().parent.parent.parent / "assets" / "characters"
             )
 
         character_id = str(self._win.cfg.get("character", DEFAULT_CHARACTER))

@@ -30,14 +30,14 @@ from PySide6.QtCore import QRect
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
-import pet.dynamic_island as island_mod
-from pet import island_layout as layout
-from pet import island_segments as isl
+import pet.island.dynamic_island as island_mod
+from pet.island import layout
+from pet.island import segments as isl
 from pet import net_monitor, sys_monitor
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
-from pet.island_layout import _InfoSeg, place_info_segments, plan_info_row
-from pet.island_segments import CPU, MEM, NETWORK
+from pet.island.dynamic_island import DynamicIsland
+from pet.island.layout import _InfoSeg, place_info_segments, plan_info_row
+from pet.island.segments import CPU, MEM, NETWORK
 
 app = QApplication.instance() or QApplication([])
 

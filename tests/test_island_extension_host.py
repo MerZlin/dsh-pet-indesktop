@@ -26,8 +26,8 @@ from pathlib import Path
 
 import pytest
 
-from pet import island_extension_host as host
-from pet import island_segments as isl
+from pet.island import extension_host as host
+from pet.island import segments as isl
 
 READ_LOG = "read.log"
 IMPORT_FLAG = "imported.flag"
@@ -502,7 +502,7 @@ def test_file_paths_are_derived_not_hardcoded():
     assert host.user_root().name == host.ROOT_DIR_NAME
     assert host.project_root().name == host.ROOT_DIR_NAME
     assert host.user_root() != host.project_root()
-    assert host.project_root().parent == Path(host.__file__).resolve().parents[1]
+    assert host.project_root().parent == Path(host.__file__).resolve().parents[2]
 
 
 def test_provider_cache_reuses_the_same_file(_clean_state):

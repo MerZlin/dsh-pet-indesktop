@@ -46,10 +46,10 @@ SHELL_SCRIPTS = {
 }
 
 #: 上游 v2.6.0 release 资产的字节数（与 sha256 互为交叉证据：GitHub release API
-#: 的 ``size`` 字段）。它不是从 ``pet/game_fps.py`` 抄来的第二份真值。
+#: 的 ``size`` 字段）。它不是从 ``pet/island/game_fps.py`` 抄来的第二份真值。
 RELEASE_ASSET_SIZE = 980320
 
-from pet import game_fps  # noqa: E402  —— 期望值只有一份，直接问产品
+from pet.island import game_fps  # noqa: E402  —— 期望值只有一份，直接问产品
 
 BACKEND = RESOURCE_DIR / game_fps.BACKEND_EXE_NAME
 BACKEND_MISSING_REASON = (
@@ -195,13 +195,13 @@ class TestGateHasTeeth:
 
 class TestGateGuardsAgainstSecondTruth:
     def test_gate_reads_expectations_from_the_product_module(self):
-        """期望值必须来自 ``pet/game_fps.py``（单一真相源），不许在门里抄一份。
+        """期望值必须来自 ``pet/island/game_fps.py``（单一真相源），不许在门里抄一份。
 
         抄一份的下场是"改了产品没改门"或反过来，两件事都会让门失去意义——
         所以断言的是**它 import 了产品模块**，不是它写了什么字面量。
         """
         text = SCRIPT.read_text(encoding="utf-8")
-        assert "from pet import game_fps" in text
+        assert "from pet.island import game_fps" in text
         assert "game_fps.BACKEND_EXE_NAME" in text
         assert "game_fps.REQUIRED_SHA256" in text
         # 反向断言：门里不许再有这两个常量的**定义**（副本真值）

@@ -4,8 +4,8 @@
 实测依据（tools/import_cost.py，每个模块一个全新子进程的 tracemalloc 增量）：
 
     MB      module
-  4.75  pet.balance            （档位文案/价格提示表；默认配置从不查余额）
-  2.95  pet.festival_service   （连带 festival/festival_calendar/festival_data
+  4.75  pet.island.balance     （档位文案/价格提示表；默认配置从不查余额）
+  2.95  pet.festival.service   （连带 festival/calendar/data
   ＋五份节日文案表；总开关默认关闭）
 
 合计 ~7.7MB Python 堆在启动时白白常驻。两个 import 已收到真正的构造/使用点
@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 _CHILD = r'''
 import json, sys
 import pet.app  # noqa: F401 - 被测：只导入入口模块，不起 QApplication
-deferred = ["pet.balance", "pet.festival.service", "pet.festival.data",
+deferred = ["pet.island.balance", "pet.festival.service", "pet.festival.data",
             "pet.festival.quotes_cn", "pet.festival.quotes_west_movie"]
 print(json.dumps({name: name in sys.modules for name in deferred}))
 '''
@@ -50,8 +50,8 @@ def _run_child() -> dict:
 
 def test_importing_app_defers_balance_module():
     loaded = _run_child()
-    assert loaded['pet.balance'] is False, (
-        'pet.balance（4.75MB 档位文案表）不得在 import pet.app 时常驻：'
+    assert loaded['pet.island.balance'] is False, (
+        'pet.island.balance（4.75MB 档位文案表）不得在 import pet.app 时常驻：'
         '默认配置不查余额，它必须留到 _show_balance_payload/_island_tier_hint'
     )
 

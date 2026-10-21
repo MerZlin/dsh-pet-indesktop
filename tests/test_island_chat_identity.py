@@ -62,7 +62,7 @@ class _SpyBubble(QObject):
 
 def _make_shell(base, monkeypatch, *, child_roles=()):
     """真 AppShell（``__new__`` 装配）：全局 Config + slot0 路由视图 + 可选的子宠。"""
-    import pet.island_chat as island_chat_mod
+    import pet.island.chat as island_chat_mod
 
     global_cfg = Config(base=base)
     config_dir = global_cfg.dir          # Config 会把 base 再拼一层 APP_DIR_NAME

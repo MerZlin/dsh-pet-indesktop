@@ -34,13 +34,13 @@ import pytest
 from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QApplication
 
-import pet.dynamic_island as island_mod
-from pet import fps_monitor as fm
-from pet import game_fps as gf
-from pet import island_fps, island_segments as isl
+import pet.island.dynamic_island as island_mod
+from pet.island import fps_monitor as fm
+from pet.island import game_fps as gf
+from pet.island import fps as island_fps, segments as isl
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
-from pet.island_segments import CPU, FPS, GPU
+from pet.island.dynamic_island import DynamicIsland
+from pet.island.segments import CPU, FPS, GPU
 from tests.test_island_segment_render import _config as _island_config
 from tests.test_island_segment_render import _island as _render_island
 
@@ -308,7 +308,7 @@ def test_the_reading_reaches_the_capsule_and_the_card(tmp_path, monkeypatch):
 
 def test_the_value_box_never_changes_width_with_the_reading(tmp_path, monkeypatch):
     """0 → 60 → 144 → 9999：读数只在盒内左扩，胶囊宽与窗口宽一个像素都不动。"""
-    from pet import island_layout as layout
+    from pet.island import layout
 
     island, monitor, _hub = _island(_config(tmp_path, metrics=[FPS]), monkeypatch)
     try:

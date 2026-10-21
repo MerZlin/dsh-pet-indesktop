@@ -30,7 +30,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import island_segments, net_monitor
+from . import segments as island_segments
+from .. import net_monitor
 
 # ---------------------------------------------------------------- 行内几何常量
 #: 统一基线：所有字号层级共用一条（胶囊垂直中心线下方 5px，见设计稿 §2.1）。

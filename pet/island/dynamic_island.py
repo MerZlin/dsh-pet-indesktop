@@ -36,12 +36,15 @@ from PySide6.QtWidgets import (
 )
 
 from . import (
-    catalog, gpu_monitor, island_extension_host, island_fps, island_layout,
-    island_segments, net_monitor, quiet_mode, sys_monitor,
+    extension_host as island_extension_host, fps as island_fps,
+    layout as island_layout, segments as island_segments,
 )
-from .config import _clean_island_coordinate
-from .agent_link.dsh_state import DshState
-from .island_layout import (
+from .. import (
+    catalog, gpu_monitor, net_monitor, quiet_mode, sys_monitor,
+)
+from ..config import _clean_island_coordinate
+from ..agent_link.dsh_state import DshState
+from .layout import (
     _BASELINE_DY, _CHIP_ALERT_DOT_PX, _CHIP_H_PX, _CHIP_RADIUS_PX, _CONTENT_PAD_PX,
     _DEVICE_LABELS, _DIVIDER_H_PX, _DIVIDER_W_PX, _GPU_LABEL, _ICON_GAP_PX, _ICON_PX,
     _NAME_GAP_PX, _NAME_MAX_PX, _NETWORK_BOX_SAMPLE, _PRIMARY_ELIDE_PX,
@@ -378,7 +381,7 @@ def _native_reassert_topmost(window) -> bool:
     if sys.platform != "win32":
         return False
     try:
-        from .platform_win import _set_windows_topmost
+        from ..platform_win import _set_windows_topmost
 
         return bool(_set_windows_topmost(int(window.winId()), True))
     except Exception:

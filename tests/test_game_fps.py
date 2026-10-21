@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from pet import game_fps as gf
+from pet.island import game_fps as gf
 
 
 # ---------------------------------------------------------------- 官方表头 fixture
@@ -603,7 +603,7 @@ def test_classify_bounds_huge_stderr():
 
 def test_parse_session_names_takes_first_column():
     """``logman query -ets`` 的输出里只认本应用前缀的会话名（每行首列）。"""
-    import pet.game_fps as gf
+    import pet.island.game_fps as gf
 
     output = (
         "\nData Collector Set                      Type                          Status\n"
@@ -621,7 +621,7 @@ def test_parse_session_names_takes_first_column():
 
 def test_stale_session_names_excludes_the_current_session():
     """残留清理只针对**不是本次**的会话，且绝不碰别人前缀的采集。"""
-    import pet.game_fps as gf
+    import pet.island.game_fps as gf
 
     output = (
         "dsh-pet-fps-15520-37-b4e46ca9  Trace  Running\n"

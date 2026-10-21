@@ -47,8 +47,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from pet import gpu_monitor
-from pet import island_segments
-from pet.island_segments import STATE_ERROR, STATE_OK
+from pet.island import segments as island_segments
+from pet.island.segments import STATE_ERROR, STATE_OK
 
 logger = logging.getLogger(__name__)
 

@@ -2470,7 +2470,7 @@ class DshMonitor(BaseAgentMonitor):
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             candidates.append(Path(meipass) / "integrations" / "dsh-pet-bridge")
-        candidates.append(Path(__file__).resolve().parent.parent / "integrations" / "dsh-pet-bridge")
+        candidates.append(Path(__file__).resolve().parent.parent.parent / "integrations" / "dsh-pet-bridge")
         for c in candidates:
             if (c / "package.json").is_file():
                 return c
@@ -5563,7 +5563,7 @@ class AgentLinkManager(QObject):
         def worker() -> None:
             total = None
             try:
-                from ..balance import fetch_balance
+                from ..island.balance import fetch_balance
 
                 data = fetch_balance(
                     provider.base_url, api_key,

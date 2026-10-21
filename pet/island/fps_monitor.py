@@ -64,7 +64,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from pet import game_fps
+from pet.island import game_fps
 from pet import win_job
 
 logger = logging.getLogger(__name__)

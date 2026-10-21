@@ -66,8 +66,8 @@ import logging
 import math
 import time
 
-from . import collision
-from .sprite_collision import STATIC_HIT_MIN_DV, capsule_circles
+from .. import collision
+from ..sprite_collision import STATIC_HIT_MIN_DV, capsule_circles
 
 logger = logging.getLogger(__name__)
 

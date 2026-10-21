@@ -19,7 +19,7 @@ import types
 
 import pytest
 
-from pet import island_segments as isl
+from pet.island import segments as isl
 from pet import sys_monitor as sm
 
 

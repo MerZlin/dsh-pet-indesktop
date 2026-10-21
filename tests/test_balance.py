@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from pet import balance
+from pet.island import balance
 from pet.chat.models import ChatSession
 
 _BJ = timezone(timedelta(hours=8))

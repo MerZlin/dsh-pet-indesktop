@@ -25,10 +25,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-import pet.dynamic_island as island_mod
-from pet import island_segments as isl
+import pet.island.dynamic_island as island_mod
+from pet.island import segments as isl
 from pet.config import Config
-from pet.island_segments import CPU, GPU, MEM, NETWORK
+from pet.island.segments import CPU, GPU, MEM, NETWORK
 from tests.test_island_gpu_integration import _config, _gpu_sample
 from tests.test_island_segment_render import _island
 

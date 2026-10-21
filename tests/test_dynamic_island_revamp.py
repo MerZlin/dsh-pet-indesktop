@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
-from pet.dynamic_island import (
+from pet.island.dynamic_island import (
     DynamicIsland,
     _CAPSULE_HEIGHT,
     _CAPSULE_INSET,

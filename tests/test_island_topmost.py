@@ -31,7 +31,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from pet import platform_win
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 
 
 def _qapp() -> QApplication:
@@ -57,7 +57,7 @@ def _spy_native_reassert(monkeypatch) -> list:
     ``raising=False``：产品改动前该 seam 不存在，此时监视表为空——测试以
     「重申没有被触发」的断言失败作为红，而不是 ImportError。
     """
-    from pet import dynamic_island as island_mod
+    from pet.island import dynamic_island as island_mod
 
     calls: list = []
     monkeypatch.setattr(
@@ -202,7 +202,7 @@ def test_macos_reassert_does_not_raise_or_activate(tmp_path, monkeypatch):
     island.show()
     _settle(app)
     try:
-        from pet import dynamic_island as island_mod
+        from pet.island import dynamic_island as island_mod
 
         fallbacks: list = []
         monkeypatch.setattr(island_mod.sys, "platform", "darwin")

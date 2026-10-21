@@ -21,7 +21,7 @@ from PySide6.QtCore import QPointF, QRect
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 
-from pet import balance as balance_mod
+from pet.island import balance as balance_mod
 from pet.speech_bubble import BUBBLE_TEXT_COLUMN, PetSpeechBubble
 
 BEIJING = ZoneInfo("Asia/Shanghai")

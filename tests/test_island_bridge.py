@@ -31,10 +31,10 @@ from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication, QWidget
 
 from pet import collision as collision_mod
-from pet import island_bridge as island_bridge_mod
+from pet.island import bridge as island_bridge_mod
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
-from pet.island_bridge import IslandCollisionBridge, IslandWindowBridge
+from pet.island.dynamic_island import DynamicIsland
+from pet.island.bridge import IslandCollisionBridge, IslandWindowBridge
 from pet.overlay_window import OverlayWindow
 from pet.sprite_collision import (
     STATIC_HIT_MIN_DV,
@@ -727,7 +727,7 @@ def test_window_bridge_warns_when_replacing_foreign_geometry_callback(caplog):
     world = RecordingWorld()
     island = StubIsland()
     island.on_geometry_changed = lambda: None  # 模拟旧 island_collision 路径已占用
-    with caplog.at_level(logging.WARNING, logger="pet.island_bridge"):
+    with caplog.at_level(logging.WARNING, logger="pet.island.bridge"):
         bridge = IslandWindowBridge(island, world)
     try:
         assert any("on_geometry_changed" in record.message for record in caplog.records)

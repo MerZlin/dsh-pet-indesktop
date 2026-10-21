@@ -59,7 +59,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
-from pet.island_segments import (
+from pet.island.segments import (
     STATE_ERROR,
     STATE_OK,
     STATE_SAMPLING,

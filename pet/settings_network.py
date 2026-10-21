@@ -29,7 +29,8 @@ from PySide6.QtCore import QSize, QTimer
 from PySide6.QtWidgets import QLineEdit, QPushButton
 
 from . import feature_activation
-from . import fps_permission, island_extension_host, island_segments, net_monitor
+from . import fps_permission, net_monitor
+from .island import extension_host as island_extension_host, segments as island_segments
 from .config import (
     GAME_FPS_PROCESS_MAX_CHARS,
     _clean_game_fps_process,

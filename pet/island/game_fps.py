@@ -45,7 +45,7 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from pet.island_segments import (
+from pet.island.segments import (
     MAX_DETAIL_CHARS,
     STATE_ERROR,
     STATE_OK,
@@ -241,7 +241,7 @@ def bundled_backend_path() -> pathlib.Path:
     （或用户自己装了一个）时，我们采到的就不是校验过的那一个二进制。
     """
     meipass = getattr(sys, "_MEIPASS", None)
-    root = pathlib.Path(meipass) if meipass else pathlib.Path(__file__).resolve().parents[1]
+    root = pathlib.Path(meipass) if meipass else pathlib.Path(__file__).resolve().parents[2]
     return root.joinpath(*BACKEND_RELATIVE_DIR, BACKEND_EXE_NAME)
 
 

@@ -341,7 +341,7 @@ def test_pure_logic_modules_do_not_import_qt():
         # 2026-10-07 加入 island_layout（P1 Slice D2 下沉）：段数据/落位/收缩流水线
         # 是纯几何，度量对象同样注入——收缩逐级触发/逆序恢复这些规则要能在没有
         # 窗口、没有真实字体、没有屏幕的替身上直接验，就必须零 Qt。
-        "island_segments.py", "sys_monitor.py", "island_layout.py",
+        "island/segments.py", "sys_monitor.py", "island/layout.py",
     ):
         src = _read(name)
         assert "PySide6" not in src, f"{name} 引入了 Qt 依赖，破坏纯函数层定位"
@@ -575,7 +575,7 @@ def _overlay_new_path_modules() -> tuple[str, ...]:
     不会因为"忘了加名单"漏掉一次回潮。
     """
     patterns = ("overlay_*.py", "sprite_*.py", "tick_*.py")
-    names = {"pet_sprite.py", "island_bridge.py"}
+    names = {"pet_sprite.py", "island/bridge.py"}
     for pattern in patterns:
         names.update(p.name for p in PET_DIR.glob(pattern))
     return tuple(sorted(names))
@@ -606,7 +606,7 @@ def test_window_private_surface_frozen():
     """S2 收口成果：window 私有成员跨模块访问在以下文件中必须保持零命中。"""
     pattern = re.compile(r"(?:win|pet|window)\._[a-z]")
     offenders = []
-    for rel in ("app.py", "agent_link.py"):
+    for rel in ("app.py", "agent_link/__init__.py"):
         for lineno, line in enumerate(_read(rel).splitlines(), 1):
             if pattern.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")

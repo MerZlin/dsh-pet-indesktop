@@ -36,7 +36,7 @@ from pet.config import (
     GAME_FPS_TARGET_MODES,
     Config,
 )
-from pet.island_segments import BUILTIN_SEGMENT_IDS, CPU, FPS, GPU, MEM, NETWORK
+from pet.island.segments import BUILTIN_SEGMENT_IDS, CPU, FPS, GPU, MEM, NETWORK
 from pet.modern_settings_dialog import SettingRow
 
 app = QApplication.instance() or QApplication([])

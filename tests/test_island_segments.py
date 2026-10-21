@@ -24,10 +24,10 @@ import pytest
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QApplication
 
-from pet import island_segments as isl
+from pet.island import segments as isl
 
 #: 本模块 logger 名（告警断言用，跟着模块路径走）
-LOGGER_NAME = "pet.island_segments"
+LOGGER_NAME = "pet.island.segments"
 
 
 def _qapp() -> QApplication:

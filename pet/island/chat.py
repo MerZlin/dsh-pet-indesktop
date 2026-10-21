@@ -21,7 +21,7 @@ from PySide6.QtCore import QPoint, QTimer, Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QPushButton, QWidget
 
-from .quick_chat import QuickChatBubble
+from ..quick_chat import QuickChatBubble
 
 # 预览式弹出的自动收回时长（与展开卡片 _CARD_AUTO_COLLAPSE_MS 同口径）
 _AUTO_COLLAPSE_MS = 15_000

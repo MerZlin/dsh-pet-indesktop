@@ -78,7 +78,7 @@ def test_every_variant_offers_paid_backends_that_need_the_keyring():
         assert secrets, f"{provider_id} 必须仍然带 API Key 字段（keyring 的用武之地）"
         assert all(spec.secret_ref for spec in secrets), f"{provider_id} 的凭据缺少 secret_ref"
 
-    page = (REPO / "pet" / "voice_chime_settings.py").read_text(encoding="utf-8")
+    page = (REPO / "pet" / "voice" / "chime_settings.py").read_text(encoding="utf-8")
     assert "pet.chat" not in page and "from .chat" not in page, (
         "语音报时设置页刻意不依赖 pet.chat（no-chat 变体也要能打开），别把它接回 chat 链"
     )

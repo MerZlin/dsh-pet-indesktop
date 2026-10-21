@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import catalog, island_segments
+from . import catalog
+from .island import segments as island_segments
 from .music import players as music_players
 
 
@@ -744,7 +745,7 @@ def _clean_island_metrics(value) -> list:
     # 清单扫描失败不能连累配置加载（读目录/解析是外部输入面）：拿不到就只认内置段，
     # 已声明组件的 id 会在下一次（扫描恢复后）重新被接受——宁可这一拍收紧，不炸启动。
     try:
-        from . import island_extension_host
+        from .island import extension_host as island_extension_host
 
         allowed = island_extension_host.allowed_metric_ids()
     except Exception:  # pragma: no cover - 目录不可读等极端环境

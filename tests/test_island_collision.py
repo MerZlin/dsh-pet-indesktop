@@ -18,8 +18,8 @@ from pet import collision
 from pet import physics as physics_mod
 from pet import window_placement
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
-from pet.island_collision import IslandCollisionBody
+from pet.island.dynamic_island import DynamicIsland
+from pet.island.collision import IslandCollisionBody
 
 
 def _qapp() -> QApplication:

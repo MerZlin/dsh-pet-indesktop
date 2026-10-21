@@ -91,7 +91,7 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Callable
 
-from . import island_segments
+from . import segments as island_segments
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ def user_root() -> Path:
     ``pet/config.py`` 的路径算法（``_default_base`` + ``APP_DIR_NAME``）是唯一真源；
     这里**延迟导入**它，免得 ``config`` 与本模块在 import 期互相等待。
     """
-    from .config import APP_DIR_NAME, _default_base
+    from ..config import APP_DIR_NAME, _default_base
 
     return Path(_default_base()) / APP_DIR_NAME / ROOT_DIR_NAME
 
@@ -242,7 +242,7 @@ def user_root() -> Path:
 #: 模块导入时算一次：``Path.resolve()`` 在 Windows 上要逐段解析（实测 ~250µs），
 #: 而本函数在配置归一化路径上被反复调用（每次 reload / 保存各一次）——``__file__``
 #: 在进程内不变，所以缓存它就是廉价且正确的。
-_PROJECT_ROOT = Path(__file__).resolve().parents[1] / ROOT_DIR_NAME
+_PROJECT_ROOT = Path(__file__).resolve().parents[2] / ROOT_DIR_NAME
 
 
 def project_root() -> Path:

@@ -6,9 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 from PySide6.QtWidgets import QApplication
 
-from pet import balance as balance_mod
+from pet.island import balance as balance_mod
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 
 
 def _qapp() -> QApplication:

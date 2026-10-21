@@ -29,10 +29,10 @@ from PySide6.QtCore import QRect
 from PySide6.QtGui import QPainter, qAlpha
 from PySide6.QtWidgets import QApplication
 
-import pet.dynamic_island as island_mod
-from pet import island_layout as layout
+import pet.island.dynamic_island as island_mod
+from pet.island import layout
 from pet.config import Config
-from pet.dynamic_island import _CAPSULE_INSET, DynamicIsland
+from pet.island.dynamic_island import _CAPSULE_INSET, DynamicIsland
 
 app = QApplication.instance() or QApplication([])
 

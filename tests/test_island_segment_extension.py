@@ -27,10 +27,10 @@ from pathlib import Path
 
 import pytest
 
-from pet import island_segments as isl
+from pet.island import segments as isl
 from tests.test_island_segments import FakeMetrics
 
-LOGGER_NAME = "pet.island_segments"
+LOGGER_NAME = "pet.island.segments"
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "ISLAND-SEGMENTS-EXTENSION.md"
 

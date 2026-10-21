@@ -40,7 +40,7 @@ from pathlib import Path
 import pytest
 
 from pet import gpu_monitor as gm
-from pet import island_segments as isl
+from pet.island import segments as isl
 from pet import sys_monitor as sm
 
 #: 采样线程的固定名字（收口/独占断言用）。

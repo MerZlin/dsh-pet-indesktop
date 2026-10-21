@@ -176,6 +176,6 @@ def test_channel_idle_is_public_and_truthful():
 
 
 def test_lyric_chain_never_wires_reply_voice():
-    for name in ("music_lyric_controller.py", "music_lyric.py", "now_playing.py"):
-        source = (REPO_ROOT / "pet" / name).read_text(encoding="utf-8")
+    for name in ("lyric_controller.py", "lyric.py", "now_playing.py"):
+        source = (REPO_ROOT / "pet" / "music" / name).read_text(encoding="utf-8")
         assert "chat_reply_voice" not in source, f"{name} 不该接助手回复朗读（只念对话，不念歌词）"

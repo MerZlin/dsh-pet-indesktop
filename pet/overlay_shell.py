@@ -3918,7 +3918,7 @@ class OverlayShell(QObject):
         host = self._island_screen_host(island)
         driver = getattr(self, "driver", None)
         kinetic = getattr(driver, "note_kinetic", None)
-        from .island_bridge import IslandWindowBridge
+        from .island.bridge import IslandWindowBridge
         self.island_bridge = IslandWindowBridge(
             island, host.collision, host.overlay, sound=self._sound,
             kinetic=kinetic if callable(kinetic) else None,

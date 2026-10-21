@@ -455,7 +455,7 @@ def _island_in_origin_frame(island, origin: QPoint) -> tuple[int, int, int, int]
 def test_island_wall_geometry_tracks_origin_change(tmp_path):
     """开态岛墙：同屏原点变化后墙的局部几何必须按新原点重算（岛本体不动）。"""
     from pet.config import Config
-    from pet.dynamic_island import DynamicIsland
+    from pet.island.dynamic_island import DynamicIsland
 
     screen = FakeScreen((0, 0, 1024, 768), (0, 0, 1024, 728))
     shell = _make_shell(tmp_path, screen)

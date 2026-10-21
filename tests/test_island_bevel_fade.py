@@ -33,9 +33,9 @@ from PySide6.QtCore import QEvent, QCoreApplication, QTimer, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
-import pet.dynamic_island as island_mod
+import pet.island.dynamic_island as island_mod
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 
 #: 墨阈值：滤掉抗锯齿外溢与阴影的弱覆盖（0-255 的 alpha）。
 _INK = 40

@@ -23,7 +23,7 @@ from PySide6.QtGui import QGuiApplication, QMouseEvent
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 
 # 主屏 1920×1040（左上角原点），副屏在右 / 在左 / 错位拼接三种摆法
 PRIMARY = QRect(0, 0, 1920, 1040)

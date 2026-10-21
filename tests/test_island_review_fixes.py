@@ -28,11 +28,11 @@ import tempfile
 from PySide6.QtCore import QEvent, QRect
 from PySide6.QtWidgets import QApplication
 
-import pet.dynamic_island as island_mod
-import pet.island_layout as island_layout_mod
+import pet.island.dynamic_island as island_mod
+import pet.island.layout as island_layout_mod
 from pet import quiet_mode
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 from pet.agent_link.dsh_state import DshState
 
 app = QApplication.instance() or QApplication([])
@@ -283,7 +283,7 @@ def test_oversize_candidates_use_the_full_double_box_width(monkeypatch):
     """120px 判决必须按「值盒+单位盒」完整口径（6.1sol 应修 2：修复前
     oversize_segment_ids 只量 label+max_text，长单位段绕过判决）。"""
     from PySide6.QtGui import QFont, QFontMetrics
-    from pet import island_segments as segments
+    from pet.island import segments
 
     metrics = QFontMetrics(QFont("", 13))
     try:
@@ -340,7 +340,7 @@ def test_partially_folded_device_row_is_marked_folded_not_live(monkeypatch):
     """只折内存（CPU 还在订阅）时，共享快照仍会顺带更新内存——卡片这行要标
     「已折叠 · N 秒前」，不能看起来与正常采样行一样（6.1sol 应修 4）。"""
     from pet import sys_monitor as sm
-    from pet.island_segments import MEM
+    from pet.island.segments import MEM
 
     island = _island(monkeypatch, metrics=["cpu", "mem"])
     try:
@@ -400,9 +400,9 @@ def test_unsubscribing_a_metric_clears_its_hysteresis_memory(monkeypatch):
     """
     import time as _time
 
-    from pet import island_segments as isl
+    from pet.island import segments as isl
     from pet import sys_monitor as sm
-    from pet.island_segments import CPU
+    from pet.island.segments import CPU
 
     island = _island(monkeypatch, metrics=["cpu", "mem"])
     try:
@@ -438,9 +438,9 @@ def test_full_fold_preserves_the_last_sampling_error(monkeypatch):
     """快照 error → 全折（收口袋、清快照）→ chip 告警与卡片原因不消失；恢复后清。"""
     import time as _time
 
-    from pet import island_segments as isl
+    from pet.island import segments as isl
     from pet import sys_monitor as sm
-    from pet.island_segments import CPU, MEM
+    from pet.island.segments import CPU, MEM
 
     island = _island(monkeypatch, metrics=["cpu", "mem"])
     try:
@@ -537,7 +537,7 @@ def test_fade_keeps_semi_transparent_shared_pixels_constant(monkeypatch):
         app.processEvents()
 
         # 找单位盒（"%"，α70%）的一个共用像素：cpu 段的 unit 区
-        import pet.island_layout as layout_mod
+        import pet.island.layout as layout_mod
         segs = island._compose_info_segments()
         plan = island._row_plan()
         x = 19.0 + 26 + 8 + plan.name_w + 10

@@ -28,7 +28,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from pet.config import Config
-from pet.dynamic_island import DynamicIsland
+from pet.island.dynamic_island import DynamicIsland
 
 #: 产品常数（dynamic_island._BUMP_ANIM_MAX_S）：单次撞击动效的动画时间上限
 BUMP_ANIM_MAX_S = 0.9
