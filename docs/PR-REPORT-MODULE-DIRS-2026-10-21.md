@@ -159,7 +159,7 @@ R100  pet/weather.py                  pet/weather/__init__.py
 | R100 | `pet/file_eater.py` | `pet/file_interpret/eater.py` |
 | R096 | `pet/file_interpret.py` | `pet/file_interpret/__init__.py` |
 | R096 | `pet/settings_file_interpret.py` | `pet/file_interpret/settings.py` |
-| R098 | `pet/balance.py` | `pet/island/balance.py` |
+| R097 | `pet/balance.py` | `pet/island/balance.py` |（k3 复审校正：直方图 R097 正确，详表笔误）
 | R099 | `pet/dynamic_island.py` | `pet/island/dynamic_island.py` |
 | R099 | `pet/fps_monitor.py` | `pet/island/fps_monitor.py` |
 | R099 | `pet/game_fps.py` | `pet/island/game_fps.py` |
