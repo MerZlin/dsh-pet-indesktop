@@ -28,6 +28,8 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication
 import pytest
 
+pytestmark = pytest.mark.usefixtures("non_macos_overlay_topology")
+
 import tests.test_overlay_independent_screens as indep
 from pet.config import Config
 from pet.overlay_shell import OverlayShell

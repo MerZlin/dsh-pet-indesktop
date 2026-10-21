@@ -34,6 +34,8 @@ from PySide6.QtCore import QObject, QPoint, QRect, QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon, QWidget
 
+from .platform_mac import _mac_set_dock_icon_visible
+
 from . import autostart as autostart_mod
 from . import catalog
 from . import click_sound
@@ -5106,37 +5108,6 @@ class AppShell:
                 # 菜单刚被接管，正常不会走到；防御性跳过避免拖垮托盘刷新
                 continue
         self._tray_actions = snapshot
-
-
-def _mac_set_dock_icon_visible(visible: bool) -> None:
-    """Switch the macOS application policy without restarting the pet.
-
-    The speech bubble itself owns the non-activating window flags; application
-    activation policy must not be used as a focus workaround because Accessory
-    Regular (0) displays a Dock item; Accessory (1) keeps the application out
-    of the Dock. Pet tool windows own their independent visibility/focus flags.
-    """
-    if sys.platform != 'darwin':
-        return
-    try:
-        import ctypes
-        import ctypes.util
-
-        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc') or '/usr/lib/libobjc.A.dylib')
-        objc.sel_registerName.restype = ctypes.c_void_p
-        objc.objc_getClass.restype = ctypes.c_void_p
-        msg = objc.objc_msgSend
-        msg.restype = ctypes.c_void_p
-        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        shared = msg(
-            objc.objc_getClass(b'NSApplication'),
-            objc.sel_registerName(b'sharedApplication'),
-        )
-        # NSApplicationActivationPolicyRegular = 0; Accessory = 1
-        msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
-        msg(shared, objc.sel_registerName(b'setActivationPolicy:'), 0 if visible else 1)
-    except Exception:
-        pass
 
 
 def _default_xcb_platform_on_wayland() -> None:

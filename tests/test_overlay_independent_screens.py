@@ -43,6 +43,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("non_macos_overlay_topology")
 from PySide6.QtCore import QPoint, QPointF, QRect
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication

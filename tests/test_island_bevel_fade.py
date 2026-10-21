@@ -670,7 +670,8 @@ def test_old_structure_fades_out_while_shared_stays_intact(tmp_path, monkeypatch
 def test_sample_value_change_never_fades(tmp_path):
     """采样值换字零动画（硬规则）：余额换字不播淡化，帧就是新位图。"""
     _qapp()
-    island = _island(tmp_path, info_mode="balance")
+    # 图标提供不依赖字体的实心取样点，余额文字仍参与逐像素比对。
+    island = _island(tmp_path, info_mode="balance", show_icon=True)
     island.show()
     try:
         _qapp().processEvents()

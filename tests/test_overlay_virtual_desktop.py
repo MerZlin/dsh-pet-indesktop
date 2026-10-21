@@ -24,6 +24,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("non_macos_overlay_topology")
 from PySide6.QtCore import QPointF, QRect, QRectF
 
 import tests.test_overlay_hosts_multiscreen as hosts_mod

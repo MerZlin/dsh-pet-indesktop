@@ -245,6 +245,7 @@ def test_growing_bounds_keep_right_bottom_ratio(tmp_path):
         shell._delete_runtime_marker()
 
 
+@pytest.mark.usefixtures("non_macos_overlay_topology")
 def test_migrate_home_to_another_screen_keeps_every_pet_in_place(tmp_path, monkeypatch):
     """换家（``_migrate_to_screen``）不搬宠：窗口是两屏可用区并集、宠的局部位置不动。
 

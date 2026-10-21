@@ -2878,7 +2878,7 @@ def test_window_opening_menu_action_uses_native_close_path():
 
 def test_macos_dock_icon_policy_tracks_the_saved_visibility_setting():
     source = Path("pet/app.py").read_text(encoding="utf-8")
-    helper = source.split("def _mac_set_dock_icon_visible", 1)[1].split("def main", 1)[0]
+    helper = Path("pet/platform_mac.py").read_text(encoding="utf-8")
     assert "NSApplicationActivationPolicyRegular = 0" in helper
     assert "Accessory = 1" in helper
     assert "setActivationPolicy:" in helper

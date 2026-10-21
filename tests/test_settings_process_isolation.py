@@ -146,6 +146,27 @@ def test_run_settings_disables_ai_page_without_chat_module(tmp_path, monkeypatch
     assert _AutoCloseDialog.captured["include_ai"] is False
 
 
+def test_settings_process_keeps_its_window_without_a_second_dock_item(tmp_path, monkeypatch):
+    import pet.__main__ as entry
+    import pet.platform_mac as platform_mac
+
+    app = _qapp()
+    policies = []
+    monkeypatch.setattr(platform_mac, "_mac_set_dock_icon_visible", policies.append, raising=False)
+
+    def exec_settings(settings_app, config, **kwargs):
+        assert settings_app is app
+        assert policies == [False], "设置窗创建前应切到 Accessory，保留主进程的 Dock 图标"
+        return 0
+
+    monkeypatch.setattr(entry, "_exec_settings", exec_settings)
+    previous = app.quitOnLastWindowClosed()
+    try:
+        assert entry._run_settings(Config(base=tmp_path)) == 0
+    finally:
+        app.setQuitOnLastWindowClosed(previous)
+
+
 def test_packaging_entries_route_settings_before_importing_app():
     """打包入口必须在 import pet.app 之前分流 --settings，否则子进程跑成桌宠。"""
     root = Path(__file__).resolve().parents[1]

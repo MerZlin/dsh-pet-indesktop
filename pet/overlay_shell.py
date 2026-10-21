@@ -78,11 +78,14 @@ import copy
 import logging
 import math
 import queue
+import sys
 import threading
 import time
 import weakref
 from collections import deque
 from pathlib import Path
+
+_IS_MACOS = sys.platform == "darwin"
 
 import shiboken6
 from PySide6.QtCore import (
@@ -1136,8 +1139,8 @@ class OverlayShell(QObject):
         #: 事务打断的拖拽：收口后补存（见 `_flush_deferred_geometry_save`）
         self._geometry_save_after_txn = None
         #: **已应用**的宿主形态（True = 每屏一窗）。由建壳与拓扑事务维护，是几何 /
-        #: 坐标 / 屏归属 / 落盘的唯一口径；`_multi_window()` 只是"按当前屏幕缩放
-        #: 想要什么"。两者不一致 = 需要重排（或重排失败后的降级态）。
+        #: 坐标 / 屏归属 / 落盘的唯一口径；`_multi_window()` 只是按平台、屏幕与
+        #: 跨屏开关判定目标形态。两者不一致 = 需要重排（或重排失败后的降级态）。
         self._multi_mode = False
         #: 事务进行中被挡下的重排请求（收口时补做一次）
         self._topology_recheck = False
@@ -1654,7 +1657,7 @@ class OverlayShell(QObject):
         """**此刻已经应用**的是每屏一窗形态吗（``_multi_mode`` 模型标志）。
 
         与 :meth:`_multi_window` 的分工必须分清：那个是"**想要**什么形态"（按当前
-        屏幕缩放算出来的目标），这个是"现在实际有几张窗"。拓扑重排的**决定**用前者，
+        平台、屏幕与跨屏开关算出的目标），这个是"现在实际有几张窗"。拓扑重排的**决定**用前者，
         **坐标 / 几何 / 屏归属 / 落盘**一律用后者。
 
         混用的后果不是理论问题：补窗失败时（想要多窗、实际一张）窗口自己按单窗铺整张
@@ -1664,19 +1667,16 @@ class OverlayShell(QObject):
         return bool(self._multi_mode)
 
     def _multi_window(self) -> bool:
-        """是否走「每块屏一张合成窗」（允许跨屏 + 多屏且缩放不是 1:1）。
+        """判断目标拓扑是否采用每屏一窗（须开启允许跨屏）。
 
-        一张窗只能有一个 ``devicePixelRatio``：窗口横跨两种缩放的屏时，必有一侧按
-        错的倍率渲染（#307 实机：整只画到可见区之外）。
-
-        缩放全为 1:1 的多屏仍是单窗（Qt 的原点即原生原点，坐标系没有问题）；
-        只要有一块屏缩放不是 1:1，就每屏一窗——每张窗只落在自己那块屏上，Qt 的
-        原点映射与屏的实际原生位置一致（本机验证：Qt 矩形 ``(-1920,0,1536,816)``
-        落成原生 ``(-1920,0,1920,1020)``，正好盖住副屏），那个坏坐标根本不进入
-        单窗坐标系里参与运算（issue #310 的正解）。
+        多屏时，混合 DPR 或任一屏 DPR 非 1 都使用每屏一窗，避免单窗的绘制倍率
+        或坐标映射错位；各屏缩放相同但非 1 也属于此条件（见两个缩放判据）。
+        macOS 多屏即使全部 DPR 为 1 也采用此拓扑，避免跨显示器的大窗口在副屏
+        缓冲区有内容、桌面上却不可见；其它平台的全 1 倍缩放多屏仍使用单窗。
         """
         return self._cross_screen_allowed and (
-            self._mixed_dpr() or self._scaled_multi_screen())
+            (_IS_MACOS and len(self._screens()) > 1)
+            or self._mixed_dpr() or self._scaled_multi_screen())
 
     @staticmethod
     def _window_physical_origin(overlay) -> QPoint:
@@ -7212,7 +7212,7 @@ class OverlayShell(QObject):
     def _reconcile_hosts_for_dpi(self) -> None:
         """缩放变化会翻转「单窗 ↔ 每屏一窗」：把宿主集合与新拓扑对齐。
 
-        ``_multi_window()`` 判的是**当前**屏幕 DPR，而宿主只在建壳与插拔屏时建。
+        ``_multi_window()`` 按平台、当前屏幕与跨屏开关判定目标形态。
         运行中改显示缩放（控制面板把副屏从 100% 拖到 125%）会让判定翻转，只喂
         DPR 会留下错位：单窗却按多窗算几何（副屏没有窗，那边的宠被按主宿主重新
         落位）、多窗却按单窗算（旧副屏宿主仍挂着成员，主窗又按整桌面铺开）。

@@ -71,6 +71,11 @@ dist-onedir\dsh-pet-standalone-webm-chat-portable.zip
 
 ### 运行期应用图标：`assets/icon.ico`（三端都带）
 
+macOS 的正式构建在最终签名前写入 `LSUIElement=true`：独立设置进程从启动起
+作为 Accessory 运行，避免先登记成 Dock 最近应用再隐藏。主进程仍按
+`show_dock_icon` 显式切换 Regular / Accessory；这不是取消用户的 Dock 显示设置。
+实机记录见 [macOS 多屏与 Dock 修复报告](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)。
+
 `--icon assets/icon.ico`（Windows）/ `--icon assets/icon.icns`（macOS）只决定
 **可执行文件 / `.app` 的图标资源**；窗口标题栏那一个图标是运行期由
 `pet/application_icon.py::load_application_icon()` 从 `<_MEIPASS>/assets/icon.ico`

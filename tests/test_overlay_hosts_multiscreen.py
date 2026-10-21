@@ -45,6 +45,43 @@ from pet.pet_sprite import PetSprite
 
 app = QApplication.instance() or QApplication([])
 
+pytestmark = pytest.mark.usefixtures("non_macos_overlay_topology")
+
+
+@pytest.mark.parametrize("cross_screen,count,expected", [
+    (True, 2, 2), (False, 2, 1), (True, 1, 1),
+])
+def test_macos_unit_dpr_screens_use_separate_windows(
+        tmp_path, monkeypatch, cross_screen, count, expected):
+    import pet.overlay_shell as overlay_mod
+
+    monkeypatch.setattr(overlay_mod, "_IS_MACOS", True, raising=False)
+    main = FakeScreen((0, 0, 1920, 1080), (0, 30, 1920, 1010), name="MAIN")
+    left = FakeScreen((-1920, 0, 1920, 1080), (-1920, 30, 1920, 1010), name="LEFT")
+    _install_screens(monkeypatch, *(main, left)[:count])
+    shell = _make_shell(tmp_path, main, {"allow_cross_screen": cross_screen})
+    try:
+        assert len(shell.hosts()) == expected
+        if expected == 2:
+            for screen in (main, left):
+                assert shell.host_for_screen(screen).overlay.geometry() == screen.availableGeometry()
+            for screen in (left, main):
+                assert shell.move_sprite_to_screen(shell.sprite, screen)
+                host = shell.host_for_sprite(shell.sprite)
+                assert host.screen is screen
+                body = shell.sprite.body_rect().translated(host.overlay.geometry().topLeft())
+                assert QRectF(screen.availableGeometry()).contains(body)
+            shell.sprite.set_pos(QPointF(150, 500))
+            for screen, step in ((left, -40), (main, 40)):
+                overlay = shell.host_for_sprite(shell.sprite).overlay
+                cursor, local = _drag_across(shell, shell.sprite, step_px=step)
+                overlay.mouseReleaseEvent(_release(local, cursor))
+                assert shell.host_for_sprite(shell.sprite).screen is screen
+                assert not shell.sprite.dragging
+                assert all(shell.sprite not in h.overlay._projections for h in shell.hosts())
+    finally:
+        _cleanup(shell)
+
 
 class FakeScreen(QObject):
     """带名字的假屏：宿主按 ``name()`` 命中位置记忆，故必须实现它。"""

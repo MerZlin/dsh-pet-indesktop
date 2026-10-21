@@ -88,6 +88,10 @@ def _run_settings(config=None) -> int:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
+    from .platform_mac import _mac_set_dock_icon_visible
+
+    # The main pet owns the Dock item; its settings helper remains a GUI accessory.
+    _mac_set_dock_icon_visible(False)
     # 设置进程只有设置窗一个窗口：关窗即退出，OS 立刻回收全部内存
     #（进程内设置页首开留下的字体/样式/模块高水位没有卸载 API，只能靠进程退出）。
     app.setQuitOnLastWindowClosed(True)

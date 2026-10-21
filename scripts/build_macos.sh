@@ -190,6 +190,17 @@ for variant in "${variant_list[@]}"; do
     # dsh 插件树加载失败）：剥掉 --add-data 可能带入的 node_modules 残留，
     # 校验 dist 副本清单零依赖并跑 hermetic 冒烟（见 fix_bridge_bundle.py）。
     "$PYTHON_BIN" scripts/fix_bridge_bundle.py --app-dir "$DIST_DIR/$name.app"
+    # 设置子进程从启动起不登记 Dock；主进程再按 show_dock_icon 升为 Regular。
+    "$PYTHON_BIN" - "$DIST_DIR/$name.app/Contents/Info.plist" <<'MACOS_PLIST'
+import plistlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+info = plistlib.loads(path.read_bytes())
+info["LSUIElement"] = True
+path.write_bytes(plistlib.dumps(info))
+MACOS_PLIST
     codesign --force --deep --sign - "$DIST_DIR/$name.app"
 done
 

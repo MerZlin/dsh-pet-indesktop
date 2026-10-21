@@ -144,6 +144,8 @@
 
 ## PR 报告存档
 
+- [macOS 多屏与 Dock 修复（2026-10-21）](PR-REPORT-MACOS-DESKTOP-2026-10-21.md)：Mac 双屏每屏一窗、设置进程启动即 Accessory，含用户副屏可见及单 Dock 图标确认、75 秒焦点观察、构建安装与测试证据；改 Mac 拓扑或 Dock 启动策略时查阅。
+
 - [Firefox 媒体标识识别修复（2026-10-20）](PR-REPORT-FIREFOX-MEDIA-SESSION-2026-10-20.md)：修改浏览器媒体来源识别、排查 Firefox 开关失效前必读；补充 [SMTC 媒体类型过滤](PR-REPORT-SMTC-MEDIA-TYPE-2026-10-06.md) 中仅按进程名识别的遗漏，记录注册表身份解析、回归与本机冻结验证。
 
 - [歌词让位于 Agent 状态提示（2026-10-17）](PR-REPORT-LYRIC-AGENT-PRIORITY-2026-10-17.md)：修复歌词持续占用通知槽、吞掉开始/结束提示；涉及歌词和 Agent 气泡优先级时必读。
