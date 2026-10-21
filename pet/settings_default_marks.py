@@ -267,8 +267,6 @@ def refresh(dialog) -> None:
         modified = (
             current is not NOT_A_SETTING_CONTROL and not _values_equal(current, default)
         )
-        import shiboken6
-
         row.set_default_state(
             _default_value_text(control, default) if modified else None,
             can_reset=shiboken6.isValid(control) and control.isEnabled(),

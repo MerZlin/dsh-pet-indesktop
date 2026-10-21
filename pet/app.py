@@ -1772,7 +1772,12 @@ class AppShell:
     # ------------------------------------------------- 功能门控（助手回复朗读）
     def _chat_reply_voice_wanted(self) -> bool:
         # 默认关（主动打扰型功能）：关着时不建通道、不订阅、不建定时器，
-        # 行为与 v4.3.0 完全一致。
+        # 行为与 v4.3.0 完全一致。voice/chat 任一模块未激活都不建对象、
+        # 不订阅（与门控「模块关了不建对象」的口径一致；朗读落点在 voice
+        # 层的 ensure_audio_channel 另有一闸）。
+        if not (feature_activation_mod.is_active("voice")
+                and feature_activation_mod.is_active("chat")):
+            return False
         return bool(self.config.get("chat_reply_voice_enabled", False))
 
     def _ensure_chat_reply_reader(self):
@@ -2278,6 +2283,12 @@ class AppShell:
         environment.insert("DSH_PET_INSTANCE", "")
         environment.insert(settings_command_mod.ENV_PARENT_TOPOLOGY,
                            settings_command_mod.runtime_topology_env_value())
+        # 本次冻结的功能快照透传给设置进程：盘上未判定时以它为准——新装用户
+        # 在首次自然保存前打开设置不会拿到全激活基线（盲审存疑 B）。
+        feature_snapshot = feature_activation_mod.snapshot_env_value()
+        if feature_snapshot is not None:
+            environment.insert(feature_activation_mod.ENV_FEATURE_SNAPSHOT,
+                               feature_snapshot)
         try:
             started = self._spawn_settings_process(program, arguments, workdir,
                                                   environment)

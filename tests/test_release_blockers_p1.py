@@ -136,3 +136,39 @@ def test_updater_uses_build_capability_not_module_gate(tmp_path, monkeypatch):
     finally:
         dlg2.close()
         app.processEvents()
+
+
+def test_no_floating_unmounted_controls_in_any_mode(tmp_path, monkeypatch):
+    """对话框可见的直接子控件只有侧栏容器与页面堆栈——模块停用时未挂载的
+    控件不许以 (0,0) 浮窗出现（用户实测「左上角莫名 Agent 按钮」的回归闸，
+    全模块/纯核心/部分停用三种模式都查）。"""
+    from PySide6.QtWidgets import QWidget
+
+    from pet.config import Config
+
+    modes = [
+        ("all", None),  # 不冻结：未冻结态 is_active 恒真（升级用户默认）
+        ("pure-core", []),
+        ("partial", [fid for fid in MIGRATION_BASELINE
+                     if fid not in {"voice", "festival", "agent_link", "dynamic_island"}]),
+    ]
+    for tag, enabled in modes:
+        fa.reset_snapshot_for_tests()
+        if enabled is not None:
+            seeded = Config(tmp_path)
+            assert fa.write_enabled(seeded, enabled)
+            fa.freeze_snapshot_for_tests(enabled)
+        app, dlg = _build_dialog(tmp_path, monkeypatch)
+        try:
+            dlg.show()
+            app.processEvents()  # 不能用 exec 泵：quit 会连关带删顶层窗（WA_DeleteOnClose）
+            visible = [
+                w for w in dlg.findChildren(QWidget)
+                if w.parentWidget() is dlg and w.isVisible()
+            ]
+            names = [f"{type(w).__name__}:{w.objectName() or '-'}" for w in visible]
+            assert len(visible) == 2, f"{tag} 模式浮窗控件：{names}"
+            assert dlg.pages in visible  # 骨架必须还在（2e42dcf 误藏侧栏/堆栈的反例）
+        finally:
+            dlg.close()
+            app.processEvents()

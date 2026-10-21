@@ -2211,6 +2211,20 @@ class ModernSettingsDialog(QDialog):
             row for row in self.findChildren(SettingRow) + self.findChildren(AuthorRow)
             if any(page.isAncestorOf(row) for page in live_pages)
         ]
+        # 未挂载的散落控件全部隐藏：模块停用时没进任何域页布局的控件会以
+        # (0,0) 浮窗形式出现在对话框左上角（用户实测「左上角莫名 Agent 按钮」
+        # 与若干悬浮开关）。只动对话框的直接子控件；侧栏容器与页面堆栈是对话框
+        # 骨架，必须显式排除（2e42dcf 的循环没排除，会把整个设置 UI 藏掉）。
+        # 行对象保留（_retained_rows），只是不可见。
+        nav_host = self.sidebar
+        while nav_host.parentWidget() is not None and nav_host.parentWidget() is not self:
+            nav_host = nav_host.parentWidget()
+        chrome = {nav_host, self.pages}
+        for w in self.findChildren(QWidget):
+            if w in chrome or w.parentWidget() is not self:
+                continue
+            if not any(page.isAncestorOf(w) for page in live_pages):
+                w.setVisible(False)
         # 域页全部装好之后再装「按区直找」：页头跳转条 + 每个分区的组描述。
         settings_page_guide.install(self)
 
@@ -2519,19 +2533,20 @@ class ModernSettingsDialog(QDialog):
             self.config.set("dialogue_phrases", new_global)
         # 记住上次编辑层：下次打开设置直接回到该 Agent 专属层（未知值回落全局）
         self.config.set("dialogue_last_scope", str(getattr(self, "_dialogue_scope", "") or ""))
-        # Agent 联动音效写回（模块未激活时折叠框未挂出 → 整个字典不写回，见下）
-        agent_cfg = dict(self.config.get("agent_link", {}))
-        agent_cfg["sound_enabled"] = self.agent_sound_check.isChecked()
-        agent_cfg["sound_start_enabled"] = self.agent_sound_start_check.isChecked()
-        agent_cfg["sound_start_path"] = self.agent_sound_start_picker.text().strip() or "builtin:agent-start"
-        agent_cfg["sound_done_enabled"] = self.agent_sound_done_check.isChecked()
-        agent_cfg["sound_done_path"] = self.agent_sound_done_picker.text().strip() or "builtin:agent-done"
-        agent_cfg["sound_error_enabled"] = self.agent_sound_error_check.isChecked()
-        agent_cfg["sound_error_path"] = self.agent_sound_error_picker.text().strip() or "builtin:agent-error"
-        agent_cfg["sound_volume"] = float(self.agent_sound_volume_spin.value()) / 100.0
-        agent_cfg["sound_cooldown_seconds"] = float(self.agent_sound_cooldown_spin.value())
-
+        # Agent 联动音效写回：模块未激活时折叠框未挂出——判活先于任何控件
+        # 读取（旧页 deleteLater 会连坐销毁未搬走的行控件，先读就是
+        # RuntimeError；与 dynamic_island 同型），整个字典不写回。
         if _fa.is_active("agent_link"):
+            agent_cfg = dict(self.config.get("agent_link", {}))
+            agent_cfg["sound_enabled"] = self.agent_sound_check.isChecked()
+            agent_cfg["sound_start_enabled"] = self.agent_sound_start_check.isChecked()
+            agent_cfg["sound_start_path"] = self.agent_sound_start_picker.text().strip() or "builtin:agent-start"
+            agent_cfg["sound_done_enabled"] = self.agent_sound_done_check.isChecked()
+            agent_cfg["sound_done_path"] = self.agent_sound_done_picker.text().strip() or "builtin:agent-done"
+            agent_cfg["sound_error_enabled"] = self.agent_sound_error_check.isChecked()
+            agent_cfg["sound_error_path"] = self.agent_sound_error_picker.text().strip() or "builtin:agent-error"
+            agent_cfg["sound_volume"] = float(self.agent_sound_volume_spin.value()) / 100.0
+            agent_cfg["sound_cooldown_seconds"] = float(self.agent_sound_cooldown_spin.value())
             self.config.set("agent_link", agent_cfg)
         # 模块未激活的组未挂进页面（见 automation 装配），其键不写回
         if _fa.is_active("todo"):

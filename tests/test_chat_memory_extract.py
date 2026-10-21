@@ -422,10 +422,12 @@ def _reset_turn_counters():
     with me._last_run_lock:
         me._turn_count.clear()
         me._last_run.clear()
+        me._pending_turns.clear()
     yield
     with me._last_run_lock:
         me._turn_count.clear()
         me._last_run.clear()
+        me._pending_turns.clear()
 
 
 def test_extract_every_five_turns_by_default(tmp_path, monkeypatch):
@@ -461,3 +463,36 @@ def test_interval_invalid_falls_back_to_default(tmp_path):
     assert _extract_every_turns(_config(tmp_path / "c", chat_memory_extract_interval="abc")) == 5
     assert _extract_every_turns(_config(tmp_path / "a", chat_memory_extract_interval=0)) == 1
     assert _extract_every_turns(_config(tmp_path / "b", chat_memory_extract_interval=99)) == 20
+
+
+def test_turns_before_the_gate_are_buffered_not_dropped(tmp_path, monkeypatch):
+    """轮次闸放行前的轮次不丢：interval=2 时，第 1 轮的内容必须出现在第 2 轮
+    触发的提炼入参里（修复前只提当轮、前 N-1 轮被静默丢弃——盲审应修 #2）。"""
+    from pet.chat import memory_extract as me
+
+    captured = []
+    def fake_thread(**kw):
+        captured.append(kw["args"])
+        return type("T", (), {"start": lambda self: None})()
+    monkeypatch.setattr(me.threading, "Thread", fake_thread)
+    cfg = _config(tmp_path, chat_memory_extract_interval=2)
+    path = tmp_path / "memory.json"
+    me._last_run.clear()
+    assert _schedule_turns(cfg, path, user="我叫张三", reply="你好张三") is False
+    me._last_run.clear()
+    assert _schedule_turns(cfg, path, user="我不吃辣", reply="记下啦") is True
+    assert len(captured) == 1
+    _path, turns, _provider, _provider_config = captured[0]
+    assert [u for u, _r in turns] == ["我叫张三", "我不吃辣"]
+    transcript = me._dialogue_transcript(turns)
+    assert "我叫张三" in transcript and "我不吃辣" in transcript
+
+
+def test_transcript_total_budget_keeps_newest(tmp_path):
+    """拼接整体超预算时左截留最新（老内容先丢）。"""
+    from pet.chat import memory_extract as me
+
+    turns = [(f"用户{i}" + "x" * 900, f"回复{i}" + "y" * 900) for i in range(5)]
+    text = me._dialogue_transcript(turns)
+    assert len(text) <= me._DIALOGUE_TOTAL_CHARS
+    assert "用户4" in text and "回复4" in text  # 最新的一定在

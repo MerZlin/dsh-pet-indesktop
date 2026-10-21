@@ -100,6 +100,12 @@ def test_exec_settings_builds_standalone_dialog(tmp_path, monkeypatch):
     monkeypatch.setattr(settings_mod, "ModernSettingsDialog", _AutoCloseDialog)
     _AutoCloseDialog.captured = {}
     config = Config(base=tmp_path)
+    # 老用户痕迹（config.json 存在）：设置进程冻结迁移基线 → chat 激活 →
+    # include_ai 透传 True（盲审存疑 B 修复后，全新空目录 = 纯核心 = False，
+    # 那是另一套语义，由 test_feature_activation 覆盖）。
+    config.dir.mkdir(parents=True, exist_ok=True)
+    config.path.write_text("{}", encoding="utf-8")
+    config.reload()
     previous = app.quitOnLastWindowClosed()
     try:
         assert entry._run_settings(config) == 0
